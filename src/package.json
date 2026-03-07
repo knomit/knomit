@@ -1,0 +1,30 @@
+{
+  "name": "knomit",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "index.ts",
+  "scripts": {
+    "dev": "bun index.ts",
+    "test": "bun test",
+    "build": "bun build --compile index.ts --outfile ../dist/knomit",
+    "build:all": "bun ../scripts/build-all.ts",
+    "build:local": "bun ../scripts/build-all.ts --platform $(uname -s | tr 'A-Z' 'a-z')-$(uname -m | sed 's/x86_64/x64/' | sed 's/aarch64/arm64/')"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  },
+  "dependencies": {
+    "@inkjs/ui": "^2.0.0",
+    "@modelcontextprotocol/sdk": "^1.27.1",
+    "ink": "^6.8.0",
+    "ink-markdown": "^1.0.4",
+    "onnxruntime-node": "^1.24.3",
+    "react": "^19.2.4",
+    "yaml": "^2.8.2",
+    "zod": "^4.3.6"
+  },
+  "private": true
+}
