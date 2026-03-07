@@ -1,11 +1,8 @@
 import React, { useReducer, useEffect, useCallback, useState, useRef } from "react";
-import { render, Box, Text, useInput, useApp, useStdout } from "ink";
-import type { GitRepo } from "../git.js";
-import type { SearchIndex } from "../search-index.js";
-import { parseFact } from "../facts.js";
-import type { Frontmatter } from "../facts.js";
-import type { LogEntry } from "../git.js";
-import type { StatsResult } from "../search-index.js";
+import { render, Box, useInput, useApp, useStdout } from "ink";
+import type { GitRepo, LogEntry } from "../git.js";
+import type { SearchIndex, StatsResult } from "../search-index.js";
+import { parseFact, type Frontmatter } from "../facts.js";
 import type { SummaryChild, RightSelectableItem } from "./RightPanel.js";
 import { defaultTheme } from "./theme.js";
 import { reducer, initialState, type ChildItem } from "./state.js";
@@ -133,7 +130,11 @@ function App({ repo, searchIndex }: { repo: GitRepo; searchIndex: SearchIndex })
     }
 
     if (state.focusZone === "right") {
-      if (key.leftArrow || key.escape) {
+      if (key.escape) {
+        dispatch({ type: "SET_FOCUS", zone: "left" });
+        if (state.searchActive) dispatch({ type: "CLEAR_SEARCH" });
+        return;
+      } else if (key.leftArrow) {
         dispatch({ type: "SET_FOCUS", zone: "left" });
       } else if (key.upArrow) {
         dispatch({ type: "RIGHT_NAVIGATE_UP" });
@@ -176,7 +177,7 @@ function App({ repo, searchIndex }: { repo: GitRepo; searchIndex: SearchIndex })
         dispatch({ type: "OPEN_ITEM" });
       }
     }
-    else if (key.leftArrow) {
+    else if (key.leftArrow || key.backspace || key.delete) {
       if (state.searchActive) {
         dispatch({ type: "CLEAR_SEARCH" });
       } else {
@@ -184,21 +185,11 @@ function App({ repo, searchIndex }: { repo: GitRepo; searchIndex: SearchIndex })
       }
     }
     else if (key.rightArrow) {
-      if ((state.rightPanelMode === "summary" || state.rightPanelMode === "fact") && state.rightItemCount > 0) {
+      if (state.rightPanelMode !== "history" && state.rightItemCount > 0) {
         dispatch({ type: "SET_FOCUS", zone: "right" });
       }
     }
-    else if (key.backspace || key.delete) {
-      if (state.searchActive) {
-        dispatch({ type: "CLEAR_SEARCH" });
-      } else {
-        dispatch({ type: "GO_UP" });
-      }
-    }
-    else if (input === "/") {
-      dispatch({ type: "SET_FOCUS", zone: "command" });
-    }
-    else if (key.tab) {
+    else if (input === "/" || key.tab) {
       dispatch({ type: "SET_FOCUS", zone: "command" });
     }
     else if (input === "h") {
@@ -209,11 +200,11 @@ function App({ repo, searchIndex }: { repo: GitRepo; searchIndex: SearchIndex })
     }
   });
 
-  const handleDomainSearch = useCallback(async (domain: string) => {
+  const dispatchSearch = useCallback(async (text: string, searchType?: "text" | "domain") => {
     try {
       dispatch({ type: "SET_LOADING", loading: true });
       dispatch({ type: "SET_FOCUS", zone: "left" });
-      const results = await searchIndex.search({ text: domain, min_confidence: 0 });
+      const results = await searchIndex.search({ text, min_confidence: 0 });
       dispatch({
         type: "SET_SEARCH_RESULTS",
         results: results.map((r) => ({
@@ -222,40 +213,25 @@ function App({ repo, searchIndex }: { repo: GitRepo; searchIndex: SearchIndex })
           body: r.body,
           score: r.score,
         })),
-        searchType: "domain",
-      });
-    } catch {
-      // ignore
-    } finally {
-      dispatch({ type: "SET_LOADING", loading: false });
-    }
-  }, [searchIndex]);
-
-  const handleCommandSubmit = useCallback(async (text: string) => {
-    const trimmed = text.trim();
-    if (!trimmed) return;
-
-    setInputKey((k: number) => k + 1);
-    dispatch({ type: "SET_FOCUS", zone: "left" });
-
-    try {
-      dispatch({ type: "SET_LOADING", loading: true });
-      const results = await searchIndex.search({ text: trimmed, min_confidence: 0 });
-      dispatch({
-        type: "SET_SEARCH_RESULTS",
-        results: results.map((r) => ({
-          file: r.path,
-          title: r.title,
-          body: r.body,
-          score: r.score,
-        })),
+        searchType,
       });
     } catch {
       // ignore search errors
     } finally {
       dispatch({ type: "SET_LOADING", loading: false });
     }
-  }, [repo, searchIndex]);
+  }, [searchIndex]);
+
+  const handleDomainSearch = useCallback(async (domain: string) => {
+    await dispatchSearch(domain, "domain");
+  }, [dispatchSearch]);
+
+  const handleCommandSubmit = useCallback(async (text: string) => {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    setInputKey((k: number) => k + 1);
+    await dispatchSearch(trimmed);
+  }, [dispatchSearch]);
 
   return (
     <Box flexDirection="column" width={termSize.columns} height={termSize.rows}>

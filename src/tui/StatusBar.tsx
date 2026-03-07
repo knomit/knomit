@@ -1,8 +1,7 @@
 import React from "react";
 import { Box, Text } from "ink";
 import { TextInput } from "@inkjs/ui";
-import type { Theme } from "./theme.js";
-import { glyph } from "./theme.js";
+import { glyph, type Theme } from "./theme.js";
 
 interface StatusBarProps {
   focused: boolean;

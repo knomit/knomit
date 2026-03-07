@@ -1,7 +1,6 @@
 import React from "react";
 import { Box, Text } from "ink";
-import type { Theme } from "./theme.js";
-import { glyph } from "./theme.js";
+import { glyph, type Theme } from "./theme.js";
 
 interface TopBarProps {
   branch: string;

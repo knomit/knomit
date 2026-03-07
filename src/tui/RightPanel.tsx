@@ -1,7 +1,6 @@
 import React from "react";
 import { Box, Text } from "ink";
-import type { Theme } from "./theme.js";
-import { glyph } from "./theme.js";
+import { glyph, type Theme } from "./theme.js";
 import type { Frontmatter } from "../facts.js";
 import type { StatsResult } from "../search-index.js";
 import type { LogEntry } from "../git.js";
@@ -77,11 +76,12 @@ export function RightPanel({
   mode, theme, stats, summaryChildren, factTitle, factBody, factFrontmatter, history, historyFile,
   focused, selectedIndex, onItemsChanged,
 }: RightPanelProps) {
-  const selectableItems = mode === "summary"
-    ? buildSelectableItems(stats, summaryChildren)
-    : mode === "fact"
-      ? buildFactSelectableItems(factFrontmatter)
-      : [];
+  let selectableItems: RightSelectableItem[] = [];
+  if (mode === "summary") {
+    selectableItems = buildSelectableItems(stats, summaryChildren);
+  } else if (mode === "fact") {
+    selectableItems = buildFactSelectableItems(factFrontmatter);
+  }
 
   React.useEffect(() => {
     onItemsChanged?.(selectableItems);
@@ -117,15 +117,21 @@ function Label({ label, value, theme, valueColor }: {
   return (
     <Box>
       <Text color={theme.dim}>{label} </Text>
-      <Text color={valueColor ?? undefined} bold>{value}</Text>
+      <Text color={valueColor} bold>{value}</Text>
     </Box>
   );
+}
+
+function confidenceColor(value: number, theme: Theme): string {
+  if (value >= 0.7) return theme.green;
+  if (value >= 0.4) return theme.yellow;
+  return theme.red;
 }
 
 function ConfidenceBar({ value, theme }: { value: number; theme: Theme }) {
   const filled = Math.round(value * 10);
   const empty = 10 - filled;
-  const color = value >= 0.7 ? theme.green : value >= 0.4 ? theme.yellow : theme.red;
+  const color = confidenceColor(value, theme);
   return (
     <Box>
       <Text color={theme.dim}>{glyph.confidence} </Text>
@@ -318,7 +324,7 @@ function FactView({ title, body, frontmatter, theme, focused, selectedIndex }: {
               })}
             </Box>
           )}
-          <Box paddingY={0}>
+          <Box>
             <Text color={theme.dim}>{glyph.dashDivider.repeat(30)}</Text>
           </Box>
         </Box>

@@ -1,7 +1,6 @@
 import React from "react";
 import { Box, Text } from "ink";
-import type { Theme } from "./theme.js";
-import { glyph } from "./theme.js";
+import { glyph, type Theme } from "./theme.js";
 import type { ChildItem, SearchResultItem } from "./state.js";
 
 interface LeftPanelProps {
@@ -93,19 +92,20 @@ export function LeftPanel({
             const isActive = isSelected && focused;
             const iconColor = item.type === "world" ? theme.secondary : theme.accent;
             const showScore = searchType !== "domain" && "score" in item && item.score != null;
-            const scoreStr = showScore ? `${String(item.score).padStart(3)}% ` : "";
             return (
               <Box key={item.key}>
-                <Text color={isActive ? theme.yellow : theme.dim}>
-                  {isActive ? `${glyph.cursor} ` : "  "}
-                </Text>
-                {scoreStr && (
-                  <Text color={isActive ? theme.yellow : theme.dim}>{scoreStr}</Text>
-                )}
-                <Text color={isActive ? theme.yellow : iconColor}>
-                  {item.icon}
-                </Text>
-                <Text color={isActive ? theme.yellow : theme.text} bold={isSelected}>
+                <Box flexShrink={0}>
+                  <Text color={isActive ? theme.yellow : theme.dim}>
+                    {isActive ? `${glyph.cursor} ` : "  "}
+                  </Text>
+                  {showScore && (
+                    <Text color={isActive ? theme.yellow : theme.dim}>{String(item.score).padStart(3)}% </Text>
+                  )}
+                  <Text color={isActive ? theme.yellow : iconColor}>
+                    {item.icon}
+                  </Text>
+                </Box>
+                <Text color={isActive ? theme.yellow : theme.text} bold={isSelected} wrap="truncate-end">
                   {" "}{item.label}
                 </Text>
               </Box>
