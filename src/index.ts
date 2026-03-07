@@ -1,6 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { hostname, homedir } from "node:os";
+import { exists } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { GitRepo } from "./git";
 import { SearchIndex } from "./search-index";
@@ -130,7 +131,38 @@ async function startTui(repo: GitRepo, searchIndex: SearchIndex) {
   startApp(repo, searchIndex);
 }
 
+async function reset() {
+  const repoPathRaw = process.env.KNOMIT_REPO ?? join(homedir(), ".knomit");
+  const repoPath = repoPathRaw.startsWith("~")
+    ? resolve(homedir(), repoPathRaw.slice(2))
+    : resolve(repoPathRaw);
+  const cacheDir = process.env.KNOMIT_CACHE_DIR ?? join(homedir(), ".cache", "knomit");
+
+  const { rmSync } = await import("node:fs");
+
+  if (await exists(repoPath)) {
+    rmSync(repoPath, { recursive: true, force: true });
+    console.log(`removed repo: ${repoPath}`);
+  } else {
+    console.log(`repo not found: ${repoPath}`);
+  }
+
+  if (await exists(cacheDir)) {
+    rmSync(cacheDir, { recursive: true, force: true });
+    console.log(`removed cache: ${cacheDir}`);
+  } else {
+    console.log(`cache not found: ${cacheDir}`);
+  }
+
+  console.log("reset complete");
+}
+
 async function main() {
+  if (process.argv.includes("--reset")) {
+    await reset();
+    return;
+  }
+
   const isMcp = process.argv.includes("--mcp");
 
   if (!isMcp) {
