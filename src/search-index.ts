@@ -50,6 +50,7 @@ export interface StatsResult {
   totalFacts: number;
   avgConfidence: number;
   domainCounts: Record<string, number>;
+  entityCounts: Record<string, number>;
 }
 
 /**
@@ -263,14 +264,19 @@ export class SearchIndex {
       .get(...params) as { total: number; avg_conf: number | null };
 
     const rows = this.db
-      .query(`SELECT domain FROM facts ${whereClause}`)
-      .all(...params) as Array<{ domain: string }>;
+      .query(`SELECT domain, entities FROM facts ${whereClause}`)
+      .all(...params) as Array<{ domain: string; entities: string }>;
 
     const domainCounts: Record<string, number> = {};
+    const entityCounts: Record<string, number> = {};
     for (const row of rows) {
       const domains: string[] = JSON.parse(row.domain);
       for (const d of domains) {
         domainCounts[d] = (domainCounts[d] ?? 0) + 1;
+      }
+      const entities: string[] = JSON.parse(row.entities);
+      for (const e of entities) {
+        entityCounts[e] = (entityCounts[e] ?? 0) + 1;
       }
     }
 
@@ -278,6 +284,7 @@ export class SearchIndex {
       totalFacts: agg.total,
       avgConfidence: agg.avg_conf ?? 0,
       domainCounts,
+      entityCounts,
     };
   }
 
@@ -338,10 +345,12 @@ export class SearchIndex {
 
         const vecMap = new Map(vecRows.map((r) => [r.path, r.distance]));
 
-        // Normalize BM25 scores (they're negative, closer to 0 is better)
-        const maxBm25 = Math.max(...results.map((r) => Math.abs(r.score)), 0.001);
+        // Normalize BM25 scores (negative, closer to 0 = better match)
+        const minBm25 = Math.min(...results.map((r) => Math.abs(r.score)));
+        const maxBm25 = Math.max(...results.map((r) => Math.abs(r.score)));
+        const bm25Range = maxBm25 - minBm25;
         for (const r of results) {
-          const normBm25 = Math.abs(r.score) / maxBm25;
+          const normBm25 = bm25Range > 0 ? (maxBm25 - Math.abs(r.score)) / bm25Range : 1;
           const vecDist = vecMap.get(r.path) ?? 1.0;
           r.score = 0.6 * normBm25 + 0.4 * (1 - vecDist);
         }
@@ -363,7 +372,28 @@ export class SearchIndex {
       }
     }
 
-    return results.slice(0, limit);
+    // Normalize scores to 0-100
+    const finalResults = results.slice(0, limit);
+    if (finalResults.length > 0) {
+      // BM25 scores are negative (closer to 0 = better); hybrid scores are positive (higher = better)
+      const allNonPositive = finalResults.every((r) => r.score <= 0);
+      if (allNonPositive) {
+        const minAbs = Math.min(...finalResults.map((r) => Math.abs(r.score)));
+        const maxAbs = Math.max(...finalResults.map((r) => Math.abs(r.score)));
+        const range = maxAbs - minAbs;
+        for (const r of finalResults) {
+          r.score = range > 0
+            ? Math.round(((maxAbs - Math.abs(r.score)) / range) * 100)
+            : 100;
+        }
+      } else {
+        const maxScore = Math.max(...finalResults.map((r) => r.score), 0.001);
+        for (const r of finalResults) {
+          r.score = Math.round((Math.max(0, r.score) / maxScore) * 100);
+        }
+      }
+    }
+    return finalResults.filter((r) => r.score > 0);
   }
 
   private rowToResult(r: Record<string, unknown>, score: number): SearchResult {

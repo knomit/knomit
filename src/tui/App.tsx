@@ -1,18 +1,18 @@
-import React, { useReducer, useEffect, useCallback, useState } from "react";
-import { render, Box, useInput, useApp, useStdout } from "ink";
+import React, { useReducer, useEffect, useCallback, useState, useRef } from "react";
+import { render, Box, Text, useInput, useApp, useStdout } from "ink";
 import type { GitRepo } from "../git.js";
 import type { SearchIndex } from "../search-index.js";
 import { parseFact } from "../facts.js";
 import type { Frontmatter } from "../facts.js";
 import type { LogEntry } from "../git.js";
 import type { StatsResult } from "../search-index.js";
-import type { FactSummaryItem } from "./RightPanel.js";
+import type { SummaryChild, RightSelectableItem } from "./RightPanel.js";
 import { defaultTheme } from "./theme.js";
 import { reducer, initialState, type ChildItem } from "./state.js";
 import { TopBar } from "./TopBar.js";
 import { LeftPanel } from "./LeftPanel.js";
 import { RightPanel } from "./RightPanel.js";
-import { CommandBar } from "./CommandBar.js";
+import { StatusBar } from "./StatusBar.js";
 import { exploreHandler } from "../tools/explore.js";
 
 const theme = defaultTheme;
@@ -41,11 +41,18 @@ function App({ repo, searchIndex }: { repo: GitRepo; searchIndex: SearchIndex })
   const [factFrontmatter, setFactFrontmatter] = useState<Frontmatter | undefined>();
   const [history, setHistory] = useState<LogEntry[]>([]);
   const [stats, setStats] = useState<StatsResult | null>(null);
-  const [summaryFacts, setSummaryFacts] = useState<FactSummaryItem[]>([]);
+  const [summaryChildren, setSummaryChildren] = useState<SummaryChild[]>([]);
+
+  const rightItemsRef = useRef<RightSelectableItem[]>([]);
+
+  const handleRightItemsChanged = useCallback((items: RightSelectableItem[]) => {
+    rightItemsRef.current = items;
+    dispatch({ type: "SET_RIGHT_ITEM_COUNT", count: items.length });
+  }, []);
 
   const branch = repo.branchName;
 
-  // Load children when path changes
+  // Load children when path changes (not when toggling search — children are preserved)
   useEffect(() => {
     if (state.searchActive) return;
     (async () => {
@@ -56,7 +63,7 @@ function App({ repo, searchIndex }: { repo: GitRepo; searchIndex: SearchIndex })
         dispatch({ type: "SET_CHILDREN", children: [] });
       }
     })();
-  }, [state.currentPath, state.searchActive]);
+  }, [state.currentPath]);
 
   // Load stats and fact summaries when statsPath changes and in summary mode
   useEffect(() => {
@@ -70,13 +77,11 @@ function App({ repo, searchIndex }: { repo: GitRepo; searchIndex: SearchIndex })
     (async () => {
       try {
         const result = await exploreHandler(repo, { path: state.statsPath }, { skipSync: true });
-        setSummaryFacts(
-          result.children
-            .filter((c: ChildItem) => c.type === "fact")
-            .map((c: ChildItem) => ({ name: c.name, summary: c.summary }))
+        setSummaryChildren(
+          result.children.map((c: ChildItem) => ({ name: c.name, type: c.type, summary: c.summary }))
         );
       } catch {
-        setSummaryFacts([]);
+        setSummaryChildren([]);
       }
     })();
   }, [state.statsPath, state.rightPanelMode]);
@@ -127,6 +132,36 @@ function App({ repo, searchIndex }: { repo: GitRepo; searchIndex: SearchIndex })
       return;
     }
 
+    if (state.focusZone === "right") {
+      if (key.leftArrow || key.escape) {
+        dispatch({ type: "SET_FOCUS", zone: "left" });
+      } else if (key.upArrow) {
+        dispatch({ type: "RIGHT_NAVIGATE_UP" });
+      } else if (key.downArrow) {
+        dispatch({ type: "RIGHT_NAVIGATE_DOWN" });
+      } else if (key.return) {
+        const item = rightItemsRef.current[state.rightSelectedIndex];
+        if (item) {
+          if (item.type === "domain" || item.type === "entity") {
+            handleDomainSearch(item.label);
+          } else if (item.type === "fact" && item.path) {
+            dispatch({ type: "SET_FOCUS", zone: "left" });
+            const factPath = `${state.statsPath}/${item.path}`;
+            dispatch({
+              type: "SET_SEARCH_RESULTS",
+              results: [{ file: factPath, title: item.label, body: "", score: 0 }],
+              searchType: "domain",
+            });
+          }
+        }
+      } else if (input === "q") {
+        exit();
+      } else if (input === "h") {
+        dispatch({ type: "TOGGLE_HISTORY" });
+      }
+      return;
+    }
+
     // Left panel focused
     if (input === "q") {
       exit();
@@ -142,10 +177,23 @@ function App({ repo, searchIndex }: { repo: GitRepo; searchIndex: SearchIndex })
       }
     }
     else if (key.leftArrow) {
-      dispatch({ type: "GO_UP" });
+      if (state.searchActive) {
+        dispatch({ type: "CLEAR_SEARCH" });
+      } else {
+        dispatch({ type: "GO_UP" });
+      }
+    }
+    else if (key.rightArrow) {
+      if ((state.rightPanelMode === "summary" || state.rightPanelMode === "fact") && state.rightItemCount > 0) {
+        dispatch({ type: "SET_FOCUS", zone: "right" });
+      }
     }
     else if (key.backspace || key.delete) {
-      dispatch({ type: "GO_UP" });
+      if (state.searchActive) {
+        dispatch({ type: "CLEAR_SEARCH" });
+      } else {
+        dispatch({ type: "GO_UP" });
+      }
     }
     else if (input === "/") {
       dispatch({ type: "SET_FOCUS", zone: "command" });
@@ -161,6 +209,28 @@ function App({ repo, searchIndex }: { repo: GitRepo; searchIndex: SearchIndex })
     }
   });
 
+  const handleDomainSearch = useCallback(async (domain: string) => {
+    try {
+      dispatch({ type: "SET_LOADING", loading: true });
+      dispatch({ type: "SET_FOCUS", zone: "left" });
+      const results = await searchIndex.search({ text: domain, min_confidence: 0 });
+      dispatch({
+        type: "SET_SEARCH_RESULTS",
+        results: results.map((r) => ({
+          file: r.path,
+          title: r.title,
+          body: r.body,
+          score: r.score,
+        })),
+        searchType: "domain",
+      });
+    } catch {
+      // ignore
+    } finally {
+      dispatch({ type: "SET_LOADING", loading: false });
+    }
+  }, [searchIndex]);
+
   const handleCommandSubmit = useCallback(async (text: string) => {
     const trimmed = text.trim();
     if (!trimmed) return;
@@ -173,7 +243,12 @@ function App({ repo, searchIndex }: { repo: GitRepo; searchIndex: SearchIndex })
       const results = await searchIndex.search({ text: trimmed, min_confidence: 0 });
       dispatch({
         type: "SET_SEARCH_RESULTS",
-        results: results.map((r) => ({ file: r.path, title: r.title, body: r.body })),
+        results: results.map((r) => ({
+          file: r.path,
+          title: r.title,
+          body: r.body,
+          score: r.score,
+        })),
       });
     } catch {
       // ignore search errors
@@ -195,6 +270,7 @@ function App({ repo, searchIndex }: { repo: GitRepo; searchIndex: SearchIndex })
           breadcrumbSelected={state.breadcrumbSelected}
           focused={state.focusZone === "left"}
           theme={theme}
+          searchType={state.searchType}
           statusText={
             state.searchActive && !state.breadcrumbSelected
               ? state.searchResults[state.selectedIndex]?.file
@@ -205,15 +281,18 @@ function App({ repo, searchIndex }: { repo: GitRepo; searchIndex: SearchIndex })
           mode={state.rightPanelMode}
           theme={theme}
           stats={stats}
-          factSummaries={state.rightPanelMode === "summary" ? summaryFacts : undefined}
+          summaryChildren={state.rightPanelMode === "summary" ? summaryChildren : undefined}
           factTitle={factTitle}
           factBody={factBody}
           factFrontmatter={factFrontmatter}
           history={history}
           historyFile={state.currentFact ?? state.statsPath}
+          focused={state.focusZone === "right"}
+          selectedIndex={state.rightSelectedIndex}
+          onItemsChanged={handleRightItemsChanged}
         />
       </Box>
-      <CommandBar
+      <StatusBar
         focused={state.focusZone === "command"}
         theme={theme}
         onSubmit={handleCommandSubmit}

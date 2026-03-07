@@ -1,23 +1,35 @@
 export interface Theme {
   primary: string;
   secondary: string;
-  highlight: string;
-  dimmed: string;
-  error: string;
-  success: string;
+  text: string;
+  dim: string;
+  surface: string;
+  green: string;
+  blue: string;
+  yellow: string;
+  red: string;
   accent: string;
-  muted: string;
+  dark: string;
+  crust: string;
+  mantle: string;
+  base: string;
 }
 
 export const defaultTheme: Theme = {
-  primary: "#c678dd",      // soft purple
-  secondary: "#61afef",    // soft blue
-  highlight: "#e5c07b",    // warm gold
-  dimmed: "gray",
-  error: "#e06c75",        // soft red
-  success: "#98c379",      // soft green
-  accent: "#56b6c2",       // teal
-  muted: "#5c6370",        // dark gray
+  primary: "#cba6f7",
+  secondary: "#89b4fa",
+  text: "#cdd6f4",
+  dim: "#a6adc8",
+  surface: "#45475a",
+  green: "#a6e3a1",
+  blue: "#89b4fa",
+  yellow: "#f9e2af",
+  red: "#f38ba8",
+  accent: "#94e2d5",
+  dark: "#11111b",
+  crust: "#181926",
+  mantle: "#1e2030",
+  base: "#24273a",
 };
 
 // Box-drawing characters for custom borders
@@ -50,4 +62,6 @@ export const glyph = {
   search: "⌕",
   empty: "∅",
   arrow: "→",
+  activeIndicator: "▌",
+  dashDivider: "╌",
 } as const;

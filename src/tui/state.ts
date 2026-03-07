@@ -8,6 +8,15 @@ export interface SearchResultItem {
   file: string;
   title: string;
   body: string;
+  score: number;
+}
+
+export interface SavedNavState {
+  selectedIndex: number;
+  breadcrumbSelected: boolean;
+  currentFact: string | null;
+  statsPath: string;
+  rightPanelMode: "summary" | "fact" | "history";
 }
 
 export interface AppState {
@@ -20,8 +29,12 @@ export interface AppState {
   searchActive: boolean;
   searchResults: SearchResultItem[];
   children: ChildItem[];
-  focusZone: "left" | "command";
+  focusZone: "left" | "right" | "command";
+  rightSelectedIndex: number;
+  rightItemCount: number;
+  searchType: "text" | "domain";
   loading: boolean;
+  savedNavState: SavedNavState | null;
 }
 
 export const initialState: AppState = {
@@ -35,7 +48,11 @@ export const initialState: AppState = {
   searchResults: [],
   children: [],
   focusZone: "left",
+  rightSelectedIndex: 0,
+  rightItemCount: 0,
+  searchType: "text",
   loading: false,
+  savedNavState: null,
 };
 
 export type Action =
@@ -44,13 +61,16 @@ export type Action =
   | { type: "NAVIGATE_DOWN" }
   | { type: "OPEN_ITEM" }
   | { type: "GO_UP" }
-  | { type: "SET_FOCUS"; zone: "left" | "command" }
+  | { type: "SET_FOCUS"; zone: "left" | "right" | "command" }
   | { type: "TOGGLE_HISTORY" }
-  | { type: "SET_SEARCH_RESULTS"; results: SearchResultItem[] }
+  | { type: "SET_SEARCH_RESULTS"; results: SearchResultItem[]; searchType?: "text" | "domain" }
   | { type: "CLEAR_SEARCH" }
   | { type: "SELECT_SEARCH_RESULT" }
   | { type: "NAVIGATE_TO_PATH"; path: string }
-  | { type: "SET_LOADING"; loading: boolean };
+  | { type: "SET_LOADING"; loading: boolean }
+  | { type: "RIGHT_NAVIGATE_UP" }
+  | { type: "RIGHT_NAVIGATE_DOWN" }
+  | { type: "SET_RIGHT_ITEM_COUNT"; count: number };
 
 function autoSelectItem(
   state: AppState,
@@ -200,7 +220,11 @@ export function reducer(state: AppState, action: Action): AppState {
     }
 
     case "SET_FOCUS":
-      return { ...state, focusZone: action.zone };
+      return {
+        ...state,
+        focusZone: action.zone,
+        ...(action.zone === "right" ? { rightSelectedIndex: 0 } : {}),
+      };
 
     case "TOGGLE_HISTORY": {
       if (state.rightPanelMode === "history") {
@@ -218,21 +242,36 @@ export function reducer(state: AppState, action: Action): AppState {
         ...state,
         searchActive: true,
         searchResults: action.results,
+        searchType: action.searchType ?? "text",
         selectedIndex: 0,
         breadcrumbSelected: false,
         focusZone: "left",
         currentFact: firstResult?.file ?? null,
         rightPanelMode: firstResult ? "fact" : "summary",
+        savedNavState: state.savedNavState ?? {
+          selectedIndex: state.selectedIndex,
+          breadcrumbSelected: state.breadcrumbSelected,
+          currentFact: state.currentFact,
+          statsPath: state.statsPath,
+          rightPanelMode: state.rightPanelMode,
+        },
       };
     }
 
-    case "CLEAR_SEARCH":
+    case "CLEAR_SEARCH": {
+      const saved = state.savedNavState;
       return {
         ...state,
         searchActive: false,
         searchResults: [],
-        selectedIndex: 0,
+        selectedIndex: saved?.selectedIndex ?? 0,
+        breadcrumbSelected: saved?.breadcrumbSelected ?? true,
+        currentFact: saved?.currentFact ?? null,
+        statsPath: saved?.statsPath ?? state.currentPath,
+        rightPanelMode: saved?.rightPanelMode ?? "summary",
+        savedNavState: null,
       };
+    }
 
     case "SELECT_SEARCH_RESULT": {
       const item = state.searchResults[state.selectedIndex];
@@ -246,5 +285,28 @@ export function reducer(state: AppState, action: Action): AppState {
 
     case "SET_LOADING":
       return { ...state, loading: action.loading };
+
+    case "RIGHT_NAVIGATE_DOWN": {
+      if (state.rightItemCount === 0) return state;
+      return {
+        ...state,
+        rightSelectedIndex: Math.min(state.rightSelectedIndex + 1, state.rightItemCount - 1),
+      };
+    }
+
+    case "RIGHT_NAVIGATE_UP": {
+      if (state.rightItemCount === 0) return state;
+      return {
+        ...state,
+        rightSelectedIndex: Math.max(state.rightSelectedIndex - 1, 0),
+      };
+    }
+
+    case "SET_RIGHT_ITEM_COUNT":
+      return {
+        ...state,
+        rightItemCount: action.count,
+        rightSelectedIndex: Math.min(state.rightSelectedIndex, Math.max(0, action.count - 1)),
+      };
   }
 }

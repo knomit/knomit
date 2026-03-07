@@ -145,7 +145,7 @@ test("TOGGLE_HISTORY works without a fact selected (shows path history)", () => 
 test("SET_SEARCH_RESULTS activates search mode and selects first fact", () => {
   const s = reducer(initialState, {
     type: "SET_SEARCH_RESULTS",
-    results: [{ file: "worlds/x.md", title: "X", body: "body" }],
+    results: [{ file: "worlds/x.md", title: "X", body: "body", score: 100 }],
   });
   expect(s.searchActive).toBe(true);
   expect(s.searchResults.length).toBe(1);
@@ -158,8 +158,8 @@ test("NAVIGATE_DOWN in search auto-selects fact", () => {
   let s = reducer(initialState, {
     type: "SET_SEARCH_RESULTS",
     results: [
-      { file: "worlds/a.md", title: "A", body: "a" },
-      { file: "worlds/b.md", title: "B", body: "b" },
+      { file: "worlds/a.md", title: "A", body: "a", score: 100 },
+      { file: "worlds/b.md", title: "B", body: "b", score: 80 },
     ],
   });
   expect(s.currentFact).toBe("worlds/a.md");
@@ -201,9 +201,42 @@ test("NAVIGATE_TO_PATH navigates to specific path", () => {
 test("CLEAR_SEARCH returns to explorer mode", () => {
   let s = reducer(initialState, {
     type: "SET_SEARCH_RESULTS",
-    results: [{ file: "worlds/x.md", title: "X", body: "body" }],
+    results: [{ file: "worlds/x.md", title: "X", body: "body", score: 100 }],
   });
   s = reducer(s, { type: "CLEAR_SEARCH" });
   expect(s.searchActive).toBe(false);
   expect(s.searchResults).toEqual([]);
+});
+
+test("CLEAR_SEARCH restores previous navigation state", () => {
+  // Navigate to a specific position
+  let s = reducer(initialState, {
+    type: "SET_CHILDREN",
+    children: [
+      { name: "physics", type: "world" },
+      { name: "note.md", type: "fact" },
+    ],
+  });
+  s = reducer(s, { type: "NAVIGATE_DOWN" }); // select physics
+  s = reducer(s, { type: "NAVIGATE_DOWN" }); // select note.md
+  expect(s.selectedIndex).toBe(1);
+  expect(s.currentFact).toBe("worlds/note.md");
+  expect(s.rightPanelMode).toBe("fact");
+
+  // Search
+  s = reducer(s, {
+    type: "SET_SEARCH_RESULTS",
+    results: [{ file: "worlds/x.md", title: "X", body: "body", score: 100 }],
+  });
+  expect(s.searchActive).toBe(true);
+  expect(s.selectedIndex).toBe(0);
+  expect(s.savedNavState).not.toBeNull();
+
+  // Clear search — should restore
+  s = reducer(s, { type: "CLEAR_SEARCH" });
+  expect(s.searchActive).toBe(false);
+  expect(s.selectedIndex).toBe(1);
+  expect(s.currentFact).toBe("worlds/note.md");
+  expect(s.rightPanelMode).toBe("fact");
+  expect(s.savedNavState).toBeNull();
 });

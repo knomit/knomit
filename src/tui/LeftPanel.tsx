@@ -1,7 +1,7 @@
 import React from "react";
 import { Box, Text } from "ink";
 import type { Theme } from "./theme.js";
-import { glyph, box } from "./theme.js";
+import { glyph } from "./theme.js";
 import type { ChildItem, SearchResultItem } from "./state.js";
 
 interface LeftPanelProps {
@@ -13,6 +13,7 @@ interface LeftPanelProps {
   breadcrumbSelected: boolean;
   focused: boolean;
   theme: Theme;
+  searchType?: "text" | "domain";
   statusText?: string;
 }
 
@@ -22,15 +23,15 @@ function Breadcrumb({ path, selected, focused, theme }: {
   const segments = path.split("/");
   const isActive = selected && focused;
   return (
-    <Box paddingX={1}>
-      <Text color={isActive ? theme.highlight : theme.muted}>
+    <Box>
+      <Text color={isActive ? theme.yellow : theme.dim}>
         {isActive ? `${glyph.cursor} ` : "  "}
       </Text>
       {segments.map((seg, i) => (
         <React.Fragment key={i}>
-          {i > 0 && <Text color={theme.muted}> {glyph.breadcrumbSep} </Text>}
+          {i > 0 && <Text color={theme.dim}> {glyph.breadcrumbSep} </Text>}
           <Text
-            color={i === segments.length - 1 ? (isActive ? theme.highlight : theme.primary) : theme.muted}
+            color={i === segments.length - 1 ? (isActive ? theme.yellow : theme.text) : theme.dim}
             bold={i === segments.length - 1}
           >
             {seg}
@@ -50,6 +51,7 @@ export function LeftPanel({
   breadcrumbSelected,
   focused,
   theme,
+  searchType,
   statusText,
 }: LeftPanelProps) {
   const items = searchActive
@@ -58,6 +60,7 @@ export function LeftPanel({
         icon: glyph.fact,
         label: r.title || r.file,
         type: "fact" as const,
+        score: r.score,
       }))
     : children.map((c) => ({
         key: c.name,
@@ -67,35 +70,42 @@ export function LeftPanel({
       }));
 
   return (
-    <Box flexDirection="column" width="40%" borderStyle="round" borderColor={theme.muted} overflow="hidden">
+    <Box flexDirection="column" width="40%" paddingX={2} paddingTop={1} overflow="hidden" backgroundColor={theme.mantle}>
       {searchActive ? (
-        <Box paddingX={1}>
+        <Box>
           <Text color={theme.secondary} bold>{glyph.search} Search results</Text>
-          <Text color={theme.muted}> ({items.length})</Text>
+          <Text color={theme.dim}> ({items.length})</Text>
         </Box>
       ) : (
-        <Breadcrumb path={currentPath} selected={breadcrumbSelected} focused={focused} theme={theme} />
+        <Box>
+          <Breadcrumb path={currentPath} selected={breadcrumbSelected} focused={focused} theme={theme} />
+        </Box>
       )}
-      <Box paddingX={1}>
-        <Text color={theme.muted}>{box.horizontal.repeat(30)}</Text>
+      <Box>
+        <Text color={theme.dim}>  {glyph.dashDivider.repeat(20)}</Text>
       </Box>
-      <Box flexDirection="column" paddingX={1} flexGrow={1}>
+      <Box flexDirection="column" flexGrow={1}>
         {items.length === 0 ? (
-          <Text color={theme.muted}> {glyph.empty} {searchActive ? "No results" : "Empty"}</Text>
+          <Text color={theme.dim}>  {glyph.empty} {searchActive ? "No results" : "Empty"}</Text>
         ) : (
           items.map((item, i) => {
             const isSelected = !breadcrumbSelected && i === selectedIndex;
             const isActive = isSelected && focused;
             const iconColor = item.type === "world" ? theme.secondary : theme.accent;
+            const showScore = searchType !== "domain" && "score" in item && item.score != null;
+            const scoreStr = showScore ? `${String(item.score).padStart(3)}% ` : "";
             return (
               <Box key={item.key}>
-                <Text color={isActive ? theme.highlight : theme.muted}>
+                <Text color={isActive ? theme.yellow : theme.dim}>
                   {isActive ? `${glyph.cursor} ` : "  "}
                 </Text>
-                <Text color={isActive ? theme.highlight : iconColor}>
+                {scoreStr && (
+                  <Text color={isActive ? theme.yellow : theme.dim}>{scoreStr}</Text>
+                )}
+                <Text color={isActive ? theme.yellow : iconColor}>
                   {item.icon}
                 </Text>
-                <Text color={isActive ? theme.highlight : undefined} bold={isSelected}>
+                <Text color={isActive ? theme.yellow : theme.text} bold={isSelected}>
                   {" "}{item.label}
                 </Text>
               </Box>
@@ -104,8 +114,8 @@ export function LeftPanel({
         )}
       </Box>
       {statusText && (
-        <Box paddingX={1}>
-          <Text color={theme.muted}>{statusText}</Text>
+        <Box>
+          <Text color={theme.dim}>  {statusText}</Text>
         </Box>
       )}
     </Box>
