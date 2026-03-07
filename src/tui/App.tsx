@@ -6,8 +6,9 @@ import { parseFact } from "../facts.js";
 import type { Frontmatter } from "../facts.js";
 import type { LogEntry } from "../git.js";
 import type { StatsResult } from "../search-index.js";
+import type { FactSummaryItem } from "./RightPanel.js";
 import { defaultTheme } from "./theme.js";
-import { reducer, initialState } from "./state.js";
+import { reducer, initialState, type ChildItem } from "./state.js";
 import { TopBar } from "./TopBar.js";
 import { LeftPanel } from "./LeftPanel.js";
 import { RightPanel } from "./RightPanel.js";
@@ -40,6 +41,7 @@ function App({ repo, searchIndex }: { repo: GitRepo; searchIndex: SearchIndex })
   const [factFrontmatter, setFactFrontmatter] = useState<Frontmatter | undefined>();
   const [history, setHistory] = useState<LogEntry[]>([]);
   const [stats, setStats] = useState<StatsResult | null>(null);
+  const [summaryFacts, setSummaryFacts] = useState<FactSummaryItem[]>([]);
 
   const branch = repo.branchName;
 
@@ -56,7 +58,7 @@ function App({ repo, searchIndex }: { repo: GitRepo; searchIndex: SearchIndex })
     })();
   }, [state.currentPath, state.searchActive]);
 
-  // Load stats when statsPath changes and in summary mode
+  // Load stats and fact summaries when statsPath changes and in summary mode
   useEffect(() => {
     if (state.rightPanelMode !== "summary") return;
     try {
@@ -65,6 +67,18 @@ function App({ repo, searchIndex }: { repo: GitRepo; searchIndex: SearchIndex })
     } catch {
       setStats(null);
     }
+    (async () => {
+      try {
+        const result = await exploreHandler(repo, { path: state.statsPath }, { skipSync: true });
+        setSummaryFacts(
+          result.children
+            .filter((c: ChildItem) => c.type === "fact")
+            .map((c: ChildItem) => ({ name: c.name, summary: c.summary }))
+        );
+      } catch {
+        setSummaryFacts([]);
+      }
+    })();
   }, [state.statsPath, state.rightPanelMode]);
 
   // Load fact content when currentFact changes
@@ -181,11 +195,17 @@ function App({ repo, searchIndex }: { repo: GitRepo; searchIndex: SearchIndex })
           breadcrumbSelected={state.breadcrumbSelected}
           focused={state.focusZone === "left"}
           theme={theme}
+          statusText={
+            state.searchActive && !state.breadcrumbSelected
+              ? state.searchResults[state.selectedIndex]?.file
+              : undefined
+          }
         />
         <RightPanel
           mode={state.rightPanelMode}
           theme={theme}
           stats={stats}
+          factSummaries={state.rightPanelMode === "summary" ? summaryFacts : undefined}
           factTitle={factTitle}
           factBody={factBody}
           factFrontmatter={factFrontmatter}

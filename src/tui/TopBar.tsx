@@ -1,6 +1,7 @@
 import React from "react";
 import { Box, Text } from "ink";
 import type { Theme } from "./theme.js";
+import { glyph } from "./theme.js";
 
 interface TopBarProps {
   branch: string;
@@ -9,15 +10,16 @@ interface TopBarProps {
 
 export function TopBar({ branch, theme }: TopBarProps) {
   return (
-    <Box
-      borderStyle="single"
-      borderBottom={false}
-      paddingX={1}
-      justifyContent="space-between"
-    >
-      <Text bold color={theme.primary}>knomit</Text>
-      <Text dimColor>branch: {branch}</Text>
-      <Text dimColor>↑↓ Enter ← h / Tab q</Text>
+    <Box paddingX={1} justifyContent="space-between">
+      <Box gap={1}>
+        <Text color={theme.primary} bold>knomit</Text>
+        <Text color={theme.muted}>
+          {glyph.branch} {branch}
+        </Text>
+      </Box>
+      <Text color={theme.muted}>
+        ↑↓ navigate  ↵ open  ← back  h history  / search  q quit
+      </Text>
     </Box>
   );
 }
