@@ -157,7 +157,38 @@ async function reset() {
   console.log("reset complete");
 }
 
+const KNOWN_FLAGS = ["--mcp", "--reset", "--help"];
+
+function printHelp() {
+  console.log(`knomit - Git-backed knowledge base for AI agents
+
+Usage:
+  knomit              Launch the TUI browser
+  knomit --mcp        Run as an MCP server (for Claude Code / Claude Desktop)
+  knomit --reset      Wipe the repo and search index
+  knomit --help       Show this help
+
+Environment variables:
+  KNOMIT_REPO         Path to the git repository (default: ~/.knomit)
+  KNOMIT_CACHE_DIR    Path to the SQLite index and cache (default: ~/.cache/knomit)
+  KNOMIT_MACHINE_ID   Branch name: machine/<id> (default: system hostname)
+  KNOMIT_EMBEDDINGS   Enable vector similarity search (1 or true)`);
+}
+
 async function main() {
+  const flags = process.argv.slice(2).filter((a) => a.startsWith("-"));
+  const unknown = flags.filter((f) => !KNOWN_FLAGS.includes(f));
+  if (unknown.length > 0) {
+    console.error(`Unknown option: ${unknown[0]}\n`);
+    printHelp();
+    process.exit(1);
+  }
+
+  if (process.argv.includes("--help")) {
+    printHelp();
+    return;
+  }
+
   if (process.argv.includes("--reset")) {
     await reset();
     return;
