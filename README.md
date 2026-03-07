@@ -110,7 +110,7 @@ Each learning moment is an atomic git commit tagged with `learn/<moment-name>`, 
 | `KNOMIT_REPO` | `~/.knomit` | Path to the git repository |
 | `KNOMIT_CACHE_DIR` | `~/.cache/knomit` | Path to the SQLite index and model cache |
 | `KNOMIT_MACHINE_ID` | system hostname | Branch name: `machine/<id>` |
-| `KNOMIT_EMBEDDINGS` | `false` | Enable vector similarity search (`1` or `true`) |
+| `KNOMIT_EMBEDDINGS` | `true` | Vector similarity search (`0` or `false` to disable) |
 
 ## Development
 

@@ -57,8 +57,8 @@ async function bootstrap(options?: { embeddings?: boolean }) {
   const cacheDir = process.env.KNOMIT_CACHE_DIR ?? join(homedir(), ".cache", "knomit");
   const envEmbeddings = process.env.KNOMIT_EMBEDDINGS;
   const embeddingsEnabled = envEmbeddings !== undefined
-    ? (envEmbeddings === "1" || envEmbeddings === "true")
-    : (options?.embeddings ?? false);
+    ? (envEmbeddings !== "0" && envEmbeddings !== "false")
+    : (options?.embeddings ?? true);
   const searchIndex = new SearchIndex(cacheDir, { embeddings: embeddingsEnabled });
   await searchIndex.init();
   await searchIndex.sync(repo);
@@ -172,7 +172,7 @@ Environment variables:
   KNOMIT_REPO         Path to the git repository (default: ~/.knomit)
   KNOMIT_CACHE_DIR    Path to the SQLite index and cache (default: ~/.cache/knomit)
   KNOMIT_MACHINE_ID   Branch name: machine/<id> (default: system hostname)
-  KNOMIT_EMBEDDINGS   Enable vector similarity search (1 or true)`);
+  KNOMIT_EMBEDDINGS   Vector similarity search, on by default (0 or false to disable)`);
 }
 
 async function main() {
