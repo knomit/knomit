@@ -99,18 +99,93 @@ Git supports both. For knomit:
 
 **GPG** has richer identity metadata (name, email, expiry) but the complexity isn't justified here. The signing key is an opaque identifier — the trust policy provides the semantic mapping.
 
-## Agent Identity
+## Key Architecture: Per-Machine, Not Per-User
 
-AI agents present a unique challenge. Who holds the key?
+A single "master key" on every machine is a liability. Lose the laptop, lose the key. The solution: **each machine gets its own signing key**. All keys belonging to the same person are grouped in the trust policy.
 
-Options:
-- **Per-machine key**: The machine the agent runs on has a key. Proves "this fact came from machine X" but not which agent or model produced it.
-- **Per-agent key**: Each agent instance (e.g., "alice's claude on laptop") has its own key. More granular but more keys to manage.
-- **Per-user key**: The human who owns the agent signs on behalf of all their agents. Simpler, and the human is ultimately accountable.
+### Setup
 
-For knomit, **per-user key** is the pragmatic choice. The human owns the knowledge base. Their agents act on their behalf. The signing key says "this knowledge base belongs to this person" — not "this particular AI model produced this fact."
+Each machine generates its own key at `knomit init`:
 
-The current hardcoded identity in `src/git.ts` (`user.email: knomit@local`, `user.name: knomit`) would be replaced with the user's actual identity and signing key at init time.
+```bash
+# On laptop
+ssh-keygen -t ed25519 -f ~/.ssh/knomit_laptop -C "knomit/laptop"
+git config user.signingkey ~/.ssh/knomit_laptop.pub
+
+# On homelab
+ssh-keygen -t ed25519 -f ~/.ssh/knomit_homelab -C "knomit/homelab"
+git config user.signingkey ~/.ssh/knomit_homelab.pub
+```
+
+No key ever leaves the machine it was generated on.
+
+### Trust Policy Maps Keys to Identities
+
+The `trust.yaml` groups multiple keys under a single identity:
+
+```yaml
+identities:
+  - name: "me"
+    trust: full
+    keys:
+      - fingerprint: "SHA256:laptop_aaa..."
+        label: "laptop"
+      - fingerprint: "SHA256:homelab_bbb..."
+        label: "homelab"
+      - fingerprint: "SHA256:work_ccc..."
+        label: "work-desktop"
+
+  - name: "bob"
+    trust: partial
+    keys:
+      - fingerprint: "SHA256:bob_ddd..."
+        label: "bob/main"
+
+default: reject
+```
+
+Trust is per-identity, not per-key. All of "me"'s keys share the same trust level. But each key is independently revocable.
+
+### Key Revocation
+
+Laptop stolen? Add the compromised key to a revoked list:
+
+```yaml
+revoked:
+  - fingerprint: "SHA256:laptop_aaa..."
+    reason: "device lost 2025-03-08"
+    revoked_at: "2025-03-08"
+```
+
+Effects:
+- Facts signed by the revoked key after the revocation date are rejected
+- Facts signed before revocation remain valid (the key wasn't compromised when they were created — or at least, you don't know that it was)
+- Other keys for the same identity continue working
+- The revoked key can be identified across all repos: `git log --format="%H %GK %s" | grep <fingerprint>`
+
+This is better than a single key because:
+- Revocation is surgical (one machine, not all machines)
+- No "re-sign everything" migration
+- No shared secrets between machines
+- Key compromise has a bounded blast radius
+
+### AI Agent Identity
+
+The agent doesn't get its own key — it uses the machine's key. The signing says "this fact was committed on this machine" which transitively means "by the person who controls this machine."
+
+This is the right level of granularity. You don't need to distinguish "Claude on laptop" from "Gemini on laptop" — you need to distinguish "my laptop" from "my homelab" from "a machine I don't control."
+
+The current hardcoded identity in `src/git.ts` (`user.email: knomit@local`, `user.name: knomit`) would be replaced with the user's actual identity and the machine's signing key at init time.
+
+### Multi-Machine Reconciliation
+
+This integrates with the reconciliation architecture. When machine A pulls facts from machine B's branch:
+
+1. Verify the commits are signed by a key belonging to "me"
+2. Check the key isn't revoked
+3. Merge with full trust (it's your own knowledge, from a machine you control)
+
+If a revoked key is found, the reconciliation flags those commits for review rather than auto-merging. The blast radius of a compromised machine is contained to facts it authored after compromise, and those facts don't silently propagate.
 
 ## What Changes in the Spec
 
@@ -157,7 +232,7 @@ If the pack publisher is the same as the fact author (typical case), one signatu
 ## What This Does NOT Solve
 
 - **Content truthfulness**: A signed fact proves who said it, not whether it's correct. A fully trusted source can still be wrong. This is what `confidence` and `sources` are for.
-- **Key revocation**: If a key is compromised, all facts signed with it are suspect. Git doesn't have a native revocation mechanism. The trust policy would need to be updated manually.
+- **Key revocation timing**: Revocation is manual. You need to notice a device is compromised and update `trust.yaml`. Facts signed between compromise and revocation are in a gray zone.
 - **Anonymity**: Signing inherently links facts to an identity. If you want to share knowledge anonymously, you'd use an unsigned pack (and consumers would apply their `default` trust policy, likely `review` or `reject`).
 
 ## Recommendation
@@ -167,6 +242,7 @@ If the pack publisher is the same as the fact author (typical case), one signatu
 3. **Add `trust.yaml`** — local policy mapping keys to trust levels
 4. **Verify on import** — cross-repo discovery and pack consumption verify signatures
 5. **Modulate confidence** — trust level adjusts imported fact confidence
-6. **Per-user keys** — the human owns the key, their agents use it
+6. **Per-machine keys** — each machine gets its own key, grouped under a single identity in trust.yaml
+7. **Independent revocation** — compromised keys are revoked surgically without affecting other machines
 
-This keeps provenance in the git layer (no schema changes) and adds cryptographic guarantees where `git log --author` only provides self-declaration. The trust policy is local and subjective — exactly like trust in the real world.
+This keeps provenance in the git layer (no schema changes) and adds cryptographic guarantees where `git log --author` only provides self-declaration. The trust policy is local and subjective — exactly like trust in the real world. Per-machine keys ensure that losing a device doesn't compromise the entire identity.
