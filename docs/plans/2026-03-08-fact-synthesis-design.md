@@ -168,19 +168,23 @@ interface LLMAdapter {
 }
 ```
 
-Two implementations via raw `fetch`, no SDK dependencies:
+Three implementations via raw `fetch`, no SDK dependencies:
 - **Anthropic**: `POST https://api.anthropic.com/v1/messages`
 - **Gemini**: `POST https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent`
+- **AWS Bedrock**: `POST https://bedrock-runtime.{region}.amazonaws.com/model/{model}/invoke` (uses AWS Signature V4 signing)
 
 ### Configuration
 
 Environment variables (defaults when step doesn't specify a model):
 
 ```
-KNOMIT_LLM_PROVIDER=anthropic
+KNOMIT_LLM_PROVIDER=anthropic    # "anthropic", "gemini", or "bedrock"
 KNOMIT_LLM_MODEL=claude-sonnet-4-6
 ANTHROPIC_API_KEY=sk-ant-...
 GOOGLE_AI_API_KEY=AI...
+AWS_REGION=us-east-1
+AWS_ACCESS_KEY_ID=AKIA...
+AWS_SECRET_ACCESS_KEY=...
 ```
 
 The adapter is reusable for future features. Adding providers is a one-file change.
