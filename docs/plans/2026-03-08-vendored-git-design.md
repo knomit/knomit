@@ -75,13 +75,34 @@ share/perl5/
 
 Everything else stays (blacklist approach — safer than whitelist).
 
-## Git commands needed
+## Git commands audit
 
-Current (`src/git.ts`): init, add, commit, checkout, branch, tag, log, merge, merge --abort, fetch, push, diff, ls-tree, grep, rev-parse, remote, config
+### Current (`src/git.ts`)
 
-Future (research docs): commit -S, verify-commit, cherry-pick, branch --remote, clone
+init, add, commit, checkout, branch, tag, log, merge, merge --abort, fetch, push, diff, ls-tree, grep, rev-parse, remote, config
 
-External dependency: `ssh-keygen` (ships with all target OSes, not vendored).
+### Future (from research docs)
+
+| Command | Research doc | Purpose |
+|---|---|---|
+| `commit -S` | provenance-and-signing | SSH-signed commits |
+| `verify-commit` | provenance-and-signing | Verify signatures |
+| `cherry-pick` | reconciliation-architecture | Apply commits across branches |
+| `branch --remote` | reconciliation-architecture | List remote machine branches |
+| `clone` | cross-repo-knowledge-discovery | Import foreign repos |
+
+### Git config settings needed (provenance)
+
+| Setting | Purpose |
+|---|---|
+| `gpg.format ssh` | Use SSH signing |
+| `user.signingkey` | Which key to sign with |
+| `gpg.ssh.allowedSignersFile` | Trusted signers |
+| `commit.gpgsign true` | Auto-sign all commits |
+
+### External dependencies (not vendored)
+
+- `ssh-keygen` — ships with macOS, Linux (openssh-client), Windows 10+
 
 ## Changes
 
