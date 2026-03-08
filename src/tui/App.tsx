@@ -1,9 +1,9 @@
 import React, { useReducer, useEffect, useCallback, useState, useRef } from "react";
 import { render, Box, useInput, useApp, useStdout } from "ink";
-import type { GitRepo, LogEntry } from "../git.js";
+import type { GitRepo } from "../git.js";
 import type { SearchIndex, StatsResult } from "../search-index.js";
 import { parseFact, type Frontmatter } from "../facts.js";
-import type { SummaryChild, RightSelectableItem } from "./RightPanel.js";
+import type { SummaryChild, RightSelectableItem, HistoricalData } from "./RightPanel.js";
 import { defaultTheme } from "./theme.js";
 import { reducer, initialState, type ChildItem } from "./state.js";
 import { TopBar } from "./TopBar.js";
@@ -11,8 +11,10 @@ import { LeftPanel } from "./LeftPanel.js";
 import { RightPanel } from "./RightPanel.js";
 import { StatusBar } from "./StatusBar.js";
 import { exploreHandler } from "../tools/explore.js";
+import { log } from "../logger.js";
 
 const theme = defaultTheme;
+const PULL_INTERVAL_MS = parseInt(process.env.KNOMIT_POLL_INTERVAL ?? "30000", 10);
 
 function App({ repo, searchIndex }: { repo: GitRepo; searchIndex: SearchIndex }) {
   const [state, dispatch] = useReducer(reducer, initialState);
@@ -32,13 +34,36 @@ function App({ repo, searchIndex }: { repo: GitRepo; searchIndex: SearchIndex })
     return () => { stdout.off("resize", onResize); };
   }, [stdout]);
 
+  // Periodic sync: pull from remote + re-index local changes from other processes
+  const [lastPull, setLastPull] = useState(0);
+  useEffect(() => {
+    const timer = setInterval(async () => {
+      try {
+        // Pull from remote if available
+        const synced = await repo.sync();
+        if (synced.conflict) {
+          log.warn("tui: pull found merge conflict, skipping");
+        }
+        // Re-index or detect changes from other processes (e.g. MCP)
+        const indexed = await searchIndex.sync(repo);
+        if (indexed) {
+          setLastPull((n) => n + 1);
+          log.info("tui: background sync detected new data");
+        }
+      } catch (err) {
+        log.debug(`tui: background sync failed: ${err}`);
+      }
+    }, PULL_INTERVAL_MS);
+    return () => clearInterval(timer);
+  }, [repo, searchIndex]);
+
   // Right panel data
   const [factTitle, setFactTitle] = useState("");
   const [factBody, setFactBody] = useState("");
   const [factFrontmatter, setFactFrontmatter] = useState<Frontmatter | undefined>();
-  const [history, setHistory] = useState<LogEntry[]>([]);
   const [stats, setStats] = useState<StatsResult | null>(null);
   const [summaryChildren, setSummaryChildren] = useState<SummaryChild[]>([]);
+  const [historical, setHistorical] = useState<HistoricalData | null>(null);
 
   const rightItemsRef = useRef<RightSelectableItem[]>([]);
 
@@ -60,7 +85,7 @@ function App({ repo, searchIndex }: { repo: GitRepo; searchIndex: SearchIndex })
         dispatch({ type: "SET_CHILDREN", children: [] });
       }
     })();
-  }, [state.currentPath]);
+  }, [state.currentPath, lastPull]);
 
   // Load stats and fact summaries when statsPath changes and in summary mode
   useEffect(() => {
@@ -74,9 +99,7 @@ function App({ repo, searchIndex }: { repo: GitRepo; searchIndex: SearchIndex })
     (async () => {
       try {
         const result = await exploreHandler(repo, { path: state.statsPath }, { skipSync: true });
-        setSummaryChildren(
-          result.children.map((c: ChildItem) => ({ name: c.name, type: c.type, summary: c.summary }))
-        );
+        setSummaryChildren(result.children);
       } catch {
         setSummaryChildren([]);
       }
@@ -101,19 +124,57 @@ function App({ repo, searchIndex }: { repo: GitRepo; searchIndex: SearchIndex })
     })();
   }, [state.currentFact, state.rightPanelMode]);
 
-  // Load history when toggled
-  const historyTarget = state.currentFact ?? state.statsPath;
+  // Load history entries when entering history mode
   useEffect(() => {
-    if (state.rightPanelMode !== "history") return;
+    if (!state.historyMode || !state.historyTarget) return;
     (async () => {
       try {
-        const entries = await repo.log(historyTarget);
-        setHistory(entries);
+        const entries = await repo.log(state.historyTarget);
+        dispatch({ type: "SET_HISTORY_ENTRIES", entries });
       } catch {
-        setHistory([]);
+        dispatch({ type: "SET_HISTORY_ENTRIES", entries: [] });
       }
     })();
-  }, [state.rightPanelMode, historyTarget]);
+  }, [state.historyMode, state.historyTarget]);
+
+  // Load content at selected historical commit
+  const selectedHistoryEntry = state.historyMode ? state.historyEntries[state.historySelectedIndex] : null;
+  useEffect(() => {
+    if (!state.historyMode || !selectedHistoryEntry) {
+      setHistorical(null);
+      return;
+    }
+    const commit = selectedHistoryEntry.commit;
+    const target = state.historyTarget;
+    const entry = selectedHistoryEntry;
+    const isFact = target.endsWith(".md");
+    (async () => {
+      try {
+        if (isFact) {
+          const [raw, lineDiff] = await Promise.all([
+            repo.readFileAtCommit(target, commit),
+            repo.diffFileAtCommit(target, commit),
+          ]);
+          setHistorical({ content: raw, lineDiff, entry });
+        } else {
+          const [entries, diff] = await Promise.all([
+            repo.listDirAtCommit(target, commit),
+            repo.diffAtCommit(commit, target),
+          ]);
+          setHistorical({
+            children: entries.map((e) => ({
+              name: e.name,
+              type: e.isDirectory ? "world" as const : "fact" as const,
+            })),
+            diff: { added: new Set(diff.added), modified: new Set(diff.modified) },
+            entry,
+          });
+        }
+      } catch {
+        setHistorical(null);
+      }
+    })();
+  }, [state.historyMode, selectedHistoryEntry?.commit, state.historyTarget]);
 
   // Keyboard handling
   useInput((input, key) => {
@@ -122,7 +183,7 @@ function App({ repo, searchIndex }: { repo: GitRepo; searchIndex: SearchIndex })
       return;
     }
 
-    if (state.focusZone === "command") {
+    if (state.focusZone === "command" || state.focusZone === "cmdline") {
       if (key.escape) {
         dispatch({ type: "SET_FOCUS", zone: "left" });
       }
@@ -158,7 +219,7 @@ function App({ repo, searchIndex }: { repo: GitRepo; searchIndex: SearchIndex })
       } else if (input === "q") {
         exit();
       } else if (input === "h") {
-        dispatch({ type: "TOGGLE_HISTORY" });
+        dispatch({ type: "TOGGLE_HISTORY", target: state.currentFact ?? state.statsPath });
       }
       return;
     }
@@ -171,6 +232,7 @@ function App({ repo, searchIndex }: { repo: GitRepo; searchIndex: SearchIndex })
     if (key.upArrow) dispatch({ type: "NAVIGATE_UP" });
     else if (key.downArrow) dispatch({ type: "NAVIGATE_DOWN" });
     else if (key.return) {
+      if (state.historyMode) return;
       if (state.breadcrumbSelected) {
         dispatch({ type: "GO_UP" });
       } else {
@@ -178,25 +240,39 @@ function App({ repo, searchIndex }: { repo: GitRepo; searchIndex: SearchIndex })
       }
     }
     else if (key.leftArrow || key.backspace || key.delete) {
-      if (state.searchActive) {
+      if (state.historyMode) {
+        dispatch({ type: "TOGGLE_HISTORY", target: "" });
+      } else if (state.searchActive) {
         dispatch({ type: "CLEAR_SEARCH" });
       } else {
         dispatch({ type: "GO_UP" });
       }
     }
     else if (key.rightArrow) {
-      if (state.rightPanelMode !== "history" && state.rightItemCount > 0) {
+      if (!state.historyMode && state.rightItemCount > 0) {
         dispatch({ type: "SET_FOCUS", zone: "right" });
       }
     }
     else if (input === "/" || key.tab) {
-      dispatch({ type: "SET_FOCUS", zone: "command" });
+      if (!state.historyMode) {
+        dispatch({ type: "SET_FOCUS", zone: "command" });
+      }
+    }
+    else if (input === ":") {
+      if (!state.historyMode) {
+        dispatch({ type: "SET_FOCUS", zone: "cmdline" });
+      }
     }
     else if (input === "h") {
-      dispatch({ type: "TOGGLE_HISTORY" });
+      const target = state.currentFact ?? state.statsPath;
+      dispatch({ type: "TOGGLE_HISTORY", target });
     }
-    else if (key.escape && state.searchActive) {
-      dispatch({ type: "CLEAR_SEARCH" });
+    else if (key.escape) {
+      if (state.historyMode) {
+        dispatch({ type: "TOGGLE_HISTORY", target: "" });
+      } else if (state.searchActive) {
+        dispatch({ type: "CLEAR_SEARCH" });
+      }
     }
   });
 
@@ -226,16 +302,37 @@ function App({ repo, searchIndex }: { repo: GitRepo; searchIndex: SearchIndex })
     await dispatchSearch(domain, "domain");
   }, [dispatchSearch]);
 
-  const handleCommandSubmit = useCallback(async (text: string) => {
+  const handleSearchSubmit = useCallback(async (text: string) => {
     const trimmed = text.trim();
     if (!trimmed) return;
     setInputKey((k: number) => k + 1);
     await dispatchSearch(trimmed);
   }, [dispatchSearch]);
 
+  const handleCommandSubmit = useCallback(async (text: string) => {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    setInputKey((k: number) => k + 1);
+    dispatch({ type: "SET_FOCUS", zone: "left" });
+    switch (trimmed) {
+      case "rebuild": {
+        dispatch({ type: "SET_LOADING", loading: true });
+        try {
+          await searchIndex.rebuild(repo);
+          dispatch({ type: "SET_CHILDREN", children: [] });
+          const result = await exploreHandler(repo, { path: "worlds" }, { skipSync: true });
+          dispatch({ type: "SET_CHILDREN", children: result.children });
+        } finally {
+          dispatch({ type: "SET_LOADING", loading: false });
+        }
+        break;
+      }
+    }
+  }, [searchIndex, repo]);
+
   return (
     <Box flexDirection="column" width={termSize.columns} height={termSize.rows}>
-      <TopBar branch={branch} theme={theme} />
+      <TopBar branch={branch} theme={theme} embeddings={searchIndex.hasEmbeddings} />
       <Box flexDirection="row" flexGrow={1} overflow="hidden">
         <LeftPanel
           currentPath={state.currentPath}
@@ -252,26 +349,30 @@ function App({ repo, searchIndex }: { repo: GitRepo; searchIndex: SearchIndex })
               ? state.searchResults[state.selectedIndex]?.file
               : undefined
           }
+          historyMode={state.historyMode}
+          historyEntries={state.historyEntries}
+          historySelectedIndex={state.historySelectedIndex}
+          historyTarget={state.historyTarget}
         />
         <RightPanel
-          mode={state.rightPanelMode}
+          mode={state.rightPanelMode === "history" ? "summary" : state.rightPanelMode}
           theme={theme}
           stats={stats}
           summaryChildren={state.rightPanelMode === "summary" ? summaryChildren : undefined}
           factTitle={factTitle}
           factBody={factBody}
           factFrontmatter={factFrontmatter}
-          history={history}
-          historyFile={state.currentFact ?? state.statsPath}
           focused={state.focusZone === "right"}
           selectedIndex={state.rightSelectedIndex}
           onItemsChanged={handleRightItemsChanged}
+          historical={state.historyMode ? historical ?? undefined : undefined}
         />
       </Box>
       <StatusBar
-        focused={state.focusZone === "command"}
+        mode={state.focusZone === "command" ? "search" : state.focusZone === "cmdline" ? "cmdline" : "idle"}
         theme={theme}
-        onSubmit={handleCommandSubmit}
+        onSearchSubmit={handleSearchSubmit}
+        onCommandSubmit={handleCommandSubmit}
         inputKey={inputKey}
       />
     </Box>

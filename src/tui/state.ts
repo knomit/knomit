@@ -1,3 +1,5 @@
+import type { LogEntry } from "../git.js";
+
 export interface ChildItem {
   name: string;
   type: "world" | "fact";
@@ -29,12 +31,16 @@ export interface AppState {
   searchActive: boolean;
   searchResults: SearchResultItem[];
   children: ChildItem[];
-  focusZone: "left" | "right" | "command";
+  focusZone: "left" | "right" | "command" | "cmdline";
   rightSelectedIndex: number;
   rightItemCount: number;
   searchType: "text" | "domain";
   loading: boolean;
   savedNavState: SavedNavState | null;
+  historyMode: boolean;
+  historyEntries: LogEntry[];
+  historyTarget: string;
+  historySelectedIndex: number;
 }
 
 export const initialState: AppState = {
@@ -53,6 +59,10 @@ export const initialState: AppState = {
   searchType: "text",
   loading: false,
   savedNavState: null,
+  historyMode: false,
+  historyEntries: [],
+  historyTarget: "",
+  historySelectedIndex: 0,
 };
 
 export type Action =
@@ -61,12 +71,11 @@ export type Action =
   | { type: "NAVIGATE_DOWN" }
   | { type: "OPEN_ITEM" }
   | { type: "GO_UP" }
-  | { type: "SET_FOCUS"; zone: "left" | "right" | "command" }
-  | { type: "TOGGLE_HISTORY" }
+  | { type: "SET_FOCUS"; zone: "left" | "right" | "command" | "cmdline" }
+  | { type: "TOGGLE_HISTORY"; target: string }
+  | { type: "SET_HISTORY_ENTRIES"; entries: LogEntry[] }
   | { type: "SET_SEARCH_RESULTS"; results: SearchResultItem[]; searchType?: "text" | "domain" }
   | { type: "CLEAR_SEARCH" }
-  | { type: "SELECT_SEARCH_RESULT" }
-  | { type: "NAVIGATE_TO_PATH"; path: string }
   | { type: "SET_LOADING"; loading: boolean }
   | { type: "RIGHT_NAVIGATE_UP" }
   | { type: "RIGHT_NAVIGATE_DOWN" }
@@ -76,18 +85,17 @@ function autoSelectItem(
   state: AppState,
   index: number
 ): Pick<AppState, "currentFact" | "rightPanelMode" | "statsPath" | "breadcrumbSelected"> {
-  const sticky = state.rightPanelMode === "history";
   if (state.searchActive) {
     const item = state.searchResults[index];
     return item
-      ? { currentFact: item.file, rightPanelMode: sticky ? "history" : "fact", statsPath: state.currentPath, breadcrumbSelected: false }
-      : { currentFact: null, rightPanelMode: sticky ? "history" : "summary", statsPath: state.currentPath, breadcrumbSelected: false };
+      ? { currentFact: item.file, rightPanelMode: "fact", statsPath: state.currentPath, breadcrumbSelected: false }
+      : { currentFact: null, rightPanelMode: "summary", statsPath: state.currentPath, breadcrumbSelected: false };
   }
   const child = state.children[index];
   if (child?.type === "fact") {
     return {
       currentFact: `${state.currentPath}/${child.name}`,
-      rightPanelMode: sticky ? "history" : "fact",
+      rightPanelMode: "fact",
       statsPath: state.currentPath,
       breadcrumbSelected: false,
     };
@@ -95,18 +103,17 @@ function autoSelectItem(
   if (child?.type === "world") {
     return {
       currentFact: null,
-      rightPanelMode: sticky ? "history" : "summary",
+      rightPanelMode: "summary",
       statsPath: `${state.currentPath}/${child.name}`,
       breadcrumbSelected: false,
     };
   }
-  return { currentFact: null, rightPanelMode: sticky ? "history" : "summary", statsPath: state.currentPath, breadcrumbSelected: false };
+  return { currentFact: null, rightPanelMode: "summary", statsPath: state.currentPath, breadcrumbSelected: false };
 }
 
 export function reducer(state: AppState, action: Action): AppState {
   switch (action.type) {
     case "SET_CHILDREN": {
-      const mode = state.rightPanelMode === "history" ? "history" : "summary";
       return {
         ...state,
         children: action.children,
@@ -114,11 +121,19 @@ export function reducer(state: AppState, action: Action): AppState {
         breadcrumbSelected: true,
         statsPath: state.currentPath,
         currentFact: null,
-        rightPanelMode: mode,
+        rightPanelMode: "summary",
       };
     }
 
     case "NAVIGATE_DOWN": {
+      if (state.historyMode) {
+        const maxIdx = state.historyEntries.length - 1;
+        if (maxIdx < 0) return state;
+        return {
+          ...state,
+          historySelectedIndex: Math.min(state.historySelectedIndex + 1, maxIdx),
+        };
+      }
       if (state.breadcrumbSelected) {
         if ((state.searchActive ? state.searchResults.length : state.children.length) === 0) return state;
         return {
@@ -138,14 +153,19 @@ export function reducer(state: AppState, action: Action): AppState {
     }
 
     case "NAVIGATE_UP": {
+      if (state.historyMode) {
+        return {
+          ...state,
+          historySelectedIndex: Math.max(state.historySelectedIndex - 1, 0),
+        };
+      }
       if (state.breadcrumbSelected) return state;
       if (state.selectedIndex === 0) {
-        const sticky = state.rightPanelMode === "history";
         return {
           ...state,
           breadcrumbSelected: true,
           currentFact: null,
-          rightPanelMode: sticky ? "history" : "summary",
+          rightPanelMode: "summary",
           statsPath: state.currentPath,
         };
       }
@@ -178,7 +198,7 @@ export function reducer(state: AppState, action: Action): AppState {
           breadcrumbSelected: true,
           currentFact: null,
           statsPath: `${state.currentPath}/${child.name}`,
-          rightPanelMode: state.rightPanelMode === "history" ? "history" : "summary",
+          rightPanelMode: "summary",
         };
       }
       return {
@@ -199,21 +219,7 @@ export function reducer(state: AppState, action: Action): AppState {
         breadcrumbSelected: true,
         currentFact: null,
         statsPath: parentPath,
-        rightPanelMode: state.rightPanelMode === "history" ? "history" : "summary",
-        searchActive: false,
-        searchResults: [],
-      };
-    }
-
-    case "NAVIGATE_TO_PATH": {
-      return {
-        ...state,
-        currentPath: action.path,
-        selectedIndex: 0,
-        breadcrumbSelected: true,
-        currentFact: null,
-        statsPath: action.path,
-        rightPanelMode: state.rightPanelMode === "history" ? "history" : "summary",
+        rightPanelMode: "summary",
         searchActive: false,
         searchResults: [],
       };
@@ -227,13 +233,31 @@ export function reducer(state: AppState, action: Action): AppState {
       };
 
     case "TOGGLE_HISTORY": {
-      if (state.rightPanelMode === "history") {
+      if (state.historyMode) {
         return {
           ...state,
+          historyMode: false,
+          historyEntries: [],
+          historyTarget: "",
+          historySelectedIndex: 0,
           rightPanelMode: state.currentFact ? "fact" : "summary",
         };
       }
-      return { ...state, rightPanelMode: "history" };
+      return {
+        ...state,
+        historyMode: true,
+        historyTarget: action.target,
+        historySelectedIndex: 0,
+        rightPanelMode: "history",
+      };
+    }
+
+    case "SET_HISTORY_ENTRIES": {
+      return {
+        ...state,
+        historyEntries: action.entries,
+        historySelectedIndex: 0,
+      };
     }
 
     case "SET_SEARCH_RESULTS": {
@@ -270,16 +294,6 @@ export function reducer(state: AppState, action: Action): AppState {
         statsPath: saved?.statsPath ?? state.currentPath,
         rightPanelMode: saved?.rightPanelMode ?? "summary",
         savedNavState: null,
-      };
-    }
-
-    case "SELECT_SEARCH_RESULT": {
-      const item = state.searchResults[state.selectedIndex];
-      if (!item) return state;
-      return {
-        ...state,
-        currentFact: item.file,
-        rightPanelMode: "fact",
       };
     }
 

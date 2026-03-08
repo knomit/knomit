@@ -154,7 +154,7 @@ export async function exploreHandler(
 export function registerExploreTool(server: McpServer, repo: GitRepo): void {
   server.tool(
     "knomit_explore",
-    "Browse the knowledge graph hierarchy. Lists worlds (categories) and facts at a given path. Start with 'worlds' to see top-level categories.",
+    `Browse the knowledge graph hierarchy. Lists worlds (categories) and facts at a given path. Start with 'worlds' to see top-level categories. Use this to understand what's already stored before learning new facts, or to orient yourself in the ontology.`,
     ExploreInput.shape,
     async (input) => {
       const parsed = ExploreInput.parse(input);

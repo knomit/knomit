@@ -1,4 +1,43 @@
+import { join, dirname } from "node:path";
+import { existsSync, copyFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { log } from "./logger";
+import { bundledLibDir } from "./paths";
+
+function ensureOnnxLibInTmpdir(): void {
+  // The compiled binary extracts native .node addons to os.tmpdir().
+  // The .node addon uses @rpath which resolves to that same temp dir,
+  // so we must place the onnxruntime dylib/so there.
+  const libName = process.platform === "darwin"
+    ? "libonnxruntime.1.24.3.dylib"
+    : "libonnxruntime.so.1";
+  const dest = join(tmpdir(), libName);
+
+  if (existsSync(dest)) return;
+
+  // Search for the library in known locations
+  const candidates = [
+    join(bundledLibDir(), libName),
+    join(dirname(process.execPath), "node_modules", "onnxruntime-node", "bin", "napi-v6",
+      process.platform, process.arch, libName),
+    join(import.meta.dir, "node_modules", "onnxruntime-node", "bin", "napi-v6",
+      process.platform, process.arch, libName),
+  ];
+
+  for (const src of candidates) {
+    if (existsSync(src)) {
+      try {
+        copyFileSync(src, dest);
+        log.info(`copied ${libName} to ${dest}`);
+        return;
+      } catch (err) {
+        log.debug(`failed to copy ${libName} from ${src}: ${err}`);
+      }
+    }
+  }
+
+  log.warn(`could not find ${libName} to copy to tmpdir`);
+}
 
 export class Embedder {
   private ort: typeof import("onnxruntime-node") | null = null;
@@ -6,6 +45,8 @@ export class Embedder {
   private tokenizer: unknown = null;
 
   async init(modelPath: string, tokenizerPath: string): Promise<void> {
+    // Ensure onnxruntime dylib is in tmpdir where the .node addon expects it
+    ensureOnnxLibInTmpdir();
     // Lazy import — only loaded when embeddings enabled
     this.ort = await import("onnxruntime-node");
     this.session = await this.ort.InferenceSession.create(modelPath);

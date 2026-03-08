@@ -1,4 +1,4 @@
-import { exists, mkdir, readdir, readFile as fsReadFile, writeFile } from "node:fs/promises";
+import { exists, mkdir, readdir } from "node:fs/promises";
 import { join, dirname, resolve } from "node:path";
 import { hostname } from "node:os";
 import { log } from "./logger";
@@ -17,6 +17,7 @@ export interface LogEntry {
   commit: string;
   date: string;
   message: string;
+  episode?: string;
 }
 
 export interface DirEntry {
@@ -70,17 +71,32 @@ export class GitRepo {
     ...args: string[]
   ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
     const bin = await this.resolveGitBin();
-    log.debug(`git ${args.join(" ")}`);
-    const proc = Bun.spawnSync([bin, "-C", this.repoPath, ...args]);
-    const result = {
-      stdout: new TextDecoder().decode(proc.stdout).trim(),
-      stderr: new TextDecoder().decode(proc.stderr).trim(),
-      exitCode: proc.exitCode,
-    };
-    if (result.exitCode !== 0) {
-      log.debug(`git ${args[0]} exited ${result.exitCode}: ${result.stderr}`);
+    const maxRetries = 5;
+
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      log.debug(`git ${args.join(" ")}${attempt > 0 ? ` (retry ${attempt})` : ""}`);
+      const proc = Bun.spawnSync([bin, "-C", this.repoPath, ...args]);
+      const result = {
+        stdout: new TextDecoder().decode(proc.stdout).trim(),
+        stderr: new TextDecoder().decode(proc.stderr).trim(),
+        exitCode: proc.exitCode,
+      };
+
+      if (result.exitCode !== 0) {
+        // Retry on lock contention
+        if (attempt < maxRetries && (result.stderr.includes("could not lock") || result.stderr.includes(".lock"))) {
+          const delay = 50 * Math.pow(2, attempt) + Math.random() * 50;
+          log.debug(`git lock contention, retrying in ${Math.round(delay)}ms`);
+          await Bun.sleep(delay);
+          continue;
+        }
+        log.debug(`git ${args[0]} exited ${result.exitCode}: ${result.stderr}`);
+      }
+      return result;
     }
-    return result;
+
+    // Unreachable, but satisfies TypeScript
+    throw new Error(`git ${args.join(" ")} failed after ${maxRetries} retries`);
   }
 
   private async gitOrThrow(...args: string[]): Promise<string> {
@@ -134,7 +150,7 @@ refs: []
 
 Root of the Knomit knowledge graph.
 `;
-    await writeFile(join(this.repoPath, "worlds.md"), worldsMd);
+    await Bun.write(join(this.repoPath, "worlds.md"), worldsMd);
     await this.gitOrThrow("add", "worlds.md");
     await this.gitOrThrow("commit", "-m", "init: create knowledge base");
 
@@ -222,7 +238,7 @@ Root of the Knomit knowledge graph.
       this.validatePath(file.path);
       const fullPath = join(this.repoPath, file.path);
       await mkdir(dirname(fullPath), { recursive: true });
-      await writeFile(fullPath, file.content);
+      await Bun.write(fullPath, file.content);
     }
 
     await this.gitOrThrow("add", ...files.map((f) => f.path));
@@ -259,21 +275,100 @@ Root of the Knomit knowledge graph.
     const stdout = await this.gitOrThrow(
       "log",
       "--follow",
-      "--format=%H|%aI|%s",
+      "--decorate-refs=refs/tags/learn/",
+      "--format=%H|%aI|%s|%D",
       "--",
       file
     );
     if (!stdout) return [];
-    return stdout.split("\n").map((line) => {
-      const [commit, date, message] = line.split("|", 3);
-      return { commit: commit!, date: date!, message: message! };
+    const entries = stdout.split("\n").map((line) => {
+      const [commit, date, message, decor] = line.split("|", 4);
+      const tag = decor?.match(/tag: learn\/([^\s,)]+)/)?.[1];
+      return { commit: commit!, date: date!, message: message!, episode: tag };
     });
+    // Walk newest-first: a learn/ tag marks the episode for itself and
+    // all older commits until the next tag.
+    let currentEpisode: string | undefined;
+    for (const entry of entries) {
+      if (entry.episode) {
+        currentEpisode = entry.episode;
+      } else {
+        entry.episode = currentEpisode;
+      }
+    }
+    return entries;
   }
 
   async readFile(path: string): Promise<string> {
     this.validatePath(path);
     const fullPath = join(this.repoPath, path);
-    return fsReadFile(fullPath, "utf-8");
+    return Bun.file(fullPath).text();
+  }
+
+  async readFileAtCommit(path: string, commit: string): Promise<string> {
+    return this.gitOrThrow("show", `${commit}:${path}`);
+  }
+
+  async diffFileAtCommit(path: string, commit: string): Promise<Set<number>> {
+    const result = await this.git("diff", "-U0", `${commit}^`, commit, "--", path);
+    if (result.exitCode !== 0 || !result.stdout) return new Set();
+    const added = new Set<number>();
+    let newLineNum = 0;
+    for (const line of result.stdout.split("\n")) {
+      if (line.startsWith("@@")) {
+        const match = line.match(/\+(\d+)/);
+        if (match) newLineNum = parseInt(match[1]!, 10);
+        continue;
+      }
+      if (line.startsWith("+") && !line.startsWith("+++")) {
+        added.add(newLineNum);
+        newLineNum++;
+      } else if (!line.startsWith("-") || line.startsWith("---")) {
+        newLineNum++;
+      }
+    }
+    return added;
+  }
+
+  private parseDiffNameStatus(stdout: string, stripPrefix?: string): { added: string[]; modified: string[]; deleted: string[] } {
+    const added: string[] = [];
+    const modified: string[] = [];
+    const deleted: string[] = [];
+    for (const line of stdout.split("\n")) {
+      const [status, file] = line.split("\t", 2);
+      if (!file) continue;
+      const name = stripPrefix && file.startsWith(stripPrefix) ? file.slice(stripPrefix.length) : file;
+      if (status === "A") added.push(name);
+      else if (status === "M") modified.push(name);
+      else if (status === "D") deleted.push(name);
+    }
+    return { added, modified, deleted };
+  }
+
+  private dirPrefix(path: string): string {
+    return path.endsWith("/") ? path : `${path}/`;
+  }
+
+  async diffAtCommit(commit: string, path: string): Promise<{ added: string[]; modified: string[]; deleted: string[] }> {
+    const prefix = this.dirPrefix(path);
+    const result = await this.git("diff", "--name-status", `${commit}^`, commit, "--", prefix);
+    if (result.exitCode !== 0 || !result.stdout) {
+      return { added: [], modified: [], deleted: [] };
+    }
+    return this.parseDiffNameStatus(result.stdout, prefix);
+  }
+
+  async listDirAtCommit(path: string, commit: string): Promise<DirEntry[]> {
+    const prefix = this.dirPrefix(path);
+    const result = await this.git("ls-tree", commit, prefix);
+    if (result.exitCode !== 0 || !result.stdout) return [];
+    return result.stdout.split("\n").filter(Boolean).map((line) => {
+      // format: <mode> <type> <hash>\t<path>
+      const [meta, fullPath] = line.split("\t", 2);
+      const type = meta!.split(" ")[1];
+      const name = fullPath!.startsWith(prefix) ? fullPath!.slice(prefix.length) : fullPath!;
+      return { name, isDirectory: type === "tree" };
+    });
   }
 
   async fileExists(path: string): Promise<boolean> {
@@ -306,23 +401,19 @@ Root of the Knomit knowledge graph.
     if (result.exitCode !== 0 || !result.stdout) {
       return { added: [], modified: [], deleted: [] };
     }
-    const added: string[] = [];
-    const modified: string[] = [];
-    const deleted: string[] = [];
-    for (const line of result.stdout.split("\n")) {
-      const [status, file] = line.split("\t", 2);
-      if (!file) continue;
-      if (status === "A") added.push(file);
-      else if (status === "M") modified.push(file);
-      else if (status === "D") deleted.push(file);
-    }
-    return { added, modified, deleted };
+    return this.parseDiffNameStatus(result.stdout);
   }
 
   async tagsContaining(commit: string): Promise<string[]> {
     const result = await this.git("tag", "--contains", commit);
     if (result.exitCode !== 0) return [];
     return result.stdout ? result.stdout.split("\n") : [];
+  }
+
+  async tagsAt(commit: string): Promise<string[]> {
+    const result = await this.git("tag", "--points-at", commit);
+    if (result.exitCode !== 0) return [];
+    return result.stdout ? result.stdout.split("\n").filter(Boolean) : [];
   }
 
   async commitsBetweenTags(

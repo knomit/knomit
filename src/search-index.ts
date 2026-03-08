@@ -99,6 +99,7 @@ export class SearchIndex {
 
     this.db = new Database(this.dbPath);
     this.db.run("PRAGMA journal_mode = WAL");
+    this.db.run("PRAGMA busy_timeout = 5000");
 
     this.db.run(`
       CREATE TABLE IF NOT EXISTS meta (
@@ -183,33 +184,41 @@ export class SearchIndex {
     const entities = JSON.stringify(fact.entities);
     const refs = JSON.stringify(fact.refs);
 
-    // Get existing rowid for FTS delete trigger
-    const existing = this.db
-      .query("SELECT rowid, title, body, entities, domain FROM facts WHERE path = ?")
-      .get(path) as { rowid: number; title: string; body: string; entities: string; domain: string } | null;
+    this.db.run("BEGIN");
+    try {
+      // Get existing rowid for FTS delete trigger
+      const existing = this.db
+        .query("SELECT rowid, title, body, entities, domain FROM facts WHERE path = ?")
+        .get(path) as { rowid: number; title: string; body: string; entities: string; domain: string } | null;
 
-    if (existing) {
-      // Delete old FTS entry
+      if (existing) {
+        // Delete old FTS entry
+        this.db.query(
+          "INSERT INTO facts_fts(facts_fts, rowid, title, body, entities, domain) VALUES ('delete', ?, ?, ?, ?, ?)"
+        ).run(existing.rowid, existing.title, existing.body, existing.entities, existing.domain);
+      }
+
+      // Upsert the fact row
       this.db.query(
-        "INSERT INTO facts_fts(facts_fts, rowid, title, body, entities, domain) VALUES ('delete', ?, ?, ?, ?, ?)"
-      ).run(existing.rowid, existing.title, existing.body, existing.entities, existing.domain);
+        `INSERT OR REPLACE INTO facts (path, title, body, domain, entities, confidence, sources, refs, commit_hash)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      ).run(path, fact.title, fact.body, domain, entities, fact.confidence, fact.sources, refs, fact.commitHash);
+
+      // Get new rowid and insert into FTS
+      const newRow = this.db
+        .query("SELECT rowid FROM facts WHERE path = ?")
+        .get(path) as { rowid: number };
+      this.db.query(
+        "INSERT INTO facts_fts(rowid, title, body, entities, domain) VALUES (?, ?, ?, ?, ?)"
+      ).run(newRow.rowid, fact.title, fact.body, entities, domain);
+
+      this.db.run("COMMIT");
+    } catch (err) {
+      this.db.run("ROLLBACK");
+      throw err;
     }
 
-    // Upsert the fact row
-    this.db.query(
-      `INSERT OR REPLACE INTO facts (path, title, body, domain, entities, confidence, sources, refs, commit_hash)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    ).run(path, fact.title, fact.body, domain, entities, fact.confidence, fact.sources, refs, fact.commitHash);
-
-    // Get new rowid and insert into FTS
-    const newRow = this.db
-      .query("SELECT rowid FROM facts WHERE path = ?")
-      .get(path) as { rowid: number };
-    this.db.query(
-      "INSERT INTO facts_fts(rowid, title, body, entities, domain) VALUES (?, ?, ?, ?, ?)"
-    ).run(newRow.rowid, fact.title, fact.body, entities, domain);
-
-    // Vector embedding
+    // Vector embedding (outside transaction — async and non-critical)
     if (this.embedder) {
       try {
         await this.embedFact(path, fact);
@@ -238,10 +247,17 @@ export class SearchIndex {
       .get(path) as { rowid: number; title: string; body: string; entities: string; domain: string } | null;
 
     if (existing) {
-      this.db.query(
-        "INSERT INTO facts_fts(facts_fts, rowid, title, body, entities, domain) VALUES ('delete', ?, ?, ?, ?, ?)"
-      ).run(existing.rowid, existing.title, existing.body, existing.entities, existing.domain);
-      this.db.query("DELETE FROM facts WHERE path = ?").run(path);
+      this.db.run("BEGIN");
+      try {
+        this.db.query(
+          "INSERT INTO facts_fts(facts_fts, rowid, title, body, entities, domain) VALUES ('delete', ?, ?, ?, ?, ?)"
+        ).run(existing.rowid, existing.title, existing.body, existing.entities, existing.domain);
+        this.db.query("DELETE FROM facts WHERE path = ?").run(path);
+        this.db.run("COMMIT");
+      } catch (err) {
+        this.db.run("ROLLBACK");
+        throw err;
+      }
     }
   }
 
@@ -295,6 +311,12 @@ export class SearchIndex {
     let rows: Array<Record<string, unknown>>;
 
     if (query.text) {
+      // Quote each token to prevent FTS5 syntax interpretation (e.g. hyphens, colons)
+      const ftsQuery = query.text
+        .split(/\s+/)
+        .filter(Boolean)
+        .map((t) => `"${t.replace(/"/g, '""')}"`)
+        .join(" ");
       // FTS5 search with BM25 ranking
       rows = this.db.query(`
         SELECT f.*, fts.rank as score
@@ -303,7 +325,7 @@ export class SearchIndex {
         WHERE facts_fts MATCH ?
         ORDER BY fts.rank
         LIMIT ?
-      `).all(query.text, limit * 5) as Array<Record<string, unknown>>;
+      `).all(ftsQuery, limit * 5) as Array<Record<string, unknown>>;
     } else {
       // No text search — scan facts table
       rows = this.db.query(`
@@ -415,9 +437,15 @@ export class SearchIndex {
     if (!this.db) throw new Error("SearchIndex not initialized");
     log.info("search index: full rebuild starting");
 
-    // Clear existing data
-    this.db.run("DELETE FROM facts");
-    this.db.run("INSERT INTO facts_fts(facts_fts) VALUES ('delete-all')");
+    this.db.run("BEGIN");
+    try {
+      this.db.run("DELETE FROM facts");
+      this.db.run("INSERT INTO facts_fts(facts_fts) VALUES ('delete-all')");
+      this.db.run("COMMIT");
+    } catch (err) {
+      this.db.run("ROLLBACK");
+      throw err;
+    }
 
     const head = await repo.headCommit();
     await this.indexDir(repo, "worlds", head);
@@ -425,6 +453,8 @@ export class SearchIndex {
     this.setMeta("last_commit", head);
     log.info("search index: rebuild complete");
   }
+
+  private lastSeenHead: string | null = null;
 
   async sync(repo: GitRepo): Promise<boolean> {
     if (!this.db) throw new Error("SearchIndex not initialized");
@@ -434,9 +464,24 @@ export class SearchIndex {
 
     if (!lastCommit) {
       await this.rebuild(repo);
+      this.lastSeenHead = head;
       return true;
     }
-    if (lastCommit === head) return false;
+
+    // Initialize in-memory tracker from DB on first call
+    if (this.lastSeenHead === null) {
+      this.lastSeenHead = lastCommit;
+    }
+
+    // Another process (e.g. MCP) already indexed this commit,
+    // but we haven't seen it yet — signal data changed for UI refresh.
+    if (lastCommit === head) {
+      if (this.lastSeenHead !== head) {
+        this.lastSeenHead = head;
+        return true;
+      }
+      return false;
+    }
 
     log.info(`search index: syncing from ${lastCommit.slice(0, 7)} to ${head.slice(0, 7)}`);
     const diff = await repo.diffFiles(lastCommit);
@@ -451,6 +496,7 @@ export class SearchIndex {
     }
 
     this.setMeta("last_commit", head);
+    this.lastSeenHead = head;
     return true;
   }
 
@@ -494,6 +540,10 @@ export class SearchIndex {
   private setMeta(key: string, value: string): void {
     if (!this.db) return;
     this.db.query("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)").run(key, value);
+  }
+
+  get hasEmbeddings(): boolean {
+    return this.embedder !== null;
   }
 
   close(): void {

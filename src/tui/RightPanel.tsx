@@ -1,15 +1,12 @@
 import React from "react";
 import { Box, Text } from "ink";
 import { glyph, type Theme } from "./theme.js";
-import type { Frontmatter } from "../facts.js";
+import { parseFact, type Frontmatter } from "../facts.js";
 import type { StatsResult } from "../search-index.js";
 import type { LogEntry } from "../git.js";
+import type { ChildItem } from "./state.js";
 
-export interface SummaryChild {
-  name: string;
-  type: "world" | "fact";
-  summary?: string;
-}
+export type SummaryChild = ChildItem;
 
 export interface RightSelectableItem {
   type: "domain" | "entity" | "fact";
@@ -17,19 +14,26 @@ export interface RightSelectableItem {
   path?: string;
 }
 
+export interface HistoricalData {
+  content?: string;
+  children?: SummaryChild[];
+  diff?: { added: Set<string>; modified: Set<string> };
+  lineDiff?: Set<number>;
+  entry: LogEntry;
+}
+
 interface RightPanelProps {
-  mode: "summary" | "fact" | "history";
+  mode: "summary" | "fact";
   theme: Theme;
   stats?: StatsResult | null;
   summaryChildren?: SummaryChild[];
   factTitle?: string;
   factBody?: string;
   factFrontmatter?: Frontmatter;
-  history?: LogEntry[];
-  historyFile?: string;
   focused?: boolean;
   selectedIndex?: number;
   onItemsChanged?: (items: RightSelectableItem[]) => void;
+  historical?: HistoricalData;
 }
 
 export function buildFactSelectableItems(
@@ -73,24 +77,28 @@ export function buildSelectableItems(
 }
 
 export function RightPanel({
-  mode, theme, stats, summaryChildren, factTitle, factBody, factFrontmatter, history, historyFile,
-  focused, selectedIndex, onItemsChanged,
+  mode, theme, stats, summaryChildren, factTitle, factBody, factFrontmatter,
+  focused, selectedIndex, onItemsChanged, historical,
 }: RightPanelProps) {
   let selectableItems: RightSelectableItem[] = [];
-  if (mode === "summary") {
-    selectableItems = buildSelectableItems(stats, summaryChildren);
-  } else if (mode === "fact") {
-    selectableItems = buildFactSelectableItems(factFrontmatter);
+  if (!historical) {
+    if (mode === "summary") {
+      selectableItems = buildSelectableItems(stats, summaryChildren);
+    } else if (mode === "fact") {
+      selectableItems = buildFactSelectableItems(factFrontmatter);
+    }
   }
 
   React.useEffect(() => {
     onItemsChanged?.(selectableItems);
-  }, [selectableItems.length, mode]);
+  }, [selectableItems.length, mode, !!historical]);
 
   return (
     <Box flexDirection="column" width="60%" paddingX={2} paddingTop={1} overflow="hidden" backgroundColor={theme.base}>
       <Box flexDirection="column" flexGrow={1} overflow="hidden">
-        {mode === "summary" && (
+        {historical ? (
+          <HistoricalView data={historical} theme={theme} />
+        ) : mode === "summary" ? (
           <SummaryView
             stats={stats}
             summaryChildren={summaryChildren}
@@ -99,14 +107,125 @@ export function RightPanel({
             selectedIndex={selectedIndex}
             selectableItems={selectableItems}
           />
-        )}
-        {mode === "fact" && (
+        ) : mode === "fact" ? (
           <FactView title={factTitle ?? ""} body={factBody ?? ""} frontmatter={factFrontmatter} theme={theme} focused={focused} selectedIndex={selectedIndex} />
-        )}
-        {mode === "history" && (
-          <HistoryView entries={history ?? []} file={historyFile ?? ""} theme={theme} />
-        )}
+        ) : null}
       </Box>
+    </Box>
+  );
+}
+
+function HistoricalView({ data, theme }: { data: HistoricalData; theme: Theme }) {
+  const { content, children, diff, lineDiff, entry } = data;
+  const commitShort = entry.commit.slice(0, 7);
+  const dateStr = new Date(entry.date).toLocaleDateString("en-US", {
+    month: "short", day: "numeric", year: "numeric",
+  });
+
+  const isFact = content !== undefined && content !== "";
+  let parsed: { title: string; body: string; frontmatter?: Frontmatter } | null = null;
+  // Track which lines in the raw file correspond to the body, for diff highlighting
+  let bodyStartLine = 0;
+  if (isFact) {
+    try {
+      parsed = parseFact(content);
+      // Body starts after "---\n<yaml>\n---\n" — count lines before body
+      const fmMatch = content.match(/^---\n[\s\S]*?\n---\n/);
+      bodyStartLine = fmMatch ? fmMatch[0].split("\n").length : 0;
+    } catch {
+      parsed = { title: "", body: content };
+    }
+  }
+
+  const hasLineDiff = lineDiff && lineDiff.size > 0;
+
+  // Check if frontmatter lines were changed
+  const fmChanged = hasLineDiff && Array.from(lineDiff).some((n) => n > 0 && n < bodyStartLine);
+
+  return (
+    <Box flexDirection="column">
+      <Box>
+        <Text color={theme.primary} bold>{glyph.bullet} Snapshot</Text>
+        <Text color={theme.dim}> at </Text>
+        <Text color={theme.yellow}>{commitShort}</Text>
+        <Text color={theme.dim}> {dateStr}</Text>
+      </Box>
+      <Box>
+        <ActionBadge message={entry.message} theme={theme} />
+      </Box>
+      {entry.episode && (
+        <Box>
+          <Text backgroundColor={theme.secondary} color={theme.dark} bold> {entry.episode} </Text>
+        </Box>
+      )}
+      <Text> </Text>
+      {parsed ? (
+        <Box flexDirection="column">
+          <Text color={theme.yellow} bold>{parsed.title}</Text>
+          <Text> </Text>
+          {parsed.frontmatter && (
+            <Box flexDirection="column" marginBottom={1}>
+              <Box gap={2}>
+                <ConfidenceBar value={parsed.frontmatter.confidence} theme={theme} />
+                <Label label="sources:" value={String(parsed.frontmatter.sources)} theme={theme} />
+                {fmChanged && <Text color={theme.green} bold>~</Text>}
+              </Box>
+              {parsed.frontmatter.domain.length > 0 && (
+                <Box>
+                  <Text color={theme.dim}>{glyph.tag} </Text>
+                  <Text color={fmChanged ? theme.green : theme.secondary}>{parsed.frontmatter.domain.join(", ")}</Text>
+                </Box>
+              )}
+              {parsed.frontmatter.entities.length > 0 && (
+                <Box>
+                  <Text color={theme.dim}>{glyph.bullet} </Text>
+                  <Text color={fmChanged ? theme.green : theme.accent}>{parsed.frontmatter.entities.join(", ")}</Text>
+                </Box>
+              )}
+              <Box>
+                <Text color={theme.dim}>{glyph.dashDivider.repeat(30)}</Text>
+              </Box>
+            </Box>
+          )}
+          {hasLineDiff ? (
+            <Box flexDirection="column">
+              {parsed.body.split("\n").map((line, i) => {
+                const fileLineNum = bodyStartLine + i;
+                const changed = lineDiff.has(fileLineNum);
+                return (
+                  <Box key={i}>
+                    {changed && <Text color={theme.green} bold>+ </Text>}
+                    <Text color={changed ? theme.green : undefined} wrap="wrap">{line}</Text>
+                  </Box>
+                );
+              })}
+            </Box>
+          ) : (
+            <Text wrap="wrap">{parsed.body}</Text>
+          )}
+        </Box>
+      ) : children && children.length > 0 ? (
+        <Box flexDirection="column">
+          {children.map((c) => {
+            const isNew = diff?.added.has(c.name);
+            const isMod = diff?.modified.has(c.name);
+            const badge = isNew ? " +" : isMod ? " ~" : "";
+            const badgeColor = isNew ? theme.green : isMod ? theme.yellow : undefined;
+            const nameColor = isNew ? theme.green : isMod ? theme.yellow : undefined;
+            return (
+              <Box key={c.name}>
+                <Text color={c.type === "world" ? theme.secondary : theme.accent}>
+                  {c.type === "world" ? glyph.world : glyph.fact}{" "}
+                </Text>
+                <Text color={nameColor}>{c.name}</Text>
+                {badge && <Text color={badgeColor} bold>{badge}</Text>}
+              </Box>
+            );
+          })}
+        </Box>
+      ) : (
+        <Text color={theme.dim}>{glyph.empty} No content at this commit.</Text>
+      )}
     </Box>
   );
 }
@@ -346,52 +465,3 @@ function FactView({ title, body, frontmatter, theme, focused, selectedIndex }: {
   );
 }
 
-function HistoryView({ entries, file, theme }: {
-  entries: LogEntry[]; file: string; theme: Theme;
-}) {
-  return (
-    <Box flexDirection="column">
-      <Text color={theme.primary} bold>{glyph.bullet} History</Text>
-      <Text color={theme.dim}>{file}</Text>
-      <Text> </Text>
-      {entries.length === 0 ? (
-        <Text color={theme.dim}>{glyph.empty} No history found.</Text>
-      ) : (
-        entries.map((e, i) => {
-          const isLast = i === entries.length - 1;
-          const date = new Date(e.date);
-          const dateStr = date.toLocaleDateString("en-US", {
-            month: "short",
-            day: "numeric",
-            year: "numeric",
-          });
-          const timeStr = date.toLocaleTimeString("en-US", {
-            hour: "2-digit",
-            minute: "2-digit",
-            hour12: false,
-          });
-          return (
-            <Box key={e.commit} flexDirection="column">
-              <Box>
-                <Text color={theme.primary}>{glyph.timelineDot} </Text>
-                <Text color={theme.yellow}>{e.commit.slice(0, 7)}</Text>
-                <Text color={theme.dim}> {dateStr} {timeStr}</Text>
-              </Box>
-              <Box>
-                <Text color={theme.dim}>{isLast ? " " : glyph.timelineLine} </Text>
-                <ActionBadge message={e.message} theme={theme} />
-              </Box>
-              {!isLast && (
-                <Box>
-                  <Text color={theme.dim}>{glyph.timelineLine}</Text>
-                </Box>
-              )}
-            </Box>
-          );
-        })
-      )}
-      <Text> </Text>
-      <Text color={theme.dim}>Press h to go back</Text>
-    </Box>
-  );
-}

@@ -189,14 +189,6 @@ test("NAVIGATE_DOWN in explorer auto-selects facts but shows stats for worlds", 
   expect(s.rightPanelMode).toBe("fact");
 });
 
-test("NAVIGATE_TO_PATH navigates to specific path", () => {
-  let s: AppState = { ...initialState, currentPath: "worlds/a/b/c", statsPath: "worlds/a/b/c" };
-  s = reducer(s, { type: "NAVIGATE_TO_PATH", path: "worlds/a" });
-  expect(s.currentPath).toBe("worlds/a");
-  expect(s.breadcrumbSelected).toBe(true);
-  expect(s.statsPath).toBe("worlds/a");
-  expect(s.selectedIndex).toBe(0);
-});
 
 test("CLEAR_SEARCH returns to explorer mode", () => {
   let s = reducer(initialState, {

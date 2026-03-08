@@ -194,7 +194,9 @@ async function walkDir(
 export function registerQueryTool(server: McpServer, repo: GitRepo, searchIndex?: SearchIndex): void {
   server.tool(
     "knomit_query",
-    "Search the persistent knowledge base. Query by free text, entity names, domain tags, or path prefix.",
+    `Search the persistent knowledge base. Query by free text, entity names, domain tags, or path prefix.
+
+USE PROACTIVELY: When starting work on a project or topic, query by project name, entity, or domain to load relevant context from previous sessions before responding. Start broad, then narrow by path if needed. Check refs against current state — a fact anchored to an old commit may be outdated.`,
     QueryInput.shape,
     async (input) => {
       const parsed = QueryInput.parse(input);

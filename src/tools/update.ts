@@ -81,7 +81,7 @@ export async function updateHandler(
 export function registerUpdateTool(server: McpServer, repo: GitRepo, searchIndex?: SearchIndex): void {
   server.tool(
     "knomit_update",
-    "Update an existing fact when a previous belief is reinforced or contradicted. Use this to change confidence, add refs, or correct the body of an existing fact.",
+    `Update an existing fact when a previous belief is reinforced or contradicted. Use this to change confidence, add refs, or correct the body of an existing fact. Prefer this over knomit_learn when a fact on the topic already exists — increment sources when multiple sessions confirm the same thing.`,
     UpdateInput.shape,
     async (input) => {
       const parsed = UpdateInput.parse(input);

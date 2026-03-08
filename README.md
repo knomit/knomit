@@ -16,9 +16,19 @@ bun build --compile index.ts --outfile ../dist/knomit
 
 ## Usage
 
-### MCP Server (Claude Code)
+### MCP Server
 
-Add to your project's `.mcp.json`:
+Knomit supports different instruction profiles via `--mcp[=profile]`:
+
+| Profile | Use case |
+|---------|----------|
+| `code` | Code editors (default) — anchors facts to git commits |
+| `chat` | Conversational tools — anchors facts to URLs, documents |
+| `generic` | Minimal instructions for any integration |
+
+#### Claude Code
+
+Add to your project's `.mcp.json` (or `~/.claude/mcp.json` for global):
 
 ```json
 {
@@ -31,7 +41,9 @@ Add to your project's `.mcp.json`:
 }
 ```
 
-### MCP Server (Claude Desktop)
+Knomit's tool descriptions carry all the behavioral guidance the model needs — no `CLAUDE.md` setup required. The model will automatically query for context and learn decisions as they arise.
+
+#### Claude Desktop
 
 Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or `%APPDATA%\Claude\claude_desktop_config.json` (Windows):
 
@@ -40,11 +52,17 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS)
   "mcpServers": {
     "knomit": {
       "command": "/path/to/knomit",
-      "args": ["--mcp"]
+      "args": ["--mcp=chat"]
     }
   }
 }
 ```
+
+Knomit works automatically via tool descriptions — no manual activation needed. Optionally use the **knomit-save** prompt at the end of a conversation to flush any remaining learnings.
+
+#### Gemini CLI / Other tools
+
+Use `--mcp` (defaults to `code` profile) or `--mcp=generic` for minimal instructions. Configure according to your tool's MCP server documentation.
 
 ### TUI
 
@@ -62,6 +80,7 @@ Keyboard shortcuts:
 | `↵` | Open item |
 | `←` `→` | Switch panels |
 | `/` | Search |
+| `:` | Command mode |
 | `h` | Toggle history |
 | `q` | Quit |
 
@@ -72,6 +91,12 @@ Wipe the git repo and search index for a clean start:
 ```sh
 knomit --reset
 ```
+
+## MCP Prompts
+
+| Prompt | Description |
+|--------|-------------|
+| `knomit-save` | End-of-session review. Prompts the agent to persist decisions, preferences, and conclusions from the conversation. |
 
 ## MCP Tools
 
@@ -111,6 +136,7 @@ Each learning moment is an atomic git commit tagged with `learn/<moment-name>`, 
 | `KNOMIT_CACHE_DIR` | `~/.cache/knomit` | Path to the SQLite index and model cache |
 | `KNOMIT_MACHINE_ID` | system hostname | Branch name: `machine/<id>` |
 | `KNOMIT_EMBEDDINGS` | `true` | Vector similarity search (`0` or `false` to disable) |
+| `KNOMIT_POLL_INTERVAL` | `5000` | TUI remote poll interval in milliseconds |
 
 ## Development
 

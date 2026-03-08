@@ -4,19 +4,30 @@ import { TextInput } from "@inkjs/ui";
 import { glyph, type Theme } from "./theme.js";
 
 interface StatusBarProps {
-  focused: boolean;
+  mode: "idle" | "search" | "cmdline";
   theme: Theme;
-  onSubmit: (text: string) => void;
+  onSearchSubmit: (text: string) => void;
+  onCommandSubmit: (cmd: string) => void;
   inputKey: number;
 }
 
-export function StatusBar({ focused, theme, onSubmit, inputKey }: StatusBarProps) {
-  if (focused) {
+export function StatusBar({ mode, theme, onSearchSubmit, onCommandSubmit, inputKey }: StatusBarProps) {
+  if (mode === "search") {
     return (
-      <Box key={inputKey}>
+      <Box key={`s${inputKey}`}>
         <Text backgroundColor={theme.primary} color={theme.dark} bold> {glyph.search} </Text>
         <Text> </Text>
-        <TextInput placeholder="search..." onSubmit={onSubmit} />
+        <TextInput placeholder="search..." onSubmit={onSearchSubmit} />
+      </Box>
+    );
+  }
+
+  if (mode === "cmdline") {
+    return (
+      <Box key={`c${inputKey}`}>
+        <Text backgroundColor={theme.yellow} color={theme.dark} bold> : </Text>
+        <Text> </Text>
+        <TextInput placeholder="command..." onSubmit={onCommandSubmit} />
       </Box>
     );
   }
@@ -24,7 +35,7 @@ export function StatusBar({ focused, theme, onSubmit, inputKey }: StatusBarProps
   return (
     <Box backgroundColor={theme.crust}>
       <Text color={theme.dim}>
-        {" "}↑↓ navigate  ↵ open  ←→ panels  h history  / search  q quit{" "}
+        {" "}↑↓ navigate  ↵ open  ←→ panels  h history  / search  : command  q quit{" "}
       </Text>
     </Box>
   );

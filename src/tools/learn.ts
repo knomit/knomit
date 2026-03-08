@@ -95,7 +95,21 @@ export async function learnHandler(
 export function registerLearnTool(server: McpServer, repo: GitRepo, searchIndex?: SearchIndex): void {
   server.tool(
     "knomit_learn",
-    "Persist knowledge to a Git-backed knowledge base. Call this AUTOMATICALLY whenever the user states a preference, makes a decision, or you jointly arrive at a conclusion worth remembering across sessions. Creates one or more facts as a learning moment.",
+    `Persist knowledge to a Git-backed knowledge base. Call this AUTOMATICALLY whenever the user states a preference, makes a decision, or you jointly arrive at a conclusion worth remembering across sessions. Creates one or more facts as a learning moment.
+
+WHEN TO CALL: Decisions, preferences, architectural choices, debugging insights, conclusions. NOT transient discussion, obvious facts, or things easily re-derived.
+
+FACT QUALITY:
+- path: organize under worlds/ by domain (e.g. worlds/projects/myapp/conventions.md). Durable facts at higher levels, ephemeral facts in sub-directories.
+- title: concise and descriptive — this is the primary search surface.
+- body: include reasoning, not just conclusions.
+- confidence: 0.9+ for explicit user statements, 0.7–0.8 for inferred conclusions, 0.5–0.6 for tentative observations.
+- entities: people, projects, tools — anything worth querying by.
+- domain: topic tags like "architecture", "testing", "workflow".
+- refs: anchor to source. For code facts, use "origin-url@commit-hash" (e.g. "github.com/org/repo@abc123"). Also URLs, file paths, issue numbers.
+- sources: set to 1 for new facts; increment via knomit_update when multiple sessions confirm the same thing.
+
+Before learning, query first to avoid duplicating an existing fact — use knomit_update instead if one exists.`,
     LearnInput.shape,
     async (input) => {
       const parsed = LearnInput.parse(input);
