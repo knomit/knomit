@@ -1,5 +1,7 @@
-import { defineCommand, runMain } from "citty";
+import { defineCommand, runMain, renderUsage } from "citty";
 import { globalArgs } from "./cli/args";
+
+const stripAnsi = (s: string) => s.replace(/\x1b\[[0-9;]*m/g, "");
 
 const main = defineCommand({
   meta: {
@@ -33,4 +35,9 @@ const main = defineCommand({
   },
 });
 
-runMain(main);
+runMain(main, {
+  showUsage: async (cmd, parent) => {
+    const text = await renderUsage(cmd, parent);
+    console.log(stripAnsi(text));
+  },
+});
