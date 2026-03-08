@@ -3,6 +3,19 @@ import { join, dirname, resolve } from "node:path";
 import { hostname } from "node:os";
 import { log } from "./logger";
 
+/** Returns extra env vars needed when using vendored git, or null for system git. */
+export function vendoredGitEnv(gitBin: string): Record<string, string> | null {
+  const marker = join("vendor", "git", "bin", "git");
+  const idx = gitBin.indexOf(marker);
+  if (idx === -1) return null;
+  const vendorGitDir = gitBin.slice(0, idx + "vendor/git".length);
+  return {
+    GIT_EXEC_PATH: join(vendorGitDir, "libexec", "git-core"),
+    GIT_TEMPLATE_DIR: join(vendorGitDir, "share", "git-core", "templates"),
+    GIT_SSL_CAINFO: join(vendorGitDir, "ssl", "cacert.pem"),
+  };
+}
+
 export function toMomentTag(momentName: string): string {
   const safe = momentName.replace(/[^a-zA-Z0-9._/-]/g, "-");
   return `learn/${safe}`;
@@ -56,14 +69,14 @@ export class GitRepo {
 
     // Try vendored git
     const execDir = dirname(Bun.execPath);
-    const vendored = join(execDir, "vendor", "git");
+    const vendored = join(execDir, "vendor", "git", "bin", "git");
     if (await exists(vendored)) {
       this.gitBin = vendored;
       return this.gitBin;
     }
 
     throw new Error(
-      "Git binary not found. Install git or place a static binary at <exec_dir>/vendor/git"
+      "Git not found. Install git or use a platform build with bundled git."
     );
   }
 
@@ -75,7 +88,8 @@ export class GitRepo {
 
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
       log.debug(`git ${args.join(" ")}${attempt > 0 ? ` (retry ${attempt})` : ""}`);
-      const proc = Bun.spawnSync([bin, "-C", this.repoPath, ...args]);
+      const extraEnv = vendoredGitEnv(bin);
+      const proc = Bun.spawnSync([bin, "-C", this.repoPath, ...args], extraEnv ? { env: { ...process.env, ...extraEnv } } : undefined);
       const result = {
         stdout: new TextDecoder().decode(proc.stdout).trim(),
         stderr: new TextDecoder().decode(proc.stderr).trim(),
@@ -132,7 +146,8 @@ export class GitRepo {
     log.info(`initializing new repo at ${this.repoPath}`);
     await mkdir(this.repoPath, { recursive: true });
     const bin = await this.resolveGitBin();
-    Bun.spawnSync([bin, "init", this.repoPath]);
+    const initEnv = vendoredGitEnv(bin);
+    Bun.spawnSync([bin, "init", this.repoPath], initEnv ? { env: { ...process.env, ...initEnv } } : undefined);
 
     // Configure for commits
     await this.gitOrThrow("config", "user.email", "knomit@local");
