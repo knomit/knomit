@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { type GitRepo, toMomentTag } from "../git";
 import type { SearchIndex } from "../search-index";
-import { serializeFact } from "../facts";
+import { commitFact } from "../fact-ops";
 import { log } from "../logger";
 
 const LearnInput = z.object({
@@ -42,43 +42,20 @@ export async function learnHandler(
   const commits: Array<{ file: string; hash: string }> = [];
 
   for (const fact of input.facts) {
-    // Ensure path ends with .md and starts with worlds/
     let factPath = fact.path;
-    if (!factPath.startsWith("worlds/")) {
-      factPath = `worlds/${factPath}`;
-    }
-    if (!factPath.endsWith(".md")) {
-      factPath = `${factPath}.md`;
-    }
+    if (!factPath.startsWith("worlds/")) factPath = `worlds/${factPath}`;
+    if (!factPath.endsWith(".md")) factPath = `${factPath}.md`;
 
-    const content = serializeFact(
-      {
-        domain: fact.domain,
-        confidence: fact.confidence,
-        sources: fact.sources,
-        entities: fact.entities,
-        refs: fact.refs ?? [],
-      },
-      fact.title,
-      fact.body
-    );
-
-    const hash = await repo.commit(
-      [{ path: factPath, content }],
-      `learn: ${fact.title}`
-    );
-
-    // Index the fact
-    await searchIndex?.upsert(factPath, {
+    const hash = await commitFact(repo, {
+      path: factPath,
       title: fact.title,
       body: fact.body,
       domain: fact.domain,
-      entities: fact.entities,
       confidence: fact.confidence,
       sources: fact.sources,
+      entities: fact.entities,
       refs: fact.refs ?? [],
-      commitHash: hash,
-    });
+    }, searchIndex);
 
     log.debug(`learn: committed ${factPath} as ${hash}`);
     commits.push({ file: factPath, hash });
