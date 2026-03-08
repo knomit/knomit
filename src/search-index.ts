@@ -109,6 +109,16 @@ export class SearchIndex {
     `);
 
     this.db.run(`
+      CREATE TABLE IF NOT EXISTS synthesis_log (
+        recipe TEXT NOT NULL,
+        last_commit TEXT NOT NULL,
+        run_at TEXT NOT NULL,
+        facts_processed INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (recipe)
+      )
+    `);
+
+    this.db.run(`
       CREATE TABLE IF NOT EXISTS facts (
         path TEXT PRIMARY KEY,
         title TEXT NOT NULL,
@@ -547,6 +557,39 @@ export class SearchIndex {
 
   get hasEmbeddings(): boolean {
     return this.embedder !== null;
+  }
+
+  async reindex(repo: GitRepo): Promise<void> {
+    if (!this.db) return;
+    log.info("search index: reindexing from repo");
+    const head = await repo.headCommit();
+    this.db.run("BEGIN");
+    try {
+      this.db.run("DELETE FROM facts");
+      this.db.run("INSERT INTO facts_fts(facts_fts) VALUES ('delete-all')");
+      this.db.run("COMMIT");
+    } catch (err) {
+      this.db.run("ROLLBACK");
+      throw err;
+    }
+    await this.indexDir(repo, "worlds", head);
+    this.setMeta("last_commit", head);
+  }
+
+  getSynthesisLog(recipe: string): { lastCommit: string; runAt: string; factsProcessed: number } | null {
+    if (!this.db) return null;
+    const row = this.db
+      .query("SELECT last_commit, run_at, facts_processed FROM synthesis_log WHERE recipe = ?")
+      .get(recipe) as { last_commit: string; run_at: string; facts_processed: number } | null;
+    if (!row) return null;
+    return { lastCommit: row.last_commit, runAt: row.run_at, factsProcessed: row.facts_processed };
+  }
+
+  setSynthesisLog(recipe: string, lastCommit: string, factsProcessed: number): void {
+    if (!this.db) return;
+    this.db.query(
+      "INSERT OR REPLACE INTO synthesis_log (recipe, last_commit, run_at, facts_processed) VALUES (?, ?, ?, ?)"
+    ).run(recipe, lastCommit, new Date().toISOString(), factsProcessed);
   }
 
   close(): void {

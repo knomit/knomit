@@ -273,7 +273,7 @@ async function gatherFactsByDelta(
   recipeName: string
 ): Promise<FactForLLM[]> {
   // getSynthesisLog is added in Task 5 — will be undefined until then
-  const lastRun = (searchIndex as any).getSynthesisLog?.(recipeName);
+  const lastRun = searchIndex.getSynthesisLog(recipeName);
   if (!lastRun) {
     log.info(`auto-discovery: first run for "${recipeName}", gathering all facts`);
     const results = await searchIndex.search({ limit: 100_000 });
@@ -536,7 +536,7 @@ export async function synthesize(
 
       // Re-index from git before each step so we see previous step's changes
       // reindex() is added in Task 5
-      await (searchIndex as any).reindex?.(repo);
+      await searchIndex.reindex(repo);
 
       let summary: string;
       if (step.mode === "prune") {
@@ -553,7 +553,7 @@ export async function synthesize(
 
   // Record synthesis run in log — setSynthesisLog added in Task 5
   const headAfter = await repo.headCommit();
-  (searchIndex as any).setSynthesisLog?.(recipe.name, headAfter, stepSummaries.length);
+  searchIndex.setSynthesisLog(recipe.name, headAfter, stepSummaries.length);
 
   if (recipe.auto_merge) {
     const currentBranch = branchName;
