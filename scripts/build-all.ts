@@ -194,12 +194,11 @@ async function downloadGit(target: Target, vendorDir: string) {
 
   // Strip blacklisted components from libexec/git-core/
   const gitCoreDir = join(vendorDir, "git", "libexec", "git-core");
-  for (const name of DUGITE_BLACKLIST) {
-    const glob = new Bun.Glob(`${name}*`);
-    for (const entry of glob.scanSync({ cwd: gitCoreDir })) {
-      const fullPath = join(gitCoreDir, entry);
+  const blacklistSet = new Set(DUGITE_BLACKLIST);
+  for (const entry of new Bun.Glob("*").scanSync({ cwd: gitCoreDir })) {
+    if (blacklistSet.has(entry) || [...blacklistSet].some((b) => entry.startsWith(b))) {
       try {
-        rmSync(fullPath, { recursive: true, force: true });
+        rmSync(join(gitCoreDir, entry), { recursive: true, force: true });
         log(`stripped ${entry}`);
       } catch { /* ignore */ }
     }

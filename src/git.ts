@@ -8,7 +8,7 @@ export function vendoredGitEnv(gitBin: string): Record<string, string> | null {
   const marker = join("vendor", "git", "bin", "git");
   const idx = gitBin.indexOf(marker);
   if (idx === -1) return null;
-  const vendorGitDir = gitBin.slice(0, idx + "vendor/git".length);
+  const vendorGitDir = gitBin.slice(0, idx + join("vendor", "git").length);
   return {
     GIT_EXEC_PATH: join(vendorGitDir, "libexec", "git-core"),
     GIT_TEMPLATE_DIR: join(vendorGitDir, "share", "git-core", "templates"),
@@ -47,6 +47,7 @@ export class GitRepo {
   readonly repoPath: string;
   readonly machineId: string;
   private gitBin: string | null = null;
+  private gitSpawnOpts: { env: Record<string, string | undefined> } | undefined = undefined;
 
   constructor(repoPath: string, machineId?: string) {
     this.repoPath = repoPath;
@@ -64,6 +65,7 @@ export class GitRepo {
     const which = Bun.spawnSync(["which", "git"]);
     if (which.exitCode === 0) {
       this.gitBin = new TextDecoder().decode(which.stdout).trim();
+      this.gitSpawnOpts = undefined;
       return this.gitBin;
     }
 
@@ -72,6 +74,8 @@ export class GitRepo {
     const vendored = join(execDir, "vendor", "git", "bin", "git");
     if (await exists(vendored)) {
       this.gitBin = vendored;
+      const extraEnv = vendoredGitEnv(vendored);
+      this.gitSpawnOpts = extraEnv ? { env: { ...process.env, ...extraEnv } } : undefined;
       return this.gitBin;
     }
 
@@ -88,8 +92,7 @@ export class GitRepo {
 
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
       log.debug(`git ${args.join(" ")}${attempt > 0 ? ` (retry ${attempt})` : ""}`);
-      const extraEnv = vendoredGitEnv(bin);
-      const proc = Bun.spawnSync([bin, "-C", this.repoPath, ...args], extraEnv ? { env: { ...process.env, ...extraEnv } } : undefined);
+      const proc = Bun.spawnSync([bin, "-C", this.repoPath, ...args], this.gitSpawnOpts);
       const result = {
         stdout: new TextDecoder().decode(proc.stdout).trim(),
         stderr: new TextDecoder().decode(proc.stderr).trim(),
@@ -146,8 +149,7 @@ export class GitRepo {
     log.info(`initializing new repo at ${this.repoPath}`);
     await mkdir(this.repoPath, { recursive: true });
     const bin = await this.resolveGitBin();
-    const initEnv = vendoredGitEnv(bin);
-    Bun.spawnSync([bin, "init", this.repoPath], initEnv ? { env: { ...process.env, ...initEnv } } : undefined);
+    Bun.spawnSync([bin, "init", this.repoPath], this.gitSpawnOpts);
 
     // Configure for commits
     await this.gitOrThrow("config", "user.email", "knomit@local");
