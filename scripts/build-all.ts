@@ -184,16 +184,17 @@ async function downloadGit(target: Target, vendorDir: string) {
   const resp = await fetch(asset.browser_download_url);
   if (!resp.ok) throw new Error(`Failed to download git: HTTP ${resp.status}`);
 
-  mkdirSync(vendorDir, { recursive: true });
+  const gitDir = join(vendorDir, "git");
+  mkdirSync(gitDir, { recursive: true });
   const tarPath = join(vendorDir, "git.tar.gz");
   await Bun.write(tarPath, await resp.arrayBuffer());
 
-  // Extract — dugite-native tarballs contain a top-level git/ directory
-  run(["tar", "xzf", tarPath, "-C", vendorDir]);
+  // Extract — dugite-native tarballs have no top-level directory, extract into git/
+  run(["tar", "xzf", tarPath, "-C", gitDir]);
   rmSync(tarPath);
 
   // Strip blacklisted components from libexec/git-core/
-  const gitCoreDir = join(vendorDir, "git", "libexec", "git-core");
+  const gitCoreDir = join(gitDir, "libexec", "git-core");
   const blacklistSet = new Set(DUGITE_BLACKLIST);
   for (const entry of new Bun.Glob("*").scanSync({ cwd: gitCoreDir })) {
     if (blacklistSet.has(entry) || [...blacklistSet].some((b) => entry.startsWith(b))) {
@@ -206,7 +207,7 @@ async function downloadGit(target: Target, vendorDir: string) {
 
   // Strip non-essential directories
   for (const dir of ["share/gitweb", "share/perl5"]) {
-    const fullPath = join(vendorDir, "git", dir);
+    const fullPath = join(gitDir, dir);
     try {
       rmSync(fullPath, { recursive: true, force: true });
       log(`stripped ${dir}`);
