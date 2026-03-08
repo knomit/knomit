@@ -15,6 +15,7 @@ const main = defineCommand({
   subCommands: {
     mcp: () => import("./cli/mcp.js").then((m) => m.default),
     reset: () => import("./cli/reset.js").then((m) => m.default),
+    synthesize: () => import("./cli/synthesize.js").then((m) => m.default),
   },
   async run({ args }) {
     // Default (no subcommand) = TUI
