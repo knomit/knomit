@@ -148,3 +148,93 @@ knomit-public/
 ```
 
 No metadata about the private repo. No submodule pointers. No "imported from" markers. Just facts.
+
+## Knowledge Packs
+
+The `visibility: shared` field answers "can this be published?" but not "published *where* and *for whom*?" A flat shared/private toggle is too coarse. You might want:
+
+- A "security hardening" pack for your team
+- A "Bun patterns" pack for the community
+- A "project onboarding" pack for new hires on a specific project
+
+A **knowledge pack** is a named, curated projection of your knowledge base.
+
+### Definition
+
+A pack is a file in the repo:
+
+```yaml
+# packs/bun-patterns.yaml
+name: bun-patterns
+description: "Patterns and gotchas for Bun runtime development"
+target: https://github.com/me/knomit-bun-patterns
+include:
+  # by domain
+  - domain: bun
+  - domain: javascript
+    entities: [bun, bun:sqlite, bun:test]
+  # by explicit path
+  - path: worlds/programming/bun-html-imports.md
+  - path: worlds/programming/bun-sqlite-macos.md
+exclude:
+  - path: worlds/programming/bun-internal-workaround.md
+```
+
+A pack is a query against your knowledge base. `include` selects facts by domain, entities, path globs, or combinations. `exclude` removes specific facts from the result. The pack definition itself lives in your private repo — the target repo only gets the matching facts.
+
+### Why Packs Instead of Just `visibility: shared`
+
+The `visibility` field is **per-fact, per-audience**. But you don't have one audience — you have many. A fact about SQL injection might be shared with your security team but not in your public "Bun patterns" pack. Encoding this as `visibility: [bun-patterns, security-team]` on every fact pushes audience management into every file. It doesn't scale and it clutters the frontmatter.
+
+Packs invert the relationship: the pack declares what it wants, not the fact. The fact stays clean. The pack is the lens.
+
+This also means the same fact can appear in multiple packs without the fact knowing about any of them. No coupling between content and distribution.
+
+### Publishing a Pack
+
+```
+knomit publish bun-patterns
+```
+
+Steps:
+1. Load `packs/bun-patterns.yaml`
+2. Resolve include/exclude rules against the knowledge base
+3. Copy matching facts to the target repo
+4. Remove facts from the target that no longer match
+5. Commit and push
+
+Multiple packs can target different repos, or the same repo with different branches/directories.
+
+### Relationship to `visibility`
+
+The `visibility` field still exists as a hard safety boundary:
+
+- `visibility: private` — **never** published, regardless of what any pack says. This is the override. If a pack's include rules match a private fact, it's silently excluded.
+- `visibility: shared` — eligible for publication. Packs select from the shared pool.
+- Omitted — treated as private (safe default).
+
+So the flow is:
+1. A fact must be `visibility: shared` to be publishable at all
+2. A pack selects from the shared facts using its include/exclude rules
+3. `knomit publish <pack>` projects the result to the target repo
+
+This gives two layers: the fact author controls *whether* something can leave the repo. The pack author controls *where* it goes.
+
+### What a Pack Looks Like as a Published Repo
+
+Same as before — a normal knomit repo. The receiver doesn't know it came from a pack. They clone it, their agent learns from it. The pack mechanism is invisible to consumers.
+
+```
+knomit-bun-patterns/           ← target repo
+  worlds/
+    programming/
+      bun-html-imports.md
+      bun-sqlite-macos.md
+      bun-test-patterns.md
+    javascript/
+      module-resolution.md
+```
+
+### Pack as the Unit of Sharing
+
+This reframes sharing. You don't "make facts public." You curate packs — themed, intentional bundles of knowledge — and publish them. Each pack has a name, a purpose, and a target. This is closer to how people actually share knowledge: "here's my security playbook" not "here are all 47 facts I've marked as shared."
