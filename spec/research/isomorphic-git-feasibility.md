@@ -1,4 +1,4 @@
-# Research: isomorphic-git Feasibility
+# Research: Git Library Feasibility (isomorphic-git, libgit2, native git)
 
 ## Current State
 
@@ -127,9 +127,54 @@ For server-side use (knomit's primary environment), the Node.js `fs` module is s
 
 None of these apply to knomit's current architecture.
 
+## libgit2 / Native Bindings
+
+Also evaluated: using libgit2 (the C library) via native bindings instead of shelling out to git.
+
+### Available bindings
+
+| Package | Status | Last npm publish | API style |
+|---------|--------|-----------------|-----------|
+| **nodegit** | Effectively abandoned | ~2019 (6 years ago) | NAN/node-gyp (not N-API) |
+| **node-gitteh** | Dead | Ancient (requires Node 0.8) | — |
+| **libgit2 (emscripten)** | Dead | 9 years ago | WASM port |
+
+**There is no modern N-API libgit2 package on npm.** To use libgit2 today you'd need to build bindings from scratch, either via:
+- **napi-rs** + Rust `git2` crate → N-API addon
+- **bun:ffi** → direct C calls to libgit2
+- **Bun `cc`** → compile C wrapper
+
+### libgit2 doesn't support SSH signing either
+
+This is the same blocker. libgit2 has no native SSH commit signing support. GitButler (a libgit2-based client) found that "most [libgit2 clients] only support GPG and all of them shell out to GPG commands to get it done, none appear to support SSH signing." Even with perfect bindings, we'd still need to shell out for signing.
+
+### Bun + libgit2 performance
+
+The Bun team tested libgit2 internally and found it **3x slower than spawning git** for operations like `git init`. The overhead of FFI/N-API call marshaling can exceed the cost of process spawning for short-lived operations.
+
+### Verdict on libgit2
+
+Not viable for knomit:
+1. No maintained JS bindings exist
+2. No SSH signing support (same gap as isomorphic-git)
+3. Slower than native git in Bun benchmarks
+4. Building new bindings is significant effort for zero gain
+
+## Summary: All Roads Lead to Native Git
+
+| Approach | SSH Signing | Multi-process Safe | Maintained | Verdict |
+|----------|------------|-------------------|------------|---------|
+| `Bun.spawnSync("git", ...)` | Yes (2.34+) | Yes (.lock files) | N/A (uses system git) | **Use this** |
+| isomorphic-git | No (PGP only) | No (in-memory locks) | Yes | Blocked |
+| nodegit (libgit2) | No | Yes (.lock files) | No (abandoned) | Dead |
+| New libgit2 bindings | No | Yes | Would need building | Not worth it |
+| bun:ffi → libgit2 | No | Yes | Would need building | Not worth it |
+
+The native git binary is the only option that supports SSH signing, `.lock` file safety, `git grep`, merge conflict handling, and `allowed_signers` verification — all features knomit needs.
+
 ### Hardening the current approach
 
-Instead of switching to isomorphic-git, invest in hardening the native git wrapper:
+Instead of switching libraries, invest in hardening the native git wrapper:
 
 1. **Add process-level locking** — use a lockfile (`knomit.lock`) to prevent concurrent knomit operations on the same repo
 2. **Verify git version** — require git 2.34+ at init time for SSH signing support
