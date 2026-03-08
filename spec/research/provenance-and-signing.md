@@ -119,55 +119,82 @@ git config user.signingkey ~/.ssh/knomit_homelab.pub
 
 No key ever leaves the machine it was generated on.
 
-### Trust Policy Maps Keys to Identities
+### Trust Policy: GitHub as the Key Server
 
-The `trust.yaml` groups multiple keys under a single identity:
+Manually managing fingerprints in a YAML file doesn't scale. GitHub already solves key distribution — every user's public SSH keys are available at `https://github.com/<username>.keys`, and GitHub verifies commits signed with those keys.
+
+The trust policy references **GitHub identities**, not raw fingerprints:
 
 ```yaml
+# trust.yaml
 identities:
-  - name: "me"
+  - github: "myusername"
+    trust: full            # all keys registered on my GitHub account
+
+  - github: "bob"
+    trust: partial         # bob's facts get confidence * 0.7
+
+  - github: "alice"
     trust: full
-    keys:
-      - fingerprint: "SHA256:laptop_aaa..."
-        label: "laptop"
-      - fingerprint: "SHA256:homelab_bbb..."
-        label: "homelab"
-      - fingerprint: "SHA256:work_ccc..."
-        label: "work-desktop"
 
-  - name: "bob"
-    trust: partial
-    keys:
-      - fingerprint: "SHA256:bob_ddd..."
-        label: "bob/main"
-
-default: reject
+default: reject            # unknown signers are rejected
 ```
 
-Trust is per-identity, not per-key. All of "me"'s keys share the same trust level. But each key is independently revocable.
+#### How It Works
 
-### Key Revocation
+1. **Your keys**: You upload your per-machine SSH signing keys to GitHub (Settings → SSH and GPG keys → "Signing key"). Each machine has its own key, all registered under your one GitHub account.
 
-Laptop stolen? Add the compromised key to a revoked list:
+2. **Verification**: Git's `allowed_signers` file maps email addresses to public keys. `knomit` generates this file automatically by fetching keys from GitHub:
 
-```yaml
-revoked:
-  - fingerprint: "SHA256:laptop_aaa..."
-    reason: "device lost 2025-03-08"
-    revoked_at: "2025-03-08"
+```bash
+# Fetch keys for all trusted identities
+curl -s https://github.com/myusername.keys   # returns all your public keys
+curl -s https://github.com/bob.keys          # returns bob's public keys
 ```
 
-Effects:
-- Facts signed by the revoked key after the revocation date are rejected
-- Facts signed before revocation remain valid (the key wasn't compromised when they were created — or at least, you don't know that it was)
-- Other keys for the same identity continue working
-- The revoked key can be identified across all repos: `git log --format="%H %GK %s" | grep <fingerprint>`
+These get written to `.git/allowed_signers`:
 
-This is better than a single key because:
-- Revocation is surgical (one machine, not all machines)
-- No "re-sign everything" migration
-- No shared secrets between machines
-- Key compromise has a bounded blast radius
+```
+myusername@github ssh-ed25519 AAAA...laptop_key
+myusername@github ssh-ed25519 AAAA...homelab_key
+bob@github ssh-ed25519 AAAA...bob_key
+```
+
+Then git verifies natively:
+
+```bash
+git config gpg.ssh.allowedSignersFile .git/allowed_signers
+git verify-commit <hash>   # → "Good signature by myusername@github"
+```
+
+3. **Trust resolution**: The verified identity (GitHub username) is looked up in `trust.yaml` to get the trust level.
+
+#### Key Lifecycle
+
+| Action | Where |
+|--------|-------|
+| Generate per-machine key | Local: `ssh-keygen -t ed25519` |
+| Register key for signing | GitHub: Settings → SSH keys → "Signing key" |
+| Revoke compromised key | GitHub: Delete the key from your account |
+| Refresh trusted keys | `knomit trust refresh` → re-fetches from GitHub |
+
+**Revocation is just deleting the key from GitHub.** The next `knomit trust refresh` updates the allowed signers file. No manual fingerprint management. GitHub is the source of truth for "which keys belong to this person."
+
+#### Why This Works
+
+- **No manual key exchange**: You trust "github.com/bob", not a fingerprint you got over Signal
+- **Per-machine keys, single identity**: Five machines, five keys, one GitHub account
+- **Revocation via GitHub**: Delete the key from your account, done
+- **GitHub already verifies**: Commits on GitHub show "Verified" badges — same infrastructure
+- **Offline fallback**: The allowed_signers file is cached locally. Verification works offline. Only `trust refresh` needs network access
+- **Git-native**: Uses `gpg.ssh.allowedSignersFile`, a standard git feature. No custom verification code
+
+#### Limitations
+
+- Requires GitHub accounts (or any forge that exposes public keys via URL — Gitea, GitLab, etc. all do)
+- Key fetch is a network operation — needs periodic refresh
+- A compromised GitHub account could add malicious signing keys. But this is the same threat model as any SSH-based workflow
+- For fully offline / air-gapped setups, falls back to manual fingerprint management
 
 ### AI Agent Identity
 
