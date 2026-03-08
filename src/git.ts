@@ -180,6 +180,35 @@ Root of the Knomit knowledge graph.
     return this.gitOrThrow("rev-parse", "--abbrev-ref", "HEAD");
   }
 
+  async checkoutBranch(name: string, create?: boolean): Promise<void> {
+    if (create) {
+      await this.gitOrThrow("checkout", "-b", name);
+    } else {
+      await this.gitOrThrow("checkout", name);
+    }
+  }
+
+  async pushBranch(name: string): Promise<void> {
+    const hasRemote = await this.hasRemote();
+    if (!hasRemote) return;
+    const result = await this.git("push", "-u", "origin", name);
+    if (result.exitCode !== 0) {
+      log.warn(`push failed: ${result.stderr}`);
+    }
+  }
+
+  async checkoutPrevious(): Promise<void> {
+    await this.gitOrThrow("checkout", "-");
+  }
+
+  async mergeBranch(name: string): Promise<void> {
+    await this.gitOrThrow("merge", name);
+  }
+
+  async deleteBranch(name: string): Promise<void> {
+    await this.gitOrThrow("branch", "-d", name);
+  }
+
   async listBranches(): Promise<string[]> {
     const result = await this.gitOrThrow("branch", "--list", "--format=%(refname:short)");
     if (!result) return [];
