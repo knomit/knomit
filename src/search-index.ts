@@ -311,7 +311,7 @@ export class SearchIndex {
     let rows: Array<Record<string, unknown>>;
 
     if (query.text) {
-      // Quote each token to prevent FTS5 syntax interpretation (e.g. hyphens, colons)
+      // Quote each token to prevent FTS5 syntax interpretation (hyphens, colons, etc.)
       const ftsQuery = query.text
         .split(/\s+/)
         .filter(Boolean)
@@ -377,10 +377,10 @@ export class SearchIndex {
           r.score = 0.6 * normBm25 + 0.4 * (1 - vecDist);
         }
 
-        // Add any vec-only results not in FTS results
+        // Add vec-only results not in FTS results, but only if sufficiently similar
         const seenPaths = new Set(results.map((r) => r.path));
         for (const vr of vecRows) {
-          if (!seenPaths.has(vr.path)) {
+          if (!seenPaths.has(vr.path) && vr.distance < 0.8) {
             const fullRow = this.db!.query("SELECT * FROM facts WHERE path = ?").get(vr.path) as Record<string, unknown> | undefined;
             if (fullRow) {
               results.push(this.rowToResult(fullRow, 0.4 * (1 - vr.distance)));
@@ -415,7 +415,7 @@ export class SearchIndex {
         }
       }
     }
-    return finalResults.filter((r) => r.score > 0);
+    return finalResults.filter((r) => r.score >= 10);
   }
 
   private rowToResult(r: Record<string, unknown>, score: number): SearchResult {
@@ -441,6 +441,9 @@ export class SearchIndex {
     try {
       this.db.run("DELETE FROM facts");
       this.db.run("INSERT INTO facts_fts(facts_fts) VALUES ('delete-all')");
+      if (this.embedder) {
+        try { this.db.run("DELETE FROM facts_vec"); } catch { /* table may not exist */ }
+      }
       this.db.run("COMMIT");
     } catch (err) {
       this.db.run("ROLLBACK");

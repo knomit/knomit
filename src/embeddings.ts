@@ -39,6 +39,35 @@ function ensureOnnxLibInTmpdir(): void {
   log.warn(`could not find ${libName} to copy to tmpdir`);
 }
 
+/** Greedy longest-match-first WordPiece tokenization. */
+export function wordPiece(word: string, vocab: Record<string, number>): number[] {
+  const ids: number[] = [];
+  let start = 0;
+
+  while (start < word.length) {
+    let end = word.length;
+    let matched = false;
+
+    while (start < end) {
+      const substr = start === 0 ? word.slice(start, end) : `##${word.slice(start, end)}`;
+      const id = vocab[substr];
+      if (id != null) {
+        ids.push(id);
+        start = end;
+        matched = true;
+        break;
+      }
+      end--;
+    }
+
+    if (!matched) {
+      return [100]; // [UNK]
+    }
+  }
+
+  return ids;
+}
+
 export class Embedder {
   private ort: typeof import("onnxruntime-node") | null = null;
   private session: unknown = null;
@@ -103,19 +132,44 @@ export class Embedder {
   private tokenize(text: string): { ids: number[]; mask: number[] } {
     const tok = this.tokenizer as { model: { vocab: Record<string, number> } };
     const vocab = tok.model.vocab;
+    const maxLen = 512;
 
-    const words = text.toLowerCase().split(/\s+/).filter(Boolean);
+    // Normalize: lowercase, strip accents, collapse whitespace
+    const normalized = text
+      .toLowerCase()
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/\s+/g, " ")
+      .trim();
+
+    // Pre-tokenize: split on whitespace, then split each token on punctuation boundaries
+    const preTokens: string[] = [];
+    for (const word of normalized.split(" ")) {
+      if (!word) continue;
+      let current = "";
+      for (const ch of word) {
+        if (/[\p{P}\p{S}]/u.test(ch)) {
+          if (current) preTokens.push(current);
+          preTokens.push(ch);
+          current = "";
+        } else {
+          current += ch;
+        }
+      }
+      if (current) preTokens.push(current);
+    }
+
     const ids: number[] = [101]; // [CLS]
     const mask: number[] = [1];
 
-    for (const word of words) {
-      const id = vocab[word];
-      if (id != null) {
+    for (const token of preTokens) {
+      const pieces = wordPiece(token, vocab);
+      for (const id of pieces) {
+        if (ids.length >= maxLen - 1) break;
         ids.push(id);
-      } else {
-        ids.push(100); // [UNK]
+        mask.push(1);
       }
-      mask.push(1);
+      if (ids.length >= maxLen - 1) break;
     }
 
     ids.push(102); // [SEP]
