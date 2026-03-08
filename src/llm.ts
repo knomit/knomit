@@ -177,7 +177,7 @@ async function signAwsRequest(
   const now = new Date();
   const amzDate = now.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, "");
   const dateStamp = amzDate.slice(0, 8);
-  const service = "bedrock";
+  const service = "bedrock-runtime";
 
   const sha256 = async (data: string | Uint8Array): Promise<string> => {
     const buf = typeof data === "string" ? encoder.encode(data) : data;
