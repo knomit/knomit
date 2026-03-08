@@ -96,10 +96,20 @@ export function LeftPanel({
               return (
                 <Box key={entry.commit} flexDirection="column">
                   {showEpisode && (
-                    <Box>
-                      <Text color={theme.dim}>  {i > 0 ? glyph.timelineLine : " "} </Text>
-                      <Text backgroundColor={theme.secondary} color={theme.dark} bold> {entry.episode} </Text>
-                    </Box>
+                    <>
+                      {i > 0 && (
+                        <Box>
+                          <Text color={lineColor}>  {glyph.timelineLine}</Text>
+                        </Box>
+                      )}
+                      <Box>
+                        <Text color={theme.secondary}>  {glyph.tag} </Text>
+                        <Text color={theme.secondary} bold>{entry.episode}</Text>
+                      </Box>
+                      <Box>
+                        <Text color={lineColor}>  {glyph.timelineLine}</Text>
+                      </Box>
+                    </>
                   )}
                   <Box>
                     <Text color={dotColor}>{isActive ? glyph.cursor : " "} {glyph.timelineDot} </Text>
