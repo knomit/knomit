@@ -43,6 +43,15 @@ function sqliteLibName(platform: string): string {
   return "libsqlite3.so";
 }
 
+const DUGITE_VERSION = "v2.53.0";
+
+const DUGITE_PLATFORM_MAP: Record<string, string> = {
+  "darwin-arm64": "macOS-arm64",
+  "linux-x64": "ubuntu-x64",
+  "linux-arm64": "ubuntu-arm64",
+  "win32-x64": "windows-x64",
+};
+
 async function compileBinary(target: Target, outDir: string) {
   const outFile = join(outDir, exeName(target.platform));
   log(`compiling binary for ${target.bunTarget}`);
@@ -134,6 +143,80 @@ function copySqliteLib(target: Target, libDir: string) {
   }
 }
 
+const DUGITE_BLACKLIST = [
+  "git-lfs",
+  "git-credential-manager",
+  "git-svn",
+  "git-p4",
+  "git-gui",
+  "gitk",
+  "git-daemon",
+  "git-shell",
+  "git-http-backend",
+  "git-cvsserver",
+  "git-cvsimport",
+  "git-cvsexportcommit",
+  "git-send-email",
+  "git-request-pull",
+  "git-instaweb",
+  "git-archimport",
+  "scalar",
+];
+
+async function downloadGit(target: Target, vendorDir: string) {
+  const platKey = DUGITE_PLATFORM_MAP[`${target.platform}-${target.arch}`];
+  if (!platKey) throw new Error(`No dugite-native build for ${target.platform}-${target.arch}`);
+
+  // Fetch release assets list to find exact filename (includes commit hash)
+  const releaseUrl = `https://api.github.com/repos/desktop/dugite-native/releases/tags/${DUGITE_VERSION}`;
+  log(`fetching dugite-native release info`);
+  const releaseResp = await fetch(releaseUrl);
+  if (!releaseResp.ok) throw new Error(`Failed to fetch release info: HTTP ${releaseResp.status}`);
+  const release = await releaseResp.json() as { assets: Array<{ name: string; browser_download_url: string }> };
+
+  // Match asset: dugite-native-<version>-<hash>-<platform>.tar.gz (not lzma)
+  const asset = release.assets.find((a: { name: string }) =>
+    a.name.includes(platKey) && a.name.endsWith(".tar.gz") && !a.name.includes("lzma")
+  );
+  if (!asset) throw new Error(`No dugite-native asset found for ${platKey}`);
+
+  log(`downloading vendored git from ${asset.browser_download_url}`);
+  const resp = await fetch(asset.browser_download_url);
+  if (!resp.ok) throw new Error(`Failed to download git: HTTP ${resp.status}`);
+
+  const gitDir = join(vendorDir, "git");
+  mkdirSync(gitDir, { recursive: true });
+  const tarPath = join(vendorDir, "git.tar.gz");
+  await Bun.write(tarPath, await resp.arrayBuffer());
+
+  // Extract — dugite-native tarballs have no top-level directory, extract into git/
+  run(["tar", "xzf", tarPath, "-C", gitDir]);
+  rmSync(tarPath);
+
+  // Strip blacklisted components from libexec/git-core/
+  const gitCoreDir = join(gitDir, "libexec", "git-core");
+  const blacklistSet = new Set(DUGITE_BLACKLIST);
+  for (const entry of new Bun.Glob("*").scanSync({ cwd: gitCoreDir })) {
+    if (blacklistSet.has(entry) || [...blacklistSet].some((b) => entry.startsWith(b))) {
+      try {
+        rmSync(join(gitCoreDir, entry), { recursive: true, force: true });
+        log(`stripped ${entry}`);
+      } catch { /* ignore */ }
+    }
+  }
+
+  // Strip non-essential directories
+  for (const dir of ["share/gitweb", "share/perl5"]) {
+    const fullPath = join(gitDir, dir);
+    try {
+      rmSync(fullPath, { recursive: true, force: true });
+      log(`stripped ${dir}`);
+    } catch { /* ignore */ }
+  }
+
+  log(`installed vendored git ${DUGITE_VERSION}`);
+}
+
 function createTarball(target: Target) {
   const slug = `${target.platform}-${target.arch}`;
   const tarName = `knomit-${slug}.tar.gz`;
@@ -164,7 +247,11 @@ async function buildTarget(target: Target) {
   // Step 4: Copy SQLite lib (macOS only)
   copySqliteLib(target, libDir);
 
-  // Step 5: Create tarball
+  // Step 5: Download vendored git
+  const vendorDir = join(outDir, "vendor");
+  await downloadGit(target, vendorDir);
+
+  // Step 6: Create tarball
   createTarball(target);
 
   log(`done: ${slug}`);

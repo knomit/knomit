@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { GitRepo } from "../git";
 import type { SearchIndex } from "../search-index";
+import { deleteFact } from "../fact-ops";
 import { log } from "../logger";
 
 const ForgetInput = z.object({
@@ -31,12 +32,7 @@ export async function forgetHandler(
     );
   }
 
-  const commit = await repo.deleteFile(
-    input.file,
-    `forget(${input.moment_name}): ${input.file}`
-  );
-
-  searchIndex?.remove(input.file);
+  const commit = await deleteFact(repo, input.file, input.moment_name, searchIndex);
 
   const safe = input.moment_name.replace(/[^a-zA-Z0-9._/-]/g, "-");
   const moment_tag = await repo.tag(`forget/${safe}`);

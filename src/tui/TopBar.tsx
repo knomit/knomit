@@ -1,23 +1,27 @@
 import React from "react";
 import { Box, Text } from "ink";
-import type { Theme } from "./theme.js";
+import { glyph, type Theme } from "./theme.js";
 
 interface TopBarProps {
   branch: string;
   theme: Theme;
+  embeddings?: boolean;
 }
 
-export function TopBar({ branch, theme }: TopBarProps) {
+export function TopBar({ branch, theme, embeddings }: TopBarProps) {
   return (
-    <Box
-      borderStyle="single"
-      borderBottom={false}
-      paddingX={1}
-      justifyContent="space-between"
-    >
-      <Text bold color={theme.primary}>knomit</Text>
-      <Text dimColor>branch: {branch}</Text>
-      <Text dimColor>↑↓ Enter ← h / Tab q</Text>
+    <Box paddingX={2} backgroundColor={theme.crust} justifyContent="space-between">
+      <Box gap={1}>
+        <Text color={theme.primary} bold>knomit</Text>
+        <Text color={theme.dim}>
+          {glyph.branch} {branch}
+        </Text>
+      </Box>
+      <Box gap={1}>
+        {embeddings !== undefined && (
+          <Text color={embeddings ? theme.green : theme.dim}>e</Text>
+        )}
+      </Box>
     </Box>
   );
 }

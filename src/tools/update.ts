@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { type GitRepo, toMomentTag } from "../git";
 import type { SearchIndex } from "../search-index";
-import { parseFact, serializeFact, mergeFrontmatter } from "../facts";
+import { updateFact } from "../fact-ops";
 import { log } from "../logger";
 
 const UpdateInput = z.object({
@@ -42,33 +42,7 @@ export async function updateHandler(
     throw new Error(`File not found: ${input.file}`);
   }
 
-  const content = await repo.readFile(input.file);
-  const parsed = parseFact(content);
-
-  // Merge frontmatter updates
-  const newFrontmatter = mergeFrontmatter(parsed.frontmatter, input.updates);
-
-  // Apply title/body overrides
-  const newTitle = input.updates.title ?? parsed.title;
-  const newBody = input.updates.body ?? parsed.body;
-
-  const serialized = serializeFact(newFrontmatter, newTitle, newBody);
-
-  const commit = await repo.commit(
-    [{ path: input.file, content: serialized }],
-    `update: ${newTitle}`
-  );
-
-  await searchIndex?.upsert(input.file, {
-    title: newTitle,
-    body: newBody,
-    domain: newFrontmatter.domain,
-    entities: newFrontmatter.entities,
-    confidence: newFrontmatter.confidence,
-    sources: newFrontmatter.sources,
-    refs: newFrontmatter.refs,
-    commitHash: commit,
-  });
+  const commit = await updateFact(repo, input.file, input.updates, searchIndex);
 
   const moment_tag = await repo.tag(toMomentTag(input.moment_name));
 
@@ -81,7 +55,7 @@ export async function updateHandler(
 export function registerUpdateTool(server: McpServer, repo: GitRepo, searchIndex?: SearchIndex): void {
   server.tool(
     "knomit_update",
-    "Update an existing fact when a previous belief is reinforced or contradicted. Use this to change confidence, add refs, or correct the body of an existing fact.",
+    `Update an existing fact when a previous belief is reinforced or contradicted. Use this to change confidence, add refs, or correct the body of an existing fact. Prefer this over knomit_learn when a fact on the topic already exists — increment sources when multiple sessions confirm the same thing.`,
     UpdateInput.shape,
     async (input) => {
       const parsed = UpdateInput.parse(input);

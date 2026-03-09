@@ -1,8 +1,24 @@
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
-import { GitRepo } from "./git";
+import { GitRepo, vendoredGitEnv } from "./git";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+
+describe("vendoredGitEnv", () => {
+  it("returns env vars when bin is under vendor/git/", () => {
+    const env = vendoredGitEnv("/app/vendor/git/bin/git");
+    expect(env).toEqual({
+      GIT_EXEC_PATH: "/app/vendor/git/libexec/git-core",
+      GIT_TEMPLATE_DIR: "/app/vendor/git/share/git-core/templates",
+      GIT_SSL_CAINFO: "/app/vendor/git/ssl/cacert.pem",
+    });
+  });
+
+  it("returns null when bin is system git", () => {
+    const env = vendoredGitEnv("/usr/bin/git");
+    expect(env).toBeNull();
+  });
+});
 
 let testDir: string;
 let repo: GitRepo;
