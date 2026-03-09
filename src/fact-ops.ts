@@ -17,7 +17,8 @@ export interface FactData {
 export async function commitFact(
   repo: GitRepo,
   fact: FactData,
-  searchIndex?: SearchIndex
+  searchIndex?: SearchIndex,
+  reason?: string
 ): Promise<string> {
   let factPath = fact.path;
   if (!factPath.startsWith("worlds/")) factPath = `worlds/${factPath}`;
@@ -35,9 +36,10 @@ export async function commitFact(
     fact.body
   );
 
+  const msg = reason ? `learn: ${fact.title}\n\n${reason}` : `learn: ${fact.title}`;
   const hash = await repo.commit(
     [{ path: factPath, content }],
-    `learn: ${fact.title}`
+    msg
   );
 
   await searchIndex?.upsert(factPath, {
@@ -59,12 +61,13 @@ export async function deleteFact(
   repo: GitRepo,
   file: string,
   momentName: string,
-  searchIndex?: SearchIndex
+  searchIndex?: SearchIndex,
+  reason?: string
 ): Promise<string> {
-  const hash = await repo.deleteFile(
-    file,
-    `forget(${momentName}): ${file}`
-  );
+  const msg = reason
+    ? `forget(${momentName}): ${file}\n\n${reason}`
+    : `forget(${momentName}): ${file}`;
+  const hash = await repo.deleteFile(file, msg);
   searchIndex?.remove(file);
   return hash;
 }
@@ -82,7 +85,8 @@ export async function updateFact(
     domain?: string[];
     entities?: string[];
   },
-  searchIndex?: SearchIndex
+  searchIndex?: SearchIndex,
+  reason?: string
 ): Promise<string> {
   const content = await repo.readFile(file);
   const parsed = parseFact(content);
@@ -91,9 +95,10 @@ export async function updateFact(
   const newBody = updates.body ?? parsed.body;
   const serialized = serializeFact(newFrontmatter, newTitle, newBody);
 
+  const msg = reason ? `update: ${newTitle}\n\n${reason}` : `update: ${newTitle}`;
   const hash = await repo.commit(
     [{ path: file, content: serialized }],
-    `update: ${newTitle}`
+    msg
   );
 
   await searchIndex?.upsert(file, {

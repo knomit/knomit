@@ -20,7 +20,13 @@ export function resolveProvider(
   model: string,
   explicit?: string
 ): "anthropic" | "gemini" | "bedrock" {
-  if (explicit) return explicit as "anthropic" | "gemini" | "bedrock";
+  if (explicit) {
+    const valid = ["anthropic", "gemini", "bedrock"];
+    if (!valid.includes(explicit)) {
+      throw new Error(`Invalid provider "${explicit}". Must be one of: ${valid.join(", ")}`);
+    }
+    return explicit as "anthropic" | "gemini" | "bedrock";
+  }
   if (model.startsWith("claude")) return "anthropic";
   if (model.startsWith("gemini")) return "gemini";
   if (model.includes("anthropic.") || model.startsWith("us.") || model.startsWith("eu."))

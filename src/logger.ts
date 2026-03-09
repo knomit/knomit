@@ -1,4 +1,5 @@
-import { appendFileSync, openSync, closeSync, statSync, renameSync, unlinkSync, existsSync } from "node:fs";
+import { appendFileSync, openSync, closeSync, statSync, renameSync, unlinkSync, existsSync, mkdirSync } from "node:fs";
+import { dirname } from "node:path";
 
 export type LogLevel = "debug" | "info" | "warn" | "error";
 
@@ -73,7 +74,8 @@ export function setLogFile(path: string, options?: { maxSize?: number; maxFiles?
   logFilePath = path;
   if (options?.maxSize) maxLogSize = options.maxSize;
   if (options?.maxFiles) maxLogFiles = options.maxFiles;
-  // Ensure the file exists / is writable
+  // Ensure parent directory and file exist
+  mkdirSync(dirname(path), { recursive: true });
   const fd = openSync(path, "a");
   closeSync(fd);
 }

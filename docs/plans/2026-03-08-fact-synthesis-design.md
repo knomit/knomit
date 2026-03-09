@@ -66,12 +66,66 @@ steps:
 
 The ontology (directory tree) is for organizing facts, not for bounding synthesis. Synthesis thinks across the entire knowledge base, filtered by domains and entities. The `path` filter is an optional narrowing mechanism, not the primary scoping lens.
 
+### Auto-discovery mode
+
+When a recipe omits the `scope` field entirely, synthesis auto-discovers what needs processing by detecting facts that changed since the last run. This is the default mode for recurring/scheduled synthesis.
+
+**How it works:**
+
+1. Look up the last synthesis commit for this recipe in the `synthesis_log` table
+2. If no previous run exists, process all facts (full initial run)
+3. Otherwise, `git diff --name-only <last_commit>..HEAD -- worlds/` to find added/modified/deleted fact files
+4. Use the changed facts as the input set for the pipeline steps
+
+This means a recipe like:
+
+```yaml
+name: daily-review
+prompt: "Review recent changes for patterns and staleness"
+auto_merge: true
+steps:
+  - mode: prune
+    model: gemini-2.0-flash
+  - mode: distill
+    model: claude-sonnet-4-6
+```
+
+...automatically targets only facts that changed since the last `daily-review` run. No explicit scope needed.
+
+**Explicit scope still works.** If `scope` is provided, it's used as-is regardless of what changed. Auto-discovery and explicit scope are mutually exclusive — the recipe author chooses one or the other.
+
+## Synthesis Log
+
+A SQLite table in the cache DB tracking when each recipe last ran:
+
+```sql
+CREATE TABLE IF NOT EXISTS synthesis_log (
+  recipe TEXT NOT NULL,
+  last_commit TEXT NOT NULL,
+  run_at TEXT NOT NULL,
+  facts_processed INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (recipe)
+);
+```
+
+| Column | Description |
+|--------|-------------|
+| `recipe` | Recipe name (matches `.knomit/synthesize/<name>.yml`) |
+| `last_commit` | Git commit SHA at the time of the run |
+| `run_at` | ISO 8601 timestamp |
+| `facts_processed` | Number of facts sent to the LLM |
+
+Updated after each successful synthesis run. Used by auto-discovery mode to determine the delta.
+
 ## CLI
 
 ```bash
+knomit synthesize                     # default: prune+distill on changes since last run
 knomit synthesize --recipe <name>     # run one recipe
 knomit synthesize --all               # run all recipes in .knomit/synthesize/
 ```
+
+**Default mode (no flags):** Runs a built-in two-step pipeline (prune → distill) using auto-discovery — only facts that changed since the last `knomit synthesize` run. Uses the default LLM model from env. Auto-merges results. This is the "just run it" mode for cron/CI.
 
 Resolves `<name>` to `<repo>/.knomit/synthesize/<name>.yml`.
 
@@ -220,7 +274,7 @@ At thousands of facts:
 
 ## Not in Scope
 
-- **Scheduling** — external (cron, GitHub Actions, etc.)
+- **Scheduling** — external (cron, GitHub Actions, etc.). Auto-discovery mode makes this easy: just run `knomit synthesize --all` on a schedule and each recipe processes only what changed
 - **Multi-machine merge** — separate feature (`knomit merge`)
 - **Review manifests in frontmatter** — recipe prompts handle staleness rules
 - **Priority scoring formulas** — recipe author decides what to review

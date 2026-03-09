@@ -17,7 +17,11 @@ const main = defineCommand({
     reset: () => import("./cli/reset.js").then((m) => m.default),
     synthesize: () => import("./cli/synthesize.js").then((m) => m.default),
   },
-  async run({ args }) {
+  async run({ args, rawArgs }) {
+    // Skip TUI if a subcommand was invoked
+    const subCmds = ["mcp", "reset", "synthesize"];
+    if (rawArgs.some((a: string) => subCmds.includes(a))) return;
+
     // Default (no subcommand) = TUI
     const { join } = await import("node:path");
     const { setLogFile } = await import("./logger.js");
@@ -34,6 +38,16 @@ const main = defineCommand({
     const { startApp } = await import("./tui/App.js");
     startApp(repo, searchIndex);
   },
+});
+
+process.on("uncaughtException", (err) => {
+  console.error(`Error: ${err.message}`);
+  process.exit(1);
+});
+
+process.on("unhandledRejection", (err: any) => {
+  console.error(`Error: ${err?.message ?? err}`);
+  process.exit(1);
 });
 
 runMain(main, {

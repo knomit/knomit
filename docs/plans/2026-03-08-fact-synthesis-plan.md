@@ -714,14 +714,26 @@ steps:
   it("defaults empty scope fields", () => {
     const yaml = `
 name: test
+scope:
+  domain: []
 steps:
   - mode: prune
 `;
     const recipe = parseRecipe(yaml);
-    expect(recipe.scope.domain).toEqual([]);
-    expect(recipe.scope.entities).toEqual([]);
-    expect(recipe.scope.search).toEqual([]);
-    expect(recipe.scope.path).toBe("");
+    expect(recipe.scope!.domain).toEqual([]);
+    expect(recipe.scope!.entities).toEqual([]);
+    expect(recipe.scope!.search).toEqual([]);
+    expect(recipe.scope!.path).toBe("");
+  });
+
+  it("allows omitting scope entirely for auto-discovery", () => {
+    const yaml = `
+name: auto-test
+steps:
+  - mode: prune
+`;
+    const recipe = parseRecipe(yaml);
+    expect(recipe.scope).toBeUndefined();
   });
 });
 ```
@@ -749,12 +761,12 @@ const ScopeSchema = z.object({
   entities: z.array(z.string()).optional().default([]),
   search: z.array(z.string()).optional().default([]),
   path: z.string().optional().default(""),
-}).optional().default({});
+});
 
 const RecipeSchema = z.object({
   name: z.string().min(1),
   prompt: z.string().optional().default(""),
-  scope: ScopeSchema,
+  scope: ScopeSchema.optional(), // undefined = auto-discovery mode
   auto_merge: z.boolean().optional().default(false),
   steps: z.array(StepSchema).min(1),
 });
@@ -1122,6 +1134,10 @@ async function gatherFacts(
   searchIndex: SearchIndex,
   scope: Recipe["scope"]
 ): Promise<FactForLLM[]> {
+  if (!scope) {
+    throw new Error("gatherFacts requires explicit scope. Use gatherFactsByDelta for auto-discovery.");
+  }
+
   const allFacts: Map<string, FactForLLM> = new Map();
 
   // Primary query by domain/entities/path
@@ -1150,6 +1166,53 @@ async function gatherFacts(
   }
 
   return [...allFacts.values()];
+}
+
+/** Auto-discovery: gather facts that changed since last synthesis run. */
+async function gatherFactsByDelta(
+  repo: GitRepo,
+  searchIndex: SearchIndex,
+  recipeName: string
+): Promise<FactForLLM[]> {
+  const lastRun = searchIndex.getSynthesisLog(recipeName);
+  if (!lastRun) {
+    // First run — gather all facts
+    log.info(`auto-discovery: first run for "${recipeName}", gathering all facts`);
+    const results = await searchIndex.search({ limit: 100_000 });
+    return results.map(searchResultToFact);
+  }
+
+  log.info(`auto-discovery: finding changes since ${lastRun.lastCommit.slice(0, 7)}`);
+  const diff = await repo.diffFiles(lastRun.lastCommit);
+  const changedPaths = [...diff.added, ...diff.modified].filter((f) => f.endsWith(".md"));
+
+  if (changedPaths.length === 0) {
+    log.info("auto-discovery: no changes since last run");
+    return [];
+  }
+
+  const facts: FactForLLM[] = [];
+  for (const path of changedPaths) {
+    try {
+      const content = await repo.readFile(path);
+      const parsed = (await import("./facts.js")).parseFact(content);
+      facts.push({
+        path,
+        title: parsed.title,
+        body: parsed.body,
+        domain: parsed.frontmatter.domain,
+        entities: parsed.frontmatter.entities,
+        confidence: parsed.frontmatter.confidence,
+        sources: parsed.frontmatter.sources,
+        refs: parsed.frontmatter.refs,
+      });
+    } catch {
+      // Skip files that fail to parse
+    }
+  }
+
+  log.info(`auto-discovery: ${facts.length} changed facts since last run`);
+  return facts;
 }
 
 function searchResultToFact(r: SearchResult): FactForLLM {
@@ -1183,7 +1246,9 @@ async function executePruneStep(
   step: RecipeStep,
   recipeName: string
 ): Promise<string> {
-  const facts = await gatherFacts(searchIndex, recipe.scope);
+  const facts = recipe.scope
+    ? await gatherFacts(searchIndex, recipe.scope)
+    : await gatherFactsByDelta(repo, searchIndex, recipeName);
   if (facts.length === 0) return "No facts found in scope.";
 
   const adapter = adapterForStep(step);
@@ -1263,7 +1328,9 @@ async function executeDistillStep(
   step: RecipeStep,
   recipeName: string
 ): Promise<string> {
-  const facts = await gatherFacts(searchIndex, recipe.scope);
+  const facts = recipe.scope
+    ? await gatherFacts(searchIndex, recipe.scope)
+    : await gatherFactsByDelta(repo, searchIndex, recipeName);
   if (facts.length === 0) return "No facts found in scope.";
 
   const adapter = adapterForStep(step);
@@ -1387,9 +1454,12 @@ export async function synthesize(
     throw err;
   }
 
+  // Record synthesis run in log
+  const headAfter = await repo.headCommit();
+  searchIndex.setSynthesisLog(recipe.name, headAfter, stepSummaries.length);
+
   // Finalize
   if (recipe.auto_merge) {
-    const currentBranch = (await repo.git("rev-parse", "--abbrev-ref", "HEAD")).stdout;
     await repo.gitOrThrow("checkout", "-");
     await repo.gitOrThrow("merge", branchName);
     await repo.gitOrThrow("branch", "-d", branchName);
@@ -1423,16 +1493,28 @@ git commit -m "feat: add synthesis engine with prune and distill modes"
 
 ---
 
-### Task 5: Add `reindex` method to SearchIndex
+### Task 5: Add `reindex` method and `synthesis_log` table to SearchIndex
 
-The synthesis engine needs to re-index facts between pipeline steps so each step sees changes from the previous one. The SearchIndex currently only indexes on startup.
+The synthesis engine needs to re-index facts between pipeline steps so each step sees changes from the previous one. It also needs a `synthesis_log` table to track when each recipe last ran (for auto-discovery mode).
 
 **Files:**
 - Modify: `src/search-index.ts`
 
-**Step 1: Check if reindex already exists**
+**Step 1: Add `synthesis_log` table creation to `init()`**
 
-Check `src/search-index.ts` for an existing `reindex` method. If it doesn't exist, add one.
+In the `init()` method, after the `meta` table creation, add:
+
+```ts
+    this.db.run(`
+      CREATE TABLE IF NOT EXISTS synthesis_log (
+        recipe TEXT NOT NULL,
+        last_commit TEXT NOT NULL,
+        run_at TEXT NOT NULL,
+        facts_processed INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (recipe)
+      )
+    `);
+```
 
 **Step 2: Add `reindex` method**
 
@@ -1442,23 +1524,51 @@ Add to the `SearchIndex` class:
   async reindex(repo: GitRepo): Promise<void> {
     if (!this.db) return;
     log.info("search index: reindexing from repo");
-    this.db.run("DELETE FROM facts");
-    await this.indexAll(repo);
+    const head = await repo.headCommit();
+    this.db.run("BEGIN");
+    try {
+      this.db.run("DELETE FROM facts");
+      this.db.run("INSERT INTO facts_fts(facts_fts) VALUES ('delete-all')");
+      this.db.run("COMMIT");
+    } catch (err) {
+      this.db.run("ROLLBACK");
+      throw err;
+    }
+    await this.indexDir(repo, "worlds", head);
+    this.setMeta("last_commit", head);
   }
 ```
 
-This uses the existing `indexAll` method (which walks `worlds/` and upserts all facts).
+**Step 3: Add synthesis log read/write methods**
 
-**Step 3: Run full test suite**
+```ts
+  getSynthesisLog(recipe: string): { lastCommit: string; runAt: string; factsProcessed: number } | null {
+    if (!this.db) return null;
+    const row = this.db
+      .query("SELECT last_commit, run_at, facts_processed FROM synthesis_log WHERE recipe = ?")
+      .get(recipe) as { last_commit: string; run_at: string; facts_processed: number } | null;
+    if (!row) return null;
+    return { lastCommit: row.last_commit, runAt: row.run_at, factsProcessed: row.facts_processed };
+  }
+
+  setSynthesisLog(recipe: string, lastCommit: string, factsProcessed: number): void {
+    if (!this.db) return;
+    this.db.query(
+      "INSERT OR REPLACE INTO synthesis_log (recipe, last_commit, run_at, facts_processed) VALUES (?, ?, ?, ?)"
+    ).run(recipe, lastCommit, new Date().toISOString(), factsProcessed);
+  }
+```
+
+**Step 4: Run full test suite**
 
 Run: `cd /Users/knomit/data/mine/knomit/src && bun test`
 Expected: all pass
 
-**Step 4: Commit**
+**Step 5: Commit**
 
 ```bash
 git add src/search-index.ts
-git commit -m "feat: add reindex method to SearchIndex for synthesis pipeline"
+git commit -m "feat: add reindex method and synthesis_log table to SearchIndex"
 ```
 
 ---
@@ -1558,8 +1668,22 @@ export default defineCommand({
       for (const s of result.stepSummaries) console.log(`  ${s}`);
       console.log(result.merged ? "Auto-merged" : "Pushed for review");
     } else {
-      console.error("Specify --recipe <name> or --all");
-      process.exit(1);
+      // Default: built-in prune+distill on changes since last run
+      const defaultRecipe: import("../recipe.js").Recipe = {
+        name: "default",
+        prompt: "",
+        scope: undefined, // auto-discovery mode
+        auto_merge: true,
+        steps: [
+          { mode: "prune", prompt: "" },
+          { mode: "distill", prompt: "" },
+        ],
+      };
+      console.log("Running default synthesis (prune + distill on recent changes)...");
+      const result = await synthesize(repo, searchIndex, defaultRecipe);
+      console.log(`Branch: ${result.branch}`);
+      for (const s of result.stepSummaries) console.log(`  ${s}`);
+      console.log(result.merged ? "Auto-merged" : "Pushed for review");
     }
   },
 });
