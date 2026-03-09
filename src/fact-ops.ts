@@ -2,6 +2,10 @@ import type { GitRepo } from "./git";
 import type { SearchIndex } from "./search-index";
 import { serializeFact, parseFact, mergeFrontmatter } from "./facts";
 
+function commitMsg(subject: string, reason?: string): string {
+  return reason ? `${subject}\n\n${reason}` : subject;
+}
+
 export interface FactData {
   path: string;
   title: string;
@@ -36,10 +40,9 @@ export async function commitFact(
     fact.body
   );
 
-  const msg = reason ? `learn: ${fact.title}\n\n${reason}` : `learn: ${fact.title}`;
   const hash = await repo.commit(
     [{ path: factPath, content }],
-    msg
+    commitMsg(`learn: ${fact.title}`, reason)
   );
 
   await searchIndex?.upsert(factPath, {
@@ -64,10 +67,7 @@ export async function deleteFact(
   searchIndex?: SearchIndex,
   reason?: string
 ): Promise<string> {
-  const msg = reason
-    ? `forget(${momentName}): ${file}\n\n${reason}`
-    : `forget(${momentName}): ${file}`;
-  const hash = await repo.deleteFile(file, msg);
+  const hash = await repo.deleteFile(file, commitMsg(`forget(${momentName}): ${file}`, reason));
   searchIndex?.remove(file);
   return hash;
 }
@@ -95,10 +95,9 @@ export async function updateFact(
   const newBody = updates.body ?? parsed.body;
   const serialized = serializeFact(newFrontmatter, newTitle, newBody);
 
-  const msg = reason ? `update: ${newTitle}\n\n${reason}` : `update: ${newTitle}`;
   const hash = await repo.commit(
     [{ path: file, content: serialized }],
-    msg
+    commitMsg(`update: ${newTitle}`, reason)
   );
 
   await searchIndex?.upsert(file, {

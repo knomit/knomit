@@ -17,7 +17,6 @@ export interface RightSelectableItem {
 export interface HistoricalData {
   content?: string;
   children?: SummaryChild[];
-  diff?: { added: Set<string>; modified: Set<string> };
   changedFiles?: { added: string[]; modified: string[]; deleted: string[] };
   lineDiff?: Set<number>;
   entry: LogEntry;
@@ -121,7 +120,8 @@ export function RightPanel({
 }
 
 function HistoricalView({ data, theme, maxHeight }: { data: HistoricalData; theme: Theme; maxHeight: number }) {
-  const { content, children, diff, changedFiles, lineDiff, entry, commitBody } = data;
+  const { content, children, changedFiles, lineDiff, entry, commitBody } = data;
+  const diff = changedFiles ? { added: new Set(changedFiles.added), modified: new Set(changedFiles.modified) } : undefined;
   const commitShort = entry.commit.slice(0, 7);
   const dateStr = new Date(entry.date).toLocaleDateString("en-US", {
     month: "short", day: "numeric", year: "numeric",

@@ -65,6 +65,14 @@ export interface DistillResult {
   summary: string;
 }
 
+// --- Prompt constants ---
+
+const PLACEMENT_RULES = `- The path MUST be placed in an appropriate ontological location based on the source facts' paths, NOT under "worlds/synthesized/" or any operational directory.
+- If all sources share a common parent directory, place the fact there (e.g. sources from worlds/projects/webapp/* → worlds/projects/webapp/combined-name.md).
+- If sources span different directories, place the fact at the nearest common ancestor (e.g. sources from worlds/debugging/* → worlds/debugging/common-patterns.md).
+- Keep paths meaningful: the directory structure IS the ontology. Use descriptive filenames.
+- The "refs" field MUST list the source file paths exactly as given (e.g. "worlds/foo/bar.md") — the system will resolve them to knomit: URIs automatically.`;
+
 // --- Prompt builders ---
 
 export function buildPrunePrompt(
@@ -100,10 +108,7 @@ For each fact, decide:
 Also identify facts that say the same thing and should be merged into a single unified fact.
 
 IMPORTANT — merged fact placement:
-- The merged fact's path MUST be placed in an appropriate ontological location based on the source facts' paths, NOT under "worlds/synthesized/".
-- If all sources share a common parent directory, place the merged fact there (e.g. sources from worlds/projects/webapp/* → worlds/projects/webapp/merged-name.md).
-- If sources span different directories, place the merged fact at the nearest common ancestor (e.g. worlds/debugging/* → worlds/debugging/merged-name.md).
-- The "refs" field MUST list the source file paths exactly as given (e.g. "worlds/foo/bar.md") — the system will resolve them to knomit: URIs automatically.
+${PLACEMENT_RULES}
 
 Respond as JSON (no markdown wrapping):
 {
@@ -158,11 +163,7 @@ Identify patterns across these facts. Produce:
 2. Which original facts are fully subsumed and can be forgotten
 
 IMPORTANT — synthesized fact placement:
-- The new fact's path MUST be placed in an appropriate ontological location based on the source facts' paths, NOT under "worlds/synthesized/" or any operational directory.
-- If all sources share a common parent directory, place the new fact there (e.g. sources from worlds/projects/webapp/* → worlds/projects/webapp/architecture-overview.md).
-- If sources span different directories, place the fact at the nearest common ancestor or the most relevant domain directory (e.g. sources from worlds/debugging/* → worlds/debugging/common-patterns.md).
-- Keep paths meaningful: the directory structure IS the ontology. Use descriptive filenames.
-- The "refs" field MUST list the source file paths exactly as given (e.g. "worlds/foo/bar.md") — the system will resolve them to knomit: URIs automatically.
+${PLACEMENT_RULES}
 
 Respond as JSON (no markdown wrapping):
 {
@@ -302,11 +303,12 @@ async function gatherFactsByDelta(
     return [];
   }
 
+  const { parseFact } = await import("./facts.js");
   const facts: FactForLLM[] = [];
   for (const path of changedPaths) {
     try {
       const content = await repo.readFile(path);
-      const parsed = (await import("./facts.js")).parseFact(content);
+      const parsed = parseFact(content);
       facts.push({
         path,
         title: parsed.title,
@@ -350,22 +352,12 @@ function searchResultToFact(r: SearchResult): FactForLLM {
  * Refs that already have a protocol scheme are passed through unchanged.
  */
 async function resolveRefs(repo: GitRepo, refs: string[]): Promise<string[]> {
-  const resolved: string[] = [];
-  for (const ref of refs) {
+  return Promise.all(refs.map(async (ref) => {
     // Already a URI — pass through
-    if (ref.includes("://") || ref.startsWith("knomit:")) {
-      resolved.push(ref);
-      continue;
-    }
+    if (ref.includes("://") || ref.startsWith("knomit:")) return ref;
     const commit = await repo.lastCommitForFile(ref);
-    if (commit) {
-      resolved.push(`knomit:blob/${commit.slice(0, 7)}/${ref}`);
-    } else {
-      // Can't resolve — keep raw path
-      resolved.push(ref);
-    }
-  }
-  return resolved;
+    return commit ? `knomit:blob/${commit.slice(0, 7)}/${ref}` : ref;
+  }));
 }
 
 // --- Step execution ---
@@ -379,6 +371,21 @@ function adapterForStep(step: RecipeStep): LLMAdapter {
   return createAdapter(configFromEnv());
 }
 
+async function gatherStepFacts(
+  repo: GitRepo,
+  searchIndex: SearchIndex,
+  recipe: Recipe,
+  recipeName: string,
+  onProgress?: OnProgress
+): Promise<FactForLLM[] | null> {
+  const isAutoDiscovery = !recipe.scope;
+  const facts = recipe.scope
+    ? await gatherFacts(searchIndex, recipe.scope)
+    : await gatherFactsByDelta(repo, searchIndex, recipeName);
+  onProgress?.({ phase: "gather", facts: facts.length, mode: isAutoDiscovery ? "delta" : "scope", firstRun: isAutoDiscovery && !searchIndex.getSynthesisLog(recipeName) });
+  return facts.length === 0 ? null : facts;
+}
+
 async function executePruneStep(
   repo: GitRepo,
   searchIndex: SearchIndex,
@@ -389,12 +396,8 @@ async function executePruneStep(
   totalSteps: number,
   onProgress?: OnProgress
 ): Promise<string> {
-  const isAutoDiscovery = !recipe.scope;
-  const facts = recipe.scope
-    ? await gatherFacts(searchIndex, recipe.scope)
-    : await gatherFactsByDelta(repo, searchIndex, recipeName);
-  onProgress?.({ phase: "gather", facts: facts.length, mode: isAutoDiscovery ? "delta" : "scope", firstRun: isAutoDiscovery && !searchIndex.getSynthesisLog(recipeName) });
-  if (facts.length === 0) return "No facts found in scope.";
+  const facts = await gatherStepFacts(repo, searchIndex, recipe, recipeName, onProgress);
+  if (!facts) return "No facts found in scope.";
 
   const adapter = adapterForStep(step);
   const chunks = chunkFacts(facts, 100_000);
@@ -492,12 +495,8 @@ async function executeDistillStep(
   totalSteps: number,
   onProgress?: OnProgress
 ): Promise<string> {
-  const isAutoDiscovery = !recipe.scope;
-  const facts = recipe.scope
-    ? await gatherFacts(searchIndex, recipe.scope)
-    : await gatherFactsByDelta(repo, searchIndex, recipeName);
-  onProgress?.({ phase: "gather", facts: facts.length, mode: isAutoDiscovery ? "delta" : "scope", firstRun: isAutoDiscovery && !searchIndex.getSynthesisLog(recipeName) });
-  if (facts.length === 0) return "No facts found in scope.";
+  const facts = await gatherStepFacts(repo, searchIndex, recipe, recipeName, onProgress);
+  if (!facts) return "No facts found in scope.";
 
   const adapter = adapterForStep(step);
   const chunks = chunkFacts(facts, 100_000);

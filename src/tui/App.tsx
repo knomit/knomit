@@ -167,7 +167,6 @@ function App({ repo, searchIndex }: { repo: GitRepo; searchIndex: SearchIndex })
               name: e.name,
               type: e.isDirectory ? "world" as const : "fact" as const,
             })),
-            diff: { added: new Set(diff.added), modified: new Set(diff.modified) },
             changedFiles: { added: diff.added, modified: diff.modified, deleted: diff.deleted },
             entry,
             commitBody,

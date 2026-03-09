@@ -1,6 +1,6 @@
 import React from "react";
 import { Box, Text } from "ink";
-import { glyph, box, type Theme } from "./theme.js";
+import { glyph, type Theme } from "./theme.js";
 import type { ChildItem, SearchResultItem } from "./state.js";
 import type { LogEntry } from "../git.js";
 

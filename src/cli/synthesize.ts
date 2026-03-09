@@ -157,17 +157,16 @@ export default defineCommand({
     // Validate LLM config early so we fail with a clear message
     try {
       const config = configFromEnv();
-      resolveProvider(config.model, config.provider);
-      const provider = config.provider ?? resolveProvider(config.model);
-      if (provider === "gemini" && !config.apiKey && !process.env.GOOGLE_AI_API_KEY) {
+      const provider = resolveProvider(config.model, config.provider);
+      if (provider === "gemini" && !config.apiKey) {
         console.error("Error: GOOGLE_AI_API_KEY is required. Set it in your environment.");
         process.exit(1);
       }
-      if (provider === "anthropic" && !config.apiKey && !process.env.ANTHROPIC_API_KEY) {
+      if (provider === "anthropic" && !config.apiKey) {
         console.error("Error: ANTHROPIC_API_KEY is required. Set it in your environment.");
         process.exit(1);
       }
-      if (provider === "bedrock" && (!process.env.AWS_ACCESS_KEY_ID || !process.env.AWS_SECRET_ACCESS_KEY)) {
+      if (provider === "bedrock" && (!config.accessKeyId || !config.secretAccessKey)) {
         console.error("Error: AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY are required. Set them in your environment.");
         process.exit(1);
       }
