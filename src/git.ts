@@ -154,6 +154,7 @@ export class GitRepo {
     // Configure for commits
     await this.gitOrThrow("config", "user.email", "knomit@local");
     await this.gitOrThrow("config", "user.name", "knomit");
+    await this.gitOrThrow("config", "commit.gpgsign", "false");
 
     // Create root manifest
     const worldsMd = `---
