@@ -99,6 +99,12 @@ For each fact, decide:
 
 Also identify facts that say the same thing and should be merged into a single unified fact.
 
+IMPORTANT — merged fact placement:
+- The merged fact's path MUST be placed in an appropriate ontological location based on the source facts' paths, NOT under "worlds/synthesized/".
+- If all sources share a common parent directory, place the merged fact there (e.g. sources from worlds/projects/webapp/* → worlds/projects/webapp/merged-name.md).
+- If sources span different directories, place the merged fact at the nearest common ancestor (e.g. worlds/debugging/* → worlds/debugging/merged-name.md).
+- The "refs" field MUST list the source file paths exactly as given (e.g. "worlds/foo/bar.md") — the system will resolve them to knomit: URIs automatically.
+
 Respond as JSON (no markdown wrapping):
 {
   "decisions": [
@@ -148,8 +154,15 @@ Facts in scope:
 ${factsJson}
 
 Identify patterns across these facts. Produce:
-1. New higher-order facts that capture patterns (with refs to source fact files)
+1. New higher-order facts that capture patterns
 2. Which original facts are fully subsumed and can be forgotten
+
+IMPORTANT — synthesized fact placement:
+- The new fact's path MUST be placed in an appropriate ontological location based on the source facts' paths, NOT under "worlds/synthesized/" or any operational directory.
+- If all sources share a common parent directory, place the new fact there (e.g. sources from worlds/projects/webapp/* → worlds/projects/webapp/architecture-overview.md).
+- If sources span different directories, place the fact at the nearest common ancestor or the most relevant domain directory (e.g. sources from worlds/debugging/* → worlds/debugging/common-patterns.md).
+- Keep paths meaningful: the directory structure IS the ontology. Use descriptive filenames.
+- The "refs" field MUST list the source file paths exactly as given (e.g. "worlds/foo/bar.md") — the system will resolve them to knomit: URIs automatically.
 
 Respond as JSON (no markdown wrapping):
 {
@@ -326,6 +339,35 @@ function searchResultToFact(r: SearchResult): FactForLLM {
   };
 }
 
+// --- Ref resolution ---
+
+/**
+ * Resolve file-path refs to knomit: URIs.
+ *
+ * Local refs (no authority) → knomit:blob/<commit>/<path>
+ * External refs would be    → knomit://host/repo/blob/<commit>/<path>
+ *
+ * Refs that already have a protocol scheme are passed through unchanged.
+ */
+async function resolveRefs(repo: GitRepo, refs: string[]): Promise<string[]> {
+  const resolved: string[] = [];
+  for (const ref of refs) {
+    // Already a URI — pass through
+    if (ref.includes("://") || ref.startsWith("knomit:")) {
+      resolved.push(ref);
+      continue;
+    }
+    const commit = await repo.lastCommitForFile(ref);
+    if (commit) {
+      resolved.push(`knomit:blob/${commit.slice(0, 7)}/${ref}`);
+    } else {
+      // Can't resolve — keep raw path
+      resolved.push(ref);
+    }
+  }
+  return resolved;
+}
+
 // --- Step execution ---
 
 function adapterForStep(step: RecipeStep): LLMAdapter {
@@ -342,11 +384,16 @@ async function executePruneStep(
   searchIndex: SearchIndex,
   recipe: Recipe,
   step: RecipeStep,
-  recipeName: string
+  recipeName: string,
+  stepIdx: number,
+  totalSteps: number,
+  onProgress?: OnProgress
 ): Promise<string> {
+  const isAutoDiscovery = !recipe.scope;
   const facts = recipe.scope
     ? await gatherFacts(searchIndex, recipe.scope)
     : await gatherFactsByDelta(repo, searchIndex, recipeName);
+  onProgress?.({ phase: "gather", facts: facts.length, mode: isAutoDiscovery ? "delta" : "scope", firstRun: isAutoDiscovery && !searchIndex.getSynthesisLog(recipeName) });
   if (facts.length === 0) return "No facts found in scope.";
 
   const adapter = adapterForStep(step);
@@ -355,13 +402,17 @@ async function executePruneStep(
   const allMerges: PruneMerge[] = [];
   const summaries: string[] = [];
 
-  for (const chunk of chunks) {
+  for (let i = 0; i < chunks.length; i++) {
+    const chunk = chunks[i]!;
+    onProgress?.({ phase: "llm", step: stepIdx, totalSteps, mode: "prune", chunk: i + 1, totalChunks: chunks.length, facts: chunk.length });
     const prompt = buildPrunePrompt(chunk, recipe.prompt, step.prompt ?? "");
     log.info(`prune: sending ${chunk.length} facts to LLM`);
+    const t0 = Date.now();
     const response = await adapter.complete(
       "You are a knowledge base maintenance assistant. Respond only with valid JSON.",
       [{ role: "user", content: prompt }]
     );
+    onProgress?.({ phase: "llm-done", step: stepIdx, totalSteps, mode: "prune", elapsed: Date.now() - t0 });
     const result = parsePruneResponse(response);
     allDecisions.push(...result.decisions);
     allMerges.push(...result.merges);
@@ -371,19 +422,24 @@ async function executePruneStep(
   let forgotten = 0;
   let updated = 0;
   let merged = 0;
+  const kept = allDecisions.filter((d) => d.action === "keep").length;
 
   for (const decision of allDecisions) {
-    if (decision.action === "forget") {
+    if (decision.action === "keep") {
+      onProgress?.({ phase: "detail-keep", path: decision.file, reason: decision.reason });
+    } else if (decision.action === "forget") {
       try {
-        await deleteFact(repo, decision.file, `synthesize-${recipeName}`, searchIndex);
+        await deleteFact(repo, decision.file, `synthesize-${recipeName}`, searchIndex, decision.reason);
         forgotten++;
+        onProgress?.({ phase: "detail-forget", path: decision.file, reason: decision.reason });
       } catch (err) {
         log.warn(`prune: failed to delete ${decision.file}: ${err}`);
       }
     } else if (decision.action === "update" && decision.confidence != null) {
       try {
-        await updateFact(repo, decision.file, { confidence: decision.confidence }, searchIndex);
+        await updateFact(repo, decision.file, { confidence: decision.confidence }, searchIndex, decision.reason);
         updated++;
+        onProgress?.({ phase: "detail-update", path: decision.file, confidence: decision.confidence, reason: decision.reason });
       } catch (err) {
         log.warn(`prune: failed to update ${decision.file}: ${err}`);
       }
@@ -392,6 +448,8 @@ async function executePruneStep(
 
   for (const merge of allMerges) {
     try {
+      const mergeReason = `Merged ${merge.sources.length} facts: ${merge.sources.join(", ")}`;
+      const resolvedRefs = await resolveRefs(repo, merge.merged.refs);
       await commitFact(repo, {
         path: merge.merged.path,
         title: merge.merged.title,
@@ -400,20 +458,23 @@ async function executePruneStep(
         confidence: merge.merged.confidence,
         sources: 1,
         entities: merge.merged.entities,
-        refs: merge.merged.refs,
-      }, searchIndex);
+        refs: resolvedRefs,
+      }, searchIndex, mergeReason);
       for (const source of merge.sources) {
         try {
-          await deleteFact(repo, source, `synthesize-${recipeName}`, searchIndex);
+          await deleteFact(repo, source, `synthesize-${recipeName}`, searchIndex, `Subsumed by merged fact: ${merge.merged.path}`);
         } catch (err) {
           log.warn(`prune: failed to delete merge source ${source}: ${err}`);
         }
       }
       merged++;
+      onProgress?.({ phase: "detail-merge", sources: merge.sources, target: merge.merged.path, reason: mergeReason });
     } catch (err) {
       log.warn(`prune: failed to commit merged fact ${merge.merged.path}: ${err}`);
     }
   }
+
+  onProgress?.({ phase: "apply", mode: "prune", kept, forgotten, updated, merged });
 
   await repo.tag(toMomentTag(`synthesize-${recipeName}-prune`));
   const summary = `Prune: ${forgotten} forgotten, ${updated} updated, ${merged} merged. ${summaries.join(" ")}`;
@@ -426,11 +487,16 @@ async function executeDistillStep(
   searchIndex: SearchIndex,
   recipe: Recipe,
   step: RecipeStep,
-  recipeName: string
+  recipeName: string,
+  stepIdx: number,
+  totalSteps: number,
+  onProgress?: OnProgress
 ): Promise<string> {
+  const isAutoDiscovery = !recipe.scope;
   const facts = recipe.scope
     ? await gatherFacts(searchIndex, recipe.scope)
     : await gatherFactsByDelta(repo, searchIndex, recipeName);
+  onProgress?.({ phase: "gather", facts: facts.length, mode: isAutoDiscovery ? "delta" : "scope", firstRun: isAutoDiscovery && !searchIndex.getSynthesisLog(recipeName) });
   if (facts.length === 0) return "No facts found in scope.";
 
   const adapter = adapterForStep(step);
@@ -439,13 +505,17 @@ async function executeDistillStep(
   const allForget: string[] = [];
   const summaries: string[] = [];
 
-  for (const chunk of chunks) {
+  for (let i = 0; i < chunks.length; i++) {
+    const chunk = chunks[i]!;
+    onProgress?.({ phase: "llm", step: stepIdx, totalSteps, mode: "distill", chunk: i + 1, totalChunks: chunks.length, facts: chunk.length });
     const prompt = buildDistillPrompt(chunk, recipe.prompt, step.prompt ?? "");
     log.info(`distill: sending ${chunk.length} facts to LLM`);
+    const t0 = Date.now();
     const response = await adapter.complete(
       "You are a knowledge base synthesis assistant. Respond only with valid JSON.",
       [{ role: "user", content: prompt }]
     );
+    onProgress?.({ phase: "llm-done", step: stepIdx, totalSteps, mode: "distill", elapsed: Date.now() - t0 });
     const result = parseDistillResponse(response);
     allSynthesized.push(...result.synthesize);
     allForget.push(...result.forget);
@@ -453,6 +523,7 @@ async function executeDistillStep(
   }
 
   if (chunks.length > 1 && allSynthesized.length > 0) {
+    onProgress?.({ phase: "cross-chunk", facts: allSynthesized.length });
     const crossPrompt = buildDistillPrompt(
       allSynthesized.map((s) => ({ ...s, sources: 1 })),
       recipe.prompt,
@@ -465,7 +536,6 @@ async function executeDistillStep(
     );
     const crossResult = parseDistillResponse(crossResponse);
     if (crossResult.synthesize.length > 0) {
-      // Replace per-chunk facts with consolidated cross-batch output
       allSynthesized.length = 0;
       allSynthesized.push(...crossResult.synthesize);
       allForget.push(...crossResult.forget);
@@ -478,6 +548,8 @@ async function executeDistillStep(
 
   for (const fact of allSynthesized) {
     try {
+      const resolvedRefs = await resolveRefs(repo, fact.refs);
+      const refsNote = fact.refs.length > 0 ? `Distilled from: ${fact.refs.join(", ")}` : "Distilled from analysis of related facts";
       await commitFact(repo, {
         path: fact.path,
         title: fact.title,
@@ -486,9 +558,10 @@ async function executeDistillStep(
         confidence: fact.confidence,
         sources: 1,
         entities: fact.entities,
-        refs: fact.refs,
-      }, searchIndex);
+        refs: resolvedRefs,
+      }, searchIndex, refsNote);
       learned++;
+      onProgress?.({ phase: "detail-learn", path: fact.path, body: fact.body, refs: fact.refs });
     } catch (err) {
       log.warn(`distill: failed to learn ${fact.path}: ${err}`);
     }
@@ -496,12 +569,15 @@ async function executeDistillStep(
 
   for (const file of allForget) {
     try {
-      await deleteFact(repo, file, `synthesize-${recipeName}`, searchIndex);
+      await deleteFact(repo, file, `synthesize-${recipeName}`, searchIndex, "Subsumed by higher-order distilled fact");
       forgotten++;
+      onProgress?.({ phase: "detail-distill-forget", path: file });
     } catch (err) {
       log.warn(`distill: failed to delete ${file}: ${err}`);
     }
   }
+
+  onProgress?.({ phase: "apply", mode: "distill", learned, forgotten });
 
   await repo.tag(toMomentTag(`synthesize-${recipeName}-distill`));
   const summary = `Distill: ${learned} learned, ${forgotten} forgotten. ${summaries.join(" ")}`;
@@ -510,6 +586,27 @@ async function executeDistillStep(
 }
 
 // --- Main entry point ---
+
+export type ProgressEvent =
+  | { phase: "step-start"; step: number; totalSteps: number; mode: string }
+  | { phase: "gather"; facts: number; mode: "scope" | "delta"; firstRun?: boolean }
+  | { phase: "llm"; step: number; totalSteps: number; mode: string; chunk: number; totalChunks: number; facts: number }
+  | { phase: "llm-done"; step: number; totalSteps: number; mode: string; elapsed: number }
+  | { phase: "apply"; mode: "prune"; kept: number; forgotten: number; updated: number; merged: number }
+  | { phase: "apply"; mode: "distill"; learned: number; forgotten: number }
+  | { phase: "detail-keep"; path: string; reason: string }
+  | { phase: "detail-forget"; path: string; reason: string }
+  | { phase: "detail-update"; path: string; confidence: number; reason: string }
+  | { phase: "detail-merge"; sources: string[]; target: string; reason: string }
+  | { phase: "detail-learn"; path: string; body: string; refs: string[] }
+  | { phase: "detail-distill-forget"; path: string }
+  | { phase: "cross-chunk"; facts: number }
+  | { phase: "reindex" }
+  | { phase: "merge" }
+  | { phase: "push" }
+  | { phase: "done"; stepSummaries: string[]; elapsed: number };
+
+export type OnProgress = (event: ProgressEvent) => void;
 
 export interface SynthesizeResult {
   branch: string;
@@ -520,29 +617,35 @@ export interface SynthesizeResult {
 export async function synthesize(
   repo: GitRepo,
   searchIndex: SearchIndex,
-  recipe: Recipe
+  recipe: Recipe,
+  onProgress?: OnProgress
 ): Promise<SynthesizeResult> {
   const branchName = `synthesize/${recipe.name}`;
+  const t0 = Date.now();
   log.info(`synthesize: starting recipe "${recipe.name}" on branch ${branchName}`);
 
-  // Create synthesis branch — use public methods added to GitRepo
+  // Delete stale synthesis branch from a previous failed/interrupted run
+  try { await repo.deleteBranch(branchName); } catch { /* doesn't exist — fine */ }
+
   await repo.checkoutBranch(branchName, true);
 
   const stepSummaries: string[] = [];
 
   try {
-    for (const step of recipe.steps) {
+    for (let i = 0; i < recipe.steps.length; i++) {
+      const step = recipe.steps[i]!;
       log.info(`synthesize: running step mode=${step.mode}`);
+      onProgress?.({ phase: "step-start", step: i, totalSteps: recipe.steps.length, mode: step.mode });
 
       // Re-index from git before each step so we see previous step's changes
-      // reindex() is added in Task 5
+      onProgress?.({ phase: "reindex" });
       await searchIndex.reindex(repo);
 
       let summary: string;
       if (step.mode === "prune") {
-        summary = await executePruneStep(repo, searchIndex, recipe, step, recipe.name);
+        summary = await executePruneStep(repo, searchIndex, recipe, step, recipe.name, i, recipe.steps.length, onProgress);
       } else {
-        summary = await executeDistillStep(repo, searchIndex, recipe, step, recipe.name);
+        summary = await executeDistillStep(repo, searchIndex, recipe, step, recipe.name, i, recipe.steps.length, onProgress);
       }
       stepSummaries.push(summary);
     }
@@ -556,16 +659,20 @@ export async function synthesize(
   searchIndex.setSynthesisLog(recipe.name, headAfter, stepSummaries.length);
 
   if (recipe.auto_merge) {
+    onProgress?.({ phase: "merge" });
     const currentBranch = branchName;
     await repo.checkoutPrevious();
     await repo.mergeBranch(currentBranch);
     await repo.deleteBranch(currentBranch);
     log.info(`synthesize: auto-merged ${branchName} and deleted branch`);
+    onProgress?.({ phase: "done", stepSummaries, elapsed: Date.now() - t0 });
     return { branch: branchName, stepSummaries, merged: true };
   } else {
+    onProgress?.({ phase: "push" });
     await repo.pushBranch(branchName);
     await repo.checkoutPrevious();
     log.info(`synthesize: pushed ${branchName} for review`);
+    onProgress?.({ phase: "done", stepSummaries, elapsed: Date.now() - t0 });
     return { branch: branchName, stepSummaries, merged: false };
   }
 }

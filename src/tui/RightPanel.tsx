@@ -18,8 +18,10 @@ export interface HistoricalData {
   content?: string;
   children?: SummaryChild[];
   diff?: { added: Set<string>; modified: Set<string> };
+  changedFiles?: { added: string[]; modified: string[]; deleted: string[] };
   lineDiff?: Set<number>;
   entry: LogEntry;
+  commitBody?: string;
 }
 
 interface RightPanelProps {
@@ -34,6 +36,7 @@ interface RightPanelProps {
   selectedIndex?: number;
   onItemsChanged?: (items: RightSelectableItem[]) => void;
   historical?: HistoricalData;
+  availableHeight?: number;
 }
 
 export function buildFactSelectableItems(
@@ -78,7 +81,7 @@ export function buildSelectableItems(
 
 export function RightPanel({
   mode, theme, stats, summaryChildren, factTitle, factBody, factFrontmatter,
-  focused, selectedIndex, onItemsChanged, historical,
+  focused, selectedIndex, onItemsChanged, historical, availableHeight,
 }: RightPanelProps) {
   let selectableItems: RightSelectableItem[] = [];
   if (!historical) {
@@ -93,11 +96,13 @@ export function RightPanel({
     onItemsChanged?.(selectableItems);
   }, [selectableItems.length, mode, !!historical]);
 
+  const contentHeight = Math.max(3, (availableHeight ?? 24) - 3);
+
   return (
     <Box flexDirection="column" width="60%" paddingX={2} paddingTop={1} overflow="hidden" backgroundColor={theme.base}>
       <Box flexDirection="column" flexGrow={1} overflow="hidden">
         {historical ? (
-          <HistoricalView data={historical} theme={theme} />
+          <HistoricalView data={historical} theme={theme} maxHeight={contentHeight} />
         ) : mode === "summary" ? (
           <SummaryView
             stats={stats}
@@ -108,15 +113,15 @@ export function RightPanel({
             selectableItems={selectableItems}
           />
         ) : mode === "fact" ? (
-          <FactView title={factTitle ?? ""} body={factBody ?? ""} frontmatter={factFrontmatter} theme={theme} focused={focused} selectedIndex={selectedIndex} />
+          <FactView title={factTitle ?? ""} body={factBody ?? ""} frontmatter={factFrontmatter} theme={theme} focused={focused} selectedIndex={selectedIndex} maxHeight={contentHeight} />
         ) : null}
       </Box>
     </Box>
   );
 }
 
-function HistoricalView({ data, theme }: { data: HistoricalData; theme: Theme }) {
-  const { content, children, diff, lineDiff, entry } = data;
+function HistoricalView({ data, theme, maxHeight }: { data: HistoricalData; theme: Theme; maxHeight: number }) {
+  const { content, children, diff, changedFiles, lineDiff, entry, commitBody } = data;
   const commitShort = entry.commit.slice(0, 7);
   const dateStr = new Date(entry.date).toLocaleDateString("en-US", {
     month: "short", day: "numeric", year: "numeric",
@@ -124,12 +129,10 @@ function HistoricalView({ data, theme }: { data: HistoricalData; theme: Theme })
 
   const isFact = content !== undefined && content !== "";
   let parsed: { title: string; body: string; frontmatter?: Frontmatter } | null = null;
-  // Track which lines in the raw file correspond to the body, for diff highlighting
   let bodyStartLine = 0;
   if (isFact) {
     try {
       parsed = parseFact(content);
-      // Body starts after "---\n<yaml>\n---\n" — count lines before body
       const fmMatch = content.match(/^---\n[\s\S]*?\n---\n/);
       bodyStartLine = fmMatch ? fmMatch[0].split("\n").length : 0;
     } catch {
@@ -138,9 +141,14 @@ function HistoricalView({ data, theme }: { data: HistoricalData; theme: Theme })
   }
 
   const hasLineDiff = lineDiff && lineDiff.size > 0;
-
-  // Check if frontmatter lines were changed
   const fmChanged = hasLineDiff && Array.from(lineDiff).some((n) => n > 0 && n < bodyStartLine);
+
+  const commitBodyLines = commitBody ? commitBody.split("\n").length + 1 : 0;
+  const headerLines = 4 + commitBodyLines + (parsed?.frontmatter ? 4 : 0);
+  const bodyMaxLines = Math.max(1, maxHeight - headerLines);
+  const bodyLines = parsed?.body.split("\n") ?? [];
+  const truncatedBody = bodyLines.length > bodyMaxLines;
+  const visibleBodyLines = bodyLines.slice(0, bodyMaxLines);
 
   return (
     <Box flexDirection="column">
@@ -156,6 +164,11 @@ function HistoricalView({ data, theme }: { data: HistoricalData; theme: Theme })
       {entry.episode && (
         <Box>
           <Text backgroundColor={theme.secondary} color={theme.dark} bold> {entry.episode} </Text>
+        </Box>
+      )}
+      {commitBody && (
+        <Box marginTop={1}>
+          <Text color={theme.dim} italic wrap="wrap">{commitBody}</Text>
         </Box>
       )}
       <Text> </Text>
@@ -189,9 +202,9 @@ function HistoricalView({ data, theme }: { data: HistoricalData; theme: Theme })
           )}
           {hasLineDiff ? (
             <Box flexDirection="column">
-              {parsed.body.split("\n").map((line, i) => {
+              {visibleBodyLines.map((line, i) => {
                 const fileLineNum = bodyStartLine + i;
-                const changed = lineDiff.has(fileLineNum);
+                const changed = lineDiff!.has(fileLineNum);
                 return (
                   <Box key={i}>
                     {changed && <Text color={theme.green} bold>+ </Text>}
@@ -199,9 +212,15 @@ function HistoricalView({ data, theme }: { data: HistoricalData; theme: Theme })
                   </Box>
                 );
               })}
+              {truncatedBody && <Text color={theme.dim}>{glyph.bullet}{glyph.bullet}{glyph.bullet} {bodyLines.length - bodyMaxLines} more lines</Text>}
             </Box>
           ) : (
-            <Text wrap="wrap">{parsed.body}</Text>
+            <Box flexDirection="column">
+              {visibleBodyLines.map((line, i) => (
+                <Box key={i}><Text wrap="wrap">{line}</Text></Box>
+              ))}
+              {truncatedBody && <Text color={theme.dim}>{glyph.bullet}{glyph.bullet}{glyph.bullet} {bodyLines.length - bodyMaxLines} more lines</Text>}
+            </Box>
           )}
         </Box>
       ) : children && children.length > 0 ? (
@@ -222,6 +241,29 @@ function HistoricalView({ data, theme }: { data: HistoricalData; theme: Theme })
               </Box>
             );
           })}
+          {changedFiles && (changedFiles.added.length > 0 || changedFiles.modified.length > 0 || changedFiles.deleted.length > 0) && (
+            <Box flexDirection="column" marginTop={1}>
+              <Text color={theme.dim}>{glyph.dashDivider} Changed files:</Text>
+              {changedFiles.added.map((f) => (
+                <Box key={f}>
+                  <Text color={theme.green} bold>+ </Text>
+                  <Text color={theme.green}>{f}</Text>
+                </Box>
+              ))}
+              {changedFiles.modified.map((f) => (
+                <Box key={f}>
+                  <Text color={theme.yellow} bold>~ </Text>
+                  <Text color={theme.yellow}>{f}</Text>
+                </Box>
+              ))}
+              {changedFiles.deleted.map((f) => (
+                <Box key={f}>
+                  <Text color={theme.red} bold>- </Text>
+                  <Text color={theme.red}>{f}</Text>
+                </Box>
+              ))}
+            </Box>
+          )}
         </Box>
       ) : (
         <Text color={theme.dim}>{glyph.empty} No content at this commit.</Text>
@@ -280,7 +322,7 @@ function ActionBadge({ message, theme }: { message: string; theme: Theme }) {
   );
 }
 
-function SummaryView({ stats, summaryChildren, theme, focused, selectedIndex, selectableItems }: {
+function SummaryView({ stats, summaryChildren, theme, focused, selectedIndex }: {
   stats?: StatsResult | null; summaryChildren?: SummaryChild[]; theme: Theme;
   focused?: boolean; selectedIndex?: number; selectableItems?: RightSelectableItem[];
 }) {
@@ -396,11 +438,19 @@ function SummaryView({ stats, summaryChildren, theme, focused, selectedIndex, se
   );
 }
 
-function FactView({ title, body, frontmatter, theme, focused, selectedIndex }: {
+function FactView({ title, body, frontmatter, theme, focused, selectedIndex, maxHeight }: {
   title: string; body: string; frontmatter?: Frontmatter; theme: Theme;
-  focused?: boolean; selectedIndex?: number;
+  focused?: boolean; selectedIndex?: number; maxHeight: number;
 }) {
   const domainCount = frontmatter?.domain.length ?? 0;
+
+  const headerLines = 2 + (frontmatter ? 3 + (frontmatter.domain.length > 0 ? 1 + frontmatter.domain.length : 0) + (frontmatter.entities.length > 0 ? 1 + frontmatter.entities.length : 0) + 1 : 0);
+  const refsLines = frontmatter?.refs.length ? frontmatter.refs.length + 2 : 0;
+  const bodyMaxLines = Math.max(1, maxHeight - headerLines - refsLines);
+  const bodyLines = body.split("\n");
+  const truncatedBody = bodyLines.length > bodyMaxLines;
+  const visibleBodyLines = bodyLines.slice(0, bodyMaxLines);
+
   return (
     <Box flexDirection="column">
       <Text color={theme.yellow} bold>{title}</Text>
@@ -448,7 +498,10 @@ function FactView({ title, body, frontmatter, theme, focused, selectedIndex }: {
           </Box>
         </Box>
       )}
-      <Text wrap="wrap">{body}</Text>
+      {visibleBodyLines.map((line, i) => (
+        <Box key={i}><Text wrap="wrap">{line}</Text></Box>
+      ))}
+      {truncatedBody && <Text color={theme.dim}>{glyph.bullet}{glyph.bullet}{glyph.bullet} {bodyLines.length - bodyMaxLines} more lines</Text>}
       {frontmatter && frontmatter.refs.length > 0 && (
         <Box flexDirection="column" marginTop={1}>
           <Text color={theme.dim}>{glyph.dashDivider.repeat(30)}</Text>
@@ -464,4 +517,3 @@ function FactView({ title, body, frontmatter, theme, focused, selectedIndex }: {
     </Box>
   );
 }
-

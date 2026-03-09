@@ -345,6 +345,12 @@ Root of the Knomit knowledge graph.
     return entries;
   }
 
+  /** Get the body (everything after the subject line) of a commit message. */
+  async commitBody(commit: string): Promise<string> {
+    const stdout = await this.gitOrThrow("log", "-1", "--format=%b", commit);
+    return stdout.trim();
+  }
+
   async readFile(path: string): Promise<string> {
     this.validatePath(path);
     const fullPath = join(this.repoPath, path);
@@ -440,6 +446,13 @@ Root of the Knomit knowledge graph.
 
   async headCommit(): Promise<string> {
     return this.gitOrThrow("rev-parse", "HEAD");
+  }
+
+  /** Return the last commit hash that touched a file, or null if not found. */
+  async lastCommitForFile(path: string): Promise<string | null> {
+    const result = await this.git("log", "-1", "--format=%H", "--", path);
+    if (result.exitCode !== 0 || !result.stdout) return null;
+    return result.stdout.trim() || null;
   }
 
   async diffFiles(fromCommit: string): Promise<{ added: string[]; modified: string[]; deleted: string[] }> {

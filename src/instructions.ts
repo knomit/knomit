@@ -47,10 +47,13 @@ FACT QUALITY:
   0.7–0.8 for inferred conclusions, 0.5–0.6 for tentative observations.
 - Entities: people, projects, tools — anything you'd want to query by.
 - Domain: topic tags like "architecture", "testing", "migration".
-- Refs: anchor facts to their source. For project-specific facts,
-  include the repo origin and commit hash (e.g. "github.com/org/repo@abc123")
-  so refs remain valid outside the original clone. Also use for URLs,
-  file paths, or issue numbers.
+- Refs: anchor facts to their source using knomit: URIs.
+  For facts about code in external repos, use the full form:
+  "knomit://github.com/org/repo/blob/<commit>/<path>"
+  (mirrors GitHub blob URLs but with the knomit: scheme).
+  For facts referencing other knowledge base facts, use the relative form:
+  "knomit:blob/<commit>/<path>" (no authority = current repo).
+  Also acceptable: plain URLs, issue numbers, or document names.
 - Sources: increment when multiple sessions confirm the same fact.
 
 QUERYING:
@@ -67,12 +70,11 @@ CODE EDITOR INTEGRATION:
   an identity fact at the project root (e.g. worlds/projects/myapp/identity.md)
   containing the git remote origin URL (if any), default branch, and a
   brief description. This anchors all child facts to a concrete repository.
-- Every fact about project code MUST include the project's current
-  git HEAD commit hash in refs for staleness detection. If the project
-  has a remote, format as "origin-url@commit-hash" (e.g.
-  "github.com/org/repo@abc1234"). If no remote exists, use just the
-  commit hash. Run "git rev-parse HEAD" and optionally
+- Every fact about project code MUST include a knomit: ref for
+  staleness detection. Run "git rev-parse --short HEAD" and optionally
   "git remote get-url origin" (which may fail for local-only repos).
+  With remote: "knomit://github.com/org/repo/blob/abc1234/src/file.ts"
+  Without remote: "knomit:blob/abc1234/src/file.ts" (relative to project).
 - Persist architectural decisions, debugging insights, and patterns
   discovered during code review.
 - At session end, review what was decided and learn anything worth

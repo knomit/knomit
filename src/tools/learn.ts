@@ -83,7 +83,7 @@ FACT QUALITY:
 - confidence: 0.9+ for explicit user statements, 0.7–0.8 for inferred conclusions, 0.5–0.6 for tentative observations.
 - entities: people, projects, tools — anything worth querying by.
 - domain: topic tags like "architecture", "testing", "workflow".
-- refs: anchor to source. For code facts, use "origin-url@commit-hash" (e.g. "github.com/org/repo@abc123"). Also URLs, file paths, issue numbers.
+- refs: anchor to source using knomit: URIs. For code facts: "knomit://github.com/org/repo/blob/<commit>/<path>". For knowledge base cross-refs: "knomit:blob/<commit>/<path>". Also plain URLs, issue numbers.
 - sources: set to 1 for new facts; increment via knomit_update when multiple sessions confirm the same thing.
 
 Before learning, query first to avoid duplicating an existing fact — use knomit_update instead if one exists.`,

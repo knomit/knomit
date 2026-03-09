@@ -150,12 +150,13 @@ function App({ repo, searchIndex }: { repo: GitRepo; searchIndex: SearchIndex })
     const isFact = target.endsWith(".md");
     (async () => {
       try {
+        const commitBody = await repo.commitBody(commit);
         if (isFact) {
           const [raw, lineDiff] = await Promise.all([
             repo.readFileAtCommit(target, commit),
             repo.diffFileAtCommit(target, commit),
           ]);
-          setHistorical({ content: raw, lineDiff, entry });
+          setHistorical({ content: raw, lineDiff, entry, commitBody });
         } else {
           const [entries, diff] = await Promise.all([
             repo.listDirAtCommit(target, commit),
@@ -167,7 +168,9 @@ function App({ repo, searchIndex }: { repo: GitRepo; searchIndex: SearchIndex })
               type: e.isDirectory ? "world" as const : "fact" as const,
             })),
             diff: { added: new Set(diff.added), modified: new Set(diff.modified) },
+            changedFiles: { added: diff.added, modified: diff.modified, deleted: diff.deleted },
             entry,
+            commitBody,
           });
         }
       } catch {
@@ -353,6 +356,7 @@ function App({ repo, searchIndex }: { repo: GitRepo; searchIndex: SearchIndex })
           historyEntries={state.historyEntries}
           historySelectedIndex={state.historySelectedIndex}
           historyTarget={state.historyTarget}
+          availableHeight={termSize.rows - 2}
         />
         <RightPanel
           mode={state.rightPanelMode === "history" ? "summary" : state.rightPanelMode}
@@ -366,6 +370,7 @@ function App({ repo, searchIndex }: { repo: GitRepo; searchIndex: SearchIndex })
           selectedIndex={state.rightSelectedIndex}
           onItemsChanged={handleRightItemsChanged}
           historical={state.historyMode ? historical ?? undefined : undefined}
+          availableHeight={termSize.rows - 2}
         />
       </Box>
       <StatusBar
