@@ -2,6 +2,7 @@ package synthesize
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -299,5 +300,104 @@ func TestExtractJSON(t *testing.T) {
 	plain := `{"hello": "world"}`
 	if extractJSON(plain) != plain {
 		t.Errorf("extractJSON plain: got %q", extractJSON(plain))
+	}
+}
+
+func TestParsePruneResponseMarkdownWrapped(t *testing.T) {
+	// LLMs sometimes wrap their JSON in markdown code fences.
+	wrapped := "```json\n" + `{
+  "decisions": [
+    { "path": "know/x.md", "action": "keep" }
+  ],
+  "merges": []
+}` + "\n```"
+
+	result, err := parsePruneResponse(wrapped)
+	if err != nil {
+		t.Fatalf("parsePruneResponse with markdown wrapping: %v", err)
+	}
+	if len(result.Decisions) != 1 {
+		t.Fatalf("expected 1 decision, got %d", len(result.Decisions))
+	}
+	if result.Decisions[0].Path != "know/x.md" {
+		t.Errorf("expected path 'know/x.md', got %q", result.Decisions[0].Path)
+	}
+	if result.Decisions[0].Action != "keep" {
+		t.Errorf("expected action 'keep', got %q", result.Decisions[0].Action)
+	}
+	if len(result.Merges) != 0 {
+		t.Errorf("expected no merges, got %d", len(result.Merges))
+	}
+}
+
+func TestParseDistillResponseMarkdownWrapped(t *testing.T) {
+	wrapped := "```json\n" + `{
+  "synthesize": [
+    {
+      "path": "know/synth.md",
+      "title": "Synthesized",
+      "body": "Combined insight.",
+      "domain": ["testing"],
+      "confidence": 0.85,
+      "entities": [],
+      "refs": ["know/a.md"]
+    }
+  ],
+  "forget": ["know/a.md"]
+}` + "\n```"
+
+	result, err := parseDistillResponse(wrapped)
+	if err != nil {
+		t.Fatalf("parseDistillResponse with markdown wrapping: %v", err)
+	}
+	if len(result.Synthesize) != 1 {
+		t.Fatalf("expected 1 synthesized fact, got %d", len(result.Synthesize))
+	}
+	if result.Synthesize[0].Path != "know/synth.md" {
+		t.Errorf("expected path 'know/synth.md', got %q", result.Synthesize[0].Path)
+	}
+	if result.Synthesize[0].Title != "Synthesized" {
+		t.Errorf("expected title 'Synthesized', got %q", result.Synthesize[0].Title)
+	}
+	if len(result.Forget) != 1 || result.Forget[0] != "know/a.md" {
+		t.Errorf("expected forget=[know/a.md], got %v", result.Forget)
+	}
+}
+
+func TestChunkFactsExceedsBudget(t *testing.T) {
+	// Build many facts so that the total JSON exceeds a small budget,
+	// forcing the chunker to split across multiple chunks.
+	facts := make([]factForLLM, 10)
+	for i := range facts {
+		facts[i] = factForLLM{
+			File:  "know/fact.md",
+			Title: "A moderately long title that takes up space",
+			Body:  "A moderately long body that contributes to the chunk budget.",
+		}
+	}
+
+	// Measure a single fact's size.
+	import_json_b, _ := json.Marshal(facts[0])
+	singleSize := len(import_json_b)
+
+	// Budget that fits exactly 3 facts — expect ceil(10/3) = 4 chunks.
+	budget := singleSize * 3
+	chunks := chunkFacts(facts, budget)
+	if len(chunks) < 2 {
+		t.Errorf("expected multiple chunks when budget is tight, got %d chunk(s)", len(chunks))
+	}
+	// Every chunk must be non-empty.
+	for i, ch := range chunks {
+		if len(ch) == 0 {
+			t.Errorf("chunk %d is empty", i)
+		}
+	}
+	// Total facts across all chunks must equal original count.
+	total := 0
+	for _, ch := range chunks {
+		total += len(ch)
+	}
+	if total != len(facts) {
+		t.Errorf("expected %d total facts across chunks, got %d", len(facts), total)
 	}
 }

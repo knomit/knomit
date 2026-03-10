@@ -76,6 +76,66 @@ func TestExploreDefaultPath(t *testing.T) {
 	}
 }
 
+func TestExploreInheritedFacts(t *testing.T) {
+	store := newMockStore()
+
+	// Set up a nested path: know/area/sub
+	store.dirEntries["know/area/sub"] = []DirEntry{}
+
+	// Parent directory "know/area" has a regular fact file (not a subdirectory).
+	store.dirEntries["know/area"] = []DirEntry{
+		{Name: "parent-fact.md", IsDir: false},
+	}
+	store.files["know/area/parent-fact.md"] = SerializeFact(Fact{
+		Path:       "know/area/parent-fact.md",
+		Title:      "Parent Fact",
+		Body:       "Inherited from parent.",
+		Domain:     []string{},
+		Confidence: 0.9,
+		Sources:    1,
+		Entities:   []string{},
+		Refs:       []string{},
+	})
+
+	handler := ExploreHandler(store)
+	req := mcpgo.CallToolRequest{}
+	req.Params.Arguments = map[string]interface{}{
+		"path": "know/area/sub",
+	}
+
+	result, err := handler(context.Background(), req)
+	if err != nil {
+		t.Fatalf("handler error: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("tool error: %v", result.Content)
+	}
+
+	text := getResultText(t, result)
+	var resp map[string]interface{}
+	if err := json.Unmarshal([]byte(text), &resp); err != nil {
+		t.Fatalf("invalid JSON: %v\n%s", err, text)
+	}
+
+	inherited, ok := resp["inherited_facts"].([]interface{})
+	if !ok {
+		t.Fatalf("inherited_facts not array: %v", resp["inherited_facts"])
+	}
+	if len(inherited) != 1 {
+		t.Fatalf("expected 1 inherited fact, got %d: %v", len(inherited), inherited)
+	}
+	fact, ok := inherited[0].(map[string]interface{})
+	if !ok {
+		t.Fatalf("inherited fact not an object: %v", inherited[0])
+	}
+	if fact["title"] != "Parent Fact" {
+		t.Fatalf("expected inherited title 'Parent Fact', got %q", fact["title"])
+	}
+	if fact["file"] != "know/area/parent-fact.md" {
+		t.Fatalf("expected inherited file 'know/area/parent-fact.md', got %q", fact["file"])
+	}
+}
+
 func TestExploreWithManifest(t *testing.T) {
 	store := newMockStore()
 	store.dirEntries["know/sub"] = []DirEntry{}
