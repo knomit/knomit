@@ -544,9 +544,9 @@ describe("knomit_explore", () => {
 
   it("shows sub-know (directories) correctly", async () => {
     const result = await exploreHandler(env.repo, { path: "know/projects" }, { skipSync: true });
-    const worlds = result.children.filter(c => c.type === "world");
-    expect(worlds.length).toBe(1);
-    expect(worlds[0].name).toBe("webapp");
+    const domains = result.children.filter(c => c.type === "world");
+    expect(domains.length).toBe(1);
+    expect(domains[0].name).toBe("webapp");
   });
 
   it("includes fact summaries (titles)", async () => {
