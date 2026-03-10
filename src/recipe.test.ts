@@ -85,4 +85,31 @@ steps:
     const recipe = parseRecipe(yaml);
     expect(recipe.scope).toBeUndefined();
   });
+
+  it("parses distill step with cluster params", () => {
+    const yaml = `
+name: cluster-test
+steps:
+  - mode: distill
+    max_depth: 3
+    umap_dimensions: 10
+    min_cluster_size: 5
+`;
+    const recipe = parseRecipe(yaml);
+    expect(recipe.steps[0].max_depth).toBe(3);
+    expect(recipe.steps[0].umap_dimensions).toBe(10);
+    expect(recipe.steps[0].min_cluster_size).toBe(5);
+  });
+
+  it("defaults cluster params when omitted", () => {
+    const yaml = `
+name: default-test
+steps:
+  - mode: distill
+`;
+    const recipe = parseRecipe(yaml);
+    expect(recipe.steps[0].max_depth).toBe(1);
+    expect(recipe.steps[0].umap_dimensions).toBe(5);
+    expect(recipe.steps[0].min_cluster_size).toBe(3);
+  });
 });

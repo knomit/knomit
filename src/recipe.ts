@@ -5,6 +5,9 @@ const StepSchema = z.object({
   mode: z.enum(["prune", "distill"]),
   model: z.string().optional(),
   prompt: z.string().optional().default(""),
+  max_depth: z.number().int().min(1).optional().default(1),
+  umap_dimensions: z.number().int().min(2).optional().default(5),
+  min_cluster_size: z.number().int().min(2).optional().default(3),
 });
 
 const ScopeSchema = z.object({
