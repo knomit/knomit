@@ -119,9 +119,13 @@ function App({ repo, searchIndex }: { repo: GitRepo; searchIndex: SearchIndex })
         setFactBody(parsed.body);
         setFactFrontmatter(parsed.frontmatter);
       } catch {
-        setFactTitle("Error loading fact");
-        setFactBody("");
-        setFactFrontmatter(undefined);
+        if (state.navStack.length > 0) {
+          dispatch({ type: "NAV_BACK" });
+        } else {
+          setFactTitle("Error loading fact");
+          setFactBody("");
+          setFactFrontmatter(undefined);
+        }
       }
     })();
   }, [state.currentFact, state.rightPanelMode]);
@@ -252,7 +256,11 @@ function App({ repo, searchIndex }: { repo: GitRepo; searchIndex: SearchIndex })
       } else if (input === "q") {
         exit();
       } else if (input === "h") {
-        dispatch({ type: "TOGGLE_HISTORY", target: state.currentFact ?? state.statsPath });
+        if (state.navStack.length > 0) {
+          dispatch({ type: "NAV_BACK" });
+        } else {
+          dispatch({ type: "TOGGLE_HISTORY", target: state.currentFact ?? state.statsPath });
+        }
       }
       return;
     }
@@ -299,8 +307,12 @@ function App({ repo, searchIndex }: { repo: GitRepo; searchIndex: SearchIndex })
       }
     }
     else if (input === "h") {
-      const target = state.currentFact ?? state.statsPath;
-      dispatch({ type: "TOGGLE_HISTORY", target });
+      if (state.navStack.length > 0) {
+        dispatch({ type: "NAV_BACK" });
+      } else {
+        const target = state.currentFact ?? state.statsPath;
+        dispatch({ type: "TOGGLE_HISTORY", target });
+      }
     }
     else if (key.escape) {
       if (state.historyMode) {

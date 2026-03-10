@@ -341,4 +341,27 @@ describe("ref navigation", () => {
     expect(s.historySelectedIndex).toBe(2);
     expect(s.rightPanelMode).toBe("history");
   });
+
+  it("TOGGLE_HISTORY after FOLLOW_REF should not exit to non-existent fact", () => {
+    // Regression: pressing "h" after following a ref into history mode would
+    // TOGGLE_HISTORY off and try to load the fact from the working tree,
+    // showing "Error loading fact" for files that only exist at old commits.
+    // Fix: "h" with navStack should NAV_BACK instead.
+    let s = {
+      ...initialState,
+      currentFact: "worlds/source-fact.md",
+      rightPanelMode: "fact" as const,
+    };
+    // Follow ref into history for a file
+    s = reducer(s, { type: "FOLLOW_REF", path: "worlds/old-file.md", commit: "abc1234" });
+    expect(s.historyMode).toBe(true);
+    expect(s.navStack).toHaveLength(1);
+
+    // NAV_BACK (what "h" should dispatch) restores the source fact
+    s = reducer(s, { type: "NAV_BACK" });
+    expect(s.historyMode).toBe(false);
+    expect(s.currentFact).toBe("worlds/source-fact.md");
+    expect(s.rightPanelMode).toBe("fact");
+    expect(s.navStack).toHaveLength(0);
+  });
 });
