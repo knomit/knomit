@@ -4,7 +4,7 @@
 
 The Knomit MCP server exposes a personal knowledge base to AI agents via the Model Context Protocol. It abstracts all Git operations behind high-level cognitive tools — agents think in terms of learning, querying, and exploring, not branches and commits.
 
-Each machine operates on its own Git branch. Consensus (merging into `main`) is handled externally — by a Librarian agent, CI, or manual merge. The MCP server never writes to `main`.
+Each agent operates on its own Git branch. Consensus (merging into `main`) is handled externally — by a Librarian agent, CI, or manual merge. The MCP server never writes to `main`.
 
 ## 2. Stack
 
@@ -54,40 +54,40 @@ This means:
 | Variable | Required | Default | Description |
 | --- | --- | --- | --- |
 | `KNOMIT_REPO` | yes | — | Path to the knowledge repository |
-| `KNOMIT_MACHINE_ID` | no | system hostname | Identifies this machine's branch: `machine/<id>` |
+| `KNOMIT_AGENT_ID` | no | system hostname | Identifies this agent's branch: `agent/<id>` |
 
-If `KNOMIT_REPO` points to a path that does not exist, the server initializes a new Git repository with a root `worlds.md` manifest on first run.
+If `KNOMIT_REPO` points to a path that does not exist, the server initializes a new Git repository with a root `know.md` manifest on first run.
 
 ## 4. Git Model
 
-### Machine Branch
+### Agent Branch
 
-The MCP server operates exclusively on the branch `machine/<machine_id>`. All reads and writes target this branch.
+The MCP server operates exclusively on the branch `agent/<machine_id>`. All reads and writes target this branch.
 
 - `main` is the consensus branch — never written to by the MCP server
 - Machine branch is created from `main` (or initial commit) on first run
-- Learning moments are marked by tags on the machine branch
+- Learning moments are marked by tags on the agent branch
 
 ### Sync Behavior
 
 Every tool call begins with a sync step:
 
 1. `git fetch origin` (no-op if no remote configured)
-2. Check if `origin/main` has commits not yet in the machine branch
-3. If yes: `git merge origin/main` into the machine branch
+2. Check if `origin/main` has commits not yet in the agent branch
+3. If yes: `git merge origin/main` into the agent branch
 4. If merge conflict: return conflict details to agent, tool does not proceed
 
 After every write operation:
 
-1. `git push origin machine/<id>` (no-op if no remote configured)
+1. `git push origin agent/<id>` (no-op if no remote configured)
 
 ### Consensus Flow
 
 The MCP server does not participate in consensus. The expected external flow is:
 
-1. Each machine pushes its branch to the remote
-2. An external process (Librarian agent, CI, manual) merges machine branches into `main`
-3. The same or another process merges `main` back into each machine branch
+1. Each agent pushes its branch to the remote
+2. An external process (Librarian agent, CI, manual) merges agent branches into `main`
+3. The same or another process merges `main` back into each agent branch
 4. The MCP server picks up consensus changes via fetch+merge on the next tool call
 
 ## 5. Tools
@@ -102,7 +102,7 @@ The MCP server does not participate in consensus. The expected external flow is:
 {
   moment_name: string        // e.g. "alice-music-2025"
   facts: Array<{
-    path: string             // e.g. "worlds/people/alice/alice-likes-rock-music.md"
+    path: string             // e.g. "know/people/alice/alice-likes-rock-music.md"
     domain: string[]         // e.g. ["personal", "music"]
     confidence: number       // 0.0 - 1.0
     sources: number          // independent corroborations
@@ -256,7 +256,7 @@ At least one of `entities`, `domain`, or `path` must be provided.
 
 ```typescript
 {
-  path?: string              // world path (default: root "worlds/")
+  path?: string              // world path (default: root "know/")
 }
 ```
 
@@ -294,9 +294,9 @@ The server exposes an MCP resource that agents load at session start.
 ```
 You have access to Knomit, a persistent knowledge base that survives
 across sessions. It stores structured facts as markdown files in a
-Git repository, organized by an ontological hierarchy (worlds/).
+Git repository, organized by an ontological hierarchy (know/).
 
-Your knowledge base operates on a machine-specific branch. Other
+Your knowledge base operates on a agent-specific branch. Other
 machines may contribute knowledge that arrives via merges from main.
 If a merge conflict occurs, you will be notified and should resolve
 it using knomit_update.
@@ -318,7 +318,7 @@ AT SESSION END:
 GUIDELINES:
 - Not everything needs to be saved. Persist decisions, preferences,
   architectural choices, and conclusions — not transient discussion.
-- Use the ontology (worlds/) to organize facts by where they belong,
+- Use the ontology (know/) to organize facts by where they belong,
   not just what they're about.
 - When querying, start broad (domain or entity) then narrow down.
 ```
@@ -327,7 +327,7 @@ GUIDELINES:
 
 | Scenario | Behavior |
 | --- | --- |
-| Repo path doesn't exist | Initialize new repo with root manifest, create machine branch |
+| Repo path doesn't exist | Initialize new repo with root manifest, create agent branch |
 | No remote configured | Sync and push are no-ops, works fully offline |
 | Remote unreachable | Log warning, proceed with local state |
 | Merge conflict from `origin/main` | Return conflict details to agent, tool does not proceed |

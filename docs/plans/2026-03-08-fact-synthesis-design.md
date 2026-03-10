@@ -14,7 +14,7 @@ Recipes live in the knomit repo at `.knomit/synthesize/<name>.yml`. Version-cont
 
 ```
 <knomit-repo>/
-├── worlds/
+├── know/
 │   └── ...
 └── .knomit/
     ├── synthesize/
@@ -74,7 +74,7 @@ When a recipe omits the `scope` field entirely, synthesis auto-discovers what ne
 
 1. Look up the last synthesis commit for this recipe in the `synthesis_log` table
 2. If no previous run exists, process all facts (full initial run)
-3. Otherwise, `git diff --name-only <last_commit>..HEAD -- worlds/` to find added/modified/deleted fact files
+3. Otherwise, `git diff --name-only <last_commit>..HEAD -- know/` to find added/modified/deleted fact files
 4. Use the changed facts as the input set for the pipeline steps
 
 This means a recipe like:
@@ -140,21 +140,21 @@ LLM response:
 ```json
 {
   "decisions": [
-    { "file": "worlds/security/cve-2024-1234.md", "action": "forget", "reason": "Patched in vendor advisory VA-2024-5678" },
-    { "file": "worlds/security/cve-2024-5555.md", "action": "update", "confidence": 0.3, "reason": "Likely fixed but no confirmation" },
-    { "file": "worlds/security/cve-2024-9999.md", "action": "keep", "reason": "Still active, no patch available" }
+    { "file": "know/security/cve-2024-1234.md", "action": "forget", "reason": "Patched in vendor advisory VA-2024-5678" },
+    { "file": "know/security/cve-2024-5555.md", "action": "update", "confidence": 0.3, "reason": "Likely fixed but no confirmation" },
+    { "file": "know/security/cve-2024-9999.md", "action": "keep", "reason": "Still active, no patch available" }
   ],
   "merges": [
     {
-      "sources": ["worlds/people/alice/dark-mode-1.md", "worlds/people/alice/dark-mode-2.md"],
+      "sources": ["know/people/alice/dark-mode-1.md", "know/people/alice/dark-mode-2.md"],
       "merged": {
-        "path": "worlds/people/alice/prefers-dark-mode",
+        "path": "know/people/alice/prefers-dark-mode",
         "title": "Alice prefers dark mode",
         "body": "Consistently stated across multiple sessions...",
         "domain": ["preferences"],
         "confidence": 0.95,
         "entities": ["alice"],
-        "refs": ["worlds/people/alice/dark-mode-1.md", "worlds/people/alice/dark-mode-2.md"]
+        "refs": ["know/people/alice/dark-mode-1.md", "know/people/alice/dark-mode-2.md"]
       }
     }
   ],
@@ -172,16 +172,16 @@ LLM response:
 {
   "synthesize": [
     {
-      "path": "worlds/vendors/acme/security-posture",
+      "path": "know/vendors/acme/security-posture",
       "title": "Acme Corp has recurring authentication vulnerabilities",
       "body": "Across 15 CVEs from 2023-2025, Acme Corp shows a pattern of...",
       "domain": ["security", "vendors"],
       "confidence": 0.8,
       "entities": ["acme-corp"],
-      "refs": ["worlds/security/cve-2024-1234.md", "worlds/security/cve-2024-5678.md"]
+      "refs": ["know/security/cve-2024-1234.md", "know/security/cve-2024-5678.md"]
     }
   ],
-  "forget": ["worlds/security/acme-cve-summary-old.md"],
+  "forget": ["know/security/acme-cve-summary-old.md"],
   "summary": "Synthesized 15 Acme CVEs into 2 pattern facts, removed 1 outdated summary"
 }
 ```

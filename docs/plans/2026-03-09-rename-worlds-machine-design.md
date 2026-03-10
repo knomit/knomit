@@ -1,6 +1,6 @@
 # Rename worlds→know, machine→agent
 
-**Goal:** Replace the `worlds/` ontology directory with `know/`, the `machine/` branch prefix with `agent/`, and introduce constants so these names are defined once. Also review and fix README inaccuracies.
+**Goal:** Replace the `know/` ontology directory with `know/`, the `agent/` branch prefix with `agent/`, and introduce constants so these names are defined once. Also review and fix README inaccuracies.
 
 ## Constants
 
@@ -18,14 +18,14 @@ All code references use these constants instead of string literals.
 
 ### worlds → know
 
-- Directory prefix: `worlds/` → `know/`
-- Root manifest: `worlds.md` → `know.md`
+- Directory prefix: `know/` → `know/`
+- Root manifest: `know.md` → `know.md`
 - All path literals in source, tests, instructions, specs, and docs
 
 ### machine → agent
 
-- Branch prefix: `machine/<id>` → `agent/<id>`
-- Env var: `KNOMIT_MACHINE_ID` → `KNOMIT_AGENT_ID` (clean break, no fallback)
+- Branch prefix: `agent/<id>` → `agent/<id>`
+- Env var: `KNOMIT_AGENT_ID` → `KNOMIT_AGENT_ID` (clean break, no fallback)
 - Property/variable: `machineId` → `agentId` throughout
 - Comments and log messages
 

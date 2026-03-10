@@ -9,7 +9,7 @@ Knomit solves exactly the problems OpenClaw can't:
 | OpenClaw gap | Knomit answer |
 |---|---|
 | No provenance ("where did this fact come from?") | SSH-signed commits, evidence chains, `knomit_why` |
-| No cross-agent sharing | Git remotes, branches per machine, merge to consensus |
+| No cross-agent sharing | Git remotes, branches per agent, merge to consensus |
 | No trust model for shared knowledge | Signed commits + `allowed_signers` |
 | Memory grows forever, gets noisy | Confidence decay, structured ontology, `knomit_forget` |
 | No relationship awareness | Ontological hierarchy, entity graph, domain tags |

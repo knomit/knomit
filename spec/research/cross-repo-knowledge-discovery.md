@@ -17,7 +17,7 @@ User: "Go look at Bob's knomit and learn anything useful about security"
 
 Agent:
   1. git clone https://github.com/bob/knomit /tmp/bob-knowledge
-  2. Read files under /tmp/bob-knowledge/worlds/**
+  2. Read files under /tmp/bob-knowledge/know/**
   3. For each fact:
      a. Do I already know this?  →  knomit_recall to check  →  skip if yes
      b. Is this relevant to the user's instruction?  →  LLM judges
@@ -39,7 +39,7 @@ An agent reading files in a cloned repo is equivalent to an agent reading a JSON
 
 ## Ontology Mapping
 
-Imported facts go into the canonical ontology path, not a namespaced import directory. A fact about SQL injection prevention is `worlds/security/sql-injection-prevention.md` regardless of who discovered it. "Who told me" is provenance metadata, not ontology structure.
+Imported facts go into the canonical ontology path, not a namespaced import directory. A fact about SQL injection prevention is `know/security/sql-injection-prevention.md` regardless of who discovered it. "Who told me" is provenance metadata, not ontology structure.
 
 The agent handles ontology differences naturally. If Bob organizes his facts differently (different directory structure, different entity naming), the LLM re-contextualizes when calling `knomit_learn` — the same way a human would translate someone else's framing into their own.
 
@@ -97,11 +97,11 @@ knomit browse <repo-url> "<instruction>" --watch
 
 Which periodically pulls Bob's repo and re-runs discovery on new commits since the last check. This is a cron job wrapping the same flow — no new architecture.
 
-## Comparison to Multi-Machine Reconciliation
+## Comparison to Multi-Agent Reconciliation
 
-| | Multi-machine sync | Cross-repo discovery |
+| | Multi-agent sync | Cross-repo discovery |
 |-|-------------------|---------------------|
-| Ownership | Same person, multiple machines | Different people |
+| Ownership | Same person, multiple agents | Different people |
 | Direction | Bidirectional | One-way (pull) |
 | Scope | Everything | Filtered by instruction |
 | Ontology | Shared (same repo) | Potentially different |

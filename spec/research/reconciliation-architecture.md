@@ -1,6 +1,6 @@
 # Research: Reconciliation Architecture
 
-How and where multi-machine reconciliation runs.
+How and where multi-agent reconciliation runs.
 
 ## Git Mechanics
 
@@ -9,9 +9,9 @@ async reconcile(strategy: string): Promise<MergeResult> {
   // 1. Fetch all remote branches
   await git.fetch("origin");
 
-  // 2. Find machine branches ahead of main
+  // 2. Find agent branches ahead of main
   const branches = (await git.branch({ remote: true }))
-    .filter(b => b.startsWith("origin/machine/"));
+    .filter(b => b.startsWith("origin/agent/"));
 
   // 3. For each branch, compute diff vs main
   const diffs = await Promise.all(
@@ -46,22 +46,22 @@ Before merging, `dry_run` mode returns a structured report:
 
 ```ts
 {
-  branches: ["machine/laptop", "machine/desktop"],
+  branches: ["agent/laptop", "agent/desktop"],
   clean_merges: [
-    { file: "worlds/security/cve-2024-1234.md", from: "machine/laptop", action: "add" }
+    { file: "know/security/cve-2024-1234.md", from: "agent/laptop", action: "add" }
   ],
   conflicts: [
     {
-      file: "worlds/people/alice/likes-rock.md",
+      file: "know/people/alice/likes-rock.md",
       versions: [
-        { branch: "machine/laptop", confidence: 0.9, sources: 4 },
-        { branch: "machine/desktop", confidence: 0.88, sources: 5 },
+        { branch: "agent/laptop", confidence: 0.9, sources: 4 },
+        { branch: "agent/desktop", confidence: 0.88, sources: 5 },
       ]
     }
   ],
   semantic_conflicts: [
     {
-      files: ["worlds/projects/api/uses-rest.md", "worlds/projects/api/uses-graphql.md"],
+      files: ["know/projects/api/uses-rest.md", "know/projects/api/uses-graphql.md"],
       reason: "contradictory facts about same entity from different branches"
     }
   ]
@@ -72,7 +72,7 @@ Before merging, `dry_run` mode returns a structured report:
 
 | Option | How | Pros | Cons |
 |--------|-----|------|------|
-| **GitHub Action** | Triggers on push to any `machine/**` branch | Fully automated, no machine needs to be online | Needs LLM API key in GitHub secrets |
+| **GitHub Action** | Triggers on push to any `agent/**` branch | Fully automated, no machine needs to be online | Needs LLM API key in GitHub secrets |
 | **On a machine** | User runs `knomit merge` manually or on a schedule | Simple, no infra | That machine must be online |
 | **Container/server** | Central server runs reconciliation on a cron | Always available | Adds ops burden |
 
@@ -84,7 +84,7 @@ The cleanest fit. Triggers automatically when any machine pushes, runs reconcili
 # .github/workflows/reconcile.yml
 on:
   push:
-    branches: ["machine/**"]
+    branches: ["agent/**"]
 
 jobs:
   reconcile:
@@ -106,7 +106,7 @@ jobs:
 Machine A (laptop)                    Machine B (desktop)
     │                                       │
     ├── learn facts                         ├── learn facts
-    ├── push machine/laptop                 ├── push machine/desktop
+    ├── push agent/laptop                 ├── push agent/desktop
     │                                       │
     └──────────► origin ◄──────────────────┘
                     │
@@ -129,4 +129,4 @@ Machine A (laptop)                    Machine B (desktop)
   (pulls new main)        (pulls new main)
 ```
 
-Each machine stays dumb: push your branch, pull main. Reconciliation intelligence lives in the action.
+Each agent stays dumb: push your branch, pull main. Reconciliation intelligence lives in the action.

@@ -25,8 +25,8 @@ import { parseKnomitRef } from "./refs";
 
 describe("parseKnomitRef", () => {
   it("parses local ref", () => {
-    expect(parseKnomitRef("knomit:blob/abc1234/worlds/people/alice/likes-rock.md"))
-      .toEqual({ path: "worlds/people/alice/likes-rock.md", commit: "abc1234" });
+    expect(parseKnomitRef("knomit:blob/abc1234/know/people/alice/likes-rock.md"))
+      .toEqual({ path: "know/people/alice/likes-rock.md", commit: "abc1234" });
   });
 
   it("parses external ref", () => {
@@ -43,8 +43,8 @@ describe("parseKnomitRef", () => {
   });
 
   it("handles paths with multiple slashes", () => {
-    expect(parseKnomitRef("knomit:blob/aaa1111/worlds/a/b/c/d.md"))
-      .toEqual({ path: "worlds/a/b/c/d.md", commit: "aaa1111" });
+    expect(parseKnomitRef("knomit:blob/aaa1111/know/a/b/c/d.md"))
+      .toEqual({ path: "know/a/b/c/d.md", commit: "aaa1111" });
   });
 });
 ```
@@ -234,25 +234,25 @@ Add a new describe block:
 ```ts
 describe("ref navigation", () => {
   it("FOLLOW_REF pushes state and enters history mode", () => {
-    let s = { ...initialState, currentFact: "worlds/distilled/overview.md", rightPanelMode: "fact" as const };
-    s = reducer(s, { type: "FOLLOW_REF", path: "worlds/people/alice/likes-rock.md", commit: "abc1234" });
+    let s = { ...initialState, currentFact: "know/distilled/overview.md", rightPanelMode: "fact" as const };
+    s = reducer(s, { type: "FOLLOW_REF", path: "know/people/alice/likes-rock.md", commit: "abc1234" });
 
     expect(s.navStack).toHaveLength(1);
-    expect(s.navStack[0].currentFact).toBe("worlds/distilled/overview.md");
+    expect(s.navStack[0].currentFact).toBe("know/distilled/overview.md");
     expect(s.navStack[0].rightPanelMode).toBe("fact");
     expect(s.historyMode).toBe(true);
-    expect(s.historyTarget).toBe("worlds/people/alice/likes-rock.md");
-    expect(s.currentFact).toBe("worlds/people/alice/likes-rock.md");
+    expect(s.historyTarget).toBe("know/people/alice/likes-rock.md");
+    expect(s.currentFact).toBe("know/people/alice/likes-rock.md");
     expect(s.rightPanelMode).toBe("history");
   });
 
   it("NAV_BACK restores previous state", () => {
-    let s = { ...initialState, currentFact: "worlds/distilled/overview.md", rightPanelMode: "fact" as const };
-    s = reducer(s, { type: "FOLLOW_REF", path: "worlds/people/alice/likes-rock.md", commit: "abc1234" });
+    let s = { ...initialState, currentFact: "know/distilled/overview.md", rightPanelMode: "fact" as const };
+    s = reducer(s, { type: "FOLLOW_REF", path: "know/people/alice/likes-rock.md", commit: "abc1234" });
     s = reducer(s, { type: "NAV_BACK" });
 
     expect(s.navStack).toHaveLength(0);
-    expect(s.currentFact).toBe("worlds/distilled/overview.md");
+    expect(s.currentFact).toBe("know/distilled/overview.md");
     expect(s.rightPanelMode).toBe("fact");
     expect(s.historyMode).toBe(false);
   });
@@ -263,24 +263,24 @@ describe("ref navigation", () => {
   });
 
   it("deep stack: follow 3 refs, back 3 times", () => {
-    let s = { ...initialState, currentFact: "worlds/a.md", rightPanelMode: "fact" as const };
-    s = reducer(s, { type: "FOLLOW_REF", path: "worlds/b.md", commit: "aaa" });
-    s = reducer(s, { type: "FOLLOW_REF", path: "worlds/c.md", commit: "bbb" });
-    s = reducer(s, { type: "FOLLOW_REF", path: "worlds/d.md", commit: "ccc" });
+    let s = { ...initialState, currentFact: "know/a.md", rightPanelMode: "fact" as const };
+    s = reducer(s, { type: "FOLLOW_REF", path: "know/b.md", commit: "aaa" });
+    s = reducer(s, { type: "FOLLOW_REF", path: "know/c.md", commit: "bbb" });
+    s = reducer(s, { type: "FOLLOW_REF", path: "know/d.md", commit: "ccc" });
 
     expect(s.navStack).toHaveLength(3);
-    expect(s.currentFact).toBe("worlds/d.md");
+    expect(s.currentFact).toBe("know/d.md");
 
     s = reducer(s, { type: "NAV_BACK" });
-    expect(s.currentFact).toBe("worlds/c.md");
+    expect(s.currentFact).toBe("know/c.md");
     expect(s.navStack).toHaveLength(2);
 
     s = reducer(s, { type: "NAV_BACK" });
-    expect(s.currentFact).toBe("worlds/b.md");
+    expect(s.currentFact).toBe("know/b.md");
     expect(s.navStack).toHaveLength(1);
 
     s = reducer(s, { type: "NAV_BACK" });
-    expect(s.currentFact).toBe("worlds/a.md");
+    expect(s.currentFact).toBe("know/a.md");
     expect(s.navStack).toHaveLength(0);
     expect(s.historyMode).toBe(false);
   });
@@ -289,11 +289,11 @@ describe("ref navigation", () => {
     let s = {
       ...initialState,
       searchActive: true,
-      searchResults: [{ file: "worlds/x.md", title: "X", body: "", score: 1 }],
-      currentFact: "worlds/x.md",
+      searchResults: [{ file: "know/x.md", title: "X", body: "", score: 1 }],
+      currentFact: "know/x.md",
       rightPanelMode: "fact" as const,
     };
-    s = reducer(s, { type: "FOLLOW_REF", path: "worlds/y.md", commit: "aaa" });
+    s = reducer(s, { type: "FOLLOW_REF", path: "know/y.md", commit: "aaa" });
 
     expect(s.navStack[0].searchActive).toBe(true);
     expect(s.navStack[0].searchResults).toHaveLength(1);

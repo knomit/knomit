@@ -313,7 +313,7 @@ describe("clusterFacts", () => {
     const facts: FactForLLM[] = [];
     const embeddings = new Map<string, Float32Array>();
     for (let i = 0; i < n; i++) {
-      const path = `worlds/group-a/f${i}.md`;
+      const path = `know/group-a/f${i}.md`;
       facts.push(makeFact(path, ["security"], ["alice"]));
       const vec = new Float32Array(384);
       // Group A: high values in first half
@@ -322,7 +322,7 @@ describe("clusterFacts", () => {
       embeddings.set(path, vec);
     }
     for (let i = 0; i < n; i++) {
-      const path = `worlds/group-b/f${i}.md`;
+      const path = `know/group-b/f${i}.md`;
       facts.push(makeFact(path, ["cooking"], ["bob"]));
       const vec = new Float32Array(384);
       // Group B: high values in second half
@@ -542,7 +542,7 @@ describe("executeDistillStep integration", () => {
 
   it("buildDistillPrompt includes cluster context hint", () => {
     const facts = [
-      { path: "worlds/test.md", title: "Test", body: "Body", domain: ["d"], entities: ["e"], confidence: 0.8, sources: 1, refs: [] },
+      { path: "know/test.md", title: "Test", body: "Body", domain: ["d"], entities: ["e"], confidence: 0.8, sources: 1, refs: [] },
     ];
     const prompt = buildDistillPrompt(facts, "recipe ctx", "step ctx");
     expect(prompt).toContain("synthesizing facts");

@@ -1,15 +1,15 @@
-# Research: Multi-Machine Reconciliation
+# Research: Multi-Agent Reconciliation
 
 ## Problem
 
-Two (or more) machines share the same origin repo, each working on its own `machine/{hostname}` branch. Each machine learns facts independently, pushes its branch, and pulls `origin/main` on sync. But nothing ever merges machine branches into main — knowledge stays siloed.
+Two (or more) agents share the same origin repo, each working on its own `agent/{hostname}` branch. Each agent learns facts independently, pushes its branch, and pulls `origin/main` on sync. But nothing ever merges agent branches into main — knowledge stays siloed.
 
 ```
 origin/main          ─────────────────────────────────────────────►
                           ↑                          ↑
-machine/laptop       ──●──●──●                       │
+agent/laptop       ──●──●──●                       │
                                                      │
-machine/desktop      ────────────●──●──●             │
+agent/desktop      ────────────●──●──●             │
                                                      │
                      ◄── who merges these into main? ─┘
 ```
@@ -18,7 +18,7 @@ machine/desktop      ────────────●──●──●  
 
 ### Phase 1: Propose
 
-For each machine branch ahead of main, compute a diff — the list of new, changed, and deleted facts. Package each as a "review packet."
+For each agent branch ahead of main, compute a diff — the list of new, changed, and deleted facts. Package each as a "review packet."
 
 ### Phase 2: Synthesize
 
@@ -33,7 +33,7 @@ For metadata conflicts, deterministic rules can resolve most cases. For semantic
 
 ### Phase 3: Merge
 
-Apply resolved changes to main. Each machine picks up the merged result on its next `sync()`.
+Apply resolved changes to main. Each agent picks up the merged result on its next `sync()`.
 
 ## Merge Tool API
 
@@ -49,4 +49,4 @@ knomit_merge({
 
 ## Key Principle
 
-Machines stay simple — push your branch, pull main. The reconciliation intelligence lives outside the machines, either in a GitHub Action or a dedicated merge tool invocation.
+Agents stay simple — push your branch, pull main. The reconciliation intelligence lives outside the agents, either in a GitHub Action or a dedicated merge tool invocation.

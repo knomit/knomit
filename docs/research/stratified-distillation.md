@@ -5,14 +5,14 @@ Status: research / brainstorming — not an implementation plan.
 ## Problem
 
 Current `synthesize` groups facts by ontology path only, missing cross-path
-connections and placing results in a meaningless `worlds/synthesized/` directory.
+connections and placing results in a meaningless `know/synthesized/` directory.
 We have richer signals available: domains, entities, embeddings, and FTS.
 
 ## Available Dimensions
 
 | Dimension | Source | Signal type |
 |-----------|--------|-------------|
-| Ontology path | File hierarchy under `worlds/` | Structural / hierarchical |
+| Ontology path | File hierarchy under `know/` | Structural / hierarchical |
 | Domains | YAML frontmatter tags | Categorical / set membership |
 | Entities | YAML frontmatter tags | Categorical / set membership |
 | Embeddings | Vector similarity (384-dim or model-dependent) | Continuous / semantic |

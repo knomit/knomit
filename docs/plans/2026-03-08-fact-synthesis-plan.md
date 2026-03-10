@@ -400,7 +400,7 @@ describe("fact-ops", () => {
 
   it("commitFact creates a fact file and commits", async () => {
     const hash = await commitFact(repo, {
-      path: "worlds/test/fact1.md",
+      path: "know/test/fact1.md",
       title: "Test fact",
       body: "Some body",
       domain: ["testing"],
@@ -410,13 +410,13 @@ describe("fact-ops", () => {
       refs: [],
     });
     expect(hash).toBeTruthy();
-    const content = await repo.readFile("worlds/test/fact1.md");
+    const content = await repo.readFile("know/test/fact1.md");
     expect(content).toContain("Test fact");
   });
 
   it("deleteFact removes a fact file and commits", async () => {
     await commitFact(repo, {
-      path: "worlds/test/fact1.md",
+      path: "know/test/fact1.md",
       title: "To delete",
       body: "Body",
       domain: [],
@@ -425,15 +425,15 @@ describe("fact-ops", () => {
       entities: [],
       refs: [],
     });
-    const hash = await deleteFact(repo, "worlds/test/fact1.md", "test-moment");
+    const hash = await deleteFact(repo, "know/test/fact1.md", "test-moment");
     expect(hash).toBeTruthy();
-    const exists = await repo.fileExists("worlds/test/fact1.md");
+    const exists = await repo.fileExists("know/test/fact1.md");
     expect(exists).toBe(false);
   });
 
   it("updateFact modifies frontmatter and commits", async () => {
     await commitFact(repo, {
-      path: "worlds/test/fact1.md",
+      path: "know/test/fact1.md",
       title: "Original",
       body: "Body",
       domain: ["a"],
@@ -442,11 +442,11 @@ describe("fact-ops", () => {
       entities: [],
       refs: [],
     });
-    const hash = await updateFact(repo, "worlds/test/fact1.md", {
+    const hash = await updateFact(repo, "know/test/fact1.md", {
       confidence: 0.9,
     });
     expect(hash).toBeTruthy();
-    const content = await repo.readFile("worlds/test/fact1.md");
+    const content = await repo.readFile("know/test/fact1.md");
     expect(content).toContain("confidence: 0.9");
   });
 });
@@ -483,7 +483,7 @@ export async function commitFact(
   searchIndex?: SearchIndex
 ): Promise<string> {
   let factPath = fact.path;
-  if (!factPath.startsWith("worlds/")) factPath = `worlds/${factPath}`;
+  if (!factPath.startsWith("know/")) factPath = `know/${factPath}`;
   if (!factPath.endsWith(".md")) factPath = `${factPath}.md`;
 
   const content = serializeFact(
@@ -588,7 +588,7 @@ In `src/tools/learn.ts`, replace lines 44-84 (the for loop) with:
 
   for (const fact of input.facts) {
     let factPath = fact.path;
-    if (!factPath.startsWith("worlds/")) factPath = `worlds/${factPath}`;
+    if (!factPath.startsWith("know/")) factPath = `know/${factPath}`;
     if (!factPath.endsWith(".md")) factPath = `${factPath}.md`;
 
     const hash = await commitFact(repo, {
@@ -660,7 +660,7 @@ scope:
   domain: [security]
   entities: [acme]
   search: ["patch"]
-  path: worlds/security/
+  path: know/security/
 auto_merge: false
 steps:
   - mode: prune
@@ -679,7 +679,7 @@ steps:
     expect(recipe.scope.domain).toEqual(["security"]);
     expect(recipe.scope.entities).toEqual(["acme"]);
     expect(recipe.scope.search).toEqual(["patch"]);
-    expect(recipe.scope.path).toBe("worlds/security/");
+    expect(recipe.scope.path).toBe("know/security/");
     expect(recipe.auto_merge).toBe(false);
   });
 
@@ -823,13 +823,13 @@ import {
 describe("buildPrunePrompt", () => {
   it("includes facts and recipe prompt", () => {
     const facts = [
-      { path: "worlds/test.md", title: "Test", body: "Body", domain: ["d"], entities: ["e"], confidence: 0.8, sources: 1, refs: [] },
+      { path: "know/test.md", title: "Test", body: "Body", domain: ["d"], entities: ["e"], confidence: 0.8, sources: 1, refs: [] },
     ];
     const prompt = buildPrunePrompt(facts, "Focus on security", "Find stale facts");
     expect(prompt).toContain("Test");
     expect(prompt).toContain("Focus on security");
     expect(prompt).toContain("Find stale facts");
-    expect(prompt).toContain("worlds/test.md");
+    expect(prompt).toContain("know/test.md");
   });
 });
 
@@ -837,8 +837,8 @@ describe("parsePruneResponse", () => {
   it("parses valid prune JSON", () => {
     const json = JSON.stringify({
       decisions: [
-        { file: "worlds/a.md", action: "forget", reason: "stale" },
-        { file: "worlds/b.md", action: "keep", reason: "current" },
+        { file: "know/a.md", action: "forget", reason: "stale" },
+        { file: "know/b.md", action: "keep", reason: "current" },
       ],
       merges: [],
       summary: "Pruned 1",
@@ -859,27 +859,27 @@ describe("parseDistillResponse", () => {
   it("parses valid distill JSON", () => {
     const json = JSON.stringify({
       synthesize: [{
-        path: "worlds/new.md",
+        path: "know/new.md",
         title: "Pattern",
         body: "Insight",
         domain: ["d"],
         confidence: 0.8,
         entities: ["e"],
-        refs: ["worlds/old1.md"],
+        refs: ["know/old1.md"],
       }],
-      forget: ["worlds/old1.md"],
+      forget: ["know/old1.md"],
       summary: "Distilled 1",
     });
     const result = parseDistillResponse(json);
     expect(result.synthesize).toHaveLength(1);
-    expect(result.forget).toContain("worlds/old1.md");
+    expect(result.forget).toContain("know/old1.md");
   });
 });
 
 describe("chunkFacts", () => {
   it("returns one chunk when facts fit", () => {
     const facts = Array.from({ length: 5 }, (_, i) => ({
-      path: `worlds/f${i}.md`, title: `F${i}`, body: "short",
+      path: `know/f${i}.md`, title: `F${i}`, body: "short",
       domain: [], entities: [], confidence: 0.8, sources: 1, refs: [],
     }));
     const chunks = chunkFacts(facts, 100_000);
@@ -888,7 +888,7 @@ describe("chunkFacts", () => {
 
   it("splits into multiple chunks when facts exceed budget", () => {
     const facts = Array.from({ length: 100 }, (_, i) => ({
-      path: `worlds/f${i}.md`, title: `Fact ${i}`, body: "x".repeat(1000),
+      path: `know/f${i}.md`, title: `Fact ${i}`, body: "x".repeat(1000),
       domain: [], entities: [], confidence: 0.8, sources: 1, refs: [],
     }));
     const chunks = chunkFacts(facts, 10_000);
@@ -1015,7 +1015,7 @@ Respond as JSON (no markdown wrapping):
     {
       "sources": ["file1.md", "file2.md"],
       "merged": {
-        "path": "worlds/...",
+        "path": "know/...",
         "title": "...",
         "body": "...",
         "domain": [...],
@@ -1062,7 +1062,7 @@ Respond as JSON (no markdown wrapping):
 {
   "synthesize": [
     {
-      "path": "worlds/...",
+      "path": "know/...",
       "title": "...",
       "body": "...",
       "domain": [...],
@@ -1761,7 +1761,7 @@ describe("synthesize e2e", () => {
 
     // Create some facts
     await commitFact(repo, {
-      path: "worlds/security/cve-1.md",
+      path: "know/security/cve-1.md",
       title: "CVE-2024-001 in libfoo",
       body: "Buffer overflow in libfoo 1.0",
       domain: ["security"],
@@ -1772,7 +1772,7 @@ describe("synthesize e2e", () => {
     }, searchIndex);
 
     await commitFact(repo, {
-      path: "worlds/security/cve-2.md",
+      path: "know/security/cve-2.md",
       title: "CVE-2024-002 in libfoo",
       body: "Another buffer overflow in libfoo 1.0",
       domain: ["security"],
@@ -1798,8 +1798,8 @@ describe("synthesize e2e", () => {
     (llm as any).createAdapter = () => ({
       complete: async () => JSON.stringify({
         decisions: [
-          { file: "worlds/security/cve-1.md", action: "forget", reason: "Fixed" },
-          { file: "worlds/security/cve-2.md", action: "keep", reason: "Still active" },
+          { file: "know/security/cve-1.md", action: "forget", reason: "Fixed" },
+          { file: "know/security/cve-2.md", action: "keep", reason: "Still active" },
         ],
         merges: [],
         summary: "Pruned 1 fixed CVE",
@@ -1822,8 +1822,8 @@ steps:
       expect(result.stepSummaries[0]).toContain("1 forgotten");
 
       // cve-1 should be gone, cve-2 should remain
-      const cve1Exists = await repo.fileExists("worlds/security/cve-1.md");
-      const cve2Exists = await repo.fileExists("worlds/security/cve-2.md");
+      const cve1Exists = await repo.fileExists("know/security/cve-1.md");
+      const cve2Exists = await repo.fileExists("know/security/cve-2.md");
       expect(cve1Exists).toBe(false);
       expect(cve2Exists).toBe(true);
     } finally {

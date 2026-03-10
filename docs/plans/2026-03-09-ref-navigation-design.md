@@ -16,8 +16,8 @@ Navigate `knomit:` refs from the fact view to open referenced facts at their exa
 `parseKnomitRef(ref: string): ParsedRef | null`
 
 ```
-"knomit:blob/abc1234/worlds/people/alice/likes-rock.md"
-  → { path: "worlds/people/alice/likes-rock.md", commit: "abc1234" }
+"knomit:blob/abc1234/know/people/alice/likes-rock.md"
+  → { path: "know/people/alice/likes-rock.md", commit: "abc1234" }
 
 "knomit://github.com/org/repo/blob/abc1234/src/file.ts"
   → { path: "src/file.ts", commit: "abc1234", external: true }

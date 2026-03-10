@@ -7,8 +7,8 @@ Four concrete scenarios that arise when two machines independently learn facts a
 Two branches add completely different facts. No file overlap.
 
 ```
-laptop:  + worlds/security/cve-2024-1234.md
-desktop: + worlds/people/alice/prefers-dark-mode.md
+laptop:  + know/security/cve-2024-1234.md
+desktop: + know/people/alice/prefers-dark-mode.md
 ```
 
 **Resolution:** Trivial. Git auto-merges. No LLM needed.
@@ -18,8 +18,8 @@ desktop: + worlds/people/alice/prefers-dark-mode.md
 Both branches update the same fact file — different confidence bumps, different new sources.
 
 ```
-laptop:  worlds/people/alice/likes-rock.md  (confidence: 0.85 → 0.9, sources: 3 → 4)
-desktop: worlds/people/alice/likes-rock.md  (confidence: 0.85 → 0.88, sources: 3 → 5)
+laptop:  know/people/alice/likes-rock.md  (confidence: 0.85 → 0.9, sources: 3 → 4)
+desktop: know/people/alice/likes-rock.md  (confidence: 0.85 → 0.88, sources: 3 → 5)
 ```
 
 Git sees a conflict on the same file.
@@ -34,8 +34,8 @@ Git sees a conflict on the same file.
 No file-level conflict — different files — but the facts contradict each other.
 
 ```
-laptop:  + worlds/projects/api/uses-rest.md    (confidence: 0.8)
-desktop: + worlds/projects/api/uses-graphql.md  (confidence: 0.7)
+laptop:  + know/projects/api/uses-rest.md    (confidence: 0.8)
+desktop: + know/projects/api/uses-graphql.md  (confidence: 0.7)
 ```
 
 Git merges cleanly (different files), but the knowledge base now contains a contradiction.
@@ -52,8 +52,8 @@ Git merges cleanly (different files), but the knowledge base now contains a cont
 One branch learns a fact. Another branch (or a later commit on the same branch) deletes it.
 
 ```
-laptop:  + worlds/security/cve-2024-1234.md  (committed 3 months ago)
-desktop: forget worlds/security/cve-2024-1234.md  (committed yesterday, CVE was fixed)
+laptop:  + know/security/cve-2024-1234.md  (committed 3 months ago)
+desktop: forget know/security/cve-2024-1234.md  (committed yesterday, CVE was fixed)
 ```
 
 **Resolution:** The delete wins — it's more recent and intentional. Recency + intentional deletion beats older addition.

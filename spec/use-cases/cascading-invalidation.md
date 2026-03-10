@@ -11,7 +11,7 @@ When a base fact is updated or reverted, any higher-order facts that were derive
 When a fact is modified, an agent can find everything that depends on it by grepping for the original commit hash across all fact files:
 
 ```bash
-grep -rl "abc1234" --include="*.md" worlds/
+grep -rl "abc1234" --include="*.md" know/
 ```
 
 This returns every fact whose `refs` contain that commit hash — i.e., every fact that cited the modified fact as evidence.

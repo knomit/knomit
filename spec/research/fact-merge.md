@@ -2,14 +2,14 @@
 
 ## Problem
 
-Two or more machines share the same origin repo, each on its own `machine/{hostname}` branch. Each machine learns facts independently, pushes its branch, and pulls `origin/main` on sync. But nothing merges machine branches into main — knowledge stays siloed.
+Two or more agents share the same origin repo, each on its own `agent/{hostname}` branch. Each agent learns facts independently, pushes its branch, and pulls `origin/main` on sync. But nothing merges agent branches into main — knowledge stays siloed.
 
 ```
 origin/main          ─────────────────────────────────────────────►
                           ↑                          ↑
-machine/laptop       ──●──●──●                       │
+agent/laptop       ──●──●──●                       │
                                                      │
-machine/desktop      ────────────●──●──●             │
+agent/desktop      ────────────●──●──●             │
                                                      │
                      ◄── who merges these into main? ─┘
 ```
@@ -18,7 +18,7 @@ machine/desktop      ────────────●──●──●  
 
 ### Phase 1: Propose
 
-For each machine branch ahead of main, compute a diff — the list of new, changed, and deleted facts. Package each as a "review packet."
+For each agent branch ahead of main, compute a diff — the list of new, changed, and deleted facts. Package each as a "review packet."
 
 ### Phase 2: Synthesize
 
@@ -33,7 +33,7 @@ Combine review packets from all branches. Classify each change:
 
 ### Phase 3: Merge
 
-Apply resolved changes to main. Each machine picks up the merged result on its next `sync()`.
+Apply resolved changes to main. Each agent picks up the merged result on its next `sync()`.
 
 ## Merge Cases in Detail
 
@@ -42,8 +42,8 @@ Apply resolved changes to main. Each machine picks up the merged result on its n
 Two branches add completely different facts. No file overlap.
 
 ```
-laptop:  + worlds/security/cve-2024-1234.md
-desktop: + worlds/people/alice/prefers-dark-mode.md
+laptop:  + know/security/cve-2024-1234.md
+desktop: + know/people/alice/prefers-dark-mode.md
 ```
 
 **Resolution:** Trivial. Git auto-merges. No LLM needed.
@@ -53,8 +53,8 @@ desktop: + worlds/people/alice/prefers-dark-mode.md
 Both branches update the same fact file — different confidence bumps, different new sources.
 
 ```
-laptop:  worlds/people/alice/likes-rock.md  (confidence: 0.85 → 0.9, sources: 3 → 4)
-desktop: worlds/people/alice/likes-rock.md  (confidence: 0.85 → 0.88, sources: 3 → 5)
+laptop:  know/people/alice/likes-rock.md  (confidence: 0.85 → 0.9, sources: 3 → 4)
+desktop: know/people/alice/likes-rock.md  (confidence: 0.85 → 0.88, sources: 3 → 5)
 ```
 
 **Resolution (deterministic rules):**
@@ -67,8 +67,8 @@ desktop: worlds/people/alice/likes-rock.md  (confidence: 0.85 → 0.88, sources:
 No file-level conflict — different files — but the facts contradict each other.
 
 ```
-laptop:  + worlds/projects/api/uses-rest.md    (confidence: 0.8)
-desktop: + worlds/projects/api/uses-graphql.md  (confidence: 0.7)
+laptop:  + know/projects/api/uses-rest.md    (confidence: 0.8)
+desktop: + know/projects/api/uses-graphql.md  (confidence: 0.7)
 ```
 
 Git merges cleanly (different files), but the knowledge base now contains a contradiction.
@@ -85,8 +85,8 @@ Git merges cleanly (different files), but the knowledge base now contains a cont
 One branch learns a fact. Another branch deletes it.
 
 ```
-laptop:  + worlds/security/cve-2024-1234.md  (committed 3 months ago)
-desktop: forget worlds/security/cve-2024-1234.md  (committed yesterday, CVE was fixed)
+laptop:  + know/security/cve-2024-1234.md  (committed 3 months ago)
+desktop: forget know/security/cve-2024-1234.md  (committed yesterday, CVE was fixed)
 ```
 
 **Resolution:** The delete wins — more recent and intentional. Recency + intentional deletion beats older addition.
@@ -111,22 +111,22 @@ knomit_merge({
 
 ```ts
 {
-  branches: ["machine/laptop", "machine/desktop"],
+  branches: ["agent/laptop", "agent/desktop"],
   clean_merges: [
-    { file: "worlds/security/cve-2024-1234.md", from: "machine/laptop", action: "add" }
+    { file: "know/security/cve-2024-1234.md", from: "agent/laptop", action: "add" }
   ],
   conflicts: [
     {
-      file: "worlds/people/alice/likes-rock.md",
+      file: "know/people/alice/likes-rock.md",
       versions: [
-        { branch: "machine/laptop", confidence: 0.9, sources: 4 },
-        { branch: "machine/desktop", confidence: 0.88, sources: 5 },
+        { branch: "agent/laptop", confidence: 0.9, sources: 4 },
+        { branch: "agent/desktop", confidence: 0.88, sources: 5 },
       ]
     }
   ],
   semantic_conflicts: [
     {
-      files: ["worlds/projects/api/uses-rest.md", "worlds/projects/api/uses-graphql.md"],
+      files: ["know/projects/api/uses-rest.md", "know/projects/api/uses-graphql.md"],
       reason: "contradictory facts about same entity from different branches"
     }
   ]
@@ -140,9 +140,9 @@ async reconcile(strategy: string): Promise<MergeResult> {
   // 1. Fetch all remote branches
   await git.fetch("origin");
 
-  // 2. Find machine branches ahead of main
+  // 2. Find agent branches ahead of main
   const branches = (await git.branch({ remote: true }))
-    .filter(b => b.startsWith("origin/machine/"));
+    .filter(b => b.startsWith("origin/agent/"));
 
   // 3. For each branch, compute diff vs main
   const diffs = await Promise.all(
@@ -175,7 +175,7 @@ async reconcile(strategy: string): Promise<MergeResult> {
 
 | Option | How | Pros | Cons |
 |--------|-----|------|------|
-| **GitHub Action** | Triggers on push to any `machine/**` branch | Fully automated, no machine needs to be online | Needs LLM API key in GitHub secrets |
+| **GitHub Action** | Triggers on push to any `agent/**` branch | Fully automated, no machine needs to be online | Needs LLM API key in GitHub secrets |
 | **On a machine** | User runs `knomit merge` manually or on a schedule | Simple, no infra | That machine must be online |
 | **Container/server** | Central server runs reconciliation on a cron | Always available | Adds ops burden |
 
@@ -187,7 +187,7 @@ Triggers automatically when any machine pushes, runs reconciliation, and either 
 # .github/workflows/reconcile.yml
 on:
   push:
-    branches: ["machine/**"]
+    branches: ["agent/**"]
 
 jobs:
   reconcile:
@@ -209,7 +209,7 @@ jobs:
 Machine A (laptop)                    Machine B (desktop)
     │                                       │
     ├── learn facts                         ├── learn facts
-    ├── push machine/laptop                 ├── push machine/desktop
+    ├── push agent/laptop                 ├── push agent/desktop
     │                                       │
     └──────────► origin ◄──────────────────┘
                     │
@@ -234,7 +234,7 @@ Machine A (laptop)                    Machine B (desktop)
 
 ## Key Principle
 
-Machines stay simple — push your branch, pull main. The reconciliation intelligence lives outside the machines, either in a GitHub Action or a dedicated merge tool invocation.
+Agents stay simple — push your branch, pull main. The reconciliation intelligence lives outside the agents, either in a GitHub Action or a dedicated merge tool invocation.
 
 ## Relationship to `knomit_synthesize`
 
@@ -242,10 +242,10 @@ Both tools involve LLM-assisted fact reasoning, but they solve different problem
 
 | | `knomit_merge` | `knomit_synthesize` |
 |-|----------------|---------------------|
-| **Trigger** | Multiple machine branches diverge from main | Fact count grows, facts age |
+| **Trigger** | Multiple agent branches diverge from main | Fact count grows, facts age |
 | **Input** | Diffs between branches | Facts within a scope |
-| **Problem** | Reconcile divergent knowledge across machines | Maintain knowledge quality within one branch |
+| **Problem** | Reconcile divergent knowledge across agents | Maintain knowledge quality within one branch |
 | **LLM role** | Resolve semantic conflicts between versions | Identify staleness, redundancy, patterns |
 | **Git ops** | Merge branches | Learn/update/forget on current branch |
 
-They complement each other: `knomit_merge` unifies knowledge across machines, `knomit_synthesize` maintains the quality of the unified result. A typical flow might be: merge first, then synthesize the merged result to prune duplicates that arose from independent learning.
+They complement each other: `knomit_merge` unifies knowledge across agents, `knomit_synthesize` maintains the quality of the unified result. A typical flow might be: merge first, then synthesize the merged result to prune duplicates that arose from independent learning.

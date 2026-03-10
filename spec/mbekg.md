@@ -59,8 +59,8 @@ The following are intentionally omitted because Git handles them natively:
 The repository's directory structure defines a strict "is-within" hierarchy called the **ontology**. It represents containment relationships that are unambiguous — a house is on a street, in a city, in a country.
 
 ```
-worlds.md
-worlds/
+know.md
+know/
   earth.md
   earth/
     uk.md
@@ -81,8 +81,8 @@ worlds/
 - **Facts are placed at the most specific level they apply to.** "It rains in London in April" goes in `london/`, not `uk/`.
 - **Facts at higher levels are inherited by everything below.** "The UK drives on the left" applies to London, Manchester, and every address under `uk/`.
 - **Each folder has a sibling manifest file** with the same name and `.md` extension. This file describes what that level of the hierarchy represents. It follows the same fact file schema.
-- **The root is no exception.** `worlds.md` describes the knowledge base itself.
-- **The ontology is not limited to physical space.** `worlds/digital/github/repo-x/` is equally valid.
+- **The root is no exception.** `know.md` describes the knowledge base itself.
+- **The ontology is not limited to physical space.** `know/digital/github/repo-x/` is equally valid.
 
 ### 3.3 Manifests
 
@@ -104,7 +104,7 @@ Located in southeastern England on the River Thames.
 
 ### 3.4 Agent Navigation
 
-1. Agent enters `worlds/earth/uk/london/`
+1. Agent enters `know/earth/uk/london/`
 2. Reads `london.md` (sibling manifest) — understands what "London" is
 3. Reads fact files in `london/` — learns what is true about London
 4. Walks up to `uk.md`, `earth.md` — inherits higher-level truths
@@ -137,12 +137,12 @@ Evidence chains are resolved through two complementary mechanisms:
 
 **Step 1 — Find the fact.**
 ```
-grep -rl "entity_name" --include="*.md" worlds/
+grep -rl "entity_name" --include="*.md" know/
 ```
 
 **Step 2 — Find the learning moment.**
 ```
-git log --follow --format="%H %s" worlds/path/to/fact.md
+git log --follow --format="%H %s" know/path/to/fact.md
 ```
 
 **Step 3 — Find sibling facts (implicit evidence).**
@@ -213,8 +213,8 @@ The synthesized fact is structurally identical to any other fact. The only diffe
 ### Repository State
 
 ```
-worlds.md
-worlds/
+know.md
+know/
   earth.md
   earth/
     uk.md
@@ -232,7 +232,7 @@ worlds/
 
 ### A Ground-Level Fact
 
-`worlds/people/alice/alice-likes-rock-music.md`
+`know/people/alice/alice-likes-rock-music.md`
 
 ```yaml
 ---
@@ -251,7 +251,7 @@ purchasing Album X in 2024 and attending Concert Y in 2025.
 
 ### A Synthesized Fact
 
-`worlds/people/alice/alice-music-shifts-seasonally.md`
+`know/people/alice/alice-music-shifts-seasonally.md`
 
 ```yaml
 ---

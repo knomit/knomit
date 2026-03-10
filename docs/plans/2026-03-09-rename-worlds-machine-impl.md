@@ -2,7 +2,7 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Replace `worlds/` with `know/`, `machine/` branch prefix with `agent/`, introduce constants, and fix README inaccuracies.
+**Goal:** Replace `know/` with `know/`, `agent/` branch prefix with `agent/`, introduce constants, and fix README inaccuracies.
 
 **Architecture:** Create `src/constants.ts` with `ONTOLOGY_DIR`, `ONTOLOGY_ROOT`, `BRANCH_PREFIX`. All code references use these constants. Mechanical rename of string literals in tests and docs. The `type: "world" | "fact"` discriminator stays unchanged (it's a semantic type, not a directory name).
 
@@ -119,7 +119,7 @@ import { ONTOLOGY_DIR } from "../constants.js";
 ```
 
 - Line 46: `if (!factPath.startsWith(\`${ONTOLOGY_DIR}/\`)) factPath = \`${ONTOLOGY_DIR}/${factPath}\`;`
-- Line 80 (tool description): change `worlds/` → `know/` in the path example: `"path: organize under know/ by domain (e.g. know/projects/myapp/conventions.md)"`
+- Line 80 (tool description): change `know/` → `know/` in the path example: `"path: organize under know/ by domain (e.g. know/projects/myapp/conventions.md)"`
 
 **Step 2: Update explore.ts**
 
@@ -148,16 +148,16 @@ git commit -m "refactor: use ONTOLOGY_DIR constant in tools"
 **Files:**
 - Modify: `src/instructions.ts`
 
-**Step 1: Replace all `worlds/` with `know/` in instruction strings**
+**Step 1: Replace all `know/` with `know/` in instruction strings**
 
 In `BASE` constant:
 - Line 3: `organized by an ontological hierarchy (know/).`
 - Line 5: `Your knowledge base operates on an agent-specific branch. Other agents may contribute knowledge that arrives via merges from main.`
 - Line 21: `The directory tree under know/ is a hierarchy.`
-- Lines 23-37: All path examples `worlds/projects/...` → `know/projects/...`, `worlds/preferences/...` → `know/preferences/...`, `worlds/tools/...` → `know/tools/...`
+- Lines 23-37: All path examples `know/projects/...` → `know/projects/...`, `know/preferences/...` → `know/preferences/...`, `know/tools/...` → `know/tools/...`
 
 In `CODE_ADDENDUM`:
-- Line 70: `worlds/projects/myapp/identity.md` → `know/projects/myapp/identity.md`
+- Line 70: `know/projects/myapp/identity.md` → `know/projects/myapp/identity.md`
 
 **Step 2: Commit**
 
@@ -257,22 +257,22 @@ git commit -m "refactor: use ONTOLOGY_DIR constant in TUI"
 **Step 1: Mechanical replacements across all test files**
 
 Apply these replacements in all test files:
-- `"worlds/` → `"know/` (path string literals)
+- `"know/` → `"know/` (path string literals)
 - `"worlds"` → `"know"` (bare directory references)
-- `"worlds.md"` → `"know.md"` (root manifest)
+- `"know.md"` → `"know.md"` (root manifest)
 - `"test-machine"` → `"test-agent"` (test agent IDs)
-- `"machine/test-machine"` → `"agent/test-agent"` (branch names)
-- `"machine/machine-a"` → `"agent/agent-a"` (multi-agent tests)
-- `"machine/machine-b"` → `"agent/agent-b"`
-- `"machine/my-machine"` → `"agent/my-agent"`
-- `"machine/test-custom-machine"` → `"agent/test-custom-agent"`
-- `"machine/test"` → `"agent/test"` (branch checkout tests)
+- `"agent/test-machine"` → `"agent/test-agent"` (branch names)
+- `"agent/machine-a"` → `"agent/agent-a"` (multi-agent tests)
+- `"agent/machine-b"` → `"agent/agent-b"`
+- `"agent/my-machine"` → `"agent/my-agent"`
+- `"agent/test-custom-machine"` → `"agent/test-custom-agent"`
+- `"agent/test"` → `"agent/test"` (branch checkout tests)
 - `"test-custom-machine"` → `"test-custom-agent"`
 - `"my-machine"` → `"my-agent"`
 - `"machine-a"` → `"agent-a"`
 - `"machine-b"` → `"agent-b"`
 - `machineId` → `agentId` (variable references in e2e tests)
-- `KNOMIT_MACHINE_ID` → `KNOMIT_AGENT_ID`
+- `KNOMIT_AGENT_ID` → `KNOMIT_AGENT_ID`
 
 In `src/e2e/helpers.ts`:
 - Line 18: `export async function createTestEnv(agentId = "test-agent"): Promise<TestEnv> {`
@@ -384,9 +384,9 @@ Add Synthesize subcommand section and Reset subcommand section (already partiall
 
 **Step 2: Apply renames throughout README**
 
-- `worlds/` → `know/`
-- `machine/<id>` → `agent/<id>`
-- `KNOMIT_MACHINE_ID` → `KNOMIT_AGENT_ID`
+- `know/` → `know/`
+- `agent/<id>` → `agent/<id>`
+- `KNOMIT_AGENT_ID` → `KNOMIT_AGENT_ID`
 - Line 5: `Each agent gets its own branch; consensus lives on \`main\`.`
 - Line 183: `The directory tree under \`know/\` forms an ontological hierarchy.`
 - Line 193: `knomit:blob/abc1234/know/debugging/pool-fix.md`
@@ -426,17 +426,17 @@ git commit -m "docs: fix README inaccuracies, update for worlds→know and machi
 - Modify: `spec/research/merge-cases.md`
 - Modify: `spec/research/cross-repo-knowledge-discovery.md`
 - Modify: `docs/research/stratified-distillation.md`
-- Modify: All `docs/plans/` files that reference `worlds/` or `machine/`
+- Modify: All `docs/plans/` files that reference `know/` or `agent/`
 
 **Step 1: Mechanical replacements across all spec and docs**
 
 Apply these replacements:
-- `worlds/` → `know/`
-- `worlds.md` → `know.md`
-- `machine/<id>` → `agent/<id>` (and variants like `machine/laptop`, `machine/desktop`)
-- `machine branch` → `agent branch`
-- `machine-specific` → `agent-specific`
-- `KNOMIT_MACHINE_ID` → `KNOMIT_AGENT_ID`
+- `know/` → `know/`
+- `know.md` → `know.md`
+- `agent/<id>` → `agent/<id>` (and variants like `agent/laptop`, `agent/desktop`)
+- `agent branch` → `agent branch`
+- `agent-specific` → `agent-specific`
+- `KNOMIT_AGENT_ID` → `KNOMIT_AGENT_ID`
 
 Note: Use judgement in research docs — some may discuss the general concept of "machines" (physical hardware) vs the branch naming convention. Only rename references to the branch prefix, not general computing terms.
 
@@ -461,7 +461,7 @@ Expected: all pass
 Run: `grep -r "worlds" src/ --include="*.ts" --include="*.tsx" | grep -v node_modules`
 Expected: no matches (or only false positives like "world" type discriminator)
 
-Run: `grep -rn '"machine/' src/ --include="*.ts" --include="*.tsx" | grep -v node_modules`
+Run: `grep -rn '"agent/' src/ --include="*.ts" --include="*.tsx" | grep -v node_modules`
 Expected: no matches
 
 Run: `grep -rn 'KNOMIT_MACHINE' src/ --include="*.ts" --include="*.tsx" | grep -v node_modules`

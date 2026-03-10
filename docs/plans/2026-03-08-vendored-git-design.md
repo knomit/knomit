@@ -88,7 +88,7 @@ init, add, commit, checkout, branch, tag, log, merge, merge --abort, fetch, push
 | `commit -S` | provenance-and-signing | SSH-signed commits |
 | `verify-commit` | provenance-and-signing | Verify signatures |
 | `cherry-pick` | reconciliation-architecture | Apply commits across branches |
-| `branch --remote` | reconciliation-architecture | List remote machine branches |
+| `branch --remote` | reconciliation-architecture | List remote agent branches |
 | `clone` | cross-repo-knowledge-discovery | Import foreign repos |
 
 ### Git config settings needed (provenance)

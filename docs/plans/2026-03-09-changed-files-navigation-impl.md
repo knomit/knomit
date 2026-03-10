@@ -53,7 +53,7 @@ export function buildChangedFileItems(
 }
 ```
 
-Note: `historyTarget` is the directory path (e.g. `worlds/people`) — file names from `changedFiles` are relative to it, so the full path is `historyTarget/filename`.
+Note: `historyTarget` is the directory path (e.g. `know/people`) — file names from `changedFiles` are relative to it, so the full path is `historyTarget/filename`.
 
 **Step 3: Wire changed-file items into RightPanel selectability**
 
@@ -274,36 +274,36 @@ it("FOLLOW_REF from history mode preserves history state", () => {
   let s = {
     ...initialState,
     historyMode: true,
-    historyTarget: "worlds/people",
+    historyTarget: "know/people",
     historySelectedIndex: 2,
     rightPanelMode: "history" as const,
     currentFact: null,
   };
-  s = reducer(s, { type: "FOLLOW_REF", path: "worlds/people/alice/likes-rock.md", commit: "abc1234" });
+  s = reducer(s, { type: "FOLLOW_REF", path: "know/people/alice/likes-rock.md", commit: "abc1234" });
 
   expect(s.navStack).toHaveLength(1);
   expect(s.navStack[0].historyMode).toBe(true);
-  expect(s.navStack[0].historyTarget).toBe("worlds/people");
+  expect(s.navStack[0].historyTarget).toBe("know/people");
   expect(s.navStack[0].historySelectedIndex).toBe(2);
   expect(s.navStack[0].rightPanelMode).toBe("history");
-  expect(s.historyTarget).toBe("worlds/people/alice/likes-rock.md");
-  expect(s.currentFact).toBe("worlds/people/alice/likes-rock.md");
+  expect(s.historyTarget).toBe("know/people/alice/likes-rock.md");
+  expect(s.currentFact).toBe("know/people/alice/likes-rock.md");
 });
 
 it("NAV_BACK to history mode restores directory history", () => {
   let s = {
     ...initialState,
     historyMode: true,
-    historyTarget: "worlds/people",
+    historyTarget: "know/people",
     historySelectedIndex: 2,
     rightPanelMode: "history" as const,
   };
-  s = reducer(s, { type: "FOLLOW_REF", path: "worlds/people/alice/likes-rock.md", commit: "abc1234" });
+  s = reducer(s, { type: "FOLLOW_REF", path: "know/people/alice/likes-rock.md", commit: "abc1234" });
   s = reducer(s, { type: "NAV_BACK" });
 
   expect(s.navStack).toHaveLength(0);
   expect(s.historyMode).toBe(true);
-  expect(s.historyTarget).toBe("worlds/people");
+  expect(s.historyTarget).toBe("know/people");
   expect(s.historySelectedIndex).toBe(2);
   expect(s.rightPanelMode).toBe("history");
 });
@@ -338,12 +338,12 @@ describe("buildChangedFileItems", () => {
   it("builds items in order: added, modified, deleted", () => {
     const items = buildChangedFileItems(
       { added: ["a.md"], modified: ["b.md"], deleted: ["c.md"] },
-      "worlds/people",
+      "know/people",
     );
     expect(items).toEqual([
-      { type: "changed-file", label: "a.md", path: "worlds/people/a.md", changeStatus: "added" },
-      { type: "changed-file", label: "b.md", path: "worlds/people/b.md", changeStatus: "modified" },
-      { type: "changed-file", label: "c.md", path: "worlds/people/c.md", changeStatus: "deleted" },
+      { type: "changed-file", label: "a.md", path: "know/people/a.md", changeStatus: "added" },
+      { type: "changed-file", label: "b.md", path: "know/people/b.md", changeStatus: "modified" },
+      { type: "changed-file", label: "c.md", path: "know/people/c.md", changeStatus: "deleted" },
     ]);
   });
 

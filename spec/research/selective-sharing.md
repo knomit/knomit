@@ -55,7 +55,7 @@ The shared facts live in a separate repo, mounted as a submodule inside the main
 
 ```
 my-knomit/
-  worlds/
+  know/
     personal/          ← private facts (main repo)
     projects/          ← private facts (main repo)
     shared/            ← submodule → github.com/me/knomit-public
@@ -63,7 +63,7 @@ my-knomit/
       programming/
 ```
 
-When you learn a shared fact, it lands in `worlds/shared/` which is the submodule. The commit goes to the submodule's repo directly. Others clone just the submodule repo.
+When you learn a shared fact, it lands in `know/shared/` which is the submodule. The commit goes to the submodule's repo directly. Others clone just the submodule repo.
 
 **Pros:**
 - No publish step — commits to shared facts are immediately in the public repo
@@ -72,7 +72,7 @@ When you learn a shared fact, it lands in `worlds/shared/` which is the submodul
 
 **Cons:**
 - Submodules are painful (git's worst feature by consensus)
-- Forces ontology to reflect visibility: `worlds/shared/security/` vs `worlds/security/`. Visibility leaks into the path, same problem as namespacing imports by source
+- Forces ontology to reflect visibility: `know/shared/security/` vs `know/security/`. Visibility leaks into the path, same problem as namespacing imports by source
 - Moving a fact from private to shared means moving it between directories (and repos)
 - `knomit_learn` needs to know which repo to commit to based on visibility
 - Submodule pointer in the parent repo needs updating after each commit
@@ -93,7 +93,7 @@ One repo. `visibility` field in frontmatter. Default `private`. A publish step p
 - **Safe by default** — forgetting to set visibility means private, not public
 - **Clean separation** — the public repo is a standalone knowledge base with no traces of private facts
 - **Simple** — the publish step is a script, not infrastructure
-- **Ontology stays clean** — `worlds/security/sql-injection.md` is the path whether it's private or shared. Visibility doesn't affect organization
+- **Ontology stays clean** — `know/security/sql-injection.md` is the path whether it's private or shared. Visibility doesn't affect organization
 
 ### The `visibility` Field
 
@@ -127,8 +127,8 @@ This can run as:
 ### Changing Visibility
 
 ```
-knomit share worlds/security/sql-injection.md     # sets visibility: shared
-knomit unshare worlds/security/sql-injection.md   # sets visibility: private
+knomit share know/security/sql-injection.md     # sets visibility: shared
+knomit unshare know/security/sql-injection.md   # sets visibility: private
 ```
 
 Or just edit the frontmatter directly. The next publish picks up the change.
@@ -139,7 +139,7 @@ A normal knomit repo. Same structure, same fact format. Someone browsing it (or 
 
 ```
 knomit-public/
-  worlds/
+  know/
     security/
       sql-injection-prevention.md
       xss-mitigation.md
@@ -174,10 +174,10 @@ include:
   - domain: javascript
     entities: [bun, bun:sqlite, bun:test]
   # by explicit path
-  - path: worlds/programming/bun-html-imports.md
-  - path: worlds/programming/bun-sqlite-macos.md
+  - path: know/programming/bun-html-imports.md
+  - path: know/programming/bun-sqlite-macos.md
 exclude:
-  - path: worlds/programming/bun-internal-workaround.md
+  - path: know/programming/bun-internal-workaround.md
 ```
 
 A pack is a query against your knowledge base. `include` selects facts by domain, entities, path globs, or combinations. `exclude` removes specific facts from the result. The pack definition itself lives in your private repo — the target repo only gets the matching facts.
@@ -226,7 +226,7 @@ Same as before — a normal knomit repo. The receiver doesn't know it came from 
 
 ```
 knomit-bun-patterns/           ← target repo
-  worlds/
+  know/
     programming/
       bun-html-imports.md
       bun-sqlite-macos.md
