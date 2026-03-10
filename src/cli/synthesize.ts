@@ -149,7 +149,7 @@ export default defineCommand({
     const { bootstrap, resolveCacheDir } = await import("../bootstrap.js");
     const { parseRecipe } = await import("../recipe.js");
     const { synthesize } = await import("../synthesize.js");
-    const { configFromEnv, resolveProvider } = await import("../llm.js");
+    const { configFromEnv, resolveProvider, cliExists } = await import("../llm.js");
 
     const cacheDir = resolveCacheDir(args["cache-dir"]);
     setLogFile(join(cacheDir, "synthesize.log"));
@@ -158,15 +158,23 @@ export default defineCommand({
     try {
       const config = configFromEnv();
       const provider = resolveProvider(config.model, config.provider);
-      if (provider === "gemini" && !config.apiKey) {
+      if (provider === "claude-cli") {
+        if (!cliExists("claude")) {
+          console.error("Error: Claude Code CLI not found. Install it or use KNOMIT_LLM_PROVIDER=anthropic with an API key.");
+          process.exit(1);
+        }
+      } else if (provider === "gemini-cli") {
+        if (!cliExists("gemini")) {
+          console.error("Error: Gemini CLI not found. Install it or use KNOMIT_LLM_PROVIDER=gemini with an API key.");
+          process.exit(1);
+        }
+      } else if (provider === "gemini" && !config.apiKey) {
         console.error("Error: GOOGLE_AI_API_KEY is required. Set it in your environment.");
         process.exit(1);
-      }
-      if (provider === "anthropic" && !config.apiKey) {
+      } else if (provider === "anthropic" && !config.apiKey) {
         console.error("Error: ANTHROPIC_API_KEY is required. Set it in your environment.");
         process.exit(1);
-      }
-      if (provider === "bedrock" && (!config.accessKeyId || !config.secretAccessKey)) {
+      } else if (provider === "bedrock" && (!config.accessKeyId || !config.secretAccessKey)) {
         console.error("Error: AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY are required. Set them in your environment.");
         process.exit(1);
       }
