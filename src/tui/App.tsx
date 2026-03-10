@@ -380,7 +380,7 @@ function App({ repo, searchIndex }: { repo: GitRepo; searchIndex: SearchIndex })
 
   return (
     <Box flexDirection="column" width={termSize.columns} height={termSize.rows}>
-      <TopBar branch={branch} theme={theme} embeddings={searchIndex.hasEmbeddings} />
+      <TopBar branch={branch} theme={theme} commit={searchIndex.lastCommit} />
       <Box flexDirection="row" flexGrow={1} overflow="hidden">
         <LeftPanel
           currentPath={state.currentPath}
@@ -425,6 +425,7 @@ function App({ repo, searchIndex }: { repo: GitRepo; searchIndex: SearchIndex })
         onSearchSubmit={handleSearchSubmit}
         onCommandSubmit={handleCommandSubmit}
         inputKey={inputKey}
+        embeddings={searchIndex.hasEmbeddings}
       />
     </Box>
   );

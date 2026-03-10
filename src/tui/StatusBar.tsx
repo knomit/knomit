@@ -9,9 +9,10 @@ interface StatusBarProps {
   onSearchSubmit: (text: string) => void;
   onCommandSubmit: (cmd: string) => void;
   inputKey: number;
+  embeddings?: boolean;
 }
 
-export function StatusBar({ mode, theme, onSearchSubmit, onCommandSubmit, inputKey }: StatusBarProps) {
+export function StatusBar({ mode, theme, onSearchSubmit, onCommandSubmit, inputKey, embeddings }: StatusBarProps) {
   if (mode === "search") {
     return (
       <Box key={`s${inputKey}`}>
@@ -33,10 +34,13 @@ export function StatusBar({ mode, theme, onSearchSubmit, onCommandSubmit, inputK
   }
 
   return (
-    <Box backgroundColor={theme.crust}>
+    <Box backgroundColor={theme.crust} justifyContent="space-between">
       <Text color={theme.dim}>
         {" "}↑↓ navigate  ↵ open  ←→ panels  h history  / search  : command  q quit{" "}
       </Text>
+      {embeddings !== undefined && (
+        <Text color={theme.dim}>{embeddings ? "e " : ""}</Text>
+      )}
     </Box>
   );
 }

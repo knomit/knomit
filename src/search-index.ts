@@ -561,6 +561,10 @@ export class SearchIndex {
     this.db.query("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)").run(key, value);
   }
 
+  get lastCommit(): string | null {
+    return this.getMeta("last_commit");
+  }
+
   get hasEmbeddings(): boolean {
     return this.embedder !== null;
   }
