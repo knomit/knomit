@@ -79,17 +79,44 @@ func TestExploreDefaultPath(t *testing.T) {
 func TestExploreInheritedFacts(t *testing.T) {
 	store := newMockStore()
 
-	// Set up a nested path: know/area/sub
-	store.dirEntries["know/area/sub"] = []DirEntry{}
-
-	// Parent directory "know/area" has a regular fact file (not a subdirectory).
-	store.dirEntries["know/area"] = []DirEntry{
-		{Name: "parent-fact.md", IsDir: false},
+	// Set up a nested path: know/area/sub with a local fact file.
+	store.dirEntries["know/area/sub"] = []DirEntry{
+		{Name: "local.md", IsDir: false},
 	}
-	store.files["know/area/parent-fact.md"] = SerializeFact(Fact{
-		Path:       "know/area/parent-fact.md",
+	store.files["know/area/sub/local.md"] = SerializeFact(Fact{
+		Path:       "know/area/sub/local.md",
+		Title:      "Local Fact",
+		Body:       "Local fact, not inherited.",
+		Domain:     []string{},
+		Confidence: 0.9,
+		Sources:    1,
+		Entities:   []string{},
+		Refs:       []string{},
+	})
+
+	// Parent directory "know/area" has a regular fact file (1 level up - inherited).
+	store.dirEntries["know/area"] = []DirEntry{
+		{Name: "parent.md", IsDir: false},
+	}
+	store.files["know/area/parent.md"] = SerializeFact(Fact{
+		Path:       "know/area/parent.md",
 		Title:      "Parent Fact",
 		Body:       "Inherited from parent.",
+		Domain:     []string{},
+		Confidence: 0.9,
+		Sources:    1,
+		Entities:   []string{},
+		Refs:       []string{},
+	})
+
+	// Grandparent directory "know" has a regular fact file (2 levels up - also inherited).
+	store.dirEntries["know"] = []DirEntry{
+		{Name: "grandparent.md", IsDir: false},
+	}
+	store.files["know/grandparent.md"] = SerializeFact(Fact{
+		Path:       "know/grandparent.md",
+		Title:      "Grandparent Fact",
+		Body:       "Inherited from grandparent.",
 		Domain:     []string{},
 		Confidence: 0.9,
 		Sources:    1,
@@ -117,22 +144,48 @@ func TestExploreInheritedFacts(t *testing.T) {
 		t.Fatalf("invalid JSON: %v\n%s", err, text)
 	}
 
+	// local.md should appear as a regular child entry, not as an inherited fact.
+	children, ok := resp["children"].([]interface{})
+	if !ok {
+		t.Fatalf("children not array: %v", resp["children"])
+	}
+	if len(children) != 1 {
+		t.Fatalf("expected 1 child, got %d: %v", len(children), children)
+	}
+	child, ok := children[0].(map[string]interface{})
+	if !ok {
+		t.Fatalf("child not an object: %v", children[0])
+	}
+	if child["name"] != "local" {
+		t.Fatalf("expected child name 'local', got %q", child["name"])
+	}
+
+	// Both parent.md (1 level up) and grandparent.md (2 levels up) must appear as inherited facts.
 	inherited, ok := resp["inherited_facts"].([]interface{})
 	if !ok {
 		t.Fatalf("inherited_facts not array: %v", resp["inherited_facts"])
 	}
-	if len(inherited) != 1 {
-		t.Fatalf("expected 1 inherited fact, got %d: %v", len(inherited), inherited)
+	if len(inherited) != 2 {
+		t.Fatalf("expected 2 inherited facts, got %d: %v", len(inherited), inherited)
 	}
-	fact, ok := inherited[0].(map[string]interface{})
-	if !ok {
-		t.Fatalf("inherited fact not an object: %v", inherited[0])
+
+	// Build a map of file -> title for easier assertion.
+	inheritedByFile := map[string]string{}
+	for _, item := range inherited {
+		f, ok := item.(map[string]interface{})
+		if !ok {
+			t.Fatalf("inherited fact not an object: %v", item)
+		}
+		file, _ := f["file"].(string)
+		title, _ := f["title"].(string)
+		inheritedByFile[file] = title
 	}
-	if fact["title"] != "Parent Fact" {
-		t.Fatalf("expected inherited title 'Parent Fact', got %q", fact["title"])
+
+	if inheritedByFile["know/area/parent.md"] != "Parent Fact" {
+		t.Fatalf("expected inherited 'know/area/parent.md' with title 'Parent Fact', got: %v", inheritedByFile)
 	}
-	if fact["file"] != "know/area/parent-fact.md" {
-		t.Fatalf("expected inherited file 'know/area/parent-fact.md', got %q", fact["file"])
+	if inheritedByFile["know/grandparent.md"] != "Grandparent Fact" {
+		t.Fatalf("expected inherited 'know/grandparent.md' with title 'Grandparent Fact', got: %v", inheritedByFile)
 	}
 }
 
