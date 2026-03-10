@@ -137,6 +137,9 @@ func handleSearch(idx SearchIndex) http.HandlerFunc {
 			}
 			limit = v
 		}
+		if limit > 500 {
+			limit = 500
+		}
 
 		results, err := idx.Search(store.SearchQuery{
 			Text:          text,
@@ -267,6 +270,7 @@ func handleSynthesizeStart(synth SynthRunner) http.HandlerFunc {
 			return
 		}
 
+		r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1 MB limit
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, fmt.Sprintf("read body error: %v", err))

@@ -111,8 +111,12 @@ func serveCmd() *cobra.Command {
 
 			// 9. Graceful shutdown
 			srv := &http.Server{
-				Addr:    ":" + cfg.Port,
-				Handler: router,
+				Addr:              ":" + cfg.Port,
+				Handler:           router,
+				ReadHeaderTimeout: 10 * time.Second,
+				ReadTimeout:       30 * time.Second,
+				WriteTimeout:      0, // 0 = no limit for SSE long-poll
+				IdleTimeout:       60 * time.Second,
 			}
 
 			stop := make(chan os.Signal, 1)

@@ -52,6 +52,7 @@ func UpdateHandler(gs GitStore, idx SearchIndex) func(context.Context, mcpgo.Cal
 		if file == "" {
 			return mcpgo.NewToolResultError("file is required"), nil
 		}
+		file = normalizePath(file)
 		momentName := req.GetString("moment_name", "")
 		if momentName == "" {
 			return mcpgo.NewToolResultError("moment_name is required"), nil

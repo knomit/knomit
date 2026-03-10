@@ -33,6 +33,7 @@ func WhyHandler(gs GitStore) func(context.Context, mcpgo.CallToolRequest) (*mcpg
 		if file == "" {
 			return mcpgo.NewToolResultError("file is required"), nil
 		}
+		file = normalizePath(file)
 
 		// 3. Read and parse the fact file.
 		content, err := gs.ReadFile(file)

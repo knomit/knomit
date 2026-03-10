@@ -7,7 +7,7 @@ web:
 	cd web && npm ci && npm run build
 
 test:
-	CGO_ENABLED=1 go test -tags fts5 ./...
+	CGO_ENABLED=1 go test -tags sqlite_fts5 ./...
 
 clean:
 	rm -rf dist/ web/dist/

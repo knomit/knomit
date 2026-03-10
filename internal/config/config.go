@@ -37,7 +37,7 @@ func FromEnv() Config {
 	if model == "" {
 		model = "claude-sonnet-4-6"
 	}
-	gitRemote := os.Getenv("KNOMIT_GIT_REMOTE") != "false"
+	gitRemote := os.Getenv("KNOMIT_GIT_REMOTE") == "true"
 	return Config{
 		RepoPath:       repoPath,
 		Port:           port,

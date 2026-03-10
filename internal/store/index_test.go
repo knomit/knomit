@@ -1,4 +1,4 @@
-//go:build fts5
+//go:build sqlite_fts5
 
 package store_test
 
