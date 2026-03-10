@@ -234,6 +234,17 @@ function App({ repo, searchIndex }: { repo: GitRepo; searchIndex: SearchIndex })
               path: item.ref.path,
               commit: item.ref.commit,
             });
+          } else if (item.type === "changed-file" && item.path) {
+            const commit = selectedHistoryEntry?.commit;
+            if (commit) {
+              const targetCommit = item.changeStatus === "deleted" ? `${commit}^` : commit;
+              refCommitTarget.current = targetCommit;
+              dispatch({
+                type: "FOLLOW_REF",
+                path: item.path,
+                commit: targetCommit,
+              });
+            }
           }
         }
       } else if (input === "q") {
