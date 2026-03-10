@@ -1,4 +1,5 @@
 import type { LogEntry } from "../git.js";
+import { ONTOLOGY_DIR } from "../constants.js";
 
 export interface ChildItem {
   name: string;
@@ -63,11 +64,11 @@ export interface AppState {
 }
 
 export const initialState: AppState = {
-  currentPath: "worlds",
+  currentPath: ONTOLOGY_DIR,
   selectedIndex: 0,
   breadcrumbSelected: true,
   currentFact: null,
-  statsPath: "worlds",
+  statsPath: ONTOLOGY_DIR,
   rightPanelMode: "summary",
   searchActive: false,
   searchResults: [],
@@ -232,9 +233,9 @@ export function reducer(state: AppState, action: Action): AppState {
     }
 
     case "GO_UP": {
-      if (state.currentPath === "worlds") return state;
+      if (state.currentPath === ONTOLOGY_DIR) return state;
       const lastSlash = state.currentPath.lastIndexOf("/");
-      const parentPath = lastSlash > 0 ? state.currentPath.slice(0, lastSlash) : "worlds";
+      const parentPath = lastSlash > 0 ? state.currentPath.slice(0, lastSlash) : ONTOLOGY_DIR;
       return {
         ...state,
         currentPath: parentPath,

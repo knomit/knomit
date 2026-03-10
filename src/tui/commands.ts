@@ -1,4 +1,5 @@
 import type { GitRepo } from "../git.js";
+import { ONTOLOGY_DIR } from "../constants.js";
 import type { SearchIndex } from "../search-index.js";
 import { queryHandler } from "../tools/query.js";
 import { whyHandler } from "../tools/why.js";
@@ -100,7 +101,7 @@ export async function dispatch(
       }
 
       case "explore": {
-        const path = arg ?? "worlds";
+        const path = arg ?? ONTOLOGY_DIR;
         try {
           const result = await exploreHandler(repo, { path });
           return {

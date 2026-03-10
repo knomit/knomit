@@ -372,7 +372,7 @@ function SummaryView({ stats, summaryChildren, theme, focused, selectedIndex }: 
         .slice(0, 10)
     : [];
 
-  const worlds = summaryChildren?.filter((c) => c.type === "world") ?? [];
+  const domains = summaryChildren?.filter((c) => c.type === "world") ?? [];
   const facts = summaryChildren?.filter((c) => c.type === "fact" && c.summary) ?? [];
 
   return (
@@ -426,14 +426,14 @@ function SummaryView({ stats, summaryChildren, theme, focused, selectedIndex }: 
           })}
         </>
       )}
-      {worlds.length > 0 && (
+      {domains.length > 0 && (
         <>
           <Text> </Text>
           <Text color={theme.dim}>{glyph.dashDivider.repeat(30)}</Text>
           <Text> </Text>
           <Text color={theme.primary} bold>{glyph.bullet} Ontology</Text>
           <Text> </Text>
-          {worlds.map((w) => (
+          {domains.map((w) => (
             <Box key={w.name}>
               <Text color={theme.secondary}>  {glyph.world} </Text>
               <Text bold>{w.name}</Text>

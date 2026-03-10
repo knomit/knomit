@@ -6,6 +6,7 @@ import { parseFact, type Frontmatter } from "../facts.js";
 import { parseKnomitRef } from "./refs.js";
 import type { SummaryChild, RightSelectableItem, HistoricalData } from "./RightPanel.js";
 import { defaultTheme } from "./theme.js";
+import { ONTOLOGY_DIR } from "../constants.js";
 import { reducer, initialState, type ChildItem } from "./state.js";
 import { TopBar } from "./TopBar.js";
 import { LeftPanel } from "./LeftPanel.js";
@@ -367,7 +368,7 @@ function App({ repo, searchIndex }: { repo: GitRepo; searchIndex: SearchIndex })
         try {
           await searchIndex.rebuild(repo);
           dispatch({ type: "SET_CHILDREN", children: [] });
-          const result = await exploreHandler(repo, { path: "worlds" }, { skipSync: true });
+          const result = await exploreHandler(repo, { path: ONTOLOGY_DIR }, { skipSync: true });
           dispatch({ type: "SET_CHILDREN", children: result.children });
         } finally {
           dispatch({ type: "SET_LOADING", loading: false });
