@@ -44,7 +44,7 @@ mock.module("../llm", () => ({
   resolveProvider,
   configFromEnv,
   createAdapter: (): LLMAdapter => ({
-    complete: async (_system: string, messages: Array<{ role: string; content: string }>): Promise<string> => {
+    complete: async (_system: string, messages: Array<{ role: string; content: string }>, _onChunk?: (text: string) => void): Promise<string> => {
       capturedPrompts.push(messages[0]?.content ?? "");
       const response = llmResponses[llmCallCount] ?? llmResponses[llmResponses.length - 1] ?? "";
       llmCallCount++;
