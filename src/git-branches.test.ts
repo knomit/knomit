@@ -9,7 +9,7 @@ let dir: string;
 
 beforeAll(async () => {
   dir = await mkdtemp(join(tmpdir(), "knomit-branches-"));
-  repo = new GitRepo(dir, "test-machine");
+  repo = new GitRepo(dir, "test-agent");
   await repo.init();
 });
 
@@ -17,8 +17,8 @@ afterAll(async () => {
   await rm(dir, { recursive: true });
 });
 
-test("listBranches includes main and machine branch", async () => {
+test("listBranches includes main and agent branch", async () => {
   const branches = await repo.listBranches();
   expect(branches).toContain("main");
-  expect(branches).toContain("machine/test-machine");
+  expect(branches).toContain("agent/test-agent");
 });

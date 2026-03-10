@@ -1,14 +1,14 @@
 import { test, expect, describe, it } from "bun:test";
 import { initialState, reducer, type AppState, type Action } from "./state";
 
-test("initial state starts at worlds root with breadcrumb selected", () => {
-  expect(initialState.currentPath).toBe("worlds");
+test("initial state starts at know root with breadcrumb selected", () => {
+  expect(initialState.currentPath).toBe("know");
   expect(initialState.selectedIndex).toBe(0);
   expect(initialState.breadcrumbSelected).toBe(true);
   expect(initialState.focusZone).toBe("left");
   expect(initialState.rightPanelMode).toBe("summary");
   expect(initialState.searchActive).toBe(false);
-  expect(initialState.statsPath).toBe("worlds");
+  expect(initialState.statsPath).toBe("know");
 });
 
 test("SET_CHILDREN populates left panel items with breadcrumb selected", () => {
@@ -22,7 +22,7 @@ test("SET_CHILDREN populates left panel items with breadcrumb selected", () => {
   expect(s.children.length).toBe(2);
   expect(s.selectedIndex).toBe(0);
   expect(s.breadcrumbSelected).toBe(true);
-  expect(s.statsPath).toBe("worlds");
+  expect(s.statsPath).toBe("know");
 });
 
 test("NAVIGATE_DOWN from breadcrumb moves to first item", () => {
@@ -37,7 +37,7 @@ test("NAVIGATE_DOWN from breadcrumb moves to first item", () => {
   s = reducer(s, { type: "NAVIGATE_DOWN" });
   expect(s.breadcrumbSelected).toBe(false);
   expect(s.selectedIndex).toBe(0);
-  expect(s.statsPath).toBe("worlds/a");
+  expect(s.statsPath).toBe("know/a");
 });
 
 test("NAVIGATE_DOWN increments selectedIndex within bounds", () => {
@@ -67,7 +67,7 @@ test("NAVIGATE_UP from first item returns to breadcrumb", () => {
   expect(s.breadcrumbSelected).toBe(false);
   s = reducer(s, { type: "NAVIGATE_UP" }); // index 0 -> breadcrumb
   expect(s.breadcrumbSelected).toBe(true);
-  expect(s.statsPath).toBe("worlds");
+  expect(s.statsPath).toBe("know");
   expect(s.rightPanelMode).toBe("summary");
 });
 
@@ -83,12 +83,12 @@ test("OPEN_ITEM on world updates currentPath and resets to breadcrumb", () => {
   });
   s = reducer(s, { type: "NAVIGATE_DOWN" }); // breadcrumb -> index 0
   s = reducer(s, { type: "OPEN_ITEM" });
-  expect(s.currentPath).toBe("worlds/physics");
+  expect(s.currentPath).toBe("know/physics");
   expect(s.selectedIndex).toBe(0);
   expect(s.breadcrumbSelected).toBe(true);
   expect(s.currentFact).toBeNull();
   expect(s.rightPanelMode).toBe("summary");
-  expect(s.statsPath).toBe("worlds/physics");
+  expect(s.statsPath).toBe("know/physics");
 });
 
 test("OPEN_ITEM on fact sets currentFact and switches right panel", () => {
@@ -98,28 +98,28 @@ test("OPEN_ITEM on fact sets currentFact and switches right panel", () => {
   });
   s = reducer(s, { type: "NAVIGATE_DOWN" }); // breadcrumb -> index 0
   s = reducer(s, { type: "OPEN_ITEM" });
-  expect(s.currentFact).toBe("worlds/gravity.md");
+  expect(s.currentFact).toBe("know/gravity.md");
   expect(s.rightPanelMode).toBe("fact");
 });
 
 test("OPEN_ITEM on breadcrumb does nothing (use GO_UP or left arrow)", () => {
   const s = reducer(initialState, { type: "OPEN_ITEM" });
-  expect(s.currentPath).toBe("worlds");
+  expect(s.currentPath).toBe("know");
 });
 
 test("GO_UP navigates to parent directory", () => {
-  let s: AppState = { ...initialState, currentPath: "worlds/physics/mechanics", statsPath: "worlds/physics/mechanics" };
+  let s: AppState = { ...initialState, currentPath: "know/physics/mechanics", statsPath: "know/physics/mechanics" };
   s = reducer(s, { type: "GO_UP" });
-  expect(s.currentPath).toBe("worlds/physics");
+  expect(s.currentPath).toBe("know/physics");
   expect(s.selectedIndex).toBe(0);
   expect(s.breadcrumbSelected).toBe(true);
   expect(s.currentFact).toBeNull();
-  expect(s.statsPath).toBe("worlds/physics");
+  expect(s.statsPath).toBe("know/physics");
 });
 
 test("GO_UP at root stays at root", () => {
   const s = reducer(initialState, { type: "GO_UP" });
-  expect(s.currentPath).toBe("worlds");
+  expect(s.currentPath).toBe("know");
 });
 
 test("SET_FOCUS changes focus zone", () => {
@@ -128,7 +128,7 @@ test("SET_FOCUS changes focus zone", () => {
 });
 
 test("TOGGLE_HISTORY switches between fact and history modes", () => {
-  let s: AppState = { ...initialState, rightPanelMode: "fact", currentFact: "worlds/x.md" };
+  let s: AppState = { ...initialState, rightPanelMode: "fact", currentFact: "know/x.md" };
   s = reducer(s, { type: "TOGGLE_HISTORY" });
   expect(s.rightPanelMode).toBe("history");
   s = reducer(s, { type: "TOGGLE_HISTORY" });
@@ -145,12 +145,12 @@ test("TOGGLE_HISTORY works without a fact selected (shows path history)", () => 
 test("SET_SEARCH_RESULTS activates search mode and selects first fact", () => {
   const s = reducer(initialState, {
     type: "SET_SEARCH_RESULTS",
-    results: [{ file: "worlds/x.md", title: "X", body: "body", score: 100 }],
+    results: [{ file: "know/x.md", title: "X", body: "body", score: 100 }],
   });
   expect(s.searchActive).toBe(true);
   expect(s.searchResults.length).toBe(1);
   expect(s.selectedIndex).toBe(0);
-  expect(s.currentFact).toBe("worlds/x.md");
+  expect(s.currentFact).toBe("know/x.md");
   expect(s.rightPanelMode).toBe("fact");
 });
 
@@ -158,18 +158,18 @@ test("NAVIGATE_DOWN in search auto-selects fact", () => {
   let s = reducer(initialState, {
     type: "SET_SEARCH_RESULTS",
     results: [
-      { file: "worlds/a.md", title: "A", body: "a", score: 100 },
-      { file: "worlds/b.md", title: "B", body: "b", score: 80 },
+      { file: "know/a.md", title: "A", body: "a", score: 100 },
+      { file: "know/b.md", title: "B", body: "b", score: 80 },
     ],
   });
-  expect(s.currentFact).toBe("worlds/a.md");
+  expect(s.currentFact).toBe("know/a.md");
   s = reducer(s, { type: "NAVIGATE_DOWN" });
   expect(s.selectedIndex).toBe(1);
-  expect(s.currentFact).toBe("worlds/b.md");
+  expect(s.currentFact).toBe("know/b.md");
   expect(s.rightPanelMode).toBe("fact");
 });
 
-test("NAVIGATE_DOWN in explorer auto-selects facts but shows stats for worlds", () => {
+test("NAVIGATE_DOWN in explorer auto-selects facts but shows stats for domains", () => {
   let s = reducer(initialState, {
     type: "SET_CHILDREN",
     children: [
@@ -181,11 +181,11 @@ test("NAVIGATE_DOWN in explorer auto-selects facts but shows stats for worlds", 
   s = reducer(s, { type: "NAVIGATE_DOWN" }); // breadcrumb -> index 0 (world)
   expect(s.selectedIndex).toBe(0);
   expect(s.currentFact).toBeNull();
-  expect(s.statsPath).toBe("worlds/physics");
+  expect(s.statsPath).toBe("know/physics");
   expect(s.rightPanelMode).toBe("summary");
   s = reducer(s, { type: "NAVIGATE_DOWN" }); // index 0 -> index 1 (fact)
   expect(s.selectedIndex).toBe(1);
-  expect(s.currentFact).toBe("worlds/note.md");
+  expect(s.currentFact).toBe("know/note.md");
   expect(s.rightPanelMode).toBe("fact");
 });
 
@@ -193,7 +193,7 @@ test("NAVIGATE_DOWN in explorer auto-selects facts but shows stats for worlds", 
 test("CLEAR_SEARCH returns to explorer mode", () => {
   let s = reducer(initialState, {
     type: "SET_SEARCH_RESULTS",
-    results: [{ file: "worlds/x.md", title: "X", body: "body", score: 100 }],
+    results: [{ file: "know/x.md", title: "X", body: "body", score: 100 }],
   });
   s = reducer(s, { type: "CLEAR_SEARCH" });
   expect(s.searchActive).toBe(false);
@@ -212,13 +212,13 @@ test("CLEAR_SEARCH restores previous navigation state", () => {
   s = reducer(s, { type: "NAVIGATE_DOWN" }); // select physics
   s = reducer(s, { type: "NAVIGATE_DOWN" }); // select note.md
   expect(s.selectedIndex).toBe(1);
-  expect(s.currentFact).toBe("worlds/note.md");
+  expect(s.currentFact).toBe("know/note.md");
   expect(s.rightPanelMode).toBe("fact");
 
   // Search
   s = reducer(s, {
     type: "SET_SEARCH_RESULTS",
-    results: [{ file: "worlds/x.md", title: "X", body: "body", score: 100 }],
+    results: [{ file: "know/x.md", title: "X", body: "body", score: 100 }],
   });
   expect(s.searchActive).toBe(true);
   expect(s.selectedIndex).toBe(0);
@@ -228,32 +228,32 @@ test("CLEAR_SEARCH restores previous navigation state", () => {
   s = reducer(s, { type: "CLEAR_SEARCH" });
   expect(s.searchActive).toBe(false);
   expect(s.selectedIndex).toBe(1);
-  expect(s.currentFact).toBe("worlds/note.md");
+  expect(s.currentFact).toBe("know/note.md");
   expect(s.rightPanelMode).toBe("fact");
   expect(s.savedNavState).toBeNull();
 });
 
 describe("ref navigation", () => {
   it("FOLLOW_REF pushes state and enters history mode", () => {
-    let s = { ...initialState, currentFact: "worlds/distilled/overview.md", rightPanelMode: "fact" as const };
-    s = reducer(s, { type: "FOLLOW_REF", path: "worlds/people/alice/likes-rock.md", commit: "abc1234" });
+    let s = { ...initialState, currentFact: "know/distilled/overview.md", rightPanelMode: "fact" as const };
+    s = reducer(s, { type: "FOLLOW_REF", path: "know/people/alice/likes-rock.md", commit: "abc1234" });
 
     expect(s.navStack).toHaveLength(1);
-    expect(s.navStack[0].currentFact).toBe("worlds/distilled/overview.md");
+    expect(s.navStack[0].currentFact).toBe("know/distilled/overview.md");
     expect(s.navStack[0].rightPanelMode).toBe("fact");
     expect(s.historyMode).toBe(true);
-    expect(s.historyTarget).toBe("worlds/people/alice/likes-rock.md");
-    expect(s.currentFact).toBe("worlds/people/alice/likes-rock.md");
+    expect(s.historyTarget).toBe("know/people/alice/likes-rock.md");
+    expect(s.currentFact).toBe("know/people/alice/likes-rock.md");
     expect(s.rightPanelMode).toBe("history");
   });
 
   it("NAV_BACK restores previous state", () => {
-    let s = { ...initialState, currentFact: "worlds/distilled/overview.md", rightPanelMode: "fact" as const };
-    s = reducer(s, { type: "FOLLOW_REF", path: "worlds/people/alice/likes-rock.md", commit: "abc1234" });
+    let s = { ...initialState, currentFact: "know/distilled/overview.md", rightPanelMode: "fact" as const };
+    s = reducer(s, { type: "FOLLOW_REF", path: "know/people/alice/likes-rock.md", commit: "abc1234" });
     s = reducer(s, { type: "NAV_BACK" });
 
     expect(s.navStack).toHaveLength(0);
-    expect(s.currentFact).toBe("worlds/distilled/overview.md");
+    expect(s.currentFact).toBe("know/distilled/overview.md");
     expect(s.rightPanelMode).toBe("fact");
     expect(s.historyMode).toBe(false);
   });
@@ -264,24 +264,24 @@ describe("ref navigation", () => {
   });
 
   it("deep stack: follow 3 refs, back 3 times", () => {
-    let s = { ...initialState, currentFact: "worlds/a.md", rightPanelMode: "fact" as const };
-    s = reducer(s, { type: "FOLLOW_REF", path: "worlds/b.md", commit: "aaa" });
-    s = reducer(s, { type: "FOLLOW_REF", path: "worlds/c.md", commit: "bbb" });
-    s = reducer(s, { type: "FOLLOW_REF", path: "worlds/d.md", commit: "ccc" });
+    let s = { ...initialState, currentFact: "know/a.md", rightPanelMode: "fact" as const };
+    s = reducer(s, { type: "FOLLOW_REF", path: "know/b.md", commit: "aaa" });
+    s = reducer(s, { type: "FOLLOW_REF", path: "know/c.md", commit: "bbb" });
+    s = reducer(s, { type: "FOLLOW_REF", path: "know/d.md", commit: "ccc" });
 
     expect(s.navStack).toHaveLength(3);
-    expect(s.currentFact).toBe("worlds/d.md");
+    expect(s.currentFact).toBe("know/d.md");
 
     s = reducer(s, { type: "NAV_BACK" });
-    expect(s.currentFact).toBe("worlds/c.md");
+    expect(s.currentFact).toBe("know/c.md");
     expect(s.navStack).toHaveLength(2);
 
     s = reducer(s, { type: "NAV_BACK" });
-    expect(s.currentFact).toBe("worlds/b.md");
+    expect(s.currentFact).toBe("know/b.md");
     expect(s.navStack).toHaveLength(1);
 
     s = reducer(s, { type: "NAV_BACK" });
-    expect(s.currentFact).toBe("worlds/a.md");
+    expect(s.currentFact).toBe("know/a.md");
     expect(s.navStack).toHaveLength(0);
     expect(s.historyMode).toBe(false);
   });
@@ -290,11 +290,11 @@ describe("ref navigation", () => {
     let s = {
       ...initialState,
       searchActive: true,
-      searchResults: [{ file: "worlds/x.md", title: "X", body: "", score: 1 }],
-      currentFact: "worlds/x.md",
+      searchResults: [{ file: "know/x.md", title: "X", body: "", score: 1 }],
+      currentFact: "know/x.md",
       rightPanelMode: "fact" as const,
     };
-    s = reducer(s, { type: "FOLLOW_REF", path: "worlds/y.md", commit: "aaa" });
+    s = reducer(s, { type: "FOLLOW_REF", path: "know/y.md", commit: "aaa" });
 
     expect(s.navStack[0].searchActive).toBe(true);
     expect(s.navStack[0].searchResults).toHaveLength(1);
@@ -308,36 +308,36 @@ describe("ref navigation", () => {
     let s = {
       ...initialState,
       historyMode: true,
-      historyTarget: "worlds/people",
+      historyTarget: "know/people",
       historySelectedIndex: 2,
       rightPanelMode: "history" as const,
       currentFact: null,
     };
-    s = reducer(s, { type: "FOLLOW_REF", path: "worlds/people/alice/likes-rock.md", commit: "abc1234" });
+    s = reducer(s, { type: "FOLLOW_REF", path: "know/people/alice/likes-rock.md", commit: "abc1234" });
 
     expect(s.navStack).toHaveLength(1);
     expect(s.navStack[0].historyMode).toBe(true);
-    expect(s.navStack[0].historyTarget).toBe("worlds/people");
+    expect(s.navStack[0].historyTarget).toBe("know/people");
     expect(s.navStack[0].historySelectedIndex).toBe(2);
     expect(s.navStack[0].rightPanelMode).toBe("history");
-    expect(s.historyTarget).toBe("worlds/people/alice/likes-rock.md");
-    expect(s.currentFact).toBe("worlds/people/alice/likes-rock.md");
+    expect(s.historyTarget).toBe("know/people/alice/likes-rock.md");
+    expect(s.currentFact).toBe("know/people/alice/likes-rock.md");
   });
 
   it("NAV_BACK to history mode restores directory history", () => {
     let s = {
       ...initialState,
       historyMode: true,
-      historyTarget: "worlds/people",
+      historyTarget: "know/people",
       historySelectedIndex: 2,
       rightPanelMode: "history" as const,
     };
-    s = reducer(s, { type: "FOLLOW_REF", path: "worlds/people/alice/likes-rock.md", commit: "abc1234" });
+    s = reducer(s, { type: "FOLLOW_REF", path: "know/people/alice/likes-rock.md", commit: "abc1234" });
     s = reducer(s, { type: "NAV_BACK" });
 
     expect(s.navStack).toHaveLength(0);
     expect(s.historyMode).toBe(true);
-    expect(s.historyTarget).toBe("worlds/people");
+    expect(s.historyTarget).toBe("know/people");
     expect(s.historySelectedIndex).toBe(2);
     expect(s.rightPanelMode).toBe("history");
   });
@@ -349,18 +349,18 @@ describe("ref navigation", () => {
     // Fix: "h" with navStack should NAV_BACK instead.
     let s = {
       ...initialState,
-      currentFact: "worlds/source-fact.md",
+      currentFact: "know/source-fact.md",
       rightPanelMode: "fact" as const,
     };
     // Follow ref into history for a file
-    s = reducer(s, { type: "FOLLOW_REF", path: "worlds/old-file.md", commit: "abc1234" });
+    s = reducer(s, { type: "FOLLOW_REF", path: "know/old-file.md", commit: "abc1234" });
     expect(s.historyMode).toBe(true);
     expect(s.navStack).toHaveLength(1);
 
     // NAV_BACK (what "h" should dispatch) restores the source fact
     s = reducer(s, { type: "NAV_BACK" });
     expect(s.historyMode).toBe(false);
-    expect(s.currentFact).toBe("worlds/source-fact.md");
+    expect(s.currentFact).toBe("know/source-fact.md");
     expect(s.rightPanelMode).toBe("fact");
     expect(s.navStack).toHaveLength(0);
   });

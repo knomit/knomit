@@ -67,7 +67,7 @@ beforeEach(async () => {
   capturedPrompts = [];
 
   repoPath = await mkdtemp(join(tmpdir(), "knomit-synth-e2e-"));
-  repo = new GitRepo(repoPath, "test-machine");
+  repo = new GitRepo(repoPath, "test-agent");
   await repo.init();
   cacheDir = join(repoPath, ".cache");
   await mkdir(cacheDir, { recursive: true });
@@ -103,7 +103,7 @@ afterEach(async () => {
 async function seedSecurityFacts() {
   for (let i = 1; i <= 5; i++) {
     await commitFact(repo, {
-      path: `worlds/security/cve-${i}`,
+      path: `know/security/cve-${i}`,
       title: `CVE-2024-00${i} in libfoo`,
       body: `Vulnerability ${i} description for libfoo.`,
       domain: ["security"],
@@ -126,11 +126,11 @@ describe("synthesize prune", () => {
 
     llmResponses = [JSON.stringify({
       decisions: [
-        { file: "worlds/security/cve-1.md", action: "forget", reason: "Patched" },
-        { file: "worlds/security/cve-2.md", action: "forget", reason: "Duplicate" },
-        { file: "worlds/security/cve-3.md", action: "keep", reason: "Still active" },
-        { file: "worlds/security/cve-4.md", action: "keep", reason: "Under investigation" },
-        { file: "worlds/security/cve-5.md", action: "keep", reason: "Critical" },
+        { file: "know/security/cve-1.md", action: "forget", reason: "Patched" },
+        { file: "know/security/cve-2.md", action: "forget", reason: "Duplicate" },
+        { file: "know/security/cve-3.md", action: "keep", reason: "Still active" },
+        { file: "know/security/cve-4.md", action: "keep", reason: "Under investigation" },
+        { file: "know/security/cve-5.md", action: "keep", reason: "Critical" },
       ],
       merges: [],
       summary: "Pruned 2 resolved CVEs",
@@ -150,13 +150,13 @@ describe("synthesize prune", () => {
     expect(result.stepSummaries[0]).toContain("forgotten");
 
     // Verify deletions
-    expect(await repo.fileExists("worlds/security/cve-1.md")).toBe(false);
-    expect(await repo.fileExists("worlds/security/cve-2.md")).toBe(false);
+    expect(await repo.fileExists("know/security/cve-1.md")).toBe(false);
+    expect(await repo.fileExists("know/security/cve-2.md")).toBe(false);
 
     // Verify keeps
-    expect(await repo.fileExists("worlds/security/cve-3.md")).toBe(true);
-    expect(await repo.fileExists("worlds/security/cve-4.md")).toBe(true);
-    expect(await repo.fileExists("worlds/security/cve-5.md")).toBe(true);
+    expect(await repo.fileExists("know/security/cve-3.md")).toBe(true);
+    expect(await repo.fileExists("know/security/cve-4.md")).toBe(true);
+    expect(await repo.fileExists("know/security/cve-5.md")).toBe(true);
   });
 
   it("updates confidence on 'update' decisions", async () => {
@@ -164,11 +164,11 @@ describe("synthesize prune", () => {
 
     llmResponses = [JSON.stringify({
       decisions: [
-        { file: "worlds/security/cve-1.md", action: "update", confidence: 0.3, reason: "Likely fixed" },
-        { file: "worlds/security/cve-2.md", action: "keep", reason: "Still valid" },
-        { file: "worlds/security/cve-3.md", action: "keep", reason: "Active" },
-        { file: "worlds/security/cve-4.md", action: "keep", reason: "Active" },
-        { file: "worlds/security/cve-5.md", action: "keep", reason: "Active" },
+        { file: "know/security/cve-1.md", action: "update", confidence: 0.3, reason: "Likely fixed" },
+        { file: "know/security/cve-2.md", action: "keep", reason: "Still valid" },
+        { file: "know/security/cve-3.md", action: "keep", reason: "Active" },
+        { file: "know/security/cve-4.md", action: "keep", reason: "Active" },
+        { file: "know/security/cve-5.md", action: "keep", reason: "Active" },
       ],
       merges: [],
       summary: "Updated 1 CVE confidence",
@@ -185,7 +185,7 @@ describe("synthesize prune", () => {
     await synthesize(repo, searchIndex, recipe);
 
     const { parseFact } = await import("../facts");
-    const content = await repo.readFile("worlds/security/cve-1.md");
+    const content = await repo.readFile("know/security/cve-1.md");
     const parsed = parseFact(content);
     expect(parsed.frontmatter.confidence).toBe(0.3);
   });
@@ -195,22 +195,22 @@ describe("synthesize prune", () => {
 
     llmResponses = [JSON.stringify({
       decisions: [
-        { file: "worlds/security/cve-1.md", action: "keep", reason: "Will merge" },
-        { file: "worlds/security/cve-2.md", action: "keep", reason: "Will merge" },
-        { file: "worlds/security/cve-3.md", action: "keep", reason: "Active" },
-        { file: "worlds/security/cve-4.md", action: "keep", reason: "Active" },
-        { file: "worlds/security/cve-5.md", action: "keep", reason: "Active" },
+        { file: "know/security/cve-1.md", action: "keep", reason: "Will merge" },
+        { file: "know/security/cve-2.md", action: "keep", reason: "Will merge" },
+        { file: "know/security/cve-3.md", action: "keep", reason: "Active" },
+        { file: "know/security/cve-4.md", action: "keep", reason: "Active" },
+        { file: "know/security/cve-5.md", action: "keep", reason: "Active" },
       ],
       merges: [{
-        sources: ["worlds/security/cve-1.md", "worlds/security/cve-2.md"],
+        sources: ["know/security/cve-1.md", "know/security/cve-2.md"],
         merged: {
-          path: "worlds/security/libfoo-overflow",
+          path: "know/security/libfoo-overflow",
           title: "Multiple buffer overflows in libfoo",
           body: "Combined CVE-1 and CVE-2.",
           domain: ["security"],
           confidence: 0.85,
           entities: ["libfoo"],
-          refs: ["worlds/security/cve-1.md", "worlds/security/cve-2.md"],
+          refs: ["know/security/cve-1.md", "know/security/cve-2.md"],
         },
       }],
       summary: "Merged 2 CVEs into 1",
@@ -227,14 +227,14 @@ describe("synthesize prune", () => {
     await synthesize(repo, searchIndex, recipe);
 
     // Merged fact exists
-    expect(await repo.fileExists("worlds/security/libfoo-overflow.md")).toBe(true);
+    expect(await repo.fileExists("know/security/libfoo-overflow.md")).toBe(true);
 
     // Source facts deleted (merge sources are removed)
-    expect(await repo.fileExists("worlds/security/cve-1.md")).toBe(false);
-    expect(await repo.fileExists("worlds/security/cve-2.md")).toBe(false);
+    expect(await repo.fileExists("know/security/cve-1.md")).toBe(false);
+    expect(await repo.fileExists("know/security/cve-2.md")).toBe(false);
 
     // Other facts untouched
-    expect(await repo.fileExists("worlds/security/cve-3.md")).toBe(true);
+    expect(await repo.fileExists("know/security/cve-3.md")).toBe(true);
   });
 });
 
@@ -248,15 +248,15 @@ describe("synthesize distill", () => {
 
     llmResponses = [JSON.stringify({
       synthesize: [{
-        path: "worlds/security/libfoo-pattern",
+        path: "know/security/libfoo-pattern",
         title: "libfoo has recurring vulnerabilities",
         body: "Pattern of buffer overflows across 5 CVEs in libfoo.",
         domain: ["security"],
         confidence: 0.9,
         entities: ["libfoo"],
-        refs: ["worlds/security/cve-1.md", "worlds/security/cve-2.md"],
+        refs: ["know/security/cve-1.md", "know/security/cve-2.md"],
       }],
-      forget: ["worlds/security/cve-1.md", "worlds/security/cve-2.md"],
+      forget: ["know/security/cve-1.md", "know/security/cve-2.md"],
       summary: "Consolidated 2 CVEs into 1 pattern",
     })];
 
@@ -273,14 +273,14 @@ describe("synthesize distill", () => {
     expect(result.stepSummaries[0]).toContain("learned");
 
     // Synthesized fact exists
-    expect(await repo.fileExists("worlds/security/libfoo-pattern.md")).toBe(true);
+    expect(await repo.fileExists("know/security/libfoo-pattern.md")).toBe(true);
 
     // Subsumed facts deleted
-    expect(await repo.fileExists("worlds/security/cve-1.md")).toBe(false);
-    expect(await repo.fileExists("worlds/security/cve-2.md")).toBe(false);
+    expect(await repo.fileExists("know/security/cve-1.md")).toBe(false);
+    expect(await repo.fileExists("know/security/cve-2.md")).toBe(false);
 
     // Others untouched
-    expect(await repo.fileExists("worlds/security/cve-3.md")).toBe(true);
+    expect(await repo.fileExists("know/security/cve-3.md")).toBe(true);
   });
 
   it("keeps all facts when forget list is empty", async () => {
@@ -288,7 +288,7 @@ describe("synthesize distill", () => {
 
     llmResponses = [JSON.stringify({
       synthesize: [{
-        path: "worlds/security/overview",
+        path: "know/security/overview",
         title: "Security overview",
         body: "5 CVEs tracked for libfoo.",
         domain: ["security"],
@@ -312,10 +312,10 @@ describe("synthesize distill", () => {
 
     // All originals still exist
     for (let i = 1; i <= 5; i++) {
-      expect(await repo.fileExists(`worlds/security/cve-${i}.md`)).toBe(true);
+      expect(await repo.fileExists(`know/security/cve-${i}.md`)).toBe(true);
     }
     // New fact also exists
-    expect(await repo.fileExists("worlds/security/overview.md")).toBe(true);
+    expect(await repo.fileExists("know/security/overview.md")).toBe(true);
   });
 });
 
@@ -331,11 +331,11 @@ describe("synthesize multi-step", () => {
       // Step 1: Prune — delete cve-1
       JSON.stringify({
         decisions: [
-          { file: "worlds/security/cve-1.md", action: "forget", reason: "stale" },
-          { file: "worlds/security/cve-2.md", action: "keep", reason: "active" },
-          { file: "worlds/security/cve-3.md", action: "keep", reason: "active" },
-          { file: "worlds/security/cve-4.md", action: "keep", reason: "active" },
-          { file: "worlds/security/cve-5.md", action: "keep", reason: "active" },
+          { file: "know/security/cve-1.md", action: "forget", reason: "stale" },
+          { file: "know/security/cve-2.md", action: "keep", reason: "active" },
+          { file: "know/security/cve-3.md", action: "keep", reason: "active" },
+          { file: "know/security/cve-4.md", action: "keep", reason: "active" },
+          { file: "know/security/cve-5.md", action: "keep", reason: "active" },
         ],
         merges: [],
         summary: "Pruned 1",
@@ -343,7 +343,7 @@ describe("synthesize multi-step", () => {
       // Step 2: Distill — synthesize from remaining
       JSON.stringify({
         synthesize: [{
-          path: "worlds/security/active-summary",
+          path: "know/security/active-summary",
           title: "4 active CVEs in libfoo",
           body: "Summary of remaining vulnerabilities.",
           domain: ["security"],
@@ -373,11 +373,11 @@ describe("synthesize multi-step", () => {
     expect(llmCallCount).toBe(2);
 
     // cve-1 pruned
-    expect(await repo.fileExists("worlds/security/cve-1.md")).toBe(false);
+    expect(await repo.fileExists("know/security/cve-1.md")).toBe(false);
     // Summary created
-    expect(await repo.fileExists("worlds/security/active-summary.md")).toBe(true);
+    expect(await repo.fileExists("know/security/active-summary.md")).toBe(true);
     // Others still exist
-    expect(await repo.fileExists("worlds/security/cve-2.md")).toBe(true);
+    expect(await repo.fileExists("know/security/cve-2.md")).toBe(true);
   });
 });
 
@@ -391,11 +391,11 @@ describe("synthesize branching", () => {
 
     llmResponses = [JSON.stringify({
       decisions: [
-        { file: "worlds/security/cve-1.md", action: "keep", reason: "active" },
-        { file: "worlds/security/cve-2.md", action: "keep", reason: "active" },
-        { file: "worlds/security/cve-3.md", action: "keep", reason: "active" },
-        { file: "worlds/security/cve-4.md", action: "keep", reason: "active" },
-        { file: "worlds/security/cve-5.md", action: "keep", reason: "active" },
+        { file: "know/security/cve-1.md", action: "keep", reason: "active" },
+        { file: "know/security/cve-2.md", action: "keep", reason: "active" },
+        { file: "know/security/cve-3.md", action: "keep", reason: "active" },
+        { file: "know/security/cve-4.md", action: "keep", reason: "active" },
+        { file: "know/security/cve-5.md", action: "keep", reason: "active" },
       ],
       merges: [],
       summary: "All current",
@@ -411,9 +411,9 @@ describe("synthesize branching", () => {
 
     await synthesize(repo, searchIndex, recipe);
 
-    // Should be on original machine branch
+    // Should be on original agent branch
     const branch = await repo.currentBranch();
-    expect(branch).toBe("machine/test-machine");
+    expect(branch).toBe("agent/test-agent");
 
     // Synthesis branch should be deleted
     const branches = await repo.listBranches();
@@ -425,7 +425,7 @@ describe("synthesize branching", () => {
 
     llmResponses = [JSON.stringify({
       synthesize: [{
-        path: "worlds/security/insight",
+        path: "know/security/insight",
         title: "Security insight",
         body: "Interesting pattern.",
         domain: ["security"],
@@ -451,7 +451,7 @@ describe("synthesize branching", () => {
 
     // Should return to original branch
     const branch = await repo.currentBranch();
-    expect(branch).toBe("machine/test-machine");
+    expect(branch).toBe("agent/test-agent");
 
     // Synthesis branch should still exist
     const branches = await repo.listBranches();
@@ -469,11 +469,11 @@ describe("synthesis log", () => {
 
     llmResponses = [JSON.stringify({
       decisions: [
-        { file: "worlds/security/cve-1.md", action: "keep", reason: "active" },
-        { file: "worlds/security/cve-2.md", action: "keep", reason: "active" },
-        { file: "worlds/security/cve-3.md", action: "keep", reason: "active" },
-        { file: "worlds/security/cve-4.md", action: "keep", reason: "active" },
-        { file: "worlds/security/cve-5.md", action: "keep", reason: "active" },
+        { file: "know/security/cve-1.md", action: "keep", reason: "active" },
+        { file: "know/security/cve-2.md", action: "keep", reason: "active" },
+        { file: "know/security/cve-3.md", action: "keep", reason: "active" },
+        { file: "know/security/cve-4.md", action: "keep", reason: "active" },
+        { file: "know/security/cve-5.md", action: "keep", reason: "active" },
       ],
       merges: [],
       summary: "All current",
@@ -506,11 +506,11 @@ describe("synthesize progress events", () => {
 
     llmResponses = [JSON.stringify({
       decisions: [
-        { file: "worlds/security/cve-1.md", action: "keep", reason: "active" },
-        { file: "worlds/security/cve-2.md", action: "keep", reason: "active" },
-        { file: "worlds/security/cve-3.md", action: "keep", reason: "active" },
-        { file: "worlds/security/cve-4.md", action: "keep", reason: "active" },
-        { file: "worlds/security/cve-5.md", action: "keep", reason: "active" },
+        { file: "know/security/cve-1.md", action: "keep", reason: "active" },
+        { file: "know/security/cve-2.md", action: "keep", reason: "active" },
+        { file: "know/security/cve-3.md", action: "keep", reason: "active" },
+        { file: "know/security/cve-4.md", action: "keep", reason: "active" },
+        { file: "know/security/cve-5.md", action: "keep", reason: "active" },
       ],
       merges: [],
       summary: "All current",

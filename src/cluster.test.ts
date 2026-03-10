@@ -87,7 +87,7 @@ describe("clusterFacts", () => {
 
     // Group A: high values in first half of vector
     for (let i = 0; i < n; i++) {
-      const path = `worlds/group-a/f${i}.md`;
+      const path = `know/group-a/f${i}.md`;
       facts.push(makeFact(path, ["security"], ["alice"]));
       const vec = new Float32Array(384);
       for (let j = 0; j < 192; j++) vec[j] = 0.8 + Math.random() * 0.1;
@@ -96,7 +96,7 @@ describe("clusterFacts", () => {
     }
     // Group B: high values in second half of vector
     for (let i = 0; i < n; i++) {
-      const path = `worlds/group-b/f${i}.md`;
+      const path = `know/group-b/f${i}.md`;
       facts.push(makeFact(path, ["cooking"], ["bob"]));
       const vec = new Float32Array(384);
       for (let j = 0; j < 192; j++) vec[j] = Math.random() * 0.1;

@@ -40,7 +40,7 @@ describe("SearchIndex init", () => {
 describe("SearchIndex upsert/remove", () => {
   it("upserts a fact into the index", async () => {
     await index.init();
-    index.upsert("worlds/test/fact.md", {
+    index.upsert("know/test/fact.md", {
       title: "Test fact",
       body: "This is a test body.",
       domain: ["testing"],
@@ -51,7 +51,7 @@ describe("SearchIndex upsert/remove", () => {
       commitHash: "abc123",
     });
 
-    const row = index.getFact("worlds/test/fact.md");
+    const row = index.getFact("know/test/fact.md");
     expect(row).not.toBeNull();
     expect(row!.title).toBe("Test fact");
     expect(row!.confidence).toBe(0.9);
@@ -59,7 +59,7 @@ describe("SearchIndex upsert/remove", () => {
 
   it("updates an existing fact on re-upsert", async () => {
     await index.init();
-    index.upsert("worlds/test/fact.md", {
+    index.upsert("know/test/fact.md", {
       title: "Original",
       body: "Body.",
       domain: ["a"],
@@ -69,7 +69,7 @@ describe("SearchIndex upsert/remove", () => {
       refs: [],
       commitHash: "aaa",
     });
-    index.upsert("worlds/test/fact.md", {
+    index.upsert("know/test/fact.md", {
       title: "Updated",
       body: "New body.",
       domain: ["b"],
@@ -80,14 +80,14 @@ describe("SearchIndex upsert/remove", () => {
       commitHash: "bbb",
     });
 
-    const row = index.getFact("worlds/test/fact.md");
+    const row = index.getFact("know/test/fact.md");
     expect(row!.title).toBe("Updated");
     expect(row!.confidence).toBe(0.8);
   });
 
   it("removes a fact from the index", async () => {
     await index.init();
-    index.upsert("worlds/test/fact.md", {
+    index.upsert("know/test/fact.md", {
       title: "To remove",
       body: "Body.",
       domain: ["a"],
@@ -97,9 +97,9 @@ describe("SearchIndex upsert/remove", () => {
       refs: [],
       commitHash: "aaa",
     });
-    index.remove("worlds/test/fact.md");
+    index.remove("know/test/fact.md");
 
-    const row = index.getFact("worlds/test/fact.md");
+    const row = index.getFact("know/test/fact.md");
     expect(row).toBeNull();
   });
 });
@@ -107,7 +107,7 @@ describe("SearchIndex upsert/remove", () => {
 describe("SearchIndex FTS search", () => {
   beforeEach(async () => {
     await index.init();
-    index.upsert("worlds/people/alice.md", {
+    index.upsert("know/people/alice.md", {
       title: "Alice likes rock music",
       body: "Strong preference for rock and alternative genres.",
       domain: ["personal", "music"],
@@ -117,7 +117,7 @@ describe("SearchIndex FTS search", () => {
       refs: [],
       commitHash: "aaa",
     });
-    index.upsert("worlds/people/bob.md", {
+    index.upsert("know/people/bob.md", {
       title: "Bob likes jazz",
       body: "Bob listens to jazz occasionally.",
       domain: ["personal", "music"],
@@ -127,7 +127,7 @@ describe("SearchIndex FTS search", () => {
       refs: [],
       commitHash: "bbb",
     });
-    index.upsert("worlds/tech/bun.md", {
+    index.upsert("know/tech/bun.md", {
       title: "Bun is fast",
       body: "Bun runtime is significantly faster than Node.",
       domain: ["tech", "runtime"],
@@ -142,30 +142,30 @@ describe("SearchIndex FTS search", () => {
   it("searches by free text", async () => {
     const results = await index.search({ text: "rock music" });
     expect(results.length).toBeGreaterThanOrEqual(1);
-    expect(results[0].path).toBe("worlds/people/alice.md");
+    expect(results[0].path).toBe("know/people/alice.md");
   });
 
   it("searches by free text and filters by domain", async () => {
     const results = await index.search({ text: "fast", domain: ["tech"] });
     expect(results.length).toBe(1);
-    expect(results[0].path).toBe("worlds/tech/bun.md");
+    expect(results[0].path).toBe("know/tech/bun.md");
   });
 
   it("filters by entity without text", async () => {
     const results = await index.search({ entities: ["bob"] });
     expect(results.length).toBe(1);
-    expect(results[0].path).toBe("worlds/people/bob.md");
+    expect(results[0].path).toBe("know/people/bob.md");
   });
 
   it("filters by path prefix", async () => {
-    const results = await index.search({ path: "worlds/tech" });
+    const results = await index.search({ path: "know/tech" });
     expect(results.length).toBe(1);
   });
 
   it("filters by min_confidence", async () => {
     const results = await index.search({ domain: ["music"], min_confidence: 0.7 });
     expect(results.length).toBe(1);
-    expect(results[0].path).toBe("worlds/people/alice.md");
+    expect(results[0].path).toBe("know/people/alice.md");
   });
 
   it("returns empty array for no matches", async () => {
@@ -185,7 +185,7 @@ describe("SearchIndex sync", () => {
 
   beforeEach(async () => {
     testDir = await mkdtemp(join(tmpdir(), "knomit-sync-"));
-    repo = new GitRepo(join(testDir, "repo"), "test-machine");
+    repo = new GitRepo(join(testDir, "repo"), "test-agent");
     await repo.init();
   });
 
@@ -198,7 +198,7 @@ describe("SearchIndex sync", () => {
       moment_name: "seed",
       facts: [
         {
-          path: "worlds/test/fact.md",
+          path: "know/test/fact.md",
           domain: ["test"],
           confidence: 0.9,
           sources: 1,
@@ -226,7 +226,7 @@ describe("SearchIndex sync", () => {
       moment_name: "new-fact",
       facts: [
         {
-          path: "worlds/new/fact.md",
+          path: "know/new/fact.md",
           domain: ["new"],
           confidence: 0.7,
           sources: 1,
@@ -258,7 +258,7 @@ describe("SearchIndex with embeddings", () => {
     const embeddedIndex = new SearchIndex(cacheDir, { embeddings: true });
     await embeddedIndex.init();
 
-    await embeddedIndex.upsert("worlds/drinks/coffee.md", {
+    await embeddedIndex.upsert("know/drinks/coffee.md", {
       title: "Enjoys flat white every morning",
       body: "A strong coffee preference, especially flat whites from local cafes.",
       domain: ["preferences"],
@@ -272,7 +272,7 @@ describe("SearchIndex with embeddings", () => {
     // Semantic search — "what does the user like to drink" should find coffee
     const results = await embeddedIndex.search({ text: "what does the user like to drink" });
     expect(results.length).toBeGreaterThanOrEqual(1);
-    expect(results[0]!.path).toBe("worlds/drinks/coffee.md");
+    expect(results[0]!.path).toBe("know/drinks/coffee.md");
 
     embeddedIndex.close();
   });

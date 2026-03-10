@@ -30,7 +30,7 @@ describe("bootstrap", () => {
     const repoPath = join(baseDir, "repo");
     const cacheDir = join(baseDir, "cache");
 
-    const { repo, searchIndex, machineId } = await bootstrap({
+    const { repo, searchIndex, agentId } = await bootstrap({
       repo: repoPath,
       cacheDir,
       embeddings: false,
@@ -40,13 +40,13 @@ describe("bootstrap", () => {
     expect(existsSync(join(repoPath, ".git"))).toBe(true);
 
     // Root manifest exists
-    const rootExists = await repo.fileExists("worlds.md");
+    const rootExists = await repo.fileExists("know.md");
     expect(rootExists).toBe(true);
 
     // Machine branch is current
     const branch = await repo.currentBranch();
-    expect(branch).toMatch(/^machine\//);
-    expect(machineId).toBeTruthy();
+    expect(branch).toMatch(/^agent\//);
+    expect(agentId).toBeTruthy();
 
     // Search index is functional
     const searchStats = searchIndex.stats();
@@ -70,7 +70,7 @@ describe("bootstrap", () => {
     await learnHandler(first.repo, {
       moment_name: "persist-test",
       facts: [{
-        path: "worlds/test/persist",
+        path: "know/test/persist",
         domain: ["testing"],
         confidence: 0.8,
         sources: 1,
@@ -84,7 +84,7 @@ describe("bootstrap", () => {
     // Second bootstrap — should reuse existing repo
     const second = await bootstrap({ repo: repoPath, cacheDir, embeddings: false });
 
-    const exists = await second.repo.fileExists("worlds/test/persist.md");
+    const exists = await second.repo.fileExists("know/test/persist.md");
     expect(exists).toBe(true);
 
     const results = await second.searchIndex.search({ text: "persistence" });
@@ -93,13 +93,13 @@ describe("bootstrap", () => {
     second.searchIndex.close();
   });
 
-  it("uses KNOMIT_MACHINE_ID env var for branch name", async () => {
+  it("uses KNOMIT_AGENT_ID env var for branch name", async () => {
     const repoPath = join(baseDir, "repo");
     const cacheDir = join(baseDir, "cache");
-    const oldId = process.env.KNOMIT_MACHINE_ID;
+    const oldId = process.env.KNOMIT_AGENT_ID;
 
     try {
-      process.env.KNOMIT_MACHINE_ID = "test-custom-machine";
+      process.env.KNOMIT_AGENT_ID = "test-custom-agent";
       const { repo, searchIndex } = await bootstrap({
         repo: repoPath,
         cacheDir,
@@ -107,11 +107,11 @@ describe("bootstrap", () => {
       });
 
       const branch = await repo.currentBranch();
-      expect(branch).toBe("machine/test-custom-machine");
+      expect(branch).toBe("agent/test-custom-agent");
       searchIndex.close();
     } finally {
-      if (oldId === undefined) delete process.env.KNOMIT_MACHINE_ID;
-      else process.env.KNOMIT_MACHINE_ID = oldId;
+      if (oldId === undefined) delete process.env.KNOMIT_AGENT_ID;
+      else process.env.KNOMIT_AGENT_ID = oldId;
     }
   });
 });

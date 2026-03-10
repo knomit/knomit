@@ -3,6 +3,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { GitRepo } from "../git";
 import type { SearchIndex } from "../search-index";
 import { parseFact, type Frontmatter } from "../facts";
+import { ONTOLOGY_DIR } from "../constants.js";
 import { log } from "../logger";
 
 const QueryInput = z.object({
@@ -83,7 +84,7 @@ export async function queryHandler(
   // Gather candidates by entity grep
   if (input.entities && input.entities.length > 0) {
     for (const entity of input.entities) {
-      const files = await repo.grep(entity, "worlds/");
+      const files = await repo.grep(entity, `${ONTOLOGY_DIR}/`);
       for (const f of files) candidateFiles.add(f);
     }
   }
@@ -91,7 +92,7 @@ export async function queryHandler(
   // Gather candidates by domain grep
   if (input.domain && input.domain.length > 0) {
     for (const d of input.domain) {
-      const files = await repo.grep(d, "worlds/");
+      const files = await repo.grep(d, `${ONTOLOGY_DIR}/`);
       for (const f of files) candidateFiles.add(f);
     }
   }

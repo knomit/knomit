@@ -5,21 +5,21 @@ describe("buildChangedFileItems", () => {
   it("builds items in order: added, modified, deleted", () => {
     const items = buildChangedFileItems(
       { added: ["a.md"], modified: ["b.md"], deleted: ["c.md"] },
-      "worlds/people",
+      "know/people",
     );
     expect(items).toEqual([
-      { type: "changed-file", label: "a.md", path: "worlds/people/a.md", changeStatus: "added" },
-      { type: "changed-file", label: "b.md", path: "worlds/people/b.md", changeStatus: "modified" },
-      { type: "changed-file", label: "c.md", path: "worlds/people/c.md", changeStatus: "deleted" },
+      { type: "changed-file", label: "a.md", path: "know/people/a.md", changeStatus: "added" },
+      { type: "changed-file", label: "b.md", path: "know/people/b.md", changeStatus: "modified" },
+      { type: "changed-file", label: "c.md", path: "know/people/c.md", changeStatus: "deleted" },
     ]);
   });
 
   it("returns empty array for undefined", () => {
-    expect(buildChangedFileItems(undefined, "worlds")).toEqual([]);
+    expect(buildChangedFileItems(undefined, "know")).toEqual([]);
   });
 
   it("returns empty array when no changes", () => {
-    expect(buildChangedFileItems({ added: [], modified: [], deleted: [] }, "worlds")).toEqual([]);
+    expect(buildChangedFileItems({ added: [], modified: [], deleted: [] }, "know")).toEqual([]);
   });
 
   it("different commits with same file count produce different items", () => {
@@ -28,11 +28,11 @@ describe("buildChangedFileItems", () => {
     // rightItemsRef stale, causing navigation to the wrong file.
     const itemsA = buildChangedFileItems(
       { added: ["kubernetes-platform-standardization.md"], modified: [], deleted: [] },
-      "worlds",
+      "know",
     );
     const itemsB = buildChangedFileItems(
       { added: ["k8s-networking.md"], modified: [], deleted: [] },
-      "worlds",
+      "know",
     );
     expect(itemsA).toHaveLength(1);
     expect(itemsB).toHaveLength(1);

@@ -128,7 +128,7 @@ export async function exploreHandler(
           continue;
         }
         // Also skip if this is the manifest for the current path's parent
-        // (e.g., worlds.md is the manifest for "worlds" directory)
+        // (e.g., know.md is the manifest for "know" directory)
         const filePath = join(parentDir, entry.name);
         try {
           const raw = await repo.readFile(filePath);

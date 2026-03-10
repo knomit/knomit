@@ -15,7 +15,7 @@ let repo: GitRepo;
 
 beforeEach(async () => {
   testDir = await mkdtemp(join(tmpdir(), "knomit-integration-"));
-  repo = new GitRepo(join(testDir, "repo"), "test-machine");
+  repo = new GitRepo(join(testDir, "repo"), "test-agent");
   await repo.init();
 });
 
@@ -30,7 +30,7 @@ describe("full workflow", () => {
       moment_name: "alice-prefs",
       facts: [
         {
-          path: "worlds/people/alice/likes-rock.md",
+          path: "know/people/alice/likes-rock.md",
           domain: ["personal", "music"],
           confidence: 0.7,
           sources: 1,
@@ -39,7 +39,7 @@ describe("full workflow", () => {
           body: "Initial signal from conversation.",
         },
         {
-          path: "worlds/people/alice/prefers-vim.md",
+          path: "know/people/alice/prefers-vim.md",
           domain: ["personal", "tools"],
           confidence: 0.9,
           sources: 2,
@@ -61,7 +61,7 @@ describe("full workflow", () => {
 
     // 4. Update a fact
     const updateResult = await updateHandler(repo, {
-      file: "worlds/people/alice/likes-rock.md",
+      file: "know/people/alice/likes-rock.md",
       moment_name: "alice-rock-confirmed",
       updates: { confidence: 0.9, sources: 3 },
     });
@@ -69,13 +69,13 @@ describe("full workflow", () => {
 
     // 5. Why is this true?
     const whyResult = await whyHandler(repo, {
-      file: "worlds/people/alice/likes-rock.md",
+      file: "know/people/alice/likes-rock.md",
     });
     expect(whyResult.history.length).toBe(2); // original + update
     expect(whyResult.fact.frontmatter).toHaveProperty("confidence", 0.9);
 
     // 6. Explore
-    const exploreResult = await exploreHandler(repo, { path: "worlds/people/alice" });
+    const exploreResult = await exploreHandler(repo, { path: "know/people/alice" });
     const factNames = exploreResult.children.map(c => c.name);
     expect(factNames).toContain("likes-rock.md");
     expect(factNames).toContain("prefers-vim.md");
@@ -92,7 +92,7 @@ describe("full workflow with search index", () => {
     const learnResult = await learnHandler(repo, {
       moment_name: "fts-test",
       facts: [{
-        path: "worlds/test/fts-fact.md",
+        path: "know/test/fts-fact.md",
         domain: ["testing"],
         confidence: 0.8,
         sources: 1,

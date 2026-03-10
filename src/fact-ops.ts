@@ -1,6 +1,7 @@
 import type { GitRepo } from "./git";
 import type { SearchIndex } from "./search-index";
 import { serializeFact, parseFact, mergeFrontmatter } from "./facts";
+import { ONTOLOGY_DIR } from "./constants.js";
 
 function commitMsg(subject: string, reason?: string): string {
   return reason ? `${subject}\n\n${reason}` : subject;
@@ -25,7 +26,7 @@ export async function commitFact(
   reason?: string
 ): Promise<string> {
   let factPath = fact.path;
-  if (!factPath.startsWith("worlds/")) factPath = `worlds/${factPath}`;
+  if (!factPath.startsWith(`${ONTOLOGY_DIR}/`)) factPath = `${ONTOLOGY_DIR}/${factPath}`;
   if (!factPath.endsWith(".md")) factPath = `${factPath}.md`;
 
   const content = serializeFact(

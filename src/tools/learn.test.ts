@@ -11,7 +11,7 @@ let repo: GitRepo;
 
 beforeEach(async () => {
   testDir = await mkdtemp(join(tmpdir(), "knomit-test-"));
-  repo = new GitRepo(join(testDir, "repo"), "test-machine");
+  repo = new GitRepo(join(testDir, "repo"), "test-agent");
   await repo.init();
 });
 
@@ -25,7 +25,7 @@ describe("knomit_learn", () => {
       moment_name: "alice-music-2025",
       facts: [
         {
-          path: "worlds/people/alice/alice-likes-rock.md",
+          path: "know/people/alice/alice-likes-rock.md",
           domain: ["personal", "music"],
           confidence: 0.85,
           sources: 3,
@@ -38,10 +38,10 @@ describe("knomit_learn", () => {
 
     expect(result.moment_tag).toBe("learn/alice-music-2025");
     expect(result.commits.length).toBe(1);
-    expect(result.commits[0].file).toBe("worlds/people/alice/alice-likes-rock.md");
+    expect(result.commits[0].file).toBe("know/people/alice/alice-likes-rock.md");
 
     // Verify file exists and parses correctly
-    const content = await repo.readFile("worlds/people/alice/alice-likes-rock.md");
+    const content = await repo.readFile("know/people/alice/alice-likes-rock.md");
     const parsed = parseFact(content);
     expect(parsed.frontmatter.confidence).toBe(0.85);
     expect(parsed.title).toBe("Alice likes rock music");
@@ -56,7 +56,7 @@ describe("knomit_learn", () => {
       moment_name: "multi-facts",
       facts: [
         {
-          path: "worlds/a.md",
+          path: "know/a.md",
           domain: ["test"],
           confidence: 0.5,
           sources: 1,
@@ -65,7 +65,7 @@ describe("knomit_learn", () => {
           body: "Body A.",
         },
         {
-          path: "worlds/b.md",
+          path: "know/b.md",
           domain: ["test"],
           confidence: 0.6,
           sources: 1,

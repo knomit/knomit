@@ -68,11 +68,11 @@ export interface DistillResult {
 
 // --- Prompt constants ---
 
-const PLACEMENT_RULES = `- The path MUST be placed in an appropriate ontological location based on the source facts' paths, NOT under "worlds/synthesized/" or any operational directory.
-- If all sources share a common parent directory, place the fact there (e.g. sources from worlds/projects/webapp/* → worlds/projects/webapp/combined-name.md).
-- If sources span different directories, place the fact at the nearest common ancestor (e.g. sources from worlds/debugging/* → worlds/debugging/common-patterns.md).
+const PLACEMENT_RULES = `- The path MUST be placed in an appropriate ontological location based on the source facts' paths, NOT under "know/synthesized/" or any operational directory.
+- If all sources share a common parent directory, place the fact there (e.g. sources from know/projects/webapp/* → know/projects/webapp/combined-name.md).
+- If sources span different directories, place the fact at the nearest common ancestor (e.g. sources from know/debugging/* → know/debugging/common-patterns.md).
 - Keep paths meaningful: the directory structure IS the ontology. Use descriptive filenames.
-- The "refs" field MUST list the source file paths exactly as given (e.g. "worlds/foo/bar.md") — the system will resolve them to knomit: URIs automatically.`;
+- The "refs" field MUST list the source file paths exactly as given (e.g. "know/foo/bar.md") — the system will resolve them to knomit: URIs automatically.`;
 
 // --- Prompt builders ---
 
@@ -120,7 +120,7 @@ Respond as JSON (no markdown wrapping):
     {
       "sources": ["file1.md", "file2.md"],
       "merged": {
-        "path": "worlds/...",
+        "path": "know/...",
         "title": "...",
         "body": "...",
         "domain": [...],
@@ -170,7 +170,7 @@ Respond as JSON (no markdown wrapping):
 {
   "synthesize": [
     {
-      "path": "worlds/...",
+      "path": "know/...",
       "title": "...",
       "body": "...",
       "domain": [...],

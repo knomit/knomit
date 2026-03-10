@@ -12,14 +12,14 @@ let repo: GitRepo;
 
 beforeEach(async () => {
   testDir = await mkdtemp(join(tmpdir(), "knomit-test-"));
-  repo = new GitRepo(join(testDir, "repo"), "test-machine");
+  repo = new GitRepo(join(testDir, "repo"), "test-agent");
   await repo.init();
 
   await learnHandler(repo, {
     moment_name: "seed",
     facts: [
       {
-        path: "worlds/people/alice/likes-rock.md",
+        path: "know/people/alice/likes-rock.md",
         domain: ["personal", "music"],
         confidence: 0.5,
         sources: 1,
@@ -38,7 +38,7 @@ afterEach(async () => {
 describe("knomit_update", () => {
   it("updates confidence and sources", async () => {
     const result = await updateHandler(repo, {
-      file: "worlds/people/alice/likes-rock.md",
+      file: "know/people/alice/likes-rock.md",
       moment_name: "alice-reinforced",
       updates: { confidence: 0.85, sources: 3 },
     });
@@ -46,7 +46,7 @@ describe("knomit_update", () => {
     expect(result.commit).toMatch(/^[0-9a-f]+$/);
     expect(result.moment_tag).toBe("learn/alice-reinforced");
 
-    const content = await repo.readFile("worlds/people/alice/likes-rock.md");
+    const content = await repo.readFile("know/people/alice/likes-rock.md");
     const parsed = parseFact(content);
     expect(parsed.frontmatter.confidence).toBe(0.85);
     expect(parsed.frontmatter.sources).toBe(3);
@@ -56,7 +56,7 @@ describe("knomit_update", () => {
 
   it("replaces body and title", async () => {
     await updateHandler(repo, {
-      file: "worlds/people/alice/likes-rock.md",
+      file: "know/people/alice/likes-rock.md",
       moment_name: "alice-corrected",
       updates: {
         title: "Alice loves rock music",
@@ -64,7 +64,7 @@ describe("knomit_update", () => {
       },
     });
 
-    const content = await repo.readFile("worlds/people/alice/likes-rock.md");
+    const content = await repo.readFile("know/people/alice/likes-rock.md");
     const parsed = parseFact(content);
     expect(parsed.title).toBe("Alice loves rock music");
     expect(parsed.body).toBe("Updated: she really loves it.");
@@ -72,12 +72,12 @@ describe("knomit_update", () => {
 
   it("appends refs", async () => {
     await updateHandler(repo, {
-      file: "worlds/people/alice/likes-rock.md",
+      file: "know/people/alice/likes-rock.md",
       moment_name: "alice-ref-added",
       updates: { refs: ["episodic://event_99"] },
     });
 
-    const content = await repo.readFile("worlds/people/alice/likes-rock.md");
+    const content = await repo.readFile("know/people/alice/likes-rock.md");
     const parsed = parseFact(content);
     expect(parsed.frontmatter.refs).toContain("episodic://event_99");
   });
@@ -85,7 +85,7 @@ describe("knomit_update", () => {
   it("throws on nonexistent file", async () => {
     await expect(
       updateHandler(repo, {
-        file: "worlds/nonexistent.md",
+        file: "know/nonexistent.md",
         moment_name: "nope",
         updates: { confidence: 0.9 },
       })

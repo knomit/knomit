@@ -25,56 +25,56 @@ afterEach(async () => {
 // ---------------------------------------------------------------------------
 
 describe("GitRepo init", () => {
-  it("creates a new repo with main branch and worlds.md", async () => {
+  it("creates a new repo with main branch and know.md", async () => {
     const repoPath = join(testDir, "repo");
-    const repo = new GitRepo(repoPath, "my-machine");
+    const repo = new GitRepo(repoPath, "my-agent");
     await repo.init();
 
     expect(existsSync(join(repoPath, ".git"))).toBe(true);
     const branch = await repo.currentBranch();
-    expect(branch).toBe("machine/my-machine");
+    expect(branch).toBe("agent/my-agent");
 
-    const worldsMd = await repo.readFile("worlds.md");
-    expect(worldsMd).toContain("Knowledge Base");
+    const knowMd = await repo.readFile("know.md");
+    expect(knowMd).toContain("Knowledge Base");
   });
 
-  it("re-opens existing repo and switches to machine branch", async () => {
+  it("re-opens existing repo and switches to agent branch", async () => {
     const repoPath = join(testDir, "repo");
 
     // First init
-    const repo1 = new GitRepo(repoPath, "machine-a");
+    const repo1 = new GitRepo(repoPath, "agent-a");
     await repo1.init();
 
-    // Re-open with same machine ID
-    const repo2 = new GitRepo(repoPath, "machine-a");
+    // Re-open with same agent ID
+    const repo2 = new GitRepo(repoPath, "agent-a");
     await repo2.init();
 
     const branch = await repo2.currentBranch();
-    expect(branch).toBe("machine/machine-a");
+    expect(branch).toBe("agent/agent-a");
   });
 
-  it("creates separate machine branches", async () => {
+  it("creates separate agent branches", async () => {
     const repoPath = join(testDir, "repo");
 
-    const repo1 = new GitRepo(repoPath, "machine-a");
+    const repo1 = new GitRepo(repoPath, "agent-a");
     await repo1.init();
 
-    // Commit something on machine-a
+    // Commit something on agent-a
     await repo1.commit(
-      [{ path: "worlds/test.md", content: "test" }],
+      [{ path: "know/test.md", content: "test" }],
       "test commit"
     );
 
-    // Switch to machine-b
-    const repo2 = new GitRepo(repoPath, "machine-b");
+    // Switch to agent-b
+    const repo2 = new GitRepo(repoPath, "agent-b");
     await repo2.init();
 
     const branch = await repo2.currentBranch();
-    expect(branch).toBe("machine/machine-b");
+    expect(branch).toBe("agent/agent-b");
 
     const branches = await repo2.listBranches();
-    expect(branches).toContain("machine/machine-a");
-    expect(branches).toContain("machine/machine-b");
+    expect(branches).toContain("agent/agent-a");
+    expect(branches).toContain("agent/agent-b");
   });
 });
 
@@ -88,14 +88,14 @@ describe("GitRepo commit", () => {
     await repo.init();
 
     const hash = await repo.commit(
-      [{ path: "worlds/test/fact.md", content: "Hello" }],
+      [{ path: "know/test/fact.md", content: "Hello" }],
       "test: add fact"
     );
 
     expect(hash).toBeTruthy();
     expect(hash.length).toBeGreaterThanOrEqual(6);
 
-    const content = await repo.readFile("worlds/test/fact.md");
+    const content = await repo.readFile("know/test/fact.md");
     expect(content).toBe("Hello");
   });
 
@@ -105,17 +105,17 @@ describe("GitRepo commit", () => {
 
     const hash = await repo.commit(
       [
-        { path: "worlds/a.md", content: "A" },
-        { path: "worlds/b.md", content: "B" },
-        { path: "worlds/deep/nested/c.md", content: "C" },
+        { path: "know/a.md", content: "A" },
+        { path: "know/b.md", content: "B" },
+        { path: "know/deep/nested/c.md", content: "C" },
       ],
       "multi-file commit"
     );
 
     expect(hash).toBeTruthy();
-    expect(await repo.readFile("worlds/a.md")).toBe("A");
-    expect(await repo.readFile("worlds/b.md")).toBe("B");
-    expect(await repo.readFile("worlds/deep/nested/c.md")).toBe("C");
+    expect(await repo.readFile("know/a.md")).toBe("A");
+    expect(await repo.readFile("know/b.md")).toBe("B");
+    expect(await repo.readFile("know/deep/nested/c.md")).toBe("C");
   });
 
   it("creates intermediate directories automatically", async () => {
@@ -123,11 +123,11 @@ describe("GitRepo commit", () => {
     await repo.init();
 
     await repo.commit(
-      [{ path: "worlds/very/deep/path/fact.md", content: "Deep" }],
+      [{ path: "know/very/deep/path/fact.md", content: "Deep" }],
       "deep commit"
     );
 
-    expect(await repo.fileExists("worlds/very/deep/path/fact.md")).toBe(true);
+    expect(await repo.fileExists("know/very/deep/path/fact.md")).toBe(true);
   });
 });
 
@@ -140,7 +140,7 @@ describe("GitRepo tags", () => {
     const repo = new GitRepo(join(testDir, "repo"), "test");
     await repo.init();
 
-    await repo.commit([{ path: "worlds/fact.md", content: "." }], "add fact");
+    await repo.commit([{ path: "know/fact.md", content: "." }], "add fact");
     const tagName = await repo.tag("learn/my-moment");
 
     expect(tagName).toBe("learn/my-moment");
@@ -152,10 +152,10 @@ describe("GitRepo tags", () => {
     const repo = new GitRepo(join(testDir, "repo"), "test");
     await repo.init();
 
-    await repo.commit([{ path: "worlds/a.md", content: "A" }], "a");
+    await repo.commit([{ path: "know/a.md", content: "A" }], "a");
     const tag1 = await repo.tag("learn/dupe");
 
-    await repo.commit([{ path: "worlds/b.md", content: "B" }], "b");
+    await repo.commit([{ path: "know/b.md", content: "B" }], "b");
     const tag2 = await repo.tag("learn/dupe");
 
     expect(tag1).toBe("learn/dupe");
@@ -178,12 +178,12 @@ describe("GitRepo deleteFile", () => {
     const repo = new GitRepo(join(testDir, "repo"), "test");
     await repo.init();
 
-    await repo.commit([{ path: "worlds/del.md", content: "to delete" }], "add");
-    expect(await repo.fileExists("worlds/del.md")).toBe(true);
+    await repo.commit([{ path: "know/del.md", content: "to delete" }], "add");
+    expect(await repo.fileExists("know/del.md")).toBe(true);
 
-    const hash = await repo.deleteFile("worlds/del.md", "forget: del.md");
+    const hash = await repo.deleteFile("know/del.md", "forget: del.md");
     expect(hash).toBeTruthy();
-    expect(await repo.fileExists("worlds/del.md")).toBe(false);
+    expect(await repo.fileExists("know/del.md")).toBe(false);
   });
 
   it("throws when deleting non-existent file", async () => {
@@ -191,7 +191,7 @@ describe("GitRepo deleteFile", () => {
     await repo.init();
 
     await expect(
-      repo.deleteFile("worlds/no-such-file.md", "forget")
+      repo.deleteFile("know/no-such-file.md", "forget")
     ).rejects.toThrow("File not found");
   });
 });
@@ -205,11 +205,11 @@ describe("GitRepo log", () => {
     const repo = new GitRepo(join(testDir, "repo"), "test");
     await repo.init();
 
-    await repo.commit([{ path: "worlds/fact.md", content: "v1" }], "learn: v1");
-    await repo.commit([{ path: "worlds/fact.md", content: "v2" }], "update: v2");
-    await repo.commit([{ path: "worlds/fact.md", content: "v3" }], "update: v3");
+    await repo.commit([{ path: "know/fact.md", content: "v1" }], "learn: v1");
+    await repo.commit([{ path: "know/fact.md", content: "v2" }], "update: v2");
+    await repo.commit([{ path: "know/fact.md", content: "v3" }], "update: v3");
 
-    const log = await repo.log("worlds/fact.md");
+    const log = await repo.log("know/fact.md");
     expect(log.length).toBe(3);
     // Most recent first
     expect(log[0].message).toBe("update: v3");
@@ -220,10 +220,10 @@ describe("GitRepo log", () => {
     const repo = new GitRepo(join(testDir, "repo"), "test");
     await repo.init();
 
-    await repo.commit([{ path: "worlds/fact.md", content: "v1" }], "learn: fact");
+    await repo.commit([{ path: "know/fact.md", content: "v1" }], "learn: fact");
     await repo.tag("learn/my-episode");
 
-    const log = await repo.log("worlds/fact.md");
+    const log = await repo.log("know/fact.md");
     expect(log[0].episode).toBe("my-episode");
   });
 
@@ -231,17 +231,17 @@ describe("GitRepo log", () => {
     const repo = new GitRepo(join(testDir, "repo"), "test");
     await repo.init();
 
-    await repo.commit([{ path: "worlds/fact.md", content: "original" }], "v1");
-    const history1 = await repo.log("worlds/fact.md");
+    await repo.commit([{ path: "know/fact.md", content: "original" }], "v1");
+    const history1 = await repo.log("know/fact.md");
     const v1Commit = history1[0].commit;
 
-    await repo.commit([{ path: "worlds/fact.md", content: "updated" }], "v2");
+    await repo.commit([{ path: "know/fact.md", content: "updated" }], "v2");
 
     // Current version
-    expect(await repo.readFile("worlds/fact.md")).toBe("updated");
+    expect(await repo.readFile("know/fact.md")).toBe("updated");
 
     // Historical version
-    expect(await repo.readFileAtCommit("worlds/fact.md", v1Commit)).toBe("original");
+    expect(await repo.readFileAtCommit("know/fact.md", v1Commit)).toBe("original");
   });
 });
 
@@ -255,12 +255,12 @@ describe("GitRepo listDir", () => {
     await repo.init();
 
     await repo.commit([
-      { path: "worlds/a/fact1.md", content: "1" },
-      { path: "worlds/a/fact2.md", content: "2" },
-      { path: "worlds/a/sub/nested.md", content: "n" },
+      { path: "know/a/fact1.md", content: "1" },
+      { path: "know/a/fact2.md", content: "2" },
+      { path: "know/a/sub/nested.md", content: "n" },
     ], "add files");
 
-    const entries = await repo.listDir("worlds/a");
+    const entries = await repo.listDir("know/a");
     const names = entries.map(e => e.name);
 
     expect(names).toContain("fact1.md");
@@ -288,7 +288,7 @@ describe("GitRepo listDir", () => {
     const repo = new GitRepo(join(testDir, "repo"), "test");
     await repo.init();
 
-    const entries = await repo.listDir("worlds/nonexistent");
+    const entries = await repo.listDir("know/nonexistent");
     expect(entries).toEqual([]);
   });
 });
@@ -303,20 +303,20 @@ describe("GitRepo grep", () => {
     await repo.init();
 
     await repo.commit([
-      { path: "worlds/a.md", content: "---\nentities: [alice]\n---\n# Alice fact" },
-      { path: "worlds/b.md", content: "---\nentities: [bob]\n---\n# Bob fact" },
+      { path: "know/a.md", content: "---\nentities: [alice]\n---\n# Alice fact" },
+      { path: "know/b.md", content: "---\nentities: [bob]\n---\n# Bob fact" },
     ], "add facts");
 
-    const aliceFiles = await repo.grep("alice", "worlds/");
-    expect(aliceFiles).toContain("worlds/a.md");
-    expect(aliceFiles).not.toContain("worlds/b.md");
+    const aliceFiles = await repo.grep("alice", "know/");
+    expect(aliceFiles).toContain("know/a.md");
+    expect(aliceFiles).not.toContain("know/b.md");
   });
 
   it("returns empty for no matches", async () => {
     const repo = new GitRepo(join(testDir, "repo"), "test");
     await repo.init();
 
-    const files = await repo.grep("nonexistent-pattern", "worlds/");
+    const files = await repo.grep("nonexistent-pattern", "know/");
     expect(files).toEqual([]);
   });
 });
@@ -338,8 +338,8 @@ describe("GitRepo path validation", () => {
     await repo.init();
 
     // Should not throw
-    repo.validatePath("worlds/test/fact.md");
-    repo.validatePath("worlds.md");
+    repo.validatePath("know/test/fact.md");
+    repo.validatePath("know.md");
   });
 });
 
@@ -355,8 +355,8 @@ describe("GitRepo branches", () => {
     await repo.checkoutBranch("feature/test", true);
     expect(await repo.currentBranch()).toBe("feature/test");
 
-    await repo.checkoutBranch("machine/test");
-    expect(await repo.currentBranch()).toBe("machine/test");
+    await repo.checkoutBranch("agent/test");
+    expect(await repo.currentBranch()).toBe("agent/test");
   });
 
   it("lists all branches", async () => {
@@ -368,7 +368,7 @@ describe("GitRepo branches", () => {
 
     const branches = await repo.listBranches();
     expect(branches).toContain("main");
-    expect(branches).toContain("machine/test");
+    expect(branches).toContain("agent/test");
     expect(branches).toContain("feature/a");
     expect(branches).toContain("feature/b");
   });
@@ -378,8 +378,8 @@ describe("GitRepo branches", () => {
     await repo.init();
 
     await repo.checkoutBranch("temp-branch", true);
-    await repo.commit([{ path: "worlds/t.md", content: "t" }], "temp");
-    await repo.checkoutBranch("machine/test");
+    await repo.commit([{ path: "know/t.md", content: "t" }], "temp");
+    await repo.checkoutBranch("agent/test");
 
     // Merge first so -d works (branch must be fully merged)
     await repo.mergeBranch("temp-branch");
@@ -394,14 +394,14 @@ describe("GitRepo branches", () => {
 
     // Create and commit on feature branch
     await repo.checkoutBranch("feature/merge-test", true);
-    await repo.commit([{ path: "worlds/merged.md", content: "merged" }], "add merged");
+    await repo.commit([{ path: "know/merged.md", content: "merged" }], "add merged");
 
-    // Back to machine branch and merge
-    await repo.checkoutBranch("machine/test");
+    // Back to agent branch and merge
+    await repo.checkoutBranch("agent/test");
     await repo.mergeBranch("feature/merge-test");
 
-    // File should exist on machine branch
-    expect(await repo.fileExists("worlds/merged.md")).toBe(true);
+    // File should exist on agent branch
+    expect(await repo.fileExists("know/merged.md")).toBe(true);
   });
 });
 
@@ -416,21 +416,21 @@ describe("GitRepo diff", () => {
 
     // Initial commit
     await repo.commit([
-      { path: "worlds/existing.md", content: "original" },
-      { path: "worlds/to-delete.md", content: "will go" },
+      { path: "know/existing.md", content: "original" },
+      { path: "know/to-delete.md", content: "will go" },
     ], "initial");
 
     const baseCommit = await repo.headCommit();
 
     // Add, modify, delete
-    await repo.commit([{ path: "worlds/new.md", content: "new" }], "add new");
-    await repo.commit([{ path: "worlds/existing.md", content: "modified" }], "modify");
-    await repo.deleteFile("worlds/to-delete.md", "delete");
+    await repo.commit([{ path: "know/new.md", content: "new" }], "add new");
+    await repo.commit([{ path: "know/existing.md", content: "modified" }], "modify");
+    await repo.deleteFile("know/to-delete.md", "delete");
 
     const diff = await repo.diffFiles(baseCommit);
-    expect(diff.added).toContain("worlds/new.md");
-    expect(diff.modified).toContain("worlds/existing.md");
-    expect(diff.deleted).toContain("worlds/to-delete.md");
+    expect(diff.added).toContain("know/new.md");
+    expect(diff.modified).toContain("know/existing.md");
+    expect(diff.deleted).toContain("know/to-delete.md");
   });
 });
 
@@ -443,7 +443,7 @@ describe("GitRepo tag queries", () => {
     const repo = new GitRepo(join(testDir, "repo"), "test");
     await repo.init();
 
-    await repo.commit([{ path: "worlds/a.md", content: "a" }], "add a");
+    await repo.commit([{ path: "know/a.md", content: "a" }], "add a");
     const commit = await repo.headCommit();
     await repo.tag("learn/test-tag");
 
@@ -455,14 +455,14 @@ describe("GitRepo tag queries", () => {
     const repo = new GitRepo(join(testDir, "repo"), "test");
     await repo.init();
 
-    await repo.commit([{ path: "worlds/a.md", content: "a" }], "learn: A");
-    await repo.commit([{ path: "worlds/b.md", content: "b" }], "learn: B");
+    await repo.commit([{ path: "know/a.md", content: "a" }], "learn: A");
+    await repo.commit([{ path: "know/b.md", content: "b" }], "learn: B");
     await repo.tag("learn/episode-1");
 
     const commits = await repo.commitsBetweenTags("learn/episode-1");
     expect(commits.length).toBeGreaterThanOrEqual(2);
     const files = commits.map(c => c.file);
-    expect(files).toContain("worlds/a.md");
-    expect(files).toContain("worlds/b.md");
+    expect(files).toContain("know/a.md");
+    expect(files).toContain("know/b.md");
   });
 });

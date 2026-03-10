@@ -10,13 +10,13 @@ import {
 describe("buildPrunePrompt", () => {
   it("includes facts and recipe prompt", () => {
     const facts = [
-      { path: "worlds/test.md", title: "Test", body: "Body", domain: ["d"], entities: ["e"], confidence: 0.8, sources: 1, refs: [] },
+      { path: "know/test.md", title: "Test", body: "Body", domain: ["d"], entities: ["e"], confidence: 0.8, sources: 1, refs: [] },
     ];
     const prompt = buildPrunePrompt(facts, "Focus on security", "Find stale facts");
     expect(prompt).toContain("Test");
     expect(prompt).toContain("Focus on security");
     expect(prompt).toContain("Find stale facts");
-    expect(prompt).toContain("worlds/test.md");
+    expect(prompt).toContain("know/test.md");
   });
 });
 
@@ -24,8 +24,8 @@ describe("parsePruneResponse", () => {
   it("parses valid prune JSON", () => {
     const json = JSON.stringify({
       decisions: [
-        { file: "worlds/a.md", action: "forget", reason: "stale" },
-        { file: "worlds/b.md", action: "keep", reason: "current" },
+        { file: "know/a.md", action: "forget", reason: "stale" },
+        { file: "know/b.md", action: "keep", reason: "current" },
       ],
       merges: [],
       summary: "Pruned 1",
@@ -46,27 +46,27 @@ describe("parseDistillResponse", () => {
   it("parses valid distill JSON", () => {
     const json = JSON.stringify({
       synthesize: [{
-        path: "worlds/new.md",
+        path: "know/new.md",
         title: "Pattern",
         body: "Insight",
         domain: ["d"],
         confidence: 0.8,
         entities: ["e"],
-        refs: ["worlds/old1.md"],
+        refs: ["know/old1.md"],
       }],
-      forget: ["worlds/old1.md"],
+      forget: ["know/old1.md"],
       summary: "Distilled 1",
     });
     const result = parseDistillResponse(json);
     expect(result.synthesize).toHaveLength(1);
-    expect(result.forget).toContain("worlds/old1.md");
+    expect(result.forget).toContain("know/old1.md");
   });
 });
 
 describe("chunkFacts", () => {
   it("returns one chunk when facts fit", () => {
     const facts = Array.from({ length: 5 }, (_, i) => ({
-      path: `worlds/f${i}.md`, title: `F${i}`, body: "short",
+      path: `know/f${i}.md`, title: `F${i}`, body: "short",
       domain: [], entities: [], confidence: 0.8, sources: 1, refs: [],
     }));
     const chunks = chunkFacts(facts, 100_000);
@@ -75,7 +75,7 @@ describe("chunkFacts", () => {
 
   it("splits into multiple chunks when facts exceed budget", () => {
     const facts = Array.from({ length: 100 }, (_, i) => ({
-      path: `worlds/f${i}.md`, title: `Fact ${i}`, body: "x".repeat(1000),
+      path: `know/f${i}.md`, title: `Fact ${i}`, body: "x".repeat(1000),
       domain: [], entities: [], confidence: 0.8, sources: 1, refs: [],
     }));
     const chunks = chunkFacts(facts, 10_000);

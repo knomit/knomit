@@ -23,8 +23,8 @@ function stateWithChildren(children: ChildItem[]): AppState {
 // ---------------------------------------------------------------------------
 
 describe("TUI initial state", () => {
-  it("starts at worlds root with breadcrumb selected", () => {
-    expect(initialState.currentPath).toBe("worlds");
+  it("starts at know root with breadcrumb selected", () => {
+    expect(initialState.currentPath).toBe("know");
     expect(initialState.breadcrumbSelected).toBe(true);
     expect(initialState.selectedIndex).toBe(0);
     expect(initialState.currentFact).toBeNull();
@@ -97,7 +97,7 @@ describe("TUI navigation", () => {
     state = reducer(state, { type: "NAVIGATE_DOWN" }); // 1: people (world)
     state = reducer(state, { type: "NAVIGATE_DOWN" }); // 2: note.md (fact)
 
-    expect(state.currentFact).toBe("worlds/note.md");
+    expect(state.currentFact).toBe("know/note.md");
     expect(state.rightPanelMode).toBe("fact");
   });
 
@@ -107,7 +107,7 @@ describe("TUI navigation", () => {
 
     expect(state.currentFact).toBeNull();
     expect(state.rightPanelMode).toBe("summary");
-    expect(state.statsPath).toBe("worlds/projects");
+    expect(state.statsPath).toBe("know/projects");
   });
 
   it("OPEN_ITEM on a world navigates into it", () => {
@@ -115,7 +115,7 @@ describe("TUI navigation", () => {
     state = reducer(state, { type: "NAVIGATE_DOWN" }); // 0: projects
     state = reducer(state, { type: "OPEN_ITEM" });
 
-    expect(state.currentPath).toBe("worlds/projects");
+    expect(state.currentPath).toBe("know/projects");
     expect(state.selectedIndex).toBe(0);
     expect(state.breadcrumbSelected).toBe(true);
   });
@@ -127,32 +127,32 @@ describe("TUI navigation", () => {
     state = reducer(state, { type: "NAVIGATE_DOWN" }); // 2: note.md
     state = reducer(state, { type: "OPEN_ITEM" });
 
-    expect(state.currentFact).toBe("worlds/note.md");
+    expect(state.currentFact).toBe("know/note.md");
     expect(state.rightPanelMode).toBe("fact");
   });
 
   it("GO_UP navigates to parent directory", () => {
     let state: AppState = {
       ...initialState,
-      currentPath: "worlds/projects/webapp",
+      currentPath: "know/projects/webapp",
     };
 
     state = reducer(state, { type: "GO_UP" });
-    expect(state.currentPath).toBe("worlds/projects");
+    expect(state.currentPath).toBe("know/projects");
 
     state = reducer(state, { type: "GO_UP" });
-    expect(state.currentPath).toBe("worlds");
+    expect(state.currentPath).toBe("know");
   });
 
-  it("GO_UP at worlds root is no-op", () => {
+  it("GO_UP at know root is no-op", () => {
     const state = reducer(initialState, { type: "GO_UP" });
-    expect(state.currentPath).toBe("worlds");
+    expect(state.currentPath).toBe("know");
   });
 
   it("GO_UP clears search state", () => {
     let state: AppState = {
       ...initialState,
-      currentPath: "worlds/projects",
+      currentPath: "know/projects",
       searchActive: true,
       searchResults: [{ file: "x.md", title: "x", body: "x", score: 50 }],
     };
@@ -176,8 +176,8 @@ describe("TUI search", () => {
   it("SET_SEARCH_RESULTS activates search mode", () => {
     const state = stateWithChildren(children);
     const results = [
-      { file: "worlds/a.md", title: "Result A", body: "Body A", score: 80 },
-      { file: "worlds/b.md", title: "Result B", body: "Body B", score: 60 },
+      { file: "know/a.md", title: "Result A", body: "Body A", score: 80 },
+      { file: "know/b.md", title: "Result B", body: "Body B", score: 60 },
     ];
 
     const next = reducer(state, { type: "SET_SEARCH_RESULTS", results });
@@ -185,21 +185,21 @@ describe("TUI search", () => {
     expect(next.searchResults).toHaveLength(2);
     expect(next.selectedIndex).toBe(0);
     expect(next.breadcrumbSelected).toBe(false);
-    expect(next.currentFact).toBe("worlds/a.md");
+    expect(next.currentFact).toBe("know/a.md");
     expect(next.rightPanelMode).toBe("fact");
   });
 
   it("navigation works in search results", () => {
     let state = stateWithChildren(children);
     const results = [
-      { file: "worlds/a.md", title: "A", body: "A", score: 80 },
-      { file: "worlds/b.md", title: "B", body: "B", score: 60 },
+      { file: "know/a.md", title: "A", body: "A", score: 80 },
+      { file: "know/b.md", title: "B", body: "B", score: 60 },
     ];
     state = reducer(state, { type: "SET_SEARCH_RESULTS", results });
 
     state = reducer(state, { type: "NAVIGATE_DOWN" });
     expect(state.selectedIndex).toBe(1);
-    expect(state.currentFact).toBe("worlds/b.md");
+    expect(state.currentFact).toBe("know/b.md");
   });
 
   it("CLEAR_SEARCH restores previous navigation state", () => {
@@ -207,12 +207,12 @@ describe("TUI search", () => {
     // Navigate to index 1 (note.md)
     state = reducer(state, { type: "NAVIGATE_DOWN" });
     state = reducer(state, { type: "NAVIGATE_DOWN" });
-    expect(state.currentFact).toBe("worlds/note.md");
+    expect(state.currentFact).toBe("know/note.md");
 
     // Search
     state = reducer(state, {
       type: "SET_SEARCH_RESULTS",
-      results: [{ file: "worlds/x.md", title: "X", body: "X", score: 50 }],
+      results: [{ file: "know/x.md", title: "X", body: "X", score: 50 }],
     });
     expect(state.searchActive).toBe(true);
 
@@ -220,7 +220,7 @@ describe("TUI search", () => {
     state = reducer(state, { type: "CLEAR_SEARCH" });
     expect(state.searchActive).toBe(false);
     expect(state.searchResults).toEqual([]);
-    expect(state.currentFact).toBe("worlds/note.md");
+    expect(state.currentFact).toBe("know/note.md");
     expect(state.selectedIndex).toBe(1);
   });
 
@@ -252,18 +252,18 @@ describe("TUI history mode", () => {
   it("TOGGLE_HISTORY enables history mode", () => {
     const state = reducer(initialState, {
       type: "TOGGLE_HISTORY",
-      target: "worlds/test/fact.md",
+      target: "know/test/fact.md",
     });
 
     expect(state.historyMode).toBe(true);
-    expect(state.historyTarget).toBe("worlds/test/fact.md");
+    expect(state.historyTarget).toBe("know/test/fact.md");
     expect(state.rightPanelMode).toBe("history");
   });
 
   it("TOGGLE_HISTORY again disables history mode", () => {
     let state = reducer(initialState, {
       type: "TOGGLE_HISTORY",
-      target: "worlds/test/fact.md",
+      target: "know/test/fact.md",
     });
     state = reducer(state, { type: "TOGGLE_HISTORY", target: "" });
 
@@ -279,7 +279,7 @@ describe("TUI history mode", () => {
 
     let state = reducer(initialState, {
       type: "TOGGLE_HISTORY",
-      target: "worlds/test/fact.md",
+      target: "know/test/fact.md",
     });
     state = reducer(state, { type: "SET_HISTORY_ENTRIES", entries });
 
@@ -408,7 +408,7 @@ describe("TUI complex workflows", () => {
       { type: "NAVIGATE_DOWN" }, // index 1
       { type: "NAVIGATE_DOWN" }, // index 2, fact c.md
       { type: "SET_SEARCH_RESULTS", results: [
-        { file: "worlds/x.md", title: "X", body: "X", score: 90 },
+        { file: "know/x.md", title: "X", body: "X", score: 90 },
       ]},
       { type: "NAVIGATE_DOWN" }, // Still at index 0 in search (only 1 result)
       { type: "CLEAR_SEARCH" },
@@ -417,7 +417,7 @@ describe("TUI complex workflows", () => {
     // Should restore to index 2, fact c.md
     expect(state.searchActive).toBe(false);
     expect(state.selectedIndex).toBe(2);
-    expect(state.currentFact).toBe("worlds/c.md");
+    expect(state.currentFact).toBe("know/c.md");
   });
 
   it("deep navigation with multiple level changes", () => {
@@ -428,22 +428,22 @@ describe("TUI complex workflows", () => {
       ]},
       { type: "NAVIGATE_DOWN" }, // select projects
       { type: "OPEN_ITEM" }, // enter projects
-      // Now at worlds/projects
+      // Now at know/projects
       { type: "SET_CHILDREN", children: [
         { name: "webapp", type: "world" as const },
       ]},
       { type: "NAVIGATE_DOWN" }, // select webapp
       { type: "OPEN_ITEM" }, // enter webapp
-      // Now at worlds/projects/webapp
+      // Now at know/projects/webapp
     ]);
 
-    expect(state.currentPath).toBe("worlds/projects/webapp");
+    expect(state.currentPath).toBe("know/projects/webapp");
 
     // Go back up
     const backUp = applyActions(state, [
       { type: "GO_UP" },
       { type: "GO_UP" },
     ]);
-    expect(backUp.currentPath).toBe("worlds");
+    expect(backUp.currentPath).toBe("know");
   });
 });

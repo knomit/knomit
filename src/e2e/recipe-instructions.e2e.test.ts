@@ -32,7 +32,7 @@ scope:
   domain: [security, compliance]
   entities: [libfoo, libbar]
   search: [buffer overflow, injection]
-  path: worlds/security
+  path: know/security
 auto_merge: true
 steps:
   - mode: prune
@@ -47,7 +47,7 @@ steps:
     expect(recipe.scope!.domain).toEqual(["security", "compliance"]);
     expect(recipe.scope!.entities).toEqual(["libfoo", "libbar"]);
     expect(recipe.scope!.search).toEqual(["buffer overflow", "injection"]);
-    expect(recipe.scope!.path).toBe("worlds/security");
+    expect(recipe.scope!.path).toBe("know/security");
     expect(recipe.auto_merge).toBe(true);
     expect(recipe.steps).toHaveLength(2);
     expect(recipe.steps[0].mode).toBe("prune");

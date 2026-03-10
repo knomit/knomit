@@ -3,8 +3,8 @@ import { parseKnomitRef } from "./refs";
 
 describe("parseKnomitRef", () => {
   it("parses local ref", () => {
-    expect(parseKnomitRef("knomit:blob/abc1234/worlds/people/alice/likes-rock.md"))
-      .toEqual({ path: "worlds/people/alice/likes-rock.md", commit: "abc1234" });
+    expect(parseKnomitRef("knomit:blob/abc1234/know/people/alice/likes-rock.md"))
+      .toEqual({ path: "know/people/alice/likes-rock.md", commit: "abc1234" });
   });
 
   it("parses external ref", () => {
@@ -21,7 +21,7 @@ describe("parseKnomitRef", () => {
   });
 
   it("handles paths with multiple slashes", () => {
-    expect(parseKnomitRef("knomit:blob/aaa1111/worlds/a/b/c/d.md"))
-      .toEqual({ path: "worlds/a/b/c/d.md", commit: "aaa1111" });
+    expect(parseKnomitRef("knomit:blob/aaa1111/know/a/b/c/d.md"))
+      .toEqual({ path: "know/a/b/c/d.md", commit: "aaa1111" });
   });
 });

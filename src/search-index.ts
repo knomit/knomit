@@ -8,6 +8,7 @@ import { ensureVecExtension, ensureOnnxModel } from "./assets";
 import { bundledLibDir } from "./paths";
 import { Embedder } from "./embeddings";
 import type { GitRepo } from "./git";
+import { ONTOLOGY_DIR } from "./constants.js";
 
 export interface SearchIndexOptions {
   embeddings?: boolean;
@@ -465,7 +466,7 @@ export class SearchIndex {
     }
 
     const head = await repo.headCommit();
-    await this.indexDir(repo, "worlds", head);
+    await this.indexDir(repo, ONTOLOGY_DIR, head);
 
     this.setMeta("last_commit", head);
     log.info("search index: rebuild complete");
@@ -595,7 +596,7 @@ export class SearchIndex {
       this.db.run("ROLLBACK");
       throw err;
     }
-    await this.indexDir(repo, "worlds", head);
+    await this.indexDir(repo, ONTOLOGY_DIR, head);
     this.setMeta("last_commit", head);
   }
 

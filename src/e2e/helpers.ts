@@ -15,13 +15,13 @@ export interface TestEnv {
 }
 
 /** Create an isolated repo + search index in a temp directory. */
-export async function createTestEnv(machineId = "test-machine"): Promise<TestEnv> {
+export async function createTestEnv(agentId = "test-agent"): Promise<TestEnv> {
   const base = await mkdtemp(join(tmpdir(), "knomit-e2e-"));
   const repoPath = join(base, "repo");
   const cacheDir = join(base, "cache");
   await mkdir(cacheDir, { recursive: true });
 
-  const repo = new GitRepo(repoPath, machineId);
+  const repo = new GitRepo(repoPath, agentId);
   await repo.init();
 
   const searchIndex = new SearchIndex(cacheDir);

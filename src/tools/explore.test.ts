@@ -11,14 +11,14 @@ let repo: GitRepo;
 
 beforeEach(async () => {
   testDir = await mkdtemp(join(tmpdir(), "knomit-test-"));
-  repo = new GitRepo(join(testDir, "repo"), "test-machine");
+  repo = new GitRepo(join(testDir, "repo"), "test-agent");
   await repo.init();
 
   await learnHandler(repo, {
     moment_name: "setup",
     facts: [
       {
-        path: "worlds/earth.md",
+        path: "know/earth.md",
         domain: ["geography"],
         confidence: 0.99,
         sources: 1,
@@ -27,7 +27,7 @@ beforeEach(async () => {
         body: "The third planet.",
       },
       {
-        path: "worlds/earth/uk.md",
+        path: "know/earth/uk.md",
         domain: ["geography"],
         confidence: 0.99,
         sources: 1,
@@ -36,7 +36,7 @@ beforeEach(async () => {
         body: "Island nation in Europe.",
       },
       {
-        path: "worlds/earth/uk/london.md",
+        path: "know/earth/uk/london.md",
         domain: ["geography", "urban"],
         confidence: 0.99,
         sources: 1,
@@ -45,7 +45,7 @@ beforeEach(async () => {
         body: "Capital city of the UK.",
       },
       {
-        path: "worlds/earth/uk/london/london-rains.md",
+        path: "know/earth/uk/london/london-rains.md",
         domain: ["geography", "weather"],
         confidence: 0.8,
         sources: 2,
@@ -54,7 +54,7 @@ beforeEach(async () => {
         body: "Frequent rainfall in London.",
       },
       {
-        path: "worlds/earth/uk/uk-drives-left.md",
+        path: "know/earth/uk/uk-drives-left.md",
         domain: ["geography", "transport"],
         confidence: 0.99,
         sources: 5,
@@ -80,27 +80,27 @@ describe("knomit_explore", () => {
   });
 
   it("shows manifest for a world", async () => {
-    const result = await exploreHandler(repo, { path: "worlds/earth/uk/london" });
+    const result = await exploreHandler(repo, { path: "know/earth/uk/london" });
 
     expect(result.manifest).not.toBeNull();
-    expect(result.manifest!.file).toBe("worlds/earth/uk/london.md");
+    expect(result.manifest!.file).toBe("know/earth/uk/london.md");
 
     const names = result.children.map(c => c.name);
     expect(names).toContain("london-rains.md");
   });
 
   it("shows inherited facts from parent levels", async () => {
-    const result = await exploreHandler(repo, { path: "worlds/earth/uk/london" });
+    const result = await exploreHandler(repo, { path: "know/earth/uk/london" });
 
     const inheritedFiles = result.inherited_facts.map(f => f.file);
-    expect(inheritedFiles).toContain("worlds/earth/uk/uk-drives-left.md");
+    expect(inheritedFiles).toContain("know/earth/uk/uk-drives-left.md");
 
-    const drivesLeft = result.inherited_facts.find(f => f.file === "worlds/earth/uk/uk-drives-left.md");
-    expect(drivesLeft?.from_level).toBe("worlds/earth/uk");
+    const drivesLeft = result.inherited_facts.find(f => f.file === "know/earth/uk/uk-drives-left.md");
+    expect(drivesLeft?.from_level).toBe("know/earth/uk");
   });
 
   it("identifies worlds vs facts in children", async () => {
-    const result = await exploreHandler(repo, { path: "worlds/earth/uk" });
+    const result = await exploreHandler(repo, { path: "know/earth/uk" });
 
     const london = result.children.find(c => c.name === "london");
     expect(london?.type).toBe("world");

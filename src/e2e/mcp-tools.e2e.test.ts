@@ -34,7 +34,7 @@ describe("knomit_learn", () => {
     const result = await learnHandler(env.repo, {
       moment_name: "test-moment",
       facts: [{
-        path: "worlds/tools/bun",
+        path: "know/tools/bun",
         domain: ["tools"],
         confidence: 0.9,
         sources: 1,
@@ -49,7 +49,7 @@ describe("knomit_learn", () => {
     expect(result.moment_tag).toMatch(/^learn\//);
 
     // Verify file exists and parses correctly
-    const content = await env.repo.readFile("worlds/tools/bun.md");
+    const content = await env.repo.readFile("know/tools/bun.md");
     const parsed = parseFact(content);
     expect(parsed.title).toBe("Bun is the preferred runtime");
     expect(parsed.frontmatter.domain).toEqual(["tools"]);
@@ -63,7 +63,7 @@ describe("knomit_learn", () => {
       moment_name: "multi-learn",
       facts: [
         {
-          path: "worlds/people/alice/likes-coffee",
+          path: "know/people/alice/likes-coffee",
           domain: ["preferences"],
           confidence: 0.8,
           sources: 1,
@@ -72,7 +72,7 @@ describe("knomit_learn", () => {
           body: "Prefers espresso.",
         },
         {
-          path: "worlds/people/alice/uses-vim",
+          path: "know/people/alice/uses-vim",
           domain: ["tools"],
           confidence: 0.95,
           sources: 2,
@@ -87,13 +87,13 @@ describe("knomit_learn", () => {
     expect(result.moment_tag).toMatch(/^learn\//);
 
     // Both files exist
-    const exists1 = await env.repo.fileExists("worlds/people/alice/likes-coffee.md");
-    const exists2 = await env.repo.fileExists("worlds/people/alice/uses-vim.md");
+    const exists1 = await env.repo.fileExists("know/people/alice/likes-coffee.md");
+    const exists2 = await env.repo.fileExists("know/people/alice/uses-vim.md");
     expect(exists1).toBe(true);
     expect(exists2).toBe(true);
   });
 
-  it("auto-prepends worlds/ and appends .md to paths", async () => {
+  it("auto-prepends know/ and appends .md to paths", async () => {
     const result = await learnHandler(env.repo, {
       moment_name: "path-normalization",
       facts: [{
@@ -108,7 +108,7 @@ describe("knomit_learn", () => {
     }, env.searchIndex);
 
     expect(result.commits).toHaveLength(1);
-    const exists = await env.repo.fileExists("worlds/projects/webapp/uses-react.md");
+    const exists = await env.repo.fileExists("know/projects/webapp/uses-react.md");
     expect(exists).toBe(true);
   });
 
@@ -116,7 +116,7 @@ describe("knomit_learn", () => {
     await learnHandler(env.repo, {
       moment_name: "indexed-learn",
       facts: [{
-        path: "worlds/test/searchable",
+        path: "know/test/searchable",
         domain: ["testing"],
         confidence: 0.85,
         sources: 1,
@@ -136,7 +136,7 @@ describe("knomit_learn", () => {
     const result = await learnHandler(env.repo, {
       moment_name: "tagged-moment",
       facts: [{
-        path: "worlds/test/tagged",
+        path: "know/test/tagged",
         domain: ["testing"],
         confidence: 0.7,
         sources: 1,
@@ -154,7 +154,7 @@ describe("knomit_learn", () => {
     await learnHandler(env.repo, {
       moment_name: "v1",
       facts: [{
-        path: "worlds/test/overwrite",
+        path: "know/test/overwrite",
         domain: ["testing"],
         confidence: 0.5,
         sources: 1,
@@ -167,7 +167,7 @@ describe("knomit_learn", () => {
     await learnHandler(env.repo, {
       moment_name: "v2",
       facts: [{
-        path: "worlds/test/overwrite",
+        path: "know/test/overwrite",
         domain: ["testing"],
         confidence: 0.9,
         sources: 2,
@@ -177,7 +177,7 @@ describe("knomit_learn", () => {
       }],
     }, env.searchIndex);
 
-    const content = await env.repo.readFile("worlds/test/overwrite.md");
+    const content = await env.repo.readFile("know/test/overwrite.md");
     const parsed = parseFact(content);
     expect(parsed.title).toBe("Version 2");
     expect(parsed.frontmatter.confidence).toBe(0.9);
@@ -195,7 +195,7 @@ describe("knomit_query", () => {
       moment_name: "seed",
       facts: [
         {
-          path: "worlds/projects/webapp/uses-react",
+          path: "know/projects/webapp/uses-react",
           domain: ["architecture", "frontend"],
           confidence: 0.9,
           sources: 2,
@@ -204,7 +204,7 @@ describe("knomit_query", () => {
           body: "Frontend built with React 19 and TypeScript.",
         },
         {
-          path: "worlds/projects/webapp/uses-postgres",
+          path: "know/projects/webapp/uses-postgres",
           domain: ["architecture", "database"],
           confidence: 0.85,
           sources: 1,
@@ -213,7 +213,7 @@ describe("knomit_query", () => {
           body: "Primary database for transactional data.",
         },
         {
-          path: "worlds/people/bob/prefers-dark-mode",
+          path: "know/people/bob/prefers-dark-mode",
           domain: ["preferences"],
           confidence: 0.95,
           sources: 3,
@@ -222,7 +222,7 @@ describe("knomit_query", () => {
           body: "Uses dark mode in all editors and terminals.",
         },
         {
-          path: "worlds/security/cve-2024-001",
+          path: "know/security/cve-2024-001",
           domain: ["security"],
           confidence: 0.6,
           sources: 1,
@@ -255,7 +255,7 @@ describe("knomit_query", () => {
   });
 
   it("queries by path prefix", async () => {
-    const result = await queryHandler(env.repo, { path: "worlds/projects/webapp" }, env.searchIndex);
+    const result = await queryHandler(env.repo, { path: "know/projects/webapp" }, env.searchIndex);
     expect(result.facts.length).toBe(2);
   });
 
@@ -306,7 +306,7 @@ describe("knomit_update", () => {
     await learnHandler(env.repo, {
       moment_name: "setup",
       facts: [{
-        path: "worlds/test/updatable",
+        path: "know/test/updatable",
         domain: ["testing"],
         confidence: 0.5,
         sources: 1,
@@ -320,7 +320,7 @@ describe("knomit_update", () => {
 
   it("updates confidence", async () => {
     const result = await updateHandler(env.repo, {
-      file: "worlds/test/updatable.md",
+      file: "know/test/updatable.md",
       moment_name: "confidence-boost",
       updates: { confidence: 0.9 },
     }, env.searchIndex);
@@ -328,7 +328,7 @@ describe("knomit_update", () => {
     expect(result.commit).toBeTruthy();
     expect(result.moment_tag).toMatch(/^learn\//);
 
-    const content = await env.repo.readFile("worlds/test/updatable.md");
+    const content = await env.repo.readFile("know/test/updatable.md");
     const parsed = parseFact(content);
     expect(parsed.frontmatter.confidence).toBe(0.9);
     // Body should be unchanged
@@ -337,12 +337,12 @@ describe("knomit_update", () => {
 
   it("updates body while keeping frontmatter", async () => {
     await updateHandler(env.repo, {
-      file: "worlds/test/updatable.md",
+      file: "know/test/updatable.md",
       moment_name: "body-update",
       updates: { body: "Updated body with more detail." },
     }, env.searchIndex);
 
-    const content = await env.repo.readFile("worlds/test/updatable.md");
+    const content = await env.repo.readFile("know/test/updatable.md");
     const parsed = parseFact(content);
     expect(parsed.body).toBe("Updated body with more detail.");
     expect(parsed.frontmatter.domain).toEqual(["testing"]);
@@ -350,31 +350,31 @@ describe("knomit_update", () => {
 
   it("updates title", async () => {
     await updateHandler(env.repo, {
-      file: "worlds/test/updatable.md",
+      file: "know/test/updatable.md",
       moment_name: "title-update",
       updates: { title: "Renamed fact" },
     }, env.searchIndex);
 
-    const content = await env.repo.readFile("worlds/test/updatable.md");
+    const content = await env.repo.readFile("know/test/updatable.md");
     const parsed = parseFact(content);
     expect(parsed.title).toBe("Renamed fact");
   });
 
   it("appends refs via merge", async () => {
     await updateHandler(env.repo, {
-      file: "worlds/test/updatable.md",
+      file: "know/test/updatable.md",
       moment_name: "add-refs",
       updates: { refs: ["https://example.com/source1"] },
     }, env.searchIndex);
 
-    const content = await env.repo.readFile("worlds/test/updatable.md");
+    const content = await env.repo.readFile("know/test/updatable.md");
     const parsed = parseFact(content);
     expect(parsed.frontmatter.refs).toContain("https://example.com/source1");
   });
 
   it("updates multiple fields at once", async () => {
     await updateHandler(env.repo, {
-      file: "worlds/test/updatable.md",
+      file: "know/test/updatable.md",
       moment_name: "multi-update",
       updates: {
         confidence: 0.95,
@@ -385,7 +385,7 @@ describe("knomit_update", () => {
       },
     }, env.searchIndex);
 
-    const content = await env.repo.readFile("worlds/test/updatable.md");
+    const content = await env.repo.readFile("know/test/updatable.md");
     const parsed = parseFact(content);
     expect(parsed.frontmatter.confidence).toBe(0.95);
     expect(parsed.frontmatter.sources).toBe(5);
@@ -396,7 +396,7 @@ describe("knomit_update", () => {
 
   it("throws on non-existent file", async () => {
     await expect(updateHandler(env.repo, {
-      file: "worlds/nonexistent.md",
+      file: "know/nonexistent.md",
       moment_name: "bad-update",
       updates: { confidence: 0.5 },
     }, env.searchIndex)).rejects.toThrow("File not found");
@@ -404,7 +404,7 @@ describe("knomit_update", () => {
 
   it("updates search index after update", async () => {
     await updateHandler(env.repo, {
-      file: "worlds/test/updatable.md",
+      file: "know/test/updatable.md",
       moment_name: "index-update",
       updates: { title: "Completely new title for searching" },
     }, env.searchIndex);
@@ -424,7 +424,7 @@ describe("knomit_forget", () => {
     await learnHandler(env.repo, {
       moment_name: "setup",
       facts: [{
-        path: "worlds/test/forgettable",
+        path: "know/test/forgettable",
         domain: ["testing"],
         confidence: 0.5,
         sources: 1,
@@ -437,14 +437,14 @@ describe("knomit_forget", () => {
 
   it("deletes the fact file", async () => {
     const result = await forgetHandler(env.repo, {
-      file: "worlds/test/forgettable.md",
+      file: "know/test/forgettable.md",
       moment_name: "cleanup",
     }, env.searchIndex);
 
     expect(result.commit).toBeTruthy();
     expect(result.moment_tag).toMatch(/^forget\//);
 
-    const exists = await env.repo.fileExists("worlds/test/forgettable.md");
+    const exists = await env.repo.fileExists("know/test/forgettable.md");
     expect(exists).toBe(false);
   });
 
@@ -454,7 +454,7 @@ describe("knomit_forget", () => {
     expect(before.length).toBeGreaterThanOrEqual(1);
 
     await forgetHandler(env.repo, {
-      file: "worlds/test/forgettable.md",
+      file: "know/test/forgettable.md",
       moment_name: "cleanup",
     }, env.searchIndex);
 
@@ -464,7 +464,7 @@ describe("knomit_forget", () => {
 
   it("creates a forget tag", async () => {
     const result = await forgetHandler(env.repo, {
-      file: "worlds/test/forgettable.md",
+      file: "know/test/forgettable.md",
       moment_name: "cleanup",
     }, env.searchIndex);
 
@@ -474,7 +474,7 @@ describe("knomit_forget", () => {
 
   it("throws on non-existent file", async () => {
     await expect(forgetHandler(env.repo, {
-      file: "worlds/nonexistent.md",
+      file: "know/nonexistent.md",
       moment_name: "bad-forget",
     }, env.searchIndex)).rejects.toThrow();
   });
@@ -490,7 +490,7 @@ describe("knomit_explore", () => {
       moment_name: "setup",
       facts: [
         {
-          path: "worlds/projects/webapp/uses-react",
+          path: "know/projects/webapp/uses-react",
           domain: ["architecture"],
           confidence: 0.9,
           sources: 1,
@@ -499,7 +499,7 @@ describe("knomit_explore", () => {
           body: "Frontend framework.",
         },
         {
-          path: "worlds/projects/webapp/uses-postgres",
+          path: "know/projects/webapp/uses-postgres",
           domain: ["architecture"],
           confidence: 0.85,
           sources: 1,
@@ -508,7 +508,7 @@ describe("knomit_explore", () => {
           body: "Database choice.",
         },
         {
-          path: "worlds/people/alice/likes-coffee",
+          path: "know/people/alice/likes-coffee",
           domain: ["preferences"],
           confidence: 0.8,
           sources: 1,
@@ -520,21 +520,21 @@ describe("knomit_explore", () => {
     }, env.searchIndex);
   });
 
-  it("lists top-level worlds", async () => {
-    const result = await exploreHandler(env.repo, { path: "worlds" }, { skipSync: true });
+  it("lists top-level know", async () => {
+    const result = await exploreHandler(env.repo, { path: "know" }, { skipSync: true });
     const names = result.children.map(c => c.name);
     expect(names).toContain("projects");
     expect(names).toContain("people");
   });
 
   it("shows manifest at root", async () => {
-    const result = await exploreHandler(env.repo, { path: "worlds" }, { skipSync: true });
+    const result = await exploreHandler(env.repo, { path: "know" }, { skipSync: true });
     expect(result.manifest).not.toBeNull();
     expect(result.manifest!.title).toBe("Knowledge Base");
   });
 
   it("lists facts in a directory", async () => {
-    const result = await exploreHandler(env.repo, { path: "worlds/projects/webapp" }, { skipSync: true });
+    const result = await exploreHandler(env.repo, { path: "know/projects/webapp" }, { skipSync: true });
     const facts = result.children.filter(c => c.type === "fact");
     expect(facts.length).toBe(2);
     const names = facts.map(f => f.name);
@@ -542,21 +542,21 @@ describe("knomit_explore", () => {
     expect(names).toContain("uses-postgres.md");
   });
 
-  it("shows sub-worlds (directories) correctly", async () => {
-    const result = await exploreHandler(env.repo, { path: "worlds/projects" }, { skipSync: true });
+  it("shows sub-know (directories) correctly", async () => {
+    const result = await exploreHandler(env.repo, { path: "know/projects" }, { skipSync: true });
     const worlds = result.children.filter(c => c.type === "world");
     expect(worlds.length).toBe(1);
     expect(worlds[0].name).toBe("webapp");
   });
 
   it("includes fact summaries (titles)", async () => {
-    const result = await exploreHandler(env.repo, { path: "worlds/projects/webapp" }, { skipSync: true });
+    const result = await exploreHandler(env.repo, { path: "know/projects/webapp" }, { skipSync: true });
     const reactFact = result.children.find(c => c.name === "uses-react.md");
     expect(reactFact?.summary).toBe("WebApp uses React");
   });
 
   it("returns empty children for non-existent path", async () => {
-    const result = await exploreHandler(env.repo, { path: "worlds/nonexistent" }, { skipSync: true });
+    const result = await exploreHandler(env.repo, { path: "know/nonexistent" }, { skipSync: true });
     expect(result.children).toEqual([]);
   });
 
@@ -565,7 +565,7 @@ describe("knomit_explore", () => {
     await learnHandler(env.repo, {
       moment_name: "parent-fact",
       facts: [{
-        path: "worlds/projects/coding-standards",
+        path: "know/projects/coding-standards",
         domain: ["standards"],
         confidence: 0.9,
         sources: 1,
@@ -575,7 +575,7 @@ describe("knomit_explore", () => {
       }],
     }, env.searchIndex);
 
-    const result = await exploreHandler(env.repo, { path: "worlds/projects/webapp" }, { skipSync: true });
+    const result = await exploreHandler(env.repo, { path: "know/projects/webapp" }, { skipSync: true });
     const inherited = result.inherited_facts;
     // Should inherit the coding-standards fact from parent
     expect(inherited.length).toBeGreaterThanOrEqual(1);
@@ -593,7 +593,7 @@ describe("knomit_why", () => {
     await learnHandler(env.repo, {
       moment_name: "initial-learn",
       facts: [{
-        path: "worlds/test/provenance",
+        path: "know/test/provenance",
         domain: ["testing"],
         confidence: 0.7,
         sources: 1,
@@ -604,7 +604,7 @@ describe("knomit_why", () => {
       }],
     }, env.searchIndex);
 
-    const result = await whyHandler(env.repo, { file: "worlds/test/provenance.md" });
+    const result = await whyHandler(env.repo, { file: "know/test/provenance.md" });
 
     expect(result.fact.title).toBe("Provenance test fact");
     expect(result.fact.frontmatter.confidence).toBe(0.7);
@@ -617,7 +617,7 @@ describe("knomit_why", () => {
     await learnHandler(env.repo, {
       moment_name: "v1",
       facts: [{
-        path: "worlds/test/history-tracked",
+        path: "know/test/history-tracked",
         domain: ["testing"],
         confidence: 0.5,
         sources: 1,
@@ -628,18 +628,18 @@ describe("knomit_why", () => {
     }, env.searchIndex);
 
     await updateHandler(env.repo, {
-      file: "worlds/test/history-tracked.md",
+      file: "know/test/history-tracked.md",
       moment_name: "v2",
       updates: { confidence: 0.8, body: "Version 2." },
     }, env.searchIndex);
 
     await updateHandler(env.repo, {
-      file: "worlds/test/history-tracked.md",
+      file: "know/test/history-tracked.md",
       moment_name: "v3",
       updates: { confidence: 0.95, body: "Version 3 — confirmed." },
     }, env.searchIndex);
 
-    const result = await whyHandler(env.repo, { file: "worlds/test/history-tracked.md" });
+    const result = await whyHandler(env.repo, { file: "know/test/history-tracked.md" });
     expect(result.history.length).toBe(3);
     expect(result.fact.frontmatter.confidence).toBe(0.95);
   });
@@ -649,7 +649,7 @@ describe("knomit_why", () => {
       moment_name: "sibling-test",
       facts: [
         {
-          path: "worlds/test/sibling-a",
+          path: "know/test/sibling-a",
           domain: ["testing"],
           confidence: 0.8,
           sources: 1,
@@ -658,7 +658,7 @@ describe("knomit_why", () => {
           body: "First of a pair.",
         },
         {
-          path: "worlds/test/sibling-b",
+          path: "know/test/sibling-b",
           domain: ["testing"],
           confidence: 0.8,
           sources: 1,
@@ -669,10 +669,10 @@ describe("knomit_why", () => {
       ],
     }, env.searchIndex);
 
-    const result = await whyHandler(env.repo, { file: "worlds/test/sibling-a.md" });
+    const result = await whyHandler(env.repo, { file: "know/test/sibling-a.md" });
     expect(result.learning_moment.siblings.length).toBeGreaterThanOrEqual(1);
     const siblingFiles = result.learning_moment.siblings.map(s => s.file);
-    expect(siblingFiles).toContain("worlds/test/sibling-b.md");
+    expect(siblingFiles).toContain("know/test/sibling-b.md");
   });
 });
 
@@ -687,7 +687,7 @@ describe("full MCP workflow", () => {
       moment_name: "full-workflow",
       facts: [
         {
-          path: "worlds/projects/api/uses-bun",
+          path: "know/projects/api/uses-bun",
           domain: ["architecture", "runtime"],
           confidence: 0.9,
           sources: 1,
@@ -697,7 +697,7 @@ describe("full MCP workflow", () => {
           body: "Bun is used for speed and simplicity.",
         },
         {
-          path: "worlds/projects/api/rest-endpoints",
+          path: "know/projects/api/rest-endpoints",
           domain: ["architecture", "api"],
           confidence: 0.7,
           sources: 1,
@@ -718,27 +718,27 @@ describe("full MCP workflow", () => {
 
     // 3. Update confidence after confirmation
     await updateHandler(env.repo, {
-      file: "worlds/projects/api/rest-endpoints.md",
+      file: "know/projects/api/rest-endpoints.md",
       moment_name: "rest-confirmed",
       updates: { confidence: 0.95, sources: 3 },
     }, env.searchIndex);
 
     // 4. Check provenance
     const whyResult = await whyHandler(env.repo, {
-      file: "worlds/projects/api/rest-endpoints.md",
+      file: "know/projects/api/rest-endpoints.md",
     });
     expect(whyResult.history.length).toBe(2); // learn + update
     expect(whyResult.fact.frontmatter.confidence).toBe(0.95);
 
     // 5. Explore the hierarchy
     const exploreResult = await exploreHandler(env.repo, {
-      path: "worlds/projects/api",
+      path: "know/projects/api",
     }, { skipSync: true });
     expect(exploreResult.children.length).toBe(2);
 
     // 6. Forget one fact
     await forgetHandler(env.repo, {
-      file: "worlds/projects/api/uses-bun.md",
+      file: "know/projects/api/uses-bun.md",
       moment_name: "remove-bun-fact",
     }, env.searchIndex);
 

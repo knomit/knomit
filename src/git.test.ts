@@ -25,7 +25,7 @@ let repo: GitRepo;
 
 beforeEach(async () => {
   testDir = await mkdtemp(join(tmpdir(), "knomit-test-"));
-  repo = new GitRepo(join(testDir, "repo"), "test-machine");
+  repo = new GitRepo(join(testDir, "repo"), "test-agent");
 });
 
 afterEach(async () => {
@@ -33,15 +33,15 @@ afterEach(async () => {
 });
 
 describe("GitRepo.init", () => {
-  it("creates a new repo with worlds.md and machine branch", async () => {
+  it("creates a new repo with know.md and agent branch", async () => {
     await repo.init();
 
-    // Should be on machine branch
+    // Should be on agent branch
     const branch = await repo.currentBranch();
-    expect(branch).toBe("machine/test-machine");
+    expect(branch).toBe("agent/test-agent");
 
-    // worlds.md should exist
-    const content = await repo.readFile("worlds.md");
+    // know.md should exist
+    const content = await repo.readFile("know.md");
     expect(content).toContain("Knowledge Base");
   });
 
@@ -49,7 +49,7 @@ describe("GitRepo.init", () => {
     await repo.init();
     await repo.init();
     const branch = await repo.currentBranch();
-    expect(branch).toBe("machine/test-machine");
+    expect(branch).toBe("agent/test-agent");
   });
 });
 
@@ -57,12 +57,12 @@ describe("GitRepo.commit", () => {
   it("commits a file and returns the hash", async () => {
     await repo.init();
     const hash = await repo.commit(
-      [{ path: "worlds/test.md", content: "# Test\n\nHello." }],
+      [{ path: "know/test.md", content: "# Test\n\nHello." }],
       "add test fact"
     );
     expect(hash).toMatch(/^[0-9a-f]{7,40}$/);
 
-    const content = await repo.readFile("worlds/test.md");
+    const content = await repo.readFile("know/test.md");
     expect(content).toContain("Hello.");
   });
 });
@@ -71,7 +71,7 @@ describe("GitRepo.tag", () => {
   it("creates a tag on the current HEAD", async () => {
     await repo.init();
     await repo.commit(
-      [{ path: "worlds/test.md", content: "test" }],
+      [{ path: "know/test.md", content: "test" }],
       "test commit"
     );
     await repo.tag("learn/test-moment");
@@ -82,9 +82,9 @@ describe("GitRepo.tag", () => {
 
   it("appends timestamp if tag exists", async () => {
     await repo.init();
-    await repo.commit([{ path: "worlds/a.md", content: "a" }], "first");
+    await repo.commit([{ path: "know/a.md", content: "a" }], "first");
     await repo.tag("learn/dupe");
-    await repo.commit([{ path: "worlds/b.md", content: "b" }], "second");
+    await repo.commit([{ path: "know/b.md", content: "b" }], "second");
     await repo.tag("learn/dupe");
 
     const tags = await repo.listTags();
@@ -96,15 +96,15 @@ describe("GitRepo.log", () => {
   it("returns commit history for a file", async () => {
     await repo.init();
     await repo.commit(
-      [{ path: "worlds/evolving.md", content: "v1" }],
+      [{ path: "know/evolving.md", content: "v1" }],
       "version 1"
     );
     await repo.commit(
-      [{ path: "worlds/evolving.md", content: "v2" }],
+      [{ path: "know/evolving.md", content: "v2" }],
       "version 2"
     );
 
-    const history = await repo.log("worlds/evolving.md");
+    const history = await repo.log("know/evolving.md");
     expect(history.length).toBe(2);
     expect(history[0].message).toBe("version 2");
     expect(history[1].message).toBe("version 1");
@@ -115,24 +115,24 @@ describe("GitRepo.log", () => {
     // target commit when navigating from changed-file items in history view.
     await repo.init();
     const c1 = await repo.commit(
-      [{ path: "worlds/file.md", content: "v1" }],
+      [{ path: "know/file.md", content: "v1" }],
       "first"
     );
     const c2 = await repo.commit(
-      [{ path: "worlds/file.md", content: "v2" }],
+      [{ path: "know/file.md", content: "v2" }],
       "second"
     );
     await repo.commit(
-      [{ path: "worlds/file.md", content: "v3" }],
+      [{ path: "know/file.md", content: "v3" }],
       "third"
     );
 
     // Without fromCommit: see all 3
-    const all = await repo.log("worlds/file.md");
+    const all = await repo.log("know/file.md");
     expect(all.length).toBe(3);
 
     // With fromCommit=c2: only see c2 and c1 (not c3)
-    const fromC2 = await repo.log("worlds/file.md", c2);
+    const fromC2 = await repo.log("know/file.md", c2);
     expect(fromC2.length).toBe(2);
     expect(fromC2[0].message).toBe("second");
     expect(fromC2[1].message).toBe("first");
@@ -144,13 +144,13 @@ describe("GitRepo.listDir", () => {
     await repo.init();
     await repo.commit(
       [
-        { path: "worlds/people/alice.md", content: "alice manifest" },
-        { path: "worlds/people/alice/likes-rock.md", content: "rock" },
+        { path: "know/people/alice.md", content: "alice manifest" },
+        { path: "know/people/alice/likes-rock.md", content: "rock" },
       ],
       "add alice"
     );
 
-    const entries = await repo.listDir("worlds/people");
+    const entries = await repo.listDir("know/people");
     expect(entries.map(e => e.name)).toContain("alice.md");
     expect(entries.map(e => e.name)).toContain("alice");
   });
@@ -162,11 +162,11 @@ describe("GitRepo.grep", () => {
     await repo.commit(
       [
         {
-          path: "worlds/a.md",
+          path: "know/a.md",
           content: '---\nentities: [alice, bob]\n---\n# A\n\nBody.',
         },
         {
-          path: "worlds/b.md",
+          path: "know/b.md",
           content: '---\nentities: [charlie]\n---\n# B\n\nBody.',
         },
       ],
@@ -174,7 +174,7 @@ describe("GitRepo.grep", () => {
     );
 
     const matches = await repo.grep("alice");
-    expect(matches).toContain("worlds/a.md");
-    expect(matches).not.toContain("worlds/b.md");
+    expect(matches).toContain("know/a.md");
+    expect(matches).not.toContain("know/b.md");
   });
 });

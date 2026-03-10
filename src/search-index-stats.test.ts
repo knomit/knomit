@@ -12,15 +12,15 @@ beforeAll(async () => {
   idx = new SearchIndex(dir);
   await idx.init();
 
-  await idx.upsert("worlds/physics/gravity.md", {
+  await idx.upsert("know/physics/gravity.md", {
     title: "Gravity", body: "Force of attraction", domain: ["physics"],
     entities: ["gravity"], confidence: 0.9, sources: 2, refs: [], commitHash: "abc",
   });
-  await idx.upsert("worlds/physics/light.md", {
+  await idx.upsert("know/physics/light.md", {
     title: "Light", body: "Electromagnetic radiation", domain: ["physics"],
     entities: ["light", "photon"], confidence: 0.8, sources: 1, refs: [], commitHash: "def",
   });
-  await idx.upsert("worlds/math/algebra.md", {
+  await idx.upsert("know/math/algebra.md", {
     title: "Algebra", body: "Study of symbols", domain: ["math"],
     entities: ["algebra"], confidence: 0.7, sources: 3, refs: [], commitHash: "ghi",
   });
@@ -43,7 +43,7 @@ test("stats() returns domain distribution", () => {
 });
 
 test("stats() with pathPrefix filters to subtree", () => {
-  const s = idx.stats("worlds/physics");
+  const s = idx.stats("know/physics");
   expect(s.totalFacts).toBe(2);
   expect(s.domainCounts).toEqual({ physics: 2 });
 });

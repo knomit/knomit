@@ -11,14 +11,14 @@ let repo: GitRepo;
 
 beforeEach(async () => {
   testDir = await mkdtemp(join(tmpdir(), "knomit-test-"));
-  repo = new GitRepo(join(testDir, "repo"), "test-machine");
+  repo = new GitRepo(join(testDir, "repo"), "test-agent");
   await repo.init();
 
   await learnHandler(repo, {
     moment_name: "seed",
     facts: [
       {
-        path: "worlds/people/alice/likes-rock.md",
+        path: "know/people/alice/likes-rock.md",
         domain: ["personal", "music"],
         confidence: 0.8,
         sources: 2,
@@ -37,21 +37,21 @@ afterEach(async () => {
 describe("knomit_forget", () => {
   it("deletes a fact file and creates a commit", async () => {
     const result = await forgetHandler(repo, {
-      file: "worlds/people/alice/likes-rock.md",
+      file: "know/people/alice/likes-rock.md",
       moment_name: "outdated-preference",
     });
 
     expect(result.commit).toMatch(/^[0-9a-f]+$/);
-    expect(result.file).toBe("worlds/people/alice/likes-rock.md");
+    expect(result.file).toBe("know/people/alice/likes-rock.md");
     expect(result.moment_tag).toBe("forget/outdated-preference");
 
-    const exists = await repo.fileExists("worlds/people/alice/likes-rock.md");
+    const exists = await repo.fileExists("know/people/alice/likes-rock.md");
     expect(exists).toBe(false);
   });
 
   it("tags the commit with forget/ prefix", async () => {
     await forgetHandler(repo, {
-      file: "worlds/people/alice/likes-rock.md",
+      file: "know/people/alice/likes-rock.md",
       moment_name: "no-longer-true",
     });
 
@@ -62,7 +62,7 @@ describe("knomit_forget", () => {
   it("throws on nonexistent file", async () => {
     await expect(
       forgetHandler(repo, {
-        file: "worlds/nonexistent.md",
+        file: "know/nonexistent.md",
         moment_name: "nope",
       })
     ).rejects.toThrow("File not found");

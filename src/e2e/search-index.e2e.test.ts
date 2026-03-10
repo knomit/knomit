@@ -29,7 +29,7 @@ describe("search index FTS", () => {
       moment_name: "seed",
       facts: [
         {
-          path: "worlds/lang/typescript/generics",
+          path: "know/lang/typescript/generics",
           domain: ["programming", "typescript"],
           confidence: 0.9,
           sources: 2,
@@ -38,7 +38,7 @@ describe("search index FTS", () => {
           body: "Generic types enable reusable, type-safe code. Use constraints with extends.",
         },
         {
-          path: "worlds/lang/rust/ownership",
+          path: "know/lang/rust/ownership",
           domain: ["programming", "rust"],
           confidence: 0.95,
           sources: 3,
@@ -47,7 +47,7 @@ describe("search index FTS", () => {
           body: "Each value has exactly one owner. Ownership can be transferred or borrowed.",
         },
         {
-          path: "worlds/tools/git/branching",
+          path: "know/tools/git/branching",
           domain: ["tools", "git"],
           confidence: 0.85,
           sources: 1,
@@ -84,7 +84,7 @@ describe("search index FTS", () => {
   });
 
   it("filters by path prefix", async () => {
-    const results = await env.searchIndex.search({ path: "worlds/lang/" });
+    const results = await env.searchIndex.search({ path: "know/lang/" });
     expect(results.length).toBe(2);
   });
 
@@ -119,7 +119,7 @@ describe("search index sync", () => {
   it("syncs new facts committed directly to repo", async () => {
     // Commit a fact directly (bypassing search index)
     await commitFact(env.repo, {
-      path: "worlds/test/direct-commit",
+      path: "know/test/direct-commit",
       title: "Directly committed fact",
       body: "Not yet in search index.",
       domain: ["testing"],
@@ -141,7 +141,7 @@ describe("search index sync", () => {
     await learnHandler(env.repo, {
       moment_name: "to-delete",
       facts: [{
-        path: "worlds/test/will-delete",
+        path: "know/test/will-delete",
         domain: ["testing"],
         confidence: 0.5,
         sources: 1,
@@ -153,7 +153,7 @@ describe("search index sync", () => {
 
     // Delete via forget (which updates index directly)
     await forgetHandler(env.repo, {
-      file: "worlds/test/will-delete.md",
+      file: "know/test/will-delete.md",
       moment_name: "delete-it",
     }, env.searchIndex);
 
@@ -167,7 +167,7 @@ describe("search index sync", () => {
       moment_name: "reindex-test",
       facts: [
         {
-          path: "worlds/test/reindex-a",
+          path: "know/test/reindex-a",
           domain: ["testing"],
           confidence: 0.8,
           sources: 1,
@@ -176,7 +176,7 @@ describe("search index sync", () => {
           body: "First fact for reindex test.",
         },
         {
-          path: "worlds/test/reindex-b",
+          path: "know/test/reindex-b",
           domain: ["testing"],
           confidence: 0.8,
           sources: 1,
@@ -206,7 +206,7 @@ describe("search index stats", () => {
       moment_name: "stats-seed",
       facts: [
         {
-          path: "worlds/a/fact1",
+          path: "know/a/fact1",
           domain: ["alpha"],
           confidence: 0.8,
           sources: 1,
@@ -215,7 +215,7 @@ describe("search index stats", () => {
           body: "Body 1.",
         },
         {
-          path: "worlds/a/fact2",
+          path: "know/a/fact2",
           domain: ["alpha", "beta"],
           confidence: 0.6,
           sources: 2,
@@ -224,7 +224,7 @@ describe("search index stats", () => {
           body: "Body 2.",
         },
         {
-          path: "worlds/b/fact3",
+          path: "know/b/fact3",
           domain: ["beta"],
           confidence: 1.0,
           sources: 1,
@@ -236,7 +236,7 @@ describe("search index stats", () => {
     }, env.searchIndex);
 
     const stats = env.searchIndex.stats();
-    // worlds.md counts as a fact too
+    // know.md counts as a fact too
     expect(stats.totalFacts).toBeGreaterThanOrEqual(3);
     expect(stats.avgConfidence).toBeGreaterThan(0);
     expect(stats.domainCounts.alpha).toBe(2);
@@ -249,12 +249,12 @@ describe("search index stats", () => {
     await learnHandler(env.repo, {
       moment_name: "path-stats",
       facts: [
-        { path: "worlds/x/fact1", domain: ["d1"], confidence: 0.8, sources: 1, entities: [], title: "X1", body: "." },
-        { path: "worlds/y/fact1", domain: ["d2"], confidence: 0.9, sources: 1, entities: [], title: "Y1", body: "." },
+        { path: "know/x/fact1", domain: ["d1"], confidence: 0.8, sources: 1, entities: [], title: "X1", body: "." },
+        { path: "know/y/fact1", domain: ["d2"], confidence: 0.9, sources: 1, entities: [], title: "Y1", body: "." },
       ],
     }, env.searchIndex);
 
-    const xStats = env.searchIndex.stats("worlds/x/");
+    const xStats = env.searchIndex.stats("know/x/");
     expect(xStats.totalFacts).toBe(1);
     expect(xStats.domainCounts.d1).toBe(1);
   });
@@ -270,7 +270,7 @@ describe("search index cache-git sync", () => {
     await learnHandler(env.repo, {
       moment_name: "first",
       facts: [{
-        path: "worlds/sync/fact-a",
+        path: "know/sync/fact-a",
         domain: ["testing"],
         confidence: 0.8,
         sources: 1,
@@ -279,12 +279,12 @@ describe("search index cache-git sync", () => {
         body: "First fact.",
       }],
     }, env.searchIndex);
-    const commitA = await env.repo.lastCommitForFile("worlds/sync/fact-a.md");
+    const commitA = await env.repo.lastCommitForFile("know/sync/fact-a.md");
 
     await learnHandler(env.repo, {
       moment_name: "second",
       facts: [{
-        path: "worlds/sync/fact-b",
+        path: "know/sync/fact-b",
         domain: ["testing"],
         confidence: 0.8,
         sources: 1,
@@ -293,7 +293,7 @@ describe("search index cache-git sync", () => {
         body: "Second fact.",
       }],
     }, env.searchIndex);
-    const commitB = await env.repo.lastCommitForFile("worlds/sync/fact-b.md");
+    const commitB = await env.repo.lastCommitForFile("know/sync/fact-b.md");
 
     // commitA and commitB should be different commits
     expect(commitA).not.toBe(commitB);
@@ -313,7 +313,7 @@ describe("search index cache-git sync", () => {
   it("commit_hash is accurate after sync (not just HEAD)", async () => {
     // Create initial fact and sync
     await commitFact(env.repo, {
-      path: "worlds/sync/early",
+      path: "know/sync/early",
       title: "Early fact",
       body: "Created first.",
       domain: ["testing"],
@@ -322,11 +322,11 @@ describe("search index cache-git sync", () => {
       entities: ["early"],
       refs: [],
     });
-    const earlyCommit = await env.repo.lastCommitForFile("worlds/sync/early.md");
+    const earlyCommit = await env.repo.lastCommitForFile("know/sync/early.md");
 
     // Create another fact (advances HEAD)
     await commitFact(env.repo, {
-      path: "worlds/sync/late",
+      path: "know/sync/late",
       title: "Late fact",
       body: "Created second.",
       domain: ["testing"],
@@ -348,7 +348,7 @@ describe("search index cache-git sync", () => {
     await learnHandler(env.repo, {
       moment_name: "reindex-hash",
       facts: [{
-        path: "worlds/sync/reindex-target",
+        path: "know/sync/reindex-target",
         domain: ["testing"],
         confidence: 0.9,
         sources: 1,
@@ -357,11 +357,11 @@ describe("search index cache-git sync", () => {
         body: "Should keep its commit hash after reindex.",
       }],
     }, env.searchIndex);
-    const originalCommit = await env.repo.lastCommitForFile("worlds/sync/reindex-target.md");
+    const originalCommit = await env.repo.lastCommitForFile("know/sync/reindex-target.md");
 
     // Create more commits to advance HEAD
     await commitFact(env.repo, {
-      path: "worlds/sync/filler",
+      path: "know/sync/filler",
       title: "Filler",
       body: "Advances HEAD.",
       domain: ["testing"],
@@ -382,7 +382,7 @@ describe("search index cache-git sync", () => {
     await learnHandler(env.repo, {
       moment_name: "remove-sync",
       facts: [{
-        path: "worlds/sync/to-remove",
+        path: "know/sync/to-remove",
         domain: ["testing"],
         confidence: 0.5,
         sources: 1,
@@ -398,7 +398,7 @@ describe("search index cache-git sync", () => {
 
     // Delete via forget and sync
     await forgetHandler(env.repo, {
-      file: "worlds/sync/to-remove.md",
+      file: "know/sync/to-remove.md",
       moment_name: "cleanup",
     }, env.searchIndex);
 
@@ -413,7 +413,7 @@ describe("search index cache-git sync", () => {
   it("sync removes facts deleted directly in git", async () => {
     // Commit a fact and sync so the index knows about it
     await commitFact(env.repo, {
-      path: "worlds/sync/direct-delete",
+      path: "know/sync/direct-delete",
       title: "Direct delete target",
       body: "Will be deleted via git.",
       domain: ["testing"],
@@ -429,7 +429,7 @@ describe("search index cache-git sync", () => {
     expect(before.length).toBe(1);
 
     // Delete the file directly in git (bypassing search index)
-    await env.repo.deleteFile("worlds/sync/direct-delete.md", "remove fact directly");
+    await env.repo.deleteFile("know/sync/direct-delete.md", "remove fact directly");
 
     // Sync should detect the deletion
     const changed = await env.searchIndex.sync(env.repo);

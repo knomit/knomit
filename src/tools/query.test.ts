@@ -12,7 +12,7 @@ let repo: GitRepo;
 
 beforeEach(async () => {
   testDir = await mkdtemp(join(tmpdir(), "knomit-test-"));
-  repo = new GitRepo(join(testDir, "repo"), "test-machine");
+  repo = new GitRepo(join(testDir, "repo"), "test-agent");
   await repo.init();
 
   // Seed with test facts
@@ -20,7 +20,7 @@ beforeEach(async () => {
     moment_name: "seed",
     facts: [
       {
-        path: "worlds/people/alice/likes-rock.md",
+        path: "know/people/alice/likes-rock.md",
         domain: ["personal", "music"],
         confidence: 0.85,
         sources: 3,
@@ -29,7 +29,7 @@ beforeEach(async () => {
         body: "Strong preference for rock.",
       },
       {
-        path: "worlds/people/bob/likes-jazz.md",
+        path: "know/people/bob/likes-jazz.md",
         domain: ["personal", "music"],
         confidence: 0.6,
         sources: 1,
@@ -38,7 +38,7 @@ beforeEach(async () => {
         body: "Bob listens to jazz occasionally.",
       },
       {
-        path: "worlds/tech/bun-is-fast.md",
+        path: "know/tech/bun-is-fast.md",
         domain: ["tech", "runtime"],
         confidence: 0.95,
         sources: 5,
@@ -67,7 +67,7 @@ describe("knomit_query", () => {
   });
 
   it("finds facts by path prefix", async () => {
-    const result = await queryHandler(repo, { path: "worlds/tech" });
+    const result = await queryHandler(repo, { path: "know/tech" });
     expect(result.facts.length).toBe(1);
     expect(result.facts[0].frontmatter.entities).toContain("bun");
   });

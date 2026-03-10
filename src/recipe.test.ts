@@ -10,7 +10,7 @@ scope:
   domain: [security]
   entities: [acme]
   search: ["patch"]
-  path: worlds/security/
+  path: know/security/
 auto_merge: false
 steps:
   - mode: prune
@@ -29,7 +29,7 @@ steps:
     expect(recipe.scope.domain).toEqual(["security"]);
     expect(recipe.scope.entities).toEqual(["acme"]);
     expect(recipe.scope.search).toEqual(["patch"]);
-    expect(recipe.scope.path).toBe("worlds/security/");
+    expect(recipe.scope.path).toBe("know/security/");
     expect(recipe.auto_merge).toBe(false);
   });
 

@@ -103,7 +103,7 @@ describe("synthesize e2e", () => {
     useMockLlm = true;
 
     repoPath = await mkdtemp(join(tmpdir(), "synth-e2e-"));
-    repo = new GitRepo(repoPath, "test-machine");
+    repo = new GitRepo(repoPath, "test-agent");
     await repo.init();
 
     cacheDir = join(repoPath, ".cache");
@@ -136,7 +136,7 @@ describe("synthesize e2e", () => {
     await commitFact(
       repo,
       {
-        path: "worlds/security/cve-1.md",
+        path: "know/security/cve-1.md",
         title: "CVE-2024-001 in libfoo",
         body: "Buffer overflow in libfoo 1.0",
         domain: ["security"],
@@ -151,7 +151,7 @@ describe("synthesize e2e", () => {
     await commitFact(
       repo,
       {
-        path: "worlds/security/cve-2.md",
+        path: "know/security/cve-2.md",
         title: "CVE-2024-002 in libfoo",
         body: "Another buffer overflow in libfoo 1.0",
         domain: ["security"],
@@ -176,8 +176,8 @@ describe("synthesize e2e", () => {
     llmResponses = [
       JSON.stringify({
         decisions: [
-          { file: "worlds/security/cve-1.md", action: "forget", reason: "stale" },
-          { file: "worlds/security/cve-2.md", action: "keep", reason: "current" },
+          { file: "know/security/cve-1.md", action: "forget", reason: "stale" },
+          { file: "know/security/cve-2.md", action: "keep", reason: "current" },
         ],
         merges: [],
         summary: "Pruned 1 stale fact",
@@ -199,16 +199,16 @@ describe("synthesize e2e", () => {
     expect(result.stepSummaries[0]).toContain("forgotten");
 
     // Verify the forgotten fact was actually deleted
-    const exists = await repo.fileExists("worlds/security/cve-1.md");
+    const exists = await repo.fileExists("know/security/cve-1.md");
     expect(exists).toBe(false);
 
     // Verify the kept fact still exists
-    const exists2 = await repo.fileExists("worlds/security/cve-2.md");
+    const exists2 = await repo.fileExists("know/security/cve-2.md");
     expect(exists2).toBe(true);
 
     // Verify we're back on the original branch (not the synthesis branch)
     const branch = await repo.currentBranch();
-    expect(branch).toBe("machine/test-machine");
+    expect(branch).toBe("agent/test-agent");
 
     // Verify synthesis log was updated
     const logEntry = searchIndex.getSynthesisLog("test-prune");
@@ -221,16 +221,16 @@ describe("synthesize e2e", () => {
       JSON.stringify({
         synthesize: [
           {
-            path: "worlds/security/libfoo-vulns.md",
+            path: "know/security/libfoo-vulns.md",
             title: "Multiple buffer overflows in libfoo 1.0",
             body: "libfoo 1.0 has multiple buffer overflow vulnerabilities (CVE-2024-001, CVE-2024-002).",
             domain: ["security"],
             confidence: 0.9,
             entities: ["libfoo"],
-            refs: ["worlds/security/cve-1.md", "worlds/security/cve-2.md"],
+            refs: ["know/security/cve-1.md", "know/security/cve-2.md"],
           },
         ],
-        forget: ["worlds/security/cve-1.md", "worlds/security/cve-2.md"],
+        forget: ["know/security/cve-1.md", "know/security/cve-2.md"],
         summary: "Consolidated 2 CVEs into 1 pattern",
       }),
     ];
@@ -251,18 +251,18 @@ describe("synthesize e2e", () => {
     expect(result.stepSummaries[0]).toContain("forgotten");
 
     // The synthesized fact should exist
-    const synthExists = await repo.fileExists("worlds/security/libfoo-vulns.md");
+    const synthExists = await repo.fileExists("know/security/libfoo-vulns.md");
     expect(synthExists).toBe(true);
 
     // The subsumed facts should be deleted
-    const cve1Exists = await repo.fileExists("worlds/security/cve-1.md");
+    const cve1Exists = await repo.fileExists("know/security/cve-1.md");
     expect(cve1Exists).toBe(false);
-    const cve2Exists = await repo.fileExists("worlds/security/cve-2.md");
+    const cve2Exists = await repo.fileExists("know/security/cve-2.md");
     expect(cve2Exists).toBe(false);
 
     // Back on original branch
     const branch = await repo.currentBranch();
-    expect(branch).toBe("machine/test-machine");
+    expect(branch).toBe("agent/test-agent");
 
     // Synthesis log recorded
     const logEntry = searchIndex.getSynthesisLog("test-distill");
@@ -275,8 +275,8 @@ describe("synthesize e2e", () => {
     llmResponses = [
       JSON.stringify({
         decisions: [
-          { file: "worlds/security/cve-1.md", action: "keep", reason: "current" },
-          { file: "worlds/security/cve-2.md", action: "keep", reason: "current" },
+          { file: "know/security/cve-1.md", action: "keep", reason: "current" },
+          { file: "know/security/cve-2.md", action: "keep", reason: "current" },
         ],
         merges: [],
         summary: "All facts current",
@@ -284,13 +284,13 @@ describe("synthesize e2e", () => {
       JSON.stringify({
         synthesize: [
           {
-            path: "worlds/security/libfoo-summary.md",
+            path: "know/security/libfoo-summary.md",
             title: "libfoo vulnerability pattern",
             body: "Pattern of buffer overflows in libfoo.",
             domain: ["security"],
             confidence: 0.85,
             entities: ["libfoo"],
-            refs: ["worlds/security/cve-1.md", "worlds/security/cve-2.md"],
+            refs: ["know/security/cve-1.md", "know/security/cve-2.md"],
           },
         ],
         forget: [],
@@ -315,11 +315,11 @@ describe("synthesize e2e", () => {
     expect(result.stepSummaries.length).toBe(2);
 
     // Both original facts kept (prune kept them) plus new synthesized fact
-    const cve1 = await repo.fileExists("worlds/security/cve-1.md");
+    const cve1 = await repo.fileExists("know/security/cve-1.md");
     expect(cve1).toBe(true);
-    const cve2 = await repo.fileExists("worlds/security/cve-2.md");
+    const cve2 = await repo.fileExists("know/security/cve-2.md");
     expect(cve2).toBe(true);
-    const summary = await repo.fileExists("worlds/security/libfoo-summary.md");
+    const summary = await repo.fileExists("know/security/libfoo-summary.md");
     expect(summary).toBe(true);
 
     expect(llmCallCount).toBe(2);
@@ -331,14 +331,14 @@ describe("synthesize e2e", () => {
     llmResponses = [
       JSON.stringify({
         decisions: [
-          { file: "worlds/security/cve-1.md", action: "forget", reason: "subsumed by merge" },
-          { file: "worlds/security/cve-2.md", action: "keep", reason: "current" },
+          { file: "know/security/cve-1.md", action: "forget", reason: "subsumed by merge" },
+          { file: "know/security/cve-2.md", action: "keep", reason: "current" },
         ],
         merges: [
           {
-            sources: ["worlds/security/cve-1.md", "worlds/security/cve-2.md"],
+            sources: ["know/security/cve-1.md", "know/security/cve-2.md"],
             merged: {
-              path: "worlds/security/libfoo-combined.md",
+              path: "know/security/libfoo-combined.md",
               title: "libfoo vulnerabilities",
               body: "Combined CVE entries for libfoo.",
               domain: ["security"],
@@ -365,11 +365,11 @@ describe("synthesize e2e", () => {
     expect(result.merged).toBe(true);
 
     // cve-1 forgotten, cve-2 deleted as merge source, merged fact created
-    const cve1 = await repo.fileExists("worlds/security/cve-1.md");
+    const cve1 = await repo.fileExists("know/security/cve-1.md");
     expect(cve1).toBe(false);
-    const cve2 = await repo.fileExists("worlds/security/cve-2.md");
+    const cve2 = await repo.fileExists("know/security/cve-2.md");
     expect(cve2).toBe(false);
-    const combined = await repo.fileExists("worlds/security/libfoo-combined.md");
+    const combined = await repo.fileExists("know/security/libfoo-combined.md");
     expect(combined).toBe(true);
   });
 });
