@@ -1,6 +1,7 @@
 import React from "react";
 import { Box, Text } from "ink";
 import { glyph, type Theme } from "./theme.js";
+import { parseKnomitRef, type ParsedRef } from "./refs.js";
 import { parseFact, type Frontmatter } from "../facts.js";
 import type { StatsResult } from "../search-index.js";
 import type { LogEntry } from "../git.js";
@@ -9,9 +10,10 @@ import type { ChildItem } from "./state.js";
 export type SummaryChild = ChildItem;
 
 export interface RightSelectableItem {
-  type: "domain" | "entity" | "fact";
+  type: "domain" | "entity" | "fact" | "ref";
   label: string;
   path?: string;
+  ref?: ParsedRef;
 }
 
 export interface HistoricalData {
@@ -48,6 +50,10 @@ export function buildFactSelectableItems(
   }
   for (const e of frontmatter.entities) {
     items.push({ type: "entity", label: e });
+  }
+  for (const r of frontmatter.refs) {
+    const parsed = parseKnomitRef(r);
+    items.push({ type: "ref", label: r, ref: parsed ?? undefined });
   }
   return items;
 }
@@ -506,12 +512,23 @@ function FactView({ title, body, frontmatter, theme, focused, selectedIndex, max
         <Box flexDirection="column" marginTop={1}>
           <Text color={theme.dim}>{glyph.dashDivider.repeat(30)}</Text>
           <Text color={theme.primary} bold>{glyph.bullet} References</Text>
-          {frontmatter.refs.map((r) => (
-            <Box key={r}>
-              <Text color={theme.dim}>{glyph.arrow} </Text>
-              <Text color={theme.secondary}>{r}</Text>
-            </Box>
-          ))}
+          {frontmatter.refs.map((r, ri) => {
+            const parsed = parseKnomitRef(r);
+            const itemIdx = domainCount + (frontmatter.entities?.length ?? 0) + ri;
+            const isActive = focused && selectedIndex === itemIdx;
+            const isExternal = parsed?.external;
+            return (
+              <Box key={r}>
+                <Text color={isActive ? theme.yellow : theme.dim}>
+                  {isActive ? `  ${glyph.cursor} ` : "    "}
+                </Text>
+                <Text color={isActive ? theme.yellow : isExternal ? theme.dim : theme.secondary}>
+                  {glyph.arrow} {r}
+                </Text>
+                {isExternal && <Text color={theme.dim}> (external)</Text>}
+              </Box>
+            );
+          })}
         </Box>
       )}
     </Box>
