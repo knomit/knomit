@@ -119,9 +119,10 @@ export function RightPanel({
     }
   }
 
+  const itemsKey = selectableItems.map((i) => i.label).join("\0");
   React.useEffect(() => {
     onItemsChanged?.(selectableItems);
-  }, [selectableItems.length, mode, !!historical]);
+  }, [itemsKey]);
 
   const contentHeight = Math.max(3, (availableHeight ?? 24) - 3);
 
