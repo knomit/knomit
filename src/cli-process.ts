@@ -18,17 +18,18 @@ export async function runCliProcess(
   // Drain stderr concurrently to avoid pipe deadlock
   const stderrPromise = new Response(proc.stderr).text();
 
-  let result = "";
+  const chunks: string[] = [];
   const reader = proc.stdout.getReader();
   const decoder = new TextDecoder();
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;
     const chunk = decoder.decode(value, { stream: true });
-    result += chunk;
+    chunks.push(chunk);
     if (onChunk) onChunk(chunk);
   }
 
+  const result = chunks.join("");
   const exitCode = await proc.exited;
   const stderr = await stderrPromise;
   const elapsed = ((Date.now() - t0) / 1000).toFixed(1);

@@ -1,5 +1,4 @@
 import { runCliProcess } from "./cli-process";
-export { runCliProcess } from "./cli-process";
 
 export interface Message {
   role: "user" | "assistant";

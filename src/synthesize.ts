@@ -634,7 +634,8 @@ async function executeDistillStep(
     }
   }
 
-  for (const file of allForget) {
+  const uniqueForget = [...new Set(allForget)];
+  for (const file of uniqueForget) {
     try {
       await deleteFact(repo, file, `synthesize-${recipeName}`, searchIndex, "Subsumed by higher-order distilled fact");
       forgotten++;
