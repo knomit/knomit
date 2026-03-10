@@ -1,5 +1,6 @@
 import { defineCommand } from "citty";
 import { globalArgs } from "./args";
+import { BRANCH_PREFIX } from "../constants.js";
 
 export default defineCommand({
   meta: {
@@ -86,6 +87,6 @@ Do NOT persist: transient discussion, obvious facts, things easily re-derived, o
     const transport = new StdioServerTransport();
     await server.connect(transport);
 
-    log.info(`running on machine/${repo.machineId}, repo=${repo.repoPath}`);
+    log.info(`running on ${BRANCH_PREFIX}/${repo.agentId}, repo=${repo.repoPath}`);
   },
 });

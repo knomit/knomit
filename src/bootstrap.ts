@@ -23,10 +23,10 @@ export function resolveCacheDir(override?: string): string {
 }
 
 export async function bootstrap(options?: BootstrapOptions) {
-  const machineId = process.env.KNOMIT_MACHINE_ID ?? hostname();
+  const agentId = process.env.KNOMIT_AGENT_ID ?? hostname();
   const repoPath = resolveRepo(options?.repo);
 
-  const repo = new GitRepo(repoPath, machineId);
+  const repo = new GitRepo(repoPath, agentId);
   await repo.init();
 
   const cacheDir = resolveCacheDir(options?.cacheDir);
@@ -38,7 +38,7 @@ export async function bootstrap(options?: BootstrapOptions) {
   await searchIndex.init();
   await searchIndex.sync(repo);
 
-  return { repo, searchIndex, repoPath, machineId, cacheDir };
+  return { repo, searchIndex, repoPath, agentId, cacheDir };
 }
 
 export async function reset(repoOverride?: string, cacheDirOverride?: string) {

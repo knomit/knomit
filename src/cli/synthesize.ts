@@ -1,6 +1,7 @@
 import { defineCommand } from "citty";
 import { globalArgs } from "./args";
 import type { ProgressEvent } from "../synthesize";
+import { ONTOLOGY_DIR } from "../constants.js";
 
 const DIM = "\x1b[2m";
 const RESET = "\x1b[0m";
@@ -17,7 +18,7 @@ function formatMs(ms: number): string {
 }
 
 function shortPath(path: string): string {
-  return path.replace(/^worlds\//, "");
+  return path.replace(new RegExp(`^${ONTOLOGY_DIR}/`), "");
 }
 
 function createProgressRenderer(verbose: boolean) {
