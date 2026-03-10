@@ -3,10 +3,11 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { GitRepo } from "../git";
 import { parseFact } from "../facts";
 import { dirname, join } from "node:path";
+import { ONTOLOGY_DIR } from "../constants.js";
 import { log } from "../logger";
 
 const ExploreInput = z.object({
-  path: z.string().optional().default("worlds"),
+  path: z.string().optional().default(ONTOLOGY_DIR),
 });
 
 type ExploreInputType = z.infer<typeof ExploreInput>;
@@ -41,7 +42,7 @@ export async function exploreHandler(
   input: ExploreInputType,
   options?: { skipSync?: boolean }
 ): Promise<ExploreResult> {
-  log.info(`explore: path="${input.path ?? "worlds"}"`);
+  log.info(`explore: path="${input.path ?? ONTOLOGY_DIR}"`);
   if (!options?.skipSync) {
     const syncResult = await repo.sync();
     if (syncResult.conflict) {
@@ -49,7 +50,7 @@ export async function exploreHandler(
     }
   }
 
-  const path = input.path ?? "worlds";
+  const path = input.path ?? ONTOLOGY_DIR;
 
   // Read manifest: look for <path>.md sibling file
   let manifest: ManifestInfo | null = null;
@@ -110,7 +111,7 @@ export async function exploreHandler(
   const inherited_facts: InheritedFact[] = [];
   let currentPath = path;
 
-  while (currentPath !== "worlds" && currentPath !== ".") {
+  while (currentPath !== ONTOLOGY_DIR && currentPath !== ".") {
     const parentDir = dirname(currentPath);
     if (parentDir === currentPath) break;
 
@@ -154,7 +155,7 @@ export async function exploreHandler(
 export function registerExploreTool(server: McpServer, repo: GitRepo): void {
   server.tool(
     "knomit_explore",
-    `Browse the knowledge graph hierarchy. Lists worlds (categories) and facts at a given path. Start with 'worlds' to see top-level categories. Use this to understand what's already stored before learning new facts, or to orient yourself in the ontology.`,
+    `Browse the knowledge graph hierarchy. Lists worlds (categories) and facts at a given path. Start with 'know' to see top-level categories. Use this to understand what's already stored before learning new facts, or to orient yourself in the ontology.`,
     ExploreInput.shape,
     async (input) => {
       const parsed = ExploreInput.parse(input);

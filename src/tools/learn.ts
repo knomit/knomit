@@ -3,6 +3,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { type GitRepo, toMomentTag } from "../git";
 import type { SearchIndex } from "../search-index";
 import { commitFact } from "../fact-ops";
+import { ONTOLOGY_DIR } from "../constants.js";
 import { log } from "../logger";
 
 const LearnInput = z.object({
@@ -21,7 +22,7 @@ const LearnInput = z.object({
   ),
 });
 
-type LearnInputType = z.infer<typeof LearnInput>;
+type LearnInputType = z.input<typeof LearnInput>;
 
 interface LearnResult {
   moment_tag: string;
@@ -43,7 +44,7 @@ export async function learnHandler(
 
   for (const fact of input.facts) {
     let factPath = fact.path;
-    if (!factPath.startsWith("worlds/")) factPath = `worlds/${factPath}`;
+    if (!factPath.startsWith(`${ONTOLOGY_DIR}/`)) factPath = `${ONTOLOGY_DIR}/${factPath}`;
     if (!factPath.endsWith(".md")) factPath = `${factPath}.md`;
 
     const hash = await commitFact(repo, {
@@ -77,7 +78,7 @@ export function registerLearnTool(server: McpServer, repo: GitRepo, searchIndex?
 WHEN TO CALL: Decisions, preferences, architectural choices, debugging insights, conclusions. NOT transient discussion, obvious facts, or things easily re-derived.
 
 FACT QUALITY:
-- path: organize under worlds/ by domain (e.g. worlds/projects/myapp/conventions.md). Durable facts at higher levels, ephemeral facts in sub-directories.
+- path: organize under know/ by domain (e.g. know/projects/myapp/conventions.md). Durable facts at higher levels, ephemeral facts in sub-directories.
 - title: concise and descriptive — this is the primary search surface.
 - body: include reasoning, not just conclusions.
 - confidence: 0.9+ for explicit user statements, 0.7–0.8 for inferred conclusions, 0.5–0.6 for tentative observations.
