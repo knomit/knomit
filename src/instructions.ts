@@ -1,9 +1,9 @@
 const BASE = `You have access to Knomit, a persistent knowledge base that survives
 across sessions. It stores structured facts as markdown files in a
-Git repository, organized by an ontological hierarchy (worlds/).
+Git repository, organized by an ontological hierarchy (know/).
 
-Your knowledge base operates on a machine-specific branch. Other
-machines may contribute knowledge that arrives via merges from main.
+Your knowledge base operates on an agent-specific branch. Other
+agents may contribute knowledge that arrives via merges from main.
 If a merge conflict occurs, you will be notified and should resolve
 it using knomit_update.
 
@@ -18,10 +18,10 @@ WHAT TO PERSIST:
 - NOT transient discussion, obvious facts, or things easily re-derived.
 
 STRUCTURING THE ONTOLOGY:
-The directory tree under worlds/ is a hierarchy. Use depth to reflect
+The directory tree under know/ is a hierarchy. Use depth to reflect
 scope and durability:
 
-  worlds/projects/myapp/
+  know/projects/myapp/
     architecture.md          <- durable: rarely changes
     conventions.md           <- durable: coding style, patterns
     caveats.md               <- durable: known pitfalls
@@ -29,11 +29,11 @@ scope and durability:
       plan.md                <- ephemeral: specific to this effort
       current-state.md       <- ephemeral: will become stale
 
-  worlds/preferences/
+  know/preferences/
     editor.md                <- cross-project user preferences
     workflow.md
 
-  worlds/tools/
+  know/tools/
     bun.md                   <- tool-specific knowledge
 
 Group by durability: durable facts at higher levels, ephemeral facts
@@ -67,7 +67,7 @@ CODE EDITOR INTEGRATION:
 - At session start, query by the current project name or directory
   to load relevant context before responding.
 - When learning facts about a project for the first time, first create
-  an identity fact at the project root (e.g. worlds/projects/myapp/identity.md)
+  an identity fact at the project root (e.g. know/projects/myapp/identity.md)
   containing the git remote origin URL (if any), default branch, and a
   brief description. This anchors all child facts to a concrete repository.
 - Every fact about project code MUST include a knomit: ref for
