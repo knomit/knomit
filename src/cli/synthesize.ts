@@ -21,6 +21,29 @@ function shortPath(path: string): string {
 }
 
 function createProgressRenderer(verbose: boolean) {
+  let waitingTimer: ReturnType<typeof setInterval> | null = null;
+  let waitingStart = 0;
+  let lastStreamBytes = 0;
+
+  function startWaiting() {
+    stopWaiting();
+    waitingStart = Date.now();
+    lastStreamBytes = 0;
+    waitingTimer = setInterval(() => {
+      const elapsed = formatMs(Date.now() - waitingStart);
+      const info = lastStreamBytes > 0 ? ` ${(lastStreamBytes / 1024).toFixed(0)}KB` : "";
+      process.stdout.write(`\r${DIM}  Waiting for LLM... ${elapsed}${info}${RESET}`);
+    }, 1000);
+  }
+
+  function stopWaiting() {
+    if (waitingTimer) {
+      clearInterval(waitingTimer);
+      waitingTimer = null;
+      process.stdout.write("\r\x1b[K"); // clear the waiting line
+    }
+  }
+
   return (event: ProgressEvent): void => {
     switch (event.phase) {
       case "step-start": {
@@ -43,17 +66,17 @@ function createProgressRenderer(verbose: boolean) {
       case "llm": {
         const chunkInfo = event.totalChunks > 1 ? ` chunk ${event.chunk}/${event.totalChunks}` : "";
         console.log(`${DIM}  Sending ${event.facts} facts to LLM${chunkInfo} [${event.mode}]...${RESET}`);
+        startWaiting();
         break;
       }
 
       case "llm-stream": {
-        const kb = (event.bytes / 1024).toFixed(0);
-        process.stdout.write(`\r${DIM}  Receiving... ${kb}KB${RESET}`);
+        lastStreamBytes = event.bytes;
         break;
       }
 
       case "llm-done":
-        process.stdout.write("\r\x1b[K"); // clear the "Receiving..." line
+        stopWaiting();
         console.log(`${GREEN}  LLM responded${RESET} ${DIM}(${formatMs(event.elapsed)})${RESET}`);
         break;
 
@@ -165,6 +188,7 @@ export default defineCommand({
     try {
       const config = configFromEnv();
       const provider = resolveProvider(config.model, config.provider);
+      console.log(`${DIM}Provider: ${provider}  Model: ${config.model}${RESET}`);
       if (provider === "claude-cli") {
         if (!cliExists("claude")) {
           console.error("Error: Claude Code CLI not found. Install it or use KNOMIT_LLM_PROVIDER=anthropic with an API key.");

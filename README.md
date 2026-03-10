@@ -99,13 +99,17 @@ knomit synthesize --verbose            # show per-fact decisions and reasons
 
 Set the model and API key via environment variables:
 
-| Provider  | Variables                                                                                              |
-|-----------|--------------------------------------------------------------------------------------------------------|
-| Gemini    | `KNOMIT_LLM_MODEL=gemini-2.0-flash` `GOOGLE_AI_API_KEY=...`                                           |
-| Anthropic | `KNOMIT_LLM_MODEL=claude-sonnet-4-6` `ANTHROPIC_API_KEY=...`                                           |
-| Bedrock   | `KNOMIT_LLM_MODEL=us.anthropic.claude-sonnet-4-6-v1` `AWS_ACCESS_KEY_ID=...` `AWS_SECRET_ACCESS_KEY=...` |
+| Provider   | Variables                                                                                                |
+|------------|----------------------------------------------------------------------------------------------------------|
+| Anthropic  | `KNOMIT_LLM_MODEL=claude-sonnet-4-6` `ANTHROPIC_API_KEY=...`                                             |
+| Gemini     | `KNOMIT_LLM_MODEL=gemini-2.0-flash` `GOOGLE_AI_API_KEY=...`                                              |
+| Bedrock    | `KNOMIT_LLM_MODEL=us.anthropic.claude-sonnet-4-6-v1` `AWS_ACCESS_KEY_ID=...` `AWS_SECRET_ACCESS_KEY=...` |
+| Claude CLI | `KNOMIT_LLM_PROVIDER=claude-cli` — uses the `claude` CLI (no API key needed, works with Anthropic Max)   |
+| Gemini CLI | `KNOMIT_LLM_PROVIDER=gemini-cli` — uses the `gemini` CLI (no API key needed, works with Google AI Pro)   |
 
-The default model is `claude-sonnet-4-6` (Anthropic). The provider is auto-detected from the model name — override with `KNOMIT_LLM_PROVIDER` if needed.
+The default model is `claude-sonnet-4-6` (Anthropic). The provider is auto-detected from the model name for API providers. CLI providers must be set explicitly via `KNOMIT_LLM_PROVIDER`.
+
+The CLI adapters pass `--model` to the underlying CLI tool, so `KNOMIT_LLM_MODEL` works with all providers.
 
 #### Recipes
 

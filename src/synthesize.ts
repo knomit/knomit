@@ -412,15 +412,19 @@ async function executePruneStep(
     log.info(`prune: sending ${chunk.length} facts to LLM`);
     const t0 = Date.now();
     let receivedBytes = 0;
-    const response = await adapter.complete(
-      "You are a knowledge base maintenance assistant. Respond only with valid JSON.",
-      [{ role: "user", content: prompt }],
-      onProgress ? (text: string) => {
-        receivedBytes += text.length;
-        onProgress({ phase: "llm-stream", step: stepIdx, totalSteps, bytes: receivedBytes });
-      } : undefined
-    );
-    onProgress?.({ phase: "llm-done", step: stepIdx, totalSteps, mode: "prune", elapsed: Date.now() - t0 });
+    let response: string;
+    try {
+      response = await adapter.complete(
+        "You are a knowledge base maintenance assistant. Respond only with valid JSON.",
+        [{ role: "user", content: prompt }],
+        onProgress ? (text: string) => {
+          receivedBytes += text.length;
+          onProgress({ phase: "llm-stream", step: stepIdx, totalSteps, bytes: receivedBytes });
+        } : undefined
+      );
+    } finally {
+      onProgress?.({ phase: "llm-done", step: stepIdx, totalSteps, mode: "prune", elapsed: Date.now() - t0 });
+    }
     const result = parsePruneResponse(response);
     allDecisions.push(...result.decisions);
     allMerges.push(...result.merges);
@@ -516,15 +520,19 @@ async function executeDistillStep(
     log.info(`distill: sending ${chunk.length} facts to LLM`);
     const t0 = Date.now();
     let receivedBytes = 0;
-    const response = await adapter.complete(
-      "You are a knowledge base synthesis assistant. Respond only with valid JSON.",
-      [{ role: "user", content: prompt }],
-      onProgress ? (text: string) => {
-        receivedBytes += text.length;
-        onProgress({ phase: "llm-stream", step: stepIdx, totalSteps, bytes: receivedBytes });
-      } : undefined
-    );
-    onProgress?.({ phase: "llm-done", step: stepIdx, totalSteps, mode: "distill", elapsed: Date.now() - t0 });
+    let response: string;
+    try {
+      response = await adapter.complete(
+        "You are a knowledge base synthesis assistant. Respond only with valid JSON.",
+        [{ role: "user", content: prompt }],
+        onProgress ? (text: string) => {
+          receivedBytes += text.length;
+          onProgress({ phase: "llm-stream", step: stepIdx, totalSteps, bytes: receivedBytes });
+        } : undefined
+      );
+    } finally {
+      onProgress?.({ phase: "llm-done", step: stepIdx, totalSteps, mode: "distill", elapsed: Date.now() - t0 });
+    }
     const result = parseDistillResponse(response);
     allSynthesized.push(...result.synthesize);
     allForget.push(...result.forget);
@@ -540,14 +548,21 @@ async function executeDistillStep(
     );
     const adapter2 = adapterForStep(step);
     let crossBytes = 0;
-    const crossResponse = await adapter2.complete(
-      "You are a knowledge base synthesis assistant. Respond only with valid JSON.",
-      [{ role: "user", content: crossPrompt }],
-      onProgress ? (text: string) => {
-        crossBytes += text.length;
-        onProgress({ phase: "llm-stream", step: recipe.steps.length - 1, totalSteps: recipe.steps.length, bytes: crossBytes });
-      } : undefined
-    );
+    onProgress?.({ phase: "llm", step: stepIdx, totalSteps, mode: "distill", chunk: 1, totalChunks: 1, facts: allSynthesized.length });
+    const crossT0 = Date.now();
+    let crossResponse: string;
+    try {
+      crossResponse = await adapter2.complete(
+        "You are a knowledge base synthesis assistant. Respond only with valid JSON.",
+        [{ role: "user", content: crossPrompt }],
+        onProgress ? (text: string) => {
+          crossBytes += text.length;
+          onProgress({ phase: "llm-stream", step: stepIdx, totalSteps, bytes: crossBytes });
+        } : undefined
+      );
+    } finally {
+      onProgress?.({ phase: "llm-done", step: stepIdx, totalSteps, mode: "distill", elapsed: Date.now() - crossT0 });
+    }
     const crossResult = parseDistillResponse(crossResponse);
     if (crossResult.synthesize.length > 0) {
       allSynthesized.length = 0;

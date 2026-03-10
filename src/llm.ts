@@ -298,6 +298,39 @@ function createBedrockAdapter(config: LLMConfig): LLMAdapter {
   };
 }
 
+/** Spawn a CLI process, stream stdout via onChunk, and return the full output. */
+async function runCliProcess(
+  cliName: string,
+  args: string[],
+  stdinContent: string,
+  onChunk?: (text: string) => void
+): Promise<string> {
+  const proc = Bun.spawn(args, {
+    stdin: new Blob([stdinContent]),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+
+  let result = "";
+  const reader = proc.stdout.getReader();
+  const decoder = new TextDecoder();
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    const chunk = decoder.decode(value, { stream: true });
+    result += chunk;
+    if (onChunk) onChunk(chunk);
+  }
+
+  const exitCode = await proc.exited;
+  if (exitCode !== 0) {
+    const stderr = await new Response(proc.stderr).text();
+    throw new Error(`${cliName} CLI exited with code ${exitCode}: ${stderr}`);
+  }
+
+  return result;
+}
+
 function createClaudeCliAdapter(model?: string): LLMAdapter {
   return {
     async complete(system: string, messages: Message[], onChunk?: (text: string) => void): Promise<string> {
@@ -307,31 +340,9 @@ function createClaudeCliAdapter(model?: string): LLMAdapter {
         .join("\n\n");
 
       const args = ["claude", "-p", "--system", system, "--output-format", "text"];
-      if (model) args.push("--model", model);
+      if (model && model !== "auto") args.push("--model", model);
 
-      const proc = Bun.spawn(
-        args,
-        { stdin: new Blob([userContent]), stdout: "pipe", stderr: "pipe" }
-      );
-
-      let result = "";
-      const reader = proc.stdout.getReader();
-      const decoder = new TextDecoder();
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        const chunk = decoder.decode(value, { stream: true });
-        result += chunk;
-        if (onChunk) onChunk(chunk);
-      }
-
-      const exitCode = await proc.exited;
-      if (exitCode !== 0) {
-        const stderr = await new Response(proc.stderr).text();
-        throw new Error(`claude CLI exited with code ${exitCode}: ${stderr}`);
-      }
-
-      return result;
+      return runCliProcess("claude", args, userContent, onChunk);
     },
   };
 }
@@ -344,34 +355,11 @@ function createGeminiCliAdapter(model?: string): LLMAdapter {
         .map((m) => m.content)
         .join("\n\n");
 
-      const stdinContent = system + "\n\n" + userContent;
+      // Use stdin for prompt content (can be 100K+) and -p "" to trigger headless mode.
+      const args = ["gemini", "-p", ""];
+      if (model && model !== "auto") args.push("--model", model);
 
-      const args = ["gemini"];
-      if (model) args.push("--model", model);
-
-      const proc = Bun.spawn(
-        args,
-        { stdin: new Blob([stdinContent]), stdout: "pipe", stderr: "pipe" }
-      );
-
-      let result = "";
-      const reader = proc.stdout.getReader();
-      const decoder = new TextDecoder();
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        const chunk = decoder.decode(value, { stream: true });
-        result += chunk;
-        if (onChunk) onChunk(chunk);
-      }
-
-      const exitCode = await proc.exited;
-      if (exitCode !== 0) {
-        const stderr = await new Response(proc.stderr).text();
-        throw new Error(`gemini CLI exited with code ${exitCode}: ${stderr}`);
-      }
-
-      return result;
+      return runCliProcess("gemini", args, system + "\n\n" + userContent, onChunk);
     },
   };
 }
