@@ -1,0 +1,13 @@
+.PHONY: build web test clean
+
+build: web
+	CGO_ENABLED=1 go build -o dist/knomit ./cmd/knomit/
+
+web:
+	cd web && npm ci && npm run build
+
+test:
+	CGO_ENABLED=1 go test -tags fts5 ./...
+
+clean:
+	rm -rf dist/ web/dist/
