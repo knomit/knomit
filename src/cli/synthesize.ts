@@ -46,7 +46,14 @@ function createProgressRenderer(verbose: boolean) {
         break;
       }
 
+      case "llm-stream": {
+        const kb = (event.bytes / 1024).toFixed(0);
+        process.stdout.write(`\r${DIM}  Receiving... ${kb}KB${RESET}`);
+        break;
+      }
+
       case "llm-done":
+        process.stdout.write("\r\x1b[K"); // clear the "Receiving..." line
         console.log(`${GREEN}  LLM responded${RESET} ${DIM}(${formatMs(event.elapsed)})${RESET}`);
         break;
 

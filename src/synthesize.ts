@@ -411,9 +411,14 @@ async function executePruneStep(
     const prompt = buildPrunePrompt(chunk, recipe.prompt, step.prompt ?? "");
     log.info(`prune: sending ${chunk.length} facts to LLM`);
     const t0 = Date.now();
+    let receivedBytes = 0;
     const response = await adapter.complete(
       "You are a knowledge base maintenance assistant. Respond only with valid JSON.",
-      [{ role: "user", content: prompt }]
+      [{ role: "user", content: prompt }],
+      onProgress ? (text: string) => {
+        receivedBytes += text.length;
+        onProgress({ phase: "llm-stream", step: stepIdx, totalSteps, bytes: receivedBytes });
+      } : undefined
     );
     onProgress?.({ phase: "llm-done", step: stepIdx, totalSteps, mode: "prune", elapsed: Date.now() - t0 });
     const result = parsePruneResponse(response);
@@ -510,9 +515,14 @@ async function executeDistillStep(
     const prompt = buildDistillPrompt(chunk, recipe.prompt, step.prompt ?? "");
     log.info(`distill: sending ${chunk.length} facts to LLM`);
     const t0 = Date.now();
+    let receivedBytes = 0;
     const response = await adapter.complete(
       "You are a knowledge base synthesis assistant. Respond only with valid JSON.",
-      [{ role: "user", content: prompt }]
+      [{ role: "user", content: prompt }],
+      onProgress ? (text: string) => {
+        receivedBytes += text.length;
+        onProgress({ phase: "llm-stream", step: stepIdx, totalSteps, bytes: receivedBytes });
+      } : undefined
     );
     onProgress?.({ phase: "llm-done", step: stepIdx, totalSteps, mode: "distill", elapsed: Date.now() - t0 });
     const result = parseDistillResponse(response);
@@ -529,9 +539,14 @@ async function executeDistillStep(
       "These are synthesized facts from multiple batches. Find cross-cutting patterns and further consolidate if possible."
     );
     const adapter2 = adapterForStep(step);
+    let crossBytes = 0;
     const crossResponse = await adapter2.complete(
       "You are a knowledge base synthesis assistant. Respond only with valid JSON.",
-      [{ role: "user", content: crossPrompt }]
+      [{ role: "user", content: crossPrompt }],
+      onProgress ? (text: string) => {
+        crossBytes += text.length;
+        onProgress({ phase: "llm-stream", step: recipe.steps.length - 1, totalSteps: recipe.steps.length, bytes: crossBytes });
+      } : undefined
     );
     const crossResult = parseDistillResponse(crossResponse);
     if (crossResult.synthesize.length > 0) {
@@ -591,6 +606,7 @@ export type ProgressEvent =
   | { phase: "gather"; facts: number; mode: "scope" | "delta"; firstRun?: boolean }
   | { phase: "llm"; step: number; totalSteps: number; mode: string; chunk: number; totalChunks: number; facts: number }
   | { phase: "llm-done"; step: number; totalSteps: number; mode: string; elapsed: number }
+  | { phase: "llm-stream"; step: number; totalSteps: number; bytes: number }
   | { phase: "apply"; mode: "prune"; kept: number; forgotten: number; updated: number; merged: number }
   | { phase: "apply"; mode: "distill"; learned: number; forgotten: number }
   | { phase: "detail-keep"; path: string; reason: string }
