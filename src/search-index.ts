@@ -564,6 +564,21 @@ export class SearchIndex {
     return this.embedder !== null;
   }
 
+  getEmbedder(): Embedder | null {
+    return this.embedder;
+  }
+
+  getEmbeddings(paths: string[]): Map<string, Float32Array> {
+    if (!this.db || !this.embedder) return new Map();
+    const result = new Map<string, Float32Array>();
+    const stmt = this.db.query("SELECT path, embedding FROM facts_vec WHERE path = ?");
+    for (const p of paths) {
+      const row = stmt.get(p) as { path: string; embedding: Float32Array } | null;
+      if (row) result.set(row.path, new Float32Array(row.embedding));
+    }
+    return result;
+  }
+
   async reindex(repo: GitRepo): Promise<void> {
     if (!this.db) return;
     log.info("search index: reindexing from repo");
