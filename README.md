@@ -2,7 +2,7 @@
 
 Git-backed knowledge base for AI agents. Knowledge + commit.
 
-Knomit stores structured facts as markdown files in a Git repository, organized by an ontological hierarchy. Each machine gets its own branch; consensus lives on `main`.
+Knomit stores structured facts as markdown files in a Git repository, organized by an ontological hierarchy. Each agent gets its own branch; consensus lives on `main`.
 
 ## Building
 
@@ -16,9 +16,27 @@ bun build --compile index.ts --outfile ../dist/knomit
 
 ## Usage
 
+```sh
+knomit                 # TUI
+knomit mcp             # MCP server
+knomit synthesize      # synthesis
+knomit reset           # reset
+```
+
+### Global Options
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--repo <path>` | `~/.knomit` | Path to the git repository |
+| `--cache-dir <path>` | `~/.cache/knomit` | Path to the SQLite index and model cache |
+
 ### MCP Server
 
-Knomit supports different instruction profiles via `--mcp[=profile]`:
+```sh
+knomit mcp                        # code profile (default)
+knomit mcp --profile chat         # chat profile
+knomit mcp --profile generic      # generic profile
+```
 
 | Profile | Use case |
 |---------|----------|
@@ -35,7 +53,7 @@ Add to your project's `.mcp.json` (or `~/.claude/mcp.json` for global):
   "mcpServers": {
     "knomit": {
       "command": "/path/to/knomit",
-      "args": ["--mcp"]
+      "args": ["mcp"]
     }
   }
 }
@@ -52,7 +70,7 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS)
   "mcpServers": {
     "knomit": {
       "command": "/path/to/knomit",
-      "args": ["--mcp=chat"]
+      "args": ["mcp", "--profile", "chat"]
     }
   }
 }
@@ -62,7 +80,7 @@ Knomit works automatically via tool descriptions — no manual activation needed
 
 #### Gemini CLI / Other tools
 
-Use `--mcp` (defaults to `code` profile) or `--mcp=generic` for minimal instructions. Configure according to your tool's MCP server documentation.
+Use `knomit mcp` (defaults to `code` profile) or `knomit mcp --profile generic` for minimal instructions. Configure according to your tool's MCP server documentation.
 
 ### TUI
 
@@ -78,10 +96,12 @@ Keyboard shortcuts:
 |-----|--------|
 | `↑` `↓` | Navigate |
 | `↵` | Open item |
-| `←` `→` | Switch panels |
+| `←` `⌫` | Go back / exit history |
+| `→` | Focus right panel |
 | `/` | Search |
 | `:` | Command mode |
 | `h` | Toggle history |
+| `Esc` | Exit history / search |
 | `q` | Quit |
 
 ### Synthesize
@@ -180,7 +200,7 @@ refs:
 Alice prefers rock music over jazz.
 ```
 
-The directory tree under `worlds/` forms an ontological hierarchy. Facts placed at higher levels apply to everything below them — a fact at `worlds/earth/` is inherited by `worlds/earth/uk/london/`.
+The directory tree under `know/` forms an ontological hierarchy. Facts placed at higher levels apply to everything below them — a fact at `know/earth/` is inherited by `know/earth/uk/london/`.
 
 Each learning moment is an atomic git commit tagged with `learn/<moment-name>`, giving full provenance tracking.
 
@@ -190,7 +210,7 @@ Refs anchor facts to their source material using the `knomit:` URI scheme:
 
 | Form | Meaning | Example |
 |------|---------|---------|
-| Relative (no authority) | Current knowledge base | `knomit:blob/abc1234/worlds/debugging/pool-fix.md` |
+| Relative (no authority) | Current knowledge base | `knomit:blob/abc1234/know/debugging/pool-fix.md` |
 | Absolute (with host) | External repo | `knomit://github.com/org/repo/blob/abc1234/src/main.ts` |
 | Plain URL | Any web resource | `https://example.com/doc` |
 
@@ -204,7 +224,7 @@ Synthesize automatically resolves file-path refs to `knomit:blob/<commit>/<path>
 |----------|---------|-------------|
 | `KNOMIT_REPO` | `~/.knomit` | Path to the git repository |
 | `KNOMIT_CACHE_DIR` | `~/.cache/knomit` | Path to the SQLite index and model cache |
-| `KNOMIT_MACHINE_ID` | system hostname | Branch name: `machine/<id>` |
+| `KNOMIT_AGENT_ID` | system hostname | Branch name: `agent/<id>` |
 | `KNOMIT_EMBEDDINGS` | `true` | Vector similarity search (`0` or `false` to disable) |
 | `KNOMIT_POLL_INTERVAL` | `5000` | TUI remote poll interval in milliseconds |
 | `KNOMIT_LLM_MODEL` | `claude-sonnet-4-6` | Model name for synthesis LLM calls |
