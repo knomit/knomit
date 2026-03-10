@@ -363,12 +363,15 @@ async function resolveRefs(repo: GitRepo, refs: string[]): Promise<string[]> {
 // --- Step execution ---
 
 function adapterForStep(step: RecipeStep): LLMAdapter {
+  const envConfig = configFromEnv();
   if (step.model) {
-    const envConfig = configFromEnv();
     const provider = resolveProvider(step.model, envConfig.provider);
+    if (provider === "claude-cli" || provider === "gemini-cli") {
+      log.warn(`Recipe step specifies model "${step.model}" but provider is ${provider}. Model field is ignored — CLI uses the subscription's default model.`);
+    }
     return createAdapter({ ...envConfig, provider, model: step.model });
   }
-  return createAdapter(configFromEnv());
+  return createAdapter(envConfig);
 }
 
 async function gatherStepFacts(
