@@ -314,13 +314,17 @@ function App({ repo, searchIndex }: { repo: GitRepo; searchIndex: SearchIndex })
     else if (input === "r") {
       setSyncing(true);
       (async () => {
+        const minDelay = new Promise((r) => setTimeout(r, 600));
         try {
-          await repo.sync();
-          const indexed = await searchIndex.sync(repo);
+          const [, indexed] = await Promise.all([
+            repo.sync(),
+            searchIndex.sync(repo),
+          ]);
           if (indexed) setLastPull((n) => n + 1);
         } catch (err) {
           log.debug(`tui: manual sync failed: ${err}`);
         } finally {
+          await minDelay;
           setSyncing(false);
         }
       })();
