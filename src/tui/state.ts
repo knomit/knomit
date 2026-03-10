@@ -21,6 +21,24 @@ export interface SavedNavState {
   rightPanelMode: "summary" | "fact" | "history";
 }
 
+export interface NavEntry {
+  currentPath: string;
+  currentFact: string | null;
+  selectedIndex: number;
+  breadcrumbSelected: boolean;
+  statsPath: string;
+  rightPanelMode: "summary" | "fact" | "history";
+  historyMode: boolean;
+  historyTarget: string;
+  historySelectedIndex: number;
+  focusZone: "left" | "right";
+  rightSelectedIndex: number;
+  searchActive: boolean;
+  searchResults: SearchResultItem[];
+  searchType: "text" | "domain";
+  savedNavState: SavedNavState | null;
+}
+
 export interface AppState {
   currentPath: string;
   selectedIndex: number;
@@ -41,6 +59,7 @@ export interface AppState {
   historyEntries: LogEntry[];
   historyTarget: string;
   historySelectedIndex: number;
+  navStack: NavEntry[];
 }
 
 export const initialState: AppState = {
@@ -63,6 +82,7 @@ export const initialState: AppState = {
   historyEntries: [],
   historyTarget: "",
   historySelectedIndex: 0,
+  navStack: [],
 };
 
 export type Action =
@@ -79,7 +99,9 @@ export type Action =
   | { type: "SET_LOADING"; loading: boolean }
   | { type: "RIGHT_NAVIGATE_UP" }
   | { type: "RIGHT_NAVIGATE_DOWN" }
-  | { type: "SET_RIGHT_ITEM_COUNT"; count: number };
+  | { type: "SET_RIGHT_ITEM_COUNT"; count: number }
+  | { type: "FOLLOW_REF"; path: string; commit: string }
+  | { type: "NAV_BACK" };
 
 function autoSelectItem(
   state: AppState,
@@ -322,5 +344,63 @@ export function reducer(state: AppState, action: Action): AppState {
         rightItemCount: action.count,
         rightSelectedIndex: Math.min(state.rightSelectedIndex, Math.max(0, action.count - 1)),
       };
+
+    case "FOLLOW_REF": {
+      const entry: NavEntry = {
+        currentPath: state.currentPath,
+        currentFact: state.currentFact,
+        selectedIndex: state.selectedIndex,
+        breadcrumbSelected: state.breadcrumbSelected,
+        statsPath: state.statsPath,
+        rightPanelMode: state.rightPanelMode,
+        historyMode: state.historyMode,
+        historyTarget: state.historyTarget,
+        historySelectedIndex: state.historySelectedIndex,
+        focusZone: state.focusZone as "left" | "right",
+        rightSelectedIndex: state.rightSelectedIndex,
+        searchActive: state.searchActive,
+        searchResults: state.searchResults,
+        searchType: state.searchType,
+        savedNavState: state.savedNavState,
+      };
+      return {
+        ...state,
+        navStack: [...state.navStack, entry],
+        historyMode: true,
+        historyTarget: action.path,
+        historySelectedIndex: 0,
+        historyEntries: [],
+        currentFact: action.path,
+        rightPanelMode: "history",
+        focusZone: "left",
+        rightSelectedIndex: 0,
+      };
+    }
+
+    case "NAV_BACK": {
+      if (state.navStack.length === 0) return state;
+      const stack = [...state.navStack];
+      const prev = stack.pop()!;
+      return {
+        ...state,
+        navStack: stack,
+        currentPath: prev.currentPath,
+        currentFact: prev.currentFact,
+        selectedIndex: prev.selectedIndex,
+        breadcrumbSelected: prev.breadcrumbSelected,
+        statsPath: prev.statsPath,
+        rightPanelMode: prev.rightPanelMode,
+        historyMode: prev.historyMode,
+        historyTarget: prev.historyTarget,
+        historySelectedIndex: prev.historySelectedIndex,
+        focusZone: prev.focusZone,
+        rightSelectedIndex: prev.rightSelectedIndex,
+        searchActive: prev.searchActive,
+        searchResults: prev.searchResults,
+        searchType: prev.searchType,
+        savedNavState: prev.savedNavState,
+        historyEntries: [],
+      };
+    }
   }
 }
