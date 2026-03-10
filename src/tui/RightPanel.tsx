@@ -10,10 +10,11 @@ import type { ChildItem } from "./state.js";
 export type SummaryChild = ChildItem;
 
 export interface RightSelectableItem {
-  type: "domain" | "entity" | "fact" | "ref";
+  type: "domain" | "entity" | "fact" | "ref" | "changed-file";
   label: string;
   path?: string;
   ref?: ParsedRef;
+  changeStatus?: "added" | "modified" | "deleted";
 }
 
 export interface HistoricalData {
@@ -38,6 +39,7 @@ interface RightPanelProps {
   onItemsChanged?: (items: RightSelectableItem[]) => void;
   historical?: HistoricalData;
   availableHeight?: number;
+  historyTarget?: string;
 }
 
 export function buildFactSelectableItems(
@@ -54,6 +56,24 @@ export function buildFactSelectableItems(
   for (const r of frontmatter.refs) {
     const parsed = parseKnomitRef(r);
     items.push({ type: "ref", label: r, ref: parsed ?? undefined });
+  }
+  return items;
+}
+
+export function buildChangedFileItems(
+  changedFiles: { added: string[]; modified: string[]; deleted: string[] } | undefined,
+  historyTarget: string,
+): RightSelectableItem[] {
+  if (!changedFiles) return [];
+  const items: RightSelectableItem[] = [];
+  for (const f of changedFiles.added) {
+    items.push({ type: "changed-file", label: f, path: `${historyTarget}/${f}`, changeStatus: "added" });
+  }
+  for (const f of changedFiles.modified) {
+    items.push({ type: "changed-file", label: f, path: `${historyTarget}/${f}`, changeStatus: "modified" });
+  }
+  for (const f of changedFiles.deleted) {
+    items.push({ type: "changed-file", label: f, path: `${historyTarget}/${f}`, changeStatus: "deleted" });
   }
   return items;
 }
@@ -86,10 +106,12 @@ export function buildSelectableItems(
 
 export function RightPanel({
   mode, theme, stats, summaryChildren, factTitle, factBody, factFrontmatter,
-  focused, selectedIndex, onItemsChanged, historical, availableHeight,
+  focused, selectedIndex, onItemsChanged, historical, availableHeight, historyTarget,
 }: RightPanelProps) {
   let selectableItems: RightSelectableItem[] = [];
-  if (!historical) {
+  if (historical?.changedFiles) {
+    selectableItems = buildChangedFileItems(historical.changedFiles, historyTarget ?? "");
+  } else if (!historical) {
     if (mode === "summary") {
       selectableItems = buildSelectableItems(stats, summaryChildren);
     } else if (mode === "fact") {
