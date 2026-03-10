@@ -303,4 +303,42 @@ describe("ref navigation", () => {
     expect(s.searchActive).toBe(true);
     expect(s.searchResults).toHaveLength(1);
   });
+
+  it("FOLLOW_REF from history mode preserves history state", () => {
+    let s = {
+      ...initialState,
+      historyMode: true,
+      historyTarget: "worlds/people",
+      historySelectedIndex: 2,
+      rightPanelMode: "history" as const,
+      currentFact: null,
+    };
+    s = reducer(s, { type: "FOLLOW_REF", path: "worlds/people/alice/likes-rock.md", commit: "abc1234" });
+
+    expect(s.navStack).toHaveLength(1);
+    expect(s.navStack[0].historyMode).toBe(true);
+    expect(s.navStack[0].historyTarget).toBe("worlds/people");
+    expect(s.navStack[0].historySelectedIndex).toBe(2);
+    expect(s.navStack[0].rightPanelMode).toBe("history");
+    expect(s.historyTarget).toBe("worlds/people/alice/likes-rock.md");
+    expect(s.currentFact).toBe("worlds/people/alice/likes-rock.md");
+  });
+
+  it("NAV_BACK to history mode restores directory history", () => {
+    let s = {
+      ...initialState,
+      historyMode: true,
+      historyTarget: "worlds/people",
+      historySelectedIndex: 2,
+      rightPanelMode: "history" as const,
+    };
+    s = reducer(s, { type: "FOLLOW_REF", path: "worlds/people/alice/likes-rock.md", commit: "abc1234" });
+    s = reducer(s, { type: "NAV_BACK" });
+
+    expect(s.navStack).toHaveLength(0);
+    expect(s.historyMode).toBe(true);
+    expect(s.historyTarget).toBe("worlds/people");
+    expect(s.historySelectedIndex).toBe(2);
+    expect(s.rightPanelMode).toBe("history");
+  });
 });
