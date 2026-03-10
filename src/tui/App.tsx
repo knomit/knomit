@@ -139,9 +139,7 @@ function App({ repo, searchIndex }: { repo: GitRepo; searchIndex: SearchIndex })
           refCommitTarget.current = null;
           const idx = entries.findIndex((e) => e.commit.startsWith(targetCommit));
           if (idx >= 0) {
-            for (let i = 0; i < idx; i++) {
-              dispatch({ type: "NAVIGATE_DOWN" });
-            }
+            dispatch({ type: "SET_HISTORY_SELECTED_INDEX", index: idx });
           }
         }
       } catch {

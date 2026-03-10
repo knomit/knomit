@@ -101,7 +101,8 @@ export type Action =
   | { type: "RIGHT_NAVIGATE_DOWN" }
   | { type: "SET_RIGHT_ITEM_COUNT"; count: number }
   | { type: "FOLLOW_REF"; path: string; commit: string }
-  | { type: "NAV_BACK" };
+  | { type: "NAV_BACK" }
+  | { type: "SET_HISTORY_SELECTED_INDEX"; index: number };
 
 function autoSelectItem(
   state: AppState,
@@ -376,6 +377,9 @@ export function reducer(state: AppState, action: Action): AppState {
         rightSelectedIndex: 0,
       };
     }
+
+    case "SET_HISTORY_SELECTED_INDEX":
+      return { ...state, historySelectedIndex: action.index };
 
     case "NAV_BACK": {
       if (state.navStack.length === 0) return state;
