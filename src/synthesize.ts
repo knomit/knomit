@@ -7,6 +7,7 @@ import { createAdapter, resolveProvider, configFromEnv } from "./llm";
 import { commitFact, deleteFact, updateFact } from "./fact-ops";
 import { toMomentTag } from "./git";
 import { log } from "./logger";
+import { clusterFacts } from "./cluster";
 
 export interface FactForLLM {
   path: string;
@@ -504,71 +505,95 @@ async function executeDistillStep(
   totalSteps: number,
   onProgress?: OnProgress
 ): Promise<string> {
+  if (!searchIndex.hasEmbeddings) {
+    throw new Error("Distill mode requires embeddings. Enable embeddings in your SearchIndex configuration.");
+  }
+
   const facts = await gatherStepFacts(repo, searchIndex, recipe, recipeName, onProgress);
   if (!facts) return "No facts found in scope.";
 
   const adapter = adapterForStep(step);
-  const chunks = chunkFacts(facts, 100_000);
   const allSynthesized: DistillFact[] = [];
   const allForget: string[] = [];
   const summaries: string[] = [];
 
-  for (let i = 0; i < chunks.length; i++) {
-    const chunk = chunks[i]!;
-    onProgress?.({ phase: "llm", step: stepIdx, totalSteps, mode: "distill", chunk: i + 1, totalChunks: chunks.length, facts: chunk.length });
-    const prompt = buildDistillPrompt(chunk, recipe.prompt, step.prompt ?? "");
-    log.info(`distill: sending ${chunk.length} facts to LLM`);
-    const t0 = Date.now();
-    let receivedBytes = 0;
-    let response: string;
-    try {
-      response = await adapter.complete(
-        "You are a knowledge base synthesis assistant. Respond only with valid JSON.",
-        [{ role: "user", content: prompt }],
-        onProgress ? (text: string) => {
-          receivedBytes += text.length;
-          onProgress({ phase: "llm-stream", step: stepIdx, totalSteps, bytes: receivedBytes });
-        } : undefined
-      );
-    } finally {
-      onProgress?.({ phase: "llm-done", step: stepIdx, totalSteps, mode: "distill", elapsed: Date.now() - t0 });
-    }
-    const result = parseDistillResponse(response);
-    allSynthesized.push(...result.synthesize);
-    allForget.push(...result.forget);
-    summaries.push(result.summary);
-  }
+  const maxDepth = step.max_depth ?? 1;
+  let currentFacts = facts;
 
-  if (chunks.length > 1 && allSynthesized.length > 0) {
-    onProgress?.({ phase: "cross-chunk", facts: allSynthesized.length });
-    const crossPrompt = buildDistillPrompt(
-      allSynthesized.map((s) => ({ ...s, sources: 1 })),
-      recipe.prompt,
-      "These are synthesized facts from multiple batches. Find cross-cutting patterns and further consolidate if possible."
-    );
-    const adapter2 = adapterForStep(step);
-    let crossBytes = 0;
-    onProgress?.({ phase: "llm", step: stepIdx, totalSteps, mode: "distill", chunk: 1, totalChunks: 1, facts: allSynthesized.length });
-    const crossT0 = Date.now();
-    let crossResponse: string;
-    try {
-      crossResponse = await adapter2.complete(
-        "You are a knowledge base synthesis assistant. Respond only with valid JSON.",
-        [{ role: "user", content: crossPrompt }],
-        onProgress ? (text: string) => {
-          crossBytes += text.length;
-          onProgress({ phase: "llm-stream", step: stepIdx, totalSteps, bytes: crossBytes });
-        } : undefined
-      );
-    } finally {
-      onProgress?.({ phase: "llm-done", step: stepIdx, totalSteps, mode: "distill", elapsed: Date.now() - crossT0 });
+  for (let depth = 0; depth < maxDepth; depth++) {
+    onProgress?.({ phase: "raptor-depth", depth: depth + 1, maxDepth });
+
+    // Get embeddings for current facts
+    const embeddings = searchIndex.getEmbeddings(currentFacts.map(f => f.path));
+
+    // Cluster facts by semantic similarity
+    const clusterResult = clusterFacts(currentFacts, embeddings, {
+      umapDimensions: step.umap_dimensions,
+      minClusterSize: step.min_cluster_size,
+    });
+
+    log.info(`distill: ${clusterResult.noise.length} noise facts skipped`);
+    onProgress?.({ phase: "cluster", clusters: clusterResult.clusters.size, noise: clusterResult.noise.length });
+
+    if (clusterResult.clusters.size === 0) {
+      log.info(`distill: no clusters formed at depth ${depth + 1}, stopping`);
+      break;
     }
-    const crossResult = parseDistillResponse(crossResponse);
-    if (crossResult.synthesize.length > 0) {
-      allSynthesized.length = 0;
-      allSynthesized.push(...crossResult.synthesize);
-      allForget.push(...crossResult.forget);
-      summaries.push(crossResult.summary);
+
+    const depthSynthesized: DistillFact[] = [];
+    let clusterIdx = 0;
+    const totalClusters = clusterResult.clusters.size;
+
+    for (const [_label, clusterFacts] of clusterResult.clusters) {
+      clusterIdx++;
+
+      // If a single cluster's JSON exceeds 100KB, fall back to chunkFacts within it
+      const clusterJson = JSON.stringify(clusterFacts);
+      const groups = clusterJson.length > 100_000
+        ? chunkFacts(clusterFacts, 100_000)
+        : [clusterFacts];
+
+      for (let i = 0; i < groups.length; i++) {
+        const group = groups[i]!;
+        onProgress?.({ phase: "llm", step: stepIdx, totalSteps, mode: "distill", chunk: clusterIdx, totalChunks: totalClusters, facts: group.length });
+        const prompt = buildDistillPrompt(group, recipe.prompt, step.prompt ?? "");
+        log.info(`distill: sending ${group.length} facts (cluster ${clusterIdx}/${totalClusters}) to LLM`);
+        const t0 = Date.now();
+        let receivedBytes = 0;
+        let response: string;
+        try {
+          response = await adapter.complete(
+            "You are a knowledge base synthesis assistant. Respond only with valid JSON.",
+            [{ role: "user", content: prompt }],
+            onProgress ? (text: string) => {
+              receivedBytes += text.length;
+              onProgress({ phase: "llm-stream", step: stepIdx, totalSteps, bytes: receivedBytes });
+            } : undefined
+          );
+        } finally {
+          onProgress?.({ phase: "llm-done", step: stepIdx, totalSteps, mode: "distill", elapsed: Date.now() - t0 });
+        }
+        const result = parseDistillResponse(response);
+        depthSynthesized.push(...result.synthesize);
+        allForget.push(...result.forget);
+        summaries.push(result.summary);
+      }
+    }
+
+    allSynthesized.push(...depthSynthesized);
+
+    // RAPTOR recursion: if we have new facts and more depth to go, re-embed and cluster again
+    if (depth + 1 < maxDepth && depthSynthesized.length > 0) {
+      const embedder = searchIndex.getEmbedder()!;
+      const newFacts: FactForLLM[] = [];
+      for (const fact of depthSynthesized) {
+        const embeddingText = `${fact.title} ${fact.body} ${fact.entities.join(" ")} ${fact.domain.join(" ")}`;
+        const vec = await embedder.embed(embeddingText);
+        // Store embedding temporarily for clustering by adding to the embeddings map
+        embeddings.set(fact.path, vec);
+        newFacts.push({ ...fact, sources: 1 });
+      }
+      currentFacts = newFacts;
     }
   }
 
@@ -631,6 +656,8 @@ export type ProgressEvent =
   | { phase: "detail-learn"; path: string; body: string; refs: string[] }
   | { phase: "detail-distill-forget"; path: string }
   | { phase: "cross-chunk"; facts: number }
+  | { phase: "cluster"; clusters: number; noise: number }
+  | { phase: "raptor-depth"; depth: number; maxDepth: number }
   | { phase: "reindex" }
   | { phase: "merge" }
   | { phase: "push" }
