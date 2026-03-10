@@ -1,4 +1,4 @@
-import { test, expect } from "bun:test";
+import { test, expect, describe, it } from "bun:test";
 import { initialState, reducer, type AppState, type Action } from "./state";
 
 test("initial state starts at worlds root with breadcrumb selected", () => {
@@ -231,4 +231,76 @@ test("CLEAR_SEARCH restores previous navigation state", () => {
   expect(s.currentFact).toBe("worlds/note.md");
   expect(s.rightPanelMode).toBe("fact");
   expect(s.savedNavState).toBeNull();
+});
+
+describe("ref navigation", () => {
+  it("FOLLOW_REF pushes state and enters history mode", () => {
+    let s = { ...initialState, currentFact: "worlds/distilled/overview.md", rightPanelMode: "fact" as const };
+    s = reducer(s, { type: "FOLLOW_REF", path: "worlds/people/alice/likes-rock.md", commit: "abc1234" });
+
+    expect(s.navStack).toHaveLength(1);
+    expect(s.navStack[0].currentFact).toBe("worlds/distilled/overview.md");
+    expect(s.navStack[0].rightPanelMode).toBe("fact");
+    expect(s.historyMode).toBe(true);
+    expect(s.historyTarget).toBe("worlds/people/alice/likes-rock.md");
+    expect(s.currentFact).toBe("worlds/people/alice/likes-rock.md");
+    expect(s.rightPanelMode).toBe("history");
+  });
+
+  it("NAV_BACK restores previous state", () => {
+    let s = { ...initialState, currentFact: "worlds/distilled/overview.md", rightPanelMode: "fact" as const };
+    s = reducer(s, { type: "FOLLOW_REF", path: "worlds/people/alice/likes-rock.md", commit: "abc1234" });
+    s = reducer(s, { type: "NAV_BACK" });
+
+    expect(s.navStack).toHaveLength(0);
+    expect(s.currentFact).toBe("worlds/distilled/overview.md");
+    expect(s.rightPanelMode).toBe("fact");
+    expect(s.historyMode).toBe(false);
+  });
+
+  it("NAV_BACK on empty stack is no-op", () => {
+    const s = reducer(initialState, { type: "NAV_BACK" });
+    expect(s).toBe(initialState);
+  });
+
+  it("deep stack: follow 3 refs, back 3 times", () => {
+    let s = { ...initialState, currentFact: "worlds/a.md", rightPanelMode: "fact" as const };
+    s = reducer(s, { type: "FOLLOW_REF", path: "worlds/b.md", commit: "aaa" });
+    s = reducer(s, { type: "FOLLOW_REF", path: "worlds/c.md", commit: "bbb" });
+    s = reducer(s, { type: "FOLLOW_REF", path: "worlds/d.md", commit: "ccc" });
+
+    expect(s.navStack).toHaveLength(3);
+    expect(s.currentFact).toBe("worlds/d.md");
+
+    s = reducer(s, { type: "NAV_BACK" });
+    expect(s.currentFact).toBe("worlds/c.md");
+    expect(s.navStack).toHaveLength(2);
+
+    s = reducer(s, { type: "NAV_BACK" });
+    expect(s.currentFact).toBe("worlds/b.md");
+    expect(s.navStack).toHaveLength(1);
+
+    s = reducer(s, { type: "NAV_BACK" });
+    expect(s.currentFact).toBe("worlds/a.md");
+    expect(s.navStack).toHaveLength(0);
+    expect(s.historyMode).toBe(false);
+  });
+
+  it("FOLLOW_REF during search preserves search state", () => {
+    let s = {
+      ...initialState,
+      searchActive: true,
+      searchResults: [{ file: "worlds/x.md", title: "X", body: "", score: 1 }],
+      currentFact: "worlds/x.md",
+      rightPanelMode: "fact" as const,
+    };
+    s = reducer(s, { type: "FOLLOW_REF", path: "worlds/y.md", commit: "aaa" });
+
+    expect(s.navStack[0].searchActive).toBe(true);
+    expect(s.navStack[0].searchResults).toHaveLength(1);
+
+    s = reducer(s, { type: "NAV_BACK" });
+    expect(s.searchActive).toBe(true);
+    expect(s.searchResults).toHaveLength(1);
+  });
 });
