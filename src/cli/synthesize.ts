@@ -126,6 +126,16 @@ function createProgressRenderer(verbose: boolean) {
         }
         break;
 
+      case "cluster":
+        console.log(`${DIM}  Clustered into ${BOLD}${event.clusters}${RESET}${DIM} clusters (${event.noise} noise)${RESET}`);
+        break;
+
+      case "raptor-depth":
+        if (event.maxDepth > 1) {
+          console.log(`${DIM}  RAPTOR depth ${event.depth}/${event.maxDepth}${RESET}`);
+        }
+        break;
+
       case "cross-chunk":
         console.log(`${DIM}  Cross-chunk consolidation (${event.facts} synthesized facts)...${RESET}`);
         break;
