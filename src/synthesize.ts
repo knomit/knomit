@@ -519,12 +519,14 @@ async function executeDistillStep(
 
   const maxDepth = step.max_depth ?? 1;
   let currentFacts = facts;
+  let currentEmbeddings: Map<string, Float32Array> | null = null;
 
   for (let depth = 0; depth < maxDepth; depth++) {
     onProgress?.({ phase: "raptor-depth", depth: depth + 1, maxDepth });
 
-    // Get embeddings for current facts
-    const embeddings = searchIndex.getEmbeddings(currentFacts.map(f => f.path));
+    // Get embeddings: from previous RAPTOR iteration or from search index
+    const embeddings = currentEmbeddings ?? searchIndex.getEmbeddings(currentFacts.map(f => f.path));
+    currentEmbeddings = null;
 
     // Cluster facts by semantic similarity
     const clusterResult = clusterFacts(currentFacts, embeddings, {
@@ -585,15 +587,16 @@ async function executeDistillStep(
     // RAPTOR recursion: if we have new facts and more depth to go, re-embed and cluster again
     if (depth + 1 < maxDepth && depthSynthesized.length > 0) {
       const embedder = searchIndex.getEmbedder()!;
+      const newEmbeddings = new Map<string, Float32Array>();
       const newFacts: FactForLLM[] = [];
       for (const fact of depthSynthesized) {
         const embeddingText = `${fact.title} ${fact.body} ${fact.entities.join(" ")} ${fact.domain.join(" ")}`;
         const vec = await embedder.embed(embeddingText);
-        // Store embedding temporarily for clustering by adding to the embeddings map
-        embeddings.set(fact.path, vec);
+        newEmbeddings.set(fact.path, vec);
         newFacts.push({ ...fact, sources: 1 });
       }
       currentFacts = newFacts;
+      currentEmbeddings = newEmbeddings;
     }
   }
 
