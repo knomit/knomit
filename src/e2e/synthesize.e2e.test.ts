@@ -73,6 +73,25 @@ beforeEach(async () => {
   await mkdir(cacheDir, { recursive: true });
   searchIndex = new SearchIndex(cacheDir);
   await searchIndex.init();
+
+  // Override embedding methods so distill mode works without ONNX model
+  Object.defineProperty(searchIndex, "hasEmbeddings", { get: () => true });
+  (searchIndex as any).getEmbeddings = (paths: string[]) => {
+    const map = new Map<string, Float32Array>();
+    for (const p of paths) {
+      const vec = new Float32Array(384);
+      for (let i = 0; i < 384; i++) vec[i] = 0.5 + Math.random() * 0.01;
+      map.set(p, vec);
+    }
+    return map;
+  };
+  (searchIndex as any).getEmbedder = () => ({
+    embed: async () => {
+      const vec = new Float32Array(384);
+      for (let i = 0; i < 384; i++) vec[i] = 0.5 + Math.random() * 0.01;
+      return vec;
+    },
+  });
 });
 
 afterEach(async () => {
