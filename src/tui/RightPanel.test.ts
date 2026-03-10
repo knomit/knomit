@@ -21,4 +21,22 @@ describe("buildChangedFileItems", () => {
   it("returns empty array when no changes", () => {
     expect(buildChangedFileItems({ added: [], modified: [], deleted: [] }, "worlds")).toEqual([]);
   });
+
+  it("different commits with same file count produce different items", () => {
+    // Regression: onItemsChanged effect used selectableItems.length as dependency,
+    // so scrolling between commits with the same number of changed files left
+    // rightItemsRef stale, causing navigation to the wrong file.
+    const itemsA = buildChangedFileItems(
+      { added: ["kubernetes-platform-standardization.md"], modified: [], deleted: [] },
+      "worlds",
+    );
+    const itemsB = buildChangedFileItems(
+      { added: ["k8s-networking.md"], modified: [], deleted: [] },
+      "worlds",
+    );
+    expect(itemsA).toHaveLength(1);
+    expect(itemsB).toHaveLength(1);
+    expect(itemsA[0].path).not.toBe(itemsB[0].path);
+    expect(itemsA[0].label).not.toBe(itemsB[0].label);
+  });
 });

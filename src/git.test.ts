@@ -109,6 +109,34 @@ describe("GitRepo.log", () => {
     expect(history[0].message).toBe("version 2");
     expect(history[1].message).toBe("version 1");
   });
+
+  it("fromCommit scopes log to start from a specific commit", async () => {
+    // Regression: repo.log() ran git log from HEAD, which could miss the
+    // target commit when navigating from changed-file items in history view.
+    await repo.init();
+    const c1 = await repo.commit(
+      [{ path: "worlds/file.md", content: "v1" }],
+      "first"
+    );
+    const c2 = await repo.commit(
+      [{ path: "worlds/file.md", content: "v2" }],
+      "second"
+    );
+    await repo.commit(
+      [{ path: "worlds/file.md", content: "v3" }],
+      "third"
+    );
+
+    // Without fromCommit: see all 3
+    const all = await repo.log("worlds/file.md");
+    expect(all.length).toBe(3);
+
+    // With fromCommit=c2: only see c2 and c1 (not c3)
+    const fromC2 = await repo.log("worlds/file.md", c2);
+    expect(fromC2.length).toBe(2);
+    expect(fromC2[0].message).toBe("second");
+    expect(fromC2[1].message).toBe("first");
+  });
 });
 
 describe("GitRepo.listDir", () => {
