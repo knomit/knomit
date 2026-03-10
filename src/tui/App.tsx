@@ -3,6 +3,7 @@ import { render, Box, useInput, useApp, useStdout } from "ink";
 import type { GitRepo } from "../git.js";
 import type { SearchIndex, StatsResult } from "../search-index.js";
 import { parseFact, type Frontmatter } from "../facts.js";
+import { parseKnomitRef } from "./refs.js";
 import type { SummaryChild, RightSelectableItem, HistoricalData } from "./RightPanel.js";
 import { defaultTheme } from "./theme.js";
 import { reducer, initialState, type ChildItem } from "./state.js";
@@ -66,6 +67,7 @@ function App({ repo, searchIndex }: { repo: GitRepo; searchIndex: SearchIndex })
   const [historical, setHistorical] = useState<HistoricalData | null>(null);
 
   const rightItemsRef = useRef<RightSelectableItem[]>([]);
+  const refCommitTarget = useRef<string | null>(null);
 
   const handleRightItemsChanged = useCallback((items: RightSelectableItem[]) => {
     rightItemsRef.current = items;
@@ -131,6 +133,17 @@ function App({ repo, searchIndex }: { repo: GitRepo; searchIndex: SearchIndex })
       try {
         const entries = await repo.log(state.historyTarget);
         dispatch({ type: "SET_HISTORY_ENTRIES", entries });
+        // Sync to ref commit if navigating via ref
+        if (refCommitTarget.current) {
+          const targetCommit = refCommitTarget.current;
+          refCommitTarget.current = null;
+          const idx = entries.findIndex((e) => e.commit.startsWith(targetCommit));
+          if (idx >= 0) {
+            for (let i = 0; i < idx; i++) {
+              dispatch({ type: "NAVIGATE_DOWN" });
+            }
+          }
+        }
       } catch {
         dispatch({ type: "SET_HISTORY_ENTRIES", entries: [] });
       }
@@ -216,6 +229,13 @@ function App({ repo, searchIndex }: { repo: GitRepo; searchIndex: SearchIndex })
               results: [{ file: factPath, title: item.label, body: "", score: 0 }],
               searchType: "domain",
             });
+          } else if (item.type === "ref" && item.ref && !item.ref.external) {
+            refCommitTarget.current = item.ref.commit;
+            dispatch({
+              type: "FOLLOW_REF",
+              path: item.ref.path,
+              commit: item.ref.commit,
+            });
           }
         }
       } else if (input === "q") {
@@ -242,7 +262,9 @@ function App({ repo, searchIndex }: { repo: GitRepo; searchIndex: SearchIndex })
       }
     }
     else if (key.leftArrow || key.backspace || key.delete) {
-      if (state.historyMode) {
+      if (state.navStack.length > 0) {
+        dispatch({ type: "NAV_BACK" });
+      } else if (state.historyMode) {
         dispatch({ type: "TOGGLE_HISTORY", target: "" });
       } else if (state.searchActive) {
         dispatch({ type: "CLEAR_SEARCH" });
