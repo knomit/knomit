@@ -436,14 +436,18 @@ async function executePruneStep(
   let updated = 0;
   let merged = 0;
   const kept = allDecisions.filter((d) => d.action === "keep").length;
+  const deletedPaths = new Set<string>();
 
   for (const decision of allDecisions) {
     if (decision.action === "keep") {
+      log.info(`prune: keep ${decision.file} — ${decision.reason}`);
       onProgress?.({ phase: "detail-keep", path: decision.file, reason: decision.reason });
     } else if (decision.action === "forget") {
       try {
         await deleteFact(repo, decision.file, `synthesize-${recipeName}`, searchIndex, decision.reason);
         forgotten++;
+        deletedPaths.add(decision.file);
+        log.info(`prune: forget ${decision.file} — ${decision.reason}`);
         onProgress?.({ phase: "detail-forget", path: decision.file, reason: decision.reason });
       } catch (err) {
         log.warn(`prune: failed to delete ${decision.file}: ${err}`);
@@ -452,6 +456,7 @@ async function executePruneStep(
       try {
         await updateFact(repo, decision.file, { confidence: decision.confidence }, searchIndex, decision.reason);
         updated++;
+        log.info(`prune: update ${decision.file} confidence=${decision.confidence} — ${decision.reason}`);
         onProgress?.({ phase: "detail-update", path: decision.file, confidence: decision.confidence, reason: decision.reason });
       } catch (err) {
         log.warn(`prune: failed to update ${decision.file}: ${err}`);
@@ -474,13 +479,16 @@ async function executePruneStep(
         refs: resolvedRefs,
       }, searchIndex, mergeReason);
       for (const source of merge.sources) {
+        if (deletedPaths.has(source)) continue; // already forgotten above
         try {
           await deleteFact(repo, source, `synthesize-${recipeName}`, searchIndex, `Subsumed by merged fact: ${merge.merged.path}`);
+          deletedPaths.add(source);
         } catch (err) {
           log.warn(`prune: failed to delete merge source ${source}: ${err}`);
         }
       }
       merged++;
+      log.info(`prune: merge ${merge.sources.join(", ")} -> ${merge.merged.path}`);
       onProgress?.({ phase: "detail-merge", sources: merge.sources, target: merge.merged.path, reason: mergeReason });
     } catch (err) {
       log.warn(`prune: failed to commit merged fact ${merge.merged.path}: ${err}`);
@@ -618,6 +626,8 @@ async function executeDistillStep(
         refs: resolvedRefs,
       }, searchIndex, refsNote);
       learned++;
+      const refsInfo = fact.refs.length > 0 ? ` from: ${fact.refs.join(", ")}` : "";
+      log.info(`distill: learn ${fact.path} — ${fact.body.slice(0, 120)}${refsInfo}`);
       onProgress?.({ phase: "detail-learn", path: fact.path, body: fact.body, refs: fact.refs });
     } catch (err) {
       log.warn(`distill: failed to learn ${fact.path}: ${err}`);
@@ -628,6 +638,7 @@ async function executeDistillStep(
     try {
       await deleteFact(repo, file, `synthesize-${recipeName}`, searchIndex, "Subsumed by higher-order distilled fact");
       forgotten++;
+      log.info(`distill: forget ${file} (subsumed)`);
       onProgress?.({ phase: "detail-distill-forget", path: file });
     } catch (err) {
       log.warn(`distill: failed to delete ${file}: ${err}`);

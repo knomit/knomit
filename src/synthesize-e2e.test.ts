@@ -324,4 +324,52 @@ describe("synthesize e2e", () => {
 
     expect(llmCallCount).toBe(2);
   });
+
+  it("prune handles facts appearing in both forget decisions and merge sources", async () => {
+    // LLM returns forget for cve-1 AND a merge that lists cve-1 as a source.
+    // Previously this caused "File not found" warnings because forget ran first.
+    llmResponses = [
+      JSON.stringify({
+        decisions: [
+          { file: "worlds/security/cve-1.md", action: "forget", reason: "subsumed by merge" },
+          { file: "worlds/security/cve-2.md", action: "keep", reason: "current" },
+        ],
+        merges: [
+          {
+            sources: ["worlds/security/cve-1.md", "worlds/security/cve-2.md"],
+            merged: {
+              path: "worlds/security/libfoo-combined.md",
+              title: "libfoo vulnerabilities",
+              body: "Combined CVE entries for libfoo.",
+              domain: ["security"],
+              confidence: 0.9,
+              entities: ["libfoo"],
+              refs: [],
+            },
+          },
+        ],
+        summary: "Merged with overlap",
+      }),
+    ];
+
+    const recipe: Recipe = {
+      name: "test-overlap",
+      prompt: "",
+      scope: { domain: ["security"], entities: [], search: [], path: "" },
+      auto_merge: true,
+      steps: [{ mode: "prune", prompt: "" }],
+    };
+
+    const result = await synthesize(repo, searchIndex, recipe);
+
+    expect(result.merged).toBe(true);
+
+    // cve-1 forgotten, cve-2 deleted as merge source, merged fact created
+    const cve1 = await repo.fileExists("worlds/security/cve-1.md");
+    expect(cve1).toBe(false);
+    const cve2 = await repo.fileExists("worlds/security/cve-2.md");
+    expect(cve2).toBe(false);
+    const combined = await repo.fileExists("worlds/security/libfoo-combined.md");
+    expect(combined).toBe(true);
+  });
 });
