@@ -148,7 +148,17 @@ const selectedMoments = phase === "base" ? baseMoments
   : [...baseMoments, ...distillMoments];
 
 let totalFacts = 0;
+let skipped = 0;
 for (const moment of selectedMoments) {
+  // Check if the first fact already exists — if so, skip this moment
+  let probePath = moment.facts[0].path;
+  if (!probePath.endsWith(".md")) probePath = `${probePath}.md`;
+  if (await repo.fileExists(probePath)) {
+    console.log(`${moment.moment_name}: already seeded, skipping`);
+    skipped++;
+    continue;
+  }
+
   const result = await learnHandler(repo, {
     moment_name: moment.moment_name,
     facts: moment.facts.map((f) => ({ ...f, refs: [] })),
@@ -157,7 +167,11 @@ for (const moment of selectedMoments) {
   console.log(`${moment.moment_name}: ${result.commits.length} facts, tag=${result.moment_tag}`);
 }
 
-console.log(`\nSeeded ${totalFacts} facts (phase: ${phase}).`);
+if (skipped > 0) {
+  console.log(`\nSeeded ${totalFacts} facts, skipped ${skipped} already-seeded moments (phase: ${phase}).`);
+} else {
+  console.log(`\nSeeded ${totalFacts} facts (phase: ${phase}).`);
+}
 
 // --- Print expectations ---
 if (phase === "base" || phase === "all") {
