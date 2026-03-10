@@ -38,8 +38,10 @@ function App({ repo, searchIndex }: { repo: GitRepo; searchIndex: SearchIndex })
 
   // Periodic sync: pull from remote + re-index local changes from other processes
   const [lastPull, setLastPull] = useState(0);
+  const [syncing, setSyncing] = useState(false);
   useEffect(() => {
     const timer = setInterval(async () => {
+      setSyncing(true);
       try {
         // Pull from remote if available
         const synced = await repo.sync();
@@ -54,6 +56,8 @@ function App({ repo, searchIndex }: { repo: GitRepo; searchIndex: SearchIndex })
         }
       } catch (err) {
         log.debug(`tui: background sync failed: ${err}`);
+      } finally {
+        setSyncing(false);
       }
     }, PULL_INTERVAL_MS);
     return () => clearInterval(timer);
@@ -308,6 +312,7 @@ function App({ repo, searchIndex }: { repo: GitRepo; searchIndex: SearchIndex })
       }
     }
     else if (input === "r") {
+      setSyncing(true);
       (async () => {
         try {
           await repo.sync();
@@ -315,6 +320,8 @@ function App({ repo, searchIndex }: { repo: GitRepo; searchIndex: SearchIndex })
           if (indexed) setLastPull((n) => n + 1);
         } catch (err) {
           log.debug(`tui: manual sync failed: ${err}`);
+        } finally {
+          setSyncing(false);
         }
       })();
     }
@@ -391,7 +398,7 @@ function App({ repo, searchIndex }: { repo: GitRepo; searchIndex: SearchIndex })
 
   return (
     <Box flexDirection="column" width={termSize.columns} height={termSize.rows}>
-      <TopBar branch={branch} theme={theme} commit={searchIndex.lastCommit} />
+      <TopBar branch={branch} theme={theme} commit={searchIndex.lastCommit} syncing={syncing} />
       <Box flexDirection="row" flexGrow={1} overflow="hidden">
         <LeftPanel
           currentPath={state.currentPath}
