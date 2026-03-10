@@ -36,7 +36,7 @@ export function StatusBar({ mode, theme, onSearchSubmit, onCommandSubmit, inputK
   return (
     <Box backgroundColor={theme.crust} justifyContent="space-between">
       <Text color={theme.dim}>
-        {" "}↑↓ navigate  ↵ open  ←→ panels  h history  / search  : command  q quit{" "}
+        {" "}↑↓ navigate  ↵ open  ←→ panels  h history  r sync  / search  : command  q quit{" "}
       </Text>
       {embeddings !== undefined && (
         <Text color={theme.dim}>{embeddings ? "e " : ""}</Text>

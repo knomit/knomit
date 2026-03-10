@@ -107,7 +107,7 @@ function App({ repo, searchIndex }: { repo: GitRepo; searchIndex: SearchIndex })
         setSummaryChildren([]);
       }
     })();
-  }, [state.statsPath, state.rightPanelMode]);
+  }, [state.statsPath, state.rightPanelMode, lastPull]);
 
   // Load fact content when currentFact changes
   useEffect(() => {
@@ -129,7 +129,7 @@ function App({ repo, searchIndex }: { repo: GitRepo; searchIndex: SearchIndex })
         }
       }
     })();
-  }, [state.currentFact, state.rightPanelMode]);
+  }, [state.currentFact, state.rightPanelMode, lastPull]);
 
   // Load history entries when entering history mode
   useEffect(() => {
@@ -153,7 +153,7 @@ function App({ repo, searchIndex }: { repo: GitRepo; searchIndex: SearchIndex })
         dispatch({ type: "SET_HISTORY_ENTRIES", entries: [] });
       }
     })();
-  }, [state.historyMode, state.historyTarget]);
+  }, [state.historyMode, state.historyTarget, lastPull]);
 
   // Load content at selected historical commit
   const selectedHistoryEntry = state.historyMode ? state.historyEntries[state.historySelectedIndex] : null;
@@ -194,7 +194,7 @@ function App({ repo, searchIndex }: { repo: GitRepo; searchIndex: SearchIndex })
         setHistorical(null);
       }
     })();
-  }, [state.historyMode, selectedHistoryEntry?.commit, state.historyTarget]);
+  }, [state.historyMode, selectedHistoryEntry?.commit, state.historyTarget, lastPull]);
 
   // Keyboard handling
   useInput((input, key) => {
@@ -306,6 +306,17 @@ function App({ repo, searchIndex }: { repo: GitRepo; searchIndex: SearchIndex })
       if (!state.historyMode) {
         dispatch({ type: "SET_FOCUS", zone: "cmdline" });
       }
+    }
+    else if (input === "r") {
+      (async () => {
+        try {
+          await repo.sync();
+          const indexed = await searchIndex.sync(repo);
+          if (indexed) setLastPull((n) => n + 1);
+        } catch (err) {
+          log.debug(`tui: manual sync failed: ${err}`);
+        }
+      })();
     }
     else if (input === "h") {
       if (state.navStack.length > 0) {
