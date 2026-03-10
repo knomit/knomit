@@ -55,9 +55,9 @@ export function createAdapter(config: LLMConfig): LLMAdapter {
     case "bedrock":
       return createBedrockAdapter(config);
     case "claude-cli":
-      return createClaudeCliAdapter();
+      return createClaudeCliAdapter(config.model);
     case "gemini-cli":
-      return createGeminiCliAdapter();
+      return createGeminiCliAdapter(config.model);
   }
 }
 
@@ -298,7 +298,7 @@ function createBedrockAdapter(config: LLMConfig): LLMAdapter {
   };
 }
 
-function createClaudeCliAdapter(): LLMAdapter {
+function createClaudeCliAdapter(model?: string): LLMAdapter {
   return {
     async complete(system: string, messages: Message[], onChunk?: (text: string) => void): Promise<string> {
       const userContent = messages
@@ -306,8 +306,11 @@ function createClaudeCliAdapter(): LLMAdapter {
         .map((m) => m.content)
         .join("\n\n");
 
+      const args = ["claude", "-p", "--system", system, "--output-format", "text"];
+      if (model) args.push("--model", model);
+
       const proc = Bun.spawn(
-        ["claude", "-p", "--system", system, "--output-format", "text"],
+        args,
         { stdin: new Blob([userContent]), stdout: "pipe", stderr: "pipe" }
       );
 
@@ -333,7 +336,7 @@ function createClaudeCliAdapter(): LLMAdapter {
   };
 }
 
-function createGeminiCliAdapter(): LLMAdapter {
+function createGeminiCliAdapter(model?: string): LLMAdapter {
   return {
     async complete(system: string, messages: Message[], onChunk?: (text: string) => void): Promise<string> {
       const userContent = messages
@@ -343,8 +346,11 @@ function createGeminiCliAdapter(): LLMAdapter {
 
       const stdinContent = system + "\n\n" + userContent;
 
+      const args = ["gemini"];
+      if (model) args.push("--model", model);
+
       const proc = Bun.spawn(
-        ["gemini"],
+        args,
         { stdin: new Blob([stdinContent]), stdout: "pipe", stderr: "pipe" }
       );
 
