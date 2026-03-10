@@ -271,7 +271,7 @@ function App({ repo, searchIndex }: { repo: GitRepo; searchIndex: SearchIndex })
       }
     }
     else if (key.rightArrow) {
-      if (!state.historyMode && state.rightItemCount > 0) {
+      if (state.rightItemCount > 0) {
         dispatch({ type: "SET_FOCUS", zone: "right" });
       }
     }
