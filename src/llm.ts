@@ -4,11 +4,11 @@ export interface Message {
 }
 
 export interface LLMAdapter {
-  complete(system: string, messages: Message[]): Promise<string>;
+  complete(system: string, messages: Message[], onChunk?: (text: string) => void): Promise<string>;
 }
 
 export interface LLMConfig {
-  provider?: "anthropic" | "gemini" | "bedrock";
+  provider?: "anthropic" | "gemini" | "bedrock" | "claude-cli" | "gemini-cli";
   model: string;
   apiKey?: string;
   region?: string;
@@ -19,13 +19,13 @@ export interface LLMConfig {
 export function resolveProvider(
   model: string,
   explicit?: string
-): "anthropic" | "gemini" | "bedrock" {
+): "anthropic" | "gemini" | "bedrock" | "claude-cli" | "gemini-cli" {
   if (explicit) {
-    const valid = ["anthropic", "gemini", "bedrock"];
+    const valid = ["anthropic", "gemini", "bedrock", "claude-cli", "gemini-cli"];
     if (!valid.includes(explicit)) {
       throw new Error(`Invalid provider "${explicit}". Must be one of: ${valid.join(", ")}`);
     }
-    return explicit as "anthropic" | "gemini" | "bedrock";
+    return explicit as "anthropic" | "gemini" | "bedrock" | "claude-cli" | "gemini-cli";
   }
   if (model.startsWith("claude")) return "anthropic";
   if (model.startsWith("gemini")) return "gemini";
@@ -34,6 +34,15 @@ export function resolveProvider(
   throw new Error(
     `Cannot infer provider for model "${model}". Set KNOMIT_LLM_PROVIDER or specify provider explicitly.`
   );
+}
+
+export function cliExists(name: string): boolean {
+  try {
+    const result = Bun.spawnSync(["which", name]);
+    return result.exitCode === 0;
+  } catch {
+    return false;
+  }
 }
 
 export function createAdapter(config: LLMConfig): LLMAdapter {
@@ -45,6 +54,10 @@ export function createAdapter(config: LLMConfig): LLMAdapter {
       return createGeminiAdapter(config);
     case "bedrock":
       return createBedrockAdapter(config);
+    case "claude-cli":
+      return createClaudeCliAdapter();
+    case "gemini-cli":
+      return createGeminiCliAdapter();
   }
 }
 
@@ -54,7 +67,20 @@ function createAnthropicAdapter(config: LLMConfig): LLMAdapter {
   const model = config.model;
 
   return {
-    async complete(system: string, messages: Message[]): Promise<string> {
+    async complete(system: string, messages: Message[], onChunk?: (text: string) => void): Promise<string> {
+      const body: Record<string, unknown> = {
+        model,
+        max_tokens: 8192,
+        system,
+        messages: messages.map((m) => ({
+          role: m.role,
+          content: m.content,
+        })),
+      };
+      if (onChunk) {
+        body.stream = true;
+      }
+
       const resp = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST",
         headers: {
@@ -62,20 +88,42 @@ function createAnthropicAdapter(config: LLMConfig): LLMAdapter {
           "x-api-key": apiKey,
           "anthropic-version": "2023-06-01",
         },
-        body: JSON.stringify({
-          model,
-          max_tokens: 8192,
-          system,
-          messages: messages.map((m) => ({
-            role: m.role,
-            content: m.content,
-          })),
-        }),
+        body: JSON.stringify(body),
       });
       if (!resp.ok) {
-        const body = await resp.text();
-        throw new Error(`Anthropic API error ${resp.status}: ${body}`);
+        const text = await resp.text();
+        throw new Error(`Anthropic API error ${resp.status}: ${text}`);
       }
+
+      if (onChunk) {
+        let result = "";
+        const reader = resp.body!.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split("\n");
+          buffer = lines.pop()!;
+          for (const line of lines) {
+            if (!line.startsWith("data: ")) continue;
+            const payload = line.slice(6).trim();
+            if (payload === "[DONE]") continue;
+            try {
+              const event = JSON.parse(payload);
+              if (event.type === "content_block_delta" && event.delta?.text) {
+                result += event.delta.text;
+                onChunk(event.delta.text);
+              }
+            } catch {
+              // skip unparseable lines
+            }
+          }
+        }
+        return result;
+      }
+
       const data = (await resp.json()) as {
         content: Array<{ type: string; text: string }>;
       };
@@ -92,13 +140,15 @@ function createGeminiAdapter(config: LLMConfig): LLMAdapter {
   const model = config.model;
 
   return {
-    async complete(system: string, messages: Message[]): Promise<string> {
+    async complete(system: string, messages: Message[], onChunk?: (text: string) => void): Promise<string> {
       const contents = messages.map((m) => ({
         role: m.role === "assistant" ? "model" : "user",
         parts: [{ text: m.content }],
       }));
+
+      const endpoint = onChunk ? "streamGenerateContent" : "generateContent";
       const resp = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
+        `https://generativelanguage.googleapis.com/v1beta/models/${model}:${endpoint}?key=${apiKey}`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -112,6 +162,38 @@ function createGeminiAdapter(config: LLMConfig): LLMAdapter {
         const body = await resp.text();
         throw new Error(`Gemini API error ${resp.status}: ${body}`);
       }
+
+      if (onChunk) {
+        const reader = resp.body!.getReader();
+        const decoder = new TextDecoder();
+        let accumulated = "";
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          const chunk = decoder.decode(value, { stream: true });
+          accumulated += chunk;
+          onChunk(chunk);
+        }
+
+        // Gemini streams a JSON array — try parsing as array first, fall back to single object
+        let parsed: any;
+        try {
+          parsed = JSON.parse(accumulated);
+        } catch {
+          throw new Error("Failed to parse Gemini streaming response");
+        }
+        const items = Array.isArray(parsed) ? parsed : [parsed];
+        const texts: string[] = [];
+        for (const item of items) {
+          if (item.candidates?.[0]?.content?.parts) {
+            for (const part of item.candidates[0].content.parts) {
+              if (part.text) texts.push(part.text);
+            }
+          }
+        }
+        return texts.join("");
+      }
+
       const data = (await resp.json()) as {
         candidates: Array<{ content: { parts: Array<{ text: string }> } }>;
       };
@@ -129,8 +211,9 @@ function createBedrockAdapter(config: LLMConfig): LLMAdapter {
   const model = config.model;
 
   return {
-    async complete(system: string, messages: Message[]): Promise<string> {
-      const url = `https://bedrock-runtime.${region}.amazonaws.com/model/${encodeURIComponent(model)}/invoke`;
+    async complete(system: string, messages: Message[], onChunk?: (text: string) => void): Promise<string> {
+      const action = onChunk ? "invoke-with-response-stream" : "invoke";
+      const url = `https://bedrock-runtime.${region}.amazonaws.com/model/${encodeURIComponent(model)}/${action}`;
       const payload = JSON.stringify({
         anthropic_version: "bedrock-2023-05-31",
         max_tokens: 8192,
@@ -159,12 +242,130 @@ function createBedrockAdapter(config: LLMConfig): LLMAdapter {
         const body = await resp.text();
         throw new Error(`Bedrock API error ${resp.status}: ${body}`);
       }
+
+      if (onChunk) {
+        const reader = resp.body!.getReader();
+        const decoder = new TextDecoder();
+        let accumulated = "";
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          const chunk = decoder.decode(value, { stream: true });
+          accumulated += chunk;
+          onChunk(chunk);
+        }
+
+        // Try to parse accumulated text for content_block_delta events
+        let result = "";
+        const lines = accumulated.split("\n");
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue;
+          const payload = line.slice(6).trim();
+          if (payload === "[DONE]") continue;
+          try {
+            const event = JSON.parse(payload);
+            if (event.type === "content_block_delta" && event.delta?.text) {
+              result += event.delta.text;
+            }
+          } catch {
+            // skip unparseable lines
+          }
+        }
+
+        // Fall back to single response parsing if no deltas found
+        if (!result) {
+          try {
+            const data = JSON.parse(accumulated) as {
+              content: Array<{ type: string; text: string }>;
+            };
+            const textBlock = data.content.find((c: { type: string }) => c.type === "text");
+            if (textBlock) return textBlock.text;
+          } catch {
+            // could not parse as single response either
+          }
+          throw new Error("No text in Bedrock streaming response");
+        }
+        return result;
+      }
+
       const data = (await resp.json()) as {
         content: Array<{ type: string; text: string }>;
       };
       const textBlock = data.content.find((c) => c.type === "text");
       if (!textBlock) throw new Error("No text in Bedrock response");
       return textBlock.text;
+    },
+  };
+}
+
+function createClaudeCliAdapter(): LLMAdapter {
+  return {
+    async complete(system: string, messages: Message[], onChunk?: (text: string) => void): Promise<string> {
+      const userContent = messages
+        .filter((m) => m.role === "user")
+        .map((m) => m.content)
+        .join("\n\n");
+
+      const proc = Bun.spawn(
+        ["claude", "-p", "--system", system, "--output-format", "text"],
+        { stdin: new Blob([userContent]), stdout: "pipe", stderr: "pipe" }
+      );
+
+      let result = "";
+      const reader = proc.stdout.getReader();
+      const decoder = new TextDecoder();
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        const chunk = decoder.decode(value, { stream: true });
+        result += chunk;
+        if (onChunk) onChunk(chunk);
+      }
+
+      const exitCode = await proc.exited;
+      if (exitCode !== 0) {
+        const stderr = await new Response(proc.stderr).text();
+        throw new Error(`claude CLI exited with code ${exitCode}: ${stderr}`);
+      }
+
+      return result;
+    },
+  };
+}
+
+function createGeminiCliAdapter(): LLMAdapter {
+  return {
+    async complete(system: string, messages: Message[], onChunk?: (text: string) => void): Promise<string> {
+      const userContent = messages
+        .filter((m) => m.role === "user")
+        .map((m) => m.content)
+        .join("\n\n");
+
+      const stdinContent = system + "\n\n" + userContent;
+
+      const proc = Bun.spawn(
+        ["gemini"],
+        { stdin: new Blob([stdinContent]), stdout: "pipe", stderr: "pipe" }
+      );
+
+      let result = "";
+      const reader = proc.stdout.getReader();
+      const decoder = new TextDecoder();
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        const chunk = decoder.decode(value, { stream: true });
+        result += chunk;
+        if (onChunk) onChunk(chunk);
+      }
+
+      const exitCode = await proc.exited;
+      if (exitCode !== 0) {
+        const stderr = await new Response(proc.stderr).text();
+        throw new Error(`gemini CLI exited with code ${exitCode}: ${stderr}`);
+      }
+
+      return result;
     },
   };
 }
@@ -244,6 +445,8 @@ export function configFromEnv(): LLMConfig {
     | "anthropic"
     | "gemini"
     | "bedrock"
+    | "claude-cli"
+    | "gemini-cli"
     | undefined;
   const model = process.env.KNOMIT_LLM_MODEL ?? "claude-sonnet-4-6";
   return {
