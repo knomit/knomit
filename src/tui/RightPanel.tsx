@@ -129,7 +129,7 @@ export function RightPanel({
     <Box flexDirection="column" width="60%" paddingX={2} paddingTop={1} overflow="hidden" backgroundColor={theme.base}>
       <Box flexDirection="column" flexGrow={1} overflow="hidden">
         {historical ? (
-          <HistoricalView data={historical} theme={theme} maxHeight={contentHeight} />
+          <HistoricalView data={historical} theme={theme} maxHeight={contentHeight} focused={focused} selectedIndex={selectedIndex} />
         ) : mode === "summary" ? (
           <SummaryView
             stats={stats}
@@ -147,7 +147,10 @@ export function RightPanel({
   );
 }
 
-function HistoricalView({ data, theme, maxHeight }: { data: HistoricalData; theme: Theme; maxHeight: number }) {
+function HistoricalView({ data, theme, maxHeight, focused, selectedIndex }: {
+  data: HistoricalData; theme: Theme; maxHeight: number;
+  focused?: boolean; selectedIndex?: number;
+}) {
   const { content, children, changedFiles, lineDiff, entry, commitBody } = data;
   const diff = changedFiles ? { added: new Set(changedFiles.added), modified: new Set(changedFiles.modified) } : undefined;
   const commitShort = entry.commit.slice(0, 7);
@@ -272,24 +275,24 @@ function HistoricalView({ data, theme, maxHeight }: { data: HistoricalData; them
           {changedFiles && (changedFiles.added.length > 0 || changedFiles.modified.length > 0 || changedFiles.deleted.length > 0) && (
             <Box flexDirection="column" marginTop={1}>
               <Text color={theme.dim}>{glyph.dashDivider} Changed files:</Text>
-              {changedFiles.added.map((f) => (
-                <Box key={f}>
-                  <Text color={theme.green} bold>+ </Text>
-                  <Text color={theme.green}>{f}</Text>
-                </Box>
-              ))}
-              {changedFiles.modified.map((f) => (
-                <Box key={f}>
-                  <Text color={theme.yellow} bold>~ </Text>
-                  <Text color={theme.yellow}>{f}</Text>
-                </Box>
-              ))}
-              {changedFiles.deleted.map((f) => (
-                <Box key={f}>
-                  <Text color={theme.red} bold>- </Text>
-                  <Text color={theme.red}>{f}</Text>
-                </Box>
-              ))}
+              {[
+                ...changedFiles.added.map((f, i) => ({ f, i, status: "added" as const, color: theme.green, prefix: "+" })),
+                ...changedFiles.modified.map((f, i) => ({ f, i: changedFiles.added.length + i, status: "modified" as const, color: theme.yellow, prefix: "~" })),
+                ...changedFiles.deleted.map((f, i) => ({ f, i: changedFiles.added.length + changedFiles.modified.length + i, status: "deleted" as const, color: theme.red, prefix: "-" })),
+              ].map(({ f, i: itemIdx, color, prefix }) => {
+                const isActive = focused && selectedIndex === itemIdx;
+                return (
+                  <Box key={f}>
+                    <Text color={isActive ? theme.yellow : theme.dim}>
+                      {isActive ? `${glyph.cursor} ` : "  "}
+                    </Text>
+                    <Text color={isActive ? theme.yellow : color} bold={!isActive}>
+                      {prefix}{" "}
+                    </Text>
+                    <Text color={isActive ? theme.yellow : color}>{f}</Text>
+                  </Box>
+                );
+              })}
             </Box>
           )}
         </Box>

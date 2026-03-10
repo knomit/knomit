@@ -390,6 +390,7 @@ function App({ repo, searchIndex }: { repo: GitRepo; searchIndex: SearchIndex })
           onItemsChanged={handleRightItemsChanged}
           historical={state.historyMode ? historical ?? undefined : undefined}
           availableHeight={termSize.rows - 2}
+          historyTarget={state.historyTarget}
         />
       </Box>
       <StatusBar
