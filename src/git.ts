@@ -318,15 +318,16 @@ Root of the Knomit knowledge graph.
     return stdout ? stdout.split("\n") : [];
   }
 
-  async log(file: string): Promise<LogEntry[]> {
-    const stdout = await this.gitOrThrow(
+  async log(file: string, fromCommit?: string): Promise<LogEntry[]> {
+    const args = [
       "log",
       "--follow",
       "--decorate-refs=refs/tags/learn/",
       "--format=%H|%aI|%s|%D",
-      "--",
-      file
-    );
+    ];
+    if (fromCommit) args.push(fromCommit);
+    args.push("--", file);
+    const stdout = await this.gitOrThrow(...args);
     if (!stdout) return [];
     const entries = stdout.split("\n").map((line) => {
       const [commit, date, message, decor] = line.split("|", 4);

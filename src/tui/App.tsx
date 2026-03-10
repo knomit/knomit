@@ -131,13 +131,15 @@ function App({ repo, searchIndex }: { repo: GitRepo; searchIndex: SearchIndex })
     if (!state.historyMode || !state.historyTarget) return;
     (async () => {
       try {
-        const entries = await repo.log(state.historyTarget);
+        const targetCommit = refCommitTarget.current;
+        refCommitTarget.current = null;
+        const entries = await repo.log(state.historyTarget, targetCommit ?? undefined);
         dispatch({ type: "SET_HISTORY_ENTRIES", entries });
         // Sync to ref commit if navigating via ref
-        if (refCommitTarget.current) {
-          const targetCommit = refCommitTarget.current;
-          refCommitTarget.current = null;
-          const idx = entries.findIndex((e) => e.commit.startsWith(targetCommit));
+        if (targetCommit) {
+          // Strip git revision suffixes (e.g. "^") for hash matching
+          const hashPart = targetCommit.replace(/[\^~].*$/, "");
+          const idx = entries.findIndex((e) => e.commit.startsWith(hashPart));
           if (idx >= 0) {
             dispatch({ type: "SET_HISTORY_SELECTED_INDEX", index: idx });
           }
