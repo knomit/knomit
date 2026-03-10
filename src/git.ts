@@ -2,6 +2,7 @@ import { exists, mkdir, readdir } from "node:fs/promises";
 import { join, dirname, resolve } from "node:path";
 import { hostname } from "node:os";
 import { log } from "./logger";
+import { ONTOLOGY_DIR, ONTOLOGY_ROOT, BRANCH_PREFIX } from "./constants";
 
 /** Returns extra env vars needed when using vendored git, or null for system git. */
 export function vendoredGitEnv(gitBin: string): Record<string, string> | null {
@@ -45,17 +46,17 @@ export interface SyncResult {
 
 export class GitRepo {
   readonly repoPath: string;
-  readonly machineId: string;
+  readonly agentId: string;
   private gitBin: string | null = null;
   private gitSpawnOpts: { env: Record<string, string | undefined> } | undefined = undefined;
 
-  constructor(repoPath: string, machineId?: string) {
+  constructor(repoPath: string, agentId?: string) {
     this.repoPath = repoPath;
-    this.machineId = machineId ?? hostname();
+    this.agentId = agentId ?? hostname();
   }
 
   get branchName(): string {
-    return `machine/${this.machineId}`;
+    return `${BRANCH_PREFIX}/${this.agentId}`;
   }
 
   private async resolveGitBin(): Promise<string> {
@@ -128,7 +129,7 @@ export class GitRepo {
     const repoExists = await exists(join(this.repoPath, ".git"));
     if (repoExists) {
       log.debug(`repo exists at ${this.repoPath}`);
-      // Ensure we're on the machine branch
+      // Ensure we're on the agent branch
       const branch = await this.currentBranch();
       if (branch !== this.branchName) {
         const { exitCode } = await this.git(
@@ -157,7 +158,7 @@ export class GitRepo {
     await this.gitOrThrow("config", "commit.gpgsign", "false");
 
     // Create root manifest
-    const worldsMd = `---
+    const rootManifest = `---
 domain: []
 confidence: 1.0
 sources: 1
@@ -168,11 +169,11 @@ refs: []
 
 Root of the Knomit knowledge graph.
 `;
-    await Bun.write(join(this.repoPath, "worlds.md"), worldsMd);
-    await this.gitOrThrow("add", "worlds.md");
+    await Bun.write(join(this.repoPath, ONTOLOGY_ROOT), rootManifest);
+    await this.gitOrThrow("add", ONTOLOGY_ROOT);
     await this.gitOrThrow("commit", "-m", "init: create knowledge base");
 
-    // Rename default branch to main, then create machine branch
+    // Rename default branch to main, then create agent branch
     await this.gitOrThrow("branch", "-M", "main");
     await this.gitOrThrow("checkout", "-b", this.branchName);
   }
@@ -440,7 +441,7 @@ Root of the Knomit knowledge graph.
   }
 
   async grep(pattern: string, path?: string): Promise<string[]> {
-    const searchPath = path ?? "worlds/";
+    const searchPath = path ?? `${ONTOLOGY_DIR}/`;
     const result = await this.git("grep", "-rl", "--", pattern, searchPath);
     if (result.exitCode !== 0) return [];
     return result.stdout ? result.stdout.split("\n") : [];
@@ -458,7 +459,7 @@ Root of the Knomit knowledge graph.
   }
 
   async diffFiles(fromCommit: string): Promise<{ added: string[]; modified: string[]; deleted: string[] }> {
-    const result = await this.git("diff", "--name-status", fromCommit, "HEAD", "--", "worlds/");
+    const result = await this.git("diff", "--name-status", fromCommit, "HEAD", "--", `${ONTOLOGY_DIR}/`);
     if (result.exitCode !== 0 || !result.stdout) {
       return { added: [], modified: [], deleted: [] };
     }
