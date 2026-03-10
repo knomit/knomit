@@ -261,6 +261,186 @@ describe("search index stats", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Cache–git sync invariants
+// ---------------------------------------------------------------------------
+
+describe("search index cache-git sync", () => {
+  it("commit_hash stores the actual last commit for each file, not HEAD", async () => {
+    // Create two facts in separate commits
+    await learnHandler(env.repo, {
+      moment_name: "first",
+      facts: [{
+        path: "worlds/sync/fact-a",
+        domain: ["testing"],
+        confidence: 0.8,
+        sources: 1,
+        entities: [],
+        title: "Fact A",
+        body: "First fact.",
+      }],
+    }, env.searchIndex);
+    const commitA = await env.repo.lastCommitForFile("worlds/sync/fact-a.md");
+
+    await learnHandler(env.repo, {
+      moment_name: "second",
+      facts: [{
+        path: "worlds/sync/fact-b",
+        domain: ["testing"],
+        confidence: 0.8,
+        sources: 1,
+        entities: [],
+        title: "Fact B",
+        body: "Second fact.",
+      }],
+    }, env.searchIndex);
+    const commitB = await env.repo.lastCommitForFile("worlds/sync/fact-b.md");
+
+    // commitA and commitB should be different commits
+    expect(commitA).not.toBe(commitB);
+
+    // After rebuild, each fact should retain its own commit hash
+    await env.searchIndex.rebuild(env.repo);
+
+    const resultsA = await env.searchIndex.search({ text: "Fact A" });
+    expect(resultsA.length).toBeGreaterThanOrEqual(1);
+    expect(resultsA[0].commitHash).toBe(commitA);
+
+    const resultsB = await env.searchIndex.search({ text: "Fact B" });
+    expect(resultsB.length).toBeGreaterThanOrEqual(1);
+    expect(resultsB[0].commitHash).toBe(commitB);
+  });
+
+  it("commit_hash is accurate after sync (not just HEAD)", async () => {
+    // Create initial fact and sync
+    await commitFact(env.repo, {
+      path: "worlds/sync/early",
+      title: "Early fact",
+      body: "Created first.",
+      domain: ["testing"],
+      confidence: 0.7,
+      sources: 1,
+      entities: ["early"],
+      refs: [],
+    });
+    const earlyCommit = await env.repo.lastCommitForFile("worlds/sync/early.md");
+
+    // Create another fact (advances HEAD)
+    await commitFact(env.repo, {
+      path: "worlds/sync/late",
+      title: "Late fact",
+      body: "Created second.",
+      domain: ["testing"],
+      confidence: 0.7,
+      sources: 1,
+      entities: ["late"],
+      refs: [],
+    });
+
+    // Sync picks up both — early fact should have its own commit, not HEAD
+    await env.searchIndex.sync(env.repo);
+
+    const results = await env.searchIndex.search({ entities: ["early"] });
+    expect(results.length).toBeGreaterThanOrEqual(1);
+    expect(results[0].commitHash).toBe(earlyCommit);
+  });
+
+  it("reindex preserves per-file commit hashes", async () => {
+    await learnHandler(env.repo, {
+      moment_name: "reindex-hash",
+      facts: [{
+        path: "worlds/sync/reindex-target",
+        domain: ["testing"],
+        confidence: 0.9,
+        sources: 1,
+        entities: ["reindex"],
+        title: "Reindex target",
+        body: "Should keep its commit hash after reindex.",
+      }],
+    }, env.searchIndex);
+    const originalCommit = await env.repo.lastCommitForFile("worlds/sync/reindex-target.md");
+
+    // Create more commits to advance HEAD
+    await commitFact(env.repo, {
+      path: "worlds/sync/filler",
+      title: "Filler",
+      body: "Advances HEAD.",
+      domain: ["testing"],
+      confidence: 0.5,
+      sources: 1,
+      entities: [],
+      refs: [],
+    });
+
+    await env.searchIndex.reindex(env.repo);
+
+    const results = await env.searchIndex.search({ entities: ["reindex"] });
+    expect(results.length).toBeGreaterThanOrEqual(1);
+    expect(results[0].commitHash).toBe(originalCommit);
+  });
+
+  it("remove cleans up deleted facts from search results", async () => {
+    await learnHandler(env.repo, {
+      moment_name: "remove-sync",
+      facts: [{
+        path: "worlds/sync/to-remove",
+        domain: ["testing"],
+        confidence: 0.5,
+        sources: 1,
+        entities: ["removable"],
+        title: "Removable fact",
+        body: "Will be removed.",
+      }],
+    }, env.searchIndex);
+
+    // Verify it exists
+    const before = await env.searchIndex.search({ entities: ["removable"] });
+    expect(before.length).toBe(1);
+
+    // Delete via forget and sync
+    await forgetHandler(env.repo, {
+      file: "worlds/sync/to-remove.md",
+      moment_name: "cleanup",
+    }, env.searchIndex);
+
+    const after = await env.searchIndex.search({ entities: ["removable"] });
+    expect(after.length).toBe(0);
+
+    // Also gone from FTS
+    const ftsAfter = await env.searchIndex.search({ text: "removable" });
+    expect(ftsAfter.length).toBe(0);
+  });
+
+  it("sync removes facts deleted directly in git", async () => {
+    // Commit a fact and sync so the index knows about it
+    await commitFact(env.repo, {
+      path: "worlds/sync/direct-delete",
+      title: "Direct delete target",
+      body: "Will be deleted via git.",
+      domain: ["testing"],
+      confidence: 0.6,
+      sources: 1,
+      entities: ["direct-del"],
+      refs: [],
+    });
+    await env.searchIndex.sync(env.repo);
+
+    // Verify it's indexed
+    const before = await env.searchIndex.search({ entities: ["direct-del"] });
+    expect(before.length).toBe(1);
+
+    // Delete the file directly in git (bypassing search index)
+    await env.repo.deleteFile("worlds/sync/direct-delete.md", "remove fact directly");
+
+    // Sync should detect the deletion
+    const changed = await env.searchIndex.sync(env.repo);
+    expect(changed).toBe(true);
+
+    const results = await env.searchIndex.search({ entities: ["direct-del"] });
+    expect(results.length).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Synthesis log
 // ---------------------------------------------------------------------------
 

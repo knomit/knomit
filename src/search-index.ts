@@ -268,6 +268,10 @@ export class SearchIndex {
         this.db.run("ROLLBACK");
         throw err;
       }
+      // Clean up vector embedding (outside transaction — non-critical)
+      if (this.embedder) {
+        try { this.db.query("DELETE FROM facts_vec WHERE path = ?").run(path); } catch { /* table may not exist */ }
+      }
     }
   }
 
@@ -525,10 +529,11 @@ export class SearchIndex {
     }
   }
 
-  private async indexFile(repo: GitRepo, path: string, commitHash: string): Promise<void> {
+  private async indexFile(repo: GitRepo, path: string, fallbackCommit: string): Promise<void> {
     try {
       const content = await repo.readFile(path);
       const parsed = parseFact(content);
+      const commitHash = await repo.lastCommitForFile(path) ?? fallbackCommit;
       await this.upsert(path, {
         title: parsed.title,
         body: parsed.body,
@@ -567,6 +572,9 @@ export class SearchIndex {
     try {
       this.db.run("DELETE FROM facts");
       this.db.run("INSERT INTO facts_fts(facts_fts) VALUES ('delete-all')");
+      if (this.embedder) {
+        try { this.db.run("DELETE FROM facts_vec"); } catch { /* table may not exist */ }
+      }
       this.db.run("COMMIT");
     } catch (err) {
       this.db.run("ROLLBACK");
