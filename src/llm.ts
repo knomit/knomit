@@ -1,3 +1,6 @@
+import { runCliProcess } from "./cli-process";
+export { runCliProcess } from "./cli-process";
+
 export interface Message {
   role: "user" | "assistant";
   content: string;
@@ -296,39 +299,6 @@ function createBedrockAdapter(config: LLMConfig): LLMAdapter {
       return textBlock.text;
     },
   };
-}
-
-/** Spawn a CLI process, stream stdout via onChunk, and return the full output. */
-async function runCliProcess(
-  cliName: string,
-  args: string[],
-  stdinContent: string,
-  onChunk?: (text: string) => void
-): Promise<string> {
-  const proc = Bun.spawn(args, {
-    stdin: new Blob([stdinContent]),
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-
-  let result = "";
-  const reader = proc.stdout.getReader();
-  const decoder = new TextDecoder();
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    const chunk = decoder.decode(value, { stream: true });
-    result += chunk;
-    if (onChunk) onChunk(chunk);
-  }
-
-  const exitCode = await proc.exited;
-  if (exitCode !== 0) {
-    const stderr = await new Response(proc.stderr).text();
-    throw new Error(`${cliName} CLI exited with code ${exitCode}: ${stderr}`);
-  }
-
-  return result;
 }
 
 function createClaudeCliAdapter(model?: string): LLMAdapter {

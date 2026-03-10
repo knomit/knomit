@@ -1,5 +1,6 @@
 import { describe, it, expect } from "bun:test";
 import { createAdapter, resolveProvider } from "./llm";
+import { runCliProcess } from "./cli-process";
 
 describe("resolveProvider", () => {
   it("resolves provider from model name", () => {
@@ -58,5 +59,44 @@ describe("createAdapter", () => {
     } finally {
       if (savedKey !== undefined) process.env.ANTHROPIC_API_KEY = savedKey;
     }
+  });
+});
+
+describe("runCliProcess", () => {
+  it("does not deadlock when subprocess writes heavily to stderr", async () => {
+    // Regression: previously stderr was only read after process exit.
+    // If stderr filled the OS pipe buffer (~64KB), the process would block
+    // on stderr write while we blocked reading stdout — deadlock.
+    // This simulates what gemini-cli and claude-cli do (logging to stderr).
+    const result = await runCliProcess("bun", [
+      "bun", "-e",
+      `for (let i = 0; i < 2000; i++) process.stderr.write("stderr line " + i + "\\n");` +
+      `process.stdout.write("stdout-ok");`,
+    ], "");
+    expect(result).toBe("stdout-ok");
+  }, 10_000);
+
+  it("streams stdout chunks via onChunk callback", async () => {
+    // Ensures the onChunk streaming path (used by claude-cli and gemini-cli)
+    // also drains stderr concurrently.
+    const chunks: string[] = [];
+    const result = await runCliProcess("bun", [
+      "bun", "-e",
+      `for (let i = 0; i < 2000; i++) process.stderr.write("noise\\n");` +
+      `process.stdout.write("hello");`,
+    ], "", (chunk) => chunks.push(chunk));
+    expect(result).toBe("hello");
+    expect(chunks.length).toBeGreaterThan(0);
+    expect(chunks.join("")).toBe("hello");
+  }, 10_000);
+
+  it("throws on non-zero exit code with stderr content", async () => {
+    await expect(
+      runCliProcess("bun", [
+        "bun", "-e",
+        `process.stderr.write("something went wrong");` +
+        `process.exit(1);`,
+      ], "")
+    ).rejects.toThrow("something went wrong");
   });
 });
