@@ -35,3 +35,13 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 
 # local plans/design docs
 docs/plans
+
+# Go build output
+/knomit
+/dist/
+
+# Claude Code
+.claude/
+
+# Large test assets
+internal/embeddings/testdata/*.onnx
