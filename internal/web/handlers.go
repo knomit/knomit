@@ -46,7 +46,7 @@ func handleBrowse(gs GitStore) http.HandlerFunc {
 		}
 		children := make([]child, 0, len(entries))
 		for _, e := range entries {
-			children = append(children, child{Name: e.Name, IsDir: e.IsWorld})
+			children = append(children, child{Name: e.Name, IsDir: e.IsDir})
 		}
 
 		writeJSON(w, http.StatusOK, map[string]any{
@@ -288,6 +288,10 @@ func handleSynthesizeStart(synth SynthRunner) http.HandlerFunc {
 // handleSynthesizeStatus handles GET /api/synthesize/{recipe}
 func handleSynthesizeStatus(synth SynthRunner) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if synth == nil {
+			writeError(w, http.StatusServiceUnavailable, "synthesis not available")
+			return
+		}
 		id := chi.URLParam(r, "recipe")
 
 		events, done := synth.Status(id)

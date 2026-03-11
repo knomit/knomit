@@ -118,8 +118,8 @@ func TestHandleBrowse(t *testing.T) {
 			name:  "default path uses know",
 			query: "/api/browse",
 			entries: []git.DirEntry{
-				{Name: "subdir", IsWorld: true},
-				{Name: "fact.md", IsWorld: false},
+				{Name: "subdir", IsDir: true},
+				{Name: "fact.md", IsDir: false},
 			},
 			wantStatus: http.StatusOK,
 			wantPath:   "know",
@@ -129,7 +129,7 @@ func TestHandleBrowse(t *testing.T) {
 			name:  "explicit path",
 			query: "/api/browse?path=know/sub",
 			entries: []git.DirEntry{
-				{Name: "item.md", IsWorld: false},
+				{Name: "item.md", IsDir: false},
 			},
 			wantStatus: http.StatusOK,
 			wantPath:   "know/sub",

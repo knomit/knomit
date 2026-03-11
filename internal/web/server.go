@@ -46,10 +46,8 @@ func NewRouter(gs GitStore, idx SearchIndex, synth SynthRunner, mcpHandler http.
 	r.Get("/api/history", handleHistory(gs))
 	r.Get("/api/stats", handleStats(gs))
 	r.Get("/api/status", handleStatus(gs, idx))
-	if synth != nil {
-		r.Post("/api/synthesize", handleSynthesizeStart(synth))
-		r.Get("/api/synthesize/{recipe}", handleSynthesizeStatus(synth))
-	}
+	r.Post("/api/synthesize", handleSynthesizeStart(synth))
+	r.Get("/api/synthesize/{recipe}", handleSynthesizeStatus(synth))
 
 	return r
 }

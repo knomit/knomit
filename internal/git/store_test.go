@@ -80,10 +80,10 @@ func TestListDir(t *testing.T) {
 
 	var hasAlpha, hasSub bool
 	for _, e := range entries {
-		if e.Name == "alpha.md" && !e.IsWorld {
+		if e.Name == "alpha.md" && !e.IsDir {
 			hasAlpha = true
 		}
-		if e.Name == "sub" && e.IsWorld {
+		if e.Name == "sub" && e.IsDir {
 			hasSub = true
 		}
 	}
@@ -196,7 +196,7 @@ func TestListDirRoot(t *testing.T) {
 
 	var hasKnowMd bool
 	for _, e := range entries {
-		if e.Name == "know.md" && !e.IsWorld {
+		if e.Name == "know.md" && !e.IsDir {
 			hasKnowMd = true
 		}
 	}

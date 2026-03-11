@@ -33,7 +33,7 @@ type Store struct {
 // DirEntry represents a single entry in a knomit directory listing.
 type DirEntry struct {
 	Name    string
-	IsWorld bool // true = subdirectory, false = .md file
+	IsDir bool // true = subdirectory, false = .md file
 }
 
 // LogEntry represents a single git commit in a log listing.
@@ -236,7 +236,7 @@ func (s *Store) FileExists(path string) (bool, error) {
 }
 
 // ListDir returns entries under path in HEAD's tree.
-// Subdirectories have IsWorld=true, .md files have IsWorld=false.
+// Subdirectories have IsDir=true, .md files have IsDir=false.
 func (s *Store) ListDir(path string) ([]DirEntry, error) {
 	headRef, err := s.repo.Head()
 	if err != nil {
@@ -267,9 +267,9 @@ func (s *Store) ListDir(path string) ([]DirEntry, error) {
 	var entries []DirEntry
 	for _, e := range subtree.Entries {
 		if e.Mode == filemode.Dir {
-			entries = append(entries, DirEntry{Name: e.Name, IsWorld: true})
+			entries = append(entries, DirEntry{Name: e.Name, IsDir: true})
 		} else if strings.HasSuffix(e.Name, ".md") {
-			entries = append(entries, DirEntry{Name: e.Name, IsWorld: false})
+			entries = append(entries, DirEntry{Name: e.Name, IsDir: false})
 		}
 		// Omit non-.md files
 	}
