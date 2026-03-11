@@ -367,6 +367,20 @@ type stubEmb struct{ vec []float32 }
 
 func (s *stubEmb) Embed(_ string) ([]float32, error) { return s.vec, nil }
 
+// dispatchEmb returns different vectors per input text.
+type dispatchEmb struct{ m map[string][]float32 }
+
+func (d *dispatchEmb) Embed(text string) ([]float32, error) {
+	if v, ok := d.m[text]; ok {
+		return v, nil
+	}
+	// Return a zero vector of the same dimension as the first registered vector.
+	for _, v := range d.m {
+		return make([]float32, len(v)), nil
+	}
+	return nil, nil
+}
+
 func TestGetEmbedding(t *testing.T) {
 	idx, err := store.New(":memory:")
 	if err != nil {
@@ -417,5 +431,157 @@ func TestGetEmbedding(t *testing.T) {
 		if v != known[i] {
 			t.Fatalf("vector mismatch at index %d: got %v, want %v", i, v, known[i])
 		}
+	}
+}
+
+// ── Search tests ──────────────────────────────────────────────────────────────
+
+func TestSearch(t *testing.T) {
+	idx, err := store.New(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer idx.Close()
+
+	if err := idx.Upsert(store.FactRecord{
+		Path: "know/a.md", Title: "Alpha", Body: "postgres database replication",
+		Domain: []string{"databases"}, Entities: []string{"postgres"},
+		Confidence: 0.9, Sources: 1, CommitHash: "x",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := idx.Upsert(store.FactRecord{
+		Path: "know/b.md", Title: "Beta", Body: "redis cache cluster",
+		Domain: []string{"infra"}, Entities: []string{"redis"},
+		Confidence: 0.8, Sources: 1, CommitHash: "x",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	results, err := idx.Search(store.SearchQuery{Text: "postgres", Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) == 0 {
+		t.Fatal("expected results")
+	}
+	if results[0].Path != "know/a.md" {
+		t.Fatalf("wrong result: %v", results[0].Path)
+	}
+	if results[0].Score < 10 {
+		t.Fatalf("score too low: %v", results[0].Score)
+	}
+}
+
+func TestSearchFilter(t *testing.T) {
+	idx, err := store.New(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer idx.Close()
+
+	if err := idx.Upsert(store.FactRecord{
+		Path: "know/a.md", Title: "Alpha", Body: "postgres database replication",
+		Domain: []string{"databases"}, Entities: []string{"postgres"},
+		Confidence: 0.9, Sources: 1, CommitHash: "x",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := idx.Upsert(store.FactRecord{
+		Path: "know/b.md", Title: "Beta", Body: "redis cache cluster",
+		Domain: []string{"infra"}, Entities: []string{"redis"},
+		Confidence: 0.8, Sources: 1, CommitHash: "x",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Text-less search filtered by domain should return only the matching fact.
+	results, err := idx.Search(store.SearchQuery{Domain: []string{"databases"}, Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+	if results[0].Path != "know/a.md" {
+		t.Fatalf("expected know/a.md, got %v", results[0].Path)
+	}
+
+	// Text-less search filtered by entity.
+	results, err = idx.Search(store.SearchQuery{Entities: []string{"redis"}, Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result for entity filter, got %d", len(results))
+	}
+	if results[0].Path != "know/b.md" {
+		t.Fatalf("expected know/b.md, got %v", results[0].Path)
+	}
+
+	// MinConfidence filter should drop low-confidence records.
+	results, err = idx.Search(store.SearchQuery{MinConfidence: 0.85, Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result for confidence filter, got %d", len(results))
+	}
+	if results[0].Path != "know/a.md" {
+		t.Fatalf("expected know/a.md, got %v", results[0].Path)
+	}
+}
+
+func TestSearchHybrid(t *testing.T) {
+	idx, err := store.New(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer idx.Close()
+
+	const dims = 4 // tiny dimension for test speed
+
+	// Fact A: matches "postgres" in text; embedding points toward [1,0,0,0].
+	vecA := []float32{1, 0, 0, 0}
+	// Fact B: matches "postgres" in text too; embedding points toward [0,1,0,0].
+	vecB := []float32{0, 1, 0, 0}
+
+	// Build a dispatch embedder that maps document bodies to their vectors,
+	// and the query "postgres" to vecA (so fact A gets cosine sim 1, fact B gets 0).
+	emb := &dispatchEmb{m: map[string][]float32{
+		"postgres database replication": vecA,
+		"postgres cache storage":        vecB,
+		"postgres":                      vecA, // query text
+	}}
+	idx.SetEmbedder(emb)
+
+	if err := idx.Upsert(store.FactRecord{
+		Path: "know/a.md", Title: "Alpha", Body: "postgres database replication",
+		Domain: []string{"databases"}, Entities: []string{"postgres"},
+		Confidence: 0.9, Sources: 1, CommitHash: "x",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := idx.Upsert(store.FactRecord{
+		Path: "know/b.md", Title: "Beta", Body: "postgres cache storage",
+		Domain: []string{"infra"}, Entities: []string{"postgres"},
+		Confidence: 0.8, Sources: 1, CommitHash: "x",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	results, err := idx.Search(store.SearchQuery{Text: "postgres", Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) == 0 {
+		t.Fatal("expected results from hybrid search")
+	}
+	// Fact A should rank first because its vector exactly matches the query vector.
+	if results[0].Path != "know/a.md" {
+		t.Fatalf("expected know/a.md first, got %v", results[0].Path)
+	}
+	if results[0].Score < 10 {
+		t.Fatalf("score too low: %v", results[0].Score)
 	}
 }

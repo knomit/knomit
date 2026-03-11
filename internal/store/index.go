@@ -523,6 +523,264 @@ func (idx *Index) SearchText(query string, limit int) ([]FactRecord, error) {
 	return results, rows.Err()
 }
 
+// ftsResult holds a FactRecord together with its raw BM25 rank from FTS5.
+type ftsResult struct {
+	rec  FactRecord
+	rank float64 // negative (lower = better match)
+}
+
+// searchTextWithRanks queries the FTS5 index and returns records with raw BM25 ranks.
+func (idx *Index) searchTextWithRanks(query string, limit int) ([]ftsResult, error) {
+	rows, err := idx.db.Query(
+		`SELECT f.path, f.title, f.body, f.domain, f.entities, f.confidence, f.sources, f.refs, f.commit_hash, rank
+		 FROM facts_fts
+		 JOIN facts f ON facts_fts.rowid = f.rowid
+		 WHERE facts_fts MATCH ?
+		 ORDER BY rank
+		 LIMIT ?`,
+		query, limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("fts query with ranks: %w", err)
+	}
+	defer rows.Close()
+
+	var results []ftsResult
+	for rows.Next() {
+		var rec FactRecord
+		var domainJSON, entitiesJSON, refsJSON string
+		var rank float64
+		err := rows.Scan(
+			&rec.Path, &rec.Title, &rec.Body,
+			&domainJSON, &entitiesJSON,
+			&rec.Confidence, &rec.Sources,
+			&refsJSON, &rec.CommitHash,
+			&rank,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("scan fts row with rank: %w", err)
+		}
+		if err := json.Unmarshal([]byte(domainJSON), &rec.Domain); err != nil {
+			return nil, fmt.Errorf("unmarshal domain: %w", err)
+		}
+		if err := json.Unmarshal([]byte(entitiesJSON), &rec.Entities); err != nil {
+			return nil, fmt.Errorf("unmarshal entities: %w", err)
+		}
+		if err := json.Unmarshal([]byte(refsJSON), &rec.Refs); err != nil {
+			return nil, fmt.Errorf("unmarshal refs: %w", err)
+		}
+		results = append(results, ftsResult{rec: rec, rank: rank})
+	}
+	return results, rows.Err()
+}
+
+// SearchQuery describes a hybrid search request.
+type SearchQuery struct {
+	Text          string
+	Entities      []string
+	Domain        []string
+	Path          string
+	MinConfidence float64
+	Limit         int
+}
+
+// SearchResult is a FactRecord paired with a relevance score in [0, 100].
+type SearchResult struct {
+	FactRecord
+	Score float64
+}
+
+// dotProduct computes the dot product of two float32 slices.
+// For L2-normalised vectors this equals cosine similarity.
+func dotProduct(a, b []float32) float64 {
+	if len(a) != len(b) {
+		return 0
+	}
+	var sum float64
+	for i := range a {
+		sum += float64(a[i]) * float64(b[i])
+	}
+	return sum
+}
+
+// containsAll reports whether haystack contains all elements of needles
+// (case-insensitive substring match).
+func containsAll(haystack []string, needles []string) bool {
+	for _, needle := range needles {
+		needle = strings.ToLower(needle)
+		found := false
+		for _, h := range haystack {
+			if strings.EqualFold(h, needle) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	return true
+}
+
+// matchesFilters reports whether rec satisfies the non-text filter fields in q.
+func matchesFilters(rec FactRecord, q SearchQuery) bool {
+	if len(q.Entities) > 0 && !containsAll(rec.Entities, q.Entities) {
+		return false
+	}
+	if len(q.Domain) > 0 && !containsAll(rec.Domain, q.Domain) {
+		return false
+	}
+	if q.Path != "" && !strings.HasPrefix(rec.Path, q.Path) {
+		return false
+	}
+	if q.MinConfidence > 0 && rec.Confidence < q.MinConfidence {
+		return false
+	}
+	return true
+}
+
+// Search performs a hybrid FTS5 + optional vector search over the index.
+//
+// Algorithm:
+//  1. If Text is present → FTS5 BM25 search; normalise BM25 ranks to [0,1].
+//  2. If embedder is available and Text is present → embed query, compute cosine
+//     similarity against stored vectors; combined score = 0.6*bm25 + 0.4*cosine.
+//  3. Apply Entities / Domain / Path / MinConfidence filters post-retrieval.
+//  4. Normalise top-N scores to [0,100]; drop scores < 10.
+//  5. Return sorted by score descending, capped at Limit.
+//
+// If Text is empty, all facts matching the non-text filters are returned with
+// score 100.
+func (idx *Index) Search(q SearchQuery) ([]SearchResult, error) {
+	limit := q.Limit
+	if limit <= 0 {
+		limit = 100
+	}
+
+	// ── Text-less path ────────────────────────────────────────────────────────
+	if q.Text == "" {
+		rows, err := idx.db.Query(
+			`SELECT path, title, body, domain, entities, confidence, sources, refs, commit_hash
+			 FROM facts`)
+		if err != nil {
+			return nil, fmt.Errorf("search: list all: %w", err)
+		}
+		defer rows.Close()
+
+		var out []SearchResult
+		for rows.Next() {
+			rec, err := scanFactRecordFromRows(rows)
+			if err != nil {
+				return nil, err
+			}
+			if !matchesFilters(*rec, q) {
+				continue
+			}
+			out = append(out, SearchResult{FactRecord: *rec, Score: 100})
+		}
+		if err := rows.Err(); err != nil {
+			return nil, err
+		}
+		if len(out) > limit {
+			out = out[:limit]
+		}
+		return out, nil
+	}
+
+	// ── FTS BM25 path ─────────────────────────────────────────────────────────
+	ftsResults, err := idx.searchTextWithRanks(q.Text, limit*5) // over-fetch for filtering
+	if err != nil {
+		return nil, fmt.Errorf("search: fts: %w", err)
+	}
+	if len(ftsResults) == 0 {
+		return nil, nil
+	}
+
+	// Normalise BM25 ranks to [0, 1].
+	// FTS5 rank is negative; the most negative value is the best match.
+	// minRank is the best (most negative) rank; maxRank is the least negative.
+	minRank := ftsResults[0].rank // ORDER BY rank ASC = best first
+	maxRank := ftsResults[len(ftsResults)-1].rank
+	rankRange := maxRank - minRank
+	bm25Scores := make([]float64, len(ftsResults))
+	for i, r := range ftsResults {
+		if rankRange == 0 {
+			bm25Scores[i] = 1.0
+		} else {
+			// Map [minRank, maxRank] → [1, 0] (best rank → 1).
+			bm25Scores[i] = (maxRank - r.rank) / rankRange
+		}
+	}
+
+	// ── Optional vector augmentation ──────────────────────────────────────────
+	var queryVec []float32
+	if idx.embedder != nil {
+		queryVec, err = idx.embedder.Embed(q.Text)
+		if err != nil {
+			// Non-fatal: fall back to BM25 only.
+			queryVec = nil
+		}
+	}
+
+	type candidate struct {
+		rec   FactRecord
+		score float64
+	}
+
+	candidates := make([]candidate, 0, len(ftsResults))
+	for i, fr := range ftsResults {
+		score := bm25Scores[i]
+		if queryVec != nil {
+			storedVec, err := idx.GetEmbedding(fr.rec.Path)
+			if err == nil && len(storedVec) == len(queryVec) {
+				cosine := dotProduct(queryVec, storedVec)
+				score = 0.6*bm25Scores[i] + 0.4*cosine
+			}
+		}
+		candidates = append(candidates, candidate{rec: fr.rec, score: score})
+	}
+
+	// ── Filters ───────────────────────────────────────────────────────────────
+	filtered := candidates[:0]
+	for _, c := range candidates {
+		if matchesFilters(c.rec, q) {
+			filtered = append(filtered, c)
+		}
+	}
+	candidates = filtered
+
+	if len(candidates) == 0 {
+		return nil, nil
+	}
+
+	// ── Sort by score descending ───────────────────────────────────────────────
+	// Simple insertion sort is fine for small N; use a basic selection.
+	for i := 1; i < len(candidates); i++ {
+		for j := i; j > 0 && candidates[j].score > candidates[j-1].score; j-- {
+			candidates[j], candidates[j-1] = candidates[j-1], candidates[j]
+		}
+	}
+
+	// ── Normalise to [0, 100] and drop < 10 ──────────────────────────────────
+	topScore := candidates[0].score
+	var out []SearchResult
+	for _, c := range candidates {
+		normalised := 100.0
+		if topScore > 0 {
+			normalised = (c.score / topScore) * 100.0
+		}
+		if normalised < 10 {
+			break // sorted descending, so all subsequent will also be < 10
+		}
+		out = append(out, SearchResult{FactRecord: c.rec, Score: normalised})
+		if len(out) >= limit {
+			break
+		}
+	}
+
+	return out, nil
+}
+
 // scanFactRecord scans a single FactRecord from a *sql.Row.
 func scanFactRecord(row *sql.Row) (*FactRecord, error) {
 	var rec FactRecord
