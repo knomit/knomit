@@ -151,9 +151,21 @@ func SerializeFact(f Fact) string {
 }
 
 // serializeInlineList renders a []string as a YAML inline list: [a, b, c] or [].
+// Items containing commas, closing brackets, or double quotes are double-quoted.
 func serializeInlineList(items []string) string {
 	if len(items) == 0 {
 		return "[]"
 	}
-	return "[" + strings.Join(items, ", ") + "]"
+	quoted := make([]string, len(items))
+	for i, item := range items {
+		if strings.ContainsAny(item, ",]\"") {
+			// Use double-quoted YAML string
+			escaped := strings.ReplaceAll(item, `\`, `\\`)
+			escaped = strings.ReplaceAll(escaped, `"`, `\"`)
+			quoted[i] = `"` + escaped + `"`
+		} else {
+			quoted[i] = item
+		}
+	}
+	return "[" + strings.Join(quoted, ", ") + "]"
 }

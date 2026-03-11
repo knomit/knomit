@@ -124,6 +124,27 @@ func TestSerializeFactFormat(t *testing.T) {
 	}
 }
 
+func TestSerializeFactWithURL(t *testing.T) {
+	f := Fact{
+		Path:       "know/test/url.md",
+		Title:      "URL ref",
+		Body:       "Body.",
+		Domain:     []string{"web"},
+		Confidence: 0.8,
+		Sources:    1,
+		Entities:   []string{},
+		Refs:       []string{"https://example.com/path?q=1,2"},
+	}
+	serialized := SerializeFact(f)
+	parsed, err := ParseFact(f.Path, serialized)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(parsed.Refs) != 1 || parsed.Refs[0] != f.Refs[0] {
+		t.Fatalf("refs: got %v want %v", parsed.Refs, f.Refs)
+	}
+}
+
 func TestSerializeFactEmptyBody(t *testing.T) {
 	f := Fact{
 		Path:       "know/empty.md",
