@@ -7,6 +7,7 @@ import (
 
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/storer"
+	"github.com/go-git/go-git/v5/storage"
 	_ "github.com/mattn/go-sqlite3"
 )
 
@@ -30,10 +31,12 @@ CREATE TABLE IF NOT EXISTS kv (
 `
 
 var _ storer.EncodedObjectStorer = (*Storer)(nil)
+var _ storage.Storer              = (*Storer)(nil)
 
 // Storer implements go-git's storage.Storer over SQLite.
 type Storer struct {
-	db *sql.DB
+	db      *sql.DB
+	modules map[string]*Storer // lazily populated; keyed by module name
 }
 
 // New opens (or creates) a SQLite database at path and initialises the schema.
@@ -217,6 +220,7 @@ func (it *objectIter) Next() (plumbing.EncodedObject, error) {
 }
 
 func (it *objectIter) ForEach(fn func(plumbing.EncodedObject) error) error {
+	defer it.rows.Close()
 	for {
 		obj, err := it.Next()
 		if err == io.EOF {

@@ -154,12 +154,24 @@ func (s *Storer) SetShallow(commits []plumbing.Hash) error {
 
 // --- ModuleStorer ---
 
-// Module returns a Storer for the named submodule, backed by an in-memory
-// SQLite database. The submodule name is recorded in the kv table.
+// Module returns a Storer for the named submodule. The same Storer instance is
+// returned on subsequent calls with the same name. The submodule name is
+// recorded in the kv table so HasModule works correctly.
 func (s *Storer) Module(name string) (storage.Storer, error) {
+	if s.modules == nil {
+		s.modules = make(map[string]*Storer)
+	}
+	if sub, ok := s.modules[name]; ok {
+		return sub, nil
+	}
 	key := "module:" + name
 	if err := s.kvSet(key, []byte("1")); err != nil {
 		return nil, err
 	}
-	return New(":memory:")
+	sub, err := New(":memory:")
+	if err != nil {
+		return nil, err
+	}
+	s.modules[name] = sub
+	return sub, nil
 }
