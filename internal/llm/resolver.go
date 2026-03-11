@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"context"
 	"fmt"
 	"strings"
 )
@@ -8,6 +9,12 @@ import (
 func ResolveProvider(model, explicit string) (string, error) {
 	if explicit != "" {
 		return explicit, nil
+	}
+	if model == "claude" {
+		return "claudecli", nil
+	}
+	if model == "gemini" {
+		return "geminicli", nil
 	}
 	if strings.HasPrefix(model, "claude-") {
 		return "anthropic", nil
@@ -23,10 +30,18 @@ func ResolveProvider(model, explicit string) (string, error) {
 	return "", fmt.Errorf("cannot infer provider from model %q", model)
 }
 
-func NewAdapter(provider, model string) (LLMAdapter, error) {
+func NewAdapter(ctx context.Context, provider, model string) (LLMAdapter, error) {
 	switch provider {
 	case "anthropic":
 		return NewAnthropicAdapter(model), nil
+	case "gemini":
+		return NewGeminiAdapter(ctx, model)
+	case "bedrock":
+		return NewBedrockAdapter(ctx, model)
+	case "claudecli":
+		return NewClaudeCLIAdapter(model), nil
+	case "geminicli":
+		return NewGeminiCLIAdapter(model), nil
 	default:
 		return nil, fmt.Errorf("unknown provider %q", provider)
 	}
