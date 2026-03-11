@@ -32,12 +32,17 @@ type SynthRunner interface {
 }
 
 // NewRouter creates and returns the chi router with all API routes registered.
-func NewRouter(gs GitStore, idx SearchIndex, synth SynthRunner, mcpHandler http.Handler) http.Handler {
+// gitHandler, if non-nil, is mounted at /git and serves the Smart HTTP git protocol.
+func NewRouter(gs GitStore, idx SearchIndex, synth SynthRunner, mcpHandler http.Handler, gitHandler http.Handler) http.Handler {
 	r := chi.NewRouter()
 	r.Use(middleware.Recoverer)
 
 	if mcpHandler != nil {
 		r.Mount("/mcp", mcpHandler)
+	}
+
+	if gitHandler != nil {
+		r.Mount("/git", gitHandler)
 	}
 
 	r.Get("/api/browse", handleBrowse(gs))

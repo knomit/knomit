@@ -98,10 +98,16 @@ func serveCmd() *cobra.Command {
 			mcpSrv := mcp.NewServer(gs, idx, llmAdapter, "code")
 			mcpHandler := mcpserver.NewStreamableHTTPServer(mcpSrv)
 
-			// 7. Create chi router (no synth runner yet)
-			router := web.NewRouter(gs, idx, nil, mcpHandler)
+			// 7. Wire git remote if enabled
+			var gitHandler http.Handler
+			if cfg.GitRemote {
+				gitHandler = web.GitRemoteHandler(gs, cfg.APIKey)
+			}
 
-			// 8. Graceful shutdown
+			// 8. Create chi router (no synth runner yet)
+			router := web.NewRouter(gs, idx, nil, mcpHandler, gitHandler)
+
+			// 9. Graceful shutdown
 			srv := &http.Server{
 				Addr:    ":" + cfg.Port,
 				Handler: router,
