@@ -1,3 +1,5 @@
+//go:build fts5
+
 package store_test
 
 import (

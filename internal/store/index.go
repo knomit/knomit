@@ -1,3 +1,5 @@
+// Package store implements the knomit search index backed by SQLite FTS5.
+// Build with -tags fts5 to enable FTS5 support (required).
 package store
 
 import (
@@ -69,6 +71,10 @@ func New(path string) (*Index, error) {
 		db.Close()
 		return nil, fmt.Errorf("init schema: %w", err)
 	}
+	if _, err = db.Exec(`INSERT OR IGNORE INTO meta(key, value) VALUES ('schema_version', '1')`); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("init schema_version: %w", err)
+	}
 	return &Index{db: db}, nil
 }
 
@@ -98,12 +104,18 @@ func (idx *Index) Upsert(rec FactRecord) error {
 	}
 	defer tx.Rollback()
 
-	// Step 1: Delete old FTS row if the path already exists
-	if _, err := tx.Exec(
-		`DELETE FROM facts_fts WHERE rowid = (SELECT rowid FROM facts WHERE path=?)`,
+	// Step 1: Read old row values (if any) so we can issue the FTS5 explicit delete command.
+	var oldRowid int64
+	var oldTitle, oldBody, oldEntities, oldDomain string
+	var hasOld bool
+	err = tx.QueryRow(
+		`SELECT rowid, title, body, entities, domain FROM facts WHERE path=?`,
 		rec.Path,
-	); err != nil {
-		return fmt.Errorf("delete old fts row: %w", err)
+	).Scan(&oldRowid, &oldTitle, &oldBody, &oldEntities, &oldDomain)
+	if err == nil {
+		hasOld = true
+	} else if err != sql.ErrNoRows {
+		return fmt.Errorf("read old fact: %w", err)
 	}
 
 	// Step 2: Insert or replace into facts
@@ -118,7 +130,18 @@ func (idx *Index) Upsert(rec FactRecord) error {
 		return fmt.Errorf("upsert fact: %w", err)
 	}
 
-	// Step 3: Insert into FTS using the new rowid
+	// Step 3: If an old row existed, remove it from FTS5 using the explicit 'delete' command.
+	if hasOld {
+		if _, err := tx.Exec(
+			`INSERT INTO facts_fts(facts_fts, rowid, title, body, entities, domain)
+			 VALUES('delete', ?, ?, ?, ?, ?)`,
+			oldRowid, oldTitle, oldBody, oldEntities, oldDomain,
+		); err != nil {
+			return fmt.Errorf("delete old fts row: %w", err)
+		}
+	}
+
+	// Step 4: Insert new row into FTS using the new rowid
 	if _, err := tx.Exec(
 		`INSERT INTO facts_fts(rowid, title, body, entities, domain)
 		 VALUES ((SELECT rowid FROM facts WHERE path=?), ?, ?, ?, ?)`,
@@ -138,11 +161,24 @@ func (idx *Index) Delete(path string) error {
 	}
 	defer tx.Rollback()
 
-	if _, err := tx.Exec(
-		`DELETE FROM facts_fts WHERE rowid = (SELECT rowid FROM facts WHERE path=?)`,
+	// Read old values to issue the FTS5 explicit 'delete' command.
+	var oldRowid int64
+	var oldTitle, oldBody, oldEntities, oldDomain string
+	err = tx.QueryRow(
+		`SELECT rowid, title, body, entities, domain FROM facts WHERE path=?`,
 		path,
-	); err != nil {
-		return fmt.Errorf("delete fts row: %w", err)
+	).Scan(&oldRowid, &oldTitle, &oldBody, &oldEntities, &oldDomain)
+	if err != nil && err != sql.ErrNoRows {
+		return fmt.Errorf("read fact for delete: %w", err)
+	}
+	if err == nil {
+		if _, err := tx.Exec(
+			`INSERT INTO facts_fts(facts_fts, rowid, title, body, entities, domain)
+			 VALUES('delete', ?, ?, ?, ?, ?)`,
+			oldRowid, oldTitle, oldBody, oldEntities, oldDomain,
+		); err != nil {
+			return fmt.Errorf("delete fts row: %w", err)
+		}
 	}
 
 	if _, err := tx.Exec(`DELETE FROM facts WHERE path=?`, path); err != nil {
