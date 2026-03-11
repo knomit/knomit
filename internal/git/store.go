@@ -386,6 +386,39 @@ func (s *Store) Tag(name string) error {
 	return s.storer.SetReference(tagRef)
 }
 
+// ListAll returns paths of all .md files under HEAD.
+func (s *Store) ListAll() ([]string, error) {
+	headRef, err := s.repo.Head()
+	if err != nil {
+		return nil, fmt.Errorf("ListAll: head: %w", err)
+	}
+
+	commit, err := s.repo.CommitObject(headRef.Hash())
+	if err != nil {
+		return nil, fmt.Errorf("ListAll: commit: %w", err)
+	}
+
+	fileIter, err := commit.Files()
+	if err != nil {
+		return nil, fmt.Errorf("ListAll: files: %w", err)
+	}
+	defer fileIter.Close()
+
+	var paths []string
+	err = fileIter.ForEach(func(f *object.File) error {
+		if strings.HasSuffix(f.Name, ".md") {
+			paths = append(paths, f.Name)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("ListAll: iterate: %w", err)
+	}
+
+	sort.Strings(paths)
+	return paths, nil
+}
+
 // Grep searches all .md files in HEAD for pattern, returns matching paths.
 func (s *Store) Grep(pattern string) ([]string, error) {
 	re, err := regexp.Compile(pattern)

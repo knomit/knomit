@@ -6,9 +6,202 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	_ "github.com/mattn/go-sqlite3"
 )
+
+// Sync brings the index up to date with the git store.
+//
+// Algorithm:
+//  1. Read meta.last_commit.
+//  2. If missing → full rebuild (ListAll, index everything).
+//  3. If last_commit == HEAD → no-op.
+//  4. Else → DiffFiles(last_commit), upsert added+modified, delete removed.
+//  5. Update meta.last_commit = HEAD.
+func (idx *Index) Sync(git GitReader) error {
+	head, err := git.HeadCommit()
+	if err != nil {
+		return fmt.Errorf("sync: head commit: %w", err)
+	}
+
+	last, err := idx.GetLastCommit()
+	if err != nil {
+		return fmt.Errorf("sync: get last commit: %w", err)
+	}
+
+	if last == head {
+		// Nothing to do.
+		return nil
+	}
+
+	if last == "" {
+		// Full rebuild.
+		paths, err := git.ListAll()
+		if err != nil {
+			return fmt.Errorf("sync: list all: %w", err)
+		}
+		for _, path := range paths {
+			if err := idx.indexFile(git, path, head); err != nil {
+				return err
+			}
+		}
+	} else {
+		// Incremental update.
+		added, modified, deleted, err := git.DiffFiles(last)
+		if err != nil {
+			return fmt.Errorf("sync: diff files: %w", err)
+		}
+		for _, path := range append(added, modified...) {
+			if err := idx.indexFile(git, path, head); err != nil {
+				return err
+			}
+		}
+		for _, path := range deleted {
+			if err := idx.Delete(path); err != nil {
+				return fmt.Errorf("sync: delete %q: %w", path, err)
+			}
+		}
+	}
+
+	return idx.SetLastCommit(head)
+}
+
+// indexFile reads path from git, parses the frontmatter, and upserts into the index.
+func (idx *Index) indexFile(git GitReader, path, commitHash string) error {
+	content, err := git.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("sync: read %q: %w", path, err)
+	}
+
+	rec, err := parseFact(path, content, commitHash)
+	if err != nil {
+		// Skip files that cannot be parsed as facts (e.g. know.md manifest).
+		return nil
+	}
+
+	return idx.Upsert(rec)
+}
+
+// parseFact parses a knomit fact markdown file into a FactRecord.
+// Expected format:
+//
+//	---
+//	domain: [databases, sql]
+//	confidence: 0.9
+//	sources: 2
+//	entities: [postgres, mysql]
+//	refs: []
+//	---
+//	# Title of the fact
+//
+//	Body content.
+func parseFact(path, content, commitHash string) (FactRecord, error) {
+	// Split on "---" delimiters.
+	parts := strings.SplitN(content, "---", 3)
+	if len(parts) < 3 {
+		return FactRecord{}, fmt.Errorf("parseFact: no frontmatter in %q", path)
+	}
+
+	frontmatter := parts[1]
+	body := strings.TrimSpace(parts[2])
+
+	// Parse frontmatter lines.
+	var domain []string
+	var entities []string
+	var refs []string
+	var confidence float64
+	var sources int
+
+	for _, line := range strings.Split(frontmatter, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		k, v, ok := strings.Cut(line, ":")
+		if !ok {
+			continue
+		}
+		k = strings.TrimSpace(k)
+		v = strings.TrimSpace(v)
+
+		switch k {
+		case "domain":
+			domain = parseYAMLList(v)
+		case "entities":
+			entities = parseYAMLList(v)
+		case "refs":
+			refs = parseYAMLList(v)
+		case "confidence":
+			fmt.Sscanf(v, "%f", &confidence)
+		case "sources":
+			fmt.Sscanf(v, "%d", &sources)
+		}
+	}
+
+	// Extract title from the first heading line.
+	title := ""
+	rest := body
+	if strings.HasPrefix(body, "#") {
+		nl := strings.IndexByte(body, '\n')
+		if nl < 0 {
+			title = strings.TrimSpace(strings.TrimLeft(body, "# "))
+			rest = ""
+		} else {
+			title = strings.TrimSpace(body[:nl])
+			title = strings.TrimLeft(title, "# ")
+			rest = strings.TrimSpace(body[nl+1:])
+		}
+	}
+
+	if title == "" {
+		return FactRecord{}, fmt.Errorf("parseFact: no title heading in %q", path)
+	}
+
+	return FactRecord{
+		Path:       path,
+		Title:      title,
+		Body:       rest,
+		Domain:     domain,
+		Entities:   entities,
+		Confidence: confidence,
+		Sources:    sources,
+		Refs:       refs,
+		CommitHash: commitHash,
+	}, nil
+}
+
+// parseYAMLList parses a simple YAML inline list like "[a, b, c]" or "[]".
+func parseYAMLList(v string) []string {
+	v = strings.TrimSpace(v)
+	v = strings.TrimPrefix(v, "[")
+	v = strings.TrimSuffix(v, "]")
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return []string{}
+	}
+	parts := strings.Split(v, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// GitReader is the interface that SearchIndex.Sync requires from the git store.
+type GitReader interface {
+	// DiffFiles returns paths added, modified, and deleted between fromCommit and HEAD.
+	DiffFiles(fromCommit string) (added, modified, deleted []string, err error)
+	// ReadFile reads the content of path from the HEAD commit.
+	ReadFile(path string) (string, error)
+	// HeadCommit returns the hash of the current HEAD commit as a hex string.
+	HeadCommit() (string, error)
+	// ListAll returns paths of all .md files from HEAD.
+	ListAll() ([]string, error)
+}
 
 const schema = `
 CREATE TABLE IF NOT EXISTS meta (

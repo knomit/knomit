@@ -495,6 +495,55 @@ func TestSync(t *testing.T) {
 	})
 }
 
+func TestListAll(t *testing.T) {
+	dir := t.TempDir()
+	store, err := git.Init(filepath.Join(dir, "knomit.git.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	// After Init, know.md exists at the root.
+	paths, err := store.ListAll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var hasKnowMd bool
+	for _, p := range paths {
+		if p == "know.md" {
+			hasKnowMd = true
+		}
+	}
+	if !hasKnowMd {
+		t.Fatalf("expected know.md in ListAll, got %v", paths)
+	}
+
+	// Add two more .md files and a non-.md file (no API for non-md, so skip that part).
+	if err := store.WriteFile("know/alpha.md", "# Alpha\n\nAlpha body.\n", "add alpha"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.WriteFile("know/sub/beta.md", "# Beta\n\nBeta body.\n", "add beta"); err != nil {
+		t.Fatal(err)
+	}
+
+	paths, err = store.ListAll()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want := map[string]bool{
+		"know.md":         true,
+		"know/alpha.md":   true,
+		"know/sub/beta.md": true,
+	}
+	for _, p := range paths {
+		delete(want, p)
+	}
+	if len(want) != 0 {
+		t.Fatalf("missing paths in ListAll: %v (got %v)", want, paths)
+	}
+}
+
 func TestBatchWrite(t *testing.T) {
 	dir := t.TempDir()
 	store, err := git.Init(filepath.Join(dir, "knomit.git.db"))

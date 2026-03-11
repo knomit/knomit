@@ -3,8 +3,10 @@
 package store_test
 
 import (
+	"path/filepath"
 	"testing"
 
+	git "knomit/internal/git"
 	"knomit/internal/store"
 )
 
@@ -225,6 +227,137 @@ func TestLastCommit(t *testing.T) {
 	}
 	if hash != "def456" {
 		t.Fatalf("expected 'def456', got %q", hash)
+	}
+}
+
+func TestIncrementalSync(t *testing.T) {
+	// Create a real GitStore backed by a temp dir.
+	dir := t.TempDir()
+	gitStore, err := git.Init(filepath.Join(dir, "test.git.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer gitStore.Close()
+
+	// Write two fact files to the git store.
+	fact1 := "---\ndomain: [databases]\nconfidence: 0.9\nsources: 2\nentities: [postgres]\nrefs: []\n---\n# Postgres MVCC\n\nPostgres uses multi-version concurrency control.\n"
+	fact2 := "---\ndomain: [caching]\nconfidence: 0.8\nsources: 1\nentities: [redis]\nrefs: []\n---\n# Redis Persistence\n\nRedis supports AOF and RDB persistence.\n"
+
+	if err := gitStore.WriteFile("know/postgres-mvcc.md", fact1, "add postgres fact"); err != nil {
+		t.Fatal(err)
+	}
+	if err := gitStore.WriteFile("know/redis-persistence.md", fact2, "add redis fact"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create a fresh in-memory search index and run a full sync.
+	idx, err := store.New(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer idx.Close()
+
+	if err := idx.Sync(gitStore); err != nil {
+		t.Fatalf("Sync (full rebuild) failed: %v", err)
+	}
+
+	// Both facts should now be searchable.
+	results, err := idx.SearchText("concurrency", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) == 0 {
+		t.Fatal("expected postgres fact after full sync")
+	}
+	if results[0].Path != "know/postgres-mvcc.md" {
+		t.Fatalf("unexpected path %q", results[0].Path)
+	}
+
+	results, err = idx.SearchText("AOF", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) == 0 {
+		t.Fatal("expected redis fact after full sync")
+	}
+
+	// Verify last_commit was set.
+	head, err := gitStore.HeadCommit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	last, err := idx.GetLastCommit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if last != head {
+		t.Fatalf("expected last_commit=%q, got %q", head, last)
+	}
+
+	// --- Incremental sync ---
+	// Write a third fact. Sync should only index the delta.
+	fact3 := "---\ndomain: [messaging]\nconfidence: 0.95\nsources: 3\nentities: [kafka]\nrefs: []\n---\n# Kafka Partitions\n\nKafka topics are split into partitions for parallelism.\n"
+	if err := gitStore.WriteFile("know/kafka-partitions.md", fact3, "add kafka fact"); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := idx.Sync(gitStore); err != nil {
+		t.Fatalf("Sync (incremental) failed: %v", err)
+	}
+
+	// New fact should be searchable.
+	results, err = idx.SearchText("partitions", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) == 0 {
+		t.Fatal("expected kafka fact after incremental sync")
+	}
+	if results[0].Path != "know/kafka-partitions.md" {
+		t.Fatalf("unexpected path %q", results[0].Path)
+	}
+
+	// Previously indexed facts should still be present.
+	results, err = idx.SearchText("concurrency", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) == 0 {
+		t.Fatal("expected postgres fact to survive incremental sync")
+	}
+
+	// --- Delete sync ---
+	// Delete the redis fact and sync; it should be removed from the index.
+	if err := gitStore.DeleteFile("know/redis-persistence.md", "delete: remove redis fact"); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := idx.Sync(gitStore); err != nil {
+		t.Fatalf("Sync (delete) failed: %v", err)
+	}
+
+	results, err = idx.SearchText("AOF", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 0 {
+		t.Fatalf("expected redis fact to be removed after delete sync, got %d results", len(results))
+	}
+
+	// No-op sync: calling Sync again with same HEAD should be a no-op.
+	headAfter, err := gitStore.HeadCommit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := idx.Sync(gitStore); err != nil {
+		t.Fatalf("Sync (no-op) failed: %v", err)
+	}
+	lastAfter, err := idx.GetLastCommit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lastAfter != headAfter {
+		t.Fatalf("no-op sync changed last_commit unexpectedly")
 	}
 }
 
