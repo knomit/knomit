@@ -1,4 +1,4 @@
-import { Fragment, useReducer, useEffect } from 'react';
+import { useReducer, useEffect } from 'react';
 import { reducer, init } from './state';
 import { api } from './api';
 import { TopBar } from './TopBar';
@@ -12,39 +12,40 @@ export default function App() {
 
   // Load initial status
   useEffect(() => {
-    api.status().then(s => dispatch({ type: 'SET_STATUS', head: s.head, embeddingsEnabled: s.embeddings_enabled })).catch(() => {});
+    api.status().then(s => dispatch({ type: 'SET_STATUS', head: s.head, branch: s.branch, embeddingsEnabled: s.embeddings_enabled })).catch(() => {});
   }, []);
 
-  const breadcrumbs = state.currentPath.split('/');
+  // Show last two path segments with ellipsis prefix if deeper
+  const pathParts = state.currentPath.split('/');
+  const shortPath = pathParts.length > 2
+    ? '…/' + pathParts.slice(-2).join('/')
+    : state.currentPath;
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', background: '#141414', color: '#eee', fontFamily: 'system-ui, sans-serif' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', width: '100vw', background: '#141414', color: '#eee', fontFamily: 'system-ui, sans-serif', overflow: 'hidden' }}>
       <TopBar state={state} dispatch={dispatch} />
 
-      {/* Path bar: current path left, commit hash right */}
-      <div style={{ height: 32, background: '#111', borderBottom: '1px solid #222', display: 'flex', alignItems: 'center', padding: '0 16px', flexShrink: 0 }}>
-        <div style={{ display: 'flex', gap: 4, alignItems: 'center', flex: 1 }}>
-          {breadcrumbs.map((seg, i) => (
-            <Fragment key={i}>
-              {i > 0 && <span style={{ color: '#333' }}>/</span>}
-              <span
-                onClick={() => dispatch({ type: 'NAVIGATE', path: breadcrumbs.slice(0, i + 1).join('/') })}
-                style={{ color: i === breadcrumbs.length - 1 ? '#ccc' : '#666', cursor: 'pointer', fontSize: 12, padding: '1px 3px', borderRadius: 3 }}>
-                {seg}
-              </span>
-            </Fragment>
-          ))}
-        </div>
+      {/* Path bar: [repo][branch] .../path  commit */}
+      <div style={{ height: 30, background: '#111', borderBottom: '1px solid #222', display: 'flex', alignItems: 'center', padding: '0 12px', gap: 8, flexShrink: 0, overflow: 'hidden' }}>
+        <span style={{ color: '#7c9', fontSize: 11, background: '#1a2a1a', border: '1px solid #2a4a2a', borderRadius: 3, padding: '1px 6px', whiteSpace: 'nowrap' }}>knomit</span>
+        {state.branch && (
+          <span style={{ color: '#8af', fontSize: 11, background: '#1a1a2a', border: '1px solid #2a2a4a', borderRadius: 3, padding: '1px 6px', whiteSpace: 'nowrap' }}>{state.branch}</span>
+        )}
+        <span
+          onClick={() => dispatch({ type: 'NAVIGATE', path: state.currentPath })}
+          style={{ color: '#aaa', fontSize: 12, cursor: 'pointer', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {shortPath}
+        </span>
         {state.headCommit && (
-          <code style={{ color: '#444', fontSize: 11 }}>{state.headCommit.slice(0, 7)}</code>
+          <code style={{ color: '#444', fontSize: 11, whiteSpace: 'nowrap' }}>{state.headCommit.slice(0, 7)}</code>
         )}
       </div>
 
-      <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
-        <div style={{ width: '35%', minWidth: 200, borderRight: '1px solid #222', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+      <div style={{ display: 'flex', flex: 1, overflow: 'hidden', minHeight: 0 }}>
+        <div style={{ width: '35%', minWidth: 180, maxWidth: '50%', borderRight: '1px solid #222', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
           <LeftPanel state={state} dispatch={dispatch} />
         </div>
-        <div style={{ flex: 1, overflow: 'hidden' }}>
+        <div style={{ flex: 1, overflow: 'hidden', minWidth: 0 }}>
           <RightPanel state={state} dispatch={dispatch} />
         </div>
       </div>

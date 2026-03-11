@@ -8,6 +8,7 @@ export interface AppState {
   loading: boolean;
   syncing: boolean;
   headCommit: string;
+  branch: string;
   embeddingsEnabled: boolean;
 }
 
@@ -22,7 +23,7 @@ export type Action =
   | { type: 'SHOW_FACT' }
   | { type: 'SET_LOADING'; value: boolean }
   | { type: 'SET_SYNCING'; value: boolean }
-  | { type: 'SET_STATUS'; head: string; embeddingsEnabled: boolean };
+  | { type: 'SET_STATUS'; head: string; branch: string; embeddingsEnabled: boolean };
 
 export const init: AppState = {
   currentPath: 'know',
@@ -32,6 +33,7 @@ export const init: AppState = {
   loading: false,
   syncing: false,
   headCommit: '',
+  branch: '',
   embeddingsEnabled: false,
 };
 
@@ -51,7 +53,7 @@ export function reducer(s: AppState, a: Action): AppState {
     case 'SHOW_FACT': return { ...s, rightMode: 'fact' };
     case 'SET_LOADING': return { ...s, loading: a.value };
     case 'SET_SYNCING': return { ...s, syncing: a.value };
-    case 'SET_STATUS': return { ...s, headCommit: a.head, embeddingsEnabled: a.embeddingsEnabled };
+    case 'SET_STATUS': return { ...s, headCommit: a.head, branch: a.branch, embeddingsEnabled: a.embeddingsEnabled };
     default: return s;
   }
 }

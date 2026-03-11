@@ -12,7 +12,7 @@ export function TopBar({ state, dispatch }: Props) {
     dispatch({ type: 'SET_SYNCING', value: true });
     try {
       const result = await api.sync();
-      if (result.commit) dispatch({ type: 'SET_STATUS', head: result.commit, embeddingsEnabled: state.embeddingsEnabled });
+      if (result.commit) dispatch({ type: 'SET_STATUS', head: result.commit, branch: state.branch, embeddingsEnabled: state.embeddingsEnabled });
     } catch (e) {
       // ignore
     } finally {
@@ -28,11 +28,6 @@ export function TopBar({ state, dispatch }: Props) {
         style={{ background: 'transparent', color: state.syncing ? '#555' : '#666', border: 'none', padding: '2px 8px', borderRadius: 4, cursor: state.syncing ? 'default' : 'pointer', fontSize: 12 }}>
         {state.syncing ? '⟳ syncing…' : '⟳ sync'}
       </button>
-      <span
-        title={state.embeddingsEnabled ? 'Embeddings on' : 'Embeddings off'}
-        style={{ color: state.embeddingsEnabled ? '#8c8' : '#555', fontSize: 12, fontFamily: 'monospace', fontWeight: 'bold', userSelect: 'none' }}>
-        e
-      </span>
     </div>
   );
 }

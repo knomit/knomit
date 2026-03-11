@@ -46,7 +46,7 @@ export function LeftPanel({ state, dispatch }: Props) {
     return () => window.removeEventListener('keydown', handler);
   });
 
-  const listLen = () => state.searchQuery ? searchResults.length : (state.currentPath !== 'know' ? 1 : 0) + children.length;
+  const listLen = () => state.searchQuery ? searchResults.length : children.length;
 
   const activateSelected = () => {
     if (state.searchQuery) {
@@ -54,9 +54,7 @@ export function LeftPanel({ state, dispatch }: Props) {
       if (r) dispatch({ type: 'SELECT_FACT', path: r.path });
       return;
     }
-    const offset = state.currentPath !== 'know' ? 1 : 0;
-    if (selectedIdx === 0 && state.currentPath !== 'know') { dispatch({ type: 'GO_UP' }); return; }
-    const child = children[selectedIdx - offset];
+    const child = children[selectedIdx];
     if (!child) return;
     if (child.is_dir) dispatch({ type: 'NAVIGATE', path: `${state.currentPath}/${child.name}` });
     else dispatch({ type: 'SELECT_FACT', path: `${state.currentPath}/${child.name}` });
@@ -96,27 +94,18 @@ export function LeftPanel({ state, dispatch }: Props) {
           ))
         ) : (
           <>
-            {state.currentPath !== 'know' && (
-              <div key=".." onClick={() => dispatch({ type: 'GO_UP' })}
-                style={{ padding: '8px 12px', cursor: 'pointer', background: selectedIdx === 0 ? '#2a2a3a' : 'transparent', borderBottom: '1px solid #222', color: '#888', fontSize: 13 }}>
-                ↑ ..
-              </div>
-            )}
-            {children.map((c, i) => {
-              const idx = i + (state.currentPath !== 'know' ? 1 : 0);
-              return (
+            {children.map((c, i) => (
                 <div key={c.name}
                   onClick={() => {
-                    setSelectedIdx(idx);
+                    setSelectedIdx(i);
                     if (c.is_dir) dispatch({ type: 'NAVIGATE', path: `${state.currentPath}/${c.name}` });
                     else dispatch({ type: 'SELECT_FACT', path: `${state.currentPath}/${c.name}` });
                   }}
-                  style={{ padding: '8px 12px', cursor: 'pointer', background: idx === selectedIdx ? '#2a2a3a' : 'transparent', borderBottom: '1px solid #222', display: 'flex', alignItems: 'center', gap: 8 }}>
+                  style={{ padding: '8px 12px', cursor: 'pointer', background: i === selectedIdx ? '#2a2a3a' : 'transparent', borderBottom: '1px solid #222', display: 'flex', alignItems: 'center', gap: 8 }}>
                   <span style={{ fontSize: 16 }}>{c.is_dir ? '📁' : '📄'}</span>
                   <span style={{ fontSize: 13, color: '#ddd' }}>{c.is_dir ? c.name : pathLabel(c.name)}</span>
                 </div>
-              );
-            })}
+            ))}
             {children.length === 0 && (
               <div style={{ padding: 16, color: '#666', fontSize: 13 }}>No items in this path.</div>
             )}
