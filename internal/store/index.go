@@ -4,8 +4,10 @@ package store
 
 import (
 	"database/sql"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"math"
 	"strings"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -231,6 +233,9 @@ CREATE VIRTUAL TABLE IF NOT EXISTS facts_fts USING fts5(
 );
 `
 
+// migrateV2 adds the vec_data column to facts if not present (schema version 2).
+const migrateV2 = `ALTER TABLE facts ADD COLUMN vec_data BLOB`
+
 // FactRecord represents a single fact stored in the index.
 type FactRecord struct {
 	Path       string
@@ -244,9 +249,21 @@ type FactRecord struct {
 	CommitHash string
 }
 
+// Embedder is the interface used by Index to compute embedding vectors.
+type Embedder interface {
+	Embed(text string) ([]float32, error)
+}
+
 // Index is the search index backed by SQLite with FTS5.
 type Index struct {
-	db *sql.DB
+	db      *sql.DB
+	embedder Embedder
+}
+
+// SetEmbedder attaches an Embedder to the index. When set, Upsert will call
+// Embed on each record's Body and persist the result as vec_data.
+func (idx *Index) SetEmbedder(e Embedder) {
+	idx.embedder = e
 }
 
 // New opens (or creates) a SQLite search index at path.
@@ -268,6 +285,33 @@ func New(path string) (*Index, error) {
 		db.Close()
 		return nil, fmt.Errorf("init schema_version: %w", err)
 	}
+
+	// Migrate to schema version 2: add vec_data BLOB column.
+	var ver string
+	_ = db.QueryRow(`SELECT value FROM meta WHERE key='schema_version'`).Scan(&ver)
+	if ver == "1" {
+		tx, err := db.Begin()
+		if err != nil {
+			db.Close()
+			return nil, fmt.Errorf("begin migration tx: %w", err)
+		}
+		if _, err := tx.Exec(migrateV2); err != nil {
+			tx.Rollback()
+			// Column may already exist (e.g. re-created in-memory DB) — ignore.
+			// ALTER TABLE ADD COLUMN failure on duplicate is an error we tolerate.
+		} else {
+			if _, err := tx.Exec(`UPDATE meta SET value='2' WHERE key='schema_version'`); err != nil {
+				tx.Rollback()
+				db.Close()
+				return nil, fmt.Errorf("update schema_version: %w", err)
+			}
+			if err := tx.Commit(); err != nil {
+				db.Close()
+				return nil, fmt.Errorf("commit migration: %w", err)
+			}
+		}
+	}
+
 	return &Index{db: db}, nil
 }
 
@@ -311,14 +355,24 @@ func (idx *Index) Upsert(rec FactRecord) error {
 		return fmt.Errorf("read old fact: %w", err)
 	}
 
+	// Compute embedding vector if an embedder is configured.
+	var vecData []byte
+	if idx.embedder != nil {
+		vec, err := idx.embedder.Embed(rec.Body)
+		if err == nil && len(vec) > 0 {
+			vecData = float32SliceToBytes(vec)
+		}
+	}
+
 	// Step 2: Insert or replace into facts
 	if _, err := tx.Exec(
-		`INSERT OR REPLACE INTO facts(path, title, body, domain, entities, confidence, sources, refs, commit_hash)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT OR REPLACE INTO facts(path, title, body, domain, entities, confidence, sources, refs, commit_hash, vec_data)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		rec.Path, rec.Title, rec.Body,
 		string(domainJSON), string(entitiesJSON),
 		rec.Confidence, rec.Sources,
 		string(refsJSON), rec.CommitHash,
+		vecData,
 	); err != nil {
 		return fmt.Errorf("upsert fact: %w", err)
 	}
@@ -392,9 +446,41 @@ func (idx *Index) GetByPath(path string) (*FactRecord, error) {
 }
 
 // GetEmbedding returns the stored embedding vector for a fact.
-// Returns nil, nil if not set (vector storage added in Task 9).
+// Returns nil, nil if not found or if vec_data is NULL.
 func (idx *Index) GetEmbedding(path string) ([]float32, error) {
-	return nil, nil
+	var blob []byte
+	err := idx.db.QueryRow(`SELECT vec_data FROM facts WHERE path=?`, path).Scan(&blob)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get embedding: %w", err)
+	}
+	if len(blob) == 0 {
+		return nil, nil
+	}
+	return bytesToFloat32Slice(blob)
+}
+
+// float32SliceToBytes encodes a []float32 as little-endian bytes.
+func float32SliceToBytes(v []float32) []byte {
+	buf := make([]byte, len(v)*4)
+	for i, f := range v {
+		binary.LittleEndian.PutUint32(buf[i*4:], math.Float32bits(f))
+	}
+	return buf
+}
+
+// bytesToFloat32Slice decodes little-endian bytes into a []float32.
+func bytesToFloat32Slice(b []byte) ([]float32, error) {
+	if len(b)%4 != 0 {
+		return nil, fmt.Errorf("vec_data length %d is not a multiple of 4", len(b))
+	}
+	v := make([]float32, len(b)/4)
+	for i := range v {
+		v[i] = math.Float32frombits(binary.LittleEndian.Uint32(b[i*4:]))
+	}
+	return v, nil
 }
 
 // SetLastCommit stores the last processed commit hash in the meta table.
