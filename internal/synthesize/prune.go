@@ -239,6 +239,7 @@ func executePruneStep(ctx context.Context, gs GitStore, idx SearchIndex, adapter
 			// no-op
 		case "forget":
 			msg := fmt.Sprintf("synthesize-%s: forget %s", recipe.Name, d.Path)
+			deletedPaths[d.Path] = true
 			if err := gs.DeleteFile(d.Path, msg); err != nil {
 				onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("forget %s: %v", d.Path, err)})
 				continue
@@ -246,7 +247,6 @@ func executePruneStep(ctx context.Context, gs GitStore, idx SearchIndex, adapter
 			if err := idx.Delete(d.Path); err != nil {
 				onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("index delete %s: %v", d.Path, err)})
 			}
-			deletedPaths[d.Path] = true
 			onProgress(ProgressEvent{Phase: "detail-forget", Message: d.Path})
 
 		case "update":

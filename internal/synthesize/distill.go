@@ -136,9 +136,11 @@ func executeDistillStep(ctx context.Context, gs GitStore, idx SearchIndex, embed
 		if embedder == nil {
 			break
 		}
-		vec, err := idx.(interface {
-			GetEmbedding(string) ([]float32, error)
-		}).GetEmbedding(f.File)
+		gei, ok := idx.(interface{ GetEmbedding(string) ([]float32, error) })
+		if !ok {
+			break
+		}
+		vec, err := gei.GetEmbedding(f.File)
 		if err != nil || vec == nil {
 			continue
 		}
