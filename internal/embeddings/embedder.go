@@ -13,15 +13,17 @@ import (
 var ortOnce sync.Once
 var ortInitErr error
 
-// candidateLibraryPaths lists absolute paths to try for the onnxruntime
-// shared library before falling back to the default system lookup.
+// candidateLibraryPaths lists paths to try for the onnxruntime shared library
+// when ORT_LIB_PATH is not set. Paths are relative-friendly or use well-known
+// system locations; developer-specific absolute paths must not appear here.
 var candidateLibraryPaths = []string{
-	// Bundled in the knomit dist directory (macOS arm64).
-	"/Users/knomit/data/mine/knomit/dist/darwin-arm64/knomit/lib/libonnxruntime.dylib",
-	// onnxruntime-node npm package in the source tree.
-	"/Users/knomit/data/mine/knomit/src/node_modules/onnxruntime-node/bin/napi-v6/darwin/arm64/libonnxruntime.1.24.3.dylib",
-	// bun install cache (arm64 macOS).
-	"/Users/knomit/.bun/install/cache/onnxruntime-node@1.24.3@@@1/bin/napi-v6/darwin/arm64/libonnxruntime.1.24.3.dylib",
+	// Bundled alongside the knomit binary (macOS arm64).
+	"lib/libonnxruntime.dylib",
+	// Common Homebrew location (macOS).
+	"/opt/homebrew/lib/libonnxruntime.dylib",
+	// Common system location (Linux).
+	"/usr/local/lib/libonnxruntime.so",
+	"/usr/lib/libonnxruntime.so",
 }
 
 func initORT() error {
@@ -49,8 +51,10 @@ type Embedder struct {
 	tok     *Tokenizer
 }
 
-// NewEmbedder loads the ONNX model from modelPath and the tokenizer from
-// tokenizerPath, initialising the onnxruntime environment if needed.
+// NewEmbedder creates a new ONNX-based sentence embedder.
+// The ONNX Runtime shared library is located automatically.
+// Set ORT_LIB_PATH to override the library path
+// (e.g. ORT_LIB_PATH=/usr/local/lib/libonnxruntime.so).
 func NewEmbedder(modelPath, tokenizerPath string) (*Embedder, error) {
 	if err := initORT(); err != nil {
 		return nil, fmt.Errorf("onnxruntime init: %w", err)

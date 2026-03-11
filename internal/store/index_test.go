@@ -361,6 +361,12 @@ func TestIncrementalSync(t *testing.T) {
 	}
 }
 
+// stubEmb is a minimal Embedder implementation that always returns a fixed
+// 384-dimensional float32 vector, useful for testing without real ONNX inference.
+type stubEmb struct{ vec []float32 }
+
+func (s *stubEmb) Embed(_ string) ([]float32, error) { return s.vec, nil }
+
 func TestGetEmbedding(t *testing.T) {
 	idx, err := store.New(":memory:")
 	if err != nil {
@@ -368,12 +374,48 @@ func TestGetEmbedding(t *testing.T) {
 	}
 	defer idx.Close()
 
-	// Should return nil, nil for nonexistent path
+	// Should return nil, nil for nonexistent path.
 	vec, err := idx.GetEmbedding("nonexistent.md")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if vec != nil {
 		t.Fatal("expected nil embedding for nonexistent path")
+	}
+
+	// Build a known 384-dim stub vector.
+	const dims = 384
+	known := make([]float32, dims)
+	for i := range known {
+		known[i] = float32(i) * 0.001
+	}
+
+	idx.SetEmbedder(&stubEmb{vec: known})
+
+	rec := store.FactRecord{
+		Path:       "know/test/emb.md",
+		Title:      "Embedding test",
+		Body:       "body text for embedding",
+		Domain:     []string{"test"},
+		Entities:   []string{},
+		Confidence: 1.0,
+		Sources:    1,
+		CommitHash: "emb1",
+	}
+	if err := idx.Upsert(rec); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+
+	got, err := idx.GetEmbedding("know/test/emb.md")
+	if err != nil {
+		t.Fatalf("GetEmbedding: %v", err)
+	}
+	if len(got) != dims {
+		t.Fatalf("expected %d-dim vector, got %d", dims, len(got))
+	}
+	for i, v := range got {
+		if v != known[i] {
+			t.Fatalf("vector mismatch at index %d: got %v, want %v", i, v, known[i])
+		}
 	}
 }

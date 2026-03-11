@@ -290,25 +290,16 @@ func New(path string) (*Index, error) {
 	var ver string
 	_ = db.QueryRow(`SELECT value FROM meta WHERE key='schema_version'`).Scan(&ver)
 	if ver == "1" {
-		tx, err := db.Begin()
-		if err != nil {
+		// Try to add the column; ignore if it already exists.
+		_, alterErr := db.Exec(`ALTER TABLE facts ADD COLUMN vec_data BLOB`)
+		if alterErr != nil && !strings.Contains(alterErr.Error(), "duplicate column") {
 			db.Close()
-			return nil, fmt.Errorf("begin migration tx: %w", err)
+			return nil, fmt.Errorf("store: migrate v1->v2: %w", alterErr)
 		}
-		if _, err := tx.Exec(migrateV2); err != nil {
-			tx.Rollback()
-			// Column may already exist (e.g. re-created in-memory DB) — ignore.
-			// ALTER TABLE ADD COLUMN failure on duplicate is an error we tolerate.
-		} else {
-			if _, err := tx.Exec(`UPDATE meta SET value='2' WHERE key='schema_version'`); err != nil {
-				tx.Rollback()
-				db.Close()
-				return nil, fmt.Errorf("update schema_version: %w", err)
-			}
-			if err := tx.Commit(); err != nil {
-				db.Close()
-				return nil, fmt.Errorf("commit migration: %w", err)
-			}
+		// Always advance schema_version regardless of whether ALTER TABLE was a no-op.
+		if _, err := db.Exec(`UPDATE meta SET value='2' WHERE key='schema_version'`); err != nil {
+			db.Close()
+			return nil, fmt.Errorf("store: migrate v1->v2: update schema_version: %w", err)
 		}
 	}
 
