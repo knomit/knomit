@@ -118,12 +118,17 @@ Each ref is a single string. The format determines how the MCP resolves it:
 
 | Format | Meaning | Example |
 |---|---|---|
-| Bare hex string | Local commit hash (same repo) | `abc1234` |
-| `git://` URI | Fact in another knowledge repo | `git://other-repo#def5678` |
+| `knomit:blob/<hash>/<path>` | Fact in this repo at a specific commit | `knomit:blob/abc1234/know/foo/bar.md` |
+| `knomit://<host>/<repo>/blob/<hash>/<path>` | Fact in a remote repo | `knomit://github.com/org/kb/blob/abc1234/know/foo.md` |
 | `episodic://` URI | Raw event in an episodic database | `episodic://event_88` |
 | `https://` URI | External URL | `https://example.com/source` |
+| Bare hex string | **Deprecated.** Local commit hash, ambiguous across clones | `abc1234` |
 
 The protocol acts as the type. The MCP parses the scheme and delegates to the appropriate handler.
+
+**Preferred format for local refs:** `knomit:blob/<hash>/<path>`. Bare hex hashes are ambiguous — they break when the knowledge base is cloned to a different machine or when history is rewritten. Always use the fully qualified `knomit:` URI form.
+
+When an MCP tool produces refs from local file paths (e.g. synthesize output), it resolves them automatically to `knomit:blob/<7-char-hash>/<path>` using the last commit for that file.
 
 ### 4.2 Two Evidence Mechanisms
 
@@ -163,39 +168,69 @@ Each evidence fact can itself be traversed using the same steps, producing a ful
 
 | Learning Operation | Git Operation |
 |---|---|
-| Learn something new | Create branch, commit new fact file(s), open PR |
-| Reinforce a fact | Edit file on branch, bump `confidence`/`sources`, commit, PR |
-| Contradict / update a fact | Edit file on branch, rewrite body and metadata, commit, PR |
-| Accept knowledge | Merge PR into `main` |
-| Name a learning moment | Tag the merge commit on `main` |
-| Reject knowledge | Close PR without merging, delete branch |
+| Learn something new | Commit new fact file(s) to agent branch, tag, push |
+| Reinforce a fact | Edit file on agent branch, bump `confidence`/`sources`, commit, tag, push |
+| Contradict / update a fact | Edit file on agent branch, rewrite body and metadata, commit, tag, push |
+| Accept knowledge | Merge agent branch into `main` (human or automated) |
+| Name a learning moment | Tag HEAD of agent branch at time of commit |
+| Forget a fact | Delete file from agent branch, commit, tag `forget/<name>`, push |
 | Trace fact history | `git log --follow <file>` |
-| Trace a learning moment | `git log main..<tag>` |
+| Trace a learning moment | Find tag, then `git log <tag-parent>..<tag>` |
 | Identify contributor | `git log --author` |
 | Roll back understanding | `git revert <commit>` |
 
-### 5.2 The Learning Lifecycle
+### 5.2 The Agent Branch Model
+
+Each agent (MCP server instance) operates on a **long-lived personal branch** named `agent/<id>`, where `<id>` is typically the machine hostname but is configurable.
 
 ```
-1. Agent creates branch:      learn/alice-music-2025
-2. Agent commits fact files (one fact per commit):
-   - commit A: alice-likes-rock-music.md
-   - commit B: alice-bought-album-x.md
-   - commit C: alice-attended-concert-y.md
-3. Agent opens PR:             "Learning: Alice's music preferences"
-4. Review & merge into main
-5. Tag merge commit:           git tag learn/alice-music-2025 <merge-hash>
-6. Delete branch:              learn/alice-music-2025
+main              ← accepted truth, never written by agents directly
+agent/laptop      ← agent on "laptop" commits here
+agent/server      ← agent on "server" commits here
+synthesize/daily  ← temporary branch for a synthesis run
 ```
 
-### 5.3 Rules
+**Write flow (learn, update, forget):**
+```
+1. sync()         pull + merge origin/main into agent branch
+2. commit         write the fact file(s), one commit per fact
+3. tag            tag HEAD with learn/<name> or forget/<name>
+4. push           push agent branch to origin
+```
 
-- **Agents never commit directly to `main`.** All knowledge enters through PRs.
+**Read flow (query, why, explore):**
+```
+1. sync()         ensure agent branch is up-to-date with main
+2. read           read files directly from working tree / HEAD
+```
+
+**Synthesis flow:**
+```
+1. Create synthesize/<recipe> branch from agent branch
+2. Execute prune/distill steps, committing results
+3. Tag each step: learn/synthesize-<recipe>-prune, learn/synthesize-<recipe>-distill
+4. Either auto-merge into agent branch and delete, or push for review
+```
+
+### 5.3 Tag Naming Conventions
+
+| Tag Pattern | Created By | Meaning |
+|---|---|---|
+| `learn/<name>` | learn, update | A learning moment; name is caller-supplied |
+| `forget/<name>` | forget | A forgetting moment |
+| `learn/synthesize-<recipe>-prune` | synthesize prune step | Pruning run completed |
+| `learn/synthesize-<recipe>-distill` | synthesize distill step | Distillation run completed |
+
+Tag names are sanitized: characters outside `[a-zA-Z0-9._/-]` are replaced with `-`.
+
+### 5.4 Rules
+
+- **Agents never commit directly to `main`.** All knowledge enters through agent branches.
 - **`main` is the accepted truth.** It represents the swarm's consensus.
 - **One fact per commit.** The commit hash is the fact's identity at that point in time.
-- **One learning moment per branch.** Related facts are grouped by their shared branch.
-- **Branches are ephemeral.** After merge, the tag preserves the learning moment. The branch is deleted.
+- **Agent branches are long-lived.** One branch per agent, many learning moments per branch. Learning moments are identified by tags, not branches.
 - **Fact evolution is in-place.** When understanding changes, the same file is edited and recommitted. Git history shows how the fact evolved.
+- **sync() before every operation.** Agents always merge the latest main before writing, minimizing conflicts.
 
 ## 6. Cross-Moment Synthesis (The Weaver Pattern)
 
@@ -260,9 +295,9 @@ confidence: 0.72
 sources: 10
 entities: [alice, music_taste, seasonal_patterns]
 refs:
-  - abc1234
-  - def5678
-  - ghi9012
+  - knomit:blob/abc1234/know/people/alice/alice-likes-rock-music.md
+  - knomit:blob/def5678/know/people/alice/alice-bought-album-x.md
+  - knomit:blob/ghi9012/know/people/alice/alice-attended-concert-y.md
 ---
 # Alice's music taste shifts seasonally
 
@@ -271,3 +306,33 @@ with the seasons. Rock and metal dominate in summer months
 around festival season, while hip-hop listening increases
 in winter.
 ```
+
+## 8. The Search Index (Ephemeral Cache)
+
+Implementations may maintain a local search index to accelerate queries. This index is **not part of the spec** — it is a local optimization that can be rebuilt from the git repo at any time.
+
+### 8.1 Properties
+
+- **Ephemeral.** Never committed to the git repo. Lives only in a local cache directory.
+- **Rebuildable.** Can always be reconstructed by walking the ontology tree and parsing every `.md` file from the current HEAD.
+- **Incrementally maintained.** Updated as facts are written; synced by diffing the git log against the last indexed commit.
+- **Implementation-defined.** Different implementations may use different backends (SQLite, in-memory, etc.).
+
+### 8.2 What it indexes
+
+For each fact file:
+
+- Path, title, body
+- Frontmatter: domain, entities, confidence, sources, refs
+- Last commit hash
+
+### 8.3 Common capabilities
+
+- **Full-text search** — BM25 ranking over title, body, entities, domain
+- **Vector similarity search** — cosine similarity over dense embeddings (e.g. 384-dim BERT); enables semantic search beyond keyword matching
+- **Hybrid scoring** — combine BM25 and vector scores (typical split: 60/40)
+- **Synthesis log** — tracks the last-processed commit per recipe name, enabling incremental delta-mode synthesis runs
+
+### 8.4 Embeddings
+
+Embeddings are also ephemeral and optional. They are computed locally using an ONNX inference model (e.g. `all-MiniLM-L6-v2`) and stored alongside the search index. If the embedding store is absent or disabled, vector search degrades gracefully to FTS-only.
