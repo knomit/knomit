@@ -87,7 +87,12 @@ func (s *Storer) NewEncodedObject() plumbing.EncodedObject {
 }
 
 // SetEncodedObject persists obj to the objects table and returns its hash.
+// Delta object types (REFDeltaObject, OFSDeltaObject) are not supported.
 func (s *Storer) SetEncodedObject(obj plumbing.EncodedObject) (plumbing.Hash, error) {
+	t := obj.Type()
+	if t == plumbing.REFDeltaObject || t == plumbing.OFSDeltaObject {
+		return plumbing.ZeroHash, fmt.Errorf("gitstorer: delta objects not supported")
+	}
 	r, err := obj.Reader()
 	if err != nil {
 		return plumbing.ZeroHash, fmt.Errorf("gitstorer: SetEncodedObject reader: %w", err)
@@ -181,21 +186,9 @@ func (s *Storer) EncodedObjectSize(h plumbing.Hash) (int64, error) {
 	return size, nil
 }
 
-// --- Stubs for full storer interface ---
-
 // AddAlternate is not supported by this backend.
 func (s *Storer) AddAlternate(remote string) error {
 	return fmt.Errorf("gitstorer: alternates not supported")
-}
-
-// PackfileWriter is not supported by this backend.
-func (s *Storer) PackfileWriter() (io.WriteCloser, error) {
-	return nil, fmt.Errorf("gitstorer: packfile not supported")
-}
-
-// DeltaObject delegates to EncodedObject.
-func (s *Storer) DeltaObject(t plumbing.ObjectType, h plumbing.Hash) (plumbing.EncodedObject, error) {
-	return s.EncodedObject(t, h)
 }
 
 // --- objectIter ---
