@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"golang.org/x/text/transform"
 	"golang.org/x/text/unicode/norm"
@@ -79,8 +80,7 @@ func (accentStripper) Transform(dst, src []byte, atEOF bool) (nDst, nSrc int, er
 	for nSrc < len(src) {
 		r, size := rune(src[nSrc]), 1
 		if src[nSrc] >= 0x80 {
-			r = decodeRune(src[nSrc:])
-			size = runeLen(r)
+			r, size = utf8.DecodeRune(src[nSrc:])
 		}
 		if size > len(src)-nSrc {
 			if !atEOF {
@@ -103,35 +103,6 @@ func (accentStripper) Transform(dst, src []byte, atEOF bool) (nDst, nSrc int, er
 }
 
 func (accentStripper) Reset() {}
-
-// decodeRune decodes the first rune from a UTF-8 byte slice.
-func decodeRune(b []byte) rune {
-	r := rune(b[0])
-	switch {
-	case r < 0x80:
-		return r
-	case r < 0xE0:
-		return (r&0x1F)<<6 | rune(b[1]&0x3F)
-	case r < 0xF0:
-		return (r&0x0F)<<12 | rune(b[1]&0x3F)<<6 | rune(b[2]&0x3F)
-	default:
-		return (r&0x07)<<18 | rune(b[1]&0x3F)<<12 | rune(b[2]&0x3F)<<6 | rune(b[3]&0x3F)
-	}
-}
-
-// runeLen returns the UTF-8 byte length of a rune.
-func runeLen(r rune) int {
-	switch {
-	case r < 0x80:
-		return 1
-	case r < 0x800:
-		return 2
-	case r < 0x10000:
-		return 3
-	default:
-		return 4
-	}
-}
 
 // normalize lowercases text, applies NFD decomposition, strips combining
 // accents (Unicode category Mn), and collapses whitespace — matching the

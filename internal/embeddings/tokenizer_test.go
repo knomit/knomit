@@ -86,3 +86,60 @@ func TestWordPiecePunctuation(t *testing.T) {
 		t.Fatalf("expected [SEP]=102, got %d", ids[4])
 	}
 }
+
+func TestAccentNormalisation(t *testing.T) {
+	tok, err := embeddings.LoadTokenizer("testdata/tokenizer.json")
+	if err != nil {
+		t.Skip("tokenizer.json not available:", err)
+	}
+	// "café" should normalise to "cafe" before tokenization; no [UNK] expected.
+	ids, _, _ := tok.Encode("café")
+	const unkID = int32(100)
+	for _, id := range ids {
+		if id == unkID {
+			t.Fatalf("unexpected [UNK] token in output for 'café': ids=%v", ids)
+		}
+	}
+	// Sanity: result must at least have [CLS] and [SEP].
+	if len(ids) < 2 {
+		t.Fatalf("expected at least [CLS] and [SEP], got %v", ids)
+	}
+}
+
+func TestUNKFallback(t *testing.T) {
+	tok, err := embeddings.LoadTokenizer("testdata/tokenizer.json")
+	if err != nil {
+		t.Skip("tokenizer.json not available:", err)
+	}
+	// A token made entirely of characters with no BERT vocab entry forces [UNK].
+	// Single-character CJK unified ideographs outside common ranges are safe bets.
+	ids, _, _ := tok.Encode("\u9fff\u9ffe\u9ffd")
+	const unkID = int32(100)
+	found := false
+	for _, id := range ids {
+		if id == unkID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected [UNK]=100 in output for unknown token, got %v", ids)
+	}
+}
+
+func TestEmptyString(t *testing.T) {
+	tok, err := embeddings.LoadTokenizer("testdata/tokenizer.json")
+	if err != nil {
+		t.Skip("tokenizer.json not available:", err)
+	}
+	ids, mask, typeIDs := tok.Encode("")
+	if len(ids) != 2 || ids[0] != 101 || ids[1] != 102 {
+		t.Fatalf("expected [101, 102], got %v", ids)
+	}
+	if len(mask) != 2 || mask[0] != 1 || mask[1] != 1 {
+		t.Fatalf("expected attention_mask [1, 1], got %v", mask)
+	}
+	if len(typeIDs) != 2 || typeIDs[0] != 0 || typeIDs[1] != 0 {
+		t.Fatalf("expected token_type_ids [0, 0], got %v", typeIDs)
+	}
+}
