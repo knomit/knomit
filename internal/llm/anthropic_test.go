@@ -73,6 +73,8 @@ func TestResolveProvider(t *testing.T) {
 		{"eu.anthropic.claude-3", "", "bedrock", false},
 		{"unknown-model", "", "", true},
 		{"unknown-model", "anthropic", "anthropic", false},
+		{"claude", "", "claudecli", false},
+		{"gemini", "", "geminicli", false},
 	}
 
 	for _, tc := range tests {

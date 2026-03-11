@@ -1,10 +1,8 @@
 package llm
 
 import (
-	"bytes"
 	"context"
 	"fmt"
-	"io"
 	"os/exec"
 	"strings"
 )
@@ -18,7 +16,9 @@ func NewClaudeCLIAdapter(model string) *ClaudeCLIAdapter {
 }
 
 func (a *ClaudeCLIAdapter) Complete(ctx context.Context, system string, msgs []Message, onChunk func(string)) (string, error) {
-	// Concatenate user messages as the prompt content
+	// Note: multi-turn conversation (msgs with assistant-role entries) is not supported
+	// by the CLI interface; only user messages are sent to the process.
+
 	var userParts []string
 	for _, m := range msgs {
 		if m.Role == "user" {
@@ -33,39 +33,14 @@ func (a *ClaudeCLIAdapter) Complete(ctx context.Context, system string, msgs []M
 	}
 
 	cmd := exec.CommandContext(ctx, "claude", args...)
-	cmd.Stdin = bytes.NewBufferString(userContent)
-
-	stdout, err := cmd.StdoutPipe()
+	cmd.Stdin = strings.NewReader(userContent)
+	out, err := cmd.Output()
 	if err != nil {
-		return "", fmt.Errorf("claude CLI stdout pipe: %w", err)
+		return "", fmt.Errorf("claudecli: %w", err)
 	}
-	if err := cmd.Start(); err != nil {
-		return "", fmt.Errorf("starting claude CLI: %w", err)
+	result := strings.TrimSpace(string(out))
+	if onChunk != nil {
+		onChunk(result)
 	}
-
-	var buf bytes.Buffer
-	tmp := make([]byte, 4096)
-	for {
-		n, readErr := stdout.Read(tmp)
-		if n > 0 {
-			chunk := string(tmp[:n])
-			buf.WriteString(chunk)
-			if onChunk != nil {
-				onChunk(chunk)
-			}
-		}
-		if readErr == io.EOF {
-			break
-		}
-		if readErr != nil {
-			_ = cmd.Wait()
-			return "", fmt.Errorf("reading claude CLI output: %w", readErr)
-		}
-	}
-
-	if err := cmd.Wait(); err != nil {
-		return "", fmt.Errorf("claude CLI exited with error: %w", err)
-	}
-
-	return buf.String(), nil
+	return result, nil
 }
