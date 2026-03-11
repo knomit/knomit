@@ -7,6 +7,8 @@ import (
 	"github.com/anthropics/anthropic-sdk-go/option"
 )
 
+const defaultMaxTokens = 8192
+
 type AnthropicAdapter struct {
 	client anthropic.Client
 	model  string
@@ -20,7 +22,7 @@ func NewAnthropicAdapter(model string, opts ...option.RequestOption) *AnthropicA
 func (a *AnthropicAdapter) Complete(ctx context.Context, system string, msgs []Message, onChunk func(string)) (string, error) {
 	params := anthropic.MessageNewParams{
 		Model:     anthropic.Model(a.model),
-		MaxTokens: 8192,
+		MaxTokens: defaultMaxTokens,
 		System: []anthropic.TextBlockParam{
 			{Text: system},
 		},
