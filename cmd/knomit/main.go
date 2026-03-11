@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
 	"net/http"
 	"os"
 	"os/signal"
@@ -11,6 +10,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 	mcpserver "github.com/mark3labs/mcp-go/server"
 
@@ -24,6 +25,8 @@ import (
 )
 
 func main() {
+	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr})
+
 	root := &cobra.Command{Use: "knomit", Short: "Git-backed knowledge base"}
 	root.AddCommand(serveCmd())
 	root.AddCommand(initCmd())
@@ -45,7 +48,6 @@ func serveCmd() *cobra.Command {
 			gitDBPath := filepath.Join(cfg.RepoPath, "knomit.git.db")
 			gs, err := git.Open(gitDBPath)
 			if err != nil {
-				// If not found, init
 				gs, err = git.Init(gitDBPath)
 				if err != nil {
 					return fmt.Errorf("open/init git store: %w", err)
@@ -63,7 +65,7 @@ func serveCmd() *cobra.Command {
 
 			// 3. Initial sync
 			if err := idx.Sync(gs); err != nil {
-				log.Printf("warn: initial sync: %v", err)
+				log.Warn().Err(err).Msg("initial index sync failed")
 			}
 
 			// 4. Load embedder if model files present (optional)
@@ -73,7 +75,7 @@ func serveCmd() *cobra.Command {
 			if _, statErr := os.Stat(modelPath); statErr == nil {
 				embedder, err = embeddings.NewEmbedder(modelPath, tokPath)
 				if err != nil {
-					log.Printf("warn: embedder: %v", err)
+					log.Warn().Err(err).Msg("embedder init failed")
 				}
 			}
 			if embedder != nil {
@@ -86,11 +88,11 @@ func serveCmd() *cobra.Command {
 			var llmAdapter llm.LLMAdapter
 			provider, err := llm.ResolveProvider(cfg.LLMModel, cfg.LLMProvider)
 			if err != nil {
-				log.Printf("warn: LLM provider: %v", err)
+				log.Warn().Err(err).Msg("LLM provider resolution failed")
 			} else {
 				llmAdapter, err = llm.NewAdapter(ctx, provider, cfg.LLMModel)
 				if err != nil {
-					log.Printf("warn: LLM adapter: %v", err)
+					log.Warn().Err(err).Msg("LLM adapter init failed")
 				}
 			}
 
@@ -104,7 +106,7 @@ func serveCmd() *cobra.Command {
 				gitHandler = web.GitRemoteHandler(gs, cfg.APIKey)
 			}
 
-			// 8. Create chi router (no synth runner yet)
+			// 8. Create chi router
 			router := web.NewRouter(gs, idx, nil, mcpHandler, gitHandler)
 
 			// 9. Graceful shutdown
@@ -117,9 +119,9 @@ func serveCmd() *cobra.Command {
 			signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
 
 			go func() {
-				log.Printf("knomit listening on :%s", cfg.Port)
+				log.Info().Str("port", cfg.Port).Msg("knomit listening")
 				if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-					log.Fatalf("listen: %v", err)
+					log.Fatal().Err(err).Msg("listen failed")
 				}
 			}()
 
@@ -171,7 +173,7 @@ func rebuildCmd() *cobra.Command {
 			if err := idx.Sync(gs); err != nil {
 				return fmt.Errorf("rebuild: %w", err)
 			}
-			fmt.Println("Index rebuilt successfully")
+			log.Info().Msg("Index rebuilt successfully")
 			return nil
 		},
 	}
