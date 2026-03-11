@@ -205,39 +205,46 @@ func HDBSCAN(points [][]float64, opts HDBSCANOptions) []int {
 			return
 		}
 		// Internal node: determine the lambda at this merge
-		lambdaHere := lambdaOf(d.lambdaInv)
+		lambdaSplit := lambdaOf(d.lambdaInv)
 
 		leftSize := dendro[d.left].size
 		rightSize := dendro[d.right].size
 
 		if leftSize >= minSize && rightSize >= minSize {
-			// Both children are valid clusters: recurse on both
-			computeStability(d.left, lambdaHere)
-			computeStability(d.right, lambdaHere)
-			stability[node] = 0 // will be set after children
+			// Both children are valid clusters: recurse on both.
+			// The parent cluster's own stability = all N points contributed from
+			// birth to the split (excess-of-mass formulation). This is NOT zeroed
+			// because points were alive in this cluster from birth to lambdaSplit.
+			computeStability(d.left, lambdaSplit)
+			computeStability(d.right, lambdaSplit)
+			stability[node] = float64(d.size) * (lambdaSplit - birth)
 		} else if leftSize < minSize && rightSize < minSize {
 			// Both children fall below minSize: they are noise, points fall into
 			// this cluster. Add stability for all points.
-			stability[node] = float64(d.size) * (lambdaHere - birth)
+			stability[node] = float64(d.size) * (lambdaSplit - birth)
 		} else {
-			// One child is valid, the other is noise
+			// One child is valid, the other is noise.
+			// The noise-side points fell out at lambdaSplit; the surviving child
+			// inherits the cluster identity. The parent's own stability includes
+			// the noise-side contribution plus the full cluster from birth to split.
 			if leftSize >= minSize {
 				// Right child is noise, left child is valid cluster
-				computeStability(d.left, lambdaHere)
-				stability[node] = float64(rightSize) * (lambdaHere - birth)
+				computeStability(d.left, lambdaSplit)
+				stability[node] = float64(d.size) * (lambdaSplit - birth)
 			} else {
 				// Left child is noise, right child is valid cluster
-				computeStability(d.right, lambdaHere)
-				stability[node] = float64(leftSize) * (lambdaHere - birth)
+				computeStability(d.right, lambdaSplit)
+				stability[node] = float64(d.size) * (lambdaSplit - birth)
 			}
 		}
 	}
 
 	computeStability(root, 0)
 
-	// Now propagate stability up: a cluster's total stability is max of
-	// (its own stability + points falling out) vs sum of children stabilities.
-	// We do a second pass bottom-up.
+	// Now propagate stability up using the excess-of-mass criterion:
+	// a cluster node is selected if its own accumulated stability >= sum of
+	// selected children stabilities. When a node is selected, its children
+	// are deselected (this node absorbs them).
 	totalStability := make([]float64, totalNodes)
 	isCluster := make([]bool, totalNodes)
 
@@ -251,9 +258,6 @@ func HDBSCAN(points [][]float64, opts HDBSCANOptions) []int {
 		leftSize := dendro[d.left].size
 		rightSize := dendro[d.right].size
 
-		lambdaHere := lambdaOf(d.lambdaInv)
-		_ = lambdaHere
-
 		childStab := 0.0
 		if leftSize >= minSize {
 			childStab += propagate(d.left)
@@ -262,9 +266,9 @@ func HDBSCAN(points [][]float64, opts HDBSCANOptions) []int {
 			childStab += propagate(d.right)
 		}
 
-		// The standard EOM: totalStability[node] = max(ownContrib, childStab)
-		// where ownContrib = stability[node] + childStab_of_selected_children
-		// When we select this node, we deselect its children.
+		// EOM decision: if this node's own stability >= sum of children
+		// stabilities, select this node (it is a better cluster boundary).
+		// Otherwise, pass children up as the selected clusters.
 		if stability[node] >= childStab {
 			// Select this node, deselect children
 			isCluster[node] = true

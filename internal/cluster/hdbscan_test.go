@@ -37,9 +37,20 @@ func TestHDBSCANAllNoise(t *testing.T) {
 	if len(labels) != 5 {
 		t.Fatalf("expected 5 labels, got %d", len(labels))
 	}
-	// With only 5 points and minClusterSize=5, at most one cluster but points
-	// are well separated so expect all noise or one degenerate cluster.
-	// The test just verifies no panic and correct label count.
+	// With 5 spread-out points and MinClusterSize=5, no split can produce a
+	// child with >= 5 points, so the root is forced to be the only cluster.
+	// All 5 points end up in a single cluster (label 0); none are noise.
+	// We intentionally allow this outcome — the check is that no more than one
+	// distinct non-noise label exists and there are no unexpected labels.
+	unique := map[int]bool{}
+	for _, l := range labels {
+		if l != -1 {
+			unique[l] = true
+		}
+	}
+	if len(unique) > 1 {
+		t.Errorf("expected at most 1 cluster for 5 spread-out points with minClusterSize=5, got %d (labels: %v)", len(unique), labels)
+	}
 }
 
 func TestHDBSCANTwoClusters(t *testing.T) {
@@ -179,9 +190,13 @@ func TestClusterFacts(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Verify we got some clusters (exact count may vary due to UMAP stochasticity)
+	// Verify we got some clusters (exact count may vary due to UMAP stochasticity,
+	// but the 3 tightly-grouped sets should produce at least 2 clusters).
 	if len(result.Clusters) == 0 && len(result.Noise) == 12 {
 		t.Fatal("expected some clusters, got all noise")
+	}
+	if len(result.Clusters) < 2 {
+		t.Fatalf("expected at least 2 clusters from 3 tight groups, got %d (noise: %d)", len(result.Clusters), len(result.Noise))
 	}
 
 	// Verify all indices are accounted for
