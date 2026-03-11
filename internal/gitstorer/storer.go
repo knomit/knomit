@@ -29,6 +29,8 @@ CREATE TABLE IF NOT EXISTS kv (
 );
 `
 
+var _ storer.EncodedObjectStorer = (*Storer)(nil)
+
 // Storer implements go-git's storage.Storer over SQLite.
 type Storer struct {
 	db *sql.DB
@@ -113,38 +115,38 @@ func (s *Storer) SetEncodedObject(obj plumbing.EncodedObject) (plumbing.Hash, er
 
 // EncodedObject retrieves a single object by type and hash.
 func (s *Storer) EncodedObject(t plumbing.ObjectType, h plumbing.Hash) (plumbing.EncodedObject, error) {
-	var objType int
+	var row *sql.Row
+	if t == plumbing.AnyObject {
+		row = s.db.QueryRow(`SELECT type, size, data FROM objects WHERE hash=? LIMIT 1`, h.String())
+	} else {
+		row = s.db.QueryRow(`SELECT type, size, data FROM objects WHERE hash=? AND type=?`, h.String(), int(t))
+	}
+	var typ int
 	var size int64
 	var data []byte
-
-	err := s.db.QueryRow(
-		`SELECT type, size, data FROM objects WHERE hash = ? AND type = ?`,
-		h.String(), int(t),
-	).Scan(&objType, &size, &data)
-	if err == sql.ErrNoRows {
+	if err := row.Scan(&typ, &size, &data); err == sql.ErrNoRows {
 		return nil, plumbing.ErrObjectNotFound
+	} else if err != nil {
+		return nil, err
 	}
-	if err != nil {
-		return nil, fmt.Errorf("gitstorer: EncodedObject query: %w", err)
-	}
-
-	mo := &plumbing.MemoryObject{}
-	mo.SetType(plumbing.ObjectType(objType))
-	mo.SetSize(size)
-	if _, err := mo.Write(data); err != nil {
-		return nil, fmt.Errorf("gitstorer: EncodedObject write mem: %w", err)
-	}
-	return mo, nil
+	obj := &plumbing.MemoryObject{}
+	obj.SetType(plumbing.ObjectType(typ))
+	obj.SetSize(size)
+	obj.Write(data)
+	return obj, nil
 }
 
 // IterEncodedObjects returns an iterator over all objects of type t.
 func (s *Storer) IterEncodedObjects(t plumbing.ObjectType) (storer.EncodedObjectIter, error) {
-	rows, err := s.db.Query(
-		`SELECT type, size, data FROM objects WHERE type = ?`,
-		int(t),
-	)
+	var rows *sql.Rows
+	var err error
+	if t == plumbing.AnyObject {
+		rows, err = s.db.Query(`SELECT hash, type, size, data FROM objects`)
+	} else {
+		rows, err = s.db.Query(`SELECT hash, type, size, data FROM objects WHERE type=?`, int(t))
+	}
 	if err != nil {
-		return nil, fmt.Errorf("gitstorer: IterEncodedObjects query: %w", err)
+		return nil, err
 	}
 	return &objectIter{rows: rows}, nil
 }
@@ -181,9 +183,14 @@ func (s *Storer) EncodedObjectSize(h plumbing.Hash) (int64, error) {
 
 // --- Stubs for full storer interface ---
 
+// AddAlternate is not supported by this backend.
+func (s *Storer) AddAlternate(remote string) error {
+	return fmt.Errorf("gitstorer: alternates not supported")
+}
+
 // PackfileWriter is not supported by this backend.
 func (s *Storer) PackfileWriter() (io.WriteCloser, error) {
-	return nil, fmt.Errorf("packfile not supported")
+	return nil, fmt.Errorf("gitstorer: packfile not supported")
 }
 
 // DeltaObject delegates to EncodedObject.
@@ -199,26 +206,21 @@ type objectIter struct {
 
 func (it *objectIter) Next() (plumbing.EncodedObject, error) {
 	if !it.rows.Next() {
-		if err := it.rows.Err(); err != nil {
-			return nil, err
-		}
 		return nil, io.EOF
 	}
-
-	var objType int
+	var hashStr string
+	var typ int
 	var size int64
 	var data []byte
-	if err := it.rows.Scan(&objType, &size, &data); err != nil {
-		return nil, fmt.Errorf("gitstorer: objectIter scan: %w", err)
+	if err := it.rows.Scan(&hashStr, &typ, &size, &data); err != nil {
+		it.rows.Close()
+		return nil, err
 	}
-
-	mo := &plumbing.MemoryObject{}
-	mo.SetType(plumbing.ObjectType(objType))
-	mo.SetSize(size)
-	if _, err := mo.Write(data); err != nil {
-		return nil, fmt.Errorf("gitstorer: objectIter write mem: %w", err)
-	}
-	return mo, nil
+	obj := &plumbing.MemoryObject{}
+	obj.SetType(plumbing.ObjectType(typ))
+	obj.SetSize(size)
+	obj.Write(data)
+	return obj, nil
 }
 
 func (it *objectIter) ForEach(fn func(plumbing.EncodedObject) error) error {

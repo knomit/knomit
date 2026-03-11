@@ -40,17 +40,24 @@ func TestObjectRoundTrip(t *testing.T) {
 }
 
 func TestIterEncodedObjects(t *testing.T) {
-	s, _ := gitstorer.New(":memory:")
+	s, err := gitstorer.New(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer s.Close()
 
-	// Write two blobs
 	for _, content := range []string{"foo", "bar"} {
 		obj := s.NewEncodedObject()
 		obj.SetType(plumbing.BlobObject)
-		w, _ := obj.Writer()
+		w, err := obj.Writer()
+		if err != nil {
+			t.Fatal(err)
+		}
 		w.Write([]byte(content))
 		w.Close()
-		s.SetEncodedObject(obj)
+		if _, err := s.SetEncodedObject(obj); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	iter, err := s.IterEncodedObjects(plumbing.BlobObject)
@@ -60,11 +67,40 @@ func TestIterEncodedObjects(t *testing.T) {
 	defer iter.Close()
 
 	count := 0
-	iter.ForEach(func(obj plumbing.EncodedObject) error {
+	if err := iter.ForEach(func(obj plumbing.EncodedObject) error {
 		count++
 		return nil
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 	if count != 2 {
 		t.Fatalf("expected 2 objects, got %d", count)
+	}
+}
+
+func TestEncodedObjectAnyType(t *testing.T) {
+	s, err := gitstorer.New(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	obj := s.NewEncodedObject()
+	obj.SetType(plumbing.BlobObject)
+	w, _ := obj.Writer()
+	w.Write([]byte("any-type-test"))
+	w.Close()
+	hash, err := s.SetEncodedObject(obj)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Should find with AnyObject
+	got, err := s.EncodedObject(plumbing.AnyObject, hash)
+	if err != nil {
+		t.Fatalf("EncodedObject(AnyObject): %v", err)
+	}
+	if got.Type() != plumbing.BlobObject {
+		t.Fatalf("expected BlobObject, got %v", got.Type())
 	}
 }
