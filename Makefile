@@ -1,7 +1,7 @@
 .PHONY: build web test clean
 
 build: web
-	CGO_ENABLED=1 go build -o dist/knomit ./cmd/knomit/
+	CGO_ENABLED=1 go build -tags sqlite_fts5 -o dist/knomit ./cmd/knomit/
 
 web:
 	cd web && npm ci && npm run build
