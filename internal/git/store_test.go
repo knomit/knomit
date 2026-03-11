@@ -199,3 +199,220 @@ func TestListDirRoot(t *testing.T) {
 		t.Fatal("expected know.md in root listing")
 	}
 }
+
+func TestDeleteFile(t *testing.T) {
+	dir := t.TempDir()
+	store, err := git.Init(filepath.Join(dir, "knomit.git.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	// Write a file, then delete it.
+	if err := store.WriteFile("know/todelete.md", "# Delete me\n", "add file"); err != nil {
+		t.Fatal(err)
+	}
+	exists, err := store.FileExists("know/todelete.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !exists {
+		t.Fatal("file should exist before deletion")
+	}
+
+	if err := store.DeleteFile("know/todelete.md", "delete: remove todelete.md"); err != nil {
+		t.Fatal(err)
+	}
+
+	exists, err = store.FileExists("know/todelete.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if exists {
+		t.Fatal("file should not exist after deletion")
+	}
+}
+
+func TestTag(t *testing.T) {
+	dir := t.TempDir()
+	store, err := git.Init(filepath.Join(dir, "knomit.git.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	if err := store.WriteFile("know/tagged.md", "# Tagged\n", "add tagged file"); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := store.Tag("v1.0"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Check that the tag ref exists and points to HEAD.
+	headHash, err := store.HeadCommit()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tags, err := store.TagsContaining(headHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var found bool
+	for _, tag := range tags {
+		if tag == "v1.0" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected tag v1.0 to contain HEAD commit %s, got tags: %v", headHash, tags)
+	}
+}
+
+func TestGrep(t *testing.T) {
+	dir := t.TempDir()
+	store, err := git.Init(filepath.Join(dir, "knomit.git.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	if err := store.WriteFile("know/alpha.md", "# Alpha\n\nThis file contains the word elephant.\n", "add alpha"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.WriteFile("know/beta.md", "# Beta\n\nThis file is about dogs.\n", "add beta"); err != nil {
+		t.Fatal(err)
+	}
+
+	matches, err := store.Grep("elephant")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matches) != 1 || matches[0] != "know/alpha.md" {
+		t.Fatalf("expected [know/alpha.md], got %v", matches)
+	}
+
+	// Grep for something in both files.
+	matches, err = store.Grep("This file")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matches) != 2 {
+		t.Fatalf("expected 2 matches, got %v", matches)
+	}
+}
+
+func TestDiffFiles(t *testing.T) {
+	dir := t.TempDir()
+	store, err := git.Init(filepath.Join(dir, "knomit.git.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	// Get the commit before any writes.
+	baseHash, err := store.HeadCommit()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := store.WriteFile("know/new.md", "# New\n", "add new"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.WriteFile("know.md", "# Knowledge Base\n\nUpdated root.\n", "update root"); err != nil {
+		t.Fatal(err)
+	}
+
+	added, modified, deleted, err := store.DiffFiles(baseHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var hasNew bool
+	for _, p := range added {
+		if p == "know/new.md" {
+			hasNew = true
+		}
+	}
+	if !hasNew {
+		t.Fatalf("expected know/new.md in added, got added=%v modified=%v deleted=%v", added, modified, deleted)
+	}
+
+	var hasModified bool
+	for _, p := range modified {
+		if p == "know.md" {
+			hasModified = true
+		}
+	}
+	if !hasModified {
+		t.Fatalf("expected know.md in modified, got added=%v modified=%v deleted=%v", added, modified, deleted)
+	}
+}
+
+func TestDiffFilesFromEmpty(t *testing.T) {
+	dir := t.TempDir()
+	store, err := git.Init(filepath.Join(dir, "knomit.git.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	// DiffFiles with empty fromCommit = diff from empty tree.
+	added, modified, deleted, err := store.DiffFiles("")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var hasKnowMd bool
+	for _, p := range added {
+		if p == "know.md" {
+			hasKnowMd = true
+		}
+	}
+	if !hasKnowMd {
+		t.Fatalf("expected know.md in added when diffing from empty, got added=%v modified=%v deleted=%v", added, modified, deleted)
+	}
+}
+
+func TestBatchWrite(t *testing.T) {
+	dir := t.TempDir()
+	store, err := git.Init(filepath.Join(dir, "knomit.git.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	files := map[string]string{
+		"know/a.md": "# A\n\nContent A.\n",
+		"know/b.md": "# B\n\nContent B.\n",
+	}
+
+	if err := store.BatchWrite(files, "batch: add a and b"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify both files exist and have correct content.
+	for path, want := range files {
+		got, err := store.ReadFile(path)
+		if err != nil {
+			t.Fatalf("ReadFile(%q): %v", path, err)
+		}
+		if got != want {
+			t.Fatalf("content mismatch for %q:\ngot:  %q\nwant: %q", path, got, want)
+		}
+	}
+
+	// A batch write should be a single commit (not two).
+	logEntries, err := store.Log("know/a.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(logEntries) == 0 {
+		t.Fatal("expected at least one log entry for know/a.md")
+	}
+	if logEntries[0].Message != "batch: add a and b" {
+		t.Fatalf("expected batch commit message, got %q", logEntries[0].Message)
+	}
+}
