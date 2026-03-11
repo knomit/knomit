@@ -1,6 +1,7 @@
 package cluster
 
 import (
+	"math"
 	"math/rand"
 	"testing"
 )
@@ -26,6 +27,25 @@ func TestUMAP(t *testing.T) {
 	}
 	if len(result) != 20 || len(result[0]) != 5 {
 		t.Fatalf("expected 20x5, got %dx%d", len(result), len(result[0]))
+	}
+	for i, row := range result {
+		for j, v := range row {
+			if math.IsNaN(v) || math.IsInf(v, 0) {
+				t.Fatalf("result[%d][%d] = %v (NaN or Inf)", i, j, v)
+			}
+		}
+	}
+}
+
+func TestUMAPSingleVector(t *testing.T) {
+	_, err := UMAP([][]float64{{1.0, 2.0}}, UMAPOptions{
+		NComponents: 2,
+		NNeighbors:  1,
+		MinDist:     0.1,
+		Seed:        1,
+	})
+	if err == nil {
+		t.Fatal("expected error for n=1, got nil")
 	}
 }
 

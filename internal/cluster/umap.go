@@ -33,6 +33,9 @@ func UMAP(vectors [][]float64, opts UMAPOptions) ([][]float64, error) {
 	if opts.NNeighbors >= n {
 		opts.NNeighbors = n - 1
 	}
+	if opts.NNeighbors < 1 {
+		return nil, fmt.Errorf("umap: need at least 2 vectors, got %d", n)
+	}
 	if opts.MinDist <= 0 {
 		opts.MinDist = 0.1
 	}
