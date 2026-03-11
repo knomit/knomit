@@ -61,8 +61,12 @@ func TestListDir(t *testing.T) {
 	}
 	defer store.Close()
 
-	store.WriteFile("know/alpha.md", "---\ndomain: []\nconfidence: 0.5\nsources: 1\nentities: []\nrefs: []\n---\n# Alpha\n\nBody.\n", "add alpha")
-	store.WriteFile("know/sub/beta.md", "---\ndomain: []\nconfidence: 0.5\nsources: 1\nentities: []\nrefs: []\n---\n# Beta\n\nBody.\n", "add beta")
+	if err := store.WriteFile("know/alpha.md", "---\ndomain: []\nconfidence: 0.5\nsources: 1\nentities: []\nrefs: []\n---\n# Alpha\n\nBody.\n", "add alpha"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.WriteFile("know/sub/beta.md", "---\ndomain: []\nconfidence: 0.5\nsources: 1\nentities: []\nrefs: []\n---\n# Beta\n\nBody.\n", "add beta"); err != nil {
+		t.Fatal(err)
+	}
 
 	entries, err := store.ListDir("know")
 	if err != nil {
@@ -94,8 +98,12 @@ func TestLog(t *testing.T) {
 	}
 	defer store.Close()
 
-	store.WriteFile("know/test.md", "---\ndomain: []\nconfidence: 0.5\nsources: 1\nentities: []\nrefs: []\n---\n# T\n\nv1.\n", "add test")
-	store.WriteFile("know/test.md", "---\ndomain: []\nconfidence: 0.5\nsources: 1\nentities: []\nrefs: []\n---\n# T\n\nv2.\n", "update test")
+	if err := store.WriteFile("know/test.md", "---\ndomain: []\nconfidence: 0.5\nsources: 1\nentities: []\nrefs: []\n---\n# T\n\nv1.\n", "add test"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.WriteFile("know/test.md", "---\ndomain: []\nconfidence: 0.5\nsources: 1\nentities: []\nrefs: []\n---\n# T\n\nv2.\n", "update test"); err != nil {
+		t.Fatal(err)
+	}
 
 	entries, err := store.Log("know/test.md")
 	if err != nil {
@@ -149,5 +157,45 @@ func TestHeadCommit(t *testing.T) {
 	}
 	if len(h) != 40 {
 		t.Fatalf("expected 40-char hex hash, got %q (len %d)", h, len(h))
+	}
+}
+
+func TestWriteFileValidation(t *testing.T) {
+	dir := t.TempDir()
+	store, err := git.Init(filepath.Join(dir, "knomit.git.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	if err := store.WriteFile("", "content", "msg"); err == nil {
+		t.Fatal("expected error for empty path")
+	}
+	if err := store.WriteFile("../escape.md", "content", "msg"); err == nil {
+		t.Fatal("expected error for path traversal")
+	}
+}
+
+func TestListDirRoot(t *testing.T) {
+	dir := t.TempDir()
+	store, err := git.Init(filepath.Join(dir, "knomit.git.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	entries, err := store.ListDir("")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var hasKnowMd bool
+	for _, e := range entries {
+		if e.Name == "know.md" && !e.IsWorld {
+			hasKnowMd = true
+		}
+	}
+	if !hasKnowMd {
+		t.Fatal("expected know.md in root listing")
 	}
 }

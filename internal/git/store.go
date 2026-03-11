@@ -159,6 +159,13 @@ func Open(dbPath string) (*Store, error) {
 // WriteFile writes content to path in a new commit with message.
 // Uses go-git plumbing API — NO filesystem.
 func (s *Store) WriteFile(path, content, message string) error {
+	if path == "" {
+		return fmt.Errorf("git: WriteFile: path must not be empty")
+	}
+	if strings.Contains(path, "..") {
+		return fmt.Errorf("git: WriteFile: path must not contain '..'")
+	}
+
 	headRef, err := s.repo.Head()
 	if err != nil {
 		return fmt.Errorf("WriteFile: head: %w", err)
@@ -245,10 +252,15 @@ func (s *Store) ListDir(path string) ([]DirEntry, error) {
 		return nil, fmt.Errorf("ListDir: tree: %w", err)
 	}
 
-	// Navigate to the subtree at path.
-	subtree, err := tree.Tree(path)
-	if err != nil {
-		return nil, fmt.Errorf("ListDir: subtree %q: %w", path, err)
+	// Navigate to the subtree at path (use root tree directly when path is empty).
+	var subtree *object.Tree
+	if path == "" {
+		subtree = tree
+	} else {
+		subtree, err = tree.Tree(path)
+		if err != nil {
+			return nil, fmt.Errorf("ListDir: subtree %q: %w", path, err)
+		}
 	}
 
 	var entries []DirEntry
@@ -314,6 +326,11 @@ func (s *Store) Log(path string) ([]LogEntry, error) {
 	}
 
 	return entries, nil
+}
+
+// Branch returns the agent branch name (e.g. "agent/laptop").
+func (s *Store) Branch() string {
+	return s.branch
 }
 
 // Close closes the underlying gitstorer.
