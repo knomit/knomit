@@ -519,6 +519,18 @@ func TestSearchFilter(t *testing.T) {
 		t.Fatalf("expected know/b.md, got %v", results[0].Path)
 	}
 
+	// Path filter should return only the fact whose path starts with "know/a".
+	results, err = idx.Search(store.SearchQuery{Path: "know/a", Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result for path filter, got %d", len(results))
+	}
+	if results[0].Path != "know/a.md" {
+		t.Fatalf("expected know/a.md, got %v", results[0].Path)
+	}
+
 	// MinConfidence filter should drop low-confidence records.
 	results, err = idx.Search(store.SearchQuery{MinConfidence: 0.85, Limit: 10})
 	if err != nil {
@@ -577,11 +589,19 @@ func TestSearchHybrid(t *testing.T) {
 	if len(results) == 0 {
 		t.Fatal("expected results from hybrid search")
 	}
+	// Both facts should be returned.
+	if len(results) != 2 {
+		t.Fatalf("expected 2 results, got %d", len(results))
+	}
 	// Fact A should rank first because its vector exactly matches the query vector.
 	if results[0].Path != "know/a.md" {
 		t.Fatalf("expected know/a.md first, got %v", results[0].Path)
 	}
 	if results[0].Score < 10 {
 		t.Fatalf("score too low: %v", results[0].Score)
+	}
+	// Fact A must have a strictly higher score than fact B.
+	if results[0].Score <= results[1].Score {
+		t.Fatalf("expected results[0].Score (%v) > results[1].Score (%v)", results[0].Score, results[1].Score)
 	}
 }

@@ -607,7 +607,6 @@ func dotProduct(a, b []float32) float64 {
 // (case-insensitive substring match).
 func containsAll(haystack []string, needles []string) bool {
 	for _, needle := range needles {
-		needle = strings.ToLower(needle)
 		found := false
 		for _, h := range haystack {
 			if strings.EqualFold(h, needle) {
