@@ -4,6 +4,11 @@ import (
 	"path/filepath"
 	"testing"
 
+	gogitconfig "github.com/go-git/go-git/v5/config"
+	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/transport/client"
+	"github.com/go-git/go-git/v5/plumbing/transport/server"
+
 	git "knomit/internal/git"
 )
 
@@ -374,6 +379,120 @@ func TestDiffFilesFromEmpty(t *testing.T) {
 	if !hasKnowMd {
 		t.Fatalf("expected know.md in added when diffing from empty, got added=%v modified=%v deleted=%v", added, modified, deleted)
 	}
+}
+
+func TestBatchWriteValidation(t *testing.T) {
+	dir := t.TempDir()
+	store, err := git.Init(filepath.Join(dir, "knomit.git.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	if err := store.BatchWrite(map[string]string{"": "content"}, "msg"); err == nil {
+		t.Fatal("expected error for empty path in BatchWrite")
+	}
+	if err := store.BatchWrite(map[string]string{"../escape.md": "content"}, "msg"); err == nil {
+		t.Fatal("expected error for path traversal in BatchWrite")
+	}
+}
+
+// TestSync verifies Sync behaviour with and without a configured origin.
+func TestSync(t *testing.T) {
+	t.Run("no origin returns Synced=false", func(t *testing.T) {
+		dir := t.TempDir()
+		store, err := git.Init(filepath.Join(dir, "knomit.git.db"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer store.Close()
+
+		result, err := store.Sync(nil)
+		if err != nil {
+			t.Fatalf("Sync with no remote returned unexpected error: %v", err)
+		}
+		if result.Synced {
+			t.Fatal("Sync with no remote should return Synced=false")
+		}
+	})
+
+	t.Run("with origin merges new commit", func(t *testing.T) {
+		// Set up origin store (SQLite-backed go-git repo).
+		originDir := t.TempDir()
+		origin, err := git.Init(filepath.Join(originDir, "origin.git.db"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer origin.Close()
+
+		// Add a commit to origin's agent branch (WriteFile always targets the
+		// agent branch), then advance origin's main ref to that commit so that
+		// origin/main has content the agent store has never seen.
+		if err := origin.WriteFile("know/shared.md", "# Shared\n", "origin: add shared"); err != nil {
+			t.Fatal(err)
+		}
+		originHead, err := origin.HeadCommit()
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Point origin's main branch at the new commit so that
+		// refs/remotes/origin/main will be ahead of the agent's history.
+		mainRef := plumbing.NewHashReference(
+			plumbing.NewBranchReferenceName("main"),
+			plumbing.NewHash(originHead),
+		)
+		if err := origin.Storer().SetReference(mainRef); err != nil {
+			t.Fatal(err)
+		}
+
+		// Register an in-process transport so the knomit store can fetch
+		// from the origin without network or git binary.
+		loader := server.MapLoader{
+			"inmem:///origin": origin.Storer(),
+		}
+		client.InstallProtocol("inmem", server.NewClient(loader))
+		t.Cleanup(func() { client.InstallProtocol("inmem", nil) })
+
+		// Create the agent store.
+		agentDir := t.TempDir()
+		store, err := git.Init(filepath.Join(agentDir, "knomit.git.db"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer store.Close()
+
+		// Configure origin remote in the agent store via the storer's Config API.
+		cfg, err := store.Storer().Config()
+		if err != nil {
+			t.Fatal(err)
+		}
+		cfg.Remotes["origin"] = &gogitconfig.RemoteConfig{
+			Name:  "origin",
+			URLs:  []string{"inmem:///origin"},
+			Fetch: []gogitconfig.RefSpec{"+refs/heads/*:refs/remotes/origin/*"},
+		}
+		if err := store.Storer().SetConfig(cfg); err != nil {
+			t.Fatal(err)
+		}
+
+		// Sync should fetch origin/main and merge it.
+		result, err := store.Sync(nil)
+		if err != nil {
+			t.Fatalf("Sync returned unexpected error: %v", err)
+		}
+		if !result.Synced {
+			t.Fatal("expected Synced=true after fetching new commits from origin")
+		}
+
+		// The merged file should now be accessible.
+		exists, err := store.FileExists("know/shared.md")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !exists {
+			t.Fatal("expected know/shared.md to exist after merge")
+		}
+	})
 }
 
 func TestBatchWrite(t *testing.T) {

@@ -496,8 +496,23 @@ func (s *Store) DiffFiles(fromCommit string) (added, modified, deleted []string,
 }
 
 // TagsContaining returns tag names whose target is reachable from hash.
+// Optimization: collect all commits reachable from hash in one walk, then
+// check each tag's target against that set — O(depth + tags) instead of
+// O(tags × depth).
 func (s *Store) TagsContaining(hash string) ([]string, error) {
 	targetHash := plumbing.NewHash(hash)
+
+	// Build set of all commits reachable from targetHash (one walk).
+	reachable := make(map[plumbing.Hash]bool)
+	logIter, err := s.repo.Log(&gogit.LogOptions{From: targetHash})
+	if err != nil {
+		return nil, fmt.Errorf("TagsContaining: log from target: %w", err)
+	}
+	_ = logIter.ForEach(func(c *object.Commit) error {
+		reachable[c.Hash] = true
+		return nil
+	})
+	logIter.Close()
 
 	refIter, err := s.storer.IterReferences()
 	if err != nil {
@@ -510,32 +525,7 @@ func (s *Store) TagsContaining(hash string) ([]string, error) {
 		if !strings.HasPrefix(ref.Name().String(), "refs/tags/") {
 			return nil
 		}
-
-		tagCommitHash := ref.Hash()
-
-		// Check if targetHash equals the tag target or is in its ancestry.
-		if tagCommitHash == targetHash {
-			tagName := strings.TrimPrefix(ref.Name().String(), "refs/tags/")
-			tags = append(tags, tagName)
-			return nil
-		}
-
-		// Walk ancestry.
-		logIter, err := s.repo.Log(&gogit.LogOptions{From: tagCommitHash})
-		if err != nil {
-			return nil
-		}
-		defer logIter.Close()
-
-		found := false
-		_ = logIter.ForEach(func(c *object.Commit) error {
-			if c.Hash == targetHash {
-				found = true
-				return io.EOF
-			}
-			return nil
-		})
-		if found {
+		if reachable[ref.Hash()] {
 			tagName := strings.TrimPrefix(ref.Name().String(), "refs/tags/")
 			tags = append(tags, tagName)
 		}
@@ -586,8 +576,8 @@ func (s *Store) Sync(remoteAuth interface{}) (SyncResult, error) {
 	}
 	agentHash := agentRef.Hash()
 
-	// Count commits in agent branch not in origin/main.
-	ahead, err := s.countAhead(agentHash, originMainHash)
+	// Count commits in origin/main not in agent branch.
+	ahead, err := s.countAhead(originMainHash, agentHash)
 	if err != nil {
 		return SyncResult{}, fmt.Errorf("Sync: count ahead: %w", err)
 	}
@@ -656,6 +646,16 @@ func (s *Store) Sync(remoteAuth interface{}) (SyncResult, error) {
 func (s *Store) BatchWrite(files map[string]string, message string) error {
 	if len(files) == 0 {
 		return nil
+	}
+
+	// Pre-flight validation: reject empty paths and paths containing "..".
+	for path := range files {
+		if path == "" {
+			return fmt.Errorf("git: BatchWrite: path must not be empty")
+		}
+		if strings.Contains(path, "..") {
+			return fmt.Errorf("git: BatchWrite: path must not contain '..'")
+		}
 	}
 
 	headRef, err := s.repo.Head()
