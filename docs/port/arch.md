@@ -285,11 +285,20 @@ CREATE VIRTUAL TABLE facts_fts USING fts5(
 
 CREATE VIRTUAL TABLE facts_vec USING vec0(
     path      TEXT PRIMARY KEY,
-    embedding FLOAT[384]
+    embedding FLOAT[768]
 );
 ```
 
-The `meta` table stores `last_commit` (the HEAD hash at the last successful index sync) and any other key-value metadata needed in future.
+The `meta` table stores the following keys:
+
+| Key              | Value           | Description                                           |
+| ---------------- | --------------- | ----------------------------------------------------- |
+| `schema_version` | integer string  | Index schema version; drives migration logic          |
+| `last_commit`    | git commit hash | HEAD hash at last successful index sync               |
+| `embed_model`    | string          | Embedding model name (e.g. `nomic-embed-text-v1.5`)   |
+| `embed_dim`      | integer string  | Vector dimension of stored embeddings (e.g. `768`)    |
+
+On `SearchIndex.Open`, after running schema migrations, the stored `embed_model` and `embed_dim` are compared against the currently configured embedder. If either differs, the vector index is considered stale: all rows are deleted from `facts_vec`, `embed_model` and `embed_dim` are updated to the new values, and `last_commit` is cleared to force a full re-index on the next `Sync` call. A warning is logged: `"embedding model changed from X to Y; vector index cleared, rebuilding"`. The FTS5 index is unaffected — only the vector data needs rebuilding.
 
 ### FTS5 Manual Content Sync
 
@@ -339,29 +348,19 @@ go-sqlite3 is a CGO library. The sqlite-vec extension is a shared library (`.so`
 
 ### Model
 
-All-MiniLM-L6-v2 (384-dimensional float32 embeddings). The ONNX model file and `tokenizer.json` (HuggingFace format) are distributed alongside the binary (bundled into a `data/` directory, or downloaded on first use to the cache dir).
+nomic-embed-text-v1.5 (768-dimensional float32 embeddings). Chosen over all-MiniLM-L6-v2 for its 8192-token context window (vs 256 tokens), which ensures full fact content is embedded without truncation. The ONNX model file and `tokenizer.json` (HuggingFace format) are distributed alongside the binary (bundled into a `data/` directory, or downloaded on first use to the cache dir).
 
 ### ONNX Runtime
 
-`github.com/yalue/onnxruntime_go` wraps the ONNX Runtime C API. The native `libonnxruntime` shared library must be locatable at runtime. The binary either:
+`github.com/yalue/onnxruntime_go` wraps the ONNX Runtime C API. The native `libonnxruntime` shared library must be locatable at runtime. The binary resolves the path from a relative `data/lib/` directory next to the binary, or from an embedded path configured at build time via `ldflags`. `ONNXRUNTIME_SHARED_LIBRARY` can override detection.
 
-- Bundles the library in its distribution archive and sets `ONNXRUNTIME_SHARED_LIBRARY` at startup, or
-- Copies the library to a well-known path at startup (the TypeScript implementation copies to `os.TempDir()`).
+### Tokenizer
 
-The Go implementation should prefer the first approach: resolve the path from a relative `data/lib/` directory next to the binary, or from an embedded path configured at build time via `ldflags`.
+`github.com/daulet/tokenizers` wraps the HuggingFace tokenizers Rust library via CGO. It reads `tokenizer.json` directly, handling nomic-embed-text's BPE tokenizer without any hand-ported tokenizer logic. The native `libtokenizers` shared library is bundled in `data/lib/` alongside `libonnxruntime`.
 
 ### Inference
 
-`Embedder.Embed(text string) ([]float32, error)` tokenizes the input using the WordPiece tokenizer, runs inference with three input tensors (`input_ids`, `attention_mask`, `token_type_ids`), performs mean-pooling over the `last_hidden_state` output, and L2-normalises the result. The tokenizer logic is a straight port of the TypeScript implementation.
-
-### WordPiece Tokenizer Port
-
-The WordPiece tokenizer is ported from the TypeScript `embeddings.ts` with identical semantics:
-
-- Lowercase + NFD normalisation + accent stripping + whitespace collapse.
-- Pre-tokenize: split on whitespace, split each token at punctuation boundaries.
-- Greedy longest-match-first WordPiece against `tokenizer.json` model vocab.
-- Prepend `[CLS]` (101), append `[SEP]` (102), truncate at 512 tokens.
+`Embedder.Embed(text string) ([]float32, error)` tokenizes the input using `daulet/tokenizers`, runs inference with the resulting `input_ids` and `attention_mask` tensors, performs mean-pooling over the `last_hidden_state` output, and L2-normalises the result. nomic-embed-text-v1.5 does not use `token_type_ids`.
 
 ---
 
@@ -592,10 +591,11 @@ Users need a way to keep `knomit serve` running persistently. Distribution shoul
 
 ### CGO Requirements
 
-Two dependencies require CGO:
+Three dependencies require CGO:
 
 - `github.com/mattn/go-sqlite3`: SQLite with FTS5 and the extension loading API. FTS5 must be compiled in (it is by default with go-sqlite3). The `-tags fts5` build tag is not needed since go-sqlite3 enables FTS5 by default, but `-tags sqlite_json` may be needed depending on SQLite version.
-- The ONNX Runtime shared library (`libonnxruntime`) is a pre-built native library loaded at runtime via cgo-based `yalue/onnxruntime_go`. It is not statically linked.
+- `github.com/yalue/onnxruntime_go`: wraps the pre-built `libonnxruntime` native library via CGO. Not statically linked; bundled in `data/lib/`.
+- `github.com/daulet/tokenizers`: wraps the HuggingFace tokenizers Rust library (`libtokenizers`) via CGO. Handles nomic-embed-text's BPE tokenizer by reading `tokenizer.json` directly. Not statically linked; bundled in `data/lib/`.
 
 ### Native Library Bundling
 
@@ -605,12 +605,15 @@ The distribution archive (`.tar.gz` or `.zip`) contains:
 knomit                         — the Go binary
 data/
   models/
-    all-MiniLM-L6-v2.onnx     — embedding model
-    tokenizer.json             — WordPiece vocab
+    nomic-embed-text-v1.5.onnx — embedding model
+    tokenizer.json             — BPE vocab (HuggingFace format)
   lib/
     libonnxruntime.so.1        — Linux
     libonnxruntime.1.24.3.dylib — macOS
     onnxruntime.dll            — Windows
+    libtokenizers.so           — Linux (daulet/tokenizers)
+    libtokenizers.dylib        — macOS (daulet/tokenizers)
+    tokenizers.dll             — Windows (daulet/tokenizers)
     libsqlite3.dylib           — macOS only (Homebrew extension-capable build)
 ```
 

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"knomit/internal/git"
@@ -304,5 +305,60 @@ func handleSynthesizeStatus(synth SynthRunner) http.HandlerFunc {
 			"events": events,
 			"done":   done,
 		})
+	}
+}
+
+// handleSync handles POST /api/sync
+func handleSync(gs GitStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		result, err := gs.Sync(nil)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{
+				"status": "error",
+				"error":  err.Error(),
+			})
+			return
+		}
+		head, _ := gs.HeadCommit()
+		msg := "already up to date"
+		if result.Synced {
+			msg = fmt.Sprintf("merged %d commit(s) from origin/main", result.Ahead)
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"status":  "ok",
+			"commit":  head,
+			"message": msg,
+		})
+	}
+}
+
+// handleEvents handles GET /api/events — SSE endpoint for real-time updates.
+func handleEvents(gs GitStore, idx SearchIndex) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Connection", "keep-alive")
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			http.Error(w, "streaming not supported", http.StatusInternalServerError)
+			return
+		}
+		// Send an initial status event immediately.
+		head, _ := gs.HeadCommit()
+		fmt.Fprintf(w, "event: status\ndata: {\"head\":\"%s\"}\n\n", head)
+		flusher.Flush()
+
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-r.Context().Done():
+				return
+			case <-ticker.C:
+				head, _ := gs.HeadCommit()
+				fmt.Fprintf(w, "event: status\ndata: {\"head\":\"%s\"}\n\n", head)
+				flusher.Flush()
+			}
+		}
 	}
 }

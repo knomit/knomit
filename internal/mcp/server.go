@@ -66,17 +66,19 @@ type SearchIndex interface {
 }
 
 // NewServer creates a new MCP server with all knomit tools registered.
-// Tool handler implementations will be added in Tasks 16–18.
 func NewServer(gs GitStore, idx SearchIndex, llmAdapter llm.LLMAdapter, profile string) *server.MCPServer {
 	s := server.NewMCPServer("knomit", "1.0.0")
 
-	// Tool registrations will be added in subsequent tasks.
-	// Placeholder to avoid "s declared and not used" errors:
-	_ = mcpgo.NewTool // reference the mcp package to confirm the import is valid
-	_ = gs
-	_ = idx
+	_ = mcpgo.NewTool // ensure import is used
 	_ = llmAdapter
 	_ = profile
+
+	s.AddTool(learnTool(), LearnHandler(gs, idx))
+	s.AddTool(queryTool(), QueryHandler(gs, idx))
+	s.AddTool(whyTool(), WhyHandler(gs))
+	s.AddTool(updateTool(), UpdateHandler(gs, idx))
+	s.AddTool(exploreTool(), ExploreHandler(gs))
+	s.AddTool(forgetTool(), ForgetHandler(gs, idx))
 
 	return s
 }

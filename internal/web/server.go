@@ -17,6 +17,7 @@ type GitStore interface {
 	HeadCommit() (string, error)
 	Branch() string
 	ListAll() ([]string, error)
+	Sync(remoteAuth interface{}) (git.SyncResult, error)
 }
 
 // SearchIndex is the narrow search interface needed by web handlers.
@@ -53,6 +54,13 @@ func NewRouter(gs GitStore, idx SearchIndex, synth SynthRunner, mcpHandler http.
 	r.Get("/api/status", handleStatus(gs, idx))
 	r.Post("/api/synthesize", handleSynthesizeStart(synth))
 	r.Get("/api/synthesize/{recipe}", handleSynthesizeStatus(synth))
+	r.Post("/api/sync", handleSync(gs))
+	r.Get("/api/events", handleEvents(gs, idx))
+
+	// Serve embedded web UI
+	staticHandler := StaticHandler()
+	r.Handle("/assets/*", staticHandler)
+	r.Get("/*", newSPAHandler(staticHandler))
 
 	return r
 }

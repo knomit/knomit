@@ -20,6 +20,7 @@ type mockGitStore struct {
 	headCommitFn func() (string, error)
 	branchFn     func() string
 	listAllFn    func() ([]string, error)
+	syncFn       func(remoteAuth interface{}) (git.SyncResult, error)
 }
 
 func (m *mockGitStore) ListDir(path string) ([]git.DirEntry, error) {
@@ -64,6 +65,13 @@ func (m *mockGitStore) ListAll() ([]string, error) {
 	return nil, nil
 }
 
+func (m *mockGitStore) Sync(remoteAuth interface{}) (git.SyncResult, error) {
+	if m.syncFn != nil {
+		return m.syncFn(remoteAuth)
+	}
+	return git.SyncResult{}, nil
+}
+
 type mockSearchIndex struct {
 	searchFn        func(q store.SearchQuery) ([]store.SearchResult, error)
 	getLastCommitFn func() (string, error)
@@ -86,7 +94,7 @@ func (m *mockSearchIndex) GetLastCommit() (string, error) {
 // --- helpers ---
 
 func newTestRouter(gs GitStore, idx SearchIndex) http.Handler {
-	return NewRouter(gs, idx, nil, nil)
+	return NewRouter(gs, idx, nil, nil, nil)
 }
 
 func doRequest(t *testing.T, handler http.Handler, method, target string, body string) *httptest.ResponseRecorder {

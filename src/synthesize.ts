@@ -693,6 +693,7 @@ export async function synthesize(
   onProgress?: OnProgress
 ): Promise<SynthesizeResult> {
   const branchName = `synthesize/${recipe.name}`;
+  const originalBranch = await repo.currentBranch();
   const t0 = Date.now();
   log.info(`synthesize: starting recipe "${recipe.name}" on branch ${branchName}`);
 
@@ -722,7 +723,7 @@ export async function synthesize(
       stepSummaries.push(summary);
     }
   } catch (err) {
-    await repo.checkoutPrevious();
+    await repo.checkoutBranch(originalBranch);
     throw err;
   }
 
@@ -732,17 +733,16 @@ export async function synthesize(
 
   if (recipe.auto_merge) {
     onProgress?.({ phase: "merge" });
-    const currentBranch = branchName;
-    await repo.checkoutPrevious();
-    await repo.mergeBranch(currentBranch);
-    await repo.deleteBranch(currentBranch);
+    await repo.checkoutBranch(originalBranch);
+    await repo.mergeBranch(branchName);
+    await repo.deleteBranch(branchName);
     log.info(`synthesize: auto-merged ${branchName} and deleted branch`);
     onProgress?.({ phase: "done", stepSummaries, elapsed: Date.now() - t0 });
     return { branch: branchName, stepSummaries, merged: true };
   } else {
     onProgress?.({ phase: "push" });
     await repo.pushBranch(branchName);
-    await repo.checkoutPrevious();
+    await repo.checkoutBranch(originalBranch);
     log.info(`synthesize: pushed ${branchName} for review`);
     onProgress?.({ phase: "done", stepSummaries, elapsed: Date.now() - t0 });
     return { branch: branchName, stepSummaries, merged: false };
