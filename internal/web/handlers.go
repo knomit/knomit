@@ -238,7 +238,7 @@ func handleStats(gs GitStore) http.HandlerFunc {
 }
 
 // handleStatus handles GET /api/status
-func handleStatus(gs GitStore, idx SearchIndex) http.HandlerFunc {
+func handleStatus(gs GitStore, idx SearchIndex, embeddingsEnabled bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		head, err := gs.HeadCommit()
 		if err != nil {
@@ -257,7 +257,7 @@ func handleStatus(gs GitStore, idx SearchIndex) http.HandlerFunc {
 			"head":               head,
 			"branch":             branch,
 			"index_commit":       indexCommit,
-			"embeddings_enabled": false,
+			"embeddings_enabled": embeddingsEnabled,
 		})
 	}
 }

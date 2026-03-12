@@ -34,7 +34,7 @@ type SynthRunner interface {
 
 // NewRouter creates and returns the chi router with all API routes registered.
 // gitHandler, if non-nil, is mounted at /git and serves the Smart HTTP git protocol.
-func NewRouter(gs GitStore, idx SearchIndex, synth SynthRunner, mcpHandler http.Handler, gitHandler http.Handler) http.Handler {
+func NewRouter(gs GitStore, idx SearchIndex, synth SynthRunner, mcpHandler http.Handler, gitHandler http.Handler, embeddingsEnabled bool) http.Handler {
 	r := chi.NewRouter()
 	r.Use(middleware.Recoverer)
 
@@ -51,7 +51,7 @@ func NewRouter(gs GitStore, idx SearchIndex, synth SynthRunner, mcpHandler http.
 	r.Get("/api/v1/search", handleSearch(idx))
 	r.Get("/api/v1/history", handleHistory(gs))
 	r.Get("/api/v1/stats", handleStats(gs))
-	r.Get("/api/v1/status", handleStatus(gs, idx))
+	r.Get("/api/v1/status", handleStatus(gs, idx, embeddingsEnabled))
 	r.Post("/api/v1/synthesize", handleSynthesizeStart(synth))
 	r.Get("/api/v1/synthesize/{recipe}", handleSynthesizeStatus(synth))
 	r.Post("/api/v1/sync", handleSync(gs))

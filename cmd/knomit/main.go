@@ -68,16 +68,18 @@ func serveCmd() *cobra.Command {
 				log.Warn().Err(err).Msg("initial index sync failed")
 			}
 
-			// 4. Load embedder if model files present (optional)
+			// 4. Ensure embedder model files are present (downloads if missing), then load.
 			var embedder *embeddings.Embedder
-			modelPath := filepath.Join(cfg.CacheDir, "model.onnx")
-			tokPath := filepath.Join(cfg.CacheDir, "tokenizer.json")
-			if _, statErr := os.Stat(modelPath); statErr == nil {
+			modelPath, tokPath, err := embeddings.EnsureModel(cfg.CacheDir)
+			if err != nil {
+				log.Warn().Err(err).Msg("embedder model unavailable")
+			} else {
 				embedder, err = embeddings.NewEmbedder(modelPath, tokPath)
 				if err != nil {
 					log.Warn().Err(err).Msg("embedder init failed")
 				}
 			}
+			embeddingsEnabled := embedder != nil
 			if embedder != nil {
 				idx.SetEmbedder(embedder)
 				defer embedder.Close()
@@ -107,7 +109,7 @@ func serveCmd() *cobra.Command {
 			}
 
 			// 8. Create chi router
-			router := web.NewRouter(gs, idx, nil, mcpHandler, gitHandler)
+			router := web.NewRouter(gs, idx, nil, mcpHandler, gitHandler, embeddingsEnabled)
 
 			// 9. Graceful shutdown
 			srv := &http.Server{

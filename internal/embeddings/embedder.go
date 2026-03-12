@@ -44,7 +44,7 @@ func initORT() error {
 	return ortInitErr
 }
 
-// Embedder tokenizes text, runs ONNX inference using all-MiniLM-L6-v2,
+// Embedder tokenizes text, runs ONNX inference using nomic-embed-text-v1.5,
 // mean-pools over sequence length, and L2-normalises to unit vector.
 type Embedder struct {
 	session *ort.DynamicAdvancedSession
@@ -65,7 +65,7 @@ func NewEmbedder(modelPath, tokenizerPath string) (*Embedder, error) {
 		return nil, fmt.Errorf("load tokenizer: %w", err)
 	}
 
-	inputNames := []string{"input_ids", "attention_mask", "token_type_ids"}
+	inputNames := []string{"input_ids", "attention_mask"}
 	outputNames := []string{"last_hidden_state"}
 
 	session, err := ort.NewDynamicAdvancedSession(modelPath, inputNames, outputNames, nil)
@@ -76,10 +76,11 @@ func NewEmbedder(modelPath, tokenizerPath string) (*Embedder, error) {
 	return &Embedder{session: session, tok: tok}, nil
 }
 
-// Embed tokenizes text, runs inference, mean-pools last_hidden_state over
-// seq_len, and returns an L2-normalised float32 vector of dimension 384.
+// Embed tokenizes text, runs inference using nomic-embed-text-v1.5, mean-pools
+// last_hidden_state over seq_len, and returns an L2-normalised float32 vector
+// of dimension 768.
 func (e *Embedder) Embed(text string) ([]float32, error) {
-	inputIDs, attentionMask, tokenTypeIDs := e.tok.Encode(text)
+	inputIDs, attentionMask, _ := e.tok.Encode(text)
 	seqLen := int64(len(inputIDs))
 
 	shape := ort.NewShape(1, seqLen)
@@ -87,11 +88,9 @@ func (e *Embedder) Embed(text string) ([]float32, error) {
 	// Convert int32 slices to int64 for the model.
 	ids64 := make([]int64, seqLen)
 	mask64 := make([]int64, seqLen)
-	types64 := make([]int64, seqLen)
 	for i := int64(0); i < seqLen; i++ {
 		ids64[i] = int64(inputIDs[i])
 		mask64[i] = int64(attentionMask[i])
-		types64[i] = int64(tokenTypeIDs[i])
 	}
 
 	idsTensor, err := ort.NewTensor(shape, ids64)
@@ -106,14 +105,8 @@ func (e *Embedder) Embed(text string) ([]float32, error) {
 	}
 	defer maskTensor.Destroy()
 
-	typesTensor, err := ort.NewTensor(shape, types64)
-	if err != nil {
-		return nil, fmt.Errorf("new token_type_ids tensor: %w", err)
-	}
-	defer typesTensor.Destroy()
-
-	// Output shape: [1, seqLen, 384] — pre-allocate.
-	const dims = 384
+	// Output shape: [1, seqLen, 768] — pre-allocate.
+	const dims = 768
 	outputShape := ort.NewShape(1, seqLen, dims)
 	outputTensor, err := ort.NewEmptyTensor[float32](outputShape)
 	if err != nil {
@@ -122,7 +115,7 @@ func (e *Embedder) Embed(text string) ([]float32, error) {
 	defer outputTensor.Destroy()
 
 	if err := e.session.Run(
-		[]ort.Value{idsTensor, maskTensor, typesTensor},
+		[]ort.Value{idsTensor, maskTensor},
 		[]ort.Value{outputTensor},
 	); err != nil {
 		return nil, fmt.Errorf("onnx run: %w", err)
