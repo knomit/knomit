@@ -711,3 +711,54 @@ func TestSearchHybrid(t *testing.T) {
 		t.Fatalf("expected results[0].Score (%v) > results[1].Score (%v)", results[0].Score, results[1].Score)
 	}
 }
+
+func TestDeleteReferentialIntegrity(t *testing.T) {
+	idx, err := store.New(":memory:", store.WithVecDimension(4))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer idx.Close()
+
+	idx.SetEmbedder(&stubEmb{vec: []float32{1, 0, 0, 0}})
+
+	rec := store.FactRecord{
+		Path: "know/test/ri.md", Title: "RI Test", Body: "referential integrity",
+		Domain: []string{"test"}, Entities: []string{},
+		Confidence: 1.0, Sources: 1, CommitHash: "ri1",
+	}
+	if err := idx.Upsert(rec); err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify embedding exists.
+	vec, err := idx.GetEmbedding("know/test/ri.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if vec == nil {
+		t.Fatal("expected embedding after upsert")
+	}
+
+	// Delete the fact.
+	if err := idx.Delete("know/test/ri.md"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Embedding must be gone.
+	vec, err = idx.GetEmbedding("know/test/ri.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if vec != nil {
+		t.Fatal("expected nil embedding after delete — orphaned facts_vec row")
+	}
+
+	// facts_vec should be empty.
+	var count int
+	if err := idx.DB().QueryRow("SELECT count(*) FROM facts_vec").Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("expected 0 rows in facts_vec after delete, got %d", count)
+	}
+}

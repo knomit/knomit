@@ -413,7 +413,9 @@ func (idx *Index) Upsert(rec FactRecord) error {
 		newRowid := int64(0)
 		_ = tx.QueryRow(`SELECT rowid FROM facts WHERE path=?`, rec.Path).Scan(&newRowid)
 		if newRowid > 0 {
-			tx.Exec(`DELETE FROM facts_vec WHERE rowid = ?`, newRowid)
+			if _, err := tx.Exec(`DELETE FROM facts_vec WHERE rowid = ?`, newRowid); err != nil {
+				return fmt.Errorf("delete old vec row: %w", err)
+			}
 			if _, err := tx.Exec(
 				`INSERT INTO facts_vec(rowid, embedding) VALUES (?, ?)`,
 				newRowid, vecData,
@@ -445,6 +447,11 @@ func (idx *Index) Delete(path string) error {
 		return fmt.Errorf("read fact for delete: %w", err)
 	}
 	if err == nil {
+		// Delete from facts_vec first (referential integrity).
+		if _, err := tx.Exec(`DELETE FROM facts_vec WHERE rowid = ?`, oldRowid); err != nil {
+			return fmt.Errorf("delete vec row: %w", err)
+		}
+		// Delete from FTS5.
 		if _, err := tx.Exec(
 			`INSERT INTO facts_fts(facts_fts, rowid, title, body, entities, domain)
 			 VALUES('delete', ?, ?, ?, ?, ?)`,
