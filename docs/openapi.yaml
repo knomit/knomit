@@ -1,0 +1,478 @@
+openapi: 3.0.3
+info:
+  title: Knomit API
+  version: 1.0.0
+  description: Git-backed knowledge base API
+
+servers:
+  - url: /api/v1
+    description: v1
+
+paths:
+  /browse:
+    get:
+      summary: List directory contents
+      operationId: browse
+      parameters:
+        - name: path
+          in: query
+          description: Directory path to list (defaults to "know")
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Directory listing
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BrowseResponse"
+        "404":
+          description: Path not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /fact:
+    get:
+      summary: Read a single fact
+      operationId: getFact
+      parameters:
+        - name: path
+          in: query
+          required: true
+          description: Git path to the fact file
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Fact content
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Fact"
+        "400":
+          description: Missing path parameter
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Fact not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Parse error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /search:
+    get:
+      summary: Search facts
+      operationId: search
+      parameters:
+        - name: q
+          in: query
+          description: Full-text search query
+          schema:
+            type: string
+        - name: entities
+          in: query
+          description: Comma-separated list of entity filters
+          schema:
+            type: string
+        - name: domain
+          in: query
+          description: Comma-separated list of domain filters
+          schema:
+            type: string
+        - name: path
+          in: query
+          description: Path prefix filter
+          schema:
+            type: string
+        - name: min_confidence
+          in: query
+          description: Minimum confidence threshold
+          schema:
+            type: number
+            format: double
+        - name: limit
+          in: query
+          description: Maximum number of results (default 50, max 500)
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Search results
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SearchResponse"
+        "400":
+          description: Search index not available or invalid parameters
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Search error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /history:
+    get:
+      summary: Get commit history for a path
+      operationId: getHistory
+      parameters:
+        - name: path
+          in: query
+          description: File path to get history for (optional, returns all commits if omitted)
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Commit history
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HistoryResponse"
+        "500":
+          description: Log error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /stats:
+    get:
+      summary: Get knowledge base statistics
+      operationId: getStats
+      parameters:
+        - name: path
+          in: query
+          description: Path prefix to scope stats to
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Statistics
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StatsResponse"
+        "500":
+          description: Internal error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /status:
+    get:
+      summary: Get repository status
+      operationId: getStatus
+      responses:
+        "200":
+          description: Repository status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StatusResponse"
+        "500":
+          description: Internal error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /synthesize:
+    post:
+      summary: Start a synthesis run
+      operationId: startSynthesis
+      requestBody:
+        description: Recipe name or body (plain text)
+        required: true
+        content:
+          text/plain:
+            schema:
+              type: string
+      responses:
+        "200":
+          description: Synthesis started
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SynthesizeStartResponse"
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Internal error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "503":
+          description: Synthesis not available
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /synthesize/{recipe}:
+    get:
+      summary: Get synthesis run status
+      operationId: getSynthesisStatus
+      parameters:
+        - name: recipe
+          in: path
+          required: true
+          description: Synthesis run ID
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Synthesis status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SynthesizeStatusResponse"
+        "503":
+          description: Synthesis not available
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /sync:
+    post:
+      summary: Sync with origin/main
+      operationId: sync
+      responses:
+        "200":
+          description: Sync result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SyncResponse"
+        "500":
+          description: Sync error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /events:
+    get:
+      summary: SSE stream of real-time status events
+      operationId: events
+      responses:
+        "200":
+          description: Server-sent event stream
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                description: >
+                  Newline-delimited SSE events. Each event has type "status"
+                  and data JSON with field "head" (current HEAD commit hash).
+        "500":
+          description: Streaming not supported
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /openapi.yaml:
+    get:
+      summary: OpenAPI specification
+      operationId: getOpenAPISpec
+      responses:
+        "200":
+          description: OpenAPI 3.0.3 spec in YAML
+          content:
+            application/yaml:
+              schema:
+                type: string
+
+components:
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+
+    DirChild:
+      type: object
+      required: [name, is_dir]
+      properties:
+        name:
+          type: string
+        is_dir:
+          type: boolean
+
+    Fact:
+      type: object
+      required: [path, title, body, domain, entities, confidence, sources, refs]
+      properties:
+        path:
+          type: string
+        title:
+          type: string
+        body:
+          type: string
+        domain:
+          type: array
+          items:
+            type: string
+        entities:
+          type: array
+          items:
+            type: string
+        confidence:
+          type: number
+          format: double
+        sources:
+          type: integer
+        refs:
+          type: array
+          items:
+            type: string
+
+    SearchResult:
+      allOf:
+        - $ref: "#/components/schemas/Fact"
+        - type: object
+          required: [score]
+          properties:
+            score:
+              type: number
+              format: double
+              description: Relevance score in [0, 100]
+
+    HistoryEntry:
+      type: object
+      required: [commit, message, date]
+      properties:
+        commit:
+          type: string
+          description: Short commit hash (8 chars)
+        message:
+          type: string
+        date:
+          type: string
+          format: date-time
+
+    StatusResponse:
+      type: object
+      required: [head, branch, index_commit, embeddings_enabled]
+      properties:
+        head:
+          type: string
+          description: Current HEAD commit hash
+        branch:
+          type: string
+          description: Current agent branch name
+        index_commit:
+          type: string
+          description: Last commit processed by the search index
+        embeddings_enabled:
+          type: boolean
+
+    StatsResponse:
+      type: object
+      required: [total, domains, avg_confidence]
+      properties:
+        total:
+          type: integer
+          description: Total number of facts
+        domains:
+          type: object
+          additionalProperties:
+            type: integer
+          description: Count of facts per domain
+        avg_confidence:
+          type: number
+          format: double
+
+    BrowseResponse:
+      type: object
+      required: [path, children]
+      properties:
+        path:
+          type: string
+        children:
+          type: array
+          items:
+            $ref: "#/components/schemas/DirChild"
+
+    SearchResponse:
+      type: object
+      required: [results]
+      properties:
+        results:
+          type: array
+          items:
+            $ref: "#/components/schemas/SearchResult"
+
+    HistoryResponse:
+      type: object
+      required: [entries]
+      properties:
+        entries:
+          type: array
+          items:
+            $ref: "#/components/schemas/HistoryEntry"
+
+    SynthesizeStartResponse:
+      type: object
+      required: [id, status]
+      properties:
+        id:
+          type: string
+          description: Synthesis run ID
+        status:
+          type: string
+          example: started
+
+    SynthesizeStatusResponse:
+      type: object
+      required: [id, events, done]
+      properties:
+        id:
+          type: string
+        events:
+          type: array
+          items:
+            type: string
+        done:
+          type: boolean
+
+    SyncResponse:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [ok, error]
+        commit:
+          type: string
+          description: Current HEAD commit after sync
+        message:
+          type: string
+          description: Human-readable sync result message
+        error:
+          type: string
+          description: Error message (only present when status is "error")

@@ -38,9 +38,9 @@ type DirEntry struct {
 
 // LogEntry represents a single git commit in a log listing.
 type LogEntry struct {
-	Commit  string
-	Date    string
-	Message string
+	Commit  string `json:"commit"`
+	Date    string `json:"date"`
+	Message string `json:"message"`
 }
 
 // Init creates a new knomit git store at dbPath.

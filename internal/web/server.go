@@ -46,16 +46,18 @@ func NewRouter(gs GitStore, idx SearchIndex, synth SynthRunner, mcpHandler http.
 		r.Mount("/git", gitHandler)
 	}
 
-	r.Get("/api/browse", handleBrowse(gs))
-	r.Get("/api/fact", handleFact(gs))
-	r.Get("/api/search", handleSearch(idx))
-	r.Get("/api/history", handleHistory(gs))
-	r.Get("/api/stats", handleStats(gs))
-	r.Get("/api/status", handleStatus(gs, idx))
-	r.Post("/api/synthesize", handleSynthesizeStart(synth))
-	r.Get("/api/synthesize/{recipe}", handleSynthesizeStatus(synth))
-	r.Post("/api/sync", handleSync(gs))
-	r.Get("/api/events", handleEvents(gs, idx))
+	r.Get("/api/v1/browse", handleBrowse(gs))
+	r.Get("/api/v1/fact", handleFact(gs))
+	r.Get("/api/v1/search", handleSearch(idx))
+	r.Get("/api/v1/history", handleHistory(gs))
+	r.Get("/api/v1/stats", handleStats(gs))
+	r.Get("/api/v1/status", handleStatus(gs, idx))
+	r.Post("/api/v1/synthesize", handleSynthesizeStart(synth))
+	r.Get("/api/v1/synthesize/{recipe}", handleSynthesizeStatus(synth))
+	r.Post("/api/v1/sync", handleSync(gs))
+	r.Get("/api/v1/events", handleEvents(gs, idx))
+	r.Get("/api/v1/openapi.yaml", handleOpenAPISpec())
+	r.Get("/docs", handleSwaggerUI())
 
 	// Serve embedded web UI
 	staticHandler := StaticHandler()

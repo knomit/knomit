@@ -124,7 +124,7 @@ func TestHandleBrowse(t *testing.T) {
 	}{
 		{
 			name:  "default path uses know",
-			query: "/api/browse",
+			query: "/api/v1/browse",
 			entries: []git.DirEntry{
 				{Name: "subdir", IsDir: true},
 				{Name: "fact.md", IsDir: false},
@@ -135,7 +135,7 @@ func TestHandleBrowse(t *testing.T) {
 		},
 		{
 			name:  "explicit path",
-			query: "/api/browse?path=know/sub",
+			query: "/api/v1/browse?path=know/sub",
 			entries: []git.DirEntry{
 				{Name: "item.md", IsDir: false},
 			},
@@ -145,7 +145,7 @@ func TestHandleBrowse(t *testing.T) {
 		},
 		{
 			name:       "empty directory",
-			query:      "/api/browse?path=know/empty",
+			query:      "/api/v1/browse?path=know/empty",
 			entries:    []git.DirEntry{},
 			wantStatus: http.StatusOK,
 			wantPath:   "know/empty",
@@ -199,12 +199,12 @@ func TestHandleFact(t *testing.T) {
 	}{
 		{
 			name:       "missing path returns 400",
-			query:      "/api/fact",
+			query:      "/api/v1/fact",
 			wantStatus: http.StatusBadRequest,
 		},
 		{
 			name:       "valid path returns parsed fact",
-			query:      "/api/fact?path=know/chi.md",
+			query:      "/api/v1/fact?path=know/chi.md",
 			content:    validContent,
 			wantStatus: http.StatusOK,
 			wantTitle:  "Chi Router",
@@ -230,8 +230,8 @@ func TestHandleFact(t *testing.T) {
 				if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
 					t.Fatalf("decode response: %v", err)
 				}
-				if resp["Title"] != tc.wantTitle {
-					t.Errorf("Title = %q, want %q", resp["Title"], tc.wantTitle)
+				if resp["title"] != tc.wantTitle {
+					t.Errorf("title = %q, want %q", resp["title"], tc.wantTitle)
 				}
 			}
 		})
@@ -259,7 +259,7 @@ func TestHandleSearch(t *testing.T) {
 	}{
 		{
 			name:  "search with q param returns results",
-			query: "/api/search?q=test",
+			query: "/api/v1/search?q=test",
 			idx: &mockSearchIndex{
 				searchFn: func(q store.SearchQuery) ([]store.SearchResult, error) {
 					return results, nil
@@ -270,13 +270,13 @@ func TestHandleSearch(t *testing.T) {
 		},
 		{
 			name:       "nil index returns 400",
-			query:      "/api/search?q=test",
+			query:      "/api/v1/search?q=test",
 			idx:        nil,
 			wantStatus: http.StatusBadRequest,
 		},
 		{
 			name:  "empty results returns empty array",
-			query: "/api/search?q=nomatch",
+			query: "/api/v1/search?q=nomatch",
 			idx: &mockSearchIndex{
 				searchFn: func(q store.SearchQuery) ([]store.SearchResult, error) {
 					return nil, nil
@@ -329,21 +329,21 @@ func TestHandleHistory(t *testing.T) {
 	}{
 		{
 			name:       "returns log entries",
-			query:      "/api/history?path=know/fact.md",
+			query:      "/api/v1/history?path=know/fact.md",
 			entries:    logEntries,
 			wantStatus: http.StatusOK,
 			wantLen:    2,
 		},
 		{
 			name:       "empty path returns full log",
-			query:      "/api/history",
+			query:      "/api/v1/history",
 			entries:    logEntries[:1],
 			wantStatus: http.StatusOK,
 			wantLen:    1,
 		},
 		{
 			name:       "nil entries returns empty array",
-			query:      "/api/history?path=know/missing.md",
+			query:      "/api/v1/history?path=know/missing.md",
 			entries:    nil,
 			wantStatus: http.StatusOK,
 			wantLen:    0,
@@ -429,7 +429,7 @@ func TestHandleStatus(t *testing.T) {
 			}
 
 			handler := newTestRouter(gs, idx)
-			rr := doRequest(t, handler, http.MethodGet, "/api/status", "")
+			rr := doRequest(t, handler, http.MethodGet, "/api/v1/status", "")
 
 			if rr.Code != tc.wantStatus {
 				t.Fatalf("status = %d, want %d; body: %s", rr.Code, tc.wantStatus, rr.Body.String())
