@@ -1,4 +1,4 @@
-.PHONY: build web test clean run
+.PHONY: build web test clean run dev
 
 build: web
 	CGO_ENABLED=1 go build -tags sqlite_fts5 -o dist/knomit ./cmd/knomit/
@@ -11,6 +11,9 @@ test:
 
 run:
 	CGO_ENABLED=1 go run -tags sqlite_fts5 ./cmd/knomit/ serve
+
+dev:
+	cd web && npm run dev
 
 clean:
 	rm -rf dist/ web/dist/
