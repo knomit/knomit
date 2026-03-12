@@ -289,7 +289,7 @@ type Index struct {
 }
 
 // SetEmbedder attaches an Embedder to the index. When set, Upsert will call
-// Embed on each record's Body and persist the result as vec_data.
+// Embed on each record's Body and persist the result in facts_vec.
 func (idx *Index) SetEmbedder(e Embedder) {
 	idx.embedder = e
 }
@@ -510,7 +510,7 @@ func float32SliceToBytes(v []float32) []byte {
 // bytesToFloat32Slice decodes little-endian bytes into a []float32.
 func bytesToFloat32Slice(b []byte) ([]float32, error) {
 	if len(b)%4 != 0 {
-		return nil, fmt.Errorf("vec_data length %d is not a multiple of 4", len(b))
+		return nil, fmt.Errorf("embedding blob length %d is not a multiple of 4", len(b))
 	}
 	v := make([]float32, len(b)/4)
 	for i := range v {
