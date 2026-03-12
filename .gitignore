@@ -39,6 +39,7 @@ docs/plans
 # Go build output
 /knomit
 /dist/
+dist/lib/
 
 # Claude Code
 .claude/
