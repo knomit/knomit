@@ -7,7 +7,7 @@ export interface AppState {
   rightMode: RightMode;
   searchQuery: string;
   loading: boolean;
-  syncing: boolean;
+  tasks: Record<string, { status: 'idle' | 'running' | 'done' | 'error'; message: string }>;
   headCommit: string;
   branch: string;
   embeddingsEnabled: boolean;
@@ -25,8 +25,9 @@ export type Action =
   | { type: 'SHOW_HISTORY' }
   | { type: 'SHOW_FACT' }
   | { type: 'SET_LOADING'; value: boolean }
-  | { type: 'SET_SYNCING'; value: boolean }
+  | { type: 'SET_TASK'; op: string; status: 'idle' | 'running' | 'done' | 'error'; message: string }
   | { type: 'SET_STATUS'; head: string; branch: string; embeddingsEnabled: boolean }
+  | { type: 'SET_HEAD'; head: string }
   | { type: 'SET_STATUS_MESSAGE'; message: string };
 
 export const init: AppState = {
@@ -36,7 +37,7 @@ export const init: AppState = {
   rightMode: 'summary',
   searchQuery: '',
   loading: false,
-  syncing: false,
+  tasks: { sync: { status: 'idle', message: '' }, synth: { status: 'idle', message: '' } },
   headCommit: '',
   branch: '',
   embeddingsEnabled: false,
@@ -59,8 +60,9 @@ export function reducer(s: AppState, a: Action): AppState {
     case 'SHOW_HISTORY': return { ...s, rightMode: 'history' };
     case 'SHOW_FACT': return { ...s, rightMode: 'fact' };
     case 'SET_LOADING': return { ...s, loading: a.value };
-    case 'SET_SYNCING': return { ...s, syncing: a.value };
+    case 'SET_TASK': return { ...s, tasks: { ...s.tasks, [a.op]: { status: a.status, message: a.message } } };
     case 'SET_STATUS': return { ...s, headCommit: a.head, branch: a.branch, embeddingsEnabled: a.embeddingsEnabled };
+    case 'SET_HEAD': return { ...s, headCommit: a.head };
     case 'SET_STATUS_MESSAGE': return { ...s, statusMessage: a.message };
     default: return s;
   }

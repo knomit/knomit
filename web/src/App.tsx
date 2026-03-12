@@ -1,4 +1,4 @@
-import { useReducer, useEffect, useState, useRef, useCallback } from 'react';
+import { useReducer, useEffect, useRef, useCallback } from 'react';
 import { reducer, init } from './state';
 import { api } from './api';
 import { TopBar } from './TopBar';
@@ -26,8 +26,7 @@ function IconBtn({ title, onClick, disabled, children }: { title: string; onClic
 
 export default function App() {
   const [state, dispatch] = useReducer(reducer, init);
-  const [synthesizing, setSynthesizing] = useState(false);
-  const statusTimer = useRef<ReturnType<typeof setTimeout>>();
+  const statusTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
 
   const showStatus = useCallback((msg: string, ms = 4000) => {
     dispatch({ type: 'SET_STATUS_MESSAGE', message: msg });
@@ -40,30 +39,35 @@ export default function App() {
     api.status().then(s => dispatch({ type: 'SET_STATUS', head: s.head, branch: s.branch, embeddingsEnabled: s.embeddings_enabled })).catch(() => {});
   }, []);
 
+  // SSE for task and status events
+  useEffect(() => {
+    const es = new EventSource('/api/v1/events');
+    es.addEventListener('task', (e) => {
+      const ev = JSON.parse(e.data);
+      dispatch({ type: 'SET_TASK', op: ev.op, status: ev.status, message: ev.message || '' });
+    });
+    es.addEventListener('status', (e) => {
+      const s = JSON.parse(e.data);
+      if (s.head) dispatch({ type: 'SET_HEAD', head: s.head });
+    });
+    return () => es.close();
+  }, []);
+
   const handleSync = async () => {
-    dispatch({ type: 'SET_SYNCING', value: true });
-    showStatus('Syncing…');
     try {
       const result = await api.sync();
-      if (result.commit) dispatch({ type: 'SET_STATUS', head: result.commit, branch: state.branch, embeddingsEnabled: state.embeddingsEnabled });
-      showStatus(result.message || result.status || 'Sync complete');
+      if (result.status === 'error') showStatus(result.message || 'Sync failed');
     } catch (e) {
       showStatus(`Sync failed: ${e}`);
-    } finally {
-      dispatch({ type: 'SET_SYNCING', value: false });
     }
   };
 
   const handleSynthesize = async () => {
-    setSynthesizing(true);
-    showStatus('Synthesizing…');
     try {
       const result = await api.synthesize();
-      showStatus(result.status || 'Synthesis started');
+      if (result.status === 'error') showStatus(result.message || 'Synthesis failed');
     } catch (e) {
       showStatus(`Synthesis failed: ${e}`);
-    } finally {
-      setSynthesizing(false);
     }
   };
 
@@ -111,11 +115,11 @@ export default function App() {
           ))}
         </div>
         {/* Path-scoped action */}
-        <IconBtn title="Synthesize" onClick={handleSynthesize} disabled={synthesizing}>⚗</IconBtn>
+        <IconBtn title="Synthesize" onClick={handleSynthesize} disabled={state.tasks.synth.status === 'running'}>⚗</IconBtn>
         <div style={{ width: 1, height: 16, background: '#333', flexShrink: 0 }} />
         {/* Branch-scoped actions */}
         <IconBtn title="Reset to root" onClick={handleReset}>⌂</IconBtn>
-        <IconBtn title="Sync" onClick={handleSync} disabled={state.syncing}>⟳</IconBtn>
+        <IconBtn title="Sync" onClick={handleSync} disabled={state.tasks.sync.status === 'running'}>⟳</IconBtn>
       </div>
 
       <div style={{ display: 'flex', flex: 1, overflow: 'hidden', minHeight: 0 }}>
@@ -126,7 +130,7 @@ export default function App() {
           <RightPanel state={state} dispatch={dispatch} />
         </div>
       </div>
-      <StatusBar state={state} />
+      <StatusBar state={state} dispatch={dispatch} />
     </div>
   );
 }

@@ -39,6 +39,8 @@ export const api = {
   history: (path: string): Promise<{ entries: HistoryEntry[] }> => fetch(`${BASE}/history?path=${encodeURIComponent(path)}`).then(r => r.json()),
   stats: (path: string): Promise<Stats> => fetch(`${BASE}/stats?path=${encodeURIComponent(path)}`).then(r => r.json()),
   status: (): Promise<Status> => fetch(`${BASE}/status`).then(r => r.json()),
-  sync: (): Promise<{ status: string; commit?: string; message?: string; error?: string }> => fetch(`${BASE}/sync`, { method: 'POST' }).then(r => r.json()),
-  synthesize: (recipe = ''): Promise<{ id: string; status: string }> => fetch(`${BASE}/synthesize`, { method: 'POST', body: recipe }).then(r => r.json()),
+  sync: (): Promise<{ op: string; id?: string; status: string; message?: string }> =>
+    fetch(`${BASE}/sync`, { method: 'POST' }).then(r => r.json()),
+  synthesize: (recipe = ''): Promise<{ op: string; id?: string; status: string; message?: string }> =>
+    fetch(`${BASE}/synthesize`, { method: 'POST', body: recipe }).then(r => r.json()),
 };
