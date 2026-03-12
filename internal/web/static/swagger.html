@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>knomit — API Docs</title>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <link rel="stylesheet" type="text/css" href="https://unpkg.com/swagger-ui-dist@5/swagger-ui.css">
+  <style>
+    body { margin: 0; background: #141414; }
+    .swagger-ui { font-family: system-ui, sans-serif; }
+    .swagger-ui .toknomitr { display: none; }
+    /* Header bar */
+    .docs-header {
+      height: 40px; background: #111; border-bottom: 1px solid #333;
+      display: flex; align-items: center; padding: 0 16px; gap: 10px;
+    }
+    .docs-header svg { flex-shrink: 0; }
+    .docs-header .title { color: #7c9; font-weight: bold; font-size: 15px; }
+    .docs-header .subtitle { color: #666; font-size: 13px; }
+    /* Dark theme overrides */
+    .swagger-ui .scheme-container,
+    .swagger-ui .opblock-tag { background: #1a1a1a; border-color: #333; }
+    .swagger-ui .opblock-tag { color: #eee; }
+    .swagger-ui .opblock-tag:hover { background: #222; }
+    .swagger-ui .info .title { color: #eee; }
+    .swagger-ui .info p, .swagger-ui .info li, .swagger-ui .info table { color: #aaa; }
+    .swagger-ui .info a { color: #8af; }
+    .swagger-ui .wrapper { background: #141414; padding: 0 16px; max-width: 1200px; }
+    .swagger-ui .opblock { background: #1a1a1a; border-color: #333; }
+    .swagger-ui .opblock .opblock-summary { border-color: #333; }
+    .swagger-ui .opblock .opblock-summary-method { font-size: 12px; }
+    .swagger-ui .opblock .opblock-summary-path { color: #eee; }
+    .swagger-ui .opblock .opblock-summary-description { color: #888; }
+    .swagger-ui .opblock.opblock-get { background: rgba(97,175,254,0.05); border-color: rgba(97,175,254,0.3); }
+    .swagger-ui .opblock.opblock-get .opblock-summary { border-color: rgba(97,175,254,0.2); }
+    .swagger-ui .opblock.opblock-post { background: rgba(73,204,144,0.05); border-color: rgba(73,204,144,0.3); }
+    .swagger-ui .opblock.opblock-post .opblock-summary { border-color: rgba(73,204,144,0.2); }
+    .swagger-ui .opblock-body { background: #141414; }
+    .swagger-ui .opblock-section-header { background: #1a1a2a; border-color: #333; }
+    .swagger-ui .opblock-section-header h4 { color: #ccc; }
+    .swagger-ui table thead tr td, .swagger-ui table thead tr th { color: #aaa; border-color: #333; }
+    .swagger-ui table tbody tr td { color: #ccc; border-color: #222; }
+    .swagger-ui .parameter__name { color: #7c9; }
+    .swagger-ui .parameter__type { color: #8af; }
+    .swagger-ui .response-col_status { color: #7c9; }
+    .swagger-ui .response-col_description { color: #aaa; }
+    .swagger-ui .model-box { background: #1a1a1a; }
+    .swagger-ui .model { color: #ccc; }
+    .swagger-ui .prop-type { color: #8af; }
+    .swagger-ui .model-title { color: #eee; }
+    .swagger-ui select { background: #1a1a2a; color: #ccc; border: 1px solid #333; }
+    .swagger-ui input[type=text] { background: #1a1a2a; color: #ccc; border: 1px solid #333; }
+    .swagger-ui .btn { background: #1a1a2a; color: #ccc; border: 1px solid #333; }
+    .swagger-ui .btn:hover { background: #222; }
+    .swagger-ui .btn.execute { background: #7c9; color: #111; border-color: #7c9; }
+    .swagger-ui .btn.execute:hover { background: #8da; }
+    .swagger-ui .responses-inner h4, .swagger-ui .responses-inner h5 { color: #ccc !important; }
+    .swagger-ui .opblock-body h4 { color: #ccc !important; }
+    .swagger-ui .responses-header td { color: #aaa !important; }
+    .swagger-ui .response-control-media-type__accept-message { color: #7c9; }
+    .swagger-ui .highlight-code { background: #111; }
+    .swagger-ui .microlight { background: #111 !important; color: #ccc; }
+    .swagger-ui .copy-to-clipboard { background: #222; }
+    .swagger-ui .download-contents { color: #8af; }
+    .swagger-ui .model-toggle::after { background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10'%3E%3Cpath d='M1 3l4 4 4-4' stroke='%23888' fill='none'/%3E%3C/svg%3E") center no-repeat; }
+    .swagger-ui .servers > label { color: #aaa; }
+    .swagger-ui .scheme-container { background: #1a1a1a; box-shadow: none; }
+    .swagger-ui .opblock-body pre.microlight { background: #111 !important; }
+    .swagger-ui .tab li { color: #aaa; }
+    .swagger-ui .tab li.active { color: #eee; }
+    .swagger-ui .opblock .opblock-section-header { background: #1a1a2a; box-shadow: none; }
+    .swagger-ui .opblock .opblock-section-header label { color: #aaa; }
+    .swagger-ui .responses-wrapper { background: transparent; }
+    .swagger-ui .response-col_links { color: #666; }
+    .swagger-ui .response-col_description__inner p { color: #aaa; }
+    .swagger-ui .parameters-col_description p { color: #aaa; }
+    .swagger-ui .parameter__in { color: #666; }
+    .swagger-ui .opblock-section-header h4 span { color: #ccc; }
+    .swagger-ui .opblock .tab li { color: #999; }
+    .swagger-ui .opblock .tab li.active { color: #eee; }
+    .swagger-ui .response-col_links .response-undocumented { color: #555; }
+    .swagger-ui .opblock-description-wrapper p,
+    .swagger-ui .opblock-external-docs-wrapper p,
+    .swagger-ui .opblock-body .opblock-description { color: #999; }
+    .swagger-ui .opblock-body pre { color: #ccc; }
+    .swagger-ui .expand-operation svg { fill: #888 !important; }
+    .swagger-ui .expand-operation:hover svg { fill: #ccc !important; }
+    .swagger-ui .opblock-summary-control svg { fill: #888 !important; }
+    .swagger-ui .opblock-summary-control:hover svg { fill: #ccc !important; }
+    .swagger-ui button.expand-operation { opacity: 1 !important; }
+    .swagger-ui .arrow { fill: #888 !important; }
+    .swagger-ui .opblock-tag small { color: #666; }
+    .swagger-ui .opblock-tag-section h3 span { color: #eee; }
+    .swagger-ui .btn.try-out__btn { color: #8af; border-color: #8af; }
+    .swagger-ui .btn.try-out__btn:hover { background: rgba(136,170,255,0.1); }
+    .swagger-ui .btn.cancel { color: #f88; border-color: #f88; }
+    .swagger-ui .response-control-media-type--accept-controller { color: #7c9; }
+    .swagger-ui .model-example li { color: #aaa; }
+    .swagger-ui .model-example li.active { color: #eee; }
+    .swagger-ui .model-toggle { color: #888; }
+    .swagger-ui .model-toggle:hover { color: #ccc; }
+    .swagger-ui .response-col_description p { color: #aaa; }
+    .swagger-ui .renderedMarkdown p { color: #aaa; }
+    .swagger-ui .opblock-body .opblock-section .opblock-section-header + div { color: #888; }
+    .swagger-ui .loading-container .loading::after { color: #888; }
+    .swagger-ui section.models { border-color: #333; }
+    .swagger-ui section.models h4 { color: #ccc; }
+    .swagger-ui .model-container { background: #1a1a1a; }
+  </style>
+</head>
+<body>
+<div class="docs-header">
+  <svg width="20" height="20" viewBox="0 0 80 80">
+    <rect x="12" y="12" width="56" height="56" rx="10" transform="rotate(45 40 40)" fill="#7c9"/>
+    <line x1="30" y1="24" x2="30" y2="56" stroke="#111" stroke-width="4" stroke-linecap="round"/>
+    <path d="M30 40 Q38 36 50 24" stroke="#111" stroke-width="4" fill="none" stroke-linecap="round"/>
+    <path d="M30 40 Q38 44 50 56" stroke="#111" stroke-width="4" fill="none" stroke-linecap="round"/>
+    <circle cx="30" cy="24" r="3.5" fill="#111"/>
+    <circle cx="30" cy="56" r="3.5" fill="#111"/>
+    <circle cx="50" cy="24" r="3.5" fill="#111"/>
+    <circle cx="50" cy="56" r="3.5" fill="#111"/>
+    <circle cx="30" cy="40" r="3.5" fill="#111"/>
+  </svg>
+  <span class="title">knomit</span>
+  <span class="subtitle">API Documentation</span>
+</div>
+<div id="swagger-ui"></div>
+<script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
+<script>
+window.onload = function() {
+  SwaggerUIBundle({
+    url: "/api/v1/openapi.yaml",
+    dom_id: '#swagger-ui',
+    presets: [SwaggerUIBundle.presets.apis, SwaggerUIBundle.SwaggerUIStandalonePreset],
+    layout: "BaseLayout",
+    defaultModelsExpandDepth: -1
+  })
+}
+</script>
+</body>
+</html>

@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/joho/godotenv"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
@@ -26,11 +27,13 @@ import (
 
 func main() {
 	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr})
+	_ = godotenv.Load() // .env is optional
 
 	root := &cobra.Command{Use: "knomit", Short: "Git-backed knowledge base"}
 	root.AddCommand(serveCmd())
 	root.AddCommand(initCmd())
 	root.AddCommand(rebuildCmd())
+	root.AddCommand(resetCmd())
 	if err := root.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
@@ -177,6 +180,30 @@ func initCmd() *cobra.Command {
 			}
 			gs.Close()
 			fmt.Printf("Initialized knomit repo at %s\n", cfg.RepoPath)
+			return nil
+		},
+	}
+}
+
+func resetCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "reset",
+		Short: "Wipe all data (git store + search index) and start fresh",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg := config.FromEnv()
+			gitDB := filepath.Join(cfg.RepoPath, "knomit.git.db")
+			idxDB := filepath.Join(cfg.RepoPath, "knomit.index.db")
+
+			for _, f := range []string{gitDB, idxDB} {
+				if err := os.Remove(f); err != nil && !os.IsNotExist(err) {
+					return fmt.Errorf("remove %s: %w", f, err)
+				}
+				// WAL/SHM sidecars
+				os.Remove(f + "-wal")
+				os.Remove(f + "-shm")
+			}
+
+			log.Info().Str("repo", cfg.RepoPath).Msg("all databases removed")
 			return nil
 		},
 	}

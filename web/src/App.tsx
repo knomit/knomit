@@ -1,10 +1,10 @@
-import { useReducer, useEffect, useRef, useCallback } from 'react';
+import { useReducer, useEffect } from 'react';
 import { reducer, init } from './state';
 import { api } from './api';
 import { TopBar } from './TopBar';
 import { LeftPanel } from './LeftPanel';
 import { RightPanel } from './RightPanel';
-import { StatusBar } from './StatusBar';
+import { Console } from './Console';
 import './App.css';
 
 function IconBtn({ title, onClick, disabled, children }: { title: string; onClick: () => void; disabled?: boolean; children: React.ReactNode }) {
@@ -26,13 +26,6 @@ function IconBtn({ title, onClick, disabled, children }: { title: string; onClic
 
 export default function App() {
   const [state, dispatch] = useReducer(reducer, init);
-  const statusTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
-
-  const showStatus = useCallback((msg: string, ms = 4000) => {
-    dispatch({ type: 'SET_STATUS_MESSAGE', message: msg });
-    clearTimeout(statusTimer.current);
-    statusTimer.current = setTimeout(() => dispatch({ type: 'SET_STATUS_MESSAGE', message: '' }), ms);
-  }, []);
 
   // Load initial status
   useEffect(() => {
@@ -45,6 +38,8 @@ export default function App() {
     es.addEventListener('task', (e) => {
       const ev = JSON.parse(e.data);
       dispatch({ type: 'SET_TASK', op: ev.op, status: ev.status, message: ev.message || '' });
+      const level = ev.status === 'error' ? 'error' as const : 'info' as const;
+      dispatch({ type: 'CONSOLE_LOG', level, message: `[${ev.op}] ${ev.message || ev.status}` });
     });
     es.addEventListener('status', (e) => {
       const s = JSON.parse(e.data);
@@ -56,24 +51,23 @@ export default function App() {
   const handleSync = async () => {
     try {
       const result = await api.sync();
-      if (result.status === 'error') showStatus(result.message || 'Sync failed');
+      if (result.status === 'error') {
+        dispatch({ type: 'CONSOLE_LOG', level: 'error', message: `Sync failed: ${result.message || 'unknown error'}` });
+      }
     } catch (e) {
-      showStatus(`Sync failed: ${e}`);
+      dispatch({ type: 'CONSOLE_LOG', level: 'error', message: `Sync failed: ${e}` });
     }
   };
 
   const handleSynthesize = async () => {
     try {
       const result = await api.synthesize();
-      if (result.status === 'error') showStatus(result.message || 'Synthesis failed');
+      if (result.status === 'error') {
+        dispatch({ type: 'CONSOLE_LOG', level: 'error', message: `Synthesis failed: ${result.message || 'unknown error'}` });
+      }
     } catch (e) {
-      showStatus(`Synthesis failed: ${e}`);
+      dispatch({ type: 'CONSOLE_LOG', level: 'error', message: `Synthesis failed: ${e}` });
     }
-  };
-
-  const handleReset = () => {
-    dispatch({ type: 'NAVIGATE', path: 'know' });
-    dispatch({ type: 'CLEAR_SEARCH' });
   };
 
   // Build breadcrumb segments from currentPath
@@ -117,8 +111,6 @@ export default function App() {
         {/* Path-scoped action */}
         <IconBtn title="Synthesize" onClick={handleSynthesize} disabled={state.tasks.synth.status === 'running'}>⚗</IconBtn>
         <div style={{ width: 1, height: 16, background: '#333', flexShrink: 0 }} />
-        {/* Branch-scoped actions */}
-        <IconBtn title="Reset to root" onClick={handleReset}>⌂</IconBtn>
         <IconBtn title="Sync" onClick={handleSync} disabled={state.tasks.sync.status === 'running'}>⟳</IconBtn>
       </div>
 
@@ -130,7 +122,7 @@ export default function App() {
           <RightPanel state={state} dispatch={dispatch} />
         </div>
       </div>
-      <StatusBar state={state} dispatch={dispatch} />
+      <Console state={state} dispatch={dispatch} />
     </div>
   );
 }

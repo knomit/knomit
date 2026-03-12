@@ -41,7 +41,7 @@ The following are retained:
 - `spec/` — MBEKG specification
 - `docs/port/` — Go architecture and tool specs
 - `web/` — React frontend (has its own `package.json` for the Vite build, but is part of the Go project, not the TS project)
-- `scripts/` — development utilities (re-implemented in Go; see Section 18)
+- `tools/` — development utilities (re-implemented in Go; see Section 18)
 
 ---
 
@@ -777,7 +777,7 @@ Used when knomit pushes to / fetches from `origin`. Token takes precedence over 
 
 ## 18. Development Seed Data
 
-`scripts/seed.ts` (TypeScript) seeds a fresh repo with sample facts for testing and exercises all clustering paths in the synthesize pipeline. In the Go port this is replaced by `scripts/seed/main.go`, which calls the running knomit server over MCP HTTP (`POST /mcp`, `knomit_learn` tool) rather than invoking the handler directly.
+`tools/seed/main.go` seeds a fresh repo with sample facts for testing and exercises all clustering paths in the synthesize pipeline. It calls the running knomit server over MCP HTTP (`POST /mcp`, `knomit_learn` tool).
 
 The same two phases are preserved:
 
@@ -787,7 +787,7 @@ The same two phases are preserved:
 Usage (with `knomit serve` already running):
 
 ```sh
-go run scripts/seed/main.go [base|distill|all] [http://localhost:3000]
+go run ./tools/seed/ [base|distill|all] [http://localhost:3000]
 ```
 
-The script is idempotent: before each moment it checks `GET /api/fact?path=<probe>` and skips the moment if the fact already exists. The fact data itself is preserved verbatim from `scripts/seed.ts`.
+The fact data is preserved verbatim from the original `scripts/seed.ts`.

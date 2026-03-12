@@ -28,15 +28,17 @@ func (a *ClaudeCLIAdapter) Complete(ctx context.Context, system string, msgs []M
 	userContent := strings.Join(userParts, "\n\n")
 
 	args := []string{"-p", "--system", system, "--output-format", "text"}
-	if a.model != "" && a.model != "auto" {
+	if strings.HasPrefix(a.model, "claude-") {
 		args = append(args, "--model", a.model)
 	}
 
 	cmd := exec.CommandContext(ctx, "claude", args...)
 	cmd.Stdin = strings.NewReader(userContent)
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
 	out, err := cmd.Output()
 	if err != nil {
-		return "", fmt.Errorf("claudecli: %w", err)
+		return "", fmt.Errorf("claudecli: %w: %s", err, strings.TrimSpace(stderr.String()))
 	}
 	result := strings.TrimSpace(string(out))
 	if onChunk != nil {

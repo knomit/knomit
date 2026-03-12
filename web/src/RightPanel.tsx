@@ -10,6 +10,62 @@ interface Props {
   dispatch: Dispatch<Action>;
 }
 
+function TagCloud({ label, entries, color, searchPrefix, onSearch }: {
+  label: string;
+  entries: [string, number][] | string[];
+  color: string; // e.g. '119,204,153' or '136,170,255'
+  searchPrefix: string; // e.g. 'domain:' or 'entity:'
+  onSearch: (query: string) => void;
+}) {
+  if (entries.length === 0) return null;
+
+  // Normalize: if entries are strings (flat list), convert to [name, 1] pairs
+  const items: [string, number][] = typeof entries[0] === 'string'
+    ? (entries as string[]).map(s => [s, 1])
+    : entries as [string, number][];
+  const max = items[0][1];
+  const weighted = items.some(([, n]) => n !== items[0][1]);
+
+  return (
+    <div style={{ marginBottom: 22 }}>
+      <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: 1.5, color: '#555', marginBottom: 10 }}>{label}</div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+        {items.map(([name, n]) => {
+          const ratio = max > 0 ? n / max : 1;
+          const accent = `rgba(${color},`;
+          return (
+            <span key={name} onClick={() => onSearch(`${searchPrefix}${name}`)}
+              style={{
+                display: 'inline-flex', alignItems: 'center', gap: 5, cursor: 'pointer',
+                padding: weighted && ratio >= 0.75 ? '5px 11px' : weighted ? '4px 9px' : '5px 11px',
+                borderRadius: 6,
+                background: weighted && ratio < 0.5 ? 'rgba(26,26,42,0.6)' : '#1a1a2a',
+                border: `1px solid ${accent}${weighted ? (ratio >= 0.75 ? 0.3 : ratio >= 0.5 ? 0.2 : 0.1) : 0.2})`,
+                transition: 'border-color 0.15s, opacity 0.15s',
+              }}
+              onMouseEnter={e => { (e.currentTarget as HTMLElement).style.borderColor = `${accent}0.5)`; }}
+              onMouseLeave={e => { (e.currentTarget as HTMLElement).style.borderColor = `${accent}${weighted ? (ratio >= 0.75 ? 0.3 : ratio >= 0.5 ? 0.2 : 0.1) : 0.2})`; }}
+            >
+              <span style={{
+                fontSize: weighted && ratio >= 0.5 ? 12 : weighted ? 11 : 12,
+                fontWeight: weighted && ratio >= 0.75 ? 600 : 'normal',
+                color: !weighted || ratio >= 0.5 ? `rgb(${color})` : `${accent}0.6)`,
+              }}>{name}</span>
+              {weighted && (
+                <span style={{
+                  fontSize: 9, borderRadius: 10, padding: '1px 5px', fontWeight: 600,
+                  color: ratio >= 0.5 ? '#111' : `${accent}0.5)`,
+                  background: ratio >= 0.75 ? `rgb(${color})` : ratio >= 0.5 ? `${accent}0.8)` : `${accent}0.15)`,
+                }}>{n}</span>
+              )}
+            </span>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 export function RightPanel({ state, dispatch }: Props) {
   const [fact, setFact] = useState<Fact | null>(null);
   const [history, setHistory] = useState<HistoryEntry[]>([]);
@@ -25,7 +81,9 @@ export function RightPanel({ state, dispatch }: Props) {
     } else if (state.rightMode === 'summary') {
       api.stats(state.previewPath ?? state.currentPath).then(setStats).catch(() => setStats(null));
     }
-  }, [state.rightMode, state.selectedFact, state.currentPath, state.previewPath]);
+  }, [state.rightMode, state.selectedFact, state.currentPath, state.previewPath, state.headCommit]);
+
+  const search = (q: string) => dispatch({ type: 'SEARCH', query: q });
 
   if (error) return <div style={{ padding: 24, color: '#f44' }}>{error}</div>;
 
@@ -59,81 +117,8 @@ export function RightPanel({ state, dispatch }: Props) {
               </div>
             </div>
 
-            {/* Domains */}
-            {domainEntries.length > 0 && (
-              <div style={{ marginBottom: 22 }}>
-                <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: 1.5, color: '#555', marginBottom: 10 }}>Domains</div>
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                  {domainEntries.map(([d, n]) => {
-                    const max = domainEntries[0][1];
-                    const ratio = n / max;
-                    return (
-                      <span key={d} onClick={() => dispatch({ type: 'SEARCH', query: `domain:${d}` })}
-                        style={{
-                          display: 'inline-flex', alignItems: 'center', gap: 5, cursor: 'pointer',
-                          padding: ratio >= 0.75 ? '5px 11px' : '4px 9px',
-                          borderRadius: 6,
-                          background: ratio >= 0.5 ? '#1a1a2a' : 'rgba(26,26,42,0.6)',
-                          border: `1px solid rgba(119,204,153,${ratio >= 0.75 ? 0.3 : ratio >= 0.5 ? 0.2 : 0.1})`,
-                          transition: 'border-color 0.15s, opacity 0.15s',
-                        }}
-                        onMouseEnter={e => { (e.currentTarget as HTMLElement).style.borderColor = 'rgba(119,204,153,0.5)'; }}
-                        onMouseLeave={e => { (e.currentTarget as HTMLElement).style.borderColor = `rgba(119,204,153,${ratio >= 0.75 ? 0.3 : ratio >= 0.5 ? 0.2 : 0.1})`; }}
-                      >
-                        <span style={{
-                          fontSize: ratio >= 0.5 ? 12 : 11,
-                          fontWeight: ratio >= 0.75 ? 600 : 'normal',
-                          color: ratio >= 0.5 ? '#7c9' : 'rgba(119,204,153,0.6)',
-                        }}>{d}</span>
-                        <span style={{
-                          fontSize: 9, borderRadius: 10, padding: '1px 5px', fontWeight: 600,
-                          color: ratio >= 0.5 ? '#111' : 'rgba(119,204,153,0.5)',
-                          background: ratio >= 0.75 ? '#7c9' : ratio >= 0.5 ? 'rgba(119,204,153,0.8)' : 'rgba(119,204,153,0.15)',
-                        }}>{n}</span>
-                      </span>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
-
-            {/* Entities */}
-            {entityEntries.length > 0 && (
-              <div>
-                <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: 1.5, color: '#555', marginBottom: 10 }}>Entities</div>
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                  {entityEntries.map(([e, n]) => {
-                    const max = entityEntries[0][1];
-                    const ratio = n / max;
-                    return (
-                      <span key={e} onClick={() => dispatch({ type: 'SEARCH', query: `entity:${e}` })}
-                        style={{
-                          display: 'inline-flex', alignItems: 'center', gap: 5, cursor: 'pointer',
-                          padding: ratio >= 0.75 ? '5px 11px' : '4px 9px',
-                          borderRadius: 6,
-                          background: ratio >= 0.5 ? '#1a1a2a' : 'rgba(26,26,42,0.6)',
-                          border: `1px solid rgba(136,170,255,${ratio >= 0.75 ? 0.3 : ratio >= 0.5 ? 0.2 : 0.1})`,
-                          transition: 'border-color 0.15s, opacity 0.15s',
-                        }}
-                        onMouseEnter={e => { (e.currentTarget as HTMLElement).style.borderColor = 'rgba(136,170,255,0.5)'; }}
-                        onMouseLeave={e => { (e.currentTarget as HTMLElement).style.borderColor = `rgba(136,170,255,${ratio >= 0.75 ? 0.3 : ratio >= 0.5 ? 0.2 : 0.1})`; }}
-                      >
-                        <span style={{
-                          fontSize: ratio >= 0.5 ? 12 : 11,
-                          fontWeight: ratio >= 0.75 ? 600 : 'normal',
-                          color: ratio >= 0.5 ? '#8af' : 'rgba(136,170,255,0.6)',
-                        }}>{e}</span>
-                        <span style={{
-                          fontSize: 9, borderRadius: 10, padding: '1px 5px', fontWeight: 600,
-                          color: ratio >= 0.5 ? '#111' : 'rgba(136,170,255,0.5)',
-                          background: ratio >= 0.75 ? '#8af' : ratio >= 0.5 ? 'rgba(136,170,255,0.8)' : 'rgba(136,170,255,0.15)',
-                        }}>{n}</span>
-                      </span>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
+            <TagCloud label="Domains" entries={domainEntries} color="119,204,153" searchPrefix="domain:" onSearch={search} />
+            <TagCloud label="Entities" entries={entityEntries} color="136,170,255" searchPrefix="entity:" onSearch={search} />
           </>
         ) : <div style={{ color: '#666' }}>No facts indexed in this path.</div>}
       </div>
@@ -193,51 +178,8 @@ export function RightPanel({ state, dispatch }: Props) {
         <ReactMarkdown>{fact.body || ''}</ReactMarkdown>
       </div>
 
-      {/* Domains */}
-      {fact.domain?.length > 0 && (
-        <div style={{ marginBottom: 22 }}>
-          <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: 1.5, color: '#555', marginBottom: 10 }}>Domains</div>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-            {fact.domain.map(d => (
-              <span key={d} onClick={() => dispatch({ type: 'SEARCH', query: `domain:${d}` })}
-                style={{
-                  display: 'inline-flex', alignItems: 'center', gap: 5, cursor: 'pointer',
-                  padding: '5px 11px', borderRadius: 6,
-                  background: '#1a1a2a', border: '1px solid rgba(119,204,153,0.2)',
-                  transition: 'border-color 0.15s',
-                }}
-                onMouseEnter={e => { (e.currentTarget as HTMLElement).style.borderColor = 'rgba(119,204,153,0.5)'; }}
-                onMouseLeave={e => { (e.currentTarget as HTMLElement).style.borderColor = 'rgba(119,204,153,0.2)'; }}
-              >
-                <span style={{ fontSize: 12, color: '#7c9' }}>{d}</span>
-              </span>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Entities */}
-      {fact.entities?.length > 0 && (
-        <div style={{ marginBottom: 22 }}>
-          <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: 1.5, color: '#555', marginBottom: 10 }}>Entities</div>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-            {fact.entities.map(e => (
-              <span key={e} onClick={() => dispatch({ type: 'SEARCH', query: `entity:${e}` })}
-                style={{
-                  display: 'inline-flex', alignItems: 'center', gap: 5, cursor: 'pointer',
-                  padding: '5px 11px', borderRadius: 6,
-                  background: '#1a1a2a', border: '1px solid rgba(136,170,255,0.2)',
-                  transition: 'border-color 0.15s',
-                }}
-                onMouseEnter={e => { (e.currentTarget as HTMLElement).style.borderColor = 'rgba(136,170,255,0.5)'; }}
-                onMouseLeave={e => { (e.currentTarget as HTMLElement).style.borderColor = 'rgba(136,170,255,0.2)'; }}
-              >
-                <span style={{ fontSize: 12, color: '#8af' }}>{e}</span>
-              </span>
-            ))}
-          </div>
-        </div>
-      )}
+      <TagCloud label="Domains" entries={fact.domain || []} color="119,204,153" searchPrefix="domain:" onSearch={search} />
+      <TagCloud label="Entities" entries={fact.entities || []} color="136,170,255" searchPrefix="entity:" onSearch={search} />
 
       {/* Refs */}
       {fact.refs?.length > 0 && (

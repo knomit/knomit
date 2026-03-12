@@ -245,5 +245,5 @@ Knomit is tolerant of manually committed files — malformed facts are silently 
 cd src
 bun test              # run tests
 bun index.ts          # run TUI in dev mode
-bun ../scripts/seed.ts    # seed test data (20 facts across 5 learning moments)
+go run ./tools/seed/      # seed test data (requires knomit serve running)
 ```

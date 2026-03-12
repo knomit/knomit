@@ -277,6 +277,16 @@ func handleStatus(gs GitStore, idx SearchIndex, embeddingsEnabled bool) http.Han
 	}
 }
 
+// writeTaskStarted writes a 200 response for a successfully started task.
+func writeTaskStarted(w http.ResponseWriter, op, id string) {
+	writeJSON(w, http.StatusOK, map[string]any{"op": op, "id": id, "status": "running"})
+}
+
+// writeTaskConflict writes a 409 response when a task is already running.
+func writeTaskConflict(w http.ResponseWriter, op string, err error) {
+	writeJSON(w, http.StatusConflict, map[string]any{"op": op, "status": "error", "message": err.Error()})
+}
+
 // handleSynthesizeStart handles POST /api/v1/synthesize
 func handleSynthesizeStart(deps *SynthDeps, hub *TaskHub) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -323,19 +333,11 @@ func handleSynthesizeStart(deps *SynthDeps, hub *TaskHub) http.HandlerFunc {
 			emit(TaskEvent{Status: "done", Message: "synthesis complete"})
 		})
 		if err != nil {
-			writeJSON(w, http.StatusConflict, map[string]any{
-				"op":      "synth",
-				"status":  "error",
-				"message": err.Error(),
-			})
+			writeTaskConflict(w, "synth", err)
 			return
 		}
 
-		writeJSON(w, http.StatusOK, map[string]any{
-			"op":     "synth",
-			"id":     id,
-			"status": "running",
-		})
+		writeTaskStarted(w, "synth", id)
 	}
 }
 
@@ -364,19 +366,11 @@ func handleSync(gs GitStore, hub *TaskHub) http.HandlerFunc {
 			emit(TaskEvent{Status: "done", Message: fmt.Sprintf("%s (%s)", msg, head[:min(7, len(head))])})
 		})
 		if err != nil {
-			writeJSON(w, http.StatusConflict, map[string]any{
-				"op":      "sync",
-				"status":  "error",
-				"message": err.Error(),
-			})
+			writeTaskConflict(w, "sync", err)
 			return
 		}
 
-		writeJSON(w, http.StatusOK, map[string]any{
-			"op":     "sync",
-			"id":     id,
-			"status": "running",
-		})
+		writeTaskStarted(w, "sync", id)
 	}
 }
 

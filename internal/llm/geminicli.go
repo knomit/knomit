@@ -29,7 +29,7 @@ func (a *GeminiCLIAdapter) Complete(ctx context.Context, system string, msgs []M
 
 	// Use stdin for prompt content; -p "" triggers headless mode
 	args := []string{"-p", ""}
-	if a.model != "" && a.model != "auto" {
+	if strings.HasPrefix(a.model, "gemini-") {
 		args = append(args, "--model", a.model)
 	}
 
@@ -37,9 +37,11 @@ func (a *GeminiCLIAdapter) Complete(ctx context.Context, system string, msgs []M
 
 	cmd := exec.CommandContext(ctx, "gemini", args...)
 	cmd.Stdin = strings.NewReader(stdinContent)
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
 	out, err := cmd.Output()
 	if err != nil {
-		return "", fmt.Errorf("geminicli: %w", err)
+		return "", fmt.Errorf("geminicli: %w: %s", err, strings.TrimSpace(stderr.String()))
 	}
 	result := strings.TrimSpace(string(out))
 	if onChunk != nil {

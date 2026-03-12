@@ -9,12 +9,16 @@ interface Props {
 export function StatusBar({ state, dispatch }: Props) {
   const clearTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
 
-  const activeTask = Object.entries(state.tasks).find(([, t]) => t.status === 'running');
-  const errorTask = Object.entries(state.tasks).find(([, t]) => t.status === 'error');
-  const doneTask = Object.entries(state.tasks).find(([, t]) => t.status === 'done');
-
-  const displayTask = activeTask || errorTask || doneTask;
-  const [taskOp, taskState] = displayTask || [null, null];
+  // Single pass: pick the highest-priority non-idle task (running > error > done).
+  let taskOp: string | null = null;
+  let taskState: { status: string; message: string } | null = null;
+  for (const [op, t] of Object.entries(state.tasks)) {
+    if (t.status === 'idle') continue;
+    if (!taskState || t.status === 'running' || (t.status === 'error' && taskState.status !== 'running')) {
+      taskOp = op;
+      taskState = t;
+    }
+  }
 
   useEffect(() => {
     clearTimeout(clearTimer.current);

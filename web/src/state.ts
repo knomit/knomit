@@ -1,5 +1,12 @@
 export type RightMode = 'summary' | 'fact' | 'history';
 
+export interface ConsoleEntry {
+  id: number;
+  time: number; // Date.now()
+  level: 'info' | 'error';
+  message: string;
+}
+
 export interface AppState {
   currentPath: string;
   selectedFact: string | null;
@@ -12,6 +19,9 @@ export interface AppState {
   branch: string;
   embeddingsEnabled: boolean;
   statusMessage: string;
+  consoleEntries: ConsoleEntry[];
+  consoleOpen: boolean;
+  consoleHeight: number; // pixels
 }
 
 export type Action =
@@ -28,7 +38,10 @@ export type Action =
   | { type: 'SET_TASK'; op: string; status: 'idle' | 'running' | 'done' | 'error'; message: string }
   | { type: 'SET_STATUS'; head: string; branch: string; embeddingsEnabled: boolean }
   | { type: 'SET_HEAD'; head: string }
-  | { type: 'SET_STATUS_MESSAGE'; message: string };
+  | { type: 'SET_STATUS_MESSAGE'; message: string }
+  | { type: 'CONSOLE_LOG'; level: 'info' | 'error'; message: string }
+  | { type: 'CONSOLE_TOGGLE' }
+  | { type: 'CONSOLE_SET_HEIGHT'; height: number };
 
 export const init: AppState = {
   currentPath: 'know',
@@ -42,6 +55,9 @@ export const init: AppState = {
   branch: '',
   embeddingsEnabled: false,
   statusMessage: '',
+  consoleEntries: [],
+  consoleOpen: false,
+  consoleHeight: 200,
 };
 
 export function reducer(s: AppState, a: Action): AppState {
@@ -60,10 +76,22 @@ export function reducer(s: AppState, a: Action): AppState {
     case 'SHOW_HISTORY': return { ...s, rightMode: 'history' };
     case 'SHOW_FACT': return { ...s, rightMode: 'fact' };
     case 'SET_LOADING': return { ...s, loading: a.value };
-    case 'SET_TASK': return { ...s, tasks: { ...s.tasks, [a.op]: { status: a.status, message: a.message } } };
+    case 'SET_TASK': {
+      const cur = s.tasks[a.op];
+      if (cur && cur.status === a.status && cur.message === a.message) return s;
+      return { ...s, tasks: { ...s.tasks, [a.op]: { status: a.status, message: a.message } } };
+    }
     case 'SET_STATUS': return { ...s, headCommit: a.head, branch: a.branch, embeddingsEnabled: a.embeddingsEnabled };
     case 'SET_HEAD': return { ...s, headCommit: a.head };
     case 'SET_STATUS_MESSAGE': return { ...s, statusMessage: a.message };
+    case 'CONSOLE_LOG': {
+      const entry: ConsoleEntry = { id: Date.now() + Math.random(), time: Date.now(), level: a.level, message: a.message };
+      const entries = [...s.consoleEntries, entry];
+      if (entries.length > 500) entries.splice(0, entries.length - 500);
+      return { ...s, consoleEntries: entries };
+    }
+    case 'CONSOLE_TOGGLE': return { ...s, consoleOpen: !s.consoleOpen };
+    case 'CONSOLE_SET_HEIGHT': return { ...s, consoleHeight: Math.max(80, Math.min(a.height, 600)) };
     default: return s;
   }
 }

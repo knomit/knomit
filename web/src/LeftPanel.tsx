@@ -15,35 +15,51 @@ export function LeftPanel({ state, dispatch }: Props) {
   const [selectedIdx, setSelectedIdx] = useState(0);
   const searchRef = useRef<HTMLInputElement>(null);
   const itemRefs = useRef<(HTMLDivElement | null)[]>([]);
+  const prevPathRef = useRef(state.currentPath);
+  const prevSearchRef = useRef(state.searchQuery);
 
   // Load directory listing; auto-preview first item so right panel is always in sync
+  // Re-fetches when headCommit changes (e.g. after sync) but preserves selection
   useEffect(() => {
     if (state.searchQuery) return;
+    const isHeadChangeOnly = state.currentPath === prevPathRef.current && state.searchQuery === prevSearchRef.current;
+    prevPathRef.current = state.currentPath;
+    prevSearchRef.current = state.searchQuery;
     api.browse(state.currentPath).then(r => {
       const c = r.children || [];
       setChildren(c);
-      setSelectedIdx(0);
-      if (c.length > 0) {
-        if (c[0].is_dir) dispatch({ type: 'PREVIEW_DIR', path: `${state.currentPath}/${c[0].name}` });
-        else dispatch({ type: 'SELECT_FACT', path: `${state.currentPath}/${c[0].name}` });
+      if (!isHeadChangeOnly) {
+        setSelectedIdx(0);
+        if (c.length > 0) {
+          if (c[0].is_dir) dispatch({ type: 'PREVIEW_DIR', path: `${state.currentPath}/${c[0].name}` });
+          else dispatch({ type: 'SELECT_FACT', path: `${state.currentPath}/${c[0].name}` });
+        }
       }
     }).catch(() => setChildren([]));
-  }, [state.currentPath, state.searchQuery]);
+  }, [state.currentPath, state.searchQuery, state.headCommit]);
 
-  // Search
+  // Search — re-runs when headCommit changes to refresh results
   useEffect(() => {
     if (!state.searchQuery) { setSearchResults([]); return; }
+    const isHeadChangeOnly = state.searchQuery === prevSearchRef.current;
+    prevSearchRef.current = state.searchQuery;
+    const savedIdx = selectedIdx;
     setSelectedIdx(0);
     const t = setTimeout(() => {
       api.search(state.searchQuery).then(r => {
         const results = r.results || [];
         setSearchResults(results);
-        setSelectedIdx(0);
-        if (results.length > 0) dispatch({ type: 'SELECT_FACT', path: results[0].path });
+        if (isHeadChangeOnly) {
+          // Preserve selection position, clamped to new results length
+          setSelectedIdx(Math.min(savedIdx, results.length - 1));
+        } else {
+          setSelectedIdx(0);
+          if (results.length > 0) dispatch({ type: 'SELECT_FACT', path: results[0].path });
+        }
       }).catch(() => setSearchResults([]));
     }, 300);
     return () => clearTimeout(t);
-  }, [state.searchQuery]);
+  }, [state.searchQuery, state.headCommit]);
 
   const listLen = () => state.searchQuery ? searchResults.length : children.length;
 

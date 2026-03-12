@@ -18,18 +18,16 @@ type TaskEvent struct {
 	Message string `json:"message,omitempty"`
 }
 
-// TaskHub manages async tasks with per-op concurrency control and SSE broadcasting.
+// TaskHub manages async tasks with per-op single-flight control and SSE broadcasting.
 type TaskHub struct {
 	mu       sync.Mutex
 	ctx      context.Context
 	cancel   context.CancelFunc
 	ob       *goob.Observable
-	active   map[string]TaskEvent // op → latest running event
-	lastDone map[string]TaskEvent // op → last terminal event
-	maxConc  map[string]int       // op → max concurrent
+	active   map[string]TaskEvent           // op → latest running event
+	lastDone map[string]TaskEvent           // op → last terminal event
+	cancels  map[string]context.CancelFunc  // taskID → cancel
 	counter  int
-	// cancels tracks per-task cancel functions so Shutdown can stop all tasks
-	cancels map[string]context.CancelFunc // taskID → cancel
 }
 
 // NewTaskHub creates a TaskHub. The provided context is the parent for all task goroutines.
@@ -41,7 +39,6 @@ func NewTaskHub(ctx context.Context) *TaskHub {
 		ob:       goob.New(taskCtx),
 		active:   make(map[string]TaskEvent),
 		lastDone: make(map[string]TaskEvent),
-		maxConc:  map[string]int{"sync": 1, "synth": 1},
 		cancels:  make(map[string]context.CancelFunc),
 	}
 }
@@ -50,11 +47,6 @@ func NewTaskHub(ctx context.Context) *TaskHub {
 func (h *TaskHub) Start(op string, fn func(ctx context.Context, emit func(TaskEvent))) (string, error) {
 	h.mu.Lock()
 
-	// Check concurrency
-	max := h.maxConc[op]
-	if max == 0 {
-		max = 1
-	}
 	if existing, running := h.active[op]; running {
 		h.mu.Unlock()
 		return "", fmt.Errorf("%s is already running (%s)", op, existing.ID)
@@ -100,7 +92,14 @@ func (h *TaskHub) Start(op string, fn func(ctx context.Context, emit func(TaskEv
 		}
 	}
 
-	go fn(taskCtx, emit)
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				emit(TaskEvent{Status: "error", Message: fmt.Sprintf("panic: %v", r)})
+			}
+		}()
+		fn(taskCtx, emit)
+	}()
 
 	return id, nil
 }
