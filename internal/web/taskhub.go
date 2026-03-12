@@ -55,8 +55,7 @@ func (h *TaskHub) Start(op string, fn func(ctx context.Context, emit func(TaskEv
 	if max == 0 {
 		max = 1
 	}
-	if _, running := h.active[op]; running {
-		existing := h.active[op]
+	if existing, running := h.active[op]; running {
 		h.mu.Unlock()
 		return "", fmt.Errorf("%s is already running (%s)", op, existing.ID)
 	}

@@ -178,6 +178,7 @@ func TestTaskHub_EmitIgnoredAfterTerminal(t *testing.T) {
 
 func TestTaskHub_Shutdown(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	hub := NewTaskHub(ctx)
 
 	taskCtxDone := make(chan struct{})
@@ -190,7 +191,7 @@ func TestTaskHub_Shutdown(t *testing.T) {
 	// Give task goroutine time to start
 	time.Sleep(50 * time.Millisecond)
 
-	cancel() // triggers Shutdown via context cancellation
+	hub.Shutdown()
 
 	select {
 	case <-taskCtxDone:
