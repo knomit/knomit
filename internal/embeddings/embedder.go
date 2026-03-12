@@ -65,7 +65,7 @@ func NewEmbedder(modelPath, tokenizerPath string) (*Embedder, error) {
 		return nil, fmt.Errorf("load tokenizer: %w", err)
 	}
 
-	inputNames := []string{"input_ids", "attention_mask"}
+	inputNames := []string{"input_ids", "attention_mask", "token_type_ids"}
 	outputNames := []string{"last_hidden_state"}
 
 	session, err := ort.NewDynamicAdvancedSession(modelPath, inputNames, outputNames, nil)
@@ -86,8 +86,10 @@ func (e *Embedder) Embed(text string) ([]float32, error) {
 	shape := ort.NewShape(1, seqLen)
 
 	// Convert int32 slices to int64 for the model.
+	// token_type_ids are all zeros (single-segment input).
 	ids64 := make([]int64, seqLen)
 	mask64 := make([]int64, seqLen)
+	types64 := make([]int64, seqLen) // all zeros
 	for i := int64(0); i < seqLen; i++ {
 		ids64[i] = int64(inputIDs[i])
 		mask64[i] = int64(attentionMask[i])
@@ -105,6 +107,12 @@ func (e *Embedder) Embed(text string) ([]float32, error) {
 	}
 	defer maskTensor.Destroy()
 
+	typesTensor, err := ort.NewTensor(shape, types64)
+	if err != nil {
+		return nil, fmt.Errorf("new token_type_ids tensor: %w", err)
+	}
+	defer typesTensor.Destroy()
+
 	// Output shape: [1, seqLen, 768] — pre-allocate.
 	const dims = 768
 	outputShape := ort.NewShape(1, seqLen, dims)
@@ -115,7 +123,7 @@ func (e *Embedder) Embed(text string) ([]float32, error) {
 	defer outputTensor.Destroy()
 
 	if err := e.session.Run(
-		[]ort.Value{idsTensor, maskTensor},
+		[]ort.Value{idsTensor, maskTensor, typesTensor},
 		[]ort.Value{outputTensor},
 	); err != nil {
 		return nil, fmt.Errorf("onnx run: %w", err)
