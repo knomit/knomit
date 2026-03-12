@@ -23,37 +23,117 @@ export function RightPanel({ state, dispatch }: Props) {
     } else if (state.rightMode === 'history' && state.selectedFact) {
       api.history(state.selectedFact).then(r => setHistory(r.entries || [])).catch(e => setError(String(e)));
     } else if (state.rightMode === 'summary') {
-      api.stats(state.currentPath).then(setStats).catch(() => setStats(null));
+      api.stats(state.previewPath ?? state.currentPath).then(setStats).catch(() => setStats(null));
     }
-  }, [state.rightMode, state.selectedFact, state.currentPath]);
+  }, [state.rightMode, state.selectedFact, state.currentPath, state.previewPath]);
 
   if (error) return <div style={{ padding: 24, color: '#f44' }}>{error}</div>;
 
   if (state.rightMode === 'summary') {
+    const domainEntries = stats ? Object.entries(stats.domains).sort((a, b) => b[1] - a[1]).slice(0, 10) : [];
+    const entityEntries = stats ? Object.entries(stats.entities).sort((a, b) => b[1] - a[1]).slice(0, 10) : [];
+    const domainCount = stats ? Object.keys(stats.domains).length : 0;
+
     return (
-      <div style={{ padding: 24, overflowY: 'auto', height: '100%', boxSizing: 'border-box' }}>
-        <h2 style={{ color: '#aaa', fontSize: 16, marginBottom: 16 }}>{state.currentPath}</h2>
+      <div style={{ padding: '24px 28px', overflowY: 'auto', height: '100%', boxSizing: 'border-box' }}>
         {stats ? (
           <>
-            <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginBottom: 24 }}>
-              {([['Total facts', stats.total], ['Avg confidence', stats.avg_confidence.toFixed(2)]] as [string, string | number][]).map(([label, value]) => (
-                <div key={String(label)} style={{ background: '#1e1e2e', border: '1px solid #333', borderRadius: 8, padding: '12px 20px', minWidth: 120 }}>
-                  <div style={{ color: '#666', fontSize: 11, marginBottom: 4 }}>{label}</div>
-                  <div style={{ color: '#eee', fontSize: 22, fontWeight: 'bold' }}>{value}</div>
-                </div>
-              ))}
+            {/* Summary line */}
+            <div style={{ fontSize: 12, color: '#555', marginBottom: 20 }}>
+              {stats.total} facts across {domainCount} domains
             </div>
-            <div style={{ marginBottom: 16 }}>
-              <div style={{ color: '#666', fontSize: 11, marginBottom: 8 }}>TOP DOMAINS</div>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-                {Object.entries(stats.domains).sort((a, b) => b[1] - a[1]).slice(0, 10).map(([d, n]) => (
-                  <span key={d} onClick={() => dispatch({ type: 'SEARCH', query: d })}
-                    style={{ background: '#2a2a3a', color: '#adf', padding: '4px 10px', borderRadius: 20, fontSize: 12, cursor: 'pointer' }}>
-                    {d} ({n})
-                  </span>
-                ))}
+
+            {/* Stat cards */}
+            <div style={{ display: 'flex', gap: 10, marginBottom: 28 }}>
+              <div style={{ borderLeft: '3px solid #7c9', padding: '10px 16px', background: '#1a1a2a', borderRadius: '0 6px 6px 0', minWidth: 90 }}>
+                <div style={{ fontSize: 10, color: '#666', textTransform: 'uppercase', letterSpacing: 1 }}>Facts</div>
+                <div style={{ fontSize: 22, fontWeight: 600, color: '#eee', marginTop: 2 }}>{stats.total}</div>
+              </div>
+              <div style={{ borderLeft: '3px solid #8af', padding: '10px 16px', background: '#1a1a2a', borderRadius: '0 6px 6px 0', minWidth: 90 }}>
+                <div style={{ fontSize: 10, color: '#666', textTransform: 'uppercase', letterSpacing: 1 }}>Confidence</div>
+                <div style={{ fontSize: 22, fontWeight: 600, color: '#eee', marginTop: 2 }}>{stats.avg_confidence.toFixed(2)}</div>
+              </div>
+              <div style={{ borderLeft: '3px solid #fa8', padding: '10px 16px', background: '#1a1a2a', borderRadius: '0 6px 6px 0', minWidth: 90 }}>
+                <div style={{ fontSize: 10, color: '#666', textTransform: 'uppercase', letterSpacing: 1 }}>Domains</div>
+                <div style={{ fontSize: 22, fontWeight: 600, color: '#eee', marginTop: 2 }}>{domainCount}</div>
               </div>
             </div>
+
+            {/* Domains */}
+            {domainEntries.length > 0 && (
+              <div style={{ marginBottom: 22 }}>
+                <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: 1.5, color: '#555', marginBottom: 10 }}>Domains</div>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                  {domainEntries.map(([d, n]) => {
+                    const max = domainEntries[0][1];
+                    const ratio = n / max;
+                    return (
+                      <span key={d} onClick={() => dispatch({ type: 'SEARCH', query: `domain:${d}` })}
+                        style={{
+                          display: 'inline-flex', alignItems: 'center', gap: 5, cursor: 'pointer',
+                          padding: ratio >= 0.75 ? '5px 11px' : '4px 9px',
+                          borderRadius: 6,
+                          background: ratio >= 0.5 ? '#1a1a2a' : 'rgba(26,26,42,0.6)',
+                          border: `1px solid rgba(119,204,153,${ratio >= 0.75 ? 0.3 : ratio >= 0.5 ? 0.2 : 0.1})`,
+                          transition: 'border-color 0.15s, opacity 0.15s',
+                        }}
+                        onMouseEnter={e => { (e.currentTarget as HTMLElement).style.borderColor = 'rgba(119,204,153,0.5)'; }}
+                        onMouseLeave={e => { (e.currentTarget as HTMLElement).style.borderColor = `rgba(119,204,153,${ratio >= 0.75 ? 0.3 : ratio >= 0.5 ? 0.2 : 0.1})`; }}
+                      >
+                        <span style={{
+                          fontSize: ratio >= 0.5 ? 12 : 11,
+                          fontWeight: ratio >= 0.75 ? 600 : 'normal',
+                          color: ratio >= 0.5 ? '#7c9' : 'rgba(119,204,153,0.6)',
+                        }}>{d}</span>
+                        <span style={{
+                          fontSize: 9, borderRadius: 10, padding: '1px 5px', fontWeight: 600,
+                          color: ratio >= 0.5 ? '#111' : 'rgba(119,204,153,0.5)',
+                          background: ratio >= 0.75 ? '#7c9' : ratio >= 0.5 ? 'rgba(119,204,153,0.8)' : 'rgba(119,204,153,0.15)',
+                        }}>{n}</span>
+                      </span>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* Entities */}
+            {entityEntries.length > 0 && (
+              <div>
+                <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: 1.5, color: '#555', marginBottom: 10 }}>Entities</div>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                  {entityEntries.map(([e, n]) => {
+                    const max = entityEntries[0][1];
+                    const ratio = n / max;
+                    return (
+                      <span key={e} onClick={() => dispatch({ type: 'SEARCH', query: `entity:${e}` })}
+                        style={{
+                          display: 'inline-flex', alignItems: 'center', gap: 5, cursor: 'pointer',
+                          padding: ratio >= 0.75 ? '5px 11px' : '4px 9px',
+                          borderRadius: 6,
+                          background: ratio >= 0.5 ? '#1a1a2a' : 'rgba(26,26,42,0.6)',
+                          border: `1px solid rgba(136,170,255,${ratio >= 0.75 ? 0.3 : ratio >= 0.5 ? 0.2 : 0.1})`,
+                          transition: 'border-color 0.15s, opacity 0.15s',
+                        }}
+                        onMouseEnter={e => { (e.currentTarget as HTMLElement).style.borderColor = 'rgba(136,170,255,0.5)'; }}
+                        onMouseLeave={e => { (e.currentTarget as HTMLElement).style.borderColor = `rgba(136,170,255,${ratio >= 0.75 ? 0.3 : ratio >= 0.5 ? 0.2 : 0.1})`; }}
+                      >
+                        <span style={{
+                          fontSize: ratio >= 0.5 ? 12 : 11,
+                          fontWeight: ratio >= 0.75 ? 600 : 'normal',
+                          color: ratio >= 0.5 ? '#8af' : 'rgba(136,170,255,0.6)',
+                        }}>{e}</span>
+                        <span style={{
+                          fontSize: 9, borderRadius: 10, padding: '1px 5px', fontWeight: 600,
+                          color: ratio >= 0.5 ? '#111' : 'rgba(136,170,255,0.5)',
+                          background: ratio >= 0.75 ? '#8af' : ratio >= 0.5 ? 'rgba(136,170,255,0.8)' : 'rgba(136,170,255,0.15)',
+                        }}>{n}</span>
+                      </span>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
           </>
         ) : <div style={{ color: '#666' }}>No facts indexed in this path.</div>}
       </div>
@@ -87,45 +167,72 @@ export function RightPanel({ state, dispatch }: Props) {
   if (!fact) return <div style={{ padding: 24, color: '#666' }}>Select a fact to view.</div>;
 
   return (
-    <div style={{ padding: 24, overflowY: 'auto', height: '100%', boxSizing: 'border-box' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16 }}>
-        <h1 style={{ color: '#eee', fontSize: 20, margin: 0, flex: 1 }}>{fact.title || fact.path}</h1>
-        <button onClick={() => dispatch({ type: 'SHOW_HISTORY' })}
-          style={{ background: '#333', color: '#aaa', border: 'none', padding: '4px 10px', borderRadius: 4, cursor: 'pointer', fontSize: 12, marginLeft: 12 }}>
-          History
-        </button>
+    <div style={{ padding: '24px 28px', overflowY: 'auto', height: '100%', boxSizing: 'border-box' }}>
+      {/* Header */}
+      <div style={{ marginBottom: 20 }}>
+        <div style={{ fontSize: 18, fontWeight: 600, color: '#eee', letterSpacing: '-0.3px' }}>
+          {fact.title || fact.path}
+        </div>
+        <div style={{ fontSize: 12, color: '#555', marginTop: 2 }}>{fact.path}</div>
       </div>
 
-      {/* Metadata */}
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 16 }}>
-        {fact.domain?.map(d => (
-          <span key={d} onClick={() => dispatch({ type: 'SEARCH', query: d })}
-            style={{ background: '#2a3a2a', color: '#8c8', padding: '3px 10px', borderRadius: 20, fontSize: 11, cursor: 'pointer' }}>
-            {d}
-          </span>
-        ))}
-        <span style={{ background: '#1a1a1a', color: '#888', padding: '3px 10px', borderRadius: 20, fontSize: 11 }}>
-          confidence: {fact.confidence?.toFixed(2)}
-        </span>
-        <span style={{ background: '#1a1a1a', color: '#888', padding: '3px 10px', borderRadius: 20, fontSize: 11 }}>
-          sources: {fact.sources}
-        </span>
+      {/* Stat cards */}
+      <div style={{ display: 'flex', gap: 10, marginBottom: 28 }}>
+        <div style={{ borderLeft: '3px solid #8af', padding: '10px 16px', background: '#1a1a2a', borderRadius: '0 6px 6px 0', minWidth: 90 }}>
+          <div style={{ fontSize: 10, color: '#666', textTransform: 'uppercase', letterSpacing: 1 }}>Confidence</div>
+          <div style={{ fontSize: 22, fontWeight: 600, color: '#eee', marginTop: 2 }}>{fact.confidence?.toFixed(2)}</div>
+        </div>
+        <div style={{ borderLeft: '3px solid #7c9', padding: '10px 16px', background: '#1a1a2a', borderRadius: '0 6px 6px 0', minWidth: 90 }}>
+          <div style={{ fontSize: 10, color: '#666', textTransform: 'uppercase', letterSpacing: 1 }}>Sources</div>
+          <div style={{ fontSize: 22, fontWeight: 600, color: '#eee', marginTop: 2 }}>{fact.sources}</div>
+        </div>
       </div>
 
       {/* Body */}
-      <div style={{ color: '#ccc', lineHeight: 1.7, fontSize: 14, marginBottom: 20 }}>
+      <div style={{ color: '#ccc', lineHeight: 1.7, fontSize: 14, marginBottom: 24 }}>
         <ReactMarkdown>{fact.body || ''}</ReactMarkdown>
       </div>
 
+      {/* Domains */}
+      {fact.domain?.length > 0 && (
+        <div style={{ marginBottom: 22 }}>
+          <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: 1.5, color: '#555', marginBottom: 10 }}>Domains</div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+            {fact.domain.map(d => (
+              <span key={d} onClick={() => dispatch({ type: 'SEARCH', query: `domain:${d}` })}
+                style={{
+                  display: 'inline-flex', alignItems: 'center', gap: 5, cursor: 'pointer',
+                  padding: '5px 11px', borderRadius: 6,
+                  background: '#1a1a2a', border: '1px solid rgba(119,204,153,0.2)',
+                  transition: 'border-color 0.15s',
+                }}
+                onMouseEnter={e => { (e.currentTarget as HTMLElement).style.borderColor = 'rgba(119,204,153,0.5)'; }}
+                onMouseLeave={e => { (e.currentTarget as HTMLElement).style.borderColor = 'rgba(119,204,153,0.2)'; }}
+              >
+                <span style={{ fontSize: 12, color: '#7c9' }}>{d}</span>
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Entities */}
       {fact.entities?.length > 0 && (
-        <div style={{ marginBottom: 16 }}>
-          <div style={{ color: '#555', fontSize: 11, marginBottom: 6 }}>ENTITIES</div>
+        <div style={{ marginBottom: 22 }}>
+          <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: 1.5, color: '#555', marginBottom: 10 }}>Entities</div>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
             {fact.entities.map(e => (
-              <span key={e} onClick={() => dispatch({ type: 'SEARCH', query: e })}
-                style={{ background: '#1a2a3a', color: '#8af', padding: '3px 8px', borderRadius: 4, fontSize: 11, cursor: 'pointer' }}>
-                {e}
+              <span key={e} onClick={() => dispatch({ type: 'SEARCH', query: `entity:${e}` })}
+                style={{
+                  display: 'inline-flex', alignItems: 'center', gap: 5, cursor: 'pointer',
+                  padding: '5px 11px', borderRadius: 6,
+                  background: '#1a1a2a', border: '1px solid rgba(136,170,255,0.2)',
+                  transition: 'border-color 0.15s',
+                }}
+                onMouseEnter={e => { (e.currentTarget as HTMLElement).style.borderColor = 'rgba(136,170,255,0.5)'; }}
+                onMouseLeave={e => { (e.currentTarget as HTMLElement).style.borderColor = 'rgba(136,170,255,0.2)'; }}
+              >
+                <span style={{ fontSize: 12, color: '#8af' }}>{e}</span>
               </span>
             ))}
           </div>
@@ -135,13 +242,21 @@ export function RightPanel({ state, dispatch }: Props) {
       {/* Refs */}
       {fact.refs?.length > 0 && (
         <div>
-          <div style={{ color: '#555', fontSize: 11, marginBottom: 6 }}>REFERENCES</div>
-          {fact.refs.map(ref => {
-            if (ref.startsWith('http://') || ref.startsWith('https://')) {
-              return <div key={ref}><a href={ref} target="_blank" rel="noopener noreferrer" style={{ color: '#68f', fontSize: 12 }}>↗ {ref}</a></div>;
-            }
-            return <div key={ref} style={{ color: '#888', fontSize: 12, fontFamily: 'monospace' }}>{ref}</div>;
-          })}
+          <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: 1.5, color: '#555', marginBottom: 10 }}>References</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            {fact.refs.map(ref => {
+              if (ref.startsWith('http://') || ref.startsWith('https://')) {
+                return (
+                  <a key={ref} href={ref} target="_blank" rel="noopener noreferrer"
+                    style={{ color: '#8af', fontSize: 12, textDecoration: 'none', transition: 'color 0.15s' }}
+                    onMouseEnter={e => { (e.currentTarget as HTMLElement).style.color = '#adf'; }}
+                    onMouseLeave={e => { (e.currentTarget as HTMLElement).style.color = '#8af'; }}
+                  >↗ {ref}</a>
+                );
+              }
+              return <div key={ref} style={{ color: '#888', fontSize: 12, fontFamily: 'monospace' }}>{ref}</div>;
+            })}
+          </div>
         </div>
       )}
     </div>

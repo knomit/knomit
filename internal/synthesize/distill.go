@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/rs/zerolog/log"
 	"knomit/internal/cluster"
 	"knomit/internal/llm"
 	"knomit/internal/mcp"
@@ -96,11 +97,14 @@ func executeDistillStep(ctx context.Context, gs GitStore, idx SearchIndex, embed
 		minCluster = 3
 	}
 
+	log.Debug().Int("max_depth", maxDepth).Int("umap_dims", umapDims).Int("min_cluster", minCluster).Msg("distill: config")
+
 	// Gather initial facts from the index (all facts, no filter).
 	searchResults, err := idx.Search(store.SearchQuery{Limit: 100_000})
 	if err != nil {
 		return fmt.Errorf("distill: search all: %w", err)
 	}
+	log.Debug().Int("facts", len(searchResults)).Msg("distill: gathered facts from index")
 	if len(searchResults) == 0 {
 		onProgress(ProgressEvent{Phase: "distill", Message: "no facts in index"})
 		return nil
@@ -151,6 +155,7 @@ func executeDistillStep(ctx context.Context, gs GitStore, idx SearchIndex, embed
 	allForget := map[string]bool{}
 
 	for depth := 0; depth < maxDepth; depth++ {
+		log.Debug().Int("depth", depth+1).Int("max_depth", maxDepth).Int("facts", len(currentFacts)).Msg("distill: RAPTOR depth")
 		onProgress(ProgressEvent{Phase: "raptor-depth", Message: fmt.Sprintf("%d/%d", depth+1, maxDepth)})
 
 		// Build embedding matrix: only facts that have embeddings.
@@ -272,6 +277,8 @@ func executeDistillStep(ctx context.Context, gs GitStore, idx SearchIndex, embed
 		}
 	}
 
+	log.Info().Int("synthesized", len(allSynthesized)).Int("forgotten", len(allForget)).Msg("distill: committing results")
+
 	// Commit synthesized facts.
 	for _, df := range allSynthesized {
 		fact := mcp.Fact{
@@ -334,6 +341,7 @@ func runDistillOnGroup(ctx context.Context, gs GitStore, idx SearchIndex, adapte
 	var forget []string
 
 	for i, chunk := range chunks {
+		log.Debug().Int("chunk", i+1).Int("total", len(chunks)).Int("facts", len(chunk)).Msg("distill: sending to LLM")
 		onProgress(ProgressEvent{Phase: "llm", Message: fmt.Sprintf("distill chunk %d/%d (%d facts)", i+1, len(chunks), len(chunk))})
 		prompt := buildDistillPrompt(chunk, recipe.Prompt, step.Prompt)
 		response, err := adapter.Complete(
@@ -349,6 +357,7 @@ func runDistillOnGroup(ctx context.Context, gs GitStore, idx SearchIndex, adapte
 		if err != nil {
 			return nil, nil, fmt.Errorf("distill parse chunk %d: %w", i+1, err)
 		}
+		log.Debug().Int("synthesized", len(result.Synthesize)).Int("forget", len(result.Forget)).Msg("distill: LLM response parsed")
 		synthesized = append(synthesized, result.Synthesize...)
 		forget = append(forget, result.Forget...)
 	}

@@ -17,6 +17,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/go-git/go-billy/v5/memfs"
 
+	"github.com/rs/zerolog/log"
 	"knomit/internal/gitstorer"
 )
 
@@ -119,6 +120,7 @@ func Init(dbPath string) (*Store, error) {
 		return nil, fmt.Errorf("git.Init: set main ref: %w", err)
 	}
 
+	log.Info().Str("branch", agentBranch).Str("db", dbPath).Msg("git store initialized")
 	return &Store{
 		repo:   repo,
 		storer: s,
@@ -149,6 +151,7 @@ func Open(dbPath string) (*Store, error) {
 
 	branch := strings.TrimPrefix(head.Name().String(), "refs/heads/")
 
+	log.Info().Str("branch", branch).Str("db", dbPath).Msg("git store opened")
 	return &Store{
 		repo:   repo,
 		storer: s,
@@ -581,22 +584,26 @@ func (s *Store) Sync(remoteAuth interface{}) (SyncResult, error) {
 	// Check if origin remote exists.
 	_, err := s.repo.Remote("origin")
 	if err != nil {
-		// No remote — nothing to sync.
+		log.Debug().Msg("git sync: no origin remote configured, skipping")
 		return SyncResult{Synced: false}, nil
 	}
 
 	// Fetch from origin.
+	log.Debug().Msg("git sync: fetching from origin")
 	err = s.repo.Fetch(&gogit.FetchOptions{
 		RemoteName: "origin",
 	})
 	if err != nil && err != gogit.NoErrAlreadyUpToDate {
 		return SyncResult{}, fmt.Errorf("Sync: fetch: %w", err)
 	}
+	if err == gogit.NoErrAlreadyUpToDate {
+		log.Debug().Msg("git sync: fetch reports already up to date")
+	}
 
 	// Resolve origin/main ref.
 	originMainRef, err := s.storer.Reference(plumbing.NewRemoteReferenceName("origin", "main"))
 	if err != nil {
-		// origin/main doesn't exist — nothing to merge.
+		log.Debug().Msg("git sync: origin/main ref not found, skipping")
 		return SyncResult{Synced: false}, nil
 	}
 	originMainHash := originMainRef.Hash()
@@ -608,6 +615,12 @@ func (s *Store) Sync(remoteAuth interface{}) (SyncResult, error) {
 		return SyncResult{}, fmt.Errorf("Sync: agent ref: %w", err)
 	}
 	agentHash := agentRef.Hash()
+
+	log.Debug().
+		Str("origin_main", originMainHash.String()[:8]).
+		Str("agent_head", agentHash.String()[:8]).
+		Str("branch", s.branch).
+		Msg("git sync: comparing refs")
 
 	// Count commits in origin/main not in agent branch.
 	ahead, err := s.countAhead(originMainHash, agentHash)
@@ -621,6 +634,7 @@ func (s *Store) Sync(remoteAuth interface{}) (SyncResult, error) {
 		return SyncResult{}, fmt.Errorf("Sync: check ancestor: %w", err)
 	}
 	if isAncestor {
+		log.Debug().Int("ahead", ahead).Msg("git sync: origin/main already merged, nothing to do")
 		return SyncResult{Synced: false, Ahead: ahead}, nil
 	}
 
@@ -672,6 +686,10 @@ func (s *Store) Sync(remoteAuth interface{}) (SyncResult, error) {
 		return SyncResult{}, fmt.Errorf("Sync: update ref: %w", err)
 	}
 
+	log.Info().
+		Int("ahead", ahead).
+		Str("merge_commit", mergeHash.String()[:8]).
+		Msg("git sync: merged origin/main")
 	return SyncResult{Synced: true, Ahead: ahead}, nil
 }
 

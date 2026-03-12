@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/rs/zerolog/log"
 	"knomit/internal/llm"
 	"knomit/internal/store"
 )
@@ -48,7 +49,10 @@ func Run(ctx context.Context, gs GitStore, idx SearchIndex, embedder Embedder, a
 		onProgress = func(ProgressEvent) {}
 	}
 
-	for _, step := range r.Steps {
+	log.Info().Str("recipe", r.Name).Int("steps", len(r.Steps)).Msg("synthesis: pipeline starting")
+
+	for i, step := range r.Steps {
+		log.Info().Str("mode", step.Mode).Int("step", i+1).Int("total", len(r.Steps)).Msg("synthesis: step starting")
 		onProgress(ProgressEvent{Phase: "step-start", Message: step.Mode})
 		var err error
 		switch step.Mode {
@@ -60,10 +64,13 @@ func Run(ctx context.Context, gs GitStore, idx SearchIndex, embedder Embedder, a
 			return fmt.Errorf("unknown step mode: %q", step.Mode)
 		}
 		if err != nil {
+			log.Error().Err(err).Str("mode", step.Mode).Msg("synthesis: step failed")
 			return fmt.Errorf("step %q: %w", step.Mode, err)
 		}
+		log.Info().Str("mode", step.Mode).Msg("synthesis: step complete")
 	}
 
+	log.Info().Str("recipe", r.Name).Msg("synthesis: pipeline complete")
 	onProgress(ProgressEvent{Phase: "done"})
 	return nil
 }

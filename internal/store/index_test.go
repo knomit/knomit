@@ -434,6 +434,94 @@ func TestGetEmbedding(t *testing.T) {
 	}
 }
 
+// TestSearchHyphenatedEntity is a regression test: searching for a hyphenated
+// entity name (e.g. "ml-pipeline") must return facts that have it as an entity.
+// Before the fix, FTS5 interpreted the hyphen as a NOT operator, so facts with
+// entity "ml-pipeline" were never returned.
+func TestSearchHyphenatedEntity(t *testing.T) {
+	idx, err := store.New(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer idx.Close()
+
+	if err := idx.Upsert(store.FactRecord{
+		Path:       "know/ml-pipeline.md",
+		Title:      "ML Pipeline",
+		Body:       "An end-to-end machine learning pipeline",
+		Domain:     []string{"machine-learning"},
+		Entities:   []string{"ml-pipeline", "pytorch"},
+		Confidence: 0.9,
+		Sources:    1,
+		CommitHash: "abc",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Searching by the hyphenated entity must return the fact.
+	results, err := idx.Search(store.SearchQuery{Text: "ml-pipeline", Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) == 0 {
+		t.Fatal("expected fact with hyphenated entity 'ml-pipeline' to be found")
+	}
+	if results[0].Path != "know/ml-pipeline.md" {
+		t.Fatalf("wrong result: %v", results[0].Path)
+	}
+
+	// Searching by a hyphenated domain must also work.
+	results, err = idx.Search(store.SearchQuery{Text: "machine-learning", Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) == 0 {
+		t.Fatal("expected fact with hyphenated domain 'machine-learning' to be found")
+	}
+}
+
+// TestSearchAllMatchesReturned is a regression test: all FTS5-matching facts must
+// be returned even when one fact matches a query term more frequently than others.
+// Before the fix, a normalised-score cutoff of 10% caused weak-but-valid matches
+// (e.g. a fact that mentions "ml" once vs another that mentions it many times) to
+// be silently dropped.
+func TestSearchAllMatchesReturned(t *testing.T) {
+	idx, err := store.New(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer idx.Close()
+
+	// Fact A: domain "ml", body mentions "ml" many times → high BM25 rank.
+	if err := idx.Upsert(store.FactRecord{
+		Path:  "know/ml-heavy.md",
+		Title: "ML Overview",
+		Body:  "ml ml ml ml ml ml ml ml machine learning",
+		Domain: []string{"ml"}, Entities: []string{},
+		Confidence: 0.9, Sources: 1, CommitHash: "x",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Fact B: domain "ml", body mentions "ml" only once → much lower BM25 rank.
+	if err := idx.Upsert(store.FactRecord{
+		Path:  "know/ml-light.md",
+		Title: "Neural Networks",
+		Body:  "a brief note about ml",
+		Domain: []string{"ml"}, Entities: []string{},
+		Confidence: 0.8, Sources: 1, CommitHash: "x",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	results, err := idx.Search(store.SearchQuery{Text: "ml", Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("expected both facts to be returned, got %d", len(results))
+	}
+}
+
 // ── Search tests ──────────────────────────────────────────────────────────────
 
 func TestSearch(t *testing.T) {

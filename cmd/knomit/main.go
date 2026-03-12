@@ -108,8 +108,17 @@ func serveCmd() *cobra.Command {
 				gitHandler = web.GitRemoteHandler(gs, cfg.APIKey)
 			}
 
-			// 8. Create chi router
-			router := web.NewRouter(gs, idx, nil, mcpHandler, gitHandler, embeddingsEnabled)
+			// 8. Create synthesis runner
+			var synth web.SynthRunner
+			if llmAdapter != nil {
+				synth = web.NewSynthRunner(gs, idx, embedder, llmAdapter)
+				log.Info().Msg("synthesis runner enabled")
+			} else {
+				log.Warn().Msg("synthesis runner disabled (no LLM adapter)")
+			}
+
+			// 9. Create chi router
+			router := web.NewRouter(gs, idx, synth, mcpHandler, gitHandler, embeddingsEnabled)
 
 			// 9. Graceful shutdown
 			srv := &http.Server{

@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	_ "github.com/mattn/go-sqlite3"
+	"github.com/rs/zerolog/log"
 )
 
 // Sync brings the index up to date with the git store.
@@ -33,12 +34,13 @@ func (idx *Index) Sync(git GitReader) error {
 	}
 
 	if last == head {
-		// Nothing to do.
+		log.Debug().Str("head", head[:8]).Msg("index sync: already at HEAD, skipping")
 		return nil
 	}
 
 	if last == "" {
 		// Full rebuild.
+		log.Info().Str("head", head[:8]).Msg("index sync: full rebuild (no previous commit)")
 		paths, err := git.ListAll()
 		if err != nil {
 			return fmt.Errorf("sync: list all: %w", err)
@@ -48,12 +50,17 @@ func (idx *Index) Sync(git GitReader) error {
 				return err
 			}
 		}
+		log.Info().Int("files", len(paths)).Msg("index sync: full rebuild complete")
 	} else {
 		// Incremental update.
 		added, modified, deleted, err := git.DiffFiles(last)
 		if err != nil {
 			return fmt.Errorf("sync: diff files: %w", err)
 		}
+		log.Debug().
+			Str("from", last[:8]).Str("to", head[:8]).
+			Int("added", len(added)).Int("modified", len(modified)).Int("deleted", len(deleted)).
+			Msg("index sync: incremental update")
 		for _, path := range append(added, modified...) {
 			if err := idx.indexFile(git, path, head); err != nil {
 				return err
@@ -505,7 +512,7 @@ func (idx *Index) SearchText(query string, limit int) ([]FactRecord, error) {
 		 WHERE facts_fts MATCH ?
 		 ORDER BY rank
 		 LIMIT ?`,
-		query, limit,
+		sanitizeFTSQuery(query), limit,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("fts query: %w", err)
@@ -529,6 +536,25 @@ type ftsResult struct {
 	rank float64 // negative (lower = better match)
 }
 
+// sanitizeFTSQuery converts a user query string into a safe FTS5 query by quoting
+// each whitespace-separated term. This prevents FTS5 syntax errors caused by
+// characters that have special meaning in FTS5 query syntax (e.g. hyphens, which
+// are interpreted as NOT operators when they precede a token).
+//
+// Example: "ml-pipeline pytorch" → `"ml-pipeline" "pytorch"`
+func sanitizeFTSQuery(q string) string {
+	terms := strings.Fields(q)
+	if len(terms) == 0 {
+		return q
+	}
+	quoted := make([]string, 0, len(terms))
+	for _, t := range terms {
+		t = strings.ReplaceAll(t, `"`, `""`) // escape embedded double-quotes
+		quoted = append(quoted, `"`+t+`"`)
+	}
+	return strings.Join(quoted, " ")
+}
+
 // searchTextWithRanks queries the FTS5 index and returns records with raw BM25 ranks.
 func (idx *Index) searchTextWithRanks(query string, limit int) ([]ftsResult, error) {
 	rows, err := idx.db.Query(
@@ -538,7 +564,7 @@ func (idx *Index) searchTextWithRanks(query string, limit int) ([]ftsResult, err
 		 WHERE facts_fts MATCH ?
 		 ORDER BY rank
 		 LIMIT ?`,
-		query, limit,
+		sanitizeFTSQuery(query), limit,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("fts query with ranks: %w", err)
@@ -760,16 +786,15 @@ func (idx *Index) Search(q SearchQuery) ([]SearchResult, error) {
 		}
 	}
 
-	// ── Normalise to [0, 100] and drop < 10 ──────────────────────────────────
+	// ── Normalise to [0, 100] ─────────────────────────────────────────────────
+	// All FTS5 matches are considered relevant; no minimum-score cutoff so that
+	// short or infrequent terms (e.g. "ml") don't silently drop valid results.
 	topScore := candidates[0].score
 	var out []SearchResult
 	for _, c := range candidates {
 		normalised := 100.0
 		if topScore > 0 {
 			normalised = (c.score / topScore) * 100.0
-		}
-		if normalised < 10 {
-			break // sorted descending, so all subsequent will also be < 10
 		}
 		out = append(out, SearchResult{FactRecord: c.rec, Score: normalised})
 		if len(out) >= limit {

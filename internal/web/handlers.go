@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/rs/zerolog/log"
 	"knomit/internal/git"
 	"knomit/internal/mcp"
 	"knomit/internal/store"
@@ -34,9 +35,11 @@ func handleBrowse(gs GitStore) http.HandlerFunc {
 		if path == "" {
 			path = "know"
 		}
+		log.Debug().Str("path", path).Msg("browse")
 
 		entries, err := gs.ListDir(path)
 		if err != nil {
+			log.Debug().Err(err).Str("path", path).Msg("browse failed")
 			writeError(w, http.StatusNotFound, fmt.Sprintf("cannot list %q: %v", path, err))
 			return
 		}
@@ -65,9 +68,11 @@ func handleFact(gs GitStore) http.HandlerFunc {
 			writeError(w, http.StatusBadRequest, "path query parameter is required")
 			return
 		}
+		log.Debug().Str("path", path).Msg("fact")
 
 		content, err := gs.ReadFile(path)
 		if err != nil {
+			log.Debug().Err(err).Str("path", path).Msg("fact not found")
 			writeError(w, http.StatusNotFound, fmt.Sprintf("fact not found: %v", err))
 			return
 		}
@@ -141,6 +146,8 @@ func handleSearch(idx SearchIndex) http.HandlerFunc {
 			limit = 500
 		}
 
+		log.Debug().Str("q", text).Strs("entities", entities).Strs("domain", domain).Int("limit", limit).Msg("search")
+
 		results, err := idx.Search(store.SearchQuery{
 			Text:          text,
 			Entities:      entities,
@@ -150,6 +157,7 @@ func handleSearch(idx SearchIndex) http.HandlerFunc {
 			Limit:         limit,
 		})
 		if err != nil {
+			log.Debug().Err(err).Msg("search failed")
 			writeError(w, http.StatusInternalServerError, fmt.Sprintf("search error: %v", err))
 			return
 		}
@@ -158,6 +166,7 @@ func handleSearch(idx SearchIndex) http.HandlerFunc {
 			results = []store.SearchResult{}
 		}
 
+		log.Debug().Int("results", len(results)).Msg("search done")
 		writeJSON(w, http.StatusOK, map[string]any{
 			"results": results,
 		})
@@ -197,6 +206,7 @@ func handleStats(gs GitStore) http.HandlerFunc {
 		}
 
 		domains := make(map[string]int)
+		entities := make(map[string]int)
 		total := 0
 		var confidenceSum float64
 
@@ -220,6 +230,9 @@ func handleStats(gs GitStore) http.HandlerFunc {
 			for _, d := range fact.Domain {
 				domains[d]++
 			}
+			for _, e := range fact.Entities {
+				entities[e]++
+			}
 		}
 
 		avgConfidence := 0.0
@@ -232,6 +245,7 @@ func handleStats(gs GitStore) http.HandlerFunc {
 		writeJSON(w, http.StatusOK, map[string]any{
 			"total":          total,
 			"domains":        domains,
+			"entities":       entities,
 			"avg_confidence": avgConfidence,
 		})
 	}
@@ -266,6 +280,7 @@ func handleStatus(gs GitStore, idx SearchIndex, embeddingsEnabled bool) http.Han
 func handleSynthesizeStart(synth SynthRunner) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if synth == nil {
+			log.Warn().Msg("synthesize: not available (no SynthRunner configured)")
 			writeError(w, http.StatusServiceUnavailable, "synthesis not available")
 			return
 		}
@@ -277,12 +292,15 @@ func handleSynthesizeStart(synth SynthRunner) http.HandlerFunc {
 			return
 		}
 
+		log.Info().Str("recipe", string(body)).Msg("synthesize: starting")
 		id, err := synth.Start(string(body))
 		if err != nil {
+			log.Error().Err(err).Msg("synthesize: start failed")
 			writeError(w, http.StatusInternalServerError, fmt.Sprintf("start synthesis error: %v", err))
 			return
 		}
 
+		log.Info().Str("id", id).Msg("synthesize: launched")
 		writeJSON(w, http.StatusOK, map[string]any{
 			"id":     id,
 			"status": "started",
@@ -304,6 +322,7 @@ func handleSynthesizeStatus(synth SynthRunner) http.HandlerFunc {
 			events = []string{}
 		}
 
+		log.Debug().Str("id", id).Int("events", len(events)).Bool("done", done).Msg("synthesize: status polled")
 		writeJSON(w, http.StatusOK, map[string]any{
 			"id":     id,
 			"events": events,
@@ -315,8 +334,10 @@ func handleSynthesizeStatus(synth SynthRunner) http.HandlerFunc {
 // handleSync handles POST /api/sync
 func handleSync(gs GitStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		log.Info().Msg("sync started")
 		result, err := gs.Sync(nil)
 		if err != nil {
+			log.Error().Err(err).Msg("sync failed")
 			writeJSON(w, http.StatusInternalServerError, map[string]string{
 				"status": "error",
 				"error":  err.Error(),
@@ -328,6 +349,7 @@ func handleSync(gs GitStore) http.HandlerFunc {
 		if result.Synced {
 			msg = fmt.Sprintf("merged %d commit(s) from origin/main", result.Ahead)
 		}
+		log.Info().Bool("synced", result.Synced).Int("ahead", result.Ahead).Str("head", head).Msg("sync done")
 		writeJSON(w, http.StatusOK, map[string]any{
 			"status":  "ok",
 			"commit":  head,

@@ -14,40 +14,64 @@ export function LeftPanel({ state, dispatch }: Props) {
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const [selectedIdx, setSelectedIdx] = useState(0);
   const searchRef = useRef<HTMLInputElement>(null);
+  const itemRefs = useRef<(HTMLDivElement | null)[]>([]);
 
-  // Load directory listing
+  // Load directory listing; auto-preview first item so right panel is always in sync
   useEffect(() => {
     if (state.searchQuery) return;
-    api.browse(state.currentPath).then(r => setChildren(r.children || [])).catch(() => setChildren([]));
-    setSelectedIdx(0);
+    api.browse(state.currentPath).then(r => {
+      const c = r.children || [];
+      setChildren(c);
+      setSelectedIdx(0);
+      if (c.length > 0) {
+        if (c[0].is_dir) dispatch({ type: 'PREVIEW_DIR', path: `${state.currentPath}/${c[0].name}` });
+        else dispatch({ type: 'SELECT_FACT', path: `${state.currentPath}/${c[0].name}` });
+      }
+    }).catch(() => setChildren([]));
   }, [state.currentPath, state.searchQuery]);
 
   // Search
   useEffect(() => {
     if (!state.searchQuery) { setSearchResults([]); return; }
+    setSelectedIdx(0);
     const t = setTimeout(() => {
-      api.search(state.searchQuery).then(r => setSearchResults(r.results || [])).catch(() => setSearchResults([]));
+      api.search(state.searchQuery).then(r => {
+        const results = r.results || [];
+        setSearchResults(results);
+        setSelectedIdx(0);
+        if (results.length > 0) dispatch({ type: 'SELECT_FACT', path: results[0].path });
+      }).catch(() => setSearchResults([]));
     }, 300);
     return () => clearTimeout(t);
   }, [state.searchQuery]);
 
-  // Keyboard: expose searchRef for '/' shortcut in App
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (document.activeElement === searchRef.current) return;
-      if (e.key === '/') { e.preventDefault(); searchRef.current?.focus(); }
-      if (e.key === 'Escape') { dispatch({ type: 'CLEAR_SEARCH' }); searchRef.current?.blur(); }
-      if (e.key === 'ArrowDown' || e.key === 'j') setSelectedIdx(i => Math.min(i + 1, listLen() - 1));
-      if (e.key === 'ArrowUp' || e.key === 'k') setSelectedIdx(i => Math.max(i - 1, 0));
-      if (e.key === 'Enter') activateSelected();
-      if ((e.key === 'Backspace' || e.key === 'u') && !state.searchQuery) dispatch({ type: 'GO_UP' });
-    };
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
-  });
-
   const listLen = () => state.searchQuery ? searchResults.length : children.length;
 
+  const previewItem = (idx: number) => {
+    if (state.searchQuery) {
+      const r = searchResults[idx];
+      if (r) dispatch({ type: 'SELECT_FACT', path: r.path });
+    } else {
+      const c = children[idx];
+      if (!c) return;
+      if (c.is_dir) dispatch({ type: 'PREVIEW_DIR', path: `${state.currentPath}/${c.name}` });
+      else dispatch({ type: 'SELECT_FACT', path: `${state.currentPath}/${c.name}` });
+    }
+  };
+
+  const moveSelection = (delta: 1 | -1) => {
+    // ArrowUp at top → go one level up (browse mode only)
+    if (delta === -1 && selectedIdx === 0 && !state.searchQuery) {
+      dispatch({ type: 'GO_UP' });
+      return;
+    }
+    const next = Math.max(0, Math.min(selectedIdx + delta, listLen() - 1));
+    setSelectedIdx(next);
+    itemRefs.current[next]?.scrollIntoView({ block: 'nearest' });
+    previewItem(next);
+  };
+
+  // Enter or Right: open/navigate into selected item
   const activateSelected = () => {
     if (state.searchQuery) {
       const r = searchResults[selectedIdx];
@@ -60,11 +84,26 @@ export function LeftPanel({ state, dispatch }: Props) {
     else dispatch({ type: 'SELECT_FACT', path: `${state.currentPath}/${child.name}` });
   };
 
+  // Keyboard: global shortcuts when search input is NOT focused
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (document.activeElement === searchRef.current) return;
+      if (e.key === '/') { e.preventDefault(); searchRef.current?.focus(); }
+      if (e.key === 'Escape') { dispatch({ type: 'CLEAR_SEARCH' }); searchRef.current?.blur(); }
+      if (e.key === 'ArrowDown' || e.key === 'j') { e.preventDefault(); moveSelection(1); }
+      if (e.key === 'ArrowUp' || e.key === 'k') { e.preventDefault(); moveSelection(-1); }
+      if (e.key === 'ArrowRight' || e.key === 'Enter') { e.preventDefault(); activateSelected(); }
+      if (e.key === 'ArrowLeft' && !state.searchQuery) { e.preventDefault(); dispatch({ type: 'GO_UP' }); }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  });
+
   const pathLabel = (name: string) => name.replace(/\.md$/, '');
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
-      {/* Search row — action buttons go on the right in the future */}
+      {/* Search row */}
       <div style={{ padding: '6px 8px', borderBottom: '1px solid #333', display: 'flex', gap: 6, alignItems: 'center' }}>
         <input
           ref={searchRef}
@@ -72,10 +111,14 @@ export function LeftPanel({ state, dispatch }: Props) {
           placeholder="Search… (/)"
           value={state.searchQuery}
           onChange={e => dispatch({ type: 'SEARCH', query: e.target.value })}
-          onKeyDown={e => { if (e.key === 'Escape') { dispatch({ type: 'CLEAR_SEARCH' }); e.currentTarget.blur(); } }}
+          onKeyDown={e => {
+            if (e.key === 'Escape') { dispatch({ type: 'CLEAR_SEARCH' }); e.currentTarget.blur(); }
+            if (e.key === 'ArrowDown') { e.preventDefault(); moveSelection(1); }
+            if (e.key === 'ArrowUp') { e.preventDefault(); moveSelection(-1); }
+            if (e.key === 'Enter') { e.preventDefault(); activateSelected(); }
+          }}
           style={{ flex: 1, background: '#1a1a1a', border: '1px solid #333', color: '#eee', padding: '5px 8px', borderRadius: 4, fontSize: 12 }}
         />
-        {/* action buttons slot */}
       </div>
 
       <div style={{ flex: 1, overflowY: 'auto' }}>
@@ -83,26 +126,26 @@ export function LeftPanel({ state, dispatch }: Props) {
           searchResults.length === 0 ? (
             <div style={{ padding: 16, color: '#666', fontSize: 13 }}>No results</div>
           ) : searchResults.map((r, i) => (
-            <div key={r.path} onClick={() => { setSelectedIdx(i); dispatch({ type: 'SELECT_FACT', path: r.path }); }}
+            <div key={r.path} ref={el => { itemRefs.current[i] = el; }} onClick={() => { setSelectedIdx(i); dispatch({ type: 'SELECT_FACT', path: r.path }); }}
               style={{ padding: '8px 12px', cursor: 'pointer', background: i === selectedIdx ? '#2a2a3a' : 'transparent', borderBottom: '1px solid #222' }}>
               <div style={{ fontSize: 13, color: '#ddd' }}>{r.title || pathLabel(r.path)}</div>
               <div style={{ fontSize: 11, color: '#666', fontFamily: 'monospace' }}>{r.path}</div>
-              <div style={{ fontSize: 11, color: r.score > 0.75 ? '#4caf50' : r.score > 0.5 ? '#ff9800' : '#888' }}>
-                score: {r.score.toFixed(2)}
+              <div style={{ fontSize: 11, color: r.score > 75 ? '#4caf50' : r.score > 50 ? '#ff9800' : '#888' }}>
+                score: {Math.round(r.score)}
               </div>
             </div>
           ))
         ) : (
           <>
             {children.map((c, i) => (
-                <div key={c.name}
+                <div key={c.name} ref={el => { itemRefs.current[i] = el; }}
                   onClick={() => {
                     setSelectedIdx(i);
                     if (c.is_dir) dispatch({ type: 'NAVIGATE', path: `${state.currentPath}/${c.name}` });
                     else dispatch({ type: 'SELECT_FACT', path: `${state.currentPath}/${c.name}` });
                   }}
                   style={{ padding: '8px 12px', cursor: 'pointer', background: i === selectedIdx ? '#2a2a3a' : 'transparent', borderBottom: '1px solid #222', display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <span style={{ fontSize: 16 }}>{c.is_dir ? '📁' : '📄'}</span>
+                  <span style={{ width: 6, height: 6, borderRadius: '50%', background: c.is_dir ? '#7c9' : '#8af', flexShrink: 0, opacity: 0.7 }} />
                   <span style={{ fontSize: 13, color: '#ddd' }}>{c.is_dir ? c.name : pathLabel(c.name)}</span>
                 </div>
             ))}

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/rs/zerolog/log"
 	"knomit/internal/llm"
 	"knomit/internal/mcp"
 	"knomit/internal/store"
@@ -196,6 +197,7 @@ func executePruneStep(ctx context.Context, gs GitStore, idx SearchIndex, adapter
 	if err != nil {
 		return fmt.Errorf("prune: gather facts: %w", err)
 	}
+	log.Debug().Int("facts", len(facts)).Msg("prune: gathered facts")
 	if len(facts) == 0 {
 		onProgress(ProgressEvent{Phase: "prune", Message: "no facts found"})
 		return nil
@@ -203,11 +205,13 @@ func executePruneStep(ctx context.Context, gs GitStore, idx SearchIndex, adapter
 
 	const maxChunkBytes = 100_000
 	chunks := chunkFacts(facts, maxChunkBytes)
+	log.Debug().Int("chunks", len(chunks)).Msg("prune: chunked for LLM")
 
 	var allDecisions []PruneDecision
 	var allMerges []MergeEntry
 
 	for i, chunk := range chunks {
+		log.Debug().Int("chunk", i+1).Int("total", len(chunks)).Int("facts", len(chunk)).Msg("prune: sending to LLM")
 		onProgress(ProgressEvent{Phase: "llm", Message: fmt.Sprintf("prune chunk %d/%d (%d facts)", i+1, len(chunks), len(chunk))})
 
 		prompt := buildPrunePrompt(chunk, recipe.Prompt, step.Prompt)
@@ -225,12 +229,15 @@ func executePruneStep(ctx context.Context, gs GitStore, idx SearchIndex, adapter
 		if err != nil {
 			return fmt.Errorf("prune: parse response chunk %d: %w", i+1, err)
 		}
+		log.Debug().Int("decisions", len(result.Decisions)).Int("merges", len(result.Merges)).Msg("prune: LLM response parsed")
 		allDecisions = append(allDecisions, result.Decisions...)
 		allMerges = append(allMerges, result.Merges...)
 	}
 
 	// Track which paths have been deleted to avoid double-deletion.
 	deletedPaths := make(map[string]bool)
+
+	log.Info().Int("decisions", len(allDecisions)).Int("merges", len(allMerges)).Msg("prune: applying results")
 
 	// Apply decisions.
 	for _, d := range allDecisions {
