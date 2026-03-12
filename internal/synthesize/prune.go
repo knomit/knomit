@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/rs/zerolog/log"
+	"knomit/internal/cluster"
 	"knomit/internal/llm"
 	"knomit/internal/mcp"
 	"knomit/internal/store"
@@ -189,8 +190,92 @@ func gatherAllFacts(gs GitStore) ([]factForLLM, error) {
 	return facts, nil
 }
 
+// clusterFactsForPrune groups facts by semantic similarity using embeddings.
+// Returns a slice of fact groups — each group is a cluster to be reviewed together.
+// When embeddings are unavailable or too few, returns all facts as a single group.
+func clusterFactsForPrune(facts []factForLLM, idx SearchIndex, embedder Embedder, step RecipeStep, onProgress func(ProgressEvent)) ([][]factForLLM, error) {
+	minCluster := step.MinClusterSize
+	if minCluster == 0 {
+		minCluster = 3
+	}
+
+	// Try to load embeddings from the index.
+	gei, hasEmbeddings := idx.(interface{ GetEmbedding(string) ([]float32, error) })
+	if embedder == nil || !hasEmbeddings {
+		log.Debug().Msg("prune: no embeddings available, using single group")
+		onProgress(ProgressEvent{Phase: "cluster", Message: "no embeddings, reviewing all facts"})
+		return [][]factForLLM{facts}, nil
+	}
+
+	// Collect facts that have stored embeddings.
+	type indexedFact struct {
+		origIdx int
+		vec     []float32
+	}
+	var withEmbedding []indexedFact
+	for i, f := range facts {
+		vec, err := gei.GetEmbedding(f.File)
+		if err != nil || vec == nil {
+			continue
+		}
+		withEmbedding = append(withEmbedding, indexedFact{i, vec})
+	}
+
+	if len(withEmbedding) < minCluster {
+		log.Debug().Int("with_embedding", len(withEmbedding)).Int("min_cluster", minCluster).Msg("prune: insufficient embeddings, using single group")
+		onProgress(ProgressEvent{Phase: "cluster", Message: fmt.Sprintf("insufficient embeddings (%d), reviewing all facts", len(withEmbedding))})
+		return [][]factForLLM{facts}, nil
+	}
+
+	// Build float64 vectors for HDBSCAN (skip UMAP — prune doesn't need
+	// dimensionality reduction and UMAP is expensive for small N).
+	vecs := make([][]float64, len(withEmbedding))
+	for i, wf := range withEmbedding {
+		v64 := make([]float64, len(wf.vec))
+		for j, x := range wf.vec {
+			v64[j] = float64(x)
+		}
+		vecs[i] = v64
+	}
+
+	labels := cluster.HDBSCAN(vecs, cluster.HDBSCANOptions{
+		MinClusterSize: minCluster,
+	})
+
+	// Group facts by cluster label. Noise (label -1) is skipped — singletons
+	// have no peers to compare against for prune/merge.
+	clusterMap := map[int][]factForLLM{}
+	noiseCount := 0
+	for i, wf := range withEmbedding {
+		label := labels[i]
+		if label == -1 {
+			noiseCount++
+			continue
+		}
+		clusterMap[label] = append(clusterMap[label], facts[wf.origIdx])
+	}
+
+	log.Debug().Int("clusters", len(clusterMap)).Int("noise", noiseCount).Int("total", len(facts)).Msg("prune: clustering complete")
+	onProgress(ProgressEvent{Phase: "cluster", Message: fmt.Sprintf("%d clusters (%d noise skipped)", len(clusterMap), noiseCount)})
+
+	if len(clusterMap) == 0 {
+		log.Debug().Msg("prune: no clusters formed, using single group")
+		onProgress(ProgressEvent{Phase: "cluster", Message: "no clusters formed, reviewing all facts"})
+		return [][]factForLLM{facts}, nil
+	}
+
+	groups := make([][]factForLLM, 0, len(clusterMap))
+	for _, group := range clusterMap {
+		groups = append(groups, group)
+	}
+	return groups, nil
+}
+
 // executePruneStep runs one prune step of the synthesis pipeline.
-func executePruneStep(ctx context.Context, gs GitStore, idx SearchIndex, adapter llm.LLMAdapter, step RecipeStep, recipe Recipe, onProgress func(ProgressEvent)) error {
+// When embeddings are available, facts are clustered first and only multi-fact
+// clusters are sent to the LLM for review. Without embeddings, all facts are
+// sent in byte-sized chunks (legacy behaviour).
+func executePruneStep(ctx context.Context, gs GitStore, idx SearchIndex, embedder Embedder, adapter llm.LLMAdapter, step RecipeStep, recipe Recipe, onProgress func(ProgressEvent)) error {
 	onProgress(ProgressEvent{Phase: "gather", Message: "loading facts for prune"})
 
 	facts, err := gatherAllFacts(gs)
@@ -203,35 +288,51 @@ func executePruneStep(ctx context.Context, gs GitStore, idx SearchIndex, adapter
 		return nil
 	}
 
-	const maxChunkBytes = 100_000
-	chunks := chunkFacts(facts, maxChunkBytes)
-	log.Debug().Int("chunks", len(chunks)).Msg("prune: chunked for LLM")
+	// Try to cluster facts using embeddings before sending to LLM.
+	groups, err := clusterFactsForPrune(facts, idx, embedder, step, onProgress)
+	if err != nil {
+		return fmt.Errorf("prune: cluster: %w", err)
+	}
 
 	var allDecisions []PruneDecision
 	var allMerges []MergeEntry
 
-	for i, chunk := range chunks {
-		log.Debug().Int("chunk", i+1).Int("total", len(chunks)).Int("facts", len(chunk)).Msg("prune: sending to LLM")
-		onProgress(ProgressEvent{Phase: "llm", Message: fmt.Sprintf("prune chunk %d/%d (%d facts)", i+1, len(chunks), len(chunk))})
+	const maxChunkBytes = 100_000
+	for gi, group := range groups {
+		chunks := chunkFacts(group, maxChunkBytes)
+		for ci, chunk := range chunks {
+			label := fmt.Sprintf("cluster %d/%d chunk %d/%d (%d facts)", gi+1, len(groups), ci+1, len(chunks), len(chunk))
+			log.Debug().Str("label", label).Msg("prune: sending to LLM")
+			onProgress(ProgressEvent{Phase: "llm", Message: fmt.Sprintf("prune %s", label)})
 
-		prompt := buildPrunePrompt(chunk, recipe.Prompt, step.Prompt)
-		response, err := adapter.Complete(
-			ctx,
-			"You are a knowledge base maintenance assistant. Respond only with valid JSON.",
-			[]llm.Message{{Role: "user", Content: prompt}},
-			nil,
-		)
-		if err != nil {
-			return fmt.Errorf("prune: LLM call chunk %d: %w", i+1, err)
-		}
+			prompt := buildPrunePrompt(chunk, recipe.Prompt, step.Prompt)
+			response, err := adapter.Complete(
+				ctx,
+				"You are a knowledge base maintenance assistant. Respond only with valid JSON.",
+				[]llm.Message{{Role: "user", Content: prompt}},
+				nil,
+			)
+			if err != nil {
+				return fmt.Errorf("prune: LLM call %s: %w", label, err)
+			}
 
-		result, err := parsePruneResponse(response)
-		if err != nil {
-			return fmt.Errorf("prune: parse response chunk %d: %w", i+1, err)
+			result, err := parsePruneResponse(response)
+			if err != nil {
+				return fmt.Errorf("prune: parse response %s: %w", label, err)
+			}
+
+			// Log each decision at debug level.
+			for _, d := range result.Decisions {
+				log.Debug().Str("path", d.Path).Str("action", d.Action).Float64("confidence", d.Confidence).Msg("prune: decision")
+			}
+			for _, m := range result.Merges {
+				log.Debug().Strs("sources", m.Paths).Str("merged_path", m.Merged.Path).Msg("prune: merge")
+			}
+
+			log.Debug().Int("decisions", len(result.Decisions)).Int("merges", len(result.Merges)).Msg("prune: LLM response parsed")
+			allDecisions = append(allDecisions, result.Decisions...)
+			allMerges = append(allMerges, result.Merges...)
 		}
-		log.Debug().Int("decisions", len(result.Decisions)).Int("merges", len(result.Merges)).Msg("prune: LLM response parsed")
-		allDecisions = append(allDecisions, result.Decisions...)
-		allMerges = append(allMerges, result.Merges...)
 	}
 
 	// Track which paths have been deleted to avoid double-deletion.

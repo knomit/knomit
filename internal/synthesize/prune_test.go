@@ -153,7 +153,7 @@ func TestPruneStep(t *testing.T) {
 	recipe := Recipe{Name: "test-recipe", Steps: []RecipeStep{{Mode: "prune"}}}
 
 	var events []ProgressEvent
-	err := executePruneStep(context.Background(), gs, idx, adapter, recipe.Steps[0], recipe, func(e ProgressEvent) {
+	err := executePruneStep(context.Background(), gs, idx, nil, adapter, recipe.Steps[0], recipe, func(e ProgressEvent) {
 		events = append(events, e)
 	})
 	if err != nil {
@@ -249,7 +249,7 @@ func TestPruneStepWithMerge(t *testing.T) {
 	idx := &mockSearchIndex{}
 	recipe := Recipe{Name: "merge-recipe", Steps: []RecipeStep{{Mode: "prune"}}}
 
-	err := executePruneStep(context.Background(), gs, idx, adapter, recipe.Steps[0], recipe, func(ProgressEvent) {})
+	err := executePruneStep(context.Background(), gs, idx, nil, adapter, recipe.Steps[0], recipe, func(ProgressEvent) {})
 	if err != nil {
 		t.Fatalf("executePruneStep: %v", err)
 	}
@@ -399,5 +399,110 @@ func TestChunkFactsExceedsBudget(t *testing.T) {
 	}
 	if total != len(facts) {
 		t.Errorf("expected %d total facts across chunks, got %d", len(facts), total)
+	}
+}
+
+// capturingLLM records prompts sent to the LLM and returns a fixed response.
+type capturingLLM struct {
+	response string
+	prompts  []string
+}
+
+func (m *capturingLLM) Complete(_ context.Context, _ string, msgs []llm.Message, _ func(string)) (string, error) {
+	for _, msg := range msgs {
+		m.prompts = append(m.prompts, msg.Content)
+	}
+	return m.response, nil
+}
+
+// mockPruneIndex wraps mockSearchIndex and adds GetEmbedding for prune clustering tests.
+type mockPruneIndex struct {
+	mockSearchIndex
+	embeddings map[string][]float32
+}
+
+func (m *mockPruneIndex) GetEmbedding(path string) ([]float32, error) {
+	return m.embeddings[path], nil
+}
+
+// stubEmbedder is a no-op embedder that satisfies the Embedder interface.
+type stubEmbedder struct{}
+
+func (stubEmbedder) Embed(_ string) ([]float32, error) {
+	return []float32{0, 0, 0, 0}, nil
+}
+
+// TestPruneStepClustersBeforeLLM verifies that when embeddings are available,
+// the prune step clusters facts and only sends clustered groups to the LLM,
+// rather than sending all facts at once.
+func TestPruneStepClustersBeforeLLM(t *testing.T) {
+	gs := newMockGitStore()
+
+	// Create two tight clusters of 5 facts each with well-separated embeddings
+	// in 8 dimensions. Cluster A lives near [10,0,...] and cluster B near [0,...,10].
+	// A single noise fact sits elsewhere.
+	clusterAFiles := []string{
+		"know/cluster-a/a1.md", "know/cluster-a/a2.md", "know/cluster-a/a3.md",
+		"know/cluster-a/a4.md", "know/cluster-a/a5.md",
+	}
+	clusterBFiles := []string{
+		"know/cluster-b/b1.md", "know/cluster-b/b2.md", "know/cluster-b/b3.md",
+		"know/cluster-b/b4.md", "know/cluster-b/b5.md",
+	}
+	noiseFile := "know/noise/lone.md"
+
+	allFiles := make([]string, 0, len(clusterAFiles)+len(clusterBFiles)+1)
+	allFiles = append(allFiles, clusterAFiles...)
+	allFiles = append(allFiles, clusterBFiles...)
+	allFiles = append(allFiles, noiseFile)
+
+	for _, f := range allFiles {
+		gs.files[f] = factContent("Fact "+f, "Body of "+f)
+	}
+
+	embeddingMap := map[string][]float32{}
+	// Cluster A: all near [10, 0, 0, 0, 0, 0, 0, 0] with small perturbations.
+	for i, f := range clusterAFiles {
+		v := make([]float32, 8)
+		v[0] = 10.0 + float32(i)*0.01
+		embeddingMap[f] = v
+	}
+	// Cluster B: all near [0, 0, 0, 0, 0, 0, 0, 10].
+	for i, f := range clusterBFiles {
+		v := make([]float32, 8)
+		v[7] = 10.0 + float32(i)*0.01
+		embeddingMap[f] = v
+	}
+	// Noise: different region.
+	embeddingMap[noiseFile] = []float32{0, 5, 0, 0, 0, 0, 5, 0}
+
+	idx := &mockPruneIndex{embeddings: embeddingMap}
+	adapter := &capturingLLM{response: `{"decisions":[],"merges":[]}`}
+	recipe := Recipe{Name: "cluster-test", Steps: []RecipeStep{{Mode: "prune", MinClusterSize: 3}}}
+
+	err := executePruneStep(context.Background(), gs, idx, stubEmbedder{}, adapter, recipe.Steps[0], recipe, func(ProgressEvent) {})
+	if err != nil {
+		t.Fatalf("executePruneStep: %v", err)
+	}
+
+	// The noise fact (lone.md) should NOT appear in any LLM prompt.
+	for i, prompt := range adapter.prompts {
+		if strings.Contains(prompt, noiseFile) {
+			t.Errorf("prompt %d contains noise fact %s — it should have been skipped as unclustered", i, noiseFile)
+		}
+	}
+
+	// With 2 clusters we expect exactly 2 LLM calls, not 1 call with all 11 facts.
+	if len(adapter.prompts) != 2 {
+		t.Errorf("expected 2 LLM calls (one per cluster), got %d", len(adapter.prompts))
+	}
+
+	// Each prompt should contain only facts from its cluster, not from both.
+	for _, prompt := range adapter.prompts {
+		hasA := strings.Contains(prompt, "know/cluster-a/")
+		hasB := strings.Contains(prompt, "know/cluster-b/")
+		if hasA && hasB {
+			t.Error("a single LLM prompt contains facts from both clusters — they should be separated")
+		}
 	}
 }

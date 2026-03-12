@@ -329,13 +329,20 @@ func knnPartialSort(all []knnEntry, k int) {
 // findAB computes the UMAP curve parameters a, b from minDist using a
 // least-squares fit on the smooth approximation of the distance function.
 // This matches the approach in umap-js.
+//
+// Results are cached for known minDist values to avoid the expensive
+// 10,000-iteration gradient descent on every call (~3M float ops).
 func findAB(minDist float64) (float64, float64) {
-	// Fit: 1/(1 + a*x^(2b)) to the piecewise function
-	// f(x) = 1 if x < minDist, exp(-(x-minDist)) otherwise
-	// Using a simple grid search / curve fit.
-	// For minDist=0.1, standard values are approximately a≈1.929, b≈0.791.
-	// We use gradient descent to fit these.
+	// Precomputed values for common minDist (spread=1.0).
+	switch minDist {
+	case 0.1:
+		return 1.576636002939383, 0.894641445561886
+	}
+	return findABSlow(minDist)
+}
 
+// findABSlow computes a, b via gradient descent (expensive).
+func findABSlow(minDist float64) (float64, float64) {
 	spread := 1.0
 	xv := make([]float64, 300)
 	yv := make([]float64, 300)
@@ -349,7 +356,6 @@ func findAB(minDist float64) (float64, float64) {
 		}
 	}
 
-	// Optimise a, b via gradient descent
 	a, b := 1.0, 1.0
 	lr := 0.001
 	for iter := 0; iter < 10000; iter++ {
@@ -359,9 +365,7 @@ func findAB(minDist float64) (float64, float64) {
 			denom := 1.0 + a*x2b
 			pred := 1.0 / denom
 			err := pred - yv[i]
-			// d(pred)/da = -x^{2b} / (1 + a x^{2b})^2
 			dA += err * (-x2b / (denom * denom))
-			// d(pred)/db = -a * x^{2b} * ln(x^2) / (1 + a x^{2b})^2
 			if xv[i] > 0 {
 				lnx2 := math.Log(xv[i] * xv[i])
 				dB += err * (-a * x2b * lnx2 / (denom * denom))

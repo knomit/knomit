@@ -57,7 +57,7 @@ func Run(ctx context.Context, gs GitStore, idx SearchIndex, embedder Embedder, a
 		var err error
 		switch step.Mode {
 		case "prune":
-			err = executePruneStep(ctx, gs, idx, adapter, step, r, onProgress)
+			err = executePruneStep(ctx, gs, idx, embedder, adapter, step, r, onProgress)
 		case "distill":
 			err = executeDistillStep(ctx, gs, idx, embedder, adapter, step, r, onProgress)
 		default:
