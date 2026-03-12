@@ -40,4 +40,3 @@ func newSPAHandler(static http.Handler) http.HandlerFunc {
 		static.ServeHTTP(w, r)
 	}
 }
-
