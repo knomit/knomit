@@ -66,16 +66,18 @@ export function LeftPanel({ state, dispatch }: Props) {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
-      <div style={{ padding: '8px', borderBottom: '1px solid #333' }}>
+      {/* Search row — action buttons go on the right in the future */}
+      <div style={{ padding: '6px 8px', borderBottom: '1px solid #333', display: 'flex', gap: 6, alignItems: 'center' }}>
         <input
           ref={searchRef}
           type="text"
-          placeholder="Search facts… (press /)"
+          placeholder="Search… (/)"
           value={state.searchQuery}
           onChange={e => dispatch({ type: 'SEARCH', query: e.target.value })}
           onKeyDown={e => { if (e.key === 'Escape') { dispatch({ type: 'CLEAR_SEARCH' }); e.currentTarget.blur(); } }}
-          style={{ width: '100%', boxSizing: 'border-box', background: '#1a1a1a', border: '1px solid #444', color: '#eee', padding: '6px 8px', borderRadius: 4, fontSize: 13 }}
+          style={{ flex: 1, background: '#1a1a1a', border: '1px solid #333', color: '#eee', padding: '5px 8px', borderRadius: 4, fontSize: 12 }}
         />
+        {/* action buttons slot */}
       </div>
 
       <div style={{ flex: 1, overflowY: 'auto' }}>
