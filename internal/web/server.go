@@ -39,12 +39,22 @@ type SynthDeps struct {
 }
 
 // NewRouter creates and returns the chi router with all API routes registered.
-func NewRouter(gs GitStore, idx SearchIndex, hub *TaskHub, synthDeps *SynthDeps, mcpHandler http.Handler, gitHandler http.Handler, embeddingsEnabled bool) http.Handler {
+func NewRouter(gs GitStore, idx SearchIndex, hub *TaskHub, synthDeps *SynthDeps, mcpHandlers map[string]http.Handler, gitHandler http.Handler, embeddingsEnabled bool) http.Handler {
 	r := chi.NewRouter()
 	r.Use(middleware.Recoverer)
 
-	if mcpHandler != nil {
-		r.Mount("/mcp", mcpHandler)
+	if len(mcpHandlers) > 0 {
+		r.Mount("/mcp", http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			profile := req.URL.Query().Get("profile")
+			if profile == "" {
+				profile = "code"
+			}
+			handler, ok := mcpHandlers[profile]
+			if !ok {
+				handler = mcpHandlers["code"]
+			}
+			handler.ServeHTTP(w, req)
+		}))
 	}
 
 	if gitHandler != nil {

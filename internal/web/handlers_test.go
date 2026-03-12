@@ -96,7 +96,7 @@ func (m *mockSearchIndex) GetLastCommit() (string, error) {
 
 func newTestRouter(gs GitStore, idx SearchIndex) http.Handler {
 	hub := NewTaskHub(context.Background())
-	return NewRouter(gs, idx, hub, nil, nil, nil, false)
+	return NewRouter(gs, idx, hub, nil, map[string]http.Handler(nil), nil, false)
 }
 
 func doRequest(t *testing.T, handler http.Handler, method, target string, body string) *httptest.ResponseRecorder {

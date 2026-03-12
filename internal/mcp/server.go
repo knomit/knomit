@@ -2,7 +2,6 @@
 package mcp
 
 import (
-	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 
 	gitpkg "knomit/internal/git"
@@ -67,11 +66,11 @@ type SearchIndex interface {
 
 // NewServer creates a new MCP server with all knomit tools registered.
 func NewServer(gs GitStore, idx SearchIndex, llmAdapter llm.LLMAdapter, profile string) *server.MCPServer {
-	s := server.NewMCPServer("knomit", "1.0.0")
-
-	_ = mcpgo.NewTool // ensure import is used
 	_ = llmAdapter
-	_ = profile
+
+	s := server.NewMCPServer("knomit", "1.0.0",
+		server.WithInstructions(ProfileInstructions(profile)),
+	)
 
 	s.AddTool(learnTool(), LearnHandler(gs, idx))
 	s.AddTool(queryTool(), QueryHandler(gs, idx))

@@ -98,9 +98,13 @@ func serveCmd() *cobra.Command {
 				}
 			}
 
-			// 6. Create MCP server and HTTP handler
-			mcpSrv := mcp.NewServer(gs, idx, llmAdapter, "code")
-			mcpHandler := mcpserver.NewStreamableHTTPServer(mcpSrv)
+			// 6. Create per-profile MCP servers
+			profiles := []string{"code", "chat", "generic"}
+			mcpServers := make(map[string]http.Handler, len(profiles))
+			for _, p := range profiles {
+				mcpSrv := mcp.NewServer(gs, idx, llmAdapter, p)
+				mcpServers[p] = mcpserver.NewStreamableHTTPServer(mcpSrv)
+			}
 
 			// 7. Wire git remote if enabled
 			var gitHandler http.Handler
@@ -109,7 +113,7 @@ func serveCmd() *cobra.Command {
 			}
 
 			// 8. Create TaskHub
-			hub := web.NewTaskHub(context.Background())
+			hub := web.NewTaskHub(ctx)
 
 			// 9. Create synthesis dependencies
 			var synthDeps *web.SynthDeps
@@ -126,9 +130,9 @@ func serveCmd() *cobra.Command {
 			}
 
 			// 10. Create chi router
-			router := web.NewRouter(gs, idx, hub, synthDeps, mcpHandler, gitHandler, embeddingsEnabled)
+			router := web.NewRouter(gs, idx, hub, synthDeps, mcpServers, gitHandler, embeddingsEnabled)
 
-			// 9. Graceful shutdown
+			// 11. Graceful shutdown
 			srv := &http.Server{
 				Addr:              ":" + cfg.Port,
 				Handler:           router,
