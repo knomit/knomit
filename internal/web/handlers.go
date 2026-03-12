@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -9,11 +10,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/go-chi/chi/v5"
 	"github.com/rs/zerolog/log"
 	"knomit/internal/git"
 	"knomit/internal/mcp"
 	"knomit/internal/store"
+	"knomit/internal/synthesize"
 )
 
 // writeJSON encodes v as JSON and writes it to w with Content-Type: application/json.
@@ -276,90 +277,111 @@ func handleStatus(gs GitStore, idx SearchIndex, embeddingsEnabled bool) http.Han
 	}
 }
 
-// handleSynthesizeStart handles POST /api/synthesize
-func handleSynthesizeStart(synth SynthRunner) http.HandlerFunc {
+// handleSynthesizeStart handles POST /api/v1/synthesize
+func handleSynthesizeStart(deps *SynthDeps, hub *TaskHub) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if synth == nil {
-			log.Warn().Msg("synthesize: not available (no SynthRunner configured)")
+		if deps == nil || deps.Adapter == nil {
+			log.Warn().Msg("synthesize: not available (no LLM configured)")
 			writeError(w, http.StatusServiceUnavailable, "synthesis not available")
 			return
 		}
 
-		r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1 MB limit
+		r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, fmt.Sprintf("read body error: %v", err))
 			return
 		}
 
-		log.Info().Str("recipe", string(body)).Msg("synthesize: starting")
-		id, err := synth.Start(string(body))
+		// Parse recipe before starting task — bad recipe gets a 400, not an async error.
+		recipeYAML := string(body)
+		if recipeYAML == "" {
+			recipeYAML = defaultRecipe
+		}
+		recipe, err := synthesize.ParseRecipe(recipeYAML)
 		if err != nil {
-			log.Error().Err(err).Msg("synthesize: start failed")
-			writeError(w, http.StatusInternalServerError, fmt.Sprintf("start synthesis error: %v", err))
+			writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid recipe: %v", err))
 			return
 		}
 
-		log.Info().Str("id", id).Msg("synthesize: launched")
-		writeJSON(w, http.StatusOK, map[string]any{
-			"id":     id,
-			"status": "started",
-		})
-	}
-}
+		log.Info().Str("recipe", recipe.Name).Msg("synthesize: starting")
 
-// handleSynthesizeStatus handles GET /api/synthesize/{recipe}
-func handleSynthesizeStatus(synth SynthRunner) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if synth == nil {
-			writeError(w, http.StatusServiceUnavailable, "synthesis not available")
-			return
-		}
-		id := chi.URLParam(r, "recipe")
-
-		events, done := synth.Status(id)
-		if events == nil {
-			events = []string{}
+		var emb synthesize.Embedder
+		if deps.Embedder != nil {
+			emb = deps.Embedder
 		}
 
-		log.Debug().Str("id", id).Int("events", len(events)).Bool("done", done).Msg("synthesize: status polled")
-		writeJSON(w, http.StatusOK, map[string]any{
-			"id":     id,
-			"events": events,
-			"done":   done,
+		id, err := hub.Start("synth", func(ctx context.Context, emit func(TaskEvent)) {
+			emit(TaskEvent{Status: "running", Phase: "start", Message: "synthesis starting"})
+			onProgress := func(ev synthesize.ProgressEvent) {
+				emit(TaskEvent{Status: "running", Phase: ev.Phase, Message: ev.Message})
+			}
+			if err := synthesize.Run(ctx, deps.GS, deps.Idx, emb, deps.Adapter, recipe, onProgress); err != nil {
+				emit(TaskEvent{Status: "error", Message: err.Error()})
+				return
+			}
+			emit(TaskEvent{Status: "done", Message: "synthesis complete"})
 		})
-	}
-}
-
-// handleSync handles POST /api/sync
-func handleSync(gs GitStore) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		log.Info().Msg("sync started")
-		result, err := gs.Sync(nil)
 		if err != nil {
-			log.Error().Err(err).Msg("sync failed")
-			writeJSON(w, http.StatusInternalServerError, map[string]string{
-				"status": "error",
-				"error":  err.Error(),
+			writeJSON(w, http.StatusConflict, map[string]any{
+				"op":      "synth",
+				"status":  "error",
+				"message": err.Error(),
 			})
 			return
 		}
-		head, _ := gs.HeadCommit()
-		msg := "already up to date"
-		if result.Synced {
-			msg = fmt.Sprintf("merged %d commit(s) from origin/main", result.Ahead)
-		}
-		log.Info().Bool("synced", result.Synced).Int("ahead", result.Ahead).Str("head", head).Msg("sync done")
+
 		writeJSON(w, http.StatusOK, map[string]any{
-			"status":  "ok",
-			"commit":  head,
-			"message": msg,
+			"op":     "synth",
+			"id":     id,
+			"status": "running",
 		})
 	}
 }
 
-// handleEvents handles GET /api/events — SSE endpoint for real-time updates.
-func handleEvents(gs GitStore, idx SearchIndex) http.HandlerFunc {
+const defaultRecipe = `name: default
+prompt: Review and consolidate the knowledge base.
+steps:
+  - mode: prune
+    prompt: Identify stale, redundant, or outdated facts.
+`
+
+// handleSync handles POST /api/v1/sync
+func handleSync(gs GitStore, hub *TaskHub) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id, err := hub.Start("sync", func(ctx context.Context, emit func(TaskEvent)) {
+			emit(TaskEvent{Status: "running", Message: "syncing"})
+			result, err := gs.Sync(nil)
+			if err != nil {
+				emit(TaskEvent{Status: "error", Message: err.Error()})
+				return
+			}
+			head, _ := gs.HeadCommit()
+			msg := "already up to date"
+			if result.Synced {
+				msg = fmt.Sprintf("merged %d commit(s) from origin/main", result.Ahead)
+			}
+			emit(TaskEvent{Status: "done", Message: fmt.Sprintf("%s (%s)", msg, head[:min(7, len(head))])})
+		})
+		if err != nil {
+			writeJSON(w, http.StatusConflict, map[string]any{
+				"op":      "sync",
+				"status":  "error",
+				"message": err.Error(),
+			})
+			return
+		}
+
+		writeJSON(w, http.StatusOK, map[string]any{
+			"op":     "sync",
+			"id":     id,
+			"status": "running",
+		})
+	}
+}
+
+// handleEvents handles GET /api/v1/events — SSE endpoint for real-time updates.
+func handleEvents(gs GitStore, idx SearchIndex, hub *TaskHub) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.Header().Set("Cache-Control", "no-cache")
@@ -369,9 +391,19 @@ func handleEvents(gs GitStore, idx SearchIndex) http.HandlerFunc {
 			http.Error(w, "streaming not supported", http.StatusInternalServerError)
 			return
 		}
-		// Send an initial status event immediately.
+
+		// Subscribe and get snapshot atomically.
+		events, snapshot := hub.Subscribe(r.Context())
+
+		// Send initial status event.
 		head, _ := gs.HeadCommit()
 		fmt.Fprintf(w, "event: status\ndata: {\"head\":\"%s\"}\n\n", head)
+
+		// Replay snapshot (reconnect recovery).
+		for _, ev := range snapshot {
+			data, _ := json.Marshal(ev)
+			fmt.Fprintf(w, "event: task\ndata: %s\n\n", data)
+		}
 		flusher.Flush()
 
 		ticker := time.NewTicker(30 * time.Second)
@@ -380,6 +412,17 @@ func handleEvents(gs GitStore, idx SearchIndex) http.HandlerFunc {
 			select {
 			case <-r.Context().Done():
 				return
+			case e, ok := <-events:
+				if !ok {
+					return
+				}
+				ev, isTask := e.(TaskEvent)
+				if !isTask {
+					continue
+				}
+				data, _ := json.Marshal(ev)
+				fmt.Fprintf(w, "event: task\ndata: %s\n\n", data)
+				flusher.Flush()
 			case <-ticker.C:
 				head, _ := gs.HeadCommit()
 				fmt.Fprintf(w, "event: status\ndata: {\"head\":\"%s\"}\n\n", head)
