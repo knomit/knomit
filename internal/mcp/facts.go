@@ -9,14 +9,14 @@ import (
 
 // Fact represents a single knomit fact file (YAML frontmatter + Markdown body).
 type Fact struct {
-	Path       string
-	Title      string
-	Body       string
-	Domain     []string
-	Confidence float64
-	Sources    int
-	Entities   []string
-	Refs       []string
+	Path       string   `json:"path"`
+	Title      string   `json:"title"`
+	Body       string   `json:"body"`
+	Domain     []string `json:"domain"`
+	Confidence float64  `json:"confidence"`
+	Sources    int      `json:"sources"`
+	Entities   []string `json:"entities"`
+	Refs       []string `json:"refs"`
 }
 
 // frontmatter is the YAML structure parsed from the --- block.

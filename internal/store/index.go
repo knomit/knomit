@@ -238,15 +238,15 @@ const migrateV2 = `ALTER TABLE facts ADD COLUMN vec_data BLOB`
 
 // FactRecord represents a single fact stored in the index.
 type FactRecord struct {
-	Path       string
-	Title      string
-	Body       string
-	Domain     []string
-	Entities   []string
-	Confidence float64
-	Sources    int
-	Refs       []string
-	CommitHash string
+	Path       string   `json:"path"`
+	Title      string   `json:"title"`
+	Body       string   `json:"body"`
+	Domain     []string `json:"domain"`
+	Entities   []string `json:"entities"`
+	Confidence float64  `json:"confidence"`
+	Sources    int      `json:"sources"`
+	Refs       []string `json:"refs"`
+	CommitHash string   `json:"commit_hash,omitempty"`
 }
 
 // Embedder is the interface used by Index to compute embedding vectors.
@@ -587,7 +587,7 @@ type SearchQuery struct {
 // SearchResult is a FactRecord paired with a relevance score in [0, 100].
 type SearchResult struct {
 	FactRecord
-	Score float64
+	Score float64 `json:"score"`
 }
 
 // dotProduct computes the dot product of two float32 slices.
