@@ -28,6 +28,7 @@ require (
 	dario.cat/mergo v1.0.0 // indirect
 	github.com/Microsoft/go-winio v0.6.2 // indirect
 	github.com/ProtonMail/go-crypto v1.1.6 // indirect
+	github.com/asg017/sqlite-vec-go-bindings v0.1.6 // indirect
 	github.com/aws/aws-sdk-go-v2 v1.41.3 // indirect
 	github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.7.6 // indirect
 	github.com/aws/aws-sdk-go-v2/credentials v1.19.11 // indirect
