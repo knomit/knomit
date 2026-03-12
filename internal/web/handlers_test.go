@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -94,7 +95,8 @@ func (m *mockSearchIndex) GetLastCommit() (string, error) {
 // --- helpers ---
 
 func newTestRouter(gs GitStore, idx SearchIndex) http.Handler {
-	return NewRouter(gs, idx, nil, nil, nil, false)
+	hub := NewTaskHub(context.Background())
+	return NewRouter(gs, idx, hub, nil, nil, nil, false)
 }
 
 func doRequest(t *testing.T, handler http.Handler, method, target string, body string) *httptest.ResponseRecorder {
