@@ -654,19 +654,6 @@ type SearchResult struct {
 	Score float64 `json:"score"`
 }
 
-// dotProduct computes the dot product of two float32 slices.
-// For L2-normalised vectors this equals cosine similarity.
-func dotProduct(a, b []float32) float64 {
-	if len(a) != len(b) {
-		return 0
-	}
-	var sum float64
-	for i := range a {
-		sum += float64(a[i]) * float64(b[i])
-	}
-	return sum
-}
-
 // containsAll reports whether haystack contains all elements of needles
 // (case-insensitive substring match).
 func containsAll(haystack []string, needles []string) bool {
@@ -775,12 +762,11 @@ func (idx *Index) Search(q SearchQuery) ([]SearchResult, error) {
 		}
 	}
 
-	// ── Optional vector augmentation ──────────────────────────────────────────
+	// ── Optional vector augmentation via vec0 KNN ─────────────────────────────
 	var queryVec []float32
 	if idx.embedder != nil {
 		queryVec, err = idx.embedder.Embed(q.Text)
 		if err != nil {
-			// Non-fatal: fall back to BM25 only.
 			queryVec = nil
 		}
 	}
@@ -790,17 +776,71 @@ func (idx *Index) Search(q SearchQuery) ([]SearchResult, error) {
 		score float64
 	}
 
-	candidates := make([]candidate, 0, len(ftsResults))
+	// Build path→bm25Score map from FTS results
+	ftsScoreByPath := make(map[string]float64, len(ftsResults))
 	for i, fr := range ftsResults {
-		score := bm25Scores[i]
-		if queryVec != nil {
-			storedVec, err := idx.GetEmbedding(fr.rec.Path)
-			if err == nil && len(storedVec) == len(queryVec) {
-				cosine := dotProduct(queryVec, storedVec)
-				score = 0.6*bm25Scores[i] + 0.4*cosine
+		ftsScoreByPath[fr.rec.Path] = bm25Scores[i]
+	}
+
+	// Vec0 KNN search — two-step: get rowid+distance from vec0, then resolve paths.
+	vecSimByPath := make(map[string]float64)
+	if queryVec != nil {
+		vecBlob := float32SliceToBytes(queryVec)
+		rows, err := idx.db.Query(
+			`SELECT rowid, distance FROM facts_vec WHERE embedding MATCH ? AND k = ?`,
+			vecBlob, limit*5,
+		)
+		if err == nil {
+			type vecHit struct {
+				rowid int64
+				dist  float64
+			}
+			var hits []vecHit
+			for rows.Next() {
+				var h vecHit
+				if err := rows.Scan(&h.rowid, &h.dist); err != nil {
+					break
+				}
+				hits = append(hits, h)
+			}
+			rows.Close()
+
+			// Resolve rowids to paths
+			for _, h := range hits {
+				var path string
+				err := idx.db.QueryRow(`SELECT path FROM facts WHERE rowid = ?`, h.rowid).Scan(&path)
+				if err == nil {
+					vecSimByPath[path] = 1.0 - h.dist // cosine_similarity = 1 - cosine_distance
+				}
 			}
 		}
+	}
+
+	// Merge FTS + vec results
+	seen := make(map[string]bool)
+	candidates := make([]candidate, 0, len(ftsResults)+len(vecSimByPath))
+
+	// FTS results with optional vec boost
+	for _, fr := range ftsResults {
+		bm25 := ftsScoreByPath[fr.rec.Path]
+		score := bm25
+		if cosine, ok := vecSimByPath[fr.rec.Path]; ok {
+			score = 0.6*bm25 + 0.4*cosine
+		}
 		candidates = append(candidates, candidate{rec: fr.rec, score: score})
+		seen[fr.rec.Path] = true
+	}
+
+	// Vec-only results (not in FTS set) if cosine_similarity > 0.2
+	for path, cosine := range vecSimByPath {
+		if seen[path] || cosine <= 0.2 {
+			continue
+		}
+		rec, err := idx.GetByPath(path)
+		if err != nil || rec == nil {
+			continue
+		}
+		candidates = append(candidates, candidate{rec: *rec, score: 0.4 * cosine})
 	}
 
 	// ── Filters ───────────────────────────────────────────────────────────────
