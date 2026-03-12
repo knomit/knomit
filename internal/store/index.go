@@ -9,10 +9,30 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"sync"
 
+	sqlite_vec "github.com/asg017/sqlite-vec-go-bindings/cgo"
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/rs/zerolog/log"
 )
+
+var vecOnce sync.Once
+
+func registerVec() {
+	vecOnce.Do(func() { sqlite_vec.Auto() })
+}
+
+type indexConfig struct {
+	vecDim int
+}
+
+// Option configures an Index.
+type Option func(*indexConfig)
+
+// WithVecDimension sets the dimension of the facts_vec embedding column.
+func WithVecDimension(d int) Option {
+	return func(c *indexConfig) { c.vecDim = d }
+}
 
 // Sync brings the index up to date with the git store.
 //
@@ -212,7 +232,8 @@ type GitReader interface {
 	ListAll() ([]string, error)
 }
 
-const schema = `
+func schemaSQL(vecDim int) string {
+	return fmt.Sprintf(`
 CREATE TABLE IF NOT EXISTS meta (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -238,10 +259,10 @@ CREATE VIRTUAL TABLE IF NOT EXISTS facts_fts USING fts5(
     title, body, entities, domain,
     content='facts', content_rowid='rowid'
 );
-`
-
-// migrateV2 adds the vec_data column to facts if not present (schema version 2).
-const migrateV2 = `ALTER TABLE facts ADD COLUMN vec_data BLOB`
+CREATE VIRTUAL TABLE IF NOT EXISTS facts_vec USING vec0(
+    embedding FLOAT[%d] distance_metric=cosine
+);`, vecDim)
+}
 
 // FactRecord represents a single fact stored in the index.
 type FactRecord struct {
@@ -275,7 +296,14 @@ func (idx *Index) SetEmbedder(e Embedder) {
 
 // New opens (or creates) a SQLite search index at path.
 // Use ":memory:" for an in-memory database (useful in tests).
-func New(path string) (*Index, error) {
+func New(path string, opts ...Option) (*Index, error) {
+	registerVec()
+
+	cfg := indexConfig{vecDim: 768}
+	for _, o := range opts {
+		o(&cfg)
+	}
+
 	dsn := path
 	if path != ":memory:" {
 		dsn = path + "?_journal_mode=WAL&_busy_timeout=5000"
@@ -284,34 +312,20 @@ func New(path string) (*Index, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite: %w", err)
 	}
-	if _, err := db.Exec(schema); err != nil {
+	if _, err := db.Exec(schemaSQL(cfg.vecDim)); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("init schema: %w", err)
 	}
-	if _, err = db.Exec(`INSERT OR IGNORE INTO meta(key, value) VALUES ('schema_version', '1')`); err != nil {
+	if _, err = db.Exec(`INSERT OR IGNORE INTO meta(key, value) VALUES ('schema_version', '3')`); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("init schema_version: %w", err)
 	}
 
-	// Migrate to schema version 2: add vec_data BLOB column.
-	var ver string
-	_ = db.QueryRow(`SELECT value FROM meta WHERE key='schema_version'`).Scan(&ver)
-	if ver == "1" {
-		// Try to add the column; ignore if it already exists.
-		_, alterErr := db.Exec(`ALTER TABLE facts ADD COLUMN vec_data BLOB`)
-		if alterErr != nil && !strings.Contains(alterErr.Error(), "duplicate column") {
-			db.Close()
-			return nil, fmt.Errorf("store: migrate v1->v2: %w", alterErr)
-		}
-		// Always advance schema_version regardless of whether ALTER TABLE was a no-op.
-		if _, err := db.Exec(`UPDATE meta SET value='2' WHERE key='schema_version'`); err != nil {
-			db.Close()
-			return nil, fmt.Errorf("store: migrate v1->v2: update schema_version: %w", err)
-		}
-	}
-
 	return &Index{db: db}, nil
 }
+
+// DB returns the underlying *sql.DB handle.
+func (idx *Index) DB() *sql.DB { return idx.db }
 
 // Close closes the underlying database connection.
 func (idx *Index) Close() error {
@@ -364,13 +378,12 @@ func (idx *Index) Upsert(rec FactRecord) error {
 
 	// Step 2: Insert or replace into facts
 	if _, err := tx.Exec(
-		`INSERT OR REPLACE INTO facts(path, title, body, domain, entities, confidence, sources, refs, commit_hash, vec_data)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT OR REPLACE INTO facts(path, title, body, domain, entities, confidence, sources, refs, commit_hash)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		rec.Path, rec.Title, rec.Body,
 		string(domainJSON), string(entitiesJSON),
 		rec.Confidence, rec.Sources,
 		string(refsJSON), rec.CommitHash,
-		vecData,
 	); err != nil {
 		return fmt.Errorf("upsert fact: %w", err)
 	}
@@ -393,6 +406,21 @@ func (idx *Index) Upsert(rec FactRecord) error {
 		rec.Path, rec.Title, rec.Body, string(entitiesJSON), string(domainJSON),
 	); err != nil {
 		return fmt.Errorf("insert fts row: %w", err)
+	}
+
+	// Step 5: Insert embedding into facts_vec.
+	if vecData != nil {
+		newRowid := int64(0)
+		_ = tx.QueryRow(`SELECT rowid FROM facts WHERE path=?`, rec.Path).Scan(&newRowid)
+		if newRowid > 0 {
+			tx.Exec(`DELETE FROM facts_vec WHERE rowid = ?`, newRowid)
+			if _, err := tx.Exec(
+				`INSERT INTO facts_vec(rowid, embedding) VALUES (?, ?)`,
+				newRowid, vecData,
+			); err != nil {
+				return fmt.Errorf("insert vec row: %w", err)
+			}
+		}
 	}
 
 	return tx.Commit()
@@ -444,10 +472,13 @@ func (idx *Index) GetByPath(path string) (*FactRecord, error) {
 }
 
 // GetEmbedding returns the stored embedding vector for a fact.
-// Returns nil, nil if not found or if vec_data is NULL.
+// Returns nil, nil if not found.
 func (idx *Index) GetEmbedding(path string) ([]float32, error) {
 	var blob []byte
-	err := idx.db.QueryRow(`SELECT vec_data FROM facts WHERE path=?`, path).Scan(&blob)
+	err := idx.db.QueryRow(
+		`SELECT fv.embedding FROM facts_vec fv JOIN facts f ON fv.rowid = f.rowid WHERE f.path = ?`,
+		path,
+	).Scan(&blob)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}

@@ -381,8 +381,26 @@ func (d *dispatchEmb) Embed(text string) ([]float32, error) {
 	return nil, nil
 }
 
-func TestGetEmbedding(t *testing.T) {
+func TestVec0Available(t *testing.T) {
 	idx, err := store.New(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer idx.Close()
+
+	var version string
+	err = idx.DB().QueryRow("SELECT vec_version()").Scan(&version)
+	if err != nil {
+		t.Fatalf("vec_version() failed: %v — sqlite-vec not registered", err)
+	}
+	if version == "" {
+		t.Fatal("vec_version() returned empty string")
+	}
+	t.Logf("sqlite-vec version: %s", version)
+}
+
+func TestGetEmbedding(t *testing.T) {
+	idx, err := store.New(":memory:", store.WithVecDimension(4))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -397,8 +415,8 @@ func TestGetEmbedding(t *testing.T) {
 		t.Fatal("expected nil embedding for nonexistent path")
 	}
 
-	// Build a known 384-dim stub vector.
-	const dims = 384
+	// Build a known 4-dim stub vector.
+	const dims = 4
 	known := make([]float32, dims)
 	for i := range known {
 		known[i] = float32(i) * 0.001
@@ -633,7 +651,7 @@ func TestSearchFilter(t *testing.T) {
 }
 
 func TestSearchHybrid(t *testing.T) {
-	idx, err := store.New(":memory:")
+	idx, err := store.New(":memory:", store.WithVecDimension(4))
 	if err != nil {
 		t.Fatal(err)
 	}
