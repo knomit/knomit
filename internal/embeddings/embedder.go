@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"path/filepath"
+	"runtime"
 	"sync"
 
 	ort "github.com/yalue/onnxruntime_go"
@@ -13,28 +15,51 @@ import (
 var ortOnce sync.Once
 var ortInitErr error
 
-// candidateLibraryPaths lists paths to try for the onnxruntime shared library
-// when ORT_LIB_PATH is not set. Paths are relative-friendly or use well-known
-// system locations; developer-specific absolute paths must not appear here.
-var candidateLibraryPaths = []string{
-	// Bundled alongside the knomit binary (macOS arm64).
-	"lib/libonnxruntime.dylib",
-	// Common Homebrew location (macOS).
-	"/opt/homebrew/lib/libonnxruntime.dylib",
-	// Common system location (Linux).
-	"/usr/local/lib/libonnxruntime.so",
-	"/usr/lib/libonnxruntime.so",
+// mustExePath returns the directory containing the running executable.
+func mustExePath() string {
+	exe, err := os.Executable()
+	if err != nil {
+		return "."
+	}
+	resolved, err := filepath.EvalSymlinks(exe)
+	if err != nil {
+		return filepath.Dir(exe)
+	}
+	return filepath.Dir(resolved)
+}
+
+// libCandidates returns ORT shared library paths to try, in priority order.
+func libCandidates(exeDir string) []string {
+	switch runtime.GOOS {
+	case "darwin":
+		return []string{
+			filepath.Join(exeDir, "lib", "libonnxruntime.dylib"),
+			"/opt/homebrew/lib/libonnxruntime.dylib",
+		}
+	case "linux":
+		return []string{
+			filepath.Join(exeDir, "lib", "libonnxruntime.so"),
+			"/usr/local/lib/libonnxruntime.so",
+			"/usr/lib/libonnxruntime.so",
+		}
+	case "windows":
+		return []string{
+			filepath.Join(exeDir, "lib", "onnxruntime.dll"),
+		}
+	default:
+		return nil
+	}
 }
 
 func initORT() error {
 	ortOnce.Do(func() {
-		// ORT_LIB_PATH env var takes priority.
 		if p := os.Getenv("ORT_LIB_PATH"); p != "" {
 			ort.SetSharedLibraryPath(p)
 		} else {
-			for _, candidate := range candidateLibraryPaths {
-				if _, err := os.Stat(candidate); err == nil {
-					ort.SetSharedLibraryPath(candidate)
+			exeDir := mustExePath()
+			for _, c := range libCandidates(exeDir) {
+				if _, err := os.Stat(c); err == nil {
+					ort.SetSharedLibraryPath(c)
 					break
 				}
 			}
