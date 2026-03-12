@@ -1,5 +1,7 @@
-// Package cluster implements dimensionality reduction (UMAP) and clustering
-// algorithms for high-dimensional embedding vectors.
+// Package cluster implements UMAP (Uniform Manifold Approximation and
+// Projection) dimensionality reduction. Reduces high-dimensional embedding
+// vectors to a lower-dimensional space while preserving local neighborhood
+// structure. Ported from umap-js (https://arxiv.org/abs/1802.03426).
 package cluster
 
 import (
@@ -19,6 +21,14 @@ type UMAPOptions struct {
 // UMAP reduces high-dimensional vectors to NComponents dimensions using the
 // Uniform Manifold Approximation and Projection algorithm.
 // Ported from umap-js, which implements https://arxiv.org/abs/1802.03426.
+//
+// The algorithm proceeds in six phases:
+//  1. Build a k-nearest-neighbor graph (brute-force Euclidean distance).
+//  2. Smooth kNN distances — binary-search for per-point bandwidth (sigma).
+//  3. Construct a fuzzy simplicial set by symmetrizing the kNN graph.
+//  4. Initialize the low-dimensional embedding (random layout).
+//  5. Precompute smooth curve parameters (a, b) from minDist.
+//  6. Optimize the embedding via stochastic gradient descent (SGD).
 func UMAP(vectors [][]float64, opts UMAPOptions) ([][]float64, error) {
 	n := len(vectors)
 	if n == 0 {
@@ -52,6 +62,9 @@ func UMAP(vectors [][]float64, opts UMAPOptions) ([][]float64, error) {
 	// -------------------------------------------------------------------------
 	// Step 1: k-nearest neighbours (brute-force Euclidean)
 	// -------------------------------------------------------------------------
+	// Brute-force is O(n²·d) which is acceptable for our use case (hundreds to
+	// low thousands of facts). For larger datasets, an approximate NN index
+	// (e.g. random-projection trees) would be needed.
 	knnIndices := make([][]int, n)
 	knnDists := make([][]float64, n)
 	k := opts.NNeighbors
@@ -80,6 +93,10 @@ func UMAP(vectors [][]float64, opts UMAPOptions) ([][]float64, error) {
 	// -------------------------------------------------------------------------
 	// Step 2: Smooth kNN distances — find rho and sigma per point
 	// -------------------------------------------------------------------------
+	// Binary search for sigma (bandwidth) per point such that the sum of
+	// neighbor membership strengths equals log2(k). rho is the distance to the
+	// nearest neighbor, ensuring at least one neighbor has membership 1. This
+	// creates an adaptive kernel: points in sparse regions get wider bandwidths.
 	rhos := make([]float64, n)   // distance to nearest neighbour
 	sigmas := make([]float64, n) // bandwidth
 
@@ -124,6 +141,10 @@ func UMAP(vectors [][]float64, opts UMAPOptions) ([][]float64, error) {
 	// -------------------------------------------------------------------------
 	// Step 3: Build fuzzy simplicial set (symmetrized membership strengths)
 	// -------------------------------------------------------------------------
+	// Symmetrize the directed kNN graph into an undirected fuzzy graph.
+	// The formula w_ij = v_ij + v_ji - v_ij*v_ji is the probabilistic t-conorm
+	// (fuzzy OR), meaning: the probability that i and j are neighbors according
+	// to either i's or j's perspective.
 	// Store as sparse COO: row, col, val
 	type edge struct {
 		i, j int
@@ -168,6 +189,9 @@ func UMAP(vectors [][]float64, opts UMAPOptions) ([][]float64, error) {
 	// -------------------------------------------------------------------------
 	// Step 4: Initialise low-dimensional embedding (random in [-10, 10])
 	// -------------------------------------------------------------------------
+	// Random initialization in [-10, 10]. Spectral initialization (PCA) would
+	// converge faster but adds complexity; random works well enough with 200
+	// SGD epochs.
 	embedding := make([][]float64, n)
 	for i := range embedding {
 		embedding[i] = make([]float64, opts.NComponents)
@@ -179,6 +203,10 @@ func UMAP(vectors [][]float64, opts UMAPOptions) ([][]float64, error) {
 	// -------------------------------------------------------------------------
 	// Step 5: Precompute curve parameters a, b from minDist
 	// -------------------------------------------------------------------------
+	// Precompute smooth curve parameters a, b that model the desired distance
+	// distribution in low-dimensional space. The curve 1/(1 + a*d^(2b)) maps
+	// high-dim distances to membership strengths. minDist controls how tightly
+	// points can pack: smaller = denser clusters.
 	a, b := findAB(opts.MinDist)
 
 	// -------------------------------------------------------------------------
@@ -188,6 +216,8 @@ func UMAP(vectors [][]float64, opts UMAPOptions) ([][]float64, error) {
 	lr := 1.0
 	nNeg := 5
 
+	// Edges are sampled proportional to their weight per epoch — high-weight
+	// edges are optimized more frequently.
 	// Build epoch weights: sample edges proportional to weight
 	totalWeight := 0.0
 	for _, e := range edges {
@@ -209,6 +239,7 @@ func UMAP(vectors [][]float64, opts UMAPOptions) ([][]float64, error) {
 		epochNextNegativeSample[idx] = epochsPerSample[idx] / negSampleRate
 	}
 
+	// Clip gradients to [-4, 4] to prevent divergence from outliers.
 	clip := func(x float64) float64 {
 		if x > 4.0 {
 			return 4.0
@@ -220,6 +251,7 @@ func UMAP(vectors [][]float64, opts UMAPOptions) ([][]float64, error) {
 	}
 
 	for epoch := 0; epoch < nEpochs; epoch++ {
+		// Linear decay from 1.0 to 0.0 over epochs (simulated annealing).
 		alpha := lr * (1.0 - float64(epoch)/float64(nEpochs))
 
 		for idx, e := range edges {
@@ -239,7 +271,8 @@ func UMAP(vectors [][]float64, opts UMAPOptions) ([][]float64, error) {
 				distSq = 1e-10
 			}
 
-			// Attraction gradient
+			// Attraction gradient: move connected points closer. This is the
+			// gradient of cross-entropy loss for the attractive force.
 			gradCoeff := -2.0 * a * b * math.Pow(distSq, b-1.0)
 			gradCoeff /= a*math.Pow(distSq, b) + 1.0
 
@@ -276,7 +309,9 @@ func UMAP(vectors [][]float64, opts UMAPOptions) ([][]float64, error) {
 					dSq = 1e-10
 				}
 
-				// Repulsion gradient
+				// Repulsion gradient: push random non-neighbors apart. Negative
+				// sampling approximates the repulsive force from all non-edges,
+				// similar to word2vec's approach.
 				gradCoeff2 := 2.0 * b
 				gradCoeff2 /= (0.001+dSq)*(a*math.Pow(dSq, b)+1.0)
 
@@ -353,6 +388,8 @@ func knnPartialSort(all []knnEntry, k int) {
 // least-squares fit on the smooth approximation of the distance function.
 // This matches the approach in umap-js.
 //
+// Common minDist values are precomputed to avoid the expensive gradient descent.
+//
 // Results are cached for known minDist values to avoid the expensive
 // 10,000-iteration gradient descent on every call (~3M float ops).
 func findAB(minDist float64) (float64, float64) {
@@ -365,6 +402,9 @@ func findAB(minDist float64) (float64, float64) {
 }
 
 // findABSlow computes a, b via gradient descent (expensive).
+// Fits the smooth curve 1/(1 + a*x^(2b)) to a step function that is 1 for
+// x < minDist and decays exponentially after, using 10,000 iterations of
+// gradient descent over 300 sample points.
 func findABSlow(minDist float64) (float64, float64) {
 	spread := 1.0
 	xv := make([]float64, 300)

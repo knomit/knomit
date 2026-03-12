@@ -9,16 +9,28 @@ import (
 	"github.com/ysmood/goob"
 )
 
-// TaskEvent is the event payload broadcast to SSE clients.
+// TaskEvent is the event payload broadcast to SSE clients via TaskHub.
+// Status progresses through: "running" → "done" | "error".
+// Phase and Message carry provider-specific detail (e.g. "raptor-depth 2/3").
 type TaskEvent struct {
-	Op      string `json:"op"`
-	ID      string `json:"id"`
-	Status  string `json:"status"`
+	Op      string `json:"op"`      // operation name, e.g. "synth", "sync"
+	ID      string `json:"id"`      // unique task ID, e.g. "synth-3"
+	Status  string `json:"status"`  // "running", "done", or "error"
 	Phase   string `json:"phase,omitempty"`
 	Message string `json:"message,omitempty"`
 }
 
-// TaskHub manages async tasks with per-op single-flight control and SSE broadcasting.
+// TaskHub manages async tasks with per-op single-flight control and pub/sub
+// broadcasting to SSE clients.
+//
+// Design:
+//   - At most one task per operation (op) runs at a time. A second Start
+//     for the same op returns an error (the handler converts this to 409).
+//   - Events are broadcast via goob.Observable to all subscribers.
+//   - Subscribe returns a snapshot of recent events so reconnecting clients
+//     can catch up without replaying the full history.
+//   - Panic recovery is built into the goroutine wrapper to prevent a
+//     crashing task from tearing down the server.
 type TaskHub struct {
 	mu       sync.Mutex
 	ctx      context.Context
@@ -43,7 +55,11 @@ func NewTaskHub(ctx context.Context) *TaskHub {
 	}
 }
 
-// Start launches a task for the given op. Returns the task ID or an error if at capacity.
+// Start launches a background goroutine for op. Returns the task ID
+// (e.g. "synth-1") or an error if a task for this op is already running.
+// The fn callback receives a cancellable context and an emit function
+// for publishing progress; fn MUST emit a terminal event (done/error)
+// before returning.
 func (h *TaskHub) Start(op string, fn func(ctx context.Context, emit func(TaskEvent))) (string, error) {
 	h.mu.Lock()
 
@@ -123,7 +139,9 @@ func (h *TaskHub) emit(ev TaskEvent) {
 	h.ob.Publish(ev)
 }
 
-// Subscribe atomically creates a subscription and returns the current snapshot.
+// Subscribe atomically creates a subscription and returns the current snapshot
+// of active and last-completed tasks. The snapshot allows reconnecting SSE
+// clients to render the correct UI state immediately.
 func (h *TaskHub) Subscribe(ctx context.Context) (goob.Events, []TaskEvent) {
 	h.mu.Lock()
 	defer h.mu.Unlock()

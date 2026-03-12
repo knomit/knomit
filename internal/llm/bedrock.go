@@ -10,11 +10,21 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
 )
 
+// BedrockAdapter calls Anthropic models hosted on AWS Bedrock using the
+// InvokeModelWithResponseStream API. It manually constructs the Anthropic
+// JSON request body (anthropic_version "bedrock-2023-05-31") and parses
+// the NDJSON stream of content_block_delta events.
+//
+// AWS credentials are loaded from the default credential chain
+// (env vars, ~/.aws/credentials, IAM role, etc.).
 type BedrockAdapter struct {
 	client *bedrockruntime.Client
 	model  string
 }
 
+// NewBedrockAdapter creates an adapter using the default AWS config.
+// Model should be a Bedrock model ID (e.g. "anthropic.claude-3-5-sonnet-20241022-v2:0"
+// or a cross-region ID like "us.anthropic.claude-3-5-sonnet-20241022-v2:0").
 func NewBedrockAdapter(ctx context.Context, model string) (*BedrockAdapter, error) {
 	cfg, err := config.LoadDefaultConfig(ctx)
 	if err != nil {
@@ -24,6 +34,7 @@ func NewBedrockAdapter(ctx context.Context, model string) (*BedrockAdapter, erro
 	return &BedrockAdapter{client: client, model: model}, nil
 }
 
+// Complete implements LLMAdapter by invoking the Bedrock streaming API.
 func (a *BedrockAdapter) Complete(ctx context.Context, system string, msgs []Message, onChunk func(string)) (string, error) {
 	type bedrockMessage struct {
 		Role    string `json:"role"`

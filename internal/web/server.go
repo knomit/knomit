@@ -12,7 +12,8 @@ import (
 	"knomit/internal/synthesize"
 )
 
-// GitStore is the narrow git interface needed by web handlers.
+// GitStore is the narrow git interface needed by read-only query handlers
+// and the sync task handler. Accepts *git.Store at runtime.
 type GitStore interface {
 	ListDir(path string) ([]git.DirEntry, error)
 	ReadFile(path string) (string, error)
@@ -23,14 +24,16 @@ type GitStore interface {
 	Sync(remoteAuth interface{}) (git.SyncResult, error)
 }
 
-// SearchIndex is the narrow search interface needed by web handlers.
+// SearchIndex is the narrow search/index interface needed by query handlers.
+// Accepts *store.Index at runtime.
 type SearchIndex interface {
 	Search(q store.SearchQuery) ([]store.SearchResult, error)
 	GetLastCommit() (string, error)
 }
 
 // SynthDeps bundles the dependencies needed by the synthesize handler.
-// May be nil if LLM is not configured (synth handler returns 503).
+// May be nil if no LLM is configured — the synth handler returns 503
+// in that case rather than panicking.
 type SynthDeps struct {
 	GS       synthesize.GitStore
 	Idx      synthesize.SearchIndex
@@ -38,7 +41,25 @@ type SynthDeps struct {
 	Adapter  llm.LLMAdapter
 }
 
-// NewRouter creates and returns the chi router with all API routes registered.
+// NewRouter creates the chi router with all API routes, MCP endpoints,
+// git smart-HTTP remote, and the embedded SPA frontend.
+//
+// Route layout:
+//
+//	GET  /api/v1/browse      — directory listing
+//	GET  /api/v1/fact        — single fact content
+//	GET  /api/v1/search      — hybrid FTS + vector search
+//	GET  /api/v1/history     — git log
+//	GET  /api/v1/stats       — aggregate statistics
+//	GET  /api/v1/status      — head commit, branch, index state
+//	POST /api/v1/synthesize  — start async synthesis task
+//	POST /api/v1/sync        — start async git sync task
+//	GET  /api/v1/events      — SSE event stream
+//	GET  /api/v1/openapi.yaml — OpenAPI spec
+//	GET  /docs               — Swagger UI
+//	/mcp                     — MCP protocol endpoints (per-profile)
+//	/git                     — Smart HTTP git remote
+//	/*                       — Embedded SPA with client-side routing fallback
 func NewRouter(gs GitStore, idx SearchIndex, hub *TaskHub, synthDeps *SynthDeps, mcpHandlers map[string]http.Handler, gitHandler http.Handler, embeddingsEnabled bool, ontologyRoot string) http.Handler {
 	r := chi.NewRouter()
 	r.Use(middleware.Recoverer)

@@ -1,7 +1,6 @@
 package cluster
 
 import (
-	"fmt"
 	"math"
 	"sort"
 )
@@ -52,6 +51,23 @@ func HDBSCAN(points [][]float64, opts HDBSCANOptions) []int {
 // HDBSCANPrecomputed clusters points given a precomputed NxN distance matrix.
 // The Distance field in opts is ignored (distances are already computed).
 // Returns a label per point; noise points receive label -1.
+//
+// The algorithm proceeds in six steps:
+//  1. (Caller provides the distance matrix.)
+//  2. Compute core distances — the k-th nearest neighbor distance for each point.
+//  3. Build a mutual reachability graph and extract its minimum spanning tree
+//     using Prim's algorithm. Mutual reachability distance between points a and b
+//     is max(core(a), core(b), dist(a,b)), which inflates distances in sparse
+//     regions so that only genuinely dense areas form clusters.
+//  4. Build a single-linkage dendrogram by processing MST edges in ascending
+//     weight order, merging clusters via union-find.
+//  5. Extract flat clusters using the "excess of mass" (EOM) criterion:
+//     each cluster accumulates stability proportional to how long its points
+//     persist (measured in lambda = 1/distance space). A parent cluster is
+//     selected over its children when its own stability exceeds the sum of
+//     its children's stabilities — meaning the single large cluster is a
+//     better explanation than the two sub-clusters.
+//  6. Assign each point to its selected cluster (or noise = -1).
 func HDBSCANPrecomputed(dist [][]float64, opts HDBSCANOptions) []int {
 	n := len(dist)
 	if n == 0 {
@@ -93,7 +109,14 @@ func HDBSCANPrecomputed(dist [][]float64, opts HDBSCANOptions) []int {
 
 	// -------------------------------------------------------------------------
 	// Step 3: Build mutual reachability graph and compute MST with Prim's.
-	// mreach(a,b) = max(core(a), core(b), dist(a,b))
+	//
+	// Mutual reachability distance: mreach(a,b) = max(core(a), core(b), dist(a,b)).
+	// This inflates short edges in low-density regions, ensuring that only
+	// points in genuinely dense neighborhoods merge early.
+	//
+	// Prim's algorithm runs in O(n^2) which is optimal here: we already have
+	// the O(n^2) distance matrix in memory, so there is no benefit to a
+	// heap-based O(E log V) approach.
 	// -------------------------------------------------------------------------
 	type mstEdge struct {
 		u, v   int
@@ -148,11 +171,14 @@ func HDBSCANPrecomputed(dist [][]float64, opts HDBSCANOptions) []int {
 	// Union-Find for building hierarchy
 	uf := newUnionFind(n)
 
-	// Each node in the dendrogram: initially n leaf nodes (0..n-1),
-	// then n-1 internal nodes (n..2n-2).
-	// lambdaInv[node] = the distance (weight) at which this cluster was created.
-	// size[node] = number of original points under this node.
-	// children[node] = two children if internal node.
+	// Dendrogram node fields:
+	//   left, right — child node indices (-1 for leaf nodes)
+	//   lambdaInv   — the merge distance at which this node was created
+	//                  (i.e. the MST edge weight that caused the merge)
+	//   size        — total number of original points below this node
+	//
+	// Nodes 0..n-1 are leaves (one per input point).
+	// Nodes n..2n-2 are internal merge nodes, created in merge order.
 	type dendroNode struct {
 		left, right int
 		lambdaInv   float64 // = merge distance
@@ -195,12 +221,17 @@ func HDBSCANPrecomputed(dist [][]float64, opts HDBSCANOptions) []int {
 	root := nextID - 1 // last created node is the root
 
 	// -------------------------------------------------------------------------
-	// Step 5: Extract flat clusters via excess of mass.
+	// Step 5: Extract flat clusters via "excess of mass" (EOM).
+	//
+	// Each cluster node accumulates stability = sum over its points of
+	// (lambda_death - lambda_birth), where lambda = 1/distance. A point's
+	// lambda_death is the lambda at which it separates from the cluster
+	// (either by a split or by falling below minClusterSize). The EOM
+	// criterion selects a parent cluster over its children when the parent's
+	// own stability exceeds the combined stability of its children — meaning
+	// the single cluster is a better density-based explanation than two
+	// sub-clusters.
 	// -------------------------------------------------------------------------
-	// For each cluster node, compute stability = sum over points p of
-	// (1/lambda_p_death - 1/lambda_birth) where lambda = 1/distance.
-	// A node is selected if its own stability > sum of children stabilities.
-
 	minSize := opts.MinClusterSize
 
 	// stability[node] = excess of mass contribution
@@ -391,267 +422,11 @@ func HDBSCANPrecomputed(dist [][]float64, opts HDBSCANOptions) []int {
 	return labels
 }
 
+// lambdaOf converts a distance to lambda-space (1/distance).
+// Returns +Inf for zero distance.
 func lambdaOf(dist float64) float64 {
 	if dist == 0 {
 		return math.Inf(1)
 	}
 	return 1.0 / dist
-}
-
-// -------------------------------------------------------------------------
-// Union-Find (path-compressed, union by rank)
-// -------------------------------------------------------------------------
-
-type unionFind struct {
-	parent []int
-	rank   []int
-}
-
-func newUnionFind(n int) *unionFind {
-	uf := &unionFind{
-		parent: make([]int, n),
-		rank:   make([]int, n),
-	}
-	for i := range uf.parent {
-		uf.parent[i] = i
-	}
-	return uf
-}
-
-func (uf *unionFind) find(x int) int {
-	for uf.parent[x] != x {
-		uf.parent[x] = uf.parent[uf.parent[x]] // path compression
-		x = uf.parent[x]
-	}
-	return x
-}
-
-func (uf *unionFind) union(a, b int) {
-	ra, rb := uf.find(a), uf.find(b)
-	if ra == rb {
-		return
-	}
-	if uf.rank[ra] < uf.rank[rb] {
-		uf.parent[ra] = rb
-	} else if uf.rank[ra] > uf.rank[rb] {
-		uf.parent[rb] = ra
-	} else {
-		uf.parent[rb] = ra
-		uf.rank[ra]++
-	}
-}
-
-// -------------------------------------------------------------------------
-// FCA metadata splitting
-// -------------------------------------------------------------------------
-
-// FactMeta holds the metadata fields used for FCA-based cluster splitting.
-type FactMeta struct {
-	Domain   []string
-	Entities []string
-}
-
-// SplitByMetadata splits clusters into connected components where two facts
-// are connected if they share at least one domain or entity tag.
-// Components smaller than minSize are reclassified as noise (-1).
-// Input labels are the HDBSCAN output; only non-noise points are processed.
-// Returns a new label slice with the same indexing as labels.
-func SplitByMetadata(facts []FactMeta, labels []int, minSize int) []int {
-	n := len(facts)
-	result := make([]int, n)
-	for i, l := range labels {
-		result[i] = l
-	}
-
-	// Group indices by cluster label
-	clusterIndices := make(map[int][]int)
-	for i, l := range labels {
-		if l == -1 {
-			continue
-		}
-		clusterIndices[l] = append(clusterIndices[l], i)
-	}
-
-	nextLabel := 0
-	// Find the max existing label to avoid collisions
-	for l := range clusterIndices {
-		if l >= nextLabel {
-			nextLabel = l + 1
-		}
-	}
-
-	for _, indices := range clusterIndices {
-		m := len(indices)
-		if m == 0 {
-			continue
-		}
-
-		// Union-Find over local indices (0..m-1)
-		uf := newUnionFind(m)
-
-		// Build tag -> local indices map
-		tagToLocal := make(map[string][]int)
-		for li, gi := range indices {
-			fact := facts[gi]
-			for _, d := range fact.Domain {
-				key := "d:" + d
-				tagToLocal[key] = append(tagToLocal[key], li)
-			}
-			for _, e := range fact.Entities {
-				key := "e:" + e
-				tagToLocal[key] = append(tagToLocal[key], li)
-			}
-		}
-
-		if len(tagToLocal) == 0 {
-			// No tags: one component, keep original label
-			// (assign a new label for all)
-			lbl := nextLabel
-			nextLabel++
-			for _, gi := range indices {
-				result[gi] = lbl
-			}
-			continue
-		}
-
-		// Union facts sharing a tag
-		for _, locals := range tagToLocal {
-			for i := 1; i < len(locals); i++ {
-				uf.union(locals[0], locals[i])
-			}
-		}
-
-		// Group by root
-		components := make(map[int][]int)
-		for li, gi := range indices {
-			root := uf.find(li)
-			components[root] = append(components[root], gi)
-		}
-
-		// If only one component, keep it (assign new label)
-		if len(components) == 1 {
-			lbl := nextLabel
-			nextLabel++
-			for _, gi := range indices {
-				result[gi] = lbl
-			}
-			continue
-		}
-
-		// Multiple components: assign new labels, noise if too small
-		for _, members := range components {
-			if len(members) >= minSize {
-				lbl := nextLabel
-				nextLabel++
-				for _, gi := range members {
-					result[gi] = lbl
-				}
-			} else {
-				for _, gi := range members {
-					result[gi] = -1
-				}
-			}
-		}
-	}
-
-	// Compact labels to 0..k-1
-	labelMap := make(map[int]int)
-	compact := 0
-	final := make([]int, n)
-	for i, l := range result {
-		if l == -1 {
-			final[i] = -1
-			continue
-		}
-		if _, ok := labelMap[l]; !ok {
-			labelMap[l] = compact
-			compact++
-		}
-		final[i] = labelMap[l]
-	}
-	return final
-}
-
-// -------------------------------------------------------------------------
-// ClusterFacts: top-level entry point
-// -------------------------------------------------------------------------
-
-// ClusterOptions configures the ClusterFacts pipeline.
-type ClusterOptions struct {
-	UMAPDimensions int // target dimensions for UMAP (default 5)
-	MinClusterSize int // minimum points per cluster (default 3)
-}
-
-// ClusterResult holds the output of ClusterFacts.
-type ClusterResult struct {
-	Clusters map[int][]int // cluster label → fact indices
-	Noise    []int         // fact indices classified as noise
-}
-
-// ClusterFacts clusters fact embeddings using UMAP + HDBSCAN + FCA metadata split.
-// embeddings[i] is the embedding for facts[i] (or metas[i]).
-func ClusterFacts(embeddings [][]float32, metas []FactMeta, opts ClusterOptions) (ClusterResult, error) {
-	n := len(embeddings)
-	if n == 0 {
-		return ClusterResult{Clusters: map[int][]int{}, Noise: nil}, nil
-	}
-	if len(metas) != n {
-		return ClusterResult{}, fmt.Errorf("cluster: embeddings and metas length mismatch: %d vs %d", n, len(metas))
-	}
-
-	if opts.UMAPDimensions <= 0 {
-		opts.UMAPDimensions = 5
-	}
-	if opts.MinClusterSize <= 0 {
-		opts.MinClusterSize = 3
-	}
-
-	// 1. float32 → float64
-	vecs := make([][]float64, n)
-	for i, emb := range embeddings {
-		v := make([]float64, len(emb))
-		for j, x := range emb {
-			v[j] = float64(x)
-		}
-		vecs[i] = v
-	}
-
-	// 2. UMAP dimensionality reduction
-	nNeighbors := 15
-	if nNeighbors >= n {
-		nNeighbors = n - 1
-	}
-	if nNeighbors < 1 {
-		nNeighbors = 1
-	}
-	reduced, err := UMAP(vecs, UMAPOptions{
-		NComponents: opts.UMAPDimensions,
-		NNeighbors:  nNeighbors,
-		MinDist:     0.1,
-		Seed:        42,
-	})
-	if err != nil {
-		return ClusterResult{}, fmt.Errorf("cluster: UMAP failed: %w", err)
-	}
-
-	// 3. HDBSCAN
-	hdbscanLabels := HDBSCAN(reduced, HDBSCANOptions{
-		MinClusterSize: opts.MinClusterSize,
-	})
-
-	// 4. FCA metadata split
-	finalLabels := SplitByMetadata(metas, hdbscanLabels, opts.MinClusterSize)
-
-	// 5. Build ClusterResult
-	clusters := make(map[int][]int)
-	noise := []int{}
-	for i, l := range finalLabels {
-		if l == -1 {
-			noise = append(noise, i)
-		} else {
-			clusters[l] = append(clusters[l], i)
-		}
-	}
-
-	return ClusterResult{Clusters: clusters, Noise: noise}, nil
 }

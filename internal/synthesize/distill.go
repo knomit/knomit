@@ -1,86 +1,21 @@
+// Package synthesize — Distill (RAPTOR) step of the synthesis pipeline:
+// iteratively clusters facts and uses an LLM to synthesize higher-order
+// insights, repeating for multiple depth levels.
+//
+// RAPTOR (Recursive Abstractive Processing for Tree-Organized Retrieval):
+// at each depth, cluster facts -> synthesize patterns -> re-embed for next level.
 package synthesize
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 
 	"github.com/rs/zerolog/log"
-	"knomit/internal/cluster"
 	"knomit/internal/llm"
 	"knomit/internal/mcp"
 	"knomit/internal/store"
 )
-
-// DistillResult is the LLM JSON response for a distill step.
-type DistillResult struct {
-	Synthesize []distillFact `json:"synthesize"`
-	Forget     []string      `json:"forget"`
-}
-
-// distillFact is a synthesized fact returned by the LLM in a distill step.
-type distillFact struct {
-	Path       string   `json:"path"`
-	Title      string   `json:"title"`
-	Body       string   `json:"body"`
-	Domain     []string `json:"domain"`
-	Confidence float64  `json:"confidence"`
-	Entities   []string `json:"entities"`
-	Refs       []string `json:"refs"`
-}
-
-// buildDistillPrompt builds the LLM prompt for a distill step.
-func buildDistillPrompt(facts []factForLLM, recipePrompt, stepPrompt string) string {
-	factsJSON, _ := json.MarshalIndent(facts, "", "  ")
-
-	var sb strings.Builder
-	sb.WriteString("You are synthesizing facts in a knowledge base to find patterns and higher-order insights.\n\n")
-	if recipePrompt != "" {
-		sb.WriteString("Context: ")
-		sb.WriteString(recipePrompt)
-		sb.WriteString("\n")
-	}
-	if stepPrompt != "" {
-		sb.WriteString("Instructions: ")
-		sb.WriteString(stepPrompt)
-		sb.WriteString("\n")
-	}
-	sb.WriteString("Facts in scope:\n")
-	sb.Write(factsJSON)
-	sb.WriteString(`
-
-Identify patterns across these facts. Produce:
-1. New higher-order facts that capture patterns
-2. Which original facts are fully subsumed and can be forgotten
-
-Respond as JSON (no markdown wrapping):
-{
-  "synthesize": [
-    {
-      "path": "know/...",
-      "title": "...",
-      "body": "...",
-      "domain": [],
-      "confidence": 0.X,
-      "entities": [],
-      "refs": ["source-file1.md", "source-file2.md"]
-    }
-  ],
-  "forget": ["file1.md", "file2.md"]
-}`)
-	return sb.String()
-}
-
-// parseDistillResponse parses the LLM JSON response for a distill step.
-func parseDistillResponse(text string) (DistillResult, error) {
-	raw := extractJSON(text)
-	var result DistillResult
-	if err := json.Unmarshal([]byte(raw), &result); err != nil {
-		return DistillResult{}, fmt.Errorf("parseDistillResponse: %w (raw: %.200s)", err, raw)
-	}
-	return result, nil
-}
 
 // executeDistillStep runs one distill (RAPTOR) step of the synthesis pipeline.
 func executeDistillStep(ctx context.Context, gs GitStore, idx SearchIndex, embedder Embedder, adapter llm.LLMAdapter, step RecipeStep, recipe Recipe, onProgress func(ProgressEvent)) error {
@@ -132,10 +67,10 @@ func executeDistillStep(ctx context.Context, gs GitStore, idx SearchIndex, embed
 		var clusterMap map[int][]factForLLM
 
 		if depth == 0 {
-			// Initial depth: facts are in the index, use PairwiseDistances from SQLite.
+			// Initial depth uses SQLite-stored embeddings via PairwiseDistances.
 			clusterMap, err = distillClusterFromIndex(currentFacts, idx, embedder, minCluster, onProgress)
 		} else {
-			// RAPTOR depth > 0: embeddings are in-memory, use cosine HDBSCAN directly.
+			// Subsequent depths use in-memory embeddings from freshly synthesized facts.
 			clusterMap = distillClusterInMemory(currentFacts, minCluster, onProgress)
 		}
 		if err != nil {
@@ -263,127 +198,4 @@ func executeDistillStep(ctx context.Context, gs GitStore, idx SearchIndex, embed
 
 	onProgress(ProgressEvent{Phase: "distill-done", Message: fmt.Sprintf("%d synthesized, %d forgotten", len(allSynthesized), len(allForget))})
 	return nil
-}
-
-// distillClusterFromIndex clusters facts whose embeddings are stored in the index,
-// using PairwiseDistances (SQLite vec_distance_cosine) + HDBSCANPrecomputed.
-// Returns nil clusterMap if embeddings are unavailable (caller should fall back).
-func distillClusterFromIndex(facts []workFact, idx SearchIndex, embedder Embedder, minCluster int, onProgress func(ProgressEvent)) (map[int][]factForLLM, error) {
-	pd, hasPD := idx.(PairwiseDistancer)
-	if embedder == nil || !hasPD {
-		onProgress(ProgressEvent{Phase: "cluster", Message: "no embeddings, using single cluster"})
-		return nil, nil
-	}
-
-	paths := make([]string, len(facts))
-	for i, f := range facts {
-		paths[i] = f.File
-	}
-
-	onProgress(ProgressEvent{Phase: "cluster", Message: fmt.Sprintf("computing distances for %d facts", len(facts))})
-	retPaths, dist, err := pd.PairwiseDistances(paths)
-	if err != nil {
-		log.Warn().Err(err).Msg("distill: pairwise distances failed")
-		return nil, nil
-	}
-	if len(retPaths) < minCluster {
-		onProgress(ProgressEvent{Phase: "cluster", Message: fmt.Sprintf("insufficient embeddings (%d)", len(retPaths))})
-		return nil, nil
-	}
-
-	factByPath := map[string]factForLLM{}
-	for _, f := range facts {
-		factByPath[f.File] = f.factForLLM
-	}
-
-	labels := cluster.HDBSCANPrecomputed(dist, cluster.HDBSCANOptions{
-		MinClusterSize: minCluster,
-	})
-
-	clusterMap := map[int][]factForLLM{}
-	for i, path := range retPaths {
-		if labels[i] == -1 {
-			continue
-		}
-		clusterMap[labels[i]] = append(clusterMap[labels[i]], factByPath[path])
-	}
-	return clusterMap, nil
-}
-
-// distillClusterInMemory clusters facts using in-memory embeddings (for RAPTOR depth > 0
-// where embeddings are freshly computed and not stored in the index).
-// Uses HDBSCAN with cosine distance directly. Returns nil if insufficient embeddings.
-func distillClusterInMemory(facts []workFact, minCluster int, onProgress func(ProgressEvent)) map[int][]factForLLM {
-	var withEmbedding []int
-	for i, f := range facts {
-		if len(f.embedding) > 0 {
-			withEmbedding = append(withEmbedding, i)
-		}
-	}
-	if len(withEmbedding) < minCluster {
-		onProgress(ProgressEvent{Phase: "cluster", Message: fmt.Sprintf("insufficient embeddings (%d)", len(withEmbedding))})
-		return nil
-	}
-
-	vecs := make([][]float64, len(withEmbedding))
-	for i, idx := range withEmbedding {
-		v32 := facts[idx].embedding
-		v64 := make([]float64, len(v32))
-		for j, x := range v32 {
-			v64[j] = float64(x)
-		}
-		vecs[i] = v64
-	}
-
-	labels := cluster.HDBSCAN(vecs, cluster.HDBSCANOptions{
-		MinClusterSize: minCluster,
-		Distance:       cluster.CosineDistance,
-	})
-
-	clusterMap := map[int][]factForLLM{}
-	for i, fi := range withEmbedding {
-		if labels[i] == -1 {
-			continue
-		}
-		clusterMap[labels[i]] = append(clusterMap[labels[i]], facts[fi].factForLLM)
-	}
-	return clusterMap
-}
-
-// workFact is a fact with an optional in-memory embedding (used during RAPTOR recursion).
-type workFact struct {
-	factForLLM
-	embedding []float32
-}
-
-// runDistillOnGroup sends one group of facts to the LLM and returns synthesized facts + paths to forget.
-func runDistillOnGroup(ctx context.Context, gs GitStore, idx SearchIndex, adapter llm.LLMAdapter, group []factForLLM, step RecipeStep, recipe Recipe, onProgress func(ProgressEvent)) ([]distillFact, []string, error) {
-	const maxChunkBytes = 100_000
-	chunks := chunkFacts(group, maxChunkBytes)
-
-	var synthesized []distillFact
-	var forget []string
-
-	for i, chunk := range chunks {
-		log.Debug().Int("chunk", i+1).Int("total", len(chunks)).Int("facts", len(chunk)).Msg("distill: sending to LLM")
-		onProgress(ProgressEvent{Phase: "llm", Message: fmt.Sprintf("distill chunk %d/%d (%d facts)", i+1, len(chunks), len(chunk))})
-		prompt := buildDistillPrompt(chunk, recipe.Prompt, step.Prompt)
-		response, err := adapter.Complete(
-			ctx,
-			"You are a knowledge base synthesis assistant. Respond only with valid JSON.",
-			[]llm.Message{{Role: "user", Content: prompt}},
-			nil,
-		)
-		if err != nil {
-			return nil, nil, fmt.Errorf("distill LLM chunk %d: %w", i+1, err)
-		}
-		result, err := parseDistillResponse(response)
-		if err != nil {
-			return nil, nil, fmt.Errorf("distill parse chunk %d: %w", i+1, err)
-		}
-		log.Debug().Int("synthesized", len(result.Synthesize)).Int("forget", len(result.Forget)).Msg("distill: LLM response parsed")
-		synthesized = append(synthesized, result.Synthesize...)
-		forget = append(forget, result.Forget...)
-	}
-	return synthesized, forget, nil
 }

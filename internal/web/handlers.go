@@ -1,20 +1,41 @@
+// Package web provides the knomit HTTP server: REST API, SSE event stream,
+// Smart HTTP git remote, and embedded SPA frontend.
+//
+// Architecture:
+//
+//   - All handlers accept narrow interfaces (GitStore, SearchIndex) rather
+//     than concrete types, making them testable with hand-rolled mocks.
+//   - Long-running operations (synthesis, git sync) execute asynchronously
+//     via TaskHub; clients observe progress through the SSE /api/v1/events
+//     endpoint.
+//   - The frontend is an embedded SPA served with client-side routing
+//     fallback (embed.go / embed_noembed.go).
+//
+// Files in this package:
+//
+//   - server.go          — NewRouter: chi mux wiring, dependency interfaces.
+//   - handlers.go        — Read-only query handlers (browse, fact, search,
+//                          history, stats, status) and JSON helpers.
+//   - handlers_task.go   — Async task handlers (synthesize, sync) and helpers.
+//   - handlers_stream.go — SSE endpoint (handleEvents).
+//   - taskhub.go         — TaskHub: per-op single-flight, pub/sub broadcasting.
+//   - gitremote.go       — Smart HTTP git remote (upload-pack, receive-pack).
+//   - openapi_handler.go — Embedded OpenAPI spec and Swagger UI.
+//   - embed.go           — Embedded SPA assets (build tag: !noembed).
+//   - embed_noembed.go   — 404 stub when compiled without SPA (build tag: noembed).
 package web
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/rs/zerolog/log"
 	"knomit/internal/git"
 	"knomit/internal/mcp"
 	"knomit/internal/store"
-	"knomit/internal/synthesize"
 )
 
 // writeJSON encodes v as JSON and writes it to w with Content-Type: application/json.
@@ -29,7 +50,10 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, map[string]string{"error": msg})
 }
 
-// handleBrowse handles GET /api/browse?path=<path>
+// handleBrowse handles GET /api/browse?path=<path>.
+// When the path parameter is empty, it defaults to ontologyRoot — the
+// configured knowledge-base root — so the UI lands on a meaningful
+// starting directory rather than the repository top level.
 func handleBrowse(gs GitStore, ontologyRoot string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.Query().Get("path")
@@ -92,7 +116,9 @@ func handleFact(gs GitStore) http.HandlerFunc {
 	}
 }
 
-// handleSearch handles GET /api/search?q=<query>&entities=<e1,e2>&domain=<d1,d2>&path=<p>&min_confidence=<f>&limit=<n>
+// handleSearch handles GET /api/search?q=<query>&entities=<e1,e2>&domain=<d1,d2>&path=<p>&min_confidence=<f>&limit=<n>.
+// The entities and domain filters are AND-combined (all specified values
+// must match). Each accepts a comma-separated list of terms.
 func handleSearch(idx SearchIndex) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if idx == nil {
@@ -211,7 +237,11 @@ func handleHistory(gs GitStore) http.HandlerFunc {
 	}
 }
 
-// handleStats handles GET /api/stats?path=<path>
+// handleStats handles GET /api/stats?path=<path>.
+// It iterates over all facts in the knowledge base (optionally filtered
+// by path prefix), collecting domain/entity counts and average confidence.
+// This is fine for small-to-medium knowledge bases; very large repos may
+// want a cached or incremental approach.
 func handleStats(gs GitStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		pathPrefix := r.URL.Query().Get("path")
@@ -290,159 +320,5 @@ func handleStatus(gs GitStore, idx SearchIndex, embeddingsEnabled bool) http.Han
 			"index_commit":       indexCommit,
 			"embeddings_enabled": embeddingsEnabled,
 		})
-	}
-}
-
-// writeTaskStarted writes a 200 response for a successfully started task.
-func writeTaskStarted(w http.ResponseWriter, op, id string) {
-	writeJSON(w, http.StatusOK, map[string]any{"op": op, "id": id, "status": "running"})
-}
-
-// writeTaskConflict writes a 409 response when a task is already running.
-func writeTaskConflict(w http.ResponseWriter, op string, err error) {
-	writeJSON(w, http.StatusConflict, map[string]any{"op": op, "status": "error", "message": err.Error()})
-}
-
-// handleSynthesizeStart handles POST /api/v1/synthesize
-func handleSynthesizeStart(deps *SynthDeps, hub *TaskHub) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if deps == nil || deps.Adapter == nil {
-			log.Warn().Msg("synthesize: not available (no LLM configured)")
-			writeError(w, http.StatusServiceUnavailable, "synthesis not available")
-			return
-		}
-
-		r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
-		body, err := io.ReadAll(r.Body)
-		if err != nil {
-			writeError(w, http.StatusBadRequest, fmt.Sprintf("read body error: %v", err))
-			return
-		}
-
-		// Parse recipe before starting task — bad recipe gets a 400, not an async error.
-		recipeYAML := string(body)
-		if recipeYAML == "" {
-			recipeYAML = defaultRecipe
-		}
-		recipe, err := synthesize.ParseRecipe(recipeYAML)
-		if err != nil {
-			writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid recipe: %v", err))
-			return
-		}
-
-		log.Info().Str("recipe", recipe.Name).Msg("synthesize: starting")
-
-		var emb synthesize.Embedder
-		if deps.Embedder != nil {
-			emb = deps.Embedder
-		}
-
-		id, err := hub.Start("synth", func(ctx context.Context, emit func(TaskEvent)) {
-			emit(TaskEvent{Status: "running", Phase: "start", Message: "synthesis starting"})
-			onProgress := func(ev synthesize.ProgressEvent) {
-				emit(TaskEvent{Status: "running", Phase: ev.Phase, Message: ev.Message})
-			}
-			if err := synthesize.Run(ctx, deps.GS, deps.Idx, emb, deps.Adapter, recipe, onProgress); err != nil {
-				emit(TaskEvent{Status: "error", Message: err.Error()})
-				return
-			}
-			emit(TaskEvent{Status: "done", Message: "synthesis complete"})
-		})
-		if err != nil {
-			writeTaskConflict(w, "synth", err)
-			return
-		}
-
-		writeTaskStarted(w, "synth", id)
-	}
-}
-
-const defaultRecipe = `name: default
-prompt: Review and consolidate the knowledge base.
-steps:
-  - mode: prune
-    prompt: Identify stale, redundant, or outdated facts.
-`
-
-// handleSync handles POST /api/v1/sync
-func handleSync(gs GitStore, hub *TaskHub) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		id, err := hub.Start("sync", func(ctx context.Context, emit func(TaskEvent)) {
-			emit(TaskEvent{Status: "running", Message: "syncing"})
-			result, err := gs.Sync(nil)
-			if err != nil {
-				emit(TaskEvent{Status: "error", Message: err.Error()})
-				return
-			}
-			head, _ := gs.HeadCommit()
-			msg := "already up to date"
-			if result.Synced {
-				msg = fmt.Sprintf("merged %d commit(s) from origin/main", result.Ahead)
-			}
-			emit(TaskEvent{Status: "done", Message: fmt.Sprintf("%s (%s)", msg, head[:min(7, len(head))])})
-		})
-		if err != nil {
-			writeTaskConflict(w, "sync", err)
-			return
-		}
-
-		writeTaskStarted(w, "sync", id)
-	}
-}
-
-// handleEvents handles GET /api/v1/events — SSE endpoint for real-time updates.
-func handleEvents(gs GitStore, idx SearchIndex, hub *TaskHub) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/event-stream")
-		w.Header().Set("Cache-Control", "no-cache")
-		w.Header().Set("Connection", "keep-alive")
-		flusher, ok := w.(http.Flusher)
-		if !ok {
-			http.Error(w, "streaming not supported", http.StatusInternalServerError)
-			return
-		}
-
-		// Subscribe and get snapshot atomically.
-		events, snapshot := hub.Subscribe(r.Context())
-
-		// Send initial status event.
-		head, _ := gs.HeadCommit()
-		fmt.Fprintf(w, "event: status\ndata: {\"head\":\"%s\"}\n\n", head)
-
-		// Replay snapshot (reconnect recovery).
-		for _, ev := range snapshot {
-			data, _ := json.Marshal(ev)
-			fmt.Fprintf(w, "event: task\ndata: %s\n\n", data)
-		}
-		flusher.Flush()
-
-		ticker := time.NewTicker(30 * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-r.Context().Done():
-				return
-			case e, ok := <-events:
-				if !ok {
-					return
-				}
-				ev, isTask := e.(TaskEvent)
-				if !isTask {
-					continue
-				}
-				data, _ := json.Marshal(ev)
-				fmt.Fprintf(w, "event: task\ndata: %s\n\n", data)
-				// After a task completes, push the current head so the UI refreshes immediately.
-				if ev.Status == "done" || ev.Status == "error" {
-					head, _ := gs.HeadCommit()
-					fmt.Fprintf(w, "event: status\ndata: {\"head\":\"%s\"}\n\n", head)
-				}
-				flusher.Flush()
-			case <-ticker.C:
-				head, _ := gs.HeadCommit()
-				fmt.Fprintf(w, "event: status\ndata: {\"head\":\"%s\"}\n\n", head)
-				flusher.Flush()
-			}
-		}
 	}
 }

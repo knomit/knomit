@@ -12,15 +12,22 @@ import (
 	"time"
 )
 
-// OllamaAdapter calls a local or remote Ollama instance via its REST API.
+// OllamaAdapter calls a local or remote Ollama instance via its /api/chat
+// REST endpoint. Responses are streamed as newline-delimited JSON (NDJSON),
+// with each line containing a message fragment and a done flag.
+//
+// The server address is read from OLLAMA_HOST (default http://localhost:11434).
+// Unlike the API-based adapters, Ollama supports any model the server has
+// pulled — including quantized open-weight models.
 type OllamaAdapter struct {
 	host   string
 	model  string
 	client *http.Client
 }
 
-// NewOllamaAdapter creates an adapter after verifying the Ollama server is reachable.
-// Reads OLLAMA_HOST from the environment (default: http://localhost:11434).
+// NewOllamaAdapter creates an adapter after verifying the Ollama server is
+// reachable (5-second health check against /api/tags). Returns an error if
+// the server is down or unreachable.
 func NewOllamaAdapter(ctx context.Context, model string) (*OllamaAdapter, error) {
 	host := os.Getenv("OLLAMA_HOST")
 	if host == "" {
@@ -71,6 +78,8 @@ type ollamaStreamLine struct {
 	Done    bool          `json:"done"`
 }
 
+// Complete implements LLMAdapter by POSTing to /api/chat with stream: true
+// and reading NDJSON lines until done: true.
 func (a *OllamaAdapter) Complete(ctx context.Context, system string, msgs []Message, onChunk func(string)) (string, error) {
 	chatMsgs := make([]ollamaMessage, 0, len(msgs)+1)
 	chatMsgs = append(chatMsgs, ollamaMessage{Role: "system", Content: system})

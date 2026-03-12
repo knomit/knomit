@@ -6,6 +6,17 @@ import (
 	"strings"
 )
 
+// ResolveProvider determines the provider name from a model string.
+// If explicit is non-empty it is returned as-is. Otherwise the model name
+// is matched by prefix:
+//
+//   - "claude"             → "claudecli"  (bare name = CLI shorthand)
+//   - "gemini"             → "geminicli"
+//   - "claude-*"           → "anthropic"
+//   - "gemini-*"           → "gemini"
+//   - "anthropic.*|us.*|eu.*" → "bedrock"
+//
+// Returns an error if no rule matches.
 func ResolveProvider(model, explicit string) (string, error) {
 	if explicit != "" {
 		return explicit, nil
@@ -30,6 +41,10 @@ func ResolveProvider(model, explicit string) (string, error) {
 	return "", fmt.Errorf("cannot infer provider from model %q", model)
 }
 
+// NewAdapter is the top-level factory: given a provider name (from
+// ResolveProvider) and a model string, it returns the corresponding
+// LLMAdapter. Each provider performs its own initialization (API client
+// creation, health checks, credential loading).
 func NewAdapter(ctx context.Context, provider, model string) (LLMAdapter, error) {
 	switch provider {
 	case "anthropic":

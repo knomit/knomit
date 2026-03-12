@@ -7,17 +7,22 @@ import (
 	"strings"
 )
 
+// GeminiCLIAdapter shells out to the `gemini` CLI binary in headless mode
+// (-p ""). Like ClaudeCLIAdapter, this is non-streaming and single-turn:
+// the system prompt and all user messages are concatenated and piped to stdin.
 type GeminiCLIAdapter struct {
 	model string
 }
 
+// NewGeminiCLIAdapter creates an adapter. If model starts with "gemini-",
+// it is passed as --model; otherwise the CLI default is used.
 func NewGeminiCLIAdapter(model string) *GeminiCLIAdapter {
 	return &GeminiCLIAdapter{model: model}
 }
 
+// Complete implements LLMAdapter by running `gemini -p ""` as a subprocess.
+// The full response is returned at once (no streaming).
 func (a *GeminiCLIAdapter) Complete(ctx context.Context, system string, msgs []Message, onChunk func(string)) (string, error) {
-	// Note: multi-turn conversation (msgs with assistant-role entries) is not supported
-	// by the CLI interface; only user messages are sent to the process.
 
 	var userParts []string
 	for _, m := range msgs {

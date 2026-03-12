@@ -1,280 +1,18 @@
+// Package synthesize — Prune step of the synthesis pipeline: gathers facts,
+// clusters by semantic similarity, sends clusters to an LLM for review, and
+// applies keep/forget/update/merge decisions.
 package synthesize
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 
 	"github.com/rs/zerolog/log"
-	"knomit/internal/cluster"
 	"knomit/internal/llm"
 	"knomit/internal/mcp"
 	"knomit/internal/store"
 )
-
-// PruneDecision is the LLM's decision for a single fact.
-type PruneDecision struct {
-	Path       string  `json:"path"`
-	Action     string  `json:"action"` // "keep" | "forget" | "update"
-	Confidence float64 `json:"confidence,omitempty"`
-}
-
-// mergedFact is the embedded merged fact object from the LLM response.
-type mergedFact struct {
-	Path       string   `json:"path"`
-	Title      string   `json:"title"`
-	Body       string   `json:"body"`
-	Domain     []string `json:"domain"`
-	Confidence float64  `json:"confidence"`
-	Sources    int      `json:"sources"`
-	Entities   []string `json:"entities"`
-	Refs       []string `json:"refs"`
-}
-
-// MergeEntry groups source paths with the merged replacement fact.
-type MergeEntry struct {
-	Paths  []string   `json:"paths"`
-	Merged mergedFact `json:"merged"`
-}
-
-// PruneResult is the full JSON response from the LLM prune call.
-type PruneResult struct {
-	Decisions []PruneDecision `json:"decisions"`
-	Merges    []MergeEntry    `json:"merges"`
-}
-
-// factForLLM is the subset of fact fields sent to the LLM.
-type factForLLM struct {
-	File       string   `json:"file"`
-	Title      string   `json:"title"`
-	Body       string   `json:"body"`
-	Domain     []string `json:"domain"`
-	Entities   []string `json:"entities"`
-	Confidence float64  `json:"confidence"`
-	Sources    int      `json:"sources"`
-}
-
-// buildPrunePrompt builds the LLM prompt for a prune step.
-func buildPrunePrompt(facts []factForLLM, recipePrompt, stepPrompt string) string {
-	factsJSON, _ := json.MarshalIndent(facts, "", "  ")
-
-	var sb strings.Builder
-	sb.WriteString("You are reviewing facts in a knowledge base for staleness, redundancy, and duplication.\n\n")
-	if recipePrompt != "" {
-		sb.WriteString("Context: ")
-		sb.WriteString(recipePrompt)
-		sb.WriteString("\n")
-	}
-	if stepPrompt != "" {
-		sb.WriteString("Instructions: ")
-		sb.WriteString(stepPrompt)
-		sb.WriteString("\n")
-	}
-	sb.WriteString("Facts to review:\n")
-	sb.Write(factsJSON)
-	sb.WriteString(`
-
-For each fact, decide:
-- keep: fact is current and valuable
-- forget: fact is obsolete, superseded, or no longer true
-- update: fact needs confidence adjusted (provide new value)
-
-Also identify facts that say the same thing and should be merged into a single unified fact.
-
-Respond as JSON (no markdown wrapping):
-{
-  "decisions": [
-    { "path": "...", "action": "keep|forget|update", "confidence": 0.X }
-  ],
-  "merges": [
-    {
-      "paths": ["file1.md", "file2.md"],
-      "merged": {
-        "path": "know/...",
-        "title": "...",
-        "body": "...",
-        "domain": [],
-        "confidence": 0.X,
-        "sources": 2,
-        "entities": [],
-        "refs": ["file1.md", "file2.md"]
-      }
-    }
-  ]
-}`)
-	return sb.String()
-}
-
-// extractJSON strips optional markdown code fences from LLM output.
-func extractJSON(text string) string {
-	text = strings.TrimSpace(text)
-	// Strip ```json ... ``` or ``` ... ```
-	if strings.HasPrefix(text, "```") {
-		end := strings.LastIndex(text, "```")
-		if end > 3 {
-			inner := text[3:end]
-			// strip optional "json" language tag
-			if idx := strings.IndexByte(inner, '\n'); idx >= 0 {
-				inner = inner[idx+1:]
-			}
-			return strings.TrimSpace(inner)
-		}
-	}
-	return text
-}
-
-// parsePruneResponse parses the LLM JSON response for a prune step.
-func parsePruneResponse(text string) (PruneResult, error) {
-	raw := extractJSON(text)
-	var result PruneResult
-	if err := json.Unmarshal([]byte(raw), &result); err != nil {
-		return PruneResult{}, fmt.Errorf("parsePruneResponse: %w (raw: %.200s)", err, raw)
-	}
-	return result, nil
-}
-
-// chunkFacts splits facts into groups where each group's JSON is ≤ maxBytes.
-func chunkFacts(facts []factForLLM, maxBytes int) [][]factForLLM {
-	var chunks [][]factForLLM
-	var current []factForLLM
-	currentSize := 0
-
-	for _, f := range facts {
-		b, _ := json.Marshal(f)
-		size := len(b)
-		if currentSize+size > maxBytes && len(current) > 0 {
-			chunks = append(chunks, current)
-			current = nil
-			currentSize = 0
-		}
-		current = append(current, f)
-		currentSize += size
-	}
-	if len(current) > 0 {
-		chunks = append(chunks, current)
-	}
-	return chunks
-}
-
-// gatherAllFacts reads all .md facts from git and returns them as factForLLM slices.
-func gatherAllFacts(gs GitStore) ([]factForLLM, error) {
-	paths, err := gs.ListAll()
-	if err != nil {
-		return nil, fmt.Errorf("gatherAllFacts: list: %w", err)
-	}
-
-	facts := make([]factForLLM, 0, len(paths))
-	for _, path := range paths {
-		if !strings.HasSuffix(path, ".md") {
-			continue
-		}
-		content, err := gs.ReadFile(path)
-		if err != nil {
-			continue // skip unreadable files
-		}
-		fact, err := mcp.ParseFact(path, content)
-		if err != nil {
-			continue // skip non-fact files
-		}
-		facts = append(facts, factForLLM{
-			File:       fact.Path,
-			Title:      fact.Title,
-			Body:       fact.Body,
-			Domain:     fact.Domain,
-			Entities:   fact.Entities,
-			Confidence: fact.Confidence,
-			Sources:    fact.Sources,
-		})
-	}
-	return facts, nil
-}
-
-// PairwiseDistancer computes cosine distance matrices in the index (via SQLite vec0).
-type PairwiseDistancer interface {
-	PairwiseDistances(paths []string) (retPaths []string, dist [][]float64, err error)
-}
-
-// clusterFactsForPrune groups facts by semantic similarity using embeddings.
-// Returns a slice of fact groups — each group is a cluster to be reviewed together.
-// When embeddings are unavailable or too few, returns all facts as a single group.
-//
-// Computes cosine distances via SQLite's vec_distance_cosine (delegating to the
-// index), then runs HDBSCAN on the precomputed distance matrix. This avoids
-// loading 768-dim embedding vectors into Go and sidesteps the curse of
-// dimensionality that makes Euclidean HDBSCAN fail on high-dim data.
-func clusterFactsForPrune(facts []factForLLM, idx SearchIndex, embedder Embedder, step RecipeStep, onProgress func(ProgressEvent)) ([][]factForLLM, error) {
-	minCluster := step.MinClusterSize
-	if minCluster == 0 {
-		minCluster = 3
-	}
-
-	pd, hasPD := idx.(PairwiseDistancer)
-	if embedder == nil || !hasPD {
-		log.Debug().Msg("prune: no embeddings available, using single group")
-		onProgress(ProgressEvent{Phase: "cluster", Message: "no embeddings, reviewing all facts"})
-		return [][]factForLLM{facts}, nil
-	}
-
-	// Collect all fact paths.
-	allPaths := make([]string, len(facts))
-	for i, f := range facts {
-		allPaths[i] = f.File
-	}
-
-	// Compute pairwise cosine distances in SQLite.
-	onProgress(ProgressEvent{Phase: "cluster", Message: fmt.Sprintf("computing distances for %d facts", len(facts))})
-	retPaths, dist, err := pd.PairwiseDistances(allPaths)
-	if err != nil {
-		log.Warn().Err(err).Msg("prune: pairwise distances failed, using single group")
-		onProgress(ProgressEvent{Phase: "cluster", Message: "distance computation failed, reviewing all facts"})
-		return [][]factForLLM{facts}, nil
-	}
-
-	if len(retPaths) < minCluster {
-		log.Debug().Int("with_embedding", len(retPaths)).Int("min_cluster", minCluster).Msg("prune: insufficient embeddings, using single group")
-		onProgress(ProgressEvent{Phase: "cluster", Message: fmt.Sprintf("insufficient embeddings (%d), reviewing all facts", len(retPaths))})
-		return [][]factForLLM{facts}, nil
-	}
-
-	// Build path→fact index for mapping results back.
-	factByPath := map[string]factForLLM{}
-	for _, f := range facts {
-		factByPath[f.File] = f
-	}
-
-	labels := cluster.HDBSCANPrecomputed(dist, cluster.HDBSCANOptions{
-		MinClusterSize: minCluster,
-	})
-
-	// Group facts by cluster label. Noise (label -1) is skipped — singletons
-	// have no peers to compare against for prune/merge.
-	clusterMap := map[int][]factForLLM{}
-	noiseCount := 0
-	for i, path := range retPaths {
-		label := labels[i]
-		if label == -1 {
-			noiseCount++
-			continue
-		}
-		clusterMap[label] = append(clusterMap[label], factByPath[path])
-	}
-
-	log.Debug().Int("clusters", len(clusterMap)).Int("noise", noiseCount).Int("total", len(facts)).Msg("prune: clustering complete")
-	onProgress(ProgressEvent{Phase: "cluster", Message: fmt.Sprintf("%d clusters (%d noise skipped)", len(clusterMap), noiseCount)})
-
-	if len(clusterMap) == 0 {
-		log.Debug().Msg("prune: no clusters formed, using single group")
-		onProgress(ProgressEvent{Phase: "cluster", Message: "no clusters formed, reviewing all facts"})
-		return [][]factForLLM{facts}, nil
-	}
-
-	groups := make([][]factForLLM, 0, len(clusterMap))
-	for _, group := range clusterMap {
-		groups = append(groups, group)
-	}
-	return groups, nil
-}
 
 // executePruneStep runs one prune step of the synthesis pipeline.
 // When embeddings are available, facts are clustered first and only multi-fact
@@ -302,6 +40,7 @@ func executePruneStep(ctx context.Context, gs GitStore, idx SearchIndex, embedde
 	var allDecisions []PruneDecision
 	var allMerges []MergeEntry
 
+	// 100KB limit per LLM call to stay within context window limits.
 	const maxChunkBytes = 100_000
 	for gi, group := range groups {
 		chunks := chunkFacts(group, maxChunkBytes)
@@ -340,7 +79,8 @@ func executePruneStep(ctx context.Context, gs GitStore, idx SearchIndex, embedde
 		}
 	}
 
-	// Track which paths have been deleted to avoid double-deletion.
+	// Track deleted paths to avoid double-deletion when a path appears in
+	// both "forget" decisions and merge source lists.
 	deletedPaths := make(map[string]bool)
 
 	log.Info().Int("decisions", len(allDecisions)).Int("merges", len(allMerges)).Msg("prune: applying results")

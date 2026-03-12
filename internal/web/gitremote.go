@@ -12,11 +12,14 @@ import (
 	"knomit/internal/gitstorer"
 )
 
-// GitRemoteStore is the interface gitremote needs from the git store.
+// GitRemoteStore is the narrow interface gitremote needs — just the
+// underlying go-git storer so it can serve pack negotiations.
 type GitRemoteStore interface {
 	Storer() *gitstorer.Storer
 }
 
+// repoLoader adapts a storer.Storer to go-git's server.Loader interface,
+// always returning the same storer regardless of endpoint.
 type repoLoader struct {
 	sto storer.Storer
 }
@@ -25,9 +28,17 @@ func (l *repoLoader) Load(_ *transport.Endpoint) (storer.Storer, error) {
 	return l.sto, nil
 }
 
-// GitRemoteHandler returns an http.Handler for the Smart HTTP git protocol.
-// Mount it at /git in the router.
-// If apiKey is non-empty, receive-pack (push) endpoints require Bearer token auth.
+// GitRemoteHandler returns an http.Handler implementing the Smart HTTP git
+// protocol (https://git-scm.com/docs/http-protocol). It exposes three
+// endpoints (relative to the mount point):
+//
+//   - GET  /info/refs?service=git-upload-pack   — advertise refs for fetch
+//   - GET  /info/refs?service=git-receive-pack  — advertise refs for push
+//   - POST /git-upload-pack                     — serve a fetch
+//   - POST /git-receive-pack                    — accept a push
+//
+// If apiKey is non-empty, receive-pack (push) endpoints require a Bearer
+// token matching apiKey. Upload-pack (fetch) is always public.
 func GitRemoteHandler(gs GitRemoteStore, apiKey string) http.Handler {
 	loader := &repoLoader{sto: gs.Storer()}
 	srv := gogitserver.NewServer(loader)
@@ -190,6 +201,7 @@ func GitRemoteHandler(gs GitRemoteStore, apiKey string) http.Handler {
 	return http.StripPrefix("/git", mux)
 }
 
+// bearerAuth checks that the request carries a Bearer token matching key.
 func bearerAuth(r *http.Request, key string) bool {
 	tok := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 	return tok == key

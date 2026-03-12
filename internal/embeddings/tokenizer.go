@@ -31,6 +31,26 @@ type tokenizerJSON struct {
 	} `json:"model"`
 }
 
+// NewTokenizer creates a Tokenizer from a vocab map and max sequence length.
+func NewTokenizer(vocab map[string]int32, maxLen int) (*Tokenizer, error) {
+	if vocab == nil {
+		return nil, fmt.Errorf("vocab must not be nil")
+	}
+	get := func(key string) int32 {
+		if id, ok := vocab[key]; ok {
+			return id
+		}
+		return -1
+	}
+	clsID := get("[CLS]")
+	sepID := get("[SEP]")
+	unkID := get("[UNK]")
+	if clsID < 0 || sepID < 0 || unkID < 0 {
+		return nil, fmt.Errorf("vocab missing special tokens [CLS]/[SEP]/[UNK]")
+	}
+	return &Tokenizer{vocab: vocab, unkID: unkID, clsID: clsID, sepID: sepID, maxLen: maxLen}, nil
+}
+
 // LoadTokenizer reads a HuggingFace tokenizer.json and returns a Tokenizer.
 func LoadTokenizer(path string) (*Tokenizer, error) {
 	data, err := os.ReadFile(path)

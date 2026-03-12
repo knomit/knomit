@@ -8,11 +8,15 @@ import (
 	"google.golang.org/genai"
 )
 
+// GeminiAdapter calls the Google Gemini API via the genai SDK with streaming.
+// Requires GEMINI_API_KEY (or GOOGLE_AI_API_KEY) in the environment.
 type GeminiAdapter struct {
 	client *genai.Client
 	model  string
 }
 
+// NewGeminiAdapter creates a streaming Gemini adapter for the given model
+// (e.g. "gemini-2.5-flash"). Returns an error if no API key is found.
 func NewGeminiAdapter(ctx context.Context, model string) (*GeminiAdapter, error) {
 	apiKey := os.Getenv("GEMINI_API_KEY")
 	if apiKey == "" {
@@ -31,6 +35,7 @@ func NewGeminiAdapter(ctx context.Context, model string) (*GeminiAdapter, error)
 	return &GeminiAdapter{client: client, model: model}, nil
 }
 
+// Complete implements LLMAdapter using Gemini's GenerateContentStream.
 func (a *GeminiAdapter) Complete(ctx context.Context, system string, msgs []Message, onChunk func(string)) (string, error) {
 	var contents []*genai.Content
 	for _, m := range msgs {
