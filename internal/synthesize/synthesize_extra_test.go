@@ -297,17 +297,17 @@ func TestChunkFactsSingleFact(t *testing.T) {
 // ── distillClusterInMemory ──────────────────────────────────────────────────
 
 func TestDistillClusterInMemoryInsufficientEmbeddings(t *testing.T) {
-	// Only 1 fact with embedding, minCluster=3 => returns nil.
+	// depth > 0 always returns nil (Louvain only works on persisted graph).
 	facts := []workFact{
 		{factForLLM: factForLLM{File: "a.md"}, embedding: []float32{1, 0, 0}},
 		{factForLLM: factForLLM{File: "b.md"}, embedding: nil},
 	}
 	var progressCalled bool
-	result := distillClusterInMemory(facts, 3, func(e ProgressEvent) {
+	result := distillClusterInMemory(facts, 1.0, func(e ProgressEvent) {
 		progressCalled = true
 	})
 	if result != nil {
-		t.Errorf("expected nil cluster map for insufficient embeddings, got %v", result)
+		t.Errorf("expected nil cluster map for in-memory facts, got %v", result)
 	}
 	if !progressCalled {
 		t.Error("expected progress callback to be called")
@@ -319,21 +319,19 @@ func TestDistillClusterInMemoryNoEmbeddings(t *testing.T) {
 		{factForLLM: factForLLM{File: "a.md"}, embedding: nil},
 		{factForLLM: factForLLM{File: "b.md"}, embedding: nil},
 	}
-	result := distillClusterInMemory(facts, 2, func(e ProgressEvent) {})
+	result := distillClusterInMemory(facts, 1.0, func(e ProgressEvent) {})
 	if result != nil {
-		t.Errorf("expected nil for no embeddings, got %v", result)
+		t.Errorf("expected nil for in-memory facts, got %v", result)
 	}
 }
 
 func TestDistillClusterInMemoryWithEmbeddings(t *testing.T) {
-	// Create two clusters of facts with clearly separated embeddings.
-	// Cluster A: dominant in dim 0
-	// Cluster B: dominant in dim 1
+	// With Louvain, depth > 0 always returns nil (no graph edges for in-memory facts).
 	facts := make([]workFact, 0, 10)
 	for i := 0; i < 5; i++ {
 		emb := make([]float32, 8)
 		emb[0] = 10.0
-		emb[2] = float32(i) * 0.01 // small perturbation
+		emb[2] = float32(i) * 0.01
 		facts = append(facts, workFact{
 			factForLLM: factForLLM{File: fmt.Sprintf("know/a/%d.md", i), Title: fmt.Sprintf("A%d", i)},
 			embedding:  emb,
@@ -349,23 +347,9 @@ func TestDistillClusterInMemoryWithEmbeddings(t *testing.T) {
 		})
 	}
 
-	result := distillClusterInMemory(facts, 3, func(e ProgressEvent) {})
-	// We expect clustering to produce some clusters (at least 1, ideally 2).
-	if result == nil {
-		t.Fatal("expected non-nil cluster map with sufficient embeddings")
-	}
-	// Verify all clustered facts came from the original set.
-	totalClustered := 0
-	for _, group := range result {
-		totalClustered += len(group)
-		for _, f := range group {
-			if !strings.HasPrefix(f.File, "know/") {
-				t.Errorf("unexpected file in cluster: %s", f.File)
-			}
-		}
-	}
-	if totalClustered == 0 {
-		t.Error("expected at least some facts to be clustered")
+	result := distillClusterInMemory(facts, 1.0, func(e ProgressEvent) {})
+	if result != nil {
+		t.Errorf("expected nil for in-memory facts (Louvain only works on persisted graph), got %v", result)
 	}
 }
 
@@ -485,73 +469,7 @@ func TestGatherAllFactsSearchResultsMapping(t *testing.T) {
 	}
 }
 
-// ── distillClusterFromIndex ─────────────────────────────────────────────────
-
-func TestDistillClusterFromIndexNoEmbedder(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	idx := NewMockSearchIndex(ctrl)
-
-	facts := []workFact{{factForLLM: factForLLM{File: "a.md"}}}
-	var progressCalled bool
-	result, err := distillClusterFromIndex(facts, idx, nil, 3, func(e ProgressEvent) {
-		progressCalled = true
-	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if result != nil {
-		t.Errorf("expected nil cluster map when embedder is nil, got %v", result)
-	}
-	if !progressCalled {
-		t.Error("expected progress callback")
-	}
-}
-
-func TestDistillClusterFromIndexNoPairwiseDistancer(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	idx := NewMockSearchIndex(ctrl) // does NOT implement PairwiseDistancer
-	embedder := NewMockEmbedder(ctrl)
-
-	facts := []workFact{{factForLLM: factForLLM{File: "a.md"}}}
-	result, err := distillClusterFromIndex(facts, idx, embedder, 3, func(e ProgressEvent) {})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if result != nil {
-		t.Errorf("expected nil when index lacks PairwiseDistancer")
-	}
-}
-
-func TestDistillClusterFromIndexInsufficientEmbeddings(t *testing.T) {
-	ctrl := gomock.NewController(t)
-
-	mockIdx := NewMockSearchIndex(ctrl)
-	mockPD := NewMockPairwiseDistancer(ctrl)
-	idx := &searchIndexWithPairwise{mockIdx, mockPD}
-	embedder := NewMockEmbedder(ctrl)
-
-	facts := []workFact{
-		{factForLLM: factForLLM{File: "a.md"}},
-		{factForLLM: factForLLM{File: "b.md"}},
-	}
-
-	// PairwiseDistances returns only 1 path — insufficient for minCluster=3.
-	mockPD.EXPECT().PairwiseDistances(gomock.Any()).Return(
-		[]string{"a.md"},
-		[][]float64{{0}},
-		nil,
-	)
-
-	result, err := distillClusterFromIndex(facts, idx, embedder, 3, func(e ProgressEvent) {})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if result != nil {
-		t.Errorf("expected nil for insufficient embeddings")
-	}
-}
-
-// ── searchIndexWithPairwise (integration with Search) ───────────────────────
+// ── gatherAllFacts (edge cases) ─────────────────────────────────────────────
 
 func TestGatherAllFactsEmptyStore(t *testing.T) {
 	ctrl := gomock.NewController(t)

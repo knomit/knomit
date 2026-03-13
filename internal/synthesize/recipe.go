@@ -9,12 +9,11 @@ import (
 
 // RecipeStep is a single step in a synthesis recipe.
 type RecipeStep struct {
-	Mode           string `yaml:"mode"`
-	Model          string `yaml:"model"`
-	Prompt         string `yaml:"prompt"`
-	MaxDepth       int    `yaml:"max_depth"`
-	UMAPDimensions int    `yaml:"umap_dimensions"`
-	MinClusterSize int    `yaml:"min_cluster_size"`
+	Mode       string  `yaml:"mode"`
+	Model      string  `yaml:"model"`
+	Prompt     string  `yaml:"prompt"`
+	MaxDepth   int     `yaml:"max_depth"`
+	Resolution float64 `yaml:"resolution"` // Louvain resolution (default 1.0)
 }
 
 // Scope limits which facts are gathered for synthesis.

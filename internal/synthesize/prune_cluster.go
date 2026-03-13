@@ -1,6 +1,5 @@
 // Package synthesize — Clustering for the prune step: gathers facts from git
-// and groups them by semantic similarity using precomputed cosine distances
-// (SQLite vec0) + HDBSCAN.
+// and groups them by Louvain community detection (graph-based).
 package synthesize
 
 import (
@@ -8,7 +7,6 @@ import (
 	"strings"
 
 	"github.com/rs/zerolog/log"
-	"knomit/internal/cluster"
 	"knomit/internal/mcp"
 )
 
@@ -45,88 +43,47 @@ func gatherAllFacts(gs GitStore) ([]factForLLM, error) {
 	return facts, nil
 }
 
-// PairwiseDistancer computes cosine distance matrices in the index (via SQLite vec0).
-type PairwiseDistancer interface {
-	PairwiseDistances(paths []string) (retPaths []string, dist [][]float64, err error)
-}
-
-// clusterFactsForPrune groups facts by semantic similarity using embeddings.
-// Returns a slice of fact groups — each group is a cluster to be reviewed together.
-// When embeddings are unavailable or too few, returns all facts as a single group.
-//
-// Cosine distances are computed via SQLite's vec_distance_cosine (delegating to
-// the index), then HDBSCAN runs on the precomputed distance matrix. This avoids
-// loading 768-dim embedding vectors into Go and sidesteps the curse of
-// dimensionality that makes Euclidean HDBSCAN fail on high-dim data.
+// clusterFactsForPrune groups facts by Louvain community detection.
 func clusterFactsForPrune(facts []factForLLM, idx SearchIndex, embedder Embedder, step RecipeStep, onProgress func(ProgressEvent)) ([][]factForLLM, error) {
-	minCluster := step.MinClusterSize
-	if minCluster == 0 {
-		minCluster = 3
+	resolution := step.Resolution
+	if resolution <= 0 {
+		resolution = 1.0
 	}
 
-	pd, hasPD := idx.(PairwiseDistancer)
-	if embedder == nil || !hasPD {
-		log.Debug().Msg("prune: no embeddings available, using single group")
-		onProgress(ProgressEvent{Phase: "cluster", Message: "no embeddings, reviewing all facts"})
-		return [][]factForLLM{facts}, nil
-	}
+	onProgress(ProgressEvent{Phase: "cluster", Message: fmt.Sprintf("running Louvain (resolution=%.2f) on %d facts", resolution, len(facts))})
 
-	// Collect all fact paths.
-	allPaths := make([]string, len(facts))
-	for i, f := range facts {
-		allPaths[i] = f.File
-	}
-
-	// Compute pairwise cosine distances in SQLite.
-	onProgress(ProgressEvent{Phase: "cluster", Message: fmt.Sprintf("computing distances for %d facts", len(facts))})
-	retPaths, dist, err := pd.PairwiseDistances(allPaths)
+	result, err := idx.ClusterFacts(resolution, 2)
 	if err != nil {
-		log.Warn().Err(err).Msg("prune: pairwise distances failed, using single group")
-		onProgress(ProgressEvent{Phase: "cluster", Message: "distance computation failed, reviewing all facts"})
+		log.Warn().Err(err).Msg("prune: Louvain failed, using single group")
+		onProgress(ProgressEvent{Phase: "cluster", Message: "clustering failed, reviewing all facts"})
 		return [][]factForLLM{facts}, nil
 	}
 
-	if len(retPaths) < minCluster {
-		log.Debug().Int("with_embedding", len(retPaths)).Int("min_cluster", minCluster).Msg("prune: insufficient embeddings, using single group")
-		onProgress(ProgressEvent{Phase: "cluster", Message: fmt.Sprintf("insufficient embeddings (%d), reviewing all facts", len(retPaths))})
-		return [][]factForLLM{facts}, nil
-	}
-
-	// Build path→fact index for mapping results back.
 	factByPath := map[string]factForLLM{}
 	for _, f := range facts {
 		factByPath[f.File] = f
 	}
 
-	labels := cluster.HDBSCANPrecomputed(dist, cluster.HDBSCANOptions{
-		MinClusterSize: minCluster,
-	})
-
-	// Group facts by cluster label. Noise (label -1) is skipped — singletons
-	// have no peers to compare against for prune/merge.
-	clusterMap := map[int][]factForLLM{}
-	noiseCount := 0
-	for i, path := range retPaths {
-		label := labels[i]
-		if label == -1 {
-			noiseCount++
-			continue
+	groups := make([][]factForLLM, 0, len(result.Clusters))
+	for _, paths := range result.Clusters {
+		var group []factForLLM
+		for _, p := range paths {
+			if f, ok := factByPath[p]; ok {
+				group = append(group, f)
+			}
 		}
-		clusterMap[label] = append(clusterMap[label], factByPath[path])
+		if len(group) > 0 {
+			groups = append(groups, group)
+		}
 	}
 
-	log.Debug().Int("clusters", len(clusterMap)).Int("noise", noiseCount).Int("total", len(facts)).Msg("prune: clustering complete")
-	onProgress(ProgressEvent{Phase: "cluster", Message: fmt.Sprintf("%d clusters (%d noise skipped)", len(clusterMap), noiseCount)})
+	log.Debug().Int("clusters", len(groups)).Int("noise", len(result.Noise)).Int("total", len(facts)).Msg("prune: clustering complete")
+	onProgress(ProgressEvent{Phase: "cluster", Message: fmt.Sprintf("%d clusters (%d noise skipped)", len(groups), len(result.Noise))})
 
-	if len(clusterMap) == 0 {
-		log.Debug().Msg("prune: no clusters formed, using single group")
+	if len(groups) == 0 {
 		onProgress(ProgressEvent{Phase: "cluster", Message: "no clusters formed, reviewing all facts"})
 		return [][]factForLLM{facts}, nil
 	}
 
-	groups := make([][]factForLLM, 0, len(clusterMap))
-	for _, group := range clusterMap {
-		groups = append(groups, group)
-	}
 	return groups, nil
 }

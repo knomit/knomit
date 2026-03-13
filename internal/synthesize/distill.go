@@ -23,12 +23,12 @@ func executeDistillStep(ctx context.Context, gs GitStore, idx SearchIndex, embed
 	if maxDepth == 0 {
 		maxDepth = 1
 	}
-	minCluster := step.MinClusterSize
-	if minCluster == 0 {
-		minCluster = 3
+	resolution := step.Resolution
+	if resolution <= 0 {
+		resolution = 1.0
 	}
 
-	log.Debug().Int("max_depth", maxDepth).Int("min_cluster", minCluster).Msg("distill: config")
+	log.Debug().Int("max_depth", maxDepth).Float64("resolution", resolution).Msg("distill: config")
 
 	// Gather initial facts from the index (all facts, no filter).
 	searchResults, err := idx.Search(store.SearchQuery{Limit: 100_000})
@@ -67,11 +67,11 @@ func executeDistillStep(ctx context.Context, gs GitStore, idx SearchIndex, embed
 		var clusterMap map[int][]factForLLM
 
 		if depth == 0 {
-			// Initial depth uses SQLite-stored embeddings via PairwiseDistances.
-			clusterMap, err = distillClusterFromIndex(currentFacts, idx, embedder, minCluster, onProgress)
+			// Initial depth uses Louvain on the persisted graph.
+			clusterMap, err = distillClusterFromIndex(currentFacts, idx, resolution, 2, onProgress)
 		} else {
-			// Subsequent depths use in-memory embeddings from freshly synthesized facts.
-			clusterMap = distillClusterInMemory(currentFacts, minCluster, onProgress)
+			// Subsequent depths: in-memory facts have no graph edges, fall back to single group.
+			clusterMap = distillClusterInMemory(currentFacts, resolution, onProgress)
 		}
 		if err != nil {
 			return err
@@ -177,6 +177,11 @@ func executeDistillStep(ctx context.Context, gs GitStore, idx SearchIndex, embed
 			Refs:       df.Refs,
 			CommitHash: head,
 		})
+		if len(df.Refs) > 0 {
+			if err := idx.GraphAddDerivedFrom(df.Path, df.Refs); err != nil {
+				onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("derived_from %s: %v", df.Path, err)})
+			}
+		}
 		onProgress(ProgressEvent{Phase: "detail-learn", Message: df.Path})
 	}
 

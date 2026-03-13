@@ -13,8 +13,7 @@ steps:
     model: claude-sonnet-4-6
   - mode: distill
     max_depth: 2
-    umap_dimensions: 5
-    min_cluster_size: 3
+    resolution: 1.5
 `
 
 func TestParseRecipe(t *testing.T) {
@@ -54,11 +53,8 @@ func TestParseRecipe(t *testing.T) {
 	if step1.MaxDepth != 2 {
 		t.Errorf("Steps[1].MaxDepth: got %d, want 2", step1.MaxDepth)
 	}
-	if step1.UMAPDimensions != 5 {
-		t.Errorf("Steps[1].UMAPDimensions: got %d, want 5", step1.UMAPDimensions)
-	}
-	if step1.MinClusterSize != 3 {
-		t.Errorf("Steps[1].MinClusterSize: got %d, want 3", step1.MinClusterSize)
+	if step1.Resolution != 1.5 {
+		t.Errorf("Steps[1].Resolution: got %f, want 1.5", step1.Resolution)
 	}
 }
 
