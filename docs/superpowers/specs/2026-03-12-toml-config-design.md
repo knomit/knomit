@@ -26,7 +26,7 @@ Each section struct lives in its consuming package. The root `Config` composes t
 type Config struct {
     RepoPath     string             `toml:"repo"`
     CacheDir     string             `toml:"cache_dir"`
-    Port         string             `toml:"port"`
+    Port         string             `toml:"port"`        // HTTP server port
     OntologyRoot string             `toml:"ontology_root"`
     ONNXLibPath  string             `toml:"onnx_lib_path"`
     LLM          llm.Config         `toml:"llm"`
@@ -44,7 +44,7 @@ type Config struct {
 // internal/git/config.go
 type Config struct {
     Remote bool   `toml:"remote"`
-    Port   string `toml:"port"`
+    Port   string `toml:"port"`  // git daemon port
 }
 
 // internal/config/config.go
@@ -55,6 +55,8 @@ type RemoteConfig struct {
     SSHKey   string `toml:"ssh_key"`
 }
 ```
+
+Note: `git.Config` does not conflict with go-git's `config.Config` in production code. Test files already alias go-git config as `gogitconfig`.
 
 ### Defaults
 
@@ -126,7 +128,7 @@ Env var mapping (unchanged from today):
 | `KNOMIT_PORT` | `Port` |
 | `KNOMIT_LLM_MODEL` | `LLM.Model` |
 | `KNOMIT_LLM_PROVIDER` | `LLM.Provider` |
-| `KNOMIT_API_KEY` | `LLM.APIKey` |
+| `KNOMIT_API_KEY` | `LLM.APIKey` (also used for git remote HTTP auth in `main.go`) |
 | `KNOMIT_GIT_REMOTE` | `Git.Remote` |
 | `KNOMIT_GIT_PORT` | `Git.Port` |
 | `KNOMIT_REMOTE_TOKEN` | `Remote.Token` |
@@ -139,28 +141,44 @@ Env var mapping (unchanged from today):
 
 The hardcoded `"know"` in these locations reads from `Config.OntologyRoot` instead:
 
-- `internal/mcp/learn.go` — `normalizePath()` prefix
+- `internal/mcp/learn.go` — `normalizePath()` becomes a method or takes ontologyRoot as a parameter. All callers (learn, update, why, forget) go through the same function, so one change covers them.
 - `internal/mcp/explore.go` — default path parameter
 - `internal/web/handlers.go` — default browse path
-- `internal/mcp/instructions.go` — base instructions text
+- `internal/mcp/instructions.go` — `baseInstructions` is a const, so `ProfileInstructions()` becomes a function that accepts `ontologyRoot` and interpolates it. This changes the signature, rippling into `NewServer()` callers.
+
+### Tilde Expansion
+
+TOML values use absolute paths. `Load()` expands `~` to `$HOME` in path fields (`RepoPath`, `CacheDir`, `ONNXLibPath`, `Remote.SSHKey`) after TOML decode.
+
+### Error Semantics
+
+- Missing TOML file: not an error (TOML is optional)
+- Malformed TOML file: returns error
+- Unrecognized keys: ignored (no strict mode)
 
 ### TOML File Example
 
 ```toml
 repo = "~/.knomit"
+cache_dir = "~/.cache/knomit"
 port = "3000"
 ontology_root = "know"
+# onnx_lib_path = "/opt/homebrew/lib/libonnxruntime.dylib"
 
 [llm]
 model = "claude-sonnet-4-6"
-api_key = "sk-ant-..."
+# provider = "anthropic"
+# api_key = "sk-ant-..."
 
 [git]
 remote = false
+# port = "9418"
 
 [remote]
-user = "git"
-ssh_key = "~/.ssh/id_ed25519"
+# token = "..."
+# user = "git"
+# password = "..."
+# ssh_key = "~/.ssh/id_ed25519"
 ```
 
 ### Dependency
