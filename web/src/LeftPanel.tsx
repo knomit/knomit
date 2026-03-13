@@ -12,6 +12,7 @@ interface Props {
 export function LeftPanel({ state, dispatch }: Props) {
   const [children, setChildren] = useState<DirChild[]>([]);
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
+  const [searchReady, setSearchReady] = useState(false); // true once results loaded for current query
   const [selectedIdx, setSelectedIdx] = useState(0);
   const searchRef = useRef<HTMLInputElement>(null);
   const itemRefs = useRef<(HTMLDivElement | null)[]>([]);
@@ -29,11 +30,7 @@ export function LeftPanel({ state, dispatch }: Props) {
       const c = r.children || [];
       setChildren(c);
       if (!isHeadChangeOnly) {
-        setSelectedIdx(0);
-        if (c.length > 0) {
-          if (c[0].is_dir) dispatch({ type: 'PREVIEW_DIR', path: `${state.currentPath}/${c[0].name}` });
-          else dispatch({ type: 'SELECT_FACT', path: `${state.currentPath}/${c[0].name}` });
-        }
+        setSelectedIdx(-1);
       }
     }).catch(() => setChildren([]));
   }, [state.currentPath, state.searchQuery, state.headCommit]);
@@ -41,19 +38,22 @@ export function LeftPanel({ state, dispatch }: Props) {
   // Similarity search — sends fact text through the regular search endpoint
   useEffect(() => {
     if (!state.similarTo) return;
+    setSearchReady(false);
     setSelectedIdx(0);
     const p = new URLSearchParams({ q: state.similarTo.text, limit: '50' });
     fetch(`/api/v1/search?${p}`).then(r => r.json()).then(r => {
       const results = (r.results || []).filter((sr: { path: string }) => sr.path !== state.similarTo!.path);
       setSearchResults(results);
+      setSearchReady(true);
       if (results.length > 0) dispatch({ type: 'SELECT_FACT', path: results[0].path });
-    }).catch(() => setSearchResults([]));
+    }).catch(() => { setSearchResults([]); setSearchReady(true); });
   }, [state.similarTo, state.headCommit]);
 
   // Search — re-runs when headCommit changes to refresh results
   useEffect(() => {
-    if (!state.searchQuery) { if (!state.similarTo) setSearchResults([]); return; }
+    if (!state.searchQuery) { if (!state.similarTo) { setSearchResults([]); setSearchReady(false); } return; }
     const isHeadChangeOnly = state.searchQuery === prevSearchRef.current;
+    if (!isHeadChangeOnly) setSearchReady(false);
     prevSearchRef.current = state.searchQuery;
     const savedIdx = selectedIdx;
     setSelectedIdx(0);
@@ -61,6 +61,7 @@ export function LeftPanel({ state, dispatch }: Props) {
       api.search(state.searchQuery).then(r => {
         const results = r.results || [];
         setSearchResults(results);
+        setSearchReady(true);
         if (isHeadChangeOnly) {
           // Preserve selection position, clamped to new results length
           setSelectedIdx(Math.min(savedIdx, results.length - 1));
@@ -68,12 +69,12 @@ export function LeftPanel({ state, dispatch }: Props) {
           setSelectedIdx(0);
           if (results.length > 0) dispatch({ type: 'SELECT_FACT', path: results[0].path });
         }
-      }).catch(() => setSearchResults([]));
+      }).catch(() => { setSearchResults([]); setSearchReady(true); });
     }, 300);
     return () => clearTimeout(t);
   }, [state.searchQuery, state.headCommit]);
 
-  const isSearchMode = !!(state.searchQuery || state.similarTo);
+  const isSearchMode = !!(state.searchQuery || state.similarTo) && searchReady;
   const listLen = () => isSearchMode ? searchResults.length : children.length;
 
   const previewItem = (idx: number) => {
