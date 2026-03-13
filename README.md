@@ -170,7 +170,7 @@ domain: [music]
 entities: [alice]
 sources: 1
 refs:
-  - knomit://github.com/org/repo/blob/abc1234/src/preferences.ts
+  - knomit://github.com/org/repo/src/preferences.ts
 ---
 Alice prefers rock music over jazz.
 ```
@@ -185,11 +185,11 @@ Refs anchor facts to their source material using the `knomit:` URI scheme:
 
 | Form | Meaning | Example |
 |------|---------|---------|
-| Relative (no authority) | Current knowledge base | `knomit:blob/abc1234/know/debugging/pool-fix.md` |
-| Absolute (with host) | External repo | `knomit://github.com/org/repo/blob/abc1234/src/main.ts` |
+| Relative (no authority) | Current knowledge base | `knomit:/know/debugging/pool-fix.md` |
+| Absolute (with host) | External repo | `knomit://github.com/org/repo/src/main.ts` |
 | Plain URL | Any web resource | `https://example.com/doc` |
 
-Synthesize automatically resolves file-path refs to `knomit:blob/<commit>/<path>` URIs.
+Synthesize automatically resolves file-path refs to `knomit:/<path>` URIs.
 
 ## HTTP API
 
