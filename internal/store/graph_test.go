@@ -2,6 +2,7 @@ package store
 
 import (
 	"database/sql"
+	"fmt"
 	"path/filepath"
 	"runtime"
 	"testing"
@@ -209,13 +210,6 @@ func TestGraphBuildSimilarityEdges(t *testing.T) {
 		}
 	}
 
-	// Upsert doesn't call graphSyncFact yet (Task 7), so create the graph nodes manually.
-	for _, f := range facts {
-		if err := idx.graphSyncFact(f); err != nil {
-			t.Fatal(err)
-		}
-	}
-
 	err = idx.graphBuildSimilarityEdges("know/a.md")
 	if err != nil {
 		t.Fatal(err)
@@ -277,4 +271,120 @@ func TestGraphQLiteCoexistence(t *testing.T) {
 		t.Fatalf("vec0 virtual table creation failed: %v", err)
 	}
 	t.Log("vec0 virtual table created successfully alongside GraphQLite")
+}
+
+func TestUpsertSyncsGraph(t *testing.T) {
+	idx, err := New(":memory:", WithVecDimension(4))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer idx.Close()
+	idx.SetEmbedder(&stubEmbedder4d{})
+
+	err = idx.Upsert(FactRecord{
+		Path: "know/eng/test.md", Title: "Test",
+		Domain: []string{"engineering/software"}, Entities: []string{"Go"},
+		Refs: []string{}, CommitHash: "abc",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Fact node should exist in graph
+	var factPath string
+	err = idx.db.QueryRow(`SELECT json_extract(value, '$.path') FROM json_each(cypher('MATCH (f:Fact {path: "know/eng/test.md"}) RETURN f.path AS path'))`).Scan(&factPath)
+	if err != nil {
+		t.Fatalf("Fact node not in graph after Upsert: %v", err)
+	}
+
+	// Entity node should exist
+	var entityName string
+	err = idx.db.QueryRow(`SELECT json_extract(value, '$.name') FROM json_each(cypher('MATCH (e:Entity {name: "Go"}) RETURN e.name AS name'))`).Scan(&entityName)
+	if err != nil {
+		t.Fatalf("Entity node not in graph: %v", err)
+	}
+}
+
+func TestDeleteSyncsGraph(t *testing.T) {
+	idx, err := New(":memory:", WithVecDimension(4))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer idx.Close()
+	idx.SetEmbedder(&stubEmbedder4d{})
+
+	_ = idx.Upsert(FactRecord{
+		Path: "know/test.md", Title: "Test",
+		Domain: []string{"eng"}, Entities: []string{"Go"},
+		Refs: []string{}, CommitHash: "abc",
+	})
+	err = idx.Delete("know/test.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Fact should be marked deleted (json_extract returns 1 for JSON true)
+	var deleted int
+	err = idx.db.QueryRow(`SELECT json_extract(value, '$.deleted') FROM json_each(cypher('MATCH (f:Fact {path: "know/test.md"}) RETURN f.deleted AS deleted'))`).Scan(&deleted)
+	if err != nil {
+		t.Fatalf("Fact node missing after Delete: %v", err)
+	}
+	if deleted != 1 {
+		t.Fatalf("expected deleted=1, got %d", deleted)
+	}
+}
+
+type mockGitReader struct {
+	files map[string]string
+	head  string
+}
+
+func (m *mockGitReader) DiffFiles(from string) (added, modified, deleted []string, err error) {
+	return nil, nil, nil, nil
+}
+func (m *mockGitReader) ReadFile(path string) (string, error) {
+	if c, ok := m.files[path]; ok {
+		return c, nil
+	}
+	return "", fmt.Errorf("not found: %s", path)
+}
+func (m *mockGitReader) HeadCommit() (string, error) { return m.head, nil }
+func (m *mockGitReader) ListAll() ([]string, error) {
+	var paths []string
+	for p := range m.files {
+		paths = append(paths, p)
+	}
+	return paths, nil
+}
+
+func TestSyncRebuildsGraph(t *testing.T) {
+	idx, err := New(":memory:", WithVecDimension(4))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer idx.Close()
+	idx.SetEmbedder(&stubEmbedder4d{})
+
+	git := &mockGitReader{
+		files: map[string]string{
+			"know/a.md": "---\ndomain: [eng]\nentities: [Go]\nconfidence: 0.9\nsources: 1\n---\n# A\n\nBody A",
+			"know/b.md": "---\ndomain: [eng]\nentities: [Rust]\nconfidence: 0.8\nsources: 1\n---\n# B\n\nBody B",
+		},
+		head: "abc123def456",
+	}
+
+	err = idx.Sync(git)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify graph has fact nodes
+	var factCount int
+	err = idx.db.QueryRow(`SELECT count(*) FROM json_each(cypher('MATCH (f:Fact) RETURN f.path AS path'))`).Scan(&factCount)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if factCount < 2 {
+		t.Fatalf("expected at least 2 fact nodes, got %d", factCount)
+	}
 }
