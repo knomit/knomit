@@ -10,7 +10,7 @@ import (
 	"go.uber.org/mock/gomock"
 )
 
-func TestForgetDeletesFile(t *testing.T) {
+func TestRetractDeletesFile(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
 	idx := NewMockSearchIndex(ctrl)
@@ -34,12 +34,12 @@ func TestForgetDeletesFile(t *testing.T) {
 		return nil
 	})
 
-	handler := ForgetHandler(gs, idx, "know")
+	handler := RetractHandler(gs, idx, "know")
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
 		"file":        "know/foo.md",
-		"moment_name": "forget-test",
+		"moment_name": "retract-test",
 	}
 
 	result, err := handler(context.Background(), req)
@@ -62,10 +62,10 @@ func TestForgetDeletesFile(t *testing.T) {
 
 	// Verify tag was set.
 	if tagSet == "" {
-		t.Fatal("expected forget tag to be set")
+		t.Fatal("expected retract tag to be set")
 	}
-	if !strings.HasPrefix(tagSet, "forget/") {
-		t.Fatalf("tag should start with forget/, got %q", tagSet)
+	if !strings.HasPrefix(tagSet, "retract/") {
+		t.Fatalf("tag should start with retract/, got %q", tagSet)
 	}
 
 	// Verify result JSON.
@@ -82,7 +82,7 @@ func TestForgetDeletesFile(t *testing.T) {
 	}
 }
 
-func TestForgetFileNotFound(t *testing.T) {
+func TestRetractFileNotFound(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
 	idx := NewMockSearchIndex(ctrl)
@@ -90,7 +90,7 @@ func TestForgetFileNotFound(t *testing.T) {
 	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
 	gs.EXPECT().FileExists("know/nonexistent.md").Return(false, nil)
 
-	handler := ForgetHandler(gs, idx, "know")
+	handler := RetractHandler(gs, idx, "know")
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{

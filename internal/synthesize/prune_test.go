@@ -48,7 +48,7 @@ func TestPruneStep(t *testing.T) {
 	mockResponse := `{
   "decisions": [
     { "path": "know/test/foo.md", "action": "keep" },
-    { "path": "know/test/bar.md", "action": "forget" },
+    { "path": "know/test/bar.md", "action": "retract" },
     { "path": "know/test/baz.md", "action": "update", "confidence": 0.7 }
   ],
   "merges": []
@@ -67,8 +67,8 @@ func TestPruneStep(t *testing.T) {
 	})
 	idx.EXPECT().Upsert(gomock.Any()).Return(nil)
 
-	// Tag at end
-	gs.EXPECT().Tag("learn/synthesize-test-recipe-prune").Return(nil)
+	// Tags per operation
+	gs.EXPECT().Tag(gomock.Any()).Return(nil).AnyTimes()
 
 	recipe := Recipe{Name: "test-recipe", Steps: []RecipeStep{{Mode: "prune"}}}
 
@@ -91,7 +91,7 @@ func TestPruneStep(t *testing.T) {
 	// tag event should be present
 	tagEventSeen := false
 	for _, e := range events {
-		if e.Phase == "detail-forget" && e.Message == "forget know/test/bar.md" {
+		if e.Phase == "detail-retract" && e.Message == "retract know/test/bar.md" {
 			tagEventSeen = true
 		}
 	}
@@ -160,8 +160,8 @@ func TestPruneStepWithMerge(t *testing.T) {
 	gs.EXPECT().DeleteFile("know/test/b.md", gomock.Any()).Return("deadbeef3", nil)
 	idx.EXPECT().Delete("know/test/b.md").Return(nil)
 
-	// Tag
-	gs.EXPECT().Tag("learn/synthesize-merge-recipe-prune").Return(nil)
+	// Tags per operation
+	gs.EXPECT().Tag(gomock.Any()).Return(nil).AnyTimes()
 
 	recipe := Recipe{Name: "merge-recipe", Steps: []RecipeStep{{Mode: "prune"}}}
 
@@ -207,7 +207,7 @@ func TestExtractJSON(t *testing.T) {
 
 func TestFlexStrings(t *testing.T) {
 	// LLMs sometimes return "domain": "ml" instead of ["ml"].
-	raw := `{"synthesize": [{"path": "x.md", "title": "X", "body": "B", "domain": "ml", "confidence": 0.8, "entities": "foo", "refs": []}], "forget": []}`
+	raw := `{"synthesize": [{"path": "x.md", "title": "X", "body": "B", "domain": "ml", "confidence": 0.8, "entities": "foo", "refs": []}], "retract": []}`
 	result, err := parseDistillResponse(raw)
 	if err != nil {
 		t.Fatalf("parseDistillResponse with string domain: %v", err)
@@ -263,7 +263,7 @@ func TestParseDistillResponseMarkdownWrapped(t *testing.T) {
       "refs": ["know/a.md"]
     }
   ],
-  "forget": ["know/a.md"]
+  "retract": ["know/a.md"]
 }` + "\n```"
 
 	result, err := parseDistillResponse(wrapped)
@@ -279,8 +279,8 @@ func TestParseDistillResponseMarkdownWrapped(t *testing.T) {
 	if result.Synthesize[0].Title != "Synthesized" {
 		t.Errorf("expected title 'Synthesized', got %q", result.Synthesize[0].Title)
 	}
-	if len(result.Forget) != 1 || result.Forget[0] != "know/a.md" {
-		t.Errorf("expected forget=[know/a.md], got %v", result.Forget)
+	if len(result.Retract) != 1 || result.Retract[0] != "know/a.md" {
+		t.Errorf("expected forget=[know/a.md], got %v", result.Retract)
 	}
 }
 
@@ -382,8 +382,8 @@ func TestPruneStepClustersBeforeLLM(t *testing.T) {
 		},
 	).AnyTimes()
 
-	// Tag at end
-	gs.EXPECT().Tag(gomock.Any()).Return(nil)
+	// Tags per operation (none expected for all-keep results)
+	gs.EXPECT().Tag(gomock.Any()).Return(nil).AnyTimes()
 
 	recipe := Recipe{Name: "cluster-test", Steps: []RecipeStep{{Mode: "prune"}}}
 
@@ -478,8 +478,8 @@ func TestPruneStepWithDedup(t *testing.T) {
 		},
 	)
 
-	// Tag at end.
-	gs.EXPECT().Tag("learn/synthesize-dedup-recipe-prune").Return(nil)
+	// Tags per operation
+	gs.EXPECT().Tag(gomock.Any()).Return(nil).AnyTimes()
 
 	recipe := Recipe{Name: "dedup-recipe", Steps: []RecipeStep{{Mode: "prune"}}}
 
@@ -527,7 +527,7 @@ func TestPruneStep_RetryOnPassive(t *testing.T) {
 	// First call: passive (all keep)
 	passiveResponse := `{"decisions": [{"path": "know/test/foo.md", "action": "keep"}, {"path": "know/test/bar.md", "action": "keep"}], "merges": []}`
 	// Second call (retry): active (forget bar)
-	activeResponse := `{"decisions": [{"path": "know/test/foo.md", "action": "keep"}, {"path": "know/test/bar.md", "action": "forget"}], "merges": []}`
+	activeResponse := `{"decisions": [{"path": "know/test/foo.md", "action": "keep"}, {"path": "know/test/bar.md", "action": "retract"}], "merges": []}`
 
 	gomock.InOrder(
 		adapter.EXPECT().Complete(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(passiveResponse, nil),
@@ -536,7 +536,7 @@ func TestPruneStep_RetryOnPassive(t *testing.T) {
 
 	gs.EXPECT().DeleteFile("know/test/bar.md", gomock.Any()).Return("deadbeef", nil)
 	idx.EXPECT().Delete("know/test/bar.md").Return(nil)
-	gs.EXPECT().Tag(gomock.Any()).Return(nil)
+	gs.EXPECT().Tag(gomock.Any()).Return(nil).AnyTimes()
 
 	profile := Profile{Name: "small", ForceJSON: false, RetryOnPassive: true, MaxChunkBytes: 100_000}
 	step := RecipeStep{Mode: "prune"}

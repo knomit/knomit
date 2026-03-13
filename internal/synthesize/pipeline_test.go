@@ -40,7 +40,7 @@ func TestRunPruneOnly(t *testing.T) {
 	llmResp := `{
   "decisions": [
     { "path": "know/test/keep.md", "action": "keep" },
-    { "path": "know/test/forget.md", "action": "forget" }
+    { "path": "know/test/forget.md", "action": "retract" }
   ],
   "merges": []
 }`
@@ -50,8 +50,8 @@ func TestRunPruneOnly(t *testing.T) {
 	gs.EXPECT().DeleteFile("know/test/forget.md", gomock.Any()).Return("deadbeef", nil)
 	idx.EXPECT().Delete("know/test/forget.md").Return(nil)
 
-	// Tag
-	gs.EXPECT().Tag("learn/synthesize-smoke-prune-prune").Return(nil)
+	// Tag per operation (retract for the deleted fact)
+	gs.EXPECT().Tag(gomock.Any()).Return(nil).AnyTimes()
 
 	recipe := Recipe{
 		Name:  "smoke-prune",
@@ -173,7 +173,7 @@ func TestRunDistillWithFacts(t *testing.T) {
       "refs": ["know/test/a.md", "know/test/b.md"]
     }
   ],
-  "forget": ["know/test/a.md"]
+  "retract": ["know/test/a.md"]
 }`
 	adapter.EXPECT().Complete(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(llmResp, nil)
 
@@ -190,8 +190,8 @@ func TestRunDistillWithFacts(t *testing.T) {
 	gs.EXPECT().DeleteFile("know/test/a.md", gomock.Any()).Return("deadbeef2", nil)
 	idx.EXPECT().Delete("know/test/a.md").Return(nil)
 
-	// Tag
-	gs.EXPECT().Tag("learn/synthesize-distill-with-facts-distill").Return(nil)
+	// Tags per operation (subsume for new fact, retract for deleted)
+	gs.EXPECT().Tag(gomock.Any()).Return(nil).AnyTimes()
 
 	recipe := Recipe{
 		Name:  "distill-with-facts",
@@ -240,11 +240,11 @@ func TestRunDistillRetryOnPassive(t *testing.T) {
 	}, nil)
 
 	// First call: passive (echoes input path, no forget)
-	passiveResp := `{"synthesize": [{"path": "know/test/a.md", "title": "A", "body": "A", "domain": [], "confidence": 0.8, "entities": [], "refs": []}], "forget": []}`
+	passiveResp := `{"synthesize": [{"path": "know/test/a.md", "title": "A", "body": "A", "domain": [], "confidence": 0.8, "entities": [], "refs": []}], "retract": []}`
 	// Second call (retry): active (new synthesized fact + forget)
 	activeResp := `{
   "synthesize": [{"path": "know/test/synth.md", "title": "Insight", "body": "Combined.", "domain": ["testing"], "confidence": 0.9, "entities": [], "refs": ["know/test/a.md", "know/test/b.md"]}],
-  "forget": ["know/test/a.md"]
+  "retract": ["know/test/a.md"]
 }`
 
 	gomock.InOrder(
@@ -261,8 +261,8 @@ func TestRunDistillRetryOnPassive(t *testing.T) {
 	gs.EXPECT().DeleteFile("know/test/a.md", gomock.Any()).Return("deadbeef2", nil)
 	idx.EXPECT().Delete("know/test/a.md").Return(nil)
 
-	// Tag
-	gs.EXPECT().Tag(gomock.Any()).Return(nil)
+	// Tags per operation
+	gs.EXPECT().Tag(gomock.Any()).Return(nil).AnyTimes()
 
 	recipe := Recipe{
 		Name:  "distill-retry",

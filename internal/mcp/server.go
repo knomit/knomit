@@ -82,7 +82,7 @@ func NewServer(gs GitStore, idx SearchIndex, llmAdapter llm.LLMAdapter, profile,
 	s.AddTool(whyTool(), WhyHandler(gs, ontologyRoot))
 	s.AddTool(updateTool(), UpdateHandler(gs, idx, ontologyRoot))
 	s.AddTool(exploreTool(ontologyRoot), ExploreHandler(gs, ontologyRoot))
-	s.AddTool(forgetTool(), ForgetHandler(gs, idx, ontologyRoot))
+	s.AddTool(retractTool(), RetractHandler(gs, idx, ontologyRoot))
 
 	return s
 }

@@ -161,6 +161,7 @@ func executeDistillStep(ctx context.Context, gs GitStore, idx SearchIndex, embed
 		}
 	}
 
+	tagCounter := 0
 	log.Info().Int("synthesized", len(allSynthesized)).Int("forgotten", len(allForget)).Msg("distill: committing results")
 
 	// Commit synthesized facts.
@@ -198,6 +199,7 @@ func executeDistillStep(ctx context.Context, gs GitStore, idx SearchIndex, embed
 				onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("derived_from %s: %v", df.Path, err)})
 			}
 		}
+		tagOp(gs, "subsume", recipe.Name, &tagCounter)
 		onProgress(ProgressEvent{Phase: "detail-learn", Message: "learn " + df.Path})
 	}
 
@@ -205,16 +207,12 @@ func executeDistillStep(ctx context.Context, gs GitStore, idx SearchIndex, embed
 	for path := range allForget {
 		msg := fmt.Sprintf("synthesize-%s: subsumed by distilled fact", recipe.Name)
 		if _, err := gs.DeleteFile(path, msg); err != nil {
-			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("distill forget %s: %v", path, err)})
+			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("distill retract %s: %v", path, err)})
 			continue
 		}
 		_ = idx.Delete(path)
-		onProgress(ProgressEvent{Phase: "detail-distill-forget", Message: "forget " + path})
-	}
-
-	tagName := fmt.Sprintf("learn/synthesize-%s-distill", recipe.Name)
-	if err := gs.Tag(tagName); err != nil {
-		onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("tag %s: %v", tagName, err)})
+		tagOp(gs, "retract", recipe.Name, &tagCounter)
+		onProgress(ProgressEvent{Phase: "detail-distill-retract", Message: "retract " + path})
 	}
 
 	onProgress(ProgressEvent{Phase: "distill-done", Message: fmt.Sprintf("%d synthesized, %d forgotten", len(allSynthesized), len(allForget))})

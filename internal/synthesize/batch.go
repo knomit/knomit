@@ -212,7 +212,7 @@ func distillBatch(ctx context.Context, ba llm.BatchAdapter, group []factForLLM, 
 			continue
 		}
 		synthesized = append(synthesized, result.Synthesize...)
-		forget = append(forget, result.Forget...)
+		forget = append(forget, result.Retract...)
 	}
 
 	if len(retryIndices) > 0 {
@@ -245,7 +245,7 @@ func distillBatch(ctx context.Context, ba llm.BatchAdapter, group []factForLLM, 
 				continue
 			}
 			synthesized = append(synthesized, result.Synthesize...)
-			forget = append(forget, result.Forget...)
+			forget = append(forget, result.Retract...)
 		}
 	}
 

@@ -57,21 +57,20 @@ func WhyHandler(gs GitStore, ontologyRoot string) func(context.Context, mcpgo.Ca
 			oldestEntry := logEntries[len(logEntries)-1]
 			tags, tagErr := gs.TagsContaining(oldestEntry.Commit)
 			if tagErr == nil {
-				// Find first tag starting with "learn/".
-				var learnTag string
-				var learnDate string
+				// Find first known knowledge tag.
+				var knownTag string
+				var knownDate string
 				for _, tag := range tags {
-					if strings.HasPrefix(tag, "learn/") {
-						learnTag = tag
-						// Use the oldest commit's date.
-						learnDate = oldestEntry.Date
+					if strings.HasPrefix(tag, "learn/") || strings.HasPrefix(tag, "update/") || strings.HasPrefix(tag, "subsume/") || strings.HasPrefix(tag, "retract/") {
+						knownTag = tag
+						knownDate = oldestEntry.Date
 						break
 					}
 				}
-				if learnTag != "" {
+				if knownTag != "" {
 					learningMoment = map[string]interface{}{
-						"tag":      learnTag,
-						"date":     learnDate,
+						"tag":      knownTag,
+						"date":     knownDate,
 						"siblings": []interface{}{},
 					}
 				}
@@ -108,10 +107,10 @@ func WhyHandler(gs GitStore, ontologyRoot string) func(context.Context, mcpgo.Ca
 		}
 
 		result := map[string]interface{}{
-			"fact":             factOut,
-			"learning_moment":  learningMoment,
-			"refs":             orEmpty(fact.Refs),
-			"history":          history,
+			"fact":            factOut,
+			"learning_moment": learningMoment,
+			"refs":            orEmpty(fact.Refs),
+			"history":         history,
 		}
 
 		out, err := json.Marshal(result)

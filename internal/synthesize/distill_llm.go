@@ -14,7 +14,7 @@ import (
 // DistillResult is the LLM JSON response for a distill step.
 type DistillResult struct {
 	Synthesize []distillFact `json:"synthesize"`
-	Forget     []string      `json:"forget"`
+	Retract    []string      `json:"retract"`
 }
 
 // distillFact is a synthesized fact returned by the LLM in a distill step.
@@ -113,9 +113,9 @@ func runDistillOnGroup(ctx context.Context, gs GitStore, idx SearchIndex, adapte
 			}
 		}
 
-		log.Debug().Int("synthesized", len(result.Synthesize)).Int("forget", len(result.Forget)).Msg("distill: LLM response parsed")
+		log.Debug().Int("synthesized", len(result.Synthesize)).Int("retract", len(result.Retract)).Msg("distill: LLM response parsed")
 		synthesized = append(synthesized, result.Synthesize...)
-		forget = append(forget, result.Forget...)
+		forget = append(forget, result.Retract...)
 	}
 	return synthesized, forget, nil
 }

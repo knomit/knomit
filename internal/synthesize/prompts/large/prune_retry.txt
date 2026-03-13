@@ -11,7 +11,7 @@ Review these facts again and make real decisions:
 Respond as JSON (no markdown wrapping):
 {
   "decisions": [
-    { "path": "...", "action": "keep|forget|update", "confidence": 0.X }
+    { "path": "...", "action": "keep|retract|update", "confidence": 0.X }
   ],
   "merges": [...]
 }

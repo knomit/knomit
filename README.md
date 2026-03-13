@@ -157,7 +157,7 @@ Running synthesis with no recipe uses a built-in default: prune + distill on all
 | `knomit_explore` | Browse the ontology hierarchy |
 | `knomit_why` | Explain a fact's provenance and learning moment |
 | `knomit_update` | Revise an existing fact (confidence, body, refs) |
-| `knomit_forget` | Remove a fact (git history retains provenance) |
+| `knomit_retract` | Remove a fact (git history retains provenance) |
 
 ## How it works
 

@@ -9,23 +9,23 @@ import (
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 )
 
-// forgetTool returns the Tool definition for knomit_forget.
-func forgetTool() mcpgo.Tool {
-	return mcpgo.NewTool("knomit_forget",
-		mcpgo.WithDescription("Delete a fact from the knowledge base."),
+// retractTool returns the Tool definition for knomit_retract.
+func retractTool() mcpgo.Tool {
+	return mcpgo.NewTool("knomit_retract",
+		mcpgo.WithDescription("Retract a fact from the knowledge base."),
 		mcpgo.WithString("file",
 			mcpgo.Required(),
-			mcpgo.Description("Path to the fact file to delete."),
+			mcpgo.Description("Path to the fact file to retract."),
 		),
 		mcpgo.WithString("moment_name",
 			mcpgo.Required(),
-			mcpgo.Description("A short label for this forget moment (used as a git tag)."),
+			mcpgo.Description("A short label for this retraction moment (used as a git tag)."),
 		),
 	)
 }
 
-// ForgetHandler returns the handler function for knomit_forget.
-func ForgetHandler(gs GitStore, idx SearchIndex, ontologyRoot string) func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+// RetractHandler returns the handler function for knomit_retract.
+func RetractHandler(gs GitStore, idx SearchIndex, ontologyRoot string) func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 	return func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 		// 1. Sync.
 		if _, err := gs.Sync(nil); err != nil {
@@ -53,7 +53,7 @@ func ForgetHandler(gs GitStore, idx SearchIndex, ontologyRoot string) func(conte
 		}
 
 		// 4. Delete the file.
-		commitMsg := fmt.Sprintf("forget(%s): %s", momentName, file)
+		commitMsg := fmt.Sprintf("retract(%s): %s", momentName, file)
 		hash, err := gs.DeleteFile(file, commitMsg)
 		if err != nil {
 			return mcpgo.NewToolResultError(fmt.Sprintf("delete error: %v", err)), nil
@@ -66,9 +66,9 @@ func ForgetHandler(gs GitStore, idx SearchIndex, ontologyRoot string) func(conte
 
 		// 7. Tag.
 		sanitized := sanitizeMomentName(momentName)
-		tagName := "forget/" + sanitized
+		tagName := "retract/" + sanitized
 		if err := gs.Tag(tagName); err != nil {
-			tagName = fmt.Sprintf("forget/%s-%d", sanitized, time.Now().Unix())
+			tagName = fmt.Sprintf("retract/%s-%d", sanitized, time.Now().Unix())
 			if err2 := gs.Tag(tagName); err2 != nil {
 				return mcpgo.NewToolResultError(fmt.Sprintf("tag error: %v", err2)), nil
 			}

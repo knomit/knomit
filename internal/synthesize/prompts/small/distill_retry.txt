@@ -13,5 +13,5 @@ Facts:
 Output JSON:
 {
   "synthesize": [...],
-  "forget": [...]
+  "retract": [...]
 }

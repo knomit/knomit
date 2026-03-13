@@ -68,7 +68,7 @@ func TestParsePruneResponseValidJSON(t *testing.T) {
 	input := `{
   "decisions": [
     {"path": "know/a.md", "action": "keep"},
-    {"path": "know/b.md", "action": "forget"},
+    {"path": "know/b.md", "action": "retract"},
     {"path": "know/c.md", "action": "update", "confidence": 0.5}
   ],
   "merges": []
@@ -144,7 +144,7 @@ func TestParseDistillResponseValidJSON(t *testing.T) {
       "refs": ["know/a.md"]
     }
   ],
-  "forget": ["know/a.md", "know/b.md"]
+  "retract": ["know/a.md", "know/b.md"]
 }`
 	result, err := parseDistillResponse(input)
 	if err != nil {
@@ -156,8 +156,8 @@ func TestParseDistillResponseValidJSON(t *testing.T) {
 	if result.Synthesize[0].Title != "Synth" {
 		t.Errorf("expected title 'Synth', got %q", result.Synthesize[0].Title)
 	}
-	if len(result.Forget) != 2 {
-		t.Errorf("expected 2 forget paths, got %d", len(result.Forget))
+	if len(result.Retract) != 2 {
+		t.Errorf("expected 2 forget paths, got %d", len(result.Retract))
 	}
 }
 
@@ -169,7 +169,7 @@ func TestParseDistillResponseInvalidJSON(t *testing.T) {
 }
 
 func TestParseDistillResponseMarkdownWrappedNoLangTag(t *testing.T) {
-	input := "```\n" + `{"synthesize": [], "forget": []}` + "\n```"
+	input := "```\n" + `{"synthesize": [], "retract": []}` + "\n```"
 	result, err := parseDistillResponse(input)
 	if err != nil {
 		t.Fatalf("parseDistillResponse markdown no lang tag: %v", err)
@@ -257,6 +257,138 @@ func TestExtractJSON_ThinkBlocks(t *testing.T) {
 				t.Errorf("extractJSON:\ngot:  %q\nwant: %q", got, tc.want)
 			}
 		})
+	}
+}
+
+// ── validatePrunePaths ──────────────────────────────────────────────────────
+
+func TestValidatePrunePaths_AllValid(t *testing.T) {
+	inputPaths := []string{"know/a.md", "know/b.md", "know/c.md"}
+	result := PruneResult{
+		Decisions: []PruneDecision{
+			{Path: "know/a.md", Action: "keep"},
+			{Path: "know/b.md", Action: "retract"},
+			{Path: "know/c.md", Action: "update", Confidence: 0.5},
+		},
+	}
+	if err := validatePrunePaths(result, inputPaths); err != nil {
+		t.Errorf("expected no error for valid paths, got: %v", err)
+	}
+}
+
+func TestValidatePrunePaths_BogusPath(t *testing.T) {
+	inputPaths := []string{"know/a.md", "know/b.md"}
+	result := PruneResult{
+		Decisions: []PruneDecision{
+			{Path: ".", Action: "keep", Confidence: 0.9},
+		},
+	}
+	err := validatePrunePaths(result, inputPaths)
+	if err == nil {
+		t.Fatal("expected error for bogus path '.'")
+	}
+	if !strings.Contains(err.Error(), ".") {
+		t.Errorf("error should mention the bogus path, got: %v", err)
+	}
+}
+
+func TestValidatePrunePaths_EmptyDecisions(t *testing.T) {
+	inputPaths := []string{"know/a.md"}
+	result := PruneResult{Decisions: nil}
+	if err := validatePrunePaths(result, inputPaths); err != nil {
+		t.Errorf("expected no error for empty decisions, got: %v", err)
+	}
+}
+
+func TestValidatePrunePaths_MergeSourcesValidated(t *testing.T) {
+	inputPaths := []string{"know/a.md", "know/b.md"}
+	result := PruneResult{
+		Merges: []MergeEntry{
+			{
+				Paths:  []string{"know/a.md", "know/NONEXISTENT.md"},
+				Merged: mergedFact{Path: "know/ab.md", Title: "Combined"},
+			},
+		},
+	}
+	err := validatePrunePaths(result, inputPaths)
+	if err == nil {
+		t.Fatal("expected error for bogus merge source path")
+	}
+	if !strings.Contains(err.Error(), "NONEXISTENT") {
+		t.Errorf("error should mention the bogus merge source, got: %v", err)
+	}
+}
+
+func TestValidatePrunePaths_UnknownAction(t *testing.T) {
+	inputPaths := []string{"know/a.md", "know/b.md"}
+	result := PruneResult{
+		Decisions: []PruneDecision{
+			{Path: "know/a.md", Action: "merge", Confidence: 0.75},
+		},
+	}
+	err := validatePrunePaths(result, inputPaths)
+	if err == nil {
+		t.Fatal("expected error for unknown action 'merge'")
+	}
+	if !strings.Contains(err.Error(), "merge") {
+		t.Errorf("error should mention the unknown action, got: %v", err)
+	}
+}
+
+func TestValidatePrunePaths_MergeEmptyPaths(t *testing.T) {
+	inputPaths := []string{"know/a.md", "know/b.md"}
+	// Model used wrong schema: "from"/"to" instead of "paths"/"merged" —
+	// Paths unmarshals as nil, Merged as zero-value.
+	result := PruneResult{
+		Merges: []MergeEntry{
+			{Paths: nil, Merged: mergedFact{}},
+		},
+	}
+	err := validatePrunePaths(result, inputPaths)
+	if err == nil {
+		t.Fatal("expected error for merge with empty paths")
+	}
+}
+
+func TestValidatePrunePaths_MergeEmptyTitle(t *testing.T) {
+	inputPaths := []string{"know/a.md", "know/b.md"}
+	result := PruneResult{
+		Merges: []MergeEntry{
+			{
+				Paths:  []string{"know/a.md", "know/b.md"},
+				Merged: mergedFact{Path: "know/ab.md", Title: ""},
+			},
+		},
+	}
+	err := validatePrunePaths(result, inputPaths)
+	if err == nil {
+		t.Fatal("expected error for merge with empty title")
+	}
+}
+
+// ── validateDistillPaths ────────────────────────────────────────────────────
+
+func TestValidateDistillPaths_AllValid(t *testing.T) {
+	inputPaths := []string{"know/a.md", "know/b.md"}
+	result := DistillResult{
+		Retract: []string{"know/a.md"},
+	}
+	if err := validateDistillPaths(result, inputPaths); err != nil {
+		t.Errorf("expected no error, got: %v", err)
+	}
+}
+
+func TestValidateDistillPaths_BogusForgetPath(t *testing.T) {
+	inputPaths := []string{"know/a.md"}
+	result := DistillResult{
+		Retract: []string{"know/FAKE.md"},
+	}
+	err := validateDistillPaths(result, inputPaths)
+	if err == nil {
+		t.Fatal("expected error for bogus forget path")
+	}
+	if !strings.Contains(err.Error(), "FAKE") {
+		t.Errorf("error should mention the bogus path, got: %v", err)
 	}
 }
 

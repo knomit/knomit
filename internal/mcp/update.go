@@ -141,9 +141,9 @@ func UpdateHandler(gs GitStore, idx SearchIndex, ontologyRoot string) func(conte
 
 		// 10. Tag.
 		sanitized := sanitizeMomentName(momentName)
-		tagName := "learn/" + sanitized
+		tagName := "update/" + sanitized
 		if err := gs.Tag(tagName); err != nil {
-			tagName = fmt.Sprintf("learn/%s-%d", sanitized, time.Now().Unix())
+			tagName = fmt.Sprintf("update/%s-%d", sanitized, time.Now().Unix())
 			if err2 := gs.Tag(tagName); err2 != nil {
 				return mcpgo.NewToolResultError(fmt.Sprintf("tag error: %v", err2)), nil
 			}
