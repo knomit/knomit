@@ -42,6 +42,8 @@ func NewAdapter(ctx context.Context, provider, model string) (LLMAdapter, error)
 		return NewClaudeCLIAdapter(model), nil
 	case "geminicli":
 		return NewGeminiCLIAdapter(model), nil
+	case "ollama":
+		return NewOllamaAdapter(ctx, model)
 	default:
 		return nil, fmt.Errorf("unknown provider %q", provider)
 	}

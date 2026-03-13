@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/anthropics/anthropic-sdk-go/option"
@@ -56,6 +57,17 @@ func TestAnthropicAdapter_Complete(t *testing.T) {
 	}
 	if chunks[1] != " world" {
 		t.Errorf("chunks[1] = %q, want %q", chunks[1], " world")
+	}
+}
+
+func TestNewAdapter_Ollama_NoServer(t *testing.T) {
+	t.Setenv("OLLAMA_HOST", "http://127.0.0.1:19999")
+	_, err := NewAdapter(context.Background(), "ollama", "qwen3:8b")
+	if err == nil {
+		t.Fatal("expected error when Ollama is unreachable, got nil")
+	}
+	if strings.Contains(err.Error(), "unknown provider") {
+		t.Errorf("resolver should recognize ollama, got: %v", err)
 	}
 }
 
