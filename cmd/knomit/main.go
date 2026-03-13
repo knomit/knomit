@@ -45,7 +45,10 @@ func serveCmd() *cobra.Command {
 		Use:   "serve",
 		Short: "Start the knomit HTTP server",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg := config.FromEnv()
+			cfg, err := config.Load()
+			if err != nil {
+				return fmt.Errorf("load config: %w", err)
+			}
 
 			// 1. Open or init GitStore
 			gitDBPath := filepath.Join(cfg.RepoPath, "knomit.git.db")
@@ -91,11 +94,11 @@ func serveCmd() *cobra.Command {
 			// 5. Resolve LLM adapter
 			ctx := context.Background()
 			var llmAdapter llm.LLMAdapter
-			provider, err := llm.ResolveProvider(cfg.LLMModel, cfg.LLMProvider)
+			provider, err := llm.ResolveProvider(cfg.LLM.Model, cfg.LLM.Provider)
 			if err != nil {
 				log.Warn().Err(err).Msg("LLM provider resolution failed")
 			} else {
-				llmAdapter, err = llm.NewAdapter(ctx, provider, cfg.LLMModel)
+				llmAdapter, err = llm.NewAdapter(ctx, provider, cfg.LLM.Model)
 				if err != nil {
 					log.Warn().Err(err).Msg("LLM adapter init failed")
 				}
@@ -111,8 +114,8 @@ func serveCmd() *cobra.Command {
 
 			// 7. Wire git remote if enabled
 			var gitHandler http.Handler
-			if cfg.GitRemote {
-				gitHandler = web.GitRemoteHandler(gs, cfg.APIKey)
+			if cfg.Git.Remote {
+				gitHandler = web.GitRemoteHandler(gs, cfg.LLM.APIKey)
 			}
 
 			// 8. Create TaskHub
@@ -169,7 +172,10 @@ func initCmd() *cobra.Command {
 		Use:   "init",
 		Short: "Initialise a new knomit repo",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg := config.FromEnv()
+			cfg, err := config.Load()
+			if err != nil {
+				return fmt.Errorf("load config: %w", err)
+			}
 			gitDBPath := filepath.Join(cfg.RepoPath, "knomit.git.db")
 			if err := os.MkdirAll(cfg.RepoPath, 0o755); err != nil {
 				return err
@@ -190,7 +196,10 @@ func resetCmd() *cobra.Command {
 		Use:   "reset",
 		Short: "Wipe all data (git store + search index) and start fresh",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg := config.FromEnv()
+			cfg, err := config.Load()
+			if err != nil {
+				return fmt.Errorf("load config: %w", err)
+			}
 			gitDB := filepath.Join(cfg.RepoPath, "knomit.git.db")
 			idxDB := filepath.Join(cfg.RepoPath, "knomit.index.db")
 
@@ -214,7 +223,10 @@ func rebuildCmd() *cobra.Command {
 		Use:   "rebuild",
 		Short: "Rebuild the search index from scratch",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg := config.FromEnv()
+			cfg, err := config.Load()
+			if err != nil {
+				return fmt.Errorf("load config: %w", err)
+			}
 			gs, err := git.Open(filepath.Join(cfg.RepoPath, "knomit.git.db"))
 			if err != nil {
 				return fmt.Errorf("open git store: %w", err)
