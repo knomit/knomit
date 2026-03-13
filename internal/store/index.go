@@ -15,8 +15,6 @@ package store
 import (
 	"database/sql"
 	"fmt"
-
-	_ "github.com/mattn/go-sqlite3"
 )
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -104,7 +102,7 @@ func New(path string, opts ...Option) (*Index, error) {
 	if path != ":memory:" {
 		dsn = path + "?_journal_mode=WAL&_busy_timeout=5000"
 	}
-	db, err := sql.Open("sqlite3", dsn)
+	db, err := sql.Open("sqlite3_knomit", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite: %w", err)
 	}

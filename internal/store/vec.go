@@ -4,19 +4,74 @@
 package store
 
 import (
+	"database/sql"
 	"encoding/binary"
 	"fmt"
 	"math"
+	"os"
+	"path/filepath"
+	"runtime"
 	"sync"
 
 	sqlite_vec "github.com/asg017/sqlite-vec-go-bindings/cgo"
+	sqlite3 "github.com/mattn/go-sqlite3"
 )
 
 var vecOnce sync.Once
 
-// registerVec loads the sqlite-vec extension exactly once per process.
+// registerVec loads the sqlite-vec extension exactly once per process and
+// registers a custom "sqlite3_knomit" driver that also loads GraphQLite.
 func registerVec() {
-	vecOnce.Do(func() { sqlite_vec.Auto() })
+	vecOnce.Do(func() {
+		sqlite_vec.Auto()
+		sql.Register("sqlite3_knomit", &sqlite3.SQLiteDriver{
+			Extensions: []string{graphqliteLibPath()},
+		})
+	})
+}
+
+// graphqliteLibPath returns the path to the GraphQLite shared library.
+// Resolution order:
+//  1. GRAPHQLITE_LIB_PATH env var (explicit override)
+//  2. Path relative to the running executable (production / installed binary)
+//  3. Path relative to the source tree (test binaries via runtime.Caller)
+func graphqliteLibPath() string {
+	if v := os.Getenv("GRAPHQLITE_LIB_PATH"); v != "" {
+		return v
+	}
+
+	ext := ".so"
+	switch runtime.GOOS {
+	case "darwin":
+		ext = ".dylib"
+	case "windows":
+		ext = ".dll"
+	}
+	rel := filepath.Join("lib", runtime.GOOS+"-"+runtime.GOARCH, "graphqlite"+ext)
+
+	// Try exe-relative path first (production binaries).
+	if exe, err := os.Executable(); err == nil {
+		candidate := filepath.Join(filepath.Dir(exe), rel)
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate
+		}
+	}
+
+	// Fall back to source-tree-relative path (go test puts the binary in a
+	// temp dir, so we use runtime.Caller to find the source file location).
+	_, file, _, ok := runtime.Caller(0)
+	if ok {
+		srcDir := filepath.Join(filepath.Dir(file), "..", "..")
+		candidate := filepath.Join(srcDir, rel)
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate
+		}
+	}
+
+	// Return a best-effort path; the driver will fail at connection time with
+	// a clear error if the library is truly missing.
+	exe, _ := os.Executable()
+	return filepath.Join(filepath.Dir(exe), rel)
 }
 
 // float32SliceToBytes encodes a []float32 as little-endian bytes

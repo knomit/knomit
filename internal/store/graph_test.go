@@ -25,6 +25,28 @@ func graphqliteTestPath(t *testing.T) string {
 	return filepath.Join(repoRoot, "lib", runtime.GOOS+"-"+runtime.GOARCH, "graphqlite"+ext)
 }
 
+func TestNewWithGraphQLite(t *testing.T) {
+	idx, err := New(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer idx.Close()
+
+	// Verify cypher() is available on the Index's db connection.
+	var result string
+	err = idx.db.QueryRow(`SELECT cypher('RETURN 1')`).Scan(&result)
+	if err != nil {
+		t.Fatalf("cypher not available on Index db: %v", err)
+	}
+
+	// Verify vec0 still works.
+	var d float64
+	err = idx.db.QueryRow(`SELECT vec_distance_cosine(vec_f32('[1,0]'), vec_f32('[0,1]'))`).Scan(&d)
+	if err != nil {
+		t.Fatalf("vec_distance_cosine failed: %v", err)
+	}
+}
+
 func TestGraphQLiteCoexistence(t *testing.T) {
 	// Register a custom driver that loads GraphQLite via Extensions.
 	// sqlite-vec is loaded separately via Auto() (CGo bindings on default driver).
