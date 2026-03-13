@@ -30,11 +30,11 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 }
 
 // handleBrowse handles GET /api/browse?path=<path>
-func handleBrowse(gs GitStore) http.HandlerFunc {
+func handleBrowse(gs GitStore, ontologyRoot string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.Query().Get("path")
 		if path == "" {
-			path = "know"
+			path = ontologyRoot
 		}
 		log.Debug().Str("path", path).Msg("browse")
 

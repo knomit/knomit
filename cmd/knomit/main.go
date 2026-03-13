@@ -136,7 +136,7 @@ func serveCmd() *cobra.Command {
 			}
 
 			// 10. Create chi router
-			router := web.NewRouter(gs, idx, hub, synthDeps, mcpServers, gitHandler, embeddingsEnabled)
+			router := web.NewRouter(gs, idx, hub, synthDeps, mcpServers, gitHandler, embeddingsEnabled, cfg.OntologyRoot)
 
 			// 11. Graceful shutdown
 			srv := &http.Server{

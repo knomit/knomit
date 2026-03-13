@@ -39,7 +39,7 @@ type SynthDeps struct {
 }
 
 // NewRouter creates and returns the chi router with all API routes registered.
-func NewRouter(gs GitStore, idx SearchIndex, hub *TaskHub, synthDeps *SynthDeps, mcpHandlers map[string]http.Handler, gitHandler http.Handler, embeddingsEnabled bool) http.Handler {
+func NewRouter(gs GitStore, idx SearchIndex, hub *TaskHub, synthDeps *SynthDeps, mcpHandlers map[string]http.Handler, gitHandler http.Handler, embeddingsEnabled bool, ontologyRoot string) http.Handler {
 	r := chi.NewRouter()
 	r.Use(middleware.Recoverer)
 
@@ -61,7 +61,7 @@ func NewRouter(gs GitStore, idx SearchIndex, hub *TaskHub, synthDeps *SynthDeps,
 		r.Mount("/git", gitHandler)
 	}
 
-	r.Get("/api/v1/browse", handleBrowse(gs))
+	r.Get("/api/v1/browse", handleBrowse(gs, ontologyRoot))
 	r.Get("/api/v1/fact", handleFact(gs))
 	r.Get("/api/v1/search", handleSearch(idx))
 	r.Get("/api/v1/history", handleHistory(gs))
