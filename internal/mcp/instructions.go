@@ -10,7 +10,7 @@ Key concepts:
 - Facts are stored as markdown files under %s/ with YAML frontmatter (domain, entities, confidence, sources, refs)
 - Each fact has a path like %s/topic/subtopic/fact-name.md
 - Use knomit_learn to store new knowledge, knomit_query to search, knomit_why for provenance
-- Use knomit_update to modify existing facts, knomit_forget to remove outdated knowledge
+- Use knomit_update to modify existing facts, knomit_retract to remove outdated knowledge
 - Use knomit_explore to browse the knowledge tree`, ontologyRoot, ontologyRoot)
 }
 

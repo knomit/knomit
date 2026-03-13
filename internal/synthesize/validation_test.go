@@ -23,7 +23,7 @@ func TestIsPrunePassive(t *testing.T) {
 			result: PruneResult{
 				Decisions: []PruneDecision{
 					{Path: "a.md", Action: "keep"},
-					{Path: "b.md", Action: "forget"},
+					{Path: "b.md", Action: "retract"},
 				},
 			},
 			want: false,
@@ -80,7 +80,7 @@ func TestIsDistillPassive(t *testing.T) {
 			name: "has new facts and forgets — active",
 			result: DistillResult{
 				Synthesize: []distillFact{{Path: "new.md", Title: "New"}},
-				Forget:     []string{"a.md"},
+				Retract:     []string{"a.md"},
 			},
 			inputPaths: []string{"a.md"},
 			want:       false,

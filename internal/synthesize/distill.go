@@ -101,14 +101,30 @@ func executeDistillStep(ctx context.Context, gs GitStore, idx SearchIndex, embed
 		}
 
 		var depthSynthesized []distillFact
-		for _, group := range clusterMap {
-			synthesized, forget, err := runDistillOnGroup(ctx, gs, idx, adapter, group, step, recipe, profile, onProgress)
+		if ba, ok := adapter.(llm.BatchAdapter); ok && ba.BatchEnabled() {
+			// Batch all groups for this depth at once.
+			var allGroupFacts []factForLLM
+			for _, group := range clusterMap {
+				allGroupFacts = append(allGroupFacts, group...)
+			}
+			synthesized, forget, err := distillBatch(ctx, ba, allGroupFacts, step, recipe, profile, onProgress)
 			if err != nil {
 				return err
 			}
 			depthSynthesized = append(depthSynthesized, synthesized...)
 			for _, p := range forget {
 				allForget[p] = true
+			}
+		} else {
+			for _, group := range clusterMap {
+				synthesized, forget, err := runDistillOnGroup(ctx, gs, idx, adapter, group, step, recipe, profile, onProgress)
+				if err != nil {
+					return err
+				}
+				depthSynthesized = append(depthSynthesized, synthesized...)
+				for _, p := range forget {
+					allForget[p] = true
+				}
 			}
 		}
 		allSynthesized = append(allSynthesized, depthSynthesized...)
@@ -145,6 +161,7 @@ func executeDistillStep(ctx context.Context, gs GitStore, idx SearchIndex, embed
 		}
 	}
 
+	tagCounter := 0
 	log.Info().Int("synthesized", len(allSynthesized)).Int("forgotten", len(allForget)).Msg("distill: committing results")
 
 	// Commit synthesized facts.
@@ -182,23 +199,20 @@ func executeDistillStep(ctx context.Context, gs GitStore, idx SearchIndex, embed
 				onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("derived_from %s: %v", df.Path, err)})
 			}
 		}
-		onProgress(ProgressEvent{Phase: "detail-learn", Message: df.Path})
+		tagOp(gs, "subsume", recipe.Name, &tagCounter)
+		onProgress(ProgressEvent{Phase: "detail-learn", Message: "learn " + df.Path})
 	}
 
 	// Delete subsumed facts.
 	for path := range allForget {
 		msg := fmt.Sprintf("synthesize-%s: subsumed by distilled fact", recipe.Name)
 		if _, err := gs.DeleteFile(path, msg); err != nil {
-			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("distill forget %s: %v", path, err)})
+			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("distill retract %s: %v", path, err)})
 			continue
 		}
 		_ = idx.Delete(path)
-		onProgress(ProgressEvent{Phase: "detail-distill-forget", Message: path})
-	}
-
-	tagName := fmt.Sprintf("learn/synthesize-%s-distill", recipe.Name)
-	if err := gs.Tag(tagName); err != nil {
-		onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("tag %s: %v", tagName, err)})
+		tagOp(gs, "retract", recipe.Name, &tagCounter)
+		onProgress(ProgressEvent{Phase: "detail-distill-retract", Message: "retract " + path})
 	}
 
 	onProgress(ProgressEvent{Phase: "distill-done", Message: fmt.Sprintf("%d synthesized, %d forgotten", len(allSynthesized), len(allForget))})

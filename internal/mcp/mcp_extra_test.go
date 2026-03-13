@@ -90,17 +90,17 @@ func TestParseFactNoTitleHeading(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// ForgetHandler edge cases
+// RetractHandler edge cases
 // ---------------------------------------------------------------------------
 
-func TestForgetEmptyFile(t *testing.T) {
+func TestRetractEmptyFile(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
 	idx := NewMockSearchIndex(ctrl)
 
 	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
 
-	handler := ForgetHandler(gs, idx, "know")
+	handler := RetractHandler(gs, idx, "know")
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
@@ -117,14 +117,14 @@ func TestForgetEmptyFile(t *testing.T) {
 	}
 }
 
-func TestForgetEmptyMomentName(t *testing.T) {
+func TestRetractEmptyMomentName(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
 	idx := NewMockSearchIndex(ctrl)
 
 	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
 
-	handler := ForgetHandler(gs, idx, "know")
+	handler := RetractHandler(gs, idx, "know")
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
@@ -141,7 +141,7 @@ func TestForgetEmptyMomentName(t *testing.T) {
 	}
 }
 
-func TestForgetFileExistsError(t *testing.T) {
+func TestRetractFileExistsError(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
 	idx := NewMockSearchIndex(ctrl)
@@ -149,7 +149,7 @@ func TestForgetFileExistsError(t *testing.T) {
 	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
 	gs.EXPECT().FileExists("know/broken.md").Return(false, fmt.Errorf("git error"))
 
-	handler := ForgetHandler(gs, idx, "know")
+	handler := RetractHandler(gs, idx, "know")
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
@@ -166,7 +166,7 @@ func TestForgetFileExistsError(t *testing.T) {
 	}
 }
 
-func TestForgetDeleteFileError(t *testing.T) {
+func TestRetractDeleteFileError(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
 	idx := NewMockSearchIndex(ctrl)
@@ -175,7 +175,7 @@ func TestForgetDeleteFileError(t *testing.T) {
 	gs.EXPECT().FileExists("know/fail.md").Return(true, nil)
 	gs.EXPECT().DeleteFile("know/fail.md", gomock.Any()).Return("", fmt.Errorf("delete failed"))
 
-	handler := ForgetHandler(gs, idx, "know")
+	handler := RetractHandler(gs, idx, "know")
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
@@ -192,14 +192,14 @@ func TestForgetDeleteFileError(t *testing.T) {
 	}
 }
 
-func TestForgetSyncError(t *testing.T) {
+func TestRetractSyncError(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
 	idx := NewMockSearchIndex(ctrl)
 
 	gs.EXPECT().Sync(nil).Return(SyncResult{}, fmt.Errorf("sync failed"))
 
-	handler := ForgetHandler(gs, idx, "know")
+	handler := RetractHandler(gs, idx, "know")
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{

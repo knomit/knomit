@@ -14,8 +14,8 @@ func TestDefaults(t *testing.T) {
 	if cfg.OntologyRoot != "know" {
 		t.Errorf("OntologyRoot = %q, want %q", cfg.OntologyRoot, "know")
 	}
-	if cfg.LLM.Model != "qwen3" {
-		t.Errorf("LLM.Model = %q, want %q", cfg.LLM.Model, "qwen3")
+	if cfg.LLM.Model != "gemini-2.5-flash" {
+		t.Errorf("LLM.Model = %q, want %q", cfg.LLM.Model, "gemini-2.5-flash")
 	}
 	home, _ := os.UserHomeDir()
 	if cfg.RepoPath != home+"/.knomit" {
@@ -170,8 +170,8 @@ port = "4000"
 	if cfg.OntologyRoot != "know" {
 		t.Errorf("OntologyRoot = %q, want default %q", cfg.OntologyRoot, "know")
 	}
-	if cfg.LLM.Model != "qwen3" {
-		t.Errorf("LLM.Model = %q, want default %q", cfg.LLM.Model, "qwen3")
+	if cfg.LLM.Model != "gemini-2.5-flash" {
+		t.Errorf("LLM.Model = %q, want default %q", cfg.LLM.Model, "gemini-2.5-flash")
 	}
 }
 

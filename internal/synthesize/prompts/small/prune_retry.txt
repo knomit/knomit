@@ -5,7 +5,7 @@ Go back and look for ANY of these:
 - A fact that is outdated
 - A fact with wrong confidence
 
-You MUST mark at least one fact as "forget" or propose at least one merge. If every fact is truly unique and correct, explain why in a "keep" decision, but this is rare.
+You MUST mark at least one fact as "retract" or propose at least one merge. If every fact is truly unique and correct, explain why in a "keep" decision, but this is rare.
 
 Facts:
 {{.Facts}}
@@ -13,7 +13,7 @@ Facts:
 Output JSON:
 {
   "decisions": [
-    { "path": "...", "action": "keep|forget|update", "confidence": 0.X }
+    { "path": "...", "action": "keep|retract|update", "confidence": 0.X }
   ],
   "merges": [...]
 }

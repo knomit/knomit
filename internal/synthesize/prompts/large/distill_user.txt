@@ -28,5 +28,5 @@ Respond as JSON (no markdown wrapping):
       "refs": ["source-file1.md", "source-file2.md"]
     }
   ],
-  "forget": ["file1.md", "file2.md"]
+  "retract": ["file1.md", "file2.md"]
 }

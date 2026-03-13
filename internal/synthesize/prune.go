@@ -60,11 +60,16 @@ func executePruneStep(ctx context.Context, gs GitStore, idx SearchIndex, embedde
 	}
 	if len(llmGroups) == 0 {
 		onProgress(ProgressEvent{Phase: "prune-done", Message: "all clusters resolved by dedup"})
-		tagName := fmt.Sprintf("learn/synthesize-%s-prune", recipe.Name)
-		if err := gs.Tag(tagName); err != nil {
-			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("tag %s: %v", tagName, err)})
-		}
 		return nil
+	}
+
+	// Try batch path if adapter supports it.
+	if ba, ok := adapter.(llm.BatchAdapter); ok && ba.BatchEnabled() {
+		decisions, merges, err := pruneBatch(ctx, ba, llmGroups, recipe, step, profile, onProgress)
+		if err != nil {
+			return fmt.Errorf("prune batch: %w", err)
+		}
+		return applyPruneResults(gs, idx, recipe, decisions, merges, onProgress)
 	}
 
 	var allDecisions []PruneDecision
@@ -157,9 +162,22 @@ func executePruneStep(ctx context.Context, gs GitStore, idx SearchIndex, embedde
 		}
 	}
 
+	return applyPruneResults(gs, idx, recipe, allDecisions, allMerges, onProgress)
+}
+
+// tagOp creates a tag for a synthesize operation, using a counter to avoid collisions.
+func tagOp(gs GitStore, prefix, recipeName string, counter *int) {
+	*counter++
+	tagName := fmt.Sprintf("%s/synthesize-%s-%d", prefix, recipeName, *counter)
+	_ = gs.Tag(tagName)
+}
+
+// applyPruneResults writes keep/retract/update decisions and merges to git+index.
+func applyPruneResults(gs GitStore, idx SearchIndex, recipe Recipe, allDecisions []PruneDecision, allMerges []MergeEntry, onProgress func(ProgressEvent)) error {
 	// Track deleted paths to avoid double-deletion when a path appears in
-	// both "forget" decisions and merge source lists.
+	// both "retract" decisions and merge source lists.
 	deletedPaths := make(map[string]bool)
+	tagCounter := 0
 
 	log.Info().Int("decisions", len(allDecisions)).Int("merges", len(allMerges)).Msg("prune: applying results")
 
@@ -168,17 +186,18 @@ func executePruneStep(ctx context.Context, gs GitStore, idx SearchIndex, embedde
 		switch d.Action {
 		case "keep":
 			// no-op
-		case "forget":
-			msg := fmt.Sprintf("synthesize-%s: forget %s", recipe.Name, d.Path)
+		case "retract":
+			msg := fmt.Sprintf("synthesize-%s: retract %s", recipe.Name, d.Path)
 			deletedPaths[d.Path] = true
 			if _, err := gs.DeleteFile(d.Path, msg); err != nil {
-				onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("forget %s: %v", d.Path, err)})
+				onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("retract %s: %v", d.Path, err)})
 				continue
 			}
 			if err := idx.Delete(d.Path); err != nil {
 				onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("index delete %s: %v", d.Path, err)})
 			}
-			onProgress(ProgressEvent{Phase: "detail-forget", Message: d.Path})
+			tagOp(gs, "retract", recipe.Name, &tagCounter)
+			onProgress(ProgressEvent{Phase: "detail-retract", Message: "retract " + d.Path})
 
 		case "update":
 			content, err := gs.ReadFile(d.Path)
@@ -212,11 +231,12 @@ func executePruneStep(ctx context.Context, gs GitStore, idx SearchIndex, embedde
 			}); err != nil {
 				onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("index upsert %s: %v", d.Path, err)})
 			}
-			onProgress(ProgressEvent{Phase: "detail-update", Message: d.Path})
+			tagOp(gs, "update", recipe.Name, &tagCounter)
+			onProgress(ProgressEvent{Phase: "detail-update", Message: fmt.Sprintf("update %.2f %s", d.Confidence, d.Path)})
 		}
 	}
 
-	// Apply merges.
+	// Apply merges: winner gets update tag, losers get retract tag.
 	for _, m := range allMerges {
 		mf := m.Merged
 		merged := mcp.Fact{
@@ -250,8 +270,9 @@ func executePruneStep(ctx context.Context, gs GitStore, idx SearchIndex, embedde
 		if err := idx.GraphAddDerivedFrom(mf.Path, m.Paths); err != nil {
 			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("derived_from %s: %v", mf.Path, err)})
 		}
+		tagOp(gs, "update", recipe.Name, &tagCounter)
 
-		// Delete source facts (unless already forgotten).
+		// Delete source facts (losers get retract tag).
 		for _, src := range m.Paths {
 			if deletedPaths[src] {
 				continue
@@ -263,13 +284,9 @@ func executePruneStep(ctx context.Context, gs GitStore, idx SearchIndex, embedde
 			}
 			_ = idx.Delete(src)
 			deletedPaths[src] = true
+			tagOp(gs, "retract", recipe.Name, &tagCounter)
 		}
-		onProgress(ProgressEvent{Phase: "detail-merge", Message: mf.Path})
-	}
-
-	tagName := fmt.Sprintf("learn/synthesize-%s-prune", recipe.Name)
-	if err := gs.Tag(tagName); err != nil {
-		onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("tag %s: %v", tagName, err)})
+		onProgress(ProgressEvent{Phase: "detail-merge", Message: "merge " + mf.Path})
 	}
 
 	onProgress(ProgressEvent{Phase: "prune-done", Message: fmt.Sprintf("%d decisions, %d merges", len(allDecisions), len(allMerges))})

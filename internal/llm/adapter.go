@@ -50,3 +50,17 @@ type LLMAdapter interface {
 	Complete(ctx context.Context, system string, msgs []Message, opts CompletionOptions, onChunk func(string)) (string, error)
 	Model() string
 }
+
+// BatchRequest is a single request within a batch.
+type BatchRequest struct {
+	System   string
+	Messages []Message
+}
+
+// BatchAdapter is optionally implemented by providers that support submitting
+// multiple requests as a single batch job (e.g. Gemini batch API).
+type BatchAdapter interface {
+	LLMAdapter
+	CompleteBatch(ctx context.Context, requests []BatchRequest, opts CompletionOptions) ([]string, error)
+	BatchEnabled() bool
+}

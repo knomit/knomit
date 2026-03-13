@@ -36,7 +36,7 @@ func (f *flexStrings) UnmarshalJSON(b []byte) error {
 // PruneDecision is the LLM's decision for a single fact.
 type PruneDecision struct {
 	Path       string  `json:"path"`
-	Action     string  `json:"action"` // "keep" | "forget" | "update"
+	Action     string  `json:"action"` // "keep" | "retract" | "update"
 	Confidence float64 `json:"confidence,omitempty"`
 }
 

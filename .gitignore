@@ -44,5 +44,8 @@ dist/lib/
 # Claude Code
 .claude/
 
+# Vite cache
+web/.vite/
+
 # Large test assets
 internal/embeddings/testdata/*.onnx
