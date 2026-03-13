@@ -372,6 +372,45 @@ func TestClusterFactsLouvain(t *testing.T) {
 	t.Logf("clusters: %d, total members: %d, noise: %d", len(result.Clusters), total, len(result.Noise))
 }
 
+func TestSearchWithGraphExpansion(t *testing.T) {
+	idx, err := New(":memory:", WithVecDimension(4))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer idx.Close()
+	idx.SetEmbedder(&stubEmbedder4d{})
+
+	_ = idx.Upsert(FactRecord{
+		Path: "know/a.md", Title: "A", Body: "alpha",
+		Domain: []string{"eng"}, Entities: []string{"Go"},
+		Refs: []string{}, CommitHash: "abc",
+	})
+	_ = idx.Upsert(FactRecord{
+		Path: "know/b.md", Title: "B", Body: "beta",
+		Domain: []string{"eng"}, Entities: []string{"Go"},
+		Refs: []string{}, CommitHash: "abc",
+	})
+
+	results, err := idx.Search(SearchQuery{
+		Text:      "alpha",
+		GraphHops: 1,
+		Limit:     10,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	paths := map[string]bool{}
+	for _, r := range results {
+		paths[r.Path] = true
+	}
+	t.Logf("results: %v", paths)
+	// With graph expansion, fact B should appear (connected via shared Entity "Go")
+	if !paths["know/b.md"] {
+		t.Error("expected know/b.md in results via graph expansion (shared Entity Go)")
+	}
+}
+
 type mockGitReader struct {
 	files map[string]string
 	head  string

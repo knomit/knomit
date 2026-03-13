@@ -355,6 +355,63 @@ func (idx *Index) ClusterFacts(resolution float64, minCommunitySize int) (Cluste
 	return result, nil
 }
 
+// graphExpandSearch expands vector search seed results through graph traversal.
+// Returns additional fact paths with scores. Graph-discovered facts receive a
+// bonus score that decreases with hop distance but is capped below the minimum
+// vector seed score to never outrank direct vector hits.
+func (idx *Index) graphExpandSearch(seeds map[string]float64, maxHops int) map[string]float64 {
+	expanded := map[string]float64{}
+
+	// Find minimum seed score for capping
+	minSeedScore := 1.0
+	for _, score := range seeds {
+		if score < minSeedScore {
+			minSeedScore = score
+		}
+	}
+	capScore := minSeedScore - 0.01
+
+	for seedPath := range seeds {
+		p := escapeCypher(seedPath)
+
+		// Traverse SIMILAR_TO (1 hop)
+		q := fmt.Sprintf(`SELECT value FROM json_each(cypher('MATCH (:Fact {path: "%s"})-[:SIMILAR_TO]-(neighbor:Fact) WHERE neighbor.deleted = false RETURN neighbor.path'))`, p)
+		rows, err := idx.db.Query(q)
+		if err == nil {
+			for rows.Next() {
+				var neighborPath string
+				rows.Scan(&neighborPath)
+				if _, isSeed := seeds[neighborPath]; !isSeed {
+					score := capScore
+					if existing, ok := expanded[neighborPath]; !ok || score > existing {
+						expanded[neighborPath] = score
+					}
+				}
+			}
+			rows.Close()
+		}
+
+		// Traverse TAGGED → Entity → TAGGED (shared entities)
+		q = fmt.Sprintf(`SELECT value FROM json_each(cypher('MATCH (:Fact {path: "%s"})-[:TAGGED]->(e:Entity)<-[:TAGGED]-(neighbor:Fact) WHERE neighbor.deleted = false AND neighbor.path <> "%s" RETURN DISTINCT neighbor.path'))`, p, p)
+		rows, err = idx.db.Query(q)
+		if err == nil {
+			for rows.Next() {
+				var neighborPath string
+				rows.Scan(&neighborPath)
+				if _, isSeed := seeds[neighborPath]; !isSeed {
+					score := capScore - 0.01
+					if existing, ok := expanded[neighborPath]; !ok || score > existing {
+						expanded[neighborPath] = score
+					}
+				}
+			}
+			rows.Close()
+		}
+	}
+
+	return expanded
+}
+
 // execer abstracts *sql.DB and *sql.Tx for transactional graph operations.
 type execer interface {
 	Exec(query string, args ...any) (sql.Result, error)
