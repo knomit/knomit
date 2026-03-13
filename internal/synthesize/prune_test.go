@@ -3,6 +3,7 @@ package synthesize
 import (
 	"context"
 	"encoding/json"
+	"math"
 	"strings"
 	"testing"
 
@@ -415,14 +416,53 @@ func (m *capturingLLM) Complete(_ context.Context, _ string, msgs []llm.Message,
 	return m.response, nil
 }
 
-// mockPruneIndex wraps mockSearchIndex and adds GetEmbedding for prune clustering tests.
+// mockPruneIndex wraps mockSearchIndex and adds PairwiseDistances for clustering tests.
 type mockPruneIndex struct {
 	mockSearchIndex
 	embeddings map[string][]float32
 }
 
-func (m *mockPruneIndex) GetEmbedding(path string) ([]float32, error) {
-	return m.embeddings[path], nil
+// PairwiseDistances computes cosine distances between the given paths using stored embeddings.
+func (m *mockPruneIndex) PairwiseDistances(paths []string) ([]string, [][]float64, error) {
+	// Filter to paths with embeddings.
+	var filtered []string
+	for _, p := range paths {
+		if _, ok := m.embeddings[p]; ok {
+			filtered = append(filtered, p)
+		}
+	}
+	n := len(filtered)
+	if n == 0 {
+		return nil, nil, nil
+	}
+
+	dist := make([][]float64, n)
+	for i := range dist {
+		dist[i] = make([]float64, n)
+	}
+	for i := 0; i < n; i++ {
+		for j := i + 1; j < n; j++ {
+			d := testCosineDistance(m.embeddings[filtered[i]], m.embeddings[filtered[j]])
+			dist[i][j] = d
+			dist[j][i] = d
+		}
+	}
+	return filtered, dist, nil
+}
+
+// testCosineDistance computes 1 - cosine_similarity for float32 slices.
+func testCosineDistance(a, b []float32) float64 {
+	var dot, normA, normB float64
+	for i := range a {
+		dot += float64(a[i]) * float64(b[i])
+		normA += float64(a[i]) * float64(a[i])
+		normB += float64(b[i]) * float64(b[i])
+	}
+	if normA == 0 || normB == 0 {
+		return 1.0
+	}
+	sim := dot / (math.Sqrt(normA) * math.Sqrt(normB))
+	return 1.0 - sim
 }
 
 // stubEmbedder is a no-op embedder that satisfies the Embedder interface.
@@ -438,9 +478,9 @@ func (stubEmbedder) Embed(_ string) ([]float32, error) {
 func TestPruneStepClustersBeforeLLM(t *testing.T) {
 	gs := newMockGitStore()
 
-	// Create two tight clusters of 5 facts each with well-separated embeddings
-	// in 8 dimensions. Cluster A lives near [10,0,...] and cluster B near [0,...,10].
-	// A single noise fact sits elsewhere.
+	// Create two tight clusters of 5 facts each with well-separated embeddings.
+	// Uses cosine distance, so direction matters — cluster A points along dim 0,
+	// cluster B points along dim 7. Small perturbations in other dims for variety.
 	clusterAFiles := []string{
 		"know/cluster-a/a1.md", "know/cluster-a/a2.md", "know/cluster-a/a3.md",
 		"know/cluster-a/a4.md", "know/cluster-a/a5.md",
@@ -461,20 +501,22 @@ func TestPruneStepClustersBeforeLLM(t *testing.T) {
 	}
 
 	embeddingMap := map[string][]float32{}
-	// Cluster A: all near [10, 0, 0, 0, 0, 0, 0, 0] with small perturbations.
+	// Cluster A: dominant component in dim 0, small noise in other dims.
 	for i, f := range clusterAFiles {
-		v := make([]float32, 8)
-		v[0] = 10.0 + float32(i)*0.01
+		v := make([]float32, 16)
+		v[0] = 10.0
+		v[1] = float32(i) * 0.1 // small perturbation
 		embeddingMap[f] = v
 	}
-	// Cluster B: all near [0, 0, 0, 0, 0, 0, 0, 10].
+	// Cluster B: dominant component in dim 7, small noise in other dims.
 	for i, f := range clusterBFiles {
-		v := make([]float32, 8)
-		v[7] = 10.0 + float32(i)*0.01
+		v := make([]float32, 16)
+		v[7] = 10.0
+		v[8] = float32(i) * 0.1
 		embeddingMap[f] = v
 	}
-	// Noise: different region.
-	embeddingMap[noiseFile] = []float32{0, 5, 0, 0, 0, 0, 5, 0}
+	// Noise: equal weight across multiple dims — equidistant from both clusters.
+	embeddingMap[noiseFile] = []float32{1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1}
 
 	idx := &mockPruneIndex{embeddings: embeddingMap}
 	adapter := &capturingLLM{response: `{"decisions":[],"merges":[]}`}

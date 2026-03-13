@@ -498,6 +498,91 @@ func (idx *Index) GetEmbedding(path string) ([]float32, error) {
 	return bytesToFloat32Slice(blob)
 }
 
+// PairwiseDistances computes the cosine distance matrix for the given paths
+// using SQLite vec_distance_cosine. Returns an NxN matrix where dist[i][j] is
+// the cosine distance between paths[i] and paths[j]. Paths without embeddings
+// are excluded; the returned paths slice contains only those with embeddings,
+// and the matrix indices correspond to the returned paths.
+func (idx *Index) PairwiseDistances(paths []string) (retPaths []string, dist [][]float64, err error) {
+	// Step 1: Load rowids for paths that have embeddings.
+	type entry struct {
+		path  string
+		rowid int64
+	}
+	var entries []entry
+	for _, p := range paths {
+		var rowid int64
+		err := idx.db.QueryRow(
+			`SELECT f.rowid FROM facts f JOIN facts_vec fv ON fv.rowid = f.rowid WHERE f.path = ?`,
+			p,
+		).Scan(&rowid)
+		if err != nil {
+			continue // no embedding for this path
+		}
+		entries = append(entries, entry{p, rowid})
+	}
+
+	n := len(entries)
+	if n == 0 {
+		return nil, nil, nil
+	}
+
+	// Step 2: Load embedding blobs once, keyed by rowid.
+	blobs := make(map[int64][]byte, n)
+	for _, e := range entries {
+		var blob []byte
+		if err := idx.db.QueryRow(
+			`SELECT embedding FROM facts_vec WHERE rowid = ?`, e.rowid,
+		).Scan(&blob); err != nil {
+			continue
+		}
+		blobs[e.rowid] = blob
+	}
+
+	// Filter to only entries with blobs.
+	var filtered []entry
+	for _, e := range entries {
+		if _, ok := blobs[e.rowid]; ok {
+			filtered = append(filtered, e)
+		}
+	}
+	entries = filtered
+	n = len(entries)
+	if n == 0 {
+		return nil, nil, nil
+	}
+
+	// Step 3: Compute pairwise distances via vec_distance_cosine.
+	retPaths = make([]string, n)
+	for i, e := range entries {
+		retPaths[i] = e.path
+	}
+
+	dist = make([][]float64, n)
+	for i := range dist {
+		dist[i] = make([]float64, n)
+	}
+
+	stmt, err := idx.db.Prepare(`SELECT vec_distance_cosine(?, ?)`)
+	if err != nil {
+		return nil, nil, fmt.Errorf("prepare vec_distance_cosine: %w", err)
+	}
+	defer stmt.Close()
+
+	for i := 0; i < n; i++ {
+		for j := i + 1; j < n; j++ {
+			var d float64
+			if err := stmt.QueryRow(blobs[entries[i].rowid], blobs[entries[j].rowid]).Scan(&d); err != nil {
+				return nil, nil, fmt.Errorf("vec_distance_cosine(%s, %s): %w", entries[i].path, entries[j].path, err)
+			}
+			dist[i][j] = d
+			dist[j][i] = d
+		}
+	}
+
+	return retPaths, dist, nil
+}
+
 // float32SliceToBytes encodes a []float32 as little-endian bytes.
 func float32SliceToBytes(v []float32) []byte {
 	buf := make([]byte, len(v)*4)

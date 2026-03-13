@@ -6,10 +6,14 @@ import (
 	"sort"
 )
 
+// DistanceFunc computes the distance between two vectors.
+type DistanceFunc func(a, b []float64) float64
+
 // HDBSCANOptions configures the HDBSCAN clustering algorithm.
 type HDBSCANOptions struct {
-	MinClusterSize int // minimum points to form a cluster (default 5)
-	MinSamples     int // core distance neighbors (default = MinClusterSize)
+	MinClusterSize int          // minimum points to form a cluster (default 5)
+	MinSamples     int          // core distance neighbors (default = MinClusterSize)
+	Distance       DistanceFunc // distance function (default: Euclidean)
 }
 
 // HDBSCAN clusters points using the Hierarchical Density-Based Spatial
@@ -17,6 +21,39 @@ type HDBSCANOptions struct {
 // Returns a label per point; noise points receive label -1.
 func HDBSCAN(points [][]float64, opts HDBSCANOptions) []int {
 	n := len(points)
+	if n == 0 {
+		return nil
+	}
+
+	distFn := opts.Distance
+	if distFn == nil {
+		dim := len(points[0])
+		distFn = func(a, b []float64) float64 {
+			return euclidean(a, b, dim)
+		}
+	}
+
+	// Compute pairwise distance matrix, then delegate.
+	dist := make([][]float64, n)
+	for i := 0; i < n; i++ {
+		dist[i] = make([]float64, n)
+	}
+	for i := 0; i < n; i++ {
+		for j := i + 1; j < n; j++ {
+			d := distFn(points[i], points[j])
+			dist[i][j] = d
+			dist[j][i] = d
+		}
+	}
+
+	return HDBSCANPrecomputed(dist, opts)
+}
+
+// HDBSCANPrecomputed clusters points given a precomputed NxN distance matrix.
+// The Distance field in opts is ignored (distances are already computed).
+// Returns a label per point; noise points receive label -1.
+func HDBSCANPrecomputed(dist [][]float64, opts HDBSCANOptions) []int {
+	n := len(dist)
 	if n == 0 {
 		return nil
 	}
@@ -34,23 +71,6 @@ func HDBSCAN(points [][]float64, opts HDBSCANOptions) []int {
 	}
 	if k < 1 {
 		k = 1
-	}
-
-	// -------------------------------------------------------------------------
-	// Step 1: Compute all pairwise distances.
-	// -------------------------------------------------------------------------
-	// dist[i][j] = euclidean distance between points[i] and points[j]
-	dist := make([][]float64, n)
-	for i := 0; i < n; i++ {
-		dist[i] = make([]float64, n)
-	}
-	dim := len(points[0])
-	for i := 0; i < n; i++ {
-		for j := i + 1; j < n; j++ {
-			d := euclidean(points[i], points[j], dim)
-			dist[i][j] = d
-			dist[j][i] = d
-		}
 	}
 
 	// -------------------------------------------------------------------------

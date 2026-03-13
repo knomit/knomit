@@ -88,16 +88,12 @@ func executeDistillStep(ctx context.Context, gs GitStore, idx SearchIndex, embed
 	if maxDepth == 0 {
 		maxDepth = 1
 	}
-	umapDims := step.UMAPDimensions
-	if umapDims == 0 {
-		umapDims = 5
-	}
 	minCluster := step.MinClusterSize
 	if minCluster == 0 {
 		minCluster = 3
 	}
 
-	log.Debug().Int("max_depth", maxDepth).Int("umap_dims", umapDims).Int("min_cluster", minCluster).Msg("distill: config")
+	log.Debug().Int("max_depth", maxDepth).Int("min_cluster", minCluster).Msg("distill: config")
 
 	// Gather initial facts from the index (all facts, no filter).
 	searchResults, err := idx.Search(store.SearchQuery{Limit: 100_000})
@@ -111,44 +107,19 @@ func executeDistillStep(ctx context.Context, gs GitStore, idx SearchIndex, embed
 	}
 
 	// Build current working set from search results.
-	type workFact struct {
-		factForLLM
-		embedding []float32
-	}
-	buildWorkFacts := func(results []store.SearchResult) []workFact {
-		wf := make([]workFact, 0, len(results))
-		for _, r := range results {
-			wf = append(wf, workFact{
-				factForLLM: factForLLM{
-					File:       r.Path,
-					Title:      r.Title,
-					Body:       r.Body,
-					Domain:     r.Domain,
-					Entities:   r.Entities,
-					Confidence: r.Confidence,
-					Sources:    r.Sources,
-				},
-			})
-		}
-		return wf
-	}
-
-	currentFacts := buildWorkFacts(searchResults)
-
-	// Load embeddings for the initial fact set.
-	for i, f := range currentFacts {
-		if embedder == nil {
-			break
-		}
-		gei, ok := idx.(interface{ GetEmbedding(string) ([]float32, error) })
-		if !ok {
-			break
-		}
-		vec, err := gei.GetEmbedding(f.File)
-		if err != nil || vec == nil {
-			continue
-		}
-		currentFacts[i].embedding = vec
+	currentFacts := make([]workFact, 0, len(searchResults))
+	for _, r := range searchResults {
+		currentFacts = append(currentFacts, workFact{
+			factForLLM: factForLLM{
+				File:       r.Path,
+				Title:      r.Title,
+				Body:       r.Body,
+				Domain:     r.Domain,
+				Entities:   r.Entities,
+				Confidence: r.Confidence,
+				Sources:    r.Sources,
+			},
+		})
 	}
 
 	var allSynthesized []distillFact
@@ -158,21 +129,21 @@ func executeDistillStep(ctx context.Context, gs GitStore, idx SearchIndex, embed
 		log.Debug().Int("depth", depth+1).Int("max_depth", maxDepth).Int("facts", len(currentFacts)).Msg("distill: RAPTOR depth")
 		onProgress(ProgressEvent{Phase: "raptor-depth", Message: fmt.Sprintf("%d/%d", depth+1, maxDepth)})
 
-		// Build embedding matrix: only facts that have embeddings.
-		type indexedFact struct {
-			idx  int
-			fact workFact
+		var clusterMap map[int][]factForLLM
+
+		if depth == 0 {
+			// Initial depth: facts are in the index, use PairwiseDistances from SQLite.
+			clusterMap, err = distillClusterFromIndex(currentFacts, idx, embedder, minCluster, onProgress)
+		} else {
+			// RAPTOR depth > 0: embeddings are in-memory, use cosine HDBSCAN directly.
+			clusterMap = distillClusterInMemory(currentFacts, minCluster, onProgress)
 		}
-		var withEmbedding []indexedFact
-		for i, f := range currentFacts {
-			if len(f.embedding) > 0 {
-				withEmbedding = append(withEmbedding, indexedFact{i, f})
-			}
+		if err != nil {
+			return err
 		}
 
-		// If not enough facts have embeddings, send all facts as one cluster.
-		if len(withEmbedding) < minCluster {
-			onProgress(ProgressEvent{Phase: "cluster", Message: fmt.Sprintf("insufficient embeddings (%d), using single cluster", len(withEmbedding))})
+		if clusterMap == nil {
+			// Fallback: send all facts as one cluster.
 			group := make([]factForLLM, len(currentFacts))
 			for i, f := range currentFacts {
 				group[i] = f.factForLLM
@@ -188,47 +159,9 @@ func executeDistillStep(ctx context.Context, gs GitStore, idx SearchIndex, embed
 			break
 		}
 
-		// Build float64 vectors for UMAP+HDBSCAN.
-		vecs := make([][]float64, len(withEmbedding))
-		for i, wf := range withEmbedding {
-			v32 := wf.fact.embedding
-			v64 := make([]float64, len(v32))
-			for j, x := range v32 {
-				v64[j] = float64(x)
-			}
-			vecs[i] = v64
-		}
-
-		// UMAP dimensionality reduction.
-		reduced, err := cluster.UMAP(vecs, cluster.UMAPOptions{
-			NComponents: umapDims,
-			NNeighbors:  15,
-			MinDist:     0.1,
-		})
-		if err != nil {
-			// Fall back to raw vectors if UMAP fails.
-			reduced = vecs
-		}
-
-		// HDBSCAN clustering.
-		labels := cluster.HDBSCAN(reduced, cluster.HDBSCANOptions{
-			MinClusterSize: minCluster,
-		})
-
-		// Group facts by cluster label (skip noise = -1).
-		clusterMap := map[int][]factForLLM{}
-		for i, wf := range withEmbedding {
-			label := labels[i]
-			if label == -1 {
-				continue
-			}
-			clusterMap[label] = append(clusterMap[label], wf.fact.factForLLM)
-		}
-
 		onProgress(ProgressEvent{Phase: "cluster", Message: fmt.Sprintf("%d clusters", len(clusterMap))})
 
 		if len(clusterMap) == 0 {
-			// No clusters formed; stop RAPTOR recursion.
 			break
 		}
 
@@ -330,6 +263,97 @@ func executeDistillStep(ctx context.Context, gs GitStore, idx SearchIndex, embed
 
 	onProgress(ProgressEvent{Phase: "distill-done", Message: fmt.Sprintf("%d synthesized, %d forgotten", len(allSynthesized), len(allForget))})
 	return nil
+}
+
+// distillClusterFromIndex clusters facts whose embeddings are stored in the index,
+// using PairwiseDistances (SQLite vec_distance_cosine) + HDBSCANPrecomputed.
+// Returns nil clusterMap if embeddings are unavailable (caller should fall back).
+func distillClusterFromIndex(facts []workFact, idx SearchIndex, embedder Embedder, minCluster int, onProgress func(ProgressEvent)) (map[int][]factForLLM, error) {
+	pd, hasPD := idx.(PairwiseDistancer)
+	if embedder == nil || !hasPD {
+		onProgress(ProgressEvent{Phase: "cluster", Message: "no embeddings, using single cluster"})
+		return nil, nil
+	}
+
+	paths := make([]string, len(facts))
+	for i, f := range facts {
+		paths[i] = f.File
+	}
+
+	onProgress(ProgressEvent{Phase: "cluster", Message: fmt.Sprintf("computing distances for %d facts", len(facts))})
+	retPaths, dist, err := pd.PairwiseDistances(paths)
+	if err != nil {
+		log.Warn().Err(err).Msg("distill: pairwise distances failed")
+		return nil, nil
+	}
+	if len(retPaths) < minCluster {
+		onProgress(ProgressEvent{Phase: "cluster", Message: fmt.Sprintf("insufficient embeddings (%d)", len(retPaths))})
+		return nil, nil
+	}
+
+	factByPath := map[string]factForLLM{}
+	for _, f := range facts {
+		factByPath[f.File] = f.factForLLM
+	}
+
+	labels := cluster.HDBSCANPrecomputed(dist, cluster.HDBSCANOptions{
+		MinClusterSize: minCluster,
+	})
+
+	clusterMap := map[int][]factForLLM{}
+	for i, path := range retPaths {
+		if labels[i] == -1 {
+			continue
+		}
+		clusterMap[labels[i]] = append(clusterMap[labels[i]], factByPath[path])
+	}
+	return clusterMap, nil
+}
+
+// distillClusterInMemory clusters facts using in-memory embeddings (for RAPTOR depth > 0
+// where embeddings are freshly computed and not stored in the index).
+// Uses HDBSCAN with cosine distance directly. Returns nil if insufficient embeddings.
+func distillClusterInMemory(facts []workFact, minCluster int, onProgress func(ProgressEvent)) map[int][]factForLLM {
+	var withEmbedding []int
+	for i, f := range facts {
+		if len(f.embedding) > 0 {
+			withEmbedding = append(withEmbedding, i)
+		}
+	}
+	if len(withEmbedding) < minCluster {
+		onProgress(ProgressEvent{Phase: "cluster", Message: fmt.Sprintf("insufficient embeddings (%d)", len(withEmbedding))})
+		return nil
+	}
+
+	vecs := make([][]float64, len(withEmbedding))
+	for i, idx := range withEmbedding {
+		v32 := facts[idx].embedding
+		v64 := make([]float64, len(v32))
+		for j, x := range v32 {
+			v64[j] = float64(x)
+		}
+		vecs[i] = v64
+	}
+
+	labels := cluster.HDBSCAN(vecs, cluster.HDBSCANOptions{
+		MinClusterSize: minCluster,
+		Distance:       cluster.CosineDistance,
+	})
+
+	clusterMap := map[int][]factForLLM{}
+	for i, fi := range withEmbedding {
+		if labels[i] == -1 {
+			continue
+		}
+		clusterMap[labels[i]] = append(clusterMap[labels[i]], facts[fi].factForLLM)
+	}
+	return clusterMap
+}
+
+// workFact is a fact with an optional in-memory embedding (used during RAPTOR recursion).
+type workFact struct {
+	factForLLM
+	embedding []float32
 }
 
 // runDistillOnGroup sends one group of facts to the LLM and returns synthesized facts + paths to forget.

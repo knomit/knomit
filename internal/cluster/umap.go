@@ -309,6 +309,29 @@ func euclidean(a, b []float64, dim int) float64 {
 	return math.Sqrt(sum)
 }
 
+// CosineDistance computes 1 - cosine_similarity(a, b).
+// This metric works well in high-dimensional spaces where Euclidean distance
+// suffers from the curse of dimensionality.
+func CosineDistance(a, b []float64) float64 {
+	var dot, normA, normB float64
+	for i := range a {
+		dot += a[i] * b[i]
+		normA += a[i] * a[i]
+		normB += b[i] * b[i]
+	}
+	if normA == 0 || normB == 0 {
+		return 1.0
+	}
+	sim := dot / (math.Sqrt(normA) * math.Sqrt(normB))
+	if sim > 1.0 {
+		sim = 1.0
+	}
+	if sim < -1.0 {
+		sim = -1.0
+	}
+	return 1.0 - sim
+}
+
 // knnPartialSort reorders all[:k] so that all[:k] are the k smallest elements
 // (by dist) in sorted order. Uses selection sort, fine for small k (≤15).
 func knnPartialSort(all []knnEntry, k int) {

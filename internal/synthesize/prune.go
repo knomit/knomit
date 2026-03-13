@@ -190,55 +190,60 @@ func gatherAllFacts(gs GitStore) ([]factForLLM, error) {
 	return facts, nil
 }
 
+// PairwiseDistancer computes cosine distance matrices in the index (via SQLite vec0).
+type PairwiseDistancer interface {
+	PairwiseDistances(paths []string) (retPaths []string, dist [][]float64, err error)
+}
+
 // clusterFactsForPrune groups facts by semantic similarity using embeddings.
 // Returns a slice of fact groups — each group is a cluster to be reviewed together.
 // When embeddings are unavailable or too few, returns all facts as a single group.
+//
+// Computes cosine distances via SQLite's vec_distance_cosine (delegating to the
+// index), then runs HDBSCAN on the precomputed distance matrix. This avoids
+// loading 768-dim embedding vectors into Go and sidesteps the curse of
+// dimensionality that makes Euclidean HDBSCAN fail on high-dim data.
 func clusterFactsForPrune(facts []factForLLM, idx SearchIndex, embedder Embedder, step RecipeStep, onProgress func(ProgressEvent)) ([][]factForLLM, error) {
 	minCluster := step.MinClusterSize
 	if minCluster == 0 {
 		minCluster = 3
 	}
 
-	// Try to load embeddings from the index.
-	gei, hasEmbeddings := idx.(interface{ GetEmbedding(string) ([]float32, error) })
-	if embedder == nil || !hasEmbeddings {
+	pd, hasPD := idx.(PairwiseDistancer)
+	if embedder == nil || !hasPD {
 		log.Debug().Msg("prune: no embeddings available, using single group")
 		onProgress(ProgressEvent{Phase: "cluster", Message: "no embeddings, reviewing all facts"})
 		return [][]factForLLM{facts}, nil
 	}
 
-	// Collect facts that have stored embeddings.
-	type indexedFact struct {
-		origIdx int
-		vec     []float32
-	}
-	var withEmbedding []indexedFact
+	// Collect all fact paths.
+	allPaths := make([]string, len(facts))
 	for i, f := range facts {
-		vec, err := gei.GetEmbedding(f.File)
-		if err != nil || vec == nil {
-			continue
-		}
-		withEmbedding = append(withEmbedding, indexedFact{i, vec})
+		allPaths[i] = f.File
 	}
 
-	if len(withEmbedding) < minCluster {
-		log.Debug().Int("with_embedding", len(withEmbedding)).Int("min_cluster", minCluster).Msg("prune: insufficient embeddings, using single group")
-		onProgress(ProgressEvent{Phase: "cluster", Message: fmt.Sprintf("insufficient embeddings (%d), reviewing all facts", len(withEmbedding))})
+	// Compute pairwise cosine distances in SQLite.
+	onProgress(ProgressEvent{Phase: "cluster", Message: fmt.Sprintf("computing distances for %d facts", len(facts))})
+	retPaths, dist, err := pd.PairwiseDistances(allPaths)
+	if err != nil {
+		log.Warn().Err(err).Msg("prune: pairwise distances failed, using single group")
+		onProgress(ProgressEvent{Phase: "cluster", Message: "distance computation failed, reviewing all facts"})
 		return [][]factForLLM{facts}, nil
 	}
 
-	// Build float64 vectors for HDBSCAN (skip UMAP — prune doesn't need
-	// dimensionality reduction and UMAP is expensive for small N).
-	vecs := make([][]float64, len(withEmbedding))
-	for i, wf := range withEmbedding {
-		v64 := make([]float64, len(wf.vec))
-		for j, x := range wf.vec {
-			v64[j] = float64(x)
-		}
-		vecs[i] = v64
+	if len(retPaths) < minCluster {
+		log.Debug().Int("with_embedding", len(retPaths)).Int("min_cluster", minCluster).Msg("prune: insufficient embeddings, using single group")
+		onProgress(ProgressEvent{Phase: "cluster", Message: fmt.Sprintf("insufficient embeddings (%d), reviewing all facts", len(retPaths))})
+		return [][]factForLLM{facts}, nil
 	}
 
-	labels := cluster.HDBSCAN(vecs, cluster.HDBSCANOptions{
+	// Build path→fact index for mapping results back.
+	factByPath := map[string]factForLLM{}
+	for _, f := range facts {
+		factByPath[f.File] = f
+	}
+
+	labels := cluster.HDBSCANPrecomputed(dist, cluster.HDBSCANOptions{
 		MinClusterSize: minCluster,
 	})
 
@@ -246,13 +251,13 @@ func clusterFactsForPrune(facts []factForLLM, idx SearchIndex, embedder Embedder
 	// have no peers to compare against for prune/merge.
 	clusterMap := map[int][]factForLLM{}
 	noiseCount := 0
-	for i, wf := range withEmbedding {
+	for i, path := range retPaths {
 		label := labels[i]
 		if label == -1 {
 			noiseCount++
 			continue
 		}
-		clusterMap[label] = append(clusterMap[label], facts[wf.origIdx])
+		clusterMap[label] = append(clusterMap[label], factByPath[path])
 	}
 
 	log.Debug().Int("clusters", len(clusterMap)).Int("noise", noiseCount).Int("total", len(facts)).Msg("prune: clustering complete")

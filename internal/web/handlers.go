@@ -40,8 +40,12 @@ func handleBrowse(gs GitStore) http.HandlerFunc {
 
 		entries, err := gs.ListDir(path)
 		if err != nil {
-			log.Debug().Err(err).Str("path", path).Msg("browse failed")
-			writeError(w, http.StatusNotFound, fmt.Sprintf("cannot list %q: %v", path, err))
+			// Empty repo or missing directory — return empty list, not an error.
+			log.Debug().Err(err).Str("path", path).Msg("browse: directory not found, returning empty")
+			writeJSON(w, http.StatusOK, map[string]any{
+				"path":     path,
+				"children": []struct{}{},
+			})
 			return
 		}
 
@@ -416,6 +420,11 @@ func handleEvents(gs GitStore, idx SearchIndex, hub *TaskHub) http.HandlerFunc {
 				}
 				data, _ := json.Marshal(ev)
 				fmt.Fprintf(w, "event: task\ndata: %s\n\n", data)
+				// After a task completes, push the current head so the UI refreshes immediately.
+				if ev.Status == "done" || ev.Status == "error" {
+					head, _ := gs.HeadCommit()
+					fmt.Fprintf(w, "event: status\ndata: {\"head\":\"%s\"}\n\n", head)
+				}
 				flusher.Flush()
 			case <-ticker.C:
 				head, _ := gs.HeadCommit()
