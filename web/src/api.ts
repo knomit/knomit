@@ -10,18 +10,27 @@ export interface Status { head: string; branch: string; index_commit: string; em
 
 // parseSearchQuery splits a query string into structured components.
 // Tokens of the form domain:X or entity:X are extracted as filters;
+// quoted strings (e.g. "some phrase") are extracted as similarity text;
 // the remaining words are treated as free text for FTS/embeddings.
 export function parseSearchQuery(raw: string): { text: string; domains: string[]; entities: string[] } {
   const domains: string[] = [];
   const entities: string[] = [];
   const textTokens: string[] = [];
-  for (const token of raw.trim().split(/\s+/)) {
+
+  // Extract quoted strings first, then process remaining tokens
+  const quoted: string[] = [];
+  const stripped = raw.replace(/"([^"]+)"/g, (_m, g) => { quoted.push(g); return ''; });
+
+  for (const token of stripped.trim().split(/\s+/)) {
     if (!token) continue;
     if (token.startsWith('domain:')) { const v = token.slice(7); if (v) domains.push(v); }
     else if (token.startsWith('entity:')) { const v = token.slice(7); if (v) entities.push(v); }
     else textTokens.push(token);
   }
-  return { text: textTokens.join(' '), domains, entities };
+
+  // Combine quoted phrases and remaining free text
+  const allText = [...quoted, ...textTokens].join(' ').trim();
+  return { text: allText, domains, entities };
 }
 
 export const api = {

@@ -645,11 +645,11 @@ func TestSearchHybrid(t *testing.T) {
 
 	// Fact A: matches "postgres" in text; embedding points toward [1,0,0,0].
 	vecA := []float32{1, 0, 0, 0}
-	// Fact B: matches "postgres" in text too; embedding points toward [0,1,0,0].
-	vecB := []float32{0, 1, 0, 0}
+	// Fact B: matches "postgres" in text too; embedding is related but less similar.
+	vecB := []float32{0.7, 0.7, 0, 0}
 
 	// Build a dispatch embedder that maps document bodies to their vectors,
-	// and the query "postgres" to vecA (so fact A gets cosine sim 1, fact B gets 0).
+	// and the query "postgres" to vecA (so fact A gets cosine sim 1, fact B gets ~0.7).
 	m := map[string][]float32{
 		"postgres database replication": vecA,
 		"postgres cache storage":        vecB,
@@ -755,5 +755,227 @@ func TestDeleteReferentialIntegrity(t *testing.T) {
 	}
 	if count != 0 {
 		t.Fatalf("expected 0 rows in facts_vec after delete, got %d", count)
+	}
+}
+
+// ── Similarity search tests ──────────────────────────────────────────────────
+
+// setupSimilarityIndex creates an in-memory index with 3 facts and a mock
+// embedder that assigns orthogonal vectors to each fact, allowing controlled
+// cosine similarity testing.
+func setupSimilarityIndex(t *testing.T) (*store.Index, *gomock.Controller) {
+	t.Helper()
+	idx, err := store.New(":memory:", store.WithVecDimension(4))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Vectors: tea=[1,0,0,0], music=[0,1,0,0], code=[0,0,1,0]
+	vecs := map[string][]float32{
+		"Carol drinks green tea exclusively":               {1, 0, 0, 0},
+		"Bob listens to jazz regularly":                    {0, 1, 0, 0},
+		"Alice writes Python every day":                    {0, 0, 1, 0},
+		"who likes tea":                                    {0.9, 0.1, 0, 0}, // close to tea
+		"music preferences":                                {0.1, 0.9, 0, 0}, // close to music
+		"who likes guns":                                   {0.3, 0.3, 0.3, 0.1}, // no strong match
+	}
+
+	ctrl := gomock.NewController(t)
+	emb := NewMockEmbedder(ctrl)
+	emb.EXPECT().Embed(gomock.Any()).DoAndReturn(func(text string) ([]float32, error) {
+		if v, ok := vecs[text]; ok {
+			return v, nil
+		}
+		return []float32{0.25, 0.25, 0.25, 0.25}, nil // default: equidistant
+	}).AnyTimes()
+	idx.SetEmbedder(emb)
+
+	facts := []store.FactRecord{
+		{Path: "know/people/carol/tea.md", Title: "Tea Preference", Body: "Carol drinks green tea exclusively",
+			Domain: []string{"preferences"}, Entities: []string{"carol"}, Confidence: 0.9, Sources: 1, CommitHash: "a"},
+		{Path: "know/people/bob/jazz.md", Title: "Jazz Fan", Body: "Bob listens to jazz regularly",
+			Domain: []string{"preferences"}, Entities: []string{"bob"}, Confidence: 0.8, Sources: 1, CommitHash: "a"},
+		{Path: "know/people/alice/python.md", Title: "Python Dev", Body: "Alice writes Python every day",
+			Domain: []string{"engineering"}, Entities: []string{"alice"}, Confidence: 0.9, Sources: 2, CommitHash: "a"},
+	}
+	for _, f := range facts {
+		if err := idx.Upsert(f); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	return idx, ctrl
+}
+
+func TestSearchSimilarityRanking(t *testing.T) {
+	idx, ctrl := setupSimilarityIndex(t)
+	defer idx.Close()
+	defer ctrl.Finish()
+
+	results, err := idx.Search(store.SearchQuery{Text: "who likes tea", Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) == 0 {
+		t.Fatal("expected results for 'who likes tea'")
+	}
+	if results[0].Path != "know/people/carol/tea.md" {
+		t.Fatalf("expected tea fact first, got %v", results[0].Path)
+	}
+}
+
+func TestSearchSimilarityScoreIsAbsolute(t *testing.T) {
+	idx, ctrl := setupSimilarityIndex(t)
+	defer idx.Close()
+	defer ctrl.Finish()
+
+	results, err := idx.Search(store.SearchQuery{Text: "who likes tea", Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) == 0 {
+		t.Fatal("expected results")
+	}
+
+	// Score should reflect absolute cosine similarity, not be normalized to 100.
+	// The query vector [0.9,0.1,0,0] vs tea [1,0,0,0] has cosine ~0.99.
+	// Score = cosine * 100, so should be near 99, not exactly 100.
+	if results[0].Score > 100 {
+		t.Fatalf("score should not exceed 100, got %v", results[0].Score)
+	}
+	// With absolute scoring, a weak match should have a correspondingly low score.
+	if len(results) > 1 && results[len(results)-1].Score > 80 {
+		t.Fatalf("weakest result should have low absolute score, got %v", results[len(results)-1].Score)
+	}
+}
+
+func TestSearchMinSimilarityThreshold(t *testing.T) {
+	idx, ctrl := setupSimilarityIndex(t)
+	defer idx.Close()
+	defer ctrl.Finish()
+
+	// Default threshold (0.40): "who likes guns" has weak cosine to all facts.
+	// Vector [0.3,0.3,0.3,0.1] vs [1,0,0,0] = cosine ~0.53 — above default 0.40.
+	results, err := idx.Search(store.SearchQuery{Text: "who likes guns", Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defaultCount := len(results)
+
+	// High threshold should return fewer or no results.
+	results, err = idx.Search(store.SearchQuery{Text: "who likes guns", MinSimilarity: 0.90, Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) >= defaultCount && defaultCount > 0 {
+		t.Fatalf("high MinSimilarity should filter more results: default=%d, high=%d", defaultCount, len(results))
+	}
+
+	// Very low threshold should return more results.
+	results, err = idx.Search(store.SearchQuery{Text: "who likes guns", MinSimilarity: 0.01, Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) < defaultCount {
+		t.Fatalf("low MinSimilarity should return at least as many results: low=%d, default=%d", len(results), defaultCount)
+	}
+}
+
+func TestSearchFTSOnlySuppressedWithEmbedder(t *testing.T) {
+	idx, err := store.New(":memory:", store.WithVecDimension(4))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer idx.Close()
+
+	// Insert a fact WITHOUT embeddings first (no embedder set yet).
+	if err := idx.Upsert(store.FactRecord{
+		Path: "know/a.md", Title: "Tea Lover", Body: "tea drinking habits",
+		Domain: []string{"pref"}, Entities: []string{}, Confidence: 0.9, Sources: 1, CommitHash: "x",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Without embedder: FTS-only results should be returned.
+	results, err := idx.Search(store.SearchQuery{Text: "tea", Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) == 0 {
+		t.Fatal("expected FTS results without embedder")
+	}
+
+	// Now attach an embedder. FTS-only results should be suppressed.
+	ctrl := gomock.NewController(t)
+	emb := NewMockEmbedder(ctrl)
+	emb.EXPECT().Embed(gomock.Any()).Return([]float32{0.5, 0.5, 0, 0}, nil).AnyTimes()
+	idx.SetEmbedder(emb)
+
+	results, err = idx.Search(store.SearchQuery{Text: "tea", Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The fact has no embedding in facts_vec (was inserted without embedder),
+	// so vec0 won't find it. With embedder set, FTS-only results are suppressed.
+	if len(results) != 0 {
+		t.Fatalf("expected 0 results (FTS-only suppressed with embedder), got %d", len(results))
+	}
+}
+
+func TestSearchHybridScoringBoost(t *testing.T) {
+	idx, err := store.New(":memory:", store.WithVecDimension(4))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer idx.Close()
+
+	// Two facts: both have embeddings, but only one matches FTS.
+	vecs := map[string][]float32{
+		"tea brewing techniques":  {1, 0, 0, 0},
+		"tea garden cultivation":  {0.95, 0.05, 0, 0}, // slightly less similar
+		"tea":                     {1, 0, 0, 0},        // query
+	}
+
+	ctrl := gomock.NewController(t)
+	emb := NewMockEmbedder(ctrl)
+	emb.EXPECT().Embed(gomock.Any()).DoAndReturn(func(text string) ([]float32, error) {
+		if v, ok := vecs[text]; ok {
+			return v, nil
+		}
+		return []float32{0.25, 0.25, 0.25, 0.25}, nil
+	}).AnyTimes()
+	idx.SetEmbedder(emb)
+
+	// Fact A: exact embedding match + FTS match on "tea"
+	if err := idx.Upsert(store.FactRecord{
+		Path: "know/a.md", Title: "Brewing", Body: "tea brewing techniques",
+		Domain: []string{"food"}, Entities: []string{}, Confidence: 0.9, Sources: 1, CommitHash: "x",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Fact B: very close embedding but body text doesn't match FTS for "tea" well
+	if err := idx.Upsert(store.FactRecord{
+		Path: "know/b.md", Title: "Garden", Body: "tea garden cultivation",
+		Domain: []string{"food"}, Entities: []string{}, Confidence: 0.9, Sources: 1, CommitHash: "x",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	results, err := idx.Search(store.SearchQuery{Text: "tea", Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) < 2 {
+		t.Fatalf("expected 2 results, got %d", len(results))
+	}
+	// Both should have scores > 40 (cosine threshold).
+	for _, r := range results {
+		if r.Score <= 40 {
+			t.Fatalf("score too low for fact %s: %v", r.Path, r.Score)
+		}
+	}
+	// Fact A (exact cosine + FTS boost) should score higher than B (slightly lower cosine).
+	if results[0].Score <= results[1].Score {
+		t.Fatalf("expected results[0] > results[1], got %v <= %v", results[0].Score, results[1].Score)
 	}
 }

@@ -13,6 +13,7 @@ export interface AppState {
   previewPath: string | null; // directory being previewed in summary panel without navigating
   rightMode: RightMode;
   searchQuery: string;
+  similarTo: { path: string; text: string } | null; // fact for similarity search
   loading: boolean;
   tasks: Record<string, { status: 'idle' | 'running' | 'done' | 'error'; message: string }>;
   headCommit: string;
@@ -31,6 +32,7 @@ export type Action =
   | { type: 'SELECT_WORLD'; path: string }
   | { type: 'GO_UP' }
   | { type: 'SEARCH'; query: string }
+  | { type: 'SIMILAR_SEARCH'; path: string; text: string }
   | { type: 'CLEAR_SEARCH' }
   | { type: 'SHOW_HISTORY' }
   | { type: 'SHOW_FACT' }
@@ -49,6 +51,7 @@ export const init: AppState = {
   previewPath: null,
   rightMode: 'summary',
   searchQuery: '',
+  similarTo: null,
   loading: false,
   tasks: { sync: { status: 'idle', message: '' }, synth: { status: 'idle', message: '' } },
   headCommit: '',
@@ -62,7 +65,7 @@ export const init: AppState = {
 
 export function reducer(s: AppState, a: Action): AppState {
   switch (a.type) {
-    case 'NAVIGATE': return { ...s, currentPath: a.path, selectedFact: null, previewPath: null, rightMode: 'summary', searchQuery: '' };
+    case 'NAVIGATE': return { ...s, currentPath: a.path, selectedFact: null, previewPath: null, rightMode: 'summary', searchQuery: '', similarTo: null };
     case 'SELECT_FACT': return { ...s, selectedFact: a.path, previewPath: null, rightMode: 'fact' };
     case 'PREVIEW_DIR': return { ...s, selectedFact: null, previewPath: a.path, rightMode: 'summary' };
     case 'SELECT_WORLD': return { ...s, selectedFact: null, previewPath: null, rightMode: 'summary' };
@@ -71,8 +74,9 @@ export function reducer(s: AppState, a: Action): AppState {
       if (parts.length <= 1) return s;
       return { ...s, currentPath: parts.slice(0, -1).join('/'), selectedFact: null, previewPath: null, rightMode: 'summary' };
     }
-    case 'SEARCH': return { ...s, searchQuery: a.query, previewPath: null };
-    case 'CLEAR_SEARCH': return { ...s, searchQuery: '', selectedFact: null, previewPath: null, rightMode: 'summary' };
+    case 'SEARCH': return { ...s, searchQuery: a.query, similarTo: null, previewPath: null };
+    case 'SIMILAR_SEARCH': return { ...s, similarTo: { path: a.path, text: a.text }, searchQuery: '', previewPath: null };
+    case 'CLEAR_SEARCH': return { ...s, searchQuery: '', similarTo: null, selectedFact: null, previewPath: null, rightMode: 'summary' };
     case 'SHOW_HISTORY': return { ...s, rightMode: 'history' };
     case 'SHOW_FACT': return { ...s, rightMode: 'fact' };
     case 'SET_LOADING': return { ...s, loading: a.value };

@@ -155,8 +155,21 @@ export function RightPanel({ state, dispatch }: Props) {
     <div style={{ padding: '24px 28px', overflowY: 'auto', height: '100%', boxSizing: 'border-box' }}>
       {/* Header */}
       <div style={{ marginBottom: 20 }}>
-        <div style={{ fontSize: 18, fontWeight: 600, color: '#eee', letterSpacing: '-0.3px' }}>
-          {fact.title || fact.path}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+          <div style={{ fontSize: 18, fontWeight: 600, color: '#eee', letterSpacing: '-0.3px' }}>
+            {fact.title || fact.path}
+          </div>
+          <button
+            title="Find similar facts"
+            onClick={() => dispatch({ type: 'SIMILAR_SEARCH', path: fact.path, text: fact.body || '' })}
+            style={{
+              background: '#1a1a2a', border: '1px solid rgba(136,170,255,0.2)', color: '#8af',
+              padding: '4px 8px', borderRadius: 4, cursor: 'pointer', fontSize: 14,
+              transition: 'border-color 0.15s, color 0.15s', flexShrink: 0,
+            }}
+            onMouseEnter={e => { e.currentTarget.style.borderColor = 'rgba(136,170,255,0.5)'; e.currentTarget.style.color = '#adf'; }}
+            onMouseLeave={e => { e.currentTarget.style.borderColor = 'rgba(136,170,255,0.2)'; e.currentTarget.style.color = '#8af'; }}
+          >≈</button>
         </div>
         <div style={{ fontSize: 12, color: '#555', marginTop: 2 }}>{fact.path}</div>
       </div>
@@ -174,9 +187,10 @@ export function RightPanel({ state, dispatch }: Props) {
       </div>
 
       {/* Body */}
-      <div style={{ color: '#ccc', lineHeight: 1.7, fontSize: 14, marginBottom: 24 }}>
+      <div style={{ color: '#ccc', lineHeight: 1.7, fontSize: 14, marginBottom: 8 }}>
         <ReactMarkdown>{fact.body || ''}</ReactMarkdown>
       </div>
+
 
       <TagCloud label="Domains" entries={fact.domain || []} color="119,204,153" searchPrefix="domain:" onSearch={search} />
       <TagCloud label="Entities" entries={fact.entities || []} color="136,170,255" searchPrefix="entity:" onSearch={search} />

@@ -730,6 +730,7 @@ type SearchQuery struct {
 	Domain        []string
 	Path          string
 	MinConfidence float64
+	MinSimilarity float64 // cosine similarity threshold (0–1); 0 uses default 0.40
 	Limit         int
 }
 
@@ -774,14 +775,13 @@ func matchesFilters(rec FactRecord, q SearchQuery) bool {
 	return true
 }
 
-// Search performs a hybrid FTS5 + optional vector search over the index.
+// Search performs a hybrid embedding + FTS5 search over the index.
 //
 // Algorithm:
-//  1. If Text is present → FTS5 BM25 search; normalise BM25 ranks to [0,1].
-//  2. If embedder is available and Text is present → embed query, compute cosine
-//     similarity against stored vectors; combined score = 0.6*bm25 + 0.4*cosine.
+//  1. If Text is present → embed query, compute cosine similarity via vec0 KNN.
+//  2. FTS5 BM25 search augments: combined score = 0.6*cosine + 0.4*bm25.
 //  3. Apply Entities / Domain / Path / MinConfidence filters post-retrieval.
-//  4. Normalise top-N scores to [0,100]; drop scores < 10.
+//  4. Normalise top-N scores to [0,100].
 //  5. Return sorted by score descending, capped at Limit.
 //
 // If Text is empty, all facts matching the non-text filters are returned with
@@ -822,110 +822,99 @@ func (idx *Index) Search(q SearchQuery) ([]SearchResult, error) {
 		return out, nil
 	}
 
-	// ── FTS BM25 path ─────────────────────────────────────────────────────────
-	ftsResults, err := idx.searchTextWithRanks(q.Text, limit*5) // over-fetch for filtering
-	if err != nil {
-		return nil, fmt.Errorf("search: fts: %w", err)
-	}
-	if len(ftsResults) == 0 {
-		return nil, nil
-	}
-
-	// Normalise BM25 ranks to [0, 1].
-	// FTS5 rank is negative; the most negative value is the best match.
-	// minRank is the best (most negative) rank; maxRank is the least negative.
-	minRank := ftsResults[0].rank // ORDER BY rank ASC = best first
-	maxRank := ftsResults[len(ftsResults)-1].rank
-	rankRange := maxRank - minRank
-	bm25Scores := make([]float64, len(ftsResults))
-	for i, r := range ftsResults {
-		if rankRange == 0 {
-			bm25Scores[i] = 1.0
-		} else {
-			// Map [minRank, maxRank] → [1, 0] (best rank → 1).
-			bm25Scores[i] = (maxRank - r.rank) / rankRange
-		}
-	}
-
-	// ── Optional vector augmentation via vec0 KNN ─────────────────────────────
-	var queryVec []float32
-	if idx.embedder != nil {
-		queryVec, err = idx.embedder.Embed(q.Text)
-		if err != nil {
-			queryVec = nil
-		}
-	}
-
+	// ── Vector (embedding) search ────────────────────────────────────────────
 	type candidate struct {
 		rec   FactRecord
 		score float64
 	}
 
-	// Build path→bm25Score map from FTS results
-	ftsScoreByPath := make(map[string]float64, len(ftsResults))
-	for i, fr := range ftsResults {
-		ftsScoreByPath[fr.rec.Path] = bm25Scores[i]
-	}
-
-	// Vec0 KNN search — two-step: get rowid+distance from vec0, then resolve paths.
 	vecSimByPath := make(map[string]float64)
-	if queryVec != nil {
-		vecBlob := float32SliceToBytes(queryVec)
-		rows, err := idx.db.Query(
-			`SELECT rowid, distance FROM facts_vec WHERE embedding MATCH ? AND k = ?`,
-			vecBlob, limit*5,
-		)
-		if err == nil {
-			type vecHit struct {
-				rowid int64
-				dist  float64
-			}
-			var hits []vecHit
-			for rows.Next() {
-				var h vecHit
-				if err := rows.Scan(&h.rowid, &h.dist); err != nil {
-					break
+	if idx.embedder == nil {
+		log.Debug().Msg("search: no embedder configured, skipping vec search")
+	} else {
+		queryVec, embedErr := idx.embedder.Embed(q.Text)
+		if embedErr != nil {
+			log.Warn().Err(embedErr).Msg("search: embed query failed")
+		} else if queryVec == nil {
+			log.Warn().Msg("search: embedder returned nil vector")
+		} else {
+			vecBlob := float32SliceToBytes(queryVec)
+			rows, err := idx.db.Query(
+				`SELECT rowid, distance FROM facts_vec WHERE embedding MATCH ? AND k = ?`,
+				vecBlob, limit*5,
+			)
+			if err != nil {
+				log.Warn().Err(err).Msg("search: vec query failed")
+			} else {
+				type vecHit struct {
+					rowid int64
+					dist  float64
 				}
-				hits = append(hits, h)
-			}
-			rows.Close()
+				var hits []vecHit
+				for rows.Next() {
+					var h vecHit
+					if err := rows.Scan(&h.rowid, &h.dist); err != nil {
+						break
+					}
+					hits = append(hits, h)
+				}
+				rows.Close()
 
-			// Resolve rowids to paths
-			for _, h := range hits {
-				var path string
-				err := idx.db.QueryRow(`SELECT path FROM facts WHERE rowid = ?`, h.rowid).Scan(&path)
-				if err == nil {
-					vecSimByPath[path] = 1.0 - h.dist // cosine_similarity = 1 - cosine_distance
+				for _, h := range hits {
+					var path string
+					err := idx.db.QueryRow(`SELECT path FROM facts WHERE rowid = ?`, h.rowid).Scan(&path)
+					if err == nil {
+						vecSimByPath[path] = 1.0 - h.dist
+					}
 				}
+				log.Debug().Int("vec_hits", len(vecSimByPath)).Msg("vec search complete")
 			}
 		}
 	}
 
-	// Merge FTS + vec results
+	// TODO: FTS BM25 augmentation disabled — returns same fact with low scores.
+	// Revisit when we have a proper similarity/semantic search backend.
+	// ftsScoreByPath := make(map[string]float64)
+	// ftsRecByPath := make(map[string]FactRecord)
+	// ftsResults, err := idx.searchTextWithRanks(q.Text, limit*5)
+	// if err == nil && len(ftsResults) > 0 {
+	// 	minRank := ftsResults[0].rank
+	// 	maxRank := ftsResults[len(ftsResults)-1].rank
+	// 	rankRange := maxRank - minRank
+	// 	for _, r := range ftsResults {
+	// 		var bm25 float64
+	// 		if rankRange == 0 {
+	// 			bm25 = 1.0
+	// 		} else {
+	// 			bm25 = (maxRank - r.rank) / rankRange
+	// 		}
+	// 		ftsScoreByPath[r.rec.Path] = bm25
+	// 		ftsRecByPath[r.rec.Path] = r.rec
+	// 	}
+	// }
+
+	if len(vecSimByPath) == 0 {
+		return nil, nil
+	}
+
+	// Vec-only scoring (no FTS boost)
 	seen := make(map[string]bool)
-	candidates := make([]candidate, 0, len(ftsResults)+len(vecSimByPath))
+	candidates := make([]candidate, 0, len(vecSimByPath))
 
-	// FTS results with optional vec boost
-	for _, fr := range ftsResults {
-		bm25 := ftsScoreByPath[fr.rec.Path]
-		score := bm25
-		if cosine, ok := vecSimByPath[fr.rec.Path]; ok {
-			score = 0.6*bm25 + 0.4*cosine
-		}
-		candidates = append(candidates, candidate{rec: fr.rec, score: score})
-		seen[fr.rec.Path] = true
+	minSim := q.MinSimilarity
+	if minSim <= 0 {
+		minSim = 0.40
 	}
-
-	// Vec-only results (not in FTS set) if cosine_similarity > 0.2
 	for path, cosine := range vecSimByPath {
-		if seen[path] || cosine <= 0.2 {
+		if cosine <= minSim {
 			continue
 		}
 		rec, err := idx.GetByPath(path)
 		if err != nil || rec == nil {
 			continue
 		}
-		candidates = append(candidates, candidate{rec: *rec, score: 0.4 * cosine})
+		candidates = append(candidates, candidate{rec: *rec, score: cosine})
+		seen[path] = true
 	}
 
 	// ── Filters ───────────────────────────────────────────────────────────────
@@ -949,17 +938,11 @@ func (idx *Index) Search(q SearchQuery) ([]SearchResult, error) {
 		}
 	}
 
-	// ── Normalise to [0, 100] ─────────────────────────────────────────────────
-	// All FTS5 matches are considered relevant; no minimum-score cutoff so that
-	// short or infrequent terms (e.g. "ml") don't silently drop valid results.
-	topScore := candidates[0].score
+	// ── Scale to [0, 100] ────────────────────────────────────────────────────
+	// Scores are in [0, 1]; multiply by 100 for display.
 	var out []SearchResult
 	for _, c := range candidates {
-		normalised := 100.0
-		if topScore > 0 {
-			normalised = (c.score / topScore) * 100.0
-		}
-		out = append(out, SearchResult{FactRecord: c.rec, Score: normalised})
+		out = append(out, SearchResult{FactRecord: c.rec, Score: c.score * 100.0})
 		if len(out) >= limit {
 			break
 		}

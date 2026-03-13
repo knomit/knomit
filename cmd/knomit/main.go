@@ -69,12 +69,7 @@ func serveCmd() *cobra.Command {
 			}
 			defer idx.Close()
 
-			// 3. Initial sync
-			if err := idx.Sync(gs); err != nil {
-				log.Warn().Err(err).Msg("initial index sync failed")
-			}
-
-			// 4. Ensure embedder model files are present (downloads if missing), then load.
+			// 3. Ensure embedder model files are present (downloads if missing), then load.
 			var embedder *embeddings.Embedder
 			modelPath, tokPath, err := embeddings.EnsureModel(cfg.CacheDir)
 			if err != nil {
@@ -89,6 +84,11 @@ func serveCmd() *cobra.Command {
 			if embedder != nil {
 				idx.SetEmbedder(embedder)
 				defer embedder.Close()
+			}
+
+			// 4. Initial sync (must happen after embedder is attached so vectors are computed)
+			if err := idx.Sync(gs); err != nil {
+				log.Warn().Err(err).Msg("initial index sync failed")
 			}
 
 			// 5. Resolve LLM adapter

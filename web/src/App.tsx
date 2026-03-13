@@ -40,6 +40,11 @@ export default function App() {
       dispatch({ type: 'SET_TASK', op: ev.op, status: ev.status, message: ev.message || '' });
       const level = ev.status === 'error' ? 'error' as const : 'info' as const;
       dispatch({ type: 'CONSOLE_LOG', level, message: `[${ev.op}] ${ev.message || ev.status}` });
+      // Refresh head when a task completes — the SSE status event may be
+      // buffered by the Vite proxy, so fetch it explicitly.
+      if (ev.status === 'done' || ev.status === 'error') {
+        api.status().then(s => dispatch({ type: 'SET_HEAD', head: s.head })).catch(() => {});
+      }
     });
     es.addEventListener('status', (e) => {
       const s = JSON.parse(e.data);

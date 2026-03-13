@@ -3,6 +3,7 @@ package web
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -241,6 +242,40 @@ func TestHandleSearch(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestHandleSearchMinSimilarity(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	gs := NewMockGitStore(ctrl)
+	mockIdx := NewMockSearchIndex(ctrl)
+
+	// Expect the Search call to receive a SearchQuery with MinSimilarity set.
+	mockIdx.EXPECT().Search(gomock.Any()).DoAndReturn(func(q store.SearchQuery) ([]store.SearchResult, error) {
+		if q.MinSimilarity != 0.75 {
+			return nil, fmt.Errorf("expected MinSimilarity=0.75, got %v", q.MinSimilarity)
+		}
+		return []store.SearchResult{}, nil
+	})
+
+	handler := newTestRouter(gs, mockIdx)
+	rr := doRequest(t, handler, http.MethodGet, "/api/v1/search?q=test&min_similarity=0.75", "")
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body: %s", rr.Code, http.StatusOK, rr.Body.String())
+	}
+}
+
+func TestHandleSearchInvalidMinSimilarity(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	gs := NewMockGitStore(ctrl)
+	mockIdx := NewMockSearchIndex(ctrl)
+
+	handler := newTestRouter(gs, mockIdx)
+	rr := doRequest(t, handler, http.MethodGet, "/api/v1/search?q=test&min_similarity=notanumber", "")
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", rr.Code, http.StatusBadRequest)
 	}
 }
 

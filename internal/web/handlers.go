@@ -106,6 +106,7 @@ func handleSearch(idx SearchIndex) http.HandlerFunc {
 		domainStr := q.Get("domain")
 		path := q.Get("path")
 		minConfidenceStr := q.Get("min_confidence")
+		minSimilarityStr := q.Get("min_similarity")
 		limitStr := q.Get("limit")
 
 		var entities []string
@@ -138,6 +139,16 @@ func handleSearch(idx SearchIndex) http.HandlerFunc {
 			minConfidence = v
 		}
 
+		var minSimilarity float64
+		if minSimilarityStr != "" {
+			v, err := strconv.ParseFloat(minSimilarityStr, 64)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, "invalid min_similarity value")
+				return
+			}
+			minSimilarity = v
+		}
+
 		limit := 50
 		if limitStr != "" {
 			v, err := strconv.Atoi(limitStr)
@@ -159,6 +170,7 @@ func handleSearch(idx SearchIndex) http.HandlerFunc {
 			Domain:        domain,
 			Path:          path,
 			MinConfidence: minConfidence,
+			MinSimilarity: minSimilarity,
 			Limit:         limit,
 		})
 		if err != nil {
