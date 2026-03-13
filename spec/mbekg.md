@@ -335,4 +335,4 @@ For each fact file:
 
 ### 8.4 Embeddings
 
-Embeddings are also ephemeral and optional. They are computed locally using an ONNX inference model (e.g. `all-MiniLM-L6-v2`) and stored alongside the search index. If the embedding store is absent or disabled, vector search degrades gracefully to FTS-only.
+Embeddings are also ephemeral and optional. They are computed locally using an ONNX inference model (e.g. `all-MiniLM-L6-v2`) and stored alongside the search index. If the embedding store is absent or disabled, text-based search with filters is used instead of vector similarity.

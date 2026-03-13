@@ -41,20 +41,20 @@ download-ort:
 	fi
 
 build: web
-	CGO_ENABLED=1 go build -tags sqlite_fts5 -o dist/knomit ./cmd/knomit/
+	CGO_ENABLED=1 go build -o dist/knomit ./cmd/knomit/
 
 web:
 	cd web && npm ci && npm run build
 
 test:
-	CGO_ENABLED=1 go test -tags sqlite_fts5 ./...
+	CGO_ENABLED=1 go test ./...
 
 dist: download-ort build
 	@echo "Distribution package ready in dist/"
 
 CMD ?= serve
 run: download-ort
-	CGO_ENABLED=1 ORT_LIB_PATH=dist/lib/$(ORT_LIB_NAME) go run -tags sqlite_fts5 ./cmd/knomit/ $(CMD)
+	CGO_ENABLED=1 ORT_LIB_PATH=dist/lib/$(ORT_LIB_NAME) go run ./cmd/knomit/ $(CMD)
 
 dev:
 	cd web && npm run dev

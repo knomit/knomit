@@ -1,17 +1,15 @@
-// Package store implements the knomit search index backed by SQLite FTS5 and
-// sqlite-vec. It provides full-text search, vector similarity search, and
-// hybrid search over a git-backed knowledge base of fact files.
+// Package store implements the knomit search index backed by SQLite and
+// sqlite-vec. It provides vector similarity search and filtered search over
+// a git-backed knowledge base of fact files.
 //
 // The package is split across several files:
 //
 //   - index.go   — Core types, interfaces, Index constructor, and schema DDL.
 //   - crud.go    — Upsert, Delete, GetByPath, GetEmbedding, meta key-value ops.
-//   - search.go  — FTS5 text search, hybrid vector+text search, filters.
+//   - search.go  — Vector search, filters, and hybrid scoring.
 //   - sync.go    — Git sync (full rebuild + incremental diff).
 //   - parse.go   — Fact markdown file parsing (YAML frontmatter + body).
 //   - vec.go     — Vector encoding/decoding, pairwise distances, sqlite-vec init.
-//
-// Build with -tags fts5 to enable FTS5 support (required).
 package store
 
 import (
@@ -80,7 +78,7 @@ type GitReader interface {
 // Index (constructor + lifecycle)
 // ────────────────────────────────────────────────────────────────────────────
 
-// Index is the search index backed by SQLite with FTS5 and sqlite-vec.
+// Index is the search index backed by SQLite with sqlite-vec.
 type Index struct {
 	db       *sql.DB
 	embedder Embedder
@@ -134,9 +132,8 @@ func (idx *Index) Close() error {
 // Schema DDL
 // ────────────────────────────────────────────────────────────────────────────
 
-// schemaSQL returns the DDL to create all tables: facts (main), facts_fts
-// (FTS5 full-text), facts_vec (vec0 embeddings), meta (key-value), and
-// synthesis_log.
+// schemaSQL returns the DDL to create all tables: facts (main),
+// facts_vec (vec0 embeddings), meta (key-value), and synthesis_log.
 func schemaSQL(vecDim int) string {
 	return fmt.Sprintf(`
 CREATE TABLE IF NOT EXISTS meta (
@@ -159,10 +156,6 @@ CREATE TABLE IF NOT EXISTS facts (
     sources     INTEGER NOT NULL,
     refs        TEXT NOT NULL,
     commit_hash TEXT NOT NULL
-);
-CREATE VIRTUAL TABLE IF NOT EXISTS facts_fts USING fts5(
-    title, body, entities, domain,
-    content='facts', content_rowid='rowid'
 );
 CREATE VIRTUAL TABLE IF NOT EXISTS facts_vec USING vec0(
     embedding FLOAT[%d] distance_metric=cosine

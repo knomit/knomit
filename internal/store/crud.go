@@ -1,6 +1,6 @@
 // CRUD operations on the facts table: insert/update, delete, get by path,
 // embedding retrieval, and meta key-value storage (last_commit tracking).
-// All mutations keep the FTS5 and vec0 indexes in sync within transactions.
+// All mutations keep the vec0 index in sync within transactions.
 package store
 
 import (
@@ -9,13 +9,12 @@ import (
 	"fmt"
 )
 
-// Upsert inserts or replaces a FactRecord, keeping the FTS5 and vec0 indexes
-// in sync. The operation runs in a single transaction:
-//  1. Read old row (if any) to prepare FTS5 explicit delete.
+// Upsert inserts or replaces a FactRecord, keeping the vec0 index in sync.
+// The operation runs in a single transaction:
+//  1. Read old row (if any) to get its rowid.
 //  2. Compute embedding via Embedder (if configured).
 //  3. INSERT OR REPLACE into facts.
-//  4. Remove old FTS5 entry, insert new one.
-//  5. Remove old vec0 entry, insert new one.
+//  4. Remove old vec0 entry, insert new one.
 func (idx *Index) Upsert(rec FactRecord) error {
 	domainJSON, err := json.Marshal(rec.Domain)
 	if err != nil {
@@ -35,20 +34,6 @@ func (idx *Index) Upsert(rec FactRecord) error {
 		return fmt.Errorf("begin tx: %w", err)
 	}
 	defer tx.Rollback()
-
-	// Read old row values (if any) so we can issue the FTS5 explicit delete command.
-	var oldRowid int64
-	var oldTitle, oldBody, oldEntities, oldDomain string
-	var hasOld bool
-	err = tx.QueryRow(
-		`SELECT rowid, title, body, entities, domain FROM facts WHERE path=?`,
-		rec.Path,
-	).Scan(&oldRowid, &oldTitle, &oldBody, &oldEntities, &oldDomain)
-	if err == nil {
-		hasOld = true
-	} else if err != sql.ErrNoRows {
-		return fmt.Errorf("read old fact: %w", err)
-	}
 
 	// Compute embedding vector if an embedder is configured.
 	var vecData []byte
@@ -71,26 +56,6 @@ func (idx *Index) Upsert(rec FactRecord) error {
 		return fmt.Errorf("upsert fact: %w", err)
 	}
 
-	// If an old row existed, remove it from FTS5 using the explicit 'delete' command.
-	if hasOld {
-		if _, err := tx.Exec(
-			`INSERT INTO facts_fts(facts_fts, rowid, title, body, entities, domain)
-			 VALUES('delete', ?, ?, ?, ?, ?)`,
-			oldRowid, oldTitle, oldBody, oldEntities, oldDomain,
-		); err != nil {
-			return fmt.Errorf("delete old fts row: %w", err)
-		}
-	}
-
-	// Insert new row into FTS using the new rowid.
-	if _, err := tx.Exec(
-		`INSERT INTO facts_fts(rowid, title, body, entities, domain)
-		 VALUES ((SELECT rowid FROM facts WHERE path=?), ?, ?, ?, ?)`,
-		rec.Path, rec.Title, rec.Body, string(entitiesJSON), string(domainJSON),
-	); err != nil {
-		return fmt.Errorf("insert fts row: %w", err)
-	}
-
 	// Insert embedding into facts_vec.
 	if vecData != nil {
 		newRowid := int64(0)
@@ -111,7 +76,7 @@ func (idx *Index) Upsert(rec FactRecord) error {
 	return tx.Commit()
 }
 
-// Delete removes a fact and its FTS5 + vec0 entries by path.
+// Delete removes a fact and its vec0 entry by path.
 func (idx *Index) Delete(path string) error {
 	tx, err := idx.db.Begin()
 	if err != nil {
@@ -119,28 +84,15 @@ func (idx *Index) Delete(path string) error {
 	}
 	defer tx.Rollback()
 
-	// Read old values to issue the FTS5 explicit 'delete' command.
+	// Delete from facts_vec first (referential integrity).
 	var oldRowid int64
-	var oldTitle, oldBody, oldEntities, oldDomain string
-	err = tx.QueryRow(
-		`SELECT rowid, title, body, entities, domain FROM facts WHERE path=?`,
-		path,
-	).Scan(&oldRowid, &oldTitle, &oldBody, &oldEntities, &oldDomain)
+	err = tx.QueryRow(`SELECT rowid FROM facts WHERE path=?`, path).Scan(&oldRowid)
 	if err != nil && err != sql.ErrNoRows {
 		return fmt.Errorf("read fact for delete: %w", err)
 	}
 	if err == nil {
-		// Delete from facts_vec first (referential integrity).
 		if _, err := tx.Exec(`DELETE FROM facts_vec WHERE rowid = ?`, oldRowid); err != nil {
 			return fmt.Errorf("delete vec row: %w", err)
-		}
-		// Delete from FTS5.
-		if _, err := tx.Exec(
-			`INSERT INTO facts_fts(facts_fts, rowid, title, body, entities, domain)
-			 VALUES('delete', ?, ?, ?, ?, ?)`,
-			oldRowid, oldTitle, oldBody, oldEntities, oldDomain,
-		); err != nil {
-			return fmt.Errorf("delete fts row: %w", err)
 		}
 	}
 

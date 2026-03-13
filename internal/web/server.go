@@ -48,7 +48,7 @@ type SynthDeps struct {
 //
 //	GET  /api/v1/browse      — directory listing
 //	GET  /api/v1/fact        — single fact content
-//	GET  /api/v1/search      — hybrid FTS + vector search
+//	GET  /api/v1/search      — vector similarity search
 //	GET  /api/v1/history     — git log
 //	GET  /api/v1/stats       — aggregate statistics
 //	GET  /api/v1/status      — head commit, branch, index state

@@ -11,7 +11,7 @@ export interface Status { head: string; branch: string; index_commit: string; em
 // parseSearchQuery splits a query string into structured components.
 // Tokens of the form domain:X or entity:X are extracted as filters;
 // quoted strings (e.g. "some phrase") are extracted as similarity text;
-// the remaining words are treated as free text for FTS/embeddings.
+// the remaining words are treated as free text for embeddings.
 export function parseSearchQuery(raw: string): { text: string; domains: string[]; entities: string[] } {
   const domains: string[] = [];
   const entities: string[] = [];

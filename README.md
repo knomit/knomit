@@ -8,7 +8,7 @@ Knomit stores structured facts as markdown files in a Git repository, organized 
 
 - Go 1.24+
 - Node.js / npm (for the web frontend)
-- SQLite with FTS5 support
+- SQLite
 - ONNX Runtime (downloaded automatically via `make setup`)
 
 ## Building

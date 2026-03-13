@@ -1,5 +1,3 @@
-//go:build sqlite_fts5
-
 package store_test
 
 import (
@@ -11,7 +9,7 @@ import (
 	"go.uber.org/mock/gomock"
 )
 
-func TestUpsertAndQuery(t *testing.T) {
+func TestUpsertAndGetByPath(t *testing.T) {
 	idx, err := store.New(":memory:")
 	if err != nil {
 		t.Fatal(err)
@@ -32,15 +30,15 @@ func TestUpsertAndQuery(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	results, err := idx.SearchText("postgres", 10)
+	rec, err := idx.GetByPath("know/test/foo.md")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(results) == 0 {
-		t.Fatal("expected at least one result")
+	if rec == nil {
+		t.Fatal("expected record, got nil")
 	}
-	if results[0].Path != "know/test/foo.md" {
-		t.Fatalf("got %v", results[0].Path)
+	if rec.Title != "Foo fact" {
+		t.Fatalf("expected title 'Foo fact', got %q", rec.Title)
 	}
 }
 
@@ -66,11 +64,11 @@ func TestDelete(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	results, err := idx.SearchText("redis", 10)
+	got, err := idx.GetByPath("know/test/bar.md")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(results) == 0 {
+	if got == nil {
 		t.Fatal("expected result before delete")
 	}
 
@@ -78,12 +76,12 @@ func TestDelete(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	results, err = idx.SearchText("redis", 10)
+	got, err = idx.GetByPath("know/test/bar.md")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(results) != 0 {
-		t.Fatalf("expected no results after delete, got %d", len(results))
+	if got != nil {
+		t.Fatal("expected nil after delete")
 	}
 }
 
@@ -166,25 +164,18 @@ func TestUpsertOverwrite(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// FTS should find new content
-	results, err := idx.SearchText("postgresql", 10)
+	got, err := idx.GetByPath("know/test/overwrite.md")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(results) == 0 {
-		t.Fatal("expected result for new content")
+	if got == nil {
+		t.Fatal("expected record after overwrite")
 	}
-	if results[0].Title != "Updated title" {
-		t.Fatalf("expected updated title, got %q", results[0].Title)
+	if got.Title != "Updated title" {
+		t.Fatalf("expected updated title, got %q", got.Title)
 	}
-
-	// FTS should NOT find old content
-	results, err = idx.SearchText("mysql", 10)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(results) != 0 {
-		t.Fatalf("expected no results for old content, got %d", len(results))
+	if got.CommitHash != "v2" {
+		t.Fatalf("expected commit_hash 'v2', got %q", got.CommitHash)
 	}
 }
 
@@ -262,23 +253,20 @@ func TestIncrementalSync(t *testing.T) {
 		t.Fatalf("Sync (full rebuild) failed: %v", err)
 	}
 
-	// Both facts should now be searchable.
-	results, err := idx.SearchText("concurrency", 10)
+	// Both facts should now be retrievable.
+	rec, err := idx.GetByPath("know/postgres-mvcc.md")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(results) == 0 {
+	if rec == nil {
 		t.Fatal("expected postgres fact after full sync")
 	}
-	if results[0].Path != "know/postgres-mvcc.md" {
-		t.Fatalf("unexpected path %q", results[0].Path)
-	}
 
-	results, err = idx.SearchText("AOF", 10)
+	rec, err = idx.GetByPath("know/redis-persistence.md")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(results) == 0 {
+	if rec == nil {
 		t.Fatal("expected redis fact after full sync")
 	}
 
@@ -306,24 +294,21 @@ func TestIncrementalSync(t *testing.T) {
 		t.Fatalf("Sync (incremental) failed: %v", err)
 	}
 
-	// New fact should be searchable.
-	results, err = idx.SearchText("partitions", 10)
+	// New fact should be retrievable.
+	rec, err = idx.GetByPath("know/kafka-partitions.md")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(results) == 0 {
+	if rec == nil {
 		t.Fatal("expected kafka fact after incremental sync")
-	}
-	if results[0].Path != "know/kafka-partitions.md" {
-		t.Fatalf("unexpected path %q", results[0].Path)
 	}
 
 	// Previously indexed facts should still be present.
-	results, err = idx.SearchText("concurrency", 10)
+	rec, err = idx.GetByPath("know/postgres-mvcc.md")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(results) == 0 {
+	if rec == nil {
 		t.Fatal("expected postgres fact to survive incremental sync")
 	}
 
@@ -337,12 +322,12 @@ func TestIncrementalSync(t *testing.T) {
 		t.Fatalf("Sync (delete) failed: %v", err)
 	}
 
-	results, err = idx.SearchText("AOF", 10)
+	rec, err = idx.GetByPath("know/redis-persistence.md")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(results) != 0 {
-		t.Fatalf("expected redis fact to be removed after delete sync, got %d results", len(results))
+	if rec != nil {
+		t.Fatal("expected redis fact to be removed after delete sync")
 	}
 
 	// No-op sync: calling Sync again with same HEAD should be a no-op.
@@ -436,132 +421,7 @@ func TestGetEmbedding(t *testing.T) {
 	}
 }
 
-// TestSearchHyphenatedEntity is a regression test: searching for a hyphenated
-// entity name (e.g. "ml-pipeline") must return facts that have it as an entity.
-// Before the fix, FTS5 interpreted the hyphen as a NOT operator, so facts with
-// entity "ml-pipeline" were never returned.
-func TestSearchHyphenatedEntity(t *testing.T) {
-	idx, err := store.New(":memory:")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer idx.Close()
-
-	if err := idx.Upsert(store.FactRecord{
-		Path:       "know/ml-pipeline.md",
-		Title:      "ML Pipeline",
-		Body:       "An end-to-end machine learning pipeline",
-		Domain:     []string{"machine-learning"},
-		Entities:   []string{"ml-pipeline", "pytorch"},
-		Confidence: 0.9,
-		Sources:    1,
-		CommitHash: "abc",
-	}); err != nil {
-		t.Fatal(err)
-	}
-
-	// Searching by the hyphenated entity must return the fact.
-	results, err := idx.Search(store.SearchQuery{Text: "ml-pipeline", Limit: 10})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(results) == 0 {
-		t.Fatal("expected fact with hyphenated entity 'ml-pipeline' to be found")
-	}
-	if results[0].Path != "know/ml-pipeline.md" {
-		t.Fatalf("wrong result: %v", results[0].Path)
-	}
-
-	// Searching by a hyphenated domain must also work.
-	results, err = idx.Search(store.SearchQuery{Text: "machine-learning", Limit: 10})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(results) == 0 {
-		t.Fatal("expected fact with hyphenated domain 'machine-learning' to be found")
-	}
-}
-
-// TestSearchAllMatchesReturned is a regression test: all FTS5-matching facts must
-// be returned even when one fact matches a query term more frequently than others.
-// Before the fix, a normalised-score cutoff of 10% caused weak-but-valid matches
-// (e.g. a fact that mentions "ml" once vs another that mentions it many times) to
-// be silently dropped.
-func TestSearchAllMatchesReturned(t *testing.T) {
-	idx, err := store.New(":memory:")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer idx.Close()
-
-	// Fact A: domain "ml", body mentions "ml" many times → high BM25 rank.
-	if err := idx.Upsert(store.FactRecord{
-		Path:  "know/ml-heavy.md",
-		Title: "ML Overview",
-		Body:  "ml ml ml ml ml ml ml ml machine learning",
-		Domain: []string{"ml"}, Entities: []string{},
-		Confidence: 0.9, Sources: 1, CommitHash: "x",
-	}); err != nil {
-		t.Fatal(err)
-	}
-	// Fact B: domain "ml", body mentions "ml" only once → much lower BM25 rank.
-	if err := idx.Upsert(store.FactRecord{
-		Path:  "know/ml-light.md",
-		Title: "Neural Networks",
-		Body:  "a brief note about ml",
-		Domain: []string{"ml"}, Entities: []string{},
-		Confidence: 0.8, Sources: 1, CommitHash: "x",
-	}); err != nil {
-		t.Fatal(err)
-	}
-
-	results, err := idx.Search(store.SearchQuery{Text: "ml", Limit: 10})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(results) != 2 {
-		t.Fatalf("expected both facts to be returned, got %d", len(results))
-	}
-}
-
 // ── Search tests ──────────────────────────────────────────────────────────────
-
-func TestSearch(t *testing.T) {
-	idx, err := store.New(":memory:")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer idx.Close()
-
-	if err := idx.Upsert(store.FactRecord{
-		Path: "know/a.md", Title: "Alpha", Body: "postgres database replication",
-		Domain: []string{"databases"}, Entities: []string{"postgres"},
-		Confidence: 0.9, Sources: 1, CommitHash: "x",
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if err := idx.Upsert(store.FactRecord{
-		Path: "know/b.md", Title: "Beta", Body: "redis cache cluster",
-		Domain: []string{"infra"}, Entities: []string{"redis"},
-		Confidence: 0.8, Sources: 1, CommitHash: "x",
-	}); err != nil {
-		t.Fatal(err)
-	}
-
-	results, err := idx.Search(store.SearchQuery{Text: "postgres", Limit: 10})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(results) == 0 {
-		t.Fatal("expected results")
-	}
-	if results[0].Path != "know/a.md" {
-		t.Fatalf("wrong result: %v", results[0].Path)
-	}
-	if results[0].Score < 10 {
-		t.Fatalf("score too low: %v", results[0].Score)
-	}
-}
 
 func TestSearchFilter(t *testing.T) {
 	idx, err := store.New(":memory:")
@@ -643,13 +503,11 @@ func TestSearchHybrid(t *testing.T) {
 
 	const dims = 4 // tiny dimension for test speed
 
-	// Fact A: matches "postgres" in text; embedding points toward [1,0,0,0].
+	// Fact A: embedding points toward [1,0,0,0].
 	vecA := []float32{1, 0, 0, 0}
-	// Fact B: matches "postgres" in text too; embedding is related but less similar.
+	// Fact B: embedding is related but less similar.
 	vecB := []float32{0.7, 0.7, 0, 0}
 
-	// Build a dispatch embedder that maps document bodies to their vectors,
-	// and the query "postgres" to vecA (so fact A gets cosine sim 1, fact B gets ~0.7).
 	m := map[string][]float32{
 		"postgres database replication": vecA,
 		"postgres cache storage":        vecB,
@@ -685,7 +543,7 @@ func TestSearchHybrid(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(results) == 0 {
-		t.Fatal("expected results from hybrid search")
+		t.Fatal("expected results from vector search")
 	}
 	// Both facts should be returned.
 	if len(results) != 2 {
@@ -881,14 +739,14 @@ func TestSearchMinSimilarityThreshold(t *testing.T) {
 	}
 }
 
-func TestSearchFTSOnlySuppressedWithEmbedder(t *testing.T) {
+func TestSearchVecOnlyNoEmbedder(t *testing.T) {
 	idx, err := store.New(":memory:", store.WithVecDimension(4))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer idx.Close()
 
-	// Insert a fact WITHOUT embeddings first (no embedder set yet).
+	// Insert a fact without embedder.
 	if err := idx.Upsert(store.FactRecord{
 		Path: "know/a.md", Title: "Tea Lover", Body: "tea drinking habits",
 		Domain: []string{"pref"}, Entities: []string{}, Confidence: 0.9, Sources: 1, CommitHash: "x",
@@ -896,44 +754,28 @@ func TestSearchFTSOnlySuppressedWithEmbedder(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Without embedder: FTS-only results should be returned.
+	// Without embedder: text search returns nil (no vec hits).
 	results, err := idx.Search(store.SearchQuery{Text: "tea", Limit: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(results) == 0 {
-		t.Fatal("expected FTS results without embedder")
-	}
-
-	// Now attach an embedder. FTS-only results should be suppressed.
-	ctrl := gomock.NewController(t)
-	emb := NewMockEmbedder(ctrl)
-	emb.EXPECT().Embed(gomock.Any()).Return([]float32{0.5, 0.5, 0, 0}, nil).AnyTimes()
-	idx.SetEmbedder(emb)
-
-	results, err = idx.Search(store.SearchQuery{Text: "tea", Limit: 10})
-	if err != nil {
-		t.Fatal(err)
-	}
-	// The fact has no embedding in facts_vec (was inserted without embedder),
-	// so vec0 won't find it. With embedder set, FTS-only results are suppressed.
 	if len(results) != 0 {
-		t.Fatalf("expected 0 results (FTS-only suppressed with embedder), got %d", len(results))
+		t.Fatalf("expected 0 results without embedder, got %d", len(results))
 	}
 }
 
-func TestSearchHybridScoringBoost(t *testing.T) {
+func TestSearchVecScoringBoost(t *testing.T) {
 	idx, err := store.New(":memory:", store.WithVecDimension(4))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer idx.Close()
 
-	// Two facts: both have embeddings, but only one matches FTS.
+	// Two facts with embeddings at different cosine distances.
 	vecs := map[string][]float32{
-		"tea brewing techniques":  {1, 0, 0, 0},
-		"tea garden cultivation":  {0.95, 0.05, 0, 0}, // slightly less similar
-		"tea":                     {1, 0, 0, 0},        // query
+		"tea brewing techniques": {1, 0, 0, 0},
+		"tea garden cultivation": {0.95, 0.05, 0, 0}, // slightly less similar
+		"tea":                    {1, 0, 0, 0},        // query
 	}
 
 	ctrl := gomock.NewController(t)
@@ -946,14 +788,12 @@ func TestSearchHybridScoringBoost(t *testing.T) {
 	}).AnyTimes()
 	idx.SetEmbedder(emb)
 
-	// Fact A: exact embedding match + FTS match on "tea"
 	if err := idx.Upsert(store.FactRecord{
 		Path: "know/a.md", Title: "Brewing", Body: "tea brewing techniques",
 		Domain: []string{"food"}, Entities: []string{}, Confidence: 0.9, Sources: 1, CommitHash: "x",
 	}); err != nil {
 		t.Fatal(err)
 	}
-	// Fact B: very close embedding but body text doesn't match FTS for "tea" well
 	if err := idx.Upsert(store.FactRecord{
 		Path: "know/b.md", Title: "Garden", Body: "tea garden cultivation",
 		Domain: []string{"food"}, Entities: []string{}, Confidence: 0.9, Sources: 1, CommitHash: "x",
@@ -974,7 +814,7 @@ func TestSearchHybridScoringBoost(t *testing.T) {
 			t.Fatalf("score too low for fact %s: %v", r.Path, r.Score)
 		}
 	}
-	// Fact A (exact cosine + FTS boost) should score higher than B (slightly lower cosine).
+	// Fact A (exact cosine match) should score higher than B (slightly lower cosine).
 	if results[0].Score <= results[1].Score {
 		t.Fatalf("expected results[0] > results[1], got %v <= %v", results[0].Score, results[1].Score)
 	}
