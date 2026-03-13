@@ -20,9 +20,11 @@ type OllamaAdapter struct {
 }
 ```
 
-**Constructor:** `NewOllamaAdapter(host, model string) (*OllamaAdapter, error)`
+**Constructor:** `NewOllamaAdapter(ctx context.Context, model string) (*OllamaAdapter, error)`
+
+- Reads `OLLAMA_HOST` from `os.Getenv()` directly (consistent with how `NewGeminiAdapter` reads `GEMINI_API_KEY`), defaults to `http://localhost:11434`
 - Validates connectivity via `GET /api/tags`
-- Returns error if Ollama is unreachable
+- Returns error if Ollama is unreachable (non-fatal at startup — `main.go` logs a warning and disables synthesis)
 
 **Complete():** `POST /api/chat`
 
@@ -49,6 +51,8 @@ Request body:
 - `stream: true` with line-delimited JSON responses
 - `options.num_predict` set to `defaultMaxTokens` (8192) for consistency with other adapters
 
+**Qwen3 thinking mode:** Qwen3 models support a thinking mode that can emit chain-of-thought before the actual response. Since `format: "json"` enforces valid JSON output at the Ollama level, thinking tokens are suppressed. If other models exhibit this issue, prepending `/no_think` to the system prompt is a fallback.
+
 **Streaming protocol:** Each line of the response is a JSON object:
 
 ```json
@@ -60,20 +64,14 @@ Final line has `"done": true`. The adapter reads line by line, calls `onChunk` w
 **Error handling:**
 - Non-2xx HTTP status: parse Ollama error response body, return as error
 - Connection refused: clear error message pointing to Ollama not running
-- Context cancellation: respected via `ctx` on the HTTP request
-
-### Config Changes: `internal/config/config.go`
-
-New env var:
-- `OLLAMA_HOST` — Ollama server URL, default `http://localhost:11434`
-
-The host value is passed through to `NewOllamaAdapter`.
+- Context cancellation: respected via `ctx` on the HTTP request (no `http.Client.Timeout` — timeout is delegated to context)
+- Connectivity health check at construction uses a short timeout (5s) independent of request context
 
 ### Resolver Changes: `internal/llm/resolver.go`
 
 - Add `"ollama"` as a recognized provider in `NewAdapter()`
-- **No auto-detection** — requires explicit `KNOMIT_LLM_PROVIDER=ollama`
-- New case in adapter construction: `"ollama"` -> `NewOllamaAdapter(host, model)`
+- **No auto-detection** — `KNOMIT_LLM_PROVIDER=ollama` is mandatory (not just recommended). Without it, `ResolveProvider` will error on Ollama model names like `qwen3:8b`
+- New case in adapter construction: `"ollama"` -> `NewOllamaAdapter(ctx, model)`
 
 ### Usage
 
@@ -89,9 +87,7 @@ OLLAMA_HOST=http://192.168.1.50:11434 KNOMIT_LLM_PROVIDER=ollama KNOMIT_LLM_MODE
 
 ### New File: `internal/llm/ollama_test.go`
 
-Uses `uber-go/mock` (mockgen) for all mocks — no hand-rolled mocks.
-
-Uses `httptest.NewServer` to mock the Ollama API:
+Uses `httptest.NewServer` to mock the Ollama HTTP API (no mockgen needed for these tests — the HTTP server itself is the test double). If future tests need to mock the `LLMAdapter` interface, use `uber-go/mock` (mockgen) per project convention.
 
 - **Request construction:** Verify correct JSON body structure (model, messages, format, stream, options)
 - **Message mapping:** System prompt becomes system message; user/assistant messages map correctly with multi-turn support
@@ -109,8 +105,8 @@ The existing `LLMAdapter` interface means the Ollama adapter is automatically us
 
 ## Dependencies
 
-- No new third-party dependencies (uses `net/http`, `encoding/json` from stdlib)
-- `uber-go/mock` added as test dependency (if not already present)
+- No new dependencies (uses `net/http`, `encoding/json` from stdlib)
+- `uber-go/mock` will be added in a future change when `LLMAdapter` mocks are needed
 
 ## Files Changed
 
@@ -119,5 +115,3 @@ The existing `LLMAdapter` interface means the Ollama adapter is automatically us
 | `internal/llm/ollama.go` | New — adapter implementation |
 | `internal/llm/ollama_test.go` | New — unit tests |
 | `internal/llm/resolver.go` | Add `"ollama"` provider case |
-| `internal/config/config.go` | Add `OLLAMA_HOST` env var |
-| `cmd/knomit/main.go` | Pass `OLLAMA_HOST` to adapter construction |
