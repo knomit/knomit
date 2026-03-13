@@ -35,7 +35,7 @@ func TestForgetDeletesFile(t *testing.T) {
 		return nil
 	})
 
-	handler := ForgetHandler(gs, idx)
+	handler := ForgetHandler(gs, idx, "know")
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
@@ -91,7 +91,7 @@ func TestForgetFileNotFound(t *testing.T) {
 	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
 	gs.EXPECT().FileExists("know/nonexistent.md").Return(false, nil)
 
-	handler := ForgetHandler(gs, idx)
+	handler := ForgetHandler(gs, idx, "know")
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{

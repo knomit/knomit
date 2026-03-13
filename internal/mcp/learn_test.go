@@ -30,7 +30,7 @@ func TestLearnWritesFacts(t *testing.T) {
 		return nil
 	})
 
-	handler := LearnHandler(gs, idx)
+	handler := LearnHandler(gs, idx, "know")
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
@@ -106,7 +106,7 @@ func TestLearnNormalizesPath(t *testing.T) {
 	gs.EXPECT().Tag(gomock.Any()).Return(nil)
 	idx.EXPECT().Upsert(gomock.Any()).Return(nil)
 
-	handler := LearnHandler(gs, idx)
+	handler := LearnHandler(gs, idx, "know")
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
@@ -149,7 +149,7 @@ func TestLearnRequiresMomentName(t *testing.T) {
 
 	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
 
-	handler := LearnHandler(gs, idx)
+	handler := LearnHandler(gs, idx, "know")
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
@@ -181,7 +181,7 @@ func TestLearnMultipleFacts(t *testing.T) {
 	gs.EXPECT().Tag(gomock.Any()).Return(nil)
 	idx.EXPECT().Upsert(gomock.Any()).Return(nil).Times(2)
 
-	handler := LearnHandler(gs, idx)
+	handler := LearnHandler(gs, idx, "know")
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{

@@ -33,7 +33,7 @@ func TestUpdateMergesFields(t *testing.T) {
 	gs.EXPECT().Tag(gomock.Any()).Return(nil)
 	idx.EXPECT().Upsert(gomock.Any()).Return(nil)
 
-	handler := UpdateHandler(gs, idx)
+	handler := UpdateHandler(gs, idx, "know")
 
 	newBody := "Updated body."
 	newConf := 0.95
@@ -99,7 +99,7 @@ func TestUpdateFileNotFound(t *testing.T) {
 	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
 	gs.EXPECT().FileExists("know/nonexistent.md").Return(false, nil)
 
-	handler := UpdateHandler(gs, idx)
+	handler := UpdateHandler(gs, idx, "know")
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
@@ -141,7 +141,7 @@ func TestUpdateRefsAppended(t *testing.T) {
 	gs.EXPECT().Tag(gomock.Any()).Return(nil)
 	idx.EXPECT().Upsert(gomock.Any()).Return(nil)
 
-	handler := UpdateHandler(gs, idx)
+	handler := UpdateHandler(gs, idx, "know")
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{

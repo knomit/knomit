@@ -33,7 +33,7 @@ func TestExploreListsEntries(t *testing.T) {
 		return "", fmt.Errorf("not found: %s", path)
 	}).AnyTimes()
 
-	handler := ExploreHandler(gs)
+	handler := ExploreHandler(gs, "know")
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
 		"path": "know",
@@ -70,7 +70,7 @@ func TestExploreDefaultPath(t *testing.T) {
 	gs.EXPECT().ListDir("know").Return([]DirEntry{}, nil)
 	gs.EXPECT().ReadFile(gomock.Any()).Return("", fmt.Errorf("not found")).AnyTimes()
 
-	handler := ExploreHandler(gs)
+	handler := ExploreHandler(gs, "know")
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{}
 
@@ -149,7 +149,7 @@ func TestExploreInheritedFacts(t *testing.T) {
 		return "", fmt.Errorf("not found: %s", path)
 	}).AnyTimes()
 
-	handler := ExploreHandler(gs)
+	handler := ExploreHandler(gs, "know")
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
 		"path": "know/area/sub",
@@ -236,7 +236,7 @@ func TestExploreWithManifest(t *testing.T) {
 		return "", fmt.Errorf("not found: %s", path)
 	}).AnyTimes()
 
-	handler := ExploreHandler(gs)
+	handler := ExploreHandler(gs, "know")
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
 		"path": "know/sub",

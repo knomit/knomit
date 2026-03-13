@@ -27,7 +27,7 @@ func TestWhyReturnsHistory(t *testing.T) {
 	}, nil)
 	gs.EXPECT().TagsContaining("deadbeef").Return([]string{"learn/first"}, nil)
 
-	handler := WhyHandler(gs)
+	handler := WhyHandler(gs, "know")
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
 		"file": "know/foo.md",
@@ -73,7 +73,7 @@ func TestWhyRequiresFile(t *testing.T) {
 
 	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
 
-	handler := WhyHandler(gs)
+	handler := WhyHandler(gs, "know")
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{}
 
@@ -93,7 +93,7 @@ func TestWhyFileNotFound(t *testing.T) {
 	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
 	gs.EXPECT().ReadFile("know/nonexistent.md").Return("", fmt.Errorf("not found"))
 
-	handler := WhyHandler(gs)
+	handler := WhyHandler(gs, "know")
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
 		"file": "know/nonexistent.md",
