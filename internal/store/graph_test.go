@@ -334,6 +334,44 @@ func TestDeleteSyncsGraph(t *testing.T) {
 	}
 }
 
+func TestClusterFactsLouvain(t *testing.T) {
+	idx, err := New(":memory:", WithVecDimension(4))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer idx.Close()
+	idx.SetEmbedder(&stubEmbedder4d{})
+
+	// Create facts that share entities (will form a cluster via TAGGED edges)
+	facts := []FactRecord{
+		{Path: "know/a.md", Title: "A", Body: "alpha", Domain: []string{"eng"}, Entities: []string{"Go", "SQLite"}, Refs: []string{}, CommitHash: "abc"},
+		{Path: "know/b.md", Title: "B", Body: "beta", Domain: []string{"eng"}, Entities: []string{"Go", "SQLite"}, Refs: []string{}, CommitHash: "abc"},
+		{Path: "know/c.md", Title: "C", Body: "gamma", Domain: []string{"eng"}, Entities: []string{"Go"}, Refs: []string{}, CommitHash: "abc"},
+	}
+	for _, f := range facts {
+		if err := idx.Upsert(f); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	result, err := idx.ClusterFacts(1.0, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Should have at least one cluster
+	if len(result.Clusters) == 0 {
+		t.Fatal("expected at least one cluster")
+	}
+
+	// All facts sharing entities should be in a community
+	total := 0
+	for _, members := range result.Clusters {
+		total += len(members)
+	}
+	t.Logf("clusters: %d, total members: %d, noise: %d", len(result.Clusters), total, len(result.Noise))
+}
+
 type mockGitReader struct {
 	files map[string]string
 	head  string

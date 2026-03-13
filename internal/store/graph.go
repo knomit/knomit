@@ -245,6 +245,111 @@ func (idx *Index) graphBuildSimilarityEdges(path string) error {
 	return nil
 }
 
+// ClusterResult holds the output of ClusterFacts.
+type ClusterResult struct {
+	Clusters map[int][]string // community ID → fact paths
+	Noise    []string         // fact paths in communities below minCommunitySize
+}
+
+// ClusterFacts runs Louvain community detection on the full graph and returns
+// community assignments for non-deleted Fact nodes.
+//
+// resolution controls Louvain granularity: higher = more, smaller communities.
+// minCommunitySize: communities smaller than this are relabeled as noise.
+func (idx *Index) ClusterFacts(resolution float64, minCommunitySize int) (ClusterResult, error) {
+	if minCommunitySize <= 0 {
+		minCommunitySize = 2
+	}
+
+	// GraphQLite's louvain() returns a single JSON string of the form:
+	//   [{"column_0": [{"node_id": N, "user_id": null, "community": N}, ...]}]
+	//
+	// We use a SQL CTE to:
+	//   1. Unpack the nested array via json_each.
+	//   2. Join node_labels to keep only Fact nodes.
+	//   3. Join node_props_text to resolve node_id → fact path.
+	//
+	// The property_keys table maps key names to integer IDs; we use a subquery
+	// to find the key_id for "path" rather than hardcoding the integer.
+	query := fmt.Sprintf(`
+		WITH louvain_raw AS (
+			SELECT
+				CAST(json_extract(item.value, '$.node_id') AS INTEGER) AS node_id,
+				CAST(json_extract(item.value, '$.community') AS INTEGER) AS community
+			FROM (SELECT cypher('RETURN louvain(%f)') AS result) r,
+			json_each(json_extract(r.result, '$[0].column_0')) item
+		)
+		SELECT lr.community, npt.value AS path
+		FROM louvain_raw lr
+		JOIN node_labels nl ON nl.node_id = lr.node_id AND nl.label = 'Fact'
+		JOIN node_props_text npt ON npt.node_id = lr.node_id
+			AND npt.key_id = (SELECT id FROM property_keys WHERE key = 'path' LIMIT 1)
+	`, resolution)
+
+	rows, err := idx.db.Query(query)
+	if err != nil {
+		return ClusterResult{}, fmt.Errorf("louvain: %w", err)
+	}
+	defer rows.Close()
+
+	communities := map[int][]string{}
+	for rows.Next() {
+		var community int
+		var path string
+		if err := rows.Scan(&community, &path); err != nil {
+			continue
+		}
+		communities[community] = append(communities[community], path)
+	}
+	if err := rows.Err(); err != nil {
+		return ClusterResult{}, fmt.Errorf("louvain rows: %w", err)
+	}
+
+	// Post-filter: exclude deleted facts (check existence in `facts` table),
+	// then apply minCommunitySize.
+	allPaths := make([]string, 0)
+	for _, members := range communities {
+		allPaths = append(allPaths, members...)
+	}
+	existingPaths := make(map[string]bool, len(allPaths))
+	if len(allPaths) > 0 {
+		placeholders := make([]string, len(allPaths))
+		args := make([]interface{}, len(allPaths))
+		for i, p := range allPaths {
+			placeholders[i] = "?"
+			args[i] = p
+		}
+		qry := `SELECT path FROM facts WHERE path IN (` + strings.Join(placeholders, ",") + `)`
+		eRows, err := idx.db.Query(qry, args...)
+		if err == nil {
+			for eRows.Next() {
+				var p string
+				if eRows.Scan(&p) == nil {
+					existingPaths[p] = true
+				}
+			}
+			eRows.Close()
+		}
+	}
+
+	result := ClusterResult{Clusters: map[int][]string{}}
+	for id, members := range communities {
+		var alive []string
+		for _, path := range members {
+			if existingPaths[path] {
+				alive = append(alive, path)
+			}
+		}
+		if len(alive) < minCommunitySize {
+			result.Noise = append(result.Noise, alive...)
+		} else {
+			result.Clusters[id] = alive
+		}
+	}
+
+	return result, nil
+}
+
 // execer abstracts *sql.DB and *sql.Tx for transactional graph operations.
 type execer interface {
 	Exec(query string, args ...any) (sql.Result, error)
