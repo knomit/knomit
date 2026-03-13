@@ -115,6 +115,22 @@ func New(path string, opts ...Option) (*Index, error) {
 		return nil, fmt.Errorf("init schema_version: %w", err)
 	}
 
+	// Migrate schema: ensure GraphQLite EAV tables are initialized and bump
+	// the version to 4. GraphQLite creates its EAV tables on the first
+	// cypher() call, so we trigger that here.
+	var currentVersion string
+	_ = db.QueryRow(`SELECT value FROM meta WHERE key='schema_version'`).Scan(&currentVersion)
+	if currentVersion == "" || currentVersion < "4" {
+		if _, err := db.Exec(`SELECT cypher('RETURN 1')`); err != nil {
+			db.Close()
+			return nil, fmt.Errorf("init graphqlite: %w", err)
+		}
+		if _, err := db.Exec(`INSERT OR REPLACE INTO meta(key, value) VALUES ('schema_version', '4')`); err != nil {
+			db.Close()
+			return nil, fmt.Errorf("update schema_version: %w", err)
+		}
+	}
+
 	return &Index{db: db}, nil
 }
 

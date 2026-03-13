@@ -25,6 +25,33 @@ func graphqliteTestPath(t *testing.T) string {
 	return filepath.Join(repoRoot, "lib", runtime.GOOS+"-"+runtime.GOARCH, "graphqlite"+ext)
 }
 
+func TestSchemaMigrationV3ToV4(t *testing.T) {
+	idx, err := New(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer idx.Close()
+
+	var version string
+	err = idx.db.QueryRow(`SELECT value FROM meta WHERE key='schema_version'`).Scan(&version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if version != "4" {
+		t.Fatalf("expected schema_version=4, got %q", version)
+	}
+
+	// Verify GraphQLite EAV tables exist.
+	tables := []string{"nodes", "edges"}
+	for _, table := range tables {
+		var name string
+		err = idx.db.QueryRow(`SELECT name FROM sqlite_master WHERE type='table' AND name=?`, table).Scan(&name)
+		if err != nil {
+			t.Fatalf("expected GraphQLite table %q to exist: %v", table, err)
+		}
+	}
+}
+
 func TestNewWithGraphQLite(t *testing.T) {
 	idx, err := New(":memory:")
 	if err != nil {
