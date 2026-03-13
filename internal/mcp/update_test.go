@@ -6,19 +6,34 @@ import (
 	"testing"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
+	"go.uber.org/mock/gomock"
 )
 
 func TestUpdateMergesFields(t *testing.T) {
-	store := newMockStore()
+	ctrl := gomock.NewController(t)
+	gs := NewMockGitStore(ctrl)
+	idx := NewMockSearchIndex(ctrl)
+
 	factContent := SerializeFact(Fact{
 		Path: "know/foo.md", Title: "Original Title", Body: "Original body.",
 		Domain: []string{"testing"}, Confidence: 0.7, Sources: 1,
 		Entities: []string{}, Refs: []string{"https://old.ref"},
 	})
-	store.files["know/foo.md"] = factContent
 
-	idx := &mockIndex{}
-	handler := UpdateHandler(store, idx)
+	var writtenContent string
+
+	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
+	gs.EXPECT().FileExists("know/foo.md").Return(true, nil)
+	gs.EXPECT().ReadFile("know/foo.md").Return(factContent, nil)
+	gs.EXPECT().WriteFile("know/foo.md", gomock.Any(), gomock.Any()).DoAndReturn(func(path, content, msg string) error {
+		writtenContent = content
+		return nil
+	})
+	gs.EXPECT().HeadCommit().Return("abc123def456", nil)
+	gs.EXPECT().Tag(gomock.Any()).Return(nil)
+	idx.EXPECT().Upsert(gomock.Any()).Return(nil)
+
+	handler := UpdateHandler(gs, idx)
 
 	newBody := "Updated body."
 	newConf := 0.95
@@ -43,12 +58,11 @@ func TestUpdateMergesFields(t *testing.T) {
 	}
 
 	// Verify file was updated.
-	written, ok := store.written["know/foo.md"]
-	if !ok {
+	if writtenContent == "" {
 		t.Fatal("expected know/foo.md to be written")
 	}
 
-	updatedFact, err := ParseFact("know/foo.md", written)
+	updatedFact, err := ParseFact("know/foo.md", writtenContent)
 	if err != nil {
 		t.Fatalf("parse updated fact: %v", err)
 	}
@@ -78,9 +92,14 @@ func TestUpdateMergesFields(t *testing.T) {
 }
 
 func TestUpdateFileNotFound(t *testing.T) {
-	store := newMockStore()
-	idx := &mockIndex{}
-	handler := UpdateHandler(store, idx)
+	ctrl := gomock.NewController(t)
+	gs := NewMockGitStore(ctrl)
+	idx := NewMockSearchIndex(ctrl)
+
+	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
+	gs.EXPECT().FileExists("know/nonexistent.md").Return(false, nil)
+
+	handler := UpdateHandler(gs, idx)
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
@@ -99,16 +118,30 @@ func TestUpdateFileNotFound(t *testing.T) {
 }
 
 func TestUpdateRefsAppended(t *testing.T) {
-	store := newMockStore()
+	ctrl := gomock.NewController(t)
+	gs := NewMockGitStore(ctrl)
+	idx := NewMockSearchIndex(ctrl)
+
 	factContent := SerializeFact(Fact{
 		Path: "know/refs.md", Title: "Refs Test", Body: "Body.",
 		Domain: []string{}, Confidence: 0.8, Sources: 1,
 		Entities: []string{}, Refs: []string{"https://existing.ref"},
 	})
-	store.files["know/refs.md"] = factContent
 
-	idx := &mockIndex{}
-	handler := UpdateHandler(store, idx)
+	var writtenContent string
+
+	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
+	gs.EXPECT().FileExists("know/refs.md").Return(true, nil)
+	gs.EXPECT().ReadFile("know/refs.md").Return(factContent, nil)
+	gs.EXPECT().WriteFile("know/refs.md", gomock.Any(), gomock.Any()).DoAndReturn(func(path, content, msg string) error {
+		writtenContent = content
+		return nil
+	})
+	gs.EXPECT().HeadCommit().Return("abc123def456", nil)
+	gs.EXPECT().Tag(gomock.Any()).Return(nil)
+	idx.EXPECT().Upsert(gomock.Any()).Return(nil)
+
+	handler := UpdateHandler(gs, idx)
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
@@ -127,8 +160,7 @@ func TestUpdateRefsAppended(t *testing.T) {
 		t.Fatalf("tool error: %v", result.Content)
 	}
 
-	written := store.written["know/refs.md"]
-	updatedFact, err := ParseFact("know/refs.md", written)
+	updatedFact, err := ParseFact("know/refs.md", writtenContent)
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}

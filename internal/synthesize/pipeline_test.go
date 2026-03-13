@@ -2,15 +2,32 @@ package synthesize
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
+	"go.uber.org/mock/gomock"
 	"knomit/internal/store"
 )
 
 func TestRunPruneOnly(t *testing.T) {
-	gs := newMockGitStore()
-	gs.files["know/test/keep.md"] = factContent("Keep fact", "This should be kept.")
-	gs.files["know/test/forget.md"] = factContent("Forget fact", "This is obsolete.")
+	ctrl := gomock.NewController(t)
+
+	gs := NewMockGitStore(ctrl)
+	idx := NewMockSearchIndex(ctrl)
+	adapter := NewMockLLMAdapter(ctrl)
+
+	files := map[string]string{
+		"know/test/keep.md":   factContent("Keep fact", "This should be kept."),
+		"know/test/forget.md": factContent("Forget fact", "This is obsolete."),
+	}
+
+	gs.EXPECT().ListAll().Return([]string{"know/test/keep.md", "know/test/forget.md"}, nil)
+	gs.EXPECT().ReadFile(gomock.Any()).DoAndReturn(func(path string) (string, error) {
+		if c, ok := files[path]; ok {
+			return c, nil
+		}
+		return "", fmt.Errorf("not found: %s", path)
+	}).AnyTimes()
 
 	llmResp := `{
   "decisions": [
@@ -19,14 +36,18 @@ func TestRunPruneOnly(t *testing.T) {
   ],
   "merges": []
 }`
-	adapter := &mockLLM{response: llmResp}
-	idx := &mockSearchIndex{}
+	adapter.EXPECT().Complete(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(llmResp, nil)
+
+	// forget.md: DeleteFile + idx.Delete
+	gs.EXPECT().DeleteFile("know/test/forget.md", gomock.Any()).Return(nil)
+	idx.EXPECT().Delete("know/test/forget.md").Return(nil)
+
+	// Tag
+	gs.EXPECT().Tag("learn/synthesize-smoke-prune-prune").Return(nil)
 
 	recipe := Recipe{
-		Name: "smoke-prune",
-		Steps: []RecipeStep{
-			{Mode: "prune"},
-		},
+		Name:  "smoke-prune",
+		Steps: []RecipeStep{{Mode: "prune"}},
 	}
 
 	var phases []string
@@ -47,32 +68,22 @@ func TestRunPruneOnly(t *testing.T) {
 	if !doneSeen {
 		t.Errorf("expected 'done' phase; phases: %v", phases)
 	}
-
-	// forget.md should be deleted.
-	forgetDeleted := false
-	for _, d := range gs.deleted {
-		if d == "know/test/forget.md" {
-			forgetDeleted = true
-		}
-	}
-	if !forgetDeleted {
-		t.Errorf("expected know/test/forget.md to be deleted; deleted: %v", gs.deleted)
-	}
 }
 
 func TestRunDistillNoEmbeddings(t *testing.T) {
-	gs := newMockGitStore()
-	idx := &mockSearchIndex{} // empty index → no facts → early return
+	ctrl := gomock.NewController(t)
+
+	gs := NewMockGitStore(ctrl)
+	idx := NewMockSearchIndex(ctrl)
+	adapter := NewMockLLMAdapter(ctrl)
+
+	// Empty index → no facts → distill returns early without calling LLM.
+	idx.EXPECT().Search(gomock.Any()).Return([]store.SearchResult{}, nil)
 
 	recipe := Recipe{
-		Name: "smoke-distill",
-		Steps: []RecipeStep{
-			{Mode: "distill"},
-		},
+		Name:  "smoke-distill",
+		Steps: []RecipeStep{{Mode: "distill"}},
 	}
-
-	// LLM should not be called since there are no facts.
-	adapter := &mockLLM{response: "should not be called"}
 
 	var phases []string
 	err := Run(context.Background(), gs, idx, nil, adapter, recipe, func(e ProgressEvent) {
@@ -94,35 +105,35 @@ func TestRunDistillNoEmbeddings(t *testing.T) {
 }
 
 func TestRunUnknownMode(t *testing.T) {
-	gs := newMockGitStore()
-	idx := &mockSearchIndex{}
+	ctrl := gomock.NewController(t)
+
+	gs := NewMockGitStore(ctrl)
+	idx := NewMockSearchIndex(ctrl)
+	adapter := NewMockLLMAdapter(ctrl)
+
 	recipe := Recipe{
 		Name:  "bad",
 		Steps: []RecipeStep{{Mode: "unknown"}},
 	}
-	err := Run(context.Background(), gs, idx, nil, &mockLLM{}, recipe, nil)
+	err := Run(context.Background(), gs, idx, nil, adapter, recipe, nil)
 	if err == nil {
 		t.Error("expected error for unknown mode, got nil")
 	}
 }
 
-// mockIndexWithEmbeddings wraps mockSearchIndex and adds GetEmbedding support.
-type mockIndexWithEmbeddings struct {
-	mockSearchIndex
-	results    []store.SearchResult
-	embeddings map[string][]float32
-}
-
-func (m *mockIndexWithEmbeddings) Search(_ store.SearchQuery) ([]store.SearchResult, error) {
-	return m.results, nil
-}
-
-func (m *mockIndexWithEmbeddings) GetEmbedding(path string) ([]float32, error) {
-	return m.embeddings[path], nil
-}
-
 func TestRunDistillWithFacts(t *testing.T) {
-	gs := newMockGitStore()
+	ctrl := gomock.NewController(t)
+
+	gs := NewMockGitStore(ctrl)
+	idx := NewMockSearchIndex(ctrl)
+	adapter := NewMockLLMAdapter(ctrl)
+
+	searchResults := []store.SearchResult{
+		{FactRecord: store.FactRecord{Path: "know/test/a.md", Title: "A fact", Body: "A body.", Domain: []string{"testing"}, Confidence: 0.8, Sources: 1}},
+		{FactRecord: store.FactRecord{Path: "know/test/b.md", Title: "B fact", Body: "B body.", Domain: []string{"testing"}, Confidence: 0.8, Sources: 1}},
+	}
+	// No embedder, no PairwiseDistancer → distillClusterFromIndex returns nil → single cluster fallback.
+	idx.EXPECT().Search(gomock.Any()).Return(searchResults, nil)
 
 	llmResp := `{
   "synthesize": [
@@ -138,15 +149,23 @@ func TestRunDistillWithFacts(t *testing.T) {
   ],
   "forget": ["know/test/a.md"]
 }`
-	adapter := &mockLLM{response: llmResp}
+	adapter.EXPECT().Complete(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(llmResp, nil)
 
-	idx := &mockIndexWithEmbeddings{
-		results: []store.SearchResult{
-			{FactRecord: store.FactRecord{Path: "know/test/a.md", Title: "A fact", Body: "A body.", Domain: []string{"testing"}, Confidence: 0.8, Sources: 1}},
-			{FactRecord: store.FactRecord{Path: "know/test/b.md", Title: "B fact", Body: "B body.", Domain: []string{"testing"}, Confidence: 0.8, Sources: 1}},
-		},
-		embeddings: map[string][]float32{}, // no embeddings → single cluster path
-	}
+	// Write synthesized fact
+	var synthWritten bool
+	gs.EXPECT().WriteFile("know/test/synth.md", gomock.Any(), gomock.Any()).DoAndReturn(func(path, content, msg string) error {
+		synthWritten = true
+		return nil
+	})
+	gs.EXPECT().HeadCommit().Return("deadbeef", nil)
+	idx.EXPECT().Upsert(gomock.Any()).Return(nil)
+
+	// Delete forgotten fact
+	gs.EXPECT().DeleteFile("know/test/a.md", gomock.Any()).Return(nil)
+	idx.EXPECT().Delete("know/test/a.md").Return(nil)
+
+	// Tag
+	gs.EXPECT().Tag("learn/synthesize-distill-with-facts-distill").Return(nil)
 
 	recipe := Recipe{
 		Name:  "distill-with-facts",
@@ -161,31 +180,8 @@ func TestRunDistillWithFacts(t *testing.T) {
 		t.Fatalf("Run distill: %v", err)
 	}
 
-	// Synthesized fact should be written to git.
-	if _, ok := gs.written["know/test/synth.md"]; !ok {
-		t.Errorf("expected know/test/synth.md to be written; written: %v", gs.written)
-	}
-
-	// Forgotten fact should be deleted.
-	aDeleted := false
-	for _, d := range gs.deleted {
-		if d == "know/test/a.md" {
-			aDeleted = true
-		}
-	}
-	if !aDeleted {
-		t.Errorf("expected know/test/a.md to be deleted; deleted: %v", gs.deleted)
-	}
-
-	// Tag should be applied.
-	tagFound := false
-	for _, tag := range gs.tags {
-		if tag == "learn/synthesize-distill-with-facts-distill" {
-			tagFound = true
-		}
-	}
-	if !tagFound {
-		t.Errorf("expected distill tag; tags: %v", gs.tags)
+	if !synthWritten {
+		t.Errorf("expected know/test/synth.md to be written")
 	}
 
 	// done event emitted.
@@ -201,14 +197,21 @@ func TestRunDistillWithFacts(t *testing.T) {
 }
 
 func TestRunNilProgress(t *testing.T) {
-	gs := newMockGitStore()
-	idx := &mockSearchIndex{}
+	ctrl := gomock.NewController(t)
+
+	gs := NewMockGitStore(ctrl)
+	idx := NewMockSearchIndex(ctrl)
+	adapter := NewMockLLMAdapter(ctrl)
+
+	// Empty store, no facts — prune returns early after gather (no Tag call).
+	gs.EXPECT().ListAll().Return([]string{}, nil)
+
 	recipe := Recipe{
 		Name:  "nil-progress",
 		Steps: []RecipeStep{{Mode: "prune"}},
 	}
 	// Empty store, no facts — should complete without panic.
-	err := Run(context.Background(), gs, idx, nil, &mockLLM{response: `{"decisions":[],"merges":[]}`}, recipe, nil)
+	err := Run(context.Background(), gs, idx, nil, adapter, recipe, nil)
 	if err != nil {
 		t.Fatalf("Run with nil progress: %v", err)
 	}

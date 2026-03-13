@@ -7,18 +7,35 @@ import (
 	"testing"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
+	"go.uber.org/mock/gomock"
 )
 
 func TestForgetDeletesFile(t *testing.T) {
-	store := newMockStore()
-	store.files["know/foo.md"] = SerializeFact(Fact{
-		Path: "know/foo.md", Title: "Foo", Body: "Body.",
-		Domain: []string{}, Confidence: 0.9, Sources: 1,
-		Entities: []string{}, Refs: []string{},
+	ctrl := gomock.NewController(t)
+	gs := NewMockGitStore(ctrl)
+	idx := NewMockSearchIndex(ctrl)
+
+	var deletedFile string
+	var deletedFromIndex string
+	var tagSet string
+
+	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
+	gs.EXPECT().FileExists("know/foo.md").Return(true, nil)
+	gs.EXPECT().DeleteFile("know/foo.md", gomock.Any()).DoAndReturn(func(path, msg string) error {
+		deletedFile = path
+		return nil
+	})
+	gs.EXPECT().HeadCommit().Return("abc123def456", nil)
+	idx.EXPECT().Delete("know/foo.md").DoAndReturn(func(path string) error {
+		deletedFromIndex = path
+		return nil
+	})
+	gs.EXPECT().Tag(gomock.Any()).DoAndReturn(func(name string) error {
+		tagSet = name
+		return nil
 	})
 
-	idx := &mockIndex{}
-	handler := ForgetHandler(store, idx)
+	handler := ForgetHandler(gs, idx)
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
@@ -34,22 +51,22 @@ func TestForgetDeletesFile(t *testing.T) {
 		t.Fatalf("tool error: %v", result.Content)
 	}
 
-	// Verify file was marked for deletion.
-	if len(store.deleted) == 0 || store.deleted[0] != "know/foo.md" {
-		t.Fatalf("expected know/foo.md to be deleted, got: %v", store.deleted)
+	// Verify file was deleted.
+	if deletedFile != "know/foo.md" {
+		t.Fatalf("expected know/foo.md to be deleted, got: %q", deletedFile)
 	}
 
 	// Verify index delete was called.
-	if len(idx.deleted) == 0 || idx.deleted[0] != "know/foo.md" {
-		t.Fatalf("expected index delete for know/foo.md, got: %v", idx.deleted)
+	if deletedFromIndex != "know/foo.md" {
+		t.Fatalf("expected index delete for know/foo.md, got: %q", deletedFromIndex)
 	}
 
 	// Verify tag was set.
-	if len(store.tags) == 0 {
+	if tagSet == "" {
 		t.Fatal("expected forget tag to be set")
 	}
-	if !strings.HasPrefix(store.tags[0], "forget/") {
-		t.Fatalf("tag should start with forget/, got %q", store.tags[0])
+	if !strings.HasPrefix(tagSet, "forget/") {
+		t.Fatalf("tag should start with forget/, got %q", tagSet)
 	}
 
 	// Verify result JSON.
@@ -67,9 +84,14 @@ func TestForgetDeletesFile(t *testing.T) {
 }
 
 func TestForgetFileNotFound(t *testing.T) {
-	store := newMockStore()
-	idx := &mockIndex{}
-	handler := ForgetHandler(store, idx)
+	ctrl := gomock.NewController(t)
+	gs := NewMockGitStore(ctrl)
+	idx := NewMockSearchIndex(ctrl)
+
+	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
+	gs.EXPECT().FileExists("know/nonexistent.md").Return(false, nil)
+
+	handler := ForgetHandler(gs, idx)
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{

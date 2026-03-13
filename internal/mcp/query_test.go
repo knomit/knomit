@@ -6,40 +6,34 @@ import (
 	"testing"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
+	"go.uber.org/mock/gomock"
 )
 
-// capturingIndex wraps mockIndex and records the last SearchQuery received.
-type capturingIndex struct {
-	mockIndex
-	lastQuery SearchQuery
-}
-
-func (c *capturingIndex) Search(q SearchQuery) ([]SearchResult, error) {
-	c.lastQuery = q
-	return c.results, c.searchErr
-}
-
 func TestQueryReturnsResults(t *testing.T) {
-	store := newMockStore()
-	idx := &mockIndex{
-		results: []SearchResult{
-			{
-				FactRecord: FactRecord{
-					Path:       "know/foo.md",
-					Title:      "Foo",
-					Body:       "Foo body.",
-					Domain:     []string{"testing"},
-					Entities:   []string{"foo"},
-					Confidence: 0.9,
-					Sources:    1,
-					Refs:       []string{},
-					CommitHash: "abc123",
-				},
-				Score: 95.0,
+	ctrl := gomock.NewController(t)
+	gs := NewMockGitStore(ctrl)
+	idx := NewMockSearchIndex(ctrl)
+
+	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
+	idx.EXPECT().Sync(gomock.Any()).Return(nil)
+	idx.EXPECT().Search(gomock.Any()).Return([]SearchResult{
+		{
+			FactRecord: FactRecord{
+				Path:       "know/foo.md",
+				Title:      "Foo",
+				Body:       "Foo body.",
+				Domain:     []string{"testing"},
+				Entities:   []string{"foo"},
+				Confidence: 0.9,
+				Sources:    1,
+				Refs:       []string{},
+				CommitHash: "abc123",
 			},
+			Score: 95.0,
 		},
-	}
-	handler := QueryHandler(store, idx)
+	}, nil)
+
+	handler := QueryHandler(gs, idx)
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
@@ -66,9 +60,14 @@ func TestQueryReturnsResults(t *testing.T) {
 }
 
 func TestQueryRequiresFilter(t *testing.T) {
-	store := newMockStore()
-	idx := &mockIndex{}
-	handler := QueryHandler(store, idx)
+	ctrl := gomock.NewController(t)
+	gs := NewMockGitStore(ctrl)
+	idx := NewMockSearchIndex(ctrl)
+
+	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
+	idx.EXPECT().Sync(gomock.Any()).Return(nil)
+
+	handler := QueryHandler(gs, idx)
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{}
@@ -83,9 +82,15 @@ func TestQueryRequiresFilter(t *testing.T) {
 }
 
 func TestQueryEmptyResults(t *testing.T) {
-	store := newMockStore()
-	idx := &mockIndex{results: nil}
-	handler := QueryHandler(store, idx)
+	ctrl := gomock.NewController(t)
+	gs := NewMockGitStore(ctrl)
+	idx := NewMockSearchIndex(ctrl)
+
+	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
+	idx.EXPECT().Sync(gomock.Any()).Return(nil)
+	idx.EXPECT().Search(gomock.Any()).Return(nil, nil)
+
+	handler := QueryHandler(gs, idx)
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
@@ -112,15 +117,22 @@ func TestQueryEmptyResults(t *testing.T) {
 }
 
 func TestQueryDomainFilter(t *testing.T) {
-	store := newMockStore()
-	idx := &capturingIndex{
-		mockIndex: mockIndex{
-			results: []SearchResult{
-				{FactRecord: FactRecord{Path: "know/foo.md", Title: "Foo", Body: "body", Domain: []string{"infra"}, Refs: []string{}}},
-			},
-		},
-	}
-	handler := QueryHandler(store, idx)
+	ctrl := gomock.NewController(t)
+	gs := NewMockGitStore(ctrl)
+	idx := NewMockSearchIndex(ctrl)
+
+	var lastQuery SearchQuery
+
+	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
+	idx.EXPECT().Sync(gomock.Any()).Return(nil)
+	idx.EXPECT().Search(gomock.Any()).DoAndReturn(func(q SearchQuery) ([]SearchResult, error) {
+		lastQuery = q
+		return []SearchResult{
+			{FactRecord: FactRecord{Path: "know/foo.md", Title: "Foo", Body: "body", Domain: []string{"infra"}, Refs: []string{}}},
+		}, nil
+	})
+
+	handler := QueryHandler(gs, idx)
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
@@ -136,21 +148,28 @@ func TestQueryDomainFilter(t *testing.T) {
 	}
 
 	// Verify the domain filter was forwarded to the index.
-	if len(idx.lastQuery.Domain) != 1 || idx.lastQuery.Domain[0] != "infra" {
-		t.Fatalf("expected Domain=[infra] in query, got: %v", idx.lastQuery.Domain)
+	if len(lastQuery.Domain) != 1 || lastQuery.Domain[0] != "infra" {
+		t.Fatalf("expected Domain=[infra] in query, got: %v", lastQuery.Domain)
 	}
 }
 
 func TestQueryEntityFilter(t *testing.T) {
-	store := newMockStore()
-	idx := &capturingIndex{
-		mockIndex: mockIndex{
-			results: []SearchResult{
-				{FactRecord: FactRecord{Path: "know/bar.md", Title: "Bar", Body: "body", Entities: []string{"db"}, Refs: []string{}}},
-			},
-		},
-	}
-	handler := QueryHandler(store, idx)
+	ctrl := gomock.NewController(t)
+	gs := NewMockGitStore(ctrl)
+	idx := NewMockSearchIndex(ctrl)
+
+	var lastQuery SearchQuery
+
+	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
+	idx.EXPECT().Sync(gomock.Any()).Return(nil)
+	idx.EXPECT().Search(gomock.Any()).DoAndReturn(func(q SearchQuery) ([]SearchResult, error) {
+		lastQuery = q
+		return []SearchResult{
+			{FactRecord: FactRecord{Path: "know/bar.md", Title: "Bar", Body: "body", Entities: []string{"db"}, Refs: []string{}}},
+		}, nil
+	})
+
+	handler := QueryHandler(gs, idx)
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
@@ -165,21 +184,28 @@ func TestQueryEntityFilter(t *testing.T) {
 		t.Fatalf("tool error: %v", result.Content)
 	}
 
-	if len(idx.lastQuery.Entities) != 1 || idx.lastQuery.Entities[0] != "db" {
-		t.Fatalf("expected Entities=[db] in query, got: %v", idx.lastQuery.Entities)
+	if len(lastQuery.Entities) != 1 || lastQuery.Entities[0] != "db" {
+		t.Fatalf("expected Entities=[db] in query, got: %v", lastQuery.Entities)
 	}
 }
 
 func TestQueryPathPrefixFilter(t *testing.T) {
-	store := newMockStore()
-	idx := &capturingIndex{
-		mockIndex: mockIndex{
-			results: []SearchResult{
-				{FactRecord: FactRecord{Path: "know/ops/deploy.md", Title: "Deploy", Body: "body", Refs: []string{}}},
-			},
-		},
-	}
-	handler := QueryHandler(store, idx)
+	ctrl := gomock.NewController(t)
+	gs := NewMockGitStore(ctrl)
+	idx := NewMockSearchIndex(ctrl)
+
+	var lastQuery SearchQuery
+
+	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
+	idx.EXPECT().Sync(gomock.Any()).Return(nil)
+	idx.EXPECT().Search(gomock.Any()).DoAndReturn(func(q SearchQuery) ([]SearchResult, error) {
+		lastQuery = q
+		return []SearchResult{
+			{FactRecord: FactRecord{Path: "know/ops/deploy.md", Title: "Deploy", Body: "body", Refs: []string{}}},
+		}, nil
+	})
+
+	handler := QueryHandler(gs, idx)
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
@@ -194,21 +220,28 @@ func TestQueryPathPrefixFilter(t *testing.T) {
 		t.Fatalf("tool error: %v", result.Content)
 	}
 
-	if idx.lastQuery.Path != "know/ops" {
-		t.Fatalf("expected Path=know/ops in query, got: %q", idx.lastQuery.Path)
+	if lastQuery.Path != "know/ops" {
+		t.Fatalf("expected Path=know/ops in query, got: %q", lastQuery.Path)
 	}
 }
 
 func TestQueryMinConfidenceFilter(t *testing.T) {
-	store := newMockStore()
-	idx := &capturingIndex{
-		mockIndex: mockIndex{
-			results: []SearchResult{
-				{FactRecord: FactRecord{Path: "know/sure.md", Title: "Sure", Body: "body", Confidence: 0.95, Refs: []string{}}},
-			},
-		},
-	}
-	handler := QueryHandler(store, idx)
+	ctrl := gomock.NewController(t)
+	gs := NewMockGitStore(ctrl)
+	idx := NewMockSearchIndex(ctrl)
+
+	var lastQuery SearchQuery
+
+	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
+	idx.EXPECT().Sync(gomock.Any()).Return(nil)
+	idx.EXPECT().Search(gomock.Any()).DoAndReturn(func(q SearchQuery) ([]SearchResult, error) {
+		lastQuery = q
+		return []SearchResult{
+			{FactRecord: FactRecord{Path: "know/sure.md", Title: "Sure", Body: "body", Confidence: 0.95, Refs: []string{}}},
+		}, nil
+	})
+
+	handler := QueryHandler(gs, idx)
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
@@ -223,7 +256,7 @@ func TestQueryMinConfidenceFilter(t *testing.T) {
 		t.Fatalf("tool error: %v", result.Content)
 	}
 
-	if idx.lastQuery.MinConfidence != 0.9 {
-		t.Fatalf("expected MinConfidence=0.9 in query, got: %v", idx.lastQuery.MinConfidence)
+	if lastQuery.MinConfidence != 0.9 {
+		t.Fatalf("expected MinConfidence=0.9 in query, got: %v", lastQuery.MinConfidence)
 	}
 }

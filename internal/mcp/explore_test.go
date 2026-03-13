@@ -3,25 +3,37 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
+	"go.uber.org/mock/gomock"
 )
 
 func TestExploreListsEntries(t *testing.T) {
-	store := newMockStore()
-	// Set up directory entries for "know".
-	store.dirEntries["know"] = []DirEntry{
+	ctrl := gomock.NewController(t)
+	gs := NewMockGitStore(ctrl)
+
+	files := map[string]string{
+		"know/foo.md": SerializeFact(Fact{
+			Path: "know/foo.md", Title: "Foo Fact", Body: "Foo body.",
+			Domain: []string{}, Confidence: 0.9, Sources: 1, Entities: []string{}, Refs: []string{},
+		}),
+	}
+
+	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
+	gs.EXPECT().ListDir("know").Return([]DirEntry{
 		{Name: "sub", IsDir: true},
 		{Name: "foo.md", IsDir: false},
-	}
-	// Set up readable foo.md.
-	store.files["know/foo.md"] = SerializeFact(Fact{
-		Path: "know/foo.md", Title: "Foo Fact", Body: "Foo body.",
-		Domain: []string{}, Confidence: 0.9, Sources: 1, Entities: []string{}, Refs: []string{},
-	})
+	}, nil)
+	gs.EXPECT().ReadFile(gomock.Any()).DoAndReturn(func(path string) (string, error) {
+		if content, ok := files[path]; ok {
+			return content, nil
+		}
+		return "", fmt.Errorf("not found: %s", path)
+	}).AnyTimes()
 
-	handler := ExploreHandler(store)
+	handler := ExploreHandler(gs)
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
 		"path": "know",
@@ -51,10 +63,14 @@ func TestExploreListsEntries(t *testing.T) {
 }
 
 func TestExploreDefaultPath(t *testing.T) {
-	store := newMockStore()
-	store.dirEntries["know"] = []DirEntry{}
+	ctrl := gomock.NewController(t)
+	gs := NewMockGitStore(ctrl)
 
-	handler := ExploreHandler(store)
+	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
+	gs.EXPECT().ListDir("know").Return([]DirEntry{}, nil)
+	gs.EXPECT().ReadFile(gomock.Any()).Return("", fmt.Errorf("not found")).AnyTimes()
+
+	handler := ExploreHandler(gs)
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{}
 
@@ -77,54 +93,63 @@ func TestExploreDefaultPath(t *testing.T) {
 }
 
 func TestExploreInheritedFacts(t *testing.T) {
-	store := newMockStore()
+	ctrl := gomock.NewController(t)
+	gs := NewMockGitStore(ctrl)
 
-	// Set up a nested path: know/area/sub with a local fact file.
-	store.dirEntries["know/area/sub"] = []DirEntry{
-		{Name: "local.md", IsDir: false},
+	files := map[string]string{
+		"know/area/sub/local.md": SerializeFact(Fact{
+			Path:       "know/area/sub/local.md",
+			Title:      "Local Fact",
+			Body:       "Local fact, not inherited.",
+			Domain:     []string{},
+			Confidence: 0.9,
+			Sources:    1,
+			Entities:   []string{},
+			Refs:       []string{},
+		}),
+		"know/area/parent.md": SerializeFact(Fact{
+			Path:       "know/area/parent.md",
+			Title:      "Parent Fact",
+			Body:       "Inherited from parent.",
+			Domain:     []string{},
+			Confidence: 0.9,
+			Sources:    1,
+			Entities:   []string{},
+			Refs:       []string{},
+		}),
+		"know/grandparent.md": SerializeFact(Fact{
+			Path:       "know/grandparent.md",
+			Title:      "Grandparent Fact",
+			Body:       "Inherited from grandparent.",
+			Domain:     []string{},
+			Confidence: 0.9,
+			Sources:    1,
+			Entities:   []string{},
+			Refs:       []string{},
+		}),
 	}
-	store.files["know/area/sub/local.md"] = SerializeFact(Fact{
-		Path:       "know/area/sub/local.md",
-		Title:      "Local Fact",
-		Body:       "Local fact, not inherited.",
-		Domain:     []string{},
-		Confidence: 0.9,
-		Sources:    1,
-		Entities:   []string{},
-		Refs:       []string{},
-	})
 
-	// Parent directory "know/area" has a regular fact file (1 level up - inherited).
-	store.dirEntries["know/area"] = []DirEntry{
-		{Name: "parent.md", IsDir: false},
+	dirEntries := map[string][]DirEntry{
+		"know/area/sub": {{Name: "local.md", IsDir: false}},
+		"know/area":     {{Name: "parent.md", IsDir: false}},
+		"know":          {{Name: "grandparent.md", IsDir: false}},
 	}
-	store.files["know/area/parent.md"] = SerializeFact(Fact{
-		Path:       "know/area/parent.md",
-		Title:      "Parent Fact",
-		Body:       "Inherited from parent.",
-		Domain:     []string{},
-		Confidence: 0.9,
-		Sources:    1,
-		Entities:   []string{},
-		Refs:       []string{},
-	})
 
-	// Grandparent directory "know" has a regular fact file (2 levels up - also inherited).
-	store.dirEntries["know"] = []DirEntry{
-		{Name: "grandparent.md", IsDir: false},
-	}
-	store.files["know/grandparent.md"] = SerializeFact(Fact{
-		Path:       "know/grandparent.md",
-		Title:      "Grandparent Fact",
-		Body:       "Inherited from grandparent.",
-		Domain:     []string{},
-		Confidence: 0.9,
-		Sources:    1,
-		Entities:   []string{},
-		Refs:       []string{},
-	})
+	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
+	gs.EXPECT().ListDir(gomock.Any()).DoAndReturn(func(path string) ([]DirEntry, error) {
+		if entries, ok := dirEntries[path]; ok {
+			return entries, nil
+		}
+		return []DirEntry{}, nil
+	}).AnyTimes()
+	gs.EXPECT().ReadFile(gomock.Any()).DoAndReturn(func(path string) (string, error) {
+		if content, ok := files[path]; ok {
+			return content, nil
+		}
+		return "", fmt.Errorf("not found: %s", path)
+	}).AnyTimes()
 
-	handler := ExploreHandler(store)
+	handler := ExploreHandler(gs)
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
 		"path": "know/area/sub",
@@ -190,15 +215,28 @@ func TestExploreInheritedFacts(t *testing.T) {
 }
 
 func TestExploreWithManifest(t *testing.T) {
-	store := newMockStore()
-	store.dirEntries["know/sub"] = []DirEntry{}
-	// Set up manifest at know/sub.md.
-	store.files["know/sub.md"] = SerializeFact(Fact{
-		Path: "know/sub.md", Title: "Sub Manifest", Body: "This is the sub section.",
-		Domain: []string{}, Confidence: 1.0, Sources: 1, Entities: []string{}, Refs: []string{},
-	})
+	ctrl := gomock.NewController(t)
+	gs := NewMockGitStore(ctrl)
 
-	handler := ExploreHandler(store)
+	files := map[string]string{
+		"know/sub.md": SerializeFact(Fact{
+			Path: "know/sub.md", Title: "Sub Manifest", Body: "This is the sub section.",
+			Domain: []string{}, Confidence: 1.0, Sources: 1, Entities: []string{}, Refs: []string{},
+		}),
+	}
+
+	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
+	gs.EXPECT().ListDir(gomock.Any()).DoAndReturn(func(path string) ([]DirEntry, error) {
+		return []DirEntry{}, nil
+	}).AnyTimes()
+	gs.EXPECT().ReadFile(gomock.Any()).DoAndReturn(func(path string) (string, error) {
+		if content, ok := files[path]; ok {
+			return content, nil
+		}
+		return "", fmt.Errorf("not found: %s", path)
+	}).AnyTimes()
+
+	handler := ExploreHandler(gs)
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
 		"path": "know/sub",

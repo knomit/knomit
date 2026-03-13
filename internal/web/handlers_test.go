@@ -8,89 +8,10 @@ import (
 	"strings"
 	"testing"
 
+	"go.uber.org/mock/gomock"
 	"knomit/internal/git"
 	"knomit/internal/store"
 )
-
-// --- mock implementations ---
-
-type mockGitStore struct {
-	listDirFn    func(path string) ([]git.DirEntry, error)
-	readFileFn   func(path string) (string, error)
-	logFn        func(path string) ([]git.LogEntry, error)
-	headCommitFn func() (string, error)
-	branchFn     func() string
-	listAllFn    func() ([]string, error)
-	syncFn       func(remoteAuth interface{}) (git.SyncResult, error)
-}
-
-func (m *mockGitStore) ListDir(path string) ([]git.DirEntry, error) {
-	if m.listDirFn != nil {
-		return m.listDirFn(path)
-	}
-	return nil, nil
-}
-
-func (m *mockGitStore) ReadFile(path string) (string, error) {
-	if m.readFileFn != nil {
-		return m.readFileFn(path)
-	}
-	return "", nil
-}
-
-func (m *mockGitStore) Log(path string) ([]git.LogEntry, error) {
-	if m.logFn != nil {
-		return m.logFn(path)
-	}
-	return nil, nil
-}
-
-func (m *mockGitStore) HeadCommit() (string, error) {
-	if m.headCommitFn != nil {
-		return m.headCommitFn()
-	}
-	return "abc123", nil
-}
-
-func (m *mockGitStore) Branch() string {
-	if m.branchFn != nil {
-		return m.branchFn()
-	}
-	return "agent/test"
-}
-
-func (m *mockGitStore) ListAll() ([]string, error) {
-	if m.listAllFn != nil {
-		return m.listAllFn()
-	}
-	return nil, nil
-}
-
-func (m *mockGitStore) Sync(remoteAuth interface{}) (git.SyncResult, error) {
-	if m.syncFn != nil {
-		return m.syncFn(remoteAuth)
-	}
-	return git.SyncResult{}, nil
-}
-
-type mockSearchIndex struct {
-	searchFn        func(q store.SearchQuery) ([]store.SearchResult, error)
-	getLastCommitFn func() (string, error)
-}
-
-func (m *mockSearchIndex) Search(q store.SearchQuery) ([]store.SearchResult, error) {
-	if m.searchFn != nil {
-		return m.searchFn(q)
-	}
-	return nil, nil
-}
-
-func (m *mockSearchIndex) GetLastCommit() (string, error) {
-	if m.getLastCommitFn != nil {
-		return m.getLastCommitFn()
-	}
-	return "idx123", nil
-}
 
 // --- helpers ---
 
@@ -157,11 +78,10 @@ func TestHandleBrowse(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			gs := &mockGitStore{
-				listDirFn: func(path string) ([]git.DirEntry, error) {
-					return tc.entries, nil
-				},
-			}
+			ctrl := gomock.NewController(t)
+			gs := NewMockGitStore(ctrl)
+			gs.EXPECT().ListDir(gomock.Any()).Return(tc.entries, nil).AnyTimes()
+
 			handler := newTestRouter(gs, nil)
 			rr := doRequest(t, handler, http.MethodGet, tc.query, "")
 
@@ -193,21 +113,24 @@ func TestHandleFact(t *testing.T) {
 	validContent := "---\ndomain: [go]\nconfidence: 0.9\nsources: 1\nentities: [chi]\nrefs: []\n---\n# Chi Router\n\nChi is a router.\n"
 
 	tests := []struct {
-		name       string
-		query      string
-		content    string
-		wantStatus int
-		wantTitle  string
+		name        string
+		query       string
+		content     string
+		expectRead  bool
+		wantStatus  int
+		wantTitle   string
 	}{
 		{
 			name:       "missing path returns 400",
 			query:      "/api/v1/fact",
+			expectRead: false,
 			wantStatus: http.StatusBadRequest,
 		},
 		{
 			name:       "valid path returns parsed fact",
 			query:      "/api/v1/fact?path=know/chi.md",
 			content:    validContent,
+			expectRead: true,
 			wantStatus: http.StatusOK,
 			wantTitle:  "Chi Router",
 		},
@@ -215,11 +138,12 @@ func TestHandleFact(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			gs := &mockGitStore{
-				readFileFn: func(path string) (string, error) {
-					return tc.content, nil
-				},
+			ctrl := gomock.NewController(t)
+			gs := NewMockGitStore(ctrl)
+			if tc.expectRead {
+				gs.EXPECT().ReadFile(gomock.Any()).Return(tc.content, nil)
 			}
+
 			handler := newTestRouter(gs, nil)
 			rr := doRequest(t, handler, http.MethodGet, tc.query, "")
 
@@ -255,35 +179,30 @@ func TestHandleSearch(t *testing.T) {
 	tests := []struct {
 		name       string
 		query      string
-		idx        SearchIndex
+		useIdx     bool
+		idxResults []store.SearchResult
 		wantStatus int
 		wantLen    int
 	}{
 		{
-			name:  "search with q param returns results",
-			query: "/api/v1/search?q=test",
-			idx: &mockSearchIndex{
-				searchFn: func(q store.SearchQuery) ([]store.SearchResult, error) {
-					return results, nil
-				},
-			},
+			name:       "search with q param returns results",
+			query:      "/api/v1/search?q=test",
+			useIdx:     true,
+			idxResults: results,
 			wantStatus: http.StatusOK,
 			wantLen:    1,
 		},
 		{
 			name:       "nil index returns 400",
 			query:      "/api/v1/search?q=test",
-			idx:        nil,
+			useIdx:     false,
 			wantStatus: http.StatusBadRequest,
 		},
 		{
-			name:  "empty results returns empty array",
-			query: "/api/v1/search?q=nomatch",
-			idx: &mockSearchIndex{
-				searchFn: func(q store.SearchQuery) ([]store.SearchResult, error) {
-					return nil, nil
-				},
-			},
+			name:       "empty results returns empty array",
+			query:      "/api/v1/search?q=nomatch",
+			useIdx:     true,
+			idxResults: nil,
 			wantStatus: http.StatusOK,
 			wantLen:    0,
 		},
@@ -291,8 +210,17 @@ func TestHandleSearch(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			gs := &mockGitStore{}
-			handler := newTestRouter(gs, tc.idx)
+			ctrl := gomock.NewController(t)
+			gs := NewMockGitStore(ctrl)
+
+			var idx SearchIndex
+			if tc.useIdx {
+				mockIdx := NewMockSearchIndex(ctrl)
+				mockIdx.EXPECT().Search(gomock.Any()).Return(tc.idxResults, nil)
+				idx = mockIdx
+			}
+
+			handler := newTestRouter(gs, idx)
 			rr := doRequest(t, handler, http.MethodGet, tc.query, "")
 
 			if rr.Code != tc.wantStatus {
@@ -354,11 +282,10 @@ func TestHandleHistory(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			gs := &mockGitStore{
-				logFn: func(path string) ([]git.LogEntry, error) {
-					return tc.entries, nil
-				},
-			}
+			ctrl := gomock.NewController(t)
+			gs := NewMockGitStore(ctrl)
+			gs.EXPECT().Log(gomock.Any()).Return(tc.entries, nil)
+
 			handler := newTestRouter(gs, nil)
 			rr := doRequest(t, handler, http.MethodGet, tc.query, "")
 
@@ -418,16 +345,16 @@ func TestHandleStatus(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			gs := &mockGitStore{
-				headCommitFn: func() (string, error) { return tc.head, nil },
-				branchFn:     func() string { return tc.branch },
-			}
+			ctrl := gomock.NewController(t)
+			gs := NewMockGitStore(ctrl)
+			gs.EXPECT().HeadCommit().Return(tc.head, nil)
+			gs.EXPECT().Branch().Return(tc.branch)
 
 			var idx SearchIndex
 			if tc.hasIdx {
-				idx = &mockSearchIndex{
-					getLastCommitFn: func() (string, error) { return tc.indexCommit, nil },
-				}
+				mockIdx := NewMockSearchIndex(ctrl)
+				mockIdx.EXPECT().GetLastCommit().Return(tc.indexCommit, nil)
+				idx = mockIdx
 			}
 
 			handler := newTestRouter(gs, idx)

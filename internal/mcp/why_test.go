@@ -3,25 +3,31 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
+	"go.uber.org/mock/gomock"
 )
 
 func TestWhyReturnsHistory(t *testing.T) {
-	store := newMockStore()
+	ctrl := gomock.NewController(t)
+	gs := NewMockGitStore(ctrl)
+
 	factContent := SerializeFact(Fact{
 		Path: "know/foo.md", Title: "Foo", Body: "Body.",
 		Domain: []string{"testing"}, Confidence: 0.9, Sources: 1,
 		Entities: []string{}, Refs: []string{},
 	})
-	store.files["know/foo.md"] = factContent
-	store.logEntries["know/foo.md"] = []LogEntry{
-		{Commit: "deadbeef", Date: "2024-01-01T00:00:00Z", Message: "learn: first"},
-	}
-	store.tags = []string{"learn/first"}
 
-	handler := WhyHandler(store)
+	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
+	gs.EXPECT().ReadFile("know/foo.md").Return(factContent, nil)
+	gs.EXPECT().Log("know/foo.md").Return([]LogEntry{
+		{Commit: "deadbeef", Date: "2024-01-01T00:00:00Z", Message: "learn: first"},
+	}, nil)
+	gs.EXPECT().TagsContaining("deadbeef").Return([]string{"learn/first"}, nil)
+
+	handler := WhyHandler(gs)
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
 		"file": "know/foo.md",
@@ -62,8 +68,12 @@ func TestWhyReturnsHistory(t *testing.T) {
 }
 
 func TestWhyRequiresFile(t *testing.T) {
-	store := newMockStore()
-	handler := WhyHandler(store)
+	ctrl := gomock.NewController(t)
+	gs := NewMockGitStore(ctrl)
+
+	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
+
+	handler := WhyHandler(gs)
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{}
 
@@ -77,8 +87,13 @@ func TestWhyRequiresFile(t *testing.T) {
 }
 
 func TestWhyFileNotFound(t *testing.T) {
-	store := newMockStore()
-	handler := WhyHandler(store)
+	ctrl := gomock.NewController(t)
+	gs := NewMockGitStore(ctrl)
+
+	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
+	gs.EXPECT().ReadFile("know/nonexistent.md").Return("", fmt.Errorf("not found"))
+
+	handler := WhyHandler(gs)
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
 		"file": "know/nonexistent.md",

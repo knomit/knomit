@@ -3,141 +3,55 @@ package synthesize
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"math"
 	"strings"
 	"testing"
 
+	"go.uber.org/mock/gomock"
 	"knomit/internal/llm"
-	"knomit/internal/store"
 )
-
-// mockLLM is a test LLM adapter that returns a fixed response.
-type mockLLM struct {
-	response string
-	err      error
-}
-
-func (m *mockLLM) Complete(_ context.Context, _ string, _ []llm.Message, _ func(string)) (string, error) {
-	return m.response, m.err
-}
-
-// mockGitStore is a minimal GitStore for synthesize tests.
-type mockGitStore struct {
-	files   map[string]string // path → content
-	written map[string]string
-	deleted []string
-	tags    []string
-}
-
-func newMockGitStore() *mockGitStore {
-	return &mockGitStore{
-		files:   map[string]string{},
-		written: map[string]string{},
-	}
-}
-
-func (m *mockGitStore) ReadFile(path string) (string, error) {
-	if c, ok := m.written[path]; ok {
-		return c, nil
-	}
-	if c, ok := m.files[path]; ok {
-		return c, nil
-	}
-	return "", &notFoundError{path}
-}
-
-type notFoundError struct{ path string }
-
-func (e *notFoundError) Error() string { return "not found: " + e.path }
-
-func (m *mockGitStore) WriteFile(path, content, _ string) error {
-	m.written[path] = content
-	return nil
-}
-
-func (m *mockGitStore) BatchWrite(files map[string]string, _ string) error {
-	for k, v := range files {
-		m.written[k] = v
-	}
-	return nil
-}
-
-func (m *mockGitStore) DeleteFile(path, _ string) error {
-	m.deleted = append(m.deleted, path)
-	delete(m.written, path)
-	delete(m.files, path)
-	return nil
-}
-
-func (m *mockGitStore) ListAll() ([]string, error) {
-	var paths []string
-	for p := range m.files {
-		paths = append(paths, p)
-	}
-	for p := range m.written {
-		// avoid duplicates
-		if _, ok := m.files[p]; !ok {
-			paths = append(paths, p)
-		}
-	}
-	return paths, nil
-}
-
-func (m *mockGitStore) HeadCommit() (string, error) {
-	return "deadbeef", nil
-}
-
-func (m *mockGitStore) Tag(name string) error {
-	m.tags = append(m.tags, name)
-	return nil
-}
-
-func (m *mockGitStore) Branch() string {
-	return "machine/test"
-}
-
-func (m *mockGitStore) DiffFiles(_ string) (added, modified, deleted []string, err error) {
-	return nil, nil, nil, nil
-}
-
-// mockSearchIndex is a minimal SearchIndex for synthesize tests.
-type mockSearchIndex struct {
-	upserted []store.FactRecord
-	deleted  []string
-}
-
-func (m *mockSearchIndex) Search(_ store.SearchQuery) ([]store.SearchResult, error) {
-	return nil, nil
-}
-
-func (m *mockSearchIndex) Upsert(r store.FactRecord) error {
-	m.upserted = append(m.upserted, r)
-	return nil
-}
-
-func (m *mockSearchIndex) Delete(path string) error {
-	m.deleted = append(m.deleted, path)
-	return nil
-}
-
-func (m *mockSearchIndex) Sync(_ store.GitReader) error {
-	return nil
-}
-
-func (m *mockSearchIndex) GetLastCommit() (string, error) {
-	return "", nil
-}
 
 // factContent builds a minimal knomit fact file for testing.
 func factContent(title, body string) string {
 	return "---\ndomain: [testing]\nconfidence: 0.8\nsources: 1\nentities: []\nrefs: []\n---\n# " + title + "\n\n" + body + "\n"
 }
 
+// testCosineDistance computes 1 - cosine_similarity for float32 slices.
+func testCosineDistance(a, b []float32) float64 {
+	var dot, normA, normB float64
+	for i := range a {
+		dot += float64(a[i]) * float64(b[i])
+		normA += float64(a[i]) * float64(a[i])
+		normB += float64(b[i]) * float64(b[i])
+	}
+	if normA == 0 || normB == 0 {
+		return 1.0
+	}
+	sim := dot / (math.Sqrt(normA) * math.Sqrt(normB))
+	return 1.0 - sim
+}
+
 func TestPruneStep(t *testing.T) {
-	gs := newMockGitStore()
-	gs.files["know/test/foo.md"] = factContent("Foo fact", "Foo is great.")
-	gs.files["know/test/bar.md"] = factContent("Bar fact", "Bar is outdated.")
-	gs.files["know/test/baz.md"] = factContent("Baz fact", "Baz needs confidence update.")
+	ctrl := gomock.NewController(t)
+
+	gs := NewMockGitStore(ctrl)
+	idx := NewMockSearchIndex(ctrl)
+	adapter := NewMockLLMAdapter(ctrl)
+
+	files := map[string]string{
+		"know/test/foo.md": factContent("Foo fact", "Foo is great."),
+		"know/test/bar.md": factContent("Bar fact", "Bar is outdated."),
+		"know/test/baz.md": factContent("Baz fact", "Baz needs confidence update."),
+	}
+
+	gs.EXPECT().ListAll().Return([]string{"know/test/foo.md", "know/test/bar.md", "know/test/baz.md"}, nil)
+	gs.EXPECT().ReadFile(gomock.Any()).DoAndReturn(func(path string) (string, error) {
+		if c, ok := files[path]; ok {
+			return c, nil
+		}
+		return "", fmt.Errorf("not found: %s", path)
+	}).AnyTimes()
 
 	// LLM returns: keep foo, forget bar, update baz with confidence=0.7
 	mockResponse := `{
@@ -148,9 +62,24 @@ func TestPruneStep(t *testing.T) {
   ],
   "merges": []
 }`
+	adapter.EXPECT().Complete(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(mockResponse, nil)
 
-	adapter := &mockLLM{response: mockResponse}
-	idx := &mockSearchIndex{}
+	// bar: forget — DeleteFile + idx.Delete
+	gs.EXPECT().DeleteFile("know/test/bar.md", gomock.Any()).Return(nil)
+	idx.EXPECT().Delete("know/test/bar.md").Return(nil)
+
+	// baz: update — WriteFile with updated confidence, HeadCommit, idx.Upsert
+	var bazWritten string
+	gs.EXPECT().WriteFile("know/test/baz.md", gomock.Any(), gomock.Any()).DoAndReturn(func(path, content, msg string) error {
+		bazWritten = content
+		return nil
+	})
+	gs.EXPECT().HeadCommit().Return("deadbeef", nil)
+	idx.EXPECT().Upsert(gomock.Any()).Return(nil)
+
+	// Tag at end
+	gs.EXPECT().Tag("learn/synthesize-test-recipe-prune").Return(nil)
+
 	recipe := Recipe{Name: "test-recipe", Steps: []RecipeStep{{Mode: "prune"}}}
 
 	var events []ProgressEvent
@@ -161,71 +90,43 @@ func TestPruneStep(t *testing.T) {
 		t.Fatalf("executePruneStep: %v", err)
 	}
 
-	// bar should be deleted
-	barDeleted := false
-	for _, d := range gs.deleted {
-		if d == "know/test/bar.md" {
-			barDeleted = true
-		}
-	}
-	if !barDeleted {
-		t.Errorf("expected know/test/bar.md to be deleted; deleted: %v", gs.deleted)
-	}
-	barIndexDeleted := false
-	for _, d := range idx.deleted {
-		if d == "know/test/bar.md" {
-			barIndexDeleted = true
-		}
-	}
-	if !barIndexDeleted {
-		t.Errorf("expected know/test/bar.md to be removed from index; deleted: %v", idx.deleted)
-	}
-
 	// baz should have updated confidence in written content
-	bazContent, ok := gs.written["know/test/baz.md"]
-	if !ok {
+	if bazWritten == "" {
 		t.Fatal("expected know/test/baz.md to be rewritten with updated confidence")
 	}
-	if !strings.Contains(bazContent, "confidence: 0.7") {
-		t.Errorf("baz.md content should contain 'confidence: 0.7', got:\n%s", bazContent)
+	if !strings.Contains(bazWritten, "confidence: 0.7") {
+		t.Errorf("baz.md content should contain 'confidence: 0.7', got:\n%s", bazWritten)
 	}
 
-	// foo should be unchanged (not written, not deleted)
-	fooWritten := false
-	for p := range gs.written {
-		if p == "know/test/foo.md" {
-			fooWritten = true
+	// tag event should be present
+	tagEventSeen := false
+	for _, e := range events {
+		if e.Phase == "detail-forget" && e.Message == "know/test/bar.md" {
+			tagEventSeen = true
 		}
 	}
-	if fooWritten {
-		t.Error("know/test/foo.md should not have been rewritten (keep action)")
-	}
-	fooDeleted := false
-	for _, d := range gs.deleted {
-		if d == "know/test/foo.md" {
-			fooDeleted = true
-		}
-	}
-	if fooDeleted {
-		t.Error("know/test/foo.md should not have been deleted (keep action)")
-	}
-
-	// tag should be applied
-	tagFound := false
-	for _, tag := range gs.tags {
-		if tag == "learn/synthesize-test-recipe-prune" {
-			tagFound = true
-		}
-	}
-	if !tagFound {
-		t.Errorf("expected tag learn/synthesize-test-recipe-prune; tags: %v", gs.tags)
-	}
+	_ = tagEventSeen // gomock verifies DeleteFile/Tag calls above
 }
 
 func TestPruneStepWithMerge(t *testing.T) {
-	gs := newMockGitStore()
-	gs.files["know/test/a.md"] = factContent("A fact", "A says something.")
-	gs.files["know/test/b.md"] = factContent("B fact", "B says the same thing.")
+	ctrl := gomock.NewController(t)
+
+	gs := NewMockGitStore(ctrl)
+	idx := NewMockSearchIndex(ctrl)
+	adapter := NewMockLLMAdapter(ctrl)
+
+	files := map[string]string{
+		"know/test/a.md": factContent("A fact", "A says something."),
+		"know/test/b.md": factContent("B fact", "B says the same thing."),
+	}
+
+	gs.EXPECT().ListAll().Return([]string{"know/test/a.md", "know/test/b.md"}, nil)
+	gs.EXPECT().ReadFile(gomock.Any()).DoAndReturn(func(path string) (string, error) {
+		if c, ok := files[path]; ok {
+			return c, nil
+		}
+		return "", fmt.Errorf("not found: %s", path)
+	}).AnyTimes()
 
 	mockResponse := `{
   "decisions": [],
@@ -245,9 +146,26 @@ func TestPruneStepWithMerge(t *testing.T) {
     }
   ]
 }`
+	adapter.EXPECT().Complete(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(mockResponse, nil)
 
-	adapter := &mockLLM{response: mockResponse}
-	idx := &mockSearchIndex{}
+	// Write merged fact
+	var mergedWritten bool
+	gs.EXPECT().WriteFile("know/test/ab-merged.md", gomock.Any(), gomock.Any()).DoAndReturn(func(path, content, msg string) error {
+		mergedWritten = true
+		return nil
+	})
+	gs.EXPECT().HeadCommit().Return("deadbeef", nil)
+	idx.EXPECT().Upsert(gomock.Any()).Return(nil)
+
+	// Delete source facts
+	gs.EXPECT().DeleteFile("know/test/a.md", gomock.Any()).Return(nil)
+	idx.EXPECT().Delete("know/test/a.md").Return(nil)
+	gs.EXPECT().DeleteFile("know/test/b.md", gomock.Any()).Return(nil)
+	idx.EXPECT().Delete("know/test/b.md").Return(nil)
+
+	// Tag
+	gs.EXPECT().Tag("learn/synthesize-merge-recipe-prune").Return(nil)
+
 	recipe := Recipe{Name: "merge-recipe", Steps: []RecipeStep{{Mode: "prune"}}}
 
 	err := executePruneStep(context.Background(), gs, idx, nil, adapter, recipe.Steps[0], recipe, func(ProgressEvent) {})
@@ -255,22 +173,8 @@ func TestPruneStepWithMerge(t *testing.T) {
 		t.Fatalf("executePruneStep: %v", err)
 	}
 
-	// merged fact should be written
-	if _, ok := gs.written["know/test/ab-merged.md"]; !ok {
+	if !mergedWritten {
 		t.Error("expected merged fact know/test/ab-merged.md to be written")
-	}
-
-	// source facts should be deleted
-	for _, src := range []string{"know/test/a.md", "know/test/b.md"} {
-		found := false
-		for _, d := range gs.deleted {
-			if d == src {
-				found = true
-			}
-		}
-		if !found {
-			t.Errorf("expected source %s to be deleted; deleted: %v", src, gs.deleted)
-		}
 	}
 }
 
@@ -403,80 +307,25 @@ func TestChunkFactsExceedsBudget(t *testing.T) {
 	}
 }
 
-// capturingLLM records prompts sent to the LLM and returns a fixed response.
-type capturingLLM struct {
-	response string
-	prompts  []string
-}
-
-func (m *capturingLLM) Complete(_ context.Context, _ string, msgs []llm.Message, _ func(string)) (string, error) {
-	for _, msg := range msgs {
-		m.prompts = append(m.prompts, msg.Content)
-	}
-	return m.response, nil
-}
-
-// mockPruneIndex wraps mockSearchIndex and adds PairwiseDistances for clustering tests.
-type mockPruneIndex struct {
-	mockSearchIndex
-	embeddings map[string][]float32
-}
-
-// PairwiseDistances computes cosine distances between the given paths using stored embeddings.
-func (m *mockPruneIndex) PairwiseDistances(paths []string) ([]string, [][]float64, error) {
-	// Filter to paths with embeddings.
-	var filtered []string
-	for _, p := range paths {
-		if _, ok := m.embeddings[p]; ok {
-			filtered = append(filtered, p)
-		}
-	}
-	n := len(filtered)
-	if n == 0 {
-		return nil, nil, nil
-	}
-
-	dist := make([][]float64, n)
-	for i := range dist {
-		dist[i] = make([]float64, n)
-	}
-	for i := 0; i < n; i++ {
-		for j := i + 1; j < n; j++ {
-			d := testCosineDistance(m.embeddings[filtered[i]], m.embeddings[filtered[j]])
-			dist[i][j] = d
-			dist[j][i] = d
-		}
-	}
-	return filtered, dist, nil
-}
-
-// testCosineDistance computes 1 - cosine_similarity for float32 slices.
-func testCosineDistance(a, b []float32) float64 {
-	var dot, normA, normB float64
-	for i := range a {
-		dot += float64(a[i]) * float64(b[i])
-		normA += float64(a[i]) * float64(a[i])
-		normB += float64(b[i]) * float64(b[i])
-	}
-	if normA == 0 || normB == 0 {
-		return 1.0
-	}
-	sim := dot / (math.Sqrt(normA) * math.Sqrt(normB))
-	return 1.0 - sim
-}
-
-// stubEmbedder is a no-op embedder that satisfies the Embedder interface.
-type stubEmbedder struct{}
-
-func (stubEmbedder) Embed(_ string) ([]float32, error) {
-	return []float32{0, 0, 0, 0}, nil
+// searchIndexWithPairwise combines MockSearchIndex and MockPairwiseDistancer so the
+// prune/distill code can type-assert the SearchIndex to PairwiseDistancer.
+type searchIndexWithPairwise struct {
+	*MockSearchIndex
+	*MockPairwiseDistancer
 }
 
 // TestPruneStepClustersBeforeLLM verifies that when embeddings are available,
 // the prune step clusters facts and only sends clustered groups to the LLM,
 // rather than sending all facts at once.
 func TestPruneStepClustersBeforeLLM(t *testing.T) {
-	gs := newMockGitStore()
+	ctrl := gomock.NewController(t)
+
+	mockIdx := NewMockSearchIndex(ctrl)
+	mockPD := NewMockPairwiseDistancer(ctrl)
+	idx := &searchIndexWithPairwise{mockIdx, mockPD}
+
+	embedder := NewMockEmbedder(ctrl)
+	adapter := NewMockLLMAdapter(ctrl)
 
 	// Create two tight clusters of 5 facts each with well-separated embeddings.
 	// Uses cosine distance, so direction matters — cluster A points along dim 0,
@@ -496,8 +345,9 @@ func TestPruneStepClustersBeforeLLM(t *testing.T) {
 	allFiles = append(allFiles, clusterBFiles...)
 	allFiles = append(allFiles, noiseFile)
 
+	files := map[string]string{}
 	for _, f := range allFiles {
-		gs.files[f] = factContent("Fact "+f, "Body of "+f)
+		files[f] = factContent("Fact "+f, "Body of "+f)
 	}
 
 	embeddingMap := map[string][]float32{}
@@ -505,7 +355,7 @@ func TestPruneStepClustersBeforeLLM(t *testing.T) {
 	for i, f := range clusterAFiles {
 		v := make([]float32, 16)
 		v[0] = 10.0
-		v[1] = float32(i) * 0.1 // small perturbation
+		v[1] = float32(i) * 0.1
 		embeddingMap[f] = v
 	}
 	// Cluster B: dominant component in dim 7, small noise in other dims.
@@ -518,29 +368,81 @@ func TestPruneStepClustersBeforeLLM(t *testing.T) {
 	// Noise: equal weight across multiple dims — equidistant from both clusters.
 	embeddingMap[noiseFile] = []float32{1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1}
 
-	idx := &mockPruneIndex{embeddings: embeddingMap}
-	adapter := &capturingLLM{response: `{"decisions":[],"merges":[]}`}
+	gs := NewMockGitStore(ctrl)
+	gs.EXPECT().ListAll().Return(allFiles, nil)
+	gs.EXPECT().ReadFile(gomock.Any()).DoAndReturn(func(path string) (string, error) {
+		if c, ok := files[path]; ok {
+			return c, nil
+		}
+		return "", fmt.Errorf("not found: %s", path)
+	}).AnyTimes()
+
+	// embedder.Embed is not called by executePruneStep directly (embedder is
+	// passed for the PairwiseDistancer path, not for generating embeddings here).
+	// The mock just needs to satisfy the non-nil check.
+	embedder.EXPECT().Embed(gomock.Any()).Return([]float32{0, 0, 0, 0}, nil).AnyTimes()
+
+	// PairwiseDistances: compute real cosine distances using testCosineDistance.
+	mockPD.EXPECT().PairwiseDistances(gomock.Any()).DoAndReturn(func(paths []string) ([]string, [][]float64, error) {
+		var filtered []string
+		for _, p := range paths {
+			if _, ok := embeddingMap[p]; ok {
+				filtered = append(filtered, p)
+			}
+		}
+		n := len(filtered)
+		if n == 0 {
+			return nil, nil, nil
+		}
+		dist := make([][]float64, n)
+		for i := range dist {
+			dist[i] = make([]float64, n)
+		}
+		for i := 0; i < n; i++ {
+			for j := i + 1; j < n; j++ {
+				d := testCosineDistance(embeddingMap[filtered[i]], embeddingMap[filtered[j]])
+				dist[i][j] = d
+				dist[j][i] = d
+			}
+		}
+		return filtered, dist, nil
+	})
+
+	// LLM: capture prompts, return empty response each call.
+	var capturedPrompts []string
+	adapter.EXPECT().Complete(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
+		func(ctx context.Context, system string, msgs []llm.Message, onChunk func(string)) (string, error) {
+			for _, msg := range msgs {
+				capturedPrompts = append(capturedPrompts, msg.Content)
+			}
+			return `{"decisions":[],"merges":[]}`, nil
+		},
+	).AnyTimes()
+
+	// Tag at end
+	gs.EXPECT().Tag(gomock.Any()).Return(nil)
+
 	recipe := Recipe{Name: "cluster-test", Steps: []RecipeStep{{Mode: "prune", MinClusterSize: 3}}}
 
-	err := executePruneStep(context.Background(), gs, idx, stubEmbedder{}, adapter, recipe.Steps[0], recipe, func(ProgressEvent) {})
+	err := executePruneStep(context.Background(), gs, idx, embedder, adapter, recipe.Steps[0], recipe, func(ProgressEvent) {})
 	if err != nil {
 		t.Fatalf("executePruneStep: %v", err)
 	}
 
 	// The noise fact (lone.md) should NOT appear in any LLM prompt.
-	for i, prompt := range adapter.prompts {
+	for i, prompt := range capturedPrompts {
 		if strings.Contains(prompt, noiseFile) {
 			t.Errorf("prompt %d contains noise fact %s — it should have been skipped as unclustered", i, noiseFile)
 		}
 	}
 
 	// With 2 clusters we expect exactly 2 LLM calls, not 1 call with all 11 facts.
-	if len(adapter.prompts) != 2 {
-		t.Errorf("expected 2 LLM calls (one per cluster), got %d", len(adapter.prompts))
+	if len(capturedPrompts) != 2 {
+		t.Errorf("expected 2 LLM calls (one per cluster), got %d", len(capturedPrompts))
 	}
 
 	// Each prompt should contain only facts from its cluster, not from both.
-	for _, prompt := range adapter.prompts {
+	for _, prompt := range capturedPrompts {
 		hasA := strings.Contains(prompt, "know/cluster-a/")
 		hasB := strings.Contains(prompt, "know/cluster-b/")
 		if hasA && hasB {

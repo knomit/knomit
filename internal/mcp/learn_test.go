@@ -7,12 +7,30 @@ import (
 	"testing"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
+	"go.uber.org/mock/gomock"
 )
 
 func TestLearnWritesFacts(t *testing.T) {
-	store := newMockStore()
-	idx := &mockIndex{}
-	handler := LearnHandler(store, idx)
+	ctrl := gomock.NewController(t)
+	gs := NewMockGitStore(ctrl)
+	idx := NewMockSearchIndex(ctrl)
+
+	var capturedFiles map[string]string
+	var capturedUpsert FactRecord
+
+	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
+	gs.EXPECT().BatchWrite(gomock.Any(), gomock.Any()).DoAndReturn(func(files map[string]string, msg string) error {
+		capturedFiles = files
+		return nil
+	})
+	gs.EXPECT().HeadCommit().Return("abc123def456", nil)
+	gs.EXPECT().Tag(gomock.Any()).Return(nil)
+	idx.EXPECT().Upsert(gomock.Any()).DoAndReturn(func(r FactRecord) error {
+		capturedUpsert = r
+		return nil
+	})
+
+	handler := LearnHandler(gs, idx)
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
@@ -41,12 +59,12 @@ func TestLearnWritesFacts(t *testing.T) {
 
 	// Verify file was written with normalized path.
 	expectedPath := "know/test/foo.md"
-	if _, ok := store.written[expectedPath]; !ok {
-		t.Fatalf("expected file %q to be written; written: %v", expectedPath, store.written)
+	if _, ok := capturedFiles[expectedPath]; !ok {
+		t.Fatalf("expected file %q to be written; written: %v", expectedPath, capturedFiles)
 	}
 
 	// Verify the file content parses correctly.
-	content := store.written[expectedPath]
+	content := capturedFiles[expectedPath]
 	fact, err := ParseFact(expectedPath, content)
 	if err != nil {
 		t.Fatalf("written file does not parse: %v", err)
@@ -67,23 +85,28 @@ func TestLearnWritesFacts(t *testing.T) {
 	}
 
 	// Verify index was updated.
-	if len(idx.upserted) != 1 {
-		t.Fatalf("expected 1 upsert, got %d", len(idx.upserted))
-	}
-	if idx.upserted[0].Path != expectedPath {
-		t.Fatalf("upserted path: got %q want %q", idx.upserted[0].Path, expectedPath)
-	}
-
-	// Verify tag was set.
-	if len(store.tags) == 0 {
-		t.Fatal("expected tag to be set")
+	if capturedUpsert.Path != expectedPath {
+		t.Fatalf("upserted path: got %q want %q", capturedUpsert.Path, expectedPath)
 	}
 }
 
 func TestLearnNormalizesPath(t *testing.T) {
-	store := newMockStore()
-	idx := &mockIndex{}
-	handler := LearnHandler(store, idx)
+	ctrl := gomock.NewController(t)
+	gs := NewMockGitStore(ctrl)
+	idx := NewMockSearchIndex(ctrl)
+
+	var capturedFiles map[string]string
+
+	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
+	gs.EXPECT().BatchWrite(gomock.Any(), gomock.Any()).DoAndReturn(func(files map[string]string, msg string) error {
+		capturedFiles = files
+		return nil
+	})
+	gs.EXPECT().HeadCommit().Return("abc123def456", nil)
+	gs.EXPECT().Tag(gomock.Any()).Return(nil)
+	idx.EXPECT().Upsert(gomock.Any()).Return(nil)
+
+	handler := LearnHandler(gs, idx)
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
@@ -111,18 +134,22 @@ func TestLearnNormalizesPath(t *testing.T) {
 	}
 
 	// Already-normalized path should not be doubled.
-	if _, ok := store.written["know/already/normalized.md"]; !ok {
-		t.Fatalf("expected know/already/normalized.md in written, got: %v", store.written)
+	if _, ok := capturedFiles["know/already/normalized.md"]; !ok {
+		t.Fatalf("expected know/already/normalized.md in written, got: %v", capturedFiles)
 	}
-	if _, ok := store.written["know/know/already/normalized.md"]; ok {
+	if _, ok := capturedFiles["know/know/already/normalized.md"]; ok {
 		t.Fatal("path was incorrectly double-prefixed")
 	}
 }
 
 func TestLearnRequiresMomentName(t *testing.T) {
-	store := newMockStore()
-	idx := &mockIndex{}
-	handler := LearnHandler(store, idx)
+	ctrl := gomock.NewController(t)
+	gs := NewMockGitStore(ctrl)
+	idx := NewMockSearchIndex(ctrl)
+
+	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
+
+	handler := LearnHandler(gs, idx)
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
@@ -139,9 +166,22 @@ func TestLearnRequiresMomentName(t *testing.T) {
 }
 
 func TestLearnMultipleFacts(t *testing.T) {
-	store := newMockStore()
-	idx := &mockIndex{}
-	handler := LearnHandler(store, idx)
+	ctrl := gomock.NewController(t)
+	gs := NewMockGitStore(ctrl)
+	idx := NewMockSearchIndex(ctrl)
+
+	var capturedFiles map[string]string
+
+	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
+	gs.EXPECT().BatchWrite(gomock.Any(), gomock.Any()).DoAndReturn(func(files map[string]string, msg string) error {
+		capturedFiles = files
+		return nil
+	})
+	gs.EXPECT().HeadCommit().Return("abc123def456", nil)
+	gs.EXPECT().Tag(gomock.Any()).Return(nil)
+	idx.EXPECT().Upsert(gomock.Any()).Return(nil).Times(2)
+
+	handler := LearnHandler(gs, idx)
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
@@ -168,14 +208,11 @@ func TestLearnMultipleFacts(t *testing.T) {
 		t.Fatalf("tool error: %v", result.Content)
 	}
 
-	if _, ok := store.written["know/a.md"]; !ok {
+	if _, ok := capturedFiles["know/a.md"]; !ok {
 		t.Error("missing know/a.md")
 	}
-	if _, ok := store.written["know/b.md"]; !ok {
+	if _, ok := capturedFiles["know/b.md"]; !ok {
 		t.Error("missing know/b.md")
-	}
-	if len(idx.upserted) != 2 {
-		t.Fatalf("expected 2 upserts, got %d", len(idx.upserted))
 	}
 }
 

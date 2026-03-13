@@ -8,6 +8,7 @@ import (
 
 	git "knomit/internal/git"
 	"knomit/internal/store"
+	"go.uber.org/mock/gomock"
 )
 
 func TestUpsertAndQuery(t *testing.T) {
@@ -361,26 +362,6 @@ func TestIncrementalSync(t *testing.T) {
 	}
 }
 
-// stubEmb is a minimal Embedder implementation that always returns a fixed
-// 384-dimensional float32 vector, useful for testing without real ONNX inference.
-type stubEmb struct{ vec []float32 }
-
-func (s *stubEmb) Embed(_ string) ([]float32, error) { return s.vec, nil }
-
-// dispatchEmb returns different vectors per input text.
-type dispatchEmb struct{ m map[string][]float32 }
-
-func (d *dispatchEmb) Embed(text string) ([]float32, error) {
-	if v, ok := d.m[text]; ok {
-		return v, nil
-	}
-	// Return a zero vector of the same dimension as the first registered vector.
-	for _, v := range d.m {
-		return make([]float32, len(v)), nil
-	}
-	return nil, nil
-}
-
 func TestVec0Available(t *testing.T) {
 	idx, err := store.New(":memory:")
 	if err != nil {
@@ -422,7 +403,10 @@ func TestGetEmbedding(t *testing.T) {
 		known[i] = float32(i) * 0.001
 	}
 
-	idx.SetEmbedder(&stubEmb{vec: known})
+	ctrl := gomock.NewController(t)
+	emb := NewMockEmbedder(ctrl)
+	emb.EXPECT().Embed(gomock.Any()).Return(known, nil).AnyTimes()
+	idx.SetEmbedder(emb)
 
 	rec := store.FactRecord{
 		Path:       "know/test/emb.md",
@@ -666,11 +650,19 @@ func TestSearchHybrid(t *testing.T) {
 
 	// Build a dispatch embedder that maps document bodies to their vectors,
 	// and the query "postgres" to vecA (so fact A gets cosine sim 1, fact B gets 0).
-	emb := &dispatchEmb{m: map[string][]float32{
+	m := map[string][]float32{
 		"postgres database replication": vecA,
 		"postgres cache storage":        vecB,
 		"postgres":                      vecA, // query text
-	}}
+	}
+	ctrl := gomock.NewController(t)
+	emb := NewMockEmbedder(ctrl)
+	emb.EXPECT().Embed(gomock.Any()).DoAndReturn(func(text string) ([]float32, error) {
+		if v, ok := m[text]; ok {
+			return v, nil
+		}
+		return make([]float32, dims), nil
+	}).AnyTimes()
 	idx.SetEmbedder(emb)
 
 	if err := idx.Upsert(store.FactRecord{
@@ -719,7 +711,10 @@ func TestDeleteReferentialIntegrity(t *testing.T) {
 	}
 	defer idx.Close()
 
-	idx.SetEmbedder(&stubEmb{vec: []float32{1, 0, 0, 0}})
+	ctrl := gomock.NewController(t)
+	emb := NewMockEmbedder(ctrl)
+	emb.EXPECT().Embed(gomock.Any()).Return([]float32{1, 0, 0, 0}, nil).AnyTimes()
+	idx.SetEmbedder(emb)
 
 	rec := store.FactRecord{
 		Path: "know/test/ri.md", Title: "RI Test", Body: "referential integrity",
