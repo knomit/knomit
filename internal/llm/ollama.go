@@ -1,8 +1,12 @@
 package llm
 
 import (
+	"bufio"
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"time"
@@ -45,6 +49,89 @@ func NewOllamaAdapter(ctx context.Context, model string) (*OllamaAdapter, error)
 	return &OllamaAdapter{host: host, model: model, client: client}, nil
 }
 
+type ollamaChatRequest struct {
+	Model    string          `json:"model"`
+	Messages []ollamaMessage `json:"messages"`
+	Format   string          `json:"format"`
+	Stream   bool            `json:"stream"`
+	Options  ollamaOptions   `json:"options"`
+}
+
+type ollamaMessage struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
+
+type ollamaOptions struct {
+	NumPredict int `json:"num_predict"`
+}
+
+type ollamaStreamLine struct {
+	Message ollamaMessage `json:"message"`
+	Done    bool          `json:"done"`
+}
+
 func (a *OllamaAdapter) Complete(ctx context.Context, system string, msgs []Message, onChunk func(string)) (string, error) {
-	return "", fmt.Errorf("not implemented")
+	chatMsgs := make([]ollamaMessage, 0, len(msgs)+1)
+	chatMsgs = append(chatMsgs, ollamaMessage{Role: "system", Content: system})
+	for _, m := range msgs {
+		chatMsgs = append(chatMsgs, ollamaMessage{Role: m.Role, Content: m.Content})
+	}
+
+	reqBody := ollamaChatRequest{
+		Model:    a.model,
+		Messages: chatMsgs,
+		Format:   "json",
+		Stream:   true,
+		Options:  ollamaOptions{NumPredict: defaultMaxTokens},
+	}
+
+	body, err := json.Marshal(reqBody)
+	if err != nil {
+		return "", fmt.Errorf("ollama: marshal request: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, a.host+"/api/chat", bytes.NewReader(body))
+	if err != nil {
+		return "", fmt.Errorf("ollama: build request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := a.client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("ollama: request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		errBody, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("ollama: HTTP %d: %s", resp.StatusCode, bytes.TrimSpace(errBody))
+	}
+
+	var accumulated string
+	scanner := bufio.NewScanner(resp.Body)
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		if len(line) == 0 {
+			continue
+		}
+		var sl ollamaStreamLine
+		if err := json.Unmarshal(line, &sl); err != nil {
+			continue
+		}
+		if sl.Message.Content != "" {
+			accumulated += sl.Message.Content
+			if onChunk != nil {
+				onChunk(sl.Message.Content)
+			}
+		}
+		if sl.Done {
+			break
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return "", fmt.Errorf("ollama: read stream: %w", err)
+	}
+
+	return accumulated, nil
 }
