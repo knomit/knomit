@@ -4,45 +4,63 @@ Git-backed knowledge base for AI agents. Knowledge + commit.
 
 Knomit stores structured facts as markdown files in a Git repository, organized by an ontological hierarchy. Each agent gets its own branch; consensus lives on `main`.
 
+## Requirements
+
+- Go 1.24+
+- Node.js / npm (for the web frontend)
+- SQLite with FTS5 support
+- ONNX Runtime (downloaded automatically via `make setup`)
+
 ## Building
 
-Requires [Bun](https://bun.sh).
+```sh
+make setup    # download ONNX Runtime
+make build    # build Go binary + React frontend → dist/knomit
+```
+
+Individual targets:
 
 ```sh
-cd src
-bun install
-bun build --compile index.ts --outfile ../dist/knomit
+make web      # build React frontend only
+make test     # run Go tests
+make dist     # full distribution package (ORT + binary)
+make clean    # remove build artifacts
 ```
 
 ## Usage
 
 ```sh
-knomit                 # TUI
-knomit mcp             # MCP server
-knomit synthesize      # synthesis
-knomit reset           # reset
+knomit serve       # start HTTP server (default port 3000)
+knomit init        # initialize a new repo
+knomit rebuild     # rebuild the search index
+knomit reset       # wipe all databases and start fresh
 ```
 
-### Global Options
+### Development
 
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--repo <path>` | `~/.knomit` | Path to the git repository |
-| `--cache-dir <path>` | `~/.cache/knomit` | Path to the SQLite index and model cache |
+```sh
+make run              # build + run server (default: serve)
+make run CMD=init     # run a different subcommand
+make dev              # Vite dev server for frontend (HMR)
+```
+
+Seed test data (requires the server running):
+
+```sh
+go run ./tools/seed/   # seed base facts
+```
 
 ### MCP Server
 
-```sh
-knomit mcp                        # code profile (default)
-knomit mcp --profile chat         # chat profile
-knomit mcp --profile generic      # generic profile
-```
+The MCP endpoint is available at `/mcp` on the HTTP server. Configure your AI tool to point at it.
 
-| Profile | Use case |
-|---------|----------|
-| `code` | Code editors (default) — anchors facts to git commits |
-| `chat` | Conversational tools — anchors facts to URLs, documents |
-| `generic` | Minimal instructions for any integration |
+Profiles tailor the MCP instructions for different use cases:
+
+| Profile | URL | Use case |
+|---------|-----|----------|
+| `code` (default) | `/mcp` or `/mcp?profile=code` | Code editors — anchors facts to git commits |
+| `chat` | `/mcp?profile=chat` | Conversational tools — anchors facts to URLs, documents |
+| `generic` | `/mcp?profile=generic` | Minimal instructions for any integration |
 
 #### Claude Code
 
@@ -52,8 +70,8 @@ Add to your project's `.mcp.json` (or `~/.claude/mcp.json` for global):
 {
   "mcpServers": {
     "knomit": {
-      "command": "/path/to/knomit",
-      "args": ["mcp"]
+      "type": "streamable-http",
+      "url": "http://localhost:3000/mcp"
     }
   }
 }
@@ -69,50 +87,23 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS)
 {
   "mcpServers": {
     "knomit": {
-      "command": "/path/to/knomit",
-      "args": ["mcp", "--profile", "chat"]
+      "type": "streamable-http",
+      "url": "http://localhost:3000/mcp?profile=chat"
     }
   }
 }
 ```
 
-Knomit works automatically via tool descriptions — no manual activation needed. Optionally use the **knomit-save** prompt at the end of a conversation to flush any remaining learnings.
+### Web UI
 
-#### Gemini CLI / Other tools
-
-Use `knomit mcp` (defaults to `code` profile) or `knomit mcp --profile generic` for minimal instructions. Configure according to your tool's MCP server documentation.
-
-### TUI
-
-Run without flags to browse your knowledge base interactively:
-
-```sh
-knomit
-```
-
-Keyboard shortcuts:
-
-| Key | Action |
-|-----|--------|
-| `↑` `↓` | Navigate |
-| `↵` | Open item |
-| `←` `⌫` | Go back / exit history |
-| `→` | Focus right panel |
-| `/` | Search |
-| `:` | Command mode |
-| `h` | Toggle history |
-| `Esc` | Exit history / search |
-| `q` | Quit |
+The server embeds a React SPA at `/`. Browse facts, search, trigger synthesis, and monitor tasks in real time via SSE.
 
 ### Synthesize
 
-Automated knowledge base maintenance — prune stale/duplicate facts and distill higher-order insights using an LLM.
+Automated knowledge base maintenance — prune stale/duplicate facts and distill higher-order insights using an LLM. Trigger via the web UI or the HTTP API:
 
-```sh
-knomit synthesize                      # default: prune + distill on changes since last run
-knomit synthesize --recipe cve-review  # run a specific recipe
-knomit synthesize --all                # run all recipes in .knomit/synthesize/
-knomit synthesize --verbose            # show per-fact decisions and reasons
+```
+POST /api/v1/synthesize
 ```
 
 #### LLM Configuration
@@ -121,15 +112,13 @@ Set the model and API key via environment variables:
 
 | Provider   | Variables                                                                                                |
 |------------|----------------------------------------------------------------------------------------------------------|
-| Anthropic  | `KNOMIT_LLM_MODEL=claude-sonnet-4-6` `ANTHROPIC_API_KEY=...`                                             |
-| Gemini     | `KNOMIT_LLM_MODEL=gemini-2.0-flash` `GOOGLE_AI_API_KEY=...`                                              |
+| Anthropic  | `KNOMIT_LLM_MODEL=claude-sonnet-4-6` `ANTHROPIC_API_KEY=...`                                            |
+| Gemini     | `KNOMIT_LLM_MODEL=gemini-2.0-flash` `GOOGLE_AI_API_KEY=...`                                             |
 | Bedrock    | `KNOMIT_LLM_MODEL=us.anthropic.claude-sonnet-4-6-v1` `AWS_ACCESS_KEY_ID=...` `AWS_SECRET_ACCESS_KEY=...` |
 | Claude CLI | `KNOMIT_LLM_PROVIDER=claude-cli` — uses the `claude` CLI (no API key needed, works with Anthropic Max)   |
 | Gemini CLI | `KNOMIT_LLM_PROVIDER=gemini-cli` — uses the `gemini` CLI (no API key needed, works with Google AI Pro)   |
 
 The default model is `claude-sonnet-4-6` (Anthropic). The provider is auto-detected from the model name for API providers. CLI providers must be set explicitly via `KNOMIT_LLM_PROVIDER`.
-
-The CLI adapters pass `--model` to the underlying CLI tool, so `KNOMIT_LLM_MODEL` works with all providers.
 
 #### Recipes
 
@@ -153,25 +142,11 @@ steps:
 |-------|-------------|
 | `name` | Recipe identifier (used for branch names and logging) |
 | `prompt` | Global context passed to every step |
-| `scope` | Filter facts by `domain`, `entities`, `search` queries, or `path` prefix. Omit for auto-discovery (changes since last run). |
+| `scope` | Filter facts by `domain`, `entities`, `search` queries, or `path` prefix |
 | `auto_merge` | `true` merges results back automatically; `false` pushes a branch for review |
 | `steps` | Pipeline of `prune` and/or `distill` steps. Each can override `model`. |
 
-Running `knomit synthesize` with no flags uses a built-in default recipe: prune + distill on all facts changed since the last synthesis run, with auto-merge enabled.
-
-### Reset
-
-Wipe the git repo and search index for a clean start:
-
-```sh
-knomit reset
-```
-
-## MCP Prompts
-
-| Prompt | Description |
-|--------|-------------|
-| `knomit-save` | End-of-session review. Prompts the agent to persist decisions, preferences, and conclusions from the conversation. |
+Running synthesis with no recipe uses a built-in default: prune + distill on all facts changed since the last run, with auto-merge enabled.
 
 ## MCP Tools
 
@@ -214,36 +189,39 @@ Refs anchor facts to their source material using the `knomit:` URI scheme:
 | Absolute (with host) | External repo | `knomit://github.com/org/repo/blob/abc1234/src/main.ts` |
 | Plain URL | Any web resource | `https://example.com/doc` |
 
-Relative refs (`knomit:blob/...`) always refer to the local repo. When a remote is added, you can immediately distinguish local refs from external ones. The format mirrors GitHub blob URLs but uses the `knomit:` scheme.
-
 Synthesize automatically resolves file-path refs to `knomit:blob/<commit>/<path>` URIs.
+
+## HTTP API
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/v1/browse` | Browse ontology hierarchy |
+| GET | `/api/v1/search` | Full-text + vector search |
+| GET | `/api/v1/fact` | Read a single fact |
+| GET | `/api/v1/history` | Commit history |
+| GET | `/api/v1/stats` | Knowledge base statistics |
+| GET | `/api/v1/status` | System status |
+| POST | `/api/v1/synthesize` | Trigger synthesis |
+| POST | `/api/v1/sync` | Sync with remote |
+| GET | `/api/v1/events` | SSE event stream |
+| ALL | `/mcp` | MCP server endpoint |
+| GET | `/docs` | Swagger UI |
 
 ## Environment variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `KNOMIT_REPO` | `~/.knomit` | Path to the git repository |
-| `KNOMIT_CACHE_DIR` | `~/.cache/knomit` | Path to the SQLite index and model cache |
-| `KNOMIT_AGENT_ID` | system hostname | Branch name: `agent/<id>` |
-| `KNOMIT_EMBEDDINGS` | `true` | Vector similarity search (`0` or `false` to disable) |
-| `KNOMIT_POLL_INTERVAL` | `5000` | TUI remote poll interval in milliseconds |
-| `KNOMIT_LLM_MODEL` | `claude-sonnet-4-6` | Model name for synthesis LLM calls |
-| `KNOMIT_LLM_PROVIDER` | auto-detected | LLM provider: `anthropic`, `gemini`, or `bedrock` |
-| `ANTHROPIC_API_KEY` | — | API key for Anthropic (required when provider is `anthropic`) |
-| `GOOGLE_AI_API_KEY` | — | API key for Gemini (required when provider is `gemini`) |
-| `AWS_ACCESS_KEY_ID` | — | AWS access key (required when provider is `bedrock`) |
-| `AWS_SECRET_ACCESS_KEY` | — | AWS secret key (required when provider is `bedrock`) |
+| `KNOMIT_REPO` | `~/.knomit` | Path to the data directory |
+| `KNOMIT_CACHE_DIR` | `~/.cache/knomit` | Model cache directory |
+| `KNOMIT_PORT` | `3000` | HTTP server port |
+| `KNOMIT_LLM_MODEL` | `claude-sonnet-4-6` | Model name for synthesis |
+| `KNOMIT_LLM_PROVIDER` | auto-detected | LLM provider: `anthropic`, `gemini`, `bedrock`, `claude-cli`, `gemini-cli` |
+| `KNOMIT_GIT_REMOTE` | `false` | Enable git remote endpoint |
+| `KNOMIT_GIT_PORT` | — | Git remote port |
+| `KNOMIT_API_KEY` | — | API key for git remote auth |
+| `ANTHROPIC_API_KEY` | — | Anthropic API key |
+| `GOOGLE_AI_API_KEY` | — | Gemini API key |
+| `AWS_ACCESS_KEY_ID` | — | AWS access key for Bedrock |
+| `AWS_SECRET_ACCESS_KEY` | — | AWS secret key for Bedrock |
 | `AWS_REGION` | `us-east-1` | AWS region for Bedrock |
-
-## Manual git operations
-
-Knomit is tolerant of manually committed files — malformed facts are silently skipped by search and explore. However, if you run `git reset`, `git rebase`, or `git commit --amend`, the search index may reference a commit that no longer exists. Rebuild the search index with `:rebuild` in the TUI, or `knomit reset` to wipe everything and start fresh.
-
-## Development
-
-```sh
-cd src
-bun test              # run tests
-bun index.ts          # run TUI in dev mode
-go run ./tools/seed/      # seed test data (requires knomit serve running)
-```
+| `ORT_LIB_PATH` | — | Override ONNX Runtime library path |
