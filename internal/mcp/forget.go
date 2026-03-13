@@ -25,7 +25,7 @@ func forgetTool() mcpgo.Tool {
 }
 
 // ForgetHandler returns the handler function for knomit_forget.
-func ForgetHandler(gs GitStore, idx SearchIndex) func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+func ForgetHandler(gs GitStore, idx SearchIndex, ontologyRoot string) func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 	return func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 		// 1. Sync.
 		if _, err := gs.Sync(nil); err != nil {
@@ -37,7 +37,7 @@ func ForgetHandler(gs GitStore, idx SearchIndex) func(context.Context, mcpgo.Cal
 		if file == "" {
 			return mcpgo.NewToolResultError("file is required"), nil
 		}
-		file = normalizePath(file)
+		file = normalizePath(ontologyRoot, file)
 		momentName := req.GetString("moment_name", "")
 		if momentName == "" {
 			return mcpgo.NewToolResultError("moment_name is required"), nil

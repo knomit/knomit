@@ -108,7 +108,7 @@ func serveCmd() *cobra.Command {
 			profiles := []string{"code", "chat", "generic"}
 			mcpServers := make(map[string]http.Handler, len(profiles))
 			for _, p := range profiles {
-				mcpSrv := mcp.NewServer(gs, idx, llmAdapter, p)
+				mcpSrv := mcp.NewServer(gs, idx, llmAdapter, p, cfg.OntologyRoot)
 				mcpServers[p] = mcpserver.NewStreamableHTTPServer(mcpSrv)
 			}
 

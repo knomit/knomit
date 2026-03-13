@@ -45,10 +45,11 @@ func sanitizeMomentName(name string) string {
 	return nonSafeRe.ReplaceAllString(name, "-")
 }
 
-// normalizePath ensures the path starts with "know/" and ends with ".md".
-func normalizePath(path string) string {
-	if !strings.HasPrefix(path, "know/") {
-		path = "know/" + path
+// normalizePath ensures the path starts with "<ontologyRoot>/" and ends with ".md".
+func normalizePath(ontologyRoot, path string) string {
+	prefix := ontologyRoot + "/"
+	if !strings.HasPrefix(path, prefix) {
+		path = prefix + path
 	}
 	if !strings.HasSuffix(path, ".md") {
 		path = path + ".md"
@@ -57,7 +58,7 @@ func normalizePath(path string) string {
 }
 
 // LearnHandler returns the handler function for knomit_learn.
-func LearnHandler(gs GitStore, idx SearchIndex) func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+func LearnHandler(gs GitStore, idx SearchIndex, ontologyRoot string) func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 	return func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 		// 1. Sync.
 		_, err := gs.Sync(nil)
@@ -95,7 +96,7 @@ func LearnHandler(gs GitStore, idx SearchIndex) func(context.Context, mcpgo.Call
 		files := make(map[string]string, len(factInputs))
 		facts := make([]Fact, len(factInputs))
 		for i, fi := range factInputs {
-			path := normalizePath(fi.Path)
+			path := normalizePath(ontologyRoot, fi.Path)
 			domain := fi.Domain
 			if domain == nil {
 				domain = []string{}

@@ -65,19 +65,19 @@ type SearchIndex interface {
 }
 
 // NewServer creates a new MCP server with all knomit tools registered.
-func NewServer(gs GitStore, idx SearchIndex, llmAdapter llm.LLMAdapter, profile string) *server.MCPServer {
+func NewServer(gs GitStore, idx SearchIndex, llmAdapter llm.LLMAdapter, profile, ontologyRoot string) *server.MCPServer {
 	_ = llmAdapter
 
 	s := server.NewMCPServer("knomit", "1.0.0",
-		server.WithInstructions(ProfileInstructions(profile)),
+		server.WithInstructions(ProfileInstructions(profile, ontologyRoot)),
 	)
 
-	s.AddTool(learnTool(), LearnHandler(gs, idx))
+	s.AddTool(learnTool(), LearnHandler(gs, idx, ontologyRoot))
 	s.AddTool(queryTool(), QueryHandler(gs, idx))
-	s.AddTool(whyTool(), WhyHandler(gs))
-	s.AddTool(updateTool(), UpdateHandler(gs, idx))
-	s.AddTool(exploreTool(), ExploreHandler(gs))
-	s.AddTool(forgetTool(), ForgetHandler(gs, idx))
+	s.AddTool(whyTool(), WhyHandler(gs, ontologyRoot))
+	s.AddTool(updateTool(), UpdateHandler(gs, idx, ontologyRoot))
+	s.AddTool(exploreTool(ontologyRoot), ExploreHandler(gs, ontologyRoot))
+	s.AddTool(forgetTool(), ForgetHandler(gs, idx, ontologyRoot))
 
 	return s
 }

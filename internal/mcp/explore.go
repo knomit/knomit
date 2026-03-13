@@ -10,25 +10,25 @@ import (
 )
 
 // exploreTool returns the Tool definition for knomit_explore.
-func exploreTool() mcpgo.Tool {
+func exploreTool(ontologyRoot string) mcpgo.Tool {
 	return mcpgo.NewTool("knomit_explore",
 		mcpgo.WithDescription("List the contents of a knowledge base path."),
 		mcpgo.WithString("path",
-			mcpgo.Description("Path to explore (default: \"know\")."),
+			mcpgo.Description(fmt.Sprintf("Path to explore (default: %q).", ontologyRoot)),
 		),
 	)
 }
 
 // ExploreHandler returns the handler function for knomit_explore.
-func ExploreHandler(gs GitStore) func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+func ExploreHandler(gs GitStore, ontologyRoot string) func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 	return func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 		// 1. Sync.
 		if _, err := gs.Sync(nil); err != nil {
 			return mcpgo.NewToolResultError(fmt.Sprintf("sync error: %v", err)), nil
 		}
 
-		// 2. Get path parameter (default "know").
-		path := req.GetString("path", "know")
+		// 2. Get path parameter (default ontologyRoot).
+		path := req.GetString("path", ontologyRoot)
 
 		// 3. Read manifest: <path>.md if it exists.
 		var manifest interface{}
