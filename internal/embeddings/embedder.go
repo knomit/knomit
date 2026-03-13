@@ -101,9 +101,9 @@ func NewEmbedder(modelPath, tokenizerPath string) (*Embedder, error) {
 	return &Embedder{session: session, tok: tok}, nil
 }
 
-// Embed tokenizes text, runs inference using nomic-embed-text-v1.5, mean-pools
-// last_hidden_state over seq_len, and returns an L2-normalised float32 vector
-// of dimension 768.
+// Embed tokenizes text, runs inference, mean-pools last_hidden_state over
+// seq_len, and returns an L2-normalised float32 vector. The embedding
+// dimension is determined by the model (e.g. 384 for MiniLM, 768 for nomic).
 func (e *Embedder) Embed(text string) ([]float32, error) {
 	inputIDs, attentionMask, _ := e.tok.Encode(text)
 	seqLen := int64(len(inputIDs))
@@ -138,20 +138,23 @@ func (e *Embedder) Embed(text string) ([]float32, error) {
 	}
 	defer typesTensor.Destroy()
 
-	// Output shape: [1, seqLen, 768] — pre-allocate.
-	const dims = 768
-	outputShape := ort.NewShape(1, seqLen, dims)
-	outputTensor, err := ort.NewEmptyTensor[float32](outputShape)
-	if err != nil {
-		return nil, fmt.Errorf("new output tensor: %w", err)
-	}
-	defer outputTensor.Destroy()
-
+	// Let ONNX Runtime allocate the output so the embedding dimension is
+	// determined by the model rather than hardcoded.
+	outputs := []ort.Value{nil}
 	if err := e.session.Run(
 		[]ort.Value{idsTensor, maskTensor, typesTensor},
-		[]ort.Value{outputTensor},
+		outputs,
 	); err != nil {
 		return nil, fmt.Errorf("onnx run: %w", err)
+	}
+	defer outputs[0].Destroy()
+
+	// Output shape is [1, seqLen, dims].
+	outShape := outputs[0].GetShape()
+	dims := int(outShape[2])
+	outputTensor, ok := outputs[0].(*ort.Tensor[float32])
+	if !ok {
+		return nil, fmt.Errorf("unexpected output tensor type")
 	}
 
 	// Mean-pool over seq_len dimension.
