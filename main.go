@@ -23,6 +23,7 @@ import (
 	"knomit/internal/llm"
 	"knomit/internal/mcp"
 	"knomit/internal/store"
+	"knomit/internal/synthesize"
 	"knomit/internal/web"
 )
 
@@ -161,10 +162,11 @@ func serveCmd() *cobra.Command {
 			}
 
 			// 6. Create per-profile MCP servers
+			reviewer := &reviewerAdapter{r: synthesize.NewReviewer(gs, idx, idx, nil)}
 			profiles := []string{"code", "chat", "generic"}
 			mcpServers := make(map[string]http.Handler, len(profiles))
 			for _, p := range profiles {
-				mcpSrv := mcp.NewServer(gs, idx, llmAdapter, p, cfg.OntologyRoot, ontology)
+				mcpSrv := mcp.NewServer(gs, idx, reviewer, p, cfg.OntologyRoot, ontology)
 				mcpServers[p] = mcpserver.NewStreamableHTTPServer(mcpSrv)
 			}
 
@@ -295,6 +297,20 @@ func resetCmd() *cobra.Command {
 			return nil
 		},
 	}
+}
+
+// reviewerAdapter adapts *synthesize.Reviewer to the mcp.Reviewer interface,
+// widening the return type from *synthesize.ReviewResult to interface{}.
+type reviewerAdapter struct {
+	r *synthesize.Reviewer
+}
+
+func (a *reviewerAdapter) StartSession() (interface{}, error) {
+	return a.r.StartSession()
+}
+
+func (a *reviewerAdapter) ContinueSession(sessionID, response string) (interface{}, error) {
+	return a.r.ContinueSession(sessionID, response)
 }
 
 func rebuildCmd() *cobra.Command {
