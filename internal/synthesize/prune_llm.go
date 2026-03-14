@@ -51,57 +51,6 @@ type factForLLM struct {
 	Sources    int      `json:"sources"`
 }
 
-// buildPrunePrompt builds the LLM prompt for a prune step.
-func buildPrunePrompt(facts []factForLLM, recipePrompt, stepPrompt string) string {
-	factsJSON, _ := json.MarshalIndent(facts, "", "  ")
-
-	var sb strings.Builder
-	sb.WriteString("You are reviewing facts in a knowledge base for staleness, redundancy, and duplication.\n\n")
-	if recipePrompt != "" {
-		sb.WriteString("Context: ")
-		sb.WriteString(recipePrompt)
-		sb.WriteString("\n")
-	}
-	if stepPrompt != "" {
-		sb.WriteString("Instructions: ")
-		sb.WriteString(stepPrompt)
-		sb.WriteString("\n")
-	}
-	sb.WriteString("Facts to review:\n")
-	sb.Write(factsJSON)
-	sb.WriteString(`
-
-For each fact, decide:
-- keep: fact is current and valuable
-- forget: fact is obsolete, superseded, or no longer true
-- update: fact needs confidence adjusted (provide new value)
-
-Also identify facts that say the same thing and should be merged into a single unified fact.
-
-Respond as JSON (no markdown wrapping):
-{
-  "decisions": [
-    { "path": "...", "action": "keep|forget|update", "confidence": 0.X }
-  ],
-  "merges": [
-    {
-      "paths": ["file1.md", "file2.md"],
-      "merged": {
-        "path": "know/...",
-        "title": "...",
-        "body": "...",
-        "domain": [],
-        "confidence": 0.X,
-        "sources": 2,
-        "entities": [],
-        "refs": ["file1.md", "file2.md"]
-      }
-    }
-  ]
-}`)
-	return sb.String()
-}
-
 // extractJSON strips optional markdown code fences from LLM output.
 func extractJSON(text string) string {
 	text = strings.TrimSpace(text)

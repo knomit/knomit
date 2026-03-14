@@ -5,6 +5,7 @@ package synthesize
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -18,7 +19,7 @@ import (
 // When embeddings are available, facts are clustered first and only multi-fact
 // clusters are sent to the LLM for review. Without embeddings, all facts are
 // sent in byte-sized chunks (legacy behaviour).
-func executePruneStep(ctx context.Context, gs GitStore, idx SearchIndex, embedder Embedder, adapter llm.LLMAdapter, step RecipeStep, recipe Recipe, onProgress func(ProgressEvent)) error {
+func executePruneStep(ctx context.Context, gs GitStore, idx SearchIndex, embedder Embedder, adapter llm.LLMAdapter, step RecipeStep, recipe Recipe, profile Profile, onProgress func(ProgressEvent)) error {
 	onProgress(ProgressEvent{Phase: "gather", Message: "loading facts for prune"})
 
 	facts, err := gatherAllFacts(gs)
@@ -40,23 +41,31 @@ func executePruneStep(ctx context.Context, gs GitStore, idx SearchIndex, embedde
 	var allDecisions []PruneDecision
 	var allMerges []MergeEntry
 
-	// 100KB limit per LLM call to stay within context window limits.
-	const maxChunkBytes = 100_000
 	for gi, group := range groups {
-		chunks := chunkFacts(group, maxChunkBytes)
+		chunks := chunkFacts(group, profile.MaxChunkBytes)
 		for ci, chunk := range chunks {
 			label := fmt.Sprintf("cluster %d/%d chunk %d/%d (%d facts)", gi+1, len(groups), ci+1, len(chunks), len(chunk))
 			log.Debug().Str("label", label).Msg("prune: sending to LLM")
 			onProgress(ProgressEvent{Phase: "llm", Message: fmt.Sprintf("prune %s", label)})
 
-			prompt := buildPrunePrompt(chunk, recipe.Prompt, step.Prompt)
-			response, err := adapter.Complete(
-				ctx,
-				"You are a knowledge base maintenance assistant. Respond only with valid JSON.",
-				[]llm.Message{{Role: "user", Content: prompt}},
-				llm.CompletionOptions{},
-				nil,
-			)
+			factsJSON, _ := json.MarshalIndent(chunk, "", "  ")
+			data := PromptData{
+				Facts:        string(factsJSON),
+				RecipePrompt: recipe.Prompt,
+				StepPrompt:   step.Prompt,
+			}
+
+			systemPrompt, err := RenderTemplate(profile.Name, "prune", "system", data)
+			if err != nil {
+				return fmt.Errorf("prune: render system: %w", err)
+			}
+			userPrompt, err := RenderTemplate(profile.Name, "prune", "user", data)
+			if err != nil {
+				return fmt.Errorf("prune: render user: %w", err)
+			}
+
+			opts := llm.CompletionOptions{ForceJSON: profile.ForceJSON}
+			response, err := adapter.Complete(ctx, systemPrompt, []llm.Message{{Role: "user", Content: userPrompt}}, opts, nil)
 			if err != nil {
 				return fmt.Errorf("prune: LLM call %s: %w", label, err)
 			}
@@ -64,6 +73,28 @@ func executePruneStep(ctx context.Context, gs GitStore, idx SearchIndex, embedde
 			result, err := parsePruneResponse(response)
 			if err != nil {
 				return fmt.Errorf("prune: parse response %s: %w", label, err)
+			}
+
+			// Retry if passive and profile says to retry
+			if isPrunePassive(result) && profile.RetryOnPassive {
+				log.Debug().Str("label", label).Msg("prune: passive response, retrying")
+				onProgress(ProgressEvent{Phase: "retry", Message: fmt.Sprintf("prune %s (passive, retrying)", label)})
+
+				retryPrompt, err := RenderTemplate(profile.Name, "prune", "retry", data)
+				if err != nil {
+					return fmt.Errorf("prune: render retry: %w", err)
+				}
+				response, err = adapter.Complete(ctx, systemPrompt, []llm.Message{{Role: "user", Content: retryPrompt}}, opts, nil)
+				if err != nil {
+					return fmt.Errorf("prune: retry LLM call %s: %w", label, err)
+				}
+				result, err = parsePruneResponse(response)
+				if err != nil {
+					return fmt.Errorf("prune: retry parse %s: %w", label, err)
+				}
+				if isPrunePassive(result) {
+					log.Warn().Str("label", label).Msg("prune: retry also passive, accepting result")
+				}
 			}
 
 			// Log each decision at debug level.
