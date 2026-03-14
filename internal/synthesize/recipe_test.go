@@ -85,6 +85,22 @@ steps:
 	}
 }
 
+func TestParseRecipeDedupThreshold(t *testing.T) {
+	yml := `
+name: test
+steps:
+  - mode: prune
+    dedup_threshold: 0.90
+`
+	r, err := ParseRecipe(yml)
+	if err != nil {
+		t.Fatalf("ParseRecipe: %v", err)
+	}
+	if r.Steps[0].DedupThreshold != 0.90 {
+		t.Fatalf("DedupThreshold: got %v, want 0.90", r.Steps[0].DedupThreshold)
+	}
+}
+
 func TestParseRecipeValidation(t *testing.T) {
 	tests := []struct {
 		name    string
