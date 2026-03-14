@@ -1,0 +1,155 @@
+package fact
+
+import (
+	"strings"
+	"testing"
+)
+
+func TestParseOntologyValid(t *testing.T) {
+	data := []byte(`
+id: test
+name: Test Ontology
+description: A test ontology
+topics:
+  technology:
+    description: Tech stuff
+    children:
+      software:
+        description: Software things
+      hardware:
+        description: Hardware things
+  people:
+    description: People stuff
+    children:
+      individuals:
+        description: Specific persons
+`)
+	ont, err := ParseOntology(data)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ont.ID != "test" {
+		t.Errorf("expected ID 'test', got %q", ont.ID)
+	}
+	if ont.Name != "Test Ontology" {
+		t.Errorf("expected Name 'Test Ontology', got %q", ont.Name)
+	}
+	if len(ont.Topics) != 2 {
+		t.Errorf("expected 2 topics, got %d", len(ont.Topics))
+	}
+	tech := ont.Topics["technology"]
+	if tech == nil {
+		t.Fatal("expected 'technology' topic")
+	}
+	if len(tech.Children) != 2 {
+		t.Errorf("expected 2 children for technology, got %d", len(tech.Children))
+	}
+	if tech.Children["software"] == nil {
+		t.Error("expected 'software' child")
+	}
+}
+
+func TestParseOntologyMissingID(t *testing.T) {
+	data := []byte(`
+name: Test
+topics:
+  people:
+    description: People
+`)
+	_, err := ParseOntology(data)
+	if err == nil {
+		t.Fatal("expected error for missing ID")
+	}
+	if !strings.Contains(err.Error(), "id is required") {
+		t.Errorf("expected error containing 'id is required', got: %v", err)
+	}
+}
+
+func TestParseOntologyMissingName(t *testing.T) {
+	data := []byte(`
+id: test
+topics:
+  people:
+    description: People
+`)
+	_, err := ParseOntology(data)
+	if err == nil {
+		t.Fatal("expected error for missing name")
+	}
+	if !strings.Contains(err.Error(), "name is required") {
+		t.Errorf("expected error containing 'name is required', got: %v", err)
+	}
+}
+
+func TestParseOntologyEmptyTopics(t *testing.T) {
+	data := []byte(`
+id: test
+name: Test
+topics: {}
+`)
+	_, err := ParseOntology(data)
+	if err == nil {
+		t.Fatal("expected error for empty topics")
+	}
+	if !strings.Contains(err.Error(), "at least one topic") {
+		t.Errorf("expected error containing 'at least one topic', got: %v", err)
+	}
+}
+
+func TestParseOntologyInvalidKey(t *testing.T) {
+	tests := []struct {
+		name string
+		yaml string
+	}{
+		{"spaces", `
+id: test
+name: Test
+topics:
+  has spaces:
+    description: bad
+`},
+		{"uppercase", `
+id: test
+name: Test
+topics:
+  Technology:
+    description: bad
+`},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := ParseOntology([]byte(tc.yaml))
+			if err == nil {
+				t.Fatal("expected error for invalid key")
+			}
+			if !strings.Contains(err.Error(), "invalid key") {
+				t.Errorf("expected error containing 'invalid key', got: %v", err)
+			}
+		})
+	}
+}
+
+func TestTopicNamesSorted(t *testing.T) {
+	data := []byte(`
+id: test
+name: Test
+topics:
+  zebra:
+    description: Z
+  alpha:
+    description: A
+  middle:
+    description: M
+`)
+	ont, err := ParseOntology(data)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	names := ont.TopicNames()
+	if len(names) != 3 {
+		t.Fatalf("expected 3 names, got %d", len(names))
+	}
+	if names[0] != "alpha" || names[1] != "middle" || names[2] != "zebra" {
+		t.Errorf("expected sorted names [alpha middle zebra], got %v", names)
+	}
+}
