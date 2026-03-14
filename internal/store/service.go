@@ -96,17 +96,14 @@ type GitWriter interface {
 	DeleteFile(path, message string) (string, error)
 }
 
-// DeleteFact deletes a fact from both the git store and the search index.
+// DeleteFact deletes a fact from the git store; the onCommit observer
+// handles index cleanup automatically via idx.Sync.
 func (s *Service) DeleteFact(gw GitWriter, path, message string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if _, err := gw.DeleteFile(path, message); err != nil {
 		return fmt.Errorf("DeleteFact git: %w", err)
-	}
-
-	if err := s.idx.Delete(path); err != nil {
-		return fmt.Errorf("DeleteFact index: %w", err)
 	}
 
 	return nil

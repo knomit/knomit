@@ -27,6 +27,11 @@ func TestDeleteFactAtomically(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	gs.SetOnCommit(func(_ string) {
+		if err := svc.Index().Sync(gs); err != nil {
+			t.Errorf("onCommit sync: %v", err)
+		}
+	})
 
 	// Write a fact
 	_, blobHash, err := gs.WriteFile("kb/test.md", "---\ndomain: []\nconfidence: 1\nsources: 1\nentities: []\nrefs: []\n---\n# Test\n\nBody.", "add test")
@@ -69,6 +74,11 @@ func TestFullRoundtrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	gs.SetOnCommit(func(_ string) {
+		if err := svc.Index().Sync(gs); err != nil {
+			t.Errorf("onCommit sync: %v", err)
+		}
+	})
 
 	// Write a fact via git
 	content := "---\ndomain: [databases]\nconfidence: 0.9\nsources: 1\nentities: [postgres]\nrefs: []\n---\n# Postgres is great\n\nPostgreSQL is a powerful RDBMS."
