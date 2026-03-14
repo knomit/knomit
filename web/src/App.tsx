@@ -29,7 +29,7 @@ export default function App() {
 
   // Load initial status
   useEffect(() => {
-    api.status().then(s => dispatch({ type: 'SET_STATUS', head: s.head, branch: s.branch, embeddingsEnabled: s.embeddings_enabled })).catch(() => {});
+    api.status().then(s => dispatch({ type: 'SET_STATUS', head: s.head, branch: s.branch, embeddingsEnabled: s.embeddings_enabled, ontologyRoot: s.ontology_root })).catch(() => {});
   }, []);
 
   // SSE for task and status events

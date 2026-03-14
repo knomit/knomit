@@ -39,6 +39,7 @@ func (s *Store) WriteFile(path, content, message string) (commitHash string, blo
 	if err := s.storer.SetReference(newRef); err != nil {
 		return "", "", err
 	}
+	s.notifyCommit(newCommitHash.String())
 	return newCommitHash.String(), newBlobHash.String(), nil
 }
 
@@ -67,6 +68,7 @@ func (s *Store) DeleteFile(path, message string) (commitHash string, err error) 
 	if err := s.storer.SetReference(newRef); err != nil {
 		return "", err
 	}
+	s.notifyCommit(newCommitHash.String())
 	return newCommitHash.String(), nil
 }
 
@@ -174,6 +176,7 @@ func (s *Store) BatchWrite(files map[string]string, message string) (commitHash 
 	if err := s.storer.SetReference(newRef); err != nil {
 		return "", nil, err
 	}
+	s.notifyCommit(cHash.String())
 	return cHash.String(), blobHashes, nil
 }
 

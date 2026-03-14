@@ -87,7 +87,7 @@ func NewRouter(gs GitStore, idx SearchIndex, hub *TaskHub, synthDeps *SynthDeps,
 	r.Get("/api/v1/search", handleSearch(idx))
 	r.Get("/api/v1/history", handleHistory(gs))
 	r.Get("/api/v1/stats", handleStats(gs))
-	r.Get("/api/v1/status", handleStatus(gs, idx, embeddingsEnabled))
+	r.Get("/api/v1/status", handleStatus(gs, idx, embeddingsEnabled, ontologyRoot))
 	r.Post("/api/v1/synthesize", handleSynthesizeStart(synthDeps, hub))
 	r.Post("/api/v1/sync", handleSync(gs, hub))
 	r.Get("/api/v1/events", handleEvents(gs, idx, hub))

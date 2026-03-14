@@ -40,12 +40,13 @@ import (
 // Store wraps go-git with knomit's logical operations.
 // All fact reads/writes go through go-git's plumbing API — NO filesystem reads/writes.
 type Store struct {
-	mu      sync.Mutex
-	repo    *gogit.Repository
-	storer  *storegit.Storer
-	ownsDB  bool    // true when Init/Open opened the DB (legacy path)
-	ownedDB *sql.DB // non-nil when ownsDB is true
-	branch  string  // e.g. "agent/laptop"
+	mu       sync.Mutex
+	repo     *gogit.Repository
+	storer   *storegit.Storer
+	ownsDB   bool    // true when Init/Open opened the DB (legacy path)
+	ownedDB  *sql.DB // non-nil when ownsDB is true
+	branch   string  // e.g. "agent/laptop"
+	onCommit func(hash string)
 }
 
 // DirEntry represents a single entry in a knomit directory listing.
@@ -238,6 +239,18 @@ func (s *Store) HeadCommit() (string, error) {
 		return "", fmt.Errorf("HeadCommit: %w", err)
 	}
 	return headRef.Hash().String(), nil
+}
+
+// SetOnCommit registers a callback invoked after every branch ref update.
+// Must be called before any writes (during init).
+func (s *Store) SetOnCommit(fn func(hash string)) {
+	s.onCommit = fn
+}
+
+func (s *Store) notifyCommit(hash string) {
+	if s.onCommit != nil {
+		s.onCommit(hash)
+	}
 }
 
 // Storer returns the underlying storer (used by the git remote handler).

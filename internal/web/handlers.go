@@ -313,7 +313,7 @@ func handleStats(gs GitStore) http.HandlerFunc {
 }
 
 // handleStatus handles GET /api/status
-func handleStatus(gs GitStore, idx SearchIndex, embeddingsEnabled bool) http.HandlerFunc {
+func handleStatus(gs GitStore, idx SearchIndex, embeddingsEnabled bool, ontologyRoot string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		head, err := gs.HeadCommit()
 		if err != nil {
@@ -333,6 +333,7 @@ func handleStatus(gs GitStore, idx SearchIndex, embeddingsEnabled bool) http.Han
 			"branch":             branch,
 			"index_commit":       indexCommit,
 			"embeddings_enabled": embeddingsEnabled,
+			"ontology_root":      ontologyRoot,
 		})
 	}
 }

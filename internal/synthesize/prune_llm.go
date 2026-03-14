@@ -45,6 +45,7 @@ type mergedFact struct {
 	Path       string      `json:"path"`
 	Title      string      `json:"title"`
 	Body       string      `json:"body"`
+	Type       string      `json:"type"`
 	Domain     flexStrings `json:"domain"`
 	Confidence float64     `json:"confidence"`
 	Sources    int         `json:"sources"`
@@ -71,6 +72,7 @@ type factForLLM struct {
 	File       string   `json:"path"`
 	Title      string   `json:"title"`
 	Body       string   `json:"body"`
+	Type       string   `json:"type"`
 	Domain     []string `json:"domain"`
 	Entities   []string `json:"entities"`
 	Confidence float64  `json:"confidence"`

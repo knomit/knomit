@@ -80,12 +80,14 @@ func handleSynthesizeStart(deps *SynthDeps, hub *TaskHub) http.HandlerFunc {
 }
 
 // defaultRecipe is used when the POST body is empty, providing a
-// sensible default synthesis operation (prune stale/redundant facts).
+// sensible default synthesis operation (prune then distill).
 const defaultRecipe = `name: default
 prompt: Review and consolidate the knowledge base.
 steps:
   - mode: prune
     prompt: Identify stale, redundant, or outdated facts.
+  - mode: distill
+    prompt: Find patterns across facts and create higher-level summaries.
 `
 
 // handleSync handles POST /api/v1/sync

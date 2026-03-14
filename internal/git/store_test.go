@@ -612,6 +612,62 @@ func TestWriteFileReturnsBlobHash(t *testing.T) {
 	}
 }
 
+func TestOnCommitCallback(t *testing.T) {
+	dir := t.TempDir()
+	gs, err := git.Init(filepath.Join(dir, "test.db"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer gs.Close()
+
+	var called []string
+	gs.SetOnCommit(func(hash string) {
+		called = append(called, hash)
+	})
+
+	hash, _, err := gs.WriteFile("kb/test.md", "---\ntitle: Test\ntype: observation\ndomain: [eng]\nentities: [Go]\nconfidence: 0.9\nsources: 1\n---\ntest content", "test commit")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(called) != 1 || called[0] != hash {
+		t.Fatalf("expected onCommit called once with %q, got %v", hash, called)
+	}
+}
+
+func TestOnCommitBatchAndDelete(t *testing.T) {
+	dir := t.TempDir()
+	gs, err := git.Init(filepath.Join(dir, "test.db"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer gs.Close()
+
+	var called []string
+	gs.SetOnCommit(func(hash string) {
+		called = append(called, hash)
+	})
+
+	files := map[string]string{
+		"kb/a.md": "---\ntitle: A\ntype: observation\ndomain: [eng]\nentities: [Go]\nconfidence: 0.9\nsources: 1\n---\na",
+		"kb/b.md": "---\ntitle: B\ntype: observation\ndomain: [eng]\nentities: [Go]\nconfidence: 0.9\nsources: 1\n---\nb",
+	}
+	batchHash, _, err := gs.BatchWrite(files, "batch commit")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(called) != 1 || called[0] != batchHash {
+		t.Fatalf("expected 1 call after BatchWrite, got %d", len(called))
+	}
+
+	delHash, err := gs.DeleteFile("kb/a.md", "delete a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(called) != 2 || called[1] != delHash {
+		t.Fatalf("expected 2 calls total, got %d", len(called))
+	}
+}
+
 func TestReadFileWithHash(t *testing.T) {
 	dir := t.TempDir()
 	store, err := git.Init(filepath.Join(dir, "knomit.git.db"), nil)

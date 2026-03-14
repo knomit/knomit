@@ -126,6 +126,8 @@ func (s *Store) Sync(remoteAuth interface{}) (SyncResult, error) {
 		return SyncResult{}, fmt.Errorf("Sync: update ref: %w", err)
 	}
 
+	s.notifyCommit(mergeHash.String())
+
 	log.Info().
 		Int("ahead", ahead).
 		Str("merge_commit", mergeHash.String()[:8]).
