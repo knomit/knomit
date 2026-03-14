@@ -97,6 +97,7 @@ func runDistillOnGroup(ctx context.Context, gs GitStore, idx SearchIndex, adapte
 			ctx,
 			"You are a knowledge base synthesis assistant. Respond only with valid JSON.",
 			[]llm.Message{{Role: "user", Content: prompt}},
+			llm.CompletionOptions{},
 			nil,
 		)
 		if err != nil {

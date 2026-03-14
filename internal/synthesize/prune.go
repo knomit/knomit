@@ -54,6 +54,7 @@ func executePruneStep(ctx context.Context, gs GitStore, idx SearchIndex, embedde
 				ctx,
 				"You are a knowledge base maintenance assistant. Respond only with valid JSON.",
 				[]llm.Message{{Role: "user", Content: prompt}},
+				llm.CompletionOptions{},
 				nil,
 			)
 			if err != nil {

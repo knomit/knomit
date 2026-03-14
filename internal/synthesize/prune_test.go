@@ -51,7 +51,7 @@ func TestPruneStep(t *testing.T) {
   ],
   "merges": []
 }`
-	adapter.EXPECT().Complete(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(mockResponse, nil)
+	adapter.EXPECT().Complete(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(mockResponse, nil)
 
 	// bar: forget — DeleteFile + idx.Delete
 	gs.EXPECT().DeleteFile("know/test/bar.md", gomock.Any()).Return(nil)
@@ -140,7 +140,7 @@ func TestPruneStepWithMerge(t *testing.T) {
     }
   ]
 }`
-	adapter.EXPECT().Complete(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(mockResponse, nil)
+	adapter.EXPECT().Complete(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(mockResponse, nil)
 
 	// Write merged fact
 	var mergedWritten bool
@@ -351,8 +351,8 @@ func TestPruneStepClustersBeforeLLM(t *testing.T) {
 
 	// LLM: capture prompts, return empty response each call.
 	var capturedPrompts []string
-	adapter.EXPECT().Complete(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
-		func(ctx context.Context, system string, msgs []llm.Message, onChunk func(string)) (string, error) {
+	adapter.EXPECT().Complete(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
+		func(ctx context.Context, system string, msgs []llm.Message, opts llm.CompletionOptions, onChunk func(string)) (string, error) {
 			for _, msg := range msgs {
 				capturedPrompts = append(capturedPrompts, msg.Content)
 			}

@@ -41,7 +41,7 @@ func TestRunPruneOnly(t *testing.T) {
   ],
   "merges": []
 }`
-	adapter.EXPECT().Complete(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(llmResp, nil)
+	adapter.EXPECT().Complete(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(llmResp, nil)
 
 	// forget.md: DeleteFile + idx.Delete
 	gs.EXPECT().DeleteFile("know/test/forget.md", gomock.Any()).Return(nil)
@@ -157,7 +157,7 @@ func TestRunDistillWithFacts(t *testing.T) {
   ],
   "forget": ["know/test/a.md"]
 }`
-	adapter.EXPECT().Complete(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(llmResp, nil)
+	adapter.EXPECT().Complete(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(llmResp, nil)
 
 	// Write synthesized fact
 	var synthWritten bool

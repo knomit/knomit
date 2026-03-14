@@ -35,7 +35,7 @@ func NewBedrockAdapter(ctx context.Context, model string) (*BedrockAdapter, erro
 }
 
 // Complete implements LLMAdapter by invoking the Bedrock streaming API.
-func (a *BedrockAdapter) Complete(ctx context.Context, system string, msgs []Message, onChunk func(string)) (string, error) {
+func (a *BedrockAdapter) Complete(ctx context.Context, system string, msgs []Message, opts CompletionOptions, onChunk func(string)) (string, error) {
 	type bedrockMessage struct {
 		Role    string `json:"role"`
 		Content string `json:"content"`
@@ -103,5 +103,8 @@ func (a *BedrockAdapter) Complete(ctx context.Context, system string, msgs []Mes
 
 	return accumulated, nil
 }
+
+// Model returns the model name used by this adapter.
+func (a *BedrockAdapter) Model() string { return a.model }
 
 func strPtr(s string) *string { return &s }

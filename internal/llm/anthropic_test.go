@@ -37,7 +37,7 @@ func TestAnthropicAdapter_Complete(t *testing.T) {
 	var chunks []string
 	result, err := adapter.Complete(context.Background(), "system prompt", []Message{
 		{Role: "user", Content: "say hello"},
-	}, func(chunk string) {
+	}, CompletionOptions{}, func(chunk string) {
 		chunks = append(chunks, chunk)
 	})
 
