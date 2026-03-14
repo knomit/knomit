@@ -19,13 +19,13 @@ type DistillResult struct {
 
 // distillFact is a synthesized fact returned by the LLM in a distill step.
 type distillFact struct {
-	Path       string   `json:"path"`
-	Title      string   `json:"title"`
-	Body       string   `json:"body"`
-	Domain     []string `json:"domain"`
-	Confidence float64  `json:"confidence"`
-	Entities   []string `json:"entities"`
-	Refs       []string `json:"refs"`
+	Path       string      `json:"path"`
+	Title      string      `json:"title"`
+	Body       string      `json:"body"`
+	Domain     flexStrings `json:"domain"`
+	Confidence float64     `json:"confidence"`
+	Entities   flexStrings `json:"entities"`
+	Refs       flexStrings `json:"refs"`
 }
 
 // parseDistillResponse parses the LLM JSON response for a distill step.
@@ -65,6 +65,12 @@ func runDistillOnGroup(ctx context.Context, gs GitStore, idx SearchIndex, adapte
 			return nil, nil, fmt.Errorf("distill: render user: %w", err)
 		}
 
+		// Collect input paths for validation and passive detection.
+		inputPaths := make([]string, len(chunk))
+		for j, f := range chunk {
+			inputPaths[j] = f.File
+		}
+
 		opts := llm.CompletionOptions{ForceJSON: profile.ForceJSON}
 		response, err := adapter.Complete(ctx, systemPrompt, []llm.Message{{Role: "user", Content: userPrompt}}, opts, nil)
 		if err != nil {
@@ -75,10 +81,10 @@ func runDistillOnGroup(ctx context.Context, gs GitStore, idx SearchIndex, adapte
 			return nil, nil, fmt.Errorf("distill parse chunk %d: %w", i+1, err)
 		}
 
-		// Collect input paths for passive detection
-		inputPaths := make([]string, len(chunk))
-		for j, f := range chunk {
-			inputPaths[j] = f.File
+		// Validate forget paths reference actual input facts.
+		if verr := validateDistillPaths(result, inputPaths); verr != nil {
+			log.Warn().Err(verr).Int("chunk", i+1).Msg("distill: invalid paths in response")
+			result = DistillResult{} // treat as passive to trigger retry
 		}
 
 		if isDistillPassive(result, inputPaths) && profile.RetryOnPassive {
@@ -96,6 +102,11 @@ func runDistillOnGroup(ctx context.Context, gs GitStore, idx SearchIndex, adapte
 			result, err = parseDistillResponse(response)
 			if err != nil {
 				return nil, nil, fmt.Errorf("distill retry parse chunk %d: %w", i+1, err)
+			}
+			// Validate retry paths too.
+			if verr := validateDistillPaths(result, inputPaths); verr != nil {
+				log.Warn().Err(verr).Int("chunk", i+1).Msg("distill: retry also has invalid paths, discarding")
+				result = DistillResult{}
 			}
 			if isDistillPassive(result, inputPaths) {
 				log.Warn().Int("chunk", i+1).Msg("distill: retry also passive, accepting result")

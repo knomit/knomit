@@ -205,6 +205,24 @@ func TestExtractJSON(t *testing.T) {
 	}
 }
 
+func TestFlexStrings(t *testing.T) {
+	// LLMs sometimes return "domain": "ml" instead of ["ml"].
+	raw := `{"synthesize": [{"path": "x.md", "title": "X", "body": "B", "domain": "ml", "confidence": 0.8, "entities": "foo", "refs": []}], "forget": []}`
+	result, err := parseDistillResponse(raw)
+	if err != nil {
+		t.Fatalf("parseDistillResponse with string domain: %v", err)
+	}
+	if len(result.Synthesize) != 1 {
+		t.Fatalf("expected 1 synthesized, got %d", len(result.Synthesize))
+	}
+	if len(result.Synthesize[0].Domain) != 1 || result.Synthesize[0].Domain[0] != "ml" {
+		t.Errorf("domain: got %v, want [ml]", result.Synthesize[0].Domain)
+	}
+	if len(result.Synthesize[0].Entities) != 1 || result.Synthesize[0].Entities[0] != "foo" {
+		t.Errorf("entities: got %v, want [foo]", result.Synthesize[0].Entities)
+	}
+}
+
 func TestParsePruneResponseMarkdownWrapped(t *testing.T) {
 	// LLMs sometimes wrap their JSON in markdown code fences.
 	wrapped := "```json\n" + `{
