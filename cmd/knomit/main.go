@@ -106,9 +106,21 @@ func serveCmd() *cobra.Command {
 			if err != nil {
 				log.Warn().Err(err).Msg("LLM provider resolution failed")
 			} else {
-				llmAdapter, err = llm.NewAdapter(ctx, provider, cfg.LLM.Model)
+				llmAdapter, err = llm.NewAdapter(ctx, provider, cfg.LLM.Model, cfg.LLM)
 				if err != nil {
 					log.Warn().Err(err).Msg("LLM adapter init failed")
+				}
+			}
+
+			// Optional LLM trace log (set KNOMIT_LLM_TRACE to a file path)
+			if tracePath := os.Getenv("KNOMIT_LLM_TRACE"); tracePath != "" && llmAdapter != nil {
+				tracer, err := llm.NewTracingAdapter(llmAdapter, tracePath)
+				if err != nil {
+					log.Warn().Err(err).Msg("LLM trace init failed")
+				} else {
+					llmAdapter = tracer
+					defer tracer.Close()
+					log.Info().Str("path", tracePath).Msg("LLM tracing enabled")
 				}
 			}
 

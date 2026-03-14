@@ -45,12 +45,16 @@ func ResolveProvider(model, explicit string) (string, error) {
 // ResolveProvider) and a model string, it returns the corresponding
 // LLMAdapter. Each provider performs its own initialization (API client
 // creation, health checks, credential loading).
-func NewAdapter(ctx context.Context, provider, model string) (LLMAdapter, error) {
+func NewAdapter(ctx context.Context, provider, model string, cfg ...Config) (LLMAdapter, error) {
+	var c Config
+	if len(cfg) > 0 {
+		c = cfg[0]
+	}
 	switch provider {
 	case "anthropic":
 		return NewAnthropicAdapter(model), nil
 	case "gemini":
-		return NewGeminiAdapter(ctx, model)
+		return NewGeminiAdapter(ctx, model, c)
 	case "bedrock":
 		return NewBedrockAdapter(ctx, model)
 	case "claudecli":

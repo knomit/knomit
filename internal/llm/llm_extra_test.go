@@ -12,11 +12,11 @@ import (
 func TestDefaultConfig(t *testing.T) {
 	cfg := DefaultConfig()
 
-	if cfg.Model != "qwen3" {
-		t.Errorf("Model = %q, want %q", cfg.Model, "qwen3")
+	if cfg.Model != "gemini-2.5-flash" {
+		t.Errorf("Model = %q, want %q", cfg.Model, "gemini-2.5-flash")
 	}
-	if cfg.Provider != "ollama" {
-		t.Errorf("Provider = %q, want %q", cfg.Provider, "ollama")
+	if cfg.Provider != "gemini" {
+		t.Errorf("Provider = %q, want %q", cfg.Provider, "gemini")
 	}
 	if cfg.APIKey != "" {
 		t.Errorf("APIKey = %q, want empty", cfg.APIKey)

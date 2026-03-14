@@ -91,7 +91,7 @@ func TestPruneStep(t *testing.T) {
 	// tag event should be present
 	tagEventSeen := false
 	for _, e := range events {
-		if e.Phase == "detail-forget" && e.Message == "know/test/bar.md" {
+		if e.Phase == "detail-forget" && e.Message == "forget know/test/bar.md" {
 			tagEventSeen = true
 		}
 	}

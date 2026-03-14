@@ -67,6 +67,15 @@ func executePruneStep(ctx context.Context, gs GitStore, idx SearchIndex, embedde
 		return nil
 	}
 
+	// Try batch path if adapter supports it.
+	if ba, ok := adapter.(llm.BatchAdapter); ok && ba.BatchEnabled() {
+		decisions, merges, err := pruneBatch(ctx, ba, llmGroups, recipe, step, profile, onProgress)
+		if err != nil {
+			return fmt.Errorf("prune batch: %w", err)
+		}
+		return applyPruneResults(gs, idx, recipe, decisions, merges, onProgress)
+	}
+
 	var allDecisions []PruneDecision
 	var allMerges []MergeEntry
 
@@ -157,6 +166,11 @@ func executePruneStep(ctx context.Context, gs GitStore, idx SearchIndex, embedde
 		}
 	}
 
+	return applyPruneResults(gs, idx, recipe, allDecisions, allMerges, onProgress)
+}
+
+// applyPruneResults writes keep/forget/update decisions and merges to git+index.
+func applyPruneResults(gs GitStore, idx SearchIndex, recipe Recipe, allDecisions []PruneDecision, allMerges []MergeEntry, onProgress func(ProgressEvent)) error {
 	// Track deleted paths to avoid double-deletion when a path appears in
 	// both "forget" decisions and merge source lists.
 	deletedPaths := make(map[string]bool)
@@ -178,7 +192,7 @@ func executePruneStep(ctx context.Context, gs GitStore, idx SearchIndex, embedde
 			if err := idx.Delete(d.Path); err != nil {
 				onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("index delete %s: %v", d.Path, err)})
 			}
-			onProgress(ProgressEvent{Phase: "detail-forget", Message: d.Path})
+			onProgress(ProgressEvent{Phase: "detail-forget", Message: "forget " + d.Path})
 
 		case "update":
 			content, err := gs.ReadFile(d.Path)
@@ -212,7 +226,7 @@ func executePruneStep(ctx context.Context, gs GitStore, idx SearchIndex, embedde
 			}); err != nil {
 				onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("index upsert %s: %v", d.Path, err)})
 			}
-			onProgress(ProgressEvent{Phase: "detail-update", Message: d.Path})
+			onProgress(ProgressEvent{Phase: "detail-update", Message: fmt.Sprintf("update %.2f %s", d.Confidence, d.Path)})
 		}
 	}
 
@@ -264,7 +278,7 @@ func executePruneStep(ctx context.Context, gs GitStore, idx SearchIndex, embedde
 			_ = idx.Delete(src)
 			deletedPaths[src] = true
 		}
-		onProgress(ProgressEvent{Phase: "detail-merge", Message: mf.Path})
+		onProgress(ProgressEvent{Phase: "detail-merge", Message: "merge " + mf.Path})
 	}
 
 	tagName := fmt.Sprintf("learn/synthesize-%s-prune", recipe.Name)
