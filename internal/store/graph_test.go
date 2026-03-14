@@ -523,7 +523,7 @@ func TestSyncRebuildsGraph(t *testing.T) {
 		head: "abc123def456",
 	}
 
-	err = idx.Sync(git)
+	err = idx.Sync(git, "main")
 	if err != nil {
 		t.Fatal(err)
 	}

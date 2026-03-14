@@ -28,7 +28,7 @@ type GitStore interface {
 // Accepts *store.Index at runtime.
 type SearchIndex interface {
 	Search(q store.SearchQuery) ([]store.SearchResult, error)
-	GetLastCommit() (string, error)
+	GetLastCommit(branch string) (string, error)
 }
 
 // SynthDeps bundles the dependencies needed by the synthesize handler.

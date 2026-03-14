@@ -28,7 +28,7 @@ func TestDeleteFactAtomically(t *testing.T) {
 		t.Fatal(err)
 	}
 	gs.SetOnCommit(func(_ string) {
-		if err := svc.Index().Sync(gs); err != nil {
+		if err := svc.Index().Sync(gs, gs.Branch()); err != nil {
 			t.Errorf("onCommit sync: %v", err)
 		}
 	})
@@ -75,7 +75,7 @@ func TestFullRoundtrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	gs.SetOnCommit(func(_ string) {
-		if err := svc.Index().Sync(gs); err != nil {
+		if err := svc.Index().Sync(gs, gs.Branch()); err != nil {
 			t.Errorf("onCommit sync: %v", err)
 		}
 	})
@@ -117,7 +117,7 @@ func TestFullRoundtrip(t *testing.T) {
 	}
 
 	// Sync should work
-	if err := svc.Index().Sync(gs); err != nil {
+	if err := svc.Index().Sync(gs, gs.Branch()); err != nil {
 		t.Fatal(err)
 	}
 

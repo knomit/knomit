@@ -23,6 +23,7 @@ import (
 	"knomit/internal/llm"
 	"knomit/internal/mcp"
 	"knomit/internal/store"
+	"knomit/internal/synthesize"
 	"knomit/internal/web"
 )
 
@@ -118,7 +119,7 @@ func serveCmd() *cobra.Command {
 			}
 
 			// 4. Initial sync (must happen after embedder is attached so vectors are computed)
-			if err := idx.Sync(gs); err != nil {
+			if err := idx.Sync(gs, gs.Branch()); err != nil {
 				log.Warn().Err(err).Msg("initial index sync failed")
 			}
 
@@ -128,7 +129,7 @@ func serveCmd() *cobra.Command {
 
 			// 4b. Observer: sync index + push SSE on every git commit.
 			obs := newObserver(50*time.Millisecond, func(hash string) {
-				if err := idx.Sync(gs); err != nil {
+				if err := idx.Sync(gs, gs.Branch()); err != nil {
 					log.Warn().Err(err).Msg("observer sync failed")
 				}
 				hub.BroadcastStatus(hash)
@@ -161,10 +162,11 @@ func serveCmd() *cobra.Command {
 			}
 
 			// 6. Create per-profile MCP servers
+			reviewer := &reviewerAdapter{r: synthesize.NewReviewer(gs, idx, idx, nil)}
 			profiles := []string{"code", "chat", "generic"}
 			mcpServers := make(map[string]http.Handler, len(profiles))
 			for _, p := range profiles {
-				mcpSrv := mcp.NewServer(gs, idx, llmAdapter, p, cfg.OntologyRoot, ontology)
+				mcpSrv := mcp.NewServer(gs, idx, reviewer, p, cfg.OntologyRoot, ontology)
 				mcpServers[p] = mcpserver.NewStreamableHTTPServer(mcpSrv)
 			}
 
@@ -297,6 +299,20 @@ func resetCmd() *cobra.Command {
 	}
 }
 
+// reviewerAdapter adapts *synthesize.Reviewer to the mcp.Reviewer interface,
+// widening the return type from *synthesize.ReviewResult to interface{}.
+type reviewerAdapter struct {
+	r *synthesize.Reviewer
+}
+
+func (a *reviewerAdapter) StartSession() (interface{}, error) {
+	return a.r.StartSession()
+}
+
+func (a *reviewerAdapter) ContinueSession(sessionID, response string) (interface{}, error) {
+	return a.r.ContinueSession(sessionID, response)
+}
+
 func rebuildCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "rebuild",
@@ -317,7 +333,7 @@ func rebuildCmd() *cobra.Command {
 				return fmt.Errorf("open git: %w", err)
 			}
 			idx := svc.Index()
-			if err := idx.Sync(gs); err != nil {
+			if err := idx.Sync(gs, gs.Branch()); err != nil {
 				return fmt.Errorf("rebuild: %w", err)
 			}
 			log.Info().Msg("Index rebuilt successfully")

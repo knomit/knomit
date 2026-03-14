@@ -174,19 +174,23 @@ func (idx *Index) GetEmbedding(path string) ([]float32, error) {
 	return bytesToFloat32Slice(blob)
 }
 
-// SetLastCommit stores the last processed commit hash in the meta table.
-func (idx *Index) SetLastCommit(hash string) error {
+// SetLastCommit stores the last processed commit hash in the meta table,
+// scoped to the given branch.
+func (idx *Index) SetLastCommit(branch, hash string) error {
+	key := "last_commit:" + branch
 	_, err := idx.db.Exec(
-		`INSERT OR REPLACE INTO meta(key, value) VALUES ('last_commit', ?)`,
-		hash,
+		`INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)`,
+		key, hash,
 	)
 	return err
 }
 
-// GetLastCommit returns the last processed commit hash, or "" if not set.
-func (idx *Index) GetLastCommit() (string, error) {
+// GetLastCommit returns the last processed commit hash for the given branch,
+// or "" if not set.
+func (idx *Index) GetLastCommit(branch string) (string, error) {
+	key := "last_commit:" + branch
 	var hash string
-	err := idx.db.QueryRow(`SELECT value FROM meta WHERE key='last_commit'`).Scan(&hash)
+	err := idx.db.QueryRow(`SELECT value FROM meta WHERE key=?`, key).Scan(&hash)
 	if err == sql.ErrNoRows {
 		return "", nil
 	}

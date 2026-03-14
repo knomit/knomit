@@ -6,7 +6,6 @@ import (
 
 	"knomit/internal/fact"
 	gitpkg "knomit/internal/git"
-	"knomit/internal/llm"
 	storepkg "knomit/internal/store"
 )
 
@@ -63,9 +62,7 @@ type SearchIndex interface {
 }
 
 // NewServer creates a new MCP server with all knomit tools registered.
-func NewServer(gs GitStore, idx SearchIndex, llmAdapter llm.LLMAdapter, profile, ontologyRoot string, ontology *fact.Ontology) *server.MCPServer {
-	_ = llmAdapter
-
+func NewServer(gs GitStore, idx SearchIndex, reviewer Reviewer, profile, ontologyRoot string, ontology *fact.Ontology) *server.MCPServer {
 	s := server.NewMCPServer("knomit", "1.0.0",
 		server.WithInstructions(ProfileInstructions(profile, ontologyRoot, ontology)),
 	)
@@ -76,6 +73,10 @@ func NewServer(gs GitStore, idx SearchIndex, llmAdapter llm.LLMAdapter, profile,
 	s.AddTool(updateTool(), UpdateHandler(gs, ontologyRoot))
 	s.AddTool(exploreTool(ontologyRoot), ExploreHandler(gs, ontologyRoot))
 	s.AddTool(retractTool(), RetractHandler(gs, ontologyRoot))
+
+	if reviewer != nil {
+		s.AddTool(reviewTool(), ReviewHandler(reviewer))
+	}
 
 	return s
 }

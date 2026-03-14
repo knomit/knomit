@@ -223,5 +223,26 @@ CREATE TABLE IF NOT EXISTS facts (
 );
 CREATE VIRTUAL TABLE IF NOT EXISTS facts_vec USING vec0(
     embedding FLOAT[%d] distance_metric=cosine
+);
+CREATE TABLE IF NOT EXISTS review_watermarks (
+    branch      TEXT PRIMARY KEY,
+    commit_hash TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS review_sessions (
+    id          TEXT PRIMARY KEY,
+    branch      TEXT NOT NULL,
+    status      TEXT NOT NULL DEFAULT 'active',
+    created_at  TEXT NOT NULL,
+    updated_at  TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS review_work_items (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id  TEXT NOT NULL REFERENCES review_sessions(id) ON DELETE CASCADE,
+    step_type   TEXT NOT NULL,
+    cluster_key TEXT NOT NULL,
+    facts_json  TEXT NOT NULL,
+    response    TEXT,
+    priority    REAL NOT NULL,
+    created_at  TEXT NOT NULL
 );`, vecDim)
 }

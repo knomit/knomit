@@ -211,7 +211,7 @@ func TestLastCommit(t *testing.T) {
 	defer idx.Close()
 
 	// Should be empty initially
-	hash, err := idx.GetLastCommit()
+	hash, err := idx.GetLastCommit("main")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -220,11 +220,11 @@ func TestLastCommit(t *testing.T) {
 	}
 
 	// Set and retrieve
-	if err := idx.SetLastCommit("abc123"); err != nil {
+	if err := idx.SetLastCommit("main", "abc123"); err != nil {
 		t.Fatal(err)
 	}
 
-	hash, err = idx.GetLastCommit()
+	hash, err = idx.GetLastCommit("main")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -233,11 +233,11 @@ func TestLastCommit(t *testing.T) {
 	}
 
 	// Overwrite
-	if err := idx.SetLastCommit("def456"); err != nil {
+	if err := idx.SetLastCommit("main", "def456"); err != nil {
 		t.Fatal(err)
 	}
 
-	hash, err = idx.GetLastCommit()
+	hash, err = idx.GetLastCommit("main")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -273,7 +273,7 @@ func TestIncrementalSync(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := idx.Sync(gitStore); err != nil {
+	if err := idx.Sync(gitStore, gitStore.Branch()); err != nil {
 		t.Fatalf("Sync (full rebuild) failed: %v", err)
 	}
 
@@ -299,7 +299,7 @@ func TestIncrementalSync(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	last, err := idx.GetLastCommit()
+	last, err := idx.GetLastCommit(gitStore.Branch())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -314,7 +314,7 @@ func TestIncrementalSync(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := idx.Sync(gitStore); err != nil {
+	if err := idx.Sync(gitStore, gitStore.Branch()); err != nil {
 		t.Fatalf("Sync (incremental) failed: %v", err)
 	}
 
@@ -342,7 +342,7 @@ func TestIncrementalSync(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := idx.Sync(gitStore); err != nil {
+	if err := idx.Sync(gitStore, gitStore.Branch()); err != nil {
 		t.Fatalf("Sync (delete) failed: %v", err)
 	}
 
@@ -359,10 +359,10 @@ func TestIncrementalSync(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := idx.Sync(gitStore); err != nil {
+	if err := idx.Sync(gitStore, gitStore.Branch()); err != nil {
 		t.Fatalf("Sync (no-op) failed: %v", err)
 	}
-	lastAfter, err := idx.GetLastCommit()
+	lastAfter, err := idx.GetLastCommit(gitStore.Branch())
 	if err != nil {
 		t.Fatal(err)
 	}

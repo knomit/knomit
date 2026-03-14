@@ -390,7 +390,7 @@ func TestHandleStatus(t *testing.T) {
 			var idx SearchIndex
 			if tc.hasIdx {
 				mockIdx := NewMockSearchIndex(ctrl)
-				mockIdx.EXPECT().GetLastCommit().Return(tc.indexCommit, nil)
+				mockIdx.EXPECT().GetLastCommit(tc.branch).Return(tc.indexCommit, nil)
 				idx = mockIdx
 			}
 

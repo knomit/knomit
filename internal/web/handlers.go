@@ -325,7 +325,7 @@ func handleStatus(gs GitStore, idx SearchIndex, embeddingsEnabled bool, ontology
 
 		indexCommit := ""
 		if idx != nil {
-			indexCommit, _ = idx.GetLastCommit()
+			indexCommit, _ = idx.GetLastCommit(branch)
 		}
 
 		writeJSON(w, http.StatusOK, map[string]any{

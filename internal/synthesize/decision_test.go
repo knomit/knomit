@@ -1,0 +1,271 @@
+package synthesize
+
+import (
+	"testing"
+
+	"go.uber.org/mock/gomock"
+	"knomit/internal/store"
+)
+
+func TestApplyPruneDecisions_Retract(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	gs := NewMockGitStore(ctrl)
+	idx := NewMockSearchIndex(ctrl)
+
+	gs.EXPECT().DeleteFile("kb/test/old.md", gomock.Any()).Return("c1", nil)
+	idx.EXPECT().Delete("kb/test/old.md").Return(nil)
+	gs.EXPECT().Tag(gomock.Any()).Return(nil).AnyTimes()
+
+	decisions := []PruneDecision{
+		{Path: "kb/test/old.md", Action: "retract"},
+	}
+	progress := collectProgress()
+
+	stats, err := ApplyPruneDecisions(gs, idx, decisions, nil, "test", progress.fn)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if stats.Pruned != 1 {
+		t.Errorf("expected Pruned=1, got %d", stats.Pruned)
+	}
+	if stats.Updated != 0 || stats.Merged != 0 {
+		t.Errorf("expected no updates or merges, got Updated=%d Merged=%d", stats.Updated, stats.Merged)
+	}
+	progress.assertContains(t, "detail-retract")
+}
+
+func TestApplyPruneDecisions_Update(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	gs := NewMockGitStore(ctrl)
+	idx := NewMockSearchIndex(ctrl)
+
+	content := factContent("Test fact", "Some body text.")
+	gs.EXPECT().ReadFile("kb/test/upd.md").Return(content, nil)
+	gs.EXPECT().WriteFile("kb/test/upd.md", gomock.Any(), gomock.Any()).Return("c2", "b2", nil)
+	idx.EXPECT().Upsert(gomock.Any()).DoAndReturn(func(r store.FactRecord) error {
+		if r.Confidence != 0.5 {
+			t.Errorf("expected confidence 0.5, got %f", r.Confidence)
+		}
+		return nil
+	})
+	gs.EXPECT().Tag(gomock.Any()).Return(nil).AnyTimes()
+
+	decisions := []PruneDecision{
+		{Path: "kb/test/upd.md", Action: "update", Confidence: 0.5},
+	}
+	progress := collectProgress()
+
+	stats, err := ApplyPruneDecisions(gs, idx, decisions, nil, "test", progress.fn)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if stats.Updated != 1 {
+		t.Errorf("expected Updated=1, got %d", stats.Updated)
+	}
+	progress.assertContains(t, "detail-update")
+}
+
+func TestApplyPruneDecisions_Keep(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	gs := NewMockGitStore(ctrl)
+	idx := NewMockSearchIndex(ctrl)
+
+	// "keep" should produce no side effects — no mock expectations needed.
+	decisions := []PruneDecision{
+		{Path: "kb/test/keep.md", Action: "keep"},
+	}
+	progress := collectProgress()
+
+	stats, err := ApplyPruneDecisions(gs, idx, decisions, nil, "test", progress.fn)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if stats.Pruned != 0 || stats.Updated != 0 || stats.Merged != 0 {
+		t.Errorf("keep should have no stats, got %+v", stats)
+	}
+}
+
+func TestApplyPruneDecisions_Merge(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	gs := NewMockGitStore(ctrl)
+	idx := NewMockSearchIndex(ctrl)
+
+	// Write merged fact.
+	gs.EXPECT().WriteFile("kb/test/merged.md", gomock.Any(), gomock.Any()).Return("c3", "b3", nil)
+	idx.EXPECT().Upsert(gomock.Any()).Return(nil)
+	idx.EXPECT().GraphAddDerivedFrom("kb/test/merged.md", []string{"kb/test/a.md", "kb/test/b.md"}).Return(nil)
+	// Delete sources.
+	gs.EXPECT().DeleteFile("kb/test/a.md", gomock.Any()).Return("c4", nil)
+	idx.EXPECT().Delete("kb/test/a.md").Return(nil)
+	gs.EXPECT().DeleteFile("kb/test/b.md", gomock.Any()).Return("c5", nil)
+	idx.EXPECT().Delete("kb/test/b.md").Return(nil)
+	gs.EXPECT().Tag(gomock.Any()).Return(nil).AnyTimes()
+
+	merges := []MergeEntry{
+		{
+			Paths: []string{"kb/test/a.md", "kb/test/b.md"},
+			Merged: mergedFact{
+				Path:       "kb/test/merged.md",
+				Title:      "Merged",
+				Body:       "Combined.",
+				Type:       "observation",
+				Domain:     []string{"testing"},
+				Confidence: 0.9,
+				Entities:   []string{},
+				Refs:       []string{},
+			},
+		},
+	}
+	progress := collectProgress()
+
+	stats, err := ApplyPruneDecisions(gs, idx, nil, merges, "test", progress.fn)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if stats.Merged != 1 {
+		t.Errorf("expected Merged=1, got %d", stats.Merged)
+	}
+	progress.assertContains(t, "detail-merge")
+}
+
+func TestApplyPruneDecisions_NoDoubleDelete(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	gs := NewMockGitStore(ctrl)
+	idx := NewMockSearchIndex(ctrl)
+
+	// Path "kb/test/a.md" appears in both retract decision and merge sources.
+	// It should only be deleted once.
+	gs.EXPECT().DeleteFile("kb/test/a.md", gomock.Any()).Return("c1", nil).Times(1)
+	idx.EXPECT().Delete("kb/test/a.md").Return(nil).Times(1)
+	// Merge write.
+	gs.EXPECT().WriteFile("kb/test/merged.md", gomock.Any(), gomock.Any()).Return("c2", "b2", nil)
+	idx.EXPECT().Upsert(gomock.Any()).Return(nil)
+	idx.EXPECT().GraphAddDerivedFrom(gomock.Any(), gomock.Any()).Return(nil)
+	gs.EXPECT().Tag(gomock.Any()).Return(nil).AnyTimes()
+
+	decisions := []PruneDecision{
+		{Path: "kb/test/a.md", Action: "retract"},
+	}
+	merges := []MergeEntry{
+		{
+			Paths: []string{"kb/test/a.md"},
+			Merged: mergedFact{
+				Path:  "kb/test/merged.md",
+				Title: "Merged",
+				Body:  "Body.",
+				Type:  "observation",
+			},
+		},
+	}
+
+	_, err := ApplyPruneDecisions(gs, idx, decisions, merges, "test", func(ProgressEvent) {})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestApplyDistillDecisions_SynthesizeAndRetract(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	gs := NewMockGitStore(ctrl)
+	idx := NewMockSearchIndex(ctrl)
+
+	// Synthesized fact write.
+	gs.EXPECT().WriteFile("kb/test/synth.md", gomock.Any(), gomock.Any()).Return("c1", "b1", nil)
+	idx.EXPECT().Upsert(gomock.Any()).DoAndReturn(func(r store.FactRecord) error {
+		if r.Path != "kb/test/synth.md" {
+			t.Errorf("expected path kb/test/synth.md, got %s", r.Path)
+		}
+		if r.Sources != 1 {
+			t.Errorf("expected sources=1, got %d", r.Sources)
+		}
+		return nil
+	})
+	idx.EXPECT().GraphAddDerivedFrom("kb/test/synth.md", []string{"kb/test/src1.md", "kb/test/src2.md"}).Return(nil)
+	gs.EXPECT().Tag(gomock.Any()).Return(nil).AnyTimes()
+
+	// Retract.
+	gs.EXPECT().DeleteFile("kb/test/old.md", gomock.Any()).Return("c2", nil)
+	idx.EXPECT().Delete("kb/test/old.md").Return(nil)
+
+	synthesized := []distillFact{
+		{
+			Path:       "kb/test/synth.md",
+			Title:      "Synthesized",
+			Body:       "Higher-order insight.",
+			Type:       "observation",
+			Domain:     []string{"testing"},
+			Confidence: 0.85,
+			Entities:   []string{"test"},
+			Refs:       []string{"kb/test/src1.md", "kb/test/src2.md"},
+		},
+	}
+	retract := []string{"kb/test/old.md"}
+	progress := collectProgress()
+
+	stats, err := ApplyDistillDecisions(gs, idx, synthesized, retract, "test", progress.fn)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if stats.Synthesized != 1 {
+		t.Errorf("expected Synthesized=1, got %d", stats.Synthesized)
+	}
+	if stats.Pruned != 1 {
+		t.Errorf("expected Pruned=1, got %d", stats.Pruned)
+	}
+	progress.assertContains(t, "detail-learn")
+	progress.assertContains(t, "detail-distill-retract")
+}
+
+func TestApplyDistillDecisions_NoRefs(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	gs := NewMockGitStore(ctrl)
+	idx := NewMockSearchIndex(ctrl)
+
+	// When refs is empty, GraphAddDerivedFrom should NOT be called.
+	gs.EXPECT().WriteFile(gomock.Any(), gomock.Any(), gomock.Any()).Return("c1", "b1", nil)
+	idx.EXPECT().Upsert(gomock.Any()).Return(nil)
+	// No GraphAddDerivedFrom expectation.
+	gs.EXPECT().Tag(gomock.Any()).Return(nil).AnyTimes()
+
+	synthesized := []distillFact{
+		{
+			Path:       "kb/test/synth.md",
+			Title:      "No refs",
+			Body:       "Body.",
+			Type:       "observation",
+			Confidence: 0.9,
+		},
+	}
+
+	stats, err := ApplyDistillDecisions(gs, idx, synthesized, nil, "test", func(ProgressEvent) {})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if stats.Synthesized != 1 {
+		t.Errorf("expected Synthesized=1, got %d", stats.Synthesized)
+	}
+}
+
+// progressCollector is a test helper that records progress events.
+type progressCollector struct {
+	events []ProgressEvent
+	fn     func(ProgressEvent)
+}
+
+func collectProgress() *progressCollector {
+	pc := &progressCollector{}
+	pc.fn = func(e ProgressEvent) {
+		pc.events = append(pc.events, e)
+	}
+	return pc
+}
+
+func (pc *progressCollector) assertContains(t *testing.T, phase string) {
+	t.Helper()
+	for _, e := range pc.events {
+		if e.Phase == phase {
+			return
+		}
+	}
+	t.Errorf("expected progress event with phase %q, got %v", phase, pc.events)
+}
