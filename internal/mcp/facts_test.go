@@ -3,6 +3,8 @@ package mcp
 import (
 	"strings"
 	"testing"
+
+	"knomit/internal/fact"
 )
 
 func TestFactRoundTrip(t *testing.T) {
@@ -111,6 +113,7 @@ func TestSerializeFactFormat(t *testing.T) {
 		Path:       "know/fmt/test.md",
 		Title:      "Format test",
 		Body:       "Body content.",
+		Type:       fact.Observation,
 		Domain:     []string{"testing"},
 		Confidence: 0.9,
 		Sources:    1,
@@ -118,9 +121,55 @@ func TestSerializeFactFormat(t *testing.T) {
 		Refs:       []string{},
 	}
 	got := SerializeFact(f)
-	want := "---\ndomain: [testing]\nconfidence: 0.9\nsources: 1\nentities: [foo]\nrefs: []\n---\n# Format test\n\nBody content.\n"
+	want := "---\ntype: observation\ndomain: [testing]\nconfidence: 0.9\nsources: 1\nentities: [foo]\nrefs: []\n---\n# Format test\n\nBody content.\n"
 	if got != want {
 		t.Fatalf("SerializeFact output mismatch:\ngot:  %q\nwant: %q", got, want)
+	}
+}
+
+func TestEpistemicTypeRoundTrip(t *testing.T) {
+	for _, et := range fact.AllTypes() {
+		f := Fact{
+			Path:       "know/type-test.md",
+			Title:      "Type round-trip",
+			Body:       "Body.",
+			Type:       et,
+			Domain:     []string{},
+			Confidence: 0.5,
+			Sources:    1,
+			Entities:   []string{},
+			Refs:       []string{},
+		}
+		serialized := SerializeFact(f)
+		parsed, err := ParseFact(f.Path, serialized)
+		if err != nil {
+			t.Fatalf("type %q: ParseFact error: %v", et, err)
+		}
+		if parsed.Type != et {
+			t.Fatalf("type round-trip: got %q want %q", parsed.Type, et)
+		}
+	}
+}
+
+func TestParseFactDefaultsToObservation(t *testing.T) {
+	content := "---\ndomain: [testing]\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# No type field\n\nBody.\n"
+	f, err := ParseFact("test/no-type.md", content)
+	if err != nil {
+		t.Fatalf("ParseFact error: %v", err)
+	}
+	if f.Type != fact.Observation {
+		t.Fatalf("expected default type %q, got %q", fact.Observation, f.Type)
+	}
+}
+
+func TestParseFactInvalidTypeReturnsError(t *testing.T) {
+	content := "---\ntype: banana\ndomain: []\nconfidence: 0.5\nsources: 1\nentities: []\nrefs: []\n---\n# Bad type\n\nBody.\n"
+	_, err := ParseFact("test/bad-type.md", content)
+	if err == nil {
+		t.Fatal("expected error for invalid epistemic type, got nil")
+	}
+	if !strings.Contains(err.Error(), "invalid epistemic type") {
+		t.Fatalf("expected 'invalid epistemic type' in error, got: %v", err)
 	}
 }
 

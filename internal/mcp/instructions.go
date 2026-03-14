@@ -7,8 +7,15 @@ func baseInstructionsText(ontologyRoot string) string {
 	return fmt.Sprintf(`You are connected to a knomit knowledge base. Use the available tools to learn, query, and manage knowledge.
 
 Key concepts:
-- Facts are stored as markdown files under %s/ with YAML frontmatter (domain, entities, confidence, sources, refs)
+- Facts are stored as markdown files under %s/ with YAML frontmatter (type, domain, entities, confidence, sources, refs)
 - Each fact has a path like %s/topic/subtopic/fact-name.md
+- Every fact has an epistemic type: observation, concept, process, principle, pattern, or reference
+  - observation: empirical finding or measured result
+  - concept: definition or explanation of a term/idea
+  - process: sequence of steps or workflow
+  - principle: guiding rule or heuristic
+  - pattern: recurring structure or solution
+  - reference: pointer to an external resource
 - Use knomit_learn to store new knowledge, knomit_query to search, knomit_why for provenance
 - Use knomit_update to modify existing facts, knomit_retract to remove outdated knowledge
 - Use knomit_explore to browse the knowledge tree`, ontologyRoot, ontologyRoot)

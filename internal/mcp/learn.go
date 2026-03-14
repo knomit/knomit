@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"knomit/internal/fact"
+
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 )
 
@@ -31,6 +33,7 @@ type learnFactInput struct {
 	Path       string   `json:"path"`
 	Title      string   `json:"title"`
 	Body       string   `json:"body"`
+	Type       string   `json:"type"`
 	Domain     []string `json:"domain"`
 	Confidence float64  `json:"confidence"`
 	Sources    int      `json:"sources"`
@@ -138,10 +141,19 @@ func LearnHandler(gs GitStore, idx SearchIndex, ontologyRoot string) func(contex
 			if refs == nil {
 				refs = []string{}
 			}
+			// Validate epistemic type.
+			eType := fact.EpistemicType(fi.Type)
+			if eType == "" {
+				eType = fact.DefaultType
+			}
+			if err := eType.Validate(); err != nil {
+				return mcpgo.NewToolResultError(fmt.Sprintf("fact %d: %v", i, err)), nil
+			}
 			f := Fact{
 				Path:       path,
 				Title:      fi.Title,
 				Body:       fi.Body,
+				Type:       eType,
 				Domain:     domain,
 				Confidence: fi.Confidence,
 				Sources:    fi.Sources,
@@ -186,6 +198,7 @@ func LearnHandler(gs GitStore, idx SearchIndex, ontologyRoot string) func(contex
 					Path:       match.Path,
 					Title:      f.Title,
 					Body:       f.Body,
+					Type:       f.Type,
 					Domain:     unionStrings(f.Domain, existingFact.Domain),
 					Entities:   unionStrings(f.Entities, existingFact.Entities),
 					Confidence: max(newConf, existConf),
@@ -198,6 +211,7 @@ func LearnHandler(gs GitStore, idx SearchIndex, ontologyRoot string) func(contex
 					Path:       match.Path,
 					Title:      existingFact.Title,
 					Body:       existingFact.Body,
+					Type:       existingFact.Type,
 					Domain:     unionStrings(f.Domain, existingFact.Domain),
 					Entities:   unionStrings(f.Entities, existingFact.Entities),
 					Confidence: max(newConf, existConf),
@@ -225,6 +239,7 @@ func LearnHandler(gs GitStore, idx SearchIndex, ontologyRoot string) func(contex
 				Path:       f.Path,
 				Title:      f.Title,
 				BlobHash:   blobHashes[f.Path],
+				Type:       string(f.Type),
 				Domain:     f.Domain,
 				Entities:   f.Entities,
 				Confidence: f.Confidence,

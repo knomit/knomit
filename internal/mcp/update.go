@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"time"
 
+	factpkg "knomit/internal/fact"
+
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 )
 
@@ -30,6 +32,7 @@ func updateTool() mcpgo.Tool {
 
 // updateInput represents the updates object in the request.
 type updateInput struct {
+	Type       *string   `json:"type"`
 	Confidence *float64  `json:"confidence"`
 	Sources    *int      `json:"sources"`
 	Body       *string   `json:"body"`
@@ -93,6 +96,13 @@ func UpdateHandler(gs GitStore, idx SearchIndex, ontologyRoot string) func(conte
 		}
 
 		// 6. Merge updates into fact.
+		if updates.Type != nil {
+			eType := factpkg.EpistemicType(*updates.Type)
+			if err := eType.Validate(); err != nil {
+				return mcpgo.NewToolResultError(err.Error()), nil
+			}
+			fact.Type = eType
+		}
 		if updates.Confidence != nil {
 			fact.Confidence = *updates.Confidence
 		}
@@ -128,6 +138,7 @@ func UpdateHandler(gs GitStore, idx SearchIndex, ontologyRoot string) func(conte
 			Path:       fact.Path,
 			Title:      fact.Title,
 			BlobHash:   blobHash,
+			Type:       string(fact.Type),
 			Domain:     fact.Domain,
 			Entities:   fact.Entities,
 			Confidence: fact.Confidence,
