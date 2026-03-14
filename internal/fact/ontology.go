@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"regexp"
 	"sort"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -61,6 +62,32 @@ func (o *Ontology) TopicNames() []string {
 	}
 	sort.Strings(names)
 	return names
+}
+
+// ValidatePath checks that path is valid against this ontology.
+// The first segment must match a top-level topic. Subsequent segments are
+// walked against defined children; once no matching child is found the
+// remaining segments are accepted as freeform.
+func (o *Ontology) ValidatePath(path string) error {
+	if path == "" {
+		return fmt.Errorf("validate path: empty path")
+	}
+	parts := strings.Split(path, "/")
+	node, ok := o.Topics[parts[0]]
+	if !ok {
+		return fmt.Errorf("validate path: unknown topic %q", parts[0])
+	}
+	for _, seg := range parts[1:] {
+		if node == nil || node.Children == nil {
+			break // freeform from here
+		}
+		child, ok := node.Children[seg]
+		if !ok {
+			break // freeform from here
+		}
+		node = child
+	}
+	return nil
 }
 
 // validateKeys checks that all map keys match validKeyRe.

@@ -153,3 +153,65 @@ topics:
 		t.Errorf("expected sorted names [alpha middle zebra], got %v", names)
 	}
 }
+
+// testOntology is used by ValidatePath tests.
+var testOntologyYAML = []byte(`
+id: test
+name: Test
+topics:
+  technology:
+    description: Tech
+    children:
+      software:
+        description: Languages, frameworks
+        children:
+          go:
+            description: Go programming language
+      hardware:
+        description: Devices
+  people:
+    description: People
+    children:
+      individuals:
+        description: Specific persons
+`)
+
+func TestValidatePath(t *testing.T) {
+	ont, err := ParseOntology(testOntologyYAML)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	tests := []struct {
+		path    string
+		wantErr bool
+		errMsg  string
+	}{
+		{"technology", false, ""},
+		{"technology/software", false, ""},
+		{"technology/software/go/concurrency", false, ""},
+		{"technology/quantum", false, ""},
+		{"people", false, ""},
+		{"people/alice", false, ""},
+		{"cooking", true, "unknown topic"},
+		{"", true, "empty path"},
+		{"TECHNOLOGY", true, "unknown topic"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.path, func(t *testing.T) {
+			err := ont.ValidatePath(tc.path)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("expected error for path %q", tc.path)
+				}
+				if tc.errMsg != "" && !strings.Contains(err.Error(), tc.errMsg) {
+					t.Errorf("expected error containing %q, got: %v", tc.errMsg, err)
+				}
+			} else {
+				if err != nil {
+					t.Errorf("unexpected error for path %q: %v", tc.path, err)
+				}
+			}
+		})
+	}
+}
