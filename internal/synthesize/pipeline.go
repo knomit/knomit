@@ -26,8 +26,6 @@ type SearchIndex interface {
 	Search(q store.SearchQuery) ([]store.SearchResult, error)
 	Upsert(r store.FactRecord) error
 	Delete(path string) error
-	Sync(g store.GitReader) error
-	GetLastCommit() (string, error)
 	ClusterFacts(resolution float64, minCommunitySize int) (store.ClusterResult, error)
 	GraphAddDerivedFrom(newPath string, sourcePaths []string) error
 }
