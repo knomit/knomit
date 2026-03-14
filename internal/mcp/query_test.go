@@ -15,7 +15,7 @@ func TestQueryReturnsResults(t *testing.T) {
 	idx := NewMockSearchIndex(ctrl)
 
 	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
-	idx.EXPECT().Sync(gomock.Any()).Return(nil)
+
 	idx.EXPECT().Search(gomock.Any()).Return([]SearchResult{
 		{
 			FactWithBody: FactWithBody{
@@ -68,7 +68,7 @@ func TestQueryRequiresFilter(t *testing.T) {
 	idx := NewMockSearchIndex(ctrl)
 
 	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
-	idx.EXPECT().Sync(gomock.Any()).Return(nil)
+
 
 	handler := QueryHandler(gs, idx)
 
@@ -90,7 +90,7 @@ func TestQueryEmptyResults(t *testing.T) {
 	idx := NewMockSearchIndex(ctrl)
 
 	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
-	idx.EXPECT().Sync(gomock.Any()).Return(nil)
+
 	idx.EXPECT().Search(gomock.Any()).Return(nil, nil)
 
 	handler := QueryHandler(gs, idx)
@@ -141,7 +141,7 @@ func TestQueryDomainFilter(t *testing.T) {
 	var lastQuery SearchQuery
 
 	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
-	idx.EXPECT().Sync(gomock.Any()).Return(nil)
+
 	idx.EXPECT().Search(gomock.Any()).DoAndReturn(func(q SearchQuery) ([]SearchResult, error) {
 		lastQuery = q
 		r := testSearchResult("general/foo.md", "Foo", "body")
@@ -177,7 +177,7 @@ func TestQueryEntityFilter(t *testing.T) {
 	var lastQuery SearchQuery
 
 	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
-	idx.EXPECT().Sync(gomock.Any()).Return(nil)
+
 	idx.EXPECT().Search(gomock.Any()).DoAndReturn(func(q SearchQuery) ([]SearchResult, error) {
 		lastQuery = q
 		r := testSearchResult("general/bar.md", "Bar", "body")
@@ -213,7 +213,7 @@ func TestQueryPathPrefixFilter(t *testing.T) {
 	var lastQuery SearchQuery
 
 	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
-	idx.EXPECT().Sync(gomock.Any()).Return(nil)
+
 	idx.EXPECT().Search(gomock.Any()).DoAndReturn(func(q SearchQuery) ([]SearchResult, error) {
 		lastQuery = q
 		return []SearchResult{testSearchResult("general/ops/deploy.md", "Deploy", "body")}, nil
@@ -247,7 +247,7 @@ func TestQueryMinConfidenceFilter(t *testing.T) {
 	var lastQuery SearchQuery
 
 	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
-	idx.EXPECT().Sync(gomock.Any()).Return(nil)
+
 	idx.EXPECT().Search(gomock.Any()).DoAndReturn(func(q SearchQuery) ([]SearchResult, error) {
 		lastQuery = q
 		r := testSearchResult("general/sure.md", "Sure", "body")

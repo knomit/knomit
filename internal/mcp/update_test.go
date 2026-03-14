@@ -12,7 +12,7 @@ import (
 func TestUpdateMergesFields(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
-	idx := NewMockSearchIndex(ctrl)
+
 
 	factContent := SerializeFact(Fact{
 		Path: "kb/foo.md", Title: "Original Title", Body: "Original body.",
@@ -30,9 +30,8 @@ func TestUpdateMergesFields(t *testing.T) {
 		return "abc123def456", "blob_foo", nil
 	})
 	gs.EXPECT().Tag(gomock.Any()).Return(nil)
-	idx.EXPECT().Upsert(gomock.Any()).Return(nil)
 
-	handler := UpdateHandler(gs, idx, "kb")
+	handler := UpdateHandler(gs, "kb")
 
 	newBody := "Updated body."
 	newConf := 0.95
@@ -93,12 +92,12 @@ func TestUpdateMergesFields(t *testing.T) {
 func TestUpdateFileNotFound(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
-	idx := NewMockSearchIndex(ctrl)
+
 
 	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
 	gs.EXPECT().FileExists("kb/nonexistent.md").Return(false, nil)
 
-	handler := UpdateHandler(gs, idx, "kb")
+	handler := UpdateHandler(gs, "kb")
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
@@ -119,7 +118,7 @@ func TestUpdateFileNotFound(t *testing.T) {
 func TestUpdateRefsAppended(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
-	idx := NewMockSearchIndex(ctrl)
+
 
 	factContent := SerializeFact(Fact{
 		Path: "kb/refs.md", Title: "Refs Test", Body: "Body.",
@@ -137,9 +136,8 @@ func TestUpdateRefsAppended(t *testing.T) {
 		return "abc123def456", "blob_refs", nil
 	})
 	gs.EXPECT().Tag(gomock.Any()).Return(nil)
-	idx.EXPECT().Upsert(gomock.Any()).Return(nil)
 
-	handler := UpdateHandler(gs, idx, "kb")
+	handler := UpdateHandler(gs, "kb")
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{

@@ -43,7 +43,7 @@ type updateInput struct {
 }
 
 // UpdateHandler returns the handler function for knomit_update.
-func UpdateHandler(gs GitStore, idx SearchIndex, ontologyRoot string) func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+func UpdateHandler(gs GitStore, ontologyRoot string) func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 	return func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 		// 1. Sync.
 		if _, err := gs.Sync(nil); err != nil {
@@ -128,29 +128,12 @@ func UpdateHandler(gs GitStore, idx SearchIndex, ontologyRoot string) func(conte
 
 		// 7. Write updated fact.
 		commitMsg := fmt.Sprintf("update: %s", fact.Title)
-		hash, blobHash, err := gs.WriteFile(file, SerializeFact(fact), commitMsg)
+		hash, _, err := gs.WriteFile(file, SerializeFact(fact), commitMsg)
 		if err != nil {
 			return mcpgo.NewToolResultError(fmt.Sprintf("write error: %v", err)), nil
 		}
 
-		// 8. Upsert into index.
-		rec := FactRecord{
-			Path:       fact.Path,
-			Title:      fact.Title,
-			BlobHash:   blobHash,
-			Type:       string(fact.Type),
-			Domain:     fact.Domain,
-			Entities:   fact.Entities,
-			Confidence: fact.Confidence,
-			Sources:    fact.Sources,
-			Refs:       fact.Refs,
-			CommitHash: hash,
-		}
-		if err := idx.Upsert(rec); err != nil {
-			return mcpgo.NewToolResultError(fmt.Sprintf("index upsert error: %v", err)), nil
-		}
-
-		// 10. Tag.
+		// 8. Tag.
 		sanitized := sanitizeMomentName(momentName)
 		tagName := "update/" + sanitized
 		if err := gs.Tag(tagName); err != nil {

@@ -18,7 +18,6 @@ func TestLearnWritesFacts(t *testing.T) {
 	idx := NewMockSearchIndex(ctrl)
 
 	var capturedFiles map[string]string
-	var capturedUpsert FactRecord
 
 	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
 	idx.EXPECT().Search(gomock.Any()).Return(nil, nil).AnyTimes()
@@ -31,10 +30,6 @@ func TestLearnWritesFacts(t *testing.T) {
 		return "abc123def456", blobHashes, nil
 	})
 	gs.EXPECT().Tag(gomock.Any()).Return(nil)
-	idx.EXPECT().Upsert(gomock.Any()).DoAndReturn(func(r FactRecord) error {
-		capturedUpsert = r
-		return nil
-	})
 
 	handler := LearnHandler(gs, idx, "kb", fact.DefaultOntology())
 
@@ -100,10 +95,6 @@ func TestLearnWritesFacts(t *testing.T) {
 		t.Fatalf("moment_tag: got %q want prefix learn/test-moment", tag)
 	}
 
-	// Verify index was updated.
-	if !strings.HasPrefix(capturedUpsert.Path, expectedPrefix) {
-		t.Fatalf("upserted path: got %q want prefix %q", capturedUpsert.Path, expectedPrefix)
-	}
 }
 
 func TestLearnRequiresTopic(t *testing.T) {
@@ -219,7 +210,6 @@ func TestLearnMultipleFacts(t *testing.T) {
 		return "abc123def456", blobHashes, nil
 	})
 	gs.EXPECT().Tag(gomock.Any()).Return(nil)
-	idx.EXPECT().Upsert(gomock.Any()).Return(nil).Times(2)
 
 	handler := LearnHandler(gs, idx, "kb", fact.DefaultOntology())
 
@@ -304,13 +294,6 @@ func TestLearnHandler_DedupMergesNearDuplicate(t *testing.T) {
 		return "commit_merged", blobHashes, nil
 	})
 
-	// Upsert the merged fact
-	var capturedUpsert FactRecord
-	idx.EXPECT().Upsert(gomock.Any()).DoAndReturn(func(r FactRecord) error {
-		capturedUpsert = r
-		return nil
-	})
-
 	gs.EXPECT().Tag(gomock.Any()).Return(nil)
 
 	handler := LearnHandler(gs, idx, "kb", fact.DefaultOntology())
@@ -346,15 +329,17 @@ func TestLearnHandler_DedupMergesNearDuplicate(t *testing.T) {
 		t.Fatalf("expected write to kb/technology/cameras/abc123.md, got: %v", capturedFiles)
 	}
 
-	// New fact has higher confidence (0.9 > 0.8), so it wins
-	if capturedUpsert.Path != "kb/technology/cameras/abc123.md" {
-		t.Errorf("upserted path: got %q, want kb/technology/cameras/abc123.md", capturedUpsert.Path)
+	// Verify merged content written to the existing path.
+	mergedContent := capturedFiles["kb/technology/cameras/abc123.md"]
+	mergedFact, err := ParseFact("kb/technology/cameras/abc123.md", mergedContent)
+	if err != nil {
+		t.Fatalf("parse merged fact: %v", err)
 	}
-	if capturedUpsert.Confidence != 0.9 {
-		t.Errorf("confidence: got %v, want 0.9", capturedUpsert.Confidence)
+	if mergedFact.Confidence != 0.9 {
+		t.Errorf("confidence: got %v, want 0.9", mergedFact.Confidence)
 	}
-	if capturedUpsert.Sources != 2 {
-		t.Errorf("sources: got %d, want 2", capturedUpsert.Sources)
+	if mergedFact.Sources != 2 {
+		t.Errorf("sources: got %d, want 2", mergedFact.Sources)
 	}
 }
 
