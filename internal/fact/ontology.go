@@ -90,6 +90,71 @@ func (o *Ontology) ValidatePath(path string) error {
 	return nil
 }
 
+// Serialize renders the ontology as YAML with deterministic key ordering.
+func (o *Ontology) Serialize() ([]byte, error) {
+	doc := &yaml.Node{Kind: yaml.DocumentNode}
+	root := &yaml.Node{Kind: yaml.MappingNode}
+	doc.Content = append(doc.Content, root)
+
+	addScalar(root, "id", o.ID)
+	addScalar(root, "name", o.Name)
+	if o.Description != "" {
+		addScalar(root, "description", o.Description)
+	}
+
+	topicsKey := &yaml.Node{Kind: yaml.ScalarNode, Value: "topics"}
+	topicsVal := &yaml.Node{Kind: yaml.MappingNode}
+	root.Content = append(root.Content, topicsKey, topicsVal)
+
+	for _, k := range sortedKeys(o.Topics) {
+		serializeNode(topicsVal, k, o.Topics[k])
+	}
+
+	var buf strings.Builder
+	enc := yaml.NewEncoder(&buf)
+	enc.SetIndent(2)
+	if err := enc.Encode(doc); err != nil {
+		return nil, fmt.Errorf("serialize ontology: %w", err)
+	}
+	if err := enc.Close(); err != nil {
+		return nil, fmt.Errorf("serialize ontology: %w", err)
+	}
+	return []byte(buf.String()), nil
+}
+
+func serializeNode(parent *yaml.Node, key string, node *OntologyNode) {
+	keyNode := &yaml.Node{Kind: yaml.ScalarNode, Value: key}
+	valNode := &yaml.Node{Kind: yaml.MappingNode}
+	parent.Content = append(parent.Content, keyNode, valNode)
+
+	addScalar(valNode, "description", node.Description)
+
+	if len(node.Children) > 0 {
+		childKey := &yaml.Node{Kind: yaml.ScalarNode, Value: "children"}
+		childVal := &yaml.Node{Kind: yaml.MappingNode}
+		valNode.Content = append(valNode.Content, childKey, childVal)
+		for _, ck := range sortedKeys(node.Children) {
+			serializeNode(childVal, ck, node.Children[ck])
+		}
+	}
+}
+
+func addScalar(parent *yaml.Node, key, value string) {
+	parent.Content = append(parent.Content,
+		&yaml.Node{Kind: yaml.ScalarNode, Value: key},
+		&yaml.Node{Kind: yaml.ScalarNode, Value: value},
+	)
+}
+
+func sortedKeys(m map[string]*OntologyNode) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
 // validateKeys checks that all map keys match validKeyRe.
 func validateKeys(ctx string, m map[string]*OntologyNode) error {
 	for k := range m {

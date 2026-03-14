@@ -215,3 +215,60 @@ func TestValidatePath(t *testing.T) {
 		})
 	}
 }
+
+func TestSerializeDeterministic(t *testing.T) {
+	// Keys intentionally unsorted.
+	data := []byte(`
+id: test
+name: Test
+description: Unsorted keys
+topics:
+  zebra:
+    description: Z animal
+    children:
+      stripes:
+        description: Black and white
+      mane:
+        description: Short mane
+  alpha:
+    description: First letter
+    children:
+      omega:
+        description: Last letter
+      beta:
+        description: Second letter
+`)
+	ont, err := ParseOntology(data)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	out1, err := ont.Serialize()
+	if err != nil {
+		t.Fatalf("serialize 1: %v", err)
+	}
+
+	// Parse the serialized output and serialize again.
+	ont2, err := ParseOntology(out1)
+	if err != nil {
+		t.Fatalf("re-parse: %v", err)
+	}
+	out2, err := ont2.Serialize()
+	if err != nil {
+		t.Fatalf("serialize 2: %v", err)
+	}
+
+	if string(out1) != string(out2) {
+		t.Errorf("serialized outputs differ:\n--- first ---\n%s\n--- second ---\n%s", out1, out2)
+	}
+
+	// Verify keys are sorted in output.
+	s := string(out1)
+	alphaIdx := strings.Index(s, "alpha:")
+	zebraIdx := strings.Index(s, "zebra:")
+	if alphaIdx < 0 || zebraIdx < 0 {
+		t.Fatal("expected both 'alpha:' and 'zebra:' in output")
+	}
+	if alphaIdx >= zebraIdx {
+		t.Error("expected 'alpha' before 'zebra' in sorted output")
+	}
+}
