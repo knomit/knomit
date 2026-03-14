@@ -1,13 +1,36 @@
 package fact
 
 import (
+	_ "embed"
 	"fmt"
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 
 	"gopkg.in/yaml.v3"
 )
+
+//go:embed ontology_default.yaml
+var defaultOntologyYAML []byte
+
+var (
+	defaultOntology     *Ontology
+	defaultOntologyOnce sync.Once
+)
+
+// DefaultOntology returns the embedded general-purpose ontology.
+// It panics if the embedded YAML is invalid.
+func DefaultOntology() *Ontology {
+	defaultOntologyOnce.Do(func() {
+		o, err := ParseOntology(defaultOntologyYAML)
+		if err != nil {
+			panic(fmt.Sprintf("embedded default ontology is invalid: %v", err))
+		}
+		defaultOntology = o
+	})
+	return defaultOntology
+}
 
 // Ontology defines a hierarchical taxonomy for organizing knowledge.
 type Ontology struct {

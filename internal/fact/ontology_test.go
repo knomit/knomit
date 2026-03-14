@@ -272,3 +272,37 @@ topics:
 		t.Error("expected 'alpha' before 'zebra' in sorted output")
 	}
 }
+
+func TestDefaultOntology(t *testing.T) {
+	ont := DefaultOntology()
+	if ont.ID != "general" {
+		t.Errorf("expected ID 'general', got %q", ont.ID)
+	}
+	if ont.Name != "General Knowledge" {
+		t.Errorf("expected Name 'General Knowledge', got %q", ont.Name)
+	}
+	if len(ont.Topics) != 12 {
+		t.Errorf("expected 12 topics, got %d", len(ont.Topics))
+	}
+
+	// Spot-check technology/software.
+	tech := ont.Topics["technology"]
+	if tech == nil {
+		t.Fatal("expected 'technology' topic")
+	}
+	if tech.Children["software"] == nil {
+		t.Error("expected 'software' child under technology")
+	}
+
+	// Spot-check people.
+	people := ont.Topics["people"]
+	if people == nil {
+		t.Fatal("expected 'people' topic")
+	}
+
+	// Spot-check reference.
+	ref := ont.Topics["reference"]
+	if ref == nil {
+		t.Fatal("expected 'reference' topic")
+	}
+}
