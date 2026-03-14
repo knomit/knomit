@@ -46,7 +46,7 @@ export type Action =
   | { type: 'CONSOLE_SET_HEIGHT'; height: number };
 
 export const init: AppState = {
-  currentPath: 'general',
+  currentPath: 'kb',
   selectedFact: null,
   previewPath: null,
   rightMode: 'summary',
