@@ -20,6 +20,11 @@ type TaskEvent struct {
 	Message string `json:"message,omitempty"`
 }
 
+// StatusEvent is broadcast when HEAD changes. SSE clients use it to refresh.
+type StatusEvent struct {
+	Head string `json:"head"`
+}
+
 // TaskHub manages async tasks with per-op single-flight control and pub/sub
 // broadcasting to SSE clients.
 //
@@ -160,6 +165,11 @@ func (h *TaskHub) Subscribe(ctx context.Context) (goob.Events, []TaskEvent) {
 	}
 
 	return events, snapshot
+}
+
+// BroadcastStatus publishes a HEAD change to all SSE subscribers.
+func (h *TaskHub) BroadcastStatus(head string) {
+	h.ob.Publish(StatusEvent{Head: head})
 }
 
 // Shutdown cancels all active task contexts.
