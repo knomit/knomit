@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"knomit/internal/fact"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
@@ -30,7 +32,8 @@ func learnTool() mcpgo.Tool {
 
 // learnFactInput is the JSON shape of a single fact in the input array.
 type learnFactInput struct {
-	Path       string   `json:"path"`
+	Topic      string   `json:"topic"`
+	Category   string   `json:"category"`
 	Title      string   `json:"title"`
 	Body       string   `json:"body"`
 	Type       string   `json:"type"`
@@ -89,8 +92,16 @@ func normalizePath(ontologyRoot, path string) string {
 	return path
 }
 
+// buildFactPath constructs a fact file path: <ontologyRoot>/<topic>/<category>/<uuid>.md
+func buildFactPath(ontologyRoot, topic, category string) string {
+	id := uuid.New().String()[:8]
+	category = strings.TrimPrefix(category, "/")
+	category = strings.TrimSuffix(category, "/")
+	return fmt.Sprintf("%s/%s/%s/%s.md", ontologyRoot, topic, category, id)
+}
+
 // LearnHandler returns the handler function for knomit_learn.
-func LearnHandler(gs GitStore, idx SearchIndex, ontologyRoot string) func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+func LearnHandler(gs GitStore, idx SearchIndex, ontologyRoot string, ontology *fact.Ontology) func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 	return func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 		// 1. Sync.
 		_, err := gs.Sync(nil)
@@ -124,11 +135,27 @@ func LearnHandler(gs GitStore, idx SearchIndex, ontologyRoot string) func(contex
 			return mcpgo.NewToolResultError("facts must not be empty"), nil
 		}
 
-		// 3. Normalize paths and serialize facts.
+		// 3. Validate inputs, build paths, and serialize facts.
 		files := make(map[string]string, len(factInputs))
 		facts := make([]Fact, len(factInputs))
 		for i, fi := range factInputs {
-			path := normalizePath(ontologyRoot, fi.Path)
+			// Validate topic+category against ontology.
+			topicCategory := fi.Topic
+			if fi.Category != "" {
+				topicCategory = fi.Topic + "/" + fi.Category
+			}
+			if ontology != nil {
+				if err := ontology.ValidatePath(topicCategory); err != nil {
+					return mcpgo.NewToolResultError(fmt.Sprintf("fact %d: %v", i, err)), nil
+				}
+			}
+			// Validate category.
+			if strings.TrimSpace(fi.Category) == "" {
+				return mcpgo.NewToolResultError(fmt.Sprintf("fact %d: category is required", i)), nil
+			}
+			// Build path with server-generated UUID.
+			path := buildFactPath(ontologyRoot, fi.Topic, fi.Category)
+
 			domain := fi.Domain
 			if domain == nil {
 				domain = []string{}
@@ -164,11 +191,13 @@ func LearnHandler(gs GitStore, idx SearchIndex, ontologyRoot string) func(contex
 			files[path] = SerializeFact(f)
 		}
 
-		// 3b. Dedup check: search for near-duplicates of each new fact.
+		// 3b. Dedup check: search for near-duplicates scoped to the same category directory.
 		const dedupThreshold = 0.92
 		for i, f := range facts {
+			categoryDir := f.Path[:strings.LastIndex(f.Path, "/")]
 			results, err := idx.Search(SearchQuery{
 				Text:          f.Title + " " + f.Body,
+				Path:          categoryDir,
 				MinSimilarity: dedupThreshold,
 				Limit:         1,
 			})
