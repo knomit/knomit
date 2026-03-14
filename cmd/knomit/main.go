@@ -69,7 +69,7 @@ func serveCmd() *cobra.Command {
 			// 2. Open or init git on top of the shared storer
 			gs, err := git.OpenWithStorer(svc.GitStorer())
 			if err != nil {
-				gs, err = git.InitWithStorer(svc.GitStorer())
+				gs, err = git.InitWithStorer(svc.GitStorer(), nil)
 				if err != nil {
 					return fmt.Errorf("init git: %w", err)
 				}
@@ -205,7 +205,7 @@ func initCmd() *cobra.Command {
 				return fmt.Errorf("open store: %w", err)
 			}
 			defer svc.Close()
-			if _, err := git.InitWithStorer(svc.GitStorer()); err != nil {
+			if _, err := git.InitWithStorer(svc.GitStorer(), nil); err != nil {
 				return fmt.Errorf("init git: %w", err)
 			}
 			fmt.Printf("Initialized knomit repo at %s\n", cfg.RepoPath)

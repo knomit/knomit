@@ -86,7 +86,7 @@ func writeFileToStore(s *storegit.Storer, parentCommitHash plumbing.Hash, path, 
 }
 
 // buildTree constructs a new root tree by adding/replacing path (which may be
-// nested, e.g. "know/sub/foo.md") with blobHash. existing may be nil for an
+// nested, e.g. "general/technology/go/abc123.md") with blobHash. existing may be nil for an
 // empty tree. The function recurses through path segments, creating or updating
 // subtrees as needed.
 func buildTree(s *storegit.Storer, existing *object.Tree, path string, blobHash plumbing.Hash) (plumbing.Hash, error) {

@@ -23,20 +23,20 @@ func openTestService(t *testing.T) *Service {
 func TestDeleteFactAtomically(t *testing.T) {
 	svc := openTestService(t)
 
-	gs, err := git.InitWithStorer(svc.GitStorer())
+	gs, err := git.InitWithStorer(svc.GitStorer(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// Write a fact
-	_, blobHash, err := gs.WriteFile("know/test.md", "---\ndomain: []\nconfidence: 1\nsources: 1\nentities: []\nrefs: []\n---\n# Test\n\nBody.", "add test")
+	_, blobHash, err := gs.WriteFile("general/test.md", "---\ndomain: []\nconfidence: 1\nsources: 1\nentities: []\nrefs: []\n---\n# Test\n\nBody.", "add test")
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// Upsert to index
 	rec := FactRecord{
-		Path: "know/test.md", Title: "Test", BlobHash: blobHash,
+		Path: "general/test.md", Title: "Test", BlobHash: blobHash,
 		Domain: []string{}, Entities: []string{}, Confidence: 1, Sources: 1, Refs: []string{},
 		CommitHash: "abc",
 	}
@@ -45,18 +45,18 @@ func TestDeleteFactAtomically(t *testing.T) {
 	}
 
 	// Delete
-	if err := svc.DeleteFact(gs, "know/test.md", "forget test"); err != nil {
+	if err := svc.DeleteFact(gs, "general/test.md", "forget test"); err != nil {
 		t.Fatal(err)
 	}
 
 	// Verify: fact gone from index
-	got, _ := svc.Index().GetByPath("know/test.md")
+	got, _ := svc.Index().GetByPath("general/test.md")
 	if got != nil {
 		t.Fatal("expected fact to be deleted from index")
 	}
 
 	// Verify: file gone from git
-	exists, _ := gs.FileExists("know/test.md")
+	exists, _ := gs.FileExists("general/test.md")
 	if exists {
 		t.Fatal("expected file to be deleted from git")
 	}
@@ -65,21 +65,21 @@ func TestDeleteFactAtomically(t *testing.T) {
 func TestFullRoundtrip(t *testing.T) {
 	svc := openTestService(t)
 
-	gs, err := git.InitWithStorer(svc.GitStorer())
+	gs, err := git.InitWithStorer(svc.GitStorer(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// Write a fact via git
 	content := "---\ndomain: [databases]\nconfidence: 0.9\nsources: 1\nentities: [postgres]\nrefs: []\n---\n# Postgres is great\n\nPostgreSQL is a powerful RDBMS."
-	_, blobHash, err := gs.WriteFile("know/db/postgres.md", content, "learn postgres")
+	_, blobHash, err := gs.WriteFile("general/db/postgres.md", content, "learn postgres")
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// Upsert to index
 	rec := FactRecord{
-		Path: "know/db/postgres.md", Title: "Postgres is great", BlobHash: blobHash,
+		Path: "general/db/postgres.md", Title: "Postgres is great", BlobHash: blobHash,
 		Domain: []string{"databases"}, Entities: []string{"postgres"},
 		Confidence: 0.9, Sources: 1, Refs: []string{},
 		CommitHash: "abc123",
@@ -89,7 +89,7 @@ func TestFullRoundtrip(t *testing.T) {
 	}
 
 	// Read back with body hydrated from git objects
-	got, err := svc.Index().GetByPath("know/db/postgres.md")
+	got, err := svc.Index().GetByPath("general/db/postgres.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,12 +112,12 @@ func TestFullRoundtrip(t *testing.T) {
 	}
 
 	// Delete
-	if err := svc.DeleteFact(gs, "know/db/postgres.md", "forget postgres"); err != nil {
+	if err := svc.DeleteFact(gs, "general/db/postgres.md", "forget postgres"); err != nil {
 		t.Fatal(err)
 	}
 
 	// Verify gone
-	got, _ = svc.Index().GetByPath("know/db/postgres.md")
+	got, _ = svc.Index().GetByPath("general/db/postgres.md")
 	if got != nil {
 		t.Fatal("expected nil after delete")
 	}
