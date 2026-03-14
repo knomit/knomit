@@ -22,9 +22,9 @@ type SearchQuery struct {
 	GraphHops     int // number of graph traversal hops to expand results (0 = disabled)
 }
 
-// SearchResult is a FactRecord paired with a relevance score in [0, 100].
+// SearchResult is a FactWithBody paired with a relevance score in [0, 100].
 type SearchResult struct {
-	FactRecord
+	FactWithBody
 	Score float64 `json:"score"`
 }
 
@@ -47,8 +47,9 @@ func (idx *Index) Search(q SearchQuery) ([]SearchResult, error) {
 	// ── Text-less path: return all facts matching filters with score 100 ──
 	if q.Text == "" {
 		rows, err := idx.db.Query(
-			`SELECT path, title, body, domain, entities, confidence, sources, refs, commit_hash
-			 FROM facts`)
+			`SELECT f.path, f.title, f.blob_hash, f.domain, f.entities, f.confidence, f.sources, f.refs, f.commit_hash, o.data
+			 FROM facts f
+			 JOIN objects o ON o.hash = f.blob_hash AND o.type = ?`, BlobObjectType)
 		if err != nil {
 			return nil, fmt.Errorf("search: list all: %w", err)
 		}
@@ -56,14 +57,14 @@ func (idx *Index) Search(q SearchQuery) ([]SearchResult, error) {
 
 		var out []SearchResult
 		for rows.Next() {
-			rec, err := scanFactRecordFromRows(rows)
+			fb, err := scanFactWithBodyFromRows(rows)
 			if err != nil {
 				return nil, err
 			}
-			if !matchesFilters(*rec, q) {
+			if !matchesFilters(fb.FactRecord, q) {
 				continue
 			}
-			out = append(out, SearchResult{FactRecord: *rec, Score: 100})
+			out = append(out, SearchResult{FactWithBody: *fb, Score: 100})
 		}
 		if err := rows.Err(); err != nil {
 			return nil, err
@@ -76,7 +77,7 @@ func (idx *Index) Search(q SearchQuery) ([]SearchResult, error) {
 
 	// ── Vector (embedding) search ────────────────────────────────────────
 	type candidate struct {
-		rec   FactRecord
+		rec   FactWithBody
 		score float64
 	}
 
@@ -153,17 +154,17 @@ func (idx *Index) Search(q SearchQuery) ([]SearchResult, error) {
 		if cosine <= minSim {
 			continue
 		}
-		rec, err := idx.GetByPath(path)
-		if err != nil || rec == nil {
+		fb, err := idx.GetByPath(path)
+		if err != nil || fb == nil {
 			continue
 		}
-		candidates = append(candidates, candidate{rec: *rec, score: cosine})
+		candidates = append(candidates, candidate{rec: *fb, score: cosine})
 	}
 
 	// ── Apply post-retrieval filters ─────────────────────────────────────
 	filtered := candidates[:0]
 	for _, c := range candidates {
-		if matchesFilters(c.rec, q) {
+		if matchesFilters(c.rec.FactRecord, q) {
 			filtered = append(filtered, c)
 		}
 	}
@@ -183,7 +184,7 @@ func (idx *Index) Search(q SearchQuery) ([]SearchResult, error) {
 	// ── Scale scores to [0, 100] ─────────────────────────────────────────
 	var out []SearchResult
 	for _, c := range candidates {
-		out = append(out, SearchResult{FactRecord: c.rec, Score: c.score * 100.0})
+		out = append(out, SearchResult{FactWithBody: c.rec, Score: c.score * 100.0})
 		if len(out) >= limit {
 			break
 		}

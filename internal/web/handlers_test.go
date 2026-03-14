@@ -168,10 +168,12 @@ func TestHandleFact(t *testing.T) {
 func TestHandleSearch(t *testing.T) {
 	results := []store.SearchResult{
 		{
-			FactRecord: store.FactRecord{
-				Path:  "know/fact.md",
-				Title: "Test Fact",
-				Body:  "A test fact body.",
+			FactWithBody: store.FactWithBody{
+				FactRecord: store.FactRecord{
+					Path:  "know/fact.md",
+					Title: "Test Fact",
+				},
+				Body: "A test fact body.",
 			},
 			Score: 95.0,
 		},

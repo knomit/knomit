@@ -12,11 +12,7 @@ import (
 )
 
 // Upsert inserts or replaces a FactRecord, keeping the vec0 index in sync.
-// The operation runs in a single transaction:
-//  1. Read old row (if any) to get its rowid.
-//  2. Compute embedding via Embedder (if configured).
-//  3. INSERT OR REPLACE into facts.
-//  4. Remove old vec0 entry, insert new one.
+// The body is read from the objects table via BlobHash for embedding computation.
 func (idx *Index) Upsert(rec FactRecord) error {
 	domainJSON, err := json.Marshal(rec.Domain)
 	if err != nil {
@@ -31,26 +27,36 @@ func (idx *Index) Upsert(rec FactRecord) error {
 		return fmt.Errorf("marshal refs: %w", err)
 	}
 
+	// Compute embedding vector if an embedder is configured.
+	var vecData []byte
+	if idx.embedder != nil {
+		// Read body from objects table for embedding computation.
+		var data []byte
+		err := idx.db.QueryRow(
+			`SELECT data FROM objects WHERE hash = ? AND type = ?`,
+			rec.BlobHash, BlobObjectType,
+		).Scan(&data)
+		if err != nil {
+			return fmt.Errorf("upsert: blob %s not found: %w", rec.BlobHash, err)
+		}
+		body := extractBody(data)
+		vec, err := idx.embedder.Embed(body)
+		if err == nil && len(vec) > 0 {
+			vecData = float32SliceToBytes(vec)
+		}
+	}
+
 	tx, err := idx.db.Begin()
 	if err != nil {
 		return fmt.Errorf("begin tx: %w", err)
 	}
 	defer tx.Rollback()
 
-	// Compute embedding vector if an embedder is configured.
-	var vecData []byte
-	if idx.embedder != nil {
-		vec, err := idx.embedder.Embed(rec.Body)
-		if err == nil && len(vec) > 0 {
-			vecData = float32SliceToBytes(vec)
-		}
-	}
-
 	// Insert or replace into facts.
 	if _, err := tx.Exec(
-		`INSERT OR REPLACE INTO facts(path, title, body, domain, entities, confidence, sources, refs, commit_hash)
+		`INSERT OR REPLACE INTO facts(path, title, blob_hash, domain, entities, confidence, sources, refs, commit_hash)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		rec.Path, rec.Title, rec.Body,
+		rec.Path, rec.Title, rec.BlobHash,
 		string(domainJSON), string(entitiesJSON),
 		rec.Confidence, rec.Sources,
 		string(refsJSON), rec.CommitHash,
@@ -130,14 +136,16 @@ func (idx *Index) Delete(path string) error {
 	return nil
 }
 
-// GetByPath retrieves a FactRecord by its path. Returns nil, nil if not found.
-func (idx *Index) GetByPath(path string) (*FactRecord, error) {
+// GetByPath retrieves a FactWithBody by its path, hydrating the body from
+// the objects table. Returns nil, nil if not found.
+func (idx *Index) GetByPath(path string) (*FactWithBody, error) {
 	row := idx.db.QueryRow(
-		`SELECT path, title, body, domain, entities, confidence, sources, refs, commit_hash
-		 FROM facts WHERE path=?`,
-		path,
+		`SELECT f.path, f.title, f.blob_hash, f.domain, f.entities, f.confidence, f.sources, f.refs, f.commit_hash, o.data
+		 FROM facts f
+		 JOIN objects o ON o.hash = f.blob_hash AND o.type = ?
+		 WHERE f.path = ?`, BlobObjectType, path,
 	)
-	return scanFactRecord(row)
+	return scanFactWithBody(row)
 }
 
 // GetEmbedding returns the stored embedding vector for a fact.
@@ -182,13 +190,36 @@ func (idx *Index) GetLastCommit() (string, error) {
 	return hash, nil
 }
 
-// scanFactRecord scans a single FactRecord from a *sql.Row.
-// JSON-encoded fields (domain, entities, refs) are deserialized automatically.
+// scanFactWithBody scans a FactWithBody from a *sql.Row (facts JOIN objects).
+func scanFactWithBody(row *sql.Row) (*FactWithBody, error) {
+	var f FactWithBody
+	var domainJSON, entitiesJSON, refsJSON string
+	var rawData []byte
+	err := row.Scan(
+		&f.Path, &f.Title, &f.BlobHash,
+		&domainJSON, &entitiesJSON,
+		&f.Confidence, &f.Sources,
+		&refsJSON, &f.CommitHash, &rawData,
+	)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("scanFactWithBody: %w", err)
+	}
+	json.Unmarshal([]byte(domainJSON), &f.Domain)
+	json.Unmarshal([]byte(entitiesJSON), &f.Entities)
+	json.Unmarshal([]byte(refsJSON), &f.Refs)
+	f.Body = extractBody(rawData)
+	return &f, nil
+}
+
+// scanFactRecord scans a FactRecord (without body) from a *sql.Row.
 func scanFactRecord(row *sql.Row) (*FactRecord, error) {
 	var rec FactRecord
 	var domainJSON, entitiesJSON, refsJSON string
 	err := row.Scan(
-		&rec.Path, &rec.Title, &rec.Body,
+		&rec.Path, &rec.Title, &rec.BlobHash,
 		&domainJSON, &entitiesJSON,
 		&rec.Confidence, &rec.Sources,
 		&refsJSON, &rec.CommitHash,
@@ -199,15 +230,9 @@ func scanFactRecord(row *sql.Row) (*FactRecord, error) {
 	if err != nil {
 		return nil, fmt.Errorf("scan fact: %w", err)
 	}
-	if err := json.Unmarshal([]byte(domainJSON), &rec.Domain); err != nil {
-		return nil, fmt.Errorf("unmarshal domain: %w", err)
-	}
-	if err := json.Unmarshal([]byte(entitiesJSON), &rec.Entities); err != nil {
-		return nil, fmt.Errorf("unmarshal entities: %w", err)
-	}
-	if err := json.Unmarshal([]byte(refsJSON), &rec.Refs); err != nil {
-		return nil, fmt.Errorf("unmarshal refs: %w", err)
-	}
+	json.Unmarshal([]byte(domainJSON), &rec.Domain)
+	json.Unmarshal([]byte(entitiesJSON), &rec.Entities)
+	json.Unmarshal([]byte(refsJSON), &rec.Refs)
 	return &rec, nil
 }
 
@@ -216,7 +241,7 @@ func scanFactRecordFromRows(rows *sql.Rows) (*FactRecord, error) {
 	var rec FactRecord
 	var domainJSON, entitiesJSON, refsJSON string
 	err := rows.Scan(
-		&rec.Path, &rec.Title, &rec.Body,
+		&rec.Path, &rec.Title, &rec.BlobHash,
 		&domainJSON, &entitiesJSON,
 		&rec.Confidence, &rec.Sources,
 		&refsJSON, &rec.CommitHash,
@@ -224,14 +249,29 @@ func scanFactRecordFromRows(rows *sql.Rows) (*FactRecord, error) {
 	if err != nil {
 		return nil, fmt.Errorf("scan fact row: %w", err)
 	}
-	if err := json.Unmarshal([]byte(domainJSON), &rec.Domain); err != nil {
-		return nil, fmt.Errorf("unmarshal domain: %w", err)
-	}
-	if err := json.Unmarshal([]byte(entitiesJSON), &rec.Entities); err != nil {
-		return nil, fmt.Errorf("unmarshal entities: %w", err)
-	}
-	if err := json.Unmarshal([]byte(refsJSON), &rec.Refs); err != nil {
-		return nil, fmt.Errorf("unmarshal refs: %w", err)
-	}
+	json.Unmarshal([]byte(domainJSON), &rec.Domain)
+	json.Unmarshal([]byte(entitiesJSON), &rec.Entities)
+	json.Unmarshal([]byte(refsJSON), &rec.Refs)
 	return &rec, nil
+}
+
+// scanFactWithBodyFromRows scans a FactWithBody from *sql.Rows (facts JOIN objects).
+func scanFactWithBodyFromRows(rows *sql.Rows) (*FactWithBody, error) {
+	var f FactWithBody
+	var domainJSON, entitiesJSON, refsJSON string
+	var rawData []byte
+	err := rows.Scan(
+		&f.Path, &f.Title, &f.BlobHash,
+		&domainJSON, &entitiesJSON,
+		&f.Confidence, &f.Sources,
+		&refsJSON, &f.CommitHash, &rawData,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("scanFactWithBodyFromRows: %w", err)
+	}
+	json.Unmarshal([]byte(domainJSON), &f.Domain)
+	json.Unmarshal([]byte(entitiesJSON), &f.Entities)
+	json.Unmarshal([]byte(refsJSON), &f.Refs)
+	f.Body = extractBody(rawData)
+	return &f, nil
 }

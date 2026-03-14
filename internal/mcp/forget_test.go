@@ -21,11 +21,10 @@ func TestForgetDeletesFile(t *testing.T) {
 
 	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
 	gs.EXPECT().FileExists("know/foo.md").Return(true, nil)
-	gs.EXPECT().DeleteFile("know/foo.md", gomock.Any()).DoAndReturn(func(path, msg string) error {
+	gs.EXPECT().DeleteFile("know/foo.md", gomock.Any()).DoAndReturn(func(path, msg string) (string, error) {
 		deletedFile = path
-		return nil
+		return "abc123def456", nil
 	})
-	gs.EXPECT().HeadCommit().Return("abc123def456", nil)
 	idx.EXPECT().Delete("know/foo.md").DoAndReturn(func(path string) error {
 		deletedFromIndex = path
 		return nil

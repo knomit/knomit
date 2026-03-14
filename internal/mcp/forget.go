@@ -54,14 +54,9 @@ func ForgetHandler(gs GitStore, idx SearchIndex, ontologyRoot string) func(conte
 
 		// 4. Delete the file.
 		commitMsg := fmt.Sprintf("forget(%s): %s", momentName, file)
-		if err := gs.DeleteFile(file, commitMsg); err != nil {
-			return mcpgo.NewToolResultError(fmt.Sprintf("delete error: %v", err)), nil
-		}
-
-		// 5. Get commit hash.
-		hash, err := gs.HeadCommit()
+		hash, err := gs.DeleteFile(file, commitMsg)
 		if err != nil {
-			return mcpgo.NewToolResultError(fmt.Sprintf("head commit error: %v", err)), nil
+			return mcpgo.NewToolResultError(fmt.Sprintf("delete error: %v", err)), nil
 		}
 
 		// 6. Delete from index.

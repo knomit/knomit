@@ -118,21 +118,16 @@ func UpdateHandler(gs GitStore, idx SearchIndex, ontologyRoot string) func(conte
 
 		// 7. Write updated fact.
 		commitMsg := fmt.Sprintf("update: %s", fact.Title)
-		if err := gs.WriteFile(file, SerializeFact(fact), commitMsg); err != nil {
+		hash, blobHash, err := gs.WriteFile(file, SerializeFact(fact), commitMsg)
+		if err != nil {
 			return mcpgo.NewToolResultError(fmt.Sprintf("write error: %v", err)), nil
 		}
 
-		// 8. Get commit hash.
-		hash, err := gs.HeadCommit()
-		if err != nil {
-			return mcpgo.NewToolResultError(fmt.Sprintf("head commit error: %v", err)), nil
-		}
-
-		// 9. Upsert into index.
+		// 8. Upsert into index.
 		rec := FactRecord{
 			Path:       fact.Path,
 			Title:      fact.Title,
-			Body:       fact.Body,
+			BlobHash:   blobHash,
 			Domain:     fact.Domain,
 			Entities:   fact.Entities,
 			Confidence: fact.Confidence,

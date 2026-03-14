@@ -12,11 +12,10 @@ import (
 // GitStore is the interface that the synthesize pipeline requires from the git store.
 type GitStore interface {
 	ReadFile(path string) (string, error)
-	WriteFile(path, content, message string) error
-	BatchWrite(files map[string]string, message string) error
-	DeleteFile(path, message string) error
+	WriteFile(path, content, message string) (commitHash, blobHash string, err error)
+	BatchWrite(files map[string]string, message string) (commitHash string, blobHashes map[string]string, err error)
+	DeleteFile(path, message string) (commitHash string, err error)
 	ListAll() ([]string, error)
-	HeadCommit() (string, error)
 	Tag(name string) error
 	Branch() string
 	DiffFiles(fromCommit string) (added, modified, deleted []string, err error)

@@ -30,6 +30,9 @@ type SearchResult = storepkg.SearchResult
 // FactRecord is re-exported from internal/store.
 type FactRecord = storepkg.FactRecord
 
+// FactWithBody is re-exported from internal/store.
+type FactWithBody = storepkg.FactWithBody
+
 // GitReader is re-exported from internal/store (used by SearchIndex.Sync).
 type GitReader = storepkg.GitReader
 
@@ -38,9 +41,10 @@ type GitReader = storepkg.GitReader
 // tests can use lightweight mocks.
 type GitStore interface {
 	ReadFile(path string) (string, error)
-	WriteFile(path, content, message string) error
-	BatchWrite(files map[string]string, message string) error
-	DeleteFile(path, message string) error
+	ReadFileWithHash(path string) (content, blobHash string, err error)
+	WriteFile(path, content, message string) (commitHash, blobHash string, err error)
+	BatchWrite(files map[string]string, message string) (commitHash string, blobHashes map[string]string, err error)
+	DeleteFile(path, message string) (commitHash string, err error)
 	FileExists(path string) (bool, error)
 	ListDir(path string) ([]DirEntry, error)
 	ListAll() ([]string, error)
@@ -59,6 +63,7 @@ type SearchIndex interface {
 	Search(q SearchQuery) ([]SearchResult, error)
 	Upsert(r FactRecord) error
 	Delete(path string) error
+	GetByPath(path string) (*FactWithBody, error)
 	Sync(g GitReader) error
 	GetLastCommit() (string, error)
 	SetLastCommit(hash string) error

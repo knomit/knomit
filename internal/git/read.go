@@ -16,6 +16,40 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/object"
 )
 
+// ReadFileWithHash returns both the file content and the blob hash for the given path.
+func (s *Store) ReadFileWithHash(path string) (string, string, error) {
+	headRef, err := s.repo.Head()
+	if err != nil {
+		return "", "", fmt.Errorf("ReadFileWithHash: head: %w", err)
+	}
+	commit, err := s.repo.CommitObject(headRef.Hash())
+	if err != nil {
+		return "", "", fmt.Errorf("ReadFileWithHash: commit: %w", err)
+	}
+	tree, err := commit.Tree()
+	if err != nil {
+		return "", "", fmt.Errorf("ReadFileWithHash: tree: %w", err)
+	}
+	entry, err := tree.FindEntry(path)
+	if err != nil {
+		return "", "", fmt.Errorf("ReadFileWithHash: entry %s: %w", path, err)
+	}
+	blob, err := s.repo.BlobObject(entry.Hash)
+	if err != nil {
+		return "", "", fmt.Errorf("ReadFileWithHash: blob: %w", err)
+	}
+	r, err := blob.Reader()
+	if err != nil {
+		return "", "", fmt.Errorf("ReadFileWithHash: reader: %w", err)
+	}
+	defer r.Close()
+	b, err := io.ReadAll(r)
+	if err != nil {
+		return "", "", fmt.Errorf("ReadFileWithHash: read: %w", err)
+	}
+	return string(b), entry.Hash.String(), nil
+}
+
 // ReadFile reads the content of path from the HEAD commit.
 func (s *Store) ReadFile(path string) (string, error) {
 	headRef, err := s.repo.Head()

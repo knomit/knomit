@@ -1,4 +1,4 @@
-package gitstorer
+package git
 
 import (
 	"database/sql"
@@ -22,7 +22,7 @@ func (s *Storer) SetReference(ref *plumbing.Reference) error {
 		target = ref.Hash().String()
 		isSymbolic = 0
 	}
-	_, err := s.db.Exec(
+	_, err := s.conn().Exec(
 		`INSERT OR REPLACE INTO refs (name, target, is_symbolic) VALUES (?, ?, ?)`,
 		ref.Name().String(),
 		target,
@@ -51,7 +51,7 @@ func (s *Storer) CheckAndSetReference(new, old *plumbing.Reference) error {
 func (s *Storer) Reference(name plumbing.ReferenceName) (*plumbing.Reference, error) {
 	var target string
 	var isSymbolic int
-	err := s.db.QueryRow(
+	err := s.conn().QueryRow(
 		`SELECT target, is_symbolic FROM refs WHERE name=?`, name.String(),
 	).Scan(&target, &isSymbolic)
 	if err == sql.ErrNoRows {
@@ -68,7 +68,7 @@ func (s *Storer) Reference(name plumbing.ReferenceName) (*plumbing.Reference, er
 
 // IterReferences returns an iterator over all stored references.
 func (s *Storer) IterReferences() (storer.ReferenceIter, error) {
-	rows, err := s.db.Query(`SELECT name, target, is_symbolic FROM refs`)
+	rows, err := s.conn().Query(`SELECT name, target, is_symbolic FROM refs`)
 	if err != nil {
 		return nil, err
 	}
@@ -77,14 +77,14 @@ func (s *Storer) IterReferences() (storer.ReferenceIter, error) {
 
 // RemoveReference deletes the reference with the given name.
 func (s *Storer) RemoveReference(name plumbing.ReferenceName) error {
-	_, err := s.db.Exec(`DELETE FROM refs WHERE name=?`, name.String())
+	_, err := s.conn().Exec(`DELETE FROM refs WHERE name=?`, name.String())
 	return err
 }
 
 // CountLooseRefs returns the total number of stored references.
 func (s *Storer) CountLooseRefs() (int, error) {
 	var count int
-	err := s.db.QueryRow(`SELECT COUNT(*) FROM refs`).Scan(&count)
+	err := s.conn().QueryRow(`SELECT COUNT(*) FROM refs`).Scan(&count)
 	return count, err
 }
 

@@ -9,13 +9,13 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/protocol/packp"
 	"github.com/go-git/go-git/v5/plumbing/transport"
 	"github.com/go-git/go-git/v5/plumbing/storer"
-	"knomit/internal/gitstorer"
+	storegit "knomit/internal/store/git"
 )
 
 // GitRemoteStore is the narrow interface gitremote needs — just the
 // underlying go-git storer so it can serve pack negotiations.
 type GitRemoteStore interface {
-	Storer() *gitstorer.Storer
+	Storer() *storegit.Storer
 }
 
 // repoLoader adapts a storer.Storer to go-git's server.Loader interface,

@@ -458,14 +458,16 @@ func TestDistillSearchResultsToWorkFacts(t *testing.T) {
 	// executeDistillStep performs (lines 44-58 of distill.go).
 	searchResults := []store.SearchResult{
 		{
-			FactRecord: store.FactRecord{
-				Path:       "know/x.md",
-				Title:      "X",
-				Body:       "X body",
-				Domain:     []string{"d1"},
-				Entities:   []string{"E1"},
-				Confidence: 0.8,
-				Sources:    2,
+			FactWithBody: store.FactWithBody{
+				FactRecord: store.FactRecord{
+					Path:       "know/x.md",
+					Title:      "X",
+					Domain:     []string{"d1"},
+					Entities:   []string{"E1"},
+					Confidence: 0.8,
+					Sources:    2,
+				},
+				Body: "X body",
 			},
 			Score: 50.0,
 		},

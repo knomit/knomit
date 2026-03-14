@@ -98,7 +98,7 @@ func TestDeleteFileRoundtrip(t *testing.T) {
 	defer store.Close()
 
 	// Write a file.
-	if err := store.WriteFile("know/ephemeral.md", "# Ephemeral\n\nTemporary.\n", "add ephemeral"); err != nil {
+	if _, _, err := store.WriteFile("know/ephemeral.md", "# Ephemeral\n\nTemporary.\n", "add ephemeral"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -112,7 +112,7 @@ func TestDeleteFileRoundtrip(t *testing.T) {
 	}
 
 	// Delete it.
-	if err := store.DeleteFile("know/ephemeral.md", "delete ephemeral"); err != nil {
+	if _, err := store.DeleteFile("know/ephemeral.md", "delete ephemeral"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -161,10 +161,10 @@ func TestGrepMatchAndNoMatch(t *testing.T) {
 	}
 	defer store.Close()
 
-	if err := store.WriteFile("know/cats.md", "# Cats\n\nCats are wonderful pets.\n", "add cats"); err != nil {
+	if _, _, err := store.WriteFile("know/cats.md", "# Cats\n\nCats are wonderful pets.\n", "add cats"); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.WriteFile("know/dogs.md", "# Dogs\n\nDogs are loyal companions.\n", "add dogs"); err != nil {
+	if _, _, err := store.WriteFile("know/dogs.md", "# Dogs\n\nDogs are loyal companions.\n", "add dogs"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -214,7 +214,7 @@ func TestDiffFilesWithDelete(t *testing.T) {
 	defer store.Close()
 
 	// Write a file and record the commit hash.
-	if err := store.WriteFile("know/willdelete.md", "# Will Delete\n", "add willdelete"); err != nil {
+	if _, _, err := store.WriteFile("know/willdelete.md", "# Will Delete\n", "add willdelete"); err != nil {
 		t.Fatal(err)
 	}
 	afterAdd, err := store.HeadCommit()
@@ -223,7 +223,7 @@ func TestDiffFilesWithDelete(t *testing.T) {
 	}
 
 	// Delete the file.
-	if err := store.DeleteFile("know/willdelete.md", "delete willdelete"); err != nil {
+	if _, err := store.DeleteFile("know/willdelete.md", "delete willdelete"); err != nil {
 		t.Fatal(err)
 	}
 

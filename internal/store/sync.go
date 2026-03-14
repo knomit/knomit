@@ -75,16 +75,17 @@ func (idx *Index) Sync(git GitReader) error {
 // it into the index. Files that fail to parse (e.g. know.md manifest) are
 // silently skipped.
 func (idx *Index) indexFile(git GitReader, path, commitHash string) error {
-	content, err := git.ReadFile(path)
+	content, blobHash, err := git.ReadFileWithHash(path)
 	if err != nil {
-		return fmt.Errorf("sync: read %q: %w", path, err)
+		return fmt.Errorf("indexFile: read %s: %w", path, err)
 	}
 
 	rec, err := parseFact(path, content, commitHash)
 	if err != nil {
-		// Skip files that cannot be parsed as facts (e.g. know.md manifest).
+		log.Debug().Str("path", path).Err(err).Msg("skipping non-fact file")
 		return nil
 	}
+	rec.BlobHash = blobHash
 
 	return idx.Upsert(rec)
 }

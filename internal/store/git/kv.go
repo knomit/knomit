@@ -1,4 +1,4 @@
-package gitstorer
+package git
 
 import (
 	"bytes"
@@ -23,7 +23,7 @@ var _ storage.ModuleStorer = (*Storer)(nil)
 // Returns (nil, nil) when the key is not found.
 func (s *Storer) kvGet(key string) ([]byte, error) {
 	var val []byte
-	err := s.db.QueryRow(`SELECT value FROM kv WHERE key=?`, key).Scan(&val)
+	err := s.conn().QueryRow(`SELECT value FROM kv WHERE key=?`, key).Scan(&val)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -32,7 +32,7 @@ func (s *Storer) kvGet(key string) ([]byte, error) {
 
 // kvSet upserts a value into the kv table.
 func (s *Storer) kvSet(key string, val []byte) error {
-	_, err := s.db.Exec(
+	_, err := s.conn().Exec(
 		`INSERT OR REPLACE INTO kv (key, value) VALUES (?, ?)`, key, val,
 	)
 	return err
@@ -168,10 +168,21 @@ func (s *Storer) Module(name string) (storage.Storer, error) {
 	if err := s.kvSet(key, []byte("1")); err != nil {
 		return nil, err
 	}
-	sub, err := New(":memory:")
+	// Module storers get their own in-memory DB for isolation.
+	modDB, err := sql.Open("sqlite3", ":memory:")
 	if err != nil {
 		return nil, err
 	}
+	modSchema := `
+CREATE TABLE IF NOT EXISTS objects (hash TEXT NOT NULL, type INTEGER NOT NULL, size INTEGER NOT NULL, data BLOB NOT NULL, PRIMARY KEY (hash, type));
+CREATE TABLE IF NOT EXISTS refs (name TEXT PRIMARY KEY, target TEXT NOT NULL, is_symbolic INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value BLOB NOT NULL);
+`
+	if _, err := modDB.Exec(modSchema); err != nil {
+		modDB.Close()
+		return nil, err
+	}
+	sub := NewStorer(modDB)
 	s.modules[name] = sub
 	return sub, nil
 }

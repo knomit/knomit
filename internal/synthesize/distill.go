@@ -161,21 +161,21 @@ func executeDistillStep(ctx context.Context, gs GitStore, idx SearchIndex, embed
 		}
 		content := mcp.SerializeFact(fact)
 		msg := fmt.Sprintf("synthesize-%s: distill %s", recipe.Name, df.Path)
-		if err := gs.WriteFile(df.Path, content, msg); err != nil {
+		commitHash, blobHash, err := gs.WriteFile(df.Path, content, msg)
+		if err != nil {
 			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("distill write %s: %v", df.Path, err)})
 			continue
 		}
-		head, _ := gs.HeadCommit()
 		_ = idx.Upsert(store.FactRecord{
 			Path:       df.Path,
 			Title:      df.Title,
-			Body:       df.Body,
+			BlobHash:   blobHash,
 			Domain:     df.Domain,
 			Entities:   df.Entities,
 			Confidence: df.Confidence,
 			Sources:    1,
 			Refs:       df.Refs,
-			CommitHash: head,
+			CommitHash: commitHash,
 		})
 		if len(df.Refs) > 0 {
 			if err := idx.GraphAddDerivedFrom(df.Path, df.Refs); err != nil {
@@ -188,7 +188,7 @@ func executeDistillStep(ctx context.Context, gs GitStore, idx SearchIndex, embed
 	// Delete subsumed facts.
 	for path := range allForget {
 		msg := fmt.Sprintf("synthesize-%s: subsumed by distilled fact", recipe.Name)
-		if err := gs.DeleteFile(path, msg); err != nil {
+		if _, err := gs.DeleteFile(path, msg); err != nil {
 			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("distill forget %s: %v", path, err)})
 			continue
 		}
