@@ -10,6 +10,7 @@ type Config struct {
 // DefaultConfig returns LLM config with sensible defaults.
 func DefaultConfig() Config {
 	return Config{
-		Model: "claude-sonnet-4-6",
+		Model:    "qwen3",
+		Provider: "ollama",
 	}
 }

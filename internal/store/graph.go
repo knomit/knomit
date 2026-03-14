@@ -423,5 +423,6 @@ type execer interface {
 func escapeCypher(s string) string {
 	s = strings.ReplaceAll(s, `\`, `\\`)
 	s = strings.ReplaceAll(s, `"`, `\"`)
+	s = strings.ReplaceAll(s, `'`, `''`) // escape for outer SQL string
 	return s
 }

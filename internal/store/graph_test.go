@@ -120,6 +120,35 @@ func TestGraphMergeFact(t *testing.T) {
 	}
 }
 
+func TestGraphMergeFactWithApostrophe(t *testing.T) {
+	idx, err := New(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer idx.Close()
+
+	// Regression: apostrophe in title broke the outer SQL string in
+	// SELECT cypher('...'), producing: near "s": syntax error
+	err = idx.graphSyncFact(FactRecord{
+		Path:     "know/people/dave/postgres-expert.md",
+		Title:    "Dave's Postgres expertise",
+		Domain:   []string{"engineering"},
+		Entities: []string{"Dave", "PostgreSQL"},
+	})
+	if err != nil {
+		t.Fatalf("graphSyncFact with apostrophe: %v", err)
+	}
+
+	var title string
+	err = idx.db.QueryRow(`SELECT json_extract(value, '$.title') FROM json_each(cypher('MATCH (f:Fact {path: "know/people/dave/postgres-expert.md"}) RETURN f.title AS title'))`).Scan(&title)
+	if err != nil {
+		t.Fatalf("Fact node not found: %v", err)
+	}
+	if title != "Dave's Postgres expertise" {
+		t.Fatalf("expected title with apostrophe, got %q", title)
+	}
+}
+
 func TestGraphDomainHierarchy(t *testing.T) {
 	idx, err := New(":memory:")
 	if err != nil {
