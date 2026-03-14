@@ -1,0 +1,15 @@
+Your previous response produced no new insights and forgot nothing. This is not useful.
+
+Look more carefully for:
+- Common themes across multiple facts
+- Facts that can be generalized into a higher-order pattern
+- Redundant facts that a synthesized fact would subsume
+
+Review these facts again:
+{{.Facts}}
+
+Respond as JSON (no markdown wrapping):
+{
+  "synthesize": [...],
+  "forget": [...]
+}
