@@ -44,10 +44,10 @@ type Embedder interface {
 	Embed(text string) ([]float32, error)
 }
 
-// namedProfiles maps explicit profile names to their Profile struct.
+// namedProfiles maps explicit profile names to their canonical Profile struct.
 var namedProfiles = map[string]Profile{
-	"small": {Name: "small", ForceJSON: false, RetryOnPassive: true, MaxChunkBytes: 50_000},
-	"large": {Name: "large", ForceJSON: true, RetryOnPassive: false, MaxChunkBytes: 100_000},
+	"small": SmallProfile,
+	"large": LargeProfile,
 }
 
 // resolveStepProfile returns the profile for a step, using the step's explicit

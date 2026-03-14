@@ -21,23 +21,29 @@ var smallPattern = regexp.MustCompile(`:(\d+)b`)
 // to be classified as "small".
 const smallProfileThreshold = 14
 
+// LargeProfile is the canonical large model profile.
+var LargeProfile = Profile{
+	Name:           "large",
+	ForceJSON:      true,
+	RetryOnPassive: false,
+	MaxChunkBytes:  100_000,
+}
+
+// SmallProfile is the canonical small model profile.
+var SmallProfile = Profile{
+	Name:           "small",
+	ForceJSON:      false,
+	RetryOnPassive: true,
+	MaxChunkBytes:  50_000,
+}
+
 // ResolveProfile returns the appropriate profile for a given model name.
 // Models with size markers ≤ 14b are "small"; everything else is "large".
 func ResolveProfile(model string) Profile {
 	if isSmallModel(model) {
-		return Profile{
-			Name:           "small",
-			ForceJSON:      false,
-			RetryOnPassive: true,
-			MaxChunkBytes:  50_000,
-		}
+		return SmallProfile
 	}
-	return Profile{
-		Name:           "large",
-		ForceJSON:      true,
-		RetryOnPassive: false,
-		MaxChunkBytes:  100_000,
-	}
+	return LargeProfile
 }
 
 func isSmallModel(model string) bool {
