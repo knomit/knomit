@@ -41,7 +41,7 @@ download-ort:
 	fi
 
 build: web
-	CGO_ENABLED=1 go build -o dist/knomit ./cmd/knomit/
+	CGO_ENABLED=1 go build -o dist/knomit .
 
 web:
 	cd web && npm ci && npm run build
@@ -54,7 +54,7 @@ dist: download-ort build
 
 CMD ?= serve
 run: download-ort
-	CGO_ENABLED=1 ORT_LIB_PATH=dist/lib/$(ORT_LIB_NAME) go run ./cmd/knomit/ $(CMD)
+	CGO_ENABLED=1 ORT_LIB_PATH=dist/lib/$(ORT_LIB_NAME) go run . $(CMD)
 
 dev:
 	cd web && npm run dev
