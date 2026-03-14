@@ -12,9 +12,7 @@ import (
 	"strings"
 
 	"github.com/rs/zerolog/log"
-	"knomit/internal/fact"
 	"knomit/internal/llm"
-	"knomit/internal/mcp"
 	"knomit/internal/store"
 )
 
@@ -164,62 +162,17 @@ func executeDistillStep(ctx context.Context, gs GitStore, idx SearchIndex, embed
 		}
 	}
 
-	tagCounter := 0
-	log.Info().Int("synthesized", len(allSynthesized)).Int("forgotten", len(allForget)).Msg("distill: committing results")
-
-	// Commit synthesized facts.
-	for _, df := range allSynthesized {
-		f := mcp.Fact{
-			Path:       df.Path,
-			Title:      df.Title,
-			Body:       df.Body,
-			Type:       fact.EpistemicType(df.Type),
-			Domain:     df.Domain,
-			Confidence: df.Confidence,
-			Sources:    1,
-			Entities:   df.Entities,
-			Refs:       df.Refs,
-		}
-		content := mcp.SerializeFact(f)
-		msg := fmt.Sprintf("synthesize-%s: distill %s", recipe.Name, df.Path)
-		commitHash, blobHash, err := gs.WriteFile(df.Path, content, msg)
-		if err != nil {
-			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("distill write %s: %v", df.Path, err)})
-			continue
-		}
-		_ = idx.Upsert(store.FactRecord{
-			Path:       df.Path,
-			Title:      df.Title,
-			BlobHash:   blobHash,
-			Type:       df.Type,
-			Domain:     df.Domain,
-			Entities:   df.Entities,
-			Confidence: df.Confidence,
-			Sources:    1,
-			Refs:       df.Refs,
-			CommitHash: commitHash,
-		})
-		if len(df.Refs) > 0 {
-			if err := idx.GraphAddDerivedFrom(df.Path, df.Refs); err != nil {
-				onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("derived_from %s: %v", df.Path, err)})
-			}
-		}
-		tagOp(gs, "subsume", recipe.Name, &tagCounter)
-		onProgress(ProgressEvent{Phase: "detail-learn", Message: "learn " + df.Path})
+	// Convert allForget map to slice for ApplyDistillDecisions.
+	retractPaths := make([]string, 0, len(allForget))
+	for p := range allForget {
+		retractPaths = append(retractPaths, p)
 	}
 
-	// Delete subsumed facts.
-	for path := range allForget {
-		msg := fmt.Sprintf("synthesize-%s: subsumed by distilled fact", recipe.Name)
-		if _, err := gs.DeleteFile(path, msg); err != nil {
-			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("distill retract %s: %v", path, err)})
-			continue
-		}
-		_ = idx.Delete(path)
-		tagOp(gs, "retract", recipe.Name, &tagCounter)
-		onProgress(ProgressEvent{Phase: "detail-distill-retract", Message: "retract " + path})
+	stats, err := ApplyDistillDecisions(gs, idx, allSynthesized, retractPaths, recipe.Name, onProgress)
+	if err != nil {
+		return err
 	}
 
-	onProgress(ProgressEvent{Phase: "distill-done", Message: fmt.Sprintf("%d synthesized, %d forgotten", len(allSynthesized), len(allForget))})
+	onProgress(ProgressEvent{Phase: "distill-done", Message: fmt.Sprintf("%d synthesized, %d forgotten", stats.Synthesized, stats.Pruned)})
 	return nil
 }
