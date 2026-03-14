@@ -18,7 +18,7 @@ import (
 
 func newTestRouter(gs GitStore, idx SearchIndex) http.Handler {
 	hub := NewTaskHub(context.Background())
-	return NewRouter(gs, idx, hub, nil, map[string]http.Handler(nil), nil, false, "know")
+	return NewRouter(gs, idx, hub, nil, map[string]http.Handler(nil), nil, false, "kb")
 }
 
 func doRequest(t *testing.T, handler http.Handler, method, target string, body string) *httptest.ResponseRecorder {
@@ -47,32 +47,32 @@ func TestHandleBrowse(t *testing.T) {
 		wantLen    int
 	}{
 		{
-			name:  "default path uses know",
+			name:  "default path uses general",
 			query: "/api/v1/browse",
 			entries: []git.DirEntry{
 				{Name: "subdir", IsDir: true},
 				{Name: "fact.md", IsDir: false},
 			},
 			wantStatus: http.StatusOK,
-			wantPath:   "know",
+			wantPath:   "kb",
 			wantLen:    2,
 		},
 		{
 			name:  "explicit path",
-			query: "/api/v1/browse?path=know/sub",
+			query: "/api/v1/browse?path=kb/sub",
 			entries: []git.DirEntry{
 				{Name: "item.md", IsDir: false},
 			},
 			wantStatus: http.StatusOK,
-			wantPath:   "know/sub",
+			wantPath:   "kb/sub",
 			wantLen:    1,
 		},
 		{
 			name:       "empty directory",
-			query:      "/api/v1/browse?path=know/empty",
+			query:      "/api/v1/browse?path=kb/empty",
 			entries:    []git.DirEntry{},
 			wantStatus: http.StatusOK,
-			wantPath:   "know/empty",
+			wantPath:   "kb/empty",
 			wantLen:    0,
 		},
 	}
@@ -129,7 +129,7 @@ func TestHandleFact(t *testing.T) {
 		},
 		{
 			name:       "valid path returns parsed fact",
-			query:      "/api/v1/fact?path=know/chi.md",
+			query:      "/api/v1/fact?path=kb/chi.md",
 			content:    validContent,
 			expectRead: true,
 			wantStatus: http.StatusOK,
@@ -170,7 +170,7 @@ func TestHandleSearch(t *testing.T) {
 		{
 			FactWithBody: store.FactWithBody{
 				FactRecord: store.FactRecord{
-					Path:  "know/fact.md",
+					Path:  "kb/fact.md",
 					Title: "Test Fact",
 				},
 				Body: "A test fact body.",
@@ -296,7 +296,7 @@ func TestHandleHistory(t *testing.T) {
 	}{
 		{
 			name:       "returns log entries",
-			query:      "/api/v1/history?path=know/fact.md",
+			query:      "/api/v1/history?path=kb/fact.md",
 			entries:    logEntries,
 			wantStatus: http.StatusOK,
 			wantLen:    2,
@@ -310,7 +310,7 @@ func TestHandleHistory(t *testing.T) {
 		},
 		{
 			name:       "nil entries returns empty array",
-			query:      "/api/v1/history?path=know/missing.md",
+			query:      "/api/v1/history?path=kb/missing.md",
 			entries:    nil,
 			wantStatus: http.StatusOK,
 			wantLen:    0,

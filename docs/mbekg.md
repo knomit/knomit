@@ -59,7 +59,7 @@ The following are intentionally omitted because Git handles them natively:
 The repository's directory structure defines a strict "is-within" hierarchy called the **ontology**. It represents containment relationships that are unambiguous — a house is on a street, in a city, in a country.
 
 ```
-know/
+general/
   earth/
     uk/
       london/
@@ -75,12 +75,12 @@ know/
 - **Facts are placed at the most specific level they apply to.** "It rains in London in April" goes in `london/`, not `uk/`.
 - **Facts at higher levels are inherited by everything below.** "The UK drives on the left" applies to London, Manchester, and every address under `uk/`.
 - **Folders may have a sibling manifest file** with the same name and `.md` extension. This file describes what that level of the hierarchy represents. It follows the same fact file schema. Manifests are optional — directories can exist without them.
-- **The root is `know/`.** All facts live under this prefix.
-- **The ontology is not limited to physical space.** `know/digital/github/repo-x/` is equally valid.
+- **The root is `general/`.** All facts live under this prefix.
+- **The ontology is not limited to physical space.** `general/digital/github/repo-x/` is equally valid.
 
 ### 3.3 Manifests
 
-A manifest is an optional fact file that describes the ontology level itself, not something within it. It sits as a sibling to the folder it describes (e.g., `know/earth/uk/london.md` describes the `london/` directory).
+A manifest is an optional fact file that describes the ontology level itself, not something within it. It sits as a sibling to the folder it describes (e.g., `general/earth/uk/london.md` describes the `london/` directory).
 
 ```yaml
 ---
@@ -98,7 +98,7 @@ Located in southeastern England on the River Thames.
 
 ### 3.4 Agent Navigation
 
-1. Agent enters `know/earth/uk/london/`
+1. Agent enters `general/earth/uk/london/`
 2. Reads `london.md` (sibling manifest, if present) — understands what "London" is
 3. Reads fact files in `london/` — learns what is true about London
 4. Walks up to `uk.md`, `earth.md` (if present) — inherits higher-level truths
@@ -112,8 +112,8 @@ Each ref is a single string. The format determines how the MCP resolves it:
 
 | Format | Meaning | Example |
 |---|---|---|
-| Local path | Fact in the same repo | `know/people/alice/alice-likes-rock-music.md` |
-| `git://` URI | Fact in another knowledge repo | `git://other-repo/know/path/to/fact.md` |
+| Local path | Fact in the same repo | `general/people/alice/alice-likes-rock-music.md` |
+| `git://` URI | Fact in another knowledge repo | `git://other-repo/general/path/to/fact.md` |
 | `episodic://` URI | Raw event in an episodic database | `episodic://event_88` |
 | `https://` URI | External URL | `https://example.com/source` |
 
@@ -130,7 +130,7 @@ Evidence chains are resolved through two complementary mechanisms:
 ### 4.3 Evidence Traversal ("Why is this true?")
 
 **Step 1 — Find the fact.**
-Locate the fact file by entity, domain, or path within the `know/` tree.
+Locate the fact file by entity, domain, or path within the `general/` tree.
 
 **Step 2 — Find the learning moment.**
 Walk the Git log for the fact file to find the tagged commit.
@@ -213,7 +213,7 @@ The synthesized fact is structurally identical to any other fact. The only diffe
 ### Repository State
 
 ```
-know/
+general/
   earth/
     uk/
       london/
@@ -226,7 +226,7 @@ know/
 
 ### A Ground-Level Fact
 
-`know/people/alice/alice-likes-rock-music.md`
+`general/people/alice/alice-likes-rock-music.md`
 
 ```yaml
 ---
@@ -245,7 +245,7 @@ purchasing Album X in 2024 and attending Concert Y in 2025.
 
 ### A Synthesized Fact
 
-`know/people/alice/alice-music-shifts-seasonally.md`
+`general/people/alice/alice-music-shifts-seasonally.md`
 
 ```yaml
 ---
@@ -254,9 +254,9 @@ confidence: 0.72
 sources: 10
 entities: [alice, music_taste, seasonal_patterns]
 refs:
-  - know/people/alice/alice-likes-rock-music.md
-  - know/people/alice/alice-bought-album-x.md
-  - know/people/alice/alice-attended-concert-y.md
+  - general/people/alice/alice-likes-rock-music.md
+  - general/people/alice/alice-bought-album-x.md
+  - general/people/alice/alice-attended-concert-y.md
 ---
 # Alice's music taste shifts seasonally
 

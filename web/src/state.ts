@@ -38,7 +38,7 @@ export type Action =
   | { type: 'SHOW_FACT' }
   | { type: 'SET_LOADING'; value: boolean }
   | { type: 'SET_TASK'; op: string; status: 'idle' | 'running' | 'done' | 'error'; message: string }
-  | { type: 'SET_STATUS'; head: string; branch: string; embeddingsEnabled: boolean }
+  | { type: 'SET_STATUS'; head: string; branch: string; embeddingsEnabled: boolean; ontologyRoot: string }
   | { type: 'SET_HEAD'; head: string }
   | { type: 'SET_STATUS_MESSAGE'; message: string }
   | { type: 'CONSOLE_LOG'; level: 'info' | 'error'; message: string }
@@ -46,7 +46,7 @@ export type Action =
   | { type: 'CONSOLE_SET_HEIGHT'; height: number };
 
 export const init: AppState = {
-  currentPath: 'know',
+  currentPath: 'kb',
   selectedFact: null,
   previewPath: null,
   rightMode: 'summary',
@@ -85,7 +85,7 @@ export function reducer(s: AppState, a: Action): AppState {
       if (cur && cur.status === a.status && cur.message === a.message) return s;
       return { ...s, tasks: { ...s.tasks, [a.op]: { status: a.status, message: a.message } } };
     }
-    case 'SET_STATUS': return { ...s, headCommit: a.head, branch: a.branch, embeddingsEnabled: a.embeddingsEnabled };
+    case 'SET_STATUS': return { ...s, headCommit: a.head, branch: a.branch, embeddingsEnabled: a.embeddingsEnabled, currentPath: a.ontologyRoot || s.currentPath };
     case 'SET_HEAD': return { ...s, headCommit: a.head };
     case 'SET_STATUS_MESSAGE': return { ...s, statusMessage: a.message };
     case 'CONSOLE_LOG': {

@@ -215,21 +215,6 @@ func (mr *MockSearchIndexMockRecorder) Delete(path any) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Delete", reflect.TypeOf((*MockSearchIndex)(nil).Delete), path)
 }
 
-// GetLastCommit mocks base method.
-func (m *MockSearchIndex) GetLastCommit() (string, error) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetLastCommit")
-	ret0, _ := ret[0].(string)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
-}
-
-// GetLastCommit indicates an expected call of GetLastCommit.
-func (mr *MockSearchIndexMockRecorder) GetLastCommit() *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetLastCommit", reflect.TypeOf((*MockSearchIndex)(nil).GetLastCommit))
-}
-
 // GraphAddDerivedFrom mocks base method.
 func (m *MockSearchIndex) GraphAddDerivedFrom(newPath string, sourcePaths []string) error {
 	m.ctrl.T.Helper()
@@ -257,20 +242,6 @@ func (m *MockSearchIndex) Search(q store.SearchQuery) ([]store.SearchResult, err
 func (mr *MockSearchIndexMockRecorder) Search(q any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Search", reflect.TypeOf((*MockSearchIndex)(nil).Search), q)
-}
-
-// Sync mocks base method.
-func (m *MockSearchIndex) Sync(g store.GitReader) error {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Sync", g)
-	ret0, _ := ret[0].(error)
-	return ret0
-}
-
-// Sync indicates an expected call of Sync.
-func (mr *MockSearchIndexMockRecorder) Sync(g any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Sync", reflect.TypeOf((*MockSearchIndex)(nil).Sync), g)
 }
 
 // Upsert mocks base method.

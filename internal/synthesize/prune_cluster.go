@@ -34,6 +34,7 @@ func gatherAllFacts(gs GitStore) ([]factForLLM, error) {
 			File:       fact.Path,
 			Title:      fact.Title,
 			Body:       fact.Body,
+			Type:       string(fact.Type),
 			Domain:     fact.Domain,
 			Entities:   fact.Entities,
 			Confidence: fact.Confidence,

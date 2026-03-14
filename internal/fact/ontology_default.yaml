@@ -1,0 +1,126 @@
+id: general
+name: General Knowledge
+description: >
+  A broad-purpose taxonomy for organizing knowledge by subject area,
+  aligned with Wikipedia's Main Topic Classifications.
+topics:
+  people:
+    description: Individuals, groups, relationships
+    children:
+      individuals:
+        description: Specific persons
+      groups:
+        description: Teams, organizations, communities
+      relationships:
+        description: Connections between people
+  technology:
+    description: Software, hardware, networking, data
+    children:
+      software:
+        description: Languages, frameworks, tools, systems
+      hardware:
+        description: Devices, components, infrastructure
+      networking:
+        description: Protocols, connectivity, distributed systems
+      data:
+        description: Databases, storage, data engineering
+  science:
+    description: Formal, natural, and applied sciences
+    children:
+      formal:
+        description: Mathematics, logic, CS theory
+      natural:
+        description: Physics, chemistry, biology, earth science
+      applied:
+        description: Engineering, medicine, agriculture
+  society:
+    description: Economics, politics, law, education
+    children:
+      economics:
+        description: Markets, trade, finance
+      politics:
+        description: Governance, policy, international relations
+      law:
+        description: Legal systems, regulation, rights
+      education:
+        description: Learning, academia, pedagogy
+  culture:
+    description: Art, literature, music, design, language
+    children:
+      art:
+        description: Visual arts, performing arts, film
+      literature:
+        description: Writing, poetry, publishing
+      music:
+        description: Composition, performance, genres
+      design:
+        description: Graphic, industrial, UX design
+      language:
+        description: Linguistics, translation, communication
+  geography:
+    description: Physical, political, and virtual spaces
+    children:
+      physical:
+        description: Landforms, climate, natural features
+      political:
+        description: Countries, regions, borders
+      urban:
+        description: Cities, infrastructure, planning
+      virtual:
+        description: Digital spaces, online communities
+  history:
+    description: Past and ongoing events
+    children:
+      ancient:
+        description: Pre-medieval events and civilizations
+      modern:
+        description: Post-medieval to present
+      ongoing:
+        description: Current events, developing situations
+  health:
+    description: Medicine, wellness, public health
+    children:
+      medicine:
+        description: Diagnosis, treatment, pharmacology
+      wellness:
+        description: Fitness, nutrition, mental health
+      public-health:
+        description: Epidemiology, policy, systems
+  philosophy:
+    description: Metaphysics, epistemology, ethics
+    children:
+      metaphysics:
+        description: Nature of reality, existence
+      epistemology:
+        description: Knowledge, belief, justification
+      ethics:
+        description: Morality, values, normative theory
+  religion:
+    description: Traditions, spirituality, theology
+    children:
+      traditions:
+        description: Organized religions, denominations
+      spirituality:
+        description: Personal practice, mysticism
+      theology:
+        description: Doctrine, scripture, comparative study
+  business:
+    description: Organizations, products, markets, operations
+    children:
+      organizations:
+        description: Companies, nonprofits, institutions
+      products:
+        description: Goods, services, brands
+      markets:
+        description: Industries, competition, trends
+      operations:
+        description: Management, logistics, strategy
+  reference:
+    description: Standards, measurements, terminology
+    children:
+      standards:
+        description: Specifications, protocols, conventions
+      measurements:
+        description: Units, metrics, benchmarks
+      terminology:
+        description: Glossaries, definitions, nomenclature

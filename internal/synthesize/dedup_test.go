@@ -12,7 +12,7 @@ import (
 // A is the winner and fields are merged correctly.
 func TestMergeFacts_HigherConfidenceWins(t *testing.T) {
 	a := factForLLM{
-		File:       "know/a.md",
+		File:       "kb/a.md",
 		Title:      "Fact A",
 		Body:       "Body of A",
 		Domain:     []string{"domain-a"},
@@ -21,7 +21,7 @@ func TestMergeFacts_HigherConfidenceWins(t *testing.T) {
 		Sources:    2,
 	}
 	b := factForLLM{
-		File:       "know/b.md",
+		File:       "kb/b.md",
 		Title:      "Fact B",
 		Body:       "Body of B",
 		Domain:     []string{"domain-b"},
@@ -32,8 +32,8 @@ func TestMergeFacts_HigherConfidenceWins(t *testing.T) {
 
 	winner, loser := mergeFacts(a, b)
 
-	if winner.File != "know/a.md" {
-		t.Errorf("expected winner file=know/a.md, got %q", winner.File)
+	if winner.File != "kb/a.md" {
+		t.Errorf("expected winner file=kb/a.md, got %q", winner.File)
 	}
 	if winner.Title != "Fact A" {
 		t.Errorf("expected winner title=Fact A, got %q", winner.Title)
@@ -41,8 +41,8 @@ func TestMergeFacts_HigherConfidenceWins(t *testing.T) {
 	if winner.Body != "Body of A" {
 		t.Errorf("expected winner body=Body of A, got %q", winner.Body)
 	}
-	if loser.File != "know/b.md" {
-		t.Errorf("expected loser file=know/b.md, got %q", loser.File)
+	if loser.File != "kb/b.md" {
+		t.Errorf("expected loser file=kb/b.md, got %q", loser.File)
 	}
 
 	// Sources should be summed.
@@ -75,7 +75,7 @@ func TestMergeFacts_HigherConfidenceWins(t *testing.T) {
 // the fact with more sources wins.
 func TestMergeFacts_TieBreakBySources(t *testing.T) {
 	a := factForLLM{
-		File:       "know/a.md",
+		File:       "kb/a.md",
 		Title:      "Fact A",
 		Body:       "Body of A",
 		Domain:     []string{"domain-a"},
@@ -84,7 +84,7 @@ func TestMergeFacts_TieBreakBySources(t *testing.T) {
 		Sources:    1,
 	}
 	b := factForLLM{
-		File:       "know/b.md",
+		File:       "kb/b.md",
 		Title:      "Fact B",
 		Body:       "Body of B",
 		Domain:     []string{"domain-b"},
@@ -96,11 +96,11 @@ func TestMergeFacts_TieBreakBySources(t *testing.T) {
 	winner, loser := mergeFacts(a, b)
 
 	// B has more sources, so B wins.
-	if winner.File != "know/b.md" {
-		t.Errorf("expected winner file=know/b.md (higher sources), got %q", winner.File)
+	if winner.File != "kb/b.md" {
+		t.Errorf("expected winner file=kb/b.md (higher sources), got %q", winner.File)
 	}
-	if loser.File != "know/a.md" {
-		t.Errorf("expected loser file=know/a.md, got %q", loser.File)
+	if loser.File != "kb/a.md" {
+		t.Errorf("expected loser file=kb/a.md, got %q", loser.File)
 	}
 	if winner.Sources != 4 {
 		t.Errorf("expected merged sources=4, got %d", winner.Sources)
@@ -111,7 +111,7 @@ func TestMergeFacts_TieBreakBySources(t *testing.T) {
 // deduplicated in the merged winner.
 func TestMergeFacts_DeduplicatesDomains(t *testing.T) {
 	a := factForLLM{
-		File:       "know/a.md",
+		File:       "kb/a.md",
 		Title:      "Fact A",
 		Body:       "Body of A",
 		Domain:     []string{"shared", "only-a"},
@@ -120,7 +120,7 @@ func TestMergeFacts_DeduplicatesDomains(t *testing.T) {
 		Sources:    1,
 	}
 	b := factForLLM{
-		File:       "know/b.md",
+		File:       "kb/b.md",
 		Title:      "Fact B",
 		Body:       "Body of B",
 		Domain:     []string{"shared", "only-b"},
@@ -156,9 +156,9 @@ func TestMergeFacts_DeduplicatesDomains(t *testing.T) {
 // TestBuildMergePairs_GreedyConsumption verifies that when A≈B and B≈C,
 // only the higher-similarity pair (A,B) is selected and C is not consumed.
 func TestBuildMergePairs_GreedyConsumption(t *testing.T) {
-	a := factForLLM{File: "know/a.md", Title: "A", Body: "body a"}
-	b := factForLLM{File: "know/b.md", Title: "B", Body: "body b"}
-	c := factForLLM{File: "know/c.md", Title: "C", Body: "body c"}
+	a := factForLLM{File: "kb/a.md", Title: "A", Body: "body a"}
+	b := factForLLM{File: "kb/b.md", Title: "B", Body: "body b"}
+	c := factForLLM{File: "kb/c.md", Title: "C", Body: "body c"}
 
 	pairs := []mergePair{
 		{a: a, b: b, similarity: 0.95},
@@ -172,8 +172,8 @@ func TestBuildMergePairs_GreedyConsumption(t *testing.T) {
 	}
 	// The highest-similarity pair (A,B) should be selected.
 	got := selected[0]
-	if !(got.a.File == "know/a.md" && got.b.File == "know/b.md") &&
-		!(got.a.File == "know/b.md" && got.b.File == "know/a.md") {
+	if !(got.a.File == "kb/a.md" && got.b.File == "kb/b.md") &&
+		!(got.a.File == "kb/b.md" && got.b.File == "kb/a.md") {
 		t.Errorf("expected selected pair to be (a,b), got (%s, %s)", got.a.File, got.b.File)
 	}
 }
@@ -188,7 +188,7 @@ func TestDedupCluster_MergesNearDuplicates(t *testing.T) {
 	idx := NewMockSearchIndex(ctrl)
 
 	factA := factForLLM{
-		File:       "know/a.md",
+		File:       "kb/a.md",
 		Title:      "Fact A",
 		Body:       "Body of fact A about topic X.",
 		Domain:     []string{"testing"},
@@ -197,7 +197,7 @@ func TestDedupCluster_MergesNearDuplicates(t *testing.T) {
 		Sources:    2,
 	}
 	factB := factForLLM{
-		File:       "know/b.md",
+		File:       "kb/b.md",
 		Title:      "Fact B",
 		Body:       "Body of fact B about topic X, similar to A.",
 		Domain:     []string{"testing"},
@@ -206,7 +206,7 @@ func TestDedupCluster_MergesNearDuplicates(t *testing.T) {
 		Sources:    1,
 	}
 	factC := factForLLM{
-		File:       "know/c.md",
+		File:       "kb/c.md",
 		Title:      "Unrelated Fact C",
 		Body:       "Something completely different.",
 		Domain:     []string{"other"},
@@ -228,7 +228,7 @@ func TestDedupCluster_MergesNearDuplicates(t *testing.T) {
 		MinSimilarity: defaultDedupThreshold,
 		Limit:         10,
 	}).Return([]store.SearchResult{
-		{FactWithBody: store.FactWithBody{FactRecord: store.FactRecord{Path: "know/b.md", Title: "Fact B"}}, Score: 95},
+		{FactWithBody: store.FactWithBody{FactRecord: store.FactRecord{Path: "kb/b.md", Title: "Fact B"}}, Score: 95},
 	}, nil)
 
 	// Search for B → returns A (score 95)
@@ -237,7 +237,7 @@ func TestDedupCluster_MergesNearDuplicates(t *testing.T) {
 		MinSimilarity: defaultDedupThreshold,
 		Limit:         10,
 	}).Return([]store.SearchResult{
-		{FactWithBody: store.FactWithBody{FactRecord: store.FactRecord{Path: "know/a.md", Title: "Fact A"}}, Score: 95},
+		{FactWithBody: store.FactWithBody{FactRecord: store.FactRecord{Path: "kb/a.md", Title: "Fact A"}}, Score: 95},
 	}, nil)
 
 	// Search for C → no matches
@@ -248,18 +248,18 @@ func TestDedupCluster_MergesNearDuplicates(t *testing.T) {
 	}).Return([]store.SearchResult{}, nil)
 
 	// Winner is A (higher confidence). Read both to get full facts with Refs.
-	gs.EXPECT().ReadFile("know/a.md").Return(aContent, nil)
-	gs.EXPECT().ReadFile("know/b.md").Return(bContent, nil)
+	gs.EXPECT().ReadFile("kb/a.md").Return(aContent, nil)
+	gs.EXPECT().ReadFile("kb/b.md").Return(bContent, nil)
 
 	// Write merged winner back to git.
-	gs.EXPECT().WriteFile("know/a.md", gomock.Any(), gomock.Any()).Return("commit-hash-1", "blob-hash-1", nil)
+	gs.EXPECT().WriteFile("kb/a.md", gomock.Any(), gomock.Any()).Return("commit-hash-1", "blob-hash-1", nil)
 
 	// Upsert updated winner into index.
 	idx.EXPECT().Upsert(gomock.Any()).Return(nil)
 
 	// Delete loser from git and index.
-	gs.EXPECT().DeleteFile("know/b.md", gomock.Any()).Return("commit-hash-2", nil)
-	idx.EXPECT().Delete("know/b.md").Return(nil)
+	gs.EXPECT().DeleteFile("kb/b.md", gomock.Any()).Return("commit-hash-2", nil)
+	idx.EXPECT().Delete("kb/b.md").Return(nil)
 
 	surviving, err := dedupCluster(context.Background(), cluster, gs, idx, defaultDedupThreshold, "test-recipe", func(ProgressEvent) {})
 	if err != nil {
@@ -278,8 +278,8 @@ func TestDedupCluster_MergesNearDuplicates(t *testing.T) {
 
 	// B should not be in the survivors.
 	for _, f := range surviving {
-		if f.File == "know/b.md" {
-			t.Errorf("loser know/b.md should not be in surviving facts")
+		if f.File == "kb/b.md" {
+			t.Errorf("loser kb/b.md should not be in surviving facts")
 		}
 	}
 }
@@ -292,8 +292,8 @@ func TestDedupCluster_SkipsBelowThreshold(t *testing.T) {
 	gs := NewMockGitStore(ctrl)
 	idx := NewMockSearchIndex(ctrl)
 
-	factA := factForLLM{File: "know/a.md", Title: "Fact A", Body: "Body A"}
-	factB := factForLLM{File: "know/b.md", Title: "Fact B", Body: "Body B"}
+	factA := factForLLM{File: "kb/a.md", Title: "Fact A", Body: "Body A"}
+	factB := factForLLM{File: "kb/b.md", Title: "Fact B", Body: "Body B"}
 
 	cluster := []factForLLM{factA, factB}
 

@@ -306,20 +306,6 @@ func (m *MockSearchIndex) EXPECT() *MockSearchIndexMockRecorder {
 	return m.recorder
 }
 
-// Delete mocks base method.
-func (m *MockSearchIndex) Delete(path string) error {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Delete", path)
-	ret0, _ := ret[0].(error)
-	return ret0
-}
-
-// Delete indicates an expected call of Delete.
-func (mr *MockSearchIndexMockRecorder) Delete(path any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Delete", reflect.TypeOf((*MockSearchIndex)(nil).Delete), path)
-}
-
 // GetByPath mocks base method.
 func (m *MockSearchIndex) GetByPath(path string) (*FactWithBody, error) {
 	m.ctrl.T.Helper()
@@ -335,21 +321,6 @@ func (mr *MockSearchIndexMockRecorder) GetByPath(path any) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetByPath", reflect.TypeOf((*MockSearchIndex)(nil).GetByPath), path)
 }
 
-// GetLastCommit mocks base method.
-func (m *MockSearchIndex) GetLastCommit() (string, error) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetLastCommit")
-	ret0, _ := ret[0].(string)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
-}
-
-// GetLastCommit indicates an expected call of GetLastCommit.
-func (mr *MockSearchIndexMockRecorder) GetLastCommit() *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetLastCommit", reflect.TypeOf((*MockSearchIndex)(nil).GetLastCommit))
-}
-
 // Search mocks base method.
 func (m *MockSearchIndex) Search(q SearchQuery) ([]SearchResult, error) {
 	m.ctrl.T.Helper()
@@ -363,46 +334,4 @@ func (m *MockSearchIndex) Search(q SearchQuery) ([]SearchResult, error) {
 func (mr *MockSearchIndexMockRecorder) Search(q any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Search", reflect.TypeOf((*MockSearchIndex)(nil).Search), q)
-}
-
-// SetLastCommit mocks base method.
-func (m *MockSearchIndex) SetLastCommit(hash string) error {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "SetLastCommit", hash)
-	ret0, _ := ret[0].(error)
-	return ret0
-}
-
-// SetLastCommit indicates an expected call of SetLastCommit.
-func (mr *MockSearchIndexMockRecorder) SetLastCommit(hash any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetLastCommit", reflect.TypeOf((*MockSearchIndex)(nil).SetLastCommit), hash)
-}
-
-// Sync mocks base method.
-func (m *MockSearchIndex) Sync(g GitReader) error {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Sync", g)
-	ret0, _ := ret[0].(error)
-	return ret0
-}
-
-// Sync indicates an expected call of Sync.
-func (mr *MockSearchIndexMockRecorder) Sync(g any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Sync", reflect.TypeOf((*MockSearchIndex)(nil).Sync), g)
-}
-
-// Upsert mocks base method.
-func (m *MockSearchIndex) Upsert(r FactRecord) error {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Upsert", r)
-	ret0, _ := ret[0].(error)
-	return ret0
-}
-
-// Upsert indicates an expected call of Upsert.
-func (mr *MockSearchIndexMockRecorder) Upsert(r any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Upsert", reflect.TypeOf((*MockSearchIndex)(nil).Upsert), r)
 }

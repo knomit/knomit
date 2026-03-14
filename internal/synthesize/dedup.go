@@ -203,6 +203,7 @@ func dedupCluster(
 			Path:       fullWinner.Path,
 			Title:      fullWinner.Title,
 			BlobHash:   blobHash,
+			Type:       string(fullWinner.Type),
 			Domain:     fullWinner.Domain,
 			Entities:   fullWinner.Entities,
 			Confidence: fullWinner.Confidence,

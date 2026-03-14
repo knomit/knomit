@@ -4,6 +4,7 @@ package mcp
 import (
 	"github.com/mark3labs/mcp-go/server"
 
+	"knomit/internal/fact"
 	gitpkg "knomit/internal/git"
 	"knomit/internal/llm"
 	storepkg "knomit/internal/store"
@@ -33,9 +34,6 @@ type FactRecord = storepkg.FactRecord
 // FactWithBody is re-exported from internal/store.
 type FactWithBody = storepkg.FactWithBody
 
-// GitReader is re-exported from internal/store (used by SearchIndex.Sync).
-type GitReader = storepkg.GitReader
-
 // GitStore is the interface the MCP tools require from internal/git.
 // Only methods actually used by the tool handlers are listed here so that
 // tests can use lightweight mocks.
@@ -61,28 +59,23 @@ type GitStore interface {
 // SearchIndex is the interface the MCP tools require from internal/store.
 type SearchIndex interface {
 	Search(q SearchQuery) ([]SearchResult, error)
-	Upsert(r FactRecord) error
-	Delete(path string) error
 	GetByPath(path string) (*FactWithBody, error)
-	Sync(g GitReader) error
-	GetLastCommit() (string, error)
-	SetLastCommit(hash string) error
 }
 
 // NewServer creates a new MCP server with all knomit tools registered.
-func NewServer(gs GitStore, idx SearchIndex, llmAdapter llm.LLMAdapter, profile, ontologyRoot string) *server.MCPServer {
+func NewServer(gs GitStore, idx SearchIndex, llmAdapter llm.LLMAdapter, profile, ontologyRoot string, ontology *fact.Ontology) *server.MCPServer {
 	_ = llmAdapter
 
 	s := server.NewMCPServer("knomit", "1.0.0",
-		server.WithInstructions(ProfileInstructions(profile, ontologyRoot)),
+		server.WithInstructions(ProfileInstructions(profile, ontologyRoot, ontology)),
 	)
 
-	s.AddTool(learnTool(), LearnHandler(gs, idx, ontologyRoot))
+	s.AddTool(learnTool(), LearnHandler(gs, idx, ontologyRoot, ontology))
 	s.AddTool(queryTool(), QueryHandler(gs, idx))
 	s.AddTool(whyTool(), WhyHandler(gs, ontologyRoot))
-	s.AddTool(updateTool(), UpdateHandler(gs, idx, ontologyRoot))
+	s.AddTool(updateTool(), UpdateHandler(gs, ontologyRoot))
 	s.AddTool(exploreTool(ontologyRoot), ExploreHandler(gs, ontologyRoot))
-	s.AddTool(retractTool(), RetractHandler(gs, idx, ontologyRoot))
+	s.AddTool(retractTool(), RetractHandler(gs, ontologyRoot))
 
 	return s
 }

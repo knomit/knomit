@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/rs/zerolog/log"
+	"knomit/internal/fact"
 	"knomit/internal/llm"
 	"knomit/internal/mcp"
 	"knomit/internal/store"
@@ -49,6 +50,7 @@ func executeDistillStep(ctx context.Context, gs GitStore, idx SearchIndex, embed
 				File:       r.Path,
 				Title:      r.Title,
 				Body:       r.Body,
+				Type:       r.Type,
 				Domain:     r.Domain,
 				Entities:   r.Entities,
 				Confidence: r.Confidence,
@@ -147,6 +149,7 @@ func executeDistillStep(ctx context.Context, gs GitStore, idx SearchIndex, embed
 						File:       df.Path,
 						Title:      df.Title,
 						Body:       df.Body,
+						Type:       df.Type,
 						Domain:     df.Domain,
 						Entities:   df.Entities,
 						Confidence: df.Confidence,
@@ -166,17 +169,18 @@ func executeDistillStep(ctx context.Context, gs GitStore, idx SearchIndex, embed
 
 	// Commit synthesized facts.
 	for _, df := range allSynthesized {
-		fact := mcp.Fact{
+		f := mcp.Fact{
 			Path:       df.Path,
 			Title:      df.Title,
 			Body:       df.Body,
+			Type:       fact.EpistemicType(df.Type),
 			Domain:     df.Domain,
 			Confidence: df.Confidence,
 			Sources:    1,
 			Entities:   df.Entities,
 			Refs:       df.Refs,
 		}
-		content := mcp.SerializeFact(fact)
+		content := mcp.SerializeFact(f)
 		msg := fmt.Sprintf("synthesize-%s: distill %s", recipe.Name, df.Path)
 		commitHash, blobHash, err := gs.WriteFile(df.Path, content, msg)
 		if err != nil {
@@ -187,6 +191,7 @@ func executeDistillStep(ctx context.Context, gs GitStore, idx SearchIndex, embed
 			Path:       df.Path,
 			Title:      df.Title,
 			BlobHash:   blobHash,
+			Type:       df.Type,
 			Domain:     df.Domain,
 			Entities:   df.Entities,
 			Confidence: df.Confidence,

@@ -18,11 +18,11 @@ func TestRunPruneOnly(t *testing.T) {
 	adapter.EXPECT().Model().Return("claude-sonnet-4-20250514").AnyTimes()
 
 	files := map[string]string{
-		"know/test/keep.md":   factContent("Keep fact", "This should be kept."),
-		"know/test/forget.md": factContent("Forget fact", "This is obsolete."),
+		"kb/test/keep.md":   factContent("Keep fact", "This should be kept."),
+		"kb/test/forget.md": factContent("Forget fact", "This is obsolete."),
 	}
 
-	gs.EXPECT().ListAll().Return([]string{"know/test/keep.md", "know/test/forget.md"}, nil)
+	gs.EXPECT().ListAll().Return([]string{"kb/test/keep.md", "kb/test/forget.md"}, nil)
 	gs.EXPECT().ReadFile(gomock.Any()).DoAndReturn(func(path string) (string, error) {
 		if c, ok := files[path]; ok {
 			return c, nil
@@ -32,23 +32,23 @@ func TestRunPruneOnly(t *testing.T) {
 
 	// Louvain clustering returns both facts in one cluster.
 	idx.EXPECT().ClusterFacts(gomock.Any(), gomock.Any()).Return(store.ClusterResult{
-		Clusters: map[int][]string{0: {"know/test/keep.md", "know/test/forget.md"}},
+		Clusters: map[int][]string{0: {"kb/test/keep.md", "kb/test/forget.md"}},
 	}, nil)
 	// Dedup pass: no near-duplicates found.
 	idx.EXPECT().Search(gomock.Any()).Return(nil, nil).AnyTimes()
 
 	llmResp := `{
   "decisions": [
-    { "path": "know/test/keep.md", "action": "keep" },
-    { "path": "know/test/forget.md", "action": "retract" }
+    { "path": "kb/test/keep.md", "action": "keep" },
+    { "path": "kb/test/forget.md", "action": "retract" }
   ],
   "merges": []
 }`
 	adapter.EXPECT().Complete(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(llmResp, nil)
 
 	// forget.md: DeleteFile + idx.Delete
-	gs.EXPECT().DeleteFile("know/test/forget.md", gomock.Any()).Return("deadbeef", nil)
-	idx.EXPECT().Delete("know/test/forget.md").Return(nil)
+	gs.EXPECT().DeleteFile("kb/test/forget.md", gomock.Any()).Return("deadbeef", nil)
+	idx.EXPECT().Delete("kb/test/forget.md").Return(nil)
 
 	// Tag per operation (retract for the deleted fact)
 	gs.EXPECT().Tag(gomock.Any()).Return(nil).AnyTimes()
@@ -152,43 +152,43 @@ func TestRunDistillWithFacts(t *testing.T) {
 	adapter.EXPECT().Model().Return("claude-sonnet-4-20250514").AnyTimes()
 
 	searchResults := []store.SearchResult{
-		testSearchResult("know/test/a.md", "A fact", "A body."),
-		testSearchResult("know/test/b.md", "B fact", "B body."),
+		testSearchResult("kb/test/a.md", "A fact", "A body."),
+		testSearchResult("kb/test/b.md", "B fact", "B body."),
 	}
 	// ClusterFacts returns both facts in one cluster.
 	idx.EXPECT().Search(gomock.Any()).Return(searchResults, nil)
 	idx.EXPECT().ClusterFacts(gomock.Any(), gomock.Any()).Return(store.ClusterResult{
-		Clusters: map[int][]string{0: {"know/test/a.md", "know/test/b.md"}},
+		Clusters: map[int][]string{0: {"kb/test/a.md", "kb/test/b.md"}},
 	}, nil)
 
 	llmResp := `{
   "synthesize": [
     {
-      "path": "know/test/synth.md",
+      "path": "kb/test/synth.md",
       "title": "Synthesized insight",
       "body": "Combined understanding.",
       "domain": ["testing"],
       "confidence": 0.9,
       "entities": [],
-      "refs": ["know/test/a.md", "know/test/b.md"]
+      "refs": ["kb/test/a.md", "kb/test/b.md"]
     }
   ],
-  "retract": ["know/test/a.md"]
+  "retract": ["kb/test/a.md"]
 }`
 	adapter.EXPECT().Complete(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(llmResp, nil)
 
 	// Write synthesized fact
 	var synthWritten bool
-	gs.EXPECT().WriteFile("know/test/synth.md", gomock.Any(), gomock.Any()).DoAndReturn(func(path, content, msg string) (string, string, error) {
+	gs.EXPECT().WriteFile("kb/test/synth.md", gomock.Any(), gomock.Any()).DoAndReturn(func(path, content, msg string) (string, string, error) {
 		synthWritten = true
 		return "deadbeef", "blob_synth", nil
 	})
 	idx.EXPECT().Upsert(gomock.Any()).Return(nil)
-	idx.EXPECT().GraphAddDerivedFrom("know/test/synth.md", gomock.Any()).Return(nil)
+	idx.EXPECT().GraphAddDerivedFrom("kb/test/synth.md", gomock.Any()).Return(nil)
 
 	// Delete forgotten fact
-	gs.EXPECT().DeleteFile("know/test/a.md", gomock.Any()).Return("deadbeef2", nil)
-	idx.EXPECT().Delete("know/test/a.md").Return(nil)
+	gs.EXPECT().DeleteFile("kb/test/a.md", gomock.Any()).Return("deadbeef2", nil)
+	idx.EXPECT().Delete("kb/test/a.md").Return(nil)
 
 	// Tags per operation (subsume for new fact, retract for deleted)
 	gs.EXPECT().Tag(gomock.Any()).Return(nil).AnyTimes()
@@ -207,7 +207,7 @@ func TestRunDistillWithFacts(t *testing.T) {
 	}
 
 	if !synthWritten {
-		t.Errorf("expected know/test/synth.md to be written")
+		t.Errorf("expected kb/test/synth.md to be written")
 	}
 
 	// done event emitted.
@@ -231,20 +231,20 @@ func TestRunDistillRetryOnPassive(t *testing.T) {
 	adapter.EXPECT().Model().Return("qwen3:8b").AnyTimes()
 
 	searchResults := []store.SearchResult{
-		testSearchResult("know/test/a.md", "A fact", "A body."),
-		testSearchResult("know/test/b.md", "B fact", "B body."),
+		testSearchResult("kb/test/a.md", "A fact", "A body."),
+		testSearchResult("kb/test/b.md", "B fact", "B body."),
 	}
 	idx.EXPECT().Search(gomock.Any()).Return(searchResults, nil)
 	idx.EXPECT().ClusterFacts(gomock.Any(), gomock.Any()).Return(store.ClusterResult{
-		Clusters: map[int][]string{0: {"know/test/a.md", "know/test/b.md"}},
+		Clusters: map[int][]string{0: {"kb/test/a.md", "kb/test/b.md"}},
 	}, nil)
 
 	// First call: passive (echoes input path, no forget)
-	passiveResp := `{"synthesize": [{"path": "know/test/a.md", "title": "A", "body": "A", "domain": [], "confidence": 0.8, "entities": [], "refs": []}], "retract": []}`
+	passiveResp := `{"synthesize": [{"path": "kb/test/a.md", "title": "A", "body": "A", "domain": [], "confidence": 0.8, "entities": [], "refs": []}], "retract": []}`
 	// Second call (retry): active (new synthesized fact + forget)
 	activeResp := `{
-  "synthesize": [{"path": "know/test/synth.md", "title": "Insight", "body": "Combined.", "domain": ["testing"], "confidence": 0.9, "entities": [], "refs": ["know/test/a.md", "know/test/b.md"]}],
-  "retract": ["know/test/a.md"]
+  "synthesize": [{"path": "kb/test/synth.md", "title": "Insight", "body": "Combined.", "domain": ["testing"], "confidence": 0.9, "entities": [], "refs": ["kb/test/a.md", "kb/test/b.md"]}],
+  "retract": ["kb/test/a.md"]
 }`
 
 	gomock.InOrder(
@@ -253,13 +253,13 @@ func TestRunDistillRetryOnPassive(t *testing.T) {
 	)
 
 	// Write synthesized fact
-	gs.EXPECT().WriteFile("know/test/synth.md", gomock.Any(), gomock.Any()).Return("deadbeef", "blob_synth", nil)
+	gs.EXPECT().WriteFile("kb/test/synth.md", gomock.Any(), gomock.Any()).Return("deadbeef", "blob_synth", nil)
 	idx.EXPECT().Upsert(gomock.Any()).Return(nil)
-	idx.EXPECT().GraphAddDerivedFrom("know/test/synth.md", gomock.Any()).Return(nil)
+	idx.EXPECT().GraphAddDerivedFrom("kb/test/synth.md", gomock.Any()).Return(nil)
 
 	// Delete forgotten fact
-	gs.EXPECT().DeleteFile("know/test/a.md", gomock.Any()).Return("deadbeef2", nil)
-	idx.EXPECT().Delete("know/test/a.md").Return(nil)
+	gs.EXPECT().DeleteFile("kb/test/a.md", gomock.Any()).Return("deadbeef2", nil)
+	idx.EXPECT().Delete("kb/test/a.md").Return(nil)
 
 	// Tags per operation
 	gs.EXPECT().Tag(gomock.Any()).Return(nil).AnyTimes()

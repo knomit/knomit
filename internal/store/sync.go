@@ -72,7 +72,7 @@ func (idx *Index) Sync(git GitReader) error {
 }
 
 // indexFile reads a single file from git, parses it as a fact, and upserts
-// it into the index. Files that fail to parse (e.g. know.md manifest) are
+// it into the index. Files that fail to parse (e.g. kb.md manifest) are
 // silently skipped.
 func (idx *Index) indexFile(git GitReader, path, commitHash string) error {
 	content, blobHash, err := git.ReadFileWithHash(path)

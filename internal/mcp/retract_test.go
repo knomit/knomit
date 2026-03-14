@@ -13,32 +13,26 @@ import (
 func TestRetractDeletesFile(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
-	idx := NewMockSearchIndex(ctrl)
 
 	var deletedFile string
-	var deletedFromIndex string
 	var tagSet string
 
 	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
-	gs.EXPECT().FileExists("know/foo.md").Return(true, nil)
-	gs.EXPECT().DeleteFile("know/foo.md", gomock.Any()).DoAndReturn(func(path, msg string) (string, error) {
+	gs.EXPECT().FileExists("kb/foo.md").Return(true, nil)
+	gs.EXPECT().DeleteFile("kb/foo.md", gomock.Any()).DoAndReturn(func(path, msg string) (string, error) {
 		deletedFile = path
 		return "abc123def456", nil
-	})
-	idx.EXPECT().Delete("know/foo.md").DoAndReturn(func(path string) error {
-		deletedFromIndex = path
-		return nil
 	})
 	gs.EXPECT().Tag(gomock.Any()).DoAndReturn(func(name string) error {
 		tagSet = name
 		return nil
 	})
 
-	handler := RetractHandler(gs, idx, "know")
+	handler := RetractHandler(gs, "kb")
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
-		"file":        "know/foo.md",
+		"file":        "kb/foo.md",
 		"moment_name": "retract-test",
 	}
 
@@ -51,13 +45,8 @@ func TestRetractDeletesFile(t *testing.T) {
 	}
 
 	// Verify file was deleted.
-	if deletedFile != "know/foo.md" {
-		t.Fatalf("expected know/foo.md to be deleted, got: %q", deletedFile)
-	}
-
-	// Verify index delete was called.
-	if deletedFromIndex != "know/foo.md" {
-		t.Fatalf("expected index delete for know/foo.md, got: %q", deletedFromIndex)
+	if deletedFile != "kb/foo.md" {
+		t.Fatalf("expected kb/foo.md to be deleted, got: %q", deletedFile)
 	}
 
 	// Verify tag was set.
@@ -74,7 +63,7 @@ func TestRetractDeletesFile(t *testing.T) {
 	if err := json.Unmarshal([]byte(text), &resp); err != nil {
 		t.Fatalf("invalid JSON: %v", err)
 	}
-	if resp["file"] != "know/foo.md" {
+	if resp["file"] != "kb/foo.md" {
 		t.Fatalf("response file: got %q", resp["file"])
 	}
 	if _, ok := resp["commit"]; !ok {
@@ -85,16 +74,15 @@ func TestRetractDeletesFile(t *testing.T) {
 func TestRetractFileNotFound(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
-	idx := NewMockSearchIndex(ctrl)
 
 	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
-	gs.EXPECT().FileExists("know/nonexistent.md").Return(false, nil)
+	gs.EXPECT().FileExists("kb/nonexistent.md").Return(false, nil)
 
-	handler := RetractHandler(gs, idx, "know")
+	handler := RetractHandler(gs, "kb")
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
-		"file":        "know/nonexistent.md",
+		"file":        "kb/nonexistent.md",
 		"moment_name": "test",
 	}
 

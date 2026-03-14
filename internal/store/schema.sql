@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS facts (
     path        TEXT PRIMARY KEY,
     title       TEXT NOT NULL,
     blob_hash   TEXT NOT NULL,
+    type        TEXT NOT NULL DEFAULT 'observation',
     domain      TEXT NOT NULL,
     entities    TEXT NOT NULL,
     confidence  REAL NOT NULL,

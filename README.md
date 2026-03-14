@@ -175,7 +175,7 @@ refs:
 Alice prefers rock music over jazz.
 ```
 
-The directory tree under `know/` forms an ontological hierarchy. Facts placed at higher levels apply to everything below them — a fact at `know/earth/` is inherited by `know/earth/uk/london/`.
+The directory tree under the ontology root (`kb/` by default) forms an ontological hierarchy. Facts placed at higher levels apply to everything below them — a fact at `kb/geography/` is inherited by `kb/geography/europe/uk/london/`.
 
 Each learning moment is an atomic git commit tagged with `learn/<moment-name>`, giving full provenance tracking.
 
@@ -185,7 +185,7 @@ Refs anchor facts to their source material using the `knomit:` URI scheme:
 
 | Form | Meaning | Example |
 |------|---------|---------|
-| Relative (no authority) | Current knowledge base | `knomit:/know/debugging/pool-fix.md` |
+| Relative (no authority) | Current knowledge base | `knomit:/kb/technology/debugging/pool-fix.md` |
 | Absolute (with host) | External repo | `knomit://github.com/org/repo/src/main.ts` |
 | Plain URL | Any web resource | `https://example.com/doc` |
 

@@ -4,23 +4,27 @@ import (
 	"fmt"
 	"strings"
 
+	"knomit/internal/fact"
+
 	"gopkg.in/yaml.v3"
 )
 
 // Fact represents a single knomit fact file (YAML frontmatter + Markdown body).
 type Fact struct {
-	Path       string   `json:"path"`
-	Title      string   `json:"title"`
-	Body       string   `json:"body"`
-	Domain     []string `json:"domain"`
-	Confidence float64  `json:"confidence"`
-	Sources    int      `json:"sources"`
-	Entities   []string `json:"entities"`
-	Refs       []string `json:"refs"`
+	Path       string             `json:"path"`
+	Title      string             `json:"title"`
+	Body       string             `json:"body"`
+	Type       fact.EpistemicType `json:"type"`
+	Domain     []string           `json:"domain"`
+	Confidence float64            `json:"confidence"`
+	Sources    int                `json:"sources"`
+	Entities   []string           `json:"entities"`
+	Refs       []string           `json:"refs"`
 }
 
 // frontmatter is the YAML structure parsed from the --- block.
 type frontmatter struct {
+	Type       string   `yaml:"type"`
 	Domain     []string `yaml:"domain"`
 	Confidence float64  `yaml:"confidence"`
 	Sources    int      `yaml:"sources"`
@@ -65,6 +69,15 @@ func ParseFact(path, content string) (Fact, error) {
 		fm.Refs = []string{}
 	}
 
+	// Resolve epistemic type: default to observation if missing.
+	eType := fact.EpistemicType(fm.Type)
+	if eType == "" {
+		eType = fact.DefaultType
+	}
+	if err := eType.Validate(); err != nil {
+		return Fact{}, fmt.Errorf("ParseFact %q: %w", path, err)
+	}
+
 	// Extract title from the first # heading in bodyRaw.
 	title, body, err := extractTitle(path, bodyRaw)
 	if err != nil {
@@ -75,6 +88,7 @@ func ParseFact(path, content string) (Fact, error) {
 		Path:       path,
 		Title:      title,
 		Body:       body,
+		Type:       eType,
 		Domain:     fm.Domain,
 		Confidence: fm.Confidence,
 		Sources:    fm.Sources,
@@ -120,6 +134,9 @@ func SerializeFact(f Fact) string {
 	var sb strings.Builder
 
 	sb.WriteString("---\n")
+	sb.WriteString("type: ")
+	sb.WriteString(string(f.Type))
+	sb.WriteString("\n")
 	sb.WriteString("domain: ")
 	sb.WriteString(serializeInlineList(f.Domain))
 	sb.WriteString("\n")

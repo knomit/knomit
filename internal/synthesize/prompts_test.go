@@ -7,7 +7,7 @@ import (
 
 func TestRenderTemplate(t *testing.T) {
 	data := PromptData{
-		Facts:        `[{"file":"test.md","title":"Test"}]`,
+		Facts:        `[{"path":"test.md","title":"Test"}]`,
 		RecipePrompt: "summarize everything",
 		StepPrompt:   "be thorough",
 	}

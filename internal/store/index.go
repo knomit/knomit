@@ -43,6 +43,7 @@ type FactRecord struct {
 	Path       string   `json:"path"`
 	Title      string   `json:"title"`
 	BlobHash   string   `json:"blob_hash"`
+	Type       string   `json:"type"`
 	Domain     []string `json:"domain"`
 	Entities   []string `json:"entities"`
 	Confidence float64  `json:"confidence"`
@@ -212,6 +213,7 @@ CREATE TABLE IF NOT EXISTS facts (
     path        TEXT PRIMARY KEY,
     title       TEXT NOT NULL,
     blob_hash   TEXT NOT NULL,
+    type        TEXT NOT NULL DEFAULT 'observation',
     domain      TEXT NOT NULL,
     entities    TEXT NOT NULL,
     confidence  REAL NOT NULL,

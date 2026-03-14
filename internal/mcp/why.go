@@ -15,7 +15,7 @@ func whyTool() mcpgo.Tool {
 		mcpgo.WithDescription("Show the history and learning moment for a fact file."),
 		mcpgo.WithString("file",
 			mcpgo.Required(),
-			mcpgo.Description("Path to the fact file (e.g. know/topic/fact.md)."),
+			mcpgo.Description("Path to the fact file (e.g. general/technology/languages/go/abc123.md)."),
 		),
 	)
 }

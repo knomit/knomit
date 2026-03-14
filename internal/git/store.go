@@ -40,12 +40,13 @@ import (
 // Store wraps go-git with knomit's logical operations.
 // All fact reads/writes go through go-git's plumbing API — NO filesystem reads/writes.
 type Store struct {
-	mu      sync.Mutex
-	repo    *gogit.Repository
-	storer  *storegit.Storer
-	ownsDB  bool    // true when Init/Open opened the DB (legacy path)
-	ownedDB *sql.DB // non-nil when ownsDB is true
-	branch  string  // e.g. "agent/laptop"
+	mu       sync.Mutex
+	repo     *gogit.Repository
+	storer   *storegit.Storer
+	ownsDB   bool    // true when Init/Open opened the DB (legacy path)
+	ownedDB  *sql.DB // non-nil when ownsDB is true
+	branch   string  // e.g. "agent/laptop"
+	onCommit func(hash string)
 }
 
 // DirEntry represents a single entry in a knomit directory listing.
@@ -76,7 +77,7 @@ CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value BLOB NOT NULL);
 
 // InitWithStorer creates a new knomit git store using an externally provided storer.
 // The storer's schema must already be applied.
-func InitWithStorer(s *storegit.Storer) (*Store, error) {
+func InitWithStorer(s *storegit.Storer, initFiles map[string]string) (*Store, error) {
 	repo, err := gogit.Init(s, memfs.New())
 	if err != nil {
 		return nil, fmt.Errorf("git.Init: git init: %w", err)
@@ -96,9 +97,16 @@ func InitWithStorer(s *storegit.Storer) (*Store, error) {
 	}
 
 	rootManifest := "# Knowledge Base\n\nRoot manifest.\n"
-	initCommitHash, _, err := writeFileToStore(s, plumbing.ZeroHash, "know.md", rootManifest, "init: create knowledge base")
+	lastCommit, _, err := writeFileToStore(s, plumbing.ZeroHash, "kb.md", rootManifest, "init: create knowledge base")
 	if err != nil {
 		return nil, fmt.Errorf("git.Init: initial commit: %w", err)
+	}
+
+	for path, content := range initFiles {
+		lastCommit, _, err = writeFileToStore(s, lastCommit, path, content, "init: "+path)
+		if err != nil {
+			return nil, fmt.Errorf("git.Init: write %s: %w", path, err)
+		}
 	}
 
 	hostname, err := os.Hostname()
@@ -108,7 +116,7 @@ func InitWithStorer(s *storegit.Storer) (*Store, error) {
 	agentBranch := "agent/" + hostname
 	agentRefName := plumbing.NewBranchReferenceName(agentBranch)
 
-	agentRef := plumbing.NewHashReference(agentRefName, initCommitHash)
+	agentRef := plumbing.NewHashReference(agentRefName, lastCommit)
 	if err := s.SetReference(agentRef); err != nil {
 		return nil, fmt.Errorf("git.Init: set agent ref: %w", err)
 	}
@@ -118,7 +126,7 @@ func InitWithStorer(s *storegit.Storer) (*Store, error) {
 		return nil, fmt.Errorf("git.Init: set HEAD: %w", err)
 	}
 
-	mainRef := plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), initCommitHash)
+	mainRef := plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), lastCommit)
 	if err := s.SetReference(mainRef); err != nil {
 		return nil, fmt.Errorf("git.Init: set main ref: %w", err)
 	}
@@ -155,7 +163,7 @@ func OpenWithStorer(s *storegit.Storer) (*Store, error) {
 
 // Init creates a new knomit git store at dbPath.
 // Deprecated: use store.Open + InitWithStorer instead.
-func Init(dbPath string) (*Store, error) {
+func Init(dbPath string, initFiles map[string]string) (*Store, error) {
 	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
 		return nil, fmt.Errorf("git.Init: mkdir: %w", err)
 	}
@@ -174,7 +182,7 @@ func Init(dbPath string) (*Store, error) {
 	}
 
 	s := storegit.NewStorer(db)
-	store, err := InitWithStorer(s)
+	store, err := InitWithStorer(s, initFiles)
 	if err != nil {
 		db.Close()
 		return nil, err
@@ -231,6 +239,18 @@ func (s *Store) HeadCommit() (string, error) {
 		return "", fmt.Errorf("HeadCommit: %w", err)
 	}
 	return headRef.Hash().String(), nil
+}
+
+// SetOnCommit registers a callback invoked after every branch ref update.
+// Must be called before any writes (during init).
+func (s *Store) SetOnCommit(fn func(hash string)) {
+	s.onCommit = fn
+}
+
+func (s *Store) notifyCommit(hash string) {
+	if s.onCommit != nil {
+		s.onCommit(hash)
+	}
 }
 
 // Storer returns the underlying storer (used by the git remote handler).

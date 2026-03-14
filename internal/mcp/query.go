@@ -38,12 +38,7 @@ func QueryHandler(gs GitStore, idx SearchIndex) func(context.Context, mcpgo.Call
 			return mcpgo.NewToolResultError(fmt.Sprintf("sync error: %v", err)), nil
 		}
 
-		// 2. Sync index.
-		if err := idx.Sync(gs); err != nil {
-			return mcpgo.NewToolResultError(fmt.Sprintf("index sync error: %v", err)), nil
-		}
-
-		// 3. Build query.
+		// 2. Build query.
 		text := req.GetString("text", "")
 		entities := req.GetStringSlice("entities", nil)
 		domain := req.GetStringSlice("domain", nil)

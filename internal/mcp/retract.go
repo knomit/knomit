@@ -25,7 +25,7 @@ func retractTool() mcpgo.Tool {
 }
 
 // RetractHandler returns the handler function for knomit_retract.
-func RetractHandler(gs GitStore, idx SearchIndex, ontologyRoot string) func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+func RetractHandler(gs GitStore, ontologyRoot string) func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 	return func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 		// 1. Sync.
 		if _, err := gs.Sync(nil); err != nil {
@@ -59,12 +59,7 @@ func RetractHandler(gs GitStore, idx SearchIndex, ontologyRoot string) func(cont
 			return mcpgo.NewToolResultError(fmt.Sprintf("delete error: %v", err)), nil
 		}
 
-		// 6. Delete from index.
-		if err := idx.Delete(file); err != nil {
-			return mcpgo.NewToolResultError(fmt.Sprintf("index delete error: %v", err)), nil
-		}
-
-		// 7. Tag.
+		// 5. Tag.
 		sanitized := sanitizeMomentName(momentName)
 		tagName := "retract/" + sanitized
 		if err := gs.Tag(tagName); err != nil {

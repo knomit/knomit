@@ -22,6 +22,7 @@ type distillFact struct {
 	Path       string      `json:"path"`
 	Title      string      `json:"title"`
 	Body       string      `json:"body"`
+	Type       string      `json:"type"`
 	Domain     flexStrings `json:"domain"`
 	Confidence float64     `json:"confidence"`
 	Entities   flexStrings `json:"entities"`

@@ -18,6 +18,7 @@ import (
 
 	"knomit/internal/config"
 	"knomit/internal/embeddings"
+	"knomit/internal/fact"
 	"knomit/internal/git"
 	"knomit/internal/llm"
 	"knomit/internal/mcp"
@@ -67,11 +68,33 @@ func serveCmd() *cobra.Command {
 			defer svc.Close()
 
 			// 2. Open or init git on top of the shared storer
+			var ontology *fact.Ontology
 			gs, err := git.OpenWithStorer(svc.GitStorer())
 			if err != nil {
-				gs, err = git.InitWithStorer(svc.GitStorer())
+				// First run: init with default ontology.
+				ontology = fact.DefaultOntology()
+				ontologyYAML, serErr := ontology.Serialize()
+				if serErr != nil {
+					return fmt.Errorf("serialize ontology: %w", serErr)
+				}
+				initFiles := map[string]string{
+					"domains/ontology.yaml": string(ontologyYAML),
+				}
+				gs, err = git.InitWithStorer(svc.GitStorer(), initFiles)
 				if err != nil {
 					return fmt.Errorf("init git: %w", err)
+				}
+			} else {
+				// Existing repo: load ontology from git.
+				ontologyYAML, readErr := gs.ReadFile("domains/ontology.yaml")
+				if readErr != nil {
+					log.Warn().Msg("domains/ontology.yaml not found, using default ontology")
+					ontology = fact.DefaultOntology()
+				} else {
+					ontology, err = fact.ParseOntology([]byte(ontologyYAML))
+					if err != nil {
+						return fmt.Errorf("parse ontology: %w", err)
+					}
 				}
 			}
 
@@ -99,8 +122,21 @@ func serveCmd() *cobra.Command {
 				log.Warn().Err(err).Msg("initial index sync failed")
 			}
 
-			// 5. Resolve LLM adapter
+			// 4a. Create TaskHub (needed by observer below)
 			ctx := context.Background()
+			hub := web.NewTaskHub(ctx)
+
+			// 4b. Observer: sync index + push SSE on every git commit.
+			obs := newObserver(50*time.Millisecond, func(hash string) {
+				if err := idx.Sync(gs); err != nil {
+					log.Warn().Err(err).Msg("observer sync failed")
+				}
+				hub.BroadcastStatus(hash)
+			})
+			defer obs.Stop()
+			gs.SetOnCommit(obs.Notify)
+
+			// 5. Resolve LLM adapter
 			var llmAdapter llm.LLMAdapter
 			provider, err = llm.ResolveProvider(cfg.LLM.Model, cfg.LLM.Provider)
 			if err != nil {
@@ -128,7 +164,7 @@ func serveCmd() *cobra.Command {
 			profiles := []string{"code", "chat", "generic"}
 			mcpServers := make(map[string]http.Handler, len(profiles))
 			for _, p := range profiles {
-				mcpSrv := mcp.NewServer(gs, idx, llmAdapter, p, cfg.OntologyRoot)
+				mcpSrv := mcp.NewServer(gs, idx, llmAdapter, p, cfg.OntologyRoot, ontology)
 				mcpServers[p] = mcpserver.NewStreamableHTTPServer(mcpSrv)
 			}
 
@@ -138,10 +174,7 @@ func serveCmd() *cobra.Command {
 				gitHandler = web.GitRemoteHandler(gs, cfg.LLM.APIKey)
 			}
 
-			// 8. Create TaskHub
-			hub := web.NewTaskHub(ctx)
-
-			// 9. Create synthesis dependencies
+			// 8. Create synthesis dependencies
 			var synthDeps *web.SynthDeps
 			if llmAdapter != nil {
 				synthDeps = &web.SynthDeps{
@@ -188,7 +221,8 @@ func serveCmd() *cobra.Command {
 }
 
 func initCmd() *cobra.Command {
-	return &cobra.Command{
+	var ontologyPath string
+	cmd := &cobra.Command{
 		Use:   "init",
 		Short: "Initialise a new knomit repo",
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -199,19 +233,43 @@ func initCmd() *cobra.Command {
 			if err := os.MkdirAll(cfg.RepoPath, 0o755); err != nil {
 				return err
 			}
+
+			// Load ontology: custom file or embedded default.
+			ontology := fact.DefaultOntology()
+			if ontologyPath != "" {
+				data, err := os.ReadFile(ontologyPath)
+				if err != nil {
+					return fmt.Errorf("read ontology file: %w", err)
+				}
+				ontology, err = fact.ParseOntology(data)
+				if err != nil {
+					return fmt.Errorf("parse ontology: %w", err)
+				}
+			}
+			ontologyYAML, err := ontology.Serialize()
+			if err != nil {
+				return fmt.Errorf("serialize ontology: %w", err)
+			}
+
 			dbPath := filepath.Join(cfg.RepoPath, "knomit.db")
 			svc, err := store.Open(dbPath)
 			if err != nil {
 				return fmt.Errorf("open store: %w", err)
 			}
 			defer svc.Close()
-			if _, err := git.InitWithStorer(svc.GitStorer()); err != nil {
+
+			initFiles := map[string]string{
+				"domains/ontology.yaml": string(ontologyYAML),
+			}
+			if _, err := git.InitWithStorer(svc.GitStorer(), initFiles); err != nil {
 				return fmt.Errorf("init git: %w", err)
 			}
 			fmt.Printf("Initialized knomit repo at %s\n", cfg.RepoPath)
 			return nil
 		},
 	}
+	cmd.Flags().StringVar(&ontologyPath, "ontology", "", "path to custom ontology YAML file")
+	return cmd
 }
 
 func resetCmd() *cobra.Command {

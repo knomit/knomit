@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/rs/zerolog/log"
+	"knomit/internal/fact"
 	"knomit/internal/llm"
 	"knomit/internal/mcp"
 	"knomit/internal/store"
@@ -222,6 +223,7 @@ func applyPruneResults(gs GitStore, idx SearchIndex, recipe Recipe, allDecisions
 				Path:       fact.Path,
 				Title:      fact.Title,
 				BlobHash:   blobHash,
+				Type:       string(fact.Type),
 				Domain:     fact.Domain,
 				Entities:   fact.Entities,
 				Confidence: fact.Confidence,
@@ -243,6 +245,7 @@ func applyPruneResults(gs GitStore, idx SearchIndex, recipe Recipe, allDecisions
 			Path:       mf.Path,
 			Title:      mf.Title,
 			Body:       mf.Body,
+			Type:       fact.EpistemicType(mf.Type),
 			Domain:     mf.Domain,
 			Confidence: mf.Confidence,
 			Sources:    mf.Sources,
@@ -260,6 +263,7 @@ func applyPruneResults(gs GitStore, idx SearchIndex, recipe Recipe, allDecisions
 			Path:       mf.Path,
 			Title:      mf.Title,
 			BlobHash:   blobHash,
+			Type:       mf.Type,
 			Domain:     mf.Domain,
 			Entities:   mf.Entities,
 			Confidence: mf.Confidence,

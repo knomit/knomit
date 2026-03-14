@@ -3,10 +3,13 @@ package mcp
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"go.uber.org/mock/gomock"
+
+	"knomit/internal/fact"
 )
 
 // ---------------------------------------------------------------------------
@@ -96,11 +99,9 @@ func TestParseFactNoTitleHeading(t *testing.T) {
 func TestRetractEmptyFile(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
-	idx := NewMockSearchIndex(ctrl)
-
 	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
 
-	handler := RetractHandler(gs, idx, "know")
+	handler := RetractHandler(gs, "kb")
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
@@ -120,15 +121,13 @@ func TestRetractEmptyFile(t *testing.T) {
 func TestRetractEmptyMomentName(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
-	idx := NewMockSearchIndex(ctrl)
-
 	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
 
-	handler := RetractHandler(gs, idx, "know")
+	handler := RetractHandler(gs, "kb")
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
-		"file":        "know/foo.md",
+		"file":        "kb/technology/go/abc123.md",
 		"moment_name": "",
 	}
 
@@ -144,16 +143,14 @@ func TestRetractEmptyMomentName(t *testing.T) {
 func TestRetractFileExistsError(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
-	idx := NewMockSearchIndex(ctrl)
-
 	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
-	gs.EXPECT().FileExists("know/broken.md").Return(false, fmt.Errorf("git error"))
+	gs.EXPECT().FileExists("kb/broken.md").Return(false, fmt.Errorf("git error"))
 
-	handler := RetractHandler(gs, idx, "know")
+	handler := RetractHandler(gs, "kb")
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
-		"file":        "know/broken.md",
+		"file":        "kb/broken.md",
 		"moment_name": "test",
 	}
 
@@ -169,17 +166,15 @@ func TestRetractFileExistsError(t *testing.T) {
 func TestRetractDeleteFileError(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
-	idx := NewMockSearchIndex(ctrl)
-
 	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
-	gs.EXPECT().FileExists("know/fail.md").Return(true, nil)
-	gs.EXPECT().DeleteFile("know/fail.md", gomock.Any()).Return("", fmt.Errorf("delete failed"))
+	gs.EXPECT().FileExists("kb/fail.md").Return(true, nil)
+	gs.EXPECT().DeleteFile("kb/fail.md", gomock.Any()).Return("", fmt.Errorf("delete failed"))
 
-	handler := RetractHandler(gs, idx, "know")
+	handler := RetractHandler(gs, "kb")
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
-		"file":        "know/fail.md",
+		"file":        "kb/fail.md",
 		"moment_name": "test",
 	}
 
@@ -195,15 +190,13 @@ func TestRetractDeleteFileError(t *testing.T) {
 func TestRetractSyncError(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
-	idx := NewMockSearchIndex(ctrl)
-
 	gs.EXPECT().Sync(nil).Return(SyncResult{}, fmt.Errorf("sync failed"))
 
-	handler := RetractHandler(gs, idx, "know")
+	handler := RetractHandler(gs, "kb")
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
-		"file":        "know/foo.md",
+		"file":        "kb/technology/go/abc.md",
 		"moment_name": "test",
 	}
 
@@ -223,11 +216,9 @@ func TestRetractSyncError(t *testing.T) {
 func TestUpdateEmptyFile(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
-	idx := NewMockSearchIndex(ctrl)
-
 	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
 
-	handler := UpdateHandler(gs, idx, "know")
+	handler := UpdateHandler(gs, "kb")
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
@@ -248,15 +239,13 @@ func TestUpdateEmptyFile(t *testing.T) {
 func TestUpdateEmptyMomentName(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
-	idx := NewMockSearchIndex(ctrl)
-
 	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
 
-	handler := UpdateHandler(gs, idx, "know")
+	handler := UpdateHandler(gs, "kb")
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
-		"file":        "know/foo.md",
+		"file":        "kb/technology/go/abc.md",
 		"moment_name": "",
 		"updates":     map[string]interface{}{},
 	}
@@ -273,16 +262,14 @@ func TestUpdateEmptyMomentName(t *testing.T) {
 func TestUpdateFileExistsError(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
-	idx := NewMockSearchIndex(ctrl)
-
 	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
-	gs.EXPECT().FileExists("know/broken.md").Return(false, fmt.Errorf("git error"))
+	gs.EXPECT().FileExists("kb/broken.md").Return(false, fmt.Errorf("git error"))
 
-	handler := UpdateHandler(gs, idx, "know")
+	handler := UpdateHandler(gs, "kb")
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
-		"file":        "know/broken.md",
+		"file":        "kb/broken.md",
 		"moment_name": "test",
 		"updates":     map[string]interface{}{},
 	}
@@ -299,17 +286,15 @@ func TestUpdateFileExistsError(t *testing.T) {
 func TestUpdateReadFileError(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
-	idx := NewMockSearchIndex(ctrl)
-
 	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
-	gs.EXPECT().FileExists("know/fail.md").Return(true, nil)
-	gs.EXPECT().ReadFile("know/fail.md").Return("", fmt.Errorf("read error"))
+	gs.EXPECT().FileExists("kb/fail.md").Return(true, nil)
+	gs.EXPECT().ReadFile("kb/fail.md").Return("", fmt.Errorf("read error"))
 
-	handler := UpdateHandler(gs, idx, "know")
+	handler := UpdateHandler(gs, "kb")
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
-		"file":        "know/fail.md",
+		"file":        "kb/fail.md",
 		"moment_name": "test",
 		"updates":     map[string]interface{}{},
 	}
@@ -326,15 +311,13 @@ func TestUpdateReadFileError(t *testing.T) {
 func TestUpdateSyncError(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
-	idx := NewMockSearchIndex(ctrl)
-
 	gs.EXPECT().Sync(nil).Return(SyncResult{}, fmt.Errorf("sync failed"))
 
-	handler := UpdateHandler(gs, idx, "know")
+	handler := UpdateHandler(gs, "kb")
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
-		"file":        "know/foo.md",
+		"file":        "kb/technology/go/abc.md",
 		"moment_name": "test",
 		"updates":     map[string]interface{}{},
 	}
@@ -351,10 +334,8 @@ func TestUpdateSyncError(t *testing.T) {
 func TestUpdateTitleField(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
-	idx := NewMockSearchIndex(ctrl)
-
 	factContent := SerializeFact(Fact{
-		Path: "know/title.md", Title: "Old Title", Body: "Body.",
+		Path: "kb/technology/go/abc.md", Title: "Old Title", Body: "Body.",
 		Domain: []string{}, Confidence: 0.5, Sources: 1,
 		Entities: []string{}, Refs: []string{},
 	})
@@ -362,20 +343,19 @@ func TestUpdateTitleField(t *testing.T) {
 	var writtenContent string
 
 	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
-	gs.EXPECT().FileExists("know/title.md").Return(true, nil)
-	gs.EXPECT().ReadFile("know/title.md").Return(factContent, nil)
-	gs.EXPECT().WriteFile("know/title.md", gomock.Any(), gomock.Any()).DoAndReturn(func(path, content, msg string) (string, string, error) {
+	gs.EXPECT().FileExists("kb/technology/go/abc.md").Return(true, nil)
+	gs.EXPECT().ReadFile("kb/technology/go/abc.md").Return(factContent, nil)
+	gs.EXPECT().WriteFile("kb/technology/go/abc.md", gomock.Any(), gomock.Any()).DoAndReturn(func(path, content, msg string) (string, string, error) {
 		writtenContent = content
 		return "abc123", "blob_title", nil
 	})
 	gs.EXPECT().Tag(gomock.Any()).Return(nil)
-	idx.EXPECT().Upsert(gomock.Any()).Return(nil)
 
-	handler := UpdateHandler(gs, idx, "know")
+	handler := UpdateHandler(gs, "kb")
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
-		"file":        "know/title.md",
+		"file":        "kb/technology/go/abc.md",
 		"moment_name": "title-update",
 		"updates": map[string]interface{}{
 			"title": "New Title",
@@ -390,7 +370,7 @@ func TestUpdateTitleField(t *testing.T) {
 		t.Fatalf("tool error: %v", result.Content)
 	}
 
-	updated, err := ParseFact("know/title.md", writtenContent)
+	updated, err := ParseFact("kb/technology/go/abc.md", writtenContent)
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
@@ -406,10 +386,8 @@ func TestUpdateTitleField(t *testing.T) {
 func TestUpdateDomainAndEntities(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
-	idx := NewMockSearchIndex(ctrl)
-
 	factContent := SerializeFact(Fact{
-		Path: "know/de.md", Title: "DE Test", Body: "Body.",
+		Path: "kb/technology/go/abc.md", Title: "DE Test", Body: "Body.",
 		Domain: []string{"old"}, Confidence: 0.5, Sources: 1,
 		Entities: []string{"old-ent"}, Refs: []string{},
 	})
@@ -417,20 +395,19 @@ func TestUpdateDomainAndEntities(t *testing.T) {
 	var writtenContent string
 
 	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
-	gs.EXPECT().FileExists("know/de.md").Return(true, nil)
-	gs.EXPECT().ReadFile("know/de.md").Return(factContent, nil)
-	gs.EXPECT().WriteFile("know/de.md", gomock.Any(), gomock.Any()).DoAndReturn(func(path, content, msg string) (string, string, error) {
+	gs.EXPECT().FileExists("kb/technology/go/abc.md").Return(true, nil)
+	gs.EXPECT().ReadFile("kb/technology/go/abc.md").Return(factContent, nil)
+	gs.EXPECT().WriteFile("kb/technology/go/abc.md", gomock.Any(), gomock.Any()).DoAndReturn(func(path, content, msg string) (string, string, error) {
 		writtenContent = content
 		return "abc123", "blob_de", nil
 	})
 	gs.EXPECT().Tag(gomock.Any()).Return(nil)
-	idx.EXPECT().Upsert(gomock.Any()).Return(nil)
 
-	handler := UpdateHandler(gs, idx, "know")
+	handler := UpdateHandler(gs, "kb")
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
-		"file":        "know/de.md",
+		"file":        "kb/technology/go/abc.md",
 		"moment_name": "de-update",
 		"updates": map[string]interface{}{
 			"domain":   []interface{}{"new-domain"},
@@ -446,7 +423,7 @@ func TestUpdateDomainAndEntities(t *testing.T) {
 		t.Fatalf("tool error: %v", result.Content)
 	}
 
-	updated, err := ParseFact("know/de.md", writtenContent)
+	updated, err := ParseFact("kb/technology/go/abc.md", writtenContent)
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
@@ -469,7 +446,7 @@ func TestLearnEmptyFacts(t *testing.T) {
 
 	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
 
-	handler := LearnHandler(gs, idx, "know")
+	handler := LearnHandler(gs, idx, "kb", fact.DefaultOntology())
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
@@ -493,7 +470,7 @@ func TestLearnSyncError(t *testing.T) {
 
 	gs.EXPECT().Sync(nil).Return(SyncResult{}, fmt.Errorf("sync failed"))
 
-	handler := LearnHandler(gs, idx, "know")
+	handler := LearnHandler(gs, idx, "kb", fact.DefaultOntology())
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
@@ -519,14 +496,14 @@ func TestLearnBatchWriteError(t *testing.T) {
 	idx.EXPECT().Search(gomock.Any()).Return(nil, nil).AnyTimes()
 	gs.EXPECT().BatchWrite(gomock.Any(), gomock.Any()).Return("", nil, fmt.Errorf("write failed"))
 
-	handler := LearnHandler(gs, idx, "know")
+	handler := LearnHandler(gs, idx, "kb", fact.DefaultOntology())
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
 		"moment_name": "fail-write",
 		"facts": []interface{}{
 			map[string]interface{}{
-				"path": "a", "title": "A", "body": "B.",
+				"topic": "technology", "category": "go", "title": "A", "body": "B.",
 				"domain": []interface{}{}, "confidence": 0.5, "sources": 1,
 				"entities": []interface{}{}, "refs": []interface{}{},
 			},
@@ -549,20 +526,25 @@ func TestLearnTagCollision(t *testing.T) {
 
 	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
 	idx.EXPECT().Search(gomock.Any()).Return(nil, nil).AnyTimes()
-	gs.EXPECT().BatchWrite(gomock.Any(), gomock.Any()).Return("abc123", map[string]string{"know/c.md": "blob_c"}, nil)
-	idx.EXPECT().Upsert(gomock.Any()).Return(nil)
+	gs.EXPECT().BatchWrite(gomock.Any(), gomock.Any()).DoAndReturn(func(files map[string]string, msg string) (string, map[string]string, error) {
+		blobHashes := make(map[string]string, len(files))
+		for path := range files {
+			blobHashes[path] = "blob_" + path
+		}
+		return "abc123", blobHashes, nil
+	})
 	// First Tag call fails (collision), second succeeds.
 	gs.EXPECT().Tag("learn/collision").Return(fmt.Errorf("tag exists"))
 	gs.EXPECT().Tag(gomock.Any()).Return(nil)
 
-	handler := LearnHandler(gs, idx, "know")
+	handler := LearnHandler(gs, idx, "kb", fact.DefaultOntology())
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
 		"moment_name": "collision",
 		"facts": []interface{}{
 			map[string]interface{}{
-				"path": "c", "title": "C", "body": "Body.",
+				"topic": "science", "category": "physics", "title": "C", "body": "Body.",
 				"domain": []interface{}{}, "confidence": 0.5, "sources": 1,
 				"entities": []interface{}{}, "refs": []interface{}{},
 			},
@@ -598,16 +580,16 @@ func TestLearnNilDomainEntitiesRefs(t *testing.T) {
 		return "abc123", blobHashes, nil
 	})
 	gs.EXPECT().Tag(gomock.Any()).Return(nil)
-	idx.EXPECT().Upsert(gomock.Any()).Return(nil)
 
-	handler := LearnHandler(gs, idx, "know")
+	handler := LearnHandler(gs, idx, "kb", fact.DefaultOntology())
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
 		"moment_name": "nil-fields",
 		"facts": []interface{}{
 			map[string]interface{}{
-				"path":       "niltest",
+				"topic":      "people",
+				"category":   "alice",
 				"title":      "Nil Fields",
 				"body":       "Body.",
 				"confidence": 0.5,
@@ -625,12 +607,19 @@ func TestLearnNilDomainEntitiesRefs(t *testing.T) {
 		t.Fatalf("tool error: %v", result.Content)
 	}
 
-	// Verify the written content parses without error.
-	content := capturedFiles["know/niltest.md"]
-	if content == "" {
-		t.Fatal("expected know/niltest.md to be written")
+	// Find the written file (path has UUID).
+	var content string
+	var writtenPath string
+	for path, c := range capturedFiles {
+		if strings.HasPrefix(path, "kb/people/alice/") {
+			content = c
+			writtenPath = path
+		}
 	}
-	f, err := ParseFact("know/niltest.md", content)
+	if writtenPath == "" {
+		t.Fatal("expected kb/people/alice/ file to be written")
+	}
+	f, err := ParseFact(writtenPath, content)
 	if err != nil {
 		t.Fatalf("parse error: %v", err)
 	}

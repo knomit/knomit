@@ -6,7 +6,7 @@ export interface Fact { path: string; title: string; body: string; domain: strin
 export interface SearchResult { path: string; title: string; body: string; score: number; domain?: string[]; entities?: string[] }
 export interface HistoryEntry { commit: string; date: string; message: string }
 export interface Stats { total: number; domains: Record<string, number>; entities: Record<string, number>; avg_confidence: number }
-export interface Status { head: string; branch: string; index_commit: string; embeddings_enabled: boolean }
+export interface Status { head: string; branch: string; index_commit: string; embeddings_enabled: boolean; ontology_root: string }
 
 // parseSearchQuery splits a query string into structured components.
 // Tokens of the form domain:X or entity:X are extracted as filters;

@@ -14,17 +14,17 @@ import (
 
 func TestInitAndReadFile(t *testing.T) {
 	dir := t.TempDir()
-	store, err := git.Init(filepath.Join(dir, "knomit.git.db"))
+	store, err := git.Init(filepath.Join(dir, "knomit.git.db"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer store.Close()
 
 	content := "---\ndomain: [test]\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# Test Fact\n\nBody.\n"
-	if _, _, err := store.WriteFile("know/test/fact.md", content, "test: write fact"); err != nil {
+	if _, _, err := store.WriteFile("kb/test/fact.md", content, "test: write fact"); err != nil {
 		t.Fatal(err)
 	}
-	got, err := store.ReadFile("know/test/fact.md")
+	got, err := store.ReadFile("kb/test/fact.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -35,21 +35,21 @@ func TestInitAndReadFile(t *testing.T) {
 
 func TestFileExists(t *testing.T) {
 	dir := t.TempDir()
-	store, err := git.Init(filepath.Join(dir, "knomit.git.db"))
+	store, err := git.Init(filepath.Join(dir, "knomit.git.db"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer store.Close()
 
-	exists, err := store.FileExists("know.md")
+	exists, err := store.FileExists("kb.md")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !exists {
-		t.Fatal("know.md should exist after Init")
+		t.Fatal("general.md should exist after Init")
 	}
 
-	exists, err = store.FileExists("know/nonexistent.md")
+	exists, err = store.FileExists("kb/nonexistent.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,20 +60,20 @@ func TestFileExists(t *testing.T) {
 
 func TestListDir(t *testing.T) {
 	dir := t.TempDir()
-	store, err := git.Init(filepath.Join(dir, "knomit.git.db"))
+	store, err := git.Init(filepath.Join(dir, "knomit.git.db"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer store.Close()
 
-	if _, _, err := store.WriteFile("know/alpha.md", "---\ndomain: []\nconfidence: 0.5\nsources: 1\nentities: []\nrefs: []\n---\n# Alpha\n\nBody.\n", "add alpha"); err != nil {
+	if _, _, err := store.WriteFile("kb/alpha.md", "---\ndomain: []\nconfidence: 0.5\nsources: 1\nentities: []\nrefs: []\n---\n# Alpha\n\nBody.\n", "add alpha"); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := store.WriteFile("know/sub/beta.md", "---\ndomain: []\nconfidence: 0.5\nsources: 1\nentities: []\nrefs: []\n---\n# Beta\n\nBody.\n", "add beta"); err != nil {
+	if _, _, err := store.WriteFile("kb/sub/beta.md", "---\ndomain: []\nconfidence: 0.5\nsources: 1\nentities: []\nrefs: []\n---\n# Beta\n\nBody.\n", "add beta"); err != nil {
 		t.Fatal(err)
 	}
 
-	entries, err := store.ListDir("know")
+	entries, err := store.ListDir("kb")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,29 +88,29 @@ func TestListDir(t *testing.T) {
 		}
 	}
 	if !hasAlpha {
-		t.Fatal("expected alpha.md in know/")
+		t.Fatal("expected alpha.md in kb/")
 	}
 	if !hasSub {
-		t.Fatal("expected sub/ in know/")
+		t.Fatal("expected sub/ in kb/")
 	}
 }
 
 func TestLog(t *testing.T) {
 	dir := t.TempDir()
-	store, err := git.Init(filepath.Join(dir, "knomit.git.db"))
+	store, err := git.Init(filepath.Join(dir, "knomit.git.db"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer store.Close()
 
-	if _, _, err := store.WriteFile("know/test.md", "---\ndomain: []\nconfidence: 0.5\nsources: 1\nentities: []\nrefs: []\n---\n# T\n\nv1.\n", "add test"); err != nil {
+	if _, _, err := store.WriteFile("kb/test.md", "---\ndomain: []\nconfidence: 0.5\nsources: 1\nentities: []\nrefs: []\n---\n# T\n\nv1.\n", "add test"); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := store.WriteFile("know/test.md", "---\ndomain: []\nconfidence: 0.5\nsources: 1\nentities: []\nrefs: []\n---\n# T\n\nv2.\n", "update test"); err != nil {
+	if _, _, err := store.WriteFile("kb/test.md", "---\ndomain: []\nconfidence: 0.5\nsources: 1\nentities: []\nrefs: []\n---\n# T\n\nv2.\n", "update test"); err != nil {
 		t.Fatal(err)
 	}
 
-	entries, err := store.Log("know/test.md")
+	entries, err := store.Log("kb/test.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,12 +123,12 @@ func TestOpenRoundtrip(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "knomit.git.db")
 
-	store, err := git.Init(dbPath)
+	store, err := git.Init(dbPath, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	content := "# Hello\n\nWorld.\n"
-	if _, _, err := store.WriteFile("know/hello.md", content, "add hello"); err != nil {
+	if _, _, err := store.WriteFile("kb/hello.md", content, "add hello"); err != nil {
 		t.Fatal(err)
 	}
 	store.Close()
@@ -139,7 +139,7 @@ func TestOpenRoundtrip(t *testing.T) {
 	}
 	defer store2.Close()
 
-	got, err := store2.ReadFile("know/hello.md")
+	got, err := store2.ReadFile("kb/hello.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -150,7 +150,7 @@ func TestOpenRoundtrip(t *testing.T) {
 
 func TestHeadCommit(t *testing.T) {
 	dir := t.TempDir()
-	store, err := git.Init(filepath.Join(dir, "knomit.git.db"))
+	store, err := git.Init(filepath.Join(dir, "knomit.git.db"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -167,7 +167,7 @@ func TestHeadCommit(t *testing.T) {
 
 func TestWriteFileValidation(t *testing.T) {
 	dir := t.TempDir()
-	store, err := git.Init(filepath.Join(dir, "knomit.git.db"))
+	store, err := git.Init(filepath.Join(dir, "knomit.git.db"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -183,7 +183,7 @@ func TestWriteFileValidation(t *testing.T) {
 
 func TestListDirRoot(t *testing.T) {
 	dir := t.TempDir()
-	store, err := git.Init(filepath.Join(dir, "knomit.git.db"))
+	store, err := git.Init(filepath.Join(dir, "knomit.git.db"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -196,28 +196,28 @@ func TestListDirRoot(t *testing.T) {
 
 	var hasKnowMd bool
 	for _, e := range entries {
-		if e.Name == "know.md" && !e.IsDir {
+		if e.Name == "kb.md" && !e.IsDir {
 			hasKnowMd = true
 		}
 	}
 	if !hasKnowMd {
-		t.Fatal("expected know.md in root listing")
+		t.Fatal("expected general.md in root listing")
 	}
 }
 
 func TestDeleteFile(t *testing.T) {
 	dir := t.TempDir()
-	store, err := git.Init(filepath.Join(dir, "knomit.git.db"))
+	store, err := git.Init(filepath.Join(dir, "knomit.git.db"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer store.Close()
 
 	// Write a file, then delete it.
-	if _, _, err := store.WriteFile("know/todelete.md", "# Delete me\n", "add file"); err != nil {
+	if _, _, err := store.WriteFile("kb/todelete.md", "# Delete me\n", "add file"); err != nil {
 		t.Fatal(err)
 	}
-	exists, err := store.FileExists("know/todelete.md")
+	exists, err := store.FileExists("kb/todelete.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -225,11 +225,11 @@ func TestDeleteFile(t *testing.T) {
 		t.Fatal("file should exist before deletion")
 	}
 
-	if _, err := store.DeleteFile("know/todelete.md", "delete: remove todelete.md"); err != nil {
+	if _, err := store.DeleteFile("kb/todelete.md", "delete: remove todelete.md"); err != nil {
 		t.Fatal(err)
 	}
 
-	exists, err = store.FileExists("know/todelete.md")
+	exists, err = store.FileExists("kb/todelete.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -240,13 +240,13 @@ func TestDeleteFile(t *testing.T) {
 
 func TestTag(t *testing.T) {
 	dir := t.TempDir()
-	store, err := git.Init(filepath.Join(dir, "knomit.git.db"))
+	store, err := git.Init(filepath.Join(dir, "knomit.git.db"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer store.Close()
 
-	if _, _, err := store.WriteFile("know/tagged.md", "# Tagged\n", "add tagged file"); err != nil {
+	if _, _, err := store.WriteFile("kb/tagged.md", "# Tagged\n", "add tagged file"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -278,16 +278,16 @@ func TestTag(t *testing.T) {
 
 func TestGrep(t *testing.T) {
 	dir := t.TempDir()
-	store, err := git.Init(filepath.Join(dir, "knomit.git.db"))
+	store, err := git.Init(filepath.Join(dir, "knomit.git.db"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer store.Close()
 
-	if _, _, err := store.WriteFile("know/alpha.md", "# Alpha\n\nThis file contains the word elephant.\n", "add alpha"); err != nil {
+	if _, _, err := store.WriteFile("kb/alpha.md", "# Alpha\n\nThis file contains the word elephant.\n", "add alpha"); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := store.WriteFile("know/beta.md", "# Beta\n\nThis file is about dogs.\n", "add beta"); err != nil {
+	if _, _, err := store.WriteFile("kb/beta.md", "# Beta\n\nThis file is about dogs.\n", "add beta"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -295,8 +295,8 @@ func TestGrep(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(matches) != 1 || matches[0] != "know/alpha.md" {
-		t.Fatalf("expected [know/alpha.md], got %v", matches)
+	if len(matches) != 1 || matches[0] != "kb/alpha.md" {
+		t.Fatalf("expected [kb/alpha.md], got %v", matches)
 	}
 
 	// Grep for something in both files.
@@ -311,7 +311,7 @@ func TestGrep(t *testing.T) {
 
 func TestDiffFiles(t *testing.T) {
 	dir := t.TempDir()
-	store, err := git.Init(filepath.Join(dir, "knomit.git.db"))
+	store, err := git.Init(filepath.Join(dir, "knomit.git.db"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -323,10 +323,10 @@ func TestDiffFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, _, err := store.WriteFile("know/new.md", "# New\n", "add new"); err != nil {
+	if _, _, err := store.WriteFile("kb/new.md", "# New\n", "add new"); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := store.WriteFile("know.md", "# Knowledge Base\n\nUpdated root.\n", "update root"); err != nil {
+	if _, _, err := store.WriteFile("kb.md", "# Knowledge Base\n\nUpdated root.\n", "update root"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -337,28 +337,28 @@ func TestDiffFiles(t *testing.T) {
 
 	var hasNew bool
 	for _, p := range added {
-		if p == "know/new.md" {
+		if p == "kb/new.md" {
 			hasNew = true
 		}
 	}
 	if !hasNew {
-		t.Fatalf("expected know/new.md in added, got added=%v modified=%v deleted=%v", added, modified, deleted)
+		t.Fatalf("expected kb/new.md in added, got added=%v modified=%v deleted=%v", added, modified, deleted)
 	}
 
 	var hasModified bool
 	for _, p := range modified {
-		if p == "know.md" {
+		if p == "kb.md" {
 			hasModified = true
 		}
 	}
 	if !hasModified {
-		t.Fatalf("expected know.md in modified, got added=%v modified=%v deleted=%v", added, modified, deleted)
+		t.Fatalf("expected general.md in modified, got added=%v modified=%v deleted=%v", added, modified, deleted)
 	}
 }
 
 func TestDiffFilesFromEmpty(t *testing.T) {
 	dir := t.TempDir()
-	store, err := git.Init(filepath.Join(dir, "knomit.git.db"))
+	store, err := git.Init(filepath.Join(dir, "knomit.git.db"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -372,18 +372,18 @@ func TestDiffFilesFromEmpty(t *testing.T) {
 
 	var hasKnowMd bool
 	for _, p := range added {
-		if p == "know.md" {
+		if p == "kb.md" {
 			hasKnowMd = true
 		}
 	}
 	if !hasKnowMd {
-		t.Fatalf("expected know.md in added when diffing from empty, got added=%v modified=%v deleted=%v", added, modified, deleted)
+		t.Fatalf("expected general.md in added when diffing from empty, got added=%v modified=%v deleted=%v", added, modified, deleted)
 	}
 }
 
 func TestBatchWriteValidation(t *testing.T) {
 	dir := t.TempDir()
-	store, err := git.Init(filepath.Join(dir, "knomit.git.db"))
+	store, err := git.Init(filepath.Join(dir, "knomit.git.db"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -401,7 +401,7 @@ func TestBatchWriteValidation(t *testing.T) {
 func TestSync(t *testing.T) {
 	t.Run("no origin returns Synced=false", func(t *testing.T) {
 		dir := t.TempDir()
-		store, err := git.Init(filepath.Join(dir, "knomit.git.db"))
+		store, err := git.Init(filepath.Join(dir, "knomit.git.db"), nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -419,7 +419,7 @@ func TestSync(t *testing.T) {
 	t.Run("with origin merges new commit", func(t *testing.T) {
 		// Set up origin store (SQLite-backed go-git repo).
 		originDir := t.TempDir()
-		origin, err := git.Init(filepath.Join(originDir, "origin.git.db"))
+		origin, err := git.Init(filepath.Join(originDir, "origin.git.db"), nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -428,7 +428,7 @@ func TestSync(t *testing.T) {
 		// Add a commit to origin's agent branch (WriteFile always targets the
 		// agent branch), then advance origin's main ref to that commit so that
 		// origin/main has content the agent store has never seen.
-		if _, _, err := origin.WriteFile("know/shared.md", "# Shared\n", "origin: add shared"); err != nil {
+		if _, _, err := origin.WriteFile("kb/shared.md", "# Shared\n", "origin: add shared"); err != nil {
 			t.Fatal(err)
 		}
 		originHead, err := origin.HeadCommit()
@@ -455,7 +455,7 @@ func TestSync(t *testing.T) {
 
 		// Create the agent store.
 		agentDir := t.TempDir()
-		store, err := git.Init(filepath.Join(agentDir, "knomit.git.db"))
+		store, err := git.Init(filepath.Join(agentDir, "knomit.git.db"), nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -485,44 +485,44 @@ func TestSync(t *testing.T) {
 		}
 
 		// The merged file should now be accessible.
-		exists, err := store.FileExists("know/shared.md")
+		exists, err := store.FileExists("kb/shared.md")
 		if err != nil {
 			t.Fatal(err)
 		}
 		if !exists {
-			t.Fatal("expected know/shared.md to exist after merge")
+			t.Fatal("expected kb/shared.md to exist after merge")
 		}
 	})
 }
 
 func TestListAll(t *testing.T) {
 	dir := t.TempDir()
-	store, err := git.Init(filepath.Join(dir, "knomit.git.db"))
+	store, err := git.Init(filepath.Join(dir, "knomit.git.db"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer store.Close()
 
-	// After Init, know.md exists at the root.
+	// After Init, general.md exists at the root.
 	paths, err := store.ListAll()
 	if err != nil {
 		t.Fatal(err)
 	}
 	var hasKnowMd bool
 	for _, p := range paths {
-		if p == "know.md" {
+		if p == "kb.md" {
 			hasKnowMd = true
 		}
 	}
 	if !hasKnowMd {
-		t.Fatalf("expected know.md in ListAll, got %v", paths)
+		t.Fatalf("expected general.md in ListAll, got %v", paths)
 	}
 
 	// Add two more .md files and a non-.md file (no API for non-md, so skip that part).
-	if _, _, err := store.WriteFile("know/alpha.md", "# Alpha\n\nAlpha body.\n", "add alpha"); err != nil {
+	if _, _, err := store.WriteFile("kb/alpha.md", "# Alpha\n\nAlpha body.\n", "add alpha"); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := store.WriteFile("know/sub/beta.md", "# Beta\n\nBeta body.\n", "add beta"); err != nil {
+	if _, _, err := store.WriteFile("kb/sub/beta.md", "# Beta\n\nBeta body.\n", "add beta"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -532,9 +532,9 @@ func TestListAll(t *testing.T) {
 	}
 
 	want := map[string]bool{
-		"know.md":           true,
-		"know/alpha.md":     true,
-		"know/sub/beta.md":  true,
+		"kb.md":           true,
+		"kb/alpha.md":     true,
+		"kb/sub/beta.md":  true,
 	}
 	for _, p := range paths {
 		delete(want, p)
@@ -546,15 +546,15 @@ func TestListAll(t *testing.T) {
 
 func TestBatchWrite(t *testing.T) {
 	dir := t.TempDir()
-	store, err := git.Init(filepath.Join(dir, "knomit.git.db"))
+	store, err := git.Init(filepath.Join(dir, "knomit.git.db"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer store.Close()
 
 	files := map[string]string{
-		"know/a.md": "# A\n\nContent A.\n",
-		"know/b.md": "# B\n\nContent B.\n",
+		"kb/a.md": "# A\n\nContent A.\n",
+		"kb/b.md": "# B\n\nContent B.\n",
 	}
 
 	commitHash, blobHashes, err := store.BatchWrite(files, "batch: add a and b")
@@ -580,12 +580,12 @@ func TestBatchWrite(t *testing.T) {
 	}
 
 	// A batch write should be a single commit (not two).
-	logEntries, err := store.Log("know/a.md")
+	logEntries, err := store.Log("kb/a.md")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(logEntries) == 0 {
-		t.Fatal("expected at least one log entry for know/a.md")
+		t.Fatal("expected at least one log entry for kb/a.md")
 	}
 	if logEntries[0].Message != "batch: add a and b" {
 		t.Fatalf("expected batch commit message, got %q", logEntries[0].Message)
@@ -594,13 +594,13 @@ func TestBatchWrite(t *testing.T) {
 
 func TestWriteFileReturnsBlobHash(t *testing.T) {
 	dir := t.TempDir()
-	store, err := git.Init(filepath.Join(dir, "knomit.git.db"))
+	store, err := git.Init(filepath.Join(dir, "knomit.git.db"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer store.Close()
 
-	commitHash, blobHash, err := store.WriteFile("know/test.md", "# Test\n\nBody.\n", "add test")
+	commitHash, blobHash, err := store.WriteFile("kb/test.md", "# Test\n\nBody.\n", "add test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -612,21 +612,77 @@ func TestWriteFileReturnsBlobHash(t *testing.T) {
 	}
 }
 
+func TestOnCommitCallback(t *testing.T) {
+	dir := t.TempDir()
+	gs, err := git.Init(filepath.Join(dir, "test.db"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer gs.Close()
+
+	var called []string
+	gs.SetOnCommit(func(hash string) {
+		called = append(called, hash)
+	})
+
+	hash, _, err := gs.WriteFile("kb/test.md", "---\ntitle: Test\ntype: observation\ndomain: [eng]\nentities: [Go]\nconfidence: 0.9\nsources: 1\n---\ntest content", "test commit")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(called) != 1 || called[0] != hash {
+		t.Fatalf("expected onCommit called once with %q, got %v", hash, called)
+	}
+}
+
+func TestOnCommitBatchAndDelete(t *testing.T) {
+	dir := t.TempDir()
+	gs, err := git.Init(filepath.Join(dir, "test.db"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer gs.Close()
+
+	var called []string
+	gs.SetOnCommit(func(hash string) {
+		called = append(called, hash)
+	})
+
+	files := map[string]string{
+		"kb/a.md": "---\ntitle: A\ntype: observation\ndomain: [eng]\nentities: [Go]\nconfidence: 0.9\nsources: 1\n---\na",
+		"kb/b.md": "---\ntitle: B\ntype: observation\ndomain: [eng]\nentities: [Go]\nconfidence: 0.9\nsources: 1\n---\nb",
+	}
+	batchHash, _, err := gs.BatchWrite(files, "batch commit")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(called) != 1 || called[0] != batchHash {
+		t.Fatalf("expected 1 call after BatchWrite, got %d", len(called))
+	}
+
+	delHash, err := gs.DeleteFile("kb/a.md", "delete a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(called) != 2 || called[1] != delHash {
+		t.Fatalf("expected 2 calls total, got %d", len(called))
+	}
+}
+
 func TestReadFileWithHash(t *testing.T) {
 	dir := t.TempDir()
-	store, err := git.Init(filepath.Join(dir, "knomit.git.db"))
+	store, err := git.Init(filepath.Join(dir, "knomit.git.db"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer store.Close()
 
 	content := "# Test\n\nBody text.\n"
-	_, expectedBlobHash, err := store.WriteFile("know/test.md", content, "add test")
+	_, expectedBlobHash, err := store.WriteFile("kb/test.md", content, "add test")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	gotContent, gotBlobHash, err := store.ReadFileWithHash("know/test.md")
+	gotContent, gotBlobHash, err := store.ReadFileWithHash("kb/test.md")
 	if err != nil {
 		t.Fatal(err)
 	}

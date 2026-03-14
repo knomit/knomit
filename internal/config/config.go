@@ -38,7 +38,7 @@ func Defaults() Config {
 		RepoPath:     home + "/.knomit",
 		CacheDir:     home + "/.cache/knomit",
 		Port:         "3000",
-		OntologyRoot: "know",
+		OntologyRoot: "kb",
 		LLM:          llm.DefaultConfig(),
 		Git:          git.DefaultConfig(),
 	}

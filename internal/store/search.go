@@ -47,7 +47,7 @@ func (idx *Index) Search(q SearchQuery) ([]SearchResult, error) {
 	// ── Text-less path: return all facts matching filters with score 100 ──
 	if q.Text == "" {
 		rows, err := idx.db.Query(
-			`SELECT f.path, f.title, f.blob_hash, f.domain, f.entities, f.confidence, f.sources, f.refs, f.commit_hash, o.data
+			`SELECT f.path, f.title, f.blob_hash, f.type, f.domain, f.entities, f.confidence, f.sources, f.refs, f.commit_hash, o.data
 			 FROM facts f
 			 JOIN objects o ON o.hash = f.blob_hash AND o.type = ?`, BlobObjectType)
 		if err != nil {

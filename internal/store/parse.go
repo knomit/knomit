@@ -37,6 +37,7 @@ func parseFact(path, content, commitHash string) (FactRecord, error) {
 	var refs []string
 	var confidence float64
 	var sources int
+	var factType string
 
 	for _, line := range strings.Split(frontmatter, "\n") {
 		line = strings.TrimSpace(line)
@@ -51,6 +52,8 @@ func parseFact(path, content, commitHash string) (FactRecord, error) {
 		v = strings.TrimSpace(v)
 
 		switch k {
+		case "type":
+			factType = v
 		case "domain":
 			domain = parseYAMLList(v)
 		case "entities":
@@ -62,6 +65,10 @@ func parseFact(path, content, commitHash string) (FactRecord, error) {
 		case "sources":
 			fmt.Sscanf(v, "%d", &sources)
 		}
+	}
+
+	if factType == "" {
+		factType = "observation"
 	}
 
 	// Extract title from the first markdown heading line (e.g. "# My Title").
@@ -83,6 +90,7 @@ func parseFact(path, content, commitHash string) (FactRecord, error) {
 	return FactRecord{
 		Path:       path,
 		Title:      title,
+		Type:       factType,
 		Domain:     domain,
 		Entities:   entities,
 		Confidence: confidence,
