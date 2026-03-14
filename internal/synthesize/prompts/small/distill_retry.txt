@@ -1,0 +1,17 @@
+You produced no new insights and forgot nothing. That means you did not find any patterns.
+
+Go back and look for ANY of these:
+- Facts from the same domain that share a theme
+- Facts that could be combined into a single higher-level insight
+- Redundant facts where one generalizes the others
+
+You MUST create at least one synthesized fact. Group related facts together.
+
+Facts:
+{{.Facts}}
+
+Output JSON:
+{
+  "synthesize": [...],
+  "forget": [...]
+}

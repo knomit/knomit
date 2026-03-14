@@ -58,6 +58,33 @@ func TestParseRecipe(t *testing.T) {
 	}
 }
 
+func TestParseRecipeWithProfile(t *testing.T) {
+	yml := `
+name: profiled
+steps:
+  - mode: prune
+    profile: small
+    retry_on_passive: false
+  - mode: distill
+`
+	r, err := ParseRecipe(yml)
+	if err != nil {
+		t.Fatalf("ParseRecipe: %v", err)
+	}
+	if r.Steps[0].Profile != "small" {
+		t.Errorf("Steps[0].Profile: got %q, want %q", r.Steps[0].Profile, "small")
+	}
+	if r.Steps[0].RetryOnPassive == nil || *r.Steps[0].RetryOnPassive != false {
+		t.Errorf("Steps[0].RetryOnPassive: want pointer to false")
+	}
+	if r.Steps[1].Profile != "" {
+		t.Errorf("Steps[1].Profile: got %q, want empty", r.Steps[1].Profile)
+	}
+	if r.Steps[1].RetryOnPassive != nil {
+		t.Errorf("Steps[1].RetryOnPassive: want nil")
+	}
+}
+
 func TestParseRecipeValidation(t *testing.T) {
 	tests := []struct {
 		name    string

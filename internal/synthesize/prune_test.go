@@ -51,7 +51,7 @@ func TestPruneStep(t *testing.T) {
   ],
   "merges": []
 }`
-	adapter.EXPECT().Complete(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(mockResponse, nil)
+	adapter.EXPECT().Complete(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(mockResponse, nil)
 
 	// bar: forget — DeleteFile + idx.Delete
 	gs.EXPECT().DeleteFile("know/test/bar.md", gomock.Any()).Return(nil)
@@ -72,7 +72,7 @@ func TestPruneStep(t *testing.T) {
 	recipe := Recipe{Name: "test-recipe", Steps: []RecipeStep{{Mode: "prune"}}}
 
 	var events []ProgressEvent
-	err := executePruneStep(context.Background(), gs, idx, nil, adapter, recipe.Steps[0], recipe, func(e ProgressEvent) {
+	err := executePruneStep(context.Background(), gs, idx, nil, adapter, recipe.Steps[0], recipe, Profile{Name: "large", ForceJSON: true, RetryOnPassive: false, MaxChunkBytes: 100_000}, func(e ProgressEvent) {
 		events = append(events, e)
 	})
 	if err != nil {
@@ -140,7 +140,7 @@ func TestPruneStepWithMerge(t *testing.T) {
     }
   ]
 }`
-	adapter.EXPECT().Complete(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(mockResponse, nil)
+	adapter.EXPECT().Complete(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(mockResponse, nil)
 
 	// Write merged fact
 	var mergedWritten bool
@@ -163,7 +163,7 @@ func TestPruneStepWithMerge(t *testing.T) {
 
 	recipe := Recipe{Name: "merge-recipe", Steps: []RecipeStep{{Mode: "prune"}}}
 
-	err := executePruneStep(context.Background(), gs, idx, nil, adapter, recipe.Steps[0], recipe, func(ProgressEvent) {})
+	err := executePruneStep(context.Background(), gs, idx, nil, adapter, recipe.Steps[0], recipe, Profile{Name: "large", ForceJSON: true, RetryOnPassive: false, MaxChunkBytes: 100_000}, func(ProgressEvent) {})
 	if err != nil {
 		t.Fatalf("executePruneStep: %v", err)
 	}
@@ -351,8 +351,8 @@ func TestPruneStepClustersBeforeLLM(t *testing.T) {
 
 	// LLM: capture prompts, return empty response each call.
 	var capturedPrompts []string
-	adapter.EXPECT().Complete(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
-		func(ctx context.Context, system string, msgs []llm.Message, onChunk func(string)) (string, error) {
+	adapter.EXPECT().Complete(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
+		func(ctx context.Context, system string, msgs []llm.Message, opts llm.CompletionOptions, onChunk func(string)) (string, error) {
 			for _, msg := range msgs {
 				capturedPrompts = append(capturedPrompts, msg.Content)
 			}
@@ -365,7 +365,7 @@ func TestPruneStepClustersBeforeLLM(t *testing.T) {
 
 	recipe := Recipe{Name: "cluster-test", Steps: []RecipeStep{{Mode: "prune"}}}
 
-	err := executePruneStep(context.Background(), gs, idx, nil, adapter, recipe.Steps[0], recipe, func(ProgressEvent) {})
+	err := executePruneStep(context.Background(), gs, idx, nil, adapter, recipe.Steps[0], recipe, Profile{Name: "large", ForceJSON: true, RetryOnPassive: false, MaxChunkBytes: 100_000}, func(ProgressEvent) {})
 	if err != nil {
 		t.Fatalf("executePruneStep: %v", err)
 	}
@@ -389,5 +389,50 @@ func TestPruneStepClustersBeforeLLM(t *testing.T) {
 		if hasA && hasB {
 			t.Error("a single LLM prompt contains facts from both clusters — they should be separated")
 		}
+	}
+}
+
+func TestPruneStep_RetryOnPassive(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	gs := NewMockGitStore(ctrl)
+	idx := NewMockSearchIndex(ctrl)
+	adapter := NewMockLLMAdapter(ctrl)
+
+	files := map[string]string{
+		"know/test/foo.md": factContent("Foo", "Foo body"),
+		"know/test/bar.md": factContent("Bar", "Bar body"),
+	}
+
+	gs.EXPECT().ListAll().Return([]string{"know/test/foo.md", "know/test/bar.md"}, nil)
+	gs.EXPECT().ReadFile(gomock.Any()).DoAndReturn(func(path string) (string, error) {
+		if c, ok := files[path]; ok {
+			return c, nil
+		}
+		return "", fmt.Errorf("not found: %s", path)
+	}).AnyTimes()
+
+	idx.EXPECT().ClusterFacts(gomock.Any(), gomock.Any()).Return(store.ClusterResult{Clusters: map[int][]string{}}, nil)
+
+	// First call: passive (all keep)
+	passiveResponse := `{"decisions": [{"path": "know/test/foo.md", "action": "keep"}, {"path": "know/test/bar.md", "action": "keep"}], "merges": []}`
+	// Second call (retry): active (forget bar)
+	activeResponse := `{"decisions": [{"path": "know/test/foo.md", "action": "keep"}, {"path": "know/test/bar.md", "action": "forget"}], "merges": []}`
+
+	gomock.InOrder(
+		adapter.EXPECT().Complete(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(passiveResponse, nil),
+		adapter.EXPECT().Complete(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(activeResponse, nil),
+	)
+
+	gs.EXPECT().DeleteFile("know/test/bar.md", gomock.Any()).Return(nil)
+	idx.EXPECT().Delete("know/test/bar.md").Return(nil)
+	gs.EXPECT().Tag(gomock.Any()).Return(nil)
+
+	profile := Profile{Name: "small", ForceJSON: false, RetryOnPassive: true, MaxChunkBytes: 100_000}
+	step := RecipeStep{Mode: "prune"}
+	recipe := Recipe{Name: "test"}
+
+	err := executePruneStep(context.Background(), gs, idx, nil, adapter, step, recipe, profile, func(ProgressEvent) {})
+	if err != nil {
+		t.Fatalf("executePruneStep: %v", err)
 	}
 }

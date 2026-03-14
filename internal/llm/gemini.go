@@ -36,7 +36,7 @@ func NewGeminiAdapter(ctx context.Context, model string) (*GeminiAdapter, error)
 }
 
 // Complete implements LLMAdapter using Gemini's GenerateContentStream.
-func (a *GeminiAdapter) Complete(ctx context.Context, system string, msgs []Message, onChunk func(string)) (string, error) {
+func (a *GeminiAdapter) Complete(ctx context.Context, system string, msgs []Message, opts CompletionOptions, onChunk func(string)) (string, error) {
 	var contents []*genai.Content
 	for _, m := range msgs {
 		role := "user"
@@ -67,3 +67,6 @@ func (a *GeminiAdapter) Complete(ctx context.Context, system string, msgs []Mess
 
 	return accumulated, nil
 }
+
+// Model returns the model name used by this adapter.
+func (a *GeminiAdapter) Model() string { return a.model }

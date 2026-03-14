@@ -42,16 +42,30 @@ func (m *MockLLMAdapter) EXPECT() *MockLLMAdapterMockRecorder {
 }
 
 // Complete mocks base method.
-func (m *MockLLMAdapter) Complete(ctx context.Context, system string, msgs []llm.Message, onChunk func(string)) (string, error) {
+func (m *MockLLMAdapter) Complete(ctx context.Context, system string, msgs []llm.Message, opts llm.CompletionOptions, onChunk func(string)) (string, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Complete", ctx, system, msgs, onChunk)
+	ret := m.ctrl.Call(m, "Complete", ctx, system, msgs, opts, onChunk)
 	ret0, _ := ret[0].(string)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // Complete indicates an expected call of Complete.
-func (mr *MockLLMAdapterMockRecorder) Complete(ctx, system, msgs, onChunk any) *gomock.Call {
+func (mr *MockLLMAdapterMockRecorder) Complete(ctx, system, msgs, opts, onChunk any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Complete", reflect.TypeOf((*MockLLMAdapter)(nil).Complete), ctx, system, msgs, onChunk)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Complete", reflect.TypeOf((*MockLLMAdapter)(nil).Complete), ctx, system, msgs, opts, onChunk)
+}
+
+// Model mocks base method.
+func (m *MockLLMAdapter) Model() string {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Model")
+	ret0, _ := ret[0].(string)
+	return ret0
+}
+
+// Model indicates an expected call of Model.
+func (mr *MockLLMAdapterMockRecorder) Model() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Model", reflect.TypeOf((*MockLLMAdapter)(nil).Model))
 }

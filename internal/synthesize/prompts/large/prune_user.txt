@@ -1,0 +1,41 @@
+You are reviewing facts in a knowledge base for staleness, redundancy, and duplication.
+{{- if .RecipePrompt}}
+
+Context: {{.RecipePrompt}}
+{{- end}}
+{{- if .StepPrompt}}
+
+Instructions: {{.StepPrompt}}
+{{- end}}
+
+Facts to review:
+{{.Facts}}
+
+For each fact, decide:
+- keep: fact is current and valuable
+- forget: fact is obsolete, superseded, or no longer true
+- update: fact needs confidence adjusted (provide new value)
+
+Also identify facts that say the same thing and should be merged into a single unified fact.
+
+Respond as JSON (no markdown wrapping):
+{
+  "decisions": [
+    { "path": "...", "action": "keep|forget|update", "confidence": 0.X }
+  ],
+  "merges": [
+    {
+      "paths": ["file1.md", "file2.md"],
+      "merged": {
+        "path": "know/...",
+        "title": "...",
+        "body": "...",
+        "domain": [],
+        "confidence": 0.X,
+        "sources": 2,
+        "entities": [],
+        "refs": ["file1.md", "file2.md"]
+      }
+    }
+  ]
+}

@@ -18,7 +18,7 @@ import (
 )
 
 // executeDistillStep runs one distill (RAPTOR) step of the synthesis pipeline.
-func executeDistillStep(ctx context.Context, gs GitStore, idx SearchIndex, embedder Embedder, adapter llm.LLMAdapter, step RecipeStep, recipe Recipe, onProgress func(ProgressEvent)) error {
+func executeDistillStep(ctx context.Context, gs GitStore, idx SearchIndex, embedder Embedder, adapter llm.LLMAdapter, step RecipeStep, recipe Recipe, profile Profile, onProgress func(ProgressEvent)) error {
 	maxDepth := step.MaxDepth
 	if maxDepth == 0 {
 		maxDepth = 1
@@ -83,7 +83,7 @@ func executeDistillStep(ctx context.Context, gs GitStore, idx SearchIndex, embed
 			for i, f := range currentFacts {
 				group[i] = f.factForLLM
 			}
-			synthesized, forget, err := runDistillOnGroup(ctx, gs, idx, adapter, group, step, recipe, onProgress)
+			synthesized, forget, err := runDistillOnGroup(ctx, gs, idx, adapter, group, step, recipe, profile, onProgress)
 			if err != nil {
 				return err
 			}
@@ -102,7 +102,7 @@ func executeDistillStep(ctx context.Context, gs GitStore, idx SearchIndex, embed
 
 		var depthSynthesized []distillFact
 		for _, group := range clusterMap {
-			synthesized, forget, err := runDistillOnGroup(ctx, gs, idx, adapter, group, step, recipe, onProgress)
+			synthesized, forget, err := runDistillOnGroup(ctx, gs, idx, adapter, group, step, recipe, profile, onProgress)
 			if err != nil {
 				return err
 			}

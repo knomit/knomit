@@ -44,6 +44,27 @@ type Embedder interface {
 	Embed(text string) ([]float32, error)
 }
 
+// namedProfiles maps explicit profile names to their canonical Profile struct.
+var namedProfiles = map[string]Profile{
+	"small": SmallProfile,
+	"large": LargeProfile,
+}
+
+// resolveStepProfile returns the profile for a step, using the step's explicit
+// override or auto-detecting from the adapter's model name.
+func resolveStepProfile(step RecipeStep, adapter llm.LLMAdapter) Profile {
+	var p Profile
+	if named, ok := namedProfiles[step.Profile]; ok {
+		p = named
+	} else {
+		p = ResolveProfile(adapter.Model())
+	}
+	if step.RetryOnPassive != nil {
+		p.RetryOnPassive = *step.RetryOnPassive
+	}
+	return p
+}
+
 // Run executes a synthesis recipe against the provided git store and search index.
 // onProgress is called for each pipeline event; if nil, a no-op is used.
 func Run(ctx context.Context, gs GitStore, idx SearchIndex, embedder Embedder, adapter llm.LLMAdapter, r Recipe, onProgress func(ProgressEvent)) error {
@@ -54,14 +75,15 @@ func Run(ctx context.Context, gs GitStore, idx SearchIndex, embedder Embedder, a
 	log.Info().Str("recipe", r.Name).Int("steps", len(r.Steps)).Msg("synthesis: pipeline starting")
 
 	for i, step := range r.Steps {
-		log.Info().Str("mode", step.Mode).Int("step", i+1).Int("total", len(r.Steps)).Msg("synthesis: step starting")
+		profile := resolveStepProfile(step, adapter)
+		log.Info().Str("mode", step.Mode).Str("profile", profile.Name).Int("step", i+1).Int("total", len(r.Steps)).Msg("synthesis: step starting")
 		onProgress(ProgressEvent{Phase: "step-start", Message: step.Mode})
 		var err error
 		switch step.Mode {
 		case "prune":
-			err = executePruneStep(ctx, gs, idx, embedder, adapter, step, r, onProgress)
+			err = executePruneStep(ctx, gs, idx, embedder, adapter, step, r, profile, onProgress)
 		case "distill":
-			err = executeDistillStep(ctx, gs, idx, embedder, adapter, step, r, onProgress)
+			err = executeDistillStep(ctx, gs, idx, embedder, adapter, step, r, profile, onProgress)
 		default:
 			return fmt.Errorf("unknown step mode: %q", step.Mode)
 		}

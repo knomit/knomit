@@ -76,7 +76,7 @@ func TestOllamaAdapter_Complete(t *testing.T) {
 		{Role: "user", Content: "say hello"},
 		{Role: "assistant", Content: "ok"},
 		{Role: "user", Content: "now"},
-	}, func(chunk string) {
+	}, CompletionOptions{}, func(chunk string) {
 		chunks = append(chunks, chunk)
 	})
 	if err != nil {
@@ -97,8 +97,8 @@ func TestOllamaAdapter_Complete(t *testing.T) {
 	if capturedBody["model"] != "qwen3:8b" {
 		t.Errorf("model = %v, want qwen3:8b", capturedBody["model"])
 	}
-	if capturedBody["format"] != "json" {
-		t.Errorf("format = %v, want json", capturedBody["format"])
+	if capturedBody["format"] != "" {
+		t.Errorf("format = %v, want \"\" (ForceJSON=false)", capturedBody["format"])
 	}
 	if capturedBody["stream"] != true {
 		t.Errorf("stream = %v, want true", capturedBody["stream"])
@@ -134,7 +134,7 @@ func TestOllamaAdapter_Complete_HTTPError(t *testing.T) {
 
 	_, err := adapter.Complete(context.Background(), "sys", []Message{
 		{Role: "user", Content: "hi"},
-	}, nil)
+	}, CompletionOptions{}, nil)
 	if err == nil {
 		t.Fatal("expected error for HTTP 400")
 	}
@@ -159,7 +159,7 @@ func TestOllamaAdapter_Complete_NilOnChunk(t *testing.T) {
 
 	result, err := adapter.Complete(context.Background(), "sys", []Message{
 		{Role: "user", Content: "hi"},
-	}, nil)
+	}, CompletionOptions{}, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -192,7 +192,7 @@ func TestOllamaAdapter_Complete_MalformedJSON(t *testing.T) {
 
 	result, err := adapter.Complete(context.Background(), "sys", []Message{
 		{Role: "user", Content: "hi"},
-	}, nil)
+	}, CompletionOptions{}, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -220,7 +220,7 @@ func TestOllamaAdapter_Complete_ContextCancelled(t *testing.T) {
 
 	_, err := adapter.Complete(ctx, "sys", []Message{
 		{Role: "user", Content: "hi"},
-	}, nil)
+	}, CompletionOptions{}, nil)
 	if err == nil {
 		t.Fatal("expected error for cancelled context")
 	}
