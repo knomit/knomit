@@ -134,6 +134,7 @@ func handleSearch(idx SearchIndex) http.HandlerFunc {
 		minConfidenceStr := q.Get("min_confidence")
 		minSimilarityStr := q.Get("min_similarity")
 		limitStr := q.Get("limit")
+		graphHopsStr := q.Get("graph_hops")
 
 		var entities []string
 		if entitiesStr != "" {
@@ -188,6 +189,18 @@ func handleSearch(idx SearchIndex) http.HandlerFunc {
 			limit = 500
 		}
 
+		var graphHops int
+		if graphHopsStr != "" {
+			v, err := strconv.Atoi(graphHopsStr)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, "invalid graph_hops value")
+				return
+			}
+			graphHops = v
+		} else {
+			graphHops = 1 // default
+		}
+
 		log.Debug().Str("q", text).Strs("entities", entities).Strs("domain", domain).Int("limit", limit).Msg("search")
 
 		results, err := idx.Search(store.SearchQuery{
@@ -198,6 +211,7 @@ func handleSearch(idx SearchIndex) http.HandlerFunc {
 			MinConfidence: minConfidence,
 			MinSimilarity: minSimilarity,
 			Limit:         limit,
+			GraphHops:     graphHops,
 		})
 		if err != nil {
 			log.Debug().Err(err).Msg("search failed")

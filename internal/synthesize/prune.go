@@ -169,6 +169,9 @@ func executePruneStep(ctx context.Context, gs GitStore, idx SearchIndex, embedde
 			Refs:       mf.Refs,
 			CommitHash: head,
 		})
+		if err := idx.GraphAddDerivedFrom(mf.Path, m.Paths); err != nil {
+			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("derived_from %s: %v", mf.Path, err)})
+		}
 
 		// Delete source facts (unless already forgotten).
 		for _, src := range m.Paths {

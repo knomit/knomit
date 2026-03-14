@@ -50,6 +50,14 @@ func serveCmd() *cobra.Command {
 				return fmt.Errorf("load config: %w", err)
 			}
 
+			provider, _ := llm.ResolveProvider(cfg.LLM.Model, cfg.LLM.Provider)
+			log.Info().
+				Str("repo", cfg.RepoPath).
+				Str("port", cfg.Port).
+				Str("llm_provider", provider).
+				Str("llm_model", cfg.LLM.Model).
+				Msg("config loaded")
+
 			// 1. Open or init GitStore
 			gitDBPath := filepath.Join(cfg.RepoPath, "knomit.git.db")
 			gs, err := git.Open(gitDBPath)
@@ -94,7 +102,7 @@ func serveCmd() *cobra.Command {
 			// 5. Resolve LLM adapter
 			ctx := context.Background()
 			var llmAdapter llm.LLMAdapter
-			provider, err := llm.ResolveProvider(cfg.LLM.Model, cfg.LLM.Provider)
+			provider, err = llm.ResolveProvider(cfg.LLM.Model, cfg.LLM.Provider)
 			if err != nil {
 				log.Warn().Err(err).Msg("LLM provider resolution failed")
 			} else {

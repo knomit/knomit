@@ -4,12 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"math"
 	"strings"
 	"testing"
 
 	"go.uber.org/mock/gomock"
 	"knomit/internal/llm"
+	"knomit/internal/store"
 )
 
 // factContent builds a minimal knomit fact file for testing.
@@ -17,20 +17,6 @@ func factContent(title, body string) string {
 	return "---\ndomain: [testing]\nconfidence: 0.8\nsources: 1\nentities: []\nrefs: []\n---\n# " + title + "\n\n" + body + "\n"
 }
 
-// testCosineDistance computes 1 - cosine_similarity for float32 slices.
-func testCosineDistance(a, b []float32) float64 {
-	var dot, normA, normB float64
-	for i := range a {
-		dot += float64(a[i]) * float64(b[i])
-		normA += float64(a[i]) * float64(a[i])
-		normB += float64(b[i]) * float64(b[i])
-	}
-	if normA == 0 || normB == 0 {
-		return 1.0
-	}
-	sim := dot / (math.Sqrt(normA) * math.Sqrt(normB))
-	return 1.0 - sim
-}
 
 func TestPruneStep(t *testing.T) {
 	ctrl := gomock.NewController(t)
@@ -52,6 +38,9 @@ func TestPruneStep(t *testing.T) {
 		}
 		return "", fmt.Errorf("not found: %s", path)
 	}).AnyTimes()
+
+	// ClusterFacts returns empty → single group fallback with all facts.
+	idx.EXPECT().ClusterFacts(gomock.Any(), gomock.Any()).Return(store.ClusterResult{Clusters: map[int][]string{}}, nil)
 
 	// LLM returns: keep foo, forget bar, update baz with confidence=0.7
 	mockResponse := `{
@@ -128,6 +117,11 @@ func TestPruneStepWithMerge(t *testing.T) {
 		return "", fmt.Errorf("not found: %s", path)
 	}).AnyTimes()
 
+	// Louvain clustering returns both facts in one cluster.
+	idx.EXPECT().ClusterFacts(gomock.Any(), gomock.Any()).Return(store.ClusterResult{
+		Clusters: map[int][]string{0: {"know/test/a.md", "know/test/b.md"}},
+	}, nil)
+
 	mockResponse := `{
   "decisions": [],
   "merges": [
@@ -156,6 +150,7 @@ func TestPruneStepWithMerge(t *testing.T) {
 	})
 	gs.EXPECT().HeadCommit().Return("deadbeef", nil)
 	idx.EXPECT().Upsert(gomock.Any()).Return(nil)
+	idx.EXPECT().GraphAddDerivedFrom("know/test/ab-merged.md", gomock.Any()).Return(nil)
 
 	// Delete source facts
 	gs.EXPECT().DeleteFile("know/test/a.md", gomock.Any()).Return(nil)
@@ -307,29 +302,15 @@ func TestChunkFactsExceedsBudget(t *testing.T) {
 	}
 }
 
-// searchIndexWithPairwise combines MockSearchIndex and MockPairwiseDistancer so the
-// prune/distill code can type-assert the SearchIndex to PairwiseDistancer.
-type searchIndexWithPairwise struct {
-	*MockSearchIndex
-	*MockPairwiseDistancer
-}
-
-// TestPruneStepClustersBeforeLLM verifies that when embeddings are available,
-// the prune step clusters facts and only sends clustered groups to the LLM,
-// rather than sending all facts at once.
+// TestPruneStepClustersBeforeLLM verifies that when ClusterFacts returns two
+// communities, the prune step sends each cluster to the LLM separately and
+// excludes noise facts from all prompts.
 func TestPruneStepClustersBeforeLLM(t *testing.T) {
 	ctrl := gomock.NewController(t)
 
-	mockIdx := NewMockSearchIndex(ctrl)
-	mockPD := NewMockPairwiseDistancer(ctrl)
-	idx := &searchIndexWithPairwise{mockIdx, mockPD}
-
-	embedder := NewMockEmbedder(ctrl)
+	idx := NewMockSearchIndex(ctrl)
 	adapter := NewMockLLMAdapter(ctrl)
 
-	// Create two tight clusters of 5 facts each with well-separated embeddings.
-	// Uses cosine distance, so direction matters — cluster A points along dim 0,
-	// cluster B points along dim 7. Small perturbations in other dims for variety.
 	clusterAFiles := []string{
 		"know/cluster-a/a1.md", "know/cluster-a/a2.md", "know/cluster-a/a3.md",
 		"know/cluster-a/a4.md", "know/cluster-a/a5.md",
@@ -350,24 +331,6 @@ func TestPruneStepClustersBeforeLLM(t *testing.T) {
 		files[f] = factContent("Fact "+f, "Body of "+f)
 	}
 
-	embeddingMap := map[string][]float32{}
-	// Cluster A: dominant component in dim 0, small noise in other dims.
-	for i, f := range clusterAFiles {
-		v := make([]float32, 16)
-		v[0] = 10.0
-		v[1] = float32(i) * 0.1
-		embeddingMap[f] = v
-	}
-	// Cluster B: dominant component in dim 7, small noise in other dims.
-	for i, f := range clusterBFiles {
-		v := make([]float32, 16)
-		v[7] = 10.0
-		v[8] = float32(i) * 0.1
-		embeddingMap[f] = v
-	}
-	// Noise: equal weight across multiple dims — equidistant from both clusters.
-	embeddingMap[noiseFile] = []float32{1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1}
-
 	gs := NewMockGitStore(ctrl)
 	gs.EXPECT().ListAll().Return(allFiles, nil)
 	gs.EXPECT().ReadFile(gomock.Any()).DoAndReturn(func(path string) (string, error) {
@@ -377,36 +340,14 @@ func TestPruneStepClustersBeforeLLM(t *testing.T) {
 		return "", fmt.Errorf("not found: %s", path)
 	}).AnyTimes()
 
-	// embedder.Embed is not called by executePruneStep directly (embedder is
-	// passed for the PairwiseDistancer path, not for generating embeddings here).
-	// The mock just needs to satisfy the non-nil check.
-	embedder.EXPECT().Embed(gomock.Any()).Return([]float32{0, 0, 0, 0}, nil).AnyTimes()
-
-	// PairwiseDistances: compute real cosine distances using testCosineDistance.
-	mockPD.EXPECT().PairwiseDistances(gomock.Any()).DoAndReturn(func(paths []string) ([]string, [][]float64, error) {
-		var filtered []string
-		for _, p := range paths {
-			if _, ok := embeddingMap[p]; ok {
-				filtered = append(filtered, p)
-			}
-		}
-		n := len(filtered)
-		if n == 0 {
-			return nil, nil, nil
-		}
-		dist := make([][]float64, n)
-		for i := range dist {
-			dist[i] = make([]float64, n)
-		}
-		for i := 0; i < n; i++ {
-			for j := i + 1; j < n; j++ {
-				d := testCosineDistance(embeddingMap[filtered[i]], embeddingMap[filtered[j]])
-				dist[i][j] = d
-				dist[j][i] = d
-			}
-		}
-		return filtered, dist, nil
-	})
+	// ClusterFacts returns two communities and the noise file as noise.
+	idx.EXPECT().ClusterFacts(gomock.Any(), gomock.Any()).Return(store.ClusterResult{
+		Clusters: map[int][]string{
+			0: clusterAFiles,
+			1: clusterBFiles,
+		},
+		Noise: []string{noiseFile},
+	}, nil)
 
 	// LLM: capture prompts, return empty response each call.
 	var capturedPrompts []string
@@ -422,9 +363,9 @@ func TestPruneStepClustersBeforeLLM(t *testing.T) {
 	// Tag at end
 	gs.EXPECT().Tag(gomock.Any()).Return(nil)
 
-	recipe := Recipe{Name: "cluster-test", Steps: []RecipeStep{{Mode: "prune", MinClusterSize: 3}}}
+	recipe := Recipe{Name: "cluster-test", Steps: []RecipeStep{{Mode: "prune"}}}
 
-	err := executePruneStep(context.Background(), gs, idx, embedder, adapter, recipe.Steps[0], recipe, func(ProgressEvent) {})
+	err := executePruneStep(context.Background(), gs, idx, nil, adapter, recipe.Steps[0], recipe, func(ProgressEvent) {})
 	if err != nil {
 		t.Fatalf("executePruneStep: %v", err)
 	}

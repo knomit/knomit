@@ -29,6 +29,11 @@ func TestRunPruneOnly(t *testing.T) {
 		return "", fmt.Errorf("not found: %s", path)
 	}).AnyTimes()
 
+	// Louvain clustering returns both facts in one cluster.
+	idx.EXPECT().ClusterFacts(gomock.Any(), gomock.Any()).Return(store.ClusterResult{
+		Clusters: map[int][]string{0: {"know/test/keep.md", "know/test/forget.md"}},
+	}, nil)
+
 	llmResp := `{
   "decisions": [
     { "path": "know/test/keep.md", "action": "keep" },
@@ -132,8 +137,11 @@ func TestRunDistillWithFacts(t *testing.T) {
 		{FactRecord: store.FactRecord{Path: "know/test/a.md", Title: "A fact", Body: "A body.", Domain: []string{"testing"}, Confidence: 0.8, Sources: 1}},
 		{FactRecord: store.FactRecord{Path: "know/test/b.md", Title: "B fact", Body: "B body.", Domain: []string{"testing"}, Confidence: 0.8, Sources: 1}},
 	}
-	// No embedder, no PairwiseDistancer → distillClusterFromIndex returns nil → single cluster fallback.
+	// ClusterFacts returns both facts in one cluster.
 	idx.EXPECT().Search(gomock.Any()).Return(searchResults, nil)
+	idx.EXPECT().ClusterFacts(gomock.Any(), gomock.Any()).Return(store.ClusterResult{
+		Clusters: map[int][]string{0: {"know/test/a.md", "know/test/b.md"}},
+	}, nil)
 
 	llmResp := `{
   "synthesize": [
@@ -159,6 +167,7 @@ func TestRunDistillWithFacts(t *testing.T) {
 	})
 	gs.EXPECT().HeadCommit().Return("deadbeef", nil)
 	idx.EXPECT().Upsert(gomock.Any()).Return(nil)
+	idx.EXPECT().GraphAddDerivedFrom("know/test/synth.md", gomock.Any()).Return(nil)
 
 	// Delete forgotten fact
 	gs.EXPECT().DeleteFile("know/test/a.md", gomock.Any()).Return(nil)
@@ -169,7 +178,7 @@ func TestRunDistillWithFacts(t *testing.T) {
 
 	recipe := Recipe{
 		Name:  "distill-with-facts",
-		Steps: []RecipeStep{{Mode: "distill", MinClusterSize: 3}},
+		Steps: []RecipeStep{{Mode: "distill"}},
 	}
 
 	var phases []string

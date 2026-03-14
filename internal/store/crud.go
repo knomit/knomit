@@ -7,6 +7,8 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+
+	"github.com/rs/zerolog/log"
 )
 
 // Upsert inserts or replaces a FactRecord, keeping the vec0 index in sync.
@@ -73,7 +75,23 @@ func (idx *Index) Upsert(rec FactRecord) error {
 		}
 	}
 
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+
+	// Sync graph: create/update nodes and edges for this fact.
+	if err := idx.graphSyncFact(rec); err != nil {
+		log.Warn().Err(err).Str("path", rec.Path).Msg("graph sync failed on upsert")
+	}
+
+	// Build similarity edges if embeddings are available.
+	if idx.embedder != nil {
+		if err := idx.graphBuildSimilarityEdges(rec.Path); err != nil {
+			log.Warn().Err(err).Str("path", rec.Path).Msg("graph similarity edges failed")
+		}
+	}
+
+	return nil
 }
 
 // Delete removes a fact and its vec0 entry by path.
@@ -100,7 +118,16 @@ func (idx *Index) Delete(path string) error {
 		return fmt.Errorf("delete fact: %w", err)
 	}
 
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+
+	// Mark fact as deleted in graph (preserves lineage via incoming DERIVED_FROM).
+	if err := idx.graphDeleteFact(path); err != nil {
+		log.Warn().Err(err).Str("path", path).Msg("graph delete failed")
+	}
+
+	return nil
 }
 
 // GetByPath retrieves a FactRecord by its path. Returns nil, nil if not found.

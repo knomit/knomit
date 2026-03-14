@@ -19,6 +19,7 @@ type SearchQuery struct {
 	MinConfidence float64
 	MinSimilarity float64 // cosine similarity threshold (0–1); 0 uses default 0.40
 	Limit         int
+	GraphHops     int // number of graph traversal hops to expand results (0 = disabled)
 }
 
 // SearchResult is a FactRecord paired with a relevance score in [0, 100].
@@ -124,6 +125,19 @@ func (idx *Index) Search(q SearchQuery) ([]SearchResult, error) {
 		}
 	}
 
+	graphHops := q.GraphHops
+	if graphHops < 0 {
+		graphHops = 0
+	}
+	if graphHops > 0 && len(vecSimByPath) > 0 {
+		expanded := idx.graphExpandSearch(vecSimByPath, graphHops)
+		for path, score := range expanded {
+			if _, exists := vecSimByPath[path]; !exists {
+				vecSimByPath[path] = score
+			}
+		}
+	}
+
 	if len(vecSimByPath) == 0 {
 		return nil, nil
 	}
@@ -196,13 +210,30 @@ func containsAll(haystack []string, needles []string) bool {
 	return true
 }
 
+// domainPrefixMatch checks if each query domain is a prefix of at least one fact domain.
+func domainPrefixMatch(factDomains, queryDomains []string) bool {
+	for _, qd := range queryDomains {
+		found := false
+		for _, fd := range factDomains {
+			if fd == qd || strings.HasPrefix(fd, qd+"/") {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	return true
+}
+
 // matchesFilters reports whether rec satisfies the non-text filter fields in q
 // (entities, domain, path prefix, minimum confidence).
 func matchesFilters(rec FactRecord, q SearchQuery) bool {
 	if len(q.Entities) > 0 && !containsAll(rec.Entities, q.Entities) {
 		return false
 	}
-	if len(q.Domain) > 0 && !containsAll(rec.Domain, q.Domain) {
+	if len(q.Domain) > 0 && !domainPrefixMatch(rec.Domain, q.Domain) {
 		return false
 	}
 	if q.Path != "" && !strings.HasPrefix(rec.Path, q.Path) {
