@@ -45,6 +45,35 @@ func sanitizeMomentName(name string) string {
 	return nonSafeRe.ReplaceAllString(name, "-")
 }
 
+// unionStrings returns the deduplicated union of two string slices, preserving order.
+func unionStrings(a, b []string) []string {
+	seen := map[string]bool{}
+	var result []string
+	for _, s := range a {
+		if !seen[s] {
+			seen[s] = true
+			result = append(result, s)
+		}
+	}
+	for _, s := range b {
+		if !seen[s] {
+			seen[s] = true
+			result = append(result, s)
+		}
+	}
+	return result
+}
+
+// appendUnique appends s to slice only if not already present.
+func appendUnique(slice []string, s string) []string {
+	for _, v := range slice {
+		if v == s {
+			return slice
+		}
+	}
+	return append(slice, s)
+}
+
 // normalizePath ensures the path starts with "<ontologyRoot>/" and ends with ".md".
 func normalizePath(ontologyRoot, path string) string {
 	prefix := ontologyRoot + "/"
@@ -121,6 +150,66 @@ func LearnHandler(gs GitStore, idx SearchIndex, ontologyRoot string) func(contex
 			}
 			facts[i] = f
 			files[path] = SerializeFact(f)
+		}
+
+		// 3b. Dedup check: search for near-duplicates of each new fact.
+		const dedupThreshold = 0.92
+		for i, f := range facts {
+			results, err := idx.Search(SearchQuery{
+				Text:          f.Title + " " + f.Body,
+				MinSimilarity: dedupThreshold,
+				Limit:         1,
+			})
+			if err != nil || len(results) == 0 {
+				continue
+			}
+
+			match := results[0]
+			// Read existing fact to get its full metadata (refs, etc.)
+			existingContent, readErr := gs.ReadFile(match.Path)
+			if readErr != nil {
+				continue
+			}
+			existingFact, parseErr := ParseFact(match.Path, existingContent)
+			if parseErr != nil {
+				continue
+			}
+
+			// Determine winner by merge rule: higher confidence wins, tie-break by sources.
+			newConf := f.Confidence
+			existConf := existingFact.Confidence
+
+			var merged Fact
+			if newConf > existConf || (newConf == existConf && f.Sources >= existingFact.Sources) {
+				// New fact wins — keep new fact's title and body, write to existing path.
+				merged = Fact{
+					Path:       match.Path,
+					Title:      f.Title,
+					Body:       f.Body,
+					Domain:     unionStrings(f.Domain, existingFact.Domain),
+					Entities:   unionStrings(f.Entities, existingFact.Entities),
+					Confidence: max(newConf, existConf),
+					Sources:    f.Sources + existingFact.Sources,
+					Refs:       appendUnique(unionStrings(f.Refs, existingFact.Refs), match.Path),
+				}
+			} else {
+				// Existing fact wins — keep existing title and body, update metadata.
+				merged = Fact{
+					Path:       match.Path,
+					Title:      existingFact.Title,
+					Body:       existingFact.Body,
+					Domain:     unionStrings(f.Domain, existingFact.Domain),
+					Entities:   unionStrings(f.Entities, existingFact.Entities),
+					Confidence: max(newConf, existConf),
+					Sources:    f.Sources + existingFact.Sources,
+					Refs:       appendUnique(unionStrings(f.Refs, existingFact.Refs), match.Path),
+				}
+			}
+
+			// Remove the original new-fact path from the files map and add the merged one.
+			delete(files, f.Path)
+			files[merged.Path] = SerializeFact(merged)
+			facts[i] = merged
 		}
 
 		// 4. BatchWrite all facts in one commit.

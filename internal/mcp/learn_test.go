@@ -19,6 +19,7 @@ func TestLearnWritesFacts(t *testing.T) {
 	var capturedUpsert FactRecord
 
 	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
+	idx.EXPECT().Search(gomock.Any()).Return(nil, nil).AnyTimes()
 	gs.EXPECT().BatchWrite(gomock.Any(), gomock.Any()).DoAndReturn(func(files map[string]string, msg string) (string, map[string]string, error) {
 		capturedFiles = files
 		blobHashes := make(map[string]string, len(files))
@@ -101,6 +102,7 @@ func TestLearnNormalizesPath(t *testing.T) {
 	var capturedFiles map[string]string
 
 	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
+	idx.EXPECT().Search(gomock.Any()).Return(nil, nil).AnyTimes()
 	gs.EXPECT().BatchWrite(gomock.Any(), gomock.Any()).DoAndReturn(func(files map[string]string, msg string) (string, map[string]string, error) {
 		capturedFiles = files
 		blobHashes := make(map[string]string, len(files))
@@ -179,6 +181,7 @@ func TestLearnMultipleFacts(t *testing.T) {
 	var capturedFiles map[string]string
 
 	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
+	idx.EXPECT().Search(gomock.Any()).Return(nil, nil).AnyTimes()
 	gs.EXPECT().BatchWrite(gomock.Any(), gomock.Any()).DoAndReturn(func(files map[string]string, msg string) (string, map[string]string, error) {
 		capturedFiles = files
 		blobHashes := make(map[string]string, len(files))
@@ -222,6 +225,100 @@ func TestLearnMultipleFacts(t *testing.T) {
 	}
 	if _, ok := capturedFiles["know/b.md"]; !ok {
 		t.Error("missing know/b.md")
+	}
+}
+
+func TestLearnHandler_DedupMergesNearDuplicate(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	gs := NewMockGitStore(ctrl)
+	idx := NewMockSearchIndex(ctrl)
+
+	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
+
+	// Search returns an existing near-duplicate (score=95)
+	idx.EXPECT().Search(gomock.Any()).Return([]SearchResult{
+		{FactWithBody: FactWithBody{
+			FactRecord: FactRecord{
+				Path:       "know/existing.md",
+				Title:      "Camera Review",
+				Domain:     []string{"tech"},
+				Entities:   []string{"camera"},
+				Confidence: 0.8,
+				Sources:    1,
+				Refs:       []string{},
+			},
+			Body: "Great camera with clear video",
+		}, Score: 95},
+	}, nil)
+
+	// Read existing fact to get full content
+	gs.EXPECT().ReadFile("know/existing.md").Return(
+		"---\ndomain: [tech]\nconfidence: 0.8\nsources: 1\nentities: [camera]\nrefs: []\n---\n# Camera Review\n\nGreat camera with clear video\n", nil)
+
+	// BatchWrite should write to know/existing.md (merged), NOT to know/new-camera.md
+	var capturedFiles map[string]string
+	gs.EXPECT().BatchWrite(gomock.Any(), gomock.Any()).DoAndReturn(func(files map[string]string, msg string) (string, map[string]string, error) {
+		capturedFiles = files
+		blobHashes := make(map[string]string, len(files))
+		for path := range files {
+			blobHashes[path] = "blob_" + path
+		}
+		return "commit_merged", blobHashes, nil
+	})
+
+	// Upsert the merged fact
+	var capturedUpsert FactRecord
+	idx.EXPECT().Upsert(gomock.Any()).DoAndReturn(func(r FactRecord) error {
+		capturedUpsert = r
+		return nil
+	})
+
+	gs.EXPECT().Tag(gomock.Any()).Return(nil)
+
+	handler := LearnHandler(gs, idx, "know")
+
+	req := mcpgo.CallToolRequest{}
+	req.Params.Arguments = map[string]interface{}{
+		"moment_name": "dedup-test",
+		"facts": []interface{}{
+			map[string]interface{}{
+				"path":       "new-camera",
+				"title":      "Camera Assessment",
+				"body":       "Camera provides clear video quality",
+				"domain":     []interface{}{"hardware"},
+				"confidence": 0.9,
+				"sources":    1,
+				"entities":   []interface{}{"camera"},
+				"refs":       []interface{}{},
+			},
+		},
+	}
+
+	result, err := handler(context.Background(), req)
+	if err != nil {
+		t.Fatalf("handler error: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("tool error: %v", result.Content)
+	}
+
+	// Should write to existing path, not new path
+	if _, ok := capturedFiles["know/existing.md"]; !ok {
+		t.Fatalf("expected write to know/existing.md, got: %v", capturedFiles)
+	}
+	if _, ok := capturedFiles["know/new-camera.md"]; ok {
+		t.Fatal("should NOT write to know/new-camera.md (merged into existing)")
+	}
+
+	// New fact has higher confidence (0.9 > 0.8), so it wins — its title should be used
+	if capturedUpsert.Path != "know/existing.md" {
+		t.Errorf("upserted path: got %q, want know/existing.md", capturedUpsert.Path)
+	}
+	if capturedUpsert.Confidence != 0.9 {
+		t.Errorf("confidence: got %v, want 0.9", capturedUpsert.Confidence)
+	}
+	if capturedUpsert.Sources != 2 {
+		t.Errorf("sources: got %d, want 2", capturedUpsert.Sources)
 	}
 }
 

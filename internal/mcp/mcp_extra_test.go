@@ -516,6 +516,7 @@ func TestLearnBatchWriteError(t *testing.T) {
 	idx := NewMockSearchIndex(ctrl)
 
 	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
+	idx.EXPECT().Search(gomock.Any()).Return(nil, nil).AnyTimes()
 	gs.EXPECT().BatchWrite(gomock.Any(), gomock.Any()).Return("", nil, fmt.Errorf("write failed"))
 
 	handler := LearnHandler(gs, idx, "know")
@@ -547,6 +548,7 @@ func TestLearnTagCollision(t *testing.T) {
 	idx := NewMockSearchIndex(ctrl)
 
 	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
+	idx.EXPECT().Search(gomock.Any()).Return(nil, nil).AnyTimes()
 	gs.EXPECT().BatchWrite(gomock.Any(), gomock.Any()).Return("abc123", map[string]string{"know/c.md": "blob_c"}, nil)
 	idx.EXPECT().Upsert(gomock.Any()).Return(nil)
 	// First Tag call fails (collision), second succeeds.
@@ -586,6 +588,7 @@ func TestLearnNilDomainEntitiesRefs(t *testing.T) {
 	var capturedFiles map[string]string
 
 	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
+	idx.EXPECT().Search(gomock.Any()).Return(nil, nil).AnyTimes()
 	gs.EXPECT().BatchWrite(gomock.Any(), gomock.Any()).DoAndReturn(func(files map[string]string, msg string) (string, map[string]string, error) {
 		capturedFiles = files
 		blobHashes := make(map[string]string, len(files))
