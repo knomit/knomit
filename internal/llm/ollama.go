@@ -80,17 +80,21 @@ type ollamaStreamLine struct {
 
 // Complete implements LLMAdapter by POSTing to /api/chat with stream: true
 // and reading NDJSON lines until done: true.
-func (a *OllamaAdapter) Complete(ctx context.Context, system string, msgs []Message, onChunk func(string)) (string, error) {
+func (a *OllamaAdapter) Complete(ctx context.Context, system string, msgs []Message, opts CompletionOptions, onChunk func(string)) (string, error) {
 	chatMsgs := make([]ollamaMessage, 0, len(msgs)+1)
 	chatMsgs = append(chatMsgs, ollamaMessage{Role: "system", Content: system})
 	for _, m := range msgs {
 		chatMsgs = append(chatMsgs, ollamaMessage{Role: m.Role, Content: m.Content})
 	}
 
+	format := ""
+	if opts.ForceJSON {
+		format = "json"
+	}
 	reqBody := ollamaChatRequest{
 		Model:    a.model,
 		Messages: chatMsgs,
-		Format:   "json",
+		Format:   format,
 		Stream:   true,
 		Options:  ollamaOptions{NumPredict: defaultMaxTokens},
 	}
@@ -144,3 +148,6 @@ func (a *OllamaAdapter) Complete(ctx context.Context, system string, msgs []Mess
 
 	return accumulated, nil
 }
+
+// Model returns the model name used by this adapter.
+func (a *OllamaAdapter) Model() string { return a.model }

@@ -9,78 +9,6 @@ import (
 	"knomit/internal/store"
 )
 
-// ── buildPrunePrompt ────────────────────────────────────────────────────────
-
-func TestBuildPrunePromptWithRecipePrompt(t *testing.T) {
-	facts := []factForLLM{
-		{File: "know/a.md", Title: "A", Body: "body-a", Domain: []string{"d1"}, Confidence: 0.8, Sources: 1},
-	}
-	out := buildPrunePrompt(facts, "my recipe context", "my step instructions")
-
-	if !strings.Contains(out, "Context: my recipe context") {
-		t.Error("expected recipe context in prompt")
-	}
-	if !strings.Contains(out, "Instructions: my step instructions") {
-		t.Error("expected step instructions in prompt")
-	}
-	if !strings.Contains(out, "know/a.md") {
-		t.Error("expected fact file path in prompt")
-	}
-}
-
-func TestBuildPrunePromptWithoutRecipePrompt(t *testing.T) {
-	facts := []factForLLM{
-		{File: "know/b.md", Title: "B", Body: "body-b"},
-	}
-	out := buildPrunePrompt(facts, "", "")
-
-	if strings.Contains(out, "Context:") {
-		t.Error("should not contain 'Context:' when recipe prompt is empty")
-	}
-	if strings.Contains(out, "Instructions:") {
-		t.Error("should not contain 'Instructions:' when step prompt is empty")
-	}
-	if !strings.Contains(out, "know/b.md") {
-		t.Error("expected fact file path in prompt")
-	}
-}
-
-// ── buildDistillPrompt ──────────────────────────────────────────────────────
-
-func TestBuildDistillPromptWithRecipePrompt(t *testing.T) {
-	facts := []factForLLM{
-		{File: "know/c.md", Title: "C", Body: "body-c", Domain: []string{"d2"}, Confidence: 0.9, Sources: 2},
-	}
-	out := buildDistillPrompt(facts, "distill recipe context", "distill step instructions")
-
-	if !strings.Contains(out, "Context: distill recipe context") {
-		t.Error("expected recipe context in distill prompt")
-	}
-	if !strings.Contains(out, "Instructions: distill step instructions") {
-		t.Error("expected step instructions in distill prompt")
-	}
-	if !strings.Contains(out, "synthesizing facts") {
-		t.Error("expected distill system text in prompt")
-	}
-	if !strings.Contains(out, "know/c.md") {
-		t.Error("expected fact file path in prompt")
-	}
-}
-
-func TestBuildDistillPromptWithoutRecipePrompt(t *testing.T) {
-	facts := []factForLLM{
-		{File: "know/d.md", Title: "D", Body: "body-d"},
-	}
-	out := buildDistillPrompt(facts, "", "")
-
-	if strings.Contains(out, "Context:") {
-		t.Error("should not contain 'Context:' when recipe prompt is empty")
-	}
-	if strings.Contains(out, "Instructions:") {
-		t.Error("should not contain 'Instructions:' when step prompt is empty")
-	}
-}
-
 // ── extractJSON ─────────────────────────────────────────────────────────────
 
 func TestExtractJSONRawJSON(t *testing.T) {
@@ -291,6 +219,44 @@ func TestChunkFactsSingleFact(t *testing.T) {
 	}
 	if len(chunks[0]) != 1 {
 		t.Errorf("expected 1 fact in chunk, got %d", len(chunks[0]))
+	}
+}
+
+func TestExtractJSON_ThinkBlocks(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{
+			name:  "think then JSON",
+			input: "<think>\nLet me analyze these facts...\n</think>\n{\"decisions\": []}",
+			want:  `{"decisions": []}`,
+		},
+		{
+			name:  "think then fenced JSON",
+			input: "<think>\nreasoning here\n</think>\n```json\n{\"decisions\": []}\n```",
+			want:  `{"decisions": []}`,
+		},
+		{
+			name:  "no think block",
+			input: `{"decisions": []}`,
+			want:  `{"decisions": []}`,
+		},
+		{
+			name:  "fenced without think",
+			input: "```json\n{\"foo\": 1}\n```",
+			want:  `{"foo": 1}`,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := extractJSON(tc.input)
+			if got != tc.want {
+				t.Errorf("extractJSON:\ngot:  %q\nwant: %q", got, tc.want)
+			}
+		})
 	}
 }
 

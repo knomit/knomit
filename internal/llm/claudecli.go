@@ -26,7 +26,7 @@ func NewClaudeCLIAdapter(model string) *ClaudeCLIAdapter {
 
 // Complete implements LLMAdapter by running `claude -p` as a subprocess.
 // The full response is returned at once (no streaming).
-func (a *ClaudeCLIAdapter) Complete(ctx context.Context, system string, msgs []Message, onChunk func(string)) (string, error) {
+func (a *ClaudeCLIAdapter) Complete(ctx context.Context, system string, msgs []Message, opts CompletionOptions, onChunk func(string)) (string, error) {
 
 	var userParts []string
 	for _, m := range msgs {
@@ -55,3 +55,6 @@ func (a *ClaudeCLIAdapter) Complete(ctx context.Context, system string, msgs []M
 	}
 	return result, nil
 }
+
+// Model returns the model name used by this adapter.
+func (a *ClaudeCLIAdapter) Model() string { return a.model }

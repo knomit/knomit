@@ -37,10 +37,16 @@ type Message struct {
 	Content string
 }
 
+// CompletionOptions controls provider-specific behaviour for a single call.
+type CompletionOptions struct {
+	ForceJSON bool // when true, constrain output to valid JSON (e.g. Ollama format:"json")
+}
+
 // LLMAdapter is the common interface implemented by every provider.
 // Complete sends a system prompt and conversation to the model, streaming
 // text deltas through onChunk (which may be nil). It returns the full
 // accumulated response or an error.
 type LLMAdapter interface {
-	Complete(ctx context.Context, system string, msgs []Message, onChunk func(string)) (string, error)
+	Complete(ctx context.Context, system string, msgs []Message, opts CompletionOptions, onChunk func(string)) (string, error)
+	Model() string
 }

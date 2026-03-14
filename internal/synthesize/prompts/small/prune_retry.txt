@@ -1,0 +1,19 @@
+You kept every fact and made zero changes. That means you did not actually review them.
+
+Go back and look for ANY of these:
+- Two facts that overlap or repeat the same information
+- A fact that is outdated
+- A fact with wrong confidence
+
+You MUST mark at least one fact as "forget" or propose at least one merge. If every fact is truly unique and correct, explain why in a "keep" decision, but this is rare.
+
+Facts:
+{{.Facts}}
+
+Output JSON:
+{
+  "decisions": [
+    { "path": "...", "action": "keep|forget|update", "confidence": 0.X }
+  ],
+  "merges": [...]
+}

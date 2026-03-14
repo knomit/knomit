@@ -27,7 +27,7 @@ func NewAnthropicAdapter(model string, opts ...option.RequestOption) *AnthropicA
 }
 
 // Complete implements LLMAdapter by opening a streaming Messages request.
-func (a *AnthropicAdapter) Complete(ctx context.Context, system string, msgs []Message, onChunk func(string)) (string, error) {
+func (a *AnthropicAdapter) Complete(ctx context.Context, system string, msgs []Message, opts CompletionOptions, onChunk func(string)) (string, error) {
 	params := anthropic.MessageNewParams{
 		Model:     anthropic.Model(a.model),
 		MaxTokens: defaultMaxTokens,
@@ -71,3 +71,6 @@ func (a *AnthropicAdapter) Complete(ctx context.Context, system string, msgs []M
 
 	return accumulated, nil
 }
+
+// Model returns the model name used by this adapter.
+func (a *AnthropicAdapter) Model() string { return a.model }

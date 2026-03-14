@@ -22,7 +22,7 @@ func NewGeminiCLIAdapter(model string) *GeminiCLIAdapter {
 
 // Complete implements LLMAdapter by running `gemini -p ""` as a subprocess.
 // The full response is returned at once (no streaming).
-func (a *GeminiCLIAdapter) Complete(ctx context.Context, system string, msgs []Message, onChunk func(string)) (string, error) {
+func (a *GeminiCLIAdapter) Complete(ctx context.Context, system string, msgs []Message, opts CompletionOptions, onChunk func(string)) (string, error) {
 
 	var userParts []string
 	for _, m := range msgs {
@@ -54,3 +54,6 @@ func (a *GeminiCLIAdapter) Complete(ctx context.Context, system string, msgs []M
 	}
 	return result, nil
 }
+
+// Model returns the model name used by this adapter.
+func (a *GeminiCLIAdapter) Model() string { return a.model }

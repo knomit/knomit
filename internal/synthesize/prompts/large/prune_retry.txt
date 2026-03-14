@@ -1,0 +1,17 @@
+Your previous response kept every fact and made no changes. This is not useful.
+
+Look more carefully for:
+- Redundant facts that say the same thing differently
+- Outdated facts that are no longer true
+- Facts that should be merged into one
+
+Review these facts again and make real decisions:
+{{.Facts}}
+
+Respond as JSON (no markdown wrapping):
+{
+  "decisions": [
+    { "path": "...", "action": "keep|forget|update", "confidence": 0.X }
+  ],
+  "merges": [...]
+}

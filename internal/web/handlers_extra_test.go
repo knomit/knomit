@@ -513,6 +513,10 @@ func TestHandleSwaggerUI(t *testing.T) {
 
 type fakeAdapter struct{}
 
-func (f *fakeAdapter) Complete(_ context.Context, _ string, _ []llm.Message, _ func(string)) (string, error) {
+func (f *fakeAdapter) Complete(_ context.Context, _ string, _ []llm.Message, _ llm.CompletionOptions, _ func(string)) (string, error) {
 	return "{}", nil
+}
+
+func (f *fakeAdapter) Model() string {
+	return "fake-model"
 }

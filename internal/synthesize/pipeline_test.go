@@ -15,6 +15,7 @@ func TestRunPruneOnly(t *testing.T) {
 	gs := NewMockGitStore(ctrl)
 	idx := NewMockSearchIndex(ctrl)
 	adapter := NewMockLLMAdapter(ctrl)
+	adapter.EXPECT().Model().Return("claude-sonnet-4-20250514").AnyTimes()
 
 	files := map[string]string{
 		"know/test/keep.md":   factContent("Keep fact", "This should be kept."),
@@ -41,7 +42,7 @@ func TestRunPruneOnly(t *testing.T) {
   ],
   "merges": []
 }`
-	adapter.EXPECT().Complete(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(llmResp, nil)
+	adapter.EXPECT().Complete(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(llmResp, nil)
 
 	// forget.md: DeleteFile + idx.Delete
 	gs.EXPECT().DeleteFile("know/test/forget.md", gomock.Any()).Return(nil)
@@ -81,6 +82,7 @@ func TestRunDistillNoEmbeddings(t *testing.T) {
 	gs := NewMockGitStore(ctrl)
 	idx := NewMockSearchIndex(ctrl)
 	adapter := NewMockLLMAdapter(ctrl)
+	adapter.EXPECT().Model().Return("claude-sonnet-4-20250514").AnyTimes()
 
 	// Empty index → no facts → distill returns early without calling LLM.
 	idx.EXPECT().Search(gomock.Any()).Return([]store.SearchResult{}, nil)
@@ -115,6 +117,7 @@ func TestRunUnknownMode(t *testing.T) {
 	gs := NewMockGitStore(ctrl)
 	idx := NewMockSearchIndex(ctrl)
 	adapter := NewMockLLMAdapter(ctrl)
+	adapter.EXPECT().Model().Return("claude-sonnet-4-20250514").AnyTimes()
 
 	recipe := Recipe{
 		Name:  "bad",
@@ -132,6 +135,7 @@ func TestRunDistillWithFacts(t *testing.T) {
 	gs := NewMockGitStore(ctrl)
 	idx := NewMockSearchIndex(ctrl)
 	adapter := NewMockLLMAdapter(ctrl)
+	adapter.EXPECT().Model().Return("claude-sonnet-4-20250514").AnyTimes()
 
 	searchResults := []store.SearchResult{
 		{FactRecord: store.FactRecord{Path: "know/test/a.md", Title: "A fact", Body: "A body.", Domain: []string{"testing"}, Confidence: 0.8, Sources: 1}},
@@ -157,7 +161,7 @@ func TestRunDistillWithFacts(t *testing.T) {
   ],
   "forget": ["know/test/a.md"]
 }`
-	adapter.EXPECT().Complete(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(llmResp, nil)
+	adapter.EXPECT().Complete(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(llmResp, nil)
 
 	// Write synthesized fact
 	var synthWritten bool
@@ -205,12 +209,75 @@ func TestRunDistillWithFacts(t *testing.T) {
 	}
 }
 
+func TestRunDistillRetryOnPassive(t *testing.T) {
+	ctrl := gomock.NewController(t)
+
+	gs := NewMockGitStore(ctrl)
+	idx := NewMockSearchIndex(ctrl)
+	adapter := NewMockLLMAdapter(ctrl)
+	adapter.EXPECT().Model().Return("qwen3:8b").AnyTimes()
+
+	searchResults := []store.SearchResult{
+		{FactRecord: store.FactRecord{Path: "know/test/a.md", Title: "A fact", Body: "A body.", Domain: []string{"testing"}, Confidence: 0.8, Sources: 1}},
+		{FactRecord: store.FactRecord{Path: "know/test/b.md", Title: "B fact", Body: "B body.", Domain: []string{"testing"}, Confidence: 0.8, Sources: 1}},
+	}
+	idx.EXPECT().Search(gomock.Any()).Return(searchResults, nil)
+	idx.EXPECT().ClusterFacts(gomock.Any(), gomock.Any()).Return(store.ClusterResult{
+		Clusters: map[int][]string{0: {"know/test/a.md", "know/test/b.md"}},
+	}, nil)
+
+	// First call: passive (echoes input path, no forget)
+	passiveResp := `{"synthesize": [{"path": "know/test/a.md", "title": "A", "body": "A", "domain": [], "confidence": 0.8, "entities": [], "refs": []}], "forget": []}`
+	// Second call (retry): active (new synthesized fact + forget)
+	activeResp := `{
+  "synthesize": [{"path": "know/test/synth.md", "title": "Insight", "body": "Combined.", "domain": ["testing"], "confidence": 0.9, "entities": [], "refs": ["know/test/a.md", "know/test/b.md"]}],
+  "forget": ["know/test/a.md"]
+}`
+
+	gomock.InOrder(
+		adapter.EXPECT().Complete(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(passiveResp, nil),
+		adapter.EXPECT().Complete(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(activeResp, nil),
+	)
+
+	// Write synthesized fact
+	gs.EXPECT().WriteFile("know/test/synth.md", gomock.Any(), gomock.Any()).Return(nil)
+	gs.EXPECT().HeadCommit().Return("deadbeef", nil)
+	idx.EXPECT().Upsert(gomock.Any()).Return(nil)
+	idx.EXPECT().GraphAddDerivedFrom("know/test/synth.md", gomock.Any()).Return(nil)
+
+	// Delete forgotten fact
+	gs.EXPECT().DeleteFile("know/test/a.md", gomock.Any()).Return(nil)
+	idx.EXPECT().Delete("know/test/a.md").Return(nil)
+
+	// Tag
+	gs.EXPECT().Tag(gomock.Any()).Return(nil)
+
+	recipe := Recipe{
+		Name:  "distill-retry",
+		Steps: []RecipeStep{{Mode: "distill"}},
+	}
+
+	var retrySeen bool
+	err := Run(context.Background(), gs, idx, nil, adapter, recipe, func(e ProgressEvent) {
+		if e.Phase == "retry" {
+			retrySeen = true
+		}
+	})
+	if err != nil {
+		t.Fatalf("Run distill retry: %v", err)
+	}
+	if !retrySeen {
+		t.Error("expected 'retry' phase event from distill passive detection")
+	}
+}
+
 func TestRunNilProgress(t *testing.T) {
 	ctrl := gomock.NewController(t)
 
 	gs := NewMockGitStore(ctrl)
 	idx := NewMockSearchIndex(ctrl)
 	adapter := NewMockLLMAdapter(ctrl)
+	adapter.EXPECT().Model().Return("claude-sonnet-4-20250514").AnyTimes()
 
 	// Empty store, no facts — prune returns early after gather (no Tag call).
 	gs.EXPECT().ListAll().Return([]string{}, nil)
