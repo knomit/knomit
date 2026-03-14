@@ -19,11 +19,14 @@ func TestLearnWritesFacts(t *testing.T) {
 	var capturedUpsert FactRecord
 
 	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
-	gs.EXPECT().BatchWrite(gomock.Any(), gomock.Any()).DoAndReturn(func(files map[string]string, msg string) error {
+	gs.EXPECT().BatchWrite(gomock.Any(), gomock.Any()).DoAndReturn(func(files map[string]string, msg string) (string, map[string]string, error) {
 		capturedFiles = files
-		return nil
+		blobHashes := make(map[string]string, len(files))
+		for path := range files {
+			blobHashes[path] = "blob_" + path
+		}
+		return "abc123def456", blobHashes, nil
 	})
-	gs.EXPECT().HeadCommit().Return("abc123def456", nil)
 	gs.EXPECT().Tag(gomock.Any()).Return(nil)
 	idx.EXPECT().Upsert(gomock.Any()).DoAndReturn(func(r FactRecord) error {
 		capturedUpsert = r
@@ -98,11 +101,14 @@ func TestLearnNormalizesPath(t *testing.T) {
 	var capturedFiles map[string]string
 
 	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
-	gs.EXPECT().BatchWrite(gomock.Any(), gomock.Any()).DoAndReturn(func(files map[string]string, msg string) error {
+	gs.EXPECT().BatchWrite(gomock.Any(), gomock.Any()).DoAndReturn(func(files map[string]string, msg string) (string, map[string]string, error) {
 		capturedFiles = files
-		return nil
+		blobHashes := make(map[string]string, len(files))
+		for path := range files {
+			blobHashes[path] = "blob_" + path
+		}
+		return "abc123def456", blobHashes, nil
 	})
-	gs.EXPECT().HeadCommit().Return("abc123def456", nil)
 	gs.EXPECT().Tag(gomock.Any()).Return(nil)
 	idx.EXPECT().Upsert(gomock.Any()).Return(nil)
 
@@ -173,11 +179,14 @@ func TestLearnMultipleFacts(t *testing.T) {
 	var capturedFiles map[string]string
 
 	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
-	gs.EXPECT().BatchWrite(gomock.Any(), gomock.Any()).DoAndReturn(func(files map[string]string, msg string) error {
+	gs.EXPECT().BatchWrite(gomock.Any(), gomock.Any()).DoAndReturn(func(files map[string]string, msg string) (string, map[string]string, error) {
 		capturedFiles = files
-		return nil
+		blobHashes := make(map[string]string, len(files))
+		for path := range files {
+			blobHashes[path] = "blob_" + path
+		}
+		return "abc123def456", blobHashes, nil
 	})
-	gs.EXPECT().HeadCommit().Return("abc123def456", nil)
 	gs.EXPECT().Tag(gomock.Any()).Return(nil)
 	idx.EXPECT().Upsert(gomock.Any()).Return(nil).Times(2)
 

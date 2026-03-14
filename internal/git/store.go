@@ -21,6 +21,7 @@
 package git
 
 import (
+	"database/sql"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -30,19 +31,21 @@ import (
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-billy/v5/memfs"
+	_ "github.com/mattn/go-sqlite3"
 
 	"github.com/rs/zerolog/log"
-	"knomit/internal/gitstorer"
+	storegit "knomit/internal/store/git"
 )
 
 // Store wraps go-git with knomit's logical operations.
 // All fact reads/writes go through go-git's plumbing API — NO filesystem reads/writes.
 type Store struct {
-	mu     sync.Mutex
-	repo   *gogit.Repository
-	storer *gitstorer.Storer
-	dbPath string
-	branch string // e.g. "agent/laptop"
+	mu      sync.Mutex
+	repo    *gogit.Repository
+	storer  *storegit.Storer
+	ownsDB  bool    // true when Init/Open opened the DB (legacy path)
+	ownedDB *sql.DB // non-nil when ownsDB is true
+	branch  string  // e.g. "agent/laptop"
 }
 
 // DirEntry represents a single entry in a knomit directory listing.
@@ -64,54 +67,40 @@ type SyncResult struct {
 	Ahead  int
 }
 
-// Init creates a new knomit git store at dbPath.
-// It initialises the SQLite-backed git repository, sets git config, creates
-// an initial commit with know.md, and creates the agent branch.
-func Init(dbPath string) (*Store, error) {
-	// 1. Create parent directory if it doesn't exist.
-	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
-		return nil, fmt.Errorf("git.Init: mkdir: %w", err)
-	}
+// gitSchema is the minimal schema for standalone Init/Open (legacy path).
+const gitSchema = `
+CREATE TABLE IF NOT EXISTS objects (hash TEXT NOT NULL, type INTEGER NOT NULL, size INTEGER NOT NULL, data BLOB NOT NULL, PRIMARY KEY (hash, type));
+CREATE TABLE IF NOT EXISTS refs (name TEXT PRIMARY KEY, target TEXT NOT NULL, is_symbolic INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value BLOB NOT NULL);
+`
 
-	// 2. Open the SQLite storer.
-	s, err := gitstorer.New(dbPath)
-	if err != nil {
-		return nil, fmt.Errorf("git.Init: storer: %w", err)
-	}
-
-	// 3. Initialise git with memfs worktree (memfs is never used directly).
+// InitWithStorer creates a new knomit git store using an externally provided storer.
+// The storer's schema must already be applied.
+func InitWithStorer(s *storegit.Storer) (*Store, error) {
 	repo, err := gogit.Init(s, memfs.New())
 	if err != nil {
-		s.Close()
 		return nil, fmt.Errorf("git.Init: git init: %w", err)
 	}
 
-	// 4. Set git config.
 	cfg, err := repo.Config()
 	if err != nil {
-		s.Close()
 		return nil, fmt.Errorf("git.Init: read config: %w", err)
 	}
 	cfg.User.Name = "knomit"
 	cfg.User.Email = "knomit@local"
-	// Disable GPG signing via raw config section.
 	if cfg.Raw != nil {
 		cfg.Raw.Section("commit").SetOption("gpgsign", "false")
 	}
 	if err := repo.SetConfig(cfg); err != nil {
-		s.Close()
 		return nil, fmt.Errorf("git.Init: set config: %w", err)
 	}
 
-	// 5. Create initial commit containing know.md.
 	rootManifest := "# Knowledge Base\n\nRoot manifest.\n"
-	initCommitHash, err := writeFileToStore(s, plumbing.ZeroHash, "know.md", rootManifest, "init: create knowledge base")
+	initCommitHash, _, err := writeFileToStore(s, plumbing.ZeroHash, "know.md", rootManifest, "init: create knowledge base")
 	if err != nil {
-		s.Close()
 		return nil, fmt.Errorf("git.Init: initial commit: %w", err)
 	}
 
-	// 6. Determine agent branch name.
 	hostname, err := os.Hostname()
 	if err != nil {
 		hostname = "local"
@@ -119,70 +108,115 @@ func Init(dbPath string) (*Store, error) {
 	agentBranch := "agent/" + hostname
 	agentRefName := plumbing.NewBranchReferenceName(agentBranch)
 
-	// 7. Create the agent branch ref pointing to the initial commit.
 	agentRef := plumbing.NewHashReference(agentRefName, initCommitHash)
 	if err := s.SetReference(agentRef); err != nil {
-		s.Close()
 		return nil, fmt.Errorf("git.Init: set agent ref: %w", err)
 	}
 
-	// Update HEAD to point to the agent branch.
 	headRef := plumbing.NewSymbolicReference(plumbing.HEAD, agentRefName)
 	if err := s.SetReference(headRef); err != nil {
-		s.Close()
 		return nil, fmt.Errorf("git.Init: set HEAD: %w", err)
 	}
 
-	// Also ensure main ref exists for the initial commit.
 	mainRef := plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), initCommitHash)
 	if err := s.SetReference(mainRef); err != nil {
-		s.Close()
 		return nil, fmt.Errorf("git.Init: set main ref: %w", err)
 	}
 
-	log.Info().Str("branch", agentBranch).Str("db", dbPath).Msg("git store initialized")
+	log.Info().Str("branch", agentBranch).Msg("git store initialized")
 	return &Store{
 		repo:   repo,
 		storer: s,
-		dbPath: dbPath,
 		branch: agentBranch,
 	}, nil
 }
 
-// Open opens an existing knomit git store at dbPath.
-func Open(dbPath string) (*Store, error) {
-	s, err := gitstorer.New(dbPath)
-	if err != nil {
-		return nil, fmt.Errorf("git.Open: storer: %w", err)
-	}
-
+// OpenWithStorer opens an existing knomit git store using an externally provided storer.
+func OpenWithStorer(s *storegit.Storer) (*Store, error) {
 	repo, err := gogit.Open(s, memfs.New())
 	if err != nil {
-		s.Close()
 		return nil, fmt.Errorf("git.Open: git open: %w", err)
 	}
 
-	// Read HEAD to determine current branch name.
 	head, err := repo.Head()
 	if err != nil {
-		s.Close()
 		return nil, fmt.Errorf("git.Open: read HEAD: %w", err)
 	}
 
 	branch := strings.TrimPrefix(head.Name().String(), "refs/heads/")
 
-	log.Info().Str("branch", branch).Str("db", dbPath).Msg("git store opened")
+	log.Info().Str("branch", branch).Msg("git store opened")
 	return &Store{
 		repo:   repo,
 		storer: s,
-		dbPath: dbPath,
 		branch: branch,
 	}, nil
 }
 
-// Close closes the underlying gitstorer.
+// Init creates a new knomit git store at dbPath.
+// Deprecated: use store.Open + InitWithStorer instead.
+func Init(dbPath string) (*Store, error) {
+	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
+		return nil, fmt.Errorf("git.Init: mkdir: %w", err)
+	}
+
+	dsn := dbPath
+	if dbPath != ":memory:" {
+		dsn = dbPath + "?_journal_mode=WAL&_busy_timeout=5000"
+	}
+	db, err := sql.Open("sqlite3", dsn)
+	if err != nil {
+		return nil, fmt.Errorf("git.Init: open db: %w", err)
+	}
+	if _, err := db.Exec(gitSchema); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("git.Init: schema: %w", err)
+	}
+
+	s := storegit.NewStorer(db)
+	store, err := InitWithStorer(s)
+	if err != nil {
+		db.Close()
+		return nil, err
+	}
+	store.ownsDB = true
+	store.ownedDB = db
+	return store, nil
+}
+
+// Open opens an existing knomit git store at dbPath.
+// Deprecated: use store.Open + OpenWithStorer instead.
+func Open(dbPath string) (*Store, error) {
+	dsn := dbPath
+	if dbPath != ":memory:" {
+		dsn = dbPath + "?_journal_mode=WAL&_busy_timeout=5000"
+	}
+	db, err := sql.Open("sqlite3", dsn)
+	if err != nil {
+		return nil, fmt.Errorf("git.Open: open db: %w", err)
+	}
+	if _, err := db.Exec(gitSchema); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("git.Open: schema: %w", err)
+	}
+
+	s := storegit.NewStorer(db)
+	store, err := OpenWithStorer(s)
+	if err != nil {
+		db.Close()
+		return nil, err
+	}
+	store.ownsDB = true
+	store.ownedDB = db
+	return store, nil
+}
+
+// Close closes the underlying database if this Store owns it.
 func (s *Store) Close() error {
-	return s.storer.Close()
+	if s.ownsDB && s.ownedDB != nil {
+		return s.ownedDB.Close()
+	}
+	return nil
 }
 
 // Branch returns the agent branch name (e.g. "agent/laptop").
@@ -199,7 +233,7 @@ func (s *Store) HeadCommit() (string, error) {
 	return headRef.Hash().String(), nil
 }
 
-// Storer returns the underlying gitstorer (used by the git remote handler).
-func (s *Store) Storer() *gitstorer.Storer {
+// Storer returns the underlying storer (used by the git remote handler).
+func (s *Store) Storer() *storegit.Storer {
 	return s.storer
 }

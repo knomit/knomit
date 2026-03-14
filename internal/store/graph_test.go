@@ -5,10 +5,26 @@ import (
 	"fmt"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	sqlite3 "github.com/mattn/go-sqlite3"
 )
+
+// insertBlob inserts a fake blob into the objects table for testing.
+// content is the full raw file content (frontmatter + body).
+// If content looks like a plain body (no frontmatter), it is wrapped.
+func insertBlob(t *testing.T, db *sql.DB, hash, content string) {
+	t.Helper()
+	if !strings.HasPrefix(content, "---\n") {
+		content = "---\ndomain: [test]\nconfidence: 0.9\nsources: 1\n---\n# Title\n\n" + content
+	}
+	_, err := db.Exec(`INSERT OR IGNORE INTO objects(hash, type, size, data) VALUES (?, ?, ?, ?)`,
+		hash, BlobObjectType, len(content), []byte(content))
+	if err != nil {
+		t.Fatalf("insertBlob %s: %v", hash, err)
+	}
+}
 
 // stubEmbedder4d returns deterministic 4-dimensional embeddings based on the text.
 type stubEmbedder4d struct{}
@@ -229,9 +245,11 @@ func TestGraphBuildSimilarityEdges(t *testing.T) {
 	defer idx.Close()
 
 	idx.SetEmbedder(&stubEmbedder4d{})
+	insertBlob(t, idx.db, "hash_alpha", "alpha")
+	insertBlob(t, idx.db, "hash_beta", "beta")
 	facts := []FactRecord{
-		{Path: "know/a.md", Title: "A", Body: "alpha", Domain: []string{"test"}, Entities: []string{}, Refs: []string{}, CommitHash: "abc"},
-		{Path: "know/b.md", Title: "B", Body: "beta", Domain: []string{"test"}, Entities: []string{}, Refs: []string{}, CommitHash: "abc"},
+		{Path: "know/a.md", Title: "A", BlobHash: "hash_alpha", Domain: []string{"test"}, Entities: []string{}, Refs: []string{}, CommitHash: "abc"},
+		{Path: "know/b.md", Title: "B", BlobHash: "hash_beta", Domain: []string{"test"}, Entities: []string{}, Refs: []string{}, CommitHash: "abc"},
 	}
 	for _, f := range facts {
 		if err := idx.Upsert(f); err != nil {
@@ -309,9 +327,10 @@ func TestUpsertSyncsGraph(t *testing.T) {
 	}
 	defer idx.Close()
 	idx.SetEmbedder(&stubEmbedder4d{})
+	insertBlob(t, idx.db, "hash_test", "test content")
 
 	err = idx.Upsert(FactRecord{
-		Path: "know/eng/test.md", Title: "Test",
+		Path: "know/eng/test.md", Title: "Test", BlobHash: "hash_test",
 		Domain: []string{"engineering/software"}, Entities: []string{"Go"},
 		Refs: []string{}, CommitHash: "abc",
 	})
@@ -341,9 +360,10 @@ func TestDeleteSyncsGraph(t *testing.T) {
 	}
 	defer idx.Close()
 	idx.SetEmbedder(&stubEmbedder4d{})
+	insertBlob(t, idx.db, "hash_del", "delete test")
 
 	_ = idx.Upsert(FactRecord{
-		Path: "know/test.md", Title: "Test",
+		Path: "know/test.md", Title: "Test", BlobHash: "hash_del",
 		Domain: []string{"eng"}, Entities: []string{"Go"},
 		Refs: []string{}, CommitHash: "abc",
 	})
@@ -370,12 +390,15 @@ func TestClusterFactsLouvain(t *testing.T) {
 	}
 	defer idx.Close()
 	idx.SetEmbedder(&stubEmbedder4d{})
+	insertBlob(t, idx.db, "hash_alpha", "alpha")
+	insertBlob(t, idx.db, "hash_beta", "beta")
+	insertBlob(t, idx.db, "hash_gamma", "gamma")
 
 	// Create facts that share entities (will form a cluster via TAGGED edges)
 	facts := []FactRecord{
-		{Path: "know/a.md", Title: "A", Body: "alpha", Domain: []string{"eng"}, Entities: []string{"Go", "SQLite"}, Refs: []string{}, CommitHash: "abc"},
-		{Path: "know/b.md", Title: "B", Body: "beta", Domain: []string{"eng"}, Entities: []string{"Go", "SQLite"}, Refs: []string{}, CommitHash: "abc"},
-		{Path: "know/c.md", Title: "C", Body: "gamma", Domain: []string{"eng"}, Entities: []string{"Go"}, Refs: []string{}, CommitHash: "abc"},
+		{Path: "know/a.md", Title: "A", BlobHash: "hash_alpha", Domain: []string{"eng"}, Entities: []string{"Go", "SQLite"}, Refs: []string{}, CommitHash: "abc"},
+		{Path: "know/b.md", Title: "B", BlobHash: "hash_beta", Domain: []string{"eng"}, Entities: []string{"Go", "SQLite"}, Refs: []string{}, CommitHash: "abc"},
+		{Path: "know/c.md", Title: "C", BlobHash: "hash_gamma", Domain: []string{"eng"}, Entities: []string{"Go"}, Refs: []string{}, CommitHash: "abc"},
 	}
 	for _, f := range facts {
 		if err := idx.Upsert(f); err != nil {
@@ -408,14 +431,16 @@ func TestSearchWithGraphExpansion(t *testing.T) {
 	}
 	defer idx.Close()
 	idx.SetEmbedder(&stubEmbedder4d{})
+	insertBlob(t, idx.db, "hash_alpha", "alpha")
+	insertBlob(t, idx.db, "hash_beta", "beta")
 
 	_ = idx.Upsert(FactRecord{
-		Path: "know/a.md", Title: "A", Body: "alpha",
+		Path: "know/a.md", Title: "A", BlobHash: "hash_alpha",
 		Domain: []string{"eng"}, Entities: []string{"Go"},
 		Refs: []string{}, CommitHash: "abc",
 	})
 	_ = idx.Upsert(FactRecord{
-		Path: "know/b.md", Title: "B", Body: "beta",
+		Path: "know/b.md", Title: "B", BlobHash: "hash_beta",
 		Domain: []string{"eng"}, Entities: []string{"Go"},
 		Refs: []string{}, CommitHash: "abc",
 	})
@@ -441,8 +466,9 @@ func TestSearchWithGraphExpansion(t *testing.T) {
 }
 
 type mockGitReader struct {
-	files map[string]string
-	head  string
+	files      map[string]string
+	blobHashes map[string]string // path → blob hash
+	head       string
 }
 
 func (m *mockGitReader) DiffFiles(from string) (added, modified, deleted []string, err error) {
@@ -453,6 +479,19 @@ func (m *mockGitReader) ReadFile(path string) (string, error) {
 		return c, nil
 	}
 	return "", fmt.Errorf("not found: %s", path)
+}
+func (m *mockGitReader) ReadFileWithHash(path string) (string, string, error) {
+	c, ok := m.files[path]
+	if !ok {
+		return "", "", fmt.Errorf("not found: %s", path)
+	}
+	hash := "blob_" + path
+	if m.blobHashes != nil {
+		if h, ok := m.blobHashes[path]; ok {
+			hash = h
+		}
+	}
+	return c, hash, nil
 }
 func (m *mockGitReader) HeadCommit() (string, error) { return m.head, nil }
 func (m *mockGitReader) ListAll() ([]string, error) {
@@ -471,10 +510,15 @@ func TestSyncRebuildsGraph(t *testing.T) {
 	defer idx.Close()
 	idx.SetEmbedder(&stubEmbedder4d{})
 
+	contentA := "---\ndomain: [eng]\nentities: [Go]\nconfidence: 0.9\nsources: 1\n---\n# A\n\nBody A"
+	contentB := "---\ndomain: [eng]\nentities: [Rust]\nconfidence: 0.8\nsources: 1\n---\n# B\n\nBody B"
+	insertBlob(t, idx.db, "blob_know/a.md", contentA)
+	insertBlob(t, idx.db, "blob_know/b.md", contentB)
+
 	git := &mockGitReader{
 		files: map[string]string{
-			"know/a.md": "---\ndomain: [eng]\nentities: [Go]\nconfidence: 0.9\nsources: 1\n---\n# A\n\nBody A",
-			"know/b.md": "---\ndomain: [eng]\nentities: [Rust]\nconfidence: 0.8\nsources: 1\n---\n# B\n\nBody B",
+			"know/a.md": contentA,
+			"know/b.md": contentB,
 		},
 		head: "abc123def456",
 	}

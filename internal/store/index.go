@@ -15,6 +15,7 @@ package store
 import (
 	"database/sql"
 	"fmt"
+	"strings"
 )
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -37,17 +38,23 @@ func WithVecDimension(d int) Option {
 // Domain types
 // ────────────────────────────────────────────────────────────────────────────
 
-// FactRecord represents a single fact stored in the index.
+// FactRecord is the stored record — no body, just a blob_hash pointer.
 type FactRecord struct {
 	Path       string   `json:"path"`
 	Title      string   `json:"title"`
-	Body       string   `json:"body"`
+	BlobHash   string   `json:"blob_hash"`
 	Domain     []string `json:"domain"`
 	Entities   []string `json:"entities"`
 	Confidence float64  `json:"confidence"`
 	Sources    int      `json:"sources"`
 	Refs       []string `json:"refs"`
 	CommitHash string   `json:"commit_hash,omitempty"`
+}
+
+// FactWithBody is returned by read operations that hydrate the body from git objects.
+type FactWithBody struct {
+	FactRecord
+	Body string `json:"body"`
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -66,6 +73,8 @@ type GitReader interface {
 	DiffFiles(fromCommit string) (added, modified, deleted []string, err error)
 	// ReadFile reads the content of path from the HEAD commit.
 	ReadFile(path string) (string, error)
+	// ReadFileWithHash returns both the file content and the blob hash for the given path.
+	ReadFileWithHash(path string) (content string, blobHash string, err error)
 	// HeadCommit returns the hash of the current HEAD commit as a hex string.
 	HeadCommit() (string, error)
 	// ListAll returns paths of all .md files from HEAD.
@@ -80,6 +89,12 @@ type GitReader interface {
 type Index struct {
 	db       *sql.DB
 	embedder Embedder
+}
+
+// newIndex wraps an existing *sql.DB. Schema must already be applied.
+// Used by Service.Open to construct the Index over the shared database.
+func newIndex(db *sql.DB) *Index {
+	return &Index{db: db}
 }
 
 // SetEmbedder attaches an Embedder to the index. When set, Upsert will call
@@ -146,10 +161,43 @@ func (idx *Index) Close() error {
 // Schema DDL
 // ────────────────────────────────────────────────────────────────────────────
 
-// schemaSQL returns the DDL to create all tables: facts (main),
+// extractBody strips YAML frontmatter from raw markdown and returns just the body.
+// It assumes the format: ---\n...\n---\n# Title\n\nBody
+func extractBody(raw []byte) string {
+	content := string(raw)
+	parts := strings.SplitN(content, "---", 3)
+	if len(parts) < 3 {
+		return content
+	}
+	afterFrontmatter := strings.TrimSpace(parts[2])
+	// Skip the title line (first # heading)
+	if idx := strings.Index(afterFrontmatter, "\n"); idx >= 0 {
+		return strings.TrimSpace(afterFrontmatter[idx+1:])
+	}
+	return ""
+}
+
+// schemaSQL returns the DDL to create all tables: objects (git blobs),
+// refs (git references), kv (git config), facts (search index),
 // facts_vec (vec0 embeddings), meta (key-value), and synthesis_log.
 func schemaSQL(vecDim int) string {
 	return fmt.Sprintf(`
+CREATE TABLE IF NOT EXISTS objects (
+    hash TEXT NOT NULL,
+    type INTEGER NOT NULL,
+    size INTEGER NOT NULL,
+    data BLOB NOT NULL,
+    PRIMARY KEY (hash, type)
+);
+CREATE TABLE IF NOT EXISTS refs (
+    name        TEXT PRIMARY KEY,
+    target      TEXT NOT NULL,
+    is_symbolic INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS kv (
+    key   TEXT PRIMARY KEY,
+    value BLOB NOT NULL
+);
 CREATE TABLE IF NOT EXISTS meta (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -163,7 +211,7 @@ CREATE TABLE IF NOT EXISTS synthesis_log (
 CREATE TABLE IF NOT EXISTS facts (
     path        TEXT PRIMARY KEY,
     title       TEXT NOT NULL,
-    body        TEXT NOT NULL,
+    blob_hash   TEXT NOT NULL,
     domain      TEXT NOT NULL,
     entities    TEXT NOT NULL,
     confidence  REAL NOT NULL,

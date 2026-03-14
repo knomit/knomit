@@ -1,4 +1,4 @@
-package gitstorer
+package git
 
 import (
 	"database/sql"
@@ -8,78 +8,47 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/storer"
 	"github.com/go-git/go-git/v5/storage"
-	_ "github.com/mattn/go-sqlite3"
 )
 
-const schema = `
-CREATE TABLE IF NOT EXISTS objects (
-    hash TEXT NOT NULL,
-    type INTEGER NOT NULL,
-    size INTEGER NOT NULL,
-    data BLOB NOT NULL,
-    PRIMARY KEY (hash, type)
-);
-CREATE TABLE IF NOT EXISTS refs (
-    name        TEXT PRIMARY KEY,
-    target      TEXT NOT NULL,
-    is_symbolic INTEGER NOT NULL DEFAULT 0
-);
-CREATE TABLE IF NOT EXISTS kv (
-    key   TEXT PRIMARY KEY,
-    value BLOB NOT NULL
-);
-`
-
 var _ storer.EncodedObjectStorer = (*Storer)(nil)
-var _ storage.Storer              = (*Storer)(nil)
+var _ storage.Storer = (*Storer)(nil)
 
-// Storer implements go-git's storage.Storer over SQLite.
+// Storer implements go-git's storage.Storer over a shared SQLite *sql.DB.
+// The caller (store.Service) owns the database lifecycle.
 type Storer struct {
 	db      *sql.DB
-	modules map[string]*Storer // lazily populated; keyed by module name
+	tx      *sql.Tx
+	modules map[string]*Storer
 }
 
-// New opens (or creates) a SQLite database at path and initialises the schema.
-// Use ":memory:" for an in-memory database (useful in tests).
-func New(path string) (*Storer, error) {
-	dsn := path
-	if path != ":memory:" {
-		dsn = path + "?_journal_mode=WAL&_busy_timeout=5000"
-	}
-	db, err := sql.Open("sqlite3", dsn)
-	if err != nil {
-		return nil, fmt.Errorf("gitstorer: open db: %w", err)
-	}
-	s := &Storer{db: db}
-	if err := s.createSchema(); err != nil {
-		db.Close()
-		return nil, err
-	}
-	if err := s.migrate(); err != nil {
-		db.Close()
-		return nil, err
-	}
-	return s, nil
+// execer is the common interface between *sql.DB and *sql.Tx.
+type execer interface {
+	Exec(query string, args ...any) (sql.Result, error)
+	Query(query string, args ...any) (*sql.Rows, error)
+	QueryRow(query string, args ...any) *sql.Row
 }
 
-// Close closes the underlying database connection.
-func (s *Storer) Close() error {
-	return s.db.Close()
+// NewStorer wraps an existing *sql.DB. Schema must already be applied.
+func NewStorer(db *sql.DB) *Storer {
+	return &Storer{db: db}
 }
 
-func (s *Storer) createSchema() error {
-	if _, err := s.db.Exec(schema); err != nil {
-		return fmt.Errorf("gitstorer: create schema: %w", err)
+// conn returns the active transaction if set, otherwise the raw *sql.DB.
+func (s *Storer) conn() execer {
+	if s.tx != nil {
+		return s.tx
 	}
-	return nil
+	return s.db
 }
 
-func (s *Storer) migrate() error {
-	_, err := s.db.Exec(`INSERT OR IGNORE INTO kv (key, value) VALUES ('schema_version', '1')`)
-	if err != nil {
-		return fmt.Errorf("gitstorer: migrate: %w", err)
-	}
-	return nil
+// SetTx routes all subsequent operations through the given transaction.
+func (s *Storer) SetTx(tx *sql.Tx) {
+	s.tx = tx
+}
+
+// ClearTx reverts to using the raw *sql.DB for all operations.
+func (s *Storer) ClearTx() {
+	s.tx = nil
 }
 
 // --- EncodedObjectStorer ---
@@ -94,29 +63,26 @@ func (s *Storer) NewEncodedObject() plumbing.EncodedObject {
 func (s *Storer) SetEncodedObject(obj plumbing.EncodedObject) (plumbing.Hash, error) {
 	t := obj.Type()
 	if t == plumbing.REFDeltaObject || t == plumbing.OFSDeltaObject {
-		return plumbing.ZeroHash, fmt.Errorf("gitstorer: delta objects not supported")
+		return plumbing.ZeroHash, fmt.Errorf("storegit: delta objects not supported")
 	}
 	r, err := obj.Reader()
 	if err != nil {
-		return plumbing.ZeroHash, fmt.Errorf("gitstorer: SetEncodedObject reader: %w", err)
+		return plumbing.ZeroHash, fmt.Errorf("storegit: SetEncodedObject reader: %w", err)
 	}
 	defer r.Close()
 
 	data, err := io.ReadAll(r)
 	if err != nil {
-		return plumbing.ZeroHash, fmt.Errorf("gitstorer: SetEncodedObject read: %w", err)
+		return plumbing.ZeroHash, fmt.Errorf("storegit: SetEncodedObject read: %w", err)
 	}
 
 	hash := obj.Hash()
-	_, err = s.db.Exec(
+	_, err = s.conn().Exec(
 		`INSERT OR IGNORE INTO objects (hash, type, size, data) VALUES (?, ?, ?, ?)`,
-		hash.String(),
-		int(obj.Type()),
-		obj.Size(),
-		data,
+		hash.String(), int(obj.Type()), obj.Size(), data,
 	)
 	if err != nil {
-		return plumbing.ZeroHash, fmt.Errorf("gitstorer: SetEncodedObject insert: %w", err)
+		return plumbing.ZeroHash, fmt.Errorf("storegit: SetEncodedObject insert: %w", err)
 	}
 	return hash, nil
 }
@@ -125,9 +91,9 @@ func (s *Storer) SetEncodedObject(obj plumbing.EncodedObject) (plumbing.Hash, er
 func (s *Storer) EncodedObject(t plumbing.ObjectType, h plumbing.Hash) (plumbing.EncodedObject, error) {
 	var row *sql.Row
 	if t == plumbing.AnyObject {
-		row = s.db.QueryRow(`SELECT type, size, data FROM objects WHERE hash=? LIMIT 1`, h.String())
+		row = s.conn().QueryRow(`SELECT type, size, data FROM objects WHERE hash=? LIMIT 1`, h.String())
 	} else {
-		row = s.db.QueryRow(`SELECT type, size, data FROM objects WHERE hash=? AND type=?`, h.String(), int(t))
+		row = s.conn().QueryRow(`SELECT type, size, data FROM objects WHERE hash=? AND type=?`, h.String(), int(t))
 	}
 	var typ int
 	var size int64
@@ -149,9 +115,9 @@ func (s *Storer) IterEncodedObjects(t plumbing.ObjectType) (storer.EncodedObject
 	var rows *sql.Rows
 	var err error
 	if t == plumbing.AnyObject {
-		rows, err = s.db.Query(`SELECT hash, type, size, data FROM objects`)
+		rows, err = s.conn().Query(`SELECT hash, type, size, data FROM objects`)
 	} else {
-		rows, err = s.db.Query(`SELECT hash, type, size, data FROM objects WHERE type=?`, int(t))
+		rows, err = s.conn().Query(`SELECT hash, type, size, data FROM objects WHERE type=?`, int(t))
 	}
 	if err != nil {
 		return nil, err
@@ -162,11 +128,11 @@ func (s *Storer) IterEncodedObjects(t plumbing.ObjectType) (storer.EncodedObject
 // HasEncodedObject returns nil if the object exists, plumbing.ErrObjectNotFound otherwise.
 func (s *Storer) HasEncodedObject(h plumbing.Hash) error {
 	var count int
-	err := s.db.QueryRow(
+	err := s.conn().QueryRow(
 		`SELECT COUNT(*) FROM objects WHERE hash = ?`, h.String(),
 	).Scan(&count)
 	if err != nil {
-		return fmt.Errorf("gitstorer: HasEncodedObject: %w", err)
+		return fmt.Errorf("storegit: HasEncodedObject: %w", err)
 	}
 	if count == 0 {
 		return plumbing.ErrObjectNotFound
@@ -177,21 +143,21 @@ func (s *Storer) HasEncodedObject(h plumbing.Hash) error {
 // EncodedObjectSize returns the stored size of the object with the given hash.
 func (s *Storer) EncodedObjectSize(h plumbing.Hash) (int64, error) {
 	var size int64
-	err := s.db.QueryRow(
+	err := s.conn().QueryRow(
 		`SELECT size FROM objects WHERE hash = ? LIMIT 1`, h.String(),
 	).Scan(&size)
 	if err == sql.ErrNoRows {
 		return 0, plumbing.ErrObjectNotFound
 	}
 	if err != nil {
-		return 0, fmt.Errorf("gitstorer: EncodedObjectSize: %w", err)
+		return 0, fmt.Errorf("storegit: EncodedObjectSize: %w", err)
 	}
 	return size, nil
 }
 
 // AddAlternate is not supported by this backend.
 func (s *Storer) AddAlternate(remote string) error {
-	return fmt.Errorf("gitstorer: alternates not supported")
+	return fmt.Errorf("storegit: alternates not supported")
 }
 
 // --- objectIter ---

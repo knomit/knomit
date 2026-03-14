@@ -54,16 +54,15 @@ func TestPruneStep(t *testing.T) {
 	adapter.EXPECT().Complete(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(mockResponse, nil)
 
 	// bar: forget — DeleteFile + idx.Delete
-	gs.EXPECT().DeleteFile("know/test/bar.md", gomock.Any()).Return(nil)
+	gs.EXPECT().DeleteFile("know/test/bar.md", gomock.Any()).Return("deadbeef1", nil)
 	idx.EXPECT().Delete("know/test/bar.md").Return(nil)
 
-	// baz: update — WriteFile with updated confidence, HeadCommit, idx.Upsert
+	// baz: update — WriteFile with updated confidence, idx.Upsert
 	var bazWritten string
-	gs.EXPECT().WriteFile("know/test/baz.md", gomock.Any(), gomock.Any()).DoAndReturn(func(path, content, msg string) error {
+	gs.EXPECT().WriteFile("know/test/baz.md", gomock.Any(), gomock.Any()).DoAndReturn(func(path, content, msg string) (string, string, error) {
 		bazWritten = content
-		return nil
+		return "deadbeef2", "blob_baz", nil
 	})
-	gs.EXPECT().HeadCommit().Return("deadbeef", nil)
 	idx.EXPECT().Upsert(gomock.Any()).Return(nil)
 
 	// Tag at end
@@ -144,18 +143,17 @@ func TestPruneStepWithMerge(t *testing.T) {
 
 	// Write merged fact
 	var mergedWritten bool
-	gs.EXPECT().WriteFile("know/test/ab-merged.md", gomock.Any(), gomock.Any()).DoAndReturn(func(path, content, msg string) error {
+	gs.EXPECT().WriteFile("know/test/ab-merged.md", gomock.Any(), gomock.Any()).DoAndReturn(func(path, content, msg string) (string, string, error) {
 		mergedWritten = true
-		return nil
+		return "deadbeef", "blob_merged", nil
 	})
-	gs.EXPECT().HeadCommit().Return("deadbeef", nil)
 	idx.EXPECT().Upsert(gomock.Any()).Return(nil)
 	idx.EXPECT().GraphAddDerivedFrom("know/test/ab-merged.md", gomock.Any()).Return(nil)
 
 	// Delete source facts
-	gs.EXPECT().DeleteFile("know/test/a.md", gomock.Any()).Return(nil)
+	gs.EXPECT().DeleteFile("know/test/a.md", gomock.Any()).Return("deadbeef2", nil)
 	idx.EXPECT().Delete("know/test/a.md").Return(nil)
-	gs.EXPECT().DeleteFile("know/test/b.md", gomock.Any()).Return(nil)
+	gs.EXPECT().DeleteFile("know/test/b.md", gomock.Any()).Return("deadbeef3", nil)
 	idx.EXPECT().Delete("know/test/b.md").Return(nil)
 
 	// Tag
@@ -423,7 +421,7 @@ func TestPruneStep_RetryOnPassive(t *testing.T) {
 		adapter.EXPECT().Complete(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(activeResponse, nil),
 	)
 
-	gs.EXPECT().DeleteFile("know/test/bar.md", gomock.Any()).Return(nil)
+	gs.EXPECT().DeleteFile("know/test/bar.md", gomock.Any()).Return("deadbeef", nil)
 	idx.EXPECT().Delete("know/test/bar.md").Return(nil)
 	gs.EXPECT().Tag(gomock.Any()).Return(nil)
 

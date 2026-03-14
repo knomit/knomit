@@ -58,24 +58,24 @@ func serveCmd() *cobra.Command {
 				Str("llm_model", cfg.LLM.Model).
 				Msg("config loaded")
 
-			// 1. Open or init GitStore
-			gitDBPath := filepath.Join(cfg.RepoPath, "knomit.git.db")
-			gs, err := git.Open(gitDBPath)
+			// 1. Open unified store (single SQLite database)
+			dbPath := filepath.Join(cfg.RepoPath, "knomit.db")
+			svc, err := store.Open(dbPath)
 			if err != nil {
-				gs, err = git.Init(gitDBPath)
+				return fmt.Errorf("open store: %w", err)
+			}
+			defer svc.Close()
+
+			// 2. Open or init git on top of the shared storer
+			gs, err := git.OpenWithStorer(svc.GitStorer())
+			if err != nil {
+				gs, err = git.InitWithStorer(svc.GitStorer())
 				if err != nil {
-					return fmt.Errorf("open/init git store: %w", err)
+					return fmt.Errorf("init git: %w", err)
 				}
 			}
-			defer gs.Close()
 
-			// 2. Open SearchIndex
-			idxDBPath := filepath.Join(cfg.RepoPath, "knomit.index.db")
-			idx, err := store.New(idxDBPath)
-			if err != nil {
-				return fmt.Errorf("open index: %w", err)
-			}
-			defer idx.Close()
+			idx := svc.Index()
 
 			// 3. Ensure embedder model files are present (downloads if missing), then load.
 			var embedder *embeddings.Embedder
@@ -184,15 +184,18 @@ func initCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("load config: %w", err)
 			}
-			gitDBPath := filepath.Join(cfg.RepoPath, "knomit.git.db")
 			if err := os.MkdirAll(cfg.RepoPath, 0o755); err != nil {
 				return err
 			}
-			gs, err := git.Init(gitDBPath)
+			dbPath := filepath.Join(cfg.RepoPath, "knomit.db")
+			svc, err := store.Open(dbPath)
 			if err != nil {
-				return fmt.Errorf("init: %w", err)
+				return fmt.Errorf("open store: %w", err)
 			}
-			gs.Close()
+			defer svc.Close()
+			if _, err := git.InitWithStorer(svc.GitStorer()); err != nil {
+				return fmt.Errorf("init git: %w", err)
+			}
 			fmt.Printf("Initialized knomit repo at %s\n", cfg.RepoPath)
 			return nil
 		},
@@ -202,16 +205,14 @@ func initCmd() *cobra.Command {
 func resetCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "reset",
-		Short: "Wipe all data (git store + search index) and start fresh",
+		Short: "Wipe all data and start fresh",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := config.Load()
 			if err != nil {
 				return fmt.Errorf("load config: %w", err)
 			}
-			gitDB := filepath.Join(cfg.RepoPath, "knomit.git.db")
-			idxDB := filepath.Join(cfg.RepoPath, "knomit.index.db")
-
-			for _, f := range []string{gitDB, idxDB} {
+			dbFile := filepath.Join(cfg.RepoPath, "knomit.db")
+			for _, f := range []string{dbFile} {
 				if err := os.Remove(f); err != nil && !os.IsNotExist(err) {
 					return fmt.Errorf("remove %s: %w", f, err)
 				}
@@ -220,7 +221,7 @@ func resetCmd() *cobra.Command {
 				os.Remove(f + "-shm")
 			}
 
-			log.Info().Str("repo", cfg.RepoPath).Msg("all databases removed")
+			log.Info().Str("repo", cfg.RepoPath).Msg("database removed")
 			return nil
 		},
 	}
@@ -235,16 +236,17 @@ func rebuildCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("load config: %w", err)
 			}
-			gs, err := git.Open(filepath.Join(cfg.RepoPath, "knomit.git.db"))
+			dbPath := filepath.Join(cfg.RepoPath, "knomit.db")
+			svc, err := store.Open(dbPath)
 			if err != nil {
-				return fmt.Errorf("open git store: %w", err)
+				return fmt.Errorf("open store: %w", err)
 			}
-			defer gs.Close()
-			idx, err := store.New(filepath.Join(cfg.RepoPath, "knomit.index.db"))
+			defer svc.Close()
+			gs, err := git.OpenWithStorer(svc.GitStorer())
 			if err != nil {
-				return fmt.Errorf("open index: %w", err)
+				return fmt.Errorf("open git: %w", err)
 			}
-			defer idx.Close()
+			idx := svc.Index()
 			if err := idx.Sync(gs); err != nil {
 				return fmt.Errorf("rebuild: %w", err)
 			}

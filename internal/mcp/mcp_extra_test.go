@@ -50,8 +50,6 @@ func TestParseFactConfidenceOutOfRange(t *testing.T) {
 }
 
 func TestParseFactDomainAsString(t *testing.T) {
-	// go-yaml v3 does not auto-coerce a scalar into []string, so this should
-	// return a YAML parse error.
 	content := "---\ndomain: testing\nconfidence: 0.8\nsources: 1\nentities: []\nrefs: []\n---\n# Scalar Domain\n\nBody.\n"
 	_, err := ParseFact("test/scalar-domain.md", content)
 	if err == nil {
@@ -60,8 +58,6 @@ func TestParseFactDomainAsString(t *testing.T) {
 }
 
 func TestParseFactEntitiesAsString(t *testing.T) {
-	// go-yaml v3 does not auto-coerce a scalar into []string, so this should
-	// return a YAML parse error.
 	content := "---\ndomain: []\nconfidence: 0.8\nsources: 1\nentities: foo\nrefs: []\n---\n# Scalar Entities\n\nBody.\n"
 	_, err := ParseFact("test/scalar-ent.md", content)
 	if err == nil {
@@ -177,7 +173,7 @@ func TestForgetDeleteFileError(t *testing.T) {
 
 	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
 	gs.EXPECT().FileExists("know/fail.md").Return(true, nil)
-	gs.EXPECT().DeleteFile("know/fail.md", gomock.Any()).Return(fmt.Errorf("delete failed"))
+	gs.EXPECT().DeleteFile("know/fail.md", gomock.Any()).Return("", fmt.Errorf("delete failed"))
 
 	handler := ForgetHandler(gs, idx, "know")
 
@@ -368,11 +364,10 @@ func TestUpdateTitleField(t *testing.T) {
 	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
 	gs.EXPECT().FileExists("know/title.md").Return(true, nil)
 	gs.EXPECT().ReadFile("know/title.md").Return(factContent, nil)
-	gs.EXPECT().WriteFile("know/title.md", gomock.Any(), gomock.Any()).DoAndReturn(func(path, content, msg string) error {
+	gs.EXPECT().WriteFile("know/title.md", gomock.Any(), gomock.Any()).DoAndReturn(func(path, content, msg string) (string, string, error) {
 		writtenContent = content
-		return nil
+		return "abc123", "blob_title", nil
 	})
-	gs.EXPECT().HeadCommit().Return("abc123", nil)
 	gs.EXPECT().Tag(gomock.Any()).Return(nil)
 	idx.EXPECT().Upsert(gomock.Any()).Return(nil)
 
@@ -424,11 +419,10 @@ func TestUpdateDomainAndEntities(t *testing.T) {
 	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
 	gs.EXPECT().FileExists("know/de.md").Return(true, nil)
 	gs.EXPECT().ReadFile("know/de.md").Return(factContent, nil)
-	gs.EXPECT().WriteFile("know/de.md", gomock.Any(), gomock.Any()).DoAndReturn(func(path, content, msg string) error {
+	gs.EXPECT().WriteFile("know/de.md", gomock.Any(), gomock.Any()).DoAndReturn(func(path, content, msg string) (string, string, error) {
 		writtenContent = content
-		return nil
+		return "abc123", "blob_de", nil
 	})
-	gs.EXPECT().HeadCommit().Return("abc123", nil)
 	gs.EXPECT().Tag(gomock.Any()).Return(nil)
 	idx.EXPECT().Upsert(gomock.Any()).Return(nil)
 
@@ -522,7 +516,7 @@ func TestLearnBatchWriteError(t *testing.T) {
 	idx := NewMockSearchIndex(ctrl)
 
 	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
-	gs.EXPECT().BatchWrite(gomock.Any(), gomock.Any()).Return(fmt.Errorf("write failed"))
+	gs.EXPECT().BatchWrite(gomock.Any(), gomock.Any()).Return("", nil, fmt.Errorf("write failed"))
 
 	handler := LearnHandler(gs, idx, "know")
 
@@ -553,8 +547,7 @@ func TestLearnTagCollision(t *testing.T) {
 	idx := NewMockSearchIndex(ctrl)
 
 	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
-	gs.EXPECT().BatchWrite(gomock.Any(), gomock.Any()).Return(nil)
-	gs.EXPECT().HeadCommit().Return("abc123", nil)
+	gs.EXPECT().BatchWrite(gomock.Any(), gomock.Any()).Return("abc123", map[string]string{"know/c.md": "blob_c"}, nil)
 	idx.EXPECT().Upsert(gomock.Any()).Return(nil)
 	// First Tag call fails (collision), second succeeds.
 	gs.EXPECT().Tag("learn/collision").Return(fmt.Errorf("tag exists"))
@@ -593,11 +586,14 @@ func TestLearnNilDomainEntitiesRefs(t *testing.T) {
 	var capturedFiles map[string]string
 
 	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
-	gs.EXPECT().BatchWrite(gomock.Any(), gomock.Any()).DoAndReturn(func(files map[string]string, msg string) error {
+	gs.EXPECT().BatchWrite(gomock.Any(), gomock.Any()).DoAndReturn(func(files map[string]string, msg string) (string, map[string]string, error) {
 		capturedFiles = files
-		return nil
+		blobHashes := make(map[string]string, len(files))
+		for path := range files {
+			blobHashes[path] = "blob_" + path
+		}
+		return "abc123", blobHashes, nil
 	})
-	gs.EXPECT().HeadCommit().Return("abc123", nil)
 	gs.EXPECT().Tag(gomock.Any()).Return(nil)
 	idx.EXPECT().Upsert(gomock.Any()).Return(nil)
 

@@ -1,13 +1,15 @@
-package gitstorer_test
+package git_test
 
 import (
+	"database/sql"
 	"testing"
 
 	gogitconfig "github.com/go-git/go-git/v5/config"
 	storagetestutils "github.com/go-git/go-git/v5/storage/test"
+	_ "github.com/mattn/go-sqlite3"
 	"gopkg.in/check.v1"
 
-	"knomit/internal/gitstorer"
+	storegit "knomit/internal/store/git"
 )
 
 // storerSuite wraps BaseStorageSuite so it can be registered with check.v1.
@@ -18,10 +20,20 @@ type storerSuite struct {
 var _ = check.Suite(&storerSuite{})
 
 func (s *storerSuite) SetUpTest(c *check.C) {
-	st, err := gitstorer.New(":memory:")
+	db, err := sql.Open("sqlite3", ":memory:")
 	if err != nil {
 		c.Fatal(err)
 	}
+	schema := `
+CREATE TABLE IF NOT EXISTS objects (hash TEXT NOT NULL, type INTEGER NOT NULL, size INTEGER NOT NULL, data BLOB NOT NULL, PRIMARY KEY (hash, type));
+CREATE TABLE IF NOT EXISTS refs (name TEXT PRIMARY KEY, target TEXT NOT NULL, is_symbolic INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value BLOB NOT NULL);
+`
+	if _, err := db.Exec(schema); err != nil {
+		db.Close()
+		c.Fatal(err)
+	}
+	st := storegit.NewStorer(db)
 	s.BaseStorageSuite = storagetestutils.NewBaseStorageSuite(st)
 }
 

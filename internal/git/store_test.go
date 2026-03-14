@@ -21,7 +21,7 @@ func TestInitAndReadFile(t *testing.T) {
 	defer store.Close()
 
 	content := "---\ndomain: [test]\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# Test Fact\n\nBody.\n"
-	if err := store.WriteFile("know/test/fact.md", content, "test: write fact"); err != nil {
+	if _, _, err := store.WriteFile("know/test/fact.md", content, "test: write fact"); err != nil {
 		t.Fatal(err)
 	}
 	got, err := store.ReadFile("know/test/fact.md")
@@ -66,10 +66,10 @@ func TestListDir(t *testing.T) {
 	}
 	defer store.Close()
 
-	if err := store.WriteFile("know/alpha.md", "---\ndomain: []\nconfidence: 0.5\nsources: 1\nentities: []\nrefs: []\n---\n# Alpha\n\nBody.\n", "add alpha"); err != nil {
+	if _, _, err := store.WriteFile("know/alpha.md", "---\ndomain: []\nconfidence: 0.5\nsources: 1\nentities: []\nrefs: []\n---\n# Alpha\n\nBody.\n", "add alpha"); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.WriteFile("know/sub/beta.md", "---\ndomain: []\nconfidence: 0.5\nsources: 1\nentities: []\nrefs: []\n---\n# Beta\n\nBody.\n", "add beta"); err != nil {
+	if _, _, err := store.WriteFile("know/sub/beta.md", "---\ndomain: []\nconfidence: 0.5\nsources: 1\nentities: []\nrefs: []\n---\n# Beta\n\nBody.\n", "add beta"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -103,10 +103,10 @@ func TestLog(t *testing.T) {
 	}
 	defer store.Close()
 
-	if err := store.WriteFile("know/test.md", "---\ndomain: []\nconfidence: 0.5\nsources: 1\nentities: []\nrefs: []\n---\n# T\n\nv1.\n", "add test"); err != nil {
+	if _, _, err := store.WriteFile("know/test.md", "---\ndomain: []\nconfidence: 0.5\nsources: 1\nentities: []\nrefs: []\n---\n# T\n\nv1.\n", "add test"); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.WriteFile("know/test.md", "---\ndomain: []\nconfidence: 0.5\nsources: 1\nentities: []\nrefs: []\n---\n# T\n\nv2.\n", "update test"); err != nil {
+	if _, _, err := store.WriteFile("know/test.md", "---\ndomain: []\nconfidence: 0.5\nsources: 1\nentities: []\nrefs: []\n---\n# T\n\nv2.\n", "update test"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -128,7 +128,7 @@ func TestOpenRoundtrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	content := "# Hello\n\nWorld.\n"
-	if err := store.WriteFile("know/hello.md", content, "add hello"); err != nil {
+	if _, _, err := store.WriteFile("know/hello.md", content, "add hello"); err != nil {
 		t.Fatal(err)
 	}
 	store.Close()
@@ -173,10 +173,10 @@ func TestWriteFileValidation(t *testing.T) {
 	}
 	defer store.Close()
 
-	if err := store.WriteFile("", "content", "msg"); err == nil {
+	if _, _, err := store.WriteFile("", "content", "msg"); err == nil {
 		t.Fatal("expected error for empty path")
 	}
-	if err := store.WriteFile("../escape.md", "content", "msg"); err == nil {
+	if _, _, err := store.WriteFile("../escape.md", "content", "msg"); err == nil {
 		t.Fatal("expected error for path traversal")
 	}
 }
@@ -214,7 +214,7 @@ func TestDeleteFile(t *testing.T) {
 	defer store.Close()
 
 	// Write a file, then delete it.
-	if err := store.WriteFile("know/todelete.md", "# Delete me\n", "add file"); err != nil {
+	if _, _, err := store.WriteFile("know/todelete.md", "# Delete me\n", "add file"); err != nil {
 		t.Fatal(err)
 	}
 	exists, err := store.FileExists("know/todelete.md")
@@ -225,7 +225,7 @@ func TestDeleteFile(t *testing.T) {
 		t.Fatal("file should exist before deletion")
 	}
 
-	if err := store.DeleteFile("know/todelete.md", "delete: remove todelete.md"); err != nil {
+	if _, err := store.DeleteFile("know/todelete.md", "delete: remove todelete.md"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -246,7 +246,7 @@ func TestTag(t *testing.T) {
 	}
 	defer store.Close()
 
-	if err := store.WriteFile("know/tagged.md", "# Tagged\n", "add tagged file"); err != nil {
+	if _, _, err := store.WriteFile("know/tagged.md", "# Tagged\n", "add tagged file"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -284,10 +284,10 @@ func TestGrep(t *testing.T) {
 	}
 	defer store.Close()
 
-	if err := store.WriteFile("know/alpha.md", "# Alpha\n\nThis file contains the word elephant.\n", "add alpha"); err != nil {
+	if _, _, err := store.WriteFile("know/alpha.md", "# Alpha\n\nThis file contains the word elephant.\n", "add alpha"); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.WriteFile("know/beta.md", "# Beta\n\nThis file is about dogs.\n", "add beta"); err != nil {
+	if _, _, err := store.WriteFile("know/beta.md", "# Beta\n\nThis file is about dogs.\n", "add beta"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -323,10 +323,10 @@ func TestDiffFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := store.WriteFile("know/new.md", "# New\n", "add new"); err != nil {
+	if _, _, err := store.WriteFile("know/new.md", "# New\n", "add new"); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.WriteFile("know.md", "# Knowledge Base\n\nUpdated root.\n", "update root"); err != nil {
+	if _, _, err := store.WriteFile("know.md", "# Knowledge Base\n\nUpdated root.\n", "update root"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -389,10 +389,10 @@ func TestBatchWriteValidation(t *testing.T) {
 	}
 	defer store.Close()
 
-	if err := store.BatchWrite(map[string]string{"": "content"}, "msg"); err == nil {
+	if _, _, err := store.BatchWrite(map[string]string{"": "content"}, "msg"); err == nil {
 		t.Fatal("expected error for empty path in BatchWrite")
 	}
-	if err := store.BatchWrite(map[string]string{"../escape.md": "content"}, "msg"); err == nil {
+	if _, _, err := store.BatchWrite(map[string]string{"../escape.md": "content"}, "msg"); err == nil {
 		t.Fatal("expected error for path traversal in BatchWrite")
 	}
 }
@@ -428,7 +428,7 @@ func TestSync(t *testing.T) {
 		// Add a commit to origin's agent branch (WriteFile always targets the
 		// agent branch), then advance origin's main ref to that commit so that
 		// origin/main has content the agent store has never seen.
-		if err := origin.WriteFile("know/shared.md", "# Shared\n", "origin: add shared"); err != nil {
+		if _, _, err := origin.WriteFile("know/shared.md", "# Shared\n", "origin: add shared"); err != nil {
 			t.Fatal(err)
 		}
 		originHead, err := origin.HeadCommit()
@@ -519,10 +519,10 @@ func TestListAll(t *testing.T) {
 	}
 
 	// Add two more .md files and a non-.md file (no API for non-md, so skip that part).
-	if err := store.WriteFile("know/alpha.md", "# Alpha\n\nAlpha body.\n", "add alpha"); err != nil {
+	if _, _, err := store.WriteFile("know/alpha.md", "# Alpha\n\nAlpha body.\n", "add alpha"); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.WriteFile("know/sub/beta.md", "# Beta\n\nBeta body.\n", "add beta"); err != nil {
+	if _, _, err := store.WriteFile("know/sub/beta.md", "# Beta\n\nBeta body.\n", "add beta"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -532,9 +532,9 @@ func TestListAll(t *testing.T) {
 	}
 
 	want := map[string]bool{
-		"know.md":         true,
-		"know/alpha.md":   true,
-		"know/sub/beta.md": true,
+		"know.md":           true,
+		"know/alpha.md":     true,
+		"know/sub/beta.md":  true,
 	}
 	for _, p := range paths {
 		delete(want, p)
@@ -557,8 +557,15 @@ func TestBatchWrite(t *testing.T) {
 		"know/b.md": "# B\n\nContent B.\n",
 	}
 
-	if err := store.BatchWrite(files, "batch: add a and b"); err != nil {
+	commitHash, blobHashes, err := store.BatchWrite(files, "batch: add a and b")
+	if err != nil {
 		t.Fatal(err)
+	}
+	if commitHash == "" {
+		t.Fatal("expected non-empty commit hash")
+	}
+	if len(blobHashes) != 2 {
+		t.Fatalf("expected 2 blob hashes, got %d", len(blobHashes))
 	}
 
 	// Verify both files exist and have correct content.
@@ -582,5 +589,51 @@ func TestBatchWrite(t *testing.T) {
 	}
 	if logEntries[0].Message != "batch: add a and b" {
 		t.Fatalf("expected batch commit message, got %q", logEntries[0].Message)
+	}
+}
+
+func TestWriteFileReturnsBlobHash(t *testing.T) {
+	dir := t.TempDir()
+	store, err := git.Init(filepath.Join(dir, "knomit.git.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	commitHash, blobHash, err := store.WriteFile("know/test.md", "# Test\n\nBody.\n", "add test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(commitHash) != 40 {
+		t.Fatalf("expected 40-char commit hash, got %q", commitHash)
+	}
+	if len(blobHash) != 40 {
+		t.Fatalf("expected 40-char blob hash, got %q", blobHash)
+	}
+}
+
+func TestReadFileWithHash(t *testing.T) {
+	dir := t.TempDir()
+	store, err := git.Init(filepath.Join(dir, "knomit.git.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	content := "# Test\n\nBody text.\n"
+	_, expectedBlobHash, err := store.WriteFile("know/test.md", content, "add test")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	gotContent, gotBlobHash, err := store.ReadFileWithHash("know/test.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotContent != content {
+		t.Fatalf("content mismatch: got %q, want %q", gotContent, content)
+	}
+	if gotBlobHash != expectedBlobHash {
+		t.Fatalf("blob hash mismatch: got %q, want %q", gotBlobHash, expectedBlobHash)
 	}
 }

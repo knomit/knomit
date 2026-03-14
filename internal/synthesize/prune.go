@@ -125,7 +125,7 @@ func executePruneStep(ctx context.Context, gs GitStore, idx SearchIndex, embedde
 		case "forget":
 			msg := fmt.Sprintf("synthesize-%s: forget %s", recipe.Name, d.Path)
 			deletedPaths[d.Path] = true
-			if err := gs.DeleteFile(d.Path, msg); err != nil {
+			if _, err := gs.DeleteFile(d.Path, msg); err != nil {
 				onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("forget %s: %v", d.Path, err)})
 				continue
 			}
@@ -148,21 +148,21 @@ func executePruneStep(ctx context.Context, gs GitStore, idx SearchIndex, embedde
 			fact.Confidence = d.Confidence
 			updated := mcp.SerializeFact(fact)
 			msg := fmt.Sprintf("synthesize-%s: update confidence %s → %.2f", recipe.Name, d.Path, d.Confidence)
-			if err := gs.WriteFile(d.Path, updated, msg); err != nil {
+			commitHash, blobHash, err := gs.WriteFile(d.Path, updated, msg)
+			if err != nil {
 				onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("update write %s: %v", d.Path, err)})
 				continue
 			}
-			head, _ := gs.HeadCommit()
 			if err := idx.Upsert(store.FactRecord{
 				Path:       fact.Path,
 				Title:      fact.Title,
-				Body:       fact.Body,
+				BlobHash:   blobHash,
 				Domain:     fact.Domain,
 				Entities:   fact.Entities,
 				Confidence: fact.Confidence,
 				Sources:    fact.Sources,
 				Refs:       fact.Refs,
-				CommitHash: head,
+				CommitHash: commitHash,
 			}); err != nil {
 				onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("index upsert %s: %v", d.Path, err)})
 			}
@@ -185,21 +185,21 @@ func executePruneStep(ctx context.Context, gs GitStore, idx SearchIndex, embedde
 		}
 		content := mcp.SerializeFact(merged)
 		msg := fmt.Sprintf("synthesize-%s: merge %s", recipe.Name, strings.Join(m.Paths, ", "))
-		if err := gs.WriteFile(mf.Path, content, msg); err != nil {
+		commitHash, blobHash, err := gs.WriteFile(mf.Path, content, msg)
+		if err != nil {
 			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("merge write %s: %v", mf.Path, err)})
 			continue
 		}
-		head, _ := gs.HeadCommit()
 		_ = idx.Upsert(store.FactRecord{
 			Path:       mf.Path,
 			Title:      mf.Title,
-			Body:       mf.Body,
+			BlobHash:   blobHash,
 			Domain:     mf.Domain,
 			Entities:   mf.Entities,
 			Confidence: mf.Confidence,
 			Sources:    mf.Sources,
 			Refs:       mf.Refs,
-			CommitHash: head,
+			CommitHash: commitHash,
 		})
 		if err := idx.GraphAddDerivedFrom(mf.Path, m.Paths); err != nil {
 			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("derived_from %s: %v", mf.Path, err)})
@@ -211,7 +211,7 @@ func executePruneStep(ctx context.Context, gs GitStore, idx SearchIndex, embedde
 				continue
 			}
 			srcMsg := fmt.Sprintf("synthesize-%s: subsumed by %s", recipe.Name, mf.Path)
-			if err := gs.DeleteFile(src, srcMsg); err != nil {
+			if _, err := gs.DeleteFile(src, srcMsg); err != nil {
 				onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("merge delete source %s: %v", src, err)})
 				continue
 			}

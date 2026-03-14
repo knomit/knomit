@@ -125,22 +125,17 @@ func LearnHandler(gs GitStore, idx SearchIndex, ontologyRoot string) func(contex
 
 		// 4. BatchWrite all facts in one commit.
 		commitMsg := fmt.Sprintf("learn: %s", momentName)
-		if err := gs.BatchWrite(files, commitMsg); err != nil {
+		hash, blobHashes, err := gs.BatchWrite(files, commitMsg)
+		if err != nil {
 			return mcpgo.NewToolResultError(fmt.Sprintf("write error: %v", err)), nil
 		}
 
-		// 5. Get commit hash.
-		hash, err := gs.HeadCommit()
-		if err != nil {
-			return mcpgo.NewToolResultError(fmt.Sprintf("head commit error: %v", err)), nil
-		}
-
-		// 6. Upsert each fact into index.
+		// 5. Upsert each fact into index.
 		for _, f := range facts {
 			rec := FactRecord{
 				Path:       f.Path,
 				Title:      f.Title,
-				Body:       f.Body,
+				BlobHash:   blobHashes[f.Path],
 				Domain:     f.Domain,
 				Entities:   f.Entities,
 				Confidence: f.Confidence,
