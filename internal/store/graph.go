@@ -22,8 +22,8 @@ func (idx *Index) graphSyncFact(rec FactRecord) error {
 
 // graphSyncFactTx is the transactional version of graphSyncFact.
 func (idx *Index) graphSyncFactTx(tx execer, rec FactRecord) error {
-	path := escapeCypher(rec.Path)
-	title := escapeCypher(rec.Title)
+	path := escapeCypherKey(rec.Path)
+	title := escapeCypherVal(rec.Title)
 
 	// 1. MERGE Fact node, then SET properties in a separate statement.
 	// GraphQLite does not apply SET clauses in the same MERGE statement; a
@@ -48,7 +48,7 @@ func (idx *Index) graphSyncFactTx(tx execer, rec FactRecord) error {
 
 	// 3. MERGE Entity nodes + TAGGED edges
 	for _, entity := range rec.Entities {
-		e := escapeCypher(entity)
+		e := escapeCypherKey(entity)
 		q = fmt.Sprintf(`SELECT cypher('MERGE (e:Entity {name: "%s"}) MERGE (f:Fact {path: "%s"}) MERGE (f)-[:TAGGED]->(e)')`, e, path)
 		if _, err := tx.Exec(q); err != nil {
 			return fmt.Errorf("graph merge entity %s: %w", entity, err)
@@ -76,20 +76,20 @@ func (idx *Index) graphMergeDomainHierarchy(tx execer, factPath, domain string) 
 	parts := strings.Split(domain, "/")
 	for i := range parts {
 		seg := strings.Join(parts[:i+1], "/")
-		escaped := escapeCypher(seg)
+		escaped := escapeCypherKey(seg)
 		q := fmt.Sprintf(`SELECT cypher('MERGE (:Domain {path: "%s"})')`, escaped)
 		if _, err := tx.Exec(q); err != nil {
 			return fmt.Errorf("graph merge domain %s: %w", seg, err)
 		}
 		if i > 0 {
-			parent := escapeCypher(strings.Join(parts[:i], "/"))
+			parent := escapeCypherKey(strings.Join(parts[:i], "/"))
 			q = fmt.Sprintf(`SELECT cypher('MATCH (c:Domain {path: "%s"}), (p:Domain {path: "%s"}) MERGE (c)-[:DOMAIN_CHILD_OF]->(p)')`, escaped, parent)
 			if _, err := tx.Exec(q); err != nil {
 				return fmt.Errorf("graph domain child_of %s: %w", seg, err)
 			}
 		}
 	}
-	leaf := escapeCypher(domain)
+	leaf := escapeCypherKey(domain)
 	q := fmt.Sprintf(`SELECT cypher('MATCH (f:Fact {path: "%s"}), (d:Domain {path: "%s"}) MERGE (f)-[:IN_DOMAIN]->(d)')`, factPath, leaf)
 	if _, err := tx.Exec(q); err != nil {
 		return fmt.Errorf("graph in_domain %s: %w", domain, err)
@@ -108,21 +108,21 @@ func (idx *Index) graphMergeOntologyHierarchy(tx execer, factPath string) error 
 
 	for i := range dirParts {
 		seg := strings.Join(dirParts[:i+1], "/")
-		escaped := escapeCypher(seg)
+		escaped := escapeCypherKey(seg)
 		q := fmt.Sprintf(`SELECT cypher('MERGE (:OntologyNode {path: "%s"})')`, escaped)
 		if _, err := tx.Exec(q); err != nil {
 			return fmt.Errorf("graph merge ontology %s: %w", seg, err)
 		}
 		if i > 0 {
-			parent := escapeCypher(strings.Join(dirParts[:i], "/"))
+			parent := escapeCypherKey(strings.Join(dirParts[:i], "/"))
 			q = fmt.Sprintf(`SELECT cypher('MATCH (c:OntologyNode {path: "%s"}), (p:OntologyNode {path: "%s"}) MERGE (c)-[:ONTOLOGY_CHILD_OF]->(p)')`, escaped, parent)
 			if _, err := tx.Exec(q); err != nil {
 				return fmt.Errorf("graph ontology child_of %s: %w", seg, err)
 			}
 		}
 	}
-	leaf := escapeCypher(strings.Join(dirParts, "/"))
-	fp := escapeCypher(factPath)
+	leaf := escapeCypherKey(strings.Join(dirParts, "/"))
+	fp := escapeCypherKey(factPath)
 	q := fmt.Sprintf(`SELECT cypher('MATCH (f:Fact {path: "%s"}), (o:OntologyNode {path: "%s"}) MERGE (f)-[:UNDER]->(o)')`, fp, leaf)
 	if _, err := tx.Exec(q); err != nil {
 		return fmt.Errorf("graph under %s: %w", factPath, err)
@@ -137,7 +137,7 @@ func (idx *Index) graphDeleteFact(path string) error {
 }
 
 func (idx *Index) graphDeleteFactTx(tx execer, path string) error {
-	p := escapeCypher(path)
+	p := escapeCypherKey(path)
 	// Delete outgoing edges
 	q := fmt.Sprintf(`SELECT cypher('MATCH (f:Fact {path: "%s"})-[r]->() DELETE r')`, p)
 	if _, err := tx.Exec(q); err != nil {
@@ -163,9 +163,9 @@ func (idx *Index) GraphAddDerivedFrom(newPath string, sourcePaths []string) erro
 
 // graphAddDerivedFrom creates DERIVED_FROM edges from a new fact to its source facts.
 func (idx *Index) graphAddDerivedFrom(newPath string, sourcePaths []string) error {
-	np := escapeCypher(newPath)
+	np := escapeCypherKey(newPath)
 	for _, src := range sourcePaths {
-		sp := escapeCypher(src)
+		sp := escapeCypherKey(src)
 		q := fmt.Sprintf(`SELECT cypher('MATCH (n:Fact {path: "%s"}), (s:Fact {path: "%s"}) MERGE (n)-[:DERIVED_FROM]->(s)')`, np, sp)
 		if _, err := idx.db.Exec(q); err != nil {
 			return fmt.Errorf("graph derived_from %s→%s: %w", newPath, src, err)
@@ -228,7 +228,7 @@ func (idx *Index) graphBuildSimilarityEdges(path string) error {
 	rows.Close()
 
 	// Delete old outgoing SIMILAR_TO edges for this fact.
-	p := escapeCypher(path)
+	p := escapeCypherKey(path)
 	q := fmt.Sprintf(`SELECT cypher('MATCH (f:Fact {path: "%s"})-[r:SIMILAR_TO]->() DELETE r')`, p)
 	if _, err := idx.db.Exec(q); err != nil {
 		return fmt.Errorf("delete old SIMILAR_TO: %w", err)
@@ -241,7 +241,7 @@ func (idx *Index) graphBuildSimilarityEdges(path string) error {
 		if n.similarity < knnThreshold {
 			continue
 		}
-		np := escapeCypher(n.path)
+		np := escapeCypherKey(n.path)
 		q = fmt.Sprintf(`SELECT cypher('MATCH (a:Fact {path: "%s"}), (b:Fact {path: "%s"}) MERGE (a)-[:SIMILAR_TO]->(b)')`, p, np)
 		if _, err := idx.db.Exec(q); err != nil {
 			return fmt.Errorf("create SIMILAR_TO %s→%s: %w", path, n.path, err)
@@ -372,7 +372,7 @@ func (idx *Index) graphExpandSearch(seeds map[string]float64, maxHops int) map[s
 	capScore := minSeedScore - 0.01
 
 	for seedPath := range seeds {
-		p := escapeCypher(seedPath)
+		p := escapeCypherKey(seedPath)
 
 		// Traverse SIMILAR_TO (1 hop)
 		q := fmt.Sprintf(`SELECT value FROM json_each(cypher('MATCH (:Fact {path: "%s"})-[:SIMILAR_TO]-(neighbor:Fact) WHERE neighbor.deleted = false RETURN neighbor.path'))`, p)
@@ -419,10 +419,25 @@ type execer interface {
 	Query(query string, args ...any) (*sql.Rows, error)
 }
 
-// escapeCypher escapes double quotes and backslashes in strings for Cypher interpolation.
-func escapeCypher(s string) string {
+// escapeCypherKey escapes a string for use in Cypher MATCH property patterns
+// (e.g. {path: "value"}). GraphQLite's MATCH parser does not support unicode
+// escapes or SQL '' escaping inside property patterns, so single quotes are
+// stripped. Null bytes are also stripped as they break the SQL parser.
+func escapeCypherKey(s string) string {
+	s = strings.ReplaceAll(s, "\x00", "")
 	s = strings.ReplaceAll(s, `\`, `\\`)
 	s = strings.ReplaceAll(s, `"`, `\"`)
-	s = strings.ReplaceAll(s, `'`, `''`) // escape for outer SQL string
+	s = strings.ReplaceAll(s, `'`, ``)
+	return s
+}
+
+// escapeCypherVal escapes a string for use in Cypher SET values
+// (e.g. SET f.title = "value"). These are more lenient than MATCH patterns
+// and support \u unicode escapes, so single quotes become \u0027.
+func escapeCypherVal(s string) string {
+	s = strings.ReplaceAll(s, "\x00", "")
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, `"`, `\"`)
+	s = strings.ReplaceAll(s, `'`, `\u0027`)
 	return s
 }
