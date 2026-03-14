@@ -38,13 +38,42 @@ func executePruneStep(ctx context.Context, gs GitStore, idx SearchIndex, embedde
 		return fmt.Errorf("prune: cluster: %w", err)
 	}
 
+	// Dedup pass: merge near-duplicates within each cluster before LLM review.
+	threshold := step.DedupThreshold
+	if threshold <= 0 {
+		threshold = defaultDedupThreshold
+	}
+	for gi := range groups {
+		surviving, err := dedupCluster(ctx, groups[gi], gs, idx, threshold, recipe.Name, onProgress)
+		if err != nil {
+			return fmt.Errorf("prune: dedup cluster %d: %w", gi, err)
+		}
+		groups[gi] = surviving
+	}
+
+	// Filter out clusters that shrank to ≤1 fact (nothing for LLM to reason about).
+	var llmGroups [][]factForLLM
+	for _, g := range groups {
+		if len(g) > 1 {
+			llmGroups = append(llmGroups, g)
+		}
+	}
+	if len(llmGroups) == 0 {
+		onProgress(ProgressEvent{Phase: "prune-done", Message: "all clusters resolved by dedup"})
+		tagName := fmt.Sprintf("learn/synthesize-%s-prune", recipe.Name)
+		if err := gs.Tag(tagName); err != nil {
+			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("tag %s: %v", tagName, err)})
+		}
+		return nil
+	}
+
 	var allDecisions []PruneDecision
 	var allMerges []MergeEntry
 
-	for gi, group := range groups {
+	for gi, group := range llmGroups {
 		chunks := chunkFacts(group, profile.MaxChunkBytes)
 		for ci, chunk := range chunks {
-			label := fmt.Sprintf("cluster %d/%d chunk %d/%d (%d facts)", gi+1, len(groups), ci+1, len(chunks), len(chunk))
+			label := fmt.Sprintf("cluster %d/%d chunk %d/%d (%d facts)", gi+1, len(llmGroups), ci+1, len(chunks), len(chunk))
 			log.Debug().Str("label", label).Msg("prune: sending to LLM")
 			onProgress(ProgressEvent{Phase: "llm", Message: fmt.Sprintf("prune %s", label)})
 
@@ -64,6 +93,12 @@ func executePruneStep(ctx context.Context, gs GitStore, idx SearchIndex, embedde
 				return fmt.Errorf("prune: render user: %w", err)
 			}
 
+			// Collect input paths for validation.
+			inputPaths := make([]string, len(chunk))
+			for j, f := range chunk {
+				inputPaths[j] = f.File
+			}
+
 			opts := llm.CompletionOptions{ForceJSON: profile.ForceJSON}
 			response, err := adapter.Complete(ctx, systemPrompt, []llm.Message{{Role: "user", Content: userPrompt}}, opts, nil)
 			if err != nil {
@@ -73,6 +108,12 @@ func executePruneStep(ctx context.Context, gs GitStore, idx SearchIndex, embedde
 			result, err := parsePruneResponse(response)
 			if err != nil {
 				return fmt.Errorf("prune: parse response %s: %w", label, err)
+			}
+
+			// Validate paths reference actual input facts.
+			if verr := validatePrunePaths(result, inputPaths); verr != nil {
+				log.Warn().Err(verr).Str("label", label).Msg("prune: invalid paths in response")
+				result = PruneResult{} // treat as passive to trigger retry
 			}
 
 			// Retry if passive and profile says to retry
@@ -91,6 +132,11 @@ func executePruneStep(ctx context.Context, gs GitStore, idx SearchIndex, embedde
 				result, err = parsePruneResponse(response)
 				if err != nil {
 					return fmt.Errorf("prune: retry parse %s: %w", label, err)
+				}
+				// Validate retry paths too.
+				if verr := validatePrunePaths(result, inputPaths); verr != nil {
+					log.Warn().Err(verr).Str("label", label).Msg("prune: retry also has invalid paths, discarding")
+					result = PruneResult{}
 				}
 				if isPrunePassive(result) {
 					log.Warn().Str("label", label).Msg("prune: retry also passive, accepting result")

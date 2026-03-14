@@ -34,6 +34,8 @@ func TestRunPruneOnly(t *testing.T) {
 	idx.EXPECT().ClusterFacts(gomock.Any(), gomock.Any()).Return(store.ClusterResult{
 		Clusters: map[int][]string{0: {"know/test/keep.md", "know/test/forget.md"}},
 	}, nil)
+	// Dedup pass: no near-duplicates found.
+	idx.EXPECT().Search(gomock.Any()).Return(nil, nil).AnyTimes()
 
 	llmResp := `{
   "decisions": [

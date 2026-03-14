@@ -41,6 +41,8 @@ func TestPruneStep(t *testing.T) {
 
 	// ClusterFacts returns empty → single group fallback with all facts.
 	idx.EXPECT().ClusterFacts(gomock.Any(), gomock.Any()).Return(store.ClusterResult{Clusters: map[int][]string{}}, nil)
+	// Dedup pass: no near-duplicates found.
+	idx.EXPECT().Search(gomock.Any()).Return(nil, nil).AnyTimes()
 
 	// LLM returns: keep foo, forget bar, update baz with confidence=0.7
 	mockResponse := `{
@@ -120,6 +122,8 @@ func TestPruneStepWithMerge(t *testing.T) {
 	idx.EXPECT().ClusterFacts(gomock.Any(), gomock.Any()).Return(store.ClusterResult{
 		Clusters: map[int][]string{0: {"know/test/a.md", "know/test/b.md"}},
 	}, nil)
+	// Dedup pass: no near-duplicates found.
+	idx.EXPECT().Search(gomock.Any()).Return(nil, nil).AnyTimes()
 
 	mockResponse := `{
   "decisions": [],
@@ -346,6 +350,8 @@ func TestPruneStepClustersBeforeLLM(t *testing.T) {
 		},
 		Noise: []string{noiseFile},
 	}, nil)
+	// Dedup pass: no near-duplicates found.
+	idx.EXPECT().Search(gomock.Any()).Return(nil, nil).AnyTimes()
 
 	// LLM: capture prompts, return empty response each call.
 	var capturedPrompts []string
@@ -390,6 +396,93 @@ func TestPruneStepClustersBeforeLLM(t *testing.T) {
 	}
 }
 
+// TestPruneStepWithDedup verifies that when the dedup pass merges near-duplicate
+// facts, the LLM receives fewer facts (merged + unique) rather than all originals.
+func TestPruneStepWithDedup(t *testing.T) {
+	ctrl := gomock.NewController(t)
+
+	gs := NewMockGitStore(ctrl)
+	idx := NewMockSearchIndex(ctrl)
+	adapter := NewMockLLMAdapter(ctrl)
+
+	files := map[string]string{
+		"know/test/dup1.md":   factContent("Dup fact one", "Dup body one."),
+		"know/test/dup2.md":   factContent("Dup fact two", "Dup body two."),
+		"know/test/unique.md": factContent("Unique fact", "Unique body."),
+	}
+
+	gs.EXPECT().ListAll().Return([]string{"know/test/dup1.md", "know/test/dup2.md", "know/test/unique.md"}, nil)
+	gs.EXPECT().ReadFile(gomock.Any()).DoAndReturn(func(path string) (string, error) {
+		if c, ok := files[path]; ok {
+			return c, nil
+		}
+		return "", fmt.Errorf("not found: %s", path)
+	}).AnyTimes()
+
+	// ClusterFacts returns a single cluster with all 3 facts.
+	idx.EXPECT().ClusterFacts(gomock.Any(), gomock.Any()).Return(store.ClusterResult{
+		Clusters: map[int][]string{0: {"know/test/dup1.md", "know/test/dup2.md", "know/test/unique.md"}},
+	}, nil)
+
+	// Search: dup1 returns dup2 as near-duplicate (score 95); dup2 returns dup1; unique returns nothing.
+	idx.EXPECT().Search(gomock.Any()).DoAndReturn(func(q store.SearchQuery) ([]store.SearchResult, error) {
+		switch {
+		case strings.Contains(q.Text, "Dup fact one"):
+			return []store.SearchResult{
+				{FactWithBody: store.FactWithBody{FactRecord: store.FactRecord{Path: "know/test/dup2.md"}}, Score: 95},
+			}, nil
+		case strings.Contains(q.Text, "Dup fact two"):
+			return []store.SearchResult{
+				{FactWithBody: store.FactWithBody{FactRecord: store.FactRecord{Path: "know/test/dup1.md"}}, Score: 95},
+			}, nil
+		default:
+			return nil, nil
+		}
+	}).AnyTimes()
+
+	// Dedup: write merged winner (dup1 wins — same confidence/sources, first alphabetically = dup1 >= dup2 tie-break by sources).
+	// Both have confidence=0.8, sources=1 → dup1.Sources(1) >= dup2.Sources(1) so dup1 wins.
+	gs.EXPECT().WriteFile("know/test/dup1.md", gomock.Any(), gomock.Any()).Return("dedup-commit", "dedup-blob", nil)
+	idx.EXPECT().Upsert(gomock.Any()).Return(nil)
+	gs.EXPECT().DeleteFile("know/test/dup2.md", gomock.Any()).Return("del-commit", nil)
+	idx.EXPECT().Delete("know/test/dup2.md").Return(nil)
+
+	// After dedup, 2 facts remain: dup1 (merged) + unique.
+	// LLM receives both; returns keep for both.
+	mockResponse := `{"decisions": [{"path": "know/test/dup1.md", "action": "keep"}, {"path": "know/test/unique.md", "action": "keep"}], "merges": []}`
+	var capturedFacts string
+	adapter.EXPECT().Complete(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
+		func(ctx context.Context, system string, msgs []llm.Message, opts llm.CompletionOptions, onChunk func(string)) (string, error) {
+			if len(msgs) > 0 {
+				capturedFacts = msgs[0].Content
+			}
+			return mockResponse, nil
+		},
+	)
+
+	// Tag at end.
+	gs.EXPECT().Tag("learn/synthesize-dedup-recipe-prune").Return(nil)
+
+	recipe := Recipe{Name: "dedup-recipe", Steps: []RecipeStep{{Mode: "prune"}}}
+
+	err := executePruneStep(context.Background(), gs, idx, nil, adapter, recipe.Steps[0], recipe, Profile{Name: "large", ForceJSON: true, RetryOnPassive: false, MaxChunkBytes: 100_000}, func(ProgressEvent) {})
+	if err != nil {
+		t.Fatalf("executePruneStep: %v", err)
+	}
+
+	// The LLM prompt must NOT contain dup2 (it was merged away).
+	if strings.Contains(capturedFacts, "know/test/dup2.md") {
+		t.Error("LLM prompt contains dup2.md — expected it to be removed by dedup pass")
+	}
+	// The LLM prompt must contain dup1 (winner) and unique.
+	if !strings.Contains(capturedFacts, "know/test/dup1.md") {
+		t.Error("LLM prompt missing dup1.md (dedup winner)")
+	}
+	if !strings.Contains(capturedFacts, "know/test/unique.md") {
+		t.Error("LLM prompt missing unique.md")
+	}
+}
+
 func TestPruneStep_RetryOnPassive(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
@@ -410,6 +503,8 @@ func TestPruneStep_RetryOnPassive(t *testing.T) {
 	}).AnyTimes()
 
 	idx.EXPECT().ClusterFacts(gomock.Any(), gomock.Any()).Return(store.ClusterResult{Clusters: map[int][]string{}}, nil)
+	// Dedup pass: no near-duplicates found.
+	idx.EXPECT().Search(gomock.Any()).Return(nil, nil).AnyTimes()
 
 	// First call: passive (all keep)
 	passiveResponse := `{"decisions": [{"path": "know/test/foo.md", "action": "keep"}, {"path": "know/test/bar.md", "action": "keep"}], "merges": []}`
