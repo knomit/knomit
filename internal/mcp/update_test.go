@@ -15,7 +15,7 @@ func TestUpdateMergesFields(t *testing.T) {
 	idx := NewMockSearchIndex(ctrl)
 
 	factContent := SerializeFact(Fact{
-		Path: "know/foo.md", Title: "Original Title", Body: "Original body.",
+		Path: "kb/foo.md", Title: "Original Title", Body: "Original body.",
 		Domain: []string{"testing"}, Confidence: 0.7, Sources: 1,
 		Entities: []string{}, Refs: []string{"https://old.ref"},
 	})
@@ -23,23 +23,23 @@ func TestUpdateMergesFields(t *testing.T) {
 	var writtenContent string
 
 	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
-	gs.EXPECT().FileExists("know/foo.md").Return(true, nil)
-	gs.EXPECT().ReadFile("know/foo.md").Return(factContent, nil)
-	gs.EXPECT().WriteFile("know/foo.md", gomock.Any(), gomock.Any()).DoAndReturn(func(path, content, msg string) (string, string, error) {
+	gs.EXPECT().FileExists("kb/foo.md").Return(true, nil)
+	gs.EXPECT().ReadFile("kb/foo.md").Return(factContent, nil)
+	gs.EXPECT().WriteFile("kb/foo.md", gomock.Any(), gomock.Any()).DoAndReturn(func(path, content, msg string) (string, string, error) {
 		writtenContent = content
 		return "abc123def456", "blob_foo", nil
 	})
 	gs.EXPECT().Tag(gomock.Any()).Return(nil)
 	idx.EXPECT().Upsert(gomock.Any()).Return(nil)
 
-	handler := UpdateHandler(gs, idx, "know")
+	handler := UpdateHandler(gs, idx, "kb")
 
 	newBody := "Updated body."
 	newConf := 0.95
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
-		"file":        "know/foo.md",
+		"file":        "kb/foo.md",
 		"moment_name": "update-test",
 		"updates": map[string]interface{}{
 			"body":       newBody,
@@ -58,10 +58,10 @@ func TestUpdateMergesFields(t *testing.T) {
 
 	// Verify file was updated.
 	if writtenContent == "" {
-		t.Fatal("expected know/foo.md to be written")
+		t.Fatal("expected kb/foo.md to be written")
 	}
 
-	updatedFact, err := ParseFact("know/foo.md", writtenContent)
+	updatedFact, err := ParseFact("kb/foo.md", writtenContent)
 	if err != nil {
 		t.Fatalf("parse updated fact: %v", err)
 	}
@@ -96,13 +96,13 @@ func TestUpdateFileNotFound(t *testing.T) {
 	idx := NewMockSearchIndex(ctrl)
 
 	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
-	gs.EXPECT().FileExists("know/nonexistent.md").Return(false, nil)
+	gs.EXPECT().FileExists("kb/nonexistent.md").Return(false, nil)
 
-	handler := UpdateHandler(gs, idx, "know")
+	handler := UpdateHandler(gs, idx, "kb")
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
-		"file":        "know/nonexistent.md",
+		"file":        "kb/nonexistent.md",
 		"moment_name": "test",
 		"updates":     map[string]interface{}{},
 	}
@@ -122,7 +122,7 @@ func TestUpdateRefsAppended(t *testing.T) {
 	idx := NewMockSearchIndex(ctrl)
 
 	factContent := SerializeFact(Fact{
-		Path: "know/refs.md", Title: "Refs Test", Body: "Body.",
+		Path: "kb/refs.md", Title: "Refs Test", Body: "Body.",
 		Domain: []string{}, Confidence: 0.8, Sources: 1,
 		Entities: []string{}, Refs: []string{"https://existing.ref"},
 	})
@@ -130,20 +130,20 @@ func TestUpdateRefsAppended(t *testing.T) {
 	var writtenContent string
 
 	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
-	gs.EXPECT().FileExists("know/refs.md").Return(true, nil)
-	gs.EXPECT().ReadFile("know/refs.md").Return(factContent, nil)
-	gs.EXPECT().WriteFile("know/refs.md", gomock.Any(), gomock.Any()).DoAndReturn(func(path, content, msg string) (string, string, error) {
+	gs.EXPECT().FileExists("kb/refs.md").Return(true, nil)
+	gs.EXPECT().ReadFile("kb/refs.md").Return(factContent, nil)
+	gs.EXPECT().WriteFile("kb/refs.md", gomock.Any(), gomock.Any()).DoAndReturn(func(path, content, msg string) (string, string, error) {
 		writtenContent = content
 		return "abc123def456", "blob_refs", nil
 	})
 	gs.EXPECT().Tag(gomock.Any()).Return(nil)
 	idx.EXPECT().Upsert(gomock.Any()).Return(nil)
 
-	handler := UpdateHandler(gs, idx, "know")
+	handler := UpdateHandler(gs, idx, "kb")
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
-		"file":        "know/refs.md",
+		"file":        "kb/refs.md",
 		"moment_name": "refs-append",
 		"updates": map[string]interface{}{
 			"refs": []interface{}{"https://new1.ref", "https://new2.ref"},
@@ -158,7 +158,7 @@ func TestUpdateRefsAppended(t *testing.T) {
 		t.Fatalf("tool error: %v", result.Content)
 	}
 
-	updatedFact, err := ParseFact("know/refs.md", writtenContent)
+	updatedFact, err := ParseFact("kb/refs.md", writtenContent)
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}

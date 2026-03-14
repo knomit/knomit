@@ -34,7 +34,7 @@ func TestUpsertAndGetByPath(t *testing.T) {
 	insertTestBlob(t, idx.DB(), "blob_foo", "This is about databases and postgres")
 
 	err = idx.Upsert(store.FactRecord{
-		Path:       "general/test/foo.md",
+		Path:       "kb/test/foo.md",
 		Title:      "Foo fact",
 		BlobHash:   "blob_foo",
 		Domain:     []string{"databases"},
@@ -47,7 +47,7 @@ func TestUpsertAndGetByPath(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	rec, err := idx.GetByPath("general/test/foo.md")
+	rec, err := idx.GetByPath("kb/test/foo.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,7 +69,7 @@ func TestDelete(t *testing.T) {
 	insertTestBlob(t, idx.DB(), "blob_bar", "This is about redis and caching")
 
 	rec := store.FactRecord{
-		Path:       "general/test/bar.md",
+		Path:       "kb/test/bar.md",
 		Title:      "Bar fact",
 		BlobHash:   "blob_bar",
 		Domain:     []string{"caching"},
@@ -83,7 +83,7 @@ func TestDelete(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := idx.GetByPath("general/test/bar.md")
+	got, err := idx.GetByPath("kb/test/bar.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,11 +91,11 @@ func TestDelete(t *testing.T) {
 		t.Fatal("expected result before delete")
 	}
 
-	if err := idx.Delete("general/test/bar.md"); err != nil {
+	if err := idx.Delete("kb/test/bar.md"); err != nil {
 		t.Fatal(err)
 	}
 
-	got, err = idx.GetByPath("general/test/bar.md")
+	got, err = idx.GetByPath("kb/test/bar.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,7 +124,7 @@ func TestGetByPath(t *testing.T) {
 	insertTestBlob(t, idx.DB(), "blob_baz", "This is about golang")
 
 	original := store.FactRecord{
-		Path:       "general/test/baz.md",
+		Path:       "kb/test/baz.md",
 		Title:      "Baz fact",
 		BlobHash:   "blob_baz",
 		Domain:     []string{"languages"},
@@ -138,7 +138,7 @@ func TestGetByPath(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := idx.GetByPath("general/test/baz.md")
+	got, err := idx.GetByPath("kb/test/baz.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -164,7 +164,7 @@ func TestUpsertOverwrite(t *testing.T) {
 	insertTestBlob(t, idx.DB(), "blob_v2", "updated body text about postgresql")
 
 	rec := store.FactRecord{
-		Path:       "general/test/overwrite.md",
+		Path:       "kb/test/overwrite.md",
 		Title:      "Original title",
 		BlobHash:   "blob_v1",
 		Domain:     []string{"databases"},
@@ -188,7 +188,7 @@ func TestUpsertOverwrite(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := idx.GetByPath("general/test/overwrite.md")
+	got, err := idx.GetByPath("kb/test/overwrite.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -266,10 +266,10 @@ func TestIncrementalSync(t *testing.T) {
 	fact1 := "---\ndomain: [databases]\nconfidence: 0.9\nsources: 2\nentities: [postgres]\nrefs: []\n---\n# Postgres MVCC\n\nPostgres uses multi-version concurrency control.\n"
 	fact2 := "---\ndomain: [caching]\nconfidence: 0.8\nsources: 1\nentities: [redis]\nrefs: []\n---\n# Redis Persistence\n\nRedis supports AOF and RDB persistence.\n"
 
-	if _, _, err := gitStore.WriteFile("general/postgres-mvcc.md", fact1, "add postgres fact"); err != nil {
+	if _, _, err := gitStore.WriteFile("kb/postgres-mvcc.md", fact1, "add postgres fact"); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := gitStore.WriteFile("general/redis-persistence.md", fact2, "add redis fact"); err != nil {
+	if _, _, err := gitStore.WriteFile("kb/redis-persistence.md", fact2, "add redis fact"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -278,7 +278,7 @@ func TestIncrementalSync(t *testing.T) {
 	}
 
 	// Both facts should now be retrievable.
-	rec, err := idx.GetByPath("general/postgres-mvcc.md")
+	rec, err := idx.GetByPath("kb/postgres-mvcc.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -286,7 +286,7 @@ func TestIncrementalSync(t *testing.T) {
 		t.Fatal("expected postgres fact after full sync")
 	}
 
-	rec, err = idx.GetByPath("general/redis-persistence.md")
+	rec, err = idx.GetByPath("kb/redis-persistence.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -310,7 +310,7 @@ func TestIncrementalSync(t *testing.T) {
 	// --- Incremental sync ---
 	// Write a third fact. Sync should only index the delta.
 	fact3 := "---\ndomain: [messaging]\nconfidence: 0.95\nsources: 3\nentities: [kafka]\nrefs: []\n---\n# Kafka Partitions\n\nKafka topics are split into partitions for parallelism.\n"
-	if _, _, err := gitStore.WriteFile("general/kafka-partitions.md", fact3, "add kafka fact"); err != nil {
+	if _, _, err := gitStore.WriteFile("kb/kafka-partitions.md", fact3, "add kafka fact"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -319,7 +319,7 @@ func TestIncrementalSync(t *testing.T) {
 	}
 
 	// New fact should be retrievable.
-	rec, err = idx.GetByPath("general/kafka-partitions.md")
+	rec, err = idx.GetByPath("kb/kafka-partitions.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -328,7 +328,7 @@ func TestIncrementalSync(t *testing.T) {
 	}
 
 	// Previously indexed facts should still be present.
-	rec, err = idx.GetByPath("general/postgres-mvcc.md")
+	rec, err = idx.GetByPath("kb/postgres-mvcc.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -338,7 +338,7 @@ func TestIncrementalSync(t *testing.T) {
 
 	// --- Delete sync ---
 	// Delete the redis fact and sync; it should be removed from the index.
-	if _, err := gitStore.DeleteFile("general/redis-persistence.md", "delete: remove redis fact"); err != nil {
+	if _, err := gitStore.DeleteFile("kb/redis-persistence.md", "delete: remove redis fact"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -346,7 +346,7 @@ func TestIncrementalSync(t *testing.T) {
 		t.Fatalf("Sync (delete) failed: %v", err)
 	}
 
-	rec, err = idx.GetByPath("general/redis-persistence.md")
+	rec, err = idx.GetByPath("kb/redis-persistence.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -420,7 +420,7 @@ func TestGetEmbedding(t *testing.T) {
 	insertTestBlob(t, idx.DB(), "blob_emb", "body text for embedding")
 
 	rec := store.FactRecord{
-		Path:       "general/test/emb.md",
+		Path:       "kb/test/emb.md",
 		Title:      "Embedding test",
 		BlobHash:   "blob_emb",
 		Domain:     []string{"test"},
@@ -433,7 +433,7 @@ func TestGetEmbedding(t *testing.T) {
 		t.Fatalf("Upsert: %v", err)
 	}
 
-	got, err := idx.GetEmbedding("general/test/emb.md")
+	got, err := idx.GetEmbedding("kb/test/emb.md")
 	if err != nil {
 		t.Fatalf("GetEmbedding: %v", err)
 	}
@@ -460,14 +460,14 @@ func TestSearchFilter(t *testing.T) {
 	insertTestBlob(t, idx.DB(), "blob_b", "redis cache cluster")
 
 	if err := idx.Upsert(store.FactRecord{
-		Path: "general/a.md", Title: "Alpha", BlobHash: "blob_a",
+		Path: "kb/a.md", Title: "Alpha", BlobHash: "blob_a",
 		Domain: []string{"databases"}, Entities: []string{"postgres"},
 		Confidence: 0.9, Sources: 1, CommitHash: "x",
 	}); err != nil {
 		t.Fatal(err)
 	}
 	if err := idx.Upsert(store.FactRecord{
-		Path: "general/b.md", Title: "Beta", BlobHash: "blob_b",
+		Path: "kb/b.md", Title: "Beta", BlobHash: "blob_b",
 		Domain: []string{"infra"}, Entities: []string{"redis"},
 		Confidence: 0.8, Sources: 1, CommitHash: "x",
 	}); err != nil {
@@ -482,8 +482,8 @@ func TestSearchFilter(t *testing.T) {
 	if len(results) != 1 {
 		t.Fatalf("expected 1 result, got %d", len(results))
 	}
-	if results[0].Path != "general/a.md" {
-		t.Fatalf("expected general/a.md, got %v", results[0].Path)
+	if results[0].Path != "kb/a.md" {
+		t.Fatalf("expected kb/a.md, got %v", results[0].Path)
 	}
 
 	// Text-less search filtered by entity.
@@ -494,20 +494,20 @@ func TestSearchFilter(t *testing.T) {
 	if len(results) != 1 {
 		t.Fatalf("expected 1 result for entity filter, got %d", len(results))
 	}
-	if results[0].Path != "general/b.md" {
-		t.Fatalf("expected general/b.md, got %v", results[0].Path)
+	if results[0].Path != "kb/b.md" {
+		t.Fatalf("expected kb/b.md, got %v", results[0].Path)
 	}
 
-	// Path filter should return only the fact whose path starts with "general/a".
-	results, err = idx.Search(store.SearchQuery{Path: "general/a", Limit: 10})
+	// Path filter should return only the fact whose path starts with "kb/a".
+	results, err = idx.Search(store.SearchQuery{Path: "kb/a", Limit: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(results) != 1 {
 		t.Fatalf("expected 1 result for path filter, got %d", len(results))
 	}
-	if results[0].Path != "general/a.md" {
-		t.Fatalf("expected general/a.md, got %v", results[0].Path)
+	if results[0].Path != "kb/a.md" {
+		t.Fatalf("expected kb/a.md, got %v", results[0].Path)
 	}
 
 	// MinConfidence filter should drop low-confidence records.
@@ -518,8 +518,8 @@ func TestSearchFilter(t *testing.T) {
 	if len(results) != 1 {
 		t.Fatalf("expected 1 result for confidence filter, got %d", len(results))
 	}
-	if results[0].Path != "general/a.md" {
-		t.Fatalf("expected general/a.md, got %v", results[0].Path)
+	if results[0].Path != "kb/a.md" {
+		t.Fatalf("expected kb/a.md, got %v", results[0].Path)
 	}
 }
 
@@ -556,14 +556,14 @@ func TestSearchHybrid(t *testing.T) {
 	insertTestBlob(t, idx.DB(), "blob_hb", "postgres cache storage")
 
 	if err := idx.Upsert(store.FactRecord{
-		Path: "general/a.md", Title: "Alpha", BlobHash: "blob_ha",
+		Path: "kb/a.md", Title: "Alpha", BlobHash: "blob_ha",
 		Domain: []string{"databases"}, Entities: []string{"postgres"},
 		Confidence: 0.9, Sources: 1, CommitHash: "x",
 	}); err != nil {
 		t.Fatal(err)
 	}
 	if err := idx.Upsert(store.FactRecord{
-		Path: "general/b.md", Title: "Beta", BlobHash: "blob_hb",
+		Path: "kb/b.md", Title: "Beta", BlobHash: "blob_hb",
 		Domain: []string{"infra"}, Entities: []string{"postgres"},
 		Confidence: 0.8, Sources: 1, CommitHash: "x",
 	}); err != nil {
@@ -582,8 +582,8 @@ func TestSearchHybrid(t *testing.T) {
 		t.Fatalf("expected 2 results, got %d", len(results))
 	}
 	// Fact A should rank first because its vector exactly matches the query vector.
-	if results[0].Path != "general/a.md" {
-		t.Fatalf("expected general/a.md first, got %v", results[0].Path)
+	if results[0].Path != "kb/a.md" {
+		t.Fatalf("expected kb/a.md first, got %v", results[0].Path)
 	}
 	if results[0].Score < 10 {
 		t.Fatalf("score too low: %v", results[0].Score)
@@ -609,7 +609,7 @@ func TestDeleteReferentialIntegrity(t *testing.T) {
 	insertTestBlob(t, idx.DB(), "blob_ri", "referential integrity")
 
 	rec := store.FactRecord{
-		Path: "general/test/ri.md", Title: "RI Test", BlobHash: "blob_ri",
+		Path: "kb/test/ri.md", Title: "RI Test", BlobHash: "blob_ri",
 		Domain: []string{"test"}, Entities: []string{},
 		Confidence: 1.0, Sources: 1, CommitHash: "ri1",
 	}
@@ -618,7 +618,7 @@ func TestDeleteReferentialIntegrity(t *testing.T) {
 	}
 
 	// Verify embedding exists.
-	vec, err := idx.GetEmbedding("general/test/ri.md")
+	vec, err := idx.GetEmbedding("kb/test/ri.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -627,12 +627,12 @@ func TestDeleteReferentialIntegrity(t *testing.T) {
 	}
 
 	// Delete the fact.
-	if err := idx.Delete("general/test/ri.md"); err != nil {
+	if err := idx.Delete("kb/test/ri.md"); err != nil {
 		t.Fatal(err)
 	}
 
 	// Embedding must be gone.
-	vec, err = idx.GetEmbedding("general/test/ri.md")
+	vec, err = idx.GetEmbedding("kb/test/ri.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -687,11 +687,11 @@ func setupSimilarityIndex(t *testing.T) (*store.Index, *gomock.Controller) {
 	insertTestBlob(t, idx.DB(), "blob_python", "Alice writes Python every day")
 
 	facts := []store.FactRecord{
-		{Path: "general/people/carol/tea.md", Title: "Tea Preference", BlobHash: "blob_tea",
+		{Path: "kb/people/carol/tea.md", Title: "Tea Preference", BlobHash: "blob_tea",
 			Domain: []string{"preferences"}, Entities: []string{"carol"}, Confidence: 0.9, Sources: 1, CommitHash: "a"},
-		{Path: "general/people/bob/jazz.md", Title: "Jazz Fan", BlobHash: "blob_jazz",
+		{Path: "kb/people/bob/jazz.md", Title: "Jazz Fan", BlobHash: "blob_jazz",
 			Domain: []string{"preferences"}, Entities: []string{"bob"}, Confidence: 0.8, Sources: 1, CommitHash: "a"},
-		{Path: "general/people/alice/python.md", Title: "Python Dev", BlobHash: "blob_python",
+		{Path: "kb/people/alice/python.md", Title: "Python Dev", BlobHash: "blob_python",
 			Domain: []string{"engineering"}, Entities: []string{"alice"}, Confidence: 0.9, Sources: 2, CommitHash: "a"},
 	}
 	for _, f := range facts {
@@ -715,7 +715,7 @@ func TestSearchSimilarityRanking(t *testing.T) {
 	if len(results) == 0 {
 		t.Fatal("expected results for 'who likes tea'")
 	}
-	if results[0].Path != "general/people/carol/tea.md" {
+	if results[0].Path != "kb/people/carol/tea.md" {
 		t.Fatalf("expected tea fact first, got %v", results[0].Path)
 	}
 }
@@ -788,7 +788,7 @@ func TestSearchVecOnlyNoEmbedder(t *testing.T) {
 
 	// Insert a fact without embedder.
 	if err := idx.Upsert(store.FactRecord{
-		Path: "general/a.md", Title: "Tea Lover", BlobHash: "blob_tea_ne",
+		Path: "kb/a.md", Title: "Tea Lover", BlobHash: "blob_tea_ne",
 		Domain: []string{"pref"}, Entities: []string{}, Confidence: 0.9, Sources: 1, CommitHash: "x",
 	}); err != nil {
 		t.Fatal(err)
@@ -832,13 +832,13 @@ func TestSearchVecScoringBoost(t *testing.T) {
 	insertTestBlob(t, idx.DB(), "blob_garden", "tea garden cultivation")
 
 	if err := idx.Upsert(store.FactRecord{
-		Path: "general/a.md", Title: "Brewing", BlobHash: "blob_brew",
+		Path: "kb/a.md", Title: "Brewing", BlobHash: "blob_brew",
 		Domain: []string{"food"}, Entities: []string{}, Confidence: 0.9, Sources: 1, CommitHash: "x",
 	}); err != nil {
 		t.Fatal(err)
 	}
 	if err := idx.Upsert(store.FactRecord{
-		Path: "general/b.md", Title: "Garden", BlobHash: "blob_garden",
+		Path: "kb/b.md", Title: "Garden", BlobHash: "blob_garden",
 		Domain: []string{"food"}, Entities: []string{}, Confidence: 0.9, Sources: 1, CommitHash: "x",
 	}); err != nil {
 		t.Fatal(err)

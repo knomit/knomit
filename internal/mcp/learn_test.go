@@ -36,7 +36,7 @@ func TestLearnWritesFacts(t *testing.T) {
 		return nil
 	})
 
-	handler := LearnHandler(gs, idx, "general", fact.DefaultOntology())
+	handler := LearnHandler(gs, idx, "kb", fact.DefaultOntology())
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
@@ -65,7 +65,7 @@ func TestLearnWritesFacts(t *testing.T) {
 	}
 
 	// Verify file was written with correct path prefix (UUID is random).
-	expectedPrefix := "general/technology/go/testing/"
+	expectedPrefix := "kb/technology/go/testing/"
 	var writtenPath string
 	for path := range capturedFiles {
 		if strings.HasPrefix(path, expectedPrefix) {
@@ -113,7 +113,7 @@ func TestLearnRequiresTopic(t *testing.T) {
 
 	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
 
-	handler := LearnHandler(gs, idx, "general", fact.DefaultOntology())
+	handler := LearnHandler(gs, idx, "kb", fact.DefaultOntology())
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
@@ -149,7 +149,7 @@ func TestLearnRequiresCategory(t *testing.T) {
 
 	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
 
-	handler := LearnHandler(gs, idx, "general", fact.DefaultOntology())
+	handler := LearnHandler(gs, idx, "kb", fact.DefaultOntology())
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
@@ -185,7 +185,7 @@ func TestLearnRequiresMomentName(t *testing.T) {
 
 	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
 
-	handler := LearnHandler(gs, idx, "general", fact.DefaultOntology())
+	handler := LearnHandler(gs, idx, "kb", fact.DefaultOntology())
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
@@ -221,7 +221,7 @@ func TestLearnMultipleFacts(t *testing.T) {
 	gs.EXPECT().Tag(gomock.Any()).Return(nil)
 	idx.EXPECT().Upsert(gomock.Any()).Return(nil).Times(2)
 
-	handler := LearnHandler(gs, idx, "general", fact.DefaultOntology())
+	handler := LearnHandler(gs, idx, "kb", fact.DefaultOntology())
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
@@ -251,18 +251,18 @@ func TestLearnMultipleFacts(t *testing.T) {
 	// Verify two files were written to different topic paths.
 	var foundScience, foundPeople bool
 	for path := range capturedFiles {
-		if strings.HasPrefix(path, "general/science/physics/") {
+		if strings.HasPrefix(path, "kb/science/physics/") {
 			foundScience = true
 		}
-		if strings.HasPrefix(path, "general/people/alice/") {
+		if strings.HasPrefix(path, "kb/people/alice/") {
 			foundPeople = true
 		}
 	}
 	if !foundScience {
-		t.Error("missing general/science/physics/ file")
+		t.Error("missing kb/science/physics/ file")
 	}
 	if !foundPeople {
-		t.Error("missing general/people/alice/ file")
+		t.Error("missing kb/people/alice/ file")
 	}
 }
 
@@ -277,7 +277,7 @@ func TestLearnHandler_DedupMergesNearDuplicate(t *testing.T) {
 	idx.EXPECT().Search(gomock.Any()).Return([]SearchResult{
 		{FactWithBody: FactWithBody{
 			FactRecord: FactRecord{
-				Path:       "general/technology/cameras/abc123.md",
+				Path:       "kb/technology/cameras/abc123.md",
 				Title:      "Camera Review",
 				Domain:     []string{"tech"},
 				Entities:   []string{"camera"},
@@ -290,7 +290,7 @@ func TestLearnHandler_DedupMergesNearDuplicate(t *testing.T) {
 	}, nil)
 
 	// Read existing fact to get full content
-	gs.EXPECT().ReadFile("general/technology/cameras/abc123.md").Return(
+	gs.EXPECT().ReadFile("kb/technology/cameras/abc123.md").Return(
 		"---\ndomain: [tech]\nconfidence: 0.8\nsources: 1\nentities: [camera]\nrefs: []\n---\n# Camera Review\n\nGreat camera with clear video\n", nil)
 
 	// BatchWrite should write to existing path (merged)
@@ -313,7 +313,7 @@ func TestLearnHandler_DedupMergesNearDuplicate(t *testing.T) {
 
 	gs.EXPECT().Tag(gomock.Any()).Return(nil)
 
-	handler := LearnHandler(gs, idx, "general", fact.DefaultOntology())
+	handler := LearnHandler(gs, idx, "kb", fact.DefaultOntology())
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
@@ -342,13 +342,13 @@ func TestLearnHandler_DedupMergesNearDuplicate(t *testing.T) {
 	}
 
 	// Should write to existing path, not a new UUID path
-	if _, ok := capturedFiles["general/technology/cameras/abc123.md"]; !ok {
-		t.Fatalf("expected write to general/technology/cameras/abc123.md, got: %v", capturedFiles)
+	if _, ok := capturedFiles["kb/technology/cameras/abc123.md"]; !ok {
+		t.Fatalf("expected write to kb/technology/cameras/abc123.md, got: %v", capturedFiles)
 	}
 
 	// New fact has higher confidence (0.9 > 0.8), so it wins
-	if capturedUpsert.Path != "general/technology/cameras/abc123.md" {
-		t.Errorf("upserted path: got %q, want general/technology/cameras/abc123.md", capturedUpsert.Path)
+	if capturedUpsert.Path != "kb/technology/cameras/abc123.md" {
+		t.Errorf("upserted path: got %q, want kb/technology/cameras/abc123.md", capturedUpsert.Path)
 	}
 	if capturedUpsert.Confidence != 0.9 {
 		t.Errorf("confidence: got %v, want 0.9", capturedUpsert.Confidence)
@@ -359,9 +359,9 @@ func TestLearnHandler_DedupMergesNearDuplicate(t *testing.T) {
 }
 
 func TestBuildFactPath(t *testing.T) {
-	path := buildFactPath("general", "technology", "go/concurrency")
-	if !strings.HasPrefix(path, "general/technology/go/concurrency/") {
-		t.Fatalf("expected prefix general/technology/go/concurrency/, got %q", path)
+	path := buildFactPath("kb", "technology", "go/concurrency")
+	if !strings.HasPrefix(path, "kb/technology/go/concurrency/") {
+		t.Fatalf("expected prefix kb/technology/go/concurrency/, got %q", path)
 	}
 	if !strings.HasSuffix(path, ".md") {
 		t.Fatalf("expected .md suffix, got %q", path)
@@ -374,7 +374,7 @@ func TestBuildFactPath(t *testing.T) {
 	}
 
 	// Two calls should produce different paths.
-	path2 := buildFactPath("general", "technology", "go/concurrency")
+	path2 := buildFactPath("kb", "technology", "go/concurrency")
 	if path == path2 {
 		t.Fatal("expected different UUIDs for different calls")
 	}

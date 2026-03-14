@@ -9,7 +9,7 @@ import (
 
 func TestFactRoundTrip(t *testing.T) {
 	f := Fact{
-		Path:       "know/test/foo.md",
+		Path:       "general/test/foo.md",
 		Title:      "Test fact",
 		Body:       "Some body text.",
 		Domain:     []string{"testing"},
@@ -56,7 +56,7 @@ func TestParseFactMissingFrontmatter(t *testing.T) {
 
 func TestParseFactMultilineBody(t *testing.T) {
 	f := Fact{
-		Path:       "know/multi.md",
+		Path:       "general/multi.md",
 		Title:      "Multi-paragraph fact",
 		Body:       "First paragraph.\n\nSecond paragraph with more detail.\n\nThird paragraph.",
 		Domain:     []string{"testing", "multiline"},
@@ -110,7 +110,7 @@ func TestParseFactCRLFLineEndings(t *testing.T) {
 
 func TestSerializeFactFormat(t *testing.T) {
 	f := Fact{
-		Path:       "know/fmt/test.md",
+		Path:       "general/fmt/test.md",
 		Title:      "Format test",
 		Body:       "Body content.",
 		Type:       fact.Observation,
@@ -130,7 +130,7 @@ func TestSerializeFactFormat(t *testing.T) {
 func TestEpistemicTypeRoundTrip(t *testing.T) {
 	for _, et := range fact.AllTypes() {
 		f := Fact{
-			Path:       "know/type-test.md",
+			Path:       "general/type-test.md",
 			Title:      "Type round-trip",
 			Body:       "Body.",
 			Type:       et,
@@ -175,7 +175,7 @@ func TestParseFactInvalidTypeReturnsError(t *testing.T) {
 
 func TestSerializeFactWithURL(t *testing.T) {
 	f := Fact{
-		Path:       "know/test/url.md",
+		Path:       "general/test/url.md",
 		Title:      "URL ref",
 		Body:       "Body.",
 		Domain:     []string{"web"},
@@ -196,7 +196,7 @@ func TestSerializeFactWithURL(t *testing.T) {
 
 func TestSerializeFactEmptyBody(t *testing.T) {
 	f := Fact{
-		Path:       "know/empty.md",
+		Path:       "general/empty.md",
 		Title:      "No body",
 		Body:       "",
 		Domain:     []string{},

@@ -21,10 +21,10 @@ import (
 func TestHandleBrowse_ListDirError(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
-	gs.EXPECT().ListDir("know/missing").Return(nil, fmt.Errorf("not found"))
+	gs.EXPECT().ListDir("kb/missing").Return(nil, fmt.Errorf("not found"))
 
 	handler := newTestRouter(gs, nil)
-	rr := doRequest(t, handler, http.MethodGet, "/api/v1/browse?path=know/missing", "")
+	rr := doRequest(t, handler, http.MethodGet, "/api/v1/browse?path=kb/missing", "")
 
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (empty list on error)", rr.Code)
@@ -42,10 +42,10 @@ func TestHandleBrowse_ListDirError(t *testing.T) {
 func TestHandleFact_NotFound(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
-	gs.EXPECT().ReadFile("know/missing.md").Return("", fmt.Errorf("not found"))
+	gs.EXPECT().ReadFile("kb/missing.md").Return("", fmt.Errorf("not found"))
 
 	handler := newTestRouter(gs, nil)
-	rr := doRequest(t, handler, http.MethodGet, "/api/v1/fact?path=know/missing.md", "")
+	rr := doRequest(t, handler, http.MethodGet, "/api/v1/fact?path=kb/missing.md", "")
 
 	if rr.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404", rr.Code)
@@ -56,10 +56,10 @@ func TestHandleFact_ParseError(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
 	// Return content that will fail YAML parsing (invalid frontmatter).
-	gs.EXPECT().ReadFile("know/bad.md").Return("---\ndomain: [[[invalid\n---\nbody\n", nil)
+	gs.EXPECT().ReadFile("kb/bad.md").Return("---\ndomain: [[[invalid\n---\nbody\n", nil)
 
 	handler := newTestRouter(gs, nil)
-	rr := doRequest(t, handler, http.MethodGet, "/api/v1/fact?path=know/bad.md", "")
+	rr := doRequest(t, handler, http.MethodGet, "/api/v1/fact?path=kb/bad.md", "")
 
 	if rr.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d, want 500", rr.Code)
@@ -86,15 +86,15 @@ func TestHandleSearch_WithFilters(t *testing.T) {
 		if q.Limit != 10 {
 			t.Errorf("limit = %v, want 10", q.Limit)
 		}
-		if q.Path != "know/sub" {
-			t.Errorf("path = %v, want know/sub", q.Path)
+		if q.Path != "kb/sub" {
+			t.Errorf("path = %v, want kb/sub", q.Path)
 		}
 		return []store.SearchResult{}, nil
 	})
 
 	handler := newTestRouter(gs, mockIdx)
 	rr := doRequest(t, handler, http.MethodGet,
-		"/api/v1/search?q=test&entities=go,chi&domain=web&min_confidence=0.8&limit=10&path=know/sub", "")
+		"/api/v1/search?q=test&entities=go,chi&domain=web&min_confidence=0.8&limit=10&path=kb/sub", "")
 
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body: %s", rr.Code, rr.Body.String())
@@ -169,7 +169,7 @@ func TestHandleHistory_Error(t *testing.T) {
 	gs.EXPECT().Log(gomock.Any()).Return(nil, fmt.Errorf("git error"))
 
 	handler := newTestRouter(gs, nil)
-	rr := doRequest(t, handler, http.MethodGet, "/api/v1/history?path=know/fact.md", "")
+	rr := doRequest(t, handler, http.MethodGet, "/api/v1/history?path=kb/fact.md", "")
 
 	if rr.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d, want 500", rr.Code)
@@ -184,12 +184,12 @@ func TestHandleStats(t *testing.T) {
 
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
-	gs.EXPECT().ListAll().Return([]string{"know/a.md", "know/b.md", "other/c.md"}, nil)
-	gs.EXPECT().ReadFile("know/a.md").Return(validFact, nil)
-	gs.EXPECT().ReadFile("know/b.md").Return(validFact2, nil)
+	gs.EXPECT().ListAll().Return([]string{"kb/a.md", "kb/b.md", "other/c.md"}, nil)
+	gs.EXPECT().ReadFile("kb/a.md").Return(validFact, nil)
+	gs.EXPECT().ReadFile("kb/b.md").Return(validFact2, nil)
 
 	handler := newTestRouter(gs, nil)
-	rr := doRequest(t, handler, http.MethodGet, "/api/v1/stats?path=know/", "")
+	rr := doRequest(t, handler, http.MethodGet, "/api/v1/stats?path=kb/", "")
 
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body: %s", rr.Code, rr.Body.String())
@@ -238,10 +238,10 @@ func TestHandleStats_ListAllError(t *testing.T) {
 func TestHandleStats_SkipsBadFiles(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
-	gs.EXPECT().ListAll().Return([]string{"know/good.md", "know/unreadable.md", "know/badparse.md"}, nil)
-	gs.EXPECT().ReadFile("know/good.md").Return("---\ndomain: [go]\nconfidence: 0.9\nsources: 1\nentities: [x]\nrefs: []\n---\n# Good\nBody.\n", nil)
-	gs.EXPECT().ReadFile("know/unreadable.md").Return("", fmt.Errorf("read error"))
-	gs.EXPECT().ReadFile("know/badparse.md").Return("not valid frontmatter at all", nil)
+	gs.EXPECT().ListAll().Return([]string{"kb/good.md", "kb/unreadable.md", "kb/badparse.md"}, nil)
+	gs.EXPECT().ReadFile("kb/good.md").Return("---\ndomain: [go]\nconfidence: 0.9\nsources: 1\nentities: [x]\nrefs: []\n---\n# Good\nBody.\n", nil)
+	gs.EXPECT().ReadFile("kb/unreadable.md").Return("", fmt.Errorf("read error"))
+	gs.EXPECT().ReadFile("kb/badparse.md").Return("not valid frontmatter at all", nil)
 
 	handler := newTestRouter(gs, nil)
 	rr := doRequest(t, handler, http.MethodGet, "/api/v1/stats", "")
@@ -313,7 +313,7 @@ func TestHandleSynthesizeStart_InvalidRecipe(t *testing.T) {
 
 	hub := NewTaskHub(context.Background())
 	synthDeps := &SynthDeps{Adapter: &fakeAdapter{}}
-	handler := NewRouter(gs, nil, hub, synthDeps, nil, nil, false, "know")
+	handler := NewRouter(gs, nil, hub, synthDeps, nil, nil, false, "kb")
 
 	rr := doRequest(t, handler, http.MethodPost, "/api/v1/synthesize", "not: valid: yaml: [[[")
 
@@ -331,7 +331,7 @@ func TestHandleSync_Success(t *testing.T) {
 	gs.EXPECT().HeadCommit().Return("abcdef1234567890", nil)
 
 	hub := NewTaskHub(context.Background())
-	handler := NewRouter(gs, nil, hub, nil, nil, nil, false, "know")
+	handler := NewRouter(gs, nil, hub, nil, nil, nil, false, "kb")
 
 	rr := doRequest(t, handler, http.MethodPost, "/api/v1/sync", "")
 
@@ -356,7 +356,7 @@ func TestHandleSync_AlreadyUpToDate(t *testing.T) {
 	gs.EXPECT().HeadCommit().Return("abcdef1234567890", nil)
 
 	hub := NewTaskHub(context.Background())
-	handler := NewRouter(gs, nil, hub, nil, nil, nil, false, "know")
+	handler := NewRouter(gs, nil, hub, nil, nil, nil, false, "kb")
 
 	rr := doRequest(t, handler, http.MethodPost, "/api/v1/sync", "")
 
@@ -373,7 +373,7 @@ func TestHandleSync_Error(t *testing.T) {
 	gs.EXPECT().Sync(nil).Return(git.SyncResult{}, fmt.Errorf("no remote"))
 
 	hub := NewTaskHub(context.Background())
-	handler := NewRouter(gs, nil, hub, nil, nil, nil, false, "know")
+	handler := NewRouter(gs, nil, hub, nil, nil, nil, false, "kb")
 
 	rr := doRequest(t, handler, http.MethodPost, "/api/v1/sync", "")
 
@@ -399,7 +399,7 @@ func TestHandleSync_Conflict(t *testing.T) {
 	gs.EXPECT().HeadCommit().Return("abc", nil).AnyTimes()
 
 	hub := NewTaskHub(context.Background())
-	handler := NewRouter(gs, nil, hub, nil, nil, nil, false, "know")
+	handler := NewRouter(gs, nil, hub, nil, nil, nil, false, "kb")
 
 	// First sync starts.
 	doRequest(t, handler, http.MethodPost, "/api/v1/sync", "")
@@ -424,7 +424,7 @@ func TestHandleEvents_InitialStatus(t *testing.T) {
 	mockIdx := NewMockSearchIndex(ctrl)
 
 	hub := NewTaskHub(context.Background())
-	handler := NewRouter(gs, mockIdx, hub, nil, nil, nil, false, "know")
+	handler := NewRouter(gs, mockIdx, hub, nil, nil, nil, false, "kb")
 
 	// Use a context with timeout to end the SSE connection.
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
@@ -450,7 +450,7 @@ func TestHandleEvents_TaskEvents(t *testing.T) {
 	gs.EXPECT().Sync(nil).Return(git.SyncResult{Synced: false}, nil)
 
 	hub := NewTaskHub(context.Background())
-	handler := NewRouter(gs, nil, hub, nil, nil, nil, false, "know")
+	handler := NewRouter(gs, nil, hub, nil, nil, nil, false, "kb")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()

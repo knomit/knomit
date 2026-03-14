@@ -15,14 +15,14 @@ func TestExploreListsEntries(t *testing.T) {
 	gs := NewMockGitStore(ctrl)
 
 	files := map[string]string{
-		"know/foo.md": SerializeFact(Fact{
-			Path: "know/foo.md", Title: "Foo Fact", Body: "Foo body.",
+		"kb/foo.md": SerializeFact(Fact{
+			Path: "kb/foo.md", Title: "Foo Fact", Body: "Foo body.",
 			Domain: []string{}, Confidence: 0.9, Sources: 1, Entities: []string{}, Refs: []string{},
 		}),
 	}
 
 	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
-	gs.EXPECT().ListDir("know").Return([]DirEntry{
+	gs.EXPECT().ListDir("kb").Return([]DirEntry{
 		{Name: "sub", IsDir: true},
 		{Name: "foo.md", IsDir: false},
 	}, nil)
@@ -33,10 +33,10 @@ func TestExploreListsEntries(t *testing.T) {
 		return "", fmt.Errorf("not found: %s", path)
 	}).AnyTimes()
 
-	handler := ExploreHandler(gs, "know")
+	handler := ExploreHandler(gs, "kb")
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
-		"path": "know",
+		"path": "kb",
 	}
 
 	result, err := handler(context.Background(), req)
@@ -67,10 +67,10 @@ func TestExploreDefaultPath(t *testing.T) {
 	gs := NewMockGitStore(ctrl)
 
 	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
-	gs.EXPECT().ListDir("know").Return([]DirEntry{}, nil)
+	gs.EXPECT().ListDir("kb").Return([]DirEntry{}, nil)
 	gs.EXPECT().ReadFile(gomock.Any()).Return("", fmt.Errorf("not found")).AnyTimes()
 
-	handler := ExploreHandler(gs, "know")
+	handler := ExploreHandler(gs, "kb")
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{}
 
@@ -97,8 +97,8 @@ func TestExploreInheritedFacts(t *testing.T) {
 	gs := NewMockGitStore(ctrl)
 
 	files := map[string]string{
-		"know/area/sub/local.md": SerializeFact(Fact{
-			Path:       "know/area/sub/local.md",
+		"kb/area/sub/local.md": SerializeFact(Fact{
+			Path:       "kb/area/sub/local.md",
 			Title:      "Local Fact",
 			Body:       "Local fact, not inherited.",
 			Domain:     []string{},
@@ -107,8 +107,8 @@ func TestExploreInheritedFacts(t *testing.T) {
 			Entities:   []string{},
 			Refs:       []string{},
 		}),
-		"know/area/parent.md": SerializeFact(Fact{
-			Path:       "know/area/parent.md",
+		"kb/area/parent.md": SerializeFact(Fact{
+			Path:       "kb/area/parent.md",
 			Title:      "Parent Fact",
 			Body:       "Inherited from parent.",
 			Domain:     []string{},
@@ -117,8 +117,8 @@ func TestExploreInheritedFacts(t *testing.T) {
 			Entities:   []string{},
 			Refs:       []string{},
 		}),
-		"know/grandparent.md": SerializeFact(Fact{
-			Path:       "know/grandparent.md",
+		"kb/grandparent.md": SerializeFact(Fact{
+			Path:       "kb/grandparent.md",
 			Title:      "Grandparent Fact",
 			Body:       "Inherited from grandparent.",
 			Domain:     []string{},
@@ -130,9 +130,9 @@ func TestExploreInheritedFacts(t *testing.T) {
 	}
 
 	dirEntries := map[string][]DirEntry{
-		"know/area/sub": {{Name: "local.md", IsDir: false}},
-		"know/area":     {{Name: "parent.md", IsDir: false}},
-		"know":          {{Name: "grandparent.md", IsDir: false}},
+		"kb/area/sub": {{Name: "local.md", IsDir: false}},
+		"kb/area":     {{Name: "parent.md", IsDir: false}},
+		"kb":          {{Name: "grandparent.md", IsDir: false}},
 	}
 
 	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
@@ -149,10 +149,10 @@ func TestExploreInheritedFacts(t *testing.T) {
 		return "", fmt.Errorf("not found: %s", path)
 	}).AnyTimes()
 
-	handler := ExploreHandler(gs, "know")
+	handler := ExploreHandler(gs, "kb")
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
-		"path": "know/area/sub",
+		"path": "kb/area/sub",
 	}
 
 	result, err := handler(context.Background(), req)
@@ -206,11 +206,11 @@ func TestExploreInheritedFacts(t *testing.T) {
 		inheritedByFile[file] = title
 	}
 
-	if inheritedByFile["know/area/parent.md"] != "Parent Fact" {
-		t.Fatalf("expected inherited 'know/area/parent.md' with title 'Parent Fact', got: %v", inheritedByFile)
+	if inheritedByFile["kb/area/parent.md"] != "Parent Fact" {
+		t.Fatalf("expected inherited 'kb/area/parent.md' with title 'Parent Fact', got: %v", inheritedByFile)
 	}
-	if inheritedByFile["know/grandparent.md"] != "Grandparent Fact" {
-		t.Fatalf("expected inherited 'know/grandparent.md' with title 'Grandparent Fact', got: %v", inheritedByFile)
+	if inheritedByFile["kb/grandparent.md"] != "Grandparent Fact" {
+		t.Fatalf("expected inherited 'kb/grandparent.md' with title 'Grandparent Fact', got: %v", inheritedByFile)
 	}
 }
 
@@ -219,8 +219,8 @@ func TestExploreWithManifest(t *testing.T) {
 	gs := NewMockGitStore(ctrl)
 
 	files := map[string]string{
-		"know/sub.md": SerializeFact(Fact{
-			Path: "know/sub.md", Title: "Sub Manifest", Body: "This is the sub section.",
+		"kb/sub.md": SerializeFact(Fact{
+			Path: "kb/sub.md", Title: "Sub Manifest", Body: "This is the sub section.",
 			Domain: []string{}, Confidence: 1.0, Sources: 1, Entities: []string{}, Refs: []string{},
 		}),
 	}
@@ -236,10 +236,10 @@ func TestExploreWithManifest(t *testing.T) {
 		return "", fmt.Errorf("not found: %s", path)
 	}).AnyTimes()
 
-	handler := ExploreHandler(gs, "know")
+	handler := ExploreHandler(gs, "kb")
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
-		"path": "know/sub",
+		"path": "kb/sub",
 	}
 
 	result, err := handler(context.Background(), req)

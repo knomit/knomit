@@ -21,10 +21,10 @@ func TestInitAndReadFile(t *testing.T) {
 	defer store.Close()
 
 	content := "---\ndomain: [test]\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# Test Fact\n\nBody.\n"
-	if _, _, err := store.WriteFile("general/test/fact.md", content, "test: write fact"); err != nil {
+	if _, _, err := store.WriteFile("kb/test/fact.md", content, "test: write fact"); err != nil {
 		t.Fatal(err)
 	}
-	got, err := store.ReadFile("general/test/fact.md")
+	got, err := store.ReadFile("kb/test/fact.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -49,7 +49,7 @@ func TestFileExists(t *testing.T) {
 		t.Fatal("general.md should exist after Init")
 	}
 
-	exists, err = store.FileExists("general/nonexistent.md")
+	exists, err = store.FileExists("kb/nonexistent.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,14 +66,14 @@ func TestListDir(t *testing.T) {
 	}
 	defer store.Close()
 
-	if _, _, err := store.WriteFile("general/alpha.md", "---\ndomain: []\nconfidence: 0.5\nsources: 1\nentities: []\nrefs: []\n---\n# Alpha\n\nBody.\n", "add alpha"); err != nil {
+	if _, _, err := store.WriteFile("kb/alpha.md", "---\ndomain: []\nconfidence: 0.5\nsources: 1\nentities: []\nrefs: []\n---\n# Alpha\n\nBody.\n", "add alpha"); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := store.WriteFile("general/sub/beta.md", "---\ndomain: []\nconfidence: 0.5\nsources: 1\nentities: []\nrefs: []\n---\n# Beta\n\nBody.\n", "add beta"); err != nil {
+	if _, _, err := store.WriteFile("kb/sub/beta.md", "---\ndomain: []\nconfidence: 0.5\nsources: 1\nentities: []\nrefs: []\n---\n# Beta\n\nBody.\n", "add beta"); err != nil {
 		t.Fatal(err)
 	}
 
-	entries, err := store.ListDir("general")
+	entries, err := store.ListDir("kb")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,10 +88,10 @@ func TestListDir(t *testing.T) {
 		}
 	}
 	if !hasAlpha {
-		t.Fatal("expected alpha.md in general/")
+		t.Fatal("expected alpha.md in kb/")
 	}
 	if !hasSub {
-		t.Fatal("expected sub/ in general/")
+		t.Fatal("expected sub/ in kb/")
 	}
 }
 
@@ -103,14 +103,14 @@ func TestLog(t *testing.T) {
 	}
 	defer store.Close()
 
-	if _, _, err := store.WriteFile("general/test.md", "---\ndomain: []\nconfidence: 0.5\nsources: 1\nentities: []\nrefs: []\n---\n# T\n\nv1.\n", "add test"); err != nil {
+	if _, _, err := store.WriteFile("kb/test.md", "---\ndomain: []\nconfidence: 0.5\nsources: 1\nentities: []\nrefs: []\n---\n# T\n\nv1.\n", "add test"); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := store.WriteFile("general/test.md", "---\ndomain: []\nconfidence: 0.5\nsources: 1\nentities: []\nrefs: []\n---\n# T\n\nv2.\n", "update test"); err != nil {
+	if _, _, err := store.WriteFile("kb/test.md", "---\ndomain: []\nconfidence: 0.5\nsources: 1\nentities: []\nrefs: []\n---\n# T\n\nv2.\n", "update test"); err != nil {
 		t.Fatal(err)
 	}
 
-	entries, err := store.Log("general/test.md")
+	entries, err := store.Log("kb/test.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -128,7 +128,7 @@ func TestOpenRoundtrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	content := "# Hello\n\nWorld.\n"
-	if _, _, err := store.WriteFile("general/hello.md", content, "add hello"); err != nil {
+	if _, _, err := store.WriteFile("kb/hello.md", content, "add hello"); err != nil {
 		t.Fatal(err)
 	}
 	store.Close()
@@ -139,7 +139,7 @@ func TestOpenRoundtrip(t *testing.T) {
 	}
 	defer store2.Close()
 
-	got, err := store2.ReadFile("general/hello.md")
+	got, err := store2.ReadFile("kb/hello.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -214,10 +214,10 @@ func TestDeleteFile(t *testing.T) {
 	defer store.Close()
 
 	// Write a file, then delete it.
-	if _, _, err := store.WriteFile("general/todelete.md", "# Delete me\n", "add file"); err != nil {
+	if _, _, err := store.WriteFile("kb/todelete.md", "# Delete me\n", "add file"); err != nil {
 		t.Fatal(err)
 	}
-	exists, err := store.FileExists("general/todelete.md")
+	exists, err := store.FileExists("kb/todelete.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -225,11 +225,11 @@ func TestDeleteFile(t *testing.T) {
 		t.Fatal("file should exist before deletion")
 	}
 
-	if _, err := store.DeleteFile("general/todelete.md", "delete: remove todelete.md"); err != nil {
+	if _, err := store.DeleteFile("kb/todelete.md", "delete: remove todelete.md"); err != nil {
 		t.Fatal(err)
 	}
 
-	exists, err = store.FileExists("general/todelete.md")
+	exists, err = store.FileExists("kb/todelete.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -246,7 +246,7 @@ func TestTag(t *testing.T) {
 	}
 	defer store.Close()
 
-	if _, _, err := store.WriteFile("general/tagged.md", "# Tagged\n", "add tagged file"); err != nil {
+	if _, _, err := store.WriteFile("kb/tagged.md", "# Tagged\n", "add tagged file"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -284,10 +284,10 @@ func TestGrep(t *testing.T) {
 	}
 	defer store.Close()
 
-	if _, _, err := store.WriteFile("general/alpha.md", "# Alpha\n\nThis file contains the word elephant.\n", "add alpha"); err != nil {
+	if _, _, err := store.WriteFile("kb/alpha.md", "# Alpha\n\nThis file contains the word elephant.\n", "add alpha"); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := store.WriteFile("general/beta.md", "# Beta\n\nThis file is about dogs.\n", "add beta"); err != nil {
+	if _, _, err := store.WriteFile("kb/beta.md", "# Beta\n\nThis file is about dogs.\n", "add beta"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -295,8 +295,8 @@ func TestGrep(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(matches) != 1 || matches[0] != "general/alpha.md" {
-		t.Fatalf("expected [general/alpha.md], got %v", matches)
+	if len(matches) != 1 || matches[0] != "kb/alpha.md" {
+		t.Fatalf("expected [kb/alpha.md], got %v", matches)
 	}
 
 	// Grep for something in both files.
@@ -323,7 +323,7 @@ func TestDiffFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, _, err := store.WriteFile("general/new.md", "# New\n", "add new"); err != nil {
+	if _, _, err := store.WriteFile("kb/new.md", "# New\n", "add new"); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := store.WriteFile("kb.md", "# Knowledge Base\n\nUpdated root.\n", "update root"); err != nil {
@@ -337,12 +337,12 @@ func TestDiffFiles(t *testing.T) {
 
 	var hasNew bool
 	for _, p := range added {
-		if p == "general/new.md" {
+		if p == "kb/new.md" {
 			hasNew = true
 		}
 	}
 	if !hasNew {
-		t.Fatalf("expected general/new.md in added, got added=%v modified=%v deleted=%v", added, modified, deleted)
+		t.Fatalf("expected kb/new.md in added, got added=%v modified=%v deleted=%v", added, modified, deleted)
 	}
 
 	var hasModified bool
@@ -428,7 +428,7 @@ func TestSync(t *testing.T) {
 		// Add a commit to origin's agent branch (WriteFile always targets the
 		// agent branch), then advance origin's main ref to that commit so that
 		// origin/main has content the agent store has never seen.
-		if _, _, err := origin.WriteFile("general/shared.md", "# Shared\n", "origin: add shared"); err != nil {
+		if _, _, err := origin.WriteFile("kb/shared.md", "# Shared\n", "origin: add shared"); err != nil {
 			t.Fatal(err)
 		}
 		originHead, err := origin.HeadCommit()
@@ -485,12 +485,12 @@ func TestSync(t *testing.T) {
 		}
 
 		// The merged file should now be accessible.
-		exists, err := store.FileExists("general/shared.md")
+		exists, err := store.FileExists("kb/shared.md")
 		if err != nil {
 			t.Fatal(err)
 		}
 		if !exists {
-			t.Fatal("expected general/shared.md to exist after merge")
+			t.Fatal("expected kb/shared.md to exist after merge")
 		}
 	})
 }
@@ -519,10 +519,10 @@ func TestListAll(t *testing.T) {
 	}
 
 	// Add two more .md files and a non-.md file (no API for non-md, so skip that part).
-	if _, _, err := store.WriteFile("general/alpha.md", "# Alpha\n\nAlpha body.\n", "add alpha"); err != nil {
+	if _, _, err := store.WriteFile("kb/alpha.md", "# Alpha\n\nAlpha body.\n", "add alpha"); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := store.WriteFile("general/sub/beta.md", "# Beta\n\nBeta body.\n", "add beta"); err != nil {
+	if _, _, err := store.WriteFile("kb/sub/beta.md", "# Beta\n\nBeta body.\n", "add beta"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -533,8 +533,8 @@ func TestListAll(t *testing.T) {
 
 	want := map[string]bool{
 		"kb.md":           true,
-		"general/alpha.md":     true,
-		"general/sub/beta.md":  true,
+		"kb/alpha.md":     true,
+		"kb/sub/beta.md":  true,
 	}
 	for _, p := range paths {
 		delete(want, p)
@@ -553,8 +553,8 @@ func TestBatchWrite(t *testing.T) {
 	defer store.Close()
 
 	files := map[string]string{
-		"general/a.md": "# A\n\nContent A.\n",
-		"general/b.md": "# B\n\nContent B.\n",
+		"kb/a.md": "# A\n\nContent A.\n",
+		"kb/b.md": "# B\n\nContent B.\n",
 	}
 
 	commitHash, blobHashes, err := store.BatchWrite(files, "batch: add a and b")
@@ -580,12 +580,12 @@ func TestBatchWrite(t *testing.T) {
 	}
 
 	// A batch write should be a single commit (not two).
-	logEntries, err := store.Log("general/a.md")
+	logEntries, err := store.Log("kb/a.md")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(logEntries) == 0 {
-		t.Fatal("expected at least one log entry for general/a.md")
+		t.Fatal("expected at least one log entry for kb/a.md")
 	}
 	if logEntries[0].Message != "batch: add a and b" {
 		t.Fatalf("expected batch commit message, got %q", logEntries[0].Message)
@@ -600,7 +600,7 @@ func TestWriteFileReturnsBlobHash(t *testing.T) {
 	}
 	defer store.Close()
 
-	commitHash, blobHash, err := store.WriteFile("general/test.md", "# Test\n\nBody.\n", "add test")
+	commitHash, blobHash, err := store.WriteFile("kb/test.md", "# Test\n\nBody.\n", "add test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -621,12 +621,12 @@ func TestReadFileWithHash(t *testing.T) {
 	defer store.Close()
 
 	content := "# Test\n\nBody text.\n"
-	_, expectedBlobHash, err := store.WriteFile("general/test.md", content, "add test")
+	_, expectedBlobHash, err := store.WriteFile("kb/test.md", content, "add test")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	gotContent, gotBlobHash, err := store.ReadFileWithHash("general/test.md")
+	gotContent, gotBlobHash, err := store.ReadFileWithHash("kb/test.md")
 	if err != nil {
 		t.Fatal(err)
 	}

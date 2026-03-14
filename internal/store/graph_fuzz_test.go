@@ -44,7 +44,7 @@ func FuzzGraphUpsert(f *testing.F) {
 		defer idx.Close()
 
 		rec := FactRecord{
-			Path:       "know/" + path + ".md",
+			Path:       "kb/" + path + ".md",
 			Title:      title,
 			Domain:     []string{domain},
 			Entities:   []string{entity},

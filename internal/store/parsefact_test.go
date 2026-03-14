@@ -1,6 +1,44 @@
 package store
 
-import "testing"
+import (
+	"testing"
+)
+
+func TestParseFact_TypeField(t *testing.T) {
+	content := "---\ntype: concept\ndomain: [test]\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# A concept\n\nBody.\n"
+	rec, err := parseFact("test/typed.md", content, "abc123")
+	if err != nil {
+		t.Fatalf("parseFact error: %v", err)
+	}
+	if rec.Type != "concept" {
+		t.Fatalf("type: got %q want %q", rec.Type, "concept")
+	}
+}
+
+func TestParseFact_TypeDefaultsToObservation(t *testing.T) {
+	content := "---\ndomain: [test]\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# No type\n\nBody.\n"
+	rec, err := parseFact("test/no-type.md", content, "abc123")
+	if err != nil {
+		t.Fatalf("parseFact error: %v", err)
+	}
+	if rec.Type != "observation" {
+		t.Fatalf("type: got %q want %q", rec.Type, "observation")
+	}
+}
+
+func TestParseFact_AllEpistemicTypes(t *testing.T) {
+	types := []string{"observation", "concept", "process", "principle", "pattern", "reference"}
+	for _, et := range types {
+		content := "---\ntype: " + et + "\ndomain: []\nconfidence: 0.5\nsources: 1\nentities: []\nrefs: []\n---\n# Title\n\nBody.\n"
+		rec, err := parseFact("test/"+et+".md", content, "abc")
+		if err != nil {
+			t.Fatalf("type %q: parseFact error: %v", et, err)
+		}
+		if rec.Type != et {
+			t.Fatalf("type %q: got %q", et, rec.Type)
+		}
+	}
+}
 
 func TestParseFact_HeadingVariants(t *testing.T) {
 	tests := []struct {

@@ -129,7 +129,7 @@ steps:
   - mode: prune
 scope:
   domain: [testing]
-  path: know/test/
+  path: kb/test/
 `,
 			wantErr: false,
 		},

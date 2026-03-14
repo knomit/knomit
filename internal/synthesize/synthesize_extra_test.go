@@ -67,9 +67,9 @@ func TestExtractJSONSingleBacktickBlock(t *testing.T) {
 func TestParsePruneResponseValidJSON(t *testing.T) {
 	input := `{
   "decisions": [
-    {"path": "know/a.md", "action": "keep"},
-    {"path": "know/b.md", "action": "retract"},
-    {"path": "know/c.md", "action": "update", "confidence": 0.5}
+    {"path": "kb/a.md", "action": "keep"},
+    {"path": "kb/b.md", "action": "retract"},
+    {"path": "kb/c.md", "action": "update", "confidence": 0.5}
   ],
   "merges": []
 }`
@@ -102,7 +102,7 @@ func TestParsePruneResponseWithMerges(t *testing.T) {
     {
       "paths": ["a.md", "b.md"],
       "merged": {
-        "path": "know/ab.md",
+        "path": "kb/ab.md",
         "title": "AB",
         "body": "combined",
         "domain": ["test"],
@@ -135,16 +135,16 @@ func TestParseDistillResponseValidJSON(t *testing.T) {
 	input := `{
   "synthesize": [
     {
-      "path": "know/synth.md",
+      "path": "kb/synth.md",
       "title": "Synth",
       "body": "Insight.",
       "domain": ["d1"],
       "confidence": 0.85,
       "entities": ["E1"],
-      "refs": ["know/a.md"]
+      "refs": ["kb/a.md"]
     }
   ],
-  "retract": ["know/a.md", "know/b.md"]
+  "retract": ["kb/a.md", "kb/b.md"]
 }`
 	result, err := parseDistillResponse(input)
 	if err != nil {
@@ -263,12 +263,12 @@ func TestExtractJSON_ThinkBlocks(t *testing.T) {
 // ── validatePrunePaths ──────────────────────────────────────────────────────
 
 func TestValidatePrunePaths_AllValid(t *testing.T) {
-	inputPaths := []string{"know/a.md", "know/b.md", "know/c.md"}
+	inputPaths := []string{"kb/a.md", "kb/b.md", "kb/c.md"}
 	result := PruneResult{
 		Decisions: []PruneDecision{
-			{Path: "know/a.md", Action: "keep"},
-			{Path: "know/b.md", Action: "retract"},
-			{Path: "know/c.md", Action: "update", Confidence: 0.5},
+			{Path: "kb/a.md", Action: "keep"},
+			{Path: "kb/b.md", Action: "retract"},
+			{Path: "kb/c.md", Action: "update", Confidence: 0.5},
 		},
 	}
 	if err := validatePrunePaths(result, inputPaths); err != nil {
@@ -277,7 +277,7 @@ func TestValidatePrunePaths_AllValid(t *testing.T) {
 }
 
 func TestValidatePrunePaths_BogusPath(t *testing.T) {
-	inputPaths := []string{"know/a.md", "know/b.md"}
+	inputPaths := []string{"kb/a.md", "kb/b.md"}
 	result := PruneResult{
 		Decisions: []PruneDecision{
 			{Path: ".", Action: "keep", Confidence: 0.9},
@@ -293,7 +293,7 @@ func TestValidatePrunePaths_BogusPath(t *testing.T) {
 }
 
 func TestValidatePrunePaths_EmptyDecisions(t *testing.T) {
-	inputPaths := []string{"know/a.md"}
+	inputPaths := []string{"kb/a.md"}
 	result := PruneResult{Decisions: nil}
 	if err := validatePrunePaths(result, inputPaths); err != nil {
 		t.Errorf("expected no error for empty decisions, got: %v", err)
@@ -301,12 +301,12 @@ func TestValidatePrunePaths_EmptyDecisions(t *testing.T) {
 }
 
 func TestValidatePrunePaths_MergeSourcesValidated(t *testing.T) {
-	inputPaths := []string{"know/a.md", "know/b.md"}
+	inputPaths := []string{"kb/a.md", "kb/b.md"}
 	result := PruneResult{
 		Merges: []MergeEntry{
 			{
-				Paths:  []string{"know/a.md", "know/NONEXISTENT.md"},
-				Merged: mergedFact{Path: "know/ab.md", Title: "Combined"},
+				Paths:  []string{"kb/a.md", "kb/NONEXISTENT.md"},
+				Merged: mergedFact{Path: "kb/ab.md", Title: "Combined"},
 			},
 		},
 	}
@@ -320,10 +320,10 @@ func TestValidatePrunePaths_MergeSourcesValidated(t *testing.T) {
 }
 
 func TestValidatePrunePaths_UnknownAction(t *testing.T) {
-	inputPaths := []string{"know/a.md", "know/b.md"}
+	inputPaths := []string{"kb/a.md", "kb/b.md"}
 	result := PruneResult{
 		Decisions: []PruneDecision{
-			{Path: "know/a.md", Action: "merge", Confidence: 0.75},
+			{Path: "kb/a.md", Action: "merge", Confidence: 0.75},
 		},
 	}
 	err := validatePrunePaths(result, inputPaths)
@@ -336,7 +336,7 @@ func TestValidatePrunePaths_UnknownAction(t *testing.T) {
 }
 
 func TestValidatePrunePaths_MergeEmptyPaths(t *testing.T) {
-	inputPaths := []string{"know/a.md", "know/b.md"}
+	inputPaths := []string{"kb/a.md", "kb/b.md"}
 	// Model used wrong schema: "from"/"to" instead of "paths"/"merged" —
 	// Paths unmarshals as nil, Merged as zero-value.
 	result := PruneResult{
@@ -351,12 +351,12 @@ func TestValidatePrunePaths_MergeEmptyPaths(t *testing.T) {
 }
 
 func TestValidatePrunePaths_MergeEmptyTitle(t *testing.T) {
-	inputPaths := []string{"know/a.md", "know/b.md"}
+	inputPaths := []string{"kb/a.md", "kb/b.md"}
 	result := PruneResult{
 		Merges: []MergeEntry{
 			{
-				Paths:  []string{"know/a.md", "know/b.md"},
-				Merged: mergedFact{Path: "know/ab.md", Title: ""},
+				Paths:  []string{"kb/a.md", "kb/b.md"},
+				Merged: mergedFact{Path: "kb/ab.md", Title: ""},
 			},
 		},
 	}
@@ -369,9 +369,9 @@ func TestValidatePrunePaths_MergeEmptyTitle(t *testing.T) {
 // ── validateDistillPaths ────────────────────────────────────────────────────
 
 func TestValidateDistillPaths_AllValid(t *testing.T) {
-	inputPaths := []string{"know/a.md", "know/b.md"}
+	inputPaths := []string{"kb/a.md", "kb/b.md"}
 	result := DistillResult{
-		Retract: []string{"know/a.md"},
+		Retract: []string{"kb/a.md"},
 	}
 	if err := validateDistillPaths(result, inputPaths); err != nil {
 		t.Errorf("expected no error, got: %v", err)
@@ -379,9 +379,9 @@ func TestValidateDistillPaths_AllValid(t *testing.T) {
 }
 
 func TestValidateDistillPaths_BogusForgetPath(t *testing.T) {
-	inputPaths := []string{"know/a.md"}
+	inputPaths := []string{"kb/a.md"}
 	result := DistillResult{
-		Retract: []string{"know/FAKE.md"},
+		Retract: []string{"kb/FAKE.md"},
 	}
 	err := validateDistillPaths(result, inputPaths)
 	if err == nil {
@@ -431,7 +431,7 @@ func TestDistillClusterInMemoryWithEmbeddings(t *testing.T) {
 		emb[0] = 10.0
 		emb[2] = float32(i) * 0.01
 		facts = append(facts, workFact{
-			factForLLM: factForLLM{File: fmt.Sprintf("know/a/%d.md", i), Title: fmt.Sprintf("A%d", i)},
+			factForLLM: factForLLM{File: fmt.Sprintf("kb/a/%d.md", i), Title: fmt.Sprintf("A%d", i)},
 			embedding:  emb,
 		})
 	}
@@ -440,7 +440,7 @@ func TestDistillClusterInMemoryWithEmbeddings(t *testing.T) {
 		emb[4] = 10.0
 		emb[5] = float32(i) * 0.01
 		facts = append(facts, workFact{
-			factForLLM: factForLLM{File: fmt.Sprintf("know/b/%d.md", i), Title: fmt.Sprintf("B%d", i)},
+			factForLLM: factForLLM{File: fmt.Sprintf("kb/b/%d.md", i), Title: fmt.Sprintf("B%d", i)},
 			embedding:  emb,
 		})
 	}
@@ -458,12 +458,12 @@ func TestGatherAllFactsSuccess(t *testing.T) {
 	gs := NewMockGitStore(ctrl)
 
 	gs.EXPECT().ListAll().Return([]string{
-		"know/test/fact1.md",
-		"know/test/fact2.md",
-		"know/test/readme.txt", // non-md, should be skipped
+		"kb/test/fact1.md",
+		"kb/test/fact2.md",
+		"kb/test/readme.txt", // non-md, should be skipped
 	}, nil)
-	gs.EXPECT().ReadFile("know/test/fact1.md").Return(factContent("Fact One", "Body one."), nil)
-	gs.EXPECT().ReadFile("know/test/fact2.md").Return(factContent("Fact Two", "Body two."), nil)
+	gs.EXPECT().ReadFile("kb/test/fact1.md").Return(factContent("Fact One", "Body one."), nil)
+	gs.EXPECT().ReadFile("kb/test/fact2.md").Return(factContent("Fact Two", "Body two."), nil)
 
 	facts, err := gatherAllFacts(gs)
 	if err != nil {
@@ -497,11 +497,11 @@ func TestGatherAllFactsSkipsUnreadable(t *testing.T) {
 	gs := NewMockGitStore(ctrl)
 
 	gs.EXPECT().ListAll().Return([]string{
-		"know/ok.md",
-		"know/broken.md",
+		"kb/ok.md",
+		"kb/broken.md",
 	}, nil)
-	gs.EXPECT().ReadFile("know/ok.md").Return(factContent("OK", "OK body."), nil)
-	gs.EXPECT().ReadFile("know/broken.md").Return("", fmt.Errorf("read error"))
+	gs.EXPECT().ReadFile("kb/ok.md").Return(factContent("OK", "OK body."), nil)
+	gs.EXPECT().ReadFile("kb/broken.md").Return("", fmt.Errorf("read error"))
 
 	facts, err := gatherAllFacts(gs)
 	if err != nil {
@@ -517,12 +517,12 @@ func TestGatherAllFactsSkipsNonFact(t *testing.T) {
 	gs := NewMockGitStore(ctrl)
 
 	gs.EXPECT().ListAll().Return([]string{
-		"know/ok.md",
-		"know/notafact.md",
+		"kb/ok.md",
+		"kb/notafact.md",
 	}, nil)
-	gs.EXPECT().ReadFile("know/ok.md").Return(factContent("OK", "OK body."), nil)
+	gs.EXPECT().ReadFile("kb/ok.md").Return(factContent("OK", "OK body."), nil)
 	// File is .md but content is not a valid fact (no frontmatter).
-	gs.EXPECT().ReadFile("know/notafact.md").Return("# Just a markdown file\n\nNo frontmatter here.", nil)
+	gs.EXPECT().ReadFile("kb/notafact.md").Return("# Just a markdown file\n\nNo frontmatter here.", nil)
 
 	facts, err := gatherAllFacts(gs)
 	if err != nil {
@@ -539,8 +539,8 @@ func TestGatherAllFactsSearchResultsMapping(t *testing.T) {
 	gs := NewMockGitStore(ctrl)
 
 	content := "---\ndomain: [go, testing]\nconfidence: 0.95\nsources: 3\nentities: [Foo, Bar]\nrefs: []\n---\n# My Title\n\nMy body text.\n"
-	gs.EXPECT().ListAll().Return([]string{"know/mapped.md"}, nil)
-	gs.EXPECT().ReadFile("know/mapped.md").Return(content, nil)
+	gs.EXPECT().ListAll().Return([]string{"kb/mapped.md"}, nil)
+	gs.EXPECT().ReadFile("kb/mapped.md").Return(content, nil)
 
 	facts, err := gatherAllFacts(gs)
 	if err != nil {
@@ -550,8 +550,8 @@ func TestGatherAllFactsSearchResultsMapping(t *testing.T) {
 		t.Fatalf("expected 1 fact, got %d", len(facts))
 	}
 	f := facts[0]
-	if f.File != "know/mapped.md" {
-		t.Errorf("File: got %q, want %q", f.File, "know/mapped.md")
+	if f.File != "kb/mapped.md" {
+		t.Errorf("File: got %q, want %q", f.File, "kb/mapped.md")
 	}
 	if f.Title != "My Title" {
 		t.Errorf("Title: got %q, want %q", f.Title, "My Title")
@@ -592,7 +592,7 @@ func TestDistillSearchResultsToWorkFacts(t *testing.T) {
 		{
 			FactWithBody: store.FactWithBody{
 				FactRecord: store.FactRecord{
-					Path:       "know/x.md",
+					Path:       "kb/x.md",
 					Title:      "X",
 					Domain:     []string{"d1"},
 					Entities:   []string{"E1"},
@@ -625,8 +625,8 @@ func TestDistillSearchResultsToWorkFacts(t *testing.T) {
 		t.Fatalf("expected 1 workFact, got %d", len(currentFacts))
 	}
 	wf := currentFacts[0]
-	if wf.File != "know/x.md" {
-		t.Errorf("File: got %q, want %q", wf.File, "know/x.md")
+	if wf.File != "kb/x.md" {
+		t.Errorf("File: got %q, want %q", wf.File, "kb/x.md")
 	}
 	if wf.Title != "X" {
 		t.Errorf("Title: got %q", wf.Title)

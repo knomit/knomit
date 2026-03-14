@@ -15,22 +15,22 @@ func TestWhyReturnsHistory(t *testing.T) {
 	gs := NewMockGitStore(ctrl)
 
 	factContent := SerializeFact(Fact{
-		Path: "know/foo.md", Title: "Foo", Body: "Body.",
+		Path: "kb/foo.md", Title: "Foo", Body: "Body.",
 		Domain: []string{"testing"}, Confidence: 0.9, Sources: 1,
 		Entities: []string{}, Refs: []string{},
 	})
 
 	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
-	gs.EXPECT().ReadFile("know/foo.md").Return(factContent, nil)
-	gs.EXPECT().Log("know/foo.md").Return([]LogEntry{
+	gs.EXPECT().ReadFile("kb/foo.md").Return(factContent, nil)
+	gs.EXPECT().Log("kb/foo.md").Return([]LogEntry{
 		{Commit: "deadbeef", Date: "2024-01-01T00:00:00Z", Message: "learn: first"},
 	}, nil)
 	gs.EXPECT().TagsContaining("deadbeef").Return([]string{"learn/first"}, nil)
 
-	handler := WhyHandler(gs, "know")
+	handler := WhyHandler(gs, "kb")
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
-		"file": "know/foo.md",
+		"file": "kb/foo.md",
 	}
 
 	result, err := handler(context.Background(), req)
@@ -73,7 +73,7 @@ func TestWhyRequiresFile(t *testing.T) {
 
 	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
 
-	handler := WhyHandler(gs, "know")
+	handler := WhyHandler(gs, "kb")
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{}
 
@@ -91,12 +91,12 @@ func TestWhyFileNotFound(t *testing.T) {
 	gs := NewMockGitStore(ctrl)
 
 	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
-	gs.EXPECT().ReadFile("know/nonexistent.md").Return("", fmt.Errorf("not found"))
+	gs.EXPECT().ReadFile("kb/nonexistent.md").Return("", fmt.Errorf("not found"))
 
-	handler := WhyHandler(gs, "know")
+	handler := WhyHandler(gs, "kb")
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
-		"file": "know/nonexistent.md",
+		"file": "kb/nonexistent.md",
 	}
 
 	result, err := handler(context.Background(), req)

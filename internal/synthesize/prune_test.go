@@ -26,12 +26,12 @@ func TestPruneStep(t *testing.T) {
 	adapter := NewMockLLMAdapter(ctrl)
 
 	files := map[string]string{
-		"know/test/foo.md": factContent("Foo fact", "Foo is great."),
-		"know/test/bar.md": factContent("Bar fact", "Bar is outdated."),
-		"know/test/baz.md": factContent("Baz fact", "Baz needs confidence update."),
+		"kb/test/foo.md": factContent("Foo fact", "Foo is great."),
+		"kb/test/bar.md": factContent("Bar fact", "Bar is outdated."),
+		"kb/test/baz.md": factContent("Baz fact", "Baz needs confidence update."),
 	}
 
-	gs.EXPECT().ListAll().Return([]string{"know/test/foo.md", "know/test/bar.md", "know/test/baz.md"}, nil)
+	gs.EXPECT().ListAll().Return([]string{"kb/test/foo.md", "kb/test/bar.md", "kb/test/baz.md"}, nil)
 	gs.EXPECT().ReadFile(gomock.Any()).DoAndReturn(func(path string) (string, error) {
 		if c, ok := files[path]; ok {
 			return c, nil
@@ -47,21 +47,21 @@ func TestPruneStep(t *testing.T) {
 	// LLM returns: keep foo, forget bar, update baz with confidence=0.7
 	mockResponse := `{
   "decisions": [
-    { "path": "know/test/foo.md", "action": "keep" },
-    { "path": "know/test/bar.md", "action": "retract" },
-    { "path": "know/test/baz.md", "action": "update", "confidence": 0.7 }
+    { "path": "kb/test/foo.md", "action": "keep" },
+    { "path": "kb/test/bar.md", "action": "retract" },
+    { "path": "kb/test/baz.md", "action": "update", "confidence": 0.7 }
   ],
   "merges": []
 }`
 	adapter.EXPECT().Complete(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(mockResponse, nil)
 
 	// bar: forget — DeleteFile + idx.Delete
-	gs.EXPECT().DeleteFile("know/test/bar.md", gomock.Any()).Return("deadbeef1", nil)
-	idx.EXPECT().Delete("know/test/bar.md").Return(nil)
+	gs.EXPECT().DeleteFile("kb/test/bar.md", gomock.Any()).Return("deadbeef1", nil)
+	idx.EXPECT().Delete("kb/test/bar.md").Return(nil)
 
 	// baz: update — WriteFile with updated confidence, idx.Upsert
 	var bazWritten string
-	gs.EXPECT().WriteFile("know/test/baz.md", gomock.Any(), gomock.Any()).DoAndReturn(func(path, content, msg string) (string, string, error) {
+	gs.EXPECT().WriteFile("kb/test/baz.md", gomock.Any(), gomock.Any()).DoAndReturn(func(path, content, msg string) (string, string, error) {
 		bazWritten = content
 		return "deadbeef2", "blob_baz", nil
 	})
@@ -82,7 +82,7 @@ func TestPruneStep(t *testing.T) {
 
 	// baz should have updated confidence in written content
 	if bazWritten == "" {
-		t.Fatal("expected know/test/baz.md to be rewritten with updated confidence")
+		t.Fatal("expected kb/test/baz.md to be rewritten with updated confidence")
 	}
 	if !strings.Contains(bazWritten, "confidence: 0.7") {
 		t.Errorf("baz.md content should contain 'confidence: 0.7', got:\n%s", bazWritten)
@@ -91,7 +91,7 @@ func TestPruneStep(t *testing.T) {
 	// tag event should be present
 	tagEventSeen := false
 	for _, e := range events {
-		if e.Phase == "detail-retract" && e.Message == "retract know/test/bar.md" {
+		if e.Phase == "detail-retract" && e.Message == "retract kb/test/bar.md" {
 			tagEventSeen = true
 		}
 	}
@@ -106,11 +106,11 @@ func TestPruneStepWithMerge(t *testing.T) {
 	adapter := NewMockLLMAdapter(ctrl)
 
 	files := map[string]string{
-		"know/test/a.md": factContent("A fact", "A says something."),
-		"know/test/b.md": factContent("B fact", "B says the same thing."),
+		"kb/test/a.md": factContent("A fact", "A says something."),
+		"kb/test/b.md": factContent("B fact", "B says the same thing."),
 	}
 
-	gs.EXPECT().ListAll().Return([]string{"know/test/a.md", "know/test/b.md"}, nil)
+	gs.EXPECT().ListAll().Return([]string{"kb/test/a.md", "kb/test/b.md"}, nil)
 	gs.EXPECT().ReadFile(gomock.Any()).DoAndReturn(func(path string) (string, error) {
 		if c, ok := files[path]; ok {
 			return c, nil
@@ -120,7 +120,7 @@ func TestPruneStepWithMerge(t *testing.T) {
 
 	// Louvain clustering returns both facts in one cluster.
 	idx.EXPECT().ClusterFacts(gomock.Any(), gomock.Any()).Return(store.ClusterResult{
-		Clusters: map[int][]string{0: {"know/test/a.md", "know/test/b.md"}},
+		Clusters: map[int][]string{0: {"kb/test/a.md", "kb/test/b.md"}},
 	}, nil)
 	// Dedup pass: no near-duplicates found.
 	idx.EXPECT().Search(gomock.Any()).Return(nil, nil).AnyTimes()
@@ -129,16 +129,16 @@ func TestPruneStepWithMerge(t *testing.T) {
   "decisions": [],
   "merges": [
     {
-      "paths": ["know/test/a.md", "know/test/b.md"],
+      "paths": ["kb/test/a.md", "kb/test/b.md"],
       "merged": {
-        "path": "know/test/ab-merged.md",
+        "path": "kb/test/ab-merged.md",
         "title": "A and B combined",
         "body": "Combined body.",
         "domain": ["testing"],
         "confidence": 0.85,
         "sources": 2,
         "entities": [],
-        "refs": ["know/test/a.md", "know/test/b.md"]
+        "refs": ["kb/test/a.md", "kb/test/b.md"]
       }
     }
   ]
@@ -147,18 +147,18 @@ func TestPruneStepWithMerge(t *testing.T) {
 
 	// Write merged fact
 	var mergedWritten bool
-	gs.EXPECT().WriteFile("know/test/ab-merged.md", gomock.Any(), gomock.Any()).DoAndReturn(func(path, content, msg string) (string, string, error) {
+	gs.EXPECT().WriteFile("kb/test/ab-merged.md", gomock.Any(), gomock.Any()).DoAndReturn(func(path, content, msg string) (string, string, error) {
 		mergedWritten = true
 		return "deadbeef", "blob_merged", nil
 	})
 	idx.EXPECT().Upsert(gomock.Any()).Return(nil)
-	idx.EXPECT().GraphAddDerivedFrom("know/test/ab-merged.md", gomock.Any()).Return(nil)
+	idx.EXPECT().GraphAddDerivedFrom("kb/test/ab-merged.md", gomock.Any()).Return(nil)
 
 	// Delete source facts
-	gs.EXPECT().DeleteFile("know/test/a.md", gomock.Any()).Return("deadbeef2", nil)
-	idx.EXPECT().Delete("know/test/a.md").Return(nil)
-	gs.EXPECT().DeleteFile("know/test/b.md", gomock.Any()).Return("deadbeef3", nil)
-	idx.EXPECT().Delete("know/test/b.md").Return(nil)
+	gs.EXPECT().DeleteFile("kb/test/a.md", gomock.Any()).Return("deadbeef2", nil)
+	idx.EXPECT().Delete("kb/test/a.md").Return(nil)
+	gs.EXPECT().DeleteFile("kb/test/b.md", gomock.Any()).Return("deadbeef3", nil)
+	idx.EXPECT().Delete("kb/test/b.md").Return(nil)
 
 	// Tags per operation
 	gs.EXPECT().Tag(gomock.Any()).Return(nil).AnyTimes()
@@ -171,7 +171,7 @@ func TestPruneStepWithMerge(t *testing.T) {
 	}
 
 	if !mergedWritten {
-		t.Error("expected merged fact know/test/ab-merged.md to be written")
+		t.Error("expected merged fact kb/test/ab-merged.md to be written")
 	}
 }
 
@@ -227,7 +227,7 @@ func TestParsePruneResponseMarkdownWrapped(t *testing.T) {
 	// LLMs sometimes wrap their JSON in markdown code fences.
 	wrapped := "```json\n" + `{
   "decisions": [
-    { "path": "know/x.md", "action": "keep" }
+    { "path": "kb/x.md", "action": "keep" }
   ],
   "merges": []
 }` + "\n```"
@@ -239,8 +239,8 @@ func TestParsePruneResponseMarkdownWrapped(t *testing.T) {
 	if len(result.Decisions) != 1 {
 		t.Fatalf("expected 1 decision, got %d", len(result.Decisions))
 	}
-	if result.Decisions[0].Path != "know/x.md" {
-		t.Errorf("expected path 'know/x.md', got %q", result.Decisions[0].Path)
+	if result.Decisions[0].Path != "kb/x.md" {
+		t.Errorf("expected path 'kb/x.md', got %q", result.Decisions[0].Path)
 	}
 	if result.Decisions[0].Action != "keep" {
 		t.Errorf("expected action 'keep', got %q", result.Decisions[0].Action)
@@ -254,16 +254,16 @@ func TestParseDistillResponseMarkdownWrapped(t *testing.T) {
 	wrapped := "```json\n" + `{
   "synthesize": [
     {
-      "path": "know/synth.md",
+      "path": "kb/synth.md",
       "title": "Synthesized",
       "body": "Combined insight.",
       "domain": ["testing"],
       "confidence": 0.85,
       "entities": [],
-      "refs": ["know/a.md"]
+      "refs": ["kb/a.md"]
     }
   ],
-  "retract": ["know/a.md"]
+  "retract": ["kb/a.md"]
 }` + "\n```"
 
 	result, err := parseDistillResponse(wrapped)
@@ -273,14 +273,14 @@ func TestParseDistillResponseMarkdownWrapped(t *testing.T) {
 	if len(result.Synthesize) != 1 {
 		t.Fatalf("expected 1 synthesized fact, got %d", len(result.Synthesize))
 	}
-	if result.Synthesize[0].Path != "know/synth.md" {
-		t.Errorf("expected path 'know/synth.md', got %q", result.Synthesize[0].Path)
+	if result.Synthesize[0].Path != "kb/synth.md" {
+		t.Errorf("expected path 'kb/synth.md', got %q", result.Synthesize[0].Path)
 	}
 	if result.Synthesize[0].Title != "Synthesized" {
 		t.Errorf("expected title 'Synthesized', got %q", result.Synthesize[0].Title)
 	}
-	if len(result.Retract) != 1 || result.Retract[0] != "know/a.md" {
-		t.Errorf("expected forget=[know/a.md], got %v", result.Retract)
+	if len(result.Retract) != 1 || result.Retract[0] != "kb/a.md" {
+		t.Errorf("expected forget=[kb/a.md], got %v", result.Retract)
 	}
 }
 
@@ -290,7 +290,7 @@ func TestChunkFactsExceedsBudget(t *testing.T) {
 	facts := make([]factForLLM, 10)
 	for i := range facts {
 		facts[i] = factForLLM{
-			File:  "know/fact.md",
+			File:  "kb/fact.md",
 			Title: "A moderately long title that takes up space",
 			Body:  "A moderately long body that contributes to the chunk budget.",
 		}
@@ -332,14 +332,14 @@ func TestPruneStepClustersBeforeLLM(t *testing.T) {
 	adapter := NewMockLLMAdapter(ctrl)
 
 	clusterAFiles := []string{
-		"know/cluster-a/a1.md", "know/cluster-a/a2.md", "know/cluster-a/a3.md",
-		"know/cluster-a/a4.md", "know/cluster-a/a5.md",
+		"kb/cluster-a/a1.md", "kb/cluster-a/a2.md", "kb/cluster-a/a3.md",
+		"kb/cluster-a/a4.md", "kb/cluster-a/a5.md",
 	}
 	clusterBFiles := []string{
-		"know/cluster-b/b1.md", "know/cluster-b/b2.md", "know/cluster-b/b3.md",
-		"know/cluster-b/b4.md", "know/cluster-b/b5.md",
+		"kb/cluster-b/b1.md", "kb/cluster-b/b2.md", "kb/cluster-b/b3.md",
+		"kb/cluster-b/b4.md", "kb/cluster-b/b5.md",
 	}
-	noiseFile := "know/noise/lone.md"
+	noiseFile := "kb/noise/lone.md"
 
 	allFiles := make([]string, 0, len(clusterAFiles)+len(clusterBFiles)+1)
 	allFiles = append(allFiles, clusterAFiles...)
@@ -406,8 +406,8 @@ func TestPruneStepClustersBeforeLLM(t *testing.T) {
 
 	// Each prompt should contain only facts from its cluster, not from both.
 	for _, prompt := range capturedPrompts {
-		hasA := strings.Contains(prompt, "know/cluster-a/")
-		hasB := strings.Contains(prompt, "know/cluster-b/")
+		hasA := strings.Contains(prompt, "kb/cluster-a/")
+		hasB := strings.Contains(prompt, "kb/cluster-b/")
 		if hasA && hasB {
 			t.Error("a single LLM prompt contains facts from both clusters — they should be separated")
 		}
@@ -424,12 +424,12 @@ func TestPruneStepWithDedup(t *testing.T) {
 	adapter := NewMockLLMAdapter(ctrl)
 
 	files := map[string]string{
-		"know/test/dup1.md":   factContent("Dup fact one", "Dup body one."),
-		"know/test/dup2.md":   factContent("Dup fact two", "Dup body two."),
-		"know/test/unique.md": factContent("Unique fact", "Unique body."),
+		"kb/test/dup1.md":   factContent("Dup fact one", "Dup body one."),
+		"kb/test/dup2.md":   factContent("Dup fact two", "Dup body two."),
+		"kb/test/unique.md": factContent("Unique fact", "Unique body."),
 	}
 
-	gs.EXPECT().ListAll().Return([]string{"know/test/dup1.md", "know/test/dup2.md", "know/test/unique.md"}, nil)
+	gs.EXPECT().ListAll().Return([]string{"kb/test/dup1.md", "kb/test/dup2.md", "kb/test/unique.md"}, nil)
 	gs.EXPECT().ReadFile(gomock.Any()).DoAndReturn(func(path string) (string, error) {
 		if c, ok := files[path]; ok {
 			return c, nil
@@ -439,7 +439,7 @@ func TestPruneStepWithDedup(t *testing.T) {
 
 	// ClusterFacts returns a single cluster with all 3 facts.
 	idx.EXPECT().ClusterFacts(gomock.Any(), gomock.Any()).Return(store.ClusterResult{
-		Clusters: map[int][]string{0: {"know/test/dup1.md", "know/test/dup2.md", "know/test/unique.md"}},
+		Clusters: map[int][]string{0: {"kb/test/dup1.md", "kb/test/dup2.md", "kb/test/unique.md"}},
 	}, nil)
 
 	// Search: dup1 returns dup2 as near-duplicate (score 95); dup2 returns dup1; unique returns nothing.
@@ -447,11 +447,11 @@ func TestPruneStepWithDedup(t *testing.T) {
 		switch {
 		case strings.Contains(q.Text, "Dup fact one"):
 			return []store.SearchResult{
-				{FactWithBody: store.FactWithBody{FactRecord: store.FactRecord{Path: "know/test/dup2.md"}}, Score: 95},
+				{FactWithBody: store.FactWithBody{FactRecord: store.FactRecord{Path: "kb/test/dup2.md"}}, Score: 95},
 			}, nil
 		case strings.Contains(q.Text, "Dup fact two"):
 			return []store.SearchResult{
-				{FactWithBody: store.FactWithBody{FactRecord: store.FactRecord{Path: "know/test/dup1.md"}}, Score: 95},
+				{FactWithBody: store.FactWithBody{FactRecord: store.FactRecord{Path: "kb/test/dup1.md"}}, Score: 95},
 			}, nil
 		default:
 			return nil, nil
@@ -460,14 +460,14 @@ func TestPruneStepWithDedup(t *testing.T) {
 
 	// Dedup: write merged winner (dup1 wins — same confidence/sources, first alphabetically = dup1 >= dup2 tie-break by sources).
 	// Both have confidence=0.8, sources=1 → dup1.Sources(1) >= dup2.Sources(1) so dup1 wins.
-	gs.EXPECT().WriteFile("know/test/dup1.md", gomock.Any(), gomock.Any()).Return("dedup-commit", "dedup-blob", nil)
+	gs.EXPECT().WriteFile("kb/test/dup1.md", gomock.Any(), gomock.Any()).Return("dedup-commit", "dedup-blob", nil)
 	idx.EXPECT().Upsert(gomock.Any()).Return(nil)
-	gs.EXPECT().DeleteFile("know/test/dup2.md", gomock.Any()).Return("del-commit", nil)
-	idx.EXPECT().Delete("know/test/dup2.md").Return(nil)
+	gs.EXPECT().DeleteFile("kb/test/dup2.md", gomock.Any()).Return("del-commit", nil)
+	idx.EXPECT().Delete("kb/test/dup2.md").Return(nil)
 
 	// After dedup, 2 facts remain: dup1 (merged) + unique.
 	// LLM receives both; returns keep for both.
-	mockResponse := `{"decisions": [{"path": "know/test/dup1.md", "action": "keep"}, {"path": "know/test/unique.md", "action": "keep"}], "merges": []}`
+	mockResponse := `{"decisions": [{"path": "kb/test/dup1.md", "action": "keep"}, {"path": "kb/test/unique.md", "action": "keep"}], "merges": []}`
 	var capturedFacts string
 	adapter.EXPECT().Complete(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
 		func(ctx context.Context, system string, msgs []llm.Message, opts llm.CompletionOptions, onChunk func(string)) (string, error) {
@@ -489,14 +489,14 @@ func TestPruneStepWithDedup(t *testing.T) {
 	}
 
 	// The LLM prompt must NOT contain dup2 (it was merged away).
-	if strings.Contains(capturedFacts, "know/test/dup2.md") {
+	if strings.Contains(capturedFacts, "kb/test/dup2.md") {
 		t.Error("LLM prompt contains dup2.md — expected it to be removed by dedup pass")
 	}
 	// The LLM prompt must contain dup1 (winner) and unique.
-	if !strings.Contains(capturedFacts, "know/test/dup1.md") {
+	if !strings.Contains(capturedFacts, "kb/test/dup1.md") {
 		t.Error("LLM prompt missing dup1.md (dedup winner)")
 	}
-	if !strings.Contains(capturedFacts, "know/test/unique.md") {
+	if !strings.Contains(capturedFacts, "kb/test/unique.md") {
 		t.Error("LLM prompt missing unique.md")
 	}
 }
@@ -508,11 +508,11 @@ func TestPruneStep_RetryOnPassive(t *testing.T) {
 	adapter := NewMockLLMAdapter(ctrl)
 
 	files := map[string]string{
-		"know/test/foo.md": factContent("Foo", "Foo body"),
-		"know/test/bar.md": factContent("Bar", "Bar body"),
+		"kb/test/foo.md": factContent("Foo", "Foo body"),
+		"kb/test/bar.md": factContent("Bar", "Bar body"),
 	}
 
-	gs.EXPECT().ListAll().Return([]string{"know/test/foo.md", "know/test/bar.md"}, nil)
+	gs.EXPECT().ListAll().Return([]string{"kb/test/foo.md", "kb/test/bar.md"}, nil)
 	gs.EXPECT().ReadFile(gomock.Any()).DoAndReturn(func(path string) (string, error) {
 		if c, ok := files[path]; ok {
 			return c, nil
@@ -525,17 +525,17 @@ func TestPruneStep_RetryOnPassive(t *testing.T) {
 	idx.EXPECT().Search(gomock.Any()).Return(nil, nil).AnyTimes()
 
 	// First call: passive (all keep)
-	passiveResponse := `{"decisions": [{"path": "know/test/foo.md", "action": "keep"}, {"path": "know/test/bar.md", "action": "keep"}], "merges": []}`
+	passiveResponse := `{"decisions": [{"path": "kb/test/foo.md", "action": "keep"}, {"path": "kb/test/bar.md", "action": "keep"}], "merges": []}`
 	// Second call (retry): active (forget bar)
-	activeResponse := `{"decisions": [{"path": "know/test/foo.md", "action": "keep"}, {"path": "know/test/bar.md", "action": "retract"}], "merges": []}`
+	activeResponse := `{"decisions": [{"path": "kb/test/foo.md", "action": "keep"}, {"path": "kb/test/bar.md", "action": "retract"}], "merges": []}`
 
 	gomock.InOrder(
 		adapter.EXPECT().Complete(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(passiveResponse, nil),
 		adapter.EXPECT().Complete(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(activeResponse, nil),
 	)
 
-	gs.EXPECT().DeleteFile("know/test/bar.md", gomock.Any()).Return("deadbeef", nil)
-	idx.EXPECT().Delete("know/test/bar.md").Return(nil)
+	gs.EXPECT().DeleteFile("kb/test/bar.md", gomock.Any()).Return("deadbeef", nil)
+	idx.EXPECT().Delete("kb/test/bar.md").Return(nil)
 	gs.EXPECT().Tag(gomock.Any()).Return(nil).AnyTimes()
 
 	profile := Profile{Name: "small", ForceJSON: false, RetryOnPassive: true, MaxChunkBytes: 100_000}

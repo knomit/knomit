@@ -107,7 +107,7 @@ func ExploreHandler(gs GitStore, ontologyRoot string) func(context.Context, mcpg
 func collectInheritedFacts(gs GitStore, path string) []map[string]interface{} {
 	var inherited []map[string]interface{}
 
-	// Walk up: e.g. "know/a/b" → "know/a" → "know" → stop at root.
+	// Walk up: e.g. "kb/a/b" → "kb/a" → "kb" → stop at root.
 	current := path
 	for {
 		// Find last slash.
