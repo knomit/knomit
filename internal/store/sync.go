@@ -17,13 +17,13 @@ import (
 //  3. If last_commit == HEAD → no-op.
 //  4. Else → DiffFiles(last_commit), upsert added+modified, delete removed.
 //  5. Update meta.last_commit = HEAD.
-func (idx *Index) Sync(git GitReader) error {
+func (idx *Index) Sync(git GitReader, branch string) error {
 	head, err := git.HeadCommit()
 	if err != nil {
 		return fmt.Errorf("sync: head commit: %w", err)
 	}
 
-	last, err := idx.GetLastCommit()
+	last, err := idx.GetLastCommit(branch)
 	if err != nil {
 		return fmt.Errorf("sync: get last commit: %w", err)
 	}
@@ -68,7 +68,7 @@ func (idx *Index) Sync(git GitReader) error {
 		}
 	}
 
-	return idx.SetLastCommit(head)
+	return idx.SetLastCommit(branch, head)
 }
 
 // indexFile reads a single file from git, parses it as a fact, and upserts

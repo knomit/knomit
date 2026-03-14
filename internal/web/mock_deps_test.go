@@ -170,18 +170,18 @@ func (m *MockSearchIndex) EXPECT() *MockSearchIndexMockRecorder {
 }
 
 // GetLastCommit mocks base method.
-func (m *MockSearchIndex) GetLastCommit() (string, error) {
+func (m *MockSearchIndex) GetLastCommit(branch string) (string, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetLastCommit")
+	ret := m.ctrl.Call(m, "GetLastCommit", branch)
 	ret0, _ := ret[0].(string)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // GetLastCommit indicates an expected call of GetLastCommit.
-func (mr *MockSearchIndexMockRecorder) GetLastCommit() *gomock.Call {
+func (mr *MockSearchIndexMockRecorder) GetLastCommit(branch any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetLastCommit", reflect.TypeOf((*MockSearchIndex)(nil).GetLastCommit))
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetLastCommit", reflect.TypeOf((*MockSearchIndex)(nil).GetLastCommit), branch)
 }
 
 // Search mocks base method.

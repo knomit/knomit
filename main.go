@@ -118,7 +118,7 @@ func serveCmd() *cobra.Command {
 			}
 
 			// 4. Initial sync (must happen after embedder is attached so vectors are computed)
-			if err := idx.Sync(gs); err != nil {
+			if err := idx.Sync(gs, gs.Branch()); err != nil {
 				log.Warn().Err(err).Msg("initial index sync failed")
 			}
 
@@ -128,7 +128,7 @@ func serveCmd() *cobra.Command {
 
 			// 4b. Observer: sync index + push SSE on every git commit.
 			obs := newObserver(50*time.Millisecond, func(hash string) {
-				if err := idx.Sync(gs); err != nil {
+				if err := idx.Sync(gs, gs.Branch()); err != nil {
 					log.Warn().Err(err).Msg("observer sync failed")
 				}
 				hub.BroadcastStatus(hash)
@@ -317,7 +317,7 @@ func rebuildCmd() *cobra.Command {
 				return fmt.Errorf("open git: %w", err)
 			}
 			idx := svc.Index()
-			if err := idx.Sync(gs); err != nil {
+			if err := idx.Sync(gs, gs.Branch()); err != nil {
 				return fmt.Errorf("rebuild: %w", err)
 			}
 			log.Info().Msg("Index rebuilt successfully")

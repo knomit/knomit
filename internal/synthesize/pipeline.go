@@ -19,6 +19,7 @@ type GitStore interface {
 	Tag(name string) error
 	Branch() string
 	DiffFiles(fromCommit string) (added, modified, deleted []string, err error)
+	HeadCommit() (string, error)
 }
 
 // SearchIndex is the interface that the synthesize pipeline requires from the search index.
