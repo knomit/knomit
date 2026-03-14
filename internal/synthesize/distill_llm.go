@@ -6,7 +6,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strings"
 
 	"github.com/rs/zerolog/log"
 	"knomit/internal/llm"
@@ -29,48 +28,6 @@ type distillFact struct {
 	Refs       []string `json:"refs"`
 }
 
-// buildDistillPrompt builds the LLM prompt for a distill step.
-func buildDistillPrompt(facts []factForLLM, recipePrompt, stepPrompt string) string {
-	factsJSON, _ := json.MarshalIndent(facts, "", "  ")
-
-	var sb strings.Builder
-	sb.WriteString("You are synthesizing facts in a knowledge base to find patterns and higher-order insights.\n\n")
-	if recipePrompt != "" {
-		sb.WriteString("Context: ")
-		sb.WriteString(recipePrompt)
-		sb.WriteString("\n")
-	}
-	if stepPrompt != "" {
-		sb.WriteString("Instructions: ")
-		sb.WriteString(stepPrompt)
-		sb.WriteString("\n")
-	}
-	sb.WriteString("Facts in scope:\n")
-	sb.Write(factsJSON)
-	sb.WriteString(`
-
-Identify patterns across these facts. Produce:
-1. New higher-order facts that capture patterns
-2. Which original facts are fully subsumed and can be forgotten
-
-Respond as JSON (no markdown wrapping):
-{
-  "synthesize": [
-    {
-      "path": "know/...",
-      "title": "...",
-      "body": "...",
-      "domain": [],
-      "confidence": 0.X,
-      "entities": [],
-      "refs": ["source-file1.md", "source-file2.md"]
-    }
-  ],
-  "forget": ["file1.md", "file2.md"]
-}`)
-	return sb.String()
-}
-
 // parseDistillResponse parses the LLM JSON response for a distill step.
 func parseDistillResponse(text string) (DistillResult, error) {
 	raw := extractJSON(text)
@@ -82,9 +39,8 @@ func parseDistillResponse(text string) (DistillResult, error) {
 }
 
 // runDistillOnGroup sends one group of facts to the LLM and returns synthesized facts + paths to forget.
-func runDistillOnGroup(ctx context.Context, gs GitStore, idx SearchIndex, adapter llm.LLMAdapter, group []factForLLM, step RecipeStep, recipe Recipe, onProgress func(ProgressEvent)) ([]distillFact, []string, error) {
-	const maxChunkBytes = 100_000
-	chunks := chunkFacts(group, maxChunkBytes)
+func runDistillOnGroup(ctx context.Context, gs GitStore, idx SearchIndex, adapter llm.LLMAdapter, group []factForLLM, step RecipeStep, recipe Recipe, profile Profile, onProgress func(ProgressEvent)) ([]distillFact, []string, error) {
+	chunks := chunkFacts(group, profile.MaxChunkBytes)
 
 	var synthesized []distillFact
 	var forget []string
@@ -92,14 +48,25 @@ func runDistillOnGroup(ctx context.Context, gs GitStore, idx SearchIndex, adapte
 	for i, chunk := range chunks {
 		log.Debug().Int("chunk", i+1).Int("total", len(chunks)).Int("facts", len(chunk)).Msg("distill: sending to LLM")
 		onProgress(ProgressEvent{Phase: "llm", Message: fmt.Sprintf("distill chunk %d/%d (%d facts)", i+1, len(chunks), len(chunk))})
-		prompt := buildDistillPrompt(chunk, recipe.Prompt, step.Prompt)
-		response, err := adapter.Complete(
-			ctx,
-			"You are a knowledge base synthesis assistant. Respond only with valid JSON.",
-			[]llm.Message{{Role: "user", Content: prompt}},
-			llm.CompletionOptions{},
-			nil,
-		)
+
+		factsJSON, _ := json.MarshalIndent(chunk, "", "  ")
+		data := PromptData{
+			Facts:        string(factsJSON),
+			RecipePrompt: recipe.Prompt,
+			StepPrompt:   step.Prompt,
+		}
+
+		systemPrompt, err := RenderTemplate(profile.Name, "distill", "system", data)
+		if err != nil {
+			return nil, nil, fmt.Errorf("distill: render system: %w", err)
+		}
+		userPrompt, err := RenderTemplate(profile.Name, "distill", "user", data)
+		if err != nil {
+			return nil, nil, fmt.Errorf("distill: render user: %w", err)
+		}
+
+		opts := llm.CompletionOptions{ForceJSON: profile.ForceJSON}
+		response, err := adapter.Complete(ctx, systemPrompt, []llm.Message{{Role: "user", Content: userPrompt}}, opts, nil)
 		if err != nil {
 			return nil, nil, fmt.Errorf("distill LLM chunk %d: %w", i+1, err)
 		}
@@ -107,6 +74,34 @@ func runDistillOnGroup(ctx context.Context, gs GitStore, idx SearchIndex, adapte
 		if err != nil {
 			return nil, nil, fmt.Errorf("distill parse chunk %d: %w", i+1, err)
 		}
+
+		// Collect input paths for passive detection
+		inputPaths := make([]string, len(chunk))
+		for j, f := range chunk {
+			inputPaths[j] = f.File
+		}
+
+		if isDistillPassive(result, inputPaths) && profile.RetryOnPassive {
+			log.Debug().Int("chunk", i+1).Msg("distill: passive response, retrying")
+			onProgress(ProgressEvent{Phase: "retry", Message: fmt.Sprintf("distill chunk %d (passive, retrying)", i+1)})
+
+			retryPrompt, err := RenderTemplate(profile.Name, "distill", "retry", data)
+			if err != nil {
+				return nil, nil, fmt.Errorf("distill: render retry: %w", err)
+			}
+			response, err = adapter.Complete(ctx, systemPrompt, []llm.Message{{Role: "user", Content: retryPrompt}}, opts, nil)
+			if err != nil {
+				return nil, nil, fmt.Errorf("distill retry chunk %d: %w", i+1, err)
+			}
+			result, err = parseDistillResponse(response)
+			if err != nil {
+				return nil, nil, fmt.Errorf("distill retry parse chunk %d: %w", i+1, err)
+			}
+			if isDistillPassive(result, inputPaths) {
+				log.Warn().Int("chunk", i+1).Msg("distill: retry also passive, accepting result")
+			}
+		}
+
 		log.Debug().Int("synthesized", len(result.Synthesize)).Int("forget", len(result.Forget)).Msg("distill: LLM response parsed")
 		synthesized = append(synthesized, result.Synthesize...)
 		forget = append(forget, result.Forget...)
