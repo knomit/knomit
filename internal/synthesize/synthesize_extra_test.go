@@ -294,6 +294,44 @@ func TestChunkFactsSingleFact(t *testing.T) {
 	}
 }
 
+func TestExtractJSON_ThinkBlocks(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{
+			name:  "think then JSON",
+			input: "<think>\nLet me analyze these facts...\n</think>\n{\"decisions\": []}",
+			want:  `{"decisions": []}`,
+		},
+		{
+			name:  "think then fenced JSON",
+			input: "<think>\nreasoning here\n</think>\n```json\n{\"decisions\": []}\n```",
+			want:  `{"decisions": []}`,
+		},
+		{
+			name:  "no think block",
+			input: `{"decisions": []}`,
+			want:  `{"decisions": []}`,
+		},
+		{
+			name:  "fenced without think",
+			input: "```json\n{\"foo\": 1}\n```",
+			want:  `{"foo": 1}`,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := extractJSON(tc.input)
+			if got != tc.want {
+				t.Errorf("extractJSON:\ngot:  %q\nwant: %q", got, tc.want)
+			}
+		})
+	}
+}
+
 // ── distillClusterInMemory ──────────────────────────────────────────────────
 
 func TestDistillClusterInMemoryInsufficientEmbeddings(t *testing.T) {

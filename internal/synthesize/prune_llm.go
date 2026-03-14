@@ -105,12 +105,15 @@ Respond as JSON (no markdown wrapping):
 // extractJSON strips optional markdown code fences from LLM output.
 func extractJSON(text string) string {
 	text = strings.TrimSpace(text)
+	// Strip <think>...</think> blocks (used by small models for chain-of-thought)
+	if idx := strings.Index(text, "</think>"); idx >= 0 {
+		text = strings.TrimSpace(text[idx+len("</think>"):])
+	}
 	// Strip ```json ... ``` or ``` ... ```
 	if strings.HasPrefix(text, "```") {
 		end := strings.LastIndex(text, "```")
 		if end > 3 {
 			inner := text[3:end]
-			// strip optional "json" language tag
 			if idx := strings.IndexByte(inner, '\n'); idx >= 0 {
 				inner = inner[idx+1:]
 			}
