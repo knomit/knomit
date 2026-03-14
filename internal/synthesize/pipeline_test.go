@@ -15,6 +15,7 @@ func TestRunPruneOnly(t *testing.T) {
 	gs := NewMockGitStore(ctrl)
 	idx := NewMockSearchIndex(ctrl)
 	adapter := NewMockLLMAdapter(ctrl)
+	adapter.EXPECT().Model().Return("claude-sonnet-4-20250514").AnyTimes()
 
 	files := map[string]string{
 		"know/test/keep.md":   factContent("Keep fact", "This should be kept."),
@@ -81,6 +82,7 @@ func TestRunDistillNoEmbeddings(t *testing.T) {
 	gs := NewMockGitStore(ctrl)
 	idx := NewMockSearchIndex(ctrl)
 	adapter := NewMockLLMAdapter(ctrl)
+	adapter.EXPECT().Model().Return("claude-sonnet-4-20250514").AnyTimes()
 
 	// Empty index → no facts → distill returns early without calling LLM.
 	idx.EXPECT().Search(gomock.Any()).Return([]store.SearchResult{}, nil)
@@ -115,6 +117,7 @@ func TestRunUnknownMode(t *testing.T) {
 	gs := NewMockGitStore(ctrl)
 	idx := NewMockSearchIndex(ctrl)
 	adapter := NewMockLLMAdapter(ctrl)
+	adapter.EXPECT().Model().Return("claude-sonnet-4-20250514").AnyTimes()
 
 	recipe := Recipe{
 		Name:  "bad",
@@ -132,6 +135,7 @@ func TestRunDistillWithFacts(t *testing.T) {
 	gs := NewMockGitStore(ctrl)
 	idx := NewMockSearchIndex(ctrl)
 	adapter := NewMockLLMAdapter(ctrl)
+	adapter.EXPECT().Model().Return("claude-sonnet-4-20250514").AnyTimes()
 
 	searchResults := []store.SearchResult{
 		{FactRecord: store.FactRecord{Path: "know/test/a.md", Title: "A fact", Body: "A body.", Domain: []string{"testing"}, Confidence: 0.8, Sources: 1}},
@@ -211,6 +215,7 @@ func TestRunNilProgress(t *testing.T) {
 	gs := NewMockGitStore(ctrl)
 	idx := NewMockSearchIndex(ctrl)
 	adapter := NewMockLLMAdapter(ctrl)
+	adapter.EXPECT().Model().Return("claude-sonnet-4-20250514").AnyTimes()
 
 	// Empty store, no facts — prune returns early after gather (no Tag call).
 	gs.EXPECT().ListAll().Return([]string{}, nil)
