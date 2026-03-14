@@ -11,10 +11,10 @@ import (
 	"time"
 
 	"github.com/joho/godotenv"
+	mcpserver "github.com/mark3labs/mcp-go/server"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
-	mcpserver "github.com/mark3labs/mcp-go/server"
 
 	"knomit/internal/config"
 	"knomit/internal/embeddings"
@@ -128,7 +128,7 @@ func serveCmd() *cobra.Command {
 			hub := web.NewTaskHub(ctx)
 
 			// 4b. Observer: sync index + push SSE on every git commit.
-			obs := newObserver(50*time.Millisecond, func(hash string) {
+			obs := newObserver(time.Second, func(hash string) {
 				if err := idx.Sync(gs, gs.Branch()); err != nil {
 					log.Warn().Err(err).Msg("observer sync failed")
 				}
