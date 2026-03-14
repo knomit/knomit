@@ -114,9 +114,13 @@ export default function App() {
           ))}
         </div>
         {/* Path-scoped action */}
-        <IconBtn title="Synthesize" onClick={handleSynthesize} disabled={state.tasks.synth.status === 'running'}>⚗</IconBtn>
+        <IconBtn title="Synthesize" onClick={handleSynthesize} disabled={state.tasks.synth.status === 'running'}>
+          <span className={state.tasks.synth.status === 'running' ? 'icon-spin' : ''}>⚗</span>
+        </IconBtn>
         <div style={{ width: 1, height: 16, background: '#333', flexShrink: 0 }} />
-        <IconBtn title="Sync" onClick={handleSync} disabled={state.tasks.sync.status === 'running'}>⟳</IconBtn>
+        <IconBtn title="Sync" onClick={handleSync} disabled={state.tasks.sync.status === 'running'}>
+          <span className={state.tasks.sync.status === 'running' ? 'icon-spin' : ''}>⟳</span>
+        </IconBtn>
       </div>
 
       <div style={{ display: 'flex', flex: 1, overflow: 'hidden', minHeight: 0 }}>
