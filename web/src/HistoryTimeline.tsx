@@ -45,9 +45,11 @@ export function HistoryTimeline({ state, dispatch }: Props) {
     setNextCursor(undefined);
     setSelectedIdx(0);
     api.history(state.currentPath).then(r => {
-      setEntries(r.entries || []);
+      const e = r.entries || [];
+      setEntries(e);
       setNextCursor(r.next);
       setLoading(false);
+      if (e.length > 0) dispatch({ type: 'SELECT_COMMIT', commit: e[0].commit });
     }).catch(() => {
       setEntries([]);
       setLoading(false);
