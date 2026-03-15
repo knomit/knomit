@@ -82,7 +82,7 @@ func NewServer(gs GitStore, idx SearchIndex, exploreIdx ExploreIndex, reviewer R
 
 	s.AddTool(learnTool(), LearnHandler(gs, idx, ontologyRoot, ontology))
 	s.AddTool(queryTool(), QueryHandler(gs, idx))
-	s.AddTool(whyTool(), WhyHandler(gs, ontologyRoot))
+	s.AddTool(explainTool(), ExplainHandler(gs, ontologyRoot))
 	s.AddTool(updateTool(), UpdateHandler(gs, ontologyRoot))
 	s.AddTool(exploreTool(ontologyRoot), ExploreHandler(gs, exploreIdx, ontologyRoot))
 	s.AddTool(retractTool(), RetractHandler(gs, ontologyRoot))

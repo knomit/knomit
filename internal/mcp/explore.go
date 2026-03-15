@@ -14,7 +14,7 @@ const explorePageSize = 25
 // exploreTool returns the Tool definition for knomit_explore.
 func exploreTool(ontologyRoot string) mcpgo.Tool {
 	return mcpgo.NewTool("knomit_explore",
-		mcpgo.WithDescription("Browse knowledge base facts ordered by most recently updated. Returns paginated results. Call with no cursor to start; pass the returned cursor to get the next page. Use knomit_why for history on individual facts."),
+		mcpgo.WithDescription("Browse knowledge base facts ordered by most recently updated. Returns paginated results. Call with no cursor to start; pass the returned cursor to get the next page. Use knomit_explain for history on individual facts."),
 		mcpgo.WithString("path",
 			mcpgo.Description(fmt.Sprintf("Filter to a subtree (default: %q).", ontologyRoot)),
 		),

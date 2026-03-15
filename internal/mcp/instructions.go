@@ -80,10 +80,10 @@ Each fact has YAML frontmatter with:
     - path: "%s/technology/go" → all Go-related facts
     - path: "%s/people/alice" → all facts about Alice
   - min_confidence: minimum confidence threshold (0–1)
-- **knomit_why**: show the learning moments (commits and changes) that built a fact over time
+- **knomit_explain**: show the learning moments (commits and changes) that built a fact over time
 - **knomit_update**: modify an existing fact's fields
 - **knomit_retract**: remove outdated knowledge
-- **knomit_explore**: browse facts ordered by most recently updated. Returns paginated results (25 per page). Call with no arguments to start; pass the returned cursor to get the next page. Use path to scope to a subtree (e.g. path: "%s/technology"). Use knomit_why for history on individual facts.
+- **knomit_explore**: browse facts ordered by most recently updated. Returns paginated results (25 per page). Call with no arguments to start; pass the returned cursor to get the next page. Use path to scope to a subtree (e.g. path: "%s/technology"). Use knomit_explain for history on individual facts.
 
 ## knomit_review — Knowledge Base Maintenance
 

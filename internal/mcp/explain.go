@@ -9,9 +9,9 @@ import (
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 )
 
-// whyTool returns the Tool definition for knomit_why.
-func whyTool() mcpgo.Tool {
-	return mcpgo.NewTool("knomit_why",
+// explainTool returns the Tool definition for knomit_explain.
+func explainTool() mcpgo.Tool {
+	return mcpgo.NewTool("knomit_explain",
 		mcpgo.WithDescription("Show the history and learning moment for a fact file."),
 		mcpgo.WithString("file",
 			mcpgo.Required(),
@@ -20,8 +20,8 @@ func whyTool() mcpgo.Tool {
 	)
 }
 
-// WhyHandler returns the handler function for knomit_why.
-func WhyHandler(gs GitStore, ontologyRoot string) func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+// ExplainHandler returns the handler function for knomit_explain.
+func ExplainHandler(gs GitStore, ontologyRoot string) func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 	return func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 		// 1. Get file argument.
 		file := req.GetString("file", "")

@@ -13,7 +13,7 @@ func allTools() []mcpgo.Tool {
 		learnTool(),
 		queryTool(),
 		updateTool(),
-		whyTool(),
+		explainTool(),
 		exploreTool("kb"),
 		retractTool(),
 		reviewTool(),
@@ -250,7 +250,7 @@ func TestSchemaRequiredFields(t *testing.T) {
 	}{
 		{"knomit_learn", learnTool(), []string{"moment_name", "facts"}},
 		{"knomit_update", updateTool(), []string{"file", "moment_name", "updates"}},
-		{"knomit_why", whyTool(), []string{"file"}},
+		{"knomit_explain", explainTool(), []string{"file"}},
 		{"knomit_retract", retractTool(), []string{"file", "moment_name"}},
 	}
 

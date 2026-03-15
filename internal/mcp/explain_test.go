@@ -10,7 +10,7 @@ import (
 	"go.uber.org/mock/gomock"
 )
 
-func TestWhyReturnsHistory(t *testing.T) {
+func TestExplainReturnsHistory(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
 
@@ -27,7 +27,7 @@ func TestWhyReturnsHistory(t *testing.T) {
 	}, nil)
 	gs.EXPECT().TagsContaining("deadbeef").Return([]string{"learn/first"}, nil)
 
-	handler := WhyHandler(gs, "kb")
+	handler := ExplainHandler(gs, "kb")
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
 		"file": "kb/foo.md",
@@ -67,13 +67,13 @@ func TestWhyReturnsHistory(t *testing.T) {
 	}
 }
 
-func TestWhyRequiresFile(t *testing.T) {
+func TestExplainRequiresFile(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
 
 
 
-	handler := WhyHandler(gs, "kb")
+	handler := ExplainHandler(gs, "kb")
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{}
 
@@ -86,14 +86,14 @@ func TestWhyRequiresFile(t *testing.T) {
 	}
 }
 
-func TestWhyFileNotFound(t *testing.T) {
+func TestExplainFileNotFound(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
 
 
 	gs.EXPECT().ReadFile("kb/nonexistent.md").Return("", fmt.Errorf("not found"))
 
-	handler := WhyHandler(gs, "kb")
+	handler := ExplainHandler(gs, "kb")
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
 		"file": "kb/nonexistent.md",
