@@ -33,6 +33,13 @@ func (s *Store) WriteFile(path, content, message string) (commitHash string, blo
 		return "", "", err
 	}
 
+	if s.signer != nil {
+		newCommitHash, err = signCommitInPlace(s.storer, s.signer, newCommitHash)
+		if err != nil {
+			return "", "", err
+		}
+	}
+
 	// Update the branch ref to point to the new commit.
 	branchRefName := plumbing.NewBranchReferenceName(s.branch)
 	newRef := plumbing.NewHashReference(branchRefName, newCommitHash)
@@ -70,6 +77,13 @@ func (s *Store) DeleteFile(path, message string) (commitHash string, err error) 
 	newCommitHash, err := deleteFileFromStore(s.storer, headRef.Hash(), path, message)
 	if err != nil {
 		return "", err
+	}
+
+	if s.signer != nil {
+		newCommitHash, err = signCommitInPlace(s.storer, s.signer, newCommitHash)
+		if err != nil {
+			return "", err
+		}
 	}
 
 	branchRefName := plumbing.NewBranchReferenceName(s.branch)
@@ -178,6 +192,13 @@ func (s *Store) BatchWrite(files map[string]string, message string) (commitHash 
 	cHash, err := s.storer.SetEncodedObject(commitObj)
 	if err != nil {
 		return "", nil, fmt.Errorf("BatchWrite: store commit: %w", err)
+	}
+
+	if s.signer != nil {
+		cHash, err = signCommitInPlace(s.storer, s.signer, cHash)
+		if err != nil {
+			return "", nil, err
+		}
 	}
 
 	branchRefName := plumbing.NewBranchReferenceName(s.branch)

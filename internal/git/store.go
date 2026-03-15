@@ -35,6 +35,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/transport"
 	"github.com/go-git/go-billy/v5/memfs"
 	_ "github.com/mattn/go-sqlite3"
+	"golang.org/x/crypto/ssh"
 
 	"github.com/rs/zerolog/log"
 	storegit "knomit/internal/store/git"
@@ -50,6 +51,7 @@ type Store struct {
 	ownedDB  *sql.DB // non-nil when ownsDB is true
 	branch   string  // e.g. "agent/laptop"
 	auth     transport.AuthMethod
+	signer   ssh.Signer // signs commits when set
 	onCommit func(hash string)
 }
 
@@ -295,6 +297,11 @@ func (s *Store) Storer() *storegit.Storer {
 // SetAuth sets the transport authentication method used by Sync and Push.
 func (s *Store) SetAuth(auth transport.AuthMethod) {
 	s.auth = auth
+}
+
+// SetSigner sets the SSH signer used for commit signing.
+func (s *Store) SetSigner(signer ssh.Signer) {
+	s.signer = signer
 }
 
 // InitFromRemote initializes a knomit git store by fetching from a remote origin.
