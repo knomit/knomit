@@ -187,7 +187,7 @@ func serveCmd() *cobra.Command {
 
 			// 7. Wire git remote if enabled
 			var gitHandler http.Handler
-			if cfg.Git.Remote {
+			if cfg.Git.Serve {
 				gitHandler = web.GitRemoteHandler(gs, cfg.LLM.APIKey)
 			}
 

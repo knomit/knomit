@@ -139,17 +139,17 @@ func TestEnvBoolOverridesToml(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "knomit.toml"), []byte(`
 [git]
-remote = true
+serve = true
 `), 0o644)
 	t.Setenv("KNOMIT_REPO", dir)
-	t.Setenv("KNOMIT_GIT_REMOTE", "false")
+	t.Setenv("KNOMIT_GIT_SERVE", "false")
 
 	cfg, err := Load()
 	if err != nil {
 		t.Fatalf("Load() error: %v", err)
 	}
-	if cfg.Git.Remote {
-		t.Error("Git.Remote should be false (env override of TOML true)")
+	if cfg.Git.Serve {
+		t.Error("Git.Serve should be false (env override of TOML true)")
 	}
 }
 
@@ -183,12 +183,14 @@ func TestAllEnvVars(t *testing.T) {
 	t.Setenv("KNOMIT_LLM_MODEL", "test-model")
 	t.Setenv("KNOMIT_LLM_PROVIDER", "test-provider")
 	t.Setenv("KNOMIT_API_KEY", "sk-test")
-	t.Setenv("KNOMIT_GIT_REMOTE", "true")
+	t.Setenv("KNOMIT_GIT_ORIGIN", "https://github.com/example/repo.git")
+	t.Setenv("KNOMIT_GIT_SERVE", "true")
 	t.Setenv("KNOMIT_GIT_PORT", "9418")
 	t.Setenv("KNOMIT_REMOTE_TOKEN", "tok")
 	t.Setenv("KNOMIT_REMOTE_USER", "usr")
 	t.Setenv("KNOMIT_REMOTE_PASSWORD", "pw")
 	t.Setenv("KNOMIT_REMOTE_SSH_KEY", "/tmp/key")
+	t.Setenv("KNOMIT_REMOTE_AUTH", "token")
 	t.Setenv("ONNXRUNTIME_SHARED_LIBRARY", "/tmp/ort.so")
 
 	cfg, err := Load()
@@ -214,8 +216,11 @@ func TestAllEnvVars(t *testing.T) {
 	if cfg.LLM.APIKey != "sk-test" {
 		t.Errorf("LLM.APIKey = %q", cfg.LLM.APIKey)
 	}
-	if !cfg.Git.Remote {
-		t.Error("Git.Remote should be true")
+	if cfg.Git.Origin != "https://github.com/example/repo.git" {
+		t.Errorf("Git.Origin = %q", cfg.Git.Origin)
+	}
+	if !cfg.Git.Serve {
+		t.Error("Git.Serve should be true")
 	}
 	if cfg.Git.Port != "9418" {
 		t.Errorf("Git.Port = %q", cfg.Git.Port)
@@ -232,6 +237,9 @@ func TestAllEnvVars(t *testing.T) {
 	if cfg.Remote.SSHKey != "/tmp/key" {
 		t.Errorf("Remote.SSHKey = %q", cfg.Remote.SSHKey)
 	}
+	if cfg.Remote.AuthMethod != "token" {
+		t.Errorf("Remote.AuthMethod = %q", cfg.Remote.AuthMethod)
+	}
 	if cfg.ONNXLibPath != "/tmp/ort.so" {
 		t.Errorf("ONNXLibPath = %q", cfg.ONNXLibPath)
 	}
@@ -241,7 +249,8 @@ func TestTOMLSections(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "knomit.toml"), []byte(`
 [git]
-remote = true
+origin = "https://github.com/example/repo.git"
+serve = true
 port = "9418"
 
 [remote]
@@ -249,6 +258,7 @@ token = "my-token"
 user = "deployer"
 password = "secret"
 ssh_key = "/home/deploy/.ssh/id_ed25519"
+auth_method = "ssh"
 `), 0o644)
 	t.Setenv("KNOMIT_REPO", dir)
 
@@ -256,8 +266,11 @@ ssh_key = "/home/deploy/.ssh/id_ed25519"
 	if err != nil {
 		t.Fatalf("Load() error: %v", err)
 	}
-	if !cfg.Git.Remote {
-		t.Error("Git.Remote should be true")
+	if cfg.Git.Origin != "https://github.com/example/repo.git" {
+		t.Errorf("Git.Origin = %q", cfg.Git.Origin)
+	}
+	if !cfg.Git.Serve {
+		t.Error("Git.Serve should be true")
 	}
 	if cfg.Git.Port != "9418" {
 		t.Errorf("Git.Port = %q, want %q", cfg.Git.Port, "9418")
@@ -273,5 +286,26 @@ ssh_key = "/home/deploy/.ssh/id_ed25519"
 	}
 	if cfg.Remote.SSHKey != "/home/deploy/.ssh/id_ed25519" {
 		t.Errorf("Remote.SSHKey = %q", cfg.Remote.SSHKey)
+	}
+	if cfg.Remote.AuthMethod != "ssh" {
+		t.Errorf("Remote.AuthMethod = %q", cfg.Remote.AuthMethod)
+	}
+}
+
+func TestNewEnvVars(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("KNOMIT_REPO", dir)
+	t.Setenv("KNOMIT_GIT_ORIGIN", "git@github.com:org/repo.git")
+	t.Setenv("KNOMIT_REMOTE_AUTH", "basic")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if cfg.Git.Origin != "git@github.com:org/repo.git" {
+		t.Errorf("Git.Origin = %q, want %q", cfg.Git.Origin, "git@github.com:org/repo.git")
+	}
+	if cfg.Remote.AuthMethod != "basic" {
+		t.Errorf("Remote.AuthMethod = %q, want %q", cfg.Remote.AuthMethod, "basic")
 	}
 }

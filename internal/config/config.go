@@ -13,10 +13,11 @@ import (
 
 // RemoteConfig holds git remote authentication settings.
 type RemoteConfig struct {
-	Token    string `toml:"token"`
-	User     string `toml:"user"`
-	Password string `toml:"password"`
-	SSHKey   string `toml:"ssh_key"`
+	Token      string `toml:"token"`
+	User       string `toml:"user"`
+	Password   string `toml:"password"`
+	SSHKey     string `toml:"ssh_key"`
+	AuthMethod string `toml:"auth_method"`
 }
 
 // Config is the root configuration, composed of section structs.
@@ -69,12 +70,14 @@ func Load() (Config, error) {
 	envOr("KNOMIT_API_KEY", &cfg.LLM.APIKey)
 	envBoolOr("KNOMIT_LLM_CACHE", &cfg.LLM.Cache)
 	envBoolOr("KNOMIT_LLM_BATCH", &cfg.LLM.Batch)
-	envBoolOr("KNOMIT_GIT_REMOTE", &cfg.Git.Remote)
+	envOr("KNOMIT_GIT_ORIGIN", &cfg.Git.Origin)
+	envBoolOr("KNOMIT_GIT_SERVE", &cfg.Git.Serve)
 	envOr("KNOMIT_GIT_PORT", &cfg.Git.Port)
 	envOr("KNOMIT_REMOTE_TOKEN", &cfg.Remote.Token)
 	envOr("KNOMIT_REMOTE_USER", &cfg.Remote.User)
 	envOr("KNOMIT_REMOTE_PASSWORD", &cfg.Remote.Password)
 	envOr("KNOMIT_REMOTE_SSH_KEY", &cfg.Remote.SSHKey)
+	envOr("KNOMIT_REMOTE_AUTH", &cfg.Remote.AuthMethod)
 	envOr("ONNXRUNTIME_SHARED_LIBRARY", &cfg.ONNXLibPath)
 
 	// Expand tildes in path fields.
