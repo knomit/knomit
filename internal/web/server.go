@@ -71,6 +71,7 @@ func NewRouter(rm *RepoManager, gitHandler http.Handler, embeddingsEnabled bool,
 	}
 
 	r.Get("/api/v1/openapi.yaml", handleOpenAPISpec())
+	r.Get("/api/v1/repos", handleRepos(rm))
 	r.Get("/docs", handleSwaggerUI())
 
 	r.Route("/api/v1/{repo}", func(sub chi.Router) {
