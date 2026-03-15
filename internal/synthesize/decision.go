@@ -4,13 +4,25 @@ package synthesize
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 
+	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
 	"knomit/internal/fact"
 	"knomit/internal/mcp"
 	"knomit/internal/store"
 )
+
+// normalizeFactPath replaces the filename component of a path with an 8-char
+// UUID, matching the convention used by learn. This prevents LLM-generated
+// filenames (e.g. "chrome-extension-threat-surface-2026.md") from clashing
+// with each other or with learn-generated facts.
+func normalizeFactPath(path string) string {
+	dir := filepath.Dir(path)
+	id := uuid.New().String()[:8]
+	return dir + "/" + id + ".md"
+}
 
 // ReviewStats tracks what actions were taken during a review.
 type ReviewStats struct {
@@ -170,6 +182,8 @@ func ApplyDistillDecisions(
 
 	// Commit synthesized facts.
 	for _, df := range synthesized {
+		// Replace LLM-generated filename with a UUID to match learn convention.
+		df.Path = normalizeFactPath(df.Path)
 		f := mcp.Fact{
 			Path:       df.Path,
 			Title:      df.Title,

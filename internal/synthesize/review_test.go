@@ -373,10 +373,10 @@ func TestContinueSession_DistillResponse(t *testing.T) {
 
 	distillResp := `{"synthesize": [{"path": "kb/go/combined.md", "title": "Combined", "body": "Merged insight.", "type": "observation", "domain": ["go"], "confidence": 0.9, "entities": [], "refs": ["kb/go/one.md", "kb/go/two.md"]}], "retract": ["kb/go/one.md"]}`
 
-	// ApplyDistillDecisions: write synth, retract one.md.
-	gs.EXPECT().WriteFile("kb/go/combined.md", gomock.Any(), gomock.Any()).Return("c1", "b1", nil)
+	// ApplyDistillDecisions: write synth (path gets UUID), retract one.md.
+	gs.EXPECT().WriteFile(gomock.Any(), gomock.Any(), gomock.Any()).Return("c1", "b1", nil)
 	idx.EXPECT().Upsert(gomock.Any()).Return(nil)
-	idx.EXPECT().GraphAddDerivedFrom("kb/go/combined.md", gomock.Any()).Return(nil)
+	idx.EXPECT().GraphAddDerivedFrom(gomock.Any(), gomock.Any()).Return(nil)
 	gs.EXPECT().Tag(gomock.Any()).Return(nil).AnyTimes()
 	gs.EXPECT().DeleteFile("kb/go/one.md", gomock.Any()).Return("c2", nil)
 	idx.EXPECT().Delete("kb/go/one.md").Return(nil)

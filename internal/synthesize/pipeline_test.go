@@ -179,12 +179,12 @@ func TestRunDistillWithFacts(t *testing.T) {
 
 	// Write synthesized fact
 	var synthWritten bool
-	gs.EXPECT().WriteFile("kb/test/synth.md", gomock.Any(), gomock.Any()).DoAndReturn(func(path, content, msg string) (string, string, error) {
+	gs.EXPECT().WriteFile(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(path, content, msg string) (string, string, error) {
 		synthWritten = true
 		return "deadbeef", "blob_synth", nil
 	})
 	idx.EXPECT().Upsert(gomock.Any()).Return(nil)
-	idx.EXPECT().GraphAddDerivedFrom("kb/test/synth.md", gomock.Any()).Return(nil)
+	idx.EXPECT().GraphAddDerivedFrom(gomock.Any(), gomock.Any()).Return(nil)
 
 	// Delete forgotten fact
 	gs.EXPECT().DeleteFile("kb/test/a.md", gomock.Any()).Return("deadbeef2", nil)
@@ -253,9 +253,9 @@ func TestRunDistillRetryOnPassive(t *testing.T) {
 	)
 
 	// Write synthesized fact
-	gs.EXPECT().WriteFile("kb/test/synth.md", gomock.Any(), gomock.Any()).Return("deadbeef", "blob_synth", nil)
+	gs.EXPECT().WriteFile(gomock.Any(), gomock.Any(), gomock.Any()).Return("deadbeef", "blob_synth", nil)
 	idx.EXPECT().Upsert(gomock.Any()).Return(nil)
-	idx.EXPECT().GraphAddDerivedFrom("kb/test/synth.md", gomock.Any()).Return(nil)
+	idx.EXPECT().GraphAddDerivedFrom(gomock.Any(), gomock.Any()).Return(nil)
 
 	// Delete forgotten fact
 	gs.EXPECT().DeleteFile("kb/test/a.md", gomock.Any()).Return("deadbeef2", nil)

@@ -1,6 +1,7 @@
 package synthesize
 
 import (
+	"strings"
 	"testing"
 
 	"go.uber.org/mock/gomock"
@@ -169,18 +170,27 @@ func TestApplyDistillDecisions_SynthesizeAndRetract(t *testing.T) {
 	gs := NewMockGitStore(ctrl)
 	idx := NewMockSearchIndex(ctrl)
 
-	// Synthesized fact write.
-	gs.EXPECT().WriteFile("kb/test/synth.md", gomock.Any(), gomock.Any()).Return("c1", "b1", nil)
+	// Synthesized fact write — path gets a UUID filename, so match on prefix.
+	gs.EXPECT().WriteFile(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
+		func(path, content, msg string) (string, string, error) {
+			if !strings.HasPrefix(path, "kb/test/") || !strings.HasSuffix(path, ".md") {
+				t.Errorf("expected path kb/test/<uuid>.md, got %s", path)
+			}
+			if path == "kb/test/synth.md" {
+				t.Errorf("expected UUID filename, got LLM-generated name: %s", path)
+			}
+			return "c1", "b1", nil
+		})
 	idx.EXPECT().Upsert(gomock.Any()).DoAndReturn(func(r store.FactRecord) error {
-		if r.Path != "kb/test/synth.md" {
-			t.Errorf("expected path kb/test/synth.md, got %s", r.Path)
+		if !strings.HasPrefix(r.Path, "kb/test/") {
+			t.Errorf("expected path under kb/test/, got %s", r.Path)
 		}
 		if r.Sources != 1 {
 			t.Errorf("expected sources=1, got %d", r.Sources)
 		}
 		return nil
 	})
-	idx.EXPECT().GraphAddDerivedFrom("kb/test/synth.md", []string{"kb/test/src1.md", "kb/test/src2.md"}).Return(nil)
+	idx.EXPECT().GraphAddDerivedFrom(gomock.Any(), []string{"kb/test/src1.md", "kb/test/src2.md"}).Return(nil)
 	gs.EXPECT().Tag(gomock.Any()).Return(nil).AnyTimes()
 
 	// Retract.
