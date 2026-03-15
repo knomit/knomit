@@ -25,7 +25,17 @@ func updateTool() mcpgo.Tool {
 		),
 		mcpgo.WithObject("updates",
 			mcpgo.Required(),
-			mcpgo.Description("Fields to update."),
+			mcpgo.Description("Fields to update. Include only the fields you want to change."),
+			mcpgo.Properties(map[string]any{
+				"title":      map[string]any{"type": "string", "description": "New title."},
+				"body":       map[string]any{"type": "string", "description": "New body text."},
+				"type":       map[string]any{"type": "string", "description": "Epistemic type: observation, concept, process, principle, pattern, or reference."},
+				"confidence": map[string]any{"type": "number", "description": "Certainty level 0.0–1.0."},
+				"sources":    map[string]any{"type": "integer", "description": "Number of independent sources."},
+				"domain":     map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Replaces domain tags."},
+				"entities":   map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Replaces entity list."},
+				"refs":       map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Appended to existing refs."},
+			}),
 		),
 	)
 }
