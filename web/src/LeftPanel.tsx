@@ -3,6 +3,7 @@ import type { Dispatch } from 'react';
 import { api } from './api';
 import type { DirChild, SearchResult } from './api';
 import type { AppState, Action } from './state';
+import { HistoryTimeline } from './HistoryTimeline';
 
 interface Props {
   state: AppState;
@@ -119,7 +120,16 @@ export function LeftPanel({ state, dispatch }: Props) {
     const handler = (e: KeyboardEvent) => {
       if (document.activeElement === searchRef.current) return;
       if (e.key === '/') { e.preventDefault(); searchRef.current?.focus(); }
-      if (e.key === 'Escape') { dispatch({ type: 'CLEAR_SEARCH' }); searchRef.current?.blur(); }
+      if (e.key === 'Escape') {
+        if (state.leftMode === 'history') {
+          dispatch({ type: 'EXIT_HISTORY' });
+        } else {
+          dispatch({ type: 'CLEAR_SEARCH' });
+          searchRef.current?.blur();
+        }
+      }
+      if (e.key === 'h') { e.preventDefault(); dispatch({ type: 'ENTER_HISTORY' }); }
+      if (e.key === 'Backspace' || e.key === 'Delete') { e.preventDefault(); dispatch({ type: 'NAV_BACK' }); }
       if (e.key === 'ArrowDown' || e.key === 'j') { e.preventDefault(); moveSelection(1); }
       if (e.key === 'ArrowUp' || e.key === 'k') { e.preventDefault(); moveSelection(-1); }
       if (e.key === 'ArrowRight' || e.key === 'Enter') { e.preventDefault(); activateSelected(); }
@@ -130,6 +140,10 @@ export function LeftPanel({ state, dispatch }: Props) {
   });
 
   const pathLabel = (name: string) => name.replace(/\.md$/, '');
+
+  if (state.leftMode === 'history') {
+    return <HistoryTimeline state={state} dispatch={dispatch} />;
+  }
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
