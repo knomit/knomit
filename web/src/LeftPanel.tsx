@@ -128,8 +128,10 @@ export function LeftPanel({ state, dispatch }: Props) {
           searchRef.current?.blur();
         }
       }
-      if (e.key === 'h') { e.preventDefault(); dispatch({ type: 'ENTER_HISTORY' }); }
+      if (e.key === 'h' && state.leftMode !== 'history') { e.preventDefault(); dispatch({ type: 'ENTER_HISTORY' }); }
       if (e.key === 'Backspace' || e.key === 'Delete') { e.preventDefault(); dispatch({ type: 'NAV_BACK' }); }
+      // Browse-mode only shortcuts — skip when in history mode (HistoryTimeline handles its own keys)
+      if (state.leftMode === 'history') return;
       if (e.key === 'ArrowDown' || e.key === 'j') { e.preventDefault(); moveSelection(1); }
       if (e.key === 'ArrowUp' || e.key === 'k') { e.preventDefault(); moveSelection(-1); }
       if (e.key === 'ArrowRight' || e.key === 'Enter') { e.preventDefault(); activateSelected(); }
