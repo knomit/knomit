@@ -384,3 +384,131 @@ func TestExplainExternalRefsOnly(t *testing.T) {
 		t.Fatalf("expected 2 external refs, got %d", len(resp.Facts[0].Refs.External))
 	}
 }
+
+func TestExplainMissingFile(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	gs := NewMockGitStore(ctrl)
+	sessionIdx := NewMockToolSessionIndex(ctrl)
+
+	gs.EXPECT().Branch().Return("machine/test")
+	sessionIdx.EXPECT().GCToolSessions("explain", "machine/test", 5).Return(nil)
+	gs.EXPECT().ReadFile("kb/gone.md").Return("", fmt.Errorf("not found"))
+
+	handler := ExplainHandler(gs, sessionIdx, "kb")
+	req := mcpgo.CallToolRequest{}
+	req.Params.Arguments = map[string]interface{}{"file": "kb/gone.md"}
+
+	result, err := handler(context.Background(), req)
+	if err != nil {
+		t.Fatalf("handler error: %v", err)
+	}
+	if !result.IsError {
+		t.Fatal("expected tool error for missing file")
+	}
+}
+
+func TestExplainRequiresFile(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	gs := NewMockGitStore(ctrl)
+	sessionIdx := NewMockToolSessionIndex(ctrl)
+
+	handler := ExplainHandler(gs, sessionIdx, "kb")
+	req := mcpgo.CallToolRequest{}
+	req.Params.Arguments = map[string]interface{}{}
+
+	result, err := handler(context.Background(), req)
+	if err != nil {
+		t.Fatalf("handler error: %v", err)
+	}
+	if !result.IsError {
+		t.Fatal("expected tool error for missing file param")
+	}
+}
+
+func TestExplainResumeEmptyQueue(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	gs := NewMockGitStore(ctrl)
+	sessionIdx := NewMockToolSessionIndex(ctrl)
+
+	sessionIdx.EXPECT().GetToolSession("sess-done").Return(&ToolSession{
+		ID: "sess-done", Tool: "explain", Status: "active",
+	}, nil)
+	sessionIdx.EXPECT().GetSeenPaths("sess-done").Return(map[string]bool{"kb/root.md": true}, nil)
+	sessionIdx.EXPECT().DequeuePaths("sess-done", 25).Return(nil, nil)
+	sessionIdx.EXPECT().QueueSize("sess-done").Return(0, nil)
+	sessionIdx.EXPECT().UpdateToolSession("sess-done", "", "completed").Return(nil)
+
+	handler := ExplainHandler(gs, sessionIdx, "kb")
+	req := mcpgo.CallToolRequest{}
+	req.Params.Arguments = map[string]interface{}{
+		"file":   "kb/root.md",
+		"cursor": "sess-done",
+	}
+
+	result, err := handler(context.Background(), req)
+	if err != nil {
+		t.Fatalf("handler error: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("unexpected tool error: %s", getResultText(t, result))
+	}
+
+	text := getResultText(t, result)
+	var resp struct {
+		Facts   []explainFactEntry `json:"facts"`
+		HasMore bool               `json:"has_more"`
+	}
+	if err := json.Unmarshal([]byte(text), &resp); err != nil {
+		t.Fatalf("invalid JSON: %v\n%s", err, text)
+	}
+	if resp.HasMore {
+		t.Fatal("expected has_more=false for empty queue")
+	}
+}
+
+func TestExplainResumeParseError(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	gs := NewMockGitStore(ctrl)
+	sessionIdx := NewMockToolSessionIndex(ctrl)
+
+	sessionIdx.EXPECT().GetToolSession("sess-pe").Return(&ToolSession{
+		ID: "sess-pe", Tool: "explain", Status: "active",
+	}, nil)
+	sessionIdx.EXPECT().GetSeenPaths("sess-pe").Return(map[string]bool{"kb/root.md": true}, nil)
+	// First dequeue: one item, ReadFileAtCommit returns invalid content.
+	sessionIdx.EXPECT().DequeuePaths("sess-pe", 25).Return([]QueueItem{
+		{Path: "kb/bad.md", CommitHash: "abc123", Depth: 1},
+	}, nil)
+	gs.EXPECT().ReadFileAtCommit("kb/bad.md", "abc123").Return("not valid frontmatter", nil)
+	// Retry dequeue: empty, stop.
+	sessionIdx.EXPECT().DequeuePaths("sess-pe", 25).Return(nil, nil)
+	sessionIdx.EXPECT().QueueSize("sess-pe").Return(0, nil)
+	sessionIdx.EXPECT().UpdateToolSession("sess-pe", "", "completed").Return(nil)
+
+	handler := ExplainHandler(gs, sessionIdx, "kb")
+	req := mcpgo.CallToolRequest{}
+	req.Params.Arguments = map[string]interface{}{
+		"file":   "kb/root.md",
+		"cursor": "sess-pe",
+	}
+
+	result, err := handler(context.Background(), req)
+	if err != nil {
+		t.Fatalf("handler error: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("unexpected tool error: %s", getResultText(t, result))
+	}
+
+	text := getResultText(t, result)
+	var resp struct {
+		Facts   []explainFactEntry `json:"facts"`
+		HasMore bool               `json:"has_more"`
+	}
+	if err := json.Unmarshal([]byte(text), &resp); err != nil {
+		t.Fatalf("invalid JSON: %v\n%s", err, text)
+	}
+	if resp.HasMore {
+		t.Fatal("expected has_more=false")
+	}
+}
