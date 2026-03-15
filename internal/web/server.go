@@ -85,6 +85,8 @@ func NewRouter(rm *RepoManager, synthDeps *SynthDeps, mcpHandlers map[string]htt
 		sub.Post("/synthesize", handleSynthesizeStart(synthDeps))
 		sub.Post("/sync", handleSync())
 		sub.Get("/events", handleEvents())
+		sub.Get("/origin", handleGetOrigin())
+		sub.Put("/origin", handleSetOrigin())
 
 		if len(mcpHandlers) > 0 {
 			sub.Mount("/mcp", http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
