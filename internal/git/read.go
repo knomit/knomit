@@ -331,6 +331,82 @@ func (s *Store) buildTagIndex() (map[plumbing.Hash][]string, error) {
 	return idx, nil
 }
 
+// CommitDetail returns metadata and changed files for a specific commit.
+// It diffs the commit's tree against its parent to determine which files changed.
+func (s *Store) CommitDetail(commitHash string) (*CommitDetailResult, error) {
+	hash := plumbing.NewHash(commitHash)
+	commit, err := s.repo.CommitObject(hash)
+	if err != nil {
+		return nil, fmt.Errorf("CommitDetail: commit: %w", err)
+	}
+
+	toTree, err := commit.Tree()
+	if err != nil {
+		return nil, fmt.Errorf("CommitDetail: tree: %w", err)
+	}
+
+	var fromTree *object.Tree
+	if commit.NumParents() > 0 {
+		parent, err := commit.Parent(0)
+		if err != nil {
+			return nil, fmt.Errorf("CommitDetail: parent: %w", err)
+		}
+		fromTree, err = parent.Tree()
+		if err != nil {
+			return nil, fmt.Errorf("CommitDetail: parent tree: %w", err)
+		}
+	}
+
+	changes, err := object.DiffTree(fromTree, toTree)
+	if err != nil {
+		return nil, fmt.Errorf("CommitDetail: diff: %w", err)
+	}
+
+	var files []ChangedFile
+	for _, ch := range changes {
+		from := ch.From.Name
+		to := ch.To.Name
+		switch {
+		case from == "" && to != "":
+			if strings.HasSuffix(to, ".md") {
+				files = append(files, ChangedFile{Path: to, Action: "added"})
+			}
+		case from != "" && to == "":
+			if strings.HasSuffix(from, ".md") {
+				files = append(files, ChangedFile{Path: from, Action: "deleted"})
+			}
+		default:
+			if strings.HasSuffix(to, ".md") {
+				files = append(files, ChangedFile{Path: to, Action: "modified"})
+			}
+		}
+	}
+
+	shortHash := hash.String()
+	if len(shortHash) > 8 {
+		shortHash = shortHash[:8]
+	}
+
+	firstLine := commit.Message
+	if idx := strings.IndexByte(firstLine, '\n'); idx >= 0 {
+		firstLine = firstLine[:idx]
+	}
+
+	tagIndex, _ := s.buildTagIndex()
+	tags := tagIndex[hash]
+	if tags == nil {
+		tags = []string{}
+	}
+
+	return &CommitDetailResult{
+		Commit:  shortHash,
+		Date:    commit.Committer.When.UTC().Format(time.RFC3339),
+		Message: firstLine,
+		Tags:    tags,
+		Files:   files,
+	}, nil
+}
+
 // Grep searches all .md files in HEAD for pattern, returns matching paths.
 func (s *Store) Grep(pattern string) ([]string, error) {
 	re, err := regexp.Compile(pattern)

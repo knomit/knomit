@@ -1,6 +1,7 @@
 package git_test
 
 import (
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -719,4 +720,86 @@ func TestReadFileWithHash(t *testing.T) {
 	if gotBlobHash != expectedBlobHash {
 		t.Fatalf("blob hash mismatch: got %q, want %q", gotBlobHash, expectedBlobHash)
 	}
+}
+
+func TestCommitDetail(t *testing.T) {
+	dir := t.TempDir()
+	store, err := git.Init(filepath.Join(dir, "test.db"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	commitHash, _, err := store.WriteFile("kb/test.md", "---\ndomain: []\nconfidence: 0.5\nsources: 1\nentities: []\nrefs: []\n---\n# T\n\nBody.\n", "add test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Tag("learn/test"); err != nil {
+		t.Fatal(err)
+	}
+
+	detail, err := store.CommitDetail(commitHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if detail.Commit != commitHash[:8] {
+		t.Errorf("expected commit %s, got %s", commitHash[:8], detail.Commit)
+	}
+	if len(detail.Tags) == 0 || detail.Tags[0] != "learn/test" {
+		t.Errorf("expected tag learn/test, got %v", detail.Tags)
+	}
+	if len(detail.Files) == 0 {
+		t.Fatal("expected at least one changed file")
+	}
+	found := false
+	for _, f := range detail.Files {
+		if f.Path == "kb/test.md" && f.Action == "added" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected kb/test.md added, got %v", detail.Files)
+	}
+}
+
+func TestLogPaginated(t *testing.T) {
+	dir := t.TempDir()
+	store, err := git.Init(filepath.Join(dir, "test.db"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	for i := 1; i <= 3; i++ {
+		content := fmt.Sprintf("---\ndomain: []\nconfidence: 0.5\nsources: 1\nentities: []\nrefs: []\n---\n# F%d\n\nFact %d.\n", i, i)
+		if _, _, err := store.WriteFile(fmt.Sprintf("kb/f%d.md", i), content, fmt.Sprintf("add f%d", i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := store.Tag("learn/test-moment"); err != nil {
+		t.Fatal(err)
+	}
+
+	entries, next, err := store.LogPaginated("", 2, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("expected 2 entries, got %d", len(entries))
+	}
+	if next == "" {
+		t.Fatal("expected next cursor")
+	}
+	if len(entries[0].Tags) == 0 || entries[0].Tags[0] != "learn/test-moment" {
+		t.Errorf("expected tag learn/test-moment on first entry, got %v", entries[0].Tags)
+	}
+
+	entries2, next2, err := store.LogPaginated("", 2, next)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries2) == 0 {
+		t.Fatal("expected entries on second page")
+	}
+	_ = next2
 }
