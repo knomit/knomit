@@ -62,7 +62,7 @@ type SynthDeps struct {
 //	/api/v1/{repo}/mcp              — MCP protocol endpoints (per-profile)
 //	/git                            — Smart HTTP git remote
 //	/*                              — Embedded SPA with client-side routing fallback
-func NewRouter(rm *RepoManager, synthDeps *SynthDeps, mcpHandlers map[string]http.Handler, gitHandler http.Handler, embeddingsEnabled bool, ontologyRoot string) http.Handler {
+func NewRouter(rm *RepoManager, gitHandler http.Handler, embeddingsEnabled bool, ontologyRoot string) http.Handler {
 	r := chi.NewRouter()
 	r.Use(middleware.Recoverer)
 
@@ -82,25 +82,28 @@ func NewRouter(rm *RepoManager, synthDeps *SynthDeps, mcpHandlers map[string]htt
 		sub.Get("/commit", handleCommitDetail())
 		sub.Get("/stats", handleStats())
 		sub.Get("/status", handleStatus(embeddingsEnabled, ontologyRoot))
-		sub.Post("/synthesize", handleSynthesizeStart(synthDeps))
+		sub.Post("/synthesize", handleSynthesizeStart())
 		sub.Post("/sync", handleSync())
 		sub.Get("/events", handleEvents())
 		sub.Get("/origin", handleGetOrigin())
 		sub.Put("/origin", handleSetOrigin())
 
-		if len(mcpHandlers) > 0 {
-			sub.Mount("/mcp", http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-				profile := req.URL.Query().Get("profile")
-				if profile == "" {
-					profile = "code"
-				}
-				handler, ok := mcpHandlers[profile]
-				if !ok {
-					handler = mcpHandlers["code"]
-				}
-				handler.ServeHTTP(w, req)
-			}))
-		}
+		sub.Mount("/mcp", http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			ri := RepoFromContext(req.Context())
+			if len(ri.MCPHandlers) == 0 {
+				http.NotFound(w, req)
+				return
+			}
+			profile := req.URL.Query().Get("profile")
+			if profile == "" {
+				profile = "code"
+			}
+			handler, ok := ri.MCPHandlers[profile]
+			if !ok {
+				handler = ri.MCPHandlers["code"]
+			}
+			handler.ServeHTTP(w, req)
+		}))
 	})
 
 	// Serve embedded web UI

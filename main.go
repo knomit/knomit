@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -16,6 +17,7 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
+	"golang.org/x/crypto/ssh"
 
 	"knomit/internal/config"
 	"knomit/internal/embeddings"
@@ -142,7 +144,7 @@ func serveCmd() *cobra.Command {
 
 			// 3. Ensure embedder model files are present (downloads if missing), then load.
 			var embedder *embeddings.Embedder
-			modelPath, tokPath, err := embeddings.EnsureModel(cfg.CacheDir)
+			modelPath, tokPath, err := embeddings.EnsureModel(filepath.Join(cfg.RepoPath, "models"))
 			if err != nil {
 				log.Warn().Err(err).Msg("embedder model unavailable")
 			} else {
@@ -254,19 +256,45 @@ func serveCmd() *cobra.Command {
 			// 9. Create RepoManager
 			rm := web.NewRepoManager()
 			rm.Set("knomit", &web.RepoInstance{
-				Name:       "knomit",
-				GS:         gs,
-				Svc:        svc,
-				Idx:        idx,
-				Hub:        hub,
-				SyncCancel: syncCancel,
-				SyncWg:     &syncWg,
+				Name:        "knomit",
+				GS:          gs,
+				Svc:         svc,
+				Idx:         idx,
+				Hub:         hub,
+				SyncCancel:  syncCancel,
+				SyncWg:      &syncWg,
+				MCPHandlers: mcpServers,
+				SynthDeps:   synthDeps,
 			})
 
 			// 10. Create chi router
-			router := web.NewRouter(rm, synthDeps, mcpServers, gitHandler, embeddingsEnabled, cfg.OntologyRoot)
+			router := web.NewRouter(rm, gitHandler, embeddingsEnabled, cfg.OntologyRoot)
 
-			// 11. Graceful shutdown
+			// 11. Startup summary
+			pubKey := strings.TrimSpace(string(ssh.MarshalAuthorizedKey(signer.PublicKey())))
+			httpAddr := "http://localhost:" + cfg.Port
+
+			startupLog := log.Info().
+				Str("http", httpAddr).
+				Str("api", httpAddr+"/api/v1/{repo}").
+				Str("mcp", httpAddr+"/api/v1/{repo}/mcp")
+
+			if gitHandler != nil {
+				startupLog = startupLog.Str("git_remote", httpAddr+"/git")
+			}
+
+			var repoNames []string
+			rm.ForEach(func(name string, _ *web.RepoInstance) {
+				repoNames = append(repoNames, name)
+			})
+
+			startupLog.
+				Str("public_key", pubKey).
+				Str("branch", agentBranch).
+				Strs("repos", repoNames).
+				Msg("knomit ready")
+
+			// 12. Graceful shutdown
 			srv := &http.Server{
 				Addr:              ":" + cfg.Port,
 				Handler:           router,
@@ -280,7 +308,6 @@ func serveCmd() *cobra.Command {
 			signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
 
 			go func() {
-				log.Info().Str("port", cfg.Port).Msg("knomit listening")
 				if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 					log.Fatal().Err(err).Msg("listen failed")
 				}

@@ -386,11 +386,12 @@ func TestHandleSynthesizeStart_InvalidRecipe(t *testing.T) {
 	synthDeps := &SynthDeps{Adapter: &fakeAdapter{}}
 	rm := NewRepoManager()
 	rm.Set("knomit", &RepoInstance{
-		Name: "knomit",
-		GS:   gs,
-		Hub:  hub,
+		Name:      "knomit",
+		GS:        gs,
+		Hub:       hub,
+		SynthDeps: synthDeps,
 	})
-	handler := NewRouter(rm, synthDeps, nil, nil, false, "kb")
+	handler := NewRouter(rm, nil, false, "kb")
 
 	rr := doRequest(t, handler, http.MethodPost, "/api/v1/knomit/synthesize", "not: valid: yaml: [[[")
 
@@ -412,7 +413,7 @@ func TestHandleSync_ServiceUnavailable(t *testing.T) {
 		GS:   gs,
 		Hub:  hub,
 	})
-	handler := NewRouter(rm, nil, nil, nil, false, "kb")
+	handler := NewRouter(rm, nil, false, "kb")
 
 	rr := doRequest(t, handler, http.MethodPost, "/api/v1/knomit/sync", "")
 
@@ -437,7 +438,7 @@ func TestHandleEvents_InitialStatus(t *testing.T) {
 		Idx:  mockIdx,
 		Hub:  hub,
 	})
-	handler := NewRouter(rm, nil, nil, nil, false, "kb")
+	handler := NewRouter(rm, nil, false, "kb")
 
 	// Use a context with timeout to end the SSE connection.
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
@@ -468,7 +469,7 @@ func TestHandleEvents_TaskEvents(t *testing.T) {
 		GS:   gs,
 		Hub:  hub,
 	})
-	handler := NewRouter(rm, nil, nil, nil, false, "kb")
+	handler := NewRouter(rm, nil, false, "kb")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
@@ -595,7 +596,7 @@ func TestHandleEvents_SyncAndPushEvents(t *testing.T) {
 		GS:   gs,
 		Hub:  hub,
 	})
-	handler := NewRouter(rm, nil, nil, nil, false, "kb")
+	handler := NewRouter(rm, nil, false, "kb")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()

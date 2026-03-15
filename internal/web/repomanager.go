@@ -12,13 +12,15 @@ import (
 
 // RepoInstance holds all runtime state for a single repository.
 type RepoInstance struct {
-	Name       string
-	GS         GitStore
-	Svc        *store.Service
-	Idx        SearchIndex
-	Hub        *TaskHub
-	SyncCancel context.CancelFunc
-	SyncWg     *sync.WaitGroup
+	Name        string
+	GS          GitStore
+	Svc         *store.Service
+	Idx         SearchIndex
+	Hub         *TaskHub
+	SyncCancel  context.CancelFunc
+	SyncWg      *sync.WaitGroup
+	MCPHandlers map[string]http.Handler // profile -> MCP handler
+	SynthDeps   *SynthDeps             // nil if no LLM configured
 }
 
 // RepoManager is a concurrent-safe registry of named RepoInstances.

@@ -25,7 +25,7 @@ func newTestRouter(gs GitStore, idx SearchIndex) http.Handler {
 		Idx:  idx,
 		Hub:  hub,
 	})
-	return NewRouter(rm, nil, nil, nil, false, "kb")
+	return NewRouter(rm, nil, false, "kb")
 }
 
 func doRequest(t *testing.T, handler http.Handler, method, target string, body string) *httptest.ResponseRecorder {

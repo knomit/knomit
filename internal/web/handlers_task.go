@@ -26,15 +26,15 @@ func writeTaskConflict(w http.ResponseWriter, op string, err error) {
 // The recipe is validated synchronously so that a malformed recipe
 // produces a 400 immediately rather than an async error. If the recipe
 // is valid, execution proceeds in the background via TaskHub.
-func handleSynthesizeStart(deps *SynthDeps) http.HandlerFunc {
+func handleSynthesizeStart() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		ri := RepoFromContext(r.Context())
+		deps := ri.SynthDeps
 		if deps == nil || deps.Adapter == nil {
 			log.Warn().Msg("synthesize: not available (no LLM configured)")
 			writeError(w, http.StatusServiceUnavailable, "synthesis not available")
 			return
 		}
-
-		ri := RepoFromContext(r.Context())
 
 		r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 		body, err := io.ReadAll(r.Body)

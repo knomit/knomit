@@ -32,7 +32,7 @@ func TestHandleGetOrigin_NoRemote(t *testing.T) {
 		Svc:  svc,
 		Hub:  hub,
 	})
-	handler := NewRouter(rm, nil, nil, nil, false, "kb")
+	handler := NewRouter(rm, nil, false, "kb")
 
 	rr := doRequest(t, handler, http.MethodGet, "/api/v1/knomit/origin", "")
 	if rr.Code != http.StatusNoContent {
@@ -58,7 +58,7 @@ func TestHandleGetOrigin_WithRemote(t *testing.T) {
 		Svc:  svc,
 		Hub:  hub,
 	})
-	handler := NewRouter(rm, nil, nil, nil, false, "kb")
+	handler := NewRouter(rm, nil, false, "kb")
 
 	rr := doRequest(t, handler, http.MethodGet, "/api/v1/knomit/origin", "")
 	if rr.Code != http.StatusOK {
