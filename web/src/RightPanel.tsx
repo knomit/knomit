@@ -211,7 +211,10 @@ export function RightPanel({ state, dispatch }: Props) {
           })}
         </div>
         <div style={{ color: '#888', fontSize: 12, marginBottom: 12 }}>{commitDetail.message}</div>
-        {commitDetail.files.map(f => (
+        {(!commitDetail.files || commitDetail.files.length === 0) && (
+          <div style={{ color: '#555', fontSize: 12, fontStyle: 'italic' }}>No file changes in this commit.</div>
+        )}
+        {(commitDetail.files || []).map(f => (
           <div key={f.path}
             onClick={() => {
               if (f.action === 'deleted') return;

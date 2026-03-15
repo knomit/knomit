@@ -360,7 +360,7 @@ func (s *Store) CommitDetail(commitHash string) (*CommitDetailResult, error) {
 		return nil, fmt.Errorf("CommitDetail: diff: %w", err)
 	}
 
-	var files []ChangedFile
+	files := []ChangedFile{}
 	for _, ch := range changes {
 		from := ch.From.Name
 		to := ch.To.Name
