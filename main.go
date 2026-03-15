@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"syscall"
@@ -45,6 +46,191 @@ func main() {
 	}
 }
 
+// repoResult holds the initialized resources for a single repo.
+type repoResult struct {
+	ri      *web.RepoInstance
+	gs      *git.Store
+	svc     *store.Service
+	idx     *store.Index // concrete index — needed for MCP/synthesize which require wider interfaces
+	obs     *observer
+	cleanup func() // close svc, stop observer — NOT the embedder or LLM adapter
+}
+
+// openRepo initialises a single repo from a SQLite database file.
+// Shared resources (signer, embedder, LLM adapter) are passed in but
+// never closed by this function — their lifecycle is managed by the caller.
+//
+// If isDefault is true and no git data exists, the repo is initialised
+// from scratch (or cloned from origin). Non-default repos that fail to
+// open are returned as errors so the caller can skip them gracefully.
+func openRepo(
+	ctx context.Context,
+	name string,
+	dbPath string,
+	isDefault bool,
+	signer ssh.Signer,
+	agentBranch string,
+	embedder *embeddings.Embedder,
+	llmAdapter llm.LLMAdapter,
+	ontologyRoot string,
+	ontology *fact.Ontology,
+	cfg config.Config,
+	keyPath string,
+) (*repoResult, error) {
+	svc, err := store.Open(dbPath)
+	if err != nil {
+		return nil, fmt.Errorf("open store: %w", err)
+	}
+
+	gs, err := git.OpenWithStorer(svc.GitStorer())
+	if err != nil {
+		if !isDefault {
+			svc.Close()
+			return nil, fmt.Errorf("open git: %w", err)
+		}
+		// Default repo — first run, init from remote or local.
+		if cfg.Git.Origin != "" {
+			auth, authErr := git.ResolveAuth(cfg.Remote, keyPath)
+			if authErr != nil {
+				svc.Close()
+				return nil, fmt.Errorf("resolve auth: %w", authErr)
+			}
+			gs, err = git.InitFromRemote(svc.GitStorer(), cfg.Git.Origin, auth, agentBranch)
+			if err != nil {
+				svc.Close()
+				return nil, fmt.Errorf("init from remote: %w", err)
+			}
+		} else {
+			ont := fact.DefaultOntology()
+			ontologyYAML, serErr := ont.Serialize()
+			if serErr != nil {
+				svc.Close()
+				return nil, fmt.Errorf("serialize ontology: %w", serErr)
+			}
+			initFiles := map[string]string{
+				"domains/ontology.yaml": string(ontologyYAML),
+			}
+			gs, err = git.InitWithStorer(svc.GitStorer(), initFiles, agentBranch)
+			if err != nil {
+				svc.Close()
+				return nil, fmt.Errorf("init git: %w", err)
+			}
+		}
+	}
+
+	gs.SetSigner(signer)
+
+	// Seed remotes table for default repo on first startup.
+	if isDefault && cfg.Git.Origin != "" {
+		if err := svc.SetRemote("origin", cfg.Git.Origin, "main", 300, 300); err != nil {
+			log.Warn().Err(err).Msg("failed to seed origin in remotes table")
+		}
+	}
+
+	idx := svc.Index()
+	if embedder != nil {
+		idx.SetEmbedder(embedder)
+	}
+
+	// Initial index sync.
+	if err := idx.Sync(gs, gs.Branch()); err != nil {
+		log.Warn().Err(err).Str("repo", name).Msg("initial index sync failed")
+	}
+
+	hub := web.NewTaskHub(ctx)
+
+	// Observer: sync index + push SSE on every git commit.
+	obs := newObserver(time.Second, func(hash string) {
+		if err := idx.Sync(gs, gs.Branch()); err != nil {
+			log.Warn().Err(err).Str("repo", name).Msg("observer sync failed")
+		}
+		hub.BroadcastStatus(hash)
+	})
+	gs.SetOnCommit(obs.Notify)
+
+	// Background remote sync + push goroutines.
+	syncCtx, syncCancel := context.WithCancel(ctx)
+	var syncWg sync.WaitGroup
+	remote, _ := svc.GetRemote("origin")
+	if remote != nil {
+		auth, authErr := git.ResolveAuth(cfg.Remote, keyPath)
+		if authErr != nil {
+			log.Warn().Err(authErr).Str("repo", name).Msg("remote: auth resolution failed")
+		} else {
+			gs.SetAuth(auth)
+		}
+
+		if err := gs.ConfigureRemote(remote.URL, remote.Branch); err != nil {
+			log.Warn().Err(err).Str("repo", name).Msg("remote: configure failed")
+		} else {
+			syncWg.Add(2)
+			go runSyncLoop(syncCtx, &syncWg, gs, svc, hub, remote)
+			go runPushLoop(syncCtx, &syncWg, gs, svc, hub, remote)
+		}
+	}
+
+	// Per-repo MCP servers.
+	var mcpHandlers map[string]http.Handler
+	if ontology != nil {
+		reviewer := &reviewerAdapter{r: synthesize.NewReviewer(gs, idx, idx, nil)}
+		profiles := []string{"code", "chat", "generic"}
+		mcpHandlers = make(map[string]http.Handler, len(profiles))
+		for _, p := range profiles {
+			mcpSrv := mcp.NewServer(gs, idx, idx, reviewer, p, ontologyRoot, ontology)
+			mcpHandlers[p] = mcpserver.NewStreamableHTTPServer(mcpSrv)
+		}
+	}
+
+	// Per-repo synthesis deps.
+	var synthDeps *web.SynthDeps
+	if llmAdapter != nil {
+		synthDeps = &web.SynthDeps{
+			GS:       gs,
+			Idx:      idx,
+			Embedder: embedder,
+			Adapter:  llmAdapter,
+		}
+	}
+
+	ri := &web.RepoInstance{
+		Name:        name,
+		GS:          gs,
+		Svc:         svc,
+		Idx:         idx,
+		Hub:         hub,
+		SyncCancel:  syncCancel,
+		SyncWg:      &syncWg,
+		MCPHandlers: mcpHandlers,
+		SynthDeps:   synthDeps,
+	}
+
+	return &repoResult{
+		ri:  ri,
+		gs:  gs,
+		svc: svc,
+		idx: idx,
+		obs: obs,
+		cleanup: func() {
+			obs.Stop()
+			svc.Close()
+		},
+	}, nil
+}
+
+// isValidRepoName checks that a repo name contains only lowercase letters,
+// digits, hyphens, or underscores.
+func isValidRepoName(name string) bool {
+	if name == "" {
+		return false
+	}
+	for _, c := range name {
+		if !((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' || c == '_') {
+			return false
+		}
+	}
+	return true
+}
+
 func serveCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "serve",
@@ -75,74 +261,7 @@ func serveCmd() *cobra.Command {
 			}
 			agentBranch := git.AgentBranch(keyFingerprint)
 
-			// 1. Open unified store (single SQLite database)
-			dbPath := filepath.Join(cfg.RepoPath, "knomit.db")
-			svc, err := store.Open(dbPath)
-			if err != nil {
-				return fmt.Errorf("open store: %w", err)
-			}
-			defer svc.Close()
-
-			// 2. Open or init git on top of the shared storer
-			var ontology *fact.Ontology
-			gs, err := git.OpenWithStorer(svc.GitStorer())
-			if err != nil {
-				// First run — check if origin is configured
-				if cfg.Git.Origin != "" {
-					// Resolve auth
-					auth, authErr := git.ResolveAuth(cfg.Remote, keyPath)
-					if authErr != nil {
-						return fmt.Errorf("resolve auth: %w", authErr)
-					}
-					gs, err = git.InitFromRemote(svc.GitStorer(), cfg.Git.Origin, auth, agentBranch)
-					if err != nil {
-						return fmt.Errorf("init from remote: %w", err)
-					}
-				} else {
-					// No origin — local init
-					ontology = fact.DefaultOntology()
-					ontologyYAML, serErr := ontology.Serialize()
-					if serErr != nil {
-						return fmt.Errorf("serialize ontology: %w", serErr)
-					}
-					initFiles := map[string]string{
-						"domains/ontology.yaml": string(ontologyYAML),
-					}
-					gs, err = git.InitWithStorer(svc.GitStorer(), initFiles, agentBranch)
-					if err != nil {
-						return fmt.Errorf("init git: %w", err)
-					}
-				}
-			}
-
-			// Load ontology from git if it wasn't set during init.
-			if ontology == nil {
-				ontologyYAML, readErr := gs.ReadFile("domains/ontology.yaml")
-				if readErr != nil {
-					log.Warn().Msg("domains/ontology.yaml not found, using default ontology")
-					ontology = fact.DefaultOntology()
-				} else {
-					ontology, err = fact.ParseOntology([]byte(ontologyYAML))
-					if err != nil {
-						return fmt.Errorf("parse ontology: %w", err)
-					}
-				}
-			}
-
-			gs.SetSigner(signer)
-
-			// Seed remotes table on first startup if origin is set.
-			if cfg.Git.Origin != "" {
-				interval := 300
-				pushInterval := 300
-				if err := svc.SetRemote("origin", cfg.Git.Origin, "main", interval, pushInterval); err != nil {
-					log.Warn().Err(err).Msg("failed to seed origin in remotes table")
-				}
-			}
-
-			idx := svc.Index()
-
-			// 3. Ensure embedder model files are present (downloads if missing), then load.
+			// 1. Ensure embedder model files are present (shared across repos).
 			var embedder *embeddings.Embedder
 			modelPath, tokPath, err := embeddings.EnsureModel(filepath.Join(cfg.RepoPath, "models"))
 			if err != nil {
@@ -155,52 +274,11 @@ func serveCmd() *cobra.Command {
 			}
 			embeddingsEnabled := embedder != nil
 			if embedder != nil {
-				idx.SetEmbedder(embedder)
 				defer embedder.Close()
 			}
 
-			// 4. Initial sync (must happen after embedder is attached so vectors are computed)
-			if err := idx.Sync(gs, gs.Branch()); err != nil {
-				log.Warn().Err(err).Msg("initial index sync failed")
-			}
-
-			// 4a. Create TaskHub (needed by observer below)
+			// 2. Resolve LLM adapter (shared across repos).
 			ctx := context.Background()
-			hub := web.NewTaskHub(ctx)
-
-			// 4b. Observer: sync index + push SSE on every git commit.
-			obs := newObserver(time.Second, func(hash string) {
-				if err := idx.Sync(gs, gs.Branch()); err != nil {
-					log.Warn().Err(err).Msg("observer sync failed")
-				}
-				hub.BroadcastStatus(hash)
-			})
-			defer obs.Stop()
-			gs.SetOnCommit(obs.Notify)
-
-			// 4c. Background remote sync + push goroutines.
-			syncCtx, syncCancel := context.WithCancel(ctx)
-			var syncWg sync.WaitGroup
-			remote, _ := svc.GetRemote("origin")
-			if remote != nil {
-				// Resolve and set auth
-				auth, authErr := git.ResolveAuth(cfg.Remote, keyPath)
-				if authErr != nil {
-					log.Warn().Err(authErr).Msg("remote: auth resolution failed")
-				} else {
-					gs.SetAuth(auth)
-				}
-
-				if err := gs.ConfigureRemote(remote.URL, remote.Branch); err != nil {
-					log.Warn().Err(err).Msg("remote: configure failed")
-				} else {
-					syncWg.Add(2)
-					go runSyncLoop(syncCtx, &syncWg, gs, svc, hub, remote)
-					go runPushLoop(syncCtx, &syncWg, gs, svc, hub, remote)
-				}
-			}
-
-			// 5. Resolve LLM adapter
 			var llmAdapter llm.LLMAdapter
 			provider, err = llm.ResolveProvider(cfg.LLM.Model, cfg.LLM.Provider)
 			if err != nil {
@@ -212,7 +290,6 @@ func serveCmd() *cobra.Command {
 				}
 			}
 
-			// Optional LLM trace log (set KNOMIT_LLM_TRACE to a file path)
 			if tracePath := os.Getenv("KNOMIT_LLM_TRACE"); tracePath != "" && llmAdapter != nil {
 				tracer, err := llm.NewTracingAdapter(llmAdapter, tracePath)
 				if err != nil {
@@ -224,53 +301,93 @@ func serveCmd() *cobra.Command {
 				}
 			}
 
-			// 6. Create per-profile MCP servers
-			reviewer := &reviewerAdapter{r: synthesize.NewReviewer(gs, idx, idx, nil)}
-			profiles := []string{"code", "chat", "generic"}
-			mcpServers := make(map[string]http.Handler, len(profiles))
-			for _, p := range profiles {
-				mcpSrv := mcp.NewServer(gs, idx, idx, reviewer, p, cfg.OntologyRoot, ontology)
-				mcpServers[p] = mcpserver.NewStreamableHTTPServer(mcpSrv)
-			}
-
-			// 7. Wire git remote if enabled
-			var gitHandler http.Handler
-			if cfg.Git.Serve {
-				gitHandler = web.GitRemoteHandler(gs, cfg.LLM.APIKey)
-			}
-
-			// 8. Create synthesis dependencies
-			var synthDeps *web.SynthDeps
 			if llmAdapter != nil {
-				synthDeps = &web.SynthDeps{
-					GS:       gs,
-					Idx:      idx,
-					Embedder: embedder,
-					Adapter:  llmAdapter,
-				}
 				log.Info().Msg("synthesis enabled")
 			} else {
 				log.Warn().Msg("synthesis disabled (no LLM adapter)")
 			}
 
-			// 9. Create RepoManager
-			rm := web.NewRepoManager()
-			rm.Set("knomit", &web.RepoInstance{
-				Name:        "knomit",
-				GS:          gs,
-				Svc:         svc,
-				Idx:         idx,
-				Hub:         hub,
-				SyncCancel:  syncCancel,
-				SyncWg:      &syncWg,
-				MCPHandlers: mcpServers,
-				SynthDeps:   synthDeps,
-			})
+			// 3. Discover repos — scan repos/*.db
+			reposDir := filepath.Join(cfg.RepoPath, "repos")
+			if err := os.MkdirAll(reposDir, 0o755); err != nil {
+				return fmt.Errorf("create repos dir: %w", err)
+			}
 
-			// 10. Create chi router
+			// Migrate: warn if old-layout knomit.db exists at root
+			oldDB := filepath.Join(cfg.RepoPath, "knomit.db")
+			if _, err := os.Stat(oldDB); err == nil {
+				entries, _ := filepath.Glob(filepath.Join(reposDir, "*.db"))
+				if len(entries) == 0 {
+					return fmt.Errorf("found knomit.db at old location %s — move it to %s/knomit.db", oldDB, reposDir)
+				}
+			}
+
+			// Phase 1: Open default knomit repo first (needed for ontology).
+			defaultDB := filepath.Join(reposDir, "knomit.db")
+			knomitResult, err := openRepo(ctx, "knomit", defaultDB, true, signer, agentBranch, embedder, llmAdapter, cfg.OntologyRoot, nil, cfg, keyPath)
+			if err != nil {
+				return fmt.Errorf("open default repo: %w", err)
+			}
+
+			// Load ontology from knomit repo's git store.
+			var ontology *fact.Ontology
+			ontologyYAML, readErr := knomitResult.gs.ReadFile("domains/ontology.yaml")
+			if readErr != nil {
+				log.Warn().Msg("domains/ontology.yaml not found, using default ontology")
+				ontology = fact.DefaultOntology()
+			} else {
+				ontology, err = fact.ParseOntology([]byte(ontologyYAML))
+				if err != nil {
+					knomitResult.cleanup()
+					return fmt.Errorf("parse ontology: %w", err)
+				}
+			}
+
+			// Now set MCP servers on the knomit repo (they need ontology).
+			setRepoMCP(knomitResult, cfg.OntologyRoot, ontology, llmAdapter, embedder)
+
+			rm := web.NewRepoManager()
+			var allResults []*repoResult
+			rm.Set("knomit", knomitResult.ri)
+			allResults = append(allResults, knomitResult)
+
+			// Phase 2: Discover and open remaining repos.
+			dbFiles, _ := filepath.Glob(filepath.Join(reposDir, "*.db"))
+			sort.Strings(dbFiles)
+
+			for _, dbPath := range dbFiles {
+				base := filepath.Base(dbPath)
+				name := strings.TrimSuffix(base, ".db")
+
+				if name == "knomit" {
+					continue // already opened
+				}
+
+				if !isValidRepoName(name) {
+					log.Warn().Str("file", base).Msg("skipping db with invalid repo name")
+					continue
+				}
+
+				result, err := openRepo(ctx, name, dbPath, false, signer, agentBranch, embedder, llmAdapter, cfg.OntologyRoot, ontology, cfg, keyPath)
+				if err != nil {
+					log.Warn().Err(err).Str("repo", name).Msg("skipping repo")
+					continue
+				}
+
+				rm.Set(name, result.ri)
+				allResults = append(allResults, result)
+			}
+
+			// 4. Wire git remote handler (bound to default repo).
+			var gitHandler http.Handler
+			if cfg.Git.Serve {
+				gitHandler = web.GitRemoteHandler(knomitResult.gs, cfg.LLM.APIKey)
+			}
+
+			// 5. Create chi router.
 			router := web.NewRouter(rm, gitHandler, embeddingsEnabled, cfg.OntologyRoot)
 
-			// 11. Startup summary
+			// 6. Startup summary.
 			pubKey := strings.TrimSpace(string(ssh.MarshalAuthorizedKey(signer.PublicKey())))
 			httpAddr := "http://localhost:" + cfg.Port
 
@@ -294,7 +411,7 @@ func serveCmd() *cobra.Command {
 				Strs("repos", repoNames).
 				Msg("knomit ready")
 
-			// 12. Graceful shutdown
+			// 7. Graceful shutdown.
 			srv := &http.Server{
 				Addr:              ":" + cfg.Port,
 				Handler:           router,
@@ -314,9 +431,17 @@ func serveCmd() *cobra.Command {
 			}()
 
 			<-stop
-			syncCancel()
-			syncWg.Wait()
-			hub.Shutdown()
+			// Cancel all sync loops first.
+			for _, result := range allResults {
+				result.ri.SyncCancel()
+			}
+			// Wait for all sync loops and clean up per-repo resources.
+			for _, result := range allResults {
+				result.ri.SyncWg.Wait()
+				result.ri.Hub.Shutdown()
+				result.cleanup()
+			}
+			// Shared resource cleanup (embedder, tracer) happens via defers.
 			shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			return srv.Shutdown(shutCtx)
@@ -324,8 +449,31 @@ func serveCmd() *cobra.Command {
 	}
 }
 
+// setRepoMCP creates and attaches MCP handlers to a repoResult.
+// Called after the ontology is loaded (since MCP servers need it).
+func setRepoMCP(result *repoResult, ontologyRoot string, ontology *fact.Ontology, llmAdapter llm.LLMAdapter, embedder *embeddings.Embedder) {
+	reviewer := &reviewerAdapter{r: synthesize.NewReviewer(result.gs, result.idx, result.idx, nil)}
+	profiles := []string{"code", "chat", "generic"}
+	mcpHandlers := make(map[string]http.Handler, len(profiles))
+	for _, p := range profiles {
+		mcpSrv := mcp.NewServer(result.gs, result.idx, result.idx, reviewer, p, ontologyRoot, ontology)
+		mcpHandlers[p] = mcpserver.NewStreamableHTTPServer(mcpSrv)
+	}
+	result.ri.MCPHandlers = mcpHandlers
+
+	if llmAdapter != nil {
+		result.ri.SynthDeps = &web.SynthDeps{
+			GS:       result.gs,
+			Idx:      result.idx,
+			Embedder: embedder,
+			Adapter:  llmAdapter,
+		}
+	}
+}
+
 func initCmd() *cobra.Command {
 	var ontologyPath string
+	var repoName string
 	cmd := &cobra.Command{
 		Use:   "init",
 		Short: "Initialise a new knomit repo",
@@ -334,7 +482,8 @@ func initCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("load config: %w", err)
 			}
-			if err := os.MkdirAll(cfg.RepoPath, 0o755); err != nil {
+			reposDir := filepath.Join(cfg.RepoPath, "repos")
+			if err := os.MkdirAll(reposDir, 0o755); err != nil {
 				return err
 			}
 
@@ -367,7 +516,7 @@ func initCmd() *cobra.Command {
 				return fmt.Errorf("serialize ontology: %w", err)
 			}
 
-			dbPath := filepath.Join(cfg.RepoPath, "knomit.db")
+			dbPath := filepath.Join(reposDir, repoName+".db")
 			svc, err := store.Open(dbPath)
 			if err != nil {
 				return fmt.Errorf("open store: %w", err)
@@ -380,16 +529,18 @@ func initCmd() *cobra.Command {
 			if _, err := git.InitWithStorer(svc.GitStorer(), initFiles, agentBranch); err != nil {
 				return fmt.Errorf("init git: %w", err)
 			}
-			fmt.Printf("Initialized knomit repo at %s\n", cfg.RepoPath)
+			fmt.Printf("Initialized knomit repo %q at %s\n", repoName, dbPath)
 			return nil
 		},
 	}
 	cmd.Flags().StringVar(&ontologyPath, "ontology", "", "path to custom ontology YAML file")
+	cmd.Flags().StringVar(&repoName, "name", "knomit", "repo name")
 	return cmd
 }
 
 func resetCmd() *cobra.Command {
-	return &cobra.Command{
+	var repoName string
+	cmd := &cobra.Command{
 		Use:   "reset",
 		Short: "Wipe all data and start fresh",
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -397,7 +548,7 @@ func resetCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("load config: %w", err)
 			}
-			dbFile := filepath.Join(cfg.RepoPath, "knomit.db")
+			dbFile := filepath.Join(cfg.RepoPath, "repos", repoName+".db")
 			for _, f := range []string{dbFile} {
 				if err := os.Remove(f); err != nil && !os.IsNotExist(err) {
 					return fmt.Errorf("remove %s: %w", f, err)
@@ -407,10 +558,12 @@ func resetCmd() *cobra.Command {
 				os.Remove(f + "-shm")
 			}
 
-			log.Info().Str("repo", cfg.RepoPath).Msg("database removed")
+			log.Info().Str("repo", repoName).Msg("database removed")
 			return nil
 		},
 	}
+	cmd.Flags().StringVar(&repoName, "name", "knomit", "repo name to reset")
+	return cmd
 }
 
 // reviewerAdapter adapts *synthesize.Reviewer to the mcp.Reviewer interface,
@@ -506,7 +659,8 @@ func runPushLoop(ctx context.Context, wg *sync.WaitGroup, gs *git.Store, svc *st
 }
 
 func rebuildCmd() *cobra.Command {
-	return &cobra.Command{
+	var repoName string
+	cmd := &cobra.Command{
 		Use:   "rebuild",
 		Short: "Rebuild the search index from scratch",
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -514,7 +668,7 @@ func rebuildCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("load config: %w", err)
 			}
-			dbPath := filepath.Join(cfg.RepoPath, "knomit.db")
+			dbPath := filepath.Join(cfg.RepoPath, "repos", repoName+".db")
 			svc, err := store.Open(dbPath)
 			if err != nil {
 				return fmt.Errorf("open store: %w", err)
@@ -528,8 +682,10 @@ func rebuildCmd() *cobra.Command {
 			if err := idx.Sync(gs, gs.Branch()); err != nil {
 				return fmt.Errorf("rebuild: %w", err)
 			}
-			log.Info().Msg("Index rebuilt successfully")
+			log.Info().Str("repo", repoName).Msg("Index rebuilt successfully")
 			return nil
 		},
 	}
+	cmd.Flags().StringVar(&repoName, "name", "knomit", "repo name")
+	return cmd
 }
