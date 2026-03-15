@@ -26,6 +26,22 @@ func learnTool() mcpgo.Tool {
 		mcpgo.WithArray("facts",
 			mcpgo.Required(),
 			mcpgo.Description("Array of fact objects to write."),
+			mcpgo.Items(map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"topic":      map[string]any{"type": "string", "description": "Top-level ontology topic (e.g. technology, people, science)."},
+					"category":   map[string]any{"type": "string", "description": "Category path within the topic (e.g. languages/go/concurrency)."},
+					"title":      map[string]any{"type": "string", "description": "Fact title (short, descriptive)."},
+					"body":       map[string]any{"type": "string", "description": "Fact body in natural language."},
+					"type":       map[string]any{"type": "string", "description": "Epistemic type: observation, concept, process, principle, pattern, or reference.", "default": "observation"},
+					"domain":     map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Cross-cutting domain tags."},
+					"confidence": map[string]any{"type": "number", "description": "Certainty level 0.0–1.0.", "default": 0.7},
+					"sources":    map[string]any{"type": "integer", "description": "Number of independent sources.", "default": 1},
+					"entities":   map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Entities this fact mentions."},
+					"refs":       map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "External URLs or source references."},
+				},
+				"required": []string{"topic", "category", "title", "body"},
+			}),
 		),
 	)
 }
