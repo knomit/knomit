@@ -44,19 +44,13 @@ func (s *stubEmbedder4d) Embed(text string) ([]float32, error) {
 }
 
 // graphqliteTestPath returns the absolute path to the vendored GraphQLite
-// shared library for the current platform (without file extension — mattn
-// driver strips it).
+// shared library for the current platform, without the file extension.
+// The mattn/go-sqlite3 driver appends the platform extension automatically.
 func graphqliteTestPath(t *testing.T) string {
 	t.Helper()
 	_, file, _, _ := runtime.Caller(0)
 	repoRoot := filepath.Join(filepath.Dir(file), "..", "..")
-	ext := ".so"
-	if runtime.GOOS == "darwin" {
-		ext = ".dylib"
-	} else if runtime.GOOS == "windows" {
-		ext = ".dll"
-	}
-	return filepath.Join(repoRoot, "lib", runtime.GOOS+"-"+runtime.GOARCH, "graphqlite"+ext)
+	return filepath.Join(repoRoot, "dist", "lib", "graphqlite")
 }
 
 func TestSchemaMigrationV3ToV4(t *testing.T) {

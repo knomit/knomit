@@ -1,4 +1,4 @@
-.PHONY: build web test clean run dev setup dist download-ort
+.PHONY: build web test clean run dev setup dist download-ort download-graphqlite
 
 ORT_VERSION := 1.24.3
 UNAME_S := $(shell uname -s)
@@ -27,7 +27,30 @@ endif
 
 ORT_URL := https://github.com/microsoft/onnxruntime/releases/download/v$(ORT_VERSION)/onnxruntime-$(ORT_PLATFORM)-$(ORT_VERSION).tgz
 
-setup: download-ort
+GRAPHQLITE_VERSION := 0.3.7
+ifeq ($(UNAME_S),Darwin)
+  ifeq ($(UNAME_M),arm64)
+    GRAPHQLITE_ASSET := graphqlite-macos-arm64.dylib
+    GRAPHQLITE_LIB := graphqlite.dylib
+  else
+    GRAPHQLITE_ASSET := graphqlite-macos-x86_64.dylib
+    GRAPHQLITE_LIB := graphqlite.dylib
+  endif
+else ifeq ($(UNAME_S),Linux)
+  ifeq ($(UNAME_M),aarch64)
+    GRAPHQLITE_ASSET := graphqlite-linux-aarch64.so
+    GRAPHQLITE_LIB := graphqlite.so
+  else
+    GRAPHQLITE_ASSET := graphqlite-linux-x86_64.so
+    GRAPHQLITE_LIB := graphqlite.so
+  endif
+else
+  GRAPHQLITE_ASSET := graphqlite-windows-x86_64.dll
+  GRAPHQLITE_LIB := graphqlite.dll
+endif
+GRAPHQLITE_URL := https://github.com/colliery-io/graphqlite/releases/download/v$(GRAPHQLITE_VERSION)/$(GRAPHQLITE_ASSET)
+
+setup: download-ort download-graphqlite
 	@echo "Setup complete. Run 'make run' to start the server."
 
 download-ort:
@@ -40,16 +63,24 @@ download-ort:
 		echo "onnxruntime installed to dist/lib/"; \
 	fi
 
+download-graphqlite:
+	@mkdir -p dist/lib
+	@if [ ! -f dist/lib/$(GRAPHQLITE_LIB) ]; then \
+		echo "Downloading graphqlite v$(GRAPHQLITE_VERSION)..."; \
+		curl -sL $(GRAPHQLITE_URL) -o dist/lib/$(GRAPHQLITE_LIB); \
+		echo "graphqlite installed to dist/lib/"; \
+	fi
+
 build: web
 	CGO_ENABLED=1 go build -o dist/knomit .
 
 web:
 	cd web && npm ci && npm run build
 
-test:
+test: download-graphqlite
 	CGO_ENABLED=1 go test ./...
 
-dist: download-ort build
+dist: download-ort download-graphqlite build
 	@echo "Distribution package ready in dist/"
 
 CMD ?= serve
