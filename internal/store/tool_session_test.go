@@ -2,17 +2,22 @@ package store_test
 
 import (
 	"testing"
+
+	"knomit/internal/store"
 )
 
-func TestCreateExploreSession(t *testing.T) {
+func TestCreateToolSession(t *testing.T) {
 	idx := newTestIndex(t)
 
-	s, err := idx.CreateExploreSession("machine/test", "concepts/")
+	s, err := idx.CreateToolSession("explore", "machine/test", "concepts/")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if s.ID == "" {
 		t.Fatal("expected non-empty session ID")
+	}
+	if s.Tool != "explore" {
+		t.Fatalf("expected tool explore, got %q", s.Tool)
 	}
 	if s.Branch != "machine/test" {
 		t.Fatalf("expected branch machine/test, got %q", s.Branch)
@@ -34,15 +39,15 @@ func TestCreateExploreSession(t *testing.T) {
 	}
 }
 
-func TestGetExploreSession(t *testing.T) {
+func TestGetToolSession(t *testing.T) {
 	idx := newTestIndex(t)
 
-	s, err := idx.CreateExploreSession("machine/test", "")
+	s, err := idx.CreateToolSession("explore", "machine/test", "")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	got, err := idx.GetExploreSession(s.ID)
+	got, err := idx.GetToolSession(s.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -51,6 +56,9 @@ func TestGetExploreSession(t *testing.T) {
 	}
 	if got.ID != s.ID {
 		t.Fatalf("expected ID %q, got %q", s.ID, got.ID)
+	}
+	if got.Tool != "explore" {
+		t.Fatalf("expected tool explore, got %q", got.Tool)
 	}
 	if got.Branch != s.Branch {
 		t.Fatalf("expected branch %q, got %q", s.Branch, got.Branch)
@@ -63,7 +71,7 @@ func TestGetExploreSession(t *testing.T) {
 	}
 
 	// Nonexistent returns nil, no error.
-	got2, err := idx.GetExploreSession("nonexistent-id")
+	got2, err := idx.GetToolSession("nonexistent-id")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,19 +80,19 @@ func TestGetExploreSession(t *testing.T) {
 	}
 }
 
-func TestUpdateExploreSession(t *testing.T) {
+func TestUpdateToolSession(t *testing.T) {
 	idx := newTestIndex(t)
 
-	s, err := idx.CreateExploreSession("machine/test", "")
+	s, err := idx.CreateToolSession("explore", "machine/test", "")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if err := idx.UpdateExploreSession(s.ID, "abc123", "completed"); err != nil {
+	if err := idx.UpdateToolSession(s.ID, "abc123", "completed"); err != nil {
 		t.Fatal(err)
 	}
 
-	got, err := idx.GetExploreSession(s.ID)
+	got, err := idx.GetToolSession(s.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,22 +102,21 @@ func TestUpdateExploreSession(t *testing.T) {
 	if got.Status != "completed" {
 		t.Fatalf("expected completed, got %q", got.Status)
 	}
-	// updated_at should be set (non-empty).
 	if got.UpdatedAt == "" {
 		t.Fatal("expected non-empty updated_at after update")
 	}
 }
 
-func TestExploreSeenPaths(t *testing.T) {
+func TestToolSeenPaths(t *testing.T) {
 	idx := newTestIndex(t)
 
-	s, err := idx.CreateExploreSession("machine/test", "")
+	s, err := idx.CreateToolSession("explore", "machine/test", "")
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// Initially empty.
-	seen, err := idx.GetExploreSeenPaths(s.ID)
+	seen, err := idx.GetSeenPaths(s.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -118,11 +125,11 @@ func TestExploreSeenPaths(t *testing.T) {
 	}
 
 	// Add some paths.
-	if err := idx.AddExploreSeenPaths(s.ID, []string{"a.md", "b.md", "c.md"}); err != nil {
+	if err := idx.AddSeenPaths(s.ID, []string{"a.md", "b.md", "c.md"}); err != nil {
 		t.Fatal(err)
 	}
 
-	seen, err = idx.GetExploreSeenPaths(s.ID)
+	seen, err = idx.GetSeenPaths(s.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,12 +142,12 @@ func TestExploreSeenPaths(t *testing.T) {
 		}
 	}
 
-	// Add duplicates — should not grow.
-	if err := idx.AddExploreSeenPaths(s.ID, []string{"b.md", "c.md", "d.md"}); err != nil {
+	// Add duplicates — should not grow beyond 4.
+	if err := idx.AddSeenPaths(s.ID, []string{"b.md", "c.md", "d.md"}); err != nil {
 		t.Fatal(err)
 	}
 
-	seen, err = idx.GetExploreSeenPaths(s.ID)
+	seen, err = idx.GetSeenPaths(s.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -149,13 +156,13 @@ func TestExploreSeenPaths(t *testing.T) {
 	}
 }
 
-func TestGCExploreSessions(t *testing.T) {
+func TestGCToolSessions(t *testing.T) {
 	idx := newTestIndex(t)
 
-	// Create 4 sessions on the same branch.
+	// Create 4 sessions on the same tool+branch.
 	var ids []string
 	for i := 0; i < 4; i++ {
-		s, err := idx.CreateExploreSession("machine/test", "")
+		s, err := idx.CreateToolSession("explore", "machine/test", "")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -163,18 +170,24 @@ func TestGCExploreSessions(t *testing.T) {
 	}
 
 	// Add seen paths to session 1 to test cascade.
-	if err := idx.AddExploreSeenPaths(ids[1], []string{"x.md", "y.md"}); err != nil {
+	if err := idx.AddSeenPaths(ids[1], []string{"x.md", "y.md"}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create a session for a different tool — should be untouched.
+	otherSess, err := idx.CreateToolSession("explain", "machine/test", "")
+	if err != nil {
 		t.Fatal(err)
 	}
 
 	// Keep only 2 most recent.
-	if err := idx.GCExploreSessions("machine/test", 2); err != nil {
+	if err := idx.GCToolSessions("explore", "machine/test", 2); err != nil {
 		t.Fatal(err)
 	}
 
 	// Sessions 0, 1 should be deleted; 2, 3 should remain.
 	for _, id := range ids[:2] {
-		got, err := idx.GetExploreSession(id)
+		got, err := idx.GetToolSession(id)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -183,7 +196,7 @@ func TestGCExploreSessions(t *testing.T) {
 		}
 	}
 	for _, id := range ids[2:] {
-		got, err := idx.GetExploreSession(id)
+		got, err := idx.GetToolSession(id)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -193,11 +206,127 @@ func TestGCExploreSessions(t *testing.T) {
 	}
 
 	// Seen paths for deleted session should also be gone (cascade).
-	seen, err := idx.GetExploreSeenPaths(ids[1])
+	seen, err := idx.GetSeenPaths(ids[1])
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(seen) != 0 {
 		t.Fatalf("expected 0 seen paths after GC cascade, got %d", len(seen))
+	}
+
+	// Other tool's session should be untouched.
+	otherGot, err := idx.GetToolSession(otherSess.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if otherGot == nil {
+		t.Fatal("expected explain session to survive GC of explore sessions")
+	}
+}
+
+func TestEnqueueAndDequeuePaths(t *testing.T) {
+	idx := newTestIndex(t)
+
+	s, err := idx.CreateToolSession("explore", "machine/test", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	items := []store.QueueItem{
+		{Path: "a.md", CommitHash: "aaa", Depth: 0},
+		{Path: "b.md", CommitHash: "bbb", Depth: 1},
+		{Path: "c.md", CommitHash: "ccc", Depth: 2},
+	}
+	if err := idx.EnqueuePaths(s.ID, items); err != nil {
+		t.Fatal(err)
+	}
+
+	// Dequeue 2 — should get depth-0 and depth-1 items (breadth-first).
+	got, err := idx.DequeuePaths(s.ID, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("expected 2 dequeued items, got %d", len(got))
+	}
+	if got[0].Path != "a.md" || got[0].Depth != 0 {
+		t.Fatalf("expected first item a.md@depth=0, got %s@depth=%d", got[0].Path, got[0].Depth)
+	}
+	if got[1].Path != "b.md" || got[1].Depth != 1 {
+		t.Fatalf("expected second item b.md@depth=1, got %s@depth=%d", got[1].Path, got[1].Depth)
+	}
+
+	// Verify remaining count.
+	size, err := idx.QueueSize(s.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if size != 1 {
+		t.Fatalf("expected queue size 1 after dequeue, got %d", size)
+	}
+}
+
+func TestDequeuePathsEmpty(t *testing.T) {
+	idx := newTestIndex(t)
+
+	s, err := idx.CreateToolSession("explore", "machine/test", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := idx.DequeuePaths(s.ID, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != nil {
+		t.Fatalf("expected nil from empty dequeue, got %d items", len(got))
+	}
+}
+
+func TestQueueSize(t *testing.T) {
+	idx := newTestIndex(t)
+
+	s, err := idx.CreateToolSession("explore", "machine/test", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Initially zero.
+	size, err := idx.QueueSize(s.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if size != 0 {
+		t.Fatalf("expected queue size 0, got %d", size)
+	}
+
+	// Enqueue some items.
+	items := []store.QueueItem{
+		{Path: "a.md", CommitHash: "aaa", Depth: 0},
+		{Path: "b.md", CommitHash: "bbb", Depth: 0},
+	}
+	if err := idx.EnqueuePaths(s.ID, items); err != nil {
+		t.Fatal(err)
+	}
+
+	size, err = idx.QueueSize(s.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if size != 2 {
+		t.Fatalf("expected queue size 2, got %d", size)
+	}
+
+	// Dequeue all.
+	if _, err := idx.DequeuePaths(s.ID, 10); err != nil {
+		t.Fatal(err)
+	}
+
+	size, err = idx.QueueSize(s.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if size != 0 {
+		t.Fatalf("expected queue size 0 after dequeue, got %d", size)
 	}
 }

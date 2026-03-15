@@ -1,4 +1,4 @@
-// Explore session CRUD for progressive knowledge-base exploration.
+// Tool session CRUD for progressive knowledge-base exploration and other paginated tools.
 package store
 
 import (
@@ -9,9 +9,10 @@ import (
 	"github.com/google/uuid"
 )
 
-// ExploreSession represents an explore session for a branch.
-type ExploreSession struct {
+// ToolSession represents a paginated tool session for a branch.
+type ToolSession struct {
 	ID         string
+	Tool       string
 	Branch     string
 	PathPrefix string
 	LastCommit string
@@ -20,12 +21,20 @@ type ExploreSession struct {
 	UpdatedAt  string
 }
 
-// CreateExploreSession creates a new explore session for the given branch and path prefix.
-func (idx *Index) CreateExploreSession(branch, pathPrefix string) (*ExploreSession, error) {
+// QueueItem represents a single item in a tool session's work queue.
+type QueueItem struct {
+	Path       string
+	CommitHash string
+	Depth      int
+}
+
+// CreateToolSession creates a new tool session for the given tool, branch, and path prefix.
+func (idx *Index) CreateToolSession(tool, branch, pathPrefix string) (*ToolSession, error) {
 	now := time.Now().UTC().Format(time.RFC3339)
 
-	s := &ExploreSession{
+	s := &ToolSession{
 		ID:         uuid.New().String(),
+		Tool:       tool,
 		Branch:     branch,
 		PathPrefix: pathPrefix,
 		LastCommit: "",
@@ -35,50 +44,50 @@ func (idx *Index) CreateExploreSession(branch, pathPrefix string) (*ExploreSessi
 	}
 
 	_, err := idx.db.Exec(
-		`INSERT INTO explore_sessions(id, branch, path_prefix, last_commit, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		s.ID, s.Branch, s.PathPrefix, s.LastCommit, s.Status, s.CreatedAt, s.UpdatedAt,
+		`INSERT INTO tool_sessions(id, tool, branch, path_prefix, last_commit, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		s.ID, s.Tool, s.Branch, s.PathPrefix, s.LastCommit, s.Status, s.CreatedAt, s.UpdatedAt,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("CreateExploreSession: %w", err)
+		return nil, fmt.Errorf("CreateToolSession: %w", err)
 	}
 	return s, nil
 }
 
-// GetExploreSession returns the session with the given ID, or nil if not found.
-func (idx *Index) GetExploreSession(id string) (*ExploreSession, error) {
-	var s ExploreSession
+// GetToolSession returns the session with the given ID, or nil if not found.
+func (idx *Index) GetToolSession(id string) (*ToolSession, error) {
+	var s ToolSession
 	err := idx.db.QueryRow(
-		`SELECT id, branch, path_prefix, last_commit, status, created_at, updated_at FROM explore_sessions WHERE id = ?`, id,
-	).Scan(&s.ID, &s.Branch, &s.PathPrefix, &s.LastCommit, &s.Status, &s.CreatedAt, &s.UpdatedAt)
+		`SELECT id, tool, branch, path_prefix, last_commit, status, created_at, updated_at FROM tool_sessions WHERE id = ?`, id,
+	).Scan(&s.ID, &s.Tool, &s.Branch, &s.PathPrefix, &s.LastCommit, &s.Status, &s.CreatedAt, &s.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("GetExploreSession: %w", err)
+		return nil, fmt.Errorf("GetToolSession: %w", err)
 	}
 	return &s, nil
 }
 
-// UpdateExploreSession updates the last_commit, status, and updated_at for a session.
-func (idx *Index) UpdateExploreSession(id, lastCommit, status string) error {
+// UpdateToolSession updates the last_commit, status, and updated_at for a session.
+func (idx *Index) UpdateToolSession(id, lastCommit, status string) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 	_, err := idx.db.Exec(
-		`UPDATE explore_sessions SET last_commit = ?, status = ?, updated_at = ? WHERE id = ?`,
+		`UPDATE tool_sessions SET last_commit = ?, status = ?, updated_at = ? WHERE id = ?`,
 		lastCommit, status, now, id,
 	)
 	if err != nil {
-		return fmt.Errorf("UpdateExploreSession: %w", err)
+		return fmt.Errorf("UpdateToolSession: %w", err)
 	}
 	return nil
 }
 
-// GetExploreSeenPaths returns all seen paths for the given session as a set.
-func (idx *Index) GetExploreSeenPaths(sessionID string) (map[string]bool, error) {
+// GetSeenPaths returns all seen paths for the given session as a set.
+func (idx *Index) GetSeenPaths(sessionID string) (map[string]bool, error) {
 	rows, err := idx.db.Query(
-		`SELECT path FROM explore_seen_paths WHERE session_id = ?`, sessionID,
+		`SELECT path FROM tool_seen_paths WHERE session_id = ?`, sessionID,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("GetExploreSeenPaths: %w", err)
+		return nil, fmt.Errorf("GetSeenPaths: %w", err)
 	}
 	defer rows.Close()
 
@@ -86,61 +95,154 @@ func (idx *Index) GetExploreSeenPaths(sessionID string) (map[string]bool, error)
 	for rows.Next() {
 		var p string
 		if err := rows.Scan(&p); err != nil {
-			return nil, fmt.Errorf("GetExploreSeenPaths scan: %w", err)
+			return nil, fmt.Errorf("GetSeenPaths scan: %w", err)
 		}
 		seen[p] = true
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("GetExploreSeenPaths rows: %w", err)
+		return nil, fmt.Errorf("GetSeenPaths rows: %w", err)
 	}
 	return seen, nil
 }
 
-// AddExploreSeenPaths batch-inserts seen paths for a session, ignoring duplicates.
-func (idx *Index) AddExploreSeenPaths(sessionID string, paths []string) error {
+// AddSeenPaths batch-inserts seen paths for a session, ignoring duplicates.
+func (idx *Index) AddSeenPaths(sessionID string, paths []string) error {
 	tx, err := idx.db.Begin()
 	if err != nil {
-		return fmt.Errorf("AddExploreSeenPaths begin: %w", err)
+		return fmt.Errorf("AddSeenPaths begin: %w", err)
 	}
 	defer tx.Rollback()
 
-	stmt, err := tx.Prepare(`INSERT OR IGNORE INTO explore_seen_paths(session_id, path) VALUES (?, ?)`)
+	stmt, err := tx.Prepare(`INSERT OR IGNORE INTO tool_seen_paths(session_id, path) VALUES (?, ?)`)
 	if err != nil {
-		return fmt.Errorf("AddExploreSeenPaths prepare: %w", err)
+		return fmt.Errorf("AddSeenPaths prepare: %w", err)
 	}
 	defer stmt.Close()
 
 	for _, p := range paths {
 		if _, err := stmt.Exec(sessionID, p); err != nil {
-			return fmt.Errorf("AddExploreSeenPaths exec: %w", err)
+			return fmt.Errorf("AddSeenPaths exec: %w", err)
 		}
 	}
 
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("AddExploreSeenPaths commit: %w", err)
+		return fmt.Errorf("AddSeenPaths commit: %w", err)
 	}
 	return nil
 }
 
-// GCExploreSessions deletes all but the most recent `keep` sessions for a branch.
-// Seen paths are cascaded via the foreign key constraint.
-func (idx *Index) GCExploreSessions(branch string, keep int) error {
+// GCToolSessions deletes all but the most recent `keep` sessions for a given tool and branch.
+// Seen paths and queue items are cascaded via the foreign key constraint.
+func (idx *Index) GCToolSessions(tool, branch string, keep int) error {
 	// Enable foreign keys for cascade deletes.
 	if _, err := idx.db.Exec(`PRAGMA foreign_keys = ON`); err != nil {
-		return fmt.Errorf("GCExploreSessions pragma: %w", err)
+		return fmt.Errorf("GCToolSessions pragma: %w", err)
 	}
 	_, err := idx.db.Exec(
-		`DELETE FROM explore_sessions
-		 WHERE branch = ? AND id NOT IN (
-		     SELECT id FROM explore_sessions
-		     WHERE branch = ?
+		`DELETE FROM tool_sessions
+		 WHERE tool = ? AND branch = ? AND id NOT IN (
+		     SELECT id FROM tool_sessions
+		     WHERE tool = ? AND branch = ?
 		     ORDER BY rowid DESC
 		     LIMIT ?
 		 )`,
-		branch, branch, keep,
+		tool, branch, tool, branch, keep,
 	)
 	if err != nil {
-		return fmt.Errorf("GCExploreSessions: %w", err)
+		return fmt.Errorf("GCToolSessions: %w", err)
 	}
 	return nil
+}
+
+// EnqueuePaths batch-inserts items into the tool_queue for a session, ignoring duplicates.
+func (idx *Index) EnqueuePaths(sessionID string, items []QueueItem) error {
+	tx, err := idx.db.Begin()
+	if err != nil {
+		return fmt.Errorf("EnqueuePaths begin: %w", err)
+	}
+	defer tx.Rollback()
+
+	stmt, err := tx.Prepare(`INSERT OR IGNORE INTO tool_queue(session_id, path, commit_hash, depth) VALUES (?, ?, ?, ?)`)
+	if err != nil {
+		return fmt.Errorf("EnqueuePaths prepare: %w", err)
+	}
+	defer stmt.Close()
+
+	for _, item := range items {
+		if _, err := stmt.Exec(sessionID, item.Path, item.CommitHash, item.Depth); err != nil {
+			return fmt.Errorf("EnqueuePaths exec: %w", err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("EnqueuePaths commit: %w", err)
+	}
+	return nil
+}
+
+// DequeuePaths atomically selects and deletes up to `limit` items from the queue,
+// ordered by depth ASC then rowid ASC (breadth-first).
+func (idx *Index) DequeuePaths(sessionID string, limit int) ([]QueueItem, error) {
+	tx, err := idx.db.Begin()
+	if err != nil {
+		return nil, fmt.Errorf("DequeuePaths begin: %w", err)
+	}
+	defer tx.Rollback()
+
+	// Enable foreign keys within the transaction.
+	if _, err := tx.Exec(`PRAGMA foreign_keys = ON`); err != nil {
+		return nil, fmt.Errorf("DequeuePaths pragma: %w", err)
+	}
+
+	rows, err := tx.Query(
+		`SELECT rowid, path, commit_hash, depth FROM tool_queue
+		 WHERE session_id = ?
+		 ORDER BY depth ASC, rowid ASC
+		 LIMIT ?`,
+		sessionID, limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("DequeuePaths select: %w", err)
+	}
+
+	var items []QueueItem
+	var rowIDs []int64
+	for rows.Next() {
+		var rowID int64
+		var item QueueItem
+		if err := rows.Scan(&rowID, &item.Path, &item.CommitHash, &item.Depth); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("DequeuePaths scan: %w", err)
+		}
+		items = append(items, item)
+		rowIDs = append(rowIDs, rowID)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("DequeuePaths rows: %w", err)
+	}
+
+	// Delete the dequeued rows.
+	for _, rowID := range rowIDs {
+		if _, err := tx.Exec(`DELETE FROM tool_queue WHERE rowid = ?`, rowID); err != nil {
+			return nil, fmt.Errorf("DequeuePaths delete: %w", err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("DequeuePaths commit: %w", err)
+	}
+	return items, nil
+}
+
+// QueueSize returns the number of items in the queue for a session.
+func (idx *Index) QueueSize(sessionID string) (int, error) {
+	var count int
+	err := idx.db.QueryRow(
+		`SELECT COUNT(*) FROM tool_queue WHERE session_id = ?`, sessionID,
+	).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("QueueSize: %w", err)
+	}
+	return count, nil
 }
