@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { reducer, init } from './state';
+import { reducer, init, type LeftMode } from './state';
 
 describe('reducer', () => {
   it('NAVIGATE sets currentPath, clears selectedFact, resets rightMode', () => {
@@ -122,5 +122,48 @@ describe('reducer', () => {
     expect(reducer(init, { type: 'CONSOLE_SET_HEIGHT', height: 50 }).consoleHeight).toBe(80);
     expect(reducer(init, { type: 'CONSOLE_SET_HEIGHT', height: 300 }).consoleHeight).toBe(300);
     expect(reducer(init, { type: 'CONSOLE_SET_HEIGHT', height: 900 }).consoleHeight).toBe(600);
+  });
+});
+
+describe('history mode', () => {
+  it('ENTER_HISTORY pushes to navStack and sets leftMode', () => {
+    const s = reducer(init, { type: 'ENTER_HISTORY' });
+    expect(s.leftMode).toBe('history');
+    expect(s.navStack.length).toBe(1);
+    expect(s.navStack[0].leftMode).toBe('browse');
+  });
+
+  it('EXIT_HISTORY resets to browse and clears historyCommit', () => {
+    let s = reducer(init, { type: 'ENTER_HISTORY' });
+    s = reducer(s, { type: 'SELECT_COMMIT', commit: 'abc123' });
+    s = reducer(s, { type: 'EXIT_HISTORY' });
+    expect(s.leftMode).toBe('browse');
+    expect(s.historyCommit).toBeNull();
+  });
+
+  it('SELECT_COMMIT sets historyCommit', () => {
+    const s = reducer(init, { type: 'SELECT_COMMIT', commit: 'abc123' });
+    expect(s.historyCommit).toBe('abc123');
+  });
+
+  it('NAV_BACK pops navStack and restores state', () => {
+    let s = reducer(init, { type: 'NAVIGATE', path: 'kb/tech' });
+    s = reducer(s, { type: 'ENTER_HISTORY' });
+    s = reducer(s, { type: 'NAV_BACK' });
+    expect(s.leftMode).toBe('browse');
+    expect(s.currentPath).toBe('kb/tech');
+  });
+
+  it('NAV_BACK on empty stack is no-op', () => {
+    const s = reducer(init, { type: 'NAV_BACK' });
+    expect(s).toBe(init);
+  });
+
+  it('navStack caps at 10 entries', () => {
+    let s = init;
+    for (let i = 0; i < 12; i++) {
+      s = reducer(s, { type: 'NAVIGATE', path: `kb/p${i}` });
+    }
+    expect(s.navStack.length).toBe(10);
   });
 });
