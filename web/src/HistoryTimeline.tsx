@@ -76,26 +76,20 @@ export function HistoryTimeline({ state, dispatch }: Props) {
     return () => observer.disconnect();
   }, [loadMore]);
 
-  // Keyboard navigation
+  // Keyboard navigation — j/k moves selection and loads commit in right panel
+  const navigate = useCallback((delta: 1 | -1) => {
+    const next = Math.max(0, Math.min(selectedIdx + delta, entries.length - 1));
+    setSelectedIdx(next);
+    itemRefs.current[next]?.scrollIntoView({ block: 'nearest' });
+    const entry = entries[next];
+    if (entry) dispatch({ type: 'SELECT_COMMIT', commit: entry.commit });
+  }, [selectedIdx, entries, dispatch]);
+
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (entries.length === 0) return;
-      if (e.key === 'ArrowDown' || e.key === 'j') {
-        e.preventDefault();
-        setSelectedIdx(prev => {
-          const next = Math.min(prev + 1, entries.length - 1);
-          itemRefs.current[next]?.scrollIntoView({ block: 'nearest' });
-          return next;
-        });
-      }
-      if (e.key === 'ArrowUp' || e.key === 'k') {
-        e.preventDefault();
-        setSelectedIdx(prev => {
-          const next = Math.max(prev - 1, 0);
-          itemRefs.current[next]?.scrollIntoView({ block: 'nearest' });
-          return next;
-        });
-      }
+      if (e.key === 'ArrowDown' || e.key === 'j') { e.preventDefault(); navigate(1); }
+      if (e.key === 'ArrowUp' || e.key === 'k') { e.preventDefault(); navigate(-1); }
       if (e.key === 'Enter') {
         e.preventDefault();
         const entry = entries[selectedIdx];
