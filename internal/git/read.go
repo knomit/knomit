@@ -50,6 +50,24 @@ func (s *Store) ReadFileWithHash(path string) (string, string, error) {
 	return string(b), entry.Hash.String(), nil
 }
 
+// ReadFileAtCommit reads the content of path from a specific commit.
+func (s *Store) ReadFileAtCommit(path, commitHash string) (string, error) {
+	hash := plumbing.NewHash(commitHash)
+	commit, err := s.repo.CommitObject(hash)
+	if err != nil {
+		return "", fmt.Errorf("ReadFileAtCommit: commit: %w", err)
+	}
+	tree, err := commit.Tree()
+	if err != nil {
+		return "", fmt.Errorf("ReadFileAtCommit: tree: %w", err)
+	}
+	f, err := tree.File(path)
+	if err != nil {
+		return "", fmt.Errorf("ReadFileAtCommit: file %q: %w", path, err)
+	}
+	return f.Contents()
+}
+
 // ReadFile reads the content of path from the HEAD commit.
 func (s *Store) ReadFile(path string) (string, error) {
 	headRef, err := s.repo.Head()
@@ -218,6 +236,99 @@ func (s *Store) Log(path string) ([]LogEntry, error) {
 	}
 
 	return entries, nil
+}
+
+// LogPaginated returns log entries with pagination and tags.
+// If path is empty, returns all commits. If after is non-empty, skips
+// commits until that hash is found, then returns the next `limit` entries.
+// Returns the entries, a "next" cursor (empty string if no more), and error.
+func (s *Store) LogPaginated(path string, limit int, after string) ([]LogEntryWithTags, string, error) {
+	headRef, err := s.repo.Head()
+	if err != nil {
+		return nil, "", fmt.Errorf("LogPaginated: head: %w", err)
+	}
+
+	opts := &gogit.LogOptions{
+		From:  headRef.Hash(),
+		Order: gogit.LogOrderCommitterTime,
+	}
+	if path != "" {
+		opts.FileName = &path
+	}
+
+	logIter, err := s.repo.Log(opts)
+	if err != nil {
+		return nil, "", fmt.Errorf("LogPaginated: %w", err)
+	}
+	defer logIter.Close()
+
+	tagIndex, err := s.buildTagIndex()
+	if err != nil {
+		return nil, "", fmt.Errorf("LogPaginated: tags: %w", err)
+	}
+
+	skipping := after != ""
+	afterHash := plumbing.NewHash(after)
+
+	var entries []LogEntryWithTags
+	var nextCursor string
+
+	_ = logIter.ForEach(func(c *object.Commit) error {
+		if skipping {
+			if c.Hash == afterHash {
+				skipping = false
+			}
+			return nil
+		}
+
+		if len(entries) >= limit {
+			nextCursor = c.Hash.String()
+			return io.EOF
+		}
+
+		hash := c.Hash.String()
+		shortHash := hash
+		if len(shortHash) > 8 {
+			shortHash = shortHash[:8]
+		}
+		firstLine := c.Message
+		if idx := strings.IndexByte(firstLine, '\n'); idx >= 0 {
+			firstLine = firstLine[:idx]
+		}
+
+		tags := tagIndex[c.Hash]
+		if tags == nil {
+			tags = []string{}
+		}
+
+		entries = append(entries, LogEntryWithTags{
+			Commit:  shortHash,
+			Date:    c.Committer.When.UTC().Format(time.RFC3339),
+			Message: firstLine,
+			Tags:    tags,
+		})
+		return nil
+	})
+
+	return entries, nextCursor, nil
+}
+
+// buildTagIndex returns a map from commit hash to tag names.
+func (s *Store) buildTagIndex() (map[plumbing.Hash][]string, error) {
+	idx := make(map[plumbing.Hash][]string)
+	refIter, err := s.storer.IterReferences()
+	if err != nil {
+		return nil, err
+	}
+	_ = refIter.ForEach(func(ref *plumbing.Reference) error {
+		name := ref.Name().String()
+		if strings.HasPrefix(name, "refs/tags/") {
+			tagName := strings.TrimPrefix(name, "refs/tags/")
+			idx[ref.Hash()] = append(idx[ref.Hash()], tagName)
+		}
+		return nil
+	})
+	return idx, nil
 }
 
 // Grep searches all .md files in HEAD for pattern, returns matching paths.

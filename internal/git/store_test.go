@@ -2,6 +2,7 @@ package git_test
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 
 	gogitconfig "github.com/go-git/go-git/v5/config"
@@ -665,6 +666,32 @@ func TestOnCommitBatchAndDelete(t *testing.T) {
 	}
 	if len(called) != 2 || called[1] != delHash {
 		t.Fatalf("expected 2 calls total, got %d", len(called))
+	}
+}
+
+func TestReadFileAtCommit(t *testing.T) {
+	dir := t.TempDir()
+	store, err := git.Init(filepath.Join(dir, "test.db"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	commitHash1, _, err := store.WriteFile("kb/test.md", "---\ndomain: []\nconfidence: 0.5\nsources: 1\nentities: []\nrefs: []\n---\n# T\n\nv1.\n", "add v1")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, _, err := store.WriteFile("kb/test.md", "---\ndomain: []\nconfidence: 0.5\nsources: 1\nentities: []\nrefs: []\n---\n# T\n\nv2.\n", "update v2"); err != nil {
+		t.Fatal(err)
+	}
+
+	content, err := store.ReadFileAtCommit("kb/test.md", commitHash1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(content, "v1.") {
+		t.Fatalf("expected v1 content, got: %s", content)
 	}
 }
 
