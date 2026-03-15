@@ -93,3 +93,27 @@ CREATE TABLE IF NOT EXISTS remotes (
     last_push_status TEXT,
     last_push_error  TEXT
 );
+
+-- Tool sessions (paginated browsing/explain)
+CREATE TABLE IF NOT EXISTS tool_sessions (
+    id           TEXT PRIMARY KEY,
+    tool         TEXT NOT NULL,
+    branch       TEXT NOT NULL,
+    path_prefix  TEXT NOT NULL DEFAULT '',
+    last_commit  TEXT NOT NULL DEFAULT '',
+    status       TEXT NOT NULL DEFAULT 'active',
+    created_at   TEXT NOT NULL,
+    updated_at   TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS tool_seen_paths (
+    session_id TEXT NOT NULL REFERENCES tool_sessions(id) ON DELETE CASCADE,
+    path       TEXT NOT NULL,
+    PRIMARY KEY (session_id, path)
+);
+CREATE TABLE IF NOT EXISTS tool_queue (
+    session_id  TEXT NOT NULL REFERENCES tool_sessions(id) ON DELETE CASCADE,
+    path        TEXT NOT NULL,
+    commit_hash TEXT NOT NULL,
+    depth       INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (session_id, path, commit_hash)
+);

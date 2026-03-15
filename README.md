@@ -163,8 +163,8 @@ Running synthesis with no recipe uses a built-in default: prune + distill on all
 |------|-------------|
 | `knomit_learn` | Persist facts — preferences, decisions, conclusions |
 | `knomit_query` | Search by free text, entity, domain, or path |
-| `knomit_explore` | Browse the ontology hierarchy |
-| `knomit_why` | Explain a fact's provenance and learning moment |
+| `knomit_explore` | Browse facts by recency (paginated, 25/page) |
+| `knomit_explain` | Explain a fact's provenance graph (paginated BFS) |
 | `knomit_update` | Revise an existing fact (confidence, body, refs) |
 | `knomit_retract` | Remove a fact (git history retains provenance) |
 
