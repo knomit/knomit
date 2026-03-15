@@ -1,5 +1,5 @@
 // Server-Sent Events (SSE) endpoint for real-time task progress and
-// status updates. Clients connect to /api/v1/events and receive task
+// status updates. Clients connect to /api/v1/{repo}/events and receive task
 // lifecycle events plus periodic head-commit heartbeats.
 package web
 
@@ -10,9 +10,10 @@ import (
 	"time"
 )
 
-// handleEvents handles GET /api/v1/events — SSE endpoint for real-time updates.
-func handleEvents(gs GitStore, hub *TaskHub) http.HandlerFunc {
+// handleEvents handles GET /api/v1/{repo}/events — SSE endpoint for real-time updates.
+func handleEvents() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		ri := RepoFromContext(r.Context())
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.Header().Set("Cache-Control", "no-cache")
 		w.Header().Set("Connection", "keep-alive")
@@ -24,10 +25,10 @@ func handleEvents(gs GitStore, hub *TaskHub) http.HandlerFunc {
 
 		// Subscribe returns both a channel and a snapshot of recent events,
 		// providing reconnection recovery without maintaining client-side state.
-		events, snapshot := hub.Subscribe(r.Context())
+		events, snapshot := ri.Hub.Subscribe(r.Context())
 
 		// Send initial status event.
-		head, _ := gs.HeadCommit()
+		head, _ := ri.GS.HeadCommit()
 		fmt.Fprintf(w, "event: status\ndata: {\"head\":\"%s\"}\n\n", head)
 
 		// Replay snapshot (reconnect recovery).

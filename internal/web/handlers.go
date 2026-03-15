@@ -51,19 +51,19 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, map[string]string{"error": msg})
 }
 
-// handleBrowse handles GET /api/browse?path=<path>.
+// handleBrowse handles GET /api/v1/{repo}/browse?path=<path>.
 // When the path parameter is empty, it defaults to ontologyRoot — the
 // configured knowledge-base root — so the UI lands on a meaningful
 // starting directory rather than the repository top level.
-func handleBrowse(gs GitStore, ontologyRoot string) http.HandlerFunc {
+func handleBrowse(ontologyRoot string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		ri := RepoFromContext(r.Context())
 		path := r.URL.Query().Get("path")
 		if path == "" {
 			path = ontologyRoot
 		}
-		//log.Debug().Str("path", path).Msg("browse")
 
-		entries, err := gs.ListDir(path)
+		entries, err := ri.GS.ListDir(path)
 		if err != nil {
 			// Empty repo or missing directory — return empty list, not an error.
 			log.Debug().Err(err).Str("path", path).Msg("browse: directory not found, returning empty")
@@ -90,9 +90,10 @@ func handleBrowse(gs GitStore, ontologyRoot string) http.HandlerFunc {
 	}
 }
 
-// handleFact handles GET /api/fact?path=<path>&commit=<hash>
-func handleFact(gs GitStore) http.HandlerFunc {
+// handleFact handles GET /api/v1/{repo}/fact?path=<path>&commit=<hash>
+func handleFact() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		ri := RepoFromContext(r.Context())
 		path := r.URL.Query().Get("path")
 		if path == "" {
 			writeError(w, http.StatusBadRequest, "path query parameter is required")
@@ -104,9 +105,9 @@ func handleFact(gs GitStore) http.HandlerFunc {
 		var content string
 		var err error
 		if commitHash != "" {
-			content, err = gs.ReadFileAtCommit(path, commitHash)
+			content, err = ri.GS.ReadFileAtCommit(path, commitHash)
 		} else {
-			content, err = gs.ReadFile(path)
+			content, err = ri.GS.ReadFile(path)
 		}
 		if err != nil {
 			log.Debug().Err(err).Str("path", path).Msg("fact not found")
@@ -129,12 +130,13 @@ func handleFact(gs GitStore) http.HandlerFunc {
 	}
 }
 
-// handleSearch handles GET /api/search?q=<query>&entities=<e1,e2>&domain=<d1,d2>&path=<p>&min_confidence=<f>&limit=<n>.
+// handleSearch handles GET /api/v1/{repo}/search?q=<query>&entities=<e1,e2>&domain=<d1,d2>&path=<p>&min_confidence=<f>&limit=<n>.
 // The entities and domain filters are AND-combined (all specified values
 // must match). Each accepts a comma-separated list of terms.
-func handleSearch(idx SearchIndex) http.HandlerFunc {
+func handleSearch() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if idx == nil {
+		ri := RepoFromContext(r.Context())
+		if ri.Idx == nil {
 			writeError(w, http.StatusBadRequest, "search index not available")
 			return
 		}
@@ -216,7 +218,7 @@ func handleSearch(idx SearchIndex) http.HandlerFunc {
 
 		log.Debug().Str("q", text).Strs("entities", entities).Strs("domain", domain).Int("limit", limit).Msg("search")
 
-		results, err := idx.Search(store.SearchQuery{
+		results, err := ri.Idx.Search(store.SearchQuery{
 			Text:          text,
 			Entities:      entities,
 			Domain:        domain,
@@ -243,9 +245,10 @@ func handleSearch(idx SearchIndex) http.HandlerFunc {
 	}
 }
 
-// handleHistoryPaginated handles GET /api/v1/history?path=<path>&limit=50&after=<cursor>
-func handleHistoryPaginated(gs GitStore) http.HandlerFunc {
+// handleHistoryPaginated handles GET /api/v1/{repo}/history?path=<path>&limit=50&after=<cursor>
+func handleHistoryPaginated() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		ri := RepoFromContext(r.Context())
 		path := r.URL.Query().Get("path")
 
 		limit := 50
@@ -260,7 +263,7 @@ func handleHistoryPaginated(gs GitStore) http.HandlerFunc {
 
 		after := r.URL.Query().Get("after")
 
-		entries, next, err := gs.LogPaginated(path, limit, after)
+		entries, next, err := ri.GS.LogPaginated(path, limit, after)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, fmt.Sprintf("log error: %v", err))
 			return
@@ -277,16 +280,17 @@ func handleHistoryPaginated(gs GitStore) http.HandlerFunc {
 	}
 }
 
-// handleCommitDetail handles GET /api/v1/commit?hash=<hash>
-func handleCommitDetail(gs GitStore) http.HandlerFunc {
+// handleCommitDetail handles GET /api/v1/{repo}/commit?hash=<hash>
+func handleCommitDetail() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		ri := RepoFromContext(r.Context())
 		hash := r.URL.Query().Get("hash")
 		if hash == "" {
 			writeError(w, http.StatusBadRequest, "hash query parameter is required")
 			return
 		}
 
-		detail, err := gs.CommitDetail(hash)
+		detail, err := ri.GS.CommitDetail(hash)
 		if err != nil {
 			writeError(w, http.StatusNotFound, fmt.Sprintf("commit not found: %v", err))
 			return
@@ -296,16 +300,17 @@ func handleCommitDetail(gs GitStore) http.HandlerFunc {
 	}
 }
 
-// handleStats handles GET /api/stats?path=<path>.
+// handleStats handles GET /api/v1/{repo}/stats?path=<path>.
 // It iterates over all facts in the knowledge base (optionally filtered
 // by path prefix), collecting domain/entity counts and average confidence.
 // This is fine for small-to-medium knowledge bases; very large repos may
 // want a cached or incremental approach.
-func handleStats(gs GitStore) http.HandlerFunc {
+func handleStats() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		ri := RepoFromContext(r.Context())
 		pathPrefix := r.URL.Query().Get("path")
 
-		allPaths, err := gs.ListAll()
+		allPaths, err := ri.GS.ListAll()
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, fmt.Sprintf("list all error: %v", err))
 			return
@@ -321,7 +326,7 @@ func handleStats(gs GitStore) http.HandlerFunc {
 				continue
 			}
 
-			content, err := gs.ReadFile(p)
+			content, err := ri.GS.ReadFile(p)
 			if err != nil {
 				continue
 			}
@@ -357,20 +362,21 @@ func handleStats(gs GitStore) http.HandlerFunc {
 	}
 }
 
-// handleStatus handles GET /api/status
-func handleStatus(gs GitStore, idx SearchIndex, embeddingsEnabled bool, ontologyRoot string) http.HandlerFunc {
+// handleStatus handles GET /api/v1/{repo}/status
+func handleStatus(embeddingsEnabled bool, ontologyRoot string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		head, err := gs.HeadCommit()
+		ri := RepoFromContext(r.Context())
+		head, err := ri.GS.HeadCommit()
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, fmt.Sprintf("head commit error: %v", err))
 			return
 		}
 
-		branch := gs.Branch()
+		branch := ri.GS.Branch()
 
 		indexCommit := ""
-		if idx != nil {
-			indexCommit, _ = idx.GetLastCommit(branch)
+		if ri.Idx != nil {
+			indexCommit, _ = ri.Idx.GetLastCommit(branch)
 		}
 
 		writeJSON(w, http.StatusOK, map[string]any{

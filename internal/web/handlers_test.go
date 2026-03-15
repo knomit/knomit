@@ -18,7 +18,14 @@ import (
 
 func newTestRouter(gs GitStore, idx SearchIndex) http.Handler {
 	hub := NewTaskHub(context.Background())
-	return NewRouter(gs, idx, hub, nil, map[string]http.Handler(nil), nil, false, "kb")
+	rm := NewRepoManager()
+	rm.Set("knomit", &RepoInstance{
+		Name: "knomit",
+		GS:   gs,
+		Idx:  idx,
+		Hub:  hub,
+	})
+	return NewRouter(rm, nil, nil, nil, false, "kb")
 }
 
 func doRequest(t *testing.T, handler http.Handler, method, target string, body string) *httptest.ResponseRecorder {
@@ -48,7 +55,7 @@ func TestHandleBrowse(t *testing.T) {
 	}{
 		{
 			name:  "default path uses general",
-			query: "/api/v1/browse",
+			query: "/api/v1/knomit/browse",
 			entries: []git.DirEntry{
 				{Name: "subdir", IsDir: true},
 				{Name: "fact.md", IsDir: false},
@@ -59,7 +66,7 @@ func TestHandleBrowse(t *testing.T) {
 		},
 		{
 			name:  "explicit path",
-			query: "/api/v1/browse?path=kb/sub",
+			query: "/api/v1/knomit/browse?path=kb/sub",
 			entries: []git.DirEntry{
 				{Name: "item.md", IsDir: false},
 			},
@@ -69,7 +76,7 @@ func TestHandleBrowse(t *testing.T) {
 		},
 		{
 			name:       "empty directory",
-			query:      "/api/v1/browse?path=kb/empty",
+			query:      "/api/v1/knomit/browse?path=kb/empty",
 			entries:    []git.DirEntry{},
 			wantStatus: http.StatusOK,
 			wantPath:   "kb/empty",
@@ -123,13 +130,13 @@ func TestHandleFact(t *testing.T) {
 	}{
 		{
 			name:       "missing path returns 400",
-			query:      "/api/v1/fact",
+			query:      "/api/v1/knomit/fact",
 			expectRead: false,
 			wantStatus: http.StatusBadRequest,
 		},
 		{
 			name:       "valid path returns parsed fact",
-			query:      "/api/v1/fact?path=kb/chi.md",
+			query:      "/api/v1/knomit/fact?path=kb/chi.md",
 			content:    validContent,
 			expectRead: true,
 			wantStatus: http.StatusOK,
@@ -189,7 +196,7 @@ func TestHandleSearch(t *testing.T) {
 	}{
 		{
 			name:       "search with q param returns results",
-			query:      "/api/v1/search?q=test",
+			query:      "/api/v1/knomit/search?q=test",
 			useIdx:     true,
 			idxResults: results,
 			wantStatus: http.StatusOK,
@@ -197,13 +204,13 @@ func TestHandleSearch(t *testing.T) {
 		},
 		{
 			name:       "nil index returns 400",
-			query:      "/api/v1/search?q=test",
+			query:      "/api/v1/knomit/search?q=test",
 			useIdx:     false,
 			wantStatus: http.StatusBadRequest,
 		},
 		{
 			name:       "empty results returns empty array",
-			query:      "/api/v1/search?q=nomatch",
+			query:      "/api/v1/knomit/search?q=nomatch",
 			useIdx:     true,
 			idxResults: nil,
 			wantStatus: http.StatusOK,
@@ -261,7 +268,7 @@ func TestHandleSearchMinSimilarity(t *testing.T) {
 	})
 
 	handler := newTestRouter(gs, mockIdx)
-	rr := doRequest(t, handler, http.MethodGet, "/api/v1/search?q=test&min_similarity=0.75", "")
+	rr := doRequest(t, handler, http.MethodGet, "/api/v1/knomit/search?q=test&min_similarity=0.75", "")
 
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d; body: %s", rr.Code, http.StatusOK, rr.Body.String())
@@ -274,7 +281,7 @@ func TestHandleSearchInvalidMinSimilarity(t *testing.T) {
 	mockIdx := NewMockSearchIndex(ctrl)
 
 	handler := newTestRouter(gs, mockIdx)
-	rr := doRequest(t, handler, http.MethodGet, "/api/v1/search?q=test&min_similarity=notanumber", "")
+	rr := doRequest(t, handler, http.MethodGet, "/api/v1/knomit/search?q=test&min_similarity=notanumber", "")
 
 	if rr.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d", rr.Code, http.StatusBadRequest)
@@ -297,7 +304,7 @@ func TestHandleHistory(t *testing.T) {
 	}{
 		{
 			name:       "returns log entries",
-			query:      "/api/v1/history?path=kb/fact.md",
+			query:      "/api/v1/knomit/history?path=kb/fact.md",
 			path:       "kb/fact.md",
 			entries:    logEntries,
 			wantStatus: http.StatusOK,
@@ -305,7 +312,7 @@ func TestHandleHistory(t *testing.T) {
 		},
 		{
 			name:       "empty path returns full log",
-			query:      "/api/v1/history",
+			query:      "/api/v1/knomit/history",
 			path:       "",
 			entries:    logEntries[:1],
 			wantStatus: http.StatusOK,
@@ -313,7 +320,7 @@ func TestHandleHistory(t *testing.T) {
 		},
 		{
 			name:       "nil entries returns empty array",
-			query:      "/api/v1/history?path=kb/missing.md",
+			query:      "/api/v1/knomit/history?path=kb/missing.md",
 			path:       "kb/missing.md",
 			entries:    nil,
 			wantStatus: http.StatusOK,
@@ -399,7 +406,7 @@ func TestHandleStatus(t *testing.T) {
 			}
 
 			handler := newTestRouter(gs, idx)
-			rr := doRequest(t, handler, http.MethodGet, "/api/v1/status", "")
+			rr := doRequest(t, handler, http.MethodGet, "/api/v1/knomit/status", "")
 
 			if rr.Code != tc.wantStatus {
 				t.Fatalf("status = %d, want %d; body: %s", rr.Code, tc.wantStatus, rr.Body.String())
