@@ -94,9 +94,10 @@ CREATE TABLE IF NOT EXISTS remotes (
     last_push_error  TEXT
 );
 
--- Explore sessions (progressive knowledge-base exploration)
-CREATE TABLE IF NOT EXISTS explore_sessions (
+-- Tool sessions (paginated browsing/explain)
+CREATE TABLE IF NOT EXISTS tool_sessions (
     id           TEXT PRIMARY KEY,
+    tool         TEXT NOT NULL,
     branch       TEXT NOT NULL,
     path_prefix  TEXT NOT NULL DEFAULT '',
     last_commit  TEXT NOT NULL DEFAULT '',
@@ -104,10 +105,15 @@ CREATE TABLE IF NOT EXISTS explore_sessions (
     created_at   TEXT NOT NULL,
     updated_at   TEXT NOT NULL
 );
-
--- Explore seen paths (tracks which paths a session has already visited)
-CREATE TABLE IF NOT EXISTS explore_seen_paths (
-    session_id TEXT NOT NULL REFERENCES explore_sessions(id) ON DELETE CASCADE,
+CREATE TABLE IF NOT EXISTS tool_seen_paths (
+    session_id TEXT NOT NULL REFERENCES tool_sessions(id) ON DELETE CASCADE,
     path       TEXT NOT NULL,
     PRIMARY KEY (session_id, path)
+);
+CREATE TABLE IF NOT EXISTS tool_queue (
+    session_id  TEXT NOT NULL REFERENCES tool_sessions(id) ON DELETE CASCADE,
+    path        TEXT NOT NULL,
+    commit_hash TEXT NOT NULL,
+    depth       INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (session_id, path, commit_hash)
 );
