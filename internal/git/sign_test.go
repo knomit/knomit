@@ -113,6 +113,20 @@ func TestInitCommits_AreUnsigned(t *testing.T) {
 	}
 }
 
+func TestCommitHasSignature_BadHash(t *testing.T) {
+	dir := t.TempDir()
+	store, err := git.Init(filepath.Join(dir, "test.db"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	_, err = git.CommitHasSignature(store, "0000000000000000000000000000000000000000")
+	if err == nil {
+		t.Fatal("expected error for nonexistent commit hash")
+	}
+}
+
 func TestSignCommitInPlace_NoSignerNoSignature(t *testing.T) {
 	dir := t.TempDir()
 	store, err := git.Init(filepath.Join(dir, "test.db"), nil)

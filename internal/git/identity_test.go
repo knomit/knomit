@@ -101,6 +101,21 @@ func TestAgentBranch_Format(t *testing.T) {
 	}
 }
 
+func TestEnsureKeyPair_CorruptKeyFile(t *testing.T) {
+	dir := t.TempDir()
+	keyPath := filepath.Join(dir, "id_ed25519")
+
+	// Write garbage to the key file.
+	if err := os.WriteFile(keyPath, []byte("not a valid key"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, _, err := git.EnsureKeyPair(keyPath)
+	if err == nil {
+		t.Fatal("expected error for corrupt key file")
+	}
+}
+
 func TestSanitizeHostname(t *testing.T) {
 	tests := []struct {
 		input string

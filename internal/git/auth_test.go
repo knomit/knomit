@@ -136,6 +136,16 @@ func TestResolveAuth_SSHDefaultKeyFallback(t *testing.T) {
 	}
 }
 
+func TestResolveAuth_SSHNoKeyAvailable(t *testing.T) {
+	// SSH method with no SSHKey and no defaultKeyPath → error.
+	_, err := git.ResolveAuth(git.RemoteAuthConfig{
+		AuthMethod: "ssh",
+	}, "")
+	if err == nil {
+		t.Fatal("expected error when ssh auth has no key path")
+	}
+}
+
 func TestResolveAuthWithOrigin_GitURL(t *testing.T) {
 	dir := t.TempDir()
 	keyPath := filepath.Join(dir, "id_ed25519")
