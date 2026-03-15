@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"go.uber.org/mock/gomock"
+	"knomit/internal/git"
 	"knomit/internal/llm"
 	"knomit/internal/store"
 )
@@ -51,17 +52,22 @@ func TestHandleFact_NotFound(t *testing.T) {
 	}
 }
 
-func TestHandleFact_ParseError(t *testing.T) {
+func TestHandleFact_NonFactFallsBackToRaw(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
-	// Return content that will fail YAML parsing (invalid frontmatter).
-	gs.EXPECT().ReadFile("kb/bad.md").Return("---\ndomain: [[[invalid\n---\nbody\n", nil)
+	// Return content without frontmatter (e.g. kb.md manifest).
+	gs.EXPECT().ReadFile("kb.md").Return("# Knowledge Base\n\nRoot manifest.\n", nil)
 
 	handler := newTestRouter(gs, nil)
-	rr := doRequest(t, handler, http.MethodGet, "/api/v1/fact?path=kb/bad.md", "")
+	rr := doRequest(t, handler, http.MethodGet, "/api/v1/fact?path=kb.md", "")
 
-	if rr.Code != http.StatusInternalServerError {
-		t.Fatalf("status = %d, want 500", rr.Code)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", rr.Code, rr.Body.String())
+	}
+	var resp map[string]any
+	json.Unmarshal(rr.Body.Bytes(), &resp)
+	if resp["path"] != "kb.md" {
+		t.Errorf("expected path kb.md, got %v", resp["path"])
 	}
 }
 
@@ -160,18 +166,90 @@ func TestHandleSearch_IndexError(t *testing.T) {
 	}
 }
 
-// --- handleHistory error path ---
+// --- handleHistoryPaginated error path ---
 
 func TestHandleHistory_Error(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
-	gs.EXPECT().Log(gomock.Any()).Return(nil, fmt.Errorf("git error"))
+	gs.EXPECT().LogPaginated("kb/fact.md", 50, "").Return(nil, "", fmt.Errorf("git error"))
 
 	handler := newTestRouter(gs, nil)
 	rr := doRequest(t, handler, http.MethodGet, "/api/v1/history?path=kb/fact.md", "")
 
 	if rr.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d, want 500", rr.Code)
+	}
+}
+
+func TestHandleHistoryPaginated(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	gs := NewMockGitStore(ctrl)
+
+	entries := []git.LogEntryWithTags{
+		{Commit: "abc12345", Date: "2026-03-14T10:00:00Z", Message: "add fact", Tags: []string{"learn/test"}},
+	}
+	gs.EXPECT().LogPaginated("kb/test", 50, "").Return(entries, "def67890", nil)
+
+	handler := handleHistoryPaginated(gs)
+	req := httptest.NewRequest("GET", "/api/v1/history?path=kb/test", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != 200 {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	var resp map[string]any
+	json.Unmarshal(w.Body.Bytes(), &resp)
+	if resp["next"] != "def67890" {
+		t.Errorf("expected next=def67890, got %v", resp["next"])
+	}
+	arr := resp["entries"].([]any)
+	if len(arr) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(arr))
+	}
+}
+
+func TestHandleCommitDetail(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	gs := NewMockGitStore(ctrl)
+
+	gs.EXPECT().CommitDetail("abc12345").Return(&git.CommitDetailResult{
+		Commit: "abc12345", Date: "2026-03-14T10:00:00Z", Message: "add fact",
+		Tags: []string{"learn/test"},
+		Files: []git.ChangedFile{{Path: "kb/test.md", Action: "added"}},
+	}, nil)
+
+	handler := handleCommitDetail(gs)
+	req := httptest.NewRequest("GET", "/api/v1/commit?hash=abc12345", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != 200 {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	var resp git.CommitDetailResult
+	json.Unmarshal(w.Body.Bytes(), &resp)
+	if len(resp.Files) != 1 || resp.Files[0].Path != "kb/test.md" {
+		t.Errorf("unexpected files: %v", resp.Files)
+	}
+}
+
+func TestHandleFactAtCommit(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	gs := NewMockGitStore(ctrl)
+
+	factContent := "---\ndomain: [test]\nconfidence: 0.8\nsources: 1\nentities: [x]\nrefs: []\n---\n# Title\n\nBody at commit.\n"
+	gs.EXPECT().ReadFileAtCommit("kb/test.md", "abc12345").Return(factContent, nil)
+
+	handler := handleFact(gs)
+	req := httptest.NewRequest("GET", "/api/v1/fact?path=kb/test.md&commit=abc12345", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != 200 {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
 	}
 }
 

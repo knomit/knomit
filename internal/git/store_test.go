@@ -1,7 +1,9 @@
 package git_test
 
 import (
+	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	gogitconfig "github.com/go-git/go-git/v5/config"
@@ -235,6 +237,28 @@ func TestDeleteFile(t *testing.T) {
 	}
 	if exists {
 		t.Fatal("file should not exist after deletion")
+	}
+}
+
+func TestDeleteFile_AlreadyDeleted(t *testing.T) {
+	dir := t.TempDir()
+	store, err := git.Init(filepath.Join(dir, "knomit.git.db"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	if _, _, err := store.WriteFile("kb/gone.md", "# Gone\n", "add file"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.DeleteFile("kb/gone.md", "delete once"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Second delete should return an error, not create a no-op commit.
+	_, err = store.DeleteFile("kb/gone.md", "delete twice")
+	if err == nil {
+		t.Fatal("expected error deleting already-deleted file")
 	}
 }
 
@@ -668,6 +692,32 @@ func TestOnCommitBatchAndDelete(t *testing.T) {
 	}
 }
 
+func TestReadFileAtCommit(t *testing.T) {
+	dir := t.TempDir()
+	store, err := git.Init(filepath.Join(dir, "test.db"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	commitHash1, _, err := store.WriteFile("kb/test.md", "---\ndomain: []\nconfidence: 0.5\nsources: 1\nentities: []\nrefs: []\n---\n# T\n\nv1.\n", "add v1")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, _, err := store.WriteFile("kb/test.md", "---\ndomain: []\nconfidence: 0.5\nsources: 1\nentities: []\nrefs: []\n---\n# T\n\nv2.\n", "update v2"); err != nil {
+		t.Fatal(err)
+	}
+
+	content, err := store.ReadFileAtCommit("kb/test.md", commitHash1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(content, "v1.") {
+		t.Fatalf("expected v1 content, got: %s", content)
+	}
+}
+
 func TestReadFileWithHash(t *testing.T) {
 	dir := t.TempDir()
 	store, err := git.Init(filepath.Join(dir, "knomit.git.db"), nil)
@@ -691,5 +741,156 @@ func TestReadFileWithHash(t *testing.T) {
 	}
 	if gotBlobHash != expectedBlobHash {
 		t.Fatalf("blob hash mismatch: got %q, want %q", gotBlobHash, expectedBlobHash)
+	}
+}
+
+func TestCommitDetail(t *testing.T) {
+	dir := t.TempDir()
+	store, err := git.Init(filepath.Join(dir, "test.db"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	commitHash, _, err := store.WriteFile("kb/test.md", "---\ndomain: []\nconfidence: 0.5\nsources: 1\nentities: []\nrefs: []\n---\n# T\n\nBody.\n", "add test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Tag("learn/test"); err != nil {
+		t.Fatal(err)
+	}
+
+	detail, err := store.CommitDetail(commitHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if detail.Commit != commitHash {
+		t.Errorf("expected commit %s, got %s", commitHash, detail.Commit)
+	}
+	if len(detail.Tags) == 0 || detail.Tags[0] != "learn/test" {
+		t.Errorf("expected tag learn/test, got %v", detail.Tags)
+	}
+	if len(detail.Files) == 0 {
+		t.Fatal("expected at least one changed file")
+	}
+	found := false
+	for _, f := range detail.Files {
+		if f.Path == "kb/test.md" && f.Action == "added" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected kb/test.md added, got %v", detail.Files)
+	}
+}
+
+func TestLogPaginated(t *testing.T) {
+	dir := t.TempDir()
+	store, err := git.Init(filepath.Join(dir, "test.db"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	for i := 1; i <= 3; i++ {
+		content := fmt.Sprintf("---\ndomain: []\nconfidence: 0.5\nsources: 1\nentities: []\nrefs: []\n---\n# F%d\n\nFact %d.\n", i, i)
+		if _, _, err := store.WriteFile(fmt.Sprintf("kb/f%d.md", i), content, fmt.Sprintf("add f%d", i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := store.Tag("learn/test-moment"); err != nil {
+		t.Fatal(err)
+	}
+
+	entries, next, err := store.LogPaginated("", 2, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("expected 2 entries, got %d", len(entries))
+	}
+	if next == "" {
+		t.Fatal("expected next cursor")
+	}
+	if len(entries[0].Tags) == 0 || entries[0].Tags[0] != "learn/test-moment" {
+		t.Errorf("expected tag learn/test-moment on first entry, got %v", entries[0].Tags)
+	}
+
+	entries2, next2, err := store.LogPaginated("", 2, next)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries2) == 0 {
+		t.Fatal("expected entries on second page")
+	}
+	_ = next2
+}
+
+func TestLogPaginated_DirectoryFilter(t *testing.T) {
+	dir := t.TempDir()
+	store, err := git.Init(filepath.Join(dir, "test.db"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	// Write files in two different directories.
+	fact := "---\ndomain: []\nconfidence: 0.5\nsources: 1\nentities: []\nrefs: []\n---\n# T\n\nBody.\n"
+	if _, _, err := store.WriteFile("kb/science/a.md", fact, "add science a"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.WriteFile("kb/tech/b.md", fact, "add tech b"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.WriteFile("kb/science/c.md", fact, "add science c"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Filter to kb/science — should only include commits that touched files under kb/science/.
+	entries, _, err := store.LogPaginated("kb/science", 50, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("expected 2 entries for kb/science, got %d", len(entries))
+	}
+	// Most recent first: "add science c", then "add science a".
+	if entries[0].Message != "add science c" {
+		t.Errorf("expected 'add science c', got %q", entries[0].Message)
+	}
+	if entries[1].Message != "add science a" {
+		t.Errorf("expected 'add science a', got %q", entries[1].Message)
+	}
+}
+
+func TestLogPaginated_FileFilter(t *testing.T) {
+	dir := t.TempDir()
+	store, err := git.Init(filepath.Join(dir, "test.db"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	fact := "---\ndomain: []\nconfidence: 0.5\nsources: 1\nentities: []\nrefs: []\n---\n# T\n\nBody.\n"
+	if _, _, err := store.WriteFile("kb/a.md", fact, "add a"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.WriteFile("kb/b.md", fact, "add b"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.WriteFile("kb/a.md", fact+"updated", "update a"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Filter to specific file — should only include commits that touched kb/a.md.
+	entries, _, err := store.LogPaginated("kb/a.md", 50, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("expected 2 entries for kb/a.md, got %d", len(entries))
+	}
+	if entries[0].Message != "update a" {
+		t.Errorf("expected 'update a', got %q", entries[0].Message)
 	}
 }

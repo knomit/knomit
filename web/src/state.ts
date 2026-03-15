@@ -1,4 +1,14 @@
 export type RightMode = 'summary' | 'fact' | 'history';
+export type LeftMode = 'browse' | 'history';
+
+export interface NavEntry {
+  currentPath: string;
+  selectedFact: string | null;
+  leftMode: LeftMode;
+  historyCommit: string | null;
+  rightMode: RightMode;
+  searchQuery: string;
+}
 
 export interface ConsoleEntry {
   id: number;
@@ -23,6 +33,9 @@ export interface AppState {
   consoleEntries: ConsoleEntry[];
   consoleOpen: boolean;
   consoleHeight: number; // pixels
+  leftMode: LeftMode;
+  historyCommit: string | null;
+  navStack: NavEntry[];
 }
 
 export type Action =
@@ -43,7 +56,11 @@ export type Action =
   | { type: 'SET_STATUS_MESSAGE'; message: string }
   | { type: 'CONSOLE_LOG'; level: 'info' | 'error'; message: string }
   | { type: 'CONSOLE_TOGGLE' }
-  | { type: 'CONSOLE_SET_HEIGHT'; height: number };
+  | { type: 'CONSOLE_SET_HEIGHT'; height: number }
+  | { type: 'ENTER_HISTORY' }
+  | { type: 'EXIT_HISTORY' }
+  | { type: 'SELECT_COMMIT'; commit: string }
+  | { type: 'NAV_BACK' };
 
 export const init: AppState = {
   currentPath: 'kb',
@@ -61,12 +78,29 @@ export const init: AppState = {
   consoleEntries: [],
   consoleOpen: false,
   consoleHeight: 200,
+  leftMode: 'browse' as LeftMode,
+  historyCommit: null,
+  navStack: [],
 };
+
+function pushNav(s: AppState): NavEntry[] {
+  const entry: NavEntry = {
+    currentPath: s.currentPath,
+    selectedFact: s.selectedFact,
+    leftMode: s.leftMode,
+    historyCommit: s.historyCommit,
+    rightMode: s.rightMode,
+    searchQuery: s.searchQuery,
+  };
+  const stack = [...s.navStack, entry];
+  if (stack.length > 10) stack.shift();
+  return stack;
+}
 
 export function reducer(s: AppState, a: Action): AppState {
   switch (a.type) {
-    case 'NAVIGATE': return { ...s, currentPath: a.path, selectedFact: null, previewPath: null, rightMode: 'summary', searchQuery: '', similarTo: null };
-    case 'SELECT_FACT': return { ...s, selectedFact: a.path, previewPath: null, rightMode: 'fact' };
+    case 'NAVIGATE': return { ...s, currentPath: a.path, selectedFact: null, previewPath: null, rightMode: 'summary', searchQuery: '', similarTo: null, navStack: pushNav(s) };
+    case 'SELECT_FACT': return { ...s, selectedFact: a.path, previewPath: null, rightMode: 'fact', navStack: pushNav(s) };
     case 'PREVIEW_DIR': return { ...s, selectedFact: null, previewPath: a.path, rightMode: 'summary' };
     case 'SELECT_WORLD': return { ...s, selectedFact: null, previewPath: null, rightMode: 'summary' };
     case 'GO_UP': {
@@ -74,7 +108,7 @@ export function reducer(s: AppState, a: Action): AppState {
       if (parts.length <= 1) return s;
       return { ...s, currentPath: parts.slice(0, -1).join('/'), selectedFact: null, previewPath: null, rightMode: 'summary' };
     }
-    case 'SEARCH': return { ...s, searchQuery: a.query, similarTo: null, previewPath: null };
+    case 'SEARCH': return { ...s, searchQuery: a.query, similarTo: null, previewPath: null, navStack: pushNav(s) };
     case 'SIMILAR_SEARCH': return { ...s, similarTo: { path: a.path, text: a.text }, searchQuery: '', previewPath: null };
     case 'CLEAR_SEARCH': return { ...s, searchQuery: '', similarTo: null, selectedFact: null, previewPath: null, rightMode: 'summary' };
     case 'SHOW_HISTORY': return { ...s, rightMode: 'history' };
@@ -96,6 +130,14 @@ export function reducer(s: AppState, a: Action): AppState {
     }
     case 'CONSOLE_TOGGLE': return { ...s, consoleOpen: !s.consoleOpen };
     case 'CONSOLE_SET_HEIGHT': return { ...s, consoleHeight: Math.max(80, Math.min(a.height, 600)) };
+    case 'ENTER_HISTORY': return { ...s, leftMode: 'history' as LeftMode, navStack: pushNav(s) };
+    case 'EXIT_HISTORY': return { ...s, leftMode: 'browse' as LeftMode, historyCommit: null };
+    case 'SELECT_COMMIT': return { ...s, historyCommit: a.commit };
+    case 'NAV_BACK': {
+      if (s.navStack.length === 0) return s;
+      const prev = s.navStack[s.navStack.length - 1];
+      return { ...s, ...prev, navStack: s.navStack.slice(0, -1) };
+    }
     default: return s;
   }
 }

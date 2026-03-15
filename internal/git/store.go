@@ -62,6 +62,29 @@ type LogEntry struct {
 	Message string `json:"message"`
 }
 
+// ChangedFile represents a file changed in a commit.
+type ChangedFile struct {
+	Path   string `json:"path"`
+	Action string `json:"action"` // "added", "modified", "deleted"
+}
+
+// CommitDetailResult contains metadata and changed files for a single commit.
+type CommitDetailResult struct {
+	Commit  string        `json:"commit"`
+	Date    string        `json:"date"`
+	Message string        `json:"message"`
+	Tags    []string      `json:"tags"`
+	Files   []ChangedFile `json:"files"`
+}
+
+// LogEntryWithTags extends LogEntry with tag names associated with the commit.
+type LogEntryWithTags struct {
+	Commit  string   `json:"commit"`
+	Date    string   `json:"date"`
+	Message string   `json:"message"`
+	Tags    []string `json:"tags"`
+}
+
 // SyncResult is returned by Sync to report what happened during synchronization.
 type SyncResult struct {
 	Synced      bool   // true if tree changed (merge or fast-forward)

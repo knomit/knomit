@@ -5,6 +5,10 @@ export interface BrowseResponse { path: string; children: DirChild[] }
 export interface Fact { path: string; title: string; body: string; domain: string[]; confidence: number; sources: number; entities: string[]; refs: string[] }
 export interface SearchResult { path: string; title: string; body: string; score: number; domain?: string[]; entities?: string[] }
 export interface HistoryEntry { commit: string; date: string; message: string }
+export interface HistoryEntryWithTags { commit: string; date: string; message: string; tags: string[] }
+export interface HistoryResponse { entries: HistoryEntryWithTags[]; next?: string }
+export interface CommitFile { path: string; action: string }
+export interface CommitDetail { commit: string; date: string; message: string; tags: string[]; files: CommitFile[] }
 export interface Stats { total: number; domains: Record<string, number>; entities: Record<string, number>; avg_confidence: number }
 export interface Status { head: string; branch: string; index_commit: string; embeddings_enabled: boolean; ontology_root: string }
 
@@ -35,7 +39,11 @@ export function parseSearchQuery(raw: string): { text: string; domains: string[]
 
 export const api = {
   browse: (path: string): Promise<BrowseResponse> => fetch(`${BASE}/browse?path=${encodeURIComponent(path)}`).then(r => r.json()),
-  fact: (path: string): Promise<Fact> => fetch(`${BASE}/fact?path=${encodeURIComponent(path)}`).then(r => { if (!r.ok) throw new Error(r.statusText); return r.json(); }),
+  fact: (path: string, commit?: string): Promise<Fact> => {
+    const p = new URLSearchParams({ path });
+    if (commit) p.set('commit', commit);
+    return fetch(`${BASE}/fact?${p}`).then(r => { if (!r.ok) throw new Error(r.statusText); return r.json(); });
+  },
   search: (q: string, minConfidence = 0): Promise<{ results: SearchResult[] }> => {
     const { text, domains, entities } = parseSearchQuery(q);
     const p = new URLSearchParams({ limit: '50' });
@@ -45,7 +53,13 @@ export const api = {
     if (minConfidence) p.set('min_confidence', String(minConfidence));
     return fetch(`${BASE}/search?${p}`).then(r => r.json());
   },
-  history: (path: string): Promise<{ entries: HistoryEntry[] }> => fetch(`${BASE}/history?path=${encodeURIComponent(path)}`).then(r => r.json()),
+  history: (path: string, after?: string): Promise<HistoryResponse> => {
+    const p = new URLSearchParams({ path, limit: '50' });
+    if (after) p.set('after', after);
+    return fetch(`${BASE}/history?${p}`).then(r => r.json());
+  },
+  commitDetail: (hash: string): Promise<CommitDetail> =>
+    fetch(`${BASE}/commit?hash=${encodeURIComponent(hash)}`).then(r => r.json()),
   stats: (path: string): Promise<Stats> => fetch(`${BASE}/stats?path=${encodeURIComponent(path)}`).then(r => r.json()),
   status: (): Promise<Status> => fetch(`${BASE}/status`).then(r => r.json()),
   sync: (): Promise<{ op: string; id?: string; status: string; message?: string }> =>

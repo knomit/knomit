@@ -282,7 +282,7 @@ func TestHandleSearchInvalidMinSimilarity(t *testing.T) {
 }
 
 func TestHandleHistory(t *testing.T) {
-	logEntries := []git.LogEntry{
+	logEntries := []git.LogEntryWithTags{
 		{Commit: "abcd1234", Date: "2024-01-01T00:00:00Z", Message: "add fact"},
 		{Commit: "efgh5678", Date: "2024-01-02T00:00:00Z", Message: "update fact"},
 	}
@@ -290,13 +290,15 @@ func TestHandleHistory(t *testing.T) {
 	tests := []struct {
 		name       string
 		query      string
-		entries    []git.LogEntry
+		path       string
+		entries    []git.LogEntryWithTags
 		wantStatus int
 		wantLen    int
 	}{
 		{
 			name:       "returns log entries",
 			query:      "/api/v1/history?path=kb/fact.md",
+			path:       "kb/fact.md",
 			entries:    logEntries,
 			wantStatus: http.StatusOK,
 			wantLen:    2,
@@ -304,6 +306,7 @@ func TestHandleHistory(t *testing.T) {
 		{
 			name:       "empty path returns full log",
 			query:      "/api/v1/history",
+			path:       "",
 			entries:    logEntries[:1],
 			wantStatus: http.StatusOK,
 			wantLen:    1,
@@ -311,6 +314,7 @@ func TestHandleHistory(t *testing.T) {
 		{
 			name:       "nil entries returns empty array",
 			query:      "/api/v1/history?path=kb/missing.md",
+			path:       "kb/missing.md",
 			entries:    nil,
 			wantStatus: http.StatusOK,
 			wantLen:    0,
@@ -321,7 +325,7 @@ func TestHandleHistory(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			ctrl := gomock.NewController(t)
 			gs := NewMockGitStore(ctrl)
-			gs.EXPECT().Log(gomock.Any()).Return(tc.entries, nil)
+			gs.EXPECT().LogPaginated(tc.path, 50, "").Return(tc.entries, "", nil)
 
 			handler := newTestRouter(gs, nil)
 			rr := doRequest(t, handler, http.MethodGet, tc.query, "")

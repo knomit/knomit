@@ -15,7 +15,7 @@
 //
 //   - server.go          — NewRouter: chi mux wiring, dependency interfaces.
 //   - handlers.go        — Read-only query handlers (browse, fact, search,
-//                          history, stats, status) and JSON helpers.
+//     history, stats, status) and JSON helpers.
 //   - handlers_task.go   — Async task handlers (synthesize, sync) and helpers.
 //   - handlers_stream.go — SSE endpoint (handleEvents).
 //   - taskhub.go         — TaskHub: per-op single-flight, pub/sub broadcasting.
@@ -32,10 +32,11 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/rs/zerolog/log"
 	"knomit/internal/git"
 	"knomit/internal/mcp"
 	"knomit/internal/store"
+
+	"github.com/rs/zerolog/log"
 )
 
 // writeJSON encodes v as JSON and writes it to w with Content-Type: application/json.
@@ -60,7 +61,7 @@ func handleBrowse(gs GitStore, ontologyRoot string) http.HandlerFunc {
 		if path == "" {
 			path = ontologyRoot
 		}
-		log.Debug().Str("path", path).Msg("browse")
+		//log.Debug().Str("path", path).Msg("browse")
 
 		entries, err := gs.ListDir(path)
 		if err != nil {
@@ -89,7 +90,7 @@ func handleBrowse(gs GitStore, ontologyRoot string) http.HandlerFunc {
 	}
 }
 
-// handleFact handles GET /api/fact?path=<path>
+// handleFact handles GET /api/fact?path=<path>&commit=<hash>
 func handleFact(gs GitStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.Query().Get("path")
@@ -97,9 +98,16 @@ func handleFact(gs GitStore) http.HandlerFunc {
 			writeError(w, http.StatusBadRequest, "path query parameter is required")
 			return
 		}
-		log.Debug().Str("path", path).Msg("fact")
 
-		content, err := gs.ReadFile(path)
+		commitHash := r.URL.Query().Get("commit")
+
+		var content string
+		var err error
+		if commitHash != "" {
+			content, err = gs.ReadFileAtCommit(path, commitHash)
+		} else {
+			content, err = gs.ReadFile(path)
+		}
 		if err != nil {
 			log.Debug().Err(err).Str("path", path).Msg("fact not found")
 			writeError(w, http.StatusNotFound, fmt.Sprintf("fact not found: %v", err))
@@ -108,7 +116,12 @@ func handleFact(gs GitStore) http.HandlerFunc {
 
 		fact, err := mcp.ParseFact(path, content)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, fmt.Sprintf("parse error: %v", err))
+			// Not a fact file (e.g. kb.md manifest) — return raw content.
+			writeJSON(w, http.StatusOK, map[string]any{
+				"path":  path,
+				"title": path,
+				"body":  content,
+			})
 			return
 		}
 
@@ -230,24 +243,56 @@ func handleSearch(idx SearchIndex) http.HandlerFunc {
 	}
 }
 
-// handleHistory handles GET /api/history?path=<path>
-func handleHistory(gs GitStore) http.HandlerFunc {
+// handleHistoryPaginated handles GET /api/v1/history?path=<path>&limit=50&after=<cursor>
+func handleHistoryPaginated(gs GitStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.Query().Get("path")
 
-		entries, err := gs.Log(path)
+		limit := 50
+		if v := r.URL.Query().Get("limit"); v != "" {
+			if n, err := strconv.Atoi(v); err == nil && n > 0 {
+				limit = n
+			}
+		}
+		if limit > 500 {
+			limit = 500
+		}
+
+		after := r.URL.Query().Get("after")
+
+		entries, next, err := gs.LogPaginated(path, limit, after)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, fmt.Sprintf("log error: %v", err))
 			return
 		}
-
 		if entries == nil {
-			entries = []git.LogEntry{}
+			entries = []git.LogEntryWithTags{}
 		}
 
-		writeJSON(w, http.StatusOK, map[string]any{
-			"entries": entries,
-		})
+		resp := map[string]any{"entries": entries}
+		if next != "" {
+			resp["next"] = next
+		}
+		writeJSON(w, http.StatusOK, resp)
+	}
+}
+
+// handleCommitDetail handles GET /api/v1/commit?hash=<hash>
+func handleCommitDetail(gs GitStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		hash := r.URL.Query().Get("hash")
+		if hash == "" {
+			writeError(w, http.StatusBadRequest, "hash query parameter is required")
+			return
+		}
+
+		detail, err := gs.CommitDetail(hash)
+		if err != nil {
+			writeError(w, http.StatusNotFound, fmt.Sprintf("commit not found: %v", err))
+			return
+		}
+
+		writeJSON(w, http.StatusOK, detail)
 	}
 }
 
