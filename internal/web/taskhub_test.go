@@ -176,6 +176,164 @@ func TestTaskHub_EmitIgnoredAfterTerminal(t *testing.T) {
 	}
 }
 
+func TestTaskHub_BroadcastStatus(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	hub := NewTaskHub(ctx)
+
+	subCtx, subCancel := context.WithCancel(context.Background())
+	defer subCancel()
+	events, _ := hub.Subscribe(subCtx)
+
+	hub.BroadcastStatus("deadbeef")
+
+	select {
+	case e := <-events:
+		ev, ok := e.(StatusEvent)
+		if !ok {
+			t.Fatalf("expected StatusEvent, got %T", e)
+		}
+		if ev.Head != "deadbeef" {
+			t.Errorf("Head = %q, want %q", ev.Head, "deadbeef")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for StatusEvent")
+	}
+}
+
+func TestTaskHub_BroadcastSyncOK(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	hub := NewTaskHub(ctx)
+
+	subCtx, subCancel := context.WithCancel(context.Background())
+	defer subCancel()
+	events, _ := hub.Subscribe(subCtx)
+
+	hub.BroadcastSyncOK("origin", "abc123", true)
+
+	select {
+	case e := <-events:
+		ev, ok := e.(SyncEvent)
+		if !ok {
+			t.Fatalf("expected SyncEvent, got %T", e)
+		}
+		if ev.Remote != "origin" {
+			t.Errorf("Remote = %q, want %q", ev.Remote, "origin")
+		}
+		if ev.Status != "sync_ok" {
+			t.Errorf("Status = %q, want %q", ev.Status, "sync_ok")
+		}
+		if ev.MergeCommit != "abc123" {
+			t.Errorf("MergeCommit = %q, want %q", ev.MergeCommit, "abc123")
+		}
+		if !ev.FastForward {
+			t.Error("expected FastForward=true")
+		}
+		if ev.Error != "" {
+			t.Errorf("Error = %q, want empty", ev.Error)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for SyncEvent")
+	}
+}
+
+func TestTaskHub_BroadcastSyncError(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	hub := NewTaskHub(ctx)
+
+	subCtx, subCancel := context.WithCancel(context.Background())
+	defer subCancel()
+	events, _ := hub.Subscribe(subCtx)
+
+	hub.BroadcastSyncError("origin", "fetch failed")
+
+	select {
+	case e := <-events:
+		ev, ok := e.(SyncEvent)
+		if !ok {
+			t.Fatalf("expected SyncEvent, got %T", e)
+		}
+		if ev.Remote != "origin" {
+			t.Errorf("Remote = %q, want %q", ev.Remote, "origin")
+		}
+		if ev.Status != "sync_error" {
+			t.Errorf("Status = %q, want %q", ev.Status, "sync_error")
+		}
+		if ev.Error != "fetch failed" {
+			t.Errorf("Error = %q, want %q", ev.Error, "fetch failed")
+		}
+		if ev.MergeCommit != "" {
+			t.Errorf("MergeCommit = %q, want empty", ev.MergeCommit)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for SyncEvent")
+	}
+}
+
+func TestTaskHub_BroadcastPushOK(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	hub := NewTaskHub(ctx)
+
+	subCtx, subCancel := context.WithCancel(context.Background())
+	defer subCancel()
+	events, _ := hub.Subscribe(subCtx)
+
+	hub.BroadcastPushOK("origin")
+
+	select {
+	case e := <-events:
+		ev, ok := e.(PushEvent)
+		if !ok {
+			t.Fatalf("expected PushEvent, got %T", e)
+		}
+		if ev.Remote != "origin" {
+			t.Errorf("Remote = %q, want %q", ev.Remote, "origin")
+		}
+		if ev.Status != "push_ok" {
+			t.Errorf("Status = %q, want %q", ev.Status, "push_ok")
+		}
+		if ev.Error != "" {
+			t.Errorf("Error = %q, want empty", ev.Error)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for PushEvent")
+	}
+}
+
+func TestTaskHub_BroadcastPushError(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	hub := NewTaskHub(ctx)
+
+	subCtx, subCancel := context.WithCancel(context.Background())
+	defer subCancel()
+	events, _ := hub.Subscribe(subCtx)
+
+	hub.BroadcastPushError("origin", "auth denied")
+
+	select {
+	case e := <-events:
+		ev, ok := e.(PushEvent)
+		if !ok {
+			t.Fatalf("expected PushEvent, got %T", e)
+		}
+		if ev.Remote != "origin" {
+			t.Errorf("Remote = %q, want %q", ev.Remote, "origin")
+		}
+		if ev.Status != "push_error" {
+			t.Errorf("Status = %q, want %q", ev.Status, "push_error")
+		}
+		if ev.Error != "auth denied" {
+			t.Errorf("Error = %q, want %q", ev.Error, "auth denied")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for PushEvent")
+	}
+}
+
 func TestTaskHub_Shutdown(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

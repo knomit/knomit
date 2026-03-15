@@ -469,6 +469,89 @@ func TestSyncThreeWay_DeletedFileAgentModified(t *testing.T) {
 	}
 }
 
+func TestSyncNoRemote(t *testing.T) {
+	dir := t.TempDir()
+	s, err := git.Init(filepath.Join(dir, "test.db"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	// No remote configured — Sync should return empty result, no error.
+	result, err := s.Sync("")
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+	if result.Synced {
+		t.Fatal("expected Synced=false with no remote")
+	}
+	if result.FastForward {
+		t.Fatal("expected FastForward=false with no remote")
+	}
+	if result.MergeCommit != "" {
+		t.Fatalf("expected empty MergeCommit, got: %s", result.MergeCommit)
+	}
+}
+
+func TestSyncDefaultRemoteBranch(t *testing.T) {
+	origin, agent := setupOriginAndAgent(t)
+
+	// Advance origin/main.
+	advanceOriginMain(t, origin, map[string]string{
+		"kb/default-branch.md": "# Default branch test\n",
+	})
+
+	// Call Sync with empty string — should default to "main".
+	result, err := agent.Sync("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Synced {
+		t.Fatal("expected Synced=true when using default remoteBranch")
+	}
+
+	// Verify the file arrived.
+	content, err := agent.ReadFile("kb/default-branch.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if content != "# Default branch test\n" {
+		t.Fatalf("unexpected content: %q", content)
+	}
+}
+
+func TestSyncOriginRefNotFoundAfterFetch(t *testing.T) {
+	origin, agent := setupOriginAndAgent(t)
+
+	// Reconfigure agent to fetch a branch that doesn't exist on origin.
+	cfg, err := agent.Storer().Config()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.Remotes["origin"] = &gogitconfig.RemoteConfig{
+		Name:  "origin",
+		URLs:  []string{"inmem:///origin"},
+		Fetch: []gogitconfig.RefSpec{"+refs/heads/*:refs/remotes/origin/*"},
+	}
+	if err := agent.Storer().SetConfig(cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	// Advance origin on main (not on "nonexistent").
+	advanceOriginMain(t, origin, map[string]string{
+		"kb/x.md": "# X\n",
+	})
+
+	// Sync looking for "nonexistent" branch — origin/nonexistent won't exist.
+	result, err := agent.Sync("nonexistent")
+	if err != nil {
+		t.Fatalf("expected no error for missing origin ref, got: %v", err)
+	}
+	if result.Synced {
+		t.Fatal("expected Synced=false when origin ref not found")
+	}
+}
+
 func TestConfigureRemote(t *testing.T) {
 	dir := t.TempDir()
 	store, err := git.Init(filepath.Join(dir, "test.db"), nil)

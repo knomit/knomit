@@ -432,6 +432,107 @@ func TestHandleSwaggerUI(t *testing.T) {
 	}
 }
 
+// --- writeTaskStarted / writeTaskConflict ---
+
+func TestWriteTaskStarted(t *testing.T) {
+	rr := httptest.NewRecorder()
+	writeTaskStarted(rr, "synth", "synth-1")
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rr.Code)
+	}
+
+	var resp map[string]any
+	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp["op"] != "synth" {
+		t.Errorf("op = %q, want %q", resp["op"], "synth")
+	}
+	if resp["id"] != "synth-1" {
+		t.Errorf("id = %q, want %q", resp["id"], "synth-1")
+	}
+	if resp["status"] != "running" {
+		t.Errorf("status = %q, want %q", resp["status"], "running")
+	}
+}
+
+func TestWriteTaskConflict(t *testing.T) {
+	rr := httptest.NewRecorder()
+	writeTaskConflict(rr, "sync", fmt.Errorf("sync is already running (sync-1)"))
+
+	if rr.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409", rr.Code)
+	}
+
+	var resp map[string]any
+	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp["op"] != "sync" {
+		t.Errorf("op = %q, want %q", resp["op"], "sync")
+	}
+	if resp["status"] != "error" {
+		t.Errorf("status = %q, want %q", resp["status"], "error")
+	}
+	msg, ok := resp["message"].(string)
+	if !ok || msg == "" {
+		t.Errorf("expected non-empty message, got %v", resp["message"])
+	}
+	if !strings.Contains(msg, "already running") {
+		t.Errorf("message = %q, expected it to contain 'already running'", msg)
+	}
+}
+
+// --- handleEvents SSE with SyncEvent and PushEvent ---
+
+func TestHandleEvents_SyncAndPushEvents(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	gs := NewMockGitStore(ctrl)
+	gs.EXPECT().HeadCommit().Return("abc123", nil).AnyTimes()
+
+	hub := NewTaskHub(context.Background())
+	handler := NewRouter(gs, nil, hub, nil, nil, nil, false, "kb")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/events", nil).WithContext(ctx)
+	rr := httptest.NewRecorder()
+
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		hub.BroadcastSyncOK("origin", "merge123", false)
+		time.Sleep(20 * time.Millisecond)
+		hub.BroadcastPushError("origin", "push failed")
+	}()
+
+	handler.ServeHTTP(rr, req)
+
+	body := rr.Body.String()
+
+	// Verify initial status event.
+	if !strings.Contains(body, "event: status") {
+		t.Errorf("expected initial status event, got: %s", body)
+	}
+
+	// Verify SyncEvent arrived.
+	if !strings.Contains(body, "event: sync_ok") {
+		t.Errorf("expected sync_ok event, got: %s", body)
+	}
+	if !strings.Contains(body, "merge123") {
+		t.Errorf("expected merge commit in sync event, got: %s", body)
+	}
+
+	// Verify PushEvent arrived.
+	if !strings.Contains(body, "event: push_error") {
+		t.Errorf("expected push_error event, got: %s", body)
+	}
+	if !strings.Contains(body, "push failed") {
+		t.Errorf("expected error message in push event, got: %s", body)
+	}
+}
+
 // --- fakeAdapter for synthesize tests ---
 
 type fakeAdapter struct{}
