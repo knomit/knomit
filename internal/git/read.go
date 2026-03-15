@@ -252,7 +252,9 @@ func (s *Store) LogPaginated(path string, limit int, after string) ([]LogEntryWi
 		From:  headRef.Hash(),
 		Order: gogit.LogOrderCommitterTime,
 	}
-	if path != "" {
+	// Only use FileName for specific files (.md). For directories, show all
+	// commits — go-git's FileName is exact match, not prefix.
+	if path != "" && strings.HasSuffix(path, ".md") {
 		opts.FileName = &path
 	}
 
