@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	gogitconfig "github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing"
@@ -860,6 +861,168 @@ func TestLogPaginated_DirectoryFilter(t *testing.T) {
 	}
 	if entries[1].Message != "add science a" {
 		t.Errorf("expected 'add science a', got %q", entries[1].Message)
+	}
+}
+
+func TestWalkChangedFilesBasic(t *testing.T) {
+	dir := t.TempDir()
+	store, err := git.Init(filepath.Join(dir, "knomit.git.db"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	// Write 3 files in separate commits.
+	if _, _, err := store.WriteFile("kb/a.md", "# A\n", "add a"); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(10 * time.Millisecond) // ensure distinct timestamps
+	if _, _, err := store.WriteFile("kb/b.md", "# B\n", "add b"); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(10 * time.Millisecond)
+	if _, _, err := store.WriteFile("kb/c.md", "# C\n", "add c"); err != nil {
+		t.Fatal(err)
+	}
+
+	files, lastHash, err := store.WalkChangedFiles("", "kb", nil, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(lastHash) != 40 {
+		t.Fatalf("expected 40-char last hash, got %q", lastHash)
+	}
+
+	// Should find at least a.md, b.md, c.md (plus kb.md from init).
+	paths := make([]string, len(files))
+	for i, f := range files {
+		paths[i] = f.Path
+	}
+	// Most recent first: c.md should come before b.md, b.md before a.md.
+	idxC, idxB, idxA := -1, -1, -1
+	for i, p := range paths {
+		switch p {
+		case "kb/c.md":
+			idxC = i
+		case "kb/b.md":
+			idxB = i
+		case "kb/a.md":
+			idxA = i
+		}
+	}
+	if idxC < 0 || idxB < 0 || idxA < 0 {
+		t.Fatalf("expected all 3 files, got paths: %v", paths)
+	}
+	if idxC > idxB || idxB > idxA {
+		t.Fatalf("expected most-recent-first order (c < b < a), got indices c=%d b=%d a=%d in %v", idxC, idxB, idxA, paths)
+	}
+}
+
+func TestWalkChangedFilesPrefix(t *testing.T) {
+	dir := t.TempDir()
+	store, err := git.Init(filepath.Join(dir, "knomit.git.db"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	if _, _, err := store.WriteFile("kb/science/phys.md", "# Physics\n", "add phys"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.WriteFile("kb/tech/go.md", "# Go\n", "add go"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.WriteFile("kb/science/chem.md", "# Chemistry\n", "add chem"); err != nil {
+		t.Fatal(err)
+	}
+
+	files, _, err := store.WalkChangedFiles("", "kb/science", nil, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, f := range files {
+		if !strings.HasPrefix(f.Path, "kb/science/") {
+			t.Fatalf("unexpected file outside prefix: %s", f.Path)
+		}
+	}
+	if len(files) != 2 {
+		t.Fatalf("expected 2 files under kb/science, got %d: %v", len(files), files)
+	}
+}
+
+func TestWalkChangedFilesSeen(t *testing.T) {
+	dir := t.TempDir()
+	store, err := git.Init(filepath.Join(dir, "knomit.git.db"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	if _, _, err := store.WriteFile("kb/a.md", "# A\n", "add a"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.WriteFile("kb/b.md", "# B\n", "add b"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Walk with limit=1 — should get the most recent file only.
+	files1, _, err := store.WalkChangedFiles("", "kb", nil, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files1) != 1 {
+		t.Fatalf("expected 1 file, got %d", len(files1))
+	}
+
+	// Resume with the seen set from page 1.
+	seen := map[string]bool{files1[0].Path: true}
+	files2, _, err := store.WalkChangedFiles("", "kb", seen, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// files2 should not contain the file from files1.
+	for _, f := range files2 {
+		if f.Path == files1[0].Path {
+			t.Fatalf("seen file %s appeared again in second walk", files1[0].Path)
+		}
+	}
+	// Should have found at least one more file.
+	if len(files2) == 0 {
+		t.Fatal("expected at least 1 file in second walk")
+	}
+}
+
+func TestWalkChangedFilesDedup(t *testing.T) {
+	dir := t.TempDir()
+	store, err := git.Init(filepath.Join(dir, "knomit.git.db"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	// Write the same file twice (two commits).
+	if _, _, err := store.WriteFile("kb/dup.md", "# Dup v1\n", "add dup"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.WriteFile("kb/dup.md", "# Dup v2\n", "update dup"); err != nil {
+		t.Fatal(err)
+	}
+
+	files, _, err := store.WalkChangedFiles("", "kb", nil, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	count := 0
+	for _, f := range files {
+		if f.Path == "kb/dup.md" {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("expected kb/dup.md exactly once, got %d times in %v", count, files)
 	}
 }
 

@@ -27,6 +27,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
@@ -66,6 +67,12 @@ type LogEntry struct {
 type ChangedFile struct {
 	Path   string `json:"path"`
 	Action string `json:"action"` // "added", "modified", "deleted"
+}
+
+// FileRecency represents a file path and the timestamp of the commit that last changed it.
+type FileRecency struct {
+	Path      string
+	Timestamp time.Time
 }
 
 // CommitDetailResult contains metadata and changed files for a single commit.

@@ -407,6 +407,105 @@ func (s *Store) CommitDetail(commitHash string) (*CommitDetailResult, error) {
 	}, nil
 }
 
+// WalkChangedFiles walks commit history from fromCommit (or HEAD if empty),
+// diffs each commit against its parent, and yields .md files under prefix that
+// haven't been seen before. It stops after limit unique files or end of history.
+// Returns the found files (most-recently-changed first) and the full hash of the
+// last commit examined.
+func (s *Store) WalkChangedFiles(fromCommit string, prefix string, seen map[string]bool, limit int) ([]FileRecency, string, error) {
+	var from plumbing.Hash
+	if fromCommit != "" {
+		from = plumbing.NewHash(fromCommit)
+	} else {
+		headRef, err := s.repo.Head()
+		if err != nil {
+			return nil, "", fmt.Errorf("WalkChangedFiles: head: %w", err)
+		}
+		from = headRef.Hash()
+	}
+
+	logIter, err := s.repo.Log(&gogit.LogOptions{
+		From:  from,
+		Order: gogit.LogOrderCommitterTime,
+	})
+	if err != nil {
+		return nil, "", fmt.Errorf("WalkChangedFiles: log: %w", err)
+	}
+	defer logIter.Close()
+
+	// Merge caller's seen set into a local copy.
+	localSeen := make(map[string]bool, len(seen))
+	for k, v := range seen {
+		localSeen[k] = v
+	}
+
+	prefixDir := prefix + "/"
+
+	var results []FileRecency
+	var lastHash string
+
+	err = logIter.ForEach(func(c *object.Commit) error {
+		lastHash = c.Hash.String()
+
+		toTree, err := c.Tree()
+		if err != nil {
+			return fmt.Errorf("tree: %w", err)
+		}
+
+		var fromTree *object.Tree
+		if c.NumParents() > 0 {
+			parent, err := c.Parent(0)
+			if err != nil {
+				return fmt.Errorf("parent: %w", err)
+			}
+			fromTree, err = parent.Tree()
+			if err != nil {
+				return fmt.Errorf("parent tree: %w", err)
+			}
+		}
+
+		changes, err := object.DiffTree(fromTree, toTree)
+		if err != nil {
+			return fmt.Errorf("diff: %w", err)
+		}
+
+		for _, ch := range changes {
+			// Use the "to" name for adds/modifies, "from" name for deletes.
+			path := ch.To.Name
+			if path == "" {
+				path = ch.From.Name
+			}
+
+			if !strings.HasSuffix(path, ".md") {
+				continue
+			}
+			// Filter by prefix: must be under prefix/ or equal to prefix.md
+			if prefix != "" && path != prefix+".md" && !strings.HasPrefix(path, prefixDir) {
+				continue
+			}
+			if localSeen[path] {
+				continue
+			}
+
+			localSeen[path] = true
+			results = append(results, FileRecency{
+				Path:      path,
+				Timestamp: c.Committer.When.UTC(),
+			})
+
+			if len(results) >= limit {
+				return io.EOF
+			}
+		}
+		return nil
+	})
+	if err != nil && err != io.EOF {
+		return nil, "", fmt.Errorf("WalkChangedFiles: iterate: %w", err)
+	}
+
+	return results, lastHash, nil
+}
+
 // Grep searches all .md files in HEAD for pattern, returns matching paths.
 func (s *Store) Grep(pattern string) ([]string, error) {
 	re, err := regexp.Compile(pattern)
