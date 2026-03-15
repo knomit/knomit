@@ -98,6 +98,11 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS)
 
 The bridge reads JSON-RPC from stdin, forwards to the knomit HTTP endpoint, and writes responses to stdout.
 
+Use this initial prompt
+```
+You have access to a knowledge base called knomit. Use knomit_learn to save important facts, decisions, and preferences from our conversations. Use knomit_query to check if you already know something before asking me. Use knomit_explore to browse what you know. Use knomit_review to review and maintain the knowledge base — it guides you through evaluating facts step by step.
+```
+
 ### Web UI
 
 The server embeds a React SPA at `/`. Browse facts, search, trigger synthesis, and monitor tasks in real time via SSE.
