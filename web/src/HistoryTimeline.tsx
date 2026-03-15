@@ -128,8 +128,9 @@ export function HistoryTimeline({ state, dispatch }: Props) {
               ref={el => { itemRefs.current[i] = el; }}
               style={{
                 display: 'flex',
-                alignItems: 'flex-start',
-                padding: '4px 12px',
+                alignItems: 'stretch',
+                paddingLeft: 12,
+                paddingRight: 12,
                 background: isSelected || isHighlighted ? '#2a2a3a' : 'transparent',
                 cursor: 'pointer',
               }}
@@ -138,10 +139,10 @@ export function HistoryTimeline({ state, dispatch }: Props) {
                 dispatch({ type: 'SELECT_COMMIT', commit: entry.commit });
               }}
             >
-              {/* Timeline column: line + dot */}
-              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', width: 20, flexShrink: 0, position: 'relative' }}>
-                {/* Top connector */}
-                <div style={{ width: 2, background: '#333', flex: 1, minHeight: 4 }} />
+              {/* Timeline column: continuous line + dot */}
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', width: 20, flexShrink: 0 }}>
+                {/* Top connector — hide for first entry */}
+                <div style={{ width: 2, background: i === 0 ? 'transparent' : '#333', flex: 1 }} />
                 {/* Dot */}
                 <div style={{
                   width: dotSize,
@@ -149,13 +150,14 @@ export function HistoryTimeline({ state, dispatch }: Props) {
                   borderRadius: '50%',
                   background: dotColor,
                   flexShrink: 0,
+                  margin: '2px 0',
                 }} />
-                {/* Bottom connector */}
-                <div style={{ width: 2, background: '#333', flex: 1, minHeight: 4 }} />
+                {/* Bottom connector — hide for last entry */}
+                <div style={{ width: 2, background: i === entries.length - 1 ? 'transparent' : '#333', flex: 1 }} />
               </div>
 
               {/* Commit info */}
-              <div style={{ flex: 1, minWidth: 0, paddingLeft: 8 }}>
+              <div style={{ flex: 1, minWidth: 0, paddingLeft: 8, paddingTop: 4, paddingBottom: 4 }}>
                 {/* Tag badges */}
                 {hasTag && (
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginBottom: 2 }}>
