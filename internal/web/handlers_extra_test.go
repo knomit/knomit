@@ -52,17 +52,22 @@ func TestHandleFact_NotFound(t *testing.T) {
 	}
 }
 
-func TestHandleFact_ParseError(t *testing.T) {
+func TestHandleFact_NonFactFallsBackToRaw(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
-	// Return content that will fail YAML parsing (invalid frontmatter).
-	gs.EXPECT().ReadFile("kb/bad.md").Return("---\ndomain: [[[invalid\n---\nbody\n", nil)
+	// Return content without frontmatter (e.g. kb.md manifest).
+	gs.EXPECT().ReadFile("kb.md").Return("# Knowledge Base\n\nRoot manifest.\n", nil)
 
 	handler := newTestRouter(gs, nil)
-	rr := doRequest(t, handler, http.MethodGet, "/api/v1/fact?path=kb/bad.md", "")
+	rr := doRequest(t, handler, http.MethodGet, "/api/v1/fact?path=kb.md", "")
 
-	if rr.Code != http.StatusInternalServerError {
-		t.Fatalf("status = %d, want 500", rr.Code)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", rr.Code, rr.Body.String())
+	}
+	var resp map[string]any
+	json.Unmarshal(rr.Body.Bytes(), &resp)
+	if resp["path"] != "kb.md" {
+		t.Errorf("expected path kb.md, got %v", resp["path"])
 	}
 }
 

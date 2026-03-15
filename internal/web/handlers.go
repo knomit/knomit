@@ -116,7 +116,12 @@ func handleFact(gs GitStore) http.HandlerFunc {
 
 		fact, err := mcp.ParseFact(path, content)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, fmt.Sprintf("parse error: %v", err))
+			// Not a fact file (e.g. kb.md manifest) — return raw content.
+			writeJSON(w, http.StatusOK, map[string]any{
+				"path":  path,
+				"title": path,
+				"body":  content,
+			})
 			return
 		}
 
