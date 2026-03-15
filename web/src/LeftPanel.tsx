@@ -42,7 +42,7 @@ export function LeftPanel({ state, dispatch }: Props) {
     setSearchReady(false);
     setSelectedIdx(0);
     const p = new URLSearchParams({ q: state.similarTo.text, limit: '50' });
-    fetch(`/api/v1/search?${p}`).then(r => r.json()).then(r => {
+    fetch(`/api/v1/knomit/search?${p}`).then(r => r.json()).then(r => {
       const results = (r.results || []).filter((sr: { path: string }) => sr.path !== state.similarTo!.path);
       setSearchResults(results);
       setSearchReady(true);
