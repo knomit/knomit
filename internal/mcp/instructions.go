@@ -83,7 +83,7 @@ Each fact has YAML frontmatter with:
 - **knomit_why**: show the learning moments (commits and changes) that built a fact over time
 - **knomit_update**: modify an existing fact's fields
 - **knomit_retract**: remove outdated knowledge
-- **knomit_explore**: browse the knowledge tree — use to discover what topics and categories exist
+- **knomit_explore**: browse facts ordered by most recently updated. Returns paginated results (25 per page). Call with no arguments to start; pass the returned cursor to get the next page. Use path to scope to a subtree (e.g. path: "%s/technology"). Use knomit_why for history on individual facts.
 
 ## knomit_review — Knowledge Base Maintenance
 
@@ -96,7 +96,7 @@ Call this tool to review and maintain the knowledge base. It works as a multi-tu
    - response: your JSON decisions matching the response_schema
 4. Repeat until the response contains "done": true
 
-You may stop at any time — progress is saved and the next session picks up remaining work.`, ontologyRoot, ontologyRoot, topicList, ontologyRoot, ontologyRoot, ontologyRoot)
+You may stop at any time — progress is saved and the next session picks up remaining work.`, ontologyRoot, ontologyRoot, topicList, ontologyRoot, ontologyRoot, ontologyRoot, ontologyRoot)
 }
 
 // ProfileInstructions returns the MCP server instructions for the given profile.
