@@ -73,6 +73,7 @@ download-graphqlite:
 
 build: web
 	CGO_ENABLED=1 go build -o dist/knomit .
+	go build -o dist/knomit-mcp-remote ./tools/mcp-remote/
 
 web:
 	cd web && npm ci && npm run build

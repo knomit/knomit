@@ -81,18 +81,22 @@ Knomit's tool descriptions carry all the behavioral guidance the model needs —
 
 #### Claude Desktop
 
+Claude Desktop only supports stdio transports. Use the included `knomit-mcp-remote` bridge (built automatically by `make build`):
+
 Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or `%APPDATA%\Claude\claude_desktop_config.json` (Windows):
 
 ```json
 {
   "mcpServers": {
     "knomit": {
-      "type": "streamable-http",
-      "url": "http://localhost:3000/mcp?profile=chat"
+      "command": "/path/to/dist/knomit-mcp-remote",
+      "args": ["http://localhost:3000/mcp?profile=chat"]
     }
   }
 }
 ```
+
+The bridge reads JSON-RPC from stdin, forwards to the knomit HTTP endpoint, and writes responses to stdout.
 
 ### Web UI
 
