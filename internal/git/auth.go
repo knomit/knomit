@@ -2,6 +2,7 @@ package git
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/go-git/go-git/v5/plumbing/transport"
 	githttp "github.com/go-git/go-git/v5/plumbing/transport/http"
@@ -10,7 +11,8 @@ import (
 
 // ResolveAuth returns a go-git transport.AuthMethod based on the remote config.
 // Returns nil if no credentials are configured (anonymous access).
-func ResolveAuth(cfg RemoteAuthConfig) (transport.AuthMethod, error) {
+// defaultKeyPath is used as a fallback SSH key when cfg.SSHKey is empty.
+func ResolveAuth(cfg RemoteAuthConfig, defaultKeyPath string) (transport.AuthMethod, error) {
 	method := cfg.AuthMethod
 
 	// Infer method from available fields when not explicitly set.
@@ -40,7 +42,14 @@ func ResolveAuth(cfg RemoteAuthConfig) (transport.AuthMethod, error) {
 		}, nil
 
 	case "ssh":
-		publicKeys, err := gitssh.NewPublicKeysFromFile("git", cfg.SSHKey, "")
+		keyPath := cfg.SSHKey
+		if keyPath == "" {
+			keyPath = defaultKeyPath
+		}
+		if keyPath == "" {
+			return nil, fmt.Errorf("ssh auth requires a key path")
+		}
+		publicKeys, err := gitssh.NewPublicKeysFromFile("git", keyPath, "")
 		if err != nil {
 			return nil, fmt.Errorf("resolve ssh auth: %w", err)
 		}
@@ -52,4 +61,14 @@ func ResolveAuth(cfg RemoteAuthConfig) (transport.AuthMethod, error) {
 	default:
 		return nil, fmt.Errorf("unknown auth method: %q", method)
 	}
+}
+
+// ResolveAuthWithOrigin resolves auth, auto-detecting SSH for git@ or ssh:// URLs.
+func ResolveAuthWithOrigin(cfg RemoteAuthConfig, defaultKeyPath, originURL string) (transport.AuthMethod, error) {
+	if cfg.AuthMethod == "" && originURL != "" {
+		if strings.HasPrefix(originURL, "git@") || strings.HasPrefix(originURL, "ssh://") {
+			cfg.AuthMethod = "ssh"
+		}
+	}
+	return ResolveAuth(cfg, defaultKeyPath)
 }

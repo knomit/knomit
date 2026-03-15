@@ -76,7 +76,7 @@ func serveCmd() *cobra.Command {
 				// First run — check if origin is configured
 				if cfg.Git.Origin != "" {
 					// Resolve auth
-					auth, authErr := git.ResolveAuth(cfg.Remote)
+					auth, authErr := git.ResolveAuth(cfg.Remote, "")
 					if authErr != nil {
 						return fmt.Errorf("resolve auth: %w", authErr)
 					}
@@ -168,7 +168,7 @@ func serveCmd() *cobra.Command {
 			remote, _ := svc.GetRemote("origin")
 			if remote != nil {
 				// Resolve and set auth
-				auth, authErr := git.ResolveAuth(cfg.Remote)
+				auth, authErr := git.ResolveAuth(cfg.Remote, "")
 				if authErr != nil {
 					log.Warn().Err(authErr).Msg("remote: auth resolution failed")
 				} else {
