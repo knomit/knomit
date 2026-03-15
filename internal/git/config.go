@@ -11,3 +11,12 @@ type Config struct {
 func DefaultConfig() Config {
 	return Config{}
 }
+
+// RemoteAuthConfig holds git remote authentication settings.
+type RemoteAuthConfig struct {
+	Token      string `toml:"token"`
+	User       string `toml:"user"`
+	Password   string `toml:"password"`
+	SSHKey     string `toml:"ssh_key"`
+	AuthMethod string `toml:"auth_method"`
+}
