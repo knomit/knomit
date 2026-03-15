@@ -30,7 +30,9 @@ import (
 	"time"
 
 	gogit "github.com/go-git/go-git/v5"
+	gogitconfig "github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/transport"
 	"github.com/go-git/go-billy/v5/memfs"
 	_ "github.com/mattn/go-sqlite3"
 
@@ -47,6 +49,7 @@ type Store struct {
 	ownsDB   bool    // true when Init/Open opened the DB (legacy path)
 	ownedDB  *sql.DB // non-nil when ownsDB is true
 	branch   string  // e.g. "agent/laptop"
+	auth     transport.AuthMethod
 	onCommit func(hash string)
 }
 
@@ -287,4 +290,134 @@ func (s *Store) notifyCommit(hash string) {
 // Storer returns the underlying storer (used by the git remote handler).
 func (s *Store) Storer() *storegit.Storer {
 	return s.storer
+}
+
+// SetAuth sets the transport authentication method used by Sync and Push.
+func (s *Store) SetAuth(auth transport.AuthMethod) {
+	s.auth = auth
+}
+
+// InitFromRemote initializes a knomit git store by fetching from a remote origin.
+// If the remote has an existing agent branch for this hostname, it is used.
+// Otherwise a new agent branch is created from origin/main.
+// If the remote is empty (no refs), falls back to InitWithStorer.
+func InitFromRemote(s *storegit.Storer, originURL string, auth transport.AuthMethod) (*Store, error) {
+	repo, err := gogit.Init(s, memfs.New())
+	if err != nil {
+		return nil, fmt.Errorf("InitFromRemote: git init: %w", err)
+	}
+
+	cfg, err := repo.Config()
+	if err != nil {
+		return nil, fmt.Errorf("InitFromRemote: read config: %w", err)
+	}
+	cfg.User.Name = "knomit"
+	cfg.User.Email = "knomit@local"
+	if cfg.Raw != nil {
+		cfg.Raw.Section("commit").SetOption("gpgsign", "false")
+	}
+	if err := repo.SetConfig(cfg); err != nil {
+		return nil, fmt.Errorf("InitFromRemote: set config: %w", err)
+	}
+
+	_, err = repo.CreateRemote(&gogitconfig.RemoteConfig{
+		Name: "origin",
+		URLs: []string{originURL},
+		Fetch: []gogitconfig.RefSpec{
+			"+refs/heads/*:refs/remotes/origin/*",
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("InitFromRemote: create remote: %w", err)
+	}
+
+	err = repo.Fetch(&gogit.FetchOptions{
+		RemoteName: "origin",
+		Auth:       auth,
+	})
+	if err == transport.ErrEmptyRemoteRepository {
+		// Repo already initialized above; create initial content inline
+		// (can't call InitWithStorer which would try gogit.Init again).
+		rootManifest := "# Knowledge Base\n\nRoot manifest.\n"
+		lastCommit, _, writeErr := writeFileToStore(s, plumbing.ZeroHash, "kb.md", rootManifest, "init: create knowledge base")
+		if writeErr != nil {
+			return nil, fmt.Errorf("InitFromRemote: empty remote fallback: %w", writeErr)
+		}
+		hostname, _ := os.Hostname()
+		if hostname == "" {
+			hostname = "local"
+		}
+		agentBranch := "agent/" + hostname
+		agentRefName := plumbing.NewBranchReferenceName(agentBranch)
+		if writeErr = s.SetReference(plumbing.NewHashReference(agentRefName, lastCommit)); writeErr != nil {
+			return nil, fmt.Errorf("InitFromRemote: empty remote set agent ref: %w", writeErr)
+		}
+		if writeErr = s.SetReference(plumbing.NewSymbolicReference(plumbing.HEAD, agentRefName)); writeErr != nil {
+			return nil, fmt.Errorf("InitFromRemote: empty remote set HEAD: %w", writeErr)
+		}
+		if writeErr = s.SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), lastCommit)); writeErr != nil {
+			return nil, fmt.Errorf("InitFromRemote: empty remote set main: %w", writeErr)
+		}
+		log.Info().Str("branch", agentBranch).Msg("git store initialized (empty remote)")
+		return &Store{
+			repo:   repo,
+			storer: s,
+			branch: agentBranch,
+			auth:   auth,
+		}, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("InitFromRemote: fetch: %w", err)
+	}
+
+	hostname, err := os.Hostname()
+	if err != nil {
+		hostname = "local"
+	}
+	agentBranch := "agent/" + hostname
+	agentRefName := plumbing.NewBranchReferenceName(agentBranch)
+
+	// Check for existing remote agent branch.
+	remoteAgentRef, err := s.Reference(plumbing.NewRemoteReferenceName("origin", agentBranch))
+	if err == nil {
+		// Remote agent branch exists — use it.
+		localRef := plumbing.NewHashReference(agentRefName, remoteAgentRef.Hash())
+		if err := s.SetReference(localRef); err != nil {
+			return nil, fmt.Errorf("InitFromRemote: set agent ref: %w", err)
+		}
+	} else {
+		// No remote agent branch — create from origin/main.
+		originMainRef, err := s.Reference(plumbing.NewRemoteReferenceName("origin", "main"))
+		if err != nil {
+			return nil, fmt.Errorf("InitFromRemote: resolve origin/main: %w", err)
+		}
+		localRef := plumbing.NewHashReference(agentRefName, originMainRef.Hash())
+		if err := s.SetReference(localRef); err != nil {
+			return nil, fmt.Errorf("InitFromRemote: set agent ref from main: %w", err)
+		}
+	}
+
+	// Set HEAD to agent branch.
+	headRef := plumbing.NewSymbolicReference(plumbing.HEAD, agentRefName)
+	if err := s.SetReference(headRef); err != nil {
+		return nil, fmt.Errorf("InitFromRemote: set HEAD: %w", err)
+	}
+
+	// Create local main pointing at origin/main.
+	originMainRef, err := s.Reference(plumbing.NewRemoteReferenceName("origin", "main"))
+	if err != nil {
+		return nil, fmt.Errorf("InitFromRemote: resolve origin/main for local main: %w", err)
+	}
+	mainRef := plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), originMainRef.Hash())
+	if err := s.SetReference(mainRef); err != nil {
+		return nil, fmt.Errorf("InitFromRemote: set main ref: %w", err)
+	}
+
+	log.Info().Str("branch", agentBranch).Msg("git store initialized from remote")
+	return &Store{
+		repo:   repo,
+		storer: s,
+		branch: agentBranch,
+		auth:   auth,
+	}, nil
 }
