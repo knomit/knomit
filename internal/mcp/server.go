@@ -30,6 +30,12 @@ type FactRecord = storepkg.FactRecord
 // FactWithBody is re-exported from internal/store.
 type FactWithBody = storepkg.FactWithBody
 
+// FileRecency is re-exported from internal/git.
+type FileRecency = gitpkg.FileRecency
+
+// ExploreSession is re-exported from internal/store.
+type ExploreSession = storepkg.ExploreSession
+
 // GitStore is the interface the MCP tools require from internal/git.
 // Only methods actually used by the tool handlers are listed here so that
 // tests can use lightweight mocks.
@@ -46,6 +52,7 @@ type GitStore interface {
 	Grep(pattern string) ([]string, error)
 	DiffFiles(fromCommit string) (added, modified, deleted []string, err error)
 	HeadCommit() (string, error)
+	WalkChangedFiles(fromCommit, prefix string, seen map[string]bool, limit int) ([]FileRecency, string, error)
 	Tag(name string) error
 	TagsContaining(hash string) ([]string, error)
 	Branch() string
@@ -57,8 +64,18 @@ type SearchIndex interface {
 	GetByPath(path string) (*FactWithBody, error)
 }
 
+// ExploreIndex is the interface the explore tool requires for session persistence.
+type ExploreIndex interface {
+	CreateExploreSession(branch, pathPrefix string) (*ExploreSession, error)
+	GetExploreSession(id string) (*ExploreSession, error)
+	UpdateExploreSession(id, lastCommit, status string) error
+	GetExploreSeenPaths(sessionID string) (map[string]bool, error)
+	AddExploreSeenPaths(sessionID string, paths []string) error
+	GCExploreSessions(branch string, keep int) error
+}
+
 // NewServer creates a new MCP server with all knomit tools registered.
-func NewServer(gs GitStore, idx SearchIndex, reviewer Reviewer, profile, ontologyRoot string, ontology *fact.Ontology) *server.MCPServer {
+func NewServer(gs GitStore, idx SearchIndex, exploreIdx ExploreIndex, reviewer Reviewer, profile, ontologyRoot string, ontology *fact.Ontology) *server.MCPServer {
 	s := server.NewMCPServer("knomit", "1.0.0",
 		server.WithInstructions(ProfileInstructions(profile, ontologyRoot, ontology)),
 	)
@@ -67,7 +84,7 @@ func NewServer(gs GitStore, idx SearchIndex, reviewer Reviewer, profile, ontolog
 	s.AddTool(queryTool(), QueryHandler(gs, idx))
 	s.AddTool(whyTool(), WhyHandler(gs, ontologyRoot))
 	s.AddTool(updateTool(), UpdateHandler(gs, ontologyRoot))
-	s.AddTool(exploreTool(ontologyRoot), ExploreHandler(gs, ontologyRoot))
+	s.AddTool(exploreTool(ontologyRoot), ExploreHandler(gs, exploreIdx, ontologyRoot))
 	s.AddTool(retractTool(), RetractHandler(gs, ontologyRoot))
 
 	if reviewer != nil {
