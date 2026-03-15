@@ -163,102 +163,75 @@ export function RightPanel({ state, dispatch }: Props) {
   const [stats, setStats] = useState<Stats | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [commitDetail, setCommitDetail] = useState<CommitDetail | null>(null);
-  const [commitFact, setCommitFact] = useState<Fact | null>(null);
   const [commitSelectedFile, setCommitSelectedFile] = useState<string | null>(null);
 
   useEffect(() => {
     setError(null);
-    if (state.rightMode === 'fact' && state.selectedFact) {
+    if (state.historyCommit) {
+      // Time-travel: fetch commit detail and auto-load single file
+      api.commitDetail(state.historyCommit).then(detail => {
+        setCommitDetail(detail);
+        const viewableFiles = detail.files.filter(f => f.action !== 'deleted');
+        if (viewableFiles.length === 1) {
+          setCommitSelectedFile(viewableFiles[0].path);
+          api.fact(viewableFiles[0].path, state.historyCommit!).then(setFact).catch(e => setError(String(e)));
+        } else {
+          setFact(null);
+          setCommitSelectedFile(null);
+        }
+      }).catch(() => setCommitDetail(null));
+    } else if (state.rightMode === 'fact' && state.selectedFact) {
       api.fact(state.selectedFact).then(setFact).catch(e => setError(String(e)));
     } else if (state.rightMode === 'history' && state.selectedFact) {
       api.history(state.selectedFact).then(r => setHistory(r.entries || [])).catch(e => setError(String(e)));
     } else if (state.rightMode === 'summary') {
       api.stats(state.previewPath ?? state.currentPath).then(setStats).catch(() => setStats(null));
     }
-  }, [state.rightMode, state.selectedFact, state.currentPath, state.previewPath, state.headCommit]);
-
-  useEffect(() => {
-    if (!state.historyCommit) {
-      setCommitDetail(null);
-      setCommitFact(null);
-      setCommitSelectedFile(null);
-      return;
-    }
-    api.commitDetail(state.historyCommit).then(detail => {
-      setCommitDetail(detail);
-      // If single non-deleted file, auto-load it
-      const viewableFiles = detail.files.filter(f => f.action !== 'deleted');
-      if (viewableFiles.length === 1) {
-        const file = viewableFiles[0];
-        setCommitSelectedFile(file.path);
-        api.fact(file.path, state.historyCommit!).then(setCommitFact).catch(() => setCommitFact(null));
-      }
-    }).catch(() => setCommitDetail(null));
-  }, [state.historyCommit]);
+  }, [state.rightMode, state.selectedFact, state.currentPath, state.previewPath, state.headCommit, state.historyCommit]);
 
   const search = (q: string) => dispatch({ type: 'SEARCH', query: q });
 
   if (error) return <div style={{ padding: 24, color: '#f44' }}>{error}</div>;
 
-  // Time-travel view takes priority when a commit is selected
+  // Time-travel: single file auto-loaded → show fact normally
+  if (state.historyCommit && fact) {
+    return renderFact(fact, search);
+  }
+
+  // Time-travel: multiple files → show file list in the right panel
   if (state.historyCommit && commitDetail) {
-    const banner = (
-      <div style={{ background: '#1a1a2a', padding: '8px 16px', display: 'flex', alignItems: 'center', gap: 8, borderBottom: '1px solid #333', flexShrink: 0 }}>
-        <span style={{ color: '#7c9', fontFamily: 'monospace', fontSize: 12 }}>{commitDetail.commit}</span>
-        <span style={{ color: '#666', fontSize: 11 }}>{relativeTime(commitDetail.date)}</span>
-        {commitDetail.tags.map(tag => {
-          const tc = tagColor(tag);
-          return <span key={tag} style={{ color: tc.color, background: tc.bg, padding: '1px 6px', borderRadius: 3, fontSize: 10, fontFamily: 'monospace' }}>{tag}</span>;
-        })}
-        <div style={{ flex: 1 }} />
-        <span onClick={() => dispatch({ type: 'SELECT_COMMIT', commit: '' })}
-          style={{ color: '#555', fontSize: 11, cursor: 'pointer', padding: '2px 8px', border: '1px solid #333', borderRadius: 3 }}
-          onMouseEnter={e => (e.currentTarget.style.color = '#aaa')}
-          onMouseLeave={e => (e.currentTarget.style.color = '#555')}
-        >✕ close</span>
-      </div>
-    );
-
-    // If we have a fact loaded, show it with banner
-    if (commitFact) {
-      return (
-        <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-          {banner}
-          <div style={{ flex: 1, overflowY: 'auto' }}>
-            {renderFact(commitFact, search)}
-          </div>
-        </div>
-      );
-    }
-
-    // Multiple files or no auto-loaded fact — show file list
     return (
-      <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-        {banner}
-        <div style={{ padding: 16, overflowY: 'auto', flex: 1 }}>
-          <div style={{ color: '#888', fontSize: 12, marginBottom: 12 }}>{commitDetail.message}</div>
-          {commitDetail.files.map(f => (
-            <div key={f.path}
-              onClick={() => {
-                if (f.action === 'deleted') return;
-                setCommitSelectedFile(f.path);
-                api.fact(f.path, state.historyCommit!).then(setCommitFact).catch(() => setCommitFact(null));
-              }}
-              style={{
-                padding: '8px 12px', cursor: f.action === 'deleted' ? 'default' : 'pointer',
-                background: commitSelectedFile === f.path ? '#2a2a3a' : 'transparent',
-                borderBottom: '1px solid #222', display: 'flex', alignItems: 'center', gap: 8,
-                opacity: f.action === 'deleted' ? 0.5 : 1,
-              }}>
-              <span style={{
-                fontSize: 9, padding: '1px 4px', borderRadius: 2, fontFamily: 'monospace',
-                color: f.action === 'added' ? '#7c9' : f.action === 'modified' ? '#8af' : '#f88',
-                background: f.action === 'added' ? '#1a2e1a' : f.action === 'modified' ? '#1a1a2e' : '#2e1a1a',
-              }}>{f.action[0].toUpperCase()}</span>
-              <span style={{ fontSize: 12, color: '#ddd', fontFamily: 'monospace' }}>{f.path.replace(/\.md$/, '')}</span>
-            </div>
-          ))}
+      <div style={{ padding: '24px 28px', overflowY: 'auto', height: '100%', boxSizing: 'border-box' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16 }}>
+          <span style={{ color: '#7c9', fontFamily: 'monospace', fontSize: 12 }}>{commitDetail.commit.slice(0, 7)}</span>
+          <span style={{ color: '#666', fontSize: 11 }}>{relativeTime(commitDetail.date)}</span>
+          {commitDetail.tags.map(tag => {
+            const tc = tagColor(tag);
+            return <span key={tag} style={{ color: tc.color, background: tc.bg, padding: '1px 6px', borderRadius: 3, fontSize: 10, fontFamily: 'monospace' }}>{tag}</span>;
+          })}
         </div>
+        <div style={{ color: '#888', fontSize: 12, marginBottom: 12 }}>{commitDetail.message}</div>
+        {commitDetail.files.map(f => (
+          <div key={f.path}
+            onClick={() => {
+              if (f.action === 'deleted') return;
+              setCommitSelectedFile(f.path);
+              api.fact(f.path, state.historyCommit!).then(setFact).catch(() => setFact(null));
+            }}
+            style={{
+              padding: '8px 12px', cursor: f.action === 'deleted' ? 'default' : 'pointer',
+              background: commitSelectedFile === f.path ? '#2a2a3a' : 'transparent',
+              borderBottom: '1px solid #222', display: 'flex', alignItems: 'center', gap: 8,
+              opacity: f.action === 'deleted' ? 0.5 : 1,
+            }}>
+            <span style={{
+              fontSize: 9, padding: '1px 4px', borderRadius: 2, fontFamily: 'monospace',
+              color: f.action === 'added' ? '#7c9' : f.action === 'modified' ? '#8af' : '#f88',
+              background: f.action === 'added' ? '#1a2e1a' : f.action === 'modified' ? '#1a1a2e' : '#2e1a1a',
+            }}>{f.action[0].toUpperCase()}</span>
+            <span style={{ fontSize: 12, color: '#ddd', fontFamily: 'monospace' }}>{f.path.replace(/\.md$/, '')}</span>
+          </div>
+        ))}
       </div>
     );
   }
