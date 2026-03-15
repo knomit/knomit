@@ -742,8 +742,8 @@ func TestCommitDetail(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if detail.Commit != commitHash[:8] {
-		t.Errorf("expected commit %s, got %s", commitHash[:8], detail.Commit)
+	if detail.Commit != commitHash {
+		t.Errorf("expected commit %s, got %s", commitHash, detail.Commit)
 	}
 	if len(detail.Tags) == 0 || detail.Tags[0] != "learn/test" {
 		t.Errorf("expected tag learn/test, got %v", detail.Tags)

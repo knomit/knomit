@@ -289,10 +289,6 @@ func (s *Store) LogPaginated(path string, limit int, after string) ([]LogEntryWi
 		}
 
 		hash := c.Hash.String()
-		shortHash := hash
-		if len(shortHash) > 8 {
-			shortHash = shortHash[:8]
-		}
 		firstLine := c.Message
 		if idx := strings.IndexByte(firstLine, '\n'); idx >= 0 {
 			firstLine = firstLine[:idx]
@@ -304,7 +300,7 @@ func (s *Store) LogPaginated(path string, limit int, after string) ([]LogEntryWi
 		}
 
 		entries = append(entries, LogEntryWithTags{
-			Commit:  shortHash,
+			Commit:  hash,
 			Date:    c.Committer.When.UTC().Format(time.RFC3339),
 			Message: firstLine,
 			Tags:    tags,
@@ -384,11 +380,6 @@ func (s *Store) CommitDetail(commitHash string) (*CommitDetailResult, error) {
 		}
 	}
 
-	shortHash := hash.String()
-	if len(shortHash) > 8 {
-		shortHash = shortHash[:8]
-	}
-
 	firstLine := commit.Message
 	if idx := strings.IndexByte(firstLine, '\n'); idx >= 0 {
 		firstLine = firstLine[:idx]
@@ -401,7 +392,7 @@ func (s *Store) CommitDetail(commitHash string) (*CommitDetailResult, error) {
 	}
 
 	return &CommitDetailResult{
-		Commit:  shortHash,
+		Commit:  hash.String(),
 		Date:    commit.Committer.When.UTC().Format(time.RFC3339),
 		Message: firstLine,
 		Tags:    tags,
