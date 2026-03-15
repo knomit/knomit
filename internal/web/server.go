@@ -48,54 +48,60 @@ type SynthDeps struct {
 //
 // Route layout:
 //
-//	GET  /api/v1/browse      — directory listing
-//	GET  /api/v1/fact        — single fact content
-//	GET  /api/v1/search      — vector similarity search
-//	GET  /api/v1/history     — git log
-//	GET  /api/v1/stats       — aggregate statistics
-//	GET  /api/v1/status      — head commit, branch, index state
-//	POST /api/v1/synthesize  — start async synthesis task
-//	POST /api/v1/sync        — start async git sync task
-//	GET  /api/v1/events      — SSE event stream
-//	GET  /api/v1/openapi.yaml — OpenAPI spec
-//	GET  /docs               — Swagger UI
-//	/mcp                     — MCP protocol endpoints (per-profile)
-//	/git                     — Smart HTTP git remote
-//	/*                       — Embedded SPA with client-side routing fallback
-func NewRouter(gs GitStore, idx SearchIndex, hub *TaskHub, synthDeps *SynthDeps, mcpHandlers map[string]http.Handler, gitHandler http.Handler, embeddingsEnabled bool, ontologyRoot string) http.Handler {
+//	GET  /api/v1/{repo}/browse      — directory listing
+//	GET  /api/v1/{repo}/fact        — single fact content
+//	GET  /api/v1/{repo}/search      — vector similarity search
+//	GET  /api/v1/{repo}/history     — git log
+//	GET  /api/v1/{repo}/stats       — aggregate statistics
+//	GET  /api/v1/{repo}/status      — head commit, branch, index state
+//	POST /api/v1/{repo}/synthesize  — start async synthesis task
+//	POST /api/v1/{repo}/sync        — start async git sync task
+//	GET  /api/v1/{repo}/events      — SSE event stream
+//	GET  /api/v1/openapi.yaml       — OpenAPI spec
+//	GET  /docs                      — Swagger UI
+//	/api/v1/{repo}/mcp              — MCP protocol endpoints (per-profile)
+//	/git                            — Smart HTTP git remote
+//	/*                              — Embedded SPA with client-side routing fallback
+func NewRouter(rm *RepoManager, synthDeps *SynthDeps, mcpHandlers map[string]http.Handler, gitHandler http.Handler, embeddingsEnabled bool, ontologyRoot string) http.Handler {
 	r := chi.NewRouter()
 	r.Use(middleware.Recoverer)
-
-	if len(mcpHandlers) > 0 {
-		r.Mount("/mcp", http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-			profile := req.URL.Query().Get("profile")
-			if profile == "" {
-				profile = "code"
-			}
-			handler, ok := mcpHandlers[profile]
-			if !ok {
-				handler = mcpHandlers["code"]
-			}
-			handler.ServeHTTP(w, req)
-		}))
-	}
 
 	if gitHandler != nil {
 		r.Mount("/git", gitHandler)
 	}
 
-	r.Get("/api/v1/browse", handleBrowse(gs, ontologyRoot))
-	r.Get("/api/v1/fact", handleFact(gs))
-	r.Get("/api/v1/search", handleSearch(idx))
-	r.Get("/api/v1/history", handleHistoryPaginated(gs))
-	r.Get("/api/v1/commit", handleCommitDetail(gs))
-	r.Get("/api/v1/stats", handleStats(gs))
-	r.Get("/api/v1/status", handleStatus(gs, idx, embeddingsEnabled, ontologyRoot))
-	r.Post("/api/v1/synthesize", handleSynthesizeStart(synthDeps, hub))
-	r.Post("/api/v1/sync", handleSync(gs, hub))
-	r.Get("/api/v1/events", handleEvents(gs, hub))
 	r.Get("/api/v1/openapi.yaml", handleOpenAPISpec())
 	r.Get("/docs", handleSwaggerUI())
+
+	r.Route("/api/v1/{repo}", func(sub chi.Router) {
+		sub.Use(repoMiddleware(rm))
+		sub.Get("/browse", handleBrowse(ontologyRoot))
+		sub.Get("/fact", handleFact())
+		sub.Get("/search", handleSearch())
+		sub.Get("/history", handleHistoryPaginated())
+		sub.Get("/commit", handleCommitDetail())
+		sub.Get("/stats", handleStats())
+		sub.Get("/status", handleStatus(embeddingsEnabled, ontologyRoot))
+		sub.Post("/synthesize", handleSynthesizeStart(synthDeps))
+		sub.Post("/sync", handleSync())
+		sub.Get("/events", handleEvents())
+		sub.Get("/origin", handleGetOrigin())
+		sub.Put("/origin", handleSetOrigin())
+
+		if len(mcpHandlers) > 0 {
+			sub.Mount("/mcp", http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+				profile := req.URL.Query().Get("profile")
+				if profile == "" {
+					profile = "code"
+				}
+				handler, ok := mcpHandlers[profile]
+				if !ok {
+					handler = mcpHandlers["code"]
+				}
+				handler.ServeHTTP(w, req)
+			}))
+		}
+	})
 
 	// Serve embedded web UI
 	staticHandler := StaticHandler()

@@ -31,8 +31,11 @@ func TestBranch(t *testing.T) {
 func TestDefaultConfig(t *testing.T) {
 	cfg := git.DefaultConfig()
 
-	if cfg.Remote {
-		t.Fatal("DefaultConfig().Remote should be false")
+	if cfg.Serve {
+		t.Fatal("DefaultConfig().Serve should be false")
+	}
+	if cfg.Origin != "" {
+		t.Fatalf("DefaultConfig().Origin should be empty, got %q", cfg.Origin)
 	}
 	if cfg.Port != "" {
 		t.Fatalf("DefaultConfig().Port should be empty, got %q", cfg.Port)

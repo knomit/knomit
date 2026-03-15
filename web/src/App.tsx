@@ -17,7 +17,7 @@ export default function App() {
 
   // SSE for task and status events
   useEffect(() => {
-    const es = new EventSource('/api/v1/events');
+    const es = new EventSource('/api/v1/knomit/events');
     es.addEventListener('task', (e) => {
       const ev = JSON.parse(e.data);
       dispatch({ type: 'SET_TASK', op: ev.op, status: ev.status, message: ev.message || '' });

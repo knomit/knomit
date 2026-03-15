@@ -73,21 +73,36 @@ func serveCmd() *cobra.Command {
 			var ontology *fact.Ontology
 			gs, err := git.OpenWithStorer(svc.GitStorer())
 			if err != nil {
-				// First run: init with default ontology.
-				ontology = fact.DefaultOntology()
-				ontologyYAML, serErr := ontology.Serialize()
-				if serErr != nil {
-					return fmt.Errorf("serialize ontology: %w", serErr)
+				// First run — check if origin is configured
+				if cfg.Git.Origin != "" {
+					// Resolve auth
+					auth, authErr := git.ResolveAuth(cfg.Remote)
+					if authErr != nil {
+						return fmt.Errorf("resolve auth: %w", authErr)
+					}
+					gs, err = git.InitFromRemote(svc.GitStorer(), cfg.Git.Origin, auth)
+					if err != nil {
+						return fmt.Errorf("init from remote: %w", err)
+					}
+				} else {
+					// No origin — local init
+					ontology = fact.DefaultOntology()
+					ontologyYAML, serErr := ontology.Serialize()
+					if serErr != nil {
+						return fmt.Errorf("serialize ontology: %w", serErr)
+					}
+					initFiles := map[string]string{
+						"domains/ontology.yaml": string(ontologyYAML),
+					}
+					gs, err = git.InitWithStorer(svc.GitStorer(), initFiles)
+					if err != nil {
+						return fmt.Errorf("init git: %w", err)
+					}
 				}
-				initFiles := map[string]string{
-					"domains/ontology.yaml": string(ontologyYAML),
-				}
-				gs, err = git.InitWithStorer(svc.GitStorer(), initFiles)
-				if err != nil {
-					return fmt.Errorf("init git: %w", err)
-				}
-			} else {
-				// Existing repo: load ontology from git.
+			}
+
+			// Load ontology from git if it wasn't set during init.
+			if ontology == nil {
 				ontologyYAML, readErr := gs.ReadFile("domains/ontology.yaml")
 				if readErr != nil {
 					log.Warn().Msg("domains/ontology.yaml not found, using default ontology")
@@ -97,6 +112,15 @@ func serveCmd() *cobra.Command {
 					if err != nil {
 						return fmt.Errorf("parse ontology: %w", err)
 					}
+				}
+			}
+
+			// Seed remotes table on first startup if origin is set.
+			if cfg.Git.Origin != "" {
+				interval := 300
+				pushInterval := 300
+				if err := svc.SetRemote("origin", cfg.Git.Origin, "main", interval, pushInterval); err != nil {
+					log.Warn().Err(err).Msg("failed to seed origin in remotes table")
 				}
 			}
 
@@ -143,6 +167,14 @@ func serveCmd() *cobra.Command {
 			var syncWg sync.WaitGroup
 			remote, _ := svc.GetRemote("origin")
 			if remote != nil {
+				// Resolve and set auth
+				auth, authErr := git.ResolveAuth(cfg.Remote)
+				if authErr != nil {
+					log.Warn().Err(authErr).Msg("remote: auth resolution failed")
+				} else {
+					gs.SetAuth(auth)
+				}
+
 				if err := gs.ConfigureRemote(remote.URL, remote.Branch); err != nil {
 					log.Warn().Err(err).Msg("remote: configure failed")
 				} else {
@@ -187,7 +219,7 @@ func serveCmd() *cobra.Command {
 
 			// 7. Wire git remote if enabled
 			var gitHandler http.Handler
-			if cfg.Git.Remote {
+			if cfg.Git.Serve {
 				gitHandler = web.GitRemoteHandler(gs, cfg.LLM.APIKey)
 			}
 
@@ -205,8 +237,20 @@ func serveCmd() *cobra.Command {
 				log.Warn().Msg("synthesis disabled (no LLM adapter)")
 			}
 
+			// 9. Create RepoManager
+			rm := web.NewRepoManager()
+			rm.Set("knomit", &web.RepoInstance{
+				Name:       "knomit",
+				GS:         gs,
+				Svc:        svc,
+				Idx:        idx,
+				Hub:        hub,
+				SyncCancel: syncCancel,
+				SyncWg:     &syncWg,
+			})
+
 			// 10. Create chi router
-			router := web.NewRouter(gs, idx, hub, synthDeps, mcpServers, gitHandler, embeddingsEnabled, cfg.OntologyRoot)
+			router := web.NewRouter(rm, synthDeps, mcpServers, gitHandler, embeddingsEnabled, cfg.OntologyRoot)
 
 			// 11. Graceful shutdown
 			srv := &http.Server{

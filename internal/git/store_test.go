@@ -1,6 +1,7 @@
 package git_test
 
 import (
+	"database/sql"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -13,6 +14,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/transport/server"
 
 	git "knomit/internal/git"
+	storegit "knomit/internal/store/git"
 )
 
 func TestInitAndReadFile(t *testing.T) {
@@ -1023,6 +1025,161 @@ func TestWalkChangedFilesDedup(t *testing.T) {
 	}
 	if count != 1 {
 		t.Fatalf("expected kb/dup.md exactly once, got %d times in %v", count, files)
+	}
+}
+
+// newTestStorer creates a fresh SQLite-backed storer for testing.
+func newTestStorer(t *testing.T) *storegit.Storer {
+	t.Helper()
+	db, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	schema := `
+CREATE TABLE IF NOT EXISTS objects (hash TEXT NOT NULL, type INTEGER NOT NULL, size INTEGER NOT NULL, data BLOB NOT NULL, PRIMARY KEY (hash, type));
+CREATE TABLE IF NOT EXISTS refs (name TEXT PRIMARY KEY, target TEXT NOT NULL, is_symbolic INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value BLOB NOT NULL);
+`
+	if _, err := db.Exec(schema); err != nil {
+		t.Fatal(err)
+	}
+	return storegit.NewStorer(db)
+}
+
+func TestInitFromRemote_WithContent(t *testing.T) {
+	// Set up an origin store with content.
+	originDir := t.TempDir()
+	origin, err := git.Init(filepath.Join(originDir, "origin.db"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer origin.Close()
+
+	if _, _, err := origin.WriteFile("kb/shared.md", "# Shared\n", "origin: add shared"); err != nil {
+		t.Fatal(err)
+	}
+	// Advance main to HEAD.
+	head, err := origin.HeadCommit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	mainRef := plumbing.NewHashReference(
+		plumbing.NewBranchReferenceName("main"),
+		plumbing.NewHash(head),
+	)
+	if err := origin.Storer().SetReference(mainRef); err != nil {
+		t.Fatal(err)
+	}
+
+	// Register in-process transport.
+	loader := server.MapLoader{"inmem:///origin-ifr": origin.Storer()}
+	client.InstallProtocol("inmem", server.NewClient(loader))
+	t.Cleanup(func() { client.InstallProtocol("inmem", nil) })
+
+	// InitFromRemote into a fresh storer.
+	s := newTestStorer(t)
+	store, err := git.InitFromRemote(s, "inmem:///origin-ifr", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Agent branch should be created from origin/main.
+	if !strings.HasPrefix(store.Branch(), "agent/") {
+		t.Fatalf("expected agent branch, got %q", store.Branch())
+	}
+
+	// The shared file should be readable.
+	content, err := store.ReadFile("kb/shared.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if content != "# Shared\n" {
+		t.Fatalf("unexpected content: %q", content)
+	}
+}
+
+func TestInitFromRemote_ExistingAgentBranch(t *testing.T) {
+	// Set up an origin store with an agent branch.
+	originDir := t.TempDir()
+	origin, err := git.Init(filepath.Join(originDir, "origin.db"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer origin.Close()
+
+	// Write something on the agent branch (which is the default).
+	if _, _, err := origin.WriteFile("kb/agent-file.md", "# Agent File\n", "origin: agent file"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Also advance main to current HEAD so origin/main exists.
+	head, err := origin.HeadCommit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	mainRef := plumbing.NewHashReference(
+		plumbing.NewBranchReferenceName("main"),
+		plumbing.NewHash(head),
+	)
+	if err := origin.Storer().SetReference(mainRef); err != nil {
+		t.Fatal(err)
+	}
+
+	// Register in-process transport.
+	loader := server.MapLoader{"inmem:///origin-ifr2": origin.Storer()}
+	client.InstallProtocol("inmem", server.NewClient(loader))
+	t.Cleanup(func() { client.InstallProtocol("inmem", nil) })
+
+	// InitFromRemote — should find the existing agent branch.
+	s := newTestStorer(t)
+	store, err := git.InitFromRemote(s, "inmem:///origin-ifr2", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Agent branch should match origin's agent branch.
+	if !strings.HasPrefix(store.Branch(), "agent/") {
+		t.Fatalf("expected agent branch, got %q", store.Branch())
+	}
+
+	// The agent file should be readable (came from the agent branch, not just main).
+	content, err := store.ReadFile("kb/agent-file.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if content != "# Agent File\n" {
+		t.Fatalf("unexpected content: %q", content)
+	}
+}
+
+func TestInitFromRemote_EmptyRemote(t *testing.T) {
+	// Create a bare storer with no commits to act as an empty remote.
+	emptyStorer := newTestStorer(t)
+
+	// Register in-process transport.
+	loader := server.MapLoader{"inmem:///empty-origin": emptyStorer}
+	client.InstallProtocol("inmem", server.NewClient(loader))
+	t.Cleanup(func() { client.InstallProtocol("inmem", nil) })
+
+	// InitFromRemote with empty remote — should fall back to InitWithStorer.
+	s := newTestStorer(t)
+	store, err := git.InitFromRemote(s, "inmem:///empty-origin", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Should have a valid agent branch and the default kb.md.
+	if !strings.HasPrefix(store.Branch(), "agent/") {
+		t.Fatalf("expected agent branch, got %q", store.Branch())
+	}
+
+	exists, err := store.FileExists("kb.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !exists {
+		t.Fatal("expected kb.md to exist after fallback to InitWithStorer")
 	}
 }
 

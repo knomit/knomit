@@ -42,6 +42,7 @@ func (s *Store) Sync(remoteBranch string) (SyncResult, error) {
 	log.Debug().Msg("git sync: fetching from origin")
 	err = s.repo.Fetch(&gogit.FetchOptions{
 		RemoteName: "origin",
+		Auth:       s.auth,
 	})
 	if err != nil && err != gogit.NoErrAlreadyUpToDate {
 		s.mu.Unlock()
@@ -320,6 +321,7 @@ func (s *Store) Push() (PushResult, error) {
 	err = s.repo.Push(&gogit.PushOptions{
 		RemoteName: "origin",
 		RefSpecs:   []gogitconfig.RefSpec{gogitconfig.RefSpec(refspec)},
+		Auth:       s.auth,
 	})
 	if err == gogit.NoErrAlreadyUpToDate {
 		log.Debug().Msg("git push: already up to date")

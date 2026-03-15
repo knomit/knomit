@@ -22,17 +22,19 @@ func writeTaskConflict(w http.ResponseWriter, op string, err error) {
 	writeJSON(w, http.StatusConflict, map[string]any{"op": op, "status": "error", "message": err.Error()})
 }
 
-// handleSynthesizeStart handles POST /api/v1/synthesize.
+// handleSynthesizeStart handles POST /api/v1/{repo}/synthesize.
 // The recipe is validated synchronously so that a malformed recipe
 // produces a 400 immediately rather than an async error. If the recipe
 // is valid, execution proceeds in the background via TaskHub.
-func handleSynthesizeStart(deps *SynthDeps, hub *TaskHub) http.HandlerFunc {
+func handleSynthesizeStart(deps *SynthDeps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if deps == nil || deps.Adapter == nil {
 			log.Warn().Msg("synthesize: not available (no LLM configured)")
 			writeError(w, http.StatusServiceUnavailable, "synthesis not available")
 			return
 		}
+
+		ri := RepoFromContext(r.Context())
 
 		r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 		body, err := io.ReadAll(r.Body)
@@ -59,7 +61,7 @@ func handleSynthesizeStart(deps *SynthDeps, hub *TaskHub) http.HandlerFunc {
 			emb = deps.Embedder
 		}
 
-		id, err := hub.Start("synth", func(ctx context.Context, emit func(TaskEvent)) {
+		id, err := ri.Hub.Start("synth", func(ctx context.Context, emit func(TaskEvent)) {
 			emit(TaskEvent{Status: "running", Phase: "start", Message: "synthesis starting"})
 			onProgress := func(ev synthesize.ProgressEvent) {
 				emit(TaskEvent{Status: "running", Phase: ev.Phase, Message: ev.Message})
@@ -90,9 +92,9 @@ steps:
     prompt: Find patterns across facts and create higher-level summaries.
 `
 
-// handleSync handles POST /api/v1/sync
+// handleSync handles POST /api/v1/{repo}/sync
 // TODO: re-wire to trigger the background sync goroutine instead of calling gs.Sync directly.
-func handleSync(gs GitStore, hub *TaskHub) http.HandlerFunc {
+func handleSync() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "sync moved to background goroutine")
 	}

@@ -1,4 +1,4 @@
-const BASE = '/api/v1';
+const BASE = '/api/v1/knomit';
 
 export interface DirChild { name: string; is_dir: boolean }
 export interface BrowseResponse { path: string; children: DirChild[] }
@@ -11,6 +11,26 @@ export interface CommitFile { path: string; action: string }
 export interface CommitDetail { commit: string; date: string; message: string; tags: string[]; files: CommitFile[] }
 export interface Stats { total: number; domains: Record<string, number>; entities: Record<string, number>; avg_confidence: number }
 export interface Status { head: string; branch: string; index_commit: string; embeddings_enabled: boolean; ontology_root: string }
+
+export interface OriginResponse {
+  name: string;
+  url: string;
+  branch: string;
+  interval: number;
+  last_sync_at: string | null;
+  last_status: string | null;
+  last_error: string | null;
+  push_interval: number;
+  last_push_at: string | null;
+  last_push_status: string | null;
+  last_push_error: string | null;
+}
+
+export interface OriginSetResponse {
+  status: string;
+  branch: string;
+  head: string;
+}
 
 // parseSearchQuery splits a query string into structured components.
 // Tokens of the form domain:X or entity:X are extracted as filters;
@@ -66,4 +86,12 @@ export const api = {
     fetch(`${BASE}/sync`, { method: 'POST' }).then(r => r.json()),
   synthesize: (recipe = ''): Promise<{ op: string; id?: string; status: string; message?: string }> =>
     fetch(`${BASE}/synthesize`, { method: 'POST', body: recipe }).then(r => r.json()),
+  getOrigin: (): Promise<OriginResponse | null> =>
+    fetch(`${BASE}/origin`).then(r => r.status === 204 ? null : r.json()),
+  setOrigin: (opts: { url: string; auth_method?: string; token?: string; user?: string; password?: string }): Promise<OriginSetResponse> =>
+    fetch(`${BASE}/origin`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(opts),
+    }).then(r => { if (!r.ok) throw new Error(r.statusText); return r.json(); }),
 };
