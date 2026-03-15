@@ -7,23 +7,6 @@ import { RightPanel } from './RightPanel';
 import { Console } from './Console';
 import './App.css';
 
-function IconBtn({ title, onClick, disabled, children }: { title: string; onClick: () => void; disabled?: boolean; children: React.ReactNode }) {
-  return (
-    <button
-      title={title}
-      onClick={onClick}
-      disabled={disabled}
-      style={{ background: 'transparent', border: 'none', outline: 'none', cursor: disabled ? 'default' : 'pointer', padding: '2px 8px', borderRadius: 3, fontSize: 22, display: 'flex', alignItems: 'center', color: disabled ? '#444' : '#888', transition: 'color 0.15s, background 0.15s' }}
-      onMouseEnter={e => { if (!disabled) e.currentTarget.style.color = '#7c9'; }}
-      onMouseLeave={e => { if (!disabled) { e.currentTarget.style.color = '#888'; e.currentTarget.style.background = 'transparent'; } }}
-      onMouseDown={e => { if (!disabled) e.currentTarget.style.background = 'rgba(119,204,153,0.1)'; }}
-      onMouseUp={e => { if (!disabled) e.currentTarget.style.background = 'transparent'; }}
-    >
-      {children}
-    </button>
-  );
-}
-
 export default function App() {
   const [state, dispatch] = useReducer(reducer, init);
 
@@ -52,28 +35,6 @@ export default function App() {
     });
     return () => es.close();
   }, []);
-
-  const handleSync = async () => {
-    try {
-      const result = await api.sync();
-      if (result.status === 'error') {
-        dispatch({ type: 'CONSOLE_LOG', level: 'error', message: `Sync failed: ${result.message || 'unknown error'}` });
-      }
-    } catch (e) {
-      dispatch({ type: 'CONSOLE_LOG', level: 'error', message: `Sync failed: ${e}` });
-    }
-  };
-
-  const handleSynthesize = async () => {
-    try {
-      const result = await api.synthesize();
-      if (result.status === 'error') {
-        dispatch({ type: 'CONSOLE_LOG', level: 'error', message: `Synthesis failed: ${result.message || 'unknown error'}` });
-      }
-    } catch (e) {
-      dispatch({ type: 'CONSOLE_LOG', level: 'error', message: `Synthesis failed: ${e}` });
-    }
-  };
 
   // Build breadcrumb segments from currentPath
   const pathParts = state.currentPath.split('/').filter(Boolean);
@@ -113,14 +74,6 @@ export default function App() {
             </span>
           ))}
         </div>
-        {/* Path-scoped action */}
-        <IconBtn title="Synthesize" onClick={handleSynthesize} disabled={state.tasks.synth.status === 'running'}>
-          <span className={state.tasks.synth.status === 'running' ? 'icon-spin' : ''}>⚗</span>
-        </IconBtn>
-        <div style={{ width: 1, height: 16, background: '#333', flexShrink: 0 }} />
-        <IconBtn title="Sync" onClick={handleSync} disabled={state.tasks.sync.status === 'running'}>
-          <span className={state.tasks.sync.status === 'running' ? 'icon-spin' : ''}>⟳</span>
-        </IconBtn>
       </div>
 
       <div style={{ display: 'flex', flex: 1, overflow: 'hidden', minHeight: 0 }}>
