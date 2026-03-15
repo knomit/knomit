@@ -61,6 +61,18 @@ func serveCmd() *cobra.Command {
 				Str("llm_model", cfg.LLM.Model).
 				Msg("config loaded")
 
+			// 0. Ensure SSH keypair exists.
+			keyPath := cfg.Remote.SSHKey
+			if keyPath == "" {
+				home, _ := os.UserHomeDir()
+				keyPath = filepath.Join(home, ".knomit", "id_ed25519")
+			}
+			signer, keyFingerprint, err := git.EnsureKeyPair(keyPath)
+			if err != nil {
+				return fmt.Errorf("ensure keypair: %w", err)
+			}
+			agentBranch := git.AgentBranch(keyFingerprint)
+
 			// 1. Open unified store (single SQLite database)
 			dbPath := filepath.Join(cfg.RepoPath, "knomit.db")
 			svc, err := store.Open(dbPath)
@@ -76,11 +88,11 @@ func serveCmd() *cobra.Command {
 				// First run — check if origin is configured
 				if cfg.Git.Origin != "" {
 					// Resolve auth
-					auth, authErr := git.ResolveAuth(cfg.Remote, "")
+					auth, authErr := git.ResolveAuth(cfg.Remote, keyPath)
 					if authErr != nil {
 						return fmt.Errorf("resolve auth: %w", authErr)
 					}
-					gs, err = git.InitFromRemote(svc.GitStorer(), cfg.Git.Origin, auth, "")
+					gs, err = git.InitFromRemote(svc.GitStorer(), cfg.Git.Origin, auth, agentBranch)
 					if err != nil {
 						return fmt.Errorf("init from remote: %w", err)
 					}
@@ -94,7 +106,7 @@ func serveCmd() *cobra.Command {
 					initFiles := map[string]string{
 						"domains/ontology.yaml": string(ontologyYAML),
 					}
-					gs, err = git.InitWithStorer(svc.GitStorer(), initFiles, "")
+					gs, err = git.InitWithStorer(svc.GitStorer(), initFiles, agentBranch)
 					if err != nil {
 						return fmt.Errorf("init git: %w", err)
 					}
@@ -114,6 +126,8 @@ func serveCmd() *cobra.Command {
 					}
 				}
 			}
+
+			gs.SetSigner(signer)
 
 			// Seed remotes table on first startup if origin is set.
 			if cfg.Git.Origin != "" {
@@ -168,7 +182,7 @@ func serveCmd() *cobra.Command {
 			remote, _ := svc.GetRemote("origin")
 			if remote != nil {
 				// Resolve and set auth
-				auth, authErr := git.ResolveAuth(cfg.Remote, "")
+				auth, authErr := git.ResolveAuth(cfg.Remote, keyPath)
 				if authErr != nil {
 					log.Warn().Err(authErr).Msg("remote: auth resolution failed")
 				} else {
@@ -297,6 +311,18 @@ func initCmd() *cobra.Command {
 				return err
 			}
 
+			// Ensure SSH keypair exists.
+			keyPath := cfg.Remote.SSHKey
+			if keyPath == "" {
+				home, _ := os.UserHomeDir()
+				keyPath = filepath.Join(home, ".knomit", "id_ed25519")
+			}
+			_, keyFingerprint, err := git.EnsureKeyPair(keyPath)
+			if err != nil {
+				return fmt.Errorf("ensure keypair: %w", err)
+			}
+			agentBranch := git.AgentBranch(keyFingerprint)
+
 			// Load ontology: custom file or embedded default.
 			ontology := fact.DefaultOntology()
 			if ontologyPath != "" {
@@ -324,7 +350,7 @@ func initCmd() *cobra.Command {
 			initFiles := map[string]string{
 				"domains/ontology.yaml": string(ontologyYAML),
 			}
-			if _, err := git.InitWithStorer(svc.GitStorer(), initFiles, ""); err != nil {
+			if _, err := git.InitWithStorer(svc.GitStorer(), initFiles, agentBranch); err != nil {
 				return fmt.Errorf("init git: %w", err)
 			}
 			fmt.Printf("Initialized knomit repo at %s\n", cfg.RepoPath)
