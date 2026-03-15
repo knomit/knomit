@@ -33,6 +33,14 @@ import (
 	"sync"
 )
 
+var debug = os.Getenv("KNOMIT_MCP_DEBUG") != ""
+
+func logDebug(format string, args ...any) {
+	if debug {
+		fmt.Fprintf(os.Stderr, "[mcp-remote] "+format+"\n", args...)
+	}
+}
+
 func main() {
 	if len(os.Args) < 2 {
 		fmt.Fprintf(os.Stderr, "usage: knomit-mcp-remote <url>\n")
@@ -58,6 +66,14 @@ func main() {
 			continue
 		}
 
+		logDebug("← stdin: %s", truncate(line, 200))
+
+		// Validate it's actual JSON before sending.
+		if !json.Valid([]byte(line)) {
+			logDebug("  skipping invalid JSON")
+			continue
+		}
+
 		req, err := http.NewRequest(http.MethodPost, serverURL, bytes.NewReader([]byte(line)))
 		if err != nil {
 			writeError(os.Stdout, &mu, nil, fmt.Sprintf("create request: %v", err))
@@ -75,14 +91,18 @@ func main() {
 			continue
 		}
 
+		logDebug("  → HTTP %d, Content-Type: %s", resp.StatusCode, resp.Header.Get("Content-Type"))
+
 		// Capture session ID from initialize response.
 		if sid := resp.Header.Get("Mcp-Session-Id"); sid != "" {
 			sessionID = sid
+			logDebug("  session: %s", sid)
 		}
 
 		if resp.StatusCode == http.StatusAccepted {
 			// Notification accepted, no response body.
 			resp.Body.Close()
+			logDebug("  202 accepted (notification)")
 			continue
 		}
 
@@ -98,10 +118,11 @@ func main() {
 		case "application/json":
 			body, _ := io.ReadAll(resp.Body)
 			resp.Body.Close()
-			mu.Lock()
-			os.Stdout.Write(body)
-			os.Stdout.Write([]byte("\n"))
-			mu.Unlock()
+			if len(body) > 0 && json.Valid(body) {
+				writeLine(os.Stdout, &mu, body)
+			} else {
+				logDebug("  empty or invalid JSON response body")
+			}
 
 		case "text/event-stream":
 			handleSSE(resp.Body, os.Stdout, &mu)
@@ -120,9 +141,18 @@ func main() {
 	}
 }
 
+// writeLine writes a JSON line to stdout, ensuring exactly one newline.
+func writeLine(w io.Writer, mu *sync.Mutex, data []byte) {
+	logDebug("→ stdout: %s", truncate(string(data), 200))
+	mu.Lock()
+	w.Write(data)
+	w.Write([]byte("\n"))
+	mu.Unlock()
+}
+
 // handleSSE reads an SSE stream and writes JSON-RPC messages to stdout.
-// The MCP streamable-http spec sends SSE events with "event: message" and
-// JSON-RPC data. Notifications may arrive before the final response.
+// Per the MCP streamable-http spec, JSON-RPC messages arrive as SSE events
+// with "event: message" and a "data:" line containing the JSON-RPC payload.
 func handleSSE(r io.Reader, w io.Writer, mu *sync.Mutex) {
 	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
@@ -138,12 +168,12 @@ func handleSSE(r io.Reader, w io.Writer, mu *sync.Mutex) {
 
 		if strings.HasPrefix(line, "data:") {
 			data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
-			if eventType == "message" || eventType == "" {
-				mu.Lock()
-				fmt.Fprintln(w, data)
-				mu.Unlock()
+			// Only forward "message" events with valid JSON content.
+			if eventType == "message" && len(data) > 0 && json.Valid([]byte(data)) {
+				writeLine(w, mu, []byte(data))
+			} else if len(data) > 0 {
+				logDebug("  SSE event=%q data=%s", eventType, truncate(data, 200))
 			}
-			eventType = ""
 			continue
 		}
 
@@ -178,7 +208,12 @@ func writeError(w io.Writer, mu *sync.Mutex, id json.RawMessage, msg string) {
 		"error":   map[string]any{"code": -32603, "message": msg},
 	}
 	data, _ := json.Marshal(resp)
-	mu.Lock()
-	fmt.Fprintln(w, string(data))
-	mu.Unlock()
+	writeLine(w, mu, data)
+}
+
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "..."
 }
