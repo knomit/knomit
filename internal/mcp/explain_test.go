@@ -27,7 +27,7 @@ func TestExplainReturnsHistory(t *testing.T) {
 	}, nil)
 	gs.EXPECT().TagsContaining("deadbeef").Return([]string{"learn/first"}, nil)
 
-	handler := ExplainHandler(gs, "kb")
+	handler := ExplainHandler(gs, NewMockToolSessionIndex(ctrl), "kb")
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
 		"file": "kb/foo.md",
@@ -73,7 +73,7 @@ func TestExplainRequiresFile(t *testing.T) {
 
 
 
-	handler := ExplainHandler(gs, "kb")
+	handler := ExplainHandler(gs, NewMockToolSessionIndex(ctrl), "kb")
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{}
 
@@ -93,7 +93,7 @@ func TestExplainFileNotFound(t *testing.T) {
 
 	gs.EXPECT().ReadFile("kb/nonexistent.md").Return("", fmt.Errorf("not found"))
 
-	handler := ExplainHandler(gs, "kb")
+	handler := ExplainHandler(gs, NewMockToolSessionIndex(ctrl), "kb")
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
 		"file": "kb/nonexistent.md",

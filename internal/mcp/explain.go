@@ -21,8 +21,9 @@ func explainTool() mcpgo.Tool {
 }
 
 // ExplainHandler returns the handler function for knomit_explain.
-func ExplainHandler(gs GitStore, ontologyRoot string) func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+func ExplainHandler(gs GitStore, sessionIdx ToolSessionIndex, ontologyRoot string) func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 	return func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		_ = sessionIdx // will be used in Task 4
 		// 1. Get file argument.
 		file := req.GetString("file", "")
 		if file == "" {

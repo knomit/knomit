@@ -25,7 +25,7 @@ func exploreTool(ontologyRoot string) mcpgo.Tool {
 }
 
 // ExploreHandler returns the handler function for knomit_explore.
-func ExploreHandler(gs GitStore, exploreIdx ExploreIndex, ontologyRoot string) func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+func ExploreHandler(gs GitStore, sessionIdx ToolSessionIndex, ontologyRoot string) func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 	return func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 		path := req.GetString("path", ontologyRoot)
 		cursor := req.GetString("cursor", "")
@@ -35,17 +35,17 @@ func ExploreHandler(gs GitStore, exploreIdx ExploreIndex, ontologyRoot string) f
 
 		if cursor == "" {
 			// New session: GC old sessions, start fresh.
-			_ = exploreIdx.GCExploreSessions(gs.Branch(), 5)
+			_ = sessionIdx.GCToolSessions("explore", gs.Branch(), 5)
 		} else {
 			// Resume existing session.
-			session, err := exploreIdx.GetExploreSession(cursor)
+			session, err := sessionIdx.GetToolSession(cursor)
 			if err != nil {
 				return mcpgo.NewToolResultError(fmt.Sprintf("session lookup error: %v", err)), nil
 			}
 			if session == nil || session.Status != "active" {
 				return mcpgo.NewToolResultError("session expired or not found — omit cursor to start a new session"), nil
 			}
-			seen, err = exploreIdx.GetExploreSeenPaths(cursor)
+			seen, err = sessionIdx.GetSeenPaths(cursor)
 			if err != nil {
 				return mcpgo.NewToolResultError(fmt.Sprintf("seen paths error: %v", err)), nil
 			}
@@ -98,7 +98,7 @@ func ExploreHandler(gs GitStore, exploreIdx ExploreIndex, ontologyRoot string) f
 		// Create session on first call.
 		var sessionID string
 		if cursor == "" {
-			session, err := exploreIdx.CreateExploreSession(gs.Branch(), path)
+			session, err := sessionIdx.CreateToolSession("explore", gs.Branch(), path)
 			if err != nil {
 				return mcpgo.NewToolResultError(fmt.Sprintf("create session error: %v", err)), nil
 			}
@@ -109,7 +109,7 @@ func ExploreHandler(gs GitStore, exploreIdx ExploreIndex, ontologyRoot string) f
 
 		// Record seen paths.
 		if len(newPaths) > 0 {
-			if err := exploreIdx.AddExploreSeenPaths(sessionID, newPaths); err != nil {
+			if err := sessionIdx.AddSeenPaths(sessionID, newPaths); err != nil {
 				return mcpgo.NewToolResultError(fmt.Sprintf("add seen paths error: %v", err)), nil
 			}
 		}
@@ -119,7 +119,7 @@ func ExploreHandler(gs GitStore, exploreIdx ExploreIndex, ontologyRoot string) f
 		if !hasMore {
 			status = "completed"
 		}
-		if err := exploreIdx.UpdateExploreSession(sessionID, lastCommit, status); err != nil {
+		if err := sessionIdx.UpdateToolSession(sessionID, lastCommit, status); err != nil {
 			return mcpgo.NewToolResultError(fmt.Sprintf("update session error: %v", err)), nil
 		}
 

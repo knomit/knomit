@@ -14,7 +14,7 @@ import (
 func TestExploreFirstPage(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
-	ei := NewMockExploreIndex(ctrl)
+	ei := NewMockToolSessionIndex(ctrl)
 
 	ts := time.Date(2026, 3, 14, 10, 0, 0, 0, time.UTC)
 
@@ -24,18 +24,18 @@ func TestExploreFirstPage(t *testing.T) {
 	})
 
 	gs.EXPECT().Branch().Return("machine/test").AnyTimes()
-	ei.EXPECT().GCExploreSessions("machine/test", 5).Return(nil)
+	ei.EXPECT().GCToolSessions("explore", "machine/test", 5).Return(nil)
 	gs.EXPECT().WalkChangedFiles("", "kb", nil, 25).Return(
 		[]FileRecency{{Path: "kb/foo.md", Timestamp: ts}},
 		"abc123", nil,
 	)
 	gs.EXPECT().ReadFile("kb/foo.md").Return(factContent, nil)
-	ei.EXPECT().CreateExploreSession("machine/test", "kb").Return(
-		&ExploreSession{ID: "sess-1", Branch: "machine/test", PathPrefix: "kb", Status: "active"},
+	ei.EXPECT().CreateToolSession("explore", "machine/test", "kb").Return(
+		&ToolSession{ID: "sess-1", Tool: "explore", Branch: "machine/test", PathPrefix: "kb", Status: "active"},
 		nil,
 	)
-	ei.EXPECT().AddExploreSeenPaths("sess-1", []string{"kb/foo.md"}).Return(nil)
-	ei.EXPECT().UpdateExploreSession("sess-1", "abc123", "completed").Return(nil)
+	ei.EXPECT().AddSeenPaths("sess-1", []string{"kb/foo.md"}).Return(nil)
+	ei.EXPECT().UpdateToolSession("sess-1", "abc123", "completed").Return(nil)
 
 	handler := ExploreHandler(gs, ei, "kb")
 	req := mcpgo.CallToolRequest{}
@@ -74,7 +74,7 @@ func TestExploreFirstPage(t *testing.T) {
 func TestExploreResumesSession(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
-	ei := NewMockExploreIndex(ctrl)
+	ei := NewMockToolSessionIndex(ctrl)
 
 	ts := time.Date(2026, 3, 14, 10, 0, 0, 0, time.UTC)
 
@@ -86,18 +86,18 @@ func TestExploreResumesSession(t *testing.T) {
 	seen := map[string]bool{"kb/foo.md": true}
 
 	gs.EXPECT().Branch().Return("machine/test").AnyTimes()
-	ei.EXPECT().GetExploreSession("sess-1").Return(
-		&ExploreSession{ID: "sess-1", Branch: "machine/test", PathPrefix: "kb", LastCommit: "abc123", Status: "active"},
+	ei.EXPECT().GetToolSession("sess-1").Return(
+		&ToolSession{ID: "sess-1", Tool: "explore", Branch: "machine/test", PathPrefix: "kb", LastCommit: "abc123", Status: "active"},
 		nil,
 	)
-	ei.EXPECT().GetExploreSeenPaths("sess-1").Return(seen, nil)
+	ei.EXPECT().GetSeenPaths("sess-1").Return(seen, nil)
 	gs.EXPECT().WalkChangedFiles("abc123", "kb", seen, 25).Return(
 		[]FileRecency{{Path: "kb/bar.md", Timestamp: ts}},
 		"def456", nil,
 	)
 	gs.EXPECT().ReadFile("kb/bar.md").Return(factContent, nil)
-	ei.EXPECT().AddExploreSeenPaths("sess-1", []string{"kb/bar.md"}).Return(nil)
-	ei.EXPECT().UpdateExploreSession("sess-1", "def456", "completed").Return(nil)
+	ei.EXPECT().AddSeenPaths("sess-1", []string{"kb/bar.md"}).Return(nil)
+	ei.EXPECT().UpdateToolSession("sess-1", "def456", "completed").Return(nil)
 
 	handler := ExploreHandler(gs, ei, "kb")
 	req := mcpgo.CallToolRequest{}
@@ -131,10 +131,10 @@ func TestExploreResumesSession(t *testing.T) {
 func TestExploreEmptyKB(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
-	ei := NewMockExploreIndex(ctrl)
+	ei := NewMockToolSessionIndex(ctrl)
 
 	gs.EXPECT().Branch().Return("machine/test").AnyTimes()
-	ei.EXPECT().GCExploreSessions("machine/test", 5).Return(nil)
+	ei.EXPECT().GCToolSessions("explore", "machine/test", 5).Return(nil)
 	gs.EXPECT().WalkChangedFiles("", "kb", nil, 25).Return(nil, "", nil)
 
 	handler := ExploreHandler(gs, ei, "kb")
@@ -170,10 +170,10 @@ func TestExploreEmptyKB(t *testing.T) {
 func TestExploreExpiredSession(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
-	ei := NewMockExploreIndex(ctrl)
+	ei := NewMockToolSessionIndex(ctrl)
 
 	gs.EXPECT().Branch().Return("machine/test").AnyTimes()
-	ei.EXPECT().GetExploreSession("gone-sess").Return(nil, nil)
+	ei.EXPECT().GetToolSession("gone-sess").Return(nil, nil)
 
 	handler := ExploreHandler(gs, ei, "kb")
 	req := mcpgo.CallToolRequest{}
@@ -193,7 +193,7 @@ func TestExploreExpiredSession(t *testing.T) {
 func TestExploreDeletedFactSkipped(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
-	ei := NewMockExploreIndex(ctrl)
+	ei := NewMockToolSessionIndex(ctrl)
 
 	ts := time.Date(2026, 3, 14, 10, 0, 0, 0, time.UTC)
 
@@ -203,7 +203,7 @@ func TestExploreDeletedFactSkipped(t *testing.T) {
 	})
 
 	gs.EXPECT().Branch().Return("machine/test").AnyTimes()
-	ei.EXPECT().GCExploreSessions("machine/test", 5).Return(nil)
+	ei.EXPECT().GCToolSessions("explore", "machine/test", 5).Return(nil)
 	gs.EXPECT().WalkChangedFiles("", "kb", nil, 25).Return(
 		[]FileRecency{
 			{Path: "kb/deleted.md", Timestamp: ts},
@@ -213,12 +213,12 @@ func TestExploreDeletedFactSkipped(t *testing.T) {
 	)
 	gs.EXPECT().ReadFile("kb/deleted.md").Return("", fmt.Errorf("not found"))
 	gs.EXPECT().ReadFile("kb/good.md").Return(goodContent, nil)
-	ei.EXPECT().CreateExploreSession("machine/test", "kb").Return(
-		&ExploreSession{ID: "sess-2", Branch: "machine/test", PathPrefix: "kb", Status: "active"},
+	ei.EXPECT().CreateToolSession("explore", "machine/test", "kb").Return(
+		&ToolSession{ID: "sess-2", Tool: "explore", Branch: "machine/test", PathPrefix: "kb", Status: "active"},
 		nil,
 	)
-	ei.EXPECT().AddExploreSeenPaths("sess-2", []string{"kb/good.md"}).Return(nil)
-	ei.EXPECT().UpdateExploreSession("sess-2", "abc123", "completed").Return(nil)
+	ei.EXPECT().AddSeenPaths("sess-2", []string{"kb/good.md"}).Return(nil)
+	ei.EXPECT().UpdateToolSession("sess-2", "abc123", "completed").Return(nil)
 
 	handler := ExploreHandler(gs, ei, "kb")
 	req := mcpgo.CallToolRequest{}
