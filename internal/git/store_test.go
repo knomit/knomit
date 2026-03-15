@@ -825,3 +825,72 @@ func TestLogPaginated(t *testing.T) {
 	}
 	_ = next2
 }
+
+func TestLogPaginated_DirectoryFilter(t *testing.T) {
+	dir := t.TempDir()
+	store, err := git.Init(filepath.Join(dir, "test.db"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	// Write files in two different directories.
+	fact := "---\ndomain: []\nconfidence: 0.5\nsources: 1\nentities: []\nrefs: []\n---\n# T\n\nBody.\n"
+	if _, _, err := store.WriteFile("kb/science/a.md", fact, "add science a"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.WriteFile("kb/tech/b.md", fact, "add tech b"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.WriteFile("kb/science/c.md", fact, "add science c"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Filter to kb/science — should only include commits that touched files under kb/science/.
+	entries, _, err := store.LogPaginated("kb/science", 50, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("expected 2 entries for kb/science, got %d", len(entries))
+	}
+	// Most recent first: "add science c", then "add science a".
+	if entries[0].Message != "add science c" {
+		t.Errorf("expected 'add science c', got %q", entries[0].Message)
+	}
+	if entries[1].Message != "add science a" {
+		t.Errorf("expected 'add science a', got %q", entries[1].Message)
+	}
+}
+
+func TestLogPaginated_FileFilter(t *testing.T) {
+	dir := t.TempDir()
+	store, err := git.Init(filepath.Join(dir, "test.db"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	fact := "---\ndomain: []\nconfidence: 0.5\nsources: 1\nentities: []\nrefs: []\n---\n# T\n\nBody.\n"
+	if _, _, err := store.WriteFile("kb/a.md", fact, "add a"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.WriteFile("kb/b.md", fact, "add b"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.WriteFile("kb/a.md", fact+"updated", "update a"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Filter to specific file — should only include commits that touched kb/a.md.
+	entries, _, err := store.LogPaginated("kb/a.md", 50, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("expected 2 entries for kb/a.md, got %d", len(entries))
+	}
+	if entries[0].Message != "update a" {
+		t.Errorf("expected 'update a', got %q", entries[0].Message)
+	}
+}
