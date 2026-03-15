@@ -4,140 +4,138 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strings"
+	"time"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 )
 
+const explorePageSize = 25
+
 // exploreTool returns the Tool definition for knomit_explore.
 func exploreTool(ontologyRoot string) mcpgo.Tool {
 	return mcpgo.NewTool("knomit_explore",
-		mcpgo.WithDescription("List the contents of a knowledge base path."),
+		mcpgo.WithDescription("Browse knowledge base facts ordered by most recently updated. Returns paginated results. Call with no cursor to start; pass the returned cursor to get the next page. Use knomit_why for history on individual facts."),
 		mcpgo.WithString("path",
-			mcpgo.Description(fmt.Sprintf("Path to explore (default: %q).", ontologyRoot)),
+			mcpgo.Description(fmt.Sprintf("Filter to a subtree (default: %q).", ontologyRoot)),
+		),
+		mcpgo.WithString("cursor",
+			mcpgo.Description("Session ID from a previous call. Omit to start a new session."),
 		),
 	)
 }
 
 // ExploreHandler returns the handler function for knomit_explore.
-func ExploreHandler(gs GitStore, ontologyRoot string) func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+func ExploreHandler(gs GitStore, exploreIdx ExploreIndex, ontologyRoot string) func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 	return func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		// 1. Get path parameter (default ontologyRoot).
 		path := req.GetString("path", ontologyRoot)
+		cursor := req.GetString("cursor", "")
 
-		// 3. Read manifest: <path>.md if it exists.
-		var manifest interface{}
-		manifestPath := path + ".md"
-		manifestContent, err := gs.ReadFile(manifestPath)
-		if err == nil {
-			if f, parseErr := ParseFact(manifestPath, manifestContent); parseErr == nil {
-				manifest = map[string]interface{}{
-					"title": f.Title,
-					"body":  f.Body,
-				}
+		var seen map[string]bool
+		var fromCommit string
+
+		if cursor == "" {
+			// New session: GC old sessions, start fresh.
+			_ = exploreIdx.GCExploreSessions(gs.Branch(), 5)
+		} else {
+			// Resume existing session.
+			session, err := exploreIdx.GetExploreSession(cursor)
+			if err != nil {
+				return mcpgo.NewToolResultError(fmt.Sprintf("session lookup error: %v", err)), nil
 			}
+			if session == nil || session.Status != "active" {
+				return mcpgo.NewToolResultError("session expired or not found — omit cursor to start a new session"), nil
+			}
+			seen, err = exploreIdx.GetExploreSeenPaths(cursor)
+			if err != nil {
+				return mcpgo.NewToolResultError(fmt.Sprintf("seen paths error: %v", err)), nil
+			}
+			fromCommit = session.LastCommit
 		}
 
-		// 4. List directory.
-		entries, err := gs.ListDir(path)
+		files, lastCommit, err := gs.WalkChangedFiles(fromCommit, path, seen, explorePageSize)
 		if err != nil {
-			return mcpgo.NewToolResultError(fmt.Sprintf("list dir error: %v", err)), nil
+			return mcpgo.NewToolResultError(fmt.Sprintf("walk error: %v", err)), nil
 		}
 
-		type childOutput struct {
-			Name    string `json:"name"`
-			IsDir   bool   `json:"is_dir"`
-			Summary string `json:"summary,omitempty"`
+		type factOutput struct {
+			Path    string `json:"path"`
+			Title   string `json:"title"`
+			Updated string `json:"updated"`
 		}
 
-		children := make([]childOutput, 0, len(entries))
-		for _, e := range entries {
-			child := childOutput{
-				Name:  e.Name,
-				IsDir: e.IsDir,
+		var facts []factOutput
+		var newPaths []string
+
+		for _, f := range files {
+			content, readErr := gs.ReadFile(f.Path)
+			if readErr != nil {
+				continue // deleted or unreadable — skip
 			}
-			// Try to read summary from manifest or file.
-			if e.IsDir {
-				// Directory: try to read <path>/<name>.md as manifest.
-				subManifestPath := path + "/" + e.Name + ".md"
-				if content, readErr := gs.ReadFile(subManifestPath); readErr == nil {
-					if f, parseErr := ParseFact(subManifestPath, content); parseErr == nil {
-						child.Summary = f.Title
-					}
-				}
-			} else {
-				// File: strip ".md" suffix for name display, try to parse for title.
-				name := strings.TrimSuffix(e.Name, ".md")
-				child.Name = name
-				filePath := path + "/" + e.Name
-				if content, readErr := gs.ReadFile(filePath); readErr == nil {
-					if f, parseErr := ParseFact(filePath, content); parseErr == nil {
-						child.Summary = f.Title
-					}
-				}
+			parsed, parseErr := ParseFact(f.Path, content)
+			if parseErr != nil {
+				continue
 			}
-			children = append(children, child)
+			facts = append(facts, factOutput{
+				Path:    f.Path,
+				Title:   parsed.Title,
+				Updated: f.Timestamp.Format(time.RFC3339),
+			})
+			newPaths = append(newPaths, f.Path)
 		}
 
-		// 5. Walk parent dirs collecting inherited facts.
-		var inheritedFacts []map[string]interface{}
-		inheritedFacts = collectInheritedFacts(gs, path)
-
-		result := map[string]interface{}{
-			"manifest":        manifest,
-			"children":        children,
-			"inherited_facts": inheritedFacts,
+		// Empty KB on first call: return immediately without creating a session.
+		if cursor == "" && len(facts) == 0 {
+			out, _ := json.Marshal(map[string]interface{}{
+				"facts":    []factOutput{},
+				"cursor":   nil,
+				"has_more": false,
+			})
+			return mcpgo.NewToolResultText(string(out)), nil
 		}
 
-		out, err := json.Marshal(result)
+		hasMore := len(files) >= explorePageSize
+
+		// Create session on first call.
+		var sessionID string
+		if cursor == "" {
+			session, err := exploreIdx.CreateExploreSession(gs.Branch(), path)
+			if err != nil {
+				return mcpgo.NewToolResultError(fmt.Sprintf("create session error: %v", err)), nil
+			}
+			sessionID = session.ID
+		} else {
+			sessionID = cursor
+		}
+
+		// Record seen paths.
+		if len(newPaths) > 0 {
+			if err := exploreIdx.AddExploreSeenPaths(sessionID, newPaths); err != nil {
+				return mcpgo.NewToolResultError(fmt.Sprintf("add seen paths error: %v", err)), nil
+			}
+		}
+
+		// Update session with last commit and status.
+		status := "active"
+		if !hasMore {
+			status = "completed"
+		}
+		if err := exploreIdx.UpdateExploreSession(sessionID, lastCommit, status); err != nil {
+			return mcpgo.NewToolResultError(fmt.Sprintf("update session error: %v", err)), nil
+		}
+
+		var cursorOut interface{} = sessionID
+		if !hasMore {
+			cursorOut = nil
+		}
+
+		out, err := json.Marshal(map[string]interface{}{
+			"facts":    facts,
+			"cursor":   cursorOut,
+			"has_more": hasMore,
+		})
 		if err != nil {
 			return mcpgo.NewToolResultError(fmt.Sprintf("marshal error: %v", err)), nil
 		}
 		return mcpgo.NewToolResultText(string(out)), nil
 	}
-}
-
-// collectInheritedFacts walks up the directory tree from path, collecting
-// facts found at each parent level. Returns a flat list of fact summaries.
-func collectInheritedFacts(gs GitStore, path string) []map[string]interface{} {
-	var inherited []map[string]interface{}
-
-	// Walk up: e.g. "kb/a/b" → "kb/a" → "kb" → stop at root.
-	current := path
-	for {
-		// Find last slash.
-		idx := strings.LastIndex(current, "/")
-		if idx < 0 {
-			break
-		}
-		current = current[:idx]
-		if current == "" {
-			break
-		}
-
-		// List entries at this level.
-		entries, err := gs.ListDir(current)
-		if err != nil {
-			break
-		}
-		for _, e := range entries {
-			if e.IsDir {
-				continue // Skip subdirectories.
-			}
-			filePath := current + "/" + e.Name
-			content, err := gs.ReadFile(filePath)
-			if err != nil {
-				continue
-			}
-			f, err := ParseFact(filePath, content)
-			if err != nil {
-				continue
-			}
-			inherited = append(inherited, map[string]interface{}{
-				"file":  filePath,
-				"title": f.Title,
-			})
-		}
-	}
-	return inherited
 }
