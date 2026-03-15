@@ -27,7 +27,7 @@ export function LeftPanel({ state, dispatch }: Props) {
     const isHeadChangeOnly = state.currentPath === prevPathRef.current && state.searchQuery === prevSearchRef.current;
     prevPathRef.current = state.currentPath;
     prevSearchRef.current = state.searchQuery;
-    api.browse(state.currentPath).then(r => {
+    api.browse(state.repo, state.currentPath).then(r => {
       const c = r.children || [];
       setChildren(c);
       if (!isHeadChangeOnly) {
@@ -42,7 +42,7 @@ export function LeftPanel({ state, dispatch }: Props) {
     setSearchReady(false);
     setSelectedIdx(0);
     const p = new URLSearchParams({ q: state.similarTo.text, limit: '50' });
-    fetch(`/api/v1/knomit/search?${p}`).then(r => r.json()).then(r => {
+    fetch(`/api/v1/${state.repo}/search?${p}`).then(r => r.json()).then(r => {
       const results = (r.results || []).filter((sr: { path: string }) => sr.path !== state.similarTo!.path);
       setSearchResults(results);
       setSearchReady(true);
@@ -59,7 +59,7 @@ export function LeftPanel({ state, dispatch }: Props) {
     const savedIdx = selectedIdx;
     setSelectedIdx(0);
     const t = setTimeout(() => {
-      api.search(state.searchQuery).then(r => {
+      api.search(state.repo, state.searchQuery).then(r => {
         const results = r.results || [];
         setSearchResults(results);
         setSearchReady(true);

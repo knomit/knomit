@@ -1,6 +1,7 @@
-import { useReducer, useEffect } from 'react';
+import { useReducer, useEffect, useState } from 'react';
 import { reducer, init } from './state';
 import { api } from './api';
+import type { RepoInfo } from './api';
 import { TopBar } from './TopBar';
 import { LeftPanel } from './LeftPanel';
 import { RightPanel } from './RightPanel';
@@ -9,24 +10,31 @@ import './App.css';
 
 export default function App() {
   const [state, dispatch] = useReducer(reducer, init);
+  const [repos, setRepos] = useState<RepoInfo[]>([]);
 
-  // Load initial status
+  // Fetch repos list on mount.
   useEffect(() => {
-    api.status().then(s => dispatch({ type: 'SET_STATUS', head: s.head, branch: s.branch, embeddingsEnabled: s.embeddings_enabled, ontologyRoot: s.ontology_root })).catch(() => {});
+    api.repos().then(setRepos).catch(() => {});
   }, []);
 
-  // SSE for task and status events
+  // Load status when repo changes (also fires on mount).
   useEffect(() => {
-    const es = new EventSource('/api/v1/knomit/events');
+    api.status(state.repo).then(s =>
+      dispatch({ type: 'SET_STATUS', head: s.head, branch: s.branch, embeddingsEnabled: s.embeddings_enabled, ontologyRoot: s.ontology_root })
+    ).catch(() => {});
+  }, [state.repo]);
+
+  // SSE for task and status events — reconnects when repo changes.
+  useEffect(() => {
+    const es = new EventSource(`/api/v1/${state.repo}/events`);
     es.addEventListener('task', (e) => {
       const ev = JSON.parse(e.data);
       dispatch({ type: 'SET_TASK', op: ev.op, status: ev.status, message: ev.message || '' });
       const level = ev.status === 'error' ? 'error' as const : 'info' as const;
       dispatch({ type: 'CONSOLE_LOG', level, message: `[${ev.op}] ${ev.message || ev.status}` });
-      // Refresh head when a task completes — the SSE status event may be
-      // buffered by the Vite proxy, so fetch it explicitly.
+      // Refresh head when a task completes.
       if (ev.status === 'done' || ev.status === 'error') {
-        api.status().then(s => dispatch({ type: 'SET_HEAD', head: s.head })).catch(() => {});
+        api.status(state.repo).then(s => dispatch({ type: 'SET_HEAD', head: s.head })).catch(() => {});
       }
     });
     es.addEventListener('status', (e) => {
@@ -34,7 +42,7 @@ export default function App() {
       if (s.head) dispatch({ type: 'SET_HEAD', head: s.head });
     });
     return () => es.close();
-  }, []);
+  }, [state.repo]);
 
   // Build breadcrumb segments from currentPath
   const pathParts = state.currentPath.split('/').filter(Boolean);
@@ -45,7 +53,7 @@ export default function App() {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', width: '100vw', background: '#141414', color: '#eee', fontFamily: 'system-ui, sans-serif', overflow: 'hidden' }}>
-      <TopBar state={state} />
+      <TopBar state={state} repos={repos} dispatch={dispatch} />
 
       {/* Breadcrumb path bar + action buttons */}
       <div style={{ height: 30, background: '#111', borderBottom: '1px solid #222', display: 'flex', alignItems: 'center', padding: '0 8px', gap: 2, flexShrink: 0, overflow: 'hidden' }}>

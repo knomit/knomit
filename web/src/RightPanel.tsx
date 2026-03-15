@@ -169,23 +169,23 @@ export function RightPanel({ state, dispatch }: Props) {
     setError(null);
     if (state.historyCommit) {
       // Time-travel: fetch commit detail and auto-load single file
-      api.commitDetail(state.historyCommit).then(detail => {
+      api.commitDetail(state.repo, state.historyCommit).then(detail => {
         setCommitDetail(detail);
         const viewableFiles = detail.files.filter(f => f.action !== 'deleted');
         if (viewableFiles.length === 1) {
           setCommitSelectedFile(viewableFiles[0].path);
-          api.fact(viewableFiles[0].path, state.historyCommit!).then(setFact).catch(e => setError(String(e)));
+          api.fact(state.repo, viewableFiles[0].path, state.historyCommit!).then(setFact).catch(e => setError(String(e)));
         } else {
           setFact(null);
           setCommitSelectedFile(null);
         }
       }).catch(() => setCommitDetail(null));
     } else if (state.rightMode === 'fact' && state.selectedFact) {
-      api.fact(state.selectedFact).then(setFact).catch(e => setError(String(e)));
+      api.fact(state.repo, state.selectedFact).then(setFact).catch(e => setError(String(e)));
     } else if (state.rightMode === 'history' && state.selectedFact) {
-      api.history(state.selectedFact).then(r => setHistory(r.entries || [])).catch(e => setError(String(e)));
+      api.history(state.repo, state.selectedFact).then(r => setHistory(r.entries || [])).catch(e => setError(String(e)));
     } else if (state.rightMode === 'summary') {
-      api.stats(state.previewPath ?? state.currentPath).then(setStats).catch(() => setStats(null));
+      api.stats(state.repo, state.previewPath ?? state.currentPath).then(setStats).catch(() => setStats(null));
     }
   }, [state.rightMode, state.selectedFact, state.currentPath, state.previewPath, state.headCommit, state.historyCommit]);
 
@@ -219,7 +219,7 @@ export function RightPanel({ state, dispatch }: Props) {
             onClick={() => {
               if (f.action === 'deleted') return;
               setCommitSelectedFile(f.path);
-              api.fact(f.path, state.historyCommit!).then(setFact).catch(() => setFact(null));
+              api.fact(state.repo, f.path, state.historyCommit!).then(setFact).catch(() => setFact(null));
             }}
             style={{
               padding: '8px 12px', cursor: f.action === 'deleted' ? 'default' : 'pointer',

@@ -44,7 +44,7 @@ export function HistoryTimeline({ state, dispatch }: Props) {
     setEntries([]);
     setNextCursor(undefined);
     setSelectedIdx(0);
-    api.history(state.currentPath).then(r => {
+    api.history(state.repo, state.currentPath).then(r => {
       const e = r.entries || [];
       setEntries(e);
       setNextCursor(r.next);
@@ -60,7 +60,7 @@ export function HistoryTimeline({ state, dispatch }: Props) {
   const loadMore = useCallback(() => {
     if (loading || !nextCursor) return;
     setLoading(true);
-    api.history(state.currentPath, nextCursor).then(r => {
+    api.history(state.repo, state.currentPath, nextCursor).then(r => {
       setEntries(prev => [...prev, ...(r.entries || [])]);
       setNextCursor(r.next);
       setLoading(false);

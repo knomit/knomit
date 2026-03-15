@@ -3,13 +3,14 @@ import { api } from './api';
 import type { OriginResponse } from './api';
 
 interface Props {
+  repo: string;
   onClose: () => void;
 }
 
-export function OriginModal({ onClose }: Props) {
+export function OriginModal({ repo, onClose }: Props) {
   const [origin, setOrigin] = useState<OriginResponse | null | undefined>(undefined);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
+  const [error] = useState('');
 
   // Form state
   const [url, setUrl] = useState('');
@@ -22,15 +23,15 @@ export function OriginModal({ onClose }: Props) {
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
-    api.getOrigin()
+    api.getOrigin(repo)
       .then(r => { setOrigin(r); setLoading(false); })
       .catch(() => { setOrigin(null); setLoading(false); });
-  }, []);
+  }, [repo]);
 
   const handleSubmit = () => {
     setSubmitError('');
     setSubmitting(true);
-    const opts: Parameters<typeof api.setOrigin>[0] = { url };
+    const opts: Parameters<typeof api.setOrigin>[1] = { url };
     if (authMethod === 'token') {
       opts.auth_method = 'token';
       opts.token = token;
@@ -41,10 +42,10 @@ export function OriginModal({ onClose }: Props) {
     } else {
       opts.auth_method = 'ssh';
     }
-    api.setOrigin(opts)
+    api.setOrigin(repo, opts)
       .then(() => {
         setSubmitting(false);
-        api.getOrigin().then(r => setOrigin(r)).catch(() => {});
+        api.getOrigin(repo).then(r => setOrigin(r)).catch(() => {});
         setConfirm('');
       })
       .catch((e: Error) => {

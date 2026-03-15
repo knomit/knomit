@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { reducer, init, type LeftMode } from './state';
+import { reducer, init } from './state';
 
 describe('reducer', () => {
   it('NAVIGATE sets currentPath, clears selectedFact, resets rightMode', () => {
@@ -165,5 +165,27 @@ describe('history mode', () => {
       s = reducer(s, { type: 'NAVIGATE', path: `kb/p${i}` });
     }
     expect(s.navStack.length).toBe(10);
+  });
+});
+
+describe('SET_REPO', () => {
+  it('resets navigation state when switching repos', () => {
+    let s = reducer(init, { type: 'NAVIGATE', path: 'kb/deep/path' });
+    s = reducer(s, { type: 'SELECT_FACT', path: 'kb/deep/path/fact.md' });
+    s = reducer(s, { type: 'SET_REPO', repo: 'work' });
+    expect(s.repo).toBe('work');
+    expect(s.currentPath).toBe('kb');
+    expect(s.selectedFact).toBeNull();
+    expect(s.rightMode).toBe('summary');
+    expect(s.searchQuery).toBe('');
+    expect(s.navStack).toHaveLength(0);
+    expect(s.leftMode).toBe('browse');
+    expect(s.historyCommit).toBeNull();
+    expect(s.headCommit).toBe('');
+    expect(s.branch).toBe('');
+  });
+
+  it('init has repo set to knomit', () => {
+    expect(init.repo).toBe('knomit');
   });
 });

@@ -1,14 +1,12 @@
-import type { AppState } from './state';
+import type { Dispatch } from 'react';
+import type { AppState, Action } from './state';
+import type { RepoInfo } from './api';
 
 interface Props {
   state: AppState;
+  repos: RepoInfo[];
+  dispatch: Dispatch<Action>;
 }
-
-const RepoIcon = () => (
-  <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor">
-    <path d="M2 2.5A2.5 2.5 0 0 1 4.5 0h8.75a.75.75 0 0 1 .75.75v12.5a.75.75 0 0 1-.75.75h-2.5a.75.75 0 0 1 0-1.5h1.75v-2h-8a1 1 0 0 0-.714 1.7.75.75 0 1 1-1.072 1.05A2.495 2.495 0 0 1 2 11.5Zm10.5-1h-8a1 1 0 0 0-1 1v6.708A2.486 2.486 0 0 1 4.5 9h8V1.5Z"/>
-  </svg>
-);
 
 const BranchIcon = () => (
   <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor">
@@ -16,7 +14,13 @@ const BranchIcon = () => (
   </svg>
 );
 
-export function TopBar({ state }: Props) {
+const RepoIcon = () => (
+  <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor">
+    <path d="M2 2.5A2.5 2.5 0 0 1 4.5 0h8.75a.75.75 0 0 1 .75.75v12.5a.75.75 0 0 1-.75.75h-2.5a.75.75 0 0 1 0-1.5h1.75v-2h-8a1 1 0 0 0-.714 1.7.75.75 0 1 1-1.072 1.05A2.495 2.495 0 0 1 2 11.5Zm10.5-1h-8a1 1 0 0 0-1 1v6.708A2.486 2.486 0 0 1 4.5 9h8V1.5Z"/>
+  </svg>
+);
+
+export function TopBar({ state, repos, dispatch }: Props) {
   return (
     <div style={{ height: 40, background: '#111', borderBottom: '1px solid #333', display: 'flex', alignItems: 'center', padding: '0 16px', gap: 12, flexShrink: 0 }}>
       <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -36,7 +40,22 @@ export function TopBar({ state }: Props) {
       <div style={{ flex: 1 }} />
       <span style={{ display: 'flex', alignItems: 'center', gap: 5, color: '#7c9', fontSize: 12 }}>
         <RepoIcon />
-        <span>knomit</span>
+        {repos.length > 1 ? (
+          <select
+            value={state.repo}
+            onChange={e => dispatch({ type: 'SET_REPO', repo: e.target.value })}
+            style={{
+              background: '#1a1a2a', color: '#7c9', border: '1px solid #333',
+              borderRadius: 3, fontSize: 12, padding: '1px 4px', cursor: 'pointer',
+            }}
+          >
+            {repos.map(r => (
+              <option key={r.name} value={r.name}>{r.name}</option>
+            ))}
+          </select>
+        ) : (
+          <span>{state.repo}</span>
+        )}
       </span>
       {state.branch && (
         <span style={{ display: 'flex', alignItems: 'center', gap: 5, color: '#8af', fontSize: 12 }}>

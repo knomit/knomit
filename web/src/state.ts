@@ -18,6 +18,7 @@ export interface ConsoleEntry {
 }
 
 export interface AppState {
+  repo: string;
   currentPath: string;
   selectedFact: string | null;
   previewPath: string | null; // directory being previewed in summary panel without navigating
@@ -60,9 +61,11 @@ export type Action =
   | { type: 'ENTER_HISTORY' }
   | { type: 'EXIT_HISTORY' }
   | { type: 'SELECT_COMMIT'; commit: string }
-  | { type: 'NAV_BACK' };
+  | { type: 'NAV_BACK' }
+  | { type: 'SET_REPO'; repo: string };
 
 export const init: AppState = {
+  repo: 'knomit',
   currentPath: 'kb',
   selectedFact: null,
   previewPath: null,
@@ -138,6 +141,21 @@ export function reducer(s: AppState, a: Action): AppState {
       const prev = s.navStack[s.navStack.length - 1];
       return { ...s, ...prev, navStack: s.navStack.slice(0, -1) };
     }
+    case 'SET_REPO': return {
+      ...s,
+      repo: a.repo,
+      currentPath: 'kb',
+      selectedFact: null,
+      previewPath: null,
+      rightMode: 'summary',
+      searchQuery: '',
+      similarTo: null,
+      headCommit: '',
+      branch: '',
+      navStack: [],
+      leftMode: 'browse' as LeftMode,
+      historyCommit: null,
+    };
     default: return s;
   }
 }
