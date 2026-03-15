@@ -407,7 +407,7 @@ func TestSync(t *testing.T) {
 		}
 		defer store.Close()
 
-		result, err := store.Sync(nil)
+		result, err := store.Sync("")
 		if err != nil {
 			t.Fatalf("Sync with no remote returned unexpected error: %v", err)
 		}
@@ -476,7 +476,7 @@ func TestSync(t *testing.T) {
 		}
 
 		// Sync should fetch origin/main and merge it.
-		result, err := store.Sync(nil)
+		result, err := store.Sync("")
 		if err != nil {
 			t.Fatalf("Sync returned unexpected error: %v", err)
 		}

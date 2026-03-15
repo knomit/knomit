@@ -14,7 +14,7 @@ func TestQueryReturnsResults(t *testing.T) {
 	gs := NewMockGitStore(ctrl)
 	idx := NewMockSearchIndex(ctrl)
 
-	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
+
 
 	idx.EXPECT().Search(gomock.Any()).Return([]SearchResult{
 		{
@@ -67,7 +67,7 @@ func TestQueryRequiresFilter(t *testing.T) {
 	gs := NewMockGitStore(ctrl)
 	idx := NewMockSearchIndex(ctrl)
 
-	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
+
 
 
 	handler := QueryHandler(gs, idx)
@@ -89,7 +89,7 @@ func TestQueryEmptyResults(t *testing.T) {
 	gs := NewMockGitStore(ctrl)
 	idx := NewMockSearchIndex(ctrl)
 
-	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
+
 
 	idx.EXPECT().Search(gomock.Any()).Return(nil, nil)
 
@@ -140,7 +140,7 @@ func TestQueryDomainFilter(t *testing.T) {
 
 	var lastQuery SearchQuery
 
-	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
+
 
 	idx.EXPECT().Search(gomock.Any()).DoAndReturn(func(q SearchQuery) ([]SearchResult, error) {
 		lastQuery = q
@@ -176,7 +176,7 @@ func TestQueryEntityFilter(t *testing.T) {
 
 	var lastQuery SearchQuery
 
-	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
+
 
 	idx.EXPECT().Search(gomock.Any()).DoAndReturn(func(q SearchQuery) ([]SearchResult, error) {
 		lastQuery = q
@@ -212,7 +212,7 @@ func TestQueryPathPrefixFilter(t *testing.T) {
 
 	var lastQuery SearchQuery
 
-	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
+
 
 	idx.EXPECT().Search(gomock.Any()).DoAndReturn(func(q SearchQuery) ([]SearchResult, error) {
 		lastQuery = q
@@ -246,7 +246,7 @@ func TestQueryMinConfidenceFilter(t *testing.T) {
 
 	var lastQuery SearchQuery
 
-	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
+
 
 	idx.EXPECT().Search(gomock.Any()).DoAndReturn(func(q SearchQuery) ([]SearchResult, error) {
 		lastQuery = q

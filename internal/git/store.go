@@ -64,8 +64,9 @@ type LogEntry struct {
 
 // SyncResult is returned by Sync to report what happened during synchronization.
 type SyncResult struct {
-	Synced bool
-	Ahead  int
+	Synced      bool   // true if tree changed (merge or fast-forward)
+	FastForward bool   // true if fast-forward (no merge commit)
+	MergeCommit string // hash of merge commit (empty if ff or no-op)
 }
 
 // gitSchema is the minimal schema for standalone Init/Open (legacy path).

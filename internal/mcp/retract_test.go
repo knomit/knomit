@@ -17,7 +17,7 @@ func TestRetractDeletesFile(t *testing.T) {
 	var deletedFile string
 	var tagSet string
 
-	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
+
 	gs.EXPECT().FileExists("kb/foo.md").Return(true, nil)
 	gs.EXPECT().DeleteFile("kb/foo.md", gomock.Any()).DoAndReturn(func(path, msg string) (string, error) {
 		deletedFile = path
@@ -75,7 +75,7 @@ func TestRetractFileNotFound(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
 
-	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
+
 	gs.EXPECT().FileExists("kb/nonexistent.md").Return(false, nil)
 
 	handler := RetractHandler(gs, "kb")

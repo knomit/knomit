@@ -130,21 +130,6 @@ func (mr *MockGitStoreMockRecorder) ReadFile(path any) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ReadFile", reflect.TypeOf((*MockGitStore)(nil).ReadFile), path)
 }
 
-// Sync mocks base method.
-func (m *MockGitStore) Sync(remoteAuth any) (git.SyncResult, error) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Sync", remoteAuth)
-	ret0, _ := ret[0].(git.SyncResult)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
-}
-
-// Sync indicates an expected call of Sync.
-func (mr *MockGitStoreMockRecorder) Sync(remoteAuth any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Sync", reflect.TypeOf((*MockGitStore)(nil).Sync), remoteAuth)
-}
-
 // MockSearchIndex is a mock of SearchIndex interface.
 type MockSearchIndex struct {
 	ctrl     *gomock.Controller

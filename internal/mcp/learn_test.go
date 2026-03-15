@@ -19,7 +19,7 @@ func TestLearnWritesFacts(t *testing.T) {
 
 	var capturedFiles map[string]string
 
-	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
+
 	idx.EXPECT().Search(gomock.Any()).Return(nil, nil).AnyTimes()
 	gs.EXPECT().BatchWrite(gomock.Any(), gomock.Any()).DoAndReturn(func(files map[string]string, msg string) (string, map[string]string, error) {
 		capturedFiles = files
@@ -102,7 +102,7 @@ func TestLearnRequiresTopic(t *testing.T) {
 	gs := NewMockGitStore(ctrl)
 	idx := NewMockSearchIndex(ctrl)
 
-	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
+
 
 	handler := LearnHandler(gs, idx, "kb", fact.DefaultOntology())
 
@@ -138,7 +138,7 @@ func TestLearnRequiresCategory(t *testing.T) {
 	gs := NewMockGitStore(ctrl)
 	idx := NewMockSearchIndex(ctrl)
 
-	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
+
 
 	handler := LearnHandler(gs, idx, "kb", fact.DefaultOntology())
 
@@ -174,7 +174,7 @@ func TestLearnRequiresMomentName(t *testing.T) {
 	gs := NewMockGitStore(ctrl)
 	idx := NewMockSearchIndex(ctrl)
 
-	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
+
 
 	handler := LearnHandler(gs, idx, "kb", fact.DefaultOntology())
 
@@ -199,7 +199,7 @@ func TestLearnMultipleFacts(t *testing.T) {
 
 	var capturedFiles map[string]string
 
-	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
+
 	idx.EXPECT().Search(gomock.Any()).Return(nil, nil).AnyTimes()
 	gs.EXPECT().BatchWrite(gomock.Any(), gomock.Any()).DoAndReturn(func(files map[string]string, msg string) (string, map[string]string, error) {
 		capturedFiles = files
@@ -261,7 +261,7 @@ func TestLearnHandler_DedupMergesNearDuplicate(t *testing.T) {
 	gs := NewMockGitStore(ctrl)
 	idx := NewMockSearchIndex(ctrl)
 
-	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
+
 
 	// Search returns an existing near-duplicate (score=95)
 	idx.EXPECT().Search(gomock.Any()).Return([]SearchResult{

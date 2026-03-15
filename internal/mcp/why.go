@@ -23,12 +23,7 @@ func whyTool() mcpgo.Tool {
 // WhyHandler returns the handler function for knomit_why.
 func WhyHandler(gs GitStore, ontologyRoot string) func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 	return func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		// 1. Sync.
-		if _, err := gs.Sync(nil); err != nil {
-			return mcpgo.NewToolResultError(fmt.Sprintf("sync error: %v", err)), nil
-		}
-
-		// 2. Get file argument.
+		// 1. Get file argument.
 		file := req.GetString("file", "")
 		if file == "" {
 			return mcpgo.NewToolResultError("file is required"), nil

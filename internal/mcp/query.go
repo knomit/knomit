@@ -33,12 +33,7 @@ func queryTool() mcpgo.Tool {
 // QueryHandler returns the handler function for knomit_query.
 func QueryHandler(gs GitStore, idx SearchIndex) func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 	return func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		// 1. Sync.
-		if _, err := gs.Sync(nil); err != nil {
-			return mcpgo.NewToolResultError(fmt.Sprintf("sync error: %v", err)), nil
-		}
-
-		// 2. Build query.
+		// 1. Build query.
 		text := req.GetString("text", "")
 		entities := req.GetStringSlice("entities", nil)
 		domain := req.GetStringSlice("domain", nil)

@@ -18,9 +18,6 @@ type DirEntry = gitpkg.DirEntry
 // LogEntry is re-exported from internal/git.
 type LogEntry = gitpkg.LogEntry
 
-// SyncResult is re-exported from internal/git.
-type SyncResult = gitpkg.SyncResult
-
 // SearchQuery is re-exported from internal/store.
 type SearchQuery = storepkg.SearchQuery
 
@@ -50,7 +47,6 @@ type GitStore interface {
 	DiffFiles(fromCommit string) (added, modified, deleted []string, err error)
 	HeadCommit() (string, error)
 	Tag(name string) error
-	Sync(remoteAuth interface{}) (SyncResult, error)
 	TagsContaining(hash string) ([]string, error)
 	Branch() string
 }

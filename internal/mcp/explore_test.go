@@ -21,7 +21,7 @@ func TestExploreListsEntries(t *testing.T) {
 		}),
 	}
 
-	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
+
 	gs.EXPECT().ListDir("kb").Return([]DirEntry{
 		{Name: "sub", IsDir: true},
 		{Name: "foo.md", IsDir: false},
@@ -66,7 +66,7 @@ func TestExploreDefaultPath(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
 
-	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
+
 	gs.EXPECT().ListDir("kb").Return([]DirEntry{}, nil)
 	gs.EXPECT().ReadFile(gomock.Any()).Return("", fmt.Errorf("not found")).AnyTimes()
 
@@ -135,7 +135,7 @@ func TestExploreInheritedFacts(t *testing.T) {
 		"kb":          {{Name: "grandparent.md", IsDir: false}},
 	}
 
-	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
+
 	gs.EXPECT().ListDir(gomock.Any()).DoAndReturn(func(path string) ([]DirEntry, error) {
 		if entries, ok := dirEntries[path]; ok {
 			return entries, nil
@@ -225,7 +225,7 @@ func TestExploreWithManifest(t *testing.T) {
 		}),
 	}
 
-	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
+
 	gs.EXPECT().ListDir(gomock.Any()).DoAndReturn(func(path string) ([]DirEntry, error) {
 		return []DirEntry{}, nil
 	}).AnyTimes()

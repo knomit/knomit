@@ -172,6 +172,58 @@ func (h *TaskHub) BroadcastStatus(head string) {
 	h.ob.Publish(StatusEvent{Head: head})
 }
 
+// SyncEvent is broadcast after a remote sync attempt.
+type SyncEvent struct {
+	Remote      string `json:"remote"`
+	Status      string `json:"status"` // "sync_ok" or "sync_error"
+	MergeCommit string `json:"merge_commit,omitempty"`
+	FastForward bool   `json:"fast_forward,omitempty"`
+	Error       string `json:"error,omitempty"`
+}
+
+// BroadcastSyncOK publishes a successful sync event.
+func (h *TaskHub) BroadcastSyncOK(remote, mergeCommit string, fastForward bool) {
+	h.ob.Publish(SyncEvent{
+		Remote:      remote,
+		Status:      "sync_ok",
+		MergeCommit: mergeCommit,
+		FastForward: fastForward,
+	})
+}
+
+// BroadcastSyncError publishes a sync failure event.
+func (h *TaskHub) BroadcastSyncError(remote, errMsg string) {
+	h.ob.Publish(SyncEvent{
+		Remote: remote,
+		Status: "sync_error",
+		Error:  errMsg,
+	})
+}
+
+// PushEvent is broadcast after a push attempt.
+type PushEvent struct {
+	Remote string `json:"remote"`
+	Status string `json:"status"` // "push_ok" or "push_error"
+	Error  string `json:"error,omitempty"`
+}
+
+// BroadcastPushOK publishes a successful push event.
+func (h *TaskHub) BroadcastPushOK(remote string) {
+	h.ob.Publish(PushEvent{
+		Remote: remote,
+		Status: "push_ok",
+	})
+}
+
+// BroadcastPushError publishes a push failure event.
+func (h *TaskHub) BroadcastPushError(remote, errMsg string) {
+	h.ob.Publish(PushEvent{
+		Remote: remote,
+		Status: "push_error",
+		Error:  errMsg,
+	})
+}
+
 // Shutdown cancels all active task contexts.
 func (h *TaskHub) Shutdown() {
 	h.cancel()

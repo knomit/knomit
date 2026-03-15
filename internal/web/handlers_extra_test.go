@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"go.uber.org/mock/gomock"
-	"knomit/internal/git"
 	"knomit/internal/llm"
 	"knomit/internal/store"
 )
@@ -324,95 +323,18 @@ func TestHandleSynthesizeStart_InvalidRecipe(t *testing.T) {
 
 // --- handleSync ---
 
-func TestHandleSync_Success(t *testing.T) {
+func TestHandleSync_ServiceUnavailable(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
-	gs.EXPECT().Sync(nil).Return(git.SyncResult{Synced: true, Ahead: 3}, nil)
-	gs.EXPECT().HeadCommit().Return("abcdef1234567890", nil)
 
 	hub := NewTaskHub(context.Background())
 	handler := NewRouter(gs, nil, hub, nil, nil, nil, false, "kb")
 
 	rr := doRequest(t, handler, http.MethodPost, "/api/v1/sync", "")
 
-	if rr.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200; body: %s", rr.Code, rr.Body.String())
+	if rr.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503; body: %s", rr.Code, rr.Body.String())
 	}
-
-	var resp map[string]any
-	json.NewDecoder(rr.Body).Decode(&resp)
-	if resp["status"] != "running" {
-		t.Errorf("status = %v, want running", resp["status"])
-	}
-
-	// Wait for task to finish.
-	time.Sleep(100 * time.Millisecond)
-}
-
-func TestHandleSync_AlreadyUpToDate(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	gs := NewMockGitStore(ctrl)
-	gs.EXPECT().Sync(nil).Return(git.SyncResult{Synced: false}, nil)
-	gs.EXPECT().HeadCommit().Return("abcdef1234567890", nil)
-
-	hub := NewTaskHub(context.Background())
-	handler := NewRouter(gs, nil, hub, nil, nil, nil, false, "kb")
-
-	rr := doRequest(t, handler, http.MethodPost, "/api/v1/sync", "")
-
-	if rr.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200", rr.Code)
-	}
-
-	time.Sleep(100 * time.Millisecond)
-}
-
-func TestHandleSync_Error(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	gs := NewMockGitStore(ctrl)
-	gs.EXPECT().Sync(nil).Return(git.SyncResult{}, fmt.Errorf("no remote"))
-
-	hub := NewTaskHub(context.Background())
-	handler := NewRouter(gs, nil, hub, nil, nil, nil, false, "kb")
-
-	rr := doRequest(t, handler, http.MethodPost, "/api/v1/sync", "")
-
-	if rr.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200 (async start)", rr.Code)
-	}
-
-	time.Sleep(100 * time.Millisecond)
-}
-
-func TestHandleSync_Conflict(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	gs := NewMockGitStore(ctrl)
-
-	// Block the first sync so the second hits 409.
-	started := make(chan struct{})
-	done := make(chan struct{})
-	gs.EXPECT().Sync(nil).DoAndReturn(func(_ any) (git.SyncResult, error) {
-		close(started)
-		<-done
-		return git.SyncResult{}, nil
-	})
-	gs.EXPECT().HeadCommit().Return("abc", nil).AnyTimes()
-
-	hub := NewTaskHub(context.Background())
-	handler := NewRouter(gs, nil, hub, nil, nil, nil, false, "kb")
-
-	// First sync starts.
-	doRequest(t, handler, http.MethodPost, "/api/v1/sync", "")
-	<-started
-
-	// Second sync should get 409.
-	rr := doRequest(t, handler, http.MethodPost, "/api/v1/sync", "")
-	if rr.Code != http.StatusConflict {
-		t.Fatalf("status = %d, want 409", rr.Code)
-	}
-
-	close(done)
-	time.Sleep(100 * time.Millisecond)
 }
 
 // --- handleEvents (SSE) ---
@@ -447,7 +369,6 @@ func TestHandleEvents_TaskEvents(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
 	gs.EXPECT().HeadCommit().Return("abc123", nil).AnyTimes()
-	gs.EXPECT().Sync(nil).Return(git.SyncResult{Synced: false}, nil)
 
 	hub := NewTaskHub(context.Background())
 	handler := NewRouter(gs, nil, hub, nil, nil, nil, false, "kb")
@@ -458,10 +379,12 @@ func TestHandleEvents_TaskEvents(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/events", nil).WithContext(ctx)
 	rr := httptest.NewRecorder()
 
-	// Start a sync task after a small delay so the SSE connection is open.
+	// Start a manual task after a small delay so the SSE connection is open.
 	go func() {
 		time.Sleep(50 * time.Millisecond)
-		doRequest(t, handler, http.MethodPost, "/api/v1/sync", "")
+		hub.Start("test", func(_ context.Context, emit func(TaskEvent)) {
+			emit(TaskEvent{Status: "done", Message: "test task done"})
+		})
 	}()
 
 	handler.ServeHTTP(rr, req)

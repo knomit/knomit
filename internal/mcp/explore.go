@@ -22,12 +22,7 @@ func exploreTool(ontologyRoot string) mcpgo.Tool {
 // ExploreHandler returns the handler function for knomit_explore.
 func ExploreHandler(gs GitStore, ontologyRoot string) func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 	return func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		// 1. Sync.
-		if _, err := gs.Sync(nil); err != nil {
-			return mcpgo.NewToolResultError(fmt.Sprintf("sync error: %v", err)), nil
-		}
-
-		// 2. Get path parameter (default ontologyRoot).
+		// 1. Get path parameter (default ontologyRoot).
 		path := req.GetString("path", ontologyRoot)
 
 		// 3. Read manifest: <path>.md if it exists.

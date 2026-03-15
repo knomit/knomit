@@ -22,7 +22,7 @@ func TestUpdateMergesFields(t *testing.T) {
 
 	var writtenContent string
 
-	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
+
 	gs.EXPECT().FileExists("kb/foo.md").Return(true, nil)
 	gs.EXPECT().ReadFile("kb/foo.md").Return(factContent, nil)
 	gs.EXPECT().WriteFile("kb/foo.md", gomock.Any(), gomock.Any()).DoAndReturn(func(path, content, msg string) (string, string, error) {
@@ -94,7 +94,7 @@ func TestUpdateFileNotFound(t *testing.T) {
 	gs := NewMockGitStore(ctrl)
 
 
-	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
+
 	gs.EXPECT().FileExists("kb/nonexistent.md").Return(false, nil)
 
 	handler := UpdateHandler(gs, "kb")
@@ -128,7 +128,7 @@ func TestUpdateRefsAppended(t *testing.T) {
 
 	var writtenContent string
 
-	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
+
 	gs.EXPECT().FileExists("kb/refs.md").Return(true, nil)
 	gs.EXPECT().ReadFile("kb/refs.md").Return(factContent, nil)
 	gs.EXPECT().WriteFile("kb/refs.md", gomock.Any(), gomock.Any()).DoAndReturn(func(path, content, msg string) (string, string, error) {

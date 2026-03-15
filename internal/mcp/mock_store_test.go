@@ -222,21 +222,6 @@ func (mr *MockGitStoreMockRecorder) ReadFileWithHash(path any) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ReadFileWithHash", reflect.TypeOf((*MockGitStore)(nil).ReadFileWithHash), path)
 }
 
-// Sync mocks base method.
-func (m *MockGitStore) Sync(remoteAuth any) (SyncResult, error) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Sync", remoteAuth)
-	ret0, _ := ret[0].(SyncResult)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
-}
-
-// Sync indicates an expected call of Sync.
-func (mr *MockGitStoreMockRecorder) Sync(remoteAuth any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Sync", reflect.TypeOf((*MockGitStore)(nil).Sync), remoteAuth)
-}
-
 // Tag mocks base method.
 func (m *MockGitStore) Tag(name string) error {
 	m.ctrl.T.Helper()

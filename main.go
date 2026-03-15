@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sync"
 	"syscall"
 	"time"
 
@@ -137,6 +138,20 @@ func serveCmd() *cobra.Command {
 			defer obs.Stop()
 			gs.SetOnCommit(obs.Notify)
 
+			// 4c. Background remote sync + push goroutines.
+			syncCtx, syncCancel := context.WithCancel(ctx)
+			var syncWg sync.WaitGroup
+			remote, _ := svc.GetRemote("origin")
+			if remote != nil {
+				if err := gs.ConfigureRemote(remote.URL, remote.Branch); err != nil {
+					log.Warn().Err(err).Msg("remote: configure failed")
+				} else {
+					syncWg.Add(2)
+					go runSyncLoop(syncCtx, &syncWg, gs, svc, hub, remote)
+					go runPushLoop(syncCtx, &syncWg, gs, svc, hub, remote)
+				}
+			}
+
 			// 5. Resolve LLM adapter
 			var llmAdapter llm.LLMAdapter
 			provider, err = llm.ResolveProvider(cfg.LLM.Model, cfg.LLM.Provider)
@@ -214,6 +229,8 @@ func serveCmd() *cobra.Command {
 			}()
 
 			<-stop
+			syncCancel()
+			syncWg.Wait()
 			hub.Shutdown()
 			shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
@@ -311,6 +328,84 @@ func (a *reviewerAdapter) StartSession() (interface{}, error) {
 
 func (a *reviewerAdapter) ContinueSession(sessionID, response string) (interface{}, error) {
 	return a.r.ContinueSession(sessionID, response)
+}
+
+// runSyncLoop pulls from the configured remote on a fixed interval.
+// First sync fires immediately, then every remote.Interval seconds.
+func runSyncLoop(ctx context.Context, wg *sync.WaitGroup, gs *git.Store, svc *store.Service, hub *web.TaskHub, remote *store.Remote) {
+	defer wg.Done()
+
+	interval := time.Duration(remote.Interval) * time.Second
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	doSync := func() {
+		result, err := gs.Sync(remote.Branch)
+		if err != nil {
+			errMsg := err.Error()
+			_ = svc.UpdateRemoteStatus(remote.Name, "error", &errMsg)
+			hub.BroadcastSyncError(remote.Name, errMsg)
+			log.Warn().Err(err).Msg("remote sync failed")
+			return
+		}
+		_ = svc.UpdateRemoteStatus(remote.Name, "ok", nil)
+		if result.Synced {
+			hub.BroadcastSyncOK(remote.Name, result.MergeCommit, result.FastForward)
+			log.Info().
+				Bool("fast_forward", result.FastForward).
+				Str("merge_commit", result.MergeCommit).
+				Msg("remote sync complete")
+		}
+	}
+
+	// Immediate first sync.
+	doSync()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			doSync()
+		}
+	}
+}
+
+// runPushLoop pushes the agent branch to origin on a fixed interval.
+func runPushLoop(ctx context.Context, wg *sync.WaitGroup, gs *git.Store, svc *store.Service, hub *web.TaskHub, remote *store.Remote) {
+	defer wg.Done()
+
+	interval := time.Duration(remote.PushInterval) * time.Second
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	doPush := func() {
+		result, err := gs.Push()
+		if err != nil {
+			errMsg := err.Error()
+			_ = svc.UpdateRemotePushStatus(remote.Name, "error", &errMsg)
+			hub.BroadcastPushError(remote.Name, errMsg)
+			log.Warn().Err(err).Msg("remote push failed")
+			return
+		}
+		_ = svc.UpdateRemotePushStatus(remote.Name, "ok", nil)
+		if result.Pushed {
+			hub.BroadcastPushOK(remote.Name)
+			log.Info().Str("branch", gs.Branch()).Msg("remote push complete")
+		}
+	}
+
+	// Immediate first push.
+	doPush()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			doPush()
+		}
+	}
 }
 
 func rebuildCmd() *cobra.Command {

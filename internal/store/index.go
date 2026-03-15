@@ -244,5 +244,18 @@ CREATE TABLE IF NOT EXISTS review_work_items (
     response    TEXT,
     priority    REAL NOT NULL,
     created_at  TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS remotes (
+    name             TEXT PRIMARY KEY,
+    url              TEXT NOT NULL,
+    branch           TEXT NOT NULL DEFAULT 'main',
+    interval         INTEGER NOT NULL DEFAULT 300,
+    last_sync_at     TEXT,
+    last_status      TEXT,
+    last_error       TEXT,
+    push_interval    INTEGER NOT NULL DEFAULT 300,
+    last_push_at     TEXT,
+    last_push_status TEXT,
+    last_push_error  TEXT
 );`, vecDim)
 }

@@ -20,7 +20,7 @@ func TestWhyReturnsHistory(t *testing.T) {
 		Entities: []string{}, Refs: []string{},
 	})
 
-	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
+
 	gs.EXPECT().ReadFile("kb/foo.md").Return(factContent, nil)
 	gs.EXPECT().Log("kb/foo.md").Return([]LogEntry{
 		{Commit: "deadbeef", Date: "2024-01-01T00:00:00Z", Message: "learn: first"},
@@ -71,7 +71,7 @@ func TestWhyRequiresFile(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
 
-	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
+
 
 	handler := WhyHandler(gs, "kb")
 	req := mcpgo.CallToolRequest{}
@@ -90,7 +90,7 @@ func TestWhyFileNotFound(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
 
-	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
+
 	gs.EXPECT().ReadFile("kb/nonexistent.md").Return("", fmt.Errorf("not found"))
 
 	handler := WhyHandler(gs, "kb")

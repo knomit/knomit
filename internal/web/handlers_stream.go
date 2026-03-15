@@ -54,6 +54,12 @@ func handleEvents(gs GitStore, hub *TaskHub) http.HandlerFunc {
 					fmt.Fprintf(w, "event: task\ndata: %s\n\n", data)
 				case StatusEvent:
 					fmt.Fprintf(w, "event: status\ndata: {\"head\":\"%s\"}\n\n", ev.Head)
+				case SyncEvent:
+					data, _ := json.Marshal(ev)
+					fmt.Fprintf(w, "event: %s\ndata: %s\n\n", ev.Status, data)
+				case PushEvent:
+					data, _ := json.Marshal(ev)
+					fmt.Fprintf(w, "event: %s\ndata: %s\n\n", ev.Status, data)
 				default:
 					continue
 				}

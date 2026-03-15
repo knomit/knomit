@@ -21,7 +21,6 @@ type GitStore interface {
 	HeadCommit() (string, error)
 	Branch() string
 	ListAll() ([]string, error)
-	Sync(remoteAuth interface{}) (git.SyncResult, error)
 }
 
 // SearchIndex is the narrow search/index interface needed by query handlers.
