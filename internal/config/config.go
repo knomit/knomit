@@ -38,7 +38,7 @@ func Defaults() Config {
 		RepoPath:     home + "/.knomit",
 		CacheDir:     home + "/.cache/knomit",
 		Port:         "3000",
-		OntologyRoot: "know",
+		OntologyRoot: "kb",
 		LLM:          llm.DefaultConfig(),
 		Git:          git.DefaultConfig(),
 	}
@@ -67,6 +67,8 @@ func Load() (Config, error) {
 	envOr("KNOMIT_LLM_MODEL", &cfg.LLM.Model)
 	envOr("KNOMIT_LLM_PROVIDER", &cfg.LLM.Provider)
 	envOr("KNOMIT_API_KEY", &cfg.LLM.APIKey)
+	envBoolOr("KNOMIT_LLM_CACHE", &cfg.LLM.Cache)
+	envBoolOr("KNOMIT_LLM_BATCH", &cfg.LLM.Batch)
 	envBoolOr("KNOMIT_GIT_REMOTE", &cfg.Git.Remote)
 	envOr("KNOMIT_GIT_PORT", &cfg.Git.Port)
 	envOr("KNOMIT_REMOTE_TOKEN", &cfg.Remote.Token)

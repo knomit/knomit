@@ -8,6 +8,8 @@ import (
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"go.uber.org/mock/gomock"
+
+	"knomit/internal/fact"
 )
 
 func TestLearnWritesFacts(t *testing.T) {
@@ -16,28 +18,28 @@ func TestLearnWritesFacts(t *testing.T) {
 	idx := NewMockSearchIndex(ctrl)
 
 	var capturedFiles map[string]string
-	var capturedUpsert FactRecord
 
-	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
-	gs.EXPECT().BatchWrite(gomock.Any(), gomock.Any()).DoAndReturn(func(files map[string]string, msg string) error {
+
+	idx.EXPECT().Search(gomock.Any()).Return(nil, nil).AnyTimes()
+	gs.EXPECT().BatchWrite(gomock.Any(), gomock.Any()).DoAndReturn(func(files map[string]string, msg string) (string, map[string]string, error) {
 		capturedFiles = files
-		return nil
+		blobHashes := make(map[string]string, len(files))
+		for path := range files {
+			blobHashes[path] = "blob_" + path
+		}
+		return "abc123def456", blobHashes, nil
 	})
-	gs.EXPECT().HeadCommit().Return("abc123def456", nil)
 	gs.EXPECT().Tag(gomock.Any()).Return(nil)
-	idx.EXPECT().Upsert(gomock.Any()).DoAndReturn(func(r FactRecord) error {
-		capturedUpsert = r
-		return nil
-	})
 
-	handler := LearnHandler(gs, idx, "know")
+	handler := LearnHandler(gs, idx, "kb", fact.DefaultOntology())
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
 		"moment_name": "test-moment",
 		"facts": []interface{}{
 			map[string]interface{}{
-				"path":       "test/foo",
+				"topic":      "technology",
+				"category":   "go/testing",
 				"title":      "Test Fact",
 				"body":       "Some body text.",
 				"domain":     []interface{}{"testing"},
@@ -57,15 +59,24 @@ func TestLearnWritesFacts(t *testing.T) {
 		t.Fatalf("handler returned tool error: %v", result.Content)
 	}
 
-	// Verify file was written with normalized path.
-	expectedPath := "know/test/foo.md"
-	if _, ok := capturedFiles[expectedPath]; !ok {
-		t.Fatalf("expected file %q to be written; written: %v", expectedPath, capturedFiles)
+	// Verify file was written with correct path prefix (UUID is random).
+	expectedPrefix := "kb/technology/go/testing/"
+	var writtenPath string
+	for path := range capturedFiles {
+		if strings.HasPrefix(path, expectedPrefix) {
+			writtenPath = path
+		}
+	}
+	if writtenPath == "" {
+		t.Fatalf("expected file with prefix %q to be written; written: %v", expectedPrefix, capturedFiles)
+	}
+	if !strings.HasSuffix(writtenPath, ".md") {
+		t.Fatalf("expected .md suffix, got %q", writtenPath)
 	}
 
 	// Verify the file content parses correctly.
-	content := capturedFiles[expectedPath]
-	fact, err := ParseFact(expectedPath, content)
+	content := capturedFiles[writtenPath]
+	fact, err := ParseFact(writtenPath, content)
 	if err != nil {
 		t.Fatalf("written file does not parse: %v", err)
 	}
@@ -84,41 +95,29 @@ func TestLearnWritesFacts(t *testing.T) {
 		t.Fatalf("moment_tag: got %q want prefix learn/test-moment", tag)
 	}
 
-	// Verify index was updated.
-	if capturedUpsert.Path != expectedPath {
-		t.Fatalf("upserted path: got %q want %q", capturedUpsert.Path, expectedPath)
-	}
 }
 
-func TestLearnNormalizesPath(t *testing.T) {
+func TestLearnRequiresTopic(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
 	idx := NewMockSearchIndex(ctrl)
 
-	var capturedFiles map[string]string
 
-	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
-	gs.EXPECT().BatchWrite(gomock.Any(), gomock.Any()).DoAndReturn(func(files map[string]string, msg string) error {
-		capturedFiles = files
-		return nil
-	})
-	gs.EXPECT().HeadCommit().Return("abc123def456", nil)
-	gs.EXPECT().Tag(gomock.Any()).Return(nil)
-	idx.EXPECT().Upsert(gomock.Any()).Return(nil)
 
-	handler := LearnHandler(gs, idx, "know")
+	handler := LearnHandler(gs, idx, "kb", fact.DefaultOntology())
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
-		"moment_name": "path-test",
+		"moment_name": "test",
 		"facts": []interface{}{
 			map[string]interface{}{
-				"path":       "know/already/normalized.md",
-				"title":      "Normalized",
-				"body":       "",
+				"topic":      "banana",
+				"category":   "foo",
+				"title":      "Bad Topic",
+				"body":       "Body.",
 				"domain":     []interface{}{},
 				"confidence": 0.5,
-				"sources":    0,
+				"sources":    1,
 				"entities":   []interface{}{},
 				"refs":       []interface{}{},
 			},
@@ -129,16 +128,44 @@ func TestLearnNormalizesPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("handler error: %v", err)
 	}
-	if result.IsError {
-		t.Fatalf("tool error: %v", result.Content)
+	if !result.IsError {
+		t.Fatal("expected tool error for invalid topic")
+	}
+}
+
+func TestLearnRequiresCategory(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	gs := NewMockGitStore(ctrl)
+	idx := NewMockSearchIndex(ctrl)
+
+
+
+	handler := LearnHandler(gs, idx, "kb", fact.DefaultOntology())
+
+	req := mcpgo.CallToolRequest{}
+	req.Params.Arguments = map[string]interface{}{
+		"moment_name": "test",
+		"facts": []interface{}{
+			map[string]interface{}{
+				"topic":      "technology",
+				"category":   "",
+				"title":      "No Category",
+				"body":       "Body.",
+				"domain":     []interface{}{},
+				"confidence": 0.5,
+				"sources":    1,
+				"entities":   []interface{}{},
+				"refs":       []interface{}{},
+			},
+		},
 	}
 
-	// Already-normalized path should not be doubled.
-	if _, ok := capturedFiles["know/already/normalized.md"]; !ok {
-		t.Fatalf("expected know/already/normalized.md in written, got: %v", capturedFiles)
+	result, err := handler(context.Background(), req)
+	if err != nil {
+		t.Fatalf("handler error: %v", err)
 	}
-	if _, ok := capturedFiles["know/know/already/normalized.md"]; ok {
-		t.Fatal("path was incorrectly double-prefixed")
+	if !result.IsError {
+		t.Fatal("expected tool error for empty category")
 	}
 }
 
@@ -147,9 +174,9 @@ func TestLearnRequiresMomentName(t *testing.T) {
 	gs := NewMockGitStore(ctrl)
 	idx := NewMockSearchIndex(ctrl)
 
-	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
 
-	handler := LearnHandler(gs, idx, "know")
+
+	handler := LearnHandler(gs, idx, "kb", fact.DefaultOntology())
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
@@ -172,28 +199,31 @@ func TestLearnMultipleFacts(t *testing.T) {
 
 	var capturedFiles map[string]string
 
-	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
-	gs.EXPECT().BatchWrite(gomock.Any(), gomock.Any()).DoAndReturn(func(files map[string]string, msg string) error {
-		capturedFiles = files
-		return nil
-	})
-	gs.EXPECT().HeadCommit().Return("abc123def456", nil)
-	gs.EXPECT().Tag(gomock.Any()).Return(nil)
-	idx.EXPECT().Upsert(gomock.Any()).Return(nil).Times(2)
 
-	handler := LearnHandler(gs, idx, "know")
+	idx.EXPECT().Search(gomock.Any()).Return(nil, nil).AnyTimes()
+	gs.EXPECT().BatchWrite(gomock.Any(), gomock.Any()).DoAndReturn(func(files map[string]string, msg string) (string, map[string]string, error) {
+		capturedFiles = files
+		blobHashes := make(map[string]string, len(files))
+		for path := range files {
+			blobHashes[path] = "blob_" + path
+		}
+		return "abc123def456", blobHashes, nil
+	})
+	gs.EXPECT().Tag(gomock.Any()).Return(nil)
+
+	handler := LearnHandler(gs, idx, "kb", fact.DefaultOntology())
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
 		"moment_name": "multi",
 		"facts": []interface{}{
 			map[string]interface{}{
-				"path": "a", "title": "Fact A", "body": "A body.",
+				"topic": "science", "category": "physics", "title": "Fact A", "body": "A body.",
 				"domain": []interface{}{}, "confidence": 0.8, "sources": 1,
 				"entities": []interface{}{}, "refs": []interface{}{},
 			},
 			map[string]interface{}{
-				"path": "b", "title": "Fact B", "body": "B body.",
+				"topic": "people", "category": "alice", "title": "Fact B", "body": "B body.",
 				"domain": []interface{}{}, "confidence": 0.7, "sources": 1,
 				"entities": []interface{}{}, "refs": []interface{}{},
 			},
@@ -208,11 +238,130 @@ func TestLearnMultipleFacts(t *testing.T) {
 		t.Fatalf("tool error: %v", result.Content)
 	}
 
-	if _, ok := capturedFiles["know/a.md"]; !ok {
-		t.Error("missing know/a.md")
+	// Verify two files were written to different topic paths.
+	var foundScience, foundPeople bool
+	for path := range capturedFiles {
+		if strings.HasPrefix(path, "kb/science/physics/") {
+			foundScience = true
+		}
+		if strings.HasPrefix(path, "kb/people/alice/") {
+			foundPeople = true
+		}
 	}
-	if _, ok := capturedFiles["know/b.md"]; !ok {
-		t.Error("missing know/b.md")
+	if !foundScience {
+		t.Error("missing kb/science/physics/ file")
+	}
+	if !foundPeople {
+		t.Error("missing kb/people/alice/ file")
+	}
+}
+
+func TestLearnHandler_DedupMergesNearDuplicate(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	gs := NewMockGitStore(ctrl)
+	idx := NewMockSearchIndex(ctrl)
+
+
+
+	// Search returns an existing near-duplicate (score=95)
+	idx.EXPECT().Search(gomock.Any()).Return([]SearchResult{
+		{FactWithBody: FactWithBody{
+			FactRecord: FactRecord{
+				Path:       "kb/technology/cameras/abc123.md",
+				Title:      "Camera Review",
+				Domain:     []string{"tech"},
+				Entities:   []string{"camera"},
+				Confidence: 0.8,
+				Sources:    1,
+				Refs:       []string{},
+			},
+			Body: "Great camera with clear video",
+		}, Score: 95},
+	}, nil)
+
+	// Read existing fact to get full content
+	gs.EXPECT().ReadFile("kb/technology/cameras/abc123.md").Return(
+		"---\ndomain: [tech]\nconfidence: 0.8\nsources: 1\nentities: [camera]\nrefs: []\n---\n# Camera Review\n\nGreat camera with clear video\n", nil)
+
+	// BatchWrite should write to existing path (merged)
+	var capturedFiles map[string]string
+	gs.EXPECT().BatchWrite(gomock.Any(), gomock.Any()).DoAndReturn(func(files map[string]string, msg string) (string, map[string]string, error) {
+		capturedFiles = files
+		blobHashes := make(map[string]string, len(files))
+		for path := range files {
+			blobHashes[path] = "blob_" + path
+		}
+		return "commit_merged", blobHashes, nil
+	})
+
+	gs.EXPECT().Tag(gomock.Any()).Return(nil)
+
+	handler := LearnHandler(gs, idx, "kb", fact.DefaultOntology())
+
+	req := mcpgo.CallToolRequest{}
+	req.Params.Arguments = map[string]interface{}{
+		"moment_name": "dedup-test",
+		"facts": []interface{}{
+			map[string]interface{}{
+				"topic":      "technology",
+				"category":   "cameras",
+				"title":      "Camera Assessment",
+				"body":       "Camera provides clear video quality",
+				"domain":     []interface{}{"hardware"},
+				"confidence": 0.9,
+				"sources":    1,
+				"entities":   []interface{}{"camera"},
+				"refs":       []interface{}{},
+			},
+		},
+	}
+
+	result, err := handler(context.Background(), req)
+	if err != nil {
+		t.Fatalf("handler error: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("tool error: %v", result.Content)
+	}
+
+	// Should write to existing path, not a new UUID path
+	if _, ok := capturedFiles["kb/technology/cameras/abc123.md"]; !ok {
+		t.Fatalf("expected write to kb/technology/cameras/abc123.md, got: %v", capturedFiles)
+	}
+
+	// Verify merged content written to the existing path.
+	mergedContent := capturedFiles["kb/technology/cameras/abc123.md"]
+	mergedFact, err := ParseFact("kb/technology/cameras/abc123.md", mergedContent)
+	if err != nil {
+		t.Fatalf("parse merged fact: %v", err)
+	}
+	if mergedFact.Confidence != 0.9 {
+		t.Errorf("confidence: got %v, want 0.9", mergedFact.Confidence)
+	}
+	if mergedFact.Sources != 2 {
+		t.Errorf("sources: got %d, want 2", mergedFact.Sources)
+	}
+}
+
+func TestBuildFactPath(t *testing.T) {
+	path := buildFactPath("kb", "technology", "go/concurrency")
+	if !strings.HasPrefix(path, "kb/technology/go/concurrency/") {
+		t.Fatalf("expected prefix kb/technology/go/concurrency/, got %q", path)
+	}
+	if !strings.HasSuffix(path, ".md") {
+		t.Fatalf("expected .md suffix, got %q", path)
+	}
+	// UUID portion should be 8 chars.
+	parts := strings.Split(path, "/")
+	leaf := strings.TrimSuffix(parts[len(parts)-1], ".md")
+	if len(leaf) != 8 {
+		t.Fatalf("expected 8-char UUID leaf, got %q (%d chars)", leaf, len(leaf))
+	}
+
+	// Two calls should produce different paths.
+	path2 := buildFactPath("kb", "technology", "go/concurrency")
+	if path == path2 {
+		t.Fatal("expected different UUIDs for different calls")
 	}
 }
 

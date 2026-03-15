@@ -1,0 +1,499 @@
+package store_test
+
+import (
+	"testing"
+
+	"knomit/internal/store"
+)
+
+func newTestIndex(t *testing.T) *store.Index {
+	t.Helper()
+	idx, err := store.New(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { idx.Close() })
+	return idx
+}
+
+// ── Watermark tests ──────────────────────────────────────────────────────────
+
+func TestGetReviewWatermark_Empty(t *testing.T) {
+	idx := newTestIndex(t)
+
+	hash, err := idx.GetReviewWatermark("machine/test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hash != "" {
+		t.Fatalf("expected empty string for unset watermark, got %q", hash)
+	}
+}
+
+func TestSetGetReviewWatermark(t *testing.T) {
+	idx := newTestIndex(t)
+
+	if err := idx.SetReviewWatermark("machine/test", "abc123"); err != nil {
+		t.Fatal(err)
+	}
+
+	hash, err := idx.GetReviewWatermark("machine/test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hash != "abc123" {
+		t.Fatalf("expected abc123, got %q", hash)
+	}
+
+	// Overwrite
+	if err := idx.SetReviewWatermark("machine/test", "def456"); err != nil {
+		t.Fatal(err)
+	}
+
+	hash, err = idx.GetReviewWatermark("machine/test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hash != "def456" {
+		t.Fatalf("expected def456, got %q", hash)
+	}
+}
+
+func TestReviewWatermark_IndependentPerBranch(t *testing.T) {
+	idx := newTestIndex(t)
+
+	if err := idx.SetReviewWatermark("branch-a", "aaa"); err != nil {
+		t.Fatal(err)
+	}
+	if err := idx.SetReviewWatermark("branch-b", "bbb"); err != nil {
+		t.Fatal(err)
+	}
+
+	ha, err := idx.GetReviewWatermark("branch-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	hb, err := idx.GetReviewWatermark("branch-b")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ha != "aaa" || hb != "bbb" {
+		t.Fatalf("expected aaa/bbb, got %q/%q", ha, hb)
+	}
+}
+
+// ── Session lifecycle tests ──────────────────────────────────────────────────
+
+func TestCreateAndGetReviewSession(t *testing.T) {
+	idx := newTestIndex(t)
+
+	s, err := idx.CreateReviewSession("machine/test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.ID == "" {
+		t.Fatal("expected non-empty session ID")
+	}
+	if s.Branch != "machine/test" {
+		t.Fatalf("expected branch machine/test, got %q", s.Branch)
+	}
+	if s.Status != "active" {
+		t.Fatalf("expected active status, got %q", s.Status)
+	}
+
+	got, err := idx.GetReviewSession(s.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got == nil {
+		t.Fatal("expected session, got nil")
+	}
+	if got.ID != s.ID {
+		t.Fatalf("expected ID %q, got %q", s.ID, got.ID)
+	}
+}
+
+func TestGetReviewSession_NotFound(t *testing.T) {
+	idx := newTestIndex(t)
+
+	got, err := idx.GetReviewSession("nonexistent-id")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != nil {
+		t.Fatal("expected nil for nonexistent session")
+	}
+}
+
+func TestCompleteReviewSession(t *testing.T) {
+	idx := newTestIndex(t)
+
+	s, err := idx.CreateReviewSession("machine/test")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := idx.CompleteReviewSession(s.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := idx.GetReviewSession(s.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != "completed" {
+		t.Fatalf("expected completed, got %q", got.Status)
+	}
+}
+
+func TestCreateReviewSession_AbandonsStale(t *testing.T) {
+	idx := newTestIndex(t)
+
+	s1, err := idx.CreateReviewSession("machine/test")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Creating a second session on the same branch should abandon the first.
+	s2, err := idx.CreateReviewSession("machine/test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s2.ID == s1.ID {
+		t.Fatal("expected different session IDs")
+	}
+
+	got, err := idx.GetReviewSession(s1.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != "abandoned" {
+		t.Fatalf("expected abandoned, got %q", got.Status)
+	}
+
+	got2, err := idx.GetReviewSession(s2.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got2.Status != "active" {
+		t.Fatalf("expected active, got %q", got2.Status)
+	}
+}
+
+func TestCreateReviewSession_DoesNotAbandonOtherBranch(t *testing.T) {
+	idx := newTestIndex(t)
+
+	s1, err := idx.CreateReviewSession("branch-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Creating on a different branch should not touch branch-a's session.
+	_, err = idx.CreateReviewSession("branch-b")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := idx.GetReviewSession(s1.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != "active" {
+		t.Fatalf("expected active (different branch), got %q", got.Status)
+	}
+}
+
+// ── Work item tests ──────────────────────────────────────────────────────────
+
+func TestInsertAndNextWorkItem(t *testing.T) {
+	idx := newTestIndex(t)
+
+	s, err := idx.CreateReviewSession("machine/test")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Insert two items with different priorities.
+	if err := idx.InsertWorkItem(store.ReviewWorkItem{
+		SessionID:  s.ID,
+		StepType:   "prune",
+		ClusterKey: "cluster-low",
+		FactsJSON:  `["a.md"]`,
+		Priority:   1.0,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := idx.InsertWorkItem(store.ReviewWorkItem{
+		SessionID:  s.ID,
+		StepType:   "distill",
+		ClusterKey: "cluster-high",
+		FactsJSON:  `["b.md","c.md"]`,
+		Priority:   10.0,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Next should return the highest priority item.
+	item, err := idx.NextWorkItem(s.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if item == nil {
+		t.Fatal("expected work item, got nil")
+	}
+	if item.ClusterKey != "cluster-high" {
+		t.Fatalf("expected cluster-high (priority 10), got %q", item.ClusterKey)
+	}
+	if item.StepType != "distill" {
+		t.Fatalf("expected distill, got %q", item.StepType)
+	}
+	if item.Response != nil {
+		t.Fatal("expected nil response for unanswered item")
+	}
+}
+
+func TestSetWorkItemResponse(t *testing.T) {
+	idx := newTestIndex(t)
+
+	s, err := idx.CreateReviewSession("machine/test")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := idx.InsertWorkItem(store.ReviewWorkItem{
+		SessionID:  s.ID,
+		StepType:   "prune",
+		ClusterKey: "cluster-a",
+		FactsJSON:  `["a.md"]`,
+		Priority:   5.0,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	item, err := idx.NextWorkItem(s.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := idx.SetWorkItemResponse(item.ID, "keep all"); err != nil {
+		t.Fatal(err)
+	}
+
+	// After responding, NextWorkItem should return nil (no unanswered items).
+	next, err := idx.NextWorkItem(s.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if next != nil {
+		t.Fatal("expected nil after all items answered")
+	}
+}
+
+func TestNextWorkItem_SkipsAnswered(t *testing.T) {
+	idx := newTestIndex(t)
+
+	s, err := idx.CreateReviewSession("machine/test")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Insert two items: high priority and low priority.
+	if err := idx.InsertWorkItem(store.ReviewWorkItem{
+		SessionID: s.ID, StepType: "prune", ClusterKey: "high",
+		FactsJSON: `["a.md"]`, Priority: 10.0,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := idx.InsertWorkItem(store.ReviewWorkItem{
+		SessionID: s.ID, StepType: "prune", ClusterKey: "low",
+		FactsJSON: `["b.md"]`, Priority: 1.0,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Answer the high-priority item.
+	high, err := idx.NextWorkItem(s.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := idx.SetWorkItemResponse(high.ID, "done"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Next should now return the low-priority item.
+	next, err := idx.NextWorkItem(s.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if next == nil {
+		t.Fatal("expected low-priority item")
+	}
+	if next.ClusterKey != "low" {
+		t.Fatalf("expected low, got %q", next.ClusterKey)
+	}
+}
+
+func TestNextWorkItem_EmptySession(t *testing.T) {
+	idx := newTestIndex(t)
+
+	s, err := idx.CreateReviewSession("machine/test")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	item, err := idx.NextWorkItem(s.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if item != nil {
+		t.Fatal("expected nil for session with no items")
+	}
+}
+
+// ── WorkItemStats tests ──────────────────────────────────────────────────────
+
+func TestWorkItemStats(t *testing.T) {
+	idx := newTestIndex(t)
+
+	s, err := idx.CreateReviewSession("machine/test")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Initially: 0 completed, 0 remaining.
+	c, r, err := idx.WorkItemStats(s.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c != 0 || r != 0 {
+		t.Fatalf("expected 0/0, got %d/%d", c, r)
+	}
+
+	// Insert 3 items.
+	for i, key := range []string{"a", "b", "c"} {
+		if err := idx.InsertWorkItem(store.ReviewWorkItem{
+			SessionID: s.ID, StepType: "prune", ClusterKey: key,
+			FactsJSON: `["x.md"]`, Priority: float64(i),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	c, r, err = idx.WorkItemStats(s.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c != 0 || r != 3 {
+		t.Fatalf("expected 0/3, got %d/%d", c, r)
+	}
+
+	// Answer one.
+	item, _ := idx.NextWorkItem(s.ID)
+	if err := idx.SetWorkItemResponse(item.ID, "ok"); err != nil {
+		t.Fatal(err)
+	}
+
+	c, r, err = idx.WorkItemStats(s.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c != 1 || r != 2 {
+		t.Fatalf("expected 1/2, got %d/%d", c, r)
+	}
+}
+
+// ── GC tests ─────────────────────────────────────────────────────────────────
+
+func TestGCReviewSessions(t *testing.T) {
+	idx := newTestIndex(t)
+
+	// Create 5 sessions on the same branch.
+	var ids []string
+	for i := 0; i < 5; i++ {
+		s, err := idx.CreateReviewSession("machine/test")
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, s.ID)
+	}
+
+	// Only the last one should be active; the rest abandoned.
+	// Add a work item to session 3 (index 2) to test cascade.
+	if err := idx.InsertWorkItem(store.ReviewWorkItem{
+		SessionID: ids[2], StepType: "prune", ClusterKey: "gc-test",
+		FactsJSON: `["z.md"]`, Priority: 1.0,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Keep only 2 most recent sessions.
+	if err := idx.GCReviewSessions("machine/test", 2); err != nil {
+		t.Fatal(err)
+	}
+
+	// Sessions 0, 1, 2 should be deleted; 3 and 4 should remain.
+	for _, id := range ids[:3] {
+		got, err := idx.GetReviewSession(id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != nil {
+			t.Fatalf("expected session %s to be deleted by GC", id)
+		}
+	}
+	for _, id := range ids[3:] {
+		got, err := idx.GetReviewSession(id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got == nil {
+			t.Fatalf("expected session %s to survive GC", id)
+		}
+	}
+
+	// Work items for deleted session should also be gone (cascade).
+	var count int
+	if err := idx.DB().QueryRow(
+		`SELECT COUNT(*) FROM review_work_items WHERE session_id = ?`, ids[2],
+	).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("expected 0 work items after GC cascade, got %d", count)
+	}
+}
+
+func TestGCReviewSessions_IndependentPerBranch(t *testing.T) {
+	idx := newTestIndex(t)
+
+	// Create sessions on two branches.
+	sA, err := idx.CreateReviewSession("branch-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sB, err := idx.CreateReviewSession("branch-b")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// GC branch-a keeping 0 should not affect branch-b.
+	if err := idx.GCReviewSessions("branch-a", 0); err != nil {
+		t.Fatal(err)
+	}
+
+	gotA, err := idx.GetReviewSession(sA.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotA != nil {
+		t.Fatal("expected branch-a session to be deleted")
+	}
+
+	gotB, err := idx.GetReviewSession(sB.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotB == nil {
+		t.Fatal("expected branch-b session to survive")
+	}
+}

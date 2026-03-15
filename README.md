@@ -81,17 +81,26 @@ Knomit's tool descriptions carry all the behavioral guidance the model needs —
 
 #### Claude Desktop
 
+Claude Desktop only supports stdio transports. Use the included `knomit-mcp-remote` bridge (built automatically by `make build`):
+
 Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or `%APPDATA%\Claude\claude_desktop_config.json` (Windows):
 
 ```json
 {
   "mcpServers": {
     "knomit": {
-      "type": "streamable-http",
-      "url": "http://localhost:3000/mcp?profile=chat"
+      "command": "/path/to/dist/knomit-mcp-remote",
+      "args": ["http://localhost:3000/mcp?profile=chat"]
     }
   }
 }
+```
+
+The bridge reads JSON-RPC from stdin, forwards to the knomit HTTP endpoint, and writes responses to stdout.
+
+Use this initial prompt
+```
+You have access to a knowledge base called knomit. Use knomit_learn to save important facts, decisions, and preferences from our conversations. Use knomit_query to check if you already know something before asking me. Use knomit_explore to browse what you know. Use knomit_review to review and maintain the knowledge base — it guides you through evaluating facts step by step.
 ```
 
 ### Web UI
@@ -154,10 +163,10 @@ Running synthesis with no recipe uses a built-in default: prune + distill on all
 |------|-------------|
 | `knomit_learn` | Persist facts — preferences, decisions, conclusions |
 | `knomit_query` | Search by free text, entity, domain, or path |
-| `knomit_explore` | Browse the ontology hierarchy |
-| `knomit_why` | Explain a fact's provenance and learning moment |
+| `knomit_explore` | Browse facts by recency (paginated, 25/page) |
+| `knomit_explain` | Explain a fact's provenance graph (paginated BFS) |
 | `knomit_update` | Revise an existing fact (confidence, body, refs) |
-| `knomit_forget` | Remove a fact (git history retains provenance) |
+| `knomit_retract` | Remove a fact (git history retains provenance) |
 
 ## How it works
 
@@ -175,7 +184,7 @@ refs:
 Alice prefers rock music over jazz.
 ```
 
-The directory tree under `know/` forms an ontological hierarchy. Facts placed at higher levels apply to everything below them — a fact at `know/earth/` is inherited by `know/earth/uk/london/`.
+The directory tree under the ontology root (`kb/` by default) forms an ontological hierarchy. Facts placed at higher levels apply to everything below them — a fact at `kb/geography/` is inherited by `kb/geography/europe/uk/london/`.
 
 Each learning moment is an atomic git commit tagged with `learn/<moment-name>`, giving full provenance tracking.
 
@@ -185,7 +194,7 @@ Refs anchor facts to their source material using the `knomit:` URI scheme:
 
 | Form | Meaning | Example |
 |------|---------|---------|
-| Relative (no authority) | Current knowledge base | `knomit:/know/debugging/pool-fix.md` |
+| Relative (no authority) | Current knowledge base | `knomit:/kb/technology/debugging/pool-fix.md` |
 | Absolute (with host) | External repo | `knomit://github.com/org/repo/src/main.ts` |
 | Plain URL | Any web resource | `https://example.com/doc` |
 

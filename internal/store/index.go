@@ -15,6 +15,7 @@ package store
 import (
 	"database/sql"
 	"fmt"
+	"strings"
 )
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -37,17 +38,24 @@ func WithVecDimension(d int) Option {
 // Domain types
 // ────────────────────────────────────────────────────────────────────────────
 
-// FactRecord represents a single fact stored in the index.
+// FactRecord is the stored record — no body, just a blob_hash pointer.
 type FactRecord struct {
 	Path       string   `json:"path"`
 	Title      string   `json:"title"`
-	Body       string   `json:"body"`
+	BlobHash   string   `json:"blob_hash"`
+	Type       string   `json:"type"`
 	Domain     []string `json:"domain"`
 	Entities   []string `json:"entities"`
 	Confidence float64  `json:"confidence"`
 	Sources    int      `json:"sources"`
 	Refs       []string `json:"refs"`
 	CommitHash string   `json:"commit_hash,omitempty"`
+}
+
+// FactWithBody is returned by read operations that hydrate the body from git objects.
+type FactWithBody struct {
+	FactRecord
+	Body string `json:"body"`
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -66,6 +74,8 @@ type GitReader interface {
 	DiffFiles(fromCommit string) (added, modified, deleted []string, err error)
 	// ReadFile reads the content of path from the HEAD commit.
 	ReadFile(path string) (string, error)
+	// ReadFileWithHash returns both the file content and the blob hash for the given path.
+	ReadFileWithHash(path string) (content string, blobHash string, err error)
 	// HeadCommit returns the hash of the current HEAD commit as a hex string.
 	HeadCommit() (string, error)
 	// ListAll returns paths of all .md files from HEAD.
@@ -80,6 +90,12 @@ type GitReader interface {
 type Index struct {
 	db       *sql.DB
 	embedder Embedder
+}
+
+// newIndex wraps an existing *sql.DB. Schema must already be applied.
+// Used by Service.Open to construct the Index over the shared database.
+func newIndex(db *sql.DB) *Index {
+	return &Index{db: db}
 }
 
 // SetEmbedder attaches an Embedder to the index. When set, Upsert will call
@@ -146,10 +162,43 @@ func (idx *Index) Close() error {
 // Schema DDL
 // ────────────────────────────────────────────────────────────────────────────
 
-// schemaSQL returns the DDL to create all tables: facts (main),
+// extractBody strips YAML frontmatter from raw markdown and returns just the body.
+// It assumes the format: ---\n...\n---\n# Title\n\nBody
+func extractBody(raw []byte) string {
+	content := string(raw)
+	parts := strings.SplitN(content, "---", 3)
+	if len(parts) < 3 {
+		return content
+	}
+	afterFrontmatter := strings.TrimSpace(parts[2])
+	// Skip the title line (first # heading)
+	if idx := strings.Index(afterFrontmatter, "\n"); idx >= 0 {
+		return strings.TrimSpace(afterFrontmatter[idx+1:])
+	}
+	return ""
+}
+
+// schemaSQL returns the DDL to create all tables: objects (git blobs),
+// refs (git references), kv (git config), facts (search index),
 // facts_vec (vec0 embeddings), meta (key-value), and synthesis_log.
 func schemaSQL(vecDim int) string {
 	return fmt.Sprintf(`
+CREATE TABLE IF NOT EXISTS objects (
+    hash TEXT NOT NULL,
+    type INTEGER NOT NULL,
+    size INTEGER NOT NULL,
+    data BLOB NOT NULL,
+    PRIMARY KEY (hash, type)
+);
+CREATE TABLE IF NOT EXISTS refs (
+    name        TEXT PRIMARY KEY,
+    target      TEXT NOT NULL,
+    is_symbolic INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS kv (
+    key   TEXT PRIMARY KEY,
+    value BLOB NOT NULL
+);
 CREATE TABLE IF NOT EXISTS meta (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -163,7 +212,8 @@ CREATE TABLE IF NOT EXISTS synthesis_log (
 CREATE TABLE IF NOT EXISTS facts (
     path        TEXT PRIMARY KEY,
     title       TEXT NOT NULL,
-    body        TEXT NOT NULL,
+    blob_hash   TEXT NOT NULL,
+    type        TEXT NOT NULL DEFAULT 'observation',
     domain      TEXT NOT NULL,
     entities    TEXT NOT NULL,
     confidence  REAL NOT NULL,
@@ -173,5 +223,61 @@ CREATE TABLE IF NOT EXISTS facts (
 );
 CREATE VIRTUAL TABLE IF NOT EXISTS facts_vec USING vec0(
     embedding FLOAT[%d] distance_metric=cosine
+);
+CREATE TABLE IF NOT EXISTS review_watermarks (
+    branch      TEXT PRIMARY KEY,
+    commit_hash TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS review_sessions (
+    id          TEXT PRIMARY KEY,
+    branch      TEXT NOT NULL,
+    status      TEXT NOT NULL DEFAULT 'active',
+    created_at  TEXT NOT NULL,
+    updated_at  TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS review_work_items (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id  TEXT NOT NULL REFERENCES review_sessions(id) ON DELETE CASCADE,
+    step_type   TEXT NOT NULL,
+    cluster_key TEXT NOT NULL,
+    facts_json  TEXT NOT NULL,
+    response    TEXT,
+    priority    REAL NOT NULL,
+    created_at  TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS remotes (
+    name             TEXT PRIMARY KEY,
+    url              TEXT NOT NULL,
+    branch           TEXT NOT NULL DEFAULT 'main',
+    interval         INTEGER NOT NULL DEFAULT 300,
+    last_sync_at     TEXT,
+    last_status      TEXT,
+    last_error       TEXT,
+    push_interval    INTEGER NOT NULL DEFAULT 300,
+    last_push_at     TEXT,
+    last_push_status TEXT,
+    last_push_error  TEXT
+);
+CREATE TABLE IF NOT EXISTS tool_sessions (
+    id           TEXT PRIMARY KEY,
+    tool         TEXT NOT NULL,
+    branch       TEXT NOT NULL,
+    path_prefix  TEXT NOT NULL DEFAULT '',
+    last_commit  TEXT NOT NULL DEFAULT '',
+    status       TEXT NOT NULL DEFAULT 'active',
+    created_at   TEXT NOT NULL,
+    updated_at   TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS tool_seen_paths (
+    session_id TEXT NOT NULL REFERENCES tool_sessions(id) ON DELETE CASCADE,
+    path       TEXT NOT NULL,
+    PRIMARY KEY (session_id, path)
+);
+CREATE TABLE IF NOT EXISTS tool_queue (
+    session_id  TEXT NOT NULL REFERENCES tool_sessions(id) ON DELETE CASCADE,
+    path        TEXT NOT NULL,
+    commit_hash TEXT NOT NULL,
+    depth       INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (session_id, path, commit_hash)
 );`, vecDim)
 }

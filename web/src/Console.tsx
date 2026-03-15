@@ -61,11 +61,6 @@ export function Console({ state, dispatch }: Props) {
         {errorCount > 0 && <span style={{ color: '#c66', fontSize: 11 }}>{errorCount} err</span>}
         <div style={{ flex: 1 }} />
         <span style={{ color: '#666', fontSize: 13 }}>&#x25B2;</span>
-        <span
-          title={state.embeddingsEnabled ? 'Embeddings on' : 'Embeddings off'}
-          style={{ color: state.embeddingsEnabled ? '#8c8' : '#555', fontSize: 11, fontFamily: 'monospace', fontWeight: 'bold' }}>
-          e
-        </span>
       </div>
     );
   }
@@ -97,11 +92,6 @@ export function Console({ state, dispatch }: Props) {
           onClick={() => dispatch({ type: 'CONSOLE_TOGGLE' })}
           style={{ color: '#666', fontSize: 13, cursor: 'pointer' }}
         >&#x25BC;</span>
-        <span
-          title={state.embeddingsEnabled ? 'Embeddings on' : 'Embeddings off'}
-          style={{ color: state.embeddingsEnabled ? '#8c8' : '#555', fontSize: 11, fontFamily: 'monospace', fontWeight: 'bold' }}>
-          e
-        </span>
       </div>
       {/* Log entries */}
       <div

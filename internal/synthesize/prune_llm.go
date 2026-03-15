@@ -9,23 +9,48 @@ import (
 	"strings"
 )
 
+// flexStrings unmarshals from either a JSON string ("x") or array (["x","y"]).
+// Small LLMs sometimes return a bare string where an array is expected.
+type flexStrings []string
+
+func (f *flexStrings) UnmarshalJSON(b []byte) error {
+	// Try array first.
+	var arr []string
+	if err := json.Unmarshal(b, &arr); err == nil {
+		*f = arr
+		return nil
+	}
+	// Fall back to single string.
+	var s string
+	if err := json.Unmarshal(b, &s); err != nil {
+		return err
+	}
+	if s == "" {
+		*f = []string{}
+	} else {
+		*f = []string{s}
+	}
+	return nil
+}
+
 // PruneDecision is the LLM's decision for a single fact.
 type PruneDecision struct {
 	Path       string  `json:"path"`
-	Action     string  `json:"action"` // "keep" | "forget" | "update"
+	Action     string  `json:"action"` // "keep" | "retract" | "update"
 	Confidence float64 `json:"confidence,omitempty"`
 }
 
 // mergedFact is the embedded merged fact object from the LLM response.
 type mergedFact struct {
-	Path       string   `json:"path"`
-	Title      string   `json:"title"`
-	Body       string   `json:"body"`
-	Domain     []string `json:"domain"`
-	Confidence float64  `json:"confidence"`
-	Sources    int      `json:"sources"`
-	Entities   []string `json:"entities"`
-	Refs       []string `json:"refs"`
+	Path       string      `json:"path"`
+	Title      string      `json:"title"`
+	Body       string      `json:"body"`
+	Type       string      `json:"type"`
+	Domain     flexStrings `json:"domain"`
+	Confidence float64     `json:"confidence"`
+	Sources    int         `json:"sources"`
+	Entities   flexStrings `json:"entities"`
+	Refs       flexStrings `json:"refs"`
 }
 
 // MergeEntry groups source paths with the merged replacement fact.
@@ -41,10 +66,13 @@ type PruneResult struct {
 }
 
 // factForLLM is the subset of fact fields sent to the LLM.
+// The Path field uses json:"path" to match the output schema (PruneDecision.Path,
+// distillFact.Path) so small models don't have to map between field names.
 type factForLLM struct {
-	File       string   `json:"file"`
+	File       string   `json:"path"`
 	Title      string   `json:"title"`
 	Body       string   `json:"body"`
+	Type       string   `json:"type"`
 	Domain     []string `json:"domain"`
 	Entities   []string `json:"entities"`
 	Confidence float64  `json:"confidence"`

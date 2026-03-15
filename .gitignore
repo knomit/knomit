@@ -12,7 +12,7 @@ coverage
 
 # logs
 logs
-_.log
+*.log
 report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 
 # dotenv environment variable files
@@ -43,6 +43,9 @@ dist/lib/
 
 # Claude Code
 .claude/
+
+# Vite cache
+web/.vite/
 
 # Large test assets
 internal/embeddings/testdata/*.onnx

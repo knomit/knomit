@@ -1,27 +1,112 @@
 package mcp
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+
+	"knomit/internal/fact"
+)
 
 // baseInstructionsText returns the base MCP server instructions with the given ontology root.
-func baseInstructionsText(ontologyRoot string) string {
+func baseInstructionsText(ontologyRoot string, ontology *fact.Ontology) string {
+	// Build dynamic topic list from ontology.
+	var topicList string
+	if ontology != nil {
+		var lines []string
+		for _, name := range ontology.TopicNames() {
+			node := ontology.Topics[name]
+			if node.Description != "" {
+				lines = append(lines, fmt.Sprintf("  %s — %s", name, node.Description))
+			} else {
+				lines = append(lines, fmt.Sprintf("  %s", name))
+			}
+		}
+		topicList = strings.Join(lines, "\n")
+	} else {
+		topicList = "  (no ontology loaded)"
+	}
 	return fmt.Sprintf(`You are connected to a knomit knowledge base. Use the available tools to learn, query, and manage knowledge.
 
-Key concepts:
-- Facts are stored as markdown files under %s/ with YAML frontmatter (domain, entities, confidence, sources, refs)
-- Each fact has a path like %s/topic/subtopic/fact-name.md
-- Use knomit_learn to store new knowledge, knomit_query to search, knomit_why for provenance
-- Use knomit_update to modify existing facts, knomit_forget to remove outdated knowledge
-- Use knomit_explore to browse the knowledge tree`, ontologyRoot, ontologyRoot)
+## Ontology Structure
+
+Facts are organized under %s/ using a two-level classification:
+
+  %s/<topic>/<category>/<uuid>.md
+
+- **topic**: A validated top-level folder. Available topics:
+%s
+- **category**: A freeform path you choose within the topic (e.g. "cameras/smart-home", "go/concurrency", "alice")
+- **uuid**: Server-generated — you never provide or see this. Each fact gets a unique ID automatically.
+
+### Choosing topic and category
+
+Pick the topic that best fits the subject area. Then build a category path that creates a navigable hierarchy — think of it as a file system for knowledge. A good category path has 2–4 segments that narrow from general to specific:
+
+- "technology" + "languages/go/concurrency" — not just "go" or "go/concurrency"
+- "technology" + "hardware/cameras/smart-home" — not just "cameras"
+- "people" + "colleagues/alice" — not just "alice"
+- "science" + "natural/physics/quantum-mechanics" — not just "physics"
+- "business" + "companies/acme-corp/products" — not just "acme-corp"
+- "technology" + "infrastructure/kubernetes/networking" — not just "kubernetes"
+- "health" + "nutrition/supplements/vitamin-d" — not just "vitamin-d"
+
+Avoid flat categories. "technology" + "react" is too shallow — prefer "technology" + "frameworks/frontend/react". The goal is that browsing the tree at any level reveals a manageable number of subcategories, not hundreds of siblings. Think: would someone navigating this tree understand where to look?
+
+## Fact Frontmatter
+
+Each fact has YAML frontmatter with:
+- **type**: epistemic type (defaults to "observation" if omitted):
+  - observation: concrete, specific statements ("Alice likes Japanese tea")
+  - concept: definitions, mental models ("Japanese tea culture emphasizes mindfulness")
+  - process: procedures, workflows, how-to ("How to brew matcha")
+  - principle: rules, heuristics, causal claims ("Brew below boiling to avoid bitterness")
+  - pattern: recurring solutions, idioms ("When X, do Y")
+  - reference: specs, measurements, enumerations ("Sencha steeps at 70°C for 60s")
+- **domain**: cross-cutting tags from additional classification systems (not the primary ontology path)
+- **entities**: all entities this fact mentions (for search and graph queries)
+- **confidence**: 0.0–1.0 certainty level
+- **sources**: number of independent sources
+- **refs**: external URLs or source-file lineage
+
+## Tools
+
+- **knomit_learn**: store new knowledge — provide topic, category, title, body, and metadata. The server handles deduplication automatically within the same category.
+- **knomit_query**: search existing knowledge. Filters:
+  - text: semantic search across all facts
+  - entities: filter to facts mentioning specific entities (all must match)
+  - domain: filter by cross-cutting domain tags (prefix match — "tech" matches "tech/cloud")
+  - path: filter by path prefix — use this to scope searches to a topic or category. Examples:
+    - path: "%s/technology" → all technology facts
+    - path: "%s/technology/go" → all Go-related facts
+    - path: "%s/people/alice" → all facts about Alice
+  - min_confidence: minimum confidence threshold (0–1)
+- **knomit_explain**: explain a fact by traversing its provenance graph — follows local refs breadth-first, returning referenced facts as they existed at the root fact's commit time. Returns paginated results. Use file to start, pass cursor for next page. External URL refs are returned for you to inspect.
+- **knomit_update**: modify an existing fact's fields
+- **knomit_retract**: remove outdated knowledge
+- **knomit_explore**: browse facts ordered by most recently updated. Returns paginated results (25 per page). Call with no arguments to start; pass the returned cursor to get the next page. Use path to scope to a subtree (e.g. path: "%s/technology"). Use knomit_explain for history on individual facts.
+
+## knomit_review — Knowledge Base Maintenance
+
+Call this tool to review and maintain the knowledge base. It works as a multi-turn conversation:
+
+1. Call knomit_review with no arguments to start a review session
+2. You'll receive a prompt describing facts to evaluate and a response_schema
+3. Reason about the facts, then call knomit_review again with:
+   - session_id: the ID from the previous response
+   - response: your JSON decisions matching the response_schema
+4. Repeat until the response contains "done": true
+
+You may stop at any time — progress is saved and the next session picks up remaining work.`, ontologyRoot, ontologyRoot, topicList, ontologyRoot, ontologyRoot, ontologyRoot, ontologyRoot)
 }
 
 // ProfileInstructions returns the MCP server instructions for the given profile.
 // Valid profiles: "code", "chat", "generic". Unknown profiles fall back to "code".
-func ProfileInstructions(profile, ontologyRoot string) string {
+func ProfileInstructions(profile, ontologyRoot string, ontology *fact.Ontology) string {
 	addendum, ok := profileAddenda[profile]
 	if !ok {
 		addendum = profileAddenda["code"]
 	}
-	return baseInstructionsText(ontologyRoot) + "\n\n" + addendum
+	return baseInstructionsText(ontologyRoot, ontology) + "\n\n" + addendum
 }
 
 var profileAddenda = map[string]string{

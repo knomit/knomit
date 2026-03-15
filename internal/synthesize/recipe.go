@@ -16,6 +16,7 @@ type RecipeStep struct {
 	Resolution     float64 `yaml:"resolution"`      // Louvain resolution (default 1.0)
 	Profile        string  `yaml:"profile"`          // "large", "small", or "" (auto-detect)
 	RetryOnPassive *bool   `yaml:"retry_on_passive"` // nil = use profile default
+	DedupThreshold float64 `yaml:"dedup_threshold"`  // 0 = default (0.92)
 }
 
 // Scope limits which facts are gathered for synthesis.

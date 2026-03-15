@@ -17,18 +17,20 @@ import (
 type GitStore interface {
 	ListDir(path string) ([]git.DirEntry, error)
 	ReadFile(path string) (string, error)
+	ReadFileAtCommit(path, commitHash string) (string, error)
 	Log(path string) ([]git.LogEntry, error)
+	LogPaginated(path string, limit int, after string) ([]git.LogEntryWithTags, string, error)
+	CommitDetail(commitHash string) (*git.CommitDetailResult, error)
 	HeadCommit() (string, error)
 	Branch() string
 	ListAll() ([]string, error)
-	Sync(remoteAuth interface{}) (git.SyncResult, error)
 }
 
 // SearchIndex is the narrow search/index interface needed by query handlers.
 // Accepts *store.Index at runtime.
 type SearchIndex interface {
 	Search(q store.SearchQuery) ([]store.SearchResult, error)
-	GetLastCommit() (string, error)
+	GetLastCommit(branch string) (string, error)
 }
 
 // SynthDeps bundles the dependencies needed by the synthesize handler.
@@ -85,12 +87,13 @@ func NewRouter(gs GitStore, idx SearchIndex, hub *TaskHub, synthDeps *SynthDeps,
 	r.Get("/api/v1/browse", handleBrowse(gs, ontologyRoot))
 	r.Get("/api/v1/fact", handleFact(gs))
 	r.Get("/api/v1/search", handleSearch(idx))
-	r.Get("/api/v1/history", handleHistory(gs))
+	r.Get("/api/v1/history", handleHistoryPaginated(gs))
+	r.Get("/api/v1/commit", handleCommitDetail(gs))
 	r.Get("/api/v1/stats", handleStats(gs))
-	r.Get("/api/v1/status", handleStatus(gs, idx, embeddingsEnabled))
+	r.Get("/api/v1/status", handleStatus(gs, idx, embeddingsEnabled, ontologyRoot))
 	r.Post("/api/v1/synthesize", handleSynthesizeStart(synthDeps, hub))
 	r.Post("/api/v1/sync", handleSync(gs, hub))
-	r.Get("/api/v1/events", handleEvents(gs, idx, hub))
+	r.Get("/api/v1/events", handleEvents(gs, hub))
 	r.Get("/api/v1/openapi.yaml", handleOpenAPISpec())
 	r.Get("/docs", handleSwaggerUI())
 

@@ -13,7 +13,7 @@ Facts to review:
 
 For each fact, decide:
 - keep: fact is current and valuable
-- forget: fact is obsolete, superseded, or no longer true
+- retract: fact is obsolete, superseded, or no longer true
 - update: fact needs confidence adjusted (provide new value)
 
 Also identify facts that say the same thing and should be merged into a single unified fact.
@@ -21,7 +21,7 @@ Also identify facts that say the same thing and should be merged into a single u
 Respond as JSON (no markdown wrapping):
 {
   "decisions": [
-    { "path": "...", "action": "keep|forget|update", "confidence": 0.X }
+    { "path": "...", "action": "keep|retract|update", "confidence": 0.X }
   ],
   "merges": [
     {

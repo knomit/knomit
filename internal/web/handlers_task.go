@@ -80,36 +80,20 @@ func handleSynthesizeStart(deps *SynthDeps, hub *TaskHub) http.HandlerFunc {
 }
 
 // defaultRecipe is used when the POST body is empty, providing a
-// sensible default synthesis operation (prune stale/redundant facts).
+// sensible default synthesis operation (prune then distill).
 const defaultRecipe = `name: default
 prompt: Review and consolidate the knowledge base.
 steps:
   - mode: prune
     prompt: Identify stale, redundant, or outdated facts.
+  - mode: distill
+    prompt: Find patterns across facts and create higher-level summaries.
 `
 
 // handleSync handles POST /api/v1/sync
+// TODO: re-wire to trigger the background sync goroutine instead of calling gs.Sync directly.
 func handleSync(gs GitStore, hub *TaskHub) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		id, err := hub.Start("sync", func(ctx context.Context, emit func(TaskEvent)) {
-			emit(TaskEvent{Status: "running", Message: "syncing"})
-			result, err := gs.Sync(nil)
-			if err != nil {
-				emit(TaskEvent{Status: "error", Message: err.Error()})
-				return
-			}
-			head, _ := gs.HeadCommit()
-			msg := "already up to date"
-			if result.Synced {
-				msg = fmt.Sprintf("merged %d commit(s) from origin/main", result.Ahead)
-			}
-			emit(TaskEvent{Status: "done", Message: fmt.Sprintf("%s (%s)", msg, head[:min(7, len(head))])})
-		})
-		if err != nil {
-			writeTaskConflict(w, "sync", err)
-			return
-		}
-
-		writeTaskStarted(w, "sync", id)
+		writeError(w, http.StatusServiceUnavailable, "sync moved to background goroutine")
 	}
 }

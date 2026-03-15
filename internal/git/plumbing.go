@@ -13,27 +13,28 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/filemode"
 	"github.com/go-git/go-git/v5/plumbing/object"
 
-	"knomit/internal/gitstorer"
+	storegit "knomit/internal/store/git"
 )
 
 // writeFileToStore creates a blob+tree+commit for path/content.
 // parentCommitHash is ZeroHash for the initial commit (no parent).
-func writeFileToStore(s *gitstorer.Storer, parentCommitHash plumbing.Hash, path, content, message string) (plumbing.Hash, error) {
+// Returns (commitHash, blobHash, error).
+func writeFileToStore(s *storegit.Storer, parentCommitHash plumbing.Hash, path, content, message string) (plumbing.Hash, plumbing.Hash, error) {
 	// 1. Create blob.
 	blobObj := s.NewEncodedObject()
 	blobObj.SetType(plumbing.BlobObject)
 	bw, err := blobObj.Writer()
 	if err != nil {
-		return plumbing.ZeroHash, fmt.Errorf("writeFileToStore: blob writer: %w", err)
+		return plumbing.ZeroHash, plumbing.ZeroHash, fmt.Errorf("writeFileToStore: blob writer: %w", err)
 	}
 	if _, err := io.WriteString(bw, content); err != nil {
 		bw.Close()
-		return plumbing.ZeroHash, fmt.Errorf("writeFileToStore: blob write: %w", err)
+		return plumbing.ZeroHash, plumbing.ZeroHash, fmt.Errorf("writeFileToStore: blob write: %w", err)
 	}
 	bw.Close()
 	blobHash, err := s.SetEncodedObject(blobObj)
 	if err != nil {
-		return plumbing.ZeroHash, fmt.Errorf("writeFileToStore: store blob: %w", err)
+		return plumbing.ZeroHash, plumbing.ZeroHash, fmt.Errorf("writeFileToStore: store blob: %w", err)
 	}
 
 	// 2. Read existing root tree (if any).
@@ -41,18 +42,18 @@ func writeFileToStore(s *gitstorer.Storer, parentCommitHash plumbing.Hash, path,
 	if parentCommitHash != plumbing.ZeroHash {
 		parentCommit, err := object.GetCommit(s, parentCommitHash)
 		if err != nil {
-			return plumbing.ZeroHash, fmt.Errorf("writeFileToStore: get parent commit: %w", err)
+			return plumbing.ZeroHash, plumbing.ZeroHash, fmt.Errorf("writeFileToStore: get parent commit: %w", err)
 		}
 		existingTree, err = parentCommit.Tree()
 		if err != nil {
-			return plumbing.ZeroHash, fmt.Errorf("writeFileToStore: get parent tree: %w", err)
+			return plumbing.ZeroHash, plumbing.ZeroHash, fmt.Errorf("writeFileToStore: get parent tree: %w", err)
 		}
 	}
 
 	// 3. Build new root tree with path added/replaced.
 	newRootHash, err := buildTree(s, existingTree, path, blobHash)
 	if err != nil {
-		return plumbing.ZeroHash, fmt.Errorf("writeFileToStore: build tree: %w", err)
+		return plumbing.ZeroHash, plumbing.ZeroHash, fmt.Errorf("writeFileToStore: build tree: %w", err)
 	}
 
 	// 4. Create commit object.
@@ -74,21 +75,21 @@ func writeFileToStore(s *gitstorer.Storer, parentCommitHash plumbing.Hash, path,
 
 	commitObj := s.NewEncodedObject()
 	if err := commit.Encode(commitObj); err != nil {
-		return plumbing.ZeroHash, fmt.Errorf("writeFileToStore: encode commit: %w", err)
+		return plumbing.ZeroHash, plumbing.ZeroHash, fmt.Errorf("writeFileToStore: encode commit: %w", err)
 	}
 	commitHash, err := s.SetEncodedObject(commitObj)
 	if err != nil {
-		return plumbing.ZeroHash, fmt.Errorf("writeFileToStore: store commit: %w", err)
+		return plumbing.ZeroHash, plumbing.ZeroHash, fmt.Errorf("writeFileToStore: store commit: %w", err)
 	}
 
-	return commitHash, nil
+	return commitHash, blobHash, nil
 }
 
 // buildTree constructs a new root tree by adding/replacing path (which may be
-// nested, e.g. "know/sub/foo.md") with blobHash. existing may be nil for an
+// nested, e.g. "general/technology/go/abc123.md") with blobHash. existing may be nil for an
 // empty tree. The function recurses through path segments, creating or updating
 // subtrees as needed.
-func buildTree(s *gitstorer.Storer, existing *object.Tree, path string, blobHash plumbing.Hash) (plumbing.Hash, error) {
+func buildTree(s *storegit.Storer, existing *object.Tree, path string, blobHash plumbing.Hash) (plumbing.Hash, error) {
 	parts := strings.SplitN(path, "/", 2)
 	name := parts[0]
 
@@ -131,7 +132,7 @@ func buildTree(s *gitstorer.Storer, existing *object.Tree, path string, blobHash
 
 // upsertEntry adds or replaces entry in a copy of existing (nil means empty tree),
 // encodes the resulting tree, stores it, and returns its hash.
-func upsertEntry(s *gitstorer.Storer, existing *object.Tree, entry object.TreeEntry) (plumbing.Hash, error) {
+func upsertEntry(s *storegit.Storer, existing *object.Tree, entry object.TreeEntry) (plumbing.Hash, error) {
 	var entries []object.TreeEntry
 
 	if existing != nil {
@@ -160,7 +161,7 @@ func upsertEntry(s *gitstorer.Storer, existing *object.Tree, entry object.TreeEn
 
 // deleteFileFromStore creates a commit that removes path from the tree rooted
 // at parentCommitHash.
-func deleteFileFromStore(s *gitstorer.Storer, parentCommitHash plumbing.Hash, path, message string) (plumbing.Hash, error) {
+func deleteFileFromStore(s *storegit.Storer, parentCommitHash plumbing.Hash, path, message string) (plumbing.Hash, error) {
 	parentCommit, err := object.GetCommit(s, parentCommitHash)
 	if err != nil {
 		return plumbing.ZeroHash, fmt.Errorf("deleteFileFromStore: get parent commit: %w", err)
@@ -202,7 +203,7 @@ func deleteFileFromStore(s *gitstorer.Storer, parentCommitHash plumbing.Hash, pa
 
 // deleteFromTree removes path from the tree rooted at existing, recursing
 // through directory segments as needed.
-func deleteFromTree(s *gitstorer.Storer, existing *object.Tree, path string) (plumbing.Hash, error) {
+func deleteFromTree(s *storegit.Storer, existing *object.Tree, path string) (plumbing.Hash, error) {
 	parts := strings.SplitN(path, "/", 2)
 	name := parts[0]
 
@@ -242,7 +243,7 @@ func deleteFromTree(s *gitstorer.Storer, existing *object.Tree, path string) (pl
 
 // removeEntry removes the entry with name from a copy of existing tree,
 // encodes, stores and returns the new tree hash.
-func removeEntry(s *gitstorer.Storer, existing *object.Tree, name string) (plumbing.Hash, error) {
+func removeEntry(s *storegit.Storer, existing *object.Tree, name string) (plumbing.Hash, error) {
 	var entries []object.TreeEntry
 	if existing != nil {
 		for _, e := range existing.Entries {

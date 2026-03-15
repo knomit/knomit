@@ -5,72 +5,39 @@ import (
 	"encoding/json"
 	"fmt"
 	"testing"
+	"time"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"go.uber.org/mock/gomock"
 )
 
-func TestExploreListsEntries(t *testing.T) {
+func TestExploreFirstPage(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
+	ei := NewMockToolSessionIndex(ctrl)
 
-	files := map[string]string{
-		"know/foo.md": SerializeFact(Fact{
-			Path: "know/foo.md", Title: "Foo Fact", Body: "Foo body.",
-			Domain: []string{}, Confidence: 0.9, Sources: 1, Entities: []string{}, Refs: []string{},
-		}),
-	}
+	ts := time.Date(2026, 3, 14, 10, 0, 0, 0, time.UTC)
 
-	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
-	gs.EXPECT().ListDir("know").Return([]DirEntry{
-		{Name: "sub", IsDir: true},
-		{Name: "foo.md", IsDir: false},
-	}, nil)
-	gs.EXPECT().ReadFile(gomock.Any()).DoAndReturn(func(path string) (string, error) {
-		if content, ok := files[path]; ok {
-			return content, nil
-		}
-		return "", fmt.Errorf("not found: %s", path)
-	}).AnyTimes()
+	factContent := SerializeFact(Fact{
+		Path: "kb/foo.md", Title: "Foo Fact", Body: "Foo body.",
+		Domain: []string{}, Confidence: 0.9, Sources: 1, Entities: []string{}, Refs: []string{},
+	})
 
-	handler := ExploreHandler(gs, "know")
-	req := mcpgo.CallToolRequest{}
-	req.Params.Arguments = map[string]interface{}{
-		"path": "know",
-	}
+	gs.EXPECT().Branch().Return("machine/test").AnyTimes()
+	ei.EXPECT().GCToolSessions("explore", "machine/test", 5).Return(nil)
+	gs.EXPECT().WalkChangedFiles("", "kb", nil, 25).Return(
+		[]FileRecency{{Path: "kb/foo.md", Timestamp: ts}},
+		"abc123", nil,
+	)
+	gs.EXPECT().ReadFile("kb/foo.md").Return(factContent, nil)
+	ei.EXPECT().CreateToolSession("explore", "machine/test", "kb").Return(
+		&ToolSession{ID: "sess-1", Tool: "explore", Branch: "machine/test", PathPrefix: "kb", Status: "active"},
+		nil,
+	)
+	ei.EXPECT().AddSeenPaths("sess-1", []string{"kb/foo.md"}).Return(nil)
+	ei.EXPECT().UpdateToolSession("sess-1", "abc123", "completed").Return(nil)
 
-	result, err := handler(context.Background(), req)
-	if err != nil {
-		t.Fatalf("handler error: %v", err)
-	}
-	if result.IsError {
-		t.Fatalf("tool error: %v", result.Content)
-	}
-
-	text := getResultText(t, result)
-	var resp map[string]interface{}
-	if err := json.Unmarshal([]byte(text), &resp); err != nil {
-		t.Fatalf("invalid JSON: %v\n%s", err, text)
-	}
-
-	children, ok := resp["children"].([]interface{})
-	if !ok {
-		t.Fatalf("children not array: %v", resp["children"])
-	}
-	if len(children) != 2 {
-		t.Fatalf("expected 2 children, got %d: %v", len(children), children)
-	}
-}
-
-func TestExploreDefaultPath(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	gs := NewMockGitStore(ctrl)
-
-	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
-	gs.EXPECT().ListDir("know").Return([]DirEntry{}, nil)
-	gs.EXPECT().ReadFile(gomock.Any()).Return("", fmt.Errorf("not found")).AnyTimes()
-
-	handler := ExploreHandler(gs, "know")
+	handler := ExploreHandler(gs, ei, "kb")
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{}
 
@@ -85,74 +52,57 @@ func TestExploreDefaultPath(t *testing.T) {
 	text := getResultText(t, result)
 	var resp map[string]interface{}
 	if err := json.Unmarshal([]byte(text), &resp); err != nil {
-		t.Fatalf("invalid JSON: %v", err)
+		t.Fatalf("invalid JSON: %v\n%s", err, text)
 	}
-	if _, ok := resp["children"]; !ok {
-		t.Fatal("missing children in response")
+
+	facts, ok := resp["facts"].([]interface{})
+	if !ok || len(facts) != 1 {
+		t.Fatalf("expected 1 fact, got: %v", resp["facts"])
+	}
+	f := facts[0].(map[string]interface{})
+	if f["path"] != "kb/foo.md" {
+		t.Fatalf("expected path kb/foo.md, got %v", f["path"])
+	}
+	if f["title"] != "Foo Fact" {
+		t.Fatalf("expected title Foo Fact, got %v", f["title"])
+	}
+	if resp["has_more"] != false {
+		t.Fatalf("expected has_more=false, got %v", resp["has_more"])
 	}
 }
 
-func TestExploreInheritedFacts(t *testing.T) {
+func TestExploreResumesSession(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
+	ei := NewMockToolSessionIndex(ctrl)
 
-	files := map[string]string{
-		"know/area/sub/local.md": SerializeFact(Fact{
-			Path:       "know/area/sub/local.md",
-			Title:      "Local Fact",
-			Body:       "Local fact, not inherited.",
-			Domain:     []string{},
-			Confidence: 0.9,
-			Sources:    1,
-			Entities:   []string{},
-			Refs:       []string{},
-		}),
-		"know/area/parent.md": SerializeFact(Fact{
-			Path:       "know/area/parent.md",
-			Title:      "Parent Fact",
-			Body:       "Inherited from parent.",
-			Domain:     []string{},
-			Confidence: 0.9,
-			Sources:    1,
-			Entities:   []string{},
-			Refs:       []string{},
-		}),
-		"know/grandparent.md": SerializeFact(Fact{
-			Path:       "know/grandparent.md",
-			Title:      "Grandparent Fact",
-			Body:       "Inherited from grandparent.",
-			Domain:     []string{},
-			Confidence: 0.9,
-			Sources:    1,
-			Entities:   []string{},
-			Refs:       []string{},
-		}),
-	}
+	ts := time.Date(2026, 3, 14, 10, 0, 0, 0, time.UTC)
 
-	dirEntries := map[string][]DirEntry{
-		"know/area/sub": {{Name: "local.md", IsDir: false}},
-		"know/area":     {{Name: "parent.md", IsDir: false}},
-		"know":          {{Name: "grandparent.md", IsDir: false}},
-	}
+	factContent := SerializeFact(Fact{
+		Path: "kb/bar.md", Title: "Bar Fact", Body: "Bar body.",
+		Domain: []string{}, Confidence: 0.9, Sources: 1, Entities: []string{}, Refs: []string{},
+	})
 
-	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
-	gs.EXPECT().ListDir(gomock.Any()).DoAndReturn(func(path string) ([]DirEntry, error) {
-		if entries, ok := dirEntries[path]; ok {
-			return entries, nil
-		}
-		return []DirEntry{}, nil
-	}).AnyTimes()
-	gs.EXPECT().ReadFile(gomock.Any()).DoAndReturn(func(path string) (string, error) {
-		if content, ok := files[path]; ok {
-			return content, nil
-		}
-		return "", fmt.Errorf("not found: %s", path)
-	}).AnyTimes()
+	seen := map[string]bool{"kb/foo.md": true}
 
-	handler := ExploreHandler(gs, "know")
+	gs.EXPECT().Branch().Return("machine/test").AnyTimes()
+	ei.EXPECT().GetToolSession("sess-1").Return(
+		&ToolSession{ID: "sess-1", Tool: "explore", Branch: "machine/test", PathPrefix: "kb", LastCommit: "abc123", Status: "active"},
+		nil,
+	)
+	ei.EXPECT().GetSeenPaths("sess-1").Return(seen, nil)
+	gs.EXPECT().WalkChangedFiles("abc123", "kb", seen, 25).Return(
+		[]FileRecency{{Path: "kb/bar.md", Timestamp: ts}},
+		"def456", nil,
+	)
+	gs.EXPECT().ReadFile("kb/bar.md").Return(factContent, nil)
+	ei.EXPECT().AddSeenPaths("sess-1", []string{"kb/bar.md"}).Return(nil)
+	ei.EXPECT().UpdateToolSession("sess-1", "def456", "completed").Return(nil)
+
+	handler := ExploreHandler(gs, ei, "kb")
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
-		"path": "know/area/sub",
+		"cursor": "sess-1",
 	}
 
 	result, err := handler(context.Background(), req)
@@ -169,78 +119,27 @@ func TestExploreInheritedFacts(t *testing.T) {
 		t.Fatalf("invalid JSON: %v\n%s", err, text)
 	}
 
-	// local.md should appear as a regular child entry, not as an inherited fact.
-	children, ok := resp["children"].([]interface{})
-	if !ok {
-		t.Fatalf("children not array: %v", resp["children"])
+	facts := resp["facts"].([]interface{})
+	if len(facts) != 1 {
+		t.Fatalf("expected 1 fact, got %d", len(facts))
 	}
-	if len(children) != 1 {
-		t.Fatalf("expected 1 child, got %d: %v", len(children), children)
-	}
-	child, ok := children[0].(map[string]interface{})
-	if !ok {
-		t.Fatalf("child not an object: %v", children[0])
-	}
-	if child["name"] != "local" {
-		t.Fatalf("expected child name 'local', got %q", child["name"])
-	}
-
-	// Both parent.md (1 level up) and grandparent.md (2 levels up) must appear as inherited facts.
-	inherited, ok := resp["inherited_facts"].([]interface{})
-	if !ok {
-		t.Fatalf("inherited_facts not array: %v", resp["inherited_facts"])
-	}
-	if len(inherited) != 2 {
-		t.Fatalf("expected 2 inherited facts, got %d: %v", len(inherited), inherited)
-	}
-
-	// Build a map of file -> title for easier assertion.
-	inheritedByFile := map[string]string{}
-	for _, item := range inherited {
-		f, ok := item.(map[string]interface{})
-		if !ok {
-			t.Fatalf("inherited fact not an object: %v", item)
-		}
-		file, _ := f["file"].(string)
-		title, _ := f["title"].(string)
-		inheritedByFile[file] = title
-	}
-
-	if inheritedByFile["know/area/parent.md"] != "Parent Fact" {
-		t.Fatalf("expected inherited 'know/area/parent.md' with title 'Parent Fact', got: %v", inheritedByFile)
-	}
-	if inheritedByFile["know/grandparent.md"] != "Grandparent Fact" {
-		t.Fatalf("expected inherited 'know/grandparent.md' with title 'Grandparent Fact', got: %v", inheritedByFile)
+	if facts[0].(map[string]interface{})["title"] != "Bar Fact" {
+		t.Fatalf("expected Bar Fact, got %v", facts[0])
 	}
 }
 
-func TestExploreWithManifest(t *testing.T) {
+func TestExploreEmptyKB(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
+	ei := NewMockToolSessionIndex(ctrl)
 
-	files := map[string]string{
-		"know/sub.md": SerializeFact(Fact{
-			Path: "know/sub.md", Title: "Sub Manifest", Body: "This is the sub section.",
-			Domain: []string{}, Confidence: 1.0, Sources: 1, Entities: []string{}, Refs: []string{},
-		}),
-	}
+	gs.EXPECT().Branch().Return("machine/test").AnyTimes()
+	ei.EXPECT().GCToolSessions("explore", "machine/test", 5).Return(nil)
+	gs.EXPECT().WalkChangedFiles("", "kb", nil, 25).Return(nil, "", nil)
 
-	gs.EXPECT().Sync(nil).Return(SyncResult{}, nil)
-	gs.EXPECT().ListDir(gomock.Any()).DoAndReturn(func(path string) ([]DirEntry, error) {
-		return []DirEntry{}, nil
-	}).AnyTimes()
-	gs.EXPECT().ReadFile(gomock.Any()).DoAndReturn(func(path string) (string, error) {
-		if content, ok := files[path]; ok {
-			return content, nil
-		}
-		return "", fmt.Errorf("not found: %s", path)
-	}).AnyTimes()
-
-	handler := ExploreHandler(gs, "know")
+	handler := ExploreHandler(gs, ei, "kb")
 	req := mcpgo.CallToolRequest{}
-	req.Params.Arguments = map[string]interface{}{
-		"path": "know/sub",
-	}
+	req.Params.Arguments = map[string]interface{}{}
 
 	result, err := handler(context.Background(), req)
 	if err != nil {
@@ -253,13 +152,97 @@ func TestExploreWithManifest(t *testing.T) {
 	text := getResultText(t, result)
 	var resp map[string]interface{}
 	if err := json.Unmarshal([]byte(text), &resp); err != nil {
-		t.Fatalf("invalid JSON: %v", err)
+		t.Fatalf("invalid JSON: %v\n%s", err, text)
 	}
-	manifest, ok := resp["manifest"].(map[string]interface{})
-	if !ok {
-		t.Fatalf("expected manifest, got: %v", resp["manifest"])
+
+	facts := resp["facts"].([]interface{})
+	if len(facts) != 0 {
+		t.Fatalf("expected 0 facts, got %d", len(facts))
 	}
-	if manifest["title"] != "Sub Manifest" {
-		t.Fatalf("manifest title: got %q", manifest["title"])
+	if resp["cursor"] != nil {
+		t.Fatalf("expected nil cursor, got %v", resp["cursor"])
+	}
+	if resp["has_more"] != false {
+		t.Fatalf("expected has_more=false, got %v", resp["has_more"])
+	}
+}
+
+func TestExploreExpiredSession(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	gs := NewMockGitStore(ctrl)
+	ei := NewMockToolSessionIndex(ctrl)
+
+	gs.EXPECT().Branch().Return("machine/test").AnyTimes()
+	ei.EXPECT().GetToolSession("gone-sess").Return(nil, nil)
+
+	handler := ExploreHandler(gs, ei, "kb")
+	req := mcpgo.CallToolRequest{}
+	req.Params.Arguments = map[string]interface{}{
+		"cursor": "gone-sess",
+	}
+
+	result, err := handler(context.Background(), req)
+	if err != nil {
+		t.Fatalf("handler error: %v", err)
+	}
+	if !result.IsError {
+		t.Fatal("expected tool error for expired session")
+	}
+}
+
+func TestExploreDeletedFactSkipped(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	gs := NewMockGitStore(ctrl)
+	ei := NewMockToolSessionIndex(ctrl)
+
+	ts := time.Date(2026, 3, 14, 10, 0, 0, 0, time.UTC)
+
+	goodContent := SerializeFact(Fact{
+		Path: "kb/good.md", Title: "Good Fact", Body: "Good body.",
+		Domain: []string{}, Confidence: 0.9, Sources: 1, Entities: []string{}, Refs: []string{},
+	})
+
+	gs.EXPECT().Branch().Return("machine/test").AnyTimes()
+	ei.EXPECT().GCToolSessions("explore", "machine/test", 5).Return(nil)
+	gs.EXPECT().WalkChangedFiles("", "kb", nil, 25).Return(
+		[]FileRecency{
+			{Path: "kb/deleted.md", Timestamp: ts},
+			{Path: "kb/good.md", Timestamp: ts},
+		},
+		"abc123", nil,
+	)
+	gs.EXPECT().ReadFile("kb/deleted.md").Return("", fmt.Errorf("not found"))
+	gs.EXPECT().ReadFile("kb/good.md").Return(goodContent, nil)
+	ei.EXPECT().CreateToolSession("explore", "machine/test", "kb").Return(
+		&ToolSession{ID: "sess-2", Tool: "explore", Branch: "machine/test", PathPrefix: "kb", Status: "active"},
+		nil,
+	)
+	ei.EXPECT().AddSeenPaths("sess-2", []string{"kb/good.md"}).Return(nil)
+	ei.EXPECT().UpdateToolSession("sess-2", "abc123", "completed").Return(nil)
+
+	handler := ExploreHandler(gs, ei, "kb")
+	req := mcpgo.CallToolRequest{}
+	req.Params.Arguments = map[string]interface{}{}
+
+	result, err := handler(context.Background(), req)
+	if err != nil {
+		t.Fatalf("handler error: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("tool error: %v", result.Content)
+	}
+
+	text := getResultText(t, result)
+	var resp map[string]interface{}
+	if err := json.Unmarshal([]byte(text), &resp); err != nil {
+		t.Fatalf("invalid JSON: %v\n%s", err, text)
+	}
+
+	facts := resp["facts"].([]interface{})
+	if len(facts) != 1 {
+		t.Fatalf("expected 1 fact (deleted skipped), got %d", len(facts))
+	}
+	if facts[0].(map[string]interface{})["title"] != "Good Fact" {
+		t.Fatalf("expected Good Fact, got %v", facts[0])
 	}
 }

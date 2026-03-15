@@ -13,7 +13,6 @@ import (
 
 	"github.com/rs/zerolog/log"
 	"knomit/internal/llm"
-	"knomit/internal/mcp"
 	"knomit/internal/store"
 )
 
@@ -49,6 +48,7 @@ func executeDistillStep(ctx context.Context, gs GitStore, idx SearchIndex, embed
 				File:       r.Path,
 				Title:      r.Title,
 				Body:       r.Body,
+				Type:       r.Type,
 				Domain:     r.Domain,
 				Entities:   r.Entities,
 				Confidence: r.Confidence,
@@ -101,14 +101,30 @@ func executeDistillStep(ctx context.Context, gs GitStore, idx SearchIndex, embed
 		}
 
 		var depthSynthesized []distillFact
-		for _, group := range clusterMap {
-			synthesized, forget, err := runDistillOnGroup(ctx, gs, idx, adapter, group, step, recipe, profile, onProgress)
+		if ba, ok := adapter.(llm.BatchAdapter); ok && ba.BatchEnabled() {
+			// Batch all groups for this depth at once.
+			var allGroupFacts []factForLLM
+			for _, group := range clusterMap {
+				allGroupFacts = append(allGroupFacts, group...)
+			}
+			synthesized, forget, err := distillBatch(ctx, ba, allGroupFacts, step, recipe, profile, onProgress)
 			if err != nil {
 				return err
 			}
 			depthSynthesized = append(depthSynthesized, synthesized...)
 			for _, p := range forget {
 				allForget[p] = true
+			}
+		} else {
+			for _, group := range clusterMap {
+				synthesized, forget, err := runDistillOnGroup(ctx, gs, idx, adapter, group, step, recipe, profile, onProgress)
+				if err != nil {
+					return err
+				}
+				depthSynthesized = append(depthSynthesized, synthesized...)
+				for _, p := range forget {
+					allForget[p] = true
+				}
 			}
 		}
 		allSynthesized = append(allSynthesized, depthSynthesized...)
@@ -131,6 +147,7 @@ func executeDistillStep(ctx context.Context, gs GitStore, idx SearchIndex, embed
 						File:       df.Path,
 						Title:      df.Title,
 						Body:       df.Body,
+						Type:       df.Type,
 						Domain:     df.Domain,
 						Entities:   df.Entities,
 						Confidence: df.Confidence,
@@ -145,62 +162,17 @@ func executeDistillStep(ctx context.Context, gs GitStore, idx SearchIndex, embed
 		}
 	}
 
-	log.Info().Int("synthesized", len(allSynthesized)).Int("forgotten", len(allForget)).Msg("distill: committing results")
-
-	// Commit synthesized facts.
-	for _, df := range allSynthesized {
-		fact := mcp.Fact{
-			Path:       df.Path,
-			Title:      df.Title,
-			Body:       df.Body,
-			Domain:     df.Domain,
-			Confidence: df.Confidence,
-			Sources:    1,
-			Entities:   df.Entities,
-			Refs:       df.Refs,
-		}
-		content := mcp.SerializeFact(fact)
-		msg := fmt.Sprintf("synthesize-%s: distill %s", recipe.Name, df.Path)
-		if err := gs.WriteFile(df.Path, content, msg); err != nil {
-			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("distill write %s: %v", df.Path, err)})
-			continue
-		}
-		head, _ := gs.HeadCommit()
-		_ = idx.Upsert(store.FactRecord{
-			Path:       df.Path,
-			Title:      df.Title,
-			Body:       df.Body,
-			Domain:     df.Domain,
-			Entities:   df.Entities,
-			Confidence: df.Confidence,
-			Sources:    1,
-			Refs:       df.Refs,
-			CommitHash: head,
-		})
-		if len(df.Refs) > 0 {
-			if err := idx.GraphAddDerivedFrom(df.Path, df.Refs); err != nil {
-				onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("derived_from %s: %v", df.Path, err)})
-			}
-		}
-		onProgress(ProgressEvent{Phase: "detail-learn", Message: df.Path})
+	// Convert allForget map to slice for ApplyDistillDecisions.
+	retractPaths := make([]string, 0, len(allForget))
+	for p := range allForget {
+		retractPaths = append(retractPaths, p)
 	}
 
-	// Delete subsumed facts.
-	for path := range allForget {
-		msg := fmt.Sprintf("synthesize-%s: subsumed by distilled fact", recipe.Name)
-		if err := gs.DeleteFile(path, msg); err != nil {
-			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("distill forget %s: %v", path, err)})
-			continue
-		}
-		_ = idx.Delete(path)
-		onProgress(ProgressEvent{Phase: "detail-distill-forget", Message: path})
+	stats, err := ApplyDistillDecisions(gs, idx, allSynthesized, retractPaths, recipe.Name, onProgress)
+	if err != nil {
+		return err
 	}
 
-	tagName := fmt.Sprintf("learn/synthesize-%s-distill", recipe.Name)
-	if err := gs.Tag(tagName); err != nil {
-		onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("tag %s: %v", tagName, err)})
-	}
-
-	onProgress(ProgressEvent{Phase: "distill-done", Message: fmt.Sprintf("%d synthesized, %d forgotten", len(allSynthesized), len(allForget))})
+	onProgress(ProgressEvent{Phase: "distill-done", Message: fmt.Sprintf("%d synthesized, %d forgotten", stats.Synthesized, stats.Pruned)})
 	return nil
 }

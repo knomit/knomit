@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"time"
 
+	factpkg "knomit/internal/fact"
+
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 )
 
@@ -23,13 +25,24 @@ func updateTool() mcpgo.Tool {
 		),
 		mcpgo.WithObject("updates",
 			mcpgo.Required(),
-			mcpgo.Description("Fields to update."),
+			mcpgo.Description("Fields to update. Include only the fields you want to change."),
+			mcpgo.Properties(map[string]any{
+				"title":      map[string]any{"type": "string", "description": "New title."},
+				"body":       map[string]any{"type": "string", "description": "New body text."},
+				"type":       map[string]any{"type": "string", "description": "Epistemic type: observation, concept, process, principle, pattern, or reference."},
+				"confidence": map[string]any{"type": "number", "description": "Certainty level 0.0–1.0."},
+				"sources":    map[string]any{"type": "integer", "description": "Number of independent sources."},
+				"domain":     map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Replaces domain tags."},
+				"entities":   map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Replaces entity list."},
+				"refs":       map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Appended to existing refs."},
+			}),
 		),
 	)
 }
 
 // updateInput represents the updates object in the request.
 type updateInput struct {
+	Type       *string   `json:"type"`
 	Confidence *float64  `json:"confidence"`
 	Sources    *int      `json:"sources"`
 	Body       *string   `json:"body"`
@@ -40,14 +53,9 @@ type updateInput struct {
 }
 
 // UpdateHandler returns the handler function for knomit_update.
-func UpdateHandler(gs GitStore, idx SearchIndex, ontologyRoot string) func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+func UpdateHandler(gs GitStore, ontologyRoot string) func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 	return func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		// 1. Sync.
-		if _, err := gs.Sync(nil); err != nil {
-			return mcpgo.NewToolResultError(fmt.Sprintf("sync error: %v", err)), nil
-		}
-
-		// 2. Get arguments.
+		// 1. Get arguments.
 		file := req.GetString("file", "")
 		if file == "" {
 			return mcpgo.NewToolResultError("file is required"), nil
@@ -93,6 +101,13 @@ func UpdateHandler(gs GitStore, idx SearchIndex, ontologyRoot string) func(conte
 		}
 
 		// 6. Merge updates into fact.
+		if updates.Type != nil {
+			eType := factpkg.EpistemicType(*updates.Type)
+			if err := eType.Validate(); err != nil {
+				return mcpgo.NewToolResultError(err.Error()), nil
+			}
+			fact.Type = eType
+		}
 		if updates.Confidence != nil {
 			fact.Confidence = *updates.Confidence
 		}
@@ -118,37 +133,16 @@ func UpdateHandler(gs GitStore, idx SearchIndex, ontologyRoot string) func(conte
 
 		// 7. Write updated fact.
 		commitMsg := fmt.Sprintf("update: %s", fact.Title)
-		if err := gs.WriteFile(file, SerializeFact(fact), commitMsg); err != nil {
+		hash, _, err := gs.WriteFile(file, SerializeFact(fact), commitMsg)
+		if err != nil {
 			return mcpgo.NewToolResultError(fmt.Sprintf("write error: %v", err)), nil
 		}
 
-		// 8. Get commit hash.
-		hash, err := gs.HeadCommit()
-		if err != nil {
-			return mcpgo.NewToolResultError(fmt.Sprintf("head commit error: %v", err)), nil
-		}
-
-		// 9. Upsert into index.
-		rec := FactRecord{
-			Path:       fact.Path,
-			Title:      fact.Title,
-			Body:       fact.Body,
-			Domain:     fact.Domain,
-			Entities:   fact.Entities,
-			Confidence: fact.Confidence,
-			Sources:    fact.Sources,
-			Refs:       fact.Refs,
-			CommitHash: hash,
-		}
-		if err := idx.Upsert(rec); err != nil {
-			return mcpgo.NewToolResultError(fmt.Sprintf("index upsert error: %v", err)), nil
-		}
-
-		// 10. Tag.
+		// 8. Tag.
 		sanitized := sanitizeMomentName(momentName)
-		tagName := "learn/" + sanitized
+		tagName := "update/" + sanitized
 		if err := gs.Tag(tagName); err != nil {
-			tagName = fmt.Sprintf("learn/%s-%d", sanitized, time.Now().Unix())
+			tagName = fmt.Sprintf("update/%s-%d", sanitized, time.Now().Unix())
 			if err2 := gs.Tag(tagName); err2 != nil {
 				return mcpgo.NewToolResultError(fmt.Sprintf("tag error: %v", err2)), nil
 			}

@@ -18,7 +18,7 @@ import (
 
 func newTestRouter(gs GitStore, idx SearchIndex) http.Handler {
 	hub := NewTaskHub(context.Background())
-	return NewRouter(gs, idx, hub, nil, map[string]http.Handler(nil), nil, false, "know")
+	return NewRouter(gs, idx, hub, nil, map[string]http.Handler(nil), nil, false, "kb")
 }
 
 func doRequest(t *testing.T, handler http.Handler, method, target string, body string) *httptest.ResponseRecorder {
@@ -47,32 +47,32 @@ func TestHandleBrowse(t *testing.T) {
 		wantLen    int
 	}{
 		{
-			name:  "default path uses know",
+			name:  "default path uses general",
 			query: "/api/v1/browse",
 			entries: []git.DirEntry{
 				{Name: "subdir", IsDir: true},
 				{Name: "fact.md", IsDir: false},
 			},
 			wantStatus: http.StatusOK,
-			wantPath:   "know",
+			wantPath:   "kb",
 			wantLen:    2,
 		},
 		{
 			name:  "explicit path",
-			query: "/api/v1/browse?path=know/sub",
+			query: "/api/v1/browse?path=kb/sub",
 			entries: []git.DirEntry{
 				{Name: "item.md", IsDir: false},
 			},
 			wantStatus: http.StatusOK,
-			wantPath:   "know/sub",
+			wantPath:   "kb/sub",
 			wantLen:    1,
 		},
 		{
 			name:       "empty directory",
-			query:      "/api/v1/browse?path=know/empty",
+			query:      "/api/v1/browse?path=kb/empty",
 			entries:    []git.DirEntry{},
 			wantStatus: http.StatusOK,
-			wantPath:   "know/empty",
+			wantPath:   "kb/empty",
 			wantLen:    0,
 		},
 	}
@@ -129,7 +129,7 @@ func TestHandleFact(t *testing.T) {
 		},
 		{
 			name:       "valid path returns parsed fact",
-			query:      "/api/v1/fact?path=know/chi.md",
+			query:      "/api/v1/fact?path=kb/chi.md",
 			content:    validContent,
 			expectRead: true,
 			wantStatus: http.StatusOK,
@@ -168,10 +168,12 @@ func TestHandleFact(t *testing.T) {
 func TestHandleSearch(t *testing.T) {
 	results := []store.SearchResult{
 		{
-			FactRecord: store.FactRecord{
-				Path:  "know/fact.md",
-				Title: "Test Fact",
-				Body:  "A test fact body.",
+			FactWithBody: store.FactWithBody{
+				FactRecord: store.FactRecord{
+					Path:  "kb/fact.md",
+					Title: "Test Fact",
+				},
+				Body: "A test fact body.",
 			},
 			Score: 95.0,
 		},
@@ -280,7 +282,7 @@ func TestHandleSearchInvalidMinSimilarity(t *testing.T) {
 }
 
 func TestHandleHistory(t *testing.T) {
-	logEntries := []git.LogEntry{
+	logEntries := []git.LogEntryWithTags{
 		{Commit: "abcd1234", Date: "2024-01-01T00:00:00Z", Message: "add fact"},
 		{Commit: "efgh5678", Date: "2024-01-02T00:00:00Z", Message: "update fact"},
 	}
@@ -288,13 +290,15 @@ func TestHandleHistory(t *testing.T) {
 	tests := []struct {
 		name       string
 		query      string
-		entries    []git.LogEntry
+		path       string
+		entries    []git.LogEntryWithTags
 		wantStatus int
 		wantLen    int
 	}{
 		{
 			name:       "returns log entries",
-			query:      "/api/v1/history?path=know/fact.md",
+			query:      "/api/v1/history?path=kb/fact.md",
+			path:       "kb/fact.md",
 			entries:    logEntries,
 			wantStatus: http.StatusOK,
 			wantLen:    2,
@@ -302,13 +306,15 @@ func TestHandleHistory(t *testing.T) {
 		{
 			name:       "empty path returns full log",
 			query:      "/api/v1/history",
+			path:       "",
 			entries:    logEntries[:1],
 			wantStatus: http.StatusOK,
 			wantLen:    1,
 		},
 		{
 			name:       "nil entries returns empty array",
-			query:      "/api/v1/history?path=know/missing.md",
+			query:      "/api/v1/history?path=kb/missing.md",
+			path:       "kb/missing.md",
 			entries:    nil,
 			wantStatus: http.StatusOK,
 			wantLen:    0,
@@ -319,7 +325,7 @@ func TestHandleHistory(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			ctrl := gomock.NewController(t)
 			gs := NewMockGitStore(ctrl)
-			gs.EXPECT().Log(gomock.Any()).Return(tc.entries, nil)
+			gs.EXPECT().LogPaginated(tc.path, 50, "").Return(tc.entries, "", nil)
 
 			handler := newTestRouter(gs, nil)
 			rr := doRequest(t, handler, http.MethodGet, tc.query, "")
@@ -388,7 +394,7 @@ func TestHandleStatus(t *testing.T) {
 			var idx SearchIndex
 			if tc.hasIdx {
 				mockIdx := NewMockSearchIndex(ctrl)
-				mockIdx.EXPECT().GetLastCommit().Return(tc.indexCommit, nil)
+				mockIdx.EXPECT().GetLastCommit(tc.branch).Return(tc.indexCommit, nil)
 				idx = mockIdx
 			}
 

@@ -14,74 +14,93 @@ import (
 )
 
 // WriteFile writes content to path in a new commit with message.
-// Uses go-git plumbing API — NO filesystem.
-func (s *Store) WriteFile(path, content, message string) error {
+// Returns the commit hash and the blob hash of the written file.
+func (s *Store) WriteFile(path, content, message string) (commitHash string, blobHash string, err error) {
 	if path == "" {
-		return fmt.Errorf("git: WriteFile: path must not be empty")
+		return "", "", fmt.Errorf("git: WriteFile: path must not be empty")
 	}
 	if strings.Contains(path, "..") {
-		return fmt.Errorf("git: WriteFile: path must not contain '..'")
+		return "", "", fmt.Errorf("git: WriteFile: path must not contain '..'")
 	}
 
 	headRef, err := s.repo.Head()
 	if err != nil {
-		return fmt.Errorf("WriteFile: head: %w", err)
+		return "", "", fmt.Errorf("WriteFile: head: %w", err)
 	}
 
-	newCommitHash, err := writeFileToStore(s.storer, headRef.Hash(), path, content, message)
+	newCommitHash, newBlobHash, err := writeFileToStore(s.storer, headRef.Hash(), path, content, message)
 	if err != nil {
-		return err
+		return "", "", err
 	}
 
 	// Update the branch ref to point to the new commit.
 	branchRefName := plumbing.NewBranchReferenceName(s.branch)
 	newRef := plumbing.NewHashReference(branchRefName, newCommitHash)
-	return s.storer.SetReference(newRef)
+	if err := s.storer.SetReference(newRef); err != nil {
+		return "", "", err
+	}
+	s.notifyCommit(newCommitHash.String())
+	return newCommitHash.String(), newBlobHash.String(), nil
 }
 
 // DeleteFile removes path from HEAD and creates a commit.
-func (s *Store) DeleteFile(path, message string) error {
+// Returns the commit hash of the new commit.
+func (s *Store) DeleteFile(path, message string) (commitHash string, err error) {
 	if path == "" {
-		return fmt.Errorf("git: DeleteFile: path must not be empty")
+		return "", fmt.Errorf("git: DeleteFile: path must not be empty")
 	}
 	if strings.Contains(path, "..") {
-		return fmt.Errorf("git: DeleteFile: path must not contain '..'")
+		return "", fmt.Errorf("git: DeleteFile: path must not contain '..'")
+	}
+
+	// Check if file exists before creating a commit.
+	exists, err := s.FileExists(path)
+	if err != nil {
+		return "", fmt.Errorf("DeleteFile: check exists: %w", err)
+	}
+	if !exists {
+		return "", fmt.Errorf("DeleteFile: file %q does not exist", path)
 	}
 
 	headRef, err := s.repo.Head()
 	if err != nil {
-		return fmt.Errorf("DeleteFile: head: %w", err)
+		return "", fmt.Errorf("DeleteFile: head: %w", err)
 	}
 
 	newCommitHash, err := deleteFileFromStore(s.storer, headRef.Hash(), path, message)
 	if err != nil {
-		return err
+		return "", err
 	}
 
 	branchRefName := plumbing.NewBranchReferenceName(s.branch)
 	newRef := plumbing.NewHashReference(branchRefName, newCommitHash)
-	return s.storer.SetReference(newRef)
+	if err := s.storer.SetReference(newRef); err != nil {
+		return "", err
+	}
+	s.notifyCommit(newCommitHash.String())
+	return newCommitHash.String(), nil
 }
 
 // BatchWrite writes multiple files in one commit.
-func (s *Store) BatchWrite(files map[string]string, message string) error {
+// Returns the commit hash and a map of path → blob hash for each written file.
+func (s *Store) BatchWrite(files map[string]string, message string) (commitHash string, blobHashes map[string]string, err error) {
 	if len(files) == 0 {
-		return nil
+		return "", nil, nil
 	}
 
 	// Pre-flight validation: reject empty paths and paths containing "..".
 	for path := range files {
 		if path == "" {
-			return fmt.Errorf("git: BatchWrite: path must not be empty")
+			return "", nil, fmt.Errorf("git: BatchWrite: path must not be empty")
 		}
 		if strings.Contains(path, "..") {
-			return fmt.Errorf("git: BatchWrite: path must not contain '..'")
+			return "", nil, fmt.Errorf("git: BatchWrite: path must not contain '..'")
 		}
 	}
 
 	headRef, err := s.repo.Head()
 	if err != nil {
-		return fmt.Errorf("BatchWrite: head: %w", err)
+		return "", nil, fmt.Errorf("BatchWrite: head: %w", err)
 	}
 
 	parentHash := headRef.Hash()
@@ -91,13 +110,15 @@ func (s *Store) BatchWrite(files map[string]string, message string) error {
 	if parentHash != plumbing.ZeroHash {
 		parentCommit, err := object.GetCommit(s.storer, parentHash)
 		if err != nil {
-			return fmt.Errorf("BatchWrite: get parent commit: %w", err)
+			return "", nil, fmt.Errorf("BatchWrite: get parent commit: %w", err)
 		}
 		rootTree, err = parentCommit.Tree()
 		if err != nil {
-			return fmt.Errorf("BatchWrite: get parent tree: %w", err)
+			return "", nil, fmt.Errorf("BatchWrite: get parent tree: %w", err)
 		}
 	}
+
+	blobHashes = make(map[string]string, len(files))
 
 	// Apply each file to the tree sequentially.
 	var currentRootHash plumbing.Hash
@@ -107,28 +128,29 @@ func (s *Store) BatchWrite(files map[string]string, message string) error {
 		blobObj.SetType(plumbing.BlobObject)
 		bw, err := blobObj.Writer()
 		if err != nil {
-			return fmt.Errorf("BatchWrite: blob writer for %q: %w", path, err)
+			return "", nil, fmt.Errorf("BatchWrite: blob writer for %q: %w", path, err)
 		}
 		if _, err := io.WriteString(bw, content); err != nil {
 			bw.Close()
-			return fmt.Errorf("BatchWrite: blob write for %q: %w", path, err)
+			return "", nil, fmt.Errorf("BatchWrite: blob write for %q: %w", path, err)
 		}
 		bw.Close()
 		blobHash, err := s.storer.SetEncodedObject(blobObj)
 		if err != nil {
-			return fmt.Errorf("BatchWrite: store blob for %q: %w", path, err)
+			return "", nil, fmt.Errorf("BatchWrite: store blob for %q: %w", path, err)
 		}
+		blobHashes[path] = blobHash.String()
 
 		// Update tree.
 		currentRootHash, err = buildTree(s.storer, rootTree, path, blobHash)
 		if err != nil {
-			return fmt.Errorf("BatchWrite: build tree for %q: %w", path, err)
+			return "", nil, fmt.Errorf("BatchWrite: build tree for %q: %w", path, err)
 		}
 
 		// Load updated root tree for next iteration.
 		rootTree, err = object.GetTree(s.storer, currentRootHash)
 		if err != nil {
-			return fmt.Errorf("BatchWrite: get updated tree: %w", err)
+			return "", nil, fmt.Errorf("BatchWrite: get updated tree: %w", err)
 		}
 	}
 
@@ -151,16 +173,20 @@ func (s *Store) BatchWrite(files map[string]string, message string) error {
 
 	commitObj := s.storer.NewEncodedObject()
 	if err := commit.Encode(commitObj); err != nil {
-		return fmt.Errorf("BatchWrite: encode commit: %w", err)
+		return "", nil, fmt.Errorf("BatchWrite: encode commit: %w", err)
 	}
-	commitHash, err := s.storer.SetEncodedObject(commitObj)
+	cHash, err := s.storer.SetEncodedObject(commitObj)
 	if err != nil {
-		return fmt.Errorf("BatchWrite: store commit: %w", err)
+		return "", nil, fmt.Errorf("BatchWrite: store commit: %w", err)
 	}
 
 	branchRefName := plumbing.NewBranchReferenceName(s.branch)
-	newRef := plumbing.NewHashReference(branchRefName, commitHash)
-	return s.storer.SetReference(newRef)
+	newRef := plumbing.NewHashReference(branchRefName, cHash)
+	if err := s.storer.SetReference(newRef); err != nil {
+		return "", nil, err
+	}
+	s.notifyCommit(cHash.String())
+	return cHash.String(), blobHashes, nil
 }
 
 // Tag creates a lightweight tag ref at HEAD.

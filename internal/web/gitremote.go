@@ -9,13 +9,16 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/protocol/packp"
 	"github.com/go-git/go-git/v5/plumbing/transport"
 	"github.com/go-git/go-git/v5/plumbing/storer"
-	"knomit/internal/gitstorer"
+	storegit "knomit/internal/store/git"
 )
+
+// gitHTTPSuffixes are the three endpoint paths defined by the git smart HTTP protocol.
+var gitHTTPSuffixes = []string{"/info/refs", "/git-upload-pack", "/git-receive-pack"}
 
 // GitRemoteStore is the narrow interface gitremote needs — just the
 // underlying go-git storer so it can serve pack negotiations.
 type GitRemoteStore interface {
-	Storer() *gitstorer.Storer
+	Storer() *storegit.Storer
 }
 
 // repoLoader adapts a storer.Storer to go-git's server.Loader interface,
@@ -198,7 +201,33 @@ func GitRemoteHandler(gs GitRemoteStore, apiKey string) http.Handler {
 		}
 	})
 
-	return http.StripPrefix("/git", mux)
+	return gitPathStripper(mux)
+}
+
+// gitPathStripper wraps an http.Handler, stripping the repo-name prefix from
+// the URL path so that git smart HTTP suffix endpoints (/info/refs,
+// /git-upload-pack, /git-receive-pack) reach the inner mux.
+func gitPathStripper(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p := r.URL.Path
+		var suffix string
+		for _, s := range gitHTTPSuffixes {
+			if strings.HasSuffix(p, s) {
+				suffix = s
+				break
+			}
+		}
+		if suffix == "" {
+			http.NotFound(w, r)
+			return
+		}
+
+		r2 := r.Clone(r.Context())
+		r2.URL = &*r.URL // shallow copy
+		r2.URL.Path = suffix
+		r2.URL.RawPath = ""
+		next.ServeHTTP(w, r2)
+	})
 }
 
 // bearerAuth checks that the request carries a Bearer token matching key.

@@ -11,5 +11,5 @@ Review these facts again:
 Respond as JSON (no markdown wrapping):
 {
   "synthesize": [...],
-  "forget": [...]
+  "retract": [...]
 }

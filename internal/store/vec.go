@@ -30,7 +30,10 @@ func registerVec() {
 	})
 }
 
-// graphqliteLibPath returns the path to the GraphQLite shared library.
+// graphqliteLibPath returns the path to the GraphQLite shared library
+// without the file extension. The mattn/go-sqlite3 driver appends the
+// platform extension (.so, .dylib, .dll) automatically.
+//
 // Resolution order:
 //  1. GRAPHQLITE_LIB_PATH env var (explicit override)
 //  2. Path relative to the running executable (production / installed binary)
@@ -47,13 +50,16 @@ func graphqliteLibPath() string {
 	case "windows":
 		ext = ".dll"
 	}
-	rel := filepath.Join("lib", runtime.GOOS+"-"+runtime.GOARCH, "graphqlite"+ext)
+	// The file on disk has the extension, but we return the path without it
+	// because the mattn driver appends it automatically.
+	fileName := "graphqlite" + ext
+	baseName := "graphqlite"
 
-	// Try exe-relative path first (production binaries).
+	// Try exe-relative path first (production binaries: dist/lib/).
 	if exe, err := os.Executable(); err == nil {
-		candidate := filepath.Join(filepath.Dir(exe), rel)
-		if _, err := os.Stat(candidate); err == nil {
-			return candidate
+		dir := filepath.Dir(exe)
+		if _, err := os.Stat(filepath.Join(dir, "lib", fileName)); err == nil {
+			return filepath.Join(dir, "lib", baseName)
 		}
 	}
 
@@ -62,16 +68,15 @@ func graphqliteLibPath() string {
 	_, file, _, ok := runtime.Caller(0)
 	if ok {
 		srcDir := filepath.Join(filepath.Dir(file), "..", "..")
-		candidate := filepath.Join(srcDir, rel)
-		if _, err := os.Stat(candidate); err == nil {
-			return candidate
+		if _, err := os.Stat(filepath.Join(srcDir, "dist", "lib", fileName)); err == nil {
+			return filepath.Join(srcDir, "dist", "lib", baseName)
 		}
 	}
 
 	// Return a best-effort path; the driver will fail at connection time with
 	// a clear error if the library is truly missing.
 	exe, _ := os.Executable()
-	return filepath.Join(filepath.Dir(exe), rel)
+	return filepath.Join(filepath.Dir(exe), "lib", baseName)
 }
 
 // float32SliceToBytes encodes a []float32 as little-endian bytes

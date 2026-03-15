@@ -1,4 +1,4 @@
-Review these facts. For each one, decide: keep, forget, or update.
+Review these facts. For each one, decide: keep, retract, or update.
 {{- if .RecipePrompt}}
 
 Context: {{.RecipePrompt}}
@@ -9,8 +9,8 @@ Instructions: {{.StepPrompt}}
 {{- end}}
 
 RULES:
-1. If two facts say the same thing, mark one as "forget" and keep the better one, OR merge them.
-2. If a fact is clearly outdated or wrong, mark it "forget".
+1. If two facts say the same thing, mark one as "retract" and keep the better one, OR merge them.
+2. If a fact is clearly outdated or wrong, mark it "retract".
 3. If a fact's confidence should change, mark it "update" with the new confidence value.
 4. Only mark "keep" if the fact is accurate, unique, and valuable.
 
@@ -21,7 +21,7 @@ EXAMPLE OUTPUT:
 {
   "decisions": [
     { "path": "know/topic/fact1.md", "action": "keep", "confidence": 0.9 },
-    { "path": "know/topic/fact2.md", "action": "forget" },
+    { "path": "know/topic/fact2.md", "action": "retract" },
     { "path": "know/topic/fact3.md", "action": "update", "confidence": 0.5 }
   ],
   "merges": [

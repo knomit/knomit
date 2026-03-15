@@ -17,9 +17,11 @@ func queryTool() mcpgo.Tool {
 		),
 		mcpgo.WithArray("entities",
 			mcpgo.Description("Filter by entities (all must be present)."),
+			mcpgo.WithStringItems(),
 		),
 		mcpgo.WithArray("domain",
 			mcpgo.Description("Filter by domain tags."),
+			mcpgo.WithStringItems(),
 		),
 		mcpgo.WithString("path",
 			mcpgo.Description("Filter by path prefix."),
@@ -33,17 +35,7 @@ func queryTool() mcpgo.Tool {
 // QueryHandler returns the handler function for knomit_query.
 func QueryHandler(gs GitStore, idx SearchIndex) func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 	return func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		// 1. Sync.
-		if _, err := gs.Sync(nil); err != nil {
-			return mcpgo.NewToolResultError(fmt.Sprintf("sync error: %v", err)), nil
-		}
-
-		// 2. Sync index.
-		if err := idx.Sync(gs); err != nil {
-			return mcpgo.NewToolResultError(fmt.Sprintf("index sync error: %v", err)), nil
-		}
-
-		// 3. Build query.
+		// 1. Build query.
 		text := req.GetString("text", "")
 		entities := req.GetStringSlice("entities", nil)
 		domain := req.GetStringSlice("domain", nil)

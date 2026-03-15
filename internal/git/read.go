@@ -16,6 +16,58 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/object"
 )
 
+// ReadFileWithHash returns both the file content and the blob hash for the given path.
+func (s *Store) ReadFileWithHash(path string) (string, string, error) {
+	headRef, err := s.repo.Head()
+	if err != nil {
+		return "", "", fmt.Errorf("ReadFileWithHash: head: %w", err)
+	}
+	commit, err := s.repo.CommitObject(headRef.Hash())
+	if err != nil {
+		return "", "", fmt.Errorf("ReadFileWithHash: commit: %w", err)
+	}
+	tree, err := commit.Tree()
+	if err != nil {
+		return "", "", fmt.Errorf("ReadFileWithHash: tree: %w", err)
+	}
+	entry, err := tree.FindEntry(path)
+	if err != nil {
+		return "", "", fmt.Errorf("ReadFileWithHash: entry %s: %w", path, err)
+	}
+	blob, err := s.repo.BlobObject(entry.Hash)
+	if err != nil {
+		return "", "", fmt.Errorf("ReadFileWithHash: blob: %w", err)
+	}
+	r, err := blob.Reader()
+	if err != nil {
+		return "", "", fmt.Errorf("ReadFileWithHash: reader: %w", err)
+	}
+	defer r.Close()
+	b, err := io.ReadAll(r)
+	if err != nil {
+		return "", "", fmt.Errorf("ReadFileWithHash: read: %w", err)
+	}
+	return string(b), entry.Hash.String(), nil
+}
+
+// ReadFileAtCommit reads the content of path from a specific commit.
+func (s *Store) ReadFileAtCommit(path, commitHash string) (string, error) {
+	hash := plumbing.NewHash(commitHash)
+	commit, err := s.repo.CommitObject(hash)
+	if err != nil {
+		return "", fmt.Errorf("ReadFileAtCommit: commit: %w", err)
+	}
+	tree, err := commit.Tree()
+	if err != nil {
+		return "", fmt.Errorf("ReadFileAtCommit: tree: %w", err)
+	}
+	f, err := tree.File(path)
+	if err != nil {
+		return "", fmt.Errorf("ReadFileAtCommit: file %q: %w", path, err)
+	}
+	return f.Contents()
+}
+
 // ReadFile reads the content of path from the HEAD commit.
 func (s *Store) ReadFile(path string) (string, error) {
 	headRef, err := s.repo.Head()
@@ -184,6 +236,274 @@ func (s *Store) Log(path string) ([]LogEntry, error) {
 	}
 
 	return entries, nil
+}
+
+// LogPaginated returns log entries with pagination and tags.
+// If path is empty, returns all commits. If after is non-empty, skips
+// commits until that hash is found, then returns the next `limit` entries.
+// Returns the entries, a "next" cursor (empty string if no more), and error.
+func (s *Store) LogPaginated(path string, limit int, after string) ([]LogEntryWithTags, string, error) {
+	headRef, err := s.repo.Head()
+	if err != nil {
+		return nil, "", fmt.Errorf("LogPaginated: head: %w", err)
+	}
+
+	opts := &gogit.LogOptions{
+		From:  headRef.Hash(),
+		Order: gogit.LogOrderCommitterTime,
+	}
+	if path != "" {
+		if strings.HasSuffix(path, ".md") {
+			// Specific file: exact match.
+			opts.FileName = &path
+		} else {
+			// Directory: prefix match using PathFilter.
+			prefix := path + "/"
+			opts.PathFilter = func(p string) bool {
+				return strings.HasPrefix(p, prefix)
+			}
+		}
+	}
+
+	logIter, err := s.repo.Log(opts)
+	if err != nil {
+		return nil, "", fmt.Errorf("LogPaginated: %w", err)
+	}
+	defer logIter.Close()
+
+	tagIndex, err := s.buildTagIndex()
+	if err != nil {
+		return nil, "", fmt.Errorf("LogPaginated: tags: %w", err)
+	}
+
+	skipping := after != ""
+	afterHash := plumbing.NewHash(after)
+
+	var entries []LogEntryWithTags
+	var nextCursor string
+
+	_ = logIter.ForEach(func(c *object.Commit) error {
+		if skipping {
+			if c.Hash == afterHash {
+				skipping = false
+			}
+			return nil
+		}
+
+		if len(entries) >= limit {
+			nextCursor = c.Hash.String()
+			return io.EOF
+		}
+
+		hash := c.Hash.String()
+		firstLine := c.Message
+		if idx := strings.IndexByte(firstLine, '\n'); idx >= 0 {
+			firstLine = firstLine[:idx]
+		}
+
+		tags := tagIndex[c.Hash]
+		if tags == nil {
+			tags = []string{}
+		}
+
+		entries = append(entries, LogEntryWithTags{
+			Commit:  hash,
+			Date:    c.Committer.When.UTC().Format(time.RFC3339),
+			Message: firstLine,
+			Tags:    tags,
+		})
+		return nil
+	})
+
+	return entries, nextCursor, nil
+}
+
+// buildTagIndex returns a map from commit hash to tag names.
+func (s *Store) buildTagIndex() (map[plumbing.Hash][]string, error) {
+	idx := make(map[plumbing.Hash][]string)
+	refIter, err := s.storer.IterReferences()
+	if err != nil {
+		return nil, err
+	}
+	_ = refIter.ForEach(func(ref *plumbing.Reference) error {
+		name := ref.Name().String()
+		if strings.HasPrefix(name, "refs/tags/") {
+			tagName := strings.TrimPrefix(name, "refs/tags/")
+			idx[ref.Hash()] = append(idx[ref.Hash()], tagName)
+		}
+		return nil
+	})
+	return idx, nil
+}
+
+// CommitDetail returns metadata and changed files for a specific commit.
+// It diffs the commit's tree against its parent to determine which files changed.
+func (s *Store) CommitDetail(commitHash string) (*CommitDetailResult, error) {
+	hash := plumbing.NewHash(commitHash)
+	commit, err := s.repo.CommitObject(hash)
+	if err != nil {
+		return nil, fmt.Errorf("CommitDetail: commit: %w", err)
+	}
+
+	toTree, err := commit.Tree()
+	if err != nil {
+		return nil, fmt.Errorf("CommitDetail: tree: %w", err)
+	}
+
+	var fromTree *object.Tree
+	if commit.NumParents() > 0 {
+		parent, err := commit.Parent(0)
+		if err != nil {
+			return nil, fmt.Errorf("CommitDetail: parent: %w", err)
+		}
+		fromTree, err = parent.Tree()
+		if err != nil {
+			return nil, fmt.Errorf("CommitDetail: parent tree: %w", err)
+		}
+	}
+
+	changes, err := object.DiffTree(fromTree, toTree)
+	if err != nil {
+		return nil, fmt.Errorf("CommitDetail: diff: %w", err)
+	}
+
+	files := []ChangedFile{}
+	for _, ch := range changes {
+		from := ch.From.Name
+		to := ch.To.Name
+		switch {
+		case from == "" && to != "":
+			if strings.HasSuffix(to, ".md") {
+				files = append(files, ChangedFile{Path: to, Action: "added"})
+			}
+		case from != "" && to == "":
+			if strings.HasSuffix(from, ".md") {
+				files = append(files, ChangedFile{Path: from, Action: "deleted"})
+			}
+		default:
+			if strings.HasSuffix(to, ".md") {
+				files = append(files, ChangedFile{Path: to, Action: "modified"})
+			}
+		}
+	}
+
+	firstLine := commit.Message
+	if idx := strings.IndexByte(firstLine, '\n'); idx >= 0 {
+		firstLine = firstLine[:idx]
+	}
+
+	tagIndex, _ := s.buildTagIndex()
+	tags := tagIndex[hash]
+	if tags == nil {
+		tags = []string{}
+	}
+
+	return &CommitDetailResult{
+		Commit:  hash.String(),
+		Date:    commit.Committer.When.UTC().Format(time.RFC3339),
+		Message: firstLine,
+		Tags:    tags,
+		Files:   files,
+	}, nil
+}
+
+// WalkChangedFiles walks commit history from fromCommit (or HEAD if empty),
+// diffs each commit against its parent, and yields .md files under prefix that
+// haven't been seen before. It stops after limit unique files or end of history.
+// Returns the found files (most-recently-changed first) and the full hash of the
+// last commit examined.
+func (s *Store) WalkChangedFiles(fromCommit string, prefix string, seen map[string]bool, limit int) ([]FileRecency, string, error) {
+	var from plumbing.Hash
+	if fromCommit != "" {
+		from = plumbing.NewHash(fromCommit)
+	} else {
+		headRef, err := s.repo.Head()
+		if err != nil {
+			return nil, "", fmt.Errorf("WalkChangedFiles: head: %w", err)
+		}
+		from = headRef.Hash()
+	}
+
+	logIter, err := s.repo.Log(&gogit.LogOptions{
+		From:  from,
+		Order: gogit.LogOrderCommitterTime,
+	})
+	if err != nil {
+		return nil, "", fmt.Errorf("WalkChangedFiles: log: %w", err)
+	}
+	defer logIter.Close()
+
+	// Merge caller's seen set into a local copy.
+	localSeen := make(map[string]bool, len(seen))
+	for k, v := range seen {
+		localSeen[k] = v
+	}
+
+	prefixDir := prefix + "/"
+
+	var results []FileRecency
+	var lastHash string
+
+	err = logIter.ForEach(func(c *object.Commit) error {
+		lastHash = c.Hash.String()
+
+		toTree, err := c.Tree()
+		if err != nil {
+			return fmt.Errorf("tree: %w", err)
+		}
+
+		var fromTree *object.Tree
+		if c.NumParents() > 0 {
+			parent, err := c.Parent(0)
+			if err != nil {
+				return fmt.Errorf("parent: %w", err)
+			}
+			fromTree, err = parent.Tree()
+			if err != nil {
+				return fmt.Errorf("parent tree: %w", err)
+			}
+		}
+
+		changes, err := object.DiffTree(fromTree, toTree)
+		if err != nil {
+			return fmt.Errorf("diff: %w", err)
+		}
+
+		for _, ch := range changes {
+			// Use the "to" name for adds/modifies, "from" name for deletes.
+			path := ch.To.Name
+			if path == "" {
+				path = ch.From.Name
+			}
+
+			if !strings.HasSuffix(path, ".md") {
+				continue
+			}
+			// Filter by prefix: must be under prefix/ or equal to prefix.md
+			if prefix != "" && path != prefix+".md" && !strings.HasPrefix(path, prefixDir) {
+				continue
+			}
+			if localSeen[path] {
+				continue
+			}
+
+			localSeen[path] = true
+			results = append(results, FileRecency{
+				Path:      path,
+				Timestamp: c.Committer.When.UTC(),
+			})
+
+			if len(results) >= limit {
+				return io.EOF
+			}
+		}
+		return nil
+	})
+	if err != nil && err != io.EOF {
+		return nil, "", fmt.Errorf("WalkChangedFiles: iterate: %w", err)
+	}
+
+	return results, lastHash, nil
 }
 
 // Grep searches all .md files in HEAD for pattern, returns matching paths.

@@ -5,10 +5,26 @@ import (
 	"fmt"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	sqlite3 "github.com/mattn/go-sqlite3"
 )
+
+// insertBlob inserts a fake blob into the objects table for testing.
+// content is the full raw file content (frontmatter + body).
+// If content looks like a plain body (no frontmatter), it is wrapped.
+func insertBlob(t *testing.T, db *sql.DB, hash, content string) {
+	t.Helper()
+	if !strings.HasPrefix(content, "---\n") {
+		content = "---\ndomain: [test]\nconfidence: 0.9\nsources: 1\n---\n# Title\n\n" + content
+	}
+	_, err := db.Exec(`INSERT OR IGNORE INTO objects(hash, type, size, data) VALUES (?, ?, ?, ?)`,
+		hash, BlobObjectType, len(content), []byte(content))
+	if err != nil {
+		t.Fatalf("insertBlob %s: %v", hash, err)
+	}
+}
 
 // stubEmbedder4d returns deterministic 4-dimensional embeddings based on the text.
 type stubEmbedder4d struct{}
@@ -28,19 +44,13 @@ func (s *stubEmbedder4d) Embed(text string) ([]float32, error) {
 }
 
 // graphqliteTestPath returns the absolute path to the vendored GraphQLite
-// shared library for the current platform (without file extension — mattn
-// driver strips it).
+// shared library for the current platform, without the file extension.
+// The mattn/go-sqlite3 driver appends the platform extension automatically.
 func graphqliteTestPath(t *testing.T) string {
 	t.Helper()
 	_, file, _, _ := runtime.Caller(0)
 	repoRoot := filepath.Join(filepath.Dir(file), "..", "..")
-	ext := ".so"
-	if runtime.GOOS == "darwin" {
-		ext = ".dylib"
-	} else if runtime.GOOS == "windows" {
-		ext = ".dll"
-	}
-	return filepath.Join(repoRoot, "lib", runtime.GOOS+"-"+runtime.GOARCH, "graphqlite"+ext)
+	return filepath.Join(repoRoot, "dist", "lib", "graphqlite")
 }
 
 func TestSchemaMigrationV3ToV4(t *testing.T) {
@@ -100,7 +110,7 @@ func TestGraphMergeFact(t *testing.T) {
 	defer idx.Close()
 
 	err = idx.graphSyncFact(FactRecord{
-		Path:     "know/test/fact.md",
+		Path:     "kb/test/fact.md",
 		Title:    "Test Fact",
 		Domain:   []string{"engineering/software"},
 		Entities: []string{"Go", "SQLite"},
@@ -111,12 +121,12 @@ func TestGraphMergeFact(t *testing.T) {
 
 	// Verify Fact node exists
 	var path string
-	err = idx.db.QueryRow(`SELECT json_extract(value, '$.path') FROM json_each(cypher('MATCH (f:Fact {path: "know/test/fact.md"}) RETURN f.path AS path'))`).Scan(&path)
+	err = idx.db.QueryRow(`SELECT json_extract(value, '$.path') FROM json_each(cypher('MATCH (f:Fact {path: "kb/test/fact.md"}) RETURN f.path AS path'))`).Scan(&path)
 	if err != nil {
 		t.Fatalf("Fact node not found: %v", err)
 	}
-	if path != "know/test/fact.md" {
-		t.Fatalf("expected path know/test/fact.md, got %q", path)
+	if path != "kb/test/fact.md" {
+		t.Fatalf("expected path kb/test/fact.md, got %q", path)
 	}
 }
 
@@ -130,7 +140,7 @@ func TestGraphMergeFactWithApostrophe(t *testing.T) {
 	// Regression: apostrophe in title broke the outer SQL string in
 	// SELECT cypher('...'), producing: near "s": syntax error
 	err = idx.graphSyncFact(FactRecord{
-		Path:     "know/people/dave/postgres-expert.md",
+		Path:     "kb/people/dave/postgres-expert.md",
 		Title:    "Dave's Postgres expertise",
 		Domain:   []string{"engineering"},
 		Entities: []string{"Dave", "PostgreSQL"},
@@ -140,7 +150,7 @@ func TestGraphMergeFactWithApostrophe(t *testing.T) {
 	}
 
 	var title string
-	err = idx.db.QueryRow(`SELECT json_extract(value, '$.title') FROM json_each(cypher('MATCH (f:Fact {path: "know/people/dave/postgres-expert.md"}) RETURN f.title AS title'))`).Scan(&title)
+	err = idx.db.QueryRow(`SELECT json_extract(value, '$.title') FROM json_each(cypher('MATCH (f:Fact {path: "kb/people/dave/postgres-expert.md"}) RETURN f.title AS title'))`).Scan(&title)
 	if err != nil {
 		t.Fatalf("Fact node not found: %v", err)
 	}
@@ -157,7 +167,7 @@ func TestGraphDomainHierarchy(t *testing.T) {
 	defer idx.Close()
 
 	err = idx.graphSyncFact(FactRecord{
-		Path:   "know/test/fact.md",
+		Path:   "kb/test/fact.md",
 		Domain: []string{"engineering/software/applications/web-server"},
 	})
 	if err != nil {
@@ -200,11 +210,11 @@ func TestGraphDeleteFact(t *testing.T) {
 
 	// Create then delete
 	_ = idx.graphSyncFact(FactRecord{
-		Path:     "know/test/fact.md",
+		Path:     "kb/test/fact.md",
 		Domain:   []string{"eng"},
 		Entities: []string{"Go"},
 	})
-	err = idx.graphDeleteFact("know/test/fact.md")
+	err = idx.graphDeleteFact("kb/test/fact.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -212,7 +222,7 @@ func TestGraphDeleteFact(t *testing.T) {
 	// Fact node should be marked deleted.
 	// json_extract returns integer 1 for JSON boolean true (SQLite has no bool type).
 	var deleted int
-	err = idx.db.QueryRow(`SELECT json_extract(value, '$.deleted') FROM json_each(cypher('MATCH (f:Fact {path: "know/test/fact.md"}) RETURN f.deleted AS deleted'))`).Scan(&deleted)
+	err = idx.db.QueryRow(`SELECT json_extract(value, '$.deleted') FROM json_each(cypher('MATCH (f:Fact {path: "kb/test/fact.md"}) RETURN f.deleted AS deleted'))`).Scan(&deleted)
 	if err != nil {
 		t.Fatalf("Fact node not found after delete: %v", err)
 	}
@@ -229,9 +239,11 @@ func TestGraphBuildSimilarityEdges(t *testing.T) {
 	defer idx.Close()
 
 	idx.SetEmbedder(&stubEmbedder4d{})
+	insertBlob(t, idx.db, "hash_alpha", "alpha")
+	insertBlob(t, idx.db, "hash_beta", "beta")
 	facts := []FactRecord{
-		{Path: "know/a.md", Title: "A", Body: "alpha", Domain: []string{"test"}, Entities: []string{}, Refs: []string{}, CommitHash: "abc"},
-		{Path: "know/b.md", Title: "B", Body: "beta", Domain: []string{"test"}, Entities: []string{}, Refs: []string{}, CommitHash: "abc"},
+		{Path: "kb/a.md", Title: "A", BlobHash: "hash_alpha", Domain: []string{"test"}, Entities: []string{}, Refs: []string{}, CommitHash: "abc"},
+		{Path: "kb/b.md", Title: "B", BlobHash: "hash_beta", Domain: []string{"test"}, Entities: []string{}, Refs: []string{}, CommitHash: "abc"},
 	}
 	for _, f := range facts {
 		if err := idx.Upsert(f); err != nil {
@@ -239,13 +251,13 @@ func TestGraphBuildSimilarityEdges(t *testing.T) {
 		}
 	}
 
-	err = idx.graphBuildSimilarityEdges("know/a.md")
+	err = idx.graphBuildSimilarityEdges("kb/a.md")
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	var count int
-	err = idx.db.QueryRow(`SELECT count(*) FROM json_each(cypher('MATCH (:Fact {path: "know/a.md"})-[:SIMILAR_TO]->(:Fact) RETURN 1 AS n'))`).Scan(&count)
+	err = idx.db.QueryRow(`SELECT count(*) FROM json_each(cypher('MATCH (:Fact {path: "kb/a.md"})-[:SIMILAR_TO]->(:Fact) RETURN 1 AS n'))`).Scan(&count)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -309,9 +321,10 @@ func TestUpsertSyncsGraph(t *testing.T) {
 	}
 	defer idx.Close()
 	idx.SetEmbedder(&stubEmbedder4d{})
+	insertBlob(t, idx.db, "hash_test", "test content")
 
 	err = idx.Upsert(FactRecord{
-		Path: "know/eng/test.md", Title: "Test",
+		Path: "kb/eng/test.md", Title: "Test", BlobHash: "hash_test",
 		Domain: []string{"engineering/software"}, Entities: []string{"Go"},
 		Refs: []string{}, CommitHash: "abc",
 	})
@@ -321,7 +334,7 @@ func TestUpsertSyncsGraph(t *testing.T) {
 
 	// Fact node should exist in graph
 	var factPath string
-	err = idx.db.QueryRow(`SELECT json_extract(value, '$.path') FROM json_each(cypher('MATCH (f:Fact {path: "know/eng/test.md"}) RETURN f.path AS path'))`).Scan(&factPath)
+	err = idx.db.QueryRow(`SELECT json_extract(value, '$.path') FROM json_each(cypher('MATCH (f:Fact {path: "kb/eng/test.md"}) RETURN f.path AS path'))`).Scan(&factPath)
 	if err != nil {
 		t.Fatalf("Fact node not in graph after Upsert: %v", err)
 	}
@@ -341,20 +354,21 @@ func TestDeleteSyncsGraph(t *testing.T) {
 	}
 	defer idx.Close()
 	idx.SetEmbedder(&stubEmbedder4d{})
+	insertBlob(t, idx.db, "hash_del", "delete test")
 
 	_ = idx.Upsert(FactRecord{
-		Path: "know/test.md", Title: "Test",
+		Path: "kb/test.md", Title: "Test", BlobHash: "hash_del",
 		Domain: []string{"eng"}, Entities: []string{"Go"},
 		Refs: []string{}, CommitHash: "abc",
 	})
-	err = idx.Delete("know/test.md")
+	err = idx.Delete("kb/test.md")
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// Fact should be marked deleted (json_extract returns 1 for JSON true)
 	var deleted int
-	err = idx.db.QueryRow(`SELECT json_extract(value, '$.deleted') FROM json_each(cypher('MATCH (f:Fact {path: "know/test.md"}) RETURN f.deleted AS deleted'))`).Scan(&deleted)
+	err = idx.db.QueryRow(`SELECT json_extract(value, '$.deleted') FROM json_each(cypher('MATCH (f:Fact {path: "kb/test.md"}) RETURN f.deleted AS deleted'))`).Scan(&deleted)
 	if err != nil {
 		t.Fatalf("Fact node missing after Delete: %v", err)
 	}
@@ -370,12 +384,15 @@ func TestClusterFactsLouvain(t *testing.T) {
 	}
 	defer idx.Close()
 	idx.SetEmbedder(&stubEmbedder4d{})
+	insertBlob(t, idx.db, "hash_alpha", "alpha")
+	insertBlob(t, idx.db, "hash_beta", "beta")
+	insertBlob(t, idx.db, "hash_gamma", "gamma")
 
 	// Create facts that share entities (will form a cluster via TAGGED edges)
 	facts := []FactRecord{
-		{Path: "know/a.md", Title: "A", Body: "alpha", Domain: []string{"eng"}, Entities: []string{"Go", "SQLite"}, Refs: []string{}, CommitHash: "abc"},
-		{Path: "know/b.md", Title: "B", Body: "beta", Domain: []string{"eng"}, Entities: []string{"Go", "SQLite"}, Refs: []string{}, CommitHash: "abc"},
-		{Path: "know/c.md", Title: "C", Body: "gamma", Domain: []string{"eng"}, Entities: []string{"Go"}, Refs: []string{}, CommitHash: "abc"},
+		{Path: "kb/a.md", Title: "A", BlobHash: "hash_alpha", Domain: []string{"eng"}, Entities: []string{"Go", "SQLite"}, Refs: []string{}, CommitHash: "abc"},
+		{Path: "kb/b.md", Title: "B", BlobHash: "hash_beta", Domain: []string{"eng"}, Entities: []string{"Go", "SQLite"}, Refs: []string{}, CommitHash: "abc"},
+		{Path: "kb/c.md", Title: "C", BlobHash: "hash_gamma", Domain: []string{"eng"}, Entities: []string{"Go"}, Refs: []string{}, CommitHash: "abc"},
 	}
 	for _, f := range facts {
 		if err := idx.Upsert(f); err != nil {
@@ -408,14 +425,16 @@ func TestSearchWithGraphExpansion(t *testing.T) {
 	}
 	defer idx.Close()
 	idx.SetEmbedder(&stubEmbedder4d{})
+	insertBlob(t, idx.db, "hash_alpha", "alpha")
+	insertBlob(t, idx.db, "hash_beta", "beta")
 
 	_ = idx.Upsert(FactRecord{
-		Path: "know/a.md", Title: "A", Body: "alpha",
+		Path: "kb/a.md", Title: "A", BlobHash: "hash_alpha",
 		Domain: []string{"eng"}, Entities: []string{"Go"},
 		Refs: []string{}, CommitHash: "abc",
 	})
 	_ = idx.Upsert(FactRecord{
-		Path: "know/b.md", Title: "B", Body: "beta",
+		Path: "kb/b.md", Title: "B", BlobHash: "hash_beta",
 		Domain: []string{"eng"}, Entities: []string{"Go"},
 		Refs: []string{}, CommitHash: "abc",
 	})
@@ -435,14 +454,15 @@ func TestSearchWithGraphExpansion(t *testing.T) {
 	}
 	t.Logf("results: %v", paths)
 	// With graph expansion, fact B should appear (connected via shared Entity "Go")
-	if !paths["know/b.md"] {
-		t.Error("expected know/b.md in results via graph expansion (shared Entity Go)")
+	if !paths["kb/b.md"] {
+		t.Error("expected kb/b.md in results via graph expansion (shared Entity Go)")
 	}
 }
 
 type mockGitReader struct {
-	files map[string]string
-	head  string
+	files      map[string]string
+	blobHashes map[string]string // path → blob hash
+	head       string
 }
 
 func (m *mockGitReader) DiffFiles(from string) (added, modified, deleted []string, err error) {
@@ -453,6 +473,19 @@ func (m *mockGitReader) ReadFile(path string) (string, error) {
 		return c, nil
 	}
 	return "", fmt.Errorf("not found: %s", path)
+}
+func (m *mockGitReader) ReadFileWithHash(path string) (string, string, error) {
+	c, ok := m.files[path]
+	if !ok {
+		return "", "", fmt.Errorf("not found: %s", path)
+	}
+	hash := "blob_" + path
+	if m.blobHashes != nil {
+		if h, ok := m.blobHashes[path]; ok {
+			hash = h
+		}
+	}
+	return c, hash, nil
 }
 func (m *mockGitReader) HeadCommit() (string, error) { return m.head, nil }
 func (m *mockGitReader) ListAll() ([]string, error) {
@@ -471,15 +504,20 @@ func TestSyncRebuildsGraph(t *testing.T) {
 	defer idx.Close()
 	idx.SetEmbedder(&stubEmbedder4d{})
 
+	contentA := "---\ndomain: [eng]\nentities: [Go]\nconfidence: 0.9\nsources: 1\n---\n# A\n\nBody A"
+	contentB := "---\ndomain: [eng]\nentities: [Rust]\nconfidence: 0.8\nsources: 1\n---\n# B\n\nBody B"
+	insertBlob(t, idx.db, "blob_kb/a.md", contentA)
+	insertBlob(t, idx.db, "blob_kb/b.md", contentB)
+
 	git := &mockGitReader{
 		files: map[string]string{
-			"know/a.md": "---\ndomain: [eng]\nentities: [Go]\nconfidence: 0.9\nsources: 1\n---\n# A\n\nBody A",
-			"know/b.md": "---\ndomain: [eng]\nentities: [Rust]\nconfidence: 0.8\nsources: 1\n---\n# B\n\nBody B",
+			"kb/a.md": contentA,
+			"kb/b.md": contentB,
 		},
 		head: "abc123def456",
 	}
 
-	err = idx.Sync(git)
+	err = idx.Sync(git, "main")
 	if err != nil {
 		t.Fatal(err)
 	}
