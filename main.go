@@ -80,7 +80,7 @@ func serveCmd() *cobra.Command {
 					if authErr != nil {
 						return fmt.Errorf("resolve auth: %w", authErr)
 					}
-					gs, err = git.InitFromRemote(svc.GitStorer(), cfg.Git.Origin, auth)
+					gs, err = git.InitFromRemote(svc.GitStorer(), cfg.Git.Origin, auth, "")
 					if err != nil {
 						return fmt.Errorf("init from remote: %w", err)
 					}
@@ -94,7 +94,7 @@ func serveCmd() *cobra.Command {
 					initFiles := map[string]string{
 						"domains/ontology.yaml": string(ontologyYAML),
 					}
-					gs, err = git.InitWithStorer(svc.GitStorer(), initFiles)
+					gs, err = git.InitWithStorer(svc.GitStorer(), initFiles, "")
 					if err != nil {
 						return fmt.Errorf("init git: %w", err)
 					}
@@ -324,7 +324,7 @@ func initCmd() *cobra.Command {
 			initFiles := map[string]string{
 				"domains/ontology.yaml": string(ontologyYAML),
 			}
-			if _, err := git.InitWithStorer(svc.GitStorer(), initFiles); err != nil {
+			if _, err := git.InitWithStorer(svc.GitStorer(), initFiles, ""); err != nil {
 				return fmt.Errorf("init git: %w", err)
 			}
 			fmt.Printf("Initialized knomit repo at %s\n", cfg.RepoPath)
