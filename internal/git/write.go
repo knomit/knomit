@@ -53,6 +53,15 @@ func (s *Store) DeleteFile(path, message string) (commitHash string, err error) 
 		return "", fmt.Errorf("git: DeleteFile: path must not contain '..'")
 	}
 
+	// Check if file exists before creating a commit.
+	exists, err := s.FileExists(path)
+	if err != nil {
+		return "", fmt.Errorf("DeleteFile: check exists: %w", err)
+	}
+	if !exists {
+		return "", fmt.Errorf("DeleteFile: file %q does not exist", path)
+	}
+
 	headRef, err := s.repo.Head()
 	if err != nil {
 		return "", fmt.Errorf("DeleteFile: head: %w", err)

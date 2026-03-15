@@ -240,6 +240,28 @@ func TestDeleteFile(t *testing.T) {
 	}
 }
 
+func TestDeleteFile_AlreadyDeleted(t *testing.T) {
+	dir := t.TempDir()
+	store, err := git.Init(filepath.Join(dir, "knomit.git.db"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	if _, _, err := store.WriteFile("kb/gone.md", "# Gone\n", "add file"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.DeleteFile("kb/gone.md", "delete once"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Second delete should return an error, not create a no-op commit.
+	_, err = store.DeleteFile("kb/gone.md", "delete twice")
+	if err == nil {
+		t.Fatal("expected error deleting already-deleted file")
+	}
+}
+
 func TestTag(t *testing.T) {
 	dir := t.TempDir()
 	store, err := git.Init(filepath.Join(dir, "knomit.git.db"), nil)
