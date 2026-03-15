@@ -23,7 +23,7 @@ func openTestService(t *testing.T) *Service {
 func TestDeleteFactAtomically(t *testing.T) {
 	svc := openTestService(t)
 
-	gs, err := git.InitWithStorer(svc.GitStorer(), nil)
+	gs, err := git.InitWithStorer(svc.GitStorer(), nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,7 +70,7 @@ func TestDeleteFactAtomically(t *testing.T) {
 func TestFullRoundtrip(t *testing.T) {
 	svc := openTestService(t)
 
-	gs, err := git.InitWithStorer(svc.GitStorer(), nil)
+	gs, err := git.InitWithStorer(svc.GitStorer(), nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}

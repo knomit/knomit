@@ -165,6 +165,14 @@ func (s *Store) Sync(remoteBranch string) (SyncResult, error) {
 		return SyncResult{}, fmt.Errorf("Sync: store merge commit: %w", err)
 	}
 
+	if s.signer != nil {
+		mergeHash, err = signCommitInPlace(s.storer, s.signer, mergeHash)
+		if err != nil {
+			s.mu.Unlock()
+			return SyncResult{}, fmt.Errorf("Sync: sign merge commit: %w", err)
+		}
+	}
+
 	newRef := plumbing.NewHashReference(agentRefName, mergeHash)
 	if err := s.storer.SetReference(newRef); err != nil {
 		s.mu.Unlock()

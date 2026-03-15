@@ -35,6 +35,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/transport"
 	"github.com/go-git/go-billy/v5/memfs"
 	_ "github.com/mattn/go-sqlite3"
+	"golang.org/x/crypto/ssh"
 
 	"github.com/rs/zerolog/log"
 	storegit "knomit/internal/store/git"
@@ -50,6 +51,7 @@ type Store struct {
 	ownedDB  *sql.DB // non-nil when ownsDB is true
 	branch   string  // e.g. "agent/laptop"
 	auth     transport.AuthMethod
+	signer   ssh.Signer // signs commits when set
 	onCommit func(hash string)
 }
 
@@ -111,7 +113,7 @@ CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value BLOB NOT NULL);
 
 // InitWithStorer creates a new knomit git store using an externally provided storer.
 // The storer's schema must already be applied.
-func InitWithStorer(s *storegit.Storer, initFiles map[string]string) (*Store, error) {
+func InitWithStorer(s *storegit.Storer, initFiles map[string]string, agentBranch string) (*Store, error) {
 	repo, err := gogit.Init(s, memfs.New())
 	if err != nil {
 		return nil, fmt.Errorf("git.Init: git init: %w", err)
@@ -143,11 +145,13 @@ func InitWithStorer(s *storegit.Storer, initFiles map[string]string) (*Store, er
 		}
 	}
 
-	hostname, err := os.Hostname()
-	if err != nil {
-		hostname = "local"
+	if agentBranch == "" {
+		hostname, err := os.Hostname()
+		if err != nil {
+			hostname = "local"
+		}
+		agentBranch = "agent/" + hostname
 	}
-	agentBranch := "agent/" + hostname
 	agentRefName := plumbing.NewBranchReferenceName(agentBranch)
 
 	agentRef := plumbing.NewHashReference(agentRefName, lastCommit)
@@ -216,7 +220,7 @@ func Init(dbPath string, initFiles map[string]string) (*Store, error) {
 	}
 
 	s := storegit.NewStorer(db)
-	store, err := InitWithStorer(s, initFiles)
+	store, err := InitWithStorer(s, initFiles, "")
 	if err != nil {
 		db.Close()
 		return nil, err
@@ -297,11 +301,16 @@ func (s *Store) SetAuth(auth transport.AuthMethod) {
 	s.auth = auth
 }
 
+// SetSigner sets the SSH signer used for commit signing.
+func (s *Store) SetSigner(signer ssh.Signer) {
+	s.signer = signer
+}
+
 // InitFromRemote initializes a knomit git store by fetching from a remote origin.
 // If the remote has an existing agent branch for this hostname, it is used.
 // Otherwise a new agent branch is created from origin/main.
 // If the remote is empty (no refs), falls back to InitWithStorer.
-func InitFromRemote(s *storegit.Storer, originURL string, auth transport.AuthMethod) (*Store, error) {
+func InitFromRemote(s *storegit.Storer, originURL string, auth transport.AuthMethod, agentBranch string) (*Store, error) {
 	repo, err := gogit.Init(s, memfs.New())
 	if err != nil {
 		return nil, fmt.Errorf("InitFromRemote: git init: %w", err)
@@ -343,11 +352,13 @@ func InitFromRemote(s *storegit.Storer, originURL string, auth transport.AuthMet
 		if writeErr != nil {
 			return nil, fmt.Errorf("InitFromRemote: empty remote fallback: %w", writeErr)
 		}
-		hostname, _ := os.Hostname()
-		if hostname == "" {
-			hostname = "local"
+		if agentBranch == "" {
+			hostname, _ := os.Hostname()
+			if hostname == "" {
+				hostname = "local"
+			}
+			agentBranch = "agent/" + hostname
 		}
-		agentBranch := "agent/" + hostname
 		agentRefName := plumbing.NewBranchReferenceName(agentBranch)
 		if writeErr = s.SetReference(plumbing.NewHashReference(agentRefName, lastCommit)); writeErr != nil {
 			return nil, fmt.Errorf("InitFromRemote: empty remote set agent ref: %w", writeErr)
@@ -370,11 +381,13 @@ func InitFromRemote(s *storegit.Storer, originURL string, auth transport.AuthMet
 		return nil, fmt.Errorf("InitFromRemote: fetch: %w", err)
 	}
 
-	hostname, err := os.Hostname()
-	if err != nil {
-		hostname = "local"
+	if agentBranch == "" {
+		hostname, err := os.Hostname()
+		if err != nil {
+			hostname = "local"
+		}
+		agentBranch = "agent/" + hostname
 	}
-	agentBranch := "agent/" + hostname
 	agentRefName := plumbing.NewBranchReferenceName(agentBranch)
 
 	// Check for existing remote agent branch.

@@ -25,7 +25,7 @@ func TestReviewLoopIntegration(t *testing.T) {
 	reviewIdx := svc.Index()
 
 	// Real git store backed by SQLite storer.
-	gitStore, err := git.InitWithStorer(svc.GitStorer(), nil)
+	gitStore, err := git.InitWithStorer(svc.GitStorer(), nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}

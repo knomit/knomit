@@ -1079,7 +1079,7 @@ func TestInitFromRemote_WithContent(t *testing.T) {
 
 	// InitFromRemote into a fresh storer.
 	s := newTestStorer(t)
-	store, err := git.InitFromRemote(s, "inmem:///origin-ifr", nil)
+	store, err := git.InitFromRemote(s, "inmem:///origin-ifr", nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1133,7 +1133,7 @@ func TestInitFromRemote_ExistingAgentBranch(t *testing.T) {
 
 	// InitFromRemote — should find the existing agent branch.
 	s := newTestStorer(t)
-	store, err := git.InitFromRemote(s, "inmem:///origin-ifr2", nil)
+	store, err := git.InitFromRemote(s, "inmem:///origin-ifr2", nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1164,7 +1164,7 @@ func TestInitFromRemote_EmptyRemote(t *testing.T) {
 
 	// InitFromRemote with empty remote — should fall back to InitWithStorer.
 	s := newTestStorer(t)
-	store, err := git.InitFromRemote(s, "inmem:///empty-origin", nil)
+	store, err := git.InitFromRemote(s, "inmem:///empty-origin", nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}

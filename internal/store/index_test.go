@@ -255,7 +255,7 @@ func TestIncrementalSync(t *testing.T) {
 	}
 	defer svc.Close()
 
-	gitStore, err := git.InitWithStorer(svc.GitStorer(), nil)
+	gitStore, err := git.InitWithStorer(svc.GitStorer(), nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}
