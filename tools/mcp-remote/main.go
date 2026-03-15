@@ -141,12 +141,21 @@ func main() {
 	}
 }
 
-// writeLine writes a JSON line to stdout, ensuring exactly one newline.
+// writeLine writes a JSON line to stdout as a single atomic write,
+// ensuring exactly one trailing newline.
 func writeLine(w io.Writer, mu *sync.Mutex, data []byte) {
+	// Trim any trailing whitespace from the data to avoid double newlines.
+	data = bytes.TrimRight(data, " \t\r\n")
+	if len(data) == 0 {
+		return
+	}
 	logDebug("→ stdout: %s", truncate(string(data), 200))
+	// Single write call to avoid partial reads on the pipe.
+	msg := make([]byte, len(data)+1)
+	copy(msg, data)
+	msg[len(data)] = '\n'
 	mu.Lock()
-	w.Write(data)
-	w.Write([]byte("\n"))
+	w.Write(msg)
 	mu.Unlock()
 }
 
