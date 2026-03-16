@@ -59,6 +59,13 @@ export function OriginModal({ repo, onClose }: Props) {
   const hasChanges = urlChanged || token || user || password ||
     (origin && authMethod !== origin.auth_method);
   const needsUrl = !origin && !url;
+  const isSSHURL = url.startsWith('git@') || url.startsWith('ssh://');
+  const isHTTPURL = url.startsWith('http://') || url.startsWith('https://');
+  const authMismatch = (isHTTPURL && authMethod === 'ssh')
+    ? 'SSH auth cannot be used with HTTP/HTTPS URLs'
+    : (isSSHURL && (authMethod === 'token' || authMethod === 'basic'))
+    ? 'Token/basic auth cannot be used with SSH URLs'
+    : '';
 
   const overlay: React.CSSProperties = {
     position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
@@ -166,12 +173,13 @@ export function OriginModal({ repo, onClose }: Props) {
               </>
             )}
 
+            {authMismatch && <div style={{ color: '#f44336', fontSize: 12, marginBottom: 8 }}>{authMismatch}</div>}
             {submitError && <div style={{ color: '#f44336', fontSize: 12, marginBottom: 8 }}>{submitError}</div>}
 
             <button
-              disabled={!hasChanges || needsUrl || (urlChanged && confirm !== 'yes') || submitting}
+              disabled={!hasChanges || needsUrl || !!authMismatch || (urlChanged && confirm !== 'yes') || submitting}
               onClick={handleSubmit}
-              style={btn(!hasChanges || needsUrl || (urlChanged && confirm !== 'yes') || submitting)}
+              style={btn(!hasChanges || needsUrl || !!authMismatch || (urlChanged && confirm !== 'yes') || submitting)}
             >
               {submitting ? 'Saving...' : 'Save'}
             </button>

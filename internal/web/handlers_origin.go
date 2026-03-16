@@ -97,6 +97,18 @@ func handleSetOrigin() http.HandlerFunc {
 			authToken = existing.AuthToken
 		}
 
+		// Validate URL/auth compatibility.
+		isSSHURL := strings.HasPrefix(url, "git@") || strings.HasPrefix(url, "ssh://")
+		isHTTPURL := strings.HasPrefix(url, "http://") || strings.HasPrefix(url, "https://")
+		if isHTTPURL && authMethod == "ssh" {
+			writeError(w, http.StatusBadRequest, "SSH auth cannot be used with HTTP/HTTPS URLs — use a token or basic auth instead")
+			return
+		}
+		if isSSHURL && (authMethod == "token" || authMethod == "basic") {
+			writeError(w, http.StatusBadRequest, "token/basic auth cannot be used with SSH URLs — use SSH auth instead")
+			return
+		}
+
 		// Preserve existing intervals or use defaults.
 		branch := "main"
 		interval := 300
