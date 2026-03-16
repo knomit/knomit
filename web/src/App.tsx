@@ -43,6 +43,19 @@ export default function App() {
       const s = JSON.parse(e.data);
       if (s.head) dispatch({ type: 'SET_HEAD', head: s.head });
     });
+    const handleRemoteEvent = (e: MessageEvent) => {
+      const ev = JSON.parse(e.data);
+      if (ev.error) {
+        dispatch({ type: 'SET_REMOTE_ERROR', error: ev.error });
+        dispatch({ type: 'CONSOLE_LOG', level: 'error', message: `[remote] ${ev.error}` });
+      } else {
+        dispatch({ type: 'SET_REMOTE_ERROR', error: '' });
+      }
+    };
+    es.addEventListener('sync_ok', handleRemoteEvent);
+    es.addEventListener('sync_error', handleRemoteEvent);
+    es.addEventListener('push_ok', handleRemoteEvent);
+    es.addEventListener('push_error', handleRemoteEvent);
     return () => es.close();
   }, [state.repo]);
 

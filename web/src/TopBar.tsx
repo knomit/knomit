@@ -77,12 +77,15 @@ export function TopBar({ state, repos, dispatch, onSettingsClick }: Props) {
       )}
       <button
         onClick={onSettingsClick}
-        title="Origin settings"
-        style={{ background: 'none', border: 'none', color: '#666', cursor: 'pointer', padding: 4, display: 'flex', alignItems: 'center' }}
-        onMouseEnter={e => { e.currentTarget.style.color = '#aaa'; }}
-        onMouseLeave={e => { e.currentTarget.style.color = '#666'; }}
+        title={state.remoteError ? `Remote error: ${state.remoteError}` : 'Origin settings'}
+        style={{ background: 'none', border: 'none', color: state.remoteError ? '#f44336' : '#666', cursor: 'pointer', padding: 4, display: 'flex', alignItems: 'center', position: 'relative' }}
+        onMouseEnter={e => { if (!state.remoteError) e.currentTarget.style.color = '#aaa'; }}
+        onMouseLeave={e => { if (!state.remoteError) e.currentTarget.style.color = '#666'; }}
       >
         <GearIcon />
+        {state.remoteError && (
+          <span style={{ position: 'absolute', top: 2, right: 2, width: 6, height: 6, borderRadius: '50%', background: '#f44336' }} />
+        )}
       </button>
     </div>
   );

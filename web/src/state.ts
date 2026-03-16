@@ -37,6 +37,7 @@ export interface AppState {
   leftMode: LeftMode;
   historyCommit: string | null;
   navStack: NavEntry[];
+  remoteError: string; // latest sync/push error, empty = ok
 }
 
 export type Action =
@@ -62,7 +63,8 @@ export type Action =
   | { type: 'EXIT_HISTORY' }
   | { type: 'SELECT_COMMIT'; commit: string }
   | { type: 'NAV_BACK' }
-  | { type: 'SET_REPO'; repo: string };
+  | { type: 'SET_REPO'; repo: string }
+  | { type: 'SET_REMOTE_ERROR'; error: string };
 
 export const init: AppState = {
   repo: 'knomit',
@@ -82,6 +84,7 @@ export const init: AppState = {
   consoleOpen: false,
   consoleHeight: 200,
   leftMode: 'browse' as LeftMode,
+  remoteError: '',
   historyCommit: null,
   navStack: [],
 };
@@ -155,7 +158,9 @@ export function reducer(s: AppState, a: Action): AppState {
       navStack: [],
       leftMode: 'browse' as LeftMode,
       historyCommit: null,
+      remoteError: '',
     };
+    case 'SET_REMOTE_ERROR': return { ...s, remoteError: a.error };
     default: return s;
   }
 }
