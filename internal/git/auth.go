@@ -7,6 +7,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/transport"
 	githttp "github.com/go-git/go-git/v5/plumbing/transport/http"
 	gitssh "github.com/go-git/go-git/v5/plumbing/transport/ssh"
+	gossh "golang.org/x/crypto/ssh"
 )
 
 // ResolveAuth returns a go-git transport.AuthMethod based on the remote config.
@@ -53,6 +54,7 @@ func ResolveAuth(cfg RemoteAuthConfig, defaultKeyPath string) (transport.AuthMet
 		if err != nil {
 			return nil, fmt.Errorf("resolve ssh auth: %w", err)
 		}
+		publicKeys.HostKeyCallback = gossh.InsecureIgnoreHostKey()
 		return publicKeys, nil
 
 	case "":
