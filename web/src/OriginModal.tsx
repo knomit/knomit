@@ -17,6 +17,7 @@ export function OriginModal({ repo, onClose }: Props) {
   const [token, setToken] = useState('');
   const [user, setUser] = useState('');
   const [password, setPassword] = useState('');
+  const [confirm, setConfirm] = useState('');
   const [submitError, setSubmitError] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
@@ -155,12 +156,22 @@ export function OriginModal({ repo, onClose }: Props) {
               </>
             )}
 
+            {urlChanged && (
+              <>
+                <div style={{ fontSize: 11, color: '#f9a825', marginBottom: 12, lineHeight: 1.4 }}>
+                  Changing the remote URL will reconfigure the origin for this knowledge base.
+                </div>
+                <label style={label}>Type "yes" to confirm URL change</label>
+                <input style={input} value={confirm} onChange={e => setConfirm(e.target.value)} placeholder="yes" />
+              </>
+            )}
+
             {submitError && <div style={{ color: '#f44336', fontSize: 12, marginBottom: 8 }}>{submitError}</div>}
 
             <button
-              disabled={!hasChanges || needsUrl || submitting}
+              disabled={!hasChanges || needsUrl || (urlChanged && confirm !== 'yes') || submitting}
               onClick={handleSubmit}
-              style={btn(!hasChanges || needsUrl || submitting)}
+              style={btn(!hasChanges || needsUrl || (urlChanged && confirm !== 'yes') || submitting)}
             >
               {submitting ? 'Saving...' : 'Save'}
             </button>
