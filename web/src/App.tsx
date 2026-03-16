@@ -6,11 +6,13 @@ import { TopBar } from './TopBar';
 import { LeftPanel } from './LeftPanel';
 import { RightPanel } from './RightPanel';
 import { Console } from './Console';
+import { OriginModal } from './OriginModal';
 import './App.css';
 
 export default function App() {
   const [state, dispatch] = useReducer(reducer, init);
   const [repos, setRepos] = useState<RepoInfo[]>([]);
+  const [showOrigin, setShowOrigin] = useState(false);
 
   // Fetch repos list on mount.
   useEffect(() => {
@@ -53,7 +55,7 @@ export default function App() {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', width: '100vw', background: '#141414', color: '#eee', fontFamily: 'system-ui, sans-serif', overflow: 'hidden' }}>
-      <TopBar state={state} repos={repos} dispatch={dispatch} />
+      <TopBar state={state} repos={repos} dispatch={dispatch} onSettingsClick={() => setShowOrigin(true)} />
 
       {/* Breadcrumb path bar + action buttons */}
       <div style={{ height: 30, background: '#111', borderBottom: '1px solid #222', display: 'flex', alignItems: 'center', padding: '0 8px', gap: 2, flexShrink: 0, overflow: 'hidden' }}>
@@ -93,6 +95,7 @@ export default function App() {
         </div>
       </div>
       <Console state={state} dispatch={dispatch} />
+      {showOrigin && <OriginModal repo={state.repo} onClose={() => setShowOrigin(false)} />}
     </div>
   );
 }
