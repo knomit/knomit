@@ -118,7 +118,8 @@ export function LeftPanel({ state, dispatch }: Props) {
   // Keyboard: global shortcuts when search input is NOT focused
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (document.activeElement === searchRef.current) return;
+      const tag = (document.activeElement as HTMLElement)?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
       if (e.key === '/') { e.preventDefault(); searchRef.current?.focus(); }
       if (e.key === 'Escape') {
         if (state.leftMode === 'history') {
