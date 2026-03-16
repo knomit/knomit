@@ -2,6 +2,7 @@ package store
 
 import (
 	"database/sql"
+	"fmt"
 	"time"
 )
 
@@ -32,10 +33,19 @@ func (s *Service) SetRemote(name, url, branch string, interval, pushInterval int
 }
 
 // SetRemoteWithAuth inserts or replaces a remote configuration including auth credentials.
+// Credentials are encrypted at rest if a Crypt instance is configured.
 func (s *Service) SetRemoteWithAuth(name, url, branch string, interval, pushInterval int, authMethod, authToken string) error {
+	storedToken := authToken
+	if s.crypt != nil && authToken != "" {
+		enc, err := s.crypt.Encrypt(authToken)
+		if err != nil {
+			return fmt.Errorf("encrypt token: %w", err)
+		}
+		storedToken = enc
+	}
 	_, err := s.db.Exec(
 		`INSERT OR REPLACE INTO remotes (name, url, branch, interval, push_interval, auth_method, auth_token) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		name, url, branch, interval, pushInterval, authMethod, authToken,
+		name, url, branch, interval, pushInterval, authMethod, storedToken,
 	)
 	return err
 }
@@ -57,6 +67,16 @@ func (s *Service) GetRemote(name string) (*Remote, error) {
 	}
 	if err != nil {
 		return nil, err
+	}
+	// Decrypt token if encrypted.
+	if s.crypt != nil && r.AuthToken != "" {
+		dec, decErr := s.crypt.Decrypt(r.AuthToken)
+		if decErr != nil {
+			// May be plaintext from before encryption was enabled — use as-is.
+			_ = decErr
+		} else {
+			r.AuthToken = dec
+		}
 	}
 	return r, nil
 }

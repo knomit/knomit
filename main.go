@@ -82,6 +82,13 @@ func openRepo(
 		return nil, fmt.Errorf("open store: %w", err)
 	}
 
+	// Set up credential encryption using the SSH private key.
+	if keyData, readErr := os.ReadFile(keyPath); readErr == nil {
+		if crypt, cryptErr := store.NewCrypt(keyData); cryptErr == nil {
+			svc.SetCrypt(crypt)
+		}
+	}
+
 	gs, err := git.OpenWithStorer(svc.GitStorer())
 	if err != nil {
 		if !isDefault {

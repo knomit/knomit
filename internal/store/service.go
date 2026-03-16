@@ -20,10 +20,11 @@ const BlobObjectType = 3
 // SQLite file with sqlite-vec + GraphQLite extensions, runs the embedded
 // schema, and provides both a go-git Storer and an Index over the shared *sql.DB.
 type Service struct {
-	mu   sync.Mutex
-	db   *sql.DB
-	idx  *Index
-	gits *storegit.Storer
+	mu    sync.Mutex
+	db    *sql.DB
+	idx   *Index
+	gits  *storegit.Storer
+	crypt *Crypt // nil if no key material provided
 }
 
 // Open opens (or creates) a unified SQLite database at path, initializes the
@@ -82,6 +83,9 @@ func Open(path string, opts ...Option) (*Service, error) {
 
 	return &Service{db: db, idx: idx, gits: gits}, nil
 }
+
+// SetCrypt sets the encryption provider for credential storage.
+func (s *Service) SetCrypt(c *Crypt) { s.crypt = c }
 
 // Index returns the search index.
 func (s *Service) Index() *Index { return s.idx }
