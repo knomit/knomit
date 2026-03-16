@@ -313,15 +313,6 @@ func serveCmd() *cobra.Command {
 				return fmt.Errorf("create repos dir: %w", err)
 			}
 
-			// Migrate: warn if old-layout knomit.db exists at root
-			oldDB := filepath.Join(cfg.RepoPath, "knomit.db")
-			if _, err := os.Stat(oldDB); err == nil {
-				entries, _ := filepath.Glob(filepath.Join(reposDir, "*.db"))
-				if len(entries) == 0 {
-					return fmt.Errorf("found knomit.db at old location %s — move it to %s/knomit.db", oldDB, reposDir)
-				}
-			}
-
 			// Phase 1: Open default knomit repo first (needed for ontology).
 			defaultDB := filepath.Join(reposDir, "knomit.db")
 			knomitResult, err := openRepo(ctx, "knomit", defaultDB, true, signer, agentBranch, embedder, llmAdapter, cfg.OntologyRoot, nil, cfg, keyPath)
