@@ -81,7 +81,21 @@ func TestHandleGetOrigin_WithRemote(t *testing.T) {
 }
 
 func TestHandleSetOrigin_MissingURL(t *testing.T) {
-	handler := newTestRouter(nil, nil)
+	svc, err := store.Open(":memory:")
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	defer svc.Close()
+
+	hub := NewTaskHub(context.Background())
+	rm := NewRepoManager()
+	rm.Set("knomit", &RepoInstance{
+		Name: "knomit",
+		Svc:  svc,
+		Hub:  hub,
+	})
+	handler := NewRouter(rm, nil, false, "kb")
+
 	rr := doRequest(t, handler, http.MethodPut, "/api/v1/knomit/origin", `{"auth_method":"token"}`)
 	if rr.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d", rr.Code)
@@ -94,14 +108,52 @@ func TestHandleSetOrigin_MissingURL(t *testing.T) {
 }
 
 func TestHandleSetOrigin_ValidURL(t *testing.T) {
-	handler := newTestRouter(nil, nil)
-	rr := doRequest(t, handler, http.MethodPut, "/api/v1/knomit/origin", `{"url":"https://github.com/org/new-kb.git","auth_method":"token","token":"ghp_abc"}`)
-	if rr.Code != http.StatusNotImplemented {
-		t.Fatalf("expected 501, got %d", rr.Code)
+	svc, err := store.Open(":memory:")
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
 	}
+	defer svc.Close()
+
+	hub := NewTaskHub(context.Background())
+	rm := NewRepoManager()
+	rm.Set("knomit", &RepoInstance{
+		Name: "knomit",
+		Svc:  svc,
+		Hub:  hub,
+	})
+	handler := NewRouter(rm, nil, false, "kb")
+
+	rr := doRequest(t, handler, http.MethodPut, "/api/v1/knomit/origin", `{"url":"https://github.com/org/new-kb.git","auth_method":"token","token":"ghp_abc"}`)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+
 	var body map[string]string
 	_ = json.NewDecoder(rr.Body).Decode(&body)
-	if body["error"] != "origin change not yet implemented" {
-		t.Errorf("unexpected error: %q", body["error"])
+	if body["status"] != "ok" {
+		t.Errorf("expected status=ok, got %q", body["status"])
+	}
+	if body["branch"] != "main" {
+		t.Errorf("expected branch=main, got %q", body["branch"])
+	}
+
+	// Verify it was persisted
+	remote, err := svc.GetRemote("origin")
+	if err != nil {
+		t.Fatalf("GetRemote: %v", err)
+	}
+	if remote == nil {
+		t.Fatal("expected remote to be saved")
+	}
+	if remote.URL != "https://github.com/org/new-kb.git" {
+		t.Errorf("expected url=https://github.com/org/new-kb.git, got %q", remote.URL)
+	}
+}
+
+func TestHandleSetOrigin_NoService(t *testing.T) {
+	handler := newTestRouter(nil, nil)
+	rr := doRequest(t, handler, http.MethodPut, "/api/v1/knomit/origin", `{"url":"https://example.com/repo.git"}`)
+	if rr.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500, got %d", rr.Code)
 	}
 }
