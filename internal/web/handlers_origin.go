@@ -69,19 +69,20 @@ func handleSetOrigin() http.HandlerFunc {
 			return
 		}
 
-		log.Info().Str("repo", ri.Name).Str("url", req.URL).Msg("origin configured (restart to activate sync)")
-
-		// Return the saved remote.
-		remote, err := ri.Svc.GetRemote("origin")
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "saved but failed to read back")
-			return
+		// Activate sync loops if the callback is set.
+		if ri.StartSync != nil {
+			if err := ri.StartSync(req.URL); err != nil {
+				log.Warn().Err(err).Str("repo", ri.Name).Msg("sync activation failed")
+			} else {
+				log.Info().Str("repo", ri.Name).Str("url", req.URL).Msg("origin configured and sync activated")
+			}
+		} else {
+			log.Info().Str("repo", ri.Name).Str("url", req.URL).Msg("origin configured (restart to activate sync)")
 		}
 
 		writeJSON(w, http.StatusOK, map[string]any{
 			"status": "ok",
-			"branch": remote.Branch,
-			"head":   "",
+			"branch": branch,
 		})
 	}
 }

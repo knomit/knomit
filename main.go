@@ -209,6 +209,28 @@ func openRepo(
 		SyncWg:      &syncWg,
 		MCPHandlers: mcpHandlers,
 		SynthDeps:   synthDeps,
+		StartSync: func(remoteURL string) error {
+			remoteBranch := "main"
+			auth, authErr := git.ResolveAuth(cfg.Remote, keyPath)
+			if authErr != nil {
+				return fmt.Errorf("resolve auth: %w", authErr)
+			}
+			gs.SetAuth(auth)
+
+			if err := gs.ConfigureRemote(remoteURL, remoteBranch); err != nil {
+				return fmt.Errorf("configure remote: %w", err)
+			}
+
+			remote, err := svc.GetRemote("origin")
+			if err != nil || remote == nil {
+				return fmt.Errorf("read remote after save: %w", err)
+			}
+
+			syncWg.Add(2)
+			go runSyncLoop(syncCtx, &syncWg, gs, svc, hub, remote)
+			go runPushLoop(syncCtx, &syncWg, gs, svc, hub, remote)
+			return nil
+		},
 	}
 
 	return &repoResult{

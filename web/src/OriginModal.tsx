@@ -45,8 +45,7 @@ export function OriginModal({ repo, onClose }: Props) {
     api.setOrigin(repo, opts)
       .then(() => {
         setSubmitting(false);
-        api.getOrigin(repo).then(r => setOrigin(r)).catch(() => {});
-        setConfirm('');
+        onClose();
       })
       .catch((e: Error) => {
         setSubmitting(false);

@@ -21,6 +21,11 @@ type RepoInstance struct {
 	SyncWg      *sync.WaitGroup
 	MCPHandlers map[string]http.Handler // profile -> MCP handler
 	SynthDeps   *SynthDeps             // nil if no LLM configured
+
+	// StartSync is called by the origin handler to activate sync/push loops
+	// after a remote is configured. Set by main.go during initialization.
+	// Takes the remote URL and returns an error if activation fails.
+	StartSync func(url string) error
 }
 
 // RepoManager is a concurrent-safe registry of named RepoInstances.
