@@ -160,7 +160,7 @@ func openRepo(
 	var syncWg sync.WaitGroup
 	remote, _ := svc.GetRemote("origin")
 	if remote != nil {
-		auth, authErr := git.ResolveAuth(cfg.Remote, keyPath)
+		auth, authErr := git.ResolveAuthWithOrigin(cfg.Remote, keyPath, remote.URL)
 		if authErr != nil {
 			log.Warn().Err(authErr).Str("repo", name).Msg("remote: auth resolution failed")
 		} else {
@@ -211,7 +211,7 @@ func openRepo(
 		SynthDeps:   synthDeps,
 		StartSync: func(remoteURL string) error {
 			remoteBranch := "main"
-			auth, authErr := git.ResolveAuth(cfg.Remote, keyPath)
+			auth, authErr := git.ResolveAuthWithOrigin(cfg.Remote, keyPath, remoteURL)
 			if authErr != nil {
 				return fmt.Errorf("resolve auth: %w", authErr)
 			}
