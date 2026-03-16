@@ -21,9 +21,6 @@ func TestDefaults(t *testing.T) {
 	if cfg.RepoPath != home+"/.knomit" {
 		t.Errorf("RepoPath = %q, want %q", cfg.RepoPath, home+"/.knomit")
 	}
-	if cfg.CacheDir != home+"/.cache/knomit" {
-		t.Errorf("CacheDir = %q, want %q", cfg.CacheDir, home+"/.cache/knomit")
-	}
 }
 
 func TestLoadFromTOML(t *testing.T) {
@@ -111,7 +108,6 @@ func TestLoadMalformedTOML(t *testing.T) {
 func TestTildeExpansion(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "knomit.toml"), []byte(`
-cache_dir = "~/cache/knomit"
 onnx_lib_path = "~/lib/ort.dylib"
 
 [remote]
@@ -124,9 +120,6 @@ ssh_key = "~/.ssh/id_ed25519"
 		t.Fatalf("Load() error: %v", err)
 	}
 	home, _ := os.UserHomeDir()
-	if cfg.CacheDir != home+"/cache/knomit" {
-		t.Errorf("CacheDir = %q, want tilde expanded to %q", cfg.CacheDir, home+"/cache/knomit")
-	}
 	if cfg.ONNXLibPath != home+"/lib/ort.dylib" {
 		t.Errorf("ONNXLibPath = %q, want tilde expanded to %q", cfg.ONNXLibPath, home+"/lib/ort.dylib")
 	}
@@ -178,7 +171,6 @@ port = "4000"
 func TestAllEnvVars(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("KNOMIT_REPO", dir)
-	t.Setenv("KNOMIT_CACHE_DIR", "/tmp/cache")
 	t.Setenv("KNOMIT_PORT", "9090")
 	t.Setenv("KNOMIT_LLM_MODEL", "test-model")
 	t.Setenv("KNOMIT_LLM_PROVIDER", "test-provider")
@@ -200,9 +192,6 @@ func TestAllEnvVars(t *testing.T) {
 
 	if cfg.RepoPath != dir {
 		t.Errorf("RepoPath = %q, want %q", cfg.RepoPath, dir)
-	}
-	if cfg.CacheDir != "/tmp/cache" {
-		t.Errorf("CacheDir = %q", cfg.CacheDir)
 	}
 	if cfg.Port != "9090" {
 		t.Errorf("Port = %q", cfg.Port)

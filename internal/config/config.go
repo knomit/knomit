@@ -14,7 +14,6 @@ import (
 // Config is the root configuration, composed of section structs.
 type Config struct {
 	RepoPath     string              `toml:"repo"`
-	CacheDir     string              `toml:"cache_dir"`
 	Port         string              `toml:"port"`
 	OntologyRoot string              `toml:"ontology_root"`
 	ONNXLibPath  string              `toml:"onnx_lib_path"`
@@ -28,7 +27,6 @@ func Defaults() Config {
 	home, _ := os.UserHomeDir()
 	return Config{
 		RepoPath:     home + "/.knomit",
-		CacheDir:     home + "/.cache/knomit",
 		Port:         "3000",
 		OntologyRoot: "kb",
 		LLM:          llm.DefaultConfig(),
@@ -54,7 +52,6 @@ func Load() (Config, error) {
 
 	// Overlay env vars.
 	envOr("KNOMIT_REPO", &cfg.RepoPath)
-	envOr("KNOMIT_CACHE_DIR", &cfg.CacheDir)
 	envOr("KNOMIT_PORT", &cfg.Port)
 	envOr("KNOMIT_LLM_MODEL", &cfg.LLM.Model)
 	envOr("KNOMIT_LLM_PROVIDER", &cfg.LLM.Provider)
@@ -73,7 +70,6 @@ func Load() (Config, error) {
 
 	// Expand tildes in path fields.
 	expandTilde(&cfg.RepoPath)
-	expandTilde(&cfg.CacheDir)
 	expandTilde(&cfg.ONNXLibPath)
 	expandTilde(&cfg.Remote.SSHKey)
 
