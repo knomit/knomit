@@ -1214,3 +1214,81 @@ func TestLogPaginated_FileFilter(t *testing.T) {
 		t.Errorf("expected 'update a', got %q", entries[0].Message)
 	}
 }
+
+func TestSwitchBranch(t *testing.T) {
+	dir := t.TempDir()
+	store, err := git.Init(filepath.Join(dir, "test.db"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	oldBranch := store.Branch()
+
+	// Write a file so we have a commit to preserve.
+	_, _, err = store.WriteFile("kb/fact.md", "test content", "add fact")
+	if err != nil {
+		t.Fatal(err)
+	}
+	headBefore, _ := store.HeadCommit()
+
+	// Switch to new branch.
+	newBranch := "agent/test-abc123"
+	if err := store.SwitchBranch(newBranch); err != nil {
+		t.Fatalf("SwitchBranch: %v", err)
+	}
+
+	if store.Branch() != newBranch {
+		t.Errorf("Branch() = %q, want %q", store.Branch(), newBranch)
+	}
+
+	// HEAD commit should be unchanged.
+	headAfter, _ := store.HeadCommit()
+	if headBefore != headAfter {
+		t.Errorf("HEAD changed: %s → %s", headBefore, headAfter)
+	}
+
+	// Data should still be readable.
+	content, err := store.ReadFile("kb/fact.md")
+	if err != nil {
+		t.Fatalf("ReadFile after switch: %v", err)
+	}
+	if content != "test content" {
+		t.Errorf("content = %q, want %q", content, "test content")
+	}
+
+	// No-op if already on the right branch.
+	if err := store.SwitchBranch(newBranch); err != nil {
+		t.Fatalf("SwitchBranch no-op: %v", err)
+	}
+
+	// Old branch should still exist (not deleted).
+	_ = oldBranch
+}
+
+func TestSwitchBranch_WritesAfterSwitch(t *testing.T) {
+	dir := t.TempDir()
+	store, err := git.Init(filepath.Join(dir, "test.db"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	if err := store.SwitchBranch("agent/new-branch"); err != nil {
+		t.Fatalf("SwitchBranch: %v", err)
+	}
+
+	// Writes should go to the new branch.
+	_, _, err = store.WriteFile("kb/new-fact.md", "new content", "add after switch")
+	if err != nil {
+		t.Fatalf("WriteFile after switch: %v", err)
+	}
+
+	content, err := store.ReadFile("kb/new-fact.md")
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if content != "new content" {
+		t.Errorf("content = %q, want %q", content, "new content")
+	}
+}

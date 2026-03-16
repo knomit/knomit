@@ -120,6 +120,13 @@ func openRepo(
 
 	gs.SetSigner(signer)
 
+	// Switch to the expected agent branch if the repo is on a different one.
+	if agentBranch != "" && gs.Branch() != agentBranch {
+		if err := gs.SwitchBranch(agentBranch); err != nil {
+			log.Warn().Err(err).Str("repo", name).Msg("branch switch failed")
+		}
+	}
+
 	// Seed remotes table for default repo on first startup.
 	if isDefault && cfg.Git.Origin != "" {
 		if err := svc.SetRemote("origin", cfg.Git.Origin, "main", 300, 300); err != nil {

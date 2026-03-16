@@ -291,6 +291,39 @@ func (s *Store) notifyCommit(hash string) {
 	}
 }
 
+// SwitchBranch creates a new branch from the current HEAD and switches to it.
+// The old branch is left intact. No-op if already on the target branch.
+func (s *Store) SwitchBranch(newBranch string) error {
+	if s.branch == newBranch {
+		return nil
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Resolve current HEAD commit.
+	head, err := s.repo.Head()
+	if err != nil {
+		return fmt.Errorf("SwitchBranch: read HEAD: %w", err)
+	}
+
+	newRefName := plumbing.NewBranchReferenceName(newBranch)
+
+	// Create new branch pointing at current HEAD.
+	if err := s.storer.SetReference(plumbing.NewHashReference(newRefName, head.Hash())); err != nil {
+		return fmt.Errorf("SwitchBranch: set new ref: %w", err)
+	}
+
+	// Update HEAD to point to new branch.
+	if err := s.storer.SetReference(plumbing.NewSymbolicReference(plumbing.HEAD, newRefName)); err != nil {
+		return fmt.Errorf("SwitchBranch: update HEAD: %w", err)
+	}
+
+	log.Info().Str("from", s.branch).Str("to", newBranch).Msg("switched branch")
+	s.branch = newBranch
+	return nil
+}
+
 // Storer returns the underlying storer (used by the git remote handler).
 func (s *Store) Storer() *storegit.Storer {
 	return s.storer
