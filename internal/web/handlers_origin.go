@@ -74,11 +74,19 @@ func handleSetOrigin() http.HandlerFunc {
 			return
 		}
 
-		// Save remote config — sync loops will pick it up on next restart.
+		// Determine auth token from request.
+		authMethod := req.AuthMethod
+		authToken := req.Token
+		if authMethod == "basic" && req.User != "" {
+			// Encode basic auth as user:password in token field.
+			authToken = req.User + ":" + req.Password
+		}
+
+		// Save remote config with auth credentials.
 		branch := "main"
 		interval := 300
 		pushInterval := 300
-		if err := ri.Svc.SetRemote("origin", req.URL, branch, interval, pushInterval); err != nil {
+		if err := ri.Svc.SetRemoteWithAuth("origin", req.URL, branch, interval, pushInterval, authMethod, authToken); err != nil {
 			log.Warn().Err(err).Str("repo", ri.Name).Msg("set origin failed")
 			writeError(w, http.StatusInternalServerError, "failed to save origin")
 			return

@@ -18,6 +18,8 @@ type Remote struct {
 	LastPushAt     *string `json:"last_push_at"`
 	LastPushStatus *string `json:"last_push_status"`
 	LastPushError  *string `json:"last_push_error"`
+	AuthMethod     string  `json:"auth_method,omitempty"`
+	AuthToken      string  `json:"auth_token,omitempty"`
 }
 
 // SetRemote inserts or replaces a remote configuration.
@@ -29,16 +31,27 @@ func (s *Service) SetRemote(name, url, branch string, interval, pushInterval int
 	return err
 }
 
+// SetRemoteWithAuth inserts or replaces a remote configuration including auth credentials.
+func (s *Service) SetRemoteWithAuth(name, url, branch string, interval, pushInterval int, authMethod, authToken string) error {
+	_, err := s.db.Exec(
+		`INSERT OR REPLACE INTO remotes (name, url, branch, interval, push_interval, auth_method, auth_token) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		name, url, branch, interval, pushInterval, authMethod, authToken,
+	)
+	return err
+}
+
 // GetRemote reads a remote configuration by name.
 func (s *Service) GetRemote(name string) (*Remote, error) {
 	r := &Remote{}
 	err := s.db.QueryRow(
 		`SELECT name, url, branch, interval, last_sync_at, last_status, last_error,
-		        push_interval, last_push_at, last_push_status, last_push_error
+		        push_interval, last_push_at, last_push_status, last_push_error,
+		        auth_method, auth_token
 		 FROM remotes WHERE name = ?`,
 		name,
 	).Scan(&r.Name, &r.URL, &r.Branch, &r.Interval, &r.LastSyncAt, &r.LastStatus, &r.LastError,
-		&r.PushInterval, &r.LastPushAt, &r.LastPushStatus, &r.LastPushError)
+		&r.PushInterval, &r.LastPushAt, &r.LastPushStatus, &r.LastPushError,
+		&r.AuthMethod, &r.AuthToken)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}

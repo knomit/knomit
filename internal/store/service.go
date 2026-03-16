@@ -52,6 +52,15 @@ func Open(path string, opts ...Option) (*Service, error) {
 		return nil, fmt.Errorf("store.Open schema: %w", err)
 	}
 
+	// Schema migrations for existing databases.
+	migrations := []string{
+		`ALTER TABLE remotes ADD COLUMN auth_method TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE remotes ADD COLUMN auth_token TEXT NOT NULL DEFAULT ''`,
+	}
+	for _, m := range migrations {
+		db.Exec(m) // ignore "duplicate column" errors
+	}
+
 	// Create vec0 virtual table (dimension is configurable).
 	vecDDL := fmt.Sprintf(
 		`CREATE VIRTUAL TABLE IF NOT EXISTS facts_vec USING vec0(embedding FLOAT[%d] distance_metric=cosine)`,

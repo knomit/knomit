@@ -160,7 +160,8 @@ func openRepo(
 	var syncWg sync.WaitGroup
 	remote, _ := svc.GetRemote("origin")
 	if remote != nil {
-		auth, authErr := git.ResolveAuthWithOrigin(cfg.Remote, keyPath, remote.URL)
+		authCfg := remoteAuthFromRecord(remote, cfg.Remote)
+		auth, authErr := git.ResolveAuthWithOrigin(authCfg, keyPath, remote.URL)
 		if authErr != nil {
 			log.Warn().Err(authErr).Str("repo", name).Msg("remote: auth resolution failed")
 		} else {
@@ -210,20 +211,21 @@ func openRepo(
 		MCPHandlers: mcpHandlers,
 		SynthDeps:   synthDeps,
 		StartSync: func(remoteURL string) error {
-			remoteBranch := "main"
-			auth, authErr := git.ResolveAuthWithOrigin(cfg.Remote, keyPath, remoteURL)
+			remote, err := svc.GetRemote("origin")
+			if err != nil || remote == nil {
+				return fmt.Errorf("read remote: %w", err)
+			}
+
+			// Build auth from stored remote credentials.
+			authCfg := remoteAuthFromRecord(remote, cfg.Remote)
+			auth, authErr := git.ResolveAuthWithOrigin(authCfg, keyPath, remoteURL)
 			if authErr != nil {
 				return fmt.Errorf("resolve auth: %w", authErr)
 			}
 			gs.SetAuth(auth)
 
-			if err := gs.ConfigureRemote(remoteURL, remoteBranch); err != nil {
+			if err := gs.ConfigureRemote(remoteURL, remote.Branch); err != nil {
 				return fmt.Errorf("configure remote: %w", err)
-			}
-
-			remote, err := svc.GetRemote("origin")
-			if err != nil || remote == nil {
-				return fmt.Errorf("read remote after save: %w", err)
 			}
 
 			syncWg.Add(2)
@@ -244,6 +246,27 @@ func openRepo(
 			svc.Close()
 		},
 	}, nil
+}
+
+// remoteAuthFromRecord builds a RemoteAuthConfig from a stored remote record,
+// falling back to the global config for fields not set in the record.
+func remoteAuthFromRecord(remote *store.Remote, fallback git.RemoteAuthConfig) git.RemoteAuthConfig {
+	cfg := fallback
+	if remote.AuthMethod != "" {
+		cfg.AuthMethod = remote.AuthMethod
+	}
+	if remote.AuthToken != "" {
+		if cfg.AuthMethod == "basic" {
+			// token field stores user:password
+			if parts := strings.SplitN(remote.AuthToken, ":", 2); len(parts) == 2 {
+				cfg.User = parts[0]
+				cfg.Password = parts[1]
+			}
+		} else {
+			cfg.Token = remote.AuthToken
+		}
+	}
+	return cfg
 }
 
 // isValidRepoName checks that a repo name contains only lowercase letters,
