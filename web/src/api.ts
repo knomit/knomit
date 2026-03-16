@@ -26,6 +26,7 @@ export interface OriginResponse {
   last_push_at: string | null;
   last_push_status: string | null;
   last_push_error: string | null;
+  auth_method: string;
 }
 
 export interface OriginSetResponse {
@@ -91,7 +92,7 @@ export const api = {
     fetch(`${base(repo)}/synthesize`, { method: 'POST', body: recipe }).then(r => r.json()),
   getOrigin: (repo: string): Promise<OriginResponse | null> =>
     fetch(`${base(repo)}/origin`).then(r => r.status === 204 ? null : r.json()),
-  setOrigin: (repo: string, opts: { url: string; auth_method?: string; token?: string; user?: string; password?: string }): Promise<OriginSetResponse> =>
+  setOrigin: (repo: string, opts: { url?: string; auth_method?: string; token?: string; user?: string; password?: string }): Promise<OriginSetResponse> =>
     fetch(`${base(repo)}/origin`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
