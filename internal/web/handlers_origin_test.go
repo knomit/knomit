@@ -150,6 +150,24 @@ func TestHandleSetOrigin_ValidURL(t *testing.T) {
 	}
 }
 
+func TestHandleSetOrigin_SSHUrl(t *testing.T) {
+	svc, err := store.Open(":memory:")
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	defer svc.Close()
+
+	hub := NewTaskHub(context.Background())
+	rm := NewRepoManager()
+	rm.Set("knomit", &RepoInstance{Name: "knomit", Svc: svc, Hub: hub})
+	handler := NewRouter(rm, nil, false, "kb")
+
+	rr := doRequest(t, handler, http.MethodPut, "/api/v1/knomit/origin", `{"url":"git@github.com:knomit/blank.git","auth_method":"ssh"}`)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
 func TestHandleSetOrigin_NoService(t *testing.T) {
 	handler := newTestRouter(nil, nil)
 	rr := doRequest(t, handler, http.MethodPut, "/api/v1/knomit/origin", `{"url":"https://example.com/repo.git"}`)

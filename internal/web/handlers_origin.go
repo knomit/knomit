@@ -4,9 +4,23 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/url"
+	"strings"
 
 	"github.com/rs/zerolog/log"
 )
+
+// isGitURL returns true if s is a valid git remote URL.
+// Accepts standard URLs (https://, ssh://, git://) and SCP-style (git@host:path).
+func isGitURL(s string) bool {
+	if strings.Contains(s, "://") {
+		_, err := url.Parse(s)
+		return err == nil
+	}
+	// SCP-style: user@host:path
+	at := strings.Index(s, "@")
+	colon := strings.Index(s, ":")
+	return at > 0 && colon > at && colon < len(s)-1
+}
 
 func handleGetOrigin() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -54,7 +68,8 @@ func handleSetOrigin() http.HandlerFunc {
 			writeError(w, http.StatusBadRequest, "url is required")
 			return
 		}
-		if _, err := url.Parse(req.URL); err != nil {
+		// Accept both standard URLs and SCP-style git SSH URLs (git@host:path).
+		if !isGitURL(req.URL) {
 			writeError(w, http.StatusBadRequest, "invalid url")
 			return
 		}
