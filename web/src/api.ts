@@ -4,7 +4,7 @@ export interface RepoInfo { name: string; branch: string }
 
 export interface DirChild { name: string; is_dir: boolean }
 export interface BrowseResponse { path: string; children: DirChild[] }
-export interface Fact { path: string; title: string; body: string; domain: string[]; confidence: number; sources: number; entities: string[]; refs: string[] }
+export interface Fact { path: string; title: string; body: string; domain: string[]; confidence: number; sources: number; entities: string[]; refs: string[]; parse_error?: string }
 export interface SearchResult { path: string; title: string; body: string; score: number; domain?: string[]; entities?: string[] }
 export interface HistoryEntry { commit: string; date: string; message: string }
 export interface HistoryEntryWithTags { commit: string; date: string; message: string; tags: string[] }
@@ -84,6 +84,12 @@ export const api = {
   },
   commitDetail: (repo: string, hash: string): Promise<CommitDetail> =>
     fetch(`${base(repo)}/commit?hash=${encodeURIComponent(hash)}`).then(r => r.json()),
+  updateFact: (repo: string, path: string, content: string): Promise<Fact> =>
+    fetch(`${base(repo)}/fact`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path, content }),
+    }).then(r => { if (!r.ok) throw new Error(r.statusText); return r.json(); }),
   stats: (repo: string, path: string): Promise<Stats> => fetch(`${base(repo)}/stats?path=${encodeURIComponent(path)}`).then(r => r.json()),
   status: (repo: string): Promise<Status> => fetch(`${base(repo)}/status`).then(r => r.json()),
   sync: (repo: string): Promise<{ op: string; id?: string; status: string; message?: string }> =>

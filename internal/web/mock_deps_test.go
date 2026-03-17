@@ -161,6 +161,22 @@ func (mr *MockGitStoreMockRecorder) LogPaginated(path, limit, after any) *gomock
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "LogPaginated", reflect.TypeOf((*MockGitStore)(nil).LogPaginated), path, limit, after)
 }
 
+// WriteFile mocks base method.
+func (m *MockGitStore) WriteFile(path, content, message string) (string, string, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "WriteFile", path, content, message)
+	ret0, _ := ret[0].(string)
+	ret1, _ := ret[1].(string)
+	ret2, _ := ret[2].(error)
+	return ret0, ret1, ret2
+}
+
+// WriteFile indicates an expected call of WriteFile.
+func (mr *MockGitStoreMockRecorder) WriteFile(path, content, message any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "WriteFile", reflect.TypeOf((*MockGitStore)(nil).WriteFile), path, content, message)
+}
+
 // CommitDetail mocks base method.
 func (m *MockGitStore) CommitDetail(commitHash string) (*git.CommitDetailResult, error) {
 	m.ctrl.T.Helper()

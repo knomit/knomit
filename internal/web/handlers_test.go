@@ -172,6 +172,78 @@ func TestHandleFact(t *testing.T) {
 	}
 }
 
+func TestHandleFactParseError(t *testing.T) {
+	// Content that fails ParseFact (missing frontmatter delimiters)
+	badContent := "type: observation\ndomain: [go]\n---\n# Bad Fact\n\nBody.\n"
+
+	ctrl := gomock.NewController(t)
+	gs := NewMockGitStore(ctrl)
+	gs.EXPECT().ReadFile("kb/bad.md").Return(badContent, nil)
+
+	handler := newTestRouter(gs, nil)
+	rr := doRequest(t, handler, http.MethodGet, "/api/v1/knomit/fact?path=kb/bad.md", "")
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", rr.Code, rr.Body.String())
+	}
+	var resp map[string]any
+	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp["parse_error"] == nil || resp["parse_error"] == "" {
+		t.Errorf("expected parse_error field, got: %v", resp)
+	}
+	if resp["body"] != badContent {
+		t.Errorf("body = %q, want raw content", resp["body"])
+	}
+}
+
+func TestHandleFactWrite(t *testing.T) {
+	validContent := "---\ndomain: [go]\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# Fixed Fact\n\nFixed body.\n"
+
+	t.Run("write valid content returns parsed fact", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		gs := NewMockGitStore(ctrl)
+		gs.EXPECT().WriteFile("kb/fact.md", validContent, gomock.Any()).Return("abc123", "def456", nil)
+
+		handler := newTestRouter(gs, nil)
+		body := `{"path":"kb/fact.md","content":` + string(mustJSON(validContent)) + `}`
+		rr := doRequest(t, handler, http.MethodPut, "/api/v1/knomit/fact", body)
+
+		if rr.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200; body: %s", rr.Code, rr.Body.String())
+		}
+		var resp map[string]any
+		if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if resp["title"] != "Fixed Fact" {
+			t.Errorf("title = %q, want %q", resp["title"], "Fixed Fact")
+		}
+		if resp["parse_error"] != nil {
+			t.Errorf("unexpected parse_error: %v", resp["parse_error"])
+		}
+	})
+
+	t.Run("missing path returns 400", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		gs := NewMockGitStore(ctrl)
+		handler := newTestRouter(gs, nil)
+		rr := doRequest(t, handler, http.MethodPut, "/api/v1/knomit/fact", `{"content":"x"}`)
+		if rr.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want 400", rr.Code)
+		}
+	})
+}
+
+func mustJSON(s string) []byte {
+	b, err := json.Marshal(s)
+	if err != nil {
+		panic(err)
+	}
+	return b
+}
+
 func TestHandleSearch(t *testing.T) {
 	results := []store.SearchResult{
 		{

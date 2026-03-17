@@ -274,6 +274,59 @@ function renderFact(fact: Fact, search: (q: string) => void, dispatch?: Dispatch
   );
 }
 
+function FactEditor({ fact, repo, onSaved }: { fact: Fact; repo: string; onSaved: (updated: Fact) => void }) {
+  const [raw, setRaw] = useState(fact.body);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+
+  const save = () => {
+    setSaving(true);
+    setSaveError(null);
+    api.updateFact(repo, fact.path, raw)
+      .then(updated => { setSaving(false); onSaved(updated); })
+      .catch(e => { setSaving(false); setSaveError(String(e)); });
+  };
+
+  return (
+    <div style={{ padding: '24px 28px', overflowY: 'auto', height: '100%', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', gap: 16 }}>
+      {/* Error banner */}
+      <div style={{ background: '#2e1a1a', border: '1px solid rgba(255,80,80,0.3)', borderRadius: 6, padding: '10px 14px' }}>
+        <div style={{ color: '#f88', fontSize: 11, textTransform: 'uppercase', letterSpacing: 1.2, marginBottom: 4 }}>Parse error</div>
+        <div style={{ color: '#f44', fontSize: 12, fontFamily: 'monospace' }}>{fact.parse_error}</div>
+      </div>
+
+      {/* Path */}
+      <div style={{ fontSize: 12, color: '#555' }}>{fact.path}</div>
+
+      {/* Raw editor */}
+      <textarea
+        value={raw}
+        onChange={e => setRaw(e.target.value)}
+        spellCheck={false}
+        style={{
+          flex: 1, minHeight: 320, background: '#0d0d14', color: '#ccc', border: '1px solid #2a2a3a',
+          borderRadius: 6, padding: '12px 14px', fontFamily: 'monospace', fontSize: 12,
+          lineHeight: 1.6, resize: 'none', outline: 'none', boxSizing: 'border-box', width: '100%',
+        }}
+      />
+
+      {/* Save button + feedback */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+        <button
+          onClick={save}
+          disabled={saving}
+          style={{
+            background: '#1a2e1a', border: '1px solid rgba(119,204,153,0.35)', color: '#7c9',
+            padding: '6px 16px', borderRadius: 4, cursor: saving ? 'default' : 'pointer',
+            fontSize: 13, opacity: saving ? 0.6 : 1,
+          }}
+        >{saving ? 'Saving…' : 'Save'}</button>
+        {saveError && <span style={{ color: '#f88', fontSize: 12 }}>{saveError}</span>}
+      </div>
+    </div>
+  );
+}
+
 export function RightPanel({ state, dispatch }: Props) {
   const [fact, setFact] = useState<Fact | null>(null);
   const [history, setHistory] = useState<HistoryEntry[]>([]);
@@ -401,6 +454,7 @@ export function RightPanel({ state, dispatch }: Props) {
 
   // Time-travel: single file auto-loaded → show fact normally (no switcher)
   if (state.historyCommit && fact && !hasSwitcher) {
+    if (fact.parse_error) return <FactEditor fact={fact} repo={state.repo} onSaved={setFact} />;
     return renderFact(fact, search, undefined, focusInfo);
   }
 
@@ -440,7 +494,8 @@ export function RightPanel({ state, dispatch }: Props) {
           />
         )}
 
-        {fact && <div style={{ flex: 1 }}>{renderFact(fact, search, undefined, focusInfo)}</div>}
+        {fact && fact.parse_error && <FactEditor fact={fact} repo={state.repo} onSaved={setFact} />}
+        {fact && !fact.parse_error && <div style={{ flex: 1 }}>{renderFact(fact, search, undefined, focusInfo)}</div>}
         {!fact && viewable.length > 0 && (
           <div style={{ padding: '16px 20px', color: '#666', fontSize: 13 }}>Select a fact above.</div>
         )}
@@ -512,5 +567,6 @@ export function RightPanel({ state, dispatch }: Props) {
   // Fact mode
   if (!fact) return <div style={{ padding: 24, color: '#666' }}>Select a fact to view.</div>;
 
+  if (fact.parse_error) return <FactEditor fact={fact} repo={state.repo} onSaved={setFact} />;
   return renderFact(fact, search, dispatch, focusInfo);
 }

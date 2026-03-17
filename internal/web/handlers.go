@@ -117,11 +117,53 @@ func handleFact() http.HandlerFunc {
 
 		fact, err := mcp.ParseFact(path, content)
 		if err != nil {
-			// Not a fact file (e.g. kb.md manifest) — return raw content.
+			// File could not be parsed as a fact — return raw content with parse error.
 			writeJSON(w, http.StatusOK, map[string]any{
-				"path":  path,
-				"title": path,
-				"body":  content,
+				"path":        path,
+				"title":       path,
+				"body":        content,
+				"parse_error": err.Error(),
+			})
+			return
+		}
+
+		writeJSON(w, http.StatusOK, fact)
+	}
+}
+
+// handleFactWrite handles PUT /api/v1/{repo}/fact — writes raw fact file content.
+// Request body: JSON {"path": "...", "content": "..."}
+// Response: the re-parsed fact JSON (or parse error if content is still invalid).
+func handleFactWrite() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		ri := RepoFromContext(r.Context())
+
+		var req struct {
+			Path    string `json:"path"`
+			Content string `json:"content"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid request body")
+			return
+		}
+		if req.Path == "" {
+			writeError(w, http.StatusBadRequest, "path is required")
+			return
+		}
+
+		msg := "edit: update " + req.Path + " via UI"
+		if _, _, err := ri.GS.WriteFile(req.Path, req.Content, msg); err != nil {
+			writeError(w, http.StatusInternalServerError, fmt.Sprintf("write failed: %v", err))
+			return
+		}
+
+		fact, err := mcp.ParseFact(req.Path, req.Content)
+		if err != nil {
+			writeJSON(w, http.StatusOK, map[string]any{
+				"path":        req.Path,
+				"title":       req.Path,
+				"body":        req.Content,
+				"parse_error": err.Error(),
 			})
 			return
 		}
