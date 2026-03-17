@@ -31,7 +31,13 @@ export function LeftPanel({ state, dispatch }: Props) {
       const c = r.children || [];
       setChildren(c);
       if (!isHeadChangeOnly) {
-        setSelectedIdx(-1);
+        if (state.selectedFact) {
+          const factName = state.selectedFact.split('/').pop();
+          const idx = c.findIndex(ch => !ch.is_dir && ch.name === factName);
+          setSelectedIdx(idx >= 0 ? idx : -1);
+        } else {
+          setSelectedIdx(-1);
+        }
       }
     }).catch(() => setChildren([]));
   }, [state.currentPath, state.searchQuery, state.headCommit]);
