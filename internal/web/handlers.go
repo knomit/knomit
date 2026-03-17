@@ -26,11 +26,13 @@
 package web
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"knomit/internal/git"
 	"knomit/internal/mcp"
@@ -146,6 +148,32 @@ func handleFact() http.HandlerFunc {
 				"from_commit": fromCommit,
 			})
 			return
+		}
+
+		// Browsing mode: enrich with commit hash and date from the store index.
+		if commitHash == "" && ri.Svc != nil {
+			if rec, lerr := ri.Svc.Index().GetByPath(path); lerr == nil && rec != nil && rec.CommitHash != "" {
+				resp := map[string]any{
+					"path":        fact.Path,
+					"title":       fact.Title,
+					"body":        fact.Body,
+					"domain":      fact.Domain,
+					"confidence":  fact.Confidence,
+					"sources":     fact.Sources,
+					"entities":    fact.Entities,
+					"refs":        fact.Refs,
+					"commit_hash": rec.CommitHash,
+				}
+				var ts sql.NullInt64
+				if qerr := ri.Svc.DB().QueryRow(
+					`SELECT committed_at FROM commit_log WHERE commit_hash = ? LIMIT 1`,
+					rec.CommitHash,
+				).Scan(&ts); qerr == nil && ts.Valid {
+					resp["commit_date"] = time.Unix(ts.Int64, 0).UTC().Format(time.RFC3339)
+				}
+				writeJSON(w, http.StatusOK, resp)
+				return
+			}
 		}
 		writeJSON(w, http.StatusOK, fact)
 	}

@@ -219,19 +219,40 @@ function renderFact(fact: Fact, search: (q: string) => void, dispatch?: Dispatch
             </span>
           )}
           {dispatch && (
-            <button
-              title="Find similar facts"
-              onClick={() => dispatch({ type: 'SIMILAR_SEARCH', path: fact.path, text: fact.body || '' })}
-              style={{
-                background: '#1a1a2a', border: '1px solid rgba(136,170,255,0.2)', color: '#8af',
-                padding: '4px 8px', borderRadius: 4, cursor: 'pointer', fontSize: 14,
-                transition: 'border-color 0.15s, color 0.15s', flexShrink: 0,
-                outline: ft?.kind === 'similar' ? '2px solid rgba(136,170,255,0.55)' : 'none',
-                outlineOffset: 1,
-              }}
-              onMouseEnter={e => { e.currentTarget.style.borderColor = 'rgba(136,170,255,0.5)'; e.currentTarget.style.color = '#adf'; }}
-              onMouseLeave={e => { e.currentTarget.style.borderColor = 'rgba(136,170,255,0.2)'; e.currentTarget.style.color = '#8af'; }}
-            >≈</button>
+            <span style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0, marginTop: 4 }}>
+              {fact.commit_date && (
+                <span title={new Date(fact.commit_date).toLocaleString()} style={{ color: '#555', fontSize: 11 }}>
+                  {relativeTime(fact.commit_date)}
+                </span>
+              )}
+              {fact.commit_hash && (
+                <span
+                  title={`Go to commit ${fact.commit_hash.slice(0, 7)} in history`}
+                  onClick={() => {
+                    dispatch({ type: 'ENTER_HISTORY' });
+                    dispatch({ type: 'SELECT_COMMIT', commit: fact.commit_hash! });
+                  }}
+                  style={{ color: '#7c9', fontFamily: 'monospace', fontSize: 11, cursor: 'pointer', background: '#1a2e1a', padding: '1px 5px', borderRadius: 3 }}
+                  onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = '#1e3820'; }}
+                  onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = '#1a2e1a'; }}
+                >
+                  {fact.commit_hash.slice(0, 7)}
+                </span>
+              )}
+              <button
+                title="Find similar facts"
+                onClick={() => dispatch({ type: 'SIMILAR_SEARCH', path: fact.path, text: fact.body || '' })}
+                style={{
+                  background: '#1a1a2a', border: '1px solid rgba(136,170,255,0.2)', color: '#8af',
+                  padding: '4px 8px', borderRadius: 4, cursor: 'pointer', fontSize: 14,
+                  transition: 'border-color 0.15s, color 0.15s', flexShrink: 0,
+                  outline: ft?.kind === 'similar' ? '2px solid rgba(136,170,255,0.55)' : 'none',
+                  outlineOffset: 1,
+                }}
+                onMouseEnter={e => { e.currentTarget.style.borderColor = 'rgba(136,170,255,0.5)'; e.currentTarget.style.color = '#adf'; }}
+                onMouseLeave={e => { e.currentTarget.style.borderColor = 'rgba(136,170,255,0.2)'; e.currentTarget.style.color = '#8af'; }}
+              >≈</button>
+            </span>
           )}
         </div>
         <div style={{ fontSize: 12, color: '#555', marginTop: 2 }}>{fact.path}</div>
@@ -350,12 +371,6 @@ function FactEditor({ fact, repo, onSaved }: { fact: Fact; repo: string; onSaved
   );
 }
 
-function activityLevel(a: ActivityStats): { label: string; color: string } {
-  if (a.changes_90d === 0) return { label: 'dormant', color: '#555' };
-  if (a.changes_30d === 0) return { label: 'low', color: '#888' };
-  if (a.changes_30d < 5) return { label: 'moderate', color: '#fa0' };
-  return { label: 'high', color: '#7c9' };
-}
 
 export function RightPanel({ state, dispatch }: Props) {
   const [fact, setFact] = useState<Fact | null>(null);
@@ -566,8 +581,6 @@ export function RightPanel({ state, dispatch }: Props) {
     const domainCount = stats ? Object.keys(stats.domains).length : 0;
     const entityCount = stats ? Object.keys(stats.entities).length : 0;
     const totalCommits = activity ? String(activity.total) : '—';
-    const level = activity ? activityLevel(activity) : null;
-    const activityRate = activity ? Math.min(activity.changes_30d / 15, 1) : 0;
 
     return (
       <div style={{ padding: '24px 28px', overflowY: 'auto', height: '100%', boxSizing: 'border-box' }}>
@@ -605,32 +618,6 @@ export function RightPanel({ state, dispatch }: Props) {
                 <div style={{ fontSize: 10, color: '#666', textTransform: 'uppercase', letterSpacing: 1 }}>Commits</div>
                 <div style={{ fontSize: 22, fontWeight: 600, color: '#eee', marginTop: 2 }}>{totalCommits}</div>
               </div>
-              {/* Activity card: 7d/30d/90d pills (top) + progress bar (bottom) */}
-              {activity && level && (
-                <div style={{ borderLeft: `3px solid ${level.color}`, padding: '10px 16px', background: '#1a1a2a', borderRadius: '0 6px 6px 0', minWidth: 140, display: 'flex', flexDirection: 'column', justifyContent: 'space-between', gap: 10 }}>
-                  <div style={{ display: 'flex', gap: 5 }}>
-                    {([
-                      { label: '7d', value: activity.changes_7d },
-                      { label: '30d', value: activity.changes_30d },
-                      { label: '90d', value: activity.changes_90d },
-                    ] as const).map(({ label, value }) => (
-                      <span key={label} style={{
-                        fontSize: 10, padding: '2px 6px', borderRadius: 8,
-                        background: value > 0 ? '#2a2a3a' : 'transparent',
-                        border: '1px solid #2a2a3a',
-                        color: value > 0 ? '#ccc' : '#444',
-                        fontFamily: 'monospace',
-                        whiteSpace: 'nowrap',
-                      }}>
-                        {value}<span style={{ color: '#555', marginLeft: 2 }}>{label}</span>
-                      </span>
-                    ))}
-                  </div>
-                  <div style={{ height: 5, background: '#2a2a3a', borderRadius: 3, overflow: 'hidden' }}>
-                    <div style={{ height: '100%', width: `${activityRate * 100}%`, background: level.color, borderRadius: 3 }} />
-                  </div>
-                </div>
-              )}
             </div>
 
             <TagCloud label="Domains" entries={domainEntries} color="119,204,153" searchPrefix="domain:" onSearch={search} />
