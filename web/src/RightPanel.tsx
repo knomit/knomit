@@ -357,52 +357,6 @@ function activityLevel(a: ActivityStats): { label: string; color: string } {
   return { label: 'high', color: '#7c9' };
 }
 
-function ActivitySection({ activity: a }: { activity: ActivityStats }) {
-  const level = activityLevel(a);
-  const totalLabel = a.total_capped ? `${a.total}+` : String(a.total);
-
-  return (
-    <div style={{ marginBottom: 22 }}>
-      <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: 1.5, color: '#555', marginBottom: 10 }}>Activity</div>
-
-      {/* Stat cards row */}
-      <div style={{ display: 'flex', gap: 10, marginBottom: 14 }}>
-        <div style={{ borderLeft: '3px solid #555', padding: '10px 16px', background: '#1a1a2a', borderRadius: '0 6px 6px 0', flex: 1 }}>
-          <div style={{ fontSize: 10, color: '#666', textTransform: 'uppercase', letterSpacing: 1 }}>Last changed</div>
-          <div
-            title={a.last_commit ? new Date(a.last_commit).toLocaleString() : ''}
-            style={{ fontSize: 18, fontWeight: 600, color: '#eee', marginTop: 2 }}
-          >
-            {a.last_commit ? relativeTime(a.last_commit) : '—'}
-          </div>
-        </div>
-        <div style={{ borderLeft: '3px solid #555', padding: '10px 16px', background: '#1a1a2a', borderRadius: '0 6px 6px 0', flex: 1 }}>
-          <div style={{ fontSize: 10, color: '#666', textTransform: 'uppercase', letterSpacing: 1 }}>Commits</div>
-          <div style={{ fontSize: 18, fontWeight: 600, color: '#eee', marginTop: 2 }}>{totalLabel}</div>
-        </div>
-      </div>
-
-      {/* Time-window breakdown + activity level */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-        {[
-          { label: '7d', value: a.changes_7d },
-          { label: '30d', value: a.changes_30d },
-          { label: '90d', value: a.changes_90d },
-        ].map(({ label, value }) => (
-          <span key={label} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, background: '#1a1a2a', border: '1px solid #2a2a3a', borderRadius: 6, padding: '4px 10px' }}>
-            <span style={{ fontSize: 14, fontWeight: 600, color: value > 0 ? '#ccc' : '#555' }}>{value}</span>
-            <span style={{ fontSize: 10, color: '#555' }}>{label}</span>
-          </span>
-        ))}
-        <span style={{ marginLeft: 4, fontSize: 11, color: level.color, display: 'flex', alignItems: 'center', gap: 4 }}>
-          <span style={{ width: 6, height: 6, borderRadius: '50%', background: level.color, display: 'inline-block' }} />
-          {level.label}
-        </span>
-      </div>
-    </div>
-  );
-}
-
 export function RightPanel({ state, dispatch }: Props) {
   const [fact, setFact] = useState<Fact | null>(null);
   const [history, setHistory] = useState<HistoryEntry[]>([]);
@@ -610,18 +564,27 @@ export function RightPanel({ state, dispatch }: Props) {
     const domainEntries = stats ? Object.entries(stats.domains).sort((a, b) => b[1] - a[1]).slice(0, 10) : [];
     const entityEntries = stats ? Object.entries(stats.entities).sort((a, b) => b[1] - a[1]).slice(0, 10) : [];
     const domainCount = stats ? Object.keys(stats.domains).length : 0;
+    const entityCount = stats ? Object.keys(stats.entities).length : 0;
+    const totalCommits = activity ? (activity.total_capped ? `${activity.total}+` : String(activity.total)) : '—';
+    const level = activity ? activityLevel(activity) : null;
+    const activityRate = activity ? Math.min(activity.changes_30d / 15, 1) : 0;
 
     return (
       <div style={{ padding: '24px 28px', overflowY: 'auto', height: '100%', boxSizing: 'border-box' }}>
         {stats ? (
           <>
-            {/* Summary line */}
-            <div style={{ fontSize: 12, color: '#555', marginBottom: 20 }}>
-              {stats.total} facts across {domainCount} domains
+            {/* Summary line with last change time */}
+            <div style={{ fontSize: 12, color: '#555', marginBottom: 20, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span>{stats.total} facts across {domainCount} domains</span>
+              {activity?.last_commit && (
+                <span title={new Date(activity.last_commit).toLocaleString()} style={{ color: '#555', fontSize: 11 }}>
+                  {relativeTime(activity.last_commit)}
+                </span>
+              )}
             </div>
 
             {/* Stat cards */}
-            <div style={{ display: 'flex', gap: 10, marginBottom: 28 }}>
+            <div style={{ display: 'flex', gap: 10, marginBottom: 28, flexWrap: 'wrap' }}>
               <div style={{ borderLeft: '3px solid #7c9', padding: '10px 16px', background: '#1a1a2a', borderRadius: '0 6px 6px 0', minWidth: 90 }}>
                 <div style={{ fontSize: 10, color: '#666', textTransform: 'uppercase', letterSpacing: 1 }}>Facts</div>
                 <div style={{ fontSize: 22, fontWeight: 600, color: '#eee', marginTop: 2 }}>{stats.total}</div>
@@ -634,12 +597,44 @@ export function RightPanel({ state, dispatch }: Props) {
                 <div style={{ fontSize: 10, color: '#666', textTransform: 'uppercase', letterSpacing: 1 }}>Domains</div>
                 <div style={{ fontSize: 22, fontWeight: 600, color: '#eee', marginTop: 2 }}>{domainCount}</div>
               </div>
+              <div style={{ borderLeft: '3px solid #8af', padding: '10px 16px', background: '#1a1a2a', borderRadius: '0 6px 6px 0', minWidth: 90 }}>
+                <div style={{ fontSize: 10, color: '#666', textTransform: 'uppercase', letterSpacing: 1 }}>Entities</div>
+                <div style={{ fontSize: 22, fontWeight: 600, color: '#eee', marginTop: 2 }}>{entityCount}</div>
+              </div>
+              <div style={{ borderLeft: '3px solid #555', padding: '10px 16px', background: '#1a1a2a', borderRadius: '0 6px 6px 0', minWidth: 90 }}>
+                <div style={{ fontSize: 10, color: '#666', textTransform: 'uppercase', letterSpacing: 1 }}>Commits</div>
+                <div style={{ fontSize: 22, fontWeight: 600, color: '#eee', marginTop: 2 }}>{totalCommits}</div>
+              </div>
+              {/* Activity card: 7d/30d/90d pills (top) + progress bar (bottom) */}
+              {activity && level && (
+                <div style={{ borderLeft: `3px solid ${level.color}`, padding: '10px 16px', background: '#1a1a2a', borderRadius: '0 6px 6px 0', minWidth: 140, display: 'flex', flexDirection: 'column', justifyContent: 'space-between', gap: 10 }}>
+                  <div style={{ display: 'flex', gap: 5 }}>
+                    {([
+                      { label: '7d', value: activity.changes_7d },
+                      { label: '30d', value: activity.changes_30d },
+                      { label: '90d', value: activity.changes_90d },
+                    ] as const).map(({ label, value }) => (
+                      <span key={label} style={{
+                        fontSize: 10, padding: '2px 6px', borderRadius: 8,
+                        background: value > 0 ? '#2a2a3a' : 'transparent',
+                        border: '1px solid #2a2a3a',
+                        color: value > 0 ? '#ccc' : '#444',
+                        fontFamily: 'monospace',
+                        whiteSpace: 'nowrap',
+                      }}>
+                        {value}<span style={{ color: '#555', marginLeft: 2 }}>{label}</span>
+                      </span>
+                    ))}
+                  </div>
+                  <div style={{ height: 5, background: '#2a2a3a', borderRadius: 3, overflow: 'hidden' }}>
+                    <div style={{ height: '100%', width: `${activityRate * 100}%`, background: level.color, borderRadius: 3 }} />
+                  </div>
+                </div>
+              )}
             </div>
 
             <TagCloud label="Domains" entries={domainEntries} color="119,204,153" searchPrefix="domain:" onSearch={search} />
             <TagCloud label="Entities" entries={entityEntries} color="136,170,255" searchPrefix="entity:" onSearch={search} />
-
-            {activity && <ActivitySection activity={activity} />}
           </>
         ) : <div style={{ color: '#666' }}>No facts indexed in this path.</div>}
       </div>
