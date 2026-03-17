@@ -348,64 +348,20 @@ func handleCommitDetail() http.HandlerFunc {
 }
 
 // handleStats handles GET /api/v1/{repo}/stats?path=<path>.
-// It iterates over all facts in the knowledge base (optionally filtered
-// by path prefix), collecting domain/entity counts and average confidence.
-// This is fine for small-to-medium knowledge bases; very large repos may
-// want a cached or incremental approach.
+// Aggregates are computed with a SQL query over the search index.
 func handleStats() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := RepoFromContext(r.Context())
-		pathPrefix := r.URL.Query().Get("path")
-
-		allPaths, err := ri.GS.ListAll()
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, fmt.Sprintf("list all error: %v", err))
+		if ri.Idx == nil {
+			writeError(w, http.StatusServiceUnavailable, "index not available")
 			return
 		}
-
-		domains := make(map[string]int)
-		entities := make(map[string]int)
-		total := 0
-		var confidenceSum float64
-
-		for _, p := range allPaths {
-			if pathPrefix != "" && !strings.HasPrefix(p, pathPrefix) {
-				continue
-			}
-
-			content, err := ri.GS.ReadFile(p)
-			if err != nil {
-				continue
-			}
-
-			fact, err := mcp.ParseFact(p, content)
-			if err != nil {
-				continue
-			}
-
-			total++
-			confidenceSum += fact.Confidence
-			for _, d := range fact.Domain {
-				domains[d]++
-			}
-			for _, e := range fact.Entities {
-				entities[e]++
-			}
+		stats, err := ri.Idx.Stats(r.URL.Query().Get("path"))
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, fmt.Sprintf("stats error: %v", err))
+			return
 		}
-
-		avgConfidence := 0.0
-		if total > 0 {
-			avgConfidence = confidenceSum / float64(total)
-			// Round to 2 decimal places.
-			avgConfidence = float64(int(avgConfidence*100+0.5)) / 100
-		}
-
-		writeJSON(w, http.StatusOK, map[string]any{
-			"total":          total,
-			"domains":        domains,
-			"entities":       entities,
-			"avg_confidence": avgConfidence,
-		})
+		writeJSON(w, http.StatusOK, stats)
 	}
 }
 

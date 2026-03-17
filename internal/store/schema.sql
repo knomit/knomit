@@ -91,7 +91,9 @@ CREATE TABLE IF NOT EXISTS remotes (
     push_interval    INTEGER NOT NULL DEFAULT 300,
     last_push_at     TEXT,
     last_push_status TEXT,
-    last_push_error  TEXT
+    last_push_error  TEXT,
+    auth_method      TEXT NOT NULL DEFAULT '',
+    auth_token       TEXT NOT NULL DEFAULT ''
 );
 
 -- Tool sessions (paginated browsing/explain)

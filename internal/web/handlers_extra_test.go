@@ -250,16 +250,17 @@ func TestHandleFactAtCommit(t *testing.T) {
 // --- handleStats ---
 
 func TestHandleStats(t *testing.T) {
-	validFact := "---\ndomain: [go, web]\nconfidence: 0.9\nsources: 1\nentities: [chi]\nrefs: []\n---\n# Test\nBody.\n"
-	validFact2 := "---\ndomain: [go]\nconfidence: 0.7\nsources: 1\nentities: [chi, mux]\nrefs: []\n---\n# Test2\nBody2.\n"
-
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
-	gs.EXPECT().ListAll().Return([]string{"kb/a.md", "kb/b.md", "other/c.md"}, nil)
-	gs.EXPECT().ReadFile("kb/a.md").Return(validFact, nil)
-	gs.EXPECT().ReadFile("kb/b.md").Return(validFact2, nil)
+	mockIdx := NewMockSearchIndex(ctrl)
+	mockIdx.EXPECT().Stats("kb/").Return(store.StatsResult{
+		Total:         2,
+		AvgConfidence: 0.8,
+		Domains:       map[string]int{"go": 2, "web": 1},
+		Entities:      map[string]int{"chi": 2, "mux": 1},
+	}, nil)
 
-	handler := newTestRouter(gs, nil)
+	handler := newTestRouter(gs, mockIdx)
 	rr := doRequest(t, handler, http.MethodGet, "/api/v1/knomit/stats?path=kb/", "")
 
 	if rr.Code != http.StatusOK {
@@ -293,12 +294,13 @@ func TestHandleStats(t *testing.T) {
 	}
 }
 
-func TestHandleStats_ListAllError(t *testing.T) {
+func TestHandleStats_IndexError(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
-	gs.EXPECT().ListAll().Return(nil, fmt.Errorf("db error"))
+	mockIdx := NewMockSearchIndex(ctrl)
+	mockIdx.EXPECT().Stats("").Return(store.StatsResult{}, fmt.Errorf("db error"))
 
-	handler := newTestRouter(gs, nil)
+	handler := newTestRouter(gs, mockIdx)
 	rr := doRequest(t, handler, http.MethodGet, "/api/v1/knomit/stats", "")
 
 	if rr.Code != http.StatusInternalServerError {
@@ -306,37 +308,30 @@ func TestHandleStats_ListAllError(t *testing.T) {
 	}
 }
 
-func TestHandleStats_SkipsBadFiles(t *testing.T) {
+func TestHandleStats_NoIndex(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
-	gs.EXPECT().ListAll().Return([]string{"kb/good.md", "kb/unreadable.md", "kb/badparse.md"}, nil)
-	gs.EXPECT().ReadFile("kb/good.md").Return("---\ndomain: [go]\nconfidence: 0.9\nsources: 1\nentities: [x]\nrefs: []\n---\n# Good\nBody.\n", nil)
-	gs.EXPECT().ReadFile("kb/unreadable.md").Return("", fmt.Errorf("read error"))
-	gs.EXPECT().ReadFile("kb/badparse.md").Return("not valid frontmatter at all", nil)
 
 	handler := newTestRouter(gs, nil)
 	rr := doRequest(t, handler, http.MethodGet, "/api/v1/knomit/stats", "")
 
-	if rr.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200", rr.Code)
-	}
-
-	var resp map[string]any
-	json.NewDecoder(rr.Body).Decode(&resp)
-	total := int(resp["total"].(float64))
-	if total != 1 {
-		t.Errorf("total = %d, want 1 (only the good file)", total)
+	if rr.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503", rr.Code)
 	}
 }
 
 func TestHandleStats_NoPath(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
-	gs.EXPECT().ListAll().Return([]string{"a.md", "b.md"}, nil)
-	gs.EXPECT().ReadFile("a.md").Return("---\ndomain: [x]\nconfidence: 1.0\nsources: 1\nentities: [y]\nrefs: []\n---\n# A\nBody.\n", nil)
-	gs.EXPECT().ReadFile("b.md").Return("---\ndomain: [x]\nconfidence: 0.5\nsources: 1\nentities: [z]\nrefs: []\n---\n# B\nBody.\n", nil)
+	mockIdx := NewMockSearchIndex(ctrl)
+	mockIdx.EXPECT().Stats("").Return(store.StatsResult{
+		Total:         2,
+		AvgConfidence: 0.75,
+		Domains:       map[string]int{"x": 2},
+		Entities:      map[string]int{"y": 1, "z": 1},
+	}, nil)
 
-	handler := newTestRouter(gs, nil)
+	handler := newTestRouter(gs, mockIdx)
 	rr := doRequest(t, handler, http.MethodGet, "/api/v1/knomit/stats", "")
 
 	if rr.Code != http.StatusOK {
@@ -397,28 +392,6 @@ func TestHandleSynthesizeStart_InvalidRecipe(t *testing.T) {
 
 	if rr.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400; body: %s", rr.Code, rr.Body.String())
-	}
-}
-
-// --- handleSync ---
-
-func TestHandleSync_ServiceUnavailable(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	gs := NewMockGitStore(ctrl)
-
-	hub := NewTaskHub(context.Background())
-	rm := NewRepoManager()
-	rm.Set("knomit", &RepoInstance{
-		Name: "knomit",
-		GS:   gs,
-		Hub:  hub,
-	})
-	handler := NewRouter(rm, nil, false, "kb")
-
-	rr := doRequest(t, handler, http.MethodPost, "/api/v1/knomit/sync", "")
-
-	if rr.Code != http.StatusServiceUnavailable {
-		t.Fatalf("status = %d, want 503; body: %s", rr.Code, rr.Body.String())
 	}
 }
 

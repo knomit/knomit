@@ -1,6 +1,8 @@
 package web
 
 import (
+	"bytes"
+	"compress/gzip"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -34,7 +36,7 @@ func TestGitCloneIntegration(t *testing.T) {
 		t.Fatalf("git.Init: %v", err)
 	}
 
-	gitHandler := GitRemoteHandler(newTestRepoManager("knomit", store), "")
+	gitHandler := GitRemoteHandler(newTestRepoManager("knomit", store))
 
 	r := chi.NewRouter()
 	r.Mount("/git", gitHandler)
@@ -99,7 +101,7 @@ func TestGitCloneWithCommits(t *testing.T) {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
-	gitHandler := GitRemoteHandler(newTestRepoManager("knomit", store), "")
+	gitHandler := GitRemoteHandler(newTestRepoManager("knomit", store))
 	r := chi.NewRouter()
 	r.Mount("/git", gitHandler)
 	srv := httptest.NewServer(r)
@@ -125,7 +127,7 @@ func TestGitRemoteHandler_GSNotGitRemoteStore(t *testing.T) {
 	rm := NewRepoManager()
 	rm.Set("mocked", &RepoInstance{GS: NewMockGitStore(ctrl)})
 
-	handler := GitRemoteHandler(rm, "")
+	handler := GitRemoteHandler(rm)
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest("GET", "/mocked/info/refs?service=git-upload-pack", nil)
 	handler.ServeHTTP(rr, req)
@@ -143,7 +145,7 @@ func TestGitRemoteHandler_UnknownRepo(t *testing.T) {
 		t.Fatalf("git.Init: %v", err)
 	}
 
-	handler := GitRemoteHandler(newTestRepoManager("knomit", store), "")
+	handler := GitRemoteHandler(newTestRepoManager("knomit", store))
 
 	tests := []struct {
 		name string
@@ -164,6 +166,57 @@ func TestGitRemoteHandler_UnknownRepo(t *testing.T) {
 				t.Errorf("status = %d, want %d", rr.Code, tt.want)
 			}
 		})
+	}
+}
+
+// TestRequestBody_GzipDecompresses verifies that requestBody transparently
+// decompresses a gzip-encoded body.
+func TestRequestBody_GzipDecompresses(t *testing.T) {
+	payload := []byte("hello git pack-protocol")
+
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	if _, err := gz.Write(payload); err != nil {
+		t.Fatal(err)
+	}
+	gz.Close()
+
+	req := httptest.NewRequest(http.MethodPost, "/", &buf)
+	req.Header.Set("Content-Encoding", "gzip")
+
+	rc, err := requestBody(req)
+	if err != nil {
+		t.Fatalf("requestBody: %v", err)
+	}
+	defer rc.Close()
+
+	got, err := io.ReadAll(rc)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if string(got) != string(payload) {
+		t.Fatalf("got %q, want %q", got, payload)
+	}
+}
+
+// TestRequestBody_PlainPassthrough verifies that a non-gzip body is returned
+// unchanged.
+func TestRequestBody_PlainPassthrough(t *testing.T) {
+	payload := []byte("plain body")
+	req := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(payload))
+
+	rc, err := requestBody(req)
+	if err != nil {
+		t.Fatalf("requestBody: %v", err)
+	}
+	defer rc.Close()
+
+	got, err := io.ReadAll(rc)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if string(got) != string(payload) {
+		t.Fatalf("got %q, want %q", got, payload)
 	}
 }
 
@@ -193,7 +246,7 @@ func TestGitRemoteHandler_MultiRepo(t *testing.T) {
 	rm.Set("repo-b", &RepoInstance{GS: storeB})
 
 	r := chi.NewRouter()
-	r.Mount("/git", GitRemoteHandler(rm, ""))
+	r.Mount("/git", GitRemoteHandler(rm))
 	srv := httptest.NewServer(r)
 	defer srv.Close()
 

@@ -8,11 +8,41 @@ import (
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 )
 
+// ReviewResult is returned from StartSession and ContinueSession.
+type ReviewResult struct {
+	SessionID string          `json:"session_id"`
+	Item      *ReviewItem     `json:"item,omitempty"`
+	Done      bool            `json:"done,omitempty"`
+	Summary   *ReviewStats    `json:"summary,omitempty"`
+	Progress  *ReviewProgress `json:"progress,omitempty"`
+}
+
+// ReviewItem describes a single work item for the hosting model.
+type ReviewItem struct {
+	Type           string `json:"type"` // "prune" or "distill"
+	Prompt         string `json:"prompt"`
+	ResponseSchema string `json:"response_schema"`
+}
+
+// ReviewProgress tracks completed/remaining counts.
+type ReviewProgress struct {
+	Completed int `json:"completed"`
+	Remaining int `json:"remaining"`
+}
+
+// ReviewStats tracks what actions were taken during a review.
+type ReviewStats struct {
+	Pruned      int
+	Merged      int
+	Updated     int
+	Synthesized int
+}
+
 // Reviewer is the interface the review MCP tool requires from the synthesize
 // package. Using an interface breaks the import cycle (synthesize imports mcp).
 type Reviewer interface {
-	StartSession() (interface{}, error)
-	ContinueSession(sessionID, response string) (interface{}, error)
+	StartSession() (*ReviewResult, error)
+	ContinueSession(sessionID, response string) (*ReviewResult, error)
 }
 
 // reviewTool returns the Tool definition for knomit_review.
@@ -30,7 +60,7 @@ func ReviewHandler(reviewer Reviewer) func(context.Context, mcpgo.CallToolReques
 		sessionID := req.GetString("session_id", "")
 		response := req.GetString("response", "")
 
-		var result interface{}
+		var result *ReviewResult
 		var err error
 
 		if sessionID == "" {

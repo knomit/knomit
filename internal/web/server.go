@@ -35,6 +35,7 @@ type GitStore interface {
 type SearchIndex interface {
 	Search(q store.SearchQuery) ([]store.SearchResult, error)
 	GetLastCommit(branch string) (string, error)
+	Stats(pathPrefix string) (store.StatsResult, error)
 }
 
 // SynthDeps bundles the dependencies needed by the synthesize handler.
@@ -59,7 +60,6 @@ type SynthDeps struct {
 //	GET  /api/v1/{repo}/stats       — aggregate statistics
 //	GET  /api/v1/{repo}/status      — head commit, branch, index state
 //	POST /api/v1/{repo}/synthesize  — start async synthesis task
-//	POST /api/v1/{repo}/sync        — start async git sync task
 //	GET  /api/v1/{repo}/events      — SSE event stream
 //	GET  /api/v1/openapi.yaml       — OpenAPI spec
 //	GET  /docs                      — Swagger UI
@@ -89,7 +89,6 @@ func NewRouter(rm *RepoManager, gitHandler http.Handler, embeddingsEnabled bool,
 		sub.Get("/stats", handleStats())
 		sub.Get("/status", handleStatus(embeddingsEnabled, ontologyRoot))
 		sub.Post("/synthesize", handleSynthesizeStart())
-		sub.Post("/sync", handleSync())
 		sub.Get("/events", handleEvents())
 		sub.Get("/origin", handleGetOrigin())
 		sub.Put("/origin", handleSetOrigin())
