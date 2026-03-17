@@ -349,8 +349,7 @@ export function RightPanel({ state, dispatch }: Props) {
         const firstFile = detail.files.find(f => f.action !== 'deleted') ?? detail.files[0];
         if (firstFile) {
           setCommitSelectedFile(firstFile.path);
-          const hash = firstFile.action === 'deleted' ? state.historyCommit! + '^' : state.historyCommit!;
-          api.fact(state.repo, firstFile.path, hash).then(setFact).catch(e => setError(String(e)));
+          api.fact(state.repo, firstFile.path, state.historyCommit!).then(setFact).catch(e => setError(String(e)));
         }
       }).catch(() => setCommitDetail(null));
     } else if (state.rightMode === 'fact' && state.selectedFact) {
@@ -391,9 +390,8 @@ export function RightPanel({ state, dispatch }: Props) {
         const cur = all.findIndex(f => f.path === commitSelectedFile);
         const next = (cur + delta + all.length) % all.length;
         const nextFile = all[next];
-        const hash = nextFile.action === 'deleted' ? state.historyCommit! + '^' : state.historyCommit!;
         setCommitSelectedFile(nextFile.path);
-        api.fact(state.repo, nextFile.path, hash).then(setFact).catch(() => setFact(null));
+        api.fact(state.repo, nextFile.path, state.historyCommit!).then(setFact).catch(() => setFact(null));
         setFocusIdx(0);
       };
 
@@ -421,9 +419,8 @@ export function RightPanel({ state, dispatch }: Props) {
           if (switcherOpen && dropdownFocusIdx >= 0) {
             const f = commitDetail!.files[dropdownFocusIdx];
             if (f) {
-              const hash = f.action === 'deleted' ? state.historyCommit! + '^' : state.historyCommit!;
               setCommitSelectedFile(f.path);
-              api.fact(state.repo, f.path, hash).then(setFact).catch(() => setFact(null));
+              api.fact(state.repo, f.path, state.historyCommit!).then(setFact).catch(() => setFact(null));
               setSwitcherOpen(false);
               setDropdownFocusIdx(-1);
               setFocusIdx(0);
@@ -486,10 +483,9 @@ export function RightPanel({ state, dispatch }: Props) {
         <FactSwitcher
           files={commitDetail.files}
           selectedPath={commitSelectedFile}
-          onSelect={(path, action) => {
-            const hash = action === 'deleted' ? state.historyCommit! + '^' : state.historyCommit!;
+          onSelect={(path, _action) => {
             setCommitSelectedFile(path);
-            api.fact(state.repo, path, hash).then(setFact).catch(() => setFact(null));
+            api.fact(state.repo, path, state.historyCommit!).then(setFact).catch(() => setFact(null));
             setFocusIdx(0);
           }}
           focusIdx={state.rightPanelFocused ? focusIdx : -1}

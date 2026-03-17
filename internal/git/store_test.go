@@ -721,6 +721,39 @@ func TestReadFileAtCommit(t *testing.T) {
 	}
 }
 
+func TestReadFileLastCommit(t *testing.T) {
+	dir := t.TempDir()
+	store, err := git.Init(filepath.Join(dir, "test.db"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	const content = "---\ndomain: []\nconfidence: 0.5\nsources: 1\nentities: []\nrefs: []\n---\n# Fact\n\nBody.\n"
+	if _, _, err := store.WriteFile("kb/fact.md", content, "add fact"); err != nil {
+		t.Fatal(err)
+	}
+
+	retractHash, err := store.DeleteFile("kb/fact.md", "retract fact")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// File must not be readable at the retract commit.
+	if _, err := store.ReadFileAtCommit("kb/fact.md", retractHash); err == nil {
+		t.Fatal("expected error reading deleted file at retract commit, got nil")
+	}
+
+	// But ReadFileLastCommit must recover the content.
+	got, err := store.ReadFileLastCommit("kb/fact.md", retractHash)
+	if err != nil {
+		t.Fatalf("ReadFileLastCommit: %v", err)
+	}
+	if got != content {
+		t.Errorf("content mismatch:\ngot:  %q\nwant: %q", got, content)
+	}
+}
+
 func TestReadFileWithHash(t *testing.T) {
 	dir := t.TempDir()
 	store, err := git.Init(filepath.Join(dir, "knomit.git.db"), nil)

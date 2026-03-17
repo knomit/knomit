@@ -18,6 +18,7 @@ type GitStore interface {
 	ListDir(path string) ([]git.DirEntry, error)
 	ReadFile(path string) (string, error)
 	ReadFileAtCommit(path, commitHash string) (string, error)
+	ReadFileLastCommit(path, beforeCommitHash string) (string, error)
 	WriteFile(path, content, message string) (commitHash, blobHash string, err error)
 	Log(path string) ([]git.LogEntry, error)
 	LogPaginated(path string, limit int, after string) ([]git.LogEntryWithTags, string, error)

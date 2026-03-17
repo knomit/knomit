@@ -161,6 +161,21 @@ func (mr *MockGitStoreMockRecorder) LogPaginated(path, limit, after any) *gomock
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "LogPaginated", reflect.TypeOf((*MockGitStore)(nil).LogPaginated), path, limit, after)
 }
 
+// ReadFileLastCommit mocks base method.
+func (m *MockGitStore) ReadFileLastCommit(path, beforeCommitHash string) (string, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ReadFileLastCommit", path, beforeCommitHash)
+	ret0, _ := ret[0].(string)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// ReadFileLastCommit indicates an expected call of ReadFileLastCommit.
+func (mr *MockGitStoreMockRecorder) ReadFileLastCommit(path, beforeCommitHash any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ReadFileLastCommit", reflect.TypeOf((*MockGitStore)(nil).ReadFileLastCommit), path, beforeCommitHash)
+}
+
 // WriteFile mocks base method.
 func (m *MockGitStore) WriteFile(path, content, message string) (string, string, error) {
 	m.ctrl.T.Helper()

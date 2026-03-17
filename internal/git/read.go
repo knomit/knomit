@@ -68,6 +68,37 @@ func (s *Store) ReadFileAtCommit(path, commitHash string) (string, error) {
 	return f.Contents()
 }
 
+// ReadFileLastCommit finds the most recent ancestor of beforeCommitHash where
+// path existed and returns its content. Used to read facts that were deleted
+// in beforeCommitHash (e.g. retract commits).
+func (s *Store) ReadFileLastCommit(path, beforeCommitHash string) (string, error) {
+	startHash := plumbing.NewHash(beforeCommitHash)
+	startCommit, err := s.repo.CommitObject(startHash)
+	if err != nil {
+		return "", fmt.Errorf("ReadFileLastCommit: commit: %w", err)
+	}
+	if len(startCommit.ParentHashes) == 0 {
+		return "", fmt.Errorf("ReadFileLastCommit: %q: commit has no parents", path)
+	}
+
+	logIter, err := s.repo.Log(&gogit.LogOptions{
+		From:     startCommit.ParentHashes[0],
+		FileName: &path,
+		Order:    gogit.LogOrderCommitterTime,
+	})
+	if err != nil {
+		return "", fmt.Errorf("ReadFileLastCommit: log: %w", err)
+	}
+	defer logIter.Close()
+
+	lastCommit, err := logIter.Next()
+	if err != nil {
+		return "", fmt.Errorf("ReadFileLastCommit: %q: no prior commit found", path)
+	}
+
+	return s.ReadFileAtCommit(path, lastCommit.Hash.String())
+}
+
 // ReadFile reads the content of path from the HEAD commit.
 func (s *Store) ReadFile(path string) (string, error) {
 	headRef, err := s.repo.Head()

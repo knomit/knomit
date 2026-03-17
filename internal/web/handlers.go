@@ -106,6 +106,11 @@ func handleFact() http.HandlerFunc {
 		var err error
 		if commitHash != "" {
 			content, err = ri.GS.ReadFileAtCommit(path, commitHash)
+			if err != nil {
+				// File may have been deleted in this commit (e.g. retract).
+				// Fall back to the last commit where the file existed.
+				content, err = ri.GS.ReadFileLastCommit(path, commitHash)
+			}
 		} else {
 			content, err = ri.GS.ReadFile(path)
 		}
