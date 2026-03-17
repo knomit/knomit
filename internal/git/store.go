@@ -44,15 +44,17 @@ import (
 // Store wraps go-git with knomit's logical operations.
 // All fact reads/writes go through go-git's plumbing API — NO filesystem reads/writes.
 type Store struct {
-	mu       sync.Mutex
-	repo     *gogit.Repository
-	storer   *storegit.Storer
-	ownsDB   bool    // true when Init/Open opened the DB (legacy path)
-	ownedDB  *sql.DB // non-nil when ownsDB is true
-	branch   string  // e.g. "agent/laptop"
-	auth     transport.AuthMethod
-	signer   ssh.Signer // signs commits when set
-	onCommit func(hash string)
+	mu        sync.Mutex
+	repo      *gogit.Repository
+	storer    *storegit.Storer
+	db        *sql.DB // non-nil when commit_log is available
+	commitLog bool    // true once commit_log table is confirmed populated
+	ownsDB    bool    // true when Init/Open opened the DB (legacy path)
+	ownedDB   *sql.DB // non-nil when ownsDB is true
+	branch    string  // e.g. "agent/laptop"
+	auth      transport.AuthMethod
+	signer    ssh.Signer // signs commits when set
+	onCommit  func(hash string)
 }
 
 // DirEntry represents a single entry in a knomit directory listing.
@@ -98,14 +100,12 @@ type LogEntryWithTags struct {
 }
 
 // ActivityResult holds commit-activity metrics for a path over several time windows.
-// Total is capped at maxActivityCommits; TotalCapped is true when the cap was reached.
 type ActivityResult struct {
-	LastCommit  string `json:"last_commit"`  // ISO-8601 timestamp of most recent commit, or ""
-	Total       int    `json:"total"`        // total commits touching this path (capped)
-	TotalCapped bool   `json:"total_capped"` // true when Total == maxActivityCommits
-	Changes7d   int    `json:"changes_7d"`
-	Changes30d  int    `json:"changes_30d"`
-	Changes90d  int    `json:"changes_90d"`
+	LastCommit string `json:"last_commit"` // ISO-8601 timestamp of most recent commit, or ""
+	Total      int    `json:"total"`       // total commits touching this path
+	Changes7d  int    `json:"changes_7d"`
+	Changes30d int    `json:"changes_30d"`
+	Changes90d int    `json:"changes_90d"`
 }
 
 // SyncResult is returned by Sync to report what happened during synchronization.
@@ -116,10 +116,14 @@ type SyncResult struct {
 }
 
 // gitSchema is the minimal schema for standalone Init/Open (legacy path).
+// Includes commit_log so SQL-based Activity and WalkChangedFiles work.
 const gitSchema = `
 CREATE TABLE IF NOT EXISTS objects (hash TEXT NOT NULL, type INTEGER NOT NULL, size INTEGER NOT NULL, data BLOB NOT NULL, PRIMARY KEY (hash, type));
 CREATE TABLE IF NOT EXISTS refs (name TEXT PRIMARY KEY, target TEXT NOT NULL, is_symbolic INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value BLOB NOT NULL);
+CREATE TABLE IF NOT EXISTS commit_log (commit_hash TEXT NOT NULL, path TEXT NOT NULL, committed_at INTEGER NOT NULL, message TEXT NOT NULL, PRIMARY KEY (commit_hash, path));
+CREATE INDEX IF NOT EXISTS commit_log_path_time ON commit_log (path, committed_at DESC);
+CREATE INDEX IF NOT EXISTS commit_log_time ON commit_log (committed_at DESC);
 `
 
 // InitWithStorer creates a new knomit git store using an externally provided storer.
@@ -181,11 +185,16 @@ func InitWithStorer(s *storegit.Storer, initFiles map[string]string, agentBranch
 	}
 
 	log.Info().Str("branch", agentBranch).Msg("git store initialized")
-	return &Store{
+	gs := &Store{
 		repo:   repo,
 		storer: s,
+		db:     s.DB(),
 		branch: agentBranch,
-	}, nil
+	}
+	if err := gs.populateCommitLog(); err != nil {
+		log.Warn().Err(err).Msg("commit_log: initial populate failed")
+	}
+	return gs, nil
 }
 
 // OpenWithStorer opens an existing knomit git store using an externally provided storer.
@@ -203,11 +212,16 @@ func OpenWithStorer(s *storegit.Storer) (*Store, error) {
 	branch := strings.TrimPrefix(head.Name().String(), "refs/heads/")
 
 	log.Info().Str("branch", branch).Msg("git store opened")
-	return &Store{
+	gs := &Store{
 		repo:   repo,
 		storer: s,
+		db:     s.DB(),
 		branch: branch,
-	}, nil
+	}
+	if err := gs.populateCommitLog(); err != nil {
+		log.Warn().Err(err).Msg("commit_log: open populate failed")
+	}
+	return gs, nil
 }
 
 // Init creates a new knomit git store at dbPath.
@@ -414,12 +428,17 @@ func InitFromRemote(s *storegit.Storer, originURL string, auth transport.AuthMet
 			return nil, fmt.Errorf("InitFromRemote: empty remote set main: %w", writeErr)
 		}
 		log.Info().Str("branch", agentBranch).Msg("git store initialized (empty remote)")
-		return &Store{
+		gs := &Store{
 			repo:   repo,
 			storer: s,
+			db:     s.DB(),
 			branch: agentBranch,
 			auth:   auth,
-		}, nil
+		}
+		if err := gs.populateCommitLog(); err != nil {
+			log.Warn().Err(err).Msg("commit_log: empty-remote populate failed")
+		}
+		return gs, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("InitFromRemote: fetch: %w", err)
@@ -471,10 +490,15 @@ func InitFromRemote(s *storegit.Storer, originURL string, auth transport.AuthMet
 	}
 
 	log.Info().Str("branch", agentBranch).Msg("git store initialized from remote")
-	return &Store{
+	gs := &Store{
 		repo:   repo,
 		storer: s,
+		db:     s.DB(),
 		branch: agentBranch,
 		auth:   auth,
-	}, nil
+	}
+	if err := gs.populateCommitLog(); err != nil {
+		log.Warn().Err(err).Msg("commit_log: remote populate failed")
+	}
+	return gs, nil
 }

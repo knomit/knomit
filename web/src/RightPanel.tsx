@@ -565,7 +565,7 @@ export function RightPanel({ state, dispatch }: Props) {
     const entityEntries = stats ? Object.entries(stats.entities).sort((a, b) => b[1] - a[1]).slice(0, 10) : [];
     const domainCount = stats ? Object.keys(stats.domains).length : 0;
     const entityCount = stats ? Object.keys(stats.entities).length : 0;
-    const totalCommits = activity ? (activity.total_capped ? `${activity.total}+` : String(activity.total)) : '—';
+    const totalCommits = activity ? String(activity.total) : '—';
     const level = activity ? activityLevel(activity) : null;
     const activityRate = activity ? Math.min(activity.changes_30d / 15, 1) : 0;
 

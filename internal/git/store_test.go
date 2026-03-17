@@ -1371,3 +1371,62 @@ func TestSwitchBranch_WritesAfterSwitch(t *testing.T) {
 		t.Errorf("content = %q, want %q", content, "new content")
 	}
 }
+
+func TestActivitySQL(t *testing.T) {
+	dir := t.TempDir()
+	store, err := git.Init(filepath.Join(dir, "test.db"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	fact := "---\ndomain: []\nconfidence: 0.5\nsources: 1\nentities: []\nrefs: []\n---\n# T\n\nBody.\n"
+	for i := 0; i < 3; i++ {
+		if _, _, err := store.WriteFile(fmt.Sprintf("kb/f%d.md", i), fact, fmt.Sprintf("add f%d", i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Write one file twice to test dedup.
+	if _, _, err := store.WriteFile("kb/f0.md", fact+"v2", "update f0"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Activity for all paths: should include init commit + 4 writes.
+	a, err := store.Activity("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.Total < 4 {
+		t.Errorf("Activity(\"\").Total = %d, want >= 4", a.Total)
+	}
+	if a.LastCommit == "" {
+		t.Error("Activity(\"\").LastCommit should be non-empty")
+	}
+
+	// Activity for directory: 4 commits touch kb/* (init doesn't touch kb/).
+	a2, err := store.Activity("kb")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a2.Total != 4 {
+		t.Errorf("Activity(\"kb\").Total = %d, want 4", a2.Total)
+	}
+
+	// Activity for specific file touched twice.
+	a3, err := store.Activity("kb/f0.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a3.Total != 2 {
+		t.Errorf("Activity(\"kb/f0.md\").Total = %d, want 2", a3.Total)
+	}
+
+	// Activity for specific file touched once.
+	a4, err := store.Activity("kb/f1.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a4.Total != 1 {
+		t.Errorf("Activity(\"kb/f1.md\").Total = %d, want 1", a4.Total)
+	}
+}

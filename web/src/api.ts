@@ -13,7 +13,7 @@ export interface CommitFile { path: string; action: string }
 export interface CommitDetail { commit: string; date: string; message: string; tags: string[]; files: CommitFile[] }
 export interface Stats { total: number; domains: Record<string, number>; entities: Record<string, number>; avg_confidence: number }
 export interface Status { head: string; branch: string; index_commit: string; embeddings_enabled: boolean; ontology_root: string }
-export interface ActivityStats { last_commit: string; total: number; total_capped: boolean; changes_7d: number; changes_30d: number; changes_90d: number }
+export interface ActivityStats { last_commit: string; total: number; changes_7d: number; changes_30d: number; changes_90d: number }
 
 export interface OriginResponse {
   name: string;
