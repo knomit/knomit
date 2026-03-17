@@ -190,7 +190,7 @@ interface FocusInfo {
   target: FocusTarget | null;
 }
 
-function renderFact(fact: Fact, search: (q: string) => void, dispatch?: Dispatch<Action>, focusInfo?: FocusInfo) {
+function renderFact(fact: Fact, search: (q: string) => void, dispatch?: Dispatch<Action>, focusInfo?: FocusInfo, historyDate?: string, onFromCommitClick?: (commit: string) => void) {
   const ft = focusInfo?.target ?? null;
   return (
     <div style={{ padding: '24px 28px', overflowY: 'auto', height: '100%', boxSizing: 'border-box' }}>
@@ -200,6 +200,24 @@ function renderFact(fact: Fact, search: (q: string) => void, dispatch?: Dispatch
           <div style={{ fontSize: 18, fontWeight: 600, color: '#eee', letterSpacing: '-0.3px' }}>
             {fact.title || fact.path}
           </div>
+          {historyDate && (
+            <span style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0, marginTop: 4 }}>
+              <span title={new Date(historyDate).toLocaleString()} style={{ color: '#666', fontSize: 11 }}>
+                {relativeTime(historyDate)}
+              </span>
+              {fact.from_commit && onFromCommitClick && (
+                <span
+                  title={`Retracted from commit ${fact.from_commit}`}
+                  onClick={() => onFromCommitClick(fact.from_commit!)}
+                  style={{ color: '#f88', fontFamily: 'monospace', fontSize: 11, cursor: 'pointer', background: '#2e1a1a', padding: '1px 5px', borderRadius: 3 }}
+                  onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = '#3e2020'; }}
+                  onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = '#2e1a1a'; }}
+                >
+                  {fact.from_commit.slice(0, 7)}
+                </span>
+              )}
+            </span>
+          )}
           {dispatch && (
             <button
               title="Find similar facts"
@@ -449,7 +467,11 @@ export function RightPanel({ state, dispatch }: Props) {
   // Time-travel: single file auto-loaded → show fact normally (no switcher)
   if (state.historyCommit && fact && !hasSwitcher) {
     if (fact.parse_error) return <FactEditor fact={fact} repo={state.repo} onSaved={setFact} />;
-    return renderFact(fact, search, undefined, focusInfo);
+    const goToCommit = (commit: string) => {
+      if (state.leftMode !== 'history') dispatch({ type: 'ENTER_HISTORY' });
+      dispatch({ type: 'SELECT_COMMIT', commit });
+    };
+    return renderFact(fact, search, undefined, focusInfo, commitDetail?.date, goToCommit);
   }
 
   // Time-travel: multiple files → show FactSwitcher + selected fact below
@@ -466,13 +488,13 @@ export function RightPanel({ state, dispatch }: Props) {
         {/* Commit header */}
         <div style={{ padding: '16px 20px 8px', borderBottom: '1px solid #222', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', flexShrink: 0 }}>
           <span style={{ color: '#7c9', fontFamily: 'monospace', fontSize: 12 }}>{commitDetail.commit.slice(0, 7)}</span>
-          <span style={{ color: '#666', fontSize: 11 }}>{relativeTime(commitDetail.date)}</span>
           {commitDetail.tags.map(tag => {
             const tc = tagColor(tag);
             return <span key={tag} style={{ color: tc.color, background: tc.bg, padding: '1px 6px', borderRadius: 3, fontSize: 10, fontFamily: 'monospace' }}>{tag}</span>;
           })}
-          {/* A/M/D summary */}
-          <span style={{ marginLeft: 'auto', display: 'flex', gap: 6, flexShrink: 0 }}>
+          {/* timestamp + A/M/D summary */}
+          <span style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+            <span title={new Date(commitDetail.date).toLocaleString()} style={{ color: '#666', fontSize: 11 }}>{relativeTime(commitDetail.date)}</span>
             {added > 0 && <span style={{ fontSize: 10, color: '#7c9', background: '#1a2e1a', padding: '1px 6px', borderRadius: 3, fontFamily: 'monospace' }}>{added} A</span>}
             {modified > 0 && <span style={{ fontSize: 10, color: '#8af', background: '#1a1a2e', padding: '1px 6px', borderRadius: 3, fontFamily: 'monospace' }}>{modified} M</span>}
             {deleted > 0 && <span style={{ fontSize: 10, color: '#f88', background: '#2e1a1a', padding: '1px 6px', borderRadius: 3, fontFamily: 'monospace' }}>{deleted} D</span>}

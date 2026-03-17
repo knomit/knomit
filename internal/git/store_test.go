@@ -744,13 +744,16 @@ func TestReadFileLastCommit(t *testing.T) {
 		t.Fatal("expected error reading deleted file at retract commit, got nil")
 	}
 
-	// But ReadFileLastCommit must recover the content.
-	got, err := store.ReadFileLastCommit("kb/fact.md", retractHash)
+	// But ReadFileLastCommit must recover the content and return the source commit.
+	got, fromCommit, err := store.ReadFileLastCommit("kb/fact.md", retractHash)
 	if err != nil {
 		t.Fatalf("ReadFileLastCommit: %v", err)
 	}
 	if got != content {
 		t.Errorf("content mismatch:\ngot:  %q\nwant: %q", got, content)
+	}
+	if fromCommit == "" {
+		t.Error("ReadFileLastCommit: expected non-empty fromCommit")
 	}
 }
 

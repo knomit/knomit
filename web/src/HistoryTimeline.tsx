@@ -78,6 +78,15 @@ export function HistoryTimeline({ state, dispatch }: Props) {
     return () => observer.disconnect();
   }, [loadMore]);
 
+  // Sync selection + scroll when historyCommit is set externally (e.g. from_commit badge click)
+  useEffect(() => {
+    if (!state.historyCommit) return;
+    const idx = entries.findIndex(e => e.commit === state.historyCommit);
+    if (idx === -1) return; // not yet loaded
+    setSelectedIdx(idx);
+    itemRefs.current[idx]?.scrollIntoView({ block: 'nearest' });
+  }, [state.historyCommit, entries]);
+
   // Keyboard navigation — j/k moves selection and loads commit in right panel
   const navigate = useCallback((delta: 1 | -1) => {
     const next = Math.max(0, Math.min(selectedIdx + delta, entries.length - 1));

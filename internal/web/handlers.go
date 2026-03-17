@@ -103,13 +103,14 @@ func handleFact() http.HandlerFunc {
 		commitHash := r.URL.Query().Get("commit")
 
 		var content string
+		var fromCommit string
 		var err error
 		if commitHash != "" {
 			content, err = ri.GS.ReadFileAtCommit(path, commitHash)
 			if err != nil {
 				// File may have been deleted in this commit (e.g. retract).
 				// Fall back to the last commit where the file existed.
-				content, err = ri.GS.ReadFileLastCommit(path, commitHash)
+				content, fromCommit, err = ri.GS.ReadFileLastCommit(path, commitHash)
 			}
 		} else {
 			content, err = ri.GS.ReadFile(path)
@@ -132,6 +133,20 @@ func handleFact() http.HandlerFunc {
 			return
 		}
 
+		if fromCommit != "" {
+			writeJSON(w, http.StatusOK, map[string]any{
+				"path":        fact.Path,
+				"title":       fact.Title,
+				"body":        fact.Body,
+				"domain":      fact.Domain,
+				"confidence":  fact.Confidence,
+				"sources":     fact.Sources,
+				"entities":    fact.Entities,
+				"refs":        fact.Refs,
+				"from_commit": fromCommit,
+			})
+			return
+		}
 		writeJSON(w, http.StatusOK, fact)
 	}
 }

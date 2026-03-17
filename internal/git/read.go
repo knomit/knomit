@@ -69,16 +69,16 @@ func (s *Store) ReadFileAtCommit(path, commitHash string) (string, error) {
 }
 
 // ReadFileLastCommit finds the most recent ancestor of beforeCommitHash where
-// path existed and returns its content. Used to read facts that were deleted
-// in beforeCommitHash (e.g. retract commits).
-func (s *Store) ReadFileLastCommit(path, beforeCommitHash string) (string, error) {
+// path existed and returns its content and commit hash. Used to read facts
+// that were deleted in beforeCommitHash (e.g. retract commits).
+func (s *Store) ReadFileLastCommit(path, beforeCommitHash string) (content string, fromCommit string, err error) {
 	startHash := plumbing.NewHash(beforeCommitHash)
 	startCommit, err := s.repo.CommitObject(startHash)
 	if err != nil {
-		return "", fmt.Errorf("ReadFileLastCommit: commit: %w", err)
+		return "", "", fmt.Errorf("ReadFileLastCommit: commit: %w", err)
 	}
 	if len(startCommit.ParentHashes) == 0 {
-		return "", fmt.Errorf("ReadFileLastCommit: %q: commit has no parents", path)
+		return "", "", fmt.Errorf("ReadFileLastCommit: %q: commit has no parents", path)
 	}
 
 	logIter, err := s.repo.Log(&gogit.LogOptions{
@@ -87,16 +87,17 @@ func (s *Store) ReadFileLastCommit(path, beforeCommitHash string) (string, error
 		Order:    gogit.LogOrderCommitterTime,
 	})
 	if err != nil {
-		return "", fmt.Errorf("ReadFileLastCommit: log: %w", err)
+		return "", "", fmt.Errorf("ReadFileLastCommit: log: %w", err)
 	}
 	defer logIter.Close()
 
 	lastCommit, err := logIter.Next()
 	if err != nil {
-		return "", fmt.Errorf("ReadFileLastCommit: %q: no prior commit found", path)
+		return "", "", fmt.Errorf("ReadFileLastCommit: %q: no prior commit found", path)
 	}
 
-	return s.ReadFileAtCommit(path, lastCommit.Hash.String())
+	content, err = s.ReadFileAtCommit(path, lastCommit.Hash.String())
+	return content, lastCommit.Hash.String(), err
 }
 
 // ReadFile reads the content of path from the HEAD commit.
