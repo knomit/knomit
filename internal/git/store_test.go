@@ -721,6 +721,42 @@ func TestReadFileAtCommit(t *testing.T) {
 	}
 }
 
+func TestReadFileLastCommit(t *testing.T) {
+	dir := t.TempDir()
+	store, err := git.Init(filepath.Join(dir, "test.db"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	const content = "---\ndomain: []\nconfidence: 0.5\nsources: 1\nentities: []\nrefs: []\n---\n# Fact\n\nBody.\n"
+	if _, _, err := store.WriteFile("kb/fact.md", content, "add fact"); err != nil {
+		t.Fatal(err)
+	}
+
+	retractHash, err := store.DeleteFile("kb/fact.md", "retract fact")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// File must not be readable at the retract commit.
+	if _, err := store.ReadFileAtCommit("kb/fact.md", retractHash); err == nil {
+		t.Fatal("expected error reading deleted file at retract commit, got nil")
+	}
+
+	// But ReadFileLastCommit must recover the content and return the source commit.
+	got, fromCommit, err := store.ReadFileLastCommit("kb/fact.md", retractHash)
+	if err != nil {
+		t.Fatalf("ReadFileLastCommit: %v", err)
+	}
+	if got != content {
+		t.Errorf("content mismatch:\ngot:  %q\nwant: %q", got, content)
+	}
+	if fromCommit == "" {
+		t.Error("ReadFileLastCommit: expected non-empty fromCommit")
+	}
+}
+
 func TestReadFileWithHash(t *testing.T) {
 	dir := t.TempDir()
 	store, err := git.Init(filepath.Join(dir, "knomit.git.db"), nil)
@@ -784,6 +820,49 @@ func TestCommitDetail(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("expected kb/test.md added, got %v", detail.Files)
+	}
+}
+
+func TestCommitDetailBatchWrite(t *testing.T) {
+	dir := t.TempDir()
+	store, err := git.Init(filepath.Join(dir, "test.db"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	// First commit: anchor so BatchWrite has a parent.
+	if _, _, err := store.WriteFile("kb/anchor.md", "---\ndomain: []\nconfidence: 0.5\nsources: 1\nentities: []\nrefs: []\n---\n# A\n\nA.\n", "add anchor"); err != nil {
+		t.Fatal(err)
+	}
+
+	// BatchWrite: add three files in one commit.
+	files := map[string]string{
+		"kb/a.md": "---\ndomain: []\nconfidence: 0.5\nsources: 1\nentities: []\nrefs: []\n---\n# A\n\nA.\n",
+		"kb/b.md": "---\ndomain: []\nconfidence: 0.5\nsources: 1\nentities: []\nrefs: []\n---\n# B\n\nB.\n",
+		"kb/c.md": "---\ndomain: []\nconfidence: 0.5\nsources: 1\nentities: []\nrefs: []\n---\n# C\n\nC.\n",
+	}
+	commitHash, _, err := store.BatchWrite(files, "batch add three facts")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	detail, err := store.CommitDetail(commitHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(detail.Files) != 3 {
+		t.Fatalf("expected 3 files in batch commit, got %d: %v", len(detail.Files), detail.Files)
+	}
+	paths := make(map[string]string, 3)
+	for _, f := range detail.Files {
+		paths[f.Path] = f.Action
+	}
+	for _, p := range []string{"kb/a.md", "kb/b.md", "kb/c.md"} {
+		if action, ok := paths[p]; !ok || action != "added" {
+			t.Errorf("expected %s added, got action=%q ok=%v", p, action, ok)
+		}
 	}
 }
 
@@ -1290,5 +1369,160 @@ func TestSwitchBranch_WritesAfterSwitch(t *testing.T) {
 	}
 	if content != "new content" {
 		t.Errorf("content = %q, want %q", content, "new content")
+	}
+}
+
+func TestActivitySQL(t *testing.T) {
+	dir := t.TempDir()
+	store, err := git.Init(filepath.Join(dir, "test.db"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	fact := "---\ndomain: []\nconfidence: 0.5\nsources: 1\nentities: []\nrefs: []\n---\n# T\n\nBody.\n"
+	for i := 0; i < 3; i++ {
+		if _, _, err := store.WriteFile(fmt.Sprintf("kb/f%d.md", i), fact, fmt.Sprintf("add f%d", i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Write one file twice to test dedup.
+	if _, _, err := store.WriteFile("kb/f0.md", fact+"v2", "update f0"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Activity for all paths: should include init commit + 4 writes.
+	a, err := store.Activity("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.Total < 4 {
+		t.Errorf("Activity(\"\").Total = %d, want >= 4", a.Total)
+	}
+	if a.LastCommit == "" {
+		t.Error("Activity(\"\").LastCommit should be non-empty")
+	}
+
+	// Activity for directory: 4 commits touch kb/* (init doesn't touch kb/).
+	a2, err := store.Activity("kb")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a2.Total != 4 {
+		t.Errorf("Activity(\"kb\").Total = %d, want 4", a2.Total)
+	}
+
+	// Activity for specific file touched twice.
+	a3, err := store.Activity("kb/f0.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a3.Total != 2 {
+		t.Errorf("Activity(\"kb/f0.md\").Total = %d, want 2", a3.Total)
+	}
+
+	// Activity for specific file touched once.
+	a4, err := store.Activity("kb/f1.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a4.Total != 1 {
+		t.Errorf("Activity(\"kb/f1.md\").Total = %d, want 1", a4.Total)
+	}
+
+	// Activity for a path with no commits must return zeros, not an error.
+	a5, err := store.Activity("kb/nonexistent.md")
+	if err != nil {
+		t.Fatalf("Activity(nonexistent) unexpected error: %v", err)
+	}
+	if a5.Total != 0 || a5.LastCommit != "" || a5.Changes7d != 0 {
+		t.Errorf("Activity(nonexistent) = %+v, want all-zero", a5)
+	}
+}
+
+// TestWalkChangedFilesEmptyPrefix checks that an empty prefix returns all
+// .md files (no GLOB clause applied).
+func TestWalkChangedFilesEmptyPrefix(t *testing.T) {
+	dir := t.TempDir()
+	store, err := git.Init(filepath.Join(dir, "test.db"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	fact := "# F\n"
+	if _, _, err := store.WriteFile("kb/a.md", fact, "add kb/a"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.WriteFile("other/b.md", fact, "add other/b"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Empty prefix — should include files from both directories.
+	files, _, err := store.WalkChangedFiles("", "", nil, 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	paths := make(map[string]bool, len(files))
+	for _, f := range files {
+		paths[f.Path] = true
+	}
+	if !paths["kb/a.md"] {
+		t.Errorf("expected kb/a.md in results; got %v", files)
+	}
+	if !paths["other/b.md"] {
+		t.Errorf("expected other/b.md in results; got %v", files)
+	}
+}
+
+// TestWalkChangedFilesLimit ensures the limit parameter is respected exactly.
+func TestWalkChangedFilesLimit(t *testing.T) {
+	dir := t.TempDir()
+	store, err := git.Init(filepath.Join(dir, "test.db"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	for i := 0; i < 5; i++ {
+		if _, _, err := store.WriteFile(fmt.Sprintf("kb/f%d.md", i), "# F\n", fmt.Sprintf("add f%d", i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	files, _, err := store.WalkChangedFiles("", "kb", nil, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 3 {
+		t.Errorf("WalkChangedFiles with limit=3 returned %d files, want exactly 3", len(files))
+	}
+}
+
+// TestWalkChangedFilesLastHashIsHEAD verifies that the returned lastHash
+// always equals the current HEAD commit hash (SQL path ignores fromCommit).
+func TestWalkChangedFilesLastHashIsHEAD(t *testing.T) {
+	dir := t.TempDir()
+	store, err := git.Init(filepath.Join(dir, "test.db"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	if _, _, err := store.WriteFile("kb/a.md", "# A\n", "add a"); err != nil {
+		t.Fatal(err)
+	}
+
+	head, err := store.HeadCommit()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, lastHash, err := store.WalkChangedFiles("", "kb", nil, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lastHash != head {
+		t.Errorf("lastHash = %s, want HEAD = %s", lastHash[:8], head[:8])
 	}
 }

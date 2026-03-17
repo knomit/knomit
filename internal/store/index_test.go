@@ -862,3 +862,81 @@ func TestSearchVecScoringBoost(t *testing.T) {
 		t.Fatalf("expected results[0] > results[1], got %v <= %v", results[0].Score, results[1].Score)
 	}
 }
+
+// ── Stats tests ───────────────────────────────────────────────────────────────
+
+func TestStats_Empty(t *testing.T) {
+	idx, err := store.New(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer idx.Close()
+
+	res, err := idx.Stats("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Total != 0 {
+		t.Errorf("empty index: total = %d, want 0", res.Total)
+	}
+	if res.AvgConfidence != 0 {
+		t.Errorf("empty index: avg_confidence = %v, want 0", res.AvgConfidence)
+	}
+}
+
+func TestStats_Aggregate(t *testing.T) {
+	idx, err := store.New(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer idx.Close()
+
+	insertTestBlob(t, idx.DB(), "b1", "body1")
+	insertTestBlob(t, idx.DB(), "b2", "body2")
+	insertTestBlob(t, idx.DB(), "b3", "body3")
+
+	facts := []store.FactRecord{
+		{Path: "kb/a.md", Title: "A", BlobHash: "b1", Domain: []string{"go", "web"}, Entities: []string{"chi"}, Confidence: 0.9, Sources: 1, CommitHash: "x"},
+		{Path: "kb/b.md", Title: "B", BlobHash: "b2", Domain: []string{"go"}, Entities: []string{"chi", "mux"}, Confidence: 0.7, Sources: 1, CommitHash: "x"},
+		{Path: "other/c.md", Title: "C", BlobHash: "b3", Domain: []string{"infra"}, Entities: []string{"k8s"}, Confidence: 1.0, Sources: 1, CommitHash: "x"},
+	}
+	for _, f := range facts {
+		if err := idx.Upsert(f); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// All facts (no prefix filter).
+	res, err := idx.Stats("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Total != 3 {
+		t.Errorf("total = %d, want 3", res.Total)
+	}
+	if res.Domains["go"] != 2 {
+		t.Errorf("domains[go] = %d, want 2", res.Domains["go"])
+	}
+	if res.Domains["infra"] != 1 {
+		t.Errorf("domains[infra] = %d, want 1", res.Domains["infra"])
+	}
+	if res.Entities["chi"] != 2 {
+		t.Errorf("entities[chi] = %d, want 2", res.Entities["chi"])
+	}
+
+	// Prefix-filtered: only kb/ facts.
+	res, err = idx.Stats("kb/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Total != 2 {
+		t.Errorf("prefix filter: total = %d, want 2", res.Total)
+	}
+	if _, ok := res.Domains["infra"]; ok {
+		t.Error("prefix filter: infra domain should not appear for kb/ prefix")
+	}
+	// avg_confidence for kb/ = (0.9 + 0.7) / 2 = 0.8
+	if res.AvgConfidence != 0.8 {
+		t.Errorf("prefix filter: avg_confidence = %v, want 0.8", res.AvgConfidence)
+	}
+}

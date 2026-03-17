@@ -26,6 +26,7 @@ import (
 	"knomit/internal/git"
 	"knomit/internal/llm"
 	"knomit/internal/mcp"
+	"knomit/internal/observe"
 	"knomit/internal/store"
 	"knomit/internal/synthesize"
 	"knomit/internal/web"
@@ -52,7 +53,7 @@ type repoResult struct {
 	gs      *git.Store
 	svc     *store.Service
 	idx     *store.Index // concrete index — needed for MCP/synthesize which require wider interfaces
-	obs     *observer
+	obs     *observe.Observer
 	cleanup func() // close svc, stop observer — NOT the embedder or LLM adapter
 }
 
@@ -154,7 +155,7 @@ func openRepo(
 	hub := web.NewTaskHub(ctx)
 
 	// Observer: sync index + push SSE on every git commit.
-	obs := newObserver(time.Second, func(hash string) {
+	obs := observe.New(time.Second, func(hash string) {
 		if err := idx.Sync(gs, gs.Branch()); err != nil {
 			log.Warn().Err(err).Str("repo", name).Msg("observer sync failed")
 		}
@@ -187,7 +188,7 @@ func openRepo(
 	// Per-repo MCP servers.
 	var mcpHandlers map[string]http.Handler
 	if ontology != nil {
-		reviewer := &reviewerAdapter{r: synthesize.NewReviewer(gs, idx, idx, nil)}
+		reviewer := synthesize.NewReviewer(gs, idx, idx, nil)
 		profiles := []string{"code", "chat", "generic"}
 		mcpHandlers = make(map[string]http.Handler, len(profiles))
 		for _, p := range profiles {
@@ -428,10 +429,10 @@ func serveCmd() *cobra.Command {
 				allResults = append(allResults, result)
 			}
 
-			// 4. Wire git remote handler (bound to default repo).
+			// 4. Wire git remote handler (all repos via RepoManager).
 			var gitHandler http.Handler
 			if cfg.Git.Serve {
-				gitHandler = web.GitRemoteHandler(knomitResult.gs, cfg.LLM.APIKey)
+				gitHandler = web.GitRemoteHandler(rm)
 			}
 
 			// 5. Create chi router.
@@ -502,7 +503,7 @@ func serveCmd() *cobra.Command {
 // setRepoMCP creates and attaches MCP handlers to a repoResult.
 // Called after the ontology is loaded (since MCP servers need it).
 func setRepoMCP(result *repoResult, ontologyRoot string, ontology *fact.Ontology, llmAdapter llm.LLMAdapter, embedder *embeddings.Embedder) {
-	reviewer := &reviewerAdapter{r: synthesize.NewReviewer(result.gs, result.idx, result.idx, nil)}
+	reviewer := synthesize.NewReviewer(result.gs, result.idx, result.idx, nil)
 	profiles := []string{"code", "chat", "generic"}
 	mcpHandlers := make(map[string]http.Handler, len(profiles))
 	for _, p := range profiles {
@@ -616,22 +617,11 @@ func resetCmd() *cobra.Command {
 	return cmd
 }
 
-// reviewerAdapter adapts *synthesize.Reviewer to the mcp.Reviewer interface,
-// widening the return type from *synthesize.ReviewResult to interface{}.
-type reviewerAdapter struct {
-	r *synthesize.Reviewer
-}
-
-func (a *reviewerAdapter) StartSession() (interface{}, error) {
-	return a.r.StartSession()
-}
-
-func (a *reviewerAdapter) ContinueSession(sessionID, response string) (interface{}, error) {
-	return a.r.ContinueSession(sessionID, response)
-}
 
 // runSyncLoop pulls from the configured remote on a fixed interval.
 // First sync fires immediately, then every remote.Interval seconds.
+// The interval is re-read from the database on each tick so that changes
+// made via PUT /api/v1/{repo}/origin take effect without a restart.
 func runSyncLoop(ctx context.Context, wg *sync.WaitGroup, gs *git.Store, svc *store.Service, hub *web.TaskHub, remote *store.Remote) {
 	defer wg.Done()
 
@@ -666,12 +656,21 @@ func runSyncLoop(ctx context.Context, wg *sync.WaitGroup, gs *git.Store, svc *st
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			// Re-read remote config so interval changes via PUT /origin take effect.
+			if fresh, err := svc.GetRemote(remote.Name); err == nil && fresh != nil {
+				if d := time.Duration(fresh.Interval) * time.Second; d != interval {
+					interval = d
+					ticker.Reset(interval)
+				}
+			}
 			doSync()
 		}
 	}
 }
 
 // runPushLoop pushes the agent branch to origin on a fixed interval.
+// The interval is re-read from the database on each tick so that changes
+// made via PUT /api/v1/{repo}/origin take effect without a restart.
 func runPushLoop(ctx context.Context, wg *sync.WaitGroup, gs *git.Store, svc *store.Service, hub *web.TaskHub, remote *store.Remote) {
 	defer wg.Done()
 
@@ -703,6 +702,13 @@ func runPushLoop(ctx context.Context, wg *sync.WaitGroup, gs *git.Store, svc *st
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			// Re-read remote config so interval changes via PUT /origin take effect.
+			if fresh, err := svc.GetRemote(remote.Name); err == nil && fresh != nil {
+				if d := time.Duration(fresh.PushInterval) * time.Second; d != interval {
+					interval = d
+					ticker.Reset(interval)
+				}
+			}
 			doPush()
 		}
 	}

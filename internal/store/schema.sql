@@ -91,7 +91,9 @@ CREATE TABLE IF NOT EXISTS remotes (
     push_interval    INTEGER NOT NULL DEFAULT 300,
     last_push_at     TEXT,
     last_push_status TEXT,
-    last_push_error  TEXT
+    last_push_error  TEXT,
+    auth_method      TEXT NOT NULL DEFAULT '',
+    auth_token       TEXT NOT NULL DEFAULT ''
 );
 
 -- Tool sessions (paginated browsing/explain)
@@ -117,3 +119,16 @@ CREATE TABLE IF NOT EXISTS tool_queue (
     depth       INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (session_id, path, commit_hash)
 );
+
+-- Denormalized commit log for O(1) activity queries and efficient path history.
+-- Populated on open (INSERT OR IGNORE) and appended after each write/sync.
+-- Insertion order mirrors commit age: oldest first → rowid order reflects recency.
+CREATE TABLE IF NOT EXISTS commit_log (
+    commit_hash  TEXT    NOT NULL,
+    path         TEXT    NOT NULL,
+    committed_at INTEGER NOT NULL,  -- Unix seconds
+    message      TEXT    NOT NULL,
+    PRIMARY KEY (commit_hash, path)
+);
+CREATE INDEX IF NOT EXISTS commit_log_path_time ON commit_log (path, committed_at DESC);
+CREATE INDEX IF NOT EXISTS commit_log_time      ON commit_log (committed_at DESC);

@@ -3,13 +3,15 @@ package web
 import (
 	"net/http"
 
-	"github.com/go-chi/chi/v5"
-	"github.com/go-chi/chi/v5/middleware"
 	"knomit/internal/embeddings"
 	"knomit/internal/git"
 	"knomit/internal/llm"
 	"knomit/internal/store"
 	"knomit/internal/synthesize"
+
+	"github.com/go-chi/chi/v5"
+	"github.com/go-chi/chi/v5/middleware"
+	"github.com/rs/zerolog/log"
 )
 
 // GitStore is the narrow git interface needed by read-only query handlers
@@ -18,9 +20,12 @@ type GitStore interface {
 	ListDir(path string) ([]git.DirEntry, error)
 	ReadFile(path string) (string, error)
 	ReadFileAtCommit(path, commitHash string) (string, error)
+	ReadFileLastCommit(path, beforeCommitHash string) (content string, fromCommit string, err error)
+	WriteFile(path, content, message string) (commitHash, blobHash string, err error)
 	Log(path string) ([]git.LogEntry, error)
 	LogPaginated(path string, limit int, after string) ([]git.LogEntryWithTags, string, error)
 	CommitDetail(commitHash string) (*git.CommitDetailResult, error)
+	Activity(path string) (git.ActivityResult, error)
 	HeadCommit() (string, error)
 	Branch() string
 	ListAll() ([]string, error)
@@ -31,6 +36,7 @@ type GitStore interface {
 type SearchIndex interface {
 	Search(q store.SearchQuery) ([]store.SearchResult, error)
 	GetLastCommit(branch string) (string, error)
+	Stats(pathPrefix string) (store.StatsResult, error)
 }
 
 // SynthDeps bundles the dependencies needed by the synthesize handler.
@@ -55,7 +61,6 @@ type SynthDeps struct {
 //	GET  /api/v1/{repo}/stats       — aggregate statistics
 //	GET  /api/v1/{repo}/status      — head commit, branch, index state
 //	POST /api/v1/{repo}/synthesize  — start async synthesis task
-//	POST /api/v1/{repo}/sync        — start async git sync task
 //	GET  /api/v1/{repo}/events      — SSE event stream
 //	GET  /api/v1/openapi.yaml       — OpenAPI spec
 //	GET  /docs                      — Swagger UI
@@ -65,8 +70,8 @@ type SynthDeps struct {
 func NewRouter(rm *RepoManager, gitHandler http.Handler, embeddingsEnabled bool, ontologyRoot string) http.Handler {
 	r := chi.NewRouter()
 	r.Use(middleware.Recoverer)
-
 	if gitHandler != nil {
+		log.Info().Msg("git handler enabled at /git")
 		r.Mount("/git", gitHandler)
 	}
 
@@ -78,13 +83,14 @@ func NewRouter(rm *RepoManager, gitHandler http.Handler, embeddingsEnabled bool,
 		sub.Use(repoMiddleware(rm))
 		sub.Get("/browse", handleBrowse(ontologyRoot))
 		sub.Get("/fact", handleFact())
+		sub.Put("/fact", handleFactWrite())
 		sub.Get("/search", handleSearch())
 		sub.Get("/history", handleHistoryPaginated())
 		sub.Get("/commit", handleCommitDetail())
 		sub.Get("/stats", handleStats())
+		sub.Get("/activity", handleActivity())
 		sub.Get("/status", handleStatus(embeddingsEnabled, ontologyRoot))
 		sub.Post("/synthesize", handleSynthesizeStart())
-		sub.Post("/sync", handleSync())
 		sub.Get("/events", handleEvents())
 		sub.Get("/origin", handleGetOrigin())
 		sub.Put("/origin", handleSetOrigin())

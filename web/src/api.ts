@@ -4,7 +4,7 @@ export interface RepoInfo { name: string; branch: string }
 
 export interface DirChild { name: string; is_dir: boolean }
 export interface BrowseResponse { path: string; children: DirChild[] }
-export interface Fact { path: string; title: string; body: string; domain: string[]; confidence: number; sources: number; entities: string[]; refs: string[] }
+export interface Fact { path: string; title: string; body: string; domain: string[]; confidence: number; sources: number; entities: string[]; refs: string[]; parse_error?: string; from_commit?: string; commit_hash?: string; commit_date?: string }
 export interface SearchResult { path: string; title: string; body: string; score: number; domain?: string[]; entities?: string[] }
 export interface HistoryEntry { commit: string; date: string; message: string }
 export interface HistoryEntryWithTags { commit: string; date: string; message: string; tags: string[] }
@@ -13,6 +13,7 @@ export interface CommitFile { path: string; action: string }
 export interface CommitDetail { commit: string; date: string; message: string; tags: string[]; files: CommitFile[] }
 export interface Stats { total: number; domains: Record<string, number>; entities: Record<string, number>; avg_confidence: number }
 export interface Status { head: string; branch: string; index_commit: string; embeddings_enabled: boolean; ontology_root: string }
+export interface ActivityStats { last_commit: string; total: number; changes_7d: number; changes_30d: number; changes_90d: number }
 
 export interface OriginResponse {
   name: string;
@@ -84,7 +85,14 @@ export const api = {
   },
   commitDetail: (repo: string, hash: string): Promise<CommitDetail> =>
     fetch(`${base(repo)}/commit?hash=${encodeURIComponent(hash)}`).then(r => r.json()),
+  updateFact: (repo: string, path: string, content: string): Promise<Fact> =>
+    fetch(`${base(repo)}/fact`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path, content }),
+    }).then(r => { if (!r.ok) throw new Error(r.statusText); return r.json(); }),
   stats: (repo: string, path: string): Promise<Stats> => fetch(`${base(repo)}/stats?path=${encodeURIComponent(path)}`).then(r => r.json()),
+  activity: (repo: string, path: string): Promise<ActivityStats> => fetch(`${base(repo)}/activity?path=${encodeURIComponent(path)}`).then(r => r.json()),
   status: (repo: string): Promise<Status> => fetch(`${base(repo)}/status`).then(r => r.json()),
   sync: (repo: string): Promise<{ op: string; id?: string; status: string; message?: string }> =>
     fetch(`${base(repo)}/sync`, { method: 'POST' }).then(r => r.json()),

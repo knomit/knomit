@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	_ "embed"
 	"fmt"
-	"sync"
 
 	storegit "knomit/internal/store/git"
 )
@@ -20,7 +19,6 @@ const BlobObjectType = 3
 // SQLite file with sqlite-vec + GraphQLite extensions, runs the embedded
 // schema, and provides both a go-git Storer and an Index over the shared *sql.DB.
 type Service struct {
-	mu    sync.Mutex
 	db    *sql.DB
 	idx   *Index
 	gits  *storegit.Storer
@@ -112,9 +110,6 @@ type GitWriter interface {
 // DeleteFact deletes a fact from the git store; the onCommit observer
 // handles index cleanup automatically via idx.Sync.
 func (s *Service) DeleteFact(gw GitWriter, path, message string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	if _, err := gw.DeleteFile(path, message); err != nil {
 		return fmt.Errorf("DeleteFact git: %w", err)
 	}

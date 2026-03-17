@@ -92,10 +92,3 @@ steps:
     prompt: Find patterns across facts and create higher-level summaries.
 `
 
-// handleSync handles POST /api/v1/{repo}/sync
-// TODO: re-wire to trigger the background sync goroutine instead of calling gs.Sync directly.
-func handleSync() http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		writeError(w, http.StatusServiceUnavailable, "sync moved to background goroutine")
-	}
-}

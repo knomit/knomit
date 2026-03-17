@@ -31,7 +31,13 @@ export function LeftPanel({ state, dispatch }: Props) {
       const c = r.children || [];
       setChildren(c);
       if (!isHeadChangeOnly) {
-        setSelectedIdx(-1);
+        if (state.selectedFact) {
+          const factName = state.selectedFact.split('/').pop();
+          const idx = c.findIndex(ch => !ch.is_dir && ch.name === factName);
+          setSelectedIdx(idx >= 0 ? idx : -1);
+        } else {
+          setSelectedIdx(-1);
+        }
       }
     }).catch(() => setChildren([]));
   }, [state.currentPath, state.searchQuery, state.headCommit]);
@@ -133,10 +139,23 @@ export function LeftPanel({ state, dispatch }: Props) {
       if (e.key === 'Backspace' || e.key === 'Delete') { e.preventDefault(); dispatch({ type: 'NAV_BACK' }); }
       // Browse-mode only shortcuts — skip when in history mode (HistoryTimeline handles its own keys)
       if (state.leftMode === 'history') return;
+      if (state.rightPanelFocused) return; // right panel owns j/k/enter when focused
       if (e.key === 'ArrowDown' || e.key === 'j') { e.preventDefault(); moveSelection(1); }
       if (e.key === 'ArrowUp' || e.key === 'k') { e.preventDefault(); moveSelection(-1); }
-      if (e.key === 'ArrowRight' || e.key === 'Enter') { e.preventDefault(); activateSelected(); }
       if (e.key === 'ArrowLeft' && !isSearchMode) { e.preventDefault(); dispatch({ type: 'GO_UP' }); }
+      if (e.key === 'Enter') { e.preventDefault(); activateSelected(); }
+      if (e.key === 'ArrowRight') {
+        e.preventDefault();
+        const selectedItem = isSearchMode ? searchResults[selectedIdx] : children[selectedIdx];
+        if (!selectedItem) return; // no item selected → do nothing
+        const isDir = !isSearchMode && (selectedItem as { is_dir?: boolean }).is_dir;
+        if (isDir) {
+          activateSelected(); // navigate into directory as before
+        } else {
+          // transfer focus to right panel (fact selected in browse or search mode)
+          dispatch({ type: 'FOCUS_RIGHT_PANEL' });
+        }
+      }
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);

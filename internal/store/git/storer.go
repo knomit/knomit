@@ -33,6 +33,9 @@ func NewStorer(db *sql.DB) *Storer {
 	return &Storer{db: db}
 }
 
+// DB returns the underlying *sql.DB.
+func (s *Storer) DB() *sql.DB { return s.db }
+
 // conn returns the active transaction if set, otherwise the raw *sql.DB.
 func (s *Storer) conn() execer {
 	if s.tx != nil {

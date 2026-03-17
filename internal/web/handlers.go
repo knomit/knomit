@@ -26,11 +26,13 @@
 package web
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"knomit/internal/git"
 	"knomit/internal/mcp"
@@ -103,9 +105,15 @@ func handleFact() http.HandlerFunc {
 		commitHash := r.URL.Query().Get("commit")
 
 		var content string
+		var fromCommit string
 		var err error
 		if commitHash != "" {
 			content, err = ri.GS.ReadFileAtCommit(path, commitHash)
+			if err != nil {
+				// File may have been deleted in this commit (e.g. retract).
+				// Fall back to the last commit where the file existed.
+				content, fromCommit, err = ri.GS.ReadFileLastCommit(path, commitHash)
+			}
 		} else {
 			content, err = ri.GS.ReadFile(path)
 		}
@@ -117,11 +125,93 @@ func handleFact() http.HandlerFunc {
 
 		fact, err := mcp.ParseFact(path, content)
 		if err != nil {
-			// Not a fact file (e.g. kb.md manifest) — return raw content.
+			// File could not be parsed as a fact — return raw content with parse error.
 			writeJSON(w, http.StatusOK, map[string]any{
-				"path":  path,
-				"title": path,
-				"body":  content,
+				"path":        path,
+				"title":       path,
+				"body":        content,
+				"parse_error": err.Error(),
+			})
+			return
+		}
+
+		if fromCommit != "" {
+			writeJSON(w, http.StatusOK, map[string]any{
+				"path":        fact.Path,
+				"title":       fact.Title,
+				"body":        fact.Body,
+				"domain":      fact.Domain,
+				"confidence":  fact.Confidence,
+				"sources":     fact.Sources,
+				"entities":    fact.Entities,
+				"refs":        fact.Refs,
+				"from_commit": fromCommit,
+			})
+			return
+		}
+
+		// Browsing mode: enrich with commit hash and date from the store index.
+		if commitHash == "" && ri.Svc != nil {
+			if rec, lerr := ri.Svc.Index().GetByPath(path); lerr == nil && rec != nil && rec.CommitHash != "" {
+				resp := map[string]any{
+					"path":        fact.Path,
+					"title":       fact.Title,
+					"body":        fact.Body,
+					"domain":      fact.Domain,
+					"confidence":  fact.Confidence,
+					"sources":     fact.Sources,
+					"entities":    fact.Entities,
+					"refs":        fact.Refs,
+					"commit_hash": rec.CommitHash,
+				}
+				var ts sql.NullInt64
+				if qerr := ri.Svc.DB().QueryRow(
+					`SELECT committed_at FROM commit_log WHERE commit_hash = ? LIMIT 1`,
+					rec.CommitHash,
+				).Scan(&ts); qerr == nil && ts.Valid {
+					resp["commit_date"] = time.Unix(ts.Int64, 0).UTC().Format(time.RFC3339)
+				}
+				writeJSON(w, http.StatusOK, resp)
+				return
+			}
+		}
+		writeJSON(w, http.StatusOK, fact)
+	}
+}
+
+// handleFactWrite handles PUT /api/v1/{repo}/fact — writes raw fact file content.
+// Request body: JSON {"path": "...", "content": "..."}
+// Response: the re-parsed fact JSON (or parse error if content is still invalid).
+func handleFactWrite() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		ri := RepoFromContext(r.Context())
+
+		var req struct {
+			Path    string `json:"path"`
+			Content string `json:"content"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid request body")
+			return
+		}
+		if req.Path == "" {
+			writeError(w, http.StatusBadRequest, "path is required")
+			return
+		}
+
+		msg := "edit: update " + req.Path + " via UI"
+		if _, _, err := ri.GS.WriteFile(req.Path, req.Content, msg); err != nil {
+			writeError(w, http.StatusInternalServerError, fmt.Sprintf("write failed: %v", err))
+			return
+		}
+
+		fact, err := mcp.ParseFact(req.Path, req.Content)
+		if err != nil {
+			writeJSON(w, http.StatusOK, map[string]any{
+				"path":        req.Path,
+				"title":       req.Path,
+				"body":        req.Content,
+				"parse_error": err.Error(),
 			})
 			return
 		}
@@ -300,65 +390,35 @@ func handleCommitDetail() http.HandlerFunc {
 	}
 }
 
+// handleActivity handles GET /api/v1/{repo}/activity?path=<path>.
+// Returns commit-activity metrics (last change, total commits, 7d/30d/90d counts).
+func handleActivity() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		ri := RepoFromContext(r.Context())
+		result, err := ri.GS.Activity(r.URL.Query().Get("path"))
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, fmt.Sprintf("activity error: %v", err))
+			return
+		}
+		writeJSON(w, http.StatusOK, result)
+	}
+}
+
 // handleStats handles GET /api/v1/{repo}/stats?path=<path>.
-// It iterates over all facts in the knowledge base (optionally filtered
-// by path prefix), collecting domain/entity counts and average confidence.
-// This is fine for small-to-medium knowledge bases; very large repos may
-// want a cached or incremental approach.
+// Aggregates are computed with a SQL query over the search index.
 func handleStats() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := RepoFromContext(r.Context())
-		pathPrefix := r.URL.Query().Get("path")
-
-		allPaths, err := ri.GS.ListAll()
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, fmt.Sprintf("list all error: %v", err))
+		if ri.Idx == nil {
+			writeError(w, http.StatusServiceUnavailable, "index not available")
 			return
 		}
-
-		domains := make(map[string]int)
-		entities := make(map[string]int)
-		total := 0
-		var confidenceSum float64
-
-		for _, p := range allPaths {
-			if pathPrefix != "" && !strings.HasPrefix(p, pathPrefix) {
-				continue
-			}
-
-			content, err := ri.GS.ReadFile(p)
-			if err != nil {
-				continue
-			}
-
-			fact, err := mcp.ParseFact(p, content)
-			if err != nil {
-				continue
-			}
-
-			total++
-			confidenceSum += fact.Confidence
-			for _, d := range fact.Domain {
-				domains[d]++
-			}
-			for _, e := range fact.Entities {
-				entities[e]++
-			}
+		stats, err := ri.Idx.Stats(r.URL.Query().Get("path"))
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, fmt.Sprintf("stats error: %v", err))
+			return
 		}
-
-		avgConfidence := 0.0
-		if total > 0 {
-			avgConfidence = confidenceSum / float64(total)
-			// Round to 2 decimal places.
-			avgConfidence = float64(int(avgConfidence*100+0.5)) / 100
-		}
-
-		writeJSON(w, http.StatusOK, map[string]any{
-			"total":          total,
-			"domains":        domains,
-			"entities":       entities,
-			"avg_confidence": avgConfidence,
-		})
+		writeJSON(w, http.StatusOK, stats)
 	}
 }
 

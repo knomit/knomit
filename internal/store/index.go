@@ -122,9 +122,18 @@ func New(path string, opts ...Option) (*Index, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite: %w", err)
 	}
-	if _, err := db.Exec(schemaSQL(cfg.vecDim)); err != nil {
+	// Use the same embedded schema.sql as Service.Open to keep DDL in one place.
+	if _, err := db.Exec(schemaSQL_); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("init schema: %w", err)
+	}
+	vecDDL := fmt.Sprintf(
+		`CREATE VIRTUAL TABLE IF NOT EXISTS facts_vec USING vec0(embedding FLOAT[%d] distance_metric=cosine)`,
+		cfg.vecDim,
+	)
+	if _, err := db.Exec(vecDDL); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("init vec0: %w", err)
 	}
 	if _, err = db.Exec(`INSERT OR IGNORE INTO meta(key, value) VALUES ('schema_version', '3')`); err != nil {
 		db.Close()
@@ -178,108 +187,78 @@ func extractBody(raw []byte) string {
 	return ""
 }
 
-// schemaSQL returns the DDL to create all tables: objects (git blobs),
-// refs (git references), kv (git config), facts (search index),
-// facts_vec (vec0 embeddings), meta (key-value), and synthesis_log.
-func schemaSQL(vecDim int) string {
-	return fmt.Sprintf(`
-CREATE TABLE IF NOT EXISTS objects (
-    hash TEXT NOT NULL,
-    type INTEGER NOT NULL,
-    size INTEGER NOT NULL,
-    data BLOB NOT NULL,
-    PRIMARY KEY (hash, type)
-);
-CREATE TABLE IF NOT EXISTS refs (
-    name        TEXT PRIMARY KEY,
-    target      TEXT NOT NULL,
-    is_symbolic INTEGER NOT NULL DEFAULT 0
-);
-CREATE TABLE IF NOT EXISTS kv (
-    key   TEXT PRIMARY KEY,
-    value BLOB NOT NULL
-);
-CREATE TABLE IF NOT EXISTS meta (
-    key   TEXT PRIMARY KEY,
-    value TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS synthesis_log (
-    recipe          TEXT PRIMARY KEY,
-    last_commit     TEXT NOT NULL,
-    run_at          TEXT NOT NULL,
-    facts_processed INTEGER NOT NULL DEFAULT 0
-);
-CREATE TABLE IF NOT EXISTS facts (
-    path        TEXT PRIMARY KEY,
-    title       TEXT NOT NULL,
-    blob_hash   TEXT NOT NULL,
-    type        TEXT NOT NULL DEFAULT 'observation',
-    domain      TEXT NOT NULL,
-    entities    TEXT NOT NULL,
-    confidence  REAL NOT NULL,
-    sources     INTEGER NOT NULL,
-    refs        TEXT NOT NULL,
-    commit_hash TEXT NOT NULL
-);
-CREATE VIRTUAL TABLE IF NOT EXISTS facts_vec USING vec0(
-    embedding FLOAT[%d] distance_metric=cosine
-);
-CREATE TABLE IF NOT EXISTS review_watermarks (
-    branch      TEXT PRIMARY KEY,
-    commit_hash TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS review_sessions (
-    id          TEXT PRIMARY KEY,
-    branch      TEXT NOT NULL,
-    status      TEXT NOT NULL DEFAULT 'active',
-    created_at  TEXT NOT NULL,
-    updated_at  TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS review_work_items (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    session_id  TEXT NOT NULL REFERENCES review_sessions(id) ON DELETE CASCADE,
-    step_type   TEXT NOT NULL,
-    cluster_key TEXT NOT NULL,
-    facts_json  TEXT NOT NULL,
-    response    TEXT,
-    priority    REAL NOT NULL,
-    created_at  TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS remotes (
-    name             TEXT PRIMARY KEY,
-    url              TEXT NOT NULL,
-    branch           TEXT NOT NULL DEFAULT 'main',
-    interval         INTEGER NOT NULL DEFAULT 300,
-    last_sync_at     TEXT,
-    last_status      TEXT,
-    last_error       TEXT,
-    push_interval    INTEGER NOT NULL DEFAULT 300,
-    last_push_at     TEXT,
-    last_push_status TEXT,
-    last_push_error  TEXT,
-    auth_method      TEXT NOT NULL DEFAULT '',
-    auth_token       TEXT NOT NULL DEFAULT ''
-);
-CREATE TABLE IF NOT EXISTS tool_sessions (
-    id           TEXT PRIMARY KEY,
-    tool         TEXT NOT NULL,
-    branch       TEXT NOT NULL,
-    path_prefix  TEXT NOT NULL DEFAULT '',
-    last_commit  TEXT NOT NULL DEFAULT '',
-    status       TEXT NOT NULL DEFAULT 'active',
-    created_at   TEXT NOT NULL,
-    updated_at   TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS tool_seen_paths (
-    session_id TEXT NOT NULL REFERENCES tool_sessions(id) ON DELETE CASCADE,
-    path       TEXT NOT NULL,
-    PRIMARY KEY (session_id, path)
-);
-CREATE TABLE IF NOT EXISTS tool_queue (
-    session_id  TEXT NOT NULL REFERENCES tool_sessions(id) ON DELETE CASCADE,
-    path        TEXT NOT NULL,
-    commit_hash TEXT NOT NULL,
-    depth       INTEGER NOT NULL DEFAULT 0,
-    PRIMARY KEY (session_id, path, commit_hash)
-);`, vecDim)
+
+// StatsResult holds aggregate statistics computed from the facts table.
+type StatsResult struct {
+	Total         int            `json:"total"`
+	AvgConfidence float64        `json:"avg_confidence"`
+	Domains       map[string]int `json:"domains"`
+	Entities      map[string]int `json:"entities"`
+}
+
+// Stats returns aggregate statistics over all indexed facts, optionally
+// filtered to those whose path starts with pathPrefix.
+func (idx *Index) Stats(pathPrefix string) (StatsResult, error) {
+	res := StatsResult{
+		Domains:  make(map[string]int),
+		Entities: make(map[string]int),
+	}
+
+	// Total count and average confidence.
+	var avgConf *float64
+	q := `SELECT COUNT(*), AVG(confidence) FROM facts`
+	args := []any{}
+	if pathPrefix != "" {
+		q += ` WHERE path LIKE ?`
+		args = append(args, pathPrefix+"%")
+	}
+	if err := idx.db.QueryRow(q, args...).Scan(&res.Total, &avgConf); err != nil {
+		return res, err
+	}
+	if avgConf != nil {
+		// Round to 2 decimal places.
+		res.AvgConfidence = float64(int(*avgConf*100+0.5)) / 100
+	}
+
+	// Domain counts via json_each.
+	dq := `SELECT d.value, COUNT(*) FROM facts f, json_each(f.domain) d`
+	if pathPrefix != "" {
+		dq += ` WHERE f.path LIKE ?`
+	}
+	dq += ` GROUP BY d.value`
+	drows, err := idx.db.Query(dq, args...)
+	if err != nil {
+		return res, err
+	}
+	defer drows.Close()
+	for drows.Next() {
+		var k string
+		var n int
+		if err := drows.Scan(&k, &n); err != nil {
+			return res, err
+		}
+		res.Domains[k] = n
+	}
+
+	// Entity counts via json_each.
+	eq := `SELECT e.value, COUNT(*) FROM facts f, json_each(f.entities) e`
+	if pathPrefix != "" {
+		eq += ` WHERE f.path LIKE ?`
+	}
+	eq += ` GROUP BY e.value`
+	erows, err := idx.db.Query(eq, args...)
+	if err != nil {
+		return res, err
+	}
+	defer erows.Close()
+	for erows.Next() {
+		var k string
+		var n int
+		if err := erows.Scan(&k, &n); err != nil {
+			return res, err
+		}
+		res.Entities[k] = n
+	}
+
+	return res, nil
 }

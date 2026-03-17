@@ -63,6 +63,11 @@ describe('reducer', () => {
     expect(next.rightMode).toBe('history');
   });
 
+  it('SHOW_HISTORY clears rightPanelFocused', () => {
+    const s = reducer({ ...init, rightPanelFocused: true }, { type: 'SHOW_HISTORY' });
+    expect(s.rightPanelFocused).toBe(false);
+  });
+
   it('SET_TASK updates task status', () => {
     const next = reducer(init, { type: 'SET_TASK', op: 'sync', status: 'running', message: 'syncing' });
     expect(next.tasks.sync).toEqual({ status: 'running', message: 'syncing' });
@@ -187,5 +192,57 @@ describe('SET_REPO', () => {
 
   it('init has repo set to knomit', () => {
     expect(init.repo).toBe('knomit');
+  });
+});
+
+describe('right panel focus', () => {
+  it('init has rightPanelFocused false', () => {
+    expect(init.rightPanelFocused).toBe(false);
+  });
+
+  it('FOCUS_RIGHT_PANEL sets rightPanelFocused to true', () => {
+    const s = reducer(init, { type: 'FOCUS_RIGHT_PANEL' });
+    expect(s.rightPanelFocused).toBe(true);
+  });
+
+  it('BLUR_RIGHT_PANEL sets rightPanelFocused to false', () => {
+    const s = reducer({ ...init, rightPanelFocused: true }, { type: 'BLUR_RIGHT_PANEL' });
+    expect(s.rightPanelFocused).toBe(false);
+  });
+
+  it('NAVIGATE clears rightPanelFocused', () => {
+    const s = reducer({ ...init, rightPanelFocused: true }, { type: 'NAVIGATE', path: 'kb/other' });
+    expect(s.rightPanelFocused).toBe(false);
+  });
+
+  it('SET_REPO clears rightPanelFocused', () => {
+    const s = reducer({ ...init, rightPanelFocused: true }, { type: 'SET_REPO', repo: 'other' });
+    expect(s.rightPanelFocused).toBe(false);
+  });
+
+  it('SEARCH clears rightPanelFocused', () => {
+    const s = reducer({ ...init, rightPanelFocused: true }, { type: 'SEARCH', query: 'test' });
+    expect(s.rightPanelFocused).toBe(false);
+  });
+
+  it('SIMILAR_SEARCH clears rightPanelFocused', () => {
+    const s = reducer({ ...init, rightPanelFocused: true }, { type: 'SIMILAR_SEARCH', path: 'kb/x', text: 'y' });
+    expect(s.rightPanelFocused).toBe(false);
+  });
+
+  it('ENTER_HISTORY clears rightPanelFocused', () => {
+    const s = reducer({ ...init, rightPanelFocused: true }, { type: 'ENTER_HISTORY' });
+    expect(s.rightPanelFocused).toBe(false);
+  });
+
+  it('EXIT_HISTORY clears rightPanelFocused', () => {
+    const s = reducer({ ...init, rightPanelFocused: true }, { type: 'EXIT_HISTORY' });
+    expect(s.rightPanelFocused).toBe(false);
+  });
+
+  it('NAV_BACK clears rightPanelFocused', () => {
+    let s = reducer(init, { type: 'NAVIGATE', path: 'kb/tech' });
+    s = reducer({ ...s, rightPanelFocused: true }, { type: 'NAV_BACK' });
+    expect(s.rightPanelFocused).toBe(false);
   });
 });

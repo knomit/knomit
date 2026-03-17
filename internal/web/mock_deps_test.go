@@ -41,6 +41,21 @@ func (m *MockGitStore) EXPECT() *MockGitStoreMockRecorder {
 	return m.recorder
 }
 
+// Activity mocks base method.
+func (m *MockGitStore) Activity(path string) (git.ActivityResult, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Activity", path)
+	ret0, _ := ret[0].(git.ActivityResult)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// Activity indicates an expected call of Activity.
+func (mr *MockGitStoreMockRecorder) Activity(path any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Activity", reflect.TypeOf((*MockGitStore)(nil).Activity), path)
+}
+
 // Branch mocks base method.
 func (m *MockGitStore) Branch() string {
 	m.ctrl.T.Helper()
@@ -53,6 +68,21 @@ func (m *MockGitStore) Branch() string {
 func (mr *MockGitStoreMockRecorder) Branch() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Branch", reflect.TypeOf((*MockGitStore)(nil).Branch))
+}
+
+// CommitDetail mocks base method.
+func (m *MockGitStore) CommitDetail(commitHash string) (*git.CommitDetailResult, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "CommitDetail", commitHash)
+	ret0, _ := ret[0].(*git.CommitDetailResult)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// CommitDetail indicates an expected call of CommitDetail.
+func (mr *MockGitStoreMockRecorder) CommitDetail(commitHash any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CommitDetail", reflect.TypeOf((*MockGitStore)(nil).CommitDetail), commitHash)
 }
 
 // HeadCommit mocks base method.
@@ -115,6 +145,22 @@ func (mr *MockGitStoreMockRecorder) Log(path any) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Log", reflect.TypeOf((*MockGitStore)(nil).Log), path)
 }
 
+// LogPaginated mocks base method.
+func (m *MockGitStore) LogPaginated(path string, limit int, after string) ([]git.LogEntryWithTags, string, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "LogPaginated", path, limit, after)
+	ret0, _ := ret[0].([]git.LogEntryWithTags)
+	ret1, _ := ret[1].(string)
+	ret2, _ := ret[2].(error)
+	return ret0, ret1, ret2
+}
+
+// LogPaginated indicates an expected call of LogPaginated.
+func (mr *MockGitStoreMockRecorder) LogPaginated(path, limit, after any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "LogPaginated", reflect.TypeOf((*MockGitStore)(nil).LogPaginated), path, limit, after)
+}
+
 // ReadFile mocks base method.
 func (m *MockGitStore) ReadFile(path string) (string, error) {
 	m.ctrl.T.Helper()
@@ -145,35 +191,36 @@ func (mr *MockGitStoreMockRecorder) ReadFileAtCommit(path, commitHash any) *gomo
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ReadFileAtCommit", reflect.TypeOf((*MockGitStore)(nil).ReadFileAtCommit), path, commitHash)
 }
 
-// LogPaginated mocks base method.
-func (m *MockGitStore) LogPaginated(path string, limit int, after string) ([]git.LogEntryWithTags, string, error) {
+// ReadFileLastCommit mocks base method.
+func (m *MockGitStore) ReadFileLastCommit(path, beforeCommitHash string) (string, string, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "LogPaginated", path, limit, after)
-	ret0, _ := ret[0].([]git.LogEntryWithTags)
+	ret := m.ctrl.Call(m, "ReadFileLastCommit", path, beforeCommitHash)
+	ret0, _ := ret[0].(string)
 	ret1, _ := ret[1].(string)
 	ret2, _ := ret[2].(error)
 	return ret0, ret1, ret2
 }
 
-// LogPaginated indicates an expected call of LogPaginated.
-func (mr *MockGitStoreMockRecorder) LogPaginated(path, limit, after any) *gomock.Call {
+// ReadFileLastCommit indicates an expected call of ReadFileLastCommit.
+func (mr *MockGitStoreMockRecorder) ReadFileLastCommit(path, beforeCommitHash any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "LogPaginated", reflect.TypeOf((*MockGitStore)(nil).LogPaginated), path, limit, after)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ReadFileLastCommit", reflect.TypeOf((*MockGitStore)(nil).ReadFileLastCommit), path, beforeCommitHash)
 }
 
-// CommitDetail mocks base method.
-func (m *MockGitStore) CommitDetail(commitHash string) (*git.CommitDetailResult, error) {
+// WriteFile mocks base method.
+func (m *MockGitStore) WriteFile(path, content, message string) (string, string, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "CommitDetail", commitHash)
-	ret0, _ := ret[0].(*git.CommitDetailResult)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
+	ret := m.ctrl.Call(m, "WriteFile", path, content, message)
+	ret0, _ := ret[0].(string)
+	ret1, _ := ret[1].(string)
+	ret2, _ := ret[2].(error)
+	return ret0, ret1, ret2
 }
 
-// CommitDetail indicates an expected call of CommitDetail.
-func (mr *MockGitStoreMockRecorder) CommitDetail(commitHash any) *gomock.Call {
+// WriteFile indicates an expected call of WriteFile.
+func (mr *MockGitStoreMockRecorder) WriteFile(path, content, message any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CommitDetail", reflect.TypeOf((*MockGitStore)(nil).CommitDetail), commitHash)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "WriteFile", reflect.TypeOf((*MockGitStore)(nil).WriteFile), path, content, message)
 }
 
 // MockSearchIndex is a mock of SearchIndex interface.
@@ -228,4 +275,19 @@ func (m *MockSearchIndex) Search(q store.SearchQuery) ([]store.SearchResult, err
 func (mr *MockSearchIndexMockRecorder) Search(q any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Search", reflect.TypeOf((*MockSearchIndex)(nil).Search), q)
+}
+
+// Stats mocks base method.
+func (m *MockSearchIndex) Stats(pathPrefix string) (store.StatsResult, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Stats", pathPrefix)
+	ret0, _ := ret[0].(store.StatsResult)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// Stats indicates an expected call of Stats.
+func (mr *MockSearchIndexMockRecorder) Stats(pathPrefix any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Stats", reflect.TypeOf((*MockSearchIndex)(nil).Stats), pathPrefix)
 }

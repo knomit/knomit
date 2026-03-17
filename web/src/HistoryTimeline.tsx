@@ -78,6 +78,15 @@ export function HistoryTimeline({ state, dispatch }: Props) {
     return () => observer.disconnect();
   }, [loadMore]);
 
+  // Sync selection + scroll when historyCommit is set externally (e.g. from_commit badge click)
+  useEffect(() => {
+    if (!state.historyCommit) return;
+    const idx = entries.findIndex(e => e.commit === state.historyCommit);
+    if (idx === -1) return; // not yet loaded
+    setSelectedIdx(idx);
+    itemRefs.current[idx]?.scrollIntoView({ block: 'nearest' });
+  }, [state.historyCommit, entries]);
+
   // Keyboard navigation — j/k moves selection and loads commit in right panel
   const navigate = useCallback((delta: 1 | -1) => {
     const next = Math.max(0, Math.min(selectedIdx + delta, entries.length - 1));
@@ -89,6 +98,7 @@ export function HistoryTimeline({ state, dispatch }: Props) {
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
+      if (state.rightPanelFocused) return; // right panel owns these keys when focused
       if (entries.length === 0) return;
       if (e.key === 'ArrowDown' || e.key === 'j') { e.preventDefault(); navigate(1); }
       if (e.key === 'ArrowUp' || e.key === 'k') { e.preventDefault(); navigate(-1); }
@@ -97,10 +107,14 @@ export function HistoryTimeline({ state, dispatch }: Props) {
         const entry = entries[selectedIdx];
         if (entry) dispatch({ type: 'SELECT_COMMIT', commit: entry.commit });
       }
+      if (e.key === 'ArrowRight') {
+        e.preventDefault();
+        dispatch({ type: 'FOCUS_RIGHT_PANEL' });
+      }
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  });
+  }, [state.rightPanelFocused, entries, selectedIdx, navigate, dispatch]);
 
   return (
     <div ref={containerRef} style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
