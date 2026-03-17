@@ -30,12 +30,13 @@ function tagColor(tag: string): { color: string; bg: string } {
   return { color: '#888', bg: '#222' };
 }
 
-function TagCloud({ label, entries, color, searchPrefix, onSearch }: {
+function TagCloud({ label, entries, color, searchPrefix, onSearch, focusedValue }: {
   label: string;
   entries: [string, number][] | string[];
   color: string; // e.g. '119,204,153' or '136,170,255'
   searchPrefix: string; // e.g. 'domain:' or 'entity:'
   onSearch: (query: string) => void;
+  focusedValue?: string;
 }) {
   if (entries.length === 0) return null;
 
@@ -62,6 +63,8 @@ function TagCloud({ label, entries, color, searchPrefix, onSearch }: {
                 background: weighted && ratio < 0.5 ? 'rgba(26,26,42,0.6)' : '#1a1a2a',
                 border: `1px solid ${accent}${weighted ? (ratio >= 0.75 ? 0.3 : ratio >= 0.5 ? 0.2 : 0.1) : 0.2})`,
                 transition: 'border-color 0.15s, opacity 0.15s',
+                outline: name === focusedValue ? `2px solid rgba(${color},0.55)` : 'none',
+                outlineOffset: 1,
               }}
               onMouseEnter={e => { (e.currentTarget as HTMLElement).style.borderColor = `${accent}0.5)`; }}
               onMouseLeave={e => { (e.currentTarget as HTMLElement).style.borderColor = `${accent}${weighted ? (ratio >= 0.75 ? 0.3 : ratio >= 0.5 ? 0.2 : 0.1) : 0.2})`; }}
@@ -187,7 +190,12 @@ function FactSwitcher({ files, selectedPath, onSelect, focusIdx, dropdownFocusId
   );
 }
 
-function renderFact(fact: Fact, search: (q: string) => void, dispatch?: Dispatch<Action>) {
+interface FocusInfo {
+  target: FocusTarget | null;
+}
+
+function renderFact(fact: Fact, search: (q: string) => void, dispatch?: Dispatch<Action>, focusInfo?: FocusInfo) {
+  const ft = focusInfo?.target ?? null;
   return (
     <div style={{ padding: '24px 28px', overflowY: 'auto', height: '100%', boxSizing: 'border-box' }}>
       {/* Header */}
@@ -204,6 +212,8 @@ function renderFact(fact: Fact, search: (q: string) => void, dispatch?: Dispatch
                 background: '#1a1a2a', border: '1px solid rgba(136,170,255,0.2)', color: '#8af',
                 padding: '4px 8px', borderRadius: 4, cursor: 'pointer', fontSize: 14,
                 transition: 'border-color 0.15s, color 0.15s', flexShrink: 0,
+                outline: ft?.kind === 'similar' ? '2px solid rgba(136,170,255,0.55)' : 'none',
+                outlineOffset: 1,
               }}
               onMouseEnter={e => { e.currentTarget.style.borderColor = 'rgba(136,170,255,0.5)'; e.currentTarget.style.color = '#adf'; }}
               onMouseLeave={e => { e.currentTarget.style.borderColor = 'rgba(136,170,255,0.2)'; e.currentTarget.style.color = '#8af'; }}
@@ -231,8 +241,10 @@ function renderFact(fact: Fact, search: (q: string) => void, dispatch?: Dispatch
       </div>
 
 
-      <TagCloud label="Domains" entries={fact.domain || []} color="119,204,153" searchPrefix="domain:" onSearch={search} />
-      <TagCloud label="Entities" entries={fact.entities || []} color="136,170,255" searchPrefix="entity:" onSearch={search} />
+      <TagCloud label="Domains" entries={fact.domain || []} color="119,204,153" searchPrefix="domain:" onSearch={search}
+        focusedValue={ft?.kind === 'domain' ? ft.value : undefined} />
+      <TagCloud label="Entities" entries={fact.entities || []} color="136,170,255" searchPrefix="entity:" onSearch={search}
+        focusedValue={ft?.kind === 'entity' ? ft.value : undefined} />
 
       {/* Refs */}
       {fact.refs?.length > 0 && (
@@ -243,7 +255,11 @@ function renderFact(fact: Fact, search: (q: string) => void, dispatch?: Dispatch
               if (ref.startsWith('http://') || ref.startsWith('https://')) {
                 return (
                   <a key={ref} href={ref} target="_blank" rel="noopener noreferrer"
-                    style={{ color: '#8af', fontSize: 12, textDecoration: 'none', transition: 'color 0.15s' }}
+                    style={{
+                      color: '#8af', fontSize: 12, textDecoration: 'none', transition: 'color 0.15s',
+                      outline: ft?.kind === 'ref' && ft.value === ref ? '2px solid rgba(136,170,255,0.55)' : 'none',
+                      outlineOffset: 2,
+                    }}
                     onMouseEnter={e => { (e.currentTarget as HTMLElement).style.color = '#adf'; }}
                     onMouseLeave={e => { (e.currentTarget as HTMLElement).style.color = '#8af'; }}
                   >↗ {ref}</a>
@@ -298,13 +314,94 @@ export function RightPanel({ state, dispatch }: Props) {
     }
   }, [state.rightMode, state.selectedFact, state.currentPath, state.previewPath, state.headCommit, state.historyCommit]);
 
+  // hasSimilar is true only in regular fact view (not in time-travel multi-file path)
+  const hasSimilar = !!fact && !hasSwitcher;
+  const focusTargets = buildFocusTargets(fact, hasSwitcher, hasSimilar);
+
+  useEffect(() => {
+    setFocusIdx(0);
+    setSwitcherOpen(false);
+    setDropdownFocusIdx(-1);
+  }, [fact, commitDetail, state.rightMode]);
+
+  useEffect(() => {
+    if (!state.rightPanelFocused) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'ArrowLeft') {
+        e.preventDefault();
+        dispatch({ type: 'BLUR_RIGHT_PANEL' });
+        return;
+      }
+
+      const moveInDropdown = (delta: 1 | -1) => {
+        const total = commitDetail!.files.length;
+        setDropdownFocusIdx(i => (i + delta + total) % total);
+      };
+
+      const cycleFact = (delta: 1 | -1) => {
+        const viewable = commitDetail!.files.filter(f => f.action !== 'deleted');
+        const cur = viewable.findIndex(f => f.path === commitSelectedFile);
+        const next = (cur + delta + viewable.length) % viewable.length;
+        const nextFile = viewable[next];
+        setCommitSelectedFile(nextFile.path);
+        api.fact(state.repo, nextFile.path, state.historyCommit!).then(setFact).catch(() => setFact(null));
+        setFocusIdx(0);
+      };
+
+      if (e.key === 'ArrowDown' || e.key === 'j') {
+        e.preventDefault();
+        if (hasSwitcher && switcherOpen) { moveInDropdown(1); return; }
+        if (hasSwitcher && focusTargets[focusIdx]?.kind === 'switcher') { cycleFact(1); return; }
+        setFocusIdx(i => focusTargets.length > 0 ? (i + 1) % focusTargets.length : 0);
+        return;
+      }
+
+      if (e.key === 'ArrowUp' || e.key === 'k') {
+        e.preventDefault();
+        if (hasSwitcher && switcherOpen) { moveInDropdown(-1); return; }
+        if (hasSwitcher && focusTargets[focusIdx]?.kind === 'switcher') { cycleFact(-1); return; }
+        setFocusIdx(i => focusTargets.length > 0 ? (i - 1 + focusTargets.length) % focusTargets.length : 0);
+        return;
+      }
+
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        const target = focusTargets[focusIdx];
+        if (!target) return;
+        if (target.kind === 'switcher') {
+          if (switcherOpen && dropdownFocusIdx >= 0) {
+            const f = commitDetail!.files[dropdownFocusIdx];
+            if (f && f.action !== 'deleted') {
+              setCommitSelectedFile(f.path);
+              api.fact(state.repo, f.path, state.historyCommit!).then(setFact).catch(() => setFact(null));
+              setSwitcherOpen(false);
+              setDropdownFocusIdx(-1);
+              setFocusIdx(0);
+            }
+          } else {
+            setSwitcherOpen(o => !o);
+          }
+          return;
+        }
+        if (target.kind === 'domain') { dispatch({ type: 'SEARCH', query: `domain:${target.value}` }); return; }
+        if (target.kind === 'entity') { dispatch({ type: 'SEARCH', query: `entity:${target.value}` }); return; }
+        if (target.kind === 'ref') { window.open(target.value, '_blank', 'noopener'); return; }
+        if (target.kind === 'similar' && fact) { dispatch({ type: 'SIMILAR_SEARCH', path: fact.path, text: fact.body || '' }); return; }
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [state.rightPanelFocused, focusIdx, focusTargets, switcherOpen, dropdownFocusIdx, hasSwitcher, commitDetail, commitSelectedFile, fact, state.repo, state.historyCommit, dispatch]);
+
+  const focusInfo: FocusInfo = state.rightPanelFocused ? { target: focusTargets[focusIdx] ?? null } : { target: null };
+
   const search = (q: string) => dispatch({ type: 'SEARCH', query: q });
 
   if (error) return <div style={{ padding: 24, color: '#f44' }}>{error}</div>;
 
   // Time-travel: single file auto-loaded → show fact normally (no switcher)
   if (state.historyCommit && fact && !hasSwitcher) {
-    return renderFact(fact, search);
+    return renderFact(fact, search, undefined, focusInfo);
   }
 
   // Time-travel: multiple viewable files → show FactSwitcher + selected fact below
@@ -343,7 +440,7 @@ export function RightPanel({ state, dispatch }: Props) {
           />
         )}
 
-        {fact && <div style={{ flex: 1 }}>{renderFact(fact, search)}</div>}
+        {fact && <div style={{ flex: 1 }}>{renderFact(fact, search, undefined, focusInfo)}</div>}
         {!fact && viewable.length > 0 && (
           <div style={{ padding: '16px 20px', color: '#666', fontSize: 13 }}>Select a fact above.</div>
         )}
@@ -415,5 +512,5 @@ export function RightPanel({ state, dispatch }: Props) {
   // Fact mode
   if (!fact) return <div style={{ padding: 24, color: '#666' }}>Select a fact to view.</div>;
 
-  return renderFact(fact, search, dispatch);
+  return renderFact(fact, search, dispatch, focusInfo);
 }
