@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import type { Dispatch } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { api } from './api';
-import type { Fact, HistoryEntry, Stats, CommitDetail } from './api';
+import type { Fact, HistoryEntry, Stats, CommitDetail, CommitFile } from './api';
 import type { AppState, Action } from './state';
 
 interface Props {
@@ -86,6 +86,107 @@ function TagCloud({ label, entries, color, searchPrefix, onSearch }: {
   );
 }
 
+type FocusTarget =
+  | { kind: 'switcher' }
+  | { kind: 'domain'; value: string }
+  | { kind: 'entity'; value: string }
+  | { kind: 'ref'; value: string }
+  | { kind: 'similar' };
+
+// hasSwitcher: true when the commit view has multiple viewable files.
+// hasSimilar: true when the "Find similar" button will actually be rendered
+//   (only in fact view where dispatch is passed to renderFact, NOT in the time-travel multi-file path).
+function buildFocusTargets(f: Fact | null, hasSwitcher: boolean, hasSimilar: boolean): FocusTarget[] {
+  const targets: FocusTarget[] = [];
+  if (hasSwitcher) targets.push({ kind: 'switcher' });
+  if (!f) return targets;
+  const domainNames: string[] = (f.domain ?? []).map((d: string | [string, number]) => typeof d === 'string' ? d : d[0]);
+  const entityNames: string[] = (f.entities ?? []).map((e: string | [string, number]) => typeof e === 'string' ? e : e[0]);
+  for (const d of domainNames) targets.push({ kind: 'domain', value: d });
+  for (const e of entityNames) targets.push({ kind: 'entity', value: e });
+  for (const r of (f.refs ?? [])) {
+    if (r.startsWith('http://') || r.startsWith('https://')) targets.push({ kind: 'ref', value: r });
+  }
+  if (hasSimilar) targets.push({ kind: 'similar' });
+  return targets;
+}
+
+interface SwitcherProps {
+  files: CommitFile[];
+  selectedPath: string | null;
+  onSelect: (path: string) => void;
+  focusIdx: number;       // 0 = trigger is focused (when right panel focused); -1 = not focused
+  dropdownFocusIdx: number; // index within dropdown when open; -1 = none
+  open: boolean;
+  onToggle: () => void;
+}
+
+function FactSwitcher({ files, selectedPath, onSelect, focusIdx, dropdownFocusIdx, open, onToggle }: SwitcherProps) {
+  const viewable = files.filter(f => f.action !== 'deleted');
+  const currentIdx = viewable.findIndex(f => f.path === selectedPath);
+  const current = viewable[currentIdx] ?? viewable[0] ?? null;
+
+  const actionStyle = (action: string): React.CSSProperties => ({
+    fontSize: 9, padding: '1px 5px', borderRadius: 3, fontFamily: 'monospace', fontWeight: 600,
+    color: action === 'added' ? '#7c9' : action === 'modified' ? '#8af' : '#f88',
+    background: action === 'added' ? '#1a2e1a' : action === 'modified' ? '#1a1a2e' : '#2e1a1a',
+    ...(action === 'deleted' ? { opacity: 0.5 } : {}),
+  });
+
+  const triggerFocused = focusIdx === 0;
+
+  return (
+    <div style={{ margin: '10px 16px 12px' }}>
+      <div
+        onClick={onToggle}
+        style={{
+          display: 'flex', alignItems: 'center', gap: 8, padding: '7px 10px',
+          background: triggerFocused ? '#2a2a3a' : '#1a1a2a',
+          border: '1px solid #2a2a3a',
+          borderRadius: open ? '6px 6px 0 0' : 6,
+          cursor: 'pointer', userSelect: 'none' as const,
+        }}
+      >
+        {current && <span style={actionStyle(current.action)}>{current.action[0].toUpperCase()}</span>}
+        <span style={{ flex: 1, fontSize: 12, color: '#ddd', fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {current ? current.path.replace(/\.md$/, '') : '—'}
+        </span>
+        <span style={{ fontSize: 11, color: '#555', flexShrink: 0 }}>
+          {currentIdx + 1} / {viewable.length}
+        </span>
+        <span style={{ fontSize: 11, color: '#555', flexShrink: 0 }}>{open ? '▴' : '▾'}</span>
+      </div>
+
+      {open && (
+        <div style={{ background: '#1a1a2a', border: '1px solid #2a2a3a', borderTop: 'none', borderRadius: '0 0 6px 6px', overflow: 'hidden' }}>
+          {files.map((f, i) => {
+            const isDeleted = f.action === 'deleted';
+            const isSelected = f.path === selectedPath;
+            const isDdFocused = dropdownFocusIdx === i;
+            return (
+              <div
+                key={f.path}
+                onClick={() => { if (isDeleted) return; onSelect(f.path); onToggle(); }}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 8, padding: '7px 10px',
+                  cursor: isDeleted ? 'default' : 'pointer',
+                  opacity: isDeleted ? 0.4 : 1,
+                  background: isDdFocused ? '#2a2a3a' : isSelected ? '#222233' : 'transparent',
+                  outline: isDdFocused ? '1px solid rgba(136,170,255,0.3)' : 'none',
+                  outlineOffset: -1,
+                }}
+              >
+                <span style={actionStyle(f.action)}>{f.action[0].toUpperCase()}</span>
+                <span style={{ fontSize: 12, color: '#ddd', fontFamily: 'monospace' }}>{f.path.replace(/\.md$/, '')}</span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function renderFact(fact: Fact, search: (q: string) => void, dispatch?: Dispatch<Action>) {
   return (
     <div style={{ padding: '24px 28px', overflowY: 'auto', height: '100%', boxSizing: 'border-box' }}>
@@ -164,12 +265,20 @@ export function RightPanel({ state, dispatch }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [commitDetail, setCommitDetail] = useState<CommitDetail | null>(null);
   const [commitSelectedFile, setCommitSelectedFile] = useState<string | null>(null);
+  const [focusIdx, setFocusIdx] = useState(0);
+  const [switcherOpen, setSwitcherOpen] = useState(false);
+  const [dropdownFocusIdx, setDropdownFocusIdx] = useState(-1);
+
+  const hasSwitcher = !!(state.historyCommit && commitDetail && commitDetail.files.filter(f => f.action !== 'deleted').length > 1);
 
   useEffect(() => {
     setError(null);
     if (state.historyCommit) {
       // Time-travel: fetch commit detail and auto-load single file
       api.commitDetail(state.repo, state.historyCommit).then(detail => {
+        setFocusIdx(0);
+        setSwitcherOpen(false);
+        setDropdownFocusIdx(-1);
         setCommitDetail(detail);
         const viewableFiles = detail.files.filter(f => f.action !== 'deleted');
         if (viewableFiles.length === 1) {
@@ -193,16 +302,22 @@ export function RightPanel({ state, dispatch }: Props) {
 
   if (error) return <div style={{ padding: 24, color: '#f44' }}>{error}</div>;
 
-  // Time-travel: single file auto-loaded → show fact normally
-  if (state.historyCommit && fact) {
+  // Time-travel: single file auto-loaded → show fact normally (no switcher)
+  if (state.historyCommit && fact && !hasSwitcher) {
     return renderFact(fact, search);
   }
 
-  // Time-travel: multiple files → show file list in the right panel
+  // Time-travel: multiple viewable files → show FactSwitcher + selected fact below
   if (state.historyCommit && commitDetail) {
+    const viewable = commitDetail.files.filter(f => f.action !== 'deleted');
+
     return (
-      <div style={{ padding: '24px 28px', overflowY: 'auto', height: '100%', boxSizing: 'border-box' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16 }}>
+      <div
+        onClick={() => dispatch({ type: 'FOCUS_RIGHT_PANEL' })}
+        style={{ display: 'flex', flexDirection: 'column', height: '100%', overflowY: 'auto', boxSizing: 'border-box' }}
+      >
+        {/* Commit header */}
+        <div style={{ padding: '16px 20px 8px', borderBottom: '1px solid #222', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', flexShrink: 0 }}>
           <span style={{ color: '#7c9', fontFamily: 'monospace', fontSize: 12 }}>{commitDetail.commit.slice(0, 7)}</span>
           <span style={{ color: '#666', fontSize: 11 }}>{relativeTime(commitDetail.date)}</span>
           {commitDetail.tags.map(tag => {
@@ -210,31 +325,28 @@ export function RightPanel({ state, dispatch }: Props) {
             return <span key={tag} style={{ color: tc.color, background: tc.bg, padding: '1px 6px', borderRadius: 3, fontSize: 10, fontFamily: 'monospace' }}>{tag}</span>;
           })}
         </div>
-        <div style={{ color: '#888', fontSize: 12, marginBottom: 12 }}>{commitDetail.message}</div>
-        {(!commitDetail.files || commitDetail.files.length === 0) && (
-          <div style={{ color: '#555', fontSize: 12, fontStyle: 'italic' }}>No file changes in this commit.</div>
-        )}
-        {(commitDetail.files || []).map(f => (
-          <div key={f.path}
-            onClick={() => {
-              if (f.action === 'deleted') return;
-              setCommitSelectedFile(f.path);
-              api.fact(state.repo, f.path, state.historyCommit!).then(setFact).catch(() => setFact(null));
+        <div style={{ color: '#888', fontSize: 12, padding: '6px 20px 0', flexShrink: 0 }}>{commitDetail.message}</div>
+
+        {viewable.length > 1 && (
+          <FactSwitcher
+            files={commitDetail.files}
+            selectedPath={commitSelectedFile}
+            onSelect={path => {
+              setCommitSelectedFile(path);
+              api.fact(state.repo, path, state.historyCommit!).then(setFact).catch(() => setFact(null));
+              setFocusIdx(0);
             }}
-            style={{
-              padding: '8px 12px', cursor: f.action === 'deleted' ? 'default' : 'pointer',
-              background: commitSelectedFile === f.path ? '#2a2a3a' : 'transparent',
-              borderBottom: '1px solid #222', display: 'flex', alignItems: 'center', gap: 8,
-              opacity: f.action === 'deleted' ? 0.5 : 1,
-            }}>
-            <span style={{
-              fontSize: 9, padding: '1px 4px', borderRadius: 2, fontFamily: 'monospace',
-              color: f.action === 'added' ? '#7c9' : f.action === 'modified' ? '#8af' : '#f88',
-              background: f.action === 'added' ? '#1a2e1a' : f.action === 'modified' ? '#1a1a2e' : '#2e1a1a',
-            }}>{f.action[0].toUpperCase()}</span>
-            <span style={{ fontSize: 12, color: '#ddd', fontFamily: 'monospace' }}>{f.path.replace(/\.md$/, '')}</span>
-          </div>
-        ))}
+            focusIdx={state.rightPanelFocused ? focusIdx : -1}
+            dropdownFocusIdx={dropdownFocusIdx}
+            open={switcherOpen}
+            onToggle={() => setSwitcherOpen(o => !o)}
+          />
+        )}
+
+        {fact && <div style={{ flex: 1 }}>{renderFact(fact, search)}</div>}
+        {!fact && viewable.length > 0 && (
+          <div style={{ padding: '16px 20px', color: '#666', fontSize: 13 }}>Select a fact above.</div>
+        )}
       </div>
     );
   }
