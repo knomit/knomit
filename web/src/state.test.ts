@@ -189,3 +189,29 @@ describe('SET_REPO', () => {
     expect(init.repo).toBe('knomit');
   });
 });
+
+describe('right panel focus', () => {
+  it('init has rightPanelFocused false', () => {
+    expect(init.rightPanelFocused).toBe(false);
+  });
+
+  it('FOCUS_RIGHT_PANEL sets rightPanelFocused to true', () => {
+    const s = reducer(init, { type: 'FOCUS_RIGHT_PANEL' });
+    expect(s.rightPanelFocused).toBe(true);
+  });
+
+  it('BLUR_RIGHT_PANEL sets rightPanelFocused to false', () => {
+    const s = reducer({ ...init, rightPanelFocused: true }, { type: 'BLUR_RIGHT_PANEL' });
+    expect(s.rightPanelFocused).toBe(false);
+  });
+
+  it('NAVIGATE clears rightPanelFocused', () => {
+    const s = reducer({ ...init, rightPanelFocused: true }, { type: 'NAVIGATE', path: 'kb/other' });
+    expect(s.rightPanelFocused).toBe(false);
+  });
+
+  it('SET_REPO clears rightPanelFocused', () => {
+    const s = reducer({ ...init, rightPanelFocused: true }, { type: 'SET_REPO', repo: 'other' });
+    expect(s.rightPanelFocused).toBe(false);
+  });
+});

@@ -38,6 +38,7 @@ export interface AppState {
   historyCommit: string | null;
   navStack: NavEntry[];
   remoteError: string; // latest sync/push error, empty = ok
+  rightPanelFocused: boolean;
 }
 
 export type Action =
@@ -64,7 +65,9 @@ export type Action =
   | { type: 'SELECT_COMMIT'; commit: string }
   | { type: 'NAV_BACK' }
   | { type: 'SET_REPO'; repo: string }
-  | { type: 'SET_REMOTE_ERROR'; error: string };
+  | { type: 'SET_REMOTE_ERROR'; error: string }
+  | { type: 'FOCUS_RIGHT_PANEL' }
+  | { type: 'BLUR_RIGHT_PANEL' };
 
 export const init: AppState = {
   repo: 'knomit',
@@ -87,6 +90,7 @@ export const init: AppState = {
   remoteError: '',
   historyCommit: null,
   navStack: [],
+  rightPanelFocused: false,
 };
 
 function pushNav(s: AppState): NavEntry[] {
@@ -105,7 +109,7 @@ function pushNav(s: AppState): NavEntry[] {
 
 export function reducer(s: AppState, a: Action): AppState {
   switch (a.type) {
-    case 'NAVIGATE': return { ...s, currentPath: a.path, selectedFact: null, previewPath: null, rightMode: 'summary', searchQuery: '', similarTo: null, navStack: pushNav(s) };
+    case 'NAVIGATE': return { ...s, currentPath: a.path, selectedFact: null, previewPath: null, rightMode: 'summary', searchQuery: '', similarTo: null, navStack: pushNav(s), rightPanelFocused: false };
     case 'SELECT_FACT': return { ...s, selectedFact: a.path, previewPath: null, rightMode: 'fact', navStack: pushNav(s) };
     case 'PREVIEW_DIR': return { ...s, selectedFact: null, previewPath: a.path, rightMode: 'summary' };
     case 'SELECT_WORLD': return { ...s, selectedFact: null, previewPath: null, rightMode: 'summary' };
@@ -159,8 +163,11 @@ export function reducer(s: AppState, a: Action): AppState {
       leftMode: 'browse' as LeftMode,
       historyCommit: null,
       remoteError: '',
+      rightPanelFocused: false,
     };
     case 'SET_REMOTE_ERROR': return { ...s, remoteError: a.error };
+    case 'FOCUS_RIGHT_PANEL': return { ...s, rightPanelFocused: true };
+    case 'BLUR_RIGHT_PANEL': return { ...s, rightPanelFocused: false };
     default: return s;
   }
 }
