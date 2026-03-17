@@ -63,6 +63,11 @@ describe('reducer', () => {
     expect(next.rightMode).toBe('history');
   });
 
+  it('SHOW_HISTORY clears rightPanelFocused', () => {
+    const s = reducer({ ...init, rightPanelFocused: true }, { type: 'SHOW_HISTORY' });
+    expect(s.rightPanelFocused).toBe(false);
+  });
+
   it('SET_TASK updates task status', () => {
     const next = reducer(init, { type: 'SET_TASK', op: 'sync', status: 'running', message: 'syncing' });
     expect(next.tasks.sync).toEqual({ status: 'running', message: 'syncing' });

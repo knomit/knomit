@@ -121,7 +121,7 @@ export function reducer(s: AppState, a: Action): AppState {
     case 'SEARCH': return { ...s, searchQuery: a.query, similarTo: null, previewPath: null, navStack: pushNav(s), rightPanelFocused: false };
     case 'SIMILAR_SEARCH': return { ...s, similarTo: { path: a.path, text: a.text }, searchQuery: '', previewPath: null, rightPanelFocused: false };
     case 'CLEAR_SEARCH': return { ...s, searchQuery: '', similarTo: null, selectedFact: null, previewPath: null, rightMode: 'summary' };
-    case 'SHOW_HISTORY': return { ...s, rightMode: 'history' };
+    case 'SHOW_HISTORY': return { ...s, rightMode: 'history', rightPanelFocused: false };
     case 'SHOW_FACT': return { ...s, rightMode: 'fact' };
     case 'SET_LOADING': return { ...s, loading: a.value };
     case 'SET_TASK': {

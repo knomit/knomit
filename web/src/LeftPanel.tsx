@@ -140,12 +140,13 @@ export function LeftPanel({ state, dispatch }: Props) {
       if (e.key === 'Enter') { e.preventDefault(); activateSelected(); }
       if (e.key === 'ArrowRight') {
         e.preventDefault();
-        // In search mode, all results are facts → always transfer focus to right panel.
-        // In browse mode, transfer only when selected item is a fact (not a directory).
-        const isDir = !isSearchMode && children[selectedIdx]?.is_dir;
+        const selectedItem = isSearchMode ? searchResults[selectedIdx] : children[selectedIdx];
+        if (!selectedItem) return; // no item selected → do nothing
+        const isDir = !isSearchMode && (selectedItem as { is_dir?: boolean }).is_dir;
         if (isDir) {
           activateSelected(); // navigate into directory as before
         } else {
+          // transfer focus to right panel (fact selected in browse or search mode)
           dispatch({ type: 'FOCUS_RIGHT_PANEL' });
         }
       }
