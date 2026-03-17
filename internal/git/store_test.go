@@ -1429,4 +1429,100 @@ func TestActivitySQL(t *testing.T) {
 	if a4.Total != 1 {
 		t.Errorf("Activity(\"kb/f1.md\").Total = %d, want 1", a4.Total)
 	}
+
+	// Activity for a path with no commits must return zeros, not an error.
+	a5, err := store.Activity("kb/nonexistent.md")
+	if err != nil {
+		t.Fatalf("Activity(nonexistent) unexpected error: %v", err)
+	}
+	if a5.Total != 0 || a5.LastCommit != "" || a5.Changes7d != 0 {
+		t.Errorf("Activity(nonexistent) = %+v, want all-zero", a5)
+	}
+}
+
+// TestWalkChangedFilesEmptyPrefix checks that an empty prefix returns all
+// .md files (no GLOB clause applied).
+func TestWalkChangedFilesEmptyPrefix(t *testing.T) {
+	dir := t.TempDir()
+	store, err := git.Init(filepath.Join(dir, "test.db"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	fact := "# F\n"
+	if _, _, err := store.WriteFile("kb/a.md", fact, "add kb/a"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.WriteFile("other/b.md", fact, "add other/b"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Empty prefix — should include files from both directories.
+	files, _, err := store.WalkChangedFiles("", "", nil, 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	paths := make(map[string]bool, len(files))
+	for _, f := range files {
+		paths[f.Path] = true
+	}
+	if !paths["kb/a.md"] {
+		t.Errorf("expected kb/a.md in results; got %v", files)
+	}
+	if !paths["other/b.md"] {
+		t.Errorf("expected other/b.md in results; got %v", files)
+	}
+}
+
+// TestWalkChangedFilesLimit ensures the limit parameter is respected exactly.
+func TestWalkChangedFilesLimit(t *testing.T) {
+	dir := t.TempDir()
+	store, err := git.Init(filepath.Join(dir, "test.db"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	for i := 0; i < 5; i++ {
+		if _, _, err := store.WriteFile(fmt.Sprintf("kb/f%d.md", i), "# F\n", fmt.Sprintf("add f%d", i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	files, _, err := store.WalkChangedFiles("", "kb", nil, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 3 {
+		t.Errorf("WalkChangedFiles with limit=3 returned %d files, want exactly 3", len(files))
+	}
+}
+
+// TestWalkChangedFilesLastHashIsHEAD verifies that the returned lastHash
+// always equals the current HEAD commit hash (SQL path ignores fromCommit).
+func TestWalkChangedFilesLastHashIsHEAD(t *testing.T) {
+	dir := t.TempDir()
+	store, err := git.Init(filepath.Join(dir, "test.db"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	if _, _, err := store.WriteFile("kb/a.md", "# A\n", "add a"); err != nil {
+		t.Fatal(err)
+	}
+
+	head, err := store.HeadCommit()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, lastHash, err := store.WalkChangedFiles("", "kb", nil, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lastHash != head {
+		t.Errorf("lastHash = %s, want HEAD = %s", lastHash[:8], head[:8])
+	}
 }
