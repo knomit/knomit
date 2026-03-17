@@ -9,7 +9,7 @@ type Config struct {
 
 // DefaultConfig returns git config with sensible defaults.
 func DefaultConfig() Config {
-	return Config{}
+	return Config{Serve: true}
 }
 
 // RemoteAuthConfig holds git remote authentication settings.
