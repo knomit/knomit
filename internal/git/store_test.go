@@ -820,6 +820,49 @@ func TestCommitDetail(t *testing.T) {
 	}
 }
 
+func TestCommitDetailBatchWrite(t *testing.T) {
+	dir := t.TempDir()
+	store, err := git.Init(filepath.Join(dir, "test.db"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	// First commit: anchor so BatchWrite has a parent.
+	if _, _, err := store.WriteFile("kb/anchor.md", "---\ndomain: []\nconfidence: 0.5\nsources: 1\nentities: []\nrefs: []\n---\n# A\n\nA.\n", "add anchor"); err != nil {
+		t.Fatal(err)
+	}
+
+	// BatchWrite: add three files in one commit.
+	files := map[string]string{
+		"kb/a.md": "---\ndomain: []\nconfidence: 0.5\nsources: 1\nentities: []\nrefs: []\n---\n# A\n\nA.\n",
+		"kb/b.md": "---\ndomain: []\nconfidence: 0.5\nsources: 1\nentities: []\nrefs: []\n---\n# B\n\nB.\n",
+		"kb/c.md": "---\ndomain: []\nconfidence: 0.5\nsources: 1\nentities: []\nrefs: []\n---\n# C\n\nC.\n",
+	}
+	commitHash, _, err := store.BatchWrite(files, "batch add three facts")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	detail, err := store.CommitDetail(commitHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(detail.Files) != 3 {
+		t.Fatalf("expected 3 files in batch commit, got %d: %v", len(detail.Files), detail.Files)
+	}
+	paths := make(map[string]string, 3)
+	for _, f := range detail.Files {
+		paths[f.Path] = f.Action
+	}
+	for _, p := range []string{"kb/a.md", "kb/b.md", "kb/c.md"} {
+		if action, ok := paths[p]; !ok || action != "added" {
+			t.Errorf("expected %s added, got action=%q ok=%v", p, action, ok)
+		}
+	}
+}
+
 func TestLogPaginated(t *testing.T) {
 	dir := t.TempDir()
 	store, err := git.Init(filepath.Join(dir, "test.db"), nil)

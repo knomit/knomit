@@ -428,10 +428,10 @@ func serveCmd() *cobra.Command {
 				allResults = append(allResults, result)
 			}
 
-			// 4. Wire git remote handler (bound to default repo).
+			// 4. Wire git remote handler (all repos via RepoManager).
 			var gitHandler http.Handler
 			if cfg.Git.Serve {
-				gitHandler = web.GitRemoteHandler(knomitResult.gs, cfg.LLM.APIKey)
+				gitHandler = web.GitRemoteHandler(rm, cfg.LLM.APIKey)
 			}
 
 			// 5. Create chi router.

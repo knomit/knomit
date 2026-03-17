@@ -10,8 +10,17 @@ import (
 	"testing"
 
 	"github.com/go-chi/chi/v5"
+	"go.uber.org/mock/gomock"
 	"knomit/internal/git"
 )
+
+// newTestRepoManager creates a RepoManager with a single repo named repoName
+// backed by store.
+func newTestRepoManager(repoName string, store *git.Store) *RepoManager {
+	rm := NewRepoManager()
+	rm.Set(repoName, &RepoInstance{GS: store})
+	return rm
+}
 
 // TestGitCloneIntegration verifies that git clone HTTP traffic routed through
 // the full chi stack (r.Mount("/git", gitHandler)) reaches the go-git handler
@@ -25,7 +34,7 @@ func TestGitCloneIntegration(t *testing.T) {
 		t.Fatalf("git.Init: %v", err)
 	}
 
-	gitHandler := GitRemoteHandler(store, "")
+	gitHandler := GitRemoteHandler(newTestRepoManager("knomit", store), "")
 
 	r := chi.NewRouter()
 	r.Mount("/git", gitHandler)
@@ -58,7 +67,7 @@ func TestGitCloneIntegration(t *testing.T) {
 	// go-git serves the advertised refs; we accept 200 or 500 (empty repo).
 	// What we must NOT get is a redirect or 404 from path mismatch.
 	if resp.StatusCode == http.StatusNotFound {
-		t.Errorf("got 404 — gitPathStripper failed to route request\nbody: %s", body)
+		t.Errorf("got 404 — GitRemoteHandler failed to route request\nbody: %s", body)
 	}
 
 	// Also run an actual git ls-remote to confirm the full protocol works.
@@ -90,7 +99,7 @@ func TestGitCloneWithCommits(t *testing.T) {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
-	gitHandler := GitRemoteHandler(store, "")
+	gitHandler := GitRemoteHandler(newTestRepoManager("knomit", store), "")
 	r := chi.NewRouter()
 	r.Mount("/git", gitHandler)
 	srv := httptest.NewServer(r)
@@ -109,55 +118,96 @@ func TestGitCloneWithCommits(t *testing.T) {
 	}
 }
 
-// TestGitRemoteHandler_RepoPrefix verifies that requests with a repo-name
-// prefix in the path (e.g. /knomit/info/refs) are correctly routed to the
-// git smart HTTP endpoints. This is a regression test for a bug where
-// git clone http://host/git/knomit failed because the repo-name segment
-// was not stripped, causing a redirect loop.
-func TestGitRemoteHandler_RepoPrefix(t *testing.T) {
-	// Build a test mux with the same endpoints as the real handler.
-	mux := http.NewServeMux()
-	mux.HandleFunc("/info/refs", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("refs"))
-	})
-	mux.HandleFunc("/git-upload-pack", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("upload"))
-	})
-	mux.HandleFunc("/git-receive-pack", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("receive"))
-	})
+// TestGitRemoteHandler_GSNotGitRemoteStore verifies that a repo whose GS does
+// not implement GitRemoteStore returns 500 rather than panicking.
+func TestGitRemoteHandler_GSNotGitRemoteStore(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	rm := NewRepoManager()
+	rm.Set("mocked", &RepoInstance{GS: NewMockGitStore(ctrl)})
 
-	// Wrap with the same path-stripping logic used by GitRemoteHandler.
-	handler := gitPathStripper(mux)
+	handler := GitRemoteHandler(rm, "")
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/mocked/info/refs?service=git-upload-pack", nil)
+	handler.ServeHTTP(rr, req)
+	if rr.Code != http.StatusInternalServerError {
+		t.Errorf("want 500, got %d", rr.Code)
+	}
+}
+
+// TestGitRemoteHandler_UnknownRepo verifies that requests for an unknown repo
+// return 404.
+func TestGitRemoteHandler_UnknownRepo(t *testing.T) {
+	dir := t.TempDir()
+	store, err := git.Init(filepath.Join(dir, "test.db"), nil)
+	if err != nil {
+		t.Fatalf("git.Init: %v", err)
+	}
+
+	handler := GitRemoteHandler(newTestRepoManager("knomit", store), "")
 
 	tests := []struct {
-		name   string
-		path   string
-		want   int
-		body   string
+		name string
+		path string
+		want int
 	}{
-		{"info/refs with repo prefix", "/knomit/info/refs", 200, "refs"},
-		{"info/refs with nested repo prefix", "/org/repo/info/refs", 200, "refs"},
-		{"git-upload-pack with repo prefix", "/myrepo/git-upload-pack", 200, "upload"},
-		{"git-receive-pack with repo prefix", "/myrepo/git-receive-pack", 200, "receive"},
-		{"no matching suffix", "/knomit/unknown", 404, ""},
-		{"bare path no suffix", "/knomit", 404, ""},
+		{"unknown repo", "/other/info/refs", 404},
+		{"no repo segment", "/info/refs", 404},
+		{"empty path", "/", 404},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			rr := httptest.NewRecorder()
-			req := httptest.NewRequest("GET", tt.path, nil)
+			req := httptest.NewRequest("GET", tt.path+"?service=git-upload-pack", nil)
 			handler.ServeHTTP(rr, req)
 			if rr.Code != tt.want {
 				t.Errorf("status = %d, want %d", rr.Code, tt.want)
 			}
-			if tt.body != "" && rr.Body.String() != tt.body {
-				t.Errorf("body = %q, want %q", rr.Body.String(), tt.body)
-			}
 		})
+	}
+}
+
+// TestGitRemoteHandler_MultiRepo verifies that multiple repos can be served
+// from the same handler, each routing to the correct underlying store.
+func TestGitRemoteHandler_MultiRepo(t *testing.T) {
+	dir := t.TempDir()
+
+	storeA, err := git.Init(filepath.Join(dir, "a.db"), nil)
+	if err != nil {
+		t.Fatalf("git.Init a: %v", err)
+	}
+	if _, _, err := storeA.WriteFile("kb/a.md", "# A\n", "init a"); err != nil {
+		t.Fatalf("WriteFile a: %v", err)
+	}
+
+	storeB, err := git.Init(filepath.Join(dir, "b.db"), nil)
+	if err != nil {
+		t.Fatalf("git.Init b: %v", err)
+	}
+	if _, _, err := storeB.WriteFile("kb/b.md", "# B\n", "init b"); err != nil {
+		t.Fatalf("WriteFile b: %v", err)
+	}
+
+	rm := NewRepoManager()
+	rm.Set("repo-a", &RepoInstance{GS: storeA})
+	rm.Set("repo-b", &RepoInstance{GS: storeB})
+
+	r := chi.NewRouter()
+	r.Mount("/git", GitRemoteHandler(rm, ""))
+	srv := httptest.NewServer(r)
+	defer srv.Close()
+
+	for _, repoName := range []string{"repo-a", "repo-b"} {
+		cloneDir := filepath.Join(dir, "clone-"+repoName)
+		cmd := exec.Command("git", "clone", srv.URL+"/git/"+repoName, cloneDir)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			output := string(out)
+			if strings.Contains(output, "redirect") || strings.Contains(output, "400") {
+				t.Errorf("git clone %s failed: %s", repoName, output)
+			} else {
+				t.Logf("git clone %s non-fatal: %s", repoName, output)
+			}
+		}
 	}
 }

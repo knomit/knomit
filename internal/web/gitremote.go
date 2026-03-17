@@ -1,9 +1,13 @@
 package web
 
 import (
+	"compress/gzip"
+	"io"
 	"net/http"
 	"strings"
+	"sync"
 
+	"github.com/go-chi/chi/v5"
 	gogitserver "github.com/go-git/go-git/v5/plumbing/transport/server"
 	"github.com/go-git/go-git/v5/plumbing/format/pktline"
 	"github.com/go-git/go-git/v5/plumbing/protocol/packp"
@@ -11,9 +15,6 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/storer"
 	storegit "knomit/internal/store/git"
 )
-
-// gitHTTPSuffixes are the three endpoint paths defined by the git smart HTTP protocol.
-var gitHTTPSuffixes = []string{"/info/refs", "/git-upload-pack", "/git-receive-pack"}
 
 // GitRemoteStore is the narrow interface gitremote needs — just the
 // underlying go-git storer so it can serve pack negotiations.
@@ -35,14 +36,62 @@ func (l *repoLoader) Load(_ *transport.Endpoint) (storer.Storer, error) {
 // protocol (https://git-scm.com/docs/http-protocol). It exposes three
 // endpoints (relative to the mount point):
 //
-//   - GET  /info/refs?service=git-upload-pack   — advertise refs for fetch
-//   - GET  /info/refs?service=git-receive-pack  — advertise refs for push
-//   - POST /git-upload-pack                     — serve a fetch
-//   - POST /git-receive-pack                    — accept a push
+//   - GET  /{repo}/info/refs?service=git-upload-pack   — advertise refs for fetch
+//   - GET  /{repo}/info/refs?service=git-receive-pack  — advertise refs for push
+//   - POST /{repo}/git-upload-pack                     — serve a fetch
+//   - POST /{repo}/git-receive-pack                    — accept a push
 //
 // If apiKey is non-empty, receive-pack (push) endpoints require a Bearer
 // token matching apiKey. Upload-pack (fetch) is always public.
-func GitRemoteHandler(gs GitRemoteStore, apiKey string) http.Handler {
+func GitRemoteHandler(rm *RepoManager, apiKey string) http.Handler {
+	// Cache per-repo handlers by GitRemoteStore identity so we don't rebuild
+	// the mux and go-git server on every request.
+	var cache sync.Map // key: GitRemoteStore, value: http.Handler
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// chi's RoutePath is the mount-relative path, e.g. "/knomit/info/refs".
+		// Fall back to r.URL.Path when called outside a chi routing context (e.g. tests).
+		routePath := r.URL.Path
+		if rctx := chi.RouteContext(r.Context()); rctx != nil {
+			routePath = rctx.RoutePath
+		}
+		p := strings.TrimPrefix(routePath, "/")
+		repoName, repoSuffix, _ := strings.Cut(p, "/")
+		if repoName == "" {
+			http.NotFound(w, r)
+			return
+		}
+
+		ri := rm.Get(repoName)
+		if ri == nil {
+			http.NotFound(w, r)
+			return
+		}
+
+		gs, ok := ri.GS.(GitRemoteStore)
+		if !ok {
+			http.Error(w, "git serving not supported for this repo", http.StatusInternalServerError)
+			return
+		}
+
+		h, _ := cache.LoadOrStore(gs, newRepoGitHandler(gs, apiKey))
+
+		// Rewrite the request URL to just the git-protocol suffix so the inner
+		// mux can match /info/refs, /git-upload-pack, /git-receive-pack directly.
+		// Shallow copy is sufficient — inner handlers never mutate request fields.
+		u2 := *r.URL
+		u2.Path = "/" + repoSuffix
+		u2.RawPath = ""
+		r2 := r.WithContext(r.Context())
+		r2.URL = &u2
+		h.(http.Handler).ServeHTTP(w, r2)
+	})
+}
+
+// newRepoGitHandler builds the inner mux that handles the three git smart HTTP
+// endpoints for a single repository. The caller is responsible for stripping
+// the repo-name prefix before dispatching to this handler.
+func newRepoGitHandler(gs GitRemoteStore, apiKey string) http.Handler {
 	loader := &repoLoader{sto: gs.Storer()}
 	srv := gogitserver.NewServer(loader)
 
@@ -135,8 +184,15 @@ func GitRemoteHandler(gs GitRemoteStore, apiKey string) http.Handler {
 			return
 		}
 
+		body, err := requestBody(r)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		defer body.Close()
+
 		req := packp.NewUploadPackRequest()
-		if err := req.Decode(r.Body); err != nil {
+		if err := req.Decode(body); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
@@ -180,8 +236,15 @@ func GitRemoteHandler(gs GitRemoteStore, apiKey string) http.Handler {
 			return
 		}
 
+		body, err := requestBody(r)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		defer body.Close()
+
 		req := packp.NewReferenceUpdateRequest()
-		if err := req.Decode(r.Body); err != nil {
+		if err := req.Decode(body); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
@@ -201,33 +264,20 @@ func GitRemoteHandler(gs GitRemoteStore, apiKey string) http.Handler {
 		}
 	})
 
-	return gitPathStripper(mux)
+	return mux
 }
 
-// gitPathStripper wraps an http.Handler, stripping the repo-name prefix from
-// the URL path so that git smart HTTP suffix endpoints (/info/refs,
-// /git-upload-pack, /git-receive-pack) reach the inner mux.
-func gitPathStripper(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		p := r.URL.Path
-		var suffix string
-		for _, s := range gitHTTPSuffixes {
-			if strings.HasSuffix(p, s) {
-				suffix = s
-				break
-			}
+// requestBody returns a reader for the request body, transparently
+// decompressing gzip-encoded bodies that git sends for pack negotiations.
+func requestBody(r *http.Request) (io.ReadCloser, error) {
+	if strings.EqualFold(r.Header.Get("Content-Encoding"), "gzip") {
+		gr, err := gzip.NewReader(r.Body)
+		if err != nil {
+			return nil, err
 		}
-		if suffix == "" {
-			http.NotFound(w, r)
-			return
-		}
-
-		r2 := r.Clone(r.Context())
-		r2.URL = &*r.URL // shallow copy
-		r2.URL.Path = suffix
-		r2.URL.RawPath = ""
-		next.ServeHTTP(w, r2)
-	})
+		return gr, nil
+	}
+	return r.Body, nil
 }
 
 // bearerAuth checks that the request carries a Bearer token matching key.

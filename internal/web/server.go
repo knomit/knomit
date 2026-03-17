@@ -3,13 +3,15 @@ package web
 import (
 	"net/http"
 
-	"github.com/go-chi/chi/v5"
-	"github.com/go-chi/chi/v5/middleware"
 	"knomit/internal/embeddings"
 	"knomit/internal/git"
 	"knomit/internal/llm"
 	"knomit/internal/store"
 	"knomit/internal/synthesize"
+
+	"github.com/go-chi/chi/v5"
+	"github.com/go-chi/chi/v5/middleware"
+	"github.com/rs/zerolog/log"
 )
 
 // GitStore is the narrow git interface needed by read-only query handlers
@@ -67,8 +69,8 @@ type SynthDeps struct {
 func NewRouter(rm *RepoManager, gitHandler http.Handler, embeddingsEnabled bool, ontologyRoot string) http.Handler {
 	r := chi.NewRouter()
 	r.Use(middleware.Recoverer)
-
 	if gitHandler != nil {
+		log.Info().Msg("git handler enabled at /git")
 		r.Mount("/git", gitHandler)
 	}
 
