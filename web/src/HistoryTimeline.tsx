@@ -98,6 +98,10 @@ export function HistoryTimeline({ state, dispatch }: Props) {
         const entry = entries[selectedIdx];
         if (entry) dispatch({ type: 'SELECT_COMMIT', commit: entry.commit });
       }
+      if (e.key === 'ArrowRight') {
+        e.preventDefault();
+        dispatch({ type: 'FOCUS_RIGHT_PANEL' });
+      }
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);

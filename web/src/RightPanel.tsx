@@ -117,7 +117,7 @@ function buildFocusTargets(f: Fact | null, hasSwitcher: boolean, hasSimilar: boo
 interface SwitcherProps {
   files: CommitFile[];
   selectedPath: string | null;
-  onSelect: (path: string) => void;
+  onSelect: (path: string, action: string) => void;
   focusIdx: number;       // 0 = trigger is focused (when right panel focused); -1 = not focused
   dropdownFocusIdx: number; // index within dropdown when open; -1 = none
   open: boolean;
@@ -125,15 +125,13 @@ interface SwitcherProps {
 }
 
 function FactSwitcher({ files, selectedPath, onSelect, focusIdx, dropdownFocusIdx, open, onToggle }: SwitcherProps) {
-  const viewable = files.filter(f => f.action !== 'deleted');
-  const currentIdx = viewable.findIndex(f => f.path === selectedPath);
-  const current = viewable[currentIdx] ?? viewable[0] ?? null;
+  const currentIdx = files.findIndex(f => f.path === selectedPath);
+  const current = files[currentIdx] ?? files[0] ?? null;
 
   const actionStyle = (action: string): React.CSSProperties => ({
     fontSize: 9, padding: '1px 5px', borderRadius: 3, fontFamily: 'monospace', fontWeight: 600,
     color: action === 'added' ? '#7c9' : action === 'modified' ? '#8af' : '#f88',
     background: action === 'added' ? '#1a2e1a' : action === 'modified' ? '#1a1a2e' : '#2e1a1a',
-    ...(action === 'deleted' ? { opacity: 0.5 } : {}),
   });
 
   const triggerFocused = focusIdx === 0;
@@ -155,7 +153,7 @@ function FactSwitcher({ files, selectedPath, onSelect, focusIdx, dropdownFocusId
           {current ? current.path.replace(/\.md$/, '') : '—'}
         </span>
         <span style={{ fontSize: 11, color: '#555', flexShrink: 0 }}>
-          {currentIdx + 1} / {viewable.length}
+          {currentIdx + 1} / {files.length}
         </span>
         <span style={{ fontSize: 11, color: '#555', flexShrink: 0 }}>{open ? '▴' : '▾'}</span>
       </div>
@@ -163,17 +161,15 @@ function FactSwitcher({ files, selectedPath, onSelect, focusIdx, dropdownFocusId
       {open && (
         <div style={{ background: '#1a1a2a', border: '1px solid #2a2a3a', borderTop: 'none', borderRadius: '0 0 6px 6px', overflow: 'hidden' }}>
           {files.map((f, i) => {
-            const isDeleted = f.action === 'deleted';
             const isSelected = f.path === selectedPath;
             const isDdFocused = dropdownFocusIdx === i;
             return (
               <div
                 key={f.path}
-                onClick={() => { if (isDeleted) return; onSelect(f.path); onToggle(); }}
+                onClick={() => { onSelect(f.path, f.action); onToggle(); }}
                 style={{
                   display: 'flex', alignItems: 'center', gap: 8, padding: '7px 10px',
-                  cursor: isDeleted ? 'default' : 'pointer',
-                  opacity: isDeleted ? 0.4 : 1,
+                  cursor: 'pointer',
                   background: isDdFocused ? '#2a2a3a' : isSelected ? '#222233' : 'transparent',
                   outline: isDdFocused ? '1px solid rgba(136,170,255,0.3)' : 'none',
                   outlineOffset: -1,
@@ -338,7 +334,7 @@ export function RightPanel({ state, dispatch }: Props) {
   const [switcherOpen, setSwitcherOpen] = useState(false);
   const [dropdownFocusIdx, setDropdownFocusIdx] = useState(-1);
 
-  const hasSwitcher = !!(state.historyCommit && commitDetail && commitDetail.files.filter(f => f.action !== 'deleted').length > 1);
+  const hasSwitcher = !!(state.historyCommit && commitDetail && commitDetail.files.length > 1);
 
   useEffect(() => {
     setError(null);
@@ -349,13 +345,12 @@ export function RightPanel({ state, dispatch }: Props) {
         setSwitcherOpen(false);
         setDropdownFocusIdx(-1);
         setCommitDetail(detail);
-        const viewableFiles = detail.files.filter(f => f.action !== 'deleted');
-        if (viewableFiles.length === 1) {
-          setCommitSelectedFile(viewableFiles[0].path);
-          api.fact(state.repo, viewableFiles[0].path, state.historyCommit!).then(setFact).catch(e => setError(String(e)));
-        } else {
-          setFact(null);
-          setCommitSelectedFile(null);
+        // Auto-select first file (prefer non-deleted; fall back to first deleted)
+        const firstFile = detail.files.find(f => f.action !== 'deleted') ?? detail.files[0];
+        if (firstFile) {
+          setCommitSelectedFile(firstFile.path);
+          const hash = firstFile.action === 'deleted' ? state.historyCommit! + '^' : state.historyCommit!;
+          api.fact(state.repo, firstFile.path, hash).then(setFact).catch(e => setError(String(e)));
         }
       }).catch(() => setCommitDetail(null));
     } else if (state.rightMode === 'fact' && state.selectedFact) {
@@ -392,12 +387,13 @@ export function RightPanel({ state, dispatch }: Props) {
       };
 
       const cycleFact = (delta: 1 | -1) => {
-        const viewable = commitDetail!.files.filter(f => f.action !== 'deleted');
-        const cur = viewable.findIndex(f => f.path === commitSelectedFile);
-        const next = (cur + delta + viewable.length) % viewable.length;
-        const nextFile = viewable[next];
+        const all = commitDetail!.files;
+        const cur = all.findIndex(f => f.path === commitSelectedFile);
+        const next = (cur + delta + all.length) % all.length;
+        const nextFile = all[next];
+        const hash = nextFile.action === 'deleted' ? state.historyCommit! + '^' : state.historyCommit!;
         setCommitSelectedFile(nextFile.path);
-        api.fact(state.repo, nextFile.path, state.historyCommit!).then(setFact).catch(() => setFact(null));
+        api.fact(state.repo, nextFile.path, hash).then(setFact).catch(() => setFact(null));
         setFocusIdx(0);
       };
 
@@ -424,9 +420,10 @@ export function RightPanel({ state, dispatch }: Props) {
         if (target.kind === 'switcher') {
           if (switcherOpen && dropdownFocusIdx >= 0) {
             const f = commitDetail!.files[dropdownFocusIdx];
-            if (f && f.action !== 'deleted') {
+            if (f) {
+              const hash = f.action === 'deleted' ? state.historyCommit! + '^' : state.historyCommit!;
               setCommitSelectedFile(f.path);
-              api.fact(state.repo, f.path, state.historyCommit!).then(setFact).catch(() => setFact(null));
+              api.fact(state.repo, f.path, hash).then(setFact).catch(() => setFact(null));
               setSwitcherOpen(false);
               setDropdownFocusIdx(-1);
               setFocusIdx(0);
@@ -458,9 +455,11 @@ export function RightPanel({ state, dispatch }: Props) {
     return renderFact(fact, search, undefined, focusInfo);
   }
 
-  // Time-travel: multiple viewable files → show FactSwitcher + selected fact below
+  // Time-travel: multiple files → show FactSwitcher + selected fact below
   if (state.historyCommit && commitDetail) {
-    const viewable = commitDetail.files.filter(f => f.action !== 'deleted');
+    const added = commitDetail.files.filter(f => f.action === 'added').length;
+    const modified = commitDetail.files.filter(f => f.action === 'modified').length;
+    const deleted = commitDetail.files.filter(f => f.action === 'deleted').length;
 
     return (
       <div
@@ -475,30 +474,33 @@ export function RightPanel({ state, dispatch }: Props) {
             const tc = tagColor(tag);
             return <span key={tag} style={{ color: tc.color, background: tc.bg, padding: '1px 6px', borderRadius: 3, fontSize: 10, fontFamily: 'monospace' }}>{tag}</span>;
           })}
+          {/* A/M/D summary */}
+          <span style={{ marginLeft: 'auto', display: 'flex', gap: 6, flexShrink: 0 }}>
+            {added > 0 && <span style={{ fontSize: 10, color: '#7c9', background: '#1a2e1a', padding: '1px 6px', borderRadius: 3, fontFamily: 'monospace' }}>{added} A</span>}
+            {modified > 0 && <span style={{ fontSize: 10, color: '#8af', background: '#1a1a2e', padding: '1px 6px', borderRadius: 3, fontFamily: 'monospace' }}>{modified} M</span>}
+            {deleted > 0 && <span style={{ fontSize: 10, color: '#f88', background: '#2e1a1a', padding: '1px 6px', borderRadius: 3, fontFamily: 'monospace' }}>{deleted} D</span>}
+          </span>
         </div>
         <div style={{ color: '#888', fontSize: 12, padding: '6px 20px 0', flexShrink: 0 }}>{commitDetail.message}</div>
 
-        {viewable.length > 1 && (
-          <FactSwitcher
-            files={commitDetail.files}
-            selectedPath={commitSelectedFile}
-            onSelect={path => {
-              setCommitSelectedFile(path);
-              api.fact(state.repo, path, state.historyCommit!).then(setFact).catch(() => setFact(null));
-              setFocusIdx(0);
-            }}
-            focusIdx={state.rightPanelFocused ? focusIdx : -1}
-            dropdownFocusIdx={dropdownFocusIdx}
-            open={switcherOpen}
-            onToggle={() => setSwitcherOpen(o => !o)}
-          />
-        )}
+        <FactSwitcher
+          files={commitDetail.files}
+          selectedPath={commitSelectedFile}
+          onSelect={(path, action) => {
+            const hash = action === 'deleted' ? state.historyCommit! + '^' : state.historyCommit!;
+            setCommitSelectedFile(path);
+            api.fact(state.repo, path, hash).then(setFact).catch(() => setFact(null));
+            setFocusIdx(0);
+          }}
+          focusIdx={state.rightPanelFocused ? focusIdx : -1}
+          dropdownFocusIdx={dropdownFocusIdx}
+          open={switcherOpen}
+          onToggle={() => setSwitcherOpen(o => !o)}
+        />
 
         {fact && fact.parse_error && <FactEditor fact={fact} repo={state.repo} onSaved={setFact} />}
         {fact && !fact.parse_error && <div style={{ flex: 1 }}>{renderFact(fact, search, undefined, focusInfo)}</div>}
-        {!fact && viewable.length > 0 && (
-          <div style={{ padding: '16px 20px', color: '#666', fontSize: 13 }}>Select a fact above.</div>
-        )}
+        {!fact && <div style={{ padding: '16px 20px', color: '#666', fontSize: 13 }}>Loading…</div>}
       </div>
     );
   }
