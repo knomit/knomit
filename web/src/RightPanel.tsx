@@ -190,7 +190,7 @@ interface FocusInfo {
   target: FocusTarget | null;
 }
 
-function renderFact(fact: Fact, search: (q: string) => void, dispatch?: Dispatch<Action>, focusInfo?: FocusInfo, historyDate?: string, onFromCommitClick?: (commit: string) => void) {
+function renderFact(fact: Fact, search: (q: string) => void, dispatch?: Dispatch<Action>, focusInfo?: FocusInfo, historyDate?: string, onFromCommitClick?: (commit: string) => void, onLocalRef?: (path: string) => void) {
   const ft = focusInfo?.target ?? null;
   return (
     <div style={{ padding: '24px 28px', overflowY: 'auto', height: '100%', boxSizing: 'border-box' }}>
@@ -279,6 +279,15 @@ function renderFact(fact: Fact, search: (q: string) => void, dispatch?: Dispatch
                   >↗ {ref}</a>
                 );
               }
+              if (onLocalRef) {
+                return (
+                  <span key={ref} onClick={() => onLocalRef(ref)}
+                    style={{ color: '#8af', fontSize: 12, fontFamily: 'monospace', cursor: 'pointer', transition: 'color 0.15s' }}
+                    onMouseEnter={e => { (e.currentTarget as HTMLElement).style.color = '#adf'; }}
+                    onMouseLeave={e => { (e.currentTarget as HTMLElement).style.color = '#8af'; }}
+                  >→ {ref}</span>
+                );
+              }
               return <div key={ref} style={{ color: '#888', fontSize: 12, fontFamily: 'monospace' }}>{ref}</div>;
             })}
           </div>
@@ -357,19 +366,29 @@ export function RightPanel({ state, dispatch }: Props) {
   useEffect(() => {
     setError(null);
     if (state.historyCommit) {
-      // Time-travel: fetch commit detail and auto-load single file
-      api.commitDetail(state.repo, state.historyCommit).then(detail => {
+      if (state.historyFocusPath) {
+        // Local-ref navigation in history mode: load specific path at current commit
+        setCommitDetail(null);
         setFocusIdx(0);
         setSwitcherOpen(false);
         setDropdownFocusIdx(-1);
-        setCommitDetail(detail);
-        // Auto-select first file (prefer non-deleted; fall back to first deleted)
-        const firstFile = detail.files.find(f => f.action !== 'deleted') ?? detail.files[0];
-        if (firstFile) {
-          setCommitSelectedFile(firstFile.path);
-          api.fact(state.repo, firstFile.path, state.historyCommit!).then(setFact).catch(e => setError(String(e)));
-        }
-      }).catch(() => setCommitDetail(null));
+        setCommitSelectedFile(state.historyFocusPath);
+        api.fact(state.repo, state.historyFocusPath, state.historyCommit).then(setFact).catch(e => setError(String(e)));
+      } else {
+        // Time-travel: fetch commit detail and auto-load single file
+        api.commitDetail(state.repo, state.historyCommit).then(detail => {
+          setFocusIdx(0);
+          setSwitcherOpen(false);
+          setDropdownFocusIdx(-1);
+          setCommitDetail(detail);
+          // Auto-select first file (prefer non-deleted; fall back to first deleted)
+          const firstFile = detail.files.find(f => f.action !== 'deleted') ?? detail.files[0];
+          if (firstFile) {
+            setCommitSelectedFile(firstFile.path);
+            api.fact(state.repo, firstFile.path, state.historyCommit!).then(setFact).catch(e => setError(String(e)));
+          }
+        }).catch(() => setCommitDetail(null));
+      }
     } else if (state.rightMode === 'fact' && state.selectedFact) {
       api.fact(state.repo, state.selectedFact).then(setFact).catch(e => setError(String(e)));
     } else if (state.rightMode === 'history' && state.selectedFact) {
@@ -377,7 +396,7 @@ export function RightPanel({ state, dispatch }: Props) {
     } else if (state.rightMode === 'summary') {
       api.stats(state.repo, state.previewPath ?? state.currentPath).then(setStats).catch(() => setStats(null));
     }
-  }, [state.rightMode, state.selectedFact, state.currentPath, state.previewPath, state.headCommit, state.historyCommit]);
+  }, [state.rightMode, state.selectedFact, state.currentPath, state.previewPath, state.headCommit, state.historyCommit, state.historyFocusPath]);
 
   // hasSimilar is true only in regular fact view (not in time-travel multi-file path)
   const hasSimilar = !!fact && !hasSwitcher;
@@ -462,6 +481,14 @@ export function RightPanel({ state, dispatch }: Props) {
 
   const search = (q: string) => dispatch({ type: 'SEARCH', query: q });
 
+  const handleLocalRef = (path: string) => {
+    if (state.leftMode === 'history') {
+      dispatch({ type: 'HISTORY_OPEN_PATH', path });
+    } else {
+      dispatch({ type: 'OPEN_FACT', path });
+    }
+  };
+
   if (error) return <div style={{ padding: 24, color: '#f44' }}>{error}</div>;
 
   // Time-travel: single file auto-loaded → show fact normally (no switcher)
@@ -471,7 +498,7 @@ export function RightPanel({ state, dispatch }: Props) {
       if (state.leftMode !== 'history') dispatch({ type: 'ENTER_HISTORY' });
       dispatch({ type: 'SELECT_COMMIT', commit });
     };
-    return renderFact(fact, search, undefined, focusInfo, commitDetail?.date, goToCommit);
+    return renderFact(fact, search, undefined, focusInfo, commitDetail?.date, goToCommit, handleLocalRef);
   }
 
   // Time-travel: multiple files → show FactSwitcher + selected fact below
@@ -517,7 +544,7 @@ export function RightPanel({ state, dispatch }: Props) {
         />
 
         {fact && fact.parse_error && <FactEditor fact={fact} repo={state.repo} onSaved={setFact} />}
-        {fact && !fact.parse_error && <div style={{ flex: 1 }}>{renderFact(fact, search, undefined, focusInfo)}</div>}
+        {fact && !fact.parse_error && <div style={{ flex: 1 }}>{renderFact(fact, search, undefined, focusInfo, undefined, undefined, handleLocalRef)}</div>}
         {!fact && <div style={{ padding: '16px 20px', color: '#666', fontSize: 13 }}>Loading…</div>}
       </div>
     );
@@ -588,5 +615,5 @@ export function RightPanel({ state, dispatch }: Props) {
   if (!fact) return <div style={{ padding: 24, color: '#666' }}>Select a fact to view.</div>;
 
   if (fact.parse_error) return <FactEditor fact={fact} repo={state.repo} onSaved={setFact} />;
-  return renderFact(fact, search, dispatch, focusInfo);
+  return renderFact(fact, search, dispatch, focusInfo, undefined, undefined, handleLocalRef);
 }
