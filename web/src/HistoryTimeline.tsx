@@ -89,6 +89,7 @@ export function HistoryTimeline({ state, dispatch }: Props) {
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
+      if (state.rightPanelFocused) return; // right panel owns these keys when focused
       if (entries.length === 0) return;
       if (e.key === 'ArrowDown' || e.key === 'j') { e.preventDefault(); navigate(1); }
       if (e.key === 'ArrowUp' || e.key === 'k') { e.preventDefault(); navigate(-1); }
@@ -100,7 +101,7 @@ export function HistoryTimeline({ state, dispatch }: Props) {
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  });
+  }, [state.rightPanelFocused, entries, selectedIdx, navigate, dispatch]);
 
   return (
     <div ref={containerRef} style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
