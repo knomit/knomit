@@ -43,6 +43,7 @@ func (s *Store) Sync(remoteBranch string) (SyncResult, error) {
 	err = s.repo.Fetch(&gogit.FetchOptions{
 		RemoteName: "origin",
 		Auth:       s.auth,
+		Tags:       gogit.AllTags,
 	})
 	if err != nil && err != gogit.NoErrAlreadyUpToDate {
 		s.mu.Unlock()
@@ -331,11 +332,14 @@ func (s *Store) Push() (PushResult, error) {
 
 	refspec := fmt.Sprintf("refs/heads/%s:refs/heads/%s", s.branch, s.branch)
 
-	log.Debug().Str("branch", s.branch).Msg("git push: pushing agent branch")
+	log.Debug().Str("branch", s.branch).Msg("git push: pushing agent branch and tags")
 	err = s.repo.Push(&gogit.PushOptions{
 		RemoteName: "origin",
-		RefSpecs:   []gogitconfig.RefSpec{gogitconfig.RefSpec(refspec)},
-		Auth:       s.auth,
+		RefSpecs: []gogitconfig.RefSpec{
+			gogitconfig.RefSpec(refspec),
+			"refs/tags/*:refs/tags/*",
+		},
+		Auth: s.auth,
 	})
 	if err == gogit.NoErrAlreadyUpToDate {
 		log.Debug().Msg("git push: already up to date")
