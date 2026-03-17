@@ -350,6 +350,67 @@ func (s *Store) LogPaginated(path string, limit int, after string) ([]LogEntryWi
 	return entries, nextCursor, nil
 }
 
+const maxActivityCommits = 500
+
+// Activity computes commit-activity metrics for path. It walks up to
+// maxActivityCommits commits and counts how many touched that path in the
+// last 7, 30, and 90 days. path may be a directory prefix or a specific file.
+func (s *Store) Activity(path string) (ActivityResult, error) {
+	headRef, err := s.repo.Head()
+	if err != nil {
+		return ActivityResult{}, fmt.Errorf("Activity: head: %w", err)
+	}
+
+	opts := &gogit.LogOptions{
+		From:  headRef.Hash(),
+		Order: gogit.LogOrderCommitterTime,
+	}
+	if path != "" {
+		if strings.HasSuffix(path, ".md") {
+			opts.FileName = &path
+		} else {
+			prefix := path + "/"
+			opts.PathFilter = func(p string) bool { return strings.HasPrefix(p, prefix) }
+		}
+	}
+
+	logIter, err := s.repo.Log(opts)
+	if err != nil {
+		return ActivityResult{}, fmt.Errorf("Activity: log: %w", err)
+	}
+	defer logIter.Close()
+
+	now := time.Now()
+	cutoff7 := now.AddDate(0, 0, -7)
+	cutoff30 := now.AddDate(0, 0, -30)
+	cutoff90 := now.AddDate(0, 0, -90)
+
+	var result ActivityResult
+	_ = logIter.ForEach(func(c *object.Commit) error {
+		t := c.Committer.When
+		if result.Total == 0 {
+			result.LastCommit = t.UTC().Format(time.RFC3339)
+		}
+		result.Total++
+		if t.After(cutoff7) {
+			result.Changes7d++
+		}
+		if t.After(cutoff30) {
+			result.Changes30d++
+		}
+		if t.After(cutoff90) {
+			result.Changes90d++
+		}
+		if result.Total >= maxActivityCommits {
+			result.TotalCapped = true
+			return io.EOF
+		}
+		return nil
+	})
+
+	return result, nil
+}
+
 // buildTagIndex returns a map from commit hash to tag names.
 func (s *Store) buildTagIndex() (map[plumbing.Hash][]string, error) {
 	idx := make(map[plumbing.Hash][]string)

@@ -25,6 +25,7 @@ type GitStore interface {
 	Log(path string) ([]git.LogEntry, error)
 	LogPaginated(path string, limit int, after string) ([]git.LogEntryWithTags, string, error)
 	CommitDetail(commitHash string) (*git.CommitDetailResult, error)
+	Activity(path string) (git.ActivityResult, error)
 	HeadCommit() (string, error)
 	Branch() string
 	ListAll() ([]string, error)
@@ -87,6 +88,7 @@ func NewRouter(rm *RepoManager, gitHandler http.Handler, embeddingsEnabled bool,
 		sub.Get("/history", handleHistoryPaginated())
 		sub.Get("/commit", handleCommitDetail())
 		sub.Get("/stats", handleStats())
+		sub.Get("/activity", handleActivity())
 		sub.Get("/status", handleStatus(embeddingsEnabled, ontologyRoot))
 		sub.Post("/synthesize", handleSynthesizeStart())
 		sub.Get("/events", handleEvents())

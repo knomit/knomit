@@ -41,6 +41,21 @@ func (m *MockGitStore) EXPECT() *MockGitStoreMockRecorder {
 	return m.recorder
 }
 
+// Activity mocks base method.
+func (m *MockGitStore) Activity(path string) (git.ActivityResult, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Activity", path)
+	ret0, _ := ret[0].(git.ActivityResult)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// Activity indicates an expected call of Activity.
+func (mr *MockGitStoreMockRecorder) Activity(path any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Activity", reflect.TypeOf((*MockGitStore)(nil).Activity), path)
+}
+
 // Branch mocks base method.
 func (m *MockGitStore) Branch() string {
 	m.ctrl.T.Helper()

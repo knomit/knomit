@@ -362,6 +362,20 @@ func handleCommitDetail() http.HandlerFunc {
 	}
 }
 
+// handleActivity handles GET /api/v1/{repo}/activity?path=<path>.
+// Returns commit-activity metrics (last change, total commits, 7d/30d/90d counts).
+func handleActivity() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		ri := RepoFromContext(r.Context())
+		result, err := ri.GS.Activity(r.URL.Query().Get("path"))
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, fmt.Sprintf("activity error: %v", err))
+			return
+		}
+		writeJSON(w, http.StatusOK, result)
+	}
+}
+
 // handleStats handles GET /api/v1/{repo}/stats?path=<path>.
 // Aggregates are computed with a SQL query over the search index.
 func handleStats() http.HandlerFunc {

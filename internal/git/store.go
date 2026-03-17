@@ -97,6 +97,17 @@ type LogEntryWithTags struct {
 	Tags    []string `json:"tags"`
 }
 
+// ActivityResult holds commit-activity metrics for a path over several time windows.
+// Total is capped at maxActivityCommits; TotalCapped is true when the cap was reached.
+type ActivityResult struct {
+	LastCommit  string `json:"last_commit"`  // ISO-8601 timestamp of most recent commit, or ""
+	Total       int    `json:"total"`        // total commits touching this path (capped)
+	TotalCapped bool   `json:"total_capped"` // true when Total == maxActivityCommits
+	Changes7d   int    `json:"changes_7d"`
+	Changes30d  int    `json:"changes_30d"`
+	Changes90d  int    `json:"changes_90d"`
+}
+
 // SyncResult is returned by Sync to report what happened during synchronization.
 type SyncResult struct {
 	Synced      bool   // true if tree changed (merge or fast-forward)

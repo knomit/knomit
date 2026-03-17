@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import type { Dispatch } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { api } from './api';
-import type { Fact, HistoryEntry, Stats, CommitDetail, CommitFile } from './api';
+import type { Fact, HistoryEntry, Stats, CommitDetail, CommitFile, ActivityStats } from './api';
 import type { AppState, Action } from './state';
 
 interface Props {
@@ -350,10 +350,64 @@ function FactEditor({ fact, repo, onSaved }: { fact: Fact; repo: string; onSaved
   );
 }
 
+function activityLevel(a: ActivityStats): { label: string; color: string } {
+  if (a.changes_90d === 0) return { label: 'dormant', color: '#555' };
+  if (a.changes_30d === 0) return { label: 'low', color: '#888' };
+  if (a.changes_30d < 5) return { label: 'moderate', color: '#fa0' };
+  return { label: 'high', color: '#7c9' };
+}
+
+function ActivitySection({ activity: a }: { activity: ActivityStats }) {
+  const level = activityLevel(a);
+  const totalLabel = a.total_capped ? `${a.total}+` : String(a.total);
+
+  return (
+    <div style={{ marginBottom: 22 }}>
+      <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: 1.5, color: '#555', marginBottom: 10 }}>Activity</div>
+
+      {/* Stat cards row */}
+      <div style={{ display: 'flex', gap: 10, marginBottom: 14 }}>
+        <div style={{ borderLeft: '3px solid #555', padding: '10px 16px', background: '#1a1a2a', borderRadius: '0 6px 6px 0', flex: 1 }}>
+          <div style={{ fontSize: 10, color: '#666', textTransform: 'uppercase', letterSpacing: 1 }}>Last changed</div>
+          <div
+            title={a.last_commit ? new Date(a.last_commit).toLocaleString() : ''}
+            style={{ fontSize: 18, fontWeight: 600, color: '#eee', marginTop: 2 }}
+          >
+            {a.last_commit ? relativeTime(a.last_commit) : '—'}
+          </div>
+        </div>
+        <div style={{ borderLeft: '3px solid #555', padding: '10px 16px', background: '#1a1a2a', borderRadius: '0 6px 6px 0', flex: 1 }}>
+          <div style={{ fontSize: 10, color: '#666', textTransform: 'uppercase', letterSpacing: 1 }}>Commits</div>
+          <div style={{ fontSize: 18, fontWeight: 600, color: '#eee', marginTop: 2 }}>{totalLabel}</div>
+        </div>
+      </div>
+
+      {/* Time-window breakdown + activity level */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+        {[
+          { label: '7d', value: a.changes_7d },
+          { label: '30d', value: a.changes_30d },
+          { label: '90d', value: a.changes_90d },
+        ].map(({ label, value }) => (
+          <span key={label} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, background: '#1a1a2a', border: '1px solid #2a2a3a', borderRadius: 6, padding: '4px 10px' }}>
+            <span style={{ fontSize: 14, fontWeight: 600, color: value > 0 ? '#ccc' : '#555' }}>{value}</span>
+            <span style={{ fontSize: 10, color: '#555' }}>{label}</span>
+          </span>
+        ))}
+        <span style={{ marginLeft: 4, fontSize: 11, color: level.color, display: 'flex', alignItems: 'center', gap: 4 }}>
+          <span style={{ width: 6, height: 6, borderRadius: '50%', background: level.color, display: 'inline-block' }} />
+          {level.label}
+        </span>
+      </div>
+    </div>
+  );
+}
+
 export function RightPanel({ state, dispatch }: Props) {
   const [fact, setFact] = useState<Fact | null>(null);
   const [history, setHistory] = useState<HistoryEntry[]>([]);
   const [stats, setStats] = useState<Stats | null>(null);
+  const [activity, setActivity] = useState<ActivityStats | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [commitDetail, setCommitDetail] = useState<CommitDetail | null>(null);
   const [commitSelectedFile, setCommitSelectedFile] = useState<string | null>(null);
@@ -394,7 +448,9 @@ export function RightPanel({ state, dispatch }: Props) {
     } else if (state.rightMode === 'history' && state.selectedFact) {
       api.history(state.repo, state.selectedFact).then(r => setHistory(r.entries || [])).catch(e => setError(String(e)));
     } else if (state.rightMode === 'summary') {
-      api.stats(state.repo, state.previewPath ?? state.currentPath).then(setStats).catch(() => setStats(null));
+      const p = state.previewPath ?? state.currentPath;
+      api.stats(state.repo, p).then(setStats).catch(() => setStats(null));
+      api.activity(state.repo, p).then(setActivity).catch(() => setActivity(null));
     }
   }, [state.rightMode, state.selectedFact, state.currentPath, state.previewPath, state.headCommit, state.historyCommit, state.historyFocusPath]);
 
@@ -582,6 +638,8 @@ export function RightPanel({ state, dispatch }: Props) {
 
             <TagCloud label="Domains" entries={domainEntries} color="119,204,153" searchPrefix="domain:" onSearch={search} />
             <TagCloud label="Entities" entries={entityEntries} color="136,170,255" searchPrefix="entity:" onSearch={search} />
+
+            {activity && <ActivitySection activity={activity} />}
           </>
         ) : <div style={{ color: '#666' }}>No facts indexed in this path.</div>}
       </div>

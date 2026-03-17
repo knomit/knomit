@@ -13,6 +13,7 @@ export interface CommitFile { path: string; action: string }
 export interface CommitDetail { commit: string; date: string; message: string; tags: string[]; files: CommitFile[] }
 export interface Stats { total: number; domains: Record<string, number>; entities: Record<string, number>; avg_confidence: number }
 export interface Status { head: string; branch: string; index_commit: string; embeddings_enabled: boolean; ontology_root: string }
+export interface ActivityStats { last_commit: string; total: number; total_capped: boolean; changes_7d: number; changes_30d: number; changes_90d: number }
 
 export interface OriginResponse {
   name: string;
@@ -91,6 +92,7 @@ export const api = {
       body: JSON.stringify({ path, content }),
     }).then(r => { if (!r.ok) throw new Error(r.statusText); return r.json(); }),
   stats: (repo: string, path: string): Promise<Stats> => fetch(`${base(repo)}/stats?path=${encodeURIComponent(path)}`).then(r => r.json()),
+  activity: (repo: string, path: string): Promise<ActivityStats> => fetch(`${base(repo)}/activity?path=${encodeURIComponent(path)}`).then(r => r.json()),
   status: (repo: string): Promise<Status> => fetch(`${base(repo)}/status`).then(r => r.json()),
   sync: (repo: string): Promise<{ op: string; id?: string; status: string; message?: string }> =>
     fetch(`${base(repo)}/sync`, { method: 'POST' }).then(r => r.json()),
