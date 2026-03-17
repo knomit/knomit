@@ -133,10 +133,22 @@ export function LeftPanel({ state, dispatch }: Props) {
       if (e.key === 'Backspace' || e.key === 'Delete') { e.preventDefault(); dispatch({ type: 'NAV_BACK' }); }
       // Browse-mode only shortcuts — skip when in history mode (HistoryTimeline handles its own keys)
       if (state.leftMode === 'history') return;
+      if (state.rightPanelFocused) return; // right panel owns j/k/enter when focused
       if (e.key === 'ArrowDown' || e.key === 'j') { e.preventDefault(); moveSelection(1); }
       if (e.key === 'ArrowUp' || e.key === 'k') { e.preventDefault(); moveSelection(-1); }
-      if (e.key === 'ArrowRight' || e.key === 'Enter') { e.preventDefault(); activateSelected(); }
       if (e.key === 'ArrowLeft' && !isSearchMode) { e.preventDefault(); dispatch({ type: 'GO_UP' }); }
+      if (e.key === 'Enter') { e.preventDefault(); activateSelected(); }
+      if (e.key === 'ArrowRight') {
+        e.preventDefault();
+        // In search mode, all results are facts → always transfer focus to right panel.
+        // In browse mode, transfer only when selected item is a fact (not a directory).
+        const isDir = !isSearchMode && children[selectedIdx]?.is_dir;
+        if (isDir) {
+          activateSelected(); // navigate into directory as before
+        } else {
+          dispatch({ type: 'FOCUS_RIGHT_PANEL' });
+        }
+      }
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
