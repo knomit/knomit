@@ -214,4 +214,30 @@ describe('right panel focus', () => {
     const s = reducer({ ...init, rightPanelFocused: true }, { type: 'SET_REPO', repo: 'other' });
     expect(s.rightPanelFocused).toBe(false);
   });
+
+  it('SEARCH clears rightPanelFocused', () => {
+    const s = reducer({ ...init, rightPanelFocused: true }, { type: 'SEARCH', query: 'test' });
+    expect(s.rightPanelFocused).toBe(false);
+  });
+
+  it('SIMILAR_SEARCH clears rightPanelFocused', () => {
+    const s = reducer({ ...init, rightPanelFocused: true }, { type: 'SIMILAR_SEARCH', path: 'kb/x', text: 'y' });
+    expect(s.rightPanelFocused).toBe(false);
+  });
+
+  it('ENTER_HISTORY clears rightPanelFocused', () => {
+    const s = reducer({ ...init, rightPanelFocused: true }, { type: 'ENTER_HISTORY' });
+    expect(s.rightPanelFocused).toBe(false);
+  });
+
+  it('EXIT_HISTORY clears rightPanelFocused', () => {
+    const s = reducer({ ...init, rightPanelFocused: true }, { type: 'EXIT_HISTORY' });
+    expect(s.rightPanelFocused).toBe(false);
+  });
+
+  it('NAV_BACK clears rightPanelFocused', () => {
+    let s = reducer(init, { type: 'NAVIGATE', path: 'kb/tech' });
+    s = reducer({ ...s, rightPanelFocused: true }, { type: 'NAV_BACK' });
+    expect(s.rightPanelFocused).toBe(false);
+  });
 });
