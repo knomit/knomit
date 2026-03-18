@@ -22,12 +22,24 @@ function relativeTime(dateStr: string): string {
   return new Date(dateStr).toLocaleDateString();
 }
 
-function tagColor(tag: string): { color: string; bg: string } {
-  if (tag.startsWith('learn/')) return { color: '#7c9', bg: '#1a2e1a' };
-  if (tag.startsWith('update/')) return { color: '#8af', bg: '#1a1a2e' };
-  if (tag.startsWith('retract/')) return { color: '#f88', bg: '#2e1a1a' };
-  if (tag.startsWith('synthesize/') || tag.startsWith('subsume/')) return { color: '#fa0', bg: '#2e2a1a' };
-  return { color: '#888', bg: '#222' };
+const opStyles: Record<string, { color: string; bg: string; label: string }> = {
+  learn:   { color: '#7c9', bg: '#1a2e1a', label: 'learn' },
+  update:  { color: '#8af', bg: '#1a1a2e', label: 'update' },
+  retract: { color: '#f88', bg: '#2e1a1a', label: 'retract' },
+  subsume: { color: '#fa0', bg: '#2e2a1a', label: 'subsume' },
+  sync:    { color: '#888', bg: '#222',    label: 'sync' },
+};
+
+function commitDetailStyle(detail: CommitDetail): { color: string; bg: string; label: string } | null {
+  if (detail.operation && opStyles[detail.operation]) return opStyles[detail.operation];
+  // Fall back to tag prefix for legacy commits.
+  for (const tag of detail.tags || []) {
+    if (tag.startsWith('learn/')) return opStyles.learn;
+    if (tag.startsWith('update/')) return opStyles.update;
+    if (tag.startsWith('retract/')) return opStyles.retract;
+    if (tag.startsWith('synthesize/') || tag.startsWith('subsume/')) return opStyles.subsume;
+  }
+  return null;
 }
 
 function TagCloud({ label, entries, color, searchPrefix, onSearch, focusedValue }: {
@@ -540,10 +552,10 @@ export function RightPanel({ state, dispatch }: Props) {
         {/* Commit header */}
         <div style={{ padding: '16px 20px 8px', borderBottom: '1px solid #222', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', flexShrink: 0 }}>
           <span style={{ color: '#7c9', fontFamily: 'monospace', fontSize: 12 }}>{commitDetail.commit.slice(0, 7)}</span>
-          {commitDetail.tags.map(tag => {
-            const tc = tagColor(tag);
-            return <span key={tag} style={{ color: tc.color, background: tc.bg, padding: '1px 6px', borderRadius: 3, fontSize: 10, fontFamily: 'monospace' }}>{tag}</span>;
-          })}
+          {(() => {
+            const cs = commitDetailStyle(commitDetail);
+            return cs ? <span style={{ color: cs.color, background: cs.bg, padding: '1px 6px', borderRadius: 3, fontSize: 10, fontFamily: 'monospace' }}>{cs.label}</span> : null;
+          })()}
           {/* timestamp + A/M/D summary */}
           <span style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
             <span title={new Date(commitDetail.date).toLocaleString()} style={{ color: '#666', fontSize: 11 }}>{relativeTime(commitDetail.date)}</span>

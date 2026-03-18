@@ -340,10 +340,11 @@ func (s *Store) LogPaginated(path string, limit int, after string) ([]LogEntryWi
 		}
 
 		entries = append(entries, LogEntryWithTags{
-			Commit:  hash,
-			Date:    c.Committer.When.UTC().Format(time.RFC3339),
-			Message: firstLine,
-			Tags:    tags,
+			Commit:    hash,
+			Date:      c.Committer.When.UTC().Format(time.RFC3339),
+			Message:   firstLine,
+			Tags:      tags,
+			Operation: parseOperation(c.Author.Email),
 		})
 		return nil
 	})
@@ -542,11 +543,12 @@ func (s *Store) CommitDetail(commitHash string) (*CommitDetailResult, error) {
 	}
 
 	return &CommitDetailResult{
-		Commit:  hash.String(),
-		Date:    commit.Committer.When.UTC().Format(time.RFC3339),
-		Message: firstLine,
-		Tags:    tags,
-		Files:   files,
+		Commit:    hash.String(),
+		Date:      commit.Committer.When.UTC().Format(time.RFC3339),
+		Message:   firstLine,
+		Tags:      tags,
+		Operation: parseOperation(commit.Author.Email),
+		Files:     files,
 	}, nil
 }
 

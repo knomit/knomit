@@ -86,19 +86,21 @@ type FileRecency struct {
 
 // CommitDetailResult contains metadata and changed files for a single commit.
 type CommitDetailResult struct {
-	Commit  string        `json:"commit"`
-	Date    string        `json:"date"`
-	Message string        `json:"message"`
-	Tags    []string      `json:"tags"`
-	Files   []ChangedFile `json:"files"`
+	Commit    string        `json:"commit"`
+	Date      string        `json:"date"`
+	Message   string        `json:"message"`
+	Tags      []string      `json:"tags"`
+	Operation string        `json:"operation,omitempty"`
+	Files     []ChangedFile `json:"files"`
 }
 
 // LogEntryWithTags extends LogEntry with tag names associated with the commit.
 type LogEntryWithTags struct {
-	Commit  string   `json:"commit"`
-	Date    string   `json:"date"`
-	Message string   `json:"message"`
-	Tags    []string `json:"tags"`
+	Commit    string   `json:"commit"`
+	Date      string   `json:"date"`
+	Message   string   `json:"message"`
+	Tags      []string `json:"tags"`
+	Operation string   `json:"operation,omitempty"`
 }
 
 // ActivityResult holds commit-activity metrics for a path over several time windows.
@@ -464,7 +466,7 @@ func InitFromRemote(s *storegit.Storer, originURL string, auth transport.AuthMet
 		if writeErr = s.SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), lastCommit)); writeErr != nil {
 			return nil, fmt.Errorf("InitFromRemote: empty remote set main: %w", writeErr)
 		}
-		log.Info().Str("branch", agentBranch).Msg("git store initialized (empty remote)")
+		log.Info().Str("branch", agentBranch).Str("origin", originURL).Msg("git store initialized (empty remote)")
 		gs := &Store{
 			repo:    repo,
 			storer:  s,
@@ -527,7 +529,7 @@ func InitFromRemote(s *storegit.Storer, originURL string, auth transport.AuthMet
 		return nil, fmt.Errorf("InitFromRemote: set main ref: %w", err)
 	}
 
-	log.Info().Str("branch", agentBranch).Msg("git store initialized from remote")
+	log.Info().Str("branch", agentBranch).Str("origin", originURL).Msg("git store initialized from remote")
 	gs := &Store{
 		repo:    repo,
 		storer:  s,

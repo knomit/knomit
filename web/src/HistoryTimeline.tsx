@@ -9,12 +9,26 @@ interface Props {
   dispatch: Dispatch<Action>;
 }
 
-function tagColor(tag: string): { color: string; bg: string } {
-  if (tag.startsWith('learn/')) return { color: '#7c9', bg: '#1a2e1a' };
-  if (tag.startsWith('update/')) return { color: '#8af', bg: '#1a1a2e' };
-  if (tag.startsWith('retract/')) return { color: '#f88', bg: '#2e1a1a' };
-  if (tag.startsWith('synthesize/') || tag.startsWith('subsume/')) return { color: '#fa0', bg: '#2e2a1a' };
-  return { color: '#888', bg: '#222' };
+const opStyles: Record<string, { color: string; bg: string; label: string }> = {
+  learn:   { color: '#7c9', bg: '#1a2e1a', label: 'learn' },
+  update:  { color: '#8af', bg: '#1a1a2e', label: 'update' },
+  retract: { color: '#f88', bg: '#2e1a1a', label: 'retract' },
+  subsume: { color: '#fa0', bg: '#2e2a1a', label: 'subsume' },
+  sync:    { color: '#888', bg: '#222',    label: 'sync' },
+};
+const defaultStyle = { color: '#555', bg: '#222', label: '' };
+
+function commitStyle(entry: HistoryEntryWithTags): { color: string; bg: string; label: string } {
+  // Prefer explicit operation field (new commits).
+  if (entry.operation && opStyles[entry.operation]) return opStyles[entry.operation];
+  // Fall back to tag prefix detection (legacy commits).
+  for (const tag of entry.tags || []) {
+    if (tag.startsWith('learn/')) return opStyles.learn;
+    if (tag.startsWith('update/')) return opStyles.update;
+    if (tag.startsWith('retract/')) return opStyles.retract;
+    if (tag.startsWith('synthesize/') || tag.startsWith('subsume/')) return opStyles.subsume;
+  }
+  return defaultStyle;
 }
 
 function relativeTime(dateStr: string): string {
@@ -128,9 +142,9 @@ export function HistoryTimeline({ state, dispatch }: Props) {
         {entries.map((entry, i) => {
           const isSelected = i === selectedIdx;
           const isHighlighted = state.historyCommit === entry.commit;
-          const hasTag = entry.tags && entry.tags.length > 0;
-          const dotSize = hasTag ? 10 : 6;
-          const dotColor = hasTag ? tagColor(entry.tags[0]).color : '#555';
+          const cs = commitStyle(entry);
+          const hasLabel = cs.label !== '';
+          const dotSize = hasLabel ? 10 : 6;
 
           return (
             <div
@@ -158,7 +172,7 @@ export function HistoryTimeline({ state, dispatch }: Props) {
                   width: dotSize,
                   height: dotSize,
                   borderRadius: '50%',
-                  background: dotColor,
+                  background: cs.color,
                   flexShrink: 0,
                   margin: '2px 0',
                 }} />
@@ -168,22 +182,17 @@ export function HistoryTimeline({ state, dispatch }: Props) {
 
               {/* Commit info */}
               <div style={{ flex: 1, minWidth: 0, paddingLeft: 8, paddingTop: 4, paddingBottom: 4 }}>
-                {/* Tag badges */}
-                {hasTag && (
+                {/* Operation badge */}
+                {hasLabel && (
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginBottom: 2 }}>
-                    {entry.tags.map(tag => {
-                      const tc = tagColor(tag);
-                      return (
-                        <span key={tag} style={{
-                          fontSize: 10,
-                          padding: '1px 6px',
-                          borderRadius: 8,
-                          color: tc.color,
-                          background: tc.bg,
-                          whiteSpace: 'nowrap',
-                        }}>{tag}</span>
-                      );
-                    })}
+                    <span style={{
+                      fontSize: 10,
+                      padding: '1px 6px',
+                      borderRadius: 8,
+                      color: cs.color,
+                      background: cs.bg,
+                      whiteSpace: 'nowrap',
+                    }}>{cs.label}</span>
                   </div>
                 )}
                 {/* Hash + time */}
