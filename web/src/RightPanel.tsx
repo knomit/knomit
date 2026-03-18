@@ -163,7 +163,7 @@ function FactSwitcher({ files, selectedPath, onSelect, focusIdx, dropdownFocusId
           <>
             <span style={{
               fontSize: 10, padding: '1px 7px', borderRadius: 8,
-              color: '#ddd', background: '#2a2a3a', fontWeight: 600,
+              color: '#ddd', background: '#3a3a4a', fontWeight: 600,
             }}>
               {currentIdx + 1}/{files.length} facts
             </span>
