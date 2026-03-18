@@ -19,14 +19,16 @@ export function LeftPanel({ state, dispatch }: Props) {
   const itemRefs = useRef<(HTMLDivElement | null)[]>([]);
   const prevPathRef = useRef(state.currentPath);
   const prevSearchRef = useRef(state.searchQuery);
+  const prevFactRef = useRef(state.selectedFact);
 
   // Load directory listing; auto-preview first item so right panel is always in sync
   // Re-fetches when headCommit changes (e.g. after sync) but preserves selection
   useEffect(() => {
     if (state.searchQuery || state.similarTo) return;
-    const isHeadChangeOnly = state.currentPath === prevPathRef.current && state.searchQuery === prevSearchRef.current;
+    const isHeadChangeOnly = state.currentPath === prevPathRef.current && state.searchQuery === prevSearchRef.current && state.selectedFact === prevFactRef.current;
     prevPathRef.current = state.currentPath;
     prevSearchRef.current = state.searchQuery;
+    prevFactRef.current = state.selectedFact;
     api.browse(state.repo, state.currentPath).then(r => {
       const c = r.children || [];
       setChildren(c);
@@ -40,7 +42,7 @@ export function LeftPanel({ state, dispatch }: Props) {
         }
       }
     }).catch(() => setChildren([]));
-  }, [state.currentPath, state.searchQuery, state.headCommit]);
+  }, [state.currentPath, state.searchQuery, state.headCommit, state.selectedFact]);
 
   // Similarity search — sends fact text through the regular search endpoint
   useEffect(() => {
@@ -161,7 +163,7 @@ export function LeftPanel({ state, dispatch }: Props) {
     return () => window.removeEventListener('keydown', handler);
   });
 
-  const pathLabel = (name: string) => name.replace(/\.md$/, '');
+  const pathLabel = (name: string) => name;
 
   if (state.leftMode === 'history') {
     return <HistoryTimeline state={state} dispatch={dispatch} />;

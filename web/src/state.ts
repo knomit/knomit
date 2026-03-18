@@ -63,6 +63,7 @@ export type Action =
   | { type: 'CONSOLE_SET_HEIGHT'; height: number }
   | { type: 'ENTER_HISTORY' }
   | { type: 'EXIT_HISTORY' }
+  | { type: 'FACT_HISTORY'; factPath: string; commit?: string }
   | { type: 'SELECT_COMMIT'; commit: string }
   | { type: 'NAV_BACK' }
   | { type: 'SET_REPO'; repo: string }
@@ -145,7 +146,16 @@ export function reducer(s: AppState, a: Action): AppState {
     case 'CONSOLE_TOGGLE': return { ...s, consoleOpen: !s.consoleOpen };
     case 'CONSOLE_SET_HEIGHT': return { ...s, consoleHeight: Math.max(80, Math.min(a.height, 600)) };
     case 'ENTER_HISTORY': return { ...s, leftMode: 'history' as LeftMode, navStack: pushNav(s), rightPanelFocused: false };
-    case 'EXIT_HISTORY': return { ...s, leftMode: 'browse' as LeftMode, historyCommit: null, historyFocusPath: null, rightPanelFocused: false };
+    case 'EXIT_HISTORY': {
+      // If currentPath is a fact (.md), restore to its parent directory and keep the fact selected
+      if (s.currentPath.endsWith('.md')) {
+        const parentDir = s.currentPath.split('/').slice(0, -1).join('/') || s.currentPath;
+        return { ...s, currentPath: parentDir, selectedFact: s.currentPath, leftMode: 'browse' as LeftMode, historyCommit: null, historyFocusPath: null, rightMode: 'fact', rightPanelFocused: false };
+      }
+      return { ...s, leftMode: 'browse' as LeftMode, historyCommit: null, historyFocusPath: null, rightPanelFocused: false };
+    }
+    case 'FACT_HISTORY':
+      return { ...s, currentPath: a.factPath, selectedFact: a.factPath, leftMode: 'history' as LeftMode, historyCommit: a.commit || null, historyFocusPath: a.factPath, navStack: pushNav(s), rightPanelFocused: false };
     case 'SELECT_COMMIT': return { ...s, historyCommit: a.commit };
     case 'OPEN_FACT': {
       const parts = a.path.split('/');

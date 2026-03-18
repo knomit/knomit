@@ -243,8 +243,7 @@ function renderFact(fact: Fact, search: (q: string) => void, dispatch?: Dispatch
                 <span
                   title={`Go to commit ${fact.commit_hash.slice(0, 7)} in history`}
                   onClick={() => {
-                    dispatch({ type: 'ENTER_HISTORY' });
-                    dispatch({ type: 'SELECT_COMMIT', commit: fact.commit_hash! });
+                    dispatch({ type: 'FACT_HISTORY', factPath: fact.path, commit: fact.commit_hash! });
                   }}
                   style={{ color: '#7c9', fontFamily: 'monospace', fontSize: 11, cursor: 'pointer', background: '#1a2e1a', padding: '1px 5px', borderRadius: 3 }}
                   onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = '#1e3820'; }}
@@ -270,7 +269,7 @@ function renderFact(fact: Fact, search: (q: string) => void, dispatch?: Dispatch
         </div>
         {dispatch ? (
           <div
-            onClick={() => { dispatch({ type: 'NAVIGATE', path: fact.path }); dispatch({ type: 'ENTER_HISTORY' }); }}
+            onClick={() => { dispatch({ type: 'FACT_HISTORY', factPath: fact.path }); }}
             style={{ fontSize: 12, color: '#556', marginTop: 2, cursor: 'pointer' }}
             onMouseEnter={e => { (e.currentTarget as HTMLElement).style.color = '#8af'; }}
             onMouseLeave={e => { (e.currentTarget as HTMLElement).style.color = '#556'; }}
@@ -542,9 +541,7 @@ export function RightPanel({ state, dispatch }: Props) {
   if (state.historyCommit && fact && !hasSwitcher) {
     if (fact.parse_error) return <FactEditor fact={fact} repo={state.repo} onSaved={setFact} />;
     const goToCommit = (commit: string) => {
-      dispatch({ type: 'NAVIGATE', path: fact.path });
-      dispatch({ type: 'ENTER_HISTORY' });
-      dispatch({ type: 'SELECT_COMMIT', commit });
+      dispatch({ type: 'FACT_HISTORY', factPath: fact.path, commit });
     };
     return renderFact(fact, search, dispatch, focusInfo, commitDetail?.date, goToCommit, handleLocalRef);
   }

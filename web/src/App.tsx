@@ -1,13 +1,172 @@
-import { useReducer, useEffect, useState } from 'react';
+import { useReducer, useEffect, useState, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { reducer, init } from './state';
+import type { Action } from './state';
 import { api } from './api';
-import type { RepoInfo } from './api';
+import type { RepoInfo, DirChild } from './api';
 import { TopBar } from './TopBar';
 import { LeftPanel } from './LeftPanel';
 import { RightPanel } from './RightPanel';
 import { Console } from './Console';
 import { OriginModal } from './OriginModal';
 import './App.css';
+
+function BreadcrumbPicker({ repo, currentPath, dispatch }: { repo: string; currentPath: string; dispatch: React.Dispatch<Action> }) {
+  const [open, setOpen] = useState(false);
+  const [children, setChildren] = useState<DirChild[]>([]);
+  const [filter, setFilter] = useState('');
+  const [highlightIdx, setHighlightIdx] = useState(0);
+  const triggerRef = useRef<HTMLSpanElement>(null);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [pos, setPos] = useState({ top: 0, left: 0 });
+
+  useEffect(() => {
+    if (!open) return;
+    api.browse(repo, currentPath).then(r => {
+      setChildren(r.children || []);
+    }).catch(() => setChildren([]));
+  }, [open, repo, currentPath]);
+
+  // Focus input when dropdown opens
+  useEffect(() => {
+    if (open) setTimeout(() => inputRef.current?.focus(), 0);
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: MouseEvent) => {
+      if (triggerRef.current?.contains(e.target as Node)) return;
+      if (dropdownRef.current?.contains(e.target as Node)) return;
+      setOpen(false);
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [open]);
+
+  const filtered = children.filter(c => {
+    const name = c.name;
+    return name.toLowerCase().includes(filter.toLowerCase());
+  });
+
+  // Sort: dirs first, then alphabetical
+  filtered.sort((a, b) => {
+    if (a.is_dir !== b.is_dir) return a.is_dir ? -1 : 1;
+    return a.name.localeCompare(b.name);
+  });
+
+  const pick = (c: DirChild) => {
+    const fullPath = currentPath ? `${currentPath}/${c.name}` : c.name;
+    if (c.is_dir) {
+      dispatch({ type: 'NAVIGATE', path: fullPath });
+    } else {
+      dispatch({ type: 'SELECT_FACT', path: fullPath });
+    }
+    close();
+  };
+
+  const close = () => { setOpen(false); setFilter(''); setHighlightIdx(0); };
+
+  const handleOpen = () => {
+    if (!open && triggerRef.current) {
+      const rect = triggerRef.current.getBoundingClientRect();
+      setPos({ top: rect.bottom + 4, left: rect.left });
+    }
+    if (open) close(); else setOpen(true);
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'ArrowDown') { e.preventDefault(); setHighlightIdx(i => Math.min(i + 1, filtered.length - 1)); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); setHighlightIdx(i => Math.max(i - 1, 0)); }
+    else if (e.key === 'Enter' && filtered.length > 0) { e.preventDefault(); pick(filtered[highlightIdx] || filtered[0]); }
+    else if (e.key === 'Escape') { e.preventDefault(); close(); }
+  };
+
+  return (
+    <>
+      <span style={{ display: 'inline-flex', alignItems: 'center' }}>
+        <span style={{ color: '#444', fontSize: 12, flexShrink: 0, margin: '0 2px' }}>/</span>
+        <span
+          ref={triggerRef}
+          onClick={handleOpen}
+          style={{
+            color: '#555',
+            fontSize: 12,
+            cursor: 'pointer',
+            padding: '1px 4px',
+            borderRadius: 3,
+            fontFamily: 'monospace',
+          }}
+          onMouseEnter={e => (e.currentTarget.style.color = '#eee')}
+          onMouseLeave={e => (e.currentTarget.style.color = '#555')}
+        >_</span>
+      </span>
+      {open && createPortal(
+        <div ref={dropdownRef} style={{
+          position: 'fixed',
+          top: pos.top,
+          left: pos.left,
+          background: '#1a1a1a',
+          border: '1px solid #333',
+          borderRadius: 4,
+          minWidth: 160,
+          maxHeight: 240,
+          display: 'flex',
+          flexDirection: 'column',
+          zIndex: 10000,
+          boxShadow: '0 4px 12px rgba(0,0,0,0.5)',
+        }}>
+          <input
+            ref={inputRef}
+            value={filter}
+            onChange={e => { setFilter(e.target.value); setHighlightIdx(0); }}
+            onKeyDown={handleKeyDown}
+            placeholder="type to filter…"
+            style={{
+              background: '#222',
+              border: 'none',
+              borderBottom: '1px solid #333',
+              color: '#ccc',
+              fontSize: 12,
+              padding: '5px 8px',
+              outline: 'none',
+              fontFamily: 'monospace',
+            }}
+          />
+          <div style={{ overflowY: 'auto', maxHeight: 200 }}>
+            {filtered.length === 0 && (
+              <div style={{ color: '#555', fontSize: 12, padding: '6px 10px' }}>no matches</div>
+            )}
+            {filtered.map((c, i) => (
+              <div
+                key={c.name}
+                onClick={() => pick(c)}
+                style={{
+                  color: i === highlightIdx ? '#eee' : '#aaa',
+                  background: i === highlightIdx ? '#2a2a3a' : 'transparent',
+                  fontSize: 12,
+                  padding: '4px 10px',
+                  cursor: 'pointer',
+                  whiteSpace: 'nowrap',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 4,
+                }}
+                onMouseEnter={() => setHighlightIdx(i)}
+              >
+                <span style={{ color: c.is_dir ? '#6a9fb5' : '#888', fontSize: 10, width: 12, textAlign: 'center', flexShrink: 0 }}>
+                  {c.is_dir ? '▸' : '·'}
+                </span>
+                {c.is_dir ? c.name + '/' : c.name}
+              </div>
+            ))}
+          </div>
+        </div>,
+        document.body
+      )}
+    </>
+  );
+}
 
 export default function App() {
   const [state, dispatch] = useReducer(reducer, init);
@@ -60,11 +219,18 @@ export default function App() {
   }, [state.repo]);
 
   // Build breadcrumb segments from currentPath
-  const pathParts = state.currentPath.split('/').filter(Boolean);
+  // When currentPath points to a fact (.md file), treat the parent as the dir breadcrumb
+  const isFactPath = state.currentPath.endsWith('.md');
+  const dirPath = isFactPath ? state.currentPath.split('/').slice(0, -1).join('/') : state.currentPath;
+  const pathParts = dirPath.split('/').filter(Boolean);
   const breadcrumbs = pathParts.map((seg, i) => ({
     label: seg,
     path: pathParts.slice(0, i + 1).join('/'),
   }));
+  const showFact = state.selectedFact || isFactPath;
+  const factLabel = state.selectedFact
+    ? state.selectedFact.split('/').pop()
+    : state.currentPath.split('/').pop();
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', width: '100vw', background: '#141414', color: '#eee', fontFamily: 'system-ui, sans-serif', overflow: 'hidden' }}>
@@ -80,7 +246,7 @@ export default function App() {
               <span
                 onClick={() => dispatch({ type: 'NAVIGATE', path: crumb.path })}
                 style={{
-                  color: i === breadcrumbs.length - 1 ? '#ccc' : '#666',
+                  color: i === breadcrumbs.length - 1 && !showFact ? '#ccc' : '#666',
                   fontSize: 12,
                   cursor: 'pointer',
                   whiteSpace: 'nowrap',
@@ -90,12 +256,30 @@ export default function App() {
                   borderRadius: 3,
                 }}
                 onMouseEnter={e => (e.currentTarget.style.color = '#eee')}
-                onMouseLeave={e => (e.currentTarget.style.color = i === breadcrumbs.length - 1 ? '#ccc' : '#666')}
+                onMouseLeave={e => (e.currentTarget.style.color = i === breadcrumbs.length - 1 && !showFact ? '#ccc' : '#666')}
               >
                 {crumb.label}
               </span>
             </span>
           ))}
+          {showFact ? (
+            <span style={{ display: 'flex', alignItems: 'center', gap: 2, minWidth: 0, overflow: 'hidden' }}>
+              <span style={{ color: '#444', fontSize: 12, flexShrink: 0 }}>/</span>
+              <span style={{
+                color: '#ccc',
+                fontSize: 12,
+                whiteSpace: 'nowrap',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                padding: '1px 4px',
+                borderRadius: 3,
+              }}>
+                {factLabel}
+              </span>
+            </span>
+          ) : (
+            <BreadcrumbPicker repo={state.repo} currentPath={state.currentPath} dispatch={dispatch} />
+          )}
         </div>
       </div>
 
