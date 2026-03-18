@@ -147,20 +147,6 @@ func (mr *MockGitStoreMockRecorder) ReadFile(path any) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ReadFile", reflect.TypeOf((*MockGitStore)(nil).ReadFile), path)
 }
 
-// Tag mocks base method.
-func (m *MockGitStore) Tag(name string) error {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Tag", name)
-	ret0, _ := ret[0].(error)
-	return ret0
-}
-
-// Tag indicates an expected call of Tag.
-func (mr *MockGitStoreMockRecorder) Tag(name any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Tag", reflect.TypeOf((*MockGitStore)(nil).Tag), name)
-}
-
 // WriteFile mocks base method.
 func (m *MockGitStore) WriteFile(path, content, message, operation string) (string, string, error) {
 	m.ctrl.T.Helper()

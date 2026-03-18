@@ -237,35 +237,6 @@ func (mr *MockGitStoreMockRecorder) ReadFileWithHash(path any) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ReadFileWithHash", reflect.TypeOf((*MockGitStore)(nil).ReadFileWithHash), path)
 }
 
-// Tag mocks base method.
-func (m *MockGitStore) Tag(name string) error {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Tag", name)
-	ret0, _ := ret[0].(error)
-	return ret0
-}
-
-// Tag indicates an expected call of Tag.
-func (mr *MockGitStoreMockRecorder) Tag(name any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Tag", reflect.TypeOf((*MockGitStore)(nil).Tag), name)
-}
-
-// TagsContaining mocks base method.
-func (m *MockGitStore) TagsContaining(hash string) ([]string, error) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "TagsContaining", hash)
-	ret0, _ := ret[0].([]string)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
-}
-
-// TagsContaining indicates an expected call of TagsContaining.
-func (mr *MockGitStoreMockRecorder) TagsContaining(hash any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "TagsContaining", reflect.TypeOf((*MockGitStore)(nil).TagsContaining), hash)
-}
-
 // WalkChangedFiles mocks base method.
 func (m *MockGitStore) WalkChangedFiles(fromCommit, prefix string, seen map[string]bool, limit int) ([]FileRecency, string, error) {
 	m.ctrl.T.Helper()

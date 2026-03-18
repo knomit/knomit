@@ -57,8 +57,6 @@ type GitStore interface {
 	DiffFiles(fromCommit string) (added, modified, deleted []string, err error)
 	HeadCommit() (string, error)
 	WalkChangedFiles(fromCommit, prefix string, seen map[string]bool, limit int) ([]FileRecency, string, error)
-	Tag(name string) error
-	TagsContaining(hash string) ([]string, error)
 	Branch() string
 }
 

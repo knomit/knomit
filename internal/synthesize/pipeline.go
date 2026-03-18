@@ -16,7 +16,6 @@ type GitStore interface {
 	BatchWrite(files map[string]string, message, operation string) (commitHash string, blobHashes map[string]string, err error)
 	DeleteFile(path, message, operation string) (commitHash string, err error)
 	ListAll() ([]string, error)
-	Tag(name string) error
 	Branch() string
 	DiffFiles(fromCommit string) (added, modified, deleted []string, err error)
 	HeadCommit() (string, error)
