@@ -123,9 +123,10 @@ const gitSchema = `
 CREATE TABLE IF NOT EXISTS objects (hash TEXT NOT NULL, type INTEGER NOT NULL, size INTEGER NOT NULL, data BLOB NOT NULL, PRIMARY KEY (hash, type));
 CREATE TABLE IF NOT EXISTS refs (name TEXT PRIMARY KEY, target TEXT NOT NULL, is_symbolic INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value BLOB NOT NULL);
-CREATE TABLE IF NOT EXISTS commit_log (commit_hash TEXT NOT NULL, path TEXT NOT NULL, committed_at INTEGER NOT NULL, message TEXT NOT NULL, PRIMARY KEY (commit_hash, path));
+CREATE TABLE IF NOT EXISTS commit_log (commit_hash TEXT NOT NULL, path TEXT NOT NULL, committed_at INTEGER NOT NULL, message TEXT NOT NULL, operation TEXT NOT NULL DEFAULT '', author_email TEXT NOT NULL DEFAULT '', PRIMARY KEY (commit_hash, path));
 CREATE INDEX IF NOT EXISTS commit_log_path_time ON commit_log (path, committed_at DESC);
 CREATE INDEX IF NOT EXISTS commit_log_time ON commit_log (committed_at DESC);
+CREATE INDEX IF NOT EXISTS commit_log_operation ON commit_log (operation, committed_at DESC);
 `
 
 // InitWithStorer creates a new knomit git store using an externally provided storer.

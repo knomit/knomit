@@ -205,6 +205,32 @@ func TestAppendCommitLogDelete(t *testing.T) {
 	}
 }
 
+// TestCommitLogOperation verifies that operation and author_email are stored in commit_log.
+func TestCommitLogOperation(t *testing.T) {
+	store, err := Init(":memory:", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	if _, _, err := store.WriteFile("kb/a.md", "# A\n", "add a", "learn"); err != nil {
+		t.Fatal(err)
+	}
+
+	var op, email string
+	err = store.db.QueryRow(`SELECT operation, author_email FROM commit_log WHERE path = 'kb/a.md'`).Scan(&op, &email)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if op != "learn" {
+		t.Errorf("operation = %q, want %q", op, "learn")
+	}
+	wantEmail := store.AgentID() + "+learn@agents.knomit.io"
+	if email != wantEmail {
+		t.Errorf("author_email = %q, want %q", email, wantEmail)
+	}
+}
+
 // TestActivityFallbackNoTable verifies that Activity and WalkChangedFiles fall
 // back to go-git correctly when the commit_log table is absent.
 func TestActivityFallbackNoTable(t *testing.T) {

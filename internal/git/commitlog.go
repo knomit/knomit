@@ -19,6 +19,20 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+// parseOperation extracts the operation from an author email using the +tag subaddress convention.
+// "agent+learn@agents.knomit.io" → "learn", "bob+learn@gmail.com" → "learn", "bob@gmail.com" → "".
+func parseOperation(email string) string {
+	plusIdx := strings.IndexByte(email, '+')
+	if plusIdx < 0 {
+		return ""
+	}
+	atIdx := strings.IndexByte(email, '@')
+	if atIdx < 0 || atIdx < plusIdx {
+		return ""
+	}
+	return email[plusIdx+1 : atIdx]
+}
+
 // firstLine returns the first line of s.
 func firstLine(s string) string {
 	if idx := strings.IndexByte(s, '\n'); idx >= 0 {
@@ -92,10 +106,12 @@ func (s *Store) populateCommitLog() error {
 	defer logIter.Close()
 
 	type entry struct {
-		hash  string
-		ts    int64
-		msg   string
-		paths []string
+		hash        string
+		ts          int64
+		msg         string
+		paths       []string
+		authorEmail string
+		operation   string
 	}
 	var toInsert []entry
 
@@ -113,10 +129,12 @@ func (s *Store) populateCommitLog() error {
 			return err
 		}
 		toInsert = append(toInsert, entry{
-			hash:  c.Hash.String(),
-			ts:    c.Committer.When.Unix(),
-			msg:   firstLine(c.Message),
-			paths: files,
+			hash:        c.Hash.String(),
+			ts:          c.Committer.When.Unix(),
+			msg:         firstLine(c.Message),
+			paths:       files,
+			authorEmail: c.Author.Email,
+			operation:   parseOperation(c.Author.Email),
 		})
 		return nil
 	})
@@ -140,7 +158,7 @@ func (s *Store) populateCommitLog() error {
 	}
 	defer tx.Rollback()
 
-	stmt, err := tx.Prepare(`INSERT OR IGNORE INTO commit_log (commit_hash, path, committed_at, message) VALUES (?, ?, ?, ?)`)
+	stmt, err := tx.Prepare(`INSERT OR IGNORE INTO commit_log (commit_hash, path, committed_at, message, operation, author_email) VALUES (?, ?, ?, ?, ?, ?)`)
 	if err != nil {
 		return fmt.Errorf("populateCommitLog: prepare: %w", err)
 	}
@@ -148,7 +166,7 @@ func (s *Store) populateCommitLog() error {
 
 	for _, e := range toInsert {
 		for _, path := range e.paths {
-			if _, err := stmt.Exec(e.hash, path, e.ts, e.msg); err != nil {
+			if _, err := stmt.Exec(e.hash, path, e.ts, e.msg, e.operation, e.authorEmail); err != nil {
 				return fmt.Errorf("populateCommitLog: insert: %w", err)
 			}
 		}
@@ -179,12 +197,14 @@ func (s *Store) appendCommitLog(hash plumbing.Hash) {
 		log.Warn().Err(err).Str("hash", hash.String()[:8]).Msg("commit_log: changed files")
 		return
 	}
+	authorEmail := c.Author.Email
+	op := parseOperation(authorEmail)
 	ts := c.Committer.When.Unix()
 	msg := firstLine(c.Message)
 	for _, path := range files {
 		if _, err := s.db.Exec(
-			`INSERT OR IGNORE INTO commit_log (commit_hash, path, committed_at, message) VALUES (?, ?, ?, ?)`,
-			hash.String(), path, ts, msg,
+			`INSERT OR IGNORE INTO commit_log (commit_hash, path, committed_at, message, operation, author_email) VALUES (?, ?, ?, ?, ?, ?)`,
+			hash.String(), path, ts, msg, op, authorEmail,
 		); err != nil {
 			log.Warn().Err(err).Str("path", path).Msg("commit_log: insert")
 		}
