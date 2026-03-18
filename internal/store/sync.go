@@ -82,8 +82,7 @@ func (idx *Index) indexFile(git GitReader, path, commitHash string) error {
 
 	rec, err := parseFact(path, content, commitHash)
 	if err != nil {
-		log.Debug().Str("path", path).Err(err).Msg("skipping non-fact file")
-		return nil
+		return nil // not a fact file (e.g. kb.md manifest, ontology.yaml)
 	}
 	rec.BlobHash = blobHash
 
