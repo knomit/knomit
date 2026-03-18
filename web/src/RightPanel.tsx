@@ -148,7 +148,7 @@ function FactSwitcher({ files, selectedPath, onSelect, focusIdx, dropdownFocusId
         onClick={onToggle}
         style={{
           display: 'flex', alignItems: 'center', gap: 8, padding: '7px 10px',
-          background: triggerFocused ? '#2a2a3a' : '#1a1a2a',
+          background: triggerFocused ? '#222233' : '#161622',
           border: '1px solid transparent',
           borderRadius: open ? '6px 6px 0 0' : 6,
           cursor: hasMultiple ? 'pointer' : 'default',
