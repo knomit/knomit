@@ -68,7 +68,7 @@ func TestPruneStep(t *testing.T) {
 	idx.EXPECT().Upsert(gomock.Any()).Return(nil)
 
 	// Tags per operation
-	gs.EXPECT().Tag(gomock.Any()).Return(nil).AnyTimes()
+
 
 	recipe := Recipe{Name: "test-recipe", Steps: []RecipeStep{{Mode: "prune"}}}
 
@@ -161,7 +161,7 @@ func TestPruneStepWithMerge(t *testing.T) {
 	idx.EXPECT().Delete("kb/test/b.md").Return(nil)
 
 	// Tags per operation
-	gs.EXPECT().Tag(gomock.Any()).Return(nil).AnyTimes()
+
 
 	recipe := Recipe{Name: "merge-recipe", Steps: []RecipeStep{{Mode: "prune"}}}
 
@@ -383,7 +383,7 @@ func TestPruneStepClustersBeforeLLM(t *testing.T) {
 	).AnyTimes()
 
 	// Tags per operation (none expected for all-keep results)
-	gs.EXPECT().Tag(gomock.Any()).Return(nil).AnyTimes()
+
 
 	recipe := Recipe{Name: "cluster-test", Steps: []RecipeStep{{Mode: "prune"}}}
 
@@ -479,7 +479,7 @@ func TestPruneStepWithDedup(t *testing.T) {
 	)
 
 	// Tags per operation
-	gs.EXPECT().Tag(gomock.Any()).Return(nil).AnyTimes()
+
 
 	recipe := Recipe{Name: "dedup-recipe", Steps: []RecipeStep{{Mode: "prune"}}}
 
@@ -536,7 +536,7 @@ func TestPruneStep_RetryOnPassive(t *testing.T) {
 
 	gs.EXPECT().DeleteFile("kb/test/bar.md", gomock.Any(), gomock.Any()).Return("deadbeef", nil)
 	idx.EXPECT().Delete("kb/test/bar.md").Return(nil)
-	gs.EXPECT().Tag(gomock.Any()).Return(nil).AnyTimes()
+
 
 	profile := Profile{Name: "small", ForceJSON: false, RetryOnPassive: true, MaxChunkBytes: 100_000}
 	step := RecipeStep{Mode: "prune"}

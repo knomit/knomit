@@ -51,7 +51,7 @@ func TestRunPruneOnly(t *testing.T) {
 	idx.EXPECT().Delete("kb/test/forget.md").Return(nil)
 
 	// Tag per operation (retract for the deleted fact)
-	gs.EXPECT().Tag(gomock.Any()).Return(nil).AnyTimes()
+
 
 	recipe := Recipe{
 		Name:  "smoke-prune",
@@ -191,7 +191,7 @@ func TestRunDistillWithFacts(t *testing.T) {
 	idx.EXPECT().Delete("kb/test/a.md").Return(nil)
 
 	// Tags per operation (subsume for new fact, retract for deleted)
-	gs.EXPECT().Tag(gomock.Any()).Return(nil).AnyTimes()
+
 
 	recipe := Recipe{
 		Name:  "distill-with-facts",
@@ -262,7 +262,7 @@ func TestRunDistillRetryOnPassive(t *testing.T) {
 	idx.EXPECT().Delete("kb/test/a.md").Return(nil)
 
 	// Tags per operation
-	gs.EXPECT().Tag(gomock.Any()).Return(nil).AnyTimes()
+
 
 	recipe := Recipe{
 		Name:  "distill-retry",

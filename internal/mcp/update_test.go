@@ -29,7 +29,6 @@ func TestUpdateMergesFields(t *testing.T) {
 		writtenContent = content
 		return "abc123def456", "blob_foo", nil
 	})
-	gs.EXPECT().Tag(gomock.Any()).Return(nil)
 
 	handler := UpdateHandler(gs, "kb")
 
@@ -84,9 +83,6 @@ func TestUpdateMergesFields(t *testing.T) {
 	if _, ok := resp["commit"]; !ok {
 		t.Fatal("missing commit in response")
 	}
-	if _, ok := resp["moment_tag"]; !ok {
-		t.Fatal("missing moment_tag in response")
-	}
 }
 
 func TestUpdateFileNotFound(t *testing.T) {
@@ -135,7 +131,6 @@ func TestUpdateRefsAppended(t *testing.T) {
 		writtenContent = content
 		return "abc123def456", "blob_refs", nil
 	})
-	gs.EXPECT().Tag(gomock.Any()).Return(nil)
 
 	handler := UpdateHandler(gs, "kb")
 

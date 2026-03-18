@@ -45,8 +45,6 @@ func ApplyPruneDecisions(
 	// Track deleted paths to avoid double-deletion when a path appears in
 	// both "retract" decisions and merge source lists.
 	deletedPaths := make(map[string]bool)
-	tagCounter := 0
-
 	log.Info().Int("decisions", len(decisions)).Int("merges", len(merges)).Msg("prune: applying results")
 
 	// Apply decisions.
@@ -64,7 +62,7 @@ func ApplyPruneDecisions(
 			if err := idx.Delete(d.Path); err != nil {
 				onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("index delete %s: %v", d.Path, err)})
 			}
-			tagOp(gs, "retract", recipeName, &tagCounter)
+		
 			onProgress(ProgressEvent{Phase: "detail-retract", Message: "retract " + d.Path})
 			stats.Pruned++
 
@@ -101,13 +99,13 @@ func ApplyPruneDecisions(
 			}); err != nil {
 				onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("index upsert %s: %v", d.Path, err)})
 			}
-			tagOp(gs, "update", recipeName, &tagCounter)
+		
 			onProgress(ProgressEvent{Phase: "detail-update", Message: fmt.Sprintf("update %.2f %s", d.Confidence, d.Path)})
 			stats.Updated++
 		}
 	}
 
-	// Apply merges: winner gets update tag, losers get retract tag.
+	// Apply merges.
 	for _, m := range merges {
 		mf := m.Merged
 		merged := mcp.Fact{
@@ -143,7 +141,7 @@ func ApplyPruneDecisions(
 		if err := idx.GraphAddDerivedFrom(mf.Path, m.Paths); err != nil {
 			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("derived_from %s: %v", mf.Path, err)})
 		}
-		tagOp(gs, "update", recipeName, &tagCounter)
+	
 
 		// Delete source facts (losers get retract tag).
 		for _, src := range m.Paths {
@@ -157,7 +155,7 @@ func ApplyPruneDecisions(
 			}
 			_ = idx.Delete(src)
 			deletedPaths[src] = true
-			tagOp(gs, "retract", recipeName, &tagCounter)
+		
 		}
 		onProgress(ProgressEvent{Phase: "detail-merge", Message: "merge " + mf.Path})
 		stats.Merged++
@@ -176,7 +174,6 @@ func ApplyDistillDecisions(
 	onProgress func(ProgressEvent),
 ) (*ReviewStats, error) {
 	stats := &ReviewStats{}
-	tagCounter := 0
 
 	log.Info().Int("synthesized", len(synthesized)).Int("forgotten", len(retract)).Msg("distill: committing results")
 
@@ -219,7 +216,7 @@ func ApplyDistillDecisions(
 				onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("derived_from %s: %v", df.Path, err)})
 			}
 		}
-		tagOp(gs, "subsume", recipeName, &tagCounter)
+	
 		onProgress(ProgressEvent{Phase: "detail-learn", Message: "learn " + df.Path})
 		stats.Synthesized++
 	}
@@ -232,7 +229,7 @@ func ApplyDistillDecisions(
 			continue
 		}
 		_ = idx.Delete(path)
-		tagOp(gs, "retract", recipeName, &tagCounter)
+	
 		onProgress(ProgressEvent{Phase: "detail-distill-retract", Message: "retract " + path})
 		stats.Pruned++
 	}

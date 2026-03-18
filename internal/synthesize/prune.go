@@ -162,13 +162,6 @@ func executePruneStep(ctx context.Context, gs GitStore, idx SearchIndex, embedde
 	return applyPruneResults(gs, idx, recipe, allDecisions, allMerges, onProgress)
 }
 
-// tagOp creates a tag for a synthesize operation, using a counter to avoid collisions.
-func tagOp(gs GitStore, prefix, recipeName string, counter *int) {
-	*counter++
-	tagName := fmt.Sprintf("%s/synthesize-%s-%d", prefix, recipeName, *counter)
-	_ = gs.Tag(tagName)
-}
-
 // applyPruneResults writes keep/retract/update decisions and merges to git+index.
 func applyPruneResults(gs GitStore, idx SearchIndex, recipe Recipe, allDecisions []PruneDecision, allMerges []MergeEntry, onProgress func(ProgressEvent)) error {
 	_, err := ApplyPruneDecisions(gs, idx, allDecisions, allMerges, recipe.Name, onProgress)

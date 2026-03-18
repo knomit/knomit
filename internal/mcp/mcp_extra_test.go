@@ -306,7 +306,6 @@ func TestUpdateTitleField(t *testing.T) {
 		writtenContent = content
 		return "abc123", "blob_title", nil
 	})
-	gs.EXPECT().Tag(gomock.Any()).Return(nil)
 
 	handler := UpdateHandler(gs, "kb")
 
@@ -358,7 +357,6 @@ func TestUpdateDomainAndEntities(t *testing.T) {
 		writtenContent = content
 		return "abc123", "blob_de", nil
 	})
-	gs.EXPECT().Tag(gomock.Any()).Return(nil)
 
 	handler := UpdateHandler(gs, "kb")
 
@@ -466,10 +464,6 @@ func TestLearnTagCollision(t *testing.T) {
 		}
 		return "abc123", blobHashes, nil
 	})
-	// First Tag call fails (collision), second succeeds.
-	gs.EXPECT().Tag("learn/collision").Return(fmt.Errorf("tag exists"))
-	gs.EXPECT().Tag(gomock.Any()).Return(nil)
-
 	handler := LearnHandler(gs, idx, "kb", fact.DefaultOntology())
 
 	req := mcpgo.CallToolRequest{}
@@ -512,7 +506,6 @@ func TestLearnNilDomainEntitiesRefs(t *testing.T) {
 		}
 		return "abc123", blobHashes, nil
 	})
-	gs.EXPECT().Tag(gomock.Any()).Return(nil)
 
 	handler := LearnHandler(gs, idx, "kb", fact.DefaultOntology())
 

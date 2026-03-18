@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"time"
 
 	factpkg "knomit/internal/fact"
 
@@ -21,7 +20,7 @@ func updateTool() mcpgo.Tool {
 		),
 		mcpgo.WithString("moment_name",
 			mcpgo.Required(),
-			mcpgo.Description("A short label for this update moment (used as a git tag)."),
+			mcpgo.Description("A short label for this update moment."),
 		),
 		mcpgo.WithObject("updates",
 			mcpgo.Required(),
@@ -138,19 +137,8 @@ func UpdateHandler(gs GitStore, ontologyRoot string) func(context.Context, mcpgo
 			return mcpgo.NewToolResultError(fmt.Sprintf("write error: %v", err)), nil
 		}
 
-		// 8. Tag.
-		sanitized := sanitizeMomentName(momentName)
-		tagName := "update/" + sanitized
-		if err := gs.Tag(tagName); err != nil {
-			tagName = fmt.Sprintf("update/%s-%d", sanitized, time.Now().Unix())
-			if err2 := gs.Tag(tagName); err2 != nil {
-				return mcpgo.NewToolResultError(fmt.Sprintf("tag error: %v", err2)), nil
-			}
-		}
-
 		result := map[string]interface{}{
-			"commit":     hash,
-			"moment_tag": tagName,
+			"commit": hash,
 		}
 		out, err := json.Marshal(result)
 		if err != nil {

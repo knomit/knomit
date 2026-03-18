@@ -207,7 +207,7 @@ func TestContinueSession_PruneResponse(t *testing.T) {
 	// ApplyPruneDecisions: retract two.md.
 	gs.EXPECT().DeleteFile("kb/go/two.md", gomock.Any(), gomock.Any()).Return("c1", nil)
 	idx.EXPECT().Delete("kb/go/two.md").Return(nil)
-	gs.EXPECT().Tag(gomock.Any()).Return(nil).AnyTimes()
+
 
 	ri.EXPECT().SetWorkItemResponse(int64(1), pruneResp).Return(nil)
 
@@ -377,7 +377,7 @@ func TestContinueSession_DistillResponse(t *testing.T) {
 	gs.EXPECT().WriteFile(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return("c1", "b1", nil)
 	idx.EXPECT().Upsert(gomock.Any()).Return(nil)
 	idx.EXPECT().GraphAddDerivedFrom(gomock.Any(), gomock.Any()).Return(nil)
-	gs.EXPECT().Tag(gomock.Any()).Return(nil).AnyTimes()
+
 	gs.EXPECT().DeleteFile("kb/go/one.md", gomock.Any(), gomock.Any()).Return("c2", nil)
 	idx.EXPECT().Delete("kb/go/one.md").Return(nil)
 

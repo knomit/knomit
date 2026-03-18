@@ -15,7 +15,7 @@ func TestApplyPruneDecisions_Retract(t *testing.T) {
 
 	gs.EXPECT().DeleteFile("kb/test/old.md", gomock.Any(), gomock.Any()).Return("c1", nil)
 	idx.EXPECT().Delete("kb/test/old.md").Return(nil)
-	gs.EXPECT().Tag(gomock.Any()).Return(nil).AnyTimes()
+
 
 	decisions := []PruneDecision{
 		{Path: "kb/test/old.md", Action: "retract"},
@@ -49,7 +49,7 @@ func TestApplyPruneDecisions_Update(t *testing.T) {
 		}
 		return nil
 	})
-	gs.EXPECT().Tag(gomock.Any()).Return(nil).AnyTimes()
+
 
 	decisions := []PruneDecision{
 		{Path: "kb/test/upd.md", Action: "update", Confidence: 0.5},
@@ -100,7 +100,7 @@ func TestApplyPruneDecisions_Merge(t *testing.T) {
 	idx.EXPECT().Delete("kb/test/a.md").Return(nil)
 	gs.EXPECT().DeleteFile("kb/test/b.md", gomock.Any(), gomock.Any()).Return("c5", nil)
 	idx.EXPECT().Delete("kb/test/b.md").Return(nil)
-	gs.EXPECT().Tag(gomock.Any()).Return(nil).AnyTimes()
+
 
 	merges := []MergeEntry{
 		{
@@ -142,7 +142,7 @@ func TestApplyPruneDecisions_NoDoubleDelete(t *testing.T) {
 	gs.EXPECT().WriteFile("kb/test/merged.md", gomock.Any(), gomock.Any(), gomock.Any()).Return("c2", "b2", nil)
 	idx.EXPECT().Upsert(gomock.Any()).Return(nil)
 	idx.EXPECT().GraphAddDerivedFrom(gomock.Any(), gomock.Any()).Return(nil)
-	gs.EXPECT().Tag(gomock.Any()).Return(nil).AnyTimes()
+
 
 	decisions := []PruneDecision{
 		{Path: "kb/test/a.md", Action: "retract"},
@@ -191,7 +191,7 @@ func TestApplyDistillDecisions_SynthesizeAndRetract(t *testing.T) {
 		return nil
 	})
 	idx.EXPECT().GraphAddDerivedFrom(gomock.Any(), []string{"kb/test/src1.md", "kb/test/src2.md"}).Return(nil)
-	gs.EXPECT().Tag(gomock.Any()).Return(nil).AnyTimes()
+
 
 	// Retract.
 	gs.EXPECT().DeleteFile("kb/test/old.md", gomock.Any(), gomock.Any()).Return("c2", nil)
@@ -235,7 +235,7 @@ func TestApplyDistillDecisions_NoRefs(t *testing.T) {
 	gs.EXPECT().WriteFile(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return("c1", "b1", nil)
 	idx.EXPECT().Upsert(gomock.Any()).Return(nil)
 	// No GraphAddDerivedFrom expectation.
-	gs.EXPECT().Tag(gomock.Any()).Return(nil).AnyTimes()
+
 
 	synthesized := []distillFact{
 		{

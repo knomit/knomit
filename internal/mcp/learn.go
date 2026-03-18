@@ -4,9 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"regexp"
 	"strings"
-	"time"
 
 	"github.com/google/uuid"
 
@@ -58,13 +56,6 @@ type learnFactInput struct {
 	Sources    int      `json:"sources"`
 	Entities   []string `json:"entities"`
 	Refs       []string `json:"refs"`
-}
-
-// sanitizeMomentName replaces characters not in [a-zA-Z0-9._/-] with '-'.
-var nonSafeRe = regexp.MustCompile(`[^a-zA-Z0-9._/\-]`)
-
-func sanitizeMomentName(name string) string {
-	return nonSafeRe.ReplaceAllString(name, "-")
 }
 
 // unionStrings returns the deduplicated union of two string slices, preserving order.
@@ -272,18 +263,7 @@ func LearnHandler(gs GitStore, idx SearchIndex, ontologyRoot string, ontology *f
 			return mcpgo.NewToolResultError(fmt.Sprintf("write error: %v", err)), nil
 		}
 
-		// 5. Tag.
-		sanitized := sanitizeMomentName(momentName)
-		tagName := "learn/" + sanitized
-		if err := gs.Tag(tagName); err != nil {
-			// Tag already exists — append unix seconds.
-			tagName = fmt.Sprintf("learn/%s-%d", sanitized, time.Now().Unix())
-			if err2 := gs.Tag(tagName); err2 != nil {
-				return mcpgo.NewToolResultError(fmt.Sprintf("tag error: %v", err2)), nil
-			}
-		}
-
-		// 8. Build response.
+		// 5. Build response.
 		type commitEntry struct {
 			File string `json:"file"`
 			Hash string `json:"hash"`
@@ -294,8 +274,7 @@ func LearnHandler(gs GitStore, idx SearchIndex, ontologyRoot string, ontology *f
 		}
 
 		result := map[string]interface{}{
-			"moment_tag": tagName,
-			"commits":    commits,
+			"commits": commits,
 		}
 		out, err := json.Marshal(result)
 		if err != nil {
