@@ -211,7 +211,7 @@ function renderFact(fact: Fact, search: (q: string) => void, dispatch?: Dispatch
       {/* Header */}
       <div style={{ marginBottom: 20 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-          <div style={{ fontSize: 18, fontWeight: 600, color: '#eee', letterSpacing: '-0.3px' }}>
+          <div style={{ fontSize: 18, fontWeight: 600, color: '#eee', letterSpacing: '-0.3px', flex: 1, minWidth: 0 }}>
             {fact.title || fact.path}
           </div>
           {historyDate && (
