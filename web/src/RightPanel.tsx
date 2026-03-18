@@ -140,6 +140,7 @@ function FactSwitcher({ files, selectedPath, onSelect, focusIdx, dropdownFocusId
   });
 
   const triggerFocused = focusIdx === 0;
+  const hasMultiple = files.length > 1;
 
   return (
     <div style={{ margin: '10px 16px 12px' }}>
@@ -148,23 +149,31 @@ function FactSwitcher({ files, selectedPath, onSelect, focusIdx, dropdownFocusId
         style={{
           display: 'flex', alignItems: 'center', gap: 8, padding: '7px 10px',
           background: triggerFocused ? '#2a2a3a' : '#1a1a2a',
-          border: '1px solid #2a2a3a',
+          border: hasMultiple ? '1px solid #3a3a4a' : '1px solid #2a2a3a',
           borderRadius: open ? '6px 6px 0 0' : 6,
-          cursor: 'pointer', userSelect: 'none' as const,
+          cursor: hasMultiple ? 'pointer' : 'default',
+          userSelect: 'none' as const,
         }}
       >
         {current && <span style={actionStyle(current.action)}>{current.action[0].toUpperCase()}</span>}
         <span style={{ flex: 1, fontSize: 12, color: '#ddd', fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {current ? current.path.replace(/\.md$/, '') : '—'}
         </span>
-        <span style={{ fontSize: 11, color: '#555', flexShrink: 0 }}>
-          {currentIdx + 1} / {files.length}
-        </span>
-        <span style={{ fontSize: 11, color: '#555', flexShrink: 0 }}>{open ? '▴' : '▾'}</span>
+        {hasMultiple && (
+          <>
+            <span style={{
+              fontSize: 10, padding: '1px 7px', borderRadius: 8,
+              color: '#ddd', background: '#3a3a5a', fontWeight: 600,
+            }}>
+              {files.length} files
+            </span>
+            <span style={{ fontSize: 11, color: '#888', flexShrink: 0 }}>{open ? '▴' : '▾'}</span>
+          </>
+        )}
       </div>
 
       {open && (
-        <div style={{ background: '#1a1a2a', border: '1px solid #2a2a3a', borderTop: 'none', borderRadius: '0 0 6px 6px', overflow: 'hidden' }}>
+        <div style={{ background: '#1a1a2a', border: '1px solid #3a3a4a', borderTop: 'none', borderRadius: '0 0 6px 6px', maxHeight: 200, overflowY: 'auto' }}>
           {files.map((f, i) => {
             const isSelected = f.path === selectedPath;
             const isDdFocused = dropdownFocusIdx === i;
@@ -181,7 +190,7 @@ function FactSwitcher({ files, selectedPath, onSelect, focusIdx, dropdownFocusId
                 }}
               >
                 <span style={actionStyle(f.action)}>{f.action[0].toUpperCase()}</span>
-                <span style={{ fontSize: 12, color: '#ddd', fontFamily: 'monospace' }}>{f.path.replace(/\.md$/, '')}</span>
+                <span style={{ fontSize: 12, color: isSelected ? '#ddd' : '#999', fontFamily: 'monospace' }}>{f.path.replace(/\.md$/, '')}</span>
               </div>
             );
           })}
