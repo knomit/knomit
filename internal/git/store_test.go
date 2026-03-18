@@ -1526,3 +1526,18 @@ func TestWalkChangedFilesLastHashIsHEAD(t *testing.T) {
 		t.Errorf("lastHash = %s, want HEAD = %s", lastHash[:8], head[:8])
 	}
 }
+
+func TestAgentID(t *testing.T) {
+	store, err := git.Init(":memory:", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	// Branch is "agent/<hostname>"; agentID strips the "agent/" prefix.
+	branch := store.Branch()
+	wantID := strings.TrimPrefix(branch, "agent/")
+	if store.AgentID() != wantID {
+		t.Errorf("AgentID() = %q, want %q", store.AgentID(), wantID)
+	}
+}

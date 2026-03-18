@@ -32,6 +32,7 @@ import (
 	gogit "github.com/go-git/go-git/v5"
 	gogitconfig "github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/go-git/go-git/v5/plumbing/transport"
 	"github.com/go-git/go-billy/v5/memfs"
 	_ "github.com/mattn/go-sqlite3"
@@ -52,6 +53,7 @@ type Store struct {
 	ownsDB    bool    // true when Init/Open opened the DB (legacy path)
 	ownedDB   *sql.DB // non-nil when ownsDB is true
 	branch    string  // e.g. "agent/laptop"
+	agentID   string  // e.g. "laptop" (branch with "agent/" prefix stripped)
 	auth      transport.AuthMethod
 	signer    ssh.Signer // signs commits when set
 	onCommit  func(hash string)
@@ -186,10 +188,11 @@ func InitWithStorer(s *storegit.Storer, initFiles map[string]string, agentBranch
 
 	log.Info().Str("branch", agentBranch).Msg("git store initialized")
 	gs := &Store{
-		repo:   repo,
-		storer: s,
-		db:     s.DB(),
-		branch: agentBranch,
+		repo:    repo,
+		storer:  s,
+		db:      s.DB(),
+		branch:  agentBranch,
+		agentID: deriveAgentID(agentBranch),
 	}
 	if err := gs.populateCommitLog(); err != nil {
 		log.Warn().Err(err).Msg("commit_log: initial populate failed")
@@ -213,10 +216,11 @@ func OpenWithStorer(s *storegit.Storer) (*Store, error) {
 
 	log.Info().Str("branch", branch).Msg("git store opened")
 	gs := &Store{
-		repo:   repo,
-		storer: s,
-		db:     s.DB(),
-		branch: branch,
+		repo:    repo,
+		storer:  s,
+		db:      s.DB(),
+		branch:  branch,
+		agentID: deriveAgentID(branch),
 	}
 	if err := gs.populateCommitLog(); err != nil {
 		log.Warn().Err(err).Msg("commit_log: open populate failed")
@@ -293,6 +297,36 @@ func (s *Store) Close() error {
 // Branch returns the agent branch name (e.g. "agent/laptop").
 func (s *Store) Branch() string {
 	return s.branch
+}
+
+// deriveAgentID extracts the agent identifier from a branch name.
+// "agent/laptop-abc" → "laptop-abc", "main" → "main".
+func deriveAgentID(branch string) string {
+	if after, ok := strings.CutPrefix(branch, "agent/"); ok {
+		return after
+	}
+	return branch
+}
+
+// AgentID returns the agent identifier derived from the branch name.
+func (s *Store) AgentID() string { return s.agentID }
+
+// authorSig returns the author signature for a given operation.
+func (s *Store) authorSig(operation string) object.Signature {
+	return object.Signature{
+		Name:  s.agentID,
+		Email: s.agentID + "+" + operation + "@agents.knomit.io",
+		When:  time.Now(),
+	}
+}
+
+// committerSig returns the committer signature (stable per agent).
+func (s *Store) committerSig() object.Signature {
+	return object.Signature{
+		Name:  s.agentID,
+		Email: s.agentID + "@agents.knomit.io",
+		When:  time.Now(),
+	}
 }
 
 // HeadCommit returns the hash of the current HEAD commit as a hex string.
@@ -429,11 +463,12 @@ func InitFromRemote(s *storegit.Storer, originURL string, auth transport.AuthMet
 		}
 		log.Info().Str("branch", agentBranch).Msg("git store initialized (empty remote)")
 		gs := &Store{
-			repo:   repo,
-			storer: s,
-			db:     s.DB(),
-			branch: agentBranch,
-			auth:   auth,
+			repo:    repo,
+			storer:  s,
+			db:      s.DB(),
+			branch:  agentBranch,
+			agentID: deriveAgentID(agentBranch),
+			auth:    auth,
 		}
 		if err := gs.populateCommitLog(); err != nil {
 			log.Warn().Err(err).Msg("commit_log: empty-remote populate failed")
@@ -491,11 +526,12 @@ func InitFromRemote(s *storegit.Storer, originURL string, auth transport.AuthMet
 
 	log.Info().Str("branch", agentBranch).Msg("git store initialized from remote")
 	gs := &Store{
-		repo:   repo,
-		storer: s,
-		db:     s.DB(),
-		branch: agentBranch,
-		auth:   auth,
+		repo:    repo,
+		storer:  s,
+		db:      s.DB(),
+		branch:  agentBranch,
+		agentID: deriveAgentID(agentBranch),
+		auth:    auth,
 	}
 	if err := gs.populateCommitLog(); err != nil {
 		log.Warn().Err(err).Msg("commit_log: remote populate failed")
