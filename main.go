@@ -90,12 +90,14 @@ func openRepo(
 		}
 	}
 
+	freshInit := false
 	gs, err := git.OpenWithStorer(svc.GitStorer())
 	if err != nil {
 		if !isDefault {
 			svc.Close()
 			return nil, fmt.Errorf("open git: %w", err)
 		}
+		freshInit = true
 		// Default repo — first run, init from remote or local.
 		if cfg.Git.Origin != "" {
 			auth, authErr := git.ResolveAuth(cfg.Remote, keyPath)
@@ -150,6 +152,16 @@ func openRepo(
 	// Initial index sync.
 	if err := idx.Sync(gs, gs.Branch()); err != nil {
 		log.Warn().Err(err).Str("repo", name).Msg("initial index sync failed")
+	}
+
+	// On fresh init, set the review watermark to HEAD so the first review
+	// doesn't treat every existing fact as dirty.
+	if freshInit {
+		if head, err := gs.HeadCommit(); err == nil {
+			if err := idx.SetReviewWatermark(gs.Branch(), head); err != nil {
+				log.Warn().Err(err).Msg("review watermark: initial set failed")
+			}
+		}
 	}
 
 	hub := web.NewTaskHub(ctx)

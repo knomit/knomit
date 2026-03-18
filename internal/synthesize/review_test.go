@@ -44,6 +44,48 @@ func TestStartSession_NoDirtyFacts(t *testing.T) {
 	}
 }
 
+// TestStartSession_WatermarkAtHead_NoDirtyFacts verifies that when the review
+// watermark is set to HEAD (e.g. after fresh InitFromRemote), DiffFiles returns
+// no changes and the review completes immediately without processing any facts.
+func TestStartSession_WatermarkAtHead_NoDirtyFacts(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	gs := NewMockGitStore(ctrl)
+	idx := NewMockSearchIndex(ctrl)
+	ri := NewMockReviewIndex(ctrl)
+
+	gs.EXPECT().Branch().Return("machine/test")
+	ri.EXPECT().GCReviewSessions("machine/test", 5).Return(nil)
+	ri.EXPECT().CreateReviewSession("machine/test").Return(&store.ReviewSession{
+		ID: "sess-wm", Branch: "machine/test", Status: "active",
+	}, nil)
+
+	// Watermark is set to HEAD — simulates post-InitFromRemote state.
+	ri.EXPECT().GetReviewWatermark("machine/test").Return("head-hash", nil)
+
+	// DiffFiles returns no changes since watermark == HEAD.
+	gs.EXPECT().DiffFiles("head-hash").Return(nil, nil, nil, nil)
+
+	// gatherAllFacts still returns existing facts (they exist in the repo).
+	fact1Content := factContent("Existing fact", "Already reviewed.")
+	gs.EXPECT().ListAll().Return([]string{"kb/tech/existing.md"}, nil)
+	gs.EXPECT().ReadFile("kb/tech/existing.md").Return(fact1Content, nil)
+
+	// No dirty facts → session completes immediately.
+	ri.EXPECT().CompleteReviewSession("sess-wm").Return(nil)
+	gs.EXPECT().HeadCommit().Return("head-hash", nil)
+	ri.EXPECT().SetReviewWatermark("machine/test", "head-hash").Return(nil)
+	ri.EXPECT().WorkItemStats("sess-wm").Return(0, 0, nil)
+
+	r := NewReviewer(gs, idx, ri, nil)
+	result, err := r.StartSession()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !result.Done {
+		t.Error("expected Done=true when watermark is at HEAD")
+	}
+}
+
 func TestStartSession_WatermarkEmpty_AllFactsDirty(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
