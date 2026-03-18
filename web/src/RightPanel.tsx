@@ -253,19 +253,18 @@ function renderFact(fact: Fact, search: (q: string) => void, dispatch?: Dispatch
                   {fact.commit_hash.slice(0, 7)}
                 </span>
               )}
-              {!historyDate && <button
+              {!historyDate && <span
                 title="Find similar facts"
                 onClick={() => dispatch({ type: 'SIMILAR_SEARCH', path: fact.path, text: fact.body || '' })}
                 style={{
-                  background: '#1a1a2a', border: '1px solid rgba(136,170,255,0.2)', color: '#8af',
-                  padding: '4px 8px', borderRadius: 4, cursor: 'pointer', fontSize: 14,
-                  transition: 'border-color 0.15s, color 0.15s', flexShrink: 0,
+                  color: '#555', cursor: 'pointer', fontSize: 11, fontFamily: 'monospace',
+                  transition: 'color 0.15s', flexShrink: 0,
                   outline: ft?.kind === 'similar' ? '2px solid rgba(136,170,255,0.55)' : 'none',
-                  outlineOffset: 1,
+                  outlineOffset: 1, borderRadius: 3,
                 }}
-                onMouseEnter={e => { e.currentTarget.style.borderColor = 'rgba(136,170,255,0.5)'; e.currentTarget.style.color = '#adf'; }}
-                onMouseLeave={e => { e.currentTarget.style.borderColor = 'rgba(136,170,255,0.2)'; e.currentTarget.style.color = '#8af'; }}
-              >≈</button>}
+                onMouseEnter={e => { (e.currentTarget as HTMLElement).style.color = '#8af'; }}
+                onMouseLeave={e => { (e.currentTarget as HTMLElement).style.color = '#555'; }}
+              >≈</span>}
             </span>
           )}
         </div>
