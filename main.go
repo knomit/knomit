@@ -192,8 +192,8 @@ func openRepo(
 			log.Warn().Err(err).Str("repo", name).Msg("remote: configure failed")
 		} else {
 			syncWg.Add(2)
-			go runSyncLoop(syncCtx, &syncWg, gs, svc, hub, remote)
-			go runPushLoop(syncCtx, &syncWg, gs, svc, hub, remote)
+			go runSyncLoop(syncCtx, &syncWg, gs, svc, hub, remote, name)
+			go runPushLoop(syncCtx, &syncWg, gs, svc, hub, remote, name)
 		}
 	}
 
@@ -230,29 +230,37 @@ func openRepo(
 		SyncWg:      &syncWg,
 		MCPHandlers: mcpHandlers,
 		SynthDeps:   synthDeps,
-		StartSync: func(remoteURL string) error {
-			remote, err := svc.GetRemote("origin")
-			if err != nil || remote == nil {
-				return fmt.Errorf("read remote: %w", err)
-			}
+	}
+	ri.StartSync = func(remoteURL string) error {
+		remote, err := svc.GetRemote("origin")
+		if err != nil || remote == nil {
+			return fmt.Errorf("read remote: %w", err)
+		}
 
-			// Build auth from stored remote credentials.
-			authCfg := remoteAuthFromRecord(remote, cfg.Remote)
-			auth, authErr := git.ResolveAuthWithOrigin(authCfg, keyPath, remoteURL)
-			if authErr != nil {
-				return fmt.Errorf("resolve auth: %w", authErr)
-			}
-			gs.SetAuth(auth)
+		// Build auth from stored remote credentials.
+		authCfg := remoteAuthFromRecord(remote, cfg.Remote)
+		auth, authErr := git.ResolveAuthWithOrigin(authCfg, keyPath, remoteURL)
+		if authErr != nil {
+			return fmt.Errorf("resolve auth: %w", authErr)
+		}
+		gs.SetAuth(auth)
 
-			if err := gs.ConfigureRemote(remoteURL, remote.Branch); err != nil {
-				return fmt.Errorf("configure remote: %w", err)
-			}
+		if err := gs.ConfigureRemote(remoteURL, remote.Branch); err != nil {
+			return fmt.Errorf("configure remote: %w", err)
+		}
 
-			syncWg.Add(2)
-			go runSyncLoop(syncCtx, &syncWg, gs, svc, hub, remote)
-			go runPushLoop(syncCtx, &syncWg, gs, svc, hub, remote)
-			return nil
-		},
+		// Stop existing sync/push loops (if any) before starting new ones.
+		syncCancel()
+		syncWg.Wait()
+
+		// Create fresh context and update ri so shutdown cancels the right one.
+		syncCtx, syncCancel = context.WithCancel(ctx)
+		ri.SyncCancel = syncCancel
+
+		syncWg.Add(2)
+		go runSyncLoop(syncCtx, &syncWg, gs, svc, hub, remote, name)
+		go runPushLoop(syncCtx, &syncWg, gs, svc, hub, remote, name)
+		return nil
 	}
 
 	return &repoResult{
@@ -634,12 +642,15 @@ func resetCmd() *cobra.Command {
 // First sync fires immediately, then every remote.Interval seconds.
 // The interval is re-read from the database on each tick so that changes
 // made via PUT /api/v1/{repo}/origin take effect without a restart.
-func runSyncLoop(ctx context.Context, wg *sync.WaitGroup, gs *git.Store, svc *store.Service, hub *web.TaskHub, remote *store.Remote) {
+func runSyncLoop(ctx context.Context, wg *sync.WaitGroup, gs *git.Store, svc *store.Service, hub *web.TaskHub, remote *store.Remote, repo string) {
 	defer wg.Done()
 
 	interval := time.Duration(remote.Interval) * time.Second
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
+
+	lg := log.With().Str("repo", repo).Str("remote", remote.URL).Logger()
+	lg.Info().Dur("interval", interval).Msg("sync loop started")
 
 	doSync := func() {
 		result, err := gs.Sync(remote.Branch)
@@ -647,16 +658,18 @@ func runSyncLoop(ctx context.Context, wg *sync.WaitGroup, gs *git.Store, svc *st
 			errMsg := err.Error()
 			_ = svc.UpdateRemoteStatus(remote.Name, "error", &errMsg)
 			hub.BroadcastSyncError(remote.Name, errMsg)
-			log.Warn().Err(err).Msg("remote sync failed")
+			lg.Warn().Err(err).Msg("sync: pull failed")
 			return
 		}
 		_ = svc.UpdateRemoteStatus(remote.Name, "ok", nil)
 		if result.Synced {
 			hub.BroadcastSyncOK(remote.Name, result.MergeCommit, result.FastForward)
-			log.Info().
+			lg.Info().
 				Bool("fast_forward", result.FastForward).
 				Str("merge_commit", result.MergeCommit).
-				Msg("remote sync complete")
+				Msg("sync: pulled changes")
+		} else {
+			lg.Debug().Msg("sync: up to date")
 		}
 	}
 
@@ -666,11 +679,13 @@ func runSyncLoop(ctx context.Context, wg *sync.WaitGroup, gs *git.Store, svc *st
 	for {
 		select {
 		case <-ctx.Done():
+			lg.Info().Msg("sync loop stopped")
 			return
 		case <-ticker.C:
 			// Re-read remote config so interval changes via PUT /origin take effect.
 			if fresh, err := svc.GetRemote(remote.Name); err == nil && fresh != nil {
 				if d := time.Duration(fresh.Interval) * time.Second; d != interval {
+					lg.Info().Dur("old", interval).Dur("new", d).Msg("sync: interval changed")
 					interval = d
 					ticker.Reset(interval)
 				}
@@ -683,12 +698,15 @@ func runSyncLoop(ctx context.Context, wg *sync.WaitGroup, gs *git.Store, svc *st
 // runPushLoop pushes the agent branch to origin on a fixed interval.
 // The interval is re-read from the database on each tick so that changes
 // made via PUT /api/v1/{repo}/origin take effect without a restart.
-func runPushLoop(ctx context.Context, wg *sync.WaitGroup, gs *git.Store, svc *store.Service, hub *web.TaskHub, remote *store.Remote) {
+func runPushLoop(ctx context.Context, wg *sync.WaitGroup, gs *git.Store, svc *store.Service, hub *web.TaskHub, remote *store.Remote, repo string) {
 	defer wg.Done()
 
 	interval := time.Duration(remote.PushInterval) * time.Second
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
+
+	lg := log.With().Str("repo", repo).Str("remote", remote.URL).Logger()
+	lg.Info().Dur("interval", interval).Msg("push loop started")
 
 	doPush := func() {
 		result, err := gs.Push()
@@ -696,13 +714,15 @@ func runPushLoop(ctx context.Context, wg *sync.WaitGroup, gs *git.Store, svc *st
 			errMsg := err.Error()
 			_ = svc.UpdateRemotePushStatus(remote.Name, "error", &errMsg)
 			hub.BroadcastPushError(remote.Name, errMsg)
-			log.Warn().Err(err).Msg("remote push failed")
+			lg.Warn().Err(err).Msg("push: failed")
 			return
 		}
 		_ = svc.UpdateRemotePushStatus(remote.Name, "ok", nil)
 		if result.Pushed {
 			hub.BroadcastPushOK(remote.Name)
-			log.Info().Str("branch", gs.Branch()).Msg("remote push complete")
+			lg.Info().Str("branch", gs.Branch()).Msg("push: pushed changes")
+		} else {
+			lg.Debug().Msg("push: up to date")
 		}
 	}
 
@@ -712,11 +732,13 @@ func runPushLoop(ctx context.Context, wg *sync.WaitGroup, gs *git.Store, svc *st
 	for {
 		select {
 		case <-ctx.Done():
+			lg.Info().Msg("push loop stopped")
 			return
 		case <-ticker.C:
 			// Re-read remote config so interval changes via PUT /origin take effect.
 			if fresh, err := svc.GetRemote(remote.Name); err == nil && fresh != nil {
 				if d := time.Duration(fresh.PushInterval) * time.Second; d != interval {
+					lg.Info().Dur("old", interval).Dur("new", d).Msg("push: interval changed")
 					interval = d
 					ticker.Reset(interval)
 				}
