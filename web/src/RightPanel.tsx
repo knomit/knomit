@@ -543,7 +543,8 @@ export function RightPanel({ state, dispatch }: Props) {
   if (state.historyCommit && fact && !hasSwitcher) {
     if (fact.parse_error) return <FactEditor fact={fact} repo={state.repo} onSaved={setFact} />;
     const goToCommit = (commit: string) => {
-      if (state.leftMode !== 'history') dispatch({ type: 'ENTER_HISTORY' });
+      dispatch({ type: 'NAVIGATE', path: fact.path });
+      dispatch({ type: 'ENTER_HISTORY' });
       dispatch({ type: 'SELECT_COMMIT', commit });
     };
     return renderFact(fact, search, dispatch, focusInfo, commitDetail?.date, goToCommit, handleLocalRef);
