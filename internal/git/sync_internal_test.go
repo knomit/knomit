@@ -1,9 +1,98 @@
-// Internal tests for sync — uses package git to access unexported methods.
+// Internal tests — uses package git to access unexported methods.
 package git
 
 import (
 	"testing"
+
+	"github.com/go-git/go-git/v5/plumbing"
 )
+
+func TestDeriveAgentID(t *testing.T) {
+	tests := []struct {
+		branch string
+		want   string
+	}{
+		{"agent/laptop-abc", "laptop-abc"},
+		{"agent/dev-a1b2c3", "dev-a1b2c3"},
+		{"main", "main"},
+		{"feature/foo", "feature/foo"},
+		{"agent/", ""},
+	}
+	for _, tt := range tests {
+		got := deriveAgentID(tt.branch)
+		if got != tt.want {
+			t.Errorf("deriveAgentID(%q) = %q, want %q", tt.branch, got, tt.want)
+		}
+	}
+}
+
+func TestCommitAuthorCommitter(t *testing.T) {
+	store, err := Init(":memory:", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	agentID := store.AgentID()
+
+	// WriteFile with "learn" operation.
+	hash, _, err := store.WriteFile("kb/test.md", "# Test\n", "add test", "learn")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := store.repo.CommitObject(plumbing.NewHash(hash))
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantAuthor := agentID + "+learn@agents.knomit.io"
+	if c.Author.Email != wantAuthor {
+		t.Errorf("WriteFile author email = %q, want %q", c.Author.Email, wantAuthor)
+	}
+	if c.Author.Name != agentID {
+		t.Errorf("WriteFile author name = %q, want %q", c.Author.Name, agentID)
+	}
+	wantCommitter := agentID + "@agents.knomit.io"
+	if c.Committer.Email != wantCommitter {
+		t.Errorf("WriteFile committer email = %q, want %q", c.Committer.Email, wantCommitter)
+	}
+
+	// DeleteFile with "retract" operation.
+	delHash, err := store.DeleteFile("kb/test.md", "retract test", "retract")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dc, err := store.repo.CommitObject(plumbing.NewHash(delHash))
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantDelAuthor := agentID + "+retract@agents.knomit.io"
+	if dc.Author.Email != wantDelAuthor {
+		t.Errorf("DeleteFile author email = %q, want %q", dc.Author.Email, wantDelAuthor)
+	}
+	if dc.Committer.Email != wantCommitter {
+		t.Errorf("DeleteFile committer email = %q, want %q", dc.Committer.Email, wantCommitter)
+	}
+
+	// BatchWrite with "subsume" operation.
+	batchHash, _, err := store.BatchWrite(map[string]string{
+		"kb/x.md": "# X\n",
+		"kb/y.md": "# Y\n",
+	}, "batch add", "subsume")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bc, err := store.repo.CommitObject(plumbing.NewHash(batchHash))
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantBatchAuthor := agentID + "+subsume@agents.knomit.io"
+	if bc.Author.Email != wantBatchAuthor {
+		t.Errorf("BatchWrite author email = %q, want %q", bc.Author.Email, wantBatchAuthor)
+	}
+	if bc.Committer.Email != wantCommitter {
+		t.Errorf("BatchWrite committer email = %q, want %q", bc.Committer.Email, wantCommitter)
+	}
+}
 
 func TestSyncMergeCommitAuthor(t *testing.T) {
 	// Create origin with shared content.

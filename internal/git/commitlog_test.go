@@ -205,7 +205,8 @@ func TestAppendCommitLogDelete(t *testing.T) {
 	}
 }
 
-// TestCommitLogOperation verifies that operation and author_email are stored in commit_log.
+// TestCommitLogOperation verifies that operation and author_email are stored
+// in commit_log for multiple operation types (learn, retract, update).
 func TestCommitLogOperation(t *testing.T) {
 	store, err := Init(":memory:", nil)
 	if err != nil {
@@ -213,21 +214,73 @@ func TestCommitLogOperation(t *testing.T) {
 	}
 	defer store.Close()
 
+	agentID := store.AgentID()
+
+	// learn
 	if _, _, err := store.WriteFile("kb/a.md", "# A\n", "add a", "learn"); err != nil {
 		t.Fatal(err)
 	}
+	// update
+	if _, _, err := store.WriteFile("kb/a.md", "# A v2\n", "update a", "update"); err != nil {
+		t.Fatal(err)
+	}
+	// retract
+	if _, err := store.DeleteFile("kb/a.md", "retract a", "retract"); err != nil {
+		t.Fatal(err)
+	}
 
-	var op, email string
-	err = store.db.QueryRow(`SELECT operation, author_email FROM commit_log WHERE path = 'kb/a.md'`).Scan(&op, &email)
+	rows, err := store.db.Query(`SELECT operation, author_email FROM commit_log WHERE path = 'kb/a.md' ORDER BY rowid`)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if op != "learn" {
-		t.Errorf("operation = %q, want %q", op, "learn")
+	defer rows.Close()
+
+	want := []struct{ op, emailSuffix string }{
+		{"learn", "+learn@agents.knomit.io"},
+		{"update", "+update@agents.knomit.io"},
+		{"retract", "+retract@agents.knomit.io"},
 	}
-	wantEmail := store.AgentID() + "+learn@agents.knomit.io"
-	if email != wantEmail {
-		t.Errorf("author_email = %q, want %q", email, wantEmail)
+	var i int
+	for rows.Next() {
+		var op, email string
+		if err := rows.Scan(&op, &email); err != nil {
+			t.Fatal(err)
+		}
+		if i >= len(want) {
+			t.Fatalf("unexpected extra row: op=%q email=%q", op, email)
+		}
+		if op != want[i].op {
+			t.Errorf("row %d: operation = %q, want %q", i, op, want[i].op)
+		}
+		wantEmail := agentID + want[i].emailSuffix
+		if email != wantEmail {
+			t.Errorf("row %d: author_email = %q, want %q", i, email, wantEmail)
+		}
+		i++
+	}
+	if i != len(want) {
+		t.Errorf("got %d rows, want %d", i, len(want))
+	}
+}
+
+func TestParseOperation(t *testing.T) {
+	tests := []struct {
+		email string
+		want  string
+	}{
+		{"agent+learn@agents.knomit.io", "learn"},
+		{"bob+retract@gmail.com", "retract"},
+		{"host-abc+sync@agents.knomit.io", "sync"},
+		{"plain@example.com", ""},     // no +tag
+		{"noatsign", ""},              // no @ at all
+		{"+learn@example.com", "learn"}, // + at start is valid subaddress
+		{"a@b+c@d.com", ""},             // @ before + (malformed)
+	}
+	for _, tt := range tests {
+		got := parseOperation(tt.email)
+		if got != tt.want {
+			t.Errorf("parseOperation(%q) = %q, want %q", tt.email, got, tt.want)
+		}
 	}
 }
 
