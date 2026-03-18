@@ -149,7 +149,7 @@ function FactSwitcher({ files, selectedPath, onSelect, focusIdx, dropdownFocusId
         style={{
           display: 'flex', alignItems: 'center', gap: 8, padding: '7px 10px',
           background: triggerFocused ? '#2a2a3a' : '#1a1a2a',
-          border: hasMultiple ? '1px solid #3a3a4a' : '1px solid #2a2a3a',
+          border: '1px solid #2a2a3a',
           borderRadius: open ? '6px 6px 0 0' : 6,
           cursor: hasMultiple ? 'pointer' : 'default',
           userSelect: 'none' as const,
@@ -165,7 +165,7 @@ function FactSwitcher({ files, selectedPath, onSelect, focusIdx, dropdownFocusId
               fontSize: 10, padding: '1px 7px', borderRadius: 8,
               color: '#ddd', background: '#3a3a5a', fontWeight: 600,
             }}>
-              {files.length} files
+              {currentIdx + 1}/{files.length} facts
             </span>
             <span style={{ fontSize: 11, color: '#888', flexShrink: 0 }}>{open ? '▴' : '▾'}</span>
           </>
@@ -173,7 +173,7 @@ function FactSwitcher({ files, selectedPath, onSelect, focusIdx, dropdownFocusId
       </div>
 
       {open && (
-        <div style={{ background: '#1a1a2a', border: '1px solid #3a3a4a', borderTop: 'none', borderRadius: '0 0 6px 6px', maxHeight: 200, overflowY: 'auto' }}>
+        <div style={{ background: '#1a1a2a', border: '1px solid #2a2a3a', borderTop: 'none', borderRadius: '0 0 6px 6px', maxHeight: 200, overflowY: 'auto' }}>
           {files.map((f, i) => {
             const isSelected = f.path === selectedPath;
             const isDdFocused = dropdownFocusIdx === i;
