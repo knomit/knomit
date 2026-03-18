@@ -32,13 +32,6 @@ const opStyles: Record<string, { color: string; bg: string; label: string }> = {
 
 function commitDetailStyle(detail: CommitDetail): { color: string; bg: string; label: string } | null {
   if (detail.operation && opStyles[detail.operation]) return opStyles[detail.operation];
-  // Fall back to tag prefix for legacy commits.
-  for (const tag of detail.tags || []) {
-    if (tag.startsWith('learn/')) return opStyles.learn;
-    if (tag.startsWith('update/')) return opStyles.update;
-    if (tag.startsWith('retract/')) return opStyles.retract;
-    if (tag.startsWith('synthesize/') || tag.startsWith('subsume/')) return opStyles.subsume;
-  }
   return null;
 }
 

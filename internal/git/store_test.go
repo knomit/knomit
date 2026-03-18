@@ -795,10 +795,6 @@ func TestCommitDetail(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.Tag("learn/test"); err != nil {
-		t.Fatal(err)
-	}
-
 	detail, err := store.CommitDetail(commitHash)
 	if err != nil {
 		t.Fatal(err)
@@ -806,8 +802,8 @@ func TestCommitDetail(t *testing.T) {
 	if detail.Commit != commitHash {
 		t.Errorf("expected commit %s, got %s", commitHash, detail.Commit)
 	}
-	if len(detail.Tags) == 0 || detail.Tags[0] != "learn/test" {
-		t.Errorf("expected tag learn/test, got %v", detail.Tags)
+	if detail.Operation != "learn" {
+		t.Errorf("expected operation learn, got %q", detail.Operation)
 	}
 	if len(detail.Files) == 0 {
 		t.Fatal("expected at least one changed file")
@@ -880,10 +876,6 @@ func TestLogPaginated(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := store.Tag("learn/test-moment"); err != nil {
-		t.Fatal(err)
-	}
-
 	entries, next, err := store.LogPaginated("", 2, "")
 	if err != nil {
 		t.Fatal(err)
@@ -894,8 +886,8 @@ func TestLogPaginated(t *testing.T) {
 	if next == "" {
 		t.Fatal("expected next cursor")
 	}
-	if len(entries[0].Tags) == 0 || entries[0].Tags[0] != "learn/test-moment" {
-		t.Errorf("expected tag learn/test-moment on first entry, got %v", entries[0].Tags)
+	if entries[0].Operation != "learn" {
+		t.Errorf("expected operation learn on first entry, got %q", entries[0].Operation)
 	}
 
 	entries2, next2, err := store.LogPaginated("", 2, next)

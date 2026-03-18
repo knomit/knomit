@@ -304,11 +304,6 @@ func (s *Store) LogPaginated(path string, limit int, after string) ([]LogEntryWi
 	}
 	defer logIter.Close()
 
-	tagIndex, err := s.buildTagIndex()
-	if err != nil {
-		return nil, "", fmt.Errorf("LogPaginated: tags: %w", err)
-	}
-
 	skipping := after != ""
 	afterHash := plumbing.NewHash(after)
 
@@ -334,16 +329,10 @@ func (s *Store) LogPaginated(path string, limit int, after string) ([]LogEntryWi
 			firstLine = firstLine[:idx]
 		}
 
-		tags := tagIndex[c.Hash]
-		if tags == nil {
-			tags = []string{}
-		}
-
 		entries = append(entries, LogEntryWithTags{
 			Commit:    hash,
 			Date:      c.Committer.When.UTC().Format(time.RFC3339),
 			Message:   firstLine,
-			Tags:      tags,
 			Operation: parseOperation(c.Author.Email),
 		})
 		return nil
@@ -462,24 +451,6 @@ func (s *Store) activityGit(path string) (ActivityResult, error) {
 	return result, nil
 }
 
-// buildTagIndex returns a map from commit hash to tag names.
-func (s *Store) buildTagIndex() (map[plumbing.Hash][]string, error) {
-	idx := make(map[plumbing.Hash][]string)
-	refIter, err := s.storer.IterReferences()
-	if err != nil {
-		return nil, err
-	}
-	_ = refIter.ForEach(func(ref *plumbing.Reference) error {
-		name := ref.Name().String()
-		if strings.HasPrefix(name, "refs/tags/") {
-			tagName := strings.TrimPrefix(name, "refs/tags/")
-			idx[ref.Hash()] = append(idx[ref.Hash()], tagName)
-		}
-		return nil
-	})
-	return idx, nil
-}
-
 // CommitDetail returns metadata and changed files for a specific commit.
 // It diffs the commit's tree against its parent to determine which files changed.
 func (s *Store) CommitDetail(commitHash string) (*CommitDetailResult, error) {
@@ -536,17 +507,10 @@ func (s *Store) CommitDetail(commitHash string) (*CommitDetailResult, error) {
 		firstLine = firstLine[:idx]
 	}
 
-	tagIndex, _ := s.buildTagIndex()
-	tags := tagIndex[hash]
-	if tags == nil {
-		tags = []string{}
-	}
-
 	return &CommitDetailResult{
 		Commit:    hash.String(),
 		Date:      commit.Committer.When.UTC().Format(time.RFC3339),
 		Message:   firstLine,
-		Tags:      tags,
 		Operation: parseOperation(commit.Author.Email),
 		Files:     files,
 	}, nil

@@ -19,15 +19,7 @@ const opStyles: Record<string, { color: string; bg: string; label: string }> = {
 const defaultStyle = { color: '#555', bg: '#222', label: '' };
 
 function commitStyle(entry: HistoryEntryWithTags): { color: string; bg: string; label: string } {
-  // Prefer explicit operation field (new commits).
   if (entry.operation && opStyles[entry.operation]) return opStyles[entry.operation];
-  // Fall back to tag prefix detection (legacy commits).
-  for (const tag of entry.tags || []) {
-    if (tag.startsWith('learn/')) return opStyles.learn;
-    if (tag.startsWith('update/')) return opStyles.update;
-    if (tag.startsWith('retract/')) return opStyles.retract;
-    if (tag.startsWith('synthesize/') || tag.startsWith('subsume/')) return opStyles.subsume;
-  }
   return defaultStyle;
 }
 

@@ -186,7 +186,7 @@ func TestHandleHistoryPaginated(t *testing.T) {
 	gs := NewMockGitStore(ctrl)
 
 	entries := []git.LogEntryWithTags{
-		{Commit: "abc12345", Date: "2026-03-14T10:00:00Z", Message: "add fact", Tags: []string{"learn/test"}},
+		{Commit: "abc12345", Date: "2026-03-14T10:00:00Z", Message: "add fact", Operation: "learn"},
 	}
 	gs.EXPECT().LogPaginated("kb/test", 50, "").Return(entries, "def67890", nil)
 
@@ -214,8 +214,8 @@ func TestHandleCommitDetail(t *testing.T) {
 
 	gs.EXPECT().CommitDetail("abc12345").Return(&git.CommitDetailResult{
 		Commit: "abc12345", Date: "2026-03-14T10:00:00Z", Message: "add fact",
-		Tags: []string{"learn/test"},
-		Files: []git.ChangedFile{{Path: "kb/test.md", Action: "added"}},
+		Operation: "learn",
+		Files:     []git.ChangedFile{{Path: "kb/test.md", Action: "added"}},
 	}, nil)
 
 	handler := newTestRouter(gs, nil)

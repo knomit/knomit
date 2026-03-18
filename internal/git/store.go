@@ -89,18 +89,16 @@ type CommitDetailResult struct {
 	Commit    string        `json:"commit"`
 	Date      string        `json:"date"`
 	Message   string        `json:"message"`
-	Tags      []string      `json:"tags"`
 	Operation string        `json:"operation,omitempty"`
 	Files     []ChangedFile `json:"files"`
 }
 
 // LogEntryWithTags extends LogEntry with tag names associated with the commit.
 type LogEntryWithTags struct {
-	Commit    string   `json:"commit"`
-	Date      string   `json:"date"`
-	Message   string   `json:"message"`
-	Tags      []string `json:"tags"`
-	Operation string   `json:"operation,omitempty"`
+	Commit    string `json:"commit"`
+	Date      string `json:"date"`
+	Message   string `json:"message"`
+	Operation string `json:"operation,omitempty"`
 }
 
 // ActivityResult holds commit-activity metrics for a path over several time windows.
