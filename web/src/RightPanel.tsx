@@ -269,7 +269,16 @@ function renderFact(fact: Fact, search: (q: string) => void, dispatch?: Dispatch
             </span>
           )}
         </div>
-        <div style={{ fontSize: 12, color: '#555', marginTop: 2 }}>{fact.path}</div>
+        {dispatch ? (
+          <div
+            onClick={() => { dispatch({ type: 'NAVIGATE', path: fact.path }); dispatch({ type: 'ENTER_HISTORY' }); }}
+            style={{ fontSize: 12, color: '#556', marginTop: 2, cursor: 'pointer' }}
+            onMouseEnter={e => { (e.currentTarget as HTMLElement).style.color = '#8af'; }}
+            onMouseLeave={e => { (e.currentTarget as HTMLElement).style.color = '#556'; }}
+          >{fact.path}</div>
+        ) : (
+          <div style={{ fontSize: 12, color: '#555', marginTop: 2 }}>{fact.path}</div>
+        )}
       </div>
 
       {/* Stat cards */}
@@ -537,7 +546,7 @@ export function RightPanel({ state, dispatch }: Props) {
       if (state.leftMode !== 'history') dispatch({ type: 'ENTER_HISTORY' });
       dispatch({ type: 'SELECT_COMMIT', commit });
     };
-    return renderFact(fact, search, undefined, focusInfo, commitDetail?.date, goToCommit, handleLocalRef);
+    return renderFact(fact, search, dispatch, focusInfo, commitDetail?.date, goToCommit, handleLocalRef);
   }
 
   // Time-travel: multiple files → show FactSwitcher + selected fact below
@@ -583,7 +592,7 @@ export function RightPanel({ state, dispatch }: Props) {
         />
 
         {fact && fact.parse_error && <FactEditor fact={fact} repo={state.repo} onSaved={setFact} />}
-        {fact && !fact.parse_error && <div style={{ flex: 1 }}>{renderFact(fact, search, undefined, focusInfo, undefined, undefined, handleLocalRef)}</div>}
+        {fact && !fact.parse_error && <div style={{ flex: 1 }}>{renderFact(fact, search, dispatch, focusInfo, undefined, undefined, handleLocalRef)}</div>}
         {!fact && <div style={{ padding: '16px 20px', color: '#666', fontSize: 13 }}>Loading…</div>}
       </div>
     );
