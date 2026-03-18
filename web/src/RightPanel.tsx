@@ -593,7 +593,7 @@ export function RightPanel({ state, dispatch }: Props) {
         />
 
         {fact && fact.parse_error && <FactEditor fact={fact} repo={state.repo} onSaved={setFact} />}
-        {fact && !fact.parse_error && <div style={{ flex: 1 }}>{renderFact(fact, search, dispatch, focusInfo, undefined, undefined, handleLocalRef)}</div>}
+        {fact && !fact.parse_error && <div style={{ flex: 1 }}>{renderFact(fact, search, dispatch, focusInfo, commitDetail.date, undefined, handleLocalRef)}</div>}
         {!fact && <div style={{ padding: '16px 20px', color: '#666', fontSize: 13 }}>Loading…</div>}
       </div>
     );
