@@ -139,6 +139,7 @@ func handleFact() http.HandlerFunc {
 			writeJSON(w, http.StatusOK, map[string]any{
 				"path":        fact.Path,
 				"title":       fact.Title,
+				"type":        fact.Type,
 				"body":        fact.Body,
 				"domain":      fact.Domain,
 				"confidence":  fact.Confidence,
@@ -156,6 +157,7 @@ func handleFact() http.HandlerFunc {
 				resp := map[string]any{
 					"path":        fact.Path,
 					"title":       fact.Title,
+					"type":        fact.Type,
 					"body":        fact.Body,
 					"domain":      fact.Domain,
 					"confidence":  fact.Confidence,
