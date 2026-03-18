@@ -2,7 +2,7 @@
 
 ## 1. Overview
 
-Knomit (**kno**wledge + co**mmit**) is a knowledge representation system where facts are stored as markdown files in a Git repository. Git's native capabilities (commits, branches, tags, history) handle identity, lineage, timestamps, and versioning — the file itself carries only what Git cannot infer.
+Knomit (**kno**wledge + co**mmit**) is a knowledge representation system where facts are stored as markdown files in a Git repository. Git's native capabilities (commits, branches, history) handle identity, lineage, timestamps, and versioning — the file itself carries only what Git cannot infer.
 
 The system is designed for consumption by AI agents. Human readability is a secondary benefit.
 
@@ -134,7 +134,7 @@ When an MCP tool produces refs from local file paths (e.g. synthesize output), i
 
 Evidence chains are resolved through two complementary mechanisms:
 
-**Implicit (Git-native):** Facts committed together in the same learning moment are evidence for each other. The agent finds siblings by looking up the learning moment tag and listing all commits under it. No explicit linking needed.
+**Implicit (Git-native):** Facts committed together in the same learning moment are evidence for each other. The agent finds siblings by inspecting the commit — a `learn` commit may contain multiple files. No explicit linking needed.
 
 **Explicit (`refs`):** When a fact is derived from facts across different learning moments (e.g., a Weaver agent synthesizing a pattern from 10 independently contributed facts), the `refs` field points to the source commit hashes. This is the cross-cutting evidence link.
 
@@ -147,13 +147,12 @@ grep -rl "entity_name" --include="*.md" know/
 
 **Step 2 — Find the learning moment.**
 ```
-git log --follow --format="%H %s" know/path/to/fact.md
+git log --follow --format="%H %aN <%aE> %s" know/path/to/fact.md
 ```
 
 **Step 3 — Find sibling facts (implicit evidence).**
 ```
-git tag --contains <commit_hash>
-git log main..<tag> --format="%H %s"
+git show --stat <commit_hash>    # lists all files in the commit
 ```
 
 **Step 4 — Follow explicit refs.**
@@ -168,15 +167,14 @@ Each evidence fact can itself be traversed using the same steps, producing a ful
 
 | Learning Operation | Git Operation |
 |---|---|
-| Learn something new | Commit new fact file(s) to agent branch, tag, push |
-| Reinforce a fact | Edit file on agent branch, bump `confidence`/`sources`, commit, tag, push |
-| Contradict / update a fact | Edit file on agent branch, rewrite body and metadata, commit, tag, push |
+| Learn something new | Commit new fact file(s) to agent branch, push |
+| Reinforce a fact | Edit file on agent branch, bump `confidence`/`sources`, commit, push |
+| Contradict / update a fact | Edit file on agent branch, rewrite body and metadata, commit, push |
 | Accept knowledge | Merge agent branch into `main` (human or automated) |
-| Name a learning moment | Tag HEAD of agent branch at time of commit |
-| Forget a fact | Delete file from agent branch, commit, tag `forget/<name>`, push |
+| Forget a fact | Delete file from agent branch, commit, push |
 | Trace fact history | `git log --follow <file>` |
-| Trace a learning moment | Find tag, then `git log <tag-parent>..<tag>` |
-| Identify contributor | `git log --author` |
+| Filter by operation type | `git log --author="+learn@"` |
+| Identify contributor | `git log --author` / `git log --committer` |
 | Roll back understanding | `git revert <commit>` |
 
 ### 5.2 The Agent Branch Model
@@ -190,12 +188,11 @@ agent/server      ← agent on "server" commits here
 synthesize/daily  ← temporary branch for a synthesis run
 ```
 
-**Write flow (learn, update, forget):**
+**Write flow (learn, update, retract):**
 ```
 1. sync()         pull + merge origin/main into agent branch
-2. commit         write the fact file(s), one commit per fact
-3. tag            tag HEAD with learn/<name> or forget/<name>
-4. push           push agent branch to origin
+2. commit         write the fact file(s), with operation-typed author signature
+3. push           push agent branch to origin
 ```
 
 **Read flow (query, why, explore):**
@@ -206,29 +203,67 @@ synthesize/daily  ← temporary branch for a synthesis run
 
 **Synthesis flow:**
 ```
-1. Create synthesize/<recipe> branch from agent branch
-2. Execute prune/distill steps, committing results
-3. Tag each step: learn/synthesize-<recipe>-prune, learn/synthesize-<recipe>-distill
-4. Either auto-merge into agent branch and delete, or push for review
+1. Execute prune/distill steps on agent branch, committing results
+2. Each commit carries the appropriate operation in its author signature
 ```
 
-### 5.3 Tag Naming Conventions
+### 5.3 Operation Identity (Author/Committer Convention)
 
-| Tag Pattern | Created By | Meaning |
+Operations are classified using **email subaddressing** in the git commit's author field. The committer field carries the stable agent identity.
+
+```
+Author:    <identity> <<identity>+<operation>@<domain>>
+Committer: <identity> <<identity>@<domain>>
+```
+
+#### Agent Commits
+
+| Field | Value | Example |
 |---|---|---|
-| `learn/<name>` | learn, update | A learning moment; name is caller-supplied |
-| `forget/<name>` | forget | A forgetting moment |
-| `learn/synthesize-<recipe>-prune` | synthesize prune step | Pruning run completed |
-| `learn/synthesize-<recipe>-distill` | synthesize distill step | Distillation run completed |
+| Author | `<agent-id> <<agent-id>+<op>@agents.knomit.io>` | `laptop-a1b2 <laptop-a1b2+learn@agents.knomit.io>` |
+| Committer | `<agent-id> <<agent-id>@agents.knomit.io>` | `laptop-a1b2 <laptop-a1b2@agents.knomit.io>` |
 
-Tag names are sanitized: characters outside `[a-zA-Z0-9._/-]` are replaced with `-`.
+#### Human Commits
+
+Humans use their own email with the `+tag` subaddress convention:
+
+| Field | Value | Example |
+|---|---|---|
+| Author | `<name> <<email>+<op>>` | `Bob <bob+learn@gmail.com>` |
+| Committer | `<name> <<email>>` | `Bob <bob@gmail.com>` |
+
+#### Operations
+
+| Operation | Meaning |
+|---|---|
+| `learn` | New fact(s) added |
+| `update` | Existing fact modified |
+| `retract` | Fact deleted |
+| `subsume` | Facts merged or synthesized |
+| `sync` | Merge commit from remote synchronization |
+
+#### Querying by Operation
+
+```sh
+# All learn operations (agent + human)
+git log --author="+learn@"
+
+# All operations from a specific agent
+git log --author="laptop-a1b2"
+
+# All agent operations (any type)
+git log --author="agents.knomit.io"
+
+# Learn operations from a specific agent
+git log --author="laptop-a1b2+learn"
+```
 
 ### 5.4 Rules
 
 - **Agents never commit directly to `main`.** All knowledge enters through agent branches.
 - **`main` is the accepted truth.** It represents the swarm's consensus.
-- **One fact per commit.** The commit hash is the fact's identity at that point in time.
-- **Agent branches are long-lived.** One branch per agent, many learning moments per branch. Learning moments are identified by tags, not branches.
+- **One fact per commit.** The commit hash is the fact's identity at that point in time. (Exception: `learn` may batch multiple facts in a single commit.)
+- **Agent branches are long-lived.** One branch per agent, many learning moments per branch. Learning moments are identified by the commit's author signature (operation + agent identity), not tags.
 - **Fact evolution is in-place.** When understanding changes, the same file is edited and recommitted. Git history shows how the fact evolved.
 - **sync() before every operation.** Agents always merge the latest main before writing, minimizing conflicts.
 

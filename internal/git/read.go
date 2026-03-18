@@ -304,11 +304,6 @@ func (s *Store) LogPaginated(path string, limit int, after string) ([]LogEntryWi
 	}
 	defer logIter.Close()
 
-	tagIndex, err := s.buildTagIndex()
-	if err != nil {
-		return nil, "", fmt.Errorf("LogPaginated: tags: %w", err)
-	}
-
 	skipping := after != ""
 	afterHash := plumbing.NewHash(after)
 
@@ -334,21 +329,63 @@ func (s *Store) LogPaginated(path string, limit int, after string) ([]LogEntryWi
 			firstLine = firstLine[:idx]
 		}
 
-		tags := tagIndex[c.Hash]
-		if tags == nil {
-			tags = []string{}
-		}
-
 		entries = append(entries, LogEntryWithTags{
-			Commit:  hash,
-			Date:    c.Committer.When.UTC().Format(time.RFC3339),
-			Message: firstLine,
-			Tags:    tags,
+			Commit:    hash,
+			Date:      c.Committer.When.UTC().Format(time.RFC3339),
+			Message:   firstLine,
+			Operation: parseOperation(c.Author.Email),
 		})
 		return nil
 	})
 
+	// Batch-fetch file change counts from commit_log if available.
+	if s.db != nil && s.commitLog && len(entries) > 0 {
+		s.enrichFileCounts(entries)
+	}
+
 	return entries, nextCursor, nil
+}
+
+// enrichFileCounts batch-queries commit_log for A/M/D counts per commit.
+func (s *Store) enrichFileCounts(entries []LogEntryWithTags) {
+	placeholders := make([]string, len(entries))
+	args := make([]any, len(entries))
+	idx := make(map[string]int, len(entries))
+	for i, e := range entries {
+		placeholders[i] = "?"
+		args[i] = e.Commit
+		idx[e.Commit] = i
+	}
+
+	query := `SELECT commit_hash, action, COUNT(*) FROM commit_log WHERE commit_hash IN (` +
+		strings.Join(placeholders, ",") +
+		`) GROUP BY commit_hash, action`
+
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var hash, action string
+		var count int
+		if err := rows.Scan(&hash, &action, &count); err != nil {
+			continue
+		}
+		i, ok := idx[hash]
+		if !ok {
+			continue
+		}
+		switch action {
+		case "added":
+			entries[i].Files.Added = count
+		case "modified":
+			entries[i].Files.Modified = count
+		case "deleted":
+			entries[i].Files.Deleted = count
+		}
+	}
 }
 
 // Activity computes commit-activity metrics for path using a SQL aggregate
@@ -461,24 +498,6 @@ func (s *Store) activityGit(path string) (ActivityResult, error) {
 	return result, nil
 }
 
-// buildTagIndex returns a map from commit hash to tag names.
-func (s *Store) buildTagIndex() (map[plumbing.Hash][]string, error) {
-	idx := make(map[plumbing.Hash][]string)
-	refIter, err := s.storer.IterReferences()
-	if err != nil {
-		return nil, err
-	}
-	_ = refIter.ForEach(func(ref *plumbing.Reference) error {
-		name := ref.Name().String()
-		if strings.HasPrefix(name, "refs/tags/") {
-			tagName := strings.TrimPrefix(name, "refs/tags/")
-			idx[ref.Hash()] = append(idx[ref.Hash()], tagName)
-		}
-		return nil
-	})
-	return idx, nil
-}
-
 // CommitDetail returns metadata and changed files for a specific commit.
 // It diffs the commit's tree against its parent to determine which files changed.
 func (s *Store) CommitDetail(commitHash string) (*CommitDetailResult, error) {
@@ -535,18 +554,12 @@ func (s *Store) CommitDetail(commitHash string) (*CommitDetailResult, error) {
 		firstLine = firstLine[:idx]
 	}
 
-	tagIndex, _ := s.buildTagIndex()
-	tags := tagIndex[hash]
-	if tags == nil {
-		tags = []string{}
-	}
-
 	return &CommitDetailResult{
-		Commit:  hash.String(),
-		Date:    commit.Committer.When.UTC().Format(time.RFC3339),
-		Message: firstLine,
-		Tags:    tags,
-		Files:   files,
+		Commit:    hash.String(),
+		Date:      commit.Committer.When.UTC().Format(time.RFC3339),
+		Message:   firstLine,
+		Operation: parseOperation(commit.Author.Email),
+		Files:     files,
 	}, nil
 }
 

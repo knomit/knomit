@@ -2,7 +2,6 @@ package mcp
 
 import (
 	"context"
-	"encoding/json"
 	"strings"
 	"testing"
 
@@ -21,7 +20,7 @@ func TestLearnWritesFacts(t *testing.T) {
 
 
 	idx.EXPECT().Search(gomock.Any()).Return(nil, nil).AnyTimes()
-	gs.EXPECT().BatchWrite(gomock.Any(), gomock.Any()).DoAndReturn(func(files map[string]string, msg string) (string, map[string]string, error) {
+	gs.EXPECT().BatchWrite(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(files map[string]string, msg, operation string) (string, map[string]string, error) {
 		capturedFiles = files
 		blobHashes := make(map[string]string, len(files))
 		for path := range files {
@@ -29,7 +28,6 @@ func TestLearnWritesFacts(t *testing.T) {
 		}
 		return "abc123def456", blobHashes, nil
 	})
-	gs.EXPECT().Tag(gomock.Any()).Return(nil)
 
 	handler := LearnHandler(gs, idx, "kb", fact.DefaultOntology())
 
@@ -82,17 +80,6 @@ func TestLearnWritesFacts(t *testing.T) {
 	}
 	if fact.Title != "Test Fact" {
 		t.Fatalf("title: got %q want %q", fact.Title, "Test Fact")
-	}
-
-	// Verify result JSON has moment_tag.
-	textContent := getResultText(t, result)
-	var resp map[string]interface{}
-	if err := json.Unmarshal([]byte(textContent), &resp); err != nil {
-		t.Fatalf("result is not valid JSON: %v\n%s", err, textContent)
-	}
-	tag, _ := resp["moment_tag"].(string)
-	if !strings.HasPrefix(tag, "learn/test-moment") {
-		t.Fatalf("moment_tag: got %q want prefix learn/test-moment", tag)
 	}
 
 }
@@ -201,7 +188,7 @@ func TestLearnMultipleFacts(t *testing.T) {
 
 
 	idx.EXPECT().Search(gomock.Any()).Return(nil, nil).AnyTimes()
-	gs.EXPECT().BatchWrite(gomock.Any(), gomock.Any()).DoAndReturn(func(files map[string]string, msg string) (string, map[string]string, error) {
+	gs.EXPECT().BatchWrite(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(files map[string]string, msg, operation string) (string, map[string]string, error) {
 		capturedFiles = files
 		blobHashes := make(map[string]string, len(files))
 		for path := range files {
@@ -209,7 +196,6 @@ func TestLearnMultipleFacts(t *testing.T) {
 		}
 		return "abc123def456", blobHashes, nil
 	})
-	gs.EXPECT().Tag(gomock.Any()).Return(nil)
 
 	handler := LearnHandler(gs, idx, "kb", fact.DefaultOntology())
 
@@ -285,7 +271,7 @@ func TestLearnHandler_DedupMergesNearDuplicate(t *testing.T) {
 
 	// BatchWrite should write to existing path (merged)
 	var capturedFiles map[string]string
-	gs.EXPECT().BatchWrite(gomock.Any(), gomock.Any()).DoAndReturn(func(files map[string]string, msg string) (string, map[string]string, error) {
+	gs.EXPECT().BatchWrite(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(files map[string]string, msg, operation string) (string, map[string]string, error) {
 		capturedFiles = files
 		blobHashes := make(map[string]string, len(files))
 		for path := range files {
@@ -293,8 +279,6 @@ func TestLearnHandler_DedupMergesNearDuplicate(t *testing.T) {
 		}
 		return "commit_merged", blobHashes, nil
 	})
-
-	gs.EXPECT().Tag(gomock.Any()).Return(nil)
 
 	handler := LearnHandler(gs, idx, "kb", fact.DefaultOntology())
 

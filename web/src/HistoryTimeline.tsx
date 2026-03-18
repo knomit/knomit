@@ -9,12 +9,18 @@ interface Props {
   dispatch: Dispatch<Action>;
 }
 
-function tagColor(tag: string): { color: string; bg: string } {
-  if (tag.startsWith('learn/')) return { color: '#7c9', bg: '#1a2e1a' };
-  if (tag.startsWith('update/')) return { color: '#8af', bg: '#1a1a2e' };
-  if (tag.startsWith('retract/')) return { color: '#f88', bg: '#2e1a1a' };
-  if (tag.startsWith('synthesize/') || tag.startsWith('subsume/')) return { color: '#fa0', bg: '#2e2a1a' };
-  return { color: '#888', bg: '#222' };
+const opStyles: Record<string, { color: string; bg: string; label: string }> = {
+  learn:   { color: '#7c9', bg: '#1a2e1a', label: 'learn' },
+  update:  { color: '#8af', bg: '#1a1a2e', label: 'update' },
+  retract: { color: '#f88', bg: '#2e1a1a', label: 'retract' },
+  subsume: { color: '#fa0', bg: '#2e2a1a', label: 'subsume' },
+  sync:    { color: '#888', bg: '#222',    label: 'sync' },
+};
+const defaultStyle = { color: '#555', bg: '#222', label: '' };
+
+function commitStyle(entry: HistoryEntryWithTags): { color: string; bg: string; label: string } {
+  if (entry.operation && opStyles[entry.operation]) return opStyles[entry.operation];
+  return defaultStyle;
 }
 
 function relativeTime(dateStr: string): string {
@@ -128,9 +134,9 @@ export function HistoryTimeline({ state, dispatch }: Props) {
         {entries.map((entry, i) => {
           const isSelected = i === selectedIdx;
           const isHighlighted = state.historyCommit === entry.commit;
-          const hasTag = entry.tags && entry.tags.length > 0;
-          const dotSize = hasTag ? 10 : 6;
-          const dotColor = hasTag ? tagColor(entry.tags[0]).color : '#555';
+          const cs = commitStyle(entry);
+          const hasLabel = cs.label !== '';
+          const dotSize = hasLabel ? 10 : 6;
 
           return (
             <div
@@ -158,7 +164,7 @@ export function HistoryTimeline({ state, dispatch }: Props) {
                   width: dotSize,
                   height: dotSize,
                   borderRadius: '50%',
-                  background: dotColor,
+                  background: cs.color,
                   flexShrink: 0,
                   margin: '2px 0',
                 }} />
@@ -168,26 +174,21 @@ export function HistoryTimeline({ state, dispatch }: Props) {
 
               {/* Commit info */}
               <div style={{ flex: 1, minWidth: 0, paddingLeft: 8, paddingTop: 4, paddingBottom: 4 }}>
-                {/* Tag badges */}
-                {hasTag && (
+                {/* Operation badge */}
+                {hasLabel && (
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginBottom: 2 }}>
-                    {entry.tags.map(tag => {
-                      const tc = tagColor(tag);
-                      return (
-                        <span key={tag} style={{
-                          fontSize: 10,
-                          padding: '1px 6px',
-                          borderRadius: 8,
-                          color: tc.color,
-                          background: tc.bg,
-                          whiteSpace: 'nowrap',
-                        }}>{tag}</span>
-                      );
-                    })}
+                    <span style={{
+                      fontSize: 10,
+                      padding: '1px 6px',
+                      borderRadius: 8,
+                      color: cs.color,
+                      background: cs.bg,
+                      whiteSpace: 'nowrap',
+                    }}>{cs.label}</span>
                   </div>
                 )}
-                {/* Hash + time */}
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                {/* Hash + time + file counts */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                   <span
                     onClick={e => {
                       e.stopPropagation();
@@ -197,6 +198,9 @@ export function HistoryTimeline({ state, dispatch }: Props) {
                   >
                     {entry.commit.slice(0, 7)}
                   </span>
+                  {entry.files?.added ? <span style={{ fontSize: 9, color: '#7c9', fontFamily: 'monospace' }}>{entry.files.added}A</span> : null}
+                  {entry.files?.modified ? <span style={{ fontSize: 9, color: '#8af', fontFamily: 'monospace' }}>{entry.files.modified}M</span> : null}
+                  {entry.files?.deleted ? <span style={{ fontSize: 9, color: '#f88', fontFamily: 'monospace' }}>{entry.files.deleted}D</span> : null}
                   <span style={{ fontSize: 11, color: '#666' }}>{relativeTime(entry.date)}</span>
                 </div>
                 {/* Commit message */}

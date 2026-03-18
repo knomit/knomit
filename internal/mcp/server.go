@@ -46,9 +46,9 @@ type GitStore interface {
 	ReadFile(path string) (string, error)
 	ReadFileAtCommit(path, commitHash string) (string, error)
 	ReadFileWithHash(path string) (content, blobHash string, err error)
-	WriteFile(path, content, message string) (commitHash, blobHash string, err error)
-	BatchWrite(files map[string]string, message string) (commitHash string, blobHashes map[string]string, err error)
-	DeleteFile(path, message string) (commitHash string, err error)
+	WriteFile(path, content, message, operation string) (commitHash, blobHash string, err error)
+	BatchWrite(files map[string]string, message, operation string) (commitHash string, blobHashes map[string]string, err error)
+	DeleteFile(path, message, operation string) (commitHash string, err error)
 	FileExists(path string) (bool, error)
 	ListDir(path string) ([]DirEntry, error)
 	ListAll() ([]string, error)
@@ -57,8 +57,6 @@ type GitStore interface {
 	DiffFiles(fromCommit string) (added, modified, deleted []string, err error)
 	HeadCommit() (string, error)
 	WalkChangedFiles(fromCommit, prefix string, seen map[string]bool, limit int) ([]FileRecency, string, error)
-	Tag(name string) error
-	TagsContaining(hash string) ([]string, error)
 	Branch() string
 }
 

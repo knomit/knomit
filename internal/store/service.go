@@ -104,13 +104,13 @@ func (s *Service) BeginTx(ctx context.Context, opts *sql.TxOptions) (*sql.Tx, er
 
 // GitWriter is the minimal interface needed for DeleteFact.
 type GitWriter interface {
-	DeleteFile(path, message string) (string, error)
+	DeleteFile(path, message, operation string) (string, error)
 }
 
 // DeleteFact deletes a fact from the git store; the onCommit observer
 // handles index cleanup automatically via idx.Sync.
 func (s *Service) DeleteFact(gw GitWriter, path, message string) error {
-	if _, err := gw.DeleteFile(path, message); err != nil {
+	if _, err := gw.DeleteFile(path, message, "retract"); err != nil {
 		return fmt.Errorf("DeleteFact git: %w", err)
 	}
 

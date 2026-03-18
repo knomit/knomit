@@ -18,7 +18,7 @@ func TestSignCommitInPlace_SignsAndChangesHash(t *testing.T) {
 	signer := generateTestSigner(t)
 	store.SetSigner(signer)
 
-	commitHash, _, err := store.WriteFile("kb/test.md", "# Test\n", "add test")
+	commitHash, _, err := store.WriteFile("kb/test.md", "# Test\n", "add test", "learn")
 	if err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
@@ -44,10 +44,10 @@ func TestDeleteFile_SignsCommit(t *testing.T) {
 	store.SetSigner(signer)
 
 	// Write a file first.
-	store.WriteFile("kb/temp.md", "# Temp\n", "add temp")
+	store.WriteFile("kb/temp.md", "# Temp\n", "add temp", "learn")
 
 	// Delete it — should also produce a signed commit.
-	commitHash, err := store.DeleteFile("kb/temp.md", "delete temp")
+	commitHash, err := store.DeleteFile("kb/temp.md", "delete temp", "retract")
 	if err != nil {
 		t.Fatalf("DeleteFile: %v", err)
 	}
@@ -76,7 +76,7 @@ func TestBatchWrite_SignsCommit(t *testing.T) {
 		"kb/a.md": "# A\n",
 		"kb/b.md": "# B\n",
 	}
-	commitHash, _, err := store.BatchWrite(files, "batch add")
+	commitHash, _, err := store.BatchWrite(files, "batch add", "learn")
 	if err != nil {
 		t.Fatalf("BatchWrite: %v", err)
 	}
@@ -136,7 +136,7 @@ func TestSignCommitInPlace_NoSignerNoSignature(t *testing.T) {
 	defer store.Close()
 
 	// No signer — commit should be unsigned.
-	commitHash, _, err := store.WriteFile("kb/test.md", "# Test\n", "add test")
+	commitHash, _, err := store.WriteFile("kb/test.md", "# Test\n", "add test", "learn")
 	if err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}

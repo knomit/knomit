@@ -5,7 +5,6 @@ package git
 
 import (
 	"fmt"
-	"time"
 
 	gogit "github.com/go-git/go-git/v5"
 	gogitconfig "github.com/go-git/go-git/v5/config"
@@ -43,7 +42,6 @@ func (s *Store) Sync(remoteBranch string) (SyncResult, error) {
 	err = s.repo.Fetch(&gogit.FetchOptions{
 		RemoteName: "origin",
 		Auth:       s.auth,
-		Tags:       gogit.AllTags,
 	})
 	if err != nil && err != gogit.NoErrAlreadyUpToDate {
 		s.mu.Unlock()
@@ -148,11 +146,9 @@ func (s *Store) Sync(remoteBranch string) (SyncResult, error) {
 	}
 
 	// Create merge commit.
-	now := time.Now()
-	sig := object.Signature{Name: "knomit", Email: "knomit@local", When: now}
 	mc := &object.Commit{
-		Author:       sig,
-		Committer:    sig,
+		Author:       s.authorSig("sync"),
+		Committer:    s.committerSig(),
 		Message:      fmt.Sprintf("sync: merge origin/%s into %s", remoteBranch, s.branch),
 		TreeHash:     mergedTreeHash,
 		ParentHashes: []plumbing.Hash{agentHash, originHash},
@@ -332,12 +328,11 @@ func (s *Store) Push() (PushResult, error) {
 
 	refspec := fmt.Sprintf("refs/heads/%s:refs/heads/%s", s.branch, s.branch)
 
-	log.Debug().Str("branch", s.branch).Msg("git push: pushing agent branch and tags")
+	log.Debug().Str("branch", s.branch).Msg("git push: pushing agent branch")
 	err = s.repo.Push(&gogit.PushOptions{
 		RemoteName: "origin",
 		RefSpecs: []gogitconfig.RefSpec{
 			gogitconfig.RefSpec(refspec),
-			"refs/tags/*:refs/tags/*",
 		},
 		Auth: s.auth,
 	})

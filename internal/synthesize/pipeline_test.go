@@ -47,11 +47,11 @@ func TestRunPruneOnly(t *testing.T) {
 	adapter.EXPECT().Complete(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(llmResp, nil)
 
 	// forget.md: DeleteFile + idx.Delete
-	gs.EXPECT().DeleteFile("kb/test/forget.md", gomock.Any()).Return("deadbeef", nil)
+	gs.EXPECT().DeleteFile("kb/test/forget.md", gomock.Any(), gomock.Any()).Return("deadbeef", nil)
 	idx.EXPECT().Delete("kb/test/forget.md").Return(nil)
 
 	// Tag per operation (retract for the deleted fact)
-	gs.EXPECT().Tag(gomock.Any()).Return(nil).AnyTimes()
+
 
 	recipe := Recipe{
 		Name:  "smoke-prune",
@@ -179,7 +179,7 @@ func TestRunDistillWithFacts(t *testing.T) {
 
 	// Write synthesized fact
 	var synthWritten bool
-	gs.EXPECT().WriteFile(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(path, content, msg string) (string, string, error) {
+	gs.EXPECT().WriteFile(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(path, content, msg, operation string) (string, string, error) {
 		synthWritten = true
 		return "deadbeef", "blob_synth", nil
 	})
@@ -187,11 +187,11 @@ func TestRunDistillWithFacts(t *testing.T) {
 	idx.EXPECT().GraphAddDerivedFrom(gomock.Any(), gomock.Any()).Return(nil)
 
 	// Delete forgotten fact
-	gs.EXPECT().DeleteFile("kb/test/a.md", gomock.Any()).Return("deadbeef2", nil)
+	gs.EXPECT().DeleteFile("kb/test/a.md", gomock.Any(), gomock.Any()).Return("deadbeef2", nil)
 	idx.EXPECT().Delete("kb/test/a.md").Return(nil)
 
 	// Tags per operation (subsume for new fact, retract for deleted)
-	gs.EXPECT().Tag(gomock.Any()).Return(nil).AnyTimes()
+
 
 	recipe := Recipe{
 		Name:  "distill-with-facts",
@@ -253,16 +253,16 @@ func TestRunDistillRetryOnPassive(t *testing.T) {
 	)
 
 	// Write synthesized fact
-	gs.EXPECT().WriteFile(gomock.Any(), gomock.Any(), gomock.Any()).Return("deadbeef", "blob_synth", nil)
+	gs.EXPECT().WriteFile(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return("deadbeef", "blob_synth", nil)
 	idx.EXPECT().Upsert(gomock.Any()).Return(nil)
 	idx.EXPECT().GraphAddDerivedFrom(gomock.Any(), gomock.Any()).Return(nil)
 
 	// Delete forgotten fact
-	gs.EXPECT().DeleteFile("kb/test/a.md", gomock.Any()).Return("deadbeef2", nil)
+	gs.EXPECT().DeleteFile("kb/test/a.md", gomock.Any(), gomock.Any()).Return("deadbeef2", nil)
 	idx.EXPECT().Delete("kb/test/a.md").Return(nil)
 
 	// Tags per operation
-	gs.EXPECT().Tag(gomock.Any()).Return(nil).AnyTimes()
+
 
 	recipe := Recipe{
 		Name:  "distill-retry",

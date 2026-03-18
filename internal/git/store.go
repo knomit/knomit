@@ -32,6 +32,7 @@ import (
 	gogit "github.com/go-git/go-git/v5"
 	gogitconfig "github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/go-git/go-git/v5/plumbing/transport"
 	"github.com/go-git/go-billy/v5/memfs"
 	_ "github.com/mattn/go-sqlite3"
@@ -52,6 +53,7 @@ type Store struct {
 	ownsDB    bool    // true when Init/Open opened the DB (legacy path)
 	ownedDB   *sql.DB // non-nil when ownsDB is true
 	branch    string  // e.g. "agent/laptop"
+	agentID   string  // e.g. "laptop" (branch with "agent/" prefix stripped)
 	auth      transport.AuthMethod
 	signer    ssh.Signer // signs commits when set
 	onCommit  func(hash string)
@@ -84,19 +86,27 @@ type FileRecency struct {
 
 // CommitDetailResult contains metadata and changed files for a single commit.
 type CommitDetailResult struct {
-	Commit  string        `json:"commit"`
-	Date    string        `json:"date"`
-	Message string        `json:"message"`
-	Tags    []string      `json:"tags"`
-	Files   []ChangedFile `json:"files"`
+	Commit    string        `json:"commit"`
+	Date      string        `json:"date"`
+	Message   string        `json:"message"`
+	Operation string        `json:"operation,omitempty"`
+	Files     []ChangedFile `json:"files"`
+}
+
+// FileCounts summarizes the number of files added, modified, and deleted in a commit.
+type FileCounts struct {
+	Added    int `json:"added,omitempty"`
+	Modified int `json:"modified,omitempty"`
+	Deleted  int `json:"deleted,omitempty"`
 }
 
 // LogEntryWithTags extends LogEntry with tag names associated with the commit.
 type LogEntryWithTags struct {
-	Commit  string   `json:"commit"`
-	Date    string   `json:"date"`
-	Message string   `json:"message"`
-	Tags    []string `json:"tags"`
+	Commit    string     `json:"commit"`
+	Date      string     `json:"date"`
+	Message   string     `json:"message"`
+	Operation string     `json:"operation,omitempty"`
+	Files     FileCounts `json:"files,omitempty"`
 }
 
 // ActivityResult holds commit-activity metrics for a path over several time windows.
@@ -121,9 +131,10 @@ const gitSchema = `
 CREATE TABLE IF NOT EXISTS objects (hash TEXT NOT NULL, type INTEGER NOT NULL, size INTEGER NOT NULL, data BLOB NOT NULL, PRIMARY KEY (hash, type));
 CREATE TABLE IF NOT EXISTS refs (name TEXT PRIMARY KEY, target TEXT NOT NULL, is_symbolic INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value BLOB NOT NULL);
-CREATE TABLE IF NOT EXISTS commit_log (commit_hash TEXT NOT NULL, path TEXT NOT NULL, committed_at INTEGER NOT NULL, message TEXT NOT NULL, PRIMARY KEY (commit_hash, path));
+CREATE TABLE IF NOT EXISTS commit_log (commit_hash TEXT NOT NULL, path TEXT NOT NULL, committed_at INTEGER NOT NULL, message TEXT NOT NULL, operation TEXT NOT NULL DEFAULT '', author_email TEXT NOT NULL DEFAULT '', action TEXT NOT NULL DEFAULT '', PRIMARY KEY (commit_hash, path));
 CREATE INDEX IF NOT EXISTS commit_log_path_time ON commit_log (path, committed_at DESC);
 CREATE INDEX IF NOT EXISTS commit_log_time ON commit_log (committed_at DESC);
+CREATE INDEX IF NOT EXISTS commit_log_operation ON commit_log (operation, committed_at DESC);
 `
 
 // InitWithStorer creates a new knomit git store using an externally provided storer.
@@ -148,13 +159,14 @@ func InitWithStorer(s *storegit.Storer, initFiles map[string]string, agentBranch
 	}
 
 	rootManifest := "# Knowledge Base\n\nRoot manifest.\n"
-	lastCommit, _, err := writeFileToStore(s, plumbing.ZeroHash, "kb.md", rootManifest, "init: create knowledge base")
+	initSig := object.Signature{Name: "knomit", Email: "knomit@local", When: time.Now()}
+	lastCommit, _, err := writeFileToStore(s, plumbing.ZeroHash, "kb.md", rootManifest, "init: create knowledge base", initSig, initSig)
 	if err != nil {
 		return nil, fmt.Errorf("git.Init: initial commit: %w", err)
 	}
 
 	for path, content := range initFiles {
-		lastCommit, _, err = writeFileToStore(s, lastCommit, path, content, "init: "+path)
+		lastCommit, _, err = writeFileToStore(s, lastCommit, path, content, "init: "+path, initSig, initSig)
 		if err != nil {
 			return nil, fmt.Errorf("git.Init: write %s: %w", path, err)
 		}
@@ -186,10 +198,11 @@ func InitWithStorer(s *storegit.Storer, initFiles map[string]string, agentBranch
 
 	log.Info().Str("branch", agentBranch).Msg("git store initialized")
 	gs := &Store{
-		repo:   repo,
-		storer: s,
-		db:     s.DB(),
-		branch: agentBranch,
+		repo:    repo,
+		storer:  s,
+		db:      s.DB(),
+		branch:  agentBranch,
+		agentID: deriveAgentID(agentBranch),
 	}
 	if err := gs.populateCommitLog(); err != nil {
 		log.Warn().Err(err).Msg("commit_log: initial populate failed")
@@ -213,10 +226,11 @@ func OpenWithStorer(s *storegit.Storer) (*Store, error) {
 
 	log.Info().Str("branch", branch).Msg("git store opened")
 	gs := &Store{
-		repo:   repo,
-		storer: s,
-		db:     s.DB(),
-		branch: branch,
+		repo:    repo,
+		storer:  s,
+		db:      s.DB(),
+		branch:  branch,
+		agentID: deriveAgentID(branch),
 	}
 	if err := gs.populateCommitLog(); err != nil {
 		log.Warn().Err(err).Msg("commit_log: open populate failed")
@@ -293,6 +307,36 @@ func (s *Store) Close() error {
 // Branch returns the agent branch name (e.g. "agent/laptop").
 func (s *Store) Branch() string {
 	return s.branch
+}
+
+// deriveAgentID extracts the agent identifier from a branch name.
+// "agent/laptop-abc" → "laptop-abc", "main" → "main".
+func deriveAgentID(branch string) string {
+	if after, ok := strings.CutPrefix(branch, "agent/"); ok {
+		return after
+	}
+	return branch
+}
+
+// AgentID returns the agent identifier derived from the branch name.
+func (s *Store) AgentID() string { return s.agentID }
+
+// authorSig returns the author signature for a given operation.
+func (s *Store) authorSig(operation string) object.Signature {
+	return object.Signature{
+		Name:  s.agentID,
+		Email: s.agentID + "+" + operation + "@agents.knomit.io",
+		When:  time.Now(),
+	}
+}
+
+// committerSig returns the committer signature (stable per agent).
+func (s *Store) committerSig() object.Signature {
+	return object.Signature{
+		Name:  s.agentID,
+		Email: s.agentID + "@agents.knomit.io",
+		When:  time.Now(),
+	}
 }
 
 // HeadCommit returns the hash of the current HEAD commit as a hex string.
@@ -406,7 +450,8 @@ func InitFromRemote(s *storegit.Storer, originURL string, auth transport.AuthMet
 		// Repo already initialized above; create initial content inline
 		// (can't call InitWithStorer which would try gogit.Init again).
 		rootManifest := "# Knowledge Base\n\nRoot manifest.\n"
-		lastCommit, _, writeErr := writeFileToStore(s, plumbing.ZeroHash, "kb.md", rootManifest, "init: create knowledge base")
+		initSig := object.Signature{Name: "knomit", Email: "knomit@local", When: time.Now()}
+		lastCommit, _, writeErr := writeFileToStore(s, plumbing.ZeroHash, "kb.md", rootManifest, "init: create knowledge base", initSig, initSig)
 		if writeErr != nil {
 			return nil, fmt.Errorf("InitFromRemote: empty remote fallback: %w", writeErr)
 		}
@@ -427,13 +472,14 @@ func InitFromRemote(s *storegit.Storer, originURL string, auth transport.AuthMet
 		if writeErr = s.SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), lastCommit)); writeErr != nil {
 			return nil, fmt.Errorf("InitFromRemote: empty remote set main: %w", writeErr)
 		}
-		log.Info().Str("branch", agentBranch).Msg("git store initialized (empty remote)")
+		log.Info().Str("branch", agentBranch).Str("origin", originURL).Msg("git store initialized (empty remote)")
 		gs := &Store{
-			repo:   repo,
-			storer: s,
-			db:     s.DB(),
-			branch: agentBranch,
-			auth:   auth,
+			repo:    repo,
+			storer:  s,
+			db:      s.DB(),
+			branch:  agentBranch,
+			agentID: deriveAgentID(agentBranch),
+			auth:    auth,
 		}
 		if err := gs.populateCommitLog(); err != nil {
 			log.Warn().Err(err).Msg("commit_log: empty-remote populate failed")
@@ -489,13 +535,14 @@ func InitFromRemote(s *storegit.Storer, originURL string, auth transport.AuthMet
 		return nil, fmt.Errorf("InitFromRemote: set main ref: %w", err)
 	}
 
-	log.Info().Str("branch", agentBranch).Msg("git store initialized from remote")
+	log.Info().Str("branch", agentBranch).Str("origin", originURL).Msg("git store initialized from remote")
 	gs := &Store{
-		repo:   repo,
-		storer: s,
-		db:     s.DB(),
-		branch: agentBranch,
-		auth:   auth,
+		repo:    repo,
+		storer:  s,
+		db:      s.DB(),
+		branch:  agentBranch,
+		agentID: deriveAgentID(agentBranch),
+		auth:    auth,
 	}
 	if err := gs.populateCommitLog(); err != nil {
 		log.Warn().Err(err).Msg("commit_log: remote populate failed")

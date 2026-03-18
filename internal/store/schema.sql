@@ -128,7 +128,11 @@ CREATE TABLE IF NOT EXISTS commit_log (
     path         TEXT    NOT NULL,
     committed_at INTEGER NOT NULL,  -- Unix seconds
     message      TEXT    NOT NULL,
+    operation    TEXT    NOT NULL DEFAULT '',
+    author_email TEXT    NOT NULL DEFAULT '',
+    action       TEXT    NOT NULL DEFAULT '',
     PRIMARY KEY (commit_hash, path)
 );
 CREATE INDEX IF NOT EXISTS commit_log_path_time ON commit_log (path, committed_at DESC);
 CREATE INDEX IF NOT EXISTS commit_log_time      ON commit_log (committed_at DESC);
+CREATE INDEX IF NOT EXISTS commit_log_operation ON commit_log (operation, committed_at DESC);

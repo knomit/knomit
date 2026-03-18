@@ -266,10 +266,10 @@ func TestIncrementalSync(t *testing.T) {
 	fact1 := "---\ndomain: [databases]\nconfidence: 0.9\nsources: 2\nentities: [postgres]\nrefs: []\n---\n# Postgres MVCC\n\nPostgres uses multi-version concurrency control.\n"
 	fact2 := "---\ndomain: [caching]\nconfidence: 0.8\nsources: 1\nentities: [redis]\nrefs: []\n---\n# Redis Persistence\n\nRedis supports AOF and RDB persistence.\n"
 
-	if _, _, err := gitStore.WriteFile("kb/postgres-mvcc.md", fact1, "add postgres fact"); err != nil {
+	if _, _, err := gitStore.WriteFile("kb/postgres-mvcc.md", fact1, "add postgres fact", "learn"); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := gitStore.WriteFile("kb/redis-persistence.md", fact2, "add redis fact"); err != nil {
+	if _, _, err := gitStore.WriteFile("kb/redis-persistence.md", fact2, "add redis fact", "learn"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -310,7 +310,7 @@ func TestIncrementalSync(t *testing.T) {
 	// --- Incremental sync ---
 	// Write a third fact. Sync should only index the delta.
 	fact3 := "---\ndomain: [messaging]\nconfidence: 0.95\nsources: 3\nentities: [kafka]\nrefs: []\n---\n# Kafka Partitions\n\nKafka topics are split into partitions for parallelism.\n"
-	if _, _, err := gitStore.WriteFile("kb/kafka-partitions.md", fact3, "add kafka fact"); err != nil {
+	if _, _, err := gitStore.WriteFile("kb/kafka-partitions.md", fact3, "add kafka fact", "learn"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -338,7 +338,7 @@ func TestIncrementalSync(t *testing.T) {
 
 	// --- Delete sync ---
 	// Delete the redis fact and sync; it should be removed from the index.
-	if _, err := gitStore.DeleteFile("kb/redis-persistence.md", "delete: remove redis fact"); err != nil {
+	if _, err := gitStore.DeleteFile("kb/redis-persistence.md", "delete: remove redis fact", "retract"); err != nil {
 		t.Fatal(err)
 	}
 

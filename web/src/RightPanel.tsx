@@ -22,12 +22,17 @@ function relativeTime(dateStr: string): string {
   return new Date(dateStr).toLocaleDateString();
 }
 
-function tagColor(tag: string): { color: string; bg: string } {
-  if (tag.startsWith('learn/')) return { color: '#7c9', bg: '#1a2e1a' };
-  if (tag.startsWith('update/')) return { color: '#8af', bg: '#1a1a2e' };
-  if (tag.startsWith('retract/')) return { color: '#f88', bg: '#2e1a1a' };
-  if (tag.startsWith('synthesize/') || tag.startsWith('subsume/')) return { color: '#fa0', bg: '#2e2a1a' };
-  return { color: '#888', bg: '#222' };
+const opStyles: Record<string, { color: string; bg: string; label: string }> = {
+  learn:   { color: '#7c9', bg: '#1a2e1a', label: 'learn' },
+  update:  { color: '#8af', bg: '#1a1a2e', label: 'update' },
+  retract: { color: '#f88', bg: '#2e1a1a', label: 'retract' },
+  subsume: { color: '#fa0', bg: '#2e2a1a', label: 'subsume' },
+  sync:    { color: '#888', bg: '#222',    label: 'sync' },
+};
+
+function commitDetailStyle(detail: CommitDetail): { color: string; bg: string; label: string } | null {
+  if (detail.operation && opStyles[detail.operation]) return opStyles[detail.operation];
+  return null;
 }
 
 function TagCloud({ label, entries, color, searchPrefix, onSearch, focusedValue }: {
@@ -135,6 +140,7 @@ function FactSwitcher({ files, selectedPath, onSelect, focusIdx, dropdownFocusId
   });
 
   const triggerFocused = focusIdx === 0;
+  const hasMultiple = files.length > 1;
 
   return (
     <div style={{ margin: '10px 16px 12px' }}>
@@ -142,24 +148,32 @@ function FactSwitcher({ files, selectedPath, onSelect, focusIdx, dropdownFocusId
         onClick={onToggle}
         style={{
           display: 'flex', alignItems: 'center', gap: 8, padding: '7px 10px',
-          background: triggerFocused ? '#2a2a3a' : '#1a1a2a',
-          border: '1px solid #2a2a3a',
+          background: triggerFocused ? '#222233' : '#161622',
+          border: '1px solid transparent',
           borderRadius: open ? '6px 6px 0 0' : 6,
-          cursor: 'pointer', userSelect: 'none' as const,
+          cursor: hasMultiple ? 'pointer' : 'default',
+          userSelect: 'none' as const,
         }}
       >
         {current && <span style={actionStyle(current.action)}>{current.action[0].toUpperCase()}</span>}
         <span style={{ flex: 1, fontSize: 12, color: '#ddd', fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {current ? current.path.replace(/\.md$/, '') : '—'}
         </span>
-        <span style={{ fontSize: 11, color: '#555', flexShrink: 0 }}>
-          {currentIdx + 1} / {files.length}
-        </span>
-        <span style={{ fontSize: 11, color: '#555', flexShrink: 0 }}>{open ? '▴' : '▾'}</span>
+        {hasMultiple && (
+          <>
+            <span style={{
+              fontSize: 10, padding: '1px 7px', borderRadius: 8,
+              color: '#ddd', background: '#3a3a4a', fontWeight: 600,
+            }}>
+              {currentIdx + 1}/{files.length} facts
+            </span>
+            <span style={{ fontSize: 11, color: '#888', flexShrink: 0 }}>{open ? '▴' : '▾'}</span>
+          </>
+        )}
       </div>
 
       {open && (
-        <div style={{ background: '#1a1a2a', border: '1px solid #2a2a3a', borderTop: 'none', borderRadius: '0 0 6px 6px', overflow: 'hidden' }}>
+        <div style={{ background: '#1a1a2a', border: '1px solid #2a2a3a', borderTop: 'none', borderRadius: '0 0 6px 6px', maxHeight: 200, overflowY: 'auto' }}>
           {files.map((f, i) => {
             const isSelected = f.path === selectedPath;
             const isDdFocused = dropdownFocusIdx === i;
@@ -176,7 +190,7 @@ function FactSwitcher({ files, selectedPath, onSelect, focusIdx, dropdownFocusId
                 }}
               >
                 <span style={actionStyle(f.action)}>{f.action[0].toUpperCase()}</span>
-                <span style={{ fontSize: 12, color: '#ddd', fontFamily: 'monospace' }}>{f.path.replace(/\.md$/, '')}</span>
+                <span style={{ fontSize: 12, color: isSelected ? '#ddd' : '#999', fontFamily: 'monospace' }}>{f.path.replace(/\.md$/, '')}</span>
               </div>
             );
           })}
@@ -197,7 +211,7 @@ function renderFact(fact: Fact, search: (q: string) => void, dispatch?: Dispatch
       {/* Header */}
       <div style={{ marginBottom: 20 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-          <div style={{ fontSize: 18, fontWeight: 600, color: '#eee', letterSpacing: '-0.3px' }}>
+          <div style={{ fontSize: 18, fontWeight: 600, color: '#eee', letterSpacing: '-0.3px', flex: 1, minWidth: 0 }}>
             {fact.title || fact.path}
           </div>
           {historyDate && (
@@ -239,23 +253,31 @@ function renderFact(fact: Fact, search: (q: string) => void, dispatch?: Dispatch
                   {fact.commit_hash.slice(0, 7)}
                 </span>
               )}
-              <button
+              {!historyDate && <span
                 title="Find similar facts"
                 onClick={() => dispatch({ type: 'SIMILAR_SEARCH', path: fact.path, text: fact.body || '' })}
                 style={{
-                  background: '#1a1a2a', border: '1px solid rgba(136,170,255,0.2)', color: '#8af',
-                  padding: '4px 8px', borderRadius: 4, cursor: 'pointer', fontSize: 14,
-                  transition: 'border-color 0.15s, color 0.15s', flexShrink: 0,
+                  color: '#555', cursor: 'pointer', fontSize: 11, fontFamily: 'monospace',
+                  transition: 'color 0.15s', flexShrink: 0,
                   outline: ft?.kind === 'similar' ? '2px solid rgba(136,170,255,0.55)' : 'none',
-                  outlineOffset: 1,
+                  outlineOffset: 1, borderRadius: 3,
                 }}
-                onMouseEnter={e => { e.currentTarget.style.borderColor = 'rgba(136,170,255,0.5)'; e.currentTarget.style.color = '#adf'; }}
-                onMouseLeave={e => { e.currentTarget.style.borderColor = 'rgba(136,170,255,0.2)'; e.currentTarget.style.color = '#8af'; }}
-              >≈</button>
+                onMouseEnter={e => { (e.currentTarget as HTMLElement).style.color = '#8af'; }}
+                onMouseLeave={e => { (e.currentTarget as HTMLElement).style.color = '#555'; }}
+              >≈</span>}
             </span>
           )}
         </div>
-        <div style={{ fontSize: 12, color: '#555', marginTop: 2 }}>{fact.path}</div>
+        {dispatch ? (
+          <div
+            onClick={() => { dispatch({ type: 'NAVIGATE', path: fact.path }); dispatch({ type: 'ENTER_HISTORY' }); }}
+            style={{ fontSize: 12, color: '#556', marginTop: 2, cursor: 'pointer' }}
+            onMouseEnter={e => { (e.currentTarget as HTMLElement).style.color = '#8af'; }}
+            onMouseLeave={e => { (e.currentTarget as HTMLElement).style.color = '#556'; }}
+          >{fact.path}</div>
+        ) : (
+          <div style={{ fontSize: 12, color: '#555', marginTop: 2 }}>{fact.path}</div>
+        )}
       </div>
 
       {/* Stat cards */}
@@ -520,10 +542,11 @@ export function RightPanel({ state, dispatch }: Props) {
   if (state.historyCommit && fact && !hasSwitcher) {
     if (fact.parse_error) return <FactEditor fact={fact} repo={state.repo} onSaved={setFact} />;
     const goToCommit = (commit: string) => {
-      if (state.leftMode !== 'history') dispatch({ type: 'ENTER_HISTORY' });
+      dispatch({ type: 'NAVIGATE', path: fact.path });
+      dispatch({ type: 'ENTER_HISTORY' });
       dispatch({ type: 'SELECT_COMMIT', commit });
     };
-    return renderFact(fact, search, undefined, focusInfo, commitDetail?.date, goToCommit, handleLocalRef);
+    return renderFact(fact, search, dispatch, focusInfo, commitDetail?.date, goToCommit, handleLocalRef);
   }
 
   // Time-travel: multiple files → show FactSwitcher + selected fact below
@@ -540,10 +563,10 @@ export function RightPanel({ state, dispatch }: Props) {
         {/* Commit header */}
         <div style={{ padding: '16px 20px 8px', borderBottom: '1px solid #222', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', flexShrink: 0 }}>
           <span style={{ color: '#7c9', fontFamily: 'monospace', fontSize: 12 }}>{commitDetail.commit.slice(0, 7)}</span>
-          {commitDetail.tags.map(tag => {
-            const tc = tagColor(tag);
-            return <span key={tag} style={{ color: tc.color, background: tc.bg, padding: '1px 6px', borderRadius: 3, fontSize: 10, fontFamily: 'monospace' }}>{tag}</span>;
-          })}
+          {(() => {
+            const cs = commitDetailStyle(commitDetail);
+            return cs ? <span style={{ color: cs.color, background: cs.bg, padding: '1px 6px', borderRadius: 3, fontSize: 10, fontFamily: 'monospace' }}>{cs.label}</span> : null;
+          })()}
           {/* timestamp + A/M/D summary */}
           <span style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
             <span title={new Date(commitDetail.date).toLocaleString()} style={{ color: '#666', fontSize: 11 }}>{relativeTime(commitDetail.date)}</span>
@@ -569,7 +592,7 @@ export function RightPanel({ state, dispatch }: Props) {
         />
 
         {fact && fact.parse_error && <FactEditor fact={fact} repo={state.repo} onSaved={setFact} />}
-        {fact && !fact.parse_error && <div style={{ flex: 1 }}>{renderFact(fact, search, undefined, focusInfo, undefined, undefined, handleLocalRef)}</div>}
+        {fact && !fact.parse_error && <div style={{ flex: 1 }}>{renderFact(fact, search, dispatch, focusInfo, commitDetail.date, undefined, handleLocalRef)}</div>}
         {!fact && <div style={{ padding: '16px 20px', color: '#666', fontSize: 13 }}>Loading…</div>}
       </div>
     );

@@ -204,7 +204,7 @@ func TestHandleFactWrite(t *testing.T) {
 	t.Run("write valid content returns parsed fact", func(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		gs := NewMockGitStore(ctrl)
-		gs.EXPECT().WriteFile("kb/fact.md", validContent, gomock.Any()).Return("abc123", "def456", nil)
+		gs.EXPECT().WriteFile("kb/fact.md", validContent, gomock.Any(), gomock.Any()).Return("abc123", "def456", nil)
 
 		handler := newTestRouter(gs, nil)
 		body := `{"path":"kb/fact.md","content":` + string(mustJSON(validContent)) + `}`
