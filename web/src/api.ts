@@ -7,7 +7,8 @@ export interface BrowseResponse { path: string; children: DirChild[] }
 export interface Fact { path: string; title: string; body: string; domain: string[]; confidence: number; sources: number; entities: string[]; refs: string[]; parse_error?: string; from_commit?: string; commit_hash?: string; commit_date?: string }
 export interface SearchResult { path: string; title: string; body: string; score: number; domain?: string[]; entities?: string[] }
 export interface HistoryEntry { commit: string; date: string; message: string }
-export interface HistoryEntryWithTags { commit: string; date: string; message: string; operation?: string }
+export interface FileCounts { added?: number; modified?: number; deleted?: number }
+export interface HistoryEntryWithTags { commit: string; date: string; message: string; operation?: string; files?: FileCounts }
 export interface HistoryResponse { entries: HistoryEntryWithTags[]; next?: string }
 export interface CommitFile { path: string; action: string }
 export interface CommitDetail { commit: string; date: string; message: string; operation?: string; files: CommitFile[] }

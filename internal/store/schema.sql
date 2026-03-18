@@ -130,6 +130,7 @@ CREATE TABLE IF NOT EXISTS commit_log (
     message      TEXT    NOT NULL,
     operation    TEXT    NOT NULL DEFAULT '',
     author_email TEXT    NOT NULL DEFAULT '',
+    action       TEXT    NOT NULL DEFAULT '',
     PRIMARY KEY (commit_hash, path)
 );
 CREATE INDEX IF NOT EXISTS commit_log_path_time ON commit_log (path, committed_at DESC);

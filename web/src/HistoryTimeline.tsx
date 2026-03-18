@@ -187,8 +187,8 @@ export function HistoryTimeline({ state, dispatch }: Props) {
                     }}>{cs.label}</span>
                   </div>
                 )}
-                {/* Hash + time */}
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                {/* Hash + time + file counts */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                   <span
                     onClick={e => {
                       e.stopPropagation();
@@ -198,6 +198,9 @@ export function HistoryTimeline({ state, dispatch }: Props) {
                   >
                     {entry.commit.slice(0, 7)}
                   </span>
+                  {entry.files?.added ? <span style={{ fontSize: 9, color: '#7c9', fontFamily: 'monospace' }}>{entry.files.added}A</span> : null}
+                  {entry.files?.modified ? <span style={{ fontSize: 9, color: '#8af', fontFamily: 'monospace' }}>{entry.files.modified}M</span> : null}
+                  {entry.files?.deleted ? <span style={{ fontSize: 9, color: '#f88', fontFamily: 'monospace' }}>{entry.files.deleted}D</span> : null}
                   <span style={{ fontSize: 11, color: '#666' }}>{relativeTime(entry.date)}</span>
                 </div>
                 {/* Commit message */}

@@ -93,12 +93,20 @@ type CommitDetailResult struct {
 	Files     []ChangedFile `json:"files"`
 }
 
+// FileCounts summarizes the number of files added, modified, and deleted in a commit.
+type FileCounts struct {
+	Added    int `json:"added,omitempty"`
+	Modified int `json:"modified,omitempty"`
+	Deleted  int `json:"deleted,omitempty"`
+}
+
 // LogEntryWithTags extends LogEntry with tag names associated with the commit.
 type LogEntryWithTags struct {
-	Commit    string `json:"commit"`
-	Date      string `json:"date"`
-	Message   string `json:"message"`
-	Operation string `json:"operation,omitempty"`
+	Commit    string     `json:"commit"`
+	Date      string     `json:"date"`
+	Message   string     `json:"message"`
+	Operation string     `json:"operation,omitempty"`
+	Files     FileCounts `json:"files,omitempty"`
 }
 
 // ActivityResult holds commit-activity metrics for a path over several time windows.
@@ -123,7 +131,7 @@ const gitSchema = `
 CREATE TABLE IF NOT EXISTS objects (hash TEXT NOT NULL, type INTEGER NOT NULL, size INTEGER NOT NULL, data BLOB NOT NULL, PRIMARY KEY (hash, type));
 CREATE TABLE IF NOT EXISTS refs (name TEXT PRIMARY KEY, target TEXT NOT NULL, is_symbolic INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value BLOB NOT NULL);
-CREATE TABLE IF NOT EXISTS commit_log (commit_hash TEXT NOT NULL, path TEXT NOT NULL, committed_at INTEGER NOT NULL, message TEXT NOT NULL, operation TEXT NOT NULL DEFAULT '', author_email TEXT NOT NULL DEFAULT '', PRIMARY KEY (commit_hash, path));
+CREATE TABLE IF NOT EXISTS commit_log (commit_hash TEXT NOT NULL, path TEXT NOT NULL, committed_at INTEGER NOT NULL, message TEXT NOT NULL, operation TEXT NOT NULL DEFAULT '', author_email TEXT NOT NULL DEFAULT '', action TEXT NOT NULL DEFAULT '', PRIMARY KEY (commit_hash, path));
 CREATE INDEX IF NOT EXISTS commit_log_path_time ON commit_log (path, committed_at DESC);
 CREATE INDEX IF NOT EXISTS commit_log_time ON commit_log (committed_at DESC);
 CREATE INDEX IF NOT EXISTS commit_log_operation ON commit_log (operation, committed_at DESC);

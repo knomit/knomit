@@ -338,7 +338,54 @@ func (s *Store) LogPaginated(path string, limit int, after string) ([]LogEntryWi
 		return nil
 	})
 
+	// Batch-fetch file change counts from commit_log if available.
+	if s.db != nil && s.commitLog && len(entries) > 0 {
+		s.enrichFileCounts(entries)
+	}
+
 	return entries, nextCursor, nil
+}
+
+// enrichFileCounts batch-queries commit_log for A/M/D counts per commit.
+func (s *Store) enrichFileCounts(entries []LogEntryWithTags) {
+	placeholders := make([]string, len(entries))
+	args := make([]any, len(entries))
+	idx := make(map[string]int, len(entries))
+	for i, e := range entries {
+		placeholders[i] = "?"
+		args[i] = e.Commit
+		idx[e.Commit] = i
+	}
+
+	query := `SELECT commit_hash, action, COUNT(*) FROM commit_log WHERE commit_hash IN (` +
+		strings.Join(placeholders, ",") +
+		`) GROUP BY commit_hash, action`
+
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var hash, action string
+		var count int
+		if err := rows.Scan(&hash, &action, &count); err != nil {
+			continue
+		}
+		i, ok := idx[hash]
+		if !ok {
+			continue
+		}
+		switch action {
+		case "added":
+			entries[i].Files.Added = count
+		case "modified":
+			entries[i].Files.Modified = count
+		case "deleted":
+			entries[i].Files.Deleted = count
+		}
+	}
 }
 
 // Activity computes commit-activity metrics for path using a SQL aggregate
