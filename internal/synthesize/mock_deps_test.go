@@ -41,9 +41,9 @@ func (m *MockGitStore) EXPECT() *MockGitStoreMockRecorder {
 }
 
 // BatchWrite mocks base method.
-func (m *MockGitStore) BatchWrite(files map[string]string, message string) (string, map[string]string, error) {
+func (m *MockGitStore) BatchWrite(files map[string]string, message, operation string) (string, map[string]string, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "BatchWrite", files, message)
+	ret := m.ctrl.Call(m, "BatchWrite", files, message, operation)
 	ret0, _ := ret[0].(string)
 	ret1, _ := ret[1].(map[string]string)
 	ret2, _ := ret[2].(error)
@@ -51,9 +51,9 @@ func (m *MockGitStore) BatchWrite(files map[string]string, message string) (stri
 }
 
 // BatchWrite indicates an expected call of BatchWrite.
-func (mr *MockGitStoreMockRecorder) BatchWrite(files, message any) *gomock.Call {
+func (mr *MockGitStoreMockRecorder) BatchWrite(files, message, operation any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "BatchWrite", reflect.TypeOf((*MockGitStore)(nil).BatchWrite), files, message)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "BatchWrite", reflect.TypeOf((*MockGitStore)(nil).BatchWrite), files, message, operation)
 }
 
 // Branch mocks base method.
@@ -71,18 +71,18 @@ func (mr *MockGitStoreMockRecorder) Branch() *gomock.Call {
 }
 
 // DeleteFile mocks base method.
-func (m *MockGitStore) DeleteFile(path, message string) (string, error) {
+func (m *MockGitStore) DeleteFile(path, message, operation string) (string, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "DeleteFile", path, message)
+	ret := m.ctrl.Call(m, "DeleteFile", path, message, operation)
 	ret0, _ := ret[0].(string)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // DeleteFile indicates an expected call of DeleteFile.
-func (mr *MockGitStoreMockRecorder) DeleteFile(path, message any) *gomock.Call {
+func (mr *MockGitStoreMockRecorder) DeleteFile(path, message, operation any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteFile", reflect.TypeOf((*MockGitStore)(nil).DeleteFile), path, message)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteFile", reflect.TypeOf((*MockGitStore)(nil).DeleteFile), path, message, operation)
 }
 
 // DiffFiles mocks base method.
@@ -162,9 +162,9 @@ func (mr *MockGitStoreMockRecorder) Tag(name any) *gomock.Call {
 }
 
 // WriteFile mocks base method.
-func (m *MockGitStore) WriteFile(path, content, message string) (string, string, error) {
+func (m *MockGitStore) WriteFile(path, content, message, operation string) (string, string, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "WriteFile", path, content, message)
+	ret := m.ctrl.Call(m, "WriteFile", path, content, message, operation)
 	ret0, _ := ret[0].(string)
 	ret1, _ := ret[1].(string)
 	ret2, _ := ret[2].(error)
@@ -172,9 +172,9 @@ func (m *MockGitStore) WriteFile(path, content, message string) (string, string,
 }
 
 // WriteFile indicates an expected call of WriteFile.
-func (mr *MockGitStoreMockRecorder) WriteFile(path, content, message any) *gomock.Call {
+func (mr *MockGitStoreMockRecorder) WriteFile(path, content, message, operation any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "WriteFile", reflect.TypeOf((*MockGitStore)(nil).WriteFile), path, content, message)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "WriteFile", reflect.TypeOf((*MockGitStore)(nil).WriteFile), path, content, message, operation)
 }
 
 // MockSearchIndex is a mock of SearchIndex interface.

@@ -57,7 +57,7 @@ func ApplyPruneDecisions(
 		case "retract":
 			msg := fmt.Sprintf("synthesize-%s: retract %s", recipeName, d.Path)
 			deletedPaths[d.Path] = true
-			if _, err := gs.DeleteFile(d.Path, msg); err != nil {
+			if _, err := gs.DeleteFile(d.Path, msg, "retract"); err != nil {
 				onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("retract %s: %v", d.Path, err)})
 				continue
 			}
@@ -82,7 +82,7 @@ func ApplyPruneDecisions(
 			f.Confidence = d.Confidence
 			updated := mcp.SerializeFact(f)
 			msg := fmt.Sprintf("synthesize-%s: update confidence %s → %.2f", recipeName, d.Path, d.Confidence)
-			commitHash, blobHash, err := gs.WriteFile(d.Path, updated, msg)
+			commitHash, blobHash, err := gs.WriteFile(d.Path, updated, msg, "update")
 			if err != nil {
 				onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("update write %s: %v", d.Path, err)})
 				continue
@@ -123,7 +123,7 @@ func ApplyPruneDecisions(
 		}
 		content := mcp.SerializeFact(merged)
 		msg := fmt.Sprintf("synthesize-%s: merge %s", recipeName, strings.Join(m.Paths, ", "))
-		commitHash, blobHash, err := gs.WriteFile(mf.Path, content, msg)
+		commitHash, blobHash, err := gs.WriteFile(mf.Path, content, msg, "subsume")
 		if err != nil {
 			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("merge write %s: %v", mf.Path, err)})
 			continue
@@ -151,7 +151,7 @@ func ApplyPruneDecisions(
 				continue
 			}
 			srcMsg := fmt.Sprintf("synthesize-%s: subsumed by %s", recipeName, mf.Path)
-			if _, err := gs.DeleteFile(src, srcMsg); err != nil {
+			if _, err := gs.DeleteFile(src, srcMsg, "retract"); err != nil {
 				onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("merge delete source %s: %v", src, err)})
 				continue
 			}
@@ -197,7 +197,7 @@ func ApplyDistillDecisions(
 		}
 		content := mcp.SerializeFact(f)
 		msg := fmt.Sprintf("synthesize-%s: distill %s", recipeName, df.Path)
-		commitHash, blobHash, err := gs.WriteFile(df.Path, content, msg)
+		commitHash, blobHash, err := gs.WriteFile(df.Path, content, msg, "subsume")
 		if err != nil {
 			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("distill write %s: %v", df.Path, err)})
 			continue
@@ -227,7 +227,7 @@ func ApplyDistillDecisions(
 	// Delete subsumed facts.
 	for _, path := range retract {
 		msg := fmt.Sprintf("synthesize-%s: subsumed by distilled fact", recipeName)
-		if _, err := gs.DeleteFile(path, msg); err != nil {
+		if _, err := gs.DeleteFile(path, msg, "retract"); err != nil {
 			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("distill retract %s: %v", path, err)})
 			continue
 		}

@@ -200,7 +200,7 @@ func handleFactWrite() http.HandlerFunc {
 		}
 
 		msg := "edit: update " + req.Path + " via UI"
-		if _, _, err := ri.GS.WriteFile(req.Path, req.Content, msg); err != nil {
+		if _, _, err := ri.GS.WriteFile(req.Path, req.Content, msg, "update"); err != nil {
 			writeError(w, http.StatusInternalServerError, fmt.Sprintf("write failed: %v", err))
 			return
 		}

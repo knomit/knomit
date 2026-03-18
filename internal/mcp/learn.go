@@ -267,7 +267,7 @@ func LearnHandler(gs GitStore, idx SearchIndex, ontologyRoot string, ontology *f
 
 		// 4. BatchWrite all facts in one commit.
 		commitMsg := fmt.Sprintf("learn: %s", momentName)
-		hash, _, err := gs.BatchWrite(files, commitMsg)
+		hash, _, err := gs.BatchWrite(files, commitMsg, "learn")
 		if err != nil {
 			return mcpgo.NewToolResultError(fmt.Sprintf("write error: %v", err)), nil
 		}

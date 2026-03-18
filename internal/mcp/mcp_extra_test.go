@@ -168,7 +168,7 @@ func TestRetractDeleteFileError(t *testing.T) {
 	gs := NewMockGitStore(ctrl)
 
 	gs.EXPECT().FileExists("kb/fail.md").Return(true, nil)
-	gs.EXPECT().DeleteFile("kb/fail.md", gomock.Any()).Return("", fmt.Errorf("delete failed"))
+	gs.EXPECT().DeleteFile("kb/fail.md", gomock.Any(), gomock.Any()).Return("", fmt.Errorf("delete failed"))
 
 	handler := RetractHandler(gs, "kb")
 
@@ -302,7 +302,7 @@ func TestUpdateTitleField(t *testing.T) {
 
 	gs.EXPECT().FileExists("kb/technology/go/abc.md").Return(true, nil)
 	gs.EXPECT().ReadFile("kb/technology/go/abc.md").Return(factContent, nil)
-	gs.EXPECT().WriteFile("kb/technology/go/abc.md", gomock.Any(), gomock.Any()).DoAndReturn(func(path, content, msg string) (string, string, error) {
+	gs.EXPECT().WriteFile("kb/technology/go/abc.md", gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(path, content, msg, operation string) (string, string, error) {
 		writtenContent = content
 		return "abc123", "blob_title", nil
 	})
@@ -354,7 +354,7 @@ func TestUpdateDomainAndEntities(t *testing.T) {
 
 	gs.EXPECT().FileExists("kb/technology/go/abc.md").Return(true, nil)
 	gs.EXPECT().ReadFile("kb/technology/go/abc.md").Return(factContent, nil)
-	gs.EXPECT().WriteFile("kb/technology/go/abc.md", gomock.Any(), gomock.Any()).DoAndReturn(func(path, content, msg string) (string, string, error) {
+	gs.EXPECT().WriteFile("kb/technology/go/abc.md", gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(path, content, msg, operation string) (string, string, error) {
 		writtenContent = content
 		return "abc123", "blob_de", nil
 	})
@@ -427,7 +427,7 @@ func TestLearnBatchWriteError(t *testing.T) {
 
 
 	idx.EXPECT().Search(gomock.Any()).Return(nil, nil).AnyTimes()
-	gs.EXPECT().BatchWrite(gomock.Any(), gomock.Any()).Return("", nil, fmt.Errorf("write failed"))
+	gs.EXPECT().BatchWrite(gomock.Any(), gomock.Any(), gomock.Any()).Return("", nil, fmt.Errorf("write failed"))
 
 	handler := LearnHandler(gs, idx, "kb", fact.DefaultOntology())
 
@@ -459,7 +459,7 @@ func TestLearnTagCollision(t *testing.T) {
 
 
 	idx.EXPECT().Search(gomock.Any()).Return(nil, nil).AnyTimes()
-	gs.EXPECT().BatchWrite(gomock.Any(), gomock.Any()).DoAndReturn(func(files map[string]string, msg string) (string, map[string]string, error) {
+	gs.EXPECT().BatchWrite(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(files map[string]string, msg, operation string) (string, map[string]string, error) {
 		blobHashes := make(map[string]string, len(files))
 		for path := range files {
 			blobHashes[path] = "blob_" + path
@@ -504,7 +504,7 @@ func TestLearnNilDomainEntitiesRefs(t *testing.T) {
 
 
 	idx.EXPECT().Search(gomock.Any()).Return(nil, nil).AnyTimes()
-	gs.EXPECT().BatchWrite(gomock.Any(), gomock.Any()).DoAndReturn(func(files map[string]string, msg string) (string, map[string]string, error) {
+	gs.EXPECT().BatchWrite(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(files map[string]string, msg, operation string) (string, map[string]string, error) {
 		capturedFiles = files
 		blobHashes := make(map[string]string, len(files))
 		for path := range files {

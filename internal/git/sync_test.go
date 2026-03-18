@@ -87,7 +87,7 @@ func syncMainToHead(t *testing.T, s *git.Store) {
 func advanceOriginMain(t *testing.T, origin *git.Store, files map[string]string) {
 	t.Helper()
 	for path, content := range files {
-		if _, _, err := origin.WriteFile(path, content, "origin: "+path); err != nil {
+		if _, _, err := origin.WriteFile(path, content, "origin: "+path, "learn"); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -98,7 +98,7 @@ func advanceOriginMain(t *testing.T, origin *git.Store, files map[string]string)
 func deleteOnOriginMain(t *testing.T, origin *git.Store, paths []string) {
 	t.Helper()
 	for _, path := range paths {
-		if _, err := origin.DeleteFile(path, "origin: delete "+path); err != nil {
+		if _, err := origin.DeleteFile(path, "origin: delete "+path, "retract"); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -250,7 +250,7 @@ func TestSyncThreeWay_AgentOnlyFilePreserved(t *testing.T) {
 	origin, agent := setupOriginAndAgent(t)
 
 	// Agent adds its own file (diverges from origin).
-	if _, _, err := agent.WriteFile("kb/agent-only.md", "# Agent Only\n", "agent: add local"); err != nil {
+	if _, _, err := agent.WriteFile("kb/agent-only.md", "# Agent Only\n", "agent: add local", "learn"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -292,7 +292,7 @@ func TestSyncThreeWay_OriginOverwritesAgentChange(t *testing.T) {
 	}
 
 	// Agent modifies the file (diverges).
-	if _, _, err := agent.WriteFile("kb/contested.md", "# Agent version\n", "agent: modify"); err != nil {
+	if _, _, err := agent.WriteFile("kb/contested.md", "# Agent version\n", "agent: modify", "learn"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -374,7 +374,7 @@ func TestSyncThreeWay_MergeCommitHasTwoParents(t *testing.T) {
 	origin, agent := setupOriginAndAgent(t)
 
 	// Agent diverges.
-	if _, _, err := agent.WriteFile("kb/agent-file.md", "# Agent\n", "agent: diverge"); err != nil {
+	if _, _, err := agent.WriteFile("kb/agent-file.md", "# Agent\n", "agent: diverge", "learn"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -399,7 +399,7 @@ func TestSyncThreeWay_SubsequentMergesWork(t *testing.T) {
 	origin, agent := setupOriginAndAgent(t)
 
 	// First divergence + merge.
-	if _, _, err := agent.WriteFile("kb/a.md", "# A\n", "agent: a"); err != nil {
+	if _, _, err := agent.WriteFile("kb/a.md", "# A\n", "agent: a", "learn"); err != nil {
 		t.Fatal(err)
 	}
 	advanceOriginMain(t, origin, map[string]string{
@@ -411,7 +411,7 @@ func TestSyncThreeWay_SubsequentMergesWork(t *testing.T) {
 	}
 
 	// Second divergence + merge.
-	if _, _, err := agent.WriteFile("kb/c.md", "# C\n", "agent: c"); err != nil {
+	if _, _, err := agent.WriteFile("kb/c.md", "# C\n", "agent: c", "learn"); err != nil {
 		t.Fatal(err)
 	}
 	advanceOriginMain(t, origin, map[string]string{
@@ -447,7 +447,7 @@ func TestSyncThreeWay_DeletedFileAgentModified(t *testing.T) {
 	}
 
 	// Agent modifies the file.
-	if _, _, err := agent.WriteFile("kb/will-delete.md", "# Agent modified\n", "agent: modify"); err != nil {
+	if _, _, err := agent.WriteFile("kb/will-delete.md", "# Agent modified\n", "agent: modify", "learn"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -597,7 +597,7 @@ func TestPush(t *testing.T) {
 		origin, agent := setupOriginAndAgent(t)
 
 		// Agent writes a file.
-		if _, _, err := agent.WriteFile("kb/agent-push.md", "# Push test\n", "agent: push test"); err != nil {
+		if _, _, err := agent.WriteFile("kb/agent-push.md", "# Push test\n", "agent: push test", "learn"); err != nil {
 			t.Fatal(err)
 		}
 

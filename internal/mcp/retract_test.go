@@ -19,7 +19,7 @@ func TestRetractDeletesFile(t *testing.T) {
 
 
 	gs.EXPECT().FileExists("kb/foo.md").Return(true, nil)
-	gs.EXPECT().DeleteFile("kb/foo.md", gomock.Any()).DoAndReturn(func(path, msg string) (string, error) {
+	gs.EXPECT().DeleteFile("kb/foo.md", gomock.Any(), gomock.Any()).DoAndReturn(func(path, msg, operation string) (string, error) {
 		deletedFile = path
 		return "abc123def456", nil
 	})

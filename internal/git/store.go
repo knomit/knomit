@@ -150,13 +150,14 @@ func InitWithStorer(s *storegit.Storer, initFiles map[string]string, agentBranch
 	}
 
 	rootManifest := "# Knowledge Base\n\nRoot manifest.\n"
-	lastCommit, _, err := writeFileToStore(s, plumbing.ZeroHash, "kb.md", rootManifest, "init: create knowledge base")
+	initSig := object.Signature{Name: "knomit", Email: "knomit@local", When: time.Now()}
+	lastCommit, _, err := writeFileToStore(s, plumbing.ZeroHash, "kb.md", rootManifest, "init: create knowledge base", initSig, initSig)
 	if err != nil {
 		return nil, fmt.Errorf("git.Init: initial commit: %w", err)
 	}
 
 	for path, content := range initFiles {
-		lastCommit, _, err = writeFileToStore(s, lastCommit, path, content, "init: "+path)
+		lastCommit, _, err = writeFileToStore(s, lastCommit, path, content, "init: "+path, initSig, initSig)
 		if err != nil {
 			return nil, fmt.Errorf("git.Init: write %s: %w", path, err)
 		}
@@ -440,7 +441,8 @@ func InitFromRemote(s *storegit.Storer, originURL string, auth transport.AuthMet
 		// Repo already initialized above; create initial content inline
 		// (can't call InitWithStorer which would try gogit.Init again).
 		rootManifest := "# Knowledge Base\n\nRoot manifest.\n"
-		lastCommit, _, writeErr := writeFileToStore(s, plumbing.ZeroHash, "kb.md", rootManifest, "init: create knowledge base")
+		initSig := object.Signature{Name: "knomit", Email: "knomit@local", When: time.Now()}
+		lastCommit, _, writeErr := writeFileToStore(s, plumbing.ZeroHash, "kb.md", rootManifest, "init: create knowledge base", initSig, initSig)
 		if writeErr != nil {
 			return nil, fmt.Errorf("InitFromRemote: empty remote fallback: %w", writeErr)
 		}

@@ -25,7 +25,7 @@ func TestUpdateMergesFields(t *testing.T) {
 
 	gs.EXPECT().FileExists("kb/foo.md").Return(true, nil)
 	gs.EXPECT().ReadFile("kb/foo.md").Return(factContent, nil)
-	gs.EXPECT().WriteFile("kb/foo.md", gomock.Any(), gomock.Any()).DoAndReturn(func(path, content, msg string) (string, string, error) {
+	gs.EXPECT().WriteFile("kb/foo.md", gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(path, content, msg, operation string) (string, string, error) {
 		writtenContent = content
 		return "abc123def456", "blob_foo", nil
 	})
@@ -131,7 +131,7 @@ func TestUpdateRefsAppended(t *testing.T) {
 
 	gs.EXPECT().FileExists("kb/refs.md").Return(true, nil)
 	gs.EXPECT().ReadFile("kb/refs.md").Return(factContent, nil)
-	gs.EXPECT().WriteFile("kb/refs.md", gomock.Any(), gomock.Any()).DoAndReturn(func(path, content, msg string) (string, string, error) {
+	gs.EXPECT().WriteFile("kb/refs.md", gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(path, content, msg, operation string) (string, string, error) {
 		writtenContent = content
 		return "abc123def456", "blob_refs", nil
 	})

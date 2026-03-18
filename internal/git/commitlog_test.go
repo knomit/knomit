@@ -86,11 +86,11 @@ func TestCommitLogIncrementalAppend(t *testing.T) {
 	var countBefore int
 	store.db.QueryRow(`SELECT COUNT(*) FROM commit_log`).Scan(&countBefore)
 
-	h1, _, err := store.WriteFile("kb/a.md", "# A\n", "add a")
+	h1, _, err := store.WriteFile("kb/a.md", "# A\n", "add a", "learn")
 	if err != nil {
 		t.Fatal(err)
 	}
-	h2, _, err := store.WriteFile("kb/b.md", "# B\n", "add b")
+	h2, _, err := store.WriteFile("kb/b.md", "# B\n", "add b", "learn")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -132,10 +132,10 @@ func TestPopulateCommitLogIsIncremental(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := store.WriteFile("kb/a.md", "# A\n", "add a"); err != nil {
+	if _, _, err := store.WriteFile("kb/a.md", "# A\n", "add a", "learn"); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := store.WriteFile("kb/b.md", "# B\n", "add b"); err != nil {
+	if _, _, err := store.WriteFile("kb/b.md", "# B\n", "add b", "learn"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -175,11 +175,11 @@ func TestAppendCommitLogDelete(t *testing.T) {
 		t.Skip("commit_log not available")
 	}
 
-	h1, _, err := store.WriteFile("kb/del.md", "# Del\n", "add del")
+	h1, _, err := store.WriteFile("kb/del.md", "# Del\n", "add del", "learn")
 	if err != nil {
 		t.Fatal(err)
 	}
-	h2, err := store.DeleteFile("kb/del.md", "delete del")
+	h2, err := store.DeleteFile("kb/del.md", "delete del", "retract")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -233,7 +233,7 @@ CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value BLOB NOT NULL);`
 		t.Error("commitLog should be false when commit_log table is absent")
 	}
 
-	if _, _, err := store.WriteFile("kb/a.md", "# A\n", "add a"); err != nil {
+	if _, _, err := store.WriteFile("kb/a.md", "# A\n", "add a", "learn"); err != nil {
 		t.Fatal(err)
 	}
 

@@ -37,7 +37,7 @@ func TestReviewLoopIntegration(t *testing.T) {
 		"kb/go/errors.md":      factContent("Go Error Handling", "Go uses explicit error returns instead of exceptions."),
 	}
 	for path, content := range facts {
-		if _, _, err := gitStore.WriteFile(path, content, "add "+path); err != nil {
+		if _, _, err := gitStore.WriteFile(path, content, "add "+path, "learn"); err != nil {
 			t.Fatalf("write %s: %v", path, err)
 		}
 	}

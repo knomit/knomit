@@ -7,7 +7,6 @@ import (
 	"io"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/filemode"
@@ -19,7 +18,7 @@ import (
 // writeFileToStore creates a blob+tree+commit for path/content.
 // parentCommitHash is ZeroHash for the initial commit (no parent).
 // Returns (commitHash, blobHash, error).
-func writeFileToStore(s *storegit.Storer, parentCommitHash plumbing.Hash, path, content, message string) (plumbing.Hash, plumbing.Hash, error) {
+func writeFileToStore(s *storegit.Storer, parentCommitHash plumbing.Hash, path, content, message string, author, committer object.Signature) (plumbing.Hash, plumbing.Hash, error) {
 	// 1. Create blob.
 	blobObj := s.NewEncodedObject()
 	blobObj.SetType(plumbing.BlobObject)
@@ -57,15 +56,9 @@ func writeFileToStore(s *storegit.Storer, parentCommitHash plumbing.Hash, path, 
 	}
 
 	// 4. Create commit object.
-	now := time.Now()
-	sig := object.Signature{
-		Name:  "knomit",
-		Email: "knomit@local",
-		When:  now,
-	}
 	commit := &object.Commit{
-		Author:    sig,
-		Committer: sig,
+		Author:    author,
+		Committer: committer,
 		Message:   message,
 		TreeHash:  newRootHash,
 	}
@@ -161,7 +154,7 @@ func upsertEntry(s *storegit.Storer, existing *object.Tree, entry object.TreeEnt
 
 // deleteFileFromStore creates a commit that removes path from the tree rooted
 // at parentCommitHash.
-func deleteFileFromStore(s *storegit.Storer, parentCommitHash plumbing.Hash, path, message string) (plumbing.Hash, error) {
+func deleteFileFromStore(s *storegit.Storer, parentCommitHash plumbing.Hash, path, message string, author, committer object.Signature) (plumbing.Hash, error) {
 	parentCommit, err := object.GetCommit(s, parentCommitHash)
 	if err != nil {
 		return plumbing.ZeroHash, fmt.Errorf("deleteFileFromStore: get parent commit: %w", err)
@@ -176,15 +169,9 @@ func deleteFileFromStore(s *storegit.Storer, parentCommitHash plumbing.Hash, pat
 		return plumbing.ZeroHash, fmt.Errorf("deleteFileFromStore: delete from tree: %w", err)
 	}
 
-	now := time.Now()
-	sig := object.Signature{
-		Name:  "knomit",
-		Email: "knomit@local",
-		When:  now,
-	}
 	commit := &object.Commit{
-		Author:       sig,
-		Committer:    sig,
+		Author:       author,
+		Committer:    committer,
 		Message:      message,
 		TreeHash:     newRootHash,
 		ParentHashes: []plumbing.Hash{parentCommitHash},

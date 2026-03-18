@@ -21,7 +21,7 @@ func TestLearnWritesFacts(t *testing.T) {
 
 
 	idx.EXPECT().Search(gomock.Any()).Return(nil, nil).AnyTimes()
-	gs.EXPECT().BatchWrite(gomock.Any(), gomock.Any()).DoAndReturn(func(files map[string]string, msg string) (string, map[string]string, error) {
+	gs.EXPECT().BatchWrite(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(files map[string]string, msg, operation string) (string, map[string]string, error) {
 		capturedFiles = files
 		blobHashes := make(map[string]string, len(files))
 		for path := range files {
@@ -201,7 +201,7 @@ func TestLearnMultipleFacts(t *testing.T) {
 
 
 	idx.EXPECT().Search(gomock.Any()).Return(nil, nil).AnyTimes()
-	gs.EXPECT().BatchWrite(gomock.Any(), gomock.Any()).DoAndReturn(func(files map[string]string, msg string) (string, map[string]string, error) {
+	gs.EXPECT().BatchWrite(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(files map[string]string, msg, operation string) (string, map[string]string, error) {
 		capturedFiles = files
 		blobHashes := make(map[string]string, len(files))
 		for path := range files {
@@ -285,7 +285,7 @@ func TestLearnHandler_DedupMergesNearDuplicate(t *testing.T) {
 
 	// BatchWrite should write to existing path (merged)
 	var capturedFiles map[string]string
-	gs.EXPECT().BatchWrite(gomock.Any(), gomock.Any()).DoAndReturn(func(files map[string]string, msg string) (string, map[string]string, error) {
+	gs.EXPECT().BatchWrite(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(files map[string]string, msg, operation string) (string, map[string]string, error) {
 		capturedFiles = files
 		blobHashes := make(map[string]string, len(files))
 		for path := range files {

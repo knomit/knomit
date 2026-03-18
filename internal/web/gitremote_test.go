@@ -97,7 +97,7 @@ func TestGitCloneWithCommits(t *testing.T) {
 	}
 
 	// Add a commit so the repo is non-empty.
-	if _, _, err := store.WriteFile("kb/hello.md", "# Hello\n", "init"); err != nil {
+	if _, _, err := store.WriteFile("kb/hello.md", "# Hello\n", "init", "learn"); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
@@ -229,7 +229,7 @@ func TestGitRemoteHandler_MultiRepo(t *testing.T) {
 	if err != nil {
 		t.Fatalf("git.Init a: %v", err)
 	}
-	if _, _, err := storeA.WriteFile("kb/a.md", "# A\n", "init a"); err != nil {
+	if _, _, err := storeA.WriteFile("kb/a.md", "# A\n", "init a", "learn"); err != nil {
 		t.Fatalf("WriteFile a: %v", err)
 	}
 
@@ -237,7 +237,7 @@ func TestGitRemoteHandler_MultiRepo(t *testing.T) {
 	if err != nil {
 		t.Fatalf("git.Init b: %v", err)
 	}
-	if _, _, err := storeB.WriteFile("kb/b.md", "# B\n", "init b"); err != nil {
+	if _, _, err := storeB.WriteFile("kb/b.md", "# B\n", "init b", "learn"); err != nil {
 		t.Fatalf("WriteFile b: %v", err)
 	}
 

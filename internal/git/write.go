@@ -6,7 +6,6 @@ import (
 	"io"
 	"sort"
 	"strings"
-	"time"
 
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
@@ -15,7 +14,7 @@ import (
 
 // WriteFile writes content to path in a new commit with message.
 // Returns the commit hash and the blob hash of the written file.
-func (s *Store) WriteFile(path, content, message string) (commitHash string, blobHash string, err error) {
+func (s *Store) WriteFile(path, content, message, operation string) (commitHash string, blobHash string, err error) {
 	if path == "" {
 		return "", "", fmt.Errorf("git: WriteFile: path must not be empty")
 	}
@@ -28,7 +27,9 @@ func (s *Store) WriteFile(path, content, message string) (commitHash string, blo
 		return "", "", fmt.Errorf("WriteFile: head: %w", err)
 	}
 
-	newCommitHash, newBlobHash, err := writeFileToStore(s.storer, headRef.Hash(), path, content, message)
+	author := s.authorSig(operation)
+	committer := s.committerSig()
+	newCommitHash, newBlobHash, err := writeFileToStore(s.storer, headRef.Hash(), path, content, message, author, committer)
 	if err != nil {
 		return "", "", err
 	}
@@ -53,7 +54,7 @@ func (s *Store) WriteFile(path, content, message string) (commitHash string, blo
 
 // DeleteFile removes path from HEAD and creates a commit.
 // Returns the commit hash of the new commit.
-func (s *Store) DeleteFile(path, message string) (commitHash string, err error) {
+func (s *Store) DeleteFile(path, message, operation string) (commitHash string, err error) {
 	if path == "" {
 		return "", fmt.Errorf("git: DeleteFile: path must not be empty")
 	}
@@ -75,7 +76,9 @@ func (s *Store) DeleteFile(path, message string) (commitHash string, err error) 
 		return "", fmt.Errorf("DeleteFile: head: %w", err)
 	}
 
-	newCommitHash, err := deleteFileFromStore(s.storer, headRef.Hash(), path, message)
+	author := s.authorSig(operation)
+	committer := s.committerSig()
+	newCommitHash, err := deleteFileFromStore(s.storer, headRef.Hash(), path, message, author, committer)
 	if err != nil {
 		return "", err
 	}
@@ -99,7 +102,7 @@ func (s *Store) DeleteFile(path, message string) (commitHash string, err error) 
 
 // BatchWrite writes multiple files in one commit.
 // Returns the commit hash and a map of path → blob hash for each written file.
-func (s *Store) BatchWrite(files map[string]string, message string) (commitHash string, blobHashes map[string]string, err error) {
+func (s *Store) BatchWrite(files map[string]string, message, operation string) (commitHash string, blobHashes map[string]string, err error) {
 	if len(files) == 0 {
 		return "", nil, nil
 	}
@@ -171,15 +174,11 @@ func (s *Store) BatchWrite(files map[string]string, message string) (commitHash 
 	}
 
 	// Create single commit.
-	now := time.Now()
-	sig := object.Signature{
-		Name:  "knomit",
-		Email: "knomit@local",
-		When:  now,
-	}
+	author := s.authorSig(operation)
+	committer := s.committerSig()
 	commit := &object.Commit{
-		Author:    sig,
-		Committer: sig,
+		Author:    author,
+		Committer: committer,
 		Message:   message,
 		TreeHash:  currentRootHash,
 	}

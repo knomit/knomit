@@ -56,12 +56,12 @@ func TestPruneStep(t *testing.T) {
 	adapter.EXPECT().Complete(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(mockResponse, nil)
 
 	// bar: forget — DeleteFile + idx.Delete
-	gs.EXPECT().DeleteFile("kb/test/bar.md", gomock.Any()).Return("deadbeef1", nil)
+	gs.EXPECT().DeleteFile("kb/test/bar.md", gomock.Any(), gomock.Any()).Return("deadbeef1", nil)
 	idx.EXPECT().Delete("kb/test/bar.md").Return(nil)
 
 	// baz: update — WriteFile with updated confidence, idx.Upsert
 	var bazWritten string
-	gs.EXPECT().WriteFile("kb/test/baz.md", gomock.Any(), gomock.Any()).DoAndReturn(func(path, content, msg string) (string, string, error) {
+	gs.EXPECT().WriteFile("kb/test/baz.md", gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(path, content, msg, operation string) (string, string, error) {
 		bazWritten = content
 		return "deadbeef2", "blob_baz", nil
 	})
@@ -147,7 +147,7 @@ func TestPruneStepWithMerge(t *testing.T) {
 
 	// Write merged fact
 	var mergedWritten bool
-	gs.EXPECT().WriteFile("kb/test/ab-merged.md", gomock.Any(), gomock.Any()).DoAndReturn(func(path, content, msg string) (string, string, error) {
+	gs.EXPECT().WriteFile("kb/test/ab-merged.md", gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(path, content, msg, operation string) (string, string, error) {
 		mergedWritten = true
 		return "deadbeef", "blob_merged", nil
 	})
@@ -155,9 +155,9 @@ func TestPruneStepWithMerge(t *testing.T) {
 	idx.EXPECT().GraphAddDerivedFrom("kb/test/ab-merged.md", gomock.Any()).Return(nil)
 
 	// Delete source facts
-	gs.EXPECT().DeleteFile("kb/test/a.md", gomock.Any()).Return("deadbeef2", nil)
+	gs.EXPECT().DeleteFile("kb/test/a.md", gomock.Any(), gomock.Any()).Return("deadbeef2", nil)
 	idx.EXPECT().Delete("kb/test/a.md").Return(nil)
-	gs.EXPECT().DeleteFile("kb/test/b.md", gomock.Any()).Return("deadbeef3", nil)
+	gs.EXPECT().DeleteFile("kb/test/b.md", gomock.Any(), gomock.Any()).Return("deadbeef3", nil)
 	idx.EXPECT().Delete("kb/test/b.md").Return(nil)
 
 	// Tags per operation
@@ -460,9 +460,9 @@ func TestPruneStepWithDedup(t *testing.T) {
 
 	// Dedup: write merged winner (dup1 wins — same confidence/sources, first alphabetically = dup1 >= dup2 tie-break by sources).
 	// Both have confidence=0.8, sources=1 → dup1.Sources(1) >= dup2.Sources(1) so dup1 wins.
-	gs.EXPECT().WriteFile("kb/test/dup1.md", gomock.Any(), gomock.Any()).Return("dedup-commit", "dedup-blob", nil)
+	gs.EXPECT().WriteFile("kb/test/dup1.md", gomock.Any(), gomock.Any(), gomock.Any()).Return("dedup-commit", "dedup-blob", nil)
 	idx.EXPECT().Upsert(gomock.Any()).Return(nil)
-	gs.EXPECT().DeleteFile("kb/test/dup2.md", gomock.Any()).Return("del-commit", nil)
+	gs.EXPECT().DeleteFile("kb/test/dup2.md", gomock.Any(), gomock.Any()).Return("del-commit", nil)
 	idx.EXPECT().Delete("kb/test/dup2.md").Return(nil)
 
 	// After dedup, 2 facts remain: dup1 (merged) + unique.
@@ -534,7 +534,7 @@ func TestPruneStep_RetryOnPassive(t *testing.T) {
 		adapter.EXPECT().Complete(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(activeResponse, nil),
 	)
 
-	gs.EXPECT().DeleteFile("kb/test/bar.md", gomock.Any()).Return("deadbeef", nil)
+	gs.EXPECT().DeleteFile("kb/test/bar.md", gomock.Any(), gomock.Any()).Return("deadbeef", nil)
 	idx.EXPECT().Delete("kb/test/bar.md").Return(nil)
 	gs.EXPECT().Tag(gomock.Any()).Return(nil).AnyTimes()
 

@@ -49,7 +49,7 @@ func RetractHandler(gs GitStore, ontologyRoot string) func(context.Context, mcpg
 
 		// 4. Delete the file.
 		commitMsg := fmt.Sprintf("retract(%s): %s", momentName, file)
-		hash, err := gs.DeleteFile(file, commitMsg)
+		hash, err := gs.DeleteFile(file, commitMsg, "retract")
 		if err != nil {
 			return mcpgo.NewToolResultError(fmt.Sprintf("delete error: %v", err)), nil
 		}

@@ -133,7 +133,7 @@ func UpdateHandler(gs GitStore, ontologyRoot string) func(context.Context, mcpgo
 
 		// 7. Write updated fact.
 		commitMsg := fmt.Sprintf("update: %s", fact.Title)
-		hash, _, err := gs.WriteFile(file, SerializeFact(fact), commitMsg)
+		hash, _, err := gs.WriteFile(file, SerializeFact(fact), commitMsg, "update")
 		if err != nil {
 			return mcpgo.NewToolResultError(fmt.Sprintf("write error: %v", err)), nil
 		}

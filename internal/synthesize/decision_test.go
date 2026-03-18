@@ -13,7 +13,7 @@ func TestApplyPruneDecisions_Retract(t *testing.T) {
 	gs := NewMockGitStore(ctrl)
 	idx := NewMockSearchIndex(ctrl)
 
-	gs.EXPECT().DeleteFile("kb/test/old.md", gomock.Any()).Return("c1", nil)
+	gs.EXPECT().DeleteFile("kb/test/old.md", gomock.Any(), gomock.Any()).Return("c1", nil)
 	idx.EXPECT().Delete("kb/test/old.md").Return(nil)
 	gs.EXPECT().Tag(gomock.Any()).Return(nil).AnyTimes()
 
@@ -42,7 +42,7 @@ func TestApplyPruneDecisions_Update(t *testing.T) {
 
 	content := factContent("Test fact", "Some body text.")
 	gs.EXPECT().ReadFile("kb/test/upd.md").Return(content, nil)
-	gs.EXPECT().WriteFile("kb/test/upd.md", gomock.Any(), gomock.Any()).Return("c2", "b2", nil)
+	gs.EXPECT().WriteFile("kb/test/upd.md", gomock.Any(), gomock.Any(), gomock.Any()).Return("c2", "b2", nil)
 	idx.EXPECT().Upsert(gomock.Any()).DoAndReturn(func(r store.FactRecord) error {
 		if r.Confidence != 0.5 {
 			t.Errorf("expected confidence 0.5, got %f", r.Confidence)
@@ -92,13 +92,13 @@ func TestApplyPruneDecisions_Merge(t *testing.T) {
 	idx := NewMockSearchIndex(ctrl)
 
 	// Write merged fact.
-	gs.EXPECT().WriteFile("kb/test/merged.md", gomock.Any(), gomock.Any()).Return("c3", "b3", nil)
+	gs.EXPECT().WriteFile("kb/test/merged.md", gomock.Any(), gomock.Any(), gomock.Any()).Return("c3", "b3", nil)
 	idx.EXPECT().Upsert(gomock.Any()).Return(nil)
 	idx.EXPECT().GraphAddDerivedFrom("kb/test/merged.md", []string{"kb/test/a.md", "kb/test/b.md"}).Return(nil)
 	// Delete sources.
-	gs.EXPECT().DeleteFile("kb/test/a.md", gomock.Any()).Return("c4", nil)
+	gs.EXPECT().DeleteFile("kb/test/a.md", gomock.Any(), gomock.Any()).Return("c4", nil)
 	idx.EXPECT().Delete("kb/test/a.md").Return(nil)
-	gs.EXPECT().DeleteFile("kb/test/b.md", gomock.Any()).Return("c5", nil)
+	gs.EXPECT().DeleteFile("kb/test/b.md", gomock.Any(), gomock.Any()).Return("c5", nil)
 	idx.EXPECT().Delete("kb/test/b.md").Return(nil)
 	gs.EXPECT().Tag(gomock.Any()).Return(nil).AnyTimes()
 
@@ -136,10 +136,10 @@ func TestApplyPruneDecisions_NoDoubleDelete(t *testing.T) {
 
 	// Path "kb/test/a.md" appears in both retract decision and merge sources.
 	// It should only be deleted once.
-	gs.EXPECT().DeleteFile("kb/test/a.md", gomock.Any()).Return("c1", nil).Times(1)
+	gs.EXPECT().DeleteFile("kb/test/a.md", gomock.Any(), gomock.Any()).Return("c1", nil).Times(1)
 	idx.EXPECT().Delete("kb/test/a.md").Return(nil).Times(1)
 	// Merge write.
-	gs.EXPECT().WriteFile("kb/test/merged.md", gomock.Any(), gomock.Any()).Return("c2", "b2", nil)
+	gs.EXPECT().WriteFile("kb/test/merged.md", gomock.Any(), gomock.Any(), gomock.Any()).Return("c2", "b2", nil)
 	idx.EXPECT().Upsert(gomock.Any()).Return(nil)
 	idx.EXPECT().GraphAddDerivedFrom(gomock.Any(), gomock.Any()).Return(nil)
 	gs.EXPECT().Tag(gomock.Any()).Return(nil).AnyTimes()
@@ -171,8 +171,8 @@ func TestApplyDistillDecisions_SynthesizeAndRetract(t *testing.T) {
 	idx := NewMockSearchIndex(ctrl)
 
 	// Synthesized fact write — path gets a UUID filename, so match on prefix.
-	gs.EXPECT().WriteFile(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
-		func(path, content, msg string) (string, string, error) {
+	gs.EXPECT().WriteFile(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
+		func(path, content, msg, operation string) (string, string, error) {
 			if !strings.HasPrefix(path, "kb/test/") || !strings.HasSuffix(path, ".md") {
 				t.Errorf("expected path kb/test/<uuid>.md, got %s", path)
 			}
@@ -194,7 +194,7 @@ func TestApplyDistillDecisions_SynthesizeAndRetract(t *testing.T) {
 	gs.EXPECT().Tag(gomock.Any()).Return(nil).AnyTimes()
 
 	// Retract.
-	gs.EXPECT().DeleteFile("kb/test/old.md", gomock.Any()).Return("c2", nil)
+	gs.EXPECT().DeleteFile("kb/test/old.md", gomock.Any(), gomock.Any()).Return("c2", nil)
 	idx.EXPECT().Delete("kb/test/old.md").Return(nil)
 
 	synthesized := []distillFact{
@@ -232,7 +232,7 @@ func TestApplyDistillDecisions_NoRefs(t *testing.T) {
 	idx := NewMockSearchIndex(ctrl)
 
 	// When refs is empty, GraphAddDerivedFrom should NOT be called.
-	gs.EXPECT().WriteFile(gomock.Any(), gomock.Any(), gomock.Any()).Return("c1", "b1", nil)
+	gs.EXPECT().WriteFile(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return("c1", "b1", nil)
 	idx.EXPECT().Upsert(gomock.Any()).Return(nil)
 	// No GraphAddDerivedFrom expectation.
 	gs.EXPECT().Tag(gomock.Any()).Return(nil).AnyTimes()

@@ -252,13 +252,13 @@ func TestDedupCluster_MergesNearDuplicates(t *testing.T) {
 	gs.EXPECT().ReadFile("kb/b.md").Return(bContent, nil)
 
 	// Write merged winner back to git.
-	gs.EXPECT().WriteFile("kb/a.md", gomock.Any(), gomock.Any()).Return("commit-hash-1", "blob-hash-1", nil)
+	gs.EXPECT().WriteFile("kb/a.md", gomock.Any(), gomock.Any(), gomock.Any()).Return("commit-hash-1", "blob-hash-1", nil)
 
 	// Upsert updated winner into index.
 	idx.EXPECT().Upsert(gomock.Any()).Return(nil)
 
 	// Delete loser from git and index.
-	gs.EXPECT().DeleteFile("kb/b.md", gomock.Any()).Return("commit-hash-2", nil)
+	gs.EXPECT().DeleteFile("kb/b.md", gomock.Any(), gomock.Any()).Return("commit-hash-2", nil)
 	idx.EXPECT().Delete("kb/b.md").Return(nil)
 
 	surviving, err := dedupCluster(context.Background(), cluster, gs, idx, defaultDedupThreshold, "test-recipe", func(ProgressEvent) {})
