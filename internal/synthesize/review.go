@@ -57,7 +57,7 @@ func (r *Reviewer) StartSession() (*mcp.ReviewResult, error) {
 		return nil, fmt.Errorf("review: create session: %w", err)
 	}
 
-	seeds, allFacts, err := r.dirtyFacts(branch)
+	seeds, err := r.dirtyFacts(branch)
 	if err != nil {
 		return nil, fmt.Errorf("review: dirty facts: %w", err)
 	}
@@ -67,7 +67,7 @@ func (r *Reviewer) StartSession() (*mcp.ReviewResult, error) {
 	}
 
 	// Build scoped clusters.
-	clusters, err := ScopedCluster(seeds, allFacts, r.idx, 1.0, r.onProgress)
+	clusters, err := ScopedCluster(seeds, r.idx, 1.0, r.onProgress)
 	if err != nil {
 		return nil, fmt.Errorf("review: cluster: %w", err)
 	}
@@ -186,27 +186,27 @@ func (r *Reviewer) ContinueSession(sessionID, response string) (*mcp.ReviewResul
 	return r.nextItem(sessionID)
 }
 
-// dirtyFacts returns seed facts (changed since watermark) and all facts.
-func (r *Reviewer) dirtyFacts(branch string) (seeds, all []factForLLM, err error) {
+// dirtyFacts returns seed facts (changed since watermark).
+func (r *Reviewer) dirtyFacts(branch string) (seeds []factForLLM, err error) {
 	allFacts, err := gatherAllFacts(r.gs)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
 	watermark, err := r.reviewIdx.GetReviewWatermark(branch)
 	if err != nil {
-		return nil, nil, fmt.Errorf("get watermark: %w", err)
+		return nil, fmt.Errorf("get watermark: %w", err)
 	}
 
 	// No watermark → all facts are dirty.
 	if watermark == "" {
-		return allFacts, allFacts, nil
+		return allFacts, nil
 	}
 
 	// Get changed files since watermark.
 	added, modified, _, err := r.gs.DiffFiles(watermark)
 	if err != nil {
-		return nil, nil, fmt.Errorf("diff files: %w", err)
+		return nil, fmt.Errorf("diff files: %w", err)
 	}
 
 	changedSet := make(map[string]bool)
@@ -232,7 +232,7 @@ func (r *Reviewer) dirtyFacts(branch string) (seeds, all []factForLLM, err error
 		}
 	}
 
-	return seeds, allFacts, nil
+	return seeds, nil
 }
 
 // nextItem fetches the next unanswered work item, renders its prompt, and
