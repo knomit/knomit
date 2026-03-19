@@ -212,7 +212,7 @@ func TestApplyDistillDecisions_SynthesizeAndRetract(t *testing.T) {
 	retract := []string{"kb/test/old.md"}
 	progress := collectProgress()
 
-	stats, err := ApplyDistillDecisions(gs, idx, synthesized, retract, "test", progress.fn)
+	stats, _, err := ApplyDistillDecisions(gs, idx, synthesized, retract, "test", progress.fn)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -247,7 +247,7 @@ func TestApplyDistillDecisions_NoRefs(t *testing.T) {
 		},
 	}
 
-	stats, err := ApplyDistillDecisions(gs, idx, synthesized, nil, "test", func(ProgressEvent) {})
+	stats, _, err := ApplyDistillDecisions(gs, idx, synthesized, nil, "test", func(ProgressEvent) {})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

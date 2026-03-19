@@ -420,6 +420,11 @@ func TestContinueSession_DistillResponse(t *testing.T) {
 	gs.EXPECT().DeleteFile("kb/go/one.md", gomock.Any(), gomock.Any()).Return("c2", nil)
 	idx.EXPECT().Delete("kb/go/one.md").Return(nil)
 
+	// RAPTOR: ScopedCluster on the 1 written fact — searches neighbors, clusters.
+	// Single fact → filterSmallClusters removes it → no new work items.
+	idx.EXPECT().Search(gomock.Any()).Return(nil, nil).AnyTimes()
+	idx.EXPECT().ClusterFacts(1.0, 2).Return(store.ClusterResult{}, fmt.Errorf("no embeddings"))
+
 	ri.EXPECT().SetWorkItemResponse(int64(2), distillResp).Return(nil)
 
 	// nextItem: done.
@@ -566,6 +571,161 @@ func TestDirtyFacts_Incremental_SkipsDeletedAndNonMD(t *testing.T) {
 	}
 	if len(facts) != 0 {
 		t.Errorf("expected 0 facts, got %d", len(facts))
+	}
+}
+
+func TestContinueSession_RAPTOR_EnqueuesDeeper(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	gs := NewMockGitStore(ctrl)
+	idx := NewMockSearchIndex(ctrl)
+	ri := NewMockReviewIndex(ctrl)
+
+	ri.EXPECT().GetReviewSession("sess-r").Return(&store.ReviewSession{
+		ID: "sess-r", Branch: "machine/test", Status: "active",
+	}, nil)
+
+	inputFacts := []factForLLM{
+		{File: "kb/go/one.md", Title: "Fact one", Body: "Body one.", Type: "observation", Domain: []string{"go"}, Confidence: 0.8, Sources: 1},
+		{File: "kb/go/two.md", Title: "Fact two", Body: "Body two.", Type: "observation", Domain: []string{"go"}, Confidence: 0.8, Sources: 1},
+		{File: "kb/go/three.md", Title: "Fact three", Body: "Body three.", Type: "observation", Domain: []string{"go"}, Confidence: 0.8, Sources: 1},
+	}
+
+	// Current work item is distill at depth 0.
+	ri.EXPECT().NextWorkItem("sess-r").Return(&store.ReviewWorkItem{
+		ID:        1,
+		SessionID: "sess-r",
+		StepType:  "distill",
+		FactsJSON: mustJSON(t, inputFacts),
+		Priority:  0,
+		Depth:     0,
+	}, nil)
+
+	// Distill response synthesizes 2 new facts (enough for a cluster after ScopedCluster).
+	distillResp := `{"synthesize": [` +
+		`{"path": "kb/go/synth-a.md", "title": "Synth A", "body": "Synthesized A.", "type": "insight", "domain": ["go"], "confidence": 0.95, "entities": ["Go"], "refs": ["kb/go/one.md"]},` +
+		`{"path": "kb/go/synth-b.md", "title": "Synth B", "body": "Synthesized B.", "type": "insight", "domain": ["go"], "confidence": 0.90, "entities": ["Go"], "refs": ["kb/go/two.md"]}` +
+		`], "retract": ["kb/go/three.md"]}`
+
+	// ApplyDistillDecisions: write 2 synth facts, retract one.
+	gs.EXPECT().WriteFile(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return("c1", "b1", nil).Times(2)
+	idx.EXPECT().Upsert(gomock.Any()).Return(nil).Times(2)
+	idx.EXPECT().GraphAddDerivedFrom(gomock.Any(), gomock.Any()).Return(nil).Times(2)
+
+	gs.EXPECT().DeleteFile("kb/go/three.md", gomock.Any(), gomock.Any()).Return("c2", nil)
+	idx.EXPECT().Delete("kb/go/three.md").Return(nil)
+
+	// RAPTOR: ScopedCluster on the 2 written facts.
+	// Search returns neighbors so cluster has >1 fact.
+	idx.EXPECT().Search(gomock.Any()).Return(nil, nil).AnyTimes()
+	// ClusterFacts fails → fallback to category grouping.
+	// Both written facts share kb/go → one cluster of 2 facts.
+	idx.EXPECT().ClusterFacts(1.0, 2).Return(store.ClusterResult{}, fmt.Errorf("no embeddings"))
+
+	// Expect one new work item inserted at depth 1.
+	var insertedItem store.ReviewWorkItem
+	ri.EXPECT().InsertWorkItem(gomock.Any()).DoAndReturn(func(item store.ReviewWorkItem) error {
+		insertedItem = item
+		return nil
+	}).Times(1)
+
+	ri.EXPECT().SetWorkItemResponse(int64(1), distillResp).Return(nil)
+
+	// nextItem: return the RAPTOR item so session is NOT done.
+	ri.EXPECT().NextWorkItem("sess-r").Return(&store.ReviewWorkItem{
+		ID:        2,
+		SessionID: "sess-r",
+		StepType:  "distill",
+		ClusterKey: "raptor-d1-c0",
+		FactsJSON: mustJSON(t, inputFacts[:2]), // placeholder
+		Priority:  -1,
+		Depth:     1,
+	}, nil)
+	ri.EXPECT().WorkItemStats("sess-r").Return(1, 1, nil)
+
+	r := NewReviewer(gs, idx, ri, NewMockEmbedder(ctrl), nil)
+	result, err := r.ContinueSession("sess-r", distillResp)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Session should NOT be done — there are remaining RAPTOR items.
+	if result.Done {
+		t.Error("expected Done=false, RAPTOR items should remain")
+	}
+	if result.Progress.Remaining != 1 {
+		t.Errorf("expected 1 remaining, got %d", result.Progress.Remaining)
+	}
+
+	// Verify the inserted work item has correct depth and type.
+	if insertedItem.StepType != "distill" {
+		t.Errorf("expected distill step type, got %s", insertedItem.StepType)
+	}
+	if insertedItem.Depth != 1 {
+		t.Errorf("expected depth 1, got %d", insertedItem.Depth)
+	}
+	if insertedItem.SessionID != "sess-r" {
+		t.Errorf("expected session sess-r, got %s", insertedItem.SessionID)
+	}
+	if insertedItem.ClusterKey != "raptor-d1-c0" {
+		t.Errorf("expected cluster key raptor-d1-c0, got %s", insertedItem.ClusterKey)
+	}
+	if insertedItem.Priority != -1 {
+		t.Errorf("expected priority -1, got %f", insertedItem.Priority)
+	}
+}
+
+func TestContinueSession_RAPTOR_StopsAtMaxDepth(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	gs := NewMockGitStore(ctrl)
+	idx := NewMockSearchIndex(ctrl)
+	ri := NewMockReviewIndex(ctrl)
+
+	ri.EXPECT().GetReviewSession("sess-max").Return(&store.ReviewSession{
+		ID: "sess-max", Branch: "machine/test", Status: "active",
+	}, nil)
+
+	inputFacts := []factForLLM{
+		{File: "kb/go/one.md", Title: "Fact one", Body: "Body one.", Type: "observation", Domain: []string{"go"}, Confidence: 0.8, Sources: 1},
+		{File: "kb/go/two.md", Title: "Fact two", Body: "Body two.", Type: "observation", Domain: []string{"go"}, Confidence: 0.8, Sources: 1},
+	}
+
+	// Work item at max depth (3) — RAPTOR should NOT enqueue deeper.
+	ri.EXPECT().NextWorkItem("sess-max").Return(&store.ReviewWorkItem{
+		ID:        5,
+		SessionID: "sess-max",
+		StepType:  "distill",
+		FactsJSON: mustJSON(t, inputFacts),
+		Priority:  -3,
+		Depth:     3,
+	}, nil)
+
+	distillResp := `{"synthesize": [{"path": "kb/go/deep.md", "title": "Deep", "body": "Deep synthesis.", "type": "insight", "domain": ["go"], "confidence": 0.95, "entities": [], "refs": []}], "retract": []}`
+
+	// ApplyDistillDecisions writes the synth fact.
+	gs.EXPECT().WriteFile(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return("c1", "b1", nil)
+	idx.EXPECT().Upsert(gomock.Any()).Return(nil)
+
+	// No InsertWorkItem expected — max depth reached.
+
+	ri.EXPECT().SetWorkItemResponse(int64(5), distillResp).Return(nil)
+
+	// nextItem: done.
+	ri.EXPECT().NextWorkItem("sess-max").Return(nil, nil)
+	ri.EXPECT().GetReviewSession("sess-max").Return(&store.ReviewSession{
+		ID: "sess-max", Branch: "machine/test", Status: "active",
+	}, nil)
+	ri.EXPECT().CompleteReviewSession("sess-max").Return(nil)
+	gs.EXPECT().HeadCommit().Return("final-hash", nil)
+	ri.EXPECT().SetReviewWatermark("machine/test", "final-hash").Return(nil)
+	ri.EXPECT().WorkItemStats("sess-max").Return(1, 0, nil)
+
+	r := NewReviewer(gs, idx, ri, NewMockEmbedder(ctrl), nil)
+	result, err := r.ContinueSession("sess-max", distillResp)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !result.Done {
+		t.Error("expected Done=true at max depth")
 	}
 }
 

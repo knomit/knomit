@@ -188,8 +188,48 @@ func (r *Reviewer) ContinueSession(sessionID, response string) (*mcp.ReviewResul
 		if err := validateDistillPaths(result, inputPaths); err != nil {
 			return nil, fmt.Errorf("review: validate distill: %w", err)
 		}
-		if _, err := ApplyDistillDecisions(r.gs, r.idx, result.Synthesize, result.Retract, "review", r.onProgress); err != nil {
+		_, writtenFacts, err := ApplyDistillDecisions(r.gs, r.idx, result.Synthesize, result.Retract, "review", r.onProgress)
+		if err != nil {
 			return nil, fmt.Errorf("review: apply distill: %w", err)
+		}
+
+		// RAPTOR: if new facts were synthesized and we haven't hit max depth, enqueue deeper.
+		const maxRaptorDepth = 3
+		if len(writtenFacts) > 0 && item.Depth < maxRaptorDepth {
+			// Build factForLLM from the written (normalized-path) facts for clustering.
+			newFacts := make([]factForLLM, 0, len(writtenFacts))
+			for _, df := range writtenFacts {
+				newFacts = append(newFacts, factForLLM{
+					File: df.Path, Title: df.Title, Body: df.Body,
+					Type: df.Type, Domain: df.Domain, Entities: df.Entities,
+					Confidence: df.Confidence, Sources: 1,
+				})
+			}
+
+			// Cluster the new facts to find groups worth distilling further.
+			raptorClusters, clErr := ScopedCluster(newFacts, r.idx, 1.0, r.onProgress)
+			if clErr != nil {
+				log.Warn().Err(clErr).Msg("review: RAPTOR clustering failed")
+			} else {
+				nextDepth := item.Depth + 1
+				for ci, cluster := range raptorClusters {
+					factsJSON, _ := json.Marshal(cluster)
+					wItem := store.ReviewWorkItem{
+						SessionID:  sessionID,
+						StepType:   "distill",
+						ClusterKey: fmt.Sprintf("raptor-d%d-c%d", nextDepth, ci),
+						FactsJSON:  string(factsJSON),
+						Priority:   float64(-nextDepth),
+						Depth:      nextDepth,
+					}
+					if err := r.reviewIdx.InsertWorkItem(wItem); err != nil {
+						log.Warn().Err(err).Msg("review: RAPTOR enqueue failed")
+					}
+				}
+				if len(raptorClusters) > 0 {
+					log.Info().Int("depth", nextDepth).Int("clusters", len(raptorClusters)).Msg("review: RAPTOR enqueued deeper distill items")
+				}
+			}
 		}
 
 	default:

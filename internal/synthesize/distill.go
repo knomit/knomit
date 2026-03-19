@@ -168,7 +168,7 @@ func executeDistillStep(ctx context.Context, gs GitStore, idx SearchIndex, embed
 		retractPaths = append(retractPaths, p)
 	}
 
-	stats, err := ApplyDistillDecisions(gs, idx, allSynthesized, retractPaths, recipe.Name, onProgress)
+	stats, _, err := ApplyDistillDecisions(gs, idx, allSynthesized, retractPaths, recipe.Name, onProgress)
 	if err != nil {
 		return err
 	}
