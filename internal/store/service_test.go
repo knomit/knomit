@@ -58,3 +58,71 @@ func TestServiceOpenMemory(t *testing.T) {
 		t.Fatal("expected non-nil DB")
 	}
 }
+
+// TestMigration_ReviewWorkItemsDepth verifies that opening an existing database
+// whose review_work_items table lacks the depth column gets it added via migration.
+func TestMigration_ReviewWorkItemsDepth(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "old.db")
+
+	// Step 1: Create a DB with the OLD schema (no depth column).
+	svc, err := Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Drop and recreate review_work_items WITHOUT the depth column,
+	// simulating an old database.
+	db := svc.DB()
+	if _, err := db.Exec(`DROP TABLE IF EXISTS review_work_items`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`CREATE TABLE review_work_items (
+		id          INTEGER PRIMARY KEY AUTOINCREMENT,
+		session_id  TEXT NOT NULL,
+		step_type   TEXT NOT NULL,
+		cluster_key TEXT NOT NULL,
+		facts_json  TEXT NOT NULL,
+		response    TEXT,
+		priority    REAL NOT NULL,
+		created_at  TEXT NOT NULL
+	)`); err != nil {
+		t.Fatal(err)
+	}
+	svc.Close()
+
+	// Step 2: Reopen — migration should add the depth column.
+	svc2, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open after migration failed: %v", err)
+	}
+	defer svc2.Close()
+
+	// Step 3: Verify we can insert and read a work item with depth.
+	idx := svc2.Index()
+	sess, err := idx.CreateReviewSession("main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = idx.InsertWorkItem(ReviewWorkItem{
+		SessionID:  sess.ID,
+		StepType:   "distill",
+		ClusterKey: "raptor-d2",
+		FactsJSON:  "[]",
+		Priority:   -2,
+		Depth:      2,
+	})
+	if err != nil {
+		t.Fatalf("InsertWorkItem with depth after migration: %v", err)
+	}
+
+	item, err := idx.NextWorkItem(sess.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if item == nil {
+		t.Fatal("expected work item, got nil")
+	}
+	if item.Depth != 2 {
+		t.Errorf("Depth = %d, want 2", item.Depth)
+	}
+}
