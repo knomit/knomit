@@ -100,9 +100,10 @@ export function RecentFacts({ state, dispatch }: Props) {
   }, [state.rightPanelFocused, facts, selectedIdx, navigate, dispatch]);
 
   return (
-    <div ref={containerRef} style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
+    <div data-testid="recent-list" ref={containerRef} style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
       <div style={{ padding: '4px 8px', borderBottom: '1px solid #333', flexShrink: 0, position: 'relative' }}>
         <input
+          data-testid="recent-search-input"
           ref={searchRef}
           value={query}
           onChange={e => { setQuery(e.target.value); setSelectedIdx(0); }}
@@ -114,7 +115,7 @@ export function RecentFacts({ state, dispatch }: Props) {
           }}
         />
         {query && (
-          <button onClick={() => { setQuery(''); searchRef.current?.focus(); }}
+          <button data-testid="recent-search-clear" onClick={() => { setQuery(''); searchRef.current?.focus(); }}
             style={{ position: 'absolute', right: 12, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', color: '#666', cursor: 'pointer', fontSize: 12, padding: '2px 4px', lineHeight: 1 }}
             onMouseEnter={e => { e.currentTarget.style.color = '#aaa'; }}
             onMouseLeave={e => { e.currentTarget.style.color = '#666'; }}
@@ -130,6 +131,8 @@ export function RecentFacts({ state, dispatch }: Props) {
         {facts.map((f, i) => (
           <div
             key={f.path}
+            data-testid="recent-item"
+            data-path={f.path}
             ref={el => { itemRefs.current[i] = el; }}
             onClick={() => {
               setSelectedIdx(i);

@@ -87,6 +87,7 @@ function BreadcrumbPicker({ repo, currentPath, dispatch }: { repo: string; curre
       <span style={{ display: 'inline-flex', alignItems: 'center' }}>
         <span style={{ color: '#444', fontSize: 12, flexShrink: 0, margin: '0 2px' }}>/</span>
         <span
+          data-testid="breadcrumb-picker"
           ref={triggerRef}
           onClick={handleOpen}
           style={{
@@ -102,7 +103,7 @@ function BreadcrumbPicker({ repo, currentPath, dispatch }: { repo: string; curre
         >_</span>
       </span>
       {open && createPortal(
-        <div ref={dropdownRef} style={{
+        <div data-testid="breadcrumb-dropdown" ref={dropdownRef} style={{
           position: 'fixed',
           top: pos.top,
           left: pos.left,
@@ -139,6 +140,7 @@ function BreadcrumbPicker({ repo, currentPath, dispatch }: { repo: string; curre
             )}
             {filtered.map((c, i) => (
               <div
+                data-testid="breadcrumb-item"
                 key={c.name}
                 onClick={() => pick(c)}
                 style={{
@@ -240,12 +242,13 @@ export default function App() {
 
       {/* Breadcrumb path bar + action buttons */}
       <div style={{ height: 30, background: '#111', borderBottom: '1px solid #222', display: 'flex', alignItems: 'center', padding: '0 8px', gap: 2, flexShrink: 0, overflow: 'hidden' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 2, flex: 1, overflow: 'hidden', minWidth: 0 }}>
+        <div data-testid="breadcrumb" style={{ display: 'flex', alignItems: 'center', gap: 2, flex: 1, overflow: 'hidden', minWidth: 0 }}>
           <span style={{ color: '#444', fontSize: 12, flexShrink: 0, marginRight: 2 }}>⟩</span>
           {breadcrumbs.map((crumb, i) => (
             <span key={crumb.path} style={{ display: 'flex', alignItems: 'center', gap: 2, minWidth: 0, overflow: 'hidden' }}>
               {i > 0 && <span style={{ color: '#444', fontSize: 12, flexShrink: 0 }}>/</span>}
               <span
+                data-testid="breadcrumb-segment"
                 onClick={() => dispatch({ type: 'NAVIGATE', path: crumb.path })}
                 style={{
                   color: i === breadcrumbs.length - 1 && !showFact ? '#ccc' : '#666',

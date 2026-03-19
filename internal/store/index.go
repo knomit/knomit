@@ -223,9 +223,9 @@ func (idx *Index) Stats(pathPrefix string) (StatsResult, error) {
 	}
 
 	// Domain counts via json_each.
-	dq := `SELECT d.value, COUNT(*) FROM facts f, json_each(f.domain) d`
+	dq := `SELECT d.value, COUNT(*) FROM facts f, json_each(f.domain) d WHERE d.value IS NOT NULL`
 	if pathPrefix != "" {
-		dq += ` WHERE f.path LIKE ?`
+		dq += ` AND f.path LIKE ?`
 	}
 	dq += ` GROUP BY d.value`
 	drows, err := idx.db.Query(dq, args...)
@@ -243,9 +243,9 @@ func (idx *Index) Stats(pathPrefix string) (StatsResult, error) {
 	}
 
 	// Entity counts via json_each.
-	eq := `SELECT e.value, COUNT(*) FROM facts f, json_each(f.entities) e`
+	eq := `SELECT e.value, COUNT(*) FROM facts f, json_each(f.entities) e WHERE e.value IS NOT NULL`
 	if pathPrefix != "" {
-		eq += ` WHERE f.path LIKE ?`
+		eq += ` AND f.path LIKE ?`
 	}
 	eq += ` GROUP BY e.value`
 	erows, err := idx.db.Query(eq, args...)

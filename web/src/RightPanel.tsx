@@ -36,7 +36,7 @@ function TagCloud({ label, entries, color, searchPrefix, onSearch, focusedValue 
           const ratio = max > 0 ? n / max : 1;
           const accent = `rgba(${color},`;
           return (
-            <span key={name} onClick={() => onSearch(`${searchPrefix}${name}`)}
+            <span key={name} data-testid="tag-item" data-value={name} onClick={() => onSearch(`${searchPrefix}${name}`)}
               style={{
                 display: 'inline-flex', alignItems: 'center', gap: 5, cursor: 'pointer',
                 padding: weighted && ratio >= 0.75 ? '5px 11px' : weighted ? '4px 9px' : '5px 11px',
@@ -187,7 +187,7 @@ function renderFact(fact: Fact, search: (q: string) => void, dispatch?: Dispatch
       {/* Header */}
       <div style={{ marginBottom: 20 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-          <div style={{ fontSize: 18, fontWeight: 600, color: '#eee', letterSpacing: '-0.3px', flex: 1, minWidth: 0 }}>
+          <div data-testid="fact-title" style={{ fontSize: 18, fontWeight: 600, color: '#eee', letterSpacing: '-0.3px', flex: 1, minWidth: 0 }}>
             {fact.title || fact.path}
           </div>
           {historyDate && (
@@ -256,7 +256,7 @@ function renderFact(fact: Fact, search: (q: string) => void, dispatch?: Dispatch
       </div>
 
       {/* Stat cards */}
-      <div style={{ display: 'flex', gap: 10, marginBottom: 28 }}>
+      <div data-testid="fact-meta" style={{ display: 'flex', gap: 10, marginBottom: 28 }}>
         <div style={{ borderLeft: '3px solid #8af', padding: '10px 16px', background: '#1a1a2a', borderRadius: '0 6px 6px 0', minWidth: 90 }}>
           <div style={{ fontSize: 10, color: '#666', textTransform: 'uppercase', letterSpacing: 1 }}>Confidence</div>
           <div style={{ fontSize: 22, fontWeight: 600, color: '#eee', marginTop: 2 }}>{fact.confidence?.toFixed(2)}</div>
@@ -268,7 +268,7 @@ function renderFact(fact: Fact, search: (q: string) => void, dispatch?: Dispatch
       </div>
 
       {/* Body */}
-      <div style={{ color: '#ccc', lineHeight: 1.7, fontSize: 14, marginBottom: 8 }}>
+      <div data-testid="fact-body" style={{ color: '#ccc', lineHeight: 1.7, fontSize: 14, marginBottom: 8 }}>
         <ReactMarkdown>{fact.body || ''}</ReactMarkdown>
       </div>
 
@@ -341,6 +341,7 @@ function FactEditor({ fact, repo, onSaved }: { fact: Fact; repo: string; onSaved
 
       {/* Raw editor */}
       <textarea
+        data-testid="fact-editor"
         value={raw}
         onChange={e => setRaw(e.target.value)}
         spellCheck={false}
@@ -354,6 +355,7 @@ function FactEditor({ fact, repo, onSaved }: { fact: Fact; repo: string; onSaved
       {/* Save button + feedback */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
         <button
+          data-testid="fact-save-btn"
           onClick={save}
           disabled={saving}
           style={{
@@ -369,7 +371,7 @@ function FactEditor({ fact, repo, onSaved }: { fact: Fact; repo: string; onSaved
 }
 
 
-export function RightPanel({ state, dispatch }: Props) {
+export function RightPanel({ state, dispatch }: { state: AppState; dispatch: Dispatch<Action> }) {
   const [fact, setFact] = useState<Fact | null>(null);
   const [history, setHistory] = useState<HistoryEntry[]>([]);
   const [stats, setStats] = useState<Stats | null>(null);
@@ -530,6 +532,7 @@ export function RightPanel({ state, dispatch }: Props) {
 
     return (
       <div
+        data-testid="commit-detail"
         onClick={() => dispatch({ type: 'FOCUS_RIGHT_PANEL' })}
         style={{ display: 'flex', flexDirection: 'column', height: '100%', overflowY: 'auto', boxSizing: 'border-box' }}
       >
@@ -579,7 +582,7 @@ export function RightPanel({ state, dispatch }: Props) {
     const totalCommits = activity ? String(activity.total) : '—';
 
     return (
-      <div style={{ padding: '24px 28px', overflowY: 'auto', height: '100%', boxSizing: 'border-box' }}>
+      <div data-testid="stats-view" style={{ padding: '24px 28px', overflowY: 'auto', height: '100%', boxSizing: 'border-box' }}>
         {stats ? (
           <>
             {/* Summary line with last change time */}

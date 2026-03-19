@@ -96,11 +96,11 @@ export function OriginModal({ repo, onClose }: Props) {
   });
 
   return (
-    <div style={overlay} onClick={onClose}>
+    <div data-testid="origin-modal" style={overlay} onClick={onClose}>
       <div style={modal} onClick={e => e.stopPropagation()}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
           <h2 style={{ margin: 0, fontSize: 16 }}>Origin Configuration</h2>
-          <button onClick={onClose} style={{ background: 'none', border: 'none', color: '#666', cursor: 'pointer', fontSize: 16 }}>x</button>
+          <button data-testid="origin-close-btn" onClick={onClose} style={{ background: 'none', border: 'none', color: '#666', cursor: 'pointer', fontSize: 16 }}>x</button>
         </div>
 
         {loading && <div style={{ color: '#666', fontSize: 13 }}>Loading...</div>}
@@ -133,7 +133,7 @@ export function OriginModal({ repo, onClose }: Props) {
         {!loading && (
           <>
             <label style={label}>Remote URL</label>
-            <input style={input} value={url} onChange={e => setUrl(e.target.value)} placeholder="git@github.com:user/repo.git" />
+            <input data-testid="origin-url-input" style={input} value={url} onChange={e => setUrl(e.target.value)} placeholder="git@github.com:user/repo.git" />
 
             <label style={label}>Auth Method</label>
             <select
@@ -177,6 +177,7 @@ export function OriginModal({ repo, onClose }: Props) {
             {submitError && <div style={{ color: '#f44336', fontSize: 12, marginBottom: 8 }}>{submitError}</div>}
 
             <button
+              data-testid="origin-save-btn"
               disabled={!hasChanges || needsUrl || !!authMismatch || (urlChanged && confirm !== 'yes') || submitting}
               onClick={handleSubmit}
               style={btn(!hasChanges || needsUrl || !!authMismatch || (urlChanged && confirm !== 'yes') || submitting)}

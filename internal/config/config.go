@@ -13,7 +13,7 @@ import (
 
 // Config is the root configuration, composed of section structs.
 type Config struct {
-	RepoPath     string              `toml:"repo"`
+	Home         string              `toml:"repo"`
 	Port         string              `toml:"port"`
 	OntologyRoot string              `toml:"ontology_root"`
 	ONNXLibPath  string              `toml:"onnx_lib_path"`
@@ -26,7 +26,7 @@ type Config struct {
 func Defaults() Config {
 	home, _ := os.UserHomeDir()
 	return Config{
-		RepoPath:     home + "/.knomit",
+		Home:         home + "/.knomit",
 		Port:         "3000",
 		OntologyRoot: "kb",
 		LLM:          llm.DefaultConfig(),
@@ -38,20 +38,25 @@ func Defaults() Config {
 func Load() (Config, error) {
 	cfg := Defaults()
 
-	// Resolve RepoPath from env first (needed for TOML file discovery).
-	if v := os.Getenv("KNOMIT_REPO"); v != "" {
-		cfg.RepoPath = v
+	// Resolve Home from env first (needed for TOML file discovery).
+	// KNOMIT_HOME takes precedence; KNOMIT_REPO is a backward-compatible alias.
+	if v := os.Getenv("KNOMIT_HOME"); v != "" {
+		cfg.Home = v
+	} else if v := os.Getenv("KNOMIT_REPO"); v != "" {
+		cfg.Home = v
 	}
 
 	// Find and decode TOML file.
-	if path := findConfigFile(cfg.RepoPath); path != "" {
+	homeBefore := cfg.Home
+	if path := findConfigFile(cfg.Home); path != "" {
 		if _, err := toml.DecodeFile(path, &cfg); err != nil {
 			return Config{}, err
 		}
 	}
+	// Restore Home — TOML cannot override it since it's the config search root.
+	cfg.Home = homeBefore
 
 	// Overlay env vars.
-	envOr("KNOMIT_REPO", &cfg.RepoPath)
 	envOr("KNOMIT_PORT", &cfg.Port)
 	envOr("KNOMIT_LLM_MODEL", &cfg.LLM.Model)
 	envOr("KNOMIT_LLM_PROVIDER", &cfg.LLM.Provider)
@@ -69,22 +74,22 @@ func Load() (Config, error) {
 	envOr("ONNXRUNTIME_SHARED_LIBRARY", &cfg.ONNXLibPath)
 
 	// Expand tildes in path fields.
-	expandTilde(&cfg.RepoPath)
+	expandTilde(&cfg.Home)
 	expandTilde(&cfg.ONNXLibPath)
 	expandTilde(&cfg.Remote.SSHKey)
 
 	return cfg, nil
 }
 
-// findConfigFile looks for knomit.toml next to the binary, then in repoPath.
-func findConfigFile(repoPath string) string {
+// findConfigFile looks for knomit.toml next to the binary, then in homePath.
+func findConfigFile(homePath string) string {
 	if exe, err := os.Executable(); err == nil {
 		p := filepath.Join(filepath.Dir(exe), "knomit.toml")
 		if fileExists(p) {
 			return p
 		}
 	}
-	p := filepath.Join(repoPath, "knomit.toml")
+	p := filepath.Join(homePath, "knomit.toml")
 	if fileExists(p) {
 		return p
 	}

@@ -90,6 +90,7 @@ export function TopBar({ state, repos, dispatch, onSettingsClick }: Props) {
         <RepoIcon />
         {repos.length > 1 ? (
           <select
+            data-testid="toknomitr-repo-select"
             value={state.repo}
             onChange={e => dispatch({ type: 'SET_REPO', repo: e.target.value })}
             style={{
@@ -102,21 +103,22 @@ export function TopBar({ state, repos, dispatch, onSettingsClick }: Props) {
             ))}
           </select>
         ) : (
-          <span>{state.repo}</span>
+          <span data-testid="toknomitr-repo-name">{state.repo}</span>
         )}
       </span>
       {state.branch && (
         <span style={{ display: 'flex', alignItems: 'center', gap: 5, color: '#8af', fontSize: 12 }}>
           <BranchIcon />
-          <span>{state.branch}</span>
+          <span data-testid="toknomitr-branch">{state.branch}</span>
         </span>
       )}
       {state.headCommit && (
-        <span style={{ display: 'inline-flex', alignItems: 'center', fontSize: 11, fontFamily: 'monospace', color: '#666', background: '#1a1a2a', padding: '0 6px', borderRadius: 3, border: '1px solid #333', lineHeight: '18px' }}>
+        <span data-testid="toknomitr-commit" style={{ display: 'inline-flex', alignItems: 'center', fontSize: 11, fontFamily: 'monospace', color: '#666', background: '#1a1a2a', padding: '0 6px', borderRadius: 3, border: '1px solid #333', lineHeight: '18px' }}>
           {state.headCommit.slice(0, 7)}
         </span>
       )}
       <button
+        data-testid="toknomitr-menu-btn"
         ref={btnRef}
         onClick={toggleMenu}
         title="Actions"
@@ -143,6 +145,7 @@ export function TopBar({ state, repos, dispatch, onSettingsClick }: Props) {
           padding: '4px 0',
         }}>
           <div
+            data-testid="menu-origin"
             onClick={() => { setMenuOpen(false); onSettingsClick(); }}
             style={{
               display: 'flex', alignItems: 'center', gap: 8,
@@ -154,6 +157,7 @@ export function TopBar({ state, repos, dispatch, onSettingsClick }: Props) {
             <GlobeIcon /> Origin
           </div>
           <div
+            data-testid="menu-rebuild"
             onClick={() => {
               if (!rebuilding) {
                 api.rebuild(state.repo);

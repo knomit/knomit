@@ -1027,3 +1027,30 @@ func TestStats_Aggregate(t *testing.T) {
 		t.Errorf("prefix filter: avg_confidence = %v, want 0.8", res.AvgConfidence)
 	}
 }
+
+func TestStats_NullDomainAndEntities(t *testing.T) {
+	idx, err := store.New(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer idx.Close()
+
+	insertTestBlob(t, idx.DB(), "b1", "body1")
+
+	// Insert a fact with nil domain and entities (simulates missing frontmatter fields).
+	if err := idx.Upsert(store.FactRecord{
+		Path: "kb/bare.md", Title: "Bare", BlobHash: "b1",
+		Domain: nil, Entities: nil,
+		Confidence: 0.5, Sources: 1, CommitHash: "x",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := idx.Stats("")
+	if err != nil {
+		t.Fatalf("Stats with NULL domain/entities should not error: %v", err)
+	}
+	if res.Total != 1 {
+		t.Errorf("total = %d, want 1", res.Total)
+	}
+}
