@@ -10,6 +10,8 @@ export interface HistoryEntry { commit: string; date: string; message: string }
 export interface FileCounts { added?: number; modified?: number; deleted?: number }
 export interface HistoryEntryWithTags { commit: string; date: string; message: string; operation?: string; files?: FileCounts }
 export interface HistoryResponse { entries: HistoryEntryWithTags[]; next?: string }
+export interface RecentFactEntry { path: string; title: string; committed_at: number }
+export interface RecentResponse { facts: RecentFactEntry[]; total: number }
 export interface CommitFile { path: string; action: string }
 export interface CommitDetail { commit: string; date: string; message: string; operation?: string; files: CommitFile[] }
 export interface Stats { total: number; domains: Record<string, number>; entities: Record<string, number>; avg_confidence: number }
@@ -102,6 +104,8 @@ export const api = {
     fetch(`${base(repo)}/synthesize`, { method: 'POST', body: recipe }).then(r => r.json()),
   rebuild: (repo: string): Promise<{ op: string; id?: string; status: string; message?: string }> =>
     fetch(`${base(repo)}/rebuild`, { method: 'POST' }).then(r => r.json()),
+  recent: (repo: string, path: string, limit = 50, offset = 0): Promise<RecentResponse> =>
+    fetch(`${base(repo)}/recent?path=${encodeURIComponent(path)}&limit=${limit}&offset=${offset}`).then(r => r.json()),
   getOrigin: (repo: string): Promise<OriginResponse | null> =>
     fetch(`${base(repo)}/origin`).then(r => r.status === 204 ? null : r.json()),
   setOrigin: (repo: string, opts: { url?: string; auth_method?: string; token?: string; user?: string; password?: string }): Promise<OriginSetResponse> =>

@@ -4,6 +4,7 @@ import { api } from './api';
 import type { DirChild, SearchResult } from './api';
 import type { AppState, Action } from './state';
 import { HistoryTimeline } from './HistoryTimeline';
+import { RecentFacts } from './RecentFacts';
 
 interface Props {
   state: AppState;
@@ -130,17 +131,18 @@ export function LeftPanel({ state, dispatch }: Props) {
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
       if (e.key === '/') { e.preventDefault(); searchRef.current?.focus(); }
       if (e.key === 'Escape') {
-        if (state.leftMode === 'history') {
+        if (state.leftMode === 'history' || state.leftMode === 'recent') {
           dispatch({ type: 'EXIT_HISTORY' });
         } else {
           dispatch({ type: 'CLEAR_SEARCH' });
           searchRef.current?.blur();
         }
       }
-      if (e.key === 'h' && state.leftMode !== 'history') { e.preventDefault(); dispatch({ type: 'ENTER_HISTORY' }); }
+      if (e.key === 'h' && state.leftMode === 'browse') { e.preventDefault(); dispatch({ type: 'ENTER_HISTORY' }); }
+      if (e.key === 'r' && state.leftMode !== 'recent') { e.preventDefault(); dispatch({ type: 'ENTER_RECENT' }); }
       if (e.key === 'Backspace' || e.key === 'Delete') { e.preventDefault(); dispatch({ type: 'NAV_BACK' }); }
-      // Browse-mode only shortcuts — skip when in history mode (HistoryTimeline handles its own keys)
-      if (state.leftMode === 'history') return;
+      // Browse-mode only shortcuts — skip when in history/recent mode
+      if (state.leftMode !== 'browse') return;
       if (state.rightPanelFocused) return; // right panel owns j/k/enter when focused
       if (e.key === 'ArrowDown' || e.key === 'j') { e.preventDefault(); moveSelection(1); }
       if (e.key === 'ArrowUp' || e.key === 'k') { e.preventDefault(); moveSelection(-1); }
@@ -167,6 +169,9 @@ export function LeftPanel({ state, dispatch }: Props) {
 
   if (state.leftMode === 'history') {
     return <HistoryTimeline state={state} dispatch={dispatch} />;
+  }
+  if (state.leftMode === 'recent') {
+    return <RecentFacts state={state} dispatch={dispatch} />;
   }
 
   return (

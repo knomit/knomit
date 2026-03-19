@@ -285,3 +285,45 @@ func scanFactWithBodyFromRows(rows *sql.Rows) (*FactWithBody, error) {
 	f.Body = extractBody(rawData)
 	return &f, nil
 }
+
+// RecentFactEntry is a lightweight record for the recent-facts endpoint.
+type RecentFactEntry struct {
+	Path        string `json:"path"`
+	Title       string `json:"title"`
+	CommittedAt int64  `json:"committed_at"`
+}
+
+// RecentFacts returns facts under pathPrefix ordered by most recent commit,
+// paginated by offset/limit.
+func (idx *Index) RecentFacts(pathPrefix string, limit, offset int) ([]RecentFactEntry, int, error) {
+	var total int
+	if err := idx.db.QueryRow(
+		`SELECT COUNT(*) FROM facts WHERE path LIKE ? || '%'`, pathPrefix,
+	).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("RecentFacts count: %w", err)
+	}
+
+	rows, err := idx.db.Query(
+		`SELECT f.path, f.title, COALESCE(cl.committed_at, 0)
+		 FROM facts f
+		 LEFT JOIN commit_log cl ON f.commit_hash = cl.commit_hash AND f.path = cl.path
+		 WHERE f.path LIKE ? || '%'
+		 ORDER BY cl.committed_at DESC, f.path ASC
+		 LIMIT ? OFFSET ?`,
+		pathPrefix, limit, offset,
+	)
+	if err != nil {
+		return nil, 0, fmt.Errorf("RecentFacts query: %w", err)
+	}
+	defer rows.Close()
+
+	var entries []RecentFactEntry
+	for rows.Next() {
+		var e RecentFactEntry
+		if err := rows.Scan(&e.Path, &e.Title, &e.CommittedAt); err != nil {
+			return nil, 0, fmt.Errorf("RecentFacts scan: %w", err)
+		}
+		entries = append(entries, e)
+	}
+	return entries, total, rows.Err()
+}

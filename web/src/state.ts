@@ -1,5 +1,5 @@
 export type RightMode = 'summary' | 'fact' | 'history';
-export type LeftMode = 'browse' | 'history';
+export type LeftMode = 'browse' | 'history' | 'recent';
 
 export interface NavEntry {
   currentPath: string;
@@ -65,6 +65,7 @@ export type Action =
   | { type: 'ENTER_HISTORY' }
   | { type: 'EXIT_HISTORY' }
   | { type: 'FACT_HISTORY'; factPath: string; commit?: string }
+  | { type: 'ENTER_RECENT' }
   | { type: 'SELECT_COMMIT'; commit: string }
   | { type: 'NAV_BACK' }
   | { type: 'SET_REPO'; repo: string }
@@ -148,6 +149,7 @@ export function reducer(s: AppState, a: Action): AppState {
     case 'CONSOLE_TOGGLE': return { ...s, consoleOpen: !s.consoleOpen };
     case 'CONSOLE_SET_HEIGHT': return { ...s, consoleHeight: Math.max(80, Math.min(a.height, 600)) };
     case 'ENTER_HISTORY': return { ...s, leftMode: 'history' as LeftMode, navStack: pushNav(s), rightPanelFocused: false };
+    case 'ENTER_RECENT': return { ...s, leftMode: 'recent' as LeftMode, navStack: pushNav(s), rightPanelFocused: false };
     case 'EXIT_HISTORY': {
       // If currentPath is a fact (.md), restore to its parent directory and keep the fact selected
       if (s.currentPath.endsWith('.md')) {

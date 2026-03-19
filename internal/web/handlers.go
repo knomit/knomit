@@ -465,3 +465,41 @@ func handleStatus(embeddingsEnabled bool, ontologyRoot string) http.HandlerFunc 
 		})
 	}
 }
+
+// handleRecent handles GET /api/v1/{repo}/recent?path=<prefix>&limit=50&offset=0
+func handleRecent() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		ri := RepoFromContext(r.Context())
+		if ri.Svc == nil {
+			writeError(w, http.StatusServiceUnavailable, "index not available")
+			return
+		}
+
+		path := r.URL.Query().Get("path")
+		limit := 50
+		if v := r.URL.Query().Get("limit"); v != "" {
+			if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 500 {
+				limit = n
+			}
+		}
+		offset := 0
+		if v := r.URL.Query().Get("offset"); v != "" {
+			if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+				offset = n
+			}
+		}
+
+		entries, total, err := ri.Svc.Index().RecentFacts(path, limit, offset)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, fmt.Sprintf("recent error: %v", err))
+			return
+		}
+		if entries == nil {
+			entries = []store.RecentFactEntry{}
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"facts": entries,
+			"total": total,
+		})
+	}
+}
