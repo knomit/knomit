@@ -144,7 +144,8 @@ export function RecentFacts({ state, dispatch }: Props) {
               borderBottom: '1px solid #1a1a1a',
             }}
           >
-            <div style={{ fontSize: 12, color: (f.operation && opStyles[f.operation]?.color) || '#ddd', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            <div style={{ fontSize: 12, color: '#ddd', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: 6 }}>
+              <span style={{ color: (f.operation && opStyles[f.operation]?.color) || '#555', fontSize: 8, lineHeight: 1, flexShrink: 0 }}>●</span>
               {f.title}
             </div>
             <div style={{ fontSize: 10, color: '#666', marginTop: 1, display: 'flex', gap: 8 }}>
