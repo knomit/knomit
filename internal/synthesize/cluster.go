@@ -18,7 +18,6 @@ import (
 // 4. Fallback to grouping by category path if Louvain fails or no embeddings
 func ScopedCluster(
 	seeds []factForLLM,
-	allFacts []factForLLM,
 	idx SearchIndex,
 	resolution float64,
 	onProgress func(ProgressEvent),
@@ -31,13 +30,8 @@ func ScopedCluster(
 		onProgress = func(ProgressEvent) {}
 	}
 
-	// Build lookup from path to fact for all facts.
-	factByPath := make(map[string]factForLLM, len(allFacts))
-	for _, f := range allFacts {
-		factByPath[f.File] = f
-	}
-
-	// Also include seeds in lookup (they may not be in allFacts).
+	// Build lookup from path to fact, starting with seeds.
+	factByPath := make(map[string]factForLLM, len(seeds)*2)
 	for _, s := range seeds {
 		factByPath[s.File] = s
 	}
@@ -59,6 +53,13 @@ func ScopedCluster(
 		}
 		for _, r := range results {
 			subgraph[r.Path] = true
+			if _, exists := factByPath[r.Path]; !exists {
+				factByPath[r.Path] = factForLLM{
+					File: r.Path, Title: r.Title, Body: r.Body,
+					Type: r.Type, Domain: r.Domain, Entities: r.Entities,
+					Confidence: r.Confidence, Sources: r.Sources,
+				}
+			}
 		}
 	}
 

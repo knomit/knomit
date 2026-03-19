@@ -3,11 +3,13 @@
 package synthesize
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
 
 	"github.com/rs/zerolog/log"
+	"knomit/internal/llm"
 	"knomit/internal/mcp"
 	"knomit/internal/store"
 )
@@ -31,15 +33,16 @@ type Reviewer struct {
 	gs         GitStore
 	idx        SearchIndex
 	reviewIdx  ReviewIndex
+	embedder   Embedder
 	onProgress func(ProgressEvent)
 }
 
 // NewReviewer creates a new review orchestrator.
-func NewReviewer(gs GitStore, idx SearchIndex, reviewIdx ReviewIndex, onProgress func(ProgressEvent)) *Reviewer {
+func NewReviewer(gs GitStore, idx SearchIndex, reviewIdx ReviewIndex, embedder Embedder, onProgress func(ProgressEvent)) *Reviewer {
 	if onProgress == nil {
 		onProgress = func(ProgressEvent) {}
 	}
-	return &Reviewer{gs: gs, idx: idx, reviewIdx: reviewIdx, onProgress: onProgress}
+	return &Reviewer{gs: gs, idx: idx, reviewIdx: reviewIdx, embedder: embedder, onProgress: onProgress}
 }
 
 // StartSession creates a new review session, identifies dirty facts, clusters
@@ -57,7 +60,7 @@ func (r *Reviewer) StartSession() (*mcp.ReviewResult, error) {
 		return nil, fmt.Errorf("review: create session: %w", err)
 	}
 
-	seeds, allFacts, err := r.dirtyFacts(branch)
+	seeds, err := r.dirtyFacts(branch)
 	if err != nil {
 		return nil, fmt.Errorf("review: dirty facts: %w", err)
 	}
@@ -67,13 +70,29 @@ func (r *Reviewer) StartSession() (*mcp.ReviewResult, error) {
 	}
 
 	// Build scoped clusters.
-	clusters, err := ScopedCluster(seeds, allFacts, r.idx, 1.0, r.onProgress)
+	clusters, err := ScopedCluster(seeds, r.idx, 1.0, r.onProgress)
 	if err != nil {
 		return nil, fmt.Errorf("review: cluster: %w", err)
 	}
 
+	// Dedup pass: merge near-duplicates within each cluster before enqueueing.
+	for i := range clusters {
+		surviving, err := dedupCluster(context.Background(), clusters[i], r.gs, r.idx, 0.92, "review", r.onProgress)
+		if err != nil {
+			return nil, fmt.Errorf("review: dedup cluster %d: %w", i, err)
+		}
+		clusters[i] = surviving
+	}
+	// Filter to clusters with > 1 fact (nothing for LLM to reason about with just 1).
+	var pruneClusters [][]factForLLM
+	for _, c := range clusters {
+		if len(c) > 1 {
+			pruneClusters = append(pruneClusters, c)
+		}
+	}
+
 	// Store prune work items — priority = cluster size (bigger = more urgent).
-	for i, cluster := range clusters {
+	for i, cluster := range pruneClusters {
 		factsJSON, err := json.Marshal(cluster)
 		if err != nil {
 			return nil, fmt.Errorf("review: marshal cluster %d: %w", i, err)
@@ -108,8 +127,8 @@ func (r *Reviewer) StartSession() (*mcp.ReviewResult, error) {
 		}
 	}
 
-	log.Info().Str("session", sess.ID).Int("clusters", len(clusters)).Int("seeds", len(seeds)).Msg("review: session started")
-	r.onProgress(ProgressEvent{Phase: "review-start", Message: fmt.Sprintf("session %s: %d clusters, %d seeds", sess.ID, len(clusters), len(seeds))})
+	log.Info().Str("session", sess.ID).Int("clusters", len(pruneClusters)).Int("seeds", len(seeds)).Msg("review: session started")
+	r.onProgress(ProgressEvent{Phase: "review-start", Message: fmt.Sprintf("session %s: %d clusters, %d seeds", sess.ID, len(pruneClusters), len(seeds))})
 
 	return r.nextItem(sess.ID)
 }
@@ -170,8 +189,48 @@ func (r *Reviewer) ContinueSession(sessionID, response string) (*mcp.ReviewResul
 		if err := validateDistillPaths(result, inputPaths); err != nil {
 			return nil, fmt.Errorf("review: validate distill: %w", err)
 		}
-		if _, err := ApplyDistillDecisions(r.gs, r.idx, result.Synthesize, result.Retract, "review", r.onProgress); err != nil {
+		_, writtenFacts, err := ApplyDistillDecisions(r.gs, r.idx, result.Synthesize, result.Retract, "review", r.onProgress)
+		if err != nil {
 			return nil, fmt.Errorf("review: apply distill: %w", err)
+		}
+
+		// RAPTOR: if new facts were synthesized and we haven't hit max depth, enqueue deeper.
+		const maxRaptorDepth = 3
+		if len(writtenFacts) > 0 && item.Depth < maxRaptorDepth {
+			// Build factForLLM from the written (normalized-path) facts for clustering.
+			newFacts := make([]factForLLM, 0, len(writtenFacts))
+			for _, df := range writtenFacts {
+				newFacts = append(newFacts, factForLLM{
+					File: df.Path, Title: df.Title, Body: df.Body,
+					Type: df.Type, Domain: df.Domain, Entities: df.Entities,
+					Confidence: df.Confidence, Sources: 1,
+				})
+			}
+
+			// Cluster the new facts to find groups worth distilling further.
+			raptorClusters, clErr := ScopedCluster(newFacts, r.idx, 1.0, r.onProgress)
+			if clErr != nil {
+				log.Warn().Err(clErr).Msg("review: RAPTOR clustering failed")
+			} else {
+				nextDepth := item.Depth + 1
+				for ci, cluster := range raptorClusters {
+					factsJSON, _ := json.Marshal(cluster)
+					wItem := store.ReviewWorkItem{
+						SessionID:  sessionID,
+						StepType:   "distill",
+						ClusterKey: fmt.Sprintf("raptor-d%d-c%d", nextDepth, ci),
+						FactsJSON:  string(factsJSON),
+						Priority:   float64(-nextDepth),
+						Depth:      nextDepth,
+					}
+					if err := r.reviewIdx.InsertWorkItem(wItem); err != nil {
+						log.Warn().Err(err).Msg("review: RAPTOR enqueue failed")
+					}
+				}
+				if len(raptorClusters) > 0 {
+					log.Info().Int("depth", nextDepth).Int("clusters", len(raptorClusters)).Msg("review: RAPTOR enqueued deeper distill items")
+				}
+			}
 		}
 
 	default:
@@ -186,53 +245,105 @@ func (r *Reviewer) ContinueSession(sessionID, response string) (*mcp.ReviewResul
 	return r.nextItem(sessionID)
 }
 
-// dirtyFacts returns seed facts (changed since watermark) and all facts.
-func (r *Reviewer) dirtyFacts(branch string) (seeds, all []factForLLM, err error) {
-	allFacts, err := gatherAllFacts(r.gs)
+// RunAll drives the review session to completion using an LLM adapter.
+// It starts a session, then loops: render prompt → LLM call → apply response
+// until all work items are processed.
+func (r *Reviewer) RunAll(ctx context.Context, adapter llm.LLMAdapter) error {
+	result, err := r.StartSession()
 	if err != nil {
-		return nil, nil, err
+		return fmt.Errorf("RunAll: start: %w", err)
+	}
+	if result.Done {
+		return nil
 	}
 
+	sessionID := result.SessionID
+	for result.Item != nil {
+		r.onProgress(ProgressEvent{
+			Phase:   "llm",
+			Message: fmt.Sprintf("processing %s work item", result.Item.Type),
+		})
+
+		opts := llm.CompletionOptions{ForceJSON: true}
+		response, err := adapter.Complete(ctx, "", []llm.Message{
+			{Role: "user", Content: result.Item.Prompt},
+		}, opts, nil)
+		if err != nil {
+			return fmt.Errorf("RunAll: LLM %s: %w", result.Item.Type, err)
+		}
+
+		result, err = r.ContinueSession(sessionID, response)
+		if err != nil {
+			return fmt.Errorf("RunAll: continue: %w", err)
+		}
+	}
+	return nil
+}
+
+// dirtyFacts returns seed facts (changed since watermark).
+//
+// First run (no watermark): uses the search index to retrieve all facts
+// without reading every file from git.
+// Incremental (has watermark): uses DiffFiles to read only changed paths.
+func (r *Reviewer) dirtyFacts(branch string) ([]factForLLM, error) {
 	watermark, err := r.reviewIdx.GetReviewWatermark(branch)
 	if err != nil {
-		return nil, nil, fmt.Errorf("get watermark: %w", err)
+		return nil, fmt.Errorf("get watermark: %w", err)
 	}
 
-	// No watermark → all facts are dirty.
+	// No watermark → first run, all facts are dirty. Use the index (fast).
 	if watermark == "" {
-		return allFacts, allFacts, nil
+		results, err := r.idx.Search(store.SearchQuery{Limit: 100_000})
+		if err != nil {
+			return nil, fmt.Errorf("search all: %w", err)
+		}
+		facts := make([]factForLLM, 0, len(results))
+		for _, sr := range results {
+			facts = append(facts, factForLLM{
+				File:       sr.Path,
+				Title:      sr.Title,
+				Body:       sr.Body,
+				Type:       sr.Type,
+				Domain:     sr.Domain,
+				Entities:   sr.Entities,
+				Confidence: sr.Confidence,
+				Sources:    sr.Sources,
+			})
+		}
+		return facts, nil
 	}
 
-	// Get changed files since watermark.
+	// Incremental: only changed facts since watermark.
 	added, modified, _, err := r.gs.DiffFiles(watermark)
 	if err != nil {
-		return nil, nil, fmt.Errorf("diff files: %w", err)
+		return nil, fmt.Errorf("diff files: %w", err)
 	}
 
-	changedSet := make(map[string]bool)
-	for _, p := range added {
-		changedSet[p] = true
-	}
-	for _, p := range modified {
-		changedSet[p] = true
-	}
-
-	// Intersect with actual facts (filter to .md fact files).
-	factByPath := make(map[string]factForLLM, len(allFacts))
-	for _, f := range allFacts {
-		factByPath[f.File] = f
-	}
-
-	for p := range changedSet {
-		if !strings.HasSuffix(p, ".md") {
+	var seeds []factForLLM
+	for _, path := range append(added, modified...) {
+		if !strings.HasSuffix(path, ".md") {
 			continue
 		}
-		if f, ok := factByPath[p]; ok {
-			seeds = append(seeds, f)
+		content, err := r.gs.ReadFile(path)
+		if err != nil {
+			continue // deleted or unreadable
 		}
+		fact, err := mcp.ParseFact(path, content)
+		if err != nil {
+			continue // not a valid fact
+		}
+		seeds = append(seeds, factForLLM{
+			File:       fact.Path,
+			Title:      fact.Title,
+			Body:       fact.Body,
+			Type:       string(fact.Type),
+			Domain:     fact.Domain,
+			Entities:   fact.Entities,
+			Confidence: fact.Confidence,
+			Sources:    fact.Sources,
+		})
 	}
-
-	return seeds, allFacts, nil
+	return seeds, nil
 }
 
 // nextItem fetches the next unanswered work item, renders its prompt, and

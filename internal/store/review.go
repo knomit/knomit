@@ -27,6 +27,7 @@ type ReviewWorkItem struct {
 	FactsJSON  string
 	Response   *string // nil until answered
 	Priority   float64
+	Depth      int // RAPTOR depth level (0 = initial)
 	CreatedAt  string
 }
 
@@ -123,9 +124,9 @@ func (idx *Index) CompleteReviewSession(id string) error {
 func (idx *Index) InsertWorkItem(item ReviewWorkItem) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 	_, err := idx.db.Exec(
-		`INSERT INTO review_work_items(session_id, step_type, cluster_key, facts_json, response, priority, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		item.SessionID, item.StepType, item.ClusterKey, item.FactsJSON, item.Response, item.Priority, now,
+		`INSERT INTO review_work_items(session_id, step_type, cluster_key, facts_json, response, priority, depth, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		item.SessionID, item.StepType, item.ClusterKey, item.FactsJSON, item.Response, item.Priority, item.Depth, now,
 	)
 	if err != nil {
 		return fmt.Errorf("InsertWorkItem: %w", err)
@@ -138,13 +139,13 @@ func (idx *Index) InsertWorkItem(item ReviewWorkItem) error {
 func (idx *Index) NextWorkItem(sessionID string) (*ReviewWorkItem, error) {
 	var item ReviewWorkItem
 	err := idx.db.QueryRow(
-		`SELECT id, session_id, step_type, cluster_key, facts_json, response, priority, created_at
+		`SELECT id, session_id, step_type, cluster_key, facts_json, response, priority, depth, created_at
 		 FROM review_work_items
 		 WHERE session_id = ? AND response IS NULL
 		 ORDER BY priority DESC
 		 LIMIT 1`, sessionID,
 	).Scan(&item.ID, &item.SessionID, &item.StepType, &item.ClusterKey,
-		&item.FactsJSON, &item.Response, &item.Priority, &item.CreatedAt)
+		&item.FactsJSON, &item.Response, &item.Priority, &item.Depth, &item.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}

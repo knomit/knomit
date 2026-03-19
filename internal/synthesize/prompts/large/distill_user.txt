@@ -1,12 +1,4 @@
 You are synthesizing facts in a knowledge base to find patterns and higher-order insights.
-{{- if .RecipePrompt}}
-
-Context: {{.RecipePrompt}}
-{{- end}}
-{{- if .StepPrompt}}
-
-Instructions: {{.StepPrompt}}
-{{- end}}
 
 Facts in scope:
 {{.Facts}}

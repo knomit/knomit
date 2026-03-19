@@ -1,12 +1,4 @@
 You are reviewing facts in a knowledge base for staleness, redundancy, and duplication.
-{{- if .RecipePrompt}}
-
-Context: {{.RecipePrompt}}
-{{- end}}
-{{- if .StepPrompt}}
-
-Instructions: {{.StepPrompt}}
-{{- end}}
 
 Facts to review:
 {{.Facts}}

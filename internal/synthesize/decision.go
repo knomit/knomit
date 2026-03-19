@@ -165,6 +165,7 @@ func ApplyPruneDecisions(
 }
 
 // ApplyDistillDecisions applies distill results: writes synthesized facts and retracts subsumed ones.
+// Returns stats, the written facts (with normalized paths), and any error.
 func ApplyDistillDecisions(
 	gs GitStore,
 	idx SearchIndex,
@@ -172,8 +173,9 @@ func ApplyDistillDecisions(
 	retract []string,
 	recipeName string,
 	onProgress func(ProgressEvent),
-) (*ReviewStats, error) {
+) (*ReviewStats, []distillFact, error) {
 	stats := &ReviewStats{}
+	var written []distillFact
 
 	log.Info().Int("synthesized", len(synthesized)).Int("forgotten", len(retract)).Msg("distill: committing results")
 
@@ -219,6 +221,7 @@ func ApplyDistillDecisions(
 	
 		onProgress(ProgressEvent{Phase: "detail-learn", Message: "learn " + df.Path})
 		stats.Synthesized++
+		written = append(written, df)
 	}
 
 	// Delete subsumed facts.
@@ -234,5 +237,5 @@ func ApplyDistillDecisions(
 		stats.Pruned++
 	}
 
-	return stats, nil
+	return stats, written, nil
 }

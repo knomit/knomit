@@ -8,6 +8,11 @@ import (
 	"knomit/internal/store"
 )
 
+// factContent builds a minimal knomit fact file for testing.
+func factContent(title, body string) string {
+	return "---\ndomain: [testing]\nconfidence: 0.8\nsources: 1\nentities: []\nrefs: []\n---\n# " + title + "\n\n" + body + "\n"
+}
+
 func TestApplyPruneDecisions_Retract(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
@@ -212,7 +217,7 @@ func TestApplyDistillDecisions_SynthesizeAndRetract(t *testing.T) {
 	retract := []string{"kb/test/old.md"}
 	progress := collectProgress()
 
-	stats, err := ApplyDistillDecisions(gs, idx, synthesized, retract, "test", progress.fn)
+	stats, _, err := ApplyDistillDecisions(gs, idx, synthesized, retract, "test", progress.fn)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -247,7 +252,7 @@ func TestApplyDistillDecisions_NoRefs(t *testing.T) {
 		},
 	}
 
-	stats, err := ApplyDistillDecisions(gs, idx, synthesized, nil, "test", func(ProgressEvent) {})
+	stats, _, err := ApplyDistillDecisions(gs, idx, synthesized, nil, "test", func(ProgressEvent) {})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

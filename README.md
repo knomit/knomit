@@ -207,33 +207,7 @@ Set the model and API key via environment variables:
 
 The default model is `claude-sonnet-4-6` (Anthropic). The provider is auto-detected from the model name for API providers. CLI providers must be set explicitly via `KNOMIT_LLM_PROVIDER`.
 
-#### Recipes
-
-Recipes are YAML files in `<repo>/.knomit/synthesize/`. Example:
-
-```yaml
-name: cve-review
-prompt: "Review security CVEs for staleness and patterns"
-scope:
-  domain: [security]
-  entities: [libfoo]
-auto_merge: false
-steps:
-  - mode: prune
-    prompt: "Find stale or superseded CVEs"
-  - mode: distill
-    prompt: "Identify vulnerability patterns"
-```
-
-| Field | Description |
-|-------|-------------|
-| `name` | Recipe identifier (used for branch names and logging) |
-| `prompt` | Global context passed to every step |
-| `scope` | Filter facts by `domain`, `entities`, `search` queries, or `path` prefix |
-| `auto_merge` | `true` merges results back automatically; `false` pushes a branch for review |
-| `steps` | Pipeline of `prune` and/or `distill` steps. Each can override `model`. |
-
-Running synthesis with no recipe uses a built-in default: prune + distill on all facts changed since the last run, with auto-merge enabled.
+Synthesis is incremental — it only processes facts that changed since the last run. The pipeline prunes stale/duplicate facts first, then distills higher-order insights using RAPTOR (recursive abstractive processing) across multiple depth levels.
 
 ## MCP Tools
 

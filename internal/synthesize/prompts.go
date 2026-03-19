@@ -7,22 +7,19 @@ import (
 	"text/template"
 )
 
-//go:embed prompts/large/*.txt prompts/small/*.txt
+//go:embed prompts/large/*.txt
 var promptFS embed.FS
 
 // PromptData is the data passed to prompt templates.
 type PromptData struct {
-	Facts        string
-	RecipePrompt string
-	StepPrompt   string
+	Facts string
 }
 
 // RenderTemplate loads and renders a prompt template.
-// profile: "large" or "small"
 // operation: "prune" or "distill"
 // promptType: "system", "user", or "retry"
-func RenderTemplate(profile, operation, promptType string, data PromptData) (string, error) {
-	path := fmt.Sprintf("prompts/%s/%s_%s.txt", profile, operation, promptType)
+func RenderTemplate(operation, promptType string, data PromptData) (string, error) {
+	path := fmt.Sprintf("prompts/large/%s_%s.txt", operation, promptType)
 	raw, err := promptFS.ReadFile(path)
 	if err != nil {
 		return "", fmt.Errorf("load template %s: %w", path, err)
