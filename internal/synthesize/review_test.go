@@ -21,9 +21,9 @@ func TestStartSession_NoDirtyFacts(t *testing.T) {
 		ID: "sess-1", Branch: "machine/test", Status: "active",
 	}, nil)
 
-	// No watermark → all facts dirty, but ListAll returns empty.
+	// No watermark → all facts dirty, but index returns empty.
 	ri.EXPECT().GetReviewWatermark("machine/test").Return("", nil)
-	gs.EXPECT().ListAll().Return([]string{}, nil)
+	idx.EXPECT().Search(store.SearchQuery{Limit: 100_000}).Return(nil, nil)
 
 	// Complete session immediately.
 	ri.EXPECT().CompleteReviewSession("sess-1").Return(nil)
@@ -65,11 +65,6 @@ func TestStartSession_WatermarkAtHead_NoDirtyFacts(t *testing.T) {
 	// DiffFiles returns no changes since watermark == HEAD.
 	gs.EXPECT().DiffFiles("head-hash").Return(nil, nil, nil, nil)
 
-	// gatherAllFacts still returns existing facts (they exist in the repo).
-	fact1Content := factContent("Existing fact", "Already reviewed.")
-	gs.EXPECT().ListAll().Return([]string{"kb/tech/existing.md"}, nil)
-	gs.EXPECT().ReadFile("kb/tech/existing.md").Return(fact1Content, nil)
-
 	// No dirty facts → session completes immediately.
 	ri.EXPECT().CompleteReviewSession("sess-wm").Return(nil)
 	gs.EXPECT().HeadCommit().Return("head-hash", nil)
@@ -100,12 +95,11 @@ func TestStartSession_WatermarkEmpty_AllFactsDirty(t *testing.T) {
 
 	ri.EXPECT().GetReviewWatermark("machine/test").Return("", nil)
 
-	// Two fact files.
-	fact1Content := factContent("Fact one", "Body one.")
-	fact2Content := factContent("Fact two", "Body two.")
-	gs.EXPECT().ListAll().Return([]string{"kb/go/one.md", "kb/go/two.md"}, nil)
-	gs.EXPECT().ReadFile("kb/go/one.md").Return(fact1Content, nil)
-	gs.EXPECT().ReadFile("kb/go/two.md").Return(fact2Content, nil)
+	// No watermark → index returns all facts.
+	idx.EXPECT().Search(store.SearchQuery{Limit: 100_000}).Return([]store.SearchResult{
+		{FactWithBody: store.FactWithBody{FactRecord: store.FactRecord{Path: "kb/go/one.md", Title: "Fact one", Type: "observation", Domain: []string{"testing"}, Confidence: 0.8, Sources: 1}, Body: "Body one."}},
+		{FactWithBody: store.FactWithBody{FactRecord: store.FactRecord{Path: "kb/go/two.md", Title: "Fact two", Type: "observation", Domain: []string{"testing"}, Confidence: 0.8, Sources: 1}, Body: "Body two."}},
+	}, nil)
 
 	// ScopedCluster will search for neighbors.
 	idx.EXPECT().Search(gomock.Any()).Return(nil, nil).AnyTimes()
@@ -172,12 +166,9 @@ func TestStartSession_WithWatermark(t *testing.T) {
 	// DiffFiles: only one.md was modified since watermark.
 	gs.EXPECT().DiffFiles("old-hash").Return(nil, []string{"kb/go/one.md"}, nil, nil)
 
-	// gatherAllFacts sees both.
+	// Incremental: only reads the changed file.
 	fact1Content := factContent("Fact one", "Body one.")
-	fact2Content := factContent("Fact two", "Body two.")
-	gs.EXPECT().ListAll().Return([]string{"kb/go/one.md", "kb/go/two.md"}, nil)
 	gs.EXPECT().ReadFile("kb/go/one.md").Return(fact1Content, nil)
-	gs.EXPECT().ReadFile("kb/go/two.md").Return(fact2Content, nil)
 
 	// ScopedCluster: one seed (one.md), searches neighbors.
 	idx.EXPECT().Search(gomock.Any()).Return([]store.SearchResult{
@@ -473,6 +464,102 @@ func TestContinueSession_ValidationError(t *testing.T) {
 	_, err := r.ContinueSession("sess-1", badResp)
 	if err == nil {
 		t.Fatal("expected error for validation failure")
+	}
+}
+
+func TestDirtyFacts_NoWatermark_UsesIndex(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	gs := NewMockGitStore(ctrl)
+	idx := NewMockSearchIndex(ctrl)
+	ri := NewMockReviewIndex(ctrl)
+
+	ri.EXPECT().GetReviewWatermark("machine/test").Return("", nil)
+	idx.EXPECT().Search(store.SearchQuery{Limit: 100_000}).Return([]store.SearchResult{
+		{FactWithBody: store.FactWithBody{
+			FactRecord: store.FactRecord{Path: "kb/go/one.md", Title: "Fact one", Type: "observation", Domain: []string{"go"}, Entities: []string{"Go"}, Confidence: 0.9, Sources: 2},
+			Body:       "Body one.",
+		}},
+		{FactWithBody: store.FactWithBody{
+			FactRecord: store.FactRecord{Path: "kb/go/two.md", Title: "Fact two", Type: "insight", Domain: []string{"go"}, Confidence: 0.7, Sources: 1},
+			Body:       "Body two.",
+		}},
+	}, nil)
+
+	r := NewReviewer(gs, idx, ri, nil)
+	facts, err := r.dirtyFacts("machine/test")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(facts) != 2 {
+		t.Fatalf("expected 2 facts, got %d", len(facts))
+	}
+	if facts[0].File != "kb/go/one.md" {
+		t.Errorf("expected path kb/go/one.md, got %s", facts[0].File)
+	}
+	if facts[0].Title != "Fact one" {
+		t.Errorf("expected title 'Fact one', got %s", facts[0].Title)
+	}
+	if facts[1].Type != "insight" {
+		t.Errorf("expected type 'insight', got %s", facts[1].Type)
+	}
+}
+
+func TestDirtyFacts_Incremental_OnlyChangedFiles(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	gs := NewMockGitStore(ctrl)
+	idx := NewMockSearchIndex(ctrl)
+	ri := NewMockReviewIndex(ctrl)
+
+	ri.EXPECT().GetReviewWatermark("machine/test").Return("abc123", nil)
+	gs.EXPECT().DiffFiles("abc123").Return(
+		[]string{"kb/go/new.md"},           // added
+		[]string{"kb/go/changed.md"},       // modified
+		[]string{"kb/go/deleted.md"},       // deleted (not read)
+		nil,
+	)
+
+	newContent := factContent("New fact", "Brand new.")
+	changedContent := factContent("Changed fact", "Updated body.")
+	gs.EXPECT().ReadFile("kb/go/new.md").Return(newContent, nil)
+	gs.EXPECT().ReadFile("kb/go/changed.md").Return(changedContent, nil)
+
+	r := NewReviewer(gs, idx, ri, nil)
+	facts, err := r.dirtyFacts("machine/test")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(facts) != 2 {
+		t.Fatalf("expected 2 facts, got %d", len(facts))
+	}
+	titles := map[string]bool{facts[0].Title: true, facts[1].Title: true}
+	if !titles["New fact"] || !titles["Changed fact"] {
+		t.Errorf("expected 'New fact' and 'Changed fact', got %v", titles)
+	}
+}
+
+func TestDirtyFacts_Incremental_SkipsDeletedAndNonMD(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	gs := NewMockGitStore(ctrl)
+	idx := NewMockSearchIndex(ctrl)
+	ri := NewMockReviewIndex(ctrl)
+
+	ri.EXPECT().GetReviewWatermark("machine/test").Return("abc123", nil)
+	gs.EXPECT().DiffFiles("abc123").Return(
+		[]string{"kb/go/gone.md", "README.txt"}, // added: one .md (unreadable), one non-.md
+		nil, nil, nil,
+	)
+
+	// gone.md returns error (deleted between diff and read).
+	gs.EXPECT().ReadFile("kb/go/gone.md").Return("", fmt.Errorf("not found"))
+	// README.txt should not be read at all (not .md).
+
+	r := NewReviewer(gs, idx, ri, nil)
+	facts, err := r.dirtyFacts("machine/test")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(facts) != 0 {
+		t.Errorf("expected 0 facts, got %d", len(facts))
 	}
 }
 

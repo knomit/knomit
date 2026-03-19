@@ -42,11 +42,18 @@ func TestReviewLoopIntegration(t *testing.T) {
 		}
 	}
 
-	// Mock SearchIndex — ScopedCluster will call Search + ClusterFacts.
+	// Mock SearchIndex.
 	idx := NewMockSearchIndex(ctrl)
+	// dirtyFacts (no watermark) calls Search with Limit=100_000 to get all facts from index.
+	idx.EXPECT().Search(store.SearchQuery{Limit: 100_000}).Return([]store.SearchResult{
+		{FactWithBody: store.FactWithBody{FactRecord: store.FactRecord{Path: "kb/go/concurrency.md", Title: "Go Concurrency", Type: "observation", Domain: []string{"testing"}, Confidence: 0.8, Sources: 1}, Body: "Go uses goroutines and channels for concurrency."}},
+		{FactWithBody: store.FactWithBody{FactRecord: store.FactRecord{Path: "kb/go/interfaces.md", Title: "Go Interfaces", Type: "observation", Domain: []string{"testing"}, Confidence: 0.8, Sources: 1}, Body: "Go interfaces are satisfied implicitly."}},
+		{FactWithBody: store.FactWithBody{FactRecord: store.FactRecord{Path: "kb/go/errors.md", Title: "Go Error Handling", Type: "observation", Domain: []string{"testing"}, Confidence: 0.8, Sources: 1}, Body: "Go uses explicit error returns instead of exceptions."}},
+	}, nil)
+	// ScopedCluster calls Search for neighbors.
 	idx.EXPECT().Search(gomock.Any()).Return(nil, nil).AnyTimes()
 	idx.EXPECT().ClusterFacts(gomock.Any(), gomock.Any()).Return(store.ClusterResult{}, fmt.Errorf("no embeddings")).AnyTimes()
-	// For prune apply: delete calls go to real git, index delete goes to mock.
+	// For prune/distill apply: delete calls go to real git, index delete goes to mock.
 	idx.EXPECT().Delete(gomock.Any()).Return(nil).AnyTimes()
 	idx.EXPECT().Upsert(gomock.Any()).Return(nil).AnyTimes()
 	idx.EXPECT().GraphAddDerivedFrom(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()

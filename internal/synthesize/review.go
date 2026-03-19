@@ -187,51 +187,68 @@ func (r *Reviewer) ContinueSession(sessionID, response string) (*mcp.ReviewResul
 }
 
 // dirtyFacts returns seed facts (changed since watermark).
-func (r *Reviewer) dirtyFacts(branch string) (seeds []factForLLM, err error) {
-	allFacts, err := gatherAllFacts(r.gs)
-	if err != nil {
-		return nil, err
-	}
-
+//
+// First run (no watermark): uses the search index to retrieve all facts
+// without reading every file from git.
+// Incremental (has watermark): uses DiffFiles to read only changed paths.
+func (r *Reviewer) dirtyFacts(branch string) ([]factForLLM, error) {
 	watermark, err := r.reviewIdx.GetReviewWatermark(branch)
 	if err != nil {
 		return nil, fmt.Errorf("get watermark: %w", err)
 	}
 
-	// No watermark → all facts are dirty.
+	// No watermark → first run, all facts are dirty. Use the index (fast).
 	if watermark == "" {
-		return allFacts, nil
+		results, err := r.idx.Search(store.SearchQuery{Limit: 100_000})
+		if err != nil {
+			return nil, fmt.Errorf("search all: %w", err)
+		}
+		facts := make([]factForLLM, 0, len(results))
+		for _, sr := range results {
+			facts = append(facts, factForLLM{
+				File:       sr.Path,
+				Title:      sr.Title,
+				Body:       sr.Body,
+				Type:       sr.Type,
+				Domain:     sr.Domain,
+				Entities:   sr.Entities,
+				Confidence: sr.Confidence,
+				Sources:    sr.Sources,
+			})
+		}
+		return facts, nil
 	}
 
-	// Get changed files since watermark.
+	// Incremental: only changed facts since watermark.
 	added, modified, _, err := r.gs.DiffFiles(watermark)
 	if err != nil {
 		return nil, fmt.Errorf("diff files: %w", err)
 	}
 
-	changedSet := make(map[string]bool)
-	for _, p := range added {
-		changedSet[p] = true
-	}
-	for _, p := range modified {
-		changedSet[p] = true
-	}
-
-	// Intersect with actual facts (filter to .md fact files).
-	factByPath := make(map[string]factForLLM, len(allFacts))
-	for _, f := range allFacts {
-		factByPath[f.File] = f
-	}
-
-	for p := range changedSet {
-		if !strings.HasSuffix(p, ".md") {
+	var seeds []factForLLM
+	for _, path := range append(added, modified...) {
+		if !strings.HasSuffix(path, ".md") {
 			continue
 		}
-		if f, ok := factByPath[p]; ok {
-			seeds = append(seeds, f)
+		content, err := r.gs.ReadFile(path)
+		if err != nil {
+			continue // deleted or unreadable
 		}
+		fact, err := mcp.ParseFact(path, content)
+		if err != nil {
+			continue // not a valid fact
+		}
+		seeds = append(seeds, factForLLM{
+			File:       fact.Path,
+			Title:      fact.Title,
+			Body:       fact.Body,
+			Type:       string(fact.Type),
+			Domain:     fact.Domain,
+			Entities:   fact.Entities,
+			Confidence: fact.Confidence,
+			Sources:    fact.Sources,
+		})
 	}
-
 	return seeds, nil
 }
 
