@@ -67,7 +67,7 @@ export function LeftPanel({ state, dispatch }: Props) {
     const savedIdx = selectedIdx;
     setSelectedIdx(0);
     const t = setTimeout(() => {
-      api.search(state.repo, state.searchQuery).then(r => {
+      api.search(state.repo, state.searchQuery, state.currentPath).then(r => {
         const results = r.results || [];
         setSearchResults(results);
         setSearchReady(true);

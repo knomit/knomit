@@ -70,12 +70,13 @@ export const api = {
     if (commit) p.set('commit', commit);
     return fetch(`${base(repo)}/fact?${p}`).then(r => { if (!r.ok) throw new Error(r.statusText); return r.json(); });
   },
-  search: (repo: string, q: string, minConfidence = 0): Promise<{ results: SearchResult[] }> => {
+  search: (repo: string, q: string, path = '', minConfidence = 0): Promise<{ results: SearchResult[] }> => {
     const { text, domains, entities } = parseSearchQuery(q);
     const p = new URLSearchParams({ limit: '50' });
     if (text) p.set('q', text);
     if (domains.length) p.set('domain', domains.join(','));
     if (entities.length) p.set('entities', entities.join(','));
+    if (path) p.set('path', path);
     if (minConfidence) p.set('min_confidence', String(minConfidence));
     return fetch(`${base(repo)}/search?${p}`).then(r => r.json());
   },
