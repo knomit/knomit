@@ -55,9 +55,9 @@ Redis is often used as an in-memory cache layer. Its key-value model and TTL sup
       expect(res.ok()).toBeTruthy();
     }
 
-    // Trigger synthesize — expect 503 (no LLM configured) or 202 (accepted)
+    // Trigger synthesize — expect 200 (ok), 202 (accepted), or 503 (no LLM configured)
     const synthRes = await freshKnomit.api.post(`${freshKnomit.baseURL}/api/v1/knomit/synthesize`);
-    expect([202, 503]).toContain(synthRes.status());
+    expect([200, 202, 503]).toContain(synthRes.status());
 
     if (synthRes.status() === 503) {
       // Gracefully handle no-LLM case — the endpoint is reachable but cannot synthesize

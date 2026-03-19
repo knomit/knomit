@@ -58,13 +58,18 @@ Third fact about the discovery topic.`,
       expect(res.ok()).toBeTruthy();
     }
 
+    // Wait for the search index to sync (it's async after PUT)
+    await page.waitForTimeout(3000);
+
     // Navigate to the UI
     await page.goto(freshKnomit.baseURL);
     await page.waitForLoadState('domcontentloaded');
     const browse = new BrowsePage(page);
 
-    // Navigate directory tree into discover/
+    // Navigate directory tree: root shows 'discover' dir, click into it
+    await browse.waitForEntry('discover');
     await browse.clickEntry('discover');
+    await browse.waitForFactEntry();
     const entries = await browse.getDirectoryEntries();
     const names = entries.map(e => e.name);
     expect(names).toContain('alpha.md');
@@ -85,8 +90,15 @@ Third fact about the discovery topic.`,
     await expect(tagItem).toBeVisible({ timeout: 10_000 });
     await tagItem.click();
 
-    // Verify search results include related facts
-    const searchResults = await browse.getSearchResults();
+    // Verify search results include related facts (index may still be syncing)
+    let searchResults: string[] = [];
+    for (let attempt = 0; attempt < 5; attempt++) {
+      searchResults = await browse.getSearchResults();
+      if (searchResults.length >= 2) break;
+      await page.waitForTimeout(1000);
+      // Re-click the tag to retry the search
+      await tagItem.click();
+    }
     expect(searchResults.length).toBeGreaterThanOrEqual(2);
 
     // All three facts share the entity, so they should all appear

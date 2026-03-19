@@ -38,15 +38,18 @@ This fact exercises the full lifecycle.`;
     await expect(factPanel.title).toContainText('Lifecycle Demo');
     await expect(factPanel.body).toContainText('full lifecycle');
 
-    // 4. Search for it
-    await browse.search('lifecycle');
-    const searchResults = await browse.getSearchResults();
+    // 4. Search for it (index is async — retry until it catches up)
+    let searchResults: string[] = [];
+    for (let attempt = 0; attempt < 5; attempt++) {
+      await browse.search('lifecycle');
+      searchResults = await browse.getSearchResults();
+      if (searchResults.includes(factPath)) break;
+      await browse.clearSearch();
+      await page.waitForTimeout(1000);
+    }
     expect(searchResults).toContain(factPath);
 
-    // Clear search to return to browse mode
-    await browse.clearSearch();
-
-    // 5. Edit via editor
+    // 5. Edit via API (the UI only shows the editor for facts with parse errors)
     const updatedContent = `---
 type: observation
 domain: [testing]
@@ -59,15 +62,16 @@ refs: []
 
 Updated content after edit.`;
 
-    // Navigate back to the fact
+    const editRes = await freshKnomit.api.put(`${freshKnomit.baseURL}/api/v1/knomit/fact`, {
+      data: { path: factPath, content: updatedContent },
+    });
+    expect(editRes.ok()).toBeTruthy();
+
+    // 6. Verify the update in the UI
+    await page.goto(freshKnomit.baseURL);
+    await page.waitForLoadState('domcontentloaded');
     await browse.clickEntry('lifecycle');
     await browse.clickEntry('demo.md');
-    await expect(factPanel.title).toContainText('Lifecycle Demo');
-
-    await factPanel.editContent(updatedContent);
-    await factPanel.save();
-
-    // 6. Verify the update
     await expect(factPanel.body).toContainText('Updated content after edit');
 
     // 7. Check history has multiple commits
@@ -85,15 +89,23 @@ Updated content after edit.`;
     const mcp = new McpClient(freshKnomit.baseURL, 'knomit', 'code');
     await mcp.initialize();
     try {
-      const retractResult = await mcp.callTool('knomit_retract', { path: 'lifecycle/demo' });
+      const retractResult = await mcp.callTool('knomit_retract', { file: 'lifecycle/demo', moment_name: 'e2e-test' });
       expect(retractResult.isError).toBeFalsy();
     } finally {
       await mcp.close();
     }
 
-    // 9. Verify it's gone from search
-    await browse.search('lifecycle');
-    const afterResults = await browse.getSearchResults();
+    // 9. Verify it's gone from search (index is async — retry until it catches up)
+    await page.goto(freshKnomit.baseURL);
+    await page.waitForLoadState('domcontentloaded');
+    let afterResults: string[] = [factPath]; // seed with factPath so the loop runs
+    for (let attempt = 0; attempt < 5; attempt++) {
+      await page.waitForTimeout(1000);
+      await browse.search('lifecycle');
+      afterResults = await browse.getSearchResults();
+      if (!afterResults.includes(factPath)) break;
+      await browse.clearSearch();
+    }
     expect(afterResults).not.toContain(factPath);
   });
 });
