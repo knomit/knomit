@@ -1,5 +1,5 @@
-// Package synthesize — LLM interaction for the distill step: prompt
-// construction, response parsing, and per-group LLM calls.
+// Package synthesize — LLM interaction for the distill step: per-group LLM calls.
+// Shared types have been moved to types.go.
 package synthesize
 
 import (
@@ -10,34 +10,6 @@ import (
 	"github.com/rs/zerolog/log"
 	"knomit/internal/llm"
 )
-
-// DistillResult is the LLM JSON response for a distill step.
-type DistillResult struct {
-	Synthesize []distillFact `json:"synthesize"`
-	Retract    []string      `json:"retract"`
-}
-
-// distillFact is a synthesized fact returned by the LLM in a distill step.
-type distillFact struct {
-	Path       string      `json:"path"`
-	Title      string      `json:"title"`
-	Body       string      `json:"body"`
-	Type       string      `json:"type"`
-	Domain     flexStrings `json:"domain"`
-	Confidence float64     `json:"confidence"`
-	Entities   flexStrings `json:"entities"`
-	Refs       flexStrings `json:"refs"`
-}
-
-// parseDistillResponse parses the LLM JSON response for a distill step.
-func parseDistillResponse(text string) (DistillResult, error) {
-	raw := extractJSON(text)
-	var result DistillResult
-	if err := json.Unmarshal([]byte(raw), &result); err != nil {
-		return DistillResult{}, fmt.Errorf("parseDistillResponse: %w (raw: %.200s)", err, raw)
-	}
-	return result, nil
-}
 
 // runDistillOnGroup sends one group of facts to the LLM and returns synthesized facts + paths to forget.
 func runDistillOnGroup(ctx context.Context, gs GitStore, idx SearchIndex, adapter llm.LLMAdapter, group []factForLLM, step RecipeStep, recipe Recipe, profile Profile, onProgress func(ProgressEvent)) ([]distillFact, []string, error) {
