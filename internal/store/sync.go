@@ -117,13 +117,9 @@ func (idx *Index) indexFile(git GitReader, path, commitHash string) error {
 		return fmt.Errorf("indexFile: read %s: %w", path, err)
 	}
 
-	// Use the most recent commit that actually touched this file.
-	var lastCommit string
-	if qerr := idx.db.QueryRow(
-		`SELECT commit_hash FROM commit_log WHERE path = ? ORDER BY rowid DESC LIMIT 1`,
-		path,
-	).Scan(&lastCommit); qerr == nil && lastCommit != "" {
-		commitHash = lastCommit
+	// Use the most recent non-merge commit that touched this file.
+	if last, lerr := git.LastCommitForPath(path); lerr == nil && last != "" {
+		commitHash = last
 	}
 
 	rec, err := parseFact(path, content, commitHash)

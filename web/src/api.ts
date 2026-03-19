@@ -10,6 +10,8 @@ export interface HistoryEntry { commit: string; date: string; message: string }
 export interface FileCounts { added?: number; modified?: number; deleted?: number }
 export interface HistoryEntryWithTags { commit: string; date: string; message: string; operation?: string; files?: FileCounts }
 export interface HistoryResponse { entries: HistoryEntryWithTags[]; next?: string }
+export interface RecentFactEntry { path: string; title: string; committed_at: number; score?: number }
+export interface RecentResponse { facts: RecentFactEntry[]; total: number }
 export interface CommitFile { path: string; action: string }
 export interface CommitDetail { commit: string; date: string; message: string; operation?: string; files: CommitFile[] }
 export interface Stats { total: number; domains: Record<string, number>; entities: Record<string, number>; avg_confidence: number }
@@ -70,12 +72,13 @@ export const api = {
     if (commit) p.set('commit', commit);
     return fetch(`${base(repo)}/fact?${p}`).then(r => { if (!r.ok) throw new Error(r.statusText); return r.json(); });
   },
-  search: (repo: string, q: string, minConfidence = 0): Promise<{ results: SearchResult[] }> => {
+  search: (repo: string, q: string, path = '', minConfidence = 0): Promise<{ results: SearchResult[] }> => {
     const { text, domains, entities } = parseSearchQuery(q);
     const p = new URLSearchParams({ limit: '50' });
     if (text) p.set('q', text);
     if (domains.length) p.set('domain', domains.join(','));
     if (entities.length) p.set('entities', entities.join(','));
+    if (path) p.set('path', path);
     if (minConfidence) p.set('min_confidence', String(minConfidence));
     return fetch(`${base(repo)}/search?${p}`).then(r => r.json());
   },
@@ -101,6 +104,11 @@ export const api = {
     fetch(`${base(repo)}/synthesize`, { method: 'POST', body: recipe }).then(r => r.json()),
   rebuild: (repo: string): Promise<{ op: string; id?: string; status: string; message?: string }> =>
     fetch(`${base(repo)}/rebuild`, { method: 'POST' }).then(r => r.json()),
+  recent: (repo: string, path: string, query = '', limit = 50, offset = 0): Promise<RecentResponse> => {
+    const p = new URLSearchParams({ path, limit: String(limit), offset: String(offset) });
+    if (query) p.set('q', query);
+    return fetch(`${base(repo)}/recent?${p}`).then(r => r.json());
+  },
   getOrigin: (repo: string): Promise<OriginResponse | null> =>
     fetch(`${base(repo)}/origin`).then(r => r.status === 204 ? null : r.json()),
   setOrigin: (repo: string, opts: { url?: string; auth_method?: string; token?: string; user?: string; password?: string }): Promise<OriginSetResponse> =>

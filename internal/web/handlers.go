@@ -114,6 +114,20 @@ func handleFact() http.HandlerFunc {
 				// Fall back to the last commit where the file existed.
 				content, fromCommit, err = ri.GS.ReadFileLastCommit(path, commitHash)
 			}
+			if err != nil && ri.Svc != nil {
+				// Commit may be invalid or file never on that branch.
+				// Fall back to the most recent commit_log entry for this path.
+				var lastHash string
+				if qerr := ri.Svc.DB().QueryRow(
+					`SELECT commit_hash FROM commit_log WHERE path = ? AND action != 'deleted' ORDER BY rowid DESC LIMIT 1`,
+					path,
+				).Scan(&lastHash); qerr == nil && lastHash != "" {
+					content, err = ri.GS.ReadFileAtCommit(path, lastHash)
+					if err == nil {
+						fromCommit = lastHash
+					}
+				}
+			}
 		} else {
 			content, err = ri.GS.ReadFile(path)
 		}
@@ -147,6 +161,7 @@ func handleFact() http.HandlerFunc {
 				"entities":    fact.Entities,
 				"refs":        fact.Refs,
 				"from_commit": fromCommit,
+				"commit_hash": fromCommit,
 			})
 			return
 		}
@@ -447,6 +462,45 @@ func handleStatus(embeddingsEnabled bool, ontologyRoot string) http.HandlerFunc 
 			"index_commit":       indexCommit,
 			"embeddings_enabled": embeddingsEnabled,
 			"ontology_root":      ontologyRoot,
+		})
+	}
+}
+
+// handleRecent handles GET /api/v1/{repo}/recent?path=<prefix>&q=<query>&limit=50&offset=0
+func handleRecent() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		ri := RepoFromContext(r.Context())
+		if ri.Svc == nil {
+			writeError(w, http.StatusServiceUnavailable, "index not available")
+			return
+		}
+
+		path := r.URL.Query().Get("path")
+		limit := 50
+		if v := r.URL.Query().Get("limit"); v != "" {
+			if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 500 {
+				limit = n
+			}
+		}
+		offset := 0
+		if v := r.URL.Query().Get("offset"); v != "" {
+			if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+				offset = n
+			}
+		}
+
+		query := r.URL.Query().Get("q")
+		entries, total, err := ri.Svc.Index().RecentFacts(path, query, limit, offset)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, fmt.Sprintf("recent error: %v", err))
+			return
+		}
+		if entries == nil {
+			entries = []store.RecentFactEntry{}
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"facts": entries,
+			"total": total,
 		})
 	}
 }

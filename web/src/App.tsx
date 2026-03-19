@@ -228,7 +228,8 @@ export default function App() {
     label: seg,
     path: pathParts.slice(0, i + 1).join('/'),
   }));
-  const showFact = state.selectedFact || isFactPath;
+  const isSearchMode = !!(state.searchQuery || state.similarTo) || state.leftMode === 'recent';
+  const showFact = (state.selectedFact && !isSearchMode) || isFactPath;
   const factLabel = state.selectedFact
     ? state.selectedFact.split('/').pop()
     : state.currentPath.split('/').pop();
@@ -282,6 +283,36 @@ export default function App() {
             <BreadcrumbPicker repo={state.repo} currentPath={state.currentPath} dispatch={dispatch} />
           )}
         </div>
+        <span
+          title={state.leftMode === 'browse' ? 'Switch to history (h)' : state.leftMode === 'history' ? 'Switch to recent (r)' : 'Switch to browsing (esc)'}
+          onClick={() => {
+            if (state.leftMode === 'browse') dispatch({ type: 'ENTER_HISTORY' });
+            else if (state.leftMode === 'history') dispatch({ type: 'ENTER_RECENT' });
+            else dispatch({ type: 'EXIT_HISTORY' });
+          }}
+          style={{
+            display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+            width: 22, height: 20, borderRadius: 3, cursor: 'pointer', flexShrink: 0, marginLeft: 8,
+            color: '#888',
+          }}
+          onMouseEnter={e => (e.currentTarget.style.color = '#ccc')}
+          onMouseLeave={e => (e.currentTarget.style.color = '#888')}
+        >
+          {state.leftMode === 'browse' ? (
+            <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
+              <path d="M1 2.5A1.5 1.5 0 0 1 2.5 1h3.879a1.5 1.5 0 0 1 1.06.44l1.122 1.12A1.5 1.5 0 0 0 9.62 3H13.5A1.5 1.5 0 0 1 15 4.5v8a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 1 12.5v-10z"/>
+            </svg>
+          ) : state.leftMode === 'history' ? (
+            <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
+              <path d="M8 3.5a.5.5 0 0 0-1 0V8a.5.5 0 0 0 .252.434l3.5 2a.5.5 0 0 0 .496-.868L8 7.71V3.5z"/>
+              <path d="M8 16A8 8 0 1 0 8 0a8 8 0 0 0 0 16zm7-8A7 7 0 1 1 1 8a7 7 0 0 1 14 0z"/>
+            </svg>
+          ) : (
+            <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
+              <path d="M2.5 15a.5.5 0 1 1 0-1h1v-1a4.5 4.5 0 0 1 2.557-4.06c.29-.139.443-.377.443-.59v-.7c0-.213-.154-.451-.443-.59A4.5 4.5 0 0 1 3.5 3V2h-1a.5.5 0 0 1 0-1h11a.5.5 0 0 1 0 1h-1v1a4.5 4.5 0 0 1-2.557 4.06c-.29.139-.443.377-.443.59v.7c0 .213.154.451.443.59A4.5 4.5 0 0 1 12.5 13v1h1a.5.5 0 0 1 0 1h-11z"/>
+            </svg>
+          )}
+        </span>
       </div>
 
       <div style={{ display: 'flex', flex: 1, overflow: 'hidden', minHeight: 0 }}>
