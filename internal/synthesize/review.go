@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/rs/zerolog/log"
+	"knomit/internal/llm"
 	"knomit/internal/mcp"
 	"knomit/internal/store"
 )
@@ -242,6 +243,41 @@ func (r *Reviewer) ContinueSession(sessionID, response string) (*mcp.ReviewResul
 	}
 
 	return r.nextItem(sessionID)
+}
+
+// RunAll drives the review session to completion using an LLM adapter.
+// It starts a session, then loops: render prompt → LLM call → apply response
+// until all work items are processed.
+func (r *Reviewer) RunAll(ctx context.Context, adapter llm.LLMAdapter) error {
+	result, err := r.StartSession()
+	if err != nil {
+		return fmt.Errorf("RunAll: start: %w", err)
+	}
+	if result.Done {
+		return nil
+	}
+
+	sessionID := result.SessionID
+	for result.Item != nil {
+		r.onProgress(ProgressEvent{
+			Phase:   "llm",
+			Message: fmt.Sprintf("processing %s work item", result.Item.Type),
+		})
+
+		opts := llm.CompletionOptions{ForceJSON: true}
+		response, err := adapter.Complete(ctx, "", []llm.Message{
+			{Role: "user", Content: result.Item.Prompt},
+		}, opts, nil)
+		if err != nil {
+			return fmt.Errorf("RunAll: LLM %s: %w", result.Item.Type, err)
+		}
+
+		result, err = r.ContinueSession(sessionID, response)
+		if err != nil {
+			return fmt.Errorf("RunAll: continue: %w", err)
+		}
+	}
+	return nil
 }
 
 // dirtyFacts returns seed facts (changed since watermark).

@@ -1,11 +1,13 @@
 package synthesize
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"testing"
 
 	"go.uber.org/mock/gomock"
+	"knomit/internal/llm"
 	"knomit/internal/store"
 )
 
@@ -726,6 +728,136 @@ func TestContinueSession_RAPTOR_StopsAtMaxDepth(t *testing.T) {
 	}
 	if !result.Done {
 		t.Error("expected Done=true at max depth")
+	}
+}
+
+func TestRunAll_ProcessesAllWorkItems(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	gs := NewMockGitStore(ctrl)
+	idx := NewMockSearchIndex(ctrl)
+	ri := NewMockReviewIndex(ctrl)
+	adapter := NewMockLLMAdapter(ctrl)
+
+	// --- StartSession setup ---
+	gs.EXPECT().Branch().Return("machine/test")
+	ri.EXPECT().GCReviewSessions("machine/test", 5).Return(nil)
+	ri.EXPECT().CreateReviewSession("machine/test").Return(&store.ReviewSession{
+		ID: "sess-run", Branch: "machine/test", Status: "active",
+	}, nil)
+
+	// No watermark → all facts dirty via index.
+	ri.EXPECT().GetReviewWatermark("machine/test").Return("", nil)
+	idx.EXPECT().Search(store.SearchQuery{Limit: 100_000}).Return([]store.SearchResult{
+		{FactWithBody: store.FactWithBody{FactRecord: store.FactRecord{Path: "kb/go/one.md", Title: "Fact one", Type: "observation", Domain: []string{"go"}, Confidence: 0.8, Sources: 1}, Body: "Body one."}},
+		{FactWithBody: store.FactWithBody{FactRecord: store.FactRecord{Path: "kb/go/two.md", Title: "Fact two", Type: "observation", Domain: []string{"go"}, Confidence: 0.8, Sources: 1}, Body: "Body two."}},
+	}, nil)
+
+	// ScopedCluster: search + cluster.
+	idx.EXPECT().Search(gomock.Any()).Return(nil, nil).AnyTimes()
+	idx.EXPECT().ClusterFacts(1.0, 2).Return(store.ClusterResult{}, fmt.Errorf("no embeddings")).AnyTimes()
+
+	// Insert prune + distill work items (2 seeds, 1 cluster of 2).
+	ri.EXPECT().InsertWorkItem(gomock.Any()).Return(nil).Times(2)
+
+	// --- First nextItem: prune ---
+	pruneFacts := []factForLLM{
+		{File: "kb/go/one.md", Title: "Fact one", Body: "Body one.", Type: "observation", Domain: []string{"go"}, Confidence: 0.8, Sources: 1},
+		{File: "kb/go/two.md", Title: "Fact two", Body: "Body two.", Type: "observation", Domain: []string{"go"}, Confidence: 0.8, Sources: 1},
+	}
+	pruneItem := &store.ReviewWorkItem{
+		ID: 1, SessionID: "sess-run", StepType: "prune",
+		FactsJSON: mustJSON(t, pruneFacts), Priority: 2,
+	}
+
+	distillFacts := []factForLLM{
+		{File: "kb/go/one.md", Title: "Fact one", Body: "Body one.", Type: "observation", Domain: []string{"go"}, Confidence: 0.8, Sources: 1},
+		{File: "kb/go/two.md", Title: "Fact two", Body: "Body two.", Type: "observation", Domain: []string{"go"}, Confidence: 0.8, Sources: 1},
+	}
+	distillItem := &store.ReviewWorkItem{
+		ID: 2, SessionID: "sess-run", StepType: "distill",
+		FactsJSON: mustJSON(t, distillFacts), Priority: 0,
+	}
+
+	// NextWorkItem calls: StartSession(1st), ContinueSession-prune(current+next), ContinueSession-distill(current+next=nil)
+	nextWorkItemCall := ri.EXPECT().NextWorkItem("sess-run")
+	nextWorkItemCall.Return(pruneItem, nil) // StartSession → first item
+
+	// ContinueSession for prune: first call gets current item, second gets next item
+	ri.EXPECT().GetReviewSession("sess-run").Return(&store.ReviewSession{
+		ID: "sess-run", Branch: "machine/test", Status: "active",
+	}, nil).AnyTimes()
+
+	// After first nextItem in StartSession, ContinueSession calls NextWorkItem twice:
+	// once to get current item to process, once to get next item.
+	ri.EXPECT().NextWorkItem("sess-run").Return(pruneItem, nil)  // ContinueSession: current item
+	ri.EXPECT().WorkItemStats("sess-run").Return(0, 2, nil)       // StartSession stats
+
+	pruneResp := `{"decisions": [{"path": "kb/go/one.md", "action": "keep"}, {"path": "kb/go/two.md", "action": "keep"}]}`
+	ri.EXPECT().SetWorkItemResponse(int64(1), pruneResp).Return(nil)
+	ri.EXPECT().NextWorkItem("sess-run").Return(distillItem, nil) // after prune: next is distill
+	ri.EXPECT().WorkItemStats("sess-run").Return(1, 1, nil)
+
+	// LLM call 1: prune
+	adapter.EXPECT().Complete(
+		gomock.Any(), "", gomock.Any(),
+		llm.CompletionOptions{ForceJSON: true}, nil,
+	).Return(pruneResp, nil)
+
+	// ContinueSession for distill
+	ri.EXPECT().NextWorkItem("sess-run").Return(distillItem, nil) // current distill item
+
+	distillResp := `{"synthesize": [], "retract": []}`
+	ri.EXPECT().SetWorkItemResponse(int64(2), distillResp).Return(nil)
+
+	// After distill: no more items → complete session
+	ri.EXPECT().NextWorkItem("sess-run").Return(nil, nil)
+	ri.EXPECT().CompleteReviewSession("sess-run").Return(nil)
+	gs.EXPECT().HeadCommit().Return("final-hash", nil)
+	ri.EXPECT().SetReviewWatermark("machine/test", "final-hash").Return(nil)
+	ri.EXPECT().WorkItemStats("sess-run").Return(2, 0, nil)
+
+	// LLM call 2: distill
+	adapter.EXPECT().Complete(
+		gomock.Any(), "", gomock.Any(),
+		llm.CompletionOptions{ForceJSON: true}, nil,
+	).Return(distillResp, nil)
+
+	r := NewReviewer(gs, idx, ri, NewMockEmbedder(ctrl), nil)
+	err := r.RunAll(context.Background(), adapter)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestRunAll_NoDirtyFacts(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	gs := NewMockGitStore(ctrl)
+	idx := NewMockSearchIndex(ctrl)
+	ri := NewMockReviewIndex(ctrl)
+	adapter := NewMockLLMAdapter(ctrl)
+
+	gs.EXPECT().Branch().Return("machine/test")
+	ri.EXPECT().GCReviewSessions("machine/test", 5).Return(nil)
+	ri.EXPECT().CreateReviewSession("machine/test").Return(&store.ReviewSession{
+		ID: "sess-empty", Branch: "machine/test", Status: "active",
+	}, nil)
+
+	// No watermark, index returns empty → no dirty facts.
+	ri.EXPECT().GetReviewWatermark("machine/test").Return("", nil)
+	idx.EXPECT().Search(store.SearchQuery{Limit: 100_000}).Return(nil, nil)
+
+	// Complete session immediately.
+	ri.EXPECT().CompleteReviewSession("sess-empty").Return(nil)
+	gs.EXPECT().HeadCommit().Return("abc123", nil)
+	ri.EXPECT().SetReviewWatermark("machine/test", "abc123").Return(nil)
+	ri.EXPECT().WorkItemStats("sess-empty").Return(0, 0, nil)
+
+	// adapter.Complete should NOT be called at all.
+
+	r := NewReviewer(gs, idx, ri, NewMockEmbedder(ctrl), nil)
+	err := r.RunAll(context.Background(), adapter)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
