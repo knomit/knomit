@@ -27,36 +27,42 @@ export function RecentFacts({ state, dispatch }: Props) {
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
   const [selectedIdx, setSelectedIdx] = useState(0);
-  const [filter, setFilter] = useState('');
+  const [query, setQuery] = useState('');
+  const [activeQuery, setActiveQuery] = useState(''); // debounced query sent to backend
   const sentinelRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const itemRefs = useRef<(HTMLDivElement | null)[]>([]);
   const searchRef = useRef<HTMLInputElement>(null);
 
-  // Fetch first page when path changes
+  // Debounce query input
+  useEffect(() => {
+    const t = setTimeout(() => setActiveQuery(query), 300);
+    return () => clearTimeout(t);
+  }, [query]);
+
+  // Fetch when path or activeQuery changes
   useEffect(() => {
     setLoading(true);
     setFacts([]);
     setTotal(0);
     setSelectedIdx(0);
-    setFilter('');
-    api.recent(state.repo, state.currentPath).then(r => {
+    api.recent(state.repo, state.currentPath, activeQuery).then(r => {
       setFacts(r.facts || []);
       setTotal(r.total);
       setLoading(false);
       if (r.facts?.length > 0) dispatch({ type: 'SELECT_FACT', path: r.facts[0].path });
     }).catch(() => { setFacts([]); setLoading(false); });
-  }, [state.currentPath, state.headCommit]);
+  }, [state.currentPath, state.headCommit, activeQuery]);
 
   // Infinite scroll
   const loadMore = useCallback(() => {
     if (loading || facts.length >= total) return;
     setLoading(true);
-    api.recent(state.repo, state.currentPath, 50, facts.length).then(r => {
+    api.recent(state.repo, state.currentPath, activeQuery, 50, facts.length).then(r => {
       setFacts(prev => [...prev, ...(r.facts || [])]);
       setLoading(false);
     }).catch(() => setLoading(false));
-  }, [loading, facts.length, total, state.repo, state.currentPath]);
+  }, [loading, facts.length, total, state.repo, state.currentPath, activeQuery]);
 
   useEffect(() => {
     const sentinel = sentinelRef.current;
@@ -69,33 +75,28 @@ export function RecentFacts({ state, dispatch }: Props) {
     return () => observer.disconnect();
   }, [loadMore]);
 
-  // Client-side filter on titles
-  const filtered = filter
-    ? facts.filter(f => f.title.toLowerCase().includes(filter.toLowerCase()))
-    : facts;
-
   // Keyboard navigation
   const navigate = useCallback((delta: 1 | -1) => {
-    const next = Math.max(0, Math.min(selectedIdx + delta, filtered.length - 1));
+    const next = Math.max(0, Math.min(selectedIdx + delta, facts.length - 1));
     setSelectedIdx(next);
     itemRefs.current[next]?.scrollIntoView({ block: 'nearest' });
-    const f = filtered[next];
+    const f = facts[next];
     if (f) dispatch({ type: 'SELECT_FACT', path: f.path });
-  }, [selectedIdx, filtered, dispatch]);
+  }, [selectedIdx, facts, dispatch]);
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (state.rightPanelFocused) return;
       if (document.activeElement === searchRef.current) {
-        if (e.key === 'Escape') { searchRef.current?.blur(); setFilter(''); e.preventDefault(); return; }
+        if (e.key === 'Escape') { searchRef.current?.blur(); setQuery(''); e.preventDefault(); return; }
         if (e.key === 'ArrowDown') { e.preventDefault(); navigate(1); return; }
         if (e.key === 'ArrowUp') { e.preventDefault(); navigate(-1); return; }
-        if (e.key === 'Enter' && filtered.length > 0) {
+        if (e.key === 'Enter' && facts.length > 0) {
           e.preventDefault();
-          dispatch({ type: 'SELECT_FACT', path: filtered[selectedIdx]?.path || filtered[0].path });
+          dispatch({ type: 'SELECT_FACT', path: facts[selectedIdx]?.path || facts[0].path });
           return;
         }
-        return; // let typing happen
+        return;
       }
       if (e.key === 'ArrowDown' || e.key === 'j') { e.preventDefault(); navigate(1); }
       else if (e.key === 'ArrowUp' || e.key === 'k') { e.preventDefault(); navigate(-1); }
@@ -104,16 +105,16 @@ export function RecentFacts({ state, dispatch }: Props) {
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [state.rightPanelFocused, filtered, selectedIdx, navigate, dispatch]);
+  }, [state.rightPanelFocused, facts, selectedIdx, navigate, dispatch]);
 
   return (
     <div ref={containerRef} style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
       <div style={{ padding: '4px 8px', borderBottom: '1px solid #333', flexShrink: 0 }}>
         <input
           ref={searchRef}
-          value={filter}
-          onChange={e => { setFilter(e.target.value); setSelectedIdx(0); }}
-          placeholder="Filter by title…"
+          value={query}
+          onChange={e => { setQuery(e.target.value); setSelectedIdx(0); }}
+          placeholder="Search facts…"
           style={{
             width: '100%', background: '#1a1a1a', border: '1px solid #333', borderRadius: 3,
             color: '#ccc', fontSize: 12, padding: '4px 8px', outline: 'none', fontFamily: 'monospace',
@@ -122,12 +123,12 @@ export function RecentFacts({ state, dispatch }: Props) {
         />
       </div>
       <div style={{ flex: 1, overflowY: 'auto', padding: '4px 0' }}>
-        {filtered.length === 0 && !loading && (
+        {facts.length === 0 && !loading && (
           <div style={{ padding: 16, color: '#666', fontSize: 13 }}>
-            {filter ? 'No facts match the filter.' : 'No facts in this path.'}
+            {activeQuery ? 'No facts match the search.' : 'No facts in this path.'}
           </div>
         )}
-        {filtered.map((f, i) => (
+        {facts.map((f, i) => (
           <div
             key={f.path}
             ref={el => { itemRefs.current[i] = el; }}

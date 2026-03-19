@@ -294,8 +294,13 @@ type RecentFactEntry struct {
 }
 
 // RecentFacts returns facts under pathPrefix ordered by most recent commit,
-// paginated by offset/limit.
-func (idx *Index) RecentFacts(pathPrefix string, limit, offset int) ([]RecentFactEntry, int, error) {
+// paginated by offset/limit. If query is non-empty, it performs a semantic
+// search first and returns only matching facts (still ordered by time).
+func (idx *Index) RecentFacts(pathPrefix, query string, limit, offset int) ([]RecentFactEntry, int, error) {
+	if query != "" {
+		return idx.recentFactsSearch(pathPrefix, query, limit, offset)
+	}
+
 	var total int
 	if err := idx.db.QueryRow(
 		`SELECT COUNT(*) FROM facts WHERE path LIKE ? || '%'`, pathPrefix,
@@ -326,4 +331,74 @@ func (idx *Index) RecentFacts(pathPrefix string, limit, offset int) ([]RecentFac
 		entries = append(entries, e)
 	}
 	return entries, total, rows.Err()
+}
+
+// recentFactsSearch uses semantic search to find matching facts, then returns
+// them ordered by committed_at with pagination.
+func (idx *Index) recentFactsSearch(pathPrefix, query string, limit, offset int) ([]RecentFactEntry, int, error) {
+	results, err := idx.Search(SearchQuery{
+		Text:  query,
+		Path:  pathPrefix,
+		Limit: 500, // large enough to get all matches for pagination
+	})
+	if err != nil {
+		return nil, 0, fmt.Errorf("RecentFacts search: %w", err)
+	}
+	if len(results) == 0 {
+		return []RecentFactEntry{}, 0, nil
+	}
+
+	// Build path set for SQL IN clause and fetch committed_at
+	placeholders := make([]string, len(results))
+	args := make([]any, len(results))
+	for i, r := range results {
+		placeholders[i] = "?"
+		args[i] = r.Path
+	}
+
+	rows, err := idx.db.Query(
+		`SELECT f.path, f.title, COALESCE(cl.committed_at, 0)
+		 FROM facts f
+		 LEFT JOIN commit_log cl ON f.commit_hash = cl.commit_hash AND f.path = cl.path
+		 WHERE f.path IN (`+join(placeholders, ",")+`)
+		 ORDER BY cl.committed_at DESC, f.path ASC`,
+		args...,
+	)
+	if err != nil {
+		return nil, 0, fmt.Errorf("RecentFacts search query: %w", err)
+	}
+	defer rows.Close()
+
+	var all []RecentFactEntry
+	for rows.Next() {
+		var e RecentFactEntry
+		if err := rows.Scan(&e.Path, &e.Title, &e.CommittedAt); err != nil {
+			return nil, 0, fmt.Errorf("RecentFacts search scan: %w", err)
+		}
+		all = append(all, e)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
+	}
+
+	total := len(all)
+	if offset >= total {
+		return []RecentFactEntry{}, total, nil
+	}
+	end := offset + limit
+	if end > total {
+		end = total
+	}
+	return all[offset:end], total, nil
+}
+
+func join(ss []string, sep string) string {
+	result := ""
+	for i, s := range ss {
+		if i > 0 {
+			result += sep
+		}
+		result += s
+	}
+	return result
 }

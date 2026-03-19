@@ -466,7 +466,7 @@ func handleStatus(embeddingsEnabled bool, ontologyRoot string) http.HandlerFunc 
 	}
 }
 
-// handleRecent handles GET /api/v1/{repo}/recent?path=<prefix>&limit=50&offset=0
+// handleRecent handles GET /api/v1/{repo}/recent?path=<prefix>&q=<query>&limit=50&offset=0
 func handleRecent() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := RepoFromContext(r.Context())
@@ -489,7 +489,8 @@ func handleRecent() http.HandlerFunc {
 			}
 		}
 
-		entries, total, err := ri.Svc.Index().RecentFacts(path, limit, offset)
+		query := r.URL.Query().Get("q")
+		entries, total, err := ri.Svc.Index().RecentFacts(path, query, limit, offset)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, fmt.Sprintf("recent error: %v", err))
 			return

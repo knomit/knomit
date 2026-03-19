@@ -104,8 +104,11 @@ export const api = {
     fetch(`${base(repo)}/synthesize`, { method: 'POST', body: recipe }).then(r => r.json()),
   rebuild: (repo: string): Promise<{ op: string; id?: string; status: string; message?: string }> =>
     fetch(`${base(repo)}/rebuild`, { method: 'POST' }).then(r => r.json()),
-  recent: (repo: string, path: string, limit = 50, offset = 0): Promise<RecentResponse> =>
-    fetch(`${base(repo)}/recent?path=${encodeURIComponent(path)}&limit=${limit}&offset=${offset}`).then(r => r.json()),
+  recent: (repo: string, path: string, query = '', limit = 50, offset = 0): Promise<RecentResponse> => {
+    const p = new URLSearchParams({ path, limit: String(limit), offset: String(offset) });
+    if (query) p.set('q', query);
+    return fetch(`${base(repo)}/recent?${p}`).then(r => r.json());
+  },
   getOrigin: (repo: string): Promise<OriginResponse | null> =>
     fetch(`${base(repo)}/origin`).then(r => r.status === 204 ? null : r.json()),
   setOrigin: (repo: string, opts: { url?: string; auth_method?: string; token?: string; user?: string; password?: string }): Promise<OriginSetResponse> =>
