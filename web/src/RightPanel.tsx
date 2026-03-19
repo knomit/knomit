@@ -434,7 +434,7 @@ export function RightPanel({ state, dispatch }: Props) {
         }).catch(() => setCommitDetail(null));
       }
     } else if (state.rightMode === 'fact' && state.selectedFact) {
-      api.fact(state.repo, state.selectedFact).then(setFact).catch(e => setError(String(e)));
+      api.fact(state.repo, state.selectedFact, state.refCommit || undefined).then(setFact).catch(e => setError(String(e)));
     } else if (state.rightMode === 'history' && state.selectedFact) {
       api.history(state.repo, state.selectedFact).then(r => setHistory(r.entries || [])).catch(e => setError(String(e)));
     } else if (state.rightMode === 'summary') {
@@ -530,19 +530,9 @@ export function RightPanel({ state, dispatch }: Props) {
   const handleLocalRef = (path: string) => {
     if (state.leftMode === 'history') {
       dispatch({ type: 'HISTORY_OPEN_PATH', path });
-      return;
+    } else {
+      dispatch({ type: 'OPEN_FACT', path, refCommit: fact?.commit_hash || undefined });
     }
-    // Try HEAD first; if the fact was deleted, fall back to the referring fact's commit.
-    api.fact(state.repo, path).then(() => {
-      dispatch({ type: 'OPEN_FACT', path });
-    }).catch(() => {
-      const fallbackCommit = fact?.commit_hash;
-      if (fallbackCommit) {
-        dispatch({ type: 'FACT_HISTORY', factPath: path, commit: fallbackCommit });
-      } else {
-        dispatch({ type: 'OPEN_FACT', path });
-      }
-    });
   };
 
   if (error) return <div style={{ padding: 24, color: '#f44' }}>{error}</div>;

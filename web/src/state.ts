@@ -38,6 +38,7 @@ export interface AppState {
   historyCommit: string | null;
   historyFocusPath: string | null; // in history mode: load this specific path (not commitDetail auto-select)
   navStack: NavEntry[];
+  refCommit: string | null; // when opening a ref, the referring fact's commit (for time-travel fallback)
   remoteError: string; // latest sync/push error, empty = ok
   rightPanelFocused: boolean;
 }
@@ -68,7 +69,7 @@ export type Action =
   | { type: 'NAV_BACK' }
   | { type: 'SET_REPO'; repo: string }
   | { type: 'SET_REMOTE_ERROR'; error: string }
-  | { type: 'OPEN_FACT'; path: string }
+  | { type: 'OPEN_FACT'; path: string; refCommit?: string }
   | { type: 'HISTORY_OPEN_PATH'; path: string }
   | { type: 'FOCUS_RIGHT_PANEL' }
   | { type: 'BLUR_RIGHT_PANEL' };
@@ -91,6 +92,7 @@ export const init: AppState = {
   consoleOpen: false,
   consoleHeight: 200,
   leftMode: 'browse' as LeftMode,
+  refCommit: null,
   remoteError: '',
   historyCommit: null,
   historyFocusPath: null,
@@ -114,8 +116,8 @@ function pushNav(s: AppState): NavEntry[] {
 
 export function reducer(s: AppState, a: Action): AppState {
   switch (a.type) {
-    case 'NAVIGATE': return { ...s, currentPath: a.path, selectedFact: null, previewPath: null, rightMode: 'summary', searchQuery: '', similarTo: null, historyFocusPath: null, navStack: pushNav(s), rightPanelFocused: false };
-    case 'SELECT_FACT': return { ...s, selectedFact: a.path, previewPath: null, rightMode: 'fact', navStack: pushNav(s) };
+    case 'NAVIGATE': return { ...s, currentPath: a.path, selectedFact: null, previewPath: null, rightMode: 'summary', searchQuery: '', similarTo: null, historyFocusPath: null, refCommit: null, navStack: pushNav(s), rightPanelFocused: false };
+    case 'SELECT_FACT': return { ...s, selectedFact: a.path, previewPath: null, rightMode: 'fact', refCommit: null, navStack: pushNav(s) };
     case 'PREVIEW_DIR': return { ...s, selectedFact: null, previewPath: a.path, rightMode: 'summary' };
     case 'SELECT_WORLD': return { ...s, selectedFact: null, previewPath: null, rightMode: 'summary' };
     case 'GO_UP': {
@@ -160,7 +162,7 @@ export function reducer(s: AppState, a: Action): AppState {
     case 'OPEN_FACT': {
       const parts = a.path.split('/');
       const parentDir = parts.slice(0, -1).join('/') || s.currentPath;
-      return { ...s, currentPath: parentDir, selectedFact: a.path, rightMode: 'fact', historyCommit: null, historyFocusPath: null, leftMode: 'browse' as LeftMode, navStack: pushNav(s), rightPanelFocused: false };
+      return { ...s, currentPath: parentDir, selectedFact: a.path, refCommit: a.refCommit || null, rightMode: 'fact', historyCommit: null, historyFocusPath: null, leftMode: 'browse' as LeftMode, navStack: pushNav(s), rightPanelFocused: false };
     }
     case 'HISTORY_OPEN_PATH': return { ...s, currentPath: a.path, historyFocusPath: a.path, navStack: pushNav(s), rightPanelFocused: false };
     case 'NAV_BACK': {
