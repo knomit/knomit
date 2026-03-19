@@ -64,7 +64,7 @@ B-tree indexes support range queries and ordering while hash indexes only suppor
     path: 'kb/databases/redis/eviction-policies.md',
     content: `---
 confidence: 0.7
-type: claim
+type: observation
 entities:
   - Redis
   - cache eviction
@@ -108,7 +108,7 @@ Modern TCP stacks use algorithms like BBR (Bottleneck Bandwidth and RTT) instead
     path: 'kb/networking/http/http3-quic.md',
     content: `---
 confidence: 0.7
-type: claim
+type: observation
 entities:
   - HTTP/3
   - QUIC
@@ -180,7 +180,7 @@ AES-GCM provides both confidentiality and integrity in a single operation. It is
     path: 'kb/security/supply-chain/sbom.md',
     content: `---
 confidence: 0.6
-type: claim
+type: observation
 entities:
   - SBOM
   - supply chain security
@@ -282,7 +282,7 @@ mTLS requires both client and server to present certificates during the TLS hand
     path: 'kb/observability/dashboards/grafana-best-practices.md',
     content: `---
 confidence: 0.3
-type: claim
+type: observation
 entities:
   - Grafana
   - dashboards

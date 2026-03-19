@@ -55,6 +55,7 @@ func Open(path string, opts ...Option) (*Service, error) {
 	migrations := []string{
 		`ALTER TABLE remotes ADD COLUMN auth_method TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE remotes ADD COLUMN auth_token TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE review_work_items ADD COLUMN depth INTEGER NOT NULL DEFAULT 0`,
 	}
 	for _, m := range migrations {
 		db.Exec(m) // ignore "duplicate column" errors

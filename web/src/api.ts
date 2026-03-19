@@ -10,7 +10,7 @@ export interface HistoryEntry { commit: string; date: string; message: string }
 export interface FileCounts { added?: number; modified?: number; deleted?: number }
 export interface HistoryEntryWithTags { commit: string; date: string; message: string; operation?: string; files?: FileCounts }
 export interface HistoryResponse { entries: HistoryEntryWithTags[]; next?: string }
-export interface RecentFactEntry { path: string; title: string; committed_at: number; score?: number }
+export interface RecentFactEntry { path: string; title: string; committed_at: number; operation?: string; score?: number }
 export interface RecentResponse { facts: RecentFactEntry[]; total: number }
 export interface CommitFile { path: string; action: string }
 export interface CommitDetail { commit: string; date: string; message: string; operation?: string; files: CommitFile[] }
