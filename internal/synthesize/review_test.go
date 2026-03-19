@@ -31,7 +31,7 @@ func TestStartSession_NoDirtyFacts(t *testing.T) {
 	ri.EXPECT().SetReviewWatermark("machine/test", "abc123").Return(nil)
 	ri.EXPECT().WorkItemStats("sess-1").Return(0, 0, nil)
 
-	r := NewReviewer(gs, idx, ri, nil)
+	r := NewReviewer(gs, idx, ri, NewMockEmbedder(ctrl), nil)
 	result, err := r.StartSession()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -71,7 +71,7 @@ func TestStartSession_WatermarkAtHead_NoDirtyFacts(t *testing.T) {
 	ri.EXPECT().SetReviewWatermark("machine/test", "head-hash").Return(nil)
 	ri.EXPECT().WorkItemStats("sess-wm").Return(0, 0, nil)
 
-	r := NewReviewer(gs, idx, ri, nil)
+	r := NewReviewer(gs, idx, ri, NewMockEmbedder(ctrl), nil)
 	result, err := r.StartSession()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -127,7 +127,7 @@ func TestStartSession_WatermarkEmpty_AllFactsDirty(t *testing.T) {
 	}, nil)
 	ri.EXPECT().WorkItemStats("sess-2").Return(0, 2, nil)
 
-	r := NewReviewer(gs, idx, ri, nil)
+	r := NewReviewer(gs, idx, ri, NewMockEmbedder(ctrl), nil)
 	result, err := r.StartSession()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -171,9 +171,15 @@ func TestStartSession_WithWatermark(t *testing.T) {
 	gs.EXPECT().ReadFile("kb/go/one.md").Return(fact1Content, nil)
 
 	// ScopedCluster: one seed (one.md), searches neighbors.
-	idx.EXPECT().Search(gomock.Any()).Return([]store.SearchResult{
-		{FactWithBody: store.FactWithBody{FactRecord: store.FactRecord{Path: "kb/go/two.md"}}},
-	}, nil).AnyTimes()
+	// Dedup also calls Search with MinSimilarity=0.92; return empty for those.
+	idx.EXPECT().Search(gomock.Any()).DoAndReturn(func(q store.SearchQuery) ([]store.SearchResult, error) {
+		if q.MinSimilarity >= 0.9 {
+			return nil, nil // dedup pass: no near-duplicates
+		}
+		return []store.SearchResult{
+			{FactWithBody: store.FactWithBody{FactRecord: store.FactRecord{Path: "kb/go/two.md"}}},
+		}, nil
+	}).AnyTimes()
 	idx.EXPECT().ClusterFacts(1.0, 2).Return(store.ClusterResult{
 		Clusters: map[int][]string{0: {"kb/go/one.md", "kb/go/two.md"}},
 	}, nil)
@@ -199,7 +205,7 @@ func TestStartSession_WithWatermark(t *testing.T) {
 	}, nil)
 	ri.EXPECT().WorkItemStats("sess-3").Return(0, 1, nil)
 
-	r := NewReviewer(gs, idx, ri, nil)
+	r := NewReviewer(gs, idx, ri, NewMockEmbedder(ctrl), nil)
 	result, err := r.StartSession()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -254,7 +260,7 @@ func TestContinueSession_PruneResponse(t *testing.T) {
 	ri.EXPECT().SetReviewWatermark("machine/test", "new-hash").Return(nil)
 	ri.EXPECT().WorkItemStats("sess-1").Return(1, 0, nil)
 
-	r := NewReviewer(gs, idx, ri, nil)
+	r := NewReviewer(gs, idx, ri, NewMockEmbedder(ctrl), nil)
 	result, err := r.ContinueSession("sess-1", pruneResp)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -306,7 +312,7 @@ func TestContinueSession_ReturnsNextItem(t *testing.T) {
 	}, nil)
 	ri.EXPECT().WorkItemStats("sess-1").Return(1, 1, nil)
 
-	r := NewReviewer(gs, idx, ri, nil)
+	r := NewReviewer(gs, idx, ri, NewMockEmbedder(ctrl), nil)
 	result, err := r.ContinueSession("sess-1", pruneResp)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -330,7 +336,7 @@ func TestContinueSession_InvalidSession(t *testing.T) {
 
 	ri.EXPECT().GetReviewSession("bad-id").Return(nil, nil)
 
-	r := NewReviewer(gs, idx, ri, nil)
+	r := NewReviewer(gs, idx, ri, NewMockEmbedder(ctrl), nil)
 	_, err := r.ContinueSession("bad-id", "{}")
 	if err == nil {
 		t.Fatal("expected error for invalid session")
@@ -347,7 +353,7 @@ func TestContinueSession_CompletedSession(t *testing.T) {
 		ID: "done-sess", Branch: "machine/test", Status: "completed",
 	}, nil)
 
-	r := NewReviewer(gs, idx, ri, nil)
+	r := NewReviewer(gs, idx, ri, NewMockEmbedder(ctrl), nil)
 	_, err := r.ContinueSession("done-sess", "{}")
 	if err == nil {
 		t.Fatal("expected error for completed session")
@@ -375,7 +381,7 @@ func TestContinueSession_InvalidJSON(t *testing.T) {
 		Priority:  2,
 	}, nil)
 
-	r := NewReviewer(gs, idx, ri, nil)
+	r := NewReviewer(gs, idx, ri, NewMockEmbedder(ctrl), nil)
 	_, err := r.ContinueSession("sess-1", "not valid json at all")
 	if err == nil {
 		t.Fatal("expected error for invalid JSON response")
@@ -426,7 +432,7 @@ func TestContinueSession_DistillResponse(t *testing.T) {
 	ri.EXPECT().SetReviewWatermark("machine/test", "new-hash").Return(nil)
 	ri.EXPECT().WorkItemStats("sess-1").Return(1, 0, nil)
 
-	r := NewReviewer(gs, idx, ri, nil)
+	r := NewReviewer(gs, idx, ri, NewMockEmbedder(ctrl), nil)
 	result, err := r.ContinueSession("sess-1", distillResp)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -460,7 +466,7 @@ func TestContinueSession_ValidationError(t *testing.T) {
 	// Response references unknown path.
 	badResp := `{"decisions": [{"path": "kb/go/nonexistent.md", "action": "retract"}]}`
 
-	r := NewReviewer(gs, idx, ri, nil)
+	r := NewReviewer(gs, idx, ri, NewMockEmbedder(ctrl), nil)
 	_, err := r.ContinueSession("sess-1", badResp)
 	if err == nil {
 		t.Fatal("expected error for validation failure")
@@ -485,7 +491,7 @@ func TestDirtyFacts_NoWatermark_UsesIndex(t *testing.T) {
 		}},
 	}, nil)
 
-	r := NewReviewer(gs, idx, ri, nil)
+	r := NewReviewer(gs, idx, ri, NewMockEmbedder(ctrl), nil)
 	facts, err := r.dirtyFacts("machine/test")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -523,7 +529,7 @@ func TestDirtyFacts_Incremental_OnlyChangedFiles(t *testing.T) {
 	gs.EXPECT().ReadFile("kb/go/new.md").Return(newContent, nil)
 	gs.EXPECT().ReadFile("kb/go/changed.md").Return(changedContent, nil)
 
-	r := NewReviewer(gs, idx, ri, nil)
+	r := NewReviewer(gs, idx, ri, NewMockEmbedder(ctrl), nil)
 	facts, err := r.dirtyFacts("machine/test")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -553,7 +559,7 @@ func TestDirtyFacts_Incremental_SkipsDeletedAndNonMD(t *testing.T) {
 	gs.EXPECT().ReadFile("kb/go/gone.md").Return("", fmt.Errorf("not found"))
 	// README.txt should not be read at all (not .md).
 
-	r := NewReviewer(gs, idx, ri, nil)
+	r := NewReviewer(gs, idx, ri, NewMockEmbedder(ctrl), nil)
 	facts, err := r.dirtyFacts("machine/test")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)

@@ -3,6 +3,7 @@
 package synthesize
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -31,15 +32,16 @@ type Reviewer struct {
 	gs         GitStore
 	idx        SearchIndex
 	reviewIdx  ReviewIndex
+	embedder   Embedder
 	onProgress func(ProgressEvent)
 }
 
 // NewReviewer creates a new review orchestrator.
-func NewReviewer(gs GitStore, idx SearchIndex, reviewIdx ReviewIndex, onProgress func(ProgressEvent)) *Reviewer {
+func NewReviewer(gs GitStore, idx SearchIndex, reviewIdx ReviewIndex, embedder Embedder, onProgress func(ProgressEvent)) *Reviewer {
 	if onProgress == nil {
 		onProgress = func(ProgressEvent) {}
 	}
-	return &Reviewer{gs: gs, idx: idx, reviewIdx: reviewIdx, onProgress: onProgress}
+	return &Reviewer{gs: gs, idx: idx, reviewIdx: reviewIdx, embedder: embedder, onProgress: onProgress}
 }
 
 // StartSession creates a new review session, identifies dirty facts, clusters
@@ -72,8 +74,24 @@ func (r *Reviewer) StartSession() (*mcp.ReviewResult, error) {
 		return nil, fmt.Errorf("review: cluster: %w", err)
 	}
 
+	// Dedup pass: merge near-duplicates within each cluster before enqueueing.
+	for i := range clusters {
+		surviving, err := dedupCluster(context.Background(), clusters[i], r.gs, r.idx, 0.92, "review", r.onProgress)
+		if err != nil {
+			return nil, fmt.Errorf("review: dedup cluster %d: %w", i, err)
+		}
+		clusters[i] = surviving
+	}
+	// Filter to clusters with > 1 fact (nothing for LLM to reason about with just 1).
+	var pruneClusters [][]factForLLM
+	for _, c := range clusters {
+		if len(c) > 1 {
+			pruneClusters = append(pruneClusters, c)
+		}
+	}
+
 	// Store prune work items — priority = cluster size (bigger = more urgent).
-	for i, cluster := range clusters {
+	for i, cluster := range pruneClusters {
 		factsJSON, err := json.Marshal(cluster)
 		if err != nil {
 			return nil, fmt.Errorf("review: marshal cluster %d: %w", i, err)
@@ -108,8 +126,8 @@ func (r *Reviewer) StartSession() (*mcp.ReviewResult, error) {
 		}
 	}
 
-	log.Info().Str("session", sess.ID).Int("clusters", len(clusters)).Int("seeds", len(seeds)).Msg("review: session started")
-	r.onProgress(ProgressEvent{Phase: "review-start", Message: fmt.Sprintf("session %s: %d clusters, %d seeds", sess.ID, len(clusters), len(seeds))})
+	log.Info().Str("session", sess.ID).Int("clusters", len(pruneClusters)).Int("seeds", len(seeds)).Msg("review: session started")
+	r.onProgress(ProgressEvent{Phase: "review-start", Message: fmt.Sprintf("session %s: %d clusters, %d seeds", sess.ID, len(pruneClusters), len(seeds))})
 
 	return r.nextItem(sess.ID)
 }

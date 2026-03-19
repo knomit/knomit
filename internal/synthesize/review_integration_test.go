@@ -58,7 +58,7 @@ func TestReviewLoopIntegration(t *testing.T) {
 	idx.EXPECT().Upsert(gomock.Any()).Return(nil).AnyTimes()
 	idx.EXPECT().GraphAddDerivedFrom(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 
-	r := NewReviewer(gitStore, idx, reviewIdx, nil)
+	r := NewReviewer(gitStore, idx, reviewIdx, NewMockEmbedder(ctrl), nil)
 
 	// --- Step 1: StartSession — all 3 facts are dirty (no watermark). ---
 	result, err := r.StartSession()

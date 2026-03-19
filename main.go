@@ -200,7 +200,7 @@ func openRepo(
 	// Per-repo MCP servers.
 	var mcpHandlers map[string]http.Handler
 	if ontology != nil {
-		reviewer := synthesize.NewReviewer(gs, idx, idx, nil)
+		reviewer := synthesize.NewReviewer(gs, idx, idx, nil, nil)
 		profiles := []string{"code", "chat", "generic"}
 		mcpHandlers = make(map[string]http.Handler, len(profiles))
 		for _, p := range profiles {
@@ -522,7 +522,7 @@ func serveCmd() *cobra.Command {
 // setRepoMCP creates and attaches MCP handlers to a repoResult.
 // Called after the ontology is loaded (since MCP servers need it).
 func setRepoMCP(result *repoResult, ontologyRoot string, ontology *fact.Ontology, llmAdapter llm.LLMAdapter, embedder *embeddings.Embedder) {
-	reviewer := synthesize.NewReviewer(result.gs, result.idx, result.idx, nil)
+	reviewer := synthesize.NewReviewer(result.gs, result.idx, result.idx, embedder, nil)
 	profiles := []string{"code", "chat", "generic"}
 	mcpHandlers := make(map[string]http.Handler, len(profiles))
 	for _, p := range profiles {
