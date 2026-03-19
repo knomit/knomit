@@ -1,4 +1,4 @@
-.PHONY: build web test clean run dev setup dist download-ort download-graphqlite e2e e2e-ui e2e-setup
+.PHONY: build web test clean run dev setup dist download-ort download-graphqlite e2e e2e-ui e2e-setup e2e-report
 
 ORT_VERSION := 1.24.3
 UNAME_S := $(shell uname -s)
@@ -102,3 +102,6 @@ e2e: dist
 
 e2e-ui: dist
 	cd e2e && npx playwright test --headed
+
+e2e-report:
+	cd e2e && npx playwright show-report playwright-report

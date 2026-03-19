@@ -10,10 +10,10 @@ export default defineConfig({
   forbidOnly: isCI,
   retries: isCI ? 1 : 0,
   workers: 1,
-  reporter: isCI ? 'github' : 'list',
+  reporter: [['list'], ['html', { open: 'never', outputFolder: 'playwright-report' }]],
   use: {
     baseURL: process.env.KNOMIT_E2E_BASE_URL || 'http://localhost:3000',
-    trace: isCI ? 'on-first-retry' : 'retain-on-failure',
+    trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
     actionTimeout: 15_000,
   },
