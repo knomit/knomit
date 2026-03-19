@@ -228,7 +228,7 @@ export default function App() {
     label: seg,
     path: pathParts.slice(0, i + 1).join('/'),
   }));
-  const isSearchMode = !!(state.searchQuery || state.similarTo);
+  const isSearchMode = !!(state.searchQuery || state.similarTo) || state.leftMode === 'recent';
   const showFact = (state.selectedFact && !isSearchMode) || isFactPath;
   const factLabel = state.selectedFact
     ? state.selectedFact.split('/').pop()
