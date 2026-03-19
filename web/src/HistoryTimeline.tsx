@@ -15,6 +15,7 @@ const opStyles: Record<string, { color: string; bg: string; label: string }> = {
   retract: { color: '#f88', bg: '#2e1a1a', label: 'retract' },
   subsume: { color: '#fa0', bg: '#2e2a1a', label: 'subsume' },
   sync:    { color: '#888', bg: '#222',    label: 'sync' },
+  other:   { color: '#666', bg: '#1a1a1a', label: 'other' },
 };
 const defaultStyle = { color: '#555', bg: '#222', label: '' };
 
@@ -64,11 +65,16 @@ export function HistoryTimeline({ state, dispatch }: Props) {
     });
   }, [state.currentPath]);
 
-  // Collect distinct operations from loaded entries
+  // Collect distinct operations from loaded entries; add "other" if any have no operation
   const availableOps = Array.from(new Set(entries.map(e => e.operation || '').filter(Boolean)));
+  const hasOther = entries.some(e => !e.operation);
+  if (hasOther) availableOps.push('other');
 
   // Filter entries by active operations (empty set = show all)
-  const filtered = activeOps.size === 0 ? entries : entries.filter(e => e.operation && activeOps.has(e.operation));
+  const filtered = activeOps.size === 0 ? entries : entries.filter(e => {
+    if (!e.operation) return activeOps.has('other');
+    return activeOps.has(e.operation);
+  });
 
   const toggleOp = (op: string) => {
     setActiveOps(prev => {
