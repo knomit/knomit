@@ -371,7 +371,7 @@ function FactEditor({ fact, repo, onSaved }: { fact: Fact; repo: string; onSaved
 }
 
 
-export function RightPanel({ state, dispatch }: Props) {
+export function RightPanel({ state, dispatch }: { state: AppState; dispatch: Dispatch<Action> }) {
   const [fact, setFact] = useState<Fact | null>(null);
   const [history, setHistory] = useState<HistoryEntry[]>([]);
   const [stats, setStats] = useState<Stats | null>(null);
