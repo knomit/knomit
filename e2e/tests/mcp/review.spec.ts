@@ -19,9 +19,12 @@ test.describe('knomit_review', () => {
     expect(names).toContain('knomit_review');
   });
 
-  test('knomit_review fails without LLM configured', async () => {
+  test('knomit_review with no dirty facts returns done', async () => {
+    // Fresh KB has no dirty facts, so review should complete immediately
     const result = await client.callTool('knomit_review', {});
-    // Expect an error since no LLM provider is configured in test instances
-    expect(result.isError).toBe(true);
+    expect(result.isError).toBeFalsy();
+    const parsed = JSON.parse(result.content[0].text || '{}');
+    expect(parsed.session_id).toBeDefined();
+    expect(parsed.done).toBe(true);
   });
 });

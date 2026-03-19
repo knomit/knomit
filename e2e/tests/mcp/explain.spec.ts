@@ -1,18 +1,25 @@
 import { test, expect } from '../../fixtures/knomit.js';
 import { McpClient } from '../../helpers/mcp-client.js';
 
-const fact = `---
-type: observation
-domain: [testing]
-confidence: 0.85
-sources: 1
-entities: [explain-entity]
-refs: []
----
-# Explainable Fact
-
-This fact exists for testing the explain tool.
-`;
+/** Learn a fact and return its file path. */
+async function learnFact(client: McpClient): Promise<string> {
+  const result = await client.callTool('knomit_learn', {
+    moment_name: 'test-explain-seed',
+    facts: [
+      {
+        topic: 'technology',
+        category: 'software',
+        title: 'Explainable Fact',
+        body: 'This fact exists for testing the explain tool.',
+        domain: ['testing'],
+        confidence: 0.85,
+        entities: ['explain-entity'],
+      },
+    ],
+  });
+  const parsed = JSON.parse(result.content[0].text || '{}');
+  return parsed.commits[0].file;
+}
 
 test.describe('knomit_explain', () => {
   let client: McpClient;
@@ -26,18 +33,22 @@ test.describe('knomit_explain', () => {
     await client.close();
   });
 
-  test('explain returns path and metadata for a learned fact', async () => {
-    await client.callTool('knomit_learn', {
-      path: 'explain/target',
-      content: fact,
-    });
+  test('explain returns fact with provenance structure', async () => {
+    const path = await learnFact(client);
 
-    const result = await client.callTool('knomit_explain', {
-      path: 'explain/target',
-    });
+    const result = await client.callTool('knomit_explain', { file: path });
     expect(result.isError).toBeFalsy();
     expect(result.content.length).toBeGreaterThan(0);
-    const text = result.content.map((c) => c.text ?? '').join('');
-    expect(text).toContain('explain/target');
+
+    const parsed = JSON.parse(result.content[0].text || '{}');
+    expect(parsed.facts).toBeDefined();
+    expect(parsed.facts.length).toBe(1);
+    expect(parsed.facts[0].path).toBe(path);
+    expect(parsed.facts[0].title).toBe('Explainable Fact');
+    expect(parsed.facts[0].depth).toBe(0);
+    expect(parsed.facts[0]).toHaveProperty('commit');
+    expect(parsed.facts[0]).toHaveProperty('refs');
+    expect(parsed).toHaveProperty('cursor');
+    expect(parsed).toHaveProperty('has_more');
   });
 });

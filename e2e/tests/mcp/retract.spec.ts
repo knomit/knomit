@@ -1,18 +1,36 @@
 import { test, expect } from '../../fixtures/knomit.js';
 import { McpClient } from '../../helpers/mcp-client.js';
 
-const fact = `---
-type: observation
-domain: [testing]
-confidence: 0.9
-sources: 1
-entities: [retract-entity]
-refs: []
----
-# Retractable Fact
+/** Learn a fact and return its file path. */
+async function learnFact(client: McpClient): Promise<string> {
+  const result = await client.callTool('knomit_learn', {
+    moment_name: 'test-retract-seed',
+    facts: [
+      {
+        topic: 'technology',
+        category: 'software',
+        title: 'Retractable Fact',
+        body: 'This fact will be retracted.',
+        domain: ['testing'],
+        confidence: 0.9,
+        entities: ['retract-entity'],
+      },
+    ],
+  });
+  const parsed = JSON.parse(result.content[0].text || '{}');
+  return parsed.commits[0].file;
+}
 
-This fact will be retracted.
-`;
+/** Wait for index to pick up a text query. */
+async function waitForIndex(client: McpClient, text: string, maxWait = 5000): Promise<void> {
+  const deadline = Date.now() + maxWait;
+  while (Date.now() < deadline) {
+    const result = await client.callTool('knomit_query', { text });
+    const parsed = JSON.parse(result.content[0].text || '{}');
+    if (parsed.facts && parsed.facts.length > 0) return;
+    await new Promise((r) => setTimeout(r, 500));
+  }
+}
 
 test.describe('knomit_retract', () => {
   let client: McpClient;
@@ -27,26 +45,35 @@ test.describe('knomit_retract', () => {
   });
 
   test('retracted fact is no longer queryable', async () => {
-    await client.callTool('knomit_learn', {
-      path: 'retract/gone',
-      content: fact,
-    });
+    const path = await learnFact(client);
 
-    // Verify it exists first
+    // Wait for it to be indexed
+    await waitForIndex(client, 'Retractable Fact');
+
+    // Verify it exists
     const before = await client.callTool('knomit_query', { text: 'Retractable Fact' });
-    expect(before.isError).toBeFalsy();
-    const beforeText = before.content.map((c) => c.text ?? '').join('');
-    expect(beforeText).toContain('retract/gone');
+    const beforeParsed = JSON.parse(before.content[0].text || '{}');
+    expect(beforeParsed.facts.length).toBeGreaterThan(0);
 
     // Retract it
     const retractResult = await client.callTool('knomit_retract', {
-      path: 'retract/gone',
+      file: path,
+      moment_name: 'test-retract',
     });
     expect(retractResult.isError).toBeFalsy();
 
-    // Verify it's gone
-    const after = await client.callTool('knomit_query', { text: 'Retractable Fact' });
-    const afterText = after.content.map((c) => c.text ?? '').join('');
-    expect(afterText).not.toContain('retract/gone');
+    // Wait for index to update, then verify it's gone
+    const deadline = Date.now() + 5000;
+    let gone = false;
+    while (Date.now() < deadline) {
+      const after = await client.callTool('knomit_query', { text: 'Retractable Fact' });
+      const afterParsed = JSON.parse(after.content[0].text || '{}');
+      if (afterParsed.facts.length === 0) {
+        gone = true;
+        break;
+      }
+      await new Promise((r) => setTimeout(r, 500));
+    }
+    expect(gone).toBe(true);
   });
 });

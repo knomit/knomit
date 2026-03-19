@@ -1,18 +1,40 @@
 import { test, expect } from '../../fixtures/knomit.js';
 import { McpClient } from '../../helpers/mcp-client.js';
 
-const fact = (title: string) => `---
-type: observation
-domain: [testing]
-confidence: 0.9
-sources: 1
-entities: [explore-entity]
-refs: []
----
-# ${title}
+/** Learn a fact and return its file path. */
+async function learnFact(
+  client: McpClient,
+  title: string,
+  category = 'software',
+): Promise<string> {
+  const result = await client.callTool('knomit_learn', {
+    moment_name: 'test-explore-seed',
+    facts: [
+      {
+        topic: 'technology',
+        category,
+        title,
+        body: `Body for ${title}.`,
+        domain: ['testing'],
+        confidence: 0.9,
+        entities: ['explore-entity'],
+      },
+    ],
+  });
+  const parsed = JSON.parse(result.content[0].text || '{}');
+  return parsed.commits[0].file;
+}
 
-Body.
-`;
+/** Wait for explore to return facts. */
+async function waitForExplore(client: McpClient, maxWait = 5000): Promise<void> {
+  const deadline = Date.now() + maxWait;
+  while (Date.now() < deadline) {
+    const result = await client.callTool('knomit_explore', {});
+    const parsed = JSON.parse(result.content[0].text || '{}');
+    if (parsed.facts && parsed.facts.length > 0) return;
+    await new Promise((r) => setTimeout(r, 500));
+  }
+}
 
 test.describe('knomit_explore', () => {
   let client: McpClient;
@@ -20,48 +42,49 @@ test.describe('knomit_explore', () => {
   test.beforeEach(async ({ freshKnomit }) => {
     client = new McpClient(freshKnomit.baseURL, 'knomit', 'code');
     await client.initialize();
-
-    // Seed some facts in a directory structure
-    await client.callTool('knomit_learn', { path: 'explore/sub/fact-a', content: fact('Fact A') });
-    await client.callTool('knomit_learn', { path: 'explore/sub/fact-b', content: fact('Fact B') });
-    await client.callTool('knomit_learn', { path: 'explore/other/fact-c', content: fact('Fact C') });
   });
 
   test.afterEach(async () => {
     await client.close();
   });
 
-  test('explore root returns directory listing', async () => {
+  test('explore returns facts after learning', async () => {
+    await learnFact(client, 'Explore Fact A');
+    await learnFact(client, 'Explore Fact B');
+    await waitForExplore(client);
+
     const result = await client.callTool('knomit_explore', {});
     expect(result.isError).toBeFalsy();
-    const text = result.content.map((c) => c.text ?? '').join('');
-    expect(text).toContain('explore');
+    const parsed = JSON.parse(result.content[0].text || '{}');
+    expect(parsed.facts).toBeDefined();
+    expect(parsed.facts.length).toBeGreaterThan(0);
+    expect(parsed).toHaveProperty('has_more');
   });
 
-  test('explore into a subdirectory', async () => {
-    const result = await client.callTool('knomit_explore', { path: 'explore/sub' });
+  test('explore with path filter', async () => {
+    await learnFact(client, 'Sub Fact A', 'networking');
+    await learnFact(client, 'Other Fact B', 'hardware');
+    await waitForExplore(client);
+
+    const result = await client.callTool('knomit_explore', { path: 'kb/technology/networking' });
     expect(result.isError).toBeFalsy();
-    const text = result.content.map((c) => c.text ?? '').join('');
-    expect(text).toContain('fact-a');
+    const parsed = JSON.parse(result.content[0].text || '{}');
+    expect(parsed.facts).toBeDefined();
+    // All returned facts should be under kb/technology/networking
+    for (const f of parsed.facts) {
+      expect(f.path).toContain('kb/technology/networking');
+    }
   });
 
-  test('session-based: multiple explore calls build up state', async () => {
-    // First call — root
-    const r1 = await client.callTool('knomit_explore', {});
-    expect(r1.isError).toBeFalsy();
+  test('explore returns cursor-based pagination structure', async () => {
+    await learnFact(client, 'Pagination Fact');
+    await waitForExplore(client);
 
-    // Second call — deeper
-    const r2 = await client.callTool('knomit_explore', { path: 'explore' });
-    expect(r2.isError).toBeFalsy();
-    const text2 = r2.content.map((c) => c.text ?? '').join('');
-    expect(text2).toContain('sub');
-    expect(text2).toContain('other');
-
-    // Third call — leaf directory
-    const r3 = await client.callTool('knomit_explore', { path: 'explore/sub' });
-    expect(r3.isError).toBeFalsy();
-    const text3 = r3.content.map((c) => c.text ?? '').join('');
-    expect(text3).toContain('fact-a');
-    expect(text3).toContain('fact-b');
+    const result = await client.callTool('knomit_explore', {});
+    expect(result.isError).toBeFalsy();
+    const parsed = JSON.parse(result.content[0].text || '{}');
+    expect(parsed).toHaveProperty('facts');
+    expect(parsed).toHaveProperty('cursor');
+    expect(parsed).toHaveProperty('has_more');
   });
 });
