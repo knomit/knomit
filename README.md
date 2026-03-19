@@ -25,6 +25,9 @@ make web      # build React frontend only
 make test     # run Go tests
 make dist     # full distribution package (ORT + binary)
 make clean    # remove build artifacts
+make e2e-setup # install Playwright browsers (once)
+make e2e      # build + run e2e tests
+make e2e-ui   # build + run e2e tests (headed browser)
 ```
 
 ## Usage
@@ -40,6 +43,8 @@ knomit reset --name work      # wipe a specific repo
 ```
 
 ### Data Layout
+
+All data lives under `KNOMIT_HOME` (default `~/.knomit`):
 
 ```
 ~/.knomit/
@@ -68,6 +73,18 @@ Seed test data (requires the server running):
 ```sh
 go run ./tools/seed/   # seed base facts
 ```
+
+### E2E Testing
+
+The `e2e/` directory contains a Playwright test suite that exercises the built binary end-to-end across UI, MCP, and API layers.
+
+```sh
+make e2e-setup   # install deps + Playwright browsers (once)
+make e2e         # build binary + run all tests (headless)
+make e2e-ui      # same but with a visible browser
+```
+
+Tests use `KNOMIT_HOME` pointed at a temp directory for full isolation. A shared instance is seeded with fixture data for read-only tests; mutating tests spin up fresh instances per test.
 
 ### Configuration
 
@@ -292,7 +309,8 @@ All repo-scoped endpoints use the pattern `/api/v1/{repo}/...`.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `KNOMIT_REPO` | `~/.knomit` | Path to the data directory |
+| `KNOMIT_HOME` | `~/.knomit` | Path to the data directory |
+| `KNOMIT_REPO` | — | Alias for `KNOMIT_HOME` (backward compat) |
 | `KNOMIT_PORT` | `3000` | HTTP server port |
 | `KNOMIT_LLM_MODEL` | `claude-sonnet-4-6` | Model name for synthesis |
 | `KNOMIT_LLM_PROVIDER` | auto-detected | LLM provider: `anthropic`, `gemini`, `bedrock`, `claude-cli`, `gemini-cli` |
