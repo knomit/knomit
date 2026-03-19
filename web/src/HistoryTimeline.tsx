@@ -3,37 +3,16 @@ import type { Dispatch } from 'react';
 import { api } from './api';
 import type { HistoryEntryWithTags } from './api';
 import type { AppState, Action } from './state';
+import { relativeTime, opStyles, defaultOpStyle } from './utils';
 
 interface Props {
   state: AppState;
   dispatch: Dispatch<Action>;
 }
 
-const opStyles: Record<string, { color: string; bg: string; label: string }> = {
-  learn:   { color: '#7c9', bg: '#1a2e1a', label: 'learn' },
-  update:  { color: '#8af', bg: '#1a1a2e', label: 'update' },
-  retract: { color: '#f88', bg: '#2e1a1a', label: 'retract' },
-  subsume: { color: '#fa0', bg: '#2e2a1a', label: 'subsume' },
-  sync:    { color: '#888', bg: '#222',    label: 'sync' },
-  other:   { color: '#666', bg: '#1a1a1a', label: 'other' },
-};
-const defaultStyle = { color: '#555', bg: '#222', label: '' };
-
 function commitStyle(entry: HistoryEntryWithTags): { color: string; bg: string; label: string } {
   if (entry.operation && opStyles[entry.operation]) return opStyles[entry.operation];
-  return defaultStyle;
-}
-
-function relativeTime(dateStr: string): string {
-  const diff = Date.now() - new Date(dateStr).getTime();
-  const mins = Math.floor(diff / 60000);
-  if (mins < 1) return 'just now';
-  if (mins < 60) return `${mins}m ago`;
-  const hours = Math.floor(mins / 60);
-  if (hours < 24) return `${hours}h ago`;
-  const days = Math.floor(hours / 24);
-  if (days < 30) return `${days}d ago`;
-  return new Date(dateStr).toLocaleDateString();
+  return defaultOpStyle;
 }
 
 export function HistoryTimeline({ state, dispatch }: Props) {
@@ -149,7 +128,7 @@ export function HistoryTimeline({ state, dispatch }: Props) {
     <div ref={containerRef} style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
       <div style={{ padding: '6px 12px', borderBottom: '1px solid #333', display: 'flex', flexWrap: 'wrap', gap: 4, alignItems: 'center', minHeight: 30 }}>
         {availableOps.map(op => {
-          const s = opStyles[op] || defaultStyle;
+          const s = opStyles[op] || defaultOpStyle;
           const active = activeOps.has(op);
           return (
             <span

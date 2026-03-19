@@ -92,7 +92,7 @@ export const init: AppState = {
   consoleEntries: [],
   consoleOpen: false,
   consoleHeight: 200,
-  leftMode: 'browse' as LeftMode,
+  leftMode: 'browse',
   refCommit: null,
   remoteError: '',
   historyCommit: null,
@@ -148,27 +148,27 @@ export function reducer(s: AppState, a: Action): AppState {
     }
     case 'CONSOLE_TOGGLE': return { ...s, consoleOpen: !s.consoleOpen };
     case 'CONSOLE_SET_HEIGHT': return { ...s, consoleHeight: Math.max(80, Math.min(a.height, 600)) };
-    case 'ENTER_HISTORY': return { ...s, leftMode: 'history' as LeftMode, navStack: pushNav(s), rightPanelFocused: false };
-    case 'ENTER_RECENT': return { ...s, leftMode: 'recent' as LeftMode, navStack: pushNav(s), rightPanelFocused: false };
+    case 'ENTER_HISTORY': return { ...s, leftMode: 'history', navStack: pushNav(s), rightPanelFocused: false };
+    case 'ENTER_RECENT': return { ...s, leftMode: 'recent', navStack: pushNav(s), rightPanelFocused: false };
     case 'EXIT_HISTORY': {
       // If currentPath is a fact (.md), restore to its parent directory and keep the fact selected
       if (s.currentPath.endsWith('.md')) {
         const parentDir = s.currentPath.split('/').slice(0, -1).join('/') || s.currentPath;
-        return { ...s, currentPath: parentDir, selectedFact: s.currentPath, leftMode: 'browse' as LeftMode, historyCommit: null, historyFocusPath: null, rightMode: 'fact', rightPanelFocused: false };
+        return { ...s, currentPath: parentDir, selectedFact: s.currentPath, leftMode: 'browse', historyCommit: null, historyFocusPath: null, rightMode: 'fact', rightPanelFocused: false };
       }
       // Exiting recent mode: clear selectedFact since it may not be a child of currentPath
       if (s.leftMode === 'recent') {
-        return { ...s, leftMode: 'browse' as LeftMode, selectedFact: null, rightMode: 'summary', historyCommit: null, historyFocusPath: null, rightPanelFocused: false };
+        return { ...s, leftMode: 'browse', selectedFact: null, rightMode: 'summary', historyCommit: null, historyFocusPath: null, rightPanelFocused: false };
       }
-      return { ...s, leftMode: 'browse' as LeftMode, historyCommit: null, historyFocusPath: null, rightPanelFocused: false };
+      return { ...s, leftMode: 'browse', historyCommit: null, historyFocusPath: null, rightPanelFocused: false };
     }
     case 'FACT_HISTORY':
-      return { ...s, currentPath: a.factPath, selectedFact: a.factPath, leftMode: 'history' as LeftMode, historyCommit: a.commit || null, historyFocusPath: a.factPath, navStack: pushNav(s), rightPanelFocused: false };
+      return { ...s, currentPath: a.factPath, selectedFact: a.factPath, leftMode: 'history', historyCommit: a.commit || null, historyFocusPath: a.factPath, navStack: pushNav(s), rightPanelFocused: false };
     case 'SELECT_COMMIT': return { ...s, historyCommit: a.commit };
     case 'OPEN_FACT': {
       const parts = a.path.split('/');
       const parentDir = parts.slice(0, -1).join('/') || s.currentPath;
-      return { ...s, currentPath: parentDir, selectedFact: a.path, refCommit: a.refCommit || null, rightMode: 'fact', historyCommit: null, historyFocusPath: null, leftMode: 'browse' as LeftMode, navStack: pushNav(s), rightPanelFocused: false };
+      return { ...s, currentPath: parentDir, selectedFact: a.path, refCommit: a.refCommit || null, rightMode: 'fact', historyCommit: null, historyFocusPath: null, leftMode: 'browse', navStack: pushNav(s), rightPanelFocused: false };
     }
     case 'HISTORY_OPEN_PATH': return { ...s, currentPath: a.path, historyFocusPath: a.path, navStack: pushNav(s), rightPanelFocused: false };
     case 'NAV_BACK': {
@@ -188,7 +188,7 @@ export function reducer(s: AppState, a: Action): AppState {
       headCommit: '',
       branch: '',
       navStack: [],
-      leftMode: 'browse' as LeftMode,
+      leftMode: 'browse',
       historyCommit: null,
       remoteError: '',
       rightPanelFocused: false,

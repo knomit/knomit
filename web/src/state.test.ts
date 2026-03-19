@@ -173,6 +173,96 @@ describe('history mode', () => {
   });
 });
 
+describe('EXIT_HISTORY edge cases', () => {
+  it('EXIT_HISTORY from fact path restores parent dir and keeps fact selected', () => {
+    const s = { ...init, currentPath: 'kb/tech/fact.md', leftMode: 'history' as const, historyCommit: 'abc' };
+    const next = reducer(s, { type: 'EXIT_HISTORY' });
+    expect(next.leftMode).toBe('browse');
+    expect(next.currentPath).toBe('kb/tech');
+    expect(next.selectedFact).toBe('kb/tech/fact.md');
+    expect(next.rightMode).toBe('fact');
+    expect(next.historyCommit).toBeNull();
+  });
+
+  it('EXIT_HISTORY from recent mode clears selectedFact', () => {
+    const s = { ...init, leftMode: 'recent' as const, selectedFact: 'kb/x/y.md' };
+    const next = reducer(s, { type: 'EXIT_HISTORY' });
+    expect(next.leftMode).toBe('browse');
+    expect(next.selectedFact).toBeNull();
+    expect(next.rightMode).toBe('summary');
+  });
+});
+
+describe('ENTER_RECENT', () => {
+  it('switches to recent mode and pushes navStack', () => {
+    const s = reducer(init, { type: 'ENTER_RECENT' });
+    expect(s.leftMode).toBe('recent');
+    expect(s.navStack.length).toBe(1);
+    expect(s.rightPanelFocused).toBe(false);
+  });
+});
+
+describe('FACT_HISTORY', () => {
+  it('enters history mode for a specific fact with commit', () => {
+    const s = reducer(init, { type: 'FACT_HISTORY', factPath: 'kb/a/b.md', commit: 'abc123' });
+    expect(s.currentPath).toBe('kb/a/b.md');
+    expect(s.selectedFact).toBe('kb/a/b.md');
+    expect(s.leftMode).toBe('history');
+    expect(s.historyCommit).toBe('abc123');
+    expect(s.historyFocusPath).toBe('kb/a/b.md');
+    expect(s.navStack.length).toBe(1);
+  });
+
+  it('FACT_HISTORY without commit sets historyCommit to null', () => {
+    const s = reducer(init, { type: 'FACT_HISTORY', factPath: 'kb/a/b.md' });
+    expect(s.historyCommit).toBeNull();
+  });
+});
+
+describe('OPEN_FACT', () => {
+  it('navigates to parent dir and selects fact', () => {
+    const s = reducer(init, { type: 'OPEN_FACT', path: 'kb/tech/cyber/fact.md' });
+    expect(s.currentPath).toBe('kb/tech/cyber');
+    expect(s.selectedFact).toBe('kb/tech/cyber/fact.md');
+    expect(s.rightMode).toBe('fact');
+    expect(s.leftMode).toBe('browse');
+    expect(s.navStack.length).toBe(1);
+  });
+
+  it('OPEN_FACT with refCommit stores it', () => {
+    const s = reducer(init, { type: 'OPEN_FACT', path: 'kb/a/b.md', refCommit: 'abc' });
+    expect(s.refCommit).toBe('abc');
+  });
+
+  it('OPEN_FACT without refCommit clears it', () => {
+    const s = { ...init, refCommit: 'old' };
+    const next = reducer(s, { type: 'OPEN_FACT', path: 'kb/a/b.md' });
+    expect(next.refCommit).toBeNull();
+  });
+});
+
+describe('HISTORY_OPEN_PATH', () => {
+  it('sets currentPath and historyFocusPath, pushes navStack', () => {
+    const s = reducer(init, { type: 'HISTORY_OPEN_PATH', path: 'kb/tech/ref.md' });
+    expect(s.currentPath).toBe('kb/tech/ref.md');
+    expect(s.historyFocusPath).toBe('kb/tech/ref.md');
+    expect(s.navStack.length).toBe(1);
+  });
+});
+
+describe('SET_REMOTE_ERROR', () => {
+  it('sets remoteError', () => {
+    const s = reducer(init, { type: 'SET_REMOTE_ERROR', error: 'auth failed' });
+    expect(s.remoteError).toBe('auth failed');
+  });
+
+  it('clears remoteError with empty string', () => {
+    const s = { ...init, remoteError: 'old error' };
+    const next = reducer(s, { type: 'SET_REMOTE_ERROR', error: '' });
+    expect(next.remoteError).toBe('');
+  });
+});
+
 describe('SET_REPO', () => {
   it('resets navigation state when switching repos', () => {
     let s = reducer(init, { type: 'NAVIGATE', path: 'kb/deep/path' });

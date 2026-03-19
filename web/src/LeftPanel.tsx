@@ -166,8 +166,6 @@ export function LeftPanel({ state, dispatch }: Props) {
     return () => window.removeEventListener('keydown', handler);
   });
 
-  const pathLabel = (name: string) => name;
-
   if (state.leftMode === 'history') {
     return <HistoryTimeline state={state} dispatch={dispatch} />;
   }
@@ -213,7 +211,7 @@ export function LeftPanel({ state, dispatch }: Props) {
           ) : searchResults.map((r, i) => (
             <div key={r.path} ref={el => { itemRefs.current[i] = el; }} onClick={() => { setSelectedIdx(i); dispatch({ type: 'SELECT_FACT', path: r.path }); }}
               style={{ padding: '8px 12px', cursor: 'pointer', background: i === selectedIdx ? '#2a2a3a' : 'transparent', borderBottom: '1px solid #222' }}>
-              <div style={{ fontSize: 13, color: '#ddd' }}>{r.title || pathLabel(r.path)}</div>
+              <div style={{ fontSize: 13, color: '#ddd' }}>{r.title || r.path}</div>
               <div style={{ fontSize: 11, color: '#666', fontFamily: 'monospace' }}>{r.path}</div>
               <div style={{ fontSize: 11, color: r.score > 75 ? '#4caf50' : r.score > 50 ? '#ff9800' : '#888' }}>
                 score: {Math.round(r.score)}
@@ -231,7 +229,7 @@ export function LeftPanel({ state, dispatch }: Props) {
                   }}
                   style={{ padding: '8px 12px', cursor: 'pointer', background: i === selectedIdx ? '#2a2a3a' : 'transparent', borderBottom: '1px solid #222', display: 'flex', alignItems: 'center', gap: 8 }}>
                   <span style={{ width: 6, height: 6, borderRadius: '50%', background: c.is_dir ? '#7c9' : '#8af', flexShrink: 0, opacity: 0.7 }} />
-                  <span style={{ fontSize: 13, color: '#ddd' }}>{c.is_dir ? c.name : pathLabel(c.name)}</span>
+                  <span style={{ fontSize: 13, color: '#ddd' }}>{c.is_dir ? c.name : c.name}</span>
                 </div>
             ))}
             {children.length === 0 && (
