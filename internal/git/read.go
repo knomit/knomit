@@ -194,6 +194,37 @@ func (s *Store) ListDir(path string) ([]DirEntry, error) {
 	return entries, nil
 }
 
+// LastCommitForPath returns the hash of the most recent non-merge commit
+// that touched path. Merges are skipped because they duplicate authoring
+// commits from the merged branch.
+func (s *Store) LastCommitForPath(path string) (string, error) {
+	headRef, err := s.repo.Head()
+	if err != nil {
+		return "", fmt.Errorf("LastCommitForPath: head: %w", err)
+	}
+
+	logIter, err := s.repo.Log(&gogit.LogOptions{
+		From:     headRef.Hash(),
+		FileName: &path,
+		Order:    gogit.LogOrderCommitterTime,
+	})
+	if err != nil {
+		return "", fmt.Errorf("LastCommitForPath: log: %w", err)
+	}
+	defer logIter.Close()
+
+	for {
+		c, err := logIter.Next()
+		if err != nil {
+			return "", fmt.Errorf("LastCommitForPath: %q: no commit found", path)
+		}
+		// Skip merge commits (more than one parent).
+		if c.NumParents() <= 1 {
+			return c.Hash.String(), nil
+		}
+	}
+}
+
 // ListAll returns paths of all .md files under HEAD.
 func (s *Store) ListAll() ([]string, error) {
 	headRef, err := s.repo.Head()
