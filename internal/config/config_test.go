@@ -18,8 +18,8 @@ func TestDefaults(t *testing.T) {
 		t.Errorf("LLM.Model = %q, want %q", cfg.LLM.Model, "gemini-2.5-flash")
 	}
 	home, _ := os.UserHomeDir()
-	if cfg.RepoPath != home+"/.knomit" {
-		t.Errorf("RepoPath = %q, want %q", cfg.RepoPath, home+"/.knomit")
+	if cfg.Home != home+"/.knomit" {
+		t.Errorf("Home = %q, want %q", cfg.Home, home+"/.knomit")
 	}
 }
 
@@ -190,8 +190,8 @@ func TestAllEnvVars(t *testing.T) {
 		t.Fatalf("Load() error: %v", err)
 	}
 
-	if cfg.RepoPath != dir {
-		t.Errorf("RepoPath = %q, want %q", cfg.RepoPath, dir)
+	if cfg.Home != dir {
+		t.Errorf("Home = %q, want %q", cfg.Home, dir)
 	}
 	if cfg.Port != "9090" {
 		t.Errorf("Port = %q", cfg.Port)
@@ -296,5 +296,46 @@ func TestNewEnvVars(t *testing.T) {
 	}
 	if cfg.Remote.AuthMethod != "basic" {
 		t.Errorf("Remote.AuthMethod = %q, want %q", cfg.Remote.AuthMethod, "basic")
+	}
+}
+
+func TestLoad_KnomitHomeEnvVar(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("KNOMIT_HOME", dir)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if cfg.Home != dir {
+		t.Errorf("Home = %q, want %q", cfg.Home, dir)
+	}
+}
+
+func TestLoad_KnomitRepoBackwardCompat(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("KNOMIT_REPO", dir)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if cfg.Home != dir {
+		t.Errorf("Home = %q, want %q (KNOMIT_REPO should set Home)", cfg.Home, dir)
+	}
+}
+
+func TestLoad_KnomitHomePrecedence(t *testing.T) {
+	homeDir := t.TempDir()
+	repoDir := t.TempDir()
+	t.Setenv("KNOMIT_HOME", homeDir)
+	t.Setenv("KNOMIT_REPO", repoDir)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if cfg.Home != homeDir {
+		t.Errorf("Home = %q, want %q (KNOMIT_HOME should take precedence over KNOMIT_REPO)", cfg.Home, homeDir)
 	}
 }

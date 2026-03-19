@@ -323,7 +323,7 @@ func serveCmd() *cobra.Command {
 
 			provider, _ := llm.ResolveProvider(cfg.LLM.Model, cfg.LLM.Provider)
 			log.Info().
-				Str("repo", cfg.RepoPath).
+				Str("repo", cfg.Home).
 				Str("port", cfg.Port).
 				Str("llm_provider", provider).
 				Str("llm_model", cfg.LLM.Model).
@@ -332,8 +332,7 @@ func serveCmd() *cobra.Command {
 			// 0. Ensure SSH keypair exists.
 			keyPath := cfg.Remote.SSHKey
 			if keyPath == "" {
-				home, _ := os.UserHomeDir()
-				keyPath = filepath.Join(home, ".knomit", "id_ed25519")
+				keyPath = filepath.Join(cfg.Home, "id_ed25519")
 			}
 			signer, keyFingerprint, err := git.EnsureKeyPair(keyPath)
 			if err != nil {
@@ -343,7 +342,7 @@ func serveCmd() *cobra.Command {
 
 			// 1. Ensure embedder model files are present (shared across repos).
 			var embedder *embeddings.Embedder
-			modelPath, tokPath, err := embeddings.EnsureModel(filepath.Join(cfg.RepoPath, "models"))
+			modelPath, tokPath, err := embeddings.EnsureModel(filepath.Join(cfg.Home, "models"))
 			if err != nil {
 				log.Warn().Err(err).Msg("embedder model unavailable")
 			} else {
@@ -388,7 +387,7 @@ func serveCmd() *cobra.Command {
 			}
 
 			// 3. Discover repos — scan repos/*.db
-			reposDir := filepath.Join(cfg.RepoPath, "repos")
+			reposDir := filepath.Join(cfg.Home, "repos")
 			if err := os.MkdirAll(reposDir, 0o755); err != nil {
 				return fmt.Errorf("create repos dir: %w", err)
 			}
@@ -553,7 +552,7 @@ func initCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("load config: %w", err)
 			}
-			reposDir := filepath.Join(cfg.RepoPath, "repos")
+			reposDir := filepath.Join(cfg.Home, "repos")
 			if err := os.MkdirAll(reposDir, 0o755); err != nil {
 				return err
 			}
@@ -561,8 +560,7 @@ func initCmd() *cobra.Command {
 			// Ensure SSH keypair exists.
 			keyPath := cfg.Remote.SSHKey
 			if keyPath == "" {
-				home, _ := os.UserHomeDir()
-				keyPath = filepath.Join(home, ".knomit", "id_ed25519")
+				keyPath = filepath.Join(cfg.Home, "id_ed25519")
 			}
 			_, keyFingerprint, err := git.EnsureKeyPair(keyPath)
 			if err != nil {
@@ -619,7 +617,7 @@ func resetCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("load config: %w", err)
 			}
-			dbFile := filepath.Join(cfg.RepoPath, "repos", repoName+".db")
+			dbFile := filepath.Join(cfg.Home, "repos", repoName+".db")
 			for _, f := range []string{dbFile} {
 				if err := os.Remove(f); err != nil && !os.IsNotExist(err) {
 					return fmt.Errorf("remove %s: %w", f, err)
@@ -758,7 +756,7 @@ func rebuildCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("load config: %w", err)
 			}
-			dbPath := filepath.Join(cfg.RepoPath, "repos", repoName+".db")
+			dbPath := filepath.Join(cfg.Home, "repos", repoName+".db")
 			svc, err := store.Open(dbPath)
 			if err != nil {
 				return fmt.Errorf("open store: %w", err)
