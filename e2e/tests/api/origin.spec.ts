@@ -3,8 +3,8 @@ import { test, expect } from '../../fixtures/knomit.js';
 test.describe('API: Origin', () => {
   test('returns origin config', async ({ freshKnomit }) => {
     const res = await freshKnomit.api.get(`${freshKnomit.baseURL}/api/v1/knomit/origin`);
-    // May be 200 with empty origin or 404 if no repo yet
-    expect([200, 404]).toContain(res.status());
+    // Returns 204 (no content) when no origin is configured, or 200 with origin data
+    expect([200, 204]).toContain(res.status());
   });
 
   test('sets origin URL', async ({ freshKnomit }) => {

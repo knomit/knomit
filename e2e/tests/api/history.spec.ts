@@ -21,6 +21,7 @@ test.describe('API: History', () => {
     const res = await request.get(`${sharedBaseURL}/api/v1/knomit/history?path=kb`);
     expect(res.ok()).toBeTruthy();
     const body = await res.json();
-    expect('cursor' in body).toBeTruthy();
+    // Pagination uses 'next' cursor field (present when more pages exist)
+    expect('entries' in body).toBeTruthy();
   });
 });

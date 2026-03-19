@@ -5,7 +5,9 @@ test.describe('API: Recent', () => {
     const res = await request.get(`${sharedBaseURL}/api/v1/knomit/recent`);
     expect(res.ok()).toBeTruthy();
     const body = await res.json();
-    expect(Array.isArray(body)).toBeTruthy();
-    expect(body.length).toBeGreaterThan(0);
+    expect(body.facts).toBeDefined();
+    expect(Array.isArray(body.facts)).toBeTruthy();
+    expect(body.facts.length).toBeGreaterThan(0);
+    expect(typeof body.total).toBe('number');
   });
 });

@@ -7,13 +7,13 @@ test.describe('API: Commit', () => {
     expect(histRes.ok()).toBeTruthy();
     const histBody = await histRes.json();
     expect(histBody.entries.length).toBeGreaterThan(0);
-    const hash = histBody.entries[0].hash;
+    const commit = histBody.entries[0].commit;
 
-    const res = await request.get(`${sharedBaseURL}/api/v1/knomit/commit?hash=${hash}`);
+    const res = await request.get(`${sharedBaseURL}/api/v1/knomit/commit?hash=${commit}`);
     expect(res.ok()).toBeTruthy();
     const body = await res.json();
     expect(body).toBeDefined();
-    expect(body.hash).toBe(hash);
+    expect(body.commit).toBe(commit);
   });
 
   test('returns 404 for nonexistent hash', async ({ request, sharedBaseURL }) => {

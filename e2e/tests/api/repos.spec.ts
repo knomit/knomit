@@ -5,6 +5,7 @@ test.describe('API: Repos', () => {
     const res = await request.get(`${sharedBaseURL}/api/v1/repos`);
     expect(res.ok()).toBeTruthy();
     const body = await res.json();
-    expect(body).toContain('knomit');
+    expect(Array.isArray(body)).toBeTruthy();
+    expect(body.some((r: any) => r.name === 'knomit')).toBeTruthy();
   });
 });
