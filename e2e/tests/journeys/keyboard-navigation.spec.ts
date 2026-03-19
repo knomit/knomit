@@ -47,8 +47,19 @@ test.describe('Keyboard Navigation Across Modes', () => {
     expect(backTitle).toBe(firstTitle);
   });
 
-  test('recent mode: down key selects next item and right panel updates', async ({ page }) => {
-    // Enter recent mode
+  test('recent mode after history: down key selects next item and right panel updates', async ({ page }) => {
+    // First enter history mode — this sets historyCommit in state
+    await page.keyboard.press('h');
+    await expect(page.getByTestId('history-timeline')).toBeVisible();
+    const commits = page.getByTestId('history-commit');
+    await commits.first().waitFor({ timeout: 10_000 });
+    // Select a commit so historyCommit is set
+    await page.keyboard.press('ArrowDown');
+    await page.waitForTimeout(500);
+
+    // Now switch to recent mode — this must clear historyCommit
+    // BUG FIX: ENTER_RECENT now clears historyCommit so the right panel
+    // falls through to the fact-loading branch instead of commit-loading
     await page.keyboard.press('r');
     const recentList = page.getByTestId('recent-list');
     await expect(recentList).toBeVisible();
@@ -64,13 +75,18 @@ test.describe('Keyboard Navigation Across Modes', () => {
     const firstTitle = await factPanel.getTitle();
     expect(firstTitle.length).toBeGreaterThan(0);
 
-    // Press ArrowDown to select the next item in the left panel
+    // Press ArrowDown to select the next item
     await page.keyboard.press('ArrowDown');
-    await page.waitForTimeout(1500);
+    await page.waitForTimeout(1000);
 
-    // The right panel SHOULD update with the newly selected fact
-    // BUG: it does not — the right panel still shows the first fact
+    // Right panel should update with the new fact
     const secondTitle = await factPanel.getTitle();
     expect(secondTitle).not.toBe(firstTitle);
+
+    // Press ArrowDown again — third fact
+    await page.keyboard.press('ArrowDown');
+    await page.waitForTimeout(1000);
+    const thirdTitle = await factPanel.getTitle();
+    expect(thirdTitle).not.toBe(secondTitle);
   });
 });

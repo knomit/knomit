@@ -149,7 +149,7 @@ export function reducer(s: AppState, a: Action): AppState {
     case 'CONSOLE_TOGGLE': return { ...s, consoleOpen: !s.consoleOpen };
     case 'CONSOLE_SET_HEIGHT': return { ...s, consoleHeight: Math.max(80, Math.min(a.height, 600)) };
     case 'ENTER_HISTORY': return { ...s, leftMode: 'history', navStack: pushNav(s), rightPanelFocused: false };
-    case 'ENTER_RECENT': return { ...s, leftMode: 'recent', navStack: pushNav(s), rightPanelFocused: false };
+    case 'ENTER_RECENT': return { ...s, leftMode: 'recent', historyCommit: null, historyFocusPath: null, navStack: pushNav(s), rightPanelFocused: false };
     case 'EXIT_HISTORY': {
       // If currentPath is a fact (.md), restore to its parent directory and keep the fact selected
       if (s.currentPath.endsWith('.md')) {
