@@ -91,6 +91,7 @@ func NewRouter(rm *RepoManager, gitHandler http.Handler, embeddingsEnabled bool,
 		sub.Get("/activity", handleActivity())
 		sub.Get("/status", handleStatus(embeddingsEnabled, ontologyRoot))
 		sub.Post("/synthesize", handleSynthesizeStart())
+		sub.Post("/rebuild", handleRebuild())
 		sub.Get("/events", handleEvents())
 		sub.Get("/origin", handleGetOrigin())
 		sub.Put("/origin", handleSetOrigin())

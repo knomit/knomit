@@ -99,6 +99,8 @@ export const api = {
     fetch(`${base(repo)}/sync`, { method: 'POST' }).then(r => r.json()),
   synthesize: (repo: string, recipe = ''): Promise<{ op: string; id?: string; status: string; message?: string }> =>
     fetch(`${base(repo)}/synthesize`, { method: 'POST', body: recipe }).then(r => r.json()),
+  rebuild: (repo: string): Promise<{ op: string; id?: string; status: string; message?: string }> =>
+    fetch(`${base(repo)}/rebuild`, { method: 'POST' }).then(r => r.json()),
   getOrigin: (repo: string): Promise<OriginResponse | null> =>
     fetch(`${base(repo)}/origin`).then(r => r.status === 204 ? null : r.json()),
   setOrigin: (repo: string, opts: { url?: string; auth_method?: string; token?: string; user?: string; password?: string }): Promise<OriginSetResponse> =>

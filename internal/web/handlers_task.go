@@ -1,4 +1,4 @@
-// Async task handlers for long-running operations (synthesis, git sync).
+// Async task handlers for long-running operations (synthesis, rebuild, git sync).
 // Tasks run in the background via TaskHub; clients poll via SSE.
 package web
 
@@ -9,6 +9,7 @@ import (
 	"net/http"
 
 	"github.com/rs/zerolog/log"
+	"knomit/internal/store"
 	"knomit/internal/synthesize"
 )
 
@@ -78,6 +79,48 @@ func handleSynthesizeStart() http.HandlerFunc {
 		}
 
 		writeTaskStarted(w, "synth", id)
+	}
+}
+
+// handleRebuild handles POST /api/v1/{repo}/rebuild.
+// Clears the index last-commit marker and re-indexes every file from HEAD,
+// emitting progress events via TaskHub.
+func handleRebuild() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		ri := RepoFromContext(r.Context())
+		if ri.Svc == nil {
+			writeError(w, http.StatusServiceUnavailable, "index not available")
+			return
+		}
+
+		gitReader, ok := ri.GS.(store.GitReader)
+		if !ok {
+			writeError(w, http.StatusInternalServerError, "git store does not support rebuild")
+			return
+		}
+
+		idx := ri.Svc.Index()
+		branch := ri.GS.Branch()
+
+		id, err := ri.Hub.Start("rebuild", func(ctx context.Context, emit func(TaskEvent)) {
+			emit(TaskEvent{Status: "running", Phase: "start", Message: "rebuilding index"})
+			progress := func(done, total int) {
+				if done%10 == 0 || done == total {
+					emit(TaskEvent{Status: "running", Phase: "indexing", Message: fmt.Sprintf("%d/%d files", done, total)})
+				}
+			}
+			if err := idx.Rebuild(gitReader, branch, progress); err != nil {
+				emit(TaskEvent{Status: "error", Message: err.Error()})
+				return
+			}
+			emit(TaskEvent{Status: "done", Message: "rebuild complete"})
+		})
+		if err != nil {
+			writeTaskConflict(w, "rebuild", err)
+			return
+		}
+
+		writeTaskStarted(w, "rebuild", id)
 	}
 }
 

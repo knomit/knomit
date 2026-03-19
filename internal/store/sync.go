@@ -71,6 +71,40 @@ func (idx *Index) Sync(git GitReader, branch string) error {
 	return idx.SetLastCommit(branch, head)
 }
 
+// RebuildProgress is called during Rebuild to report progress.
+type RebuildProgress func(done, total int)
+
+// Rebuild clears the last-commit marker and re-indexes every file from HEAD.
+func (idx *Index) Rebuild(git GitReader, branch string, progress RebuildProgress) error {
+	// Clear last_commit to force full rebuild.
+	if err := idx.SetLastCommit(branch, ""); err != nil {
+		return fmt.Errorf("rebuild: clear last commit: %w", err)
+	}
+
+	head, err := git.HeadCommit()
+	if err != nil {
+		return fmt.Errorf("rebuild: head commit: %w", err)
+	}
+
+	paths, err := git.ListAll()
+	if err != nil {
+		return fmt.Errorf("rebuild: list all: %w", err)
+	}
+
+	log.Info().Str("head", head[:8]).Int("files", len(paths)).Msg("index rebuild: starting")
+	for i, path := range paths {
+		if err := idx.indexFile(git, path, head); err != nil {
+			return err
+		}
+		if progress != nil {
+			progress(i+1, len(paths))
+		}
+	}
+	log.Info().Int("files", len(paths)).Msg("index rebuild: complete")
+
+	return idx.SetLastCommit(branch, head)
+}
+
 // indexFile reads a single file from git, parses it as a fact, and upserts
 // it into the index. Files that fail to parse (e.g. kb.md manifest) are
 // silently skipped.
