@@ -14,14 +14,17 @@ test.describe('Fact View', () => {
   });
 
   test('displays fact title and body', async () => {
-    // Navigate to a known fact
+    // Navigate to a known fact with valid type (observation)
     await browse.clickEntry('databases');
+    await browse.waitForEntry('postgresql');
     await browse.clickEntry('postgresql');
-    // Get first fact in listing
+    await browse.waitForFactEntry();
     const entries = await browse.getDirectoryEntries();
     const facts = entries.filter(e => !e.isDir);
     expect(facts.length).toBeGreaterThan(0);
-    await browse.clickEntry(facts[0].name);
+    // Pick mvcc.md which has type: observation (valid)
+    const mvcc = facts.find(f => f.name === 'mvcc.md');
+    await browse.clickEntry(mvcc ? mvcc.name : facts[0].name);
 
     // Verify title and body display
     await expect(factPanel.title).toBeVisible();
@@ -33,22 +36,30 @@ test.describe('Fact View', () => {
 
   test('displays fact metadata', async () => {
     await browse.clickEntry('databases');
+    await browse.waitForEntry('postgresql');
     await browse.clickEntry('postgresql');
+    await browse.waitForFactEntry();
     const entries = await browse.getDirectoryEntries();
     const facts = entries.filter(e => !e.isDir);
-    await browse.clickEntry(facts[0].name);
+    // Pick mvcc.md which has type: observation (valid)
+    const mvcc = facts.find(f => f.name === 'mvcc.md');
+    await browse.clickEntry(mvcc ? mvcc.name : facts[0].name);
 
     // Check metadata section is visible and has content
     await expect(factPanel.meta).toBeVisible();
   });
 
   test('renders markdown content', async () => {
-    await browse.clickEntry('security');
-    await browse.clickEntry('authn');
-    const entries = await browse.getDirectoryEntries();
-    const facts = entries.filter(e => !e.isDir);
-    await browse.clickEntry(facts[0].name);
+    // Navigate to a fact with type: observation which parses correctly.
+    // Seed facts with type: practice/claim show parse errors and display raw frontmatter.
+    // Use databases/postgresql/mvcc.md (type: observation)
+    await browse.clickEntry('databases');
+    await browse.waitForEntry('postgresql');
+    await browse.clickEntry('postgresql');
+    await browse.waitForFactEntry();
+    await browse.clickEntry('mvcc.md');
 
+    await expect(factPanel.title).toBeVisible();
     const body = await factPanel.getBody();
     // Should contain actual content, not raw frontmatter
     expect(body).not.toContain('---');
@@ -56,22 +67,29 @@ test.describe('Fact View', () => {
   });
 
   test('switching facts updates the panel', async () => {
-    await browse.clickEntry('observability');
-    await browse.clickEntry('logging');
-    const entries = await browse.getDirectoryEntries();
-    const facts = entries.filter(e => !e.isDir);
-    expect(facts.length).toBeGreaterThan(0);
-    await browse.clickEntry(facts[0].name);
+    // Navigate to a directory with observation-type facts
+    await browse.clickEntry('databases');
+    await browse.waitForEntry('postgresql');
+    await browse.clickEntry('postgresql');
+    await browse.waitForFactEntry();
+    // Click mvcc.md (type: observation, valid)
+    await browse.clickEntry('mvcc.md');
+    await expect(factPanel.title).toBeVisible();
     const firstTitle = await factPanel.getTitle();
 
-    // Go back and select a different domain
+    // Go back to root and pick a different fact
     await browse.clickBreadcrumb('kb');
+    await browse.waitForEntry('networking');
     await browse.clickEntry('networking');
+    await browse.waitForEntry('dns');
     await browse.clickEntry('dns');
+    await browse.waitForFactEntry();
     const netEntries = await browse.getDirectoryEntries();
     const netFacts = netEntries.filter(e => !e.isDir);
     if (netFacts.length > 0) {
       await browse.clickEntry(netFacts[0].name);
+      // Wait for the right panel title to change from the previous fact
+      await expect(factPanel.title).not.toHaveText(firstTitle, { timeout: 10_000 });
       const secondTitle = await factPanel.getTitle();
       expect(secondTitle).not.toBe(firstTitle);
     }

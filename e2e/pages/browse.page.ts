@@ -1,4 +1,4 @@
-import { type Page, type Locator } from '@playwright/test';
+import { type Page, type Locator, expect } from '@playwright/test';
 
 export class BrowsePage {
   readonly page: Page;
@@ -38,6 +38,23 @@ export class BrowsePage {
       result.push({ name, isDir });
     }
     return result;
+  }
+
+  /**
+   * Wait for a specific named entry to appear in the directory listing.
+   * Useful after navigation to ensure the DOM has updated.
+   */
+  async waitForEntry(name: string, opts?: { timeout?: number }) {
+    const timeout = opts?.timeout ?? 10_000;
+    await this.page.getByTestId('dir-entry').and(this.page.locator(`[data-name="${name}"]`)).waitFor({ timeout });
+  }
+
+  /**
+   * Wait for any non-directory entry (fact file) to appear.
+   */
+  async waitForFactEntry(opts?: { timeout?: number }) {
+    const timeout = opts?.timeout ?? 10_000;
+    await this.page.getByTestId('dir-entry').and(this.page.locator('[data-isdir="false"]')).first().waitFor({ timeout });
   }
 
   async clickEntry(name: string) {

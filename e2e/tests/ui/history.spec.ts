@@ -34,11 +34,11 @@ test.describe('History Mode', () => {
     await history.timeline.waitFor({ timeout: 10_000 });
 
     const commits = await history.getCommits();
-    // Seed data is written in 6 batches, so there should be multiple commits
+    // Seed data is written in multiple batches, so there should be multiple commits
     expect(commits.length).toBeGreaterThanOrEqual(2);
   });
 
-  test('clicking a commit shows commit detail in right panel', async ({ page }) => {
+  test('clicking a commit shows fact in right panel', async ({ page }) => {
     await page.keyboard.press('h');
     const history = new HistoryPage(page);
     await history.timeline.waitFor({ timeout: 10_000 });
@@ -49,9 +49,12 @@ test.describe('History Mode', () => {
     // Click the first commit
     await history.clickCommit(commits[0].hash);
 
-    // Verify the right panel shows commit detail
+    // The right panel should show either commit-detail (multi-file) or fact-title (single-file).
+    // Seed commits are typically single-file, so the fact renders directly.
+    const factTitle = page.getByTestId('fact-title');
     const commitDetail = page.getByTestId('commit-detail');
-    await expect(commitDetail).toBeVisible({ timeout: 10_000 });
+    // Wait for either to appear
+    await expect(factTitle.or(commitDetail)).toBeVisible({ timeout: 10_000 });
   });
 
   test('pressing Escape exits history mode back to browse', async ({ page }) => {

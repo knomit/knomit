@@ -26,6 +26,8 @@ test.describe('Browse', () => {
 
   test('navigating into a directory shows children', async () => {
     await browse.clickEntry('databases');
+    // Wait for a known child to appear after navigation
+    await browse.waitForEntry('postgresql');
     const entries = await browse.getDirectoryEntries();
     const names = entries.map(e => e.name);
     // Should have subdirectories from seed data
@@ -34,13 +36,18 @@ test.describe('Browse', () => {
 
   test('navigating updates breadcrumbs', async () => {
     await browse.clickEntry('databases');
+    await browse.waitForEntry('postgresql');
     const crumbs = await browse.getBreadcrumbs();
     expect(crumbs.join('/')).toContain('databases');
   });
 
   test('clicking breadcrumb navigates back', async () => {
     await browse.clickEntry('databases');
+    // Wait for databases children to load
+    await browse.waitForEntry('postgresql');
     await browse.clickBreadcrumb('kb');
+    // Wait for the root entries to reappear
+    await browse.waitForEntry('databases');
     const entries = await browse.getDirectoryEntries();
     const names = entries.map(e => e.name);
     expect(names).toContain('databases');
@@ -50,9 +57,10 @@ test.describe('Browse', () => {
   test('clicking a fact selects it in the right panel', async ({ page }) => {
     // Navigate to a leaf directory that contains facts (kb/databases/postgresql/)
     await browse.clickEntry('databases');
+    await browse.waitForEntry('postgresql');
     await browse.clickEntry('postgresql');
     // Wait for a known fact file to appear (mvcc.md is seeded here)
-    await page.getByTestId('dir-entry').and(page.locator('[data-isdir="false"]')).first().waitFor({ timeout: 10_000 });
+    await browse.waitForFactEntry();
     const entries = await browse.getDirectoryEntries();
     const facts = entries.filter(e => !e.isDir);
     expect(facts.length).toBeGreaterThan(0);

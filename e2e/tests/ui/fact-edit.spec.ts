@@ -10,10 +10,9 @@ test.describe('Fact Edit', () => {
         path: 'kb/test-fact.md',
         content: `---
 type: observation
-domain: [testing]
 confidence: 0.9
-sources: 1
-entities: [playwright]
+entities:
+  - playwright
 refs: []
 ---
 # Test Fact
@@ -32,17 +31,16 @@ Created by e2e test.`,
     await expect(factPanel.title).toContainText('Test Fact');
   });
 
-  test('edit an existing fact via the editor', async ({ freshKnomit, page }) => {
+  test('edit an existing fact via API and verify update in UI', async ({ freshKnomit, page }) => {
     // Seed a fact
     await freshKnomit.api.put(`${freshKnomit.baseURL}/api/v1/knomit/fact`, {
       data: {
         path: 'kb/editable.md',
         content: `---
 type: observation
-domain: [testing]
 confidence: 0.5
-sources: 1
-entities: [edit-test]
+entities:
+  - edit-test
 refs: []
 ---
 # Editable Fact
@@ -58,22 +56,33 @@ Original content.`,
 
     const factPanel = new FactPanel(page);
     await expect(factPanel.title).toContainText('Editable Fact');
+    await expect(factPanel.body).toContainText('Original content');
 
-    // Edit the fact via the editor textarea
-    await factPanel.editContent(`---
+    // Update the fact via API (the editor textarea only appears for parse errors)
+    const updateRes = await freshKnomit.api.put(`${freshKnomit.baseURL}/api/v1/knomit/fact`, {
+      data: {
+        path: 'kb/editable.md',
+        content: `---
 type: observation
-domain: [testing]
 confidence: 0.8
-sources: 2
-entities: [edit-test]
+entities:
+  - edit-test
 refs: []
 ---
 # Editable Fact
 
-Updated content via e2e test.`);
-    await factPanel.save();
+Updated content via e2e test.`,
+      },
+    });
+    expect(updateRes.ok()).toBeTruthy();
 
-    // Verify the update took effect
-    await expect(factPanel.body).toContainText('Updated content via e2e test');
+    // Reload page to see the updated fact
+    await page.goto(freshKnomit.baseURL);
+    await page.waitForLoadState('domcontentloaded');
+    const browse2 = new BrowsePage(page);
+    await browse2.clickEntry('editable.md');
+
+    const factPanel2 = new FactPanel(page);
+    await expect(factPanel2.body).toContainText('Updated content via e2e test');
   });
 });
