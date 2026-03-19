@@ -283,6 +283,41 @@ export default function App() {
             <BreadcrumbPicker repo={state.repo} currentPath={state.currentPath} dispatch={dispatch} />
           )}
         </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 2, flexShrink: 0, marginLeft: 8 }}>
+          <span
+            title="Browsing"
+            onClick={() => { if (state.leftMode === 'history') dispatch({ type: 'EXIT_HISTORY' }); }}
+            style={{
+              display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+              width: 22, height: 20, borderRadius: 3, cursor: 'pointer',
+              background: state.leftMode === 'browse' ? '#2a2a3a' : 'transparent',
+              color: state.leftMode === 'browse' ? '#ccc' : '#555',
+            }}
+            onMouseEnter={e => { if (state.leftMode !== 'browse') e.currentTarget.style.color = '#aaa'; }}
+            onMouseLeave={e => { if (state.leftMode !== 'browse') e.currentTarget.style.color = '#555'; }}
+          >
+            <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
+              <path d="M1 2.5A1.5 1.5 0 0 1 2.5 1h3.879a1.5 1.5 0 0 1 1.06.44l1.122 1.12A1.5 1.5 0 0 0 9.62 3H13.5A1.5 1.5 0 0 1 15 4.5v8a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 1 12.5v-10z"/>
+            </svg>
+          </span>
+          <span
+            title="History"
+            onClick={() => { if (state.leftMode === 'browse') dispatch({ type: 'ENTER_HISTORY' }); }}
+            style={{
+              display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+              width: 22, height: 20, borderRadius: 3, cursor: 'pointer',
+              background: state.leftMode === 'history' ? '#2a2a3a' : 'transparent',
+              color: state.leftMode === 'history' ? '#ccc' : '#555',
+            }}
+            onMouseEnter={e => { if (state.leftMode !== 'history') e.currentTarget.style.color = '#aaa'; }}
+            onMouseLeave={e => { if (state.leftMode !== 'history') e.currentTarget.style.color = '#555'; }}
+          >
+            <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
+              <path d="M8 3.5a.5.5 0 0 0-1 0V8a.5.5 0 0 0 .252.434l3.5 2a.5.5 0 0 0 .496-.868L8 7.71V3.5z"/>
+              <path d="M8 16A8 8 0 1 0 8 0a8 8 0 0 0 0 16zm7-8A7 7 0 1 1 1 8a7 7 0 0 1 14 0z"/>
+            </svg>
+          </span>
+        </div>
       </div>
 
       <div style={{ display: 'flex', flex: 1, overflow: 'hidden', minHeight: 0 }}>
