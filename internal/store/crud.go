@@ -291,6 +291,7 @@ type RecentFactEntry struct {
 	Path        string  `json:"path"`
 	Title       string  `json:"title"`
 	CommittedAt int64   `json:"committed_at"`
+	Operation   string  `json:"operation,omitempty"`
 	Score       float64 `json:"score,omitempty"`
 }
 
@@ -310,7 +311,7 @@ func (idx *Index) RecentFacts(pathPrefix, query string, limit, offset int) ([]Re
 	}
 
 	rows, err := idx.db.Query(
-		`SELECT f.path, f.title, COALESCE(cl.committed_at, 0)
+		`SELECT f.path, f.title, COALESCE(cl.committed_at, 0), COALESCE(cl.operation, '')
 		 FROM facts f
 		 LEFT JOIN commit_log cl ON f.commit_hash = cl.commit_hash AND f.path = cl.path
 		 WHERE f.path LIKE ? || '%'
@@ -326,7 +327,7 @@ func (idx *Index) RecentFacts(pathPrefix, query string, limit, offset int) ([]Re
 	var entries []RecentFactEntry
 	for rows.Next() {
 		var e RecentFactEntry
-		if err := rows.Scan(&e.Path, &e.Title, &e.CommittedAt); err != nil {
+		if err := rows.Scan(&e.Path, &e.Title, &e.CommittedAt, &e.Operation); err != nil {
 			return nil, 0, fmt.Errorf("RecentFacts scan: %w", err)
 		}
 		entries = append(entries, e)
@@ -360,7 +361,7 @@ func (idx *Index) recentFactsSearch(pathPrefix, query string, limit, offset int)
 	}
 
 	rows, err := idx.db.Query(
-		`SELECT f.path, f.title, COALESCE(cl.committed_at, 0)
+		`SELECT f.path, f.title, COALESCE(cl.committed_at, 0), COALESCE(cl.operation, '')
 		 FROM facts f
 		 LEFT JOIN commit_log cl ON f.commit_hash = cl.commit_hash AND f.path = cl.path
 		 WHERE f.path IN (`+join(placeholders, ",")+`)
@@ -375,7 +376,7 @@ func (idx *Index) recentFactsSearch(pathPrefix, query string, limit, offset int)
 	var all []RecentFactEntry
 	for rows.Next() {
 		var e RecentFactEntry
-		if err := rows.Scan(&e.Path, &e.Title, &e.CommittedAt); err != nil {
+		if err := rows.Scan(&e.Path, &e.Title, &e.CommittedAt, &e.Operation); err != nil {
 			return nil, 0, fmt.Errorf("RecentFacts search scan: %w", err)
 		}
 		e.Score = scoreByPath[e.Path]
