@@ -3,7 +3,7 @@ import { test, expect } from '../../fixtures/knomit.js';
 test.describe('Recent Mode', () => {
   test.beforeEach(async ({ page, sharedBaseURL }) => {
     await page.goto(sharedBaseURL);
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
   });
 
   test('pressing "r" enters recent mode and shows recently modified facts', async ({ page }) => {

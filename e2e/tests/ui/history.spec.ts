@@ -4,7 +4,7 @@ import { HistoryPage } from '../../pages/history.page.js';
 test.describe('History Mode', () => {
   test.beforeEach(async ({ page, sharedBaseURL }) => {
     await page.goto(sharedBaseURL);
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
   });
 
   test('pressing "h" enters history mode and shows timeline', async ({ page }) => {

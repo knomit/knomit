@@ -26,7 +26,7 @@ This fact exercises the full lifecycle.`;
 
     // 2. Navigate to it in the UI
     await page.goto(freshKnomit.baseURL);
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
     const browse = new BrowsePage(page);
 
     // Navigate into lifecycle directory then click the fact

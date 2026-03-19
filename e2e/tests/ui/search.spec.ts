@@ -7,7 +7,7 @@ test.describe('Search', () => {
   test.beforeEach(async ({ page, sharedBaseURL }) => {
     await page.goto(sharedBaseURL);
     browse = new BrowsePage(page);
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
   });
 
   test('text search returns matching facts', async () => {

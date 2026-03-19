@@ -23,7 +23,7 @@ const facts: SeedFact[] = [
     path: 'kb/databases/postgresql/mvcc.md',
     content: `---
 confidence: 0.9
-epistemic_type: observation
+type: observation
 entities:
   - PostgreSQL
   - MVCC
@@ -36,7 +36,7 @@ PostgreSQL uses Multi-Version Concurrency Control (MVCC) to handle concurrent ac
     path: 'kb/databases/postgresql/vacuum.md',
     content: `---
 confidence: 0.85
-epistemic_type: practice
+type: practice
 entities:
   - PostgreSQL
   - VACUUM
@@ -49,7 +49,7 @@ Regular VACUUM operations are essential for reclaiming storage from dead tuples.
     path: 'kb/databases/indexing/btree-vs-hash.md',
     content: `---
 confidence: 0.8
-epistemic_type: observation
+type: observation
 entities:
   - B-tree index
   - Hash index
@@ -64,7 +64,7 @@ B-tree indexes support range queries and ordering while hash indexes only suppor
     path: 'kb/databases/redis/eviction-policies.md',
     content: `---
 confidence: 0.7
-epistemic_type: claim
+type: claim
 entities:
   - Redis
   - cache eviction
@@ -79,7 +79,7 @@ Redis supports multiple eviction policies including allkeys-lru, volatile-lru, a
     path: 'kb/networking/dns/resolution-flow.md',
     content: `---
 confidence: 0.95
-epistemic_type: observation
+type: observation
 entities:
   - DNS
   - recursive resolver
@@ -92,7 +92,7 @@ DNS resolution follows a hierarchical lookup: stub resolver -> recursive resolve
     path: 'kb/networking/tcp/congestion-control.md',
     content: `---
 confidence: 0.8
-epistemic_type: observation
+type: observation
 entities:
   - TCP
   - congestion control
@@ -108,7 +108,7 @@ Modern TCP stacks use algorithms like BBR (Bottleneck Bandwidth and RTT) instead
     path: 'kb/networking/http/http3-quic.md',
     content: `---
 confidence: 0.7
-epistemic_type: claim
+type: claim
 entities:
   - HTTP/3
   - QUIC
@@ -122,7 +122,7 @@ HTTP/3 runs over QUIC (UDP-based) rather than TCP. This eliminates head-of-line 
     path: 'kb/networking/load-balancing/l4-vs-l7.md',
     content: `---
 confidence: 0.85
-epistemic_type: practice
+type: practice
 entities:
   - load balancer
   - L4
@@ -138,7 +138,7 @@ L4 (transport) load balancers route based on IP/port and are faster but less fle
     path: 'kb/security/authn/jwt-best-practices.md',
     content: `---
 confidence: 0.9
-epistemic_type: practice
+type: practice
 entities:
   - JWT
   - authentication
@@ -153,7 +153,7 @@ Always validate the algorithm header to prevent algorithm confusion attacks. Use
     path: 'kb/security/authn/oauth2-pkce.md',
     content: `---
 confidence: 0.85
-epistemic_type: practice
+type: practice
 entities:
   - OAuth2
   - PKCE
@@ -167,7 +167,7 @@ PKCE (Proof Key for Code Exchange) mitigates authorization code interception att
     path: 'kb/security/encryption/aes-gcm.md',
     content: `---
 confidence: 0.95
-epistemic_type: observation
+type: observation
 entities:
   - AES-GCM
   - authenticated encryption
@@ -180,7 +180,7 @@ AES-GCM provides both confidentiality and integrity in a single operation. It is
     path: 'kb/security/supply-chain/sbom.md',
     content: `---
 confidence: 0.6
-epistemic_type: claim
+type: claim
 entities:
   - SBOM
   - supply chain security
@@ -195,7 +195,7 @@ SBOMs (Software Bill of Materials) enumerate all dependencies in a software arti
     path: 'kb/observability/metrics/red-method.md',
     content: `---
 confidence: 0.9
-epistemic_type: practice
+type: practice
 entities:
   - RED method
   - metrics
@@ -209,7 +209,7 @@ The RED method tracks three key signals for every service: Rate (requests/sec), 
     path: 'kb/observability/tracing/opentelemetry-basics.md',
     content: `---
 confidence: 0.8
-epistemic_type: observation
+type: observation
 entities:
   - OpenTelemetry
   - distributed tracing
@@ -225,7 +225,7 @@ OpenTelemetry provides a vendor-neutral API for emitting traces, metrics, and lo
     path: 'kb/observability/logging/structured-logging.md',
     content: `---
 confidence: 0.85
-epistemic_type: practice
+type: practice
 entities:
   - structured logging
   - JSON logs
@@ -238,7 +238,7 @@ Structured logging (JSON format) enables machine-parseable log analysis. Key fie
     path: 'kb/observability/alerting/slo-burn-rate.md',
     content: `---
 confidence: 0.7
-epistemic_type: observation
+type: observation
 entities:
   - SLO
   - burn rate
@@ -254,7 +254,7 @@ Burn rate alerting measures how fast an error budget is being consumed. A burn r
     path: 'kb/databases/postgresql/extensions/pgvector.md',
     content: `---
 confidence: 0.8
-epistemic_type: observation
+type: observation
 entities:
   - pgvector
   - PostgreSQL
@@ -268,7 +268,7 @@ pgvector adds vector similarity search to PostgreSQL. It supports L2 distance, i
     path: 'kb/security/network/mtls.md',
     content: `---
 confidence: 0.9
-epistemic_type: practice
+type: practice
 entities:
   - mTLS
   - mutual TLS
@@ -282,7 +282,7 @@ mTLS requires both client and server to present certificates during the TLS hand
     path: 'kb/observability/dashboards/grafana-best-practices.md',
     content: `---
 confidence: 0.3
-epistemic_type: claim
+type: claim
 entities:
   - Grafana
   - dashboards
@@ -295,7 +295,7 @@ Dashboards should follow a hierarchy: high-level service overview -> subsystem d
     path: 'kb/networking/service-mesh/envoy-proxy.md',
     content: `---
 confidence: 0.6
-epistemic_type: observation
+type: observation
 entities:
   - Envoy
   - service mesh

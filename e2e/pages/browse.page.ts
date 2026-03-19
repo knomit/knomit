@@ -13,7 +13,7 @@ export class BrowsePage {
 
   async goto() {
     await this.page.goto('/');
-    await this.page.waitForLoadState('networkidle');
+    await this.page.waitForLoadState('domcontentloaded');
   }
 
   async getBreadcrumbs(): Promise<string[]> {
@@ -26,6 +26,8 @@ export class BrowsePage {
   }
 
   async getDirectoryEntries(): Promise<Array<{ name: string; isDir: boolean }>> {
+    // Wait for at least one entry to appear (browse API is async)
+    await this.page.getByTestId('dir-entry').first().waitFor({ timeout: 10_000 }).catch(() => {});
     const entries = this.page.getByTestId('dir-entry');
     const count = await entries.count();
     const result: Array<{ name: string; isDir: boolean }> = [];
@@ -39,7 +41,9 @@ export class BrowsePage {
   }
 
   async clickEntry(name: string) {
-    await this.page.getByTestId('dir-entry').and(this.page.locator(`[data-name="${name}"]`)).click();
+    const entry = this.page.getByTestId('dir-entry').and(this.page.locator(`[data-name="${name}"]`));
+    await entry.waitFor({ timeout: 10_000 });
+    await entry.click();
   }
 
   async search(query: string) {

@@ -22,7 +22,7 @@ Seed fact so the repo exists.`,
     expect(seedRes.ok()).toBeTruthy();
 
     await page.goto(freshKnomit.baseURL);
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
 
     // Open the menu
     const menuBtn = page.getByTestId('toknomitr-menu-btn');

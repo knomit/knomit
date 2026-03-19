@@ -3,7 +3,7 @@ import { test, expect } from '../../fixtures/knomit.js';
 test.describe('Status Bar (Console)', () => {
   test.beforeEach(async ({ page, sharedBaseURL }) => {
     await page.goto(sharedBaseURL);
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
   });
 
   test('console bar is visible at the bottom of the page', async ({ page }) => {

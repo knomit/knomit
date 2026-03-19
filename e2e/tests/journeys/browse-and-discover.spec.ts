@@ -60,7 +60,7 @@ Third fact about the discovery topic.`,
 
     // Navigate to the UI
     await page.goto(freshKnomit.baseURL);
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
     const browse = new BrowsePage(page);
 
     // Navigate directory tree into discover/

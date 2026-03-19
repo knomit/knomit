@@ -42,7 +42,7 @@ Content in the second repo.`,
 
     // Reload to pick up the new repo list
     await page.goto(freshKnomit.baseURL);
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
 
     // Verify repo selector dropdown appears (multiple repos)
     const repoSelect = page.getByTestId('toknomitr-repo-select');
@@ -59,7 +59,7 @@ Content in the second repo.`,
 
     // Switch to the "second" repo
     await repoSelect.selectOption('second');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
     await page.waitForTimeout(1000);
 
     // Verify different content

@@ -7,7 +7,7 @@ test.describe('Browse', () => {
   test.beforeEach(async ({ page, sharedBaseURL }) => {
     await page.goto(sharedBaseURL);
     browse = new BrowsePage(page);
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
   });
 
   test('shows root directory entries', async () => {
@@ -48,10 +48,11 @@ test.describe('Browse', () => {
   });
 
   test('clicking a fact selects it in the right panel', async ({ page }) => {
-    // Navigate to a leaf directory that contains facts
+    // Navigate to a leaf directory that contains facts (kb/databases/postgresql/)
     await browse.clickEntry('databases');
     await browse.clickEntry('postgresql');
-    // Click a fact file
+    // Wait for a known fact file to appear (mvcc.md is seeded here)
+    await page.getByTestId('dir-entry').and(page.locator('[data-isdir="false"]')).first().waitFor({ timeout: 10_000 });
     const entries = await browse.getDirectoryEntries();
     const facts = entries.filter(e => !e.isDir);
     expect(facts.length).toBeGreaterThan(0);

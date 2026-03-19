@@ -21,7 +21,7 @@ Single repo test fact.`,
     });
 
     await page.goto(freshKnomit.baseURL);
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
 
     // With only one repo, should show plain text repo name
     const repoName = page.getByTestId('toknomitr-repo-name');
@@ -72,7 +72,7 @@ Fact in the second repo.`,
 
     // Reload to pick up the new repo list
     await page.goto(freshKnomit.baseURL);
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
 
     // With two repos, should show a dropdown
     const repoSelect = page.getByTestId('toknomitr-repo-select');
@@ -121,7 +121,7 @@ Content in the other repo.`,
     });
 
     await page.goto(freshKnomit.baseURL);
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
 
     // Verify we start on "knomit" repo and see alpha-fact
     const entries = page.getByTestId('dir-entry');
@@ -135,7 +135,7 @@ Content in the other repo.`,
     // Switch to the "other" repo
     const repoSelect = page.getByTestId('toknomitr-repo-select');
     await repoSelect.selectOption('other');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
 
     // Wait for entries to update
     await page.waitForTimeout(1000);

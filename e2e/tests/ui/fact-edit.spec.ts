@@ -25,7 +25,7 @@ Created by e2e test.`,
 
     // Navigate to it in the UI
     await page.goto(freshKnomit.baseURL);
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
     const browse = new BrowsePage(page);
     await browse.clickEntry('test-fact.md');
     const factPanel = new FactPanel(page);
@@ -52,7 +52,7 @@ Original content.`,
     });
 
     await page.goto(freshKnomit.baseURL);
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
     const browse = new BrowsePage(page);
     await browse.clickEntry('editable.md');
 

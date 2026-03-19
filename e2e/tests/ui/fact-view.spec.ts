@@ -10,7 +10,7 @@ test.describe('Fact View', () => {
     await page.goto(sharedBaseURL);
     browse = new BrowsePage(page);
     factPanel = new FactPanel(page);
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
   });
 
   test('displays fact title and body', async () => {
