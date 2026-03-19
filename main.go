@@ -212,11 +212,13 @@ func openRepo(
 	// Per-repo synthesis deps.
 	var synthDeps *web.SynthDeps
 	if llmAdapter != nil {
+		synthReviewer := synthesize.NewReviewer(gs, idx, idx, embedder, nil)
 		synthDeps = &web.SynthDeps{
 			GS:       gs,
 			Idx:      idx,
 			Embedder: embedder,
 			Adapter:  llmAdapter,
+			Reviewer: synthReviewer,
 		}
 	}
 
@@ -532,11 +534,13 @@ func setRepoMCP(result *repoResult, ontologyRoot string, ontology *fact.Ontology
 	result.ri.MCPHandlers = mcpHandlers
 
 	if llmAdapter != nil {
+		synthReviewer := synthesize.NewReviewer(result.gs, result.idx, result.idx, embedder, nil)
 		result.ri.SynthDeps = &web.SynthDeps{
 			GS:       result.gs,
 			Idx:      result.idx,
 			Embedder: embedder,
 			Adapter:  llmAdapter,
+			Reviewer: synthReviewer,
 		}
 	}
 }

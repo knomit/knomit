@@ -8,6 +8,11 @@ import (
 	"knomit/internal/store"
 )
 
+// factContent builds a minimal knomit fact file for testing.
+func factContent(title, body string) string {
+	return "---\ndomain: [testing]\nconfidence: 0.8\nsources: 1\nentities: []\nrefs: []\n---\n# " + title + "\n\n" + body + "\n"
+}
+
 func TestApplyPruneDecisions_Retract(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)

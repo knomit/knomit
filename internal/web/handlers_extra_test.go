@@ -373,7 +373,7 @@ func TestHandleSynthesizeStart_NoDeps(t *testing.T) {
 	}
 }
 
-func TestHandleSynthesizeStart_InvalidRecipe(t *testing.T) {
+func TestHandleSynthesizeStart_NoReviewer(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
 
@@ -388,10 +388,11 @@ func TestHandleSynthesizeStart_InvalidRecipe(t *testing.T) {
 	})
 	handler := NewRouter(rm, nil, false, "kb")
 
-	rr := doRequest(t, handler, http.MethodPost, "/api/v1/knomit/synthesize", "not: valid: yaml: [[[")
+	rr := doRequest(t, handler, http.MethodPost, "/api/v1/knomit/synthesize", "")
 
-	if rr.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400; body: %s", rr.Code, rr.Body.String())
+	// SynthDeps without Reviewer returns 503.
+	if rr.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503; body: %s", rr.Code, rr.Body.String())
 	}
 }
 

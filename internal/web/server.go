@@ -47,6 +47,7 @@ type SynthDeps struct {
 	Idx      synthesize.SearchIndex
 	Embedder *embeddings.Embedder
 	Adapter  llm.LLMAdapter
+	Reviewer *synthesize.Reviewer
 }
 
 // NewRouter creates the chi router with all API routes, MCP endpoints,

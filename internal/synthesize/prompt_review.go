@@ -83,7 +83,7 @@ func RenderPruneWorkItem(facts []factForLLM) (*WorkItemContent, error) {
 		return nil, fmt.Errorf("marshal facts for prune work item: %w", err)
 	}
 
-	prompt, err := RenderTemplate("large", "prune", "user", PromptData{Facts: string(factsJSON)})
+	prompt, err := RenderTemplate("prune", "user", PromptData{Facts: string(factsJSON)})
 	if err != nil {
 		return nil, fmt.Errorf("render prune work item: %w", err)
 	}
@@ -101,7 +101,7 @@ func RenderDistillWorkItem(facts []factForLLM) (*WorkItemContent, error) {
 		return nil, fmt.Errorf("marshal facts for distill work item: %w", err)
 	}
 
-	prompt, err := RenderTemplate("large", "distill", "user", PromptData{Facts: string(factsJSON)})
+	prompt, err := RenderTemplate("distill", "user", PromptData{Facts: string(factsJSON)})
 	if err != nil {
 		return nil, fmt.Errorf("render distill work item: %w", err)
 	}
