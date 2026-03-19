@@ -325,6 +325,26 @@ func TestLoad_KnomitRepoBackwardCompat(t *testing.T) {
 	}
 }
 
+func TestLoad_TOMLCannotOverrideHome(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "knomit.toml"), []byte(`
+repo = "/should/be/ignored"
+port = "7777"
+`), 0o644)
+	t.Setenv("KNOMIT_HOME", dir)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if cfg.Home != dir {
+		t.Errorf("Home = %q, want %q (TOML repo should not override Home)", cfg.Home, dir)
+	}
+	if cfg.Port != "7777" {
+		t.Errorf("Port = %q, want %q (other TOML fields should still apply)", cfg.Port, "7777")
+	}
+}
+
 func TestLoad_KnomitHomePrecedence(t *testing.T) {
 	homeDir := t.TempDir()
 	repoDir := t.TempDir()
