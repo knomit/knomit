@@ -3,6 +3,7 @@
 package git
 
 import (
+	"database/sql"
 	"fmt"
 	"io"
 	"regexp"
@@ -66,6 +67,38 @@ func (s *Store) ReadFileAtCommit(path, commitHash string) (string, error) {
 		return "", fmt.Errorf("ReadFileAtCommit: file %q: %w", path, err)
 	}
 	return f.Contents()
+}
+
+// ReadFileLastCommit finds the most recent ancestor of beforeCommitHash where
+// path existed and returns its content and commit hash. Used to read facts
+// that were deleted in beforeCommitHash (e.g. retract commits).
+func (s *Store) ReadFileLastCommit(path, beforeCommitHash string) (content string, fromCommit string, err error) {
+	startHash := plumbing.NewHash(beforeCommitHash)
+	startCommit, err := s.repo.CommitObject(startHash)
+	if err != nil {
+		return "", "", fmt.Errorf("ReadFileLastCommit: commit: %w", err)
+	}
+	if len(startCommit.ParentHashes) == 0 {
+		return "", "", fmt.Errorf("ReadFileLastCommit: %q: commit has no parents", path)
+	}
+
+	logIter, err := s.repo.Log(&gogit.LogOptions{
+		From:     startCommit.ParentHashes[0],
+		FileName: &path,
+		Order:    gogit.LogOrderCommitterTime,
+	})
+	if err != nil {
+		return "", "", fmt.Errorf("ReadFileLastCommit: log: %w", err)
+	}
+	defer logIter.Close()
+
+	lastCommit, err := logIter.Next()
+	if err != nil {
+		return "", "", fmt.Errorf("ReadFileLastCommit: %q: no prior commit found", path)
+	}
+
+	content, err = s.ReadFileAtCommit(path, lastCommit.Hash.String())
+	return content, lastCommit.Hash.String(), err
 }
 
 // ReadFile reads the content of path from the HEAD commit.
@@ -159,6 +192,37 @@ func (s *Store) ListDir(path string) ([]DirEntry, error) {
 		// Omit non-.md files
 	}
 	return entries, nil
+}
+
+// LastCommitForPath returns the hash of the most recent non-merge commit
+// that touched path. Merges are skipped because they duplicate authoring
+// commits from the merged branch.
+func (s *Store) LastCommitForPath(path string) (string, error) {
+	headRef, err := s.repo.Head()
+	if err != nil {
+		return "", fmt.Errorf("LastCommitForPath: head: %w", err)
+	}
+
+	logIter, err := s.repo.Log(&gogit.LogOptions{
+		From:     headRef.Hash(),
+		FileName: &path,
+		Order:    gogit.LogOrderCommitterTime,
+	})
+	if err != nil {
+		return "", fmt.Errorf("LastCommitForPath: log: %w", err)
+	}
+	defer logIter.Close()
+
+	for {
+		c, err := logIter.Next()
+		if err != nil {
+			return "", fmt.Errorf("LastCommitForPath: %q: no commit found", path)
+		}
+		// Skip merge commits (more than one parent).
+		if c.NumParents() <= 1 {
+			return c.Hash.String(), nil
+		}
+	}
 }
 
 // ListAll returns paths of all .md files under HEAD.
@@ -271,11 +335,6 @@ func (s *Store) LogPaginated(path string, limit int, after string) ([]LogEntryWi
 	}
 	defer logIter.Close()
 
-	tagIndex, err := s.buildTagIndex()
-	if err != nil {
-		return nil, "", fmt.Errorf("LogPaginated: tags: %w", err)
-	}
-
 	skipping := after != ""
 	afterHash := plumbing.NewHash(after)
 
@@ -301,39 +360,173 @@ func (s *Store) LogPaginated(path string, limit int, after string) ([]LogEntryWi
 			firstLine = firstLine[:idx]
 		}
 
-		tags := tagIndex[c.Hash]
-		if tags == nil {
-			tags = []string{}
-		}
-
 		entries = append(entries, LogEntryWithTags{
-			Commit:  hash,
-			Date:    c.Committer.When.UTC().Format(time.RFC3339),
-			Message: firstLine,
-			Tags:    tags,
+			Commit:    hash,
+			Date:      c.Committer.When.UTC().Format(time.RFC3339),
+			Message:   firstLine,
+			Operation: parseOperation(c.Author.Email),
 		})
 		return nil
 	})
 
+	// Batch-fetch file change counts from commit_log if available.
+	if s.db != nil && s.commitLog && len(entries) > 0 {
+		s.enrichFileCounts(entries)
+	}
+
 	return entries, nextCursor, nil
 }
 
-// buildTagIndex returns a map from commit hash to tag names.
-func (s *Store) buildTagIndex() (map[plumbing.Hash][]string, error) {
-	idx := make(map[plumbing.Hash][]string)
-	refIter, err := s.storer.IterReferences()
-	if err != nil {
-		return nil, err
+// enrichFileCounts batch-queries commit_log for A/M/D counts per commit.
+func (s *Store) enrichFileCounts(entries []LogEntryWithTags) {
+	placeholders := make([]string, len(entries))
+	args := make([]any, len(entries))
+	idx := make(map[string]int, len(entries))
+	for i, e := range entries {
+		placeholders[i] = "?"
+		args[i] = e.Commit
+		idx[e.Commit] = i
 	}
-	_ = refIter.ForEach(func(ref *plumbing.Reference) error {
-		name := ref.Name().String()
-		if strings.HasPrefix(name, "refs/tags/") {
-			tagName := strings.TrimPrefix(name, "refs/tags/")
-			idx[ref.Hash()] = append(idx[ref.Hash()], tagName)
+
+	query := `SELECT commit_hash, action, COUNT(*) FROM commit_log WHERE commit_hash IN (` +
+		strings.Join(placeholders, ",") +
+		`) GROUP BY commit_hash, action`
+
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var hash, action string
+		var count int
+		if err := rows.Scan(&hash, &action, &count); err != nil {
+			continue
+		}
+		i, ok := idx[hash]
+		if !ok {
+			continue
+		}
+		switch action {
+		case "added":
+			entries[i].Files.Added = count
+		case "modified":
+			entries[i].Files.Modified = count
+		case "deleted":
+			entries[i].Files.Deleted = count
+		}
+	}
+}
+
+// Activity computes commit-activity metrics for path using a SQL aggregate
+// query when commit_log is available, or a capped go-git walk otherwise.
+// path may be a directory prefix or a specific .md file.
+func (s *Store) Activity(path string) (ActivityResult, error) {
+	if s.commitLog {
+		return s.activitySQL(path)
+	}
+	return s.activityGit(path)
+}
+
+func (s *Store) activitySQL(path string) (ActivityResult, error) {
+	cutoff7 := commitLogAge(7)
+	cutoff30 := commitLogAge(30)
+	cutoff90 := commitLogAge(90)
+
+	var filter string
+	args := []any{cutoff7, cutoff30, cutoff90}
+	if path == "" {
+		filter = "1=1"
+	} else if strings.HasSuffix(path, ".md") {
+		filter = "path = ?"
+		args = append(args, path)
+	} else {
+		filter = "path GLOB ?"
+		args = append(args, path+"/*")
+	}
+
+	q := fmt.Sprintf(`
+		SELECT MAX(committed_at),
+		       COUNT(DISTINCT commit_hash),
+		       COUNT(DISTINCT CASE WHEN committed_at > ? THEN commit_hash END),
+		       COUNT(DISTINCT CASE WHEN committed_at > ? THEN commit_hash END),
+		       COUNT(DISTINCT CASE WHEN committed_at > ? THEN commit_hash END)
+		FROM commit_log WHERE %s`, filter)
+
+	var lastTS sql.NullInt64
+	var total, c7, c30, c90 int
+	if err := s.db.QueryRow(q, args...).Scan(&lastTS, &total, &c7, &c30, &c90); err != nil {
+		return ActivityResult{}, fmt.Errorf("activitySQL: %w", err)
+	}
+
+	var lastCommit string
+	if lastTS.Valid {
+		lastCommit = time.Unix(lastTS.Int64, 0).UTC().Format(time.RFC3339)
+	}
+	return ActivityResult{
+		LastCommit: lastCommit,
+		Total:      total,
+		Changes7d:  c7,
+		Changes30d: c30,
+		Changes90d: c90,
+	}, nil
+}
+
+func (s *Store) activityGit(path string) (ActivityResult, error) {
+	const maxCommits = 500
+
+	headRef, err := s.repo.Head()
+	if err != nil {
+		return ActivityResult{}, fmt.Errorf("Activity: head: %w", err)
+	}
+
+	opts := &gogit.LogOptions{
+		From:  headRef.Hash(),
+		Order: gogit.LogOrderCommitterTime,
+	}
+	if path != "" {
+		if strings.HasSuffix(path, ".md") {
+			opts.FileName = &path
+		} else {
+			prefix := path + "/"
+			opts.PathFilter = func(p string) bool { return strings.HasPrefix(p, prefix) }
+		}
+	}
+
+	logIter, err := s.repo.Log(opts)
+	if err != nil {
+		return ActivityResult{}, fmt.Errorf("Activity: log: %w", err)
+	}
+	defer logIter.Close()
+
+	now := time.Now()
+	cutoff7 := now.AddDate(0, 0, -7)
+	cutoff30 := now.AddDate(0, 0, -30)
+	cutoff90 := now.AddDate(0, 0, -90)
+
+	var result ActivityResult
+	_ = logIter.ForEach(func(c *object.Commit) error {
+		t := c.Committer.When
+		if result.Total == 0 {
+			result.LastCommit = t.UTC().Format(time.RFC3339)
+		}
+		result.Total++
+		if t.After(cutoff7) {
+			result.Changes7d++
+		}
+		if t.After(cutoff30) {
+			result.Changes30d++
+		}
+		if t.After(cutoff90) {
+			result.Changes90d++
+		}
+		if result.Total >= maxCommits {
+			return io.EOF
 		}
 		return nil
 	})
-	return idx, nil
+	return result, nil
 }
 
 // CommitDetail returns metadata and changed files for a specific commit.
@@ -392,27 +585,89 @@ func (s *Store) CommitDetail(commitHash string) (*CommitDetailResult, error) {
 		firstLine = firstLine[:idx]
 	}
 
-	tagIndex, _ := s.buildTagIndex()
-	tags := tagIndex[hash]
-	if tags == nil {
-		tags = []string{}
-	}
-
 	return &CommitDetailResult{
-		Commit:  hash.String(),
-		Date:    commit.Committer.When.UTC().Format(time.RFC3339),
-		Message: firstLine,
-		Tags:    tags,
-		Files:   files,
+		Commit:    hash.String(),
+		Date:      commit.Committer.When.UTC().Format(time.RFC3339),
+		Message:   firstLine,
+		Operation: parseOperation(commit.Author.Email),
+		Files:     files,
 	}, nil
 }
 
-// WalkChangedFiles walks commit history from fromCommit (or HEAD if empty),
-// diffs each commit against its parent, and yields .md files under prefix that
-// haven't been seen before. It stops after limit unique files or end of history.
-// Returns the found files (most-recently-changed first) and the full hash of the
-// last commit examined.
+// WalkChangedFiles returns .md files under prefix most recently changed,
+// excluding already-seen paths, up to limit results.
+// Uses a SQL aggregate query when commit_log is available, or a full git walk
+// otherwise. Returns files ordered most-recently-changed first, and the HEAD
+// commit hash for session compatibility (SQL path ignores fromCommit).
 func (s *Store) WalkChangedFiles(fromCommit string, prefix string, seen map[string]bool, limit int) ([]FileRecency, string, error) {
+	if s.commitLog {
+		return s.walkChangedFilesSQL(prefix, seen, limit)
+	}
+	return s.walkChangedFilesGit(fromCommit, prefix, seen, limit)
+}
+
+func (s *Store) walkChangedFilesSQL(prefix string, seen map[string]bool, limit int) ([]FileRecency, string, error) {
+	var whereParts []string
+	var args []any
+
+	if prefix != "" {
+		whereParts = append(whereParts, "path GLOB ?")
+		args = append(args, prefix+"/*")
+	}
+	if len(seen) > 0 {
+		placeholders := make([]string, 0, len(seen))
+		for p := range seen {
+			placeholders = append(placeholders, "?")
+			args = append(args, p)
+		}
+		whereParts = append(whereParts, "path NOT IN ("+strings.Join(placeholders, ",")+")")
+	}
+
+	where := "1=1"
+	if len(whereParts) > 0 {
+		where = strings.Join(whereParts, " AND ")
+	}
+
+	q := fmt.Sprintf(`
+		SELECT path, MAX(committed_at) AS ts, MAX(rowid) AS last_rowid
+		FROM commit_log
+		WHERE %s
+		GROUP BY path
+		ORDER BY ts DESC, last_rowid DESC
+		LIMIT ?`, where)
+	args = append(args, limit)
+
+	rows, err := s.db.Query(q, args...)
+	if err != nil {
+		return nil, "", fmt.Errorf("walkChangedFilesSQL: query: %w", err)
+	}
+	defer rows.Close()
+
+	var results []FileRecency
+	for rows.Next() {
+		var path string
+		var ts, lastRowid int64
+		if err := rows.Scan(&path, &ts, &lastRowid); err != nil {
+			return nil, "", fmt.Errorf("walkChangedFilesSQL: scan: %w", err)
+		}
+		results = append(results, FileRecency{
+			Path:      path,
+			Timestamp: time.Unix(ts, 0).UTC(),
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, "", fmt.Errorf("walkChangedFilesSQL: rows: %w", err)
+	}
+
+	// Return HEAD hash for session compatibility (fromCommit is ignored in SQL path).
+	headRef, err := s.repo.Head()
+	if err != nil {
+		return results, "", nil
+	}
+	return results, headRef.Hash().String(), nil
+}
+
+func (s *Store) walkChangedFilesGit(fromCommit string, prefix string, seen map[string]bool, limit int) ([]FileRecency, string, error) {
 	var from plumbing.Hash
 	if fromCommit != "" {
 		from = plumbing.NewHash(fromCommit)
@@ -433,14 +688,12 @@ func (s *Store) WalkChangedFiles(fromCommit string, prefix string, seen map[stri
 	}
 	defer logIter.Close()
 
-	// Merge caller's seen set into a local copy.
 	localSeen := make(map[string]bool, len(seen))
 	for k, v := range seen {
 		localSeen[k] = v
 	}
 
 	prefixDir := prefix + "/"
-
 	var results []FileRecency
 	var lastHash string
 
@@ -451,7 +704,6 @@ func (s *Store) WalkChangedFiles(fromCommit string, prefix string, seen map[stri
 		if err != nil {
 			return fmt.Errorf("tree: %w", err)
 		}
-
 		var fromTree *object.Tree
 		if c.NumParents() > 0 {
 			parent, err := c.Parent(0)
@@ -463,36 +715,29 @@ func (s *Store) WalkChangedFiles(fromCommit string, prefix string, seen map[stri
 				return fmt.Errorf("parent tree: %w", err)
 			}
 		}
-
 		changes, err := object.DiffTree(fromTree, toTree)
 		if err != nil {
 			return fmt.Errorf("diff: %w", err)
 		}
-
 		for _, ch := range changes {
-			// Use the "to" name for adds/modifies, "from" name for deletes.
 			path := ch.To.Name
 			if path == "" {
 				path = ch.From.Name
 			}
-
 			if !strings.HasSuffix(path, ".md") {
 				continue
 			}
-			// Filter by prefix: must be under prefix/ or equal to prefix.md
 			if prefix != "" && path != prefix+".md" && !strings.HasPrefix(path, prefixDir) {
 				continue
 			}
 			if localSeen[path] {
 				continue
 			}
-
 			localSeen[path] = true
 			results = append(results, FileRecency{
 				Path:      path,
 				Timestamp: c.Committer.When.UTC(),
 			})
-
 			if len(results) >= limit {
 				return io.EOF
 			}
@@ -502,7 +747,6 @@ func (s *Store) WalkChangedFiles(fromCommit string, prefix string, seen map[stri
 	if err != nil && err != io.EOF {
 		return nil, "", fmt.Errorf("WalkChangedFiles: iterate: %w", err)
 	}
-
 	return results, lastHash, nil
 }
 

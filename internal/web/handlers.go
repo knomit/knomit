@@ -26,11 +26,13 @@
 package web
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"knomit/internal/git"
 	"knomit/internal/mcp"
@@ -51,19 +53,19 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, map[string]string{"error": msg})
 }
 
-// handleBrowse handles GET /api/browse?path=<path>.
+// handleBrowse handles GET /api/v1/{repo}/browse?path=<path>.
 // When the path parameter is empty, it defaults to ontologyRoot — the
 // configured knowledge-base root — so the UI lands on a meaningful
 // starting directory rather than the repository top level.
-func handleBrowse(gs GitStore, ontologyRoot string) http.HandlerFunc {
+func handleBrowse(ontologyRoot string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		ri := RepoFromContext(r.Context())
 		path := r.URL.Query().Get("path")
 		if path == "" {
 			path = ontologyRoot
 		}
-		//log.Debug().Str("path", path).Msg("browse")
 
-		entries, err := gs.ListDir(path)
+		entries, err := ri.GS.ListDir(path)
 		if err != nil {
 			// Empty repo or missing directory — return empty list, not an error.
 			log.Debug().Err(err).Str("path", path).Msg("browse: directory not found, returning empty")
@@ -90,9 +92,10 @@ func handleBrowse(gs GitStore, ontologyRoot string) http.HandlerFunc {
 	}
 }
 
-// handleFact handles GET /api/fact?path=<path>&commit=<hash>
-func handleFact(gs GitStore) http.HandlerFunc {
+// handleFact handles GET /api/v1/{repo}/fact?path=<path>&commit=<hash>
+func handleFact() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		ri := RepoFromContext(r.Context())
 		path := r.URL.Query().Get("path")
 		if path == "" {
 			writeError(w, http.StatusBadRequest, "path query parameter is required")
@@ -102,11 +105,31 @@ func handleFact(gs GitStore) http.HandlerFunc {
 		commitHash := r.URL.Query().Get("commit")
 
 		var content string
+		var fromCommit string
 		var err error
 		if commitHash != "" {
-			content, err = gs.ReadFileAtCommit(path, commitHash)
+			content, err = ri.GS.ReadFileAtCommit(path, commitHash)
+			if err != nil {
+				// File may have been deleted in this commit (e.g. retract).
+				// Fall back to the last commit where the file existed.
+				content, fromCommit, err = ri.GS.ReadFileLastCommit(path, commitHash)
+			}
+			if err != nil && ri.Svc != nil {
+				// Commit may be invalid or file never on that branch.
+				// Fall back to the most recent commit_log entry for this path.
+				var lastHash string
+				if qerr := ri.Svc.DB().QueryRow(
+					`SELECT commit_hash FROM commit_log WHERE path = ? AND action != 'deleted' ORDER BY rowid DESC LIMIT 1`,
+					path,
+				).Scan(&lastHash); qerr == nil && lastHash != "" {
+					content, err = ri.GS.ReadFileAtCommit(path, lastHash)
+					if err == nil {
+						fromCommit = lastHash
+					}
+				}
+			}
 		} else {
-			content, err = gs.ReadFile(path)
+			content, err = ri.GS.ReadFile(path)
 		}
 		if err != nil {
 			log.Debug().Err(err).Str("path", path).Msg("fact not found")
@@ -116,11 +139,96 @@ func handleFact(gs GitStore) http.HandlerFunc {
 
 		fact, err := mcp.ParseFact(path, content)
 		if err != nil {
-			// Not a fact file (e.g. kb.md manifest) — return raw content.
+			// File could not be parsed as a fact — return raw content with parse error.
 			writeJSON(w, http.StatusOK, map[string]any{
-				"path":  path,
-				"title": path,
-				"body":  content,
+				"path":        path,
+				"title":       path,
+				"body":        content,
+				"parse_error": err.Error(),
+			})
+			return
+		}
+
+		if fromCommit != "" {
+			writeJSON(w, http.StatusOK, map[string]any{
+				"path":        fact.Path,
+				"title":       fact.Title,
+				"type":        fact.Type,
+				"body":        fact.Body,
+				"domain":      fact.Domain,
+				"confidence":  fact.Confidence,
+				"sources":     fact.Sources,
+				"entities":    fact.Entities,
+				"refs":        fact.Refs,
+				"from_commit": fromCommit,
+				"commit_hash": fromCommit,
+			})
+			return
+		}
+
+		// Browsing mode: enrich with commit hash and date from the store index.
+		if commitHash == "" && ri.Svc != nil {
+			if rec, lerr := ri.Svc.Index().GetByPath(path); lerr == nil && rec != nil && rec.CommitHash != "" {
+				resp := map[string]any{
+					"path":        fact.Path,
+					"title":       fact.Title,
+					"type":        fact.Type,
+					"body":        fact.Body,
+					"domain":      fact.Domain,
+					"confidence":  fact.Confidence,
+					"sources":     fact.Sources,
+					"entities":    fact.Entities,
+					"refs":        fact.Refs,
+					"commit_hash": rec.CommitHash,
+				}
+				var ts sql.NullInt64
+				if qerr := ri.Svc.DB().QueryRow(
+					`SELECT committed_at FROM commit_log WHERE commit_hash = ? LIMIT 1`,
+					rec.CommitHash,
+				).Scan(&ts); qerr == nil && ts.Valid {
+					resp["commit_date"] = time.Unix(ts.Int64, 0).UTC().Format(time.RFC3339)
+				}
+				writeJSON(w, http.StatusOK, resp)
+				return
+			}
+		}
+		writeJSON(w, http.StatusOK, fact)
+	}
+}
+
+// handleFactWrite handles PUT /api/v1/{repo}/fact — writes raw fact file content.
+// Request body: JSON {"path": "...", "content": "..."}
+// Response: the re-parsed fact JSON (or parse error if content is still invalid).
+func handleFactWrite() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		ri := RepoFromContext(r.Context())
+
+		var req struct {
+			Path    string `json:"path"`
+			Content string `json:"content"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid request body")
+			return
+		}
+		if req.Path == "" {
+			writeError(w, http.StatusBadRequest, "path is required")
+			return
+		}
+
+		msg := "edit: update " + req.Path + " via UI"
+		if _, _, err := ri.GS.WriteFile(req.Path, req.Content, msg, "update"); err != nil {
+			writeError(w, http.StatusInternalServerError, fmt.Sprintf("write failed: %v", err))
+			return
+		}
+
+		fact, err := mcp.ParseFact(req.Path, req.Content)
+		if err != nil {
+			writeJSON(w, http.StatusOK, map[string]any{
+				"path":        req.Path,
+				"title":       req.Path,
+				"body":        req.Content,
+				"parse_error": err.Error(),
 			})
 			return
 		}
@@ -129,12 +237,13 @@ func handleFact(gs GitStore) http.HandlerFunc {
 	}
 }
 
-// handleSearch handles GET /api/search?q=<query>&entities=<e1,e2>&domain=<d1,d2>&path=<p>&min_confidence=<f>&limit=<n>.
+// handleSearch handles GET /api/v1/{repo}/search?q=<query>&entities=<e1,e2>&domain=<d1,d2>&path=<p>&min_confidence=<f>&limit=<n>.
 // The entities and domain filters are AND-combined (all specified values
 // must match). Each accepts a comma-separated list of terms.
-func handleSearch(idx SearchIndex) http.HandlerFunc {
+func handleSearch() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if idx == nil {
+		ri := RepoFromContext(r.Context())
+		if ri.Idx == nil {
 			writeError(w, http.StatusBadRequest, "search index not available")
 			return
 		}
@@ -216,7 +325,7 @@ func handleSearch(idx SearchIndex) http.HandlerFunc {
 
 		log.Debug().Str("q", text).Strs("entities", entities).Strs("domain", domain).Int("limit", limit).Msg("search")
 
-		results, err := idx.Search(store.SearchQuery{
+		results, err := ri.Idx.Search(store.SearchQuery{
 			Text:          text,
 			Entities:      entities,
 			Domain:        domain,
@@ -243,9 +352,10 @@ func handleSearch(idx SearchIndex) http.HandlerFunc {
 	}
 }
 
-// handleHistoryPaginated handles GET /api/v1/history?path=<path>&limit=50&after=<cursor>
-func handleHistoryPaginated(gs GitStore) http.HandlerFunc {
+// handleHistoryPaginated handles GET /api/v1/{repo}/history?path=<path>&limit=50&after=<cursor>
+func handleHistoryPaginated() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		ri := RepoFromContext(r.Context())
 		path := r.URL.Query().Get("path")
 
 		limit := 50
@@ -260,7 +370,7 @@ func handleHistoryPaginated(gs GitStore) http.HandlerFunc {
 
 		after := r.URL.Query().Get("after")
 
-		entries, next, err := gs.LogPaginated(path, limit, after)
+		entries, next, err := ri.GS.LogPaginated(path, limit, after)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, fmt.Sprintf("log error: %v", err))
 			return
@@ -277,16 +387,17 @@ func handleHistoryPaginated(gs GitStore) http.HandlerFunc {
 	}
 }
 
-// handleCommitDetail handles GET /api/v1/commit?hash=<hash>
-func handleCommitDetail(gs GitStore) http.HandlerFunc {
+// handleCommitDetail handles GET /api/v1/{repo}/commit?hash=<hash>
+func handleCommitDetail() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		ri := RepoFromContext(r.Context())
 		hash := r.URL.Query().Get("hash")
 		if hash == "" {
 			writeError(w, http.StatusBadRequest, "hash query parameter is required")
 			return
 		}
 
-		detail, err := gs.CommitDetail(hash)
+		detail, err := ri.GS.CommitDetail(hash)
 		if err != nil {
 			writeError(w, http.StatusNotFound, fmt.Sprintf("commit not found: %v", err))
 			return
@@ -296,81 +407,53 @@ func handleCommitDetail(gs GitStore) http.HandlerFunc {
 	}
 }
 
-// handleStats handles GET /api/stats?path=<path>.
-// It iterates over all facts in the knowledge base (optionally filtered
-// by path prefix), collecting domain/entity counts and average confidence.
-// This is fine for small-to-medium knowledge bases; very large repos may
-// want a cached or incremental approach.
-func handleStats(gs GitStore) http.HandlerFunc {
+// handleActivity handles GET /api/v1/{repo}/activity?path=<path>.
+// Returns commit-activity metrics (last change, total commits, 7d/30d/90d counts).
+func handleActivity() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		pathPrefix := r.URL.Query().Get("path")
-
-		allPaths, err := gs.ListAll()
+		ri := RepoFromContext(r.Context())
+		result, err := ri.GS.Activity(r.URL.Query().Get("path"))
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, fmt.Sprintf("list all error: %v", err))
+			writeError(w, http.StatusInternalServerError, fmt.Sprintf("activity error: %v", err))
 			return
 		}
-
-		domains := make(map[string]int)
-		entities := make(map[string]int)
-		total := 0
-		var confidenceSum float64
-
-		for _, p := range allPaths {
-			if pathPrefix != "" && !strings.HasPrefix(p, pathPrefix) {
-				continue
-			}
-
-			content, err := gs.ReadFile(p)
-			if err != nil {
-				continue
-			}
-
-			fact, err := mcp.ParseFact(p, content)
-			if err != nil {
-				continue
-			}
-
-			total++
-			confidenceSum += fact.Confidence
-			for _, d := range fact.Domain {
-				domains[d]++
-			}
-			for _, e := range fact.Entities {
-				entities[e]++
-			}
-		}
-
-		avgConfidence := 0.0
-		if total > 0 {
-			avgConfidence = confidenceSum / float64(total)
-			// Round to 2 decimal places.
-			avgConfidence = float64(int(avgConfidence*100+0.5)) / 100
-		}
-
-		writeJSON(w, http.StatusOK, map[string]any{
-			"total":          total,
-			"domains":        domains,
-			"entities":       entities,
-			"avg_confidence": avgConfidence,
-		})
+		writeJSON(w, http.StatusOK, result)
 	}
 }
 
-// handleStatus handles GET /api/status
-func handleStatus(gs GitStore, idx SearchIndex, embeddingsEnabled bool, ontologyRoot string) http.HandlerFunc {
+// handleStats handles GET /api/v1/{repo}/stats?path=<path>.
+// Aggregates are computed with a SQL query over the search index.
+func handleStats() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		head, err := gs.HeadCommit()
+		ri := RepoFromContext(r.Context())
+		if ri.Idx == nil {
+			writeError(w, http.StatusServiceUnavailable, "index not available")
+			return
+		}
+		stats, err := ri.Idx.Stats(r.URL.Query().Get("path"))
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, fmt.Sprintf("stats error: %v", err))
+			return
+		}
+		writeJSON(w, http.StatusOK, stats)
+	}
+}
+
+// handleStatus handles GET /api/v1/{repo}/status
+func handleStatus(embeddingsEnabled bool, ontologyRoot string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		ri := RepoFromContext(r.Context())
+		head, err := ri.GS.HeadCommit()
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, fmt.Sprintf("head commit error: %v", err))
 			return
 		}
 
-		branch := gs.Branch()
+		branch := ri.GS.Branch()
 
 		indexCommit := ""
-		if idx != nil {
-			indexCommit, _ = idx.GetLastCommit(branch)
+		if ri.Idx != nil {
+			indexCommit, _ = ri.Idx.GetLastCommit(branch)
 		}
 
 		writeJSON(w, http.StatusOK, map[string]any{
@@ -379,6 +462,45 @@ func handleStatus(gs GitStore, idx SearchIndex, embeddingsEnabled bool, ontology
 			"index_commit":       indexCommit,
 			"embeddings_enabled": embeddingsEnabled,
 			"ontology_root":      ontologyRoot,
+		})
+	}
+}
+
+// handleRecent handles GET /api/v1/{repo}/recent?path=<prefix>&q=<query>&limit=50&offset=0
+func handleRecent() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		ri := RepoFromContext(r.Context())
+		if ri.Svc == nil {
+			writeError(w, http.StatusServiceUnavailable, "index not available")
+			return
+		}
+
+		path := r.URL.Query().Get("path")
+		limit := 50
+		if v := r.URL.Query().Get("limit"); v != "" {
+			if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 500 {
+				limit = n
+			}
+		}
+		offset := 0
+		if v := r.URL.Query().Get("offset"); v != "" {
+			if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+				offset = n
+			}
+		}
+
+		query := r.URL.Query().Get("q")
+		entries, total, err := ri.Svc.Index().RecentFacts(path, query, limit, offset)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, fmt.Sprintf("recent error: %v", err))
+			return
+		}
+		if entries == nil {
+			entries = []store.RecentFactEntry{}
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"facts": entries,
+			"total": total,
 		})
 	}
 }

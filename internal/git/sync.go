@@ -5,7 +5,6 @@ package git
 
 import (
 	"fmt"
-	"time"
 
 	gogit "github.com/go-git/go-git/v5"
 	gogitconfig "github.com/go-git/go-git/v5/config"
@@ -42,6 +41,7 @@ func (s *Store) Sync(remoteBranch string) (SyncResult, error) {
 	log.Debug().Msg("git sync: fetching from origin")
 	err = s.repo.Fetch(&gogit.FetchOptions{
 		RemoteName: "origin",
+		Auth:       s.auth,
 	})
 	if err != nil && err != gogit.NoErrAlreadyUpToDate {
 		s.mu.Unlock()
@@ -118,6 +118,9 @@ func (s *Store) Sync(remoteBranch string) (SyncResult, error) {
 
 		log.Info().Str("to", originHash.String()[:8]).Msg("git sync: fast-forward")
 		s.notifyCommit(originHash.String())
+		if err := s.populateCommitLog(); err != nil {
+			log.Warn().Err(err).Msg("commit_log: sync populate")
+		}
 		return SyncResult{Synced: true, FastForward: true}, nil
 	}
 
@@ -143,11 +146,9 @@ func (s *Store) Sync(remoteBranch string) (SyncResult, error) {
 	}
 
 	// Create merge commit.
-	now := time.Now()
-	sig := object.Signature{Name: "knomit", Email: "knomit@local", When: now}
 	mc := &object.Commit{
-		Author:       sig,
-		Committer:    sig,
+		Author:       s.authorSig("sync"),
+		Committer:    s.committerSig(),
 		Message:      fmt.Sprintf("sync: merge origin/%s into %s", remoteBranch, s.branch),
 		TreeHash:     mergedTreeHash,
 		ParentHashes: []plumbing.Hash{agentHash, originHash},
@@ -164,6 +165,14 @@ func (s *Store) Sync(remoteBranch string) (SyncResult, error) {
 		return SyncResult{}, fmt.Errorf("Sync: store merge commit: %w", err)
 	}
 
+	if s.signer != nil {
+		mergeHash, err = signCommitInPlace(s.storer, s.signer, mergeHash)
+		if err != nil {
+			s.mu.Unlock()
+			return SyncResult{}, fmt.Errorf("Sync: sign merge commit: %w", err)
+		}
+	}
+
 	newRef := plumbing.NewHashReference(agentRefName, mergeHash)
 	if err := s.storer.SetReference(newRef); err != nil {
 		s.mu.Unlock()
@@ -174,6 +183,9 @@ func (s *Store) Sync(remoteBranch string) (SyncResult, error) {
 
 	log.Info().Str("merge_commit", mergeHash.String()[:8]).Msg("git sync: merged origin")
 	s.notifyCommit(mergeHash.String())
+	if err := s.populateCommitLog(); err != nil {
+		log.Warn().Err(err).Msg("commit_log: sync populate")
+	}
 	return SyncResult{Synced: true, MergeCommit: mergeHash.String()}, nil
 }
 
@@ -319,7 +331,10 @@ func (s *Store) Push() (PushResult, error) {
 	log.Debug().Str("branch", s.branch).Msg("git push: pushing agent branch")
 	err = s.repo.Push(&gogit.PushOptions{
 		RemoteName: "origin",
-		RefSpecs:   []gogitconfig.RefSpec{gogitconfig.RefSpec(refspec)},
+		RefSpecs: []gogitconfig.RefSpec{
+			gogitconfig.RefSpec(refspec),
+		},
+		Auth: s.auth,
 	})
 	if err == gogit.NoErrAlreadyUpToDate {
 		log.Debug().Msg("git push: already up to date")

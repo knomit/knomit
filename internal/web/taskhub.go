@@ -18,6 +18,7 @@ type TaskEvent struct {
 	Status  string `json:"status"`  // "running", "done", or "error"
 	Phase   string `json:"phase,omitempty"`
 	Message string `json:"message,omitempty"`
+	Repo    string `json:"repo,omitempty"` // repository name for log context
 }
 
 // StatusEvent is broadcast when HEAD changes. SSE clients use it to refresh.
@@ -127,13 +128,20 @@ func (h *TaskHub) Start(op string, fn func(ctx context.Context, emit func(TaskEv
 
 // emit broadcasts an event to all subscribers and updates internal state.
 func (h *TaskHub) emit(ev TaskEvent) {
-	log.Debug().
+	l := log.Debug().
 		Str("op", ev.Op).
 		Str("id", ev.ID).
-		Str("status", ev.Status).
-		Str("phase", ev.Phase).
-		Str("message", ev.Message).
-		Msg("task event")
+		Str("status", ev.Status)
+	if ev.Repo != "" {
+		l = l.Str("repo", ev.Repo)
+	}
+	if ev.Phase != "" {
+		l = l.Str("phase", ev.Phase)
+	}
+	if ev.Message != "" {
+		l = l.Str("message", ev.Message)
+	}
+	l.Msg("task event")
 
 	h.mu.Lock()
 	if ev.Status == "running" {

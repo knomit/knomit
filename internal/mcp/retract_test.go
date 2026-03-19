@@ -3,7 +3,6 @@ package mcp
 import (
 	"context"
 	"encoding/json"
-	"strings"
 	"testing"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
@@ -15,17 +14,11 @@ func TestRetractDeletesFile(t *testing.T) {
 	gs := NewMockGitStore(ctrl)
 
 	var deletedFile string
-	var tagSet string
-
 
 	gs.EXPECT().FileExists("kb/foo.md").Return(true, nil)
-	gs.EXPECT().DeleteFile("kb/foo.md", gomock.Any()).DoAndReturn(func(path, msg string) (string, error) {
+	gs.EXPECT().DeleteFile("kb/foo.md", gomock.Any(), gomock.Any()).DoAndReturn(func(path, msg, operation string) (string, error) {
 		deletedFile = path
 		return "abc123def456", nil
-	})
-	gs.EXPECT().Tag(gomock.Any()).DoAndReturn(func(name string) error {
-		tagSet = name
-		return nil
 	})
 
 	handler := RetractHandler(gs, "kb")
@@ -47,14 +40,6 @@ func TestRetractDeletesFile(t *testing.T) {
 	// Verify file was deleted.
 	if deletedFile != "kb/foo.md" {
 		t.Fatalf("expected kb/foo.md to be deleted, got: %q", deletedFile)
-	}
-
-	// Verify tag was set.
-	if tagSet == "" {
-		t.Fatal("expected retract tag to be set")
-	}
-	if !strings.HasPrefix(tagSet, "retract/") {
-		t.Fatalf("tag should start with retract/, got %q", tagSet)
 	}
 
 	// Verify result JSON.

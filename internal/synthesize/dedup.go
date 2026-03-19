@@ -193,7 +193,7 @@ func dedupCluster(
 
 		// Serialize and write the winner back to git.
 		newContent := mcp.SerializeFact(fullWinner)
-		commitHash, blobHash, err := gs.WriteFile(winnerFact.File, newContent, fmt.Sprintf("dedup: merge %s into %s [%s]", loserFact.File, winnerFact.File, recipeName))
+		commitHash, blobHash, err := gs.WriteFile(winnerFact.File, newContent, fmt.Sprintf("dedup: merge %s into %s [%s]", loserFact.File, winnerFact.File, recipeName), "subsume")
 		if err != nil {
 			return nil, fmt.Errorf("dedupCluster: write winner %q: %w", winnerFact.File, err)
 		}
@@ -215,7 +215,7 @@ func dedupCluster(
 		}
 
 		// Delete the loser from git and the search index.
-		if _, err := gs.DeleteFile(loserFact.File, fmt.Sprintf("dedup: remove duplicate %s (merged into %s) [%s]", loserFact.File, winnerFact.File, recipeName)); err != nil {
+		if _, err := gs.DeleteFile(loserFact.File, fmt.Sprintf("dedup: remove duplicate %s (merged into %s) [%s]", loserFact.File, winnerFact.File, recipeName), "retract"); err != nil {
 			return nil, fmt.Errorf("dedupCluster: delete loser %q: %w", loserFact.File, err)
 		}
 		if err := idx.Delete(loserFact.File); err != nil {

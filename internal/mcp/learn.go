@@ -4,9 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"regexp"
 	"strings"
-	"time"
 
 	"github.com/google/uuid"
 
@@ -21,7 +19,7 @@ func learnTool() mcpgo.Tool {
 		mcpgo.WithDescription("Write one or more facts to the knowledge base in a single commit."),
 		mcpgo.WithString("moment_name",
 			mcpgo.Required(),
-			mcpgo.Description("A short label for this learning moment (used as a git tag)."),
+			mcpgo.Description("A short label for this learning moment."),
 		),
 		mcpgo.WithArray("facts",
 			mcpgo.Required(),
@@ -33,7 +31,7 @@ func learnTool() mcpgo.Tool {
 					"category":   map[string]any{"type": "string", "description": "Category path within the topic (e.g. languages/go/concurrency)."},
 					"title":      map[string]any{"type": "string", "description": "Fact title (short, descriptive)."},
 					"body":       map[string]any{"type": "string", "description": "Fact body in natural language."},
-					"type":       map[string]any{"type": "string", "description": "Epistemic type: observation, concept, process, principle, pattern, or reference.", "default": "observation"},
+					"type":       map[string]any{"type": "string", "description": "Epistemic type: observation (default, concrete facts), concept (definitions), process (procedures), principle (rules/heuristics), pattern (recurring structures), reference (specs/measurements), synthesis (derived from other facts).", "default": "observation"},
 					"domain":     map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Cross-cutting domain tags."},
 					"confidence": map[string]any{"type": "number", "description": "Certainty level 0.0–1.0.", "default": 0.7},
 					"sources":    map[string]any{"type": "integer", "description": "Number of independent sources.", "default": 1},
@@ -58,13 +56,6 @@ type learnFactInput struct {
 	Sources    int      `json:"sources"`
 	Entities   []string `json:"entities"`
 	Refs       []string `json:"refs"`
-}
-
-// sanitizeMomentName replaces characters not in [a-zA-Z0-9._/-] with '-'.
-var nonSafeRe = regexp.MustCompile(`[^a-zA-Z0-9._/\-]`)
-
-func sanitizeMomentName(name string) string {
-	return nonSafeRe.ReplaceAllString(name, "-")
 }
 
 // unionStrings returns the deduplicated union of two string slices, preserving order.
@@ -267,23 +258,12 @@ func LearnHandler(gs GitStore, idx SearchIndex, ontologyRoot string, ontology *f
 
 		// 4. BatchWrite all facts in one commit.
 		commitMsg := fmt.Sprintf("learn: %s", momentName)
-		hash, _, err := gs.BatchWrite(files, commitMsg)
+		hash, _, err := gs.BatchWrite(files, commitMsg, "learn")
 		if err != nil {
 			return mcpgo.NewToolResultError(fmt.Sprintf("write error: %v", err)), nil
 		}
 
-		// 5. Tag.
-		sanitized := sanitizeMomentName(momentName)
-		tagName := "learn/" + sanitized
-		if err := gs.Tag(tagName); err != nil {
-			// Tag already exists — append unix seconds.
-			tagName = fmt.Sprintf("learn/%s-%d", sanitized, time.Now().Unix())
-			if err2 := gs.Tag(tagName); err2 != nil {
-				return mcpgo.NewToolResultError(fmt.Sprintf("tag error: %v", err2)), nil
-			}
-		}
-
-		// 8. Build response.
+		// 5. Build response.
 		type commitEntry struct {
 			File string `json:"file"`
 			Hash string `json:"hash"`
@@ -294,8 +274,7 @@ func LearnHandler(gs GitStore, idx SearchIndex, ontologyRoot string, ontology *f
 		}
 
 		result := map[string]interface{}{
-			"moment_tag": tagName,
-			"commits":    commits,
+			"commits": commits,
 		}
 		out, err := json.Marshal(result)
 		if err != nil {

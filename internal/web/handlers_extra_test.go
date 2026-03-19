@@ -24,7 +24,7 @@ func TestHandleBrowse_ListDirError(t *testing.T) {
 	gs.EXPECT().ListDir("kb/missing").Return(nil, fmt.Errorf("not found"))
 
 	handler := newTestRouter(gs, nil)
-	rr := doRequest(t, handler, http.MethodGet, "/api/v1/browse?path=kb/missing", "")
+	rr := doRequest(t, handler, http.MethodGet, "/api/v1/knomit/browse?path=kb/missing", "")
 
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (empty list on error)", rr.Code)
@@ -45,7 +45,7 @@ func TestHandleFact_NotFound(t *testing.T) {
 	gs.EXPECT().ReadFile("kb/missing.md").Return("", fmt.Errorf("not found"))
 
 	handler := newTestRouter(gs, nil)
-	rr := doRequest(t, handler, http.MethodGet, "/api/v1/fact?path=kb/missing.md", "")
+	rr := doRequest(t, handler, http.MethodGet, "/api/v1/knomit/fact?path=kb/missing.md", "")
 
 	if rr.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404", rr.Code)
@@ -59,7 +59,7 @@ func TestHandleFact_NonFactFallsBackToRaw(t *testing.T) {
 	gs.EXPECT().ReadFile("kb.md").Return("# Knowledge Base\n\nRoot manifest.\n", nil)
 
 	handler := newTestRouter(gs, nil)
-	rr := doRequest(t, handler, http.MethodGet, "/api/v1/fact?path=kb.md", "")
+	rr := doRequest(t, handler, http.MethodGet, "/api/v1/knomit/fact?path=kb.md", "")
 
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body: %s", rr.Code, rr.Body.String())
@@ -99,7 +99,7 @@ func TestHandleSearch_WithFilters(t *testing.T) {
 
 	handler := newTestRouter(gs, mockIdx)
 	rr := doRequest(t, handler, http.MethodGet,
-		"/api/v1/search?q=test&entities=go,chi&domain=web&min_confidence=0.8&limit=10&path=kb/sub", "")
+		"/api/v1/knomit/search?q=test&entities=go,chi&domain=web&min_confidence=0.8&limit=10&path=kb/sub", "")
 
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body: %s", rr.Code, rr.Body.String())
@@ -119,7 +119,7 @@ func TestHandleSearch_LimitCappedAt500(t *testing.T) {
 	})
 
 	handler := newTestRouter(gs, mockIdx)
-	rr := doRequest(t, handler, http.MethodGet, "/api/v1/search?q=test&limit=9999", "")
+	rr := doRequest(t, handler, http.MethodGet, "/api/v1/knomit/search?q=test&limit=9999", "")
 
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rr.Code)
@@ -132,7 +132,7 @@ func TestHandleSearch_InvalidMinConfidence(t *testing.T) {
 	mockIdx := NewMockSearchIndex(ctrl)
 
 	handler := newTestRouter(gs, mockIdx)
-	rr := doRequest(t, handler, http.MethodGet, "/api/v1/search?q=test&min_confidence=bad", "")
+	rr := doRequest(t, handler, http.MethodGet, "/api/v1/knomit/search?q=test&min_confidence=bad", "")
 
 	if rr.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", rr.Code)
@@ -145,7 +145,7 @@ func TestHandleSearch_InvalidLimit(t *testing.T) {
 	mockIdx := NewMockSearchIndex(ctrl)
 
 	handler := newTestRouter(gs, mockIdx)
-	rr := doRequest(t, handler, http.MethodGet, "/api/v1/search?q=test&limit=abc", "")
+	rr := doRequest(t, handler, http.MethodGet, "/api/v1/knomit/search?q=test&limit=abc", "")
 
 	if rr.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", rr.Code)
@@ -159,7 +159,7 @@ func TestHandleSearch_IndexError(t *testing.T) {
 	mockIdx.EXPECT().Search(gomock.Any()).Return(nil, fmt.Errorf("index corrupt"))
 
 	handler := newTestRouter(gs, mockIdx)
-	rr := doRequest(t, handler, http.MethodGet, "/api/v1/search?q=test", "")
+	rr := doRequest(t, handler, http.MethodGet, "/api/v1/knomit/search?q=test", "")
 
 	if rr.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d, want 500", rr.Code)
@@ -174,7 +174,7 @@ func TestHandleHistory_Error(t *testing.T) {
 	gs.EXPECT().LogPaginated("kb/fact.md", 50, "").Return(nil, "", fmt.Errorf("git error"))
 
 	handler := newTestRouter(gs, nil)
-	rr := doRequest(t, handler, http.MethodGet, "/api/v1/history?path=kb/fact.md", "")
+	rr := doRequest(t, handler, http.MethodGet, "/api/v1/knomit/history?path=kb/fact.md", "")
 
 	if rr.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d, want 500", rr.Code)
@@ -186,21 +186,19 @@ func TestHandleHistoryPaginated(t *testing.T) {
 	gs := NewMockGitStore(ctrl)
 
 	entries := []git.LogEntryWithTags{
-		{Commit: "abc12345", Date: "2026-03-14T10:00:00Z", Message: "add fact", Tags: []string{"learn/test"}},
+		{Commit: "abc12345", Date: "2026-03-14T10:00:00Z", Message: "add fact", Operation: "learn"},
 	}
 	gs.EXPECT().LogPaginated("kb/test", 50, "").Return(entries, "def67890", nil)
 
-	handler := handleHistoryPaginated(gs)
-	req := httptest.NewRequest("GET", "/api/v1/history?path=kb/test", nil)
-	w := httptest.NewRecorder()
-	handler.ServeHTTP(w, req)
+	handler := newTestRouter(gs, nil)
+	rr := doRequest(t, handler, http.MethodGet, "/api/v1/knomit/history?path=kb/test", "")
 
-	if w.Code != 200 {
-		t.Fatalf("expected 200, got %d", w.Code)
+	if rr.Code != 200 {
+		t.Fatalf("expected 200, got %d", rr.Code)
 	}
 
 	var resp map[string]any
-	json.Unmarshal(w.Body.Bytes(), &resp)
+	json.Unmarshal(rr.Body.Bytes(), &resp)
 	if resp["next"] != "def67890" {
 		t.Errorf("expected next=def67890, got %v", resp["next"])
 	}
@@ -216,21 +214,19 @@ func TestHandleCommitDetail(t *testing.T) {
 
 	gs.EXPECT().CommitDetail("abc12345").Return(&git.CommitDetailResult{
 		Commit: "abc12345", Date: "2026-03-14T10:00:00Z", Message: "add fact",
-		Tags: []string{"learn/test"},
-		Files: []git.ChangedFile{{Path: "kb/test.md", Action: "added"}},
+		Operation: "learn",
+		Files:     []git.ChangedFile{{Path: "kb/test.md", Action: "added"}},
 	}, nil)
 
-	handler := handleCommitDetail(gs)
-	req := httptest.NewRequest("GET", "/api/v1/commit?hash=abc12345", nil)
-	w := httptest.NewRecorder()
-	handler.ServeHTTP(w, req)
+	handler := newTestRouter(gs, nil)
+	rr := doRequest(t, handler, http.MethodGet, "/api/v1/knomit/commit?hash=abc12345", "")
 
-	if w.Code != 200 {
-		t.Fatalf("expected 200, got %d", w.Code)
+	if rr.Code != 200 {
+		t.Fatalf("expected 200, got %d", rr.Code)
 	}
 
 	var resp git.CommitDetailResult
-	json.Unmarshal(w.Body.Bytes(), &resp)
+	json.Unmarshal(rr.Body.Bytes(), &resp)
 	if len(resp.Files) != 1 || resp.Files[0].Path != "kb/test.md" {
 		t.Errorf("unexpected files: %v", resp.Files)
 	}
@@ -243,30 +239,29 @@ func TestHandleFactAtCommit(t *testing.T) {
 	factContent := "---\ndomain: [test]\nconfidence: 0.8\nsources: 1\nentities: [x]\nrefs: []\n---\n# Title\n\nBody at commit.\n"
 	gs.EXPECT().ReadFileAtCommit("kb/test.md", "abc12345").Return(factContent, nil)
 
-	handler := handleFact(gs)
-	req := httptest.NewRequest("GET", "/api/v1/fact?path=kb/test.md&commit=abc12345", nil)
-	w := httptest.NewRecorder()
-	handler.ServeHTTP(w, req)
+	handler := newTestRouter(gs, nil)
+	rr := doRequest(t, handler, http.MethodGet, "/api/v1/knomit/fact?path=kb/test.md&commit=abc12345", "")
 
-	if w.Code != 200 {
-		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	if rr.Code != 200 {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
 	}
 }
 
 // --- handleStats ---
 
 func TestHandleStats(t *testing.T) {
-	validFact := "---\ndomain: [go, web]\nconfidence: 0.9\nsources: 1\nentities: [chi]\nrefs: []\n---\n# Test\nBody.\n"
-	validFact2 := "---\ndomain: [go]\nconfidence: 0.7\nsources: 1\nentities: [chi, mux]\nrefs: []\n---\n# Test2\nBody2.\n"
-
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
-	gs.EXPECT().ListAll().Return([]string{"kb/a.md", "kb/b.md", "other/c.md"}, nil)
-	gs.EXPECT().ReadFile("kb/a.md").Return(validFact, nil)
-	gs.EXPECT().ReadFile("kb/b.md").Return(validFact2, nil)
+	mockIdx := NewMockSearchIndex(ctrl)
+	mockIdx.EXPECT().Stats("kb/").Return(store.StatsResult{
+		Total:         2,
+		AvgConfidence: 0.8,
+		Domains:       map[string]int{"go": 2, "web": 1},
+		Entities:      map[string]int{"chi": 2, "mux": 1},
+	}, nil)
 
-	handler := newTestRouter(gs, nil)
-	rr := doRequest(t, handler, http.MethodGet, "/api/v1/stats?path=kb/", "")
+	handler := newTestRouter(gs, mockIdx)
+	rr := doRequest(t, handler, http.MethodGet, "/api/v1/knomit/stats?path=kb/", "")
 
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body: %s", rr.Code, rr.Body.String())
@@ -299,51 +294,45 @@ func TestHandleStats(t *testing.T) {
 	}
 }
 
-func TestHandleStats_ListAllError(t *testing.T) {
+func TestHandleStats_IndexError(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
-	gs.EXPECT().ListAll().Return(nil, fmt.Errorf("db error"))
+	mockIdx := NewMockSearchIndex(ctrl)
+	mockIdx.EXPECT().Stats("").Return(store.StatsResult{}, fmt.Errorf("db error"))
 
-	handler := newTestRouter(gs, nil)
-	rr := doRequest(t, handler, http.MethodGet, "/api/v1/stats", "")
+	handler := newTestRouter(gs, mockIdx)
+	rr := doRequest(t, handler, http.MethodGet, "/api/v1/knomit/stats", "")
 
 	if rr.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d, want 500", rr.Code)
 	}
 }
 
-func TestHandleStats_SkipsBadFiles(t *testing.T) {
+func TestHandleStats_NoIndex(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
-	gs.EXPECT().ListAll().Return([]string{"kb/good.md", "kb/unreadable.md", "kb/badparse.md"}, nil)
-	gs.EXPECT().ReadFile("kb/good.md").Return("---\ndomain: [go]\nconfidence: 0.9\nsources: 1\nentities: [x]\nrefs: []\n---\n# Good\nBody.\n", nil)
-	gs.EXPECT().ReadFile("kb/unreadable.md").Return("", fmt.Errorf("read error"))
-	gs.EXPECT().ReadFile("kb/badparse.md").Return("not valid frontmatter at all", nil)
 
 	handler := newTestRouter(gs, nil)
-	rr := doRequest(t, handler, http.MethodGet, "/api/v1/stats", "")
+	rr := doRequest(t, handler, http.MethodGet, "/api/v1/knomit/stats", "")
 
-	if rr.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200", rr.Code)
-	}
-
-	var resp map[string]any
-	json.NewDecoder(rr.Body).Decode(&resp)
-	total := int(resp["total"].(float64))
-	if total != 1 {
-		t.Errorf("total = %d, want 1 (only the good file)", total)
+	if rr.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503", rr.Code)
 	}
 }
 
 func TestHandleStats_NoPath(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
-	gs.EXPECT().ListAll().Return([]string{"a.md", "b.md"}, nil)
-	gs.EXPECT().ReadFile("a.md").Return("---\ndomain: [x]\nconfidence: 1.0\nsources: 1\nentities: [y]\nrefs: []\n---\n# A\nBody.\n", nil)
-	gs.EXPECT().ReadFile("b.md").Return("---\ndomain: [x]\nconfidence: 0.5\nsources: 1\nentities: [z]\nrefs: []\n---\n# B\nBody.\n", nil)
+	mockIdx := NewMockSearchIndex(ctrl)
+	mockIdx.EXPECT().Stats("").Return(store.StatsResult{
+		Total:         2,
+		AvgConfidence: 0.75,
+		Domains:       map[string]int{"x": 2},
+		Entities:      map[string]int{"y": 1, "z": 1},
+	}, nil)
 
-	handler := newTestRouter(gs, nil)
-	rr := doRequest(t, handler, http.MethodGet, "/api/v1/stats", "")
+	handler := newTestRouter(gs, mockIdx)
+	rr := doRequest(t, handler, http.MethodGet, "/api/v1/knomit/stats", "")
 
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rr.Code)
@@ -363,7 +352,7 @@ func TestHandleStatus_HeadCommitError(t *testing.T) {
 	gs.EXPECT().HeadCommit().Return("", fmt.Errorf("no HEAD"))
 
 	handler := newTestRouter(gs, nil)
-	rr := doRequest(t, handler, http.MethodGet, "/api/v1/status", "")
+	rr := doRequest(t, handler, http.MethodGet, "/api/v1/knomit/status", "")
 
 	if rr.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d, want 500", rr.Code)
@@ -377,7 +366,7 @@ func TestHandleSynthesizeStart_NoDeps(t *testing.T) {
 	gs := NewMockGitStore(ctrl)
 
 	handler := newTestRouter(gs, nil) // synthDeps is nil
-	rr := doRequest(t, handler, http.MethodPost, "/api/v1/synthesize", "")
+	rr := doRequest(t, handler, http.MethodPost, "/api/v1/knomit/synthesize", "")
 
 	if rr.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, want 503", rr.Code)
@@ -390,28 +379,19 @@ func TestHandleSynthesizeStart_InvalidRecipe(t *testing.T) {
 
 	hub := NewTaskHub(context.Background())
 	synthDeps := &SynthDeps{Adapter: &fakeAdapter{}}
-	handler := NewRouter(gs, nil, hub, synthDeps, nil, nil, false, "kb")
+	rm := NewRepoManager()
+	rm.Set("knomit", &RepoInstance{
+		Name:      "knomit",
+		GS:        gs,
+		Hub:       hub,
+		SynthDeps: synthDeps,
+	})
+	handler := NewRouter(rm, nil, false, "kb")
 
-	rr := doRequest(t, handler, http.MethodPost, "/api/v1/synthesize", "not: valid: yaml: [[[")
+	rr := doRequest(t, handler, http.MethodPost, "/api/v1/knomit/synthesize", "not: valid: yaml: [[[")
 
 	if rr.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400; body: %s", rr.Code, rr.Body.String())
-	}
-}
-
-// --- handleSync ---
-
-func TestHandleSync_ServiceUnavailable(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	gs := NewMockGitStore(ctrl)
-
-	hub := NewTaskHub(context.Background())
-	handler := NewRouter(gs, nil, hub, nil, nil, nil, false, "kb")
-
-	rr := doRequest(t, handler, http.MethodPost, "/api/v1/sync", "")
-
-	if rr.Code != http.StatusServiceUnavailable {
-		t.Fatalf("status = %d, want 503; body: %s", rr.Code, rr.Body.String())
 	}
 }
 
@@ -424,13 +404,20 @@ func TestHandleEvents_InitialStatus(t *testing.T) {
 	mockIdx := NewMockSearchIndex(ctrl)
 
 	hub := NewTaskHub(context.Background())
-	handler := NewRouter(gs, mockIdx, hub, nil, nil, nil, false, "kb")
+	rm := NewRepoManager()
+	rm.Set("knomit", &RepoInstance{
+		Name: "knomit",
+		GS:   gs,
+		Idx:  mockIdx,
+		Hub:  hub,
+	})
+	handler := NewRouter(rm, nil, false, "kb")
 
 	// Use a context with timeout to end the SSE connection.
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/events", nil).WithContext(ctx)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/knomit/events", nil).WithContext(ctx)
 	rr := httptest.NewRecorder()
 	handler.ServeHTTP(rr, req)
 
@@ -449,12 +436,18 @@ func TestHandleEvents_TaskEvents(t *testing.T) {
 	gs.EXPECT().HeadCommit().Return("abc123", nil).AnyTimes()
 
 	hub := NewTaskHub(context.Background())
-	handler := NewRouter(gs, nil, hub, nil, nil, nil, false, "kb")
+	rm := NewRepoManager()
+	rm.Set("knomit", &RepoInstance{
+		Name: "knomit",
+		GS:   gs,
+		Hub:  hub,
+	})
+	handler := NewRouter(rm, nil, false, "kb")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/events", nil).WithContext(ctx)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/knomit/events", nil).WithContext(ctx)
 	rr := httptest.NewRecorder()
 
 	// Start a manual task after a small delay so the SSE connection is open.
@@ -570,12 +563,18 @@ func TestHandleEvents_SyncAndPushEvents(t *testing.T) {
 	gs.EXPECT().HeadCommit().Return("abc123", nil).AnyTimes()
 
 	hub := NewTaskHub(context.Background())
-	handler := NewRouter(gs, nil, hub, nil, nil, nil, false, "kb")
+	rm := NewRepoManager()
+	rm.Set("knomit", &RepoInstance{
+		Name: "knomit",
+		GS:   gs,
+		Hub:  hub,
+	})
+	handler := NewRouter(rm, nil, false, "kb")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/events", nil).WithContext(ctx)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/knomit/events", nil).WithContext(ctx)
 	rr := httptest.NewRecorder()
 
 	go func() {

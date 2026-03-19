@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"time"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 )
@@ -19,7 +18,7 @@ func retractTool() mcpgo.Tool {
 		),
 		mcpgo.WithString("moment_name",
 			mcpgo.Required(),
-			mcpgo.Description("A short label for this retraction moment (used as a git tag)."),
+			mcpgo.Description("A short label for this retraction moment."),
 		),
 	)
 }
@@ -49,25 +48,14 @@ func RetractHandler(gs GitStore, ontologyRoot string) func(context.Context, mcpg
 
 		// 4. Delete the file.
 		commitMsg := fmt.Sprintf("retract(%s): %s", momentName, file)
-		hash, err := gs.DeleteFile(file, commitMsg)
+		hash, err := gs.DeleteFile(file, commitMsg, "retract")
 		if err != nil {
 			return mcpgo.NewToolResultError(fmt.Sprintf("delete error: %v", err)), nil
 		}
 
-		// 5. Tag.
-		sanitized := sanitizeMomentName(momentName)
-		tagName := "retract/" + sanitized
-		if err := gs.Tag(tagName); err != nil {
-			tagName = fmt.Sprintf("retract/%s-%d", sanitized, time.Now().Unix())
-			if err2 := gs.Tag(tagName); err2 != nil {
-				return mcpgo.NewToolResultError(fmt.Sprintf("tag error: %v", err2)), nil
-			}
-		}
-
 		result := map[string]interface{}{
-			"file":       file,
-			"commit":     hash,
-			"moment_tag": tagName,
+			"file":   file,
+			"commit": hash,
 		}
 		out, err := json.Marshal(result)
 		if err != nil {

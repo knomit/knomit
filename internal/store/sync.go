@@ -71,19 +71,60 @@ func (idx *Index) Sync(git GitReader, branch string) error {
 	return idx.SetLastCommit(branch, head)
 }
 
+// RebuildProgress is called during Rebuild to report progress.
+type RebuildProgress func(done, total int)
+
+// Rebuild clears the last-commit marker and re-indexes every file from HEAD.
+func (idx *Index) Rebuild(git GitReader, branch string, progress RebuildProgress) error {
+	// Clear last_commit to force full rebuild.
+	if err := idx.SetLastCommit(branch, ""); err != nil {
+		return fmt.Errorf("rebuild: clear last commit: %w", err)
+	}
+
+	head, err := git.HeadCommit()
+	if err != nil {
+		return fmt.Errorf("rebuild: head commit: %w", err)
+	}
+
+	paths, err := git.ListAll()
+	if err != nil {
+		return fmt.Errorf("rebuild: list all: %w", err)
+	}
+
+	log.Info().Str("head", head[:8]).Int("files", len(paths)).Msg("index rebuild: starting")
+	for i, path := range paths {
+		if err := idx.indexFile(git, path, head); err != nil {
+			return err
+		}
+		if progress != nil {
+			progress(i+1, len(paths))
+		}
+	}
+	log.Info().Int("files", len(paths)).Msg("index rebuild: complete")
+
+	return idx.SetLastCommit(branch, head)
+}
+
 // indexFile reads a single file from git, parses it as a fact, and upserts
 // it into the index. Files that fail to parse (e.g. kb.md manifest) are
 // silently skipped.
+//
+// commitHash is the fallback; if commit_log has a more specific last-touch
+// commit for this path, that is used instead.
 func (idx *Index) indexFile(git GitReader, path, commitHash string) error {
 	content, blobHash, err := git.ReadFileWithHash(path)
 	if err != nil {
 		return fmt.Errorf("indexFile: read %s: %w", path, err)
 	}
 
+	// Use the most recent non-merge commit that touched this file.
+	if last, lerr := git.LastCommitForPath(path); lerr == nil && last != "" {
+		commitHash = last
+	}
+
 	rec, err := parseFact(path, content, commitHash)
 	if err != nil {
-		log.Debug().Str("path", path).Err(err).Msg("skipping non-fact file")
-		return nil
+		return nil // not a fact file (e.g. kb.md manifest, ontology.yaml)
 	}
 	rec.BlobHash = blobHash
 

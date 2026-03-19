@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	_ "embed"
 	"fmt"
-	"sync"
 
 	storegit "knomit/internal/store/git"
 )
@@ -20,10 +19,10 @@ const BlobObjectType = 3
 // SQLite file with sqlite-vec + GraphQLite extensions, runs the embedded
 // schema, and provides both a go-git Storer and an Index over the shared *sql.DB.
 type Service struct {
-	mu   sync.Mutex
-	db   *sql.DB
-	idx  *Index
-	gits *storegit.Storer
+	db    *sql.DB
+	idx   *Index
+	gits  *storegit.Storer
+	crypt *Crypt // nil if no key material provided
 }
 
 // Open opens (or creates) a unified SQLite database at path, initializes the
@@ -52,6 +51,15 @@ func Open(path string, opts ...Option) (*Service, error) {
 		return nil, fmt.Errorf("store.Open schema: %w", err)
 	}
 
+	// Schema migrations for existing databases.
+	migrations := []string{
+		`ALTER TABLE remotes ADD COLUMN auth_method TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE remotes ADD COLUMN auth_token TEXT NOT NULL DEFAULT ''`,
+	}
+	for _, m := range migrations {
+		db.Exec(m) // ignore "duplicate column" errors
+	}
+
 	// Create vec0 virtual table (dimension is configurable).
 	vecDDL := fmt.Sprintf(
 		`CREATE VIRTUAL TABLE IF NOT EXISTS facts_vec USING vec0(embedding FLOAT[%d] distance_metric=cosine)`,
@@ -74,6 +82,9 @@ func Open(path string, opts ...Option) (*Service, error) {
 	return &Service{db: db, idx: idx, gits: gits}, nil
 }
 
+// SetCrypt sets the encryption provider for credential storage.
+func (s *Service) SetCrypt(c *Crypt) { s.crypt = c }
+
 // Index returns the search index.
 func (s *Service) Index() *Index { return s.idx }
 
@@ -93,16 +104,13 @@ func (s *Service) BeginTx(ctx context.Context, opts *sql.TxOptions) (*sql.Tx, er
 
 // GitWriter is the minimal interface needed for DeleteFact.
 type GitWriter interface {
-	DeleteFile(path, message string) (string, error)
+	DeleteFile(path, message, operation string) (string, error)
 }
 
 // DeleteFact deletes a fact from the git store; the onCommit observer
 // handles index cleanup automatically via idx.Sync.
 func (s *Service) DeleteFact(gw GitWriter, path, message string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if _, err := gw.DeleteFile(path, message); err != nil {
+	if _, err := gw.DeleteFile(path, message, "retract"); err != nil {
 		return fmt.Errorf("DeleteFact git: %w", err)
 	}
 

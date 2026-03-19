@@ -4,6 +4,7 @@ import { api } from './api';
 import type { DirChild, SearchResult } from './api';
 import type { AppState, Action } from './state';
 import { HistoryTimeline } from './HistoryTimeline';
+import { RecentFacts } from './RecentFacts';
 
 interface Props {
   state: AppState;
@@ -19,22 +20,31 @@ export function LeftPanel({ state, dispatch }: Props) {
   const itemRefs = useRef<(HTMLDivElement | null)[]>([]);
   const prevPathRef = useRef(state.currentPath);
   const prevSearchRef = useRef(state.searchQuery);
+  const prevFactRef = useRef(state.selectedFact);
 
   // Load directory listing; auto-preview first item so right panel is always in sync
   // Re-fetches when headCommit changes (e.g. after sync) but preserves selection
   useEffect(() => {
+    if (state.leftMode !== 'browse') return;
     if (state.searchQuery || state.similarTo) return;
-    const isHeadChangeOnly = state.currentPath === prevPathRef.current && state.searchQuery === prevSearchRef.current;
+    const isHeadChangeOnly = state.currentPath === prevPathRef.current && state.searchQuery === prevSearchRef.current && state.selectedFact === prevFactRef.current;
     prevPathRef.current = state.currentPath;
     prevSearchRef.current = state.searchQuery;
-    api.browse(state.currentPath).then(r => {
+    prevFactRef.current = state.selectedFact;
+    api.browse(state.repo, state.currentPath).then(r => {
       const c = r.children || [];
       setChildren(c);
       if (!isHeadChangeOnly) {
-        setSelectedIdx(-1);
+        if (state.selectedFact) {
+          const factName = state.selectedFact.split('/').pop();
+          const idx = c.findIndex(ch => !ch.is_dir && ch.name === factName);
+          setSelectedIdx(idx >= 0 ? idx : -1);
+        } else {
+          setSelectedIdx(-1);
+        }
       }
     }).catch(() => setChildren([]));
-  }, [state.currentPath, state.searchQuery, state.headCommit]);
+  }, [state.currentPath, state.searchQuery, state.headCommit, state.selectedFact]);
 
   // Similarity search — sends fact text through the regular search endpoint
   useEffect(() => {
@@ -42,7 +52,7 @@ export function LeftPanel({ state, dispatch }: Props) {
     setSearchReady(false);
     setSelectedIdx(0);
     const p = new URLSearchParams({ q: state.similarTo.text, limit: '50' });
-    fetch(`/api/v1/search?${p}`).then(r => r.json()).then(r => {
+    fetch(`/api/v1/${state.repo}/search?${p}`).then(r => r.json()).then(r => {
       const results = (r.results || []).filter((sr: { path: string }) => sr.path !== state.similarTo!.path);
       setSearchResults(results);
       setSearchReady(true);
@@ -59,7 +69,7 @@ export function LeftPanel({ state, dispatch }: Props) {
     const savedIdx = selectedIdx;
     setSelectedIdx(0);
     const t = setTimeout(() => {
-      api.search(state.searchQuery).then(r => {
+      api.search(state.repo, state.searchQuery, state.currentPath).then(r => {
         const results = r.results || [];
         setSearchResults(results);
         setSearchReady(true);
@@ -118,33 +128,49 @@ export function LeftPanel({ state, dispatch }: Props) {
   // Keyboard: global shortcuts when search input is NOT focused
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (document.activeElement === searchRef.current) return;
+      const tag = (document.activeElement as HTMLElement)?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
       if (e.key === '/') { e.preventDefault(); searchRef.current?.focus(); }
       if (e.key === 'Escape') {
-        if (state.leftMode === 'history') {
+        if (state.leftMode === 'history' || state.leftMode === 'recent') {
           dispatch({ type: 'EXIT_HISTORY' });
         } else {
           dispatch({ type: 'CLEAR_SEARCH' });
           searchRef.current?.blur();
         }
       }
-      if (e.key === 'h' && state.leftMode !== 'history') { e.preventDefault(); dispatch({ type: 'ENTER_HISTORY' }); }
+      if (e.key === 'h' && state.leftMode === 'browse') { e.preventDefault(); dispatch({ type: 'ENTER_HISTORY' }); }
+      if (e.key === 'r' && state.leftMode !== 'recent') { e.preventDefault(); dispatch({ type: 'ENTER_RECENT' }); }
       if (e.key === 'Backspace' || e.key === 'Delete') { e.preventDefault(); dispatch({ type: 'NAV_BACK' }); }
-      // Browse-mode only shortcuts — skip when in history mode (HistoryTimeline handles its own keys)
-      if (state.leftMode === 'history') return;
+      // Browse-mode only shortcuts — skip when in history/recent mode
+      if (state.leftMode !== 'browse') return;
+      if (state.rightPanelFocused) return; // right panel owns j/k/enter when focused
       if (e.key === 'ArrowDown' || e.key === 'j') { e.preventDefault(); moveSelection(1); }
       if (e.key === 'ArrowUp' || e.key === 'k') { e.preventDefault(); moveSelection(-1); }
-      if (e.key === 'ArrowRight' || e.key === 'Enter') { e.preventDefault(); activateSelected(); }
       if (e.key === 'ArrowLeft' && !isSearchMode) { e.preventDefault(); dispatch({ type: 'GO_UP' }); }
+      if (e.key === 'Enter') { e.preventDefault(); activateSelected(); }
+      if (e.key === 'ArrowRight') {
+        e.preventDefault();
+        const selectedItem = isSearchMode ? searchResults[selectedIdx] : children[selectedIdx];
+        if (!selectedItem) return; // no item selected → do nothing
+        const isDir = !isSearchMode && (selectedItem as { is_dir?: boolean }).is_dir;
+        if (isDir) {
+          activateSelected(); // navigate into directory as before
+        } else {
+          // transfer focus to right panel (fact selected in browse or search mode)
+          dispatch({ type: 'FOCUS_RIGHT_PANEL' });
+        }
+      }
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
   });
 
-  const pathLabel = (name: string) => name.replace(/\.md$/, '');
-
   if (state.leftMode === 'history') {
     return <HistoryTimeline state={state} dispatch={dispatch} />;
+  }
+  if (state.leftMode === 'recent') {
+    return <RecentFacts state={state} dispatch={dispatch} />;
   }
 
   return (
@@ -185,7 +211,7 @@ export function LeftPanel({ state, dispatch }: Props) {
           ) : searchResults.map((r, i) => (
             <div key={r.path} ref={el => { itemRefs.current[i] = el; }} onClick={() => { setSelectedIdx(i); dispatch({ type: 'SELECT_FACT', path: r.path }); }}
               style={{ padding: '8px 12px', cursor: 'pointer', background: i === selectedIdx ? '#2a2a3a' : 'transparent', borderBottom: '1px solid #222' }}>
-              <div style={{ fontSize: 13, color: '#ddd' }}>{r.title || pathLabel(r.path)}</div>
+              <div style={{ fontSize: 13, color: '#ddd' }}>{r.title || r.path}</div>
               <div style={{ fontSize: 11, color: '#666', fontFamily: 'monospace' }}>{r.path}</div>
               <div style={{ fontSize: 11, color: r.score > 75 ? '#4caf50' : r.score > 50 ? '#ff9800' : '#888' }}>
                 score: {Math.round(r.score)}
@@ -203,7 +229,7 @@ export function LeftPanel({ state, dispatch }: Props) {
                   }}
                   style={{ padding: '8px 12px', cursor: 'pointer', background: i === selectedIdx ? '#2a2a3a' : 'transparent', borderBottom: '1px solid #222', display: 'flex', alignItems: 'center', gap: 8 }}>
                   <span style={{ width: 6, height: 6, borderRadius: '50%', background: c.is_dir ? '#7c9' : '#8af', flexShrink: 0, opacity: 0.7 }} />
-                  <span style={{ fontSize: 13, color: '#ddd' }}>{c.is_dir ? c.name : pathLabel(c.name)}</span>
+                  <span style={{ fontSize: 13, color: '#ddd' }}>{c.is_dir ? c.name : c.name}</span>
                 </div>
             ))}
             {children.length === 0 && (

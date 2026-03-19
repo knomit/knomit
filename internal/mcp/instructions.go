@@ -62,6 +62,7 @@ Each fact has YAML frontmatter with:
   - principle: rules, heuristics, causal claims ("Brew below boiling to avoid bitterness")
   - pattern: recurring solutions, idioms ("When X, do Y")
   - reference: specs, measurements, enumerations ("Sencha steeps at 70°C for 60s")
+  - synthesis: higher-order facts derived from other facts (set automatically by the synthesize pipeline)
 - **domain**: cross-cutting tags from additional classification systems (not the primary ontology path)
 - **entities**: all entities this fact mentions (for search and graph queries)
 - **confidence**: 0.0–1.0 certainty level

@@ -45,8 +45,6 @@ func ApplyPruneDecisions(
 	// Track deleted paths to avoid double-deletion when a path appears in
 	// both "retract" decisions and merge source lists.
 	deletedPaths := make(map[string]bool)
-	tagCounter := 0
-
 	log.Info().Int("decisions", len(decisions)).Int("merges", len(merges)).Msg("prune: applying results")
 
 	// Apply decisions.
@@ -57,14 +55,14 @@ func ApplyPruneDecisions(
 		case "retract":
 			msg := fmt.Sprintf("synthesize-%s: retract %s", recipeName, d.Path)
 			deletedPaths[d.Path] = true
-			if _, err := gs.DeleteFile(d.Path, msg); err != nil {
+			if _, err := gs.DeleteFile(d.Path, msg, "retract"); err != nil {
 				onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("retract %s: %v", d.Path, err)})
 				continue
 			}
 			if err := idx.Delete(d.Path); err != nil {
 				onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("index delete %s: %v", d.Path, err)})
 			}
-			tagOp(gs, "retract", recipeName, &tagCounter)
+		
 			onProgress(ProgressEvent{Phase: "detail-retract", Message: "retract " + d.Path})
 			stats.Pruned++
 
@@ -82,7 +80,7 @@ func ApplyPruneDecisions(
 			f.Confidence = d.Confidence
 			updated := mcp.SerializeFact(f)
 			msg := fmt.Sprintf("synthesize-%s: update confidence %s → %.2f", recipeName, d.Path, d.Confidence)
-			commitHash, blobHash, err := gs.WriteFile(d.Path, updated, msg)
+			commitHash, blobHash, err := gs.WriteFile(d.Path, updated, msg, "update")
 			if err != nil {
 				onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("update write %s: %v", d.Path, err)})
 				continue
@@ -101,13 +99,13 @@ func ApplyPruneDecisions(
 			}); err != nil {
 				onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("index upsert %s: %v", d.Path, err)})
 			}
-			tagOp(gs, "update", recipeName, &tagCounter)
+		
 			onProgress(ProgressEvent{Phase: "detail-update", Message: fmt.Sprintf("update %.2f %s", d.Confidence, d.Path)})
 			stats.Updated++
 		}
 	}
 
-	// Apply merges: winner gets update tag, losers get retract tag.
+	// Apply merges.
 	for _, m := range merges {
 		mf := m.Merged
 		merged := mcp.Fact{
@@ -123,7 +121,7 @@ func ApplyPruneDecisions(
 		}
 		content := mcp.SerializeFact(merged)
 		msg := fmt.Sprintf("synthesize-%s: merge %s", recipeName, strings.Join(m.Paths, ", "))
-		commitHash, blobHash, err := gs.WriteFile(mf.Path, content, msg)
+		commitHash, blobHash, err := gs.WriteFile(mf.Path, content, msg, "subsume")
 		if err != nil {
 			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("merge write %s: %v", mf.Path, err)})
 			continue
@@ -143,7 +141,7 @@ func ApplyPruneDecisions(
 		if err := idx.GraphAddDerivedFrom(mf.Path, m.Paths); err != nil {
 			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("derived_from %s: %v", mf.Path, err)})
 		}
-		tagOp(gs, "update", recipeName, &tagCounter)
+	
 
 		// Delete source facts (losers get retract tag).
 		for _, src := range m.Paths {
@@ -151,13 +149,13 @@ func ApplyPruneDecisions(
 				continue
 			}
 			srcMsg := fmt.Sprintf("synthesize-%s: subsumed by %s", recipeName, mf.Path)
-			if _, err := gs.DeleteFile(src, srcMsg); err != nil {
+			if _, err := gs.DeleteFile(src, srcMsg, "retract"); err != nil {
 				onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("merge delete source %s: %v", src, err)})
 				continue
 			}
 			_ = idx.Delete(src)
 			deletedPaths[src] = true
-			tagOp(gs, "retract", recipeName, &tagCounter)
+		
 		}
 		onProgress(ProgressEvent{Phase: "detail-merge", Message: "merge " + mf.Path})
 		stats.Merged++
@@ -176,7 +174,6 @@ func ApplyDistillDecisions(
 	onProgress func(ProgressEvent),
 ) (*ReviewStats, error) {
 	stats := &ReviewStats{}
-	tagCounter := 0
 
 	log.Info().Int("synthesized", len(synthesized)).Int("forgotten", len(retract)).Msg("distill: committing results")
 
@@ -197,7 +194,7 @@ func ApplyDistillDecisions(
 		}
 		content := mcp.SerializeFact(f)
 		msg := fmt.Sprintf("synthesize-%s: distill %s", recipeName, df.Path)
-		commitHash, blobHash, err := gs.WriteFile(df.Path, content, msg)
+		commitHash, blobHash, err := gs.WriteFile(df.Path, content, msg, "subsume")
 		if err != nil {
 			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("distill write %s: %v", df.Path, err)})
 			continue
@@ -219,7 +216,7 @@ func ApplyDistillDecisions(
 				onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("derived_from %s: %v", df.Path, err)})
 			}
 		}
-		tagOp(gs, "subsume", recipeName, &tagCounter)
+	
 		onProgress(ProgressEvent{Phase: "detail-learn", Message: "learn " + df.Path})
 		stats.Synthesized++
 	}
@@ -227,12 +224,12 @@ func ApplyDistillDecisions(
 	// Delete subsumed facts.
 	for _, path := range retract {
 		msg := fmt.Sprintf("synthesize-%s: subsumed by distilled fact", recipeName)
-		if _, err := gs.DeleteFile(path, msg); err != nil {
+		if _, err := gs.DeleteFile(path, msg, "retract"); err != nil {
 			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("distill retract %s: %v", path, err)})
 			continue
 		}
 		_ = idx.Delete(path)
-		tagOp(gs, "retract", recipeName, &tagCounter)
+	
 		onProgress(ProgressEvent{Phase: "detail-distill-retract", Message: "retract " + path})
 		stats.Pruned++
 	}

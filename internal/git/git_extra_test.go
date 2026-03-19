@@ -31,8 +31,11 @@ func TestBranch(t *testing.T) {
 func TestDefaultConfig(t *testing.T) {
 	cfg := git.DefaultConfig()
 
-	if cfg.Remote {
-		t.Fatal("DefaultConfig().Remote should be false")
+	if !cfg.Serve {
+		t.Fatal("DefaultConfig().Serve should be true")
+	}
+	if cfg.Origin != "" {
+		t.Fatalf("DefaultConfig().Origin should be empty, got %q", cfg.Origin)
 	}
 	if cfg.Port != "" {
 		t.Fatalf("DefaultConfig().Port should be empty, got %q", cfg.Port)
@@ -98,7 +101,7 @@ func TestDeleteFileRoundtrip(t *testing.T) {
 	defer store.Close()
 
 	// Write a file.
-	if _, _, err := store.WriteFile("general/ephemeral.md", "# Ephemeral\n\nTemporary.\n", "add ephemeral"); err != nil {
+	if _, _, err := store.WriteFile("general/ephemeral.md", "# Ephemeral\n\nTemporary.\n", "add ephemeral", "learn"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -112,7 +115,7 @@ func TestDeleteFileRoundtrip(t *testing.T) {
 	}
 
 	// Delete it.
-	if _, err := store.DeleteFile("general/ephemeral.md", "delete ephemeral"); err != nil {
+	if _, err := store.DeleteFile("general/ephemeral.md", "delete ephemeral", "retract"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -161,10 +164,10 @@ func TestGrepMatchAndNoMatch(t *testing.T) {
 	}
 	defer store.Close()
 
-	if _, _, err := store.WriteFile("general/cats.md", "# Cats\n\nCats are wonderful pets.\n", "add cats"); err != nil {
+	if _, _, err := store.WriteFile("general/cats.md", "# Cats\n\nCats are wonderful pets.\n", "add cats", "learn"); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := store.WriteFile("general/dogs.md", "# Dogs\n\nDogs are loyal companions.\n", "add dogs"); err != nil {
+	if _, _, err := store.WriteFile("general/dogs.md", "# Dogs\n\nDogs are loyal companions.\n", "add dogs", "learn"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -214,7 +217,7 @@ func TestDiffFilesWithDelete(t *testing.T) {
 	defer store.Close()
 
 	// Write a file and record the commit hash.
-	if _, _, err := store.WriteFile("general/willdelete.md", "# Will Delete\n", "add willdelete"); err != nil {
+	if _, _, err := store.WriteFile("general/willdelete.md", "# Will Delete\n", "add willdelete", "learn"); err != nil {
 		t.Fatal(err)
 	}
 	afterAdd, err := store.HeadCommit()
@@ -223,7 +226,7 @@ func TestDiffFilesWithDelete(t *testing.T) {
 	}
 
 	// Delete the file.
-	if _, err := store.DeleteFile("general/willdelete.md", "delete willdelete"); err != nil {
+	if _, err := store.DeleteFile("general/willdelete.md", "delete willdelete", "retract"); err != nil {
 		t.Fatal(err)
 	}
 

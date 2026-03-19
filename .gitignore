@@ -43,6 +43,7 @@ dist/lib/
 
 # Claude Code
 .claude/
+.superpowers/
 
 # Vite cache
 web/.vite/

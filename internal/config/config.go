@@ -11,24 +11,15 @@ import (
 	"knomit/internal/llm"
 )
 
-// RemoteConfig holds git remote authentication settings.
-type RemoteConfig struct {
-	Token    string `toml:"token"`
-	User     string `toml:"user"`
-	Password string `toml:"password"`
-	SSHKey   string `toml:"ssh_key"`
-}
-
 // Config is the root configuration, composed of section structs.
 type Config struct {
-	RepoPath     string       `toml:"repo"`
-	CacheDir     string       `toml:"cache_dir"`
-	Port         string       `toml:"port"`
-	OntologyRoot string       `toml:"ontology_root"`
-	ONNXLibPath  string       `toml:"onnx_lib_path"`
-	LLM          llm.Config   `toml:"llm"`
-	Remote       RemoteConfig `toml:"remote"`
-	Git          git.Config   `toml:"git"`
+	RepoPath     string              `toml:"repo"`
+	Port         string              `toml:"port"`
+	OntologyRoot string              `toml:"ontology_root"`
+	ONNXLibPath  string              `toml:"onnx_lib_path"`
+	LLM          llm.Config          `toml:"llm"`
+	Remote       git.RemoteAuthConfig `toml:"remote"`
+	Git          git.Config          `toml:"git"`
 }
 
 // Defaults returns a Config populated with default values.
@@ -36,7 +27,6 @@ func Defaults() Config {
 	home, _ := os.UserHomeDir()
 	return Config{
 		RepoPath:     home + "/.knomit",
-		CacheDir:     home + "/.cache/knomit",
 		Port:         "3000",
 		OntologyRoot: "kb",
 		LLM:          llm.DefaultConfig(),
@@ -62,24 +52,24 @@ func Load() (Config, error) {
 
 	// Overlay env vars.
 	envOr("KNOMIT_REPO", &cfg.RepoPath)
-	envOr("KNOMIT_CACHE_DIR", &cfg.CacheDir)
 	envOr("KNOMIT_PORT", &cfg.Port)
 	envOr("KNOMIT_LLM_MODEL", &cfg.LLM.Model)
 	envOr("KNOMIT_LLM_PROVIDER", &cfg.LLM.Provider)
 	envOr("KNOMIT_API_KEY", &cfg.LLM.APIKey)
 	envBoolOr("KNOMIT_LLM_CACHE", &cfg.LLM.Cache)
 	envBoolOr("KNOMIT_LLM_BATCH", &cfg.LLM.Batch)
-	envBoolOr("KNOMIT_GIT_REMOTE", &cfg.Git.Remote)
+	envOr("KNOMIT_GIT_ORIGIN", &cfg.Git.Origin)
+	envBoolOr("KNOMIT_GIT_SERVE", &cfg.Git.Serve)
 	envOr("KNOMIT_GIT_PORT", &cfg.Git.Port)
 	envOr("KNOMIT_REMOTE_TOKEN", &cfg.Remote.Token)
 	envOr("KNOMIT_REMOTE_USER", &cfg.Remote.User)
 	envOr("KNOMIT_REMOTE_PASSWORD", &cfg.Remote.Password)
 	envOr("KNOMIT_REMOTE_SSH_KEY", &cfg.Remote.SSHKey)
+	envOr("KNOMIT_REMOTE_AUTH", &cfg.Remote.AuthMethod)
 	envOr("ONNXRUNTIME_SHARED_LIBRARY", &cfg.ONNXLibPath)
 
 	// Expand tildes in path fields.
 	expandTilde(&cfg.RepoPath)
-	expandTilde(&cfg.CacheDir)
 	expandTilde(&cfg.ONNXLibPath)
 	expandTilde(&cfg.Remote.SSHKey)
 

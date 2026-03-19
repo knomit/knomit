@@ -3,30 +3,16 @@ import type { Dispatch } from 'react';
 import { api } from './api';
 import type { HistoryEntryWithTags } from './api';
 import type { AppState, Action } from './state';
+import { relativeTime, opStyles, defaultOpStyle } from './utils';
 
 interface Props {
   state: AppState;
   dispatch: Dispatch<Action>;
 }
 
-function tagColor(tag: string): { color: string; bg: string } {
-  if (tag.startsWith('learn/')) return { color: '#7c9', bg: '#1a2e1a' };
-  if (tag.startsWith('update/')) return { color: '#8af', bg: '#1a1a2e' };
-  if (tag.startsWith('retract/')) return { color: '#f88', bg: '#2e1a1a' };
-  if (tag.startsWith('synthesize/') || tag.startsWith('subsume/')) return { color: '#fa0', bg: '#2e2a1a' };
-  return { color: '#888', bg: '#222' };
-}
-
-function relativeTime(dateStr: string): string {
-  const diff = Date.now() - new Date(dateStr).getTime();
-  const mins = Math.floor(diff / 60000);
-  if (mins < 1) return 'just now';
-  if (mins < 60) return `${mins}m ago`;
-  const hours = Math.floor(mins / 60);
-  if (hours < 24) return `${hours}h ago`;
-  const days = Math.floor(hours / 24);
-  if (days < 30) return `${days}d ago`;
-  return new Date(dateStr).toLocaleDateString();
+function commitStyle(entry: HistoryEntryWithTags): { color: string; bg: string; label: string } {
+  if (entry.operation && opStyles[entry.operation]) return opStyles[entry.operation];
+  return defaultOpStyle;
 }
 
 export function HistoryTimeline({ state, dispatch }: Props) {
@@ -34,6 +20,7 @@ export function HistoryTimeline({ state, dispatch }: Props) {
   const [nextCursor, setNextCursor] = useState<string | undefined>(undefined);
   const [loading, setLoading] = useState(false);
   const [selectedIdx, setSelectedIdx] = useState(0);
+  const [activeOps, setActiveOps] = useState<Set<string>>(new Set());
   const sentinelRef = useRef<HTMLDivElement>(null);
   const itemRefs = useRef<(HTMLDivElement | null)[]>([]);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -44,7 +31,8 @@ export function HistoryTimeline({ state, dispatch }: Props) {
     setEntries([]);
     setNextCursor(undefined);
     setSelectedIdx(0);
-    api.history(state.currentPath).then(r => {
+    setActiveOps(new Set());
+    api.history(state.repo, state.currentPath).then(r => {
       const e = r.entries || [];
       setEntries(e);
       setNextCursor(r.next);
@@ -56,11 +44,31 @@ export function HistoryTimeline({ state, dispatch }: Props) {
     });
   }, [state.currentPath]);
 
+  // Collect distinct operations from loaded entries; add "other" if any have no operation
+  const availableOps = Array.from(new Set(entries.map(e => e.operation || '').filter(Boolean)));
+  const hasOther = entries.some(e => !e.operation);
+  if (hasOther) availableOps.push('other');
+
+  // Filter entries by active operations (empty set = show all)
+  const filtered = activeOps.size === 0 ? entries : entries.filter(e => {
+    if (!e.operation) return activeOps.has('other');
+    return activeOps.has(e.operation);
+  });
+
+  const toggleOp = (op: string) => {
+    setActiveOps(prev => {
+      const next = new Set(prev);
+      if (next.has(op)) next.delete(op); else next.add(op);
+      return next;
+    });
+    setSelectedIdx(0);
+  };
+
   // Infinite scroll via IntersectionObserver
   const loadMore = useCallback(() => {
     if (loading || !nextCursor) return;
     setLoading(true);
-    api.history(state.currentPath, nextCursor).then(r => {
+    api.history(state.repo, state.currentPath, nextCursor).then(r => {
       setEntries(prev => [...prev, ...(r.entries || [])]);
       setNextCursor(r.next);
       setLoading(false);
@@ -78,45 +86,84 @@ export function HistoryTimeline({ state, dispatch }: Props) {
     return () => observer.disconnect();
   }, [loadMore]);
 
+  // Sync selection + scroll when historyCommit is set externally (e.g. from_commit badge click)
+  useEffect(() => {
+    if (!state.historyCommit) return;
+    const idx = filtered.findIndex(e => e.commit === state.historyCommit);
+    if (idx === -1) return; // not yet loaded or filtered out
+    setSelectedIdx(idx);
+    itemRefs.current[idx]?.scrollIntoView({ block: 'nearest' });
+  }, [state.historyCommit, filtered]);
+
   // Keyboard navigation — j/k moves selection and loads commit in right panel
   const navigate = useCallback((delta: 1 | -1) => {
-    const next = Math.max(0, Math.min(selectedIdx + delta, entries.length - 1));
+    const next = Math.max(0, Math.min(selectedIdx + delta, filtered.length - 1));
     setSelectedIdx(next);
     itemRefs.current[next]?.scrollIntoView({ block: 'nearest' });
-    const entry = entries[next];
+    const entry = filtered[next];
     if (entry) dispatch({ type: 'SELECT_COMMIT', commit: entry.commit });
-  }, [selectedIdx, entries, dispatch]);
+  }, [selectedIdx, filtered, dispatch]);
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (entries.length === 0) return;
+      if (state.rightPanelFocused) return; // right panel owns these keys when focused
+      if (filtered.length === 0) return;
       if (e.key === 'ArrowDown' || e.key === 'j') { e.preventDefault(); navigate(1); }
       if (e.key === 'ArrowUp' || e.key === 'k') { e.preventDefault(); navigate(-1); }
       if (e.key === 'Enter') {
         e.preventDefault();
-        const entry = entries[selectedIdx];
+        const entry = filtered[selectedIdx];
         if (entry) dispatch({ type: 'SELECT_COMMIT', commit: entry.commit });
+      }
+      if (e.key === 'ArrowRight') {
+        e.preventDefault();
+        dispatch({ type: 'FOCUS_RIGHT_PANEL' });
       }
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  });
+  }, [state.rightPanelFocused, filtered, selectedIdx, navigate, dispatch]);
 
   return (
     <div ref={containerRef} style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
-      <div style={{ padding: '8px 12px', borderBottom: '1px solid #333', fontSize: 12, color: '#888' }}>
-        History: {state.currentPath}
+      <div style={{ padding: '6px 12px', borderBottom: '1px solid #333', display: 'flex', flexWrap: 'wrap', gap: 4, alignItems: 'center', minHeight: 30 }}>
+        {availableOps.map(op => {
+          const s = opStyles[op] || defaultOpStyle;
+          const active = activeOps.has(op);
+          return (
+            <span
+              key={op}
+              onClick={() => toggleOp(op)}
+              style={{
+                fontSize: 10,
+                padding: '2px 8px',
+                borderRadius: 8,
+                cursor: 'pointer',
+                color: active ? '#fff' : s.color,
+                background: active ? s.color : s.bg,
+                border: `1px solid ${s.color}`,
+                opacity: active ? 1 : 0.6,
+                userSelect: 'none',
+              }}
+            >{op}</span>
+          );
+        })}
+        {availableOps.length === 0 && !loading && (
+          <span style={{ fontSize: 11, color: '#555' }}>No operations</span>
+        )}
       </div>
       <div style={{ flex: 1, overflowY: 'auto', padding: '8px 0' }}>
-        {entries.length === 0 && !loading && (
-          <div style={{ padding: 16, color: '#666', fontSize: 13 }}>No history for this path.</div>
+        {filtered.length === 0 && !loading && (
+          <div style={{ padding: 16, color: '#666', fontSize: 13 }}>
+            {activeOps.size > 0 ? 'No entries match the selected operations.' : 'No history for this path.'}
+          </div>
         )}
-        {entries.map((entry, i) => {
+        {filtered.map((entry, i) => {
           const isSelected = i === selectedIdx;
           const isHighlighted = state.historyCommit === entry.commit;
-          const hasTag = entry.tags && entry.tags.length > 0;
-          const dotSize = hasTag ? 10 : 6;
-          const dotColor = hasTag ? tagColor(entry.tags[0]).color : '#555';
+          const cs = commitStyle(entry);
+          const hasLabel = cs.label !== '';
+          const dotSize = hasLabel ? 10 : 6;
 
           return (
             <div
@@ -144,36 +191,31 @@ export function HistoryTimeline({ state, dispatch }: Props) {
                   width: dotSize,
                   height: dotSize,
                   borderRadius: '50%',
-                  background: dotColor,
+                  background: cs.color,
                   flexShrink: 0,
                   margin: '2px 0',
                 }} />
                 {/* Bottom connector — hide for last entry */}
-                <div style={{ width: 2, background: i === entries.length - 1 ? 'transparent' : '#333', flex: 1 }} />
+                <div style={{ width: 2, background: i === filtered.length - 1 ? 'transparent' : '#333', flex: 1 }} />
               </div>
 
               {/* Commit info */}
               <div style={{ flex: 1, minWidth: 0, paddingLeft: 8, paddingTop: 4, paddingBottom: 4 }}>
-                {/* Tag badges */}
-                {hasTag && (
+                {/* Operation badge */}
+                {hasLabel && (
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginBottom: 2 }}>
-                    {entry.tags.map(tag => {
-                      const tc = tagColor(tag);
-                      return (
-                        <span key={tag} style={{
-                          fontSize: 10,
-                          padding: '1px 6px',
-                          borderRadius: 8,
-                          color: tc.color,
-                          background: tc.bg,
-                          whiteSpace: 'nowrap',
-                        }}>{tag}</span>
-                      );
-                    })}
+                    <span style={{
+                      fontSize: 10,
+                      padding: '1px 6px',
+                      borderRadius: 8,
+                      color: cs.color,
+                      background: cs.bg,
+                      whiteSpace: 'nowrap',
+                    }}>{cs.label}</span>
                   </div>
                 )}
-                {/* Hash + time */}
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                {/* Hash + time + file counts */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                   <span
                     onClick={e => {
                       e.stopPropagation();
@@ -183,6 +225,9 @@ export function HistoryTimeline({ state, dispatch }: Props) {
                   >
                     {entry.commit.slice(0, 7)}
                   </span>
+                  {entry.files?.added ? <span style={{ fontSize: 9, color: '#7c9', fontFamily: 'monospace' }}>{entry.files.added}A</span> : null}
+                  {entry.files?.modified ? <span style={{ fontSize: 9, color: '#8af', fontFamily: 'monospace' }}>{entry.files.modified}M</span> : null}
+                  {entry.files?.deleted ? <span style={{ fontSize: 9, color: '#f88', fontFamily: 'monospace' }}>{entry.files.deleted}D</span> : null}
                   <span style={{ fontSize: 11, color: '#666' }}>{relativeTime(entry.date)}</span>
                 </div>
                 {/* Commit message */}

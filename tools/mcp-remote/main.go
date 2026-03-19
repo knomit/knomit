@@ -6,7 +6,9 @@
 //
 // Usage:
 //
-//	knomit-mcp-remote http://localhost:3000/mcp?profile=chat
+//	knomit-mcp-remote [--repo <name>] [--profile <profile>] <base-url>
+//	knomit-mcp-remote http://localhost:3000
+//	knomit-mcp-remote --repo work --profile chat http://localhost:3000
 //
 // Claude Desktop config:
 //
@@ -14,7 +16,11 @@
 //	  "mcpServers": {
 //	    "knomit": {
 //	      "command": "/path/to/knomit-mcp-remote",
-//	      "args": ["http://localhost:3000/mcp?profile=chat"]
+//	      "args": ["http://localhost:3000"]
+//	    },
+//	    "work-kb": {
+//	      "command": "/path/to/knomit-mcp-remote",
+//	      "args": ["--repo", "work", "http://localhost:3000"]
 //	    }
 //	  }
 //	}
@@ -24,6 +30,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"io"
 	"mime"
@@ -42,13 +49,24 @@ func logDebug(format string, args ...any) {
 }
 
 func main() {
-	if len(os.Args) < 2 {
-		fmt.Fprintf(os.Stderr, "usage: knomit-mcp-remote <url>\n")
-		fmt.Fprintf(os.Stderr, "example: knomit-mcp-remote http://localhost:3000/mcp?profile=chat\n")
+	repo := flag.String("repo", "knomit", "repository name")
+	profile := flag.String("profile", "code", "MCP profile (code, chat, generic)")
+	flag.Usage = func() {
+		fmt.Fprintf(os.Stderr, "usage: knomit-mcp-remote [--repo <name>] [--profile <profile>] <base-url>\n")
+		fmt.Fprintf(os.Stderr, "example: knomit-mcp-remote http://localhost:3000\n")
+		fmt.Fprintf(os.Stderr, "         knomit-mcp-remote --repo work --profile chat http://localhost:3000\n")
+		flag.PrintDefaults()
+	}
+	flag.Parse()
+
+	if flag.NArg() < 1 {
+		flag.Usage()
 		os.Exit(1)
 	}
 
-	serverURL := os.Args[1]
+	baseURL := strings.TrimRight(flag.Arg(0), "/")
+	serverURL := fmt.Sprintf("%s/api/v1/%s/mcp?profile=%s", baseURL, *repo, *profile)
+	logDebug("repo=%s profile=%s url=%s", *repo, *profile, serverURL)
 	client := &http.Client{}
 
 	var (

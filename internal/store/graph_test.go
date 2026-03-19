@@ -488,6 +488,9 @@ func (m *mockGitReader) ReadFileWithHash(path string) (string, string, error) {
 	return c, hash, nil
 }
 func (m *mockGitReader) HeadCommit() (string, error) { return m.head, nil }
+func (m *mockGitReader) LastCommitForPath(path string) (string, error) {
+	return m.head, nil // mock: return head as the last commit
+}
 func (m *mockGitReader) ListAll() ([]string, error) {
 	var paths []string
 	for p := range m.files {

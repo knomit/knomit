@@ -255,7 +255,7 @@ func TestIncrementalSync(t *testing.T) {
 	}
 	defer svc.Close()
 
-	gitStore, err := git.InitWithStorer(svc.GitStorer(), nil)
+	gitStore, err := git.InitWithStorer(svc.GitStorer(), nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -266,10 +266,10 @@ func TestIncrementalSync(t *testing.T) {
 	fact1 := "---\ndomain: [databases]\nconfidence: 0.9\nsources: 2\nentities: [postgres]\nrefs: []\n---\n# Postgres MVCC\n\nPostgres uses multi-version concurrency control.\n"
 	fact2 := "---\ndomain: [caching]\nconfidence: 0.8\nsources: 1\nentities: [redis]\nrefs: []\n---\n# Redis Persistence\n\nRedis supports AOF and RDB persistence.\n"
 
-	if _, _, err := gitStore.WriteFile("kb/postgres-mvcc.md", fact1, "add postgres fact"); err != nil {
+	if _, _, err := gitStore.WriteFile("kb/postgres-mvcc.md", fact1, "add postgres fact", "learn"); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := gitStore.WriteFile("kb/redis-persistence.md", fact2, "add redis fact"); err != nil {
+	if _, _, err := gitStore.WriteFile("kb/redis-persistence.md", fact2, "add redis fact", "learn"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -310,7 +310,7 @@ func TestIncrementalSync(t *testing.T) {
 	// --- Incremental sync ---
 	// Write a third fact. Sync should only index the delta.
 	fact3 := "---\ndomain: [messaging]\nconfidence: 0.95\nsources: 3\nentities: [kafka]\nrefs: []\n---\n# Kafka Partitions\n\nKafka topics are split into partitions for parallelism.\n"
-	if _, _, err := gitStore.WriteFile("kb/kafka-partitions.md", fact3, "add kafka fact"); err != nil {
+	if _, _, err := gitStore.WriteFile("kb/kafka-partitions.md", fact3, "add kafka fact", "learn"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -338,7 +338,7 @@ func TestIncrementalSync(t *testing.T) {
 
 	// --- Delete sync ---
 	// Delete the redis fact and sync; it should be removed from the index.
-	if _, err := gitStore.DeleteFile("kb/redis-persistence.md", "delete: remove redis fact"); err != nil {
+	if _, err := gitStore.DeleteFile("kb/redis-persistence.md", "delete: remove redis fact", "retract"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -368,6 +368,93 @@ func TestIncrementalSync(t *testing.T) {
 	}
 	if lastAfter != headAfter {
 		t.Fatalf("no-op sync changed last_commit unexpectedly")
+	}
+}
+
+// Regression test: commit_hash in the index should be the commit that last
+// touched the file, not the HEAD commit at sync time.
+func TestSyncCommitHashIsLastTouch(t *testing.T) {
+	dir := t.TempDir()
+	svc, err := store.Open(dir + "/test.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer svc.Close()
+
+	gitStore, err := git.InitWithStorer(svc.GitStorer(), nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	idx := svc.Index()
+
+	fact1 := "---\ndomain: [a]\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# Fact A\n\nBody A.\n"
+	fact2 := "---\ndomain: [b]\nconfidence: 0.8\nsources: 1\nentities: []\nrefs: []\n---\n# Fact B\n\nBody B.\n"
+
+	// Commit fact A first.
+	commitA, _, err := gitStore.WriteFile("kb/a.md", fact1, "add A", "learn")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Commit fact B second — this becomes HEAD.
+	_, _, err = gitStore.WriteFile("kb/b.md", fact2, "add B", "learn")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	head, err := gitStore.HeadCommit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if commitA == head {
+		t.Fatal("expected two distinct commits")
+	}
+
+	// Full rebuild sync.
+	if err := idx.Sync(gitStore, gitStore.Branch()); err != nil {
+		t.Fatal(err)
+	}
+
+	recA, err := idx.GetByPath("kb/a.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recA == nil {
+		t.Fatal("expected fact A")
+	}
+	if recA.CommitHash == head {
+		t.Fatalf("fact A commit_hash should be %q (its own commit), not HEAD %q", commitA, head)
+	}
+	if recA.CommitHash != commitA {
+		t.Fatalf("fact A commit_hash = %q, want %q", recA.CommitHash, commitA)
+	}
+
+	// Now modify only fact A — after incremental sync, B should keep its original commit.
+	recB, err := idx.GetByPath("kb/b.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	commitBBefore := recB.CommitHash
+
+	fact1v2 := "---\ndomain: [a]\nconfidence: 0.95\nsources: 2\nentities: []\nrefs: []\n---\n# Fact A v2\n\nUpdated body.\n"
+	commitA2, _, err := gitStore.WriteFile("kb/a.md", fact1v2, "update A", "learn")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := idx.Sync(gitStore, gitStore.Branch()); err != nil {
+		t.Fatal(err)
+	}
+
+	recA, _ = idx.GetByPath("kb/a.md")
+	if recA.CommitHash != commitA2 {
+		t.Fatalf("after update, fact A commit_hash = %q, want %q", recA.CommitHash, commitA2)
+	}
+
+	recB, _ = idx.GetByPath("kb/b.md")
+	if recB.CommitHash != commitBBefore {
+		t.Fatalf("fact B commit_hash changed to %q after unrelated sync, want %q", recB.CommitHash, commitBBefore)
 	}
 }
 
@@ -860,5 +947,83 @@ func TestSearchVecScoringBoost(t *testing.T) {
 	// Fact A (exact cosine match) should score higher than B (slightly lower cosine).
 	if results[0].Score <= results[1].Score {
 		t.Fatalf("expected results[0] > results[1], got %v <= %v", results[0].Score, results[1].Score)
+	}
+}
+
+// ── Stats tests ───────────────────────────────────────────────────────────────
+
+func TestStats_Empty(t *testing.T) {
+	idx, err := store.New(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer idx.Close()
+
+	res, err := idx.Stats("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Total != 0 {
+		t.Errorf("empty index: total = %d, want 0", res.Total)
+	}
+	if res.AvgConfidence != 0 {
+		t.Errorf("empty index: avg_confidence = %v, want 0", res.AvgConfidence)
+	}
+}
+
+func TestStats_Aggregate(t *testing.T) {
+	idx, err := store.New(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer idx.Close()
+
+	insertTestBlob(t, idx.DB(), "b1", "body1")
+	insertTestBlob(t, idx.DB(), "b2", "body2")
+	insertTestBlob(t, idx.DB(), "b3", "body3")
+
+	facts := []store.FactRecord{
+		{Path: "kb/a.md", Title: "A", BlobHash: "b1", Domain: []string{"go", "web"}, Entities: []string{"chi"}, Confidence: 0.9, Sources: 1, CommitHash: "x"},
+		{Path: "kb/b.md", Title: "B", BlobHash: "b2", Domain: []string{"go"}, Entities: []string{"chi", "mux"}, Confidence: 0.7, Sources: 1, CommitHash: "x"},
+		{Path: "other/c.md", Title: "C", BlobHash: "b3", Domain: []string{"infra"}, Entities: []string{"k8s"}, Confidence: 1.0, Sources: 1, CommitHash: "x"},
+	}
+	for _, f := range facts {
+		if err := idx.Upsert(f); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// All facts (no prefix filter).
+	res, err := idx.Stats("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Total != 3 {
+		t.Errorf("total = %d, want 3", res.Total)
+	}
+	if res.Domains["go"] != 2 {
+		t.Errorf("domains[go] = %d, want 2", res.Domains["go"])
+	}
+	if res.Domains["infra"] != 1 {
+		t.Errorf("domains[infra] = %d, want 1", res.Domains["infra"])
+	}
+	if res.Entities["chi"] != 2 {
+		t.Errorf("entities[chi] = %d, want 2", res.Entities["chi"])
+	}
+
+	// Prefix-filtered: only kb/ facts.
+	res, err = idx.Stats("kb/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Total != 2 {
+		t.Errorf("prefix filter: total = %d, want 2", res.Total)
+	}
+	if _, ok := res.Domains["infra"]; ok {
+		t.Error("prefix filter: infra domain should not appear for kb/ prefix")
+	}
+	// avg_confidence for kb/ = (0.9 + 0.7) / 2 = 0.8
+	if res.AvgConfidence != 0.8 {
+		t.Errorf("prefix filter: avg_confidence = %v, want 0.8", res.AvgConfidence)
 	}
 }

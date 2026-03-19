@@ -35,7 +35,16 @@ func TestDefaultType(t *testing.T) {
 }
 
 func TestAllTypesLength(t *testing.T) {
-	if got := len(AllTypes()); got != 6 {
-		t.Fatalf("AllTypes: got %d want 6", got)
+	if got := len(AllTypes()); got != 7 {
+		t.Fatalf("AllTypes: got %d want 7", got)
+	}
+}
+
+func TestSynthesisTypeValid(t *testing.T) {
+	if !Synthesis.Valid() {
+		t.Error("synthesis must be a valid epistemic type")
+	}
+	if err := Synthesis.Validate(); err != nil {
+		t.Errorf("Synthesis.Validate() returned unexpected error: %v", err)
 	}
 }

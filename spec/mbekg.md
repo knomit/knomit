@@ -2,7 +2,7 @@
 
 ## 1. Overview
 
-Knomit (**kno**wledge + co**mmit**) is a knowledge representation system where facts are stored as markdown files in a Git repository. Git's native capabilities (commits, branches, tags, history) handle identity, lineage, timestamps, and versioning — the file itself carries only what Git cannot infer.
+Knomit (**kno**wledge + co**mmit**) is a knowledge representation system where facts are stored as markdown files in a Git repository. Git's native capabilities (commits, branches, history) handle lineage, timestamps, and versioning — the file itself carries only what Git cannot infer.
 
 The system is designed for consumption by AI agents. Human readability is a secondary benefit.
 
@@ -14,6 +14,7 @@ A fact is a single markdown file consisting of YAML frontmatter and a markdown b
 
 ```yaml
 ---
+type: <epistemic_type>
 domain: [<string>, ...]
 confidence: <float 0.0-1.0>
 sources: <integer>
@@ -30,137 +31,154 @@ that an agent would need to understand and apply it.>
 
 ### 2.2 Field Definitions
 
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `domain` | string[] | yes | Flexible categorization tags. A fact can belong to multiple domains. Not tied to directory structure. |
-| `confidence` | float | yes | 0.0 to 1.0. How strongly this fact should be weighted. Guides agent decision-making (e.g., 0.3 = weak signal, 0.9 = near-certain). |
-| `sources` | integer | yes | Count of independent corroborations. Distinct from Git commit count — tracks how many independent agents or observations produced this fact. |
-| `entities` | string[] | yes | Flat list of entity tags for grep-based discovery. Acts as a lightweight search index. |
-| `refs` | string[] | no | Evidence pointers. See Section 4. |
+| Field | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `type` | string | no | `observation` | Epistemic type. One of: `observation`, `concept`, `process`, `principle`, `pattern`, `reference`, `synthesis`. |
+| `domain` | string[] | yes | | Flexible categorization tags. A fact can belong to multiple domains. Not tied to directory structure. |
+| `confidence` | float | yes | | 0.0 to 1.0. How strongly this fact should be weighted. Guides agent decision-making (e.g., 0.3 = weak signal, 0.9 = near-certain). |
+| `sources` | integer | yes | | Count of independent corroborations. Distinct from Git commit count — tracks how many independent agents or observations produced this fact. |
+| `entities` | string[] | yes | | Flat list of entity tags for discovery. Acts as a lightweight search index. |
+| `refs` | string[] | no | `[]` | Evidence pointers: external URLs or local fact file paths. See Section 4. |
 
-### 2.3 What Is NOT in the File
+### 2.3 Epistemic Types
+
+| Type | Meaning |
+|---|---|
+| `observation` | An empirically observed fact (default) |
+| `concept` | A definition or description of a concept |
+| `process` | A sequence of steps or workflow |
+| `principle` | A guiding rule or heuristic |
+| `pattern` | A recurring structure identified across observations |
+| `reference` | A pointer to an external resource or standard |
+| `synthesis` | A higher-order fact derived from other facts via automated synthesis |
+
+### 2.4 What Is NOT in the File
 
 The following are intentionally omitted because Git handles them natively:
 
 | Concept | Git Equivalent |
 |---|---|
-| Fact identity | Commit hash |
-| Creation date | First commit timestamp |
-| Last verified / updated | Latest commit timestamp |
-| Author / source agent | `git log --author` |
+| Fact identity | File path within the ontology |
+| Creation date | First commit timestamp for the file |
+| Last verified / updated | Latest commit timestamp for the file |
+| Author / source agent | Commit author email (see Section 5.3) |
+| Operation type | Commit author email subaddress (e.g. `+learn@`) |
 | Modification history | `git log --follow <file>` |
-| Derived-from lineage | Git commit graph (branch history, parent commits) |
-| Reinforcement count | `git log --follow <file> \| wc -l` |
+| Derived-from lineage | The `refs` field pointing to source fact paths |
 
-## 3. The Ontology (World Structure)
+## 3. The Ontology (Directory Structure)
 
-### 3.1 Directory Tree as Ontology
+### 3.1 Topic-Based Hierarchy
 
-The repository's directory structure defines a strict "is-within" hierarchy called the **ontology**. It represents containment relationships that are unambiguous — a house is on a street, in a city, in a country.
+Facts are organized in a two-level hierarchy: **topic** → **category** → **fact files**. The top-level directory (the **ontology root**, default `kb/`) contains topic directories, each containing category subdirectories.
 
 ```
-know.md
-know/
-  earth.md
-  earth/
-    uk.md
-    uk/
-      london.md
-      london/
-        london-rain-in-april.md
-        baker-street.md
-        baker-street/
-          221b.md
-          221b/
-            house-has-two-floors.md
-            heating-is-gas.md
+kb/
+  kb.md                              ← root manifest
+  domains/
+    ontology.yaml                    ← ontology definition
+  people/
+    individuals/
+      a1b2c3d4.md                    ← fact file (UUID filename)
+      e5f6g7h8.md
+    relationships/
+      i9j0k1l2.md
+  technology/
+    software/
+      m3n4o5p6.md
+    networking/
+      q7r8s9t0.md
+  science/
+    natural/
+      u1v2w3x4.md
 ```
 
-### 3.2 Rules
+### 3.2 Ontology Definition
 
-- **Facts are placed at the most specific level they apply to.** "It rains in London in April" goes in `london/`, not `uk/`.
-- **Facts at higher levels are inherited by everything below.** "The UK drives on the left" applies to London, Manchester, and every address under `uk/`.
-- **Each folder has a sibling manifest file** with the same name and `.md` extension. This file describes what that level of the hierarchy represents. It follows the same fact file schema.
-- **The root is no exception.** `know.md` describes the knowledge base itself.
-- **The ontology is not limited to physical space.** `know/digital/github/repo-x/` is equally valid.
-
-### 3.3 Manifests
-
-A manifest is a fact file that describes the ontology level itself, not something within it. It sits as a sibling to the folder it describes.
+The ontology is defined in a YAML file (`domains/ontology.yaml`) that declares the valid topics and their children:
 
 ```yaml
----
-domain: [geography, urban]
-confidence: 0.99
-sources: 1
-entities: [london, uk, city]
-refs: []
----
-# London
-
-Capital city of the United Kingdom. Population ~9 million.
-Located in southeastern England on the River Thames.
+id: general
+name: General Knowledge
+description: >
+  A broad-purpose taxonomy for organizing knowledge by subject area.
+topics:
+  people:
+    description: Individuals, groups, relationships
+    children:
+      individuals:
+        description: Specific persons
+      groups:
+        description: Teams, organizations, communities
+      relationships:
+        description: Connections between people
+  technology:
+    description: Software, hardware, networking, data
+    children:
+      software:
+        description: Languages, frameworks, tools, systems
+      hardware:
+        description: Devices, components, infrastructure
+      ...
 ```
 
-### 3.4 Agent Navigation
+The default ontology ships with 12 top-level topics: people, technology, science, society, culture, geography, history, health, philosophy, religion, business, reference. Custom ontologies can replace it.
 
-1. Agent enters `know/earth/uk/london/`
-2. Reads `london.md` (sibling manifest) — understands what "London" is
-3. Reads fact files in `london/` — learns what is true about London
-4. Walks up to `uk.md`, `earth.md` — inherits higher-level truths
-5. Walks down into subdirectories — explores more specific contexts
+### 3.3 Fact Placement Rules
+
+- **Topic and category are validated** against the ontology definition at write time. Unknown topics are rejected; categories beyond the defined children are allowed (freeform nesting).
+- **Fact filenames are server-generated UUIDs** (8-character prefix), e.g. `a1b2c3d4.md`. Agents supply topic, category, title, and body — the server assigns the path.
+- **Path format:** `<ontologyRoot>/<topic>/<category>/<uuid>.md`
+- **The ontology root is configurable** (default: `kb`).
+- **Topic/category keys** must be lowercase kebab-case: `[a-z0-9]+(-[a-z0-9]+)*`
+
+### 3.4 Root Manifest
+
+`kb.md` is a plain markdown file at the ontology root. It describes the knowledge base itself. It is not a fact — it has no frontmatter and is not indexed.
 
 ## 4. Evidence and References
 
 ### 4.1 The `refs` Field
 
-Each ref is a single string. The format determines how the MCP resolves it:
+Each ref is a plain string. There are two kinds:
 
 | Format | Meaning | Example |
 |---|---|---|
-| `knomit:blob/<hash>/<path>` | Fact in this repo at a specific commit | `knomit:blob/abc1234/know/foo/bar.md` |
-| `knomit://<host>/<repo>/blob/<hash>/<path>` | Fact in a remote repo | `knomit://github.com/org/kb/blob/abc1234/know/foo.md` |
-| `episodic://` URI | Raw event in an episodic database | `episodic://event_88` |
-| `https://` URI | External URL | `https://example.com/source` |
-| Bare hex string | **Deprecated.** Local commit hash, ambiguous across clones | `abc1234` |
+| Local fact path | Another fact in this repository | `kb/technology/software/a1b2c3d4.md` |
+| External URL | An external resource | `https://example.com/source` |
 
-The protocol acts as the type. The MCP parses the scheme and delegates to the appropriate handler.
-
-**Preferred format for local refs:** `knomit:blob/<hash>/<path>`. Bare hex hashes are ambiguous — they break when the knowledge base is cloned to a different machine or when history is rewritten. Always use the fully qualified `knomit:` URI form.
-
-When an MCP tool produces refs from local file paths (e.g. synthesize output), it resolves them automatically to `knomit:blob/<7-char-hash>/<path>` using the last commit for that file.
+Refs ending in `.md` are treated as local fact references. Everything else is treated as an external URL.
 
 ### 4.2 Two Evidence Mechanisms
 
 Evidence chains are resolved through two complementary mechanisms:
 
-**Implicit (Git-native):** Facts committed together in the same learning moment are evidence for each other. The agent finds siblings by looking up the learning moment tag and listing all commits under it. No explicit linking needed.
+**Implicit (Git-native):** Facts committed together in the same learning moment are evidence for each other. A `learn` commit may contain multiple files — all facts in that commit are implicitly linked.
 
-**Explicit (`refs`):** When a fact is derived from facts across different learning moments (e.g., a Weaver agent synthesizing a pattern from 10 independently contributed facts), the `refs` field points to the source commit hashes. This is the cross-cutting evidence link.
+**Explicit (`refs`):** When a fact is derived from other facts (e.g., synthesis merging multiple observations into a pattern), the `refs` field contains the file paths of the source facts. This is the cross-cutting evidence link.
 
 ### 4.3 Evidence Traversal ("Why is this true?")
 
-**Step 1 — Find the fact.**
-```
-grep -rl "entity_name" --include="*.md" know/
-```
+The `explain` MCP tool performs automated breadth-first evidence traversal:
 
-**Step 2 — Find the learning moment.**
-```
-git log --follow --format="%H %s" know/path/to/fact.md
-```
+1. Read the root fact, extract its `refs`
+2. For each local ref (`.md` path), read the referenced fact at the commit when the referrer was last modified
+3. Recursively follow refs up to a maximum depth (default: 10)
+4. Track seen paths to prevent cycles
+5. Return the evidence tree as a paginated session (25 facts per page)
 
-**Step 3 — Find sibling facts (implicit evidence).**
-```
-git tag --contains <commit_hash>
-git log main..<tag> --format="%H %s"
-```
+Manual traversal via git:
 
-**Step 4 — Follow explicit refs.**
-Read the fact's `refs` field. For each bare hash, read the file at that commit. For URIs, resolve via the appropriate protocol handler.
+```
+# Find the fact's history
+git log --follow --format="%H %aN <%aE> %s" kb/path/to/fact.md
 
-**Step 5 — Go deeper (recursive).**
-Each evidence fact can itself be traversed using the same steps, producing a full evidence tree.
+# Find sibling facts committed together
+git show --stat <commit_hash>
+
+# Follow explicit refs
+# Read the fact's refs field, then read each referenced .md file
+```
 
 ## 5. Learning Operations as Git Operations
 
@@ -168,115 +186,168 @@ Each evidence fact can itself be traversed using the same steps, producing a ful
 
 | Learning Operation | Git Operation |
 |---|---|
-| Learn something new | Commit new fact file(s) to agent branch, tag, push |
-| Reinforce a fact | Edit file on agent branch, bump `confidence`/`sources`, commit, tag, push |
-| Contradict / update a fact | Edit file on agent branch, rewrite body and metadata, commit, tag, push |
+| Learn something new | Commit new fact file(s) to agent branch, push |
+| Update a fact | Edit file on agent branch, commit, push |
+| Retract a fact | Delete file from agent branch, commit, push |
+| Synthesize / merge facts | Write merged fact, delete sources, commit, push |
 | Accept knowledge | Merge agent branch into `main` (human or automated) |
-| Name a learning moment | Tag HEAD of agent branch at time of commit |
-| Forget a fact | Delete file from agent branch, commit, tag `forget/<name>`, push |
 | Trace fact history | `git log --follow <file>` |
-| Trace a learning moment | Find tag, then `git log <tag-parent>..<tag>` |
-| Identify contributor | `git log --author` |
+| Filter by operation type | `git log --author="+learn@"` |
+| Identify contributor | `git log --committer` |
 | Roll back understanding | `git revert <commit>` |
 
 ### 5.2 The Agent Branch Model
 
-Each agent (MCP server instance) operates on a **long-lived personal branch** named `agent/<id>`, where `<id>` is typically the machine hostname but is configurable.
+Each agent (MCP server instance) operates on a **long-lived personal branch** named `agent/<id>`, where `<id>` is derived from the machine hostname plus a short hash (e.g. `agent/laptop-a1b2c3`).
 
 ```
-main              ← accepted truth, never written by agents directly
-agent/laptop      ← agent on "laptop" commits here
-agent/server      ← agent on "server" commits here
-synthesize/daily  ← temporary branch for a synthesis run
+main                 ← accepted truth, never written by agents directly
+agent/laptop-a1b2    ← agent on "laptop" commits here
+agent/server-c3d4    ← agent on "server" commits here
 ```
 
-**Write flow (learn, update, forget):**
+**Write flow (learn, update, retract):**
 ```
 1. sync()         pull + merge origin/main into agent branch
-2. commit         write the fact file(s), one commit per fact
-3. tag            tag HEAD with learn/<name> or forget/<name>
-4. push           push agent branch to origin
+2. commit         write the fact file(s), with operation-typed author signature
+3. push           push agent branch to origin
 ```
 
-**Read flow (query, why, explore):**
+**Read flow (query, explain, explore):**
 ```
 1. sync()         ensure agent branch is up-to-date with main
-2. read           read files directly from working tree / HEAD
+2. read           read files directly from HEAD
 ```
 
 **Synthesis flow:**
 ```
-1. Create synthesize/<recipe> branch from agent branch
-2. Execute prune/distill steps, committing results
-3. Tag each step: learn/synthesize-<recipe>-prune, learn/synthesize-<recipe>-distill
-4. Either auto-merge into agent branch and delete, or push for review
+1. Execute prune/distill steps on agent branch, committing results
+2. Each commit carries the appropriate operation in its author signature
+   (subsume for writes, retract for deletions)
 ```
 
-### 5.3 Tag Naming Conventions
+### 5.3 Operation Identity (Author/Committer Convention)
 
-| Tag Pattern | Created By | Meaning |
+Operations are classified using **email subaddressing** in the git commit's author field. The committer field carries the stable agent identity.
+
+```
+Author:    <identity> <<identity>+<operation>@<domain>>
+Committer: <identity> <<identity>@<domain>>
+```
+
+#### Agent Commits
+
+| Field | Value | Example |
 |---|---|---|
-| `learn/<name>` | learn, update | A learning moment; name is caller-supplied |
-| `forget/<name>` | forget | A forgetting moment |
-| `learn/synthesize-<recipe>-prune` | synthesize prune step | Pruning run completed |
-| `learn/synthesize-<recipe>-distill` | synthesize distill step | Distillation run completed |
+| Author | `<agent-id> <<agent-id>+<op>@agents.knomit.io>` | `laptop-a1b2 <laptop-a1b2+learn@agents.knomit.io>` |
+| Committer | `<agent-id> <<agent-id>@agents.knomit.io>` | `laptop-a1b2 <laptop-a1b2@agents.knomit.io>` |
 
-Tag names are sanitized: characters outside `[a-zA-Z0-9._/-]` are replaced with `-`.
+#### Human Commits
+
+Humans use their own email with the `+tag` subaddress convention:
+
+| Field | Value | Example |
+|---|---|---|
+| Author | `<name> <<email>+<op>>` | `Bob <bob+learn@gmail.com>` |
+| Committer | `<name> <<email>>` | `Bob <bob@gmail.com>` |
+
+#### Operations
+
+| Operation | Meaning |
+|---|---|
+| `learn` | New fact(s) added |
+| `update` | Existing fact modified |
+| `retract` | Fact deleted |
+| `subsume` | Facts merged or synthesized |
+| `sync` | Merge commit from remote synchronization |
+
+#### Querying by Operation
+
+```sh
+# All learn operations (agent + human)
+git log --author="+learn@"
+
+# All operations from a specific agent
+git log --author="laptop-a1b2"
+
+# All agent operations (any type)
+git log --author="agents.knomit.io"
+
+# Learn operations from a specific agent
+git log --author="laptop-a1b2+learn"
+```
 
 ### 5.4 Rules
 
 - **Agents never commit directly to `main`.** All knowledge enters through agent branches.
 - **`main` is the accepted truth.** It represents the swarm's consensus.
-- **One fact per commit.** The commit hash is the fact's identity at that point in time.
-- **Agent branches are long-lived.** One branch per agent, many learning moments per branch. Learning moments are identified by tags, not branches.
+- **Learn batches multiple facts in a single commit.** All facts in a learning moment share one commit. Update and retract operate on individual facts.
+- **Agent branches are long-lived.** One branch per agent, many learning moments per branch. Learning moments are identified by the commit's author signature (operation + agent identity).
 - **Fact evolution is in-place.** When understanding changes, the same file is edited and recommitted. Git history shows how the fact evolved.
-- **sync() before every operation.** Agents always merge the latest main before writing, minimizing conflicts.
+- **Deduplication on learn.** When a new fact is near-identical (>0.92 similarity) to an existing fact in the same category, the facts are merged: higher confidence wins the title/body, metadata is unioned, sources are summed.
 
-## 6. Cross-Moment Synthesis (The Weaver Pattern)
+## 6. Synthesis (Prune and Distill)
 
-When an agent identifies patterns across multiple independently learned facts (from different learning moments, potentially from different agents), it creates a higher-order fact:
+Synthesis is a two-phase process that refines the knowledge base by removing redundancy and extracting higher-order patterns.
 
-1. Creates a new learning branch
-2. Commits a new fact file whose `refs` point to the source commit hashes
-3. Opens a PR like any other learning event
-4. On merge, the synthesized fact becomes part of accepted truth
+### 6.1 Prune
 
-The synthesized fact is structurally identical to any other fact. The only difference is that its `refs` contain local commit hashes pointing to the facts it was derived from, rather than external URIs.
+1. Gather all facts and cluster them by semantic similarity (or graph community detection)
+2. For each multi-fact cluster, send to an LLM for review
+3. LLM returns decisions per fact: `keep`, `retract` (delete), or `update` (adjust confidence)
+4. LLM may also propose `merge` entries: combine multiple facts into one, delete sources
+5. Apply decisions: retracted facts are deleted (`retract` operation), merged facts are written (`subsume` operation), source facts deleted (`retract` operation)
+
+### 6.2 Distill
+
+1. Cluster facts at increasing levels of abstraction (RAPTOR-style recursive summarization)
+2. At each depth level, send clusters to LLM for synthesis
+3. LLM produces new higher-order facts (type: `synthesis`) and identifies facts to retract
+4. Synthesized facts are written (`subsume` operation) with `refs` pointing to source fact paths
+5. Retracted facts are deleted (`retract` operation)
+
+### 6.3 Review Mode
+
+Synthesis can run in **review mode** — a multi-turn session where an LLM reviews facts incrementally:
+
+1. Identify dirty facts (changed since last review watermark)
+2. Cluster dirty facts with their neighbors
+3. Generate work items (prune clusters, then distill)
+4. Process one work item per turn, applying decisions after each
+5. Advance the review watermark to HEAD on completion
 
 ## 7. Full Example
 
 ### Repository State
 
 ```
-know.md
-know/
-  earth.md
-  earth/
-    uk.md
-    uk/
-      london.md
-      london/
-        london-rain-in-april.md
-  people.md
+kb/
+  kb.md
+  domains/
+    ontology.yaml
   people/
-    alice.md
-    alice/
-      alice-likes-rock-music.md
-      alice-music-shifts-seasonally.md
+    individuals/
+      a1b2c3d4.md          ← "Alice likes rock music"
+    interests/
+      e5f6g7h8.md          ← "Alice's music taste shifts seasonally"
+  geography/
+    urban/
+      i9j0k1l2.md          ← "London rain in April"
 ```
 
 ### A Ground-Level Fact
 
-`know/people/alice/alice-likes-rock-music.md`
+`kb/people/individuals/a1b2c3d4.md`
 
 ```yaml
 ---
+type: observation
 domain: [personal, music]
 confidence: 0.85
 sources: 3
 entities: [alice, rock_music]
 refs:
-  - episodic://spotify-history-2024
+  - https://example.com/spotify-history-2024
 ---
 # Alice likes rock music
 
@@ -286,18 +357,19 @@ purchasing Album X in 2024 and attending Concert Y in 2025.
 
 ### A Synthesized Fact
 
-`know/people/alice/alice-music-shifts-seasonally.md`
+`kb/people/interests/e5f6g7h8.md`
 
 ```yaml
 ---
+type: synthesis
 domain: [personal, music, behavioral_patterns]
 confidence: 0.72
-sources: 10
+sources: 1
 entities: [alice, music_taste, seasonal_patterns]
 refs:
-  - knomit:blob/abc1234/know/people/alice/alice-likes-rock-music.md
-  - knomit:blob/def5678/know/people/alice/alice-bought-album-x.md
-  - knomit:blob/ghi9012/know/people/alice/alice-attended-concert-y.md
+  - kb/people/individuals/a1b2c3d4.md
+  - kb/people/individuals/m3n4o5p6.md
+  - kb/people/individuals/q7r8s9t0.md
 ---
 # Alice's music taste shifts seasonally
 
@@ -309,30 +381,33 @@ in winter.
 
 ## 8. The Search Index (Ephemeral Cache)
 
-Implementations may maintain a local search index to accelerate queries. This index is **not part of the spec** — it is a local optimization that can be rebuilt from the git repo at any time.
+The search index is a local SQLite database that accelerates queries. It is **not part of the spec** — it is a local optimization that can be rebuilt from the git repo at any time.
 
 ### 8.1 Properties
 
-- **Ephemeral.** Never committed to the git repo. Lives only in a local cache directory.
-- **Rebuildable.** Can always be reconstructed by walking the ontology tree and parsing every `.md` file from the current HEAD.
-- **Incrementally maintained.** Updated as facts are written; synced by diffing the git log against the last indexed commit.
-- **Implementation-defined.** Different implementations may use different backends (SQLite, in-memory, etc.).
+- **Ephemeral.** Never committed to the git repo. Lives in the local database alongside the git storer.
+- **Rebuildable.** Reconstructed by walking all `.md` files from HEAD and parsing frontmatter.
+- **Incrementally maintained.** Updated on every commit via an observer; synced by diffing the git log against the last indexed commit.
 
 ### 8.2 What it indexes
 
 For each fact file:
 
-- Path, title, body
-- Frontmatter: domain, entities, confidence, sources, refs
+- Path, title, blob hash
+- Frontmatter: type, domain, entities, confidence, sources, refs
 - Last commit hash
 
-### 8.3 Common capabilities
+Additionally, a **commit log** table tracks per-commit metadata:
 
-- **Full-text search** — BM25 ranking over title, body, entities, domain
-- **Vector similarity search** — cosine similarity over dense embeddings (e.g. 384-dim BERT); enables semantic search beyond keyword matching
-- **Hybrid scoring** — combine BM25 and vector scores (typical split: 60/40)
-- **Synthesis log** — tracks the last-processed commit per recipe name, enabling incremental delta-mode synthesis runs
+- Commit hash, file path, timestamp, message
+- Operation type and author email (extracted from commit author)
+- File action (added, modified, deleted)
+
+### 8.3 Search capabilities
+
+- **Semantic search** — cosine similarity over dense embeddings (384-dim all-MiniLM-L6-v2), with post-filtering by domain, entities, path prefix, and minimum confidence
+- **Graph** — DERIVED_FROM edges between synthesized facts and their sources, enabling lineage queries and community detection for clustering
 
 ### 8.4 Embeddings
 
-Embeddings are also ephemeral and optional. They are computed locally using an ONNX inference model (e.g. `all-MiniLM-L6-v2`) and stored alongside the search index. If the embedding store is absent or disabled, text-based search with filters is used instead of vector similarity.
+Embeddings are ephemeral and optional. They are computed locally using an ONNX inference model and stored in a `sqlite-vec` virtual table. If embeddings are not available, search falls back to returning all facts matching the filters.

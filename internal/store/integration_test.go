@@ -23,7 +23,7 @@ func openTestService(t *testing.T) *Service {
 func TestDeleteFactAtomically(t *testing.T) {
 	svc := openTestService(t)
 
-	gs, err := git.InitWithStorer(svc.GitStorer(), nil)
+	gs, err := git.InitWithStorer(svc.GitStorer(), nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -34,7 +34,7 @@ func TestDeleteFactAtomically(t *testing.T) {
 	})
 
 	// Write a fact
-	_, blobHash, err := gs.WriteFile("kb/test.md", "---\ndomain: []\nconfidence: 1\nsources: 1\nentities: []\nrefs: []\n---\n# Test\n\nBody.", "add test")
+	_, blobHash, err := gs.WriteFile("kb/test.md", "---\ndomain: []\nconfidence: 1\nsources: 1\nentities: []\nrefs: []\n---\n# Test\n\nBody.", "add test", "learn")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,7 +70,7 @@ func TestDeleteFactAtomically(t *testing.T) {
 func TestFullRoundtrip(t *testing.T) {
 	svc := openTestService(t)
 
-	gs, err := git.InitWithStorer(svc.GitStorer(), nil)
+	gs, err := git.InitWithStorer(svc.GitStorer(), nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,7 +82,7 @@ func TestFullRoundtrip(t *testing.T) {
 
 	// Write a fact via git
 	content := "---\ndomain: [databases]\nconfidence: 0.9\nsources: 1\nentities: [postgres]\nrefs: []\n---\n# Postgres is great\n\nPostgreSQL is a powerful RDBMS."
-	_, blobHash, err := gs.WriteFile("kb/db/postgres.md", content, "learn postgres")
+	_, blobHash, err := gs.WriteFile("kb/db/postgres.md", content, "learn postgres", "learn")
 	if err != nil {
 		t.Fatal(err)
 	}

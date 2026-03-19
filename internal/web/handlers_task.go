@@ -1,4 +1,4 @@
-// Async task handlers for long-running operations (synthesis, git sync).
+// Async task handlers for long-running operations (synthesis, rebuild, git sync).
 // Tasks run in the background via TaskHub; clients poll via SSE.
 package web
 
@@ -9,6 +9,7 @@ import (
 	"net/http"
 
 	"github.com/rs/zerolog/log"
+	"knomit/internal/store"
 	"knomit/internal/synthesize"
 )
 
@@ -22,12 +23,14 @@ func writeTaskConflict(w http.ResponseWriter, op string, err error) {
 	writeJSON(w, http.StatusConflict, map[string]any{"op": op, "status": "error", "message": err.Error()})
 }
 
-// handleSynthesizeStart handles POST /api/v1/synthesize.
+// handleSynthesizeStart handles POST /api/v1/{repo}/synthesize.
 // The recipe is validated synchronously so that a malformed recipe
 // produces a 400 immediately rather than an async error. If the recipe
 // is valid, execution proceeds in the background via TaskHub.
-func handleSynthesizeStart(deps *SynthDeps, hub *TaskHub) http.HandlerFunc {
+func handleSynthesizeStart() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		ri := RepoFromContext(r.Context())
+		deps := ri.SynthDeps
 		if deps == nil || deps.Adapter == nil {
 			log.Warn().Msg("synthesize: not available (no LLM configured)")
 			writeError(w, http.StatusServiceUnavailable, "synthesis not available")
@@ -59,16 +62,17 @@ func handleSynthesizeStart(deps *SynthDeps, hub *TaskHub) http.HandlerFunc {
 			emb = deps.Embedder
 		}
 
-		id, err := hub.Start("synth", func(ctx context.Context, emit func(TaskEvent)) {
-			emit(TaskEvent{Status: "running", Phase: "start", Message: "synthesis starting"})
+		repo := ri.Name
+		id, err := ri.Hub.Start("synth", func(ctx context.Context, emit func(TaskEvent)) {
+			emit(TaskEvent{Status: "running", Phase: "start", Message: "synthesis starting", Repo: repo})
 			onProgress := func(ev synthesize.ProgressEvent) {
-				emit(TaskEvent{Status: "running", Phase: ev.Phase, Message: ev.Message})
+				emit(TaskEvent{Status: "running", Phase: ev.Phase, Message: ev.Message, Repo: repo})
 			}
 			if err := synthesize.Run(ctx, deps.GS, deps.Idx, emb, deps.Adapter, recipe, onProgress); err != nil {
-				emit(TaskEvent{Status: "error", Message: err.Error()})
+				emit(TaskEvent{Status: "error", Message: err.Error(), Repo: repo})
 				return
 			}
-			emit(TaskEvent{Status: "done", Message: "synthesis complete"})
+			emit(TaskEvent{Status: "done", Message: "synthesis complete", Repo: repo})
 		})
 		if err != nil {
 			writeTaskConflict(w, "synth", err)
@@ -76,6 +80,49 @@ func handleSynthesizeStart(deps *SynthDeps, hub *TaskHub) http.HandlerFunc {
 		}
 
 		writeTaskStarted(w, "synth", id)
+	}
+}
+
+// handleRebuild handles POST /api/v1/{repo}/rebuild.
+// Clears the index last-commit marker and re-indexes every file from HEAD,
+// emitting progress events via TaskHub.
+func handleRebuild() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		ri := RepoFromContext(r.Context())
+		if ri.Svc == nil {
+			writeError(w, http.StatusServiceUnavailable, "index not available")
+			return
+		}
+
+		gitReader, ok := ri.GS.(store.GitReader)
+		if !ok {
+			writeError(w, http.StatusInternalServerError, "git store does not support rebuild")
+			return
+		}
+
+		idx := ri.Svc.Index()
+		branch := ri.GS.Branch()
+
+		repo := ri.Name
+		id, err := ri.Hub.Start("rebuild", func(ctx context.Context, emit func(TaskEvent)) {
+			emit(TaskEvent{Status: "running", Phase: "start", Message: "rebuilding index", Repo: repo})
+			progress := func(done, total int) {
+				if done%10 == 0 || done == total {
+					emit(TaskEvent{Status: "running", Phase: "indexing", Message: fmt.Sprintf("%d/%d files", done, total), Repo: repo})
+				}
+			}
+			if err := idx.Rebuild(gitReader, branch, progress); err != nil {
+				emit(TaskEvent{Status: "error", Message: err.Error(), Repo: repo})
+				return
+			}
+			emit(TaskEvent{Status: "done", Message: "rebuild complete", Repo: repo})
+		})
+		if err != nil {
+			writeTaskConflict(w, "rebuild", err)
+			return
+		}
+
+		writeTaskStarted(w, "rebuild", id)
 	}
 }
 
@@ -90,10 +137,3 @@ steps:
     prompt: Find patterns across facts and create higher-level summaries.
 `
 
-// handleSync handles POST /api/v1/sync
-// TODO: re-wire to trigger the background sync goroutine instead of calling gs.Sync directly.
-func handleSync(gs GitStore, hub *TaskHub) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		writeError(w, http.StatusServiceUnavailable, "sync moved to background goroutine")
-	}
-}

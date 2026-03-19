@@ -45,6 +45,16 @@ export function Console({ state, dispatch }: Props) {
     document.addEventListener('mouseup', onUp);
   }, [consoleHeight, dispatch]);
 
+  // Pick the highest-priority active task for status display.
+  let activeTask: { op: string; status: string; message: string } | null = null;
+  for (const [op, t] of Object.entries(state.tasks)) {
+    if (t.status === 'idle') continue;
+    if (!activeTask || t.status === 'running' || (t.status === 'error' && activeTask.status !== 'running')) {
+      activeTask = { op, ...t };
+    }
+  }
+  const taskColor = activeTask?.status === 'done' ? '#8c8' : activeTask?.status === 'error' ? '#c66' : '#8af';
+
   // Collapsed bar
   if (!consoleOpen) {
     return (
@@ -59,6 +69,11 @@ export function Console({ state, dispatch }: Props) {
         <span style={{ color: '#666', fontSize: 11 }}>Console</span>
         <span style={{ color: '#888', fontSize: 11 }}>{infoCount}</span>
         {errorCount > 0 && <span style={{ color: '#c66', fontSize: 11 }}>{errorCount} err</span>}
+        {activeTask && activeTask.status !== 'idle' && (
+          <span style={{ color: taskColor, fontSize: 11, marginLeft: 4 }}>
+            [{activeTask.op}] {activeTask.message}
+          </span>
+        )}
         <div style={{ flex: 1 }} />
         <span style={{ color: '#666', fontSize: 13 }}>&#x25B2;</span>
       </div>
