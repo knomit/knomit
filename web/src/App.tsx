@@ -192,7 +192,8 @@ export default function App() {
       const ev = JSON.parse(e.data);
       dispatch({ type: 'SET_TASK', op: ev.op, status: ev.status, message: ev.message || '' });
       const level = ev.status === 'error' ? 'error' as const : 'info' as const;
-      dispatch({ type: 'CONSOLE_LOG', level, message: `[${ev.op}] ${ev.message || ev.status}` });
+      const repo = ev.repo ? `${ev.repo}/` : '';
+      dispatch({ type: 'CONSOLE_LOG', level, message: `[${repo}${ev.op}] ${ev.message || ev.status}` });
       // Refresh head when a task completes.
       if (ev.status === 'done' || ev.status === 'error') {
         api.status(state.repo).then(s => dispatch({ type: 'SET_HEAD', head: s.head })).catch(() => {});
