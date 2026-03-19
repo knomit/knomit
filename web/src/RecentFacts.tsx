@@ -36,6 +36,7 @@ export function RecentFacts({ state, dispatch }: Props) {
 
   // Debounce query input
   useEffect(() => {
+    if (query === activeQuery) return;
     const t = setTimeout(() => setActiveQuery(query), 300);
     return () => clearTimeout(t);
   }, [query]);
