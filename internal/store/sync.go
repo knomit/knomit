@@ -74,10 +74,22 @@ func (idx *Index) Sync(git GitReader, branch string) error {
 // indexFile reads a single file from git, parses it as a fact, and upserts
 // it into the index. Files that fail to parse (e.g. kb.md manifest) are
 // silently skipped.
+//
+// commitHash is the fallback; if commit_log has a more specific last-touch
+// commit for this path, that is used instead.
 func (idx *Index) indexFile(git GitReader, path, commitHash string) error {
 	content, blobHash, err := git.ReadFileWithHash(path)
 	if err != nil {
 		return fmt.Errorf("indexFile: read %s: %w", path, err)
+	}
+
+	// Use the most recent commit that actually touched this file.
+	var lastCommit string
+	if qerr := idx.db.QueryRow(
+		`SELECT commit_hash FROM commit_log WHERE path = ? ORDER BY rowid DESC LIMIT 1`,
+		path,
+	).Scan(&lastCommit); qerr == nil && lastCommit != "" {
+		commitHash = lastCommit
 	}
 
 	rec, err := parseFact(path, content, commitHash)

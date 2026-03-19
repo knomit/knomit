@@ -371,6 +371,93 @@ func TestIncrementalSync(t *testing.T) {
 	}
 }
 
+// Regression test: commit_hash in the index should be the commit that last
+// touched the file, not the HEAD commit at sync time.
+func TestSyncCommitHashIsLastTouch(t *testing.T) {
+	dir := t.TempDir()
+	svc, err := store.Open(dir + "/test.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer svc.Close()
+
+	gitStore, err := git.InitWithStorer(svc.GitStorer(), nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	idx := svc.Index()
+
+	fact1 := "---\ndomain: [a]\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# Fact A\n\nBody A.\n"
+	fact2 := "---\ndomain: [b]\nconfidence: 0.8\nsources: 1\nentities: []\nrefs: []\n---\n# Fact B\n\nBody B.\n"
+
+	// Commit fact A first.
+	commitA, _, err := gitStore.WriteFile("kb/a.md", fact1, "add A", "learn")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Commit fact B second — this becomes HEAD.
+	_, _, err = gitStore.WriteFile("kb/b.md", fact2, "add B", "learn")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	head, err := gitStore.HeadCommit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if commitA == head {
+		t.Fatal("expected two distinct commits")
+	}
+
+	// Full rebuild sync.
+	if err := idx.Sync(gitStore, gitStore.Branch()); err != nil {
+		t.Fatal(err)
+	}
+
+	recA, err := idx.GetByPath("kb/a.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recA == nil {
+		t.Fatal("expected fact A")
+	}
+	if recA.CommitHash == head {
+		t.Fatalf("fact A commit_hash should be %q (its own commit), not HEAD %q", commitA, head)
+	}
+	if recA.CommitHash != commitA {
+		t.Fatalf("fact A commit_hash = %q, want %q", recA.CommitHash, commitA)
+	}
+
+	// Now modify only fact A — after incremental sync, B should keep its original commit.
+	recB, err := idx.GetByPath("kb/b.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	commitBBefore := recB.CommitHash
+
+	fact1v2 := "---\ndomain: [a]\nconfidence: 0.95\nsources: 2\nentities: []\nrefs: []\n---\n# Fact A v2\n\nUpdated body.\n"
+	commitA2, _, err := gitStore.WriteFile("kb/a.md", fact1v2, "update A", "learn")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := idx.Sync(gitStore, gitStore.Branch()); err != nil {
+		t.Fatal(err)
+	}
+
+	recA, _ = idx.GetByPath("kb/a.md")
+	if recA.CommitHash != commitA2 {
+		t.Fatalf("after update, fact A commit_hash = %q, want %q", recA.CommitHash, commitA2)
+	}
+
+	recB, _ = idx.GetByPath("kb/b.md")
+	if recB.CommitHash != commitBBefore {
+		t.Fatalf("fact B commit_hash changed to %q after unrelated sync, want %q", recB.CommitHash, commitBBefore)
+	}
+}
+
 func TestVec0Available(t *testing.T) {
 	idx, err := store.New(":memory:")
 	if err != nil {
