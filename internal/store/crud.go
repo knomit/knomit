@@ -288,9 +288,10 @@ func scanFactWithBodyFromRows(rows *sql.Rows) (*FactWithBody, error) {
 
 // RecentFactEntry is a lightweight record for the recent-facts endpoint.
 type RecentFactEntry struct {
-	Path        string `json:"path"`
-	Title       string `json:"title"`
-	CommittedAt int64  `json:"committed_at"`
+	Path        string  `json:"path"`
+	Title       string  `json:"title"`
+	CommittedAt int64   `json:"committed_at"`
+	Score       float64 `json:"score,omitempty"`
 }
 
 // RecentFacts returns facts under pathPrefix ordered by most recent commit,
@@ -348,12 +349,14 @@ func (idx *Index) recentFactsSearch(pathPrefix, query string, limit, offset int)
 		return []RecentFactEntry{}, 0, nil
 	}
 
-	// Build path set for SQL IN clause and fetch committed_at
+	// Build score map from search results
+	scoreByPath := make(map[string]float64, len(results))
 	placeholders := make([]string, len(results))
 	args := make([]any, len(results))
 	for i, r := range results {
 		placeholders[i] = "?"
 		args[i] = r.Path
+		scoreByPath[r.Path] = r.Score
 	}
 
 	rows, err := idx.db.Query(
@@ -375,6 +378,7 @@ func (idx *Index) recentFactsSearch(pathPrefix, query string, limit, offset int)
 		if err := rows.Scan(&e.Path, &e.Title, &e.CommittedAt); err != nil {
 			return nil, 0, fmt.Errorf("RecentFacts search scan: %w", err)
 		}
+		e.Score = scoreByPath[e.Path]
 		all = append(all, e)
 	}
 	if err := rows.Err(); err != nil {

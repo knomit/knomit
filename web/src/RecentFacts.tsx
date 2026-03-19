@@ -148,6 +148,7 @@ export function RecentFacts({ state, dispatch }: Props) {
             <div style={{ fontSize: 10, color: '#666', marginTop: 1, display: 'flex', gap: 8 }}>
               <span style={{ fontFamily: 'monospace' }}>{f.path.split('/').pop()}</span>
               <span>{relativeTime(f.committed_at)}</span>
+              {f.score != null && f.score > 0 && <span style={{ color: '#7c9' }}>{Math.round(f.score)}%</span>}
             </div>
           </div>
         ))}
