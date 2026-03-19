@@ -161,6 +161,7 @@ func handleFact() http.HandlerFunc {
 				"entities":    fact.Entities,
 				"refs":        fact.Refs,
 				"from_commit": fromCommit,
+				"commit_hash": fromCommit,
 			})
 			return
 		}
