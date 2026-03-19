@@ -113,7 +113,7 @@ export function RecentFacts({ state, dispatch }: Props) {
 
   return (
     <div ref={containerRef} style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
-      <div style={{ padding: '4px 8px', borderBottom: '1px solid #333', flexShrink: 0 }}>
+      <div style={{ padding: '4px 8px', borderBottom: '1px solid #333', flexShrink: 0, position: 'relative' }}>
         <input
           ref={searchRef}
           value={query}
@@ -121,10 +121,17 @@ export function RecentFacts({ state, dispatch }: Props) {
           placeholder="Search facts…"
           style={{
             width: '100%', background: '#1a1a1a', border: '1px solid #333', borderRadius: 3,
-            color: '#ccc', fontSize: 12, padding: '4px 8px', outline: 'none', fontFamily: 'monospace',
+            color: '#ccc', fontSize: 12, padding: '4px 24px 4px 8px', outline: 'none', fontFamily: 'monospace',
             boxSizing: 'border-box',
           }}
         />
+        {query && (
+          <button onClick={() => { setQuery(''); searchRef.current?.focus(); }}
+            style={{ position: 'absolute', right: 12, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', color: '#666', cursor: 'pointer', fontSize: 12, padding: '2px 4px', lineHeight: 1 }}
+            onMouseEnter={e => { e.currentTarget.style.color = '#aaa'; }}
+            onMouseLeave={e => { e.currentTarget.style.color = '#666'; }}
+          >✕</button>
+        )}
       </div>
       <div style={{ flex: 1, overflowY: 'auto', padding: '4px 0' }}>
         {facts.length === 0 && !loading && (
