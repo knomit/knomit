@@ -174,7 +174,7 @@ export function LeftPanel({ state, dispatch }: Props) {
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
+    <div data-testid="left-panel" style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
       {/* Search row */}
       <div style={{ padding: '6px 8px', borderBottom: '1px solid #333' }}>
         <div style={{ position: 'relative' }}>
@@ -190,6 +190,7 @@ export function LeftPanel({ state, dispatch }: Props) {
               if (e.key === 'ArrowUp') { e.preventDefault(); moveSelection(-1); }
               if (e.key === 'Enter') { e.preventDefault(); activateSelected(); }
             }}
+            data-testid="search-input"
             style={{ width: '100%', boxSizing: 'border-box', background: '#1a1a1a', border: '1px solid #333', color: '#eee', padding: '5px 24px 5px 8px', borderRadius: 4, fontSize: 12 }}
           />
           {(state.searchQuery || state.similarTo) && (
@@ -209,7 +210,7 @@ export function LeftPanel({ state, dispatch }: Props) {
               {state.similarTo ? 'No similar facts found' : 'No results'}
             </div>
           ) : searchResults.map((r, i) => (
-            <div key={r.path} ref={el => { itemRefs.current[i] = el; }} onClick={() => { setSelectedIdx(i); dispatch({ type: 'SELECT_FACT', path: r.path }); }}
+            <div key={r.path} data-testid="search-result" data-path={r.path} ref={el => { itemRefs.current[i] = el; }} onClick={() => { setSelectedIdx(i); dispatch({ type: 'SELECT_FACT', path: r.path }); }}
               style={{ padding: '8px 12px', cursor: 'pointer', background: i === selectedIdx ? '#2a2a3a' : 'transparent', borderBottom: '1px solid #222' }}>
               <div style={{ fontSize: 13, color: '#ddd' }}>{r.title || r.path}</div>
               <div style={{ fontSize: 11, color: '#666', fontFamily: 'monospace' }}>{r.path}</div>
@@ -221,7 +222,7 @@ export function LeftPanel({ state, dispatch }: Props) {
         ) : (
           <>
             {children.map((c, i) => (
-                <div key={c.name} ref={el => { itemRefs.current[i] = el; }}
+                <div key={c.name} data-testid="dir-entry" data-name={c.name} data-isdir={String(c.is_dir)} ref={el => { itemRefs.current[i] = el; }}
                   onClick={() => {
                     setSelectedIdx(i);
                     if (c.is_dir) dispatch({ type: 'NAVIGATE', path: `${state.currentPath}/${c.name}` });

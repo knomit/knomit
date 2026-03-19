@@ -59,6 +59,7 @@ export function Console({ state, dispatch }: Props) {
   if (!consoleOpen) {
     return (
       <div
+        data-testid="console"
         onClick={() => dispatch({ type: 'CONSOLE_TOGGLE' })}
         style={{
           height: 24, background: '#0d0d0d', borderTop: '1px solid #222',
@@ -75,14 +76,14 @@ export function Console({ state, dispatch }: Props) {
           </span>
         )}
         <div style={{ flex: 1 }} />
-        <span style={{ color: '#666', fontSize: 13 }}>&#x25B2;</span>
+        <span data-testid="console-toggle" style={{ color: '#666', fontSize: 13 }}>&#x25B2;</span>
       </div>
     );
   }
 
   // Expanded console
   return (
-    <div style={{ flexShrink: 0, display: 'flex', flexDirection: 'column', borderTop: '1px solid #222' }}>
+    <div data-testid="console" style={{ flexShrink: 0, display: 'flex', flexDirection: 'column', borderTop: '1px solid #222' }}>
       {/* Drag handle */}
       <div
         onMouseDown={onMouseDown}
@@ -104,6 +105,7 @@ export function Console({ state, dispatch }: Props) {
         {errorCount > 0 && <span style={{ color: '#c66', fontSize: 11 }}>{errorCount} err</span>}
         <div style={{ flex: 1 }} />
         <span
+          data-testid="console-toggle"
           onClick={() => dispatch({ type: 'CONSOLE_TOGGLE' })}
           style={{ color: '#666', fontSize: 13, cursor: 'pointer' }}
         >&#x25BC;</span>
