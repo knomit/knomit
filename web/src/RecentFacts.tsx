@@ -43,16 +43,19 @@ export function RecentFacts({ state, dispatch }: Props) {
 
   // Fetch when path or activeQuery changes
   useEffect(() => {
+    let cancelled = false;
     setLoading(true);
     setFacts([]);
     setTotal(0);
     setSelectedIdx(0);
     api.recent(state.repo, state.currentPath, activeQuery).then(r => {
+      if (cancelled) return;
       setFacts(r.facts || []);
       setTotal(r.total);
       setLoading(false);
       if (r.facts?.length > 0) dispatch({ type: 'SELECT_FACT', path: r.facts[0].path });
-    }).catch(() => { setFacts([]); setLoading(false); });
+    }).catch(() => { if (!cancelled) { setFacts([]); setLoading(false); } });
+    return () => { cancelled = true; };
   }, [state.currentPath, state.headCommit, activeQuery]);
 
   // Infinite scroll

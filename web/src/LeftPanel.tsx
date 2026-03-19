@@ -25,6 +25,7 @@ export function LeftPanel({ state, dispatch }: Props) {
   // Load directory listing; auto-preview first item so right panel is always in sync
   // Re-fetches when headCommit changes (e.g. after sync) but preserves selection
   useEffect(() => {
+    if (state.leftMode !== 'browse') return;
     if (state.searchQuery || state.similarTo) return;
     const isHeadChangeOnly = state.currentPath === prevPathRef.current && state.searchQuery === prevSearchRef.current && state.selectedFact === prevFactRef.current;
     prevPathRef.current = state.currentPath;
