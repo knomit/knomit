@@ -62,16 +62,17 @@ func handleSynthesizeStart() http.HandlerFunc {
 			emb = deps.Embedder
 		}
 
+		repo := ri.Name
 		id, err := ri.Hub.Start("synth", func(ctx context.Context, emit func(TaskEvent)) {
-			emit(TaskEvent{Status: "running", Phase: "start", Message: "synthesis starting"})
+			emit(TaskEvent{Status: "running", Phase: "start", Message: "synthesis starting", Repo: repo})
 			onProgress := func(ev synthesize.ProgressEvent) {
-				emit(TaskEvent{Status: "running", Phase: ev.Phase, Message: ev.Message})
+				emit(TaskEvent{Status: "running", Phase: ev.Phase, Message: ev.Message, Repo: repo})
 			}
 			if err := synthesize.Run(ctx, deps.GS, deps.Idx, emb, deps.Adapter, recipe, onProgress); err != nil {
-				emit(TaskEvent{Status: "error", Message: err.Error()})
+				emit(TaskEvent{Status: "error", Message: err.Error(), Repo: repo})
 				return
 			}
-			emit(TaskEvent{Status: "done", Message: "synthesis complete"})
+			emit(TaskEvent{Status: "done", Message: "synthesis complete", Repo: repo})
 		})
 		if err != nil {
 			writeTaskConflict(w, "synth", err)
@@ -102,18 +103,19 @@ func handleRebuild() http.HandlerFunc {
 		idx := ri.Svc.Index()
 		branch := ri.GS.Branch()
 
+		repo := ri.Name
 		id, err := ri.Hub.Start("rebuild", func(ctx context.Context, emit func(TaskEvent)) {
-			emit(TaskEvent{Status: "running", Phase: "start", Message: "rebuilding index"})
+			emit(TaskEvent{Status: "running", Phase: "start", Message: "rebuilding index", Repo: repo})
 			progress := func(done, total int) {
 				if done%10 == 0 || done == total {
-					emit(TaskEvent{Status: "running", Phase: "indexing", Message: fmt.Sprintf("%d/%d files", done, total)})
+					emit(TaskEvent{Status: "running", Phase: "indexing", Message: fmt.Sprintf("%d/%d files", done, total), Repo: repo})
 				}
 			}
 			if err := idx.Rebuild(gitReader, branch, progress); err != nil {
-				emit(TaskEvent{Status: "error", Message: err.Error()})
+				emit(TaskEvent{Status: "error", Message: err.Error(), Repo: repo})
 				return
 			}
-			emit(TaskEvent{Status: "done", Message: "rebuild complete"})
+			emit(TaskEvent{Status: "done", Message: "rebuild complete", Repo: repo})
 		})
 		if err != nil {
 			writeTaskConflict(w, "rebuild", err)
