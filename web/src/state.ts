@@ -156,6 +156,10 @@ export function reducer(s: AppState, a: Action): AppState {
         const parentDir = s.currentPath.split('/').slice(0, -1).join('/') || s.currentPath;
         return { ...s, currentPath: parentDir, selectedFact: s.currentPath, leftMode: 'browse' as LeftMode, historyCommit: null, historyFocusPath: null, rightMode: 'fact', rightPanelFocused: false };
       }
+      // Exiting recent mode: clear selectedFact since it may not be a child of currentPath
+      if (s.leftMode === 'recent') {
+        return { ...s, leftMode: 'browse' as LeftMode, selectedFact: null, rightMode: 'summary', historyCommit: null, historyFocusPath: null, rightPanelFocused: false };
+      }
       return { ...s, leftMode: 'browse' as LeftMode, historyCommit: null, historyFocusPath: null, rightPanelFocused: false };
     }
     case 'FACT_HISTORY':
