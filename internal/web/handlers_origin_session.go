@@ -431,6 +431,7 @@ func (rm *RepoManager) handlePreview(sm *SessionManager) http.HandlerFunc {
 // applyRequest is the expected JSON body for POST /origin/session/{sessionID}/apply.
 type applyRequest struct {
 	ConflictStrategy string `json:"conflict_strategy"`
+	Branch           string `json:"branch,omitempty"` // remote branch to track; defaults to test result's default_branch
 }
 
 // applyResult is the JSON payload sent in the "done" phase of an apply SSE stream.
@@ -489,6 +490,12 @@ func (rm *RepoManager) handleApply(sm *SessionManager) http.HandlerFunc {
 			return
 		}
 
+		// Resolve the remote branch to track: explicit request > test result default.
+		remoteBranch := tr.DefaultBranch
+		if req.Branch != "" {
+			remoteBranch = req.Branch
+		}
+
 		ri := RepoFromContext(r.Context())
 
 		// Set SSE headers.
@@ -539,7 +546,7 @@ func (rm *RepoManager) handleApply(sm *SessionManager) http.HandlerFunc {
 			cfg := git.ReplayConfig{
 				Strategy:      strategy,
 				AgentBranch:   agentBranch,
-				DefaultBranch: tr.DefaultBranch,
+				DefaultBranch: remoteBranch,
 				OnProgress: func(current, total int) {
 					sendEvent(map[string]any{
 						"phase":   "replaying",
@@ -572,6 +579,7 @@ func (rm *RepoManager) handleApply(sm *SessionManager) http.HandlerFunc {
 			sess.mu.Lock()
 			sess.State = StateApplied
 			sess.ApplyResult = result
+			sess.RemoteBranch = remoteBranch
 			sess.mu.Unlock()
 
 			log.Info().Str("repo", repo).Str("session_id", sessionID).
@@ -590,6 +598,7 @@ func (rm *RepoManager) handleApply(sm *SessionManager) http.HandlerFunc {
 			sess.mu.Lock()
 			sess.State = StateApplied
 			sess.ApplyResult = result
+			sess.RemoteBranch = remoteBranch
 			sess.mu.Unlock()
 
 			log.Info().Str("repo", repo).Str("session_id", sessionID).
@@ -624,6 +633,7 @@ func extractRefsFromFrontmatter(content string) []string {
 }
 
 // collectBranches iterates references in the storer and returns branch names.
+// collectBranches returns all branch names from the storer, excluding agent/* branches.
 func collectBranches(s *storegit.Storer) []string {
 	var branches []string
 	refIter, err := s.IterReferences()
@@ -638,7 +648,10 @@ func collectBranches(s *storegit.Storer) []string {
 		}
 		name := ref.Name()
 		if name.IsBranch() {
-			branches = append(branches, strings.TrimPrefix(name.String(), "refs/heads/"))
+			short := strings.TrimPrefix(name.String(), "refs/heads/")
+			if !strings.HasPrefix(short, "agent/") {
+				branches = append(branches, short)
+			}
 		}
 	}
 	return branches
@@ -663,7 +676,7 @@ func (rm *RepoManager) handleCommit(sm *SessionManager) http.HandlerFunc {
 		remoteStore := sess.RemoteStore
 		authCfg := sess.Auth
 		remoteURL := sess.URL
-		testResult := sess.TestResult
+		remoteBranch := sess.RemoteBranch
 		sess.mu.Unlock()
 
 		if state != StateApplied {
@@ -675,10 +688,9 @@ func (rm *RepoManager) handleCommit(sm *SessionManager) http.HandlerFunc {
 			return
 		}
 
-		// Resolve the remote's default branch from the test result.
-		defaultBranch := "main"
-		if tr, ok := testResult.(connectivityResult); ok && tr.DefaultBranch != "" {
-			defaultBranch = tr.DefaultBranch
+		// Use the branch chosen during apply; fall back to "main".
+		if remoteBranch == "" {
+			remoteBranch = "main"
 		}
 
 		ri := RepoFromContext(r.Context())
@@ -718,7 +730,7 @@ func (rm *RepoManager) handleCommit(sm *SessionManager) http.HandlerFunc {
 				authToken = authCfg.User + ":" + authCfg.Password
 			}
 
-			if err := ri.Svc.SetRemoteWithAuth("origin", remoteURL, defaultBranch, 300, 300, authMethod, authToken); err != nil {
+			if err := ri.Svc.SetRemoteWithAuth("origin", remoteURL, remoteBranch, 300, 300, authMethod, authToken); err != nil {
 				sendEvent(map[string]string{"phase": "error", "message": fmt.Sprintf("save remote config: %v", err)})
 				return
 			}

@@ -33,6 +33,7 @@ export function ConnectRemoteModal({ repo, onClose }: Props) {
   const [testResult, setTestResult] = useState<TestResult | null>(null);
   const [previewResult, setPreviewResult] = useState<PreviewResult | null>(null);
   const [strategy, setStrategy] = useState<'local' | 'remote'>('local');
+  const [selectedBranch, setSelectedBranch] = useState<string>('');
   const [applyResult, setApplyResult] = useState<ApplyResult | null>(null);
   const [progress, setProgress] = useState('');
   const [error, setError] = useState<{ section: Step; message: string } | null>(null);
@@ -64,7 +65,9 @@ export function ConnectRemoteModal({ repo, onClose }: Props) {
       await new Promise<void>((resolve, reject) => {
         const close = streamTest(repo, sess.session_id, (ev: SSEEvent) => {
           if (ev.phase === 'done') {
-            setTestResult(ev.result as TestResult);
+            const result = ev.result as TestResult;
+            setTestResult(result);
+            setSelectedBranch(result.default_branch);
             setStep('tested');
             setProgress('');
             resolve();
@@ -124,7 +127,7 @@ export function ConnectRemoteModal({ repo, onClose }: Props) {
     setStep('applying');
     setProgress('Merging...');
     try {
-      await streamApply(repo, sessionId, strategy === 'local' ? 'local_wins' : 'remote_wins', (ev: SSEEvent) => {
+      await streamApply(repo, sessionId, strategy === 'local' ? 'local_wins' : 'remote_wins', selectedBranch || undefined, (ev: SSEEvent) => {
         if (ev.phase === 'done') {
           setApplyResult(ev.result as ApplyResult);
           setStep('applied');
@@ -322,8 +325,22 @@ export function ConnectRemoteModal({ repo, onClose }: Props) {
               <span style={{ margin: '0 8px', color: '#444' }}>|</span>
               <span>{testResult.local_fact_count} local</span>
             </div>
-            <div style={{ color: '#888', marginTop: 4 }}>
-              Remote branch: {testResult.default_branch}
+            <div style={{ color: '#888', marginTop: 4, display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span>Remote branch:</span>
+              {testResult.branches.length <= 1 ? (
+                <span>{selectedBranch || testResult.default_branch}</span>
+              ) : (
+                <select
+                  value={selectedBranch}
+                  onChange={e => setSelectedBranch(e.target.value)}
+                  disabled={busy}
+                  style={{ background: '#1a1a1a', border: '1px solid #333', color: '#eee', padding: '2px 6px', borderRadius: 4, fontSize: 13 }}
+                >
+                  {testResult.branches.map(b => (
+                    <option key={b} value={b}>{b}</option>
+                  ))}
+                </select>
+              )}
             </div>
             <div style={{ color: '#888', marginTop: 2 }}>
               Histories: {testResult.history}

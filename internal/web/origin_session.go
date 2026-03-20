@@ -50,9 +50,10 @@ type OriginSession struct {
 	CreatedAt   time.Time
 	LastAccess  time.Time
 	RemoteStore   *git.Store // cloned remote store, set by test handler
-	TestResult    any       // cached result from test step
-	PreviewResult any       // cached result from preview step
-	ApplyResult   any       // cached result from apply step
+	RemoteBranch  string     // remote branch to track, set by apply handler
+	TestResult    any        // cached result from test step
+	PreviewResult any        // cached result from preview step
+	ApplyResult   any        // cached result from apply step
 	mu sync.Mutex
 }
 

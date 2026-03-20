@@ -141,11 +141,14 @@ export function streamPreview(repo: string, sessionId: string, onEvent: (e: SSEE
   return () => es.close();
 }
 
-export async function streamApply(repo: string, sessionId: string, strategy: string, onEvent: (e: SSEEvent) => void): Promise<void> {
+export async function streamApply(repo: string, sessionId: string, strategy: string, branch?: string, onEvent?: (e: SSEEvent) => void): Promise<void> {
+  if (typeof branch === 'function') { onEvent = branch as any; branch = undefined; }
+  const body: Record<string, string> = { conflict_strategy: strategy };
+  if (branch) body.branch = branch;
   const res = await fetch(`${sessionBase(repo, sessionId)}/apply`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ conflict_strategy: strategy }),
+    body: JSON.stringify(body),
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: res.statusText }));
@@ -160,7 +163,7 @@ export async function streamApply(repo: string, sessionId: string, strategy: str
     buf += decoder.decode(value, { stream: true });
     const events = parseSSELines(buf);
     buf = buf.includes('\n') ? buf.slice(buf.lastIndexOf('\n') + 1) : '';
-    for (const ev of events) onEvent(ev);
+    for (const ev of events) onEvent?.(ev);
   }
 }
 
