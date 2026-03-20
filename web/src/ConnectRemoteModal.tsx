@@ -268,13 +268,13 @@ export function ConnectRemoteModal({ repo, onClose }: Props) {
 
   return (
     <div style={overlay}>
-      <div style={modal} onClick={e => e.stopPropagation()}>
+      <div style={modal} onClick={e => e.stopPropagation()} data-testid="connect-remote-modal">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
           <h2 style={{ margin: 0, fontSize: 16 }}>
             {onPage2 ? 'Merge & Sync' : 'Connect Remote'}
           </h2>
           {step !== 'committing' && (
-            <button onClick={handleCancel} style={{ background: 'none', border: 'none', color: '#666', cursor: 'pointer', fontSize: 16 }}>x</button>
+            <button onClick={handleCancel} data-testid="connect-remote-close-btn" style={{ background: 'none', border: 'none', color: '#666', cursor: 'pointer', fontSize: 16 }}>x</button>
           )}
         </div>
 
@@ -283,6 +283,7 @@ export function ConnectRemoteModal({ repo, onClose }: Props) {
           <>
             <label style={label}>Remote URL</label>
             <input
+              data-testid="connect-remote-url-input"
               style={{ ...input, opacity: busy ? 0.5 : 1 }}
               value={url}
               onChange={e => setUrl(e.target.value)}
@@ -333,8 +334,8 @@ export function ConnectRemoteModal({ repo, onClose }: Props) {
             )}
 
             <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 16 }}>
-              <button onClick={handleCancel} style={btn(false, 'danger')}>Cancel</button>
-              <button disabled={!canTest} onClick={handleTest} style={btn(!canTest)}>
+              <button onClick={handleCancel} style={btn(false, 'danger')} data-testid="connect-remote-cancel-btn">Cancel</button>
+              <button disabled={!canTest} onClick={handleTest} style={btn(!canTest)} data-testid="connect-remote-test-btn">
                 Test Connection
               </button>
             </div>
