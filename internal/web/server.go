@@ -69,6 +69,12 @@ type SynthDeps struct {
 //	/git                            — Smart HTTP git remote
 //	/*                              — Embedded SPA with client-side routing fallback
 func NewRouter(rm *RepoManager, gitHandler http.Handler, embeddingsEnabled bool, ontologyRoot string) http.Handler {
+	return NewRouterWithSessionManager(rm, gitHandler, embeddingsEnabled, ontologyRoot, NewSessionManager())
+}
+
+// NewRouterWithSessionManager is like NewRouter but accepts an external SessionManager,
+// useful for testing where the test needs direct access to the session manager.
+func NewRouterWithSessionManager(rm *RepoManager, gitHandler http.Handler, embeddingsEnabled bool, ontologyRoot string, sm *SessionManager) http.Handler {
 	r := chi.NewRouter()
 	r.Use(middleware.Recoverer)
 	if gitHandler != nil {
@@ -97,6 +103,13 @@ func NewRouter(rm *RepoManager, gitHandler http.Handler, embeddingsEnabled bool,
 		sub.Get("/events", handleEvents())
 		sub.Get("/origin", handleGetOrigin())
 		sub.Put("/origin", handleSetOrigin())
+		sub.Post("/origin/session", rm.handleCreateSession(sm))
+		sub.Get("/origin/session/{sessionID}", rm.handleGetSession(sm))
+		sub.Delete("/origin/session/{sessionID}", rm.handleDeleteSession(sm))
+		sub.Get("/origin/session/{sessionID}/test", rm.handleTestConnectivity(sm))
+		sub.Get("/origin/session/{sessionID}/preview", rm.handlePreview(sm))
+		sub.Post("/origin/session/{sessionID}/apply", rm.handleApply(sm))
+		sub.Post("/origin/session/{sessionID}/commit", rm.handleCommit(sm))
 
 		sub.Mount("/mcp", http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 			ri := RepoFromContext(req.Context())

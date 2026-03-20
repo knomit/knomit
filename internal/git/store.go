@@ -33,6 +33,7 @@ import (
 	gogitconfig "github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
+	"github.com/go-git/go-git/v5/plumbing/storer"
 	"github.com/go-git/go-git/v5/plumbing/transport"
 	"github.com/go-git/go-billy/v5/memfs"
 	_ "github.com/mattn/go-sqlite3"
@@ -548,4 +549,114 @@ func InitFromRemote(s *storegit.Storer, originURL string, auth transport.AuthMet
 		log.Warn().Err(err).Msg("commit_log: remote populate failed")
 	}
 	return gs, nil
+}
+
+// DefaultBranch resolves the default branch name from the repo's HEAD ref.
+func (s *Store) DefaultBranch() (string, error) {
+	head, err := s.storer.Reference(plumbing.HEAD)
+	if err != nil {
+		return "", fmt.Errorf("DefaultBranch: resolve HEAD: %w", err)
+	}
+	if head.Type() == plumbing.SymbolicReference {
+		return strings.TrimPrefix(head.Target().String(), "refs/heads/"), nil
+	}
+	// Detached HEAD — fall back to the branch field.
+	return s.branch, nil
+}
+
+// progressWriter adapts a progress callback to io.Writer for use with CloneOptions.Progress.
+type progressWriter struct {
+	fn func(string)
+}
+
+func (pw *progressWriter) Write(p []byte) (int, error) {
+	pw.fn(string(p))
+	return len(p), nil
+}
+
+// CloneInto clones the remote URL into the given storer, returning a new Store.
+func CloneInto(storer *storegit.Storer, url string, auth transport.AuthMethod, progress func(string)) (*Store, error) {
+	opts := &gogit.CloneOptions{
+		URL:  url,
+		Auth: auth,
+	}
+	if progress != nil {
+		opts.Progress = &progressWriter{fn: progress}
+	}
+
+	repo, err := gogit.Clone(storer, memfs.New(), opts)
+	if err != nil {
+		return nil, fmt.Errorf("CloneInto: clone: %w", err)
+	}
+
+	head, err := repo.Head()
+	if err != nil {
+		return nil, fmt.Errorf("CloneInto: resolve HEAD: %w", err)
+	}
+	branch := strings.TrimPrefix(head.Name().String(), "refs/heads/")
+
+	log.Info().Str("branch", branch).Str("url", url).Msg("cloned remote into storer")
+	return &Store{
+		repo:    repo,
+		storer:  storer,
+		db:      storer.DB(),
+		branch:  branch,
+		agentID: deriveAgentID(branch),
+		auth:    auth,
+	}, nil
+}
+
+// HasSharedHistory checks whether the current repo shares any commits with the given remote store.
+// Uses a bounded walk (max 1000 commits) to avoid scanning huge histories.
+func (s *Store) HasSharedHistory(remote *Store) (bool, error) {
+	const maxCommits = 1000
+
+	// Collect local commit hashes.
+	localHashes := make(map[plumbing.Hash]struct{})
+	localHead, err := s.repo.Head()
+	if err != nil {
+		return false, fmt.Errorf("HasSharedHistory: local HEAD: %w", err)
+	}
+	localIter, err := s.repo.Log(&gogit.LogOptions{From: localHead.Hash()})
+	if err != nil {
+		return false, fmt.Errorf("HasSharedHistory: local log: %w", err)
+	}
+	count := 0
+	if err := localIter.ForEach(func(c *object.Commit) error {
+		if count >= maxCommits {
+			return storer.ErrStop
+		}
+		localHashes[c.Hash] = struct{}{}
+		count++
+		return nil
+	}); err != nil {
+		return false, fmt.Errorf("HasSharedHistory: local walk: %w", err)
+	}
+
+	// Walk remote commits and check for overlap.
+	remoteHead, err := remote.repo.Head()
+	if err != nil {
+		return false, fmt.Errorf("HasSharedHistory: remote HEAD: %w", err)
+	}
+	remoteIter, err := remote.repo.Log(&gogit.LogOptions{From: remoteHead.Hash()})
+	if err != nil {
+		return false, fmt.Errorf("HasSharedHistory: remote log: %w", err)
+	}
+	count = 0
+	found := false
+	if err := remoteIter.ForEach(func(c *object.Commit) error {
+		if count >= maxCommits {
+			return storer.ErrStop
+		}
+		if _, ok := localHashes[c.Hash]; ok {
+			found = true
+			return storer.ErrStop
+		}
+		count++
+		return nil
+	}); err != nil {
+		return false, fmt.Errorf("HasSharedHistory: remote walk: %w", err)
+	}
+
+	return found, nil
 }

@@ -173,6 +173,7 @@ func openRepo(
 
 	ri := &web.RepoInstance{
 		Name:       name,
+		DBPath:     dbPath,
 		GS:         gs,
 		Svc:        svc,
 		Idx:        idx,
@@ -181,7 +182,15 @@ func openRepo(
 		SyncWg:     &syncWg,
 	}
 	ri.StartSync = func(remoteURL string) error {
-		remote, err := svc.GetRemote("origin")
+		// Use ri.GS and ri.Svc (not captured gs/svc) so that after SwapStore
+		// the sync loops operate on the current store, not the original one.
+		currentGS, ok := ri.GS.(*git.Store)
+		if !ok {
+			return fmt.Errorf("current store is not a *git.Store")
+		}
+		currentSvc := ri.Svc
+
+		remote, err := currentSvc.GetRemote("origin")
 		if err != nil || remote == nil {
 			return fmt.Errorf("read remote: %w", err)
 		}
@@ -192,9 +201,9 @@ func openRepo(
 		if authErr != nil {
 			return fmt.Errorf("resolve auth: %w", authErr)
 		}
-		gs.SetAuth(auth)
+		currentGS.SetAuth(auth)
 
-		if err := gs.ConfigureRemote(remoteURL, remote.Branch); err != nil {
+		if err := currentGS.ConfigureRemote(remoteURL, remote.Branch); err != nil {
 			return fmt.Errorf("configure remote: %w", err)
 		}
 
@@ -207,8 +216,8 @@ func openRepo(
 		ri.SyncCancel = syncCancel
 
 		syncWg.Add(2)
-		go runSyncLoop(syncCtx, &syncWg, gs, svc, hub, remote, name)
-		go runPushLoop(syncCtx, &syncWg, gs, svc, hub, remote, name)
+		go runSyncLoop(syncCtx, &syncWg, currentGS, currentSvc, hub, remote, name)
+		go runPushLoop(syncCtx, &syncWg, currentGS, currentSvc, hub, remote, name)
 		return nil
 	}
 

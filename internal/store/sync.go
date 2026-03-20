@@ -5,6 +5,7 @@ package store
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/rs/zerolog/log"
 )
@@ -91,6 +92,7 @@ func (idx *Index) Rebuild(git GitReader, branch string, progress RebuildProgress
 		return fmt.Errorf("rebuild: list all: %w", err)
 	}
 
+	start := time.Now()
 	log.Info().Str("head", head[:8]).Int("files", len(paths)).Msg("index rebuild: starting")
 	for i, path := range paths {
 		if err := idx.indexFile(git, path, head); err != nil {
@@ -100,7 +102,16 @@ func (idx *Index) Rebuild(git GitReader, branch string, progress RebuildProgress
 			progress(i+1, len(paths))
 		}
 	}
-	log.Info().Int("files", len(paths)).Msg("index rebuild: complete")
+	elapsed := time.Since(start)
+	avgMs := float64(0)
+	if len(paths) > 0 {
+		avgMs = float64(elapsed.Milliseconds()) / float64(len(paths))
+	}
+	log.Info().
+		Int("files", len(paths)).
+		Str("elapsed", fmt.Sprintf("%.1fs", elapsed.Seconds())).
+		Str("avg_per_file", fmt.Sprintf("%.0fms", avgMs)).
+		Msg("index rebuild: complete")
 
 	return idx.SetLastCommit(branch, head)
 }

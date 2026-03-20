@@ -2,6 +2,7 @@ package web
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/url"
 	"strings"
@@ -11,6 +12,27 @@ import (
 
 // isGitURL returns true if s is a valid git remote URL.
 // Accepts standard URLs (https://, ssh://, git://) and SCP-style (git@host:path).
+// validateURLAuth checks that the auth method is compatible with the URL scheme.
+func validateURLAuth(url, authMethod string) error {
+	isSSH := strings.HasPrefix(url, "git@") || strings.HasPrefix(url, "ssh://")
+	isHTTP := strings.HasPrefix(url, "http://") || strings.HasPrefix(url, "https://")
+	if isHTTP && authMethod == "ssh" {
+		return fmt.Errorf("SSH auth cannot be used with HTTP/HTTPS URLs — use a token or basic auth instead")
+	}
+	if isSSH && (authMethod == "token" || authMethod == "basic") {
+		return fmt.Errorf("token/basic auth cannot be used with SSH URLs — use SSH auth instead")
+	}
+	return nil
+}
+
+// assembleAuthToken returns the appropriate auth token value from the given credentials.
+func assembleAuthToken(authMethod, token, user, password string) string {
+	if authMethod == "basic" && user != "" {
+		return user + ":" + password
+	}
+	return token
+}
+
 func isGitURL(s string) bool {
 	if strings.Contains(s, "://") {
 		_, err := url.Parse(s)
@@ -88,24 +110,15 @@ func handleSetOrigin() http.HandlerFunc {
 		if authMethod == "" && existing != nil {
 			authMethod = existing.AuthMethod
 		}
-		authToken := req.Token
-		if authMethod == "basic" && req.User != "" {
-			authToken = req.User + ":" + req.Password
-		}
+		authToken := assembleAuthToken(authMethod, req.Token, req.User, req.Password)
 		// If no new token provided, keep existing.
 		if authToken == "" && existing != nil {
 			authToken = existing.AuthToken
 		}
 
 		// Validate URL/auth compatibility.
-		isSSHURL := strings.HasPrefix(url, "git@") || strings.HasPrefix(url, "ssh://")
-		isHTTPURL := strings.HasPrefix(url, "http://") || strings.HasPrefix(url, "https://")
-		if isHTTPURL && authMethod == "ssh" {
-			writeError(w, http.StatusBadRequest, "SSH auth cannot be used with HTTP/HTTPS URLs — use a token or basic auth instead")
-			return
-		}
-		if isSSHURL && (authMethod == "token" || authMethod == "basic") {
-			writeError(w, http.StatusBadRequest, "token/basic auth cannot be used with SSH URLs — use SSH auth instead")
+		if err := validateURLAuth(url, authMethod); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
 
