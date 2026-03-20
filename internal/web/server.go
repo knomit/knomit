@@ -76,6 +76,8 @@ func NewRouter(rm *RepoManager, gitHandler http.Handler, embeddingsEnabled bool,
 		r.Mount("/git", gitHandler)
 	}
 
+	sm := NewSessionManager()
+
 	r.Get("/api/v1/openapi.yaml", handleOpenAPISpec())
 	r.Get("/api/v1/repos", handleRepos(rm))
 	r.Get("/docs", handleSwaggerUI())
@@ -97,6 +99,9 @@ func NewRouter(rm *RepoManager, gitHandler http.Handler, embeddingsEnabled bool,
 		sub.Get("/events", handleEvents())
 		sub.Get("/origin", handleGetOrigin())
 		sub.Put("/origin", handleSetOrigin())
+		sub.Post("/origin/session", rm.handleCreateSession(sm))
+		sub.Get("/origin/session/{sessionID}", rm.handleGetSession(sm))
+		sub.Delete("/origin/session/{sessionID}", rm.handleDeleteSession(sm))
 
 		sub.Mount("/mcp", http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 			ri := RepoFromContext(req.Context())
