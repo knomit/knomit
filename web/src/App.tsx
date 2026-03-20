@@ -8,7 +8,7 @@ import { TopBar } from './TopBar';
 import { LeftPanel } from './LeftPanel';
 import { RightPanel } from './RightPanel';
 import { Console } from './Console';
-import { OriginModal } from './OriginModal';
+import { ConnectRemoteModal } from './ConnectRemoteModal';
 import './App.css';
 
 function BreadcrumbPicker({ repo, currentPath, dispatch }: { repo: string; currentPath: string; dispatch: React.Dispatch<Action> }) {
@@ -327,7 +327,7 @@ export default function App() {
         </div>
       </div>
       <Console state={state} dispatch={dispatch} />
-      {showOrigin && <OriginModal repo={state.repo} onClose={() => setShowOrigin(false)} />}
+      {showOrigin && <ConnectRemoteModal repo={state.repo} onClose={() => setShowOrigin(false)} />}
     </div>
   );
 }
