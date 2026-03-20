@@ -17,7 +17,7 @@ type FactRow struct {
 // into memory.
 type FactsIter struct {
 	rows *sql.Rows
-	seen map[string]bool
+	seen map[string]struct{}
 }
 
 // NewFactsIter opens a cursor over the facts table ordered by rowid DESC.
@@ -27,7 +27,7 @@ func NewFactsIter(db *sql.DB) (*FactsIter, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &FactsIter{rows: rows, seen: make(map[string]bool)}, nil
+	return &FactsIter{rows: rows, seen: make(map[string]struct{})}, nil
 }
 
 // Next returns the next unique fact, or nil when iteration is complete.
@@ -38,10 +38,10 @@ func (it *FactsIter) Next() (*FactRow, error) {
 		if err := it.rows.Scan(&row.Path, &row.BlobHash, &row.CommitHash); err != nil {
 			return nil, err
 		}
-		if it.seen[row.Path] {
+		if _, dup := it.seen[row.Path]; dup {
 			continue
 		}
-		it.seen[row.Path] = true
+		it.seen[row.Path] = struct{}{}
 		return &row, nil
 	}
 	return nil, it.rows.Err()

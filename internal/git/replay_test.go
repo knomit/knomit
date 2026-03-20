@@ -2,6 +2,7 @@ package git_test
 
 import (
 	"database/sql"
+	"strings"
 	"testing"
 
 	"github.com/go-git/go-git/v5/plumbing"
@@ -307,10 +308,10 @@ func TestReplay_ResolvesDeadRefs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !contains(content, "https://example.com/source") {
+	if !strings.Contains(content, "https://example.com/source") {
 		t.Fatalf("expected grafted URL ref in fact A, got: %q", content)
 	}
-	if contains(content, "kb/fact-b.md") {
+	if strings.Contains(content, "kb/fact-b.md") {
 		t.Fatalf("expected dead local ref to be removed from fact A, got: %q", content)
 	}
 }
@@ -368,7 +369,7 @@ func TestReplay_DropsOrphanDeadRefs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if contains(content, "kb/fact-b.md") {
+	if strings.Contains(content, "kb/fact-b.md") {
 		t.Fatalf("expected dead ref to be dropped from fact A, got: %q", content)
 	}
 }
@@ -448,20 +449,6 @@ func advanceMainToHead(t *testing.T, s *git.Store) {
 	); err != nil {
 		t.Fatal(err)
 	}
-}
-
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(substr) == 0 ||
-		(len(s) > 0 && len(substr) > 0 && containsStr(s, substr)))
-}
-
-func containsStr(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
 }
 
 // Verify FactsIter is used correctly (compile-time check).

@@ -61,14 +61,8 @@ func (rm *RepoManager) handleCreateSession(sm *SessionManager) http.HandlerFunc 
 		}
 
 		// Validate URL/auth compatibility.
-		isSSHURL := strings.HasPrefix(req.URL, "git@") || strings.HasPrefix(req.URL, "ssh://")
-		isHTTPURL := strings.HasPrefix(req.URL, "http://") || strings.HasPrefix(req.URL, "https://")
-		if isHTTPURL && req.AuthMethod == "ssh" {
-			writeError(w, http.StatusBadRequest, "SSH auth cannot be used with HTTP/HTTPS URLs — use a token or basic auth instead")
-			return
-		}
-		if isSSHURL && (req.AuthMethod == "token" || req.AuthMethod == "basic") {
-			writeError(w, http.StatusBadRequest, "token/basic auth cannot be used with SSH URLs — use SSH auth instead")
+		if err := validateURLAuth(req.URL, req.AuthMethod); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
 
@@ -158,20 +152,9 @@ func (rm *RepoManager) handleTestConnectivity(sm *SessionManager) http.HandlerFu
 
 		ri := RepoFromContext(r.Context())
 
-		// Set SSE headers.
-		w.Header().Set("Content-Type", "text/event-stream")
-		w.Header().Set("Cache-Control", "no-cache")
-		w.Header().Set("Connection", "keep-alive")
-		flusher, ok := w.(http.Flusher)
+		sendEvent, ok := beginSSE(w)
 		if !ok {
-			http.Error(w, "streaming not supported", http.StatusInternalServerError)
 			return
-		}
-
-		sendEvent := func(v any) {
-			data, _ := json.Marshal(v)
-			fmt.Fprintf(w, "data: %s\n\n", data)
-			flusher.Flush()
 		}
 
 		// Phase: connecting.
@@ -237,8 +220,9 @@ CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value BLOB NOT NULL);
 			defaultBranch = cloned.Branch()
 		}
 
-		// List branches from the cloned store's references.
-		branches := collectBranches(storer)
+		// Collect all branch info in a single pass over refs.
+		localAgentBranch := ri.GS.Branch()
+		branches, agentBranches, matchedAgent := collectAllBranchInfo(storer, localAgentBranch)
 
 		// Check shared history.
 		localGS, isRealStore := ri.GS.(*git.Store)
@@ -262,45 +246,6 @@ CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value BLOB NOT NULL);
 		localFactCount := 0
 		if err == nil {
 			localFactCount = len(localFiles)
-		}
-
-		// Collect all agent/* branches and find one matching our exact agent identity.
-		// Our agent branch name is ri.GS.Branch() (e.g. agent/<hostname>-<key-fp>).
-		// Collect agent branches. After clone, remote branches appear under
-		// both refs/heads/ (local tracking) and refs/remotes/origin/ (remote refs).
-		// We check both to be safe.
-		localAgentBranch := ri.GS.Branch()
-		agentSet := make(map[string]bool)
-		matchedAgent := ""
-		refIter, _ := cloned.Storer().IterReferences()
-		if refIter != nil {
-			for {
-				ref, err := refIter.Next()
-				if err != nil {
-					break
-				}
-				name := ref.Name().String()
-				var short string
-				switch {
-				case strings.HasPrefix(name, "refs/heads/"):
-					short = strings.TrimPrefix(name, "refs/heads/")
-				case strings.HasPrefix(name, "refs/remotes/origin/"):
-					short = strings.TrimPrefix(name, "refs/remotes/origin/")
-				default:
-					continue
-				}
-				if strings.HasPrefix(short, "agent/") && !agentSet[short] {
-					agentSet[short] = true
-					if short == localAgentBranch {
-						matchedAgent = short
-					}
-				}
-			}
-			refIter.Close()
-		}
-		agentBranches := make([]string, 0, len(agentSet))
-		for b := range agentSet {
-			agentBranches = append(agentBranches, b)
 		}
 
 		result := connectivityResult{
@@ -363,20 +308,9 @@ func (rm *RepoManager) handlePreview(sm *SessionManager) http.HandlerFunc {
 
 		ri := RepoFromContext(r.Context())
 
-		// Set SSE headers.
-		w.Header().Set("Content-Type", "text/event-stream")
-		w.Header().Set("Cache-Control", "no-cache")
-		w.Header().Set("Connection", "keep-alive")
-		flusher, ok := w.(http.Flusher)
+		sendEvent, ok := beginSSE(w)
 		if !ok {
-			http.Error(w, "streaming not supported", http.StatusInternalServerError)
 			return
-		}
-
-		sendEvent := func(v any) {
-			data, _ := json.Marshal(v)
-			fmt.Fprintf(w, "data: %s\n\n", data)
-			flusher.Flush()
 		}
 
 		sendEvent(map[string]string{"phase": "comparing"})
@@ -482,7 +416,7 @@ type applyResult struct {
 	FromLocal            int `json:"from_local"`
 	FromRemote           int `json:"from_remote"`
 	Overwrites           int `json:"overwrites"`
-	RefsResolvedFromHist int `json:"refs_resolved_from_hist"`
+	RefsResolvedFromHist int `json:"refs_resolved_from_history"`
 	DanglingRefsDropped  int `json:"dangling_refs_dropped"`
 }
 
@@ -540,20 +474,9 @@ func (rm *RepoManager) handleApply(sm *SessionManager) http.HandlerFunc {
 
 		ri := RepoFromContext(r.Context())
 
-		// Set SSE headers.
-		w.Header().Set("Content-Type", "text/event-stream")
-		w.Header().Set("Cache-Control", "no-cache")
-		w.Header().Set("Connection", "keep-alive")
-		flusher, ok := w.(http.Flusher)
+		sendEvent, ok := beginSSE(w)
 		if !ok {
-			http.Error(w, "streaming not supported", http.StatusInternalServerError)
 			return
-		}
-
-		sendEvent := func(v any) {
-			data, _ := json.Marshal(v)
-			fmt.Fprintf(w, "data: %s\n\n", data)
-			flusher.Flush()
 		}
 
 		if tr.History == "disjoint" {
@@ -678,29 +601,68 @@ func extractRefsFromFrontmatter(content string) []string {
 	return fm.Refs
 }
 
-// collectBranches iterates references in the storer and returns branch names.
-// collectBranches returns all branch names from the storer, excluding agent/* branches.
-func collectBranches(s *storegit.Storer) []string {
-	var branches []string
+// beginSSE sets SSE headers on w and returns a sendEvent function.
+// Returns nil, false if streaming is not supported.
+func beginSSE(w http.ResponseWriter) (func(v any), bool) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming not supported", http.StatusInternalServerError)
+		return nil, false
+	}
+	return func(v any) {
+		data, _ := json.Marshal(v)
+		fmt.Fprintf(w, "data: %s\n\n", data)
+		flusher.Flush()
+	}, true
+}
+
+// collectAllBranchInfo does a single pass over refs, partitioning into non-agent
+// branches, agent branches, and finding the agent branch matching localAgentBranch.
+func collectAllBranchInfo(s *storegit.Storer, localAgentBranch string) (branches []string, agentBranches []string, matchedAgent string) {
 	refIter, err := s.IterReferences()
 	if err != nil {
-		return branches
+		return
 	}
 	defer refIter.Close()
+
+	agentSet := make(map[string]struct{})
 	for {
 		ref, err := refIter.Next()
 		if err != nil {
 			break
 		}
-		name := ref.Name()
-		if name.IsBranch() {
-			short := strings.TrimPrefix(name.String(), "refs/heads/")
-			if !strings.HasPrefix(short, "agent/") {
+		name := ref.Name().String()
+		var short string
+		switch {
+		case strings.HasPrefix(name, "refs/heads/"):
+			short = strings.TrimPrefix(name, "refs/heads/")
+		case strings.HasPrefix(name, "refs/remotes/origin/"):
+			short = strings.TrimPrefix(name, "refs/remotes/origin/")
+		default:
+			continue
+		}
+		if strings.HasPrefix(short, "agent/") {
+			if _, seen := agentSet[short]; !seen {
+				agentSet[short] = struct{}{}
+				if short == localAgentBranch {
+					matchedAgent = short
+				}
+			}
+		} else {
+			// Only count refs/heads/ as selectable branches (not remote tracking refs).
+			if strings.HasPrefix(name, "refs/heads/") {
 				branches = append(branches, short)
 			}
 		}
 	}
-	return branches
+	agentBranches = make([]string, 0, len(agentSet))
+	for b := range agentSet {
+		agentBranches = append(agentBranches, b)
+	}
+	return
 }
 
 // handleCommit handles POST /api/v1/{repo}/origin/session/{sessionID}/commit
@@ -741,20 +703,9 @@ func (rm *RepoManager) handleCommit(sm *SessionManager) http.HandlerFunc {
 
 		ri := RepoFromContext(r.Context())
 
-		// Set SSE headers.
-		w.Header().Set("Content-Type", "text/event-stream")
-		w.Header().Set("Cache-Control", "no-cache")
-		w.Header().Set("Connection", "keep-alive")
-		flusher, ok := w.(http.Flusher)
+		sendEvent, ok := beginSSE(w)
 		if !ok {
-			http.Error(w, "streaming not supported", http.StatusInternalServerError)
 			return
-		}
-
-		sendEvent := func(v any) {
-			data, _ := json.Marshal(v)
-			fmt.Fprintf(w, "data: %s\n\n", data)
-			flusher.Flush()
 		}
 
 		// Phase: swapping — replace the git store on the repo instance.
@@ -780,10 +731,7 @@ func (rm *RepoManager) handleCommit(sm *SessionManager) http.HandlerFunc {
 		if ri.Svc != nil {
 			// Build the auth token for storage.
 			authMethod := authCfg.Method
-			authToken := authCfg.Token
-			if authMethod == "basic" && authCfg.User != "" {
-				authToken = authCfg.User + ":" + authCfg.Password
-			}
+			authToken := assembleAuthToken(authMethod, authCfg.Token, authCfg.User, authCfg.Password)
 
 			if err := ri.Svc.SetRemoteWithAuth("origin", remoteURL, remoteBranch, 300, 300, authMethod, authToken); err != nil {
 				sendEvent(map[string]string{"phase": "error", "message": fmt.Sprintf("save remote config: %v", err)})
