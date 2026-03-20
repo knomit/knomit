@@ -71,11 +71,10 @@ export function ConnectRemoteModal({ repo, onClose }: Props) {
             setStep('tested');
             setProgress('');
             resolve();
-            // Auto-trigger preview
             startPreview(sess.session_id);
           } else if (ev.phase === 'error') {
             setError({ section: 'testing', message: ev.message });
-            setStep('tested');
+            setStep('idle');
             reject(new Error(ev.message));
           } else if (ev.phase === 'cloning') {
             setProgress(ev.progress || 'Cloning...');
@@ -197,6 +196,15 @@ export function ConnectRemoteModal({ repo, onClose }: Props) {
     }
   };
 
+  const handleBack = () => {
+    setStep('idle');
+    setTestResult(null);
+    setPreviewResult(null);
+    setApplyResult(null);
+    setError(null);
+    if (sessionId) { deleteSession(repo, sessionId).catch(() => {}); setSessionId(null); }
+  };
+
   const handleTryDifferentStrategy = () => {
     setApplyResult(null);
     setStep('previewed');
@@ -213,6 +221,11 @@ export function ConnectRemoteModal({ repo, onClose }: Props) {
   const canTest = url && !authMismatch && step === 'idle';
   const busy = step === 'creating' || step === 'testing' || step === 'previewing' || step === 'applying' || step === 'committing';
 
+  // Page 1: connection setup (idle, creating, testing)
+  // Page 2: merge workflow (tested and beyond)
+  const onPage2 = testResult && !error?.section?.startsWith('creat') && !error?.section?.startsWith('test') &&
+    step !== 'idle' && step !== 'creating' && step !== 'testing';
+
   const overlay: React.CSSProperties = {
     position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
     background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center',
@@ -221,7 +234,7 @@ export function ConnectRemoteModal({ repo, onClose }: Props) {
 
   const modal: React.CSSProperties = {
     background: '#0d0d0d', border: '1px solid #222', borderRadius: 8,
-    padding: 24, width: 520, maxWidth: '90vw', maxHeight: '80vh',
+    padding: 24, width: 480, maxWidth: '90vw', maxHeight: '80vh',
     overflowY: 'auto', color: '#eee', fontFamily: 'system-ui, sans-serif',
   };
 
@@ -240,244 +253,229 @@ export function ConnectRemoteModal({ repo, onClose }: Props) {
     cursor: disabled ? 'not-allowed' : 'pointer',
     background: disabled ? '#333' : variant === 'primary' ? '#2563eb' : variant === 'danger' ? '#b91c1c' : '#444',
     color: disabled ? '#666' : '#fff',
-    marginRight: 8,
   });
 
   const sectionBox: React.CSSProperties = {
-    marginTop: 16, padding: 12, background: '#111', borderRadius: 4, fontSize: 13,
-  };
-
-  const stepPassed = (s: Step) => {
-    const order: Step[] = ['idle', 'creating', 'testing', 'tested', 'previewing', 'previewed', 'applying', 'applied', 'committing', 'done'];
-    return order.indexOf(step) >= order.indexOf(s);
+    marginTop: 12, padding: 12, background: '#111', borderRadius: 4, fontSize: 13,
   };
 
   return (
     <div style={overlay}>
       <div style={modal} onClick={e => e.stopPropagation()}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-          <h2 style={{ margin: 0, fontSize: 16 }}>Connect Remote</h2>
+          <h2 style={{ margin: 0, fontSize: 16 }}>
+            {onPage2 ? 'Merge & Sync' : 'Connect Remote'}
+          </h2>
           <button onClick={handleCancel} style={{ background: 'none', border: 'none', color: '#666', cursor: 'pointer', fontSize: 16 }}>x</button>
         </div>
 
-        {/* Section 1: URL + Auth */}
-        <label style={label}>Remote URL</label>
-        <input
-          style={{ ...input, opacity: busy ? 0.5 : 1 }}
-          value={url}
-          onChange={e => setUrl(e.target.value)}
-          placeholder="git@github.com:user/repo.git"
-          disabled={busy || stepPassed('tested')}
-        />
-
-        <label style={label}>Auth Method</label>
-        <select
-          value={authMethod}
-          onChange={e => setAuthMethod(e.target.value as typeof authMethod)}
-          style={{ ...input, cursor: busy || stepPassed('tested') ? 'not-allowed' : 'pointer', opacity: busy ? 0.5 : 1 }}
-          disabled={busy || stepPassed('tested')}
-        >
-          <option value="">None</option>
-          <option value="ssh">SSH (knomit key)</option>
-          <option value="token">Token</option>
-          <option value="basic">Basic (user/password)</option>
-        </select>
-
-        {authMethod === 'token' && (
+        {/* ============ PAGE 1: Connection Setup ============ */}
+        {!onPage2 && (
           <>
-            <label style={label}>Token</label>
-            <input style={{ ...input, opacity: busy ? 0.5 : 1 }} type="password" value={token} onChange={e => setToken(e.target.value)} placeholder="ghp_..." disabled={busy || stepPassed('tested')} />
+            <label style={label}>Remote URL</label>
+            <input
+              style={{ ...input, opacity: busy ? 0.5 : 1 }}
+              value={url}
+              onChange={e => setUrl(e.target.value)}
+              placeholder="git@github.com:user/repo.git"
+              disabled={busy}
+            />
+
+            <label style={label}>Auth Method</label>
+            <select
+              value={authMethod}
+              onChange={e => setAuthMethod(e.target.value as typeof authMethod)}
+              style={{ ...input, cursor: busy ? 'not-allowed' : 'pointer', opacity: busy ? 0.5 : 1 }}
+              disabled={busy}
+            >
+              <option value="">None</option>
+              <option value="ssh">SSH (knomit key)</option>
+              <option value="token">Token</option>
+              <option value="basic">Basic (user/password)</option>
+            </select>
+
+            {authMethod === 'token' && (
+              <>
+                <label style={label}>Token</label>
+                <input style={{ ...input, opacity: busy ? 0.5 : 1 }} type="password" value={token} onChange={e => setToken(e.target.value)} placeholder="ghp_..." disabled={busy} />
+              </>
+            )}
+
+            {authMethod === 'basic' && (
+              <>
+                <label style={label}>Username</label>
+                <input style={{ ...input, opacity: busy ? 0.5 : 1 }} value={user} onChange={e => setUser(e.target.value)} disabled={busy} />
+                <label style={label}>Password</label>
+                <input style={{ ...input, opacity: busy ? 0.5 : 1 }} type="password" value={password} onChange={e => setPassword(e.target.value)} disabled={busy} />
+              </>
+            )}
+
+            {authMismatch && <div style={{ color: '#f44336', fontSize: 12, marginBottom: 8 }}>{authMismatch}</div>}
+
+            {(step === 'creating' || step === 'testing') && (
+              <div style={{ fontSize: 13, color: '#8af', marginTop: 8, marginBottom: 8 }}>{progress}</div>
+            )}
+
+            {error && (
+              <div style={{ ...sectionBox, marginTop: 8 }}>
+                <div style={{ color: '#f44336' }}>{error.message}</div>
+                <button onClick={handleRetry} style={{ ...btn(false), marginTop: 8 }}>Retry</button>
+              </div>
+            )}
+
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 16 }}>
+              <button onClick={handleCancel} style={btn(false, 'danger')}>Cancel</button>
+              <button disabled={!canTest} onClick={handleTest} style={btn(!canTest)}>
+                Test Connection
+              </button>
+            </div>
           </>
         )}
 
-        {authMethod === 'basic' && (
+        {/* ============ PAGE 2: Merge Workflow ============ */}
+        {onPage2 && testResult && (
           <>
-            <label style={label}>Username</label>
-            <input style={{ ...input, opacity: busy ? 0.5 : 1 }} value={user} onChange={e => setUser(e.target.value)} disabled={busy || stepPassed('tested')} />
-            <label style={label}>Password</label>
-            <input style={{ ...input, opacity: busy ? 0.5 : 1 }} type="password" value={password} onChange={e => setPassword(e.target.value)} disabled={busy || stepPassed('tested')} />
-          </>
-        )}
-
-        {authMismatch && <div style={{ color: '#f44336', fontSize: 12, marginBottom: 8 }}>{authMismatch}</div>}
-
-        {step === 'idle' && (
-          <button disabled={!canTest} onClick={handleTest} style={btn(!canTest)}>
-            Test Connection
-          </button>
-        )}
-
-        {(step === 'creating' || step === 'testing') && (
-          <div style={{ fontSize: 13, color: '#8af', marginTop: 8 }}>{progress}</div>
-        )}
-
-        {error && error.section === 'creating' && (
-          <div style={sectionBox}>
-            <div style={{ color: '#f44336' }}>{error.message}</div>
-            <button onClick={handleRetry} style={{ ...btn(false), marginTop: 8 }}>Retry</button>
-          </div>
-        )}
-
-        {/* Section 2: Test result */}
-        {stepPassed('tested') && testResult && !error?.section?.startsWith('test') && (
-          <div style={sectionBox}>
-            <div style={{ color: '#4caf50', marginBottom: 6 }}>Connected</div>
-            <div style={{ color: '#aaa' }}>
-              <span>{testResult.remote_fact_count} facts on remote</span>
-              <span style={{ margin: '0 8px', color: '#444' }}>|</span>
-              <span>{testResult.local_fact_count} local</span>
+            {/* Summary bar */}
+            <div style={{ fontSize: 12, color: '#888', marginBottom: 12 }}>
+              {url} &mdash; {testResult.remote_fact_count} remote, {testResult.local_fact_count} local, {testResult.history} histories
             </div>
-            <div style={{ color: '#888', marginTop: 4, display: 'flex', alignItems: 'center', gap: 8 }}>
-              <span>Remote branch:</span>
-              <select
-                value={selectedBranch}
-                onChange={e => setSelectedBranch(e.target.value)}
-                disabled={busy}
-                style={{ background: '#1a1a1a', border: '1px solid #333', color: '#eee', padding: '2px 6px', borderRadius: 4, fontSize: 13 }}
-              >
-                {testResult.branches.map(b => (
-                  <option key={b} value={b}>{b}</option>
-                ))}
-              </select>
+
+            {/* Branch + Agent info */}
+            <div style={{ display: 'flex', gap: 16, marginBottom: 12, fontSize: 13 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span style={{ color: '#888' }}>Branch:</span>
+                <select
+                  value={selectedBranch}
+                  onChange={e => setSelectedBranch(e.target.value)}
+                  disabled={busy}
+                  style={{ background: '#1a1a1a', border: '1px solid #333', color: '#eee', padding: '2px 6px', borderRadius: 4, fontSize: 13 }}
+                >
+                  {testResult.branches.map(b => (
+                    <option key={b} value={b}>{b}</option>
+                  ))}
+                </select>
+              </div>
+              {testResult.matched_agent && (
+                <div style={{ color: '#8af', display: 'flex', alignItems: 'center' }}>
+                  Agent branch: found, will replay on top
+                </div>
+              )}
             </div>
-            <div style={{ color: '#888', marginTop: 2 }}>
-              Histories: {testResult.history}
-            </div>
-            {testResult.agent_branches?.length > 0 && (
-              <div style={{ marginTop: 6 }}>
-                <div style={{ color: '#888', fontSize: 12, marginBottom: 2 }}>Agent branches on remote:</div>
-                {testResult.agent_branches.map(b => (
-                  <div key={b} style={{ color: b === testResult.matched_agent ? '#8af' : '#666', fontSize: 12, paddingLeft: 8 }}>
-                    {b}{b === testResult.matched_agent ? ' (ours — will replay on top)' : ''}
+
+            {/* Preview stats */}
+            {(step === 'previewing') && (
+              <div style={{ fontSize: 13, color: '#8af', marginBottom: 8 }}>{progress}</div>
+            )}
+
+            {previewResult && !error?.section?.startsWith('preview') && (
+              <div style={sectionBox}>
+                <div style={{ color: '#aaa' }}>
+                  {previewResult.local_only} local-only
+                  <span style={{ margin: '0 6px', color: '#444' }}>&middot;</span>
+                  {previewResult.remote_only} remote-only
+                  <span style={{ margin: '0 6px', color: '#444' }}>&middot;</span>
+                  {previewResult.shared_path} shared paths
+                </div>
+                {(previewResult.dead_refs_found > 0) && (
+                  <div style={{ color: '#888', marginTop: 4 }}>
+                    {previewResult.dead_refs_found} dead refs found
                   </div>
-                ))}
+                )}
               </div>
             )}
-          </div>
-        )}
 
-        {error && error.section === 'testing' && (
-          <div style={sectionBox}>
-            <div style={{ color: '#f44336' }}>{error.message}</div>
-            <button onClick={handleRetry} style={{ ...btn(false), marginTop: 8 }}>Retry</button>
-          </div>
-        )}
-
-        {/* Section 3: Preview */}
-        {step === 'previewing' && (
-          <div style={sectionBox}>
-            <div style={{ color: '#8af' }}>{progress}</div>
-          </div>
-        )}
-
-        {stepPassed('previewed') && previewResult && !error?.section?.startsWith('preview') && (
-          <div style={sectionBox}>
-            <div style={{ color: '#aaa' }}>
-              {previewResult.local_only} local-only
-              <span style={{ margin: '0 6px', color: '#444' }}>&middot;</span>
-              {previewResult.remote_only} remote-only
-              <span style={{ margin: '0 6px', color: '#444' }}>&middot;</span>
-              {previewResult.shared_path} shared paths
-            </div>
-            {(previewResult.dead_refs_found > 0) && (
-              <div style={{ color: '#888', marginTop: 4 }}>
-                {previewResult.dead_refs_found} dead refs found
+            {error && error.section === 'previewing' && (
+              <div style={sectionBox}>
+                <div style={{ color: '#f44336' }}>{error.message}</div>
+                <button onClick={handleRetry} style={{ ...btn(false), marginTop: 8 }}>Retry</button>
               </div>
             )}
-          </div>
-        )}
 
-        {error && error.section === 'previewing' && (
-          <div style={sectionBox}>
-            <div style={{ color: '#f44336' }}>{error.message}</div>
-            <button onClick={handleRetry} style={{ ...btn(false), marginTop: 8 }}>Retry</button>
-          </div>
-        )}
+            {/* Strategy + Apply */}
+            {step !== 'done' && step !== 'committing' && !error?.section?.startsWith('preview') && previewResult && (
+              <div style={sectionBox}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 10 }}>
+                  <span style={{ color: '#888', fontSize: 12 }}>Conflict strategy:</span>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 4, cursor: busy ? 'not-allowed' : 'pointer', color: '#ccc', fontSize: 13 }}>
+                    <input type="radio" name="strategy" checked={strategy === 'local'} onChange={() => setStrategy('local')} disabled={busy} />
+                    Local wins
+                  </label>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 4, cursor: busy ? 'not-allowed' : 'pointer', color: '#ccc', fontSize: 13 }}>
+                    <input type="radio" name="strategy" checked={strategy === 'remote'} onChange={() => setStrategy('remote')} disabled={busy} />
+                    Remote wins
+                  </label>
+                </div>
 
-        {/* Section 4: Strategy + Apply */}
-        {stepPassed('previewed') && !error?.section?.startsWith('preview') && step !== 'applied' && step !== 'committing' && step !== 'done' && (
-          <div style={sectionBox}>
-            <div style={{ marginBottom: 8, color: '#888', fontSize: 12 }}>Conflict strategy</div>
-            <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: step === 'applying' ? 'not-allowed' : 'pointer', color: '#ccc', fontSize: 13, marginBottom: 6 }}>
-              <input type="radio" name="strategy" checked={strategy === 'local'} onChange={() => setStrategy('local')} disabled={step === 'applying'} />
-              Local wins
-            </label>
-            <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: step === 'applying' ? 'not-allowed' : 'pointer', color: '#ccc', fontSize: 13, marginBottom: 10 }}>
-              <input type="radio" name="strategy" checked={strategy === 'remote'} onChange={() => setStrategy('remote')} disabled={step === 'applying'} />
-              Remote wins
-            </label>
+                {step === 'applying' && (
+                  <div style={{ color: '#8af', marginBottom: 8 }}>{progress}</div>
+                )}
 
-            {step === 'applying' && (
-              <div style={{ color: '#8af', marginBottom: 8 }}>{progress}</div>
+                {step === 'applied' && applyResult && !error && (
+                  <div style={{ marginBottom: 8 }}>
+                    <div style={{ color: '#4caf50', marginBottom: 4 }}>Merge preview ready</div>
+                    <div style={{ color: '#aaa' }}>
+                      {applyResult.total_facts} total facts: {applyResult.from_local} local, {applyResult.from_remote} remote
+                      {applyResult.overwrites > 0 && <span> ({applyResult.overwrites} overwrites)</span>}
+                    </div>
+                  </div>
+                )}
+
+                {error && error.section === 'applying' && (
+                  <div style={{ marginBottom: 8 }}>
+                    <div style={{ color: '#f44336' }}>{error.message}</div>
+                    <button onClick={handleRetry} style={{ ...btn(false), marginTop: 6 }}>Retry</button>
+                  </div>
+                )}
+
+                {step !== 'applying' && step !== 'applied' && (
+                  <button onClick={handleApply} style={btn(false)}>
+                    Preview Merge
+                  </button>
+                )}
+
+                {step === 'applied' && applyResult && !error && (
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <button onClick={handleTryDifferentStrategy} style={btn(false, 'secondary')}>
+                      Try Different Strategy
+                    </button>
+                    <button onClick={handleCommit} style={btn(false)}>
+                      Apply
+                    </button>
+                  </div>
+                )}
+              </div>
             )}
 
-            {step !== 'applying' && (
-              <button onClick={handleApply} style={btn(false)}>
-                Preview Merge
-              </button>
+            {/* Committing */}
+            {step === 'committing' && (
+              <div style={sectionBox}>
+                <div style={{ color: '#8af' }}>{progress}</div>
+              </div>
             )}
-          </div>
-        )}
 
-        {error && error.section === 'applying' && (
-          <div style={sectionBox}>
-            <div style={{ color: '#f44336' }}>{error.message}</div>
-            <button onClick={handleRetry} style={{ ...btn(false), marginTop: 8 }}>Retry</button>
-          </div>
-        )}
-
-        {/* Apply result + Commit */}
-        {step === 'applied' && applyResult && !error && (
-          <div style={sectionBox}>
-            <div style={{ color: '#4caf50', marginBottom: 6 }}>Merge complete</div>
-            <div style={{ color: '#aaa' }}>
-              {applyResult.total_facts} total facts: {applyResult.from_local} from local, {applyResult.from_remote} from remote
-            </div>
-            {applyResult.overwrites > 0 && (
-              <div style={{ color: '#888', marginTop: 2 }}>{applyResult.overwrites} overwrites ({strategy === 'local' ? 'local wins' : 'remote wins'})</div>
+            {error && error.section === 'committing' && (
+              <div style={sectionBox}>
+                <div style={{ color: '#f44336' }}>{error.message}</div>
+                <button onClick={handleRetry} style={{ ...btn(false), marginTop: 8 }}>Retry</button>
+              </div>
             )}
-            {applyResult.refs_resolved_from_history > 0 && (
-              <div style={{ color: '#888', marginTop: 2 }}>{applyResult.refs_resolved_from_history} refs resolved from history</div>
+
+            {step === 'done' && (
+              <div style={sectionBox}>
+                <div style={{ color: '#4caf50' }}>Remote connected successfully.</div>
+              </div>
             )}
-            {applyResult.dangling_refs_dropped > 0 && (
-              <div style={{ color: '#888', marginTop: 2 }}>{applyResult.dangling_refs_dropped} dangling refs dropped</div>
+
+            {/* Footer */}
+            {step !== 'done' && (
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 16 }}>
+                <button onClick={handleBack} style={btn(busy, 'secondary')} disabled={busy}>
+                  Back
+                </button>
+                <button onClick={handleCancel} style={btn(false, 'danger')}>Cancel</button>
+              </div>
             )}
-            <div style={{ display: 'flex', marginTop: 12, gap: 8 }}>
-              <button onClick={handleTryDifferentStrategy} style={btn(false, 'secondary')}>
-                Try Different Strategy
-              </button>
-              <button onClick={handleCommit} style={btn(false)}>
-                Apply
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* Section 5: Committing */}
-        {step === 'committing' && (
-          <div style={sectionBox}>
-            <div style={{ color: '#8af' }}>{progress}</div>
-          </div>
-        )}
-
-        {error && error.section === 'committing' && (
-          <div style={sectionBox}>
-            <div style={{ color: '#f44336' }}>{error.message}</div>
-            <button onClick={handleRetry} style={{ ...btn(false), marginTop: 8 }}>Retry</button>
-          </div>
-        )}
-
-        {step === 'done' && (
-          <div style={sectionBox}>
-            <div style={{ color: '#4caf50' }}>Remote connected successfully.</div>
-          </div>
-        )}
-
-        {/* Cancel always available unless done */}
-        {step !== 'done' && (
-          <div style={{ marginTop: 16, textAlign: 'right' }}>
-            <button onClick={handleCancel} style={btn(false, 'danger')}>Cancel</button>
-          </div>
+          </>
         )}
       </div>
     </div>
