@@ -47,10 +47,23 @@ func (idx *Index) Search(q SearchQuery) ([]SearchResult, error) {
 
 	// ── Text-less path: return all facts matching filters with score 100 ──
 	if q.Text == "" {
-		rows, err := idx.db.Query(
-			`SELECT f.path, f.title, f.blob_hash, f.type, f.domain, f.entities, f.confidence, f.sources, f.refs, f.commit_hash, o.data
+		filterQuery := `SELECT f.path, f.title, f.blob_hash, f.type, f.domain, f.entities, f.confidence, f.sources, f.refs, f.commit_hash, o.data
 			 FROM facts f
-			 JOIN objects o ON o.hash = f.blob_hash AND o.type = ?`, BlobObjectType)
+			 JOIN objects o ON o.hash = f.blob_hash AND o.type = ?`
+		args := []any{BlobObjectType}
+		if q.MinConfidence > 0 {
+			filterQuery += " AND f.confidence >= ?"
+			args = append(args, q.MinConfidence)
+		}
+		if q.Path != "" {
+			filterQuery += " AND f.path LIKE ?"
+			args = append(args, q.Path+"%")
+		}
+		filterQuery += " LIMIT ?"
+		// Over-fetch to allow for Go-side entity/domain filtering.
+		args = append(args, limit*3)
+
+		rows, err := idx.db.Query(filterQuery, args...)
 		if err != nil {
 			return nil, fmt.Errorf("search: list all: %w", err)
 		}
@@ -62,16 +75,19 @@ func (idx *Index) Search(q SearchQuery) ([]SearchResult, error) {
 			if err != nil {
 				return nil, err
 			}
-			if !matchesFilters(fb.FactRecord, q) {
+			if len(q.Entities) > 0 && !containsAll(fb.Entities, q.Entities) {
+				continue
+			}
+			if len(q.Domain) > 0 && !domainPrefixMatch(fb.Domain, q.Domain) {
 				continue
 			}
 			out = append(out, SearchResult{FactWithBody: *fb, Score: 100})
+			if len(out) >= limit {
+				break
+			}
 		}
 		if err := rows.Err(); err != nil {
 			return nil, err
-		}
-		if len(out) > limit {
-			out = out[:limit]
 		}
 		return out, nil
 	}

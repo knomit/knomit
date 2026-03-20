@@ -89,6 +89,7 @@ func dedupCluster(
 	threshold float64,
 	recipeName string,
 	onProgress func(ProgressEvent),
+	embedders ...Embedder,
 ) ([]factForLLM, error) {
 	if len(cluster) < 2 {
 		return cluster, nil
@@ -100,16 +101,32 @@ func dedupCluster(
 		clusterByPath[f.File] = f
 	}
 
+	// Batch-embed all cluster facts upfront if a BatchEmbedder is available.
+	var clusterVecs [][]float32
+	if len(embedders) > 0 {
+		if batcher, ok := embedders[0].(BatchEmbedder); ok {
+			texts := make([]string, len(cluster))
+			for i, f := range cluster {
+				texts[i] = f.Title + " " + f.Body
+			}
+			clusterVecs, _ = batcher.EmbedBatch(texts)
+		}
+	}
+
 	// Find candidate pairs via embedding search.
 	seen := make(map[string]bool) // track "a|b" canonical pairs already added
 	var pairs []mergePair
 
-	for _, fact := range cluster {
-		results, err := idx.Search(store.SearchQuery{
+	for i, fact := range cluster {
+		sq := store.SearchQuery{
 			Text:          fact.Title + " " + fact.Body,
 			MinSimilarity: threshold,
 			Limit:         10,
-		})
+		}
+		if clusterVecs != nil && i < len(clusterVecs) && len(clusterVecs[i]) > 0 {
+			sq.QueryVec = clusterVecs[i]
+		}
+		results, err := idx.Search(sq)
 		if err != nil {
 			return nil, fmt.Errorf("dedupCluster: search for %q: %w", fact.File, err)
 		}
