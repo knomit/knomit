@@ -118,7 +118,7 @@ func (idx *Index) rebuildEmbeddings(progress RebuildProgress) (int, error) {
 	}
 
 	rows, err := idx.db.Query(`
-		SELECT f.rowid, f.path, o.data
+		SELECT f.rowid, f.path, f.title, o.data
 		FROM facts f
 		JOIN objects o ON o.hash = f.blob_hash AND o.type = ?
 		WHERE f.rowid NOT IN (SELECT rowid FROM facts_vec)
@@ -130,18 +130,19 @@ func (idx *Index) rebuildEmbeddings(progress RebuildProgress) (int, error) {
 	type entry struct {
 		rowid int64
 		path  string
-		body  string
+		text  string // title + " " + body, used for embedding
 	}
 
 	var entries []entry
 	for rows.Next() {
 		var e entry
+		var title string
 		var data []byte
-		if err := rows.Scan(&e.rowid, &e.path, &data); err != nil {
+		if err := rows.Scan(&e.rowid, &e.path, &title, &data); err != nil {
 			rows.Close()
 			return 0, fmt.Errorf("rebuildEmbeddings: scan: %w", err)
 		}
-		e.body = extractBody(data)
+		e.text = title + " " + extractBody(data)
 		entries = append(entries, e)
 	}
 	rows.Close()
@@ -166,7 +167,7 @@ func (idx *Index) rebuildEmbeddings(progress RebuildProgress) (int, error) {
 
 			texts := make([]string, len(batch))
 			for j, e := range batch {
-				texts[j] = e.body
+				texts[j] = e.text
 			}
 
 			vecs, err := batcher.EmbedBatch(texts)
@@ -191,7 +192,7 @@ func (idx *Index) rebuildEmbeddings(progress RebuildProgress) (int, error) {
 		}
 	} else {
 		for _, e := range entries {
-			vec, err := idx.embedder.Embed(e.body)
+			vec, err := idx.embedder.Embed(e.text)
 			if err != nil {
 				log.Warn().Err(err).Str("path", e.path).Msg("rebuildEmbeddings: embed failed, skipping")
 				continue

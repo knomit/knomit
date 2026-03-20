@@ -102,7 +102,7 @@ func (s *Store) populateCommitLog() error {
 
 	headRef, err := s.repo.Head()
 	if err != nil {
-		s.commitLog = true // table exists; empty repo is fine
+		s.commitLog.Store(true) // table exists; empty repo is fine
 		return nil
 	}
 
@@ -153,7 +153,7 @@ func (s *Store) populateCommitLog() error {
 	}
 
 	if len(toInsert) == 0 {
-		s.commitLog = true
+		s.commitLog.Store(true)
 		return nil
 	}
 
@@ -186,7 +186,7 @@ func (s *Store) populateCommitLog() error {
 	}
 
 	log.Debug().Int("commits", len(toInsert)).Msg("commit_log: populated")
-	s.commitLog = true
+	s.commitLog.Store(true)
 	return nil
 }
 
@@ -194,7 +194,7 @@ func (s *Store) populateCommitLog() error {
 // New commits always get the highest rowid, preserving recency ordering.
 // Errors are logged and swallowed — commit_log is an index, not source of truth.
 func (s *Store) appendCommitLog(hash plumbing.Hash) {
-	if !s.commitLog {
+	if !s.commitLog.Load() {
 		return
 	}
 	c, err := s.repo.CommitObject(hash)

@@ -23,7 +23,7 @@ func TestActivitySQLTimeBuckets(t *testing.T) {
 	}
 	defer store.Close()
 
-	if !store.commitLog {
+	if !store.commitLog.Load() {
 		t.Skip("commit_log not available")
 	}
 
@@ -79,7 +79,7 @@ func TestCommitLogIncrementalAppend(t *testing.T) {
 	}
 	defer store.Close()
 
-	if !store.commitLog {
+	if !store.commitLog.Load() {
 		t.Skip("commit_log not available")
 	}
 
@@ -156,7 +156,7 @@ func TestPopulateCommitLogIsIncremental(t *testing.T) {
 	if countSecond != countFirst {
 		t.Errorf("commit_log rows after re-open: got %d, want %d (duplicate insert?)", countSecond, countFirst)
 	}
-	if !store2.commitLog {
+	if !store2.commitLog.Load() {
 		t.Error("commitLog flag must be true after re-open")
 	}
 }
@@ -171,7 +171,7 @@ func TestAppendCommitLogDelete(t *testing.T) {
 	}
 	defer store.Close()
 
-	if !store.commitLog {
+	if !store.commitLog.Load() {
 		t.Skip("commit_log not available")
 	}
 
@@ -308,7 +308,7 @@ CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value BLOB NOT NULL);`
 		t.Fatal(err)
 	}
 
-	if store.commitLog {
+	if store.commitLog.Load() {
 		t.Error("commitLog should be false when commit_log table is absent")
 	}
 
