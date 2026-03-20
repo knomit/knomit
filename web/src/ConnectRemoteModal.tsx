@@ -166,7 +166,9 @@ export function ConnectRemoteModal({ repo, onClose }: Props) {
         } else if (ev.phase === 'configuring') {
           setProgress('Configuring remote...');
         } else if (ev.phase === 'rebuilding') {
-          setProgress('Rebuilding index...');
+          const cur = (ev as any).current;
+          const tot = (ev as any).total;
+          setProgress(tot > 0 ? `Rebuilding index... ${cur}/${tot}` : 'Rebuilding index...');
         } else {
           setProgress(ev.phase + '...');
         }
@@ -266,7 +268,9 @@ export function ConnectRemoteModal({ repo, onClose }: Props) {
           <h2 style={{ margin: 0, fontSize: 16 }}>
             {onPage2 ? 'Merge & Sync' : 'Connect Remote'}
           </h2>
-          <button onClick={handleCancel} style={{ background: 'none', border: 'none', color: '#666', cursor: 'pointer', fontSize: 16 }}>x</button>
+          {step !== 'committing' && (
+            <button onClick={handleCancel} style={{ background: 'none', border: 'none', color: '#666', cursor: 'pointer', fontSize: 16 }}>x</button>
+          )}
         </div>
 
         {/* ============ PAGE 1: Connection Setup ============ */}
@@ -466,8 +470,8 @@ export function ConnectRemoteModal({ repo, onClose }: Props) {
               </div>
             )}
 
-            {/* Footer */}
-            {step !== 'done' && (
+            {/* Footer — hidden during commit (no going back after swap) */}
+            {step !== 'done' && step !== 'committing' && (
               <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 16 }}>
                 <button onClick={handleBack} style={btn(busy, 'secondary')} disabled={busy}>
                   Back

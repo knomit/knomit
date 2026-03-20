@@ -792,11 +792,16 @@ func (rm *RepoManager) handleCommit(sm *SessionManager) http.HandlerFunc {
 		}
 
 		// Rebuild the index from the new git store so facts/recent/search work.
-		sendEvent(map[string]string{"phase": "rebuilding"})
+		sendEvent(map[string]any{"phase": "rebuilding", "current": 0, "total": 0})
 		if ri.Svc != nil {
 			if gitReader, ok := ri.GS.(store.GitReader); ok {
 				idx := ri.Svc.Index()
-				if err := idx.Rebuild(gitReader, ri.GS.Branch(), nil); err != nil {
+				progress := func(done, total int) {
+					if done%20 == 0 || done == total {
+						sendEvent(map[string]any{"phase": "rebuilding", "current": done, "total": total})
+					}
+				}
+				if err := idx.Rebuild(gitReader, ri.GS.Branch(), progress); err != nil {
 					log.Warn().Err(err).Str("repo", repo).Msg("commit: index rebuild failed")
 				} else {
 					log.Info().Str("repo", repo).Msg("commit: index rebuilt from swapped store")
