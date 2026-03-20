@@ -38,10 +38,11 @@ const (
 
 // ReplayConfig controls replay behavior.
 type ReplayConfig struct {
-	Strategy      ConflictStrategy
-	AgentBranch   string
-	DefaultBranch string
-	OnProgress    func(current, total int)
+	Strategy          ConflictStrategy
+	AgentBranch       string
+	DefaultBranch     string
+	UseExistingBranch bool // if true and AgentBranch exists on target, replay on top of it
+	OnProgress        func(current, total int)
 }
 
 // ReplayResult reports what happened during replay.
@@ -69,24 +70,37 @@ func Replay(local *Store, iter FactIter, target *Store, cfg ReplayConfig) (*Repl
 		cfg.Strategy = StrategyLocalWins
 	}
 
-	// 1. Create agent branch from default branch in target store.
-	defaultRefName := plumbing.NewBranchReferenceName(cfg.DefaultBranch)
-	defaultRef, err := target.storer.Reference(defaultRefName)
-	if err != nil {
-		return nil, fmt.Errorf("Replay: resolve default branch %q: %w", cfg.DefaultBranch, err)
-	}
-
+	// 1. Set up agent branch in target store.
+	// If the remote already has a branch with the same agent name, use it as
+	// the replay base (preserving any work already on it). Otherwise, create
+	// a fresh agent branch from the selected main branch.
 	agentRefName := plumbing.NewBranchReferenceName(cfg.AgentBranch)
-	if err := target.storer.SetReference(plumbing.NewHashReference(agentRefName, defaultRef.Hash())); err != nil {
-		return nil, fmt.Errorf("Replay: create agent branch: %w", err)
+	existingAgentRef, err := target.storer.Reference(agentRefName)
+	if cfg.UseExistingBranch && err == nil && existingAgentRef != nil {
+		// Agent branch exists on remote and caller wants to reuse it — switch to it.
+		if err := target.storer.SetReference(plumbing.NewSymbolicReference(plumbing.HEAD, agentRefName)); err != nil {
+			return nil, fmt.Errorf("Replay: set HEAD to existing agent branch: %w", err)
+		}
+		target.branch = cfg.AgentBranch
+		target.agentID = deriveAgentID(cfg.AgentBranch)
+		log.Debug().Str("agent_branch", cfg.AgentBranch).Msg("replay: using existing remote agent branch as base")
+	} else {
+		// No existing agent branch — create from the selected main branch.
+		defaultRefName := plumbing.NewBranchReferenceName(cfg.DefaultBranch)
+		defaultRef, err := target.storer.Reference(defaultRefName)
+		if err != nil {
+			return nil, fmt.Errorf("Replay: resolve default branch %q: %w", cfg.DefaultBranch, err)
+		}
+		if err := target.storer.SetReference(plumbing.NewHashReference(agentRefName, defaultRef.Hash())); err != nil {
+			return nil, fmt.Errorf("Replay: create agent branch: %w", err)
+		}
+		if err := target.storer.SetReference(plumbing.NewSymbolicReference(plumbing.HEAD, agentRefName)); err != nil {
+			return nil, fmt.Errorf("Replay: set HEAD: %w", err)
+		}
+		target.branch = cfg.AgentBranch
+		target.agentID = deriveAgentID(cfg.AgentBranch)
+		log.Debug().Str("agent_branch", cfg.AgentBranch).Str("from", cfg.DefaultBranch).Msg("replay: created agent branch from main")
 	}
-	if err := target.storer.SetReference(plumbing.NewSymbolicReference(plumbing.HEAD, agentRefName)); err != nil {
-		return nil, fmt.Errorf("Replay: set HEAD: %w", err)
-	}
-	target.branch = cfg.AgentBranch
-	target.agentID = deriveAgentID(cfg.AgentBranch)
-
-	log.Debug().Str("agent_branch", cfg.AgentBranch).Str("from", cfg.DefaultBranch).Msg("replay: created agent branch")
 
 	// 2. Collect all facts from the iterator for progress reporting.
 	defer iter.Close()

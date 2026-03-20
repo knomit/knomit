@@ -71,6 +71,7 @@ export interface SessionCreateResponse {
 export interface TestResult {
   branches: string[];
   default_branch: string;
+  existing_agent_branch?: string;
   history: "disjoint" | "shared";
   remote_fact_count: number;
   local_fact_count: number;

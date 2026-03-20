@@ -347,6 +347,11 @@ export function ConnectRemoteModal({ repo, onClose }: Props) {
             <div style={{ color: '#888', marginTop: 2 }}>
               Histories: {testResult.history}
             </div>
+            {testResult.existing_agent_branch && (
+              <div style={{ color: '#8af', marginTop: 4 }}>
+                Found existing agent branch: {testResult.existing_agent_branch} (will replay on top)
+              </div>
+            )}
           </div>
         )}
 

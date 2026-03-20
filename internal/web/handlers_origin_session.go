@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/rs/zerolog/log"
 	"gopkg.in/yaml.v3"
 
@@ -136,11 +137,12 @@ func (rm *RepoManager) handleDeleteSession(sm *SessionManager) http.HandlerFunc 
 
 // connectivityResult is the JSON payload sent in the "done" phase of a test connectivity SSE stream.
 type connectivityResult struct {
-	Branches        []string `json:"branches"`
-	DefaultBranch   string   `json:"default_branch"`
-	History         string   `json:"history"` // "shared" or "disjoint"
-	RemoteFactCount int      `json:"remote_fact_count"`
-	LocalFactCount  int      `json:"local_fact_count"`
+	Branches            []string `json:"branches"`
+	DefaultBranch       string   `json:"default_branch"`
+	ExistingAgentBranch string   `json:"existing_agent_branch,omitempty"` // non-empty if remote has our agent branch
+	History             string   `json:"history"`                         // "shared" or "disjoint"
+	RemoteFactCount     int      `json:"remote_fact_count"`
+	LocalFactCount      int      `json:"local_fact_count"`
 }
 
 // handleTestConnectivity handles GET /api/v1/{repo}/origin/session/{sessionID}/test
@@ -263,12 +265,22 @@ CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value BLOB NOT NULL);
 			localFactCount = len(localFiles)
 		}
 
+		// Check if remote has an agent branch matching our hostname.
+		hostname, _ := os.Hostname()
+		agentBranchName := "agent/" + hostname
+		existingAgent := ""
+		agentRefName := plumbing.NewBranchReferenceName(agentBranchName)
+		if _, err := cloned.Storer().Reference(agentRefName); err == nil {
+			existingAgent = agentBranchName
+		}
+
 		result := connectivityResult{
-			Branches:        branches,
-			DefaultBranch:   defaultBranch,
-			History:         history,
-			RemoteFactCount: remoteFactCount,
-			LocalFactCount:  localFactCount,
+			Branches:            branches,
+			DefaultBranch:       defaultBranch,
+			ExistingAgentBranch: existingAgent,
+			History:             history,
+			RemoteFactCount:     remoteFactCount,
+			LocalFactCount:      localFactCount,
 		}
 
 		// Send done event.
@@ -544,9 +556,10 @@ func (rm *RepoManager) handleApply(sm *SessionManager) http.HandlerFunc {
 			agentBranch := "agent/" + hostname
 
 			cfg := git.ReplayConfig{
-				Strategy:      strategy,
-				AgentBranch:   agentBranch,
-				DefaultBranch: remoteBranch,
+				Strategy:          strategy,
+				AgentBranch:       agentBranch,
+				DefaultBranch:     remoteBranch,
+				UseExistingBranch: tr.ExistingAgentBranch != "",
 				OnProgress: func(current, total int) {
 					sendEvent(map[string]any{
 						"phase":   "replaying",

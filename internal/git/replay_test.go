@@ -373,6 +373,69 @@ func TestReplay_DropsOrphanDeadRefs(t *testing.T) {
 	}
 }
 
+func TestReplay_UsesExistingAgentBranch(t *testing.T) {
+	// Create local store with a fact.
+	localStorer, localDB := newTestStorerForReplay(t)
+	local, err := git.InitWithStorer(localStorer, nil, "agent/local")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	localContent := "---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# Local Fact\n\nLocal body.\n"
+	commitHash, blobHash, err := local.WriteFile("kb/local.md", localContent, "add local", "learn")
+	if err != nil {
+		t.Fatal(err)
+	}
+	insertFact(t, localDB, "kb/local.md", blobHash, commitHash)
+
+	// Create target store that already has an agent branch with content.
+	targetStorer, _ := newTestStorerForReplay(t)
+	target, err := git.InitWithStorer(targetStorer, nil, "agent/replay-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Write a fact on the agent branch that only exists there (not on main).
+	agentContent := "---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# Agent Fact\n\nFrom agent branch.\n"
+	if _, _, err := target.WriteFile("kb/agent-existing.md", agentContent, "add agent fact", "learn"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Replay: should detect existing agent branch and replay on top of it.
+	cfg := git.ReplayConfig{
+		Strategy:          git.StrategyLocalWins,
+		AgentBranch:       "agent/replay-test",
+		DefaultBranch:     "main",
+		UseExistingBranch: true,
+	}
+	result, err := git.Replay(local, mustNewIter(t, localDB), target, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if result.FromLocal != 1 {
+		t.Fatalf("FromLocal = %d, want 1", result.FromLocal)
+	}
+
+	// The local fact should exist.
+	content, err := target.ReadFile("kb/local.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if content != localContent {
+		t.Fatalf("expected local content, got: %q", content)
+	}
+
+	// The pre-existing agent fact should still be there.
+	content, err = target.ReadFile("kb/agent-existing.md")
+	if err != nil {
+		t.Fatalf("expected agent-existing.md to still exist, got error: %v", err)
+	}
+	if content != agentContent {
+		t.Fatalf("expected agent content preserved, got: %q", content)
+	}
+}
+
 // advanceMainToHead sets the main branch ref to the current HEAD commit.
 func advanceMainToHead(t *testing.T, s *git.Store) {
 	t.Helper()
