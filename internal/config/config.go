@@ -14,6 +14,7 @@ import (
 // Config is the root configuration, composed of section structs.
 type Config struct {
 	Home         string              `toml:"repo"`
+	Host         string              `toml:"host"`
 	Port         string              `toml:"port"`
 	Socket       string              `toml:"socket"`
 	OntologyRoot string              `toml:"ontology_root"`
@@ -28,6 +29,7 @@ func Defaults() Config {
 	home, _ := os.UserHomeDir()
 	return Config{
 		Home:         home + "/.knomit",
+		Host:         "localhost",
 		Port:         "19278",
 		OntologyRoot: "kb",
 		LLM:          llm.DefaultConfig(),
@@ -58,6 +60,7 @@ func Load() (Config, error) {
 	cfg.Home = homeBefore
 
 	// Overlay env vars.
+	envOr("KNOMIT_HOST", &cfg.Host)
 	envOr("KNOMIT_PORT", &cfg.Port)
 	envOr("KNOMIT_SOCKET", &cfg.Socket)
 	envOr("KNOMIT_LLM_MODEL", &cfg.LLM.Model)

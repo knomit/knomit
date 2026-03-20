@@ -176,7 +176,8 @@ func serveCmd() *cobra.Command {
 
 			// 6. Startup summary.
 			pubKey := strings.TrimSpace(string(ssh.MarshalAuthorizedKey(signer.PublicKey())))
-			httpAddr := "http://localhost:" + cfg.Port
+			listenAddr := cfg.Host + ":" + cfg.Port
+			httpAddr := "http://" + listenAddr
 
 			startupLog := log.Info().
 				Str("http", httpAddr).
@@ -200,7 +201,7 @@ func serveCmd() *cobra.Command {
 
 			// 7. Graceful shutdown.
 			srv := &http.Server{
-				Addr:              ":" + cfg.Port,
+				Addr:              listenAddr,
 				Handler:           router,
 				ReadHeaderTimeout: 10 * time.Second,
 				ReadTimeout:       30 * time.Second,
