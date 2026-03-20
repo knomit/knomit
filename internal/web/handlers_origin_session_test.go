@@ -613,6 +613,257 @@ func TestPreview_WrongState(t *testing.T) {
 	}
 }
 
+// --- apply tests ---
+
+// setupTestedSession creates a handler with a local store+svc, a separate remote
+// store (truly disjoint), and manually wires the session into StateTested with
+// disjoint history. Returns the handler, sessionID, and SessionManager so tests
+// can call the apply endpoint.
+func setupTestedSession(t *testing.T) (http.Handler, string) {
+	t.Helper()
+
+	// Build local store+svc.
+	svc, err := store.Open(":memory:")
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	t.Cleanup(func() { svc.Close() })
+
+	localGS, err := git.InitWithStorer(svc.GitStorer(), nil, "agent/test")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Write a local fact.
+	factContent := "---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# Local Fact\n\nContent.\n"
+	writeFact(t, localGS, svc.DB(), "kb/local-fact.md", factContent)
+
+	// Build the remote store with its own independent storer (disjoint history).
+	remoteStorer := newTestStorerForWeb(t)
+	remoteStore, err := git.InitWithStorer(remoteStorer, nil, "agent/remote")
+	if err != nil {
+		t.Fatal(err)
+	}
+	remoteFact := "---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# Remote Fact\n\nContent.\n"
+	if _, _, err := remoteStore.WriteFile("kb/remote-fact.md", remoteFact, "add remote", "learn"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Set up main branch on remote (needed by Replay to create agent branch).
+	remoteHead, err := remoteStore.HeadCommit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := remoteStorer.SetReference(
+		plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), plumbing.NewHash(remoteHead)),
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	// Build router.
+	hub := NewTaskHub(context.Background())
+	rm := NewRepoManager()
+	sm := NewSessionManager()
+	t.Cleanup(sm.Shutdown)
+
+	rm.Set("knomit", &RepoInstance{
+		Name: "knomit",
+		GS:   localGS,
+		Svc:  svc,
+		Hub:  hub,
+	})
+	router := NewRouterWithSessionManager(rm, nil, false, "kb", sm)
+
+	// Create session manually and inject it into StateTested with disjoint history.
+	sess, err := sm.Create("knomit", "inmem:///test-apply", AuthConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess.mu.Lock()
+	sess.State = StateTested
+	sess.RemoteStore = remoteStore
+	sess.TestResult = connectivityResult{
+		DefaultBranch: "main",
+		History:       "disjoint",
+	}
+	sess.mu.Unlock()
+
+	return router, sess.ID
+}
+
+func TestApply_DisjointHistory_ReplaysLocalFacts(t *testing.T) {
+	handler, sessionID := setupTestedSession(t)
+
+	// POST apply with local_wins strategy.
+	applyReq := httptest.NewRequest(http.MethodPost,
+		"/api/v1/knomit/origin/session/"+sessionID+"/apply",
+		strings.NewReader(`{"conflict_strategy":"local_wins"}`))
+	applyRec := httptest.NewRecorder()
+	handler.ServeHTTP(applyRec, applyReq)
+
+	if applyRec.Code != http.StatusOK {
+		t.Fatalf("apply: expected 200, got %d: %s", applyRec.Code, applyRec.Body.String())
+	}
+
+	ct := applyRec.Header().Get("Content-Type")
+	if ct != "text/event-stream" {
+		t.Fatalf("expected text/event-stream, got %q", ct)
+	}
+
+	events := parseSSEEvents(t, applyRec.Body.String())
+	if len(events) < 2 {
+		t.Fatalf("expected at least 2 events, got %d: %s", len(events), applyRec.Body.String())
+	}
+
+	// First event should be replaying phase.
+	if events[0]["phase"] != "replaying" {
+		t.Errorf("first event: expected phase=replaying, got %v", events[0]["phase"])
+	}
+
+	// Find the done event.
+	var doneEvent map[string]any
+	for _, ev := range events {
+		if ev["phase"] == "done" {
+			doneEvent = ev
+			break
+		}
+	}
+	if doneEvent == nil {
+		t.Fatalf("no done event found in: %v", events)
+	}
+
+	result, ok := doneEvent["result"].(map[string]any)
+	if !ok {
+		t.Fatalf("done event missing result: %v", doneEvent)
+	}
+
+	// local has 1 fact, remote has at least 1 fact.
+	fromLocal := int(result["from_local"].(float64))
+	if fromLocal != 1 {
+		t.Errorf("expected from_local=1, got %d", fromLocal)
+	}
+	fromRemote := int(result["from_remote"].(float64))
+	if fromRemote == 0 {
+		t.Error("expected from_remote > 0")
+	}
+	totalFacts := int(result["total_facts"].(float64))
+	if totalFacts < 2 {
+		t.Errorf("expected total_facts >= 2, got %d", totalFacts)
+	}
+
+	// Verify session state is applied.
+	rr := doRequest(t, handler, http.MethodGet, "/api/v1/knomit/origin/session/"+sessionID, "")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("get session: expected 200, got %d", rr.Code)
+	}
+	var sessBody map[string]any
+	_ = json.NewDecoder(rr.Body).Decode(&sessBody)
+	if sessBody["state"] != "applied" {
+		t.Errorf("expected state=applied, got %v", sessBody["state"])
+	}
+}
+
+func TestApply_CanBeCalledMultipleTimes(t *testing.T) {
+	handler, sessionID := setupTestedSession(t)
+
+	// First apply with local_wins.
+	applyReq1 := httptest.NewRequest(http.MethodPost,
+		"/api/v1/knomit/origin/session/"+sessionID+"/apply",
+		strings.NewReader(`{"conflict_strategy":"local_wins"}`))
+	applyRec1 := httptest.NewRecorder()
+	handler.ServeHTTP(applyRec1, applyReq1)
+
+	if applyRec1.Code != http.StatusOK {
+		t.Fatalf("first apply: expected 200, got %d: %s", applyRec1.Code, applyRec1.Body.String())
+	}
+
+	events1 := parseSSEEvents(t, applyRec1.Body.String())
+	var done1 map[string]any
+	for _, ev := range events1 {
+		if ev["phase"] == "done" {
+			done1 = ev
+			break
+		}
+	}
+	if done1 == nil {
+		t.Fatal("first apply: no done event")
+	}
+
+	// Second apply with remote_wins — should also succeed (repeatable).
+	applyReq2 := httptest.NewRequest(http.MethodPost,
+		"/api/v1/knomit/origin/session/"+sessionID+"/apply",
+		strings.NewReader(`{"conflict_strategy":"remote_wins"}`))
+	applyRec2 := httptest.NewRecorder()
+	handler.ServeHTTP(applyRec2, applyReq2)
+
+	if applyRec2.Code != http.StatusOK {
+		t.Fatalf("second apply: expected 200, got %d: %s", applyRec2.Code, applyRec2.Body.String())
+	}
+
+	events2 := parseSSEEvents(t, applyRec2.Body.String())
+	var done2 map[string]any
+	for _, ev := range events2 {
+		if ev["phase"] == "done" {
+			done2 = ev
+			break
+		}
+	}
+	if done2 == nil {
+		t.Fatal("second apply: no done event")
+	}
+
+	// With remote_wins, from_local should be 0 (all shared paths skip local).
+	// But since local and remote have disjoint paths (no shared), both should replay the same.
+	// The key test: both calls succeeded without error.
+	result1 := done1["result"].(map[string]any)
+	result2 := done2["result"].(map[string]any)
+
+	// Both should have the same from_local count (1 local fact, no shared paths).
+	if result1["from_local"] != result2["from_local"] {
+		t.Errorf("expected same from_local across calls, got %v and %v",
+			result1["from_local"], result2["from_local"])
+	}
+
+	// Verify session is still in applied state.
+	rr := doRequest(t, handler, http.MethodGet, "/api/v1/knomit/origin/session/"+sessionID, "")
+	var sessBody map[string]any
+	_ = json.NewDecoder(rr.Body).Decode(&sessBody)
+	if sessBody["state"] != "applied" {
+		t.Errorf("expected state=applied, got %v", sessBody["state"])
+	}
+}
+
+func TestApply_SessionNotFound(t *testing.T) {
+	handler, _, _ := newTestRouterWithSvcAndGitStore(t)
+
+	rr := doRequest(t, handler, http.MethodPost, "/api/v1/knomit/origin/session/nonexistent-id/apply",
+		`{"conflict_strategy":"local_wins"}`)
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestApply_WrongState(t *testing.T) {
+	handler, _, _ := newTestRouterWithSvcAndGitStore(t)
+
+	// Create a session (state=created, not tested).
+	rr := doRequest(t, handler, http.MethodPost, "/api/v1/knomit/origin/session",
+		`{"url":"https://github.com/org/repo.git","auth_method":"token","token":"tok"}`)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("create session: expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	var createBody map[string]string
+	_ = json.NewDecoder(rr.Body).Decode(&createBody)
+	sessionID := createBody["session_id"]
+
+	// Apply without running test first -> 409.
+	rr2 := doRequest(t, handler, http.MethodPost, "/api/v1/knomit/origin/session/"+sessionID+"/apply",
+		`{"conflict_strategy":"local_wins"}`)
+	if rr2.Code != http.StatusConflict {
+		t.Fatalf("expected 409, got %d: %s", rr2.Code, rr2.Body.String())
+	}
+}
+
 func TestTestConnectivity_CloneError(t *testing.T) {
 	localStorer := newTestStorerForWeb(t)
 	localStore, err := git.InitWithStorer(localStorer, nil, "agent/test")

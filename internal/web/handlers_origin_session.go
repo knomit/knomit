@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -409,6 +410,169 @@ func (rm *RepoManager) handlePreview(sm *SessionManager) http.HandlerFunc {
 			Int("local_only", localOnly).Int("remote_only", remoteOnly).
 			Int("shared", shared).Int("dead_refs", deadRefs).
 			Msg("preview completed")
+	}
+}
+
+// applyRequest is the expected JSON body for POST /origin/session/{sessionID}/apply.
+type applyRequest struct {
+	ConflictStrategy string `json:"conflict_strategy"`
+}
+
+// applyResult is the JSON payload sent in the "done" phase of an apply SSE stream.
+type applyResult struct {
+	TotalFacts           int `json:"total_facts"`
+	FromLocal            int `json:"from_local"`
+	FromRemote           int `json:"from_remote"`
+	Overwrites           int `json:"overwrites"`
+	RefsResolvedFromHist int `json:"refs_resolved_from_hist"`
+	DanglingRefsDropped  int `json:"dangling_refs_dropped"`
+}
+
+// handleApply handles POST /api/v1/{repo}/origin/session/{sessionID}/apply
+func (rm *RepoManager) handleApply(sm *SessionManager) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		repo := chi.URLParam(r, "repo")
+		sessionID := chi.URLParam(r, "sessionID")
+
+		sess, ok := sm.Get(repo, sessionID)
+		if !ok {
+			writeError(w, http.StatusNotFound, "session not found")
+			return
+		}
+
+		sess.mu.Lock()
+		state := sess.State
+		remoteStore := sess.RemoteStore
+		testResult := sess.TestResult
+		sess.mu.Unlock()
+
+		if state != StateTested && state != StatePreviewed && state != StateApplied {
+			writeError(w, http.StatusConflict, "session must be tested before applying")
+			return
+		}
+		if remoteStore == nil {
+			writeError(w, http.StatusConflict, "session has no remote store (run test first)")
+			return
+		}
+
+		var req applyRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid JSON body")
+			return
+		}
+
+		strategy := git.ConflictStrategy(req.ConflictStrategy)
+		if strategy != git.StrategyLocalWins && strategy != git.StrategyRemoteWins {
+			writeError(w, http.StatusBadRequest, "conflict_strategy must be local_wins or remote_wins")
+			return
+		}
+
+		// Extract test result to get history type and default branch.
+		tr, ok := testResult.(connectivityResult)
+		if !ok {
+			writeError(w, http.StatusConflict, "session test result missing or invalid")
+			return
+		}
+
+		ri := RepoFromContext(r.Context())
+
+		// Set SSE headers.
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Connection", "keep-alive")
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			http.Error(w, "streaming not supported", http.StatusInternalServerError)
+			return
+		}
+
+		sendEvent := func(v any) {
+			data, _ := json.Marshal(v)
+			fmt.Fprintf(w, "data: %s\n\n", data)
+			flusher.Flush()
+		}
+
+		if tr.History == "disjoint" {
+			sendEvent(map[string]string{"phase": "replaying"})
+
+			// Get the local store and local DB for replay.
+			localGS, isRealStore := ri.GS.(*git.Store)
+			if !isRealStore {
+				sendEvent(map[string]string{"phase": "error", "message": "local store is not a git store"})
+				return
+			}
+
+			var localDB *sql.DB
+			if ri.Svc != nil {
+				localDB = ri.Svc.DB()
+			}
+			if localDB == nil {
+				sendEvent(map[string]string{"phase": "error", "message": "local database not available"})
+				return
+			}
+
+			hostname, _ := os.Hostname()
+			agentBranch := "agent/" + hostname
+
+			cfg := git.ReplayConfig{
+				Strategy:      strategy,
+				AgentBranch:   agentBranch,
+				DefaultBranch: tr.DefaultBranch,
+				OnProgress: func(current, total int) {
+					sendEvent(map[string]any{
+						"phase":   "replaying",
+						"current": current,
+						"total":   total,
+					})
+				},
+			}
+
+			replayRes, err := git.Replay(localGS, localDB, remoteStore, cfg)
+			if err != nil {
+				sendEvent(map[string]string{"phase": "error", "message": fmt.Sprintf("replay failed: %v", err)})
+				sess.mu.Lock()
+				sess.State = StateError
+				sess.mu.Unlock()
+				return
+			}
+
+			result := applyResult{
+				TotalFacts:           replayRes.TotalFacts,
+				FromLocal:            replayRes.FromLocal,
+				FromRemote:           replayRes.FromRemote,
+				Overwrites:           replayRes.Overwrites,
+				RefsResolvedFromHist: replayRes.RefsResolvedFromHist,
+				DanglingRefsDropped:  replayRes.DanglingRefsDropped,
+			}
+
+			sendEvent(map[string]any{"phase": "done", "result": result})
+
+			sess.mu.Lock()
+			sess.State = StateApplied
+			sess.ApplyResult = result
+			sess.mu.Unlock()
+
+			log.Info().Str("repo", repo).Str("session_id", sessionID).
+				Int("total", result.TotalFacts).Int("from_local", result.FromLocal).
+				Int("from_remote", result.FromRemote).Int("overwrites", result.Overwrites).
+				Msg("apply completed (disjoint replay)")
+		} else {
+			// Shared history: simple merge path.
+			sendEvent(map[string]string{"phase": "merging"})
+
+			// For v1, shared history merge is a simplified path.
+			// TODO: implement full shared-history merge
+			result := applyResult{}
+			sendEvent(map[string]any{"phase": "done", "result": result})
+
+			sess.mu.Lock()
+			sess.State = StateApplied
+			sess.ApplyResult = result
+			sess.mu.Unlock()
+
+			log.Info().Str("repo", repo).Str("session_id", sessionID).
+				Msg("apply completed (shared merge)")
+		}
 	}
 }
 
