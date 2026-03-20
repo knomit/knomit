@@ -68,6 +68,12 @@ type Embedder interface {
 	Embed(text string) ([]float32, error)
 }
 
+// BatchEmbedder extends Embedder with batch inference support.
+type BatchEmbedder interface {
+	Embedder
+	EmbedBatch(texts []string) ([][]float32, error)
+}
+
 // GitReader is the interface that Index.Sync requires from the git store.
 type GitReader interface {
 	// DiffFiles returns paths added, modified, and deleted between fromCommit and HEAD.

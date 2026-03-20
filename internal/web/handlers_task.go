@@ -76,7 +76,7 @@ func handleRebuild() http.HandlerFunc {
 		repo := ri.Name
 		id, err := ri.Hub.Start("rebuild", func(ctx context.Context, emit func(TaskEvent)) {
 			emit(TaskEvent{Status: "running", Phase: "start", Message: "rebuilding index", Repo: repo})
-			progress := func(done, total int) {
+			progress := func(phase string, done, total int) {
 				if done%10 == 0 || done == total {
 					emit(TaskEvent{Status: "running", Phase: "indexing", Message: fmt.Sprintf("%d/%d files", done, total), Repo: repo})
 				}
