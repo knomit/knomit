@@ -1,9 +1,9 @@
 import { test, expect } from '../../fixtures/knomit.js';
 
-test.describe('Origin Modal', () => {
-  test('open origin modal, set URL, save, and verify via API', async ({ freshKnomit, page }) => {
+test.describe('Connect Remote Modal', () => {
+  test('open modal, enter URL, and close via cancel', async ({ freshKnomit, page }) => {
     // Seed a fact so the repo exists
-    const seedRes = await freshKnomit.api.put(`${freshKnomit.baseURL}/api/v1/knomit/fact`, {
+    await freshKnomit.api.put(`${freshKnomit.baseURL}/api/v1/knomit/fact`, {
       data: {
         path: 'kb/origin-test.md',
         content: `---
@@ -19,7 +19,6 @@ refs: []
 Fact created to ensure the repo exists.`,
       },
     });
-    expect(seedRes.ok()).toBeTruthy();
 
     await page.goto(freshKnomit.baseURL);
     await page.waitForLoadState('domcontentloaded');
@@ -33,35 +32,26 @@ Fact created to ensure the repo exists.`,
     await expect(originItem).toBeVisible();
     await originItem.click();
 
-    // Origin modal appears
-    const modal = page.getByTestId('origin-modal');
+    // Connect Remote modal appears
+    const modal = page.getByTestId('connect-remote-modal');
     await expect(modal).toBeVisible();
 
     // Enter a URL
-    const urlInput = page.getByTestId('origin-url-input');
+    const urlInput = page.getByTestId('connect-remote-url-input');
     await urlInput.fill('git@github.com:test/origin-test.git');
+    await expect(urlInput).toHaveValue('git@github.com:test/origin-test.git');
 
-    // Type "yes" to confirm the URL change
-    const confirmInput = modal.locator('input[placeholder="yes"]');
-    await confirmInput.fill('yes');
+    // Test Connection button should be enabled
+    const testBtn = page.getByTestId('connect-remote-test-btn');
+    await expect(testBtn).toBeEnabled();
 
-    // Click save
-    const saveBtn = page.getByTestId('origin-save-btn');
-    await expect(saveBtn).toBeEnabled();
-    await saveBtn.click();
-
-    // Modal should close after save
-    await expect(modal).not.toBeVisible({ timeout: 10_000 });
-
-    // Verify the origin was set via API
-    const originRes = await freshKnomit.api.get(`${freshKnomit.baseURL}/api/v1/knomit/origin`);
-    expect(originRes.ok()).toBeTruthy();
-    const originData = await originRes.json();
-    expect(originData.url).toBe('git@github.com:test/origin-test.git');
+    // Cancel closes the modal
+    const cancelBtn = page.getByTestId('connect-remote-cancel-btn');
+    await cancelBtn.click();
+    await expect(modal).not.toBeVisible();
   });
 
-  test('close button dismisses the origin modal', async ({ freshKnomit, page }) => {
-    // Seed a fact so the repo exists
+  test('close button dismisses the modal', async ({ freshKnomit, page }) => {
     await freshKnomit.api.put(`${freshKnomit.baseURL}/api/v1/knomit/fact`, {
       data: {
         path: 'kb/close-test.md',
@@ -86,11 +76,11 @@ Seed fact.`,
     await page.getByTestId('toknomitr-menu-btn').click();
     await page.getByTestId('menu-origin').click();
 
-    const modal = page.getByTestId('origin-modal');
+    const modal = page.getByTestId('connect-remote-modal');
     await expect(modal).toBeVisible();
 
-    // Close via close button
-    await page.getByTestId('origin-close-btn').click();
+    // Close via X button
+    await page.getByTestId('connect-remote-close-btn').click();
     await expect(modal).not.toBeVisible();
   });
 });

@@ -107,8 +107,20 @@ func buildFactPath(ontologyRoot, topic, category string) string {
 	return fmt.Sprintf("%s/%s/%s/%s.md", ontologyRoot, topic, category, id)
 }
 
+// BatchEmbedder computes embedding vectors for multiple texts in a single call.
+type BatchEmbedder interface {
+	Embed(text string) ([]float32, error)
+	EmbedBatch(texts []string) ([][]float32, error)
+}
+
 // LearnHandler returns the handler function for knomit_learn.
-func LearnHandler(gs GitStore, idx SearchIndex, ontologyRoot string, ontology *fact.Ontology) func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+// If embedder is non-nil, dedup checks batch-embed all incoming facts upfront
+// instead of embedding one-at-a-time inside each Search call.
+func LearnHandler(gs GitStore, idx SearchIndex, ontologyRoot string, ontology *fact.Ontology, embedders ...BatchEmbedder) func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+	var batchEmb BatchEmbedder
+	if len(embedders) > 0 {
+		batchEmb = embedders[0]
+	}
 	return func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 		// 1. Parse arguments.
 		momentName := req.GetString("moment_name", "")
@@ -193,15 +205,29 @@ func LearnHandler(gs GitStore, idx SearchIndex, ontologyRoot string, ontology *f
 		}
 
 		// 3b. Dedup check: search for near-duplicates scoped to the same category directory.
+		// Batch-embed all incoming facts upfront if a BatchEmbedder is available,
+		// so each dedup Search uses the pre-computed vector instead of re-embedding.
 		const dedupThreshold = 0.92
+		var dedupVecs [][]float32
+		if batchEmb != nil && len(facts) > 0 {
+			texts := make([]string, len(facts))
+			for i, f := range facts {
+				texts[i] = f.Title + " " + f.Body
+			}
+			dedupVecs, _ = batchEmb.EmbedBatch(texts)
+		}
 		for i, f := range facts {
 			categoryDir := f.Path[:strings.LastIndex(f.Path, "/")]
-			results, err := idx.Search(SearchQuery{
+			sq := SearchQuery{
 				Text:          f.Title + " " + f.Body,
 				Path:          categoryDir,
 				MinSimilarity: dedupThreshold,
 				Limit:         1,
-			})
+			}
+			if dedupVecs != nil && i < len(dedupVecs) && len(dedupVecs[i]) > 0 {
+				sq.QueryVec = dedupVecs[i]
+			}
+			results, err := idx.Search(sq)
 			if err != nil || len(results) == 0 {
 				continue
 			}

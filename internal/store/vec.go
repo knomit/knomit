@@ -25,6 +25,9 @@ func registerVec() {
 	vecOnce.Do(func() {
 		sqlite_vec.Auto()
 		sql.Register("sqlite3_knomit", &sqlite3.SQLiteDriver{
+			ConnectHook: func(conn *sqlite3.SQLiteConn) error {
+				return registerSQLFuncs(conn)
+			},
 			Extensions: []string{graphqliteLibPath()},
 		})
 	})

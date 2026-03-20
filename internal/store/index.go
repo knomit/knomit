@@ -68,6 +68,12 @@ type Embedder interface {
 	Embed(text string) ([]float32, error)
 }
 
+// BatchEmbedder extends Embedder with batch inference support.
+type BatchEmbedder interface {
+	Embedder
+	EmbedBatch(texts []string) ([][]float32, error)
+}
+
 // GitReader is the interface that Index.Sync requires from the git store.
 type GitReader interface {
 	// DiffFiles returns paths added, modified, and deleted between fromCommit and HEAD.
@@ -80,6 +86,9 @@ type GitReader interface {
 	HeadCommit() (string, error)
 	// ListAll returns paths of all .md files from HEAD.
 	ListAll() ([]string, error)
+	// ListAllWithHash returns all .md file paths and their blob hashes from HEAD.
+	// Single tree walk, no per-file I/O.
+	ListAllWithHash() (paths []string, blobHashes []string, err error)
 	// LastCommitForPath returns the hash of the most recent non-merge commit that touched path.
 	LastCommitForPath(path string) (string, error)
 }
@@ -117,13 +126,16 @@ func New(path string, opts ...Option) (*Index, error) {
 	}
 
 	dsn := path
-	if path != ":memory:" {
-		dsn = path + "?_journal_mode=WAL&_busy_timeout=5000"
+	if path == ":memory:" {
+		dsn = path + "?_foreign_keys=1"
+	} else {
+		dsn = path + "?_journal_mode=WAL&_busy_timeout=5000&_foreign_keys=1"
 	}
 	db, err := sql.Open("sqlite3_knomit", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite: %w", err)
 	}
+	db.SetMaxOpenConns(2)
 	// Use the same embedded schema.sql as Service.Open to keep DDL in one place.
 	if _, err := db.Exec(schemaSQL_); err != nil {
 		db.Close()

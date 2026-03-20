@@ -17,9 +17,10 @@ type SearchQuery struct {
 	Domain        []string
 	Path          string
 	MinConfidence float64
-	MinSimilarity float64 // cosine similarity threshold (0–1); 0 uses default 0.40
+	MinSimilarity float64   // cosine similarity threshold (0–1); 0 uses default 0.40
 	Limit         int
-	GraphHops     int // number of graph traversal hops to expand results (0 = disabled)
+	GraphHops     int       // number of graph traversal hops to expand results (0 = disabled)
+	QueryVec      []float32 // pre-computed embedding vector; if set, skips Embed(Text)
 }
 
 // SearchResult is a FactWithBody paired with a relevance score in [0, 100].
@@ -46,10 +47,23 @@ func (idx *Index) Search(q SearchQuery) ([]SearchResult, error) {
 
 	// ── Text-less path: return all facts matching filters with score 100 ──
 	if q.Text == "" {
-		rows, err := idx.db.Query(
-			`SELECT f.path, f.title, f.blob_hash, f.type, f.domain, f.entities, f.confidence, f.sources, f.refs, f.commit_hash, o.data
+		filterQuery := `SELECT f.path, f.title, f.blob_hash, f.type, f.domain, f.entities, f.confidence, f.sources, f.refs, f.commit_hash, o.data
 			 FROM facts f
-			 JOIN objects o ON o.hash = f.blob_hash AND o.type = ?`, BlobObjectType)
+			 JOIN objects o ON o.hash = f.blob_hash AND o.type = ?`
+		args := []any{BlobObjectType}
+		if q.MinConfidence > 0 {
+			filterQuery += " AND f.confidence >= ?"
+			args = append(args, q.MinConfidence)
+		}
+		if q.Path != "" {
+			filterQuery += " AND f.path LIKE ?"
+			args = append(args, q.Path+"%")
+		}
+		filterQuery += " LIMIT ?"
+		// Over-fetch to allow for Go-side entity/domain filtering.
+		args = append(args, limit*3)
+
+		rows, err := idx.db.Query(filterQuery, args...)
 		if err != nil {
 			return nil, fmt.Errorf("search: list all: %w", err)
 		}
@@ -61,16 +75,19 @@ func (idx *Index) Search(q SearchQuery) ([]SearchResult, error) {
 			if err != nil {
 				return nil, err
 			}
-			if !matchesFilters(fb.FactRecord, q) {
+			if len(q.Entities) > 0 && !containsAll(fb.Entities, q.Entities) {
+				continue
+			}
+			if len(q.Domain) > 0 && !domainPrefixMatch(fb.Domain, q.Domain) {
 				continue
 			}
 			out = append(out, SearchResult{FactWithBody: *fb, Score: 100})
+			if len(out) >= limit {
+				break
+			}
 		}
 		if err := rows.Err(); err != nil {
 			return nil, err
-		}
-		if len(out) > limit {
-			out = out[:limit]
 		}
 		return out, nil
 	}
@@ -82,45 +99,43 @@ func (idx *Index) Search(q SearchQuery) ([]SearchResult, error) {
 	}
 
 	vecSimByPath := make(map[string]float64)
-	if idx.embedder == nil {
+	if idx.embedder == nil && len(q.QueryVec) == 0 {
 		log.Debug().Msg("search: no embedder configured, skipping vec search")
 	} else {
-		queryVec, embedErr := idx.embedder.Embed(q.Text)
-		if embedErr != nil {
-			log.Warn().Err(embedErr).Msg("search: embed query failed")
-		} else if queryVec == nil {
-			log.Warn().Msg("search: embedder returned nil vector")
+		// Use pre-computed vector if provided, otherwise embed the text.
+		queryVec := q.QueryVec
+		if len(queryVec) == 0 {
+			var embedErr error
+			queryVec, embedErr = idx.embedder.Embed(q.Text)
+			if embedErr != nil {
+				log.Warn().Err(embedErr).Msg("search: embed query failed")
+			}
+		}
+		if queryVec == nil {
+			log.Warn().Msg("search: no query vector available")
 		} else {
+			// Single JOIN query: KNN + facts table → path + similarity.
 			vecBlob := float32SliceToBytes(queryVec)
 			rows, err := idx.db.Query(
-				`SELECT rowid, distance FROM facts_vec WHERE embedding MATCH ? AND k = ?`,
+				`SELECT f.path, (1.0 - fv.distance) as similarity
+				 FROM facts_vec fv
+				 JOIN facts f ON f.rowid = fv.rowid
+				 WHERE fv.embedding MATCH ? AND fv.k = ?
+				 ORDER BY fv.distance ASC`,
 				vecBlob, limit*5,
 			)
 			if err != nil {
 				log.Warn().Err(err).Msg("search: vec query failed")
 			} else {
-				type vecHit struct {
-					rowid int64
-					dist  float64
-				}
-				var hits []vecHit
 				for rows.Next() {
-					var h vecHit
-					if err := rows.Scan(&h.rowid, &h.dist); err != nil {
+					var path string
+					var sim float64
+					if err := rows.Scan(&path, &sim); err != nil {
 						break
 					}
-					hits = append(hits, h)
+					vecSimByPath[path] = sim
 				}
 				rows.Close()
-
-				// Convert rowid → path and store cosine similarity (1 - distance).
-				for _, h := range hits {
-					var path string
-					err := idx.db.QueryRow(`SELECT path FROM facts WHERE rowid = ?`, h.rowid).Scan(&path)
-					if err == nil {
-						vecSimByPath[path] = 1.0 - h.dist
-					}
-				}
 				log.Debug().Int("vec_hits", len(vecSimByPath)).Msg("vec search complete")
 			}
 		}
@@ -143,32 +158,72 @@ func (idx *Index) Search(q SearchQuery) ([]SearchResult, error) {
 		return nil, nil
 	}
 
-	// Build candidates from vec hits above the similarity threshold.
-	candidates := make([]candidate, 0, len(vecSimByPath))
-
 	minSim := q.MinSimilarity
 	if minSim <= 0 {
 		minSim = 0.40
 	}
+
+	// Filter to paths above similarity threshold.
+	candidatePaths := make([]string, 0, len(vecSimByPath))
 	for path, cosine := range vecSimByPath {
-		if cosine <= minSim {
-			continue
+		if cosine > minSim {
+			candidatePaths = append(candidatePaths, path)
 		}
-		fb, err := idx.GetByPath(path)
-		if err != nil || fb == nil {
-			continue
-		}
-		candidates = append(candidates, candidate{rec: *fb, score: cosine})
+	}
+	if len(candidatePaths) == 0 {
+		return nil, nil
 	}
 
-	// ── Apply post-retrieval filters ─────────────────────────────────────
-	filtered := candidates[:0]
-	for _, c := range candidates {
-		if matchesFilters(c.rec.FactRecord, q) {
-			filtered = append(filtered, c)
-		}
+	// Batch-fetch all candidate facts+bodies in a single query with SQL-side filters.
+	placeholders := make([]string, len(candidatePaths))
+	args := make([]any, 0, len(candidatePaths)+4)
+	args = append(args, BlobObjectType)
+	for i, p := range candidatePaths {
+		placeholders[i] = "?"
+		args = append(args, p)
 	}
-	candidates = filtered
+
+	filterSQL := ""
+	if q.MinConfidence > 0 {
+		filterSQL += " AND f.confidence >= ?"
+		args = append(args, q.MinConfidence)
+	}
+	if q.Path != "" {
+		filterSQL += " AND f.path LIKE ?"
+		args = append(args, q.Path+"%")
+	}
+
+	batchQuery := `SELECT f.path, f.title, f.blob_hash, f.type, f.domain, f.entities, f.confidence, f.sources, f.refs, f.commit_hash, o.data
+		 FROM facts f
+		 JOIN objects o ON o.hash = f.blob_hash AND o.type = ?
+		 WHERE f.path IN (` + strings.Join(placeholders, ",") + `)` + filterSQL
+
+	batchRows, err := idx.db.Query(batchQuery, args...)
+	if err != nil {
+		return nil, fmt.Errorf("search: batch fetch: %w", err)
+	}
+	defer batchRows.Close()
+
+	var candidates []candidate
+	for batchRows.Next() {
+		fb, err := scanFactWithBodyFromRows(batchRows)
+		if err != nil {
+			return nil, err
+		}
+		// Entity and domain filters still applied in Go (json_each would require
+		// dynamic subqueries per filter element which adds complexity for little gain
+		// on the typically small candidate set).
+		if len(q.Entities) > 0 && !containsAll(fb.Entities, q.Entities) {
+			continue
+		}
+		if len(q.Domain) > 0 && !domainPrefixMatch(fb.Domain, q.Domain) {
+			continue
+		}
+		candidates = append(candidates, candidate{rec: *fb, score: vecSimByPath[fb.Path]})
+	}
+	if err := batchRows.Err(); err != nil {
+		return nil, err
+	}
 
 	if len(candidates) == 0 {
 		return nil, nil

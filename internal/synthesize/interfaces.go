@@ -33,3 +33,9 @@ type ProgressEvent struct {
 type Embedder interface {
 	Embed(text string) ([]float32, error)
 }
+
+// BatchEmbedder extends Embedder with batch inference support.
+type BatchEmbedder interface {
+	Embedder
+	EmbedBatch(texts []string) ([][]float32, error)
+}

@@ -211,13 +211,43 @@ func (s *Store) appendCommitLog(hash plumbing.Hash) {
 	op := parseOperation(authorEmail)
 	ts := c.Committer.When.Unix()
 	msg := firstLine(c.Message)
+	hashStr := hash.String()
+
+	if len(files) <= 1 {
+		// Single file — no need for transaction overhead.
+		for _, f := range files {
+			if _, err := s.db.Exec(
+				`INSERT OR IGNORE INTO commit_log (commit_hash, path, committed_at, message, operation, author_email, action) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+				hashStr, f.path, ts, msg, op, authorEmail, f.action,
+			); err != nil {
+				log.Warn().Err(err).Str("path", f.path).Msg("commit_log: insert")
+			}
+		}
+		return
+	}
+
+	// Multi-file commit: batch in a single transaction with a prepared statement.
+	tx, err := s.db.Begin()
+	if err != nil {
+		log.Warn().Err(err).Msg("commit_log: begin tx")
+		return
+	}
+	defer tx.Rollback()
+
+	stmt, err := tx.Prepare(`INSERT OR IGNORE INTO commit_log (commit_hash, path, committed_at, message, operation, author_email, action) VALUES (?, ?, ?, ?, ?, ?, ?)`)
+	if err != nil {
+		log.Warn().Err(err).Msg("commit_log: prepare")
+		return
+	}
+	defer stmt.Close()
+
 	for _, f := range files {
-		if _, err := s.db.Exec(
-			`INSERT OR IGNORE INTO commit_log (commit_hash, path, committed_at, message, operation, author_email, action) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-			hash.String(), f.path, ts, msg, op, authorEmail, f.action,
-		); err != nil {
+		if _, err := stmt.Exec(hashStr, f.path, ts, msg, op, authorEmail, f.action); err != nil {
 			log.Warn().Err(err).Str("path", f.path).Msg("commit_log: insert")
 		}
+	}
+	if err := tx.Commit(); err != nil {
+		log.Warn().Err(err).Msg("commit_log: commit tx")
 	}
 }
 

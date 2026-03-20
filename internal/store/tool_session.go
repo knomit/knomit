@@ -134,10 +134,6 @@ func (idx *Index) AddSeenPaths(sessionID string, paths []string) error {
 // GCToolSessions deletes all but the most recent `keep` sessions for a given tool and branch.
 // Seen paths and queue items are cascaded via the foreign key constraint.
 func (idx *Index) GCToolSessions(tool, branch string, keep int) error {
-	// Enable foreign keys for cascade deletes.
-	if _, err := idx.db.Exec(`PRAGMA foreign_keys = ON`); err != nil {
-		return fmt.Errorf("GCToolSessions pragma: %w", err)
-	}
 	_, err := idx.db.Exec(
 		`DELETE FROM tool_sessions
 		 WHERE tool = ? AND branch = ? AND id NOT IN (
@@ -188,11 +184,6 @@ func (idx *Index) DequeuePaths(sessionID string, limit int) ([]QueueItem, error)
 		return nil, fmt.Errorf("DequeuePaths begin: %w", err)
 	}
 	defer tx.Rollback()
-
-	// Enable foreign keys within the transaction.
-	if _, err := tx.Exec(`PRAGMA foreign_keys = ON`); err != nil {
-		return nil, fmt.Errorf("DequeuePaths pragma: %w", err)
-	}
 
 	rows, err := tx.Query(
 		`SELECT rowid, path, commit_hash, depth FROM tool_queue

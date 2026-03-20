@@ -571,6 +571,39 @@ func TestListAll(t *testing.T) {
 	}
 }
 
+func TestListAllWithHash(t *testing.T) {
+	dir := t.TempDir()
+	store, err := git.Init(filepath.Join(dir, "knomit.git.db"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	if _, _, err := store.WriteFile("kb/alpha.md", "# Alpha\n\nAlpha body.\n", "add alpha", "learn"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.WriteFile("kb/beta.md", "# Beta\n\nBeta body.\n", "add beta", "learn"); err != nil {
+		t.Fatal(err)
+	}
+
+	paths, hashes, err := store.ListAllWithHash()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(paths) != len(hashes) {
+		t.Fatalf("paths and hashes length mismatch: %d vs %d", len(paths), len(hashes))
+	}
+	if len(paths) == 0 {
+		t.Fatal("expected at least one result from ListAllWithHash")
+	}
+	for i, h := range hashes {
+		if h == "" {
+			t.Fatalf("empty hash for path %q", paths[i])
+		}
+	}
+}
+
 func TestBatchWrite(t *testing.T) {
 	dir := t.TempDir()
 	store, err := git.Init(filepath.Join(dir, "knomit.git.db"), nil)
