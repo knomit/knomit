@@ -128,20 +128,23 @@ func (h *TaskHub) Start(op string, fn func(ctx context.Context, emit func(TaskEv
 
 // emit broadcasts an event to all subscribers and updates internal state.
 func (h *TaskHub) emit(ev TaskEvent) {
-	l := log.Debug().
-		Str("op", ev.Op).
-		Str("id", ev.ID).
-		Str("status", ev.Status)
-	if ev.Repo != "" {
-		l = l.Str("repo", ev.Repo)
+	// Skip noisy progress logs (running + indexing phase).
+	if !(ev.Status == "running" && ev.Phase == "indexing") {
+		l := log.Debug().
+			Str("op", ev.Op).
+			Str("id", ev.ID).
+			Str("status", ev.Status)
+		if ev.Repo != "" {
+			l = l.Str("repo", ev.Repo)
+		}
+		if ev.Phase != "" {
+			l = l.Str("phase", ev.Phase)
+		}
+		if ev.Message != "" {
+			l = l.Str("message", ev.Message)
+		}
+		l.Msg("task event")
 	}
-	if ev.Phase != "" {
-		l = l.Str("phase", ev.Phase)
-	}
-	if ev.Message != "" {
-		l = l.Str("message", ev.Message)
-	}
-	l.Msg("task event")
 
 	h.mu.Lock()
 	if ev.Status == "running" {

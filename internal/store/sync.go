@@ -103,11 +103,15 @@ func (idx *Index) Rebuild(git GitReader, branch string, progress RebuildProgress
 		}
 	}
 	elapsed := time.Since(start)
-	avg := time.Duration(0)
+	avgMs := float64(0)
 	if len(paths) > 0 {
-		avg = elapsed / time.Duration(len(paths))
+		avgMs = float64(elapsed.Milliseconds()) / float64(len(paths))
 	}
-	log.Info().Int("files", len(paths)).Dur("elapsed", elapsed).Dur("avg_per_file", avg).Msg("index rebuild: complete")
+	log.Info().
+		Int("files", len(paths)).
+		Str("elapsed", fmt.Sprintf("%.1fs", elapsed.Seconds())).
+		Str("avg_per_file", fmt.Sprintf("%.0fms", avgMs)).
+		Msg("index rebuild: complete")
 
 	return idx.SetLastCommit(branch, head)
 }
