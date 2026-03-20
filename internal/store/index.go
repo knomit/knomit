@@ -80,6 +80,9 @@ type GitReader interface {
 	HeadCommit() (string, error)
 	// ListAll returns paths of all .md files from HEAD.
 	ListAll() ([]string, error)
+	// ListAllWithHash returns all .md file paths and their blob hashes from HEAD.
+	// Single tree walk, no per-file I/O.
+	ListAllWithHash() (paths []string, blobHashes []string, err error)
 	// LastCommitForPath returns the hash of the most recent non-merge commit that touched path.
 	LastCommitForPath(path string) (string, error)
 }

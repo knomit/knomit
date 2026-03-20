@@ -492,11 +492,22 @@ func (m *mockGitReader) LastCommitForPath(path string) (string, error) {
 	return m.head, nil // mock: return head as the last commit
 }
 func (m *mockGitReader) ListAll() ([]string, error) {
-	var paths []string
+	paths, _, err := m.ListAllWithHash()
+	return paths, err
+}
+func (m *mockGitReader) ListAllWithHash() ([]string, []string, error) {
+	var paths, hashes []string
 	for p := range m.files {
 		paths = append(paths, p)
+		hash := "blob_" + p
+		if m.blobHashes != nil {
+			if h, ok := m.blobHashes[p]; ok {
+				hash = h
+			}
+		}
+		hashes = append(hashes, hash)
 	}
-	return paths, nil
+	return paths, hashes, nil
 }
 
 func TestSyncRebuildsGraph(t *testing.T) {

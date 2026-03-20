@@ -225,37 +225,55 @@ func (s *Store) LastCommitForPath(path string) (string, error) {
 	}
 }
 
-// ListAll returns paths of all .md files under HEAD.
-func (s *Store) ListAll() ([]string, error) {
+// pathHashSorter sorts two parallel slices (paths and hashes) together by path.
+type pathHashSorter struct{ paths, hashes []string }
+
+func (s pathHashSorter) Len() int           { return len(s.paths) }
+func (s pathHashSorter) Less(i, j int) bool { return s.paths[i] < s.paths[j] }
+func (s pathHashSorter) Swap(i, j int) {
+	s.paths[i], s.paths[j] = s.paths[j], s.paths[i]
+	s.hashes[i], s.hashes[j] = s.hashes[j], s.hashes[i]
+}
+
+// ListAllWithHash returns all .md files under HEAD with their blob hashes.
+// Single tree walk — no per-file I/O.
+func (s *Store) ListAllWithHash() ([]string, []string, error) {
 	headRef, err := s.repo.Head()
 	if err != nil {
-		return nil, fmt.Errorf("ListAll: head: %w", err)
+		return nil, nil, fmt.Errorf("ListAllWithHash: head: %w", err)
 	}
 
 	commit, err := s.repo.CommitObject(headRef.Hash())
 	if err != nil {
-		return nil, fmt.Errorf("ListAll: commit: %w", err)
+		return nil, nil, fmt.Errorf("ListAllWithHash: commit: %w", err)
 	}
 
 	fileIter, err := commit.Files()
 	if err != nil {
-		return nil, fmt.Errorf("ListAll: files: %w", err)
+		return nil, nil, fmt.Errorf("ListAllWithHash: files: %w", err)
 	}
 	defer fileIter.Close()
 
-	var paths []string
+	var paths, blobHashes []string
 	err = fileIter.ForEach(func(f *object.File) error {
 		if strings.HasSuffix(f.Name, ".md") {
 			paths = append(paths, f.Name)
+			blobHashes = append(blobHashes, f.Hash.String())
 		}
 		return nil
 	})
 	if err != nil {
-		return nil, fmt.Errorf("ListAll: iterate: %w", err)
+		return nil, nil, fmt.Errorf("ListAllWithHash: iterate: %w", err)
 	}
 
-	sort.Strings(paths)
-	return paths, nil
+	sort.Sort(pathHashSorter{paths, blobHashes})
+	return paths, blobHashes, nil
+}
+
+// ListAll returns paths of all .md files under HEAD.
+func (s *Store) ListAll() ([]string, error) {
+	paths, _, err := s.ListAllWithHash()
+	return paths, err
 }
 
 // Log returns log entries for commits that modified path (up to 50).
