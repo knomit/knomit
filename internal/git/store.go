@@ -33,6 +33,7 @@ import (
 	gogitconfig "github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
+	"github.com/go-git/go-git/v5/plumbing/storer"
 	"github.com/go-git/go-git/v5/plumbing/transport"
 	"github.com/go-git/go-billy/v5/memfs"
 	_ "github.com/mattn/go-sqlite3"
@@ -563,12 +564,27 @@ func (s *Store) DefaultBranch() (string, error) {
 	return s.branch, nil
 }
 
+// progressWriter adapts a progress callback to io.Writer for use with CloneOptions.Progress.
+type progressWriter struct {
+	fn func(string)
+}
+
+func (pw *progressWriter) Write(p []byte) (int, error) {
+	pw.fn(string(p))
+	return len(p), nil
+}
+
 // CloneInto clones the remote URL into the given storer, returning a new Store.
 func CloneInto(storer *storegit.Storer, url string, auth transport.AuthMethod, progress func(string)) (*Store, error) {
-	repo, err := gogit.Clone(storer, memfs.New(), &gogit.CloneOptions{
+	opts := &gogit.CloneOptions{
 		URL:  url,
 		Auth: auth,
-	})
+	}
+	if progress != nil {
+		opts.Progress = &progressWriter{fn: progress}
+	}
+
+	repo, err := gogit.Clone(storer, memfs.New(), opts)
 	if err != nil {
 		return nil, fmt.Errorf("CloneInto: clone: %w", err)
 	}
@@ -578,10 +594,6 @@ func CloneInto(storer *storegit.Storer, url string, auth transport.AuthMethod, p
 		return nil, fmt.Errorf("CloneInto: resolve HEAD: %w", err)
 	}
 	branch := strings.TrimPrefix(head.Name().String(), "refs/heads/")
-
-	if progress != nil {
-		progress("clone complete: " + branch)
-	}
 
 	log.Info().Str("branch", branch).Str("url", url).Msg("cloned remote into storer")
 	return &Store{
@@ -610,14 +622,16 @@ func (s *Store) HasSharedHistory(remote *Store) (bool, error) {
 		return false, fmt.Errorf("HasSharedHistory: local log: %w", err)
 	}
 	count := 0
-	localIter.ForEach(func(c *object.Commit) error {
+	if err := localIter.ForEach(func(c *object.Commit) error {
 		if count >= maxCommits {
-			return fmt.Errorf("stop")
+			return storer.ErrStop
 		}
 		localHashes[c.Hash] = struct{}{}
 		count++
 		return nil
-	})
+	}); err != nil {
+		return false, fmt.Errorf("HasSharedHistory: local walk: %w", err)
+	}
 
 	// Walk remote commits and check for overlap.
 	remoteHead, err := remote.repo.Head()
@@ -630,17 +644,19 @@ func (s *Store) HasSharedHistory(remote *Store) (bool, error) {
 	}
 	count = 0
 	found := false
-	remoteIter.ForEach(func(c *object.Commit) error {
+	if err := remoteIter.ForEach(func(c *object.Commit) error {
 		if count >= maxCommits {
-			return fmt.Errorf("stop")
+			return storer.ErrStop
 		}
 		if _, ok := localHashes[c.Hash]; ok {
 			found = true
-			return fmt.Errorf("stop")
+			return storer.ErrStop
 		}
 		count++
 		return nil
-	})
+	}); err != nil {
+		return false, fmt.Errorf("HasSharedHistory: remote walk: %w", err)
+	}
 
 	return found, nil
 }
