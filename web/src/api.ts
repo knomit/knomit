@@ -96,14 +96,14 @@ export interface ApplyResult {
 
 export type SSEEvent =
   | { phase: "connecting" }
-  | { phase: "cloning"; progress: string }
+  | { phase: "cloning"; progress?: string }
   | { phase: "analyzing" }
   | { phase: "comparing" }
   | { phase: "replaying"; current: number; total: number }
   | { phase: "merging" }
   | { phase: "swapping" }
   | { phase: "configuring" }
-  | { phase: "rebuilding" }
+  | { phase: "rebuilding"; current?: number; total?: number }
   | { phase: "done"; result: any }
   | { phase: "error"; message: string };
 
@@ -120,6 +120,24 @@ function parseSSELines(text: string): SSEEvent[] {
     }
   }
   return events;
+}
+
+async function readSSEStream(res: Response, onEvent?: (e: SSEEvent) => void): Promise<void> {
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(err.error || res.statusText);
+  }
+  const reader = res.body!.getReader();
+  const decoder = new TextDecoder();
+  let buf = '';
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    const events = parseSSELines(buf);
+    buf = buf.includes('\n') ? buf.slice(buf.lastIndexOf('\n') + 1) : '';
+    for (const ev of events) onEvent?.(ev);
+  }
 }
 
 export function createSession(repo: string, opts: { url: string; auth_method?: string; token?: string; user?: string; password?: string }): Promise<SessionCreateResponse> {
@@ -153,40 +171,12 @@ export async function streamApply(repo: string, sessionId: string, strategy: str
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ error: res.statusText }));
-    throw new Error(err.error || res.statusText);
-  }
-  const reader = res.body!.getReader();
-  const decoder = new TextDecoder();
-  let buf = '';
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buf += decoder.decode(value, { stream: true });
-    const events = parseSSELines(buf);
-    buf = buf.includes('\n') ? buf.slice(buf.lastIndexOf('\n') + 1) : '';
-    for (const ev of events) onEvent?.(ev);
-  }
+  await readSSEStream(res, onEvent);
 }
 
 export async function streamCommit(repo: string, sessionId: string, onEvent: (e: SSEEvent) => void): Promise<void> {
   const res = await fetch(`${sessionBase(repo, sessionId)}/commit`, { method: 'POST' });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ error: res.statusText }));
-    throw new Error(err.error || res.statusText);
-  }
-  const reader = res.body!.getReader();
-  const decoder = new TextDecoder();
-  let buf = '';
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buf += decoder.decode(value, { stream: true });
-    const events = parseSSELines(buf);
-    buf = buf.includes('\n') ? buf.slice(buf.lastIndexOf('\n') + 1) : '';
-    for (const ev of events) onEvent(ev);
-  }
+  await readSSEStream(res, onEvent);
 }
 
 export function deleteSession(repo: string, sessionId: string): Promise<void> {

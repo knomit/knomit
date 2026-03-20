@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback } from 'react';
+import { useState, useRef, useCallback, useEffect } from 'react';
 import { createSession, streamTest, streamPreview, streamApply, streamCommit, deleteSession } from './api';
 import type { SSEEvent, TestResult, PreviewResult, ApplyResult } from './api';
 
@@ -39,6 +39,10 @@ export function ConnectRemoteModal({ repo, onClose }: Props) {
   const [error, setError] = useState<{ section: Step; message: string } | null>(null);
 
   const cleanupRef = useRef<(() => void) | null>(null);
+
+  useEffect(() => {
+    return () => { cleanupRef.current?.(); };
+  }, []);
 
   const handleCancel = useCallback(() => {
     if (cleanupRef.current) { cleanupRef.current(); cleanupRef.current = null; }
@@ -135,7 +139,7 @@ export function ConnectRemoteModal({ repo, onClose }: Props) {
           setError({ section: 'applying', message: ev.message });
           setStep('applied');
         } else if (ev.phase === 'replaying') {
-          setProgress(`Replaying ${(ev as any).current}/${(ev as any).total}...`);
+          setProgress(`Replaying ${ev.current}/${ev.total}...`);
         } else if (ev.phase === 'merging') {
           setProgress('Merging...');
         } else {
@@ -166,9 +170,7 @@ export function ConnectRemoteModal({ repo, onClose }: Props) {
         } else if (ev.phase === 'configuring') {
           setProgress('Configuring remote...');
         } else if (ev.phase === 'rebuilding') {
-          const cur = (ev as any).current;
-          const tot = (ev as any).total;
-          setProgress(tot > 0 ? `Rebuilding index... ${cur}/${tot}` : 'Rebuilding index...');
+          setProgress(ev.total && ev.total > 0 ? `Rebuilding index... ${ev.current}/${ev.total}` : 'Rebuilding index...');
         } else {
           setProgress(ev.phase + '...');
         }
