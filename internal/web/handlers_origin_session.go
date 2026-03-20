@@ -760,6 +760,14 @@ func (rm *RepoManager) handleCommit(sm *SessionManager) http.HandlerFunc {
 		// Phase: swapping — replace the git store on the repo instance.
 		sendEvent(map[string]string{"phase": "swapping"})
 
+		// Checkpoint the temp DB's WAL so all data is in the main .db file before copying.
+		if tempDB := remoteStore.Storer().DB(); tempDB != nil {
+			if _, err := tempDB.Exec("PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {
+				log.Warn().Err(err).Msg("commit: WAL checkpoint failed")
+			}
+			tempDB.Close()
+		}
+
 		tempDBPath := filepath.Join(sess.TempDir, "clone.db")
 		if err := rm.SwapStore(ri, tempDBPath); err != nil {
 			sendEvent(map[string]string{"phase": "error", "message": fmt.Sprintf("swap failed: %v", err)})

@@ -473,8 +473,8 @@ export function ConnectRemoteModal({ repo, onClose }: Props) {
           </div>
         )}
 
-        {/* Cancel always available at bottom when busy */}
-        {busy && (
+        {/* Cancel always available unless done */}
+        {step !== 'done' && (
           <div style={{ marginTop: 16, textAlign: 'right' }}>
             <button onClick={handleCancel} style={btn(false, 'danger')}>Cancel</button>
           </div>
