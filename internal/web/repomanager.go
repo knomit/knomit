@@ -148,6 +148,9 @@ func (rm *RepoManager) SwapStore(ri *RepoInstance, tempDBPath string) error {
 	ri.Svc = svc
 	ri.GS = gs
 	ri.Idx = svc.Index()
+
+	// Clean up backup — swap succeeded.
+	os.Remove(backupPath)
 	return nil
 }
 
