@@ -1,4 +1,4 @@
-// knomit-mcp-remote bridges stdio ↔ streamable-http for MCP.
+// knomit-remote bridges stdio ↔ streamable-http for MCP.
 //
 // Claude Desktop (and other stdio-only MCP clients) launches this binary.
 // It reads JSON-RPC messages from stdin, POSTs them to a knomit MCP
@@ -6,20 +6,20 @@
 //
 // Usage:
 //
-//	knomit-mcp-remote [--repo <name>] [--profile <profile>] <base-url>
-//	knomit-mcp-remote http://localhost:19278
-//	knomit-mcp-remote --repo work --profile chat http://localhost:19278
+//	knomit-remote [--repo <name>] [--profile <profile>] <base-url>
+//	knomit-remote http://localhost:19278
+//	knomit-remote --repo work --profile chat http://localhost:19278
 //
 // Claude Desktop config:
 //
 //	{
 //	  "mcpServers": {
 //	    "knomit": {
-//	      "command": "/path/to/knomit-mcp-remote",
+//	      "command": "/path/to/knomit-remote",
 //	      "args": ["http://localhost:19278"]
 //	    },
 //	    "work-kb": {
-//	      "command": "/path/to/knomit-mcp-remote",
+//	      "command": "/path/to/knomit-remote",
 //	      "args": ["--repo", "work", "http://localhost:19278"]
 //	    }
 //	  }
@@ -44,7 +44,7 @@ var debug = os.Getenv("KNOMIT_MCP_DEBUG") != ""
 
 func logDebug(format string, args ...any) {
 	if debug {
-		fmt.Fprintf(os.Stderr, "[mcp-remote] "+format+"\n", args...)
+		fmt.Fprintf(os.Stderr, "[knomit-remote] "+format+"\n", args...)
 	}
 }
 
@@ -52,9 +52,9 @@ func main() {
 	repo := flag.String("repo", "knomit", "repository name")
 	profile := flag.String("profile", "code", "MCP profile (code, chat, generic)")
 	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "usage: knomit-mcp-remote [--repo <name>] [--profile <profile>] <base-url>\n")
-		fmt.Fprintf(os.Stderr, "example: knomit-mcp-remote http://localhost:19278\n")
-		fmt.Fprintf(os.Stderr, "         knomit-mcp-remote --repo work --profile chat http://localhost:19278\n")
+		fmt.Fprintf(os.Stderr, "usage: knomit-remote [--repo <name>] [--profile <profile>] <base-url>\n")
+		fmt.Fprintf(os.Stderr, "example: knomit-remote http://localhost:19278\n")
+		fmt.Fprintf(os.Stderr, "         knomit-remote --repo work --profile chat http://localhost:19278\n")
 		flag.PrintDefaults()
 	}
 	flag.Parse()
