@@ -270,10 +270,59 @@ func (idx *Index) rebuildGraph(progress RebuildProgress) (int, error) {
 	}
 
 	// Build similarity edges after commit (needs committed data for KNN).
+	// Batch: collect all neighbors first, then write all edges in one transaction.
 	if idx.embedder != nil {
+		type simEdge struct{ from, to string }
+		var edges []simEdge
+
 		for _, rec := range facts {
-			if err := idx.graphBuildSimilarityEdges(rec.Path); err != nil {
-				log.Warn().Err(err).Str("path", rec.Path).Msg("rebuildGraph: similarity edges failed")
+			emb, err := idx.GetEmbedding(rec.Path)
+			if err != nil || emb == nil {
+				continue
+			}
+			vecBlob := float32SliceToBytes(emb)
+			rows, err := idx.db.Query(
+				`SELECT f.path, (1.0 - fv.distance) as similarity
+				 FROM facts_vec fv
+				 JOIN facts f ON f.rowid = fv.rowid
+				 WHERE fv.embedding MATCH ? AND fv.k = ?
+				 ORDER BY fv.distance ASC`,
+				vecBlob, knnK+1,
+			)
+			if err != nil {
+				log.Warn().Err(err).Str("path", rec.Path).Msg("rebuildGraph: knn query failed")
+				continue
+			}
+			for rows.Next() {
+				var neighborPath string
+				var sim float64
+				if err := rows.Scan(&neighborPath, &sim); err != nil {
+					break
+				}
+				if neighborPath != rec.Path && sim >= knnThreshold {
+					edges = append(edges, simEdge{from: rec.Path, to: neighborPath})
+				}
+			}
+			rows.Close()
+		}
+
+		// Batch-write all similarity edges in a single transaction.
+		if len(edges) > 0 {
+			simTx, err := idx.db.Begin()
+			if err != nil {
+				log.Warn().Err(err).Msg("rebuildGraph: begin similarity tx")
+			} else {
+				for _, e := range edges {
+					fp := escapeCypherKey(e.from)
+					tp := escapeCypherKey(e.to)
+					q := fmt.Sprintf(`SELECT cypher('MATCH (a:Fact {path: "%s"}), (b:Fact {path: "%s"}) MERGE (a)-[:SIMILAR_TO]->(b)')`, fp, tp)
+					if _, err := simTx.Exec(q); err != nil {
+						log.Warn().Err(err).Str("from", e.from).Str("to", e.to).Msg("rebuildGraph: similarity edge failed")
+					}
+				}
+				if err := simTx.Commit(); err != nil {
+					log.Warn().Err(err).Msg("rebuildGraph: commit similarity tx")
+				}
 			}
 		}
 	}

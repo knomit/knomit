@@ -126,13 +126,16 @@ func New(path string, opts ...Option) (*Index, error) {
 	}
 
 	dsn := path
-	if path != ":memory:" {
-		dsn = path + "?_journal_mode=WAL&_busy_timeout=5000"
+	if path == ":memory:" {
+		dsn = path + "?_foreign_keys=1"
+	} else {
+		dsn = path + "?_journal_mode=WAL&_busy_timeout=5000&_foreign_keys=1"
 	}
 	db, err := sql.Open("sqlite3_knomit", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite: %w", err)
 	}
+	db.SetMaxOpenConns(2)
 	// Use the same embedded schema.sql as Service.Open to keep DDL in one place.
 	if _, err := db.Exec(schemaSQL_); err != nil {
 		db.Close()

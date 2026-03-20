@@ -80,12 +80,13 @@ type ToolSessionIndex interface {
 }
 
 // NewServer creates a new MCP server with all knomit tools registered.
-func NewServer(gs GitStore, idx SearchIndex, sessionIdx ToolSessionIndex, reviewer Reviewer, profile, ontologyRoot string, ontology *fact.Ontology) *server.MCPServer {
+// If embedder is non-nil, the learn tool uses it for batch dedup embedding.
+func NewServer(gs GitStore, idx SearchIndex, sessionIdx ToolSessionIndex, reviewer Reviewer, profile, ontologyRoot string, ontology *fact.Ontology, embedders ...BatchEmbedder) *server.MCPServer {
 	s := server.NewMCPServer("knomit", "1.0.0",
 		server.WithInstructions(ProfileInstructions(profile, ontologyRoot, ontology)),
 	)
 
-	s.AddTool(learnTool(), LearnHandler(gs, idx, ontologyRoot, ontology))
+	s.AddTool(learnTool(), LearnHandler(gs, idx, ontologyRoot, ontology, embedders...))
 	s.AddTool(queryTool(), QueryHandler(gs, idx))
 	s.AddTool(explainTool(), ExplainHandler(gs, sessionIdx, ontologyRoot))
 	s.AddTool(updateTool(), UpdateHandler(gs, ontologyRoot))

@@ -3,16 +3,22 @@
 package store
 
 import (
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"math"
 	"strings"
 
 	sqlite3 "github.com/mattn/go-sqlite3"
 )
 
 // registerSQLFuncs registers all custom SQL functions on a new connection.
+// Called via ConnectHook so every pooled connection gets the same functions.
 func registerSQLFuncs(conn *sqlite3.SQLiteConn) error {
-	return conn.RegisterFunc("knomit_parse_fact", sqlParseFact, true)
+	if err := conn.RegisterFunc("knomit_parse_fact", sqlParseFact, true); err != nil {
+		return err
+	}
+	return conn.RegisterFunc("knomit_cosine_sim", sqlCosineSim, true)
 }
 
 // parsedFact is the JSON structure returned by knomit_parse_fact.
@@ -122,4 +128,27 @@ func sqlParseFact(data []byte) interface{} {
 		return nil
 	}
 	return string(b)
+}
+
+// sqlCosineSim computes cosine similarity between two embedding BLOBs.
+// Both inputs must be little-endian float32 arrays of equal length.
+// Returns a REAL in [-1, 1] or NULL on invalid input.
+func sqlCosineSim(a, b []byte) interface{} {
+	if len(a) == 0 || len(b) == 0 || len(a) != len(b) || len(a)%4 != 0 {
+		return nil
+	}
+	n := len(a) / 4
+	var dot, normA, normB float64
+	for i := 0; i < n; i++ {
+		va := float64(math.Float32frombits(binary.LittleEndian.Uint32(a[i*4:])))
+		vb := float64(math.Float32frombits(binary.LittleEndian.Uint32(b[i*4:])))
+		dot += va * vb
+		normA += va * va
+		normB += vb * vb
+	}
+	denom := math.Sqrt(normA) * math.Sqrt(normB)
+	if denom == 0 {
+		return nil
+	}
+	return dot / denom
 }

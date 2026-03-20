@@ -261,7 +261,12 @@ func setRepoMCP(result *repoResult, ontologyRoot string, ontology *fact.Ontology
 	profiles := []string{"code", "chat", "generic"}
 	mcpHandlers := make(map[string]http.Handler, len(profiles))
 	for _, p := range profiles {
-		mcpSrv := mcp.NewServer(result.gs, result.idx, result.idx, reviewer, p, ontologyRoot, ontology)
+		var mcpSrv *mcpserver.MCPServer
+		if embedder != nil {
+			mcpSrv = mcp.NewServer(result.gs, result.idx, result.idx, reviewer, p, ontologyRoot, ontology, embedder)
+		} else {
+			mcpSrv = mcp.NewServer(result.gs, result.idx, result.idx, reviewer, p, ontologyRoot, ontology)
+		}
 		mcpHandlers[p] = mcpserver.NewStreamableHTTPServer(mcpSrv)
 	}
 	result.ri.MCPHandlers = mcpHandlers

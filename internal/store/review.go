@@ -170,10 +170,6 @@ func (idx *Index) SetWorkItemResponse(id int64, response string) error {
 // GCReviewSessions deletes all but the most recent `keep` sessions for a branch.
 // Work items are cascaded via the foreign key constraint.
 func (idx *Index) GCReviewSessions(branch string, keep int) error {
-	// Enable foreign keys for cascade deletes.
-	if _, err := idx.db.Exec(`PRAGMA foreign_keys = ON`); err != nil {
-		return fmt.Errorf("GCReviewSessions pragma: %w", err)
-	}
 	_, err := idx.db.Exec(
 		`DELETE FROM review_sessions
 		 WHERE branch = ? AND id NOT IN (
