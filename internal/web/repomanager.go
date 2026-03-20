@@ -72,6 +72,23 @@ func (rm *RepoManager) ForEach(fn func(name string, ri *RepoInstance)) {
 	}
 }
 
+// SwapStore replaces the GitStore on a RepoInstance with a new one.
+// For v1 this is a simple reference swap: stop sync loops, replace ri.GS,
+// and let the caller reconfigure remote + restart sync afterwards.
+func (rm *RepoManager) SwapStore(ri *RepoInstance, newGS GitStore) error {
+	// Stop existing sync loops so no goroutines reference the old store.
+	if ri.SyncCancel != nil {
+		ri.SyncCancel()
+	}
+	if ri.SyncWg != nil {
+		ri.SyncWg.Wait()
+	}
+
+	// Swap the store reference.
+	ri.GS = newGS
+	return nil
+}
+
 // ---------- context helpers ----------
 
 type contextKey string

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/go-git/go-git/v5/plumbing"
@@ -861,6 +862,216 @@ func TestApply_WrongState(t *testing.T) {
 		`{"conflict_strategy":"local_wins"}`)
 	if rr2.Code != http.StatusConflict {
 		t.Fatalf("expected 409, got %d: %s", rr2.Code, rr2.Body.String())
+	}
+}
+
+// --- commit tests ---
+
+// setupAppliedSession creates a handler with a local store+svc, a separate remote
+// store, and manually wires the session into StateApplied. Returns the handler,
+// sessionID, RepoManager, and SessionManager.
+func setupAppliedSession(t *testing.T) (http.Handler, string, *RepoManager, *SessionManager) {
+	t.Helper()
+
+	// Build local store+svc.
+	svc, err := store.Open(":memory:")
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	t.Cleanup(func() { svc.Close() })
+
+	localGS, err := git.InitWithStorer(svc.GitStorer(), nil, "agent/test")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Write a local fact.
+	factContent := "---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# Local Fact\n\nContent.\n"
+	writeFact(t, localGS, svc.DB(), "kb/local-fact.md", factContent)
+
+	// Build the remote store (disjoint) — this simulates the result after apply.
+	remoteStorer := newTestStorerForWeb(t)
+	remoteStore, err := git.InitWithStorer(remoteStorer, nil, "agent/remote")
+	if err != nil {
+		t.Fatal(err)
+	}
+	remoteFact := "---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# Remote Fact\n\nContent.\n"
+	if _, _, err := remoteStore.WriteFile("kb/remote-fact.md", remoteFact, "add remote", "learn"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Build router.
+	hub := NewTaskHub(context.Background())
+	rm := NewRepoManager()
+	sm := NewSessionManager()
+	t.Cleanup(sm.Shutdown)
+
+	var startSyncCalled bool
+	var startSyncURL string
+
+	ri := &RepoInstance{
+		Name:       "knomit",
+		GS:         localGS,
+		Svc:        svc,
+		Hub:        hub,
+		SyncCancel: func() {},
+		SyncWg:     &sync.WaitGroup{},
+		StartSync: func(url string) error {
+			startSyncCalled = true
+			startSyncURL = url
+			_ = startSyncCalled
+			_ = startSyncURL
+			return nil
+		},
+	}
+	rm.Set("knomit", ri)
+	router := NewRouterWithSessionManager(rm, nil, false, "kb", sm)
+
+	// Create session and set it to StateApplied.
+	sess, err := sm.Create("knomit", "inmem:///test-commit", AuthConfig{
+		Method: "token",
+		Token:  "ghp_testtoken123",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess.mu.Lock()
+	sess.State = StateApplied
+	sess.RemoteStore = remoteStore
+	sess.TestResult = connectivityResult{
+		DefaultBranch: "main",
+		History:       "disjoint",
+	}
+	sess.ApplyResult = applyResult{TotalFacts: 2, FromLocal: 1, FromRemote: 1}
+	sess.mu.Unlock()
+
+	return router, sess.ID, rm, sm
+}
+
+func TestCommit_SwapsAndConfigures(t *testing.T) {
+	handler, sessionID, rm, sm := setupAppliedSession(t)
+
+	// POST commit.
+	commitReq := httptest.NewRequest(http.MethodPost,
+		"/api/v1/knomit/origin/session/"+sessionID+"/commit", nil)
+	commitRec := httptest.NewRecorder()
+	handler.ServeHTTP(commitRec, commitReq)
+
+	if commitRec.Code != http.StatusOK {
+		t.Fatalf("commit: expected 200, got %d: %s", commitRec.Code, commitRec.Body.String())
+	}
+
+	ct := commitRec.Header().Get("Content-Type")
+	if ct != "text/event-stream" {
+		t.Fatalf("expected text/event-stream, got %q", ct)
+	}
+
+	// Verify SSE events.
+	events := parseSSEEvents(t, commitRec.Body.String())
+	if len(events) < 3 {
+		t.Fatalf("expected at least 3 events (swapping, configuring, done), got %d: %s",
+			len(events), commitRec.Body.String())
+	}
+
+	// Check phases in order.
+	phases := make([]string, len(events))
+	for i, ev := range events {
+		phases[i], _ = ev["phase"].(string)
+	}
+
+	wantPhases := []string{"swapping", "configuring", "done"}
+	for _, want := range wantPhases {
+		found := false
+		for _, got := range phases {
+			if got == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("expected phase %q in events, got phases: %v", want, phases)
+		}
+	}
+
+	// Verify the git store was swapped on the repo instance.
+	ri := rm.Get("knomit")
+	if ri == nil {
+		t.Fatal("repo instance not found after commit")
+	}
+	// The GS should now be the remote store (a *git.Store), not the original local.
+	if _, ok := ri.GS.(*git.Store); !ok {
+		t.Errorf("expected ri.GS to be *git.Store after swap, got %T", ri.GS)
+	}
+
+	// Verify remote config was saved to DB.
+	remote, err := ri.Svc.GetRemote("origin")
+	if err != nil {
+		t.Fatalf("GetRemote: %v", err)
+	}
+	if remote == nil {
+		t.Fatal("expected remote config to be saved after commit")
+	}
+	if remote.URL != "inmem:///test-commit" {
+		t.Errorf("expected remote URL=inmem:///test-commit, got %q", remote.URL)
+	}
+	if remote.AuthMethod != "token" {
+		t.Errorf("expected auth_method=token, got %q", remote.AuthMethod)
+	}
+
+	// Verify session was cleaned up.
+	_, found := sm.Get("knomit", sessionID)
+	if found {
+		t.Error("expected session to be deleted after commit")
+	}
+}
+
+func TestCommit_SessionNotFound(t *testing.T) {
+	handler, _, _ := newTestRouterWithSvcAndGitStore(t)
+
+	rr := doRequest(t, handler, http.MethodPost, "/api/v1/knomit/origin/session/nonexistent-id/commit", "")
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestCommit_WrongState(t *testing.T) {
+	// Set up with a session in StateTested (not StateApplied).
+	svc, err := store.Open(":memory:")
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	t.Cleanup(func() { svc.Close() })
+
+	localGS, err := git.InitWithStorer(svc.GitStorer(), nil, "agent/test")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	hub := NewTaskHub(context.Background())
+	rm := NewRepoManager()
+	sm := NewSessionManager()
+	t.Cleanup(sm.Shutdown)
+
+	rm.Set("knomit", &RepoInstance{
+		Name: "knomit",
+		GS:   localGS,
+		Svc:  svc,
+		Hub:  hub,
+	})
+	router := NewRouterWithSessionManager(rm, nil, false, "kb", sm)
+
+	// Create session in StateTested (not applied).
+	sess, err := sm.Create("knomit", "inmem:///test-wrong-state", AuthConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess.mu.Lock()
+	sess.State = StateTested
+	sess.mu.Unlock()
+
+	rr := doRequest(t, router, http.MethodPost, "/api/v1/knomit/origin/session/"+sess.ID+"/commit", "")
+	if rr.Code != http.StatusConflict {
+		t.Fatalf("expected 409, got %d: %s", rr.Code, rr.Body.String())
 	}
 }
 

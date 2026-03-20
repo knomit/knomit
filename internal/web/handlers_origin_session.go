@@ -621,3 +621,97 @@ func collectBranches(s *storegit.Storer) []string {
 	}
 	return branches
 }
+
+// handleCommit handles POST /api/v1/{repo}/origin/session/{sessionID}/commit
+// It finalizes the origin connection by swapping the session's remote store
+// into the repo instance, saving remote config, and starting sync loops.
+func (rm *RepoManager) handleCommit(sm *SessionManager) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		repo := chi.URLParam(r, "repo")
+		sessionID := chi.URLParam(r, "sessionID")
+
+		sess, ok := sm.Get(repo, sessionID)
+		if !ok {
+			writeError(w, http.StatusNotFound, "session not found")
+			return
+		}
+
+		sess.mu.Lock()
+		state := sess.State
+		remoteStore := sess.RemoteStore
+		authCfg := sess.Auth
+		remoteURL := sess.URL
+		sess.mu.Unlock()
+
+		if state != StateApplied {
+			writeError(w, http.StatusConflict, "session must be in applied state")
+			return
+		}
+		if remoteStore == nil {
+			writeError(w, http.StatusConflict, "session has no remote store")
+			return
+		}
+
+		ri := RepoFromContext(r.Context())
+
+		// Set SSE headers.
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Connection", "keep-alive")
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			http.Error(w, "streaming not supported", http.StatusInternalServerError)
+			return
+		}
+
+		sendEvent := func(v any) {
+			data, _ := json.Marshal(v)
+			fmt.Fprintf(w, "data: %s\n\n", data)
+			flusher.Flush()
+		}
+
+		// Phase: swapping — replace the git store on the repo instance.
+		sendEvent(map[string]string{"phase": "swapping"})
+
+		if err := rm.SwapStore(ri, remoteStore); err != nil {
+			sendEvent(map[string]string{"phase": "error", "message": fmt.Sprintf("swap failed: %v", err)})
+			return
+		}
+
+		// Phase: configuring — save remote config and start sync.
+		sendEvent(map[string]string{"phase": "configuring"})
+
+		if ri.Svc != nil {
+			// Build the auth token for storage.
+			authMethod := authCfg.Method
+			authToken := authCfg.Token
+			if authMethod == "basic" && authCfg.User != "" {
+				authToken = authCfg.User + ":" + authCfg.Password
+			}
+
+			if err := ri.Svc.SetRemoteWithAuth("origin", remoteURL, "main", 300, 300, authMethod, authToken); err != nil {
+				sendEvent(map[string]string{"phase": "error", "message": fmt.Sprintf("save remote config: %v", err)})
+				return
+			}
+		}
+
+		// Start sync/push loops.
+		if ri.StartSync != nil {
+			if err := ri.StartSync(remoteURL); err != nil {
+				log.Warn().Err(err).Str("repo", repo).Msg("commit: sync activation failed")
+				// Non-fatal: remote is configured, sync can be started later.
+			}
+		}
+
+		sendEvent(map[string]string{"phase": "done"})
+
+		// Update session state and clean up.
+		sess.mu.Lock()
+		sess.State = StateCommitted
+		sess.mu.Unlock()
+
+		sm.Delete(repo, sessionID)
+
+		log.Info().Str("repo", repo).Str("session_id", sessionID).Str("url", remoteURL).Msg("commit completed — store swapped and remote configured")
+	}
+}
