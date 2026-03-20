@@ -744,9 +744,14 @@ func (rm *RepoManager) handleCommit(sm *SessionManager) http.HandlerFunc {
 		if ri.Svc != nil {
 			if gitReader, ok := ri.GS.(store.GitReader); ok {
 				idx := ri.Svc.Index()
-				progress := func(phase string, done, total int) {
+				progress := func(subPhase string, done, total int) {
 					if done%20 == 0 || done == total {
-						sendEvent(map[string]any{"phase": "rebuilding", "current": done, "total": total})
+						sendEvent(map[string]any{
+							"phase":     "rebuilding",
+							"sub_phase": subPhase,
+							"current":   done,
+							"total":     total,
+						})
 					}
 				}
 				if err := idx.Rebuild(gitReader, ri.GS.Branch(), progress); err != nil {
