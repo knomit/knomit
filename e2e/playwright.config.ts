@@ -12,7 +12,7 @@ export default defineConfig({
   workers: 1,
   reporter: [['list'], ['html', { open: 'never', outputFolder: 'playwright-report' }]],
   use: {
-    baseURL: process.env.KNOMIT_E2E_BASE_URL || 'http://localhost:3000',
+    baseURL: process.env.KNOMIT_E2E_BASE_URL || 'http://localhost:19278',
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
     actionTimeout: 15_000,

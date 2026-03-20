@@ -7,8 +7,8 @@
 // Usage:
 //
 //	knomit-mcp-remote [--repo <name>] [--profile <profile>] <base-url>
-//	knomit-mcp-remote http://localhost:3000
-//	knomit-mcp-remote --repo work --profile chat http://localhost:3000
+//	knomit-mcp-remote http://localhost:19278
+//	knomit-mcp-remote --repo work --profile chat http://localhost:19278
 //
 // Claude Desktop config:
 //
@@ -16,11 +16,11 @@
 //	  "mcpServers": {
 //	    "knomit": {
 //	      "command": "/path/to/knomit-mcp-remote",
-//	      "args": ["http://localhost:3000"]
+//	      "args": ["http://localhost:19278"]
 //	    },
 //	    "work-kb": {
 //	      "command": "/path/to/knomit-mcp-remote",
-//	      "args": ["--repo", "work", "http://localhost:3000"]
+//	      "args": ["--repo", "work", "http://localhost:19278"]
 //	    }
 //	  }
 //	}
@@ -53,8 +53,8 @@ func main() {
 	profile := flag.String("profile", "code", "MCP profile (code, chat, generic)")
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "usage: knomit-mcp-remote [--repo <name>] [--profile <profile>] <base-url>\n")
-		fmt.Fprintf(os.Stderr, "example: knomit-mcp-remote http://localhost:3000\n")
-		fmt.Fprintf(os.Stderr, "         knomit-mcp-remote --repo work --profile chat http://localhost:3000\n")
+		fmt.Fprintf(os.Stderr, "example: knomit-mcp-remote http://localhost:19278\n")
+		fmt.Fprintf(os.Stderr, "         knomit-mcp-remote --repo work --profile chat http://localhost:19278\n")
 		flag.PrintDefaults()
 	}
 	flag.Parse()

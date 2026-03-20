@@ -33,7 +33,7 @@ make e2e-ui   # build + run e2e tests (headed browser)
 ## Usage
 
 ```sh
-knomit serve                  # start HTTP server (default port 3000)
+knomit serve                  # start HTTP server (default port 19278)
 knomit init                   # initialize the default repo
 knomit init --name work       # initialize a repo named "work"
 knomit rebuild                # rebuild the default repo's search index
@@ -127,7 +127,7 @@ Add to your project's `.mcp.json` (or `~/.claude/mcp.json` for global):
   "mcpServers": {
     "knomit": {
       "type": "streamable-http",
-      "url": "http://localhost:3000/api/v1/knomit/mcp"
+      "url": "http://localhost:19278/api/v1/knomit/mcp"
     }
   }
 }
@@ -146,7 +146,7 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS)
   "mcpServers": {
     "knomit": {
       "command": "/path/to/dist/knomit-mcp-remote",
-      "args": ["http://localhost:3000"]
+      "args": ["http://localhost:19278"]
     }
   }
 }
@@ -159,11 +159,11 @@ For multiple repos:
   "mcpServers": {
     "knomit": {
       "command": "/path/to/dist/knomit-mcp-remote",
-      "args": ["http://localhost:3000"]
+      "args": ["http://localhost:19278"]
     },
     "work-kb": {
       "command": "/path/to/dist/knomit-mcp-remote",
-      "args": ["--repo", "work", "--profile", "chat", "http://localhost:3000"]
+      "args": ["--repo", "work", "--profile", "chat", "http://localhost:19278"]
     }
   }
 }
@@ -285,7 +285,8 @@ All repo-scoped endpoints use the pattern `/api/v1/{repo}/...`.
 |----------|---------|-------------|
 | `KNOMIT_HOME` | `~/.knomit` | Path to the data directory |
 | `KNOMIT_REPO` | — | Alias for `KNOMIT_HOME` (backward compat) |
-| `KNOMIT_PORT` | `3000` | HTTP server port |
+| `KNOMIT_PORT` | `19278` | HTTP server port |
+| `KNOMIT_SOCKET` | — | Unix socket path (e.g. `knomit.sock`); enables socket listener when set |
 | `KNOMIT_LLM_MODEL` | `claude-sonnet-4-6` | Model name for synthesis |
 | `KNOMIT_LLM_PROVIDER` | auto-detected | LLM provider: `anthropic`, `gemini`, `bedrock`, `claude-cli`, `gemini-cli` |
 | `KNOMIT_GIT_ORIGIN` | — | Remote origin URL (seeds default repo) |

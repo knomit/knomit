@@ -15,6 +15,7 @@ import (
 type Config struct {
 	Home         string              `toml:"repo"`
 	Port         string              `toml:"port"`
+	Socket       string              `toml:"socket"`
 	OntologyRoot string              `toml:"ontology_root"`
 	ONNXLibPath  string              `toml:"onnx_lib_path"`
 	LLM          llm.Config          `toml:"llm"`
@@ -27,7 +28,7 @@ func Defaults() Config {
 	home, _ := os.UserHomeDir()
 	return Config{
 		Home:         home + "/.knomit",
-		Port:         "3000",
+		Port:         "19278",
 		OntologyRoot: "kb",
 		LLM:          llm.DefaultConfig(),
 		Git:          git.DefaultConfig(),
@@ -58,6 +59,7 @@ func Load() (Config, error) {
 
 	// Overlay env vars.
 	envOr("KNOMIT_PORT", &cfg.Port)
+	envOr("KNOMIT_SOCKET", &cfg.Socket)
 	envOr("KNOMIT_LLM_MODEL", &cfg.LLM.Model)
 	envOr("KNOMIT_LLM_PROVIDER", &cfg.LLM.Provider)
 	envOr("KNOMIT_API_KEY", &cfg.LLM.APIKey)

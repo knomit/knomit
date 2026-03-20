@@ -8,8 +8,8 @@ import (
 
 func TestDefaults(t *testing.T) {
 	cfg := Defaults()
-	if cfg.Port != "3000" {
-		t.Errorf("Port = %q, want %q", cfg.Port, "3000")
+	if cfg.Port != "19278" {
+		t.Errorf("Port = %q, want %q", cfg.Port, "19278")
 	}
 	if cfg.OntologyRoot != "kb" {
 		t.Errorf("OntologyRoot = %q, want %q", cfg.OntologyRoot, "kb")
@@ -89,8 +89,8 @@ func TestLoadNoTOMLFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error: %v", err)
 	}
-	if cfg.Port != "3000" {
-		t.Errorf("Port = %q, want %q", cfg.Port, "3000")
+	if cfg.Port != "19278" {
+		t.Errorf("Port = %q, want %q", cfg.Port, "19278")
 	}
 }
 

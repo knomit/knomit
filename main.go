@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -501,6 +502,23 @@ func serveCmd() *cobra.Command {
 					log.Fatal().Err(err).Msg("listen failed")
 				}
 			}()
+
+			// Optional Unix socket listener.
+			if cfg.Socket != "" {
+				_ = os.Remove(cfg.Socket) // clean up stale socket
+				ul, err := net.Listen("unix", cfg.Socket)
+				if err != nil {
+					log.Fatal().Err(err).Str("socket", cfg.Socket).Msg("unix socket listen failed")
+				}
+				defer ul.Close()
+				defer os.Remove(cfg.Socket)
+				log.Info().Str("socket", cfg.Socket).Msg("unix socket listening")
+				go func() {
+					if err := srv.Serve(ul); err != nil && err != http.ErrServerClosed {
+						log.Fatal().Err(err).Msg("unix socket serve failed")
+					}
+				}()
+			}
 
 			<-stop
 			// Cancel all sync loops first.
