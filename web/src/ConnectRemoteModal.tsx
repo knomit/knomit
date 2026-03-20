@@ -253,7 +253,7 @@ export function ConnectRemoteModal({ repo, onClose }: Props) {
   };
 
   return (
-    <div style={overlay} onClick={handleCancel}>
+    <div style={overlay}>
       <div style={modal} onClick={e => e.stopPropagation()}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
           <h2 style={{ margin: 0, fontSize: 16 }}>Connect Remote</h2>

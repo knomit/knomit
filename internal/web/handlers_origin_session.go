@@ -266,8 +266,11 @@ CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value BLOB NOT NULL);
 
 		// Collect all agent/* branches and find one matching our exact agent identity.
 		// Our agent branch name is ri.GS.Branch() (e.g. agent/<hostname>-<key-fp>).
+		// Collect agent branches. After clone, remote branches appear under
+		// both refs/heads/ (local tracking) and refs/remotes/origin/ (remote refs).
+		// We check both to be safe.
 		localAgentBranch := ri.GS.Branch()
-		var agentBranches []string
+		agentSet := make(map[string]bool)
 		matchedAgent := ""
 		refIter, _ := cloned.Storer().IterReferences()
 		if refIter != nil {
@@ -276,17 +279,28 @@ CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value BLOB NOT NULL);
 				if err != nil {
 					break
 				}
-				if ref.Name().IsBranch() {
-					short := strings.TrimPrefix(ref.Name().String(), "refs/heads/")
-					if strings.HasPrefix(short, "agent/") {
-						agentBranches = append(agentBranches, short)
-						if short == localAgentBranch {
-							matchedAgent = short
-						}
+				name := ref.Name().String()
+				var short string
+				switch {
+				case strings.HasPrefix(name, "refs/heads/"):
+					short = strings.TrimPrefix(name, "refs/heads/")
+				case strings.HasPrefix(name, "refs/remotes/origin/"):
+					short = strings.TrimPrefix(name, "refs/remotes/origin/")
+				default:
+					continue
+				}
+				if strings.HasPrefix(short, "agent/") && !agentSet[short] {
+					agentSet[short] = true
+					if short == localAgentBranch {
+						matchedAgent = short
 					}
 				}
 			}
 			refIter.Close()
+		}
+		agentBranches := make([]string, 0, len(agentSet))
+		for b := range agentSet {
+			agentBranches = append(agentBranches, b)
 		}
 
 		result := connectivityResult{
