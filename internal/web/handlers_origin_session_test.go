@@ -16,6 +16,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 
 	"knomit/internal/git"
+	"knomit/internal/store"
 	storegit "knomit/internal/store/git"
 )
 
@@ -390,6 +391,225 @@ func TestTestConnectivity_SessionNotFound(t *testing.T) {
 	rr := doRequest(t, handler, http.MethodGet, "/api/v1/knomit/origin/session/nonexistent-id/test", "")
 	if rr.Code != http.StatusNotFound {
 		t.Fatalf("expected 404, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
+// --- preview helpers ---
+
+// newTestRouterWithSvcAndGitStore creates a router backed by both a store.Service
+// and a *git.Store sharing the same in-memory database.
+func newTestRouterWithSvcAndGitStore(t *testing.T) (http.Handler, *git.Store, *store.Service) {
+	t.Helper()
+	svc, err := store.Open(":memory:")
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	t.Cleanup(func() { svc.Close() })
+
+	gs, err := git.InitWithStorer(svc.GitStorer(), nil, "agent/test")
+	if err != nil {
+		t.Fatalf("git.InitWithStorer: %v", err)
+	}
+
+	hub := NewTaskHub(context.Background())
+	rm := NewRepoManager()
+	rm.Set("knomit", &RepoInstance{
+		Name: "knomit",
+		GS:   gs,
+		Svc:  svc,
+		Hub:  hub,
+	})
+	return NewRouter(rm, nil, false, "kb"), gs, svc
+}
+
+// insertFact inserts a row into the facts table for testing.
+func insertFact(t *testing.T, db *sql.DB, path, blobHash, commitHash string) {
+	t.Helper()
+	_, err := db.Exec(
+		`INSERT INTO facts (path, title, blob_hash, type, domain, entities, confidence, sources, refs, commit_hash)
+		 VALUES (?, ?, ?, 'observation', '[]', '[]', 0.9, 1, '[]', ?)`,
+		path, path, blobHash, commitHash,
+	)
+	if err != nil {
+		t.Fatalf("insertFact %q: %v", path, err)
+	}
+}
+
+// writeFact writes a fact file to the git store and inserts it into the facts table.
+// content must be a valid knomit fact (YAML frontmatter + # Title body).
+func writeFact(t *testing.T, gs *git.Store, db *sql.DB, path, content string) {
+	t.Helper()
+	commitHash, blobHash, err := gs.WriteFile(path, content, "add "+path, "learn")
+	if err != nil {
+		t.Fatalf("WriteFile %q: %v", path, err)
+	}
+	insertFact(t, db, path, blobHash, commitHash)
+}
+
+// --- preview tests ---
+
+func TestPreview_ComparesLocalAndRemote(t *testing.T) {
+	handler, localGS, svc := newTestRouterWithSvcAndGitStore(t)
+	db := svc.DB()
+
+	// Local-only fact (with a dead ref and a live ref).
+	localOnlyContent := "---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: [kb/local-b.md, kb/missing.md]\n---\n# Local A\n\nContent.\n"
+	writeFact(t, localGS, db, "kb/local-a.md", localOnlyContent)
+
+	// Local fact that will also be in remote (shared), no dead refs.
+	sharedContent := "---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# Shared\n\nContent.\n"
+	writeFact(t, localGS, db, "kb/shared.md", sharedContent)
+
+	// Another local fact (referenced by local-a so it's alive).
+	localBContent := "---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# Local B\n\nContent.\n"
+	writeFact(t, localGS, db, "kb/local-b.md", localBContent)
+
+	// Build remote store with: shared.md + remote-only.md
+	remoteStorer := newTestStorerForWeb(t)
+	remoteStore, err := git.InitWithStorer(remoteStorer, nil, "agent/remote")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := remoteStore.WriteFile("kb/shared.md", sharedContent, "add shared", "learn"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := remoteStore.WriteFile("kb/remote-only.md", "---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# Remote Only\n\nContent.\n", "add remote-only", "learn"); err != nil {
+		t.Fatal(err)
+	}
+	remoteHead, err := remoteStore.HeadCommit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := remoteStorer.SetReference(
+		plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), plumbing.NewHash(remoteHead)),
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	// Register in-process transport.
+	loader := server.MapLoader{"inmem:///test-preview": remoteStorer}
+	client.InstallProtocol("inmem", server.NewClient(loader))
+	t.Cleanup(func() { client.InstallProtocol("inmem", nil) })
+
+	// Create session and run test connectivity to populate RemoteStore.
+	rr := doRequest(t, handler, http.MethodPost, "/api/v1/knomit/origin/session",
+		`{"url":"inmem:///test-preview"}`)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("create session: expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	var createBody map[string]string
+	_ = json.NewDecoder(rr.Body).Decode(&createBody)
+	sessionID := createBody["session_id"]
+
+	// Run test connectivity to advance session to StateTested.
+	testReq := httptest.NewRequest(http.MethodGet, "/api/v1/knomit/origin/session/"+sessionID+"/test", nil)
+	testRec := httptest.NewRecorder()
+	handler.ServeHTTP(testRec, testReq)
+	if testRec.Code != http.StatusOK {
+		t.Fatalf("test connectivity: expected 200, got %d: %s", testRec.Code, testRec.Body.String())
+	}
+
+	// Run preview.
+	previewReq := httptest.NewRequest(http.MethodGet, "/api/v1/knomit/origin/session/"+sessionID+"/preview", nil)
+	previewRec := httptest.NewRecorder()
+	handler.ServeHTTP(previewRec, previewReq)
+
+	if previewRec.Code != http.StatusOK {
+		t.Fatalf("preview: expected 200, got %d: %s", previewRec.Code, previewRec.Body.String())
+	}
+
+	ct := previewRec.Header().Get("Content-Type")
+	if ct != "text/event-stream" {
+		t.Fatalf("expected text/event-stream, got %q", ct)
+	}
+
+	events := parseSSEEvents(t, previewRec.Body.String())
+	if len(events) < 2 {
+		t.Fatalf("expected at least 2 events (comparing, done), got %d: %s", len(events), previewRec.Body.String())
+	}
+
+	if events[0]["phase"] != "comparing" {
+		t.Errorf("first event: expected phase=comparing, got %v", events[0]["phase"])
+	}
+
+	var doneEvent map[string]any
+	for _, ev := range events {
+		if ev["phase"] == "done" {
+			doneEvent = ev
+			break
+		}
+	}
+	if doneEvent == nil {
+		t.Fatalf("no done event found in: %v", events)
+	}
+
+	result, ok := doneEvent["result"].(map[string]any)
+	if !ok {
+		t.Fatalf("done event missing result: %v", doneEvent)
+	}
+
+	// local has: kb/local-a.md, kb/shared.md, kb/local-b.md (3 facts)
+	// remote has: kb/shared.md (+ kb.md init), kb/remote-only.md
+	// shared_path: kb/shared.md = 1
+	// local_only: kb/local-a.md, kb/local-b.md = 2
+	// remote_only: kb/remote-only.md (+ possibly kb.md) >= 1
+	// dead_refs_found: kb/missing.md in refs of local-a = 1
+
+	sharedCount := int(result["shared_path"].(float64))
+	if sharedCount != 1 {
+		t.Errorf("expected shared_path=1, got %d", sharedCount)
+	}
+	localOnlyCount := int(result["local_only"].(float64))
+	if localOnlyCount != 2 {
+		t.Errorf("expected local_only=2, got %d", localOnlyCount)
+	}
+	remoteOnlyCount := int(result["remote_only"].(float64))
+	if remoteOnlyCount == 0 {
+		t.Errorf("expected remote_only >= 1, got %d", remoteOnlyCount)
+	}
+	deadRefsCount := int(result["dead_refs_found"].(float64))
+	if deadRefsCount != 1 {
+		t.Errorf("expected dead_refs_found=1, got %d", deadRefsCount)
+	}
+
+	// Verify session state updated to previewed.
+	rr2 := doRequest(t, handler, http.MethodGet, "/api/v1/knomit/origin/session/"+sessionID, "")
+	if rr2.Code != http.StatusOK {
+		t.Fatalf("get session: expected 200, got %d", rr2.Code)
+	}
+	var sessBody map[string]any
+	_ = json.NewDecoder(rr2.Body).Decode(&sessBody)
+	if sessBody["state"] != "previewed" {
+		t.Errorf("expected state=previewed, got %v", sessBody["state"])
+	}
+}
+
+func TestPreview_SessionNotFound(t *testing.T) {
+	handler, _, _ := newTestRouterWithSvcAndGitStore(t)
+
+	rr := doRequest(t, handler, http.MethodGet, "/api/v1/knomit/origin/session/nonexistent-id/preview", "")
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestPreview_WrongState(t *testing.T) {
+	handler, _, _ := newTestRouterWithSvcAndGitStore(t)
+
+	// Create a session (state=created, not tested).
+	rr := doRequest(t, handler, http.MethodPost, "/api/v1/knomit/origin/session",
+		`{"url":"https://github.com/org/repo.git","auth_method":"token","token":"tok"}`)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("create session: expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	var createBody map[string]string
+	_ = json.NewDecoder(rr.Body).Decode(&createBody)
+	sessionID := createBody["session_id"]
+
+	// Preview without running test first → 409.
+	rr2 := doRequest(t, handler, http.MethodGet, "/api/v1/knomit/origin/session/"+sessionID+"/preview", "")
+	if rr2.Code != http.StatusConflict {
+		t.Fatalf("expected 409, got %d: %s", rr2.Code, rr2.Body.String())
 	}
 }
 

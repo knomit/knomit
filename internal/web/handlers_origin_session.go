@@ -10,8 +10,10 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/rs/zerolog/log"
+	"gopkg.in/yaml.v3"
 
 	"knomit/internal/git"
+	"knomit/internal/store"
 	storegit "knomit/internal/store/git"
 )
 
@@ -265,6 +267,174 @@ CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value BLOB NOT NULL);
 
 		log.Info().Str("repo", repo).Str("session_id", sessionID).Str("history", history).Msg("test connectivity completed")
 	}
+}
+
+// previewResult is the JSON payload sent in the "done" phase of a preview SSE stream.
+type previewResult struct {
+	LocalOnly     int `json:"local_only"`
+	RemoteOnly    int `json:"remote_only"`
+	SharedPath    int `json:"shared_path"`
+	DeadRefsFound int `json:"dead_refs_found"`
+}
+
+// handlePreview handles GET /api/v1/{repo}/origin/session/{sessionID}/preview
+func (rm *RepoManager) handlePreview(sm *SessionManager) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		repo := chi.URLParam(r, "repo")
+		sessionID := chi.URLParam(r, "sessionID")
+
+		sess, ok := sm.Get(repo, sessionID)
+		if !ok {
+			writeError(w, http.StatusNotFound, "session not found")
+			return
+		}
+
+		sess.mu.Lock()
+		state := sess.State
+		remoteStore := sess.RemoteStore
+		sess.mu.Unlock()
+
+		if state != StateTested && state != StatePreviewed && state != StateApplied {
+			writeError(w, http.StatusConflict, "session must be in tested state or later")
+			return
+		}
+		if remoteStore == nil {
+			writeError(w, http.StatusConflict, "session has no remote store (run test first)")
+			return
+		}
+
+		ri := RepoFromContext(r.Context())
+
+		// Set SSE headers.
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Connection", "keep-alive")
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			http.Error(w, "streaming not supported", http.StatusInternalServerError)
+			return
+		}
+
+		sendEvent := func(v any) {
+			data, _ := json.Marshal(v)
+			fmt.Fprintf(w, "data: %s\n\n", data)
+			flusher.Flush()
+		}
+
+		sendEvent(map[string]string{"phase": "comparing"})
+
+		// Build local path set via FactsIter.
+		var localDB *sql.DB
+		if ri.Svc != nil {
+			localDB = ri.Svc.DB()
+		}
+
+		localPaths := make(map[string]struct{})
+		if localDB != nil {
+			iter, err := store.NewFactsIter(localDB)
+			if err != nil {
+				log.Warn().Err(err).Str("repo", repo).Msg("preview: open facts iter")
+			} else {
+				for {
+					row, err := iter.Next()
+					if err != nil || row == nil {
+						break
+					}
+					localPaths[row.Path] = struct{}{}
+				}
+				iter.Close()
+			}
+		}
+
+		// List remote paths.
+		remotePaths := make(map[string]struct{})
+		remoteFiles, err := remoteStore.ListAll()
+		if err != nil {
+			log.Warn().Err(err).Str("repo", repo).Msg("preview: list remote")
+		} else {
+			for _, p := range remoteFiles {
+				remotePaths[p] = struct{}{}
+			}
+		}
+
+		// Compute counts.
+		var localOnly, remoteOnly, shared int
+		for p := range localPaths {
+			if _, inRemote := remotePaths[p]; inRemote {
+				shared++
+			} else {
+				localOnly++
+			}
+		}
+		for p := range remotePaths {
+			if _, inLocal := localPaths[p]; !inLocal {
+				remoteOnly++
+			}
+		}
+
+		// Dead ref detection: read each local fact and check refs.
+		deadRefs := 0
+		for p := range localPaths {
+			content, err := ri.GS.ReadFile(p)
+			if err != nil {
+				continue
+			}
+			refs := extractRefsFromFrontmatter(content)
+			for _, ref := range refs {
+				if strings.HasPrefix(ref, "http://") || strings.HasPrefix(ref, "https://") {
+					continue
+				}
+				if _, alive := localPaths[ref]; alive {
+					continue
+				}
+				deadRefs++
+			}
+		}
+
+		result := previewResult{
+			LocalOnly:     localOnly,
+			RemoteOnly:    remoteOnly,
+			SharedPath:    shared,
+			DeadRefsFound: deadRefs,
+		}
+
+		sendEvent(map[string]any{"phase": "done", "result": result})
+
+		sess.mu.Lock()
+		sess.State = StatePreviewed
+		sess.PreviewResult = result
+		sess.mu.Unlock()
+
+		log.Info().Str("repo", repo).Str("session_id", sessionID).
+			Int("local_only", localOnly).Int("remote_only", remoteOnly).
+			Int("shared", shared).Int("dead_refs", deadRefs).
+			Msg("preview completed")
+	}
+}
+
+// refsOnlyFrontmatter is used to parse only the refs field from YAML frontmatter.
+type refsOnlyFrontmatter struct {
+	Refs []string `yaml:"refs"`
+}
+
+// extractRefsFromFrontmatter parses YAML frontmatter and returns the refs slice.
+// Returns nil if the content has no valid frontmatter.
+func extractRefsFromFrontmatter(content string) []string {
+	content = strings.ReplaceAll(content, "\r\n", "\n")
+	if !strings.HasPrefix(content, "---\n") {
+		return nil
+	}
+	rest := content[4:]
+	closeIdx := strings.Index(rest, "\n---\n")
+	if closeIdx < 0 {
+		return nil
+	}
+	yamlBlock := rest[:closeIdx]
+	var fm refsOnlyFrontmatter
+	if err := yaml.Unmarshal([]byte(yamlBlock), &fm); err != nil {
+		return nil
+	}
+	return fm.Refs
 }
 
 // collectBranches iterates references in the storer and returns branch names.
