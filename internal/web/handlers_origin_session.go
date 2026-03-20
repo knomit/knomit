@@ -663,6 +663,7 @@ func (rm *RepoManager) handleCommit(sm *SessionManager) http.HandlerFunc {
 		remoteStore := sess.RemoteStore
 		authCfg := sess.Auth
 		remoteURL := sess.URL
+		testResult := sess.TestResult
 		sess.mu.Unlock()
 
 		if state != StateApplied {
@@ -672,6 +673,12 @@ func (rm *RepoManager) handleCommit(sm *SessionManager) http.HandlerFunc {
 		if remoteStore == nil {
 			writeError(w, http.StatusConflict, "session has no remote store")
 			return
+		}
+
+		// Resolve the remote's default branch from the test result.
+		defaultBranch := "main"
+		if tr, ok := testResult.(connectivityResult); ok && tr.DefaultBranch != "" {
+			defaultBranch = tr.DefaultBranch
 		}
 
 		ri := RepoFromContext(r.Context())
@@ -711,7 +718,7 @@ func (rm *RepoManager) handleCommit(sm *SessionManager) http.HandlerFunc {
 				authToken = authCfg.User + ":" + authCfg.Password
 			}
 
-			if err := ri.Svc.SetRemoteWithAuth("origin", remoteURL, "main", 300, 300, authMethod, authToken); err != nil {
+			if err := ri.Svc.SetRemoteWithAuth("origin", remoteURL, defaultBranch, 300, 300, authMethod, authToken); err != nil {
 				sendEvent(map[string]string{"phase": "error", "message": fmt.Sprintf("save remote config: %v", err)})
 				return
 			}
