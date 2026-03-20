@@ -167,7 +167,12 @@ func Replay(local *Store, localDB *sql.DB, target *Store, cfg ReplayConfig) (*Re
 		}
 	}
 
+	// Subtract overwrites: paths counted in both local and remote are only one
+	// distinct fact in the target after replay.
+	result.TotalFacts = result.TotalFacts - result.Overwrites
+
 	log.Info().
+		Int("total_facts", result.TotalFacts).
 		Int("from_local", result.FromLocal).
 		Int("from_remote", result.FromRemote).
 		Int("overwrites", result.Overwrites).
@@ -260,9 +265,8 @@ func resolveDeadRefs(local *Store, content, path string, localPathSet, remotePat
 		return content, 0, 0, nil
 	}
 
-	// Rebuild the content with updated refs.
-	fm.Refs = newRefs
-	return rebuildContent(fm, yamlBlock, body), resolvedCount, droppedCount, nil
+	// Rebuild the content with updated refs, preserving all other frontmatter fields.
+	return rebuildContent(yamlBlock, body, newRefs), resolvedCount, droppedCount, nil
 }
 
 // extractExternalRefsFromHistory looks up the last version of a deleted fact in
@@ -350,36 +354,62 @@ func parseFrontmatterRefs(content string) (*replayFrontmatter, string, string, e
 	return &fm, yamlBlock, body, nil
 }
 
-// rebuildContent reconstructs a fact file with updated frontmatter refs.
-func rebuildContent(fm *replayFrontmatter, _ string, body string) string {
-	var sb strings.Builder
-	sb.WriteString("---\n")
+// rebuildContent reconstructs a fact file with updated refs, doing a targeted
+// replacement of the refs: block in the raw YAML to preserve all other fields.
+func rebuildContent(yamlBlock, body string, newRefs []string) string {
+	updatedYAML := replaceRefsInYAML(yamlBlock, newRefs)
+	return "---\n" + updatedYAML + "\n---\n" + body
+}
 
-	if fm.Type != "" {
-		sb.WriteString("type: ")
-		sb.WriteString(fm.Type)
-		sb.WriteString("\n")
+// replaceRefsInYAML does a targeted replacement of the refs: block inside a
+// raw YAML string, preserving all other fields exactly as they appear.
+// If refs are empty, the refs: section is removed. If no refs: line exists and
+// newRefs is non-empty, refs: is appended before the end.
+func replaceRefsInYAML(yamlBlock string, newRefs []string) string {
+	lines := strings.Split(yamlBlock, "\n")
+
+	// Find the refs: line and its indented continuation lines.
+	refsStart := -1
+	refsEnd := -1 // exclusive
+	for i, line := range lines {
+		if refsStart == -1 {
+			if strings.HasPrefix(line, "refs:") {
+				refsStart = i
+				refsEnd = i + 1
+			}
+		} else {
+			// Continuation: indented lines (list items) belong to refs:.
+			if len(line) > 0 && (line[0] == ' ' || line[0] == '\t') {
+				refsEnd = i + 1
+			} else {
+				break
+			}
+		}
 	}
-	sb.WriteString("domain: ")
-	sb.WriteString(serializeRefList(fm.Domain))
-	sb.WriteString("\n")
 
-	sb.WriteString(fmt.Sprintf("confidence: %g\n", fm.Confidence))
-	sb.WriteString(fmt.Sprintf("sources: %d\n", fm.Sources))
+	newRefsLine := "refs: " + serializeRefList(newRefs)
 
-	sb.WriteString("entities: ")
-	sb.WriteString(serializeRefList(fm.Entities))
-	sb.WriteString("\n")
+	var resultLines []string
+	if refsStart == -1 {
+		// No refs: line exists.
+		if len(newRefs) > 0 {
+			// Append refs before the closing boundary.
+			resultLines = append(lines, newRefsLine)
+		} else {
+			resultLines = lines
+		}
+	} else if len(newRefs) == 0 {
+		// Remove the refs: section entirely.
+		resultLines = append(lines[:refsStart], lines[refsEnd:]...)
+	} else {
+		// Replace the refs: section with the new single-line form.
+		resultLines = make([]string, 0, len(lines)-(refsEnd-refsStart)+1)
+		resultLines = append(resultLines, lines[:refsStart]...)
+		resultLines = append(resultLines, newRefsLine)
+		resultLines = append(resultLines, lines[refsEnd:]...)
+	}
 
-	sb.WriteString("refs: ")
-	sb.WriteString(serializeRefList(fm.Refs))
-	sb.WriteString("\n")
-
-	sb.WriteString("---\n")
-	// body includes the leading \n from the closing delimiter parse
-	sb.WriteString(body)
-
-	return sb.String()
+	return strings.Join(resultLines, "\n")
 }
 
 // serializeRefList renders a []string as a YAML inline list: [a, b, c] or [].
