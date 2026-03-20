@@ -145,8 +145,7 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS)
 {
   "mcpServers": {
     "knomit": {
-      "command": "/path/to/dist/knomit-remote",
-      "args": ["http://localhost:19278"]
+      "command": "/path/to/dist/knomit-remote"
     }
   }
 }
@@ -158,18 +157,17 @@ For multiple repos:
 {
   "mcpServers": {
     "knomit": {
-      "command": "/path/to/dist/knomit-remote",
-      "args": ["http://localhost:19278"]
+      "command": "/path/to/dist/knomit-remote"
     },
     "work-kb": {
       "command": "/path/to/dist/knomit-remote",
-      "args": ["--repo", "work", "--profile", "chat", "http://localhost:19278"]
+      "args": ["--repo", "work", "--profile", "chat"]
     }
   }
 }
 ```
 
-Flags: `--repo <name>` (default: `knomit`), `--profile <profile>` (default: `code`).
+Flags: `--repo <name>` (default: `knomit`), `--profile <profile>` (default: `code`). Base URL defaults to `http://localhost:19278` and can be overridden as a positional argument.
 
 The bridge reads JSON-RPC from stdin, forwards to the knomit HTTP endpoint, and writes responses to stdout.
 

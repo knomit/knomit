@@ -6,21 +6,23 @@
 //
 // Usage:
 //
-//	knomit-remote [--repo <name>] [--profile <profile>] <base-url>
-//	knomit-remote http://localhost:19278
-//	knomit-remote --repo work --profile chat http://localhost:19278
+//	knomit-remote [--repo <name>] [--profile <profile>] [base-url]
+//	knomit-remote
+//	knomit-remote --repo work --profile chat
+//	knomit-remote http://myhost:8080
+//
+// The base-url defaults to http://localhost:19278.
 //
 // Claude Desktop config:
 //
 //	{
 //	  "mcpServers": {
 //	    "knomit": {
-//	      "command": "/path/to/knomit-remote",
-//	      "args": ["http://localhost:19278"]
+//	      "command": "/path/to/knomit-remote"
 //	    },
 //	    "work-kb": {
 //	      "command": "/path/to/knomit-remote",
-//	      "args": ["--repo", "work", "http://localhost:19278"]
+//	      "args": ["--repo", "work", "--profile", "chat"]
 //	    }
 //	  }
 //	}
@@ -52,19 +54,18 @@ func main() {
 	repo := flag.String("repo", "knomit", "repository name")
 	profile := flag.String("profile", "code", "MCP profile (code, chat, generic)")
 	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "usage: knomit-remote [--repo <name>] [--profile <profile>] <base-url>\n")
-		fmt.Fprintf(os.Stderr, "example: knomit-remote http://localhost:19278\n")
-		fmt.Fprintf(os.Stderr, "         knomit-remote --repo work --profile chat http://localhost:19278\n")
+		fmt.Fprintf(os.Stderr, "usage: knomit-remote [--repo <name>] [--profile <profile>] [base-url]\n")
+		fmt.Fprintf(os.Stderr, "example: knomit-remote\n")
+		fmt.Fprintf(os.Stderr, "         knomit-remote http://myhost:8080\n")
+		fmt.Fprintf(os.Stderr, "         knomit-remote --repo work --profile chat\n")
 		flag.PrintDefaults()
 	}
 	flag.Parse()
 
-	if flag.NArg() < 1 {
-		flag.Usage()
-		os.Exit(1)
+	baseURL := "http://localhost:19278"
+	if flag.NArg() >= 1 {
+		baseURL = strings.TrimRight(flag.Arg(0), "/")
 	}
-
-	baseURL := strings.TrimRight(flag.Arg(0), "/")
 	serverURL := fmt.Sprintf("%s/api/v1/%s/mcp?profile=%s", baseURL, *repo, *profile)
 	logDebug("repo=%s profile=%s url=%s", *repo, *profile, serverURL)
 	client := &http.Client{}
