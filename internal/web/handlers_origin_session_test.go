@@ -1125,3 +1125,238 @@ func TestTestConnectivity_CloneError(t *testing.T) {
 	}
 }
 
+// --- additional apply error-path tests ---
+
+func TestApply_InvalidJSON(t *testing.T) {
+	handler, sessionID := setupTestedSession(t)
+
+	applyReq := httptest.NewRequest(http.MethodPost,
+		"/api/v1/knomit/origin/session/"+sessionID+"/apply",
+		strings.NewReader(`not-valid-json`))
+	applyRec := httptest.NewRecorder()
+	handler.ServeHTTP(applyRec, applyReq)
+
+	if applyRec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", applyRec.Code, applyRec.Body.String())
+	}
+	var body map[string]string
+	_ = json.NewDecoder(applyRec.Body).Decode(&body)
+	if body["error"] == "" {
+		t.Error("expected error message in body")
+	}
+}
+
+func TestApply_InvalidStrategy(t *testing.T) {
+	handler, sessionID := setupTestedSession(t)
+
+	applyReq := httptest.NewRequest(http.MethodPost,
+		"/api/v1/knomit/origin/session/"+sessionID+"/apply",
+		strings.NewReader(`{"conflict_strategy":"foo"}`))
+	applyRec := httptest.NewRecorder()
+	handler.ServeHTTP(applyRec, applyReq)
+
+	if applyRec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", applyRec.Code, applyRec.Body.String())
+	}
+	var body map[string]string
+	_ = json.NewDecoder(applyRec.Body).Decode(&body)
+	if body["error"] == "" {
+		t.Error("expected error message in body")
+	}
+}
+
+func TestApply_NoRemoteStore(t *testing.T) {
+	// Set up a session in StateTested but with RemoteStore = nil.
+	svc, err := store.Open(":memory:")
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	t.Cleanup(func() { svc.Close() })
+
+	localGS, err := git.InitWithStorer(svc.GitStorer(), nil, "agent/test")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	hub := NewTaskHub(context.Background())
+	rm := NewRepoManager()
+	sm := NewSessionManager()
+	t.Cleanup(sm.Shutdown)
+
+	rm.Set("knomit", &RepoInstance{
+		Name: "knomit",
+		GS:   localGS,
+		Svc:  svc,
+		Hub:  hub,
+	})
+	router := NewRouterWithSessionManager(rm, nil, false, "kb", sm)
+
+	sess, err := sm.Create("knomit", "inmem:///test-no-remote", AuthConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess.mu.Lock()
+	sess.State = StateTested
+	sess.RemoteStore = nil // no remote store
+	sess.TestResult = connectivityResult{
+		DefaultBranch: "main",
+		History:       "disjoint",
+	}
+	sess.mu.Unlock()
+
+	rr := doRequest(t, router, http.MethodPost,
+		"/api/v1/knomit/origin/session/"+sess.ID+"/apply",
+		`{"conflict_strategy":"local_wins"}`)
+	if rr.Code != http.StatusConflict {
+		t.Fatalf("expected 409, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestApply_SharedHistory(t *testing.T) {
+	// Set up a session with history="shared". The apply should send
+	// phase=merging then phase=done.
+	svc, err := store.Open(":memory:")
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	t.Cleanup(func() { svc.Close() })
+
+	localGS, err := git.InitWithStorer(svc.GitStorer(), nil, "agent/test")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Need a remote store so the nil check passes.
+	remoteStorer := newTestStorerForWeb(t)
+	remoteStore, err := git.InitWithStorer(remoteStorer, nil, "agent/remote")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	hub := NewTaskHub(context.Background())
+	rm := NewRepoManager()
+	sm := NewSessionManager()
+	t.Cleanup(sm.Shutdown)
+
+	rm.Set("knomit", &RepoInstance{
+		Name: "knomit",
+		GS:   localGS,
+		Svc:  svc,
+		Hub:  hub,
+	})
+	router := NewRouterWithSessionManager(rm, nil, false, "kb", sm)
+
+	sess, err := sm.Create("knomit", "inmem:///test-shared", AuthConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess.mu.Lock()
+	sess.State = StateTested
+	sess.RemoteStore = remoteStore
+	sess.TestResult = connectivityResult{
+		DefaultBranch: "main",
+		History:       "shared",
+	}
+	sess.mu.Unlock()
+
+	applyReq := httptest.NewRequest(http.MethodPost,
+		"/api/v1/knomit/origin/session/"+sess.ID+"/apply",
+		strings.NewReader(`{"conflict_strategy":"local_wins"}`))
+	applyRec := httptest.NewRecorder()
+	router.ServeHTTP(applyRec, applyReq)
+
+	if applyRec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", applyRec.Code, applyRec.Body.String())
+	}
+	if ct := applyRec.Header().Get("Content-Type"); ct != "text/event-stream" {
+		t.Fatalf("expected text/event-stream, got %q", ct)
+	}
+
+	events := parseSSEEvents(t, applyRec.Body.String())
+
+	var merging, done bool
+	for _, ev := range events {
+		switch ev["phase"] {
+		case "merging":
+			merging = true
+		case "done":
+			done = true
+		}
+	}
+	if !merging {
+		t.Errorf("expected merging phase event, got: %v", events)
+	}
+	if !done {
+		t.Errorf("expected done phase event, got: %v", events)
+	}
+
+	// Verify session state is applied.
+	rr := doRequest(t, router, http.MethodGet, "/api/v1/knomit/origin/session/"+sess.ID, "")
+	var sessBody map[string]any
+	_ = json.NewDecoder(rr.Body).Decode(&sessBody)
+	if sessBody["state"] != "applied" {
+		t.Errorf("expected state=applied, got %v", sessBody["state"])
+	}
+}
+
+// --- additional commit error-path tests ---
+
+func TestCommit_NotApplied(t *testing.T) {
+	// Session in StatePreviewed (not applied) → 409.
+	svc, err := store.Open(":memory:")
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	t.Cleanup(func() { svc.Close() })
+
+	localGS, err := git.InitWithStorer(svc.GitStorer(), nil, "agent/test")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	hub := NewTaskHub(context.Background())
+	rm := NewRepoManager()
+	sm := NewSessionManager()
+	t.Cleanup(sm.Shutdown)
+
+	rm.Set("knomit", &RepoInstance{
+		Name: "knomit",
+		GS:   localGS,
+		Svc:  svc,
+		Hub:  hub,
+	})
+	router := NewRouterWithSessionManager(rm, nil, false, "kb", sm)
+
+	sess, err := sm.Create("knomit", "inmem:///test-not-applied", AuthConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess.mu.Lock()
+	sess.State = StatePreviewed
+	sess.mu.Unlock()
+
+	rr := doRequest(t, router, http.MethodPost,
+		"/api/v1/knomit/origin/session/"+sess.ID+"/commit", "")
+	if rr.Code != http.StatusConflict {
+		t.Fatalf("expected 409, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
+// --- additional createSession tests ---
+
+func TestCreateSession_SSHWithNonSSHAuth(t *testing.T) {
+	handler := newTestRouter(nil, nil)
+
+	rr := doRequest(t, handler, http.MethodPost, "/api/v1/knomit/origin/session",
+		`{"url":"git@github.com:org/repo.git","auth_method":"token","token":"ghp_abc"}`)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", rr.Code, rr.Body.String())
+	}
+	var body map[string]string
+	_ = json.NewDecoder(rr.Body).Decode(&body)
+	if body["error"] == "" {
+		t.Error("expected error message")
+	}
+}
+
