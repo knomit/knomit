@@ -173,6 +173,7 @@ func openRepo(
 
 	ri := &web.RepoInstance{
 		Name:       name,
+		DBPath:     dbPath,
 		GS:         gs,
 		Svc:        svc,
 		Idx:        idx,

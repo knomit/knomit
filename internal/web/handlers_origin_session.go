@@ -760,7 +760,8 @@ func (rm *RepoManager) handleCommit(sm *SessionManager) http.HandlerFunc {
 		// Phase: swapping — replace the git store on the repo instance.
 		sendEvent(map[string]string{"phase": "swapping"})
 
-		if err := rm.SwapStore(ri, remoteStore); err != nil {
+		tempDBPath := filepath.Join(sess.TempDir, "clone.db")
+		if err := rm.SwapStore(ri, tempDBPath); err != nil {
 			sendEvent(map[string]string{"phase": "error", "message": fmt.Sprintf("swap failed: %v", err)})
 			return
 		}
