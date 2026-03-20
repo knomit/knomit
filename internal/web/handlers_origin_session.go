@@ -5,12 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/rs/zerolog/log"
 	"gopkg.in/yaml.v3"
 
@@ -137,12 +135,13 @@ func (rm *RepoManager) handleDeleteSession(sm *SessionManager) http.HandlerFunc 
 
 // connectivityResult is the JSON payload sent in the "done" phase of a test connectivity SSE stream.
 type connectivityResult struct {
-	Branches            []string `json:"branches"`
-	DefaultBranch       string   `json:"default_branch"`
-	ExistingAgentBranch string   `json:"existing_agent_branch,omitempty"` // non-empty if remote has our agent branch
-	History             string   `json:"history"`                         // "shared" or "disjoint"
-	RemoteFactCount     int      `json:"remote_fact_count"`
-	LocalFactCount      int      `json:"local_fact_count"`
+	Branches        []string `json:"branches"`        // non-agent branches (selectable as main)
+	AgentBranches   []string `json:"agent_branches"`  // all agent/* branches on remote
+	DefaultBranch   string   `json:"default_branch"`
+	MatchedAgent    string   `json:"matched_agent,omitempty"` // agent branch matching our hostname (if any)
+	History         string   `json:"history"`                 // "shared" or "disjoint"
+	RemoteFactCount int      `json:"remote_fact_count"`
+	LocalFactCount  int      `json:"local_fact_count"`
 }
 
 // handleTestConnectivity handles GET /api/v1/{repo}/origin/session/{sessionID}/test
@@ -265,19 +264,36 @@ CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value BLOB NOT NULL);
 			localFactCount = len(localFiles)
 		}
 
-		// Check if remote has an agent branch matching our hostname.
-		hostname, _ := os.Hostname()
-		agentBranchName := "agent/" + hostname
-		existingAgent := ""
-		agentRefName := plumbing.NewBranchReferenceName(agentBranchName)
-		if _, err := cloned.Storer().Reference(agentRefName); err == nil {
-			existingAgent = agentBranchName
+		// Collect all agent/* branches and find one matching our exact agent identity.
+		// Our agent branch name is ri.GS.Branch() (e.g. agent/<hostname>-<key-fp>).
+		localAgentBranch := ri.GS.Branch()
+		var agentBranches []string
+		matchedAgent := ""
+		refIter, _ := cloned.Storer().IterReferences()
+		if refIter != nil {
+			for {
+				ref, err := refIter.Next()
+				if err != nil {
+					break
+				}
+				if ref.Name().IsBranch() {
+					short := strings.TrimPrefix(ref.Name().String(), "refs/heads/")
+					if strings.HasPrefix(short, "agent/") {
+						agentBranches = append(agentBranches, short)
+						if short == localAgentBranch {
+							matchedAgent = short
+						}
+					}
+				}
+			}
+			refIter.Close()
 		}
 
 		result := connectivityResult{
-			Branches:            branches,
-			DefaultBranch:       defaultBranch,
-			ExistingAgentBranch: existingAgent,
+			Branches:      branches,
+			AgentBranches: agentBranches,
+			DefaultBranch: defaultBranch,
+			MatchedAgent:  matchedAgent,
 			History:             history,
 			RemoteFactCount:     remoteFactCount,
 			LocalFactCount:      localFactCount,
@@ -552,14 +568,17 @@ func (rm *RepoManager) handleApply(sm *SessionManager) http.HandlerFunc {
 			}
 			iter := &storeFactIterAdapter{inner: factsIter}
 
-			hostname, _ := os.Hostname()
-			agentBranch := "agent/" + hostname
+			// Use the matched remote agent branch if found, otherwise our local agent branch name.
+			agentBranch := tr.MatchedAgent
+			if agentBranch == "" {
+				agentBranch = ri.GS.Branch()
+			}
 
 			cfg := git.ReplayConfig{
 				Strategy:          strategy,
 				AgentBranch:       agentBranch,
 				DefaultBranch:     remoteBranch,
-				UseExistingBranch: tr.ExistingAgentBranch != "",
+				UseExistingBranch: tr.MatchedAgent != "",
 				OnProgress: func(current, total int) {
 					sendEvent(map[string]any{
 						"phase":   "replaying",

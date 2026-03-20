@@ -329,27 +329,28 @@ export function ConnectRemoteModal({ repo, onClose }: Props) {
             </div>
             <div style={{ color: '#888', marginTop: 4, display: 'flex', alignItems: 'center', gap: 8 }}>
               <span>Remote branch:</span>
-              {testResult.branches.length <= 1 ? (
-                <span>{selectedBranch || testResult.default_branch}</span>
-              ) : (
-                <select
-                  value={selectedBranch}
-                  onChange={e => setSelectedBranch(e.target.value)}
-                  disabled={busy}
-                  style={{ background: '#1a1a1a', border: '1px solid #333', color: '#eee', padding: '2px 6px', borderRadius: 4, fontSize: 13 }}
-                >
-                  {testResult.branches.map(b => (
-                    <option key={b} value={b}>{b}</option>
-                  ))}
-                </select>
-              )}
+              <select
+                value={selectedBranch}
+                onChange={e => setSelectedBranch(e.target.value)}
+                disabled={busy}
+                style={{ background: '#1a1a1a', border: '1px solid #333', color: '#eee', padding: '2px 6px', borderRadius: 4, fontSize: 13 }}
+              >
+                {testResult.branches.map(b => (
+                  <option key={b} value={b}>{b}</option>
+                ))}
+              </select>
             </div>
             <div style={{ color: '#888', marginTop: 2 }}>
               Histories: {testResult.history}
             </div>
-            {testResult.existing_agent_branch && (
-              <div style={{ color: '#8af', marginTop: 4 }}>
-                Found existing agent branch: {testResult.existing_agent_branch} (will replay on top)
+            {testResult.agent_branches?.length > 0 && (
+              <div style={{ marginTop: 6 }}>
+                <div style={{ color: '#888', fontSize: 12, marginBottom: 2 }}>Agent branches on remote:</div>
+                {testResult.agent_branches.map(b => (
+                  <div key={b} style={{ color: b === testResult.matched_agent ? '#8af' : '#666', fontSize: 12, paddingLeft: 8 }}>
+                    {b}{b === testResult.matched_agent ? ' (ours — will replay on top)' : ''}
+                  </div>
+                ))}
               </div>
             )}
           </div>
