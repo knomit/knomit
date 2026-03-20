@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
+	"knomit/internal/git"
 )
 
 // AuthConfig holds authentication credentials for a remote connection attempt.
@@ -48,9 +49,10 @@ type OriginSession struct {
 	State       SessionState
 	CreatedAt   time.Time
 	LastAccess  time.Time
-	TestResult    any // cached result from test step
-	PreviewResult any // cached result from preview step
-	ApplyResult   any // cached result from apply step
+	RemoteStore   *git.Store // cloned remote store, set by test handler
+	TestResult    any       // cached result from test step
+	PreviewResult any       // cached result from preview step
+	ApplyResult   any       // cached result from apply step
 	mu sync.Mutex
 }
 

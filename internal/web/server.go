@@ -102,6 +102,7 @@ func NewRouter(rm *RepoManager, gitHandler http.Handler, embeddingsEnabled bool,
 		sub.Post("/origin/session", rm.handleCreateSession(sm))
 		sub.Get("/origin/session/{sessionID}", rm.handleGetSession(sm))
 		sub.Delete("/origin/session/{sessionID}", rm.handleDeleteSession(sm))
+		sub.Get("/origin/session/{sessionID}/test", rm.handleTestConnectivity(sm))
 
 		sub.Mount("/mcp", http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 			ri := RepoFromContext(req.Context())
