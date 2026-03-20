@@ -72,7 +72,7 @@ download-graphqlite:
 	fi
 
 build: web
-	CGO_ENABLED=1 go build -o dist/knomit .
+	CGO_ENABLED=1 go build -o dist/knomit ./cmd/
 	go build -o dist/knomit-mcp-remote ./tools/mcp-remote/
 
 web:
@@ -86,7 +86,7 @@ dist: download-ort download-graphqlite build
 
 CMD ?= serve
 run: download-ort
-	CGO_ENABLED=1 ORT_LIB_PATH=dist/lib/$(ORT_LIB_NAME) go run . $(CMD)
+	CGO_ENABLED=1 ORT_LIB_PATH=dist/lib/$(ORT_LIB_NAME) go run ./cmd/ $(CMD)
 
 dev:
 	cd web && npm run dev

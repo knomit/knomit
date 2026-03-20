@@ -121,6 +121,8 @@ func TestOpenRepo_WithOntologyCreatesMCP(t *testing.T) {
 	}
 	defer result.cleanup()
 
+	setRepoMCP(result, "kb", ontology, nil, nil)
+
 	if result.ri.MCPHandlers == nil {
 		t.Fatal("MCPHandlers should not be nil when ontology is provided")
 	}
