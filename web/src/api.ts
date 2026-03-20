@@ -101,6 +101,7 @@ export type SSEEvent =
   | { phase: "merging" }
   | { phase: "swapping" }
   | { phase: "configuring" }
+  | { phase: "rebuilding" }
   | { phase: "done"; result: any }
   | { phase: "error"; message: string };
 

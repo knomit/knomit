@@ -736,6 +736,19 @@ func (rm *RepoManager) handleCommit(sm *SessionManager) http.HandlerFunc {
 			}
 		}
 
+		// Rebuild the index from the new git store so facts/recent/search work.
+		sendEvent(map[string]string{"phase": "rebuilding"})
+		if ri.Svc != nil {
+			if gitReader, ok := ri.GS.(store.GitReader); ok {
+				idx := ri.Svc.Index()
+				if err := idx.Rebuild(gitReader, ri.GS.Branch(), nil); err != nil {
+					log.Warn().Err(err).Str("repo", repo).Msg("commit: index rebuild failed")
+				} else {
+					log.Info().Str("repo", repo).Msg("commit: index rebuilt from swapped store")
+				}
+			}
+		}
+
 		// Start sync/push loops.
 		if ri.StartSync != nil {
 			if err := ri.StartSync(remoteURL); err != nil {
@@ -745,6 +758,13 @@ func (rm *RepoManager) handleCommit(sm *SessionManager) http.HandlerFunc {
 		}
 
 		sendEvent(map[string]string{"phase": "done"})
+
+		// Broadcast status so the UI refreshes with the new HEAD.
+		if ri.Hub != nil {
+			if head, err := ri.GS.HeadCommit(); err == nil {
+				ri.Hub.BroadcastStatus(head)
+			}
+		}
 
 		// Update session state and clean up.
 		sess.mu.Lock()

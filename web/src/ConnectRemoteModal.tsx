@@ -166,6 +166,8 @@ export function ConnectRemoteModal({ repo, onClose }: Props) {
           setProgress('Swapping store...');
         } else if (ev.phase === 'configuring') {
           setProgress('Configuring remote...');
+        } else if (ev.phase === 'rebuilding') {
+          setProgress('Rebuilding index...');
         } else {
           setProgress(ev.phase + '...');
         }
