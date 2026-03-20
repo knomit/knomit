@@ -48,6 +48,30 @@ CREATE TABLE IF NOT EXISTS commit_log (commit_hash TEXT NOT NULL, path TEXT NOT 
 	return storegit.NewStorer(db), db
 }
 
+// storeIterAdapter wraps store.FactsIter to implement git.FactIter.
+type storeIterAdapter struct {
+	inner *store.FactsIter
+}
+
+func (a *storeIterAdapter) Next() (*git.FactRow, error) {
+	row, err := a.inner.Next()
+	if err != nil || row == nil {
+		return nil, err
+	}
+	return &git.FactRow{Path: row.Path, BlobHash: row.BlobHash, CommitHash: row.CommitHash}, nil
+}
+
+func (a *storeIterAdapter) Close() error { return a.inner.Close() }
+
+func mustNewIter(t *testing.T, db *sql.DB) git.FactIter {
+	t.Helper()
+	iter, err := store.NewFactsIter(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &storeIterAdapter{inner: iter}
+}
+
 // insertFact inserts a row into the facts table for the iterator.
 func insertFact(t *testing.T, db *sql.DB, path, blobHash, commitHash string) {
 	t.Helper()
@@ -96,7 +120,7 @@ func TestReplay_CopiesFactsToTempBranch(t *testing.T) {
 		AgentBranch:   "agent/replay-test",
 		DefaultBranch: "main",
 	}
-	result, err := git.Replay(local, localDB, target, cfg)
+	result, err := git.Replay(local, mustNewIter(t, localDB), target, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -156,7 +180,7 @@ func TestReplay_LocalWins_OverwritesSharedPath(t *testing.T) {
 		AgentBranch:   "agent/replay-test",
 		DefaultBranch: "main",
 	}
-	result, err := git.Replay(local, localDB, target, cfg)
+	result, err := git.Replay(local, mustNewIter(t, localDB), target, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -208,7 +232,7 @@ func TestReplay_RemoteWins_KeepsRemoteOnSharedPath(t *testing.T) {
 		AgentBranch:   "agent/replay-test",
 		DefaultBranch: "main",
 	}
-	result, err := git.Replay(local, localDB, target, cfg)
+	result, err := git.Replay(local, mustNewIter(t, localDB), target, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -269,7 +293,7 @@ func TestReplay_ResolvesDeadRefs(t *testing.T) {
 		AgentBranch:   "agent/replay-test",
 		DefaultBranch: "main",
 	}
-	result, err := git.Replay(local, localDB, target, cfg)
+	result, err := git.Replay(local, mustNewIter(t, localDB), target, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -330,7 +354,7 @@ func TestReplay_DropsOrphanDeadRefs(t *testing.T) {
 		AgentBranch:   "agent/replay-test",
 		DefaultBranch: "main",
 	}
-	result, err := git.Replay(local, localDB, target, cfg)
+	result, err := git.Replay(local, mustNewIter(t, localDB), target, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}

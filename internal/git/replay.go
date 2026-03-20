@@ -3,7 +3,6 @@
 package git
 
 import (
-	"database/sql"
 	"fmt"
 	"io"
 	"strings"
@@ -12,9 +11,22 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/rs/zerolog/log"
 	"gopkg.in/yaml.v3"
-
-	"knomit/internal/store"
 )
+
+// FactIter is the interface expected by Replay for iterating local facts.
+// Implemented by store.FactsIter.
+type FactIter interface {
+	Next() (*FactRow, error)
+	Close() error
+}
+
+// FactRow holds the minimal fields needed to replay a fact.
+// Matches store.FactRow.
+type FactRow struct {
+	Path       string
+	BlobHash   string
+	CommitHash string
+}
 
 // ConflictStrategy determines how shared-path conflicts are resolved during replay.
 type ConflictStrategy string
@@ -46,7 +58,7 @@ type ReplayResult struct {
 // It iterates facts from localDB (newest-first, deduped by path), reads their
 // blob content from the local store, resolves dead refs, and writes each fact
 // to the target store.
-func Replay(local *Store, localDB *sql.DB, target *Store, cfg ReplayConfig) (*ReplayResult, error) {
+func Replay(local *Store, iter FactIter, target *Store, cfg ReplayConfig) (*ReplayResult, error) {
 	if cfg.AgentBranch == "" {
 		return nil, fmt.Errorf("Replay: AgentBranch must be set")
 	}
@@ -76,14 +88,8 @@ func Replay(local *Store, localDB *sql.DB, target *Store, cfg ReplayConfig) (*Re
 
 	log.Debug().Str("agent_branch", cfg.AgentBranch).Str("from", cfg.DefaultBranch).Msg("replay: created agent branch")
 
-	// 2. Open fact iterator from localDB.
-	iter, err := store.NewFactsIter(localDB)
-	if err != nil {
-		return nil, fmt.Errorf("Replay: open facts iterator: %w", err)
-	}
+	// 2. Collect all facts from the iterator for progress reporting.
 	defer iter.Close()
-
-	// Collect all facts first so we know the total count for progress reporting.
 	type localFact struct {
 		path     string
 		blobHash string

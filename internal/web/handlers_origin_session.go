@@ -18,6 +18,21 @@ import (
 	storegit "knomit/internal/store/git"
 )
 
+// storeFactIterAdapter wraps store.FactsIter to implement git.FactIter.
+type storeFactIterAdapter struct {
+	inner *store.FactsIter
+}
+
+func (a *storeFactIterAdapter) Next() (*git.FactRow, error) {
+	row, err := a.inner.Next()
+	if err != nil || row == nil {
+		return nil, err
+	}
+	return &git.FactRow{Path: row.Path, BlobHash: row.BlobHash, CommitHash: row.CommitHash}, nil
+}
+
+func (a *storeFactIterAdapter) Close() error { return a.inner.Close() }
+
 // createSessionRequest is the expected JSON body for POST /origin/session.
 type createSessionRequest struct {
 	URL        string `json:"url"`
@@ -511,6 +526,13 @@ func (rm *RepoManager) handleApply(sm *SessionManager) http.HandlerFunc {
 				return
 			}
 
+			factsIter, err := store.NewFactsIter(localDB)
+			if err != nil {
+				sendEvent(map[string]string{"phase": "error", "message": fmt.Sprintf("open facts iterator: %v", err)})
+				return
+			}
+			iter := &storeFactIterAdapter{inner: factsIter}
+
 			hostname, _ := os.Hostname()
 			agentBranch := "agent/" + hostname
 
@@ -527,7 +549,7 @@ func (rm *RepoManager) handleApply(sm *SessionManager) http.HandlerFunc {
 				},
 			}
 
-			replayRes, err := git.Replay(localGS, localDB, remoteStore, cfg)
+			replayRes, err := git.Replay(localGS, iter, remoteStore, cfg)
 			if err != nil {
 				sendEvent(map[string]string{"phase": "error", "message": fmt.Sprintf("replay failed: %v", err)})
 				sess.mu.Lock()
