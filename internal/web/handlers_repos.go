@@ -3,32 +3,34 @@ package web
 import (
 	"net/http"
 	"sort"
+
+	"knomit/internal/repos"
 )
 
 // handleRepos handles GET /api/v1/repos — returns all registered repos.
-func handleRepos(rm *RepoManager) http.HandlerFunc {
+func handleRepos(rm *repos.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		type repoEntry struct {
 			Name   string `json:"name"`
 			Branch string `json:"branch"`
 		}
 
-		var repos []repoEntry
-		rm.ForEach(func(name string, ri *RepoInstance) {
-			repos = append(repos, repoEntry{
+		var repoList []repoEntry
+		rm.ForEach(func(name string, ri *repos.RepoInstance) {
+			repoList = append(repoList, repoEntry{
 				Name:   name,
 				Branch: ri.GS.Branch(),
 			})
 		})
 
-		sort.Slice(repos, func(i, j int) bool {
-			return repos[i].Name < repos[j].Name
+		sort.Slice(repoList, func(i, j int) bool {
+			return repoList[i].Name < repoList[j].Name
 		})
 
-		if repos == nil {
-			repos = []repoEntry{}
+		if repoList == nil {
+			repoList = []repoEntry{}
 		}
 
-		writeJSON(w, http.StatusOK, repos)
+		writeJSON(w, http.StatusOK, repoList)
 	}
 }

@@ -13,6 +13,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"knomit/internal/git"
+	"knomit/internal/repos"
 	"knomit/internal/store"
 	storegit "knomit/internal/store/git"
 )
@@ -41,7 +42,7 @@ type createSessionRequest struct {
 	Password   string `json:"password"`
 }
 
-func (rm *RepoManager) handleCreateSession(sm *SessionManager) http.HandlerFunc {
+func handleCreateSession(rm *repos.Manager, sm *SessionManager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repo := chi.URLParam(r, "repo")
 
@@ -85,7 +86,7 @@ func (rm *RepoManager) handleCreateSession(sm *SessionManager) http.HandlerFunc 
 	}
 }
 
-func (rm *RepoManager) handleGetSession(sm *SessionManager) http.HandlerFunc {
+func handleGetSession(rm *repos.Manager, sm *SessionManager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repo := chi.URLParam(r, "repo")
 		sessionID := chi.URLParam(r, "sessionID")
@@ -117,7 +118,7 @@ func (rm *RepoManager) handleGetSession(sm *SessionManager) http.HandlerFunc {
 	}
 }
 
-func (rm *RepoManager) handleDeleteSession(sm *SessionManager) http.HandlerFunc {
+func handleDeleteSession(rm *repos.Manager, sm *SessionManager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repo := chi.URLParam(r, "repo")
 		sessionID := chi.URLParam(r, "sessionID")
@@ -139,7 +140,7 @@ type connectivityResult struct {
 }
 
 // handleTestConnectivity handles GET /api/v1/{repo}/origin/session/{sessionID}/test
-func (rm *RepoManager) handleTestConnectivity(sm *SessionManager) http.HandlerFunc {
+func handleTestConnectivity(rm *repos.Manager, sm *SessionManager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repo := chi.URLParam(r, "repo")
 		sessionID := chi.URLParam(r, "sessionID")
@@ -150,7 +151,7 @@ func (rm *RepoManager) handleTestConnectivity(sm *SessionManager) http.HandlerFu
 			return
 		}
 
-		ri := RepoFromContext(r.Context())
+		ri := repos.RepoFromContext(r.Context())
 
 		sendEvent, ok := beginSSE(w)
 		if !ok {
@@ -281,7 +282,7 @@ type previewResult struct {
 }
 
 // handlePreview handles GET /api/v1/{repo}/origin/session/{sessionID}/preview
-func (rm *RepoManager) handlePreview(sm *SessionManager) http.HandlerFunc {
+func handlePreview(rm *repos.Manager, sm *SessionManager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repo := chi.URLParam(r, "repo")
 		sessionID := chi.URLParam(r, "sessionID")
@@ -306,7 +307,7 @@ func (rm *RepoManager) handlePreview(sm *SessionManager) http.HandlerFunc {
 			return
 		}
 
-		ri := RepoFromContext(r.Context())
+		ri := repos.RepoFromContext(r.Context())
 
 		sendEvent, ok := beginSSE(w)
 		if !ok {
@@ -421,7 +422,7 @@ type applyResult struct {
 }
 
 // handleApply handles POST /api/v1/{repo}/origin/session/{sessionID}/apply
-func (rm *RepoManager) handleApply(sm *SessionManager) http.HandlerFunc {
+func handleApply(rm *repos.Manager, sm *SessionManager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repo := chi.URLParam(r, "repo")
 		sessionID := chi.URLParam(r, "sessionID")
@@ -472,7 +473,7 @@ func (rm *RepoManager) handleApply(sm *SessionManager) http.HandlerFunc {
 			remoteBranch = req.Branch
 		}
 
-		ri := RepoFromContext(r.Context())
+		ri := repos.RepoFromContext(r.Context())
 
 		sendEvent, ok := beginSSE(w)
 		if !ok {
@@ -668,7 +669,7 @@ func collectAllBranchInfo(s *storegit.Storer, localAgentBranch string) (branches
 // handleCommit handles POST /api/v1/{repo}/origin/session/{sessionID}/commit
 // It finalizes the origin connection by swapping the session's remote store
 // into the repo instance, saving remote config, and starting sync loops.
-func (rm *RepoManager) handleCommit(sm *SessionManager) http.HandlerFunc {
+func handleCommit(rm *repos.Manager, sm *SessionManager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repo := chi.URLParam(r, "repo")
 		sessionID := chi.URLParam(r, "sessionID")
@@ -701,7 +702,7 @@ func (rm *RepoManager) handleCommit(sm *SessionManager) http.HandlerFunc {
 			remoteBranch = "main"
 		}
 
-		ri := RepoFromContext(r.Context())
+		ri := repos.RepoFromContext(r.Context())
 
 		sendEvent, ok := beginSSE(w)
 		if !ok {

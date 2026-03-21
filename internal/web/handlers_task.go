@@ -8,6 +8,7 @@ import (
 	"net/http"
 
 	"github.com/rs/zerolog/log"
+	"knomit/internal/repos"
 	"knomit/internal/store"
 )
 
@@ -25,7 +26,7 @@ func writeTaskConflict(w http.ResponseWriter, op string, err error) {
 // Runs the Reviewer (multi-turn review session) in the background via TaskHub.
 func handleSynthesizeStart() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		ri := RepoFromContext(r.Context())
+		ri := repos.RepoFromContext(r.Context())
 		deps := ri.SynthDeps
 		if deps == nil || deps.Adapter == nil || deps.Reviewer == nil {
 			log.Warn().Msg("synthesize: not available (no LLM configured)")
@@ -36,13 +37,13 @@ func handleSynthesizeStart() http.HandlerFunc {
 		log.Info().Msg("synthesize: starting review")
 
 		repo := ri.Name
-		id, err := ri.Hub.Start("synth", func(ctx context.Context, emit func(TaskEvent)) {
-			emit(TaskEvent{Status: "running", Phase: "start", Message: "review starting", Repo: repo})
+		id, err := ri.Hub.Start("synth", func(ctx context.Context, emit func(repos.TaskEvent)) {
+			emit(repos.TaskEvent{Status: "running", Phase: "start", Message: "review starting", Repo: repo})
 			if err := deps.Reviewer.RunAll(ctx, deps.Adapter); err != nil {
-				emit(TaskEvent{Status: "error", Message: err.Error(), Repo: repo})
+				emit(repos.TaskEvent{Status: "error", Message: err.Error(), Repo: repo})
 				return
 			}
-			emit(TaskEvent{Status: "done", Message: "review complete", Repo: repo})
+			emit(repos.TaskEvent{Status: "done", Message: "review complete", Repo: repo})
 		})
 		if err != nil {
 			writeTaskConflict(w, "synth", err)
@@ -58,7 +59,7 @@ func handleSynthesizeStart() http.HandlerFunc {
 // emitting progress events via TaskHub.
 func handleRebuild() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		ri := RepoFromContext(r.Context())
+		ri := repos.RepoFromContext(r.Context())
 		if ri.Svc == nil {
 			writeError(w, http.StatusServiceUnavailable, "index not available")
 			return
@@ -74,18 +75,18 @@ func handleRebuild() http.HandlerFunc {
 		branch := ri.GS.Branch()
 
 		repo := ri.Name
-		id, err := ri.Hub.Start("rebuild", func(ctx context.Context, emit func(TaskEvent)) {
-			emit(TaskEvent{Status: "running", Phase: "start", Message: "rebuilding index", Repo: repo})
+		id, err := ri.Hub.Start("rebuild", func(ctx context.Context, emit func(repos.TaskEvent)) {
+			emit(repos.TaskEvent{Status: "running", Phase: "start", Message: "rebuilding index", Repo: repo})
 			progress := func(subPhase string, done, total int) {
 				if done%10 == 0 || done == total {
-					emit(TaskEvent{Status: "running", Phase: subPhase, Message: fmt.Sprintf("%d/%d", done, total), Repo: repo})
+					emit(repos.TaskEvent{Status: "running", Phase: subPhase, Message: fmt.Sprintf("%d/%d", done, total), Repo: repo})
 				}
 			}
 			if err := idx.Rebuild(gitReader, branch, progress); err != nil {
-				emit(TaskEvent{Status: "error", Message: err.Error(), Repo: repo})
+				emit(repos.TaskEvent{Status: "error", Message: err.Error(), Repo: repo})
 				return
 			}
-			emit(TaskEvent{Status: "done", Message: "rebuild complete", Repo: repo})
+			emit(repos.TaskEvent{Status: "done", Message: "rebuild complete", Repo: repo})
 		})
 		if err != nil {
 			writeTaskConflict(w, "rebuild", err)
@@ -95,5 +96,3 @@ func handleRebuild() http.HandlerFunc {
 		writeTaskStarted(w, "rebuild", id)
 	}
 }
-
-

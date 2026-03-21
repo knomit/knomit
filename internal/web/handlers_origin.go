@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/rs/zerolog/log"
+	"knomit/internal/repos"
 )
 
 // isGitURL returns true if s is a valid git remote URL.
@@ -46,7 +47,7 @@ func isGitURL(s string) bool {
 
 func handleGetOrigin() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		ri := RepoFromContext(r.Context())
+		ri := repos.RepoFromContext(r.Context())
 		if ri.Svc == nil {
 			w.WriteHeader(http.StatusNoContent)
 			return
@@ -77,7 +78,7 @@ type setOriginRequest struct {
 
 func handleSetOrigin() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		ri := RepoFromContext(r.Context())
+		ri := repos.RepoFromContext(r.Context())
 		if ri.Svc == nil {
 			writeError(w, http.StatusInternalServerError, "no store available")
 			return

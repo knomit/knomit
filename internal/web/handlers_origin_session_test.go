@@ -17,6 +17,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 
 	"knomit/internal/git"
+	"knomit/internal/repos"
 	"knomit/internal/store"
 	storegit "knomit/internal/store/git"
 )
@@ -213,9 +214,9 @@ CREATE TABLE IF NOT EXISTS commit_log (commit_hash TEXT NOT NULL, path TEXT NOT 
 // newTestRouterWithGitStore creates a router backed by a real *git.Store.
 func newTestRouterWithGitStore(t *testing.T, gs *git.Store) http.Handler {
 	t.Helper()
-	hub := NewTaskHub(context.Background())
-	rm := NewRepoManager()
-	rm.Set("knomit", &RepoInstance{
+	hub := repos.NewTaskHub(context.Background())
+	rm := repos.New(context.Background(), repos.Deps{})
+	rm.Set("knomit", &repos.RepoInstance{
 		Name: "knomit",
 		GS:   gs,
 		Hub:  hub,
@@ -412,9 +413,9 @@ func newTestRouterWithSvcAndGitStore(t *testing.T) (http.Handler, *git.Store, *s
 		t.Fatalf("git.InitWithStorer: %v", err)
 	}
 
-	hub := NewTaskHub(context.Background())
-	rm := NewRepoManager()
-	rm.Set("knomit", &RepoInstance{
+	hub := repos.NewTaskHub(context.Background())
+	rm := repos.New(context.Background(), repos.Deps{})
+	rm.Set("knomit", &repos.RepoInstance{
 		Name: "knomit",
 		GS:   gs,
 		Svc:  svc,
@@ -662,12 +663,12 @@ func setupTestedSession(t *testing.T) (http.Handler, string) {
 	}
 
 	// Build router.
-	hub := NewTaskHub(context.Background())
-	rm := NewRepoManager()
+	hub := repos.NewTaskHub(context.Background())
+	rm := repos.New(context.Background(), repos.Deps{})
 	sm := NewSessionManager()
 	t.Cleanup(sm.Shutdown)
 
-	rm.Set("knomit", &RepoInstance{
+	rm.Set("knomit", &repos.RepoInstance{
 		Name: "knomit",
 		GS:   localGS,
 		Svc:  svc,
@@ -870,7 +871,7 @@ func TestApply_WrongState(t *testing.T) {
 // setupAppliedSession creates a handler with a local store+svc, a separate remote
 // store, and manually wires the session into StateApplied. Returns the handler,
 // sessionID, RepoManager, and SessionManager.
-func setupAppliedSession(t *testing.T) (http.Handler, string, *RepoManager, *SessionManager) {
+func setupAppliedSession(t *testing.T) (http.Handler, string, *repos.Manager, *SessionManager) {
 	t.Helper()
 
 	// Build local store+svc.
@@ -901,15 +902,15 @@ func setupAppliedSession(t *testing.T) (http.Handler, string, *RepoManager, *Ses
 	}
 
 	// Build router.
-	hub := NewTaskHub(context.Background())
-	rm := NewRepoManager()
+	hub := repos.NewTaskHub(context.Background())
+	rm := repos.New(context.Background(), repos.Deps{})
 	sm := NewSessionManager()
 	t.Cleanup(sm.Shutdown)
 
 	var startSyncCalled bool
 	var startSyncURL string
 
-	ri := &RepoInstance{
+	ri := &repos.RepoInstance{
 		Name:       "knomit",
 		GS:         localGS,
 		Svc:        svc,
@@ -1047,12 +1048,12 @@ func TestCommit_WrongState(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	hub := NewTaskHub(context.Background())
-	rm := NewRepoManager()
+	hub := repos.NewTaskHub(context.Background())
+	rm := repos.New(context.Background(), repos.Deps{})
 	sm := NewSessionManager()
 	t.Cleanup(sm.Shutdown)
 
-	rm.Set("knomit", &RepoInstance{
+	rm.Set("knomit", &repos.RepoInstance{
 		Name: "knomit",
 		GS:   localGS,
 		Svc:  svc,
@@ -1178,12 +1179,12 @@ func TestApply_NoRemoteStore(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	hub := NewTaskHub(context.Background())
-	rm := NewRepoManager()
+	hub := repos.NewTaskHub(context.Background())
+	rm := repos.New(context.Background(), repos.Deps{})
 	sm := NewSessionManager()
 	t.Cleanup(sm.Shutdown)
 
-	rm.Set("knomit", &RepoInstance{
+	rm.Set("knomit", &repos.RepoInstance{
 		Name: "knomit",
 		GS:   localGS,
 		Svc:  svc,
@@ -1233,12 +1234,12 @@ func TestApply_SharedHistory(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	hub := NewTaskHub(context.Background())
-	rm := NewRepoManager()
+	hub := repos.NewTaskHub(context.Background())
+	rm := repos.New(context.Background(), repos.Deps{})
 	sm := NewSessionManager()
 	t.Cleanup(sm.Shutdown)
 
-	rm.Set("knomit", &RepoInstance{
+	rm.Set("knomit", &repos.RepoInstance{
 		Name: "knomit",
 		GS:   localGS,
 		Svc:  svc,
@@ -1314,12 +1315,12 @@ func TestCommit_NotApplied(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	hub := NewTaskHub(context.Background())
-	rm := NewRepoManager()
+	hub := repos.NewTaskHub(context.Background())
+	rm := repos.New(context.Background(), repos.Deps{})
 	sm := NewSessionManager()
 	t.Cleanup(sm.Shutdown)
 
-	rm.Set("knomit", &RepoInstance{
+	rm.Set("knomit", &repos.RepoInstance{
 		Name: "knomit",
 		GS:   localGS,
 		Svc:  svc,

@@ -8,12 +8,14 @@ import (
 	"fmt"
 	"net/http"
 	"time"
+
+	"knomit/internal/repos"
 )
 
 // handleEvents handles GET /api/v1/{repo}/events — SSE endpoint for real-time updates.
 func handleEvents() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		ri := RepoFromContext(r.Context())
+		ri := repos.RepoFromContext(r.Context())
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.Header().Set("Cache-Control", "no-cache")
 		w.Header().Set("Connection", "keep-alive")
@@ -50,15 +52,15 @@ func handleEvents() http.HandlerFunc {
 					return
 				}
 				switch ev := e.(type) {
-				case TaskEvent:
+				case repos.TaskEvent:
 					data, _ := json.Marshal(ev)
 					fmt.Fprintf(w, "event: task\ndata: %s\n\n", data)
-				case StatusEvent:
+				case repos.StatusEvent:
 					fmt.Fprintf(w, "event: status\ndata: {\"head\":\"%s\"}\n\n", ev.Head)
-				case SyncEvent:
+				case repos.SyncEvent:
 					data, _ := json.Marshal(ev)
 					fmt.Fprintf(w, "event: %s\ndata: %s\n\n", ev.Status, data)
-				case PushEvent:
+				case repos.PushEvent:
 					data, _ := json.Marshal(ev)
 					fmt.Fprintf(w, "event: %s\ndata: %s\n\n", ev.Status, data)
 				default:

@@ -11,16 +11,19 @@ import (
 	"strings"
 	"testing"
 
+	"context"
+
 	"github.com/go-chi/chi/v5"
 	"go.uber.org/mock/gomock"
 	"knomit/internal/git"
+	"knomit/internal/repos"
 )
 
-// newTestRepoManager creates a RepoManager with a single repo named repoName
+// newTestRepoManager creates a *repos.Manager with a single repo named repoName
 // backed by store.
-func newTestRepoManager(repoName string, store *git.Store) *RepoManager {
-	rm := NewRepoManager()
-	rm.Set(repoName, &RepoInstance{GS: store})
+func newTestRepoManager(repoName string, store *git.Store) *repos.Manager {
+	rm := repos.New(context.Background(), repos.Deps{})
+	rm.Set(repoName, &repos.RepoInstance{GS: store})
 	return rm
 }
 
@@ -124,8 +127,8 @@ func TestGitCloneWithCommits(t *testing.T) {
 // not implement GitRemoteStore returns 500 rather than panicking.
 func TestGitRemoteHandler_GSNotGitRemoteStore(t *testing.T) {
 	ctrl := gomock.NewController(t)
-	rm := NewRepoManager()
-	rm.Set("mocked", &RepoInstance{GS: NewMockGitStore(ctrl)})
+	rm := repos.New(context.Background(), repos.Deps{})
+	rm.Set("mocked", &repos.RepoInstance{GS: NewMockGitStore(ctrl)})
 
 	handler := GitRemoteHandler(rm)
 	rr := httptest.NewRecorder()
@@ -241,9 +244,9 @@ func TestGitRemoteHandler_MultiRepo(t *testing.T) {
 		t.Fatalf("WriteFile b: %v", err)
 	}
 
-	rm := NewRepoManager()
-	rm.Set("repo-a", &RepoInstance{GS: storeA})
-	rm.Set("repo-b", &RepoInstance{GS: storeB})
+	rm := repos.New(context.Background(), repos.Deps{})
+	rm.Set("repo-a", &repos.RepoInstance{GS: storeA})
+	rm.Set("repo-b", &repos.RepoInstance{GS: storeB})
 
 	r := chi.NewRouter()
 	r.Mount("/git", GitRemoteHandler(rm))

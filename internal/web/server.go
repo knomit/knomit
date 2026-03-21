@@ -3,52 +3,12 @@ package web
 import (
 	"net/http"
 
-	"knomit/internal/embeddings"
-	"knomit/internal/git"
-	"knomit/internal/llm"
-	"knomit/internal/store"
-	"knomit/internal/synthesize"
+	"knomit/internal/repos"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/rs/zerolog/log"
 )
-
-// GitStore is the narrow git interface needed by read-only query handlers
-// and the sync task handler. Accepts *git.Store at runtime.
-type GitStore interface {
-	ListDir(path string) ([]git.DirEntry, error)
-	ReadFile(path string) (string, error)
-	ReadFileAtCommit(path, commitHash string) (string, error)
-	ReadFileLastCommit(path, beforeCommitHash string) (content string, fromCommit string, err error)
-	WriteFile(path, content, message, operation string) (commitHash, blobHash string, err error)
-	Log(path string) ([]git.LogEntry, error)
-	LogPaginated(path string, limit int, after string) ([]git.LogEntryWithTags, string, error)
-	CommitDetail(commitHash string) (*git.CommitDetailResult, error)
-	Activity(path string) (git.ActivityResult, error)
-	HeadCommit() (string, error)
-	Branch() string
-	ListAll() ([]string, error)
-}
-
-// SearchIndex is the narrow search/index interface needed by query handlers.
-// Accepts *store.Index at runtime.
-type SearchIndex interface {
-	Search(q store.SearchQuery) ([]store.SearchResult, error)
-	GetLastCommit(branch string) (string, error)
-	Stats(pathPrefix string) (store.StatsResult, error)
-}
-
-// SynthDeps bundles the dependencies needed by the synthesize handler.
-// May be nil if no LLM is configured — the synth handler returns 503
-// in that case rather than panicking.
-type SynthDeps struct {
-	GS       synthesize.GitStore
-	Idx      synthesize.SearchIndex
-	Embedder *embeddings.Embedder
-	Adapter  llm.LLMAdapter
-	Reviewer *synthesize.Reviewer
-}
 
 // NewRouter creates the chi router with all API routes, MCP endpoints,
 // git smart-HTTP remote, and the embedded SPA frontend.
@@ -68,13 +28,13 @@ type SynthDeps struct {
 //	/api/v1/{repo}/mcp              — MCP protocol endpoints (per-profile)
 //	/git                            — Smart HTTP git remote
 //	/*                              — Embedded SPA with client-side routing fallback
-func NewRouter(rm *RepoManager, gitHandler http.Handler, embeddingsEnabled bool, ontologyRoot string) http.Handler {
+func NewRouter(rm *repos.Manager, gitHandler http.Handler, embeddingsEnabled bool, ontologyRoot string) http.Handler {
 	return NewRouterWithSessionManager(rm, gitHandler, embeddingsEnabled, ontologyRoot, NewSessionManager())
 }
 
 // NewRouterWithSessionManager is like NewRouter but accepts an external SessionManager,
 // useful for testing where the test needs direct access to the session manager.
-func NewRouterWithSessionManager(rm *RepoManager, gitHandler http.Handler, embeddingsEnabled bool, ontologyRoot string, sm *SessionManager) http.Handler {
+func NewRouterWithSessionManager(rm *repos.Manager, gitHandler http.Handler, embeddingsEnabled bool, ontologyRoot string, sm *SessionManager) http.Handler {
 	r := chi.NewRouter()
 	r.Use(middleware.Recoverer)
 	if gitHandler != nil {
@@ -87,7 +47,7 @@ func NewRouterWithSessionManager(rm *RepoManager, gitHandler http.Handler, embed
 	r.Get("/docs", handleSwaggerUI())
 
 	r.Route("/api/v1/{repo}", func(sub chi.Router) {
-		sub.Use(repoMiddleware(rm))
+		sub.Use(repos.RepoMiddleware(rm))
 		sub.Get("/browse", handleBrowse(ontologyRoot))
 		sub.Get("/fact", handleFact())
 		sub.Put("/fact", handleFactWrite())
@@ -103,16 +63,16 @@ func NewRouterWithSessionManager(rm *RepoManager, gitHandler http.Handler, embed
 		sub.Get("/events", handleEvents())
 		sub.Get("/origin", handleGetOrigin())
 		sub.Put("/origin", handleSetOrigin())
-		sub.Post("/origin/session", rm.handleCreateSession(sm))
-		sub.Get("/origin/session/{sessionID}", rm.handleGetSession(sm))
-		sub.Delete("/origin/session/{sessionID}", rm.handleDeleteSession(sm))
-		sub.Get("/origin/session/{sessionID}/test", rm.handleTestConnectivity(sm))
-		sub.Get("/origin/session/{sessionID}/preview", rm.handlePreview(sm))
-		sub.Post("/origin/session/{sessionID}/apply", rm.handleApply(sm))
-		sub.Post("/origin/session/{sessionID}/commit", rm.handleCommit(sm))
+		sub.Post("/origin/session", handleCreateSession(rm, sm))
+		sub.Get("/origin/session/{sessionID}", handleGetSession(rm, sm))
+		sub.Delete("/origin/session/{sessionID}", handleDeleteSession(rm, sm))
+		sub.Get("/origin/session/{sessionID}/test", handleTestConnectivity(rm, sm))
+		sub.Get("/origin/session/{sessionID}/preview", handlePreview(rm, sm))
+		sub.Post("/origin/session/{sessionID}/apply", handleApply(rm, sm))
+		sub.Post("/origin/session/{sessionID}/commit", handleCommit(rm, sm))
 
 		sub.Mount("/mcp", http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-			ri := RepoFromContext(req.Context())
+			ri := repos.RepoFromContext(req.Context())
 			if len(ri.MCPHandlers) == 0 {
 				http.NotFound(w, req)
 				return

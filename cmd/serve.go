@@ -6,25 +6,19 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"os/signal"
 	"path/filepath"
-	"sort"
 	"strings"
-	"syscall"
 	"time"
 
-	mcpserver "github.com/mark3labs/mcp-go/server"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 	"golang.org/x/crypto/ssh"
 
 	"knomit/internal/config"
 	"knomit/internal/embeddings"
-	"knomit/internal/fact"
 	"knomit/internal/git"
 	"knomit/internal/llm"
-	"knomit/internal/mcp"
-	"knomit/internal/synthesize"
+	"knomit/internal/repos"
 	"knomit/internal/web"
 )
 
@@ -74,7 +68,7 @@ func serveCmd() *cobra.Command {
 			}
 
 			// 2. Resolve LLM adapter (shared across repos).
-			ctx := context.Background()
+			ctx := cmd.Context()
 			var llmAdapter llm.LLMAdapter
 			provider, err = llm.ResolveProvider(cfg.LLM.Model, cfg.LLM.Provider)
 			if err != nil {
@@ -103,76 +97,27 @@ func serveCmd() *cobra.Command {
 				log.Warn().Msg("synthesis disabled (no LLM adapter)")
 			}
 
-			// 3. Discover repos — scan repos/*.db
-			reposDir := filepath.Join(cfg.Home, "repos")
-			if err := os.MkdirAll(reposDir, 0o755); err != nil {
-				return fmt.Errorf("create repos dir: %w", err)
+			// 3. Boot all repositories.
+			m := repos.New(ctx, repos.Deps{
+				Cfg:         cfg,
+				Signer:      signer,
+				AgentBranch: agentBranch,
+				Embedder:    embedder,
+				LLM:         llmAdapter,
+				KeyPath:     keyPath,
+			})
+			if err := m.Boot(); err != nil {
+				return fmt.Errorf("boot: %w", err)
 			}
 
-			// Phase 1: Open default knomit repo first (needed for ontology).
-			defaultDB := filepath.Join(reposDir, "knomit.db")
-			knomitResult, err := openRepo(ctx, "knomit", defaultDB, true, signer, agentBranch, embedder, llmAdapter, cfg.OntologyRoot, nil, cfg, keyPath)
-			if err != nil {
-				return fmt.Errorf("open default repo: %w", err)
-			}
-
-			// Load ontology from knomit repo's git store.
-			var ontology *fact.Ontology
-			ontologyYAML, readErr := knomitResult.gs.ReadFile("domains/ontology.yaml")
-			if readErr != nil {
-				log.Warn().Msg("domains/ontology.yaml not found, using default ontology")
-				ontology = fact.DefaultOntology()
-			} else {
-				ontology, err = fact.ParseOntology([]byte(ontologyYAML))
-				if err != nil {
-					knomitResult.cleanup()
-					return fmt.Errorf("parse ontology: %w", err)
-				}
-			}
-
-			// Now set MCP servers on the knomit repo (they need ontology).
-			setRepoMCP(knomitResult, cfg.OntologyRoot, ontology, llmAdapter, embedder)
-
-			rm := web.NewRepoManager()
-			var allResults []*repoResult
-			rm.Set("knomit", knomitResult.ri)
-			allResults = append(allResults, knomitResult)
-
-			// Phase 2: Discover and open remaining repos.
-			dbFiles, _ := filepath.Glob(filepath.Join(reposDir, "*.db"))
-			sort.Strings(dbFiles)
-
-			for _, dbPath := range dbFiles {
-				base := filepath.Base(dbPath)
-				name := strings.TrimSuffix(base, ".db")
-
-				if name == "knomit" {
-					continue // already opened
-				}
-
-				if !isValidRepoName(name) {
-					log.Warn().Str("file", base).Msg("skipping db with invalid repo name")
-					continue
-				}
-
-				result, err := openRepo(ctx, name, dbPath, false, signer, agentBranch, embedder, llmAdapter, cfg.OntologyRoot, ontology, cfg, keyPath)
-				if err != nil {
-					log.Warn().Err(err).Str("repo", name).Msg("skipping repo")
-					continue
-				}
-
-				rm.Set(name, result.ri)
-				allResults = append(allResults, result)
-			}
-
-			// 4. Wire git remote handler (all repos via RepoManager).
+			// 4. Wire git remote handler (all repos via Manager).
 			var gitHandler http.Handler
 			if cfg.Git.Serve {
-				gitHandler = web.GitRemoteHandler(rm)
+				gitHandler = web.GitRemoteHandler(m)
 			}
 
 			// 5. Create chi router.
-			router := web.NewRouter(rm, gitHandler, embeddingsEnabled, cfg.OntologyRoot)
+			router := web.NewRouter(m, gitHandler, embeddingsEnabled, cfg.OntologyRoot)
 
 			// 6. Startup summary.
 			pubKey := strings.TrimSpace(string(ssh.MarshalAuthorizedKey(signer.PublicKey())))
@@ -188,15 +133,10 @@ func serveCmd() *cobra.Command {
 				startupLog = startupLog.Str("git_remote", httpAddr+"/git")
 			}
 
-			var repoNames []string
-			rm.ForEach(func(name string, _ *web.RepoInstance) {
-				repoNames = append(repoNames, name)
-			})
-
 			startupLog.
 				Str("public_key", pubKey).
 				Str("branch", agentBranch).
-				Strs("repos", repoNames).
+				Strs("repos", m.Names()).
 				Msg("knomit ready")
 
 			// 7. Graceful shutdown.
@@ -208,9 +148,6 @@ func serveCmd() *cobra.Command {
 				WriteTimeout:      0, // 0 = no limit for SSE long-poll
 				IdleTimeout:       60 * time.Second,
 			}
-
-			stop := make(chan os.Signal, 1)
-			signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
 
 			go func() {
 				if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
@@ -235,50 +172,12 @@ func serveCmd() *cobra.Command {
 				}()
 			}
 
-			<-stop
-			// Cancel all sync loops first.
-			for _, result := range allResults {
-				result.ri.SyncCancel()
-			}
-			// Wait for all sync loops and clean up per-repo resources.
-			for _, result := range allResults {
-				result.ri.SyncWg.Wait()
-				result.ri.Hub.Shutdown()
-				result.cleanup()
-			}
+			<-ctx.Done()
+			m.Shutdown()
 			// Shared resource cleanup (embedder, tracer) happens via defers.
 			shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			return srv.Shutdown(shutCtx)
 		},
-	}
-}
-
-// setRepoMCP creates and attaches MCP handlers to a repoResult.
-// Called after the ontology is loaded (since MCP servers need it).
-func setRepoMCP(result *repoResult, ontologyRoot string, ontology *fact.Ontology, llmAdapter llm.LLMAdapter, embedder *embeddings.Embedder) {
-	reviewer := synthesize.NewReviewer(result.gs, result.idx, result.idx, embedder, nil)
-	profiles := []string{"code", "chat", "generic"}
-	mcpHandlers := make(map[string]http.Handler, len(profiles))
-	for _, p := range profiles {
-		var mcpSrv *mcpserver.MCPServer
-		if embedder != nil {
-			mcpSrv = mcp.NewServer(result.gs, result.idx, result.idx, reviewer, p, ontologyRoot, ontology, embedder)
-		} else {
-			mcpSrv = mcp.NewServer(result.gs, result.idx, result.idx, reviewer, p, ontologyRoot, ontology)
-		}
-		mcpHandlers[p] = mcpserver.NewStreamableHTTPServer(mcpSrv)
-	}
-	result.ri.MCPHandlers = mcpHandlers
-
-	if llmAdapter != nil {
-		synthReviewer := synthesize.NewReviewer(result.gs, result.idx, result.idx, embedder, nil)
-		result.ri.SynthDeps = &web.SynthDeps{
-			GS:       result.gs,
-			Idx:      result.idx,
-			Embedder: embedder,
-			Adapter:  llmAdapter,
-			Reviewer: synthReviewer,
-		}
 	}
 }
