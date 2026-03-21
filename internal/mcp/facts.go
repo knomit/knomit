@@ -18,8 +18,9 @@ type Fact struct {
 	Domain     []string           `json:"domain"`
 	Confidence float64            `json:"confidence"`
 	Sources    int                `json:"sources"`
-	Entities   []string           `json:"entities"`
-	Refs       []string           `json:"refs"`
+	Entities       []string           `json:"entities"`
+	Refs           []string           `json:"refs"`
+	EvidenceWeight float64            `json:"evidence_weight,omitempty"`
 }
 
 // frontmatter is the YAML structure parsed from the --- block.
@@ -28,8 +29,9 @@ type frontmatter struct {
 	Domain     []string `yaml:"domain"`
 	Confidence float64  `yaml:"confidence"`
 	Sources    int      `yaml:"sources"`
-	Entities   []string `yaml:"entities"`
-	Refs       []string `yaml:"refs"`
+	Entities       []string `yaml:"entities"`
+	Refs           []string `yaml:"refs"`
+	EvidenceWeight float64  `yaml:"evidence_weight,omitempty"`
 }
 
 // ParseFact parses a fact file. path is the git path (stored in Fact.Path, not
@@ -92,8 +94,9 @@ func ParseFact(path, content string) (Fact, error) {
 		Domain:     fm.Domain,
 		Confidence: fm.Confidence,
 		Sources:    fm.Sources,
-		Entities:   fm.Entities,
-		Refs:       fm.Refs,
+		Entities:       fm.Entities,
+		Refs:           fm.Refs,
+		EvidenceWeight: fm.EvidenceWeight,
 	}, nil
 }
 
@@ -144,6 +147,9 @@ func SerializeFact(f Fact) string {
 	// confidence: format without trailing zeros but always show at least one decimal.
 	sb.WriteString(fmt.Sprintf("confidence: %g\n", f.Confidence))
 	sb.WriteString(fmt.Sprintf("sources: %d\n", f.Sources))
+	if f.EvidenceWeight > 0 {
+		sb.WriteString(fmt.Sprintf("evidence_weight: %g\n", f.EvidenceWeight))
+	}
 
 	sb.WriteString("entities: ")
 	sb.WriteString(serializeInlineList(f.Entities))
