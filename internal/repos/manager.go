@@ -409,9 +409,9 @@ func (m *Manager) setupMCP(o *openedRepo, ri *RepoInstance) {
 	for _, p := range profiles {
 		var mcpSrv *mcpserver.MCPServer
 		if embedder != nil {
-			mcpSrv = mcp.NewServer(o.gs, o.idx, o.idx, reviewer, p, ontologyRoot, m.ontology, embedder)
+			mcpSrv = mcp.NewServer(o.gs, o.idx, o.idx, o.idx, reviewer, p, ontologyRoot, m.ontology, embedder)
 		} else {
-			mcpSrv = mcp.NewServer(o.gs, o.idx, o.idx, reviewer, p, ontologyRoot, m.ontology)
+			mcpSrv = mcp.NewServer(o.gs, o.idx, o.idx, o.idx, reviewer, p, ontologyRoot, m.ontology)
 		}
 		mcpHandlers[p] = mcpserver.NewStreamableHTTPServer(mcpSrv)
 	}
