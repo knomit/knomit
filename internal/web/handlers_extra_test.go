@@ -107,6 +107,51 @@ func TestHandleSearch_WithFilters(t *testing.T) {
 	}
 }
 
+func TestHandleSearch_TypeFilter(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	gs := NewMockGitStore(ctrl)
+	mockIdx := NewMockSearchIndex(ctrl)
+
+	mockIdx.EXPECT().Search(gomock.Any()).DoAndReturn(func(q store.SearchQuery) ([]store.SearchResult, error) {
+		if len(q.IncludeTypes) != 1 || q.IncludeTypes[0] != "hypothesis" {
+			t.Errorf("IncludeTypes = %v, want [hypothesis]", q.IncludeTypes)
+		}
+		if len(q.ExcludeTypes) != 1 || q.ExcludeTypes[0] != "observation" {
+			t.Errorf("ExcludeTypes = %v, want [observation]", q.ExcludeTypes)
+		}
+		return []store.SearchResult{}, nil
+	})
+
+	handler := newTestRouter(gs, mockIdx)
+	rr := doRequest(t, handler, http.MethodGet,
+		"/api/v1/knomit/search?q=test&type=hypothesis&exclude_type=observation", "")
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestHandleSearch_MultipleTypes(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	gs := NewMockGitStore(ctrl)
+	mockIdx := NewMockSearchIndex(ctrl)
+
+	mockIdx.EXPECT().Search(gomock.Any()).DoAndReturn(func(q store.SearchQuery) ([]store.SearchResult, error) {
+		if len(q.IncludeTypes) != 2 {
+			t.Errorf("IncludeTypes = %v, want 2 items", q.IncludeTypes)
+		}
+		return []store.SearchResult{}, nil
+	})
+
+	handler := newTestRouter(gs, mockIdx)
+	rr := doRequest(t, handler, http.MethodGet,
+		"/api/v1/knomit/search?q=test&type=hypothesis,synthesis", "")
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", rr.Code, rr.Body.String())
+	}
+}
+
 func TestHandleSearch_LimitCappedAt500(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
