@@ -2,10 +2,14 @@ package repos_test
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 
+	"knomit/internal/git"
 	"knomit/internal/repos"
+	"knomit/internal/store"
 )
 
 func emptyManager() *repos.Manager {
@@ -114,5 +118,85 @@ func TestShutdown_CallsClose(t *testing.T) {
 	}
 	if !got["a"] || !got["b"] {
 		t.Fatalf("Shutdown did not call Close on all repos: %v", got)
+	}
+}
+
+// ---------- SwapStore ----------
+
+func openTestDB(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.db")
+	gs, err := git.Init(path, nil)
+	if err != nil {
+		t.Fatalf("openTestDB: git.Init: %v", err)
+	}
+	gs.Close()
+	return path
+}
+
+func TestSwapStore_InMemoryFallback(t *testing.T) {
+	m := emptyManager()
+	ri := makeRI("knomit")
+	// DBPath="" signals in-memory/test mode.
+
+	tempDB := openTestDB(t)
+	if err := m.SwapStore(ri, tempDB); err != nil {
+		t.Fatalf("SwapStore returned error: %v", err)
+	}
+	// In-memory fallback opens the temp DB directly — Svc must be non-nil.
+	if ri.Svc == nil {
+		t.Fatal("expected ri.Svc to be set after in-memory fallback")
+	}
+}
+
+func TestSwapStore_FileSwap(t *testing.T) {
+	m := emptyManager()
+	// Create a real DB at a persistent path (already closed by openTestDB).
+	realDB := openTestDB(t)
+	svc, err := store.Open(realDB)
+	if err != nil {
+		t.Fatalf("open real DB: %v", err)
+	}
+	ri := makeRI("knomit")
+	ri.DBPath = realDB
+	ri.Svc = svc
+
+	// Create a second DB to swap in.
+	tempDB := openTestDB(t)
+	if err := m.SwapStore(ri, tempDB); err != nil {
+		t.Fatalf("SwapStore returned error: %v", err)
+	}
+	if ri.Svc == nil {
+		t.Fatal("expected ri.Svc to be set after file swap")
+	}
+	if ri.GS == nil {
+		t.Fatal("expected ri.GS to be set after file swap")
+	}
+	if ri.Idx == nil {
+		t.Fatal("expected ri.Idx to be set after file swap")
+	}
+	// Backup should be cleaned up on success.
+	if _, err := os.Stat(realDB + ".bak"); !os.IsNotExist(err) {
+		t.Fatal("expected backup to be removed after successful swap")
+	}
+}
+
+func TestSwapStore_InvalidTempPath_ReturnsError(t *testing.T) {
+	m := emptyManager()
+	// Set up a real DB so it tries the file-swap path.
+	realDB := openTestDB(t)
+	svc, err := store.Open(realDB)
+	if err != nil {
+		t.Fatalf("reopen real DB: %v", err)
+	}
+	ri := makeRI("knomit")
+	ri.DBPath = realDB
+	ri.Svc = svc
+
+	// Pass a non-existent temp path — copyFile should fail.
+	err = m.SwapStore(ri, "/nonexistent/path/to/temp.db")
+	if err == nil {
+		t.Fatal("expected error for invalid temp path, got nil")
 	}
 }
