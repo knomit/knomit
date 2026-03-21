@@ -208,7 +208,7 @@ func (r *Reviewer) ContinueSession(sessionID, response string) (*mcp.ReviewResul
 			}
 
 			// Cluster the new facts to find groups worth distilling further.
-			raptorClusters, clErr := ScopedCluster(newFacts, r.idx, 1.0, r.onProgress)
+			raptorClusters, clErr := ScopedCluster(newFacts, r.idx, 1.0, r.onProgress, "hypothesis")
 			if clErr != nil {
 				log.Warn().Err(clErr).Msg("review: RAPTOR clustering failed")
 			} else {

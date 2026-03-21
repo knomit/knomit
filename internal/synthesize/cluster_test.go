@@ -197,6 +197,56 @@ func TestGroupByCategory(t *testing.T) {
 	}
 }
 
+func TestScopedCluster_ExcludeTypesPassedToSearch(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	idx := NewMockSearchIndex(ctrl)
+
+	seed := factForLLM{File: "kb/go/concurrency/channels.md", Title: "channels", Body: "ch"}
+
+	// Expect Search to be called with ExcludeTypes populated.
+	idx.EXPECT().Search(gomock.Any()).DoAndReturn(func(q store.SearchQuery) ([]store.SearchResult, error) {
+		if len(q.ExcludeTypes) != 1 || q.ExcludeTypes[0] != "hypothesis" {
+			t.Errorf("expected ExcludeTypes=[hypothesis], got %v", q.ExcludeTypes)
+		}
+		return []store.SearchResult{
+			{FactWithBody: store.FactWithBody{FactRecord: store.FactRecord{Path: "kb/go/concurrency/goroutines.md", Title: "Goroutines"}, Body: "goroutines"}, Score: 80},
+		}, nil
+	})
+
+	idx.EXPECT().ClusterFacts(1.0, 2).Return(store.ClusterResult{
+		Clusters: map[int][]string{
+			0: {"kb/go/concurrency/channels.md", "kb/go/concurrency/goroutines.md"},
+		},
+	}, nil)
+
+	result, err := ScopedCluster([]factForLLM{seed}, idx, 1.0, nil, "hypothesis")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(result) != 1 {
+		t.Fatalf("expected 1 cluster, got %d", len(result))
+	}
+}
+
+func TestScopedCluster_NoExcludeTypesByDefault(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	idx := NewMockSearchIndex(ctrl)
+
+	seed := factForLLM{File: "kb/go/concurrency/channels.md", Title: "channels", Body: "ch"}
+
+	// Expect Search to be called without ExcludeTypes.
+	idx.EXPECT().Search(gomock.Any()).DoAndReturn(func(q store.SearchQuery) ([]store.SearchResult, error) {
+		if len(q.ExcludeTypes) != 0 {
+			t.Errorf("expected empty ExcludeTypes, got %v", q.ExcludeTypes)
+		}
+		return nil, nil
+	})
+
+	idx.EXPECT().ClusterFacts(1.0, 2).Return(store.ClusterResult{}, fmt.Errorf("no embeddings"))
+
+	_, _ = ScopedCluster([]factForLLM{seed}, idx, 1.0, nil)
+}
+
 // clusterPaths extracts file paths from a cluster for easier assertions.
 func clusterPaths(cluster []factForLLM) []string {
 	paths := make([]string, len(cluster))
