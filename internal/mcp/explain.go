@@ -33,6 +33,7 @@ type explainFactEntry struct {
 	Commit         string         `json:"commit"`
 	Depth          int            `json:"depth"`
 	Title          string         `json:"title"`
+	Type           string         `json:"type"`
 	Body           string         `json:"body"`
 	Refs           classifiedRefs `json:"refs"`
 	History        []historyEntry `json:"history,omitempty"`
@@ -164,6 +165,7 @@ func explainFirstCall(gs GitStore, sessionIdx ToolSessionIndex, ontologyRoot, fi
 		Commit:  rootCommit,
 		Depth:   0,
 		Title:   fact.Title,
+		Type:    string(fact.Type),
 		Body:    fact.Body,
 		Refs:    refs,
 		History: history,
@@ -256,6 +258,7 @@ func explainResume(gs GitStore, sessionIdx ToolSessionIndex, cursor string) (*mc
 				Commit:         item.CommitHash,
 				Depth:          item.Depth,
 				Title:          parsed.Title,
+				Type:           string(parsed.Type),
 				Body:           parsed.Body,
 				Refs:           refs,
 				Retracted:      retracted,
