@@ -349,6 +349,183 @@ func TestBuildFactPath(t *testing.T) {
 	}
 }
 
+func TestLearnBatchRejectsMixedTypes(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	gs := NewMockGitStore(ctrl)
+	idx := NewMockSearchIndex(ctrl)
+
+	handler := LearnHandler(gs, idx, "kb", fact.DefaultOntology())
+
+	req := mcpgo.CallToolRequest{}
+	req.Params.Arguments = map[string]interface{}{
+		"moment_name": "mixed-batch",
+		"facts": []interface{}{
+			map[string]interface{}{
+				"topic": "technology", "category": "go/testing",
+				"title": "Observed Fact", "body": "Something observed.",
+				"type": "observation",
+				"domain": []interface{}{}, "confidence": 0.8, "sources": 1,
+				"entities": []interface{}{}, "refs": []interface{}{},
+			},
+			map[string]interface{}{
+				"topic": "technology", "category": "go/testing",
+				"title": "Hypothesis Fact", "body": "A prediction.",
+				"type": "hypothesis",
+				"domain": []interface{}{}, "confidence": 0.5, "sources": 1,
+				"entities": []interface{}{}, "refs": []interface{}{},
+			},
+		},
+	}
+
+	result, err := handler(context.Background(), req)
+	if err != nil {
+		t.Fatalf("handler error: %v", err)
+	}
+	if !result.IsError {
+		t.Fatal("expected tool error for mixed observed/inferred batch")
+	}
+	text := getResultText(t, result)
+	if !strings.Contains(text, "cannot mix") {
+		t.Fatalf("expected 'cannot mix' in error, got: %s", text)
+	}
+}
+
+func TestLearnBatchAllowsMultipleHypotheses(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	gs := NewMockGitStore(ctrl)
+	idx := NewMockSearchIndex(ctrl)
+
+	idx.EXPECT().Search(gomock.Any()).Return(nil, nil).AnyTimes()
+	gs.EXPECT().BatchWrite(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(files map[string]string, msg, operation string) (string, map[string]string, error) {
+		blobHashes := make(map[string]string, len(files))
+		for path := range files {
+			blobHashes[path] = "blob_" + path
+		}
+		return "abc123", blobHashes, nil
+	})
+
+	handler := LearnHandler(gs, idx, "kb", fact.DefaultOntology())
+
+	req := mcpgo.CallToolRequest{}
+	req.Params.Arguments = map[string]interface{}{
+		"moment_name": "hypo-batch",
+		"facts": []interface{}{
+			map[string]interface{}{
+				"topic": "technology", "category": "go/testing",
+				"title": "Hypothesis A", "body": "Prediction A.",
+				"type": "hypothesis",
+				"domain": []interface{}{}, "confidence": 0.5, "sources": 1,
+				"entities": []interface{}{}, "refs": []interface{}{},
+			},
+			map[string]interface{}{
+				"topic": "technology", "category": "go/testing",
+				"title": "Hypothesis B", "body": "Prediction B.",
+				"type": "hypothesis",
+				"domain": []interface{}{}, "confidence": 0.4, "sources": 1,
+				"entities": []interface{}{}, "refs": []interface{}{},
+			},
+		},
+	}
+
+	result, err := handler(context.Background(), req)
+	if err != nil {
+		t.Fatalf("handler error: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("expected success for all-hypothesis batch, got error: %v", result.Content)
+	}
+}
+
+func TestLearnDedupObservationSubsumesHypothesis(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	gs := NewMockGitStore(ctrl)
+	idx := NewMockSearchIndex(ctrl)
+
+	// Search returns an existing hypothesis as near-duplicate.
+	idx.EXPECT().Search(gomock.Any()).Return([]SearchResult{
+		{FactWithBody: FactWithBody{
+			FactRecord: FactRecord{
+				Path:       "kb/technology/go/testing/existing.md",
+				Title:      "Testing Hypothesis",
+				Type:       "hypothesis",
+				Domain:     []string{"testing"},
+				Entities:   []string{},
+				Confidence: 0.5,
+				Sources:    1,
+				Refs:       []string{},
+			},
+			Body: "I predict tests will pass",
+		}, Score: 95},
+	}, nil)
+
+	// Read existing hypothesis fact.
+	gs.EXPECT().ReadFile("kb/technology/go/testing/existing.md").Return(
+		"---\ntype: hypothesis\ndomain: [testing]\nconfidence: 0.5\nsources: 1\nentities: []\nrefs: []\n---\n# Testing Hypothesis\n\nI predict tests will pass\n", nil)
+
+	// Expect the hypothesis to be deleted.
+	gs.EXPECT().DeleteFile("kb/technology/go/testing/existing.md", gomock.Any(), "retract").Return("del123", nil)
+
+	// BatchWrite should write the observation (not merged into existing path).
+	var capturedFiles map[string]string
+	gs.EXPECT().BatchWrite(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(files map[string]string, msg, operation string) (string, map[string]string, error) {
+		capturedFiles = files
+		blobHashes := make(map[string]string, len(files))
+		for path := range files {
+			blobHashes[path] = "blob_" + path
+		}
+		return "obs123", blobHashes, nil
+	})
+
+	handler := LearnHandler(gs, idx, "kb", fact.DefaultOntology())
+
+	req := mcpgo.CallToolRequest{}
+	req.Params.Arguments = map[string]interface{}{
+		"moment_name": "subsume-test",
+		"facts": []interface{}{
+			map[string]interface{}{
+				"topic": "technology", "category": "go/testing",
+				"title": "Tests Pass", "body": "Tests actually pass.",
+				"type": "observation",
+				"domain": []interface{}{"testing"}, "confidence": 0.9, "sources": 1,
+				"entities": []interface{}{}, "refs": []interface{}{},
+			},
+		},
+	}
+
+	result, err := handler(context.Background(), req)
+	if err != nil {
+		t.Fatalf("handler error: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("tool error: %v", result.Content)
+	}
+
+	// The observation should be written to a new path (not the hypothesis path).
+	if _, ok := capturedFiles["kb/technology/go/testing/existing.md"]; ok {
+		t.Error("observation should NOT be written to the hypothesis path")
+	}
+
+	// Verify the written observation includes the hypothesis path in refs.
+	for path, content := range capturedFiles {
+		if strings.HasPrefix(path, "kb/technology/go/testing/") {
+			f, err := ParseFact(path, content)
+			if err != nil {
+				t.Fatalf("parse written fact: %v", err)
+			}
+			found := false
+			for _, ref := range f.Refs {
+				if ref == "kb/technology/go/testing/existing.md" {
+					found = true
+					break
+				}
+			}
+			if !found {
+				t.Errorf("expected hypothesis path in refs, got: %v", f.Refs)
+			}
+		}
+	}
+}
+
 // getResultText extracts the text content from a CallToolResult.
 func getResultText(t *testing.T, result *mcpgo.CallToolResult) string {
 	t.Helper()

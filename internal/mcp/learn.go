@@ -87,6 +87,23 @@ func LearnHandler(gs GitStore, idx SearchIndex, ontologyRoot string, ontology *f
 			return mcpgo.NewToolResultError("facts must not be empty"), nil
 		}
 
+		// Validate batch type consistency: cannot mix observed and inferred types.
+		hasObserved, hasInferred := false, false
+		for _, fi := range factInputs {
+			eType := fact.EpistemicType(fi.Type)
+			if eType == "" {
+				eType = fact.DefaultType
+			}
+			if eType == fact.Hypothesis || eType == fact.Methodology {
+				hasInferred = true
+			} else {
+				hasObserved = true
+			}
+		}
+		if hasObserved && hasInferred {
+			return mcpgo.NewToolResultError("cannot mix observed types (observation, concept, etc.) and inferred types (hypothesis, methodology) in a single learn call"), nil
+		}
+
 		// 3. Validate inputs, build paths, and serialize facts.
 		files := make(map[string]string, len(factInputs))
 		facts := make([]Fact, len(factInputs))
@@ -179,6 +196,20 @@ func LearnHandler(gs GitStore, idx SearchIndex, ontologyRoot string, ontology *f
 			}
 			existingFact, parseErr := ParseFact(match.Path, existingContent)
 			if parseErr != nil {
+				continue
+			}
+
+			// Type-aware dedup: if existing fact is a hypothesis and new fact is not,
+			// the observation subsumes the hypothesis.
+			if existingFact.Type == fact.Hypothesis && f.Type != fact.Hypothesis {
+				// Write the observation as normal (don't merge into existing path).
+				// Retract the hypothesis.
+				retractMsg := fmt.Sprintf("learn: hypothesis %s subsumed by observation", match.Path)
+				gs.DeleteFile(match.Path, retractMsg, "retract")
+				// Add hypothesis path to observation's refs.
+				f.Refs = fact.AppendUnique(f.Refs, match.Path)
+				facts[i] = f
+				files[f.Path] = SerializeFact(f)
 				continue
 			}
 
