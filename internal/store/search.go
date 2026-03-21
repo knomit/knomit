@@ -21,6 +21,8 @@ type SearchQuery struct {
 	Limit         int
 	GraphHops     int       // number of graph traversal hops to expand results (0 = disabled)
 	QueryVec      []float32 // pre-computed embedding vector; if set, skips Embed(Text)
+	IncludeTypes  []string  // only return facts with these types (empty = all)
+	ExcludeTypes  []string  // exclude facts with these types
 }
 
 // SearchResult is a FactWithBody paired with a relevance score in [0, 100].
@@ -58,6 +60,22 @@ func (idx *Index) Search(q SearchQuery) ([]SearchResult, error) {
 		if q.Path != "" {
 			filterQuery += " AND f.path LIKE ?"
 			args = append(args, q.Path+"%")
+		}
+		if len(q.IncludeTypes) > 0 {
+			placeholders := make([]string, len(q.IncludeTypes))
+			for i := range q.IncludeTypes {
+				placeholders[i] = "?"
+				args = append(args, q.IncludeTypes[i])
+			}
+			filterQuery += " AND f.type IN (" + strings.Join(placeholders, ",") + ")"
+		}
+		if len(q.ExcludeTypes) > 0 {
+			placeholders := make([]string, len(q.ExcludeTypes))
+			for i := range q.ExcludeTypes {
+				placeholders[i] = "?"
+				args = append(args, q.ExcludeTypes[i])
+			}
+			filterQuery += " AND f.type NOT IN (" + strings.Join(placeholders, ",") + ")"
 		}
 		filterQuery += " LIMIT ?"
 		// Over-fetch to allow for Go-side entity/domain filtering.
@@ -192,6 +210,22 @@ func (idx *Index) Search(q SearchQuery) ([]SearchResult, error) {
 		filterSQL += " AND f.path LIKE ?"
 		args = append(args, q.Path+"%")
 	}
+	if len(q.IncludeTypes) > 0 {
+		ph := make([]string, len(q.IncludeTypes))
+		for i := range q.IncludeTypes {
+			ph[i] = "?"
+			args = append(args, q.IncludeTypes[i])
+		}
+		filterSQL += " AND f.type IN (" + strings.Join(ph, ",") + ")"
+	}
+	if len(q.ExcludeTypes) > 0 {
+		ph := make([]string, len(q.ExcludeTypes))
+		for i := range q.ExcludeTypes {
+			ph[i] = "?"
+			args = append(args, q.ExcludeTypes[i])
+		}
+		filterSQL += " AND f.type NOT IN (" + strings.Join(ph, ",") + ")"
+	}
 
 	batchQuery := `SELECT f.path, f.title, f.blob_hash, f.type, f.domain, f.entities, f.confidence, f.sources, f.refs, f.commit_hash, f.evidence_weight, o.data
 		 FROM facts f
@@ -297,6 +331,25 @@ func matchesFilters(rec FactRecord, q SearchQuery) bool {
 	}
 	if q.MinConfidence > 0 && rec.Confidence < q.MinConfidence {
 		return false
+	}
+	if len(q.IncludeTypes) > 0 {
+		found := false
+		for _, t := range q.IncludeTypes {
+			if rec.Type == t {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	if len(q.ExcludeTypes) > 0 {
+		for _, t := range q.ExcludeTypes {
+			if rec.Type == t {
+				return false
+			}
+		}
 	}
 	return true
 }

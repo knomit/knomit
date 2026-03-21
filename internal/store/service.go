@@ -68,6 +68,7 @@ func Open(path string, opts ...Option) (*Service, error) {
 		`ALTER TABLE review_sessions RENAME TO pipeline_sessions`,
 		`ALTER TABLE pipeline_sessions ADD COLUMN tool TEXT NOT NULL DEFAULT 'review'`,
 		`ALTER TABLE review_work_items RENAME TO pipeline_work_items`,
+		`CREATE INDEX IF NOT EXISTS facts_type ON facts(type)`,
 	}
 	for _, m := range migrations {
 		db.Exec(m) // ignore "duplicate column" errors

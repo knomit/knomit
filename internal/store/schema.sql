@@ -39,6 +39,8 @@ CREATE TABLE IF NOT EXISTS facts (
     evidence_weight  REAL NOT NULL DEFAULT 0
 );
 
+CREATE INDEX IF NOT EXISTS facts_type ON facts(type);
+
 -- Trigger: clean up embeddings when a fact is deleted
 CREATE TRIGGER IF NOT EXISTS facts_after_delete AFTER DELETE ON facts
 BEGIN
