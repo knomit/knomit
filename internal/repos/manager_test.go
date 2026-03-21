@@ -121,6 +121,26 @@ func TestShutdown_CallsClose(t *testing.T) {
 	}
 }
 
+// ---------- Context helpers ----------
+
+func TestRepoFromContext_Roundtrip(t *testing.T) {
+	ri := makeRI("test")
+	ctx := repos.WithRepoInstance(context.Background(), ri)
+	got := repos.RepoFromContext(ctx)
+	if got != ri {
+		t.Fatal("roundtrip through context failed")
+	}
+}
+
+func TestRepoFromContext_Panics(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("expected panic when RepoInstance not in context")
+		}
+	}()
+	repos.RepoFromContext(context.Background())
+}
+
 // ---------- SwapStore ----------
 
 func openTestDB(t *testing.T) string {
