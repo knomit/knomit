@@ -45,12 +45,24 @@ func TestNormalizePath(t *testing.T) {
 }
 
 func TestBuildFactPathLowercase(t *testing.T) {
-	path := BuildFactPath("kb", "Technology", "Languages/Go")
-	if path != strings.ToLower(path) {
-		t.Errorf("BuildFactPath should produce lowercase path, got %q", path)
+	tests := []struct {
+		topic    string
+		category string
+		prefix   string
+	}{
+		{"Technology", "Languages/Go", "kb/technology/languages/go/"},
+		{"technology", "languages/go", "kb/technology/languages/go/"},
+		{"SCIENCE", "Natural/PHYSICS", "kb/science/natural/physics/"},
+		{"People", "Colleagues/Alice", "kb/people/colleagues/alice/"},
 	}
-	if !strings.HasPrefix(path, "kb/technology/languages/go/") {
-		t.Errorf("expected prefix kb/technology/languages/go/, got %q", path)
+	for _, tc := range tests {
+		path := BuildFactPath("kb", tc.topic, tc.category)
+		if path != strings.ToLower(path) {
+			t.Errorf("BuildFactPath(%q, %q) should produce lowercase, got %q", tc.topic, tc.category, path)
+		}
+		if !strings.HasPrefix(path, tc.prefix) {
+			t.Errorf("BuildFactPath(%q, %q) expected prefix %q, got %q", tc.topic, tc.category, tc.prefix, path)
+		}
 	}
 }
 

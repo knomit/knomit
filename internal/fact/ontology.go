@@ -96,7 +96,8 @@ func (o *Ontology) ValidatePath(path string) error {
 		return fmt.Errorf("validate path: empty path")
 	}
 	parts := strings.Split(path, "/")
-	node, ok := o.Topics[parts[0]]
+	// Lowercase the topic for lookup — ontology keys are always lowercase.
+	node, ok := o.Topics[strings.ToLower(parts[0])]
 	if !ok {
 		return fmt.Errorf("validate path: unknown topic %q", parts[0])
 	}
@@ -104,7 +105,7 @@ func (o *Ontology) ValidatePath(path string) error {
 		if node == nil || node.Children == nil {
 			break // freeform from here
 		}
-		child, ok := node.Children[seg]
+		child, ok := node.Children[strings.ToLower(seg)]
 		if !ok {
 			break // freeform from here
 		}
