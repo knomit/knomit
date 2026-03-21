@@ -528,6 +528,9 @@ func TestExplainRetractedRef(t *testing.T) {
 	if f.Title != "Retracted" {
 		t.Errorf("Title: got %q, want %q", f.Title, "Retracted")
 	}
+	if f.Body == "" {
+		t.Error("expected non-empty Body for retracted fact")
+	}
 }
 
 func TestExplainResumeParseError(t *testing.T) {

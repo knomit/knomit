@@ -216,7 +216,10 @@ func explainResume(gs GitStore, sessionIdx ToolSessionIndex, cursor string) (*mc
 			var retracted bool
 			var lastCommitHash string
 			if readErr != nil {
-				retractCommit, lcErr := gs.LastCommitForPath(item.Path)
+				// LastCommitForPath skips git merge commits. In knomit, synthesis
+			// deletions are always regular commits (not merge commits), so this
+			// correctly returns the retraction commit.
+			retractCommit, lcErr := gs.LastCommitForPath(item.Path)
 				if lcErr != nil || retractCommit == "" {
 					continue // file never existed in git
 				}
