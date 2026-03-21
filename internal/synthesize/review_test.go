@@ -414,7 +414,9 @@ func TestContinueSession_DistillResponse(t *testing.T) {
 
 	distillResp := `{"synthesize": [{"path": "kb/go/combined.md", "title": "Combined", "body": "Merged insight.", "type": "observation", "domain": ["go"], "confidence": 0.9, "entities": [], "refs": ["kb/go/one.md", "kb/go/two.md"]}], "retract": ["kb/go/one.md"]}`
 
-	// ApplyDistillDecisions: write synth (path gets UUID), retract one.md.
+	// ApplyDistillDecisions: computeWeight reads local .md refs, then write synth (path gets UUID), retract one.md.
+	gs.EXPECT().ReadFile("kb/go/one.md").Return(factContent("Fact one", "Body one."), nil)
+	gs.EXPECT().ReadFile("kb/go/two.md").Return(factContent("Fact two", "Body two."), nil)
 	gs.EXPECT().WriteFile(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return("c1", "b1", nil)
 	idx.EXPECT().Upsert(gomock.Any()).Return(nil)
 	idx.EXPECT().GraphAddDerivedFrom(gomock.Any(), gomock.Any()).Return(nil)
@@ -608,7 +610,9 @@ func TestContinueSession_RAPTOR_EnqueuesDeeper(t *testing.T) {
 		`{"path": "kb/go/synth-b.md", "title": "Synth B", "body": "Synthesized B.", "type": "insight", "domain": ["go"], "confidence": 0.90, "entities": ["Go"], "refs": ["kb/go/two.md"]}` +
 		`], "retract": ["kb/go/three.md"]}`
 
-	// ApplyDistillDecisions: write 2 synth facts, retract one.
+	// ApplyDistillDecisions: computeWeight reads local .md refs per fact, then write 2 synth facts, retract one.
+	gs.EXPECT().ReadFile("kb/go/one.md").Return(factContent("Fact one", "Body one."), nil)
+	gs.EXPECT().ReadFile("kb/go/two.md").Return(factContent("Fact two", "Body two."), nil)
 	gs.EXPECT().WriteFile(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return("c1", "b1", nil).Times(2)
 	idx.EXPECT().Upsert(gomock.Any()).Return(nil).Times(2)
 	idx.EXPECT().GraphAddDerivedFrom(gomock.Any(), gomock.Any()).Return(nil).Times(2)

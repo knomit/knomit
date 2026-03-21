@@ -96,6 +96,9 @@ func TestApplyPruneDecisions_Merge(t *testing.T) {
 	gs := NewMockGitStore(ctrl)
 	idx := NewMockSearchIndex(ctrl)
 
+	// computeWeight reads sources before writing merged fact.
+	gs.EXPECT().ReadFile("kb/test/a.md").Return(factContent("Fact A", "Body A."), nil)
+	gs.EXPECT().ReadFile("kb/test/b.md").Return(factContent("Fact B", "Body B."), nil)
 	// Write merged fact.
 	gs.EXPECT().WriteFile("kb/test/merged.md", gomock.Any(), gomock.Any(), gomock.Any()).Return("c3", "b3", nil)
 	idx.EXPECT().Upsert(gomock.Any()).Return(nil)
@@ -143,6 +146,8 @@ func TestApplyPruneDecisions_NoDoubleDelete(t *testing.T) {
 	// It should only be deleted once.
 	gs.EXPECT().DeleteFile("kb/test/a.md", gomock.Any(), gomock.Any()).Return("c1", nil).Times(1)
 	idx.EXPECT().Delete("kb/test/a.md").Return(nil).Times(1)
+	// computeWeight reads source before writing merged fact.
+	gs.EXPECT().ReadFile("kb/test/a.md").Return(factContent("Fact A", "Body A."), nil)
 	// Merge write.
 	gs.EXPECT().WriteFile("kb/test/merged.md", gomock.Any(), gomock.Any(), gomock.Any()).Return("c2", "b2", nil)
 	idx.EXPECT().Upsert(gomock.Any()).Return(nil)
@@ -175,6 +180,9 @@ func TestApplyDistillDecisions_SynthesizeAndRetract(t *testing.T) {
 	gs := NewMockGitStore(ctrl)
 	idx := NewMockSearchIndex(ctrl)
 
+	// computeWeight reads local .md refs before writing synthesized fact.
+	gs.EXPECT().ReadFile("kb/test/src1.md").Return(factContent("Src 1", "Body 1."), nil)
+	gs.EXPECT().ReadFile("kb/test/src2.md").Return(factContent("Src 2", "Body 2."), nil)
 	// Synthesized fact write — path gets a UUID filename, so match on prefix.
 	gs.EXPECT().WriteFile(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
 		func(path, content, msg, operation string) (string, string, error) {

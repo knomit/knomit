@@ -108,16 +108,18 @@ func ApplyPruneDecisions(
 	// Apply merges.
 	for _, m := range merges {
 		mf := m.Merged
+		weight := computeWeight(gs, m.Paths)
 		merged := mcp.Fact{
-			Path:       mf.Path,
-			Title:      mf.Title,
-			Body:       mf.Body,
-			Type:       fact.EpistemicType(mf.Type),
-			Domain:     mf.Domain,
-			Confidence: mf.Confidence,
-			Sources:    mf.Sources,
-			Entities:   mf.Entities,
-			Refs:       mf.Refs,
+			Path:           mf.Path,
+			Title:          mf.Title,
+			Body:           mf.Body,
+			Type:           fact.EpistemicType(mf.Type),
+			Domain:         mf.Domain,
+			Confidence:     mf.Confidence,
+			Sources:        mf.Sources,
+			Entities:       mf.Entities,
+			Refs:           mf.Refs,
+			EvidenceWeight: weight,
 		}
 		content := mcp.SerializeFact(merged)
 		msg := fmt.Sprintf("synthesize-%s: merge %s", recipeName, strings.Join(m.Paths, ", "))
@@ -127,16 +129,17 @@ func ApplyPruneDecisions(
 			continue
 		}
 		_ = idx.Upsert(store.FactRecord{
-			Path:       mf.Path,
-			Title:      mf.Title,
-			BlobHash:   blobHash,
-			Type:       mf.Type,
-			Domain:     mf.Domain,
-			Entities:   mf.Entities,
-			Confidence: mf.Confidence,
-			Sources:    mf.Sources,
-			Refs:       mf.Refs,
-			CommitHash: commitHash,
+			Path:           mf.Path,
+			Title:          mf.Title,
+			BlobHash:       blobHash,
+			Type:           mf.Type,
+			Domain:         mf.Domain,
+			Entities:       mf.Entities,
+			Confidence:     mf.Confidence,
+			Sources:        mf.Sources,
+			Refs:           mf.Refs,
+			CommitHash:     commitHash,
+			EvidenceWeight: weight,
 		})
 		if err := idx.GraphAddDerivedFrom(mf.Path, m.Paths); err != nil {
 			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("derived_from %s: %v", mf.Path, err)})
@@ -183,16 +186,24 @@ func ApplyDistillDecisions(
 	for _, df := range synthesized {
 		// Replace LLM-generated filename with a UUID to match learn convention.
 		df.Path = normalizeFactPath(df.Path)
+		var localRefs []string
+		for _, r := range df.Refs {
+			if strings.HasSuffix(r, ".md") {
+				localRefs = append(localRefs, r)
+			}
+		}
+		weight := computeWeight(gs, localRefs)
 		f := mcp.Fact{
-			Path:       df.Path,
-			Title:      df.Title,
-			Body:       df.Body,
-			Type:       fact.EpistemicType(df.Type),
-			Domain:     df.Domain,
-			Confidence: df.Confidence,
-			Sources:    1,
-			Entities:   df.Entities,
-			Refs:       df.Refs,
+			Path:           df.Path,
+			Title:          df.Title,
+			Body:           df.Body,
+			Type:           fact.EpistemicType(df.Type),
+			Domain:         df.Domain,
+			Confidence:     df.Confidence,
+			Sources:        1,
+			Entities:       df.Entities,
+			Refs:           df.Refs,
+			EvidenceWeight: weight,
 		}
 		content := mcp.SerializeFact(f)
 		msg := fmt.Sprintf("synthesize-%s: distill %s", recipeName, df.Path)
@@ -202,16 +213,17 @@ func ApplyDistillDecisions(
 			continue
 		}
 		_ = idx.Upsert(store.FactRecord{
-			Path:       df.Path,
-			Title:      df.Title,
-			BlobHash:   blobHash,
-			Type:       df.Type,
-			Domain:     df.Domain,
-			Entities:   df.Entities,
-			Confidence: df.Confidence,
-			Sources:    1,
-			Refs:       df.Refs,
-			CommitHash: commitHash,
+			Path:           df.Path,
+			Title:          df.Title,
+			BlobHash:       blobHash,
+			Type:           df.Type,
+			Domain:         df.Domain,
+			Entities:       df.Entities,
+			Confidence:     df.Confidence,
+			Sources:        1,
+			Refs:           df.Refs,
+			CommitHash:     commitHash,
+			EvidenceWeight: weight,
 		})
 		if len(df.Refs) > 0 {
 			if err := idx.GraphAddDerivedFrom(df.Path, df.Refs); err != nil {
