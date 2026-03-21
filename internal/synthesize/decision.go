@@ -161,6 +161,11 @@ func ApplyDistillDecisions(
 
 	// Commit synthesized facts.
 	for _, df := range synthesized {
+		// Distill cannot create hypothesis-type facts.
+		if fact.EpistemicType(df.Type) == fact.Hypothesis {
+			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("distill: skipping hypothesis-type output %s — distill cannot create hypotheses", df.Path)})
+			continue
+		}
 		// Replace LLM-generated filename with a UUID to match learn convention.
 		df.Path = normalizeFactPath(df.Path)
 		var localRefs []string
