@@ -60,12 +60,12 @@ func (idx *Index) Upsert(rec FactRecord) error {
 
 	// Insert or replace into facts.
 	if _, err := tx.Exec(
-		`INSERT OR REPLACE INTO facts(path, title, blob_hash, type, domain, entities, confidence, sources, refs, commit_hash)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT OR REPLACE INTO facts(path, title, blob_hash, type, domain, entities, confidence, sources, refs, commit_hash, evidence_weight)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		rec.Path, rec.Title, rec.BlobHash, factType,
 		string(domainJSON), string(entitiesJSON),
 		rec.Confidence, rec.Sources,
-		string(refsJSON), rec.CommitHash,
+		string(refsJSON), rec.CommitHash, rec.EvidenceWeight,
 	); err != nil {
 		return fmt.Errorf("upsert fact: %w", err)
 	}
@@ -146,7 +146,7 @@ func (idx *Index) Delete(path string) error {
 // the objects table. Returns nil, nil if not found.
 func (idx *Index) GetByPath(path string) (*FactWithBody, error) {
 	row := idx.db.QueryRow(
-		`SELECT f.path, f.title, f.blob_hash, f.type, f.domain, f.entities, f.confidence, f.sources, f.refs, f.commit_hash, o.data
+		`SELECT f.path, f.title, f.blob_hash, f.type, f.domain, f.entities, f.confidence, f.sources, f.refs, f.commit_hash, f.evidence_weight, o.data
 		 FROM facts f
 		 JOIN objects o ON o.hash = f.blob_hash AND o.type = ?
 		 WHERE f.path = ?`, BlobObjectType, path,
@@ -209,7 +209,7 @@ func scanFactWithBody(row *sql.Row) (*FactWithBody, error) {
 		&f.Path, &f.Title, &f.BlobHash, &f.Type,
 		&domainJSON, &entitiesJSON,
 		&f.Confidence, &f.Sources,
-		&refsJSON, &f.CommitHash, &rawData,
+		&refsJSON, &f.CommitHash, &f.EvidenceWeight, &rawData,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -232,7 +232,7 @@ func scanFactRecord(row *sql.Row) (*FactRecord, error) {
 		&rec.Path, &rec.Title, &rec.BlobHash, &rec.Type,
 		&domainJSON, &entitiesJSON,
 		&rec.Confidence, &rec.Sources,
-		&refsJSON, &rec.CommitHash,
+		&refsJSON, &rec.CommitHash, &rec.EvidenceWeight,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -254,7 +254,7 @@ func scanFactRecordFromRows(rows *sql.Rows) (*FactRecord, error) {
 		&rec.Path, &rec.Title, &rec.BlobHash, &rec.Type,
 		&domainJSON, &entitiesJSON,
 		&rec.Confidence, &rec.Sources,
-		&refsJSON, &rec.CommitHash,
+		&refsJSON, &rec.CommitHash, &rec.EvidenceWeight,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("scan fact row: %w", err)
@@ -274,7 +274,7 @@ func scanFactWithBodyFromRows(rows *sql.Rows) (*FactWithBody, error) {
 		&f.Path, &f.Title, &f.BlobHash, &f.Type,
 		&domainJSON, &entitiesJSON,
 		&f.Confidence, &f.Sources,
-		&refsJSON, &f.CommitHash, &rawData,
+		&refsJSON, &f.CommitHash, &f.EvidenceWeight, &rawData,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("scanFactWithBodyFromRows: %w", err)

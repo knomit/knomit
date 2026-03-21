@@ -40,6 +40,17 @@ func TestParseFact_AllEpistemicTypes(t *testing.T) {
 	}
 }
 
+func TestParseFact_EvidenceWeight(t *testing.T) {
+	content := "---\ndomain: [test]\nconfidence: 0.9\nsources: 5\nevidence_weight: 0.8\nentities: []\nrefs: []\n---\n# Weighted\n\nBody.\n"
+	rec, err := parseFact("kb/weighted.md", content, "abc123")
+	if err != nil {
+		t.Fatalf("parseFact: %v", err)
+	}
+	if rec.EvidenceWeight != 0.8 {
+		t.Fatalf("EvidenceWeight: got %v, want 0.8", rec.EvidenceWeight)
+	}
+}
+
 func TestParseFact_HeadingVariants(t *testing.T) {
 	tests := []struct {
 		name          string

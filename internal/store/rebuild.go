@@ -222,7 +222,7 @@ func (idx *Index) rebuildEmbeddings(progress RebuildProgress) (int, error) {
 // then builds similarity edges after commit.
 func (idx *Index) rebuildGraph(progress RebuildProgress) (int, error) {
 	// Read all facts.
-	rows, err := idx.db.Query(`SELECT path, title, blob_hash, type, domain, entities, confidence, sources, refs, commit_hash FROM facts`)
+	rows, err := idx.db.Query(`SELECT path, title, blob_hash, type, domain, entities, confidence, sources, refs, commit_hash, evidence_weight FROM facts`)
 	if err != nil {
 		return 0, fmt.Errorf("rebuildGraph: query facts: %w", err)
 	}
@@ -233,7 +233,7 @@ func (idx *Index) rebuildGraph(progress RebuildProgress) (int, error) {
 		var domainJSON, entitiesJSON, refsJSON string
 		if err := rows.Scan(&rec.Path, &rec.Title, &rec.BlobHash, &rec.Type,
 			&domainJSON, &entitiesJSON, &rec.Confidence, &rec.Sources,
-			&refsJSON, &rec.CommitHash); err != nil {
+			&refsJSON, &rec.CommitHash, &rec.EvidenceWeight); err != nil {
 			rows.Close()
 			return 0, fmt.Errorf("rebuildGraph: scan: %w", err)
 		}

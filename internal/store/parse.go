@@ -38,6 +38,7 @@ func parseFact(path, content, commitHash string) (FactRecord, error) {
 	var confidence float64
 	var sources int
 	var factType string
+	var evidenceWeight float64
 
 	for _, line := range strings.Split(frontmatter, "\n") {
 		line = strings.TrimSpace(line)
@@ -64,6 +65,8 @@ func parseFact(path, content, commitHash string) (FactRecord, error) {
 			fmt.Sscanf(v, "%f", &confidence)
 		case "sources":
 			fmt.Sscanf(v, "%d", &sources)
+		case "evidence_weight":
+			fmt.Sscanf(v, "%f", &evidenceWeight)
 		}
 	}
 
@@ -88,15 +91,16 @@ func parseFact(path, content, commitHash string) (FactRecord, error) {
 	}
 
 	return FactRecord{
-		Path:       path,
-		Title:      title,
-		Type:       factType,
-		Domain:     domain,
-		Entities:   entities,
-		Confidence: confidence,
-		Sources:    sources,
-		Refs:       refs,
-		CommitHash: commitHash,
+		Path:           path,
+		Title:          title,
+		Type:           factType,
+		Domain:         domain,
+		Entities:       entities,
+		Confidence:     confidence,
+		Sources:        sources,
+		Refs:           refs,
+		CommitHash:     commitHash,
+		EvidenceWeight: evidenceWeight,
 	}, nil
 }
 

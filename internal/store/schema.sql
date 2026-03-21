@@ -34,8 +34,9 @@ CREATE TABLE IF NOT EXISTS facts (
     entities    TEXT NOT NULL,
     confidence  REAL NOT NULL,
     sources     INTEGER NOT NULL,
-    refs        TEXT NOT NULL,
-    commit_hash TEXT NOT NULL
+    refs             TEXT NOT NULL,
+    commit_hash      TEXT NOT NULL,
+    evidence_weight  REAL NOT NULL DEFAULT 0
 );
 
 -- Trigger: clean up embeddings when a fact is deleted

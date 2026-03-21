@@ -40,16 +40,17 @@ func WithVecDimension(d int) Option {
 
 // FactRecord is the stored record — no body, just a blob_hash pointer.
 type FactRecord struct {
-	Path       string   `json:"path"`
-	Title      string   `json:"title"`
-	BlobHash   string   `json:"blob_hash"`
-	Type       string   `json:"type"`
-	Domain     []string `json:"domain"`
-	Entities   []string `json:"entities"`
-	Confidence float64  `json:"confidence"`
-	Sources    int      `json:"sources"`
-	Refs       []string `json:"refs"`
-	CommitHash string   `json:"commit_hash,omitempty"`
+	Path           string   `json:"path"`
+	Title          string   `json:"title"`
+	BlobHash       string   `json:"blob_hash"`
+	Type           string   `json:"type"`
+	Domain         []string `json:"domain"`
+	Entities       []string `json:"entities"`
+	Confidence     float64  `json:"confidence"`
+	Sources        int      `json:"sources"`
+	Refs           []string `json:"refs"`
+	CommitHash     string   `json:"commit_hash,omitempty"`
+	EvidenceWeight float64  `json:"evidence_weight,omitempty"`
 }
 
 // FactWithBody is returned by read operations that hydrate the body from git objects.

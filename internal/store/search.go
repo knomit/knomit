@@ -47,7 +47,7 @@ func (idx *Index) Search(q SearchQuery) ([]SearchResult, error) {
 
 	// ── Text-less path: return all facts matching filters with score 100 ──
 	if q.Text == "" {
-		filterQuery := `SELECT f.path, f.title, f.blob_hash, f.type, f.domain, f.entities, f.confidence, f.sources, f.refs, f.commit_hash, o.data
+		filterQuery := `SELECT f.path, f.title, f.blob_hash, f.type, f.domain, f.entities, f.confidence, f.sources, f.refs, f.commit_hash, f.evidence_weight, o.data
 			 FROM facts f
 			 JOIN objects o ON o.hash = f.blob_hash AND o.type = ?`
 		args := []any{BlobObjectType}
@@ -193,7 +193,7 @@ func (idx *Index) Search(q SearchQuery) ([]SearchResult, error) {
 		args = append(args, q.Path+"%")
 	}
 
-	batchQuery := `SELECT f.path, f.title, f.blob_hash, f.type, f.domain, f.entities, f.confidence, f.sources, f.refs, f.commit_hash, o.data
+	batchQuery := `SELECT f.path, f.title, f.blob_hash, f.type, f.domain, f.entities, f.confidence, f.sources, f.refs, f.commit_hash, f.evidence_weight, o.data
 		 FROM facts f
 		 JOIN objects o ON o.hash = f.blob_hash AND o.type = ?
 		 WHERE f.path IN (` + strings.Join(placeholders, ",") + `)` + filterSQL
