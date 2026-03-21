@@ -1166,6 +1166,72 @@ func TestFindHypothesisTransitions_ConfidenceUpdate(t *testing.T) {
 	}
 }
 
+func TestFindHypothesisTransitions_DiffFilesError(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	gs := NewMockGitStore(ctrl)
+	idx := NewMockSearchIndex(ctrl)
+	ri := NewMockPipelineIndex(ctrl)
+
+	ri.EXPECT().GetPipelineSession("sess-diff-err").Return(&store.PipelineSession{
+		ID: "sess-diff-err", Branch: "machine/test", Status: "active",
+	}, nil)
+	ri.EXPECT().GetPipelineWatermark("review", "machine/test").Return("old-hash", nil)
+	gs.EXPECT().DiffFiles("old-hash").Return(nil, nil, nil, fmt.Errorf("git diff failed"))
+
+	r := NewReviewer(gs, idx, ri, NewMockEmbedder(ctrl), nil)
+	_, err := r.findHypothesisTransitions("sess-diff-err")
+	if err == nil {
+		t.Fatal("expected error when DiffFiles fails")
+	}
+}
+
+func TestFindHypothesisTransitions_EmptyWatermark(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	gs := NewMockGitStore(ctrl)
+	idx := NewMockSearchIndex(ctrl)
+	ri := NewMockPipelineIndex(ctrl)
+
+	ri.EXPECT().GetPipelineSession("sess-no-wm").Return(&store.PipelineSession{
+		ID: "sess-no-wm", Branch: "machine/test", Status: "active",
+	}, nil)
+	// Empty watermark → first run, no previous session to compare against.
+	ri.EXPECT().GetPipelineWatermark("review", "machine/test").Return("", nil)
+
+	r := NewReviewer(gs, idx, ri, NewMockEmbedder(ctrl), nil)
+	transitions, err := r.findHypothesisTransitions("sess-no-wm")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(transitions) != 0 {
+		t.Fatalf("expected 0 transitions for empty watermark, got %d", len(transitions))
+	}
+}
+
+func TestFindHypothesisTransitions_ModifiedNonHypothesisSkipped(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	gs := NewMockGitStore(ctrl)
+	idx := NewMockSearchIndex(ctrl)
+	ri := NewMockPipelineIndex(ctrl)
+
+	ri.EXPECT().GetPipelineSession("sess-nonhyp").Return(&store.PipelineSession{
+		ID: "sess-nonhyp", Branch: "machine/test", Status: "active",
+	}, nil)
+	ri.EXPECT().GetPipelineWatermark("review", "machine/test").Return("old-hash", nil)
+	gs.EXPECT().DiffFiles("old-hash").Return(nil, []string{"kb/go/obs.md"}, nil, nil)
+	// Old version was an observation, not a hypothesis → should be skipped.
+	gs.EXPECT().ReadFileAtCommit("kb/go/obs.md", "old-hash").Return(
+		"---\ntype: observation\ndomain: [go]\nconfidence: 0.8\nsources: 1\nentities: []\nrefs: []\n---\n# Observation\n\nJust an observation.\n", nil)
+
+	r := NewReviewer(gs, idx, ri, NewMockEmbedder(ctrl), nil)
+	transitions, err := r.findHypothesisTransitions("sess-nonhyp")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(transitions) != 0 {
+		t.Fatalf("expected 0 transitions when modified fact is not a hypothesis, got %d", len(transitions))
+	}
+}
+
 // mustJSON marshals v to JSON string, failing the test on error.
 func mustJSON(t *testing.T, v any) string {
 	t.Helper()

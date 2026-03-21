@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
@@ -347,6 +348,102 @@ Synthesized insight about channels.
 	}
 	if resp.SessionID != "sess-3" {
 		t.Fatalf("expected session_id=sess-3, got %q", resp.SessionID)
+	}
+}
+
+func TestHypothesizeContinueExpiredSession(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	gs := NewMockGitStore(ctrl)
+	idx := NewMockSearchIndex(ctrl)
+	pIdx := NewMockPipelineIndex(ctrl)
+
+	sess := &store.PipelineSession{ID: "sess-expired", Status: "completed"}
+	pIdx.EXPECT().GetPipelineSession("sess-expired").Return(sess, nil)
+
+	handler := HypothesizeHandler(gs, idx, pIdx, "kb")
+	req := mcpgo.CallToolRequest{}
+	req.Params.Arguments = map[string]interface{}{
+		"session_id": "sess-expired",
+	}
+
+	result, err := handler(context.Background(), req)
+	if err != nil {
+		t.Fatalf("handler returned error: %v", err)
+	}
+	if !result.IsError {
+		t.Fatal("expected tool error for completed session")
+	}
+}
+
+func TestHypothesizeContinueNilCurrentItem(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	gs := NewMockGitStore(ctrl)
+	idx := NewMockSearchIndex(ctrl)
+	pIdx := NewMockPipelineIndex(ctrl)
+
+	gs.EXPECT().Branch().Return("machine/test").AnyTimes()
+	gs.EXPECT().HeadCommit().Return("abc123", nil).AnyTimes()
+
+	sess := &store.PipelineSession{ID: "sess-nil", Status: "active"}
+	pIdx.EXPECT().GetPipelineSession("sess-nil").Return(sess, nil)
+
+	// First NextPipelineWorkItem call in hypothesizeContinue returns nil (nothing to mark).
+	pIdx.EXPECT().NextPipelineWorkItem("sess-nil").Return(nil, nil)
+
+	// Second NextPipelineWorkItem call in hypothesizeNextItem also returns nil → complete.
+	pIdx.EXPECT().NextPipelineWorkItem("sess-nil").Return(nil, nil)
+	pIdx.EXPECT().CompletePipelineSession("sess-nil").Return(nil)
+	pIdx.EXPECT().SetPipelineWatermark("hypothesize", "machine/test", "abc123").Return(nil)
+
+	handler := HypothesizeHandler(gs, idx, pIdx, "kb")
+	req := mcpgo.CallToolRequest{}
+	req.Params.Arguments = map[string]interface{}{
+		"session_id": "sess-nil",
+		"response":   "ack",
+	}
+
+	result, err := handler(context.Background(), req)
+	if err != nil {
+		t.Fatalf("handler returned error: %v", err)
+	}
+
+	text := result.Content[0].(mcpgo.TextContent).Text
+	var resp HypothesizeResult
+	if err := json.Unmarshal([]byte(text), &resp); err != nil {
+		t.Fatalf("failed to parse response: %v", err)
+	}
+	if !resp.Done {
+		t.Fatal("expected done=true when no items to mark")
+	}
+}
+
+func TestHypothesizeStartSearchError(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	gs := NewMockGitStore(ctrl)
+	idx := NewMockSearchIndex(ctrl)
+	pIdx := NewMockPipelineIndex(ctrl)
+
+	gs.EXPECT().Branch().Return("machine/test").AnyTimes()
+
+	pIdx.EXPECT().GCPipelineSessions("hypothesize", "machine/test", 5).Return(nil)
+	pIdx.EXPECT().GetPipelineWatermark("hypothesize", "machine/test").Return("", nil)
+
+	// Search returns an error.
+	idx.EXPECT().Search(SearchQuery{
+		IncludeTypes: []string{"synthesis"},
+		Limit:        100000,
+	}).Return(nil, fmt.Errorf("database locked"))
+
+	handler := HypothesizeHandler(gs, idx, pIdx, "kb")
+	req := mcpgo.CallToolRequest{}
+	req.Params.Arguments = map[string]interface{}{}
+
+	result, err := handler(context.Background(), req)
+	if err != nil {
+		t.Fatalf("handler returned error: %v", err)
+	}
+	if !result.IsError {
+		t.Fatal("expected tool error when search fails")
 	}
 }
 
