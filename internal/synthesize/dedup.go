@@ -21,17 +21,30 @@ type mergePair struct {
 }
 
 // mergeFacts applies the dedup merge rule to a and b, returning (winner, loser).
-// Winner is the fact with higher confidence; ties are broken by higher sources.
+// Non-hypothesis facts always win over hypothesis facts regardless of confidence.
+// Between same-category facts, winner is higher confidence; ties broken by higher sources.
 func mergeFacts(a, b factForLLM) (winner, loser factForLLM) {
-	if a.Confidence > b.Confidence || (a.Confidence == b.Confidence && a.Sources >= b.Sources) {
-		winner, loser = a, b
+	aIsHyp := a.Type == string(fact.Hypothesis)
+	bIsHyp := b.Type == string(fact.Hypothesis)
+
+	if aIsHyp != bIsHyp {
+		// One is hypothesis, one is not — non-hypothesis always wins.
+		if bIsHyp {
+			winner, loser = a, b
+		} else {
+			winner, loser = b, a
+		}
 	} else {
-		winner, loser = b, a
+		// Same category — use confidence/sources tie-breaking.
+		if a.Confidence > b.Confidence || (a.Confidence == b.Confidence && a.Sources >= b.Sources) {
+			winner, loser = a, b
+		} else {
+			winner, loser = b, a
+		}
 	}
 	// Merge domains and entities as union.
 	winner.Domain = fact.UnionStrings(winner.Domain, loser.Domain)
 	winner.Entities = fact.UnionStrings(winner.Entities, loser.Entities)
-	// Confidence = max (already winner's).
 	// Sources = sum.
 	winner.Sources = a.Sources + b.Sources
 	return winner, loser
