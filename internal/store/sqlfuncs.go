@@ -23,13 +23,14 @@ func registerSQLFuncs(conn *sqlite3.SQLiteConn) error {
 
 // parsedFact is the JSON structure returned by knomit_parse_fact.
 type parsedFact struct {
-	Title      string   `json:"title"`
-	Type       string   `json:"type"`
-	Domain     []string `json:"domain"`
-	Entities   []string `json:"entities"`
-	Confidence float64  `json:"confidence"`
-	Sources    int      `json:"sources"`
-	Refs       []string `json:"refs"`
+	Title          string   `json:"title"`
+	Type           string   `json:"type"`
+	Domain         []string `json:"domain"`
+	Entities       []string `json:"entities"`
+	Confidence     float64  `json:"confidence"`
+	Sources        int      `json:"sources"`
+	Refs           []string `json:"refs"`
+	EvidenceWeight float64  `json:"evidence_weight,omitempty"`
 }
 
 // sqlParseFact parses a knomit fact markdown blob (YAML frontmatter + body)
@@ -52,6 +53,7 @@ func sqlParseFact(data []byte) interface{} {
 	var entities []string
 	var refs []string
 	var confidence float64
+	var evidenceWeight float64
 	var sources int
 	var factType string
 
@@ -80,6 +82,8 @@ func sqlParseFact(data []byte) interface{} {
 			fmt.Sscanf(v, "%f", &confidence)
 		case "sources":
 			fmt.Sscanf(v, "%d", &sources)
+		case "evidence_weight":
+			fmt.Sscanf(v, "%f", &evidenceWeight)
 		}
 	}
 
@@ -114,13 +118,14 @@ func sqlParseFact(data []byte) interface{} {
 	}
 
 	pf := parsedFact{
-		Title:      title,
-		Type:       factType,
-		Domain:     domain,
-		Entities:   entities,
-		Confidence: confidence,
-		Sources:    sources,
-		Refs:       refs,
+		Title:          title,
+		Type:           factType,
+		Domain:         domain,
+		Entities:       entities,
+		Confidence:     confidence,
+		Sources:        sources,
+		Refs:           refs,
+		EvidenceWeight: evidenceWeight,
 	}
 
 	b, err := json.Marshal(pf)

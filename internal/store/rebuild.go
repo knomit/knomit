@@ -58,7 +58,7 @@ func (idx *Index) rebuildFacts(git GitReader, head string, progress RebuildProgr
 			FROM _rebuild_entries e
 			JOIN objects o ON o.hash = e.blob_hash AND o.type = ?
 		)
-		INSERT OR REPLACE INTO facts (path, title, blob_hash, type, domain, entities, confidence, sources, refs, commit_hash)
+		INSERT OR REPLACE INTO facts (path, title, blob_hash, type, domain, entities, confidence, sources, refs, commit_hash, evidence_weight)
 		SELECT
 			pe.path,
 			json_extract(pe.parsed, '$.title'),
@@ -69,7 +69,8 @@ func (idx *Index) rebuildFacts(git GitReader, head string, progress RebuildProgr
 			json_extract(pe.parsed, '$.confidence'),
 			json_extract(pe.parsed, '$.sources'),
 			json_extract(pe.parsed, '$.refs'),
-			COALESCE(cl.commit_hash, '')
+			COALESCE(cl.commit_hash, ''),
+			COALESCE(json_extract(pe.parsed, '$.evidence_weight'), 0)
 		FROM parsed_entries pe
 		LEFT JOIN (
 			SELECT path, commit_hash, ROW_NUMBER() OVER (PARTITION BY path ORDER BY committed_at DESC) AS rn
