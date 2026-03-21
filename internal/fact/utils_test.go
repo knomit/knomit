@@ -31,12 +31,26 @@ func TestNormalizePath(t *testing.T) {
 		{"kb/topic/foo", "kb/topic/foo.md"},
 		{"kb/topic/foo.md", "kb/topic/foo.md"},
 		{"topic/foo.md", "kb/topic/foo.md"},
+		// Case normalization: segments after root are lowercased.
+		{"Technology/AI/abc.md", "kb/technology/ai/abc.md"},
+		{"kb/Technology/AI/abc.md", "kb/technology/ai/abc.md"},
+		{"TOPIC/FOO", "kb/topic/foo.md"},
 	}
 	for _, tc := range tests {
 		got := NormalizePath(root, tc.input)
 		if got != tc.want {
 			t.Errorf("NormalizePath(%q, %q) = %q, want %q", root, tc.input, got, tc.want)
 		}
+	}
+}
+
+func TestBuildFactPathLowercase(t *testing.T) {
+	path := BuildFactPath("kb", "Technology", "Languages/Go")
+	if path != strings.ToLower(path) {
+		t.Errorf("BuildFactPath should produce lowercase path, got %q", path)
+	}
+	if !strings.HasPrefix(path, "kb/technology/languages/go/") {
+		t.Errorf("expected prefix kb/technology/languages/go/, got %q", path)
 	}
 }
 
