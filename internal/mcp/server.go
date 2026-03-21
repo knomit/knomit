@@ -58,6 +58,8 @@ type GitStore interface {
 	HeadCommit() (string, error)
 	WalkChangedFiles(fromCommit, prefix string, seen map[string]bool, limit int) ([]FileRecency, string, error)
 	Branch() string
+	LastCommitForPath(path string) (string, error)
+	ReadFileLastCommit(path, beforeCommitHash string) (content, fromCommit string, err error)
 }
 
 // SearchIndex is the interface the MCP tools require from internal/store.

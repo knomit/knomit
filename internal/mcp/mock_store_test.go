@@ -146,6 +146,21 @@ func (mr *MockGitStoreMockRecorder) HeadCommit() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "HeadCommit", reflect.TypeOf((*MockGitStore)(nil).HeadCommit))
 }
 
+// LastCommitForPath mocks base method.
+func (m *MockGitStore) LastCommitForPath(path string) (string, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "LastCommitForPath", path)
+	ret0, _ := ret[0].(string)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// LastCommitForPath indicates an expected call of LastCommitForPath.
+func (mr *MockGitStoreMockRecorder) LastCommitForPath(path any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "LastCommitForPath", reflect.TypeOf((*MockGitStore)(nil).LastCommitForPath), path)
+}
+
 // ListAll mocks base method.
 func (m *MockGitStore) ListAll() ([]string, error) {
 	m.ctrl.T.Helper()
@@ -219,6 +234,22 @@ func (m *MockGitStore) ReadFileAtCommit(path, commitHash string) (string, error)
 func (mr *MockGitStoreMockRecorder) ReadFileAtCommit(path, commitHash any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ReadFileAtCommit", reflect.TypeOf((*MockGitStore)(nil).ReadFileAtCommit), path, commitHash)
+}
+
+// ReadFileLastCommit mocks base method.
+func (m *MockGitStore) ReadFileLastCommit(path, beforeCommitHash string) (string, string, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ReadFileLastCommit", path, beforeCommitHash)
+	ret0, _ := ret[0].(string)
+	ret1, _ := ret[1].(string)
+	ret2, _ := ret[2].(error)
+	return ret0, ret1, ret2
+}
+
+// ReadFileLastCommit indicates an expected call of ReadFileLastCommit.
+func (mr *MockGitStoreMockRecorder) ReadFileLastCommit(path, beforeCommitHash any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ReadFileLastCommit", reflect.TypeOf((*MockGitStore)(nil).ReadFileLastCommit), path, beforeCommitHash)
 }
 
 // ReadFileWithHash mocks base method.
