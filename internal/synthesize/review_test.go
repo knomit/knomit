@@ -252,8 +252,14 @@ func TestContinueSession_PruneResponse(t *testing.T) {
 
 	ri.EXPECT().SetPipelineWorkItemResponse(int64(1), pruneResp).Return(nil)
 
-	// nextItem: no more items → complete session.
+	// nextItem: no more items → reflect check → complete session.
 	ri.EXPECT().NextPipelineWorkItem("sess-1").Return(nil, nil)
+	// findHypothesisTransitions: no watermark → no transitions.
+	ri.EXPECT().GetPipelineSession("sess-1").Return(&store.PipelineSession{
+		ID: "sess-1", Branch: "machine/test", Status: "active",
+	}, nil)
+	ri.EXPECT().GetPipelineWatermark("review", "machine/test").Return("", nil)
+	// completeSession.
 	ri.EXPECT().GetPipelineSession("sess-1").Return(&store.PipelineSession{
 		ID: "sess-1", Branch: "machine/test", Status: "active",
 	}, nil)
@@ -431,8 +437,13 @@ func TestContinueSession_DistillResponse(t *testing.T) {
 
 	ri.EXPECT().SetPipelineWorkItemResponse(int64(2), distillResp).Return(nil)
 
-	// nextItem: done.
+	// nextItem: done — reflect check finds no transitions.
 	ri.EXPECT().NextPipelineWorkItem("sess-1").Return(nil, nil)
+	ri.EXPECT().GetPipelineSession("sess-1").Return(&store.PipelineSession{
+		ID: "sess-1", Branch: "machine/test", Status: "active",
+	}, nil)
+	ri.EXPECT().GetPipelineWatermark("review", "machine/test").Return("", nil)
+	// completeSession.
 	ri.EXPECT().GetPipelineSession("sess-1").Return(&store.PipelineSession{
 		ID: "sess-1", Branch: "machine/test", Status: "active",
 	}, nil)
@@ -715,8 +726,13 @@ func TestContinueSession_RAPTOR_StopsAtMaxDepth(t *testing.T) {
 
 	ri.EXPECT().SetPipelineWorkItemResponse(int64(5), distillResp).Return(nil)
 
-	// nextItem: done.
+	// nextItem: done — reflect check finds no transitions.
 	ri.EXPECT().NextPipelineWorkItem("sess-max").Return(nil, nil)
+	ri.EXPECT().GetPipelineSession("sess-max").Return(&store.PipelineSession{
+		ID: "sess-max", Branch: "machine/test", Status: "active",
+	}, nil)
+	ri.EXPECT().GetPipelineWatermark("review", "machine/test").Return("", nil)
+	// completeSession.
 	ri.EXPECT().GetPipelineSession("sess-max").Return(&store.PipelineSession{
 		ID: "sess-max", Branch: "machine/test", Status: "active",
 	}, nil)
@@ -813,8 +829,9 @@ func TestRunAll_ProcessesAllWorkItems(t *testing.T) {
 	distillResp := `{"synthesize": [], "retract": []}`
 	ri.EXPECT().SetPipelineWorkItemResponse(int64(2), distillResp).Return(nil)
 
-	// After distill: no more items → complete session
+	// After distill: no more items → reflect check (no watermark → no transitions) → complete session.
 	ri.EXPECT().NextPipelineWorkItem("sess-run").Return(nil, nil)
+	ri.EXPECT().GetPipelineWatermark("review", "machine/test").Return("", nil)
 	ri.EXPECT().CompletePipelineSession("sess-run").Return(nil)
 	gs.EXPECT().HeadCommit().Return("final-hash", nil)
 	ri.EXPECT().SetPipelineWatermark("review", "machine/test", "final-hash").Return(nil)
@@ -862,6 +879,290 @@ func TestRunAll_NoDirtyFacts(t *testing.T) {
 	err := r.RunAll(context.Background(), adapter)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestReflectStepNotCreatedWhenNoHypotheses(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	gs := NewMockGitStore(ctrl)
+	idx := NewMockSearchIndex(ctrl)
+	ri := NewMockPipelineIndex(ctrl)
+
+	ri.EXPECT().GetPipelineSession("sess-noh").Return(&store.PipelineSession{
+		ID: "sess-noh", Branch: "machine/test", Status: "active",
+	}, nil).AnyTimes()
+
+	// Current work item: prune with observation-only facts.
+	facts := []factForLLM{
+		{File: "kb/go/one.md", Title: "Fact one", Body: "Body one.", Type: "observation", Domain: []string{"go"}, Confidence: 0.8, Sources: 1},
+	}
+	ri.EXPECT().NextPipelineWorkItem("sess-noh").Return(&store.PipelineWorkItem{
+		ID:        1,
+		SessionID: "sess-noh",
+		StepType:  "prune",
+		FactsJSON: mustJSON(t, facts),
+		Priority:  1,
+	}, nil)
+
+	// Prune response keeps everything.
+	pruneResp := `{"decisions": [{"path": "kb/go/one.md", "action": "keep"}]}`
+	ri.EXPECT().SetPipelineWorkItemResponse(int64(1), pruneResp).Return(nil)
+
+	// nextItem: no more items → reflect check.
+	ri.EXPECT().NextPipelineWorkItem("sess-noh").Return(nil, nil)
+	// findHypothesisTransitions: watermark exists, DiffFiles returns only observation deletes.
+	ri.EXPECT().GetPipelineWatermark("review", "machine/test").Return("old-hash", nil)
+	gs.EXPECT().DiffFiles("old-hash").Return(nil, nil, []string{"kb/go/obs.md"}, nil)
+	// Deleted file was an observation, not a hypothesis.
+	gs.EXPECT().ReadFileAtCommit("kb/go/obs.md", "old-hash").Return(
+		"---\ntype: observation\ndomain: [go]\nconfidence: 0.8\nsources: 1\nentities: []\nrefs: []\n---\n# Observation\n\nJust an observation.\n", nil)
+
+	// No reflect item should be inserted — session completes directly.
+	ri.EXPECT().CompletePipelineSession("sess-noh").Return(nil)
+	gs.EXPECT().HeadCommit().Return("new-hash", nil)
+	ri.EXPECT().SetPipelineWatermark("review", "machine/test", "new-hash").Return(nil)
+	ri.EXPECT().PipelineWorkItemStats("sess-noh").Return(1, 0, nil)
+
+	r := NewReviewer(gs, idx, ri, NewMockEmbedder(ctrl), nil)
+	result, err := r.ContinueSession("sess-noh", pruneResp)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !result.Done {
+		t.Error("expected Done=true — no hypothesis transitions means no reflect step")
+	}
+}
+
+func TestReflectStepCreatedWhenHypothesesRetracted(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	gs := NewMockGitStore(ctrl)
+	idx := NewMockSearchIndex(ctrl)
+	ri := NewMockPipelineIndex(ctrl)
+
+	ri.EXPECT().GetPipelineSession("sess-hyp").Return(&store.PipelineSession{
+		ID: "sess-hyp", Branch: "machine/test", Status: "active",
+	}, nil).AnyTimes()
+
+	// Current work item: prune that retracts a hypothesis.
+	facts := []factForLLM{
+		{File: "kb/go/hyp.md", Title: "Hypothesis", Body: "A hypothesis.", Type: "hypothesis", Domain: []string{"go"}, Confidence: 0.6, Sources: 1},
+	}
+	ri.EXPECT().NextPipelineWorkItem("sess-hyp").Return(&store.PipelineWorkItem{
+		ID:        1,
+		SessionID: "sess-hyp",
+		StepType:  "prune",
+		FactsJSON: mustJSON(t, facts),
+		Priority:  1,
+	}, nil)
+
+	pruneResp := `{"decisions": [{"path": "kb/go/hyp.md", "action": "retract"}]}`
+
+	// ApplyPruneDecisions: retract hyp.md.
+	gs.EXPECT().DeleteFile("kb/go/hyp.md", gomock.Any(), gomock.Any()).Return("c1", nil)
+	idx.EXPECT().Delete("kb/go/hyp.md").Return(nil)
+
+	ri.EXPECT().SetPipelineWorkItemResponse(int64(1), pruneResp).Return(nil)
+
+	// nextItem: no more items → reflect check.
+	ri.EXPECT().NextPipelineWorkItem("sess-hyp").Return(nil, nil)
+	// findHypothesisTransitions: watermark exists, DiffFiles shows hyp.md deleted.
+	ri.EXPECT().GetPipelineWatermark("review", "machine/test").Return("old-hash", nil)
+	gs.EXPECT().DiffFiles("old-hash").Return(nil, nil, []string{"kb/go/hyp.md"}, nil)
+	// Read the old version — it was a hypothesis.
+	gs.EXPECT().ReadFileAtCommit("kb/go/hyp.md", "old-hash").Return(
+		"---\ntype: hypothesis\ndomain: [go]\nconfidence: 0.6\nsources: 1\nentities: []\nrefs: []\n---\n# Hypothesis\n\nA hypothesis.\n", nil)
+
+	// Reflect item should be enqueued.
+	var insertedReflect store.PipelineWorkItem
+	ri.EXPECT().InsertPipelineWorkItem(gomock.Any()).DoAndReturn(func(item store.PipelineWorkItem) error {
+		insertedReflect = item
+		return nil
+	}).Times(1)
+
+	// Recursive nextItem call fetches the reflect item.
+	ri.EXPECT().NextPipelineWorkItem("sess-hyp").Return(&store.PipelineWorkItem{
+		ID:         10,
+		SessionID:  "sess-hyp",
+		StepType:   "reflect",
+		ClusterKey: "reflect",
+		FactsJSON:  `[{"path":"kb/go/hyp.md","original_type":"hypothesis","action":"retracted"}]`,
+		Priority:   -100,
+	}, nil)
+	ri.EXPECT().PipelineWorkItemStats("sess-hyp").Return(1, 1, nil)
+
+	r := NewReviewer(gs, idx, ri, NewMockEmbedder(ctrl), nil)
+	result, err := r.ContinueSession("sess-hyp", pruneResp)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Done {
+		t.Error("expected Done=false — reflect item should be pending")
+	}
+	if result.Item == nil {
+		t.Fatal("expected non-nil Item")
+	}
+	if result.Item.Type != "reflect" {
+		t.Errorf("expected reflect item, got %s", result.Item.Type)
+	}
+
+	// Verify the enqueued reflect item.
+	if insertedReflect.StepType != "reflect" {
+		t.Errorf("expected reflect step type, got %s", insertedReflect.StepType)
+	}
+	if insertedReflect.Priority != -100 {
+		t.Errorf("expected priority -100, got %f", insertedReflect.Priority)
+	}
+	if insertedReflect.SessionID != "sess-hyp" {
+		t.Errorf("expected session sess-hyp, got %s", insertedReflect.SessionID)
+	}
+}
+
+func TestReflectStepCreatedWhenHypothesisPromoted(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	gs := NewMockGitStore(ctrl)
+	idx := NewMockSearchIndex(ctrl)
+	ri := NewMockPipelineIndex(ctrl)
+
+	ri.EXPECT().GetPipelineSession("sess-prom").Return(&store.PipelineSession{
+		ID: "sess-prom", Branch: "machine/test", Status: "active",
+	}, nil).AnyTimes()
+
+	// Current work item: prune that keeps everything.
+	facts := []factForLLM{
+		{File: "kb/go/hyp.md", Title: "Hypothesis", Body: "Was a hypothesis.", Type: "observation", Domain: []string{"go"}, Confidence: 0.9, Sources: 1},
+	}
+	ri.EXPECT().NextPipelineWorkItem("sess-prom").Return(&store.PipelineWorkItem{
+		ID:        1,
+		SessionID: "sess-prom",
+		StepType:  "prune",
+		FactsJSON: mustJSON(t, facts),
+		Priority:  1,
+	}, nil)
+
+	pruneResp := `{"decisions": [{"path": "kb/go/hyp.md", "action": "keep"}]}`
+	ri.EXPECT().SetPipelineWorkItemResponse(int64(1), pruneResp).Return(nil)
+
+	// nextItem: no more items → reflect check.
+	ri.EXPECT().NextPipelineWorkItem("sess-prom").Return(nil, nil)
+	// findHypothesisTransitions: watermark exists, DiffFiles shows hyp.md modified.
+	ri.EXPECT().GetPipelineWatermark("review", "machine/test").Return("old-hash", nil)
+	gs.EXPECT().DiffFiles("old-hash").Return(nil, []string{"kb/go/hyp.md"}, nil, nil)
+	// Old version was hypothesis.
+	gs.EXPECT().ReadFileAtCommit("kb/go/hyp.md", "old-hash").Return(
+		"---\ntype: hypothesis\ndomain: [go]\nconfidence: 0.6\nsources: 1\nentities: []\nrefs: []\n---\n# Hypothesis\n\nWas a hypothesis.\n", nil)
+	// New version is observation (promoted).
+	gs.EXPECT().ReadFile("kb/go/hyp.md").Return(
+		"---\ntype: observation\ndomain: [go]\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# Hypothesis\n\nNow an observation.\n", nil)
+
+	// Reflect item should be enqueued.
+	ri.EXPECT().InsertPipelineWorkItem(gomock.Any()).DoAndReturn(func(item store.PipelineWorkItem) error {
+		if item.StepType != "reflect" {
+			t.Errorf("expected reflect, got %s", item.StepType)
+		}
+		return nil
+	}).Times(1)
+
+	// Recursive nextItem fetches the reflect item.
+	ri.EXPECT().NextPipelineWorkItem("sess-prom").Return(&store.PipelineWorkItem{
+		ID:         10,
+		SessionID:  "sess-prom",
+		StepType:   "reflect",
+		ClusterKey: "reflect",
+		FactsJSON:  `[{"path":"kb/go/hyp.md","original_type":"hypothesis","action":"promoted","detail":"type changed to observation"}]`,
+		Priority:   -100,
+	}, nil)
+	ri.EXPECT().PipelineWorkItemStats("sess-prom").Return(1, 1, nil)
+
+	r := NewReviewer(gs, idx, ri, NewMockEmbedder(ctrl), nil)
+	result, err := r.ContinueSession("sess-prom", pruneResp)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Done {
+		t.Error("expected Done=false — reflect item should be pending")
+	}
+	if result.Item == nil {
+		t.Fatal("expected non-nil Item")
+	}
+	if result.Item.Type != "reflect" {
+		t.Errorf("expected reflect item, got %s", result.Item.Type)
+	}
+}
+
+func TestContinueSession_ReflectResponseCompletesSession(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	gs := NewMockGitStore(ctrl)
+	idx := NewMockSearchIndex(ctrl)
+	ri := NewMockPipelineIndex(ctrl)
+
+	ri.EXPECT().GetPipelineSession("sess-ref").Return(&store.PipelineSession{
+		ID: "sess-ref", Branch: "machine/test", Status: "active",
+	}, nil).AnyTimes()
+
+	// Current work item is reflect.
+	ri.EXPECT().NextPipelineWorkItem("sess-ref").Return(&store.PipelineWorkItem{
+		ID:         5,
+		SessionID:  "sess-ref",
+		StepType:   "reflect",
+		ClusterKey: "reflect",
+		FactsJSON:  `[{"path":"kb/go/hyp.md","original_type":"hypothesis","action":"retracted"}]`,
+		Priority:   -100,
+	}, nil)
+
+	reflectResp := `{"methodology_facts": [{"title": "Test hypotheses early", "body": "Validate hypotheses with minimal experiments."}]}`
+	ri.EXPECT().SetPipelineWorkItemResponse(int64(5), reflectResp).Return(nil)
+
+	// nextItem after reflect: no more items → reflect already checked → complete session.
+	ri.EXPECT().NextPipelineWorkItem("sess-ref").Return(nil, nil)
+	// findHypothesisTransitions (first time for this session).
+	ri.EXPECT().GetPipelineWatermark("review", "machine/test").Return("", nil)
+	// completeSession.
+	ri.EXPECT().CompletePipelineSession("sess-ref").Return(nil)
+	gs.EXPECT().HeadCommit().Return("final-hash", nil)
+	ri.EXPECT().SetPipelineWatermark("review", "machine/test", "final-hash").Return(nil)
+	ri.EXPECT().PipelineWorkItemStats("sess-ref").Return(1, 0, nil)
+
+	r := NewReviewer(gs, idx, ri, NewMockEmbedder(ctrl), nil)
+	result, err := r.ContinueSession("sess-ref", reflectResp)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !result.Done {
+		t.Error("expected Done=true after reflect response")
+	}
+}
+
+func TestFindHypothesisTransitions_ConfidenceUpdate(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	gs := NewMockGitStore(ctrl)
+	idx := NewMockSearchIndex(ctrl)
+	ri := NewMockPipelineIndex(ctrl)
+
+	ri.EXPECT().GetPipelineSession("sess-conf").Return(&store.PipelineSession{
+		ID: "sess-conf", Branch: "machine/test", Status: "active",
+	}, nil)
+	ri.EXPECT().GetPipelineWatermark("review", "machine/test").Return("old-hash", nil)
+	gs.EXPECT().DiffFiles("old-hash").Return(nil, []string{"kb/go/hyp.md"}, nil, nil)
+	// Old version: hypothesis with confidence 0.5.
+	gs.EXPECT().ReadFileAtCommit("kb/go/hyp.md", "old-hash").Return(
+		"---\ntype: hypothesis\ndomain: [go]\nconfidence: 0.5\nsources: 1\nentities: []\nrefs: []\n---\n# Hyp\n\nBody.\n", nil)
+	// New version: still hypothesis but confidence changed to 0.8.
+	gs.EXPECT().ReadFile("kb/go/hyp.md").Return(
+		"---\ntype: hypothesis\ndomain: [go]\nconfidence: 0.8\nsources: 1\nentities: []\nrefs: []\n---\n# Hyp\n\nBody.\n", nil)
+
+	r := NewReviewer(gs, idx, ri, NewMockEmbedder(ctrl), nil)
+	transitions, err := r.findHypothesisTransitions("sess-conf")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(transitions) != 1 {
+		t.Fatalf("expected 1 transition, got %d", len(transitions))
+	}
+	if transitions[0].Action != "confidence-updated" {
+		t.Errorf("expected action confidence-updated, got %s", transitions[0].Action)
+	}
+	if transitions[0].Path != "kb/go/hyp.md" {
+		t.Errorf("expected path kb/go/hyp.md, got %s", transitions[0].Path)
 	}
 }
 

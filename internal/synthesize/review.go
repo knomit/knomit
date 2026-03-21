@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/rs/zerolog/log"
+	"knomit/internal/fact"
 	"knomit/internal/llm"
 	"knomit/internal/mcp"
 	"knomit/internal/store"
@@ -30,11 +31,12 @@ type PipelineIndex interface {
 
 // Reviewer orchestrates multi-turn review sessions.
 type Reviewer struct {
-	gs         GitStore
-	idx        SearchIndex
-	reviewIdx  PipelineIndex
-	embedder   Embedder
-	onProgress func(ProgressEvent)
+	gs             GitStore
+	idx            SearchIndex
+	reviewIdx      PipelineIndex
+	embedder       Embedder
+	onProgress     func(ProgressEvent)
+	reflectChecked map[string]bool
 }
 
 // NewReviewer creates a new review orchestrator.
@@ -42,7 +44,7 @@ func NewReviewer(gs GitStore, idx SearchIndex, reviewIdx PipelineIndex, embedder
 	if onProgress == nil {
 		onProgress = func(ProgressEvent) {}
 	}
-	return &Reviewer{gs: gs, idx: idx, reviewIdx: reviewIdx, embedder: embedder, onProgress: onProgress}
+	return &Reviewer{gs: gs, idx: idx, reviewIdx: reviewIdx, embedder: embedder, onProgress: onProgress, reflectChecked: make(map[string]bool)}
 }
 
 // StartSession creates a new review session, identifies dirty facts, clusters
@@ -157,19 +159,21 @@ func (r *Reviewer) ContinueSession(sessionID, response string) (*mcp.ReviewResul
 		return r.completeSession(sess)
 	}
 
-	// Parse the facts from the work item.
-	var facts []factForLLM
-	if err := json.Unmarshal([]byte(item.FactsJSON), &facts); err != nil {
-		return nil, fmt.Errorf("review: unmarshal facts: %w", err)
-	}
-	inputPaths := make([]string, len(facts))
-	for i, f := range facts {
-		inputPaths[i] = f.File
-	}
-
 	// Apply based on step type.
 	switch item.StepType {
+	case "reflect":
+		// Reflect responses are informational — the agent writes methodology facts
+		// via knomit_learn. No server-side action needed.
+
 	case "prune":
+		var facts []factForLLM
+		if err := json.Unmarshal([]byte(item.FactsJSON), &facts); err != nil {
+			return nil, fmt.Errorf("review: unmarshal facts: %w", err)
+		}
+		inputPaths := make([]string, len(facts))
+		for i, f := range facts {
+			inputPaths[i] = f.File
+		}
 		result, err := parsePruneResponse(response)
 		if err != nil {
 			return nil, fmt.Errorf("review: parse prune response: %w", err)
@@ -182,6 +186,14 @@ func (r *Reviewer) ContinueSession(sessionID, response string) (*mcp.ReviewResul
 		}
 
 	case "distill":
+		var facts []factForLLM
+		if err := json.Unmarshal([]byte(item.FactsJSON), &facts); err != nil {
+			return nil, fmt.Errorf("review: unmarshal facts: %w", err)
+		}
+		inputPaths := make([]string, len(facts))
+		for i, f := range facts {
+			inputPaths[i] = f.File
+		}
 		result, err := parseDistillResponse(response)
 		if err != nil {
 			return nil, fmt.Errorf("review: parse distill response: %w", err)
@@ -355,6 +367,30 @@ func (r *Reviewer) nextItem(sessionID string) (*mcp.ReviewResult, error) {
 	}
 
 	if item == nil {
+		// Before completing, check if we should enqueue a reflect step.
+		if !r.reflectChecked[sessionID] {
+			r.reflectChecked[sessionID] = true
+			transitions, tErr := r.findHypothesisTransitions(sessionID)
+			if tErr != nil {
+				log.Warn().Err(tErr).Msg("review: failed to find hypothesis transitions")
+			}
+			if len(transitions) > 0 {
+				transJSON, _ := json.Marshal(transitions)
+				reflectItem := store.PipelineWorkItem{
+					SessionID:  sessionID,
+					StepType:   "reflect",
+					ClusterKey: "reflect",
+					FactsJSON:  string(transJSON),
+					Priority:   -100,
+				}
+				if err := r.reviewIdx.InsertPipelineWorkItem(reflectItem); err != nil {
+					log.Warn().Err(err).Msg("review: failed to enqueue reflect item")
+				} else {
+					// Recurse to fetch the just-enqueued reflect item.
+					return r.nextItem(sessionID)
+				}
+			}
+		}
 		sess, err := r.reviewIdx.GetPipelineSession(sessionID)
 		if err != nil {
 			return nil, fmt.Errorf("review: get session for complete: %w", err)
@@ -362,17 +398,22 @@ func (r *Reviewer) nextItem(sessionID string) (*mcp.ReviewResult, error) {
 		return r.completeSession(sess)
 	}
 
-	var facts []factForLLM
-	if err := json.Unmarshal([]byte(item.FactsJSON), &facts); err != nil {
-		return nil, fmt.Errorf("review: unmarshal facts for prompt: %w", err)
-	}
-
 	var content *WorkItemContent
 	switch item.StepType {
 	case "prune":
+		var facts []factForLLM
+		if err := json.Unmarshal([]byte(item.FactsJSON), &facts); err != nil {
+			return nil, fmt.Errorf("review: unmarshal facts for prompt: %w", err)
+		}
 		content, err = RenderPruneWorkItem(facts)
 	case "distill":
+		var facts []factForLLM
+		if err := json.Unmarshal([]byte(item.FactsJSON), &facts); err != nil {
+			return nil, fmt.Errorf("review: unmarshal facts for prompt: %w", err)
+		}
 		content, err = RenderDistillWorkItem(facts)
+	case "reflect":
+		content, err = RenderReflectWorkItem([]byte(item.FactsJSON))
 	default:
 		return nil, fmt.Errorf("review: unknown step type %q", item.StepType)
 	}
@@ -428,4 +469,86 @@ func (r *Reviewer) completeSession(sess *store.PipelineSession) (*mcp.ReviewResu
 		Summary:   &mcp.ReviewStats{},
 		Progress:  &mcp.ReviewProgress{Completed: completed, Remaining: 0},
 	}, nil
+}
+
+// hypothesisTransition records a change to a hypothesis fact during a review session.
+type hypothesisTransition struct {
+	Path         string `json:"path"`
+	OriginalType string `json:"original_type"`
+	Action       string `json:"action"` // "promoted", "retracted", "confidence-updated"
+	Detail       string `json:"detail,omitempty"`
+}
+
+// findHypothesisTransitions detects hypothesis facts that were promoted,
+// retracted, or had their confidence changed during the current review session.
+func (r *Reviewer) findHypothesisTransitions(sessionID string) ([]hypothesisTransition, error) {
+	sess, err := r.reviewIdx.GetPipelineSession(sessionID)
+	if err != nil || sess == nil {
+		return nil, err
+	}
+
+	// Read the watermark set at the end of the previous session.
+	// Since we haven't advanced it yet (that happens in completeSession),
+	// all commits between here and HEAD are changes made during this session.
+	watermark, err := r.reviewIdx.GetPipelineWatermark("review", sess.Branch)
+	if err != nil || watermark == "" {
+		return nil, err
+	}
+
+	_, modified, deleted, err := r.gs.DiffFiles(watermark)
+	if err != nil {
+		return nil, err
+	}
+
+	var transitions []hypothesisTransition
+
+	// Check deleted paths — were any hypotheses retracted?
+	for _, path := range deleted {
+		content, err := r.gs.ReadFileAtCommit(path, watermark)
+		if err != nil {
+			continue
+		}
+		f, err := mcp.ParseFact(path, content)
+		if err != nil {
+			continue
+		}
+		if f.Type == fact.Hypothesis {
+			transitions = append(transitions, hypothesisTransition{
+				Path: path, OriginalType: "hypothesis", Action: "retracted",
+			})
+		}
+	}
+
+	// Check modified paths — did any hypothesis change confidence or type?
+	for _, path := range modified {
+		oldContent, err := r.gs.ReadFileAtCommit(path, watermark)
+		if err != nil {
+			continue
+		}
+		oldFact, err := mcp.ParseFact(path, oldContent)
+		if err != nil || oldFact.Type != fact.Hypothesis {
+			continue
+		}
+		newContent, err := r.gs.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		newFact, err := mcp.ParseFact(path, newContent)
+		if err != nil {
+			continue
+		}
+		if newFact.Type != oldFact.Type {
+			transitions = append(transitions, hypothesisTransition{
+				Path: path, OriginalType: "hypothesis", Action: "promoted",
+				Detail: fmt.Sprintf("type changed to %s", newFact.Type),
+			})
+		} else if newFact.Confidence != oldFact.Confidence {
+			transitions = append(transitions, hypothesisTransition{
+				Path: path, OriginalType: "hypothesis", Action: "confidence-updated",
+				Detail: fmt.Sprintf("%.2f → %.2f", oldFact.Confidence, newFact.Confidence),
+			})
+		}
+	}
+
+	return transitions, nil
 }
