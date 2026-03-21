@@ -3,7 +3,7 @@ import type { Dispatch } from 'react';
 import { api } from './api';
 import type { RecentFactEntry } from './api';
 import type { AppState, Action } from './state';
-import { relativeTimeEpoch, opStyles } from './utils';
+import { relativeTimeEpoch, opStyles, typeStyles, defaultTypeStyle } from './utils';
 
 interface Props {
   state: AppState;
@@ -17,6 +17,7 @@ export function RecentFacts({ state, dispatch }: Props) {
   const [selectedIdx, setSelectedIdx] = useState(0);
   const [query, setQuery] = useState('');
   const [activeQuery, setActiveQuery] = useState(''); // debounced query sent to backend
+  const [typeFilter, setTypeFilter] = useState('');
   const sentinelRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const itemRefs = useRef<(HTMLDivElement | null)[]>([]);
@@ -36,7 +37,7 @@ export function RecentFacts({ state, dispatch }: Props) {
     setFacts([]);
     setTotal(0);
     setSelectedIdx(0);
-    api.recent(state.repo, state.currentPath, activeQuery).then(r => {
+    api.recent(state.repo, state.currentPath, activeQuery, 50, 0, typeFilter || undefined).then(r => {
       if (cancelled) return;
       setFacts(r.facts || []);
       setTotal(r.total);
@@ -44,13 +45,13 @@ export function RecentFacts({ state, dispatch }: Props) {
       if (r.facts?.length > 0) dispatch({ type: 'SELECT_FACT', path: r.facts[0].path });
     }).catch(() => { if (!cancelled) { setFacts([]); setLoading(false); } });
     return () => { cancelled = true; };
-  }, [state.currentPath, state.headCommit, activeQuery]);
+  }, [state.currentPath, state.headCommit, activeQuery, typeFilter]);
 
   // Infinite scroll
   const loadMore = useCallback(() => {
     if (loading || facts.length >= total) return;
     setLoading(true);
-    api.recent(state.repo, state.currentPath, activeQuery, 50, facts.length).then(r => {
+    api.recent(state.repo, state.currentPath, activeQuery, 50, facts.length, typeFilter || undefined).then(r => {
       setFacts(prev => [...prev, ...(r.facts || [])]);
       setLoading(false);
     }).catch(() => setLoading(false));
@@ -122,6 +123,22 @@ export function RecentFacts({ state, dispatch }: Props) {
           >✕</button>
         )}
       </div>
+      <div style={{ padding: '4px 8px', borderBottom: '1px solid #333', flexShrink: 0 }}>
+        <select
+          data-testid="recent-type-filter"
+          value={typeFilter}
+          onChange={e => { setTypeFilter(e.target.value); setSelectedIdx(0); }}
+          style={{
+            width: '100%', background: '#1a1a1a', border: '1px solid #333', borderRadius: 3,
+            color: '#ccc', fontSize: 11, padding: '3px 6px', outline: 'none', fontFamily: 'monospace',
+          }}
+        >
+          <option value="">all types</option>
+          {Object.entries(typeStyles).map(([key, s]) => (
+            <option key={key} value={key}>{s.icon} {s.label}</option>
+          ))}
+        </select>
+      </div>
       <div style={{ flex: 1, overflowY: 'auto', padding: '4px 0' }}>
         {facts.length === 0 && !loading && (
           <div style={{ padding: 16, color: '#666', fontSize: 13 }}>
@@ -147,6 +164,15 @@ export function RecentFacts({ state, dispatch }: Props) {
             <div style={{ fontSize: 12, color: '#ddd', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: 6 }}>
               <span style={{ color: (f.operation && opStyles[f.operation]?.color) || '#555', fontSize: 8, lineHeight: 1, flexShrink: 0 }}>●</span>
               {f.title}
+              {f.type && f.type !== 'observation' && (() => {
+                const ts = typeStyles[f.type] || defaultTypeStyle;
+                return (
+                  <span data-testid="recent-type-badge" style={{
+                    color: ts.color, background: ts.bg, fontSize: 9, padding: '1px 5px',
+                    borderRadius: 3, fontFamily: 'monospace', flexShrink: 0, letterSpacing: 0.3,
+                  }}>{ts.label}</span>
+                );
+              })()}
             </div>
             <div style={{ fontSize: 10, color: '#666', marginTop: 1, display: 'flex', gap: 8 }}>
               <span style={{ fontFamily: 'monospace' }}>{f.path.split('/').pop()}</span>
