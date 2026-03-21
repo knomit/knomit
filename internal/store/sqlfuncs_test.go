@@ -20,7 +20,7 @@ func openTestDB(t *testing.T) *sql.DB {
 func TestSQLParseFact_ValidFact(t *testing.T) {
 	db := openTestDB(t)
 
-	blob := "---\ntype: rule\ndomain: [databases, sql]\nentities: [postgres, mysql]\nconfidence: 0.9\nsources: 2\nrefs: [https://example.com]\n---\n# My Title\n\nBody content."
+	blob := "---\ntype: principle\ndomain: [databases, sql]\nentities: [postgres, mysql]\nconfidence: 0.9\nsources: 2\nrefs: [https://example.com]\n---\n# My Title\n\nBody content."
 
 	var result sql.NullString
 	err := db.QueryRow("SELECT knomit_parse_fact(?)", []byte(blob)).Scan(&result)
@@ -39,8 +39,8 @@ func TestSQLParseFact_ValidFact(t *testing.T) {
 	if pf.Title != "My Title" {
 		t.Errorf("title = %q, want %q", pf.Title, "My Title")
 	}
-	if pf.Type != "rule" {
-		t.Errorf("type = %q, want %q", pf.Type, "rule")
+	if pf.Type != "principle" {
+		t.Errorf("type = %q, want %q", pf.Type, "principle")
 	}
 	if len(pf.Domain) != 2 || pf.Domain[0] != "databases" || pf.Domain[1] != "sql" {
 		t.Errorf("domain = %v, want [databases sql]", pf.Domain)
