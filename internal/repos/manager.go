@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -129,6 +130,70 @@ func (m *Manager) Shutdown() {
 			ri.Close()
 		}
 	}
+}
+
+// Boot opens all repositories under cfg.Home/repos/.
+// Phase 1: opens knomit.db, loads ontology, wires MCP.
+// Phase 2: discovers and opens remaining *.db files.
+func (m *Manager) Boot() error {
+	reposDir := filepath.Join(m.deps.Cfg.Home, "repos")
+	if err := os.MkdirAll(reposDir, 0o755); err != nil {
+		return fmt.Errorf("create repos dir: %w", err)
+	}
+
+	// Phase 1: open knomit.
+	defaultDB := filepath.Join(reposDir, "knomit.db")
+	knomitO, knomitRI, err := m.openOne("knomit", defaultDB, true)
+	if err != nil {
+		return fmt.Errorf("open default repo: %w", err)
+	}
+
+	// Load ontology from knomit repo's git store.
+	ontologyYAML, readErr := knomitO.gs.ReadFile("domains/ontology.yaml")
+	if readErr != nil {
+		log.Warn().Msg("domains/ontology.yaml not found, using default ontology")
+		m.ontology = fact.DefaultOntology()
+	} else {
+		m.ontology, err = fact.ParseOntology([]byte(ontologyYAML))
+		if err != nil {
+			knomitRI.Close()
+			return fmt.Errorf("parse ontology: %w", err)
+		}
+	}
+
+	m.setupMCP(knomitO, knomitRI)
+	m.Set("knomit", knomitRI)
+
+	// Phase 2: discover remaining repos.
+	dbFiles, _ := filepath.Glob(filepath.Join(reposDir, "*.db"))
+	sort.Strings(dbFiles)
+	for _, dbPath := range dbFiles {
+		base := filepath.Base(dbPath)
+		name := strings.TrimSuffix(base, ".db")
+		if name == "knomit" {
+			continue
+		}
+		if !isValidRepoName(name) {
+			log.Warn().Str("file", base).Msg("skipping db with invalid repo name")
+			continue
+		}
+		if err := m.Add(name, dbPath); err != nil {
+			log.Warn().Err(err).Str("repo", name).Msg("skipping repo")
+		}
+	}
+	return nil
+}
+
+// Add opens a single repository and registers it under name.
+// Uses the ontology already loaded by Boot (or nil if Boot not yet called).
+func (m *Manager) Add(name, dbPath string) error {
+	o, ri, err := m.openOne(name, dbPath, false)
+	if err != nil {
+		return err
+	}
+	m.setupMCP(o, ri)
+	m.Set(name, ri)
+	return nil
 }
 
 // ---------- private helpers ----------

@@ -7,6 +7,7 @@ import (
 	"sync"
 	"testing"
 
+	"knomit/internal/config"
 	"knomit/internal/git"
 	"knomit/internal/repos"
 	"knomit/internal/store"
@@ -218,5 +219,87 @@ func TestSwapStore_InvalidTempPath_ReturnsError(t *testing.T) {
 	err = m.SwapStore(ri, "/nonexistent/path/to/temp.db")
 	if err == nil {
 		t.Fatal("expected error for invalid temp path, got nil")
+	}
+}
+
+// ---------- Boot / Add ----------
+
+func bootManager(t *testing.T, dir string) *repos.Manager {
+	t.Helper()
+	keyPath := filepath.Join(dir, "id_ed25519")
+	signer, fp, err := git.EnsureKeyPair(keyPath)
+	if err != nil {
+		t.Fatalf("EnsureKeyPair: %v", err)
+	}
+	return repos.New(context.Background(), repos.Deps{
+		Cfg:         config.Config{Home: dir},
+		Signer:      signer,
+		AgentBranch: git.AgentBranch(fp),
+		KeyPath:     keyPath,
+	})
+}
+
+func TestBoot_OpensKnomitAndRegisters(t *testing.T) {
+	dir := t.TempDir()
+	m := bootManager(t, dir)
+	defer m.Shutdown()
+
+	if err := m.Boot(); err != nil {
+		t.Fatalf("Boot: %v", err)
+	}
+	if m.Get("knomit") == nil {
+		t.Error("knomit not registered after Boot")
+	}
+}
+
+func TestBoot_MissingOntologyUsesDefault(t *testing.T) {
+	// Boot on a fresh dir — no ontology.yaml written yet — should not error.
+	dir := t.TempDir()
+	m := bootManager(t, dir)
+	defer m.Shutdown()
+
+	if err := m.Boot(); err != nil {
+		t.Fatalf("Boot with missing ontology: %v", err)
+	}
+	if m.Get("knomit") == nil {
+		t.Error("knomit not registered")
+	}
+}
+
+func TestBoot_SkipsInvalidNames(t *testing.T) {
+	dir := t.TempDir()
+	reposDir := filepath.Join(dir, "repos")
+	os.MkdirAll(reposDir, 0o755)
+	// Create a db file with an invalid name — Boot should skip it.
+	os.WriteFile(filepath.Join(reposDir, "My.Bad.db"), []byte{}, 0o644)
+
+	m := bootManager(t, dir)
+	defer m.Shutdown()
+
+	if err := m.Boot(); err != nil {
+		t.Fatalf("Boot: %v", err)
+	}
+	// Only knomit should be registered; "My.Bad" should be skipped.
+	names := m.Names()
+	if len(names) != 1 || names[0] != "knomit" {
+		t.Errorf("expected only [knomit], got %v", names)
+	}
+}
+
+func TestAdd_RegistersRepo(t *testing.T) {
+	dir := t.TempDir()
+	m := bootManager(t, dir)
+	defer m.Shutdown()
+
+	if err := m.Boot(); err != nil {
+		t.Fatalf("Boot: %v", err)
+	}
+
+	workDB := openTestDB(t)
+	if err := m.Add("work", workDB); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	if m.Get("work") == nil {
+		t.Error("work not registered after Add")
 	}
 }
