@@ -16,6 +16,8 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
+
+	"knomit/internal/fact"
 )
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -51,6 +53,24 @@ type FactRecord struct {
 	Refs           []string `json:"refs"`
 	CommitHash     string   `json:"commit_hash,omitempty"`
 	EvidenceWeight float64  `json:"evidence_weight,omitempty"`
+}
+
+// NewFactRecord constructs a FactRecord from a parsed fact and git metadata.
+// blobHash is the blob SHA returned by WriteFile; commitHash is the commit SHA.
+func NewFactRecord(f fact.Fact, blobHash, commitHash string) FactRecord {
+	return FactRecord{
+		Path:           f.Path,
+		Title:          f.Title,
+		BlobHash:       blobHash,
+		Type:           string(f.Type),
+		Domain:         f.Domain,
+		Entities:       f.Entities,
+		Confidence:     f.Confidence,
+		Sources:        f.Sources,
+		Refs:           f.Refs,
+		CommitHash:     commitHash,
+		EvidenceWeight: f.EvidenceWeight,
+	}
 }
 
 // FactWithBody is returned by read operations that hydrate the body from git objects.

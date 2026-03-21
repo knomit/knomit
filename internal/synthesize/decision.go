@@ -85,18 +85,7 @@ func ApplyPruneDecisions(
 				onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("update write %s: %v", d.Path, err)})
 				continue
 			}
-			if err := idx.Upsert(store.FactRecord{
-				Path:       f.Path,
-				Title:      f.Title,
-				BlobHash:   blobHash,
-				Type:       string(f.Type),
-				Domain:     f.Domain,
-				Entities:   f.Entities,
-				Confidence: f.Confidence,
-				Sources:    f.Sources,
-				Refs:       f.Refs,
-				CommitHash: commitHash,
-			}); err != nil {
+			if err := idx.Upsert(store.NewFactRecord(f, blobHash, commitHash)); err != nil {
 				onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("index upsert %s: %v", d.Path, err)})
 			}
 		
@@ -128,19 +117,7 @@ func ApplyPruneDecisions(
 			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("merge write %s: %v", mf.Path, err)})
 			continue
 		}
-		_ = idx.Upsert(store.FactRecord{
-			Path:           mf.Path,
-			Title:          mf.Title,
-			BlobHash:       blobHash,
-			Type:           mf.Type,
-			Domain:         mf.Domain,
-			Entities:       mf.Entities,
-			Confidence:     mf.Confidence,
-			Sources:        mf.Sources,
-			Refs:           mf.Refs,
-			CommitHash:     commitHash,
-			EvidenceWeight: weight,
-		})
+		_ = idx.Upsert(store.NewFactRecord(merged, blobHash, commitHash))
 		if err := idx.GraphAddDerivedFrom(mf.Path, m.Paths); err != nil {
 			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("derived_from %s: %v", mf.Path, err)})
 		}
@@ -212,19 +189,7 @@ func ApplyDistillDecisions(
 			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("distill write %s: %v", df.Path, err)})
 			continue
 		}
-		_ = idx.Upsert(store.FactRecord{
-			Path:           df.Path,
-			Title:          df.Title,
-			BlobHash:       blobHash,
-			Type:           df.Type,
-			Domain:         df.Domain,
-			Entities:       df.Entities,
-			Confidence:     df.Confidence,
-			Sources:        1,
-			Refs:           df.Refs,
-			CommitHash:     commitHash,
-			EvidenceWeight: weight,
-		})
+		_ = idx.Upsert(store.NewFactRecord(f, blobHash, commitHash))
 		if len(df.Refs) > 0 {
 			if err := idx.GraphAddDerivedFrom(df.Path, df.Refs); err != nil {
 				onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("derived_from %s: %v", df.Path, err)})
