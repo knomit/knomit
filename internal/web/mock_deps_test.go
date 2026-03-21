@@ -262,6 +262,21 @@ func (mr *MockSearchIndexMockRecorder) GetLastCommit(branch any) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetLastCommit", reflect.TypeOf((*MockSearchIndex)(nil).GetLastCommit), branch)
 }
 
+// GetByPath mocks base method.
+func (m *MockSearchIndex) GetByPath(path string) (*store.FactWithBody, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetByPath", path)
+	ret0, _ := ret[0].(*store.FactWithBody)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetByPath indicates an expected call of GetByPath.
+func (mr *MockSearchIndexMockRecorder) GetByPath(path any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetByPath", reflect.TypeOf((*MockSearchIndex)(nil).GetByPath), path)
+}
+
 // Search mocks base method.
 func (m *MockSearchIndex) Search(q store.SearchQuery) ([]store.SearchResult, error) {
 	m.ctrl.T.Helper()

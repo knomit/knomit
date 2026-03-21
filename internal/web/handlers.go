@@ -80,10 +80,34 @@ func handleBrowse(ontologyRoot string) http.HandlerFunc {
 		type child struct {
 			Name  string `json:"name"`
 			IsDir bool   `json:"is_dir"`
+			Type  string `json:"type,omitempty"`
 		}
+
+		// Batch-fetch epistemic types for fact files from the index.
+		typeByPath := map[string]string{}
+		if ri.Idx != nil {
+			var factPaths []string
+			for _, e := range entries {
+				if !e.IsDir {
+					factPaths = append(factPaths, path+"/"+e.Name)
+				}
+			}
+			if len(factPaths) > 0 {
+				for _, fp := range factPaths {
+					if fb, err := ri.Idx.GetByPath(fp); err == nil && fb != nil {
+						typeByPath[fp] = fb.Type
+					}
+				}
+			}
+		}
+
 		children := make([]child, 0, len(entries))
 		for _, e := range entries {
-			children = append(children, child{Name: e.Name, IsDir: e.IsDir})
+			c := child{Name: e.Name, IsDir: e.IsDir}
+			if !e.IsDir {
+				c.Type = typeByPath[path+"/"+e.Name]
+			}
+			children = append(children, c)
 		}
 
 		writeJSON(w, http.StatusOK, map[string]any{
