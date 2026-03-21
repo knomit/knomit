@@ -62,6 +62,12 @@ func Open(path string, opts ...Option) (*Service, error) {
 		`ALTER TABLE remotes ADD COLUMN auth_token TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE review_work_items ADD COLUMN depth INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE facts ADD COLUMN evidence_weight REAL NOT NULL DEFAULT 0`,
+		// Pipeline table renames (review_* → pipeline_*)
+		`ALTER TABLE review_watermarks RENAME TO pipeline_watermarks`,
+		`ALTER TABLE pipeline_watermarks ADD COLUMN tool TEXT NOT NULL DEFAULT 'review'`,
+		`ALTER TABLE review_sessions RENAME TO pipeline_sessions`,
+		`ALTER TABLE pipeline_sessions ADD COLUMN tool TEXT NOT NULL DEFAULT 'review'`,
+		`ALTER TABLE review_work_items RENAME TO pipeline_work_items`,
 	}
 	for _, m := range migrations {
 		db.Exec(m) // ignore "duplicate column" errors
