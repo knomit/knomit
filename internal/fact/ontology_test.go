@@ -281,8 +281,8 @@ func TestDefaultOntology(t *testing.T) {
 	if ont.Name != "General Knowledge" {
 		t.Errorf("expected Name 'General Knowledge', got %q", ont.Name)
 	}
-	if len(ont.Topics) != 12 {
-		t.Errorf("expected 12 topics, got %d", len(ont.Topics))
+	if len(ont.Topics) != 13 {
+		t.Errorf("expected 13 topics, got %d", len(ont.Topics))
 	}
 
 	// Spot-check technology/software.

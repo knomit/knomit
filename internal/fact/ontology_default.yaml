@@ -124,3 +124,8 @@ topics:
         description: Units, metrics, benchmarks
       terminology:
         description: Glossaries, definitions, nomenclature
+  meta:
+    description: Reasoning processes and epistemic self-improvement
+    children:
+      reasoning:
+        description: Methodology facts — lessons learned from hypothesis outcomes
