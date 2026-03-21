@@ -29,7 +29,7 @@ func learnTool() mcpgo.Tool {
 					"category":   map[string]any{"type": "string", "description": "Category path within the topic (e.g. languages/go/concurrency)."},
 					"title":      map[string]any{"type": "string", "description": "Fact title (short, descriptive)."},
 					"body":       map[string]any{"type": "string", "description": "Fact body in natural language."},
-					"type":       map[string]any{"type": "string", "description": "Epistemic type: observation (default, concrete facts), concept (definitions), process (procedures), principle (rules/heuristics), pattern (recurring structures), reference (specs/measurements), synthesis (derived from other facts).", "default": "observation"},
+					"type":       map[string]any{"type": "string", "description": "Epistemic type: observation (default, concrete facts), concept (definitions), process (procedures), principle (rules/heuristics), pattern (recurring structures), reference (specs/measurements), synthesis (derived from other facts), hypothesis (predictions from patterns — carries uncertainty), methodology (reasoning process lessons).", "default": "observation"},
 					"domain":     map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Cross-cutting domain tags."},
 					"confidence": map[string]any{"type": "number", "description": "Certainty level 0.0–1.0.", "default": 0.7},
 					"sources":    map[string]any{"type": "integer", "description": "Number of independent sources.", "default": 1},

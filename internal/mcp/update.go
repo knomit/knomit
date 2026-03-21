@@ -28,7 +28,7 @@ func updateTool() mcpgo.Tool {
 			mcpgo.Properties(map[string]any{
 				"title":      map[string]any{"type": "string", "description": "New title."},
 				"body":       map[string]any{"type": "string", "description": "New body text."},
-				"type":       map[string]any{"type": "string", "description": "Epistemic type: observation, concept, process, principle, pattern, reference, or synthesis."},
+				"type":       map[string]any{"type": "string", "description": "Epistemic type: observation, concept, process, principle, pattern, reference, synthesis, hypothesis, or methodology."},
 				"confidence": map[string]any{"type": "number", "description": "Certainty level 0.0–1.0."},
 				"sources":    map[string]any{"type": "integer", "description": "Number of independent sources."},
 				"domain":     map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Replaces domain tags."},
