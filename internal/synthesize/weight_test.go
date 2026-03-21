@@ -3,6 +3,8 @@ package synthesize
 import (
 	"fmt"
 	"testing"
+
+	"go.uber.org/mock/gomock"
 )
 
 func TestSumProductNorm(t *testing.T) {
@@ -34,7 +36,9 @@ func abs(x float64) float64 {
 }
 
 func TestComputeWeight_AllMissing(t *testing.T) {
-	gs := &fakeGS{files: map[string]string{}}
+	ctrl := gomock.NewController(t)
+	gs := NewMockGitStore(ctrl)
+	gs.EXPECT().ReadFile("kb/missing.md").Return("", fmt.Errorf("not found"))
 	w := computeWeight(gs, []string{"kb/missing.md"})
 	if w != 0 {
 		t.Fatalf("expected 0 for missing sources, got %v", w)
@@ -43,7 +47,10 @@ func TestComputeWeight_AllMissing(t *testing.T) {
 
 func TestComputeWeight_PartialMissing(t *testing.T) {
 	content := "---\ndomain: []\nconfidence: 0.8\nsources: 3\nentities: []\nrefs: []\n---\n# Source\n\nBody."
-	gs := &fakeGS{files: map[string]string{"kb/present.md": content}}
+	ctrl := gomock.NewController(t)
+	gs := NewMockGitStore(ctrl)
+	gs.EXPECT().ReadFile("kb/missing.md").Return("", fmt.Errorf("not found"))
+	gs.EXPECT().ReadFile("kb/present.md").Return(content, nil)
 	w := computeWeight(gs, []string{"kb/missing.md", "kb/present.md"})
 	// sum = 0.8*3 = 2.4; weight = 2.4/3.4
 	want := 2.4 / 3.4
@@ -51,24 +58,3 @@ func TestComputeWeight_PartialMissing(t *testing.T) {
 		t.Fatalf("weight: got %v, want %v", w, want)
 	}
 }
-
-// fakeGS implements the ReadFile method of GitStore for weight tests.
-type fakeGS struct {
-	files map[string]string
-}
-
-func (f *fakeGS) ReadFile(path string) (string, error) {
-	if c, ok := f.files[path]; ok {
-		return c, nil
-	}
-	return "", fmt.Errorf("not found")
-}
-func (f *fakeGS) WriteFile(_, _, _, _ string) (string, string, error) { panic("not used") }
-func (f *fakeGS) BatchWrite(_ map[string]string, _, _ string) (string, map[string]string, error) {
-	panic("not used")
-}
-func (f *fakeGS) DeleteFile(_, _, _ string) (string, error)                { panic("not used") }
-func (f *fakeGS) ListAll() ([]string, error)                               { panic("not used") }
-func (f *fakeGS) Branch() string                                           { return "test" }
-func (f *fakeGS) DiffFiles(_ string) ([]string, []string, []string, error) { panic("not used") }
-func (f *fakeGS) HeadCommit() (string, error)                              { panic("not used") }
