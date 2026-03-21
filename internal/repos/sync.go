@@ -1,4 +1,4 @@
-package cmd
+package repos
 
 import (
 	"context"
@@ -9,14 +9,13 @@ import (
 
 	"knomit/internal/git"
 	"knomit/internal/store"
-	"knomit/internal/web"
 )
 
 // runSyncLoop pulls from the configured remote on a fixed interval.
 // First sync fires immediately, then every remote.Interval seconds.
 // The interval is re-read from the database on each tick so that changes
 // made via PUT /api/v1/{repo}/origin take effect without a restart.
-func runSyncLoop(ctx context.Context, wg *sync.WaitGroup, gs *git.Store, svc *store.Service, hub *web.TaskHub, remote *store.Remote, repo string) {
+func runSyncLoop(ctx context.Context, wg *sync.WaitGroup, gs *git.Store, svc *store.Service, hub *TaskHub, remote *store.Remote, repo string) {
 	defer wg.Done()
 
 	interval := time.Duration(remote.Interval) * time.Second
@@ -72,7 +71,7 @@ func runSyncLoop(ctx context.Context, wg *sync.WaitGroup, gs *git.Store, svc *st
 // runPushLoop pushes the agent branch to origin on a fixed interval.
 // The interval is re-read from the database on each tick so that changes
 // made via PUT /api/v1/{repo}/origin take effect without a restart.
-func runPushLoop(ctx context.Context, wg *sync.WaitGroup, gs *git.Store, svc *store.Service, hub *web.TaskHub, remote *store.Remote, repo string) {
+func runPushLoop(ctx context.Context, wg *sync.WaitGroup, gs *git.Store, svc *store.Service, hub *TaskHub, remote *store.Remote, repo string) {
 	defer wg.Done()
 
 	interval := time.Duration(remote.PushInterval) * time.Second

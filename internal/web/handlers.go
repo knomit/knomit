@@ -36,6 +36,7 @@ import (
 
 	"knomit/internal/git"
 	"knomit/internal/mcp"
+	"knomit/internal/repos"
 	"knomit/internal/store"
 
 	"github.com/rs/zerolog/log"
@@ -59,7 +60,7 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 // starting directory rather than the repository top level.
 func handleBrowse(ontologyRoot string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		ri := RepoFromContext(r.Context())
+		ri := repos.RepoFromContext(r.Context())
 		path := r.URL.Query().Get("path")
 		if path == "" {
 			path = ontologyRoot
@@ -95,7 +96,7 @@ func handleBrowse(ontologyRoot string) http.HandlerFunc {
 // handleFact handles GET /api/v1/{repo}/fact?path=<path>&commit=<hash>
 func handleFact() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		ri := RepoFromContext(r.Context())
+		ri := repos.RepoFromContext(r.Context())
 		path := r.URL.Query().Get("path")
 		if path == "" {
 			writeError(w, http.StatusBadRequest, "path query parameter is required")
@@ -201,7 +202,7 @@ func handleFact() http.HandlerFunc {
 // Response: the re-parsed fact JSON (or parse error if content is still invalid).
 func handleFactWrite() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		ri := RepoFromContext(r.Context())
+		ri := repos.RepoFromContext(r.Context())
 
 		var req struct {
 			Path    string `json:"path"`
@@ -242,7 +243,7 @@ func handleFactWrite() http.HandlerFunc {
 // must match). Each accepts a comma-separated list of terms.
 func handleSearch() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		ri := RepoFromContext(r.Context())
+		ri := repos.RepoFromContext(r.Context())
 		if ri.Idx == nil {
 			writeError(w, http.StatusBadRequest, "search index not available")
 			return
@@ -355,7 +356,7 @@ func handleSearch() http.HandlerFunc {
 // handleHistoryPaginated handles GET /api/v1/{repo}/history?path=<path>&limit=50&after=<cursor>
 func handleHistoryPaginated() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		ri := RepoFromContext(r.Context())
+		ri := repos.RepoFromContext(r.Context())
 		path := r.URL.Query().Get("path")
 
 		limit := 50
@@ -390,7 +391,7 @@ func handleHistoryPaginated() http.HandlerFunc {
 // handleCommitDetail handles GET /api/v1/{repo}/commit?hash=<hash>
 func handleCommitDetail() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		ri := RepoFromContext(r.Context())
+		ri := repos.RepoFromContext(r.Context())
 		hash := r.URL.Query().Get("hash")
 		if hash == "" {
 			writeError(w, http.StatusBadRequest, "hash query parameter is required")
@@ -411,7 +412,7 @@ func handleCommitDetail() http.HandlerFunc {
 // Returns commit-activity metrics (last change, total commits, 7d/30d/90d counts).
 func handleActivity() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		ri := RepoFromContext(r.Context())
+		ri := repos.RepoFromContext(r.Context())
 		result, err := ri.GS.Activity(r.URL.Query().Get("path"))
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, fmt.Sprintf("activity error: %v", err))
@@ -425,7 +426,7 @@ func handleActivity() http.HandlerFunc {
 // Aggregates are computed with a SQL query over the search index.
 func handleStats() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		ri := RepoFromContext(r.Context())
+		ri := repos.RepoFromContext(r.Context())
 		if ri.Idx == nil {
 			writeError(w, http.StatusServiceUnavailable, "index not available")
 			return
@@ -442,7 +443,7 @@ func handleStats() http.HandlerFunc {
 // handleStatus handles GET /api/v1/{repo}/status
 func handleStatus(embeddingsEnabled bool, ontologyRoot string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		ri := RepoFromContext(r.Context())
+		ri := repos.RepoFromContext(r.Context())
 		head, err := ri.GS.HeadCommit()
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, fmt.Sprintf("head commit error: %v", err))
@@ -469,7 +470,7 @@ func handleStatus(embeddingsEnabled bool, ontologyRoot string) http.HandlerFunc 
 // handleRecent handles GET /api/v1/{repo}/recent?path=<prefix>&q=<query>&limit=50&offset=0
 func handleRecent() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		ri := RepoFromContext(r.Context())
+		ri := repos.RepoFromContext(r.Context())
 		if ri.Svc == nil {
 			writeError(w, http.StatusServiceUnavailable, "index not available")
 			return

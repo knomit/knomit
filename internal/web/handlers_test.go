@@ -11,15 +11,16 @@ import (
 
 	"go.uber.org/mock/gomock"
 	"knomit/internal/git"
+	"knomit/internal/repos"
 	"knomit/internal/store"
 )
 
 // --- helpers ---
 
-func newTestRouter(gs GitStore, idx SearchIndex) http.Handler {
-	hub := NewTaskHub(context.Background())
-	rm := NewRepoManager()
-	rm.Set("knomit", &RepoInstance{
+func newTestRouter(gs repos.GitStore, idx repos.SearchIndex) http.Handler {
+	hub := repos.NewTaskHub(context.Background())
+	rm := repos.New(context.Background(), repos.Deps{})
+	rm.Set("knomit", &repos.RepoInstance{
 		Name: "knomit",
 		GS:   gs,
 		Idx:  idx,
@@ -295,7 +296,7 @@ func TestHandleSearch(t *testing.T) {
 			ctrl := gomock.NewController(t)
 			gs := NewMockGitStore(ctrl)
 
-			var idx SearchIndex
+			var idx repos.SearchIndex
 			if tc.useIdx {
 				mockIdx := NewMockSearchIndex(ctrl)
 				mockIdx.EXPECT().Search(gomock.Any()).Return(tc.idxResults, nil)
@@ -470,7 +471,7 @@ func TestHandleStatus(t *testing.T) {
 			gs.EXPECT().HeadCommit().Return(tc.head, nil)
 			gs.EXPECT().Branch().Return(tc.branch)
 
-			var idx SearchIndex
+			var idx repos.SearchIndex
 			if tc.hasIdx {
 				mockIdx := NewMockSearchIndex(ctrl)
 				mockIdx.EXPECT().GetLastCommit(tc.branch).Return(tc.indexCommit, nil)

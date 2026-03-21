@@ -39,8 +39,8 @@ func (idx *Index) Upsert(rec FactRecord) error {
 		if err != nil {
 			return fmt.Errorf("upsert: blob %s not found: %w", rec.BlobHash, err)
 		}
-		body := extractBody(data)
-		vec, err := idx.embedder.Embed(body)
+		text := rec.Title + " " + extractBody(data)
+		vec, err := idx.embedder.Embed(text)
 		if err == nil && len(vec) > 0 {
 			vecData = float32SliceToBytes(vec)
 		}

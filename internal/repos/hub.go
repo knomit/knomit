@@ -1,4 +1,4 @@
-package web
+package repos
 
 import (
 	"context"
@@ -42,9 +42,9 @@ type TaskHub struct {
 	ctx      context.Context
 	cancel   context.CancelFunc
 	ob       *goob.Observable
-	active   map[string]TaskEvent           // op → latest running event
-	lastDone map[string]TaskEvent           // op → last terminal event
-	cancels  map[string]context.CancelFunc  // taskID → cancel
+	active   map[string]TaskEvent          // op → latest running event
+	lastDone map[string]TaskEvent          // op → last terminal event
+	cancels  map[string]context.CancelFunc // taskID → cancel
 	counter  int
 }
 

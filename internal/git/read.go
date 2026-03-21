@@ -388,7 +388,7 @@ func (s *Store) LogPaginated(path string, limit int, after string) ([]LogEntryWi
 	})
 
 	// Batch-fetch file change counts from commit_log if available.
-	if s.db != nil && s.commitLog && len(entries) > 0 {
+	if s.db != nil && s.commitLog.Load() && len(entries) > 0 {
 		s.enrichFileCounts(entries)
 	}
 
@@ -441,7 +441,7 @@ func (s *Store) enrichFileCounts(entries []LogEntryWithTags) {
 // query when commit_log is available, or a capped go-git walk otherwise.
 // path may be a directory prefix or a specific .md file.
 func (s *Store) Activity(path string) (ActivityResult, error) {
-	if s.commitLog {
+	if s.commitLog.Load() {
 		return s.activitySQL(path)
 	}
 	return s.activityGit(path)
@@ -618,7 +618,7 @@ func (s *Store) CommitDetail(commitHash string) (*CommitDetailResult, error) {
 // otherwise. Returns files ordered most-recently-changed first, and the HEAD
 // commit hash for session compatibility (SQL path ignores fromCommit).
 func (s *Store) WalkChangedFiles(fromCommit string, prefix string, seen map[string]bool, limit int) ([]FileRecency, string, error) {
-	if s.commitLog {
+	if s.commitLog.Load() {
 		return s.walkChangedFilesSQL(prefix, seen, limit)
 	}
 	return s.walkChangedFilesGit(fromCommit, prefix, seen, limit)

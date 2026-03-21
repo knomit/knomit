@@ -16,6 +16,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/transport/server"
 
 	"knomit/internal/git"
+	"knomit/internal/repos"
 	"knomit/internal/store"
 )
 
@@ -90,12 +91,12 @@ func TestOriginSession_FullWorkflow(t *testing.T) {
 
 	// ---- 4. Build router with local store ----
 
-	hub := NewTaskHub(context.Background())
-	rm := NewRepoManager()
+	hub := repos.NewTaskHub(context.Background())
+	rm := repos.New(context.Background(), repos.Deps{})
 	sm := NewSessionManager()
 	t.Cleanup(sm.Shutdown)
 
-	ri := &RepoInstance{
+	ri := &repos.RepoInstance{
 		Name:       "knomit",
 		GS:         localGS,
 		Svc:        localSvc,
@@ -356,12 +357,12 @@ func TestOriginSession_RemoteWinsStrategy(t *testing.T) {
 	client.InstallProtocol("inmem", server.NewClient(loader))
 	t.Cleanup(func() { client.InstallProtocol("inmem", nil) })
 
-	hub := NewTaskHub(context.Background())
-	rm := NewRepoManager()
+	hub := repos.NewTaskHub(context.Background())
+	rm := repos.New(context.Background(), repos.Deps{})
 	sm := NewSessionManager()
 	t.Cleanup(sm.Shutdown)
 
-	ri := &RepoInstance{
+	ri := &repos.RepoInstance{
 		Name:       "knomit",
 		GS:         localGS,
 		Svc:        localSvc,
@@ -492,12 +493,12 @@ func TestOriginSession_SwitchStrategy(t *testing.T) {
 	client.InstallProtocol("inmem", server.NewClient(loader))
 	t.Cleanup(func() { client.InstallProtocol("inmem", nil) })
 
-	hub := NewTaskHub(context.Background())
-	rm := NewRepoManager()
+	hub := repos.NewTaskHub(context.Background())
+	rm := repos.New(context.Background(), repos.Deps{})
 	sm := NewSessionManager()
 	t.Cleanup(sm.Shutdown)
 
-	ri := &RepoInstance{
+	ri := &repos.RepoInstance{
 		Name:       "knomit",
 		GS:         localGS,
 		Svc:        localSvc,
@@ -613,12 +614,12 @@ func TestOriginSession_ExistingAgentBranch(t *testing.T) {
 	client.InstallProtocol("inmem", server.NewClient(loader))
 	t.Cleanup(func() { client.InstallProtocol("inmem", nil) })
 
-	hub := NewTaskHub(context.Background())
-	rm := NewRepoManager()
+	hub := repos.NewTaskHub(context.Background())
+	rm := repos.New(context.Background(), repos.Deps{})
 	sm := NewSessionManager()
 	t.Cleanup(sm.Shutdown)
 
-	ri := &RepoInstance{
+	ri := &repos.RepoInstance{
 		Name:       "knomit",
 		GS:         localGS,
 		Svc:        localSvc,
@@ -705,12 +706,12 @@ func TestOriginSession_CancelCleanup(t *testing.T) {
 		t.Fatalf("git.InitWithStorer: %v", err)
 	}
 
-	hub := NewTaskHub(context.Background())
-	rm := NewRepoManager()
+	hub := repos.NewTaskHub(context.Background())
+	rm := repos.New(context.Background(), repos.Deps{})
 	sm := NewSessionManager()
 	t.Cleanup(sm.Shutdown)
 
-	ri := &RepoInstance{
+	ri := &repos.RepoInstance{
 		Name:       "knomit",
 		GS:         localGS,
 		Svc:        localSvc,
@@ -828,12 +829,12 @@ func TestOriginSession_BranchSelection(t *testing.T) {
 	client.InstallProtocol("inmem", server.NewClient(loader))
 	t.Cleanup(func() { client.InstallProtocol("inmem", nil) })
 
-	hub := NewTaskHub(context.Background())
-	rm := NewRepoManager()
+	hub := repos.NewTaskHub(context.Background())
+	rm := repos.New(context.Background(), repos.Deps{})
 	sm := NewSessionManager()
 	t.Cleanup(sm.Shutdown)
 
-	ri := &RepoInstance{
+	ri := &repos.RepoInstance{
 		Name:       "knomit",
 		GS:         localGS,
 		Svc:        localSvc,
@@ -966,12 +967,12 @@ func TestOriginSession_RebuildAfterCommit(t *testing.T) {
 	client.InstallProtocol("inmem", server.NewClient(loader))
 	t.Cleanup(func() { client.InstallProtocol("inmem", nil) })
 
-	hub := NewTaskHub(context.Background())
-	rm := NewRepoManager()
+	hub := repos.NewTaskHub(context.Background())
+	rm := repos.New(context.Background(), repos.Deps{})
 	sm := NewSessionManager()
 	t.Cleanup(sm.Shutdown)
 
-	ri := &RepoInstance{
+	ri := &repos.RepoInstance{
 		Name:       "knomit",
 		GS:         localGS,
 		Svc:        localSvc,

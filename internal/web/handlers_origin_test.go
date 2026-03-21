@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"testing"
 
+	"knomit/internal/repos"
 	"knomit/internal/store"
 )
 
@@ -25,9 +26,9 @@ func TestHandleGetOrigin_NoRemote(t *testing.T) {
 	}
 	defer svc.Close()
 
-	hub := NewTaskHub(context.Background())
-	rm := NewRepoManager()
-	rm.Set("knomit", &RepoInstance{
+	hub := repos.NewTaskHub(context.Background())
+	rm := repos.New(context.Background(), repos.Deps{})
+	rm.Set("knomit", &repos.RepoInstance{
 		Name: "knomit",
 		Svc:  svc,
 		Hub:  hub,
@@ -51,9 +52,9 @@ func TestHandleGetOrigin_WithRemote(t *testing.T) {
 		t.Fatalf("SetRemote: %v", err)
 	}
 
-	hub := NewTaskHub(context.Background())
-	rm := NewRepoManager()
-	rm.Set("knomit", &RepoInstance{
+	hub := repos.NewTaskHub(context.Background())
+	rm := repos.New(context.Background(), repos.Deps{})
+	rm.Set("knomit", &repos.RepoInstance{
 		Name: "knomit",
 		Svc:  svc,
 		Hub:  hub,
@@ -87,9 +88,9 @@ func TestHandleSetOrigin_MissingURL(t *testing.T) {
 	}
 	defer svc.Close()
 
-	hub := NewTaskHub(context.Background())
-	rm := NewRepoManager()
-	rm.Set("knomit", &RepoInstance{
+	hub := repos.NewTaskHub(context.Background())
+	rm := repos.New(context.Background(), repos.Deps{})
+	rm.Set("knomit", &repos.RepoInstance{
 		Name: "knomit",
 		Svc:  svc,
 		Hub:  hub,
@@ -114,9 +115,9 @@ func TestHandleSetOrigin_ValidURL(t *testing.T) {
 	}
 	defer svc.Close()
 
-	hub := NewTaskHub(context.Background())
-	rm := NewRepoManager()
-	rm.Set("knomit", &RepoInstance{
+	hub := repos.NewTaskHub(context.Background())
+	rm := repos.New(context.Background(), repos.Deps{})
+	rm.Set("knomit", &repos.RepoInstance{
 		Name: "knomit",
 		Svc:  svc,
 		Hub:  hub,
@@ -157,9 +158,9 @@ func TestHandleSetOrigin_SSHUrl(t *testing.T) {
 	}
 	defer svc.Close()
 
-	hub := NewTaskHub(context.Background())
-	rm := NewRepoManager()
-	rm.Set("knomit", &RepoInstance{Name: "knomit", Svc: svc, Hub: hub})
+	hub := repos.NewTaskHub(context.Background())
+	rm := repos.New(context.Background(), repos.Deps{})
+	rm.Set("knomit", &repos.RepoInstance{Name: "knomit", Svc: svc, Hub: hub})
 	handler := NewRouter(rm, nil, false, "kb")
 
 	rr := doRequest(t, handler, http.MethodPut, "/api/v1/knomit/origin", `{"url":"git@github.com:knomit/blank.git","auth_method":"ssh"}`)
@@ -175,9 +176,9 @@ func TestHandleSetOrigin_HTTPWithSSHAuth(t *testing.T) {
 	}
 	defer svc.Close()
 
-	hub := NewTaskHub(context.Background())
-	rm := NewRepoManager()
-	rm.Set("knomit", &RepoInstance{Name: "knomit", Svc: svc, Hub: hub})
+	hub := repos.NewTaskHub(context.Background())
+	rm := repos.New(context.Background(), repos.Deps{})
+	rm.Set("knomit", &repos.RepoInstance{Name: "knomit", Svc: svc, Hub: hub})
 	handler := NewRouter(rm, nil, false, "kb")
 
 	rr := doRequest(t, handler, http.MethodPut, "/api/v1/knomit/origin", `{"url":"https://github.com/org/repo.git","auth_method":"ssh"}`)
@@ -193,9 +194,9 @@ func TestHandleSetOrigin_SSHWithTokenAuth(t *testing.T) {
 	}
 	defer svc.Close()
 
-	hub := NewTaskHub(context.Background())
-	rm := NewRepoManager()
-	rm.Set("knomit", &RepoInstance{Name: "knomit", Svc: svc, Hub: hub})
+	hub := repos.NewTaskHub(context.Background())
+	rm := repos.New(context.Background(), repos.Deps{})
+	rm.Set("knomit", &repos.RepoInstance{Name: "knomit", Svc: svc, Hub: hub})
 	handler := NewRouter(rm, nil, false, "kb")
 
 	rr := doRequest(t, handler, http.MethodPut, "/api/v1/knomit/origin", `{"url":"git@github.com:org/repo.git","auth_method":"token","token":"ghp_abc"}`)

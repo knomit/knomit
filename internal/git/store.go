@@ -27,6 +27,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	gogit "github.com/go-git/go-git/v5"
@@ -49,9 +50,9 @@ type Store struct {
 	mu        sync.Mutex
 	repo      *gogit.Repository
 	storer    *storegit.Storer
-	db        *sql.DB // non-nil when commit_log is available
-	commitLog bool    // true once commit_log table is confirmed populated
-	ownsDB    bool    // true when Init/Open opened the DB (legacy path)
+	db        *sql.DB      // non-nil when commit_log is available
+	commitLog atomic.Bool  // true once commit_log table is confirmed populated
+	ownsDB    bool         // true when Init/Open opened the DB (legacy path)
 	ownedDB   *sql.DB // non-nil when ownsDB is true
 	branch    string  // e.g. "agent/laptop"
 	agentID   string  // e.g. "laptop" (branch with "agent/" prefix stripped)

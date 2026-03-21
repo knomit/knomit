@@ -1,12 +1,14 @@
 package web
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	"go.uber.org/mock/gomock"
+	"knomit/internal/repos"
 )
 
 func TestHandleRepos(t *testing.T) {
@@ -14,9 +16,9 @@ func TestHandleRepos(t *testing.T) {
 	gs := NewMockGitStore(ctrl)
 	gs.EXPECT().Branch().Return("agent/abc123").AnyTimes()
 
-	rm := NewRepoManager()
-	rm.Set("knomit", &RepoInstance{Name: "knomit", GS: gs})
-	rm.Set("work", &RepoInstance{Name: "work", GS: gs})
+	rm := repos.New(context.Background(), repos.Deps{})
+	rm.Set("knomit", &repos.RepoInstance{Name: "knomit", GS: gs})
+	rm.Set("work", &repos.RepoInstance{Name: "work", GS: gs})
 
 	handler := handleRepos(rm)
 	req := httptest.NewRequest("GET", "/api/v1/repos", nil)
@@ -47,7 +49,7 @@ func TestHandleRepos(t *testing.T) {
 }
 
 func TestHandleRepos_Empty(t *testing.T) {
-	rm := NewRepoManager()
+	rm := repos.New(context.Background(), repos.Deps{})
 
 	handler := handleRepos(rm)
 	req := httptest.NewRequest("GET", "/api/v1/repos", nil)
