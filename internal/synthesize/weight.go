@@ -1,0 +1,55 @@
+package synthesize
+
+import "knomit/internal/mcp"
+
+// SourceWeight holds the confidence and sources count from a single source fact,
+// used to compute a normalized evidence weight for synthesized facts.
+type SourceWeight struct {
+	Confidence float64
+	Sources    int
+}
+
+// WeightStrategy computes a normalized evidence weight in [0, 1) from a set
+// of source facts. Implement this interface to add alternative formulas.
+type WeightStrategy interface {
+	Compute(sources []SourceWeight) float64
+}
+
+// SumProductNorm implements WeightStrategy using sum(c*s) / (sum(c*s) + 1).
+// This maps [0, ∞) → [0, 1) with diminishing returns as evidence accumulates.
+type SumProductNorm struct{}
+
+// Compute returns sum(confidence_i * sources_i) / (sum + 1).
+func (SumProductNorm) Compute(srcs []SourceWeight) float64 {
+	if len(srcs) == 0 {
+		return 0
+	}
+	sum := 0.0
+	for _, s := range srcs {
+		sum += s.Confidence * float64(s.Sources)
+	}
+	return sum / (sum + 1.0)
+}
+
+// DefaultWeightStrategy is used by ApplyPruneDecisions and ApplyDistillDecisions.
+// Swap to change the formula globally.
+var DefaultWeightStrategy WeightStrategy = SumProductNorm{}
+
+// computeWeight reads each source path from git, parses it, and returns a
+// normalized evidence weight. Sources that fail to read or parse contribute
+// nothing. Must be called before source facts are deleted.
+func computeWeight(gs GitStore, sourcePaths []string) float64 {
+	var srcs []SourceWeight
+	for _, p := range sourcePaths {
+		content, err := gs.ReadFile(p)
+		if err != nil {
+			continue
+		}
+		f, err := mcp.ParseFact(p, content)
+		if err != nil {
+			continue
+		}
+		srcs = append(srcs, SourceWeight{Confidence: f.Confidence, Sources: f.Sources})
+	}
+	return DefaultWeightStrategy.Compute(srcs)
+}
