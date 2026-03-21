@@ -35,6 +35,37 @@ func abs(x float64) float64 {
 	return x
 }
 
+func TestSumProductNormBasic(t *testing.T) {
+	s := SumProductNorm{}
+	got := s.Compute([]SourceWeight{{Confidence: 0.8, Sources: 2}})
+	want := 1.6 / 2.6
+	if got < want-0.001 || got > want+0.001 {
+		t.Errorf("SumProductNorm: got %f want %f", got, want)
+	}
+}
+
+func TestSumProductNormEmpty(t *testing.T) {
+	s := SumProductNorm{}
+	if got := s.Compute(nil); got != 0 {
+		t.Errorf("SumProductNorm(nil): got %f want 0", got)
+	}
+}
+
+func TestComputeWeightSkipsHypothesis(t *testing.T) {
+	hypContent := "---\ndomain: []\nconfidence: 0.9\nsources: 5\nentities: []\nrefs: []\ntype: hypothesis\n---\n# Hyp\n\nBody."
+	obsContent := "---\ndomain: []\nconfidence: 0.8\nsources: 2\nentities: []\nrefs: []\ntype: observation\n---\n# Obs\n\nBody."
+	ctrl := gomock.NewController(t)
+	gs := NewMockGitStore(ctrl)
+	gs.EXPECT().ReadFile("kb/hyp.md").Return(hypContent, nil)
+	gs.EXPECT().ReadFile("kb/obs.md").Return(obsContent, nil)
+	w := computeWeight(gs, []string{"kb/hyp.md", "kb/obs.md"})
+	// Only the observation contributes: sum = 0.8*2 = 1.6; weight = 1.6/2.6
+	want := 1.6 / 2.6
+	if abs(w-want) > 1e-9 {
+		t.Errorf("hypothesis should be skipped: got %v, want %v", w, want)
+	}
+}
+
 func TestComputeWeight_AllMissing(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)

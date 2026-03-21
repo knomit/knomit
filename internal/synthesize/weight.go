@@ -1,6 +1,9 @@
 package synthesize
 
-import "knomit/internal/mcp"
+import (
+	"knomit/internal/fact"
+	"knomit/internal/mcp"
+)
 
 // SourceWeight holds the confidence and sources count from a single source fact,
 // used to compute a normalized evidence weight for synthesized facts.
@@ -47,6 +50,11 @@ func computeWeight(gs GitStore, sourcePaths []string) float64 {
 		}
 		f, err := mcp.ParseFact(p, content)
 		if err != nil {
+			continue
+		}
+		// Skip hypothesis-type sources — they carry uncertainty and should not
+		// contribute to evidence weight for synthesized facts.
+		if f.Type == fact.Hypothesis {
 			continue
 		}
 		srcs = append(srcs, SourceWeight{Confidence: f.Confidence, Sources: f.Sources})
