@@ -234,6 +234,7 @@ func TestExplainDeletedRef(t *testing.T) {
 		{Path: "kb/good.md", CommitHash: "abc123", Depth: 1},
 	}, nil)
 	gs.EXPECT().ReadFileAtCommit("kb/deleted.md", "abc123").Return("", fmt.Errorf("not found"))
+	gs.EXPECT().LastCommitForPath("kb/deleted.md").Return("", nil)
 	gs.EXPECT().ReadFileAtCommit("kb/good.md", "abc123").Return(goodContent, nil)
 	sessionIdx.EXPECT().AddSeenPaths("sess-3", []string{"kb/good.md"}).Return(nil)
 	// No new local refs to enqueue.
@@ -463,6 +464,69 @@ func TestExplainResumeEmptyQueue(t *testing.T) {
 	}
 	if resp.HasMore {
 		t.Fatal("expected has_more=false for empty queue")
+	}
+}
+
+func TestExplainRetractedRef(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	gs := NewMockGitStore(ctrl)
+	sessionIdx := NewMockToolSessionIndex(ctrl)
+
+	retractedContent := SerializeFact(Fact{
+		Path: "kb/retracted.md", Title: "Retracted", Body: "Was here.",
+		Domain: []string{"testing"}, Confidence: 0.8, Sources: 3,
+		Entities: []string{}, Refs: []string{},
+	})
+
+	sessionIdx.EXPECT().GetToolSession("sess-ret").Return(&ToolSession{ID: "sess-ret", Status: "active"}, nil)
+	sessionIdx.EXPECT().GetSeenPaths("sess-ret").Return(map[string]bool{"kb/root.md": true}, nil)
+	sessionIdx.EXPECT().DequeuePaths("sess-ret", 25).Return([]QueueItem{
+		{Path: "kb/retracted.md", CommitHash: "merge-commit", Depth: 1},
+	}, nil)
+	// ReadFileAtCommit fails — file was retracted before merge-commit.
+	gs.EXPECT().ReadFileAtCommit("kb/retracted.md", "merge-commit").Return("", fmt.Errorf("not found"))
+	// Fallback: find the retraction commit, then read from just before it.
+	gs.EXPECT().LastCommitForPath("kb/retracted.md").Return("retract-commit", nil)
+	gs.EXPECT().ReadFileLastCommit("kb/retracted.md", "retract-commit").Return(retractedContent, "last-live-commit", nil)
+	sessionIdx.EXPECT().AddSeenPaths("sess-ret", []string{"kb/retracted.md"}).Return(nil)
+	sessionIdx.EXPECT().QueueSize("sess-ret").Return(0, nil)
+	sessionIdx.EXPECT().UpdateToolSession("sess-ret", "", "completed").Return(nil)
+
+	handler := ExplainHandler(gs, sessionIdx, "kb")
+	req := mcpgo.CallToolRequest{}
+	req.Params.Arguments = map[string]interface{}{
+		"file":   "kb/root.md",
+		"cursor": "sess-ret",
+	}
+
+	result, err := handler(context.Background(), req)
+	if err != nil {
+		t.Fatalf("handler error: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("tool error: %s", getResultText(t, result))
+	}
+
+	text := getResultText(t, result)
+	var resp struct {
+		Facts   []explainFactEntry `json:"facts"`
+		HasMore bool               `json:"has_more"`
+	}
+	if err := json.Unmarshal([]byte(text), &resp); err != nil {
+		t.Fatalf("invalid JSON: %v\n%s", err, text)
+	}
+	if len(resp.Facts) != 1 {
+		t.Fatalf("expected 1 retracted fact, got %d", len(resp.Facts))
+	}
+	f := resp.Facts[0]
+	if !f.Retracted {
+		t.Error("expected Retracted=true")
+	}
+	if f.LastCommitHash != "last-live-commit" {
+		t.Errorf("LastCommitHash: got %q, want %q", f.LastCommitHash, "last-live-commit")
+	}
+	if f.Title != "Retracted" {
+		t.Errorf("Title: got %q, want %q", f.Title, "Retracted")
 	}
 }
 

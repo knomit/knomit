@@ -27,13 +27,15 @@ func explainTool() mcpgo.Tool {
 }
 
 type explainFactEntry struct {
-	Path    string         `json:"path"`
-	Commit  string         `json:"commit"`
-	Depth   int            `json:"depth"`
-	Title   string         `json:"title"`
-	Body    string         `json:"body"`
-	Refs    classifiedRefs `json:"refs"`
-	History []historyEntry `json:"history,omitempty"`
+	Path           string         `json:"path"`
+	Commit         string         `json:"commit"`
+	Depth          int            `json:"depth"`
+	Title          string         `json:"title"`
+	Body           string         `json:"body"`
+	Refs           classifiedRefs `json:"refs"`
+	History        []historyEntry `json:"history,omitempty"`
+	Retracted      bool           `json:"retracted,omitempty"`
+	LastCommitHash string         `json:"last_commit_hash,omitempty"`
 }
 
 type classifiedRefs struct {
@@ -211,8 +213,20 @@ func explainResume(gs GitStore, sessionIdx ToolSessionIndex, cursor string) (*mc
 
 		for _, item := range items {
 			content, readErr := gs.ReadFileAtCommit(item.Path, item.CommitHash)
+			var retracted bool
+			var lastCommitHash string
 			if readErr != nil {
-				continue
+				retractCommit, lcErr := gs.LastCommitForPath(item.Path)
+				if lcErr != nil || retractCommit == "" {
+					continue // file never existed in git
+				}
+				var fromCommit string
+				content, fromCommit, readErr = gs.ReadFileLastCommit(item.Path, retractCommit)
+				if readErr != nil {
+					continue
+				}
+				retracted = true
+				lastCommitHash = fromCommit
 			}
 			parsed, parseErr := ParseFact(item.Path, content)
 			if parseErr != nil {
@@ -233,12 +247,14 @@ func explainResume(gs GitStore, sessionIdx ToolSessionIndex, cursor string) (*mc
 
 			newPaths = append(newPaths, item.Path)
 			facts = append(facts, explainFactEntry{
-				Path:   item.Path,
-				Commit: item.CommitHash,
-				Depth:  item.Depth,
-				Title:  parsed.Title,
-				Body:   parsed.Body,
-				Refs:   refs,
+				Path:           item.Path,
+				Commit:         item.CommitHash,
+				Depth:          item.Depth,
+				Title:          parsed.Title,
+				Body:           parsed.Body,
+				Refs:           refs,
+				Retracted:      retracted,
+				LastCommitHash: lastCommitHash,
 			})
 		}
 
