@@ -6,6 +6,7 @@ import (
 	"sort"
 
 	"github.com/rs/zerolog/log"
+	"knomit/internal/fact"
 	"knomit/internal/mcp"
 	"knomit/internal/store"
 )
@@ -19,26 +20,6 @@ type mergePair struct {
 	similarity float64
 }
 
-// unionStrings returns the union of two string slices, preserving order (a first, then new items from b).
-func unionStrings(a, b []string) []string {
-	out := make([]string, len(a))
-	copy(out, a)
-	for _, s := range b {
-		out = appendUnique(out, s)
-	}
-	return out
-}
-
-// appendUnique appends s to slice only if it is not already present.
-func appendUnique(slice []string, s string) []string {
-	for _, existing := range slice {
-		if existing == s {
-			return slice
-		}
-	}
-	return append(slice, s)
-}
-
 // mergeFacts applies the dedup merge rule to a and b, returning (winner, loser).
 // Winner is the fact with higher confidence; ties are broken by higher sources.
 func mergeFacts(a, b factForLLM) (winner, loser factForLLM) {
@@ -48,8 +29,8 @@ func mergeFacts(a, b factForLLM) (winner, loser factForLLM) {
 		winner, loser = b, a
 	}
 	// Merge domains and entities as union.
-	winner.Domain = unionStrings(winner.Domain, loser.Domain)
-	winner.Entities = unionStrings(winner.Entities, loser.Entities)
+	winner.Domain = fact.UnionStrings(winner.Domain, loser.Domain)
+	winner.Entities = fact.UnionStrings(winner.Entities, loser.Entities)
 	// Confidence = max (already winner's).
 	// Sources = sum.
 	winner.Sources = a.Sources + b.Sources
@@ -204,8 +185,8 @@ func dedupCluster(
 		fullWinner.Confidence = winnerFact.Confidence
 		fullWinner.Sources = winnerFact.Sources
 		// Refs = union of both refs + loser's path.
-		mergedRefs := unionStrings(fullWinner.Refs, fullLoser.Refs)
-		mergedRefs = appendUnique(mergedRefs, loserFact.File)
+		mergedRefs := fact.UnionStrings(fullWinner.Refs, fullLoser.Refs)
+		mergedRefs = fact.AppendUnique(mergedRefs, loserFact.File)
 		fullWinner.Refs = mergedRefs
 
 		// Serialize and write the winner back to git.

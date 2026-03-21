@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"strings"
 
+	"knomit/internal/fact"
+
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 )
 
@@ -84,7 +86,7 @@ func explainFirstCall(gs GitStore, sessionIdx ToolSessionIndex, ontologyRoot, fi
 	if file == "" {
 		return mcpgo.NewToolResultError("file is required"), nil
 	}
-	file = normalizePath(ontologyRoot, file)
+	file = fact.NormalizePath(ontologyRoot, file)
 
 	// GC old sessions.
 	_ = sessionIdx.GCToolSessions("explain", gs.Branch(), 5)

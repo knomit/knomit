@@ -328,7 +328,7 @@ func TestLearnHandler_DedupMergesNearDuplicate(t *testing.T) {
 }
 
 func TestBuildFactPath(t *testing.T) {
-	path := buildFactPath("kb", "technology", "go/concurrency")
+	path := fact.BuildFactPath("kb", "technology", "go/concurrency")
 	if !strings.HasPrefix(path, "kb/technology/go/concurrency/") {
 		t.Fatalf("expected prefix kb/technology/go/concurrency/, got %q", path)
 	}
@@ -343,7 +343,7 @@ func TestBuildFactPath(t *testing.T) {
 	}
 
 	// Two calls should produce different paths.
-	path2 := buildFactPath("kb", "technology", "go/concurrency")
+	path2 := fact.BuildFactPath("kb", "technology", "go/concurrency")
 	if path == path2 {
 		t.Fatal("expected different UUIDs for different calls")
 	}

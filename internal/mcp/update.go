@@ -59,7 +59,7 @@ func UpdateHandler(gs GitStore, ontologyRoot string) func(context.Context, mcpgo
 		if file == "" {
 			return mcpgo.NewToolResultError("file is required"), nil
 		}
-		file = normalizePath(ontologyRoot, file)
+		file = factpkg.NormalizePath(ontologyRoot, file)
 		momentName := req.GetString("moment_name", "")
 		if momentName == "" {
 			return mcpgo.NewToolResultError("moment_name is required"), nil
