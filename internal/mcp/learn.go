@@ -79,20 +79,9 @@ func LearnHandler(gs GitStore, idx SearchIndex, ontologyRoot string, ontology *f
 		}
 
 		// Parse facts from the arguments.
-		args := req.GetArguments()
-		factsRaw, ok := args["facts"]
-		if !ok {
-			return mcpgo.NewToolResultError("facts is required"), nil
-		}
-
-		// Re-marshal and unmarshal to handle type coercion.
-		factsJSON, err := json.Marshal(factsRaw)
-		if err != nil {
-			return mcpgo.NewToolResultError(fmt.Sprintf("invalid facts: %v", err)), nil
-		}
 		var factInputs []learnFactInput
-		if err := json.Unmarshal(factsJSON, &factInputs); err != nil {
-			return mcpgo.NewToolResultError(fmt.Sprintf("invalid facts format: %v", err)), nil
+		if err := unmarshalArg(req, "facts", &factInputs); err != nil {
+			return mcpgo.NewToolResultError(err.Error()), nil
 		}
 		if len(factInputs) == 0 {
 			return mcpgo.NewToolResultError("facts must not be empty"), nil
