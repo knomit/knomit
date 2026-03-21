@@ -15,23 +15,23 @@ func TestStartSession_NoDirtyFacts(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
 	idx := NewMockSearchIndex(ctrl)
-	ri := NewMockReviewIndex(ctrl)
+	ri := NewMockPipelineIndex(ctrl)
 
 	gs.EXPECT().Branch().Return("machine/test")
-	ri.EXPECT().GCReviewSessions("machine/test", 5).Return(nil)
-	ri.EXPECT().CreateReviewSession("machine/test").Return(&store.ReviewSession{
+	ri.EXPECT().GCPipelineSessions("review", "machine/test", 5).Return(nil)
+	ri.EXPECT().CreatePipelineSession("review", "machine/test").Return(&store.PipelineSession{
 		ID: "sess-1", Branch: "machine/test", Status: "active",
 	}, nil)
 
 	// No watermark → all facts dirty, but index returns empty.
-	ri.EXPECT().GetReviewWatermark("machine/test").Return("", nil)
+	ri.EXPECT().GetPipelineWatermark("review", "machine/test").Return("", nil)
 	idx.EXPECT().Search(store.SearchQuery{Limit: 100_000}).Return(nil, nil)
 
 	// Complete session immediately.
-	ri.EXPECT().CompleteReviewSession("sess-1").Return(nil)
+	ri.EXPECT().CompletePipelineSession("sess-1").Return(nil)
 	gs.EXPECT().HeadCommit().Return("abc123", nil)
-	ri.EXPECT().SetReviewWatermark("machine/test", "abc123").Return(nil)
-	ri.EXPECT().WorkItemStats("sess-1").Return(0, 0, nil)
+	ri.EXPECT().SetPipelineWatermark("review", "machine/test", "abc123").Return(nil)
+	ri.EXPECT().PipelineWorkItemStats("sess-1").Return(0, 0, nil)
 
 	r := NewReviewer(gs, idx, ri, NewMockEmbedder(ctrl), nil)
 	result, err := r.StartSession()
@@ -53,25 +53,25 @@ func TestStartSession_WatermarkAtHead_NoDirtyFacts(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
 	idx := NewMockSearchIndex(ctrl)
-	ri := NewMockReviewIndex(ctrl)
+	ri := NewMockPipelineIndex(ctrl)
 
 	gs.EXPECT().Branch().Return("machine/test")
-	ri.EXPECT().GCReviewSessions("machine/test", 5).Return(nil)
-	ri.EXPECT().CreateReviewSession("machine/test").Return(&store.ReviewSession{
+	ri.EXPECT().GCPipelineSessions("review", "machine/test", 5).Return(nil)
+	ri.EXPECT().CreatePipelineSession("review", "machine/test").Return(&store.PipelineSession{
 		ID: "sess-wm", Branch: "machine/test", Status: "active",
 	}, nil)
 
 	// Watermark is set to HEAD — simulates post-InitFromRemote state.
-	ri.EXPECT().GetReviewWatermark("machine/test").Return("head-hash", nil)
+	ri.EXPECT().GetPipelineWatermark("review", "machine/test").Return("head-hash", nil)
 
 	// DiffFiles returns no changes since watermark == HEAD.
 	gs.EXPECT().DiffFiles("head-hash").Return(nil, nil, nil, nil)
 
 	// No dirty facts → session completes immediately.
-	ri.EXPECT().CompleteReviewSession("sess-wm").Return(nil)
+	ri.EXPECT().CompletePipelineSession("sess-wm").Return(nil)
 	gs.EXPECT().HeadCommit().Return("head-hash", nil)
-	ri.EXPECT().SetReviewWatermark("machine/test", "head-hash").Return(nil)
-	ri.EXPECT().WorkItemStats("sess-wm").Return(0, 0, nil)
+	ri.EXPECT().SetPipelineWatermark("review", "machine/test", "head-hash").Return(nil)
+	ri.EXPECT().PipelineWorkItemStats("sess-wm").Return(0, 0, nil)
 
 	r := NewReviewer(gs, idx, ri, NewMockEmbedder(ctrl), nil)
 	result, err := r.StartSession()
@@ -87,15 +87,15 @@ func TestStartSession_WatermarkEmpty_AllFactsDirty(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
 	idx := NewMockSearchIndex(ctrl)
-	ri := NewMockReviewIndex(ctrl)
+	ri := NewMockPipelineIndex(ctrl)
 
 	gs.EXPECT().Branch().Return("machine/test")
-	ri.EXPECT().GCReviewSessions("machine/test", 5).Return(nil)
-	ri.EXPECT().CreateReviewSession("machine/test").Return(&store.ReviewSession{
+	ri.EXPECT().GCPipelineSessions("review", "machine/test", 5).Return(nil)
+	ri.EXPECT().CreatePipelineSession("review", "machine/test").Return(&store.PipelineSession{
 		ID: "sess-2", Branch: "machine/test", Status: "active",
 	}, nil)
 
-	ri.EXPECT().GetReviewWatermark("machine/test").Return("", nil)
+	ri.EXPECT().GetPipelineWatermark("review", "machine/test").Return("", nil)
 
 	// No watermark → index returns all facts.
 	idx.EXPECT().Search(store.SearchQuery{Limit: 100_000}).Return([]store.SearchResult{
@@ -109,7 +109,7 @@ func TestStartSession_WatermarkEmpty_AllFactsDirty(t *testing.T) {
 	idx.EXPECT().ClusterFacts(1.0, 2).Return(store.ClusterResult{}, fmt.Errorf("no embeddings"))
 
 	// Should insert one prune work item (cluster of 2) and one distill item (>1 seed).
-	ri.EXPECT().InsertWorkItem(gomock.Any()).DoAndReturn(func(item store.ReviewWorkItem) error {
+	ri.EXPECT().InsertPipelineWorkItem(gomock.Any()).DoAndReturn(func(item store.PipelineWorkItem) error {
 		if item.StepType != "prune" && item.StepType != "distill" {
 			t.Errorf("unexpected step type: %s", item.StepType)
 		}
@@ -117,7 +117,7 @@ func TestStartSession_WatermarkEmpty_AllFactsDirty(t *testing.T) {
 	}).Times(2)
 
 	// nextItem call.
-	ri.EXPECT().NextWorkItem("sess-2").Return(&store.ReviewWorkItem{
+	ri.EXPECT().NextPipelineWorkItem("sess-2").Return(&store.PipelineWorkItem{
 		ID:        1,
 		SessionID: "sess-2",
 		StepType:  "prune",
@@ -127,7 +127,7 @@ func TestStartSession_WatermarkEmpty_AllFactsDirty(t *testing.T) {
 		}),
 		Priority: 2,
 	}, nil)
-	ri.EXPECT().WorkItemStats("sess-2").Return(0, 2, nil)
+	ri.EXPECT().PipelineWorkItemStats("sess-2").Return(0, 2, nil)
 
 	r := NewReviewer(gs, idx, ri, NewMockEmbedder(ctrl), nil)
 	result, err := r.StartSession()
@@ -155,15 +155,15 @@ func TestStartSession_WithWatermark(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
 	idx := NewMockSearchIndex(ctrl)
-	ri := NewMockReviewIndex(ctrl)
+	ri := NewMockPipelineIndex(ctrl)
 
 	gs.EXPECT().Branch().Return("machine/test")
-	ri.EXPECT().GCReviewSessions("machine/test", 5).Return(nil)
-	ri.EXPECT().CreateReviewSession("machine/test").Return(&store.ReviewSession{
+	ri.EXPECT().GCPipelineSessions("review", "machine/test", 5).Return(nil)
+	ri.EXPECT().CreatePipelineSession("review", "machine/test").Return(&store.PipelineSession{
 		ID: "sess-3", Branch: "machine/test", Status: "active",
 	}, nil)
 
-	ri.EXPECT().GetReviewWatermark("machine/test").Return("old-hash", nil)
+	ri.EXPECT().GetPipelineWatermark("review", "machine/test").Return("old-hash", nil)
 
 	// DiffFiles: only one.md was modified since watermark.
 	gs.EXPECT().DiffFiles("old-hash").Return(nil, []string{"kb/go/one.md"}, nil, nil)
@@ -187,7 +187,7 @@ func TestStartSession_WithWatermark(t *testing.T) {
 	}, nil)
 
 	// One prune item inserted. No distill (only 1 seed).
-	ri.EXPECT().InsertWorkItem(gomock.Any()).DoAndReturn(func(item store.ReviewWorkItem) error {
+	ri.EXPECT().InsertPipelineWorkItem(gomock.Any()).DoAndReturn(func(item store.PipelineWorkItem) error {
 		if item.StepType != "prune" {
 			t.Errorf("expected prune, got %s", item.StepType)
 		}
@@ -195,7 +195,7 @@ func TestStartSession_WithWatermark(t *testing.T) {
 	}).Times(1)
 
 	// nextItem call.
-	ri.EXPECT().NextWorkItem("sess-3").Return(&store.ReviewWorkItem{
+	ri.EXPECT().NextPipelineWorkItem("sess-3").Return(&store.PipelineWorkItem{
 		ID:        1,
 		SessionID: "sess-3",
 		StepType:  "prune",
@@ -205,7 +205,7 @@ func TestStartSession_WithWatermark(t *testing.T) {
 		}),
 		Priority: 2,
 	}, nil)
-	ri.EXPECT().WorkItemStats("sess-3").Return(0, 1, nil)
+	ri.EXPECT().PipelineWorkItemStats("sess-3").Return(0, 1, nil)
 
 	r := NewReviewer(gs, idx, ri, NewMockEmbedder(ctrl), nil)
 	result, err := r.StartSession()
@@ -224,9 +224,9 @@ func TestContinueSession_PruneResponse(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
 	idx := NewMockSearchIndex(ctrl)
-	ri := NewMockReviewIndex(ctrl)
+	ri := NewMockPipelineIndex(ctrl)
 
-	ri.EXPECT().GetReviewSession("sess-1").Return(&store.ReviewSession{
+	ri.EXPECT().GetPipelineSession("sess-1").Return(&store.PipelineSession{
 		ID: "sess-1", Branch: "machine/test", Status: "active",
 	}, nil)
 
@@ -234,7 +234,7 @@ func TestContinueSession_PruneResponse(t *testing.T) {
 		{File: "kb/go/one.md", Title: "Fact one", Body: "Body one.", Type: "observation", Domain: []string{"go"}, Confidence: 0.8, Sources: 1},
 		{File: "kb/go/two.md", Title: "Fact two", Body: "Body two.", Type: "observation", Domain: []string{"go"}, Confidence: 0.8, Sources: 1},
 	}
-	ri.EXPECT().NextWorkItem("sess-1").Return(&store.ReviewWorkItem{
+	ri.EXPECT().NextPipelineWorkItem("sess-1").Return(&store.PipelineWorkItem{
 		ID:        1,
 		SessionID: "sess-1",
 		StepType:  "prune",
@@ -250,17 +250,17 @@ func TestContinueSession_PruneResponse(t *testing.T) {
 	idx.EXPECT().Delete("kb/go/two.md").Return(nil)
 
 
-	ri.EXPECT().SetWorkItemResponse(int64(1), pruneResp).Return(nil)
+	ri.EXPECT().SetPipelineWorkItemResponse(int64(1), pruneResp).Return(nil)
 
 	// nextItem: no more items → complete session.
-	ri.EXPECT().NextWorkItem("sess-1").Return(nil, nil)
-	ri.EXPECT().GetReviewSession("sess-1").Return(&store.ReviewSession{
+	ri.EXPECT().NextPipelineWorkItem("sess-1").Return(nil, nil)
+	ri.EXPECT().GetPipelineSession("sess-1").Return(&store.PipelineSession{
 		ID: "sess-1", Branch: "machine/test", Status: "active",
 	}, nil)
-	ri.EXPECT().CompleteReviewSession("sess-1").Return(nil)
+	ri.EXPECT().CompletePipelineSession("sess-1").Return(nil)
 	gs.EXPECT().HeadCommit().Return("new-hash", nil)
-	ri.EXPECT().SetReviewWatermark("machine/test", "new-hash").Return(nil)
-	ri.EXPECT().WorkItemStats("sess-1").Return(1, 0, nil)
+	ri.EXPECT().SetPipelineWatermark("review", "machine/test", "new-hash").Return(nil)
+	ri.EXPECT().PipelineWorkItemStats("sess-1").Return(1, 0, nil)
 
 	r := NewReviewer(gs, idx, ri, NewMockEmbedder(ctrl), nil)
 	result, err := r.ContinueSession("sess-1", pruneResp)
@@ -279,16 +279,16 @@ func TestContinueSession_ReturnsNextItem(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
 	idx := NewMockSearchIndex(ctrl)
-	ri := NewMockReviewIndex(ctrl)
+	ri := NewMockPipelineIndex(ctrl)
 
-	ri.EXPECT().GetReviewSession("sess-1").Return(&store.ReviewSession{
+	ri.EXPECT().GetPipelineSession("sess-1").Return(&store.PipelineSession{
 		ID: "sess-1", Branch: "machine/test", Status: "active",
 	}, nil)
 
 	facts := []factForLLM{
 		{File: "kb/go/one.md", Title: "Fact one", Body: "Body one.", Type: "observation", Domain: []string{"go"}, Confidence: 0.8, Sources: 1},
 	}
-	ri.EXPECT().NextWorkItem("sess-1").Return(&store.ReviewWorkItem{
+	ri.EXPECT().NextPipelineWorkItem("sess-1").Return(&store.PipelineWorkItem{
 		ID:        1,
 		SessionID: "sess-1",
 		StepType:  "prune",
@@ -298,21 +298,21 @@ func TestContinueSession_ReturnsNextItem(t *testing.T) {
 
 	// Keep everything — no side effects from ApplyPruneDecisions.
 	pruneResp := `{"decisions": [{"path": "kb/go/one.md", "action": "keep"}]}`
-	ri.EXPECT().SetWorkItemResponse(int64(1), pruneResp).Return(nil)
+	ri.EXPECT().SetPipelineWorkItemResponse(int64(1), pruneResp).Return(nil)
 
 	// nextItem: another item waiting.
 	nextFacts := []factForLLM{
 		{File: "kb/go/three.md", Title: "Fact three", Body: "Body three.", Type: "observation", Domain: []string{"go"}, Confidence: 0.8, Sources: 1},
 		{File: "kb/go/four.md", Title: "Fact four", Body: "Body four.", Type: "observation", Domain: []string{"go"}, Confidence: 0.8, Sources: 1},
 	}
-	ri.EXPECT().NextWorkItem("sess-1").Return(&store.ReviewWorkItem{
+	ri.EXPECT().NextPipelineWorkItem("sess-1").Return(&store.PipelineWorkItem{
 		ID:        2,
 		SessionID: "sess-1",
 		StepType:  "distill",
 		FactsJSON: mustJSON(t, nextFacts),
 		Priority:  0,
 	}, nil)
-	ri.EXPECT().WorkItemStats("sess-1").Return(1, 1, nil)
+	ri.EXPECT().PipelineWorkItemStats("sess-1").Return(1, 1, nil)
 
 	r := NewReviewer(gs, idx, ri, NewMockEmbedder(ctrl), nil)
 	result, err := r.ContinueSession("sess-1", pruneResp)
@@ -334,9 +334,9 @@ func TestContinueSession_InvalidSession(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
 	idx := NewMockSearchIndex(ctrl)
-	ri := NewMockReviewIndex(ctrl)
+	ri := NewMockPipelineIndex(ctrl)
 
-	ri.EXPECT().GetReviewSession("bad-id").Return(nil, nil)
+	ri.EXPECT().GetPipelineSession("bad-id").Return(nil, nil)
 
 	r := NewReviewer(gs, idx, ri, NewMockEmbedder(ctrl), nil)
 	_, err := r.ContinueSession("bad-id", "{}")
@@ -349,9 +349,9 @@ func TestContinueSession_CompletedSession(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
 	idx := NewMockSearchIndex(ctrl)
-	ri := NewMockReviewIndex(ctrl)
+	ri := NewMockPipelineIndex(ctrl)
 
-	ri.EXPECT().GetReviewSession("done-sess").Return(&store.ReviewSession{
+	ri.EXPECT().GetPipelineSession("done-sess").Return(&store.PipelineSession{
 		ID: "done-sess", Branch: "machine/test", Status: "completed",
 	}, nil)
 
@@ -366,16 +366,16 @@ func TestContinueSession_InvalidJSON(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
 	idx := NewMockSearchIndex(ctrl)
-	ri := NewMockReviewIndex(ctrl)
+	ri := NewMockPipelineIndex(ctrl)
 
-	ri.EXPECT().GetReviewSession("sess-1").Return(&store.ReviewSession{
+	ri.EXPECT().GetPipelineSession("sess-1").Return(&store.PipelineSession{
 		ID: "sess-1", Branch: "machine/test", Status: "active",
 	}, nil)
 
 	facts := []factForLLM{
 		{File: "kb/go/one.md", Title: "Fact one", Body: "Body one."},
 	}
-	ri.EXPECT().NextWorkItem("sess-1").Return(&store.ReviewWorkItem{
+	ri.EXPECT().NextPipelineWorkItem("sess-1").Return(&store.PipelineWorkItem{
 		ID:        1,
 		SessionID: "sess-1",
 		StepType:  "prune",
@@ -394,9 +394,9 @@ func TestContinueSession_DistillResponse(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
 	idx := NewMockSearchIndex(ctrl)
-	ri := NewMockReviewIndex(ctrl)
+	ri := NewMockPipelineIndex(ctrl)
 
-	ri.EXPECT().GetReviewSession("sess-1").Return(&store.ReviewSession{
+	ri.EXPECT().GetPipelineSession("sess-1").Return(&store.PipelineSession{
 		ID: "sess-1", Branch: "machine/test", Status: "active",
 	}, nil)
 
@@ -404,7 +404,7 @@ func TestContinueSession_DistillResponse(t *testing.T) {
 		{File: "kb/go/one.md", Title: "Fact one", Body: "Body one.", Type: "observation", Domain: []string{"go"}, Confidence: 0.8, Sources: 1},
 		{File: "kb/go/two.md", Title: "Fact two", Body: "Body two.", Type: "observation", Domain: []string{"go"}, Confidence: 0.8, Sources: 1},
 	}
-	ri.EXPECT().NextWorkItem("sess-1").Return(&store.ReviewWorkItem{
+	ri.EXPECT().NextPipelineWorkItem("sess-1").Return(&store.PipelineWorkItem{
 		ID:        2,
 		SessionID: "sess-1",
 		StepType:  "distill",
@@ -429,17 +429,17 @@ func TestContinueSession_DistillResponse(t *testing.T) {
 	idx.EXPECT().Search(gomock.Any()).Return(nil, nil).AnyTimes()
 	idx.EXPECT().ClusterFacts(1.0, 2).Return(store.ClusterResult{}, fmt.Errorf("no embeddings"))
 
-	ri.EXPECT().SetWorkItemResponse(int64(2), distillResp).Return(nil)
+	ri.EXPECT().SetPipelineWorkItemResponse(int64(2), distillResp).Return(nil)
 
 	// nextItem: done.
-	ri.EXPECT().NextWorkItem("sess-1").Return(nil, nil)
-	ri.EXPECT().GetReviewSession("sess-1").Return(&store.ReviewSession{
+	ri.EXPECT().NextPipelineWorkItem("sess-1").Return(nil, nil)
+	ri.EXPECT().GetPipelineSession("sess-1").Return(&store.PipelineSession{
 		ID: "sess-1", Branch: "machine/test", Status: "active",
 	}, nil)
-	ri.EXPECT().CompleteReviewSession("sess-1").Return(nil)
+	ri.EXPECT().CompletePipelineSession("sess-1").Return(nil)
 	gs.EXPECT().HeadCommit().Return("new-hash", nil)
-	ri.EXPECT().SetReviewWatermark("machine/test", "new-hash").Return(nil)
-	ri.EXPECT().WorkItemStats("sess-1").Return(1, 0, nil)
+	ri.EXPECT().SetPipelineWatermark("review", "machine/test", "new-hash").Return(nil)
+	ri.EXPECT().PipelineWorkItemStats("sess-1").Return(1, 0, nil)
 
 	r := NewReviewer(gs, idx, ri, NewMockEmbedder(ctrl), nil)
 	result, err := r.ContinueSession("sess-1", distillResp)
@@ -455,16 +455,16 @@ func TestContinueSession_ValidationError(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
 	idx := NewMockSearchIndex(ctrl)
-	ri := NewMockReviewIndex(ctrl)
+	ri := NewMockPipelineIndex(ctrl)
 
-	ri.EXPECT().GetReviewSession("sess-1").Return(&store.ReviewSession{
+	ri.EXPECT().GetPipelineSession("sess-1").Return(&store.PipelineSession{
 		ID: "sess-1", Branch: "machine/test", Status: "active",
 	}, nil)
 
 	facts := []factForLLM{
 		{File: "kb/go/one.md", Title: "Fact one", Body: "Body one."},
 	}
-	ri.EXPECT().NextWorkItem("sess-1").Return(&store.ReviewWorkItem{
+	ri.EXPECT().NextPipelineWorkItem("sess-1").Return(&store.PipelineWorkItem{
 		ID:        1,
 		SessionID: "sess-1",
 		StepType:  "prune",
@@ -486,9 +486,9 @@ func TestDirtyFacts_NoWatermark_UsesIndex(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
 	idx := NewMockSearchIndex(ctrl)
-	ri := NewMockReviewIndex(ctrl)
+	ri := NewMockPipelineIndex(ctrl)
 
-	ri.EXPECT().GetReviewWatermark("machine/test").Return("", nil)
+	ri.EXPECT().GetPipelineWatermark("review", "machine/test").Return("", nil)
 	idx.EXPECT().Search(store.SearchQuery{Limit: 100_000}).Return([]store.SearchResult{
 		{FactWithBody: store.FactWithBody{
 			FactRecord: store.FactRecord{Path: "kb/go/one.md", Title: "Fact one", Type: "observation", Domain: []string{"go"}, Entities: []string{"Go"}, Confidence: 0.9, Sources: 2},
@@ -523,9 +523,9 @@ func TestDirtyFacts_Incremental_OnlyChangedFiles(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
 	idx := NewMockSearchIndex(ctrl)
-	ri := NewMockReviewIndex(ctrl)
+	ri := NewMockPipelineIndex(ctrl)
 
-	ri.EXPECT().GetReviewWatermark("machine/test").Return("abc123", nil)
+	ri.EXPECT().GetPipelineWatermark("review", "machine/test").Return("abc123", nil)
 	gs.EXPECT().DiffFiles("abc123").Return(
 		[]string{"kb/go/new.md"},           // added
 		[]string{"kb/go/changed.md"},       // modified
@@ -556,9 +556,9 @@ func TestDirtyFacts_Incremental_SkipsDeletedAndNonMD(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
 	idx := NewMockSearchIndex(ctrl)
-	ri := NewMockReviewIndex(ctrl)
+	ri := NewMockPipelineIndex(ctrl)
 
-	ri.EXPECT().GetReviewWatermark("machine/test").Return("abc123", nil)
+	ri.EXPECT().GetPipelineWatermark("review", "machine/test").Return("abc123", nil)
 	gs.EXPECT().DiffFiles("abc123").Return(
 		[]string{"kb/go/gone.md", "README.txt"}, // added: one .md (unreadable), one non-.md
 		nil, nil, nil,
@@ -582,9 +582,9 @@ func TestContinueSession_RAPTOR_EnqueuesDeeper(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
 	idx := NewMockSearchIndex(ctrl)
-	ri := NewMockReviewIndex(ctrl)
+	ri := NewMockPipelineIndex(ctrl)
 
-	ri.EXPECT().GetReviewSession("sess-r").Return(&store.ReviewSession{
+	ri.EXPECT().GetPipelineSession("sess-r").Return(&store.PipelineSession{
 		ID: "sess-r", Branch: "machine/test", Status: "active",
 	}, nil)
 
@@ -595,7 +595,7 @@ func TestContinueSession_RAPTOR_EnqueuesDeeper(t *testing.T) {
 	}
 
 	// Current work item is distill at depth 0.
-	ri.EXPECT().NextWorkItem("sess-r").Return(&store.ReviewWorkItem{
+	ri.EXPECT().NextPipelineWorkItem("sess-r").Return(&store.PipelineWorkItem{
 		ID:        1,
 		SessionID: "sess-r",
 		StepType:  "distill",
@@ -628,16 +628,16 @@ func TestContinueSession_RAPTOR_EnqueuesDeeper(t *testing.T) {
 	idx.EXPECT().ClusterFacts(1.0, 2).Return(store.ClusterResult{}, fmt.Errorf("no embeddings"))
 
 	// Expect one new work item inserted at depth 1.
-	var insertedItem store.ReviewWorkItem
-	ri.EXPECT().InsertWorkItem(gomock.Any()).DoAndReturn(func(item store.ReviewWorkItem) error {
+	var insertedItem store.PipelineWorkItem
+	ri.EXPECT().InsertPipelineWorkItem(gomock.Any()).DoAndReturn(func(item store.PipelineWorkItem) error {
 		insertedItem = item
 		return nil
 	}).Times(1)
 
-	ri.EXPECT().SetWorkItemResponse(int64(1), distillResp).Return(nil)
+	ri.EXPECT().SetPipelineWorkItemResponse(int64(1), distillResp).Return(nil)
 
 	// nextItem: return the RAPTOR item so session is NOT done.
-	ri.EXPECT().NextWorkItem("sess-r").Return(&store.ReviewWorkItem{
+	ri.EXPECT().NextPipelineWorkItem("sess-r").Return(&store.PipelineWorkItem{
 		ID:        2,
 		SessionID: "sess-r",
 		StepType:  "distill",
@@ -646,7 +646,7 @@ func TestContinueSession_RAPTOR_EnqueuesDeeper(t *testing.T) {
 		Priority:  -1,
 		Depth:     1,
 	}, nil)
-	ri.EXPECT().WorkItemStats("sess-r").Return(1, 1, nil)
+	ri.EXPECT().PipelineWorkItemStats("sess-r").Return(1, 1, nil)
 
 	r := NewReviewer(gs, idx, ri, NewMockEmbedder(ctrl), nil)
 	result, err := r.ContinueSession("sess-r", distillResp)
@@ -684,9 +684,9 @@ func TestContinueSession_RAPTOR_StopsAtMaxDepth(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
 	idx := NewMockSearchIndex(ctrl)
-	ri := NewMockReviewIndex(ctrl)
+	ri := NewMockPipelineIndex(ctrl)
 
-	ri.EXPECT().GetReviewSession("sess-max").Return(&store.ReviewSession{
+	ri.EXPECT().GetPipelineSession("sess-max").Return(&store.PipelineSession{
 		ID: "sess-max", Branch: "machine/test", Status: "active",
 	}, nil)
 
@@ -696,7 +696,7 @@ func TestContinueSession_RAPTOR_StopsAtMaxDepth(t *testing.T) {
 	}
 
 	// Work item at max depth (3) — RAPTOR should NOT enqueue deeper.
-	ri.EXPECT().NextWorkItem("sess-max").Return(&store.ReviewWorkItem{
+	ri.EXPECT().NextPipelineWorkItem("sess-max").Return(&store.PipelineWorkItem{
 		ID:        5,
 		SessionID: "sess-max",
 		StepType:  "distill",
@@ -713,17 +713,17 @@ func TestContinueSession_RAPTOR_StopsAtMaxDepth(t *testing.T) {
 
 	// No InsertWorkItem expected — max depth reached.
 
-	ri.EXPECT().SetWorkItemResponse(int64(5), distillResp).Return(nil)
+	ri.EXPECT().SetPipelineWorkItemResponse(int64(5), distillResp).Return(nil)
 
 	// nextItem: done.
-	ri.EXPECT().NextWorkItem("sess-max").Return(nil, nil)
-	ri.EXPECT().GetReviewSession("sess-max").Return(&store.ReviewSession{
+	ri.EXPECT().NextPipelineWorkItem("sess-max").Return(nil, nil)
+	ri.EXPECT().GetPipelineSession("sess-max").Return(&store.PipelineSession{
 		ID: "sess-max", Branch: "machine/test", Status: "active",
 	}, nil)
-	ri.EXPECT().CompleteReviewSession("sess-max").Return(nil)
+	ri.EXPECT().CompletePipelineSession("sess-max").Return(nil)
 	gs.EXPECT().HeadCommit().Return("final-hash", nil)
-	ri.EXPECT().SetReviewWatermark("machine/test", "final-hash").Return(nil)
-	ri.EXPECT().WorkItemStats("sess-max").Return(1, 0, nil)
+	ri.EXPECT().SetPipelineWatermark("review", "machine/test", "final-hash").Return(nil)
+	ri.EXPECT().PipelineWorkItemStats("sess-max").Return(1, 0, nil)
 
 	r := NewReviewer(gs, idx, ri, NewMockEmbedder(ctrl), nil)
 	result, err := r.ContinueSession("sess-max", distillResp)
@@ -739,18 +739,18 @@ func TestRunAll_ProcessesAllWorkItems(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
 	idx := NewMockSearchIndex(ctrl)
-	ri := NewMockReviewIndex(ctrl)
+	ri := NewMockPipelineIndex(ctrl)
 	adapter := NewMockLLMAdapter(ctrl)
 
 	// --- StartSession setup ---
 	gs.EXPECT().Branch().Return("machine/test")
-	ri.EXPECT().GCReviewSessions("machine/test", 5).Return(nil)
-	ri.EXPECT().CreateReviewSession("machine/test").Return(&store.ReviewSession{
+	ri.EXPECT().GCPipelineSessions("review", "machine/test", 5).Return(nil)
+	ri.EXPECT().CreatePipelineSession("review", "machine/test").Return(&store.PipelineSession{
 		ID: "sess-run", Branch: "machine/test", Status: "active",
 	}, nil)
 
 	// No watermark → all facts dirty via index.
-	ri.EXPECT().GetReviewWatermark("machine/test").Return("", nil)
+	ri.EXPECT().GetPipelineWatermark("review", "machine/test").Return("", nil)
 	idx.EXPECT().Search(store.SearchQuery{Limit: 100_000}).Return([]store.SearchResult{
 		{FactWithBody: store.FactWithBody{FactRecord: store.FactRecord{Path: "kb/go/one.md", Title: "Fact one", Type: "observation", Domain: []string{"go"}, Confidence: 0.8, Sources: 1}, Body: "Body one."}},
 		{FactWithBody: store.FactWithBody{FactRecord: store.FactRecord{Path: "kb/go/two.md", Title: "Fact two", Type: "observation", Domain: []string{"go"}, Confidence: 0.8, Sources: 1}, Body: "Body two."}},
@@ -761,14 +761,14 @@ func TestRunAll_ProcessesAllWorkItems(t *testing.T) {
 	idx.EXPECT().ClusterFacts(1.0, 2).Return(store.ClusterResult{}, fmt.Errorf("no embeddings")).AnyTimes()
 
 	// Insert prune + distill work items (2 seeds, 1 cluster of 2).
-	ri.EXPECT().InsertWorkItem(gomock.Any()).Return(nil).Times(2)
+	ri.EXPECT().InsertPipelineWorkItem(gomock.Any()).Return(nil).Times(2)
 
 	// --- First nextItem: prune ---
 	pruneFacts := []factForLLM{
 		{File: "kb/go/one.md", Title: "Fact one", Body: "Body one.", Type: "observation", Domain: []string{"go"}, Confidence: 0.8, Sources: 1},
 		{File: "kb/go/two.md", Title: "Fact two", Body: "Body two.", Type: "observation", Domain: []string{"go"}, Confidence: 0.8, Sources: 1},
 	}
-	pruneItem := &store.ReviewWorkItem{
+	pruneItem := &store.PipelineWorkItem{
 		ID: 1, SessionID: "sess-run", StepType: "prune",
 		FactsJSON: mustJSON(t, pruneFacts), Priority: 2,
 	}
@@ -777,29 +777,29 @@ func TestRunAll_ProcessesAllWorkItems(t *testing.T) {
 		{File: "kb/go/one.md", Title: "Fact one", Body: "Body one.", Type: "observation", Domain: []string{"go"}, Confidence: 0.8, Sources: 1},
 		{File: "kb/go/two.md", Title: "Fact two", Body: "Body two.", Type: "observation", Domain: []string{"go"}, Confidence: 0.8, Sources: 1},
 	}
-	distillItem := &store.ReviewWorkItem{
+	distillItem := &store.PipelineWorkItem{
 		ID: 2, SessionID: "sess-run", StepType: "distill",
 		FactsJSON: mustJSON(t, distillFacts), Priority: 0,
 	}
 
 	// NextWorkItem calls: StartSession(1st), ContinueSession-prune(current+next), ContinueSession-distill(current+next=nil)
-	nextWorkItemCall := ri.EXPECT().NextWorkItem("sess-run")
+	nextWorkItemCall := ri.EXPECT().NextPipelineWorkItem("sess-run")
 	nextWorkItemCall.Return(pruneItem, nil) // StartSession → first item
 
 	// ContinueSession for prune: first call gets current item, second gets next item
-	ri.EXPECT().GetReviewSession("sess-run").Return(&store.ReviewSession{
+	ri.EXPECT().GetPipelineSession("sess-run").Return(&store.PipelineSession{
 		ID: "sess-run", Branch: "machine/test", Status: "active",
 	}, nil).AnyTimes()
 
 	// After first nextItem in StartSession, ContinueSession calls NextWorkItem twice:
 	// once to get current item to process, once to get next item.
-	ri.EXPECT().NextWorkItem("sess-run").Return(pruneItem, nil)  // ContinueSession: current item
-	ri.EXPECT().WorkItemStats("sess-run").Return(0, 2, nil)       // StartSession stats
+	ri.EXPECT().NextPipelineWorkItem("sess-run").Return(pruneItem, nil)  // ContinueSession: current item
+	ri.EXPECT().PipelineWorkItemStats("sess-run").Return(0, 2, nil)       // StartSession stats
 
 	pruneResp := `{"decisions": [{"path": "kb/go/one.md", "action": "keep"}, {"path": "kb/go/two.md", "action": "keep"}]}`
-	ri.EXPECT().SetWorkItemResponse(int64(1), pruneResp).Return(nil)
-	ri.EXPECT().NextWorkItem("sess-run").Return(distillItem, nil) // after prune: next is distill
-	ri.EXPECT().WorkItemStats("sess-run").Return(1, 1, nil)
+	ri.EXPECT().SetPipelineWorkItemResponse(int64(1), pruneResp).Return(nil)
+	ri.EXPECT().NextPipelineWorkItem("sess-run").Return(distillItem, nil) // after prune: next is distill
+	ri.EXPECT().PipelineWorkItemStats("sess-run").Return(1, 1, nil)
 
 	// LLM call 1: prune
 	adapter.EXPECT().Complete(
@@ -808,17 +808,17 @@ func TestRunAll_ProcessesAllWorkItems(t *testing.T) {
 	).Return(pruneResp, nil)
 
 	// ContinueSession for distill
-	ri.EXPECT().NextWorkItem("sess-run").Return(distillItem, nil) // current distill item
+	ri.EXPECT().NextPipelineWorkItem("sess-run").Return(distillItem, nil) // current distill item
 
 	distillResp := `{"synthesize": [], "retract": []}`
-	ri.EXPECT().SetWorkItemResponse(int64(2), distillResp).Return(nil)
+	ri.EXPECT().SetPipelineWorkItemResponse(int64(2), distillResp).Return(nil)
 
 	// After distill: no more items → complete session
-	ri.EXPECT().NextWorkItem("sess-run").Return(nil, nil)
-	ri.EXPECT().CompleteReviewSession("sess-run").Return(nil)
+	ri.EXPECT().NextPipelineWorkItem("sess-run").Return(nil, nil)
+	ri.EXPECT().CompletePipelineSession("sess-run").Return(nil)
 	gs.EXPECT().HeadCommit().Return("final-hash", nil)
-	ri.EXPECT().SetReviewWatermark("machine/test", "final-hash").Return(nil)
-	ri.EXPECT().WorkItemStats("sess-run").Return(2, 0, nil)
+	ri.EXPECT().SetPipelineWatermark("review", "machine/test", "final-hash").Return(nil)
+	ri.EXPECT().PipelineWorkItemStats("sess-run").Return(2, 0, nil)
 
 	// LLM call 2: distill
 	adapter.EXPECT().Complete(
@@ -837,24 +837,24 @@ func TestRunAll_NoDirtyFacts(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
 	idx := NewMockSearchIndex(ctrl)
-	ri := NewMockReviewIndex(ctrl)
+	ri := NewMockPipelineIndex(ctrl)
 	adapter := NewMockLLMAdapter(ctrl)
 
 	gs.EXPECT().Branch().Return("machine/test")
-	ri.EXPECT().GCReviewSessions("machine/test", 5).Return(nil)
-	ri.EXPECT().CreateReviewSession("machine/test").Return(&store.ReviewSession{
+	ri.EXPECT().GCPipelineSessions("review", "machine/test", 5).Return(nil)
+	ri.EXPECT().CreatePipelineSession("review", "machine/test").Return(&store.PipelineSession{
 		ID: "sess-empty", Branch: "machine/test", Status: "active",
 	}, nil)
 
 	// No watermark, index returns empty → no dirty facts.
-	ri.EXPECT().GetReviewWatermark("machine/test").Return("", nil)
+	ri.EXPECT().GetPipelineWatermark("review", "machine/test").Return("", nil)
 	idx.EXPECT().Search(store.SearchQuery{Limit: 100_000}).Return(nil, nil)
 
 	// Complete session immediately.
-	ri.EXPECT().CompleteReviewSession("sess-empty").Return(nil)
+	ri.EXPECT().CompletePipelineSession("sess-empty").Return(nil)
 	gs.EXPECT().HeadCommit().Return("abc123", nil)
-	ri.EXPECT().SetReviewWatermark("machine/test", "abc123").Return(nil)
-	ri.EXPECT().WorkItemStats("sess-empty").Return(0, 0, nil)
+	ri.EXPECT().SetPipelineWatermark("review", "machine/test", "abc123").Return(nil)
+	ri.EXPECT().PipelineWorkItemStats("sess-empty").Return(0, 0, nil)
 
 	// adapter.Complete should NOT be called at all.
 

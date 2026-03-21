@@ -14,31 +14,31 @@ import (
 	"knomit/internal/store"
 )
 
-// ReviewIndex is the interface for review session storage (subset of store.Index).
-type ReviewIndex interface {
-	GetReviewWatermark(branch string) (string, error)
-	SetReviewWatermark(branch, hash string) error
-	CreateReviewSession(branch string) (*store.ReviewSession, error)
-	GetReviewSession(id string) (*store.ReviewSession, error)
-	CompleteReviewSession(id string) error
-	InsertWorkItem(item store.ReviewWorkItem) error
-	NextWorkItem(sessionID string) (*store.ReviewWorkItem, error)
-	SetWorkItemResponse(id int64, response string) error
-	WorkItemStats(sessionID string) (completed, remaining int, err error)
-	GCReviewSessions(branch string, keep int) error
+// PipelineIndex is the interface for pipeline session storage (subset of store.Index).
+type PipelineIndex interface {
+	GetPipelineWatermark(tool, branch string) (string, error)
+	SetPipelineWatermark(tool, branch, hash string) error
+	CreatePipelineSession(tool, branch string) (*store.PipelineSession, error)
+	GetPipelineSession(id string) (*store.PipelineSession, error)
+	CompletePipelineSession(id string) error
+	InsertPipelineWorkItem(item store.PipelineWorkItem) error
+	NextPipelineWorkItem(sessionID string) (*store.PipelineWorkItem, error)
+	SetPipelineWorkItemResponse(id int64, response string) error
+	PipelineWorkItemStats(sessionID string) (completed, remaining int, err error)
+	GCPipelineSessions(tool, branch string, keep int) error
 }
 
 // Reviewer orchestrates multi-turn review sessions.
 type Reviewer struct {
 	gs         GitStore
 	idx        SearchIndex
-	reviewIdx  ReviewIndex
+	reviewIdx  PipelineIndex
 	embedder   Embedder
 	onProgress func(ProgressEvent)
 }
 
 // NewReviewer creates a new review orchestrator.
-func NewReviewer(gs GitStore, idx SearchIndex, reviewIdx ReviewIndex, embedder Embedder, onProgress func(ProgressEvent)) *Reviewer {
+func NewReviewer(gs GitStore, idx SearchIndex, reviewIdx PipelineIndex, embedder Embedder, onProgress func(ProgressEvent)) *Reviewer {
 	if onProgress == nil {
 		onProgress = func(ProgressEvent) {}
 	}
@@ -51,11 +51,11 @@ func (r *Reviewer) StartSession() (*mcp.ReviewResult, error) {
 	branch := r.gs.Branch()
 
 	// GC old sessions.
-	if err := r.reviewIdx.GCReviewSessions(branch, 5); err != nil {
+	if err := r.reviewIdx.GCPipelineSessions("review", branch, 5); err != nil {
 		log.Warn().Err(err).Msg("review: GC old sessions failed")
 	}
 
-	sess, err := r.reviewIdx.CreateReviewSession(branch)
+	sess, err := r.reviewIdx.CreatePipelineSession("review", branch)
 	if err != nil {
 		return nil, fmt.Errorf("review: create session: %w", err)
 	}
@@ -97,14 +97,14 @@ func (r *Reviewer) StartSession() (*mcp.ReviewResult, error) {
 		if err != nil {
 			return nil, fmt.Errorf("review: marshal cluster %d: %w", i, err)
 		}
-		item := store.ReviewWorkItem{
+		item := store.PipelineWorkItem{
 			SessionID:  sess.ID,
 			StepType:   "prune",
 			ClusterKey: fmt.Sprintf("cluster-%d", i),
 			FactsJSON:  string(factsJSON),
 			Priority:   float64(len(cluster)),
 		}
-		if err := r.reviewIdx.InsertWorkItem(item); err != nil {
+		if err := r.reviewIdx.InsertPipelineWorkItem(item); err != nil {
 			return nil, fmt.Errorf("review: insert prune item: %w", err)
 		}
 	}
@@ -115,14 +115,14 @@ func (r *Reviewer) StartSession() (*mcp.ReviewResult, error) {
 		if err != nil {
 			return nil, fmt.Errorf("review: marshal seeds for distill: %w", err)
 		}
-		item := store.ReviewWorkItem{
+		item := store.PipelineWorkItem{
 			SessionID:  sess.ID,
 			StepType:   "distill",
 			ClusterKey: "distill-all",
 			FactsJSON:  string(factsJSON),
 			Priority:   0.0,
 		}
-		if err := r.reviewIdx.InsertWorkItem(item); err != nil {
+		if err := r.reviewIdx.InsertPipelineWorkItem(item); err != nil {
 			return nil, fmt.Errorf("review: insert distill item: %w", err)
 		}
 	}
@@ -136,7 +136,7 @@ func (r *Reviewer) StartSession() (*mcp.ReviewResult, error) {
 // ContinueSession processes the model's response for the current work item
 // and returns the next item, or done if the session is complete.
 func (r *Reviewer) ContinueSession(sessionID, response string) (*mcp.ReviewResult, error) {
-	sess, err := r.reviewIdx.GetReviewSession(sessionID)
+	sess, err := r.reviewIdx.GetPipelineSession(sessionID)
 	if err != nil {
 		return nil, fmt.Errorf("review: get session: %w", err)
 	}
@@ -148,7 +148,7 @@ func (r *Reviewer) ContinueSession(sessionID, response string) (*mcp.ReviewResul
 	}
 
 	// Get the current (unanswered) work item.
-	item, err := r.reviewIdx.NextWorkItem(sessionID)
+	item, err := r.reviewIdx.NextPipelineWorkItem(sessionID)
 	if err != nil {
 		return nil, fmt.Errorf("review: next work item: %w", err)
 	}
@@ -215,7 +215,7 @@ func (r *Reviewer) ContinueSession(sessionID, response string) (*mcp.ReviewResul
 				nextDepth := item.Depth + 1
 				for ci, cluster := range raptorClusters {
 					factsJSON, _ := json.Marshal(cluster)
-					wItem := store.ReviewWorkItem{
+					wItem := store.PipelineWorkItem{
 						SessionID:  sessionID,
 						StepType:   "distill",
 						ClusterKey: fmt.Sprintf("raptor-d%d-c%d", nextDepth, ci),
@@ -223,7 +223,7 @@ func (r *Reviewer) ContinueSession(sessionID, response string) (*mcp.ReviewResul
 						Priority:   float64(-nextDepth),
 						Depth:      nextDepth,
 					}
-					if err := r.reviewIdx.InsertWorkItem(wItem); err != nil {
+					if err := r.reviewIdx.InsertPipelineWorkItem(wItem); err != nil {
 						log.Warn().Err(err).Msg("review: RAPTOR enqueue failed")
 					}
 				}
@@ -238,7 +238,7 @@ func (r *Reviewer) ContinueSession(sessionID, response string) (*mcp.ReviewResul
 	}
 
 	// Mark item as answered.
-	if err := r.reviewIdx.SetWorkItemResponse(item.ID, response); err != nil {
+	if err := r.reviewIdx.SetPipelineWorkItemResponse(item.ID, response); err != nil {
 		return nil, fmt.Errorf("review: set response: %w", err)
 	}
 
@@ -286,7 +286,7 @@ func (r *Reviewer) RunAll(ctx context.Context, adapter llm.LLMAdapter) error {
 // without reading every file from git.
 // Incremental (has watermark): uses DiffFiles to read only changed paths.
 func (r *Reviewer) dirtyFacts(branch string) ([]factForLLM, error) {
-	watermark, err := r.reviewIdx.GetReviewWatermark(branch)
+	watermark, err := r.reviewIdx.GetPipelineWatermark("review", branch)
 	if err != nil {
 		return nil, fmt.Errorf("get watermark: %w", err)
 	}
@@ -349,13 +349,13 @@ func (r *Reviewer) dirtyFacts(branch string) ([]factForLLM, error) {
 // nextItem fetches the next unanswered work item, renders its prompt, and
 // returns a ReviewResult. If no items remain, completes the session.
 func (r *Reviewer) nextItem(sessionID string) (*mcp.ReviewResult, error) {
-	item, err := r.reviewIdx.NextWorkItem(sessionID)
+	item, err := r.reviewIdx.NextPipelineWorkItem(sessionID)
 	if err != nil {
 		return nil, fmt.Errorf("review: next item: %w", err)
 	}
 
 	if item == nil {
-		sess, err := r.reviewIdx.GetReviewSession(sessionID)
+		sess, err := r.reviewIdx.GetPipelineSession(sessionID)
 		if err != nil {
 			return nil, fmt.Errorf("review: get session for complete: %w", err)
 		}
@@ -380,7 +380,7 @@ func (r *Reviewer) nextItem(sessionID string) (*mcp.ReviewResult, error) {
 		return nil, fmt.Errorf("review: render %s prompt: %w", item.StepType, err)
 	}
 
-	completed, remaining, err := r.reviewIdx.WorkItemStats(sessionID)
+	completed, remaining, err := r.reviewIdx.PipelineWorkItemStats(sessionID)
 	if err != nil {
 		return nil, fmt.Errorf("review: work item stats: %w", err)
 	}
@@ -400,8 +400,8 @@ func (r *Reviewer) nextItem(sessionID string) (*mcp.ReviewResult, error) {
 }
 
 // completeSession marks the session done and advances the watermark.
-func (r *Reviewer) completeSession(sess *store.ReviewSession) (*mcp.ReviewResult, error) {
-	if err := r.reviewIdx.CompleteReviewSession(sess.ID); err != nil {
+func (r *Reviewer) completeSession(sess *store.PipelineSession) (*mcp.ReviewResult, error) {
+	if err := r.reviewIdx.CompletePipelineSession(sess.ID); err != nil {
 		return nil, fmt.Errorf("review: complete session: %w", err)
 	}
 
@@ -409,12 +409,12 @@ func (r *Reviewer) completeSession(sess *store.ReviewSession) (*mcp.ReviewResult
 	if err != nil {
 		log.Warn().Err(err).Msg("review: could not get HEAD for watermark")
 	} else {
-		if err := r.reviewIdx.SetReviewWatermark(sess.Branch, headHash); err != nil {
+		if err := r.reviewIdx.SetPipelineWatermark("review", sess.Branch, headHash); err != nil {
 			log.Warn().Err(err).Msg("review: could not advance watermark")
 		}
 	}
 
-	completed, _, err := r.reviewIdx.WorkItemStats(sess.ID)
+	completed, _, err := r.reviewIdx.PipelineWorkItemStats(sess.ID)
 	if err != nil {
 		log.Warn().Err(err).Msg("review: could not get final stats")
 	}

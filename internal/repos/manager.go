@@ -297,7 +297,7 @@ func (m *Manager) openOne(name, dbPath string, isDefault bool) (*openedRepo, *Re
 	// doesn't treat every existing fact as dirty.
 	if freshInit {
 		if head, err := gs.HeadCommit(); err == nil {
-			if err := idx.SetReviewWatermark(gs.Branch(), head); err != nil {
+			if err := idx.SetPipelineWatermark("review", gs.Branch(), head); err != nil {
 				log.Warn().Err(err).Msg("review watermark: initial set failed")
 			}
 		}
