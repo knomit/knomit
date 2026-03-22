@@ -125,7 +125,7 @@ export function HistoryTimeline({ state, dispatch }: Props) {
   }, [state.rightPanelFocused, filtered, selectedIdx, navigate, dispatch]);
 
   return (
-    <div ref={containerRef} style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
+    <div data-testid="history-timeline" ref={containerRef} style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
       <div style={{ padding: '6px 12px', borderBottom: '1px solid #333', display: 'flex', flexWrap: 'wrap', gap: 4, alignItems: 'center', minHeight: 30 }}>
         {availableOps.map(op => {
           const s = opStyles[op] || defaultOpStyle;
@@ -168,6 +168,8 @@ export function HistoryTimeline({ state, dispatch }: Props) {
           return (
             <div
               key={entry.commit}
+              data-testid="history-commit"
+              data-hash={entry.commit}
               ref={el => { itemRefs.current[i] = el; }}
               style={{
                 display: 'flex',

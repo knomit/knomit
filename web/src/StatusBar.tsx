@@ -37,8 +37,8 @@ export function StatusBar({ state, dispatch }: Props) {
   const color = taskMsg ? taskColor : '#888';
 
   return (
-    <div style={{ height: 24, background: '#0d0d0d', borderTop: '1px solid #222', display: 'flex', alignItems: 'center', padding: '0 12px', flexShrink: 0, gap: 8 }}>
-      {msg && <span style={{ color, fontSize: 11, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{msg}</span>}
+    <div data-testid="status-bar" style={{ height: 24, background: '#0d0d0d', borderTop: '1px solid #222', display: 'flex', alignItems: 'center', padding: '0 12px', flexShrink: 0, gap: 8 }}>
+      {msg && <span data-testid="status-message" style={{ color, fontSize: 11, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{msg}</span>}
       <div style={{ flex: 1 }} />
     </div>
   );

@@ -13,6 +13,7 @@ import (
 	"go.uber.org/mock/gomock"
 	"knomit/internal/git"
 	"knomit/internal/llm"
+	"knomit/internal/repos"
 	"knomit/internal/store"
 )
 
@@ -373,14 +374,14 @@ func TestHandleSynthesizeStart_NoDeps(t *testing.T) {
 	}
 }
 
-func TestHandleSynthesizeStart_InvalidRecipe(t *testing.T) {
+func TestHandleSynthesizeStart_NoReviewer(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
 
-	hub := NewTaskHub(context.Background())
-	synthDeps := &SynthDeps{Adapter: &fakeAdapter{}}
-	rm := NewRepoManager()
-	rm.Set("knomit", &RepoInstance{
+	hub := repos.NewTaskHub(context.Background())
+	synthDeps := &repos.SynthDeps{Adapter: &fakeAdapter{}}
+	rm := repos.New(context.Background(), repos.Deps{})
+	rm.Set("knomit", &repos.RepoInstance{
 		Name:      "knomit",
 		GS:        gs,
 		Hub:       hub,
@@ -388,10 +389,11 @@ func TestHandleSynthesizeStart_InvalidRecipe(t *testing.T) {
 	})
 	handler := NewRouter(rm, nil, false, "kb")
 
-	rr := doRequest(t, handler, http.MethodPost, "/api/v1/knomit/synthesize", "not: valid: yaml: [[[")
+	rr := doRequest(t, handler, http.MethodPost, "/api/v1/knomit/synthesize", "")
 
-	if rr.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400; body: %s", rr.Code, rr.Body.String())
+	// SynthDeps without Reviewer returns 503.
+	if rr.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503; body: %s", rr.Code, rr.Body.String())
 	}
 }
 
@@ -403,9 +405,9 @@ func TestHandleEvents_InitialStatus(t *testing.T) {
 	gs.EXPECT().HeadCommit().Return("abc123", nil).AnyTimes()
 	mockIdx := NewMockSearchIndex(ctrl)
 
-	hub := NewTaskHub(context.Background())
-	rm := NewRepoManager()
-	rm.Set("knomit", &RepoInstance{
+	hub := repos.NewTaskHub(context.Background())
+	rm := repos.New(context.Background(), repos.Deps{})
+	rm.Set("knomit", &repos.RepoInstance{
 		Name: "knomit",
 		GS:   gs,
 		Idx:  mockIdx,
@@ -435,9 +437,9 @@ func TestHandleEvents_TaskEvents(t *testing.T) {
 	gs := NewMockGitStore(ctrl)
 	gs.EXPECT().HeadCommit().Return("abc123", nil).AnyTimes()
 
-	hub := NewTaskHub(context.Background())
-	rm := NewRepoManager()
-	rm.Set("knomit", &RepoInstance{
+	hub := repos.NewTaskHub(context.Background())
+	rm := repos.New(context.Background(), repos.Deps{})
+	rm.Set("knomit", &repos.RepoInstance{
 		Name: "knomit",
 		GS:   gs,
 		Hub:  hub,
@@ -453,8 +455,8 @@ func TestHandleEvents_TaskEvents(t *testing.T) {
 	// Start a manual task after a small delay so the SSE connection is open.
 	go func() {
 		time.Sleep(50 * time.Millisecond)
-		hub.Start("test", func(_ context.Context, emit func(TaskEvent)) {
-			emit(TaskEvent{Status: "done", Message: "test task done"})
+		hub.Start("test", func(_ context.Context, emit func(repos.TaskEvent)) {
+			emit(repos.TaskEvent{Status: "done", Message: "test task done"})
 		})
 	}()
 
@@ -562,9 +564,9 @@ func TestHandleEvents_SyncAndPushEvents(t *testing.T) {
 	gs := NewMockGitStore(ctrl)
 	gs.EXPECT().HeadCommit().Return("abc123", nil).AnyTimes()
 
-	hub := NewTaskHub(context.Background())
-	rm := NewRepoManager()
-	rm.Set("knomit", &RepoInstance{
+	hub := repos.NewTaskHub(context.Background())
+	rm := repos.New(context.Background(), repos.Deps{})
+	rm.Set("knomit", &repos.RepoInstance{
 		Name: "knomit",
 		GS:   gs,
 		Hub:  hub,

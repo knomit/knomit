@@ -625,9 +625,9 @@ func TestSearchHybrid(t *testing.T) {
 	vecB := []float32{0.7, 0.7, 0, 0}
 
 	m := map[string][]float32{
-		"postgres database replication": vecA,
-		"postgres cache storage":        vecB,
-		"postgres":                      vecA, // query text
+		"Alpha postgres database replication": vecA,
+		"Beta postgres cache storage":         vecB,
+		"postgres":                            vecA, // query text
 	}
 	ctrl := gomock.NewController(t)
 	emb := NewMockEmbedder(ctrl)
@@ -750,13 +750,14 @@ func setupSimilarityIndex(t *testing.T) (*store.Index, *gomock.Controller) {
 	}
 
 	// Vectors: tea=[1,0,0,0], music=[0,1,0,0], code=[0,0,1,0]
+	// Upsert embeds "Title Body", so keys include the title prefix.
 	vecs := map[string][]float32{
-		"Carol drinks green tea exclusively":               {1, 0, 0, 0},
-		"Bob listens to jazz regularly":                    {0, 1, 0, 0},
-		"Alice writes Python every day":                    {0, 0, 1, 0},
-		"who likes tea":                                    {0.9, 0.1, 0, 0}, // close to tea
-		"music preferences":                                {0.1, 0.9, 0, 0}, // close to music
-		"who likes guns":                                   {0.3, 0.3, 0.3, 0.1}, // no strong match
+		"Tea Preference Carol drinks green tea exclusively": {1, 0, 0, 0},
+		"Jazz Fan Bob listens to jazz regularly":            {0, 1, 0, 0},
+		"Python Dev Alice writes Python every day":          {0, 0, 1, 0},
+		"who likes tea":                                     {0.9, 0.1, 0, 0}, // close to tea
+		"music preferences":                                 {0.1, 0.9, 0, 0}, // close to music
+		"who likes guns":                                    {0.3, 0.3, 0.3, 0.1}, // no strong match
 	}
 
 	ctrl := gomock.NewController(t)
@@ -899,10 +900,11 @@ func TestSearchVecScoringBoost(t *testing.T) {
 	defer idx.Close()
 
 	// Two facts with embeddings at different cosine distances.
+	// Upsert embeds "Title Body", so keys include the title prefix.
 	vecs := map[string][]float32{
-		"tea brewing techniques": {1, 0, 0, 0},
-		"tea garden cultivation": {0.95, 0.05, 0, 0}, // slightly less similar
-		"tea":                    {1, 0, 0, 0},        // query
+		"Brewing tea brewing techniques": {1, 0, 0, 0},
+		"Garden tea garden cultivation":  {0.95, 0.05, 0, 0}, // slightly less similar
+		"tea":                            {1, 0, 0, 0},        // query
 	}
 
 	ctrl := gomock.NewController(t)
@@ -1025,5 +1027,32 @@ func TestStats_Aggregate(t *testing.T) {
 	// avg_confidence for kb/ = (0.9 + 0.7) / 2 = 0.8
 	if res.AvgConfidence != 0.8 {
 		t.Errorf("prefix filter: avg_confidence = %v, want 0.8", res.AvgConfidence)
+	}
+}
+
+func TestStats_NullDomainAndEntities(t *testing.T) {
+	idx, err := store.New(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer idx.Close()
+
+	insertTestBlob(t, idx.DB(), "b1", "body1")
+
+	// Insert a fact with nil domain and entities (simulates missing frontmatter fields).
+	if err := idx.Upsert(store.FactRecord{
+		Path: "kb/bare.md", Title: "Bare", BlobHash: "b1",
+		Domain: nil, Entities: nil,
+		Confidence: 0.5, Sources: 1, CommitHash: "x",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := idx.Stats("")
+	if err != nil {
+		t.Fatalf("Stats with NULL domain/entities should not error: %v", err)
+	}
+	if res.Total != 1 {
+		t.Errorf("total = %d, want 1", res.Total)
 	}
 }

@@ -13,6 +13,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/protocol/packp"
 	"github.com/go-git/go-git/v5/plumbing/transport"
 	"github.com/go-git/go-git/v5/plumbing/storer"
+	"knomit/internal/repos"
 	storegit "knomit/internal/store/git"
 )
 
@@ -38,7 +39,7 @@ func (l *repoLoader) Load(_ *transport.Endpoint) (storer.Storer, error) {
 //
 //   - GET  /{repo}/info/refs?service=git-upload-pack — advertise refs
 //   - POST /{repo}/git-upload-pack                   — serve a fetch
-func GitRemoteHandler(rm *RepoManager) http.Handler {
+func GitRemoteHandler(rm *repos.Manager) http.Handler {
 	// Cache per-repo handlers by GitRemoteStore identity so we don't rebuild
 	// the mux and go-git server on every request.
 	var cache sync.Map // key: GitRemoteStore, value: http.Handler

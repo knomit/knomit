@@ -85,18 +85,7 @@ func ApplyPruneDecisions(
 				onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("update write %s: %v", d.Path, err)})
 				continue
 			}
-			if err := idx.Upsert(store.FactRecord{
-				Path:       f.Path,
-				Title:      f.Title,
-				BlobHash:   blobHash,
-				Type:       string(f.Type),
-				Domain:     f.Domain,
-				Entities:   f.Entities,
-				Confidence: f.Confidence,
-				Sources:    f.Sources,
-				Refs:       f.Refs,
-				CommitHash: commitHash,
-			}); err != nil {
+			if err := idx.Upsert(store.NewFactRecord(f, blobHash, commitHash)); err != nil {
 				onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("index upsert %s: %v", d.Path, err)})
 			}
 		
@@ -108,16 +97,18 @@ func ApplyPruneDecisions(
 	// Apply merges.
 	for _, m := range merges {
 		mf := m.Merged
+		weight := computeWeight(gs, m.Paths)
 		merged := mcp.Fact{
-			Path:       mf.Path,
-			Title:      mf.Title,
-			Body:       mf.Body,
-			Type:       fact.EpistemicType(mf.Type),
-			Domain:     mf.Domain,
-			Confidence: mf.Confidence,
-			Sources:    mf.Sources,
-			Entities:   mf.Entities,
-			Refs:       mf.Refs,
+			Path:           mf.Path,
+			Title:          mf.Title,
+			Body:           mf.Body,
+			Type:           fact.EpistemicType(mf.Type),
+			Domain:         mf.Domain,
+			Confidence:     mf.Confidence,
+			Sources:        mf.Sources,
+			Entities:       mf.Entities,
+			Refs:           mf.Refs,
+			EvidenceWeight: weight,
 		}
 		content := mcp.SerializeFact(merged)
 		msg := fmt.Sprintf("synthesize-%s: merge %s", recipeName, strings.Join(m.Paths, ", "))
@@ -126,18 +117,7 @@ func ApplyPruneDecisions(
 			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("merge write %s: %v", mf.Path, err)})
 			continue
 		}
-		_ = idx.Upsert(store.FactRecord{
-			Path:       mf.Path,
-			Title:      mf.Title,
-			BlobHash:   blobHash,
-			Type:       mf.Type,
-			Domain:     mf.Domain,
-			Entities:   mf.Entities,
-			Confidence: mf.Confidence,
-			Sources:    mf.Sources,
-			Refs:       mf.Refs,
-			CommitHash: commitHash,
-		})
+		_ = idx.Upsert(store.NewFactRecord(merged, blobHash, commitHash))
 		if err := idx.GraphAddDerivedFrom(mf.Path, m.Paths); err != nil {
 			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("derived_from %s: %v", mf.Path, err)})
 		}
@@ -165,6 +145,7 @@ func ApplyPruneDecisions(
 }
 
 // ApplyDistillDecisions applies distill results: writes synthesized facts and retracts subsumed ones.
+// Returns stats, the written facts (with normalized paths), and any error.
 func ApplyDistillDecisions(
 	gs GitStore,
 	idx SearchIndex,
@@ -172,8 +153,9 @@ func ApplyDistillDecisions(
 	retract []string,
 	recipeName string,
 	onProgress func(ProgressEvent),
-) (*ReviewStats, error) {
+) (*ReviewStats, []distillFact, error) {
 	stats := &ReviewStats{}
+	var written []distillFact
 
 	log.Info().Int("synthesized", len(synthesized)).Int("forgotten", len(retract)).Msg("distill: committing results")
 
@@ -181,16 +163,24 @@ func ApplyDistillDecisions(
 	for _, df := range synthesized {
 		// Replace LLM-generated filename with a UUID to match learn convention.
 		df.Path = normalizeFactPath(df.Path)
+		var localRefs []string
+		for _, r := range df.Refs {
+			if strings.HasSuffix(r, ".md") {
+				localRefs = append(localRefs, r)
+			}
+		}
+		weight := computeWeight(gs, localRefs)
 		f := mcp.Fact{
-			Path:       df.Path,
-			Title:      df.Title,
-			Body:       df.Body,
-			Type:       fact.EpistemicType(df.Type),
-			Domain:     df.Domain,
-			Confidence: df.Confidence,
-			Sources:    1,
-			Entities:   df.Entities,
-			Refs:       df.Refs,
+			Path:           df.Path,
+			Title:          df.Title,
+			Body:           df.Body,
+			Type:           fact.EpistemicType(df.Type),
+			Domain:         df.Domain,
+			Confidence:     df.Confidence,
+			Sources:        1,
+			Entities:       df.Entities,
+			Refs:           df.Refs,
+			EvidenceWeight: weight,
 		}
 		content := mcp.SerializeFact(f)
 		msg := fmt.Sprintf("synthesize-%s: distill %s", recipeName, df.Path)
@@ -199,18 +189,7 @@ func ApplyDistillDecisions(
 			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("distill write %s: %v", df.Path, err)})
 			continue
 		}
-		_ = idx.Upsert(store.FactRecord{
-			Path:       df.Path,
-			Title:      df.Title,
-			BlobHash:   blobHash,
-			Type:       df.Type,
-			Domain:     df.Domain,
-			Entities:   df.Entities,
-			Confidence: df.Confidence,
-			Sources:    1,
-			Refs:       df.Refs,
-			CommitHash: commitHash,
-		})
+		_ = idx.Upsert(store.NewFactRecord(f, blobHash, commitHash))
 		if len(df.Refs) > 0 {
 			if err := idx.GraphAddDerivedFrom(df.Path, df.Refs); err != nil {
 				onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("derived_from %s: %v", df.Path, err)})
@@ -219,6 +198,7 @@ func ApplyDistillDecisions(
 	
 		onProgress(ProgressEvent{Phase: "detail-learn", Message: "learn " + df.Path})
 		stats.Synthesized++
+		written = append(written, df)
 	}
 
 	// Delete subsumed facts.
@@ -234,5 +214,5 @@ func ApplyDistillDecisions(
 		stats.Pruned++
 	}
 
-	return stats, nil
+	return stats, written, nil
 }

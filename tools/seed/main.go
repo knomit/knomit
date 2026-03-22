@@ -219,7 +219,7 @@ func main() {
 	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr})
 
 	phase := "all"
-	baseURL := "http://localhost:3000"
+	baseURL := "http://localhost:19278"
 
 	if len(os.Args) > 1 {
 		phase = os.Args[1]

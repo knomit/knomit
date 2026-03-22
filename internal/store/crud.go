@@ -39,8 +39,8 @@ func (idx *Index) Upsert(rec FactRecord) error {
 		if err != nil {
 			return fmt.Errorf("upsert: blob %s not found: %w", rec.BlobHash, err)
 		}
-		body := extractBody(data)
-		vec, err := idx.embedder.Embed(body)
+		text := rec.Title + " " + extractBody(data)
+		vec, err := idx.embedder.Embed(text)
 		if err == nil && len(vec) > 0 {
 			vecData = float32SliceToBytes(vec)
 		}
@@ -60,12 +60,12 @@ func (idx *Index) Upsert(rec FactRecord) error {
 
 	// Insert or replace into facts.
 	if _, err := tx.Exec(
-		`INSERT OR REPLACE INTO facts(path, title, blob_hash, type, domain, entities, confidence, sources, refs, commit_hash)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT OR REPLACE INTO facts(path, title, blob_hash, type, domain, entities, confidence, sources, refs, commit_hash, evidence_weight)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		rec.Path, rec.Title, rec.BlobHash, factType,
 		string(domainJSON), string(entitiesJSON),
 		rec.Confidence, rec.Sources,
-		string(refsJSON), rec.CommitHash,
+		string(refsJSON), rec.CommitHash, rec.EvidenceWeight,
 	); err != nil {
 		return fmt.Errorf("upsert fact: %w", err)
 	}
@@ -146,7 +146,7 @@ func (idx *Index) Delete(path string) error {
 // the objects table. Returns nil, nil if not found.
 func (idx *Index) GetByPath(path string) (*FactWithBody, error) {
 	row := idx.db.QueryRow(
-		`SELECT f.path, f.title, f.blob_hash, f.type, f.domain, f.entities, f.confidence, f.sources, f.refs, f.commit_hash, o.data
+		`SELECT f.path, f.title, f.blob_hash, f.type, f.domain, f.entities, f.confidence, f.sources, f.refs, f.commit_hash, f.evidence_weight, o.data
 		 FROM facts f
 		 JOIN objects o ON o.hash = f.blob_hash AND o.type = ?
 		 WHERE f.path = ?`, BlobObjectType, path,
@@ -209,7 +209,7 @@ func scanFactWithBody(row *sql.Row) (*FactWithBody, error) {
 		&f.Path, &f.Title, &f.BlobHash, &f.Type,
 		&domainJSON, &entitiesJSON,
 		&f.Confidence, &f.Sources,
-		&refsJSON, &f.CommitHash, &rawData,
+		&refsJSON, &f.CommitHash, &f.EvidenceWeight, &rawData,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -232,7 +232,7 @@ func scanFactRecord(row *sql.Row) (*FactRecord, error) {
 		&rec.Path, &rec.Title, &rec.BlobHash, &rec.Type,
 		&domainJSON, &entitiesJSON,
 		&rec.Confidence, &rec.Sources,
-		&refsJSON, &rec.CommitHash,
+		&refsJSON, &rec.CommitHash, &rec.EvidenceWeight,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -254,7 +254,7 @@ func scanFactRecordFromRows(rows *sql.Rows) (*FactRecord, error) {
 		&rec.Path, &rec.Title, &rec.BlobHash, &rec.Type,
 		&domainJSON, &entitiesJSON,
 		&rec.Confidence, &rec.Sources,
-		&refsJSON, &rec.CommitHash,
+		&refsJSON, &rec.CommitHash, &rec.EvidenceWeight,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("scan fact row: %w", err)
@@ -274,7 +274,7 @@ func scanFactWithBodyFromRows(rows *sql.Rows) (*FactWithBody, error) {
 		&f.Path, &f.Title, &f.BlobHash, &f.Type,
 		&domainJSON, &entitiesJSON,
 		&f.Confidence, &f.Sources,
-		&refsJSON, &f.CommitHash, &rawData,
+		&refsJSON, &f.CommitHash, &f.EvidenceWeight, &rawData,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("scanFactWithBodyFromRows: %w", err)
@@ -291,6 +291,7 @@ type RecentFactEntry struct {
 	Path        string  `json:"path"`
 	Title       string  `json:"title"`
 	CommittedAt int64   `json:"committed_at"`
+	Operation   string  `json:"operation,omitempty"`
 	Score       float64 `json:"score,omitempty"`
 }
 
@@ -310,7 +311,7 @@ func (idx *Index) RecentFacts(pathPrefix, query string, limit, offset int) ([]Re
 	}
 
 	rows, err := idx.db.Query(
-		`SELECT f.path, f.title, COALESCE(cl.committed_at, 0)
+		`SELECT f.path, f.title, COALESCE(cl.committed_at, 0), COALESCE(cl.operation, '')
 		 FROM facts f
 		 LEFT JOIN commit_log cl ON f.commit_hash = cl.commit_hash AND f.path = cl.path
 		 WHERE f.path LIKE ? || '%'
@@ -326,7 +327,7 @@ func (idx *Index) RecentFacts(pathPrefix, query string, limit, offset int) ([]Re
 	var entries []RecentFactEntry
 	for rows.Next() {
 		var e RecentFactEntry
-		if err := rows.Scan(&e.Path, &e.Title, &e.CommittedAt); err != nil {
+		if err := rows.Scan(&e.Path, &e.Title, &e.CommittedAt, &e.Operation); err != nil {
 			return nil, 0, fmt.Errorf("RecentFacts scan: %w", err)
 		}
 		entries = append(entries, e)
@@ -360,7 +361,7 @@ func (idx *Index) recentFactsSearch(pathPrefix, query string, limit, offset int)
 	}
 
 	rows, err := idx.db.Query(
-		`SELECT f.path, f.title, COALESCE(cl.committed_at, 0)
+		`SELECT f.path, f.title, COALESCE(cl.committed_at, 0), COALESCE(cl.operation, '')
 		 FROM facts f
 		 LEFT JOIN commit_log cl ON f.commit_hash = cl.commit_hash AND f.path = cl.path
 		 WHERE f.path IN (`+join(placeholders, ",")+`)
@@ -375,7 +376,7 @@ func (idx *Index) recentFactsSearch(pathPrefix, query string, limit, offset int)
 	var all []RecentFactEntry
 	for rows.Next() {
 		var e RecentFactEntry
-		if err := rows.Scan(&e.Path, &e.Title, &e.CommittedAt); err != nil {
+		if err := rows.Scan(&e.Path, &e.Title, &e.CommittedAt, &e.Operation); err != nil {
 			return nil, 0, fmt.Errorf("RecentFacts search scan: %w", err)
 		}
 		e.Score = scoreByPath[e.Path]

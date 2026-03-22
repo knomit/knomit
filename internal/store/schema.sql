@@ -34,16 +34,9 @@ CREATE TABLE IF NOT EXISTS facts (
     entities    TEXT NOT NULL,
     confidence  REAL NOT NULL,
     sources     INTEGER NOT NULL,
-    refs        TEXT NOT NULL,
-    commit_hash TEXT NOT NULL
-);
-
--- Synthesis tracking
-CREATE TABLE IF NOT EXISTS synthesis_log (
-    recipe          TEXT PRIMARY KEY,
-    last_commit     TEXT NOT NULL,
-    run_at          TEXT NOT NULL,
-    facts_processed INTEGER NOT NULL DEFAULT 0
+    refs             TEXT NOT NULL,
+    commit_hash      TEXT NOT NULL,
+    evidence_weight  REAL NOT NULL DEFAULT 0
 );
 
 -- Trigger: clean up embeddings when a fact is deleted
@@ -76,6 +69,7 @@ CREATE TABLE IF NOT EXISTS review_work_items (
     facts_json  TEXT NOT NULL,
     response    TEXT,
     priority    REAL NOT NULL,
+    depth       INTEGER NOT NULL DEFAULT 0,
     created_at  TEXT NOT NULL
 );
 

@@ -37,13 +37,18 @@ func Open(path string, opts ...Option) (*Service, error) {
 	registerVec() // one-time sqlite-vec + GraphQLite driver registration
 
 	dsn := path
-	if path != ":memory:" {
-		dsn = path + "?_journal_mode=WAL&_busy_timeout=5000"
+	if path == ":memory:" {
+		dsn = path + "?_foreign_keys=1"
+	} else {
+		dsn = path + "?_journal_mode=WAL&_busy_timeout=5000&_foreign_keys=1"
 	}
 	db, err := sql.Open("sqlite3_knomit", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("store.Open: %w", err)
 	}
+	// SQLite serializes writes internally; limiting the pool avoids SQLITE_BUSY
+	// contention between pooled connections competing for the write lock.
+	db.SetMaxOpenConns(2)
 
 	// Run embedded schema.
 	if _, err := db.Exec(schemaSQL_); err != nil {
@@ -55,6 +60,8 @@ func Open(path string, opts ...Option) (*Service, error) {
 	migrations := []string{
 		`ALTER TABLE remotes ADD COLUMN auth_method TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE remotes ADD COLUMN auth_token TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE review_work_items ADD COLUMN depth INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE facts ADD COLUMN evidence_weight REAL NOT NULL DEFAULT 0`,
 	}
 	for _, m := range migrations {
 		db.Exec(m) // ignore "duplicate column" errors

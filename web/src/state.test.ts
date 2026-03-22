@@ -335,4 +335,14 @@ describe('right panel focus', () => {
     s = reducer({ ...s, rightPanelFocused: true }, { type: 'NAV_BACK' });
     expect(s.rightPanelFocused).toBe(false);
   });
+
+  it('ENTER_RECENT clears historyCommit so right panel loads facts not commits', () => {
+    // Simulate: user was in history mode with a commit selected
+    const before = reducer({ ...init, historyCommit: 'abc123', historyFocusPath: 'kb/foo.md' }, { type: 'ENTER_HISTORY' });
+    // Switch to recent mode
+    const s = reducer(before, { type: 'ENTER_RECENT' });
+    expect(s.leftMode).toBe('recent');
+    expect(s.historyCommit).toBeNull();
+    expect(s.historyFocusPath).toBeNull();
+  });
 });

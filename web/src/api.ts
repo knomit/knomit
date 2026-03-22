@@ -10,7 +10,7 @@ export interface HistoryEntry { commit: string; date: string; message: string }
 export interface FileCounts { added?: number; modified?: number; deleted?: number }
 export interface HistoryEntryWithTags { commit: string; date: string; message: string; operation?: string; files?: FileCounts }
 export interface HistoryResponse { entries: HistoryEntryWithTags[]; next?: string }
-export interface RecentFactEntry { path: string; title: string; committed_at: number; score?: number }
+export interface RecentFactEntry { path: string; title: string; committed_at: number; operation?: string; score?: number }
 export interface RecentResponse { facts: RecentFactEntry[]; total: number }
 export interface CommitFile { path: string; action: string }
 export interface CommitDetail { commit: string; date: string; message: string; operation?: string; files: CommitFile[] }
@@ -62,6 +62,129 @@ export function parseSearchQuery(raw: string): { text: string; domains: string[]
   // Combine quoted phrases and remaining free text
   const allText = [...quoted, ...textTokens].join(' ').trim();
   return { text: allText, domains, entities };
+}
+
+export interface SessionCreateResponse {
+  session_id: string;
+}
+
+export interface TestResult {
+  branches: string[];
+  agent_branches: string[];
+  default_branch: string;
+  matched_agent?: string;
+  history: "disjoint" | "shared";
+  remote_fact_count: number;
+  local_fact_count: number;
+}
+
+export interface PreviewResult {
+  local_only: number;
+  remote_only: number;
+  shared_path: number;
+  dead_refs_found: number;
+}
+
+export interface ApplyResult {
+  total_facts: number;
+  from_local: number;
+  from_remote: number;
+  overwrites: number;
+  refs_resolved_from_history: number;
+  dangling_refs_dropped: number;
+}
+
+export type SSEEvent =
+  | { phase: "connecting" }
+  | { phase: "cloning"; progress?: string }
+  | { phase: "analyzing" }
+  | { phase: "comparing" }
+  | { phase: "replaying"; current: number; total: number }
+  | { phase: "merging" }
+  | { phase: "swapping" }
+  | { phase: "configuring" }
+  | { phase: "rebuilding"; current?: number; total?: number }
+  | { phase: "done"; result: any }
+  | { phase: "error"; message: string };
+
+function sessionBase(repo: string, sessionId: string) {
+  return `${base(repo)}/origin/session/${sessionId}`;
+}
+
+function parseSSELines(text: string): SSEEvent[] {
+  const events: SSEEvent[] = [];
+  for (const line of text.split('\n')) {
+    const trimmed = line.trim();
+    if (trimmed.startsWith('data: ')) {
+      try { events.push(JSON.parse(trimmed.slice(6))); } catch {}
+    }
+  }
+  return events;
+}
+
+async function readSSEStream(res: Response, onEvent?: (e: SSEEvent) => void): Promise<void> {
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(err.error || res.statusText);
+  }
+  const reader = res.body!.getReader();
+  const decoder = new TextDecoder();
+  let buf = '';
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    const events = parseSSELines(buf);
+    buf = buf.includes('\n') ? buf.slice(buf.lastIndexOf('\n') + 1) : '';
+    for (const ev of events) onEvent?.(ev);
+  }
+}
+
+export function createSession(repo: string, opts: { url: string; auth_method?: string; token?: string; user?: string; password?: string }): Promise<SessionCreateResponse> {
+  return fetch(`${base(repo)}/origin/session`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(opts),
+  }).then(r => { if (!r.ok) return r.json().then(e => { throw new Error(e.error || r.statusText); }); return r.json(); });
+}
+
+export function streamTest(repo: string, sessionId: string, onEvent: (e: SSEEvent) => void): () => void {
+  const es = new EventSource(`${sessionBase(repo, sessionId)}/test`);
+  es.onmessage = (e) => { try { onEvent(JSON.parse(e.data)); } catch {} };
+  es.onerror = () => { es.close(); };
+  return () => es.close();
+}
+
+export function streamPreview(repo: string, sessionId: string, onEvent: (e: SSEEvent) => void): () => void {
+  const es = new EventSource(`${sessionBase(repo, sessionId)}/preview`);
+  es.onmessage = (e) => { try { onEvent(JSON.parse(e.data)); } catch {} };
+  es.onerror = () => { es.close(); };
+  return () => es.close();
+}
+
+export async function streamApply(repo: string, sessionId: string, strategy: string, branch?: string, onEvent?: (e: SSEEvent) => void): Promise<void> {
+  if (typeof branch === 'function') { onEvent = branch as any; branch = undefined; }
+  const body: Record<string, string> = { conflict_strategy: strategy };
+  if (branch) body.branch = branch;
+  const res = await fetch(`${sessionBase(repo, sessionId)}/apply`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  await readSSEStream(res, onEvent);
+}
+
+export async function streamCommit(repo: string, sessionId: string, onEvent: (e: SSEEvent) => void): Promise<void> {
+  const res = await fetch(`${sessionBase(repo, sessionId)}/commit`, { method: 'POST' });
+  await readSSEStream(res, onEvent);
+}
+
+export function deleteSession(repo: string, sessionId: string): Promise<void> {
+  return fetch(`${sessionBase(repo, sessionId)}`, { method: 'DELETE' }).then(r => { if (!r.ok) throw new Error(r.statusText); });
+}
+
+export function getSession(repo: string, sessionId: string): Promise<any> {
+  return fetch(`${sessionBase(repo, sessionId)}`).then(r => { if (!r.ok) throw new Error(r.statusText); return r.json(); });
 }
 
 export const api = {

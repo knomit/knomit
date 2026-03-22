@@ -5,6 +5,7 @@ package store
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/rs/zerolog/log"
 )
@@ -72,11 +73,11 @@ func (idx *Index) Sync(git GitReader, branch string) error {
 }
 
 // RebuildProgress is called during Rebuild to report progress.
-type RebuildProgress func(done, total int)
+type RebuildProgress func(phase string, done, total int)
 
-// Rebuild clears the last-commit marker and re-indexes every file from HEAD.
+// Rebuild clears the last-commit marker and re-indexes every file from HEAD
+// using three phases: facts, embeddings, graph.
 func (idx *Index) Rebuild(git GitReader, branch string, progress RebuildProgress) error {
-	// Clear last_commit to force full rebuild.
 	if err := idx.SetLastCommit(branch, ""); err != nil {
 		return fmt.Errorf("rebuild: clear last commit: %w", err)
 	}
@@ -86,21 +87,29 @@ func (idx *Index) Rebuild(git GitReader, branch string, progress RebuildProgress
 		return fmt.Errorf("rebuild: head commit: %w", err)
 	}
 
-	paths, err := git.ListAll()
+	// Phase 1: facts
+	start := time.Now()
+	n, err := idx.rebuildFacts(git, head, progress)
 	if err != nil {
-		return fmt.Errorf("rebuild: list all: %w", err)
+		return fmt.Errorf("rebuild: facts: %w", err)
 	}
+	log.Info().Int("facts", n).Str("elapsed", fmt.Sprintf("%.1fs", time.Since(start).Seconds())).Msg("rebuild: phase 1 (facts) complete")
 
-	log.Info().Str("head", head[:8]).Int("files", len(paths)).Msg("index rebuild: starting")
-	for i, path := range paths {
-		if err := idx.indexFile(git, path, head); err != nil {
-			return err
-		}
-		if progress != nil {
-			progress(i+1, len(paths))
-		}
+	// Phase 2: embeddings
+	start = time.Now()
+	embedded, err := idx.rebuildEmbeddings(progress)
+	if err != nil {
+		return fmt.Errorf("rebuild: embeddings: %w", err)
 	}
-	log.Info().Int("files", len(paths)).Msg("index rebuild: complete")
+	log.Info().Int("embedded", embedded).Str("elapsed", fmt.Sprintf("%.1fs", time.Since(start).Seconds())).Msg("rebuild: phase 2 (embeddings) complete")
+
+	// Phase 3: graph
+	start = time.Now()
+	graphed, err := idx.rebuildGraph(progress)
+	if err != nil {
+		return fmt.Errorf("rebuild: graph: %w", err)
+	}
+	log.Info().Int("graphed", graphed).Str("elapsed", fmt.Sprintf("%.1fs", time.Since(start).Seconds())).Msg("rebuild: phase 3 (graph) complete")
 
 	return idx.SetLastCommit(branch, head)
 }

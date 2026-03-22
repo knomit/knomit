@@ -16,6 +16,8 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
+
+	"knomit/internal/fact"
 )
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -40,16 +42,35 @@ func WithVecDimension(d int) Option {
 
 // FactRecord is the stored record — no body, just a blob_hash pointer.
 type FactRecord struct {
-	Path       string   `json:"path"`
-	Title      string   `json:"title"`
-	BlobHash   string   `json:"blob_hash"`
-	Type       string   `json:"type"`
-	Domain     []string `json:"domain"`
-	Entities   []string `json:"entities"`
-	Confidence float64  `json:"confidence"`
-	Sources    int      `json:"sources"`
-	Refs       []string `json:"refs"`
-	CommitHash string   `json:"commit_hash,omitempty"`
+	Path           string   `json:"path"`
+	Title          string   `json:"title"`
+	BlobHash       string   `json:"blob_hash"`
+	Type           string   `json:"type"`
+	Domain         []string `json:"domain"`
+	Entities       []string `json:"entities"`
+	Confidence     float64  `json:"confidence"`
+	Sources        int      `json:"sources"`
+	Refs           []string `json:"refs"`
+	CommitHash     string   `json:"commit_hash,omitempty"`
+	EvidenceWeight float64  `json:"evidence_weight,omitempty"`
+}
+
+// NewFactRecord constructs a FactRecord from a parsed fact and git metadata.
+// blobHash is the blob SHA returned by WriteFile; commitHash is the commit SHA.
+func NewFactRecord(f fact.Fact, blobHash, commitHash string) FactRecord {
+	return FactRecord{
+		Path:           f.Path,
+		Title:          f.Title,
+		BlobHash:       blobHash,
+		Type:           string(f.Type),
+		Domain:         f.Domain,
+		Entities:       f.Entities,
+		Confidence:     f.Confidence,
+		Sources:        f.Sources,
+		Refs:           f.Refs,
+		CommitHash:     commitHash,
+		EvidenceWeight: f.EvidenceWeight,
+	}
 }
 
 // FactWithBody is returned by read operations that hydrate the body from git objects.
@@ -68,6 +89,12 @@ type Embedder interface {
 	Embed(text string) ([]float32, error)
 }
 
+// BatchEmbedder extends Embedder with batch inference support.
+type BatchEmbedder interface {
+	Embedder
+	EmbedBatch(texts []string) ([][]float32, error)
+}
+
 // GitReader is the interface that Index.Sync requires from the git store.
 type GitReader interface {
 	// DiffFiles returns paths added, modified, and deleted between fromCommit and HEAD.
@@ -80,6 +107,9 @@ type GitReader interface {
 	HeadCommit() (string, error)
 	// ListAll returns paths of all .md files from HEAD.
 	ListAll() ([]string, error)
+	// ListAllWithHash returns all .md file paths and their blob hashes from HEAD.
+	// Single tree walk, no per-file I/O.
+	ListAllWithHash() (paths []string, blobHashes []string, err error)
 	// LastCommitForPath returns the hash of the most recent non-merge commit that touched path.
 	LastCommitForPath(path string) (string, error)
 }
@@ -117,13 +147,16 @@ func New(path string, opts ...Option) (*Index, error) {
 	}
 
 	dsn := path
-	if path != ":memory:" {
-		dsn = path + "?_journal_mode=WAL&_busy_timeout=5000"
+	if path == ":memory:" {
+		dsn = path + "?_foreign_keys=1"
+	} else {
+		dsn = path + "?_journal_mode=WAL&_busy_timeout=5000&_foreign_keys=1"
 	}
 	db, err := sql.Open("sqlite3_knomit", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite: %w", err)
 	}
+	db.SetMaxOpenConns(2)
 	// Use the same embedded schema.sql as Service.Open to keep DDL in one place.
 	if _, err := db.Exec(schemaSQL_); err != nil {
 		db.Close()
@@ -223,9 +256,9 @@ func (idx *Index) Stats(pathPrefix string) (StatsResult, error) {
 	}
 
 	// Domain counts via json_each.
-	dq := `SELECT d.value, COUNT(*) FROM facts f, json_each(f.domain) d`
+	dq := `SELECT d.value, COUNT(*) FROM facts f, json_each(f.domain) d WHERE d.value IS NOT NULL`
 	if pathPrefix != "" {
-		dq += ` WHERE f.path LIKE ?`
+		dq += ` AND f.path LIKE ?`
 	}
 	dq += ` GROUP BY d.value`
 	drows, err := idx.db.Query(dq, args...)
@@ -243,9 +276,9 @@ func (idx *Index) Stats(pathPrefix string) (StatsResult, error) {
 	}
 
 	// Entity counts via json_each.
-	eq := `SELECT e.value, COUNT(*) FROM facts f, json_each(f.entities) e`
+	eq := `SELECT e.value, COUNT(*) FROM facts f, json_each(f.entities) e WHERE e.value IS NOT NULL`
 	if pathPrefix != "" {
-		eq += ` WHERE f.path LIKE ?`
+		eq += ` AND f.path LIKE ?`
 	}
 	eq += ` GROUP BY e.value`
 	erows, err := idx.db.Query(eq, args...)

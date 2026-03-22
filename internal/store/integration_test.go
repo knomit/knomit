@@ -67,6 +67,42 @@ func TestDeleteFactAtomically(t *testing.T) {
 	}
 }
 
+func TestEvidenceWeightRoundTrip(t *testing.T) {
+	svc := openTestService(t)
+	gs, err := git.InitWithStorer(svc.GitStorer(), nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, blobHash, err := gs.WriteFile("kb/weighted.md",
+		"---\ndomain: []\nconfidence: 0.9\nsources: 5\nentities: []\nrefs: []\n---\n# Weighted\n\nBody.",
+		"add weighted", "learn",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rec := FactRecord{
+		Path: "kb/weighted.md", Title: "Weighted", BlobHash: blobHash,
+		Domain: []string{}, Entities: []string{}, Confidence: 0.9, Sources: 5,
+		Refs: []string{}, CommitHash: "abc", EvidenceWeight: 0.714,
+	}
+	if err := svc.Index().Upsert(rec); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+
+	got, err := svc.Index().GetByPath("kb/weighted.md")
+	if err != nil {
+		t.Fatalf("GetByPath: %v", err)
+	}
+	if got == nil {
+		t.Fatal("GetByPath: got nil")
+	}
+	if got.EvidenceWeight != 0.714 {
+		t.Fatalf("EvidenceWeight: got %v, want 0.714", got.EvidenceWeight)
+	}
+}
+
 func TestFullRoundtrip(t *testing.T) {
 	svc := openTestService(t)
 

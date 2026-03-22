@@ -59,7 +59,7 @@ func UpdateHandler(gs GitStore, ontologyRoot string) func(context.Context, mcpgo
 		if file == "" {
 			return mcpgo.NewToolResultError("file is required"), nil
 		}
-		file = normalizePath(ontologyRoot, file)
+		file = factpkg.NormalizePath(ontologyRoot, file)
 		momentName := req.GetString("moment_name", "")
 		if momentName == "" {
 			return mcpgo.NewToolResultError("moment_name is required"), nil
@@ -85,18 +85,9 @@ func UpdateHandler(gs GitStore, ontologyRoot string) func(context.Context, mcpgo
 		}
 
 		// 5. Parse updates.
-		args := req.GetArguments()
-		updatesRaw, ok := args["updates"]
-		if !ok {
-			return mcpgo.NewToolResultError("updates is required"), nil
-		}
-		updatesJSON, err := json.Marshal(updatesRaw)
-		if err != nil {
-			return mcpgo.NewToolResultError(fmt.Sprintf("invalid updates: %v", err)), nil
-		}
 		var updates updateInput
-		if err := json.Unmarshal(updatesJSON, &updates); err != nil {
-			return mcpgo.NewToolResultError(fmt.Sprintf("invalid updates format: %v", err)), nil
+		if err := unmarshalArg(req, "updates", &updates); err != nil {
+			return mcpgo.NewToolResultError(err.Error()), nil
 		}
 
 		// 6. Merge updates into fact.

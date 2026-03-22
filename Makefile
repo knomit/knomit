@@ -1,4 +1,4 @@
-.PHONY: build web test clean run dev setup dist download-ort download-graphqlite
+.PHONY: build web test clean run dev setup dist download-ort download-graphqlite e2e e2e-ui e2e-setup e2e-report
 
 ORT_VERSION := 1.24.3
 UNAME_S := $(shell uname -s)
@@ -73,7 +73,7 @@ download-graphqlite:
 
 build: web
 	CGO_ENABLED=1 go build -o dist/knomit .
-	go build -o dist/knomit-mcp-remote ./tools/mcp-remote/
+	go build -o dist/knomit-remote ./tools/remote/
 
 web:
 	cd web && npm ci && npm run build
@@ -93,3 +93,15 @@ dev:
 
 clean:
 	rm -rf dist/ web/dist/
+
+e2e-setup:
+	cd e2e && npm ci && npx playwright install
+
+e2e: dist
+	cd e2e && npx playwright test
+
+e2e-ui: dist
+	cd e2e && npx playwright test --headed
+
+e2e-report:
+	cd e2e && npx playwright show-report playwright-report

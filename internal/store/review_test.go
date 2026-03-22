@@ -350,6 +350,65 @@ func TestNextWorkItem_EmptySession(t *testing.T) {
 	}
 }
 
+func TestWorkItemDepth(t *testing.T) {
+	idx := newTestIndex(t)
+
+	s, err := idx.CreateReviewSession("machine/test")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Insert a work item with Depth=2.
+	if err := idx.InsertWorkItem(store.ReviewWorkItem{
+		SessionID:  s.ID,
+		StepType:   "distill",
+		ClusterKey: "deep-cluster",
+		FactsJSON:  `["a.md","b.md"]`,
+		Priority:   5.0,
+		Depth:      2,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	item, err := idx.NextWorkItem(s.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if item == nil {
+		t.Fatal("expected work item, got nil")
+	}
+	if item.Depth != 2 {
+		t.Fatalf("expected depth 2, got %d", item.Depth)
+	}
+
+	// Verify default depth=0 for items inserted without explicit depth.
+	if err := idx.InsertWorkItem(store.ReviewWorkItem{
+		SessionID:  s.ID,
+		StepType:   "prune",
+		ClusterKey: "shallow-cluster",
+		FactsJSON:  `["c.md"]`,
+		Priority:   1.0,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Answer the first item so NextWorkItem returns the second.
+	if err := idx.SetWorkItemResponse(item.ID, "ok"); err != nil {
+		t.Fatal(err)
+	}
+
+	item2, err := idx.NextWorkItem(s.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if item2 == nil {
+		t.Fatal("expected second work item, got nil")
+	}
+	if item2.Depth != 0 {
+		t.Fatalf("expected default depth 0, got %d", item2.Depth)
+	}
+}
+
 // ── WorkItemStats tests ──────────────────────────────────────────────────────
 
 func TestWorkItemStats(t *testing.T) {

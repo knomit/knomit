@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"knomit/internal/fact"
+
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 )
 
@@ -31,7 +33,7 @@ func RetractHandler(gs GitStore, ontologyRoot string) func(context.Context, mcpg
 		if file == "" {
 			return mcpgo.NewToolResultError("file is required"), nil
 		}
-		file = normalizePath(ontologyRoot, file)
+		file = fact.NormalizePath(ontologyRoot, file)
 		momentName := req.GetString("moment_name", "")
 		if momentName == "" {
 			return mcpgo.NewToolResultError("moment_name is required"), nil

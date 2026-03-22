@@ -25,12 +25,15 @@ make web      # build React frontend only
 make test     # run Go tests
 make dist     # full distribution package (ORT + binary)
 make clean    # remove build artifacts
+make e2e-setup # install Playwright browsers (once)
+make e2e      # build + run e2e tests
+make e2e-ui   # build + run e2e tests (headed browser)
 ```
 
 ## Usage
 
 ```sh
-knomit serve                  # start HTTP server (default port 3000)
+knomit serve                  # start HTTP server (default port 19278)
 knomit init                   # initialize the default repo
 knomit init --name work       # initialize a repo named "work"
 knomit rebuild                # rebuild the default repo's search index
@@ -40,6 +43,8 @@ knomit reset --name work      # wipe a specific repo
 ```
 
 ### Data Layout
+
+All data lives under `KNOMIT_HOME` (default `~/.knomit`):
 
 ```
 ~/.knomit/
@@ -68,6 +73,18 @@ Seed test data (requires the server running):
 ```sh
 go run ./tools/seed/   # seed base facts
 ```
+
+### E2E Testing
+
+The `e2e/` directory contains a Playwright test suite that exercises the built binary end-to-end across UI, MCP, and API layers.
+
+```sh
+make e2e-setup   # install deps + Playwright browsers (once)
+make e2e         # build binary + run all tests (headless)
+make e2e-ui      # same but with a visible browser
+```
+
+Tests use `KNOMIT_HOME` pointed at a temp directory for full isolation. A shared instance is seeded with fixture data for read-only tests; mutating tests spin up fresh instances per test.
 
 ### Configuration
 
@@ -110,7 +127,7 @@ Add to your project's `.mcp.json` (or `~/.claude/mcp.json` for global):
   "mcpServers": {
     "knomit": {
       "type": "streamable-http",
-      "url": "http://localhost:3000/api/v1/knomit/mcp"
+      "url": "http://localhost:19278/api/v1/knomit/mcp"
     }
   }
 }
@@ -120,7 +137,7 @@ Knomit's tool descriptions carry all the behavioral guidance the model needs —
 
 #### Claude Desktop
 
-Claude Desktop only supports stdio transports. Use the included `knomit-mcp-remote` bridge (built automatically by `make build`):
+Claude Desktop only supports stdio transports. Use the included `knomit-remote` bridge (built automatically by `make build`):
 
 Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or `%APPDATA%\Claude\claude_desktop_config.json` (Windows):
 
@@ -128,8 +145,7 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS)
 {
   "mcpServers": {
     "knomit": {
-      "command": "/path/to/dist/knomit-mcp-remote",
-      "args": ["http://localhost:3000"]
+      "command": "/path/to/dist/knomit-remote"
     }
   }
 }
@@ -141,18 +157,17 @@ For multiple repos:
 {
   "mcpServers": {
     "knomit": {
-      "command": "/path/to/dist/knomit-mcp-remote",
-      "args": ["http://localhost:3000"]
+      "command": "/path/to/dist/knomit-remote"
     },
     "work-kb": {
-      "command": "/path/to/dist/knomit-mcp-remote",
-      "args": ["--repo", "work", "--profile", "chat", "http://localhost:3000"]
+      "command": "/path/to/dist/knomit-remote",
+      "args": ["--repo", "work", "--profile", "chat"]
     }
   }
 }
 ```
 
-Flags: `--repo <name>` (default: `knomit`), `--profile <profile>` (default: `code`).
+Flags: `--repo <name>` (default: `knomit`), `--profile <profile>` (default: `code`). Base URL defaults to `http://localhost:19278` and can be overridden as a positional argument.
 
 The bridge reads JSON-RPC from stdin, forwards to the knomit HTTP endpoint, and writes responses to stdout.
 
@@ -190,33 +205,7 @@ Set the model and API key via environment variables:
 
 The default model is `claude-sonnet-4-6` (Anthropic). The provider is auto-detected from the model name for API providers. CLI providers must be set explicitly via `KNOMIT_LLM_PROVIDER`.
 
-#### Recipes
-
-Recipes are YAML files in `<repo>/.knomit/synthesize/`. Example:
-
-```yaml
-name: cve-review
-prompt: "Review security CVEs for staleness and patterns"
-scope:
-  domain: [security]
-  entities: [libfoo]
-auto_merge: false
-steps:
-  - mode: prune
-    prompt: "Find stale or superseded CVEs"
-  - mode: distill
-    prompt: "Identify vulnerability patterns"
-```
-
-| Field | Description |
-|-------|-------------|
-| `name` | Recipe identifier (used for branch names and logging) |
-| `prompt` | Global context passed to every step |
-| `scope` | Filter facts by `domain`, `entities`, `search` queries, or `path` prefix |
-| `auto_merge` | `true` merges results back automatically; `false` pushes a branch for review |
-| `steps` | Pipeline of `prune` and/or `distill` steps. Each can override `model`. |
-
-Running synthesis with no recipe uses a built-in default: prune + distill on all facts changed since the last run, with auto-merge enabled.
+Synthesis is incremental — it only processes facts that changed since the last run. The pipeline prunes stale/duplicate facts first, then distills higher-order insights using RAPTOR (recursive abstractive processing) across multiple depth levels.
 
 ## MCP Tools
 
@@ -292,8 +281,10 @@ All repo-scoped endpoints use the pattern `/api/v1/{repo}/...`.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `KNOMIT_REPO` | `~/.knomit` | Path to the data directory |
-| `KNOMIT_PORT` | `3000` | HTTP server port |
+| `KNOMIT_HOME` | `~/.knomit` | Path to the data directory |
+| `KNOMIT_REPO` | — | Alias for `KNOMIT_HOME` (backward compat) |
+| `KNOMIT_PORT` | `19278` | HTTP server port |
+| `KNOMIT_SOCKET` | — | Unix socket path (e.g. `knomit.sock`); enables socket listener when set |
 | `KNOMIT_LLM_MODEL` | `claude-sonnet-4-6` | Model name for synthesis |
 | `KNOMIT_LLM_PROVIDER` | auto-detected | LLM provider: `anthropic`, `gemini`, `bedrock`, `claude-cli`, `gemini-cli` |
 | `KNOMIT_GIT_ORIGIN` | — | Remote origin URL (seeds default repo) |

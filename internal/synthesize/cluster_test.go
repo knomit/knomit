@@ -13,7 +13,7 @@ func TestScopedCluster_EmptySeeds(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	idx := NewMockSearchIndex(ctrl)
 
-	result, err := ScopedCluster(nil, nil, idx, 1.0, nil)
+	result, err := ScopedCluster(nil, idx, 1.0, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -27,10 +27,6 @@ func TestScopedCluster_SeedsAndNeighborsClustered(t *testing.T) {
 	idx := NewMockSearchIndex(ctrl)
 
 	seed := factForLLM{File: "kb/go/concurrency/channels.md", Title: "Go channels", Body: "channels in go"}
-	neighbor := factForLLM{File: "kb/go/concurrency/goroutines.md", Title: "Goroutines", Body: "goroutines"}
-	unrelated := factForLLM{File: "kb/python/async/await.md", Title: "Python await", Body: "await"}
-
-	allFacts := []factForLLM{seed, neighbor, unrelated}
 
 	// Search returns the neighbor for the seed's category.
 	idx.EXPECT().Search(store.SearchQuery{
@@ -38,7 +34,7 @@ func TestScopedCluster_SeedsAndNeighborsClustered(t *testing.T) {
 		Path:  "kb/go/concurrency",
 		Limit: 10,
 	}).Return([]store.SearchResult{
-		{FactWithBody: store.FactWithBody{FactRecord: store.FactRecord{Path: "kb/go/concurrency/goroutines.md"}}, Score: 80},
+		{FactWithBody: store.FactWithBody{FactRecord: store.FactRecord{Path: "kb/go/concurrency/goroutines.md", Title: "Goroutines"}, Body: "goroutines"}, Score: 80},
 	}, nil)
 
 	// ClusterFacts returns clusters that include both seed and neighbor in one cluster,
@@ -50,7 +46,7 @@ func TestScopedCluster_SeedsAndNeighborsClustered(t *testing.T) {
 		},
 	}, nil)
 
-	result, err := ScopedCluster([]factForLLM{seed}, allFacts, idx, 1.0, nil)
+	result, err := ScopedCluster([]factForLLM{seed}, idx, 1.0, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -74,7 +70,6 @@ func TestScopedCluster_CategoryFallbackOnLouvainError(t *testing.T) {
 
 	seed1 := factForLLM{File: "kb/go/concurrency/channels.md", Title: "channels", Body: "ch"}
 	seed2 := factForLLM{File: "kb/go/concurrency/goroutines.md", Title: "goroutines", Body: "gr"}
-	allFacts := []factForLLM{seed1, seed2}
 
 	// Search for seed1's neighbors.
 	idx.EXPECT().Search(gomock.Any()).Return([]store.SearchResult{
@@ -89,7 +84,7 @@ func TestScopedCluster_CategoryFallbackOnLouvainError(t *testing.T) {
 	// ClusterFacts fails.
 	idx.EXPECT().ClusterFacts(1.0, 2).Return(store.ClusterResult{}, fmt.Errorf("no embeddings"))
 
-	result, err := ScopedCluster([]factForLLM{seed1, seed2}, allFacts, idx, 1.0, nil)
+	result, err := ScopedCluster([]factForLLM{seed1, seed2}, idx, 1.0, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -112,7 +107,6 @@ func TestScopedCluster_SingleFactClustersFiltered(t *testing.T) {
 	idx := NewMockSearchIndex(ctrl)
 
 	seed := factForLLM{File: "kb/go/concurrency/channels.md", Title: "channels", Body: "ch"}
-	allFacts := []factForLLM{seed}
 
 	// No neighbors found.
 	idx.EXPECT().Search(gomock.Any()).Return(nil, nil)
@@ -124,7 +118,7 @@ func TestScopedCluster_SingleFactClustersFiltered(t *testing.T) {
 		},
 	}, nil)
 
-	result, err := ScopedCluster([]factForLLM{seed}, allFacts, idx, 1.0, nil)
+	result, err := ScopedCluster([]factForLLM{seed}, idx, 1.0, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -140,10 +134,6 @@ func TestScopedCluster_UnrelatedFactsExcluded(t *testing.T) {
 	idx := NewMockSearchIndex(ctrl)
 
 	seed := factForLLM{File: "kb/go/concurrency/channels.md", Title: "channels", Body: "ch"}
-	neighbor := factForLLM{File: "kb/go/concurrency/goroutines.md", Title: "goroutines", Body: "gr"}
-	unrelated := factForLLM{File: "kb/rust/ownership/borrow.md", Title: "borrowing", Body: "borrow"}
-
-	allFacts := []factForLLM{seed, neighbor, unrelated}
 
 	idx.EXPECT().Search(gomock.Any()).Return([]store.SearchResult{
 		{FactWithBody: store.FactWithBody{FactRecord: store.FactRecord{Path: "kb/go/concurrency/goroutines.md"}}, Score: 80},
@@ -156,7 +146,7 @@ func TestScopedCluster_UnrelatedFactsExcluded(t *testing.T) {
 		},
 	}, nil)
 
-	result, err := ScopedCluster([]factForLLM{seed}, allFacts, idx, 1.0, nil)
+	result, err := ScopedCluster([]factForLLM{seed}, idx, 1.0, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

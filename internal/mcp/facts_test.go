@@ -194,6 +194,44 @@ func TestSerializeFactWithURL(t *testing.T) {
 	}
 }
 
+func TestFactEvidenceWeightRoundTrip(t *testing.T) {
+	f := Fact{
+		Path:           "kb/merged.md",
+		Title:          "Merged",
+		Body:           "Some body.",
+		Domain:         []string{"testing"},
+		Confidence:     0.9,
+		Sources:        5,
+		Entities:       []string{},
+		Refs:           []string{},
+		EvidenceWeight: 0.75,
+	}
+	serialized := SerializeFact(f)
+	if !strings.Contains(serialized, "evidence_weight: 0.75") {
+		t.Fatalf("evidence_weight missing from serialized output:\n%s", serialized)
+	}
+	parsed, err := ParseFact(f.Path, serialized)
+	if err != nil {
+		t.Fatalf("ParseFact: %v", err)
+	}
+	if parsed.EvidenceWeight != 0.75 {
+		t.Fatalf("EvidenceWeight: got %v, want 0.75", parsed.EvidenceWeight)
+	}
+}
+
+func TestFactEvidenceWeightOmittedWhenZero(t *testing.T) {
+	f := Fact{
+		Path: "kb/plain.md", Title: "Plain", Body: "Body.",
+		Domain: []string{}, Confidence: 0.5, Sources: 1,
+		Entities: []string{}, Refs: []string{},
+		// EvidenceWeight zero — must not appear in output.
+	}
+	serialized := SerializeFact(f)
+	if strings.Contains(serialized, "evidence_weight") {
+		t.Fatalf("evidence_weight should be absent for zero value:\n%s", serialized)
+	}
+}
+
 func TestSerializeFactEmptyBody(t *testing.T) {
 	f := Fact{
 		Path:       "general/empty.md",
