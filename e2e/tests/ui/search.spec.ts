@@ -1,5 +1,6 @@
 import { test, expect } from '../../fixtures/knomit.js';
 import { BrowsePage } from '../../pages/browse.page.js';
+import { FactPanel } from '../../pages/fact-panel.page.js';
 
 test.describe('Search', () => {
   let browse: BrowsePage;
@@ -62,5 +63,65 @@ test.describe('Search', () => {
     // Should return to showing directory entries
     const entries = await browse.getDirectoryEntries();
     expect(entries.length).toBeGreaterThan(0);
+  });
+
+  test('entity filter with spaces finds facts when quoted', async () => {
+    // "supply chain security" is an entity in the seed data (sbom.md)
+    await browse.search('entity:"supply chain security"');
+    const results = await browse.getSearchResults();
+    expect(results.length).toBeGreaterThan(0);
+    const hasSbom = results.some(r => r.includes('sbom'));
+    expect(hasSbom).toBeTruthy();
+  });
+
+  test('clicking entity tag with spaces produces quoted search', async ({ page }) => {
+    // Navigate to a fact with a multi-word entity
+    await browse.clickEntry('security');
+    await browse.waitForEntry('supply-chain');
+    await browse.clickEntry('supply-chain');
+    await browse.waitForFactEntry();
+    await browse.clickEntry('sbom.md');
+
+    const factPanel = new FactPanel(page);
+    await expect(factPanel.title).toBeVisible();
+
+    // Click the "supply chain security" entity tag
+    const tag = page.getByTestId('tag-item').filter({ hasText: 'supply chain security' });
+    await expect(tag).toBeVisible({ timeout: 5_000 });
+    await tag.click();
+
+    // The search input should contain the quoted entity
+    const searchValue = await browse.searchInput.inputValue();
+    expect(searchValue).toContain('entity:"supply chain security"');
+
+    // And results should appear
+    const results = await browse.getSearchResults();
+    expect(results.length).toBeGreaterThan(0);
+  });
+
+  test('empty search results clears the right panel', async ({ page }) => {
+    // First select a fact so the right panel shows something
+    await browse.clickEntry('databases');
+    await browse.waitForEntry('postgresql');
+    await browse.clickEntry('postgresql');
+    await browse.waitForFactEntry();
+    await browse.clickEntry('mvcc.md');
+
+    const factPanel = new FactPanel(page);
+    await expect(factPanel.title).toBeVisible();
+
+    // Search for something that won't match
+    const nonsense = `zzqxjk_${Date.now()}_entity_test`;
+    await browse.search(nonsense);
+
+    // Wait for search to complete and verify no results
+    await page.waitForTimeout(1000);
+    const results = page.getByTestId('search-result');
+    const count = await results.count();
+
+    // If no results, the fact title should no longer be visible
+    if (count === 0) {
+      await expect(factPanel.title).not.toBeVisible({ timeout: 5_000 });
+    }
   });
 });

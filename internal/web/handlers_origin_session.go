@@ -726,6 +726,9 @@ func handleCommit(rm *repos.Manager, sm *SessionManager) http.HandlerFunc {
 			return
 		}
 
+		// Rebuild MCP handlers so they use the new database, not the closed one.
+		rm.SetupMCP(ri)
+
 		// Phase: configuring — save remote config and start sync.
 		sendEvent(map[string]string{"phase": "configuring"})
 
@@ -759,6 +762,15 @@ func handleCommit(rm *repos.Manager, sm *SessionManager) http.HandlerFunc {
 					log.Warn().Err(err).Str("repo", repo).Msg("commit: index rebuild failed")
 				} else {
 					log.Info().Str("repo", repo).Msg("commit: index rebuilt from swapped store")
+					// Set pipeline watermarks to HEAD so the first review/hypothesize
+					// doesn't treat every cloned fact as dirty.
+					if head, err := ri.GS.HeadCommit(); err == nil {
+						for _, tool := range []string{"review", "hypothesize"} {
+							if err := idx.SetPipelineWatermark(tool, ri.GS.Branch(), head); err != nil {
+								log.Warn().Err(err).Str("repo", repo).Str("tool", tool).Msg("commit: pipeline watermark set failed")
+							}
+						}
+					}
 				}
 			}
 		}

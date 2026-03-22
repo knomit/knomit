@@ -50,7 +50,7 @@ func TestOpenOne_DefaultCreatesNewRepo(t *testing.T) {
 	deps, agentBranch := defaultTestDeps(t, dir)
 
 	m := New(context.Background(), deps)
-	o, ri, err := m.openOne("knomit", dbPath, true)
+	ri, err := m.openOne("knomit", dbPath, true)
 	if err != nil {
 		t.Fatalf("openOne: %v", err)
 	}
@@ -74,12 +74,16 @@ func TestOpenOne_DefaultCreatesNewRepo(t *testing.T) {
 	if ri.Hub == nil {
 		t.Error("ri.Hub is nil")
 	}
-	if o.gs.Branch() != agentBranch {
-		t.Errorf("branch = %q, want %q", o.gs.Branch(), agentBranch)
+	gs, ok := ri.GS.(*git.Store)
+	if !ok {
+		t.Fatal("ri.GS is not *git.Store")
 	}
-	// MCP handlers should be nil — setupMCP not called yet
+	if gs.Branch() != agentBranch {
+		t.Errorf("branch = %q, want %q", gs.Branch(), agentBranch)
+	}
+	// MCP handlers should be nil — SetupMCP not called yet
 	if ri.MCPHandlers != nil {
-		t.Error("MCPHandlers should be nil before setupMCP")
+		t.Error("MCPHandlers should be nil before SetupMCP")
 	}
 }
 
@@ -91,7 +95,7 @@ func TestOpenOne_NonDefaultFailsWithoutGit(t *testing.T) {
 	deps, _ := defaultTestDeps(t, dir)
 	m := New(context.Background(), deps)
 
-	_, _, err := m.openOne("empty", dbPath, false)
+	_, err := m.openOne("empty", dbPath, false)
 	if err == nil {
 		t.Fatal("expected error for non-default repo without git data")
 	}
@@ -105,13 +109,13 @@ func TestSetupMCP_NoLLM(t *testing.T) {
 	m := New(context.Background(), deps)
 	m.ontology = fact.DefaultOntology()
 
-	o, ri, err := m.openOne("test", dbPath, true)
+	ri, err := m.openOne("test", dbPath, true)
 	if err != nil {
 		t.Fatalf("openOne: %v", err)
 	}
 	defer ri.Close()
 
-	m.setupMCP(o, ri)
+	m.SetupMCP(ri)
 
 	if ri.MCPHandlers == nil {
 		t.Fatal("MCPHandlers should not be nil after setupMCP")

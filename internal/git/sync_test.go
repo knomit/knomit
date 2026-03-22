@@ -640,4 +640,50 @@ func TestPush(t *testing.T) {
 			t.Fatal("expected Pushed=false when already up to date")
 		}
 	})
+
+	t.Run("non-fast-forward retries with force push", func(t *testing.T) {
+		// Regression test: after an origin session clone+swap, the remote may
+		// have the agent branch with a different history. Push should detect
+		// the non-fast-forward error and retry with a force push.
+		origin, agent := setupOriginAndAgent(t)
+
+		// Agent writes and pushes a file.
+		if _, _, err := agent.WriteFile("kb/first.md", "# First\n", "first", "learn"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := agent.Push(); err != nil {
+			t.Fatal(err)
+		}
+
+		// Simulate divergence: write a different commit directly on origin's
+		// copy of the agent branch, so origin's agent branch is ahead.
+		agentBranch := agent.Branch()
+		if _, _, err := origin.WriteFile("kb/origin-only.md", "# Origin\n", "origin diverge", "learn"); err != nil {
+			t.Fatal(err)
+		}
+		// Point origin's agent branch ref at origin's HEAD (diverged).
+		originHead, _ := origin.HeadCommit()
+		originAgentRef := plumbing.NewHashReference(
+			plumbing.NewBranchReferenceName(agentBranch),
+			plumbing.NewHash(originHead),
+		)
+		if err := origin.Storer().SetReference(originAgentRef); err != nil {
+			t.Fatal(err)
+		}
+
+		// Agent writes another file locally — now its agent branch has diverged
+		// from origin's copy of the agent branch.
+		if _, _, err := agent.WriteFile("kb/second.md", "# Second\n", "second", "learn"); err != nil {
+			t.Fatal(err)
+		}
+
+		// Push should succeed via force push fallback.
+		result, err := agent.Push()
+		if err != nil {
+			t.Fatalf("expected force push to succeed, got: %v", err)
+		}
+		if !result.Pushed {
+			t.Fatal("expected Pushed=true after force push")
+		}
+	})
 }

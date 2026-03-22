@@ -77,9 +77,19 @@ func (idx *Index) Search(q SearchQuery) ([]SearchResult, error) {
 			}
 			filterQuery += " AND f.type NOT IN (" + strings.Join(placeholders, ",") + ")"
 		}
+		// Push entity filter into SQL via json_each so we don't miss facts
+		// beyond the over-fetch LIMIT.
+		for _, e := range q.Entities {
+			filterQuery += " AND EXISTS (SELECT 1 FROM json_each(f.entities) je WHERE je.value = ? COLLATE NOCASE)"
+			args = append(args, e)
+		}
+		// Push domain filter into SQL via json_each (prefix match).
+		for _, d := range q.Domain {
+			filterQuery += " AND EXISTS (SELECT 1 FROM json_each(f.domain) jd WHERE jd.value = ? COLLATE NOCASE OR jd.value LIKE ? COLLATE NOCASE)"
+			args = append(args, d, d+"/%")
+		}
 		filterQuery += " LIMIT ?"
-		// Over-fetch to allow for Go-side entity/domain filtering.
-		args = append(args, limit*3)
+		args = append(args, limit)
 
 		rows, err := idx.db.Query(filterQuery, args...)
 		if err != nil {
@@ -93,16 +103,7 @@ func (idx *Index) Search(q SearchQuery) ([]SearchResult, error) {
 			if err != nil {
 				return nil, err
 			}
-			if len(q.Entities) > 0 && !containsAll(fb.Entities, q.Entities) {
-				continue
-			}
-			if len(q.Domain) > 0 && !domainPrefixMatch(fb.Domain, q.Domain) {
-				continue
-			}
 			out = append(out, SearchResult{FactWithBody: *fb, Score: 100})
-			if len(out) >= limit {
-				break
-			}
 		}
 		if err := rows.Err(); err != nil {
 			return nil, err
@@ -226,6 +227,14 @@ func (idx *Index) Search(q SearchQuery) ([]SearchResult, error) {
 		}
 		filterSQL += " AND f.type NOT IN (" + strings.Join(ph, ",") + ")"
 	}
+	for _, e := range q.Entities {
+		filterSQL += " AND EXISTS (SELECT 1 FROM json_each(f.entities) je WHERE je.value = ? COLLATE NOCASE)"
+		args = append(args, e)
+	}
+	for _, d := range q.Domain {
+		filterSQL += " AND EXISTS (SELECT 1 FROM json_each(f.domain) jd WHERE jd.value = ? COLLATE NOCASE OR jd.value LIKE ? COLLATE NOCASE)"
+		args = append(args, d, d+"/%")
+	}
 
 	batchQuery := `SELECT f.path, f.title, f.blob_hash, f.type, f.domain, f.entities, f.confidence, f.sources, f.refs, f.commit_hash, f.evidence_weight, o.data
 		 FROM facts f
@@ -243,15 +252,6 @@ func (idx *Index) Search(q SearchQuery) ([]SearchResult, error) {
 		fb, err := scanFactWithBodyFromRows(batchRows)
 		if err != nil {
 			return nil, err
-		}
-		// Entity and domain filters still applied in Go (json_each would require
-		// dynamic subqueries per filter element which adds complexity for little gain
-		// on the typically small candidate set).
-		if len(q.Entities) > 0 && !containsAll(fb.Entities, q.Entities) {
-			continue
-		}
-		if len(q.Domain) > 0 && !domainPrefixMatch(fb.Domain, q.Domain) {
-			continue
 		}
 		candidates = append(candidates, candidate{rec: *fb, score: vecSimByPath[fb.Path]})
 	}

@@ -7,6 +7,6 @@ For each transition, consider:
 - Was the prediction well-formed? What made it succeed or fail?
 - Is there a reusable lesson about the reasoning process itself?
 
-If you identify reusable methodology lessons, describe them. Each methodology fact should be a concise statement about reasoning process, not domain content.
+If you identify reusable methodology lessons, describe them. Each methodology fact should be a concise statement about reasoning process, not domain content. Call knomit_learn with type: methodology, topic: "meta", category: "reasoning" for each lesson.
 
 Respond with JSON matching the response schema.

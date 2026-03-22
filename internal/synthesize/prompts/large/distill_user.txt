@@ -27,4 +27,4 @@ Respond as JSON (no markdown wrapping):
 
 - Do NOT use hypothesis-type facts as inputs for creating new synthesis facts. Hypotheses are unconfirmed predictions.
 - If a hypothesis is confirmed by other evidence in the batch, retract it and include the hypothesis path in the new synthesis fact's refs.
-- When all input facts are type "methodology", the output must also be type "methodology" — not "synthesis". Methodology facts are about reasoning process, not domain content.
+- When all input facts are type "methodology", the output must also be type "methodology" — not "synthesis". Methodology facts are about reasoning process, not domain content. Always use a path under `knomit/meta/reasoning/` for methodology-type output (e.g. `knomit/meta/reasoning/descriptive-name.md`).
