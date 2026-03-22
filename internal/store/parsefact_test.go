@@ -2,6 +2,8 @@ package store
 
 import (
 	"testing"
+
+	"knomit/internal/fact"
 )
 
 func TestParseFact_TypeField(t *testing.T) {
@@ -27,8 +29,8 @@ func TestParseFact_TypeDefaultsToObservation(t *testing.T) {
 }
 
 func TestParseFact_AllEpistemicTypes(t *testing.T) {
-	types := []string{"observation", "concept", "process", "principle", "pattern", "reference"}
-	for _, et := range types {
+	for _, ep := range fact.AllTypes() {
+		et := string(ep)
 		content := "---\ntype: " + et + "\ndomain: []\nconfidence: 0.5\nsources: 1\nentities: []\nrefs: []\n---\n# Title\n\nBody.\n"
 		rec, err := parseFact("test/"+et+".md", content, "abc")
 		if err != nil {

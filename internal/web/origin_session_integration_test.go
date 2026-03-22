@@ -1028,7 +1028,7 @@ func TestOriginSession_RebuildAfterCommit(t *testing.T) {
 	if updatedRI == nil {
 		t.Fatal("repo instance not found after commit")
 	}
-	facts, total, err := updatedRI.Svc.Index().RecentFacts("", "", 100, 0)
+	facts, total, err := updatedRI.Svc.Index().RecentFacts("", "", 100, 0, nil, nil)
 	if err != nil {
 		t.Fatalf("RecentFacts: %v", err)
 	}

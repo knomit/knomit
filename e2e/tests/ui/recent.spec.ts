@@ -80,4 +80,28 @@ test.describe('Recent Mode', () => {
     await page.keyboard.press('Escape');
     await expect(page.getByTestId('left-panel')).toBeVisible();
   });
+
+  test('type filter dropdown is visible in recent mode', async ({ page }) => {
+    await page.keyboard.press('r');
+    const typeFilter = page.getByTestId('recent-type-filter');
+    await expect(typeFilter).toBeVisible();
+
+    // Should have "all types" as default
+    const value = await typeFilter.inputValue();
+    expect(value).toBe('');
+  });
+
+  test('selecting a type filter re-fetches with type param', async ({ page }) => {
+    await page.keyboard.press('r');
+    const items = page.getByTestId('recent-item');
+    await items.first().waitFor({ timeout: 10_000 });
+
+    const typeFilter = page.getByTestId('recent-type-filter');
+    // Select "observation" and verify API call includes type param
+    const responsePromise = page.waitForResponse(resp =>
+      resp.url().includes('/recent') && resp.url().includes('type=observation')
+    );
+    await typeFilter.selectOption('observation');
+    await responsePromise;
+  });
 });

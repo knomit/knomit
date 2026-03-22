@@ -4,7 +4,7 @@ import ReactMarkdown from 'react-markdown';
 import { api } from './api';
 import type { Fact, HistoryEntry, Stats, CommitDetail, CommitFile, ActivityStats } from './api';
 import type { AppState, Action } from './state';
-import { relativeTime, opStyles } from './utils';
+import { relativeTime, opStyles, typeStyles, defaultTypeStyle } from './utils';
 
 function commitDetailStyle(detail: CommitDetail): { color: string; bg: string; label: string } | null {
   if (detail.operation && opStyles[detail.operation]) return opStyles[detail.operation];
@@ -243,16 +243,28 @@ function renderFact(fact: Fact, search: (q: string) => void, dispatch?: Dispatch
             </span>
           )}
         </div>
-        {dispatch ? (
-          <div
-            onClick={() => { dispatch({ type: 'FACT_HISTORY', factPath: fact.path }); }}
-            style={{ fontSize: 12, color: '#556', marginTop: 2, cursor: 'pointer' }}
-            onMouseEnter={e => { (e.currentTarget as HTMLElement).style.color = '#8af'; }}
-            onMouseLeave={e => { (e.currentTarget as HTMLElement).style.color = '#556'; }}
-          >{fact.path}</div>
-        ) : (
-          <div style={{ fontSize: 12, color: '#555', marginTop: 2 }}>{fact.path}</div>
-        )}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 4 }}>
+          {fact.type && (() => {
+            const ts = typeStyles[fact.type] || defaultTypeStyle;
+            return (
+              <span data-testid="fact-type-badge" style={{
+                color: ts.color, background: ts.bg, fontSize: 10, padding: '2px 8px',
+                borderRadius: 3, fontFamily: 'monospace', letterSpacing: 0.5,
+                border: fact.type === 'hypothesis' ? `1px dashed ${ts.color}` : 'none',
+              }}>{ts.icon} {ts.label}</span>
+            );
+          })()}
+          {dispatch ? (
+            <div
+              onClick={() => { dispatch({ type: 'FACT_HISTORY', factPath: fact.path }); }}
+              style={{ fontSize: 12, color: '#556', cursor: 'pointer' }}
+              onMouseEnter={e => { (e.currentTarget as HTMLElement).style.color = '#8af'; }}
+              onMouseLeave={e => { (e.currentTarget as HTMLElement).style.color = '#556'; }}
+            >{fact.path}</div>
+          ) : (
+            <div style={{ fontSize: 12, color: '#555' }}>{fact.path}</div>
+          )}
+        </div>
       </div>
 
       {/* Stat cards */}

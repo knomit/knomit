@@ -39,31 +39,36 @@ CREATE TABLE IF NOT EXISTS facts (
     evidence_weight  REAL NOT NULL DEFAULT 0
 );
 
+CREATE INDEX IF NOT EXISTS facts_type ON facts(type);
+
 -- Trigger: clean up embeddings when a fact is deleted
 CREATE TRIGGER IF NOT EXISTS facts_after_delete AFTER DELETE ON facts
 BEGIN
     DELETE FROM facts_vec WHERE rowid = OLD.rowid;
 END;
 
--- Review watermarks (track last-reviewed commit per branch)
-CREATE TABLE IF NOT EXISTS review_watermarks (
-    branch      TEXT PRIMARY KEY,
-    commit_hash TEXT NOT NULL
+-- Pipeline watermarks (track last-processed commit per tool per branch)
+CREATE TABLE IF NOT EXISTS pipeline_watermarks (
+    tool        TEXT NOT NULL,
+    branch      TEXT NOT NULL,
+    commit_hash TEXT NOT NULL,
+    PRIMARY KEY (tool, branch)
 );
 
--- Review sessions
-CREATE TABLE IF NOT EXISTS review_sessions (
+-- Pipeline sessions
+CREATE TABLE IF NOT EXISTS pipeline_sessions (
     id          TEXT PRIMARY KEY,
+    tool        TEXT NOT NULL,
     branch      TEXT NOT NULL,
     status      TEXT NOT NULL DEFAULT 'active',
     created_at  TEXT NOT NULL,
     updated_at  TEXT NOT NULL
 );
 
--- Review work items
-CREATE TABLE IF NOT EXISTS review_work_items (
+-- Pipeline work items
+CREATE TABLE IF NOT EXISTS pipeline_work_items (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    session_id  TEXT NOT NULL REFERENCES review_sessions(id) ON DELETE CASCADE,
+    session_id  TEXT NOT NULL REFERENCES pipeline_sessions(id) ON DELETE CASCADE,
     step_type   TEXT NOT NULL,
     cluster_key TEXT NOT NULL,
     facts_json  TEXT NOT NULL,

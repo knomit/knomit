@@ -66,6 +66,7 @@ func QueryHandler(gs GitStore, idx SearchIndex) func(context.Context, mcpgo.Call
 		type factOutput struct {
 			File        string      `json:"file"`
 			Title       string      `json:"title"`
+			Type        string      `json:"type"`
 			Body        string      `json:"body"`
 			LastModified string     `json:"last_modified,omitempty"`
 			Commit      string      `json:"commit"`
@@ -91,6 +92,7 @@ func QueryHandler(gs GitStore, idx SearchIndex) func(context.Context, mcpgo.Call
 			facts[i] = factOutput{
 				File:        r.Path,
 				Title:       r.Title,
+				Type:        r.Type,
 				Body:        r.Body,
 				Commit:      r.CommitHash,
 				Frontmatter: fm,

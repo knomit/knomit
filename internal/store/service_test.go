@@ -99,11 +99,11 @@ func TestMigration_ReviewWorkItemsDepth(t *testing.T) {
 
 	// Step 3: Verify we can insert and read a work item with depth.
 	idx := svc2.Index()
-	sess, err := idx.CreateReviewSession("main")
+	sess, err := idx.CreatePipelineSession("review", "main")
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = idx.InsertWorkItem(ReviewWorkItem{
+	err = idx.InsertPipelineWorkItem(PipelineWorkItem{
 		SessionID:  sess.ID,
 		StepType:   "distill",
 		ClusterKey: "raptor-d2",
@@ -112,10 +112,10 @@ func TestMigration_ReviewWorkItemsDepth(t *testing.T) {
 		Depth:      2,
 	})
 	if err != nil {
-		t.Fatalf("InsertWorkItem with depth after migration: %v", err)
+		t.Fatalf("InsertPipelineWorkItem with depth after migration: %v", err)
 	}
 
-	item, err := idx.NextWorkItem(sess.ID)
+	item, err := idx.NextPipelineWorkItem(sess.ID)
 	if err != nil {
 		t.Fatal(err)
 	}

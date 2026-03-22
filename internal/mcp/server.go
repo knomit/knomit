@@ -39,6 +39,12 @@ type ToolSession = storepkg.ToolSession
 // QueueItem is re-exported from internal/store.
 type QueueItem = storepkg.QueueItem
 
+// PipelineSession is re-exported from internal/store.
+type PipelineSession = storepkg.PipelineSession
+
+// PipelineWorkItem is re-exported from internal/store.
+type PipelineWorkItem = storepkg.PipelineWorkItem
+
 // GitStore is the interface the MCP tools require from internal/git.
 // Only methods actually used by the tool handlers are listed here so that
 // tests can use lightweight mocks.
@@ -81,9 +87,23 @@ type ToolSessionIndex interface {
 	QueueSize(sessionID string) (int, error)
 }
 
+// PipelineIndex is the interface the MCP tools require for pipeline session management.
+type PipelineIndex interface {
+	CreatePipelineSession(tool, branch string) (*PipelineSession, error)
+	GetPipelineSession(id string) (*PipelineSession, error)
+	CompletePipelineSession(id string) error
+	InsertPipelineWorkItem(item PipelineWorkItem) error
+	NextPipelineWorkItem(sessionID string) (*PipelineWorkItem, error)
+	SetPipelineWorkItemResponse(id int64, response string) error
+	PipelineWorkItemStats(sessionID string) (completed, remaining int, err error)
+	GCPipelineSessions(tool, branch string, keep int) error
+	GetPipelineWatermark(tool, branch string) (string, error)
+	SetPipelineWatermark(tool, branch, hash string) error
+}
+
 // NewServer creates a new MCP server with all knomit tools registered.
 // If embedder is non-nil, the learn tool uses it for batch dedup embedding.
-func NewServer(gs GitStore, idx SearchIndex, sessionIdx ToolSessionIndex, reviewer Reviewer, profile, ontologyRoot string, ontology *fact.Ontology, embedders ...BatchEmbedder) *server.MCPServer {
+func NewServer(gs GitStore, idx SearchIndex, sessionIdx ToolSessionIndex, pipelineIdx PipelineIndex, reviewer Reviewer, profile, ontologyRoot string, ontology *fact.Ontology, embedders ...BatchEmbedder) *server.MCPServer {
 	s := server.NewMCPServer("knomit", "1.0.0",
 		server.WithInstructions(ProfileInstructions(profile, ontologyRoot, ontology)),
 	)
@@ -94,6 +114,8 @@ func NewServer(gs GitStore, idx SearchIndex, sessionIdx ToolSessionIndex, review
 	s.AddTool(updateTool(), UpdateHandler(gs, ontologyRoot))
 	s.AddTool(exploreTool(ontologyRoot), ExploreHandler(gs, sessionIdx, ontologyRoot))
 	s.AddTool(retractTool(), RetractHandler(gs, ontologyRoot))
+
+	s.AddTool(hypothesizeTool(), HypothesizeHandler(gs, idx, pipelineIdx, ontologyRoot))
 
 	if reviewer != nil {
 		s.AddTool(reviewTool(), ReviewHandler(reviewer))

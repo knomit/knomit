@@ -31,11 +31,37 @@ func TestNormalizePath(t *testing.T) {
 		{"kb/topic/foo", "kb/topic/foo.md"},
 		{"kb/topic/foo.md", "kb/topic/foo.md"},
 		{"topic/foo.md", "kb/topic/foo.md"},
+		// Case normalization: segments after root are lowercased.
+		{"Technology/AI/abc.md", "kb/technology/ai/abc.md"},
+		{"kb/Technology/AI/abc.md", "kb/technology/ai/abc.md"},
+		{"TOPIC/FOO", "kb/topic/foo.md"},
 	}
 	for _, tc := range tests {
 		got := NormalizePath(root, tc.input)
 		if got != tc.want {
 			t.Errorf("NormalizePath(%q, %q) = %q, want %q", root, tc.input, got, tc.want)
+		}
+	}
+}
+
+func TestBuildFactPathLowercase(t *testing.T) {
+	tests := []struct {
+		topic    string
+		category string
+		prefix   string
+	}{
+		{"Technology", "Languages/Go", "kb/technology/languages/go/"},
+		{"technology", "languages/go", "kb/technology/languages/go/"},
+		{"SCIENCE", "Natural/PHYSICS", "kb/science/natural/physics/"},
+		{"People", "Colleagues/Alice", "kb/people/colleagues/alice/"},
+	}
+	for _, tc := range tests {
+		path := BuildFactPath("kb", tc.topic, tc.category)
+		if path != strings.ToLower(path) {
+			t.Errorf("BuildFactPath(%q, %q) should produce lowercase, got %q", tc.topic, tc.category, path)
+		}
+		if !strings.HasPrefix(path, tc.prefix) {
+			t.Errorf("BuildFactPath(%q, %q) expected prefix %q, got %q", tc.topic, tc.category, tc.prefix, path)
 		}
 	}
 }

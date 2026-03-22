@@ -30,4 +30,24 @@ test.describe('API: Search', () => {
     expect(Array.isArray(body.results)).toBeTruthy();
     expect(body.results.length).toBeLessThanOrEqual(1);
   });
+
+  test('type filter restricts results to specified type', async ({ request, sharedBaseURL }) => {
+    const res = await request.get(`${sharedBaseURL}/api/v1/knomit/search?q=PostgreSQL&type=observation`);
+    expect(res.ok()).toBeTruthy();
+    const body = await res.json();
+    expect(Array.isArray(body.results)).toBeTruthy();
+    for (const r of body.results) {
+      expect(r.type).toBe('observation');
+    }
+  });
+
+  test('exclude_type filter excludes specified type', async ({ request, sharedBaseURL }) => {
+    const res = await request.get(`${sharedBaseURL}/api/v1/knomit/search?q=PostgreSQL&exclude_type=hypothesis`);
+    expect(res.ok()).toBeTruthy();
+    const body = await res.json();
+    expect(Array.isArray(body.results)).toBeTruthy();
+    for (const r of body.results) {
+      expect(r.type).not.toBe('hypothesis');
+    }
+  });
 });

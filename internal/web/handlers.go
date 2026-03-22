@@ -80,10 +80,34 @@ func handleBrowse(ontologyRoot string) http.HandlerFunc {
 		type child struct {
 			Name  string `json:"name"`
 			IsDir bool   `json:"is_dir"`
+			Type  string `json:"type,omitempty"`
 		}
+
+		// Batch-fetch epistemic types for fact files from the index.
+		typeByPath := map[string]string{}
+		if ri.Idx != nil {
+			var factPaths []string
+			for _, e := range entries {
+				if !e.IsDir {
+					factPaths = append(factPaths, path+"/"+e.Name)
+				}
+			}
+			if len(factPaths) > 0 {
+				for _, fp := range factPaths {
+					if fb, err := ri.Idx.GetByPath(fp); err == nil && fb != nil {
+						typeByPath[fp] = fb.Type
+					}
+				}
+			}
+		}
+
 		children := make([]child, 0, len(entries))
 		for _, e := range entries {
-			children = append(children, child{Name: e.Name, IsDir: e.IsDir})
+			c := child{Name: e.Name, IsDir: e.IsDir}
+			if !e.IsDir {
+				c.Type = typeByPath[path+"/"+e.Name]
+			}
+			children = append(children, c)
 		}
 
 		writeJSON(w, http.StatusOK, map[string]any{
@@ -258,6 +282,8 @@ func handleSearch() http.HandlerFunc {
 		minSimilarityStr := q.Get("min_similarity")
 		limitStr := q.Get("limit")
 		graphHopsStr := q.Get("graph_hops")
+		typeStr := q.Get("type")
+		excludeTypeStr := q.Get("exclude_type")
 
 		var entities []string
 		if entitiesStr != "" {
@@ -324,6 +350,26 @@ func handleSearch() http.HandlerFunc {
 			graphHops = 1 // default
 		}
 
+		var includeTypes []string
+		if typeStr != "" {
+			for _, t := range strings.Split(typeStr, ",") {
+				t = strings.TrimSpace(t)
+				if t != "" {
+					includeTypes = append(includeTypes, t)
+				}
+			}
+		}
+
+		var excludeTypes []string
+		if excludeTypeStr != "" {
+			for _, t := range strings.Split(excludeTypeStr, ",") {
+				t = strings.TrimSpace(t)
+				if t != "" {
+					excludeTypes = append(excludeTypes, t)
+				}
+			}
+		}
+
 		log.Debug().Str("q", text).Strs("entities", entities).Strs("domain", domain).Int("limit", limit).Msg("search")
 
 		results, err := ri.Idx.Search(store.SearchQuery{
@@ -335,6 +381,8 @@ func handleSearch() http.HandlerFunc {
 			MinSimilarity: minSimilarity,
 			Limit:         limit,
 			GraphHops:     graphHops,
+			IncludeTypes:  includeTypes,
+			ExcludeTypes:  excludeTypes,
 		})
 		if err != nil {
 			log.Debug().Err(err).Msg("search failed")
@@ -491,7 +539,27 @@ func handleRecent() http.HandlerFunc {
 		}
 
 		query := r.URL.Query().Get("q")
-		entries, total, err := ri.Svc.Index().RecentFacts(path, query, limit, offset)
+
+		var includeTypes []string
+		if v := r.URL.Query().Get("type"); v != "" {
+			for _, t := range strings.Split(v, ",") {
+				t = strings.TrimSpace(t)
+				if t != "" {
+					includeTypes = append(includeTypes, t)
+				}
+			}
+		}
+		var excludeTypes []string
+		if v := r.URL.Query().Get("exclude_type"); v != "" {
+			for _, t := range strings.Split(v, ",") {
+				t = strings.TrimSpace(t)
+				if t != "" {
+					excludeTypes = append(excludeTypes, t)
+				}
+			}
+		}
+
+		entries, total, err := ri.Svc.Index().RecentFacts(path, query, limit, offset, includeTypes, excludeTypes)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, fmt.Sprintf("recent error: %v", err))
 			return

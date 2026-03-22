@@ -297,7 +297,7 @@ func (m *Manager) openOne(name, dbPath string, isDefault bool) (*openedRepo, *Re
 	// doesn't treat every existing fact as dirty.
 	if freshInit {
 		if head, err := gs.HeadCommit(); err == nil {
-			if err := idx.SetReviewWatermark(gs.Branch(), head); err != nil {
+			if err := idx.SetPipelineWatermark("review", gs.Branch(), head); err != nil {
 				log.Warn().Err(err).Msg("review watermark: initial set failed")
 			}
 		}
@@ -409,9 +409,9 @@ func (m *Manager) setupMCP(o *openedRepo, ri *RepoInstance) {
 	for _, p := range profiles {
 		var mcpSrv *mcpserver.MCPServer
 		if embedder != nil {
-			mcpSrv = mcp.NewServer(o.gs, o.idx, o.idx, reviewer, p, ontologyRoot, m.ontology, embedder)
+			mcpSrv = mcp.NewServer(o.gs, o.idx, o.idx, o.idx, reviewer, p, ontologyRoot, m.ontology, embedder)
 		} else {
-			mcpSrv = mcp.NewServer(o.gs, o.idx, o.idx, reviewer, p, ontologyRoot, m.ontology)
+			mcpSrv = mcp.NewServer(o.gs, o.idx, o.idx, o.idx, reviewer, p, ontologyRoot, m.ontology)
 		}
 		mcpHandlers[p] = mcpserver.NewStreamableHTTPServer(mcpSrv)
 	}

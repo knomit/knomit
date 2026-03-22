@@ -284,6 +284,36 @@ func TestDedupCluster_MergesNearDuplicates(t *testing.T) {
 	}
 }
 
+func TestMergeFactsObservationWinsOverHypothesis(t *testing.T) {
+	obs := factForLLM{File: "a.md", Type: "observation", Confidence: 0.5, Sources: 1}
+	hyp := factForLLM{File: "b.md", Type: "hypothesis", Confidence: 0.9, Sources: 3}
+	winner, loser := mergeFacts(obs, hyp)
+	if winner.File != "a.md" {
+		t.Errorf("observation should win over hypothesis regardless of confidence, got winner=%s", winner.File)
+	}
+	if loser.File != "b.md" {
+		t.Errorf("hypothesis should be loser, got loser=%s", loser.File)
+	}
+}
+
+func TestMergeFactsHypVsHypUsesConfidence(t *testing.T) {
+	a := factForLLM{File: "a.md", Type: "hypothesis", Confidence: 0.9, Sources: 1}
+	b := factForLLM{File: "b.md", Type: "hypothesis", Confidence: 0.5, Sources: 3}
+	winner, _ := mergeFacts(a, b)
+	if winner.File != "a.md" {
+		t.Errorf("between hypotheses, higher confidence should win, got winner=%s", winner.File)
+	}
+}
+
+func TestMergeFactsObsVsObsPreserved(t *testing.T) {
+	a := factForLLM{File: "a.md", Type: "observation", Confidence: 0.5, Sources: 1}
+	b := factForLLM{File: "b.md", Type: "observation", Confidence: 0.9, Sources: 3}
+	winner, _ := mergeFacts(a, b)
+	if winner.File != "b.md" {
+		t.Errorf("between observations, higher confidence should win, got winner=%s", winner.File)
+	}
+}
+
 // TestDedupCluster_SkipsBelowThreshold verifies that when no facts exceed the
 // similarity threshold, all facts survive unchanged.
 func TestDedupCluster_SkipsBelowThreshold(t *testing.T) {

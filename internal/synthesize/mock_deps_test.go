@@ -147,6 +147,21 @@ func (mr *MockGitStoreMockRecorder) ReadFile(path any) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ReadFile", reflect.TypeOf((*MockGitStore)(nil).ReadFile), path)
 }
 
+// ReadFileAtCommit mocks base method.
+func (m *MockGitStore) ReadFileAtCommit(path, commitHash string) (string, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ReadFileAtCommit", path, commitHash)
+	ret0, _ := ret[0].(string)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// ReadFileAtCommit indicates an expected call of ReadFileAtCommit.
+func (mr *MockGitStoreMockRecorder) ReadFileAtCommit(path, commitHash any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ReadFileAtCommit", reflect.TypeOf((*MockGitStore)(nil).ReadFileAtCommit), path, commitHash)
+}
+
 // WriteFile mocks base method.
 func (m *MockGitStore) WriteFile(path, content, message, operation string) (string, string, error) {
 	m.ctrl.T.Helper()
@@ -296,4 +311,58 @@ func (m *MockEmbedder) Embed(text string) ([]float32, error) {
 func (mr *MockEmbedderMockRecorder) Embed(text any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Embed", reflect.TypeOf((*MockEmbedder)(nil).Embed), text)
+}
+
+// MockBatchEmbedder is a mock of BatchEmbedder interface.
+type MockBatchEmbedder struct {
+	ctrl     *gomock.Controller
+	recorder *MockBatchEmbedderMockRecorder
+	isgomock struct{}
+}
+
+// MockBatchEmbedderMockRecorder is the mock recorder for MockBatchEmbedder.
+type MockBatchEmbedderMockRecorder struct {
+	mock *MockBatchEmbedder
+}
+
+// NewMockBatchEmbedder creates a new mock instance.
+func NewMockBatchEmbedder(ctrl *gomock.Controller) *MockBatchEmbedder {
+	mock := &MockBatchEmbedder{ctrl: ctrl}
+	mock.recorder = &MockBatchEmbedderMockRecorder{mock}
+	return mock
+}
+
+// EXPECT returns an object that allows the caller to indicate expected use.
+func (m *MockBatchEmbedder) EXPECT() *MockBatchEmbedderMockRecorder {
+	return m.recorder
+}
+
+// Embed mocks base method.
+func (m *MockBatchEmbedder) Embed(text string) ([]float32, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Embed", text)
+	ret0, _ := ret[0].([]float32)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// Embed indicates an expected call of Embed.
+func (mr *MockBatchEmbedderMockRecorder) Embed(text any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Embed", reflect.TypeOf((*MockBatchEmbedder)(nil).Embed), text)
+}
+
+// EmbedBatch mocks base method.
+func (m *MockBatchEmbedder) EmbedBatch(texts []string) ([][]float32, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "EmbedBatch", texts)
+	ret0, _ := ret[0].([][]float32)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// EmbedBatch indicates an expected call of EmbedBatch.
+func (mr *MockBatchEmbedderMockRecorder) EmbedBatch(texts any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "EmbedBatch", reflect.TypeOf((*MockBatchEmbedder)(nil).EmbedBatch), texts)
 }

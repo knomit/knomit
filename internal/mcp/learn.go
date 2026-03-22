@@ -29,7 +29,7 @@ func learnTool() mcpgo.Tool {
 					"category":   map[string]any{"type": "string", "description": "Category path within the topic (e.g. languages/go/concurrency)."},
 					"title":      map[string]any{"type": "string", "description": "Fact title (short, descriptive)."},
 					"body":       map[string]any{"type": "string", "description": "Fact body in natural language."},
-					"type":       map[string]any{"type": "string", "description": "Epistemic type: observation (default, concrete facts), concept (definitions), process (procedures), principle (rules/heuristics), pattern (recurring structures), reference (specs/measurements), synthesis (derived from other facts).", "default": "observation"},
+					"type":       map[string]any{"type": "string", "description": "Epistemic type: observation (default, concrete facts), concept (definitions), process (procedures), principle (rules/heuristics), pattern (recurring structures), reference (specs/measurements), synthesis (derived from other facts), hypothesis (predictions from patterns — carries uncertainty), methodology (reasoning process lessons).", "default": "observation"},
 					"domain":     map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Cross-cutting domain tags."},
 					"confidence": map[string]any{"type": "number", "description": "Certainty level 0.0–1.0.", "default": 0.7},
 					"sources":    map[string]any{"type": "integer", "description": "Number of independent sources.", "default": 1},
@@ -85,6 +85,23 @@ func LearnHandler(gs GitStore, idx SearchIndex, ontologyRoot string, ontology *f
 		}
 		if len(factInputs) == 0 {
 			return mcpgo.NewToolResultError("facts must not be empty"), nil
+		}
+
+		// Validate batch type consistency: cannot mix observed and inferred types.
+		hasObserved, hasInferred := false, false
+		for _, fi := range factInputs {
+			eType := fact.EpistemicType(fi.Type)
+			if eType == "" {
+				eType = fact.DefaultType
+			}
+			if eType == fact.Hypothesis || eType == fact.Methodology {
+				hasInferred = true
+			} else {
+				hasObserved = true
+			}
+		}
+		if hasObserved && hasInferred {
+			return mcpgo.NewToolResultError("cannot mix observed types (observation, concept, etc.) and inferred types (hypothesis, methodology) in a single learn call"), nil
 		}
 
 		// 3. Validate inputs, build paths, and serialize facts.
@@ -179,6 +196,20 @@ func LearnHandler(gs GitStore, idx SearchIndex, ontologyRoot string, ontology *f
 			}
 			existingFact, parseErr := ParseFact(match.Path, existingContent)
 			if parseErr != nil {
+				continue
+			}
+
+			// Type-aware dedup: if existing fact is a hypothesis and new fact is not,
+			// the observation subsumes the hypothesis.
+			if existingFact.Type == fact.Hypothesis && f.Type != fact.Hypothesis {
+				// Write the observation as normal (don't merge into existing path).
+				// Retract the hypothesis.
+				retractMsg := fmt.Sprintf("learn: hypothesis %s subsumed by observation", match.Path)
+				gs.DeleteFile(match.Path, retractMsg, "retract")
+				// Add hypothesis path to observation's refs.
+				f.Refs = fact.AppendUnique(f.Refs, match.Path)
+				facts[i] = f
+				files[f.Path] = SerializeFact(f)
 				continue
 			}
 

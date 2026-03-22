@@ -33,6 +33,7 @@ type GitStore interface {
 // Accepts *store.Index at runtime.
 type SearchIndex interface {
 	Search(q store.SearchQuery) ([]store.SearchResult, error)
+	GetByPath(path string) (*store.FactWithBody, error)
 	GetLastCommit(branch string) (string, error)
 	Stats(pathPrefix string) (store.StatsResult, error)
 }

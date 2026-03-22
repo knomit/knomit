@@ -31,3 +31,13 @@ Respond as JSON (no markdown wrapping):
     }
   ]
 }
+
+## Hypothesis handling
+
+If the batch contains facts with type "hypothesis" alongside observations or synthesis facts:
+
+- Check whether observations corroborate or contradict the hypothesis's falsification condition.
+- Corroborated: action "update" with higher confidence, or promote via "merge" into a synthesis fact if evidence is strong. When promoting, the merged output type must be "synthesis" and confidence must be inherited from the hypothesis (not recomputed).
+- Contradicted: action "update" with lower confidence, or "retract" if falsified.
+- Neither: action "keep".
+- Only observations and synthesis facts count as confirmation. Other hypotheses do NOT count — predictions cannot confirm predictions.

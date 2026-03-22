@@ -60,6 +60,7 @@ func ExploreHandler(gs GitStore, sessionIdx ToolSessionIndex, ontologyRoot strin
 		type factOutput struct {
 			Path    string `json:"path"`
 			Title   string `json:"title"`
+			Type    string `json:"type"`
 			Updated string `json:"updated"`
 		}
 
@@ -78,6 +79,7 @@ func ExploreHandler(gs GitStore, sessionIdx ToolSessionIndex, ontologyRoot strin
 			facts = append(facts, factOutput{
 				Path:    f.Path,
 				Title:   parsed.Title,
+				Type:    string(parsed.Type),
 				Updated: f.Timestamp.Format(time.RFC3339),
 			})
 			newPaths = append(newPaths, f.Path)

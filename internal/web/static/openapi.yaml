@@ -333,6 +333,10 @@ components:
           type: string
         body:
           type: string
+        type:
+          type: string
+          enum: [observation, concept, process, principle, pattern, reference, synthesis, hypothesis, methodology]
+          description: Epistemic type of the fact
         domain:
           type: array
           items:

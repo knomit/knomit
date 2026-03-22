@@ -11,11 +11,11 @@ import (
 
 // TestReviewLoopIntegration exercises the full review loop end-to-end:
 // StartSession → ContinueSession (prune) → ContinueSession (distill) → done,
-// using a real git store and real SQLite-backed ReviewIndex.
+// using a real git store and real SQLite-backed PipelineIndex.
 func TestReviewLoopIntegration(t *testing.T) {
 	ctrl := gomock.NewController(t)
 
-	// Real SQLite store for ReviewIndex.
+	// Real SQLite store for PipelineIndex.
 	dir := t.TempDir()
 	svc, err := store.Open(dir + "/test.db")
 	if err != nil {
@@ -147,7 +147,7 @@ func TestReviewLoopIntegration(t *testing.T) {
 	t.Logf("Session complete: completed=%d", result.Progress.Completed)
 
 	// --- Step 5: Verify watermark was advanced. ---
-	watermark, err := reviewIdx.GetReviewWatermark(gitStore.Branch())
+	watermark, err := reviewIdx.GetPipelineWatermark("review", gitStore.Branch())
 	if err != nil {
 		t.Fatalf("GetReviewWatermark: %v", err)
 	}
@@ -171,9 +171,9 @@ func TestReviewLoopIntegration(t *testing.T) {
 	t.Logf("Second StartSession: done=%v", result2.Done)
 
 	// --- Step 7: Verify session was persisted and completed. ---
-	sess, err := reviewIdx.GetReviewSession(sessionID)
+	sess, err := reviewIdx.GetPipelineSession(sessionID)
 	if err != nil {
-		t.Fatalf("GetReviewSession: %v", err)
+		t.Fatalf("GetPipelineSession: %v", err)
 	}
 	if sess == nil {
 		t.Fatal("expected session to still be retrievable")

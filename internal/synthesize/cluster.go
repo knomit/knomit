@@ -21,6 +21,7 @@ func ScopedCluster(
 	idx SearchIndex,
 	resolution float64,
 	onProgress func(ProgressEvent),
+	excludeTypes ...string,
 ) ([][]factForLLM, error) {
 	if len(seeds) == 0 {
 		return nil, nil
@@ -43,9 +44,10 @@ func ScopedCluster(
 
 		cat := categoryDir(seed.File)
 		results, err := idx.Search(store.SearchQuery{
-			Text:  seed.Title + " " + seed.Body,
-			Path:  cat,
-			Limit: 10,
+			Text:         seed.Title + " " + seed.Body,
+			Path:         cat,
+			Limit:        10,
+			ExcludeTypes: excludeTypes,
 		})
 		if err != nil {
 			log.Debug().Err(err).Str("seed", seed.File).Msg("scoped-cluster: neighbor search failed")

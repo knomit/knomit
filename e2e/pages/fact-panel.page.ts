@@ -5,6 +5,7 @@ export class FactPanel {
   readonly title: Locator;
   readonly body: Locator;
   readonly meta: Locator;
+  readonly typeBadge: Locator;
   readonly editor: Locator;
   readonly saveBtn: Locator;
 
@@ -13,6 +14,7 @@ export class FactPanel {
     this.title = page.getByTestId('fact-title');
     this.body = page.getByTestId('fact-body');
     this.meta = page.getByTestId('fact-meta');
+    this.typeBadge = page.getByTestId('fact-type-badge');
     this.editor = page.getByTestId('fact-editor');
     this.saveBtn = page.getByTestId('fact-save-btn');
   }

@@ -195,7 +195,12 @@ func TestValidatePath(t *testing.T) {
 		{"people/alice", false, ""},
 		{"cooking", true, "unknown topic"},
 		{"", true, "empty path"},
-		{"TECHNOLOGY", true, "unknown topic"},
+		// Case-insensitive topic and child lookup.
+		{"TECHNOLOGY", false, ""},
+		{"Technology", false, ""},
+		{"technology/Software", false, ""},             // matches child "software"
+		{"Technology/Software/Go", false, ""},           // mixed case throughout
+		{"TECHNOLOGY/SOFTWARE/GO/CONCURRENCY", false, ""}, // all caps accepted
 	}
 	for _, tc := range tests {
 		t.Run(tc.path, func(t *testing.T) {
@@ -281,8 +286,8 @@ func TestDefaultOntology(t *testing.T) {
 	if ont.Name != "General Knowledge" {
 		t.Errorf("expected Name 'General Knowledge', got %q", ont.Name)
 	}
-	if len(ont.Topics) != 12 {
-		t.Errorf("expected 12 topics, got %d", len(ont.Topics))
+	if len(ont.Topics) != 13 {
+		t.Errorf("expected 13 topics, got %d", len(ont.Topics))
 	}
 
 	// Spot-check technology/software.

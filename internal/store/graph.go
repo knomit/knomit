@@ -32,8 +32,8 @@ func (idx *Index) graphSyncFactTx(tx execer, rec FactRecord) error {
 	if _, err := tx.Exec(q); err != nil {
 		return fmt.Errorf("graph merge fact: %w", err)
 	}
-	q = fmt.Sprintf(`SELECT cypher('MATCH (f:Fact {path: "%s"}) SET f.title = "%s", f.user_id = "%s", f.confidence = %f, f.sources = %d, f.deleted = false')`,
-		path, title, path, rec.Confidence, rec.Sources)
+	q = fmt.Sprintf(`SELECT cypher('MATCH (f:Fact {path: "%s"}) SET f.title = "%s", f.user_id = "%s", f.confidence = %f, f.sources = %d, f.deleted = false, f.type = "%s"')`,
+		path, title, path, rec.Confidence, rec.Sources, escapeCypherVal(rec.Type))
 	if _, err := tx.Exec(q); err != nil {
 		return fmt.Errorf("graph set fact props: %w", err)
 	}

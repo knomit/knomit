@@ -269,6 +269,47 @@ func TestApplyDistillDecisions_NoRefs(t *testing.T) {
 	}
 }
 
+func TestApplyDistillRejectsHypothesisType(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	gs := NewMockGitStore(ctrl)
+	idx := NewMockSearchIndex(ctrl)
+	// No expectations on gs or idx — hypothesis is skipped before any I/O.
+
+	synthesized := []distillFact{
+		{
+			Path:       "kb/test/hyp.md",
+			Title:      "A hypothesis",
+			Body:       "Maybe this is true.",
+			Type:       "hypothesis",
+			Domain:     []string{"testing"},
+			Confidence: 0.7,
+		},
+	}
+	progress := collectProgress()
+
+	stats, written, err := ApplyDistillDecisions(gs, idx, synthesized, nil, "test", progress.fn)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if stats.Synthesized != 0 {
+		t.Errorf("expected Synthesized=0 (hypothesis skipped), got %d", stats.Synthesized)
+	}
+	if len(written) != 0 {
+		t.Errorf("expected no written facts, got %d", len(written))
+	}
+	// A warn progress event should have been emitted.
+	found := false
+	for _, e := range progress.events {
+		if e.Phase == "warn" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected a warn progress event for rejected hypothesis, got %v", progress.events)
+	}
+}
+
 // progressCollector is a test helper that records progress events.
 type progressCollector struct {
 	events []ProgressEvent

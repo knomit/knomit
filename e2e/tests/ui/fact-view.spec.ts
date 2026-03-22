@@ -66,6 +66,24 @@ test.describe('Fact View', () => {
     expect(body.length).toBeGreaterThan(10);
   });
 
+  test('displays fact type badge', async () => {
+    await browse.clickEntry('databases');
+    await browse.waitForEntry('postgresql');
+    await browse.clickEntry('postgresql');
+    await browse.waitForFactEntry();
+    const entries = await browse.getDirectoryEntries();
+    const facts = entries.filter(e => !e.isDir);
+    const mvcc = facts.find(f => f.name === 'mvcc.md');
+    await browse.clickEntry(mvcc ? mvcc.name : facts[0].name);
+
+    // Verify type badge is visible
+    await expect(factPanel.typeBadge).toBeVisible({ timeout: 5_000 });
+    const badgeText = await factPanel.typeBadge.textContent();
+    expect(badgeText).toBeTruthy();
+    // Should contain one of the known type labels
+    expect(badgeText).toMatch(/observation|concept|process|principle|pattern|reference|synthesis|hypothesis|methodology/);
+  });
+
   test('switching facts updates the panel', async () => {
     // Navigate to a directory with observation-type facts
     await browse.clickEntry('databases');

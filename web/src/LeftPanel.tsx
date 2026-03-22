@@ -5,6 +5,7 @@ import type { DirChild, SearchResult } from './api';
 import type { AppState, Action } from './state';
 import { HistoryTimeline } from './HistoryTimeline';
 import { RecentFacts } from './RecentFacts';
+import { typeStyles, defaultTypeStyle } from './utils';
 
 interface Props {
   state: AppState;
@@ -229,8 +230,14 @@ export function LeftPanel({ state, dispatch }: Props) {
                     else dispatch({ type: 'SELECT_FACT', path: `${state.currentPath}/${c.name}` });
                   }}
                   style={{ padding: '8px 12px', cursor: 'pointer', background: i === selectedIdx ? '#2a2a3a' : 'transparent', borderBottom: '1px solid #222', display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <span style={{ width: 6, height: 6, borderRadius: '50%', background: c.is_dir ? '#7c9' : '#8af', flexShrink: 0, opacity: 0.7 }} />
-                  <span style={{ fontSize: 13, color: '#ddd' }}>{c.is_dir ? c.name : c.name}</span>
+                  {c.is_dir ? (
+                    <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#7c9', flexShrink: 0, opacity: 0.7 }} />
+                  ) : (
+                    <span data-testid="fact-type-icon" style={{ fontSize: 10, flexShrink: 0, color: (c.type && typeStyles[c.type]?.color) || defaultTypeStyle.color, lineHeight: 1 }}>
+                      {(c.type && typeStyles[c.type]?.icon) || defaultTypeStyle.icon}
+                    </span>
+                  )}
+                  <span style={{ fontSize: 13, color: '#ddd' }}>{c.name}</span>
                 </div>
             ))}
             {children.length === 0 && (

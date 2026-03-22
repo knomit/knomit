@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { relativeTime, relativeTimeEpoch, opStyles, defaultOpStyle } from './utils';
+import { relativeTime, relativeTimeEpoch, opStyles, defaultOpStyle, typeStyles, defaultTypeStyle } from './utils';
 
 describe('relativeTime', () => {
   afterEach(() => { vi.useRealTimers(); });
@@ -62,5 +62,32 @@ describe('opStyles', () => {
 
   it('defaultOpStyle has empty label', () => {
     expect(defaultOpStyle.label).toBe('');
+  });
+});
+
+describe('typeStyles', () => {
+  it('has entries for all 9 epistemic types', () => {
+    const expectedTypes = ['observation', 'concept', 'process', 'principle', 'pattern', 'reference', 'synthesis', 'hypothesis', 'methodology'];
+    for (const t of expectedTypes) {
+      expect(typeStyles[t]).toBeDefined();
+      expect(typeStyles[t].color).toBeTruthy();
+      expect(typeStyles[t].bg).toBeTruthy();
+      expect(typeStyles[t].label).toBe(t);
+      expect(typeStyles[t].icon).toBeTruthy();
+    }
+  });
+
+  it('hypothesis has distinct styling', () => {
+    expect(typeStyles.hypothesis.color).toBe('#f8a');
+    expect(typeStyles.hypothesis.icon).toBe('?');
+  });
+
+  it('methodology has distinct styling', () => {
+    expect(typeStyles.methodology.color).toBe('#af8');
+    expect(typeStyles.methodology.icon).toBe('⚙');
+  });
+
+  it('defaultTypeStyle has unknown label', () => {
+    expect(defaultTypeStyle.label).toBe('unknown');
   });
 });
