@@ -80,6 +80,7 @@ export function LeftPanel({ state, dispatch }: Props) {
         } else {
           setSelectedIdx(0);
           if (results.length > 0) dispatch({ type: 'SELECT_FACT', path: results[0].path });
+          else dispatch({ type: 'SELECT_FACT', path: '' });
         }
       }).catch(() => { setSearchResults([]); setSearchReady(true); });
     }, 300);

@@ -3,7 +3,7 @@ import type { Dispatch } from 'react';
 import { api } from './api';
 import type { RecentFactEntry } from './api';
 import type { AppState, Action } from './state';
-import { relativeTimeEpoch, opStyles, typeStyles, defaultTypeStyle } from './utils';
+import { relativeTimeEpoch, typeStyles, defaultTypeStyle } from './utils';
 
 interface Props {
   state: AppState;
@@ -43,6 +43,7 @@ export function RecentFacts({ state, dispatch }: Props) {
       setTotal(r.total);
       setLoading(false);
       if (r.facts?.length > 0) dispatch({ type: 'SELECT_FACT', path: r.facts[0].path });
+      else dispatch({ type: 'SELECT_FACT', path: '' });
     }).catch(() => { if (!cancelled) { setFacts([]); setLoading(false); } });
     return () => { cancelled = true; };
   }, [state.currentPath, state.headCommit, activeQuery, typeFilter]);
@@ -162,7 +163,10 @@ export function RecentFacts({ state, dispatch }: Props) {
             }}
           >
             <div style={{ fontSize: 12, color: '#ddd', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: 6 }}>
-              <span style={{ color: (f.operation && opStyles[f.operation]?.color) || '#555', fontSize: 8, lineHeight: 1, flexShrink: 0 }}>●</span>
+              {(() => {
+                const ts = (f.type && typeStyles[f.type]) || defaultTypeStyle;
+                return <span style={{ color: ts.color, fontSize: 11, lineHeight: 1, flexShrink: 0 }}>{ts.icon}</span>;
+              })()}
               {f.title}
               {f.type && f.type !== 'observation' && (() => {
                 const ts = typeStyles[f.type] || defaultTypeStyle;

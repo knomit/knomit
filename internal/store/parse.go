@@ -26,7 +26,7 @@ func parseFact(path, content, commitHash string) (FactRecord, error) {
 		return FactRecord{}, err
 	}
 	return FactRecord{
-		Path:           f.Path,
+		Path:           f.Path(),
 		Title:          f.Title,
 		Type:           string(f.Type),
 		Domain:         f.Domain,

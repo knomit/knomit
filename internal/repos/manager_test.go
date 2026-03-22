@@ -222,6 +222,136 @@ func TestSwapStore_InvalidTempPath_ReturnsError(t *testing.T) {
 	}
 }
 
+func TestSetupMCP_RebindsAfterSwapStore(t *testing.T) {
+	// Regression test: MCP handlers must use the new database after SwapStore,
+	// not the old (closed) one. Before the fix, MCP learn calls would fail
+	// with "sql: database is closed" because handlers captured the original index.
+	dir := t.TempDir()
+	m := bootManager(t, dir)
+	defer m.Shutdown()
+
+	if err := m.Boot(); err != nil {
+		t.Fatalf("Boot: %v", err)
+	}
+
+	ri := m.Get("knomit")
+	if ri == nil {
+		t.Fatal("knomit not registered")
+	}
+
+	oldSvc := ri.Svc
+
+	// Swap to a new database.
+	tempDB := openTestDB(t)
+	if err := m.SwapStore(ri, tempDB); err != nil {
+		t.Fatalf("SwapStore: %v", err)
+	}
+
+	// Rebuild MCP handlers (as the origin session handler does).
+	m.SetupMCP(ri)
+
+	// The old service's DB is closed; the new one should be open.
+	if ri.Svc == oldSvc {
+		t.Fatal("ri.Svc should have changed after SwapStore")
+	}
+
+	// Verify the new index is usable (not closed).
+	_, err := ri.Svc.Index().Stats("")
+	if err != nil {
+		t.Fatalf("new index query failed (database closed?): %v", err)
+	}
+}
+
+func TestObserver_UsesCurrentIndexAfterSwapStore(t *testing.T) {
+	// Regression test: the observer closure must read ri.Svc.Index() at call
+	// time. Before the fix it captured the original idx which became closed
+	// after SwapStore, causing "sql: database is closed" on every commit.
+	dir := t.TempDir()
+	m := bootManager(t, dir)
+	defer m.Shutdown()
+
+	if err := m.Boot(); err != nil {
+		t.Fatalf("Boot: %v", err)
+	}
+
+	ri := m.Get("knomit")
+	if ri == nil {
+		t.Fatal("knomit not registered")
+	}
+
+	// Write a fact so the old index has some state.
+	gs := ri.GS.(interface {
+		WriteFile(path, content, message, operation string) (string, string, error)
+	})
+	_, _, err := gs.WriteFile("kb/test/hello.md", "---\ntitle: hello\n---\n# hello\nworld\n", "test", "learn")
+	if err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	// Wait for observer to fire (debounce is 1s in openOne).
+	// Give it a generous window.
+	oldIdx := ri.Svc.Index()
+
+	// Swap to a new database — this closes the old DB.
+	tempDB := openTestDB(t)
+	if err := m.SwapStore(ri, tempDB); err != nil {
+		t.Fatalf("SwapStore: %v", err)
+	}
+	m.SetupMCP(ri)
+
+	// The new index should be different and open.
+	newIdx := ri.Svc.Index()
+	if newIdx == oldIdx {
+		t.Fatal("expected new index after SwapStore")
+	}
+
+	// Verify the new index is queryable (not closed).
+	if _, err := newIdx.Stats(""); err != nil {
+		t.Fatalf("new index Stats failed: %v", err)
+	}
+
+	// Verify the old index IS closed (confirms the bug scenario).
+	_, oldErr := oldIdx.Stats("")
+	if oldErr == nil {
+		t.Fatal("expected old index to be closed after SwapStore")
+	}
+}
+
+func TestClose_ClosesCurrentSvcAfterSwapStore(t *testing.T) {
+	// Regression test: ri.Close must close the current ri.Svc, not the
+	// original one captured at openOne time.
+	dir := t.TempDir()
+	m := bootManager(t, dir)
+	defer m.Shutdown()
+
+	if err := m.Boot(); err != nil {
+		t.Fatalf("Boot: %v", err)
+	}
+
+	ri := m.Get("knomit")
+	if ri == nil {
+		t.Fatal("knomit not registered")
+	}
+
+	// Swap to a new database.
+	tempDB := openTestDB(t)
+	if err := m.SwapStore(ri, tempDB); err != nil {
+		t.Fatalf("SwapStore: %v", err)
+	}
+
+	// Capture the new service before Close.
+	newSvc := ri.Svc
+
+	// Close should close the new service.
+	ri.Close()
+
+	// The new service's DB should now be closed.
+	_, err := newSvc.Index().Stats("")
+	if err == nil {
+		t.Fatal("expected new service to be closed after ri.Close()")
+	}
+}
+
 // ---------- Boot / Add ----------
 
 func bootManager(t *testing.T, dir string) *repos.Manager {

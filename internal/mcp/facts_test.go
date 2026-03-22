@@ -8,18 +8,17 @@ import (
 )
 
 func TestFactRoundTrip(t *testing.T) {
-	f := Fact{
-		Path:       "general/test/foo.md",
-		Title:      "Test fact",
-		Body:       "Some body text.",
-		Domain:     []string{"testing"},
-		Confidence: 0.9,
-		Sources:    1,
-		Entities:   []string{"foo"},
-		Refs:       []string{},
-	}
+	f := fact.NewFact("general/test/foo.md")
+	f.Title = "Test fact"
+	f.Body = "Some body text."
+	f.Domain = []string{"testing"}
+	f.Confidence = 0.9
+	f.Sources = 1
+	f.Entities = []string{"foo"}
+	f.Refs = []string{}
+
 	serialized := SerializeFact(f)
-	parsed, err := ParseFact(f.Path, serialized)
+	parsed, err := ParseFact(f.Path(), serialized)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -35,8 +34,8 @@ func TestFactRoundTrip(t *testing.T) {
 	if parsed.Body != f.Body {
 		t.Fatalf("body: got %q want %q", parsed.Body, f.Body)
 	}
-	if parsed.Path != f.Path {
-		t.Fatalf("path: got %q want %q", parsed.Path, f.Path)
+	if parsed.Path() != f.Path() {
+		t.Fatalf("path: got %q want %q", parsed.Path(), f.Path())
 	}
 	if parsed.Sources != f.Sources {
 		t.Fatalf("sources: got %d want %d", parsed.Sources, f.Sources)
@@ -55,18 +54,17 @@ func TestParseFactMissingFrontmatter(t *testing.T) {
 }
 
 func TestParseFactMultilineBody(t *testing.T) {
-	f := Fact{
-		Path:       "general/multi.md",
-		Title:      "Multi-paragraph fact",
-		Body:       "First paragraph.\n\nSecond paragraph with more detail.\n\nThird paragraph.",
-		Domain:     []string{"testing", "multiline"},
-		Confidence: 0.8,
-		Sources:    3,
-		Entities:   []string{"alpha", "beta"},
-		Refs:       []string{"https://example.com"},
-	}
+	f := fact.NewFact("general/multi.md")
+	f.Title = "Multi-paragraph fact"
+	f.Body = "First paragraph.\n\nSecond paragraph with more detail.\n\nThird paragraph."
+	f.Domain = []string{"testing", "multiline"}
+	f.Confidence = 0.8
+	f.Sources = 3
+	f.Entities = []string{"alpha", "beta"}
+	f.Refs = []string{"https://example.com"}
+
 	serialized := SerializeFact(f)
-	parsed, err := ParseFact(f.Path, serialized)
+	parsed, err := ParseFact(f.Path(), serialized)
 	if err != nil {
 		t.Fatalf("ParseFact error: %v", err)
 	}
@@ -109,17 +107,16 @@ func TestParseFactCRLFLineEndings(t *testing.T) {
 }
 
 func TestSerializeFactFormat(t *testing.T) {
-	f := Fact{
-		Path:       "general/fmt/test.md",
-		Title:      "Format test",
-		Body:       "Body content.",
-		Type:       fact.Observation,
-		Domain:     []string{"testing"},
-		Confidence: 0.9,
-		Sources:    1,
-		Entities:   []string{"foo"},
-		Refs:       []string{},
-	}
+	f := fact.NewFact("general/fmt/test.md")
+	f.Title = "Format test"
+	f.Body = "Body content."
+	f.Type = fact.Observation
+	f.Domain = []string{"testing"}
+	f.Confidence = 0.9
+	f.Sources = 1
+	f.Entities = []string{"foo"}
+	f.Refs = []string{}
+
 	got := SerializeFact(f)
 	want := "---\ntype: observation\ndomain: [testing]\nconfidence: 0.9\nsources: 1\nentities: [foo]\nrefs: []\n---\n# Format test\n\nBody content.\n"
 	if got != want {
@@ -129,19 +126,18 @@ func TestSerializeFactFormat(t *testing.T) {
 
 func TestEpistemicTypeRoundTrip(t *testing.T) {
 	for _, et := range fact.AllTypes() {
-		f := Fact{
-			Path:       "general/type-test.md",
-			Title:      "Type round-trip",
-			Body:       "Body.",
-			Type:       et,
-			Domain:     []string{},
-			Confidence: 0.5,
-			Sources:    1,
-			Entities:   []string{},
-			Refs:       []string{},
-		}
+		f := fact.NewFact("general/type-test.md")
+		f.Title = "Type round-trip"
+		f.Body = "Body."
+		f.Type = et
+		f.Domain = []string{}
+		f.Confidence = 0.5
+		f.Sources = 1
+		f.Entities = []string{}
+		f.Refs = []string{}
+
 		serialized := SerializeFact(f)
-		parsed, err := ParseFact(f.Path, serialized)
+		parsed, err := ParseFact(f.Path(), serialized)
 		if err != nil {
 			t.Fatalf("type %q: ParseFact error: %v", et, err)
 		}
@@ -174,18 +170,17 @@ func TestParseFactInvalidTypeReturnsError(t *testing.T) {
 }
 
 func TestSerializeFactWithURL(t *testing.T) {
-	f := Fact{
-		Path:       "general/test/url.md",
-		Title:      "URL ref",
-		Body:       "Body.",
-		Domain:     []string{"web"},
-		Confidence: 0.8,
-		Sources:    1,
-		Entities:   []string{},
-		Refs:       []string{"https://example.com/path?q=1,2"},
-	}
+	f := fact.NewFact("general/test/url.md")
+	f.Title = "URL ref"
+	f.Body = "Body."
+	f.Domain = []string{"web"}
+	f.Confidence = 0.8
+	f.Sources = 1
+	f.Entities = []string{}
+	f.Refs = []string{"https://example.com/path?q=1,2"}
+
 	serialized := SerializeFact(f)
-	parsed, err := ParseFact(f.Path, serialized)
+	parsed, err := ParseFact(f.Path(), serialized)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -195,22 +190,21 @@ func TestSerializeFactWithURL(t *testing.T) {
 }
 
 func TestFactEvidenceWeightRoundTrip(t *testing.T) {
-	f := Fact{
-		Path:           "kb/merged.md",
-		Title:          "Merged",
-		Body:           "Some body.",
-		Domain:         []string{"testing"},
-		Confidence:     0.9,
-		Sources:        5,
-		Entities:       []string{},
-		Refs:           []string{},
-		EvidenceWeight: 0.75,
-	}
+	f := fact.NewFact("kb/merged.md")
+	f.Title = "Merged"
+	f.Body = "Some body."
+	f.Domain = []string{"testing"}
+	f.Confidence = 0.9
+	f.Sources = 5
+	f.Entities = []string{}
+	f.Refs = []string{}
+	f.EvidenceWeight = 0.75
+
 	serialized := SerializeFact(f)
 	if !strings.Contains(serialized, "evidence_weight: 0.75") {
 		t.Fatalf("evidence_weight missing from serialized output:\n%s", serialized)
 	}
-	parsed, err := ParseFact(f.Path, serialized)
+	parsed, err := ParseFact(f.Path(), serialized)
 	if err != nil {
 		t.Fatalf("ParseFact: %v", err)
 	}
@@ -220,12 +214,16 @@ func TestFactEvidenceWeightRoundTrip(t *testing.T) {
 }
 
 func TestFactEvidenceWeightOmittedWhenZero(t *testing.T) {
-	f := Fact{
-		Path: "kb/plain.md", Title: "Plain", Body: "Body.",
-		Domain: []string{}, Confidence: 0.5, Sources: 1,
-		Entities: []string{}, Refs: []string{},
-		// EvidenceWeight zero — must not appear in output.
-	}
+	f := fact.NewFact("kb/plain.md")
+	f.Title = "Plain"
+	f.Body = "Body."
+	f.Domain = []string{}
+	f.Confidence = 0.5
+	f.Sources = 1
+	f.Entities = []string{}
+	f.Refs = []string{}
+	// EvidenceWeight zero — must not appear in output.
+
 	serialized := SerializeFact(f)
 	if strings.Contains(serialized, "evidence_weight") {
 		t.Fatalf("evidence_weight should be absent for zero value:\n%s", serialized)
@@ -233,16 +231,15 @@ func TestFactEvidenceWeightOmittedWhenZero(t *testing.T) {
 }
 
 func TestSerializeFactEmptyBody(t *testing.T) {
-	f := Fact{
-		Path:       "general/empty.md",
-		Title:      "No body",
-		Body:       "",
-		Domain:     []string{},
-		Confidence: 0.5,
-		Sources:    0,
-		Entities:   []string{},
-		Refs:       []string{},
-	}
+	f := fact.NewFact("general/empty.md")
+	f.Title = "No body"
+	f.Body = ""
+	f.Domain = []string{}
+	f.Confidence = 0.5
+	f.Sources = 0
+	f.Entities = []string{}
+	f.Refs = []string{}
+
 	got := SerializeFact(f)
 	// Should end with the title line and no extra blank line.
 	if !strings.HasSuffix(got, "---\n# No body\n") {

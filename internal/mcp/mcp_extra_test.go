@@ -291,11 +291,15 @@ func TestUpdateReadFileError(t *testing.T) {
 func TestUpdateTitleField(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
-	factContent := SerializeFact(Fact{
-		Path: "kb/technology/go/abc.md", Title: "Old Title", Body: "Body.",
-		Domain: []string{}, Confidence: 0.5, Sources: 1,
-		Entities: []string{}, Refs: []string{},
-	})
+	tmp := fact.NewFact("kb/technology/go/abc.md")
+	tmp.Title = "Old Title"
+	tmp.Body = "Body."
+	tmp.Domain = []string{}
+	tmp.Confidence = 0.5
+	tmp.Sources = 1
+	tmp.Entities = []string{}
+	tmp.Refs = []string{}
+	factContent := SerializeFact(tmp)
 
 	var writtenContent string
 
@@ -342,11 +346,15 @@ func TestUpdateTitleField(t *testing.T) {
 func TestUpdateDomainAndEntities(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
-	factContent := SerializeFact(Fact{
-		Path: "kb/technology/go/abc.md", Title: "DE Test", Body: "Body.",
-		Domain: []string{"old"}, Confidence: 0.5, Sources: 1,
-		Entities: []string{"old-ent"}, Refs: []string{},
-	})
+	tmp2 := fact.NewFact("kb/technology/go/abc.md")
+	tmp2.Title = "DE Test"
+	tmp2.Body = "Body."
+	tmp2.Domain = []string{"old"}
+	tmp2.Confidence = 0.5
+	tmp2.Sources = 1
+	tmp2.Entities = []string{"old-ent"}
+	tmp2.Refs = []string{}
+	factContent := SerializeFact(tmp2)
 
 	var writtenContent string
 

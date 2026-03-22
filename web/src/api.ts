@@ -41,16 +41,21 @@ export interface OriginSetResponse {
 
 // parseSearchQuery splits a query string into structured components.
 // Tokens of the form domain:X or entity:X are extracted as filters;
-// quoted strings (e.g. "some phrase") are extracted as similarity text;
+// quoted strings (e.g. entity:"Composer 2") are extracted as filter values;
+// bare quoted strings are extracted as similarity text;
 // the remaining words are treated as free text for embeddings.
 export function parseSearchQuery(raw: string): { text: string; domains: string[]; entities: string[] } {
   const domains: string[] = [];
   const entities: string[] = [];
   const textTokens: string[] = [];
 
-  // Extract quoted strings first, then process remaining tokens
+  // Extract prefix:"quoted value" patterns first (e.g. entity:"Composer 2").
   const quoted: string[] = [];
-  const stripped = raw.replace(/"([^"]+)"/g, (_m, g) => { quoted.push(g); return ''; });
+  const stripped = raw.replace(/(domain|entity):"([^"]+)"/g, (_m, prefix, value) => {
+    if (prefix === 'domain') domains.push(value);
+    else entities.push(value);
+    return '';
+  }).replace(/"([^"]+)"/g, (_m, g) => { quoted.push(g); return ''; });
 
   for (const token of stripped.trim().split(/\s+/)) {
     if (!token) continue;

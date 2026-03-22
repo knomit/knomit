@@ -36,7 +36,7 @@ function TagCloud({ label, entries, color, searchPrefix, onSearch, focusedValue 
           const ratio = max > 0 ? n / max : 1;
           const accent = `rgba(${color},`;
           return (
-            <span key={name} data-testid="tag-item" data-value={name} onClick={() => onSearch(`${searchPrefix}${name}`)}
+            <span key={name} data-testid="tag-item" data-value={name} onClick={() => onSearch(name.includes(' ') ? `${searchPrefix}"${name}"` : `${searchPrefix}${name}`)}
               style={{
                 display: 'inline-flex', alignItems: 'center', gap: 5, cursor: 'pointer',
                 padding: weighted && ratio >= 0.75 ? '5px 11px' : weighted ? '4px 9px' : '5px 11px',
@@ -425,6 +425,8 @@ export function RightPanel({ state, dispatch }: { state: AppState; dispatch: Dis
       }
     } else if (state.rightMode === 'fact' && state.selectedFact) {
       api.fact(state.repo, state.selectedFact, state.refCommit || undefined).then(setFact).catch(e => setError(String(e)));
+    } else if (state.rightMode === 'fact' && !state.selectedFact) {
+      setFact(null);
     } else if (state.rightMode === 'history' && state.selectedFact) {
       api.history(state.repo, state.selectedFact).then(r => setHistory(r.entries || [])).catch(e => setError(String(e)));
     } else if (state.rightMode === 'summary') {
@@ -503,8 +505,8 @@ export function RightPanel({ state, dispatch }: { state: AppState; dispatch: Dis
           }
           return;
         }
-        if (target.kind === 'domain') { dispatch({ type: 'SEARCH', query: `domain:${target.value}` }); return; }
-        if (target.kind === 'entity') { dispatch({ type: 'SEARCH', query: `entity:${target.value}` }); return; }
+        if (target.kind === 'domain') { const v = target.value.includes(' ') ? `"${target.value}"` : target.value; dispatch({ type: 'SEARCH', query: `domain:${v}` }); return; }
+        if (target.kind === 'entity') { const v = target.value.includes(' ') ? `"${target.value}"` : target.value; dispatch({ type: 'SEARCH', query: `entity:${v}` }); return; }
         if (target.kind === 'ref') { window.open(target.value, '_blank', 'noopener'); return; }
         if (target.kind === 'similar' && fact) { dispatch({ type: 'SIMILAR_SEARCH', path: fact.path, text: fact.body || '' }); return; }
       }

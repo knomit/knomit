@@ -1037,6 +1037,118 @@ func TestOriginSession_RebuildAfterCommit(t *testing.T) {
 	}
 }
 
+// TestOriginSession_ReviewWatermarkSetAfterCommit verifies that after the
+// origin session commit (clone + rebuild), the review watermark is set to HEAD
+// so the first review doesn't treat every cloned fact as dirty.
+func TestOriginSession_ReviewWatermarkSetAfterCommit(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	localSvc, err := store.Open(":memory:")
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	t.Cleanup(func() { localSvc.Close() })
+
+	localGS, err := git.InitWithStorer(localSvc.GitStorer(), nil, "agent/local")
+	if err != nil {
+		t.Fatalf("git.InitWithStorer: %v", err)
+	}
+
+	// Write a fact so the remote has content.
+	remoteFact := "---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# Cloned Fact\n\nThis was cloned.\n"
+
+	remoteStorer := newTestStorerForWeb(t)
+	remoteStore, err := git.InitWithStorer(remoteStorer, nil, "agent/remote")
+	if err != nil {
+		t.Fatalf("git.InitWithStorer remote: %v", err)
+	}
+	if _, _, err := remoteStore.WriteFile("kb/cloned.md", remoteFact, "add fact", "learn"); err != nil {
+		t.Fatalf("remote WriteFile: %v", err)
+	}
+	remoteHead, err := remoteStore.HeadCommit()
+	if err != nil {
+		t.Fatalf("remote HeadCommit: %v", err)
+	}
+	if err := remoteStorer.SetReference(
+		plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), plumbing.NewHash(remoteHead)),
+	); err != nil {
+		t.Fatalf("remote SetReference main: %v", err)
+	}
+
+	loader := server.MapLoader{"inmem:///watermark-test": remoteStorer}
+	client.InstallProtocol("inmem", server.NewClient(loader))
+	t.Cleanup(func() { client.InstallProtocol("inmem", nil) })
+
+	hub := repos.NewTaskHub(context.Background())
+	rm := repos.New(context.Background(), repos.Deps{})
+	sm := NewSessionManager()
+	t.Cleanup(sm.Shutdown)
+
+	ri := &repos.RepoInstance{
+		Name:       "knomit",
+		GS:         localGS,
+		Svc:        localSvc,
+		Hub:        hub,
+		SyncCancel: func() {},
+		SyncWg:     &sync.WaitGroup{},
+		StartSync:  func(url string) error { return nil },
+	}
+	rm.Set("knomit", ri)
+	handler := NewRouterWithSessionManager(rm, nil, false, "kb", sm)
+
+	// Run the full workflow: create -> test -> apply -> commit.
+	rr := doRequest(t, handler, http.MethodPost, "/api/v1/knomit/origin/session",
+		`{"url":"inmem:///watermark-test"}`)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("create session: expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	var createBody map[string]string
+	_ = json.NewDecoder(rr.Body).Decode(&createBody)
+	sessionID := createBody["session_id"]
+
+	testRec := httptest.NewRecorder()
+	handler.ServeHTTP(testRec, httptest.NewRequest(http.MethodGet,
+		"/api/v1/knomit/origin/session/"+sessionID+"/test", nil))
+
+	applyRec := httptest.NewRecorder()
+	handler.ServeHTTP(applyRec, httptest.NewRequest(http.MethodPost,
+		"/api/v1/knomit/origin/session/"+sessionID+"/apply",
+		strings.NewReader(`{"conflict_strategy":"local_wins"}`)))
+
+	commitRec := httptest.NewRecorder()
+	handler.ServeHTTP(commitRec, httptest.NewRequest(http.MethodPost,
+		"/api/v1/knomit/origin/session/"+sessionID+"/commit", nil))
+	if commitRec.Code != http.StatusOK {
+		t.Fatalf("commit: expected 200, got %d: %s", commitRec.Code, commitRec.Body.String())
+	}
+	findDoneEvent(t, parseSSEEvents(t, commitRec.Body.String()), "commit")
+
+	// All pipeline watermarks should be set to HEAD after rebuild.
+	updatedRI := rm.Get("knomit")
+	idx := updatedRI.Svc.Index()
+	branch := updatedRI.GS.Branch()
+
+	head, err := updatedRI.GS.HeadCommit()
+	if err != nil {
+		t.Fatalf("HeadCommit: %v", err)
+	}
+
+	for _, tool := range []string{"review", "hypothesize"} {
+		watermark, err := idx.GetPipelineWatermark(tool, branch)
+		if err != nil {
+			t.Fatalf("GetPipelineWatermark(%s): %v", tool, err)
+		}
+		if watermark == "" {
+			t.Fatalf("%s watermark should be set after origin session commit, but was empty", tool)
+		}
+		if watermark != head {
+			t.Errorf("%s watermark = %q, want HEAD = %q", tool, watermark, head)
+		}
+	}
+}
+
 // assertHasPhase checks that at least one SSE event contains the given phase.
 func assertHasPhase(t *testing.T, events []map[string]any, phase, step string) {
 	t.Helper()

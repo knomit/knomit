@@ -210,18 +210,7 @@ func dedupCluster(
 		}
 
 		// Update the search index for the winner.
-		if err := idx.Upsert(store.FactRecord{
-			Path:       fullWinner.Path,
-			Title:      fullWinner.Title,
-			BlobHash:   blobHash,
-			Type:       string(fullWinner.Type),
-			Domain:     fullWinner.Domain,
-			Entities:   fullWinner.Entities,
-			Confidence: fullWinner.Confidence,
-			Sources:    fullWinner.Sources,
-			Refs:       fullWinner.Refs,
-			CommitHash: commitHash,
-		}); err != nil {
+		if err := idx.Upsert(store.NewFactRecord(fullWinner, blobHash, commitHash)); err != nil {
 			return nil, fmt.Errorf("dedupCluster: upsert winner %q: %w", winnerFact.File, err)
 		}
 

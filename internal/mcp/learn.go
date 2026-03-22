@@ -145,17 +145,15 @@ func LearnHandler(gs GitStore, idx SearchIndex, ontologyRoot string, ontology *f
 			if err := eType.Validate(); err != nil {
 				return mcpgo.NewToolResultError(fmt.Sprintf("fact %d: %v", i, err)), nil
 			}
-			f := Fact{
-				Path:       path,
-				Title:      fi.Title,
-				Body:       fi.Body,
-				Type:       eType,
-				Domain:     domain,
-				Confidence: fi.Confidence,
-				Sources:    fi.Sources,
-				Entities:   entities,
-				Refs:       refs,
-			}
+			f := fact.NewFact(path)
+			f.Title = fi.Title
+			f.Body = fi.Body
+			f.Type = eType
+			f.Domain = domain
+			f.Confidence = fi.Confidence
+			f.Sources = fi.Sources
+			f.Entities = entities
+			f.Refs = refs
 			facts[i] = f
 			files[path] = SerializeFact(f)
 		}
@@ -173,7 +171,7 @@ func LearnHandler(gs GitStore, idx SearchIndex, ontologyRoot string, ontology *f
 			dedupVecs, _ = batchEmb.EmbedBatch(texts)
 		}
 		for i, f := range facts {
-			categoryDir := f.Path[:strings.LastIndex(f.Path, "/")]
+			categoryDir := f.Path()[:strings.LastIndex(f.Path(), "/")]
 			sq := SearchQuery{
 				Text:          f.Title + " " + f.Body,
 				Path:          categoryDir,
@@ -209,7 +207,7 @@ func LearnHandler(gs GitStore, idx SearchIndex, ontologyRoot string, ontology *f
 				// Add hypothesis path to observation's refs.
 				f.Refs = fact.AppendUnique(f.Refs, match.Path)
 				facts[i] = f
-				files[f.Path] = SerializeFact(f)
+				files[f.Path()] = SerializeFact(f)
 				continue
 			}
 
@@ -220,35 +218,31 @@ func LearnHandler(gs GitStore, idx SearchIndex, ontologyRoot string, ontology *f
 			var merged Fact
 			if newConf > existConf || (newConf == existConf && f.Sources >= existingFact.Sources) {
 				// New fact wins — keep new fact's title and body, write to existing path.
-				merged = Fact{
-					Path:       match.Path,
-					Title:      f.Title,
-					Body:       f.Body,
-					Type:       f.Type,
-					Domain:     fact.UnionStrings(f.Domain, existingFact.Domain),
-					Entities:   fact.UnionStrings(f.Entities, existingFact.Entities),
-					Confidence: max(newConf, existConf),
-					Sources:    f.Sources + existingFact.Sources,
-					Refs:       fact.AppendUnique(fact.UnionStrings(f.Refs, existingFact.Refs), match.Path),
-				}
+				merged = fact.NewFact(match.Path)
+				merged.Title = f.Title
+				merged.Body = f.Body
+				merged.Type = f.Type
+				merged.Domain = fact.UnionStrings(f.Domain, existingFact.Domain)
+				merged.Entities = fact.UnionStrings(f.Entities, existingFact.Entities)
+				merged.Confidence = max(newConf, existConf)
+				merged.Sources = f.Sources + existingFact.Sources
+				merged.Refs = fact.AppendUnique(fact.UnionStrings(f.Refs, existingFact.Refs), match.Path)
 			} else {
 				// Existing fact wins — keep existing title and body, update metadata.
-				merged = Fact{
-					Path:       match.Path,
-					Title:      existingFact.Title,
-					Body:       existingFact.Body,
-					Type:       existingFact.Type,
-					Domain:     fact.UnionStrings(f.Domain, existingFact.Domain),
-					Entities:   fact.UnionStrings(f.Entities, existingFact.Entities),
-					Confidence: max(newConf, existConf),
-					Sources:    f.Sources + existingFact.Sources,
-					Refs:       fact.AppendUnique(fact.UnionStrings(f.Refs, existingFact.Refs), match.Path),
-				}
+				merged = fact.NewFact(match.Path)
+				merged.Title = existingFact.Title
+				merged.Body = existingFact.Body
+				merged.Type = existingFact.Type
+				merged.Domain = fact.UnionStrings(f.Domain, existingFact.Domain)
+				merged.Entities = fact.UnionStrings(f.Entities, existingFact.Entities)
+				merged.Confidence = max(newConf, existConf)
+				merged.Sources = f.Sources + existingFact.Sources
+				merged.Refs = fact.AppendUnique(fact.UnionStrings(f.Refs, existingFact.Refs), match.Path)
 			}
 
 			// Remove the original new-fact path from the files map and add the merged one.
-			delete(files, f.Path)
-			files[merged.Path] = SerializeFact(merged)
+			delete(files, f.Path())
+			files[merged.Path()] = SerializeFact(merged)
 			facts[i] = merged
 		}
 
@@ -266,7 +260,7 @@ func LearnHandler(gs GitStore, idx SearchIndex, ontologyRoot string, ontology *f
 		}
 		commits := make([]commitEntry, len(facts))
 		for i, f := range facts {
-			commits[i] = commitEntry{File: f.Path, Hash: hash}
+			commits[i] = commitEntry{File: f.Path(), Hash: hash}
 		}
 
 		result := map[string]interface{}{

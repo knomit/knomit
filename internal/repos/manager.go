@@ -143,13 +143,13 @@ func (m *Manager) Boot() error {
 
 	// Phase 1: open knomit.
 	defaultDB := filepath.Join(reposDir, "knomit.db")
-	knomitO, knomitRI, err := m.openOne("knomit", defaultDB, true)
+	knomitRI, err := m.openOne("knomit", defaultDB, true)
 	if err != nil {
 		return fmt.Errorf("open default repo: %w", err)
 	}
 
 	// Load ontology from knomit repo's git store.
-	ontologyYAML, readErr := knomitO.gs.ReadFile("domains/ontology.yaml")
+	ontologyYAML, readErr := knomitRI.GS.ReadFile("domains/ontology.yaml")
 	if readErr != nil {
 		log.Warn().Msg("domains/ontology.yaml not found, using default ontology")
 		m.ontology = fact.DefaultOntology()
@@ -161,7 +161,7 @@ func (m *Manager) Boot() error {
 		}
 	}
 
-	m.setupMCP(knomitO, knomitRI)
+	m.SetupMCP(knomitRI)
 	m.Set("knomit", knomitRI)
 
 	// Phase 2: discover remaining repos.
@@ -187,29 +187,22 @@ func (m *Manager) Boot() error {
 // Add opens a single repository and registers it under name.
 // Uses the ontology already loaded by Boot (or nil if Boot not yet called).
 func (m *Manager) Add(name, dbPath string) error {
-	o, ri, err := m.openOne(name, dbPath, false)
+	ri, err := m.openOne(name, dbPath, false)
 	if err != nil {
 		return err
 	}
-	m.setupMCP(o, ri)
+	m.SetupMCP(ri)
 	m.Set(name, ri)
 	return nil
 }
 
 // ---------- private helpers ----------
 
-// openedRepo holds concrete types needed for MCP wiring.
-// After MCP setup these are not retained — use RepoInstance.GS/Idx (interfaces) for runtime.
-type openedRepo struct {
-	gs  *git.Store
-	idx *store.Index
-}
-
 // openOne initialises a single repo from a SQLite database file.
 // If isDefault is true and no git data exists, the repo is initialised
 // from scratch (or cloned from origin). Non-default repos that fail to
 // open are returned as errors so the caller can skip them gracefully.
-func (m *Manager) openOne(name, dbPath string, isDefault bool) (*openedRepo, *RepoInstance, error) {
+func (m *Manager) openOne(name, dbPath string, isDefault bool) (*RepoInstance, error) {
 	cfg := m.deps.Cfg
 	signer := m.deps.Signer
 	agentBranch := m.deps.AgentBranch
@@ -219,7 +212,7 @@ func (m *Manager) openOne(name, dbPath string, isDefault bool) (*openedRepo, *Re
 
 	svc, err := store.Open(dbPath)
 	if err != nil {
-		return nil, nil, fmt.Errorf("open store: %w", err)
+		return nil, fmt.Errorf("open store: %w", err)
 	}
 
 	// Set up credential encryption using the SSH private key.
@@ -229,32 +222,30 @@ func (m *Manager) openOne(name, dbPath string, isDefault bool) (*openedRepo, *Re
 		}
 	}
 
-	freshInit := false
 	gs, err := git.OpenWithStorer(svc.GitStorer())
 	if err != nil {
 		if !isDefault {
 			svc.Close()
-			return nil, nil, fmt.Errorf("open git: %w", err)
+			return nil, fmt.Errorf("open git: %w", err)
 		}
-		freshInit = true
 		// Default repo — first run, init from remote or local.
 		if cfg.Git.Origin != "" {
 			auth, authErr := git.ResolveAuth(cfg.Remote, keyPath)
 			if authErr != nil {
 				svc.Close()
-				return nil, nil, fmt.Errorf("resolve auth: %w", authErr)
+				return nil, fmt.Errorf("resolve auth: %w", authErr)
 			}
 			gs, err = git.InitFromRemote(svc.GitStorer(), cfg.Git.Origin, auth, agentBranch)
 			if err != nil {
 				svc.Close()
-				return nil, nil, fmt.Errorf("init from remote: %w", err)
+				return nil, fmt.Errorf("init from remote: %w", err)
 			}
 		} else {
 			ont := fact.DefaultOntology()
 			ontologyYAML, serErr := ont.Serialize()
 			if serErr != nil {
 				svc.Close()
-				return nil, nil, fmt.Errorf("serialize ontology: %w", serErr)
+				return nil, fmt.Errorf("serialize ontology: %w", serErr)
 			}
 			initFiles := map[string]string{
 				"domains/ontology.yaml": string(ontologyYAML),
@@ -262,7 +253,7 @@ func (m *Manager) openOne(name, dbPath string, isDefault bool) (*openedRepo, *Re
 			gs, err = git.InitWithStorer(svc.GitStorer(), initFiles, agentBranch)
 			if err != nil {
 				svc.Close()
-				return nil, nil, fmt.Errorf("init git: %w", err)
+				return nil, fmt.Errorf("init git: %w", err)
 			}
 		}
 	}
@@ -293,12 +284,16 @@ func (m *Manager) openOne(name, dbPath string, isDefault bool) (*openedRepo, *Re
 		log.Warn().Err(err).Str("repo", name).Msg("initial index sync failed")
 	}
 
-	// On fresh init, set the review watermark to HEAD so the first review
-	// doesn't treat every existing fact as dirty.
-	if freshInit {
-		if head, err := gs.HeadCommit(); err == nil {
-			if err := idx.SetPipelineWatermark("review", gs.Branch(), head); err != nil {
-				log.Warn().Err(err).Msg("review watermark: initial set failed")
+	// If there is no pipeline watermark for this branch, set it to HEAD so the
+	// first run only processes facts written after this point. This covers
+	// fresh init, branch switches (new machine / key rotation), and any other
+	// scenario where an existing repo has no watermark for the current branch.
+	for _, tool := range []string{"review", "hypothesize"} {
+		if wm, _ := idx.GetPipelineWatermark(tool, gs.Branch()); wm == "" {
+			if head, err := gs.HeadCommit(); err == nil {
+				if err := idx.SetPipelineWatermark(tool, gs.Branch(), head); err != nil {
+					log.Warn().Err(err).Str("tool", tool).Msg("pipeline watermark: initial set failed")
+				}
 			}
 		}
 	}
@@ -306,8 +301,16 @@ func (m *Manager) openOne(name, dbPath string, isDefault bool) (*openedRepo, *Re
 	hub := NewTaskHub(ctx)
 
 	// Observer: sync index + push SSE on every git commit.
+	// The closure reads ri.GS and ri.Svc at call time so that after SwapStore
+	// it operates on the current (open) database, not the original (closed) one.
+	// ri is assigned below before any commits can fire.
+	var ri *RepoInstance
 	obs := observe.New(time.Second, func(hash string) {
-		if err := idx.Sync(gs, gs.Branch()); err != nil {
+		currentGS, ok := ri.GS.(*git.Store)
+		if !ok {
+			return
+		}
+		if err := ri.Svc.Index().Sync(currentGS, currentGS.Branch()); err != nil {
 			log.Warn().Err(err).Str("repo", name).Msg("observer sync failed")
 		}
 		hub.BroadcastStatus(hash)
@@ -336,7 +339,7 @@ func (m *Manager) openOne(name, dbPath string, isDefault bool) (*openedRepo, *Re
 		}
 	}
 
-	ri := &RepoInstance{
+	ri = &RepoInstance{
 		Name:       name,
 		DBPath:     dbPath,
 		GS:         gs,
@@ -379,6 +382,10 @@ func (m *Manager) openOne(name, dbPath string, isDefault bool) (*openedRepo, *Re
 		syncCtx, syncCancel = context.WithCancel(ctx)
 		ri.SyncCancel = syncCancel
 
+		// Re-register the observer on the current git store so local writes
+		// trigger index sync after a SwapStore replaced ri.GS.
+		currentGS.SetOnCommit(obs.Notify)
+
 		syncWg.Add(2)
 		go runSyncLoop(syncCtx, &syncWg, currentGS, currentSvc, hub, remote, name)
 		go runPushLoop(syncCtx, &syncWg, currentGS, currentSvc, hub, remote, name)
@@ -387,41 +394,51 @@ func (m *Manager) openOne(name, dbPath string, isDefault bool) (*openedRepo, *Re
 
 	ri.Close = func() {
 		obs.Stop()
-		svc.Close()
+		ri.Svc.Close()
 	}
 
-	return &openedRepo{gs: gs, idx: idx}, ri, nil
+	return ri, nil
 }
 
-// setupMCP wires MCP handlers onto ri using the manager's ontology and deps.
-// Must be called after openOne. No-op if m.ontology is nil.
-func (m *Manager) setupMCP(o *openedRepo, ri *RepoInstance) {
+// SetupMCP wires MCP handlers onto ri using the manager's ontology and deps.
+// It reads the current ri.GS and ri.Svc to get concrete types, so it is safe
+// to call after SwapStore to rebind MCP handlers to the new database.
+// No-op if m.ontology is nil.
+func (m *Manager) SetupMCP(ri *RepoInstance) {
 	if m.ontology == nil {
 		return
 	}
+
+	gs, ok := ri.GS.(*git.Store)
+	if !ok {
+		log.Warn().Msg("SetupMCP: ri.GS is not *git.Store, skipping")
+		return
+	}
+	idx := ri.Svc.Index()
+
 	ontologyRoot := m.deps.Cfg.OntologyRoot
 	embedder := m.deps.Embedder
 	llmAdapter := m.deps.LLM
 
-	reviewer := synthesize.NewReviewer(o.gs, o.idx, o.idx, embedder, nil)
+	reviewer := synthesize.NewReviewer(gs, idx, idx, embedder, nil)
 	profiles := []string{"code", "chat", "generic"}
 	mcpHandlers := make(map[string]http.Handler, len(profiles))
 	for _, p := range profiles {
 		var mcpSrv *mcpserver.MCPServer
 		if embedder != nil {
-			mcpSrv = mcp.NewServer(o.gs, o.idx, o.idx, o.idx, reviewer, p, ontologyRoot, m.ontology, embedder)
+			mcpSrv = mcp.NewServer(gs, idx, idx, idx, reviewer, p, ontologyRoot, m.ontology, embedder)
 		} else {
-			mcpSrv = mcp.NewServer(o.gs, o.idx, o.idx, o.idx, reviewer, p, ontologyRoot, m.ontology)
+			mcpSrv = mcp.NewServer(gs, idx, idx, idx, reviewer, p, ontologyRoot, m.ontology)
 		}
 		mcpHandlers[p] = mcpserver.NewStreamableHTTPServer(mcpSrv)
 	}
 	ri.MCPHandlers = mcpHandlers
 
 	if llmAdapter != nil {
-		synthReviewer := synthesize.NewReviewer(o.gs, o.idx, o.idx, embedder, nil)
+		synthReviewer := synthesize.NewReviewer(gs, idx, idx, embedder, nil)
 		ri.SynthDeps = &SynthDeps{
-			GS:       o.gs,
-			Idx:      o.idx,
+			GS:       gs,
+			Idx:      idx,
 			Embedder: embedder,
 			Adapter:  llmAdapter,
 			Reviewer: synthReviewer,

@@ -8,6 +8,8 @@ import (
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"go.uber.org/mock/gomock"
+
+	"knomit/internal/fact"
 )
 
 func TestExplainFirstPage(t *testing.T) {
@@ -15,11 +17,15 @@ func TestExplainFirstPage(t *testing.T) {
 	gs := NewMockGitStore(ctrl)
 	sessionIdx := NewMockToolSessionIndex(ctrl)
 
-	factContent := SerializeFact(Fact{
-		Path: "kb/root.md", Title: "Root", Body: "Root body.",
-		Domain: []string{"testing"}, Confidence: 0.9, Sources: 1,
-		Entities: []string{}, Refs: []string{"kb/tech/ref1.md", "https://example.com"},
-	})
+	tmp := fact.NewFact("kb/root.md")
+	tmp.Title = "Root"
+	tmp.Body = "Root body."
+	tmp.Domain = []string{"testing"}
+	tmp.Confidence = 0.9
+	tmp.Sources = 1
+	tmp.Entities = []string{}
+	tmp.Refs = []string{"kb/tech/ref1.md", "https://example.com"}
+	factContent := SerializeFact(tmp)
 
 	gs.EXPECT().Branch().Return("machine/test").AnyTimes()
 	sessionIdx.EXPECT().GCToolSessions("explain", "machine/test", 5).Return(nil)
@@ -84,11 +90,15 @@ func TestExplainResumesSession(t *testing.T) {
 	gs := NewMockGitStore(ctrl)
 	sessionIdx := NewMockToolSessionIndex(ctrl)
 
-	refContent := SerializeFact(Fact{
-		Path: "kb/ref1.md", Title: "Ref1", Body: "Ref body.",
-		Domain: []string{"testing"}, Confidence: 0.8, Sources: 1,
-		Entities: []string{}, Refs: []string{"kb/deep.md"},
-	})
+	tmp := fact.NewFact("kb/ref1.md")
+	tmp.Title = "Ref1"
+	tmp.Body = "Ref body."
+	tmp.Domain = []string{"testing"}
+	tmp.Confidence = 0.8
+	tmp.Sources = 1
+	tmp.Entities = []string{}
+	tmp.Refs = []string{"kb/deep.md"}
+	refContent := SerializeFact(tmp)
 
 	sessionIdx.EXPECT().GetToolSession("sess-1").Return(&ToolSession{ID: "sess-1", Status: "active"}, nil)
 	sessionIdx.EXPECT().GetSeenPaths("sess-1").Return(map[string]bool{"kb/root.md": true}, nil)
@@ -143,11 +153,15 @@ func TestExplainNoRefs(t *testing.T) {
 	gs := NewMockGitStore(ctrl)
 	sessionIdx := NewMockToolSessionIndex(ctrl)
 
-	factContent := SerializeFact(Fact{
-		Path: "kb/solo.md", Title: "Solo", Body: "No refs.",
-		Domain: []string{"testing"}, Confidence: 0.9, Sources: 1,
-		Entities: []string{}, Refs: []string{},
-	})
+	tmp := fact.NewFact("kb/solo.md")
+	tmp.Title = "Solo"
+	tmp.Body = "No refs."
+	tmp.Domain = []string{"testing"}
+	tmp.Confidence = 0.9
+	tmp.Sources = 1
+	tmp.Entities = []string{}
+	tmp.Refs = []string{}
+	factContent := SerializeFact(tmp)
 
 	gs.EXPECT().Branch().Return("machine/test").AnyTimes()
 	sessionIdx.EXPECT().GCToolSessions("explain", "machine/test", 5).Return(nil)
@@ -221,11 +235,15 @@ func TestExplainDeletedRef(t *testing.T) {
 	gs := NewMockGitStore(ctrl)
 	sessionIdx := NewMockToolSessionIndex(ctrl)
 
-	goodContent := SerializeFact(Fact{
-		Path: "kb/good.md", Title: "Good", Body: "Still here.",
-		Domain: []string{"testing"}, Confidence: 0.9, Sources: 1,
-		Entities: []string{}, Refs: []string{},
-	})
+	tmp := fact.NewFact("kb/good.md")
+	tmp.Title = "Good"
+	tmp.Body = "Still here."
+	tmp.Domain = []string{"testing"}
+	tmp.Confidence = 0.9
+	tmp.Sources = 1
+	tmp.Entities = []string{}
+	tmp.Refs = []string{}
+	goodContent := SerializeFact(tmp)
 
 	sessionIdx.EXPECT().GetToolSession("sess-3").Return(&ToolSession{ID: "sess-3", Status: "active"}, nil)
 	sessionIdx.EXPECT().GetSeenPaths("sess-3").Return(map[string]bool{"kb/root.md": true}, nil)
@@ -278,11 +296,15 @@ func TestExplainMaxDepth(t *testing.T) {
 	gs := NewMockGitStore(ctrl)
 	sessionIdx := NewMockToolSessionIndex(ctrl)
 
-	deepContent := SerializeFact(Fact{
-		Path: "kb/deep.md", Title: "Deep", Body: "Very deep.",
-		Domain: []string{"testing"}, Confidence: 0.9, Sources: 1,
-		Entities: []string{}, Refs: []string{"kb/deeper.md"},
-	})
+	tmp := fact.NewFact("kb/deep.md")
+	tmp.Title = "Deep"
+	tmp.Body = "Very deep."
+	tmp.Domain = []string{"testing"}
+	tmp.Confidence = 0.9
+	tmp.Sources = 1
+	tmp.Entities = []string{}
+	tmp.Refs = []string{"kb/deeper.md"}
+	deepContent := SerializeFact(tmp)
 
 	sessionIdx.EXPECT().GetToolSession("sess-4").Return(&ToolSession{ID: "sess-4", Status: "active"}, nil)
 	sessionIdx.EXPECT().GetSeenPaths("sess-4").Return(map[string]bool{"kb/root.md": true}, nil)
@@ -333,11 +355,15 @@ func TestExplainExternalRefsOnly(t *testing.T) {
 	gs := NewMockGitStore(ctrl)
 	sessionIdx := NewMockToolSessionIndex(ctrl)
 
-	factContent := SerializeFact(Fact{
-		Path: "kb/ext.md", Title: "External", Body: "Only external refs.",
-		Domain: []string{"testing"}, Confidence: 0.9, Sources: 1,
-		Entities: []string{}, Refs: []string{"https://example.com", "https://go.dev"},
-	})
+	tmp := fact.NewFact("kb/ext.md")
+	tmp.Title = "External"
+	tmp.Body = "Only external refs."
+	tmp.Domain = []string{"testing"}
+	tmp.Confidence = 0.9
+	tmp.Sources = 1
+	tmp.Entities = []string{}
+	tmp.Refs = []string{"https://example.com", "https://go.dev"}
+	factContent := SerializeFact(tmp)
 
 	gs.EXPECT().Branch().Return("machine/test").AnyTimes()
 	sessionIdx.EXPECT().GCToolSessions("explain", "machine/test", 5).Return(nil)
@@ -472,11 +498,15 @@ func TestExplainRetractedRef(t *testing.T) {
 	gs := NewMockGitStore(ctrl)
 	sessionIdx := NewMockToolSessionIndex(ctrl)
 
-	retractedContent := SerializeFact(Fact{
-		Path: "kb/retracted.md", Title: "Retracted", Body: "Was here.",
-		Domain: []string{"testing"}, Confidence: 0.8, Sources: 3,
-		Entities: []string{}, Refs: []string{},
-	})
+	tmp := fact.NewFact("kb/retracted.md")
+	tmp.Title = "Retracted"
+	tmp.Body = "Was here."
+	tmp.Domain = []string{"testing"}
+	tmp.Confidence = 0.8
+	tmp.Sources = 3
+	tmp.Entities = []string{}
+	tmp.Refs = []string{}
+	retractedContent := SerializeFact(tmp)
 
 	sessionIdx.EXPECT().GetToolSession("sess-ret").Return(&ToolSession{ID: "sess-ret", Status: "active"}, nil)
 	sessionIdx.EXPECT().GetSeenPaths("sess-ret").Return(map[string]bool{"kb/root.md": true}, nil)

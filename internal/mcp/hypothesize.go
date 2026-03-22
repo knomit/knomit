@@ -91,16 +91,15 @@ func hypothesizeStart(gs GitStore, idx SearchIndex, pipelineIdx PipelineIndex, o
 			return nil, fmt.Errorf("search synthesis facts: %w", err)
 		}
 		for _, r := range results {
-			synthFacts = append(synthFacts, Fact{
-				Path:       r.Path,
-				Title:      r.Title,
-				Body:       r.Body,
-				Type:       fact.EpistemicType(r.Type),
-				Domain:     r.Domain,
-				Confidence: r.Confidence,
-				Sources:    r.Sources,
-				Entities:   r.Entities,
-			})
+			sf := fact.NewFact(r.Path)
+			sf.Title = r.Title
+			sf.Body = r.Body
+			sf.Type = fact.EpistemicType(r.Type)
+			sf.Domain = r.Domain
+			sf.Confidence = r.Confidence
+			sf.Sources = r.Sources
+			sf.Entities = r.Entities
+			synthFacts = append(synthFacts, sf)
 		}
 	} else {
 		// Incremental: find changed files since watermark.
@@ -241,6 +240,7 @@ func buildHypothesizeInstructions(ontologyRoot string) string {
 3. Gather additional evidence as needed using knomit_query
 4. Decide if a hypothesis is warranted based on the evidence
 5. If yes, call knomit_learn with type: hypothesis, including: hypothesis statement, evidence chain, reasoning step, known gaps, falsification condition
-6. Call knomit_hypothesize with session_id to continue to the next synthesis fact`, ontologyRoot)
+6. After writing the hypothesis, call knomit_learn with type: methodology, topic: "meta", category: "reasoning" to record the reasoning process used — what worked, what evidence was decisive, which patterns applied, and any pitfalls encountered
+7. Call knomit_hypothesize with session_id to continue to the next synthesis fact`, ontologyRoot)
 }
 

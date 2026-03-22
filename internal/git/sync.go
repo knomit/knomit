@@ -5,6 +5,7 @@ package git
 
 import (
 	"fmt"
+	"strings"
 
 	gogit "github.com/go-git/go-git/v5"
 	gogitconfig "github.com/go-git/go-git/v5/config"
@@ -316,6 +317,11 @@ type PushResult struct {
 
 // Push pushes the agent branch to origin.
 // Returns PushResult{Pushed: false} if already up to date.
+//
+// If the push fails with a non-fast-forward error, it retries with a force
+// push. This is safe because agent branches are per-machine — no other machine
+// writes to the same branch. Non-fast-forward errors typically happen after an
+// origin session clone+swap reconstructs the agent branch from remote data.
 func (s *Store) Push() (PushResult, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -339,6 +345,18 @@ func (s *Store) Push() (PushResult, error) {
 	if err == gogit.NoErrAlreadyUpToDate {
 		log.Debug().Msg("git push: already up to date")
 		return PushResult{Pushed: false}, nil
+	}
+	if err != nil && strings.Contains(err.Error(), "non-fast-forward") {
+		// Agent branches are per-machine, so force push is safe.
+		log.Info().Str("branch", s.branch).Msg("git push: non-fast-forward, retrying with force push")
+		forceRefspec := fmt.Sprintf("+refs/heads/%s:refs/heads/%s", s.branch, s.branch)
+		err = s.repo.Push(&gogit.PushOptions{
+			RemoteName: "origin",
+			RefSpecs: []gogitconfig.RefSpec{
+				gogitconfig.RefSpec(forceRefspec),
+			},
+			Auth: s.auth,
+		})
 	}
 	if err != nil {
 		return PushResult{}, fmt.Errorf("Push: %w", err)

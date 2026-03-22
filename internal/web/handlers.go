@@ -176,7 +176,7 @@ func handleFact() http.HandlerFunc {
 
 		if fromCommit != "" {
 			writeJSON(w, http.StatusOK, map[string]any{
-				"path":        fact.Path,
+				"path":        fact.Path(),
 				"title":       fact.Title,
 				"type":        fact.Type,
 				"body":        fact.Body,
@@ -195,7 +195,7 @@ func handleFact() http.HandlerFunc {
 		if commitHash == "" && ri.Svc != nil {
 			if rec, lerr := ri.Svc.Index().GetByPath(path); lerr == nil && rec != nil && rec.CommitHash != "" {
 				resp := map[string]any{
-					"path":        fact.Path,
+					"path":        fact.Path(),
 					"title":       fact.Title,
 					"type":        fact.Type,
 					"body":        fact.Body,
