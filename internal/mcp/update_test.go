@@ -7,21 +7,25 @@ import (
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"go.uber.org/mock/gomock"
+
+	"knomit/internal/fact"
 )
 
 func TestUpdateMergesFields(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
 
-
-	factContent := SerializeFact(Fact{
-		Path: "kb/foo.md", Title: "Original Title", Body: "Original body.",
-		Domain: []string{"testing"}, Confidence: 0.7, Sources: 1,
-		Entities: []string{}, Refs: []string{"https://old.ref"},
-	})
+	tmp := fact.NewFact("kb/foo.md")
+	tmp.Title = "Original Title"
+	tmp.Body = "Original body."
+	tmp.Domain = []string{"testing"}
+	tmp.Confidence = 0.7
+	tmp.Sources = 1
+	tmp.Entities = []string{}
+	tmp.Refs = []string{"https://old.ref"}
+	factContent := SerializeFact(tmp)
 
 	var writtenContent string
-
 
 	gs.EXPECT().FileExists("kb/foo.md").Return(true, nil)
 	gs.EXPECT().ReadFile("kb/foo.md").Return(factContent, nil)
@@ -89,8 +93,6 @@ func TestUpdateFileNotFound(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
 
-
-
 	gs.EXPECT().FileExists("kb/nonexistent.md").Return(false, nil)
 
 	handler := UpdateHandler(gs, "kb")
@@ -115,15 +117,17 @@ func TestUpdateRefsAppended(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
 
-
-	factContent := SerializeFact(Fact{
-		Path: "kb/refs.md", Title: "Refs Test", Body: "Body.",
-		Domain: []string{}, Confidence: 0.8, Sources: 1,
-		Entities: []string{}, Refs: []string{"https://existing.ref"},
-	})
+	tmp := fact.NewFact("kb/refs.md")
+	tmp.Title = "Refs Test"
+	tmp.Body = "Body."
+	tmp.Domain = []string{}
+	tmp.Confidence = 0.8
+	tmp.Sources = 1
+	tmp.Entities = []string{}
+	tmp.Refs = []string{"https://existing.ref"}
+	factContent := SerializeFact(tmp)
 
 	var writtenContent string
-
 
 	gs.EXPECT().FileExists("kb/refs.md").Return(true, nil)
 	gs.EXPECT().ReadFile("kb/refs.md").Return(factContent, nil)

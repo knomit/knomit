@@ -9,6 +9,8 @@ import (
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"go.uber.org/mock/gomock"
+
+	"knomit/internal/fact"
 )
 
 func TestExploreFirstPage(t *testing.T) {
@@ -18,10 +20,15 @@ func TestExploreFirstPage(t *testing.T) {
 
 	ts := time.Date(2026, 3, 14, 10, 0, 0, 0, time.UTC)
 
-	factContent := SerializeFact(Fact{
-		Path: "kb/foo.md", Title: "Foo Fact", Body: "Foo body.",
-		Domain: []string{}, Confidence: 0.9, Sources: 1, Entities: []string{}, Refs: []string{},
-	})
+	tmp := fact.NewFact("kb/foo.md")
+	tmp.Title = "Foo Fact"
+	tmp.Body = "Foo body."
+	tmp.Domain = []string{}
+	tmp.Confidence = 0.9
+	tmp.Sources = 1
+	tmp.Entities = []string{}
+	tmp.Refs = []string{}
+	factContent := SerializeFact(tmp)
 
 	gs.EXPECT().Branch().Return("machine/test").AnyTimes()
 	ei.EXPECT().GCToolSessions("explore", "machine/test", 5).Return(nil)
@@ -78,10 +85,15 @@ func TestExploreResumesSession(t *testing.T) {
 
 	ts := time.Date(2026, 3, 14, 10, 0, 0, 0, time.UTC)
 
-	factContent := SerializeFact(Fact{
-		Path: "kb/bar.md", Title: "Bar Fact", Body: "Bar body.",
-		Domain: []string{}, Confidence: 0.9, Sources: 1, Entities: []string{}, Refs: []string{},
-	})
+	tmp := fact.NewFact("kb/bar.md")
+	tmp.Title = "Bar Fact"
+	tmp.Body = "Bar body."
+	tmp.Domain = []string{}
+	tmp.Confidence = 0.9
+	tmp.Sources = 1
+	tmp.Entities = []string{}
+	tmp.Refs = []string{}
+	factContent := SerializeFact(tmp)
 
 	seen := map[string]bool{"kb/foo.md": true}
 
@@ -197,10 +209,15 @@ func TestExploreDeletedFactSkipped(t *testing.T) {
 
 	ts := time.Date(2026, 3, 14, 10, 0, 0, 0, time.UTC)
 
-	goodContent := SerializeFact(Fact{
-		Path: "kb/good.md", Title: "Good Fact", Body: "Good body.",
-		Domain: []string{}, Confidence: 0.9, Sources: 1, Entities: []string{}, Refs: []string{},
-	})
+	tmp := fact.NewFact("kb/good.md")
+	tmp.Title = "Good Fact"
+	tmp.Body = "Good body."
+	tmp.Domain = []string{}
+	tmp.Confidence = 0.9
+	tmp.Sources = 1
+	tmp.Entities = []string{}
+	tmp.Refs = []string{}
+	goodContent := SerializeFact(tmp)
 
 	gs.EXPECT().Branch().Return("machine/test").AnyTimes()
 	ei.EXPECT().GCToolSessions("explore", "machine/test", 5).Return(nil)

@@ -59,7 +59,7 @@ type FactRecord struct {
 // blobHash is the blob SHA returned by WriteFile; commitHash is the commit SHA.
 func NewFactRecord(f fact.Fact, blobHash, commitHash string) FactRecord {
 	return FactRecord{
-		Path:           f.Path,
+		Path:           f.Path(),
 		Title:          f.Title,
 		BlobHash:       blobHash,
 		Type:           string(f.Type),

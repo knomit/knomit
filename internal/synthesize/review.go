@@ -345,7 +345,7 @@ func (r *Reviewer) dirtyFacts(branch string) ([]factForLLM, error) {
 			continue // not a valid fact
 		}
 		seeds = append(seeds, factForLLM{
-			File:       fact.Path,
+			File:       fact.Path(),
 			Title:      fact.Title,
 			Body:       fact.Body,
 			Type:       string(fact.Type),
