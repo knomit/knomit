@@ -42,3 +42,11 @@ export const typeStyles: Record<string, { color: string; bg: string; label: stri
 };
 
 export const defaultTypeStyle = { color: '#666', bg: '#1a1a1a', label: 'unknown', icon: '·' };
+
+export const chipColors: Record<string, { bg: string; text: string; close: string }> = {
+  domain: { bg: '#2a3a2a', text: '#7c9', close: '#5a7a5a' },
+  entity: { bg: '#3a2a2a', text: '#f8a', close: '#8a5a5a' },
+  type:   { bg: '#2a2a3a', text: '#8af', close: '#5a5a8a' },
+  ep:     { bg: '#3a3a2a', text: '#fa8', close: '#8a7a5a' },
+  path:   { bg: '#333',   text: '#aaa', close: '#666' },
+};
