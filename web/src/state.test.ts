@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { reducer, init, currentPath } from './state';
-import type { FilterChip } from './state';
+import type { AppState, FilterChip } from './state';
 
 describe('reducer — view', () => {
   it('SET_VIEW changes view and pushes to navStack', () => {
@@ -86,7 +86,7 @@ describe('reducer — filters', () => {
   });
 
   it('CLEAR_FILTERS clears filters, freeText, selectedFact and pushes nav', () => {
-    let s = { ...init, filters: [{ category: 'domain' as const, value: 'tech' }], freeText: 'q', selectedFact: 'kb/f.md' };
+    let s: AppState = { ...init, filters: [{ category: 'domain', value: 'tech' }], freeText: 'q', selectedFact: 'kb/f.md' };
     s = reducer(s, { type: 'CLEAR_FILTERS' });
     expect(s.filters).toHaveLength(0);
     expect(s.freeText).toBe('');
@@ -97,7 +97,7 @@ describe('reducer — filters', () => {
 
 describe('reducer — nav', () => {
   it('NAV_BACK restores previous view/selectedFact/filters/historyCommit/freeText', () => {
-    let s = { ...init, view: 'tree' as const, selectedFact: 'kb/a.md', freeText: 'q' };
+    let s: AppState = { ...init, selectedFact: 'kb/a.md', freeText: 'q' };
     s = reducer(s, { type: 'SET_VIEW', view: 'chrono' });
     s = reducer(s, { type: 'NAV_BACK' });
     expect(s.view).toBe('tree');
