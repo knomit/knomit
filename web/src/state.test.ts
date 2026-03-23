@@ -1,71 +1,206 @@
 import { describe, it, expect } from 'vitest';
-import { reducer, init } from './state';
+import { reducer, init, currentPath } from './state';
+import type { FilterChip } from './state';
 
-describe('reducer', () => {
-  it('NAVIGATE sets currentPath, clears selectedFact, resets rightMode', () => {
-    const s = { ...init, selectedFact: 'kb/foo', rightMode: 'fact' as const };
-    const next = reducer(s, { type: 'NAVIGATE', path: 'kb/bar' });
-    expect(next.currentPath).toBe('kb/bar');
-    expect(next.selectedFact).toBeNull();
-    expect(next.rightMode).toBe('summary');
+describe('reducer — view', () => {
+  it('SET_VIEW changes view and pushes to navStack', () => {
+    const s = reducer(init, { type: 'SET_VIEW', view: 'chrono' });
+    expect(s.view).toBe('chrono');
+    expect(s.navStack.length).toBe(1);
+    expect(s.navStack[0].view).toBe('tree');
   });
 
-  it('SELECT_FACT sets selectedFact and rightMode to fact', () => {
-    const next = reducer(init, { type: 'SELECT_FACT', path: 'kb/some-fact' });
-    expect(next.selectedFact).toBe('kb/some-fact');
-    expect(next.rightMode).toBe('fact');
-  });
-
-  it('PREVIEW_DIR clears selectedFact and sets previewPath', () => {
-    const s = { ...init, selectedFact: 'kb/x' };
-    const next = reducer(s, { type: 'PREVIEW_DIR', path: 'kb/subdir' });
-    expect(next.selectedFact).toBeNull();
-    expect(next.previewPath).toBe('kb/subdir');
-  });
-
-  it('GO_UP navigates to parent path', () => {
-    const s = { ...init, currentPath: 'kb/science/physics' };
-    const next = reducer(s, { type: 'GO_UP' });
-    expect(next.currentPath).toBe('kb/science');
+  it('SET_VIEW clears selectedFact', () => {
+    const s = { ...init, selectedFact: 'kb/foo.md' };
+    const next = reducer(s, { type: 'SET_VIEW', view: 'chrono' });
     expect(next.selectedFact).toBeNull();
   });
 
-  it('GO_UP at root returns same state', () => {
-    const s = { ...init, currentPath: 'kb' };
-    const next = reducer(s, { type: 'GO_UP' });
-    expect(next).toBe(s); // same reference
+  it('SET_VIEW clears historyCommit when leaving history', () => {
+    const s = { ...init, view: 'history' as const, historyCommit: 'abc123' };
+    const next = reducer(s, { type: 'SET_VIEW', view: 'tree' });
+    expect(next.historyCommit).toBeNull();
   });
 
-  it('SEARCH sets searchQuery and clears similarTo', () => {
-    const s = { ...init, similarTo: { path: 'x', text: 'y' } };
-    const next = reducer(s, { type: 'SEARCH', query: 'hello' });
-    expect(next.searchQuery).toBe('hello');
-    expect(next.similarTo).toBeNull();
+  it('SET_VIEW keeps historyCommit when staying in history', () => {
+    const s = { ...init, view: 'history' as const, historyCommit: 'abc123' };
+    const next = reducer(s, { type: 'SET_VIEW', view: 'history' });
+    expect(next.historyCommit).toBe('abc123');
   });
 
-  it('SIMILAR_SEARCH sets similarTo and clears searchQuery', () => {
-    const s = { ...init, searchQuery: 'old' };
-    const next = reducer(s, { type: 'SIMILAR_SEARCH', path: 'kb/a', text: 'some text' });
-    expect(next.similarTo).toEqual({ path: 'kb/a', text: 'some text' });
-    expect(next.searchQuery).toBe('');
+  it('SET_VIEW clears rightPanelFocused', () => {
+    const s = { ...init, rightPanelFocused: true };
+    const next = reducer(s, { type: 'SET_VIEW', view: 'chrono' });
+    expect(next.rightPanelFocused).toBe(false);
+  });
+});
+
+describe('reducer — filters', () => {
+  it('ADD_FILTER appends chip and pushes nav', () => {
+    const chip: FilterChip = { category: 'domain', value: 'tech' };
+    const s = reducer(init, { type: 'ADD_FILTER', chip });
+    expect(s.filters).toHaveLength(1);
+    expect(s.filters[0]).toEqual(chip);
+    expect(s.navStack.length).toBe(1);
   });
 
-  it('CLEAR_SEARCH clears query, similarTo, and selectedFact', () => {
-    const s = { ...init, searchQuery: 'q', similarTo: { path: 'x', text: 'y' }, selectedFact: 'kb/f' };
-    const next = reducer(s, { type: 'CLEAR_SEARCH' });
-    expect(next.searchQuery).toBe('');
-    expect(next.similarTo).toBeNull();
-    expect(next.selectedFact).toBeNull();
+  it('ADD_FILTER with path category replaces existing path chip', () => {
+    const first: FilterChip = { category: 'path', value: 'kb/tech' };
+    const second: FilterChip = { category: 'path', value: 'kb/science' };
+    let s = reducer(init, { type: 'ADD_FILTER', chip: first });
+    s = reducer(s, { type: 'ADD_FILTER', chip: second });
+    const pathChips = s.filters.filter(f => f.category === 'path');
+    expect(pathChips).toHaveLength(1);
+    expect(pathChips[0].value).toBe('kb/science');
   });
 
-  it('SHOW_HISTORY sets rightMode to history', () => {
-    const next = reducer(init, { type: 'SHOW_HISTORY' });
-    expect(next.rightMode).toBe('history');
+  it('ADD_FILTER with path category keeps other chips', () => {
+    let s = reducer(init, { type: 'ADD_FILTER', chip: { category: 'domain', value: 'tech' } });
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'path', value: 'kb/tech' } });
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'path', value: 'kb/science' } });
+    expect(s.filters.find(f => f.category === 'domain')?.value).toBe('tech');
+    expect(s.filters.filter(f => f.category === 'path')).toHaveLength(1);
   });
 
-  it('SHOW_HISTORY clears rightPanelFocused', () => {
-    const s = reducer({ ...init, rightPanelFocused: true }, { type: 'SHOW_HISTORY' });
+  it('REMOVE_FILTER removes chip at given index and pushes nav', () => {
+    let s = reducer(init, { type: 'ADD_FILTER', chip: { category: 'domain', value: 'a' } });
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'entity', value: 'b' } });
+    const before = s.navStack.length;
+    s = reducer(s, { type: 'REMOVE_FILTER', index: 0 });
+    expect(s.filters).toHaveLength(1);
+    expect(s.filters[0].value).toBe('b');
+    expect(s.navStack.length).toBe(before + 1);
+  });
+
+  it('SET_FILTERS replaces all filters and pushes nav', () => {
+    const chips: FilterChip[] = [{ category: 'type', value: 'fact' }];
+    const s = reducer(init, { type: 'SET_FILTERS', filters: chips });
+    expect(s.filters).toEqual(chips);
+    expect(s.navStack.length).toBe(1);
+  });
+
+  it('SET_FREE_TEXT sets freeText without pushing nav', () => {
+    const s = reducer(init, { type: 'SET_FREE_TEXT', text: 'hello' });
+    expect(s.freeText).toBe('hello');
+    expect(s.navStack.length).toBe(0);
+  });
+
+  it('CLEAR_FILTERS clears filters, freeText, selectedFact and pushes nav', () => {
+    let s = { ...init, filters: [{ category: 'domain' as const, value: 'tech' }], freeText: 'q', selectedFact: 'kb/f.md' };
+    s = reducer(s, { type: 'CLEAR_FILTERS' });
+    expect(s.filters).toHaveLength(0);
+    expect(s.freeText).toBe('');
+    expect(s.selectedFact).toBeNull();
+    expect(s.navStack.length).toBe(1);
+  });
+});
+
+describe('reducer — nav', () => {
+  it('NAV_BACK restores previous view/selectedFact/filters/historyCommit/freeText', () => {
+    let s = { ...init, view: 'tree' as const, selectedFact: 'kb/a.md', freeText: 'q' };
+    s = reducer(s, { type: 'SET_VIEW', view: 'chrono' });
+    s = reducer(s, { type: 'NAV_BACK' });
+    expect(s.view).toBe('tree');
+    // SET_VIEW pushes the state before it cleared selectedFact, so restoring goes back to it
+    expect(s.selectedFact).toBe('kb/a.md');
+    expect(s.freeText).toBe('q');
+    expect(s.navStack.length).toBe(0);
+  });
+
+  it('NAV_BACK restores filters from stack', () => {
+    let s = reducer(init, { type: 'ADD_FILTER', chip: { category: 'domain', value: 'tech' } });
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'entity', value: 'ai' } });
+    const withFilters = s;
+    s = reducer(s, { type: 'CLEAR_FILTERS' });
+    s = reducer(s, { type: 'NAV_BACK' });
+    expect(s.filters).toEqual(withFilters.filters);
+  });
+
+  it('NAV_BACK on empty stack is no-op', () => {
+    const s = reducer(init, { type: 'NAV_BACK' });
+    expect(s).toBe(init);
+  });
+
+  it('NAV_BACK clears rightPanelFocused', () => {
+    let s = reducer(init, { type: 'SET_VIEW', view: 'chrono' });
+    s = reducer({ ...s, rightPanelFocused: true }, { type: 'NAV_BACK' });
     expect(s.rightPanelFocused).toBe(false);
+  });
+
+  it('nav stack caps at 20 entries', () => {
+    let s = init;
+    for (let i = 0; i < 22; i++) {
+      s = reducer(s, { type: 'SET_VIEW', view: i % 2 === 0 ? 'chrono' : 'tree' });
+    }
+    expect(s.navStack.length).toBe(20);
+  });
+});
+
+describe('currentPath()', () => {
+  it('returns path chip value when present', () => {
+    const s = { ...init, filters: [{ category: 'path' as const, value: 'kb/tech' }] };
+    expect(currentPath(s)).toBe('kb/tech');
+  });
+
+  it('returns ontologyRoot when no path chip', () => {
+    const s = { ...init, ontologyRoot: 'knowledge', filters: [] };
+    expect(currentPath(s)).toBe('knowledge');
+  });
+
+  it('returns kb fallback when ontologyRoot is empty and no path chip', () => {
+    const s = { ...init, ontologyRoot: '', filters: [] };
+    expect(currentPath(s)).toBe('kb');
+  });
+
+  it('prefers path chip over ontologyRoot', () => {
+    const s = { ...init, ontologyRoot: 'knowledge', filters: [{ category: 'path' as const, value: 'kb/custom' }] };
+    expect(currentPath(s)).toBe('kb/custom');
+  });
+});
+
+describe('reducer — SELECT_FACT', () => {
+  it('sets selectedFact and pushes nav', () => {
+    const s = reducer(init, { type: 'SELECT_FACT', path: 'kb/foo.md' });
+    expect(s.selectedFact).toBe('kb/foo.md');
+    expect(s.navStack.length).toBe(1);
+  });
+});
+
+describe('reducer — SELECT_COMMIT', () => {
+  it('sets historyCommit without pushing nav', () => {
+    const s = reducer(init, { type: 'SELECT_COMMIT', commit: 'abc123' });
+    expect(s.historyCommit).toBe('abc123');
+    expect(s.navStack.length).toBe(0);
+  });
+});
+
+describe('reducer — SET_REPO', () => {
+  it('resets navigation state when switching repos', () => {
+    let s = reducer(init, { type: 'SELECT_FACT', path: 'kb/deep/fact.md' });
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'domain', value: 'tech' } });
+    s = reducer(s, { type: 'SET_VIEW', view: 'history' });
+    s = reducer(s, { type: 'SET_REPO', repo: 'work' });
+    expect(s.repo).toBe('work');
+    expect(s.view).toBe('tree');
+    expect(s.selectedFact).toBeNull();
+    expect(s.filters).toHaveLength(0);
+    expect(s.freeText).toBe('');
+    expect(s.navStack).toHaveLength(0);
+    expect(s.historyCommit).toBeNull();
+    expect(s.headCommit).toBe('');
+    expect(s.branch).toBe('');
+    expect(s.remoteError).toBe('');
+    expect(s.rightPanelFocused).toBe(false);
+  });
+
+  it('init has repo set to knomit', () => {
+    expect(init.repo).toBe('knomit');
+  });
+});
+
+describe('reducer — shared infrastructure', () => {
+  it('SET_LOADING updates loading flag', () => {
+    expect(reducer(init, { type: 'SET_LOADING', value: true }).loading).toBe(true);
   });
 
   it('SET_TASK updates task status', () => {
@@ -79,18 +214,18 @@ describe('reducer', () => {
     expect(next).toBe(s);
   });
 
-  it('SET_STATUS sets head, branch, embeddingsEnabled, currentPath from ontologyRoot', () => {
+  it('SET_STATUS sets head, branch, embeddingsEnabled, ontologyRoot', () => {
     const next = reducer(init, { type: 'SET_STATUS', head: 'abc123', branch: 'main', embeddingsEnabled: true, ontologyRoot: 'knowledge' });
     expect(next.headCommit).toBe('abc123');
     expect(next.branch).toBe('main');
     expect(next.embeddingsEnabled).toBe(true);
-    expect(next.currentPath).toBe('knowledge');
+    expect(next.ontologyRoot).toBe('knowledge');
   });
 
-  it('SET_STATUS keeps currentPath when ontologyRoot is empty', () => {
-    const s = { ...init, currentPath: 'kb/custom' };
+  it('SET_STATUS keeps ontologyRoot when empty string provided', () => {
+    const s = { ...init, ontologyRoot: 'kb/custom' };
     const next = reducer(s, { type: 'SET_STATUS', head: 'abc', branch: 'main', embeddingsEnabled: false, ontologyRoot: '' });
-    expect(next.currentPath).toBe('kb/custom');
+    expect(next.ontologyRoot).toBe('kb/custom');
   });
 
   it('SET_HEAD only updates headCommit', () => {
@@ -114,7 +249,7 @@ describe('reducer', () => {
     const next = reducer(s, { type: 'CONSOLE_LOG', level: 'error', message: 'overflow' });
     expect(next.consoleEntries).toHaveLength(500);
     expect(next.consoleEntries[499].message).toBe('overflow');
-    expect(next.consoleEntries[0].message).toBe('msg1'); // msg0 was trimmed
+    expect(next.consoleEntries[0].message).toBe('msg1');
   });
 
   it('CONSOLE_TOGGLE flips consoleOpen', () => {
@@ -128,221 +263,18 @@ describe('reducer', () => {
     expect(reducer(init, { type: 'CONSOLE_SET_HEIGHT', height: 300 }).consoleHeight).toBe(300);
     expect(reducer(init, { type: 'CONSOLE_SET_HEIGHT', height: 900 }).consoleHeight).toBe(600);
   });
-});
 
-describe('history mode', () => {
-  it('ENTER_HISTORY pushes to navStack and sets leftMode', () => {
-    const s = reducer(init, { type: 'ENTER_HISTORY' });
-    expect(s.leftMode).toBe('history');
-    expect(s.navStack.length).toBe(1);
-    expect(s.navStack[0].leftMode).toBe('browse');
-  });
-
-  it('EXIT_HISTORY resets to browse and clears historyCommit', () => {
-    let s = reducer(init, { type: 'ENTER_HISTORY' });
-    s = reducer(s, { type: 'SELECT_COMMIT', commit: 'abc123' });
-    s = reducer(s, { type: 'EXIT_HISTORY' });
-    expect(s.leftMode).toBe('browse');
-    expect(s.historyCommit).toBeNull();
-  });
-
-  it('SELECT_COMMIT sets historyCommit', () => {
-    const s = reducer(init, { type: 'SELECT_COMMIT', commit: 'abc123' });
-    expect(s.historyCommit).toBe('abc123');
-  });
-
-  it('NAV_BACK pops navStack and restores state', () => {
-    let s = reducer(init, { type: 'NAVIGATE', path: 'kb/tech' });
-    s = reducer(s, { type: 'ENTER_HISTORY' });
-    s = reducer(s, { type: 'NAV_BACK' });
-    expect(s.leftMode).toBe('browse');
-    expect(s.currentPath).toBe('kb/tech');
-  });
-
-  it('NAV_BACK on empty stack is no-op', () => {
-    const s = reducer(init, { type: 'NAV_BACK' });
-    expect(s).toBe(init);
-  });
-
-  it('navStack caps at 10 entries', () => {
-    let s = init;
-    for (let i = 0; i < 12; i++) {
-      s = reducer(s, { type: 'NAVIGATE', path: `kb/p${i}` });
-    }
-    expect(s.navStack.length).toBe(10);
-  });
-});
-
-describe('EXIT_HISTORY edge cases', () => {
-  it('EXIT_HISTORY from fact path restores parent dir and keeps fact selected', () => {
-    const s = { ...init, currentPath: 'kb/tech/fact.md', leftMode: 'history' as const, historyCommit: 'abc' };
-    const next = reducer(s, { type: 'EXIT_HISTORY' });
-    expect(next.leftMode).toBe('browse');
-    expect(next.currentPath).toBe('kb/tech');
-    expect(next.selectedFact).toBe('kb/tech/fact.md');
-    expect(next.rightMode).toBe('fact');
-    expect(next.historyCommit).toBeNull();
-  });
-
-  it('EXIT_HISTORY from recent mode clears selectedFact', () => {
-    const s = { ...init, leftMode: 'recent' as const, selectedFact: 'kb/x/y.md' };
-    const next = reducer(s, { type: 'EXIT_HISTORY' });
-    expect(next.leftMode).toBe('browse');
-    expect(next.selectedFact).toBeNull();
-    expect(next.rightMode).toBe('summary');
-  });
-});
-
-describe('ENTER_RECENT', () => {
-  it('switches to recent mode and pushes navStack', () => {
-    const s = reducer(init, { type: 'ENTER_RECENT' });
-    expect(s.leftMode).toBe('recent');
-    expect(s.navStack.length).toBe(1);
-    expect(s.rightPanelFocused).toBe(false);
-  });
-});
-
-describe('FACT_HISTORY', () => {
-  it('enters history mode for a specific fact with commit', () => {
-    const s = reducer(init, { type: 'FACT_HISTORY', factPath: 'kb/a/b.md', commit: 'abc123' });
-    expect(s.currentPath).toBe('kb/a/b.md');
-    expect(s.selectedFact).toBe('kb/a/b.md');
-    expect(s.leftMode).toBe('history');
-    expect(s.historyCommit).toBe('abc123');
-    expect(s.historyFocusPath).toBe('kb/a/b.md');
-    expect(s.navStack.length).toBe(1);
-  });
-
-  it('FACT_HISTORY without commit sets historyCommit to null', () => {
-    const s = reducer(init, { type: 'FACT_HISTORY', factPath: 'kb/a/b.md' });
-    expect(s.historyCommit).toBeNull();
-  });
-});
-
-describe('OPEN_FACT', () => {
-  it('navigates to parent dir and selects fact', () => {
-    const s = reducer(init, { type: 'OPEN_FACT', path: 'kb/tech/cyber/fact.md' });
-    expect(s.currentPath).toBe('kb/tech/cyber');
-    expect(s.selectedFact).toBe('kb/tech/cyber/fact.md');
-    expect(s.rightMode).toBe('fact');
-    expect(s.leftMode).toBe('browse');
-    expect(s.navStack.length).toBe(1);
-  });
-
-  it('OPEN_FACT with refCommit stores it', () => {
-    const s = reducer(init, { type: 'OPEN_FACT', path: 'kb/a/b.md', refCommit: 'abc' });
-    expect(s.refCommit).toBe('abc');
-  });
-
-  it('OPEN_FACT without refCommit clears it', () => {
-    const s = { ...init, refCommit: 'old' };
-    const next = reducer(s, { type: 'OPEN_FACT', path: 'kb/a/b.md' });
-    expect(next.refCommit).toBeNull();
-  });
-});
-
-describe('HISTORY_OPEN_PATH', () => {
-  it('sets currentPath and historyFocusPath, pushes navStack', () => {
-    const s = reducer(init, { type: 'HISTORY_OPEN_PATH', path: 'kb/tech/ref.md' });
-    expect(s.currentPath).toBe('kb/tech/ref.md');
-    expect(s.historyFocusPath).toBe('kb/tech/ref.md');
-    expect(s.navStack.length).toBe(1);
-  });
-});
-
-describe('SET_REMOTE_ERROR', () => {
-  it('sets remoteError', () => {
+  it('SET_REMOTE_ERROR sets remoteError', () => {
     const s = reducer(init, { type: 'SET_REMOTE_ERROR', error: 'auth failed' });
     expect(s.remoteError).toBe('auth failed');
   });
 
-  it('clears remoteError with empty string', () => {
-    const s = { ...init, remoteError: 'old error' };
-    const next = reducer(s, { type: 'SET_REMOTE_ERROR', error: '' });
-    expect(next.remoteError).toBe('');
-  });
-});
-
-describe('SET_REPO', () => {
-  it('resets navigation state when switching repos', () => {
-    let s = reducer(init, { type: 'NAVIGATE', path: 'kb/deep/path' });
-    s = reducer(s, { type: 'SELECT_FACT', path: 'kb/deep/path/fact.md' });
-    s = reducer(s, { type: 'SET_REPO', repo: 'work' });
-    expect(s.repo).toBe('work');
-    expect(s.currentPath).toBe('kb');
-    expect(s.selectedFact).toBeNull();
-    expect(s.rightMode).toBe('summary');
-    expect(s.searchQuery).toBe('');
-    expect(s.navStack).toHaveLength(0);
-    expect(s.leftMode).toBe('browse');
-    expect(s.historyCommit).toBeNull();
-    expect(s.headCommit).toBe('');
-    expect(s.branch).toBe('');
-  });
-
-  it('init has repo set to knomit', () => {
-    expect(init.repo).toBe('knomit');
-  });
-});
-
-describe('right panel focus', () => {
-  it('init has rightPanelFocused false', () => {
-    expect(init.rightPanelFocused).toBe(false);
-  });
-
   it('FOCUS_RIGHT_PANEL sets rightPanelFocused to true', () => {
-    const s = reducer(init, { type: 'FOCUS_RIGHT_PANEL' });
-    expect(s.rightPanelFocused).toBe(true);
+    expect(reducer(init, { type: 'FOCUS_RIGHT_PANEL' }).rightPanelFocused).toBe(true);
   });
 
   it('BLUR_RIGHT_PANEL sets rightPanelFocused to false', () => {
     const s = reducer({ ...init, rightPanelFocused: true }, { type: 'BLUR_RIGHT_PANEL' });
     expect(s.rightPanelFocused).toBe(false);
-  });
-
-  it('NAVIGATE clears rightPanelFocused', () => {
-    const s = reducer({ ...init, rightPanelFocused: true }, { type: 'NAVIGATE', path: 'kb/other' });
-    expect(s.rightPanelFocused).toBe(false);
-  });
-
-  it('SET_REPO clears rightPanelFocused', () => {
-    const s = reducer({ ...init, rightPanelFocused: true }, { type: 'SET_REPO', repo: 'other' });
-    expect(s.rightPanelFocused).toBe(false);
-  });
-
-  it('SEARCH clears rightPanelFocused', () => {
-    const s = reducer({ ...init, rightPanelFocused: true }, { type: 'SEARCH', query: 'test' });
-    expect(s.rightPanelFocused).toBe(false);
-  });
-
-  it('SIMILAR_SEARCH clears rightPanelFocused', () => {
-    const s = reducer({ ...init, rightPanelFocused: true }, { type: 'SIMILAR_SEARCH', path: 'kb/x', text: 'y' });
-    expect(s.rightPanelFocused).toBe(false);
-  });
-
-  it('ENTER_HISTORY clears rightPanelFocused', () => {
-    const s = reducer({ ...init, rightPanelFocused: true }, { type: 'ENTER_HISTORY' });
-    expect(s.rightPanelFocused).toBe(false);
-  });
-
-  it('EXIT_HISTORY clears rightPanelFocused', () => {
-    const s = reducer({ ...init, rightPanelFocused: true }, { type: 'EXIT_HISTORY' });
-    expect(s.rightPanelFocused).toBe(false);
-  });
-
-  it('NAV_BACK clears rightPanelFocused', () => {
-    let s = reducer(init, { type: 'NAVIGATE', path: 'kb/tech' });
-    s = reducer({ ...s, rightPanelFocused: true }, { type: 'NAV_BACK' });
-    expect(s.rightPanelFocused).toBe(false);
-  });
-
-  it('ENTER_RECENT clears historyCommit so right panel loads facts not commits', () => {
-    // Simulate: user was in history mode with a commit selected
-    const before = reducer({ ...init, historyCommit: 'abc123', historyFocusPath: 'kb/foo.md' }, { type: 'ENTER_HISTORY' });
-    // Switch to recent mode
-    const s = reducer(before, { type: 'ENTER_RECENT' });
-    expect(s.leftMode).toBe('recent');
-    expect(s.historyCommit).toBeNull();
-    expect(s.historyFocusPath).toBeNull();
   });
 });
