@@ -42,6 +42,7 @@ type SearchIndex interface {
 	GetByPath(path string) (*store.FactWithBody, error)
 	GetLastCommit(branch string) (string, error)
 	Stats(pathPrefix string) (store.StatsResult, error)
+	Completions(category, prefix string, limit int) ([]string, error)
 }
 
 // SynthDeps bundles the dependencies needed by the synthesize handler.

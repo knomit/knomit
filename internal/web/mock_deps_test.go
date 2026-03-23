@@ -247,19 +247,19 @@ func (m *MockSearchIndex) EXPECT() *MockSearchIndexMockRecorder {
 	return m.recorder
 }
 
-// GetLastCommit mocks base method.
-func (m *MockSearchIndex) GetLastCommit(branch string) (string, error) {
+// Completions mocks base method.
+func (m *MockSearchIndex) Completions(category, prefix string, limit int) ([]string, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetLastCommit", branch)
-	ret0, _ := ret[0].(string)
+	ret := m.ctrl.Call(m, "Completions", category, prefix, limit)
+	ret0, _ := ret[0].([]string)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
-// GetLastCommit indicates an expected call of GetLastCommit.
-func (mr *MockSearchIndexMockRecorder) GetLastCommit(branch any) *gomock.Call {
+// Completions indicates an expected call of Completions.
+func (mr *MockSearchIndexMockRecorder) Completions(category, prefix, limit any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetLastCommit", reflect.TypeOf((*MockSearchIndex)(nil).GetLastCommit), branch)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Completions", reflect.TypeOf((*MockSearchIndex)(nil).Completions), category, prefix, limit)
 }
 
 // GetByPath mocks base method.
@@ -275,6 +275,21 @@ func (m *MockSearchIndex) GetByPath(path string) (*store.FactWithBody, error) {
 func (mr *MockSearchIndexMockRecorder) GetByPath(path any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetByPath", reflect.TypeOf((*MockSearchIndex)(nil).GetByPath), path)
+}
+
+// GetLastCommit mocks base method.
+func (m *MockSearchIndex) GetLastCommit(branch string) (string, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetLastCommit", branch)
+	ret0, _ := ret[0].(string)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetLastCommit indicates an expected call of GetLastCommit.
+func (mr *MockSearchIndexMockRecorder) GetLastCommit(branch any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetLastCommit", reflect.TypeOf((*MockSearchIndex)(nil).GetLastCommit), branch)
 }
 
 // Search mocks base method.

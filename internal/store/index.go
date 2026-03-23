@@ -248,6 +248,65 @@ func extractBody(raw []byte) string {
 }
 
 
+// Completions returns autocomplete suggestions for a given filter category and prefix.
+// Supported categories: "domain", "entity", "type", "ep", "path".
+func (idx *Index) Completions(category, prefix string, limit int) ([]string, error) {
+	switch category {
+	case "domain":
+		return idx.queryDistinct("SELECT DISTINCT domain FROM fact_domains WHERE domain LIKE ? LIMIT ?", prefix+"%", limit)
+	case "entity":
+		return idx.queryDistinct("SELECT DISTINCT entity FROM fact_entities WHERE entity LIKE ? LIMIT ?", prefix+"%", limit)
+	case "type":
+		return []string{"observation", "concept", "process", "principle", "pattern", "reference", "synthesis", "hypothesis", "methodology"}, nil
+	case "ep":
+		return []string{"learn", "update", "retract", "subsume", "synthesize", "sync"}, nil
+	case "path":
+		rows, err := idx.db.Query(
+			`SELECT DISTINCT CASE
+				WHEN instr(substr(path, ?+1), '/') > 0
+				THEN substr(path, 1, ?+instr(substr(path, ?+1), '/')-1)
+				ELSE path
+			END AS dir FROM facts WHERE path LIKE ? LIMIT ?`,
+			len(prefix)+1, len(prefix), len(prefix)+1, prefix+"%", limit,
+		)
+		if err != nil {
+			return nil, err
+		}
+		defer rows.Close()
+		var vals []string
+		seen := map[string]bool{}
+		for rows.Next() {
+			var v string
+			rows.Scan(&v)
+			if v != "" && !seen[v] {
+				vals = append(vals, v)
+				seen[v] = true
+			}
+		}
+		return vals, rows.Err()
+	default:
+		return nil, fmt.Errorf("unknown completion category: %s", category)
+	}
+}
+
+// queryDistinct executes a query and returns distinct non-empty string values.
+func (idx *Index) queryDistinct(query string, args ...any) ([]string, error) {
+	rows, err := idx.db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var vals []string
+	for rows.Next() {
+		var v string
+		rows.Scan(&v)
+		if v != "" {
+			vals = append(vals, v)
+		}
+	}
+	return vals, rows.Err()
+}
+
 // StatsResult holds aggregate statistics computed from the facts table.
 type StatsResult struct {
 	Total         int            `json:"total"`

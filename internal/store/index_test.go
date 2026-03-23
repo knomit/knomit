@@ -204,6 +204,43 @@ func TestUpsertOverwrite(t *testing.T) {
 	}
 }
 
+func TestCompletions(t *testing.T) {
+	idx, err := store.New(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer idx.Close()
+
+	_ = idx.Upsert(store.FactRecord{
+		Path: "kb/test.md", Title: "Test", BlobHash: "bh1",
+		Type: "concept", Domain: []string{"go", "concurrency"},
+		Entities: []string{"goroutine", "channel"}, Confidence: 0.9, Sources: 1, CommitHash: "abc",
+	})
+
+	tests := []struct {
+		category string
+		prefix   string
+		wantMin  int
+	}{
+		{"domain", "go", 1},
+		{"domain", "con", 1},
+		{"entity", "gor", 1},
+		{"entity", "zzz", 0},
+		{"type", "", 9},
+		{"ep", "", 6},
+		{"path", "kb", 1},
+	}
+	for _, tt := range tests {
+		vals, err := idx.Completions(tt.category, tt.prefix, 20)
+		if err != nil {
+			t.Errorf("Completions(%q, %q): %v", tt.category, tt.prefix, err)
+		}
+		if len(vals) < tt.wantMin {
+			t.Errorf("Completions(%q, %q) = %d values, want >= %d", tt.category, tt.prefix, len(vals), tt.wantMin)
+		}
+	}
+}
+
 func TestLastCommit(t *testing.T) {
 	idx, err := store.New(":memory:")
 	if err != nil {

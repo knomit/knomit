@@ -484,6 +484,30 @@ func handleActivity() http.HandlerFunc {
 	}
 }
 
+// handleCompletions handles GET /api/v1/{repo}/completions?category=<cat>&prefix=<p>
+// Returns autocomplete suggestions for filter values (domain, entity, type, ep, path).
+func handleCompletions() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		ri := repos.RepoFromContext(r.Context())
+		ri.RLock()
+		idx := ri.Idx
+		ri.RUnlock()
+
+		category := r.URL.Query().Get("category")
+		prefix := r.URL.Query().Get("prefix")
+		if category == "" {
+			http.Error(w, "category required", http.StatusBadRequest)
+			return
+		}
+		vals, err := idx.Completions(category, prefix, 20)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"values": vals})
+	}
+}
+
 // handleStats handles GET /api/v1/{repo}/stats?path=<path>.
 // Aggregates are computed with a SQL query over the search index.
 func handleStats() http.HandlerFunc {

@@ -59,6 +59,7 @@ func NewRouterWithSessionManager(rm *repos.Manager, gitHandler http.Handler, emb
 		sub.Get("/status", handleStatus(embeddingsEnabled, ontologyRoot))
 		sub.Post("/synthesize", handleSynthesizeStart())
 		sub.Post("/rebuild", handleRebuild())
+		sub.Get("/completions", handleCompletions())
 		sub.Get("/recent", handleRecent())
 		sub.Get("/events", handleEvents())
 		sub.Get("/origin", handleGetOrigin())
