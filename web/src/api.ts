@@ -2,7 +2,7 @@ function base(repo: string) { return `/api/v1/${repo}`; }
 
 export interface RepoInfo { name: string; branch: string }
 
-export interface DirChild { name: string; is_dir: boolean; type?: string }
+export interface DirChild { name: string; is_dir: boolean; type?: string; title?: string }
 export interface BrowseResponse { path: string; children: DirChild[] }
 export interface Fact { path: string; title: string; type?: string; body: string; domain: string[]; confidence: number; sources: number; entities: string[]; refs: string[]; parse_error?: string; from_commit?: string; commit_hash?: string; commit_date?: string }
 export interface SearchResult { path: string; title: string; body: string; score: number; domain?: string[]; entities?: string[] }
@@ -39,6 +39,8 @@ export interface OriginSetResponse {
   head: string;
 }
 
+import type { FilterChip } from './state';
+
 // parseSearchQuery splits a query string into structured components.
 // Tokens of the form domain:X or entity:X are extracted as filters;
 // quoted strings (e.g. entity:"Composer 2") are extracted as filter values;
@@ -67,6 +69,21 @@ export function parseSearchQuery(raw: string): { text: string; domains: string[]
   // Combine quoted phrases and remaining free text
   const allText = [...quoted, ...textTokens].join(' ').trim();
   return { text: allText, domains, entities };
+}
+
+export function parseFilterQuery(raw: string): { chips: FilterChip[]; text: string } {
+  const chips: FilterChip[] = [];
+  // Extract prefix:"quoted value" patterns first
+  let remaining = raw.replace(/(domain|entity|type|ep|path):"([^"]+)"/g, (_m, prefix, value) => {
+    chips.push({ category: prefix as FilterChip['category'], value });
+    return '';
+  });
+  // Extract prefix:value patterns (no quotes, no spaces)
+  remaining = remaining.replace(/(domain|entity|type|ep|path):(\S+)/g, (_m, prefix, value) => {
+    chips.push({ category: prefix as FilterChip['category'], value });
+    return '';
+  });
+  return { chips, text: remaining.trim() };
 }
 
 export interface SessionCreateResponse {
@@ -200,7 +217,9 @@ export const api = {
     if (commit) p.set('commit', commit);
     return fetch(`${base(repo)}/fact?${p}`).then(r => { if (!r.ok) throw new Error(r.statusText); return r.json(); });
   },
-  search: (repo: string, q: string, path = '', minConfidence = 0): Promise<{ results: SearchResult[] }> => {
+  search: (repo: string, q: string, path = '', minConfidence = 0,
+    opts?: { types?: string[]; eps?: string[] }
+  ): Promise<{ results: SearchResult[] }> => {
     const { text, domains, entities } = parseSearchQuery(q);
     const p = new URLSearchParams({ limit: '50' });
     if (text) p.set('q', text);
@@ -208,6 +227,8 @@ export const api = {
     if (entities.length) p.set('entities', entities.join(','));
     if (path) p.set('path', path);
     if (minConfidence) p.set('min_confidence', String(minConfidence));
+    if (opts?.types?.length) p.set('type', opts.types.join(','));
+    if (opts?.eps?.length) p.set('ep', opts.eps.join(','));
     return fetch(`${base(repo)}/search?${p}`).then(r => r.json());
   },
   history: (repo: string, path: string, after?: string): Promise<HistoryResponse> => {
@@ -232,11 +253,16 @@ export const api = {
     fetch(`${base(repo)}/synthesize`, { method: 'POST', body: recipe }).then(r => r.json()),
   rebuild: (repo: string): Promise<{ op: string; id?: string; status: string; message?: string }> =>
     fetch(`${base(repo)}/rebuild`, { method: 'POST' }).then(r => r.json()),
-  recent: (repo: string, path: string, query = '', limit = 50, offset = 0, typeFilter?: string, excludeType?: string): Promise<RecentResponse> => {
+  recent: (repo: string, path: string, query = '', limit = 50, offset = 0,
+    opts?: { typeFilter?: string; excludeType?: string; domains?: string[]; entities?: string[]; eps?: string[] }
+  ): Promise<RecentResponse> => {
     const p = new URLSearchParams({ path, limit: String(limit), offset: String(offset) });
     if (query) p.set('q', query);
-    if (typeFilter) p.set('type', typeFilter);
-    if (excludeType) p.set('exclude_type', excludeType);
+    if (opts?.typeFilter) p.set('type', opts.typeFilter);
+    if (opts?.excludeType) p.set('exclude_type', opts.excludeType);
+    if (opts?.domains?.length) p.set('domain', opts.domains.join(','));
+    if (opts?.entities?.length) p.set('entities', opts.entities.join(','));
+    if (opts?.eps?.length) p.set('ep', opts.eps.join(','));
     return fetch(`${base(repo)}/recent?${p}`).then(r => r.json());
   },
   getOrigin: (repo: string): Promise<OriginResponse | null> =>
@@ -247,4 +273,6 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(opts),
     }).then(r => { if (!r.ok) throw new Error(r.statusText); return r.json(); }),
+  completions: (repo: string, category: string, prefix = ''): Promise<{ values: string[] }> =>
+    fetch(`${base(repo)}/completions?category=${encodeURIComponent(category)}&prefix=${encodeURIComponent(prefix)}`).then(r => r.json()),
 };

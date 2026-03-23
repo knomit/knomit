@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseSearchQuery } from './api';
+import { parseSearchQuery, parseFilterQuery } from './api';
 
 describe('parseSearchQuery', () => {
   it('parses plain text', () => {
@@ -60,5 +60,22 @@ describe('parseSearchQuery', () => {
   it('handles bare quoted string alongside quoted filter', () => {
     const r = parseSearchQuery('entity:"Composer 2" "exact phrase"');
     expect(r).toEqual({ text: 'exact phrase', domains: [], entities: ['Composer 2'] });
+  });
+});
+
+describe('parseFilterQuery', () => {
+  it('extracts domain and type chips with free text', () => {
+    const r = parseFilterQuery('domain:go type:concept free text');
+    expect(r).toEqual({ chips: [{ category: 'domain', value: 'go' }, { category: 'type', value: 'concept' }], text: 'free text' });
+  });
+
+  it('extracts quoted entity and unquoted path chips', () => {
+    const r = parseFilterQuery('entity:"supply chain" path:kb/go');
+    expect(r).toEqual({ chips: [{ category: 'entity', value: 'supply chain' }, { category: 'path', value: 'kb/go' }], text: '' });
+  });
+
+  it('extracts ep and domain chips with free text', () => {
+    const r = parseFilterQuery('ep:learn domain:go goroutine scheduling');
+    expect(r).toEqual({ chips: [{ category: 'ep', value: 'learn' }, { category: 'domain', value: 'go' }], text: 'goroutine scheduling' });
   });
 });
