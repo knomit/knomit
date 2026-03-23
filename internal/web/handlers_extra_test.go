@@ -657,6 +657,33 @@ func TestHandleEvents_SyncAndPushEvents(t *testing.T) {
 	}
 }
 
+// --- handleSearch ep filter ---
+
+func TestHandleSearch_EpFilter(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	gs := NewMockGitStore(ctrl)
+	mockIdx := NewMockSearchIndex(ctrl)
+
+	mockIdx.EXPECT().Search(gomock.Any()).DoAndReturn(func(q store.SearchQuery) ([]store.SearchResult, error) {
+		if len(q.EpisodeOps) != 2 {
+			t.Errorf("EpisodeOps = %v, want [learn update]", q.EpisodeOps)
+		} else {
+			if q.EpisodeOps[0] != "learn" || q.EpisodeOps[1] != "update" {
+				t.Errorf("EpisodeOps = %v, want [learn update]", q.EpisodeOps)
+			}
+		}
+		return []store.SearchResult{}, nil
+	})
+
+	handler := newTestRouter(gs, mockIdx)
+	rr := doRequest(t, handler, http.MethodGet,
+		"/api/v1/knomit/search?q=test&ep=learn,update", "")
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", rr.Code, rr.Body.String())
+	}
+}
+
 // --- fakeAdapter for synthesize tests ---
 
 type fakeAdapter struct{}

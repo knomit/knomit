@@ -275,6 +275,7 @@ func handleFactWrite() http.HandlerFunc {
 // handleSearch handles GET /api/v1/{repo}/search?q=<query>&entities=<e1,e2>&domain=<d1,d2>&path=<p>&min_confidence=<f>&limit=<n>.
 // The entities and domain filters are AND-combined (all specified values
 // must match). Each accepts a comma-separated list of terms.
+// Additional filters: type=<t1,t2>, exclude_type=<t1>, ep=<op1,op2>
 func handleSearch() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
@@ -296,6 +297,7 @@ func handleSearch() http.HandlerFunc {
 		graphHopsStr := q.Get("graph_hops")
 		typeStr := q.Get("type")
 		excludeTypeStr := q.Get("exclude_type")
+		epStr := q.Get("ep")
 
 		var entities []string
 		if entitiesStr != "" {
@@ -382,6 +384,16 @@ func handleSearch() http.HandlerFunc {
 			}
 		}
 
+		var episodeOps []string
+		if epStr != "" {
+			for _, op := range strings.Split(epStr, ",") {
+				op = strings.TrimSpace(op)
+				if op != "" {
+					episodeOps = append(episodeOps, op)
+				}
+			}
+		}
+
 		log.Debug().Str("q", text).Strs("entities", entities).Strs("domain", domain).Int("limit", limit).Msg("search")
 
 		results, err := ri.Idx.Search(store.SearchQuery{
@@ -395,6 +407,7 @@ func handleSearch() http.HandlerFunc {
 			GraphHops:     graphHops,
 			IncludeTypes:  includeTypes,
 			ExcludeTypes:  excludeTypes,
+			EpisodeOps:    episodeOps,
 		})
 		if err != nil {
 			log.Debug().Err(err).Msg("search failed")
@@ -562,6 +575,7 @@ func handleStatus(embeddingsEnabled bool, ontologyRoot string) http.HandlerFunc 
 }
 
 // handleRecent handles GET /api/v1/{repo}/recent?path=<prefix>&q=<query>&limit=50&offset=0
+// Additional filters: domain=<d1,d2>, entities=<e1,e2>, ep=<op1,op2>, type=<t1>, exclude_type=<t1>
 func handleRecent() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
@@ -572,24 +586,25 @@ func handleRecent() http.HandlerFunc {
 			return
 		}
 
-		path := r.URL.Query().Get("path")
+		q := r.URL.Query()
+		path := q.Get("path")
 		limit := 50
-		if v := r.URL.Query().Get("limit"); v != "" {
+		if v := q.Get("limit"); v != "" {
 			if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 500 {
 				limit = n
 			}
 		}
 		offset := 0
-		if v := r.URL.Query().Get("offset"); v != "" {
+		if v := q.Get("offset"); v != "" {
 			if n, err := strconv.Atoi(v); err == nil && n >= 0 {
 				offset = n
 			}
 		}
 
-		query := r.URL.Query().Get("q")
+		query := q.Get("q")
 
 		var includeTypes []string
-		if v := r.URL.Query().Get("type"); v != "" {
+		if v := q.Get("type"); v != "" {
 			for _, t := range strings.Split(v, ",") {
 				t = strings.TrimSpace(t)
 				if t != "" {
@@ -598,7 +613,7 @@ func handleRecent() http.HandlerFunc {
 			}
 		}
 		var excludeTypes []string
-		if v := r.URL.Query().Get("exclude_type"); v != "" {
+		if v := q.Get("exclude_type"); v != "" {
 			for _, t := range strings.Split(v, ",") {
 				t = strings.TrimSpace(t)
 				if t != "" {
@@ -607,7 +622,37 @@ func handleRecent() http.HandlerFunc {
 			}
 		}
 
-		entries, total, err := ri.Svc.Index().RecentFacts(path, query, limit, offset, includeTypes, excludeTypes)
+		var domain []string
+		if v := q.Get("domain"); v != "" {
+			for _, d := range strings.Split(v, ",") {
+				d = strings.TrimSpace(d)
+				if d != "" {
+					domain = append(domain, d)
+				}
+			}
+		}
+
+		var entities []string
+		if v := q.Get("entities"); v != "" {
+			for _, e := range strings.Split(v, ",") {
+				e = strings.TrimSpace(e)
+				if e != "" {
+					entities = append(entities, e)
+				}
+			}
+		}
+
+		var epOps []string
+		if v := q.Get("ep"); v != "" {
+			for _, op := range strings.Split(v, ",") {
+				op = strings.TrimSpace(op)
+				if op != "" {
+					epOps = append(epOps, op)
+				}
+			}
+		}
+
+		entries, total, err := ri.Svc.Index().RecentFacts(path, query, limit, offset, includeTypes, excludeTypes, domain, entities, epOps)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, fmt.Sprintf("recent error: %v", err))
 			return
