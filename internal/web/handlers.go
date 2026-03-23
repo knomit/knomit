@@ -83,10 +83,12 @@ func handleBrowse(ontologyRoot string) http.HandlerFunc {
 			Name  string `json:"name"`
 			IsDir bool   `json:"is_dir"`
 			Type  string `json:"type,omitempty"`
+			Title string `json:"title,omitempty"`
 		}
 
-		// Batch-fetch epistemic types for fact files from the index.
+		// Batch-fetch epistemic types and titles for fact files from the index.
 		typeByPath := map[string]string{}
+		titleByPath := map[string]string{}
 		if ri.Idx != nil {
 			var factPaths []string
 			for _, e := range entries {
@@ -98,6 +100,7 @@ func handleBrowse(ontologyRoot string) http.HandlerFunc {
 				for _, fp := range factPaths {
 					if fb, err := ri.Idx.GetByPath(fp); err == nil && fb != nil {
 						typeByPath[fp] = fb.Type
+						titleByPath[fp] = fb.Title
 					}
 				}
 			}
@@ -108,6 +111,7 @@ func handleBrowse(ontologyRoot string) http.HandlerFunc {
 			c := child{Name: e.Name, IsDir: e.IsDir}
 			if !e.IsDir {
 				c.Type = typeByPath[path+"/"+e.Name]
+				c.Title = titleByPath[path+"/"+e.Name]
 			}
 			children = append(children, c)
 		}
