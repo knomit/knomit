@@ -148,13 +148,20 @@ func (idx *Index) Search(q SearchQuery) ([]SearchResult, error) {
 			log.Warn().Msg("search: no query vector available")
 		} else {
 			vecBlob := float32SliceToBytes(queryVec)
+			// Adaptive k: scale with MinSimilarity — higher threshold needs fewer candidates.
+			kLimit := limit * 5
+			if q.MinSimilarity > 0.7 {
+				kLimit = limit * 2
+			} else if q.MinSimilarity > 0.5 {
+				kLimit = limit * 3
+			}
 			rows, err := idx.db.Query(
 				`SELECT f.path, (1.0 - fv.distance) as similarity
 				 FROM facts_vec fv
 				 JOIN facts f ON f.rowid = fv.rowid
 				 WHERE fv.embedding MATCH ? AND fv.k = ?
 				 ORDER BY fv.distance ASC`,
-				vecBlob, limit*5,
+				vecBlob, kLimit,
 			)
 			if err != nil {
 				log.Warn().Err(err).Msg("search: vec query failed")

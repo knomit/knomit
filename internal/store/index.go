@@ -159,7 +159,7 @@ func New(path string, opts ...Option) (*Index, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite: %w", err)
 	}
-	db.SetMaxOpenConns(2)
+	db.SetMaxOpenConns(4)
 	// Use the same embedded schema.sql as Service.Open to keep DDL in one place.
 	if _, err := db.Exec(schemaSQL_); err != nil {
 		db.Close()

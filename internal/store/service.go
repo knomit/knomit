@@ -48,7 +48,7 @@ func Open(path string, opts ...Option) (*Service, error) {
 	}
 	// SQLite serializes writes internally; limiting the pool avoids SQLITE_BUSY
 	// contention between pooled connections competing for the write lock.
-	db.SetMaxOpenConns(2)
+	db.SetMaxOpenConns(4)
 
 	// Run embedded schema.
 	if _, err := db.Exec(schemaSQL_); err != nil {

@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/rs/zerolog/log"
 )
@@ -382,12 +383,12 @@ func (idx *Index) recentFactsSearch(pathPrefix, query string, limit, offset int,
 }
 
 func join(ss []string, sep string) string {
-	result := ""
+	var b strings.Builder
 	for i, s := range ss {
 		if i > 0 {
-			result += sep
+			b.WriteString(sep)
 		}
-		result += s
+		b.WriteString(s)
 	}
-	return result
+	return b.String()
 }
