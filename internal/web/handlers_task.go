@@ -28,8 +28,9 @@ func handleSynthesizeStart() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
 		ri.RLock()
-		defer ri.RUnlock()
-		deps := ri.SynthDeps
+		deps, hub, repo := ri.SynthDeps, ri.Hub, ri.Name
+		ri.RUnlock()
+
 		if deps == nil || deps.Adapter == nil || deps.Reviewer == nil {
 			log.Warn().Msg("synthesize: not available (no LLM configured)")
 			writeError(w, http.StatusServiceUnavailable, "synthesis not available")
@@ -38,8 +39,7 @@ func handleSynthesizeStart() http.HandlerFunc {
 
 		log.Info().Msg("synthesize: starting review")
 
-		repo := ri.Name
-		id, err := ri.Hub.Start("synth", func(ctx context.Context, emit func(repos.TaskEvent)) {
+		id, err := hub.Start("synth", func(ctx context.Context, emit func(repos.TaskEvent)) {
 			emit(repos.TaskEvent{Status: "running", Phase: "start", Message: "review starting", Repo: repo})
 			if err := deps.Reviewer.RunAll(ctx, deps.Adapter); err != nil {
 				emit(repos.TaskEvent{Status: "error", Message: err.Error(), Repo: repo})
@@ -63,23 +63,24 @@ func handleRebuild() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
 		ri.RLock()
-		defer ri.RUnlock()
-		if ri.Svc == nil {
+		svc, gs, hub, repo := ri.Svc, ri.GS, ri.Hub, ri.Name
+		ri.RUnlock()
+
+		if svc == nil {
 			writeError(w, http.StatusServiceUnavailable, "index not available")
 			return
 		}
 
-		gitReader, ok := ri.GS.(store.GitReader)
+		gitReader, ok := gs.(store.GitReader)
 		if !ok {
 			writeError(w, http.StatusInternalServerError, "git store does not support rebuild")
 			return
 		}
 
-		idx := ri.Svc.Index()
-		branch := ri.GS.Branch()
+		idx := svc.Index()
+		branch := gs.Branch()
 
-		repo := ri.Name
-		id, err := ri.Hub.Start("rebuild", func(ctx context.Context, emit func(repos.TaskEvent)) {
+		id, err := hub.Start("rebuild", func(ctx context.Context, emit func(repos.TaskEvent)) {
 			emit(repos.TaskEvent{Status: "running", Phase: "start", Message: "rebuilding index", Repo: repo})
 			progress := func(subPhase string, done, total int) {
 				if done%10 == 0 || done == total {
