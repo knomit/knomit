@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/rs/zerolog/log"
@@ -371,23 +372,46 @@ func handlePreview(rm *repos.Manager, sm *SessionManager) http.HandlerFunc {
 			}
 		}
 
-		// Dead ref detection: read each local fact and check refs.
-		deadRefs := 0
+		// Dead ref detection: read local facts in parallel (bounded concurrency).
+		// A mutex serializes ReadFile calls because the underlying git storer
+		// (SQLite) may not support concurrent connections safely in all configs.
+		const workers = 8
+		type refResult struct{ dead int }
+		jobs := make(chan string, len(localPaths))
+		results := make(chan refResult, len(localPaths))
+		var readMu sync.Mutex
+
+		for i := 0; i < workers; i++ {
+			go func() {
+				for p := range jobs {
+					readMu.Lock()
+					content, err := gs.ReadFile(p)
+					readMu.Unlock()
+					if err != nil {
+						results <- refResult{0}
+						continue
+					}
+					dead := 0
+					for _, ref := range extractRefsFromFrontmatter(content) {
+						if strings.HasPrefix(ref, "http://") || strings.HasPrefix(ref, "https://") {
+							continue
+						}
+						if _, alive := localPaths[ref]; !alive {
+							dead++
+						}
+					}
+					results <- refResult{dead}
+				}
+			}()
+		}
 		for p := range localPaths {
-			content, err := gs.ReadFile(p)
-			if err != nil {
-				continue
-			}
-			refs := extractRefsFromFrontmatter(content)
-			for _, ref := range refs {
-				if strings.HasPrefix(ref, "http://") || strings.HasPrefix(ref, "https://") {
-					continue
-				}
-				if _, alive := localPaths[ref]; alive {
-					continue
-				}
-				deadRefs++
-			}
+			jobs <- p
+		}
+		close(jobs)
+		deadRefs := 0
+		for range localPaths {
+			r := <-results
+			deadRefs += r.dead
 		}
 
 		result := previewResult{
