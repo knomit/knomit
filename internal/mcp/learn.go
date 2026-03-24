@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"knomit/internal/fact"
 
@@ -72,6 +73,9 @@ func LearnHandler(gs GitStore, idx SearchIndex, ontologyRoot string, ontology *f
 		batchEmb = embedders[0]
 	}
 	return func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+		defer cancel()
+
 		// 1. Parse arguments.
 		momentName := req.GetString("moment_name", "")
 		if momentName == "" {

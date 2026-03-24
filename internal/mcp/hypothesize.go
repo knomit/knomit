@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 
@@ -45,6 +46,9 @@ func hypothesizeTool() mcpgo.Tool {
 // HypothesizeHandler returns the handler function for knomit_hypothesize.
 func HypothesizeHandler(gs GitStore, idx SearchIndex, pipelineIdx PipelineIndex, ontologyRoot string) func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 	return func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+
 		sessionID := req.GetString("session_id", "")
 		response := req.GetString("response", "")
 

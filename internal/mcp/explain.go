@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"knomit/internal/fact"
 
@@ -78,6 +79,9 @@ func classifyRefs(refs []string) classifiedRefs {
 // ExplainHandler returns the handler function for knomit_explain.
 func ExplainHandler(gs GitStore, sessionIdx ToolSessionIndex, ontologyRoot string) func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 	return func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+
 		file := req.GetString("file", "")
 		cursor := req.GetString("cursor", "")
 

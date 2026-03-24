@@ -190,7 +190,7 @@ CREATE TABLE IF NOT EXISTS objects (hash TEXT NOT NULL, type INTEGER NOT NULL, s
 CREATE TABLE IF NOT EXISTS refs (name TEXT PRIMARY KEY, target TEXT NOT NULL, is_symbolic INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value BLOB NOT NULL);
 `
-		if _, err := db.Exec(schema); err != nil {
+		if _, err := db.ExecContext(r.Context(), schema); err != nil {
 			db.Close()
 			sendEvent(map[string]string{"phase": "error", "message": fmt.Sprintf("init clone schema: %v", err)})
 			return
@@ -723,7 +723,7 @@ func handleCommit(rm *repos.Manager, sm *SessionManager) http.HandlerFunc {
 
 		// Checkpoint the temp DB's WAL so all data is in the main .db file before copying.
 		if tempDB := remoteStore.Storer().DB(); tempDB != nil {
-			if _, err := tempDB.Exec("PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {
+			if _, err := tempDB.ExecContext(r.Context(), "PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {
 				log.Warn().Err(err).Msg("commit: WAL checkpoint failed")
 			}
 			tempDB.Close()

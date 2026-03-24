@@ -147,7 +147,7 @@ func handleFact() http.HandlerFunc {
 				// Commit may be invalid or file never on that branch.
 				// Fall back to the most recent commit_log entry for this path.
 				var lastHash string
-				if qerr := ri.Svc.DB().QueryRow(
+				if qerr := ri.Svc.DB().QueryRowContext(r.Context(),
 					`SELECT commit_hash FROM commit_log WHERE path = ? AND action != 'deleted' ORDER BY rowid DESC LIMIT 1`,
 					path,
 				).Scan(&lastHash); qerr == nil && lastHash != "" {
@@ -211,7 +211,7 @@ func handleFact() http.HandlerFunc {
 					"commit_hash": rec.CommitHash,
 				}
 				var ts sql.NullInt64
-				if qerr := ri.Svc.DB().QueryRow(
+				if qerr := ri.Svc.DB().QueryRowContext(r.Context(),
 					`SELECT committed_at FROM commit_log WHERE commit_hash = ? LIMIT 1`,
 					rec.CommitHash,
 				).Scan(&ts); qerr == nil && ts.Valid {
