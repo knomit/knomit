@@ -305,11 +305,14 @@ func (m *Manager) openOne(name, dbPath string, isDefault bool) (*RepoInstance, e
 	// ri is assigned below before any commits can fire.
 	var ri *RepoInstance
 	obs := observe.New(time.Second, func(hash string) {
+		ri.mu.RLock()
 		currentGS, ok := ri.GS.(*git.Store)
+		currentSvc := ri.Svc
+		ri.mu.RUnlock()
 		if !ok {
 			return
 		}
-		if err := ri.Svc.Index().Sync(currentGS, currentGS.Branch()); err != nil {
+		if err := currentSvc.Index().Sync(currentGS, currentGS.Branch()); err != nil {
 			log.Warn().Err(err).Str("repo", name).Msg("observer sync failed")
 		}
 		hub.BroadcastStatus(hash)
@@ -395,7 +398,10 @@ func (m *Manager) openOne(name, dbPath string, isDefault bool) (*RepoInstance, e
 
 	ri.Close = func() {
 		obs.Stop()
-		ri.Svc.Close()
+		ri.mu.RLock()
+		svc := ri.Svc
+		ri.mu.RUnlock()
+		svc.Close()
 	}
 
 	return ri, nil
