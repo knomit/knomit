@@ -161,19 +161,10 @@ func New(path string, opts ...Option) (*Index, error) {
 	}
 	db.SetMaxOpenConns(4)
 
-	// Performance pragmas — safe with WAL mode.
-	for _, pragma := range []string{
-		"PRAGMA synchronous = NORMAL",
-		"PRAGMA cache_size = -65536",   // 64 MB page cache
-		"PRAGMA mmap_size = 268435456", // 256 MB memory-mapped I/O
-		"PRAGMA temp_store = MEMORY",
-	} {
-		if _, err := db.Exec(pragma); err != nil {
-			db.Close()
-			return nil, fmt.Errorf("index.New pragma: %w", err)
-		}
-	}
-	// Update query planner statistics.
+	// Per-connection performance pragmas are applied in the ConnectHook (vec.go)
+	// so every pooled connection is configured, not just the first one.
+
+	// Update query planner statistics (one-time hint, not per-connection).
 	db.Exec("PRAGMA optimize")
 
 	// Use the same embedded schema.sql as Service.Open to keep DDL in one place.
