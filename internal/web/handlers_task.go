@@ -27,6 +27,8 @@ func writeTaskConflict(w http.ResponseWriter, op string, err error) {
 func handleSynthesizeStart() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
+		ri.RLock()
+		defer ri.RUnlock()
 		deps := ri.SynthDeps
 		if deps == nil || deps.Adapter == nil || deps.Reviewer == nil {
 			log.Warn().Msg("synthesize: not available (no LLM configured)")
@@ -60,6 +62,8 @@ func handleSynthesizeStart() http.HandlerFunc {
 func handleRebuild() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
+		ri.RLock()
+		defer ri.RUnlock()
 		if ri.Svc == nil {
 			writeError(w, http.StatusServiceUnavailable, "index not available")
 			return

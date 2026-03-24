@@ -43,9 +43,11 @@ func (m *Manager) SwapStore(ri *RepoInstance, tempDBPath string) error {
 		if m.deps.Embedder != nil {
 			idx.SetEmbedder(m.deps.Embedder)
 		}
+		ri.mu.Lock()
 		ri.Svc = svc
 		ri.GS = gs
 		ri.Idx = idx
+		ri.mu.Unlock()
 		return nil
 	}
 
@@ -85,9 +87,11 @@ func (m *Manager) SwapStore(ri *RepoInstance, tempDBPath string) error {
 	if m.deps.Embedder != nil {
 		idx.SetEmbedder(m.deps.Embedder)
 	}
+	ri.mu.Lock()
 	ri.Svc = svc
 	ri.GS = gs
 	ri.Idx = idx
+	ri.mu.Unlock()
 
 	// Clean up backup — swap succeeded.
 	os.Remove(backupPath)

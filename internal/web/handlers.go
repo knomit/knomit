@@ -61,6 +61,8 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 func handleBrowse(ontologyRoot string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
+		ri.RLock()
+		defer ri.RUnlock()
 		path := r.URL.Query().Get("path")
 		if path == "" {
 			path = ontologyRoot
@@ -121,6 +123,8 @@ func handleBrowse(ontologyRoot string) http.HandlerFunc {
 func handleFact() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
+		ri.RLock()
+		defer ri.RUnlock()
 		path := r.URL.Query().Get("path")
 		if path == "" {
 			writeError(w, http.StatusBadRequest, "path query parameter is required")
@@ -227,6 +231,8 @@ func handleFact() http.HandlerFunc {
 func handleFactWrite() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
+		ri.RLock()
+		defer ri.RUnlock()
 
 		var req struct {
 			Path    string `json:"path"`
@@ -268,6 +274,8 @@ func handleFactWrite() http.HandlerFunc {
 func handleSearch() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
+		ri.RLock()
+		defer ri.RUnlock()
 		if ri.Idx == nil {
 			writeError(w, http.StatusBadRequest, "search index not available")
 			return
@@ -405,6 +413,8 @@ func handleSearch() http.HandlerFunc {
 func handleHistoryPaginated() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
+		ri.RLock()
+		defer ri.RUnlock()
 		path := r.URL.Query().Get("path")
 
 		limit := 50
@@ -440,6 +450,8 @@ func handleHistoryPaginated() http.HandlerFunc {
 func handleCommitDetail() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
+		ri.RLock()
+		defer ri.RUnlock()
 		hash := r.URL.Query().Get("hash")
 		if hash == "" {
 			writeError(w, http.StatusBadRequest, "hash query parameter is required")
@@ -461,6 +473,8 @@ func handleCommitDetail() http.HandlerFunc {
 func handleActivity() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
+		ri.RLock()
+		defer ri.RUnlock()
 		result, err := ri.GS.Activity(r.URL.Query().Get("path"))
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, fmt.Sprintf("activity error: %v", err))
@@ -475,6 +489,8 @@ func handleActivity() http.HandlerFunc {
 func handleStats() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
+		ri.RLock()
+		defer ri.RUnlock()
 		if ri.Idx == nil {
 			writeError(w, http.StatusServiceUnavailable, "index not available")
 			return
@@ -492,6 +508,8 @@ func handleStats() http.HandlerFunc {
 func handleStatus(embeddingsEnabled bool, ontologyRoot string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
+		ri.RLock()
+		defer ri.RUnlock()
 		head, err := ri.GS.HeadCommit()
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, fmt.Sprintf("head commit error: %v", err))
@@ -519,6 +537,8 @@ func handleStatus(embeddingsEnabled bool, ontologyRoot string) http.HandlerFunc 
 func handleRecent() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
+		ri.RLock()
+		defer ri.RUnlock()
 		if ri.Svc == nil {
 			writeError(w, http.StatusServiceUnavailable, "index not available")
 			return

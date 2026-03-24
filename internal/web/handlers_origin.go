@@ -48,6 +48,8 @@ func isGitURL(s string) bool {
 func handleGetOrigin() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
+		ri.RLock()
+		defer ri.RUnlock()
 		if ri.Svc == nil {
 			w.WriteHeader(http.StatusNoContent)
 			return
@@ -79,6 +81,8 @@ type setOriginRequest struct {
 func handleSetOrigin() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
+		ri.RLock()
+		defer ri.RUnlock()
 		if ri.Svc == nil {
 			writeError(w, http.StatusInternalServerError, "no store available")
 			return

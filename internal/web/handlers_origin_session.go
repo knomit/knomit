@@ -152,6 +152,8 @@ func handleTestConnectivity(rm *repos.Manager, sm *SessionManager) http.HandlerF
 		}
 
 		ri := repos.RepoFromContext(r.Context())
+		ri.RLock()
+		defer ri.RUnlock()
 
 		sendEvent, ok := beginSSE(w)
 		if !ok {
@@ -308,6 +310,8 @@ func handlePreview(rm *repos.Manager, sm *SessionManager) http.HandlerFunc {
 		}
 
 		ri := repos.RepoFromContext(r.Context())
+		ri.RLock()
+		defer ri.RUnlock()
 
 		sendEvent, ok := beginSSE(w)
 		if !ok {
@@ -474,6 +478,8 @@ func handleApply(rm *repos.Manager, sm *SessionManager) http.HandlerFunc {
 		}
 
 		ri := repos.RepoFromContext(r.Context())
+		ri.RLock()
+		defer ri.RUnlock()
 
 		sendEvent, ok := beginSSE(w)
 		if !ok {

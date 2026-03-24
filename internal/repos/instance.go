@@ -55,8 +55,16 @@ type SynthDeps struct {
 	Reviewer *synthesize.Reviewer
 }
 
+// RLock acquires a read lock protecting GS, Svc, and Idx.
+// Call RUnlock when done.
+func (ri *RepoInstance) RLock() { ri.mu.RLock() }
+
+// RUnlock releases the read lock.
+func (ri *RepoInstance) RUnlock() { ri.mu.RUnlock() }
+
 // RepoInstance holds all runtime state for a single repository.
 type RepoInstance struct {
+	mu          sync.RWMutex   // protects GS, Svc, Idx during SwapStore
 	Name        string
 	DBPath      string // path to the SQLite database file
 	GS          GitStore
