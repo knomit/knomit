@@ -459,6 +459,60 @@ func TestSearchWithGraphExpansion(t *testing.T) {
 	}
 }
 
+func TestGraphExpandSearch_MultiSeed(t *testing.T) {
+	idx, err := New(":memory:", WithVecDimension(4))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer idx.Close()
+	idx.SetEmbedder(&stubEmbedder4d{})
+
+	// alpha=[1,0.1,0,0], beta=[0.9,0.2,0,0] — highly similar (cosine > 0.60 threshold)
+	// gamma=[0,0,1,0.1] — dissimilar from alpha/beta
+	insertBlob(t, idx.db, "hash_alpha", "alpha")
+	insertBlob(t, idx.db, "hash_beta", "beta")
+	insertBlob(t, idx.db, "hash_gamma", "gamma")
+
+	// seed1=alpha, seed2=gamma; fact3=beta is similar to seed1 via SIMILAR_TO.
+	// With batch OR query, fact3 should be discovered from seed1.
+	facts := []FactRecord{
+		{Path: "kb/f1.md", Title: "F1", BlobHash: "hash_alpha", Domain: []string{"eng"}, Entities: []string{}, Refs: []string{}, CommitHash: "abc"},
+		{Path: "kb/f2.md", Title: "F2", BlobHash: "hash_gamma", Domain: []string{"eng"}, Entities: []string{}, Refs: []string{}, CommitHash: "abc"},
+		{Path: "kb/f3.md", Title: "F3", BlobHash: "hash_beta", Domain: []string{"eng"}, Entities: []string{}, Refs: []string{}, CommitHash: "abc"},
+	}
+	for _, f := range facts {
+		if err := idx.Upsert(f); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Build SIMILAR_TO edges so that kb/f1.md ↔ kb/f3.md are connected.
+	if err := idx.graphBuildSimilarityEdges("kb/f1.md"); err != nil {
+		t.Fatal(err)
+	}
+	if err := idx.graphBuildSimilarityEdges("kb/f3.md"); err != nil {
+		t.Fatal(err)
+	}
+
+	seeds := map[string]float64{
+		"kb/f1.md": 0.9,  // alpha — similar to beta (f3)
+		"kb/f2.md": 0.85, // gamma — dissimilar, no SIMILAR_TO neighbors
+	}
+	expanded := idx.graphExpandSearch(seeds, 1)
+
+	// kb/f3.md should be discovered as a SIMILAR_TO neighbor of seed kb/f1.md
+	if _, ok := expanded["kb/f3.md"]; !ok {
+		t.Errorf("expected kb/f3.md to be discovered via SIMILAR_TO from seed kb/f1.md; got %v", expanded)
+	}
+	// Seeds must not appear in the expanded results
+	if _, ok := expanded["kb/f1.md"]; ok {
+		t.Error("seed kb/f1.md must not appear in expanded results")
+	}
+	if _, ok := expanded["kb/f2.md"]; ok {
+		t.Error("seed kb/f2.md must not appear in expanded results")
+	}
+}
+
 type mockGitReader struct {
 	files      map[string]string
 	blobHashes map[string]string // path → blob hash

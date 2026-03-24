@@ -359,10 +359,17 @@ func (idx *Index) ClusterFacts(resolution float64, minCommunitySize int) (Cluste
 // Returns additional fact paths with scores. Graph-discovered facts receive a
 // bonus score that decreases with hop distance but is capped below the minimum
 // vector seed score to never outrank direct vector hits.
+//
+// Runs exactly 2 Cypher queries total (one per edge type) regardless of how
+// many seeds are provided, using OR-chaining to batch all seed paths.
 func (idx *Index) graphExpandSearch(seeds map[string]float64, maxHops int) map[string]float64 {
+	if len(seeds) == 0 {
+		return nil
+	}
+
 	expanded := map[string]float64{}
 
-	// Find minimum seed score for capping
+	// Find minimum seed score for capping.
 	minSeedScore := 1.0
 	for _, score := range seeds {
 		if score < minSeedScore {
@@ -371,42 +378,60 @@ func (idx *Index) graphExpandSearch(seeds map[string]float64, maxHops int) map[s
 	}
 	capScore := minSeedScore - 0.01
 
-	for seedPath := range seeds {
-		p := escapeCypherKey(seedPath)
+	// Build Cypher path filter using OR-chaining (one clause per seed).
+	pathParts := make([]string, 0, len(seeds))
+	for p := range seeds {
+		pathParts = append(pathParts, `f.path = "`+escapeCypherKey(p)+`"`)
+	}
+	pathFilter := strings.Join(pathParts, " OR ")
 
-		// Traverse SIMILAR_TO (1 hop)
-		q := fmt.Sprintf(`SELECT value FROM json_each(cypher('MATCH (:Fact {path: "%s"})-[:SIMILAR_TO]-(neighbor:Fact) WHERE neighbor.deleted = false RETURN neighbor.path'))`, p)
-		rows, err := idx.db.Query(q)
-		if err == nil {
-			for rows.Next() {
-				var neighborPath string
-				rows.Scan(&neighborPath)
-				if _, isSeed := seeds[neighborPath]; !isSeed {
-					score := capScore
-					if existing, ok := expanded[neighborPath]; !ok || score > existing {
-						expanded[neighborPath] = score
-					}
+	// Batch query 1: SIMILAR_TO neighbors for all seeds.
+	// Use NOT neighbor.deleted = true (instead of = false) because GraphQLite
+	// stores booleans as JSON booleans which do not compare equal to Cypher
+	// literal false. Nodes that are not deleted have deleted=false (set in
+	// graphSyncFact) so this filter correctly excludes soft-deleted nodes.
+	q := fmt.Sprintf(
+		`SELECT json_extract(value, '$.path') FROM json_each(cypher('MATCH (f:Fact)-[:SIMILAR_TO]-(neighbor:Fact) WHERE (%s) AND NOT neighbor.deleted = true RETURN DISTINCT neighbor.path AS path'))`,
+		pathFilter,
+	)
+	rows, err := idx.db.Query(q)
+	if err == nil {
+		for rows.Next() {
+			var neighborPath string
+			rows.Scan(&neighborPath)
+			if neighborPath == "" {
+				continue
+			}
+			if _, isSeed := seeds[neighborPath]; !isSeed {
+				if existing, ok := expanded[neighborPath]; !ok || capScore > existing {
+					expanded[neighborPath] = capScore
 				}
 			}
-			rows.Close()
 		}
+		rows.Close()
+	}
 
-		// Traverse TAGGED → Entity → TAGGED (shared entities)
-		q = fmt.Sprintf(`SELECT value FROM json_each(cypher('MATCH (:Fact {path: "%s"})-[:TAGGED]->(e:Entity)<-[:TAGGED]-(neighbor:Fact) WHERE neighbor.deleted = false AND neighbor.path <> "%s" RETURN DISTINCT neighbor.path'))`, p, p)
-		rows, err = idx.db.Query(q)
-		if err == nil {
-			for rows.Next() {
-				var neighborPath string
-				rows.Scan(&neighborPath)
-				if _, isSeed := seeds[neighborPath]; !isSeed {
-					score := capScore - 0.01
-					if existing, ok := expanded[neighborPath]; !ok || score > existing {
-						expanded[neighborPath] = score
-					}
+	// Batch query 2: shared-entity neighbors for all seeds.
+	q = fmt.Sprintf(
+		`SELECT json_extract(value, '$.path') FROM json_each(cypher('MATCH (f:Fact)-[:TAGGED]->(e:Entity)<-[:TAGGED]-(neighbor:Fact) WHERE (%s) AND NOT neighbor.deleted = true RETURN DISTINCT neighbor.path AS path'))`,
+		pathFilter,
+	)
+	rows, err = idx.db.Query(q)
+	if err == nil {
+		for rows.Next() {
+			var neighborPath string
+			rows.Scan(&neighborPath)
+			if neighborPath == "" {
+				continue
+			}
+			if _, isSeed := seeds[neighborPath]; !isSeed {
+				score := capScore - 0.01
+				if existing, ok := expanded[neighborPath]; !ok || score > existing {
+					expanded[neighborPath] = score
 				}
 			}
-			rows.Close()
 		}
+		rows.Close()
 	}
 
 	return expanded
