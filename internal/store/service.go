@@ -75,6 +75,14 @@ func Open(path string, opts ...Option) (*Service, error) {
 		`ALTER TABLE pipeline_sessions ADD COLUMN tool TEXT NOT NULL DEFAULT 'review'`,
 		`ALTER TABLE review_work_items RENAME TO pipeline_work_items`,
 		`CREATE INDEX IF NOT EXISTS facts_type ON facts(type)`,
+		// Junction tables for indexed entity/domain filtering (idempotent).
+		`CREATE TABLE IF NOT EXISTS fact_entities (fact_path TEXT NOT NULL REFERENCES facts(path) ON DELETE CASCADE, entity TEXT NOT NULL COLLATE NOCASE, PRIMARY KEY (fact_path, entity))`,
+		`CREATE INDEX IF NOT EXISTS fact_entities_entity ON fact_entities(entity)`,
+		`CREATE TABLE IF NOT EXISTS fact_domains (fact_path TEXT NOT NULL REFERENCES facts(path) ON DELETE CASCADE, domain TEXT NOT NULL COLLATE NOCASE, PRIMARY KEY (fact_path, domain))`,
+		`CREATE INDEX IF NOT EXISTS fact_domains_domain ON fact_domains(domain)`,
+		// Backfill junction tables from existing JSON columns.
+		`INSERT OR IGNORE INTO fact_entities (fact_path, entity) SELECT f.path, je.value FROM facts f, json_each(f.entities) je WHERE je.value IS NOT NULL AND je.value != ''`,
+		`INSERT OR IGNORE INTO fact_domains (fact_path, domain) SELECT f.path, jd.value FROM facts f, json_each(f.domain) jd WHERE jd.value IS NOT NULL AND jd.value != ''`,
 	}
 	for _, m := range migrations {
 		db.Exec(m) // ignore "duplicate column" errors

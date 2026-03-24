@@ -72,11 +72,24 @@ func newFactFilter(q SearchQuery) *factFilter {
 		}
 		f.add(" AND f.type NOT IN ("+ph[:len(ph)-1]+")", args...)
 	}
-	for _, e := range q.Entities {
-		f.add(" AND EXISTS (SELECT 1 FROM json_each(f.entities) je WHERE je.value = ? COLLATE NOCASE)", e)
+	if len(q.Entities) > 0 {
+		ph := strings.Repeat("?,", len(q.Entities))
+		ph = ph[:len(ph)-1]
+		args := make([]any, len(q.Entities)+1)
+		for i, e := range q.Entities {
+			args[i] = e
+		}
+		args[len(q.Entities)] = len(q.Entities)
+		f.add(
+			" AND (SELECT COUNT(DISTINCT entity) FROM fact_entities WHERE fact_path = f.path AND entity IN ("+ph+")) >= ?",
+			args...,
+		)
 	}
 	for _, d := range q.Domain {
-		f.add(" AND EXISTS (SELECT 1 FROM json_each(f.domain) jd WHERE jd.value = ? COLLATE NOCASE OR jd.value LIKE ? COLLATE NOCASE)", d, d+"/%")
+		f.add(
+			" AND EXISTS (SELECT 1 FROM fact_domains WHERE fact_path = f.path AND (domain = ? OR domain LIKE ?))",
+			d, d+"/%",
+		)
 	}
 	return f
 }
@@ -293,75 +306,4 @@ func (idx *Index) Search(q SearchQuery) ([]SearchResult, error) {
 	return out, nil
 }
 
-// containsAll reports whether haystack contains all elements of needles
-// (case-insensitive exact match).
-func containsAll(haystack []string, needles []string) bool {
-	for _, needle := range needles {
-		found := false
-		for _, h := range haystack {
-			if strings.EqualFold(h, needle) {
-				found = true
-				break
-			}
-		}
-		if !found {
-			return false
-		}
-	}
-	return true
-}
-
-// domainPrefixMatch checks if each query domain is a prefix of at least one fact domain.
-func domainPrefixMatch(factDomains, queryDomains []string) bool {
-	for _, qd := range queryDomains {
-		found := false
-		for _, fd := range factDomains {
-			if fd == qd || strings.HasPrefix(fd, qd+"/") {
-				found = true
-				break
-			}
-		}
-		if !found {
-			return false
-		}
-	}
-	return true
-}
-
-// matchesFilters reports whether rec satisfies the non-text filter fields in q
-// (entities, domain, path prefix, minimum confidence).
-func matchesFilters(rec FactRecord, q SearchQuery) bool {
-	if len(q.Entities) > 0 && !containsAll(rec.Entities, q.Entities) {
-		return false
-	}
-	if len(q.Domain) > 0 && !domainPrefixMatch(rec.Domain, q.Domain) {
-		return false
-	}
-	if q.Path != "" && !strings.HasPrefix(rec.Path, q.Path) {
-		return false
-	}
-	if q.MinConfidence > 0 && rec.Confidence < q.MinConfidence {
-		return false
-	}
-	if len(q.IncludeTypes) > 0 {
-		found := false
-		for _, t := range q.IncludeTypes {
-			if rec.Type == t {
-				found = true
-				break
-			}
-		}
-		if !found {
-			return false
-		}
-	}
-	if len(q.ExcludeTypes) > 0 {
-		for _, t := range q.ExcludeTypes {
-			if rec.Type == t {
-				return false
-			}
-		}
-	}
-	return true
-}
 

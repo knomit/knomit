@@ -71,6 +71,38 @@ func (idx *Index) Upsert(rec FactRecord) error {
 		return fmt.Errorf("upsert fact: %w", err)
 	}
 
+	// Repopulate junction tables.
+	// IMPORTANT: INSERT OR REPLACE on facts does NOT trigger ON DELETE CASCADE in SQLite
+	// (only a top-level DELETE statement fires cascades). Delete explicitly first.
+	if _, err := tx.Exec(`DELETE FROM fact_entities WHERE fact_path = ?`, rec.Path); err != nil {
+		return fmt.Errorf("upsert fact_entities delete: %w", err)
+	}
+	if _, err := tx.Exec(`DELETE FROM fact_domains WHERE fact_path = ?`, rec.Path); err != nil {
+		return fmt.Errorf("upsert fact_domains delete: %w", err)
+	}
+	for _, entity := range rec.Entities {
+		if entity == "" {
+			continue
+		}
+		if _, err := tx.Exec(
+			`INSERT INTO fact_entities(fact_path, entity) VALUES (?, ?)`,
+			rec.Path, entity,
+		); err != nil {
+			return fmt.Errorf("upsert fact_entities: %w", err)
+		}
+	}
+	for _, domain := range rec.Domain {
+		if domain == "" {
+			continue
+		}
+		if _, err := tx.Exec(
+			`INSERT INTO fact_domains(fact_path, domain) VALUES (?, ?)`,
+			rec.Path, domain,
+		); err != nil {
+			return fmt.Errorf("upsert fact_domains: %w", err)
+		}
+	}
+
 	// Insert embedding into facts_vec.
 	if vecData != nil {
 		newRowid := int64(0)
