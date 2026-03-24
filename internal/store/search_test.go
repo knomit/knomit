@@ -845,3 +845,100 @@ func TestSearchMinSimilarity(t *testing.T) {
 		t.Fatalf("expected only kb/high.md with MinSimilarity=0.9, got %v", results)
 	}
 }
+
+func TestSearchAdaptiveKBranchMid(t *testing.T) {
+	// Behavioral test for the adaptive-k middle branch (MinSimilarity > 0.5 → kLimit = limit*3).
+	// The "close" fact has cosine ~1.0 with the query; the "distant" fact has cosine ~0.5.
+	// With MinSimilarity=0.6 the distant fact falls below the threshold, so only
+	// the close fact should be returned — confirming Search works correctly with
+	// the limit*3 candidate window.
+	idx, err := store.New(":memory:", store.WithVecDimension(4))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer idx.Close()
+
+	ctrl := gomock.NewController(t)
+	emb := NewMockEmbedder(ctrl)
+	emb.EXPECT().Embed(gomock.Any()).DoAndReturn(func(text string) ([]float32, error) {
+		if strings.Contains(text, "distant") {
+			return []float32{0.5, 0.87, 0, 0}, nil // cosine ~0.5 with [1,0,0,0]
+		}
+		return []float32{1, 0, 0, 0}, nil
+	}).AnyTimes()
+	idx.SetEmbedder(emb)
+
+	insertTestBlob(t, idx.DB(), "bh_high2", "close match")
+	insertTestBlob(t, idx.DB(), "bh_low2", "distant match")
+	if err := idx.Upsert(store.FactRecord{
+		Path: "kb/high2.md", Title: "close", BlobHash: "bh_high2",
+		Type: "observation", Domain: []string{"test"}, Entities: []string{},
+		Confidence: 0.9, Sources: 1, CommitHash: "abc",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := idx.Upsert(store.FactRecord{
+		Path: "kb/low2.md", Title: "distant", BlobHash: "bh_low2",
+		Type: "observation", Domain: []string{"test"}, Entities: []string{},
+		Confidence: 0.9, Sources: 1, CommitHash: "abc",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// MinSimilarity=0.6 exercises the >0.5 branch (kLimit = limit*3).
+	results, err := idx.Search(store.SearchQuery{Text: "q", MinSimilarity: 0.6, Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 1 || results[0].Path != "kb/high2.md" {
+		t.Fatalf("expected only kb/high2.md with MinSimilarity=0.6, got %v", results)
+	}
+}
+
+func TestSearchAdaptiveKBranchDefault(t *testing.T) {
+	// Behavioral test for the adaptive-k default branch (MinSimilarity=0 → kLimit = limit*5).
+	// Both facts have cosine above the default 0.40 floor, so both should be returned —
+	// confirming Search works correctly with the limit*5 candidate window.
+	idx, err := store.New(":memory:", store.WithVecDimension(4))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer idx.Close()
+
+	ctrl := gomock.NewController(t)
+	emb := NewMockEmbedder(ctrl)
+	emb.EXPECT().Embed(gomock.Any()).DoAndReturn(func(text string) ([]float32, error) {
+		if strings.Contains(text, "distant") {
+			return []float32{0.5, 0.87, 0, 0}, nil // cosine ~0.5 with [1,0,0,0]
+		}
+		return []float32{1, 0, 0, 0}, nil
+	}).AnyTimes()
+	idx.SetEmbedder(emb)
+
+	insertTestBlob(t, idx.DB(), "bh_high3", "close match")
+	insertTestBlob(t, idx.DB(), "bh_low3", "distant match")
+	if err := idx.Upsert(store.FactRecord{
+		Path: "kb/high3.md", Title: "close", BlobHash: "bh_high3",
+		Type: "observation", Domain: []string{"test"}, Entities: []string{},
+		Confidence: 0.9, Sources: 1, CommitHash: "abc",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := idx.Upsert(store.FactRecord{
+		Path: "kb/low3.md", Title: "distant", BlobHash: "bh_low3",
+		Type: "observation", Domain: []string{"test"}, Entities: []string{},
+		Confidence: 0.9, Sources: 1, CommitHash: "abc",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// MinSimilarity=0 exercises the default branch (kLimit = limit*5).
+	// Both facts clear the 0.40 default floor (cosine ~1.0 and ~0.5).
+	results, err := idx.Search(store.SearchQuery{Text: "q", MinSimilarity: 0, Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("expected 2 results with MinSimilarity=0 (default branch), got %d", len(results))
+	}
+}

@@ -148,7 +148,12 @@ func (idx *Index) Search(q SearchQuery) ([]SearchResult, error) {
 			log.Warn().Msg("search: no query vector available")
 		} else {
 			vecBlob := float32SliceToBytes(queryVec)
-			// Adaptive k: scale with MinSimilarity — higher threshold needs fewer candidates.
+			// Adaptive k: performance optimisation, not a correctness guarantee.
+			// A higher MinSimilarity threshold lets us fetch fewer KNN candidates
+			// because, in practice, most documents that clear the threshold will
+			// fall within the smaller window. On very large indexes, rare near-threshold
+			// documents could theoretically fall outside the reduced candidate set —
+			// an acceptable precision trade-off for the performance gain.
 			kLimit := limit * 5
 			if q.MinSimilarity > 0.7 {
 				kLimit = limit * 2
