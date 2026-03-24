@@ -29,8 +29,10 @@ func handleEvents() http.HandlerFunc {
 		// providing reconnection recovery without maintaining client-side state.
 		events, snapshot := ri.Hub.Subscribe(r.Context())
 
-		// Send initial status event.
+		// Snapshot the initial head commit under RLock — GS may be swapped concurrently.
+		ri.RLock()
 		head, _ := ri.GS.HeadCommit()
+		ri.RUnlock()
 		fmt.Fprintf(w, "event: status\ndata: {\"head\":\"%s\"}\n\n", head)
 
 		// Replay snapshot (reconnect recovery).

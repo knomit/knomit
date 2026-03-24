@@ -64,7 +64,9 @@ func GitRemoteHandler(rm *repos.Manager) http.Handler {
 			return
 		}
 
+		ri.RLock()
 		gs, ok := ri.GS.(GitRemoteStore)
+		ri.RUnlock()
 		if !ok {
 			http.Error(w, "git serving not supported for this repo", http.StatusInternalServerError)
 			return

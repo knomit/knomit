@@ -3,6 +3,7 @@ package store
 import (
 	"database/sql"
 	"encoding/json"
+	"math"
 	"testing"
 )
 
@@ -94,6 +95,75 @@ func TestSQLParseFact_NotAFact(t *testing.T) {
 	}
 	if result.Valid {
 		t.Errorf("expected NULL, got %q", result.String)
+	}
+}
+
+func TestSQLCosineSim_IdenticalVectors(t *testing.T) {
+	a := float32SliceToBytes([]float32{1, 2, 3, 4})
+	result := sqlCosineSim(a, a)
+	if result == nil {
+		t.Fatal("expected non-nil result for identical vectors")
+	}
+	got := result.(float64)
+	if math.Abs(got-1.0) > 1e-6 {
+		t.Errorf("identical vectors cosine = %f, want 1.0", got)
+	}
+}
+
+func TestSQLCosineSim_OrthogonalVectors(t *testing.T) {
+	a := float32SliceToBytes([]float32{1, 0, 0, 0})
+	b := float32SliceToBytes([]float32{0, 1, 0, 0})
+	result := sqlCosineSim(a, b)
+	if result == nil {
+		t.Fatal("expected non-nil result for orthogonal vectors")
+	}
+	got := result.(float64)
+	if math.Abs(got) > 1e-6 {
+		t.Errorf("orthogonal vectors cosine = %f, want 0.0", got)
+	}
+}
+
+func TestSQLCosineSim_KnownValue(t *testing.T) {
+	// [1,0] · [1,1]/sqrt(2) = 1/sqrt(2) ≈ 0.7071
+	a := float32SliceToBytes([]float32{1, 0})
+	b := float32SliceToBytes([]float32{1, 1})
+	result := sqlCosineSim(a, b)
+	if result == nil {
+		t.Fatal("expected non-nil")
+	}
+	want := 1.0 / math.Sqrt2
+	got := result.(float64)
+	if math.Abs(got-want) > 1e-5 {
+		t.Errorf("cosine = %f, want %f", got, want)
+	}
+}
+
+func TestSQLCosineSim_NilInput(t *testing.T) {
+	a := float32SliceToBytes([]float32{1, 2, 3})
+	if sqlCosineSim(nil, a) != nil {
+		t.Error("expected nil for nil first arg")
+	}
+	if sqlCosineSim(a, nil) != nil {
+		t.Error("expected nil for nil second arg")
+	}
+	if sqlCosineSim(nil, nil) != nil {
+		t.Error("expected nil for both nil")
+	}
+}
+
+func TestSQLCosineSim_MismatchedLengths(t *testing.T) {
+	a := float32SliceToBytes([]float32{1, 2})
+	b := float32SliceToBytes([]float32{1, 2, 3})
+	if sqlCosineSim(a, b) != nil {
+		t.Error("expected nil for mismatched lengths")
+	}
+}
+
+func TestSQLCosineSim_ZeroVector(t *testing.T) {
+	a := float32SliceToBytes([]float32{0, 0, 0})
+	b := float32SliceToBytes([]float32{1, 2, 3})
+	if sqlCosineSim(a, b) != nil {
+		t.Error("expected nil when one vector is zero (denom=0)")
 	}
 }
 

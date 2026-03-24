@@ -16,7 +16,6 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"knomit/internal/config"
-	"knomit/internal/embeddings"
 	"knomit/internal/fact"
 	"knomit/internal/git"
 	"knomit/internal/llm"
@@ -31,7 +30,7 @@ type Deps struct {
 	Cfg         config.Config
 	Signer      ssh.Signer
 	AgentBranch string
-	Embedder    *embeddings.Embedder // nil if unavailable
+	Embedder    Embedder // nil if unavailable; must implement store.Embedder and mcp.BatchEmbedder
 	LLM         llm.LLMAdapter       // nil if unavailable
 	KeyPath     string
 }
@@ -306,11 +305,14 @@ func (m *Manager) openOne(name, dbPath string, isDefault bool) (*RepoInstance, e
 	// ri is assigned below before any commits can fire.
 	var ri *RepoInstance
 	obs := observe.New(time.Second, func(hash string) {
+		ri.mu.RLock()
 		currentGS, ok := ri.GS.(*git.Store)
+		currentSvc := ri.Svc
+		ri.mu.RUnlock()
 		if !ok {
 			return
 		}
-		if err := ri.Svc.Index().Sync(currentGS, currentGS.Branch()); err != nil {
+		if err := currentSvc.Index().Sync(currentGS, currentGS.Branch()); err != nil {
 			log.Warn().Err(err).Str("repo", name).Msg("observer sync failed")
 		}
 		hub.BroadcastStatus(hash)
@@ -352,11 +354,13 @@ func (m *Manager) openOne(name, dbPath string, isDefault bool) (*RepoInstance, e
 	ri.StartSync = func(remoteURL string) error {
 		// Use ri.GS and ri.Svc (not captured gs/svc) so that after SwapStore
 		// the sync loops operate on the current store, not the original one.
+		ri.mu.RLock()
 		currentGS, ok := ri.GS.(*git.Store)
+		currentSvc := ri.Svc
+		ri.mu.RUnlock()
 		if !ok {
 			return fmt.Errorf("current store is not a *git.Store")
 		}
-		currentSvc := ri.Svc
 
 		remote, err := currentSvc.GetRemote("origin")
 		if err != nil || remote == nil {
@@ -394,7 +398,10 @@ func (m *Manager) openOne(name, dbPath string, isDefault bool) (*RepoInstance, e
 
 	ri.Close = func() {
 		obs.Stop()
-		ri.Svc.Close()
+		ri.mu.RLock()
+		svc := ri.Svc
+		ri.mu.RUnlock()
+		svc.Close()
 	}
 
 	return ri, nil
@@ -409,12 +416,15 @@ func (m *Manager) SetupMCP(ri *RepoInstance) {
 		return
 	}
 
+	ri.mu.RLock()
 	gs, ok := ri.GS.(*git.Store)
+	svc := ri.Svc
+	ri.mu.RUnlock()
 	if !ok {
 		log.Warn().Msg("SetupMCP: ri.GS is not *git.Store, skipping")
 		return
 	}
-	idx := ri.Svc.Index()
+	idx := svc.Index()
 
 	ontologyRoot := m.deps.Cfg.OntologyRoot
 	embedder := m.deps.Embedder

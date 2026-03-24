@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 )
@@ -35,6 +36,9 @@ func queryTool() mcpgo.Tool {
 // QueryHandler returns the handler function for knomit_query.
 func QueryHandler(gs GitStore, idx SearchIndex) func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 	return func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+
 		// 1. Build query.
 		text := req.GetString("text", "")
 		entities := req.GetStringSlice("entities", nil)
@@ -73,21 +77,23 @@ func QueryHandler(gs GitStore, idx SearchIndex) func(context.Context, mcpgo.Call
 			Frontmatter interface{} `json:"frontmatter"`
 		}
 		type frontmatterOutput struct {
-			Domain     []string `json:"domain"`
-			Confidence float64  `json:"confidence"`
-			Sources    int      `json:"sources"`
-			Entities   []string `json:"entities"`
-			Refs       []string `json:"refs"`
+			Domain         []string `json:"domain"`
+			Confidence     float64  `json:"confidence"`
+			Sources        int      `json:"sources"`
+			Entities       []string `json:"entities"`
+			Refs           []string `json:"refs"`
+			EvidenceWeight float64  `json:"evidence_weight,omitempty"`
 		}
 
 		facts := make([]factOutput, len(results))
 		for i, r := range results {
 			fm := frontmatterOutput{
-				Domain:     orEmpty(r.Domain),
-				Confidence: r.Confidence,
-				Sources:    r.Sources,
-				Entities:   orEmpty(r.Entities),
-				Refs:       orEmpty(r.Refs),
+				Domain:         orEmpty(r.Domain),
+				Confidence:     r.Confidence,
+				Sources:        r.Sources,
+				Entities:       orEmpty(r.Entities),
+				Refs:           orEmpty(r.Refs),
+				EvidenceWeight: r.EvidenceWeight,
 			}
 			facts[i] = factOutput{
 				File:        r.Path,

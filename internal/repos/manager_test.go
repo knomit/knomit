@@ -416,6 +416,63 @@ func TestBoot_SkipsInvalidNames(t *testing.T) {
 	}
 }
 
+// ---------- Concurrency ----------
+
+// TestRepoInstance_SwapStore_ConcurrentRead verifies that concurrent reads of
+// ri.GS/ri.Svc/ri.Idx while SwapStore is writing do not produce a data race.
+// Run with: go test -race ./internal/repos/ -run TestRepoInstance_SwapStore_ConcurrentRead
+func TestRepoInstance_SwapStore_ConcurrentRead(t *testing.T) {
+	dir := t.TempDir()
+	m := bootManager(t, dir)
+	defer m.Shutdown()
+	if err := m.Boot(); err != nil {
+		t.Fatalf("Boot: %v", err)
+	}
+	ri := m.Get("knomit")
+	if ri == nil {
+		t.Fatal("knomit not registered")
+	}
+
+	const readers = 8
+	const swaps = 5
+
+	var wg sync.WaitGroup
+
+	// Start readers that continuously snapshot GS/Svc/Idx under RLock.
+	stop := make(chan struct{})
+	for i := 0; i < readers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+					ri.RLock()
+					_ = ri.GS
+					_ = ri.Svc
+					_ = ri.Idx
+					ri.RUnlock()
+				}
+			}
+		}()
+	}
+
+	// Perform several SwapStore calls to trigger the write path.
+	for i := 0; i < swaps; i++ {
+		tempDB := openTestDB(t)
+		if err := m.SwapStore(ri, tempDB); err != nil {
+			close(stop)
+			wg.Wait()
+			t.Fatalf("SwapStore iteration %d: %v", i, err)
+		}
+	}
+
+	close(stop)
+	wg.Wait()
+}
+
 func TestAdd_RegistersRepo(t *testing.T) {
 	dir := t.TempDir()
 	m := bootManager(t, dir)

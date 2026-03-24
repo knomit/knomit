@@ -26,7 +26,23 @@ func registerVec() {
 		sqlite_vec.Auto()
 		sql.Register("sqlite3_knomit", &sqlite3.SQLiteDriver{
 			ConnectHook: func(conn *sqlite3.SQLiteConn) error {
-				return registerSQLFuncs(conn)
+				if err := registerSQLFuncs(conn); err != nil {
+					return err
+				}
+				// Apply per-connection performance pragmas. These must run in
+				// ConnectHook so every connection in the pool is configured —
+				// db.Exec() only reaches one connection.
+				for _, p := range []string{
+					"PRAGMA synchronous = NORMAL",
+					"PRAGMA cache_size = -65536",   // 64 MB page cache
+					"PRAGMA mmap_size = 268435456", // 256 MB memory-mapped I/O
+					"PRAGMA temp_store = MEMORY",
+				} {
+					if _, err := conn.Exec(p, nil); err != nil {
+						return err
+					}
+				}
+				return nil
 			},
 			Extensions: []string{graphqliteLibPath()},
 		})

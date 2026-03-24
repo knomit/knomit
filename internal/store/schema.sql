@@ -135,3 +135,20 @@ CREATE TABLE IF NOT EXISTS commit_log (
 CREATE INDEX IF NOT EXISTS commit_log_path_time ON commit_log (path, committed_at DESC);
 CREATE INDEX IF NOT EXISTS commit_log_time      ON commit_log (committed_at DESC);
 CREATE INDEX IF NOT EXISTS commit_log_operation ON commit_log (operation, committed_at DESC);
+
+-- Junction tables for indexed entity and domain filtering.
+-- Populated in sync with facts.entities / facts.domain JSON columns.
+-- ON DELETE CASCADE keeps them in sync when facts are deleted.
+CREATE TABLE IF NOT EXISTS fact_entities (
+    fact_path TEXT NOT NULL REFERENCES facts(path) ON DELETE CASCADE,
+    entity    TEXT NOT NULL COLLATE NOCASE,
+    PRIMARY KEY (fact_path, entity)
+);
+CREATE INDEX IF NOT EXISTS fact_entities_entity ON fact_entities(entity);
+
+CREATE TABLE IF NOT EXISTS fact_domains (
+    fact_path TEXT NOT NULL REFERENCES facts(path) ON DELETE CASCADE,
+    domain    TEXT NOT NULL COLLATE NOCASE,
+    PRIMARY KEY (fact_path, domain)
+);
+CREATE INDEX IF NOT EXISTS fact_domains_domain ON fact_domains(domain);

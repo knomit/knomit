@@ -16,6 +16,7 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
+	"sync"
 
 	"knomit/internal/fact"
 )
@@ -120,7 +121,8 @@ type GitReader interface {
 
 // Index is the search index backed by SQLite with sqlite-vec.
 type Index struct {
-	db       *sql.DB
+	db      *sql.DB
+	embedMu sync.RWMutex
 	embedder Embedder
 }
 
@@ -133,7 +135,23 @@ func newIndex(db *sql.DB) *Index {
 // SetEmbedder attaches an Embedder to the index. When set, Upsert will call
 // Embed on each record's body and persist the result in facts_vec.
 func (idx *Index) SetEmbedder(e Embedder) {
+	idx.embedMu.Lock()
+	defer idx.embedMu.Unlock()
 	idx.embedder = e
+}
+
+// EmbedderSet reports whether an Embedder has been attached to this index.
+func (idx *Index) EmbedderSet() bool {
+	idx.embedMu.RLock()
+	defer idx.embedMu.RUnlock()
+	return idx.embedder != nil
+}
+
+// getEmbedder returns the current Embedder under a read lock.
+func (idx *Index) getEmbedder() Embedder {
+	idx.embedMu.RLock()
+	defer idx.embedMu.RUnlock()
+	return idx.embedder
 }
 
 // New opens (or creates) a SQLite search index at path.
@@ -156,7 +174,14 @@ func New(path string, opts ...Option) (*Index, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite: %w", err)
 	}
-	db.SetMaxOpenConns(2)
+	db.SetMaxOpenConns(4)
+
+	// Per-connection performance pragmas are applied in the ConnectHook (vec.go)
+	// so every pooled connection is configured, not just the first one.
+
+	// Update query planner statistics (one-time hint, not per-connection).
+	db.Exec("PRAGMA optimize")
+
 	// Use the same embedded schema.sql as Service.Open to keep DDL in one place.
 	if _, err := db.Exec(schemaSQL_); err != nil {
 		db.Close()

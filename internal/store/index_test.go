@@ -3,6 +3,7 @@ package store_test
 import (
 	"database/sql"
 	"strings"
+	"sync"
 	"testing"
 
 	git "knomit/internal/git"
@@ -1055,4 +1056,42 @@ func TestStats_NullDomainAndEntities(t *testing.T) {
 	if res.Total != 1 {
 		t.Errorf("total = %d, want 1", res.Total)
 	}
+}
+
+func TestPragmasCacheSize(t *testing.T) {
+	idx, err := store.New(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer idx.Close()
+	var cacheSize int
+	if err := idx.DB().QueryRow("PRAGMA cache_size").Scan(&cacheSize); err != nil {
+		t.Fatal(err)
+	}
+	if cacheSize != -65536 {
+		t.Errorf("cache_size = %d, want -65536", cacheSize)
+	}
+}
+
+func TestEmbedderSetRace(t *testing.T) {
+	idx, err := store.New(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer idx.Close()
+
+	var wg sync.WaitGroup
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			idx.SetEmbedder(noopEmbedder{})
+		}()
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_ = idx.EmbedderSet()
+		}()
+	}
+	wg.Wait()
 }
