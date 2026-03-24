@@ -160,6 +160,22 @@ func New(path string, opts ...Option) (*Index, error) {
 		return nil, fmt.Errorf("open sqlite: %w", err)
 	}
 	db.SetMaxOpenConns(4)
+
+	// Performance pragmas — safe with WAL mode.
+	for _, pragma := range []string{
+		"PRAGMA synchronous = NORMAL",
+		"PRAGMA cache_size = -65536",   // 64 MB page cache
+		"PRAGMA mmap_size = 268435456", // 256 MB memory-mapped I/O
+		"PRAGMA temp_store = MEMORY",
+	} {
+		if _, err := db.Exec(pragma); err != nil {
+			db.Close()
+			return nil, fmt.Errorf("index.New pragma: %w", err)
+		}
+	}
+	// Update query planner statistics.
+	db.Exec("PRAGMA optimize")
+
 	// Use the same embedded schema.sql as Service.Open to keep DDL in one place.
 	if _, err := db.Exec(schemaSQL_); err != nil {
 		db.Close()

@@ -1056,3 +1056,18 @@ func TestStats_NullDomainAndEntities(t *testing.T) {
 		t.Errorf("total = %d, want 1", res.Total)
 	}
 }
+
+func TestPragmasCacheSize(t *testing.T) {
+	idx, err := store.New(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer idx.Close()
+	var cacheSize int
+	if err := idx.DB().QueryRow("PRAGMA cache_size").Scan(&cacheSize); err != nil {
+		t.Fatal(err)
+	}
+	if cacheSize != -65536 {
+		t.Errorf("cache_size = %d, want -65536", cacheSize)
+	}
+}
