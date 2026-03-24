@@ -305,5 +305,3 @@ func (idx *Index) Search(q SearchQuery) ([]SearchResult, error) {
 	}
 	return out, nil
 }
-
-

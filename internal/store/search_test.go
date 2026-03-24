@@ -942,3 +942,59 @@ func TestSearchAdaptiveKBranchDefault(t *testing.T) {
 		t.Fatalf("expected 2 results with MinSimilarity=0 (default branch), got %d", len(results))
 	}
 }
+
+func TestSearchDomainPrefixFilter(t *testing.T) {
+	// Domain prefix filtering: querying for "technology" should match facts
+	// with domain "technology" or "technology/go" but not "science".
+	idx, err := store.New(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer idx.Close()
+
+	facts := []struct {
+		path     string
+		blobHash string
+		domain   []string
+	}{
+		{"kb/a.md", "blob_a", []string{"technology/go"}},
+		{"kb/b.md", "blob_b", []string{"technology"}},
+		{"kb/c.md", "blob_c", []string{"science"}},
+		{"kb/d.md", "blob_d", []string{"technology/rust", "science/physics"}},
+	}
+	for _, f := range facts {
+		insertTestBlob(t, idx.DB(), f.blobHash, "content for "+f.path)
+		if err := idx.Upsert(store.FactRecord{
+			Path: f.path, Title: f.path, BlobHash: f.blobHash,
+			Type: "observation", Domain: f.domain, Entities: []string{},
+			Confidence: 0.9, Sources: 1, CommitHash: "abc",
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// "technology" should match a (technology/go), b (technology), d (technology/rust).
+	results, err := idx.Search(store.SearchQuery{Domain: []string{"technology"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 3 {
+		t.Fatalf("expected 3 results for domain prefix 'technology', got %d", len(results))
+	}
+	paths := map[string]bool{}
+	for _, r := range results {
+		paths[r.Path] = true
+	}
+	if !paths["kb/a.md"] || !paths["kb/b.md"] || !paths["kb/d.md"] {
+		t.Fatalf("expected a, b, d; got %v", paths)
+	}
+
+	// Combined domain prefix: "technology" AND "science" should match only d.
+	results, err = idx.Search(store.SearchQuery{Domain: []string{"technology", "science"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 1 || results[0].Path != "kb/d.md" {
+		t.Fatalf("expected only kb/d.md for combined domain filter, got %d results", len(results))
+	}
+}
