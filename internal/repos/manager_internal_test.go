@@ -9,7 +9,36 @@ import (
 	"knomit/internal/config"
 	"knomit/internal/fact"
 	"knomit/internal/git"
+	"knomit/internal/store"
 )
+
+// stubEmbedder satisfies repos.Embedder (and store.Embedder) without ONNX model files.
+type stubEmbedder struct{ calls int }
+
+func (s *stubEmbedder) Embed(_ string) ([]float32, error) {
+	s.calls++
+	return []float32{1, 0, 0, 0}, nil
+}
+func (s *stubEmbedder) EmbedBatch(texts []string) ([][]float32, error) {
+	out := make([][]float32, len(texts))
+	for i := range texts {
+		out[i] = []float32{1, 0, 0, 0}
+	}
+	return out, nil
+}
+
+// assertEmbedderSet fails the test if the concrete *store.Index inside ri does
+// not have an embedder attached. Uses EmbedderSet() added for this purpose.
+func assertEmbedderSet(t *testing.T, ri *RepoInstance, msg string) {
+	t.Helper()
+	idx, ok := ri.Idx.(*store.Index)
+	if !ok {
+		t.Fatalf("%s: ri.Idx is not *store.Index", msg)
+	}
+	if !idx.EmbedderSet() {
+		t.Errorf("%s: embedder not set on index after swap", msg)
+	}
+}
 
 func defaultTestDeps(t *testing.T, dir string) (Deps, string) {
 	t.Helper()
@@ -131,4 +160,45 @@ func TestSetupMCP_NoLLM(t *testing.T) {
 	if ri.SynthDeps != nil {
 		t.Error("SynthDeps should be nil without LLM adapter")
 	}
+}
+
+func TestSwapStoreRestoresEmbedder(t *testing.T) {
+	// Regression: SwapStore opened a new store.Index without calling
+	// SetEmbedder, silently dropping the embedder after every sync. This
+	// caused rebuild to report "embedded=0" even though an embedder was
+	// configured at startup.
+	dir := t.TempDir()
+	deps, _ := defaultTestDeps(t, dir)
+	emb := &stubEmbedder{}
+	deps.Embedder = emb
+
+	m := New(context.Background(), deps)
+	dbPath := filepath.Join(dir, "knomit.db")
+	ri, err := m.openOne("knomit", dbPath, true)
+	if err != nil {
+		t.Fatalf("openOne: %v", err)
+	}
+	defer ri.Close()
+
+	// Sanity-check: embedder set immediately after openOne.
+	assertEmbedderSet(t, ri, "after openOne")
+
+	// Build a second fully-initialized DB in a separate directory to use as the
+	// "incoming" store, matching what sync produces before calling SwapStore.
+	dir2 := t.TempDir()
+	deps2, _ := defaultTestDeps(t, dir2)
+	m2 := New(context.Background(), deps2)
+	ri2, err := m2.openOne("knomit", filepath.Join(dir2, "knomit.db"), true)
+	if err != nil {
+		t.Fatalf("openOne (second): %v", err)
+	}
+	tempDB := filepath.Join(dir2, "knomit.db")
+	ri2.Close()
+
+	if err := m.SwapStore(ri, tempDB); err != nil {
+		t.Fatalf("SwapStore: %v", err)
+	}
+
+	// After the swap the new index must have the embedder attached.
+	assertEmbedderSet(t, ri, "after SwapStore")
 }

@@ -2,6 +2,7 @@ package store_test
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
 	"knomit/internal/store"
@@ -483,6 +484,103 @@ func TestSearchVecPathEntityFilter(t *testing.T) {
 	}
 }
 
+func TestSearchVecLimitReturnsTopNByScoreWithBodies(t *testing.T) {
+	// Regression: the vector search path must return exactly Limit results,
+	// ranked by score descending, with body content correctly loaded.
+	// Previously, ALL candidate bodies were fetched before trimming to Limit,
+	// wasting memory. After the fix, bodies are only fetched for the top-Limit
+	// candidates. This test verifies the contract: correct results, correct order,
+	// correct body content.
+	idx, err := store.New(":memory:", store.WithVecDimension(4))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer idx.Close()
+
+	// Unit vectors with known dot-product similarity to query [1,0,0,0].
+	facts := []struct {
+		path  string
+		vec   []float32
+		body  string
+		score float32 // expected cosine sim with query
+	}{
+		{"kb/rank1.md", []float32{1, 0, 0, 0}, "body of rank one", 1.0},
+		{"kb/rank2.md", []float32{0.9, 0.44, 0, 0}, "body of rank two", 0.9},
+		{"kb/rank3.md", []float32{0.8, 0.6, 0, 0}, "body of rank three", 0.8},
+		{"kb/rank4.md", []float32{0.7, 0.71, 0, 0}, "body of rank four", 0.7},
+		{"kb/rank5.md", []float32{0.6, 0.8, 0, 0}, "body of rank five", 0.6},
+	}
+
+	queryVec := []float32{1, 0, 0, 0}
+
+	// Upsert embeds using rec.Title + " " + extractBody(blob).
+	// insertTestBlob wraps body with frontmatter; extractBody strips it back to f.body.
+	// The search query embeds using q.Text directly.
+	vecMap := map[string][]float32{}
+	for _, f := range facts {
+		vecMap[f.path+" "+f.body] = f.vec
+	}
+	vecMap["query"] = queryVec
+
+	ctrl := gomock.NewController(t)
+	emb := NewMockEmbedder(ctrl)
+	emb.EXPECT().Embed(gomock.Any()).DoAndReturn(func(text string) ([]float32, error) {
+		if v, ok := vecMap[text]; ok {
+			return v, nil
+		}
+		return queryVec, nil
+	}).AnyTimes()
+	// SetEmbedder must be called before Upsert so embeddings are stored.
+	idx.SetEmbedder(emb)
+
+	for _, f := range facts {
+		bh := "blob_" + f.path
+		insertTestBlob(t, idx.DB(), bh, f.body)
+		if err := idx.Upsert(store.FactRecord{
+			Path: f.path, Title: f.path, BlobHash: bh,
+			Type: "observation", Domain: []string{"test"}, Entities: []string{},
+			Confidence: 0.9, Sources: 1, CommitHash: "abc",
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	results, err := idx.Search(store.SearchQuery{
+		Text:  "query",
+		Limit: 3,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(results) != 3 {
+		t.Fatalf("expected 3 results (limit), got %d", len(results))
+	}
+
+	// Results must be in descending score order.
+	for i := 1; i < len(results); i++ {
+		if results[i].Score > results[i-1].Score {
+			t.Fatalf("results not sorted by score: index %d (%.2f) > index %d (%.2f)",
+				i, results[i].Score, i-1, results[i-1].Score)
+		}
+	}
+
+	// Top result must be rank1 with correct body.
+	if results[0].Path != "kb/rank1.md" {
+		t.Fatalf("expected rank1 as top result, got %s", results[0].Path)
+	}
+	if !strings.Contains(results[0].Body, "body of rank one") {
+		t.Fatalf("expected rank1 body content, got %q", results[0].Body)
+	}
+
+	// rank4 and rank5 must NOT appear (they are beyond limit=3).
+	for _, r := range results {
+		if r.Path == "kb/rank4.md" || r.Path == "kb/rank5.md" {
+			t.Fatalf("result beyond limit appeared: %s", r.Path)
+		}
+	}
+}
+
 func TestMatchesFiltersWithTypes(t *testing.T) {
 	// Test matchesFilters via Search with combined filters.
 	idx, err := store.New(":memory:")
@@ -520,5 +618,230 @@ func TestMatchesFiltersWithTypes(t *testing.T) {
 	}
 	if results[0].Type != "observation" {
 		t.Fatalf("expected observation, got %q", results[0].Type)
+	}
+}
+
+// upsertFact is a test helper that inserts a blob and upserts a FactRecord.
+func upsertFact(t *testing.T, idx *store.Index, path, blobHash, typ string, domain, entities []string, confidence float64) {
+	t.Helper()
+	insertTestBlob(t, idx.DB(), blobHash, "content of "+path)
+	if err := idx.Upsert(store.FactRecord{
+		Path: path, Title: path, BlobHash: blobHash,
+		Type: typ, Domain: domain, Entities: entities,
+		Confidence: confidence, Sources: 1, CommitHash: "abc",
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSearchPathFilter(t *testing.T) {
+	idx, err := store.New(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer idx.Close()
+
+	upsertFact(t, idx, "kb/alpha/one.md", "bh1", "observation", []string{"test"}, nil, 0.9)
+	upsertFact(t, idx, "kb/alpha/two.md", "bh2", "observation", []string{"test"}, nil, 0.9)
+	upsertFact(t, idx, "kb/beta/three.md", "bh3", "observation", []string{"test"}, nil, 0.9)
+
+	results, err := idx.Search(store.SearchQuery{Path: "kb/alpha/"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("expected 2 results under kb/alpha/, got %d", len(results))
+	}
+	for _, r := range results {
+		if !strings.HasPrefix(r.Path, "kb/alpha/") {
+			t.Errorf("result %q is outside path prefix kb/alpha/", r.Path)
+		}
+	}
+
+	// Exact prefix — should match nothing beyond that subtree.
+	results, err = idx.Search(store.SearchQuery{Path: "kb/beta/"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 1 || results[0].Path != "kb/beta/three.md" {
+		t.Fatalf("expected only kb/beta/three.md, got %v", results)
+	}
+}
+
+func TestSearchLimitTextlessPath(t *testing.T) {
+	idx, err := store.New(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer idx.Close()
+
+	for i := 0; i < 10; i++ {
+		upsertFact(t, idx, fmt.Sprintf("kb/f%02d.md", i), fmt.Sprintf("bh%d", i), "observation", []string{"test"}, nil, 0.9)
+	}
+
+	results, err := idx.Search(store.SearchQuery{Limit: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 3 {
+		t.Fatalf("expected 3 results (Limit=3), got %d", len(results))
+	}
+}
+
+func TestSearchVecMinConfidence(t *testing.T) {
+	idx, err := store.New(":memory:", store.WithVecDimension(4))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer idx.Close()
+
+	ctrl := gomock.NewController(t)
+	emb := NewMockEmbedder(ctrl)
+	emb.EXPECT().Embed(gomock.Any()).Return([]float32{1, 0, 0, 0}, nil).AnyTimes()
+	idx.SetEmbedder(emb)
+
+	upsertFact(t, idx, "kb/high.md", "bh_high", "observation", []string{"test"}, nil, 0.9)
+	upsertFact(t, idx, "kb/low.md", "bh_low", "observation", []string{"test"}, nil, 0.3)
+
+	results, err := idx.Search(store.SearchQuery{Text: "q", MinConfidence: 0.8, Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 1 || results[0].Path != "kb/high.md" {
+		t.Fatalf("expected only kb/high.md (confidence>=0.8), got %v", results)
+	}
+}
+
+func TestSearchVecIncludeTypes(t *testing.T) {
+	idx, err := store.New(":memory:", store.WithVecDimension(4))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer idx.Close()
+
+	ctrl := gomock.NewController(t)
+	emb := NewMockEmbedder(ctrl)
+	emb.EXPECT().Embed(gomock.Any()).Return([]float32{1, 0, 0, 0}, nil).AnyTimes()
+	idx.SetEmbedder(emb)
+
+	upsertFact(t, idx, "kb/obs.md", "bh_obs", "observation", []string{"test"}, nil, 0.9)
+	upsertFact(t, idx, "kb/hyp.md", "bh_hyp", "hypothesis", []string{"test"}, nil, 0.9)
+
+	results, err := idx.Search(store.SearchQuery{Text: "q", IncludeTypes: []string{"observation"}, Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 1 || results[0].Path != "kb/obs.md" {
+		t.Fatalf("expected only kb/obs.md, got %v", results)
+	}
+}
+
+func TestSearchVecExcludeTypes(t *testing.T) {
+	idx, err := store.New(":memory:", store.WithVecDimension(4))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer idx.Close()
+
+	ctrl := gomock.NewController(t)
+	emb := NewMockEmbedder(ctrl)
+	emb.EXPECT().Embed(gomock.Any()).Return([]float32{1, 0, 0, 0}, nil).AnyTimes()
+	idx.SetEmbedder(emb)
+
+	upsertFact(t, idx, "kb/obs.md", "bh_obs", "observation", []string{"test"}, nil, 0.9)
+	upsertFact(t, idx, "kb/hyp.md", "bh_hyp", "hypothesis", []string{"test"}, nil, 0.9)
+
+	results, err := idx.Search(store.SearchQuery{Text: "q", ExcludeTypes: []string{"hypothesis"}, Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 1 || results[0].Path != "kb/obs.md" {
+		t.Fatalf("expected only kb/obs.md, got %v", results)
+	}
+}
+
+func TestSearchVecPathFilter(t *testing.T) {
+	idx, err := store.New(":memory:", store.WithVecDimension(4))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer idx.Close()
+
+	ctrl := gomock.NewController(t)
+	emb := NewMockEmbedder(ctrl)
+	emb.EXPECT().Embed(gomock.Any()).Return([]float32{1, 0, 0, 0}, nil).AnyTimes()
+	idx.SetEmbedder(emb)
+
+	upsertFact(t, idx, "kb/alpha/one.md", "bh_a1", "observation", []string{"test"}, nil, 0.9)
+	upsertFact(t, idx, "kb/alpha/two.md", "bh_a2", "observation", []string{"test"}, nil, 0.9)
+	upsertFact(t, idx, "kb/beta/three.md", "bh_b3", "observation", []string{"test"}, nil, 0.9)
+
+	results, err := idx.Search(store.SearchQuery{Text: "q", Path: "kb/alpha/", Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("expected 2 results under kb/alpha/, got %d", len(results))
+	}
+	for _, r := range results {
+		if !strings.HasPrefix(r.Path, "kb/alpha/") {
+			t.Errorf("result %q is outside path prefix kb/alpha/", r.Path)
+		}
+	}
+}
+
+func TestSearchMinSimilarity(t *testing.T) {
+	// Two facts: one with high similarity, one below threshold.
+	idx, err := store.New(":memory:", store.WithVecDimension(4))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer idx.Close()
+
+	// Upsert embeds title+" "+body. Blobs contain "distant" or "close" so we
+	// can distinguish them without knowing the exact frontmatter format.
+	ctrl := gomock.NewController(t)
+	emb := NewMockEmbedder(ctrl)
+	emb.EXPECT().Embed(gomock.Any()).DoAndReturn(func(text string) ([]float32, error) {
+		if strings.Contains(text, "distant") {
+			return []float32{0.5, 0.87, 0, 0}, nil // cosine ~0.5 with [1,0,0,0]
+		}
+		return []float32{1, 0, 0, 0}, nil
+	}).AnyTimes()
+	idx.SetEmbedder(emb)
+
+	insertTestBlob(t, idx.DB(), "bh_high", "close match")
+	insertTestBlob(t, idx.DB(), "bh_low", "distant match")
+	if err := idx.Upsert(store.FactRecord{
+		Path: "kb/high.md", Title: "close", BlobHash: "bh_high",
+		Type: "observation", Domain: []string{"test"}, Entities: []string{},
+		Confidence: 0.9, Sources: 1, CommitHash: "abc",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := idx.Upsert(store.FactRecord{
+		Path: "kb/low.md", Title: "distant", BlobHash: "bh_low",
+		Type: "observation", Domain: []string{"test"}, Entities: []string{},
+		Confidence: 0.9, Sources: 1, CommitHash: "abc",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Default threshold (0.40) — both should match.
+	results, err := idx.Search(store.SearchQuery{Text: "q", Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("expected 2 results with default threshold, got %d", len(results))
+	}
+
+	// High threshold (0.9) — only the high-similarity fact should match.
+	results, err = idx.Search(store.SearchQuery{Text: "q", MinSimilarity: 0.9, Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 1 || results[0].Path != "kb/high.md" {
+		t.Fatalf("expected only kb/high.md with MinSimilarity=0.9, got %v", results)
 	}
 }

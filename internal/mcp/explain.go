@@ -34,6 +34,11 @@ type explainFactEntry struct {
 	Depth          int            `json:"depth"`
 	Title          string         `json:"title"`
 	Type           string         `json:"type"`
+	Domain         []string       `json:"domain"`
+	Confidence     float64        `json:"confidence"`
+	Sources        int            `json:"sources"`
+	Entities       []string       `json:"entities"`
+	EvidenceWeight float64        `json:"evidence_weight,omitempty"`
 	Body           string         `json:"body"`
 	Refs           classifiedRefs `json:"refs"`
 	History        []historyEntry `json:"history,omitempty"`
@@ -161,14 +166,19 @@ func explainFirstCall(gs GitStore, sessionIdx ToolSessionIndex, ontologyRoot, fi
 	}
 
 	entry := explainFactEntry{
-		Path:    file,
-		Commit:  rootCommit,
-		Depth:   0,
-		Title:   fact.Title,
-		Type:    string(fact.Type),
-		Body:    fact.Body,
-		Refs:    refs,
-		History: history,
+		Path:           file,
+		Commit:         rootCommit,
+		Depth:          0,
+		Title:          fact.Title,
+		Type:           string(fact.Type),
+		Domain:         fact.Domain,
+		Confidence:     fact.Confidence,
+		Sources:        fact.Sources,
+		Entities:       fact.Entities,
+		EvidenceWeight: fact.EvidenceWeight,
+		Body:           fact.Body,
+		Refs:           refs,
+		History:        history,
 	}
 
 	var cursorOut interface{} = session.ID
@@ -259,6 +269,11 @@ func explainResume(gs GitStore, sessionIdx ToolSessionIndex, cursor string) (*mc
 				Depth:          item.Depth,
 				Title:          parsed.Title,
 				Type:           string(parsed.Type),
+				Domain:         parsed.Domain,
+				Confidence:     parsed.Confidence,
+				Sources:        parsed.Sources,
+				Entities:       parsed.Entities,
+				EvidenceWeight: parsed.EvidenceWeight,
 				Body:           parsed.Body,
 				Refs:           refs,
 				Retracted:      retracted,

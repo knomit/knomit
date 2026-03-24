@@ -31,6 +31,58 @@ type SearchResult struct {
 	Score float64 `json:"score"`
 }
 
+// ── factFilter ────────────────────────────────────────────────────────────────
+
+// factFilter builds the shared WHERE-clause fragment used by both search paths.
+// Each Add call appends one "AND ..." clause and its bind parameters.
+// SQL() returns the concatenated fragment (empty string if no filters set).
+type factFilter struct {
+	clauses []string
+	args    []any
+}
+
+func (f *factFilter) add(clause string, args ...any) {
+	f.clauses = append(f.clauses, clause)
+	f.args = append(f.args, args...)
+}
+
+func (f *factFilter) SQL() string { return strings.Join(f.clauses, "") }
+
+func newFactFilter(q SearchQuery) *factFilter {
+	f := &factFilter{}
+	if q.MinConfidence > 0 {
+		f.add(" AND f.confidence >= ?", q.MinConfidence)
+	}
+	if q.Path != "" {
+		f.add(" AND f.path LIKE ?", q.Path+"%")
+	}
+	if len(q.IncludeTypes) > 0 {
+		ph := strings.Repeat("?,", len(q.IncludeTypes))
+		args := make([]any, len(q.IncludeTypes))
+		for i, t := range q.IncludeTypes {
+			args[i] = t
+		}
+		f.add(" AND f.type IN ("+ph[:len(ph)-1]+")", args...)
+	}
+	if len(q.ExcludeTypes) > 0 {
+		ph := strings.Repeat("?,", len(q.ExcludeTypes))
+		args := make([]any, len(q.ExcludeTypes))
+		for i, t := range q.ExcludeTypes {
+			args[i] = t
+		}
+		f.add(" AND f.type NOT IN ("+ph[:len(ph)-1]+")", args...)
+	}
+	for _, e := range q.Entities {
+		f.add(" AND EXISTS (SELECT 1 FROM json_each(f.entities) je WHERE je.value = ? COLLATE NOCASE)", e)
+	}
+	for _, d := range q.Domain {
+		f.add(" AND EXISTS (SELECT 1 FROM json_each(f.domain) jd WHERE jd.value = ? COLLATE NOCASE OR jd.value LIKE ? COLLATE NOCASE)", d, d+"/%")
+	}
+	return f
+}
+
+// ── Search ────────────────────────────────────────────────────────────────────
+
 // Search performs a vector similarity search over the index.
 //
 // Algorithm:
@@ -47,51 +99,17 @@ func (idx *Index) Search(q SearchQuery) ([]SearchResult, error) {
 		limit = 100
 	}
 
+	flt := newFactFilter(q)
+
 	// ── Text-less path: return all facts matching filters with score 100 ──
 	if q.Text == "" {
-		filterQuery := `SELECT f.path, f.title, f.blob_hash, f.type, f.domain, f.entities, f.confidence, f.sources, f.refs, f.commit_hash, f.evidence_weight, o.data
+		args := append(append([]any{BlobObjectType}, flt.args...), limit)
+		rows, err := idx.db.Query(
+			`SELECT f.path, f.title, f.blob_hash, f.type, f.domain, f.entities, f.confidence, f.sources, f.refs, f.commit_hash, f.evidence_weight, o.data
 			 FROM facts f
-			 JOIN objects o ON o.hash = f.blob_hash AND o.type = ?`
-		args := []any{BlobObjectType}
-		if q.MinConfidence > 0 {
-			filterQuery += " AND f.confidence >= ?"
-			args = append(args, q.MinConfidence)
-		}
-		if q.Path != "" {
-			filterQuery += " AND f.path LIKE ?"
-			args = append(args, q.Path+"%")
-		}
-		if len(q.IncludeTypes) > 0 {
-			placeholders := make([]string, len(q.IncludeTypes))
-			for i := range q.IncludeTypes {
-				placeholders[i] = "?"
-				args = append(args, q.IncludeTypes[i])
-			}
-			filterQuery += " AND f.type IN (" + strings.Join(placeholders, ",") + ")"
-		}
-		if len(q.ExcludeTypes) > 0 {
-			placeholders := make([]string, len(q.ExcludeTypes))
-			for i := range q.ExcludeTypes {
-				placeholders[i] = "?"
-				args = append(args, q.ExcludeTypes[i])
-			}
-			filterQuery += " AND f.type NOT IN (" + strings.Join(placeholders, ",") + ")"
-		}
-		// Push entity filter into SQL via json_each so we don't miss facts
-		// beyond the over-fetch LIMIT.
-		for _, e := range q.Entities {
-			filterQuery += " AND EXISTS (SELECT 1 FROM json_each(f.entities) je WHERE je.value = ? COLLATE NOCASE)"
-			args = append(args, e)
-		}
-		// Push domain filter into SQL via json_each (prefix match).
-		for _, d := range q.Domain {
-			filterQuery += " AND EXISTS (SELECT 1 FROM json_each(f.domain) jd WHERE jd.value = ? COLLATE NOCASE OR jd.value LIKE ? COLLATE NOCASE)"
-			args = append(args, d, d+"/%")
-		}
-		filterQuery += " LIMIT ?"
-		args = append(args, limit)
-
-		rows, err := idx.db.Query(filterQuery, args...)
+			 JOIN objects o ON o.hash = f.blob_hash AND o.type = ?`+flt.SQL()+` LIMIT ?`,
+			args...,
+		)
 		if err != nil {
 			return nil, fmt.Errorf("search: list all: %w", err)
 		}
@@ -105,13 +123,10 @@ func (idx *Index) Search(q SearchQuery) ([]SearchResult, error) {
 			}
 			out = append(out, SearchResult{FactWithBody: *fb, Score: 100})
 		}
-		if err := rows.Err(); err != nil {
-			return nil, err
-		}
-		return out, nil
+		return out, rows.Err()
 	}
 
-	// ── Vector (embedding) search ────────────────────────────────────────
+	// ── Vector (embedding) search ─────────────────────────────────────────
 	type candidate struct {
 		rec   FactWithBody
 		score float64
@@ -121,7 +136,6 @@ func (idx *Index) Search(q SearchQuery) ([]SearchResult, error) {
 	if idx.embedder == nil && len(q.QueryVec) == 0 {
 		log.Debug().Msg("search: no embedder configured, skipping vec search")
 	} else {
-		// Use pre-computed vector if provided, otherwise embed the text.
 		queryVec := q.QueryVec
 		if len(queryVec) == 0 {
 			var embedErr error
@@ -133,7 +147,6 @@ func (idx *Index) Search(q SearchQuery) ([]SearchResult, error) {
 		if queryVec == nil {
 			log.Warn().Msg("search: no query vector available")
 		} else {
-			// Single JOIN query: KNN + facts table → path + similarity.
 			vecBlob := float32SliceToBytes(queryVec)
 			rows, err := idx.db.Query(
 				`SELECT f.path, (1.0 - fv.distance) as similarity
@@ -160,13 +173,8 @@ func (idx *Index) Search(q SearchQuery) ([]SearchResult, error) {
 		}
 	}
 
-	graphHops := q.GraphHops
-	if graphHops < 0 {
-		graphHops = 0
-	}
-	if graphHops > 0 && len(vecSimByPath) > 0 {
-		expanded := idx.graphExpandSearch(vecSimByPath, graphHops)
-		for path, score := range expanded {
+	if graphHops := q.GraphHops; graphHops > 0 && len(vecSimByPath) > 0 {
+		for path, score := range idx.graphExpandSearch(vecSimByPath, graphHops) {
 			if _, exists := vecSimByPath[path]; !exists {
 				vecSimByPath[path] = score
 			}
@@ -182,7 +190,6 @@ func (idx *Index) Search(q SearchQuery) ([]SearchResult, error) {
 		minSim = 0.40
 	}
 
-	// Filter to paths above similarity threshold.
 	candidatePaths := make([]string, 0, len(vecSimByPath))
 	for path, cosine := range vecSimByPath {
 		if cosine > minSim {
@@ -193,92 +200,83 @@ func (idx *Index) Search(q SearchQuery) ([]SearchResult, error) {
 		return nil, nil
 	}
 
-	// Batch-fetch all candidate facts+bodies in a single query with SQL-side filters.
-	placeholders := make([]string, len(candidatePaths))
-	args := make([]any, 0, len(candidatePaths)+4)
-	args = append(args, BlobObjectType)
+	// ── Phase 1: fetch metadata only (no body), apply filters, sort, trim ─
+	pathPH := strings.Repeat("?,", len(candidatePaths))
+	pathArgs := make([]any, len(candidatePaths))
 	for i, p := range candidatePaths {
-		placeholders[i] = "?"
-		args = append(args, p)
+		pathArgs[i] = p
 	}
 
-	filterSQL := ""
-	if q.MinConfidence > 0 {
-		filterSQL += " AND f.confidence >= ?"
-		args = append(args, q.MinConfidence)
-	}
-	if q.Path != "" {
-		filterSQL += " AND f.path LIKE ?"
-		args = append(args, q.Path+"%")
-	}
-	if len(q.IncludeTypes) > 0 {
-		ph := make([]string, len(q.IncludeTypes))
-		for i := range q.IncludeTypes {
-			ph[i] = "?"
-			args = append(args, q.IncludeTypes[i])
-		}
-		filterSQL += " AND f.type IN (" + strings.Join(ph, ",") + ")"
-	}
-	if len(q.ExcludeTypes) > 0 {
-		ph := make([]string, len(q.ExcludeTypes))
-		for i := range q.ExcludeTypes {
-			ph[i] = "?"
-			args = append(args, q.ExcludeTypes[i])
-		}
-		filterSQL += " AND f.type NOT IN (" + strings.Join(ph, ",") + ")"
-	}
-	for _, e := range q.Entities {
-		filterSQL += " AND EXISTS (SELECT 1 FROM json_each(f.entities) je WHERE je.value = ? COLLATE NOCASE)"
-		args = append(args, e)
-	}
-	for _, d := range q.Domain {
-		filterSQL += " AND EXISTS (SELECT 1 FROM json_each(f.domain) jd WHERE jd.value = ? COLLATE NOCASE OR jd.value LIKE ? COLLATE NOCASE)"
-		args = append(args, d, d+"/%")
-	}
-
-	batchQuery := `SELECT f.path, f.title, f.blob_hash, f.type, f.domain, f.entities, f.confidence, f.sources, f.refs, f.commit_hash, f.evidence_weight, o.data
+	metaRows, err := idx.db.Query(
+		`SELECT f.path, f.title, f.blob_hash, f.type, f.domain, f.entities, f.confidence, f.sources, f.refs, f.commit_hash, f.evidence_weight
 		 FROM facts f
-		 JOIN objects o ON o.hash = f.blob_hash AND o.type = ?
-		 WHERE f.path IN (` + strings.Join(placeholders, ",") + `)` + filterSQL
-
-	batchRows, err := idx.db.Query(batchQuery, args...)
+		 WHERE f.path IN (`+pathPH[:len(pathPH)-1]+`)`+flt.SQL(),
+		append(pathArgs, flt.args...)...,
+	)
 	if err != nil {
-		return nil, fmt.Errorf("search: batch fetch: %w", err)
+		return nil, fmt.Errorf("search: meta fetch: %w", err)
 	}
-	defer batchRows.Close()
+	defer metaRows.Close()
 
 	var candidates []candidate
-	for batchRows.Next() {
-		fb, err := scanFactWithBodyFromRows(batchRows)
+	for metaRows.Next() {
+		rec, err := scanFactRecordFromRows(metaRows)
 		if err != nil {
 			return nil, err
 		}
-		candidates = append(candidates, candidate{rec: *fb, score: vecSimByPath[fb.Path]})
+		candidates = append(candidates, candidate{rec: FactWithBody{FactRecord: *rec}, score: vecSimByPath[rec.Path]})
 	}
-	if err := batchRows.Err(); err != nil {
+	if err := metaRows.Err(); err != nil {
 		return nil, err
 	}
-
 	if len(candidates) == 0 {
 		return nil, nil
 	}
 
-	// ── Sort by score descending (insertion sort, fine for small N) ───────
 	for i := 1; i < len(candidates); i++ {
 		for j := i; j > 0 && candidates[j].score > candidates[j-1].score; j-- {
 			candidates[j], candidates[j-1] = candidates[j-1], candidates[j]
 		}
 	}
-
-	// ── Scale scores to [0, 100] ─────────────────────────────────────────
-	var out []SearchResult
-	for _, c := range candidates {
-		out = append(out, SearchResult{FactWithBody: c.rec, Score: c.score * 100.0})
-		if len(out) >= limit {
-			break
-		}
+	if len(candidates) > limit {
+		candidates = candidates[:limit]
 	}
 
+	// ── Phase 2: fetch bodies for the top-limit facts only ────────────────
+	bodyPH := strings.Repeat("?,", len(candidates))
+	bodyArgs := make([]any, 0, len(candidates)+1)
+	bodyArgs = append(bodyArgs, BlobObjectType)
+	for _, c := range candidates {
+		bodyArgs = append(bodyArgs, c.rec.BlobHash)
+	}
+	bodyRows, err := idx.db.Query(
+		`SELECT hash, data FROM objects WHERE type = ? AND hash IN (`+bodyPH[:len(bodyPH)-1]+`)`,
+		bodyArgs...,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("search: body fetch: %w", err)
+	}
+	defer bodyRows.Close()
+
+	bodies := make(map[string]string, len(candidates))
+	for bodyRows.Next() {
+		var hash string
+		var data []byte
+		if err := bodyRows.Scan(&hash, &data); err != nil {
+			return nil, err
+		}
+		bodies[hash] = string(data)
+	}
+	if err := bodyRows.Err(); err != nil {
+		return nil, err
+	}
+
+	// ── Assemble final results ────────────────────────────────────────────
+	out := make([]SearchResult, 0, len(candidates))
+	for _, c := range candidates {
+		c.rec.Body = bodies[c.rec.BlobHash]
+		out = append(out, SearchResult{FactWithBody: c.rec, Score: c.score * 100.0})
+	}
 	return out, nil
 }
 

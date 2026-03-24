@@ -609,3 +609,146 @@ func TestExplainResumeParseError(t *testing.T) {
 		t.Fatal("expected has_more=false")
 	}
 }
+
+func TestExplainFirstPageIncludesAllFactFields(t *testing.T) {
+	// Regression: explainFactEntry was missing domain, confidence, sources,
+	// entities, and evidence_weight. All fields must be present in the response.
+	ctrl := gomock.NewController(t)
+	gs := NewMockGitStore(ctrl)
+	sessionIdx := NewMockToolSessionIndex(ctrl)
+
+	tmp := fact.NewFact("kb/full.md")
+	tmp.Title = "Full Fact"
+	tmp.Body = "Full body."
+	tmp.Type = fact.EpistemicType("observation")
+	tmp.Domain = []string{"engineering", "testing"}
+	tmp.Confidence = 0.85
+	tmp.Sources = 3
+	tmp.Entities = []string{"Go", "knomit"}
+	tmp.Refs = []string{}
+	tmp.EvidenceWeight = 0.7
+	factContent := SerializeFact(tmp)
+
+	gs.EXPECT().Branch().Return("machine/test").AnyTimes()
+	sessionIdx.EXPECT().GCToolSessions("explain", "machine/test", 5).Return(nil)
+	gs.EXPECT().ReadFile("kb/full.md").Return(factContent, nil)
+	gs.EXPECT().Log("kb/full.md").Return([]LogEntry{
+		{Commit: "deadbeef", Date: "2026-03-22T10:00:00Z", Message: "learn: full"},
+	}, nil)
+	sessionIdx.EXPECT().CreateToolSession("explain", "machine/test", "kb/full.md").Return(&ToolSession{ID: "sess-full", Status: "active"}, nil)
+	sessionIdx.EXPECT().AddSeenPaths("sess-full", []string{"kb/full.md"}).Return(nil)
+	sessionIdx.EXPECT().QueueSize("sess-full").Return(0, nil)
+	sessionIdx.EXPECT().UpdateToolSession("sess-full", "deadbeef", "completed").Return(nil)
+
+	handler := ExplainHandler(gs, sessionIdx, "kb")
+	req := mcpgo.CallToolRequest{}
+	req.Params.Arguments = map[string]interface{}{"file": "kb/full.md"}
+
+	result, err := handler(context.Background(), req)
+	if err != nil {
+		t.Fatalf("handler error: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("tool error: %s", getResultText(t, result))
+	}
+
+	var resp struct {
+		Facts []explainFactEntry `json:"facts"`
+	}
+	if err := json.Unmarshal([]byte(getResultText(t, result)), &resp); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if len(resp.Facts) != 1 {
+		t.Fatalf("expected 1 fact, got %d", len(resp.Facts))
+	}
+	f := resp.Facts[0]
+
+	if f.Confidence != 0.85 {
+		t.Errorf("confidence: got %v, want 0.85", f.Confidence)
+	}
+	if f.Sources != 3 {
+		t.Errorf("sources: got %v, want 3", f.Sources)
+	}
+	if len(f.Domain) != 2 || f.Domain[0] != "engineering" || f.Domain[1] != "testing" {
+		t.Errorf("domain: got %v, want [engineering testing]", f.Domain)
+	}
+	if len(f.Entities) != 2 || f.Entities[0] != "Go" || f.Entities[1] != "knomit" {
+		t.Errorf("entities: got %v, want [Go knomit]", f.Entities)
+	}
+	if f.EvidenceWeight != 0.7 {
+		t.Errorf("evidence_weight: got %v, want 0.7", f.EvidenceWeight)
+	}
+}
+
+func TestExplainResumeIncludesAllFactFields(t *testing.T) {
+	// Regression: explainFactEntry in the resume path was also missing
+	// domain, confidence, sources, entities, and evidence_weight.
+	ctrl := gomock.NewController(t)
+	gs := NewMockGitStore(ctrl)
+	sessionIdx := NewMockToolSessionIndex(ctrl)
+
+	tmp := fact.NewFact("kb/ref.md")
+	tmp.Title = "Ref Fact"
+	tmp.Body = "Ref body."
+	tmp.Type = fact.EpistemicType("hypothesis")
+	tmp.Domain = []string{"infra"}
+	tmp.Confidence = 0.6
+	tmp.Sources = 2
+	tmp.Entities = []string{"Redis"}
+	tmp.Refs = []string{}
+	tmp.EvidenceWeight = 0.5
+	factContent := SerializeFact(tmp)
+
+	sessionIdx.EXPECT().GetToolSession("sess-r").Return(&ToolSession{ID: "sess-r", Status: "active"}, nil)
+	sessionIdx.EXPECT().GetSeenPaths("sess-r").Return(map[string]bool{}, nil)
+	sessionIdx.EXPECT().DequeuePaths("sess-r", 25).Return([]QueueItem{
+		{Path: "kb/ref.md", CommitHash: "cafebabe", Depth: 1},
+	}, nil)
+	gs.EXPECT().ReadFileAtCommit("kb/ref.md", "cafebabe").Return(factContent, nil)
+	sessionIdx.EXPECT().AddSeenPaths("sess-r", []string{"kb/ref.md"}).Return(nil)
+	sessionIdx.EXPECT().EnqueuePaths(gomock.Any(), gomock.Any()).AnyTimes().Return(nil)
+	sessionIdx.EXPECT().QueueSize("sess-r").Return(0, nil)
+	sessionIdx.EXPECT().UpdateToolSession("sess-r", "", "completed").Return(nil)
+
+	handler := ExplainHandler(gs, sessionIdx, "kb")
+	req := mcpgo.CallToolRequest{}
+	req.Params.Arguments = map[string]interface{}{
+		"file":   "kb/ref.md",
+		"cursor": "sess-r",
+	}
+
+	result, err := handler(context.Background(), req)
+	if err != nil {
+		t.Fatalf("handler error: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("tool error: %s", getResultText(t, result))
+	}
+
+	var resp struct {
+		Facts []explainFactEntry `json:"facts"`
+	}
+	if err := json.Unmarshal([]byte(getResultText(t, result)), &resp); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if len(resp.Facts) != 1 {
+		t.Fatalf("expected 1 fact, got %d", len(resp.Facts))
+	}
+	f := resp.Facts[0]
+
+	if f.Confidence != 0.6 {
+		t.Errorf("confidence: got %v, want 0.6", f.Confidence)
+	}
+	if f.Sources != 2 {
+		t.Errorf("sources: got %v, want 2", f.Sources)
+	}
+	if len(f.Domain) != 1 || f.Domain[0] != "infra" {
+		t.Errorf("domain: got %v, want [infra]", f.Domain)
+	}
+	if len(f.Entities) != 1 || f.Entities[0] != "Redis" {
+		t.Errorf("entities: got %v, want [Redis]", f.Entities)
+	}
+	if f.EvidenceWeight != 0.5 {
+		t.Errorf("evidence_weight: got %v, want 0.5", f.EvidenceWeight)
+	}
+}

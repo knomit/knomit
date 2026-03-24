@@ -16,7 +16,6 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"knomit/internal/config"
-	"knomit/internal/embeddings"
 	"knomit/internal/fact"
 	"knomit/internal/git"
 	"knomit/internal/llm"
@@ -31,7 +30,7 @@ type Deps struct {
 	Cfg         config.Config
 	Signer      ssh.Signer
 	AgentBranch string
-	Embedder    *embeddings.Embedder // nil if unavailable
+	Embedder    Embedder // nil if unavailable; must implement store.Embedder and mcp.BatchEmbedder
 	LLM         llm.LLMAdapter       // nil if unavailable
 	KeyPath     string
 }

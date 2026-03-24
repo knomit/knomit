@@ -73,21 +73,23 @@ func QueryHandler(gs GitStore, idx SearchIndex) func(context.Context, mcpgo.Call
 			Frontmatter interface{} `json:"frontmatter"`
 		}
 		type frontmatterOutput struct {
-			Domain     []string `json:"domain"`
-			Confidence float64  `json:"confidence"`
-			Sources    int      `json:"sources"`
-			Entities   []string `json:"entities"`
-			Refs       []string `json:"refs"`
+			Domain         []string `json:"domain"`
+			Confidence     float64  `json:"confidence"`
+			Sources        int      `json:"sources"`
+			Entities       []string `json:"entities"`
+			Refs           []string `json:"refs"`
+			EvidenceWeight float64  `json:"evidence_weight,omitempty"`
 		}
 
 		facts := make([]factOutput, len(results))
 		for i, r := range results {
 			fm := frontmatterOutput{
-				Domain:     orEmpty(r.Domain),
-				Confidence: r.Confidence,
-				Sources:    r.Sources,
-				Entities:   orEmpty(r.Entities),
-				Refs:       orEmpty(r.Refs),
+				Domain:         orEmpty(r.Domain),
+				Confidence:     r.Confidence,
+				Sources:        r.Sources,
+				Entities:       orEmpty(r.Entities),
+				Refs:           orEmpty(r.Refs),
+				EvidenceWeight: r.EvidenceWeight,
 			}
 			facts[i] = factOutput{
 				File:        r.Path,

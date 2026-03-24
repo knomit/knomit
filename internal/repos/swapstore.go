@@ -39,9 +39,13 @@ func (m *Manager) SwapStore(ri *RepoInstance, tempDBPath string) error {
 			log.Warn().Err(err).Msg("SwapStore: cannot open temp git, keeping existing service")
 			return nil
 		}
+		idx := svc.Index()
+		if m.deps.Embedder != nil {
+			idx.SetEmbedder(m.deps.Embedder)
+		}
 		ri.Svc = svc
 		ri.GS = gs
-		ri.Idx = svc.Index()
+		ri.Idx = idx
 		return nil
 	}
 
@@ -77,9 +81,13 @@ func (m *Manager) SwapStore(ri *RepoInstance, tempDBPath string) error {
 		return fmt.Errorf("SwapStore: reopen git: %w", err)
 	}
 
+	idx := svc.Index()
+	if m.deps.Embedder != nil {
+		idx.SetEmbedder(m.deps.Embedder)
+	}
 	ri.Svc = svc
 	ri.GS = gs
-	ri.Idx = svc.Index()
+	ri.Idx = idx
 
 	// Clean up backup — swap succeeded.
 	os.Remove(backupPath)

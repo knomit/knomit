@@ -136,6 +136,9 @@ func (idx *Index) SetEmbedder(e Embedder) {
 	idx.embedder = e
 }
 
+// EmbedderSet reports whether an Embedder has been attached to this index.
+func (idx *Index) EmbedderSet() bool { return idx.embedder != nil }
+
 // New opens (or creates) a SQLite search index at path.
 // Use ":memory:" for an in-memory database (useful in tests).
 func New(path string, opts ...Option) (*Index, error) {

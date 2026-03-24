@@ -6,6 +6,63 @@ import (
 	"knomit/internal/store"
 )
 
+func TestSetRemoteWithAuth_NoCrypt(t *testing.T) {
+	svc, err := store.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer svc.Close()
+
+	if err := svc.SetRemoteWithAuth("origin", "https://example.com/kb.git", "main", 300, 300, "token", "secret"); err != nil {
+		t.Fatal(err)
+	}
+
+	r, err := svc.GetRemote("origin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r == nil {
+		t.Fatal("expected non-nil remote")
+	}
+	if r.AuthMethod != "token" {
+		t.Errorf("auth_method = %q, want %q", r.AuthMethod, "token")
+	}
+	// Without crypt, token stored and returned as-is.
+	if r.AuthToken != "secret" {
+		t.Errorf("auth_token = %q, want %q", r.AuthToken, "secret")
+	}
+}
+
+func TestSetRemoteWithAuth_WithCrypt(t *testing.T) {
+	svc, err := store.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer svc.Close()
+
+	c, err := store.NewCrypt([]byte("test-key-material-32-bytes-padded"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc.SetCrypt(c)
+
+	if err := svc.SetRemoteWithAuth("origin", "https://example.com/kb.git", "main", 300, 300, "token", "mysecret"); err != nil {
+		t.Fatal(err)
+	}
+
+	r, err := svc.GetRemote("origin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r == nil {
+		t.Fatal("expected non-nil remote")
+	}
+	// GetRemote decrypts, so we should see the original plaintext.
+	if r.AuthToken != "mysecret" {
+		t.Errorf("auth_token = %q, want %q", r.AuthToken, "mysecret")
+	}
+}
+
 func TestRemoteCRUD(t *testing.T) {
 	svc, err := store.Open(":memory:")
 	if err != nil {

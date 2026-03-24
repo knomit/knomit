@@ -224,28 +224,6 @@ func scanFactWithBody(row *sql.Row) (*FactWithBody, error) {
 	return &f, nil
 }
 
-// scanFactRecord scans a FactRecord (without body) from a *sql.Row.
-func scanFactRecord(row *sql.Row) (*FactRecord, error) {
-	var rec FactRecord
-	var domainJSON, entitiesJSON, refsJSON string
-	err := row.Scan(
-		&rec.Path, &rec.Title, &rec.BlobHash, &rec.Type,
-		&domainJSON, &entitiesJSON,
-		&rec.Confidence, &rec.Sources,
-		&refsJSON, &rec.CommitHash, &rec.EvidenceWeight,
-	)
-	if err == sql.ErrNoRows {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("scan fact: %w", err)
-	}
-	json.Unmarshal([]byte(domainJSON), &rec.Domain)
-	json.Unmarshal([]byte(entitiesJSON), &rec.Entities)
-	json.Unmarshal([]byte(refsJSON), &rec.Refs)
-	return &rec, nil
-}
-
 // scanFactRecordFromRows scans a FactRecord from *sql.Rows (used in multi-row queries).
 func scanFactRecordFromRows(rows *sql.Rows) (*FactRecord, error) {
 	var rec FactRecord
@@ -304,39 +282,21 @@ func (idx *Index) RecentFacts(pathPrefix, query string, limit, offset int, inclu
 		return idx.recentFactsSearch(pathPrefix, query, limit, offset, includeTypes, excludeTypes)
 	}
 
-	// Build WHERE clause with optional type filters.
-	where := `f.path LIKE ? || '%'`
-	args := []any{pathPrefix}
-	if len(includeTypes) > 0 {
-		placeholders := make([]string, len(includeTypes))
-		for i, t := range includeTypes {
-			placeholders[i] = "?"
-			args = append(args, t)
-		}
-		where += " AND f.type IN (" + join(placeholders, ",") + ")"
-	}
-	if len(excludeTypes) > 0 {
-		placeholders := make([]string, len(excludeTypes))
-		for i, t := range excludeTypes {
-			placeholders[i] = "?"
-			args = append(args, t)
-		}
-		where += " AND f.type NOT IN (" + join(placeholders, ",") + ")"
-	}
+	flt := newFactFilter(SearchQuery{Path: pathPrefix, IncludeTypes: includeTypes, ExcludeTypes: excludeTypes})
 
 	var total int
 	if err := idx.db.QueryRow(
-		`SELECT COUNT(*) FROM facts f WHERE `+where, args...,
+		`SELECT COUNT(*) FROM facts f WHERE 1=1`+flt.SQL(), flt.args...,
 	).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("RecentFacts count: %w", err)
 	}
 
-	queryArgs := append(args, limit, offset)
+	queryArgs := append(append([]any{}, flt.args...), limit, offset)
 	rows, err := idx.db.Query(
 		`SELECT f.path, f.title, f.type, COALESCE(cl.committed_at, 0), COALESCE(cl.operation, '')
 		 FROM facts f
 		 LEFT JOIN commit_log cl ON f.commit_hash = cl.commit_hash AND f.path = cl.path
-		 WHERE `+where+`
+		 WHERE 1=1`+flt.SQL()+`
 		 ORDER BY cl.committed_at DESC, f.path ASC
 		 LIMIT ? OFFSET ?`,
 		queryArgs...,
