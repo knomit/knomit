@@ -1149,6 +1149,226 @@ func TestOriginSession_ReviewWatermarkSetAfterCommit(t *testing.T) {
 	}
 }
 
+// TestOriginSession_DeadRefs verifies that preview reports dead_refs_found > 0
+// when a local fact references a path that does not exist, and 0 when all refs
+// point to existing facts.
+func TestOriginSession_DeadRefs(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	// ---- Local store: one fact with a dead ref, one valid fact ----
+	localSvc, err := store.Open(":memory:")
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	t.Cleanup(func() { localSvc.Close() })
+
+	localGS, err := git.InitWithStorer(localSvc.GitStorer(), nil, "agent/local")
+	if err != nil {
+		t.Fatalf("git.InitWithStorer: %v", err)
+	}
+
+	// A plain fact with no refs (dead_refs = 0 contribution).
+	validFact := "---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# Valid Fact\n\nNo refs.\n"
+	writeFact(t, localGS, localSvc.DB(), "kb/valid.md", validFact)
+
+	// A fact whose refs list contains a path that does not exist in the local store.
+	deadRefFact := "---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nrefs:\n  - kb/nonexistent.md\n---\n# Fact With Dead Ref\n\nPoints to a missing file.\n"
+	writeFact(t, localGS, localSvc.DB(), "kb/with-dead-ref.md", deadRefFact)
+
+	// ---- Remote store: minimal, just needs to be clonable ----
+	time.Sleep(1100 * time.Millisecond)
+
+	remoteStorer := newTestStorerForWeb(t)
+	remoteStore, err := git.InitWithStorer(remoteStorer, nil, "agent/remote")
+	if err != nil {
+		t.Fatalf("git.InitWithStorer remote: %v", err)
+	}
+	remoteFact := "---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# Remote Fact\n\nContent.\n"
+	if _, _, err := remoteStore.WriteFile("kb/remote.md", remoteFact, "add remote", "learn"); err != nil {
+		t.Fatalf("remote WriteFile: %v", err)
+	}
+	remoteHead, err := remoteStore.HeadCommit()
+	if err != nil {
+		t.Fatalf("remote HeadCommit: %v", err)
+	}
+	if err := remoteStorer.SetReference(
+		plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), plumbing.NewHash(remoteHead)),
+	); err != nil {
+		t.Fatalf("remote SetReference main: %v", err)
+	}
+
+	loader := server.MapLoader{"inmem:///dead-refs-test": remoteStorer}
+	client.InstallProtocol("inmem", server.NewClient(loader))
+	t.Cleanup(func() { client.InstallProtocol("inmem", nil) })
+
+	hub := repos.NewTaskHub(context.Background())
+	rm := repos.New(context.Background(), repos.Deps{})
+	sm := NewSessionManager()
+	t.Cleanup(sm.Shutdown)
+
+	ri := &repos.RepoInstance{
+		Name:       "knomit",
+		GS:         localGS,
+		Svc:        localSvc,
+		Hub:        hub,
+		SyncCancel: func() {},
+		SyncWg:     &sync.WaitGroup{},
+		StartSync:  func(url string) error { return nil },
+	}
+	rm.Set("knomit", ri)
+	handler := NewRouterWithSessionManager(rm, nil, false, "kb", sm)
+
+	// Create session.
+	rr := doRequest(t, handler, http.MethodPost, "/api/v1/knomit/origin/session",
+		`{"url":"inmem:///dead-refs-test"}`)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("create session: expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	var createBody map[string]string
+	_ = json.NewDecoder(rr.Body).Decode(&createBody)
+	sessionID := createBody["session_id"]
+
+	// Test connectivity.
+	testRec := httptest.NewRecorder()
+	handler.ServeHTTP(testRec, httptest.NewRequest(http.MethodGet,
+		"/api/v1/knomit/origin/session/"+sessionID+"/test", nil))
+	if testRec.Code != http.StatusOK {
+		t.Fatalf("test: expected 200, got %d: %s", testRec.Code, testRec.Body.String())
+	}
+	findDoneEvent(t, parseSSEEvents(t, testRec.Body.String()), "test connectivity")
+
+	// Preview — should report dead_refs_found >= 1.
+	previewRec := httptest.NewRecorder()
+	handler.ServeHTTP(previewRec, httptest.NewRequest(http.MethodGet,
+		"/api/v1/knomit/origin/session/"+sessionID+"/preview", nil))
+	if previewRec.Code != http.StatusOK {
+		t.Fatalf("preview: expected 200, got %d: %s", previewRec.Code, previewRec.Body.String())
+	}
+
+	previewDone := findDoneEvent(t, parseSSEEvents(t, previewRec.Body.String()), "preview")
+	previewResult, ok := previewDone["result"].(map[string]any)
+	if !ok {
+		t.Fatalf("preview done missing result: %v", previewDone)
+	}
+
+	deadRefsFound := int(previewResult["dead_refs_found"].(float64))
+	if deadRefsFound < 1 {
+		t.Errorf("expected dead_refs_found >= 1 (kb/nonexistent.md is missing), got %d", deadRefsFound)
+	}
+
+	// Also verify the valid fact does not inflate the dead-refs count beyond what we expect.
+	// There is exactly 1 dead ref (kb/nonexistent.md from kb/with-dead-ref.md).
+	if deadRefsFound != 1 {
+		t.Errorf("expected dead_refs_found == 1, got %d", deadRefsFound)
+	}
+}
+
+// TestOriginSession_NoDeadRefs verifies that preview reports dead_refs_found == 0
+// when all refs in local facts point to paths that exist.
+func TestOriginSession_NoDeadRefs(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	localSvc, err := store.Open(":memory:")
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	t.Cleanup(func() { localSvc.Close() })
+
+	localGS, err := git.InitWithStorer(localSvc.GitStorer(), nil, "agent/local")
+	if err != nil {
+		t.Fatalf("git.InitWithStorer: %v", err)
+	}
+
+	// Two facts; one references the other (valid ref).
+	factA := "---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# Fact A\n\nContent.\n"
+	writeFact(t, localGS, localSvc.DB(), "kb/fact-a.md", factA)
+
+	// This fact refs fact-a.md which exists.
+	factB := "---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nrefs:\n  - kb/fact-a.md\n---\n# Fact B\n\nReferences fact-a.\n"
+	writeFact(t, localGS, localSvc.DB(), "kb/fact-b.md", factB)
+
+	time.Sleep(1100 * time.Millisecond)
+
+	remoteStorer := newTestStorerForWeb(t)
+	remoteStore, err := git.InitWithStorer(remoteStorer, nil, "agent/remote")
+	if err != nil {
+		t.Fatalf("git.InitWithStorer remote: %v", err)
+	}
+	remoteFact := "---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# Remote Fact\n\nContent.\n"
+	if _, _, err := remoteStore.WriteFile("kb/remote.md", remoteFact, "add remote", "learn"); err != nil {
+		t.Fatalf("remote WriteFile: %v", err)
+	}
+	remoteHead, err := remoteStore.HeadCommit()
+	if err != nil {
+		t.Fatalf("remote HeadCommit: %v", err)
+	}
+	if err := remoteStorer.SetReference(
+		plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), plumbing.NewHash(remoteHead)),
+	); err != nil {
+		t.Fatalf("remote SetReference main: %v", err)
+	}
+
+	loader := server.MapLoader{"inmem:///no-dead-refs-test": remoteStorer}
+	client.InstallProtocol("inmem", server.NewClient(loader))
+	t.Cleanup(func() { client.InstallProtocol("inmem", nil) })
+
+	hub := repos.NewTaskHub(context.Background())
+	rm := repos.New(context.Background(), repos.Deps{})
+	sm := NewSessionManager()
+	t.Cleanup(sm.Shutdown)
+
+	ri := &repos.RepoInstance{
+		Name:       "knomit",
+		GS:         localGS,
+		Svc:        localSvc,
+		Hub:        hub,
+		SyncCancel: func() {},
+		SyncWg:     &sync.WaitGroup{},
+		StartSync:  func(url string) error { return nil },
+	}
+	rm.Set("knomit", ri)
+	handler := NewRouterWithSessionManager(rm, nil, false, "kb", sm)
+
+	rr := doRequest(t, handler, http.MethodPost, "/api/v1/knomit/origin/session",
+		`{"url":"inmem:///no-dead-refs-test"}`)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("create session: expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	var createBody map[string]string
+	_ = json.NewDecoder(rr.Body).Decode(&createBody)
+	sessionID := createBody["session_id"]
+
+	testRec := httptest.NewRecorder()
+	handler.ServeHTTP(testRec, httptest.NewRequest(http.MethodGet,
+		"/api/v1/knomit/origin/session/"+sessionID+"/test", nil))
+	if testRec.Code != http.StatusOK {
+		t.Fatalf("test: expected 200, got %d: %s", testRec.Code, testRec.Body.String())
+	}
+	findDoneEvent(t, parseSSEEvents(t, testRec.Body.String()), "test connectivity")
+
+	previewRec := httptest.NewRecorder()
+	handler.ServeHTTP(previewRec, httptest.NewRequest(http.MethodGet,
+		"/api/v1/knomit/origin/session/"+sessionID+"/preview", nil))
+	if previewRec.Code != http.StatusOK {
+		t.Fatalf("preview: expected 200, got %d: %s", previewRec.Code, previewRec.Body.String())
+	}
+
+	previewDone := findDoneEvent(t, parseSSEEvents(t, previewRec.Body.String()), "preview")
+	previewResult, ok := previewDone["result"].(map[string]any)
+	if !ok {
+		t.Fatalf("preview done missing result: %v", previewDone)
+	}
+
+	deadRefsFound := int(previewResult["dead_refs_found"].(float64))
+	if deadRefsFound != 0 {
+		t.Errorf("expected dead_refs_found == 0 (all refs are valid), got %d", deadRefsFound)
+	}
+}
+
 // assertHasPhase checks that at least one SSE event contains the given phase.
 func assertHasPhase(t *testing.T, events []map[string]any, phase, step string) {
 	t.Helper()

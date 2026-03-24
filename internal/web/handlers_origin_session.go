@@ -373,12 +373,14 @@ func handlePreview(rm *repos.Manager, sm *SessionManager) http.HandlerFunc {
 		}
 
 		// Dead ref detection: read local facts in parallel (bounded concurrency).
-		// A mutex serializes ReadFile calls because the underlying git storer
-		// (SQLite) may not support concurrent connections safely in all configs.
+		// readMu is a conservative guard because *gogit.Repository is not documented
+		// as goroutine-safe for concurrent reads. Read paths appear stateless in
+		// practice but we serialize to be safe until confirmed otherwise. Note also
+		// that for :memory: SQLite test databases, concurrent *sql.DB connections
+		// each see a fresh empty DB.
 		const workers = 8
-		type refResult struct{ dead int }
 		jobs := make(chan string, len(localPaths))
-		results := make(chan refResult, len(localPaths))
+		results := make(chan int, len(localPaths))
 		var readMu sync.Mutex
 
 		for i := 0; i < workers; i++ {
@@ -388,7 +390,7 @@ func handlePreview(rm *repos.Manager, sm *SessionManager) http.HandlerFunc {
 					content, err := gs.ReadFile(p)
 					readMu.Unlock()
 					if err != nil {
-						results <- refResult{0}
+						results <- 0
 						continue
 					}
 					dead := 0
@@ -400,7 +402,7 @@ func handlePreview(rm *repos.Manager, sm *SessionManager) http.HandlerFunc {
 							dead++
 						}
 					}
-					results <- refResult{dead}
+					results <- dead
 				}
 			}()
 		}
@@ -410,8 +412,7 @@ func handlePreview(rm *repos.Manager, sm *SessionManager) http.HandlerFunc {
 		close(jobs)
 		deadRefs := 0
 		for range localPaths {
-			r := <-results
-			deadRefs += r.dead
+			deadRefs += <-results
 		}
 
 		result := previewResult{
