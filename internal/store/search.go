@@ -133,13 +133,14 @@ func (idx *Index) Search(q SearchQuery) ([]SearchResult, error) {
 	}
 
 	vecSimByPath := make(map[string]float64)
-	if idx.embedder == nil && len(q.QueryVec) == 0 {
+	emb := idx.getEmbedder()
+	if emb == nil && len(q.QueryVec) == 0 {
 		log.Debug().Msg("search: no embedder configured, skipping vec search")
 	} else {
 		queryVec := q.QueryVec
 		if len(queryVec) == 0 {
 			var embedErr error
-			queryVec, embedErr = idx.embedder.Embed(q.Text)
+			queryVec, embedErr = emb.Embed(q.Text)
 			if embedErr != nil {
 				log.Warn().Err(embedErr).Msg("search: embed query failed")
 			}

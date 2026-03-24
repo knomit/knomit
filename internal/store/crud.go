@@ -30,7 +30,7 @@ func (idx *Index) Upsert(rec FactRecord) error {
 
 	// Compute embedding vector if an embedder is configured.
 	var vecData []byte
-	if idx.embedder != nil {
+	if emb := idx.getEmbedder(); emb != nil {
 		// Read body from objects table for embedding computation.
 		var data []byte
 		err := idx.db.QueryRow(
@@ -41,7 +41,7 @@ func (idx *Index) Upsert(rec FactRecord) error {
 			return fmt.Errorf("upsert: blob %s not found: %w", rec.BlobHash, err)
 		}
 		text := rec.Title + " " + extractBody(data)
-		vec, err := idx.embedder.Embed(text)
+		vec, err := emb.Embed(text)
 		if err == nil && len(vec) > 0 {
 			vecData = float32SliceToBytes(vec)
 		}
@@ -98,7 +98,7 @@ func (idx *Index) Upsert(rec FactRecord) error {
 	}
 
 	// Build similarity edges if embeddings are available.
-	if idx.embedder != nil {
+	if idx.getEmbedder() != nil {
 		if err := idx.graphBuildSimilarityEdges(rec.Path); err != nil {
 			log.Warn().Err(err).Str("path", rec.Path).Msg("graph similarity edges failed")
 		}

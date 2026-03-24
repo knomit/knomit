@@ -101,11 +101,12 @@ func (idx *Index) rebuildFacts(git GitReader, head string, progress RebuildProgr
 // Bodies are fetched one chunk at a time so memory usage is bounded by batchSize,
 // not by the total number of facts.
 func (idx *Index) rebuildEmbeddings(progress RebuildProgress) (int, error) {
-	if idx.embedder == nil {
+	emb := idx.getEmbedder()
+	if emb == nil {
 		return 0, nil
 	}
 
-	batcher, hasBatch := idx.embedder.(BatchEmbedder)
+	batcher, hasBatch := emb.(BatchEmbedder)
 
 	var total int
 	if err := idx.db.QueryRow(`SELECT COUNT(*) FROM facts WHERE rowid NOT IN (SELECT rowid FROM facts_vec)`).Scan(&total); err != nil {
@@ -223,7 +224,7 @@ func (idx *Index) rebuildEmbeddings(progress RebuildProgress) (int, error) {
 			}
 		} else {
 			for _, e := range entries {
-				vec, err := idx.embedder.Embed(e.text)
+				vec, err := emb.Embed(e.text)
 				if err != nil {
 					log.Warn().Err(err).Str("path", e.path).Msg("rebuildEmbeddings: embed failed, skipping")
 					continue
@@ -306,7 +307,7 @@ func (idx *Index) rebuildGraph(progress RebuildProgress) (int, error) {
 
 	// Build similarity edges after commit (needs committed data for KNN).
 	// Batch: collect all neighbors first, then write all edges in one transaction.
-	if idx.embedder != nil {
+	if idx.getEmbedder() != nil {
 		type simEdge struct{ from, to string }
 		var edges []simEdge
 
