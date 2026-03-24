@@ -153,7 +153,8 @@ func handleTestConnectivity(rm *repos.Manager, sm *SessionManager) http.HandlerF
 
 		ri := repos.RepoFromContext(r.Context())
 		ri.RLock()
-		defer ri.RUnlock()
+		gs := ri.GS
+		ri.RUnlock()
 
 		sendEvent, ok := beginSSE(w)
 		if !ok {
@@ -224,11 +225,11 @@ CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value BLOB NOT NULL);
 		}
 
 		// Collect all branch info in a single pass over refs.
-		localAgentBranch := ri.GS.Branch()
+		localAgentBranch := gs.Branch()
 		branches, agentBranches, matchedAgent := collectAllBranchInfo(storer, localAgentBranch)
 
 		// Check shared history.
-		localGS, isRealStore := ri.GS.(*git.Store)
+		localGS, isRealStore := gs.(*git.Store)
 		history := "disjoint"
 		if isRealStore {
 			shared, err := localGS.HasSharedHistory(cloned)
@@ -245,7 +246,7 @@ CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value BLOB NOT NULL);
 		}
 
 		// Count local facts.
-		localFiles, err := ri.GS.ListAll()
+		localFiles, err := gs.ListAll()
 		localFactCount := 0
 		if err == nil {
 			localFactCount = len(localFiles)
@@ -311,7 +312,8 @@ func handlePreview(rm *repos.Manager, sm *SessionManager) http.HandlerFunc {
 
 		ri := repos.RepoFromContext(r.Context())
 		ri.RLock()
-		defer ri.RUnlock()
+		svc, gs := ri.Svc, ri.GS
+		ri.RUnlock()
 
 		sendEvent, ok := beginSSE(w)
 		if !ok {
@@ -322,8 +324,8 @@ func handlePreview(rm *repos.Manager, sm *SessionManager) http.HandlerFunc {
 
 		// Build local path set via FactsIter.
 		var localDB *sql.DB
-		if ri.Svc != nil {
-			localDB = ri.Svc.DB()
+		if svc != nil {
+			localDB = svc.DB()
 		}
 
 		localPaths := make(map[string]struct{})
@@ -372,7 +374,7 @@ func handlePreview(rm *repos.Manager, sm *SessionManager) http.HandlerFunc {
 		// Dead ref detection: read each local fact and check refs.
 		deadRefs := 0
 		for p := range localPaths {
-			content, err := ri.GS.ReadFile(p)
+			content, err := gs.ReadFile(p)
 			if err != nil {
 				continue
 			}
@@ -479,7 +481,8 @@ func handleApply(rm *repos.Manager, sm *SessionManager) http.HandlerFunc {
 
 		ri := repos.RepoFromContext(r.Context())
 		ri.RLock()
-		defer ri.RUnlock()
+		svc, gs := ri.Svc, ri.GS
+		ri.RUnlock()
 
 		sendEvent, ok := beginSSE(w)
 		if !ok {
@@ -490,15 +493,15 @@ func handleApply(rm *repos.Manager, sm *SessionManager) http.HandlerFunc {
 			sendEvent(map[string]string{"phase": "replaying"})
 
 			// Get the local store and local DB for replay.
-			localGS, isRealStore := ri.GS.(*git.Store)
+			localGS, isRealStore := gs.(*git.Store)
 			if !isRealStore {
 				sendEvent(map[string]string{"phase": "error", "message": "local store is not a git store"})
 				return
 			}
 
 			var localDB *sql.DB
-			if ri.Svc != nil {
-				localDB = ri.Svc.DB()
+			if svc != nil {
+				localDB = svc.DB()
 			}
 			if localDB == nil {
 				sendEvent(map[string]string{"phase": "error", "message": "local database not available"})
@@ -515,7 +518,7 @@ func handleApply(rm *repos.Manager, sm *SessionManager) http.HandlerFunc {
 			// Use the matched remote agent branch if found, otherwise our local agent branch name.
 			agentBranch := tr.MatchedAgent
 			if agentBranch == "" {
-				agentBranch = ri.GS.Branch()
+				agentBranch = gs.Branch()
 			}
 
 			cfg := git.ReplayConfig{
@@ -735,15 +738,20 @@ func handleCommit(rm *repos.Manager, sm *SessionManager) http.HandlerFunc {
 		// Rebuild MCP handlers so they use the new database, not the closed one.
 		rm.SetupMCP(ri)
 
+		// Snapshot after swap — protect against concurrent SwapStore.
+		ri.RLock()
+		svc, gs, hub, startSync := ri.Svc, ri.GS, ri.Hub, ri.StartSync
+		ri.RUnlock()
+
 		// Phase: configuring — save remote config and start sync.
 		sendEvent(map[string]string{"phase": "configuring"})
 
-		if ri.Svc != nil {
+		if svc != nil {
 			// Build the auth token for storage.
 			authMethod := authCfg.Method
 			authToken := assembleAuthToken(authMethod, authCfg.Token, authCfg.User, authCfg.Password)
 
-			if err := ri.Svc.SetRemoteWithAuth("origin", remoteURL, remoteBranch, 300, 300, authMethod, authToken); err != nil {
+			if err := svc.SetRemoteWithAuth("origin", remoteURL, remoteBranch, 300, 300, authMethod, authToken); err != nil {
 				sendEvent(map[string]string{"phase": "error", "message": fmt.Sprintf("save remote config: %v", err)})
 				return
 			}
@@ -751,9 +759,9 @@ func handleCommit(rm *repos.Manager, sm *SessionManager) http.HandlerFunc {
 
 		// Rebuild the index from the new git store so facts/recent/search work.
 		sendEvent(map[string]any{"phase": "rebuilding", "current": 0, "total": 0})
-		if ri.Svc != nil {
-			if gitReader, ok := ri.GS.(store.GitReader); ok {
-				idx := ri.Svc.Index()
+		if svc != nil {
+			if gitReader, ok := gs.(store.GitReader); ok {
+				idx := svc.Index()
 				progress := func(subPhase string, done, total int) {
 					if done%20 == 0 || done == total {
 						sendEvent(map[string]any{
@@ -764,15 +772,15 @@ func handleCommit(rm *repos.Manager, sm *SessionManager) http.HandlerFunc {
 						})
 					}
 				}
-				if err := idx.Rebuild(gitReader, ri.GS.Branch(), progress); err != nil {
+				if err := idx.Rebuild(gitReader, gs.Branch(), progress); err != nil {
 					log.Warn().Err(err).Str("repo", repo).Msg("commit: index rebuild failed")
 				} else {
 					log.Info().Str("repo", repo).Msg("commit: index rebuilt from swapped store")
 					// Set pipeline watermarks to HEAD so the first review/hypothesize
 					// doesn't treat every cloned fact as dirty.
-					if head, err := ri.GS.HeadCommit(); err == nil {
+					if head, err := gs.HeadCommit(); err == nil {
 						for _, tool := range []string{"review", "hypothesize"} {
-							if err := idx.SetPipelineWatermark(tool, ri.GS.Branch(), head); err != nil {
+							if err := idx.SetPipelineWatermark(tool, gs.Branch(), head); err != nil {
 								log.Warn().Err(err).Str("repo", repo).Str("tool", tool).Msg("commit: pipeline watermark set failed")
 							}
 						}
@@ -782,8 +790,8 @@ func handleCommit(rm *repos.Manager, sm *SessionManager) http.HandlerFunc {
 		}
 
 		// Start sync/push loops.
-		if ri.StartSync != nil {
-			if err := ri.StartSync(remoteURL); err != nil {
+		if startSync != nil {
+			if err := startSync(remoteURL); err != nil {
 				log.Warn().Err(err).Str("repo", repo).Msg("commit: sync activation failed")
 				// Non-fatal: remote is configured, sync can be started later.
 			}
@@ -792,9 +800,9 @@ func handleCommit(rm *repos.Manager, sm *SessionManager) http.HandlerFunc {
 		sendEvent(map[string]string{"phase": "done"})
 
 		// Broadcast status so the UI refreshes with the new HEAD.
-		if ri.Hub != nil {
-			if head, err := ri.GS.HeadCommit(); err == nil {
-				ri.Hub.BroadcastStatus(head)
+		if hub != nil {
+			if head, err := gs.HeadCommit(); err == nil {
+				hub.BroadcastStatus(head)
 			}
 		}
 
