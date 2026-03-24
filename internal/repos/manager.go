@@ -351,11 +351,13 @@ func (m *Manager) openOne(name, dbPath string, isDefault bool) (*RepoInstance, e
 	ri.StartSync = func(remoteURL string) error {
 		// Use ri.GS and ri.Svc (not captured gs/svc) so that after SwapStore
 		// the sync loops operate on the current store, not the original one.
+		ri.mu.RLock()
 		currentGS, ok := ri.GS.(*git.Store)
+		currentSvc := ri.Svc
+		ri.mu.RUnlock()
 		if !ok {
 			return fmt.Errorf("current store is not a *git.Store")
 		}
-		currentSvc := ri.Svc
 
 		remote, err := currentSvc.GetRemote("origin")
 		if err != nil || remote == nil {
@@ -408,12 +410,15 @@ func (m *Manager) SetupMCP(ri *RepoInstance) {
 		return
 	}
 
+	ri.mu.RLock()
 	gs, ok := ri.GS.(*git.Store)
+	svc := ri.Svc
+	ri.mu.RUnlock()
 	if !ok {
 		log.Warn().Msg("SetupMCP: ri.GS is not *git.Store, skipping")
 		return
 	}
-	idx := ri.Svc.Index()
+	idx := svc.Index()
 
 	ontologyRoot := m.deps.Cfg.OntologyRoot
 	embedder := m.deps.Embedder
