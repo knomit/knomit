@@ -373,7 +373,7 @@ export function RightPanel({ state, dispatch }: { state: AppState; dispatch: Dis
     api.commitDetail(state.repo, state.historyCommit).then(detail => {
       if (stale) return;
       setCommitDetail(detail);
-      const first = (detail.files || []).find(f => f.action !== 'deleted');
+      const first = (detail.files || [])[0];
       if (first) dispatch({ type: 'SELECT_FACT', path: first.path });
     }).catch(() => { if (!stale) setCommitDetail(null); });
     return () => { stale = true; };
