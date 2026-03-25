@@ -74,8 +74,40 @@ describe('parseFilterQuery', () => {
     expect(r).toEqual({ chips: [{ category: 'entity', value: 'supply chain' }, { category: 'path', value: 'kb/go' }], text: '' });
   });
 
-  it('extracts ep and domain chips with free text', () => {
+  it('ep: prefix is treated as free text (not a filter)', () => {
     const r = parseFilterQuery('ep:learn domain:go goroutine scheduling');
-    expect(r).toEqual({ chips: [{ category: 'ep', value: 'learn' }, { category: 'domain', value: 'go' }], text: 'goroutine scheduling' });
+    expect(r.chips).toEqual([{ category: 'domain', value: 'go' }]);
+    expect(r.text).toContain('ep:learn');
+    expect(r.text).toContain('goroutine scheduling');
+  });
+
+  it('multiple type chips from typed syntax', () => {
+    const r = parseFilterQuery('type:concept type:principle');
+    expect(r.chips).toHaveLength(2);
+    expect(r.chips[0]).toEqual({ category: 'type', value: 'concept' });
+    expect(r.chips[1]).toEqual({ category: 'type', value: 'principle' });
+    expect(r.text).toBe('');
+  });
+
+  it('path chip with deep path', () => {
+    const r = parseFilterQuery('path:kb/technology/ai/anthropic');
+    expect(r.chips).toEqual([{ category: 'path', value: 'kb/technology/ai/anthropic' }]);
+  });
+
+  it('mixed domain entity type and free text', () => {
+    const r = parseFilterQuery('domain:go entity:goroutine type:concept scheduling');
+    expect(r.chips).toHaveLength(3);
+    expect(r.text).toBe('scheduling');
+  });
+
+  it('quoted entity with spaces preserved', () => {
+    const r = parseFilterQuery('entity:"supply chain security"');
+    expect(r.chips).toEqual([{ category: 'entity', value: 'supply chain security' }]);
+  });
+
+  it('empty input returns no chips and empty text', () => {
+    const r = parseFilterQuery('');
+    expect(r.chips).toHaveLength(0);
+    expect(r.text).toBe('');
   });
 });

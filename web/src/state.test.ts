@@ -400,3 +400,151 @@ describe('back navigation restores path state', () => {
     expect(currentPath(s)).toBe('kb');
   });
 });
+
+// ─── Regression: NAVIGATE/GO_UP actions ─────────────────────────────────────
+
+describe('NAVIGATE action', () => {
+  it('sets currentPath directly and clears selectedFact', () => {
+    let s: AppState = { ...init, selectedFact: 'kb/old.md' };
+    s = reducer(s, { type: 'NAVIGATE', path: 'kb/technology/ai' });
+    expect(s.currentPath).toBe('kb/technology/ai');
+    expect(s.selectedFact).toBeNull();
+    expect(s.navStack.length).toBe(1);
+  });
+
+  it('does not affect non-path filter chips', () => {
+    let s: AppState = init;
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'domain', value: 'go' } });
+    s = reducer(s, { type: 'NAVIGATE', path: 'kb/tech' });
+    expect(s.currentPath).toBe('kb/tech');
+    expect(s.filters.find(f => f.category === 'domain')!.value).toBe('go');
+  });
+});
+
+describe('GO_UP action', () => {
+  it('removes last path segment from currentPath', () => {
+    const s = reducer({ ...init, currentPath: 'kb/tech/go' }, { type: 'GO_UP' });
+    expect(s.currentPath).toBe('kb/tech');
+  });
+
+  it('does nothing at single-segment root', () => {
+    const s = reducer({ ...init, currentPath: 'kb' }, { type: 'GO_UP' });
+    expect(s.currentPath).toBe('kb');
+    expect(s.navStack.length).toBe(0); // no nav push when no-op
+  });
+
+  it('clears selectedFact', () => {
+    const s = reducer(
+      { ...init, currentPath: 'kb/tech', selectedFact: 'kb/tech/fact.md' },
+      { type: 'GO_UP' },
+    );
+    expect(s.selectedFact).toBeNull();
+  });
+});
+
+// ─── Regression: multiple same-category type chips (OR semantics) ───────────
+
+describe('multiple type chips accumulate (OR semantics)', () => {
+  it('adding two type chips keeps both', () => {
+    let s: AppState = init;
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'type', value: 'concept' } });
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'type', value: 'principle' } });
+    const typeChips = s.filters.filter(f => f.category === 'type');
+    expect(typeChips).toHaveLength(2);
+    expect(typeChips.map(c => c.value).sort()).toEqual(['concept', 'principle']);
+  });
+
+  it('removing one type chip keeps the other', () => {
+    let s: AppState = init;
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'type', value: 'concept' } });
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'type', value: 'principle' } });
+    // Remove first type chip (index 0)
+    s = reducer(s, { type: 'REMOVE_FILTER', index: 0 });
+    const typeChips = s.filters.filter(f => f.category === 'type');
+    expect(typeChips).toHaveLength(1);
+    expect(typeChips[0].value).toBe('principle');
+  });
+});
+
+// ─── Regression: multiple domain chips accumulate (OR semantics) ────────────
+
+describe('multiple domain chips accumulate (OR semantics)', () => {
+  it('adding two domain chips keeps both', () => {
+    let s: AppState = init;
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'domain', value: 'go' } });
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'domain', value: 'rust' } });
+    const domainChips = s.filters.filter(f => f.category === 'domain');
+    expect(domainChips).toHaveLength(2);
+  });
+});
+
+// ─── Regression: multiple entity chips accumulate (AND semantics) ───────────
+
+describe('multiple entity chips accumulate (AND semantics)', () => {
+  it('adding two entity chips keeps both', () => {
+    let s: AppState = init;
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'entity', value: 'goroutine' } });
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'entity', value: 'channel' } });
+    const entityChips = s.filters.filter(f => f.category === 'entity');
+    expect(entityChips).toHaveLength(2);
+  });
+});
+
+// ─── Regression: SET_STATUS updates currentPath on first load ───────────────
+
+describe('SET_STATUS initializes currentPath from ontologyRoot', () => {
+  it('updates currentPath when it is the default kb value', () => {
+    const s = reducer(init, {
+      type: 'SET_STATUS', head: 'abc', branch: 'main',
+      embeddingsEnabled: true, ontologyRoot: 'knowledge',
+    });
+    expect(s.currentPath).toBe('knowledge');
+  });
+
+  it('does not overwrite currentPath if user has navigated away from default', () => {
+    let s: AppState = { ...init, currentPath: 'kb/custom' };
+    s = reducer(s, {
+      type: 'SET_STATUS', head: 'abc', branch: 'main',
+      embeddingsEnabled: true, ontologyRoot: 'knowledge',
+    });
+    expect(s.currentPath).toBe('kb/custom');
+  });
+});
+
+// ─── Regression: mixed filters and path navigation ─────────────────────────
+
+describe('mixed filters with path navigation', () => {
+  it('adding type chip then navigating preserves type chip', () => {
+    let s: AppState = init;
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'type', value: 'concept' } });
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'path', value: 'kb/tech' } });
+    expect(s.filters).toHaveLength(2);
+    expect(s.filters.find(f => f.category === 'type')!.value).toBe('concept');
+    expect(currentPath(s)).toBe('kb/tech');
+  });
+
+  it('removing path chip preserves type chip and resets path', () => {
+    let s: AppState = { ...init, ontologyRoot: 'kb' };
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'type', value: 'concept' } });
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'path', value: 'kb/tech' } });
+    const pathIdx = s.filters.findIndex(f => f.category === 'path');
+    s = reducer(s, { type: 'REMOVE_FILTER', index: pathIdx });
+    expect(s.filters).toHaveLength(1);
+    expect(s.filters[0]).toEqual({ category: 'type', value: 'concept' });
+    expect(currentPath(s)).toBe('kb');
+  });
+
+  it('NAV_BACK restores both path and type filters', () => {
+    let s: AppState = init;
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'type', value: 'concept' } });
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'path', value: 'kb/tech' } });
+    // Clear everything
+    s = reducer(s, { type: 'CLEAR_FILTERS' });
+    expect(s.filters).toHaveLength(0);
+    // Go back — should restore both chips
+    s = reducer(s, { type: 'NAV_BACK' });
+    expect(s.filters).toHaveLength(2);
+    expect(s.filters.find(f => f.category === 'type')!.value).toBe('concept');
+    expect(currentPath(s)).toBe('kb/tech');
+  });
+});
