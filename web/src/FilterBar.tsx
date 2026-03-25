@@ -27,6 +27,7 @@ export function FilterBar({ state, dispatch }: Props) {
   const [showCategoryPicker, setShowCategoryPicker] = useState(false);
   const [categoryValues, setCategoryValues]       = useState<string[]>([]);
   const [activeCategory, setActiveCategory]       = useState<FilterChip['category'] | null>(null);
+  const [categorySearch, setCategorySearch]       = useState('');
 
   const inputRef    = useRef<HTMLInputElement>(null);
   const debounceRef = useRef<number>(0);
@@ -125,6 +126,7 @@ export function FilterBar({ state, dispatch }: Props) {
   async function openCategory(cat: FilterChip['category']) {
     setActiveCategory(cat);
     setCategoryValues([]);
+    setCategorySearch('');
     try {
       const res = await api.completions(state.repo, cat, '');
       setCategoryValues(res.values || []);
@@ -138,6 +140,7 @@ export function FilterBar({ state, dispatch }: Props) {
     setShowCategoryPicker(false);
     setActiveCategory(null);
     setCategoryValues([]);
+    setCategorySearch('');
     inputRef.current?.focus();
   }
 
@@ -170,7 +173,117 @@ export function FilterBar({ state, dispatch }: Props) {
       minHeight: 32,
       position: 'relative',
     }}>
-      <span style={{ color: '#888', fontSize: 12 }}>&#128269;</span>
+      {/* "+" button — leftmost */}
+      <div ref={pickerRef} style={{ position: 'relative' }}>
+        <span
+          onClick={() => {
+            setShowCategoryPicker(v => !v);
+            setActiveCategory(null);
+            setCategoryValues([]);
+          }}
+          style={{
+            cursor: 'pointer',
+            color: '#888',
+            fontSize: 16,
+            lineHeight: '1',
+            padding: '0 4px',
+            borderRadius: 3,
+            userSelect: 'none',
+          }}
+          title="Add filter"
+        >+</span>
+
+        {/* Category picker dropdown */}
+        {showCategoryPicker && (
+          <div style={{
+            position: 'absolute',
+            top: '100%',
+            left: 0,
+            zIndex: 100,
+            background: '#252525',
+            border: '1px solid #444',
+            borderRadius: 4,
+            minWidth: 140,
+            boxShadow: '0 4px 12px rgba(0,0,0,0.5)',
+            display: 'flex',
+          }}>
+            {/* Category list */}
+            <div style={{ borderRight: activeCategory ? '1px solid #333' : 'none' }}>
+              {CATEGORIES.map(({ key, label }) => {
+                const colors = chipColors[key] || chipColors.path;
+                return (
+                  <div
+                    key={key}
+                    onMouseEnter={() => openCategory(key)}
+                    onClick={() => openCategory(key)}
+                    style={{
+                      padding: '6px 12px',
+                      fontSize: 12,
+                      color: activeCategory === key ? colors.text : '#bbb',
+                      background: activeCategory === key ? '#2e2e2e' : 'transparent',
+                      cursor: 'pointer',
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    {label}
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Values sub-list */}
+            {activeCategory && (
+              <div style={{ maxHeight: 240, overflowY: 'auto', display: 'flex', flexDirection: 'column' }}>
+                <input
+                  autoFocus
+                  placeholder={`Search ${activeCategory}...`}
+                  value={categorySearch}
+                  onChange={e => {
+                    setCategorySearch(e.target.value);
+                    api.completions(state.repo, activeCategory, e.target.value).then(res => {
+                      setCategoryValues(res.values || []);
+                    }).catch(() => {});
+                  }}
+                  onKeyDown={e => e.stopPropagation()}
+                  style={{
+                    background: '#1a1a1a',
+                    border: 'none',
+                    borderBottom: '1px solid #333',
+                    outline: 'none',
+                    color: '#eee',
+                    fontSize: 12,
+                    padding: '6px 12px',
+                    width: '100%',
+                    boxSizing: 'border-box',
+                  }}
+                />
+                {categoryValues.length === 0 && (
+                  <div style={{ padding: '6px 12px', fontSize: 11, color: '#555' }}>
+                    {categorySearch ? 'No matches' : 'loading...'}
+                  </div>
+                )}
+                {categoryValues.map(v => (
+                  <div
+                    key={v}
+                    onMouseDown={e => { e.preventDefault(); pickCategoryValue(activeCategory, v); }}
+                    style={{
+                      padding: '4px 12px',
+                      fontSize: 12,
+                      color: '#ccc',
+                      cursor: 'pointer',
+                      whiteSpace: 'nowrap',
+                    }}
+                    onMouseEnter={e => { (e.currentTarget as HTMLDivElement).style.background = '#333'; }}
+                    onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.background = 'transparent'; }}
+                  >
+                    {v}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
 
       {/* Chips */}
       {state.filters.map((chip, i) => {
@@ -253,92 +366,7 @@ export function FilterBar({ state, dispatch }: Props) {
         )}
       </div>
 
-      {/* "+" button */}
-      <div ref={pickerRef} style={{ position: 'relative' }}>
-        <span
-          onClick={() => {
-            setShowCategoryPicker(v => !v);
-            setActiveCategory(null);
-            setCategoryValues([]);
-          }}
-          style={{
-            cursor: 'pointer',
-            color: '#888',
-            fontSize: 16,
-            lineHeight: '1',
-            padding: '0 4px',
-            borderRadius: 3,
-            userSelect: 'none',
-          }}
-          title="Add filter"
-        >+</span>
-
-        {/* Category picker dropdown */}
-        {showCategoryPicker && (
-          <div style={{
-            position: 'absolute',
-            top: '100%',
-            right: 0,
-            zIndex: 100,
-            background: '#252525',
-            border: '1px solid #444',
-            borderRadius: 4,
-            minWidth: 140,
-            boxShadow: '0 4px 12px rgba(0,0,0,0.5)',
-            display: 'flex',
-          }}>
-            {/* Category list */}
-            <div style={{ borderRight: activeCategory ? '1px solid #333' : 'none' }}>
-              {CATEGORIES.map(({ key, label }) => {
-                const colors = chipColors[key] || chipColors.path;
-                return (
-                  <div
-                    key={key}
-                    onMouseEnter={() => openCategory(key)}
-                    onClick={() => openCategory(key)}
-                    style={{
-                      padding: '6px 12px',
-                      fontSize: 12,
-                      color: activeCategory === key ? colors.text : '#bbb',
-                      background: activeCategory === key ? '#2e2e2e' : 'transparent',
-                      cursor: 'pointer',
-                      whiteSpace: 'nowrap',
-                    }}
-                  >
-                    {label}
-                  </div>
-                );
-              })}
-            </div>
-
-            {/* Values sub-list */}
-            {activeCategory && (
-              <div style={{ maxHeight: 200, overflowY: 'auto' }}>
-                {categoryValues.length === 0 && (
-                  <div style={{ padding: '6px 12px', fontSize: 11, color: '#555' }}>loading...</div>
-                )}
-                {categoryValues.map(v => (
-                  <div
-                    key={v}
-                    onMouseDown={e => { e.preventDefault(); pickCategoryValue(activeCategory, v); }}
-                    style={{
-                      padding: '4px 12px',
-                      fontSize: 12,
-                      color: '#ccc',
-                      cursor: 'pointer',
-                      whiteSpace: 'nowrap',
-                    }}
-                    onMouseEnter={e => { (e.currentTarget as HTMLDivElement).style.background = '#333'; }}
-                    onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.background = 'transparent'; }}
-                  >
-                    {v}
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
-      </div>
+      <span style={{ color: '#888', fontSize: 12 }}>&#128269;</span>
 
       {/* Active free-text badge */}
       {state.freeText && !inputValue && (

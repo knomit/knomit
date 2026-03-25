@@ -31,7 +31,7 @@ function TreeView({ state, dispatch }: Props) {
     const entities = state.filters.filter(f => f.category === 'entity').map(f => f.value);
     const types = state.filters.filter(f => f.category === 'type').map(f => f.value);
     const eps = state.filters.filter(f => f.category === 'ep').map(f => f.value);
-    api.search(state.repo, state.freeText, path, 0, { types, eps }).then(r => {
+    api.search(state.repo, state.freeText, path, 0, { types, eps, domains, entities }).then(r => {
       // Convert search results to DirChild-like entries
       const items: DirChild[] = (r.results || []).map(sr => ({
         name: sr.path.split('/').pop() || sr.path,
@@ -46,8 +46,6 @@ function TreeView({ state, dispatch }: Props) {
         dispatch({ type: 'SELECT_FACT', path: items[0].fullPath });
       }
     }).catch(() => setChildren([]));
-    // Note: domains/entities are passed through the query string via parseSearchQuery
-    void domains; void entities;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [path, state.headCommit, state.freeText, shouldSearch, state.repo, state.filters]);
 

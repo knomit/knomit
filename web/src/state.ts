@@ -107,6 +107,9 @@ function pushNav(s: AppState): NavEntry[] {
 }
 
 export function currentPath(state: AppState): string {
+  // Path filter chip takes precedence over currentPath (directory clicks add a path chip)
+  const pathChip = state.filters.find(f => f.category === 'path');
+  if (pathChip) return pathChip.value;
   return state.currentPath || state.ontologyRoot || 'kb';
 }
 

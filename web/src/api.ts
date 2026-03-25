@@ -218,13 +218,15 @@ export const api = {
     return fetch(`${base(repo)}/fact?${p}`).then(r => { if (!r.ok) throw new Error(r.statusText); return r.json(); });
   },
   search: (repo: string, q: string, path = '', minConfidence = 0,
-    opts?: { types?: string[]; eps?: string[] }
+    opts?: { types?: string[]; eps?: string[]; domains?: string[]; entities?: string[] }
   ): Promise<{ results: SearchResult[] }> => {
     const { text, domains, entities } = parseSearchQuery(q);
+    const allDomains = [...domains, ...(opts?.domains || [])];
+    const allEntities = [...entities, ...(opts?.entities || [])];
     const p = new URLSearchParams({ limit: '50' });
     if (text) p.set('q', text);
-    if (domains.length) p.set('domain', domains.join(','));
-    if (entities.length) p.set('entities', entities.join(','));
+    if (allDomains.length) p.set('domain', allDomains.join(','));
+    if (allEntities.length) p.set('entities', allEntities.join(','));
     if (path) p.set('path', path);
     if (minConfidence) p.set('min_confidence', String(minConfidence));
     if (opts?.types?.length) p.set('type', opts.types.join(','));

@@ -15,6 +15,7 @@ package store
 import (
 	"database/sql"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 
@@ -261,29 +262,34 @@ func (idx *Index) Completions(category, prefix string, limit int) ([]string, err
 	case "ep":
 		return []string{"learn", "update", "retract", "subsume", "synthesize", "sync"}, nil
 	case "path":
-		rows, err := idx.db.Query(
-			`SELECT DISTINCT CASE
-				WHEN instr(substr(path, ?+1), '/') > 0
-				THEN substr(path, 1, ?+instr(substr(path, ?+1), '/')-1)
-				ELSE path
-			END AS dir FROM facts WHERE path LIKE ? LIMIT ?`,
-			len(prefix)+1, len(prefix), len(prefix)+1, prefix+"%", limit,
-		)
+		rows, err := idx.db.Query(`SELECT DISTINCT path FROM facts WHERE path LIKE ? LIMIT 500`, prefix+"%")
 		if err != nil {
 			return nil, err
 		}
 		defer rows.Close()
-		var vals []string
-		seen := map[string]bool{}
+		dirs := map[string]bool{}
+		prefixLen := len(prefix)
 		for rows.Next() {
-			var v string
-			rows.Scan(&v)
-			if v != "" && !seen[v] {
-				vals = append(vals, v)
-				seen[v] = true
+			var p string
+			rows.Scan(&p)
+			// Find the next '/' after the prefix to extract directory components
+			rest := p[prefixLen:]
+			if i := strings.Index(rest, "/"); i >= 0 {
+				dirs[p[:prefixLen+i]] = true
 			}
 		}
-		return vals, rows.Err()
+		if err := rows.Err(); err != nil {
+			return nil, err
+		}
+		vals := make([]string, 0, len(dirs))
+		for d := range dirs {
+			vals = append(vals, d)
+		}
+		sort.Strings(vals)
+		if len(vals) > limit {
+			vals = vals[:limit]
+		}
+		return vals, nil
 	default:
 		return nil, fmt.Errorf("unknown completion category: %s", category)
 	}
