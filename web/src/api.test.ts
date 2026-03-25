@@ -111,4 +111,25 @@ describe('parseFilterQuery', () => {
     expect(r.chips).toHaveLength(0);
     expect(r.text).toBe('');
   });
+
+  it('multiple ep chips for history filtering', () => {
+    const r = parseFilterQuery('ep:learn ep:retract');
+    expect(r.chips).toHaveLength(2);
+    expect(r.chips[0]).toEqual({ category: 'ep', value: 'learn' });
+    expect(r.chips[1]).toEqual({ category: 'ep', value: 'retract' });
+    expect(r.text).toBe('');
+  });
+
+  it('ep chip with free text for commit message search', () => {
+    const r = parseFilterQuery('ep:retract cybersecurity apt28');
+    expect(r.chips).toEqual([{ category: 'ep', value: 'retract' }]);
+    expect(r.text).toBe('cybersecurity apt28');
+  });
+
+  it('ep and domain chips can coexist', () => {
+    const r = parseFilterQuery('ep:learn domain:go');
+    expect(r.chips).toHaveLength(2);
+    expect(r.chips).toContainEqual({ category: 'ep', value: 'learn' });
+    expect(r.chips).toContainEqual({ category: 'domain', value: 'go' });
+  });
 });

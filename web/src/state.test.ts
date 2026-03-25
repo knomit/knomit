@@ -645,3 +645,111 @@ describe('free text and filter chips coexist', () => {
     expect(currentPath(s)).toBe('kb/tech');
   });
 });
+
+// ─── Regression: history mode episode filtering ─────────────────────────────
+
+describe('episode (ep) chips in history mode', () => {
+  it('ep chip can be added alongside other filters', () => {
+    let s: AppState = init;
+    s = reducer(s, { type: 'SET_VIEW', view: 'history' });
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'ep', value: 'learn' } });
+    expect(s.filters).toHaveLength(1);
+    expect(s.filters[0]).toEqual({ category: 'ep', value: 'learn' });
+  });
+
+  it('multiple ep chips accumulate (OR semantics)', () => {
+    let s: AppState = init;
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'ep', value: 'learn' } });
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'ep', value: 'retract' } });
+    const epChips = s.filters.filter(f => f.category === 'ep');
+    expect(epChips).toHaveLength(2);
+    expect(epChips.map(c => c.value).sort()).toEqual(['learn', 'retract']);
+  });
+
+  it('ep chips persist across view switches', () => {
+    let s: AppState = init;
+    s = reducer(s, { type: 'SET_VIEW', view: 'history' });
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'ep', value: 'learn' } });
+    s = reducer(s, { type: 'SET_VIEW', view: 'tree' });
+    expect(s.filters.find(f => f.category === 'ep')!.value).toBe('learn');
+    s = reducer(s, { type: 'SET_VIEW', view: 'history' });
+    expect(s.filters.find(f => f.category === 'ep')!.value).toBe('learn');
+  });
+
+  it('CLEAR_FILTERS removes ep chips', () => {
+    let s: AppState = init;
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'ep', value: 'learn' } });
+    s = reducer(s, { type: 'CLEAR_FILTERS' });
+    expect(s.filters).toHaveLength(0);
+  });
+
+  it('ep chip + freeText coexist for history filtering', () => {
+    let s: AppState = init;
+    s = reducer(s, { type: 'SET_VIEW', view: 'history' });
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'ep', value: 'retract' } });
+    s = reducer(s, { type: 'SET_FREE_TEXT', text: 'cybersecurity' });
+    expect(s.filters).toHaveLength(1);
+    expect(s.filters[0]).toEqual({ category: 'ep', value: 'retract' });
+    expect(s.freeText).toBe('cybersecurity');
+  });
+});
+
+// ─── Regression: SELECT_COMMIT behavior ─────────────────────────────────────
+
+describe('SELECT_COMMIT in history mode', () => {
+  it('sets historyCommit without clearing selectedFact', () => {
+    let s: AppState = { ...init, view: 'history', selectedFact: 'kb/old.md' };
+    s = reducer(s, { type: 'SELECT_COMMIT', commit: 'abc123' });
+    expect(s.historyCommit).toBe('abc123');
+    expect(s.selectedFact).toBe('kb/old.md');
+  });
+
+  it('does not push to navStack', () => {
+    const s = reducer(init, { type: 'SELECT_COMMIT', commit: 'abc123' });
+    expect(s.navStack).toHaveLength(0);
+  });
+
+  it('NAV_BACK after selecting facts in different commits restores previous fact', () => {
+    let s: AppState = { ...init, view: 'history' };
+    s = reducer(s, { type: 'SELECT_COMMIT', commit: 'aaa' });
+    s = reducer(s, { type: 'SELECT_FACT', path: 'kb/fact1.md' });
+    // At this point navStack has: {selectedFact: null, historyCommit: null}
+    // Now select a new commit + fact
+    s = reducer(s, { type: 'SELECT_COMMIT', commit: 'bbb' });
+    s = reducer(s, { type: 'SELECT_FACT', path: 'kb/fact2.md' });
+    // navStack now has: [{null, null}, {fact1, bbb}]
+    // Go back — restores fact1 (SELECT_COMMIT doesn't push, so historyCommit stays bbb)
+    s = reducer(s, { type: 'NAV_BACK' });
+    expect(s.selectedFact).toBe('kb/fact1.md');
+  });
+
+  it('SELECT_FACT in history captures historyCommit in navStack', () => {
+    let s: AppState = { ...init, view: 'history', historyCommit: 'abc' };
+    s = reducer(s, { type: 'SELECT_FACT', path: 'kb/fact1.md' });
+    // NavStack should have captured historyCommit: 'abc'
+    expect(s.navStack[0].historyCommit).toBe('abc');
+  });
+});
+
+// ─── Regression: history mode + fact mode filter isolation ──────────────────
+
+describe('filter isolation between fact and history modes', () => {
+  it('ep chips added in history mode survive switch to tree and back', () => {
+    let s: AppState = init;
+    s = reducer(s, { type: 'SET_VIEW', view: 'history' });
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'ep', value: 'learn' } });
+    s = reducer(s, { type: 'SET_FREE_TEXT', text: 'goroutine' });
+    // Switch to tree
+    s = reducer(s, { type: 'SET_VIEW', view: 'tree' });
+    // ep chip and freeText should still be there
+    expect(s.filters.find(f => f.category === 'ep')!.value).toBe('learn');
+    expect(s.freeText).toBe('goroutine');
+  });
+
+  it('domain chips added in tree mode survive switch to history', () => {
+    let s: AppState = init;
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'domain', value: 'go' } });
+    s = reducer(s, { type: 'SET_VIEW', view: 'history' });
+    expect(s.filters.find(f => f.category === 'domain')!.value).toBe('go');
+  });
+});
