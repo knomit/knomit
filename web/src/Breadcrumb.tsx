@@ -79,7 +79,7 @@ export function Breadcrumb({ state, dispatch }: Props) {
       <div style={{ flex: 1 }} />
 
       {/* View switcher — right-aligned */}
-      <div style={{ display: 'flex', gap: 2, background: '#252525', borderRadius: 4, padding: 2 }}>
+      <div style={{ display: 'flex', gap: 2, background: '#1a1a1a', borderRadius: 4, padding: 2 }}>
         {viewButtons.map(({ view, Icon, label }) => {
           const active = state.view === view;
           return (
