@@ -10,22 +10,11 @@ describe('reducer — view', () => {
     expect(s.navStack[0].view).toBe('tree');
   });
 
-  it('SET_VIEW clears selectedFact', () => {
-    const s = { ...init, selectedFact: 'kb/foo.md' };
+  it('SET_VIEW clears leftSelection and rightSelection', () => {
+    const s = { ...init, leftSelection: 'kb/foo.md' };
     const next = reducer(s, { type: 'SET_VIEW', view: 'chrono' });
-    expect(next.selectedFact).toBeNull();
-  });
-
-  it('SET_VIEW clears historyCommit when leaving history', () => {
-    const s = { ...init, view: 'history' as const, historyCommit: 'abc123' };
-    const next = reducer(s, { type: 'SET_VIEW', view: 'tree' });
-    expect(next.historyCommit).toBeNull();
-  });
-
-  it('SET_VIEW keeps historyCommit when staying in history', () => {
-    const s = { ...init, view: 'history' as const, historyCommit: 'abc123' };
-    const next = reducer(s, { type: 'SET_VIEW', view: 'history' });
-    expect(next.historyCommit).toBe('abc123');
+    expect(next.leftSelection).toBeNull();
+    expect(next.rightSelection).toBeNull();
   });
 
   it('SET_VIEW clears rightPanelFocused', () => {
@@ -72,6 +61,14 @@ describe('reducer — filters', () => {
     expect(s.navStack.length).toBe(before + 1);
   });
 
+  it('REMOVE_FILTER clears both selections', () => {
+    let s: AppState = { ...init, leftSelection: 'kb/foo.md', rightSelection: 'kb/bar.md' };
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'domain', value: 'a' } });
+    s = reducer(s, { type: 'REMOVE_FILTER', index: 0 });
+    expect(s.leftSelection).toBeNull();
+    expect(s.rightSelection).toBeNull();
+  });
+
   it('SET_FILTERS replaces all filters and pushes nav', () => {
     const chips: FilterChip[] = [{ category: 'type', value: 'fact' }];
     const s = reducer(init, { type: 'SET_FILTERS', filters: chips });
@@ -85,24 +82,25 @@ describe('reducer — filters', () => {
     expect(s.navStack.length).toBe(0);
   });
 
-  it('CLEAR_FILTERS clears filters, freeText, selectedFact and pushes nav', () => {
-    let s: AppState = { ...init, filters: [{ category: 'domain', value: 'tech' }], freeText: 'q', selectedFact: 'kb/f.md' };
+  it('CLEAR_FILTERS clears filters, freeText, selections and pushes nav', () => {
+    let s: AppState = { ...init, filters: [{ category: 'domain', value: 'tech' }], freeText: 'q', leftSelection: 'kb/f.md' };
     s = reducer(s, { type: 'CLEAR_FILTERS' });
     expect(s.filters).toHaveLength(0);
     expect(s.freeText).toBe('');
-    expect(s.selectedFact).toBeNull();
+    expect(s.leftSelection).toBeNull();
+    expect(s.rightSelection).toBeNull();
     expect(s.navStack.length).toBe(1);
   });
 });
 
 describe('reducer — nav', () => {
-  it('NAV_BACK restores previous view/selectedFact/filters/historyCommit/freeText', () => {
-    let s: AppState = { ...init, selectedFact: 'kb/a.md', freeText: 'q' };
+  it('NAV_BACK restores previous view/selections/filters/freeText', () => {
+    let s: AppState = { ...init, leftSelection: 'kb/a.md', freeText: 'q' };
     s = reducer(s, { type: 'SET_VIEW', view: 'chrono' });
     s = reducer(s, { type: 'NAV_BACK' });
     expect(s.view).toBe('tree');
-    // SET_VIEW pushes the state before it cleared selectedFact, so restoring goes back to it
-    expect(s.selectedFact).toBe('kb/a.md');
+    // SET_VIEW pushes the state before it cleared selections, so restoring goes back to it
+    expect(s.leftSelection).toBe('kb/a.md');
     expect(s.freeText).toBe('q');
     expect(s.navStack.length).toBe(0);
   });
@@ -137,57 +135,85 @@ describe('reducer — nav', () => {
 });
 
 describe('currentPath()', () => {
-  it('returns currentPath from state', () => {
-    const s = { ...init, currentPath: 'kb/tech' };
+  it('returns ontologyRoot when no path chip', () => {
+    const s = { ...init, ontologyRoot: 'kb/tech' };
     expect(currentPath(s)).toBe('kb/tech');
   });
 
-  it('returns ontologyRoot when currentPath is empty', () => {
-    const s = { ...init, currentPath: '', ontologyRoot: 'knowledge' };
+  it('returns path chip value when present', () => {
+    const s = { ...init, filters: [{ category: 'path' as const, value: 'kb/technology/ai' }] };
+    expect(currentPath(s)).toBe('kb/technology/ai');
+  });
+
+  it('returns ontologyRoot when no path chip exists', () => {
+    const s = { ...init, ontologyRoot: 'knowledge' };
     expect(currentPath(s)).toBe('knowledge');
   });
 
   it('returns kb fallback when both empty', () => {
-    const s = { ...init, currentPath: '', ontologyRoot: '' };
+    const s = { ...init, ontologyRoot: '' };
     expect(currentPath(s)).toBe('kb');
   });
 });
 
 describe('reducer — NAVIGATE', () => {
-  it('sets currentPath and pushes nav', () => {
+  it('replaces path chip and pushes nav', () => {
     const s = reducer(init, { type: 'NAVIGATE', path: 'kb/tech' });
-    expect(s.currentPath).toBe('kb/tech');
-    expect(s.selectedFact).toBeNull();
+    expect(currentPath(s)).toBe('kb/tech');
+    expect(s.leftSelection).toBeNull();
     expect(s.navStack.length).toBe(1);
+  });
+
+  it('does not affect non-path filter chips', () => {
+    let s: AppState = init;
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'domain', value: 'go' } });
+    s = reducer(s, { type: 'NAVIGATE', path: 'kb/tech' });
+    expect(currentPath(s)).toBe('kb/tech');
+    expect(s.filters.find(f => f.category === 'domain')!.value).toBe('go');
   });
 });
 
 describe('reducer — GO_UP', () => {
-  it('removes last path segment', () => {
-    const s0 = { ...init, currentPath: 'kb/tech/go' };
+  it('removes last path segment from path chip', () => {
+    let s0 = reducer(init, { type: 'NAVIGATE', path: 'kb/tech/go' });
     const s = reducer(s0, { type: 'GO_UP' });
-    expect(s.currentPath).toBe('kb/tech');
+    expect(currentPath(s)).toBe('kb/tech');
   });
 
   it('does nothing at root', () => {
-    const s0 = { ...init, currentPath: 'kb' };
-    const s = reducer(s0, { type: 'GO_UP' });
-    expect(s.currentPath).toBe('kb');
+    // With ontologyRoot='kb' and no path chip, currentPath = 'kb' (single segment)
+    const s = reducer(init, { type: 'GO_UP' });
+    expect(currentPath(s)).toBe('kb');
+  });
+
+  it('clears selections', () => {
+    let s = reducer(init, { type: 'NAVIGATE', path: 'kb/tech' });
+    s = { ...s, leftSelection: 'kb/tech/fact.md' };
+    s = reducer(s, { type: 'GO_UP' });
+    expect(s.leftSelection).toBeNull();
   });
 });
 
 describe('reducer — SELECT_FACT', () => {
-  it('sets selectedFact and pushes nav', () => {
+  it('sets leftSelection in tree mode and pushes nav', () => {
     const s = reducer(init, { type: 'SELECT_FACT', path: 'kb/foo.md' });
-    expect(s.selectedFact).toBe('kb/foo.md');
+    expect(s.leftSelection).toBe('kb/foo.md');
     expect(s.navStack.length).toBe(1);
+  });
+
+  it('sets rightSelection in history mode', () => {
+    const s0: AppState = { ...init, view: 'history', leftSelection: 'abc123' };
+    const s = reducer(s0, { type: 'SELECT_FACT', path: 'kb/foo.md' });
+    expect(s.rightSelection).toBe('kb/foo.md');
+    expect(s.leftSelection).toBe('abc123'); // commit unchanged
   });
 });
 
 describe('reducer — SELECT_COMMIT', () => {
-  it('sets historyCommit and pushes nav', () => {
+  it('sets leftSelection and clears rightSelection', () => {
     const s = reducer(init, { type: 'SELECT_COMMIT', commit: 'abc123' });
-    expect(s.historyCommit).toBe('abc123');
+    expect(s.leftSelection).toBe('abc123');
+    expect(s.rightSelection).toBeNull();
     expect(s.navStack.length).toBe(1);
   });
 });
@@ -200,11 +226,11 @@ describe('reducer — SET_REPO', () => {
     s = reducer(s, { type: 'SET_REPO', repo: 'work' });
     expect(s.repo).toBe('work');
     expect(s.view).toBe('tree');
-    expect(s.selectedFact).toBeNull();
+    expect(s.leftSelection).toBeNull();
+    expect(s.rightSelection).toBeNull();
     expect(s.filters).toHaveLength(0);
     expect(s.freeText).toBe('');
     expect(s.navStack).toHaveLength(0);
-    expect(s.historyCommit).toBeNull();
     expect(s.headCommit).toBe('');
     expect(s.branch).toBe('');
     expect(s.remoteError).toBe('');
@@ -299,20 +325,19 @@ describe('reducer — shared infrastructure', () => {
 
 // ─── Regression tests for breadcrumb/path sync bugs ─────────────────────────
 
-describe('currentPath — path chip takes precedence over currentPath', () => {
-  it('returns path chip value when both chip and currentPath exist', () => {
+describe('currentPath — path chip takes precedence', () => {
+  it('returns path chip value when both chip and ontologyRoot exist', () => {
     const s: AppState = {
       ...init,
-      currentPath: 'kb/stale',
       filters: [{ category: 'path', value: 'kb/technology/ai' }],
     };
     expect(currentPath(s)).toBe('kb/technology/ai');
   });
 
-  it('falls back to currentPath when no path chip', () => {
+  it('falls back to ontologyRoot when no path chip', () => {
     const s: AppState = {
       ...init,
-      currentPath: 'kb/technology',
+      ontologyRoot: 'kb/technology',
       filters: [{ category: 'domain', value: 'go' }],
     };
     expect(currentPath(s)).toBe('kb/technology');
@@ -348,7 +373,7 @@ describe('breadcrumb and path chip stay in sync', () => {
 });
 
 describe('removing path chip resets to ontology root', () => {
-  it('REMOVE_FILTER on path chip resets currentPath to ontologyRoot', () => {
+  it('REMOVE_FILTER on path chip resets to ontologyRoot', () => {
     let s: AppState = { ...init, ontologyRoot: 'kb' };
     s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'path', value: 'kb/technology/ai' } });
     expect(currentPath(s)).toBe('kb/technology/ai');
@@ -357,11 +382,10 @@ describe('removing path chip resets to ontology root', () => {
     const pathIdx = s.filters.findIndex(f => f.category === 'path');
     s = reducer(s, { type: 'REMOVE_FILTER', index: pathIdx });
     expect(s.filters.filter(f => f.category === 'path')).toHaveLength(0);
-    expect(s.currentPath).toBe('kb');
     expect(currentPath(s)).toBe('kb');
   });
 
-  it('REMOVE_FILTER on non-path chip does not reset currentPath', () => {
+  it('REMOVE_FILTER on non-path chip does not reset path', () => {
     let s: AppState = init;
     s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'path', value: 'kb/tech' } });
     s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'domain', value: 'go' } });
@@ -372,13 +396,12 @@ describe('removing path chip resets to ontology root', () => {
     expect(currentPath(s)).toBe('kb/tech'); // path chip unchanged
   });
 
-  it('CLEAR_FILTERS resets currentPath to ontologyRoot', () => {
+  it('CLEAR_FILTERS resets to ontologyRoot', () => {
     let s: AppState = { ...init, ontologyRoot: 'kb' };
     s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'path', value: 'kb/deep/nested' } });
     s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'domain', value: 'go' } });
     s = reducer(s, { type: 'CLEAR_FILTERS' });
     expect(s.filters).toHaveLength(0);
-    expect(s.currentPath).toBe('kb');
     expect(currentPath(s)).toBe('kb');
   });
 });
@@ -404,11 +427,11 @@ describe('back navigation restores path state', () => {
 // ─── Regression: NAVIGATE/GO_UP actions ─────────────────────────────────────
 
 describe('NAVIGATE action', () => {
-  it('sets currentPath directly and clears selectedFact', () => {
-    let s: AppState = { ...init, selectedFact: 'kb/old.md' };
+  it('sets path chip and clears selections', () => {
+    let s: AppState = { ...init, leftSelection: 'kb/old.md' };
     s = reducer(s, { type: 'NAVIGATE', path: 'kb/technology/ai' });
-    expect(s.currentPath).toBe('kb/technology/ai');
-    expect(s.selectedFact).toBeNull();
+    expect(currentPath(s)).toBe('kb/technology/ai');
+    expect(s.leftSelection).toBeNull();
     expect(s.navStack.length).toBe(1);
   });
 
@@ -416,29 +439,30 @@ describe('NAVIGATE action', () => {
     let s: AppState = init;
     s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'domain', value: 'go' } });
     s = reducer(s, { type: 'NAVIGATE', path: 'kb/tech' });
-    expect(s.currentPath).toBe('kb/tech');
+    expect(currentPath(s)).toBe('kb/tech');
     expect(s.filters.find(f => f.category === 'domain')!.value).toBe('go');
   });
 });
 
 describe('GO_UP action', () => {
-  it('removes last path segment from currentPath', () => {
-    const s = reducer({ ...init, currentPath: 'kb/tech/go' }, { type: 'GO_UP' });
-    expect(s.currentPath).toBe('kb/tech');
+  it('removes last path segment via path chip', () => {
+    let s = reducer(init, { type: 'NAVIGATE', path: 'kb/tech/go' });
+    s = reducer(s, { type: 'GO_UP' });
+    expect(currentPath(s)).toBe('kb/tech');
   });
 
   it('does nothing at single-segment root', () => {
-    const s = reducer({ ...init, currentPath: 'kb' }, { type: 'GO_UP' });
-    expect(s.currentPath).toBe('kb');
+    // ontologyRoot='kb', no path chip => currentPath='kb' (single segment)
+    const s = reducer(init, { type: 'GO_UP' });
+    expect(currentPath(s)).toBe('kb');
     expect(s.navStack.length).toBe(0); // no nav push when no-op
   });
 
-  it('clears selectedFact', () => {
-    const s = reducer(
-      { ...init, currentPath: 'kb/tech', selectedFact: 'kb/tech/fact.md' },
-      { type: 'GO_UP' },
-    );
-    expect(s.selectedFact).toBeNull();
+  it('clears selections', () => {
+    let s = reducer(init, { type: 'NAVIGATE', path: 'kb/tech' });
+    s = { ...s, leftSelection: 'kb/tech/fact.md' };
+    s = reducer(s, { type: 'GO_UP' });
+    expect(s.leftSelection).toBeNull();
   });
 });
 
@@ -490,24 +514,25 @@ describe('multiple entity chips accumulate (AND semantics)', () => {
   });
 });
 
-// ─── Regression: SET_STATUS updates currentPath on first load ───────────────
+// ─── Regression: SET_STATUS ─────────────────────────────────────────────────
 
-describe('SET_STATUS initializes currentPath from ontologyRoot', () => {
-  it('updates currentPath when it is the default kb value', () => {
+describe('SET_STATUS initializes ontologyRoot', () => {
+  it('updates ontologyRoot on first load', () => {
     const s = reducer(init, {
       type: 'SET_STATUS', head: 'abc', branch: 'main',
       embeddingsEnabled: true, ontologyRoot: 'knowledge',
     });
-    expect(s.currentPath).toBe('knowledge');
+    expect(s.ontologyRoot).toBe('knowledge');
+    expect(currentPath(s)).toBe('knowledge');
   });
 
-  it('does not overwrite currentPath if user has navigated away from default', () => {
-    let s: AppState = { ...init, currentPath: 'kb/custom' };
+  it('does not overwrite ontologyRoot if already set and new is empty', () => {
+    let s: AppState = { ...init, ontologyRoot: 'kb/custom' };
     s = reducer(s, {
       type: 'SET_STATUS', head: 'abc', branch: 'main',
-      embeddingsEnabled: true, ontologyRoot: 'knowledge',
+      embeddingsEnabled: true, ontologyRoot: '',
     });
-    expect(s.currentPath).toBe('kb/custom');
+    expect(s.ontologyRoot).toBe('kb/custom');
   });
 });
 
@@ -574,7 +599,7 @@ describe('free text state management', () => {
     expect(s.freeText).toBe('bob is looking for work');
     s = reducer(s, { type: 'SELECT_FACT', path: 'kb/result.md' });
     expect(s.freeText).toBe('bob is looking for work');
-    expect(s.selectedFact).toBe('kb/result.md');
+    expect(s.leftSelection).toBe('kb/result.md');
   });
 
   it('SET_VIEW does NOT clear freeText (filters persist across views)', () => {
@@ -697,11 +722,11 @@ describe('episode (ep) chips in history mode', () => {
 // ─── Regression: SELECT_COMMIT behavior ─────────────────────────────────────
 
 describe('SELECT_COMMIT in history mode', () => {
-  it('sets historyCommit without clearing selectedFact', () => {
-    let s: AppState = { ...init, view: 'history', selectedFact: 'kb/old.md' };
+  it('sets leftSelection (commit) and clears rightSelection', () => {
+    let s: AppState = { ...init, view: 'history', rightSelection: 'kb/old.md' };
     s = reducer(s, { type: 'SELECT_COMMIT', commit: 'abc123' });
-    expect(s.historyCommit).toBe('abc123');
-    expect(s.selectedFact).toBe('kb/old.md');
+    expect(s.leftSelection).toBe('abc123');
+    expect(s.rightSelection).toBeNull();
   });
 
   it('pushes to navStack', () => {
@@ -709,25 +734,26 @@ describe('SELECT_COMMIT in history mode', () => {
     expect(s.navStack).toHaveLength(1);
   });
 
-  it('NAV_BACK after selecting facts in different commits restores previous fact', () => {
+  it('NAV_BACK after selecting facts in different commits restores previous state', () => {
     let s: AppState = { ...init, view: 'history' };
     s = reducer(s, { type: 'SELECT_COMMIT', commit: 'aaa' });
     s = reducer(s, { type: 'SELECT_FACT', path: 'kb/fact1.md' });
-    expect(s.selectedFact).toBe('kb/fact1.md');
+    expect(s.rightSelection).toBe('kb/fact1.md');
     s = reducer(s, { type: 'SELECT_COMMIT', commit: 'bbb' });
-    // selectedFact preserved (not cleared)
-    expect(s.selectedFact).toBe('kb/fact1.md');
+    // SELECT_COMMIT clears rightSelection
+    expect(s.rightSelection).toBeNull();
     s = reducer(s, { type: 'SELECT_FACT', path: 'kb/fact2.md' });
-    // Go back — restores fact1 with historyCommit bbb (SELECT_COMMIT didn't push)
+    // Go back — restores before fact2 selection
     s = reducer(s, { type: 'NAV_BACK' });
-    expect(s.selectedFact).toBe('kb/fact1.md');
+    expect(s.rightSelection).toBeNull(); // cleared by SELECT_COMMIT
+    expect(s.leftSelection).toBe('bbb');
   });
 
-  it('SELECT_FACT in history captures historyCommit in navStack', () => {
-    let s: AppState = { ...init, view: 'history', historyCommit: 'abc' };
+  it('SELECT_FACT in history captures leftSelection in navStack', () => {
+    let s: AppState = { ...init, view: 'history', leftSelection: 'abc' };
     s = reducer(s, { type: 'SELECT_FACT', path: 'kb/fact1.md' });
-    // NavStack should have captured historyCommit: 'abc'
-    expect(s.navStack[0].historyCommit).toBe('abc');
+    // NavStack should have captured leftSelection: 'abc'
+    expect(s.navStack[0].leftSelection).toBe('abc');
   });
 });
 
@@ -766,13 +792,13 @@ describe('SELECT_COMMIT pushes navStack', () => {
     expect(s.navStack.length).toBe(2);
   });
 
-  it('NAV_BACK after SELECT_COMMIT restores previous historyCommit', () => {
+  it('NAV_BACK after SELECT_COMMIT restores previous leftSelection', () => {
     let s: AppState = { ...init, view: 'history' };
     s = reducer(s, { type: 'SELECT_COMMIT', commit: 'aaa111' });
     s = reducer(s, { type: 'SELECT_COMMIT', commit: 'bbb222' });
-    expect(s.historyCommit).toBe('bbb222');
+    expect(s.leftSelection).toBe('bbb222');
     s = reducer(s, { type: 'NAV_BACK' });
-    expect(s.historyCommit).toBe('aaa111');
+    expect(s.leftSelection).toBe('aaa111');
   });
 });
 
@@ -784,34 +810,35 @@ describe('operation hierarchy — full workflow scenarios', () => {
     // Start in tree, select a fact
     s = reducer(s, { type: 'SELECT_FACT', path: 'kb/tree-fact.md' });
     expect(s.view).toBe('tree');
-    expect(s.selectedFact).toBe('kb/tree-fact.md');
+    expect(s.leftSelection).toBe('kb/tree-fact.md');
 
     // Switch to history
     s = reducer(s, { type: 'SET_VIEW', view: 'history' });
     expect(s.view).toBe('history');
-    expect(s.selectedFact).toBeNull(); // SET_VIEW clears selectedFact
+    expect(s.leftSelection).toBeNull(); // SET_VIEW clears both selections
+    expect(s.rightSelection).toBeNull();
 
     // Select a commit
     s = reducer(s, { type: 'SELECT_COMMIT', commit: 'ccc333' });
-    expect(s.historyCommit).toBe('ccc333');
+    expect(s.leftSelection).toBe('ccc333');
 
-    // Select a fact in history
+    // Select a fact in history (sets rightSelection)
     s = reducer(s, { type: 'SELECT_FACT', path: 'kb/hist-fact.md' });
-    expect(s.selectedFact).toBe('kb/hist-fact.md');
+    expect(s.rightSelection).toBe('kb/hist-fact.md');
 
     // NAV_BACK: restore before fact selection
     s = reducer(s, { type: 'NAV_BACK' });
-    expect(s.selectedFact).toBe(null);
-    expect(s.historyCommit).toBe('ccc333');
+    expect(s.rightSelection).toBeNull();
+    expect(s.leftSelection).toBe('ccc333');
 
     // NAV_BACK: restore before commit selection
     s = reducer(s, { type: 'NAV_BACK' });
-    expect(s.historyCommit).toBeNull();
+    expect(s.leftSelection).toBeNull();
 
     // NAV_BACK: restore before SET_VIEW (back to tree)
     s = reducer(s, { type: 'NAV_BACK' });
     expect(s.view).toBe('tree');
-    expect(s.selectedFact).toBe('kb/tree-fact.md');
+    expect(s.leftSelection).toBe('kb/tree-fact.md');
   });
 
   it('history with ep filter → change filter → NAV_BACK restores previous filter', () => {
@@ -837,7 +864,7 @@ describe('operation hierarchy — full workflow scenarios', () => {
     // Tree mode: select a fact
     s = reducer(s, { type: 'SELECT_FACT', path: 'kb/original.md' });
     expect(s.view).toBe('tree');
-    expect(s.selectedFact).toBe('kb/original.md');
+    expect(s.leftSelection).toBe('kb/original.md');
 
     // Switch to history
     s = reducer(s, { type: 'SET_VIEW', view: 'history' });
@@ -845,29 +872,30 @@ describe('operation hierarchy — full workflow scenarios', () => {
     // Select commit
     s = reducer(s, { type: 'SELECT_COMMIT', commit: 'xxx' });
 
-    // Select fact in history
+    // Select fact in history (rightSelection)
     s = reducer(s, { type: 'SELECT_FACT', path: 'kb/history-fact.md' });
-    expect(s.selectedFact).toBe('kb/history-fact.md');
+    expect(s.rightSelection).toBe('kb/history-fact.md');
 
     // NAV_BACK ×3 should get us back to tree with original fact
-    s = reducer(s, { type: 'NAV_BACK' }); // undo SELECT_FACT
+    s = reducer(s, { type: 'NAV_BACK' }); // undo SELECT_FACT (rightSelection)
     s = reducer(s, { type: 'NAV_BACK' }); // undo SELECT_COMMIT
     s = reducer(s, { type: 'NAV_BACK' }); // undo SET_VIEW → back to tree
 
     expect(s.view).toBe('tree');
-    expect(s.selectedFact).toBe('kb/original.md');
+    expect(s.leftSelection).toBe('kb/original.md');
   });
 
-  it('history mode: SET_VIEW to history clears selectedFact but preserves filters', () => {
+  it('history mode: SET_VIEW to history clears selections but preserves filters', () => {
     let s: AppState = init;
     s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'domain', value: 'go' } });
     s = reducer(s, { type: 'SELECT_FACT', path: 'kb/some-fact.md' });
-    expect(s.selectedFact).toBe('kb/some-fact.md');
+    expect(s.leftSelection).toBe('kb/some-fact.md');
     expect(s.filters).toHaveLength(1);
 
     s = reducer(s, { type: 'SET_VIEW', view: 'history' });
     expect(s.view).toBe('history');
-    expect(s.selectedFact).toBeNull();
+    expect(s.leftSelection).toBeNull();
+    expect(s.rightSelection).toBeNull();
     expect(s.filters).toHaveLength(1);
     expect(s.filters[0]).toEqual({ category: 'domain', value: 'go' });
   });

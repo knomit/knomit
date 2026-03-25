@@ -6,12 +6,13 @@ export interface FilterChip {
 }
 
 export interface NavEntry {
+  repo: string;
+  branch: string;
   view: View;
-  currentPath: string;
-  selectedFact: string | null;
   filters: FilterChip[];
-  historyCommit: string | null;
   freeText: string;
+  leftSelection: string | null;   // tree/chrono: fact path | history: commit hash
+  rightSelection: string | null;  // history only: fact path within commit
 }
 
 export interface ConsoleEntry {
@@ -24,8 +25,8 @@ export interface ConsoleEntry {
 export interface AppState {
   repo: string;
   view: View;
-  currentPath: string;           // directory path for browse/scope
-  selectedFact: string | null;
+  leftSelection: string | null;
+  rightSelection: string | null;
   filters: FilterChip[];
   freeText: string;              // unprefixed search text
   loading: boolean;
@@ -38,7 +39,6 @@ export interface AppState {
   consoleEntries: ConsoleEntry[];
   consoleOpen: boolean;
   consoleHeight: number;
-  historyCommit: string | null;
   navStack: NavEntry[];
   remoteError: string;
   rightPanelFocused: boolean;
@@ -73,8 +73,8 @@ export type Action =
 export const init: AppState = {
   repo: 'knomit',
   view: 'tree',
-  currentPath: 'kb',
-  selectedFact: null,
+  leftSelection: null,
+  rightSelection: null,
   filters: [],
   freeText: '',
   loading: false,
@@ -87,7 +87,6 @@ export const init: AppState = {
   consoleEntries: [],
   consoleOpen: false,
   consoleHeight: 200,
-  historyCommit: null,
   navStack: [],
   remoteError: '',
   rightPanelFocused: false,
@@ -95,12 +94,13 @@ export const init: AppState = {
 
 function pushNav(s: AppState): NavEntry[] {
   const entry: NavEntry = {
+    repo: s.repo,
+    branch: s.branch,
     view: s.view,
-    currentPath: s.currentPath,
-    selectedFact: s.selectedFact,
     filters: [...s.filters],
-    historyCommit: s.historyCommit,
     freeText: s.freeText,
+    leftSelection: s.leftSelection,
+    rightSelection: s.rightSelection,
   };
   const stack = [...s.navStack, entry];
   if (stack.length > 20) stack.shift();
@@ -108,10 +108,12 @@ function pushNav(s: AppState): NavEntry[] {
 }
 
 export function currentPath(state: AppState): string {
-  // Path filter chip takes precedence over currentPath (directory clicks add a path chip)
   const pathChip = state.filters.find(f => f.category === 'path');
-  if (pathChip) return pathChip.value;
-  return state.currentPath || state.ontologyRoot || 'kb';
+  return pathChip?.value || state.ontologyRoot || 'kb';
+}
+
+function replacePathChip(filters: FilterChip[], value: string): FilterChip[] {
+  return [...filters.filter(f => f.category !== 'path'), { category: 'path', value }];
 }
 
 export function reducer(s: AppState, a: Action): AppState {
@@ -120,32 +122,41 @@ export function reducer(s: AppState, a: Action): AppState {
       return {
         ...s,
         view: a.view,
-        historyCommit: a.view !== 'history' ? null : s.historyCommit,
-        selectedFact: null,
+        leftSelection: null,
+        rightSelection: null,
         navStack: pushNav(s),
         rightPanelFocused: false,
       };
     case 'NAVIGATE':
       return {
         ...s,
-        currentPath: a.path,
-        selectedFact: null,
+        filters: replacePathChip(s.filters, a.path),
+        leftSelection: null,
+        rightSelection: null,
         navStack: pushNav(s),
         rightPanelFocused: false,
       };
     case 'GO_UP': {
-      const parts = s.currentPath.split('/');
+      const path = currentPath(s);
+      const parts = path.split('/');
       if (parts.length <= 1) return s;
+      const parent = parts.slice(0, -1).join('/');
       return {
         ...s,
-        currentPath: parts.slice(0, -1).join('/'),
-        selectedFact: null,
+        filters: replacePathChip(s.filters, parent),
+        leftSelection: null,
+        rightSelection: null,
         navStack: pushNav(s),
         rightPanelFocused: false,
       };
     }
     case 'SELECT_FACT':
-      return { ...s, selectedFact: a.path, navStack: pushNav(s) };
+      if (s.view === 'history') {
+        // In history mode, selecting a fact means picking a file within the current commit
+        return { ...s, rightSelection: a.path, navStack: pushNav(s) };
+      }
+      // In tree/chrono, selecting a fact is the primary left panel selection
+      return { ...s, leftSelection: a.path, navStack: pushNav(s) };
     case 'ADD_FILTER': {
       let filters: FilterChip[];
       if (a.chip.category === 'path') {
@@ -157,43 +168,52 @@ export function reducer(s: AppState, a: Action): AppState {
       return { ...s, filters, navStack: pushNav(s) };
     }
     case 'REMOVE_FILTER': {
-      const removed = s.filters[a.index];
       const filters = s.filters.filter((_, i) => i !== a.index);
-      // If removing the path chip, reset currentPath to ontology root
-      const currentPathUpdate = removed?.category === 'path'
-        ? { currentPath: s.ontologyRoot || 'kb' }
-        : {};
-      return { ...s, filters, ...currentPathUpdate, selectedFact: null, navStack: pushNav(s) };
+      return { ...s, filters, leftSelection: null, rightSelection: null, navStack: pushNav(s) };
     }
     case 'SET_FILTERS':
       return { ...s, filters: a.filters, navStack: pushNav(s) };
     case 'SET_FREE_TEXT':
       return { ...s, freeText: a.text };
     case 'CLEAR_FILTERS':
-      return { ...s, filters: [], freeText: '', selectedFact: null, currentPath: s.ontologyRoot || 'kb', navStack: pushNav(s) };
+      return { ...s, filters: [], freeText: '', leftSelection: null, rightSelection: null, navStack: pushNav(s) };
     case 'NAV_BACK': {
       if (s.navStack.length === 0) return s;
       const prev = s.navStack[s.navStack.length - 1];
+      // If repo changed, treat as full reset
+      if (prev.repo !== s.repo) {
+        return {
+          ...s,
+          repo: prev.repo,
+          view: 'tree',
+          leftSelection: null,
+          rightSelection: null,
+          filters: [],
+          freeText: '',
+          headCommit: '',
+          branch: '',
+          navStack: s.navStack.slice(0, -1),
+        };
+      }
       return {
         ...s,
         view: prev.view,
-        currentPath: prev.currentPath,
-        selectedFact: prev.selectedFact,
+        leftSelection: prev.leftSelection,
+        rightSelection: prev.rightSelection,
         filters: prev.filters,
-        historyCommit: prev.historyCommit,
         freeText: prev.freeText,
         navStack: s.navStack.slice(0, -1),
         rightPanelFocused: false,
       };
     }
     case 'SELECT_COMMIT':
-      return { ...s, historyCommit: a.commit, navStack: pushNav(s) };
+      return { ...s, leftSelection: a.commit, rightSelection: null, navStack: pushNav(s) };
     case 'OPEN_REF':
       return {
         ...s,
         view: 'history',
-        historyCommit: a.commit,
-        selectedFact: a.path,
+        leftSelection: a.commit,
+        rightSelection: a.path,
         navStack: pushNav(s),
         rightPanelFocused: false,
       };
@@ -211,7 +231,6 @@ export function reducer(s: AppState, a: Action): AppState {
         branch: a.branch,
         embeddingsEnabled: a.embeddingsEnabled,
         ontologyRoot: a.ontologyRoot || s.ontologyRoot,
-        currentPath: s.currentPath === 'kb' && a.ontologyRoot ? a.ontologyRoot : s.currentPath,
       };
     case 'SET_HEAD':
       return { ...s, headCommit: a.head };
@@ -232,14 +251,13 @@ export function reducer(s: AppState, a: Action): AppState {
         ...s,
         repo: a.repo,
         view: 'tree',
-        currentPath: 'kb',
-        selectedFact: null,
+        leftSelection: null,
+        rightSelection: null,
         filters: [],
         freeText: '',
         headCommit: '',
         branch: '',
         navStack: [],
-        historyCommit: null,
         remoteError: '',
         rightPanelFocused: false,
       };

@@ -63,8 +63,8 @@ function TreeView({ state, dispatch }: Props) {
         return a.name.localeCompare(b.name);
       });
       setChildren(c);
-      if (state.selectedFact) {
-        const factName = state.selectedFact.split('/').pop();
+      if (state.leftSelection) {
+        const factName = state.leftSelection.split('/').pop();
         const idx = c.findIndex(ch => !ch.is_dir && ch.name === factName);
         setSelectedIdx(idx >= 0 ? idx : -1);
       } else {
@@ -72,7 +72,7 @@ function TreeView({ state, dispatch }: Props) {
       }
     }).catch(() => { if (!stale) setChildren([]); });
     return () => { stale = true; };
-  }, [path, state.headCommit, shouldSearch, state.repo, state.selectedFact]);
+  }, [path, state.headCommit, shouldSearch, state.repo, state.leftSelection]);
 
   const moveSelection = useCallback((delta: 1 | -1) => {
     const len = children.length;

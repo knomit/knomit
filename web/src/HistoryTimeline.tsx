@@ -92,13 +92,13 @@ export function HistoryTimeline({ state, dispatch }: Props) {
 
   // Sync selectedIdx when historyCommit changes externally (e.g. NAV_BACK)
   useEffect(() => {
-    if (!state.historyCommit) return;
-    const idx = filteredEntries.findIndex(e => e.commit === state.historyCommit);
+    if (!state.leftSelection) return;
+    const idx = filteredEntries.findIndex(e => e.commit === state.leftSelection);
     if (idx >= 0 && idx !== selectedIdx) {
       setSelectedIdx(idx);
       itemRefs.current[idx]?.scrollIntoView({ block: 'nearest' });
     }
-  }, [state.historyCommit]);
+  }, [state.leftSelection]);
 
   // Keyboard navigation (on filtered entries)
   const navigate = useCallback((delta: 1 | -1) => {

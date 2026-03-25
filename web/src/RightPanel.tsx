@@ -361,6 +361,11 @@ export function RightPanel({ state, dispatch }: { state: AppState; dispatch: Dis
   const [commitDetail, setCommitDetail] = useState<CommitDetail | null>(null);
   const path = currentPath(state);
 
+  // Derive the selected fact path based on view mode
+  const selectedFact = state.view === 'history' ? state.rightSelection : state.leftSelection;
+  // In history mode, leftSelection is the commit hash
+  const historyCommit = state.view === 'history' ? state.leftSelection : null;
+
   // ── Reactive pipeline ──────────────────────────────────────────────────
   //
   // historyCommit changes → fetch commit detail → commitDetail state set
@@ -371,48 +376,48 @@ export function RightPanel({ state, dispatch }: { state: AppState; dispatch: Dis
   // Step 1: historyCommit → commitDetail (+ auto-select first file)
   useEffect(() => {
     let stale = false;
-    if (!state.historyCommit || state.view !== 'history') {
+    if (!historyCommit || state.view !== 'history') {
       setCommitDetail(null);
       return;
     }
-    api.commitDetail(state.repo, state.historyCommit).then(detail => {
+    api.commitDetail(state.repo, historyCommit).then(detail => {
       if (stale) return;
       setCommitDetail(detail);
       const first = (detail.files || [])[0];
       if (first) dispatch({ type: 'SELECT_FACT', path: first.path });
     }).catch(() => { if (!stale) setCommitDetail(null); });
     return () => { stale = true; };
-  }, [state.historyCommit, state.view, state.repo]);
+  }, [historyCommit, state.view, state.repo]);
 
   // Derive the commit to use for fact-fetching.
   // In history mode, use commitDetail's commit hash (ensures detail is loaded).
   // This is the reactive gate: fact-fetch only runs after commitDetail is ready.
   const resolvedCommit = state.view === 'history' && commitDetail ? commitDetail.commit : null;
-  const inHistoryWithFact = !!resolvedCommit && !!state.selectedFact;
+  const inHistoryWithFact = !!resolvedCommit && !!selectedFact;
 
   // Step 2: selectedFact + resolvedCommit → fetch fact
   useEffect(() => {
     let stale = false;
     setError(null);
 
-    if (resolvedCommit && state.selectedFact) {
+    if (resolvedCommit && selectedFact) {
       // Time-travel: fact at specific commit
-      api.fact(state.repo, state.selectedFact, resolvedCommit)
+      api.fact(state.repo, selectedFact, resolvedCommit)
         .then(f => { if (!stale) setFact(f); })
         .catch(e => { if (!stale) setError(String(e)); });
-    } else if (!resolvedCommit && state.view !== 'history' && state.selectedFact) {
+    } else if (!resolvedCommit && state.view !== 'history' && selectedFact) {
       // Normal fact view (tree/chrono)
-      api.fact(state.repo, state.selectedFact)
+      api.fact(state.repo, selectedFact)
         .then(f => { if (!stale) setFact(f); })
         .catch(e => { if (!stale) setError(String(e)); });
-    } else if (!state.selectedFact && state.view !== 'history') {
+    } else if (!selectedFact && state.view !== 'history') {
       // Summary view
       setFact(null);
       api.stats(state.repo, path).then(s => { if (!stale) setStats(s); }).catch(() => { if (!stale) setStats(null); });
       api.activity(state.repo, path).then(a => { if (!stale) setActivity(a); }).catch(() => { if (!stale) setActivity(null); });
     }
     return () => { stale = true; };
-  }, [state.selectedFact, state.headCommit, resolvedCommit, state.view, state.repo, path]);
+  }, [selectedFact, state.headCommit, resolvedCommit, state.view, state.repo, path]);
 
   // Keyboard: right panel focus — ArrowLeft blurs, ArrowUp/Down navigate commit files
   const commitFiles = commitDetail?.files || [];
@@ -427,7 +432,7 @@ export function RightPanel({ state, dispatch }: { state: AppState; dispatch: Dis
       // Navigate commit files with up/down when in history mode
       if (inHistoryWithFact && commitFiles.length > 1 && (e.key === 'ArrowDown' || e.key === 'j' || e.key === 'ArrowUp' || e.key === 'k')) {
         e.preventDefault();
-        const currentIdx = commitFiles.findIndex(f => f.path === state.selectedFact);
+        const currentIdx = commitFiles.findIndex(f => f.path === selectedFact);
         const delta = (e.key === 'ArrowDown' || e.key === 'j') ? 1 : -1;
         const nextIdx = Math.max(0, Math.min(currentIdx + delta, commitFiles.length - 1));
         if (nextIdx !== currentIdx && commitFiles[nextIdx]) {
@@ -437,12 +442,12 @@ export function RightPanel({ state, dispatch }: { state: AppState; dispatch: Dis
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [state.rightPanelFocused, dispatch, inHistoryWithFact, commitFiles, state.selectedFact]);
+  }, [state.rightPanelFocused, dispatch, inHistoryWithFact, commitFiles, selectedFact]);
 
   if (error) return <div style={{ padding: 24, color: '#f44' }}>{error}</div>;
 
   // Summary view: no fact selected
-  if (!state.selectedFact) {
+  if (!selectedFact) {
     const domainEntries = stats ? Object.entries(stats.domains).sort((a, b) => b[1] - a[1]).slice(0, 10) : [];
     const entityEntries = stats ? Object.entries(stats.entities).sort((a, b) => b[1] - a[1]).slice(0, 10) : [];
     const domainCount = stats ? Object.keys(stats.domains).length : 0;
@@ -503,7 +508,7 @@ export function RightPanel({ state, dispatch }: { state: AppState; dispatch: Dis
       {/* Commit panel — shown in history mode */}
       {inHistoryWithFact && commitDetail && <CommitPanel
         detail={commitDetail}
-        selectedFact={state.selectedFact}
+        selectedFact={state.rightSelection}
         onSelectFact={path => { dispatch({ type: 'SELECT_FACT', path }); dispatch({ type: 'FOCUS_RIGHT_PANEL' }); }}
       />}
       <div style={{ flex: 1, overflow: 'auto' }}>
