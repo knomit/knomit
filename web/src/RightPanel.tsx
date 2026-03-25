@@ -222,11 +222,20 @@ function CommitPanel({ detail, selectedFact, onSelectFact }: {
   onSelectFact: (path: string) => void;
 }) {
   const listRef = useRef<HTMLDivElement>(null);
+  const itemRefs = useRef<(HTMLDivElement | null)[]>([]);
   const [listHeight, setListHeight] = useState(DEFAULT_LIST_HEIGHT);
   const draggingRef = useRef(false);
 
   const files = detail.files || [];
   const hasOverflow = files.length * ROW_HEIGHT > listHeight;
+
+  // Scroll selected file into view
+  const activeIdx = files.findIndex(f => f.path === selectedFact);
+  useEffect(() => {
+    if (activeIdx >= 0) {
+      itemRefs.current[activeIdx]?.scrollIntoView({ block: 'nearest' });
+    }
+  }, [activeIdx]);
 
   // Reset list height to default when commit changes
   useEffect(() => { setListHeight(DEFAULT_LIST_HEIGHT); }, [detail.commit]);
@@ -289,7 +298,7 @@ function CommitPanel({ detail, selectedFact, onSelectFact }: {
             flex: 1,
           }}
         >
-          {files.map(file => {
+          {files.map((file, idx) => {
             const isActive = selectedFact === file.path;
             const opColor = file.action === 'added' ? '#7c9' : file.action === 'deleted' ? '#f88' : '#8af';
             const opIndicator = file.action === 'added' ? '+' : file.action === 'deleted' ? '\u2212' : '~';
@@ -297,6 +306,7 @@ function CommitPanel({ detail, selectedFact, onSelectFact }: {
             return (
               <div
                 key={file.path}
+                ref={el => { itemRefs.current[idx] = el; }}
                 onClick={() => onSelectFact(file.path)}
                 style={{
                   height: ROW_HEIGHT,
