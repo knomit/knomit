@@ -22,41 +22,50 @@ function TreeView({ state, dispatch }: Props) {
 
   // Determine if we should search instead of browse
   const hasNonPathFilters = state.filters.some(f => f.category !== 'path');
-  const shouldSearch = hasNonPathFilters && !!state.freeText;
+  const shouldSearch = hasNonPathFilters || !!state.freeText;
 
+  // Search: fetch results when filters/freeText change (NOT when selectedFact changes)
   useEffect(() => {
-    if (shouldSearch) {
-      const domains = state.filters.filter(f => f.category === 'domain').map(f => f.value);
-      const entities = state.filters.filter(f => f.category === 'entity').map(f => f.value);
-      const types = state.filters.filter(f => f.category === 'type').map(f => f.value);
-      const eps = state.filters.filter(f => f.category === 'ep').map(f => f.value);
-      api.search(state.repo, state.freeText, path, 0, { types, eps }).then(r => {
-        // Convert search results to DirChild-like entries
-        const items: DirChild[] = (r.results || []).map(sr => ({
-          name: sr.path.split('/').pop() || sr.path,
-          is_dir: false,
-          title: sr.title,
-          type: undefined,
-        }));
-        setChildren(items);
-        setSelectedIdx(items.length > 0 ? 0 : -1);
-      }).catch(() => setChildren([]));
-      // Note: domains/entities are passed through the query string via parseSearchQuery
-      void domains; void entities;
-    } else {
-      api.browse(state.repo, path).then(r => {
-        const c = r.children || [];
-        setChildren(c);
-        if (state.selectedFact) {
-          const factName = state.selectedFact.split('/').pop();
-          const idx = c.findIndex(ch => !ch.is_dir && ch.name === factName);
-          setSelectedIdx(idx >= 0 ? idx : -1);
-        } else {
-          setSelectedIdx(-1);
-        }
-      }).catch(() => setChildren([]));
-    }
-  }, [path, state.headCommit, state.freeText, shouldSearch, state.repo, state.selectedFact, state.filters]);
+    if (!shouldSearch) return;
+    const domains = state.filters.filter(f => f.category === 'domain').map(f => f.value);
+    const entities = state.filters.filter(f => f.category === 'entity').map(f => f.value);
+    const types = state.filters.filter(f => f.category === 'type').map(f => f.value);
+    const eps = state.filters.filter(f => f.category === 'ep').map(f => f.value);
+    api.search(state.repo, state.freeText, path, 0, { types, eps }).then(r => {
+      // Convert search results to DirChild-like entries
+      const items: DirChild[] = (r.results || []).map(sr => ({
+        name: sr.path.split('/').pop() || sr.path,
+        is_dir: false,
+        title: sr.title,
+        type: undefined,
+        fullPath: sr.path,
+      }));
+      setChildren(items);
+      setSelectedIdx(items.length > 0 ? 0 : -1);
+      if (items.length > 0 && items[0].fullPath) {
+        dispatch({ type: 'SELECT_FACT', path: items[0].fullPath });
+      }
+    }).catch(() => setChildren([]));
+    // Note: domains/entities are passed through the query string via parseSearchQuery
+    void domains; void entities;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [path, state.headCommit, state.freeText, shouldSearch, state.repo, state.filters]);
+
+  // Browse: fetch directory when path/headCommit/selectedFact changes
+  useEffect(() => {
+    if (shouldSearch) return;
+    api.browse(state.repo, path).then(r => {
+      const c = r.children || [];
+      setChildren(c);
+      if (state.selectedFact) {
+        const factName = state.selectedFact.split('/').pop();
+        const idx = c.findIndex(ch => !ch.is_dir && ch.name === factName);
+        setSelectedIdx(idx >= 0 ? idx : -1);
+      } else {
+        setSelectedIdx(-1);
+      }
+    }).catch(() => setChildren([]));
+  }, [path, state.headCommit, shouldSearch, state.repo, state.selectedFact]);
 
   const moveSelection = useCallback((delta: 1 | -1) => {
     const len = children.length;
@@ -66,7 +75,7 @@ function TreeView({ state, dispatch }: Props) {
     itemRefs.current[next]?.scrollIntoView({ block: 'nearest' });
     const c = children[next];
     if (c && !c.is_dir) {
-      dispatch({ type: 'SELECT_FACT', path: `${path}/${c.name}` });
+      dispatch({ type: 'SELECT_FACT', path: c.fullPath || `${path}/${c.name}` });
     }
   }, [children, selectedIdx, path, dispatch]);
 
@@ -76,7 +85,7 @@ function TreeView({ state, dispatch }: Props) {
     if (child.is_dir) {
       dispatch({ type: 'ADD_FILTER', chip: { category: 'path', value: `${path}/${child.name}` } });
     } else {
-      dispatch({ type: 'SELECT_FACT', path: `${path}/${child.name}` });
+      dispatch({ type: 'SELECT_FACT', path: child.fullPath || `${path}/${child.name}` });
     }
   }, [children, selectedIdx, path, dispatch]);
 
@@ -125,13 +134,14 @@ function TreeView({ state, dispatch }: Props) {
               data-testid="dir-entry"
               data-name={c.name}
               data-isdir={String(c.is_dir)}
+              data-path={c.fullPath || ''}
               ref={el => { itemRefs.current[i] = el; }}
               onClick={() => {
                 setSelectedIdx(i);
                 if (c.is_dir) {
                   dispatch({ type: 'ADD_FILTER', chip: { category: 'path', value: `${path}/${c.name}` } });
                 } else {
-                  dispatch({ type: 'SELECT_FACT', path: `${path}/${c.name}` });
+                  dispatch({ type: 'SELECT_FACT', path: c.fullPath || `${path}/${c.name}` });
                 }
               }}
               style={{

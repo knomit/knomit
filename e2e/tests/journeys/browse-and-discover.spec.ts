@@ -3,7 +3,7 @@ import { BrowsePage } from '../../pages/browse.page.js';
 import { FactPanel } from '../../pages/fact-panel.page.js';
 
 test.describe.serial('Browse and Discover', () => {
-  test('navigate tree → view metadata → click entity tag → find related facts', async ({ freshKnomit, page }) => {
+  test('navigate tree -> view metadata -> click entity tag -> find related facts in chrono', async ({ freshKnomit, page }) => {
     // Create several related facts sharing an entity
     const sharedEntity = 'discovery-topic';
     const facts = [
@@ -90,20 +90,34 @@ Third fact about the discovery topic.`,
     await expect(tagItem).toBeVisible({ timeout: 10_000 });
     await tagItem.click();
 
-    // Verify search results include related facts (index may still be syncing)
-    let searchResults: string[] = [];
-    for (let attempt = 0; attempt < 5; attempt++) {
-      searchResults = await browse.getSearchResults();
-      if (searchResults.length >= 2) break;
-      await page.waitForTimeout(1000);
-      // Re-click the tag to retry the search
-      await tagItem.click();
-    }
-    expect(searchResults.length).toBeGreaterThanOrEqual(2);
+    // In the new UI, clicking a tag adds a filter chip.
+    // Verify the chip is visible.
+    const chip = page.locator('span').filter({ hasText: new RegExp(`entity:${sharedEntity}`) });
+    await expect(chip.first()).toBeVisible({ timeout: 5_000 });
 
-    // All three facts share the entity, so they should all appear
-    const hasAlpha = searchResults.some(r => r.includes('alpha'));
-    const hasBeta = searchResults.some(r => r.includes('beta'));
+    // Switch to chrono view where entity filter chips are applied to the recent API
+    await page.keyboard.press('2');
+    const chronoList = page.getByTestId('chrono-list');
+    await expect(chronoList).toBeVisible();
+
+    // Wait for filtered chrono results
+    let chronoItems: string[] = [];
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const items = page.getByTestId('chrono-item');
+      await items.first().waitFor({ timeout: 5_000 }).catch(() => {});
+      const count = await items.count();
+      for (let i = 0; i < count; i++) {
+        const path = (await items.nth(i).getAttribute('data-path')) || '';
+        if (!chronoItems.includes(path)) chronoItems.push(path);
+      }
+      if (chronoItems.length >= 2) break;
+      await page.waitForTimeout(1000);
+    }
+    expect(chronoItems.length).toBeGreaterThanOrEqual(2);
+
+    // All three facts share the entity, so they should appear
+    const hasAlpha = chronoItems.some(r => r.includes('alpha'));
+    const hasBeta = chronoItems.some(r => r.includes('beta'));
     expect(hasAlpha || hasBeta).toBeTruthy();
   });
 });

@@ -96,7 +96,11 @@ test.describe('Fact View', () => {
     const firstTitle = await factPanel.getTitle();
 
     // Go back to root and pick a different fact
-    await browse.clickBreadcrumb('kb');
+    // Use the back button multiple times to get to root
+    // Nav stack: [empty] -> [path:databases] -> [path:postgresql] -> [SELECT mvcc]
+    await browse.navigateBack(); // back to postgresql dir
+    await browse.navigateBack(); // back to databases dir
+    await browse.navigateBack(); // back to root
     await browse.waitForEntry('networking');
     await browse.clickEntry('networking');
     await browse.waitForEntry('dns');

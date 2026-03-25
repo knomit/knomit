@@ -1,27 +1,27 @@
 import { test, expect } from '../../fixtures/knomit.js';
 import { FactPanel } from '../../pages/fact-panel.page.js';
 
-test.describe('Search in Recent Mode', () => {
+test.describe('Search in Chrono View', () => {
   let factPanel: FactPanel;
 
   test.beforeEach(async ({ page, sharedBaseURL }) => {
     await page.goto(sharedBaseURL);
     factPanel = new FactPanel(page);
     await page.waitForLoadState('domcontentloaded');
-    // Enter recent mode
-    await page.keyboard.press('r');
-    const recentList = page.getByTestId('recent-list');
-    await expect(recentList).toBeVisible();
+    // Enter chrono view
+    await page.keyboard.press('2');
+    const chronoList = page.getByTestId('chrono-list');
+    await expect(chronoList).toBeVisible();
     // Wait for items to load
-    await page.getByTestId('recent-item').first().waitFor({ timeout: 10_000 });
+    await page.getByTestId('chrono-item').first().waitFor({ timeout: 10_000 });
   });
 
-  test('recent mode shows facts and selecting one opens it in the right panel', async ({ page }) => {
-    const items = page.getByTestId('recent-item');
+  test('chrono view shows facts and selecting one opens it in the right panel', async ({ page }) => {
+    const items = page.getByTestId('chrono-item');
     const count = await items.count();
     expect(count).toBeGreaterThan(0);
 
-    // Click the first recent item
+    // Click the first chrono item
     await items.first().click();
 
     // Right panel should show the selected fact
@@ -30,8 +30,8 @@ test.describe('Search in Recent Mode', () => {
     expect(title.length).toBeGreaterThan(0);
   });
 
-  test('selecting different recent items updates the right panel', async ({ page }) => {
-    const items = page.getByTestId('recent-item');
+  test('selecting different chrono items updates the right panel', async ({ page }) => {
+    const items = page.getByTestId('chrono-item');
     const count = await items.count();
     if (count < 2) return;
 
@@ -49,14 +49,14 @@ test.describe('Search in Recent Mode', () => {
     expect(secondTitle).not.toBe(firstTitle);
   });
 
-  test('searching in recent mode filters the list', async ({ page }) => {
-    const items = page.getByTestId('recent-item');
+  test('filtering in chrono view narrows the list', async ({ page }) => {
+    const items = page.getByTestId('chrono-item');
     const initialCount = await items.count();
     expect(initialCount).toBeGreaterThan(0);
 
-    // Search for a specific term
-    const searchInput = page.getByTestId('recent-search-input');
-    await searchInput.fill('postgresql');
+    // Type in the filter bar to set free text
+    const filterInput = page.locator('#filter-input');
+    await filterInput.fill('postgresql');
     // Wait for debounce + API response
     await page.waitForResponse(resp => resp.url().includes('/recent'));
     await page.waitForTimeout(500);
@@ -70,13 +70,13 @@ test.describe('Search in Recent Mode', () => {
     expect(firstPath).toContain('postgresql');
   });
 
-  test('selecting a filtered recent item opens the correct fact', async ({ page }) => {
-    const searchInput = page.getByTestId('recent-search-input');
-    await searchInput.fill('postgresql');
+  test('selecting a filtered chrono item opens the correct fact', async ({ page }) => {
+    const filterInput = page.locator('#filter-input');
+    await filterInput.fill('postgresql');
     await page.waitForResponse(resp => resp.url().includes('/recent'));
     await page.waitForTimeout(500);
 
-    const items = page.getByTestId('recent-item');
+    const items = page.getByTestId('chrono-item');
     await items.first().waitFor({ timeout: 5_000 });
     const path = await items.first().getAttribute('data-path');
     expect(path).toBeTruthy();
@@ -90,8 +90,8 @@ test.describe('Search in Recent Mode', () => {
     expect(title.length).toBeGreaterThan(0);
   });
 
-  test('arrow keys navigate recent items and update right panel', async ({ page }) => {
-    const items = page.getByTestId('recent-item');
+  test('arrow keys navigate chrono items and update right panel', async ({ page }) => {
+    const items = page.getByTestId('chrono-item');
     const count = await items.count();
     if (count < 2) return;
 
@@ -112,18 +112,18 @@ test.describe('Search in Recent Mode', () => {
     expect(backTitle).toBe(firstTitle);
   });
 
-  test('pressing Escape from recent then searching works end-to-end', async ({ page }) => {
-    // From recent mode, exit to browse
-    await page.keyboard.press('Escape');
-    const searchInput = page.getByTestId('search-input');
-    await expect(searchInput).toBeVisible();
+  test('switching to tree view then searching works end-to-end', async ({ page }) => {
+    // From chrono view, switch to tree view
+    await page.keyboard.press('1');
+    const filterInput = page.locator('#filter-input');
+    await expect(filterInput).toBeVisible();
 
-    // Now search from browse mode
-    await searchInput.fill('PostgreSQL');
-    await page.waitForResponse(resp => resp.url().includes('/search'));
+    // Now search from tree view
+    await filterInput.fill('PostgreSQL');
+    await page.waitForResponse(resp => resp.url().includes('/search') || resp.url().includes('/browse'));
 
     // Results should appear and selecting one updates the right panel
-    const results = page.getByTestId('search-result');
+    const results = page.getByTestId('dir-entry');
     await results.first().waitFor({ timeout: 10_000 });
     await results.first().click();
     await expect(factPanel.title).toBeVisible();
@@ -131,21 +131,20 @@ test.describe('Search in Recent Mode', () => {
     expect(title.length).toBeGreaterThan(0);
   });
 
-  test('clearing recent search resets to full recent list', async ({ page }) => {
-    const items = page.getByTestId('recent-item');
+  test('clearing filter resets to full chrono list', async ({ page }) => {
+    const items = page.getByTestId('chrono-item');
     const initialCount = await items.count();
 
     // Filter
-    const searchInput = page.getByTestId('recent-search-input');
-    await searchInput.fill('postgresql');
+    const filterInput = page.locator('#filter-input');
+    await filterInput.fill('postgresql');
     await page.waitForResponse(resp => resp.url().includes('/recent'));
     await page.waitForTimeout(500);
     const filteredCount = await items.count();
     expect(filteredCount).toBeLessThan(initialCount);
 
-    // Clear via the clear button
-    const clearBtn = page.getByTestId('recent-search-clear');
-    await clearBtn.click();
+    // Clear filter input
+    await filterInput.clear();
     await page.waitForResponse(resp => resp.url().includes('/recent'));
     await page.waitForTimeout(500);
 
