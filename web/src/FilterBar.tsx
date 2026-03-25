@@ -110,7 +110,11 @@ export function FilterBar({ state, dispatch }: Props) {
       } else if (e.key === 'Enter' && inputValue.trim()) {
         e.preventDefault();
         dispatch({ type: 'SET_FREE_TEXT', text: inputValue.trim() });
+        // Blur first (sets focusedRef=false) so the debounce won't overwrite with ''
+        focusedRef.current = false;
+        window.clearTimeout(debounceRef.current);
         setInputValue('');
+        inputRef.current?.blur();
       }
       return;
     }
