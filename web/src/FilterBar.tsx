@@ -23,6 +23,7 @@ export function FilterBar({ state, dispatch }: Props) {
   const [inputValue, setInputValue]               = useState('');
   const [suggestions, setSuggestions]             = useState<string[]>([]);
   const [suggestIdx, setSuggestIdx]               = useState(0);
+  const suggestRefs = useRef<(HTMLDivElement | null)[]>([]);
   const [showCategoryPicker, setShowCategoryPicker] = useState(false);
   const [categoryValues, setCategoryValues]       = useState<string[]>([]);
   const [activeCategory, setActiveCategory]       = useState<FilterChip['category'] | null>(null);
@@ -33,6 +34,11 @@ export function FilterBar({ state, dispatch }: Props) {
 
   // Track whether the input is focused — used to distinguish user clearing vs onBlur clearing
   const focusedRef = useRef(false);
+
+  // Scroll selected suggestion into view
+  useEffect(() => {
+    suggestRefs.current[suggestIdx]?.scrollIntoView({ block: 'nearest' });
+  }, [suggestIdx]);
 
   // Sync free-text debounce whenever inputValue changes without a recognised prefix
   useEffect(() => {
@@ -433,6 +439,7 @@ export function FilterBar({ state, dispatch }: Props) {
               return (
               <div
                 key={s}
+                ref={el => { suggestRefs.current[idx] = el; }}
                 onMouseDown={e => { e.preventDefault(); commitSuggestion(s); }}
                 onMouseEnter={() => setSuggestIdx(idx)}
                 style={{
