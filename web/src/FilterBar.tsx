@@ -18,11 +18,12 @@ const FACT_CATEGORIES: { key: FilterChip['category']; label: string }[] = [
 
 const HISTORY_CATEGORIES: { key: FilterChip['category']; label: string }[] = [
   { key: 'ep',   label: 'Episode' },
+  { key: 'path', label: 'Path' },
 ];
 
 // Match a trailing prefix token at end of input
 const FACT_PREFIX_RE = /(?:^|\s)(domain|entity|type|path):(\S*)$/;
-const HISTORY_PREFIX_RE = /(?:^|\s)(ep):(\S*)$/;
+const HISTORY_PREFIX_RE = /(?:^|\s)(ep|path):(\S*)$/;
 
 export function FilterBar({ state, dispatch }: Props) {
   const isHistory = state.view === 'history';
