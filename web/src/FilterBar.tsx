@@ -99,6 +99,30 @@ export function FilterBar({ state, dispatch }: Props) {
         setSuggestions([]);
         return;
       }
+      // Path navigation: ArrowRight drills deeper, ArrowLeft goes up
+      const prefixMatch = PREFIX_RE.exec(inputValue);
+      if (prefixMatch && prefixMatch[1] === 'path') {
+        if (e.key === 'ArrowRight') {
+          e.preventDefault();
+          // Replace the current prefix value with the selected suggestion + '/'
+          const selected = suggestions[suggestIdx];
+          const before = inputValue.slice(0, prefixMatch.index + (prefixMatch.index > 0 ? 1 : 0));
+          setInputValue(before + 'path:' + selected + '/');
+          return;
+        }
+        if (e.key === 'ArrowLeft') {
+          e.preventDefault();
+          // Go up: remove last path segment from the typed prefix
+          const currentPrefix = prefixMatch[2]; // e.g. "kb/tech/go"
+          const parts = currentPrefix.split('/');
+          if (parts.length > 1) {
+            const parent = parts.slice(0, -1).join('/');
+            const before = inputValue.slice(0, prefixMatch.index + (prefixMatch.index > 0 ? 1 : 0));
+            setInputValue(before + 'path:' + parent);
+          }
+          return;
+        }
+      }
     }
 
     if (e.key === 'Enter' || e.key === ' ') {
@@ -381,7 +405,11 @@ export function FilterBar({ state, dispatch }: Props) {
         />
 
         {/* Autocomplete dropdown */}
-        {hasPrefixMatch && suggestions.length > 0 && (
+        {hasPrefixMatch && suggestions.length > 0 && (() => {
+          const pm = PREFIX_RE.exec(inputValue);
+          const typedPrefix = pm ? pm[2] : '';
+          const category = pm ? pm[1] : '';
+          return (
           <div style={{
             position: 'absolute',
             top: '100%',
@@ -391,11 +419,18 @@ export function FilterBar({ state, dispatch }: Props) {
             border: '1px solid #444',
             borderRadius: 4,
             minWidth: 180,
-            maxHeight: 200,
+            maxHeight: 220,
             overflowY: 'auto',
             boxShadow: '0 4px 12px rgba(0,0,0,0.5)',
           }}>
-            {suggestions.map((s, idx) => (
+            {/* Header hint */}
+            <div style={{ padding: '4px 10px', fontSize: 10, color: '#666', borderBottom: '1px solid #333' }}>
+              {category}{typedPrefix ? `: "${typedPrefix}"` : ''}{category === 'path' ? ' — ←/→ to navigate' : ' — type to filter'}
+            </div>
+            {suggestions.map((s, idx) => {
+              // Highlight the matching prefix portion
+              const matchIdx = typedPrefix ? s.toLowerCase().indexOf(typedPrefix.toLowerCase()) : -1;
+              return (
               <div
                 key={s}
                 onMouseDown={e => { e.preventDefault(); commitSuggestion(s); }}
@@ -409,11 +444,16 @@ export function FilterBar({ state, dispatch }: Props) {
                   whiteSpace: 'nowrap',
                 }}
               >
-                {s}
+                {matchIdx >= 0 && typedPrefix ? (<>
+                  {s.slice(0, matchIdx)}
+                  <span style={{ color: '#fff', fontWeight: 'bold' }}>{s.slice(matchIdx, matchIdx + typedPrefix.length)}</span>
+                  {s.slice(matchIdx + typedPrefix.length)}
+                </>) : s}
               </div>
-            ))}
+            );
+            })}
           </div>
-        )}
+        ); })()}
       </div>
 
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#888" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
