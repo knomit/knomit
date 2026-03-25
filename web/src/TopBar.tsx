@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import type { Dispatch } from 'react';
 import { createPortal } from 'react-dom';
-import type { AppState, Action, View } from './state';
+import type { AppState, Action } from './state';
 import type { RepoInfo } from './api';
 import { api } from './api';
 
@@ -42,11 +42,6 @@ const MenuIcon = () => (
   </svg>
 );
 
-const viewButtons: { view: View; icon: string; label: string }[] = [
-  { view: 'tree',    icon: '\uD83D\uDCC1', label: 'Tree' },
-  { view: 'chrono',  icon: '\uD83D\uDD50', label: 'Chrono' },
-  { view: 'history', icon: '\uD83D\uDCD6', label: 'History' },
-];
 
 export function TopBar({ state, repos, dispatch, onSettingsClick }: Props) {
   const [menuOpen, setMenuOpen] = useState(false);
@@ -92,52 +87,6 @@ export function TopBar({ state, repos, dispatch, onSettingsClick }: Props) {
         </svg>
         <span style={{ color: '#7c9', fontWeight: 'bold', fontSize: 15 }}>knomit</span>
       </span>
-
-      {/* Back button */}
-      <button
-        disabled={state.navStack.length === 0}
-        onClick={() => dispatch({ type: 'NAV_BACK' })}
-        title="Back"
-        style={{
-          background: 'none', border: 'none', color: state.navStack.length === 0 ? '#444' : '#aaa',
-          cursor: state.navStack.length === 0 ? 'default' : 'pointer', fontSize: 16, padding: '2px 6px',
-          display: 'flex', alignItems: 'center',
-        }}
-        onMouseEnter={e => { if (state.navStack.length > 0) e.currentTarget.style.color = '#eee'; }}
-        onMouseLeave={e => { e.currentTarget.style.color = state.navStack.length === 0 ? '#444' : '#aaa'; }}
-      >
-        &#8592;
-      </button>
-
-      {/* View switcher */}
-      <div style={{ display: 'flex', gap: 2, background: '#1a1a1a', borderRadius: 4, padding: 2 }}>
-        {viewButtons.map(vb => {
-          const active = state.view === vb.view;
-          return (
-            <button
-              key={vb.view}
-              onClick={() => dispatch({ type: 'SET_VIEW', view: vb.view })}
-              title={vb.label}
-              style={{
-                background: active ? '#333' : 'transparent',
-                border: 'none',
-                color: active ? '#eee' : '#666',
-                fontSize: 13,
-                padding: '3px 8px',
-                borderRadius: 3,
-                cursor: 'pointer',
-                display: 'flex',
-                alignItems: 'center',
-                gap: 4,
-              }}
-              onMouseEnter={e => { if (!active) e.currentTarget.style.color = '#aaa'; }}
-              onMouseLeave={e => { if (!active) e.currentTarget.style.color = '#666'; }}
-            >
-              {vb.icon}
-            </button>
-          );
-        })}
-      </div>
 
       <div style={{ flex: 1 }} />
       <span style={{ display: 'flex', alignItems: 'center', gap: 5, color: '#7c9', fontSize: 12 }}>
