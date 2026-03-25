@@ -256,6 +256,9 @@ function CommitPanel({ detail, selectedFact, onSelectFact }: {
 
   useEffect(() => { checkScroll(); }, [files, listHeight]);
 
+  // Reset list height to default when commit changes
+  useEffect(() => { setListHeight(DEFAULT_LIST_HEIGHT); }, [detail.commit]);
+
   // Drag to resize
   const startDrag = (e: React.MouseEvent) => {
     e.preventDefault();
