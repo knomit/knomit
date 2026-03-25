@@ -19,6 +19,7 @@ import (
 
 // ReadFileWithHash returns both the file content and the blob hash for the given path.
 func (s *Store) ReadFileWithHash(path string) (string, string, error) {
+	path = strings.ToLower(path)
 	headRef, err := s.repo.Head()
 	if err != nil {
 		return "", "", fmt.Errorf("ReadFileWithHash: head: %w", err)
@@ -52,9 +53,8 @@ func (s *Store) ReadFileWithHash(path string) (string, string, error) {
 }
 
 // ReadFileAtCommit reads the content of path from a specific commit.
-// If an exact path match fails, it retries with a case-insensitive walk
-// to handle repos where paths were stored with mixed case in older commits.
 func (s *Store) ReadFileAtCommit(path, commitHash string) (string, error) {
+	path = strings.ToLower(path)
 	hash := plumbing.NewHash(commitHash)
 	commit, err := s.repo.CommitObject(hash)
 	if err != nil {
@@ -64,31 +64,18 @@ func (s *Store) ReadFileAtCommit(path, commitHash string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("ReadFileAtCommit: tree: %w", err)
 	}
-	// Try exact match first.
 	f, err := tree.File(path)
-	if err == nil {
-		return f.Contents()
+	if err != nil {
+		return "", fmt.Errorf("ReadFileAtCommit: file %q: %w", path, err)
 	}
-	// Fallback: case-insensitive walk to find the file.
-	lowerPath := strings.ToLower(path)
-	var found *object.File
-	tree.Files().ForEach(func(file *object.File) error {
-		if strings.ToLower(file.Name) == lowerPath {
-			found = file
-			return io.EOF // stop iteration
-		}
-		return nil
-	})
-	if found != nil {
-		return found.Contents()
-	}
-	return "", fmt.Errorf("ReadFileAtCommit: file %q: %w", path, err)
+	return f.Contents()
 }
 
 // ReadFileLastCommit finds the most recent ancestor of beforeCommitHash where
 // path existed and returns its content and commit hash. Used to read facts
 // that were deleted in beforeCommitHash (e.g. retract commits).
 func (s *Store) ReadFileLastCommit(path, beforeCommitHash string) (content string, fromCommit string, err error) {
+	path = strings.ToLower(path)
 	startHash := plumbing.NewHash(beforeCommitHash)
 	startCommit, err := s.repo.CommitObject(startHash)
 	if err != nil {
@@ -119,6 +106,7 @@ func (s *Store) ReadFileLastCommit(path, beforeCommitHash string) (content strin
 
 // ReadFile reads the content of path from the HEAD commit.
 func (s *Store) ReadFile(path string) (string, error) {
+	path = strings.ToLower(path)
 	headRef, err := s.repo.Head()
 	if err != nil {
 		return "", fmt.Errorf("ReadFile: head: %w", err)
@@ -172,6 +160,7 @@ func (s *Store) FileExists(path string) (bool, error) {
 // ListDir returns entries under path in HEAD's tree.
 // Subdirectories have IsDir=true, .md files have IsDir=false.
 func (s *Store) ListDir(path string) ([]DirEntry, error) {
+	path = strings.ToLower(path)
 	headRef, err := s.repo.Head()
 	if err != nil {
 		return nil, fmt.Errorf("ListDir: head: %w", err)
