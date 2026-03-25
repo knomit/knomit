@@ -483,7 +483,7 @@ export function RightPanel({ state, dispatch }: { state: AppState; dispatch: Dis
       {isTimeTravelView && commitDetail && <CommitPanel
         detail={commitDetail}
         selectedFact={state.selectedFact}
-        onSelectFact={path => dispatch({ type: 'SELECT_FACT', path })}
+        onSelectFact={path => { dispatch({ type: 'SELECT_FACT', path }); dispatch({ type: 'FOCUS_RIGHT_PANEL' }); }}
       />}
       <div style={{ flex: 1, overflow: 'auto' }}>
         {renderFact(fact, dispatch, isTimeTravelView ? {
