@@ -90,6 +90,7 @@ export function Breadcrumb({ state, dispatch }: Props) {
               style={{
                 background: active ? '#444' : 'transparent',
                 border: 'none',
+                outline: 'none',
                 padding: '3px 8px',
                 borderRadius: 3,
                 cursor: 'pointer',
