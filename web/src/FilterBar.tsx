@@ -338,10 +338,10 @@ export function FilterBar({ state, dispatch }: Props) {
           value={inputValue}
           onChange={e => setInputValue(e.target.value)}
           onFocus={() => {
-            // If there's a free-text pill, put it back in the input for editing
+            // If there's a free-text pill, put it back in the input for editing.
+            // Keep freeText in state so search results stay visible.
             if (state.freeText && !inputValue) {
               setInputValue(state.freeText);
-              dispatch({ type: 'SET_FREE_TEXT', text: '' });
             }
           }}
           onKeyDown={handleKeyDown}
