@@ -45,7 +45,11 @@ export function HistoryTimeline({ state, dispatch }: Props) {
       setEntries(e);
       setNextCursor(r.next);
       setLoading(false);
-      if (e.length > 0) dispatch({ type: 'SELECT_COMMIT', commit: e[0].commit });
+      // Auto-expand first commit so the right panel shows something immediately
+      if (e.length > 0) {
+        dispatch({ type: 'SELECT_COMMIT', commit: e[0].commit });
+        toggleExpand(e[0].commit);
+      }
     }).catch(() => {
       setEntries([]);
       setLoading(false);
