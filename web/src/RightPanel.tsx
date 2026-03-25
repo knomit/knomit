@@ -364,11 +364,9 @@ export function RightPanel({ state, dispatch }: { state: AppState; dispatch: Dis
     }
     api.commitDetail(state.repo, state.historyCommit).then(detail => {
       setCommitDetail(detail);
-      // Auto-select first non-deleted file if nothing selected
-      if (!state.selectedFact) {
-        const first = (detail.files || []).find(f => f.action !== 'deleted');
-        if (first) dispatch({ type: 'SELECT_FACT', path: first.path });
-      }
+      // Always auto-select first non-deleted file when commit changes
+      const first = (detail.files || []).find(f => f.action !== 'deleted');
+      if (first) dispatch({ type: 'SELECT_FACT', path: first.path });
     }).catch(() => setCommitDetail(null));
   }, [state.historyCommit, state.view, state.repo]);
 
