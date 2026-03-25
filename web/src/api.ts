@@ -74,12 +74,12 @@ export function parseSearchQuery(raw: string): { text: string; domains: string[]
 export function parseFilterQuery(raw: string): { chips: FilterChip[]; text: string } {
   const chips: FilterChip[] = [];
   // Extract prefix:"quoted value" patterns first
-  let remaining = raw.replace(/(domain|entity|type|path):"([^"]+)"/g, (_m, prefix, value) => {
+  let remaining = raw.replace(/(domain|entity|type|ep|path):"([^"]+)"/g, (_m, prefix, value) => {
     chips.push({ category: prefix as FilterChip['category'], value });
     return '';
   });
   // Extract prefix:value patterns (no quotes, no spaces)
-  remaining = remaining.replace(/(domain|entity|type|path):(\S+)/g, (_m, prefix, value) => {
+  remaining = remaining.replace(/(domain|entity|type|ep|path):(\S+)/g, (_m, prefix, value) => {
     chips.push({ category: prefix as FilterChip['category'], value });
     return '';
   });

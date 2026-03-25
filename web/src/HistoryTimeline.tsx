@@ -70,14 +70,24 @@ export function HistoryTimeline({ state, dispatch }: Props) {
     return () => observer.disconnect();
   }, [loadMore]);
 
-  // Keyboard navigation
+  // Filter entries by episode chips and free text (commit message search)
+  const epFilters = state.filters.filter(f => f.category === 'ep').map(f => f.value);
+  const freeText = state.freeText.toLowerCase();
+
+  const filteredEntries = entries.filter(entry => {
+    if (epFilters.length > 0 && (!entry.operation || !epFilters.includes(entry.operation))) return false;
+    if (freeText && !entry.message.toLowerCase().includes(freeText)) return false;
+    return true;
+  });
+
+  // Keyboard navigation (on filtered entries)
   const navigate = useCallback((delta: 1 | -1) => {
-    const next = Math.max(0, Math.min(selectedIdx + delta, entries.length - 1));
+    const next = Math.max(0, Math.min(selectedIdx + delta, filteredEntries.length - 1));
     setSelectedIdx(next);
     itemRefs.current[next]?.scrollIntoView({ block: 'nearest' });
-    const entry = entries[next];
+    const entry = filteredEntries[next];
     if (entry) dispatch({ type: 'SELECT_COMMIT', commit: entry.commit });
-  }, [selectedIdx, entries, dispatch]);
+  }, [selectedIdx, filteredEntries, dispatch]);
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -85,7 +95,7 @@ export function HistoryTimeline({ state, dispatch }: Props) {
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
       if (state.rightPanelFocused) return;
       if (state.view !== 'history') return;
-      if (entries.length === 0) return;
+      if (filteredEntries.length === 0) return;
 
       if (e.key === 'ArrowDown' || e.key === 'j') { e.preventDefault(); navigate(1); }
       if (e.key === 'ArrowUp' || e.key === 'k') { e.preventDefault(); navigate(-1); }
@@ -96,7 +106,7 @@ export function HistoryTimeline({ state, dispatch }: Props) {
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [state.rightPanelFocused, state.view, entries, selectedIdx, navigate, dispatch]);
+  }, [state.rightPanelFocused, state.view, filteredEntries, selectedIdx, navigate, dispatch]);
 
   // Compute fact count badge
   const factCountBadge = (entry: HistoryEntryWithTags) => {
@@ -107,10 +117,12 @@ export function HistoryTimeline({ state, dispatch }: Props) {
   return (
     <div data-testid="history-timeline" ref={containerRef} style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
       <div style={{ flex: 1, overflowY: 'auto', padding: '8px 0' }}>
-        {entries.length === 0 && !loading && (
-          <div style={{ padding: 16, color: '#666', fontSize: 13 }}>No history for this path.</div>
+        {filteredEntries.length === 0 && !loading && (
+          <div style={{ padding: 16, color: '#666', fontSize: 13 }}>
+            {entries.length === 0 ? 'No history for this path.' : 'No commits match the current filters.'}
+          </div>
         )}
-        {entries.map((entry, i) => {
+        {filteredEntries.map((entry, i) => {
           const isSelected = i === selectedIdx;
           const cs = commitStyle(entry);
           const hasLabel = cs.label !== '';

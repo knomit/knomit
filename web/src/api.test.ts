@@ -74,11 +74,12 @@ describe('parseFilterQuery', () => {
     expect(r).toEqual({ chips: [{ category: 'entity', value: 'supply chain' }, { category: 'path', value: 'kb/go' }], text: '' });
   });
 
-  it('ep: prefix is treated as free text (not a filter)', () => {
+  it('ep: prefix is recognized as a filter chip', () => {
     const r = parseFilterQuery('ep:learn domain:go goroutine scheduling');
-    expect(r.chips).toEqual([{ category: 'domain', value: 'go' }]);
-    expect(r.text).toContain('ep:learn');
-    expect(r.text).toContain('goroutine scheduling');
+    expect(r.chips).toHaveLength(2);
+    expect(r.chips).toContainEqual({ category: 'ep', value: 'learn' });
+    expect(r.chips).toContainEqual({ category: 'domain', value: 'go' });
+    expect(r.text).toBe('goroutine scheduling');
   });
 
   it('multiple type chips from typed syntax', () => {
