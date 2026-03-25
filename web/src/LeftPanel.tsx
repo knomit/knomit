@@ -28,12 +28,13 @@ function TreeView({ state, dispatch }: Props) {
   // Search: fetch results when filters/freeText change (NOT when selectedFact changes)
   useEffect(() => {
     if (!shouldSearch) return;
+    let stale = false;
     const domains = state.filters.filter(f => f.category === 'domain').map(f => f.value);
     const entities = state.filters.filter(f => f.category === 'entity').map(f => f.value);
     const types = state.filters.filter(f => f.category === 'type').map(f => f.value);
     const eps = state.filters.filter(f => f.category === 'ep').map(f => f.value);
     api.search(state.repo, state.freeText, path, 0, { types, eps, domains, entities }).then(r => {
-      // Convert search results to DirChild-like entries
+      if (stale) return; // Don't overwrite if filters changed while fetching
       const items: DirChild[] = (r.results || []).map(sr => ({
         name: sr.path.split('/').pop() || sr.path,
         is_dir: false,
@@ -46,14 +47,17 @@ function TreeView({ state, dispatch }: Props) {
       if (items.length > 0 && items[0].fullPath) {
         dispatch({ type: 'SELECT_FACT', path: items[0].fullPath });
       }
-    }).catch(() => setChildren([]));
+    }).catch(() => { if (!stale) setChildren([]); });
+    return () => { stale = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [path, state.headCommit, state.freeText, shouldSearch, state.repo, state.filters]);
 
   // Browse: fetch directory when path/headCommit/selectedFact changes
   useEffect(() => {
     if (shouldSearch) return;
+    let stale = false;
     api.browse(state.repo, path).then(r => {
+      if (stale) return; // Don't overwrite if filters were added while fetching
       const c = (r.children || []).slice().sort((a, b) => {
         if (a.is_dir !== b.is_dir) return a.is_dir ? -1 : 1;
         return a.name.localeCompare(b.name);
@@ -66,7 +70,8 @@ function TreeView({ state, dispatch }: Props) {
       } else {
         setSelectedIdx(-1);
       }
-    }).catch(() => setChildren([]));
+    }).catch(() => { if (!stale) setChildren([]); });
+    return () => { stale = true; };
   }, [path, state.headCommit, shouldSearch, state.repo, state.selectedFact]);
 
   const moveSelection = useCallback((delta: 1 | -1) => {
