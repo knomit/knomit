@@ -337,7 +337,23 @@ export function FilterBar({ state, dispatch }: Props) {
           ref={inputRef}
           value={inputValue}
           onChange={e => setInputValue(e.target.value)}
+          onFocus={() => {
+            // If there's a free-text pill, put it back in the input for editing
+            if (state.freeText && !inputValue) {
+              setInputValue(state.freeText);
+              dispatch({ type: 'SET_FREE_TEXT', text: '' });
+            }
+          }}
           onKeyDown={handleKeyDown}
+          onBlur={() => {
+            // Commit any uncommitted text as free text and clear input so the pill shows
+            const trimmed = inputValue.trim();
+            if (trimmed && !PREFIX_RE.test(trimmed)) {
+              window.clearTimeout(debounceRef.current);
+              dispatch({ type: 'SET_FREE_TEXT', text: trimmed });
+              setInputValue('');
+            }
+          }}
           placeholder={state.filters.length === 0 && !state.freeText ? 'Filter... (domain:x entity:y or free text)' : ''}
           style={{
             width: '100%',
