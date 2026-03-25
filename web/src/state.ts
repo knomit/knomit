@@ -214,6 +214,8 @@ export function reducer(s: AppState, a: Action): AppState {
         view: 'history',
         leftSelection: a.commit,
         rightSelection: a.path,
+        filters: [], // clear all filters — we're jumping to a specific commit+fact
+        freeText: '',
         navStack: pushNav(s),
         rightPanelFocused: false,
       };

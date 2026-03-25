@@ -38,7 +38,15 @@ export function HistoryTimeline({ state, dispatch }: Props) {
       setEntries(e);
       setNextCursor(r.next);
       setLoading(false);
-      // Auto-select first commit so the right panel loads its files
+      // If leftSelection already points to a valid commit (e.g. OPEN_REF), sync to it
+      if (state.leftSelection) {
+        const idx = e.findIndex(c => c.commit === state.leftSelection);
+        if (idx >= 0) {
+          setSelectedIdx(idx);
+          return; // don't override
+        }
+      }
+      // Otherwise auto-select first commit
       if (e.length > 0) {
         dispatch({ type: 'SELECT_COMMIT', commit: e[0].commit });
       }
@@ -80,9 +88,20 @@ export function HistoryTimeline({ state, dispatch }: Props) {
     return true;
   });
 
-  // When filters change, select the first filtered entry
+  // When filters change, select the first filtered entry — unless leftSelection
+  // already points to a valid commit in the list (e.g. OPEN_REF set it explicitly).
   const filteredKey = filteredEntries.map(e => e.commit).join(',');
   useEffect(() => {
+    // If leftSelection is already a valid commit in the filtered list, sync to it
+    if (state.leftSelection) {
+      const existingIdx = filteredEntries.findIndex(e => e.commit === state.leftSelection);
+      if (existingIdx >= 0) {
+        setSelectedIdx(existingIdx);
+        itemRefs.current[existingIdx]?.scrollIntoView({ block: 'nearest' });
+        return; // don't override with first entry
+      }
+    }
+    // Otherwise auto-select first
     setSelectedIdx(0);
     if (filteredEntries.length > 0) {
       dispatch({ type: 'SELECT_COMMIT', commit: filteredEntries[0].commit });

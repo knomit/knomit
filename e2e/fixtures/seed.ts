@@ -74,6 +74,23 @@ entities:
 Redis supports multiple eviction policies including allkeys-lru, volatile-lru, and noeviction. Choosing the right policy depends on whether all keys are cache-like or some must persist.`,
   },
 
+  {
+    path: 'kb/databases/postgresql/query-planning.md',
+    content: `---
+confidence: 0.85
+type: concept
+entities:
+  - PostgreSQL
+  - query planner
+refs:
+  - kb/databases/postgresql/mvcc.md
+  - kb/databases/indexing/btree-vs-hash.md
+---
+# PostgreSQL Query Planning
+
+The query planner evaluates multiple execution strategies and picks the one with the lowest estimated cost. Understanding MVCC and index types is essential for predicting planner behavior.`,
+  },
+
   // ── Batch 2: networking ───────────────────────────────────────
   {
     path: 'kb/networking/dns/resolution-flow.md',
