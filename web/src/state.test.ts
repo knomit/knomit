@@ -691,14 +691,12 @@ describe('episode (ep) chips in history mode', () => {
     expect(epChips.map(c => c.value).sort()).toEqual(['learn', 'retract']);
   });
 
-  it('ep chips persist across view switches', () => {
+  it('ep chips cleared when switching from history to tree', () => {
     let s: AppState = init;
     s = reducer(s, { type: 'SET_VIEW', view: 'history' });
     s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'ep', value: 'learn' } });
     s = reducer(s, { type: 'SET_VIEW', view: 'tree' });
-    expect(s.filters.find(f => f.category === 'ep')!.value).toBe('learn');
-    s = reducer(s, { type: 'SET_VIEW', view: 'history' });
-    expect(s.filters.find(f => f.category === 'ep')!.value).toBe('learn');
+    expect(s.filters.filter(f => f.category === 'ep')).toHaveLength(0);
   });
 
   it('CLEAR_FILTERS removes ep chips', () => {
@@ -760,23 +758,40 @@ describe('SELECT_COMMIT in history mode', () => {
 // ─── Regression: history mode + fact mode filter isolation ──────────────────
 
 describe('filter isolation between fact and history modes', () => {
-  it('ep chips added in history mode survive switch to tree and back', () => {
+  it('ep/freeText cleared when switching history → tree (only path kept)', () => {
     let s: AppState = init;
     s = reducer(s, { type: 'SET_VIEW', view: 'history' });
     s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'ep', value: 'learn' } });
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'path', value: 'kb/tech' } });
     s = reducer(s, { type: 'SET_FREE_TEXT', text: 'goroutine' });
-    // Switch to tree
     s = reducer(s, { type: 'SET_VIEW', view: 'tree' });
-    // ep chip and freeText should still be there
-    expect(s.filters.find(f => f.category === 'ep')!.value).toBe('learn');
-    expect(s.freeText).toBe('goroutine');
+    // ep and freeText cleared, path kept
+    expect(s.filters.filter(f => f.category === 'ep')).toHaveLength(0);
+    expect(s.freeText).toBe('');
+    expect(s.filters.find(f => f.category === 'path')!.value).toBe('kb/tech');
   });
 
-  it('domain chips added in tree mode survive switch to history', () => {
+  it('domain chips cleared when switching tree → history (only path kept)', () => {
     let s: AppState = init;
     s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'domain', value: 'go' } });
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'path', value: 'kb/tech' } });
     s = reducer(s, { type: 'SET_VIEW', view: 'history' });
+    expect(s.filters.filter(f => f.category === 'domain')).toHaveLength(0);
+    expect(s.filters.find(f => f.category === 'path')!.value).toBe('kb/tech');
+  });
+
+  it('filters preserved when switching tree ↔ chrono (same data)', () => {
+    let s: AppState = init;
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'domain', value: 'go' } });
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'entity', value: 'goroutine' } });
+    s = reducer(s, { type: 'SET_FREE_TEXT', text: 'scheduling' });
+    s = reducer(s, { type: 'SET_VIEW', view: 'chrono' });
     expect(s.filters.find(f => f.category === 'domain')!.value).toBe('go');
+    expect(s.filters.find(f => f.category === 'entity')!.value).toBe('goroutine');
+    expect(s.freeText).toBe('scheduling');
+    s = reducer(s, { type: 'SET_VIEW', view: 'tree' });
+    expect(s.filters.find(f => f.category === 'domain')!.value).toBe('go');
+    expect(s.freeText).toBe('scheduling');
   });
 });
 
@@ -885,18 +900,18 @@ describe('operation hierarchy — full workflow scenarios', () => {
     expect(s.leftSelection).toBe('kb/original.md');
   });
 
-  it('history mode: SET_VIEW to history clears selections but preserves filters', () => {
+  it('history mode: SET_VIEW to history clears selections and non-path filters', () => {
     let s: AppState = init;
     s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'domain', value: 'go' } });
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'path', value: 'kb/tech' } });
     s = reducer(s, { type: 'SELECT_FACT', path: 'kb/some-fact.md' });
-    expect(s.leftSelection).toBe('kb/some-fact.md');
-    expect(s.filters).toHaveLength(1);
 
     s = reducer(s, { type: 'SET_VIEW', view: 'history' });
     expect(s.view).toBe('history');
     expect(s.leftSelection).toBeNull();
     expect(s.rightSelection).toBeNull();
+    // domain cleared, path kept
     expect(s.filters).toHaveLength(1);
-    expect(s.filters[0]).toEqual({ category: 'domain', value: 'go' });
+    expect(s.filters[0]).toEqual({ category: 'path', value: 'kb/tech' });
   });
 });

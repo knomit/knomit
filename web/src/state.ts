@@ -118,15 +118,23 @@ function replacePathChip(filters: FilterChip[], value: string): FilterChip[] {
 
 export function reducer(s: AppState, a: Action): AppState {
   switch (a.type) {
-    case 'SET_VIEW':
+    case 'SET_VIEW': {
+      // Tree ↔ Chrono: keep all filters (same data, different presentation).
+      // Tree/Chrono ↔ History: clear all filters except path, clear freeText.
+      const crossingBoundary =
+        (s.view === 'history' && a.view !== 'history') ||
+        (s.view !== 'history' && a.view === 'history');
       return {
         ...s,
         view: a.view,
         leftSelection: null,
         rightSelection: null,
+        filters: crossingBoundary ? s.filters.filter(f => f.category === 'path') : s.filters,
+        freeText: crossingBoundary ? '' : s.freeText,
         navStack: pushNav(s),
         rightPanelFocused: false,
       };
+    }
     case 'NAVIGATE':
       return {
         ...s,
