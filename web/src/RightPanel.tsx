@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import type { Dispatch } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { api } from './api';
-import type { Fact, Stats, ActivityStats } from './api';
+import type { Fact, Stats, ActivityStats, CommitFile } from './api';
 import type { AppState, Action } from './state';
 import { currentPath } from './state';
 import { relativeTime, typeStyles, defaultTypeStyle } from './utils';
@@ -231,9 +231,26 @@ export function RightPanel({ state, dispatch }: { state: AppState; dispatch: Dis
   const [stats, setStats] = useState<Stats | null>(null);
   const [activity, setActivity] = useState<ActivityStats | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [commitFiles, setCommitFiles] = useState<CommitFile[]>([]);
 
   const path = currentPath(state);
   const isTimeTravelView = state.view === 'history' && !!state.selectedFact && !!state.historyCommit;
+
+  // Fetch commit detail when historyCommit changes (for the file picker)
+  useEffect(() => {
+    if (!state.historyCommit || state.view !== 'history') {
+      setCommitFiles([]);
+      return;
+    }
+    api.commitDetail(state.repo, state.historyCommit).then(detail => {
+      setCommitFiles(detail.files || []);
+      // Auto-select first non-deleted file if nothing selected
+      if (!state.selectedFact) {
+        const first = (detail.files || []).find(f => f.action !== 'deleted');
+        if (first) dispatch({ type: 'SELECT_FACT', path: first.path });
+      }
+    }).catch(() => setCommitFiles([]));
+  }, [state.historyCommit, state.view, state.repo]);
 
   useEffect(() => {
     setError(null);
@@ -323,8 +340,61 @@ export function RightPanel({ state, dispatch }: { state: AppState; dispatch: Dis
 
   if (fact.parse_error) return <FactEditor fact={fact} repo={state.repo} onSaved={setFact} />;
 
-  return renderFact(fact, dispatch, isTimeTravelView ? {
-    historyDate: fact.commit_date,
-    historyCommit: state.historyCommit!,
-  } : undefined);
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
+      {/* Commit file picker — shown in history mode when commit has files */}
+      {isTimeTravelView && commitFiles.length > 1 && (
+        <div style={{
+          borderBottom: '1px solid #333',
+          maxHeight: 3 * 28 + 2, // 3 rows of 28px
+          overflowY: 'auto',
+          flexShrink: 0,
+          background: '#1a1a1e',
+        }}>
+          {commitFiles.map(file => {
+            const isActive = state.selectedFact === file.path;
+            const opColor = file.action === 'added' ? '#7c9' : file.action === 'deleted' ? '#f88' : '#8af';
+            const opIndicator = file.action === 'added' ? '+' : file.action === 'deleted' ? '\u2212' : '~';
+            const displayName = file.title || file.path.split('/').pop()?.replace(/\.md$/, '') || file.path;
+            return (
+              <div
+                key={file.path}
+                onClick={() => dispatch({ type: 'SELECT_FACT', path: file.path })}
+                style={{
+                  height: 28,
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  padding: '0 12px',
+                  fontSize: 11,
+                  cursor: 'pointer',
+                  color: isActive ? '#fff' : '#aaa',
+                  background: isActive ? '#2a2a3a' : 'transparent',
+                  borderLeft: isActive ? '2px solid #8af' : '2px solid transparent',
+                }}
+                onMouseEnter={e => { if (!isActive) e.currentTarget.style.background = '#222'; }}
+                onMouseLeave={e => { if (!isActive) e.currentTarget.style.background = 'transparent'; }}
+              >
+                <span style={{ color: opColor, fontWeight: 'bold', fontFamily: 'monospace', width: 12, textAlign: 'center', flexShrink: 0 }}>{opIndicator}</span>
+                <span title={displayName} style={{
+                  fontWeight: isActive ? 500 : 400,
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                  flex: 1,
+                  minWidth: 0,
+                }}>{displayName}</span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+      <div style={{ flex: 1, overflow: 'auto' }}>
+        {renderFact(fact, dispatch, isTimeTravelView ? {
+          historyDate: fact.commit_date,
+          historyCommit: state.historyCommit!,
+        } : undefined)}
+      </div>
+    </div>
+  );
 }
