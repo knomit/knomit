@@ -88,7 +88,7 @@ export function Breadcrumb({ state, dispatch }: Props) {
               onClick={() => dispatch({ type: 'SET_VIEW', view })}
               title={label}
               style={{
-                background: active ? '#444' : 'transparent',
+                background: 'transparent',
                 border: 'none',
                 outline: 'none',
                 padding: '3px 8px',
