@@ -174,15 +174,41 @@ export function FilterBar({ state, dispatch }: Props) {
     }
   }
 
-  async function openCategory(cat: FilterChip['category']) {
+  const [pathPrefix, setPathPrefix] = useState('');
+
+  async function openCategory(cat: FilterChip['category'], prefix = '') {
     setActiveCategory(cat);
     setCategoryValues([]);
     setCategorySearch('');
+    if (cat === 'path') setPathPrefix(prefix);
     try {
-      const res = await api.completions(state.repo, cat, '');
+      const res = await api.completions(state.repo, cat, prefix);
       setCategoryValues(res.values || []);
     } catch {
       setCategoryValues([]);
+    }
+  }
+
+  function drillIntoPath(dir: string) {
+    setPathPrefix(dir);
+    setCategorySearch('');
+    api.completions(state.repo, 'path', dir + '/').then(res => {
+      setCategoryValues(res.values || []);
+    }).catch(() => setCategoryValues([]));
+  }
+
+  function drillUpPath() {
+    const parts = pathPrefix.split('/');
+    if (parts.length <= 1) {
+      // Back to root
+      openCategory('path', '');
+    } else {
+      const parent = parts.slice(0, -1).join('/');
+      setPathPrefix(parent);
+      setCategorySearch('');
+      api.completions(state.repo, 'path', parent + '/').then(res => {
+        setCategoryValues(res.values || []);
+      }).catch(() => setCategoryValues([]));
     }
   }
 
@@ -195,19 +221,35 @@ export function FilterBar({ state, dispatch }: Props) {
     inputRef.current?.focus();
   }
 
-  // Close picker on outside click
+  function closePicker() {
+    setShowCategoryPicker(false);
+    setActiveCategory(null);
+    setCategoryValues([]);
+    setCategorySearch('');
+    setPathPrefix('');
+  }
+
+  // Close picker on outside click or ESC
   const pickerRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!showCategoryPicker) return;
     function onDown(e: MouseEvent) {
       if (pickerRef.current && !pickerRef.current.contains(e.target as Node)) {
-        setShowCategoryPicker(false);
-        setActiveCategory(null);
-        setCategoryValues([]);
+        closePicker();
+      }
+    }
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        closePicker();
       }
     }
     document.addEventListener('mousedown', onDown);
-    return () => document.removeEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onKey, true);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('keydown', onKey, true);
+    };
   }, [showCategoryPicker]);
 
   const hasPrefixMatch = PREFIX_RE.test(inputValue);
@@ -291,7 +333,10 @@ export function FilterBar({ state, dispatch }: Props) {
                   value={categorySearch}
                   onChange={e => {
                     setCategorySearch(e.target.value);
-                    api.completions(state.repo, activeCategory, e.target.value).then(res => {
+                    const prefix = activeCategory === 'path' && pathPrefix
+                      ? pathPrefix + '/' + e.target.value
+                      : e.target.value;
+                    api.completions(state.repo, activeCategory, prefix).then(res => {
                       setCategoryValues(res.values || []);
                     }).catch(() => {});
                   }}
@@ -313,23 +358,47 @@ export function FilterBar({ state, dispatch }: Props) {
                     {categorySearch ? 'No matches' : 'loading...'}
                   </div>
                 )}
-                {categoryValues.map(v => (
+                {/* Back button when drilled into a path */}
+                {activeCategory === 'path' && pathPrefix && (
                   <div
-                    key={v}
-                    onMouseDown={e => { e.preventDefault(); pickCategoryValue(activeCategory, v); }}
+                    onMouseDown={e => { e.preventDefault(); drillUpPath(); }}
                     style={{
-                      padding: '4px 12px',
-                      fontSize: 12,
-                      color: '#ccc',
-                      cursor: 'pointer',
-                      whiteSpace: 'nowrap',
+                      padding: '4px 12px', fontSize: 12, color: '#888', cursor: 'pointer',
+                      whiteSpace: 'nowrap', borderBottom: '1px solid #333', display: 'flex', alignItems: 'center', gap: 4,
                     }}
                     onMouseEnter={e => { (e.currentTarget as HTMLDivElement).style.background = '#333'; }}
                     onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.background = 'transparent'; }}
                   >
-                    {v}
+                    ← {pathPrefix}
                   </div>
-                ))}
+                )}
+                {categoryValues.map(v => {
+                  const isPath = activeCategory === 'path';
+                  const displayName = isPath ? v.split('/').pop() || v : v;
+                  return (
+                    <div
+                      key={v}
+                      style={{
+                        padding: '4px 12px', fontSize: 12, color: '#ccc', cursor: 'pointer',
+                        whiteSpace: 'nowrap', display: 'flex', alignItems: 'center',
+                      }}
+                      onMouseEnter={e => { (e.currentTarget as HTMLDivElement).style.background = '#333'; }}
+                      onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.background = 'transparent'; }}
+                    >
+                      <span
+                        onMouseDown={e => { e.preventDefault(); pickCategoryValue(activeCategory, v); }}
+                        style={{ flex: 1 }}
+                      >{displayName}</span>
+                      {isPath && (
+                        <span
+                          onMouseDown={e => { e.preventDefault(); e.stopPropagation(); drillIntoPath(v); }}
+                          style={{ color: '#666', padding: '0 4px', fontSize: 14, cursor: 'pointer' }}
+                          title="Browse deeper"
+                        >›</span>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             )}
           </div>
