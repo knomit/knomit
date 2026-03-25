@@ -548,3 +548,100 @@ describe('mixed filters with path navigation', () => {
     expect(currentPath(s)).toBe('kb/tech');
   });
 });
+
+// ─── Regression: free text persistence ──────────────────────────────────────
+
+describe('free text state management', () => {
+  it('SET_FREE_TEXT sets freeText', () => {
+    const s = reducer(init, { type: 'SET_FREE_TEXT', text: 'enforcement is active' });
+    expect(s.freeText).toBe('enforcement is active');
+  });
+
+  it('SET_FREE_TEXT with empty string clears freeText', () => {
+    let s: AppState = { ...init, freeText: 'some query' };
+    s = reducer(s, { type: 'SET_FREE_TEXT', text: '' });
+    expect(s.freeText).toBe('');
+  });
+
+  it('SET_FREE_TEXT does not push to navStack (typing should not flood history)', () => {
+    const s = reducer(init, { type: 'SET_FREE_TEXT', text: 'hello' });
+    expect(s.navStack).toHaveLength(0);
+  });
+
+  it('SELECT_FACT does NOT clear freeText (search results persist)', () => {
+    let s: AppState = init;
+    s = reducer(s, { type: 'SET_FREE_TEXT', text: 'bob is looking for work' });
+    expect(s.freeText).toBe('bob is looking for work');
+    s = reducer(s, { type: 'SELECT_FACT', path: 'kb/result.md' });
+    expect(s.freeText).toBe('bob is looking for work');
+    expect(s.selectedFact).toBe('kb/result.md');
+  });
+
+  it('SET_VIEW does NOT clear freeText (filters persist across views)', () => {
+    let s: AppState = init;
+    s = reducer(s, { type: 'SET_FREE_TEXT', text: 'search query' });
+    s = reducer(s, { type: 'SET_VIEW', view: 'chrono' });
+    expect(s.freeText).toBe('search query');
+  });
+
+  it('CLEAR_FILTERS clears freeText', () => {
+    let s: AppState = { ...init, freeText: 'active query' };
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'domain', value: 'go' } });
+    s = reducer(s, { type: 'CLEAR_FILTERS' });
+    expect(s.freeText).toBe('');
+    expect(s.filters).toHaveLength(0);
+  });
+
+  it('NAV_BACK restores freeText from previous state', () => {
+    let s: AppState = init;
+    s = reducer(s, { type: 'SET_FREE_TEXT', text: 'original query' });
+    // ADD_FILTER pushes nav (which captures current freeText)
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'domain', value: 'go' } });
+    // Change freeText
+    s = reducer(s, { type: 'SET_FREE_TEXT', text: 'new query' });
+    // Clear everything
+    s = reducer(s, { type: 'CLEAR_FILTERS' });
+    expect(s.freeText).toBe('');
+    // Go back — should restore freeText from before CLEAR
+    s = reducer(s, { type: 'NAV_BACK' });
+    expect(s.freeText).toBe('new query');
+  });
+
+  it('SET_REPO clears freeText', () => {
+    let s: AppState = { ...init, freeText: 'active query' };
+    s = reducer(s, { type: 'SET_REPO', repo: 'other' });
+    expect(s.freeText).toBe('');
+  });
+});
+
+// ─── Regression: free text + filter chips coexist ───────────────────────────
+
+describe('free text and filter chips coexist', () => {
+  it('freeText and type chip both active simultaneously', () => {
+    let s: AppState = init;
+    s = reducer(s, { type: 'SET_FREE_TEXT', text: 'scheduling' });
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'type', value: 'concept' } });
+    expect(s.freeText).toBe('scheduling');
+    expect(s.filters).toHaveLength(1);
+    expect(s.filters[0]).toEqual({ category: 'type', value: 'concept' });
+  });
+
+  it('removing type chip preserves freeText', () => {
+    let s: AppState = init;
+    s = reducer(s, { type: 'SET_FREE_TEXT', text: 'scheduling' });
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'type', value: 'concept' } });
+    s = reducer(s, { type: 'REMOVE_FILTER', index: 0 });
+    expect(s.freeText).toBe('scheduling');
+    expect(s.filters).toHaveLength(0);
+  });
+
+  it('freeText + path chip + domain chip all active', () => {
+    let s: AppState = init;
+    s = reducer(s, { type: 'SET_FREE_TEXT', text: 'goroutine' });
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'path', value: 'kb/tech' } });
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'domain', value: 'go' } });
+    expect(s.freeText).toBe('goroutine');
+    expect(s.filters).toHaveLength(2);
+    expect(currentPath(s)).toBe('kb/tech');
+  });
+});
