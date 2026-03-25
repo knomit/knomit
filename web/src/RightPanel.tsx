@@ -6,7 +6,7 @@ import type { Fact, Stats, ActivityStats, CommitDetail } from './api';
 import type { AppState, Action } from './state';
 import { currentPath } from './state';
 import { relativeTime, typeStyles, defaultTypeStyle, opStyles, defaultOpStyle } from './utils';
-import { TypeIcon, ChevronUpIcon, ChevronDownIcon } from './icons';
+import { TypeIcon } from './icons';
 
 function TagCloud({ label, entries, color, onTagClick, focusedValue }: {
   label: string;
@@ -239,22 +239,11 @@ function CommitPanel({ detail, selectedFact, onSelectFact }: {
   onSelectFact: (path: string) => void;
 }) {
   const listRef = useRef<HTMLDivElement>(null);
-  const [canScrollUp, setCanScrollUp] = useState(false);
-  const [canScrollDown, setCanScrollDown] = useState(false);
   const [listHeight, setListHeight] = useState(DEFAULT_LIST_HEIGHT);
   const draggingRef = useRef(false);
 
   const files = detail.files || [];
   const hasOverflow = files.length * ROW_HEIGHT > listHeight;
-
-  const checkScroll = () => {
-    const el = listRef.current;
-    if (!el) return;
-    setCanScrollUp(el.scrollTop > 0);
-    setCanScrollDown(el.scrollTop + el.clientHeight < el.scrollHeight - 1);
-  };
-
-  useEffect(() => { checkScroll(); }, [files, listHeight]);
 
   // Reset list height to default when commit changes
   useEffect(() => { setListHeight(DEFAULT_LIST_HEIGHT); }, [detail.commit]);
@@ -310,7 +299,6 @@ function CommitPanel({ detail, selectedFact, onSelectFact }: {
       <div style={{ display: 'flex', borderTop: '1px solid #2a2a3a' }}>
         <div
           ref={listRef}
-          onScroll={checkScroll}
           style={{
             height: Math.min(listHeight, files.length * ROW_HEIGHT),
             maxHeight: listHeight,
@@ -352,25 +340,6 @@ function CommitPanel({ detail, selectedFact, onSelectFact }: {
           })}
         </div>
 
-        {/* Scroll indicators */}
-        {hasOverflow && (
-          <div style={{
-            display: 'flex', flexDirection: 'column', justifyContent: 'space-between',
-            padding: '2px 4px', flexShrink: 0, alignItems: 'center',
-          }}>
-            <div style={{ opacity: canScrollUp ? 1 : 0.2, cursor: canScrollUp ? 'pointer' : 'default' }}
-              onClick={() => { if (listRef.current) listRef.current.scrollTop -= ROW_HEIGHT; }}
-            >
-              <ChevronUpIcon color="#888" size={10} />
-            </div>
-            <div style={{ fontSize: 9, color: '#555' }}>{files.length}</div>
-            <div style={{ opacity: canScrollDown ? 1 : 0.2, cursor: canScrollDown ? 'pointer' : 'default' }}
-              onClick={() => { if (listRef.current) listRef.current.scrollTop += ROW_HEIGHT; }}
-            >
-              <ChevronDownIcon color="#888" size={10} />
-            </div>
-          </div>
-        )}
       </div>
 
       {/* Drag handle to resize */}
