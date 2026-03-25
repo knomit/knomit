@@ -31,6 +31,9 @@ export function FilterBar({ state, dispatch }: Props) {
   const inputRef    = useRef<HTMLInputElement>(null);
   const debounceRef = useRef<number>(0);
 
+  // Track whether the input is focused — used to distinguish user clearing vs onBlur clearing
+  const focusedRef = useRef(false);
+
   // Sync free-text debounce whenever inputValue changes without a recognised prefix
   useEffect(() => {
     const match = PREFIX_RE.exec(inputValue);
@@ -50,11 +53,15 @@ export function FilterBar({ state, dispatch }: Props) {
       }, 150);
     } else {
       setSuggestions([]);
-      // Debounce free-text dispatch
-      window.clearTimeout(debounceRef.current);
-      debounceRef.current = window.setTimeout(() => {
-        dispatch({ type: 'SET_FREE_TEXT', text: inputValue });
-      }, 300);
+      // Only dispatch free-text changes when the input is focused (user is typing).
+      // When unfocused, inputValue='' is from onBlur clearing it to show the pill —
+      // don't overwrite freeText with empty string.
+      if (focusedRef.current) {
+        window.clearTimeout(debounceRef.current);
+        debounceRef.current = window.setTimeout(() => {
+          dispatch({ type: 'SET_FREE_TEXT', text: inputValue });
+        }, 300);
+      }
     }
     return () => window.clearTimeout(debounceRef.current);
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -338,21 +345,23 @@ export function FilterBar({ state, dispatch }: Props) {
           value={inputValue}
           onChange={e => setInputValue(e.target.value)}
           onFocus={() => {
+            focusedRef.current = true;
             // If there's a free-text pill, put it back in the input for editing.
-            // Keep freeText in state so search results stay visible.
             if (state.freeText && !inputValue) {
               setInputValue(state.freeText);
             }
           }}
           onKeyDown={handleKeyDown}
           onBlur={() => {
-            // Commit any uncommitted text as free text and clear input so the pill shows
+            focusedRef.current = false;
+            // Commit any uncommitted text as free text and clear input so the pill shows.
+            // Cancel pending debounce first — onBlur is the authoritative commit point.
+            window.clearTimeout(debounceRef.current);
             const trimmed = inputValue.trim();
             if (trimmed && !PREFIX_RE.test(trimmed)) {
-              window.clearTimeout(debounceRef.current);
               dispatch({ type: 'SET_FREE_TEXT', text: trimmed });
-              setInputValue('');
             }
+            setInputValue('');
           }}
           placeholder={state.filters.length === 0 && !state.freeText ? 'Filter... (domain:x entity:y or free text)' : ''}
           style={{
