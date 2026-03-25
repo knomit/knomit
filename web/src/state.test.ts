@@ -296,3 +296,107 @@ describe('reducer — shared infrastructure', () => {
     expect(s.rightPanelFocused).toBe(false);
   });
 });
+
+// ─── Regression tests for breadcrumb/path sync bugs ─────────────────────────
+
+describe('currentPath — path chip takes precedence over currentPath', () => {
+  it('returns path chip value when both chip and currentPath exist', () => {
+    const s: AppState = {
+      ...init,
+      currentPath: 'kb/stale',
+      filters: [{ category: 'path', value: 'kb/technology/ai' }],
+    };
+    expect(currentPath(s)).toBe('kb/technology/ai');
+  });
+
+  it('falls back to currentPath when no path chip', () => {
+    const s: AppState = {
+      ...init,
+      currentPath: 'kb/technology',
+      filters: [{ category: 'domain', value: 'go' }],
+    };
+    expect(currentPath(s)).toBe('kb/technology');
+  });
+});
+
+describe('breadcrumb and path chip stay in sync', () => {
+  it('ADD_FILTER with path replaces existing path chip (simulates breadcrumb click)', () => {
+    // Navigate deep: kb -> kb/technology -> kb/technology/ai -> kb/technology/ai/anthropic
+    let s: AppState = init;
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'path', value: 'kb/technology' } });
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'path', value: 'kb/technology/ai' } });
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'path', value: 'kb/technology/ai/anthropic' } });
+    expect(currentPath(s)).toBe('kb/technology/ai/anthropic');
+    expect(s.filters.filter(f => f.category === 'path')).toHaveLength(1);
+
+    // Click breadcrumb "kb/technology" — replaces path chip, doesn't add second one
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'path', value: 'kb/technology' } });
+    expect(currentPath(s)).toBe('kb/technology');
+    expect(s.filters.filter(f => f.category === 'path')).toHaveLength(1);
+    expect(s.filters.find(f => f.category === 'path')!.value).toBe('kb/technology');
+  });
+
+  it('non-path filters are preserved when path chip changes', () => {
+    let s: AppState = init;
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'domain', value: 'go' } });
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'path', value: 'kb/tech' } });
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'path', value: 'kb' } });
+    expect(s.filters).toHaveLength(2); // domain:go + path:kb
+    expect(s.filters.find(f => f.category === 'domain')!.value).toBe('go');
+    expect(s.filters.find(f => f.category === 'path')!.value).toBe('kb');
+  });
+});
+
+describe('removing path chip resets to ontology root', () => {
+  it('REMOVE_FILTER on path chip resets currentPath to ontologyRoot', () => {
+    let s: AppState = { ...init, ontologyRoot: 'kb' };
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'path', value: 'kb/technology/ai' } });
+    expect(currentPath(s)).toBe('kb/technology/ai');
+
+    // Remove the path chip (find its index)
+    const pathIdx = s.filters.findIndex(f => f.category === 'path');
+    s = reducer(s, { type: 'REMOVE_FILTER', index: pathIdx });
+    expect(s.filters.filter(f => f.category === 'path')).toHaveLength(0);
+    expect(s.currentPath).toBe('kb');
+    expect(currentPath(s)).toBe('kb');
+  });
+
+  it('REMOVE_FILTER on non-path chip does not reset currentPath', () => {
+    let s: AppState = init;
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'path', value: 'kb/tech' } });
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'domain', value: 'go' } });
+
+    // Remove the domain chip
+    const domainIdx = s.filters.findIndex(f => f.category === 'domain');
+    s = reducer(s, { type: 'REMOVE_FILTER', index: domainIdx });
+    expect(currentPath(s)).toBe('kb/tech'); // path chip unchanged
+  });
+
+  it('CLEAR_FILTERS resets currentPath to ontologyRoot', () => {
+    let s: AppState = { ...init, ontologyRoot: 'kb' };
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'path', value: 'kb/deep/nested' } });
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'domain', value: 'go' } });
+    s = reducer(s, { type: 'CLEAR_FILTERS' });
+    expect(s.filters).toHaveLength(0);
+    expect(s.currentPath).toBe('kb');
+    expect(currentPath(s)).toBe('kb');
+  });
+});
+
+describe('back navigation restores path state', () => {
+  it('NAV_BACK after deep navigation restores previous path', () => {
+    let s: AppState = init;
+    // Navigate deep
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'path', value: 'kb/tech' } });
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'path', value: 'kb/tech/go' } });
+    expect(currentPath(s)).toBe('kb/tech/go');
+
+    // Go back
+    s = reducer(s, { type: 'NAV_BACK' });
+    expect(currentPath(s)).toBe('kb/tech');
+
+    // Go back again
+    s = reducer(s, { type: 'NAV_BACK' });
+    expect(currentPath(s)).toBe('kb');
+  });
+});
