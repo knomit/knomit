@@ -1,12 +1,12 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { Dispatch } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { api } from './api';
-import type { Fact, Stats, ActivityStats, CommitFile } from './api';
+import type { Fact, Stats, ActivityStats, CommitDetail } from './api';
 import type { AppState, Action } from './state';
 import { currentPath } from './state';
-import { relativeTime, typeStyles, defaultTypeStyle } from './utils';
-import { TypeIcon } from './icons';
+import { relativeTime, typeStyles, defaultTypeStyle, opStyles, defaultOpStyle } from './utils';
+import { TypeIcon, ChevronUpIcon, ChevronDownIcon } from './icons';
 
 function TagCloud({ label, entries, color, onTagClick, focusedValue }: {
   label: string;
@@ -226,12 +226,132 @@ function FactEditor({ fact, repo, onSaved }: { fact: Fact; repo: string; onSaved
 }
 
 
+// ─── Commit Panel (history mode) ─────────────────────────────────────────────
+
+const ROW_HEIGHT = 26;
+const MAX_VISIBLE_ROWS = 3;
+
+function CommitPanel({ detail, selectedFact, onSelectFact }: {
+  detail: CommitDetail;
+  selectedFact: string | null;
+  onSelectFact: (path: string) => void;
+}) {
+  const listRef = useRef<HTMLDivElement>(null);
+  const [canScrollUp, setCanScrollUp] = useState(false);
+  const [canScrollDown, setCanScrollDown] = useState(false);
+
+  const files = detail.files || [];
+  const hasOverflow = files.length > MAX_VISIBLE_ROWS;
+
+  const checkScroll = () => {
+    const el = listRef.current;
+    if (!el) return;
+    setCanScrollUp(el.scrollTop > 0);
+    setCanScrollDown(el.scrollTop + el.clientHeight < el.scrollHeight - 1);
+  };
+
+  useEffect(() => { checkScroll(); }, [files]);
+
+  // Episode tag
+  const op = detail.operation || '';
+  const os = op && opStyles[op] ? opStyles[op] : defaultOpStyle;
+
+  return (
+    <div style={{ borderBottom: '1px solid #333', flexShrink: 0, background: '#1a1a1e' }}>
+      {/* Header: episode tag + message */}
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: 8,
+        padding: '6px 12px', borderBottom: '1px solid #2a2a2a',
+      }}>
+        {op && (
+          <span style={{
+            fontSize: 10, padding: '1px 6px', borderRadius: 8,
+            color: os.color, background: os.bg, whiteSpace: 'nowrap', flexShrink: 0,
+          }}>{os.label || op}</span>
+        )}
+        <span style={{
+          fontSize: 11, color: '#aaa',
+          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, minWidth: 0,
+        }} title={detail.message}>{detail.message}</span>
+      </div>
+
+      {/* File list with scroll indicators */}
+      <div style={{ display: 'flex', position: 'relative' }}>
+        <div
+          ref={listRef}
+          onScroll={checkScroll}
+          style={{
+            maxHeight: MAX_VISIBLE_ROWS * ROW_HEIGHT,
+            overflowY: hasOverflow ? 'auto' : 'hidden',
+            flex: 1,
+          }}
+        >
+          {files.map(file => {
+            const isActive = selectedFact === file.path;
+            const opColor = file.action === 'added' ? '#7c9' : file.action === 'deleted' ? '#f88' : '#8af';
+            const opIndicator = file.action === 'added' ? '+' : file.action === 'deleted' ? '\u2212' : '~';
+            const displayName = file.title || file.path.split('/').pop()?.replace(/\.md$/, '') || file.path;
+            return (
+              <div
+                key={file.path}
+                onClick={() => onSelectFact(file.path)}
+                style={{
+                  height: ROW_HEIGHT,
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  padding: '0 12px',
+                  fontSize: 11,
+                  cursor: 'pointer',
+                  color: isActive ? '#fff' : '#aaa',
+                  background: isActive ? '#2a2a3a' : 'transparent',
+                  borderLeft: isActive ? '2px solid #8af' : '2px solid transparent',
+                }}
+                onMouseEnter={e => { if (!isActive) e.currentTarget.style.background = '#222'; }}
+                onMouseLeave={e => { if (!isActive) e.currentTarget.style.background = 'transparent'; }}
+              >
+                <span style={{ color: opColor, fontWeight: 'bold', fontFamily: 'monospace', width: 12, textAlign: 'center', flexShrink: 0 }}>{opIndicator}</span>
+                <span title={displayName} style={{
+                  fontWeight: isActive ? 500 : 400,
+                  overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, minWidth: 0,
+                }}>{displayName}</span>
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Scroll indicators */}
+        {hasOverflow && (
+          <div style={{
+            display: 'flex', flexDirection: 'column', justifyContent: 'space-between',
+            padding: '2px 4px', flexShrink: 0, alignItems: 'center',
+          }}>
+            <div style={{ opacity: canScrollUp ? 1 : 0.2, cursor: canScrollUp ? 'pointer' : 'default' }}
+              onClick={() => { if (listRef.current) listRef.current.scrollTop -= ROW_HEIGHT; }}
+            >
+              <ChevronUpIcon color="#888" size={10} />
+            </div>
+            <div style={{ fontSize: 9, color: '#555' }}>{files.length}</div>
+            <div style={{ opacity: canScrollDown ? 1 : 0.2, cursor: canScrollDown ? 'pointer' : 'default' }}
+              onClick={() => { if (listRef.current) listRef.current.scrollTop += ROW_HEIGHT; }}
+            >
+              <ChevronDownIcon color="#888" size={10} />
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── Main RightPanel ─────────────────────────────────────────────────────────
+
 export function RightPanel({ state, dispatch }: { state: AppState; dispatch: Dispatch<Action> }) {
   const [fact, setFact] = useState<Fact | null>(null);
   const [stats, setStats] = useState<Stats | null>(null);
   const [activity, setActivity] = useState<ActivityStats | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [commitFiles, setCommitFiles] = useState<CommitFile[]>([]);
+  const [commitDetail, setCommitDetail] = useState<CommitDetail | null>(null);
 
   const path = currentPath(state);
   const isTimeTravelView = state.view === 'history' && !!state.selectedFact && !!state.historyCommit;
@@ -239,17 +359,17 @@ export function RightPanel({ state, dispatch }: { state: AppState; dispatch: Dis
   // Fetch commit detail when historyCommit changes (for the file picker)
   useEffect(() => {
     if (!state.historyCommit || state.view !== 'history') {
-      setCommitFiles([]);
+      setCommitDetail(null);
       return;
     }
     api.commitDetail(state.repo, state.historyCommit).then(detail => {
-      setCommitFiles(detail.files || []);
+      setCommitDetail(detail);
       // Auto-select first non-deleted file if nothing selected
       if (!state.selectedFact) {
         const first = (detail.files || []).find(f => f.action !== 'deleted');
         if (first) dispatch({ type: 'SELECT_FACT', path: first.path });
       }
-    }).catch(() => setCommitFiles([]));
+    }).catch(() => setCommitDetail(null));
   }, [state.historyCommit, state.view, state.repo]);
 
   useEffect(() => {
@@ -342,53 +462,12 @@ export function RightPanel({ state, dispatch }: { state: AppState; dispatch: Dis
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
-      {/* Commit file picker — shown in history mode when commit has files */}
-      {isTimeTravelView && commitFiles.length > 1 && (
-        <div style={{
-          borderBottom: '1px solid #333',
-          maxHeight: 3 * 28 + 2, // 3 rows of 28px
-          overflowY: 'auto',
-          flexShrink: 0,
-          background: '#1a1a1e',
-        }}>
-          {commitFiles.map(file => {
-            const isActive = state.selectedFact === file.path;
-            const opColor = file.action === 'added' ? '#7c9' : file.action === 'deleted' ? '#f88' : '#8af';
-            const opIndicator = file.action === 'added' ? '+' : file.action === 'deleted' ? '\u2212' : '~';
-            const displayName = file.title || file.path.split('/').pop()?.replace(/\.md$/, '') || file.path;
-            return (
-              <div
-                key={file.path}
-                onClick={() => dispatch({ type: 'SELECT_FACT', path: file.path })}
-                style={{
-                  height: 28,
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 6,
-                  padding: '0 12px',
-                  fontSize: 11,
-                  cursor: 'pointer',
-                  color: isActive ? '#fff' : '#aaa',
-                  background: isActive ? '#2a2a3a' : 'transparent',
-                  borderLeft: isActive ? '2px solid #8af' : '2px solid transparent',
-                }}
-                onMouseEnter={e => { if (!isActive) e.currentTarget.style.background = '#222'; }}
-                onMouseLeave={e => { if (!isActive) e.currentTarget.style.background = 'transparent'; }}
-              >
-                <span style={{ color: opColor, fontWeight: 'bold', fontFamily: 'monospace', width: 12, textAlign: 'center', flexShrink: 0 }}>{opIndicator}</span>
-                <span title={displayName} style={{
-                  fontWeight: isActive ? 500 : 400,
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap',
-                  flex: 1,
-                  minWidth: 0,
-                }}>{displayName}</span>
-              </div>
-            );
-          })}
-        </div>
-      )}
+      {/* Commit panel — shown in history mode */}
+      {isTimeTravelView && commitDetail && <CommitPanel
+        detail={commitDetail}
+        selectedFact={state.selectedFact}
+        onSelectFact={path => dispatch({ type: 'SELECT_FACT', path })}
+      />}
       <div style={{ flex: 1, overflow: 'auto' }}>
         {renderFact(fact, dispatch, isTimeTravelView ? {
           historyDate: fact.commit_date,
