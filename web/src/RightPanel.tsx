@@ -6,6 +6,7 @@ import type { Fact, Stats, ActivityStats } from './api';
 import type { AppState, Action } from './state';
 import { currentPath } from './state';
 import { relativeTime, typeStyles, defaultTypeStyle } from './utils';
+import { TypeIcon } from './icons';
 
 function TagCloud({ label, entries, color, onTagClick, focusedValue }: {
   label: string;
@@ -115,7 +116,8 @@ function renderFact(
                 color: ts.color, background: ts.bg, fontSize: 10, padding: '2px 8px',
                 borderRadius: 3, fontFamily: 'monospace', letterSpacing: 0.5,
                 border: fact.type === 'hypothesis' ? `1px dashed ${ts.color}` : 'none',
-              }}>{ts.icon} {ts.label}</span>
+                display: 'inline-flex', alignItems: 'center', gap: 4,
+              }}><TypeIcon type={fact.type} color={ts.color} size={10} /> {ts.label}</span>
             );
           })()}
           <div style={{ fontSize: 12, color: '#555' }}>{fact.path}</div>

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useCallback } from 'react';
 import type { AppState, Action } from './state';
+import { ChevronUpIcon, ChevronDownIcon } from './icons';
 
 interface Props {
   state: AppState;
@@ -76,7 +77,7 @@ export function Console({ state, dispatch }: Props) {
           </span>
         )}
         <div style={{ flex: 1 }} />
-        <span data-testid="console-toggle" style={{ color: '#666', fontSize: 13 }}>&#x25B2;</span>
+        <span data-testid="console-toggle" style={{ color: '#666', display: 'flex', alignItems: 'center' }}><ChevronUpIcon color="#666" size={13} /></span>
       </div>
     );
   }
@@ -107,8 +108,8 @@ export function Console({ state, dispatch }: Props) {
         <span
           data-testid="console-toggle"
           onClick={() => dispatch({ type: 'CONSOLE_TOGGLE' })}
-          style={{ color: '#666', fontSize: 13, cursor: 'pointer' }}
-        >&#x25BC;</span>
+          style={{ color: '#666', cursor: 'pointer', display: 'flex', alignItems: 'center' }}
+        ><ChevronDownIcon color="#666" size={13} /></span>
       </div>
       {/* Log entries */}
       <div

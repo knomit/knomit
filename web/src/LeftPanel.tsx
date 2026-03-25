@@ -6,6 +6,7 @@ import type { AppState, Action } from './state';
 import { currentPath } from './state';
 import { HistoryTimeline } from './HistoryTimeline';
 import { typeStyles, defaultTypeStyle, relativeTimeEpoch } from './utils';
+import { TypeIcon, FolderIcon } from './icons';
 
 interface Props {
   state: AppState;
@@ -150,10 +151,12 @@ function TreeView({ state, dispatch }: Props) {
               }}
             >
               {c.is_dir ? (
-                <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#7c9', flexShrink: 0, opacity: 0.7 }} />
+                <span style={{ flexShrink: 0, display: 'flex', alignItems: 'center', opacity: 0.7 }}>
+                  <FolderIcon color="#7c9" size={12} />
+                </span>
               ) : (
-                <span data-testid="fact-type-icon" style={{ fontSize: 10, flexShrink: 0, color: ts.color, lineHeight: 1 }}>
-                  {ts.icon}
+                <span data-testid="fact-type-icon" style={{ flexShrink: 0, display: 'flex', alignItems: 'center' }}>
+                  <TypeIcon type={c.type || ''} color={ts.color} size={12} />
                 </span>
               )}
               <span style={{ fontSize: 13, color: '#ddd' }}>{c.title || c.name}</span>
@@ -283,7 +286,7 @@ function ChronoView({ state, dispatch }: Props) {
               }}
             >
               <div style={{ fontSize: 12, color: '#ddd', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: 6 }}>
-                <span style={{ color: ts.color, fontSize: 11, lineHeight: 1, flexShrink: 0 }}>{ts.icon}</span>
+                <span style={{ flexShrink: 0, display: 'flex', alignItems: 'center' }}><TypeIcon type={f.type || ''} color={ts.color} size={12} /></span>
                 {f.title}
                 {f.type && f.type !== 'observation' && (
                   <span data-testid="chrono-type-badge" style={{
