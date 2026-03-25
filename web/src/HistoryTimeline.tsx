@@ -79,11 +79,16 @@ export function HistoryTimeline({ state, dispatch }: Props) {
       });
       return;
     }
-    // Expand: fetch detail
+    // Expand: fetch detail and auto-select first file for time-travel
     setExpanded(prev => ({ ...prev, [commit]: { detail: null, loading: true } }));
     try {
       const detail = await api.commitDetail(state.repo, commit);
       setExpanded(prev => ({ ...prev, [commit]: { detail, loading: false } }));
+      // Auto-select first non-deleted file so the right panel shows it
+      const firstFile = filterChildren(detail.files || []).find(f => f.action !== 'deleted');
+      if (firstFile) {
+        dispatch({ type: 'SELECT_FACT', path: firstFile.path });
+      }
     } catch {
       setExpanded(prev => ({ ...prev, [commit]: { detail: null, loading: false } }));
     }
@@ -182,6 +187,10 @@ export function HistoryTimeline({ state, dispatch }: Props) {
                 onClick={() => {
                   setSelectedIdx(i);
                   dispatch({ type: 'SELECT_COMMIT', commit: entry.commit });
+                  // Auto-expand if not already expanded
+                  if (!expanded[entry.commit]) {
+                    toggleExpand(entry.commit);
+                  }
                 }}
               >
                 {/* Timeline column: continuous line + dot */}
