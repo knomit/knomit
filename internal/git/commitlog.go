@@ -79,7 +79,7 @@ func changedFilesInCommit(c *object.Commit) ([]changedFile, error) {
 			path, action = ch.To.Name, "modified"
 		}
 		if strings.HasSuffix(path, ".md") {
-			files = append(files, changedFile{path: path, action: action})
+			files = append(files, changedFile{path: strings.ToLower(path), action: action})
 		}
 	}
 	return files, nil

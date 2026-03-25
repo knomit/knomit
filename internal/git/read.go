@@ -52,6 +52,8 @@ func (s *Store) ReadFileWithHash(path string) (string, string, error) {
 }
 
 // ReadFileAtCommit reads the content of path from a specific commit.
+// If an exact path match fails, it retries with a case-insensitive walk
+// to handle repos where paths were stored with mixed case in older commits.
 func (s *Store) ReadFileAtCommit(path, commitHash string) (string, error) {
 	hash := plumbing.NewHash(commitHash)
 	commit, err := s.repo.CommitObject(hash)
@@ -62,11 +64,25 @@ func (s *Store) ReadFileAtCommit(path, commitHash string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("ReadFileAtCommit: tree: %w", err)
 	}
+	// Try exact match first.
 	f, err := tree.File(path)
-	if err != nil {
-		return "", fmt.Errorf("ReadFileAtCommit: file %q: %w", path, err)
+	if err == nil {
+		return f.Contents()
 	}
-	return f.Contents()
+	// Fallback: case-insensitive walk to find the file.
+	lowerPath := strings.ToLower(path)
+	var found *object.File
+	tree.Files().ForEach(func(file *object.File) error {
+		if strings.ToLower(file.Name) == lowerPath {
+			found = file
+			return io.EOF // stop iteration
+		}
+		return nil
+	})
+	if found != nil {
+		return found.Contents()
+	}
+	return "", fmt.Errorf("ReadFileAtCommit: file %q: %w", path, err)
 }
 
 // ReadFileLastCommit finds the most recent ancestor of beforeCommitHash where
@@ -585,15 +601,15 @@ func (s *Store) CommitDetail(commitHash string) (*CommitDetailResult, error) {
 		switch {
 		case from == "" && to != "":
 			if strings.HasSuffix(to, ".md") {
-				files = append(files, ChangedFile{Path: to, Action: "added"})
+				files = append(files, ChangedFile{Path: strings.ToLower(to), Action: "added"})
 			}
 		case from != "" && to == "":
 			if strings.HasSuffix(from, ".md") {
-				files = append(files, ChangedFile{Path: from, Action: "deleted"})
+				files = append(files, ChangedFile{Path: strings.ToLower(from), Action: "deleted"})
 			}
 		default:
 			if strings.HasSuffix(to, ".md") {
-				files = append(files, ChangedFile{Path: to, Action: "modified"})
+				files = append(files, ChangedFile{Path: strings.ToLower(to), Action: "modified"})
 			}
 		}
 	}
