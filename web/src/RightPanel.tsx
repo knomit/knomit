@@ -405,18 +405,30 @@ export function RightPanel({ state, dispatch }: { state: AppState; dispatch: Dis
     }
   }, [state.selectedFact, state.headCommit, state.historyCommit, isTimeTravelView, state.repo, path]);
 
-  // Keyboard: right panel focus
+  // Keyboard: right panel focus — ArrowLeft blurs, ArrowUp/Down navigate commit files
+  const commitFiles = commitDetail?.files || [];
   useEffect(() => {
     if (!state.rightPanelFocused) return;
     const handler = (e: KeyboardEvent) => {
       if (e.key === 'ArrowLeft') {
         e.preventDefault();
         dispatch({ type: 'BLUR_RIGHT_PANEL' });
+        return;
+      }
+      // Navigate commit files with up/down when in history mode
+      if (isTimeTravelView && commitFiles.length > 1 && (e.key === 'ArrowDown' || e.key === 'j' || e.key === 'ArrowUp' || e.key === 'k')) {
+        e.preventDefault();
+        const currentIdx = commitFiles.findIndex(f => f.path === state.selectedFact);
+        const delta = (e.key === 'ArrowDown' || e.key === 'j') ? 1 : -1;
+        const nextIdx = Math.max(0, Math.min(currentIdx + delta, commitFiles.length - 1));
+        if (nextIdx !== currentIdx && commitFiles[nextIdx]) {
+          dispatch({ type: 'SELECT_FACT', path: commitFiles[nextIdx].path });
+        }
       }
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [state.rightPanelFocused, dispatch]);
+  }, [state.rightPanelFocused, dispatch, isTimeTravelView, commitFiles, state.selectedFact]);
 
   if (error) return <div style={{ padding: 24, color: '#f44' }}>{error}</div>;
 
