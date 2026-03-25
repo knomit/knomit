@@ -13,12 +13,11 @@ const CATEGORIES: { key: FilterChip['category']; label: string }[] = [
   { key: 'domain', label: 'Domain' },
   { key: 'entity', label: 'Entity' },
   { key: 'type',   label: 'Type' },
-  { key: 'ep',     label: 'Episode' },
   { key: 'path',   label: 'Path' },
 ];
 
 // Match a trailing prefix token like "domain:go" or "entity:" at end of input
-const PREFIX_RE = /(?:^|\s)(domain|entity|type|ep|path):(\S*)$/;
+const PREFIX_RE = /(?:^|\s)(domain|entity|type|path):(\S*)$/;
 
 export function FilterBar({ state, dispatch }: Props) {
   const [inputValue, setInputValue]               = useState('');
