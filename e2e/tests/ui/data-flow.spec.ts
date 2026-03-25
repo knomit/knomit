@@ -126,4 +126,83 @@ test.describe('History Mode Data Flow', () => {
     // If no retract commits exist in seed data, the test passes trivially.
     // The state-level regression test covers the logic regardless.
   });
+
+  test('browse → entity click → ref click → history loads fact → back exits cleanly', async ({ page }) => {
+    // Step 1: Start in tree mode, kb selected
+    await expect(page.getByTestId('left-panel')).toBeVisible({ timeout: 10_000 });
+
+    // Step 2: Click the first directory to go one level deep
+    const firstDir = page.getByTestId('dir-entry').and(page.locator('[data-isdir="true"]')).first();
+    await firstDir.waitFor({ timeout: 10_000 });
+    await firstDir.click();
+    // Wait for new entries to load
+    await page.getByTestId('dir-entry').first().waitFor({ timeout: 10_000 });
+
+    // Navigate deeper until we find a fact (non-directory entry)
+    for (let depth = 0; depth < 5; depth++) {
+      const factEntry = page.getByTestId('dir-entry').and(page.locator('[data-isdir="false"]')).first();
+      const hasFact = await factEntry.isVisible().catch(() => false);
+      if (hasFact) break;
+      // Go deeper into first directory
+      const dir = page.getByTestId('dir-entry').and(page.locator('[data-isdir="true"]')).first();
+      if (await dir.isVisible().catch(() => false)) {
+        await dir.click();
+        await page.waitForTimeout(500);
+      } else break;
+    }
+
+    // Step 3: Click a fact to load it in the right panel
+    const factEntry = page.getByTestId('dir-entry').and(page.locator('[data-isdir="false"]')).first();
+    if (!await factEntry.isVisible().catch(() => false)) {
+      test.skip(true, 'No facts found in browsable tree');
+      return;
+    }
+    await factEntry.click();
+    await expect(page.getByTestId('fact-title')).toBeVisible({ timeout: 10_000 });
+    const factTitle1 = await page.getByTestId('fact-title').textContent();
+
+    // Step 4: Click an entity tag to trigger search
+    const entityTag = page.getByTestId('tag-item').first();
+    if (!await entityTag.isVisible({ timeout: 3_000 }).catch(() => false)) {
+      test.skip(true, 'No entity tags on the selected fact');
+      return;
+    }
+    await entityTag.click();
+    // Wait for search results (filter chip should appear)
+    await page.waitForTimeout(500);
+
+    // Step 5: Select the first search result
+    const searchResult = page.getByTestId('dir-entry').and(page.locator('[data-isdir="false"]')).first();
+    await searchResult.waitFor({ timeout: 10_000 });
+    await searchResult.click();
+    await expect(page.getByTestId('fact-title')).toBeVisible({ timeout: 10_000 });
+
+    // Step 6: Click a local reference (non-http link) to open it in history mode
+    // Local refs are rendered as <span> elements containing "→"
+    const localRef = page.locator('span').filter({ hasText: /^→/ }).first();
+    if (!await localRef.isVisible({ timeout: 3_000 }).catch(() => false)) {
+      test.skip(true, 'No local references on the selected fact');
+      return;
+    }
+    await localRef.click();
+
+    // Step 7: Verify history mode opened and fact is visible in right panel
+    await expect(page.getByTestId('history-timeline')).toBeVisible({ timeout: 10_000 });
+    // The referenced fact MUST be loaded in the right panel
+    await expect(page.getByTestId('fact-title')).toBeVisible({ timeout: 10_000 });
+
+    // Step 8: Click back — should return to previous state cleanly
+    await page.keyboard.press('Backspace');
+    await page.waitForTimeout(500);
+
+    // Should not be stuck in history — verify we can see fact content
+    await expect(page.getByTestId('fact-title')).toBeVisible({ timeout: 10_000 });
+
+    // Click back again — should keep going back through history
+    await page.keyboard.press('Backspace');
+    await page.waitForTimeout(500);
+
+    // Should still have content visible (not broken state)
+    await expect(page.getByTestId('left-panel')).toBeVisible({ timeout: 5_000 });
+  });
 });

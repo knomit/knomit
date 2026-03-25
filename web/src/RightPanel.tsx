@@ -383,8 +383,12 @@ export function RightPanel({ state, dispatch }: { state: AppState; dispatch: Dis
     api.commitDetail(state.repo, historyCommit).then(detail => {
       if (stale) return;
       setCommitDetail(detail);
-      const first = (detail.files || [])[0];
-      if (first) dispatch({ type: 'SELECT_FACT', path: first.path });
+      // Only auto-select first file if no rightSelection is already set
+      // (e.g. OPEN_REF sets rightSelection explicitly — don't clobber it)
+      if (!state.rightSelection) {
+        const first = (detail.files || [])[0];
+        if (first) dispatch({ type: 'SELECT_FACT', path: first.path });
+      }
     }).catch(() => { if (!stale) setCommitDetail(null); });
     return () => { stale = true; };
   }, [historyCommit, state.view, state.repo]);
