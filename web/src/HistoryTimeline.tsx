@@ -5,6 +5,7 @@ import type { HistoryEntryWithTags, CommitDetail } from './api';
 import type { AppState, Action } from './state';
 import { currentPath } from './state';
 import { relativeTime, opStyles, defaultOpStyle } from './utils';
+import { ChevronDownIcon, ChevronUpIcon } from './icons';
 
 interface Props {
   state: AppState;
@@ -197,7 +198,7 @@ export function HistoryTimeline({ state, dispatch }: Props) {
                   }
                 }}
               >
-                {/* Timeline column: continuous line + dot */}
+                {/* Timeline column: continuous line + dot + expand icon */}
                 <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', width: 20, flexShrink: 0 }}>
                   <div style={{ width: 2, background: i === 0 ? 'transparent' : '#333', flex: 1 }} />
                   <div
@@ -214,6 +215,17 @@ export function HistoryTimeline({ state, dispatch }: Props) {
                   />
                   <div style={{ width: 2, background: i === entries.length - 1 && !isExpanded ? 'transparent' : '#333', flex: 1 }} />
                 </div>
+                {/* Expand/collapse chevron for multi-fact commits */}
+                {count != null && count > 1 && (
+                  <div
+                    onClick={e => { e.stopPropagation(); toggleExpand(entry.commit); }}
+                    style={{ display: 'flex', alignItems: 'center', cursor: 'pointer', flexShrink: 0, padding: '0 2px' }}
+                  >
+                    {isExpanded
+                      ? <ChevronUpIcon color="#888" size={12} />
+                      : <ChevronDownIcon color="#888" size={12} />}
+                  </div>
+                )}
 
                 {/* Commit info */}
                 <div style={{ flex: 1, minWidth: 0, paddingLeft: 8, paddingTop: 4, paddingBottom: 4 }}>
@@ -252,6 +264,7 @@ export function HistoryTimeline({ state, dispatch }: Props) {
                     const opIndicator = file.action === 'added' ? '+' : file.action === 'deleted' ? '\u2212' : '~';
                     const opColor = file.action === 'added' ? '#7c9' : file.action === 'deleted' ? '#f88' : '#8af';
                     const basename = file.path.split('/').pop()?.replace(/\.md$/, '') || file.path;
+                    const isChildSelected = state.selectedFact === file.path && state.historyCommit === entry.commit;
                     return (
                       <div
                         key={file.path}
@@ -261,13 +274,16 @@ export function HistoryTimeline({ state, dispatch }: Props) {
                         }}
                         style={{
                           padding: '4px 12px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6,
-                          fontSize: 11, color: '#ccc',
+                          fontSize: 11,
+                          color: isChildSelected ? '#fff' : '#ccc',
+                          background: isChildSelected ? '#333' : 'transparent',
+                          borderLeft: isChildSelected ? '2px solid #8af' : '2px solid transparent',
                         }}
-                        onMouseEnter={e => { e.currentTarget.style.background = '#222'; }}
-                        onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
+                        onMouseEnter={e => { if (!isChildSelected) e.currentTarget.style.background = '#222'; }}
+                        onMouseLeave={e => { if (!isChildSelected) e.currentTarget.style.background = 'transparent'; }}
                       >
                         <span style={{ color: opColor, fontWeight: 'bold', fontFamily: 'monospace', width: 12, textAlign: 'center' }}>{opIndicator}</span>
-                        <span>{basename}</span>
+                        <span style={{ fontWeight: isChildSelected ? 500 : 400 }}>{basename}</span>
                       </div>
                     );
                   })}
