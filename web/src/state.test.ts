@@ -137,24 +137,42 @@ describe('reducer — nav', () => {
 });
 
 describe('currentPath()', () => {
-  it('returns path chip value when present', () => {
-    const s = { ...init, filters: [{ category: 'path' as const, value: 'kb/tech' }] };
+  it('returns currentPath from state', () => {
+    const s = { ...init, currentPath: 'kb/tech' };
     expect(currentPath(s)).toBe('kb/tech');
   });
 
-  it('returns ontologyRoot when no path chip', () => {
-    const s = { ...init, ontologyRoot: 'knowledge', filters: [] };
+  it('returns ontologyRoot when currentPath is empty', () => {
+    const s = { ...init, currentPath: '', ontologyRoot: 'knowledge' };
     expect(currentPath(s)).toBe('knowledge');
   });
 
-  it('returns kb fallback when ontologyRoot is empty and no path chip', () => {
-    const s = { ...init, ontologyRoot: '', filters: [] };
+  it('returns kb fallback when both empty', () => {
+    const s = { ...init, currentPath: '', ontologyRoot: '' };
     expect(currentPath(s)).toBe('kb');
   });
+});
 
-  it('prefers path chip over ontologyRoot', () => {
-    const s = { ...init, ontologyRoot: 'knowledge', filters: [{ category: 'path' as const, value: 'kb/custom' }] };
-    expect(currentPath(s)).toBe('kb/custom');
+describe('reducer — NAVIGATE', () => {
+  it('sets currentPath and pushes nav', () => {
+    const s = reducer(init, { type: 'NAVIGATE', path: 'kb/tech' });
+    expect(s.currentPath).toBe('kb/tech');
+    expect(s.selectedFact).toBeNull();
+    expect(s.navStack.length).toBe(1);
+  });
+});
+
+describe('reducer — GO_UP', () => {
+  it('removes last path segment', () => {
+    const s0 = { ...init, currentPath: 'kb/tech/go' };
+    const s = reducer(s0, { type: 'GO_UP' });
+    expect(s.currentPath).toBe('kb/tech');
+  });
+
+  it('does nothing at root', () => {
+    const s0 = { ...init, currentPath: 'kb' };
+    const s = reducer(s0, { type: 'GO_UP' });
+    expect(s.currentPath).toBe('kb');
   });
 });
 

@@ -3,6 +3,7 @@ import { reducer, init } from './state';
 import { api } from './api';
 import type { RepoInfo } from './api';
 import { TopBar } from './TopBar';
+import { Breadcrumb } from './Breadcrumb';
 import { FilterBar } from './FilterBar';
 import { LeftPanel } from './LeftPanel';
 import { RightPanel } from './RightPanel';
@@ -92,6 +93,7 @@ export default function App() {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', width: '100vw', background: '#141414', color: '#eee', fontFamily: 'system-ui, sans-serif', overflow: 'hidden' }}>
       <TopBar state={state} repos={repos} dispatch={dispatch} onSettingsClick={() => setShowOrigin(true)} />
+      <Breadcrumb state={state} dispatch={dispatch} />
       <FilterBar state={state} dispatch={dispatch} />
 
       <div style={{ display: 'flex', flex: 1, overflow: 'hidden', minHeight: 0 }}>

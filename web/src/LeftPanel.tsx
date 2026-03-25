@@ -83,7 +83,7 @@ function TreeView({ state, dispatch }: Props) {
     const child = children[selectedIdx];
     if (!child) return;
     if (child.is_dir) {
-      dispatch({ type: 'ADD_FILTER', chip: { category: 'path', value: `${path}/${child.name}` } });
+      dispatch({ type: 'NAVIGATE', path: `${path}/${child.name}` });
     } else {
       dispatch({ type: 'SELECT_FACT', path: child.fullPath || `${path}/${child.name}` });
     }
@@ -105,7 +105,7 @@ function TreeView({ state, dispatch }: Props) {
         // Go up directory: remove last path segment from path chip
         const parts = path.split('/');
         if (parts.length > 1) {
-          dispatch({ type: 'ADD_FILTER', chip: { category: 'path', value: parts.slice(0, -1).join('/') } });
+          dispatch({ type: 'GO_UP' });
         }
       }
       else if (e.key === 'ArrowRight') {

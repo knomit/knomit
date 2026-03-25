@@ -7,6 +7,7 @@ export interface FilterChip {
 
 export interface NavEntry {
   view: View;
+  currentPath: string;
   selectedFact: string | null;
   filters: FilterChip[];
   historyCommit: string | null;
@@ -23,6 +24,7 @@ export interface ConsoleEntry {
 export interface AppState {
   repo: string;
   view: View;
+  currentPath: string;           // directory path for browse/scope
   selectedFact: string | null;
   filters: FilterChip[];
   freeText: string;              // unprefixed search text
@@ -44,6 +46,8 @@ export interface AppState {
 
 export type Action =
   | { type: 'SET_VIEW'; view: View }
+  | { type: 'NAVIGATE'; path: string }
+  | { type: 'GO_UP' }
   | { type: 'SELECT_FACT'; path: string }
   | { type: 'ADD_FILTER'; chip: FilterChip }
   | { type: 'REMOVE_FILTER'; index: number }
@@ -68,6 +72,7 @@ export type Action =
 export const init: AppState = {
   repo: 'knomit',
   view: 'tree',
+  currentPath: 'kb',
   selectedFact: null,
   filters: [],
   freeText: '',
@@ -90,6 +95,7 @@ export const init: AppState = {
 function pushNav(s: AppState): NavEntry[] {
   const entry: NavEntry = {
     view: s.view,
+    currentPath: s.currentPath,
     selectedFact: s.selectedFact,
     filters: [...s.filters],
     historyCommit: s.historyCommit,
@@ -101,8 +107,7 @@ function pushNav(s: AppState): NavEntry[] {
 }
 
 export function currentPath(state: AppState): string {
-  const pathChip = state.filters.find(f => f.category === 'path');
-  return pathChip?.value || state.ontologyRoot || 'kb';
+  return state.currentPath || state.ontologyRoot || 'kb';
 }
 
 export function reducer(s: AppState, a: Action): AppState {
@@ -116,6 +121,25 @@ export function reducer(s: AppState, a: Action): AppState {
         navStack: pushNav(s),
         rightPanelFocused: false,
       };
+    case 'NAVIGATE':
+      return {
+        ...s,
+        currentPath: a.path,
+        selectedFact: null,
+        navStack: pushNav(s),
+        rightPanelFocused: false,
+      };
+    case 'GO_UP': {
+      const parts = s.currentPath.split('/');
+      if (parts.length <= 1) return s;
+      return {
+        ...s,
+        currentPath: parts.slice(0, -1).join('/'),
+        selectedFact: null,
+        navStack: pushNav(s),
+        rightPanelFocused: false,
+      };
+    }
     case 'SELECT_FACT':
       return { ...s, selectedFact: a.path, navStack: pushNav(s) };
     case 'ADD_FILTER': {
@@ -144,6 +168,7 @@ export function reducer(s: AppState, a: Action): AppState {
       return {
         ...s,
         view: prev.view,
+        currentPath: prev.currentPath,
         selectedFact: prev.selectedFact,
         filters: prev.filters,
         historyCommit: prev.historyCommit,
@@ -168,6 +193,7 @@ export function reducer(s: AppState, a: Action): AppState {
         branch: a.branch,
         embeddingsEnabled: a.embeddingsEnabled,
         ontologyRoot: a.ontologyRoot || s.ontologyRoot,
+        currentPath: s.currentPath === 'kb' && a.ontologyRoot ? a.ontologyRoot : s.currentPath,
       };
     case 'SET_HEAD':
       return { ...s, headCommit: a.head };
@@ -188,6 +214,7 @@ export function reducer(s: AppState, a: Action): AppState {
         ...s,
         repo: a.repo,
         view: 'tree',
+        currentPath: 'kb',
         selectedFact: null,
         filters: [],
         freeText: '',
