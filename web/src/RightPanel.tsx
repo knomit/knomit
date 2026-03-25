@@ -66,26 +66,9 @@ function TagCloud({ label, entries, color, onTagClick, focusedValue }: {
   );
 }
 
-function renderFact(
-  fact: Fact,
-  dispatch: Dispatch<Action>,
-  opts?: { historyDate?: string; historyCommit?: string }
-) {
-  const isTimeTravel = !!opts?.historyCommit;
-
+function renderFact(fact: Fact, dispatch: Dispatch<Action>) {
   return (
     <div style={{ padding: '24px 28px', overflowY: 'auto', height: '100%', boxSizing: 'border-box' }}>
-      {/* Time-travel header */}
-      {isTimeTravel && opts?.historyCommit && (
-        <div style={{
-          background: '#2e2a1a', border: '1px solid rgba(255,170,0,0.3)', borderRadius: 6,
-          padding: '8px 14px', marginBottom: 16, color: '#fa0', fontSize: 12,
-        }}>
-          Viewing at commit {opts.historyCommit.slice(0, 7)}
-          {opts.historyDate && ` \u2014 ${relativeTime(opts.historyDate)}`}
-        </div>
-      )}
-
       {/* Header */}
       <div style={{ marginBottom: 20 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
@@ -498,10 +481,7 @@ export function RightPanel({ state, dispatch }: { state: AppState; dispatch: Dis
         onSelectFact={path => { dispatch({ type: 'SELECT_FACT', path }); dispatch({ type: 'FOCUS_RIGHT_PANEL' }); }}
       />}
       <div style={{ flex: 1, overflow: 'auto' }}>
-        {renderFact(fact, dispatch, isTimeTravelView ? {
-          historyDate: fact.commit_date,
-          historyCommit: state.historyCommit!,
-        } : undefined)}
+        {renderFact(fact, dispatch)}
       </div>
     </div>
   );
