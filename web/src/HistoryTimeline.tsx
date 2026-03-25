@@ -141,7 +141,7 @@ export function HistoryTimeline({ state, dispatch }: Props) {
                 paddingLeft: 12,
                 paddingRight: 12,
                 background: isSelected ? '#2a2a3a' : 'transparent',
-                borderLeft: isSelected ? '3px solid #8af' : '3px solid transparent',
+                borderLeft: isSelected ? `3px solid ${cs.color}` : '3px solid transparent',
                 cursor: 'pointer',
               }}
               onClick={() => {
