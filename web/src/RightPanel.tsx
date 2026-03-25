@@ -144,9 +144,14 @@ function renderFact(fact: Fact, dispatch: Dispatch<Action>) {
                   >{'\u2197'} {ref}</a>
                 );
               }
+              // Local ref: open at the same commit as the current fact (time-travel).
+              const commit = fact.commit_hash;
               return (
                 <span key={ref}
-                  onClick={() => dispatch({ type: 'SELECT_FACT', path: ref })}
+                  onClick={() => commit
+                    ? dispatch({ type: 'OPEN_REF', path: ref, commit })
+                    : dispatch({ type: 'SELECT_FACT', path: ref })
+                  }
                   style={{ color: '#8af', fontSize: 12, fontFamily: 'monospace', cursor: 'pointer', transition: 'color 0.15s' }}
                   onMouseEnter={e => { (e.currentTarget as HTMLElement).style.color = '#adf'; }}
                   onMouseLeave={e => { (e.currentTarget as HTMLElement).style.color = '#8af'; }}

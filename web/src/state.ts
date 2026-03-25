@@ -56,6 +56,7 @@ export type Action =
   | { type: 'CLEAR_FILTERS' }
   | { type: 'NAV_BACK' }
   | { type: 'SELECT_COMMIT'; commit: string }
+  | { type: 'OPEN_REF'; path: string; commit: string }
   | { type: 'SET_LOADING'; value: boolean }
   | { type: 'SET_TASK'; op: string; status: 'idle' | 'running' | 'done' | 'error'; message: string }
   | { type: 'SET_STATUS'; head: string; branch: string; embeddingsEnabled: boolean; ontologyRoot: string }
@@ -187,6 +188,15 @@ export function reducer(s: AppState, a: Action): AppState {
     }
     case 'SELECT_COMMIT':
       return { ...s, historyCommit: a.commit, navStack: pushNav(s) };
+    case 'OPEN_REF':
+      return {
+        ...s,
+        view: 'history',
+        historyCommit: a.commit,
+        selectedFact: a.path,
+        navStack: pushNav(s),
+        rightPanelFocused: false,
+      };
     case 'SET_LOADING':
       return { ...s, loading: a.value };
     case 'SET_TASK': {
