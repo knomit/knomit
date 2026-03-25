@@ -263,6 +263,9 @@ func TestHandleCommitDetail(t *testing.T) {
 		Operation: "learn",
 		Files:     []git.ChangedFile{{Path: "kb/test.md", Action: "added"}},
 	}, nil)
+	// Title lookup fallback: no index, so handler tries ReadFileAtCommit
+	gs.EXPECT().ReadFileAtCommit("kb/test.md", "abc12345").Return("", fmt.Errorf("not found"))
+	gs.EXPECT().ReadFileLastCommit("kb/test.md", "abc12345").Return("", "", fmt.Errorf("not found"))
 
 	handler := newTestRouter(gs, nil)
 	rr := doRequest(t, handler, http.MethodGet, "/api/v1/knomit/commit?hash=abc12345", "")

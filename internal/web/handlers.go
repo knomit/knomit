@@ -498,17 +498,22 @@ func handleCommitDetail() http.HandlerFunc {
 		files := make([]fileWithTitle, len(detail.Files))
 		for i, f := range detail.Files {
 			files[i] = fileWithTitle{Path: f.Path, Action: f.Action}
-			// Try index first (fast, works for non-deleted files).
+			// Try index first (fast, works for facts still in the current state).
 			if ri.Idx != nil {
 				if fb, err := ri.Idx.GetByPath(f.Path); err == nil && fb != nil {
 					files[i].Title = fb.Title
 					continue
 				}
 			}
-			// Fallback for deleted files: read at the commit's parent and parse title.
-			if f.Action != "deleted" {
-				continue
+			// Fallback: read the file as it was at this commit and parse the title.
+			// Covers retracted facts, deleted files, and anything not in the current index.
+			if content, err := ri.GS.ReadFileAtCommit(f.Path, hash); err == nil && content != "" {
+				if parsed, perr := mcp.ParseFact(f.Path, content); perr == nil {
+					files[i].Title = parsed.Title
+					continue
+				}
 			}
+			// Last resort for deleted files: find the last commit where the file existed.
 			if content, _, err := ri.GS.ReadFileLastCommit(f.Path, hash); err == nil && content != "" {
 				if parsed, perr := mcp.ParseFact(f.Path, content); perr == nil {
 					files[i].Title = parsed.Title
