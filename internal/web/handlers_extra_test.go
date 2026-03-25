@@ -281,6 +281,86 @@ func TestHandleCommitDetail(t *testing.T) {
 	}
 }
 
+func TestHandleCommitDetail_DeletedFileReturnsTitleViaLastCommit(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	gs := NewMockGitStore(ctrl)
+
+	// Simulate a retract commit where the file was deleted.
+	gs.EXPECT().CommitDetail("retract99").Return(&git.CommitDetailResult{
+		Commit: "retract99", Date: "2026-03-20T10:00:00Z", Message: "retract fact",
+		Operation: "retract",
+		Files:     []git.ChangedFile{{Path: "kb/deleted-fact.md", Action: "deleted"}},
+	}, nil)
+	// Index lookup: no index provided (nil), so skipped.
+	// ReadFileAtCommit fails (file doesn't exist at the retract commit).
+	gs.EXPECT().ReadFileAtCommit("kb/deleted-fact.md", "retract99").Return("", fmt.Errorf("not found"))
+	// ReadFileLastCommit succeeds — returns the content from before deletion.
+	factContent := "---\ndomain: [test]\nconfidence: 0.8\nsources: 1\nentities: [x]\nrefs: []\n---\n# Deleted Fact Title\n\nThis fact was retracted.\n"
+	gs.EXPECT().ReadFileLastCommit("kb/deleted-fact.md", "retract99").Return(factContent, "prev-commit", nil)
+
+	handler := newTestRouter(gs, nil)
+	rr := doRequest(t, handler, http.MethodGet, "/api/v1/knomit/commit?hash=retract99", "")
+
+	if rr.Code != 200 {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	var resp map[string]any
+	json.Unmarshal(rr.Body.Bytes(), &resp)
+	files := resp["files"].([]any)
+	if len(files) != 1 {
+		t.Fatalf("expected 1 file, got %d", len(files))
+	}
+	file := files[0].(map[string]any)
+	if file["action"] != "deleted" {
+		t.Errorf("expected action=deleted, got %v", file["action"])
+	}
+	title, ok := file["title"].(string)
+	if !ok || title != "Deleted Fact Title" {
+		t.Errorf("expected title='Deleted Fact Title', got %q (ok=%v)", title, ok)
+	}
+}
+
+func TestHandleCommitDetail_DeletedFileWithIndexFallback(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	gs := NewMockGitStore(ctrl)
+	mockIdx := NewMockSearchIndex(ctrl)
+
+	// Simulate a commit with a deleted file where index still has the entry.
+	gs.EXPECT().CommitDetail("retract-idx").Return(&git.CommitDetailResult{
+		Commit: "retract-idx", Date: "2026-03-20T11:00:00Z", Message: "retract via index",
+		Operation: "retract",
+		Files:     []git.ChangedFile{{Path: "kb/indexed-deleted.md", Action: "deleted"}},
+	}, nil)
+	mockIdx.EXPECT().GetByPath("kb/indexed-deleted.md").Return(&store.FactWithBody{
+		FactRecord: store.FactRecord{Title: "Indexed Deleted Title"},
+	}, nil)
+
+	hub := repos.NewTaskHub(context.Background())
+	rm := repos.New(context.Background(), repos.Deps{})
+	rm.Set("knomit", &repos.RepoInstance{
+		Name: "knomit",
+		GS:   gs,
+		Idx:  mockIdx,
+		Hub:  hub,
+	})
+	handler := NewRouter(rm, nil, false, "kb")
+	rr := doRequest(t, handler, http.MethodGet, "/api/v1/knomit/commit?hash=retract-idx", "")
+
+	if rr.Code != 200 {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	var resp map[string]any
+	json.Unmarshal(rr.Body.Bytes(), &resp)
+	files := resp["files"].([]any)
+	file := files[0].(map[string]any)
+	title, ok := file["title"].(string)
+	if !ok || title != "Indexed Deleted Title" {
+		t.Errorf("expected title='Indexed Deleted Title', got %q", title)
+	}
+}
+
 func TestHandleFactAtCommit(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)

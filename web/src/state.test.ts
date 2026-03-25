@@ -753,3 +753,122 @@ describe('filter isolation between fact and history modes', () => {
     expect(s.filters.find(f => f.category === 'domain')!.value).toBe('go');
   });
 });
+
+// ─── SELECT_COMMIT navStack behavior ────────────────────────────────────────
+
+describe('SELECT_COMMIT pushes navStack', () => {
+  it('SELECT_COMMIT pushes to navStack (verify navStack.length increases)', () => {
+    let s: AppState = { ...init, view: 'history' };
+    expect(s.navStack.length).toBe(0);
+    s = reducer(s, { type: 'SELECT_COMMIT', commit: 'aaa111' });
+    expect(s.navStack.length).toBe(1);
+    s = reducer(s, { type: 'SELECT_COMMIT', commit: 'bbb222' });
+    expect(s.navStack.length).toBe(2);
+  });
+
+  it('NAV_BACK after SELECT_COMMIT restores previous historyCommit', () => {
+    let s: AppState = { ...init, view: 'history' };
+    s = reducer(s, { type: 'SELECT_COMMIT', commit: 'aaa111' });
+    s = reducer(s, { type: 'SELECT_COMMIT', commit: 'bbb222' });
+    expect(s.historyCommit).toBe('bbb222');
+    s = reducer(s, { type: 'NAV_BACK' });
+    expect(s.historyCommit).toBe('aaa111');
+  });
+});
+
+// ─── Full workflow scenarios: operation hierarchy ────────────────────────────
+
+describe('operation hierarchy — full workflow scenarios', () => {
+  it('tree → history → select commit → select fact → NAV_BACK restores each step', () => {
+    let s: AppState = init;
+    // Start in tree, select a fact
+    s = reducer(s, { type: 'SELECT_FACT', path: 'kb/tree-fact.md' });
+    expect(s.view).toBe('tree');
+    expect(s.selectedFact).toBe('kb/tree-fact.md');
+
+    // Switch to history
+    s = reducer(s, { type: 'SET_VIEW', view: 'history' });
+    expect(s.view).toBe('history');
+    expect(s.selectedFact).toBeNull(); // SET_VIEW clears selectedFact
+
+    // Select a commit
+    s = reducer(s, { type: 'SELECT_COMMIT', commit: 'ccc333' });
+    expect(s.historyCommit).toBe('ccc333');
+
+    // Select a fact in history
+    s = reducer(s, { type: 'SELECT_FACT', path: 'kb/hist-fact.md' });
+    expect(s.selectedFact).toBe('kb/hist-fact.md');
+
+    // NAV_BACK: restore before fact selection
+    s = reducer(s, { type: 'NAV_BACK' });
+    expect(s.selectedFact).toBe(null);
+    expect(s.historyCommit).toBe('ccc333');
+
+    // NAV_BACK: restore before commit selection
+    s = reducer(s, { type: 'NAV_BACK' });
+    expect(s.historyCommit).toBeNull();
+
+    // NAV_BACK: restore before SET_VIEW (back to tree)
+    s = reducer(s, { type: 'NAV_BACK' });
+    expect(s.view).toBe('tree');
+    expect(s.selectedFact).toBe('kb/tree-fact.md');
+  });
+
+  it('history with ep filter → change filter → NAV_BACK restores previous filter', () => {
+    let s: AppState = init;
+    s = reducer(s, { type: 'SET_VIEW', view: 'history' });
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'ep', value: 'learn' } });
+    expect(s.filters).toHaveLength(1);
+    expect(s.filters[0]).toEqual({ category: 'ep', value: 'learn' });
+
+    // Add another ep filter
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'ep', value: 'retract' } });
+    expect(s.filters).toHaveLength(2);
+
+    // NAV_BACK: restore before adding retract
+    s = reducer(s, { type: 'NAV_BACK' });
+    expect(s.filters).toHaveLength(1);
+    expect(s.filters[0]).toEqual({ category: 'ep', value: 'learn' });
+  });
+
+  it('cross-mode: tree with fact → history → commit → fact → NAV_BACK ×N returns to tree with original fact', () => {
+    let s: AppState = init;
+
+    // Tree mode: select a fact
+    s = reducer(s, { type: 'SELECT_FACT', path: 'kb/original.md' });
+    expect(s.view).toBe('tree');
+    expect(s.selectedFact).toBe('kb/original.md');
+
+    // Switch to history
+    s = reducer(s, { type: 'SET_VIEW', view: 'history' });
+
+    // Select commit
+    s = reducer(s, { type: 'SELECT_COMMIT', commit: 'xxx' });
+
+    // Select fact in history
+    s = reducer(s, { type: 'SELECT_FACT', path: 'kb/history-fact.md' });
+    expect(s.selectedFact).toBe('kb/history-fact.md');
+
+    // NAV_BACK ×3 should get us back to tree with original fact
+    s = reducer(s, { type: 'NAV_BACK' }); // undo SELECT_FACT
+    s = reducer(s, { type: 'NAV_BACK' }); // undo SELECT_COMMIT
+    s = reducer(s, { type: 'NAV_BACK' }); // undo SET_VIEW → back to tree
+
+    expect(s.view).toBe('tree');
+    expect(s.selectedFact).toBe('kb/original.md');
+  });
+
+  it('history mode: SET_VIEW to history clears selectedFact but preserves filters', () => {
+    let s: AppState = init;
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'domain', value: 'go' } });
+    s = reducer(s, { type: 'SELECT_FACT', path: 'kb/some-fact.md' });
+    expect(s.selectedFact).toBe('kb/some-fact.md');
+    expect(s.filters).toHaveLength(1);
+
+    s = reducer(s, { type: 'SET_VIEW', view: 'history' });
+    expect(s.view).toBe('history');
+    expect(s.selectedFact).toBeNull();
+    expect(s.filters).toHaveLength(1);
+    expect(s.filters[0]).toEqual({ category: 'domain', value: 'go' });
+  });
+});
