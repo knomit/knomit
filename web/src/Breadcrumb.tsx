@@ -34,7 +34,7 @@ export function Breadcrumb({ state, dispatch }: Props) {
                 cursor: isLast ? 'default' : 'pointer',
                 fontWeight: isLast ? 500 : 400,
               }}
-              onClick={isLast ? undefined : () => dispatch({ type: 'NAVIGATE', path: segmentPath })}
+              onClick={isLast ? undefined : () => dispatch({ type: 'ADD_FILTER', chip: { category: 'path', value: segmentPath } })}
             >
               {part}
             </span>
