@@ -354,50 +354,66 @@ export function RightPanel({ state, dispatch }: { state: AppState; dispatch: Dis
   const [activity, setActivity] = useState<ActivityStats | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [commitDetail, setCommitDetail] = useState<CommitDetail | null>(null);
+  const [factCommit, setFactCommit] = useState<string | null>(null);
 
   const path = currentPath(state);
-  const isTimeTravelView = state.view === 'history' && !!state.selectedFact && !!state.historyCommit;
+  const inHistoryWithFact = state.view === 'history' && !!state.selectedFact && !!factCommit;
 
-  // Fetch commit detail when historyCommit changes (for the file picker)
+  // ── Pipeline: historyCommit → commitDetail → SELECT_FACT → factFetch ──
+  //
+  // In history mode, the data flows as a cascade:
+  //   1. historyCommit changes → fetch commit detail → auto-select first file (SELECT_FACT)
+  //   2. selectedFact changes → fetch fact content at the commit
+  //
+  // The fact-fetch effect uses `factCommit` (local state) which is set by the
+  // commit-detail effect AFTER it dispatches SELECT_FACT. This ensures the
+  // fact is always fetched for the correct commit, not a stale one.
+
+  // Step 1: historyCommit changes → fetch commit detail → set factCommit
   useEffect(() => {
     let stale = false;
     if (!state.historyCommit || state.view !== 'history') {
       setCommitDetail(null);
+      setFactCommit(null);
       return;
     }
-    api.commitDetail(state.repo, state.historyCommit).then(detail => {
+    const commit = state.historyCommit;
+    api.commitDetail(state.repo, commit).then(detail => {
       if (stale) return;
       setCommitDetail(detail);
-      // Auto-select first non-deleted file — let the main effect handle fact fetching
       const first = (detail.files || []).find(f => f.action !== 'deleted');
       if (first) {
         dispatch({ type: 'SELECT_FACT', path: first.path });
       }
-    }).catch(() => { if (!stale) setCommitDetail(null); });
+      // Signal to the fact-fetch effect that this commit's detail is ready
+      setFactCommit(commit);
+    }).catch(() => { if (!stale) { setCommitDetail(null); setFactCommit(null); } });
     return () => { stale = true; };
   }, [state.historyCommit, state.view, state.repo]);
 
+  // Step 2: selectedFact or factCommit changes → fetch fact content
   useEffect(() => {
     let stale = false;
     setError(null);
-    if (state.view === 'history' && state.selectedFact && state.historyCommit) {
-      // Time-travel: fetch fact at specific commit
-      api.fact(state.repo, state.selectedFact, state.historyCommit)
+
+    if (state.view === 'history' && state.selectedFact && factCommit) {
+      // Time-travel: fetch fact at the commit that's ready
+      api.fact(state.repo, state.selectedFact, factCommit)
         .then(f => { if (!stale) setFact(f); })
         .catch(e => { if (!stale) setError(String(e)); });
-    } else if (state.selectedFact) {
-      // Normal fact view
+    } else if (state.view !== 'history' && state.selectedFact) {
+      // Normal fact view (tree/chrono)
       api.fact(state.repo, state.selectedFact)
         .then(f => { if (!stale) setFact(f); })
         .catch(e => { if (!stale) setError(String(e)); });
-    } else {
+    } else if (!state.selectedFact && state.view !== 'history') {
       // Summary view
       setFact(null);
       api.stats(state.repo, path).then(s => { if (!stale) setStats(s); }).catch(() => { if (!stale) setStats(null); });
       api.activity(state.repo, path).then(a => { if (!stale) setActivity(a); }).catch(() => { if (!stale) setActivity(null); });
     }
     return () => { stale = true; };
-  }, [state.selectedFact, state.headCommit, state.historyCommit, state.view, state.repo, path]);
+  }, [state.selectedFact, state.headCommit, factCommit, state.view, state.repo, path]);
 
   // Keyboard: right panel focus — ArrowLeft blurs, ArrowUp/Down navigate commit files
   const commitFiles = commitDetail?.files || [];
@@ -410,7 +426,7 @@ export function RightPanel({ state, dispatch }: { state: AppState; dispatch: Dis
         return;
       }
       // Navigate commit files with up/down when in history mode
-      if (isTimeTravelView && commitFiles.length > 1 && (e.key === 'ArrowDown' || e.key === 'j' || e.key === 'ArrowUp' || e.key === 'k')) {
+      if (inHistoryWithFact && commitFiles.length > 1 && (e.key === 'ArrowDown' || e.key === 'j' || e.key === 'ArrowUp' || e.key === 'k')) {
         e.preventDefault();
         const currentIdx = commitFiles.findIndex(f => f.path === state.selectedFact);
         const delta = (e.key === 'ArrowDown' || e.key === 'j') ? 1 : -1;
@@ -422,7 +438,7 @@ export function RightPanel({ state, dispatch }: { state: AppState; dispatch: Dis
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [state.rightPanelFocused, dispatch, isTimeTravelView, commitFiles, state.selectedFact]);
+  }, [state.rightPanelFocused, dispatch, inHistoryWithFact, commitFiles, state.selectedFact]);
 
   if (error) return <div style={{ padding: 24, color: '#f44' }}>{error}</div>;
 
@@ -486,7 +502,7 @@ export function RightPanel({ state, dispatch }: { state: AppState; dispatch: Dis
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
       {/* Commit panel — shown in history mode */}
-      {isTimeTravelView && commitDetail && <CommitPanel
+      {inHistoryWithFact && commitDetail && <CommitPanel
         detail={commitDetail}
         selectedFact={state.selectedFact}
         onSelectFact={path => { dispatch({ type: 'SELECT_FACT', path }); dispatch({ type: 'FOCUS_RIGHT_PANEL' }); }}
