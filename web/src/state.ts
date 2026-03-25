@@ -156,15 +156,20 @@ export function reducer(s: AppState, a: Action): AppState {
       return { ...s, filters, navStack: pushNav(s) };
     }
     case 'REMOVE_FILTER': {
+      const removed = s.filters[a.index];
       const filters = s.filters.filter((_, i) => i !== a.index);
-      return { ...s, filters, navStack: pushNav(s) };
+      // If removing the path chip, reset currentPath to ontology root
+      const currentPathUpdate = removed?.category === 'path'
+        ? { currentPath: s.ontologyRoot || 'kb' }
+        : {};
+      return { ...s, filters, ...currentPathUpdate, selectedFact: null, navStack: pushNav(s) };
     }
     case 'SET_FILTERS':
       return { ...s, filters: a.filters, navStack: pushNav(s) };
     case 'SET_FREE_TEXT':
       return { ...s, freeText: a.text };
     case 'CLEAR_FILTERS':
-      return { ...s, filters: [], freeText: '', selectedFact: null, navStack: pushNav(s) };
+      return { ...s, filters: [], freeText: '', selectedFact: null, currentPath: s.ontologyRoot || 'kb', navStack: pushNav(s) };
     case 'NAV_BACK': {
       if (s.navStack.length === 0) return s;
       const prev = s.navStack[s.navStack.length - 1];
