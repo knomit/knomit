@@ -308,6 +308,28 @@ export function FilterBar({ state, dispatch }: Props) {
         );
       })}
 
+      {/* Free-text pill */}
+      {state.freeText && !inputValue && (
+        <span style={{
+          background: '#2a2a2a',
+          color: '#ddd',
+          padding: '2px 8px',
+          borderRadius: 3,
+          fontSize: 11,
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 4,
+          userSelect: 'none',
+          border: '1px solid #444',
+        }}>
+          {state.freeText}
+          <span
+            style={{ color: '#888', cursor: 'pointer', fontWeight: 'bold', lineHeight: '1' }}
+            onClick={() => dispatch({ type: 'SET_FREE_TEXT', text: '' })}
+          >x</span>
+        </span>
+      )}
+
       {/* Inline input */}
       <div style={{ position: 'relative', flex: 1, minWidth: 100 }}>
         <input
@@ -370,12 +392,6 @@ export function FilterBar({ state, dispatch }: Props) {
         <line x1="21" y1="21" x2="16.65" y2="16.65"/>
       </svg>
 
-      {/* Active free-text badge */}
-      {state.freeText && !inputValue && (
-        <span style={{ fontSize: 11, color: '#888', fontStyle: 'italic' }}>
-          "{state.freeText}"
-        </span>
-      )}
     </div>
   );
 }
