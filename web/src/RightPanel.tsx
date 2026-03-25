@@ -6,7 +6,7 @@ import type { Fact, Stats, ActivityStats, CommitDetail } from './api';
 import type { AppState, Action } from './state';
 import { currentPath } from './state';
 import { relativeTime, typeStyles, defaultTypeStyle, opStyles, defaultOpStyle } from './utils';
-import { TypeIcon } from './icons';
+import { TypeIcon, EpisodeIcon } from './icons';
 
 function TagCloud({ label, entries, color, onTagClick, focusedValue }: {
   label: string;
@@ -274,7 +274,11 @@ function CommitPanel({ detail, selectedFact, onSelectFact }: {
               fontSize: 10, padding: '2px 8px', borderRadius: 10,
               color: os.color, background: os.bg, whiteSpace: 'nowrap', flexShrink: 0,
               fontWeight: 600, letterSpacing: 0.3, marginTop: 2,
-            }}>{os.label || op}</span>
+              display: 'inline-flex', alignItems: 'center', gap: 4,
+            }}>
+              <EpisodeIcon op={op} color={os.color} size={12} />
+              {os.label || op}
+            </span>
           )}
           <span style={{
             fontSize: 14, color: '#eee', fontWeight: 500, lineHeight: 1.4,
