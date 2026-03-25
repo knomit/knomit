@@ -229,7 +229,9 @@ function FactEditor({ fact, repo, onSaved }: { fact: Fact; repo: string; onSaved
 // ─── Commit Panel (history mode) ─────────────────────────────────────────────
 
 const ROW_HEIGHT = 26;
-const MAX_VISIBLE_ROWS = 3;
+const DEFAULT_LIST_HEIGHT = 3 * ROW_HEIGHT;
+const MIN_LIST_HEIGHT = ROW_HEIGHT;
+const MAX_LIST_HEIGHT = 12 * ROW_HEIGHT;
 
 function CommitPanel({ detail, selectedFact, onSelectFact }: {
   detail: CommitDetail;
@@ -239,9 +241,11 @@ function CommitPanel({ detail, selectedFact, onSelectFact }: {
   const listRef = useRef<HTMLDivElement>(null);
   const [canScrollUp, setCanScrollUp] = useState(false);
   const [canScrollDown, setCanScrollDown] = useState(false);
+  const [listHeight, setListHeight] = useState(DEFAULT_LIST_HEIGHT);
+  const draggingRef = useRef(false);
 
   const files = detail.files || [];
-  const hasOverflow = files.length > MAX_VISIBLE_ROWS;
+  const hasOverflow = files.length * ROW_HEIGHT > listHeight;
 
   const checkScroll = () => {
     const el = listRef.current;
@@ -250,38 +254,64 @@ function CommitPanel({ detail, selectedFact, onSelectFact }: {
     setCanScrollDown(el.scrollTop + el.clientHeight < el.scrollHeight - 1);
   };
 
-  useEffect(() => { checkScroll(); }, [files]);
+  useEffect(() => { checkScroll(); }, [files, listHeight]);
+
+  // Drag to resize
+  const startDrag = (e: React.MouseEvent) => {
+    e.preventDefault();
+    draggingRef.current = true;
+    const startY = e.clientY;
+    const startH = listHeight;
+    const onMove = (ev: MouseEvent) => {
+      if (!draggingRef.current) return;
+      const delta = ev.clientY - startY;
+      setListHeight(Math.max(MIN_LIST_HEIGHT, Math.min(MAX_LIST_HEIGHT, startH + delta)));
+    };
+    const onUp = () => {
+      draggingRef.current = false;
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  };
 
   // Episode tag
   const op = detail.operation || '';
   const os = op && opStyles[op] ? opStyles[op] : defaultOpStyle;
 
   return (
-    <div style={{ borderBottom: '1px solid #333', flexShrink: 0, background: '#1a1a1e' }}>
+    <div style={{ flexShrink: 0, background: '#1a1a1e' }}>
       {/* Header: episode tag + message */}
       <div style={{
-        display: 'flex', alignItems: 'center', gap: 8,
-        padding: '6px 12px', borderBottom: '1px solid #2a2a2a',
+        display: 'flex', alignItems: 'center', gap: 10,
+        padding: '8px 14px',
+        background: '#181820',
       }}>
         {op && (
           <span style={{
-            fontSize: 10, padding: '1px 6px', borderRadius: 8,
+            fontSize: 10, padding: '2px 8px', borderRadius: 10,
             color: os.color, background: os.bg, whiteSpace: 'nowrap', flexShrink: 0,
+            fontWeight: 600, letterSpacing: 0.3,
           }}>{os.label || op}</span>
         )}
         <span style={{
-          fontSize: 11, color: '#aaa',
+          fontSize: 13, color: '#ccc', fontWeight: 500,
           overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, minWidth: 0,
         }} title={detail.message}>{detail.message}</span>
+        <span style={{ fontSize: 10, color: '#555', flexShrink: 0 }}>
+          {detail.commit.slice(0, 7)}
+        </span>
       </div>
 
       {/* File list with scroll indicators */}
-      <div style={{ display: 'flex', position: 'relative' }}>
+      <div style={{ display: 'flex' }}>
         <div
           ref={listRef}
           onScroll={checkScroll}
           style={{
-            maxHeight: MAX_VISIBLE_ROWS * ROW_HEIGHT,
+            height: Math.min(listHeight, files.length * ROW_HEIGHT),
+            maxHeight: listHeight,
             overflowY: hasOverflow ? 'auto' : 'hidden',
             flex: 1,
           }}
@@ -300,7 +330,7 @@ function CommitPanel({ detail, selectedFact, onSelectFact }: {
                   display: 'flex',
                   alignItems: 'center',
                   gap: 6,
-                  padding: '0 12px',
+                  padding: '0 14px',
                   fontSize: 11,
                   cursor: 'pointer',
                   color: isActive ? '#fff' : '#aaa',
@@ -339,6 +369,22 @@ function CommitPanel({ detail, selectedFact, onSelectFact }: {
             </div>
           </div>
         )}
+      </div>
+
+      {/* Drag handle to resize */}
+      <div
+        onMouseDown={startDrag}
+        style={{
+          height: 5,
+          cursor: 'ns-resize',
+          background: 'transparent',
+          borderBottom: '1px solid #333',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+        }}
+      >
+        <div style={{ width: 30, height: 2, borderRadius: 1, background: '#444' }} />
       </div>
     </div>
   );
