@@ -182,6 +182,14 @@ func handleFact() http.HandlerFunc {
 			return
 		}
 
+		// Lowercase local refs so they match stored fact paths (always lowercase).
+		// A ref is local if it has no scheme (no "://" prefix).
+		for i, ref := range fact.Refs {
+			if !strings.Contains(ref, "://") {
+				fact.Refs[i] = strings.ToLower(ref)
+			}
+		}
+
 		if fromCommit != "" {
 			writeJSON(w, http.StatusOK, map[string]any{
 				"path":        fact.Path(),
