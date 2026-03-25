@@ -265,9 +265,9 @@ function CommitPanel({ detail, selectedFact, onSelectFact }: {
   const os = op && opStyles[op] ? opStyles[op] : defaultOpStyle;
 
   return (
-    <div style={{ flexShrink: 0, background: '#1a1a1e' }}>
+    <div style={{ flexShrink: 0, background: '#141414' }}>
       {/* Two-line header */}
-      <div style={{ padding: '10px 14px 6px', background: '#181820' }}>
+      <div style={{ padding: '10px 14px 6px', background: '#141414' }}>
         <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginBottom: 4 }}>
           {op && (
             <span style={{
