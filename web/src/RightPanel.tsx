@@ -266,33 +266,21 @@ function CommitPanel({ detail, selectedFact, onSelectFact }: {
 
   return (
     <div style={{ flexShrink: 0, background: '#141414' }}>
-      {/* Two-line header */}
-      <div style={{ padding: '10px 14px 6px', background: '#141414' }}>
-        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginBottom: 4 }}>
-          {op && (
-            <span style={{
-              fontSize: 10, padding: '2px 8px', borderRadius: 10,
-              color: os.color, background: os.bg, whiteSpace: 'nowrap', flexShrink: 0,
-              fontWeight: 600, letterSpacing: 0.3, marginTop: 2,
-              display: 'inline-flex', alignItems: 'center', gap: 4,
-            }}>
-              <EpisodeIcon op={op} color={os.color} size={12} />
-              {os.label || op}
-            </span>
-          )}
-          <span style={{
-            fontSize: 14, color: '#eee', fontWeight: 500, lineHeight: 1.4,
-          }}>{detail.message}</span>
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12, fontSize: 10, color: '#555', paddingBottom: 2 }}>
-          <span style={{ fontFamily: 'monospace' }}>{detail.commit.slice(0, 7)}</span>
-          <span>{relativeTime(detail.date)}</span>
-          <span>{files.length} {files.length === 1 ? 'fact' : 'facts'} changed</span>
+      {/* Left accent bar header */}
+      <div style={{ display: 'flex', borderBottom: '1px solid #2a2a2a' }}>
+        <div style={{ width: 4, background: os.color, flexShrink: 0 }} />
+        <div style={{ flex: 1, padding: '8px 14px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 3 }}>
+            <EpisodeIcon op={op} color={os.color} size={14} />
+            <span style={{ fontSize: 11, color: os.color, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.5 }}>{os.label || op}</span>
+            <span style={{ fontSize: 10, color: '#555', fontFamily: 'monospace', marginLeft: 'auto' }}>{detail.commit.slice(0, 7)} · {relativeTime(detail.date)}</span>
+          </div>
+          <div style={{ fontSize: 12, color: '#bbb', lineHeight: 1.4 }}>{detail.message}</div>
         </div>
       </div>
 
       {/* File list with accent borders */}
-      <div style={{ display: 'flex', borderTop: '1px solid #2a2a3a' }}>
+      <div style={{ display: 'flex' }}>
         <div
           ref={listRef}
           style={{
@@ -321,8 +309,8 @@ function CommitPanel({ detail, selectedFact, onSelectFact }: {
                   fontSize: 11,
                   cursor: 'pointer',
                   color: isActive ? '#fff' : '#aaa',
-                  background: isActive ? '#22223a' : 'transparent',
-                  borderLeft: isActive ? '3px solid #8af' : '3px solid transparent',
+                  background: isActive ? '#14141e' : 'transparent',
+                  borderLeft: isActive ? `4px solid #8af` : `4px solid transparent`,
                 }}
                 onMouseEnter={e => { if (!isActive) e.currentTarget.style.background = '#222'; }}
                 onMouseLeave={e => { if (!isActive) e.currentTarget.style.background = isActive ? '#22223a' : 'transparent'; }}
