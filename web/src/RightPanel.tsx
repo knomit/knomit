@@ -360,38 +360,44 @@ export function RightPanel({ state, dispatch }: { state: AppState; dispatch: Dis
 
   // Fetch commit detail when historyCommit changes (for the file picker)
   useEffect(() => {
+    let stale = false;
     if (!state.historyCommit || state.view !== 'history') {
       setCommitDetail(null);
       return;
     }
-    const commit = state.historyCommit;
-    api.commitDetail(state.repo, commit).then(detail => {
+    api.commitDetail(state.repo, state.historyCommit).then(detail => {
+      if (stale) return;
       setCommitDetail(detail);
-      // Always auto-select first non-deleted file and fetch its content
+      // Auto-select first non-deleted file — let the main effect handle fact fetching
       const first = (detail.files || []).find(f => f.action !== 'deleted');
       if (first) {
         dispatch({ type: 'SELECT_FACT', path: first.path });
-        // Also directly fetch the fact in case selectedFact path didn't change
-        api.fact(state.repo, first.path, commit).then(setFact).catch(() => {});
       }
-    }).catch(() => setCommitDetail(null));
+    }).catch(() => { if (!stale) setCommitDetail(null); });
+    return () => { stale = true; };
   }, [state.historyCommit, state.view, state.repo]);
 
   useEffect(() => {
+    let stale = false;
     setError(null);
-    if (isTimeTravelView) {
+    if (state.view === 'history' && state.selectedFact && state.historyCommit) {
       // Time-travel: fetch fact at specific commit
-      api.fact(state.repo, state.selectedFact!, state.historyCommit!).then(setFact).catch(e => setError(String(e)));
+      api.fact(state.repo, state.selectedFact, state.historyCommit)
+        .then(f => { if (!stale) setFact(f); })
+        .catch(e => { if (!stale) setError(String(e)); });
     } else if (state.selectedFact) {
       // Normal fact view
-      api.fact(state.repo, state.selectedFact).then(setFact).catch(e => setError(String(e)));
+      api.fact(state.repo, state.selectedFact)
+        .then(f => { if (!stale) setFact(f); })
+        .catch(e => { if (!stale) setError(String(e)); });
     } else {
       // Summary view
       setFact(null);
-      api.stats(state.repo, path).then(setStats).catch(() => setStats(null));
-      api.activity(state.repo, path).then(setActivity).catch(() => setActivity(null));
+      api.stats(state.repo, path).then(s => { if (!stale) setStats(s); }).catch(() => { if (!stale) setStats(null); });
+      api.activity(state.repo, path).then(a => { if (!stale) setActivity(a); }).catch(() => { if (!stale) setActivity(null); });
     }
-  }, [state.selectedFact, state.headCommit, state.historyCommit, isTimeTravelView, state.repo, path]);
+    return () => { stale = true; };
+  }, [state.selectedFact, state.headCommit, state.historyCommit, state.view, state.repo, path]);
 
   // Keyboard: right panel focus — ArrowLeft blurs, ArrowUp/Down navigate commit files
   const commitFiles = commitDetail?.files || [];

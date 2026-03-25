@@ -185,10 +185,10 @@ describe('reducer — SELECT_FACT', () => {
 });
 
 describe('reducer — SELECT_COMMIT', () => {
-  it('sets historyCommit without pushing nav', () => {
+  it('sets historyCommit and pushes nav', () => {
     const s = reducer(init, { type: 'SELECT_COMMIT', commit: 'abc123' });
     expect(s.historyCommit).toBe('abc123');
-    expect(s.navStack.length).toBe(0);
+    expect(s.navStack.length).toBe(1);
   });
 });
 
@@ -704,9 +704,9 @@ describe('SELECT_COMMIT in history mode', () => {
     expect(s.selectedFact).toBe('kb/old.md');
   });
 
-  it('does not push to navStack', () => {
+  it('pushes to navStack', () => {
     const s = reducer(init, { type: 'SELECT_COMMIT', commit: 'abc123' });
-    expect(s.navStack).toHaveLength(0);
+    expect(s.navStack).toHaveLength(1);
   });
 
   it('NAV_BACK after selecting facts in different commits restores previous fact', () => {

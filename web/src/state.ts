@@ -186,7 +186,7 @@ export function reducer(s: AppState, a: Action): AppState {
       };
     }
     case 'SELECT_COMMIT':
-      return { ...s, historyCommit: a.commit };
+      return { ...s, historyCommit: a.commit, navStack: pushNav(s) };
     case 'SET_LOADING':
       return { ...s, loading: a.value };
     case 'SET_TASK': {

@@ -83,6 +83,7 @@ export function FilterBar({ state, dispatch }: Props) {
   }, [inputValue, state.repo]);
 
   function commitSuggestion(value: string) {
+    window.clearTimeout(debounceRef.current);
     const match = PREFIX_RE.exec(inputValue);
     if (!match) return;
     const category = match[1] as FilterChip['category'];
