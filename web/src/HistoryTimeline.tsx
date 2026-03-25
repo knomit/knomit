@@ -80,6 +80,16 @@ export function HistoryTimeline({ state, dispatch }: Props) {
     return true;
   });
 
+  // When filters change, select the first filtered entry
+  const filteredKey = filteredEntries.map(e => e.commit).join(',');
+  useEffect(() => {
+    setSelectedIdx(0);
+    if (filteredEntries.length > 0) {
+      dispatch({ type: 'SELECT_COMMIT', commit: filteredEntries[0].commit });
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filteredKey]);
+
   // Keyboard navigation (on filtered entries)
   const navigate = useCallback((delta: 1 | -1) => {
     const next = Math.max(0, Math.min(selectedIdx + delta, filteredEntries.length - 1));
