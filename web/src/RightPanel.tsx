@@ -364,11 +364,16 @@ export function RightPanel({ state, dispatch }: { state: AppState; dispatch: Dis
       setCommitDetail(null);
       return;
     }
-    api.commitDetail(state.repo, state.historyCommit).then(detail => {
+    const commit = state.historyCommit;
+    api.commitDetail(state.repo, commit).then(detail => {
       setCommitDetail(detail);
-      // Always auto-select first non-deleted file when commit changes
+      // Always auto-select first non-deleted file and fetch its content
       const first = (detail.files || []).find(f => f.action !== 'deleted');
-      if (first) dispatch({ type: 'SELECT_FACT', path: first.path });
+      if (first) {
+        dispatch({ type: 'SELECT_FACT', path: first.path });
+        // Also directly fetch the fact in case selectedFact path didn't change
+        api.fact(state.repo, first.path, commit).then(setFact).catch(() => {});
+      }
     }).catch(() => setCommitDetail(null));
   }, [state.historyCommit, state.view, state.repo]);
 

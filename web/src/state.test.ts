@@ -697,11 +697,11 @@ describe('episode (ep) chips in history mode', () => {
 // ─── Regression: SELECT_COMMIT behavior ─────────────────────────────────────
 
 describe('SELECT_COMMIT in history mode', () => {
-  it('sets historyCommit and clears selectedFact (right panel re-loads from new commit)', () => {
+  it('sets historyCommit without clearing selectedFact', () => {
     let s: AppState = { ...init, view: 'history', selectedFact: 'kb/old.md' };
     s = reducer(s, { type: 'SELECT_COMMIT', commit: 'abc123' });
     expect(s.historyCommit).toBe('abc123');
-    expect(s.selectedFact).toBeNull();
+    expect(s.selectedFact).toBe('kb/old.md');
   });
 
   it('does not push to navStack', () => {
@@ -709,26 +709,18 @@ describe('SELECT_COMMIT in history mode', () => {
     expect(s.navStack).toHaveLength(0);
   });
 
-  it('NAV_BACK after selecting facts in different commits restores previous state', () => {
+  it('NAV_BACK after selecting facts in different commits restores previous fact', () => {
     let s: AppState = { ...init, view: 'history' };
     s = reducer(s, { type: 'SELECT_COMMIT', commit: 'aaa' });
-    // SELECT_COMMIT clears selectedFact
-    expect(s.selectedFact).toBeNull();
     s = reducer(s, { type: 'SELECT_FACT', path: 'kb/fact1.md' });
-    // navStack[0] = {selectedFact: null, historyCommit: aaa}
     expect(s.selectedFact).toBe('kb/fact1.md');
     s = reducer(s, { type: 'SELECT_COMMIT', commit: 'bbb' });
-    // SELECT_COMMIT clears selectedFact again
-    expect(s.selectedFact).toBeNull();
+    // selectedFact preserved (not cleared)
+    expect(s.selectedFact).toBe('kb/fact1.md');
     s = reducer(s, { type: 'SELECT_FACT', path: 'kb/fact2.md' });
-    // navStack[1] = {selectedFact: null, historyCommit: bbb}
-    // Go back — restores selectedFact: null, historyCommit: bbb
+    // Go back — restores fact1 with historyCommit bbb (SELECT_COMMIT didn't push)
     s = reducer(s, { type: 'NAV_BACK' });
-    expect(s.selectedFact).toBeNull();
-    expect(s.historyCommit).toBe('bbb');
-    // Go back again — restores selectedFact: null, historyCommit: aaa
-    s = reducer(s, { type: 'NAV_BACK' });
-    expect(s.historyCommit).toBe('aaa');
+    expect(s.selectedFact).toBe('kb/fact1.md');
   });
 
   it('SELECT_FACT in history captures historyCommit in navStack', () => {
