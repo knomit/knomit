@@ -12,7 +12,7 @@ export interface HistoryEntryWithTags { commit: string; date: string; message: s
 export interface HistoryResponse { entries: HistoryEntryWithTags[]; next?: string }
 export interface RecentFactEntry { path: string; title: string; type?: string; committed_at: number; operation?: string; score?: number }
 export interface RecentResponse { facts: RecentFactEntry[]; total: number }
-export interface CommitFile { path: string; action: string }
+export interface CommitFile { path: string; action: string; title?: string }
 export interface CommitDetail { commit: string; date: string; message: string; operation?: string; files: CommitFile[] }
 export interface Stats { total: number; domains: Record<string, number>; entities: Record<string, number>; avg_confidence: number }
 export interface Status { head: string; branch: string; index_commit: string; embeddings_enabled: boolean; ontology_root: string }

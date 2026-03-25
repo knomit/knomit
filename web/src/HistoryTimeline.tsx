@@ -58,7 +58,7 @@ export function HistoryTimeline({ state, dispatch }: Props) {
   }, [path, state.repo]);
 
   // Filter visible children by active filter chips
-  const filterChildren = (files: { path: string; action: string }[]) => {
+  const filterChildren = (files: { path: string; action: string; title?: string }[]) => {
     if (state.filters.length === 0) return files;
     return files.filter(f => {
       const typeChips = state.filters.filter(c => c.category === 'type');
@@ -263,7 +263,7 @@ export function HistoryTimeline({ state, dispatch }: Props) {
                   {exp.detail && filterChildren(exp.detail.files).map(file => {
                     const opIndicator = file.action === 'added' ? '+' : file.action === 'deleted' ? '\u2212' : '~';
                     const opColor = file.action === 'added' ? '#7c9' : file.action === 'deleted' ? '#f88' : '#8af';
-                    const basename = file.path.split('/').pop()?.replace(/\.md$/, '') || file.path;
+                    const displayName = file.title || file.path.split('/').pop()?.replace(/\.md$/, '') || file.path;
                     const isChildSelected = state.selectedFact === file.path && state.historyCommit === entry.commit;
                     return (
                       <div
@@ -283,7 +283,14 @@ export function HistoryTimeline({ state, dispatch }: Props) {
                         onMouseLeave={e => { if (!isChildSelected) e.currentTarget.style.background = 'transparent'; }}
                       >
                         <span style={{ color: opColor, fontWeight: 'bold', fontFamily: 'monospace', width: 12, textAlign: 'center' }}>{opIndicator}</span>
-                        <span style={{ fontWeight: isChildSelected ? 500 : 400 }}>{basename}</span>
+                        <span title={displayName} style={{
+                          fontWeight: isChildSelected ? 500 : 400,
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap',
+                          flex: 1,
+                          minWidth: 0,
+                        }}>{displayName}</span>
                       </div>
                     );
                   })}
