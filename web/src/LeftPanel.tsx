@@ -38,7 +38,7 @@ function TreeView({ state, dispatch }: Props) {
         name: sr.path.split('/').pop() || sr.path,
         is_dir: false,
         title: sr.title,
-        type: undefined,
+        type: sr.type,
         fullPath: sr.path,
       }));
       setChildren(items);
