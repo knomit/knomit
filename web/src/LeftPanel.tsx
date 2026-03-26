@@ -108,7 +108,6 @@ function TreeView({ state, dispatch, navigate }: Props) {
       else if (e.key === 'Enter') { e.preventDefault(); activateSelected(); }
       else if (e.key === 'ArrowLeft') {
         e.preventDefault();
-        // Go up directory: remove last path segment from path chip
         const parts = path.split('/');
         if (parts.length > 1) {
           dispatch({ type: 'GO_UP' });

@@ -447,6 +447,10 @@ export function RightPanel({ state, dispatch, navigate }: {
 
   if (error) return <div style={{ padding: 24, color: '#f44' }}>{error}</div>;
 
+  const commitPanel = state.view === 'history' && historyCommit
+    ? <CommitPanel historyCommit={historyCommit} repo={state.repo} selectedFact={factPath} navigate={navigate} rightPanelFocused={state.rightPanelFocused} dispatch={dispatch} />
+    : null;
+
   // Summary view: no fact selected
   if (!factPath) {
     const domainEntries = stats ? Object.entries(stats.domains).sort((a, b) => b[1] - a[1]).slice(0, 10) : [];
@@ -457,16 +461,7 @@ export function RightPanel({ state, dispatch, navigate }: {
 
     return (
       <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
-        {state.view === 'history' && historyCommit && (
-          <CommitPanel
-            historyCommit={historyCommit}
-            repo={state.repo}
-            selectedFact={factPath}
-            navigate={navigate}
-            rightPanelFocused={state.rightPanelFocused}
-            dispatch={dispatch}
-          />
-        )}
+        {commitPanel}
         <div data-testid="stats-view" style={{ flex: 1, padding: '24px 28px', overflowY: 'auto', boxSizing: 'border-box' }}>
           {stats ? (
             <>
@@ -503,16 +498,7 @@ export function RightPanel({ state, dispatch, navigate }: {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
-      {state.view === 'history' && historyCommit && (
-        <CommitPanel
-          historyCommit={historyCommit}
-          repo={state.repo}
-          selectedFact={factPath}
-          navigate={navigate}
-          rightPanelFocused={state.rightPanelFocused}
-          dispatch={dispatch}
-        />
-      )}
+      {commitPanel}
       <div style={{ flex: 1, overflow: 'auto' }}>
         {renderFact(fact, navigate, dispatch)}
       </div>

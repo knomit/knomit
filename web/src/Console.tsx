@@ -14,8 +14,10 @@ function formatTime(ts: number): string {
 
 export function Console({ state, dispatch }: Props) {
   const { consoleEntries, consoleOpen, consoleHeight } = state;
-  const listRef = useRef<HTMLDivElement>(null);
-  const dragRef = useRef<{ startY: number; startH: number } | null>(null);
+  const listRef      = useRef<HTMLDivElement>(null);
+  const dragRef      = useRef<{ startY: number; startH: number } | null>(null);
+  const heightRef    = useRef(consoleHeight);
+  heightRef.current  = consoleHeight;
 
   const infoCount  = consoleEntries.filter(e => e.level === 'info').length;
   const errorCount = consoleEntries.filter(e => e.level === 'error').length;
@@ -30,7 +32,7 @@ export function Console({ state, dispatch }: Props) {
   // Drag resize
   const onMouseDown = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
-    dragRef.current = { startY: e.clientY, startH: consoleHeight };
+    dragRef.current = { startY: e.clientY, startH: heightRef.current };
 
     const onMove = (ev: MouseEvent) => {
       if (!dragRef.current) return;
@@ -44,7 +46,7 @@ export function Console({ state, dispatch }: Props) {
     };
     document.addEventListener('mousemove', onMove);
     document.addEventListener('mouseup', onUp);
-  }, [consoleHeight, dispatch]);
+  }, [dispatch]);
 
   // Pick the highest-priority active task for status display.
   let activeTask: { op: string; status: string; message: string } | null = null;

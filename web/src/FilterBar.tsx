@@ -248,7 +248,10 @@ export function FilterBar({ state, dispatch }: Props) {
     };
   }, [showCategoryPicker]);
 
-  const hasPrefixMatch = PREFIX_RE.test(inputValue);
+  const prefixMatch  = PREFIX_RE.exec(inputValue);
+  const hasPrefixMatch = prefixMatch !== null;
+  const typedPrefix  = prefixMatch ? prefixMatch[2] : '';
+  const prefixCategory = prefixMatch ? prefixMatch[1] : '';
 
   return (
     <div style={{
@@ -489,12 +492,7 @@ export function FilterBar({ state, dispatch }: Props) {
           }}
         />
 
-        {/* Autocomplete dropdown */}
-        {hasPrefixMatch && suggestions.length > 0 && (() => {
-          const pm = PREFIX_RE.exec(inputValue);
-          const typedPrefix = pm ? pm[2] : '';
-          const category = pm ? pm[1] : '';
-          return (
+        {hasPrefixMatch && suggestions.length > 0 && (
           <div style={{
             position: 'absolute',
             top: '100%',
@@ -508,38 +506,37 @@ export function FilterBar({ state, dispatch }: Props) {
             overflowY: 'auto',
             boxShadow: '0 4px 12px rgba(0,0,0,0.5)',
           }}>
-            {/* Header hint */}
             <div style={{ padding: '4px 10px', fontSize: 10, color: '#666', borderBottom: '1px solid #333' }}>
-              {category}{typedPrefix ? `: "${typedPrefix}"` : ''}{category === 'path' ? ' — ←/→ to navigate' : ' — type to filter'}
+              {prefixCategory}{typedPrefix ? `: "${typedPrefix}"` : ''}{prefixCategory === 'path' ? ' — ←/→ to navigate' : ' — type to filter'}
             </div>
             {suggestions.map((s, idx) => {
               // Highlight the matching prefix portion
               const matchIdx = typedPrefix ? s.toLowerCase().indexOf(typedPrefix.toLowerCase()) : -1;
               return (
-              <div
-                key={s}
-                ref={el => { suggestRefs.current[idx] = el; }}
-                onMouseDown={e => { e.preventDefault(); commitSuggestion(s); }}
-                onMouseEnter={() => setSuggestIdx(idx)}
-                style={{
-                  padding: '4px 10px',
-                  fontSize: 12,
-                  color: idx === suggestIdx ? '#eee' : '#aaa',
-                  background: idx === suggestIdx ? '#333' : 'transparent',
-                  cursor: 'pointer',
-                  whiteSpace: 'nowrap',
-                }}
-              >
-                {matchIdx >= 0 && typedPrefix ? (<>
-                  {s.slice(0, matchIdx)}
-                  <span style={{ color: '#fff', fontWeight: 'bold' }}>{s.slice(matchIdx, matchIdx + typedPrefix.length)}</span>
-                  {s.slice(matchIdx + typedPrefix.length)}
-                </>) : s}
-              </div>
-            );
+                <div
+                  key={s}
+                  ref={el => { suggestRefs.current[idx] = el; }}
+                  onMouseDown={e => { e.preventDefault(); commitSuggestion(s); }}
+                  onMouseEnter={() => setSuggestIdx(idx)}
+                  style={{
+                    padding: '4px 10px',
+                    fontSize: 12,
+                    color: idx === suggestIdx ? '#eee' : '#aaa',
+                    background: idx === suggestIdx ? '#333' : 'transparent',
+                    cursor: 'pointer',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  {matchIdx >= 0 && typedPrefix ? (<>
+                    {s.slice(0, matchIdx)}
+                    <span style={{ color: '#fff', fontWeight: 'bold' }}>{s.slice(matchIdx, matchIdx + typedPrefix.length)}</span>
+                    {s.slice(matchIdx + typedPrefix.length)}
+                  </>) : s}
+                </div>
+              );
             })}
           </div>
-        ); })()}
+        )}
       </div>
 
 
