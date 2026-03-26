@@ -11,8 +11,6 @@ export interface NavEntry {
   view: View;
   filters: FilterChip[];
   freeText: string;
-  leftSelection: string | null;   // tree/chrono: fact path | history: commit hash
-  rightSelection: string | null;  // history only: fact path within commit
   historyCommit: string | null;
   factPath: string | null;
   factCommit: string | null;
@@ -28,8 +26,6 @@ export interface ConsoleEntry {
 export interface AppState {
   repo: string;
   view: View;
-  leftSelection: string | null;
-  rightSelection: string | null;
   historyCommit: string | null;  // history mode: commit selected in timeline
   factPath: string | null;       // right panel: fact to display (all modes)
   factCommit: string | null;     // right panel: commit to show fact at (null = HEAD)
@@ -54,15 +50,12 @@ export type Action =
   | { type: 'SET_VIEW'; view: View }
   | { type: 'NAVIGATE'; path: string }
   | { type: 'GO_UP' }
-  | { type: 'SELECT_FACT'; path: string }
   | { type: 'ADD_FILTER'; chip: FilterChip }
   | { type: 'REMOVE_FILTER'; index: number }
   | { type: 'SET_FILTERS'; filters: FilterChip[] }
   | { type: 'SET_FREE_TEXT'; text: string }
   | { type: 'CLEAR_FILTERS' }
   | { type: 'NAV_BACK' }
-  | { type: 'SELECT_COMMIT'; commit: string }
-  | { type: 'OPEN_REF'; path: string; commit: string }
   | { type: 'SET_LOADING'; value: boolean }
   | { type: 'SET_TASK'; op: string; status: 'idle' | 'running' | 'done' | 'error'; message: string }
   | { type: 'SET_STATUS'; head: string; branch: string; embeddingsEnabled: boolean; ontologyRoot: string }
@@ -81,8 +74,6 @@ export type Action =
 export const init: AppState = {
   repo: 'knomit',
   view: 'tree',
-  leftSelection: null,
-  rightSelection: null,
   historyCommit: null,
   factPath: null,
   factCommit: null,
@@ -110,8 +101,6 @@ function pushNav(s: AppState): NavEntry[] {
     view: s.view,
     filters: [...s.filters],
     freeText: s.freeText,
-    leftSelection: s.leftSelection,
-    rightSelection: s.rightSelection,
     historyCommit: s.historyCommit,
     factPath: s.factPath,
     factCommit: s.factCommit,
@@ -141,8 +130,6 @@ export function reducer(s: AppState, a: Action): AppState {
       return {
         ...s,
         view: a.view,
-        leftSelection: null,
-        rightSelection: null,
         historyCommit: a.view === 'history' ? s.historyCommit : null,
         factCommit: a.view === 'history' ? s.factCommit : null,
         // factPath preserved across view changes (same fact shown in new mode)
@@ -156,8 +143,6 @@ export function reducer(s: AppState, a: Action): AppState {
       return {
         ...s,
         filters: replacePathChip(s.filters, a.path),
-        leftSelection: null,
-        rightSelection: null,
         historyCommit: null,
         factPath: null,
         factCommit: null,
@@ -172,8 +157,6 @@ export function reducer(s: AppState, a: Action): AppState {
       return {
         ...s,
         filters: replacePathChip(s.filters, parent),
-        leftSelection: null,
-        rightSelection: null,
         historyCommit: null,
         factPath: null,
         factCommit: null,
@@ -181,13 +164,6 @@ export function reducer(s: AppState, a: Action): AppState {
         rightPanelFocused: false,
       };
     }
-    case 'SELECT_FACT':
-      if (s.view === 'history') {
-        // In history mode, selecting a fact means picking a file within the current commit
-        return { ...s, rightSelection: a.path, navStack: pushNav(s) };
-      }
-      // In tree/chrono, selecting a fact is the primary left panel selection
-      return { ...s, leftSelection: a.path, navStack: pushNav(s) };
     case 'ADD_FILTER': {
       let filters: FilterChip[];
       if (a.chip.category === 'path') {
@@ -200,14 +176,14 @@ export function reducer(s: AppState, a: Action): AppState {
     }
     case 'REMOVE_FILTER': {
       const filters = s.filters.filter((_, i) => i !== a.index);
-      return { ...s, filters, leftSelection: null, rightSelection: null, historyCommit: null, factPath: null, factCommit: null, navStack: pushNav(s) };
+      return { ...s, filters, historyCommit: null, factPath: null, factCommit: null, navStack: pushNav(s) };
     }
     case 'SET_FILTERS':
       return { ...s, filters: a.filters, navStack: pushNav(s) };
     case 'SET_FREE_TEXT':
       return { ...s, freeText: a.text };
     case 'CLEAR_FILTERS':
-      return { ...s, filters: [], freeText: '', leftSelection: null, rightSelection: null, historyCommit: null, factPath: null, factCommit: null, navStack: pushNav(s) };
+      return { ...s, filters: [], freeText: '', historyCommit: null, factPath: null, factCommit: null, navStack: pushNav(s) };
     case 'NAV_BACK': {
       if (s.navStack.length === 0) return s;
       const prev = s.navStack[s.navStack.length - 1];
@@ -217,8 +193,6 @@ export function reducer(s: AppState, a: Action): AppState {
           ...s,
           repo: prev.repo,
           view: 'tree',
-          leftSelection: null,
-          rightSelection: null,
           historyCommit: null,
           factPath: null,
           factCommit: null,
@@ -232,8 +206,6 @@ export function reducer(s: AppState, a: Action): AppState {
       return {
         ...s,
         view: prev.view,
-        leftSelection: prev.leftSelection,
-        rightSelection: prev.rightSelection,
         historyCommit: prev.historyCommit,
         factPath: prev.factPath,
         factCommit: prev.factCommit,
@@ -243,19 +215,6 @@ export function reducer(s: AppState, a: Action): AppState {
         rightPanelFocused: false,
       };
     }
-    case 'SELECT_COMMIT':
-      return { ...s, leftSelection: a.commit, rightSelection: null, navStack: pushNav(s) };
-    case 'OPEN_REF':
-      return {
-        ...s,
-        view: 'history',
-        leftSelection: a.commit,
-        rightSelection: a.path,
-        filters: [], // clear all filters — we're jumping to a specific commit+fact
-        freeText: '',
-        navStack: pushNav(s),
-        rightPanelFocused: false,
-      };
     case 'SET_LOADING':
       return { ...s, loading: a.value };
     case 'SET_TASK': {
@@ -290,8 +249,6 @@ export function reducer(s: AppState, a: Action): AppState {
         ...s,
         repo: a.repo,
         view: 'tree',
-        leftSelection: null,
-        rightSelection: null,
         historyCommit: null,
         factPath: null,
         factCommit: null,
