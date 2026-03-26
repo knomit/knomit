@@ -5,10 +5,12 @@ import type { HistoryEntryWithTags } from './api';
 import type { AppState, Action } from './state';
 import { currentPath } from './state';
 import { relativeTime, opStyles, defaultOpStyle } from './utils';
+import type { NavRequest } from './useNavigationManager';
 
 interface Props {
   state: AppState;
   dispatch: Dispatch<Action>;
+  navigate: (req: NavRequest) => void;
 }
 
 function commitStyle(entry: HistoryEntryWithTags): { color: string; bg: string; label: string } {
@@ -16,7 +18,7 @@ function commitStyle(entry: HistoryEntryWithTags): { color: string; bg: string; 
   return defaultOpStyle;
 }
 
-export function HistoryTimeline({ state, dispatch }: Props) {
+export function HistoryTimeline({ state, dispatch, navigate }: Props) {
   const [entries, setEntries] = useState<HistoryEntryWithTags[]>([]);
   const [nextCursor, setNextCursor] = useState<string | undefined>(undefined);
   const [loading, setLoading] = useState(false);
@@ -26,6 +28,9 @@ export function HistoryTimeline({ state, dispatch }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
 
   const path = currentPath(state);
+
+  const staleStateRef = useRef(state);
+  useEffect(() => { staleStateRef.current = state; });
 
   // Fetch first page on mount and when path changes
   useEffect(() => {
@@ -38,18 +43,15 @@ export function HistoryTimeline({ state, dispatch }: Props) {
       setEntries(e);
       setNextCursor(r.next);
       setLoading(false);
-      // If OPEN_REF set both leftSelection and rightSelection, don't override.
-      // RightPanel fetches commit detail directly from leftSelection.
-      // (SELECT_COMMIT from timeline clicks clears rightSelection, so this
-      // only protects external jumps like OPEN_REF.)
-      if (state.leftSelection && state.rightSelection) {
-        const idx = e.findIndex(c => c.commit === state.leftSelection);
+      // If historyCommit is already set (e.g. NAV_BACK restored it), just sync visual index.
+      if (staleStateRef.current.historyCommit) {
+        const idx = e.findIndex(c => c.commit === staleStateRef.current.historyCommit);
         if (idx >= 0) setSelectedIdx(idx);
         return;
       }
       // No explicit selection — auto-select first commit.
       if (e.length > 0) {
-        dispatch({ type: 'SELECT_COMMIT', commit: e[0].commit });
+        navigate({ view: 'history', historyCommit: e[0].commit, factPath: null });
       }
     }).catch(() => {
       setEntries([]);
@@ -89,44 +91,24 @@ export function HistoryTimeline({ state, dispatch }: Props) {
     return true;
   });
 
-  // When filters change, sync selection — but never override OPEN_REF jumps.
-  const filteredKey = filteredEntries.map(e => e.commit).join(',');
-  useEffect(() => {
-    // OPEN_REF sets both leftSelection and rightSelection — don't override.
-    if (state.leftSelection && state.rightSelection) {
-      const existingIdx = filteredEntries.findIndex(e => e.commit === state.leftSelection);
-      if (existingIdx >= 0) {
-        setSelectedIdx(existingIdx);
-        itemRefs.current[existingIdx]?.scrollIntoView({ block: 'nearest' });
-      }
-      return;
-    }
-    // No explicit selection — auto-select first.
-    setSelectedIdx(0);
-    if (filteredEntries.length > 0) {
-      dispatch({ type: 'SELECT_COMMIT', commit: filteredEntries[0].commit });
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filteredKey]);
-
   // Sync selectedIdx when historyCommit changes externally (e.g. NAV_BACK)
   useEffect(() => {
-    if (!state.leftSelection) return;
-    const idx = filteredEntries.findIndex(e => e.commit === state.leftSelection);
+    if (!state.historyCommit) return;
+    const idx = filteredEntries.findIndex(e => e.commit === state.historyCommit);
     if (idx >= 0 && idx !== selectedIdx) {
       setSelectedIdx(idx);
       itemRefs.current[idx]?.scrollIntoView({ block: 'nearest' });
     }
-  }, [state.leftSelection]);
+  }, [state.historyCommit, filteredEntries, selectedIdx]);
 
   // Keyboard navigation (on filtered entries)
-  const navigate = useCallback((delta: 1 | -1) => {
+  const moveSelection = useCallback((delta: 1 | -1) => {
     const next = Math.max(0, Math.min(selectedIdx + delta, filteredEntries.length - 1));
     setSelectedIdx(next);
     itemRefs.current[next]?.scrollIntoView({ block: 'nearest' });
     const entry = filteredEntries[next];
-    if (entry) dispatch({ type: 'SELECT_COMMIT', commit: entry.commit });
-  }, [selectedIdx, filteredEntries, dispatch]);
+    if (entry) navigate({ view: 'history', historyCommit: entry.commit, factPath: null });
+  }, [selectedIdx, filteredEntries, navigate]);
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -136,8 +118,8 @@ export function HistoryTimeline({ state, dispatch }: Props) {
       if (state.view !== 'history') return;
       if (filteredEntries.length === 0) return;
 
-      if (e.key === 'ArrowDown' || e.key === 'j') { e.preventDefault(); navigate(1); }
-      if (e.key === 'ArrowUp' || e.key === 'k') { e.preventDefault(); navigate(-1); }
+      if (e.key === 'ArrowDown' || e.key === 'j') { e.preventDefault(); moveSelection(1); }
+      if (e.key === 'ArrowUp' || e.key === 'k') { e.preventDefault(); moveSelection(-1); }
       if (e.key === 'ArrowRight') {
         e.preventDefault();
         dispatch({ type: 'FOCUS_RIGHT_PANEL' });
@@ -145,7 +127,7 @@ export function HistoryTimeline({ state, dispatch }: Props) {
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [state.rightPanelFocused, state.view, filteredEntries, selectedIdx, navigate, dispatch]);
+  }, [state.rightPanelFocused, state.view, filteredEntries, selectedIdx, moveSelection, dispatch]);
 
   // Compute fact count badge
   const factCountBadge = (entry: HistoryEntryWithTags) => {
@@ -162,7 +144,7 @@ export function HistoryTimeline({ state, dispatch }: Props) {
           </div>
         )}
         {filteredEntries.map((entry, i) => {
-          const isSelected = i === selectedIdx;
+          const isSelected = entry.commit === state.historyCommit;
           const cs = commitStyle(entry);
           const hasLabel = cs.label !== '';
           const dotSize = hasLabel ? 10 : 6;
@@ -185,7 +167,7 @@ export function HistoryTimeline({ state, dispatch }: Props) {
               }}
               onClick={() => {
                 setSelectedIdx(i);
-                dispatch({ type: 'SELECT_COMMIT', commit: entry.commit });
+                navigate({ view: 'history', historyCommit: entry.commit, factPath: null });
               }}
             >
               {/* Timeline column: continuous line + dot */}

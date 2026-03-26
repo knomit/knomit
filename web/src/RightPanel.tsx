@@ -7,6 +7,7 @@ import type { AppState, Action } from './state';
 import { currentPath } from './state';
 import { relativeTime, typeStyles, defaultTypeStyle, opStyles, defaultOpStyle } from './utils';
 import { TypeIcon, EpisodeIcon } from './icons';
+import type { NavRequest } from './useNavigationManager';
 
 function TagCloud({ label, entries, color, onTagClick, focusedValue }: {
   label: string;
@@ -355,7 +356,11 @@ function CommitPanel({ detail, selectedFact, onSelectFact }: {
 
 // ─── Main RightPanel ─────────────────────────────────────────────────────────
 
-export function RightPanel({ state, dispatch }: { state: AppState; dispatch: Dispatch<Action> }) {
+export function RightPanel({ state, dispatch, navigate: _navigate }: {
+  state: AppState;
+  dispatch: Dispatch<Action>;
+  navigate: (req: NavRequest) => void;
+}) {
   const [fact, setFact] = useState<Fact | null>(null);
   const [stats, setStats] = useState<Stats | null>(null);
   const [activity, setActivity] = useState<ActivityStats | null>(null);

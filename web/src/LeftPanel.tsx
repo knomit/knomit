@@ -7,15 +7,17 @@ import { currentPath } from './state';
 import { HistoryTimeline } from './HistoryTimeline';
 import { typeStyles, defaultTypeStyle, relativeTimeEpoch } from './utils';
 import { TypeIcon, FolderIcon } from './icons';
+import type { NavRequest } from './useNavigationManager';
 
 interface Props {
   state: AppState;
   dispatch: Dispatch<Action>;
+  navigate: (req: NavRequest) => void;
 }
 
 // ---------- TreeView ----------
 
-function TreeView({ state, dispatch }: Props) {
+function TreeView({ state, dispatch, navigate: _navigate }: Props) {
   const [children, setChildren] = useState<DirChild[]>([]);
   const [selectedIdx, setSelectedIdx] = useState(-1);
   const itemRefs = useRef<(HTMLDivElement | null)[]>([]);
@@ -181,7 +183,7 @@ function TreeView({ state, dispatch }: Props) {
 
 // ---------- ChronoView ----------
 
-function ChronoView({ state, dispatch }: Props) {
+function ChronoView({ state, dispatch, navigate: _navigate }: Props) {
   const [facts, setFacts] = useState<RecentFactEntry[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
@@ -247,7 +249,7 @@ function ChronoView({ state, dispatch }: Props) {
   }, [loadMore]);
 
   // Keyboard navigation
-  const navigate = useCallback((delta: 1 | -1) => {
+  const moveSelection = useCallback((delta: 1 | -1) => {
     const next = Math.max(0, Math.min(selectedIdx + delta, facts.length - 1));
     setSelectedIdx(next);
     itemRefs.current[next]?.scrollIntoView({ block: 'nearest' });
@@ -262,13 +264,13 @@ function ChronoView({ state, dispatch }: Props) {
       if (state.rightPanelFocused) return;
       if (state.view !== 'chrono') return;
 
-      if (e.key === 'ArrowDown' || e.key === 'j') { e.preventDefault(); navigate(1); }
-      else if (e.key === 'ArrowUp' || e.key === 'k') { e.preventDefault(); navigate(-1); }
+      if (e.key === 'ArrowDown' || e.key === 'j') { e.preventDefault(); moveSelection(1); }
+      else if (e.key === 'ArrowUp' || e.key === 'k') { e.preventDefault(); moveSelection(-1); }
       else if (e.key === 'ArrowRight') { e.preventDefault(); dispatch({ type: 'FOCUS_RIGHT_PANEL' }); }
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [state.rightPanelFocused, state.view, navigate, dispatch]);
+  }, [state.rightPanelFocused, state.view, moveSelection, dispatch]);
 
   return (
     <div data-testid="chrono-list" ref={containerRef} style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
@@ -321,16 +323,16 @@ function ChronoView({ state, dispatch }: Props) {
 
 // ---------- HistoryView ----------
 
-function HistoryView({ state, dispatch }: Props) {
-  return <HistoryTimeline state={state} dispatch={dispatch} />;
+function HistoryView({ state, dispatch, navigate }: Props) {
+  return <HistoryTimeline state={state} dispatch={dispatch} navigate={navigate} />;
 }
 
 // ---------- LeftPanel (dispatcher) ----------
 
-export function LeftPanel({ state, dispatch }: Props) {
+export function LeftPanel({ state, dispatch, navigate }: Props) {
   switch (state.view) {
-    case 'tree': return <TreeView state={state} dispatch={dispatch} />;
-    case 'chrono': return <ChronoView state={state} dispatch={dispatch} />;
-    case 'history': return <HistoryView state={state} dispatch={dispatch} />;
+    case 'tree': return <TreeView state={state} dispatch={dispatch} navigate={navigate} />;
+    case 'chrono': return <ChronoView state={state} dispatch={dispatch} navigate={navigate} />;
+    case 'history': return <HistoryView state={state} dispatch={dispatch} navigate={navigate} />;
   }
 }

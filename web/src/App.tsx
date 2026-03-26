@@ -115,10 +115,10 @@ export default function App() {
 
       <div style={{ display: 'flex', flex: 1, overflow: 'hidden', minHeight: 0 }}>
         <div style={{ width: '35%', minWidth: 180, maxWidth: '50%', borderRight: '1px solid #222', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-          <LeftPanel state={state} dispatch={dispatch} />
+          <LeftPanel state={state} dispatch={dispatch} navigate={navigate} />
         </div>
         <div style={{ flex: 1, overflow: 'hidden', minWidth: 0 }}>
-          <RightPanel state={state} dispatch={dispatch} />
+          <RightPanel state={state} dispatch={dispatch} navigate={navigate} />
         </div>
       </div>
       <Console state={state} dispatch={dispatch} />
