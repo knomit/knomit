@@ -69,6 +69,7 @@ export type Action =
   | { type: 'FOCUS_RIGHT_PANEL' }
   | { type: 'BLUR_RIGHT_PANEL' }
   | { type: 'APPLY_NAV'; view: View; historyCommit: string | null; factPath: string | null; factCommit: string | null; filters?: FilterChip[]; freeText?: string }
+  | { type: 'AMEND_NAV'; historyCommit: string | null; factPath: string | null; factCommit: string | null }
   | { type: 'FACT_LOADED'; commit: string };
 
 export const init: AppState = {
@@ -282,6 +283,11 @@ export function reducer(s: AppState, a: Action): AppState {
         rightPanelFocused: false,
       };
     }
+    case 'AMEND_NAV':
+      // Updates selection state in-place without pushing navStack.
+      // Used by auto-select behaviors (HistoryTimeline, ChronoView, TreeView search)
+      // so that view-button clicks create exactly one navStack entry.
+      return { ...s, historyCommit: a.historyCommit, factPath: a.factPath, factCommit: a.factCommit };
     case 'FACT_LOADED':
       return { ...s, factCommit: a.commit };
     default:

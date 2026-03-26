@@ -71,4 +71,43 @@ test.describe('History Mode', () => {
     await page.keyboard.press('1');
     await expect(page.getByTestId('left-panel')).toBeVisible();
   });
+
+  // Regression: History button click with a fact open should (1) highlight that fact in
+  // CommitPanel and (2) require only ONE back step to return to tree mode.
+  test('History button with fact open: fact highlighted in CommitPanel, one back returns to tree', async ({ page }) => {
+    // Use search to land on a specific fact at a known path.
+    const filterInput = page.locator('#filter-input');
+    await filterInput.focus();
+    await filterInput.fill('mvcc');
+    await page.keyboard.press('Enter');
+    await page.waitForTimeout(800);
+
+    const factEntry = page.getByTestId('dir-entry').and(page.locator('[data-isdir="false"]')).first();
+    if (!await factEntry.isVisible({ timeout: 5_000 }).catch(() => false)) {
+      test.skip(true, 'mvcc fact not found in seed data');
+      return;
+    }
+    await factEntry.click();
+    await expect(page.getByTestId('fact-title')).toBeVisible({ timeout: 10_000 });
+    const factPath = await factEntry.getAttribute('data-path');
+
+    // Wait for FACT_LOADED to fire so factCommit is set in state.
+    await page.waitForTimeout(800);
+
+    // Click the History button (not keyboard shortcut) — the bug was this bypassed the manager.
+    await page.getByTitle('History').click();
+    await expect(page.getByTestId('history-timeline')).toBeVisible({ timeout: 10_000 });
+
+    // The fact should be highlighted in CommitPanel (same path, same commit).
+    if (factPath) {
+      await expect(page.locator(`[data-testid="commit-file"][data-path="${factPath}"]`)).toBeVisible({ timeout: 5_000 });
+    }
+
+    // ONE back step must return to tree mode (previously required two).
+    await page.locator('body').click();
+    await page.keyboard.press('Backspace');
+    await page.waitForTimeout(500);
+    await expect(page.getByTestId('history-timeline')).not.toBeVisible({ timeout: 3_000 });
+    await expect(page.getByTestId('left-panel')).toBeVisible();
+  });
 });

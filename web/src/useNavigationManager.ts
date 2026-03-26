@@ -1,67 +1,79 @@
 import { useRef, useEffect } from 'react';
 import type { Dispatch } from 'react';
 import { api } from './api';
-import type { AppState, Action } from './state';
+import type { AppState, Action, View } from './state';
 
 export type NavRequest =
-  | { view: 'tree' | 'chrono'; factPath: string | null }
-  | { view: 'history'; historyCommit: string; factPath: string | null; factCommit?: string };
+  | { view: View }                                                                              // mode-switch: manager fills gaps from current state
+  | { view: 'tree' | 'chrono'; factPath: string | null }                                       // explicit fact selection in tree/chrono
+  | { view: 'history'; historyCommit: string; factPath: string | null; factCommit?: string };  // explicit history navigation
 
 /**
  * Pure async function — resolves a NavRequest to an APPLY_NAV dispatch.
  * Exported for unit testing without React.
+ *
+ * Mode-switch requests ({ view }) are resolved by reading current state:
+ *   history → anchors to factCommit if known, else headCommit (fetches first file)
+ *   tree    → preserves current factPath at HEAD
+ *   chrono  → clears factPath (ChronoView will amend selection via AMEND_NAV)
  */
 export async function resolveNavRequest(
   req: NavRequest,
-  repo: string,
+  state: AppState,
   dispatch: Dispatch<Action>,
 ): Promise<void> {
+  // ── Mode-switch: no explicit selection provided ────────────────────────────
+  if (!('factPath' in req)) {
+    if (req.view === 'history') {
+      const { factPath, factCommit, headCommit, repo } = state;
+      if (factPath && factCommit) {
+        // Already have a fact at a known commit — land there immediately.
+        dispatch({ type: 'APPLY_NAV', view: 'history', historyCommit: factCommit, factPath, factCommit });
+      } else if (headCommit) {
+        // Fetch first file of HEAD commit so CommitPanel has something to show.
+        try {
+          const detail = await api.commitDetail(repo, headCommit);
+          const first = (detail.files || [])[0];
+          dispatch({ type: 'APPLY_NAV', view: 'history', historyCommit: headCommit, factPath: first?.path ?? null, factCommit: headCommit });
+        } catch {
+          dispatch({ type: 'APPLY_NAV', view: 'history', historyCommit: headCommit, factPath: null, factCommit: headCommit });
+        }
+      } else {
+        // headCommit not yet loaded — HistoryTimeline will amend selection once it fetches.
+        dispatch({ type: 'APPLY_NAV', view: 'history', historyCommit: null, factPath: null, factCommit: null });
+      }
+    } else if (req.view === 'tree') {
+      // Preserve current fact so the same file stays visible at HEAD.
+      dispatch({ type: 'APPLY_NAV', view: 'tree', historyCommit: null, factPath: state.factPath, factCommit: null });
+    } else {
+      // chrono: ChronoView will amend selection once it fetches recent facts.
+      dispatch({ type: 'APPLY_NAV', view: 'chrono', historyCommit: null, factPath: null, factCommit: null });
+    }
+    return;
+  }
+
+  // ── Explicit history navigation ────────────────────────────────────────────
   if (req.view === 'history' && req.factPath === null) {
-    // Partial spec: need commitDetail to discover the first file
+    // historyCommit given but factPath needs resolving (e.g. timeline click).
     try {
-      const detail = await api.commitDetail(repo, req.historyCommit);
+      const detail = await api.commitDetail(state.repo, req.historyCommit);
       const first = (detail.files || [])[0];
-      dispatch({
-        type: 'APPLY_NAV',
-        view: 'history',
-        historyCommit: req.historyCommit,
-        factPath: first?.path ?? null,
-        factCommit: req.historyCommit,
-      });
+      dispatch({ type: 'APPLY_NAV', view: 'history', historyCommit: req.historyCommit, factPath: first?.path ?? null, factCommit: req.historyCommit });
     } catch {
-      // Graceful degradation: land in history mode with no fact selected
-      dispatch({
-        type: 'APPLY_NAV',
-        view: 'history',
-        historyCommit: req.historyCommit,
-        factPath: null,
-        factCommit: req.historyCommit,
-      });
+      dispatch({ type: 'APPLY_NAV', view: 'history', historyCommit: req.historyCommit, factPath: null, factCommit: req.historyCommit });
     }
   } else if (req.view === 'history') {
-    // Fully specified: dispatch immediately
-    dispatch({
-      type: 'APPLY_NAV',
-      view: 'history',
-      historyCommit: req.historyCommit,
-      factPath: req.factPath,
-      factCommit: req.factCommit ?? req.historyCommit,
-    });
+    // Fully specified: dispatch immediately.
+    dispatch({ type: 'APPLY_NAV', view: 'history', historyCommit: req.historyCommit, factPath: req.factPath, factCommit: req.factCommit ?? req.historyCommit });
   } else {
-    // tree or chrono
-    dispatch({
-      type: 'APPLY_NAV',
-      view: req.view,
-      historyCommit: null,
-      factPath: req.factPath,
-      factCommit: null,
-    });
+    // tree or chrono with explicit factPath.
+    dispatch({ type: 'APPLY_NAV', view: req.view, historyCommit: null, factPath: req.factPath, factCommit: null });
   }
 }
 
 /**
  * React hook that wraps resolveNavRequest in a serial queue.
- * Uses stale-ref pattern so async callbacks always read current state.repo.
+ * Uses stale-ref pattern so async callbacks always read current state.
  */
 export function useNavigationManager(
   state: AppState,
@@ -87,7 +99,7 @@ export function useNavigationManager(
       const req = queue.current.shift();
       if (!req) return;
       processing.current = true;
-      resolveNavRequest(req, stateRef.current.repo, dispatchRef.current)
+      resolveNavRequest(req, stateRef.current, dispatchRef.current)
         .finally(() => {
           processing.current = false;
           drainRef.current();

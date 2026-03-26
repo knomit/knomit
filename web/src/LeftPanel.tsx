@@ -47,7 +47,7 @@ function TreeView({ state, dispatch, navigate }: Props) {
       setChildren(items);
       setSelectedIdx(items.length > 0 ? 0 : -1);
       if (items.length > 0 && items[0].fullPath) {
-        navigate({ view: 'tree', factPath: items[0].fullPath });
+        dispatch({ type: 'AMEND_NAV', historyCommit: null, factPath: items[0].fullPath, factCommit: null });
       }
     }).catch(() => { if (!stale) setChildren([]); });
     return () => { stale = true; };
@@ -215,7 +215,7 @@ function ChronoView({ state, dispatch, navigate }: Props) {
       setFacts(r.facts || []);
       setTotal(r.total);
       setLoading(false);
-      if (r.facts?.length > 0) navigate({ view: 'chrono', factPath: r.facts[0].path });
+      if (r.facts?.length > 0) dispatch({ type: 'AMEND_NAV', historyCommit: null, factPath: r.facts[0].path, factCommit: null });
     }).catch(() => { if (!cancelled) { setFacts([]); setLoading(false); } });
     return () => { cancelled = true; };
   }, [path, state.headCommit, state.freeText, state.repo, typeFilter,

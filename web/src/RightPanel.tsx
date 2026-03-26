@@ -256,6 +256,15 @@ function CommitPanel({ historyCommit, repo, selectedFact, navigate, rightPanelFo
     }
   }, [activeIdx]);
 
+  // Auto-select first file when entering a commit with no fact selected.
+  // Covers the edge case where HistoryTimeline AMEND_NAV sets historyCommit but factPath is null
+  // (e.g. initial load before headCommit was available).
+  useEffect(() => {
+    if (!detail || selectedFact) return;
+    const first = detail.files?.[0];
+    if (first) dispatch({ type: 'AMEND_NAV', historyCommit, factPath: first.path, factCommit: historyCommit });
+  }, [detail, selectedFact, historyCommit, dispatch]);
+
   // Reset list height to default when commit changes
   useEffect(() => { setListHeight(DEFAULT_LIST_HEIGHT); }, [historyCommit]);
 

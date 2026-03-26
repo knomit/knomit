@@ -1,4 +1,4 @@
-import { useReducer, useEffect, useState, useRef } from 'react';
+import { useReducer, useEffect, useState } from 'react';
 import { reducer, init } from './state';
 import { api } from './api';
 import { useNavigationManager } from './useNavigationManager';
@@ -14,8 +14,6 @@ import './App.css';
 
 export default function App() {
   const [state, dispatch] = useReducer(reducer, init);
-  const stateRef = useRef(state);
-  useEffect(() => { stateRef.current = state; });
   const { navigate } = useNavigationManager(state, dispatch);
   const [repos, setRepos] = useState<RepoInfo[]>([]);
   const [showOrigin, setShowOrigin] = useState(false);
@@ -86,24 +84,9 @@ export default function App() {
         dispatch({ type: 'NAV_BACK' });
         return;
       }
-      if (e.key === '1') { e.preventDefault(); dispatch({ type: 'SET_VIEW', view: 'tree' }); return; }
-      if (e.key === '2') { e.preventDefault(); dispatch({ type: 'SET_VIEW', view: 'chrono' }); return; }
-      if (e.key === '3') {
-        e.preventDefault();
-        const s = stateRef.current;
-        if (s.factPath && s.factCommit) {
-          // Fact open with known commit — land exactly there, no async needed
-          navigate({ view: 'history', historyCommit: s.factCommit,
-                      factPath: s.factPath, factCommit: s.factCommit });
-        } else if (s.headCommit) {
-          // No fact open — auto-select latest commit then first file
-          navigate({ view: 'history', historyCommit: s.headCommit, factPath: null });
-        } else {
-          // headCommit not yet loaded — enter history, HistoryTimeline will auto-select
-          dispatch({ type: 'SET_VIEW', view: 'history' });
-        }
-        return;
-      }
+      if (e.key === '1') { e.preventDefault(); navigate({ view: 'tree' }); return; }
+      if (e.key === '2') { e.preventDefault(); navigate({ view: 'chrono' }); return; }
+      if (e.key === '3') { e.preventDefault(); navigate({ view: 'history' }); return; }
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
@@ -112,7 +95,7 @@ export default function App() {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', width: '100vw', background: '#141414', color: '#eee', fontFamily: 'system-ui, sans-serif', overflow: 'hidden' }}>
       <TopBar state={state} repos={repos} dispatch={dispatch} onSettingsClick={() => setShowOrigin(true)} />
-      <Breadcrumb state={state} dispatch={dispatch} />
+      <Breadcrumb state={state} dispatch={dispatch} navigate={navigate} />
       <FilterBar state={state} dispatch={dispatch} />
 
       <div style={{ display: 'flex', flex: 1, overflow: 'hidden', minHeight: 0 }}>

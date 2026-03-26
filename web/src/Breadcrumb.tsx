@@ -1,10 +1,12 @@
 import type { Dispatch } from 'react';
 import type { AppState, Action, View } from './state';
 import { currentPath } from './state';
+import type { NavRequest } from './useNavigationManager';
 
 interface Props {
   state: AppState;
   dispatch: Dispatch<Action>;
+  navigate: (req: NavRequest) => void;
 }
 
 // Lucide-style SVG outline icons
@@ -40,7 +42,7 @@ const viewButtons: { view: View; Icon: typeof TreeIcon; label: string }[] = [
   { view: 'history', Icon: HistoryIcon, label: 'History' },
 ];
 
-export function Breadcrumb({ state, dispatch }: Props) {
+export function Breadcrumb({ state, dispatch, navigate }: Props) {
   const path = currentPath(state);
   const parts = path.split('/');
 
@@ -78,14 +80,14 @@ export function Breadcrumb({ state, dispatch }: Props) {
 
       <div style={{ flex: 1 }} />
 
-      {/* View switcher — right-aligned */}
+      {/* View switcher — all buttons go through the navigation manager */}
       <div style={{ display: 'flex', gap: 2, background: '#1a1a1a', borderRadius: 4, padding: 2 }}>
         {viewButtons.map(({ view, Icon, label }) => {
           const active = state.view === view;
           return (
             <button
               key={view}
-              onClick={() => dispatch({ type: 'SET_VIEW', view })}
+              onClick={() => navigate({ view })}
               title={label}
               style={{
                 background: 'transparent',

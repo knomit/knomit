@@ -34,11 +34,13 @@ export function HistoryTimeline({ state, dispatch, navigate }: Props) {
 
   // Fetch first page on mount and when path changes
   useEffect(() => {
+    let stale = false;
     setLoading(true);
     setEntries([]);
     setNextCursor(undefined);
     setSelectedIdx(0);
     api.history(state.repo, path).then(r => {
+      if (stale) return;
       const e = r.entries || [];
       setEntries(e);
       setNextCursor(r.next);
@@ -49,14 +51,14 @@ export function HistoryTimeline({ state, dispatch, navigate }: Props) {
         if (idx >= 0) setSelectedIdx(idx);
         return;
       }
-      // No explicit selection — auto-select first commit.
+      // No explicit selection — amend current nav entry in-place (no navStack push).
       if (e.length > 0) {
-        navigate({ view: 'history', historyCommit: e[0].commit, factPath: null });
+        dispatch({ type: 'AMEND_NAV', historyCommit: e[0].commit, factPath: null, factCommit: e[0].commit });
       }
     }).catch(() => {
-      setEntries([]);
-      setLoading(false);
+      if (!stale) { setEntries([]); setLoading(false); }
     });
+    return () => { stale = true; };
   }, [path, state.repo]);
 
   // Infinite scroll via IntersectionObserver
