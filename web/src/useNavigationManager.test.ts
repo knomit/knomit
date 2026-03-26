@@ -82,11 +82,13 @@ describe('resolveNavRequest', () => {
 
   // ── Mode-switch: { view } ─────────────────────────────────────────────────
 
-  it('mode-switch to history with known factCommit dispatches immediately', async () => {
+  it('mode-switch to history with known factCommit dispatches immediately with empty filters', async () => {
     const state = makeState({ factPath: 'kb/foo.md', factCommit: 'abc123' });
     await resolveNavRequest({ view: 'history' }, state, dispatch);
     expect(mockCommitDetail).not.toHaveBeenCalled();
-    expect(dispatch).toHaveBeenCalledWith({ type: 'APPLY_NAV', view: 'history', historyCommit: 'abc123', factPath: 'kb/foo.md', factCommit: 'abc123' });
+    // filters: [] clears any path chip so the timeline shows all commits —
+    // factCommit is guaranteed visible even if it's a merge commit excluded by path-filtered log.
+    expect(dispatch).toHaveBeenCalledWith({ type: 'APPLY_NAV', view: 'history', historyCommit: 'abc123', factPath: 'kb/foo.md', factCommit: 'abc123', filters: [] });
   });
 
   it('mode-switch to history with no factCommit but headCommit fetches first file of headCommit', async () => {
