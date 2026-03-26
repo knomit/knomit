@@ -126,7 +126,7 @@ export function HistoryTimeline({ state, dispatch, navigate }: Props) {
     );
     observer.observe(sentinel);
     return () => observer.disconnect();
-  }, [loadPrev, prevCursor]);
+  }, [loadPrev]);
 
   const epFilters = useMemo(
     () => state.filters.filter(f => f.category === 'ep').map(f => f.value),

@@ -342,7 +342,6 @@ func (s *Store) LogPaginated(path string, limit int, after, from, before string)
 		if err == nil {
 			return entries, next, prev, nil
 		}
-		// SQL failed — fall through to go-git walk.
 	}
 	entries, next, err := s.logPaginatedGit(path, limit, after)
 	return entries, next, "", err
@@ -350,25 +349,12 @@ func (s *Store) LogPaginated(path string, limit int, after, from, before string)
 
 // logPaginatedSQL queries the commit_log table for paginated history.
 // Returns (entries, next, prev, error).
-// Sort order is (committed_at DESC, max_rowid DESC) — rowid is stable and
-// increases monotonically with commit age (populateCommitLog inserts oldest
-// first; appendCommitLog always appends), so rowid breaks same-second ties
-// in the same direction as the parent chain.
+// Sort order is (committed_at DESC, max_rowid DESC) — rowid increases
+// monotonically with commit age (oldest inserted first), breaking same-second
+// ties in the same direction as the parent chain.
 func (s *Store) logPaginatedSQL(path string, limit int, after, from, before string) ([]LogEntryWithTags, string, string, error) {
-	// Build the path condition for the inner aggregation.
-	var pathCond string
-	var pathArgs []any
-	if path == "" {
-		pathCond = "1=1"
-	} else if strings.HasSuffix(path, ".md") {
-		pathCond = "path = ?"
-		pathArgs = []any{path}
-	} else {
-		pathCond = "path LIKE ?"
-		pathArgs = []any{path + "/%"}
-	}
+	pathCond, pathArgs := commitLogPathCond(path)
 
-	// Resolve anchor commit to (ts, max_rowid) for cursor conditions.
 	type anchor struct{ ts, rid int64 }
 	lookupAnchor := func(hash string) (anchor, error) {
 		var a anchor
@@ -378,23 +364,17 @@ func (s *Store) logPaginatedSQL(path string, limit int, after, from, before stri
 		return a, err
 	}
 
-	// Build the WHERE clause and ORDER direction.
 	var cursorCond string
 	var cursorArgs []any
-	orderDir := "DESC"
-
 	switch {
 	case before != "":
-		// Exclusive up-scroll: commits strictly newer than before.
 		a, err := lookupAnchor(before)
 		if err != nil {
 			return nil, "", "", fmt.Errorf("logPaginatedSQL: before lookup: %w", err)
 		}
 		cursorCond = "(ts > ? OR (ts = ? AND max_rowid > ?))"
 		cursorArgs = []any{a.ts, a.ts, a.rid}
-		// We still want newest-first so ORDER remains DESC.
 	case from != "":
-		// Inclusive seek: target commit appears first on page 1.
 		a, err := lookupAnchor(from)
 		if err != nil {
 			return nil, "", "", fmt.Errorf("logPaginatedSQL: from lookup: %w", err)
@@ -402,7 +382,6 @@ func (s *Store) logPaginatedSQL(path string, limit int, after, from, before stri
 		cursorCond = "(ts < ? OR (ts = ? AND max_rowid <= ?))"
 		cursorArgs = []any{a.ts, a.ts, a.rid}
 	case after != "":
-		// Exclusive down-scroll: commits strictly older than after.
 		a, err := lookupAnchor(after)
 		if err != nil {
 			return nil, "", "", fmt.Errorf("logPaginatedSQL: after lookup: %w", err)
@@ -422,7 +401,7 @@ FROM (
     GROUP BY commit_hash
 )
 WHERE ` + cursorCond + `
-ORDER BY ts ` + orderDir + `, max_rowid ` + orderDir + `
+ORDER BY ts DESC, max_rowid DESC
 LIMIT ?`
 
 	args := append(pathArgs, cursorArgs...)
@@ -441,14 +420,10 @@ LIMIT ?`
 		if err := rows.Scan(&hash, &ts, &message, &operation); err != nil {
 			return nil, "", "", fmt.Errorf("logPaginatedSQL: scan: %w", err)
 		}
-		firstLine := message
-		if idx := strings.IndexByte(firstLine, '\n'); idx >= 0 {
-			firstLine = firstLine[:idx]
-		}
 		entries = append(entries, LogEntryWithTags{
 			Commit:    hash,
 			Date:      time.Unix(ts, 0).UTC().Format(time.RFC3339),
-			Message:   firstLine,
+			Message:   firstLine(message),
 			Operation: operation,
 		})
 	}
@@ -614,22 +589,25 @@ func (s *Store) Activity(path string) (ActivityResult, error) {
 	return s.activityGit(path)
 }
 
+// commitLogPathCond returns the SQL WHERE fragment and bind args for filtering
+// commit_log rows by path. Empty path matches all rows.
+func commitLogPathCond(path string) (cond string, args []any) {
+	if path == "" {
+		return "1=1", nil
+	}
+	if strings.HasSuffix(path, ".md") {
+		return "path = ?", []any{path}
+	}
+	return "path GLOB ?", []any{path + "/*"}
+}
+
 func (s *Store) activitySQL(path string) (ActivityResult, error) {
 	cutoff7 := commitLogAge(7)
 	cutoff30 := commitLogAge(30)
 	cutoff90 := commitLogAge(90)
 
-	var filter string
-	args := []any{cutoff7, cutoff30, cutoff90}
-	if path == "" {
-		filter = "1=1"
-	} else if strings.HasSuffix(path, ".md") {
-		filter = "path = ?"
-		args = append(args, path)
-	} else {
-		filter = "path GLOB ?"
-		args = append(args, path+"/*")
-	}
+	filter, pathArgs := commitLogPathCond(path)
+	args := append([]any{cutoff7, cutoff30, cutoff90}, pathArgs...)
 
 	q := fmt.Sprintf(`
 		SELECT MAX(committed_at),
