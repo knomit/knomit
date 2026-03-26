@@ -13,6 +13,9 @@ export interface NavEntry {
   freeText: string;
   leftSelection: string | null;   // tree/chrono: fact path | history: commit hash
   rightSelection: string | null;  // history only: fact path within commit
+  historyCommit: string | null;
+  factPath: string | null;
+  factCommit: string | null;
 }
 
 export interface ConsoleEntry {
@@ -27,6 +30,9 @@ export interface AppState {
   view: View;
   leftSelection: string | null;
   rightSelection: string | null;
+  historyCommit: string | null;  // history mode: commit selected in timeline
+  factPath: string | null;       // right panel: fact to display (all modes)
+  factCommit: string | null;     // right panel: commit to show fact at (null = HEAD)
   filters: FilterChip[];
   freeText: string;              // unprefixed search text
   loading: boolean;
@@ -68,13 +74,18 @@ export type Action =
   | { type: 'SET_REPO'; repo: string }
   | { type: 'SET_REMOTE_ERROR'; error: string }
   | { type: 'FOCUS_RIGHT_PANEL' }
-  | { type: 'BLUR_RIGHT_PANEL' };
+  | { type: 'BLUR_RIGHT_PANEL' }
+  | { type: 'APPLY_NAV'; view: View; historyCommit: string | null; factPath: string | null; factCommit: string | null; filters?: FilterChip[]; freeText?: string }
+  | { type: 'FACT_LOADED'; commit: string };
 
 export const init: AppState = {
   repo: 'knomit',
   view: 'tree',
   leftSelection: null,
   rightSelection: null,
+  historyCommit: null,
+  factPath: null,
+  factCommit: null,
   filters: [],
   freeText: '',
   loading: false,
@@ -101,6 +112,9 @@ function pushNav(s: AppState): NavEntry[] {
     freeText: s.freeText,
     leftSelection: s.leftSelection,
     rightSelection: s.rightSelection,
+    historyCommit: s.historyCommit,
+    factPath: s.factPath,
+    factCommit: s.factCommit,
   };
   const stack = [...s.navStack, entry];
   if (stack.length > 20) stack.shift();
@@ -129,6 +143,9 @@ export function reducer(s: AppState, a: Action): AppState {
         view: a.view,
         leftSelection: null,
         rightSelection: null,
+        historyCommit: a.view === 'history' ? s.historyCommit : null,
+        factCommit: a.view === 'history' ? s.factCommit : null,
+        // factPath preserved across view changes (same fact shown in new mode)
         filters: crossingBoundary ? s.filters.filter(f => f.category === 'path') : s.filters,
         freeText: crossingBoundary ? '' : s.freeText,
         navStack: pushNav(s),
@@ -141,6 +158,9 @@ export function reducer(s: AppState, a: Action): AppState {
         filters: replacePathChip(s.filters, a.path),
         leftSelection: null,
         rightSelection: null,
+        historyCommit: null,
+        factPath: null,
+        factCommit: null,
         navStack: pushNav(s),
         rightPanelFocused: false,
       };
@@ -154,6 +174,9 @@ export function reducer(s: AppState, a: Action): AppState {
         filters: replacePathChip(s.filters, parent),
         leftSelection: null,
         rightSelection: null,
+        historyCommit: null,
+        factPath: null,
+        factCommit: null,
         navStack: pushNav(s),
         rightPanelFocused: false,
       };
@@ -177,14 +200,14 @@ export function reducer(s: AppState, a: Action): AppState {
     }
     case 'REMOVE_FILTER': {
       const filters = s.filters.filter((_, i) => i !== a.index);
-      return { ...s, filters, leftSelection: null, rightSelection: null, navStack: pushNav(s) };
+      return { ...s, filters, leftSelection: null, rightSelection: null, historyCommit: null, factPath: null, factCommit: null, navStack: pushNav(s) };
     }
     case 'SET_FILTERS':
       return { ...s, filters: a.filters, navStack: pushNav(s) };
     case 'SET_FREE_TEXT':
       return { ...s, freeText: a.text };
     case 'CLEAR_FILTERS':
-      return { ...s, filters: [], freeText: '', leftSelection: null, rightSelection: null, navStack: pushNav(s) };
+      return { ...s, filters: [], freeText: '', leftSelection: null, rightSelection: null, historyCommit: null, factPath: null, factCommit: null, navStack: pushNav(s) };
     case 'NAV_BACK': {
       if (s.navStack.length === 0) return s;
       const prev = s.navStack[s.navStack.length - 1];
@@ -196,6 +219,9 @@ export function reducer(s: AppState, a: Action): AppState {
           view: 'tree',
           leftSelection: null,
           rightSelection: null,
+          historyCommit: null,
+          factPath: null,
+          factCommit: null,
           filters: [],
           freeText: '',
           headCommit: '',
@@ -208,6 +234,9 @@ export function reducer(s: AppState, a: Action): AppState {
         view: prev.view,
         leftSelection: prev.leftSelection,
         rightSelection: prev.rightSelection,
+        historyCommit: prev.historyCommit,
+        factPath: prev.factPath,
+        factCommit: prev.factCommit,
         filters: prev.filters,
         freeText: prev.freeText,
         navStack: s.navStack.slice(0, -1),
@@ -263,6 +292,9 @@ export function reducer(s: AppState, a: Action): AppState {
         view: 'tree',
         leftSelection: null,
         rightSelection: null,
+        historyCommit: null,
+        factPath: null,
+        factCommit: null,
         filters: [],
         freeText: '',
         headCommit: '',
@@ -277,6 +309,24 @@ export function reducer(s: AppState, a: Action): AppState {
       return { ...s, rightPanelFocused: true };
     case 'BLUR_RIGHT_PANEL':
       return { ...s, rightPanelFocused: false };
+    case 'APPLY_NAV': {
+      const crossingBoundary =
+        (s.view === 'history' && a.view !== 'history') ||
+        (s.view !== 'history' && a.view === 'history');
+      return {
+        ...s,
+        view: a.view,
+        historyCommit: a.historyCommit,
+        factPath: a.factPath,
+        factCommit: a.factCommit,
+        filters: a.filters !== undefined ? a.filters : crossingBoundary ? s.filters.filter(f => f.category === 'path') : s.filters,
+        freeText: a.freeText !== undefined ? a.freeText : crossingBoundary ? '' : s.freeText,
+        navStack: pushNav(s),
+        rightPanelFocused: false,
+      };
+    }
+    case 'FACT_LOADED':
+      return { ...s, factCommit: a.commit };
     default:
       return s;
   }

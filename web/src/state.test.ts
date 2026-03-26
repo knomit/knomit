@@ -915,3 +915,103 @@ describe('operation hierarchy — full workflow scenarios', () => {
     expect(s.filters[0]).toEqual({ category: 'path', value: 'kb/tech' });
   });
 });
+
+describe('reducer — APPLY_NAV', () => {
+  it('sets historyCommit, factPath, factCommit atomically and pushes nav', () => {
+    const s = reducer(init, {
+      type: 'APPLY_NAV',
+      view: 'history',
+      historyCommit: 'abc123',
+      factPath: 'kb/foo.md',
+      factCommit: 'abc123',
+    });
+    expect(s.view).toBe('history');
+    expect(s.historyCommit).toBe('abc123');
+    expect(s.factPath).toBe('kb/foo.md');
+    expect(s.factCommit).toBe('abc123');
+    expect(s.navStack.length).toBe(1);
+  });
+
+  it('APPLY_NAV to tree clears historyCommit', () => {
+    const s = reducer(
+      { ...init, historyCommit: 'abc', factPath: 'kb/x.md', factCommit: 'abc' },
+      { type: 'APPLY_NAV', view: 'tree', historyCommit: null, factPath: 'kb/x.md', factCommit: null },
+    );
+    expect(s.historyCommit).toBeNull();
+    expect(s.factPath).toBe('kb/x.md');
+    expect(s.factCommit).toBeNull();
+  });
+
+  it('APPLY_NAV crossing history boundary clears non-path filters', () => {
+    const s = { ...init, filters: [{ category: 'domain' as const, value: 'tech' }] };
+    const next = reducer(s, {
+      type: 'APPLY_NAV',
+      view: 'history',
+      historyCommit: 'abc123',
+      factPath: null,
+      factCommit: null,
+      filters: [],
+      freeText: '',
+    });
+    expect(next.filters).toHaveLength(0);
+  });
+});
+
+describe('reducer — FACT_LOADED', () => {
+  it('sets factCommit without touching other fields', () => {
+    const s = { ...init, factPath: 'kb/foo.md', historyCommit: null, factCommit: null };
+    const next = reducer(s, { type: 'FACT_LOADED', commit: 'def456' });
+    expect(next.factCommit).toBe('def456');
+    expect(next.factPath).toBe('kb/foo.md');
+    expect(next.historyCommit).toBeNull();
+    // FACT_LOADED does NOT push nav
+    expect(next.navStack.length).toBe(0);
+  });
+});
+
+describe('reducer — SET_VIEW with new fields', () => {
+  it('SET_VIEW to tree clears historyCommit and factCommit, preserves factPath', () => {
+    const s = { ...init, view: 'history' as const, historyCommit: 'abc', factPath: 'kb/f.md', factCommit: 'abc' };
+    const next = reducer(s, { type: 'SET_VIEW', view: 'tree' });
+    expect(next.historyCommit).toBeNull();
+    expect(next.factPath).toBe('kb/f.md');
+    expect(next.factCommit).toBeNull();
+  });
+});
+
+describe('reducer — NAV_BACK with new fields', () => {
+  it('NAV_BACK restores historyCommit, factPath, factCommit', () => {
+    const s = { ...init, historyCommit: 'abc', factPath: 'kb/f.md', factCommit: 'abc' };
+    const afterApply = reducer(s, {
+      type: 'APPLY_NAV', view: 'history',
+      historyCommit: 'xyz', factPath: 'kb/g.md', factCommit: 'xyz',
+    });
+    const back = reducer(afterApply, { type: 'NAV_BACK' });
+    expect(back.historyCommit).toBe('abc');
+    expect(back.factPath).toBe('kb/f.md');
+    expect(back.factCommit).toBe('abc');
+  });
+});
+
+describe('reducer — APPLY_NAV auto-clear path', () => {
+  it('APPLY_NAV crossing history boundary auto-clears non-path filters when caller omits filters', () => {
+    const s = { ...init, filters: [{ category: 'domain' as const, value: 'tech' }] };
+    const next = reducer(s, {
+      type: 'APPLY_NAV',
+      view: 'history',
+      historyCommit: 'abc123',
+      factPath: null,
+      factCommit: null,
+      // filters and freeText intentionally omitted
+    });
+    expect(next.filters).toHaveLength(0);
+  });
+});
+
+describe('reducer — SET_VIEW preserves factPath', () => {
+  it('SET_VIEW tree→chrono preserves factPath', () => {
+    const s = { ...init, view: 'tree' as const, factPath: 'kb/f.md' };
+    const next = reducer(s, { type: 'SET_VIEW', view: 'chrono' });
+    expect(next.factPath).toBe('kb/f.md');
+  });
+});
