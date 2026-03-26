@@ -1,6 +1,7 @@
-import { useReducer, useEffect, useState } from 'react';
+import { useReducer, useEffect, useState, useRef } from 'react';
 import { reducer, init } from './state';
 import { api } from './api';
+import { useNavigationManager } from './useNavigationManager';
 import type { RepoInfo } from './api';
 import { TopBar } from './TopBar';
 import { Breadcrumb } from './Breadcrumb';
@@ -13,6 +14,9 @@ import './App.css';
 
 export default function App() {
   const [state, dispatch] = useReducer(reducer, init);
+  const stateRef = useRef(state);
+  useEffect(() => { stateRef.current = state; });
+  const { navigate } = useNavigationManager(state, dispatch);
   const [repos, setRepos] = useState<RepoInfo[]>([]);
   const [showOrigin, setShowOrigin] = useState(false);
 
@@ -84,7 +88,20 @@ export default function App() {
       }
       if (e.key === '1') { e.preventDefault(); dispatch({ type: 'SET_VIEW', view: 'tree' }); return; }
       if (e.key === '2') { e.preventDefault(); dispatch({ type: 'SET_VIEW', view: 'chrono' }); return; }
-      if (e.key === '3') { e.preventDefault(); dispatch({ type: 'SET_VIEW', view: 'history' }); return; }
+      if (e.key === '3') {
+        e.preventDefault();
+        const s = stateRef.current;
+        if (!s.headCommit) return; // status not yet loaded
+        if (s.factPath && s.factCommit) {
+          // Fact open with known commit — land exactly there, no async needed
+          navigate({ view: 'history', historyCommit: s.factCommit,
+                      factPath: s.factPath, factCommit: s.factCommit });
+        } else {
+          // No fact open — auto-select latest commit then first file
+          navigate({ view: 'history', historyCommit: s.headCommit, factPath: null });
+        }
+        return;
+      }
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
