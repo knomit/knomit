@@ -91,14 +91,16 @@ export default function App() {
       if (e.key === '3') {
         e.preventDefault();
         const s = stateRef.current;
-        if (!s.headCommit) return; // status not yet loaded
         if (s.factPath && s.factCommit) {
           // Fact open with known commit — land exactly there, no async needed
           navigate({ view: 'history', historyCommit: s.factCommit,
                       factPath: s.factPath, factCommit: s.factCommit });
-        } else {
+        } else if (s.headCommit) {
           // No fact open — auto-select latest commit then first file
           navigate({ view: 'history', historyCommit: s.headCommit, factPath: null });
+        } else {
+          // headCommit not yet loaded — enter history, HistoryTimeline will auto-select
+          dispatch({ type: 'SET_VIEW', view: 'history' });
         }
         return;
       }

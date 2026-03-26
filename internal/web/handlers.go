@@ -146,6 +146,8 @@ func handleFact() http.HandlerFunc {
 				// File may have been deleted in this commit (e.g. retract).
 				// Fall back to the last commit where the file existed.
 				content, fromCommit, err = ri.GS.ReadFileLastCommit(path, commitHash)
+			} else {
+				fromCommit = commitHash
 			}
 			if err != nil && ri.Svc != nil {
 				// Commit may be invalid or file never on that branch.
