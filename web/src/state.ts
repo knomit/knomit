@@ -45,12 +45,10 @@ export interface AppState {
 }
 
 export type Action =
-  | { type: 'SET_VIEW'; view: View }
   | { type: 'NAVIGATE'; path: string }
   | { type: 'GO_UP' }
   | { type: 'ADD_FILTER'; chip: FilterChip }
   | { type: 'REMOVE_FILTER'; index: number }
-  | { type: 'SET_FILTERS'; filters: FilterChip[] }
   | { type: 'SET_FREE_TEXT'; text: string }
   | { type: 'CLEAR_FILTERS' }
   | { type: 'NAV_BACK' }
@@ -116,24 +114,6 @@ function replacePathChip(filters: FilterChip[], value: string): FilterChip[] {
 
 export function reducer(s: AppState, a: Action): AppState {
   switch (a.type) {
-    case 'SET_VIEW': {
-      // Tree ↔ Chrono: keep all filters (same data, different presentation).
-      // Tree/Chrono ↔ History: clear all filters except path, clear freeText.
-      const crossingBoundary =
-        (s.view === 'history' && a.view !== 'history') ||
-        (s.view !== 'history' && a.view === 'history');
-      return {
-        ...s,
-        view: a.view,
-        historyCommit: a.view === 'history' ? s.historyCommit : null,
-        factCommit: a.view === 'history' ? s.factCommit : null,
-        // factPath preserved across view changes (same fact shown in new mode)
-        filters: crossingBoundary ? s.filters.filter(f => f.category === 'path') : s.filters,
-        freeText: crossingBoundary ? '' : s.freeText,
-        navStack: pushNav(s),
-        rightPanelFocused: false,
-      };
-    }
     case 'NAVIGATE':
       return {
         ...s,
@@ -169,8 +149,6 @@ export function reducer(s: AppState, a: Action): AppState {
       const filters = s.filters.filter((_, i) => i !== a.index);
       return { ...s, filters, historyCommit: null, factPath: null, factCommit: null, navStack: pushNav(s) };
     }
-    case 'SET_FILTERS':
-      return { ...s, filters: a.filters, navStack: pushNav(s) };
     case 'SET_FREE_TEXT':
       return { ...s, freeText: a.text };
     case 'CLEAR_FILTERS':

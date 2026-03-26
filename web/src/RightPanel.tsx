@@ -426,7 +426,7 @@ export function RightPanel({ state, dispatch, navigate }: {
     api.stats(state.repo, path).then(s => { if (!stale) setStats(s); }).catch(() => { if (!stale) setStats(null); });
     api.activity(state.repo, path).then(a => { if (!stale) setActivity(a); }).catch(() => { if (!stale) setActivity(null); });
     return () => { stale = true; };
-  }, [factPath, state.view, state.repo, path, state.headCommit]);
+  }, [factPath, state.repo, path, state.headCommit]);
 
   // Keyboard: ArrowLeft blurs right panel; j/k navigation is handled inside CommitPanel
   useEffect(() => {

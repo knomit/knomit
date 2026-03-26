@@ -77,18 +77,15 @@ export function useNavigationManager(
 ): { navigate: (req: NavRequest) => void } {
   const stateRef = useRef(state);
   const dispatchRef = useRef(dispatch);
-
-  useEffect(() => {
-    stateRef.current = state;
-    dispatchRef.current = dispatch;
-  });
+  // Direct assignment in render body keeps refs current without async effect delay.
+  stateRef.current = state;
+  dispatchRef.current = dispatch;
 
   const queue = useRef<NavRequest[]>([]);
   const processing = useRef(false);
-
   const drainRef = useRef<() => void>(() => {});
-  const navigateRef = useRef<(req: NavRequest) => void>(() => {});
 
+  // Defined once — all captured values are refs so they're always current.
   useEffect(() => {
     drainRef.current = function drain() {
       if (processing.current) return;
@@ -101,15 +98,13 @@ export function useNavigationManager(
           drainRef.current();
         });
     };
-
-    navigateRef.current = function navigate(req: NavRequest) {
-      queue.current.push(req);
-      drainRef.current();
-    };
-  });
+  }, []);
 
   // Stable wrapper: identity never changes, always dispatches through current ref
-  const navigate = useRef((req: NavRequest) => navigateRef.current(req)).current;
+  const navigate = useRef((req: NavRequest) => {
+    queue.current.push(req);
+    drainRef.current();
+  }).current;
 
   return { navigate };
 }

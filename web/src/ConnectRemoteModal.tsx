@@ -170,9 +170,9 @@ export function ConnectRemoteModal({ repo, onClose }: Props) {
         } else if (ev.phase === 'configuring') {
           setProgress('Configuring remote...');
         } else if (ev.phase === 'rebuilding') {
-          const sub = (ev as any).sub_phase || '';
-          const cur = (ev as any).current || 0;
-          const tot = (ev as any).total || 0;
+          const sub = ev.sub_phase || '';
+          const cur = ev.current || 0;
+          const tot = ev.total || 0;
           setProgress(tot > 0 ? `Rebuilding ${sub}... ${cur}/${tot}` : 'Rebuilding index...');
         } else {
           setProgress(ev.phase + '...');

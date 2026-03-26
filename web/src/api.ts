@@ -125,7 +125,7 @@ export type SSEEvent =
   | { phase: "merging" }
   | { phase: "swapping" }
   | { phase: "configuring" }
-  | { phase: "rebuilding"; current?: number; total?: number }
+  | { phase: "rebuilding"; sub_phase?: string; current?: number; total?: number }
   | { phase: "done"; result: any }
   | { phase: "error"; message: string };
 
@@ -185,7 +185,6 @@ export function streamPreview(repo: string, sessionId: string, onEvent: (e: SSEE
 }
 
 export async function streamApply(repo: string, sessionId: string, strategy: string, branch?: string, onEvent?: (e: SSEEvent) => void): Promise<void> {
-  if (typeof branch === 'function') { onEvent = branch as any; branch = undefined; }
   const body: Record<string, string> = { conflict_strategy: strategy };
   if (branch) body.branch = branch;
   const res = await fetch(`${sessionBase(repo, sessionId)}/apply`, {
@@ -203,10 +202,6 @@ export async function streamCommit(repo: string, sessionId: string, onEvent: (e:
 
 export function deleteSession(repo: string, sessionId: string): Promise<void> {
   return fetch(`${sessionBase(repo, sessionId)}`, { method: 'DELETE' }).then(r => { if (!r.ok) throw new Error(r.statusText); });
-}
-
-export function getSession(repo: string, sessionId: string): Promise<any> {
-  return fetch(`${sessionBase(repo, sessionId)}`).then(r => { if (!r.ok) throw new Error(r.statusText); return r.json(); });
 }
 
 export const api = {

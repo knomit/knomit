@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback } from 'react';
+import { useEffect, useRef, useCallback, useMemo } from 'react';
 import type { AppState, Action } from './state';
 import { ChevronUpIcon, ChevronDownIcon } from './icons';
 
@@ -17,8 +17,13 @@ export function Console({ state, dispatch }: Props) {
   const listRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<{ startY: number; startH: number } | null>(null);
 
-  const infoCount = consoleEntries.filter(e => e.level === 'info').length;
-  const errorCount = consoleEntries.filter(e => e.level === 'error').length;
+  const { infoCount, errorCount } = useMemo(() => {
+    let info = 0, error = 0;
+    for (const e of consoleEntries) {
+      if (e.level === 'info') info++; else error++;
+    }
+    return { infoCount: info, errorCount: error };
+  }, [consoleEntries]);
 
   // Auto-scroll to bottom on new entries
   useEffect(() => {
@@ -85,7 +90,6 @@ export function Console({ state, dispatch }: Props) {
   // Expanded console
   return (
     <div data-testid="console" style={{ flexShrink: 0, display: 'flex', flexDirection: 'column', borderTop: '1px solid #222' }}>
-      {/* Drag handle */}
       <div
         onMouseDown={onMouseDown}
         style={{
@@ -93,7 +97,6 @@ export function Console({ state, dispatch }: Props) {
           borderBottom: '1px solid #222',
         }}
       />
-      {/* Header */}
       <div
         style={{
           height: 24, background: '#0d0d0d',
@@ -111,7 +114,6 @@ export function Console({ state, dispatch }: Props) {
           style={{ color: '#666', cursor: 'pointer', display: 'flex', alignItems: 'center' }}
         ><ChevronDownIcon color="#666" size={13} /></span>
       </div>
-      {/* Log entries */}
       <div
         ref={listRef}
         style={{

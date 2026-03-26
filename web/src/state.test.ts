@@ -2,21 +2,6 @@ import { describe, it, expect } from 'vitest';
 import { reducer, init, currentPath } from './state';
 import type { AppState, FilterChip } from './state';
 
-describe('reducer — view', () => {
-  it('SET_VIEW changes view and pushes to navStack', () => {
-    const s = reducer(init, { type: 'SET_VIEW', view: 'chrono' });
-    expect(s.view).toBe('chrono');
-    expect(s.navStack.length).toBe(1);
-    expect(s.navStack[0].view).toBe('tree');
-  });
-
-  it('SET_VIEW clears rightPanelFocused', () => {
-    const s = { ...init, rightPanelFocused: true };
-    const next = reducer(s, { type: 'SET_VIEW', view: 'chrono' });
-    expect(next.rightPanelFocused).toBe(false);
-  });
-});
-
 describe('reducer — filters', () => {
   it('ADD_FILTER appends chip and pushes nav', () => {
     const chip: FilterChip = { category: 'domain', value: 'tech' };
@@ -54,13 +39,6 @@ describe('reducer — filters', () => {
     expect(s.navStack.length).toBe(before + 1);
   });
 
-  it('SET_FILTERS replaces all filters and pushes nav', () => {
-    const chips: FilterChip[] = [{ category: 'type', value: 'fact' }];
-    const s = reducer(init, { type: 'SET_FILTERS', filters: chips });
-    expect(s.filters).toEqual(chips);
-    expect(s.navStack.length).toBe(1);
-  });
-
   it('SET_FREE_TEXT sets freeText without pushing nav', () => {
     const s = reducer(init, { type: 'SET_FREE_TEXT', text: 'hello' });
     expect(s.freeText).toBe('hello');
@@ -79,7 +57,7 @@ describe('reducer — filters', () => {
 describe('reducer — nav', () => {
   it('NAV_BACK restores previous view/filters/freeText', () => {
     let s: AppState = { ...init, freeText: 'q' };
-    s = reducer(s, { type: 'SET_VIEW', view: 'chrono' });
+    s = reducer(s, { type: 'APPLY_NAV', view: 'chrono', historyCommit: null, factPath: null, factCommit: null });
     s = reducer(s, { type: 'NAV_BACK' });
     expect(s.view).toBe('tree');
     expect(s.freeText).toBe('q');
@@ -101,7 +79,7 @@ describe('reducer — nav', () => {
   });
 
   it('NAV_BACK clears rightPanelFocused', () => {
-    let s = reducer(init, { type: 'SET_VIEW', view: 'chrono' });
+    let s = reducer(init, { type: 'APPLY_NAV', view: 'chrono', historyCommit: null, factPath: null, factCommit: null });
     s = reducer({ ...s, rightPanelFocused: true }, { type: 'NAV_BACK' });
     expect(s.rightPanelFocused).toBe(false);
   });
@@ -109,7 +87,7 @@ describe('reducer — nav', () => {
   it('nav stack caps at 20 entries', () => {
     let s = init;
     for (let i = 0; i < 22; i++) {
-      s = reducer(s, { type: 'SET_VIEW', view: i % 2 === 0 ? 'chrono' : 'tree' });
+      s = reducer(s, { type: 'APPLY_NAV', view: i % 2 === 0 ? 'chrono' : 'tree', historyCommit: null, factPath: null, factCommit: null });
     }
     expect(s.navStack.length).toBe(20);
   });
@@ -170,7 +148,7 @@ describe('reducer — GO_UP', () => {
 describe('reducer — SET_REPO', () => {
   it('resets navigation state when switching repos', () => {
     let s = reducer(init, { type: 'ADD_FILTER', chip: { category: 'domain', value: 'tech' } });
-    s = reducer(s, { type: 'SET_VIEW', view: 'history' });
+    s = reducer(s, { type: 'APPLY_NAV', view: 'history', historyCommit: null, factPath: null, factCommit: null });
     s = reducer(s, { type: 'SET_REPO', repo: 'work' });
     expect(s.repo).toBe('work');
     expect(s.view).toBe('tree');
@@ -527,10 +505,10 @@ describe('free text state management', () => {
     expect(s.navStack).toHaveLength(0);
   });
 
-  it('SET_VIEW does NOT clear freeText (filters persist across views)', () => {
+  it('APPLY_NAV tree→chrono preserves freeText', () => {
     let s: AppState = init;
     s = reducer(s, { type: 'SET_FREE_TEXT', text: 'search query' });
-    s = reducer(s, { type: 'SET_VIEW', view: 'chrono' });
+    s = reducer(s, { type: 'APPLY_NAV', view: 'chrono', historyCommit: null, factPath: null, factCommit: null });
     expect(s.freeText).toBe('search query');
   });
 
@@ -601,7 +579,7 @@ describe('free text and filter chips coexist', () => {
 describe('episode (ep) chips in history mode', () => {
   it('ep chip can be added alongside other filters', () => {
     let s: AppState = init;
-    s = reducer(s, { type: 'SET_VIEW', view: 'history' });
+    s = reducer(s, { type: 'APPLY_NAV', view: 'history', historyCommit: null, factPath: null, factCommit: null });
     s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'ep', value: 'learn' } });
     expect(s.filters).toHaveLength(1);
     expect(s.filters[0]).toEqual({ category: 'ep', value: 'learn' });
@@ -618,9 +596,9 @@ describe('episode (ep) chips in history mode', () => {
 
   it('ep chips cleared when switching from history to tree', () => {
     let s: AppState = init;
-    s = reducer(s, { type: 'SET_VIEW', view: 'history' });
+    s = reducer(s, { type: 'APPLY_NAV', view: 'history', historyCommit: null, factPath: null, factCommit: null });
     s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'ep', value: 'learn' } });
-    s = reducer(s, { type: 'SET_VIEW', view: 'tree' });
+    s = reducer(s, { type: 'APPLY_NAV', view: 'tree', historyCommit: null, factPath: null, factCommit: null });
     expect(s.filters.filter(f => f.category === 'ep')).toHaveLength(0);
   });
 
@@ -633,7 +611,7 @@ describe('episode (ep) chips in history mode', () => {
 
   it('ep chip + freeText coexist for history filtering', () => {
     let s: AppState = init;
-    s = reducer(s, { type: 'SET_VIEW', view: 'history' });
+    s = reducer(s, { type: 'APPLY_NAV', view: 'history', historyCommit: null, factPath: null, factCommit: null });
     s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'ep', value: 'retract' } });
     s = reducer(s, { type: 'SET_FREE_TEXT', text: 'cybersecurity' });
     expect(s.filters).toHaveLength(1);
@@ -648,11 +626,11 @@ describe('episode (ep) chips in history mode', () => {
 describe('filter isolation between fact and history modes', () => {
   it('ep/freeText cleared when switching history → tree (only path kept)', () => {
     let s: AppState = init;
-    s = reducer(s, { type: 'SET_VIEW', view: 'history' });
+    s = reducer(s, { type: 'APPLY_NAV', view: 'history', historyCommit: null, factPath: null, factCommit: null });
     s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'ep', value: 'learn' } });
     s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'path', value: 'kb/tech' } });
     s = reducer(s, { type: 'SET_FREE_TEXT', text: 'goroutine' });
-    s = reducer(s, { type: 'SET_VIEW', view: 'tree' });
+    s = reducer(s, { type: 'APPLY_NAV', view: 'tree', historyCommit: null, factPath: null, factCommit: null });
     // ep and freeText cleared, path kept
     expect(s.filters.filter(f => f.category === 'ep')).toHaveLength(0);
     expect(s.freeText).toBe('');
@@ -663,7 +641,7 @@ describe('filter isolation between fact and history modes', () => {
     let s: AppState = init;
     s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'domain', value: 'go' } });
     s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'path', value: 'kb/tech' } });
-    s = reducer(s, { type: 'SET_VIEW', view: 'history' });
+    s = reducer(s, { type: 'APPLY_NAV', view: 'history', historyCommit: null, factPath: null, factCommit: null });
     expect(s.filters.filter(f => f.category === 'domain')).toHaveLength(0);
     expect(s.filters.find(f => f.category === 'path')!.value).toBe('kb/tech');
   });
@@ -673,11 +651,11 @@ describe('filter isolation between fact and history modes', () => {
     s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'domain', value: 'go' } });
     s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'entity', value: 'goroutine' } });
     s = reducer(s, { type: 'SET_FREE_TEXT', text: 'scheduling' });
-    s = reducer(s, { type: 'SET_VIEW', view: 'chrono' });
+    s = reducer(s, { type: 'APPLY_NAV', view: 'chrono', historyCommit: null, factPath: null, factCommit: null });
     expect(s.filters.find(f => f.category === 'domain')!.value).toBe('go');
     expect(s.filters.find(f => f.category === 'entity')!.value).toBe('goroutine');
     expect(s.freeText).toBe('scheduling');
-    s = reducer(s, { type: 'SET_VIEW', view: 'tree' });
+    s = reducer(s, { type: 'APPLY_NAV', view: 'tree', historyCommit: null, factPath: null, factCommit: null });
     expect(s.filters.find(f => f.category === 'domain')!.value).toBe('go');
     expect(s.freeText).toBe('scheduling');
   });
@@ -695,7 +673,7 @@ describe('operation hierarchy — full workflow scenarios', () => {
     expect(s.factPath).toBe('kb/tree-fact.md');
 
     // Switch to history
-    s = reducer(s, { type: 'SET_VIEW', view: 'history' });
+    s = reducer(s, { type: 'APPLY_NAV', view: 'history', historyCommit: null, factPath: null, factCommit: null });
     expect(s.view).toBe('history');
 
     // APPLY_NAV: select a commit
@@ -715,7 +693,7 @@ describe('operation hierarchy — full workflow scenarios', () => {
     s = reducer(s, { type: 'NAV_BACK' });
     expect(s.historyCommit).toBeNull();
 
-    // NAV_BACK: restore before SET_VIEW (back to tree)
+    // NAV_BACK: restore before APPLY_NAV to history (back to tree)
     s = reducer(s, { type: 'NAV_BACK' });
     expect(s.view).toBe('tree');
     expect(s.factPath).toBe('kb/tree-fact.md');
@@ -723,7 +701,7 @@ describe('operation hierarchy — full workflow scenarios', () => {
 
   it('history with ep filter → change filter → NAV_BACK restores previous filter', () => {
     let s: AppState = init;
-    s = reducer(s, { type: 'SET_VIEW', view: 'history' });
+    s = reducer(s, { type: 'APPLY_NAV', view: 'history', historyCommit: null, factPath: null, factCommit: null });
     s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'ep', value: 'learn' } });
     expect(s.filters).toHaveLength(1);
     expect(s.filters[0]).toEqual({ category: 'ep', value: 'learn' });
@@ -747,7 +725,7 @@ describe('operation hierarchy — full workflow scenarios', () => {
     expect(s.factPath).toBe('kb/original.md');
 
     // Switch to history
-    s = reducer(s, { type: 'SET_VIEW', view: 'history' });
+    s = reducer(s, { type: 'APPLY_NAV', view: 'history', historyCommit: null, factPath: null, factCommit: null });
 
     // APPLY_NAV commit
     s = reducer(s, { type: 'APPLY_NAV', view: 'history', historyCommit: 'xxx', factPath: null, factCommit: null });
@@ -759,23 +737,12 @@ describe('operation hierarchy — full workflow scenarios', () => {
     // NAV_BACK ×3 should get us back to tree with original fact
     s = reducer(s, { type: 'NAV_BACK' }); // undo APPLY_NAV fact
     s = reducer(s, { type: 'NAV_BACK' }); // undo APPLY_NAV commit
-    s = reducer(s, { type: 'NAV_BACK' }); // undo SET_VIEW → back to tree
+    s = reducer(s, { type: 'NAV_BACK' }); // undo APPLY_NAV to history → back to tree
 
     expect(s.view).toBe('tree');
     expect(s.factPath).toBe('kb/original.md');
   });
 
-  it('history mode: SET_VIEW to history clears non-path filters', () => {
-    let s: AppState = init;
-    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'domain', value: 'go' } });
-    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'path', value: 'kb/tech' } });
-
-    s = reducer(s, { type: 'SET_VIEW', view: 'history' });
-    expect(s.view).toBe('history');
-    // domain cleared, path kept
-    expect(s.filters).toHaveLength(1);
-    expect(s.filters[0]).toEqual({ category: 'path', value: 'kb/tech' });
-  });
 });
 
 describe('reducer — APPLY_NAV', () => {
@@ -831,15 +798,6 @@ describe('reducer — FACT_LOADED', () => {
   });
 });
 
-describe('reducer — SET_VIEW with new fields', () => {
-  it('SET_VIEW to tree clears historyCommit and factCommit, preserves factPath', () => {
-    const s = { ...init, view: 'history' as const, historyCommit: 'abc', factPath: 'kb/f.md', factCommit: 'abc' };
-    const next = reducer(s, { type: 'SET_VIEW', view: 'tree' });
-    expect(next.historyCommit).toBeNull();
-    expect(next.factPath).toBe('kb/f.md');
-    expect(next.factCommit).toBeNull();
-  });
-});
 
 describe('reducer — NAV_BACK with new fields', () => {
   it('NAV_BACK restores historyCommit, factPath, factCommit', () => {
@@ -870,10 +828,3 @@ describe('reducer — APPLY_NAV auto-clear path', () => {
   });
 });
 
-describe('reducer — SET_VIEW preserves factPath', () => {
-  it('SET_VIEW tree→chrono preserves factPath', () => {
-    const s = { ...init, view: 'tree' as const, factPath: 'kb/f.md' };
-    const next = reducer(s, { type: 'SET_VIEW', view: 'chrono' });
-    expect(next.factPath).toBe('kb/f.md');
-  });
-});

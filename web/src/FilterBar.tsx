@@ -81,7 +81,7 @@ export function FilterBar({ state, dispatch }: Props) {
     }
     return () => window.clearTimeout(debounceRef.current);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [inputValue, state.repo]);
+  }, [inputValue, state.repo, state.view]);
 
   function commitSuggestion(value: string) {
     window.clearTimeout(debounceRef.current);
@@ -199,16 +199,11 @@ export function FilterBar({ state, dispatch }: Props) {
 
   function drillUpPath() {
     const parts = pathPrefix.split('/');
-    if (parts.length <= 1) {
-      // Back to root
-      openCategory('path', '');
+    const parent = parts.length <= 1 ? '' : parts.slice(0, -1).join('/');
+    if (parent) {
+      drillIntoPath(parent);
     } else {
-      const parent = parts.slice(0, -1).join('/');
-      setPathPrefix(parent);
-      setCategorySearch('');
-      api.completions(state.repo, 'path', parent + '/').then(res => {
-        setCategoryValues(res.values || []);
-      }).catch(() => setCategoryValues([]));
+      openCategory('path', '');
     }
   }
 
