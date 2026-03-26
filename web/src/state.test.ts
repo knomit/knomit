@@ -189,10 +189,6 @@ describe('reducer — SET_REPO', () => {
 });
 
 describe('reducer — shared infrastructure', () => {
-  it('SET_LOADING updates loading flag', () => {
-    expect(reducer(init, { type: 'SET_LOADING', value: true }).loading).toBe(true);
-  });
-
   it('SET_TASK updates task status', () => {
     const next = reducer(init, { type: 'SET_TASK', op: 'sync', status: 'running', message: 'syncing' });
     expect(next.tasks.sync).toEqual({ status: 'running', message: 'syncing' });

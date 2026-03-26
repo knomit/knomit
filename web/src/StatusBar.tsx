@@ -33,8 +33,8 @@ export function StatusBar({ state, dispatch }: Props) {
   const taskMsg = taskState?.message || '';
   const taskColor = taskState?.status === 'done' ? '#8c8' : taskState?.status === 'error' ? '#c66' : '#888';
 
-  const msg = taskMsg || state.statusMessage || (state.loading ? 'Loading\u2026' : '');
-  const color = taskMsg ? taskColor : '#888';
+  const msg = taskMsg;
+  const color = taskColor;
 
   return (
     <div data-testid="status-bar" style={{ height: 24, background: '#0d0d0d', borderTop: '1px solid #222', display: 'flex', alignItems: 'center', padding: '0 12px', flexShrink: 0, gap: 8 }}>

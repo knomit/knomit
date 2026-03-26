@@ -70,7 +70,6 @@ function TagCloud({ label, entries, color, onTagClick, focusedValue }: {
 function renderFact(fact: Fact, navigate: (req: NavRequest) => void, dispatch: Dispatch<Action>) {
   return (
     <div style={{ padding: '24px 28px', overflowY: 'auto', height: '100%', boxSizing: 'border-box' }}>
-      {/* Header */}
       <div style={{ marginBottom: 20 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
           <div data-testid="fact-title" style={{ fontSize: 18, fontWeight: 600, color: '#eee', letterSpacing: '-0.3px', flex: 1, minWidth: 0 }}>
@@ -108,7 +107,6 @@ function renderFact(fact: Fact, navigate: (req: NavRequest) => void, dispatch: D
         </div>
       </div>
 
-      {/* Stat cards */}
       <div data-testid="fact-meta" style={{ display: 'flex', gap: 10, marginBottom: 28 }}>
         <div style={{ borderLeft: '3px solid #8af', padding: '10px 16px', background: '#1a1a2a', borderRadius: '0 6px 6px 0', minWidth: 90 }}>
           <div style={{ fontSize: 10, color: '#666', textTransform: 'uppercase', letterSpacing: 1 }}>Confidence</div>
@@ -120,7 +118,6 @@ function renderFact(fact: Fact, navigate: (req: NavRequest) => void, dispatch: D
         </div>
       </div>
 
-      {/* Body */}
       <div data-testid="fact-body" style={{ color: '#ccc', lineHeight: 1.7, fontSize: 14, marginBottom: 8 }}>
         <ReactMarkdown>{fact.body || ''}</ReactMarkdown>
       </div>
@@ -130,7 +127,6 @@ function renderFact(fact: Fact, navigate: (req: NavRequest) => void, dispatch: D
       <TagCloud label="Entities" entries={fact.entities || []} color="136,170,255"
         onTagClick={e => dispatch({ type: 'ADD_FILTER', chip: { category: 'entity', value: e } })} />
 
-      {/* Refs */}
       {fact.refs?.length > 0 && (
         <div>
           <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: 1.5, color: '#555', marginBottom: 10 }}>References</div>
@@ -311,7 +307,6 @@ function CommitPanel({ historyCommit, repo, selectedFact, navigate, rightPanelFo
 
   return (
     <div style={{ flexShrink: 0, background: '#141414' }}>
-      {/* Left accent bar header */}
       <div style={{ display: 'flex', borderBottom: '1px solid #2a2a2a' }}>
         <div style={{ width: 4, background: os.color, flexShrink: 0 }} />
         <div style={{ flex: 1, padding: '8px 14px' }}>
@@ -324,7 +319,6 @@ function CommitPanel({ historyCommit, repo, selectedFact, navigate, rightPanelFo
         </div>
       </div>
 
-      {/* File list with accent borders */}
       <div style={{ display: 'flex' }}>
         <div
           ref={listRef}
@@ -377,7 +371,6 @@ function CommitPanel({ historyCommit, repo, selectedFact, navigate, rightPanelFo
 
       </div>
 
-      {/* Drag handle to resize */}
       <div
         onMouseDown={startDrag}
         style={{
@@ -414,26 +407,26 @@ export function RightPanel({ state, dispatch, navigate }: {
   const historyCommit = state.historyCommit;
 
   useEffect(() => {
+    if (!factPath) { setFact(null); setError(null); return; }
     let stale = false;
     setError(null);
-
-    if (factPath) {
-      api.fact(state.repo, factPath, factCommit ?? undefined)
-        .then(f => {
-          if (stale) return;
-          setFact(f);
-          if (f.commit_hash) dispatch({ type: 'FACT_LOADED', commit: f.commit_hash });
-        })
-        .catch(e => { if (!stale) setError(String(e)); });
-    } else {
-      setFact(null);
-      if (state.view !== 'history') {
-        api.stats(state.repo, path).then(s => { if (!stale) setStats(s); }).catch(() => { if (!stale) setStats(null); });
-        api.activity(state.repo, path).then(a => { if (!stale) setActivity(a); }).catch(() => { if (!stale) setActivity(null); });
-      }
-    }
+    api.fact(state.repo, factPath, factCommit ?? undefined)
+      .then(f => {
+        if (stale) return;
+        setFact(f);
+        if (f.commit_hash) dispatch({ type: 'FACT_LOADED', commit: f.commit_hash });
+      })
+      .catch(e => { if (!stale) setError(String(e)); });
     return () => { stale = true; };
-  }, [factPath, factCommit, state.repo, state.headCommit, path]);
+  }, [factPath, factCommit, state.repo]);
+
+  useEffect(() => {
+    if (factPath || state.view === 'history') return;
+    let stale = false;
+    api.stats(state.repo, path).then(s => { if (!stale) setStats(s); }).catch(() => { if (!stale) setStats(null); });
+    api.activity(state.repo, path).then(a => { if (!stale) setActivity(a); }).catch(() => { if (!stale) setActivity(null); });
+    return () => { stale = true; };
+  }, [factPath, state.view, state.repo, path, state.headCommit]);
 
   // Keyboard: ArrowLeft blurs right panel; j/k navigation is handled inside CommitPanel
   useEffect(() => {

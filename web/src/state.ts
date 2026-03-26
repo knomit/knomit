@@ -5,7 +5,7 @@ export interface FilterChip {
   value: string;
 }
 
-export interface NavEntry {
+interface NavEntry {
   repo: string;
   branch: string;
   view: View;
@@ -16,7 +16,7 @@ export interface NavEntry {
   factCommit: string | null;
 }
 
-export interface ConsoleEntry {
+interface ConsoleEntry {
   id: number;
   time: number; // Date.now()
   level: 'info' | 'error';
@@ -31,13 +31,11 @@ export interface AppState {
   factCommit: string | null;     // right panel: commit to show fact at (null = HEAD)
   filters: FilterChip[];
   freeText: string;              // unprefixed search text
-  loading: boolean;
   tasks: Record<string, { status: 'idle' | 'running' | 'done' | 'error'; message: string }>;
   headCommit: string;
   branch: string;
   embeddingsEnabled: boolean;
   ontologyRoot: string;
-  statusMessage: string;
   consoleEntries: ConsoleEntry[];
   consoleOpen: boolean;
   consoleHeight: number;
@@ -56,11 +54,9 @@ export type Action =
   | { type: 'SET_FREE_TEXT'; text: string }
   | { type: 'CLEAR_FILTERS' }
   | { type: 'NAV_BACK' }
-  | { type: 'SET_LOADING'; value: boolean }
   | { type: 'SET_TASK'; op: string; status: 'idle' | 'running' | 'done' | 'error'; message: string }
   | { type: 'SET_STATUS'; head: string; branch: string; embeddingsEnabled: boolean; ontologyRoot: string }
   | { type: 'SET_HEAD'; head: string }
-  | { type: 'SET_STATUS_MESSAGE'; message: string }
   | { type: 'CONSOLE_LOG'; level: 'info' | 'error'; message: string }
   | { type: 'CONSOLE_TOGGLE' }
   | { type: 'CONSOLE_SET_HEIGHT'; height: number }
@@ -80,13 +76,11 @@ export const init: AppState = {
   factCommit: null,
   filters: [],
   freeText: '',
-  loading: false,
   tasks: { sync: { status: 'idle', message: '' }, synth: { status: 'idle', message: '' } },
   headCommit: '',
   branch: '',
   embeddingsEnabled: false,
   ontologyRoot: 'kb',
-  statusMessage: '',
   consoleEntries: [],
   consoleOpen: false,
   consoleHeight: 200,
@@ -166,13 +160,9 @@ export function reducer(s: AppState, a: Action): AppState {
       };
     }
     case 'ADD_FILTER': {
-      let filters: FilterChip[];
-      if (a.chip.category === 'path') {
-        // Replace existing path chip
-        filters = [...s.filters.filter(f => f.category !== 'path'), a.chip];
-      } else {
-        filters = [...s.filters, a.chip];
-      }
+      const filters = a.chip.category === 'path'
+        ? replacePathChip(s.filters, a.chip.value)
+        : [...s.filters, a.chip];
       return { ...s, filters, navStack: pushNav(s) };
     }
     case 'REMOVE_FILTER': {
@@ -216,8 +206,6 @@ export function reducer(s: AppState, a: Action): AppState {
         rightPanelFocused: false,
       };
     }
-    case 'SET_LOADING':
-      return { ...s, loading: a.value };
     case 'SET_TASK': {
       const cur = s.tasks[a.op];
       if (cur && cur.status === a.status && cur.message === a.message) return s;
@@ -233,8 +221,6 @@ export function reducer(s: AppState, a: Action): AppState {
       };
     case 'SET_HEAD':
       return { ...s, headCommit: a.head };
-    case 'SET_STATUS_MESSAGE':
-      return { ...s, statusMessage: a.message };
     case 'CONSOLE_LOG': {
       const entry: ConsoleEntry = { id: Date.now() + Math.random(), time: Date.now(), level: a.level, message: a.message };
       const entries = [...s.consoleEntries, entry];

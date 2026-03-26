@@ -106,7 +106,7 @@ export function HistoryTimeline({ state, dispatch, navigate }: Props) {
       setSelectedIdx(idx);
       itemRefs.current[idx]?.scrollIntoView({ block: 'nearest' });
     }
-  }, [state.historyCommit, filteredEntries, selectedIdx]);
+  }, [state.historyCommit, filteredEntries]);
 
   const moveSelection = useCallback((delta: 1 | -1) => {
     const next = Math.max(0, Math.min(selectedIdx + delta, filteredEntries.length - 1));
