@@ -97,6 +97,7 @@ export class BrowsePage {
    * In the new UI there are no breadcrumbs; use the back button in the TopBar.
    */
   async navigateBack() {
-    await this.page.locator('button[title="Back"]').click();
+    await this.page.locator('body').click();
+    await this.page.keyboard.press('Backspace');
   }
 }

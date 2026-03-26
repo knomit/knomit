@@ -12,7 +12,7 @@ test.describe('Keyboard Navigation Across Views', () => {
     await page.getByTestId('dir-entry').first().waitFor({ timeout: 10_000 });
   });
 
-  test('history view: expanding a commit and clicking a file shows fact in right panel', async ({ page }) => {
+  test('history view: selecting a commit shows files in right panel, clicking a file shows fact', async ({ page }) => {
     // Enter history view
     await page.keyboard.press('3');
     const timeline = page.getByTestId('history-timeline');
@@ -24,18 +24,19 @@ test.describe('Keyboard Navigation Across Views', () => {
     const count = await commits.count();
     expect(count).toBeGreaterThan(1);
 
-    // Select the first commit
-    await commits.first().click();
-
-    // Press Enter to expand it
-    await page.keyboard.press('Enter');
+    // Select the second commit (first is auto-selected on load; clicking it
+    // again clears rightSelection without re-triggering auto-select)
+    await commits.nth(1).click();
     await page.waitForTimeout(1000);
 
-    // Click a file within the expanded commit to load it in the right panel
-    const expandedFiles = page.locator('[data-testid="history-commit"] + div div[style*="cursor: pointer"]');
-    const fileCount = await expandedFiles.count();
+    // Files are listed in the right panel as commit-file entries
+    const commitFiles = page.getByTestId('commit-file');
+    await commitFiles.first().waitFor({ timeout: 10_000 });
+    const fileCount = await commitFiles.count();
     expect(fileCount).toBeGreaterThan(0);
-    await expandedFiles.first().click();
+
+    // Click the first file to load the fact
+    await commitFiles.first().click();
 
     // Right panel should show the fact
     await expect(factPanel.title).toBeVisible({ timeout: 10_000 });

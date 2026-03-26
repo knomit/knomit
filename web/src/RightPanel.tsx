@@ -304,6 +304,8 @@ function CommitPanel({ detail, selectedFact, onSelectFact }: {
               <div
                 key={file.path}
                 ref={el => { itemRefs.current[idx] = el; }}
+                data-testid="commit-file"
+                data-path={file.path}
                 onClick={() => onSelectFact(file.path)}
                 style={{
                   height: ROW_HEIGHT,

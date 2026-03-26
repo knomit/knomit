@@ -84,15 +84,16 @@ test.describe('Chrono View (Recent)', () => {
     const items = page.getByTestId('chrono-item');
     await items.first().waitFor({ timeout: 10_000 });
 
+    // Register response listener before the action that triggers the API call
+    const responsePromise = page.waitForResponse(resp =>
+      resp.url().includes('/recent') && resp.url().includes('type=observation')
+    );
+
     // Type a type filter prefix in the filter bar
     const filterInput = page.locator('#filter-input');
     await filterInput.fill('type:observation');
     await filterInput.press('Enter');
 
-    // Wait for API call with type filter
-    const responsePromise = page.waitForResponse(resp =>
-      resp.url().includes('/recent') && resp.url().includes('type=observation')
-    );
     await responsePromise;
   });
 });
