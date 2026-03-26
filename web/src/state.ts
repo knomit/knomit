@@ -198,6 +198,7 @@ export function reducer(s: AppState, a: Action): AppState {
         ontologyRoot: a.ontologyRoot || s.ontologyRoot,
       };
     case 'SET_HEAD':
+      if (s.headCommit === a.head) return s;
       return { ...s, headCommit: a.head };
     case 'CONSOLE_LOG': {
       const entry: ConsoleEntry = { id: Date.now() + Math.random(), time: Date.now(), level: a.level, message: a.message };

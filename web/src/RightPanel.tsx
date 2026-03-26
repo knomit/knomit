@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import type { Dispatch } from 'react';
+import type { Dispatch, ReactNode } from 'react';
+import { useAsync } from './hooks';
 import ReactMarkdown from 'react-markdown';
 import { api } from './api';
 import type { Fact, Stats, ActivityStats, CommitDetail } from './api';
@@ -8,6 +9,15 @@ import { currentPath } from './state';
 import { relativeTime, typeStyles, defaultTypeStyle, opStyles, defaultOpStyle } from './utils';
 import { TypeIcon, EpisodeIcon } from './icons';
 import type { NavRequest } from './useNavigationManager';
+
+function StatBox({ label, value, color }: { label: string; value: ReactNode; color: string }) {
+  return (
+    <div style={{ borderLeft: `3px solid ${color}`, padding: '10px 16px', background: '#1a1a2a', borderRadius: '0 6px 6px 0', minWidth: 90 }}>
+      <div style={{ fontSize: 10, color: '#666', textTransform: 'uppercase', letterSpacing: 1 }}>{label}</div>
+      <div style={{ fontSize: 22, fontWeight: 600, color: '#eee', marginTop: 2 }}>{value}</div>
+    </div>
+  );
+}
 
 function TagCloud({ label, entries, color, onTagClick, focusedValue }: {
   label: string;
@@ -108,14 +118,8 @@ function renderFact(fact: Fact, navigate: (req: NavRequest) => void, dispatch: D
       </div>
 
       <div data-testid="fact-meta" style={{ display: 'flex', gap: 10, marginBottom: 28 }}>
-        <div style={{ borderLeft: '3px solid #8af', padding: '10px 16px', background: '#1a1a2a', borderRadius: '0 6px 6px 0', minWidth: 90 }}>
-          <div style={{ fontSize: 10, color: '#666', textTransform: 'uppercase', letterSpacing: 1 }}>Confidence</div>
-          <div style={{ fontSize: 22, fontWeight: 600, color: '#eee', marginTop: 2 }}>{fact.confidence?.toFixed(2)}</div>
-        </div>
-        <div style={{ borderLeft: '3px solid #7c9', padding: '10px 16px', background: '#1a1a2a', borderRadius: '0 6px 6px 0', minWidth: 90 }}>
-          <div style={{ fontSize: 10, color: '#666', textTransform: 'uppercase', letterSpacing: 1 }}>Sources</div>
-          <div style={{ fontSize: 22, fontWeight: 600, color: '#eee', marginTop: 2 }}>{fact.sources}</div>
-        </div>
+        <StatBox label="Confidence" value={fact.confidence?.toFixed(2)} color="#8af" />
+        <StatBox label="Sources" value={fact.sources} color="#7c9" />
       </div>
 
       <div data-testid="fact-body" style={{ color: '#ccc', lineHeight: 1.7, fontSize: 14, marginBottom: 8 }}>
@@ -232,12 +236,10 @@ function CommitPanel({ historyCommit, repo, selectedFact, navigate, rightPanelFo
   const [listHeight, setListHeight] = useState(DEFAULT_LIST_HEIGHT);
   const draggingRef = useRef(false);
 
-  useEffect(() => {
-    let stale = false;
+  useAsync((stale) => {
     api.commitDetail(repo, historyCommit)
-      .then(d => { if (!stale) setDetail(d); })
-      .catch(() => { if (!stale) setDetail(null); });
-    return () => { stale = true; };
+      .then(d => { if (!stale()) setDetail(d); })
+      .catch(() => { if (!stale()) setDetail(null); });
   }, [historyCommit, repo]);
 
   const files = detail?.files || [];
@@ -406,32 +408,28 @@ export function RightPanel({ state, dispatch, navigate }: {
   const factCommit = state.factCommit;
   const historyCommit = state.historyCommit;
 
-  useEffect(() => {
+  useAsync((stale) => {
     if (!factPath) { setFact(null); setError(null); return; }
-    let stale = false;
     setError(null);
     api.fact(state.repo, factPath, factCommit ?? undefined)
       .then(f => {
-        if (stale) return;
+        if (stale()) return;
         setFact(f);
         if (f.commit_hash) dispatch({ type: 'FACT_LOADED', commit: f.commit_hash });
       })
-      .catch(e => { if (!stale) setError(String(e)); });
-    return () => { stale = true; };
+      .catch(e => { if (!stale()) setError(String(e)); });
   }, [factPath, factCommit, state.repo]);
 
-  useEffect(() => {
+  useAsync((stale) => {
     if (factPath || state.view === 'history') return;
-    let stale = false;
     Promise.all([
       api.stats(state.repo, path).catch(() => null),
       api.activity(state.repo, path).catch(() => null),
     ]).then(([s, a]) => {
-      if (stale) return;
+      if (stale()) return;
       setStats(s);
       setActivity(a);
     });
-    return () => { stale = true; };
   }, [factPath, state.repo, path, state.headCommit]);
 
   // Keyboard: ArrowLeft blurs right panel; j/k navigation is handled inside CommitPanel
@@ -481,26 +479,11 @@ export function RightPanel({ state, dispatch, navigate }: {
                 )}
               </div>
               <div style={{ display: 'flex', gap: 10, marginBottom: 28, flexWrap: 'wrap' }}>
-                <div style={{ borderLeft: '3px solid #7c9', padding: '10px 16px', background: '#1a1a2a', borderRadius: '0 6px 6px 0', minWidth: 90 }}>
-                  <div style={{ fontSize: 10, color: '#666', textTransform: 'uppercase', letterSpacing: 1 }}>Facts</div>
-                  <div style={{ fontSize: 22, fontWeight: 600, color: '#eee', marginTop: 2 }}>{stats.total}</div>
-                </div>
-                <div style={{ borderLeft: '3px solid #8af', padding: '10px 16px', background: '#1a1a2a', borderRadius: '0 6px 6px 0', minWidth: 90 }}>
-                  <div style={{ fontSize: 10, color: '#666', textTransform: 'uppercase', letterSpacing: 1 }}>Confidence</div>
-                  <div style={{ fontSize: 22, fontWeight: 600, color: '#eee', marginTop: 2 }}>{stats.avg_confidence.toFixed(2)}</div>
-                </div>
-                <div style={{ borderLeft: '3px solid #fa8', padding: '10px 16px', background: '#1a1a2a', borderRadius: '0 6px 6px 0', minWidth: 90 }}>
-                  <div style={{ fontSize: 10, color: '#666', textTransform: 'uppercase', letterSpacing: 1 }}>Domains</div>
-                  <div style={{ fontSize: 22, fontWeight: 600, color: '#eee', marginTop: 2 }}>{domainCount}</div>
-                </div>
-                <div style={{ borderLeft: '3px solid #8af', padding: '10px 16px', background: '#1a1a2a', borderRadius: '0 6px 6px 0', minWidth: 90 }}>
-                  <div style={{ fontSize: 10, color: '#666', textTransform: 'uppercase', letterSpacing: 1 }}>Entities</div>
-                  <div style={{ fontSize: 22, fontWeight: 600, color: '#eee', marginTop: 2 }}>{entityCount}</div>
-                </div>
-                <div style={{ borderLeft: '3px solid #555', padding: '10px 16px', background: '#1a1a2a', borderRadius: '0 6px 6px 0', minWidth: 90 }}>
-                  <div style={{ fontSize: 10, color: '#666', textTransform: 'uppercase', letterSpacing: 1 }}>Commits</div>
-                  <div style={{ fontSize: 22, fontWeight: 600, color: '#eee', marginTop: 2 }}>{totalCommits}</div>
-                </div>
+                <StatBox label="Facts"      value={stats.total}                       color="#7c9" />
+                <StatBox label="Confidence" value={stats.avg_confidence.toFixed(2)}   color="#8af" />
+                <StatBox label="Domains"    value={domainCount}                        color="#fa8" />
+                <StatBox label="Entities"   value={entityCount}                        color="#8af" />
+                <StatBox label="Commits"    value={totalCommits}                       color="#555" />
               </div>
               <TagCloud label="Domains" entries={domainEntries} color="119,204,153"
                 onTagClick={d => dispatch({ type: 'ADD_FILTER', chip: { category: 'domain', value: d } })} />

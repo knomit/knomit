@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
+import { useAsync } from './hooks';
+import { EmptyState, LoadingSpinner } from './ui';
 import type { Dispatch } from 'react';
 import { api } from './api';
 import type { HistoryEntryWithTags } from './api';
@@ -32,14 +34,13 @@ export function HistoryTimeline({ state, dispatch, navigate }: Props) {
   const staleStateRef = useRef(state);
   staleStateRef.current = state;
 
-  useEffect(() => {
-    let stale = false;
+  useAsync((stale) => {
     setLoading(true);
     setEntries([]);
     setNextCursor(undefined);
     setSelectedIdx(0);
     api.history(state.repo, path).then(r => {
-      if (stale) return;
+      if (stale()) return;
       const e = r.entries || [];
       setEntries(e);
       setNextCursor(r.next);
@@ -55,9 +56,8 @@ export function HistoryTimeline({ state, dispatch, navigate }: Props) {
         dispatch({ type: 'AMEND_NAV', historyCommit: e[0].commit, factPath: null, factCommit: e[0].commit });
       }
     }).catch(() => {
-      if (!stale) { setEntries([]); setLoading(false); }
+      if (!stale()) { setEntries([]); setLoading(false); }
     });
-    return () => { stale = true; };
   }, [path, state.repo]);
 
   const loadingRef = useRef(loading);
@@ -144,9 +144,7 @@ export function HistoryTimeline({ state, dispatch, navigate }: Props) {
     <div data-testid="history-timeline" ref={containerRef} style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
       <div style={{ flex: 1, overflowY: 'auto', padding: '8px 0' }}>
         {filteredEntries.length === 0 && !loading && (
-          <div style={{ padding: 16, color: '#666', fontSize: 13 }}>
-            {entries.length === 0 ? 'No history for this path.' : 'No commits match the current filters.'}
-          </div>
+          <EmptyState message={entries.length === 0 ? 'No history for this path.' : 'No commits match the current filters.'} />
         )}
         {filteredEntries.map((entry, i) => {
           const isSelected = entry.commit === state.historyCommit;
@@ -221,9 +219,7 @@ export function HistoryTimeline({ state, dispatch, navigate }: Props) {
         })}
         {/* Sentinel for infinite scroll */}
         <div ref={sentinelRef} style={{ height: 1 }} />
-        {loading && (
-          <div style={{ padding: 12, color: '#666', fontSize: 12, textAlign: 'center' }}>Loading...</div>
-        )}
+        {loading && <LoadingSpinner />}
       </div>
     </div>
   );

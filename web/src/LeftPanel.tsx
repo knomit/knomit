@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
+import { useAsync } from './hooks';
+import { EmptyState, LoadingSpinner } from './ui';
 import type { Dispatch } from 'react';
 import { api } from './api';
 import type { DirChild, RecentFactEntry } from './api';
@@ -28,15 +30,14 @@ function TreeView({ state, dispatch, navigate }: Props) {
   const shouldSearch = hasNonPathFilters || !!state.freeText;
 
   // Search: fetch results when filters/freeText change (NOT when selectedFact changes)
-  useEffect(() => {
+  useAsync((stale) => {
     if (!shouldSearch) return;
-    let stale = false;
     const domains = state.filters.filter(f => f.category === 'domain').map(f => f.value);
     const entities = state.filters.filter(f => f.category === 'entity').map(f => f.value);
     const types = state.filters.filter(f => f.category === 'type').map(f => f.value);
     const eps = state.filters.filter(f => f.category === 'ep').map(f => f.value);
     api.search(state.repo, state.freeText, path, 0, { types, eps, domains, entities }).then(r => {
-      if (stale) return; // Don't overwrite if filters changed while fetching
+      if (stale()) return;
       const items: DirChild[] = (r.results || []).map(sr => ({
         name: sr.path.split('/').pop() || sr.path,
         is_dir: false,
@@ -49,17 +50,14 @@ function TreeView({ state, dispatch, navigate }: Props) {
       if (items.length > 0 && items[0].fullPath) {
         dispatch({ type: 'AMEND_NAV', historyCommit: null, factPath: items[0].fullPath, factCommit: null });
       }
-    }).catch(() => { if (!stale) setChildren([]); });
-    return () => { stale = true; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }).catch(() => { if (!stale()) setChildren([]); });
   }, [path, state.headCommit, state.freeText, shouldSearch, state.repo, state.filters]);
 
   // Browse: fetch directory when path/headCommit/selectedFact changes
-  useEffect(() => {
+  useAsync((stale) => {
     if (shouldSearch) return;
-    let stale = false;
     api.browse(state.repo, path).then(r => {
-      if (stale) return; // Don't overwrite if filters were added while fetching
+      if (stale()) return;
       const c = (r.children || []).slice().sort((a, b) => {
         if (a.is_dir !== b.is_dir) return a.is_dir ? -1 : 1;
         return a.name.localeCompare(b.name);
@@ -72,8 +70,7 @@ function TreeView({ state, dispatch, navigate }: Props) {
       } else {
         setSelectedIdx(-1);
       }
-    }).catch(() => { if (!stale) setChildren([]); });
-    return () => { stale = true; };
+    }).catch(() => { if (!stale()) setChildren([]); });
   }, [path, state.headCommit, shouldSearch, state.repo, state.factPath]);
 
   const moveSelection = useCallback((delta: 1 | -1) => {
@@ -173,9 +170,7 @@ function TreeView({ state, dispatch, navigate }: Props) {
             </div>
           );
         })}
-        {children.length === 0 && (
-          <div style={{ padding: 16, color: '#666', fontSize: 13 }}>No items in this path.</div>
-        )}
+        {children.length === 0 && <EmptyState message="No items in this path." />}
       </div>
     </div>
   );
@@ -193,14 +188,19 @@ function ChronoView({ state, dispatch, navigate }: Props) {
   const itemRefs = useRef<(HTMLDivElement | null)[]>([]);
 
   const path = currentPath(state);
-  const domains = useMemo(() => state.filters.filter(f => f.category === 'domain').map(f => f.value), [state.filters]);
-  const entities = useMemo(() => state.filters.filter(f => f.category === 'entity').map(f => f.value), [state.filters]);
-  const types = useMemo(() => state.filters.filter(f => f.category === 'type').map(f => f.value), [state.filters]);
-  const eps = useMemo(() => state.filters.filter(f => f.category === 'ep').map(f => f.value), [state.filters]);
+  const { domains, entities, types, eps } = useMemo(() => {
+    const domains: string[] = [], entities: string[] = [], types: string[] = [], eps: string[] = [];
+    for (const f of state.filters) {
+      if (f.category === 'domain') domains.push(f.value);
+      else if (f.category === 'entity') entities.push(f.value);
+      else if (f.category === 'type') types.push(f.value);
+      else if (f.category === 'ep') eps.push(f.value);
+    }
+    return { domains, entities, types, eps };
+  }, [state.filters]);
   const typeFilter = types.length === 1 ? types[0] : undefined;
 
-  useEffect(() => {
-    let cancelled = false;
+  useAsync((stale) => {
     setLoading(true);
     setFacts([]);
     setTotal(0);
@@ -211,13 +211,12 @@ function ChronoView({ state, dispatch, navigate }: Props) {
       entities: entities.length ? entities : undefined,
       eps: eps.length ? eps : undefined,
     }).then(r => {
-      if (cancelled) return;
+      if (stale()) return;
       setFacts(r.facts || []);
       setTotal(r.total);
       setLoading(false);
       if (r.facts?.length > 0) dispatch({ type: 'AMEND_NAV', historyCommit: null, factPath: r.facts[0].path, factCommit: null });
-    }).catch(() => { if (!cancelled) { setFacts([]); setLoading(false); } });
-    return () => { cancelled = true; };
+    }).catch(() => { if (!stale()) { setFacts([]); setLoading(false); } });
   }, [path, state.headCommit, state.freeText, state.repo, typeFilter, domains, entities, eps]);
 
   // Infinite scroll — loadingRef keeps loadMore stable so the IntersectionObserver
@@ -278,9 +277,7 @@ function ChronoView({ state, dispatch, navigate }: Props) {
     <div data-testid="chrono-list" ref={containerRef} style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
       <div style={{ flex: 1, overflowY: 'auto', padding: '4px 0' }}>
         {facts.length === 0 && !loading && (
-          <div style={{ padding: 16, color: '#666', fontSize: 13 }}>
-            {state.freeText ? 'No facts match the search.' : 'No facts in this path.'}
-          </div>
+          <EmptyState message={state.freeText ? 'No facts match the search.' : 'No facts in this path.'} />
         )}
         {facts.map((f, i) => {
           const ts = (f.type && typeStyles[f.type]) || defaultTypeStyle;
@@ -315,9 +312,7 @@ function ChronoView({ state, dispatch, navigate }: Props) {
           );
         })}
         <div ref={sentinelRef} style={{ height: 1 }} />
-        {loading && (
-          <div style={{ padding: 12, color: '#666', fontSize: 12, textAlign: 'center' }}>Loading...</div>
-        )}
+        {loading && <LoadingSpinner />}
       </div>
     </div>
   );
