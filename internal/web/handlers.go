@@ -455,8 +455,10 @@ func handleHistoryPaginated() http.HandlerFunc {
 		}
 
 		after := r.URL.Query().Get("after")
+		from := r.URL.Query().Get("from")
+		before := r.URL.Query().Get("before")
 
-		entries, next, err := ri.GS.LogPaginated(path, limit, after)
+		entries, next, prev, err := ri.GS.LogPaginated(path, limit, after, from, before)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, fmt.Sprintf("log error: %v", err))
 			return
@@ -468,6 +470,9 @@ func handleHistoryPaginated() http.HandlerFunc {
 		resp := map[string]any{"entries": entries}
 		if next != "" {
 			resp["next"] = next
+		}
+		if prev != "" {
+			resp["prev"] = prev
 		}
 		writeJSON(w, http.StatusOK, resp)
 	}

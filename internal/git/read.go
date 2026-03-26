@@ -326,10 +326,172 @@ func (s *Store) Log(path string) ([]LogEntry, error) {
 }
 
 // LogPaginated returns log entries with pagination and tags.
-// If path is empty, returns all commits. If after is non-empty, skips
-// commits until that hash is found, then returns the next `limit` entries.
-// Returns the entries, a "next" cursor (empty string if no more), and error.
-func (s *Store) LogPaginated(path string, limit int, after string) ([]LogEntryWithTags, string, error) {
+// It returns (entries, next, prev, error) where next is a cursor for loading
+// older commits and prev is a cursor for loading newer commits (empty = none).
+//
+//   - from   (inclusive seek): result window starts at that commit on page 1.
+//   - after  (exclusive, older): normal down-scroll pagination.
+//   - before (exclusive, newer): up-scroll pagination — returns commits
+//     strictly newer than the cursor, newest-first, up to limit.
+//
+// When commit_log is available the query is SQL-based (supports merge commits
+// that go-git's PathFilter excludes). Falls back to go-git walk otherwise.
+func (s *Store) LogPaginated(path string, limit int, after, from, before string) ([]LogEntryWithTags, string, string, error) {
+	if s.db != nil && s.commitLog.Load() {
+		entries, next, prev, err := s.logPaginatedSQL(path, limit, after, from, before)
+		if err == nil {
+			return entries, next, prev, nil
+		}
+		// SQL failed — fall through to go-git walk.
+	}
+	entries, next, err := s.logPaginatedGit(path, limit, after)
+	return entries, next, "", err
+}
+
+// logPaginatedSQL queries the commit_log table for paginated history.
+// Returns (entries, next, prev, error).
+// Sort order is (committed_at DESC, max_rowid DESC) — rowid is stable and
+// increases monotonically with commit age (populateCommitLog inserts oldest
+// first; appendCommitLog always appends), so rowid breaks same-second ties
+// in the same direction as the parent chain.
+func (s *Store) logPaginatedSQL(path string, limit int, after, from, before string) ([]LogEntryWithTags, string, string, error) {
+	// Build the path condition for the inner aggregation.
+	var pathCond string
+	var pathArgs []any
+	if path == "" {
+		pathCond = "1=1"
+	} else if strings.HasSuffix(path, ".md") {
+		pathCond = "path = ?"
+		pathArgs = []any{path}
+	} else {
+		pathCond = "path LIKE ?"
+		pathArgs = []any{path + "/%"}
+	}
+
+	// Resolve anchor commit to (ts, max_rowid) for cursor conditions.
+	type anchor struct{ ts, rid int64 }
+	lookupAnchor := func(hash string) (anchor, error) {
+		var a anchor
+		err := s.db.QueryRow(
+			`SELECT MIN(committed_at), MAX(rowid) FROM commit_log WHERE commit_hash = ?`, hash,
+		).Scan(&a.ts, &a.rid)
+		return a, err
+	}
+
+	// Build the WHERE clause and ORDER direction.
+	var cursorCond string
+	var cursorArgs []any
+	orderDir := "DESC"
+
+	switch {
+	case before != "":
+		// Exclusive up-scroll: commits strictly newer than before.
+		a, err := lookupAnchor(before)
+		if err != nil {
+			return nil, "", "", fmt.Errorf("logPaginatedSQL: before lookup: %w", err)
+		}
+		cursorCond = "(ts > ? OR (ts = ? AND max_rowid > ?))"
+		cursorArgs = []any{a.ts, a.ts, a.rid}
+		// We still want newest-first so ORDER remains DESC.
+	case from != "":
+		// Inclusive seek: target commit appears first on page 1.
+		a, err := lookupAnchor(from)
+		if err != nil {
+			return nil, "", "", fmt.Errorf("logPaginatedSQL: from lookup: %w", err)
+		}
+		cursorCond = "(ts < ? OR (ts = ? AND max_rowid <= ?))"
+		cursorArgs = []any{a.ts, a.ts, a.rid}
+	case after != "":
+		// Exclusive down-scroll: commits strictly older than after.
+		a, err := lookupAnchor(after)
+		if err != nil {
+			return nil, "", "", fmt.Errorf("logPaginatedSQL: after lookup: %w", err)
+		}
+		cursorCond = "(ts < ? OR (ts = ? AND max_rowid < ?))"
+		cursorArgs = []any{a.ts, a.ts, a.rid}
+	default:
+		cursorCond = "1=1"
+	}
+
+	query := `
+SELECT commit_hash, ts, message, operation
+FROM (
+    SELECT commit_hash, MIN(committed_at) AS ts, MIN(message) AS message, MIN(operation) AS operation, MAX(rowid) AS max_rowid
+    FROM commit_log
+    WHERE ` + pathCond + `
+    GROUP BY commit_hash
+)
+WHERE ` + cursorCond + `
+ORDER BY ts ` + orderDir + `, max_rowid ` + orderDir + `
+LIMIT ?`
+
+	args := append(pathArgs, cursorArgs...)
+	args = append(args, limit+1)
+
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return nil, "", "", fmt.Errorf("logPaginatedSQL: query: %w", err)
+	}
+	defer rows.Close()
+
+	var entries []LogEntryWithTags
+	for rows.Next() {
+		var hash, message, operation string
+		var ts int64
+		if err := rows.Scan(&hash, &ts, &message, &operation); err != nil {
+			return nil, "", "", fmt.Errorf("logPaginatedSQL: scan: %w", err)
+		}
+		firstLine := message
+		if idx := strings.IndexByte(firstLine, '\n'); idx >= 0 {
+			firstLine = firstLine[:idx]
+		}
+		entries = append(entries, LogEntryWithTags{
+			Commit:    hash,
+			Date:      time.Unix(ts, 0).UTC().Format(time.RFC3339),
+			Message:   firstLine,
+			Operation: operation,
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, "", "", fmt.Errorf("logPaginatedSQL: rows: %w", err)
+	}
+
+	var nextCursor, prevCursor string
+	hasOverflow := len(entries) > limit
+	if hasOverflow {
+		entries = entries[:limit]
+	}
+
+	switch {
+	case before != "":
+		// Up-scroll: overflow means even newer commits exist above entries[0].
+		if hasOverflow && len(entries) > 0 {
+			prevCursor = entries[0].Commit
+		}
+	case from != "":
+		// Seek: entries start at from; newer commits may exist above.
+		if len(entries) > 0 {
+			prevCursor = entries[0].Commit
+		}
+		if hasOverflow {
+			nextCursor = entries[len(entries)-1].Commit
+		}
+	default:
+		// Normal down-scroll (after or no cursor).
+		if hasOverflow {
+			nextCursor = entries[len(entries)-1].Commit
+		}
+	}
+
+	if len(entries) > 0 {
+		s.enrichFileCounts(entries)
+	}
+	return entries, nextCursor, prevCursor, nil
+}
+
+// logPaginatedGit is the go-git fallback for LogPaginated.
+// Note: go-git's PathFilter may exclude merge commits from directory results.
+func (s *Store) logPaginatedGit(path string, limit int, after string) ([]LogEntryWithTags, string, error) {
 	headRef, err := s.repo.Head()
 	if err != nil {
 		return nil, "", fmt.Errorf("LogPaginated: head: %w", err)

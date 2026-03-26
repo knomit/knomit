@@ -909,7 +909,7 @@ func TestLogPaginated(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	entries, next, err := store.LogPaginated("", 2, "")
+	entries, next, _, err := store.LogPaginated("", 2, "", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -923,7 +923,7 @@ func TestLogPaginated(t *testing.T) {
 		t.Errorf("expected operation learn on first entry, got %q", entries[0].Operation)
 	}
 
-	entries2, next2, err := store.LogPaginated("", 2, next)
+	entries2, next2, _, err := store.LogPaginated("", 2, next, "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -954,7 +954,7 @@ func TestLogPaginated_DirectoryFilter(t *testing.T) {
 	}
 
 	// Filter to kb/science — should only include commits that touched files under kb/science/.
-	entries, _, err := store.LogPaginated("kb/science", 50, "")
+	entries, _, _, err := store.LogPaginated("kb/science", 50, "", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1307,7 +1307,7 @@ func TestLogPaginated_FileFilter(t *testing.T) {
 	}
 
 	// Filter to specific file — should only include commits that touched kb/a.md.
-	entries, _, err := store.LogPaginated("kb/a.md", 50, "")
+	entries, _, _, err := store.LogPaginated("kb/a.md", 50, "", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}

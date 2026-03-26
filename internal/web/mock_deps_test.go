@@ -146,19 +146,20 @@ func (mr *MockGitStoreMockRecorder) Log(path any) *gomock.Call {
 }
 
 // LogPaginated mocks base method.
-func (m *MockGitStore) LogPaginated(path string, limit int, after string) ([]git.LogEntryWithTags, string, error) {
+func (m *MockGitStore) LogPaginated(path string, limit int, after, from, before string) ([]git.LogEntryWithTags, string, string, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "LogPaginated", path, limit, after)
+	ret := m.ctrl.Call(m, "LogPaginated", path, limit, after, from, before)
 	ret0, _ := ret[0].([]git.LogEntryWithTags)
 	ret1, _ := ret[1].(string)
-	ret2, _ := ret[2].(error)
-	return ret0, ret1, ret2
+	ret2, _ := ret[2].(string)
+	ret3, _ := ret[3].(error)
+	return ret0, ret1, ret2, ret3
 }
 
 // LogPaginated indicates an expected call of LogPaginated.
-func (mr *MockGitStoreMockRecorder) LogPaginated(path, limit, after any) *gomock.Call {
+func (mr *MockGitStoreMockRecorder) LogPaginated(path, limit, after, from, before any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "LogPaginated", reflect.TypeOf((*MockGitStore)(nil).LogPaginated), path, limit, after)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "LogPaginated", reflect.TypeOf((*MockGitStore)(nil).LogPaginated), path, limit, after, from, before)
 }
 
 // ReadFile mocks base method.

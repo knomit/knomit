@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { useAsync } from './hooks';
 import { EmptyState, LoadingSpinner } from './ui';
 import type { Dispatch } from 'react';
@@ -23,11 +23,15 @@ function commitStyle(entry: HistoryEntryWithTags): { color: string; bg: string; 
 export function HistoryTimeline({ state, dispatch, navigate }: Props) {
   const [entries, setEntries] = useState<HistoryEntryWithTags[]>([]);
   const [nextCursor, setNextCursor] = useState<string | undefined>(undefined);
+  const [prevCursor, setPrevCursor] = useState<string | undefined>(undefined);
   const [loading, setLoading] = useState(false);
   const [selectedIdx, setSelectedIdx] = useState(0);
   const sentinelRef = useRef<HTMLDivElement>(null);
+  const topSentinelRef = useRef<HTMLDivElement>(null);
   const itemRefs = useRef<(HTMLDivElement | null)[]>([]);
   const containerRef = useRef<HTMLDivElement>(null);
+  const scrollElRef = useRef<HTMLDivElement>(null);
+  const scrollHeightBeforeRef = useRef(0);
 
   const path = currentPath(state);
 
@@ -38,12 +42,14 @@ export function HistoryTimeline({ state, dispatch, navigate }: Props) {
     setLoading(true);
     setEntries([]);
     setNextCursor(undefined);
+    setPrevCursor(undefined);
     setSelectedIdx(0);
-    api.history(state.repo, path).then(r => {
+    api.history(state.repo, path, undefined, state.historyCommit || undefined).then(r => {
       if (stale()) return;
       const e = r.entries || [];
       setEntries(e);
       setNextCursor(r.next);
+      setPrevCursor(r.prev);
       setLoading(false);
       // If historyCommit is already set (e.g. NAV_BACK restored it), just sync visual index.
       if (staleStateRef.current.historyCommit) {
@@ -73,6 +79,33 @@ export function HistoryTimeline({ state, dispatch, navigate }: Props) {
     }).catch(() => setLoading(false));
   }, [nextCursor, path, state.repo]);
 
+  const loadPrev = useCallback(() => {
+    if (loadingRef.current || !prevCursor) return;
+    setLoading(true);
+    scrollHeightBeforeRef.current = scrollElRef.current?.scrollHeight ?? 0;
+    api.history(state.repo, path, undefined, undefined, prevCursor).then(r => {
+      const newEntries = r.entries || [];
+      if (newEntries.length === 0) {
+        scrollHeightBeforeRef.current = 0;
+        setPrevCursor(undefined);
+        setLoading(false);
+        return;
+      }
+      setEntries(prev => [...newEntries, ...prev]);
+      setSelectedIdx(idx => idx + newEntries.length);
+      setPrevCursor(r.prev);
+      setLoading(false);
+    }).catch(() => { scrollHeightBeforeRef.current = 0; setLoading(false); });
+  }, [prevCursor, path, state.repo]);
+
+  // After prepending entries, restore scroll position so the viewport doesn't jump.
+  useLayoutEffect(() => {
+    if (scrollHeightBeforeRef.current > 0 && scrollElRef.current) {
+      scrollElRef.current.scrollTop += scrollElRef.current.scrollHeight - scrollHeightBeforeRef.current;
+      scrollHeightBeforeRef.current = 0;
+    }
+  }, [entries]);
+
   useEffect(() => {
     const sentinel = sentinelRef.current;
     if (!sentinel) return;
@@ -83,6 +116,17 @@ export function HistoryTimeline({ state, dispatch, navigate }: Props) {
     observer.observe(sentinel);
     return () => observer.disconnect();
   }, [loadMore]);
+
+  useEffect(() => {
+    const sentinel = topSentinelRef.current;
+    if (!sentinel || !prevCursor) return;
+    const observer = new IntersectionObserver(
+      ([entry]) => { if (entry.isIntersecting) loadPrev(); },
+      { root: containerRef.current, threshold: 0.1 }
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [loadPrev, prevCursor]);
 
   const epFilters = useMemo(
     () => state.filters.filter(f => f.category === 'ep').map(f => f.value),
@@ -142,7 +186,8 @@ export function HistoryTimeline({ state, dispatch, navigate }: Props) {
 
   return (
     <div data-testid="history-timeline" ref={containerRef} style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
-      <div style={{ flex: 1, overflowY: 'auto', padding: '8px 0' }}>
+      <div ref={scrollElRef} style={{ flex: 1, overflowY: 'auto', padding: '8px 0' }}>
+        <div ref={topSentinelRef} style={{ height: 1 }} />
         {filteredEntries.length === 0 && !loading && (
           <EmptyState message={entries.length === 0 ? 'No history for this path.' : 'No commits match the current filters.'} />
         )}

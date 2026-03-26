@@ -28,9 +28,7 @@ export async function resolveNavRequest(
       const { factPath, factCommit, headCommit, repo } = state;
       if (factPath && factCommit) {
         // Already have a fact at a known commit — land there immediately.
-        // Clear path filter so the timeline queries all commits: factCommit is guaranteed to
-        // appear even if it is a merge commit excluded by go-git's path-filtered log.
-        dispatch({ type: 'APPLY_NAV', view: 'history', historyCommit: factCommit, factPath, factCommit, filters: [] });
+        dispatch({ type: 'APPLY_NAV', view: 'history', historyCommit: factCommit, factPath, factCommit });
       } else if (headCommit) {
         // Land at HEAD; CommitPanel will auto-select the first file via AMEND_NAV once detail loads.
         dispatch({ type: 'APPLY_NAV', view: 'history', historyCommit: headCommit, factPath: null, factCommit: headCommit });

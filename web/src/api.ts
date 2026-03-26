@@ -9,7 +9,7 @@ export interface SearchResult { path: string; title: string; body: string; score
 export interface HistoryEntry { commit: string; date: string; message: string }
 export interface FileCounts { added?: number; modified?: number; deleted?: number }
 export interface HistoryEntryWithTags { commit: string; date: string; message: string; operation?: string; files?: FileCounts }
-export interface HistoryResponse { entries: HistoryEntryWithTags[]; next?: string }
+export interface HistoryResponse { entries: HistoryEntryWithTags[]; next?: string; prev?: string }
 export interface RecentFactEntry { path: string; title: string; type?: string; committed_at: number; operation?: string; score?: number }
 export interface RecentResponse { facts: RecentFactEntry[]; total: number }
 export interface CommitFile { path: string; action: string; title?: string }
@@ -228,9 +228,11 @@ export const api = {
     if (opts?.eps?.length) p.set('ep', opts.eps.join(','));
     return fetch(`${base(repo)}/search?${p}`).then(r => r.json());
   },
-  history: (repo: string, path: string, after?: string): Promise<HistoryResponse> => {
+  history: (repo: string, path: string, after?: string, from?: string, before?: string): Promise<HistoryResponse> => {
     const p = new URLSearchParams({ path, limit: '50' });
     if (after) p.set('after', after);
+    if (from) p.set('from', from);
+    if (before) p.set('before', before);
     return fetch(`${base(repo)}/history?${p}`).then(r => r.json());
   },
   commitDetail: (repo: string, hash: string): Promise<CommitDetail> =>

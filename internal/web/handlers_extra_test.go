@@ -217,7 +217,7 @@ func TestHandleSearch_IndexError(t *testing.T) {
 func TestHandleHistory_Error(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
-	gs.EXPECT().LogPaginated("kb/fact.md", 50, "").Return(nil, "", fmt.Errorf("git error"))
+	gs.EXPECT().LogPaginated("kb/fact.md", 50, "", "", "").Return(nil, "", "", fmt.Errorf("git error"))
 
 	handler := newTestRouter(gs, nil)
 	rr := doRequest(t, handler, http.MethodGet, "/api/v1/knomit/history?path=kb/fact.md", "")
@@ -234,7 +234,7 @@ func TestHandleHistoryPaginated(t *testing.T) {
 	entries := []git.LogEntryWithTags{
 		{Commit: "abc12345", Date: "2026-03-14T10:00:00Z", Message: "add fact", Operation: "learn"},
 	}
-	gs.EXPECT().LogPaginated("kb/test", 50, "").Return(entries, "def67890", nil)
+	gs.EXPECT().LogPaginated("kb/test", 50, "", "", "").Return(entries, "def67890", "", nil)
 
 	handler := newTestRouter(gs, nil)
 	rr := doRequest(t, handler, http.MethodGet, "/api/v1/knomit/history?path=kb/test", "")

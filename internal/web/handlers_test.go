@@ -405,7 +405,7 @@ func TestHandleHistory(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			ctrl := gomock.NewController(t)
 			gs := NewMockGitStore(ctrl)
-			gs.EXPECT().LogPaginated(tc.path, 50, "").Return(tc.entries, "", nil)
+			gs.EXPECT().LogPaginated(tc.path, 50, "", "", "").Return(tc.entries, "", "", nil)
 
 			handler := newTestRouter(gs, nil)
 			rr := doRequest(t, handler, http.MethodGet, tc.query, "")
