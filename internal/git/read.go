@@ -54,7 +54,6 @@ func (s *Store) ReadFileWithHash(path string) (string, string, error) {
 
 // ReadFileAtCommit reads the content of path from a specific commit.
 func (s *Store) ReadFileAtCommit(path, commitHash string) (string, error) {
-	path = strings.ToLower(path)
 	hash := plumbing.NewHash(commitHash)
 	commit, err := s.repo.CommitObject(hash)
 	if err != nil {
@@ -730,28 +729,23 @@ func (s *Store) CommitDetail(commitHash string) (*CommitDetailResult, error) {
 		switch {
 		case from == "" && to != "":
 			if strings.HasSuffix(to, ".md") {
-				files = append(files, ChangedFile{Path: strings.ToLower(to), Action: "added"})
+				files = append(files, ChangedFile{Path: to, Action: "added"})
 			}
 		case from != "" && to == "":
 			if strings.HasSuffix(from, ".md") {
-				files = append(files, ChangedFile{Path: strings.ToLower(from), Action: "deleted"})
+				files = append(files, ChangedFile{Path: from, Action: "deleted"})
 			}
 		default:
 			if strings.HasSuffix(to, ".md") {
-				files = append(files, ChangedFile{Path: strings.ToLower(to), Action: "modified"})
+				files = append(files, ChangedFile{Path: to, Action: "modified"})
 			}
 		}
-	}
-
-	firstLine := commit.Message
-	if idx := strings.IndexByte(firstLine, '\n'); idx >= 0 {
-		firstLine = firstLine[:idx]
 	}
 
 	return &CommitDetailResult{
 		Commit:    hash.String(),
 		Date:      commit.Committer.When.UTC().Format(time.RFC3339),
-		Message:   firstLine,
+		Message:   firstLine(commit.Message),
 		Operation: parseOperation(commit.Author.Email),
 		Files:     files,
 	}, nil
