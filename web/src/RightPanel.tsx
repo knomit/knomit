@@ -236,7 +236,6 @@ function CommitPanel({ historyCommit, repo, selectedFact, navigate, rightPanelFo
   const [listHeight, setListHeight] = useState(DEFAULT_LIST_HEIGHT);
   const draggingRef = useRef(false);
 
-  // Fetch commit detail when historyCommit or repo changes
   useEffect(() => {
     let stale = false;
     api.commitDetail(repo, historyCommit)
@@ -256,16 +255,13 @@ function CommitPanel({ historyCommit, repo, selectedFact, navigate, rightPanelFo
     }
   }, [activeIdx]);
 
-  // Auto-select first file when entering a commit with no fact selected.
-  // Covers the edge case where HistoryTimeline AMEND_NAV sets historyCommit but factPath is null
-  // (e.g. initial load before headCommit was available).
+  // Auto-select first file when historyCommit is set but no fact is open yet.
   useEffect(() => {
     if (!detail || selectedFact) return;
     const first = detail.files?.[0];
     if (first) dispatch({ type: 'AMEND_NAV', historyCommit, factPath: first.path, factCommit: historyCommit });
   }, [detail, selectedFact, historyCommit, dispatch]);
 
-  // Reset list height to default when commit changes
   useEffect(() => { setListHeight(DEFAULT_LIST_HEIGHT); }, [historyCommit]);
 
   // Keyboard navigation within commit files
@@ -417,7 +413,6 @@ export function RightPanel({ state, dispatch, navigate }: {
   const factCommit = state.factCommit;
   const historyCommit = state.historyCommit;
 
-  // Collapsed single-step effect: factPath + factCommit → fetch fact (or show summary)
   useEffect(() => {
     let stale = false;
     setError(null);

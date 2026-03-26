@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import type { Dispatch } from 'react';
 import { api } from './api';
 import type { DirChild, RecentFactEntry } from './api';
@@ -193,10 +193,10 @@ function ChronoView({ state, dispatch, navigate }: Props) {
   const itemRefs = useRef<(HTMLDivElement | null)[]>([]);
 
   const path = currentPath(state);
-  const domains = state.filters.filter(f => f.category === 'domain').map(f => f.value);
-  const entities = state.filters.filter(f => f.category === 'entity').map(f => f.value);
-  const types = state.filters.filter(f => f.category === 'type').map(f => f.value);
-  const eps = state.filters.filter(f => f.category === 'ep').map(f => f.value);
+  const domains = useMemo(() => state.filters.filter(f => f.category === 'domain').map(f => f.value), [state.filters]);
+  const entities = useMemo(() => state.filters.filter(f => f.category === 'entity').map(f => f.value), [state.filters]);
+  const types = useMemo(() => state.filters.filter(f => f.category === 'type').map(f => f.value), [state.filters]);
+  const eps = useMemo(() => state.filters.filter(f => f.category === 'ep').map(f => f.value), [state.filters]);
   const typeFilter = types.length === 1 ? types[0] : undefined;
 
   useEffect(() => {
@@ -218,12 +218,15 @@ function ChronoView({ state, dispatch, navigate }: Props) {
       if (r.facts?.length > 0) dispatch({ type: 'AMEND_NAV', historyCommit: null, factPath: r.facts[0].path, factCommit: null });
     }).catch(() => { if (!cancelled) { setFacts([]); setLoading(false); } });
     return () => { cancelled = true; };
-  }, [path, state.headCommit, state.freeText, state.repo, typeFilter,
-      JSON.stringify(domains), JSON.stringify(entities), JSON.stringify(eps)]);
+  }, [path, state.headCommit, state.freeText, state.repo, typeFilter, domains, entities, eps]);
 
-  // Infinite scroll
+  // Infinite scroll — loadingRef keeps loadMore stable so the IntersectionObserver
+  // doesn't reconnect on every loading state flip.
+  const loadingRef = useRef(loading);
+  loadingRef.current = loading;
+
   const loadMore = useCallback(() => {
-    if (loading || facts.length >= total) return;
+    if (loadingRef.current || facts.length >= total) return;
     setLoading(true);
     api.recent(state.repo, path, state.freeText, 50, facts.length, {
       typeFilter,
@@ -234,8 +237,7 @@ function ChronoView({ state, dispatch, navigate }: Props) {
       setFacts(prev => [...prev, ...(r.facts || [])]);
       setLoading(false);
     }).catch(() => setLoading(false));
-  }, [loading, facts.length, total, state.repo, path, state.freeText, typeFilter,
-      JSON.stringify(domains), JSON.stringify(entities), JSON.stringify(eps)]);
+  }, [facts.length, total, state.repo, path, state.freeText, typeFilter, domains, entities, eps]);
 
   useEffect(() => {
     const sentinel = sentinelRef.current;
@@ -321,18 +323,12 @@ function ChronoView({ state, dispatch, navigate }: Props) {
   );
 }
 
-// ---------- HistoryView ----------
-
-function HistoryView({ state, dispatch, navigate }: Props) {
-  return <HistoryTimeline state={state} dispatch={dispatch} navigate={navigate} />;
-}
-
 // ---------- LeftPanel (dispatcher) ----------
 
 export function LeftPanel({ state, dispatch, navigate }: Props) {
   switch (state.view) {
     case 'tree': return <TreeView state={state} dispatch={dispatch} navigate={navigate} />;
     case 'chrono': return <ChronoView state={state} dispatch={dispatch} navigate={navigate} />;
-    case 'history': return <HistoryView state={state} dispatch={dispatch} navigate={navigate} />;
+    case 'history': return <HistoryTimeline state={state} dispatch={dispatch} navigate={navigate} />;
   }
 }

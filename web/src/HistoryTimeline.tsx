@@ -32,7 +32,6 @@ export function HistoryTimeline({ state, dispatch, navigate }: Props) {
   const staleStateRef = useRef(state);
   staleStateRef.current = state;
 
-  // Fetch first page on mount and when path changes
   useEffect(() => {
     let stale = false;
     setLoading(true);
@@ -61,16 +60,18 @@ export function HistoryTimeline({ state, dispatch, navigate }: Props) {
     return () => { stale = true; };
   }, [path, state.repo]);
 
-  // Infinite scroll via IntersectionObserver
+  const loadingRef = useRef(loading);
+  loadingRef.current = loading;
+
   const loadMore = useCallback(() => {
-    if (loading || !nextCursor) return;
+    if (loadingRef.current || !nextCursor) return;
     setLoading(true);
     api.history(state.repo, path, nextCursor).then(r => {
       setEntries(prev => [...prev, ...(r.entries || [])]);
       setNextCursor(r.next);
       setLoading(false);
     }).catch(() => setLoading(false));
-  }, [loading, nextCursor, path, state.repo]);
+  }, [nextCursor, path, state.repo]);
 
   useEffect(() => {
     const sentinel = sentinelRef.current;
@@ -98,7 +99,6 @@ export function HistoryTimeline({ state, dispatch, navigate }: Props) {
     [entries, epFilters, freeText],
   );
 
-  // Sync selectedIdx when historyCommit changes externally (e.g. NAV_BACK)
   useEffect(() => {
     if (!state.historyCommit) return;
     const idx = filteredEntries.findIndex(e => e.commit === state.historyCommit);
@@ -108,7 +108,6 @@ export function HistoryTimeline({ state, dispatch, navigate }: Props) {
     }
   }, [state.historyCommit, filteredEntries, selectedIdx]);
 
-  // Keyboard navigation (on filtered entries)
   const moveSelection = useCallback((delta: 1 | -1) => {
     const next = Math.max(0, Math.min(selectedIdx + delta, filteredEntries.length - 1));
     setSelectedIdx(next);
@@ -136,7 +135,6 @@ export function HistoryTimeline({ state, dispatch, navigate }: Props) {
     return () => window.removeEventListener('keydown', handler);
   }, [state.rightPanelFocused, state.view, filteredEntries, selectedIdx, moveSelection, dispatch]);
 
-  // Compute fact count badge
   const factCountBadge = (entry: HistoryEntryWithTags) => {
     const total = (entry.files?.added || 0) + (entry.files?.modified || 0) + (entry.files?.deleted || 0);
     return total > 0 ? total : null;

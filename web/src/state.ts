@@ -284,9 +284,9 @@ export function reducer(s: AppState, a: Action): AppState {
       };
     }
     case 'AMEND_NAV':
-      // Updates selection state in-place without pushing navStack.
-      // Used by auto-select behaviors (HistoryTimeline, ChronoView, TreeView search)
-      // so that view-button clicks create exactly one navStack entry.
+      // In-place update — no navStack push. Used by auto-select behaviors so that
+      // a single user action (e.g. view-button click) creates exactly one navStack entry.
+      if (s.historyCommit === a.historyCommit && s.factPath === a.factPath && s.factCommit === a.factCommit) return s;
       return { ...s, historyCommit: a.historyCommit, factPath: a.factPath, factCommit: a.factCommit };
     case 'FACT_LOADED':
       return { ...s, factCommit: a.commit };
