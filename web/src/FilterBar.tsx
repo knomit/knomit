@@ -39,8 +39,9 @@ export function FilterBar({ state, dispatch }: Props) {
   const [activeCategory, setActiveCategory]       = useState<FilterChip['category'] | null>(null);
   const [categorySearch, setCategorySearch]       = useState('');
 
-  const inputRef    = useRef<HTMLInputElement>(null);
-  const debounceRef = useRef<number>(0);
+  const inputRef        = useRef<HTMLInputElement>(null);
+  const debounceRef     = useRef<number>(0);
+  const catSearchSeqRef = useRef(0);
 
   // Track whether the input is focused — used to distinguish user clearing vs onBlur clearing
   const focusedRef = useRef(false);
@@ -331,8 +332,9 @@ export function FilterBar({ state, dispatch }: Props) {
                     const prefix = activeCategory === 'path' && pathPrefix
                       ? pathPrefix + '/' + e.target.value
                       : e.target.value;
+                    const seq = ++catSearchSeqRef.current;
                     api.completions(state.repo, activeCategory, prefix).then(res => {
-                      setCategoryValues(res.values || []);
+                      if (seq === catSearchSeqRef.current) setCategoryValues(res.values || []);
                     }).catch(() => {});
                   }}
                   onKeyDown={e => e.stopPropagation()}

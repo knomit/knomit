@@ -423,8 +423,14 @@ export function RightPanel({ state, dispatch, navigate }: {
   useEffect(() => {
     if (factPath || state.view === 'history') return;
     let stale = false;
-    api.stats(state.repo, path).then(s => { if (!stale) setStats(s); }).catch(() => { if (!stale) setStats(null); });
-    api.activity(state.repo, path).then(a => { if (!stale) setActivity(a); }).catch(() => { if (!stale) setActivity(null); });
+    Promise.all([
+      api.stats(state.repo, path).catch(() => null),
+      api.activity(state.repo, path).catch(() => null),
+    ]).then(([s, a]) => {
+      if (stale) return;
+      setStats(s);
+      setActivity(a);
+    });
     return () => { stale = true; };
   }, [factPath, state.repo, path, state.headCommit]);
 

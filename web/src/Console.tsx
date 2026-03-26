@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback, useMemo } from 'react';
+import { useEffect, useRef, useCallback } from 'react';
 import type { AppState, Action } from './state';
 import { ChevronUpIcon, ChevronDownIcon } from './icons';
 
@@ -17,13 +17,8 @@ export function Console({ state, dispatch }: Props) {
   const listRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<{ startY: number; startH: number } | null>(null);
 
-  const { infoCount, errorCount } = useMemo(() => {
-    let info = 0, error = 0;
-    for (const e of consoleEntries) {
-      if (e.level === 'info') info++; else error++;
-    }
-    return { infoCount: info, errorCount: error };
-  }, [consoleEntries]);
+  const infoCount  = consoleEntries.filter(e => e.level === 'info').length;
+  const errorCount = consoleEntries.filter(e => e.level === 'error').length;
 
   // Auto-scroll to bottom on new entries
   useEffect(() => {
