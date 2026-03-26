@@ -17,7 +17,7 @@ interface Props {
 
 // ---------- TreeView ----------
 
-function TreeView({ state, dispatch, navigate: _navigate }: Props) {
+function TreeView({ state, dispatch, navigate }: Props) {
   const [children, setChildren] = useState<DirChild[]>([]);
   const [selectedIdx, setSelectedIdx] = useState(-1);
   const itemRefs = useRef<(HTMLDivElement | null)[]>([]);
@@ -47,7 +47,7 @@ function TreeView({ state, dispatch, navigate: _navigate }: Props) {
       setChildren(items);
       setSelectedIdx(items.length > 0 ? 0 : -1);
       if (items.length > 0 && items[0].fullPath) {
-        dispatch({ type: 'SELECT_FACT', path: items[0].fullPath });
+        navigate({ view: 'tree', factPath: items[0].fullPath });
       }
     }).catch(() => { if (!stale) setChildren([]); });
     return () => { stale = true; };
@@ -65,8 +65,8 @@ function TreeView({ state, dispatch, navigate: _navigate }: Props) {
         return a.name.localeCompare(b.name);
       });
       setChildren(c);
-      if (state.leftSelection) {
-        const factName = state.leftSelection.split('/').pop();
+      if (state.factPath) {
+        const factName = state.factPath.split('/').pop();
         const idx = c.findIndex(ch => !ch.is_dir && ch.name === factName);
         setSelectedIdx(idx >= 0 ? idx : -1);
       } else {
@@ -74,7 +74,7 @@ function TreeView({ state, dispatch, navigate: _navigate }: Props) {
       }
     }).catch(() => { if (!stale) setChildren([]); });
     return () => { stale = true; };
-  }, [path, state.headCommit, shouldSearch, state.repo, state.leftSelection]);
+  }, [path, state.headCommit, shouldSearch, state.repo, state.factPath]);
 
   const moveSelection = useCallback((delta: 1 | -1) => {
     const len = children.length;
@@ -84,9 +84,9 @@ function TreeView({ state, dispatch, navigate: _navigate }: Props) {
     itemRefs.current[next]?.scrollIntoView({ block: 'nearest' });
     const c = children[next];
     if (c && !c.is_dir) {
-      dispatch({ type: 'SELECT_FACT', path: c.fullPath || `${path}/${c.name}` });
+      navigate({ view: 'tree', factPath: c.fullPath || `${path}/${c.name}` });
     }
-  }, [children, selectedIdx, path, dispatch]);
+  }, [children, selectedIdx, path, navigate]);
 
   const activateSelected = useCallback(() => {
     const child = children[selectedIdx];
@@ -94,9 +94,9 @@ function TreeView({ state, dispatch, navigate: _navigate }: Props) {
     if (child.is_dir) {
       dispatch({ type: 'NAVIGATE', path: `${path}/${child.name}` });
     } else {
-      dispatch({ type: 'SELECT_FACT', path: child.fullPath || `${path}/${child.name}` });
+      navigate({ view: 'tree', factPath: child.fullPath || `${path}/${child.name}` });
     }
-  }, [children, selectedIdx, path, dispatch]);
+  }, [children, selectedIdx, path, dispatch, navigate]);
 
   // Keyboard: j/k navigation, Enter to open, ArrowLeft to go up
   useEffect(() => {
@@ -150,7 +150,7 @@ function TreeView({ state, dispatch, navigate: _navigate }: Props) {
                 if (c.is_dir) {
                   dispatch({ type: 'ADD_FILTER', chip: { category: 'path', value: `${path}/${c.name}` } });
                 } else {
-                  dispatch({ type: 'SELECT_FACT', path: c.fullPath || `${path}/${c.name}` });
+                  navigate({ view: 'tree', factPath: c.fullPath || `${path}/${c.name}` });
                 }
               }}
               style={{
@@ -183,7 +183,7 @@ function TreeView({ state, dispatch, navigate: _navigate }: Props) {
 
 // ---------- ChronoView ----------
 
-function ChronoView({ state, dispatch, navigate: _navigate }: Props) {
+function ChronoView({ state, dispatch, navigate }: Props) {
   const [facts, setFacts] = useState<RecentFactEntry[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
@@ -215,11 +215,11 @@ function ChronoView({ state, dispatch, navigate: _navigate }: Props) {
       setFacts(r.facts || []);
       setTotal(r.total);
       setLoading(false);
-      if (r.facts?.length > 0) dispatch({ type: 'SELECT_FACT', path: r.facts[0].path });
+      if (r.facts?.length > 0) navigate({ view: 'chrono', factPath: r.facts[0].path });
     }).catch(() => { if (!cancelled) { setFacts([]); setLoading(false); } });
     return () => { cancelled = true; };
   }, [path, state.headCommit, state.freeText, state.repo, typeFilter,
-      JSON.stringify(domains), JSON.stringify(entities), JSON.stringify(eps)]);
+      JSON.stringify(domains), JSON.stringify(entities), JSON.stringify(eps), navigate]);
 
   // Infinite scroll
   const loadMore = useCallback(() => {
@@ -254,8 +254,8 @@ function ChronoView({ state, dispatch, navigate: _navigate }: Props) {
     setSelectedIdx(next);
     itemRefs.current[next]?.scrollIntoView({ block: 'nearest' });
     const f = facts[next];
-    if (f) dispatch({ type: 'SELECT_FACT', path: f.path });
-  }, [selectedIdx, facts, dispatch]);
+    if (f) navigate({ view: 'chrono', factPath: f.path });
+  }, [selectedIdx, facts, navigate]);
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -288,7 +288,7 @@ function ChronoView({ state, dispatch, navigate: _navigate }: Props) {
               data-testid="chrono-item"
               data-path={f.path}
               ref={el => { itemRefs.current[i] = el; }}
-              onClick={() => { setSelectedIdx(i); dispatch({ type: 'SELECT_FACT', path: f.path }); }}
+              onClick={() => { setSelectedIdx(i); navigate({ view: 'chrono', factPath: f.path }); }}
               style={{
                 padding: '6px 12px', cursor: 'pointer',
                 background: i === selectedIdx ? '#2a2a3a' : 'transparent',
