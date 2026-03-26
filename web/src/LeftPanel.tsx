@@ -219,7 +219,7 @@ function ChronoView({ state, dispatch, navigate }: Props) {
     }).catch(() => { if (!cancelled) { setFacts([]); setLoading(false); } });
     return () => { cancelled = true; };
   }, [path, state.headCommit, state.freeText, state.repo, typeFilter,
-      JSON.stringify(domains), JSON.stringify(entities), JSON.stringify(eps), navigate]);
+      JSON.stringify(domains), JSON.stringify(entities), JSON.stringify(eps)]);
 
   // Infinite scroll
   const loadMore = useCallback(() => {

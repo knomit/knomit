@@ -32,14 +32,8 @@ export async function resolveNavRequest(
         // appear even if it is a merge commit excluded by go-git's path-filtered log.
         dispatch({ type: 'APPLY_NAV', view: 'history', historyCommit: factCommit, factPath, factCommit, filters: [] });
       } else if (headCommit) {
-        // Fetch first file of HEAD commit so CommitPanel has something to show.
-        try {
-          const detail = await api.commitDetail(repo, headCommit);
-          const first = (detail.files || [])[0];
-          dispatch({ type: 'APPLY_NAV', view: 'history', historyCommit: headCommit, factPath: first?.path ?? null, factCommit: headCommit });
-        } catch {
-          dispatch({ type: 'APPLY_NAV', view: 'history', historyCommit: headCommit, factPath: null, factCommit: headCommit });
-        }
+        // Land at HEAD; CommitPanel will auto-select the first file via AMEND_NAV once detail loads.
+        dispatch({ type: 'APPLY_NAV', view: 'history', historyCommit: headCommit, factPath: null, factCommit: headCommit });
       } else {
         // headCommit not yet loaded — HistoryTimeline will amend selection once it fetches.
         dispatch({ type: 'APPLY_NAV', view: 'history', historyCommit: null, factPath: null, factCommit: null });

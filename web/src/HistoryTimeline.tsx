@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import type { Dispatch } from 'react';
 import { api } from './api';
 import type { HistoryEntryWithTags } from './api';
@@ -30,7 +30,7 @@ export function HistoryTimeline({ state, dispatch, navigate }: Props) {
   const path = currentPath(state);
 
   const staleStateRef = useRef(state);
-  useEffect(() => { staleStateRef.current = state; });
+  staleStateRef.current = state;
 
   // Fetch first page on mount and when path changes
   useEffect(() => {
@@ -83,15 +83,20 @@ export function HistoryTimeline({ state, dispatch, navigate }: Props) {
     return () => observer.disconnect();
   }, [loadMore]);
 
-  // Filter entries by episode chips and free text (commit message search)
-  const epFilters = state.filters.filter(f => f.category === 'ep').map(f => f.value);
+  const epFilters = useMemo(
+    () => state.filters.filter(f => f.category === 'ep').map(f => f.value),
+    [state.filters],
+  );
   const freeText = state.freeText.toLowerCase();
 
-  const filteredEntries = entries.filter(entry => {
-    if (epFilters.length > 0 && (!entry.operation || !epFilters.includes(entry.operation))) return false;
-    if (freeText && !entry.message.toLowerCase().includes(freeText)) return false;
-    return true;
-  });
+  const filteredEntries = useMemo(() =>
+    entries.filter(entry => {
+      if (epFilters.length > 0 && (!entry.operation || !epFilters.includes(entry.operation))) return false;
+      if (freeText && !entry.message.toLowerCase().includes(freeText)) return false;
+      return true;
+    }),
+    [entries, epFilters, freeText],
+  );
 
   // Sync selectedIdx when historyCommit changes externally (e.g. NAV_BACK)
   useEffect(() => {

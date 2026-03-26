@@ -91,15 +91,11 @@ describe('resolveNavRequest', () => {
     expect(dispatch).toHaveBeenCalledWith({ type: 'APPLY_NAV', view: 'history', historyCommit: 'abc123', factPath: 'kb/foo.md', factCommit: 'abc123', filters: [] });
   });
 
-  it('mode-switch to history with no factCommit but headCommit fetches first file of headCommit', async () => {
-    mockCommitDetail.mockResolvedValue({
-      commit: 'head1', date: '', message: '',
-      files: [{ path: 'kb/latest.md', action: 'modified' }],
-    });
+  it('mode-switch to history with no factCommit but headCommit dispatches immediately', async () => {
     const state = makeState({ factPath: null, factCommit: null, headCommit: 'head1' });
     await resolveNavRequest({ view: 'history' }, state, dispatch);
-    expect(mockCommitDetail).toHaveBeenCalledWith('myrepo', 'head1');
-    expect(dispatch).toHaveBeenCalledWith({ type: 'APPLY_NAV', view: 'history', historyCommit: 'head1', factPath: 'kb/latest.md', factCommit: 'head1' });
+    expect(mockCommitDetail).not.toHaveBeenCalled();
+    expect(dispatch).toHaveBeenCalledWith({ type: 'APPLY_NAV', view: 'history', historyCommit: 'head1', factPath: null, factCommit: 'head1' });
   });
 
   it('mode-switch to history with no headCommit dispatches with nulls (HistoryTimeline will amend)', async () => {
