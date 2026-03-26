@@ -67,7 +67,7 @@ function TagCloud({ label, entries, color, onTagClick, focusedValue }: {
   );
 }
 
-function renderFact(fact: Fact, dispatch: Dispatch<Action>) {
+function renderFact(fact: Fact, navigate: (req: NavRequest) => void, dispatch: Dispatch<Action>) {
   return (
     <div style={{ padding: '24px 28px', overflowY: 'auto', height: '100%', boxSizing: 'border-box' }}>
       {/* Header */}
@@ -150,8 +150,8 @@ function renderFact(fact: Fact, dispatch: Dispatch<Action>) {
               return (
                 <span key={ref}
                   onClick={() => commit
-                    ? dispatch({ type: 'OPEN_REF', path: ref, commit })
-                    : dispatch({ type: 'SELECT_FACT', path: ref })
+                    ? navigate({ view: 'history', historyCommit: commit, factPath: ref, factCommit: commit })
+                    : navigate({ view: 'tree', factPath: ref })
                   }
                   style={{ color: '#8af', fontSize: 12, fontFamily: 'monospace', cursor: 'pointer', transition: 'color 0.15s' }}
                   onMouseEnter={e => { (e.currentTarget as HTMLElement).style.color = '#adf'; }}
@@ -222,17 +222,30 @@ const DEFAULT_LIST_HEIGHT = 3 * ROW_HEIGHT;
 const MIN_LIST_HEIGHT = ROW_HEIGHT;
 const MAX_LIST_HEIGHT = 12 * ROW_HEIGHT;
 
-function CommitPanel({ detail, selectedFact, onSelectFact }: {
-  detail: CommitDetail;
+function CommitPanel({ historyCommit, repo, selectedFact, navigate, rightPanelFocused, dispatch }: {
+  historyCommit: string;
+  repo: string;
   selectedFact: string | null;
-  onSelectFact: (path: string) => void;
+  navigate: (req: NavRequest) => void;
+  rightPanelFocused: boolean;
+  dispatch: Dispatch<Action>;
 }) {
+  const [detail, setDetail] = useState<CommitDetail | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const itemRefs = useRef<(HTMLDivElement | null)[]>([]);
   const [listHeight, setListHeight] = useState(DEFAULT_LIST_HEIGHT);
   const draggingRef = useRef(false);
 
-  const files = detail.files || [];
+  // Fetch commit detail when historyCommit or repo changes
+  useEffect(() => {
+    let stale = false;
+    api.commitDetail(repo, historyCommit)
+      .then(d => { if (!stale) setDetail(d); })
+      .catch(() => { if (!stale) setDetail(null); });
+    return () => { stale = true; };
+  }, [historyCommit, repo]);
+
+  const files = detail?.files || [];
   const hasOverflow = files.length * ROW_HEIGHT > listHeight;
 
   // Scroll selected file into view
@@ -244,7 +257,26 @@ function CommitPanel({ detail, selectedFact, onSelectFact }: {
   }, [activeIdx]);
 
   // Reset list height to default when commit changes
-  useEffect(() => { setListHeight(DEFAULT_LIST_HEIGHT); }, [detail.commit]);
+  useEffect(() => { setListHeight(DEFAULT_LIST_HEIGHT); }, [historyCommit]);
+
+  // Keyboard navigation within commit files
+  useEffect(() => {
+    if (!rightPanelFocused) return;
+    const handler = (e: KeyboardEvent) => {
+      if (files.length === 0) return;
+      if ((e.key === 'ArrowDown' || e.key === 'j' || e.key === 'ArrowUp' || e.key === 'k') && files.length > 1) {
+        e.preventDefault();
+        const currentIdx = files.findIndex(f => f.path === selectedFact);
+        const delta = (e.key === 'ArrowDown' || e.key === 'j') ? 1 : -1;
+        const nextIdx = Math.max(0, Math.min(currentIdx + delta, files.length - 1));
+        if (nextIdx !== currentIdx) {
+          navigate({ view: 'history', historyCommit, factPath: files[nextIdx].path, factCommit: historyCommit });
+        }
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [rightPanelFocused, detail, selectedFact, historyCommit, navigate]);
 
   // Drag to resize
   const startDrag = (e: React.MouseEvent) => {
@@ -265,6 +297,8 @@ function CommitPanel({ detail, selectedFact, onSelectFact }: {
     document.addEventListener('mousemove', onMove);
     document.addEventListener('mouseup', onUp);
   };
+
+  if (!detail) return null;
 
   // Episode tag
   const op = detail.operation || '';
@@ -307,7 +341,10 @@ function CommitPanel({ detail, selectedFact, onSelectFact }: {
                 ref={el => { itemRefs.current[idx] = el; }}
                 data-testid="commit-file"
                 data-path={file.path}
-                onClick={() => onSelectFact(file.path)}
+                onClick={() => {
+                  navigate({ view: 'history', historyCommit, factPath: file.path, factCommit: historyCommit });
+                  dispatch({ type: 'FOCUS_RIGHT_PANEL' });
+                }}
                 style={{
                   height: ROW_HEIGHT,
                   display: 'flex',
@@ -356,7 +393,7 @@ function CommitPanel({ detail, selectedFact, onSelectFact }: {
 
 // ─── Main RightPanel ─────────────────────────────────────────────────────────
 
-export function RightPanel({ state, dispatch, navigate: _navigate }: {
+export function RightPanel({ state, dispatch, navigate }: {
   state: AppState;
   dispatch: Dispatch<Action>;
   navigate: (req: NavRequest) => void;
@@ -365,100 +402,52 @@ export function RightPanel({ state, dispatch, navigate: _navigate }: {
   const [stats, setStats] = useState<Stats | null>(null);
   const [activity, setActivity] = useState<ActivityStats | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [commitDetail, setCommitDetail] = useState<CommitDetail | null>(null);
   const path = currentPath(state);
 
-  // Derive the selected fact path based on view mode
-  const selectedFact = state.view === 'history' ? state.rightSelection : state.leftSelection;
-  // In history mode, leftSelection is the commit hash
-  const historyCommit = state.view === 'history' ? state.leftSelection : null;
+  const factPath = state.factPath;
+  const factCommit = state.factCommit;
+  const historyCommit = state.historyCommit;
 
-  // ── Reactive pipeline ──────────────────────────────────────────────────
-  //
-  // historyCommit changes → fetch commit detail → commitDetail state set
-  //                                             → dispatch SELECT_FACT (first file)
-  // commitDetail + selectedFact → derive which commit+path to fetch fact for
-  // fact fetch runs when the derived values change
-
-  // Step 1: historyCommit → commitDetail (+ auto-select first file)
-  useEffect(() => {
-    let stale = false;
-    if (!historyCommit || state.view !== 'history') {
-      setCommitDetail(null);
-      return;
-    }
-    api.commitDetail(state.repo, historyCommit).then(detail => {
-      if (stale) return;
-      setCommitDetail(detail);
-      // Only auto-select first file if no rightSelection is already set
-      // (e.g. OPEN_REF sets rightSelection explicitly — don't clobber it)
-      if (!state.rightSelection) {
-        const first = (detail.files || [])[0];
-        if (first) dispatch({ type: 'SELECT_FACT', path: first.path });
-      }
-    }).catch(() => { if (!stale) setCommitDetail(null); });
-    return () => { stale = true; };
-  }, [historyCommit, state.view, state.repo]);
-
-  // Derive the commit to use for fact-fetching.
-  // In history mode, use commitDetail's commit hash (ensures detail is loaded).
-  // This is the reactive gate: fact-fetch only runs after commitDetail is ready.
-  const resolvedCommit = state.view === 'history' && commitDetail ? commitDetail.commit : null;
-  const inHistoryWithFact = !!resolvedCommit && !!selectedFact;
-
-  // Step 2: selectedFact + resolvedCommit → fetch fact
+  // Collapsed single-step effect: factPath + factCommit → fetch fact (or show summary)
   useEffect(() => {
     let stale = false;
     setError(null);
 
-    if (resolvedCommit && selectedFact) {
-      // Time-travel: fact at specific commit
-      api.fact(state.repo, selectedFact, resolvedCommit)
-        .then(f => { if (!stale) setFact(f); })
+    if (factPath) {
+      api.fact(state.repo, factPath, factCommit ?? undefined)
+        .then(f => {
+          if (stale) return;
+          setFact(f);
+          if (f.commit_hash) dispatch({ type: 'FACT_LOADED', commit: f.commit_hash });
+        })
         .catch(e => { if (!stale) setError(String(e)); });
-    } else if (!resolvedCommit && state.view !== 'history' && selectedFact) {
-      // Normal fact view (tree/chrono)
-      api.fact(state.repo, selectedFact)
-        .then(f => { if (!stale) setFact(f); })
-        .catch(e => { if (!stale) setError(String(e)); });
-    } else if (!selectedFact && state.view !== 'history') {
-      // Summary view
+    } else {
       setFact(null);
-      api.stats(state.repo, path).then(s => { if (!stale) setStats(s); }).catch(() => { if (!stale) setStats(null); });
-      api.activity(state.repo, path).then(a => { if (!stale) setActivity(a); }).catch(() => { if (!stale) setActivity(null); });
+      if (state.view !== 'history') {
+        api.stats(state.repo, path).then(s => { if (!stale) setStats(s); }).catch(() => { if (!stale) setStats(null); });
+        api.activity(state.repo, path).then(a => { if (!stale) setActivity(a); }).catch(() => { if (!stale) setActivity(null); });
+      }
     }
     return () => { stale = true; };
-  }, [selectedFact, state.headCommit, resolvedCommit, state.view, state.repo, path]);
+  }, [factPath, factCommit, state.repo, state.headCommit, path]);
 
-  // Keyboard: right panel focus — ArrowLeft blurs, ArrowUp/Down navigate commit files
-  const commitFiles = commitDetail?.files || [];
+  // Keyboard: ArrowLeft blurs right panel; j/k navigation is handled inside CommitPanel
   useEffect(() => {
     if (!state.rightPanelFocused) return;
     const handler = (e: KeyboardEvent) => {
       if (e.key === 'ArrowLeft') {
         e.preventDefault();
         dispatch({ type: 'BLUR_RIGHT_PANEL' });
-        return;
-      }
-      // Navigate commit files with up/down when in history mode
-      if (inHistoryWithFact && commitFiles.length > 1 && (e.key === 'ArrowDown' || e.key === 'j' || e.key === 'ArrowUp' || e.key === 'k')) {
-        e.preventDefault();
-        const currentIdx = commitFiles.findIndex(f => f.path === selectedFact);
-        const delta = (e.key === 'ArrowDown' || e.key === 'j') ? 1 : -1;
-        const nextIdx = Math.max(0, Math.min(currentIdx + delta, commitFiles.length - 1));
-        if (nextIdx !== currentIdx && commitFiles[nextIdx]) {
-          dispatch({ type: 'SELECT_FACT', path: commitFiles[nextIdx].path });
-        }
       }
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [state.rightPanelFocused, dispatch, inHistoryWithFact, commitFiles, selectedFact]);
+  }, [state.rightPanelFocused, dispatch]);
 
   if (error) return <div style={{ padding: 24, color: '#f44' }}>{error}</div>;
 
   // Summary view: no fact selected
-  if (!selectedFact) {
+  if (!factPath) {
     const domainEntries = stats ? Object.entries(stats.domains).sort((a, b) => b[1] - a[1]).slice(0, 10) : [];
     const entityEntries = stats ? Object.entries(stats.entities).sort((a, b) => b[1] - a[1]).slice(0, 10) : [];
     const domainCount = stats ? Object.keys(stats.domains).length : 0;
@@ -466,45 +455,57 @@ export function RightPanel({ state, dispatch, navigate: _navigate }: {
     const totalCommits = activity ? String(activity.total) : '\u2014';
 
     return (
-      <div data-testid="stats-view" style={{ padding: '24px 28px', overflowY: 'auto', height: '100%', boxSizing: 'border-box' }}>
-        {stats ? (
-          <>
-            <div style={{ fontSize: 12, color: '#555', marginBottom: 20, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <span>{stats.total} facts across {domainCount} domains</span>
-              {activity?.last_commit && (
-                <span title={new Date(activity.last_commit).toLocaleString()} style={{ color: '#555', fontSize: 11 }}>
-                  {relativeTime(activity.last_commit)}
-                </span>
-              )}
-            </div>
-            <div style={{ display: 'flex', gap: 10, marginBottom: 28, flexWrap: 'wrap' }}>
-              <div style={{ borderLeft: '3px solid #7c9', padding: '10px 16px', background: '#1a1a2a', borderRadius: '0 6px 6px 0', minWidth: 90 }}>
-                <div style={{ fontSize: 10, color: '#666', textTransform: 'uppercase', letterSpacing: 1 }}>Facts</div>
-                <div style={{ fontSize: 22, fontWeight: 600, color: '#eee', marginTop: 2 }}>{stats.total}</div>
+      <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
+        {state.view === 'history' && historyCommit && (
+          <CommitPanel
+            historyCommit={historyCommit}
+            repo={state.repo}
+            selectedFact={factPath}
+            navigate={navigate}
+            rightPanelFocused={state.rightPanelFocused}
+            dispatch={dispatch}
+          />
+        )}
+        <div data-testid="stats-view" style={{ flex: 1, padding: '24px 28px', overflowY: 'auto', boxSizing: 'border-box' }}>
+          {stats ? (
+            <>
+              <div style={{ fontSize: 12, color: '#555', marginBottom: 20, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span>{stats.total} facts across {domainCount} domains</span>
+                {activity?.last_commit && (
+                  <span title={new Date(activity.last_commit).toLocaleString()} style={{ color: '#555', fontSize: 11 }}>
+                    {relativeTime(activity.last_commit)}
+                  </span>
+                )}
               </div>
-              <div style={{ borderLeft: '3px solid #8af', padding: '10px 16px', background: '#1a1a2a', borderRadius: '0 6px 6px 0', minWidth: 90 }}>
-                <div style={{ fontSize: 10, color: '#666', textTransform: 'uppercase', letterSpacing: 1 }}>Confidence</div>
-                <div style={{ fontSize: 22, fontWeight: 600, color: '#eee', marginTop: 2 }}>{stats.avg_confidence.toFixed(2)}</div>
+              <div style={{ display: 'flex', gap: 10, marginBottom: 28, flexWrap: 'wrap' }}>
+                <div style={{ borderLeft: '3px solid #7c9', padding: '10px 16px', background: '#1a1a2a', borderRadius: '0 6px 6px 0', minWidth: 90 }}>
+                  <div style={{ fontSize: 10, color: '#666', textTransform: 'uppercase', letterSpacing: 1 }}>Facts</div>
+                  <div style={{ fontSize: 22, fontWeight: 600, color: '#eee', marginTop: 2 }}>{stats.total}</div>
+                </div>
+                <div style={{ borderLeft: '3px solid #8af', padding: '10px 16px', background: '#1a1a2a', borderRadius: '0 6px 6px 0', minWidth: 90 }}>
+                  <div style={{ fontSize: 10, color: '#666', textTransform: 'uppercase', letterSpacing: 1 }}>Confidence</div>
+                  <div style={{ fontSize: 22, fontWeight: 600, color: '#eee', marginTop: 2 }}>{stats.avg_confidence.toFixed(2)}</div>
+                </div>
+                <div style={{ borderLeft: '3px solid #fa8', padding: '10px 16px', background: '#1a1a2a', borderRadius: '0 6px 6px 0', minWidth: 90 }}>
+                  <div style={{ fontSize: 10, color: '#666', textTransform: 'uppercase', letterSpacing: 1 }}>Domains</div>
+                  <div style={{ fontSize: 22, fontWeight: 600, color: '#eee', marginTop: 2 }}>{domainCount}</div>
+                </div>
+                <div style={{ borderLeft: '3px solid #8af', padding: '10px 16px', background: '#1a1a2a', borderRadius: '0 6px 6px 0', minWidth: 90 }}>
+                  <div style={{ fontSize: 10, color: '#666', textTransform: 'uppercase', letterSpacing: 1 }}>Entities</div>
+                  <div style={{ fontSize: 22, fontWeight: 600, color: '#eee', marginTop: 2 }}>{entityCount}</div>
+                </div>
+                <div style={{ borderLeft: '3px solid #555', padding: '10px 16px', background: '#1a1a2a', borderRadius: '0 6px 6px 0', minWidth: 90 }}>
+                  <div style={{ fontSize: 10, color: '#666', textTransform: 'uppercase', letterSpacing: 1 }}>Commits</div>
+                  <div style={{ fontSize: 22, fontWeight: 600, color: '#eee', marginTop: 2 }}>{totalCommits}</div>
+                </div>
               </div>
-              <div style={{ borderLeft: '3px solid #fa8', padding: '10px 16px', background: '#1a1a2a', borderRadius: '0 6px 6px 0', minWidth: 90 }}>
-                <div style={{ fontSize: 10, color: '#666', textTransform: 'uppercase', letterSpacing: 1 }}>Domains</div>
-                <div style={{ fontSize: 22, fontWeight: 600, color: '#eee', marginTop: 2 }}>{domainCount}</div>
-              </div>
-              <div style={{ borderLeft: '3px solid #8af', padding: '10px 16px', background: '#1a1a2a', borderRadius: '0 6px 6px 0', minWidth: 90 }}>
-                <div style={{ fontSize: 10, color: '#666', textTransform: 'uppercase', letterSpacing: 1 }}>Entities</div>
-                <div style={{ fontSize: 22, fontWeight: 600, color: '#eee', marginTop: 2 }}>{entityCount}</div>
-              </div>
-              <div style={{ borderLeft: '3px solid #555', padding: '10px 16px', background: '#1a1a2a', borderRadius: '0 6px 6px 0', minWidth: 90 }}>
-                <div style={{ fontSize: 10, color: '#666', textTransform: 'uppercase', letterSpacing: 1 }}>Commits</div>
-                <div style={{ fontSize: 22, fontWeight: 600, color: '#eee', marginTop: 2 }}>{totalCommits}</div>
-              </div>
-            </div>
-            <TagCloud label="Domains" entries={domainEntries} color="119,204,153"
-              onTagClick={d => dispatch({ type: 'ADD_FILTER', chip: { category: 'domain', value: d } })} />
-            <TagCloud label="Entities" entries={entityEntries} color="136,170,255"
-              onTagClick={e => dispatch({ type: 'ADD_FILTER', chip: { category: 'entity', value: e } })} />
-          </>
-        ) : <div style={{ color: '#666' }}>No facts indexed in this path.</div>}
+              <TagCloud label="Domains" entries={domainEntries} color="119,204,153"
+                onTagClick={d => dispatch({ type: 'ADD_FILTER', chip: { category: 'domain', value: d } })} />
+              <TagCloud label="Entities" entries={entityEntries} color="136,170,255"
+                onTagClick={e => dispatch({ type: 'ADD_FILTER', chip: { category: 'entity', value: e } })} />
+            </>
+          ) : <div style={{ color: '#666' }}>No facts indexed in this path.</div>}
+        </div>
       </div>
     );
   }
@@ -516,14 +517,18 @@ export function RightPanel({ state, dispatch, navigate: _navigate }: {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
-      {/* Commit panel — shown in history mode */}
-      {inHistoryWithFact && commitDetail && <CommitPanel
-        detail={commitDetail}
-        selectedFact={state.rightSelection}
-        onSelectFact={path => { dispatch({ type: 'SELECT_FACT', path }); dispatch({ type: 'FOCUS_RIGHT_PANEL' }); }}
-      />}
+      {state.view === 'history' && historyCommit && (
+        <CommitPanel
+          historyCommit={historyCommit}
+          repo={state.repo}
+          selectedFact={factPath}
+          navigate={navigate}
+          rightPanelFocused={state.rightPanelFocused}
+          dispatch={dispatch}
+        />
+      )}
       <div style={{ flex: 1, overflow: 'auto' }}>
-        {renderFact(fact, dispatch)}
+        {renderFact(fact, navigate, dispatch)}
       </div>
     </div>
   );
