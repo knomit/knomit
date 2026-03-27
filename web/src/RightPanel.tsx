@@ -614,7 +614,7 @@ export function RightPanel({ state, dispatch, navigate, onExplain }: {
       )}
       {commitPanel}
       <div style={{ flex: 1, overflow: 'auto' }}>
-        {renderFact(fact, navigate, dispatch, canRetract ? () => setConfirmRetract(true) : undefined, () => onExplain?.(fact.path, fact.commit_hash ?? null))}
+        {renderFact(fact, navigate, dispatch, canRetract ? () => setConfirmRetract(true) : undefined, canRetract ? () => onExplain?.(fact.path, fact.commit_hash ?? null) : undefined)}
       </div>
     </div>
   );
