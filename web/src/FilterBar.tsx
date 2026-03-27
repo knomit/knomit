@@ -257,14 +257,31 @@ export function FilterBar({ state, dispatch }: Props) {
     <div style={{
       display: 'flex',
       alignItems: 'center',
-      gap: 6,
-      padding: '4px 12px',
-      background: '#1e1e1e',
-      borderBottom: '1px solid #333',
+      gap: 0,
+      padding: '5px 12px',
+      background: '#0f0f0f',
+      borderBottom: '1px solid #1a1a1a',
       flexWrap: 'wrap',
-      minHeight: 32,
+      minHeight: 34,
       position: 'relative',
     }}>
+      {/* Search box wrapper */}
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 6,
+        flex: 1,
+        background: '#161616',
+        border: '1px solid #242424',
+        borderRadius: 5,
+        padding: '0 10px',
+        minHeight: 26,
+        flexWrap: 'wrap',
+      }}>
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#3a3a3a" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+        <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+      </svg>
+
       {/* "+" button — leftmost */}
       <div ref={pickerRef} style={{ position: 'relative' }}>
         <span
@@ -539,7 +556,7 @@ export function FilterBar({ state, dispatch }: Props) {
         )}
       </div>
 
-
+      </div> {/* end search box wrapper */}
     </div>
   );
 }

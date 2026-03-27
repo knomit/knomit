@@ -42,7 +42,7 @@ export function TopBar({ state, repos, dispatch, onSettingsClick }: Props) {
   const rebuilding = state.tasks.rebuild?.status === 'running';
 
   return (
-    <div style={{ height: 40, background: '#111', borderBottom: '1px solid #333', display: 'flex', alignItems: 'center', padding: '0 16px', gap: 12, flexShrink: 0 }}>
+    <div style={{ height: 40, background: '#111', borderBottom: '1px solid #1c1c1c', display: 'flex', alignItems: 'center', padding: '0 14px', gap: 10, flexShrink: 0 }}>
       <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
         <svg width="20" height="20" viewBox="0 0 80 80">
           <rect x="12" y="12" width="56" height="56" rx="10" transform="rotate(45 40 40)" fill="#7c9"/>

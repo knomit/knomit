@@ -42,6 +42,8 @@ const viewButtons: { view: View; Icon: typeof TreeIcon; label: string }[] = [
   { view: 'history', Icon: HistoryIcon, label: 'History' },
 ];
 
+const shortcuts: Record<View, string> = { tree: '1', chrono: '2', history: '3' };
+
 export function Breadcrumb({ state, dispatch, navigate }: Props) {
   const path = currentPath(state);
   const parts = path.split('/');
@@ -51,11 +53,12 @@ export function Breadcrumb({ state, dispatch, navigate }: Props) {
       display: 'flex',
       alignItems: 'center',
       gap: 4,
-      padding: '4px 12px',
-      background: '#1a1a1a',
-      borderBottom: '1px solid #333',
+      padding: '0 12px',
+      background: '#111',
+      borderBottom: '1px solid #1c1c1c',
       fontSize: 13,
-      minHeight: 28,
+      height: 34,
+      flexShrink: 0,
     }}>
       {/* Breadcrumb segments */}
       {parts.map((part, i) => {
@@ -63,12 +66,13 @@ export function Breadcrumb({ state, dispatch, navigate }: Props) {
         const segmentPath = parts.slice(0, i + 1).join('/');
         return (
           <span key={i} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-            {i > 0 && <span style={{ color: '#555' }}>/</span>}
+            {i > 0 && <span style={{ color: '#333' }}>/</span>}
             <span
               style={{
-                color: isLast ? '#eee' : '#888',
+                color: isLast ? '#ccc' : '#555',
                 cursor: isLast ? 'default' : 'pointer',
                 fontWeight: isLast ? 500 : 400,
+                fontSize: 12,
               }}
               onClick={isLast ? undefined : () => dispatch({ type: 'ADD_FILTER', chip: { category: 'path', value: segmentPath } })}
             >
@@ -80,27 +84,42 @@ export function Breadcrumb({ state, dispatch, navigate }: Props) {
 
       <div style={{ flex: 1 }} />
 
-      {/* View switcher — all buttons go through the navigation manager */}
-      <div style={{ display: 'flex', gap: 2, background: '#1a1a1a', borderRadius: 4, padding: 2 }}>
+      {/* View switcher — segmented control */}
+      <div style={{ display: 'flex', gap: 2, background: '#1a1a1a', borderRadius: 5, padding: 3 }}>
         {viewButtons.map(({ view, Icon, label }) => {
           const active = state.view === view;
           return (
             <button
               key={view}
               onClick={() => navigate({ view })}
-              title={label}
+              title={`${label} (${shortcuts[view]})`}
               style={{
-                background: 'transparent',
+                background: active ? '#252535' : 'transparent',
                 border: 'none',
                 outline: 'none',
-                padding: '3px 8px',
+                padding: '3px 10px',
                 borderRadius: 3,
                 cursor: 'pointer',
                 display: 'flex',
                 alignItems: 'center',
+                gap: 5,
+                color: active ? '#eee' : '#555',
+                fontSize: 11,
+                transition: 'background 0.12s, color 0.12s',
               }}
             >
-              <Icon color={active ? '#eee' : '#666'} />
+              <Icon color="currentColor" />
+              {label}
+              <span style={{
+                fontSize: 8,
+                color: active ? '#666' : '#3a3a3a',
+                background: active ? '#111' : '#111',
+                border: `1px solid ${active ? '#333' : '#252525'}`,
+                borderRadius: 2,
+                padding: '0 3px',
+                lineHeight: '13px',
+                fontFamily: 'monospace',
+              }}>{shortcuts[view]}</span>
             </button>
           );
         })}
