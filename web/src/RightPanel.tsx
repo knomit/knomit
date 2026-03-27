@@ -7,7 +7,7 @@ import type { Fact, Stats, ActivityStats, CommitDetail } from './api';
 import type { AppState, Action } from './state';
 import { currentPath } from './state';
 import { relativeTime, typeStyles, defaultTypeStyle, opStyles, defaultOpStyle } from './utils';
-import { TypeIcon, EpisodeIcon, RetractIcon } from './icons';
+import { TypeIcon, EpisodeIcon, RetractIcon, ExplainIcon } from './icons';
 import type { NavRequest } from './useNavigationManager';
 
 function StatBox({ label, value, color }: { label: string; value: ReactNode; color: string }) {
@@ -77,7 +77,7 @@ function TagCloud({ label, entries, color, onTagClick, focusedValue }: {
   );
 }
 
-function renderFact(fact: Fact, navigate: (req: NavRequest) => void, dispatch: Dispatch<Action>, onRetract?: () => void) {
+function renderFact(fact: Fact, navigate: (req: NavRequest) => void, dispatch: Dispatch<Action>, onRetract?: () => void, onExplain?: () => void) {
   return (
     <div style={{ padding: '24px 28px', overflowY: 'auto', height: '100%', boxSizing: 'border-box' }}>
       <div style={{ marginBottom: 20 }}>
@@ -98,6 +98,15 @@ function renderFact(fact: Fact, navigate: (req: NavRequest) => void, dispatch: D
               >
                 {fact.commit_hash.slice(0, 7)}
               </span>
+            )}
+            {onExplain && (
+              <button
+                title="Explain"
+                onClick={onExplain}
+                style={{ background: 'none', border: 'none', padding: 2, color: '#8af', cursor: 'pointer', display: 'flex', alignItems: 'center', opacity: 0.6 }}
+                onMouseEnter={e => { (e.currentTarget as HTMLElement).style.opacity = '1'; }}
+                onMouseLeave={e => { (e.currentTarget as HTMLElement).style.opacity = '0.6'; }}
+              ><ExplainIcon color="currentColor" size={15} /></button>
             )}
             {onRetract && (
               <button
@@ -126,7 +135,15 @@ function renderFact(fact: Fact, navigate: (req: NavRequest) => void, dispatch: D
               }}><TypeIcon type={fact.type} color={ts.color} size={10} /> {ts.label}</span>
             );
           })()}
-          <div style={{ fontSize: 12, color: '#555' }}>{fact.path}</div>
+          <span
+            onClick={() => fact.commit_hash
+              ? navigate({ view: 'history', historyCommit: fact.commit_hash, factPath: fact.path, factCommit: fact.commit_hash })
+              : navigate({ view: 'history' })
+            }
+            style={{ fontSize: 12, color: '#555', cursor: 'pointer', fontFamily: 'monospace' }}
+            onMouseEnter={e => { (e.currentTarget as HTMLElement).style.color = '#8af'; }}
+            onMouseLeave={e => { (e.currentTarget as HTMLElement).style.color = '#555'; }}
+          >{fact.path}</span>
         </div>
       </div>
 
@@ -462,10 +479,11 @@ function ConfirmModal({ message, onConfirm, onCancel }: {
 
 // ─── Main RightPanel ─────────────────────────────────────────────────────────
 
-export function RightPanel({ state, dispatch, navigate }: {
+export function RightPanel({ state, dispatch, navigate, onExplain }: {
   state: AppState;
   dispatch: Dispatch<Action>;
   navigate: (req: NavRequest) => void;
+  onExplain?: (path: string, commit: string | null) => void;
 }) {
   const [fact, setFact] = useState<Fact | null>(null);
   const [stats, setStats] = useState<Stats | null>(null);
@@ -596,7 +614,7 @@ export function RightPanel({ state, dispatch, navigate }: {
       )}
       {commitPanel}
       <div style={{ flex: 1, overflow: 'auto' }}>
-        {renderFact(fact, navigate, dispatch, canRetract ? () => setConfirmRetract(true) : undefined)}
+        {renderFact(fact, navigate, dispatch, canRetract ? () => setConfirmRetract(true) : undefined, () => onExplain?.(fact.path, fact.commit_hash ?? null))}
       </div>
     </div>
   );

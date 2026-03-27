@@ -10,6 +10,7 @@ import { LeftPanel } from './LeftPanel';
 import { RightPanel } from './RightPanel';
 import { Console } from './Console';
 import { ConnectRemoteModal } from './ConnectRemoteModal';
+import { ExplainView } from './ExplainView';
 import './App.css';
 
 export default function App() {
@@ -17,6 +18,7 @@ export default function App() {
   const { navigate } = useNavigationManager(state, dispatch);
   const [repos, setRepos] = useState<RepoInfo[]>([]);
   const [showOrigin, setShowOrigin] = useState(false);
+  const [explainEntry, setExplainEntry] = useState<{ path: string; commit: string | null } | null>(null);
 
   // Fetch repos list on mount.
   useEffect(() => {
@@ -95,18 +97,30 @@ export default function App() {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', width: '100vw', background: '#141414', color: '#eee', fontFamily: 'system-ui, sans-serif', overflow: 'hidden' }}>
       <TopBar state={state} repos={repos} dispatch={dispatch} onSettingsClick={() => setShowOrigin(true)} />
-      <Breadcrumb state={state} dispatch={dispatch} navigate={navigate} />
-      <FilterBar state={state} dispatch={dispatch} />
+      {explainEntry ? (
+        <div style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
+          <ExplainView
+            repo={state.repo}
+            initialEntry={explainEntry}
+            onClose={() => setExplainEntry(null)}
+          />
+        </div>
+      ) : (
+        <>
+          <Breadcrumb state={state} dispatch={dispatch} navigate={navigate} />
+          <FilterBar state={state} dispatch={dispatch} />
 
-      <div style={{ display: 'flex', flex: 1, overflow: 'hidden', minHeight: 0 }}>
-        <div style={{ width: '35%', minWidth: 180, maxWidth: '50%', borderRight: '1px solid #222', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-          <LeftPanel state={state} dispatch={dispatch} navigate={navigate} />
-        </div>
-        <div style={{ flex: 1, overflow: 'hidden', minWidth: 0 }}>
-          <RightPanel state={state} dispatch={dispatch} navigate={navigate} />
-        </div>
-      </div>
-      <Console state={state} dispatch={dispatch} />
+          <div style={{ display: 'flex', flex: 1, overflow: 'hidden', minHeight: 0 }}>
+            <div style={{ width: '35%', minWidth: 180, maxWidth: '50%', borderRight: '1px solid #222', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+              <LeftPanel state={state} dispatch={dispatch} navigate={navigate} />
+            </div>
+            <div style={{ flex: 1, overflow: 'hidden', minWidth: 0 }}>
+              <RightPanel state={state} dispatch={dispatch} navigate={navigate} onExplain={(path, commit) => setExplainEntry({ path, commit })} />
+            </div>
+          </div>
+          <Console state={state} dispatch={dispatch} />
+        </>
+      )}
       {showOrigin && <ConnectRemoteModal repo={state.repo} onClose={() => setShowOrigin(false)} />}
     </div>
   );
