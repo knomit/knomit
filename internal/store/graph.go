@@ -171,10 +171,18 @@ func (idx *Index) graphDeleteFactTx(tx execer, path string) error {
 }
 
 // graphAddDerivedFromTx creates DERIVED_FROM edges from a new fact to its source facts.
+// It pre-checks target node existence before each MERGE because GraphQLite creates a
+// self-loop (n)-[:DERIVED_FROM]->(n) when the target node is absent — the empty result
+// from the second MATCH degenerates the cross-product to just the source node.
 func (idx *Index) graphAddDerivedFromTx(tx execer, newPath string, sourcePaths []string) error {
 	np := escapeCypherKey(newPath)
 	for _, src := range sourcePaths {
 		sp := escapeCypherKey(src)
+		var count int
+		row := tx.QueryRow(fmt.Sprintf(`SELECT count(*) FROM json_each(cypher('MATCH (s:Fact {path: "%s"}) RETURN s.path AS path'))`, sp))
+		if err := row.Scan(&count); err != nil || count == 0 {
+			continue
+		}
 		q := fmt.Sprintf(`SELECT cypher('MATCH (n:Fact {path: "%s"}), (s:Fact {path: "%s"}) MERGE (n)-[:DERIVED_FROM]->(s)')`, np, sp)
 		if _, err := tx.Exec(q); err != nil {
 			return fmt.Errorf("graph derived_from %s→%s: %w", newPath, src, err)

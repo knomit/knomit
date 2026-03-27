@@ -67,7 +67,7 @@ func (idx *Index) queryRefSummaries(cypher string) ([]RefSummary, error) {
 		return nil, err
 	}
 	defer rows.Close()
-	var result []RefSummary
+	result := []RefSummary{}
 	for rows.Next() {
 		var path, title string
 		// json_extract on a JSON boolean returns an integer in SQLite (1=true, 0=false).
