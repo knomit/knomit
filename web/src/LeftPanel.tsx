@@ -29,6 +29,9 @@ function TreeView({ state, dispatch, navigate }: Props) {
   const hasNonPathFilters = state.filters.some(f => f.category !== 'path');
   const shouldSearch = hasNonPathFilters || !!state.freeText;
 
+  // Stable primitive key — same rationale as ChronoView.filtersKey.
+  const filtersKey = state.filters.map(f => `${f.category}:${f.value}`).join('\0');
+
   // Search: fetch results when filters/freeText change (NOT when selectedFact changes)
   useAsync((stale) => {
     if (!shouldSearch) return;
@@ -51,7 +54,7 @@ function TreeView({ state, dispatch, navigate }: Props) {
         dispatch({ type: 'AMEND_NAV', historyCommit: null, factPath: items[0].fullPath, factCommit: null });
       }
     }).catch(() => { if (!stale()) setChildren([]); });
-  }, [path, state.headCommit, state.freeText, shouldSearch, state.repo, state.filters]);
+  }, [path, state.headCommit, state.freeText, shouldSearch, state.repo, filtersKey]);
 
   // Browse: fetch directory when path/headCommit/selectedFact changes
   useAsync((stale) => {
@@ -186,6 +189,9 @@ function ChronoView({ state, dispatch, navigate }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const itemRefs = useRef<(HTMLDivElement | null)[]>([]);
 
+  const staleStateRef = useRef(state);
+  staleStateRef.current = state;
+
   const path = currentPath(state);
   const { domains, entities, types, eps } = useMemo(() => {
     const domains: string[] = [], entities: string[] = [], types: string[] = [], eps: string[] = [];
@@ -198,6 +204,9 @@ function ChronoView({ state, dispatch, navigate }: Props) {
     return { domains, entities, types, eps };
   }, [state.filters]);
   const typeFilter = types.length === 1 ? types[0] : undefined;
+  // Stable primitive key so useAsync doesn't re-fire when filters array has a new
+  // reference but same content (e.g. after NAV_BACK restores a pushNav-copied array).
+  const filtersKey = state.filters.map(f => `${f.category}:${f.value}`).join('\0');
 
   useAsync((stale) => {
     setLoading(true);
@@ -214,9 +223,14 @@ function ChronoView({ state, dispatch, navigate }: Props) {
       setFacts(r.facts || []);
       setTotal(r.total);
       setLoading(false);
-      if (r.facts?.length > 0) dispatch({ type: 'AMEND_NAV', historyCommit: null, factPath: r.facts[0].path, factCommit: null });
+      const loaded = r.facts || [];
+      // Don't override an already-valid selection (e.g. restored by NAV_BACK).
+      const alreadyInList = loaded.some(f => f.path === staleStateRef.current.factPath);
+      if (loaded.length > 0 && !alreadyInList) {
+        dispatch({ type: 'AMEND_NAV', historyCommit: null, factPath: loaded[0].path, factCommit: null });
+      }
     }).catch(() => { if (!stale()) { setFacts([]); setLoading(false); } });
-  }, [path, state.headCommit, state.freeText, state.repo, typeFilter, domains, entities, eps]);
+  }, [path, state.headCommit, state.freeText, state.repo, typeFilter, filtersKey]);
 
   // Infinite scroll — loadingRef keeps loadMore stable so the IntersectionObserver
   // doesn't reconnect on every loading state flip.
@@ -247,6 +261,16 @@ function ChronoView({ state, dispatch, navigate }: Props) {
     observer.observe(sentinel);
     return () => observer.disconnect();
   }, [loadMore]);
+
+  // Sync visual selection when factPath changes externally (e.g. back navigation).
+  useEffect(() => {
+    if (!state.factPath) return;
+    const idx = facts.findIndex(f => f.path === state.factPath);
+    if (idx >= 0 && idx !== selectedIdx) {
+      setSelectedIdx(idx);
+      itemRefs.current[idx]?.scrollIntoView({ block: 'nearest' });
+    }
+  }, [state.factPath, facts]);
 
   // Keyboard navigation
   const moveSelection = useCallback((delta: 1 | -1) => {

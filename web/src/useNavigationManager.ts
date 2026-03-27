@@ -98,8 +98,15 @@ export function useNavigationManager(
     };
   }, []);
 
-  // Stable wrapper: identity never changes, always dispatches through current ref
+  // Stable wrapper: identity never changes, always dispatches through current ref.
+  // Simple tree/chrono factPath navigations dispatch synchronously so each arrow-key
+  // press gets its own dispatch; React chains the reducer calls and navStack is correct.
+  // History navigation (needs async commitDetail fetch) still goes through the queue.
   const navigate = useRef((req: NavRequest) => {
+    if ('factPath' in req && req.view !== 'history') {
+      dispatchRef.current({ type: 'APPLY_NAV', view: req.view, historyCommit: null, factPath: req.factPath, factCommit: null });
+      return;
+    }
     queue.current.push(req);
     drainRef.current();
   }).current;
