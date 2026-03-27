@@ -128,9 +128,11 @@ export function HistoryTimeline({ state, dispatch, navigate }: Props) {
     return () => observer.disconnect();
   }, [loadPrev]);
 
+  const epFiltersKey = state.filters.filter(f => f.category === 'ep').map(f => f.value).join('\0');
   const epFilters = useMemo(
     () => state.filters.filter(f => f.category === 'ep').map(f => f.value),
-    [state.filters],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [epFiltersKey],
   );
   const freeText = state.freeText.toLowerCase();
 

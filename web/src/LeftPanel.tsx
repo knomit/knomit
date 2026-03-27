@@ -249,7 +249,7 @@ function ChronoView({ state, dispatch, navigate }: Props) {
       setFacts(prev => [...prev, ...(r.facts || [])]);
       setLoading(false);
     }).catch(() => setLoading(false));
-  }, [facts.length, total, state.repo, path, state.freeText, typeFilter, domains, entities, eps]);
+  }, [facts.length, total, state.repo, path, state.freeText, typeFilter, filtersKey]);
 
   useEffect(() => {
     const sentinel = sentinelRef.current;
