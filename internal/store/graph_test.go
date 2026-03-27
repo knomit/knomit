@@ -635,6 +635,66 @@ func derivedFromPaths(t *testing.T, idx *Index, src string) map[string]bool {
 	return result
 }
 
+func TestExplainFact(t *testing.T) {
+	idx, err := New(":memory:")
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer idx.Close()
+
+	// Set up: a → b, a → c, d → a. All current (not deleted).
+	// Upsert targets before referrers so DERIVED_FROM edges resolve correctly
+	// (graphAddDerivedFromTx uses MATCH, so target nodes must already exist).
+	facts := []FactRecord{
+		{Path: "kb/b.md", Title: "Fact B", Domain: []string{"test"}, CommitHash: "abc"},
+		{Path: "kb/c.md", Title: "Fact C", Domain: []string{"test"}, CommitHash: "abc"},
+		{Path: "kb/a.md", Title: "Fact A", Domain: []string{"test"}, Refs: []string{"kb/b.md", "kb/c.md"}, CommitHash: "abc"},
+		{Path: "kb/d.md", Title: "Fact D", Domain: []string{"test"}, Refs: []string{"kb/a.md"}, CommitHash: "abc"},
+	}
+	for _, f := range facts {
+		if err := idx.Upsert(f); err != nil {
+			t.Fatalf("upsert %s: %v", f.Path, err)
+		}
+	}
+
+	res, err := idx.ExplainFact("kb/a.md")
+	if err != nil {
+		t.Fatalf("ExplainFact: %v", err)
+	}
+
+	// Incoming: d references a.
+	if len(res.Incoming) != 1 || res.Incoming[0].Path != "kb/d.md" || res.Incoming[0].Title != "Fact D" {
+		t.Errorf("Incoming = %+v, want [{kb/d.md Fact D}]", res.Incoming)
+	}
+	// Outgoing: a references b and c, both not deleted.
+	if len(res.Outgoing) != 2 {
+		t.Errorf("Outgoing len = %d, want 2", len(res.Outgoing))
+	}
+	for _, r := range res.Outgoing {
+		if r.Deleted {
+			t.Errorf("outgoing %s unexpectedly marked deleted", r.Path)
+		}
+	}
+
+	// Delete kb/c.md and re-explain: c should appear as deleted in outgoing.
+	if err := idx.Delete("kb/c.md"); err != nil {
+		t.Fatalf("delete c: %v", err)
+	}
+	res2, err := idx.ExplainFact("kb/a.md")
+	if err != nil {
+		t.Fatalf("ExplainFact after delete: %v", err)
+	}
+	deletedPaths := map[string]bool{}
+	for _, r := range res2.Outgoing {
+		if r.Deleted {
+			deletedPaths[r.Path] = true
+		}
+	}
+	if !deletedPaths["kb/c.md"] {
+		t.Errorf("expected kb/c.md to be marked deleted, outgoing = %+v", res2.Outgoing)
+	}
+}
+
 func TestSyncRebuildsGraph(t *testing.T) {
 	idx, err := New(":memory:", WithVecDimension(4))
 	if err != nil {
