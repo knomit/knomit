@@ -256,8 +256,15 @@ func (idx *Index) rebuildEmbeddings(progress RebuildProgress) (int, error) {
 // rebuildGraph syncs graph nodes/edges for all facts in a single transaction,
 // then builds similarity edges after commit.
 func (idx *Index) rebuildGraph(progress RebuildProgress) (int, error) {
-	// Read all facts.
-	rows, err := idx.db.Query(`SELECT path, title, blob_hash, type, domain, entities, confidence, sources, refs, commit_hash, evidence_weight FROM facts`)
+	// Read all facts ordered by oldest commit first so that when a fact's
+	// DERIVED_FROM edges are created, its ref targets are already graph nodes.
+	rows, err := idx.db.Query(`
+		SELECT f.path, f.title, f.blob_hash, f.type, f.domain, f.entities, f.confidence, f.sources, f.refs, f.commit_hash, f.evidence_weight
+		FROM facts f
+		LEFT JOIN (
+			SELECT path, MIN(committed_at) AS first_committed FROM commit_log GROUP BY path
+		) cl ON cl.path = f.path
+		ORDER BY cl.first_committed ASC`)
 	if err != nil {
 		return 0, fmt.Errorf("rebuildGraph: query facts: %w", err)
 	}
