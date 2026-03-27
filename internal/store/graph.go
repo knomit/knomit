@@ -39,7 +39,7 @@ func (idx *Index) graphSyncFactTx(tx execer, rec FactRecord) error {
 	}
 
 	// 2. Delete old relationship edges for this fact
-	for _, edgeType := range []string{"TAGGED", "IN_DOMAIN", "UNDER"} {
+	for _, edgeType := range []string{"TAGGED", "IN_DOMAIN", "UNDER", "DERIVED_FROM"} {
 		q = fmt.Sprintf(`SELECT cypher('MATCH (f:Fact {path: "%s"})-[r:%s]->() DELETE r')`, path, edgeType)
 		if _, err := tx.Exec(q); err != nil {
 			return fmt.Errorf("graph delete old %s edges: %w", edgeType, err)
@@ -65,6 +65,19 @@ func (idx *Index) graphSyncFactTx(tx execer, rec FactRecord) error {
 	// 5. MERGE OntologyNode hierarchy + UNDER edge
 	if err := idx.graphMergeOntologyHierarchy(tx, rec.Path); err != nil {
 		return err
+	}
+
+	// 6. Sync DERIVED_FROM edges from local refs (invariant: always matches rec.Refs).
+	var localRefs []string
+	for _, r := range rec.Refs {
+		if !strings.HasPrefix(r, "http://") && !strings.HasPrefix(r, "https://") {
+			localRefs = append(localRefs, r)
+		}
+	}
+	if len(localRefs) > 0 {
+		if err := idx.graphAddDerivedFromTx(tx, rec.Path, localRefs); err != nil {
+			return fmt.Errorf("graph sync derived_from: %w", err)
+		}
 	}
 
 	return nil
@@ -163,11 +176,16 @@ func (idx *Index) GraphAddDerivedFrom(newPath string, sourcePaths []string) erro
 
 // graphAddDerivedFrom creates DERIVED_FROM edges from a new fact to its source facts.
 func (idx *Index) graphAddDerivedFrom(newPath string, sourcePaths []string) error {
+	return idx.graphAddDerivedFromTx(idx.db, newPath, sourcePaths)
+}
+
+// graphAddDerivedFromTx is the transactional version of graphAddDerivedFrom.
+func (idx *Index) graphAddDerivedFromTx(tx execer, newPath string, sourcePaths []string) error {
 	np := escapeCypherKey(newPath)
 	for _, src := range sourcePaths {
 		sp := escapeCypherKey(src)
 		q := fmt.Sprintf(`SELECT cypher('MATCH (n:Fact {path: "%s"}), (s:Fact {path: "%s"}) MERGE (n)-[:DERIVED_FROM]->(s)')`, np, sp)
-		if _, err := idx.db.Exec(q); err != nil {
+		if _, err := tx.Exec(q); err != nil {
 			return fmt.Errorf("graph derived_from %s→%s: %w", newPath, src, err)
 		}
 	}

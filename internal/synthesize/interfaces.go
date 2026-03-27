@@ -21,7 +21,6 @@ type SearchIndex interface {
 	Upsert(r store.FactRecord) error
 	Delete(path string) error
 	ClusterFacts(resolution float64, minCommunitySize int) (store.ClusterResult, error)
-	GraphAddDerivedFrom(newPath string, sourcePaths []string) error
 }
 
 // ProgressEvent carries progress information from the pipeline to the caller.

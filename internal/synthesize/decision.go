@@ -117,10 +117,6 @@ func ApplyPruneDecisions(
 			continue
 		}
 		_ = idx.Upsert(store.NewFactRecord(merged, blobHash, commitHash))
-		if err := idx.GraphAddDerivedFrom(merged.Path(), m.Paths); err != nil {
-			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("derived_from %s: %v", merged.Path(), err)})
-		}
-
 
 		// Delete source facts (losers get retract tag).
 		for _, src := range m.Paths {
@@ -193,11 +189,6 @@ func ApplyDistillDecisions(
 			continue
 		}
 		_ = idx.Upsert(store.NewFactRecord(f, blobHash, commitHash))
-		if len(df.Refs) > 0 {
-			if err := idx.GraphAddDerivedFrom(f.Path(), df.Refs); err != nil {
-				onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("derived_from %s: %v", f.Path(), err)})
-			}
-		}
 
 		onProgress(ProgressEvent{Phase: "detail-learn", Message: "learn " + f.Path()})
 		stats.Synthesized++

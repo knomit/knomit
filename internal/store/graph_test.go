@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -562,6 +563,76 @@ func (m *mockGitReader) ListAllWithHash() ([]string, []string, error) {
 		hashes = append(hashes, hash)
 	}
 	return paths, hashes, nil
+}
+
+func TestDerivedFromInvariant(t *testing.T) {
+	idx, err := New(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer idx.Close()
+
+	// Upsert a fact with two local refs and one external URL.
+	rec := FactRecord{
+		Path:       "kb/a.md",
+		Title:      "A",
+		Domain:     []string{"test"},
+		Refs:       []string{"kb/b.md", "kb/c.md", "https://example.com"},
+		CommitHash: "abc",
+	}
+	// Upsert b and c first so the graph nodes exist.
+	for _, path := range []string{"kb/b.md", "kb/c.md"} {
+		if err := idx.Upsert(FactRecord{Path: path, Title: path, Domain: []string{"test"}, CommitHash: "abc"}); err != nil {
+			t.Fatalf("upsert %s: %v", path, err)
+		}
+	}
+	if err := idx.Upsert(rec); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+
+	// Query DERIVED_FROM edges for kb/a.md.
+	got := derivedFromPaths(t, idx, "kb/a.md")
+	want := map[string]bool{"kb/b.md": true, "kb/c.md": true}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("DERIVED_FROM edges = %v, want %v", got, want)
+	}
+
+	// Re-upsert with changed refs: drop kb/c.md, add kb/d.md.
+	if err := idx.Upsert(FactRecord{Path: "kb/d.md", Title: "D", Domain: []string{"test"}, CommitHash: "abc"}); err != nil {
+		t.Fatalf("upsert d: %v", err)
+	}
+	rec.Refs = []string{"kb/b.md", "kb/d.md"}
+	if err := idx.Upsert(rec); err != nil {
+		t.Fatalf("re-upsert: %v", err)
+	}
+	got = derivedFromPaths(t, idx, "kb/a.md")
+	want = map[string]bool{"kb/b.md": true, "kb/d.md": true}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("after re-upsert DERIVED_FROM = %v, want %v", got, want)
+	}
+}
+
+// derivedFromPaths returns the set of target paths for DERIVED_FROM edges from src.
+func derivedFromPaths(t *testing.T, idx *Index, src string) map[string]bool {
+	t.Helper()
+	q := fmt.Sprintf(
+		`SELECT json_extract(value, '$.path') FROM json_each(cypher('MATCH (f:Fact {path: "%s"})-[:DERIVED_FROM]->(t:Fact) RETURN t.path AS path'))`,
+		escapeCypherKey(src),
+	)
+	rows, err := idx.db.Query(q)
+	if err != nil {
+		t.Fatalf("query DERIVED_FROM: %v", err)
+	}
+	defer rows.Close()
+	result := map[string]bool{}
+	for rows.Next() {
+		var p string
+		rows.Scan(&p)
+		if p != "" {
+			result[p] = true
+		}
+	}
+	return result
 }
 
 func TestSyncRebuildsGraph(t *testing.T) {

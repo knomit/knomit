@@ -56,7 +56,6 @@ func TestReviewLoopIntegration(t *testing.T) {
 	// For prune/distill apply: delete calls go to real git, index delete goes to mock.
 	idx.EXPECT().Delete(gomock.Any()).Return(nil).AnyTimes()
 	idx.EXPECT().Upsert(gomock.Any()).Return(nil).AnyTimes()
-	idx.EXPECT().GraphAddDerivedFrom(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 
 	r := NewReviewer(gitStore, idx, reviewIdx, NewMockEmbedder(ctrl), nil)
 

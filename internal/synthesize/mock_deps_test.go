@@ -231,20 +231,6 @@ func (mr *MockSearchIndexMockRecorder) Delete(path any) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Delete", reflect.TypeOf((*MockSearchIndex)(nil).Delete), path)
 }
 
-// GraphAddDerivedFrom mocks base method.
-func (m *MockSearchIndex) GraphAddDerivedFrom(newPath string, sourcePaths []string) error {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GraphAddDerivedFrom", newPath, sourcePaths)
-	ret0, _ := ret[0].(error)
-	return ret0
-}
-
-// GraphAddDerivedFrom indicates an expected call of GraphAddDerivedFrom.
-func (mr *MockSearchIndexMockRecorder) GraphAddDerivedFrom(newPath, sourcePaths any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GraphAddDerivedFrom", reflect.TypeOf((*MockSearchIndex)(nil).GraphAddDerivedFrom), newPath, sourcePaths)
-}
-
 // Search mocks base method.
 func (m *MockSearchIndex) Search(q store.SearchQuery) ([]store.SearchResult, error) {
 	m.ctrl.T.Helper()

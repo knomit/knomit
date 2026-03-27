@@ -102,7 +102,6 @@ func TestApplyPruneDecisions_Merge(t *testing.T) {
 	// Write merged fact.
 	gs.EXPECT().WriteFile("kb/test/merged.md", gomock.Any(), gomock.Any(), gomock.Any()).Return("c3", "b3", nil)
 	idx.EXPECT().Upsert(gomock.Any()).Return(nil)
-	idx.EXPECT().GraphAddDerivedFrom("kb/test/merged.md", []string{"kb/test/a.md", "kb/test/b.md"}).Return(nil)
 	// Delete sources.
 	gs.EXPECT().DeleteFile("kb/test/a.md", gomock.Any(), gomock.Any()).Return("c4", nil)
 	idx.EXPECT().Delete("kb/test/a.md").Return(nil)
@@ -151,8 +150,6 @@ func TestApplyPruneDecisions_NoDoubleDelete(t *testing.T) {
 	// Merge write.
 	gs.EXPECT().WriteFile("kb/test/merged.md", gomock.Any(), gomock.Any(), gomock.Any()).Return("c2", "b2", nil)
 	idx.EXPECT().Upsert(gomock.Any()).Return(nil)
-	idx.EXPECT().GraphAddDerivedFrom(gomock.Any(), gomock.Any()).Return(nil)
-
 
 	decisions := []PruneDecision{
 		{Path: "kb/test/a.md", Action: "retract"},
@@ -203,8 +200,6 @@ func TestApplyDistillDecisions_SynthesizeAndRetract(t *testing.T) {
 		}
 		return nil
 	})
-	idx.EXPECT().GraphAddDerivedFrom(gomock.Any(), []string{"kb/test/src1.md", "kb/test/src2.md"}).Return(nil)
-
 
 	// Retract.
 	gs.EXPECT().DeleteFile("kb/test/old.md", gomock.Any(), gomock.Any()).Return("c2", nil)

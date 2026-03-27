@@ -425,7 +425,6 @@ func TestContinueSession_DistillResponse(t *testing.T) {
 	gs.EXPECT().ReadFile("kb/go/two.md").Return(factContent("Fact two", "Body two."), nil)
 	gs.EXPECT().WriteFile(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return("c1", "b1", nil)
 	idx.EXPECT().Upsert(gomock.Any()).Return(nil)
-	idx.EXPECT().GraphAddDerivedFrom(gomock.Any(), gomock.Any()).Return(nil)
 
 	gs.EXPECT().DeleteFile("kb/go/one.md", gomock.Any(), gomock.Any()).Return("c2", nil)
 	idx.EXPECT().Delete("kb/go/one.md").Return(nil)
@@ -626,7 +625,6 @@ func TestContinueSession_RAPTOR_EnqueuesDeeper(t *testing.T) {
 	gs.EXPECT().ReadFile("kb/go/two.md").Return(factContent("Fact two", "Body two."), nil)
 	gs.EXPECT().WriteFile(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return("c1", "b1", nil).Times(2)
 	idx.EXPECT().Upsert(gomock.Any()).Return(nil).Times(2)
-	idx.EXPECT().GraphAddDerivedFrom(gomock.Any(), gomock.Any()).Return(nil).Times(2)
 
 	gs.EXPECT().DeleteFile("kb/go/three.md", gomock.Any(), gomock.Any()).Return("c2", nil)
 	idx.EXPECT().Delete("kb/go/three.md").Return(nil)
