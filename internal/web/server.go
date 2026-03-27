@@ -53,6 +53,7 @@ func NewRouterWithSessionManager(rm *repos.Manager, gitHandler http.Handler, emb
 		sub.Put("/fact", handleFactWrite())
 		sub.Delete("/fact", handleFactRetract())
 		sub.Get("/search", handleSearch())
+		sub.Get("/explain", handleExplain())
 		sub.Get("/history", handleHistoryPaginated())
 		sub.Get("/commit", handleCommitDetail())
 		sub.Get("/stats", handleStats())
