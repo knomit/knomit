@@ -277,4 +277,10 @@ export const api = {
       .then(r => { if (!r.ok) return r.json().then(e => { throw new Error(e.error || r.statusText); }); return r.json(); }),
   completions: (repo: string, category: string, prefix = ''): Promise<{ values: string[] }> =>
     fetch(`${base(repo)}/completions?category=${encodeURIComponent(category)}&prefix=${encodeURIComponent(prefix)}`).then(r => r.json()),
+  explain: (repo: string, path: string): Promise<{
+    incoming: { path: string; title: string }[];
+    outgoing: { path: string; title: string; deleted: boolean }[];
+  }> =>
+    fetch(`${base(repo)}/explain?path=${encodeURIComponent(path)}`)
+      .then(r => r.ok ? r.json() : r.json().then((e: { error: string }) => { throw new Error(e.error || r.statusText); })),
 };
