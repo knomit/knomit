@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Dispatch, ReactNode } from 'react';
 import { useAsync } from './hooks';
 import ReactMarkdown from 'react-markdown';
@@ -7,7 +7,7 @@ import type { Fact, Stats, ActivityStats, CommitDetail } from './api';
 import type { AppState, Action } from './state';
 import { currentPath } from './state';
 import { relativeTime, typeStyles, defaultTypeStyle, opStyles, defaultOpStyle } from './utils';
-import { TypeIcon, EpisodeIcon } from './icons';
+import { TypeIcon, EpisodeIcon, RetractIcon } from './icons';
 import type { NavRequest } from './useNavigationManager';
 
 function StatBox({ label, value, color }: { label: string; value: ReactNode; color: string }) {
@@ -77,7 +77,7 @@ function TagCloud({ label, entries, color, onTagClick, focusedValue }: {
   );
 }
 
-function renderFact(fact: Fact, navigate: (req: NavRequest) => void, dispatch: Dispatch<Action>) {
+function renderFact(fact: Fact, navigate: (req: NavRequest) => void, dispatch: Dispatch<Action>, onRetract?: () => void) {
   return (
     <div style={{ padding: '24px 28px', overflowY: 'auto', height: '100%', boxSizing: 'border-box' }}>
       <div style={{ marginBottom: 20 }}>
@@ -98,6 +98,19 @@ function renderFact(fact: Fact, navigate: (req: NavRequest) => void, dispatch: D
               >
                 {fact.commit_hash.slice(0, 7)}
               </span>
+            )}
+            {onRetract && (
+              <button
+                data-testid="retract-btn"
+                title="Retract fact"
+                onClick={onRetract}
+                style={{
+                  background: 'none', border: 'none', padding: 2,
+                  color: '#f66', cursor: 'pointer', display: 'flex', alignItems: 'center', opacity: 0.6,
+                }}
+                onMouseEnter={e => { (e.currentTarget as HTMLElement).style.opacity = '1'; }}
+                onMouseLeave={e => { (e.currentTarget as HTMLElement).style.opacity = '0.6'; }}
+              ><RetractIcon color="#f66" size={15} /></button>
             )}
           </span>
         </div>
@@ -253,9 +266,10 @@ function CommitPanel({ historyCommit, repo, selectedFact, navigate, rightPanelFo
     }
   }, [activeIdx]);
 
-  // Auto-select first file when historyCommit is set but no fact is open yet.
+  // Auto-select first file when no fact is open or the current fact isn't in this commit.
   useEffect(() => {
-    if (!detail || selectedFact) return;
+    if (!detail) return;
+    if (selectedFact && detail.files?.some(f => f.path === selectedFact)) return;
     const first = detail.files?.[0];
     if (first) dispatch({ type: 'AMEND_NAV', historyCommit, factPath: first.path, factCommit: historyCommit });
   }, [detail, selectedFact, historyCommit, dispatch]);
@@ -391,6 +405,61 @@ function CommitPanel({ historyCommit, repo, selectedFact, navigate, rightPanelFo
   );
 }
 
+// ─── Confirm Modal ───────────────────────────────────────────────────────────
+
+function ConfirmModal({ message, onConfirm, onCancel }: {
+  message: string;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  // Close on Escape
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onCancel();
+      if (e.key === 'Enter') onConfirm();
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [onConfirm, onCancel]);
+
+  return (
+    <div
+      onClick={onCancel}
+      style={{
+        position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000,
+      }}
+    >
+      <div
+        onClick={e => e.stopPropagation()}
+        style={{
+          background: '#1a1a2a', border: '1px solid #333', borderRadius: 8,
+          padding: '24px 28px', maxWidth: 400, width: '90%', boxShadow: '0 8px 32px rgba(0,0,0,0.6)',
+        }}
+      >
+        <div style={{ fontSize: 13, color: '#ccc', lineHeight: 1.6, marginBottom: 20 }}>{message}</div>
+        <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+          <button
+            onClick={onCancel}
+            style={{
+              background: 'none', border: '1px solid #333', borderRadius: 4,
+              color: '#888', cursor: 'pointer', padding: '6px 16px', fontSize: 12,
+            }}
+          >Cancel</button>
+          <button
+            data-testid="retract-confirm-btn"
+            onClick={onConfirm}
+            style={{
+              background: '#2e1a1a', border: '1px solid rgba(255,80,80,0.4)', borderRadius: 4,
+              color: '#f66', cursor: 'pointer', padding: '6px 16px', fontSize: 12,
+            }}
+          >Retract</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Main RightPanel ─────────────────────────────────────────────────────────
 
 export function RightPanel({ state, dispatch, navigate }: {
@@ -402,6 +471,8 @@ export function RightPanel({ state, dispatch, navigate }: {
   const [stats, setStats] = useState<Stats | null>(null);
   const [activity, setActivity] = useState<ActivityStats | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [retracting, setRetracting] = useState(false);
+  const [confirmRetract, setConfirmRetract] = useState(false);
   const path = currentPath(state);
 
   const factPath = state.factPath;
@@ -431,6 +502,22 @@ export function RightPanel({ state, dispatch, navigate }: {
       setActivity(a);
     });
   }, [factPath, state.repo, path, state.headCommit]);
+
+  const doRetract = useCallback(() => {
+    if (!fact || retracting) return;
+    setConfirmRetract(false);
+    setRetracting(true);
+    api.retractFact(state.repo, fact.path)
+      .then(() => {
+        setRetracting(false);
+        // Clear the fact without touching headCommit. The git observer will
+        // sync the index and then broadcast a status event with the new commit
+        // hash, which triggers SET_HEAD in App.tsx. Only then will headCommit
+        // change, ensuring the search/chrono re-fire against a fresh index.
+        dispatch({ type: 'AMEND_NAV', historyCommit: null, factPath: null, factCommit: null });
+      })
+      .catch(e => { setRetracting(false); setError(String(e)); });
+  }, [fact, retracting, state.repo, dispatch]);
 
   // Keyboard: ArrowLeft blurs right panel; j/k navigation is handled inside CommitPanel
   useEffect(() => {
@@ -496,11 +583,20 @@ export function RightPanel({ state, dispatch, navigate }: {
 
   if (fact.parse_error) return <FactEditor fact={fact} repo={state.repo} onSaved={setFact} />;
 
+  const canRetract = state.view !== 'history';
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
+      {confirmRetract && (
+        <ConfirmModal
+          message={`Are you sure you want to retract "${fact.title || fact.path}"?`}
+          onConfirm={doRetract}
+          onCancel={() => setConfirmRetract(false)}
+        />
+      )}
       {commitPanel}
       <div style={{ flex: 1, overflow: 'auto' }}>
-        {renderFact(fact, navigate, dispatch)}
+        {renderFact(fact, navigate, dispatch, canRetract ? () => setConfirmRetract(true) : undefined)}
       </div>
     </div>
   );

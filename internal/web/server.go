@@ -51,6 +51,7 @@ func NewRouterWithSessionManager(rm *repos.Manager, gitHandler http.Handler, emb
 		sub.Get("/browse", handleBrowse(ontologyRoot))
 		sub.Get("/fact", handleFact())
 		sub.Put("/fact", handleFactWrite())
+		sub.Delete("/fact", handleFactRetract())
 		sub.Get("/search", handleSearch())
 		sub.Get("/history", handleHistoryPaginated())
 		sub.Get("/commit", handleCommitDetail())

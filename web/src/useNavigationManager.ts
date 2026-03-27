@@ -25,7 +25,7 @@ export async function resolveNavRequest(
   // ── Mode-switch: no explicit selection provided ────────────────────────────
   if (!('factPath' in req)) {
     if (req.view === 'history') {
-      const { factPath, factCommit, headCommit, repo } = state;
+      const { factPath, factCommit, headCommit } = state;
       if (factPath && factCommit) {
         // Already have a fact at a known commit — land there immediately.
         dispatch({ type: 'APPLY_NAV', view: 'history', historyCommit: factCommit, factPath, factCommit });
@@ -37,8 +37,11 @@ export async function resolveNavRequest(
         dispatch({ type: 'APPLY_NAV', view: 'history', historyCommit: null, factPath: null, factCommit: null });
       }
     } else if (req.view === 'tree') {
-      // Preserve current fact so the same file stays visible at HEAD.
-      dispatch({ type: 'APPLY_NAV', view: 'tree', historyCommit: null, factPath: state.factPath, factCommit: null });
+      // Preserve current fact when already in tree/chrono (same HEAD context).
+      // Clear it when coming from history — the selected fact was at a specific commit
+      // and may not exist at HEAD.
+      const factPath = state.view === 'history' ? null : state.factPath;
+      dispatch({ type: 'APPLY_NAV', view: 'tree', historyCommit: null, factPath, factCommit: null });
     } else {
       // chrono: ChronoView will amend selection once it fetches recent facts.
       dispatch({ type: 'APPLY_NAV', view: 'chrono', historyCommit: null, factPath: null, factCommit: null });

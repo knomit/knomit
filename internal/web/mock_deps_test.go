@@ -85,6 +85,21 @@ func (mr *MockGitStoreMockRecorder) CommitDetail(commitHash any) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CommitDetail", reflect.TypeOf((*MockGitStore)(nil).CommitDetail), commitHash)
 }
 
+// DeleteFile mocks base method.
+func (m *MockGitStore) DeleteFile(path, message, operation string) (string, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "DeleteFile", path, message, operation)
+	ret0, _ := ret[0].(string)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// DeleteFile indicates an expected call of DeleteFile.
+func (mr *MockGitStoreMockRecorder) DeleteFile(path, message, operation any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteFile", reflect.TypeOf((*MockGitStore)(nil).DeleteFile), path, message, operation)
+}
+
 // HeadCommit mocks base method.
 func (m *MockGitStore) HeadCommit() (string, error) {
 	m.ctrl.T.Helper()

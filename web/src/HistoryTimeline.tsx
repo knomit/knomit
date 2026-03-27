@@ -159,8 +159,12 @@ export function HistoryTimeline({ state, dispatch, navigate }: Props) {
     setSelectedIdx(next);
     itemRefs.current[next]?.scrollIntoView({ block: 'nearest' });
     const entry = filteredEntries[next];
-    if (entry) navigate({ view: 'history', historyCommit: entry.commit, factPath: null });
-  }, [selectedIdx, filteredEntries, navigate]);
+    // Dispatch synchronously so state.historyCommit tracks local selectedIdx without lag.
+    // Keep the current factPath so the right panel doesn't flash through the stats view while
+    // CommitPanel fetches the new commit detail. CommitPanel will switch to the first file if
+    // the current fact doesn't exist in the new commit.
+    if (entry) dispatch({ type: 'APPLY_NAV', view: 'history', historyCommit: entry.commit, factPath: staleStateRef.current.factPath, factCommit: entry.commit });
+  }, [selectedIdx, filteredEntries, dispatch]);
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -179,7 +183,7 @@ export function HistoryTimeline({ state, dispatch, navigate }: Props) {
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [state.rightPanelFocused, state.view, filteredEntries, selectedIdx, moveSelection, dispatch]);
+  }, [state.rightPanelFocused, state.view, filteredEntries, moveSelection, dispatch]);
 
   const factCountBadge = (entry: HistoryEntryWithTags) => {
     const total = (entry.files?.added || 0) + (entry.files?.modified || 0) + (entry.files?.deleted || 0);

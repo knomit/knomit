@@ -767,6 +767,51 @@ func TestHandleSearch_EpFilter(t *testing.T) {
 	}
 }
 
+// --- handleFactRetract ---
+
+func TestHandleFactRetract_Success(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	gs := NewMockGitStore(ctrl)
+	gs.EXPECT().DeleteFile("kb/test.md", "manual-review: retract kb/test.md", "retract").Return("abc1234", nil)
+
+	handler := newTestRouter(gs, nil)
+	rr := doRequest(t, handler, http.MethodDelete, "/api/v1/knomit/fact?path=kb/test.md", "")
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", rr.Code, rr.Body.String())
+	}
+	var resp map[string]any
+	json.NewDecoder(rr.Body).Decode(&resp)
+	if resp["commit"] != "abc1234" {
+		t.Errorf("commit = %v, want abc1234", resp["commit"])
+	}
+}
+
+func TestHandleFactRetract_MissingPath(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	gs := NewMockGitStore(ctrl)
+
+	handler := newTestRouter(gs, nil)
+	rr := doRequest(t, handler, http.MethodDelete, "/api/v1/knomit/fact", "")
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rr.Code)
+	}
+}
+
+func TestHandleFactRetract_DeleteError(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	gs := NewMockGitStore(ctrl)
+	gs.EXPECT().DeleteFile("kb/missing.md", "manual-review: retract kb/missing.md", "retract").Return("", fmt.Errorf("file not found"))
+
+	handler := newTestRouter(gs, nil)
+	rr := doRequest(t, handler, http.MethodDelete, "/api/v1/knomit/fact?path=kb/missing.md", "")
+
+	if rr.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500", rr.Code)
+	}
+}
+
 // --- fakeAdapter for synthesize tests ---
 
 type fakeAdapter struct{}

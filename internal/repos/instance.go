@@ -26,6 +26,7 @@ type GitStore interface {
 	ReadFileAtCommit(path, commitHash string) (string, error)
 	ReadFileLastCommit(path, beforeCommitHash string) (content string, fromCommit string, err error)
 	WriteFile(path, content, message, operation string) (commitHash, blobHash string, err error)
+	DeleteFile(path, message, operation string) (commitHash string, err error)
 	Log(path string) ([]git.LogEntry, error)
 	LogPaginated(path string, limit int, after, from, before string) ([]git.LogEntryWithTags, string, string, error)
 	CommitDetail(commitHash string) (*git.CommitDetailResult, error)

@@ -272,6 +272,9 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(opts),
     }).then(r => { if (!r.ok) throw new Error(r.statusText); return r.json(); }),
+  retractFact: (repo: string, path: string): Promise<{ commit: string }> =>
+    fetch(`${base(repo)}/fact?path=${encodeURIComponent(path)}`, { method: 'DELETE' })
+      .then(r => { if (!r.ok) return r.json().then(e => { throw new Error(e.error || r.statusText); }); return r.json(); }),
   completions: (repo: string, category: string, prefix = ''): Promise<{ values: string[] }> =>
     fetch(`${base(repo)}/completions?category=${encodeURIComponent(category)}&prefix=${encodeURIComponent(prefix)}`).then(r => r.json()),
 };

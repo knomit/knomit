@@ -282,6 +282,31 @@ func handleFactWrite() http.HandlerFunc {
 	}
 }
 
+// handleFactRetract handles DELETE /api/v1/{repo}/fact?path=<path>.
+// Deletes the fact file and commits with operation "retract".
+func handleFactRetract() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		ri := repos.RepoFromContext(r.Context())
+		ri.RLock()
+		defer ri.RUnlock()
+
+		path := r.URL.Query().Get("path")
+		if path == "" {
+			writeError(w, http.StatusBadRequest, "path query parameter is required")
+			return
+		}
+
+		msg := "manual-review: retract " + path
+		commitHash, err := ri.GS.DeleteFile(path, msg, "retract")
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, fmt.Sprintf("retract failed: %v", err))
+			return
+		}
+
+		writeJSON(w, http.StatusOK, map[string]string{"commit": commitHash})
+	}
+}
+
 // handleSearch handles GET /api/v1/{repo}/search?q=<query>&entities=<e1,e2>&domain=<d1,d2>&path=<p>&min_confidence=<f>&limit=<n>.
 // The entities and domain filters are AND-combined (all specified values
 // must match). Each accepts a comma-separated list of terms.
