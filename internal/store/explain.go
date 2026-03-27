@@ -48,6 +48,8 @@ func (idx *Index) ExplainFact(path string) (ExplainResult, error) {
 // literal false→string("0"). Returns true only for int64(1).
 func isDeletedVal(v interface{}) bool {
 	switch val := v.(type) {
+	case bool:
+		return val
 	case int64:
 		return val == 1
 	case []byte:
@@ -73,7 +75,7 @@ func (idx *Index) queryRefSummaries(cypher string) ([]RefSummary, error) {
 		// Scan into interface{} to handle both cases uniformly.
 		var deletedRaw interface{}
 		if err := rows.Scan(&path, &title, &deletedRaw); err != nil {
-			continue
+			return nil, fmt.Errorf("scan ref summary: %w", err)
 		}
 		if path == "" {
 			continue
