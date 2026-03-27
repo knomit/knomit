@@ -12,10 +12,11 @@ import (
 // graphSyncFact creates or updates graph nodes and edges for a fact.
 // This implements the Learn mutation from the spec:
 //  1. MERGE Fact node
-//  2. Delete old TAGGED, IN_DOMAIN edges
+//  2. Delete old TAGGED, IN_DOMAIN, UNDER, DERIVED_FROM edges
 //  3. MERGE Entity nodes + TAGGED edges
 //  4. MERGE Domain hierarchy + IN_DOMAIN edges
 //  5. MERGE OntologyNode hierarchy + UNDER edge
+//  6. Sync DERIVED_FROM edges from local refs
 func (idx *Index) graphSyncFact(rec FactRecord) error {
 	return idx.graphSyncFactTx(idx.db, rec)
 }
@@ -167,11 +168,6 @@ func (idx *Index) graphDeleteFactTx(tx execer, path string) error {
 		return fmt.Errorf("graph mark deleted: %w", err)
 	}
 	return nil
-}
-
-// GraphAddDerivedFrom creates DERIVED_FROM edges from a new fact to source facts.
-func (idx *Index) GraphAddDerivedFrom(newPath string, sourcePaths []string) error {
-	return idx.graphAddDerivedFrom(newPath, sourcePaths)
 }
 
 // graphAddDerivedFrom creates DERIVED_FROM edges from a new fact to its source facts.

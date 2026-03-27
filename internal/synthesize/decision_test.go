@@ -239,11 +239,9 @@ func TestApplyDistillDecisions_NoRefs(t *testing.T) {
 	gs := NewMockGitStore(ctrl)
 	idx := NewMockSearchIndex(ctrl)
 
-	// When refs is empty, GraphAddDerivedFrom should NOT be called.
+	// Upsert handles DERIVED_FROM; no separate call needed.
 	gs.EXPECT().WriteFile(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return("c1", "b1", nil)
 	idx.EXPECT().Upsert(gomock.Any()).Return(nil)
-	// No GraphAddDerivedFrom expectation.
-
 
 	synthesized := []distillFact{
 		{
