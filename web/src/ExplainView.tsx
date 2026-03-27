@@ -52,12 +52,9 @@ export function ExplainView({ repo, initialEntry, onClose }: Props) {
   };
 
   const goBack = () => {
-    setBackStack(prev => {
-      const next = [...prev];
-      const entry = next.pop()!;
-      setCurrent(entry);
-      return next;
-    });
+    if (backStack.length === 0) return;
+    setCurrent(backStack[backStack.length - 1]);
+    setBackStack(prev => prev.slice(0, -1));
   };
 
   return (
