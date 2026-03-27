@@ -170,12 +170,7 @@ func (idx *Index) graphDeleteFactTx(tx execer, path string) error {
 	return nil
 }
 
-// graphAddDerivedFrom creates DERIVED_FROM edges from a new fact to its source facts.
-func (idx *Index) graphAddDerivedFrom(newPath string, sourcePaths []string) error {
-	return idx.graphAddDerivedFromTx(idx.db, newPath, sourcePaths)
-}
-
-// graphAddDerivedFromTx is the transactional version of graphAddDerivedFrom.
+// graphAddDerivedFromTx creates DERIVED_FROM edges from a new fact to its source facts.
 func (idx *Index) graphAddDerivedFromTx(tx execer, newPath string, sourcePaths []string) error {
 	np := escapeCypherKey(newPath)
 	for _, src := range sourcePaths {
