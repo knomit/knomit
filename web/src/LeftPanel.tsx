@@ -23,6 +23,8 @@ function TreeView({ state, dispatch, navigate }: Props) {
   const [children, setChildren] = useState<DirChild[]>([]);
   const [selectedIdx, setSelectedIdx] = useState(-1);
   const itemRefs = useRef<(HTMLDivElement | null)[]>([]);
+  const staleStateRef = useRef(state);
+  staleStateRef.current = state;
   const path = currentPath(state);
 
   // Determine if we should search instead of browse
@@ -49,8 +51,10 @@ function TreeView({ state, dispatch, navigate }: Props) {
         fullPath: sr.path,
       }));
       setChildren(items);
-      setSelectedIdx(items.length > 0 ? 0 : -1);
-      if (items.length > 0 && items[0].fullPath) {
+      const currentFactPath = staleStateRef.current.factPath;
+      const matchIdx = items.findIndex(it => it.fullPath === currentFactPath);
+      setSelectedIdx(matchIdx >= 0 ? matchIdx : items.length > 0 ? 0 : -1);
+      if (matchIdx < 0 && items.length > 0 && items[0].fullPath) {
         dispatch({ type: 'AMEND_NAV', historyCommit: null, factPath: items[0].fullPath, factCommit: null });
       }
     }).catch(() => { if (!stale()) setChildren([]); });

@@ -53,6 +53,9 @@ func (s *Store) ReadFileWithHash(path string) (string, string, error) {
 }
 
 // ReadFileAtCommit reads the content of path from a specific commit.
+// If the exact path is not found, it falls back to a case-insensitive tree
+// walk so that normalised (lowercase) index paths resolve correctly against
+// pre-normalisation commits that stored paths with mixed case.
 func (s *Store) ReadFileAtCommit(path, commitHash string) (string, error) {
 	hash := plumbing.NewHash(commitHash)
 	commit, err := s.repo.CommitObject(hash)
@@ -63,11 +66,54 @@ func (s *Store) ReadFileAtCommit(path, commitHash string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("ReadFileAtCommit: tree: %w", err)
 	}
-	f, err := tree.File(path)
-	if err != nil {
-		return "", fmt.Errorf("ReadFileAtCommit: file %q: %w", path, err)
+	if f, err := tree.File(path); err == nil {
+		return f.Contents()
 	}
-	return f.Contents()
+	// Exact lookup failed — try case-insensitive walk.
+	content, err := treeFileInsensitive(s.repo, tree, path)
+	if err != nil {
+		return "", fmt.Errorf("ReadFileAtCommit: file %q not found (case-insensitive): %w", path, err)
+	}
+	return content, nil
+}
+
+// treeFileInsensitive walks a git tree matching each path component
+// case-insensitively and returns the file contents.
+func treeFileInsensitive(repo *gogit.Repository, tree *object.Tree, path string) (string, error) {
+	parts := strings.Split(path, "/")
+	cur := tree
+	for i, part := range parts {
+		lower := strings.ToLower(part)
+		var matched *object.TreeEntry
+		for j := range cur.Entries {
+			if strings.ToLower(cur.Entries[j].Name) == lower {
+				matched = &cur.Entries[j]
+				break
+			}
+		}
+		if matched == nil {
+			return "", fmt.Errorf("component %q not found", part)
+		}
+		if i == len(parts)-1 {
+			blob, err := repo.BlobObject(matched.Hash)
+			if err != nil {
+				return "", err
+			}
+			r, err := blob.Reader()
+			if err != nil {
+				return "", err
+			}
+			defer r.Close()
+			b, err := io.ReadAll(r)
+			return string(b), err
+		}
+		sub, err := repo.TreeObject(matched.Hash)
+		if err != nil {
+			return "", fmt.Errorf("subtree %q: %w", part, err)
+		}
+		cur = sub
+	}
+	return "", fmt.Errorf("empty path")
 }
 
 // ReadFileLastCommit finds the most recent ancestor of beforeCommitHash where
