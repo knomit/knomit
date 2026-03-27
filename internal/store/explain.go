@@ -18,6 +18,8 @@ type ExplainResult struct {
 // ExplainFact returns the incoming and outgoing [:DERIVED_FROM] neighbours for
 // the given fact path. Incoming excludes deleted referrers. Outgoing includes
 // deleted targets (marked with Deleted: true) so the UI can show them distinctly.
+// Self-loops are filtered out: GraphQLite creates (n)-[:DERIVED_FROM]->(n) when
+// the target node is absent at edge-creation time (upstream bug).
 func (idx *Index) ExplainFact(path string) (ExplainResult, error) {
 	p := escapeCypherKey(path)
 
@@ -38,9 +40,20 @@ func (idx *Index) ExplainFact(path string) (ExplainResult, error) {
 	}
 
 	return ExplainResult{
-		Incoming: incoming,
-		Outgoing: outgoing,
+		Incoming: filterSelf(incoming, path),
+		Outgoing: filterSelf(outgoing, path),
 	}, nil
+}
+
+// filterSelf removes any RefSummary whose path equals selfPath (self-loops).
+func filterSelf(refs []RefSummary, selfPath string) []RefSummary {
+	out := refs[:0]
+	for _, r := range refs {
+		if r.Path != selfPath {
+			out = append(out, r)
+		}
+	}
+	return out
 }
 
 // isDeletedVal interprets the raw value returned by json_extract for a boolean

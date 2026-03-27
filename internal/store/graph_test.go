@@ -643,8 +643,7 @@ func TestExplainFact(t *testing.T) {
 	defer idx.Close()
 
 	// Set up: a → b, a → c, d → a. All current (not deleted).
-	// Upsert targets before referrers so DERIVED_FROM edges resolve correctly
-	// (graphAddDerivedFromTx uses MATCH, so target nodes must already exist).
+	// Upsert targets before referrers so edges resolve (no self-loops).
 	facts := []FactRecord{
 		{Path: "kb/b.md", Title: "Fact B", Domain: []string{"test"}, CommitHash: "abc"},
 		{Path: "kb/c.md", Title: "Fact C", Domain: []string{"test"}, CommitHash: "abc"},
@@ -692,6 +691,43 @@ func TestExplainFact(t *testing.T) {
 	}
 	if !deletedPaths["kb/c.md"] {
 		t.Errorf("expected kb/c.md to be marked deleted, outgoing = %+v", res2.Outgoing)
+	}
+}
+
+// TestExplainFact_SelfLoopFiltered verifies that ExplainFact strips self-loops.
+// When a fact is indexed with a ref to a node that doesn't exist yet, GraphQLite
+// creates a self-loop (f)-[:DERIVED_FROM]->(f). ExplainFact must not expose it.
+func TestExplainFact_SelfLoopFiltered(t *testing.T) {
+	idx, err := New(":memory:")
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer idx.Close()
+
+	// Index fact A with a ref to a non-existent target — causes a self-loop.
+	if err := idx.Upsert(FactRecord{
+		Path:       "kb/a.md",
+		Title:      "Fact A",
+		Domain:     []string{"test"},
+		Refs:       []string{"kb/missing.md"},
+		CommitHash: "abc",
+	}); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+
+	res, err := idx.ExplainFact("kb/a.md")
+	if err != nil {
+		t.Fatalf("ExplainFact: %v", err)
+	}
+	for _, r := range res.Outgoing {
+		if r.Path == "kb/a.md" {
+			t.Errorf("self-loop leaked into Outgoing: %+v", r)
+		}
+	}
+	for _, r := range res.Incoming {
+		if r.Path == "kb/a.md" {
+			t.Errorf("self-loop leaked into Incoming: %+v", r)
+		}
 	}
 }
 
