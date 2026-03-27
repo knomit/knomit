@@ -83,10 +83,12 @@ func handleBrowse(ontologyRoot string) http.HandlerFunc {
 			Name  string `json:"name"`
 			IsDir bool   `json:"is_dir"`
 			Type  string `json:"type,omitempty"`
+			Title string `json:"title,omitempty"`
 		}
 
-		// Batch-fetch epistemic types for fact files from the index.
+		// Batch-fetch epistemic types and titles for fact files from the index.
 		typeByPath := map[string]string{}
+		titleByPath := map[string]string{}
 		if ri.Idx != nil {
 			var factPaths []string
 			for _, e := range entries {
@@ -98,6 +100,7 @@ func handleBrowse(ontologyRoot string) http.HandlerFunc {
 				for _, fp := range factPaths {
 					if fb, err := ri.Idx.GetByPath(fp); err == nil && fb != nil {
 						typeByPath[fp] = fb.Type
+						titleByPath[fp] = fb.Title
 					}
 				}
 			}
@@ -108,6 +111,7 @@ func handleBrowse(ontologyRoot string) http.HandlerFunc {
 			c := child{Name: e.Name, IsDir: e.IsDir}
 			if !e.IsDir {
 				c.Type = typeByPath[path+"/"+e.Name]
+				c.Title = titleByPath[path+"/"+e.Name]
 			}
 			children = append(children, c)
 		}
@@ -142,6 +146,8 @@ func handleFact() http.HandlerFunc {
 				// File may have been deleted in this commit (e.g. retract).
 				// Fall back to the last commit where the file existed.
 				content, fromCommit, err = ri.GS.ReadFileLastCommit(path, commitHash)
+			} else {
+				fromCommit = commitHash
 			}
 			if err != nil && ri.Svc != nil {
 				// Commit may be invalid or file never on that branch.
@@ -176,6 +182,14 @@ func handleFact() http.HandlerFunc {
 				"parse_error": err.Error(),
 			})
 			return
+		}
+
+		// Lowercase local refs so they match stored fact paths (always lowercase).
+		// A ref is local if it has no scheme (no "://" prefix).
+		for i, ref := range fact.Refs {
+			if !strings.Contains(ref, "://") {
+				fact.Refs[i] = strings.ToLower(ref)
+			}
 		}
 
 		if fromCommit != "" {
@@ -268,9 +282,35 @@ func handleFactWrite() http.HandlerFunc {
 	}
 }
 
+// handleFactRetract handles DELETE /api/v1/{repo}/fact?path=<path>.
+// Deletes the fact file and commits with operation "retract".
+func handleFactRetract() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		ri := repos.RepoFromContext(r.Context())
+		ri.RLock()
+		defer ri.RUnlock()
+
+		path := r.URL.Query().Get("path")
+		if path == "" {
+			writeError(w, http.StatusBadRequest, "path query parameter is required")
+			return
+		}
+
+		msg := "manual-review: retract " + path
+		commitHash, err := ri.GS.DeleteFile(path, msg, "retract")
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, fmt.Sprintf("retract failed: %v", err))
+			return
+		}
+
+		writeJSON(w, http.StatusOK, map[string]string{"commit": commitHash})
+	}
+}
+
 // handleSearch handles GET /api/v1/{repo}/search?q=<query>&entities=<e1,e2>&domain=<d1,d2>&path=<p>&min_confidence=<f>&limit=<n>.
 // The entities and domain filters are AND-combined (all specified values
 // must match). Each accepts a comma-separated list of terms.
+// Additional filters: type=<t1,t2>, exclude_type=<t1>, ep=<op1,op2>
 func handleSearch() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
@@ -292,6 +332,7 @@ func handleSearch() http.HandlerFunc {
 		graphHopsStr := q.Get("graph_hops")
 		typeStr := q.Get("type")
 		excludeTypeStr := q.Get("exclude_type")
+		epStr := q.Get("ep")
 
 		var entities []string
 		if entitiesStr != "" {
@@ -378,6 +419,16 @@ func handleSearch() http.HandlerFunc {
 			}
 		}
 
+		var episodeOps []string
+		if epStr != "" {
+			for _, op := range strings.Split(epStr, ",") {
+				op = strings.TrimSpace(op)
+				if op != "" {
+					episodeOps = append(episodeOps, op)
+				}
+			}
+		}
+
 		log.Debug().Str("q", text).Strs("entities", entities).Strs("domain", domain).Int("limit", limit).Msg("search")
 
 		results, err := ri.Idx.Search(store.SearchQuery{
@@ -391,6 +442,7 @@ func handleSearch() http.HandlerFunc {
 			GraphHops:     graphHops,
 			IncludeTypes:  includeTypes,
 			ExcludeTypes:  excludeTypes,
+			EpisodeOps:    episodeOps,
 		})
 		if err != nil {
 			log.Debug().Err(err).Msg("search failed")
@@ -428,8 +480,10 @@ func handleHistoryPaginated() http.HandlerFunc {
 		}
 
 		after := r.URL.Query().Get("after")
+		from := r.URL.Query().Get("from")
+		before := r.URL.Query().Get("before")
 
-		entries, next, err := ri.GS.LogPaginated(path, limit, after)
+		entries, next, prev, err := ri.GS.LogPaginated(path, limit, after, from, before)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, fmt.Sprintf("log error: %v", err))
 			return
@@ -441,6 +495,9 @@ func handleHistoryPaginated() http.HandlerFunc {
 		resp := map[string]any{"entries": entries}
 		if next != "" {
 			resp["next"] = next
+		}
+		if prev != "" {
+			resp["prev"] = prev
 		}
 		writeJSON(w, http.StatusOK, resp)
 	}
@@ -464,7 +521,45 @@ func handleCommitDetail() http.HandlerFunc {
 			return
 		}
 
-		writeJSON(w, http.StatusOK, detail)
+		// Enrich files with titles from the index.
+		type fileWithTitle struct {
+			Path   string `json:"path"`
+			Action string `json:"action"`
+			Title  string `json:"title,omitempty"`
+		}
+		files := make([]fileWithTitle, len(detail.Files))
+		for i, f := range detail.Files {
+			files[i] = fileWithTitle{Path: f.Path, Action: f.Action}
+			// Try index first (fast, works for facts still in the current state).
+			if ri.Idx != nil {
+				if fb, err := ri.Idx.GetByPath(f.Path); err == nil && fb != nil {
+					files[i].Title = fb.Title
+					continue
+				}
+			}
+			// Fallback: read the file as it was at this commit and parse the title.
+			// Covers retracted facts, deleted files, and anything not in the current index.
+			if content, err := ri.GS.ReadFileAtCommit(f.Path, hash); err == nil && content != "" {
+				if parsed, perr := mcp.ParseFact(f.Path, content); perr == nil {
+					files[i].Title = parsed.Title
+					continue
+				}
+			}
+			// Last resort for deleted files: find the last commit where the file existed.
+			if content, _, err := ri.GS.ReadFileLastCommit(f.Path, hash); err == nil && content != "" {
+				if parsed, perr := mcp.ParseFact(f.Path, content); perr == nil {
+					files[i].Title = parsed.Title
+				}
+			}
+		}
+
+		writeJSON(w, http.StatusOK, map[string]any{
+			"commit":    detail.Commit,
+			"date":      detail.Date,
+			"message":   detail.Message,
+			"operation": detail.Operation,
+			"files":     files,
+		})
 	}
 }
 
@@ -481,6 +576,30 @@ func handleActivity() http.HandlerFunc {
 			return
 		}
 		writeJSON(w, http.StatusOK, result)
+	}
+}
+
+// handleCompletions handles GET /api/v1/{repo}/completions?category=<cat>&prefix=<p>
+// Returns autocomplete suggestions for filter values (domain, entity, type, ep, path).
+func handleCompletions() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		ri := repos.RepoFromContext(r.Context())
+		ri.RLock()
+		idx := ri.Idx
+		ri.RUnlock()
+
+		category := r.URL.Query().Get("category")
+		prefix := r.URL.Query().Get("prefix")
+		if category == "" {
+			http.Error(w, "category required", http.StatusBadRequest)
+			return
+		}
+		vals, err := idx.Completions(category, prefix, 20)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"values": vals})
 	}
 }
 
@@ -534,6 +653,7 @@ func handleStatus(embeddingsEnabled bool, ontologyRoot string) http.HandlerFunc 
 }
 
 // handleRecent handles GET /api/v1/{repo}/recent?path=<prefix>&q=<query>&limit=50&offset=0
+// Additional filters: domain=<d1,d2>, entities=<e1,e2>, ep=<op1,op2>, type=<t1>, exclude_type=<t1>
 func handleRecent() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
@@ -544,24 +664,25 @@ func handleRecent() http.HandlerFunc {
 			return
 		}
 
-		path := r.URL.Query().Get("path")
+		q := r.URL.Query()
+		path := q.Get("path")
 		limit := 50
-		if v := r.URL.Query().Get("limit"); v != "" {
+		if v := q.Get("limit"); v != "" {
 			if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 500 {
 				limit = n
 			}
 		}
 		offset := 0
-		if v := r.URL.Query().Get("offset"); v != "" {
+		if v := q.Get("offset"); v != "" {
 			if n, err := strconv.Atoi(v); err == nil && n >= 0 {
 				offset = n
 			}
 		}
 
-		query := r.URL.Query().Get("q")
+		query := q.Get("q")
 
 		var includeTypes []string
-		if v := r.URL.Query().Get("type"); v != "" {
+		if v := q.Get("type"); v != "" {
 			for _, t := range strings.Split(v, ",") {
 				t = strings.TrimSpace(t)
 				if t != "" {
@@ -570,7 +691,7 @@ func handleRecent() http.HandlerFunc {
 			}
 		}
 		var excludeTypes []string
-		if v := r.URL.Query().Get("exclude_type"); v != "" {
+		if v := q.Get("exclude_type"); v != "" {
 			for _, t := range strings.Split(v, ",") {
 				t = strings.TrimSpace(t)
 				if t != "" {
@@ -579,7 +700,37 @@ func handleRecent() http.HandlerFunc {
 			}
 		}
 
-		entries, total, err := ri.Svc.Index().RecentFacts(path, query, limit, offset, includeTypes, excludeTypes)
+		var domain []string
+		if v := q.Get("domain"); v != "" {
+			for _, d := range strings.Split(v, ",") {
+				d = strings.TrimSpace(d)
+				if d != "" {
+					domain = append(domain, d)
+				}
+			}
+		}
+
+		var entities []string
+		if v := q.Get("entities"); v != "" {
+			for _, e := range strings.Split(v, ",") {
+				e = strings.TrimSpace(e)
+				if e != "" {
+					entities = append(entities, e)
+				}
+			}
+		}
+
+		var epOps []string
+		if v := q.Get("ep"); v != "" {
+			for _, op := range strings.Split(v, ",") {
+				op = strings.TrimSpace(op)
+				if op != "" {
+					epOps = append(epOps, op)
+				}
+			}
+		}
+
+		entries, total, err := ri.Svc.Index().RecentFacts(path, query, limit, offset, includeTypes, excludeTypes, domain, entities, epOps)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, fmt.Sprintf("recent error: %v", err))
 			return

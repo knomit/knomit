@@ -1,16 +1,22 @@
-export type RightMode = 'summary' | 'fact' | 'history';
-export type LeftMode = 'browse' | 'history' | 'recent';
+export type View = 'tree' | 'chrono' | 'history';
 
-export interface NavEntry {
-  currentPath: string;
-  selectedFact: string | null;
-  leftMode: LeftMode;
-  historyCommit: string | null;
-  rightMode: RightMode;
-  searchQuery: string;
+export interface FilterChip {
+  category: 'domain' | 'entity' | 'type' | 'ep' | 'path';
+  value: string;
 }
 
-export interface ConsoleEntry {
+interface NavEntry {
+  repo: string;
+  branch: string;
+  view: View;
+  filters: FilterChip[];
+  freeText: string;
+  historyCommit: string | null;
+  factPath: string | null;
+  factCommit: string | null;
+}
+
+interface ConsoleEntry {
   id: number;
   time: number; // Date.now()
   level: 'info' | 'error';
@@ -19,183 +25,237 @@ export interface ConsoleEntry {
 
 export interface AppState {
   repo: string;
-  currentPath: string;
-  selectedFact: string | null;
-  previewPath: string | null; // directory being previewed in summary panel without navigating
-  rightMode: RightMode;
-  searchQuery: string;
-  similarTo: { path: string; text: string } | null; // fact for similarity search
-  loading: boolean;
+  view: View;
+  historyCommit: string | null;  // history mode: commit selected in timeline
+  factPath: string | null;       // right panel: fact to display (all modes)
+  factCommit: string | null;     // right panel: commit to show fact at (null = HEAD)
+  filters: FilterChip[];
+  freeText: string;              // unprefixed search text
   tasks: Record<string, { status: 'idle' | 'running' | 'done' | 'error'; message: string }>;
   headCommit: string;
   branch: string;
   embeddingsEnabled: boolean;
-  statusMessage: string;
+  ontologyRoot: string;
   consoleEntries: ConsoleEntry[];
   consoleOpen: boolean;
-  consoleHeight: number; // pixels
-  leftMode: LeftMode;
-  historyCommit: string | null;
-  historyFocusPath: string | null; // in history mode: load this specific path (not commitDetail auto-select)
+  consoleHeight: number;
   navStack: NavEntry[];
-  refCommit: string | null; // when opening a ref, the referring fact's commit (for time-travel fallback)
-  remoteError: string; // latest sync/push error, empty = ok
+  remoteError: string;
   rightPanelFocused: boolean;
 }
 
 export type Action =
   | { type: 'NAVIGATE'; path: string }
-  | { type: 'SELECT_FACT'; path: string }
-  | { type: 'PREVIEW_DIR'; path: string }
-  | { type: 'SELECT_WORLD'; path: string }
   | { type: 'GO_UP' }
-  | { type: 'SEARCH'; query: string }
-  | { type: 'SIMILAR_SEARCH'; path: string; text: string }
-  | { type: 'CLEAR_SEARCH' }
-  | { type: 'SHOW_HISTORY' }
-  | { type: 'SHOW_FACT' }
-  | { type: 'SET_LOADING'; value: boolean }
+  | { type: 'ADD_FILTER'; chip: FilterChip }
+  | { type: 'REMOVE_FILTER'; index: number }
+  | { type: 'SET_FREE_TEXT'; text: string }
+  | { type: 'CLEAR_FILTERS' }
+  | { type: 'NAV_BACK' }
   | { type: 'SET_TASK'; op: string; status: 'idle' | 'running' | 'done' | 'error'; message: string }
   | { type: 'SET_STATUS'; head: string; branch: string; embeddingsEnabled: boolean; ontologyRoot: string }
   | { type: 'SET_HEAD'; head: string }
-  | { type: 'SET_STATUS_MESSAGE'; message: string }
   | { type: 'CONSOLE_LOG'; level: 'info' | 'error'; message: string }
   | { type: 'CONSOLE_TOGGLE' }
   | { type: 'CONSOLE_SET_HEIGHT'; height: number }
-  | { type: 'ENTER_HISTORY' }
-  | { type: 'EXIT_HISTORY' }
-  | { type: 'FACT_HISTORY'; factPath: string; commit?: string }
-  | { type: 'ENTER_RECENT' }
-  | { type: 'SELECT_COMMIT'; commit: string }
-  | { type: 'NAV_BACK' }
   | { type: 'SET_REPO'; repo: string }
   | { type: 'SET_REMOTE_ERROR'; error: string }
-  | { type: 'OPEN_FACT'; path: string; refCommit?: string }
-  | { type: 'HISTORY_OPEN_PATH'; path: string }
   | { type: 'FOCUS_RIGHT_PANEL' }
-  | { type: 'BLUR_RIGHT_PANEL' };
+  | { type: 'BLUR_RIGHT_PANEL' }
+  | { type: 'APPLY_NAV'; view: View; historyCommit: string | null; factPath: string | null; factCommit: string | null; filters?: FilterChip[]; freeText?: string }
+  | { type: 'AMEND_NAV'; historyCommit: string | null; factPath: string | null; factCommit: string | null }
+  | { type: 'FACT_LOADED'; commit: string };
 
 export const init: AppState = {
   repo: 'knomit',
-  currentPath: 'kb',
-  selectedFact: null,
-  previewPath: null,
-  rightMode: 'summary',
-  searchQuery: '',
-  similarTo: null,
-  loading: false,
+  view: 'tree',
+  historyCommit: null,
+  factPath: null,
+  factCommit: null,
+  filters: [],
+  freeText: '',
   tasks: { sync: { status: 'idle', message: '' }, synth: { status: 'idle', message: '' } },
   headCommit: '',
   branch: '',
   embeddingsEnabled: false,
-  statusMessage: '',
+  ontologyRoot: 'kb',
   consoleEntries: [],
   consoleOpen: false,
   consoleHeight: 200,
-  leftMode: 'browse',
-  refCommit: null,
-  remoteError: '',
-  historyCommit: null,
-  historyFocusPath: null,
   navStack: [],
+  remoteError: '',
   rightPanelFocused: false,
 };
 
 function pushNav(s: AppState): NavEntry[] {
   const entry: NavEntry = {
-    currentPath: s.currentPath,
-    selectedFact: s.selectedFact,
-    leftMode: s.leftMode,
+    repo: s.repo,
+    branch: s.branch,
+    view: s.view,
+    filters: [...s.filters],
+    freeText: s.freeText,
     historyCommit: s.historyCommit,
-    rightMode: s.rightMode,
-    searchQuery: s.searchQuery,
+    factPath: s.factPath,
+    factCommit: s.factCommit,
   };
   const stack = [...s.navStack, entry];
-  if (stack.length > 10) stack.shift();
+  if (stack.length > 20) stack.shift();
   return stack;
+}
+
+export function currentPath(state: AppState): string {
+  const pathChip = state.filters.find(f => f.category === 'path');
+  return pathChip?.value || state.ontologyRoot || 'kb';
+}
+
+function replacePathChip(filters: FilterChip[], value: string): FilterChip[] {
+  return [...filters.filter(f => f.category !== 'path'), { category: 'path', value }];
 }
 
 export function reducer(s: AppState, a: Action): AppState {
   switch (a.type) {
-    case 'NAVIGATE': return { ...s, currentPath: a.path, selectedFact: null, previewPath: null, rightMode: 'summary', searchQuery: '', similarTo: null, historyFocusPath: null, refCommit: null, navStack: pushNav(s), rightPanelFocused: false };
-    case 'SELECT_FACT': return { ...s, selectedFact: a.path, previewPath: null, rightMode: 'fact', refCommit: null, navStack: pushNav(s) };
-    case 'PREVIEW_DIR': return { ...s, selectedFact: null, previewPath: a.path, rightMode: 'summary' };
-    case 'SELECT_WORLD': return { ...s, selectedFact: null, previewPath: null, rightMode: 'summary' };
+    case 'NAVIGATE':
+      return {
+        ...s,
+        filters: replacePathChip(s.filters, a.path),
+        historyCommit: null,
+        factPath: null,
+        factCommit: null,
+        navStack: pushNav(s),
+        rightPanelFocused: false,
+      };
     case 'GO_UP': {
-      const parts = s.currentPath.split('/');
+      const path = currentPath(s);
+      const parts = path.split('/');
       if (parts.length <= 1) return s;
-      return { ...s, currentPath: parts.slice(0, -1).join('/'), selectedFact: null, previewPath: null, rightMode: 'summary' };
+      const parent = parts.slice(0, -1).join('/');
+      return {
+        ...s,
+        filters: replacePathChip(s.filters, parent),
+        historyCommit: null,
+        factPath: null,
+        factCommit: null,
+        navStack: pushNav(s),
+        rightPanelFocused: false,
+      };
     }
-    case 'SEARCH': return { ...s, searchQuery: a.query, similarTo: null, previewPath: null, navStack: pushNav(s), rightPanelFocused: false };
-    case 'SIMILAR_SEARCH': return { ...s, similarTo: { path: a.path, text: a.text }, searchQuery: '', previewPath: null, rightPanelFocused: false };
-    case 'CLEAR_SEARCH': return { ...s, searchQuery: '', similarTo: null, selectedFact: null, previewPath: null, rightMode: 'summary' };
-    case 'SHOW_HISTORY': return { ...s, rightMode: 'history', rightPanelFocused: false };
-    case 'SHOW_FACT': return { ...s, rightMode: 'fact' };
-    case 'SET_LOADING': return { ...s, loading: a.value };
+    case 'ADD_FILTER': {
+      const filters = a.chip.category === 'path'
+        ? replacePathChip(s.filters, a.chip.value)
+        : [...s.filters, a.chip];
+      return { ...s, filters, navStack: pushNav(s) };
+    }
+    case 'REMOVE_FILTER': {
+      const filters = s.filters.filter((_, i) => i !== a.index);
+      return { ...s, filters, historyCommit: null, factPath: null, factCommit: null, navStack: pushNav(s) };
+    }
+    case 'SET_FREE_TEXT':
+      return { ...s, freeText: a.text };
+    case 'CLEAR_FILTERS':
+      return { ...s, filters: [], freeText: '', historyCommit: null, factPath: null, factCommit: null, navStack: pushNav(s) };
+    case 'NAV_BACK': {
+      if (s.navStack.length === 0) return s;
+      const prev = s.navStack[s.navStack.length - 1];
+      // If repo changed, treat as full reset
+      if (prev.repo !== s.repo) {
+        return {
+          ...s,
+          repo: prev.repo,
+          view: 'tree',
+          historyCommit: null,
+          factPath: null,
+          factCommit: null,
+          filters: [],
+          freeText: '',
+          headCommit: '',
+          branch: '',
+          navStack: s.navStack.slice(0, -1),
+        };
+      }
+      return {
+        ...s,
+        view: prev.view,
+        historyCommit: prev.historyCommit,
+        factPath: prev.factPath,
+        factCommit: prev.factCommit,
+        filters: prev.filters,
+        freeText: prev.freeText,
+        navStack: s.navStack.slice(0, -1),
+        rightPanelFocused: false,
+      };
+    }
     case 'SET_TASK': {
       const cur = s.tasks[a.op];
       if (cur && cur.status === a.status && cur.message === a.message) return s;
       return { ...s, tasks: { ...s.tasks, [a.op]: { status: a.status, message: a.message } } };
     }
-    case 'SET_STATUS': return { ...s, headCommit: a.head, branch: a.branch, embeddingsEnabled: a.embeddingsEnabled, currentPath: a.ontologyRoot || s.currentPath };
-    case 'SET_HEAD': return { ...s, headCommit: a.head };
-    case 'SET_STATUS_MESSAGE': return { ...s, statusMessage: a.message };
+    case 'SET_STATUS':
+      return {
+        ...s,
+        headCommit: a.head,
+        branch: a.branch,
+        embeddingsEnabled: a.embeddingsEnabled,
+        ontologyRoot: a.ontologyRoot || s.ontologyRoot,
+      };
+    case 'SET_HEAD':
+      if (s.headCommit === a.head) return s;
+      return { ...s, headCommit: a.head };
     case 'CONSOLE_LOG': {
       const entry: ConsoleEntry = { id: Date.now() + Math.random(), time: Date.now(), level: a.level, message: a.message };
       const entries = [...s.consoleEntries, entry];
       if (entries.length > 500) entries.splice(0, entries.length - 500);
       return { ...s, consoleEntries: entries };
     }
-    case 'CONSOLE_TOGGLE': return { ...s, consoleOpen: !s.consoleOpen };
-    case 'CONSOLE_SET_HEIGHT': return { ...s, consoleHeight: Math.max(80, Math.min(a.height, 600)) };
-    case 'ENTER_HISTORY': return { ...s, leftMode: 'history', navStack: pushNav(s), rightPanelFocused: false };
-    case 'ENTER_RECENT': return { ...s, leftMode: 'recent', historyCommit: null, historyFocusPath: null, navStack: pushNav(s), rightPanelFocused: false };
-    case 'EXIT_HISTORY': {
-      // If currentPath is a fact (.md), restore to its parent directory and keep the fact selected
-      if (s.currentPath.endsWith('.md')) {
-        const parentDir = s.currentPath.split('/').slice(0, -1).join('/') || s.currentPath;
-        return { ...s, currentPath: parentDir, selectedFact: s.currentPath, leftMode: 'browse', historyCommit: null, historyFocusPath: null, rightMode: 'fact', rightPanelFocused: false };
-      }
-      // Exiting recent mode: clear selectedFact since it may not be a child of currentPath
-      if (s.leftMode === 'recent') {
-        return { ...s, leftMode: 'browse', selectedFact: null, rightMode: 'summary', historyCommit: null, historyFocusPath: null, rightPanelFocused: false };
-      }
-      return { ...s, leftMode: 'browse', historyCommit: null, historyFocusPath: null, rightPanelFocused: false };
+    case 'CONSOLE_TOGGLE':
+      return { ...s, consoleOpen: !s.consoleOpen };
+    case 'CONSOLE_SET_HEIGHT':
+      return { ...s, consoleHeight: Math.max(80, Math.min(a.height, 600)) };
+    case 'SET_REPO':
+      return {
+        ...s,
+        repo: a.repo,
+        view: 'tree',
+        historyCommit: null,
+        factPath: null,
+        factCommit: null,
+        filters: [],
+        freeText: '',
+        headCommit: '',
+        branch: '',
+        navStack: [],
+        remoteError: '',
+        rightPanelFocused: false,
+      };
+    case 'SET_REMOTE_ERROR':
+      return { ...s, remoteError: a.error };
+    case 'FOCUS_RIGHT_PANEL':
+      return { ...s, rightPanelFocused: true };
+    case 'BLUR_RIGHT_PANEL':
+      return { ...s, rightPanelFocused: false };
+    case 'APPLY_NAV': {
+      const crossingBoundary =
+        (s.view === 'history' && a.view !== 'history') ||
+        (s.view !== 'history' && a.view === 'history');
+      return {
+        ...s,
+        view: a.view,
+        historyCommit: a.historyCommit,
+        factPath: a.factPath,
+        factCommit: a.factCommit,
+        filters: a.filters !== undefined ? a.filters : crossingBoundary ? s.filters.filter(f => f.category === 'path') : s.filters,
+        freeText: a.freeText !== undefined ? a.freeText : crossingBoundary ? '' : s.freeText,
+        navStack: pushNav(s),
+        rightPanelFocused: false,
+      };
     }
-    case 'FACT_HISTORY':
-      return { ...s, currentPath: a.factPath, selectedFact: a.factPath, leftMode: 'history', historyCommit: a.commit || null, historyFocusPath: a.factPath, navStack: pushNav(s), rightPanelFocused: false };
-    case 'SELECT_COMMIT': return { ...s, historyCommit: a.commit };
-    case 'OPEN_FACT': {
-      const parts = a.path.split('/');
-      const parentDir = parts.slice(0, -1).join('/') || s.currentPath;
-      return { ...s, currentPath: parentDir, selectedFact: a.path, refCommit: a.refCommit || null, rightMode: 'fact', historyCommit: null, historyFocusPath: null, leftMode: 'browse', navStack: pushNav(s), rightPanelFocused: false };
-    }
-    case 'HISTORY_OPEN_PATH': return { ...s, currentPath: a.path, historyFocusPath: a.path, navStack: pushNav(s), rightPanelFocused: false };
-    case 'NAV_BACK': {
-      if (s.navStack.length === 0) return s;
-      const prev = s.navStack[s.navStack.length - 1];
-      return { ...s, ...prev, navStack: s.navStack.slice(0, -1), rightPanelFocused: false };
-    }
-    case 'SET_REPO': return {
-      ...s,
-      repo: a.repo,
-      currentPath: 'kb',
-      selectedFact: null,
-      previewPath: null,
-      rightMode: 'summary',
-      searchQuery: '',
-      similarTo: null,
-      headCommit: '',
-      branch: '',
-      navStack: [],
-      leftMode: 'browse',
-      historyCommit: null,
-      remoteError: '',
-      rightPanelFocused: false,
-    };
-    case 'SET_REMOTE_ERROR': return { ...s, remoteError: a.error };
-    case 'FOCUS_RIGHT_PANEL': return { ...s, rightPanelFocused: true };
-    case 'BLUR_RIGHT_PANEL': return { ...s, rightPanelFocused: false };
-    default: return s;
+    case 'AMEND_NAV':
+      // In-place update — no navStack push. Used by auto-select behaviors so that
+      // a single user action (e.g. view-button click) creates exactly one navStack entry.
+      if (s.historyCommit === a.historyCommit && s.factPath === a.factPath && s.factCommit === a.factCommit) return s;
+      return { ...s, historyCommit: a.historyCommit, factPath: a.factPath, factCommit: a.factCommit };
+    case 'FACT_LOADED':
+      return { ...s, factCommit: a.commit };
+    default:
+      return s;
   }
 }

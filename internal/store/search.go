@@ -23,6 +23,7 @@ type SearchQuery struct {
 	QueryVec      []float32 // pre-computed embedding vector; if set, skips Embed(Text)
 	IncludeTypes  []string  // only return facts with these types (empty = all)
 	ExcludeTypes  []string  // exclude facts with these types
+	EpisodeOps    []string  // filter by episode operation type (e.g. "learn", "update", "retract"); filtered post-query in Go
 }
 
 // SearchResult is a FactWithBody paired with a relevance score in [0, 100].
@@ -94,6 +95,71 @@ func newFactFilter(q SearchQuery) *factFilter {
 	return f
 }
 
+// filterByEpisodeOps removes results whose latest commit operation is not in
+// the allowed set. It performs a single bulk SQL lookup of operations by
+// commit_hash from commit_log (same database). If ops is empty, all results
+// are kept unchanged.
+func (idx *Index) filterByEpisodeOps(results []SearchResult, ops []string) ([]SearchResult, error) {
+	if len(ops) == 0 || len(results) == 0 {
+		return results, nil
+	}
+
+	// Build a set of allowed operations for O(1) lookup.
+	allowed := make(map[string]bool, len(ops))
+	for _, op := range ops {
+		allowed[op] = true
+	}
+
+	// Collect unique commit hashes from results.
+	hashes := make([]string, 0, len(results))
+	seen := make(map[string]bool, len(results))
+	for _, r := range results {
+		if r.CommitHash != "" && !seen[r.CommitHash] {
+			hashes = append(hashes, r.CommitHash)
+			seen[r.CommitHash] = true
+		}
+	}
+	if len(hashes) == 0 {
+		return nil, nil
+	}
+
+	ph := strings.Repeat("?,", len(hashes))
+	args := make([]any, len(hashes))
+	for i, h := range hashes {
+		args[i] = h
+	}
+
+	rows, err := idx.db.Query(
+		`SELECT commit_hash, operation FROM commit_log WHERE commit_hash IN (`+ph[:len(ph)-1]+`) GROUP BY commit_hash`,
+		args...,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("filterByEpisodeOps: %w", err)
+	}
+	defer rows.Close()
+
+	opByHash := make(map[string]string, len(hashes))
+	for rows.Next() {
+		var hash, op string
+		if err := rows.Scan(&hash, &op); err != nil {
+			return nil, fmt.Errorf("filterByEpisodeOps scan: %w", err)
+		}
+		opByHash[hash] = op
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	out := results[:0]
+	for _, r := range results {
+		op := opByHash[r.CommitHash]
+		if allowed[op] {
+			out = append(out, r)
+		}
+	}
+	return out, nil
+}
+
 // ── Search ────────────────────────────────────────────────────────────────────
 
 // Search performs a vector similarity search over the index.
@@ -136,7 +202,10 @@ func (idx *Index) Search(q SearchQuery) ([]SearchResult, error) {
 			}
 			out = append(out, SearchResult{FactWithBody: *fb, Score: 100})
 		}
-		return out, rows.Err()
+		if err := rows.Err(); err != nil {
+			return nil, err
+		}
+		return idx.filterByEpisodeOps(out, q.EpisodeOps)
 	}
 
 	// ── Vector (embedding) search ─────────────────────────────────────────
@@ -303,5 +372,5 @@ func (idx *Index) Search(q SearchQuery) ([]SearchResult, error) {
 		c.rec.Body = bodies[c.rec.BlobHash]
 		out = append(out, SearchResult{FactWithBody: c.rec, Score: c.score * 100.0})
 	}
-	return out, nil
+	return idx.filterByEpisodeOps(out, q.EpisodeOps)
 }

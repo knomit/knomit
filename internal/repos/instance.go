@@ -26,8 +26,9 @@ type GitStore interface {
 	ReadFileAtCommit(path, commitHash string) (string, error)
 	ReadFileLastCommit(path, beforeCommitHash string) (content string, fromCommit string, err error)
 	WriteFile(path, content, message, operation string) (commitHash, blobHash string, err error)
+	DeleteFile(path, message, operation string) (commitHash string, err error)
 	Log(path string) ([]git.LogEntry, error)
-	LogPaginated(path string, limit int, after string) ([]git.LogEntryWithTags, string, error)
+	LogPaginated(path string, limit int, after, from, before string) ([]git.LogEntryWithTags, string, string, error)
 	CommitDetail(commitHash string) (*git.CommitDetailResult, error)
 	Activity(path string) (git.ActivityResult, error)
 	HeadCommit() (string, error)
@@ -42,6 +43,7 @@ type SearchIndex interface {
 	GetByPath(path string) (*store.FactWithBody, error)
 	GetLastCommit(branch string) (string, error)
 	Stats(pathPrefix string) (store.StatsResult, error)
+	Completions(category, prefix string, limit int) ([]string, error)
 }
 
 // SynthDeps bundles the dependencies needed by the synthesize handler.

@@ -85,6 +85,21 @@ func (mr *MockGitStoreMockRecorder) CommitDetail(commitHash any) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CommitDetail", reflect.TypeOf((*MockGitStore)(nil).CommitDetail), commitHash)
 }
 
+// DeleteFile mocks base method.
+func (m *MockGitStore) DeleteFile(path, message, operation string) (string, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "DeleteFile", path, message, operation)
+	ret0, _ := ret[0].(string)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// DeleteFile indicates an expected call of DeleteFile.
+func (mr *MockGitStoreMockRecorder) DeleteFile(path, message, operation any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteFile", reflect.TypeOf((*MockGitStore)(nil).DeleteFile), path, message, operation)
+}
+
 // HeadCommit mocks base method.
 func (m *MockGitStore) HeadCommit() (string, error) {
 	m.ctrl.T.Helper()
@@ -146,19 +161,20 @@ func (mr *MockGitStoreMockRecorder) Log(path any) *gomock.Call {
 }
 
 // LogPaginated mocks base method.
-func (m *MockGitStore) LogPaginated(path string, limit int, after string) ([]git.LogEntryWithTags, string, error) {
+func (m *MockGitStore) LogPaginated(path string, limit int, after, from, before string) ([]git.LogEntryWithTags, string, string, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "LogPaginated", path, limit, after)
+	ret := m.ctrl.Call(m, "LogPaginated", path, limit, after, from, before)
 	ret0, _ := ret[0].([]git.LogEntryWithTags)
 	ret1, _ := ret[1].(string)
-	ret2, _ := ret[2].(error)
-	return ret0, ret1, ret2
+	ret2, _ := ret[2].(string)
+	ret3, _ := ret[3].(error)
+	return ret0, ret1, ret2, ret3
 }
 
 // LogPaginated indicates an expected call of LogPaginated.
-func (mr *MockGitStoreMockRecorder) LogPaginated(path, limit, after any) *gomock.Call {
+func (mr *MockGitStoreMockRecorder) LogPaginated(path, limit, after, from, before any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "LogPaginated", reflect.TypeOf((*MockGitStore)(nil).LogPaginated), path, limit, after)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "LogPaginated", reflect.TypeOf((*MockGitStore)(nil).LogPaginated), path, limit, after, from, before)
 }
 
 // ReadFile mocks base method.
@@ -247,19 +263,19 @@ func (m *MockSearchIndex) EXPECT() *MockSearchIndexMockRecorder {
 	return m.recorder
 }
 
-// GetLastCommit mocks base method.
-func (m *MockSearchIndex) GetLastCommit(branch string) (string, error) {
+// Completions mocks base method.
+func (m *MockSearchIndex) Completions(category, prefix string, limit int) ([]string, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetLastCommit", branch)
-	ret0, _ := ret[0].(string)
+	ret := m.ctrl.Call(m, "Completions", category, prefix, limit)
+	ret0, _ := ret[0].([]string)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
-// GetLastCommit indicates an expected call of GetLastCommit.
-func (mr *MockSearchIndexMockRecorder) GetLastCommit(branch any) *gomock.Call {
+// Completions indicates an expected call of Completions.
+func (mr *MockSearchIndexMockRecorder) Completions(category, prefix, limit any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetLastCommit", reflect.TypeOf((*MockSearchIndex)(nil).GetLastCommit), branch)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Completions", reflect.TypeOf((*MockSearchIndex)(nil).Completions), category, prefix, limit)
 }
 
 // GetByPath mocks base method.
@@ -275,6 +291,21 @@ func (m *MockSearchIndex) GetByPath(path string) (*store.FactWithBody, error) {
 func (mr *MockSearchIndexMockRecorder) GetByPath(path any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetByPath", reflect.TypeOf((*MockSearchIndex)(nil).GetByPath), path)
+}
+
+// GetLastCommit mocks base method.
+func (m *MockSearchIndex) GetLastCommit(branch string) (string, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetLastCommit", branch)
+	ret0, _ := ret[0].(string)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetLastCommit indicates an expected call of GetLastCommit.
+func (mr *MockSearchIndexMockRecorder) GetLastCommit(branch any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetLastCommit", reflect.TypeOf((*MockSearchIndex)(nil).GetLastCommit), branch)
 }
 
 // Search mocks base method.

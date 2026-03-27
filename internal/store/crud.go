@@ -310,26 +310,49 @@ type RecentFactEntry struct {
 // RecentFacts returns facts under pathPrefix ordered by most recent commit,
 // paginated by offset/limit. If query is non-empty, it performs a semantic
 // search first and returns only matching facts (still ordered by time).
-func (idx *Index) RecentFacts(pathPrefix, query string, limit, offset int, includeTypes, excludeTypes []string) ([]RecentFactEntry, int, error) {
+// domain, entities, and epOps are optional additional filters.
+func (idx *Index) RecentFacts(pathPrefix, query string, limit, offset int, includeTypes, excludeTypes, domain, entities, epOps []string) ([]RecentFactEntry, int, error) {
 	if query != "" {
-		return idx.recentFactsSearch(pathPrefix, query, limit, offset, includeTypes, excludeTypes)
+		return idx.recentFactsSearch(pathPrefix, query, limit, offset, includeTypes, excludeTypes, domain, entities, epOps)
 	}
 
-	flt := newFactFilter(SearchQuery{Path: pathPrefix, IncludeTypes: includeTypes, ExcludeTypes: excludeTypes})
+	flt := newFactFilter(SearchQuery{
+		Path:         pathPrefix,
+		IncludeTypes: includeTypes,
+		ExcludeTypes: excludeTypes,
+		Domain:       domain,
+		Entities:     entities,
+	})
 
+	// Build the ep filter clause (operates on cl.operation from the LEFT JOIN).
+	epClause := ""
+	epArgs := []any{}
+	if len(epOps) > 0 {
+		ph := strings.Repeat("?,", len(epOps))
+		epArgs = make([]any, len(epOps))
+		for i, op := range epOps {
+			epArgs[i] = op
+		}
+		epClause = " AND COALESCE(cl.operation, '') IN (" + ph[:len(ph)-1] + ")"
+	}
+
+	countArgs := append(append([]any{}, flt.args...), epArgs...)
 	var total int
 	if err := idx.db.QueryRow(
-		`SELECT COUNT(*) FROM facts f WHERE 1=1`+flt.SQL(), flt.args...,
+		`SELECT COUNT(*) FROM facts f
+		 LEFT JOIN commit_log cl ON f.commit_hash = cl.commit_hash AND f.path = cl.path
+		 WHERE 1=1`+flt.SQL()+epClause,
+		countArgs...,
 	).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("RecentFacts count: %w", err)
 	}
 
-	queryArgs := append(append([]any{}, flt.args...), limit, offset)
+	queryArgs := append(append(append([]any{}, flt.args...), epArgs...), limit, offset)
 	rows, err := idx.db.Query(
 		`SELECT f.path, f.title, f.type, COALESCE(cl.committed_at, 0), COALESCE(cl.operation, '')
 		 FROM facts f
 		 LEFT JOIN commit_log cl ON f.commit_hash = cl.commit_hash AND f.path = cl.path
-		 WHERE 1=1`+flt.SQL()+`
+		 WHERE 1=1`+flt.SQL()+epClause+`
 		 ORDER BY cl.committed_at DESC, f.path ASC
 		 LIMIT ? OFFSET ?`,
 		queryArgs...,
@@ -352,12 +375,15 @@ func (idx *Index) RecentFacts(pathPrefix, query string, limit, offset int, inclu
 
 // recentFactsSearch uses semantic search to find matching facts, then returns
 // them ordered by committed_at with pagination.
-func (idx *Index) recentFactsSearch(pathPrefix, query string, limit, offset int, includeTypes, excludeTypes []string) ([]RecentFactEntry, int, error) {
+func (idx *Index) recentFactsSearch(pathPrefix, query string, limit, offset int, includeTypes, excludeTypes, domain, entities, epOps []string) ([]RecentFactEntry, int, error) {
 	results, err := idx.Search(SearchQuery{
 		Text:         query,
 		Path:         pathPrefix,
 		IncludeTypes: includeTypes,
 		ExcludeTypes: excludeTypes,
+		Domain:       domain,
+		Entities:     entities,
+		EpisodeOps:   epOps,
 		Limit:        500, // large enough to get all matches for pagination
 	})
 	if err != nil {

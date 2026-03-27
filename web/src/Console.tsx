@@ -1,5 +1,6 @@
 import { useEffect, useRef, useCallback } from 'react';
 import type { AppState, Action } from './state';
+import { ChevronUpIcon, ChevronDownIcon } from './icons';
 
 interface Props {
   state: AppState;
@@ -13,10 +14,12 @@ function formatTime(ts: number): string {
 
 export function Console({ state, dispatch }: Props) {
   const { consoleEntries, consoleOpen, consoleHeight } = state;
-  const listRef = useRef<HTMLDivElement>(null);
-  const dragRef = useRef<{ startY: number; startH: number } | null>(null);
+  const listRef      = useRef<HTMLDivElement>(null);
+  const dragRef      = useRef<{ startY: number; startH: number } | null>(null);
+  const heightRef    = useRef(consoleHeight);
+  heightRef.current  = consoleHeight;
 
-  const infoCount = consoleEntries.filter(e => e.level === 'info').length;
+  const infoCount  = consoleEntries.filter(e => e.level === 'info').length;
   const errorCount = consoleEntries.filter(e => e.level === 'error').length;
 
   // Auto-scroll to bottom on new entries
@@ -29,7 +32,7 @@ export function Console({ state, dispatch }: Props) {
   // Drag resize
   const onMouseDown = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
-    dragRef.current = { startY: e.clientY, startH: consoleHeight };
+    dragRef.current = { startY: e.clientY, startH: heightRef.current };
 
     const onMove = (ev: MouseEvent) => {
       if (!dragRef.current) return;
@@ -43,7 +46,7 @@ export function Console({ state, dispatch }: Props) {
     };
     document.addEventListener('mousemove', onMove);
     document.addEventListener('mouseup', onUp);
-  }, [consoleHeight, dispatch]);
+  }, [dispatch]);
 
   // Pick the highest-priority active task for status display.
   let activeTask: { op: string; status: string; message: string } | null = null;
@@ -76,7 +79,7 @@ export function Console({ state, dispatch }: Props) {
           </span>
         )}
         <div style={{ flex: 1 }} />
-        <span data-testid="console-toggle" style={{ color: '#666', fontSize: 13 }}>&#x25B2;</span>
+        <span data-testid="console-toggle" style={{ color: '#666', display: 'flex', alignItems: 'center' }}><ChevronUpIcon color="#666" size={13} /></span>
       </div>
     );
   }
@@ -84,7 +87,6 @@ export function Console({ state, dispatch }: Props) {
   // Expanded console
   return (
     <div data-testid="console" style={{ flexShrink: 0, display: 'flex', flexDirection: 'column', borderTop: '1px solid #222' }}>
-      {/* Drag handle */}
       <div
         onMouseDown={onMouseDown}
         style={{
@@ -92,7 +94,6 @@ export function Console({ state, dispatch }: Props) {
           borderBottom: '1px solid #222',
         }}
       />
-      {/* Header */}
       <div
         style={{
           height: 24, background: '#0d0d0d',
@@ -107,10 +108,9 @@ export function Console({ state, dispatch }: Props) {
         <span
           data-testid="console-toggle"
           onClick={() => dispatch({ type: 'CONSOLE_TOGGLE' })}
-          style={{ color: '#666', fontSize: 13, cursor: 'pointer' }}
-        >&#x25BC;</span>
+          style={{ color: '#666', cursor: 'pointer', display: 'flex', alignItems: 'center' }}
+        ><ChevronDownIcon color="#666" size={13} /></span>
       </div>
-      {/* Log entries */}
       <div
         ref={listRef}
         style={{

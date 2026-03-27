@@ -909,7 +909,7 @@ func TestLogPaginated(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	entries, next, err := store.LogPaginated("", 2, "")
+	entries, next, _, err := store.LogPaginated("", 2, "", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -923,7 +923,7 @@ func TestLogPaginated(t *testing.T) {
 		t.Errorf("expected operation learn on first entry, got %q", entries[0].Operation)
 	}
 
-	entries2, next2, err := store.LogPaginated("", 2, next)
+	entries2, next2, _, err := store.LogPaginated("", 2, next, "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -954,7 +954,7 @@ func TestLogPaginated_DirectoryFilter(t *testing.T) {
 	}
 
 	// Filter to kb/science — should only include commits that touched files under kb/science/.
-	entries, _, err := store.LogPaginated("kb/science", 50, "")
+	entries, _, _, err := store.LogPaginated("kb/science", 50, "", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1307,7 +1307,7 @@ func TestLogPaginated_FileFilter(t *testing.T) {
 	}
 
 	// Filter to specific file — should only include commits that touched kb/a.md.
-	entries, _, err := store.LogPaginated("kb/a.md", 50, "")
+	entries, _, _, err := store.LogPaginated("kb/a.md", 50, "", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1564,5 +1564,172 @@ func TestAgentID(t *testing.T) {
 	wantID := strings.TrimPrefix(branch, "agent/")
 	if store.AgentID() != wantID {
 		t.Errorf("AgentID() = %q, want %q", store.AgentID(), wantID)
+	}
+}
+
+// ─── Regression: path case handling ─────────────────────────────────────────
+
+func TestCommitDetail_LowercasesPaths(t *testing.T) {
+	dir := t.TempDir()
+	store, err := git.Init(filepath.Join(dir, "test.db"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	// Write a file with mixed-case path.
+	hash, _, err := store.WriteFile("kb/Technology/AI/fact.md",
+		"---\ndomain: [ai]\nconfidence: 0.8\nsources: 1\nentities: []\nrefs: []\n---\n# AI Fact\n\nBody.\n",
+		"add AI fact", "learn")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	detail, err := store.CommitDetail(hash)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(detail.Files) == 0 {
+		t.Fatal("expected at least one file")
+	}
+	for _, f := range detail.Files {
+		if f.Path != strings.ToLower(f.Path) {
+			t.Errorf("CommitDetail path not lowercase: %q", f.Path)
+		}
+	}
+}
+
+func TestWriteFile_LowercasesPath(t *testing.T) {
+	dir := t.TempDir()
+	store, err := git.Init(filepath.Join(dir, "test.db"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	// Write with mixed-case path — git should store it lowercase.
+	_, _, err = store.WriteFile("kb/Technology/AI/fact.md",
+		"---\ndomain: [ai]\nconfidence: 0.8\nsources: 1\nentities: []\nrefs: []\n---\n# AI Fact\n\nBody.\n",
+		"add AI fact", "learn")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Reading with lowercase should work (that's how it's stored).
+	content, err := store.ReadFile("kb/technology/ai/fact.md")
+	if err != nil {
+		t.Fatalf("lowercase read failed: %v", err)
+	}
+	if !strings.Contains(content, "AI Fact") {
+		t.Errorf("expected AI Fact in content, got: %s", content)
+	}
+
+	// Reading with mixed case also works (ReadFile lowercases input).
+	content, err = store.ReadFile("kb/Technology/AI/fact.md")
+	if err != nil {
+		t.Fatalf("mixed case read failed: %v", err)
+	}
+	if !strings.Contains(content, "AI Fact") {
+		t.Errorf("expected AI Fact in content, got: %s", content)
+	}
+}
+
+func TestDeleteFile_LowercasesPath(t *testing.T) {
+	dir := t.TempDir()
+	store, err := git.Init(filepath.Join(dir, "test.db"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	const content = "---\ndomain: []\nconfidence: 0.5\nsources: 1\nentities: []\nrefs: []\n---\n# Fact\n\nBody.\n"
+	if _, _, err := store.WriteFile("kb/Topic/SubTopic/fact.md", content, "add", "learn"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Delete with mixed case — should find the lowercase file.
+	_, err = store.DeleteFile("kb/Topic/SubTopic/fact.md", "retract", "retract")
+	if err != nil {
+		t.Fatalf("DeleteFile with mixed case failed: %v", err)
+	}
+
+	// File should be gone.
+	_, err = store.ReadFile("kb/topic/subtopic/fact.md")
+	if err == nil {
+		t.Error("expected error reading deleted file, got nil")
+	}
+}
+
+func TestReadFileLastCommit_AfterRetract(t *testing.T) {
+	dir := t.TempDir()
+	store, err := git.Init(filepath.Join(dir, "test.db"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	const content = "---\ndomain: []\nconfidence: 0.5\nsources: 1\nentities: []\nrefs: []\n---\n# Retracted Fact\n\nBody.\n"
+	// Write with mixed case (stored as lowercase).
+	if _, _, err := store.WriteFile("kb/Topic/SubTopic/fact.md", content, "add fact", "learn"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Retract with mixed case (lowercased internally).
+	retractHash, err := store.DeleteFile("kb/Topic/SubTopic/fact.md", "retract fact", "retract")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// ReadFileLastCommit with any case should work (both lowercased internally).
+	got, fromCommit, err := store.ReadFileLastCommit("kb/Topic/SubTopic/fact.md", retractHash)
+	if err != nil {
+		t.Fatalf("ReadFileLastCommit failed: %v", err)
+	}
+	if !strings.Contains(got, "Retracted Fact") {
+		t.Errorf("expected 'Retracted Fact' in content, got: %s", got)
+	}
+	if fromCommit == "" {
+		t.Error("expected non-empty fromCommit")
+	}
+}
+
+func TestBatchWrite_LowercasesPaths(t *testing.T) {
+	dir := t.TempDir()
+	store, err := git.Init(filepath.Join(dir, "test.db"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	// Anchor commit.
+	if _, _, err := store.WriteFile("kb/anchor.md",
+		"---\ndomain: []\nconfidence: 0.5\nsources: 1\nentities: []\nrefs: []\n---\n# A\n\nA.\n",
+		"anchor", "learn"); err != nil {
+		t.Fatal(err)
+	}
+
+	files := map[string]string{
+		"kb/Mixed/Case/a.md": "---\ndomain: []\nconfidence: 0.5\nsources: 1\nentities: []\nrefs: []\n---\n# A\n\nA.\n",
+		"kb/UPPER/b.md":      "---\ndomain: []\nconfidence: 0.5\nsources: 1\nentities: []\nrefs: []\n---\n# B\n\nB.\n",
+	}
+	_, hashes, err := store.BatchWrite(files, "batch", "learn")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Hashes should be keyed by lowercase paths.
+	for path := range hashes {
+		if path != strings.ToLower(path) {
+			t.Errorf("BatchWrite hash key not lowercase: %q", path)
+		}
+	}
+
+	// Files should be readable at lowercase paths.
+	if _, err := store.ReadFile("kb/mixed/case/a.md"); err != nil {
+		t.Errorf("expected kb/mixed/case/a.md to be readable: %v", err)
+	}
+	if _, err := store.ReadFile("kb/upper/b.md"); err != nil {
+		t.Errorf("expected kb/upper/b.md to be readable: %v", err)
 	}
 }

@@ -1,27 +1,27 @@
 import { test, expect } from '../../fixtures/knomit.js';
 
-test.describe('Recent Mode', () => {
+test.describe('Chrono View (Recent)', () => {
   test.beforeEach(async ({ page, sharedBaseURL }) => {
     await page.goto(sharedBaseURL);
     await page.waitForLoadState('domcontentloaded');
   });
 
-  test('pressing "r" enters recent mode and shows recently modified facts', async ({ page }) => {
-    // Press 'r' to enter recent mode (keyboard shortcut from LeftPanel.tsx)
-    await page.keyboard.press('r');
-    const recentList = page.getByTestId('recent-list');
-    await expect(recentList).toBeVisible();
+  test('pressing "2" enters chrono view and shows recently modified facts', async ({ page }) => {
+    // Press '2' to switch to chrono view (keyboard shortcut from App.tsx)
+    await page.keyboard.press('2');
+    const chronoList = page.getByTestId('chrono-list');
+    await expect(chronoList).toBeVisible();
 
-    // Should show recent items with data-testid="recent-item"
-    const items = page.getByTestId('recent-item');
+    // Should show chrono items with data-testid="chrono-item"
+    const items = page.getByTestId('chrono-item');
     await items.first().waitFor({ timeout: 10_000 });
     const count = await items.count();
     expect(count).toBeGreaterThan(0);
   });
 
-  test('recent items have data-path attribute', async ({ page }) => {
-    await page.keyboard.press('r');
-    const items = page.getByTestId('recent-item');
+  test('chrono items have data-path attribute', async ({ page }) => {
+    await page.keyboard.press('2');
+    const items = page.getByTestId('chrono-item');
     await items.first().waitFor({ timeout: 10_000 });
 
     const firstPath = await items.first().getAttribute('data-path');
@@ -29,15 +29,15 @@ test.describe('Recent Mode', () => {
     expect(firstPath).toContain('/');
   });
 
-  test('search within recent filters the list', async ({ page }) => {
-    await page.keyboard.press('r');
-    const items = page.getByTestId('recent-item');
+  test('filter via filter bar narrows the chrono list', async ({ page }) => {
+    await page.keyboard.press('2');
+    const items = page.getByTestId('chrono-item');
     await items.first().waitFor({ timeout: 10_000 });
     const initialCount = await items.count();
 
-    // Type in the recent search input
-    const searchInput = page.getByTestId('recent-search-input');
-    await searchInput.fill('postgresql');
+    // Type in the filter bar to set free text
+    const filterInput = page.locator('#filter-input');
+    await filterInput.fill('postgresql');
     // Wait for debounce (300ms) + response
     await page.waitForResponse(resp => resp.url().includes('/recent'));
     // Wait for DOM to settle
@@ -48,22 +48,20 @@ test.describe('Recent Mode', () => {
     expect(filteredCount).toBeGreaterThan(0);
   });
 
-  test('clear button resets the recent search filter', async ({ page }) => {
-    await page.keyboard.press('r');
-    const items = page.getByTestId('recent-item');
+  test('clearing filter resets the chrono list', async ({ page }) => {
+    await page.keyboard.press('2');
+    const items = page.getByTestId('chrono-item');
     await items.first().waitFor({ timeout: 10_000 });
 
     // Type a filter
-    const searchInput = page.getByTestId('recent-search-input');
-    await searchInput.fill('postgresql');
+    const filterInput = page.locator('#filter-input');
+    await filterInput.fill('postgresql');
     await page.waitForResponse(resp => resp.url().includes('/recent'));
     await page.waitForTimeout(500);
     const filteredCount = await items.count();
 
-    // Click clear button
-    const clearBtn = page.getByTestId('recent-search-clear');
-    await expect(clearBtn).toBeVisible();
-    await clearBtn.click();
+    // Clear filter input
+    await filterInput.clear();
 
     // Wait for unfiltered results
     await page.waitForResponse(resp => resp.url().includes('/recent'));
@@ -73,35 +71,29 @@ test.describe('Recent Mode', () => {
     expect(resetCount).toBeGreaterThan(filteredCount);
   });
 
-  test('pressing Escape exits recent mode back to browse', async ({ page }) => {
-    await page.keyboard.press('r');
-    await expect(page.getByTestId('recent-list')).toBeVisible();
+  test('pressing "1" exits chrono view back to tree', async ({ page }) => {
+    await page.keyboard.press('2');
+    await expect(page.getByTestId('chrono-list')).toBeVisible();
 
-    await page.keyboard.press('Escape');
+    await page.keyboard.press('1');
     await expect(page.getByTestId('left-panel')).toBeVisible();
   });
 
-  test('type filter dropdown is visible in recent mode', async ({ page }) => {
-    await page.keyboard.press('r');
-    const typeFilter = page.getByTestId('recent-type-filter');
-    await expect(typeFilter).toBeVisible();
-
-    // Should have "all types" as default
-    const value = await typeFilter.inputValue();
-    expect(value).toBe('');
-  });
-
-  test('selecting a type filter re-fetches with type param', async ({ page }) => {
-    await page.keyboard.press('r');
-    const items = page.getByTestId('recent-item');
+  test('type filter chip narrows chrono results', async ({ page }) => {
+    await page.keyboard.press('2');
+    const items = page.getByTestId('chrono-item');
     await items.first().waitFor({ timeout: 10_000 });
 
-    const typeFilter = page.getByTestId('recent-type-filter');
-    // Select "observation" and verify API call includes type param
+    // Register response listener before the action that triggers the API call
     const responsePromise = page.waitForResponse(resp =>
       resp.url().includes('/recent') && resp.url().includes('type=observation')
     );
-    await typeFilter.selectOption('observation');
+
+    // Type a type filter prefix in the filter bar
+    const filterInput = page.locator('#filter-input');
+    await filterInput.fill('type:observation');
+    await filterInput.press('Enter');
+
     await responsePromise;
   });
 });

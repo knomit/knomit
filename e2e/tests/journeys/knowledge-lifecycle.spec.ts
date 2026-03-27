@@ -39,15 +39,17 @@ This fact exercises the full lifecycle.`;
     await expect(factPanel.body).toContainText('full lifecycle');
 
     // 4. Search for it (index is async — retry until it catches up)
+    // In the new UI, search results show filenames (data-name), not full paths
+    const factName = factPath.split('/').pop()!;
     let searchResults: string[] = [];
     for (let attempt = 0; attempt < 5; attempt++) {
       await browse.search('lifecycle');
       searchResults = await browse.getSearchResults();
-      if (searchResults.includes(factPath)) break;
+      if (searchResults.some(r => r.includes(factName))) break;
       await browse.clearSearch();
       await page.waitForTimeout(1000);
     }
-    expect(searchResults).toContain(factPath);
+    expect(searchResults.some(r => r.includes(factName))).toBeTruthy();
 
     // 5. Edit via API (the UI only shows the editor for facts with parse errors)
     const updatedContent = `---
@@ -75,15 +77,15 @@ Updated content after edit.`;
     await expect(factPanel.body).toContainText('Updated content after edit');
 
     // 7. Check history has multiple commits
-    await page.keyboard.press('h');
+    await page.keyboard.press('3');
     const timeline = page.getByTestId('history-timeline');
     await timeline.waitFor({ timeout: 10_000 });
     const commits = page.getByTestId('history-commit');
     const commitCount = await commits.count();
     expect(commitCount).toBeGreaterThanOrEqual(2);
 
-    // Exit history mode
-    await page.keyboard.press('Escape');
+    // Exit history view back to tree
+    await page.keyboard.press('1');
 
     // 8. Retract via MCP
     const mcp = new McpClient(freshKnomit.baseURL, 'knomit', 'code');
@@ -98,14 +100,14 @@ Updated content after edit.`;
     // 9. Verify it's gone from search (index is async — retry until it catches up)
     await page.goto(freshKnomit.baseURL);
     await page.waitForLoadState('domcontentloaded');
-    let afterResults: string[] = [factPath]; // seed with factPath so the loop runs
+    let afterResults: string[] = [factName]; // seed so the loop runs
     for (let attempt = 0; attempt < 5; attempt++) {
       await page.waitForTimeout(1000);
       await browse.search('lifecycle');
       afterResults = await browse.getSearchResults();
-      if (!afterResults.includes(factPath)) break;
+      if (!afterResults.some(r => r.includes(factName))) break;
       await browse.clearSearch();
     }
-    expect(afterResults).not.toContain(factPath);
+    expect(afterResults.some(r => r.includes(factName))).toBeFalsy();
   });
 });

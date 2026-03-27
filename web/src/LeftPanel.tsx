@@ -1,252 +1,356 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
+import { useAsync } from './hooks';
+import { EmptyState, LoadingSpinner } from './ui';
 import type { Dispatch } from 'react';
 import { api } from './api';
-import type { DirChild, SearchResult } from './api';
+import type { DirChild, RecentFactEntry } from './api';
 import type { AppState, Action } from './state';
+import { currentPath } from './state';
 import { HistoryTimeline } from './HistoryTimeline';
-import { RecentFacts } from './RecentFacts';
-import { typeStyles, defaultTypeStyle } from './utils';
+import { typeStyles, defaultTypeStyle, relativeTimeEpoch } from './utils';
+import { TypeIcon, FolderIcon } from './icons';
+import type { NavRequest } from './useNavigationManager';
 
 interface Props {
   state: AppState;
   dispatch: Dispatch<Action>;
+  navigate: (req: NavRequest) => void;
 }
 
-export function LeftPanel({ state, dispatch }: Props) {
+// ---------- TreeView ----------
+
+function TreeView({ state, dispatch, navigate }: Props) {
   const [children, setChildren] = useState<DirChild[]>([]);
-  const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
-  const [searchReady, setSearchReady] = useState(false); // true once results loaded for current query
-  const [selectedIdx, setSelectedIdx] = useState(0);
-  const searchRef = useRef<HTMLInputElement>(null);
+  const [selectedIdx, setSelectedIdx] = useState(-1);
   const itemRefs = useRef<(HTMLDivElement | null)[]>([]);
-  const prevPathRef = useRef(state.currentPath);
-  const prevSearchRef = useRef(state.searchQuery);
-  const prevFactRef = useRef(state.selectedFact);
+  const staleStateRef = useRef(state);
+  staleStateRef.current = state;
+  const path = currentPath(state);
 
-  // Load directory listing; auto-preview first item so right panel is always in sync
-  // Re-fetches when headCommit changes (e.g. after sync) but preserves selection
-  useEffect(() => {
-    if (state.leftMode !== 'browse') return;
-    if (state.searchQuery || state.similarTo) return;
-    const isHeadChangeOnly = state.currentPath === prevPathRef.current && state.searchQuery === prevSearchRef.current && state.selectedFact === prevFactRef.current;
-    prevPathRef.current = state.currentPath;
-    prevSearchRef.current = state.searchQuery;
-    prevFactRef.current = state.selectedFact;
-    api.browse(state.repo, state.currentPath).then(r => {
-      const c = r.children || [];
-      setChildren(c);
-      if (!isHeadChangeOnly) {
-        if (state.selectedFact) {
-          const factName = state.selectedFact.split('/').pop();
-          const idx = c.findIndex(ch => !ch.is_dir && ch.name === factName);
-          setSelectedIdx(idx >= 0 ? idx : -1);
-        } else {
-          setSelectedIdx(-1);
-        }
+  // Determine if we should search instead of browse
+  const hasNonPathFilters = state.filters.some(f => f.category !== 'path');
+  const shouldSearch = hasNonPathFilters || !!state.freeText;
+
+  // Stable primitive key — same rationale as ChronoView.filtersKey.
+  const filtersKey = state.filters.map(f => `${f.category}:${f.value}`).join('\0');
+
+  // Search: fetch results when filters/freeText change (NOT when selectedFact changes)
+  useAsync((stale) => {
+    if (!shouldSearch) return;
+    const domains = state.filters.filter(f => f.category === 'domain').map(f => f.value);
+    const entities = state.filters.filter(f => f.category === 'entity').map(f => f.value);
+    const types = state.filters.filter(f => f.category === 'type').map(f => f.value);
+    const eps = state.filters.filter(f => f.category === 'ep').map(f => f.value);
+    api.search(state.repo, state.freeText, path, 0, { types, eps, domains, entities }).then(r => {
+      if (stale()) return;
+      const items: DirChild[] = (r.results || []).map(sr => ({
+        name: sr.path.split('/').pop() || sr.path,
+        is_dir: false,
+        title: sr.title,
+        type: sr.type,
+        fullPath: sr.path,
+      }));
+      setChildren(items);
+      const currentFactPath = staleStateRef.current.factPath;
+      const matchIdx = items.findIndex(it => it.fullPath === currentFactPath);
+      setSelectedIdx(matchIdx >= 0 ? matchIdx : items.length > 0 ? 0 : -1);
+      if (matchIdx < 0 && items.length > 0 && items[0].fullPath) {
+        dispatch({ type: 'AMEND_NAV', historyCommit: null, factPath: items[0].fullPath, factCommit: null });
       }
-    }).catch(() => setChildren([]));
-  }, [state.currentPath, state.searchQuery, state.headCommit, state.selectedFact]);
+    }).catch(() => { if (!stale()) setChildren([]); });
+  }, [path, state.headCommit, state.freeText, shouldSearch, state.repo, filtersKey]);
 
-  // Similarity search — sends fact text through the regular search endpoint
-  useEffect(() => {
-    if (!state.similarTo) return;
-    setSearchReady(false);
-    setSelectedIdx(0);
-    const p = new URLSearchParams({ q: state.similarTo.text, limit: '50' });
-    fetch(`/api/v1/${state.repo}/search?${p}`).then(r => r.json()).then(r => {
-      const results = (r.results || []).filter((sr: { path: string }) => sr.path !== state.similarTo!.path);
-      setSearchResults(results);
-      setSearchReady(true);
-      if (results.length > 0) dispatch({ type: 'SELECT_FACT', path: results[0].path });
-    }).catch(() => { setSearchResults([]); setSearchReady(true); });
-  }, [state.similarTo, state.headCommit]);
+  // Browse: fetch directory when path/headCommit/selectedFact changes
+  useAsync((stale) => {
+    if (shouldSearch) return;
+    api.browse(state.repo, path).then(r => {
+      if (stale()) return;
+      const c = (r.children || []).slice().sort((a, b) => {
+        if (a.is_dir !== b.is_dir) return a.is_dir ? -1 : 1;
+        return a.name.localeCompare(b.name);
+      });
+      setChildren(c);
+      if (state.factPath) {
+        const factName = state.factPath.split('/').pop();
+        const idx = c.findIndex(ch => !ch.is_dir && ch.name === factName);
+        setSelectedIdx(idx >= 0 ? idx : -1);
+      } else {
+        setSelectedIdx(-1);
+      }
+    }).catch(() => { if (!stale()) setChildren([]); });
+  }, [path, state.headCommit, shouldSearch, state.repo, state.factPath]);
 
-  // Search — re-runs when headCommit changes to refresh results
-  useEffect(() => {
-    if (!state.searchQuery) { if (!state.similarTo) { setSearchResults([]); setSearchReady(false); } return; }
-    const isHeadChangeOnly = state.searchQuery === prevSearchRef.current;
-    if (!isHeadChangeOnly) setSearchReady(false);
-    prevSearchRef.current = state.searchQuery;
-    const savedIdx = selectedIdx;
-    setSelectedIdx(0);
-    const t = setTimeout(() => {
-      api.search(state.repo, state.searchQuery, state.currentPath).then(r => {
-        const results = r.results || [];
-        setSearchResults(results);
-        setSearchReady(true);
-        if (isHeadChangeOnly) {
-          // Preserve selection position, clamped to new results length
-          setSelectedIdx(Math.min(savedIdx, results.length - 1));
-        } else {
-          setSelectedIdx(0);
-          if (results.length > 0) dispatch({ type: 'SELECT_FACT', path: results[0].path });
-          else dispatch({ type: 'SELECT_FACT', path: '' });
-        }
-      }).catch(() => { setSearchResults([]); setSearchReady(true); });
-    }, 300);
-    return () => clearTimeout(t);
-  }, [state.searchQuery, state.headCommit]);
-
-  const isSearchMode = !!(state.searchQuery || state.similarTo) && searchReady;
-  const listLen = () => isSearchMode ? searchResults.length : children.length;
-
-  const previewItem = (idx: number) => {
-    if (isSearchMode) {
-      const r = searchResults[idx];
-      if (r) dispatch({ type: 'SELECT_FACT', path: r.path });
-    } else {
-      const c = children[idx];
-      if (!c) return;
-      if (c.is_dir) dispatch({ type: 'PREVIEW_DIR', path: `${state.currentPath}/${c.name}` });
-      else dispatch({ type: 'SELECT_FACT', path: `${state.currentPath}/${c.name}` });
-    }
-  };
-
-  const moveSelection = (delta: 1 | -1) => {
-    // ArrowUp at top → go one level up (browse mode only)
-    if (delta === -1 && selectedIdx === 0 && !isSearchMode) {
-      dispatch({ type: 'GO_UP' });
-      return;
-    }
-    const next = Math.max(0, Math.min(selectedIdx + delta, listLen() - 1));
+  const moveSelection = useCallback((delta: 1 | -1) => {
+    const len = children.length;
+    if (len === 0) return;
+    const next = Math.max(0, Math.min(selectedIdx + delta, len - 1));
     setSelectedIdx(next);
     itemRefs.current[next]?.scrollIntoView({ block: 'nearest' });
-    previewItem(next);
-  };
-
-  // Enter or Right: open/navigate into selected item
-  const activateSelected = () => {
-    if (isSearchMode) {
-      const r = searchResults[selectedIdx];
-      if (r) dispatch({ type: 'SELECT_FACT', path: r.path });
-      return;
+    const c = children[next];
+    if (c && !c.is_dir) {
+      navigate({ view: 'tree', factPath: c.fullPath || `${path}/${c.name}` });
     }
+  }, [children, selectedIdx, path, navigate]);
+
+  const activateSelected = useCallback(() => {
     const child = children[selectedIdx];
     if (!child) return;
-    if (child.is_dir) dispatch({ type: 'NAVIGATE', path: `${state.currentPath}/${child.name}` });
-    else dispatch({ type: 'SELECT_FACT', path: `${state.currentPath}/${child.name}` });
-  };
+    if (child.is_dir) {
+      dispatch({ type: 'NAVIGATE', path: `${path}/${child.name}` });
+    } else {
+      navigate({ view: 'tree', factPath: child.fullPath || `${path}/${child.name}` });
+    }
+  }, [children, selectedIdx, path, dispatch, navigate]);
 
-  // Keyboard: global shortcuts when search input is NOT focused
+  // Keyboard: j/k navigation, Enter to open, ArrowLeft to go up
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       const tag = (document.activeElement as HTMLElement)?.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
-      if (e.key === '/') { e.preventDefault(); searchRef.current?.focus(); }
-      if (e.key === 'Escape') {
-        if (state.leftMode === 'history' || state.leftMode === 'recent') {
-          dispatch({ type: 'EXIT_HISTORY' });
-        } else {
-          dispatch({ type: 'CLEAR_SEARCH' });
-          searchRef.current?.blur();
+      if (state.rightPanelFocused) return;
+      if (state.view !== 'tree') return;
+
+      if (e.key === 'ArrowDown' || e.key === 'j') { e.preventDefault(); moveSelection(1); }
+      else if (e.key === 'ArrowUp' || e.key === 'k') { e.preventDefault(); moveSelection(-1); }
+      else if (e.key === 'Enter') { e.preventDefault(); activateSelected(); }
+      else if (e.key === 'ArrowLeft') {
+        e.preventDefault();
+        const parts = path.split('/');
+        if (parts.length > 1) {
+          dispatch({ type: 'GO_UP' });
         }
       }
-      if (e.key === 'h' && state.leftMode === 'browse') { e.preventDefault(); dispatch({ type: 'ENTER_HISTORY' }); }
-      if (e.key === 'r' && state.leftMode !== 'recent') { e.preventDefault(); dispatch({ type: 'ENTER_RECENT' }); }
-      if (e.key === 'Backspace' || e.key === 'Delete') { e.preventDefault(); dispatch({ type: 'NAV_BACK' }); }
-      // Browse-mode only shortcuts — skip when in history/recent mode
-      if (state.leftMode !== 'browse') return;
-      if (state.rightPanelFocused) return; // right panel owns j/k/enter when focused
-      if (e.key === 'ArrowDown' || e.key === 'j') { e.preventDefault(); moveSelection(1); }
-      if (e.key === 'ArrowUp' || e.key === 'k') { e.preventDefault(); moveSelection(-1); }
-      if (e.key === 'ArrowLeft' && !isSearchMode) { e.preventDefault(); dispatch({ type: 'GO_UP' }); }
-      if (e.key === 'Enter') { e.preventDefault(); activateSelected(); }
-      if (e.key === 'ArrowRight') {
+      else if (e.key === 'ArrowRight') {
         e.preventDefault();
-        const selectedItem = isSearchMode ? searchResults[selectedIdx] : children[selectedIdx];
-        if (!selectedItem) return; // no item selected → do nothing
-        const isDir = !isSearchMode && (selectedItem as { is_dir?: boolean }).is_dir;
-        if (isDir) {
-          activateSelected(); // navigate into directory as before
+        const child = children[selectedIdx];
+        if (!child) return;
+        if (child.is_dir) {
+          activateSelected();
         } else {
-          // transfer focus to right panel (fact selected in browse or search mode)
           dispatch({ type: 'FOCUS_RIGHT_PANEL' });
         }
       }
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  });
-
-  if (state.leftMode === 'history') {
-    return <HistoryTimeline state={state} dispatch={dispatch} />;
-  }
-  if (state.leftMode === 'recent') {
-    return <RecentFacts state={state} dispatch={dispatch} />;
-  }
+  }, [state.rightPanelFocused, state.view, moveSelection, activateSelected, children, selectedIdx, path, dispatch]);
 
   return (
     <div data-testid="left-panel" style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
-      {/* Search row */}
-      <div style={{ padding: '6px 8px', borderBottom: '1px solid #333' }}>
-        <div style={{ position: 'relative' }}>
-          <input
-            ref={searchRef}
-            type="text"
-            placeholder={state.similarTo ? `Similar to: ${state.similarTo.path.replace(/\.md$/, '')}` : 'Search… (/)'}
-            value={state.searchQuery}
-            onChange={e => dispatch({ type: 'SEARCH', query: e.target.value })}
-            onKeyDown={e => {
-              if (e.key === 'Escape') { dispatch({ type: 'CLEAR_SEARCH' }); e.currentTarget.blur(); }
-              if (e.key === 'ArrowDown') { e.preventDefault(); moveSelection(1); }
-              if (e.key === 'ArrowUp') { e.preventDefault(); moveSelection(-1); }
-              if (e.key === 'Enter') { e.preventDefault(); activateSelected(); }
-            }}
-            data-testid="search-input"
-            style={{ width: '100%', boxSizing: 'border-box', background: '#1a1a1a', border: '1px solid #333', color: '#eee', padding: '5px 24px 5px 8px', borderRadius: 4, fontSize: 12 }}
-          />
-          {(state.searchQuery || state.similarTo) && (
-            <button onClick={() => { dispatch({ type: 'CLEAR_SEARCH' }); searchRef.current?.focus(); }}
-              style={{ position: 'absolute', right: 4, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', color: '#666', cursor: 'pointer', fontSize: 12, padding: '2px 4px', lineHeight: 1 }}
-              onMouseEnter={e => { e.currentTarget.style.color = '#aaa'; }}
-              onMouseLeave={e => { e.currentTarget.style.color = '#666'; }}
-            >✕</button>
-          )}
-        </div>
-      </div>
-
       <div style={{ flex: 1, overflowY: 'auto' }}>
-        {isSearchMode ? (
-          searchResults.length === 0 ? (
-            <div style={{ padding: 16, color: '#666', fontSize: 13 }}>
-              {state.similarTo ? 'No similar facts found' : 'No results'}
+        {children.map((c, i) => {
+          const ts = (c.type && typeStyles[c.type]) || defaultTypeStyle;
+          return (
+            <div
+              key={c.name}
+              data-testid="dir-entry"
+              data-name={c.name}
+              data-isdir={String(c.is_dir)}
+              data-path={c.fullPath || ''}
+              ref={el => { itemRefs.current[i] = el; }}
+              onClick={() => {
+                setSelectedIdx(i);
+                if (c.is_dir) {
+                  dispatch({ type: 'ADD_FILTER', chip: { category: 'path', value: `${path}/${c.name}` } });
+                } else {
+                  navigate({ view: 'tree', factPath: c.fullPath || `${path}/${c.name}` });
+                }
+              }}
+              style={{
+                padding: '8px 12px', cursor: 'pointer',
+                background: i === selectedIdx ? '#2a2a3a' : 'transparent',
+                borderBottom: '1px solid #222',
+                display: 'flex', alignItems: 'center', gap: 8,
+              }}
+            >
+              {c.is_dir ? (
+                <span style={{ flexShrink: 0, display: 'flex', alignItems: 'center', opacity: 0.7 }}>
+                  <FolderIcon color="#7c9" size={12} />
+                </span>
+              ) : (
+                <span data-testid="fact-type-icon" style={{ flexShrink: 0, display: 'flex', alignItems: 'center' }}>
+                  <TypeIcon type={c.type || ''} color={ts.color} size={12} />
+                </span>
+              )}
+              <span style={{ fontSize: 13, color: '#ddd' }}>{c.title || c.name}</span>
             </div>
-          ) : searchResults.map((r, i) => (
-            <div key={r.path} data-testid="search-result" data-path={r.path} ref={el => { itemRefs.current[i] = el; }} onClick={() => { setSelectedIdx(i); dispatch({ type: 'SELECT_FACT', path: r.path }); }}
-              style={{ padding: '8px 12px', cursor: 'pointer', background: i === selectedIdx ? '#2a2a3a' : 'transparent', borderBottom: '1px solid #222' }}>
-              <div style={{ fontSize: 13, color: '#ddd' }}>{r.title || r.path}</div>
-              <div style={{ fontSize: 11, color: '#666', fontFamily: 'monospace' }}>{r.path}</div>
-              <div style={{ fontSize: 11, color: r.score > 75 ? '#4caf50' : r.score > 50 ? '#ff9800' : '#888' }}>
-                score: {Math.round(r.score)}
-              </div>
-            </div>
-          ))
-        ) : (
-          <>
-            {children.map((c, i) => (
-                <div key={c.name} data-testid="dir-entry" data-name={c.name} data-isdir={String(c.is_dir)} ref={el => { itemRefs.current[i] = el; }}
-                  onClick={() => {
-                    setSelectedIdx(i);
-                    if (c.is_dir) dispatch({ type: 'NAVIGATE', path: `${state.currentPath}/${c.name}` });
-                    else dispatch({ type: 'SELECT_FACT', path: `${state.currentPath}/${c.name}` });
-                  }}
-                  style={{ padding: '8px 12px', cursor: 'pointer', background: i === selectedIdx ? '#2a2a3a' : 'transparent', borderBottom: '1px solid #222', display: 'flex', alignItems: 'center', gap: 8 }}>
-                  {c.is_dir ? (
-                    <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#7c9', flexShrink: 0, opacity: 0.7 }} />
-                  ) : (
-                    <span data-testid="fact-type-icon" style={{ fontSize: 10, flexShrink: 0, color: (c.type && typeStyles[c.type]?.color) || defaultTypeStyle.color, lineHeight: 1 }}>
-                      {(c.type && typeStyles[c.type]?.icon) || defaultTypeStyle.icon}
-                    </span>
-                  )}
-                  <span style={{ fontSize: 13, color: '#ddd' }}>{c.name}</span>
-                </div>
-            ))}
-            {children.length === 0 && (
-              <div style={{ padding: 16, color: '#666', fontSize: 13 }}>No items in this path.</div>
-            )}
-          </>
-        )}
+          );
+        })}
+        {children.length === 0 && <EmptyState message="No items in this path." />}
       </div>
     </div>
   );
+}
+
+// ---------- ChronoView ----------
+
+function ChronoView({ state, dispatch, navigate }: Props) {
+  const [facts, setFacts] = useState<RecentFactEntry[]>([]);
+  const [total, setTotal] = useState(0);
+  const [loading, setLoading] = useState(false);
+  const [selectedIdx, setSelectedIdx] = useState(0);
+  const sentinelRef = useRef<HTMLDivElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const itemRefs = useRef<(HTMLDivElement | null)[]>([]);
+
+  const staleStateRef = useRef(state);
+  staleStateRef.current = state;
+
+  const path = currentPath(state);
+  const { domains, entities, types, eps } = useMemo(() => {
+    const domains: string[] = [], entities: string[] = [], types: string[] = [], eps: string[] = [];
+    for (const f of state.filters) {
+      if (f.category === 'domain') domains.push(f.value);
+      else if (f.category === 'entity') entities.push(f.value);
+      else if (f.category === 'type') types.push(f.value);
+      else if (f.category === 'ep') eps.push(f.value);
+    }
+    return { domains, entities, types, eps };
+  }, [state.filters]);
+  const typeFilter = types.length === 1 ? types[0] : undefined;
+  // Stable primitive key so useAsync doesn't re-fire when filters array has a new
+  // reference but same content (e.g. after NAV_BACK restores a pushNav-copied array).
+  const filtersKey = state.filters.map(f => `${f.category}:${f.value}`).join('\0');
+
+  useAsync((stale) => {
+    setLoading(true);
+    setFacts([]);
+    setTotal(0);
+    setSelectedIdx(0);
+    api.recent(state.repo, path, state.freeText, 50, 0, {
+      typeFilter,
+      domains: domains.length ? domains : undefined,
+      entities: entities.length ? entities : undefined,
+      eps: eps.length ? eps : undefined,
+    }).then(r => {
+      if (stale()) return;
+      setFacts(r.facts || []);
+      setTotal(r.total);
+      setLoading(false);
+      const loaded = r.facts || [];
+      // Don't override an already-valid selection (e.g. restored by NAV_BACK).
+      const alreadyInList = loaded.some(f => f.path === staleStateRef.current.factPath);
+      if (loaded.length > 0 && !alreadyInList) {
+        dispatch({ type: 'AMEND_NAV', historyCommit: null, factPath: loaded[0].path, factCommit: null });
+      }
+    }).catch(() => { if (!stale()) { setFacts([]); setLoading(false); } });
+  }, [path, state.headCommit, state.freeText, state.repo, typeFilter, filtersKey]);
+
+  // Infinite scroll — loadingRef keeps loadMore stable so the IntersectionObserver
+  // doesn't reconnect on every loading state flip.
+  const loadingRef = useRef(loading);
+  loadingRef.current = loading;
+
+  const loadMore = useCallback(() => {
+    if (loadingRef.current || facts.length >= total) return;
+    setLoading(true);
+    api.recent(state.repo, path, state.freeText, 50, facts.length, {
+      typeFilter,
+      domains: domains.length ? domains : undefined,
+      entities: entities.length ? entities : undefined,
+      eps: eps.length ? eps : undefined,
+    }).then(r => {
+      setFacts(prev => [...prev, ...(r.facts || [])]);
+      setLoading(false);
+    }).catch(() => setLoading(false));
+  }, [facts.length, total, state.repo, path, state.freeText, typeFilter, filtersKey]);
+
+  useEffect(() => {
+    const sentinel = sentinelRef.current;
+    if (!sentinel) return;
+    const observer = new IntersectionObserver(
+      ([entry]) => { if (entry.isIntersecting) loadMore(); },
+      { root: containerRef.current, threshold: 0.1 }
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [loadMore]);
+
+  // Sync visual selection when factPath changes externally (e.g. back navigation).
+  useEffect(() => {
+    if (!state.factPath) return;
+    const idx = facts.findIndex(f => f.path === state.factPath);
+    if (idx >= 0 && idx !== selectedIdx) {
+      setSelectedIdx(idx);
+      itemRefs.current[idx]?.scrollIntoView({ block: 'nearest' });
+    }
+  }, [state.factPath, facts]);
+
+  // Keyboard navigation
+  const moveSelection = useCallback((delta: 1 | -1) => {
+    const next = Math.max(0, Math.min(selectedIdx + delta, facts.length - 1));
+    setSelectedIdx(next);
+    itemRefs.current[next]?.scrollIntoView({ block: 'nearest' });
+    const f = facts[next];
+    if (f) navigate({ view: 'chrono', factPath: f.path });
+  }, [selectedIdx, facts, navigate]);
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      const tag = (document.activeElement as HTMLElement)?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+      if (state.rightPanelFocused) return;
+      if (state.view !== 'chrono') return;
+
+      if (e.key === 'ArrowDown' || e.key === 'j') { e.preventDefault(); moveSelection(1); }
+      else if (e.key === 'ArrowUp' || e.key === 'k') { e.preventDefault(); moveSelection(-1); }
+      else if (e.key === 'ArrowRight') { e.preventDefault(); dispatch({ type: 'FOCUS_RIGHT_PANEL' }); }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [state.rightPanelFocused, state.view, moveSelection, dispatch]);
+
+  return (
+    <div data-testid="chrono-list" ref={containerRef} style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
+      <div style={{ flex: 1, overflowY: 'auto', padding: '4px 0' }}>
+        {facts.length === 0 && !loading && (
+          <EmptyState message={state.freeText ? 'No facts match the search.' : 'No facts in this path.'} />
+        )}
+        {facts.map((f, i) => {
+          const ts = (f.type && typeStyles[f.type]) || defaultTypeStyle;
+          return (
+            <div
+              key={f.path}
+              data-testid="chrono-item"
+              data-path={f.path}
+              ref={el => { itemRefs.current[i] = el; }}
+              onClick={() => { setSelectedIdx(i); navigate({ view: 'chrono', factPath: f.path }); }}
+              style={{
+                padding: '6px 12px', cursor: 'pointer',
+                background: i === selectedIdx ? '#2a2a3a' : 'transparent',
+                borderBottom: '1px solid #1a1a1a',
+              }}
+            >
+              <div style={{ fontSize: 12, color: '#ddd', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span style={{ flexShrink: 0, display: 'flex', alignItems: 'center' }}><TypeIcon type={f.type || ''} color={ts.color} size={12} /></span>
+                {f.title}
+                {f.type && f.type !== 'observation' && (
+                  <span data-testid="chrono-type-badge" style={{
+                    color: ts.color, background: ts.bg, fontSize: 9, padding: '1px 5px',
+                    borderRadius: 3, fontFamily: 'monospace', flexShrink: 0, letterSpacing: 0.3,
+                  }}>{ts.label}</span>
+                )}
+              </div>
+              <div style={{ fontSize: 10, color: '#666', marginTop: 1, display: 'flex', gap: 8 }}>
+                <span style={{ fontFamily: 'monospace' }}>{f.path.split('/').pop()}</span>
+                <span>{relativeTimeEpoch(f.committed_at)}</span>
+              </div>
+            </div>
+          );
+        })}
+        <div ref={sentinelRef} style={{ height: 1 }} />
+        {loading && <LoadingSpinner />}
+      </div>
+    </div>
+  );
+}
+
+// ---------- LeftPanel (dispatcher) ----------
+
+export function LeftPanel({ state, dispatch, navigate }: Props) {
+  switch (state.view) {
+    case 'tree': return <TreeView state={state} dispatch={dispatch} navigate={navigate} />;
+    case 'chrono': return <ChronoView state={state} dispatch={dispatch} navigate={navigate} />;
+    case 'history': return <HistoryTimeline state={state} dispatch={dispatch} navigate={navigate} />;
+  }
 }

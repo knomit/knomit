@@ -15,6 +15,7 @@ import (
 // WriteFile writes content to path in a new commit with message.
 // Returns the commit hash and the blob hash of the written file.
 func (s *Store) WriteFile(path, content, message, operation string) (commitHash string, blobHash string, err error) {
+	path = strings.ToLower(path)
 	if path == "" {
 		return "", "", fmt.Errorf("git: WriteFile: path must not be empty")
 	}
@@ -65,6 +66,7 @@ func (s *Store) WriteFile(path, content, message, operation string) (commitHash 
 // DeleteFile removes path from HEAD and creates a commit.
 // Returns the commit hash of the new commit.
 func (s *Store) DeleteFile(path, message, operation string) (commitHash string, err error) {
+	path = strings.ToLower(path)
 	if path == "" {
 		return "", fmt.Errorf("git: DeleteFile: path must not be empty")
 	}
@@ -124,6 +126,13 @@ func (s *Store) BatchWrite(files map[string]string, message, operation string) (
 	if len(files) == 0 {
 		return "", nil, nil
 	}
+
+	// Lowercase all paths.
+	lowered := make(map[string]string, len(files))
+	for path, content := range files {
+		lowered[strings.ToLower(path)] = content
+	}
+	files = lowered
 
 	// Pre-flight validation: reject empty paths and paths containing "..".
 	for path := range files {
