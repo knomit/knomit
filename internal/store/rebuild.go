@@ -358,7 +358,7 @@ func (idx *Index) rebuildGraph(progress RebuildProgress) (int, error) {
 				for _, e := range edges {
 					fp := escapeCypherKey(e.from)
 					tp := escapeCypherKey(e.to)
-					q := fmt.Sprintf(`SELECT cypher('MATCH (a:Fact {path: "%s"}), (b:Fact {path: "%s"}) MERGE (a)-[:SIMILAR_TO]->(b)')`, fp, tp)
+					q := fmt.Sprintf(`SELECT cypher('MATCH (a:%s {path: "%s"}), (b:%s {path: "%s"}) MERGE (a)-[:%s]->(b)')`, NodeFact, fp, NodeFact, tp, EdgeSimilarTo)
 					if _, err := simTx.Exec(q); err != nil {
 						log.Warn().Err(err).Str("from", e.from).Str("to", e.to).Msg("rebuildGraph: similarity edge failed")
 					}

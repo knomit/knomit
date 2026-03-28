@@ -28,7 +28,8 @@ func (idx *Index) ExplainFact(path string) (ExplainResult, error) {
 	pj := string(params)
 
 	incoming, err := idx.queryRefSummaries(
-		`MATCH (f:Fact)-[:DERIVED_FROM]->(t:Fact {path: $path}) WHERE NOT f.deleted = true RETURN f.path AS path, f.title AS title, false AS deleted`,
+		fmt.Sprintf(`MATCH (f:%s)-[:%s]->(t:%s {path: $path}) WHERE NOT f.deleted = true RETURN f.path AS path, f.title AS title, false AS deleted`,
+			NodeFact, EdgeDerivedFrom, NodeFact),
 		pj,
 	)
 	if err != nil {
@@ -36,7 +37,8 @@ func (idx *Index) ExplainFact(path string) (ExplainResult, error) {
 	}
 
 	outgoing, err := idx.queryRefSummaries(
-		`MATCH (f:Fact {path: $path})-[:DERIVED_FROM]->(t:Fact) RETURN t.path AS path, t.title AS title, t.deleted AS deleted`,
+		fmt.Sprintf(`MATCH (f:%s {path: $path})-[:%s]->(t:%s) RETURN t.path AS path, t.title AS title, t.deleted AS deleted`,
+			NodeFact, EdgeDerivedFrom, NodeFact),
 		pj,
 	)
 	if err != nil {
