@@ -48,28 +48,6 @@ func TestGet_Unknown(t *testing.T) {
 	}
 }
 
-func TestReplace_ReturnsOld(t *testing.T) {
-	m := emptyManager()
-	old := makeRI("knomit")
-	m.Set("knomit", old)
-	newRI := makeRI("knomit")
-	prev := m.Replace("knomit", newRI)
-	if prev != old {
-		t.Fatal("Replace did not return the old instance")
-	}
-	if m.Get("knomit") != newRI {
-		t.Fatal("Replace did not install the new instance")
-	}
-}
-
-func TestReplace_NoOld(t *testing.T) {
-	m := emptyManager()
-	ri := makeRI("work")
-	prev := m.Replace("work", ri)
-	if prev != nil {
-		t.Fatalf("expected nil for absent repo, got %v", prev)
-	}
-}
 
 func TestForEach(t *testing.T) {
 	m := emptyManager()

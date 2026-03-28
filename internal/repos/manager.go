@@ -68,16 +68,6 @@ func (m *Manager) Set(name string, ri *RepoInstance) {
 	m.repos[name] = ri
 }
 
-// Replace swaps the RepoInstance for name and returns the old instance
-// (or nil if there was none) so the caller can clean it up.
-func (m *Manager) Replace(name string, ri *RepoInstance) *RepoInstance {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	old := m.repos[name]
-	m.repos[name] = ri
-	return old
-}
-
 // ForEach calls fn for every registered repo while holding a read lock.
 func (m *Manager) ForEach(fn func(name string, ri *RepoInstance)) {
 	m.mu.RLock()
