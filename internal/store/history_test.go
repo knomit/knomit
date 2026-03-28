@@ -332,3 +332,47 @@ func TestExplainFactAt_IncomingRefs(t *testing.T) {
 		t.Errorf("expected incoming from %s, got %v", source, result.Incoming)
 	}
 }
+
+func TestRebuild_IncludesHistoryPhase(t *testing.T) {
+	idx, err := New(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer idx.Close()
+
+	path := "kb/test/fact.md"
+	c1 := "aaa0000000000000000000000000000000000000aa"
+	c2 := "bbb0000000000000000000000000000000000000bb"
+
+	blobHash := "deadbeef00000004"
+	git := &mockGitReader{
+		files:      map[string]string{path: factContent("Version Two")},
+		blobHashes: map[string]string{path: blobHash},
+		commitFiles: map[string]map[string]string{
+			c1: {path: factContent("Version One")},
+			c2: {path: factContent("Version Two")},
+		},
+		head: c2,
+	}
+
+	// Seed commit_log before rebuild so history phase has entries to process.
+	insertCommitLog(t, idx, path, c1, 1000, "added")
+	insertCommitLog(t, idx, path, c2, 2000, "modified")
+
+	// Seed objects so Upsert during facts phase can find the blob.
+	idx.db.Exec(`INSERT OR IGNORE INTO objects(hash, type, size, data) VALUES (?, ?, ?, ?)`,
+		blobHash, BlobObjectType, 10, []byte(factContent("Version Two")))
+
+	if err := idx.Rebuild(git, "machine/test", nil); err != nil {
+		t.Fatalf("Rebuild: %v", err)
+	}
+
+	// After Rebuild, FactVersion nodes for both commits should exist.
+	versions, err := idx.FactVersionHistory(path)
+	if err != nil {
+		t.Fatalf("FactVersionHistory: %v", err)
+	}
+	if len(versions) != 2 {
+		t.Errorf("expected 2 FactVersion nodes after Rebuild, got %d", len(versions))
+	}
+}

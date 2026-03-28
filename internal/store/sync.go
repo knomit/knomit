@@ -111,6 +111,14 @@ func (idx *Index) Rebuild(git GitReader, branch string, progress RebuildProgress
 	}
 	log.Info().Int("graphed", graphed).Str("elapsed", fmt.Sprintf("%.1fs", time.Since(start).Seconds())).Msg("rebuild: phase 3 (graph) complete")
 
+	// Phase 4: history (FactVersion nodes from commit_log)
+	start = time.Now()
+	versioned, err := idx.rebuildGraphHistory(git, branch, progress)
+	if err != nil {
+		return fmt.Errorf("rebuild: history: %w", err)
+	}
+	log.Info().Int("versions", versioned).Str("elapsed", fmt.Sprintf("%.1fs", time.Since(start).Seconds())).Msg("rebuild: phase 4 (history) complete")
+
 	return idx.SetLastCommit(branch, head)
 }
 
