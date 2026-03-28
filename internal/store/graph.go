@@ -23,6 +23,7 @@ const (
 	NodeEntity       = "Entity"
 	NodeDomain       = "Domain"
 	NodeOntologyNode = "OntologyNode"
+	NodeFactVersion  = "FactVersion" // historical snapshot of a Fact at a specific commit
 )
 
 // Edge types used in GraphQLite Cypher queries.
@@ -34,6 +35,7 @@ const (
 	EdgeSimilarTo       = "SIMILAR_TO"        // Fact ↔ Fact (KNN similarity)
 	EdgeDomainChildOf   = "DOMAIN_CHILD_OF"   // Domain → Domain (hierarchy)
 	EdgeOntologyChildOf = "ONTOLOGY_CHILD_OF" // OntologyNode → OntologyNode (hierarchy)
+	EdgePrevVersion     = "PREV_VERSION"      // FactVersion → older FactVersion (same path)
 )
 
 // graphSyncFact creates or updates graph nodes and edges for a fact.
