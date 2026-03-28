@@ -686,7 +686,6 @@ func setupTestedSession(t *testing.T) (http.Handler, string) {
 	sess.mu.Lock()
 	sess.State = StateTested
 	sess.RemoteStore = remoteStore
-	sess.RemoteStorer = remoteStorer
 	sess.TestResult = connectivityResult{
 		DefaultBranch: "main",
 		History:       "disjoint",
@@ -942,7 +941,6 @@ func setupAppliedSession(t *testing.T) (http.Handler, string, *repos.Manager, *S
 	sess.mu.Lock()
 	sess.State = StateApplied
 	sess.RemoteStore = remoteStore
-	sess.RemoteStorer = remoteStorer
 	sess.TestResult = connectivityResult{
 		DefaultBranch: "main",
 		History:       "disjoint",
@@ -1258,7 +1256,6 @@ func TestApply_SharedHistory(t *testing.T) {
 	sess.mu.Lock()
 	sess.State = StateTested
 	sess.RemoteStore = remoteStore
-	sess.RemoteStorer = remoteStorer
 	sess.TestResult = connectivityResult{
 		DefaultBranch: "main",
 		History:       "shared",

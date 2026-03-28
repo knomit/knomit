@@ -17,9 +17,11 @@ var _ storer.EncodedObjectStorer = (*Storer)(nil)
 var _ storage.Storer = (*Storer)(nil)
 
 // Storer implements go-git's storage.Storer over a shared SQLite *sql.DB.
-// The caller (store.Service) owns the database lifecycle.
+// The caller (store.Service) owns the database lifecycle unless the Storer
+// was created by NewMemoryStorer, in which case Close() must be called.
 type Storer struct {
 	db        *sql.DB
+	ownsDB    bool
 	tx        *sql.Tx
 	commitLog atomic.Bool
 	modules   map[string]*Storer
@@ -39,8 +41,7 @@ func NewStorer(db *sql.DB) *Storer {
 
 // NewMemoryStorer opens an in-memory SQLite database, applies the core schema
 // migrations (standard tables only, no vec0 or GraphQLite), and returns a
-// Storer backed by it. The caller owns the DB lifecycle and must close it via
-// s.DB().Close() when done.
+// Storer backed by it. The caller must call s.Close() when done.
 func NewMemoryStorer() (*Storer, error) {
 	db, err := sql.Open("sqlite3", ":memory:")
 	if err != nil {
@@ -50,11 +51,17 @@ func NewMemoryStorer() (*Storer, error) {
 		db.Close()
 		return nil, fmt.Errorf("storegit.NewMemoryStorer: %w", err)
 	}
-	return NewStorer(db), nil
+	return &Storer{db: db, ownsDB: true}, nil
 }
 
-// DB returns the underlying *sql.DB.
-func (s *Storer) DB() *sql.DB { return s.db }
+// Close releases the database connection if this Storer opened it
+// (i.e. was created by NewMemoryStorer). It is a no-op otherwise.
+func (s *Storer) Close() error {
+	if s.ownsDB {
+		return s.db.Close()
+	}
+	return nil
+}
 
 // conn returns the active transaction if set, otherwise the raw *sql.DB.
 func (s *Storer) conn() execer {

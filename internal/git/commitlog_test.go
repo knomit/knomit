@@ -7,20 +7,50 @@ import (
 	"testing"
 	"time"
 
+	_ "github.com/mattn/go-sqlite3"
+
 	storegit "knomit/internal/store/git"
+	storemigrate "knomit/internal/store/migrate"
 )
+
+// newStorerAndDB opens an in-memory SQLite DB, applies Core migrations, and
+// returns a Storer (backed by an externally-owned DB) alongside the DB itself.
+// The caller is responsible for closing the DB via t.Cleanup.
+func newStorerAndDB(t *testing.T) (*storegit.Storer, *sql.DB) {
+	t.Helper()
+	db, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := storemigrate.Core(db); err != nil {
+		db.Close()
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	return storegit.NewStorer(db), db
+}
+
+// newStoreAndDB creates a git.Store backed by an in-memory DB and returns
+// both so tests can inject data directly via SQL.
+func newStoreAndDB(t *testing.T) (*Store, *sql.DB) {
+	t.Helper()
+	s, db := newStorerAndDB(t)
+	store, err := InitWithStorer(s, nil, testBranch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return store, db
+}
 
 // TestActivitySQLTimeBuckets verifies that the CASE WHEN cutoff expressions in
 // activitySQL produce correct 7d/30d/90d counts. Rows are injected directly
 // into commit_log so timestamps are fully controlled.
 func TestActivitySQLTimeBuckets(t *testing.T) {
-	store := newInternalTestStore(t)
+	store, db := newStoreAndDB(t)
 
 	if !store.storer.CommitLogAvailable() {
 		t.Skip("commit_log not available")
 	}
-
-	db := store.storer.DB()
 	now := time.Now().Unix()
 	injected := []struct {
 		hash string
@@ -65,13 +95,11 @@ func TestActivitySQLTimeBuckets(t *testing.T) {
 // TestCommitLogIncrementalAppend verifies that appendCommitLog writes the
 // correct commit hash and path for each WriteFile call.
 func TestCommitLogIncrementalAppend(t *testing.T) {
-	store := newInternalTestStore(t)
+	store, db := newStoreAndDB(t)
 
 	if !store.storer.CommitLogAvailable() {
 		t.Skip("commit_log not available")
 	}
-
-	db := store.storer.DB()
 	var countBefore int
 	db.QueryRow(`SELECT COUNT(*) FROM commit_log`).Scan(&countBefore)
 
@@ -106,7 +134,7 @@ func TestCommitLogIncrementalAppend(t *testing.T) {
 // existing commit_log entries does not duplicate rows (the early-stop on
 // already-indexed commits works correctly).
 func TestPopulateCommitLogIsIncremental(t *testing.T) {
-	s := newInternalTestStorer(t)
+	s, db := newStorerAndDB(t)
 	store, err := InitWithStorer(s, nil, testBranch)
 	if err != nil {
 		t.Fatal(err)
@@ -117,8 +145,6 @@ func TestPopulateCommitLogIsIncremental(t *testing.T) {
 	if _, _, err := store.WriteFile(testBranch, "kb/b.md", "# B\n", "add b", "learn"); err != nil {
 		t.Fatal(err)
 	}
-
-	db := store.storer.DB()
 	var countFirst int
 	db.QueryRow(`SELECT COUNT(*) FROM commit_log`).Scan(&countFirst)
 
@@ -142,13 +168,11 @@ func TestPopulateCommitLogIsIncremental(t *testing.T) {
 // TestAppendCommitLogDelete verifies that DeleteFile commits appear in
 // commit_log with the deleted file's path.
 func TestAppendCommitLogDelete(t *testing.T) {
-	store := newInternalTestStore(t)
+	store, db := newStoreAndDB(t)
 
 	if !store.storer.CommitLogAvailable() {
 		t.Skip("commit_log not available")
 	}
-
-	db := store.storer.DB()
 	h1, _, err := store.WriteFile(testBranch, "kb/del.md", "# Del\n", "add del", "learn")
 	if err != nil {
 		t.Fatal(err)
@@ -182,10 +206,9 @@ func TestAppendCommitLogDelete(t *testing.T) {
 // TestCommitLogOperation verifies that operation and author_email are stored
 // in commit_log for multiple operation types (learn, retract, update).
 func TestCommitLogOperation(t *testing.T) {
-	store := newInternalTestStore(t)
+	store, db := newStoreAndDB(t)
 
 	agentID := deriveAgentID(testBranch)
-	db := store.storer.DB()
 
 	// learn
 	if _, _, err := store.WriteFile(testBranch, "kb/a.md", "# A\n", "add a", "learn"); err != nil {

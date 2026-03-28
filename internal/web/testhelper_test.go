@@ -19,7 +19,7 @@ func newWebTestStore(t *testing.T) *git.Store {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { s.DB().Close() })
+	t.Cleanup(func() { s.Close() })
 	store, err := git.InitWithStorer(s, nil, testAgentBranch)
 	if err != nil {
 		t.Fatal(err)
