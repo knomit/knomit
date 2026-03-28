@@ -53,19 +53,19 @@ func (s *Store) ReadFileWithHash(branch, path string) (string, string, error) {
 	return string(b), entry.Hash.String(), nil
 }
 
-// ReadFileAtCommit reads the content of path from a specific commit.
+// readFileAtCommitHash reads the content of path from a specific commit.
 // If the exact path is not found, it falls back to a case-insensitive tree
 // walk so that normalised (lowercase) index paths resolve correctly against
 // pre-normalisation commits that stored paths with mixed case.
-func (s *Store) ReadFileAtCommit(path, commitHash string) (string, error) {
+func (s *Store) readFileAtCommitHash(path, commitHash string) (string, error) {
 	hash := plumbing.NewHash(commitHash)
 	commit, err := s.repo.CommitObject(hash)
 	if err != nil {
-		return "", fmt.Errorf("ReadFileAtCommit: commit: %w", err)
+		return "", fmt.Errorf("readFileAtCommitHash: commit: %w", err)
 	}
 	tree, err := commit.Tree()
 	if err != nil {
-		return "", fmt.Errorf("ReadFileAtCommit: tree: %w", err)
+		return "", fmt.Errorf("readFileAtCommitHash: tree: %w", err)
 	}
 	if f, err := tree.File(path); err == nil {
 		return f.Contents()
@@ -73,9 +73,16 @@ func (s *Store) ReadFileAtCommit(path, commitHash string) (string, error) {
 	// Exact lookup failed — try case-insensitive walk.
 	content, err := treeFileInsensitive(s.repo, tree, path)
 	if err != nil {
-		return "", fmt.Errorf("ReadFileAtCommit: file %q not found (case-insensitive): %w", path, err)
+		return "", fmt.Errorf("readFileAtCommitHash: file %q not found (case-insensitive): %w", path, err)
 	}
 	return content, nil
+}
+
+// ReadFileAtCommit reads the content of path at the given commit.
+// branch is accepted for interface consistency; the commit hash uniquely
+// identifies the version without branch resolution.
+func (s *Store) ReadFileAtCommit(branch, path, commitHash string) (string, error) {
+	return s.readFileAtCommitHash(path, commitHash)
 }
 
 // treeFileInsensitive walks a git tree matching each path component
@@ -146,7 +153,7 @@ func (s *Store) ReadFileLastCommit(branch, path, beforeCommitHash string) (conte
 		return "", "", fmt.Errorf("ReadFileLastCommit: %q: no prior commit found", path)
 	}
 
-	content, err = s.ReadFileAtCommit(path, lastCommit.Hash.String())
+	content, err = s.readFileAtCommitHash(path, lastCommit.Hash.String())
 	return content, lastCommit.Hash.String(), err
 }
 

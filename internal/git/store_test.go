@@ -665,7 +665,7 @@ func TestReadFileAtCommit(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	content, err := store.ReadFileAtCommit("kb/test.md", commitHash1)
+	content, err := store.ReadFileAtCommit(testBranch, "kb/test.md", commitHash1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -688,7 +688,7 @@ func TestReadFileLastCommit(t *testing.T) {
 	}
 
 	// File must not be readable at the retract commit.
-	if _, err := store.ReadFileAtCommit("kb/fact.md", retractHash); err == nil {
+	if _, err := store.ReadFileAtCommit(testBranch, "kb/fact.md", retractHash); err == nil {
 		t.Fatal("expected error reading deleted file at retract commit, got nil")
 	}
 

@@ -230,7 +230,7 @@ func explainResume(gs GitStore, sessionIdx ToolSessionIndex, agentBranch, cursor
 		}
 
 		for _, item := range items {
-			content, readErr := gs.ReadFileAtCommit(item.Path, item.CommitHash)
+			content, readErr := gs.ReadFileAtCommit(agentBranch, item.Path, item.CommitHash)
 			var retracted bool
 			var lastCommitHash string
 			if readErr != nil {

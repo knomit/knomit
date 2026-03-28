@@ -906,7 +906,7 @@ func TestReflectStepNotCreatedWhenNoHypotheses(t *testing.T) {
 	ri.EXPECT().GetPipelineWatermark("review", "machine/test").Return("old-hash", nil)
 	gs.EXPECT().DiffFiles("machine/test", "old-hash").Return(nil, nil, []string{"kb/go/obs.md"}, nil)
 	// Deleted file was an observation, not a hypothesis.
-	gs.EXPECT().ReadFileAtCommit("kb/go/obs.md", "old-hash").Return(
+	gs.EXPECT().ReadFileAtCommit("machine/test", "kb/go/obs.md", "old-hash").Return(
 		"---\ntype: observation\ndomain: [go]\nconfidence: 0.8\nsources: 1\nentities: []\nrefs: []\n---\n# Observation\n\nJust an observation.\n", nil)
 
 	// No reflect item should be inserted — session completes directly.
@@ -961,7 +961,7 @@ func TestReflectStepCreatedWhenHypothesesRetracted(t *testing.T) {
 	ri.EXPECT().GetPipelineWatermark("review", "machine/test").Return("old-hash", nil)
 	gs.EXPECT().DiffFiles("machine/test", "old-hash").Return(nil, nil, []string{"kb/go/hyp.md"}, nil)
 	// Read the old version — it was a hypothesis.
-	gs.EXPECT().ReadFileAtCommit("kb/go/hyp.md", "old-hash").Return(
+	gs.EXPECT().ReadFileAtCommit("machine/test", "kb/go/hyp.md", "old-hash").Return(
 		"---\ntype: hypothesis\ndomain: [go]\nconfidence: 0.6\nsources: 1\nentities: []\nrefs: []\n---\n# Hypothesis\n\nA hypothesis.\n", nil)
 
 	// Reflect item should be enqueued.
@@ -1040,7 +1040,7 @@ func TestReflectStepCreatedWhenHypothesisPromoted(t *testing.T) {
 	ri.EXPECT().GetPipelineWatermark("review", "machine/test").Return("old-hash", nil)
 	gs.EXPECT().DiffFiles("machine/test", "old-hash").Return(nil, []string{"kb/go/hyp.md"}, nil, nil)
 	// Old version was hypothesis.
-	gs.EXPECT().ReadFileAtCommit("kb/go/hyp.md", "old-hash").Return(
+	gs.EXPECT().ReadFileAtCommit("machine/test", "kb/go/hyp.md", "old-hash").Return(
 		"---\ntype: hypothesis\ndomain: [go]\nconfidence: 0.6\nsources: 1\nentities: []\nrefs: []\n---\n# Hypothesis\n\nWas a hypothesis.\n", nil)
 	// New version is observation (promoted).
 	gs.EXPECT().ReadFile("machine/test", "kb/go/hyp.md").Return(
@@ -1136,7 +1136,7 @@ func TestFindHypothesisTransitions_ConfidenceUpdate(t *testing.T) {
 	ri.EXPECT().GetPipelineWatermark("review", "machine/test").Return("old-hash", nil)
 	gs.EXPECT().DiffFiles("machine/test", "old-hash").Return(nil, []string{"kb/go/hyp.md"}, nil, nil)
 	// Old version: hypothesis with confidence 0.5.
-	gs.EXPECT().ReadFileAtCommit("kb/go/hyp.md", "old-hash").Return(
+	gs.EXPECT().ReadFileAtCommit("machine/test", "kb/go/hyp.md", "old-hash").Return(
 		"---\ntype: hypothesis\ndomain: [go]\nconfidence: 0.5\nsources: 1\nentities: []\nrefs: []\n---\n# Hyp\n\nBody.\n", nil)
 	// New version: still hypothesis but confidence changed to 0.8.
 	gs.EXPECT().ReadFile("machine/test", "kb/go/hyp.md").Return(
@@ -1211,7 +1211,7 @@ func TestFindHypothesisTransitions_ModifiedNonHypothesisSkipped(t *testing.T) {
 	ri.EXPECT().GetPipelineWatermark("review", "machine/test").Return("old-hash", nil)
 	gs.EXPECT().DiffFiles("machine/test", "old-hash").Return(nil, []string{"kb/go/obs.md"}, nil, nil)
 	// Old version was an observation, not a hypothesis → should be skipped.
-	gs.EXPECT().ReadFileAtCommit("kb/go/obs.md", "old-hash").Return(
+	gs.EXPECT().ReadFileAtCommit("machine/test", "kb/go/obs.md", "old-hash").Return(
 		"---\ntype: observation\ndomain: [go]\nconfidence: 0.8\nsources: 1\nentities: []\nrefs: []\n---\n# Observation\n\nJust an observation.\n", nil)
 
 	r := NewReviewer(gs, idx, ri, NewMockEmbedder(ctrl), nil, "machine/test")

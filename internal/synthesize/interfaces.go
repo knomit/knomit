@@ -5,7 +5,7 @@ import "knomit/internal/store"
 // GitStore is the interface that the synthesize package requires from the git store.
 type GitStore interface {
 	ReadFile(branch, path string) (string, error)
-	ReadFileAtCommit(path, commitHash string) (string, error)
+	ReadFileAtCommit(branch, path, commitHash string) (string, error)
 	WriteFile(branch, path, content, message, operation string) (commitHash, blobHash string, err error)
 	BatchWrite(branch string, files map[string]string, message, operation string) (commitHash string, blobHashes map[string]string, err error)
 	DeleteFile(branch, path, message, operation string) (commitHash string, err error)

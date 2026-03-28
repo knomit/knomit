@@ -134,18 +134,18 @@ func (mr *MockGitStoreMockRecorder) ReadFile(branch, path any) *gomock.Call {
 }
 
 // ReadFileAtCommit mocks base method.
-func (m *MockGitStore) ReadFileAtCommit(path, commitHash string) (string, error) {
+func (m *MockGitStore) ReadFileAtCommit(branch, path, commitHash string) (string, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "ReadFileAtCommit", path, commitHash)
+	ret := m.ctrl.Call(m, "ReadFileAtCommit", branch, path, commitHash)
 	ret0, _ := ret[0].(string)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // ReadFileAtCommit indicates an expected call of ReadFileAtCommit.
-func (mr *MockGitStoreMockRecorder) ReadFileAtCommit(path, commitHash any) *gomock.Call {
+func (mr *MockGitStoreMockRecorder) ReadFileAtCommit(branch, path, commitHash any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ReadFileAtCommit", reflect.TypeOf((*MockGitStore)(nil).ReadFileAtCommit), path, commitHash)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ReadFileAtCommit", reflect.TypeOf((*MockGitStore)(nil).ReadFileAtCommit), branch, path, commitHash)
 }
 
 // WriteFile mocks base method.

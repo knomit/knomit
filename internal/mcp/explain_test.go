@@ -105,7 +105,7 @@ func TestExplainResumesSession(t *testing.T) {
 	sessionIdx.EXPECT().DequeuePaths("sess-1", 25).Return([]QueueItem{
 		{Path: "kb/ref1.md", CommitHash: "abc123", Depth: 1},
 	}, nil)
-	gs.EXPECT().ReadFileAtCommit("kb/ref1.md", "abc123").Return(refContent, nil)
+	gs.EXPECT().ReadFileAtCommit(testAgentBranch, "kb/ref1.md", "abc123").Return(refContent, nil)
 	sessionIdx.EXPECT().AddSeenPaths("sess-1", []string{"kb/ref1.md"}).Return(nil)
 	sessionIdx.EXPECT().EnqueuePaths("sess-1", []QueueItem{
 		{Path: "kb/deep.md", CommitHash: "abc123", Depth: 2},
@@ -251,9 +251,9 @@ func TestExplainDeletedRef(t *testing.T) {
 		{Path: "kb/deleted.md", CommitHash: "abc123", Depth: 1},
 		{Path: "kb/good.md", CommitHash: "abc123", Depth: 1},
 	}, nil)
-	gs.EXPECT().ReadFileAtCommit("kb/deleted.md", "abc123").Return("", fmt.Errorf("not found"))
+	gs.EXPECT().ReadFileAtCommit(testAgentBranch, "kb/deleted.md", "abc123").Return("", fmt.Errorf("not found"))
 	gs.EXPECT().LastCommitForPath(testAgentBranch, "kb/deleted.md").Return("", nil)
-	gs.EXPECT().ReadFileAtCommit("kb/good.md", "abc123").Return(goodContent, nil)
+	gs.EXPECT().ReadFileAtCommit(testAgentBranch, "kb/good.md", "abc123").Return(goodContent, nil)
 	sessionIdx.EXPECT().AddSeenPaths("sess-3", []string{"kb/good.md"}).Return(nil)
 	// No new local refs to enqueue.
 	sessionIdx.EXPECT().QueueSize("sess-3").Return(0, nil)
@@ -311,7 +311,7 @@ func TestExplainMaxDepth(t *testing.T) {
 	sessionIdx.EXPECT().DequeuePaths("sess-4", 25).Return([]QueueItem{
 		{Path: "kb/deep.md", CommitHash: "abc123", Depth: 10},
 	}, nil)
-	gs.EXPECT().ReadFileAtCommit("kb/deep.md", "abc123").Return(deepContent, nil)
+	gs.EXPECT().ReadFileAtCommit(testAgentBranch, "kb/deep.md", "abc123").Return(deepContent, nil)
 	sessionIdx.EXPECT().AddSeenPaths("sess-4", []string{"kb/deep.md"}).Return(nil)
 	// EnqueuePaths should NOT be called — depth is at max.
 	sessionIdx.EXPECT().QueueSize("sess-4").Return(0, nil)
@@ -514,7 +514,7 @@ func TestExplainRetractedRef(t *testing.T) {
 		{Path: "kb/retracted.md", CommitHash: "merge-commit", Depth: 1},
 	}, nil)
 	// ReadFileAtCommit fails — file was retracted before merge-commit.
-	gs.EXPECT().ReadFileAtCommit("kb/retracted.md", "merge-commit").Return("", fmt.Errorf("not found"))
+	gs.EXPECT().ReadFileAtCommit(testAgentBranch, "kb/retracted.md", "merge-commit").Return("", fmt.Errorf("not found"))
 	// Fallback: find the retraction commit, then read from just before it.
 	gs.EXPECT().LastCommitForPath(testAgentBranch, "kb/retracted.md").Return("retract-commit", nil)
 	gs.EXPECT().ReadFileLastCommit(testAgentBranch, "kb/retracted.md", "retract-commit").Return(retractedContent, "last-live-commit", nil)
@@ -576,7 +576,7 @@ func TestExplainResumeParseError(t *testing.T) {
 	sessionIdx.EXPECT().DequeuePaths("sess-pe", 25).Return([]QueueItem{
 		{Path: "kb/bad.md", CommitHash: "abc123", Depth: 1},
 	}, nil)
-	gs.EXPECT().ReadFileAtCommit("kb/bad.md", "abc123").Return("not valid frontmatter", nil)
+	gs.EXPECT().ReadFileAtCommit(testAgentBranch, "kb/bad.md", "abc123").Return("not valid frontmatter", nil)
 	// Retry dequeue: empty, stop.
 	sessionIdx.EXPECT().DequeuePaths("sess-pe", 25).Return(nil, nil)
 	sessionIdx.EXPECT().QueueSize("sess-pe").Return(0, nil)
@@ -704,7 +704,7 @@ func TestExplainResumeIncludesAllFactFields(t *testing.T) {
 	sessionIdx.EXPECT().DequeuePaths("sess-r", 25).Return([]QueueItem{
 		{Path: "kb/ref.md", CommitHash: "cafebabe", Depth: 1},
 	}, nil)
-	gs.EXPECT().ReadFileAtCommit("kb/ref.md", "cafebabe").Return(factContent, nil)
+	gs.EXPECT().ReadFileAtCommit(testAgentBranch, "kb/ref.md", "cafebabe").Return(factContent, nil)
 	sessionIdx.EXPECT().AddSeenPaths("sess-r", []string{"kb/ref.md"}).Return(nil)
 	sessionIdx.EXPECT().EnqueuePaths(gomock.Any(), gomock.Any()).AnyTimes().Return(nil)
 	sessionIdx.EXPECT().QueueSize("sess-r").Return(0, nil)

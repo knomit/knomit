@@ -505,7 +505,7 @@ func (r *Reviewer) findHypothesisTransitions(sessionID string) ([]hypothesisTran
 
 	// Check deleted paths — were any hypotheses retracted?
 	for _, path := range deleted {
-		content, err := r.gs.ReadFileAtCommit(path, watermark)
+		content, err := r.gs.ReadFileAtCommit(r.agentBranch, path, watermark)
 		if err != nil {
 			continue
 		}
@@ -522,7 +522,7 @@ func (r *Reviewer) findHypothesisTransitions(sessionID string) ([]hypothesisTran
 
 	// Check modified paths — did any hypothesis change confidence or type?
 	for _, path := range modified {
-		oldContent, err := r.gs.ReadFileAtCommit(path, watermark)
+		oldContent, err := r.gs.ReadFileAtCommit(r.agentBranch, path, watermark)
 		if err != nil {
 			continue
 		}

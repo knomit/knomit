@@ -23,7 +23,7 @@ type Embedder interface {
 type GitStore interface {
 	ListDir(branch, path string) ([]git.DirEntry, error)
 	ReadFile(branch, path string) (string, error)
-	ReadFileAtCommit(path, commitHash string) (string, error)
+	ReadFileAtCommit(branch, path, commitHash string) (string, error)
 	ReadFileLastCommit(branch, path, beforeCommitHash string) (content string, fromCommit string, err error)
 	WriteFile(branch, path, content, message, operation string) (commitHash, blobHash string, err error)
 	DeleteFile(branch, path, message, operation string) (commitHash string, err error)

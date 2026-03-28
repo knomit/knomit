@@ -264,7 +264,7 @@ func TestHandleCommitDetail(t *testing.T) {
 		Files:     []git.ChangedFile{{Path: "kb/test.md", Action: "added"}},
 	}, nil)
 	// Title lookup fallback: no index, so handler tries ReadFileAtCommit
-	gs.EXPECT().ReadFileAtCommit("kb/test.md", "abc12345").Return("", fmt.Errorf("not found"))
+	gs.EXPECT().ReadFileAtCommit(testAgentBranch, "kb/test.md", "abc12345").Return("", fmt.Errorf("not found"))
 	gs.EXPECT().ReadFileLastCommit(testAgentBranch, "kb/test.md", "abc12345").Return("", "", fmt.Errorf("not found"))
 
 	handler := newTestRouter(gs, nil)
@@ -293,7 +293,7 @@ func TestHandleCommitDetail_DeletedFileReturnsTitleViaLastCommit(t *testing.T) {
 	}, nil)
 	// Index lookup: no index provided (nil), so skipped.
 	// ReadFileAtCommit fails (file doesn't exist at the retract commit).
-	gs.EXPECT().ReadFileAtCommit("kb/deleted-fact.md", "retract99").Return("", fmt.Errorf("not found"))
+	gs.EXPECT().ReadFileAtCommit(testAgentBranch, "kb/deleted-fact.md", "retract99").Return("", fmt.Errorf("not found"))
 	// ReadFileLastCommit succeeds — returns the content from before deletion.
 	factContent := "---\ndomain: [test]\nconfidence: 0.8\nsources: 1\nentities: [x]\nrefs: []\n---\n# Deleted Fact Title\n\nThis fact was retracted.\n"
 	gs.EXPECT().ReadFileLastCommit(testAgentBranch, "kb/deleted-fact.md", "retract99").Return(factContent, "prev-commit", nil)
@@ -367,7 +367,7 @@ func TestHandleFactAtCommit(t *testing.T) {
 	gs := NewMockGitStore(ctrl)
 
 	factContent := "---\ndomain: [test]\nconfidence: 0.8\nsources: 1\nentities: [x]\nrefs: []\n---\n# Title\n\nBody at commit.\n"
-	gs.EXPECT().ReadFileAtCommit("kb/test.md", "abc12345").Return(factContent, nil)
+	gs.EXPECT().ReadFileAtCommit(testAgentBranch, "kb/test.md", "abc12345").Return(factContent, nil)
 
 	handler := newTestRouter(gs, nil)
 	rr := doRequest(t, handler, http.MethodGet, "/api/v1/knomit/fact?path=kb/test.md&commit=abc12345", "")

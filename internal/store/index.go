@@ -99,6 +99,9 @@ type GitReader interface {
 	ListAllWithHash(branch string) (paths []string, blobHashes []string, err error)
 	// LastCommitForPath returns the hash of the most recent non-merge commit that touched path on branch.
 	LastCommitForPath(branch, path string) (string, error)
+	// ReadFileAtCommit reads the content of path at the given commit on branch.
+	// branch is used for repository context; commitHash uniquely identifies the version.
+	ReadFileAtCommit(branch, path, commitHash string) (string, error)
 }
 
 // ────────────────────────────────────────────────────────────────────────────

@@ -514,9 +514,10 @@ func TestGraphExpandSearch_MultiSeed(t *testing.T) {
 }
 
 type mockGitReader struct {
-	files      map[string]string
-	blobHashes map[string]string // path → blob hash
-	head       string
+	files       map[string]string
+	blobHashes  map[string]string            // path → blob hash
+	commitFiles map[string]map[string]string // commitHash → path → content
+	head        string
 }
 
 func (m *mockGitReader) DiffFiles(branch, from string) (added, modified, deleted []string, err error) {
@@ -544,6 +545,20 @@ func (m *mockGitReader) ReadFileWithHash(branch, path string) (string, string, e
 func (m *mockGitReader) HeadCommit(branch string) (string, error) { return m.head, nil }
 func (m *mockGitReader) LastCommitForPath(branch, path string) (string, error) {
 	return m.head, nil // mock: return head as the last commit
+}
+func (m *mockGitReader) ReadFileAtCommit(branch, path, commitHash string) (string, error) {
+	if m.commitFiles != nil {
+		if byPath, ok := m.commitFiles[commitHash]; ok {
+			if c, ok := byPath[path]; ok {
+				return c, nil
+			}
+		}
+	}
+	// Fall back to current files
+	if c, ok := m.files[path]; ok {
+		return c, nil
+	}
+	return "", fmt.Errorf("ReadFileAtCommit: not found: %s@%s", path, commitHash)
 }
 func (m *mockGitReader) ListAll(branch string) ([]string, error) {
 	paths, _, err := m.ListAllWithHash(branch)

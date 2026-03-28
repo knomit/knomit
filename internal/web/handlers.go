@@ -141,7 +141,7 @@ func handleFact(agentBranch string) http.HandlerFunc {
 		var fromCommit string
 		var err error
 		if commitHash != "" {
-			content, err = ri.GS.ReadFileAtCommit(path, commitHash)
+			content, err = ri.GS.ReadFileAtCommit(agentBranch, path, commitHash)
 			if err != nil {
 				// File may have been deleted in this commit (e.g. retract).
 				// Fall back to the last commit where the file existed.
@@ -157,7 +157,7 @@ func handleFact(agentBranch string) http.HandlerFunc {
 					`SELECT commit_hash FROM commit_log WHERE path = ? AND action != 'deleted' ORDER BY rowid DESC LIMIT 1`,
 					path,
 				).Scan(&lastHash); qerr == nil && lastHash != "" {
-					content, err = ri.GS.ReadFileAtCommit(path, lastHash)
+					content, err = ri.GS.ReadFileAtCommit(agentBranch, path, lastHash)
 					if err == nil {
 						fromCommit = lastHash
 					}
@@ -539,7 +539,7 @@ func handleCommitDetail(agentBranch string) http.HandlerFunc {
 			}
 			// Fallback: read the file as it was at this commit and parse the title.
 			// Covers retracted facts, deleted files, and anything not in the current index.
-			if content, err := ri.GS.ReadFileAtCommit(f.Path, hash); err == nil && content != "" {
+			if content, err := ri.GS.ReadFileAtCommit(agentBranch, f.Path, hash); err == nil && content != "" {
 				if parsed, perr := mcp.ParseFact(f.Path, content); perr == nil {
 					files[i].Title = parsed.Title
 					continue

@@ -37,7 +37,7 @@ func TestReadFileAtCommit_CaseInsensitiveFallback(t *testing.T) {
 
 	// ReadFileAtCommit with the normalised lowercase path must succeed.
 	lowercasePath := "kb/technology/ai/fact.md"
-	got, err := store.ReadFileAtCommit(lowercasePath, commitHash.String())
+	got, err := store.ReadFileAtCommit(testBranch, lowercasePath, commitHash.String())
 	if err != nil {
 		t.Fatalf("ReadFileAtCommit with lowercase path: %v", err)
 	}
@@ -46,7 +46,7 @@ func TestReadFileAtCommit_CaseInsensitiveFallback(t *testing.T) {
 	}
 
 	// Exact uppercase path must still work too.
-	got2, err := store.ReadFileAtCommit(uppercasePath, commitHash.String())
+	got2, err := store.ReadFileAtCommit(testBranch, uppercasePath, commitHash.String())
 	if err != nil {
 		t.Fatalf("ReadFileAtCommit with exact path: %v", err)
 	}

@@ -50,7 +50,7 @@ type PipelineWorkItem = storepkg.PipelineWorkItem
 // tests can use lightweight mocks.
 type GitStore interface {
 	ReadFile(branch, path string) (string, error)
-	ReadFileAtCommit(path, commitHash string) (string, error)
+	ReadFileAtCommit(branch, path, commitHash string) (string, error)
 	ReadFileWithHash(branch, path string) (content, blobHash string, err error)
 	WriteFile(branch, path, content, message, operation string) (commitHash, blobHash string, err error)
 	BatchWrite(branch string, files map[string]string, message, operation string) (commitHash string, blobHashes map[string]string, err error)
