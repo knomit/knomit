@@ -1,10 +1,18 @@
 // Graph operations: Cypher wrappers for maintaining the knowledge graph.
-// All graph mutations use MERGE for idempotency and string interpolation
-// (cypher() does not support parameterized queries).
+// All graph mutations use MERGE for idempotency.
+//
+// Parameterized queries (cypher('...', params)) work for read operations
+// (MATCH/RETURN) but NOT for write operations (MERGE/SET/DELETE) in the
+// installed GraphQLite build. Write operations embed values via string
+// interpolation using escapeCypherKey/escapeCypherVal.
+//
+// Note: MERGE+SET in a single Cypher statement does not work in GraphQLite;
+// a subsequent MATCH+SET is required to update properties reliably.
 package store
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"strings"
 )
@@ -39,7 +47,7 @@ func (idx *Index) graphSyncFactTx(tx execer, rec FactRecord) error {
 		return fmt.Errorf("graph set fact props: %w", err)
 	}
 
-	// 2. Delete old relationship edges for this fact
+	// 2. Delete old relationship edges for this fact.
 	for _, edgeType := range []string{"TAGGED", "IN_DOMAIN", "UNDER", "DERIVED_FROM"} {
 		q = fmt.Sprintf(`SELECT cypher('MATCH (f:Fact {path: "%s"})-[r:%s]->() DELETE r')`, path, edgeType)
 		if _, err := tx.Exec(q); err != nil {
@@ -47,7 +55,7 @@ func (idx *Index) graphSyncFactTx(tx execer, rec FactRecord) error {
 		}
 	}
 
-	// 3. MERGE Entity nodes + TAGGED edges
+	// 3. MERGE Entity nodes + TAGGED edges.
 	for _, entity := range rec.Entities {
 		e := escapeCypherKey(entity)
 		q = fmt.Sprintf(`SELECT cypher('MERGE (e:Entity {name: "%s"}) MERGE (f:Fact {path: "%s"}) MERGE (f)-[:TAGGED]->(e)')`, e, path)
@@ -56,14 +64,14 @@ func (idx *Index) graphSyncFactTx(tx execer, rec FactRecord) error {
 		}
 	}
 
-	// 4. MERGE Domain hierarchy + IN_DOMAIN edges
+	// 4. MERGE Domain hierarchy + IN_DOMAIN edges.
 	for _, domain := range rec.Domain {
-		if err := idx.graphMergeDomainHierarchy(tx, path, domain); err != nil {
+		if err := idx.graphMergeDomainHierarchy(tx, rec.Path, domain); err != nil {
 			return err
 		}
 	}
 
-	// 5. MERGE OntologyNode hierarchy + UNDER edge
+	// 5. MERGE OntologyNode hierarchy + UNDER edge.
 	if err := idx.graphMergeOntologyHierarchy(tx, rec.Path); err != nil {
 		return err
 	}
@@ -104,7 +112,7 @@ func (idx *Index) graphMergeDomainHierarchy(tx execer, factPath, domain string) 
 		}
 	}
 	leaf := escapeCypherKey(domain)
-	q := fmt.Sprintf(`SELECT cypher('MATCH (f:Fact {path: "%s"}), (d:Domain {path: "%s"}) MERGE (f)-[:IN_DOMAIN]->(d)')`, factPath, leaf)
+	q := fmt.Sprintf(`SELECT cypher('MATCH (f:Fact {path: "%s"}), (d:Domain {path: "%s"}) MERGE (f)-[:IN_DOMAIN]->(d)')`, escapeCypherKey(factPath), leaf)
 	if _, err := tx.Exec(q); err != nil {
 		return fmt.Errorf("graph in_domain %s: %w", domain, err)
 	}
@@ -152,17 +160,17 @@ func (idx *Index) graphDeleteFact(path string) error {
 
 func (idx *Index) graphDeleteFactTx(tx execer, path string) error {
 	p := escapeCypherKey(path)
-	// Delete outgoing edges
+	// Delete outgoing edges.
 	q := fmt.Sprintf(`SELECT cypher('MATCH (f:Fact {path: "%s"})-[r]->() DELETE r')`, p)
 	if _, err := tx.Exec(q); err != nil {
 		return fmt.Errorf("graph delete outgoing edges: %w", err)
 	}
-	// Delete incoming SIMILAR_TO edges (bidirectional cleanup)
+	// Delete incoming SIMILAR_TO edges (bidirectional cleanup).
 	q = fmt.Sprintf(`SELECT cypher('MATCH ()-[r:SIMILAR_TO]->(f:Fact {path: "%s"}) DELETE r')`, p)
 	if _, err := tx.Exec(q); err != nil {
 		return fmt.Errorf("graph delete incoming SIMILAR_TO: %w", err)
 	}
-	// Mark node as deleted
+	// Mark node as deleted.
 	q = fmt.Sprintf(`SELECT cypher('MATCH (f:Fact {path: "%s"}) SET f.deleted = true')`, p)
 	if _, err := tx.Exec(q); err != nil {
 		return fmt.Errorf("graph mark deleted: %w", err)
@@ -391,10 +399,13 @@ func (idx *Index) graphExpandSearch(seeds map[string]float64, maxHops int) map[s
 	}
 	capScore := minSeedScore - 0.01
 
-	// Build Cypher path filter using OR-chaining (one clause per seed).
+	// Build Cypher path filter using OR-chaining. Each path is JSON-encoded to
+	// produce a properly-quoted and escaped Cypher string literal. Parameterized
+	// queries are not used here because they do not support variadic OR patterns.
 	pathParts := make([]string, 0, len(seeds))
 	for p := range seeds {
-		pathParts = append(pathParts, `f.path = "`+escapeCypherKey(p)+`"`)
+		b, _ := json.Marshal(p)
+		pathParts = append(pathParts, `f.path = `+string(b))
 	}
 	pathFilter := strings.Join(pathParts, " OR ")
 
@@ -457,10 +468,23 @@ type execer interface {
 	Query(query string, args ...any) (*sql.Rows, error)
 }
 
-// escapeCypherKey escapes a string for use in Cypher MATCH property patterns
-// (e.g. {path: "value"}). GraphQLite's MATCH parser does not support unicode
-// escapes or SQL '' escaping inside property patterns, so single quotes are
-// stripped. Null bytes are also stripped as they break the SQL parser.
+// jsonParams encodes a single key-value pair as a JSON object string, for use
+// as the second argument to cypher() in parameterized read queries.
+// For multiple params, use json.Marshal directly.
+func jsonParams(key, value string) string {
+	b, _ := json.Marshal(map[string]string{key: value})
+	return string(b)
+}
+
+// escapeCypherKey escapes a string for use in Cypher MATCH/MERGE property
+// patterns (e.g. {path: "value"}) that appear inside a SQL single-quoted string.
+// GraphQLite's MATCH parser does not support unicode escapes or SQL '' escaping
+// inside property patterns, so single quotes are stripped to avoid breaking the
+// SQL string wrapper. Null bytes are stripped as they break the SQL parser.
+//
+// Note: parameterized queries (cypher('...', params)) work for reads (MATCH)
+// but not for writes (MERGE/SET/DELETE) in the installed GraphQLite build, so
+// write operations must use this escape approach.
 func escapeCypherKey(s string) string {
 	s = strings.ReplaceAll(s, "\x00", "")
 	s = strings.ReplaceAll(s, `\`, `\\`)

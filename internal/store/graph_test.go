@@ -614,11 +614,11 @@ func TestDerivedFromInvariant(t *testing.T) {
 // derivedFromPaths returns the set of target paths for DERIVED_FROM edges from src.
 func derivedFromPaths(t *testing.T, idx *Index, src string) map[string]bool {
 	t.Helper()
-	q := fmt.Sprintf(
-		`SELECT json_extract(value, '$.path') FROM json_each(cypher('MATCH (f:Fact {path: "%s"})-[:DERIVED_FROM]->(t:Fact) RETURN t.path AS path'))`,
-		escapeCypherKey(src),
+	pj := jsonParams("path", src)
+	rows, err := idx.db.Query(
+		`SELECT json_extract(value, '$.path') FROM json_each(cypher('MATCH (f:Fact {path: $path})-[:DERIVED_FROM]->(t:Fact) RETURN t.path AS path', ?))`,
+		pj,
 	)
-	rows, err := idx.db.Query(q)
 	if err != nil {
 		t.Fatalf("query DERIVED_FROM: %v", err)
 	}

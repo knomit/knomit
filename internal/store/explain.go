@@ -1,6 +1,9 @@
 package store
 
-import "fmt"
+import (
+	"encoding/json"
+	"fmt"
+)
 
 // RefSummary is a lightweight fact reference returned by ExplainFact.
 type RefSummary struct {
@@ -21,20 +24,21 @@ type ExplainResult struct {
 // Self-loops are filtered out: GraphQLite creates (n)-[:DERIVED_FROM]->(n) when
 // the target node is absent at edge-creation time (upstream bug).
 func (idx *Index) ExplainFact(path string) (ExplainResult, error) {
-	p := escapeCypherKey(path)
+	params, _ := json.Marshal(map[string]string{"path": path})
+	pj := string(params)
 
-	incoming, err := idx.queryRefSummaries(fmt.Sprintf(
-		`MATCH (f:Fact)-[:DERIVED_FROM]->(t:Fact {path: "%s"}) WHERE NOT f.deleted = true RETURN f.path AS path, f.title AS title, false AS deleted`,
-		p,
-	))
+	incoming, err := idx.queryRefSummaries(
+		`MATCH (f:Fact)-[:DERIVED_FROM]->(t:Fact {path: $path}) WHERE NOT f.deleted = true RETURN f.path AS path, f.title AS title, false AS deleted`,
+		pj,
+	)
 	if err != nil {
 		return ExplainResult{}, fmt.Errorf("explain incoming: %w", err)
 	}
 
-	outgoing, err := idx.queryRefSummaries(fmt.Sprintf(
-		`MATCH (f:Fact {path: "%s"})-[:DERIVED_FROM]->(t:Fact) RETURN t.path AS path, t.title AS title, t.deleted AS deleted`,
-		p,
-	))
+	outgoing, err := idx.queryRefSummaries(
+		`MATCH (f:Fact {path: $path})-[:DERIVED_FROM]->(t:Fact) RETURN t.path AS path, t.title AS title, t.deleted AS deleted`,
+		pj,
+	)
 	if err != nil {
 		return ExplainResult{}, fmt.Errorf("explain outgoing: %w", err)
 	}
@@ -72,10 +76,11 @@ func isDeletedVal(v interface{}) bool {
 }
 
 // queryRefSummaries runs a Cypher query that returns (path, title, deleted) rows.
-// The cypher argument must already have all values escaped via escapeCypherKey.
-func (idx *Index) queryRefSummaries(cypher string) ([]RefSummary, error) {
-	q := `SELECT json_extract(value, '$.path'), json_extract(value, '$.title'), json_extract(value, '$.deleted') FROM json_each(cypher('` + cypher + `'))`
-	rows, err := idx.db.Query(q)
+// cypherQuery must contain only $param placeholders (no embedded values).
+// paramsJSON is the JSON-encoded parameter object passed as cypher()'s second arg.
+func (idx *Index) queryRefSummaries(cypherQuery, paramsJSON string) ([]RefSummary, error) {
+	q := `SELECT json_extract(value, '$.path'), json_extract(value, '$.title'), json_extract(value, '$.deleted') FROM json_each(cypher('` + cypherQuery + `', ?))`
+	rows, err := idx.db.Query(q, paramsJSON)
 	if err != nil {
 		return nil, err
 	}
