@@ -18,11 +18,7 @@ func emptyManager() *repos.Manager {
 }
 
 func makeRI(name string) *repos.RepoInstance {
-	return &repos.RepoInstance{
-		Name:       name,
-		SyncCancel: func() {},
-		SyncWg:     &sync.WaitGroup{},
-	}
+	return repos.NewTestInstance(name)
 }
 
 func TestNew_Empty(t *testing.T) {
@@ -102,26 +98,6 @@ func TestNames_Sorted(t *testing.T) {
 	}
 }
 
-func TestShutdown_CallsClose(t *testing.T) {
-	m := emptyManager()
-	closed := make(chan string, 2)
-	for _, name := range []string{"a", "b"} {
-		n := name
-		ri := makeRI(n)
-		ri.Close = func() { closed <- n }
-		m.Set(n, ri)
-	}
-	m.Shutdown()
-	close(closed)
-	got := map[string]bool{}
-	for n := range closed {
-		got[n] = true
-	}
-	if !got["a"] || !got["b"] {
-		t.Fatalf("Shutdown did not call Close on all repos: %v", got)
-	}
-}
-
 // ---------- Context helpers ----------
 
 func TestRepoFromContext_Roundtrip(t *testing.T) {
@@ -170,59 +146,10 @@ func TestSwapStore_InMemoryFallback(t *testing.T) {
 		t.Fatalf("SwapStore returned error: %v", err)
 	}
 	// In-memory fallback opens the temp DB directly — Svc must be non-nil.
-	if ri.Svc == nil {
-		t.Fatal("expected ri.Svc to be set after in-memory fallback")
-	}
-}
-
-func TestSwapStore_FileSwap(t *testing.T) {
-	m := emptyManager()
-	// Create a real DB at a persistent path (already closed by openTestDB).
-	realDB := openTestDB(t)
-	svc, err := store.Open(realDB)
-	if err != nil {
-		t.Fatalf("open real DB: %v", err)
-	}
-	ri := makeRI("knomit")
-	ri.DBPath = realDB
-	ri.Svc = svc
-
-	// Create a second DB to swap in.
-	tempDB := openTestDB(t)
-	if err := m.SwapStore(ri, tempDB); err != nil {
-		t.Fatalf("SwapStore returned error: %v", err)
-	}
-	if ri.Svc == nil {
-		t.Fatal("expected ri.Svc to be set after file swap")
-	}
-	if ri.GS == nil {
-		t.Fatal("expected ri.GS to be set after file swap")
-	}
-	if ri.Idx == nil {
-		t.Fatal("expected ri.Idx to be set after file swap")
-	}
-	// Backup should be cleaned up on success.
-	if _, err := os.Stat(realDB + ".bak"); !os.IsNotExist(err) {
-		t.Fatal("expected backup to be removed after successful swap")
-	}
-}
-
-func TestSwapStore_InvalidTempPath_ReturnsError(t *testing.T) {
-	m := emptyManager()
-	// Set up a real DB so it tries the file-swap path.
-	realDB := openTestDB(t)
-	svc, err := store.Open(realDB)
-	if err != nil {
-		t.Fatalf("reopen real DB: %v", err)
-	}
-	ri := makeRI("knomit")
-	ri.DBPath = realDB
-	ri.Svc = svc
-
-	// Pass a non-existent temp path — copyFile should fail.
-	err = m.SwapStore(ri, "/nonexistent/path/to/temp.db")
-	if err == nil {
-		t.Fatal("expected error for invalid temp path, got nil")
+	var svc *store.Service
+	ri.WithRead(func(d repos.StoreDeps) { svc = d.Svc })
+	if svc == nil {
+		t.Fatal("expected Svc to be set after in-memory fallback")
 	}
 }
 
@@ -243,7 +170,8 @@ func TestSetupMCP_RebindsAfterSwapStore(t *testing.T) {
 		t.Fatal("knomit not registered")
 	}
 
-	oldSvc := ri.Svc
+	var oldSvc *store.Service
+	ri.WithRead(func(d repos.StoreDeps) { oldSvc = d.Svc })
 
 	// Swap to a new database.
 	tempDB := openTestDB(t)
@@ -255,12 +183,14 @@ func TestSetupMCP_RebindsAfterSwapStore(t *testing.T) {
 	m.SetupMCP(ri)
 
 	// The old service's DB is closed; the new one should be open.
-	if ri.Svc == oldSvc {
+	var newSvc *store.Service
+	ri.WithRead(func(d repos.StoreDeps) { newSvc = d.Svc })
+	if newSvc == oldSvc {
 		t.Fatal("ri.Svc should have changed after SwapStore")
 	}
 
 	// Verify the new index is usable (not closed).
-	_, err := ri.Svc.Index().Stats("")
+	_, err := newSvc.Index().Stats("")
 	if err != nil {
 		t.Fatalf("new index query failed (database closed?): %v", err)
 	}
@@ -284,17 +214,19 @@ func TestObserver_UsesCurrentIndexAfterSwapStore(t *testing.T) {
 	}
 
 	// Write a fact so the old index has some state.
-	gs := ri.GS.(interface {
+	var gs repos.GitStore
+	ri.WithRead(func(d repos.StoreDeps) { gs = d.GS })
+	writer := gs.(interface {
 		WriteFile(branch, path, content, message, operation string) (string, string, error)
 	})
-	_, _, err := gs.WriteFile(ri.AgentBranch, "kb/test/hello.md", "---\ntitle: hello\n---\n# hello\nworld\n", "test", "learn")
+	_, _, err := writer.WriteFile(ri.Branch(), "kb/test/hello.md", "---\ntitle: hello\n---\n# hello\nworld\n", "test", "learn")
 	if err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
-	// Wait for observer to fire (debounce is 1s in openOne).
-	// Give it a generous window.
-	oldIdx := ri.Svc.Index()
+	var oldSvc *store.Service
+	ri.WithRead(func(d repos.StoreDeps) { oldSvc = d.Svc })
+	oldIdx := oldSvc.Index()
 
 	// Swap to a new database — this closes the old DB.
 	tempDB := openTestDB(t)
@@ -304,7 +236,9 @@ func TestObserver_UsesCurrentIndexAfterSwapStore(t *testing.T) {
 	m.SetupMCP(ri)
 
 	// The new index should be different and open.
-	newIdx := ri.Svc.Index()
+	var newSvc *store.Service
+	ri.WithRead(func(d repos.StoreDeps) { newSvc = d.Svc })
+	newIdx := newSvc.Index()
 	if newIdx == oldIdx {
 		t.Fatal("expected new index after SwapStore")
 	}
@@ -344,7 +278,8 @@ func TestClose_ClosesCurrentSvcAfterSwapStore(t *testing.T) {
 	}
 
 	// Capture the new service before Close.
-	newSvc := ri.Svc
+	var newSvc *store.Service
+	ri.WithRead(func(d repos.StoreDeps) { newSvc = d.Svc })
 
 	// Close should close the new service.
 	ri.Close()
@@ -442,7 +377,7 @@ func TestRepoInstance_SwapStore_ConcurrentRead(t *testing.T) {
 
 	var wg sync.WaitGroup
 
-	// Start readers that continuously snapshot GS/Svc/Idx under RLock.
+	// Start readers that continuously snapshot GS/Svc/Idx under WithRead.
 	stop := make(chan struct{})
 	for i := 0; i < readers; i++ {
 		wg.Add(1)
@@ -453,11 +388,11 @@ func TestRepoInstance_SwapStore_ConcurrentRead(t *testing.T) {
 				case <-stop:
 					return
 				default:
-					ri.RLock()
-					_ = ri.GS
-					_ = ri.Svc
-					_ = ri.Idx
-					ri.RUnlock()
+					ri.WithRead(func(d repos.StoreDeps) {
+						_ = d.GS
+						_ = d.Svc
+						_ = d.Idx
+					})
 				}
 			}
 		}()

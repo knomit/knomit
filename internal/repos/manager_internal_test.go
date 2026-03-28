@@ -31,9 +31,9 @@ func (s *stubEmbedder) EmbedBatch(texts []string) ([][]float32, error) {
 // not have an embedder attached. Uses EmbedderSet() added for this purpose.
 func assertEmbedderSet(t *testing.T, ri *RepoInstance, msg string) {
 	t.Helper()
-	idx, ok := ri.Idx.(*store.Index)
+	idx, ok := ri.idx.(*store.Index)
 	if !ok {
-		t.Fatalf("%s: ri.Idx is not *store.Index", msg)
+		t.Fatalf("%s: ri.idx is not *store.Index", msg)
 	}
 	if !idx.EmbedderSet() {
 		t.Errorf("%s: embedder not set on index after swap", msg)
@@ -55,6 +55,26 @@ func defaultTestDeps(t *testing.T, dir string) (Deps, string) {
 		KeyPath:     keyPath,
 	}
 	return deps, agentBranch
+}
+
+func newEmptyManager() *Manager {
+	return New(context.Background(), Deps{})
+}
+
+func openTestDB(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.db")
+	svc, err := store.Open(path)
+	if err != nil {
+		t.Fatalf("openTestDB: store.Open: %v", err)
+	}
+	if _, err := git.InitWithStorer(svc.GitStorer(), nil, ""); err != nil {
+		svc.Close()
+		t.Fatalf("openTestDB: git.InitWithStorer: %v", err)
+	}
+	svc.Close()
+	return path
 }
 
 func TestIsValidRepoName(t *testing.T) {
@@ -88,30 +108,29 @@ func TestOpenOne_DefaultCreatesNewRepo(t *testing.T) {
 	if _, err := os.Stat(dbPath); err != nil {
 		t.Fatalf("db file not created: %v", err)
 	}
-	if ri.Name != "knomit" {
-		t.Errorf("ri.Name = %q, want %q", ri.Name, "knomit")
+	if ri.name != "knomit" {
+		t.Errorf("ri.name = %q, want %q", ri.name, "knomit")
 	}
-	if ri.GS == nil {
-		t.Error("ri.GS is nil")
+	if ri.gs == nil {
+		t.Error("ri.gs is nil")
 	}
-	if ri.Svc == nil {
-		t.Error("ri.Svc is nil")
+	if ri.svc == nil {
+		t.Error("ri.svc is nil")
 	}
-	if ri.Idx == nil {
-		t.Error("ri.Idx is nil")
+	if ri.idx == nil {
+		t.Error("ri.idx is nil")
 	}
-	if ri.Hub == nil {
-		t.Error("ri.Hub is nil")
+	if ri.hub == nil {
+		t.Error("ri.hub is nil")
 	}
-	if _, ok := ri.GS.(*git.Store); !ok {
-		t.Fatal("ri.GS is not *git.Store")
+	if _, ok := ri.gs.(*git.Store); !ok {
+		t.Fatal("ri.gs is not *git.Store")
 	}
-	if ri.AgentBranch != agentBranch {
-		t.Errorf("AgentBranch = %q, want %q", ri.AgentBranch, agentBranch)
+	if ri.agentBranch != agentBranch {
+		t.Errorf("agentBranch = %q, want %q", ri.agentBranch, agentBranch)
 	}
-	// MCP handlers should be nil — SetupMCP not called yet
-	if ri.MCPHandlers != nil {
-		t.Error("MCPHandlers should be nil before SetupMCP")
+	if ri.mcpHandlers != nil {
+		t.Error("mcpHandlers should be nil before SetupMCP")
 	}
 }
 
@@ -145,19 +164,85 @@ func TestSetupMCP_NoLLM(t *testing.T) {
 
 	m.SetupMCP(ri)
 
-	if ri.MCPHandlers == nil {
-		t.Fatal("MCPHandlers should not be nil after setupMCP")
+	if ri.mcpHandlers == nil {
+		t.Fatal("mcpHandlers should not be nil after SetupMCP")
 	}
-	if len(ri.MCPHandlers) != 3 {
-		t.Errorf("MCPHandlers has %d profiles, want 3", len(ri.MCPHandlers))
+	if len(ri.mcpHandlers) != 3 {
+		t.Errorf("mcpHandlers has %d profiles, want 3", len(ri.mcpHandlers))
 	}
 	for _, profile := range []string{"code", "chat", "generic"} {
-		if ri.MCPHandlers[profile] == nil {
-			t.Errorf("MCPHandlers[%q] is nil", profile)
+		if ri.mcpHandlers[profile] == nil {
+			t.Errorf("mcpHandlers[%q] is nil", profile)
 		}
 	}
-	if ri.SynthDeps != nil {
-		t.Error("SynthDeps should be nil without LLM adapter")
+	if ri.synthDeps != nil {
+		t.Error("synthDeps should be nil without LLM adapter")
+	}
+}
+
+func TestShutdown_CallsClose(t *testing.T) {
+	m := newEmptyManager()
+	closed := make(chan string, 2)
+	for _, name := range []string{"a", "b"} {
+		n := name
+		ri := NewTestInstance(n)
+		ri.closeFn = func() { closed <- n }
+		m.Set(n, ri)
+	}
+	m.Shutdown()
+	close(closed)
+	got := map[string]bool{}
+	for n := range closed {
+		got[n] = true
+	}
+	if !got["a"] || !got["b"] {
+		t.Fatalf("Shutdown did not call Close on all repos: %v", got)
+	}
+}
+
+func TestSwapStore_FileSwap(t *testing.T) {
+	m := newEmptyManager()
+	realDB := openTestDB(t)
+	svc, err := store.Open(realDB)
+	if err != nil {
+		t.Fatalf("open real DB: %v", err)
+	}
+	ri := NewTestInstance("knomit")
+	ri.dbPath = realDB
+	ri.svc = svc
+
+	tempDB := openTestDB(t)
+	if err := m.SwapStore(ri, tempDB); err != nil {
+		t.Fatalf("SwapStore: %v", err)
+	}
+	if ri.svc == nil {
+		t.Fatal("expected ri.svc to be set after file swap")
+	}
+	if ri.gs == nil {
+		t.Fatal("expected ri.gs to be set after file swap")
+	}
+	if ri.idx == nil {
+		t.Fatal("expected ri.idx to be set after file swap")
+	}
+	if _, err := os.Stat(realDB + ".bak"); !os.IsNotExist(err) {
+		t.Fatal("expected backup to be removed after successful swap")
+	}
+}
+
+func TestSwapStore_InvalidTempPath_ReturnsError(t *testing.T) {
+	m := newEmptyManager()
+	realDB := openTestDB(t)
+	svc, err := store.Open(realDB)
+	if err != nil {
+		t.Fatalf("reopen real DB: %v", err)
+	}
+	ri := NewTestInstance("knomit")
+	ri.dbPath = realDB
+	ri.svc = svc
+
+	err = m.SwapStore(ri, "/nonexistent/path/to/temp.db")
+	if err == nil {
+		t.Fatal("expected error for invalid temp path, got nil")
 	}
 }
 
