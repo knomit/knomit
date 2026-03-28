@@ -47,7 +47,8 @@ type SearchIndex interface {
 }
 
 // SynthDeps bundles the dependencies needed by the synthesize handler.
-// May be nil if no LLM is configured.
+// May be nil if no LLM is configured — the synth handler returns 503
+// in that case rather than panicking.
 type SynthDeps struct {
 	GS       synthesize.GitStore
 	Idx      synthesize.SearchIndex
@@ -81,7 +82,7 @@ type RepoInstance struct {
 	mcpHandlers map[string]http.Handler
 	synthDeps   *SynthDeps
 	startSync   func(url string) error
-	close       func()
+	closeFn     func()
 }
 
 // WithRead calls fn with all lock-protected fields under a read lock.
@@ -127,8 +128,8 @@ func (ri *RepoInstance) ActivateSync(url string) error {
 
 // Close stops the observer and closes the store.
 func (ri *RepoInstance) Close() {
-	if ri.close != nil {
-		ri.close()
+	if ri.closeFn != nil {
+		ri.closeFn()
 	}
 }
 
