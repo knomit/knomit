@@ -7,16 +7,16 @@
 // The package is split across several files:
 //
 //   - store.go    — Core types (Store, DirEntry, LogEntry, SyncResult),
-//                   lifecycle (Init, Open, Close), and metadata accessors.
+//     lifecycle (Init, Open, Close), and metadata accessors.
 //   - read.go     — Read-only operations: ReadFile, FileExists, ListDir,
-//                   ListAll, Log, Grep, DiffFiles.
+//     ListAll, Log, Grep, DiffFiles.
 //   - write.go    — Write operations: WriteFile, DeleteFile, BatchWrite,
-//                   Tag, TagsContaining.
+//     Tag, TagsContaining.
 //   - sync.go     — Remote synchronization: Sync, countAhead, isAncestor,
-//                   mergeTrees.
+//     mergeTrees.
 //   - plumbing.go — Low-level git tree manipulation: writeFileToStore,
-//                   buildTree, upsertEntry, deleteFileFromStore,
-//                   deleteFromTree, removeEntry.
+//     buildTree, upsertEntry, deleteFileFromStore,
+//     deleteFromTree, removeEntry.
 //   - config.go   — Configuration helpers.
 package git
 
@@ -24,24 +24,23 @@ import (
 	"database/sql"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/go-git/go-billy/v5/memfs"
 	gogit "github.com/go-git/go-git/v5"
 	gogitconfig "github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/go-git/go-git/v5/plumbing/storer"
 	"github.com/go-git/go-git/v5/plumbing/transport"
-	"github.com/go-git/go-billy/v5/memfs"
-	_ "github.com/mattn/go-sqlite3"
 	"golang.org/x/crypto/ssh"
 
-	"github.com/rs/zerolog/log"
 	storegit "knomit/internal/store/git"
+
+	"github.com/rs/zerolog/log"
 )
 
 // Store wraps go-git with knomit's logical operations.
@@ -50,12 +49,10 @@ type Store struct {
 	mu        sync.Mutex
 	repo      *gogit.Repository
 	storer    *storegit.Storer
-	db        *sql.DB      // non-nil when commit_log is available
-	commitLog atomic.Bool  // true once commit_log table is confirmed populated
-	ownsDB    bool         // true when Init/Open opened the DB (legacy path)
-	ownedDB   *sql.DB // non-nil when ownsDB is true
-	branch    string  // e.g. "agent/laptop"
-	agentID   string  // e.g. "laptop" (branch with "agent/" prefix stripped)
+	db        *sql.DB     // non-nil when commit_log is available
+	commitLog atomic.Bool // true once commit_log table is confirmed populated
+	branch    string      // e.g. "agent/laptop"
+	agentID   string      // e.g. "laptop" (branch with "agent/" prefix stripped)
 	auth      transport.AuthMethod
 	signer    ssh.Signer // signs commits when set
 	onCommit  func(hash string)
@@ -126,18 +123,6 @@ type SyncResult struct {
 	FastForward bool   // true if fast-forward (no merge commit)
 	MergeCommit string // hash of merge commit (empty if ff or no-op)
 }
-
-// gitSchema is the minimal schema for standalone Init/Open (legacy path).
-// Includes commit_log so SQL-based Activity and WalkChangedFiles work.
-const gitSchema = `
-CREATE TABLE IF NOT EXISTS objects (hash TEXT NOT NULL, type INTEGER NOT NULL, size INTEGER NOT NULL, data BLOB NOT NULL, PRIMARY KEY (hash, type));
-CREATE TABLE IF NOT EXISTS refs (name TEXT PRIMARY KEY, target TEXT NOT NULL, is_symbolic INTEGER NOT NULL DEFAULT 0);
-CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value BLOB NOT NULL);
-CREATE TABLE IF NOT EXISTS commit_log (commit_hash TEXT NOT NULL, path TEXT NOT NULL, committed_at INTEGER NOT NULL, message TEXT NOT NULL, operation TEXT NOT NULL DEFAULT '', author_email TEXT NOT NULL DEFAULT '', action TEXT NOT NULL DEFAULT '', PRIMARY KEY (commit_hash, path));
-CREATE INDEX IF NOT EXISTS commit_log_path_time ON commit_log (path, committed_at DESC);
-CREATE INDEX IF NOT EXISTS commit_log_time ON commit_log (committed_at DESC);
-CREATE INDEX IF NOT EXISTS commit_log_operation ON commit_log (operation, committed_at DESC);
-`
 
 // InitWithStorer creates a new knomit git store using an externally provided storer.
 // The storer's schema must already be applied.
@@ -240,71 +225,8 @@ func OpenWithStorer(s *storegit.Storer) (*Store, error) {
 	return gs, nil
 }
 
-// Init creates a new knomit git store at dbPath.
-// Deprecated: use store.Open + InitWithStorer instead.
-func Init(dbPath string, initFiles map[string]string) (*Store, error) {
-	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
-		return nil, fmt.Errorf("git.Init: mkdir: %w", err)
-	}
-
-	dsn := dbPath
-	if dbPath != ":memory:" {
-		dsn = dbPath + "?_journal_mode=WAL&_busy_timeout=5000"
-	}
-	db, err := sql.Open("sqlite3", dsn)
-	if err != nil {
-		return nil, fmt.Errorf("git.Init: open db: %w", err)
-	}
-	if _, err := db.Exec(gitSchema); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("git.Init: schema: %w", err)
-	}
-
-	s := storegit.NewStorer(db)
-	store, err := InitWithStorer(s, initFiles, "")
-	if err != nil {
-		db.Close()
-		return nil, err
-	}
-	store.ownsDB = true
-	store.ownedDB = db
-	return store, nil
-}
-
-// Open opens an existing knomit git store at dbPath.
-// Deprecated: use store.Open + OpenWithStorer instead.
-func Open(dbPath string) (*Store, error) {
-	dsn := dbPath
-	if dbPath != ":memory:" {
-		dsn = dbPath + "?_journal_mode=WAL&_busy_timeout=5000"
-	}
-	db, err := sql.Open("sqlite3", dsn)
-	if err != nil {
-		return nil, fmt.Errorf("git.Open: open db: %w", err)
-	}
-	if _, err := db.Exec(gitSchema); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("git.Open: schema: %w", err)
-	}
-
-	s := storegit.NewStorer(db)
-	store, err := OpenWithStorer(s)
-	if err != nil {
-		db.Close()
-		return nil, err
-	}
-	store.ownsDB = true
-	store.ownedDB = db
-	return store, nil
-}
-
-// Close closes the underlying database if this Store owns it.
-func (s *Store) Close() error {
-	if s.ownsDB && s.ownedDB != nil {
-		return s.ownedDB.Close()
-	}
-	return nil
-}
+// Close is a no-op. The database lifecycle is managed by the caller (via store.Service).
+func (s *Store) Close() error { return nil }
 
 // Branch returns the agent branch name (e.g. "agent/laptop").
 func (s *Store) Branch() string {

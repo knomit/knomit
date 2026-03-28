@@ -8,6 +8,8 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/storer"
 	"github.com/go-git/go-git/v5/storage"
+
+	storemigrate "knomit/internal/store/migrate"
 )
 
 var _ storer.EncodedObjectStorer = (*Storer)(nil)
@@ -31,6 +33,22 @@ type execer interface {
 // NewStorer wraps an existing *sql.DB. Schema must already be applied.
 func NewStorer(db *sql.DB) *Storer {
 	return &Storer{db: db}
+}
+
+// NewMemoryStorer opens an in-memory SQLite database, applies the core schema
+// migrations (standard tables only, no vec0 or GraphQLite), and returns a
+// Storer backed by it. The caller owns the DB lifecycle and must close it via
+// s.DB().Close() when done.
+func NewMemoryStorer() (*Storer, error) {
+	db, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		return nil, fmt.Errorf("storegit.NewMemoryStorer: open: %w", err)
+	}
+	if err := storemigrate.Core(db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("storegit.NewMemoryStorer: %w", err)
+	}
+	return NewStorer(db), nil
 }
 
 // DB returns the underlying *sql.DB.
