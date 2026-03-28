@@ -110,6 +110,7 @@ func (idx *Index) rebuildGraphHistory(git GitReader, branch string, progress Reb
 
 		rec, err := parseFact(v.path, content, v.commitHash)
 		if err != nil {
+			log.Debug().Err(err).Str("path", v.path).Msg("rebuildGraphHistory: skip (parse failed)")
 			continue
 		}
 
@@ -163,11 +164,11 @@ func (idx *Index) rebuildGraphHistory(git GitReader, branch string, progress Reb
 	}
 
 	for _, cv := range created {
+		versionID, err := idx.graphNodeIDByProp(NodeFactVersion, "commit_hash", cv.commitHash)
+		if err != nil || versionID == 0 {
+			continue
+		}
 		for _, ref := range cv.refs {
-			versionID, err := idx.graphNodeIDByProp(NodeFactVersion, "commit_hash", cv.commitHash)
-			if err != nil || versionID == 0 {
-				continue
-			}
 			targetID, err := idx.graphNodeIDByProp(NodeFact, "path", ref)
 			if err != nil || targetID == 0 {
 				// Target Fact node doesn't exist — skip (no self-loop risk with direct SQL).
