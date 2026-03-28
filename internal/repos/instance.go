@@ -47,8 +47,7 @@ type SearchIndex interface {
 }
 
 // SynthDeps bundles the dependencies needed by the synthesize handler.
-// May be nil if no LLM is configured — the synth handler returns 503
-// in that case rather than panicking.
+// May be nil if no LLM is configured.
 type SynthDeps struct {
 	GS       synthesize.GitStore
 	Idx      synthesize.SearchIndex
@@ -57,33 +56,89 @@ type SynthDeps struct {
 	Reviewer *synthesize.Reviewer
 }
 
-// RLock acquires a read lock protecting GS, Svc, and Idx.
-// Call RUnlock when done.
-func (ri *RepoInstance) RLock() { ri.mu.RLock() }
-
-// RUnlock releases the read lock.
-func (ri *RepoInstance) RUnlock() { ri.mu.RUnlock() }
+// StoreDeps bundles the lock-protected fields for read access via WithRead.
+// All five fields may be nil if the repo is not yet fully initialised.
+type StoreDeps struct {
+	GS    GitStore
+	Svc   *store.Service
+	Idx   SearchIndex
+	MCP   map[string]http.Handler
+	Synth *SynthDeps
+}
 
 // RepoInstance holds all runtime state for a single repository.
 type RepoInstance struct {
-	mu          sync.RWMutex   // protects GS, Svc, Idx during SwapStore
-	Name        string
-	DBPath      string // path to the SQLite database file
-	AgentBranch string // the branch this repo writes to (e.g. machine/<hostname>)
-	GS          GitStore
-	Svc         *store.Service
-	Idx         SearchIndex
-	Hub         *TaskHub
-	SyncCancel  context.CancelFunc
-	SyncWg      *sync.WaitGroup
-	MCPHandlers map[string]http.Handler // profile -> MCP handler
-	SynthDeps   *SynthDeps             // nil if no LLM configured
+	mu          sync.RWMutex
+	name        string
+	dbPath      string
+	agentBranch string
+	gs          GitStore
+	svc         *store.Service
+	idx         SearchIndex
+	hub         *TaskHub
+	syncCancel  context.CancelFunc
+	syncWg      *sync.WaitGroup
+	mcpHandlers map[string]http.Handler
+	synthDeps   *SynthDeps
+	startSync   func(url string) error
+	close       func()
+}
 
-	// StartSync is called by the origin handler to activate sync/push loops
-	// after a remote is configured. Set during initialization.
-	// Takes the remote URL and returns an error if activation fails.
-	StartSync func(url string) error
+// WithRead calls fn with all lock-protected fields under a read lock.
+// This is the only way external code may access gs, svc, idx, mcpHandlers,
+// and synthDeps.
+func (ri *RepoInstance) WithRead(fn func(StoreDeps)) {
+	ri.mu.RLock()
+	defer ri.mu.RUnlock()
+	fn(StoreDeps{
+		GS:    ri.gs,
+		Svc:   ri.svc,
+		Idx:   ri.idx,
+		MCP:   ri.mcpHandlers,
+		Synth: ri.synthDeps,
+	})
+}
 
-	// Close stops the observer and closes the store. Set during initialization.
-	Close func()
+// withWrite calls fn under a write lock. Only used within the repos package
+// (SwapStore, SetupMCP, StartSync closure).
+func (ri *RepoInstance) withWrite(fn func()) {
+	ri.mu.Lock()
+	defer ri.mu.Unlock()
+	fn()
+}
+
+// Name returns the repository name.
+func (ri *RepoInstance) Name() string { return ri.name }
+
+// Branch returns the agent branch this repo writes to.
+func (ri *RepoInstance) Branch() string { return ri.agentBranch }
+
+// TaskHub returns the hub for broadcasting task status events.
+func (ri *RepoInstance) TaskHub() *TaskHub { return ri.hub }
+
+// ActivateSync starts sync and push loops for the given remote URL.
+// Returns an error if the remote cannot be configured.
+func (ri *RepoInstance) ActivateSync(url string) error {
+	if ri.startSync == nil {
+		return nil
+	}
+	return ri.startSync(url)
+}
+
+// Close stops the observer and closes the store.
+func (ri *RepoInstance) Close() {
+	if ri.close != nil {
+		ri.close()
+	}
+}
+
+// NewTestInstance creates a minimal RepoInstance for use in tests that
+// exercise Manager operations (Set, Get, Replace, ForEach, Names, context).
+// Production code must use Manager.openOne instead.
+func NewTestInstance(name string) *RepoInstance {
+	return &RepoInstance{
+		name:       name,
+		syncCancel: func() {},
+		syncWg:     &sync.WaitGroup{},
+	}
 }
