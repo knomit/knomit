@@ -3,6 +3,7 @@ package git_test
 import (
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -214,6 +215,43 @@ func TestDeleteFile_AlreadyDeleted(t *testing.T) {
 	}
 }
 
+func TestDeleteFile_ConcurrentDeleteRace(t *testing.T) {
+	// Regression: FileExists was checked outside the branch lock, creating a
+	// TOCTOU race where two concurrent deletes of the same file could both
+	// observe the file as existing, then one would fail inside deleteFileFromStore.
+	store := newTestStore(t)
+
+	if _, _, err := store.WriteFile(testBranch, "kb/race.md", "# Race\n", "add", "learn"); err != nil {
+		t.Fatal(err)
+	}
+
+	var (
+		wg      sync.WaitGroup
+		mu      sync.Mutex
+		successes int
+		errors    int
+	)
+	for range 2 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := store.DeleteFile(testBranch, "kb/race.md", "delete", "retract")
+			mu.Lock()
+			if err == nil {
+				successes++
+			} else {
+				errors++
+			}
+			mu.Unlock()
+		}()
+	}
+	wg.Wait()
+
+	if successes != 1 || errors != 1 {
+		t.Fatalf("expected exactly 1 success and 1 error, got %d successes and %d errors", successes, errors)
+	}
+}
+
 func TestTag(t *testing.T) {
 	store := newTestStore(t)
 
@@ -364,7 +402,11 @@ func TestSync(t *testing.T) {
 
 	t.Run("with origin merges new commit", func(t *testing.T) {
 		// Set up origin store.
-		origin := newTestStore(t)
+		originSto := newTestStorer(t)
+		origin, err := git.InitWithStorer(originSto, nil, testBranch)
+		if err != nil {
+			t.Fatal(err)
+		}
 
 		// Add a commit to origin's agent branch (WriteFile always targets the
 		// agent branch), then advance origin's main ref to that commit so that
@@ -382,23 +424,27 @@ func TestSync(t *testing.T) {
 			plumbing.NewBranchReferenceName("main"),
 			plumbing.NewHash(originHead),
 		)
-		if err := origin.Storer().SetReference(mainRef); err != nil {
+		if err := originSto.SetReference(mainRef); err != nil {
 			t.Fatal(err)
 		}
 
 		// Register an in-process transport so the knomit store can fetch
 		// from the origin without network or git binary.
 		loader := server.MapLoader{
-			"inmem:///origin": origin.Storer(),
+			"inmem:///origin": originSto,
 		}
 		client.InstallProtocol("inmem", server.NewClient(loader))
 		t.Cleanup(func() { client.InstallProtocol("inmem", nil) })
 
 		// Create the agent store.
-		store := newTestStore(t)
+		agentSto := newTestStorer(t)
+		store, err := git.InitWithStorer(agentSto, nil, testBranch)
+		if err != nil {
+			t.Fatal(err)
+		}
 
 		// Configure origin remote in the agent store via the storer's Config API.
-		cfg, err := store.Storer().Config()
+		cfg, err := agentSto.Config()
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -407,7 +453,7 @@ func TestSync(t *testing.T) {
 			URLs:  []string{"inmem:///origin"},
 			Fetch: []gogitconfig.RefSpec{"+refs/heads/*:refs/remotes/origin/*"},
 		}
-		if err := store.Storer().SetConfig(cfg); err != nil {
+		if err := agentSto.SetConfig(cfg); err != nil {
 			t.Fatal(err)
 		}
 
@@ -958,7 +1004,11 @@ func TestWalkChangedFilesDedup(t *testing.T) {
 
 func TestInitFromRemote_WithContent(t *testing.T) {
 	// Set up an origin store with content.
-	origin := newTestStore(t)
+	originSto := newTestStorer(t)
+	origin, err := git.InitWithStorer(originSto, nil, testBranch)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	if _, _, err := origin.WriteFile(testBranch, "kb/shared.md", "# Shared\n", "origin: add shared", "learn"); err != nil {
 		t.Fatal(err)
@@ -972,12 +1022,12 @@ func TestInitFromRemote_WithContent(t *testing.T) {
 		plumbing.NewBranchReferenceName("main"),
 		plumbing.NewHash(head),
 	)
-	if err := origin.Storer().SetReference(mainRef); err != nil {
+	if err := originSto.SetReference(mainRef); err != nil {
 		t.Fatal(err)
 	}
 
 	// Register in-process transport.
-	loader := server.MapLoader{"inmem:///origin-ifr": origin.Storer()}
+	loader := server.MapLoader{"inmem:///origin-ifr": originSto}
 	client.InstallProtocol("inmem", server.NewClient(loader))
 	t.Cleanup(func() { client.InstallProtocol("inmem", nil) })
 
@@ -1009,7 +1059,11 @@ func TestInitFromRemote_WithContent(t *testing.T) {
 
 func TestInitFromRemote_ExistingAgentBranch(t *testing.T) {
 	// Set up an origin store with an agent branch.
-	origin := newTestStore(t)
+	originSto := newTestStorer(t)
+	origin, err := git.InitWithStorer(originSto, nil, testBranch)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// Write something on the agent branch (which is the default).
 	if _, _, err := origin.WriteFile(testBranch, "kb/agent-file.md", "# Agent File\n", "origin: agent file", "learn"); err != nil {
@@ -1025,12 +1079,12 @@ func TestInitFromRemote_ExistingAgentBranch(t *testing.T) {
 		plumbing.NewBranchReferenceName("main"),
 		plumbing.NewHash(head),
 	)
-	if err := origin.Storer().SetReference(mainRef); err != nil {
+	if err := originSto.SetReference(mainRef); err != nil {
 		t.Fatal(err)
 	}
 
 	// Register in-process transport.
-	loader := server.MapLoader{"inmem:///origin-ifr2": origin.Storer()}
+	loader := server.MapLoader{"inmem:///origin-ifr2": originSto}
 	client.InstallProtocol("inmem", server.NewClient(loader))
 	t.Cleanup(func() { client.InstallProtocol("inmem", nil) })
 
@@ -1118,6 +1172,117 @@ func TestLogPaginated_FileFilter(t *testing.T) {
 	}
 	if entries[0].Message != "update a" {
 		t.Errorf("expected 'update a', got %q", entries[0].Message)
+	}
+}
+
+func TestLastCommitForPath(t *testing.T) {
+	store := newTestStore(t)
+
+	fact := "---\ndomain: []\nconfidence: 0.5\nsources: 1\nentities: []\nrefs: []\n---\n# F\n\nBody.\n"
+	hash1, _, err := store.WriteFile(testBranch, "kb/f.md", fact, "add f", "learn")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := store.LastCommitForPath(testBranch, "kb/f.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != hash1 {
+		t.Errorf("expected %s, got %s", hash1, got)
+	}
+
+	// After an update the last commit should change.
+	hash2, _, err := store.WriteFile(testBranch, "kb/f.md", fact+"updated", "update f", "learn")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err = store.LastCommitForPath(testBranch, "kb/f.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != hash2 {
+		t.Errorf("expected %s after update, got %s", hash2, got)
+	}
+}
+
+func TestLastCommitForPath_NotFound(t *testing.T) {
+	store := newTestStore(t)
+	_, err := store.LastCommitForPath(testBranch, "kb/nonexistent.md")
+	if err == nil {
+		t.Fatal("expected error for nonexistent path, got nil")
+	}
+}
+
+func TestLogPaginated_BeforeCursor(t *testing.T) {
+	store := newTestStore(t)
+
+	fact := "---\ndomain: []\nconfidence: 0.5\nsources: 1\nentities: []\nrefs: []\n---\n# F\n\nBody.\n"
+	for i := range 5 {
+		if _, _, err := store.WriteFile(testBranch, fmt.Sprintf("kb/f%d.md", i), fact, fmt.Sprintf("add f%d", i), "learn"); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Get first page (newest 3).
+	page1, next, prev, err := store.LogPaginated(testBranch, "", 3, "", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page1) != 3 {
+		t.Fatalf("expected 3 entries, got %d", len(page1))
+	}
+	if next == "" {
+		t.Fatal("expected next cursor from first page")
+	}
+	_ = prev
+
+	// Use the oldest entry on page1 as a "before" cursor → should return newer entries.
+	oldest := page1[len(page1)-1].Commit
+	page0, _, _, err := store.LogPaginated(testBranch, "", 10, "", "", oldest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page0) == 0 {
+		t.Fatal("expected entries newer than before cursor")
+	}
+	for _, e := range page0 {
+		if e.Commit == oldest {
+			t.Errorf("before-cursor result should not include the cursor commit itself")
+		}
+	}
+}
+
+func TestLogPaginated_FromCursor(t *testing.T) {
+	store := newTestStore(t)
+
+	fact := "---\ndomain: []\nconfidence: 0.5\nsources: 1\nentities: []\nrefs: []\n---\n# F\n\nBody.\n"
+	var hashes []string
+	for i := range 4 {
+		h, _, err := store.WriteFile(testBranch, fmt.Sprintf("kb/g%d.md", i), fact, fmt.Sprintf("add g%d", i), "learn")
+		if err != nil {
+			t.Fatal(err)
+		}
+		hashes = append(hashes, h)
+	}
+
+	// Use the second-newest commit as a "from" anchor — should be included in results.
+	anchor := hashes[len(hashes)-2]
+	entries, _, _, err := store.LogPaginated(testBranch, "", 10, "", anchor, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) == 0 {
+		t.Fatal("expected entries for from cursor")
+	}
+	found := false
+	for _, e := range entries {
+		if e.Commit == anchor {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("from-cursor result should include the anchor commit itself")
 	}
 }
 

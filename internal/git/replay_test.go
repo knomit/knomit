@@ -178,7 +178,7 @@ func TestReplay_LocalWins_OverwritesSharedPath(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Advance main to HEAD so that the agent branch created from main has the file.
-	advanceMainToHead(t, target, "agent/target-placeholder")
+	advanceMainToHead(t, target, targetStorer, "agent/target-placeholder")
 
 	cfg := git.ReplayConfig{
 		Strategy:      git.StrategyLocalWins,
@@ -230,7 +230,7 @@ func TestReplay_RemoteWins_KeepsRemoteOnSharedPath(t *testing.T) {
 	if _, _, err := target.WriteFile("agent/target-placeholder", "kb/shared.md", remoteContent, "add shared remote", "learn"); err != nil {
 		t.Fatal(err)
 	}
-	advanceMainToHead(t, target, "agent/target-placeholder")
+	advanceMainToHead(t, target, targetStorer, "agent/target-placeholder")
 
 	cfg := git.ReplayConfig{
 		Strategy:      git.StrategyRemoteWins,
@@ -442,13 +442,13 @@ func TestReplay_UsesExistingAgentBranch(t *testing.T) {
 }
 
 // advanceMainToHead sets the main branch ref to the current HEAD commit.
-func advanceMainToHead(t *testing.T, s *git.Store, branch string) {
+func advanceMainToHead(t *testing.T, s *git.Store, sto *storegit.Storer, branch string) {
 	t.Helper()
 	head, err := s.HeadCommit(branch)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Storer().SetReference(
+	if err := sto.SetReference(
 		plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), plumbing.NewHash(head)),
 	); err != nil {
 		t.Fatal(err)

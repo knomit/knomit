@@ -270,6 +270,7 @@ CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value BLOB NOT NULL);
 		sess.State = StateTested
 		sess.TestResult = result
 		sess.RemoteStore = cloned
+		sess.RemoteStorer = storer
 		sess.mu.Unlock()
 
 		log.Info().Str("repo", repo).Str("session_id", sessionID).Str("history", history).Msg("test connectivity completed")
@@ -741,6 +742,7 @@ func handleCommit(rm *repos.Manager, sm *SessionManager, agentBranch string) htt
 		sess.mu.Lock()
 		state := sess.State
 		remoteStore := sess.RemoteStore
+		remoteStorer := sess.RemoteStorer
 		authCfg := sess.Auth
 		remoteURL := sess.URL
 		remoteBranch := sess.RemoteBranch
@@ -772,7 +774,7 @@ func handleCommit(rm *repos.Manager, sm *SessionManager, agentBranch string) htt
 		sendEvent(map[string]string{"phase": "swapping"})
 
 		// Checkpoint the temp DB's WAL so all data is in the main .db file before copying.
-		if tempDB := remoteStore.Storer().DB(); tempDB != nil {
+		if tempDB := remoteStorer.DB(); tempDB != nil {
 			if _, err := tempDB.ExecContext(r.Context(), "PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {
 				log.Warn().Err(err).Msg("commit: WAL checkpoint failed")
 			}

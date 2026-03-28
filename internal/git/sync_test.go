@@ -18,24 +18,33 @@ import (
 // the initial sync, then switches to direct object copying for tests
 // that involve diverged histories (go-git's in-memory transport can't
 // handle diverged fetch negotiation).
-func setupOriginAndAgent(t *testing.T) (origin, agent *git.Store) {
+func setupOriginAndAgent(t *testing.T) (origin, agent *git.Store, originSto, agentSto *storegit.Storer) {
 	t.Helper()
 
-	origin = newTestStore(t)
+	originSto = newTestStorer(t)
+	var err error
+	origin, err = git.InitWithStorer(originSto, nil, testBranch)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// Point origin's main at HEAD.
-	syncMainToHead(t, origin)
+	syncMainToHead(t, origin, originSto)
 
 	// Register in-process transport for initial sync.
-	loader := server.MapLoader{"inmem:///origin": origin.Storer()}
+	loader := server.MapLoader{"inmem:///origin": originSto}
 	client.InstallProtocol("inmem", server.NewClient(loader))
 	t.Cleanup(func() { client.InstallProtocol("inmem", nil) })
 
 	// Create agent store.
-	agent = newTestStore(t)
+	agentSto = newTestStorer(t)
+	agent, err = git.InitWithStorer(agentSto, nil, testBranch)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// Configure origin remote on agent.
-	cfg, err := agent.Storer().Config()
+	cfg, err := agentSto.Config()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -44,7 +53,7 @@ func setupOriginAndAgent(t *testing.T) (origin, agent *git.Store) {
 		URLs:  []string{"inmem:///origin"},
 		Fetch: []gogitconfig.RefSpec{"+refs/heads/*:refs/remotes/origin/*"},
 	}
-	if err := agent.Storer().SetConfig(cfg); err != nil {
+	if err := agentSto.SetConfig(cfg); err != nil {
 		t.Fatal(err)
 	}
 
@@ -53,11 +62,11 @@ func setupOriginAndAgent(t *testing.T) (origin, agent *git.Store) {
 		t.Fatal(err)
 	}
 
-	return origin, agent
+	return origin, agent, originSto, agentSto
 }
 
-// syncMainToHead sets origin's main branch to its current HEAD.
-func syncMainToHead(t *testing.T, s *git.Store) {
+// syncMainToHead sets a store's main branch ref to its current HEAD.
+func syncMainToHead(t *testing.T, s *git.Store, sto *storegit.Storer) {
 	t.Helper()
 	head, err := s.HeadCommit(testBranch)
 	if err != nil {
@@ -67,41 +76,41 @@ func syncMainToHead(t *testing.T, s *git.Store) {
 		plumbing.NewBranchReferenceName("main"),
 		plumbing.NewHash(head),
 	)
-	if err := s.Storer().SetReference(ref); err != nil {
+	if err := sto.SetReference(ref); err != nil {
 		t.Fatal(err)
 	}
 }
 
 // advanceOriginMain writes files to origin then advances main.
-func advanceOriginMain(t *testing.T, origin *git.Store, files map[string]string) {
+func advanceOriginMain(t *testing.T, origin *git.Store, originSto *storegit.Storer, files map[string]string) {
 	t.Helper()
 	for path, content := range files {
 		if _, _, err := origin.WriteFile(testBranch, path, content, "origin: "+path, "learn"); err != nil {
 			t.Fatal(err)
 		}
 	}
-	syncMainToHead(t, origin)
+	syncMainToHead(t, origin, originSto)
 }
 
 // deleteOnOriginMain deletes files from origin then advances main.
-func deleteOnOriginMain(t *testing.T, origin *git.Store, paths []string) {
+func deleteOnOriginMain(t *testing.T, origin *git.Store, originSto *storegit.Storer, paths []string) {
 	t.Helper()
 	for _, path := range paths {
 		if _, err := origin.DeleteFile(testBranch, path, "origin: delete "+path, "retract"); err != nil {
 			t.Fatal(err)
 		}
 	}
-	syncMainToHead(t, origin)
+	syncMainToHead(t, origin, originSto)
 }
 
 // simulateFetch copies all objects from origin's storer to agent's storer
 // and updates the remote tracking ref. This bypasses the git transport
 // protocol which can't handle diverged histories in go-git's in-memory server.
-func simulateFetch(t *testing.T, origin, agent *git.Store) {
+func simulateFetch(t *testing.T, originSto, agentSto *storegit.Storer) {
 	t.Helper()
-	copyObjects(t, origin.Storer(), agent.Storer())
+	copyObjects(t, originSto, agentSto)
 	// Update refs/remotes/origin/main in agent to origin's main hash.
-	mainRef, err := origin.Storer().Reference(plumbing.NewBranchReferenceName("main"))
+	mainRef, err := originSto.Reference(plumbing.NewBranchReferenceName("main"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,7 +118,7 @@ func simulateFetch(t *testing.T, origin, agent *git.Store) {
 		plumbing.NewRemoteReferenceName("origin", "main"),
 		mainRef.Hash(),
 	)
-	if err := agent.Storer().SetReference(remoteRef); err != nil {
+	if err := agentSto.SetReference(remoteRef); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -133,9 +142,9 @@ func copyObjects(t *testing.T, src, dst *storegit.Storer) {
 // syncWithSimulatedFetch simulates a fetch then calls Sync with an empty
 // remote branch (which skips the fetch since origin/main is already updated).
 // This is used for tests with diverged histories.
-func syncWithSimulatedFetch(t *testing.T, origin, agent *git.Store) git.SyncResult {
+func syncWithSimulatedFetch(t *testing.T, agent *git.Store, originSto, agentSto *storegit.Storer) git.SyncResult {
 	t.Helper()
-	simulateFetch(t, origin, agent)
+	simulateFetch(t, originSto, agentSto)
 	result, err := agent.Sync(testBranch, "")
 	if err != nil {
 		t.Fatal(err)
@@ -144,9 +153,9 @@ func syncWithSimulatedFetch(t *testing.T, origin, agent *git.Store) git.SyncResu
 }
 
 func TestSyncThreeWay_AddedFile(t *testing.T) {
-	origin, agent := setupOriginAndAgent(t)
+	origin, agent, originSto, _ := setupOriginAndAgent(t)
 
-	advanceOriginMain(t, origin, map[string]string{
+	advanceOriginMain(t, origin, originSto, map[string]string{
 		"kb/new-from-origin.md": "# New\nFrom origin.\n",
 	})
 
@@ -168,16 +177,16 @@ func TestSyncThreeWay_AddedFile(t *testing.T) {
 }
 
 func TestSyncThreeWay_ModifiedFile(t *testing.T) {
-	origin, agent := setupOriginAndAgent(t)
+	origin, agent, originSto, _ := setupOriginAndAgent(t)
 
-	advanceOriginMain(t, origin, map[string]string{
+	advanceOriginMain(t, origin, originSto, map[string]string{
 		"kb/shared.md": "# Shared v1\n",
 	})
 	if _, err := agent.Sync(testBranch, ""); err != nil {
 		t.Fatal(err)
 	}
 
-	advanceOriginMain(t, origin, map[string]string{
+	advanceOriginMain(t, origin, originSto, map[string]string{
 		"kb/shared.md": "# Shared v2 (origin)\n",
 	})
 
@@ -199,9 +208,9 @@ func TestSyncThreeWay_ModifiedFile(t *testing.T) {
 }
 
 func TestSyncThreeWay_DeletedFile(t *testing.T) {
-	origin, agent := setupOriginAndAgent(t)
+	origin, agent, originSto, _ := setupOriginAndAgent(t)
 
-	advanceOriginMain(t, origin, map[string]string{
+	advanceOriginMain(t, origin, originSto, map[string]string{
 		"kb/to-delete.md": "# Will be deleted\n",
 	})
 	if _, err := agent.Sync(testBranch, ""); err != nil {
@@ -216,7 +225,7 @@ func TestSyncThreeWay_DeletedFile(t *testing.T) {
 		t.Fatal("expected kb/to-delete.md to exist before delete")
 	}
 
-	deleteOnOriginMain(t, origin, []string{"kb/to-delete.md"})
+	deleteOnOriginMain(t, origin, originSto, []string{"kb/to-delete.md"})
 
 	result, err := agent.Sync(testBranch, "")
 	if err != nil {
@@ -236,7 +245,7 @@ func TestSyncThreeWay_DeletedFile(t *testing.T) {
 }
 
 func TestSyncThreeWay_AgentOnlyFilePreserved(t *testing.T) {
-	origin, agent := setupOriginAndAgent(t)
+	origin, agent, originSto, agentSto := setupOriginAndAgent(t)
 
 	// Agent adds its own file (diverges from origin).
 	if _, _, err := agent.WriteFile(testBranch, "kb/agent-only.md", "# Agent Only\n", "agent: add local", "learn"); err != nil {
@@ -244,12 +253,12 @@ func TestSyncThreeWay_AgentOnlyFilePreserved(t *testing.T) {
 	}
 
 	// Origin adds a different file.
-	advanceOriginMain(t, origin, map[string]string{
+	advanceOriginMain(t, origin, originSto, map[string]string{
 		"kb/origin-file.md": "# Origin\n",
 	})
 
 	// Use simulated fetch since histories have diverged.
-	result := syncWithSimulatedFetch(t, origin, agent)
+	result := syncWithSimulatedFetch(t, agent, originSto, agentSto)
 	if !result.Synced {
 		t.Fatal("expected Synced=true")
 	}
@@ -270,10 +279,10 @@ func TestSyncThreeWay_AgentOnlyFilePreserved(t *testing.T) {
 }
 
 func TestSyncThreeWay_OriginOverwritesAgentChange(t *testing.T) {
-	origin, agent := setupOriginAndAgent(t)
+	origin, agent, originSto, agentSto := setupOriginAndAgent(t)
 
 	// Both have a shared file.
-	advanceOriginMain(t, origin, map[string]string{
+	advanceOriginMain(t, origin, originSto, map[string]string{
 		"kb/contested.md": "# Base version\n",
 	})
 	if _, err := agent.Sync(testBranch, ""); err != nil {
@@ -286,12 +295,12 @@ func TestSyncThreeWay_OriginOverwritesAgentChange(t *testing.T) {
 	}
 
 	// Origin also modifies the file.
-	advanceOriginMain(t, origin, map[string]string{
+	advanceOriginMain(t, origin, originSto, map[string]string{
 		"kb/contested.md": "# Origin version\n",
 	})
 
 	// Use simulated fetch since histories have diverged.
-	result := syncWithSimulatedFetch(t, origin, agent)
+	result := syncWithSimulatedFetch(t, agent, originSto, agentSto)
 	if !result.Synced {
 		t.Fatal("expected Synced=true")
 	}
@@ -307,9 +316,9 @@ func TestSyncThreeWay_OriginOverwritesAgentChange(t *testing.T) {
 }
 
 func TestSyncFastForward(t *testing.T) {
-	origin, agent := setupOriginAndAgent(t)
+	origin, agent, originSto, _ := setupOriginAndAgent(t)
 
-	advanceOriginMain(t, origin, map[string]string{
+	advanceOriginMain(t, origin, originSto, map[string]string{
 		"kb/ff-file.md": "# Fast Forward\n",
 	})
 
@@ -329,7 +338,7 @@ func TestSyncFastForward(t *testing.T) {
 }
 
 func TestSyncNoOp(t *testing.T) {
-	_, agent := setupOriginAndAgent(t)
+	_, agent, _, _ := setupOriginAndAgent(t)
 
 	result, err := agent.Sync(testBranch, "")
 	if err != nil {
@@ -341,9 +350,9 @@ func TestSyncNoOp(t *testing.T) {
 }
 
 func TestSyncAlreadyMerged(t *testing.T) {
-	origin, agent := setupOriginAndAgent(t)
+	origin, agent, originSto, _ := setupOriginAndAgent(t)
 
-	advanceOriginMain(t, origin, map[string]string{
+	advanceOriginMain(t, origin, originSto, map[string]string{
 		"kb/merged.md": "# Merged\n",
 	})
 	if _, err := agent.Sync(testBranch, ""); err != nil {
@@ -360,7 +369,7 @@ func TestSyncAlreadyMerged(t *testing.T) {
 }
 
 func TestSyncThreeWay_MergeCommitHasTwoParents(t *testing.T) {
-	origin, agent := setupOriginAndAgent(t)
+	origin, agent, originSto, agentSto := setupOriginAndAgent(t)
 
 	// Agent diverges.
 	if _, _, err := agent.WriteFile(testBranch, "kb/agent-file.md", "# Agent\n", "agent: diverge", "learn"); err != nil {
@@ -368,11 +377,11 @@ func TestSyncThreeWay_MergeCommitHasTwoParents(t *testing.T) {
 	}
 
 	// Origin adds a file.
-	advanceOriginMain(t, origin, map[string]string{
+	advanceOriginMain(t, origin, originSto, map[string]string{
 		"kb/origin-file.md": "# Origin\n",
 	})
 
-	result := syncWithSimulatedFetch(t, origin, agent)
+	result := syncWithSimulatedFetch(t, agent, originSto, agentSto)
 	if !result.Synced {
 		t.Fatal("expected Synced=true")
 	}
@@ -385,16 +394,16 @@ func TestSyncThreeWay_MergeCommitHasTwoParents(t *testing.T) {
 }
 
 func TestSyncThreeWay_SubsequentMergesWork(t *testing.T) {
-	origin, agent := setupOriginAndAgent(t)
+	origin, agent, originSto, agentSto := setupOriginAndAgent(t)
 
 	// First divergence + merge.
 	if _, _, err := agent.WriteFile(testBranch, "kb/a.md", "# A\n", "agent: a", "learn"); err != nil {
 		t.Fatal(err)
 	}
-	advanceOriginMain(t, origin, map[string]string{
+	advanceOriginMain(t, origin, originSto, map[string]string{
 		"kb/b.md": "# B\n",
 	})
-	result := syncWithSimulatedFetch(t, origin, agent)
+	result := syncWithSimulatedFetch(t, agent, originSto, agentSto)
 	if !result.Synced {
 		t.Fatal("expected Synced=true on first merge")
 	}
@@ -403,11 +412,11 @@ func TestSyncThreeWay_SubsequentMergesWork(t *testing.T) {
 	if _, _, err := agent.WriteFile(testBranch, "kb/c.md", "# C\n", "agent: c", "learn"); err != nil {
 		t.Fatal(err)
 	}
-	advanceOriginMain(t, origin, map[string]string{
+	advanceOriginMain(t, origin, originSto, map[string]string{
 		"kb/d.md": "# D\n",
 	})
 
-	result = syncWithSimulatedFetch(t, origin, agent)
+	result = syncWithSimulatedFetch(t, agent, originSto, agentSto)
 	if !result.Synced {
 		t.Fatal("expected Synced=true on second merge")
 	}
@@ -425,10 +434,10 @@ func TestSyncThreeWay_SubsequentMergesWork(t *testing.T) {
 }
 
 func TestSyncThreeWay_DeletedFileAgentModified(t *testing.T) {
-	origin, agent := setupOriginAndAgent(t)
+	origin, agent, originSto, agentSto := setupOriginAndAgent(t)
 
 	// Both have a shared file.
-	advanceOriginMain(t, origin, map[string]string{
+	advanceOriginMain(t, origin, originSto, map[string]string{
 		"kb/will-delete.md": "# Base\n",
 	})
 	if _, err := agent.Sync(testBranch, ""); err != nil {
@@ -441,9 +450,9 @@ func TestSyncThreeWay_DeletedFileAgentModified(t *testing.T) {
 	}
 
 	// Origin deletes it.
-	deleteOnOriginMain(t, origin, []string{"kb/will-delete.md"})
+	deleteOnOriginMain(t, origin, originSto, []string{"kb/will-delete.md"})
 
-	result := syncWithSimulatedFetch(t, origin, agent)
+	result := syncWithSimulatedFetch(t, agent, originSto, agentSto)
 	if !result.Synced {
 		t.Fatal("expected Synced=true")
 	}
@@ -478,10 +487,10 @@ func TestSyncNoRemote(t *testing.T) {
 }
 
 func TestSyncDefaultRemoteBranch(t *testing.T) {
-	origin, agent := setupOriginAndAgent(t)
+	origin, agent, originSto, _ := setupOriginAndAgent(t)
 
 	// Advance origin/main.
-	advanceOriginMain(t, origin, map[string]string{
+	advanceOriginMain(t, origin, originSto, map[string]string{
 		"kb/default-branch.md": "# Default branch test\n",
 	})
 
@@ -505,10 +514,10 @@ func TestSyncDefaultRemoteBranch(t *testing.T) {
 }
 
 func TestSyncOriginRefNotFoundAfterFetch(t *testing.T) {
-	origin, agent := setupOriginAndAgent(t)
+	origin, agent, originSto, agentSto := setupOriginAndAgent(t)
 
 	// Reconfigure agent to fetch a branch that doesn't exist on origin.
-	cfg, err := agent.Storer().Config()
+	cfg, err := agentSto.Config()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -517,12 +526,12 @@ func TestSyncOriginRefNotFoundAfterFetch(t *testing.T) {
 		URLs:  []string{"inmem:///origin"},
 		Fetch: []gogitconfig.RefSpec{"+refs/heads/*:refs/remotes/origin/*"},
 	}
-	if err := agent.Storer().SetConfig(cfg); err != nil {
+	if err := agentSto.SetConfig(cfg); err != nil {
 		t.Fatal(err)
 	}
 
 	// Advance origin on main (not on "nonexistent").
-	advanceOriginMain(t, origin, map[string]string{
+	advanceOriginMain(t, origin, originSto, map[string]string{
 		"kb/x.md": "# X\n",
 	})
 
@@ -554,6 +563,25 @@ func TestConfigureRemote(t *testing.T) {
 	}
 }
 
+func TestSyncOriginAlreadyAncestorOfAgent(t *testing.T) {
+	// If the agent has local commits on top of origin's tip, origin is already
+	// an ancestor of agent — Sync should be a no-op (Synced=false).
+	_, agent, _, _ := setupOriginAndAgent(t)
+
+	// Agent diverges ahead of origin (origin hasn't advanced).
+	if _, _, err := agent.WriteFile(testBranch, "kb/local.md", "# Local\n", "local write", "learn"); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := agent.Sync(testBranch, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Synced {
+		t.Fatal("expected Synced=false when origin is already an ancestor of agent")
+	}
+}
+
 func TestPush(t *testing.T) {
 	t.Run("no remote returns Pushed=false", func(t *testing.T) {
 		s := newTestStore(t)
@@ -568,7 +596,7 @@ func TestPush(t *testing.T) {
 	})
 
 	t.Run("pushes agent branch to origin", func(t *testing.T) {
-		origin, agent := setupOriginAndAgent(t)
+		_, agent, originSto, _ := setupOriginAndAgent(t)
 
 		// Agent writes a file.
 		if _, _, err := agent.WriteFile(testBranch, "kb/agent-push.md", "# Push test\n", "agent: push test", "learn"); err != nil {
@@ -586,7 +614,7 @@ func TestPush(t *testing.T) {
 
 		// Verify origin has the agent branch with the file.
 		// The agent branch on origin should now have the pushed content.
-		agentRef, err := origin.Storer().Reference(plumbing.NewBranchReferenceName(testBranch))
+		agentRef, err := originSto.Reference(plumbing.NewBranchReferenceName(testBranch))
 		if err != nil {
 			t.Fatalf("expected agent branch on origin, got: %v", err)
 		}
@@ -596,7 +624,7 @@ func TestPush(t *testing.T) {
 	})
 
 	t.Run("already up to date returns Pushed=false", func(t *testing.T) {
-		_, agent := setupOriginAndAgent(t)
+		_, agent, _, _ := setupOriginAndAgent(t)
 
 		// Push with no local changes (initial push).
 		result, err := agent.Push(testBranch)
@@ -618,7 +646,7 @@ func TestPush(t *testing.T) {
 		// Regression test: after an origin session clone+swap, the remote may
 		// have the agent branch with a different history. Push should detect
 		// the non-fast-forward error and retry with a force push.
-		origin, agent := setupOriginAndAgent(t)
+		origin, agent, originSto, _ := setupOriginAndAgent(t)
 
 		// Agent writes and pushes a file.
 		if _, _, err := agent.WriteFile(testBranch, "kb/first.md", "# First\n", "first", "learn"); err != nil {
@@ -639,7 +667,7 @@ func TestPush(t *testing.T) {
 			plumbing.NewBranchReferenceName(testBranch),
 			plumbing.NewHash(originHead),
 		)
-		if err := origin.Storer().SetReference(originAgentRef); err != nil {
+		if err := originSto.SetReference(originAgentRef); err != nil {
 			t.Fatal(err)
 		}
 

@@ -73,21 +73,23 @@ func (s *Store) DeleteFile(branch, path, message, operation string) (commitHash 
 		return "", fmt.Errorf("git: DeleteFile: path must not contain '..'")
 	}
 
-	// Check if file exists before creating a commit.
-	exists, err := s.FileExists(branch, path)
-	if err != nil {
-		return "", fmt.Errorf("DeleteFile: check exists: %w", err)
-	}
-	if !exists {
-		return "", fmt.Errorf("DeleteFile: file %q does not exist", path)
-	}
-
 	unlock := s.lockBranch(branch)
 
 	headHash, err := s.resolveRef(branch)
 	if err != nil {
 		unlock()
 		return "", fmt.Errorf("DeleteFile: ref: %w", err)
+	}
+
+	// Check existence inside the lock to avoid a TOCTOU race.
+	exists, err := s.FileExists(branch, path)
+	if err != nil {
+		unlock()
+		return "", fmt.Errorf("DeleteFile: check exists: %w", err)
+	}
+	if !exists {
+		unlock()
+		return "", fmt.Errorf("DeleteFile: file %q does not exist", path)
 	}
 
 	author := s.authorSig(branch, operation)

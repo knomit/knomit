@@ -22,6 +22,7 @@ package git
 
 import (
 	"fmt"
+	"net/http"
 	"os"
 	"strings"
 	"sync"
@@ -44,13 +45,15 @@ import (
 // Store wraps go-git with knomit's logical operations.
 // All fact reads/writes go through go-git's plumbing API — NO filesystem reads/writes.
 type Store struct {
-	branchMu sync.Map     // keyed by branch name → *sync.Mutex
-	configMu sync.Mutex   // guards ConfigureRemote
-	repo     *gogit.Repository
-	storer   *storegit.Storer
-	auth     transport.AuthMethod
-	signer   ssh.Signer // signs commits when set
-	onCommit func(branch, hash string)
+	branchMu    sync.Map     // keyed by branch name → *sync.Mutex
+	configMu    sync.Mutex   // guards ConfigureRemote
+	repo        *gogit.Repository
+	storer      *storegit.Storer
+	auth        transport.AuthMethod
+	signer      ssh.Signer // signs commits when set
+	onCommit    func(branch, hash string)
+	handlerOnce sync.Once
+	handler     http.Handler
 }
 
 // DirEntry represents a single entry in a knomit directory listing.
@@ -300,11 +303,6 @@ func (s *Store) CreateBranch(branch, fromBranch string) error {
 	}
 	log.Info().Str("branch", branch).Str("from", fromBranch).Msg("created branch")
 	return nil
-}
-
-// Storer returns the underlying storer (used by the git remote handler).
-func (s *Store) Storer() *storegit.Storer {
-	return s.storer
 }
 
 // SetAuth sets the transport authentication method used by Sync and Push.

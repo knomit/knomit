@@ -27,7 +27,11 @@ func TestDefaultBranch_ResolvesFromHEAD(t *testing.T) {
 
 func TestCloneInto_ClonesRemoteToTempStorer(t *testing.T) {
 	// Create an origin store with content.
-	origin := newTestStore(t)
+	originSto := newTestStorer(t)
+	origin, err := git.InitWithStorer(originSto, nil, testBranch)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	if _, _, err := origin.WriteFile(testBranch, "kb/hello.md", "# Hello\n", "add hello", "learn"); err != nil {
 		t.Fatal(err)
@@ -37,14 +41,14 @@ func TestCloneInto_ClonesRemoteToTempStorer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := origin.Storer().SetReference(
+	if err := originSto.SetReference(
 		plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), plumbing.NewHash(head)),
 	); err != nil {
 		t.Fatal(err)
 	}
 
 	// Register in-process transport.
-	loader := server.MapLoader{"inmem:///clone-origin": origin.Storer()}
+	loader := server.MapLoader{"inmem:///clone-origin": originSto}
 	client.InstallProtocol("inmem", server.NewClient(loader))
 	t.Cleanup(func() { client.InstallProtocol("inmem", nil) })
 
@@ -118,21 +122,25 @@ func TestHasSharedHistory_DisjointRepos(t *testing.T) {
 
 func TestHasSharedHistory_SharedOrigin(t *testing.T) {
 	// Create an origin and clone it.
-	origin := newTestStore(t)
+	originSto := newTestStorer(t)
+	origin, err := git.InitWithStorer(originSto, nil, testBranch)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// Advance main.
 	head, err := origin.HeadCommit(testBranch)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := origin.Storer().SetReference(
+	if err := originSto.SetReference(
 		plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), plumbing.NewHash(head)),
 	); err != nil {
 		t.Fatal(err)
 	}
 
 	// Register in-process transport.
-	loader := server.MapLoader{"inmem:///shared-origin": origin.Storer()}
+	loader := server.MapLoader{"inmem:///shared-origin": originSto}
 	client.InstallProtocol("inmem", server.NewClient(loader))
 	t.Cleanup(func() { client.InstallProtocol("inmem", nil) })
 

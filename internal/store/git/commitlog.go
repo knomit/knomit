@@ -151,6 +151,14 @@ func (s *Storer) CommitLogQuery(path string, cursor CommitLogCursor, limit int) 
 		return ts, err
 	}
 
+	lookupPath := func(hash string) (string, error) {
+		var path string
+		err := s.db.QueryRow(
+			`SELECT MIN(path) FROM commit_log WHERE commit_hash = ?`, hash,
+		).Scan(&path)
+		return path, err
+	}
+
 	var cursorCond string
 	var cursorArgs []any
 	switch cursor.Type {
@@ -159,37 +167,48 @@ func (s *Storer) CommitLogQuery(path string, cursor CommitLogCursor, limit int) 
 		if err != nil {
 			return nil, false, fmt.Errorf("CommitLogQuery: before lookup: %w", err)
 		}
-		cursorCond = "(ts > ? OR (ts = ? AND commit_hash < ?))"
-		cursorArgs = []any{ts, ts, cursor.Hash}
+		path, err := lookupPath(cursor.Hash)
+		if err != nil {
+			return nil, false, fmt.Errorf("CommitLogQuery: before path lookup: %w", err)
+		}
+		cursorCond = "(ts > ? OR (ts = ? AND min_path < ?))"
+		cursorArgs = []any{ts, ts, path}
 	case CommitLogCursorFrom:
 		ts, err := lookupTS(cursor.Hash)
 		if err != nil {
 			return nil, false, fmt.Errorf("CommitLogQuery: from lookup: %w", err)
 		}
-		cursorCond = "(ts < ? OR (ts = ? AND commit_hash >= ?))"
-		cursorArgs = []any{ts, ts, cursor.Hash}
+		path, err := lookupPath(cursor.Hash)
+		if err != nil {
+			return nil, false, fmt.Errorf("CommitLogQuery: from path lookup: %w", err)
+		}
+		cursorCond = "(ts < ? OR (ts = ? AND min_path >= ?))"
+		cursorArgs = []any{ts, ts, path}
 	case CommitLogCursorAfter:
 		ts, err := lookupTS(cursor.Hash)
 		if err != nil {
 			return nil, false, fmt.Errorf("CommitLogQuery: after lookup: %w", err)
 		}
-		cursorCond = "(ts < ? OR (ts = ? AND commit_hash > ?))"
-		cursorArgs = []any{ts, ts, cursor.Hash}
+		path, err := lookupPath(cursor.Hash)
+		if err != nil {
+			return nil, false, fmt.Errorf("CommitLogQuery: after path lookup: %w", err)
+		}
+		cursorCond = "(ts < ? OR (ts = ? AND min_path > ?))"
+		cursorArgs = []any{ts, ts, path}
 	default:
 		cursorCond = "1=1"
 	}
 
 	query := `
-SELECT commit_hash, ts, message, operation
+SELECT commit_hash, ts, message, operation, min_path
 FROM (
-    -- MIN picks a deterministic value when multiple rows share a commit hash
-    SELECT commit_hash, MIN(committed_at) AS ts, MIN(message) AS message, MIN(operation) AS operation
+    SELECT commit_hash, MIN(committed_at) AS ts, MIN(message) AS message, MIN(operation) AS operation, MIN(path) AS min_path
     FROM commit_log
     WHERE ` + pathCond + `
     GROUP BY commit_hash
 )
 WHERE ` + cursorCond + `
-ORDER BY ts DESC, commit_hash ASC
+ORDER BY ts DESC, min_path ASC
 LIMIT ?`
 
 	args := append(pathArgs, cursorArgs...)
@@ -204,7 +223,8 @@ LIMIT ?`
 	var results []CommitLogRow
 	for rows.Next() {
 		var r CommitLogRow
-		if err := rows.Scan(&r.Hash, &r.Timestamp, &r.Message, &r.Operation); err != nil {
+		var minPath string // selected for ORDER BY / cursor; not exposed to callers
+		if err := rows.Scan(&r.Hash, &r.Timestamp, &r.Message, &r.Operation, &minPath); err != nil {
 			return nil, false, fmt.Errorf("CommitLogQuery: scan: %w", err)
 		}
 		results = append(results, r)
