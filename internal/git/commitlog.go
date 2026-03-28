@@ -194,13 +194,15 @@ func (s *Store) appendCommitLog(hash plumbing.Hash) {
 	}
 	done := false
 	entries := commitEntries(c, files)
-	_ = s.storer.CommitLogSync(func() (string, []storegit.CommitLogEntry, error) {
+	if err := s.storer.CommitLogSync(func() (string, []storegit.CommitLogEntry, error) {
 		if done {
 			return "", nil, nil
 		}
 		done = true
 		return hash.String(), entries, nil
-	})
+	}); err != nil {
+		log.Warn().Err(err).Str("hash", hash.String()[:8]).Msg("commit_log: append sync failed")
+	}
 }
 
 // commitLogAge is used in read.go for SQL activity queries.
