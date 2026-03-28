@@ -81,13 +81,17 @@ func (idx *Index) rebuildGraphHistory(git GitReader, branch string, progress Reb
 	}
 
 	// Phase 1: create all FactVersion nodes in a single transaction.
-	// Edges must be created after commit so that node IDs are visible.
+	// Edges and property SETs must be applied after commit: node IDs are only
+	// visible post-commit, and GraphQLite MATCH+SET doesn't persist EAV properties
+	// inside a *sql.Tx.
 	type prevEdge struct {
 		newerHash, olderHash string
 	}
 	type createdVersion struct {
 		path, commitHash string
 		refs             []string
+		rec              FactRecord
+		committedAt      int64
 	}
 
 	tx, err := idx.db.Begin()
@@ -130,7 +134,7 @@ func (idx *Index) rebuildGraphHistory(git GitReader, branch string, progress Reb
 				localRefs = append(localRefs, ref)
 			}
 		}
-		created = append(created, createdVersion{v.path, v.commitHash, localRefs})
+		created = append(created, createdVersion{v.path, v.commitHash, localRefs, rec, v.committedAt})
 		done++
 	}
 
@@ -140,6 +144,15 @@ func (idx *Index) rebuildGraphHistory(git GitReader, branch string, progress Reb
 
 	if progress != nil {
 		progress("history", done, total)
+	}
+
+	// Phase 1.5: set title and committed_at on each FactVersion node now that
+	// the transaction has committed. GraphQLite MATCH+SET does not persist EAV
+	// properties when executed inside a *sql.Tx, so this must run post-commit.
+	for _, cv := range created {
+		if err := idx.graphSetFactVersionProps(cv.rec, cv.committedAt); err != nil {
+			log.Warn().Err(err).Str("path", cv.path).Str("commit", cv.commitHash[:8]).Msg("rebuildGraphHistory: set props failed")
+		}
 	}
 
 	// Phase 2: create PREV_VERSION and DERIVED_FROM edges via direct SQL.
@@ -183,27 +196,74 @@ func (idx *Index) rebuildGraphHistory(git GitReader, branch string, progress Reb
 	return done, nil
 }
 
-// graphSyncFactVersionTx creates or updates a FactVersion node (MERGE + SET)
-// within the given transaction. Edges (PREV_VERSION, DERIVED_FROM) are created
-// after commit via direct SQL to avoid the GraphQLite two-node MATCH self-loop bug.
+// graphSyncFactVersionTx creates a FactVersion node (MERGE only) within the
+// given transaction. Properties (title, committed_at) must be set after the
+// transaction commits via graphSetFactVersionProps, because GraphQLite's
+// MATCH+SET does not persist to EAV tables when executed inside a *sql.Tx.
 func (idx *Index) graphSyncFactVersionTx(tx execer, rec FactRecord, committedAt int64) error {
 	p := escapeCypherKey(rec.Path)
 	ch := escapeCypherKey(rec.CommitHash)
-	title := escapeCypherVal(rec.Title)
 
-	// MERGE the FactVersion node.
+	// MERGE the FactVersion node (identity props only).
 	q := fmt.Sprintf(`SELECT cypher('MERGE (v:%s {path: "%s", commit_hash: "%s"})')`,
 		NodeFactVersion, p, ch)
 	if _, err := tx.Exec(q); err != nil {
 		return fmt.Errorf("graphSyncFactVersionTx: merge node: %w", err)
 	}
+	return nil
+}
 
-	// SET properties (title, committed_at).
-	// GraphQLite requires a separate MATCH+SET after MERGE to update properties.
-	q = fmt.Sprintf(`SELECT cypher('MATCH (v:%s {path: "%s", commit_hash: "%s"}) SET v.title = "%s", v.committed_at = %d')`,
-		NodeFactVersion, p, ch, title, committedAt)
-	if _, err := tx.Exec(q); err != nil {
-		return fmt.Errorf("graphSyncFactVersionTx: set props: %w", err)
+// graphSetFactVersionProps sets title and committed_at on an existing FactVersion
+// node via direct SQL INSERTs into the EAV tables. GraphQLite's MATCH+SET
+// silently drops property writes (confirmed: title/committed_at never appear
+// in node_props_text or node_props_real after a Cypher SET), so we bypass
+// Cypher entirely and INSERT directly into the EAV tables.
+//
+// Must be called after the transaction that created the node has committed,
+// because node IDs are only visible post-commit.
+func (idx *Index) graphSetFactVersionProps(rec FactRecord, committedAt int64) error {
+	nodeID, err := idx.graphNodeIDByProp(NodeFactVersion, "commit_hash", rec.CommitHash)
+	if err != nil || nodeID == 0 {
+		return fmt.Errorf("graphSetFactVersionProps: node not found for commit_hash=%s: %w", rec.CommitHash, err)
+	}
+
+	// Ensure property key IDs exist, then upsert values into EAV tables.
+	type textProp struct {
+		key   string
+		value string
+	}
+	for _, p := range []textProp{
+		{"title", rec.Title},
+	} {
+		// Ensure property_key row exists.
+		if _, err := idx.db.Exec(`INSERT OR IGNORE INTO property_keys(key) VALUES (?)`, p.key); err != nil {
+			return fmt.Errorf("graphSetFactVersionProps: ensure key %s: %w", p.key, err)
+		}
+		var keyID int64
+		if err := idx.db.QueryRow(`SELECT id FROM property_keys WHERE key = ?`, p.key).Scan(&keyID); err != nil {
+			return fmt.Errorf("graphSetFactVersionProps: get key_id for %s: %w", p.key, err)
+		}
+		if _, err := idx.db.Exec(
+			`INSERT OR REPLACE INTO node_props_text(node_id, key_id, value) VALUES (?, ?, ?)`,
+			nodeID, keyID, p.value,
+		); err != nil {
+			return fmt.Errorf("graphSetFactVersionProps: set text prop %s: %w", p.key, err)
+		}
+	}
+
+	// committed_at is an integer; store in node_props_real (GraphQLite uses REAL for numbers).
+	if _, err := idx.db.Exec(`INSERT OR IGNORE INTO property_keys(key) VALUES (?)`, "committed_at"); err != nil {
+		return fmt.Errorf("graphSetFactVersionProps: ensure key committed_at: %w", err)
+	}
+	var caKeyID int64
+	if err := idx.db.QueryRow(`SELECT id FROM property_keys WHERE key = 'committed_at'`).Scan(&caKeyID); err != nil {
+		return fmt.Errorf("graphSetFactVersionProps: get key_id for committed_at: %w", err)
+	}
+	if _, err := idx.db.Exec(
+		`INSERT OR REPLACE INTO node_props_real(node_id, key_id, value) VALUES (?, ?, ?)`,
+		nodeID, caKeyID, committedAt,
+	); err != nil {
+		return fmt.Errorf("graphSetFactVersionProps: set committed_at: %w", err)
 	}
 
 	return nil

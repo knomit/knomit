@@ -196,3 +196,139 @@ func TestRebuildGraphHistory_SkipsDeletedCommits(t *testing.T) {
 		t.Errorf("expected 1 version, got %d", n)
 	}
 }
+
+func TestFactVersionHistory(t *testing.T) {
+	idx, err := New(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer idx.Close()
+
+	path := "kb/test/fact.md"
+	c1 := "aaa0000000000000000000000000000000000000aa"
+	c2 := "bbb0000000000000000000000000000000000000bb"
+
+	insertCommitLog(t, idx, path, c1, 1000, "added")
+	insertCommitLog(t, idx, path, c2, 2000, "modified")
+
+	git := &mockGitReader{
+		commitFiles: map[string]map[string]string{
+			c1: {path: factContent("Version One")},
+			c2: {path: factContent("Version Two")},
+		},
+		files: map[string]string{path: factContent("Version Two")},
+		head:  c2,
+	}
+	if _, err := idx.rebuildGraphHistory(git, "machine/test", nil); err != nil {
+		t.Fatalf("rebuildGraphHistory: %v", err)
+	}
+
+	versions, err := idx.FactVersionHistory(path)
+	if err != nil {
+		t.Fatalf("FactVersionHistory: %v", err)
+	}
+	if len(versions) != 2 {
+		t.Fatalf("expected 2 versions, got %d", len(versions))
+	}
+	// Newest first.
+	if versions[0].CommitHash != c2 {
+		t.Errorf("expected newest version %s first, got %s", c2, versions[0].CommitHash)
+	}
+	if versions[0].Title != "Version Two" {
+		t.Errorf("expected title %q, got %q", "Version Two", versions[0].Title)
+	}
+}
+
+func TestExplainFactAt_OutgoingRefs(t *testing.T) {
+	idx, err := New(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer idx.Close()
+
+	source := "kb/test/source.md"
+	target := "kb/test/target.md"
+	c1 := "aaa0000000000000000000000000000000000000aa"
+	c2 := "bbb0000000000000000000000000000000000000bb"
+
+	insertCommitLog(t, idx, target, c1, 1000, "added")
+	insertCommitLog(t, idx, source, c2, 2000, "added")
+
+	blobHash := "deadbeef00000002"
+	idx.db.Exec(`INSERT OR IGNORE INTO objects(hash, type, size, data) VALUES (?, ?, ?, ?)`,
+		blobHash, BlobObjectType, 10, []byte(factContent("Target")))
+	idx.Upsert(FactRecord{
+		Path: target, Title: "Target", BlobHash: blobHash,
+		Type: "observation", Domain: []string{"test"}, Confidence: 0.8, Sources: 1,
+	})
+
+	git := &mockGitReader{
+		commitFiles: map[string]map[string]string{
+			c1: {target: factContent("Target")},
+			c2: {source: factContent("Source", target)},
+		},
+		files: map[string]string{
+			target: factContent("Target"),
+			source: factContent("Source", target),
+		},
+		head: c2,
+	}
+	if _, err := idx.rebuildGraphHistory(git, "machine/test", nil); err != nil {
+		t.Fatalf("rebuildGraphHistory: %v", err)
+	}
+
+	result, err := idx.ExplainFactAt(source, c2)
+	if err != nil {
+		t.Fatalf("ExplainFactAt: %v", err)
+	}
+	if len(result.Outgoing) != 1 || result.Outgoing[0].Path != target {
+		t.Errorf("expected outgoing ref to %s, got %v", target, result.Outgoing)
+	}
+}
+
+func TestExplainFactAt_IncomingRefs(t *testing.T) {
+	idx, err := New(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer idx.Close()
+
+	source := "kb/test/source.md"
+	target := "kb/test/target.md"
+	c1 := "aaa0000000000000000000000000000000000000aa"
+	c2 := "bbb0000000000000000000000000000000000000bb"
+
+	insertCommitLog(t, idx, target, c1, 1000, "added")
+	insertCommitLog(t, idx, source, c2, 2000, "added")
+
+	blobHash := "deadbeef00000003"
+	idx.db.Exec(`INSERT OR IGNORE INTO objects(hash, type, size, data) VALUES (?, ?, ?, ?)`,
+		blobHash, BlobObjectType, 10, []byte(factContent("Target")))
+	idx.Upsert(FactRecord{
+		Path: target, Title: "Target", BlobHash: blobHash,
+		Type: "observation", Domain: []string{"test"}, Confidence: 0.8, Sources: 1,
+	})
+
+	git := &mockGitReader{
+		commitFiles: map[string]map[string]string{
+			c1: {target: factContent("Target")},
+			c2: {source: factContent("Source", target)},
+		},
+		files: map[string]string{
+			target: factContent("Target"),
+			source: factContent("Source", target),
+		},
+		head: c2,
+	}
+	if _, err := idx.rebuildGraphHistory(git, "machine/test", nil); err != nil {
+		t.Fatalf("rebuildGraphHistory: %v", err)
+	}
+
+	result, err := idx.ExplainFactAt(target, c1)
+	if err != nil {
+		t.Fatalf("ExplainFactAt: %v", err)
+	}
+	if len(result.Incoming) != 1 || result.Incoming[0].Path != source {
+		t.Errorf("expected incoming from %s, got %v", source, result.Incoming)
+	}
+}

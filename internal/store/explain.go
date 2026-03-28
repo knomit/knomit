@@ -77,6 +77,172 @@ func isDeletedVal(v interface{}) bool {
 	return false
 }
 
+// VersionSummary is one entry in a fact's version history.
+type VersionSummary struct {
+	CommitHash  string `json:"commit_hash"`
+	CommittedAt int64  `json:"committed_at"`
+	Title       string `json:"title"`
+}
+
+// FactVersionHistory returns all known historical versions of path, newest first.
+// Only versions that have been graph-indexed (FactVersion nodes exist) are returned.
+// Uses direct SQL against EAV tables for reliability (GraphQLite parameterized
+// MATCH does not reliably return SET properties via json_each).
+func (idx *Index) FactVersionHistory(path string) ([]VersionSummary, error) {
+	// committed_at is stored in node_props_real (graphSetFactVersionProps uses
+	// INSERT INTO node_props_real); title is in node_props_text.
+	rows, err := idx.db.Query(`
+		SELECT
+			COALESCE(ch_prop.value, '') AS commit_hash,
+			CAST(COALESCE(ca_prop.value, 0) AS INTEGER) AS committed_at,
+			COALESCE(title_prop.value, '') AS title
+		FROM node_labels nl
+		JOIN node_props_text path_prop ON path_prop.node_id = nl.node_id
+			AND path_prop.key_id = (SELECT id FROM property_keys WHERE key = 'path' LIMIT 1)
+		LEFT JOIN node_props_text ch_prop ON ch_prop.node_id = nl.node_id
+			AND ch_prop.key_id = (SELECT id FROM property_keys WHERE key = 'commit_hash' LIMIT 1)
+		LEFT JOIN node_props_real ca_prop ON ca_prop.node_id = nl.node_id
+			AND ca_prop.key_id = (SELECT id FROM property_keys WHERE key = 'committed_at' LIMIT 1)
+		LEFT JOIN node_props_text title_prop ON title_prop.node_id = nl.node_id
+			AND title_prop.key_id = (SELECT id FROM property_keys WHERE key = 'title' LIMIT 1)
+		WHERE nl.label = ? AND path_prop.value = ?
+		ORDER BY COALESCE(ca_prop.value, 0) DESC
+	`, NodeFactVersion, path)
+	if err != nil {
+		return nil, fmt.Errorf("FactVersionHistory: %w", err)
+	}
+	defer rows.Close()
+
+	var result []VersionSummary
+	for rows.Next() {
+		var v VersionSummary
+		if err := rows.Scan(&v.CommitHash, &v.CommittedAt, &v.Title); err != nil {
+			return nil, fmt.Errorf("FactVersionHistory: scan: %w", err)
+		}
+		if v.CommitHash == "" {
+			continue
+		}
+		result = append(result, v)
+	}
+	return result, rows.Err()
+}
+
+// ExplainFactAt returns the incoming and outgoing DERIVED_FROM neighbours for
+// the FactVersion identified by (path, commitHash).
+//
+// Outgoing: refs declared in this specific version (FactVersion→Fact edges).
+// Incoming: all FactVersions that reference this path's Fact node.
+// Self-loops are filtered out.
+//
+// Both queries use direct SQL against the EAV tables to avoid GraphQLite's
+// same-label two-node MATCH self-loop bug (established in Task 3).
+func (idx *Index) ExplainFactAt(path, commitHash string) (ExplainResult, error) {
+	// Resolve FactVersion node ID for (path, commitHash).
+	var versionID int64
+	err := idx.db.QueryRow(`
+		SELECT np.node_id
+		FROM node_props_text np
+		JOIN property_keys pk ON pk.id = np.key_id
+		JOIN node_labels nl ON nl.node_id = np.node_id
+		WHERE pk.key = 'commit_hash' AND np.value = ? AND nl.label = ?
+		LIMIT 1
+	`, commitHash, NodeFactVersion).Scan(&versionID)
+	if err != nil {
+		return ExplainResult{}, fmt.Errorf("ExplainFactAt: resolve version node: %w", err)
+	}
+
+	// Outgoing: DERIVED_FROM edges from this FactVersion to Fact nodes.
+	outgoing, err := idx.refSummariesByEdgeSource(versionID, EdgeDerivedFrom, NodeFact)
+	if err != nil {
+		return ExplainResult{}, fmt.Errorf("ExplainFactAt outgoing: %w", err)
+	}
+
+	// Incoming: DERIVED_FROM edges from any FactVersion to the Fact node for path.
+	factID, err := idx.graphNodeIDByProp(NodeFact, "path", path)
+	if err != nil || factID == 0 {
+		// No Fact node means no incoming refs — return what we have.
+		return ExplainResult{
+			Outgoing: filterSelf(outgoing, path),
+			Incoming: []RefSummary{},
+		}, nil
+	}
+	incoming, err := idx.refSummariesByEdgeTarget(factID, EdgeDerivedFrom, NodeFactVersion)
+	if err != nil {
+		return ExplainResult{}, fmt.Errorf("ExplainFactAt incoming: %w", err)
+	}
+
+	return ExplainResult{
+		Incoming: filterSelf(incoming, path),
+		Outgoing: filterSelf(outgoing, path),
+	}, nil
+}
+
+// refSummariesByEdgeSource returns RefSummary entries for all target nodes
+// reachable from sourceNodeID via edges of edgeType, where the target has label targetLabel.
+// It reads path and title properties from the EAV tables.
+func (idx *Index) refSummariesByEdgeSource(sourceNodeID int64, edgeType, targetLabel string) ([]RefSummary, error) {
+	rows, err := idx.db.Query(`
+		SELECT DISTINCT
+			path_prop.value AS path,
+			COALESCE(title_prop.value, '') AS title
+		FROM edges e
+		JOIN node_labels nl ON nl.node_id = e.target_id AND nl.label = ?
+		JOIN node_props_text path_prop ON path_prop.node_id = e.target_id
+			AND path_prop.key_id = (SELECT id FROM property_keys WHERE key = 'path' LIMIT 1)
+		LEFT JOIN node_props_text title_prop ON title_prop.node_id = e.target_id
+			AND title_prop.key_id = (SELECT id FROM property_keys WHERE key = 'title' LIMIT 1)
+		WHERE e.source_id = ? AND e.type = ?
+	`, targetLabel, sourceNodeID, edgeType)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanRefSummaryRows(rows)
+}
+
+// refSummariesByEdgeTarget returns RefSummary entries for all source nodes
+// pointing to targetNodeID via edges of edgeType, where the source has label sourceLabel.
+// It reads path and title properties from the EAV tables.
+func (idx *Index) refSummariesByEdgeTarget(targetNodeID int64, edgeType, sourceLabel string) ([]RefSummary, error) {
+	rows, err := idx.db.Query(`
+		SELECT DISTINCT
+			path_prop.value AS path,
+			COALESCE(title_prop.value, '') AS title
+		FROM edges e
+		JOIN node_labels nl ON nl.node_id = e.source_id AND nl.label = ?
+		JOIN node_props_text path_prop ON path_prop.node_id = e.source_id
+			AND path_prop.key_id = (SELECT id FROM property_keys WHERE key = 'path' LIMIT 1)
+		LEFT JOIN node_props_text title_prop ON title_prop.node_id = e.source_id
+			AND title_prop.key_id = (SELECT id FROM property_keys WHERE key = 'title' LIMIT 1)
+		WHERE e.target_id = ? AND e.type = ?
+	`, sourceLabel, targetNodeID, edgeType)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanRefSummaryRows(rows)
+}
+
+// scanRefSummaryRows scans (path, title) rows into []RefSummary.
+func scanRefSummaryRows(rows interface {
+	Next() bool
+	Scan(dest ...any) error
+	Err() error
+}) ([]RefSummary, error) {
+	var result []RefSummary
+	for rows.Next() {
+		var path, title string
+		if err := rows.Scan(&path, &title); err != nil {
+			return nil, fmt.Errorf("scan ref summary: %w", err)
+		}
+		if path == "" {
+			continue
+		}
+		result = append(result, RefSummary{Path: path, Title: title})
+	}
+	return result, rows.Err()
+}
+
 // queryRefSummaries runs a Cypher query that returns (path, title, deleted) rows.
 // cypherQuery must contain only $param placeholders (no embedded values).
 // paramsJSON is the JSON-encoded parameter object passed as cypher()'s second arg.
