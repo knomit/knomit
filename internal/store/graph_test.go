@@ -12,6 +12,14 @@ import (
 	sqlite3 "github.com/mattn/go-sqlite3"
 )
 
+// testVec creates a 768-dimensional vector padded with zeros. The provided values
+// set the leading components, preserving relative similarity between test vectors.
+func testVec(values ...float32) []float32 {
+	v := make([]float32, 768)
+	copy(v, values)
+	return v
+}
+
 // insertBlob inserts a fake blob into the objects table for testing.
 // content is the full raw file content (frontmatter + body).
 // If content looks like a plain body (no frontmatter), it is wrapped.
@@ -27,20 +35,20 @@ func insertBlob(t *testing.T, db *sql.DB, hash, content string) {
 	}
 }
 
-// stubEmbedder4d returns deterministic 4-dimensional embeddings based on the text.
-type stubEmbedder4d struct{}
+// stubEmbedder768d returns deterministic 768-dimensional embeddings based on the text.
+type stubEmbedder768d struct{}
 
-func (s *stubEmbedder4d) Embed(text string) ([]float32, error) {
+func (s *stubEmbedder768d) Embed(text string) ([]float32, error) {
 	// Return similar vectors for different inputs so KNN finds neighbors
 	switch text {
 	case "alpha":
-		return []float32{1.0, 0.1, 0.0, 0.0}, nil
+		return testVec(1.0, 0.1, 0.0, 0.0), nil
 	case "beta":
-		return []float32{0.9, 0.2, 0.0, 0.0}, nil
+		return testVec(0.9, 0.2, 0.0, 0.0), nil
 	case "gamma":
-		return []float32{0.0, 0.0, 1.0, 0.1}, nil
+		return testVec(0.0, 0.0, 1.0, 0.1), nil
 	default:
-		return []float32{0.5, 0.5, 0.5, 0.5}, nil
+		return testVec(0.5, 0.5, 0.5, 0.5), nil
 	}
 }
 
@@ -233,13 +241,13 @@ func TestGraphDeleteFact(t *testing.T) {
 }
 
 func TestGraphBuildSimilarityEdges(t *testing.T) {
-	idx, err := New(":memory:", WithVecDimension(4))
+	idx, err := New(":memory:")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer idx.Close()
 
-	idx.SetEmbedder(&stubEmbedder4d{})
+	idx.SetEmbedder(&stubEmbedder768d{})
 	insertBlob(t, idx.db, "hash_alpha", "alpha")
 	insertBlob(t, idx.db, "hash_beta", "beta")
 	facts := []FactRecord{
@@ -316,12 +324,12 @@ func TestGraphQLiteCoexistence(t *testing.T) {
 }
 
 func TestUpsertSyncsGraph(t *testing.T) {
-	idx, err := New(":memory:", WithVecDimension(4))
+	idx, err := New(":memory:")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer idx.Close()
-	idx.SetEmbedder(&stubEmbedder4d{})
+	idx.SetEmbedder(&stubEmbedder768d{})
 	insertBlob(t, idx.db, "hash_test", "test content")
 
 	err = idx.Upsert(FactRecord{
@@ -349,12 +357,12 @@ func TestUpsertSyncsGraph(t *testing.T) {
 }
 
 func TestDeleteSyncsGraph(t *testing.T) {
-	idx, err := New(":memory:", WithVecDimension(4))
+	idx, err := New(":memory:")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer idx.Close()
-	idx.SetEmbedder(&stubEmbedder4d{})
+	idx.SetEmbedder(&stubEmbedder768d{})
 	insertBlob(t, idx.db, "hash_del", "delete test")
 
 	_ = idx.Upsert(FactRecord{
@@ -379,12 +387,12 @@ func TestDeleteSyncsGraph(t *testing.T) {
 }
 
 func TestClusterFactsLouvain(t *testing.T) {
-	idx, err := New(":memory:", WithVecDimension(4))
+	idx, err := New(":memory:")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer idx.Close()
-	idx.SetEmbedder(&stubEmbedder4d{})
+	idx.SetEmbedder(&stubEmbedder768d{})
 	insertBlob(t, idx.db, "hash_alpha", "alpha")
 	insertBlob(t, idx.db, "hash_beta", "beta")
 	insertBlob(t, idx.db, "hash_gamma", "gamma")
@@ -420,12 +428,12 @@ func TestClusterFactsLouvain(t *testing.T) {
 }
 
 func TestSearchWithGraphExpansion(t *testing.T) {
-	idx, err := New(":memory:", WithVecDimension(4))
+	idx, err := New(":memory:")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer idx.Close()
-	idx.SetEmbedder(&stubEmbedder4d{})
+	idx.SetEmbedder(&stubEmbedder768d{})
 	insertBlob(t, idx.db, "hash_alpha", "alpha")
 	insertBlob(t, idx.db, "hash_beta", "beta")
 
@@ -461,12 +469,12 @@ func TestSearchWithGraphExpansion(t *testing.T) {
 }
 
 func TestGraphExpandSearch_MultiSeed(t *testing.T) {
-	idx, err := New(":memory:", WithVecDimension(4))
+	idx, err := New(":memory:")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer idx.Close()
-	idx.SetEmbedder(&stubEmbedder4d{})
+	idx.SetEmbedder(&stubEmbedder768d{})
 
 	// alpha=[1,0.1,0,0], beta=[0.9,0.2,0,0] — highly similar (cosine > 0.60 threshold)
 	// gamma=[0,0,1,0.1] — dissimilar from alpha/beta
@@ -732,12 +740,12 @@ func TestExplainFact_SelfLoopFiltered(t *testing.T) {
 }
 
 func TestSyncRebuildsGraph(t *testing.T) {
-	idx, err := New(":memory:", WithVecDimension(4))
+	idx, err := New(":memory:")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer idx.Close()
-	idx.SetEmbedder(&stubEmbedder4d{})
+	idx.SetEmbedder(&stubEmbedder768d{})
 
 	contentA := "---\ndomain: [eng]\nentities: [Go]\nconfidence: 0.9\nsources: 1\n---\n# A\n\nBody A"
 	contentB := "---\ndomain: [eng]\nentities: [Rust]\nconfidence: 0.8\nsources: 1\n---\n# B\n\nBody B"

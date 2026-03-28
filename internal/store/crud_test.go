@@ -174,7 +174,7 @@ func TestRecentFacts_EmptyPrefix(t *testing.T) {
 
 func TestRecentFacts_SearchPath(t *testing.T) {
 	// Exercises recentFactsSearch (query != "").
-	idx, err := New(":memory:", WithVecDimension(4))
+	idx, err := New(":memory:")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -182,7 +182,7 @@ func TestRecentFacts_SearchPath(t *testing.T) {
 
 	// Stub embedder: "match" gets a vector close to the query; "other" gets a
 	// distant vector so it falls below the similarity threshold.
-	emb := &stubEmbedder4d{}
+	emb := &stubEmbedder768d{}
 	idx.SetEmbedder(emb)
 
 	insertBlob(t, idx.db, "bh_match", "alpha")
@@ -227,14 +227,14 @@ func TestRecentFacts_SearchPath(t *testing.T) {
 
 func TestRecentFacts_SearchPath_Pagination(t *testing.T) {
 	// recentFactsSearch paginates in Go after fetching all results.
-	idx, err := New(":memory:", WithVecDimension(4))
+	idx, err := New(":memory:")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer idx.Close()
 
-	// stubEmbedder4d is defined in graph_test.go (same package).
-	idx.SetEmbedder(&stubEmbedder4d{})
+	// stubEmbedder768d is defined in graph_test.go (same package).
+	idx.SetEmbedder(&stubEmbedder768d{})
 
 	// Insert 5 facts that all embed to the same vector (all will match).
 	for i := 0; i < 5; i++ {

@@ -9,6 +9,12 @@ import (
 	"go.uber.org/mock/gomock"
 )
 
+func testVec(values ...float32) []float32 {
+	v := make([]float32, 768)
+	copy(v, values)
+	return v
+}
+
 func TestSearchIncludeTypes(t *testing.T) {
 	idx, err := store.New(":memory:")
 	if err != nil {
@@ -398,15 +404,15 @@ func TestSearchEntityBeyondOldLimit(t *testing.T) {
 func TestSearchVecPathEntityFilter(t *testing.T) {
 	// Regression: the vector search path (text + entity filter) must apply
 	// entity/domain filters in SQL, not in Go post-filtering.
-	idx, err := store.New(":memory:", store.WithVecDimension(4))
+	idx, err := store.New(":memory:")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer idx.Close()
 
-	vecA := []float32{1, 0, 0, 0}
-	vecB := []float32{0.9, 0.4, 0, 0}
-	vecQ := []float32{1, 0, 0, 0}
+	vecA := testVec(1, 0, 0, 0)
+	vecB := testVec(0.9, 0.4, 0, 0)
+	vecQ := testVec(1, 0, 0, 0)
 
 	m := map[string][]float32{
 		"Alpha caching content":   vecA,
@@ -419,7 +425,7 @@ func TestSearchVecPathEntityFilter(t *testing.T) {
 		if v, ok := m[text]; ok {
 			return v, nil
 		}
-		return make([]float32, 4), nil
+		return make([]float32, 768), nil
 	}).AnyTimes()
 	idx.SetEmbedder(emb)
 
@@ -491,7 +497,7 @@ func TestSearchVecLimitReturnsTopNByScoreWithBodies(t *testing.T) {
 	// wasting memory. After the fix, bodies are only fetched for the top-Limit
 	// candidates. This test verifies the contract: correct results, correct order,
 	// correct body content.
-	idx, err := store.New(":memory:", store.WithVecDimension(4))
+	idx, err := store.New(":memory:")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -504,14 +510,14 @@ func TestSearchVecLimitReturnsTopNByScoreWithBodies(t *testing.T) {
 		body  string
 		score float32 // expected cosine sim with query
 	}{
-		{"kb/rank1.md", []float32{1, 0, 0, 0}, "body of rank one", 1.0},
-		{"kb/rank2.md", []float32{0.9, 0.44, 0, 0}, "body of rank two", 0.9},
-		{"kb/rank3.md", []float32{0.8, 0.6, 0, 0}, "body of rank three", 0.8},
-		{"kb/rank4.md", []float32{0.7, 0.71, 0, 0}, "body of rank four", 0.7},
-		{"kb/rank5.md", []float32{0.6, 0.8, 0, 0}, "body of rank five", 0.6},
+		{"kb/rank1.md", testVec(1, 0, 0, 0), "body of rank one", 1.0},
+		{"kb/rank2.md", testVec(0.9, 0.44, 0, 0), "body of rank two", 0.9},
+		{"kb/rank3.md", testVec(0.8, 0.6, 0, 0), "body of rank three", 0.8},
+		{"kb/rank4.md", testVec(0.7, 0.71, 0, 0), "body of rank four", 0.7},
+		{"kb/rank5.md", testVec(0.6, 0.8, 0, 0), "body of rank five", 0.6},
 	}
 
-	queryVec := []float32{1, 0, 0, 0}
+	queryVec := testVec(1, 0, 0, 0)
 
 	// Upsert embeds using rec.Title + " " + extractBody(blob).
 	// insertTestBlob wraps body with frontmatter; extractBody strips it back to f.body.
@@ -689,7 +695,7 @@ func TestSearchLimitTextlessPath(t *testing.T) {
 }
 
 func TestSearchVecMinConfidence(t *testing.T) {
-	idx, err := store.New(":memory:", store.WithVecDimension(4))
+	idx, err := store.New(":memory:")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -697,7 +703,7 @@ func TestSearchVecMinConfidence(t *testing.T) {
 
 	ctrl := gomock.NewController(t)
 	emb := NewMockEmbedder(ctrl)
-	emb.EXPECT().Embed(gomock.Any()).Return([]float32{1, 0, 0, 0}, nil).AnyTimes()
+	emb.EXPECT().Embed(gomock.Any()).Return(testVec(1, 0, 0, 0), nil).AnyTimes()
 	idx.SetEmbedder(emb)
 
 	upsertFact(t, idx, "kb/high.md", "bh_high", "observation", []string{"test"}, nil, 0.9)
@@ -713,7 +719,7 @@ func TestSearchVecMinConfidence(t *testing.T) {
 }
 
 func TestSearchVecIncludeTypes(t *testing.T) {
-	idx, err := store.New(":memory:", store.WithVecDimension(4))
+	idx, err := store.New(":memory:")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -721,7 +727,7 @@ func TestSearchVecIncludeTypes(t *testing.T) {
 
 	ctrl := gomock.NewController(t)
 	emb := NewMockEmbedder(ctrl)
-	emb.EXPECT().Embed(gomock.Any()).Return([]float32{1, 0, 0, 0}, nil).AnyTimes()
+	emb.EXPECT().Embed(gomock.Any()).Return(testVec(1, 0, 0, 0), nil).AnyTimes()
 	idx.SetEmbedder(emb)
 
 	upsertFact(t, idx, "kb/obs.md", "bh_obs", "observation", []string{"test"}, nil, 0.9)
@@ -737,7 +743,7 @@ func TestSearchVecIncludeTypes(t *testing.T) {
 }
 
 func TestSearchVecExcludeTypes(t *testing.T) {
-	idx, err := store.New(":memory:", store.WithVecDimension(4))
+	idx, err := store.New(":memory:")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -745,7 +751,7 @@ func TestSearchVecExcludeTypes(t *testing.T) {
 
 	ctrl := gomock.NewController(t)
 	emb := NewMockEmbedder(ctrl)
-	emb.EXPECT().Embed(gomock.Any()).Return([]float32{1, 0, 0, 0}, nil).AnyTimes()
+	emb.EXPECT().Embed(gomock.Any()).Return(testVec(1, 0, 0, 0), nil).AnyTimes()
 	idx.SetEmbedder(emb)
 
 	upsertFact(t, idx, "kb/obs.md", "bh_obs", "observation", []string{"test"}, nil, 0.9)
@@ -761,7 +767,7 @@ func TestSearchVecExcludeTypes(t *testing.T) {
 }
 
 func TestSearchVecPathFilter(t *testing.T) {
-	idx, err := store.New(":memory:", store.WithVecDimension(4))
+	idx, err := store.New(":memory:")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -769,7 +775,7 @@ func TestSearchVecPathFilter(t *testing.T) {
 
 	ctrl := gomock.NewController(t)
 	emb := NewMockEmbedder(ctrl)
-	emb.EXPECT().Embed(gomock.Any()).Return([]float32{1, 0, 0, 0}, nil).AnyTimes()
+	emb.EXPECT().Embed(gomock.Any()).Return(testVec(1, 0, 0, 0), nil).AnyTimes()
 	idx.SetEmbedder(emb)
 
 	upsertFact(t, idx, "kb/alpha/one.md", "bh_a1", "observation", []string{"test"}, nil, 0.9)
@@ -792,7 +798,7 @@ func TestSearchVecPathFilter(t *testing.T) {
 
 func TestSearchMinSimilarity(t *testing.T) {
 	// Two facts: one with high similarity, one below threshold.
-	idx, err := store.New(":memory:", store.WithVecDimension(4))
+	idx, err := store.New(":memory:")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -804,9 +810,9 @@ func TestSearchMinSimilarity(t *testing.T) {
 	emb := NewMockEmbedder(ctrl)
 	emb.EXPECT().Embed(gomock.Any()).DoAndReturn(func(text string) ([]float32, error) {
 		if strings.Contains(text, "distant") {
-			return []float32{0.5, 0.87, 0, 0}, nil // cosine ~0.5 with [1,0,0,0]
+			return testVec(0.5, 0.87, 0, 0), nil // cosine ~0.5 with [1,0,0,0]
 		}
-		return []float32{1, 0, 0, 0}, nil
+		return testVec(1, 0, 0, 0), nil
 	}).AnyTimes()
 	idx.SetEmbedder(emb)
 
@@ -852,7 +858,7 @@ func TestSearchAdaptiveKBranchMid(t *testing.T) {
 	// With MinSimilarity=0.6 the distant fact falls below the threshold, so only
 	// the close fact should be returned — confirming Search works correctly with
 	// the limit*3 candidate window.
-	idx, err := store.New(":memory:", store.WithVecDimension(4))
+	idx, err := store.New(":memory:")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -862,9 +868,9 @@ func TestSearchAdaptiveKBranchMid(t *testing.T) {
 	emb := NewMockEmbedder(ctrl)
 	emb.EXPECT().Embed(gomock.Any()).DoAndReturn(func(text string) ([]float32, error) {
 		if strings.Contains(text, "distant") {
-			return []float32{0.5, 0.87, 0, 0}, nil // cosine ~0.5 with [1,0,0,0]
+			return testVec(0.5, 0.87, 0, 0), nil // cosine ~0.5 with [1,0,0,0]
 		}
-		return []float32{1, 0, 0, 0}, nil
+		return testVec(1, 0, 0, 0), nil
 	}).AnyTimes()
 	idx.SetEmbedder(emb)
 
@@ -899,7 +905,7 @@ func TestSearchAdaptiveKBranchDefault(t *testing.T) {
 	// Behavioral test for the adaptive-k default branch (MinSimilarity=0 → kLimit = limit*5).
 	// Both facts have cosine above the default 0.40 floor, so both should be returned —
 	// confirming Search works correctly with the limit*5 candidate window.
-	idx, err := store.New(":memory:", store.WithVecDimension(4))
+	idx, err := store.New(":memory:")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -909,9 +915,9 @@ func TestSearchAdaptiveKBranchDefault(t *testing.T) {
 	emb := NewMockEmbedder(ctrl)
 	emb.EXPECT().Embed(gomock.Any()).DoAndReturn(func(text string) ([]float32, error) {
 		if strings.Contains(text, "distant") {
-			return []float32{0.5, 0.87, 0, 0}, nil // cosine ~0.5 with [1,0,0,0]
+			return testVec(0.5, 0.87, 0, 0), nil // cosine ~0.5 with [1,0,0,0]
 		}
-		return []float32{1, 0, 0, 0}, nil
+		return testVec(1, 0, 0, 0), nil
 	}).AnyTimes()
 	idx.SetEmbedder(emb)
 

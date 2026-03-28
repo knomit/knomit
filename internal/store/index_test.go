@@ -515,7 +515,7 @@ func TestVec0Available(t *testing.T) {
 }
 
 func TestGetEmbedding(t *testing.T) {
-	idx, err := store.New(":memory:", store.WithVecDimension(4))
+	idx, err := store.New(":memory:")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -530,8 +530,8 @@ func TestGetEmbedding(t *testing.T) {
 		t.Fatal("expected nil embedding for nonexistent path")
 	}
 
-	// Build a known 4-dim stub vector.
-	const dims = 4
+	// Build a known 768-dim stub vector.
+	const dims = 768
 	known := make([]float32, dims)
 	for i := range known {
 		known[i] = float32(i) * 0.001
@@ -649,18 +649,16 @@ func TestSearchFilter(t *testing.T) {
 }
 
 func TestSearchHybrid(t *testing.T) {
-	idx, err := store.New(":memory:", store.WithVecDimension(4))
+	idx, err := store.New(":memory:")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer idx.Close()
 
-	const dims = 4 // tiny dimension for test speed
-
 	// Fact A: embedding points toward [1,0,0,0].
-	vecA := []float32{1, 0, 0, 0}
+	vecA := testVec(1, 0, 0, 0)
 	// Fact B: embedding is related but less similar.
-	vecB := []float32{0.7, 0.7, 0, 0}
+	vecB := testVec(0.7, 0.7, 0, 0)
 
 	m := map[string][]float32{
 		"Alpha postgres database replication": vecA,
@@ -673,7 +671,7 @@ func TestSearchHybrid(t *testing.T) {
 		if v, ok := m[text]; ok {
 			return v, nil
 		}
-		return make([]float32, dims), nil
+		return make([]float32, 768), nil
 	}).AnyTimes()
 	idx.SetEmbedder(emb)
 
@@ -720,7 +718,7 @@ func TestSearchHybrid(t *testing.T) {
 }
 
 func TestDeleteReferentialIntegrity(t *testing.T) {
-	idx, err := store.New(":memory:", store.WithVecDimension(4))
+	idx, err := store.New(":memory:")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -728,7 +726,7 @@ func TestDeleteReferentialIntegrity(t *testing.T) {
 
 	ctrl := gomock.NewController(t)
 	emb := NewMockEmbedder(ctrl)
-	emb.EXPECT().Embed(gomock.Any()).Return([]float32{1, 0, 0, 0}, nil).AnyTimes()
+	emb.EXPECT().Embed(gomock.Any()).Return(testVec(1, 0, 0, 0), nil).AnyTimes()
 	idx.SetEmbedder(emb)
 
 	insertTestBlob(t, idx.DB(), "blob_ri", "referential integrity")
@@ -782,7 +780,7 @@ func TestDeleteReferentialIntegrity(t *testing.T) {
 // cosine similarity testing.
 func setupSimilarityIndex(t *testing.T) (*store.Index, *gomock.Controller) {
 	t.Helper()
-	idx, err := store.New(":memory:", store.WithVecDimension(4))
+	idx, err := store.New(":memory:")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -790,12 +788,12 @@ func setupSimilarityIndex(t *testing.T) (*store.Index, *gomock.Controller) {
 	// Vectors: tea=[1,0,0,0], music=[0,1,0,0], code=[0,0,1,0]
 	// Upsert embeds "Title Body", so keys include the title prefix.
 	vecs := map[string][]float32{
-		"Tea Preference Carol drinks green tea exclusively": {1, 0, 0, 0},
-		"Jazz Fan Bob listens to jazz regularly":            {0, 1, 0, 0},
-		"Python Dev Alice writes Python every day":          {0, 0, 1, 0},
-		"who likes tea":                                     {0.9, 0.1, 0, 0}, // close to tea
-		"music preferences":                                 {0.1, 0.9, 0, 0}, // close to music
-		"who likes guns":                                    {0.3, 0.3, 0.3, 0.1}, // no strong match
+		"Tea Preference Carol drinks green tea exclusively": testVec(1, 0, 0, 0),
+		"Jazz Fan Bob listens to jazz regularly":            testVec(0, 1, 0, 0),
+		"Python Dev Alice writes Python every day":          testVec(0, 0, 1, 0),
+		"who likes tea":                                     testVec(0.9, 0.1, 0, 0), // close to tea
+		"music preferences":                                 testVec(0.1, 0.9, 0, 0), // close to music
+		"who likes guns":                                    testVec(0.3, 0.3, 0.3, 0.1), // no strong match
 	}
 
 	ctrl := gomock.NewController(t)
@@ -804,7 +802,7 @@ func setupSimilarityIndex(t *testing.T) (*store.Index, *gomock.Controller) {
 		if v, ok := vecs[text]; ok {
 			return v, nil
 		}
-		return []float32{0.25, 0.25, 0.25, 0.25}, nil // default: equidistant
+		return testVec(0.25, 0.25, 0.25, 0.25), nil // default: equidistant
 	}).AnyTimes()
 	idx.SetEmbedder(emb)
 
@@ -904,7 +902,7 @@ func TestSearchMinSimilarityThreshold(t *testing.T) {
 }
 
 func TestSearchVecOnlyNoEmbedder(t *testing.T) {
-	idx, err := store.New(":memory:", store.WithVecDimension(4))
+	idx, err := store.New(":memory:")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -931,7 +929,7 @@ func TestSearchVecOnlyNoEmbedder(t *testing.T) {
 }
 
 func TestSearchVecScoringBoost(t *testing.T) {
-	idx, err := store.New(":memory:", store.WithVecDimension(4))
+	idx, err := store.New(":memory:")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -940,9 +938,9 @@ func TestSearchVecScoringBoost(t *testing.T) {
 	// Two facts with embeddings at different cosine distances.
 	// Upsert embeds "Title Body", so keys include the title prefix.
 	vecs := map[string][]float32{
-		"Brewing tea brewing techniques": {1, 0, 0, 0},
-		"Garden tea garden cultivation":  {0.95, 0.05, 0, 0}, // slightly less similar
-		"tea":                            {1, 0, 0, 0},        // query
+		"Brewing tea brewing techniques": testVec(1, 0, 0, 0),
+		"Garden tea garden cultivation":  testVec(0.95, 0.05, 0, 0), // slightly less similar
+		"tea":                            testVec(1, 0, 0, 0),        // query
 	}
 
 	ctrl := gomock.NewController(t)
@@ -951,7 +949,7 @@ func TestSearchVecScoringBoost(t *testing.T) {
 		if v, ok := vecs[text]; ok {
 			return v, nil
 		}
-		return []float32{0.25, 0.25, 0.25, 0.25}, nil
+		return testVec(0.25, 0.25, 0.25, 0.25), nil
 	}).AnyTimes()
 	idx.SetEmbedder(emb)
 
