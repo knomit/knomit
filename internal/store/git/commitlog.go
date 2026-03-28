@@ -143,39 +143,38 @@ func (s *Storer) CommitLogSync(iter func() (hash string, entries []CommitLogEntr
 func (s *Storer) CommitLogQuery(path string, cursor CommitLogCursor, limit int) ([]CommitLogRow, bool, error) {
 	pathCond, pathArgs := commitLogPathCond(path)
 
-	type anchor struct{ ts, rid int64 }
-	lookupAnchor := func(hash string) (anchor, error) {
-		var a anchor
+	lookupTS := func(hash string) (int64, error) {
+		var ts int64
 		err := s.db.QueryRow(
-			`SELECT MIN(committed_at), MAX(rowid) FROM commit_log WHERE commit_hash = ?`, hash,
-		).Scan(&a.ts, &a.rid)
-		return a, err
+			`SELECT MIN(committed_at) FROM commit_log WHERE commit_hash = ?`, hash,
+		).Scan(&ts)
+		return ts, err
 	}
 
 	var cursorCond string
 	var cursorArgs []any
 	switch cursor.Type {
 	case CommitLogCursorBefore:
-		a, err := lookupAnchor(cursor.Hash)
+		ts, err := lookupTS(cursor.Hash)
 		if err != nil {
 			return nil, false, fmt.Errorf("CommitLogQuery: before lookup: %w", err)
 		}
-		cursorCond = "(ts > ? OR (ts = ? AND max_rowid > ?))"
-		cursorArgs = []any{a.ts, a.ts, a.rid}
+		cursorCond = "(ts > ? OR (ts = ? AND commit_hash < ?))"
+		cursorArgs = []any{ts, ts, cursor.Hash}
 	case CommitLogCursorFrom:
-		a, err := lookupAnchor(cursor.Hash)
+		ts, err := lookupTS(cursor.Hash)
 		if err != nil {
 			return nil, false, fmt.Errorf("CommitLogQuery: from lookup: %w", err)
 		}
-		cursorCond = "(ts < ? OR (ts = ? AND max_rowid <= ?))"
-		cursorArgs = []any{a.ts, a.ts, a.rid}
+		cursorCond = "(ts < ? OR (ts = ? AND commit_hash >= ?))"
+		cursorArgs = []any{ts, ts, cursor.Hash}
 	case CommitLogCursorAfter:
-		a, err := lookupAnchor(cursor.Hash)
+		ts, err := lookupTS(cursor.Hash)
 		if err != nil {
 			return nil, false, fmt.Errorf("CommitLogQuery: after lookup: %w", err)
 		}
-		cursorCond = "(ts < ? OR (ts = ? AND max_rowid < ?))"
-		cursorArgs = []any{a.ts, a.ts, a.rid}
+		cursorCond = "(ts < ? OR (ts = ? AND commit_hash > ?))"
+		cursorArgs = []any{ts, ts, cursor.Hash}
 	default:
 		cursorCond = "1=1"
 	}
@@ -184,13 +183,13 @@ func (s *Storer) CommitLogQuery(path string, cursor CommitLogCursor, limit int) 
 SELECT commit_hash, ts, message, operation
 FROM (
     -- MIN picks a deterministic value when multiple rows share a commit hash
-    SELECT commit_hash, MIN(committed_at) AS ts, MIN(message) AS message, MIN(operation) AS operation, MAX(rowid) AS max_rowid
+    SELECT commit_hash, MIN(committed_at) AS ts, MIN(message) AS message, MIN(operation) AS operation
     FROM commit_log
     WHERE ` + pathCond + `
     GROUP BY commit_hash
 )
 WHERE ` + cursorCond + `
-ORDER BY ts DESC, max_rowid DESC
+ORDER BY ts DESC, commit_hash ASC
 LIMIT ?`
 
 	args := append(pathArgs, cursorArgs...)

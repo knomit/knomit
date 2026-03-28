@@ -63,8 +63,7 @@ func TestActivitySQLTimeBuckets(t *testing.T) {
 }
 
 // TestCommitLogIncrementalAppend verifies that appendCommitLog writes the
-// correct commit hash and path for each WriteFile/DeleteFile call, and that
-// rowid order reflects write order (newer commit = higher rowid).
+// correct commit hash and path for each WriteFile call.
 func TestCommitLogIncrementalAppend(t *testing.T) {
 	store := newInternalTestStore(t)
 
@@ -100,14 +99,6 @@ func TestCommitLogIncrementalAppend(t *testing.T) {
 	}
 	if gotH2 != h2 {
 		t.Errorf("kb/b.md commit_hash = %q, want %q", gotH2, h2)
-	}
-
-	// rowid(a) < rowid(b) — b was written after a, so it must have higher rowid.
-	var rowA, rowB int64
-	db.QueryRow(`SELECT rowid FROM commit_log WHERE path = 'kb/a.md'`).Scan(&rowA)
-	db.QueryRow(`SELECT rowid FROM commit_log WHERE path = 'kb/b.md'`).Scan(&rowB)
-	if rowA >= rowB {
-		t.Errorf("rowid ordering: rowid(a)=%d >= rowid(b)=%d; newer commit must have higher rowid", rowA, rowB)
 	}
 }
 

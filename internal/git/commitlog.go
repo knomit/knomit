@@ -2,9 +2,8 @@
 // The commit_log table is a denormalized index of (commit_hash, path, committed_at, message)
 // that enables O(1) activity aggregates and efficient path-history queries.
 //
-// Insertion order is oldest-first so that SQLite rowid directly reflects commit age:
-// higher rowid = more recent commit. This lets ORDER BY rowid DESC serve as a
-// stable tiebreaker when multiple commits share the same committed_at timestamp.
+// Queries use commit_hash as a tiebreaker when commits share the same committed_at timestamp,
+// giving deterministic and stable pagination without depending on insertion order.
 package git
 
 import (
@@ -110,9 +109,9 @@ func changedFilesInCommit(c *object.Commit) ([]changedFile, error) {
 	return files, nil
 }
 
-// populateCommitLog backfills commit_log from the tip of branch backwards.
-// It collects commits newest-first, reverses them, then feeds them oldest-first
-// to CommitLogSync which handles dedup and insertion.
+// populateCommitLog backfills commit_log from the tip of branch.
+// Commits are streamed directly from the iterator to CommitLogSync, which stops
+// as soon as it encounters a hash already in the table (dedup / incremental update).
 func (s *Store) populateCommitLog(branch string) error {
 	hash, err := s.resolveRef(branch)
 	if err != nil {
@@ -123,44 +122,23 @@ func (s *Store) populateCommitLog(branch string) error {
 
 	logIter, err := s.repo.Log(&gogit.LogOptions{
 		From:  hash,
-		Order: gogit.LogOrderCommitterTime,
+		Order: gogit.LogOrderDefault,
 	})
 	if err != nil {
 		return fmt.Errorf("populateCommitLog: log: %w", err)
 	}
 	defer logIter.Close()
 
-	// Collect commits newest-first from the git log iterator.
-	type commitData struct {
-		commit *object.Commit
-	}
-	var commits []commitData
-
-	err = logIter.ForEach(func(c *object.Commit) error {
-		commits = append(commits, commitData{commit: c})
-		return nil
-	})
-	if err != nil && err != io.EOF {
-		return fmt.Errorf("populateCommitLog: walk: %w", err)
-	}
-
-	if len(commits) == 0 {
-		_ = s.storer.CommitLogAvailable()
-		return nil
-	}
-
-	// Reverse to oldest-first so rowids increase with commit age.
-	for i, j := 0, len(commits)-1; i < j; i, j = i+1, j-1 {
-		commits[i], commits[j] = commits[j], commits[i]
-	}
-
-	idx := 0
+	var count int
 	err = s.storer.CommitLogSync(func() (string, []storegit.CommitLogEntry, error) {
-		if idx >= len(commits) {
+		c, err := logIter.Next()
+		if err == io.EOF {
 			return "", nil, nil
 		}
-		c := commits[idx].commit
-		idx++
+		if err != nil {
+			return "", nil, err
+		}
+		count++
 		files, err := changedFilesInCommit(c)
 		if err != nil {
 			return "", nil, err
@@ -171,7 +149,7 @@ func (s *Store) populateCommitLog(branch string) error {
 		return fmt.Errorf("populateCommitLog: sync: %w", err)
 	}
 
-	log.Debug().Int("commits", len(commits)).Msg("commit_log: populated")
+	log.Debug().Int("commits", count).Msg("commit_log: populated")
 	return nil
 }
 
