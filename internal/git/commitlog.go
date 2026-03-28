@@ -110,19 +110,19 @@ func changedFilesInCommit(c *object.Commit) ([]changedFile, error) {
 	return files, nil
 }
 
-// populateCommitLog backfills commit_log from HEAD backwards.
+// populateCommitLog backfills commit_log from the tip of branch backwards.
 // It collects commits newest-first, reverses them, then feeds them oldest-first
 // to CommitLogSync which handles dedup and insertion.
-func (s *Store) populateCommitLog() error {
-	headRef, err := s.repo.Head()
+func (s *Store) populateCommitLog(branch string) error {
+	hash, err := s.resolveRef(branch)
 	if err != nil {
-		// Empty repo — just mark available if table exists.
+		// Branch not found (empty repo) — just mark available if table exists.
 		_ = s.storer.CommitLogAvailable()
 		return nil
 	}
 
 	logIter, err := s.repo.Log(&gogit.LogOptions{
-		From:  headRef.Hash(),
+		From:  hash,
 		Order: gogit.LogOrderCommitterTime,
 	})
 	if err != nil {
