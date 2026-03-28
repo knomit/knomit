@@ -112,21 +112,21 @@ func (m *Manager) Shutdown() {
 
 	// Pass 1: cancel all sync loops so they can wind down concurrently.
 	for _, ri := range instances {
-		if ri.SyncCancel != nil {
-			ri.SyncCancel()
+		if ri.syncCancel != nil {
+			ri.syncCancel()
 		}
 	}
 
 	// Pass 2: wait for loops to finish, then shut down each repo's resources.
 	for _, ri := range instances {
-		if ri.SyncWg != nil {
-			ri.SyncWg.Wait()
+		if ri.syncWg != nil {
+			ri.syncWg.Wait()
 		}
-		if ri.Hub != nil {
-			ri.Hub.Shutdown()
+		if ri.hub != nil {
+			ri.hub.Shutdown()
 		}
-		if ri.Close != nil {
-			ri.Close()
+		if ri.closeFn != nil {
+			ri.closeFn()
 		}
 	}
 }
@@ -148,14 +148,14 @@ func (m *Manager) Boot() error {
 	}
 
 	// Load ontology from knomit repo's git store.
-	ontologyYAML, readErr := knomitRI.GS.ReadFile(m.deps.AgentBranch, "domains/ontology.yaml")
+	ontologyYAML, readErr := knomitRI.gs.ReadFile(m.deps.AgentBranch, "domains/ontology.yaml")
 	if readErr != nil {
 		log.Warn().Msg("domains/ontology.yaml not found, using default ontology")
 		m.ontology = fact.DefaultOntology()
 	} else {
 		m.ontology, err = fact.ParseOntology([]byte(ontologyYAML))
 		if err != nil {
-			knomitRI.Close()
+			knomitRI.closeFn()
 			return fmt.Errorf("parse ontology: %w", err)
 		}
 	}
@@ -306,8 +306,8 @@ func (m *Manager) openOne(name, dbPath string, isDefault bool) (*RepoInstance, e
 	var ri *RepoInstance
 	obs := observe.New(time.Second, func(hash string) {
 		ri.mu.RLock()
-		currentGS, ok := ri.GS.(*git.Store)
-		currentSvc := ri.Svc
+		currentGS, ok := ri.gs.(*git.Store)
+		currentSvc := ri.svc
 		ri.mu.RUnlock()
 		if !ok {
 			return
@@ -342,22 +342,22 @@ func (m *Manager) openOne(name, dbPath string, isDefault bool) (*RepoInstance, e
 	}
 
 	ri = &RepoInstance{
-		Name:        name,
-		DBPath:      dbPath,
-		AgentBranch: agentBranch,
-		GS:          gs,
-		Svc:         svc,
-		Idx:         idx,
-		Hub:         hub,
-		SyncCancel:  syncCancel,
-		SyncWg:      &syncWg,
+		name:        name,
+		dbPath:      dbPath,
+		agentBranch: agentBranch,
+		gs:          gs,
+		svc:         svc,
+		idx:         idx,
+		hub:         hub,
+		syncCancel:  syncCancel,
+		syncWg:      &syncWg,
 	}
-	ri.StartSync = func(remoteURL string) error {
-		// Use ri.GS and ri.Svc (not captured gs/svc) so that after SwapStore
+	ri.startSync = func(remoteURL string) error {
+		// Use ri.gs and ri.svc (not captured gs/svc) so that after SwapStore
 		// the sync loops operate on the current store, not the original one.
 		ri.mu.RLock()
-		currentGS, ok := ri.GS.(*git.Store)
-		currentSvc := ri.Svc
+		currentGS, ok := ri.gs.(*git.Store)
+		currentSvc := ri.svc
 		ri.mu.RUnlock()
 		if !ok {
 			return fmt.Errorf("current store is not a *git.Store")
@@ -385,10 +385,10 @@ func (m *Manager) openOne(name, dbPath string, isDefault bool) (*RepoInstance, e
 
 		// Create fresh context and update ri so shutdown cancels the right one.
 		syncCtx, syncCancel = context.WithCancel(ctx)
-		ri.SyncCancel = syncCancel
+		ri.syncCancel = syncCancel
 
 		// Re-register the observer on the current git store so local writes
-		// trigger index sync after a SwapStore replaced ri.GS.
+		// trigger index sync after a SwapStore replaced ri.gs.
 		currentGS.SetOnCommit(func(_, hash string) { obs.Notify(hash) })
 
 		syncWg.Add(2)
@@ -397,10 +397,10 @@ func (m *Manager) openOne(name, dbPath string, isDefault bool) (*RepoInstance, e
 		return nil
 	}
 
-	ri.Close = func() {
+	ri.closeFn = func() {
 		obs.Stop()
 		ri.mu.RLock()
-		svc := ri.Svc
+		svc := ri.svc
 		ri.mu.RUnlock()
 		svc.Close()
 	}
@@ -418,11 +418,11 @@ func (m *Manager) SetupMCP(ri *RepoInstance) {
 	}
 
 	ri.mu.RLock()
-	gs, ok := ri.GS.(*git.Store)
-	svc := ri.Svc
+	gs, ok := ri.gs.(*git.Store)
+	svc := ri.svc
 	ri.mu.RUnlock()
 	if !ok {
-		log.Warn().Msg("SetupMCP: ri.GS is not *git.Store, skipping")
+		log.Warn().Msg("SetupMCP: ri.gs is not *git.Store, skipping")
 		return
 	}
 	idx := svc.Index()
@@ -444,11 +444,11 @@ func (m *Manager) SetupMCP(ri *RepoInstance) {
 		}
 		mcpHandlers[p] = mcpserver.NewStreamableHTTPServer(mcpSrv)
 	}
-	ri.MCPHandlers = mcpHandlers
 
+	var synthDeps *SynthDeps
 	if llmAdapter != nil {
 		synthReviewer := synthesize.NewReviewer(gs, idx, idx, embedder, nil, agentBranch)
-		ri.SynthDeps = &SynthDeps{
+		synthDeps = &SynthDeps{
 			GS:       gs,
 			Idx:      idx,
 			Embedder: embedder,
@@ -456,6 +456,11 @@ func (m *Manager) SetupMCP(ri *RepoInstance) {
 			Reviewer: synthReviewer,
 		}
 	}
+
+	ri.withWrite(func() {
+		ri.mcpHandlers = mcpHandlers
+		ri.synthDeps = synthDeps
+	})
 }
 
 // remoteAuthFromRecord builds a RemoteAuthConfig from a stored remote record,
