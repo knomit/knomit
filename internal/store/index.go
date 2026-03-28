@@ -20,23 +20,8 @@ import (
 	"sync"
 
 	"knomit/internal/fact"
+	"knomit/internal/store/migrate"
 )
-
-// ────────────────────────────────────────────────────────────────────────────
-// Configuration
-// ────────────────────────────────────────────────────────────────────────────
-
-type indexConfig struct {
-	vecDim int
-}
-
-// Option configures an Index.
-type Option func(*indexConfig)
-
-// WithVecDimension sets the dimension of the facts_vec embedding column.
-func WithVecDimension(d int) Option {
-	return func(c *indexConfig) { c.vecDim = d }
-}
 
 // ────────────────────────────────────────────────────────────────────────────
 // Domain types
@@ -155,15 +140,11 @@ func (idx *Index) getEmbedder() Embedder {
 	return idx.embedder
 }
 
-// New opens (or creates) a SQLite search index at path.
+// New opens (or creates) a SQLite search index at path and applies all
+// migrations including vec0 and GraphQLite.
 // Use ":memory:" for an in-memory database (useful in tests).
-func New(path string, opts ...Option) (*Index, error) {
+func New(path string) (*Index, error) {
 	registerVec()
-
-	cfg := indexConfig{vecDim: 768}
-	for _, o := range opts {
-		o(&cfg)
-	}
 
 	dsn := path
 	if path == ":memory:" {
@@ -176,45 +157,11 @@ func New(path string, opts ...Option) (*Index, error) {
 		return nil, fmt.Errorf("open sqlite: %w", err)
 	}
 	db.SetMaxOpenConns(4)
-
-	// Per-connection performance pragmas are applied in the ConnectHook (vec.go)
-	// so every pooled connection is configured, not just the first one.
-
-	// Update query planner statistics (one-time hint, not per-connection).
 	db.Exec("PRAGMA optimize")
 
-	// Use the same embedded schema.sql as Service.Open to keep DDL in one place.
-	if _, err := db.Exec(schemaSQL_); err != nil {
+	if err := migrate.All(db); err != nil {
 		db.Close()
-		return nil, fmt.Errorf("init schema: %w", err)
-	}
-	vecDDL := fmt.Sprintf(
-		`CREATE VIRTUAL TABLE IF NOT EXISTS facts_vec USING vec0(embedding FLOAT[%d] distance_metric=cosine)`,
-		cfg.vecDim,
-	)
-	if _, err := db.Exec(vecDDL); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("init vec0: %w", err)
-	}
-	if _, err = db.Exec(`INSERT OR IGNORE INTO meta(key, value) VALUES ('schema_version', '3')`); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("init schema_version: %w", err)
-	}
-
-	// Migrate schema: ensure GraphQLite EAV tables are initialized and bump
-	// the version to 4. GraphQLite creates its EAV tables on the first
-	// cypher() call, so we trigger that here.
-	var currentVersion string
-	_ = db.QueryRow(`SELECT value FROM meta WHERE key='schema_version'`).Scan(&currentVersion)
-	if currentVersion == "" || currentVersion < "4" {
-		if _, err := db.Exec(`SELECT cypher('RETURN 1')`); err != nil {
-			db.Close()
-			return nil, fmt.Errorf("init graphqlite: %w", err)
-		}
-		if _, err := db.Exec(`INSERT OR REPLACE INTO meta(key, value) VALUES ('schema_version', '4')`); err != nil {
-			db.Close()
-			return nil, fmt.Errorf("update schema_version: %w", err)
-		}
+		return nil, fmt.Errorf("store.New: %w", err)
 	}
 
 	return &Index{db: db}, nil
