@@ -17,6 +17,8 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/rs/zerolog/log"
+
+	storegit "knomit/internal/store/git"
 )
 
 // parseOperation extracts the operation from an author email using the +tag subaddress convention.
@@ -39,6 +41,29 @@ func firstLine(s string) string {
 		return s[:idx]
 	}
 	return s
+}
+
+// commitEntries converts changedFile results from a commit into CommitLogEntry structs.
+func commitEntries(c *object.Commit, files []changedFile) []storegit.CommitLogEntry {
+	hashStr := c.Hash.String()
+	ts := c.Committer.When.Unix()
+	msg := firstLine(c.Message)
+	authorEmail := c.Author.Email
+	op := parseOperation(authorEmail)
+
+	entries := make([]storegit.CommitLogEntry, 0, len(files))
+	for _, f := range files {
+		entries = append(entries, storegit.CommitLogEntry{
+			Hash:        hashStr,
+			Path:        f.path,
+			Message:     msg,
+			Operation:   op,
+			AuthorEmail: authorEmail,
+			Action:      f.action,
+			CommittedAt: ts,
+		})
+	}
+	return entries
 }
 
 type changedFile struct {
@@ -86,23 +111,13 @@ func changedFilesInCommit(c *object.Commit) ([]changedFile, error) {
 }
 
 // populateCommitLog backfills commit_log from HEAD backwards.
-// It stops at the first commit already present in the table so incremental
-// calls (e.g. after sync) are cheap. Rows are inserted oldest-first to
-// preserve rowid ordering (higher rowid = newer commit).
-// Sets s.commitLog=true when the table is confirmed available.
+// It collects commits newest-first, reverses them, then feeds them oldest-first
+// to CommitLogSync which handles dedup and insertion.
 func (s *Store) populateCommitLog() error {
-	if s.db == nil {
-		return nil
-	}
-	// Check table existence (absent in minimal test schemas).
-	var n int
-	if err := s.db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='commit_log'`).Scan(&n); err != nil || n == 0 {
-		return nil
-	}
-
 	headRef, err := s.repo.Head()
 	if err != nil {
-		s.commitLog.Store(true) // table exists; empty repo is fine
+		// Empty repo — just mark available if table exists.
+		_ = s.storer.CommitLogAvailable()
 		return nil
 	}
 
@@ -115,78 +130,48 @@ func (s *Store) populateCommitLog() error {
 	}
 	defer logIter.Close()
 
-	type entry struct {
-		hash        string
-		ts          int64
-		msg         string
-		files       []changedFile
-		authorEmail string
-		operation   string
+	// Collect commits newest-first from the git log iterator.
+	type commitData struct {
+		commit *object.Commit
 	}
-	var toInsert []entry
+	var commits []commitData
 
 	err = logIter.ForEach(func(c *object.Commit) error {
-		// Stop at the first commit already indexed — everything older is already there.
-		var cnt int
-		if qerr := s.db.QueryRow(`SELECT COUNT(*) FROM commit_log WHERE commit_hash = ?`, c.Hash.String()).Scan(&cnt); qerr != nil {
-			return qerr
-		}
-		if cnt > 0 {
-			return io.EOF
-		}
-		files, err := changedFilesInCommit(c)
-		if err != nil {
-			return err
-		}
-		toInsert = append(toInsert, entry{
-			hash:        c.Hash.String(),
-			ts:          c.Committer.When.Unix(),
-			msg:         firstLine(c.Message),
-			files:       files,
-			authorEmail: c.Author.Email,
-			operation:   parseOperation(c.Author.Email),
-		})
+		commits = append(commits, commitData{commit: c})
 		return nil
 	})
 	if err != nil && err != io.EOF {
 		return fmt.Errorf("populateCommitLog: walk: %w", err)
 	}
 
-	if len(toInsert) == 0 {
-		s.commitLog.Store(true)
+	if len(commits) == 0 {
+		_ = s.storer.CommitLogAvailable()
 		return nil
 	}
 
-	// Reverse so oldest commit is inserted first → highest rowid = most recent.
-	for i, j := 0, len(toInsert)-1; i < j; i, j = i+1, j-1 {
-		toInsert[i], toInsert[j] = toInsert[j], toInsert[i]
+	// Reverse to oldest-first so rowids increase with commit age.
+	for i, j := 0, len(commits)-1; i < j; i, j = i+1, j-1 {
+		commits[i], commits[j] = commits[j], commits[i]
 	}
 
-	tx, err := s.db.Begin()
-	if err != nil {
-		return fmt.Errorf("populateCommitLog: begin tx: %w", err)
-	}
-	defer tx.Rollback()
-
-	stmt, err := tx.Prepare(`INSERT OR IGNORE INTO commit_log (commit_hash, path, committed_at, message, operation, author_email, action) VALUES (?, ?, ?, ?, ?, ?, ?)`)
-	if err != nil {
-		return fmt.Errorf("populateCommitLog: prepare: %w", err)
-	}
-	defer stmt.Close()
-
-	for _, e := range toInsert {
-		for _, f := range e.files {
-			if _, err := stmt.Exec(e.hash, f.path, e.ts, e.msg, e.operation, e.authorEmail, f.action); err != nil {
-				return fmt.Errorf("populateCommitLog: insert: %w", err)
-			}
+	idx := 0
+	err = s.storer.CommitLogSync(func() (string, []storegit.CommitLogEntry, error) {
+		if idx >= len(commits) {
+			return "", nil, nil
 		}
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("populateCommitLog: commit: %w", err)
+		c := commits[idx].commit
+		idx++
+		files, err := changedFilesInCommit(c)
+		if err != nil {
+			return "", nil, err
+		}
+		return c.Hash.String(), commitEntries(c, files), nil
+	})
+	if err != nil {
+		return fmt.Errorf("populateCommitLog: sync: %w", err)
 	}
 
-	log.Debug().Int("commits", len(toInsert)).Msg("commit_log: populated")
-	s.commitLog.Store(true)
+	log.Debug().Int("commits", len(commits)).Msg("commit_log: populated")
 	return nil
 }
 
@@ -194,7 +179,7 @@ func (s *Store) populateCommitLog() error {
 // New commits always get the highest rowid, preserving recency ordering.
 // Errors are logged and swallowed — commit_log is an index, not source of truth.
 func (s *Store) appendCommitLog(hash plumbing.Hash) {
-	if !s.commitLog.Load() {
+	if !s.storer.CommitLogAvailable() {
 		return
 	}
 	c, err := s.repo.CommitObject(hash)
@@ -207,48 +192,15 @@ func (s *Store) appendCommitLog(hash plumbing.Hash) {
 		log.Warn().Err(err).Str("hash", hash.String()[:8]).Msg("commit_log: changed files")
 		return
 	}
-	authorEmail := c.Author.Email
-	op := parseOperation(authorEmail)
-	ts := c.Committer.When.Unix()
-	msg := firstLine(c.Message)
-	hashStr := hash.String()
-
-	if len(files) <= 1 {
-		// Single file — no need for transaction overhead.
-		for _, f := range files {
-			if _, err := s.db.Exec(
-				`INSERT OR IGNORE INTO commit_log (commit_hash, path, committed_at, message, operation, author_email, action) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-				hashStr, f.path, ts, msg, op, authorEmail, f.action,
-			); err != nil {
-				log.Warn().Err(err).Str("path", f.path).Msg("commit_log: insert")
-			}
+	done := false
+	entries := commitEntries(c, files)
+	_ = s.storer.CommitLogSync(func() (string, []storegit.CommitLogEntry, error) {
+		if done {
+			return "", nil, nil
 		}
-		return
-	}
-
-	// Multi-file commit: batch in a single transaction with a prepared statement.
-	tx, err := s.db.Begin()
-	if err != nil {
-		log.Warn().Err(err).Msg("commit_log: begin tx")
-		return
-	}
-	defer tx.Rollback()
-
-	stmt, err := tx.Prepare(`INSERT OR IGNORE INTO commit_log (commit_hash, path, committed_at, message, operation, author_email, action) VALUES (?, ?, ?, ?, ?, ?, ?)`)
-	if err != nil {
-		log.Warn().Err(err).Msg("commit_log: prepare")
-		return
-	}
-	defer stmt.Close()
-
-	for _, f := range files {
-		if _, err := stmt.Exec(hashStr, f.path, ts, msg, op, authorEmail, f.action); err != nil {
-			log.Warn().Err(err).Str("path", f.path).Msg("commit_log: insert")
-		}
-	}
-	if err := tx.Commit(); err != nil {
-		log.Warn().Err(err).Msg("commit_log: commit tx")
-	}
+		done = true
+		return hash.String(), entries, nil
+	})
 }
 
 // commitLogAge is used in read.go for SQL activity queries.

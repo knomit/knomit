@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"io"
+	"sync/atomic"
 
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/storer"
@@ -18,9 +19,10 @@ var _ storage.Storer = (*Storer)(nil)
 // Storer implements go-git's storage.Storer over a shared SQLite *sql.DB.
 // The caller (store.Service) owns the database lifecycle.
 type Storer struct {
-	db      *sql.DB
-	tx      *sql.Tx
-	modules map[string]*Storer
+	db        *sql.DB
+	tx        *sql.Tx
+	commitLog atomic.Bool
+	modules   map[string]*Storer
 }
 
 // execer is the common interface between *sql.DB and *sql.Tx.

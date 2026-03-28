@@ -21,12 +21,10 @@
 package git
 
 import (
-	"database/sql"
 	"fmt"
 	"os"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/go-git/go-billy/v5/memfs"
@@ -46,16 +44,14 @@ import (
 // Store wraps go-git with knomit's logical operations.
 // All fact reads/writes go through go-git's plumbing API — NO filesystem reads/writes.
 type Store struct {
-	mu        sync.Mutex
-	repo      *gogit.Repository
-	storer    *storegit.Storer
-	db        *sql.DB     // non-nil when commit_log is available
-	commitLog atomic.Bool // true once commit_log table is confirmed populated
-	branch    string      // e.g. "agent/laptop"
-	agentID   string      // e.g. "laptop" (branch with "agent/" prefix stripped)
-	auth      transport.AuthMethod
-	signer    ssh.Signer // signs commits when set
-	onCommit  func(hash string)
+	mu       sync.Mutex
+	repo     *gogit.Repository
+	storer   *storegit.Storer
+	branch   string // e.g. "agent/laptop"
+	agentID  string // e.g. "laptop" (branch with "agent/" prefix stripped)
+	auth     transport.AuthMethod
+	signer   ssh.Signer // signs commits when set
+	onCommit func(hash string)
 }
 
 // DirEntry represents a single entry in a knomit directory listing.
@@ -187,7 +183,6 @@ func InitWithStorer(s *storegit.Storer, initFiles map[string]string, agentBranch
 	gs := &Store{
 		repo:    repo,
 		storer:  s,
-		db:      s.DB(),
 		branch:  agentBranch,
 		agentID: deriveAgentID(agentBranch),
 	}
@@ -215,7 +210,6 @@ func OpenWithStorer(s *storegit.Storer) (*Store, error) {
 	gs := &Store{
 		repo:    repo,
 		storer:  s,
-		db:      s.DB(),
 		branch:  branch,
 		agentID: deriveAgentID(branch),
 	}
@@ -400,7 +394,6 @@ func InitFromRemote(s *storegit.Storer, originURL string, auth transport.AuthMet
 		gs := &Store{
 			repo:    repo,
 			storer:  s,
-			db:      s.DB(),
 			branch:  agentBranch,
 			agentID: deriveAgentID(agentBranch),
 			auth:    auth,
@@ -463,7 +456,6 @@ func InitFromRemote(s *storegit.Storer, originURL string, auth transport.AuthMet
 	gs := &Store{
 		repo:    repo,
 		storer:  s,
-		db:      s.DB(),
 		branch:  agentBranch,
 		agentID: deriveAgentID(agentBranch),
 		auth:    auth,
@@ -522,7 +514,6 @@ func CloneInto(storer *storegit.Storer, url string, auth transport.AuthMethod, p
 	return &Store{
 		repo:    repo,
 		storer:  storer,
-		db:      storer.DB(),
 		branch:  branch,
 		agentID: deriveAgentID(branch),
 		auth:    auth,

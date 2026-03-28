@@ -3,7 +3,6 @@
 package git
 
 import (
-	"database/sql"
 	"fmt"
 	"io"
 	"regexp"
@@ -15,6 +14,8 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/filemode"
 	"github.com/go-git/go-git/v5/plumbing/object"
+
+	storegit "knomit/internal/store/git"
 )
 
 // ReadFileWithHash returns both the file content and the blob hash for the given path.
@@ -382,7 +383,7 @@ func (s *Store) Log(path string) ([]LogEntry, error) {
 // When commit_log is available the query is SQL-based (supports merge commits
 // that go-git's PathFilter excludes). Falls back to go-git walk otherwise.
 func (s *Store) LogPaginated(path string, limit int, after, from, before string) ([]LogEntryWithTags, string, string, error) {
-	if s.db != nil && s.commitLog.Load() {
+	if s.storer.CommitLogAvailable() {
 		entries, next, prev, err := s.logPaginatedSQL(path, limit, after, from, before)
 		if err == nil {
 			return entries, next, prev, nil
@@ -394,111 +395,47 @@ func (s *Store) LogPaginated(path string, limit int, after, from, before string)
 
 // logPaginatedSQL queries the commit_log table for paginated history.
 // Returns (entries, next, prev, error).
-// Sort order is (committed_at DESC, max_rowid DESC) — rowid increases
-// monotonically with commit age (oldest inserted first), breaking same-second
-// ties in the same direction as the parent chain.
 func (s *Store) logPaginatedSQL(path string, limit int, after, from, before string) ([]LogEntryWithTags, string, string, error) {
-	pathCond, pathArgs := commitLogPathCond(path)
-
-	type anchor struct{ ts, rid int64 }
-	lookupAnchor := func(hash string) (anchor, error) {
-		var a anchor
-		err := s.db.QueryRow(
-			`SELECT MIN(committed_at), MAX(rowid) FROM commit_log WHERE commit_hash = ?`, hash,
-		).Scan(&a.ts, &a.rid)
-		return a, err
-	}
-
-	var cursorCond string
-	var cursorArgs []any
+	var cursor storegit.CommitLogCursor
 	switch {
 	case before != "":
-		a, err := lookupAnchor(before)
-		if err != nil {
-			return nil, "", "", fmt.Errorf("logPaginatedSQL: before lookup: %w", err)
-		}
-		cursorCond = "(ts > ? OR (ts = ? AND max_rowid > ?))"
-		cursorArgs = []any{a.ts, a.ts, a.rid}
+		cursor = storegit.CommitLogCursor{Type: storegit.CommitLogCursorBefore, Hash: before}
 	case from != "":
-		a, err := lookupAnchor(from)
-		if err != nil {
-			return nil, "", "", fmt.Errorf("logPaginatedSQL: from lookup: %w", err)
-		}
-		cursorCond = "(ts < ? OR (ts = ? AND max_rowid <= ?))"
-		cursorArgs = []any{a.ts, a.ts, a.rid}
+		cursor = storegit.CommitLogCursor{Type: storegit.CommitLogCursorFrom, Hash: from}
 	case after != "":
-		a, err := lookupAnchor(after)
-		if err != nil {
-			return nil, "", "", fmt.Errorf("logPaginatedSQL: after lookup: %w", err)
-		}
-		cursorCond = "(ts < ? OR (ts = ? AND max_rowid < ?))"
-		cursorArgs = []any{a.ts, a.ts, a.rid}
-	default:
-		cursorCond = "1=1"
+		cursor = storegit.CommitLogCursor{Type: storegit.CommitLogCursorAfter, Hash: after}
 	}
 
-	query := `
-SELECT commit_hash, ts, message, operation
-FROM (
-    SELECT commit_hash, MIN(committed_at) AS ts, MIN(message) AS message, MIN(operation) AS operation, MAX(rowid) AS max_rowid
-    FROM commit_log
-    WHERE ` + pathCond + `
-    GROUP BY commit_hash
-)
-WHERE ` + cursorCond + `
-ORDER BY ts DESC, max_rowid DESC
-LIMIT ?`
-
-	args := append(pathArgs, cursorArgs...)
-	args = append(args, limit+1)
-
-	rows, err := s.db.Query(query, args...)
+	rows, hasMore, err := s.storer.CommitLogQuery(path, cursor, limit)
 	if err != nil {
-		return nil, "", "", fmt.Errorf("logPaginatedSQL: query: %w", err)
+		return nil, "", "", fmt.Errorf("logPaginatedSQL: %w", err)
 	}
-	defer rows.Close()
 
-	var entries []LogEntryWithTags
-	for rows.Next() {
-		var hash, message, operation string
-		var ts int64
-		if err := rows.Scan(&hash, &ts, &message, &operation); err != nil {
-			return nil, "", "", fmt.Errorf("logPaginatedSQL: scan: %w", err)
-		}
+	entries := make([]LogEntryWithTags, 0, len(rows))
+	for _, r := range rows {
 		entries = append(entries, LogEntryWithTags{
-			Commit:    hash,
-			Date:      time.Unix(ts, 0).UTC().Format(time.RFC3339),
-			Message:   firstLine(message),
-			Operation: operation,
+			Commit:    r.Hash,
+			Date:      time.Unix(r.Timestamp, 0).UTC().Format(time.RFC3339),
+			Message:   firstLine(r.Message),
+			Operation: r.Operation,
 		})
-	}
-	if err := rows.Err(); err != nil {
-		return nil, "", "", fmt.Errorf("logPaginatedSQL: rows: %w", err)
 	}
 
 	var nextCursor, prevCursor string
-	hasOverflow := len(entries) > limit
-	if hasOverflow {
-		entries = entries[:limit]
-	}
-
 	switch {
 	case before != "":
-		// Up-scroll: overflow means even newer commits exist above entries[0].
-		if hasOverflow && len(entries) > 0 {
+		if hasMore && len(entries) > 0 {
 			prevCursor = entries[0].Commit
 		}
 	case from != "":
-		// Seek: entries start at from; newer commits may exist above.
 		if len(entries) > 0 {
 			prevCursor = entries[0].Commit
 		}
-		if hasOverflow {
+		if hasMore {
 			nextCursor = entries[len(entries)-1].Commit
 		}
 	default:
-		// Normal down-scroll (after or no cursor).
-		if hasOverflow {
+		if hasMore {
 			nextCursor = entries[len(entries)-1].Commit
 		}
 	}
@@ -575,7 +512,7 @@ func (s *Store) logPaginatedGit(path string, limit int, after string) ([]LogEntr
 	})
 
 	// Batch-fetch file change counts from commit_log if available.
-	if s.db != nil && s.commitLog.Load() && len(entries) > 0 {
+	if s.storer.CommitLogAvailable() && len(entries) > 0 {
 		s.enrichFileCounts(entries)
 	}
 
@@ -584,43 +521,26 @@ func (s *Store) logPaginatedGit(path string, limit int, after string) ([]LogEntr
 
 // enrichFileCounts batch-queries commit_log for A/M/D counts per commit.
 func (s *Store) enrichFileCounts(entries []LogEntryWithTags) {
-	placeholders := make([]string, len(entries))
-	args := make([]any, len(entries))
+	hashes := make([]string, len(entries))
 	idx := make(map[string]int, len(entries))
 	for i, e := range entries {
-		placeholders[i] = "?"
-		args[i] = e.Commit
+		hashes[i] = e.Commit
 		idx[e.Commit] = i
 	}
 
-	query := `SELECT commit_hash, action, COUNT(*) FROM commit_log WHERE commit_hash IN (` +
-		strings.Join(placeholders, ",") +
-		`) GROUP BY commit_hash, action`
-
-	rows, err := s.db.Query(query, args...)
+	counts, err := s.storer.CommitLogFileCounts(hashes)
 	if err != nil {
 		return
 	}
-	defer rows.Close()
 
-	for rows.Next() {
-		var hash, action string
-		var count int
-		if err := rows.Scan(&hash, &action, &count); err != nil {
-			continue
-		}
+	for hash, actionCounts := range counts {
 		i, ok := idx[hash]
 		if !ok {
 			continue
 		}
-		switch action {
-		case "added":
-			entries[i].Files.Added = count
-		case "modified":
-			entries[i].Files.Modified = count
-		case "deleted":
-			entries[i].Files.Deleted = count
-		}
+		entries[i].Files.Added = actionCounts["added"]
+		entries[i].Files.Modified = actionCounts["modified"]
+		entries[i].Files.Deleted = actionCounts["deleted"]
 	}
 }
 
@@ -628,22 +548,10 @@ func (s *Store) enrichFileCounts(entries []LogEntryWithTags) {
 // query when commit_log is available, or a capped go-git walk otherwise.
 // path may be a directory prefix or a specific .md file.
 func (s *Store) Activity(path string) (ActivityResult, error) {
-	if s.commitLog.Load() {
+	if s.storer.CommitLogAvailable() {
 		return s.activitySQL(path)
 	}
 	return s.activityGit(path)
-}
-
-// commitLogPathCond returns the SQL WHERE fragment and bind args for filtering
-// commit_log rows by path. Empty path matches all rows.
-func commitLogPathCond(path string) (cond string, args []any) {
-	if path == "" {
-		return "1=1", nil
-	}
-	if strings.HasSuffix(path, ".md") {
-		return "path = ?", []any{path}
-	}
-	return "path GLOB ?", []any{path + "/*"}
 }
 
 func (s *Store) activitySQL(path string) (ActivityResult, error) {
@@ -651,33 +559,21 @@ func (s *Store) activitySQL(path string) (ActivityResult, error) {
 	cutoff30 := commitLogAge(30)
 	cutoff90 := commitLogAge(90)
 
-	filter, pathArgs := commitLogPathCond(path)
-	args := append([]any{cutoff7, cutoff30, cutoff90}, pathArgs...)
-
-	q := fmt.Sprintf(`
-		SELECT MAX(committed_at),
-		       COUNT(DISTINCT commit_hash),
-		       COUNT(DISTINCT CASE WHEN committed_at > ? THEN commit_hash END),
-		       COUNT(DISTINCT CASE WHEN committed_at > ? THEN commit_hash END),
-		       COUNT(DISTINCT CASE WHEN committed_at > ? THEN commit_hash END)
-		FROM commit_log WHERE %s`, filter)
-
-	var lastTS sql.NullInt64
-	var total, c7, c30, c90 int
-	if err := s.db.QueryRow(q, args...).Scan(&lastTS, &total, &c7, &c30, &c90); err != nil {
+	r, err := s.storer.CommitLogActivity(path, cutoff7, cutoff30, cutoff90)
+	if err != nil {
 		return ActivityResult{}, fmt.Errorf("activitySQL: %w", err)
 	}
 
 	var lastCommit string
-	if lastTS.Valid {
-		lastCommit = time.Unix(lastTS.Int64, 0).UTC().Format(time.RFC3339)
+	if r.LastCommit.Valid {
+		lastCommit = time.Unix(r.LastCommit.Int64, 0).UTC().Format(time.RFC3339)
 	}
 	return ActivityResult{
 		LastCommit: lastCommit,
-		Total:      total,
-		Changes7d:  c7,
-		Changes30d: c30,
-		Changes90d: c90,
+		Total:      r.Total,
+		Changes7d:  r.Changes7d,
+		Changes30d: r.Changes30d,
+		Changes90d: r.Changes90d,
 	}, nil
 }
 
@@ -803,63 +699,24 @@ func (s *Store) CommitDetail(commitHash string) (*CommitDetailResult, error) {
 // otherwise. Returns files ordered most-recently-changed first, and the HEAD
 // commit hash for session compatibility (SQL path ignores fromCommit).
 func (s *Store) WalkChangedFiles(fromCommit string, prefix string, seen map[string]bool, limit int) ([]FileRecency, string, error) {
-	if s.commitLog.Load() {
+	if s.storer.CommitLogAvailable() {
 		return s.walkChangedFilesSQL(prefix, seen, limit)
 	}
 	return s.walkChangedFilesGit(fromCommit, prefix, seen, limit)
 }
 
 func (s *Store) walkChangedFilesSQL(prefix string, seen map[string]bool, limit int) ([]FileRecency, string, error) {
-	var whereParts []string
-	var args []any
-
-	if prefix != "" {
-		whereParts = append(whereParts, "path GLOB ?")
-		args = append(args, prefix+"/*")
-	}
-	if len(seen) > 0 {
-		placeholders := make([]string, 0, len(seen))
-		for p := range seen {
-			placeholders = append(placeholders, "?")
-			args = append(args, p)
-		}
-		whereParts = append(whereParts, "path NOT IN ("+strings.Join(placeholders, ",")+")")
-	}
-
-	where := "1=1"
-	if len(whereParts) > 0 {
-		where = strings.Join(whereParts, " AND ")
-	}
-
-	q := fmt.Sprintf(`
-		SELECT path, MAX(committed_at) AS ts, MAX(rowid) AS last_rowid
-		FROM commit_log
-		WHERE %s
-		GROUP BY path
-		ORDER BY ts DESC, last_rowid DESC
-		LIMIT ?`, where)
-	args = append(args, limit)
-
-	rows, err := s.db.Query(q, args...)
+	rows, err := s.storer.CommitLogWalkChanged(prefix, seen, limit)
 	if err != nil {
-		return nil, "", fmt.Errorf("walkChangedFilesSQL: query: %w", err)
+		return nil, "", fmt.Errorf("walkChangedFilesSQL: %w", err)
 	}
-	defer rows.Close()
 
-	var results []FileRecency
-	for rows.Next() {
-		var path string
-		var ts, lastRowid int64
-		if err := rows.Scan(&path, &ts, &lastRowid); err != nil {
-			return nil, "", fmt.Errorf("walkChangedFilesSQL: scan: %w", err)
-		}
+	results := make([]FileRecency, 0, len(rows))
+	for _, r := range rows {
 		results = append(results, FileRecency{
-			Path:      path,
-			Timestamp: time.Unix(ts, 0).UTC(),
+			Path:      r.Path,
+			Timestamp: time.Unix(r.UpdatedAt, 0).UTC(),
 		})
-	}
-	if err := rows.Err(); err != nil {
-		return nil, "", fmt.Errorf("walkChangedFilesSQL: rows: %w", err)
 	}
 
 	// Return HEAD hash for session compatibility (fromCommit is ignored in SQL path).

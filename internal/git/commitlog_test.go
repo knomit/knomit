@@ -1,14 +1,12 @@
 // Internal tests for commit_log population, append, and SQL fallback.
-// Package git (not git_test) to access unexported fields: db, commitLog.
+// Package git (not git_test) to access unexported fields: storer.
 package git
 
 import (
 	"database/sql"
-	"path/filepath"
 	"testing"
 	"time"
 
-	_ "github.com/mattn/go-sqlite3"
 	storegit "knomit/internal/store/git"
 )
 
@@ -16,17 +14,13 @@ import (
 // activitySQL produce correct 7d/30d/90d counts. Rows are injected directly
 // into commit_log so timestamps are fully controlled.
 func TestActivitySQLTimeBuckets(t *testing.T) {
-	dir := t.TempDir()
-	store, err := Init(filepath.Join(dir, "test.db"), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newInternalTestStore(t)
 
-	if !store.commitLog.Load() {
+	if !store.storer.CommitLogAvailable() {
 		t.Skip("commit_log not available")
 	}
 
+	db := store.storer.DB()
 	now := time.Now().Unix()
 	injected := []struct {
 		hash string
@@ -40,7 +34,7 @@ func TestActivitySQLTimeBuckets(t *testing.T) {
 		{"aa000004aa000004aa000004aa000004aa000004", "kb/r120d.md", now - 120*86400, "120d ago"},
 	}
 	for _, r := range injected {
-		if _, err := store.db.Exec(
+		if _, err := db.Exec(
 			`INSERT OR IGNORE INTO commit_log (commit_hash, path, committed_at, message) VALUES (?, ?, ?, ?)`,
 			r.hash, r.path, r.ts, r.msg,
 		); err != nil {
@@ -72,19 +66,15 @@ func TestActivitySQLTimeBuckets(t *testing.T) {
 // correct commit hash and path for each WriteFile/DeleteFile call, and that
 // rowid order reflects write order (newer commit = higher rowid).
 func TestCommitLogIncrementalAppend(t *testing.T) {
-	dir := t.TempDir()
-	store, err := Init(filepath.Join(dir, "test.db"), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newInternalTestStore(t)
 
-	if !store.commitLog.Load() {
+	if !store.storer.CommitLogAvailable() {
 		t.Skip("commit_log not available")
 	}
 
+	db := store.storer.DB()
 	var countBefore int
-	store.db.QueryRow(`SELECT COUNT(*) FROM commit_log`).Scan(&countBefore)
+	db.QueryRow(`SELECT COUNT(*) FROM commit_log`).Scan(&countBefore)
 
 	h1, _, err := store.WriteFile("kb/a.md", "# A\n", "add a", "learn")
 	if err != nil {
@@ -96,15 +86,15 @@ func TestCommitLogIncrementalAppend(t *testing.T) {
 	}
 
 	var countAfter int
-	store.db.QueryRow(`SELECT COUNT(*) FROM commit_log`).Scan(&countAfter)
+	db.QueryRow(`SELECT COUNT(*) FROM commit_log`).Scan(&countAfter)
 	if countAfter != countBefore+2 {
 		t.Errorf("commit_log rows: got %d, want %d", countAfter, countBefore+2)
 	}
 
 	// Each row must reference the correct commit hash.
 	var gotH1, gotH2 string
-	store.db.QueryRow(`SELECT commit_hash FROM commit_log WHERE path = 'kb/a.md'`).Scan(&gotH1)
-	store.db.QueryRow(`SELECT commit_hash FROM commit_log WHERE path = 'kb/b.md'`).Scan(&gotH2)
+	db.QueryRow(`SELECT commit_hash FROM commit_log WHERE path = 'kb/a.md'`).Scan(&gotH1)
+	db.QueryRow(`SELECT commit_hash FROM commit_log WHERE path = 'kb/b.md'`).Scan(&gotH2)
 	if gotH1 != h1 {
 		t.Errorf("kb/a.md commit_hash = %q, want %q", gotH1, h1)
 	}
@@ -114,8 +104,8 @@ func TestCommitLogIncrementalAppend(t *testing.T) {
 
 	// rowid(a) < rowid(b) — b was written after a, so it must have higher rowid.
 	var rowA, rowB int64
-	store.db.QueryRow(`SELECT rowid FROM commit_log WHERE path = 'kb/a.md'`).Scan(&rowA)
-	store.db.QueryRow(`SELECT rowid FROM commit_log WHERE path = 'kb/b.md'`).Scan(&rowB)
+	db.QueryRow(`SELECT rowid FROM commit_log WHERE path = 'kb/a.md'`).Scan(&rowA)
+	db.QueryRow(`SELECT rowid FROM commit_log WHERE path = 'kb/b.md'`).Scan(&rowB)
 	if rowA >= rowB {
 		t.Errorf("rowid ordering: rowid(a)=%d >= rowid(b)=%d; newer commit must have higher rowid", rowA, rowB)
 	}
@@ -125,10 +115,8 @@ func TestCommitLogIncrementalAppend(t *testing.T) {
 // existing commit_log entries does not duplicate rows (the early-stop on
 // already-indexed commits works correctly).
 func TestPopulateCommitLogIsIncremental(t *testing.T) {
-	dir := t.TempDir()
-	dbPath := filepath.Join(dir, "test.db")
-
-	store, err := Init(dbPath, nil)
+	s := newInternalTestStorer(t)
+	store, err := InitWithStorer(s, nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,24 +127,23 @@ func TestPopulateCommitLogIsIncremental(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	db := store.storer.DB()
 	var countFirst int
-	store.db.QueryRow(`SELECT COUNT(*) FROM commit_log`).Scan(&countFirst)
-	store.Close()
+	db.QueryRow(`SELECT COUNT(*) FROM commit_log`).Scan(&countFirst)
 
-	// Reopen — populateCommitLog runs again.
-	store2, err := Open(dbPath)
+	// Reopen with same storer — populateCommitLog runs again.
+	store2, err := OpenWithStorer(s)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store2.Close()
 
 	var countSecond int
-	store2.db.QueryRow(`SELECT COUNT(*) FROM commit_log`).Scan(&countSecond)
+	db.QueryRow(`SELECT COUNT(*) FROM commit_log`).Scan(&countSecond)
 
 	if countSecond != countFirst {
 		t.Errorf("commit_log rows after re-open: got %d, want %d (duplicate insert?)", countSecond, countFirst)
 	}
-	if !store2.commitLog.Load() {
+	if !store2.storer.CommitLogAvailable() {
 		t.Error("commitLog flag must be true after re-open")
 	}
 }
@@ -164,17 +151,13 @@ func TestPopulateCommitLogIsIncremental(t *testing.T) {
 // TestAppendCommitLogDelete verifies that DeleteFile commits appear in
 // commit_log with the deleted file's path.
 func TestAppendCommitLogDelete(t *testing.T) {
-	dir := t.TempDir()
-	store, err := Init(filepath.Join(dir, "test.db"), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newInternalTestStore(t)
 
-	if !store.commitLog.Load() {
+	if !store.storer.CommitLogAvailable() {
 		t.Skip("commit_log not available")
 	}
 
+	db := store.storer.DB()
 	h1, _, err := store.WriteFile("kb/del.md", "# Del\n", "add del", "learn")
 	if err != nil {
 		t.Fatal(err)
@@ -184,7 +167,7 @@ func TestAppendCommitLogDelete(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	rows, err := store.db.Query(
+	rows, err := db.Query(
 		`SELECT commit_hash FROM commit_log WHERE path = 'kb/del.md' ORDER BY rowid`)
 	if err != nil {
 		t.Fatal(err)
@@ -208,13 +191,10 @@ func TestAppendCommitLogDelete(t *testing.T) {
 // TestCommitLogOperation verifies that operation and author_email are stored
 // in commit_log for multiple operation types (learn, retract, update).
 func TestCommitLogOperation(t *testing.T) {
-	store, err := Init(":memory:", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newInternalTestStore(t)
 
 	agentID := store.AgentID()
+	db := store.storer.DB()
 
 	// learn
 	if _, _, err := store.WriteFile("kb/a.md", "# A\n", "add a", "learn"); err != nil {
@@ -229,7 +209,7 @@ func TestCommitLogOperation(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	rows, err := store.db.Query(`SELECT operation, author_email FROM commit_log WHERE path = 'kb/a.md' ORDER BY rowid`)
+	rows, err := db.Query(`SELECT operation, author_email FROM commit_log WHERE path = 'kb/a.md' ORDER BY rowid`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -308,7 +288,7 @@ CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value BLOB NOT NULL);`
 		t.Fatal(err)
 	}
 
-	if store.commitLog.Load() {
+	if store.storer.CommitLogAvailable() {
 		t.Error("commitLog should be false when commit_log table is absent")
 	}
 
