@@ -143,3 +143,37 @@ func NewTestInstance(name string) *RepoInstance {
 		syncWg:     &sync.WaitGroup{},
 	}
 }
+
+// TestInstanceConfig holds optional fields for NewTestInstanceWithDeps.
+// Zero values are safe — nil fields are treated as "not configured".
+type TestInstanceConfig struct {
+	Name        string
+	AgentBranch string
+	GS          GitStore
+	Svc         *store.Service
+	Idx         SearchIndex
+	Hub         *TaskHub
+	MCP         map[string]http.Handler
+	Synth       *SynthDeps
+	StartSync   func(url string) error
+}
+
+// NewTestInstanceWithDeps creates a RepoInstance pre-populated with the given
+// dependencies. Intended for handler/integration tests in sibling packages.
+// Production code must use Manager.openOne instead.
+func NewTestInstanceWithDeps(cfg TestInstanceConfig) *RepoInstance {
+	sc := cfg.StartSync
+	return &RepoInstance{
+		name:        cfg.Name,
+		agentBranch: cfg.AgentBranch,
+		gs:          cfg.GS,
+		svc:         cfg.Svc,
+		idx:         cfg.Idx,
+		hub:         cfg.Hub,
+		mcpHandlers: cfg.MCP,
+		synthDeps:   cfg.Synth,
+		startSync:   sc,
+		syncCancel:  func() {},
+		syncWg:      &sync.WaitGroup{},
+	}
+}

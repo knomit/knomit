@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
-	"sync"
 	"testing"
 
 	"github.com/go-git/go-git/v5/plumbing"
@@ -216,12 +215,12 @@ func newTestRouterWithGitStore(t *testing.T, gs *git.Store) http.Handler {
 	t.Helper()
 	hub := repos.NewTaskHub(context.Background())
 	rm := repos.New(context.Background(), repos.Deps{})
-	rm.Set("knomit", &repos.RepoInstance{
+	rm.Set("knomit", repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
 		Name:        "knomit",
 		AgentBranch: testAgentBranch,
 		GS:          gs,
 		Hub:         hub,
-	})
+	}))
 	return NewRouter(rm, nil, false, "kb", testAgentBranch)
 }
 
@@ -416,13 +415,13 @@ func newTestRouterWithSvcAndGitStore(t *testing.T) (http.Handler, *git.Store, *s
 
 	hub := repos.NewTaskHub(context.Background())
 	rm := repos.New(context.Background(), repos.Deps{})
-	rm.Set("knomit", &repos.RepoInstance{
+	rm.Set("knomit", repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
 		Name:        "knomit",
 		AgentBranch: testAgentBranch,
 		GS:          gs,
 		Svc:         svc,
 		Hub:         hub,
-	})
+	}))
 	return NewRouter(rm, nil, false, "kb", testAgentBranch), gs, svc
 }
 
@@ -670,12 +669,12 @@ func setupTestedSession(t *testing.T) (http.Handler, string) {
 	sm := NewSessionManager()
 	t.Cleanup(sm.Shutdown)
 
-	rm.Set("knomit", &repos.RepoInstance{
+	rm.Set("knomit", repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
 		Name: "knomit",
 		GS:   localGS,
 		Svc:  svc,
 		Hub:  hub,
-	})
+	}))
 	router := NewRouterWithSessionManager(rm, nil, false, "kb", testAgentBranch, sm)
 
 	// Create session manually and inject it into StateTested with disjoint history.
@@ -912,13 +911,11 @@ func setupAppliedSession(t *testing.T) (http.Handler, string, *repos.Manager, *S
 	var startSyncCalled bool
 	var startSyncURL string
 
-	ri := &repos.RepoInstance{
-		Name:       "knomit",
-		GS:         localGS,
-		Svc:        svc,
-		Hub:        hub,
-		SyncCancel: func() {},
-		SyncWg:     &sync.WaitGroup{},
+	ri := repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
+		Name: "knomit",
+		GS:   localGS,
+		Svc:  svc,
+		Hub:  hub,
 		StartSync: func(url string) error {
 			startSyncCalled = true
 			startSyncURL = url
@@ -926,7 +923,7 @@ func setupAppliedSession(t *testing.T) (http.Handler, string, *repos.Manager, *S
 			_ = startSyncURL
 			return nil
 		},
-	}
+	})
 	rm.Set("knomit", ri)
 	router := NewRouterWithSessionManager(rm, nil, false, "kb", testAgentBranch, sm)
 
@@ -1002,12 +999,18 @@ func TestCommit_SwapsAndConfigures(t *testing.T) {
 		t.Fatal("repo instance not found after commit")
 	}
 	// The GS should now be the remote store (a *git.Store), not the original local.
-	if _, ok := ri.GS.(*git.Store); !ok {
-		t.Errorf("expected ri.GS to be *git.Store after swap, got %T", ri.GS)
+	var gs repos.GitStore
+	var svc *store.Service
+	ri.WithRead(func(d repos.StoreDeps) {
+		gs = d.GS
+		svc = d.Svc
+	})
+	if _, ok := gs.(*git.Store); !ok {
+		t.Errorf("expected ri.GS to be *git.Store after swap, got %T", gs)
 	}
 
 	// Verify remote config was saved to DB.
-	remote, err := ri.Svc.GetRemote("origin")
+	remote, err := svc.GetRemote("origin")
 	if err != nil {
 		t.Fatalf("GetRemote: %v", err)
 	}
@@ -1055,12 +1058,12 @@ func TestCommit_WrongState(t *testing.T) {
 	sm := NewSessionManager()
 	t.Cleanup(sm.Shutdown)
 
-	rm.Set("knomit", &repos.RepoInstance{
+	rm.Set("knomit", repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
 		Name: "knomit",
 		GS:   localGS,
 		Svc:  svc,
 		Hub:  hub,
-	})
+	}))
 	router := NewRouterWithSessionManager(rm, nil, false, "kb", testAgentBranch, sm)
 
 	// Create session in StateTested (not applied).
@@ -1186,12 +1189,12 @@ func TestApply_NoRemoteStore(t *testing.T) {
 	sm := NewSessionManager()
 	t.Cleanup(sm.Shutdown)
 
-	rm.Set("knomit", &repos.RepoInstance{
+	rm.Set("knomit", repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
 		Name: "knomit",
 		GS:   localGS,
 		Svc:  svc,
 		Hub:  hub,
-	})
+	}))
 	router := NewRouterWithSessionManager(rm, nil, false, "kb", testAgentBranch, sm)
 
 	sess, err := sm.Create("knomit", "inmem:///test-no-remote", AuthConfig{})
@@ -1241,12 +1244,12 @@ func TestApply_SharedHistory(t *testing.T) {
 	sm := NewSessionManager()
 	t.Cleanup(sm.Shutdown)
 
-	rm.Set("knomit", &repos.RepoInstance{
+	rm.Set("knomit", repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
 		Name: "knomit",
 		GS:   localGS,
 		Svc:  svc,
 		Hub:  hub,
-	})
+	}))
 	router := NewRouterWithSessionManager(rm, nil, false, "kb", testAgentBranch, sm)
 
 	sess, err := sm.Create("knomit", "inmem:///test-shared", AuthConfig{})
@@ -1322,12 +1325,12 @@ func TestCommit_NotApplied(t *testing.T) {
 	sm := NewSessionManager()
 	t.Cleanup(sm.Shutdown)
 
-	rm.Set("knomit", &repos.RepoInstance{
+	rm.Set("knomit", repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
 		Name: "knomit",
 		GS:   localGS,
 		Svc:  svc,
 		Hub:  hub,
-	})
+	}))
 	router := NewRouterWithSessionManager(rm, nil, false, "kb", testAgentBranch, sm)
 
 	sess, err := sm.Create("knomit", "inmem:///test-not-applied", AuthConfig{})

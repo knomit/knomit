@@ -76,17 +76,24 @@ func NewRouterWithSessionManager(rm *repos.Manager, gitHandler http.Handler, emb
 
 		sub.Mount("/mcp", http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 			ri := repos.RepoFromContext(req.Context())
-			if len(ri.MCPHandlers) == 0 {
+			var handler http.Handler
+			ri.WithRead(func(d repos.StoreDeps) {
+				if len(d.MCP) == 0 {
+					return
+				}
+				profile := req.URL.Query().Get("profile")
+				if profile == "" {
+					profile = "code"
+				}
+				h, ok := d.MCP[profile]
+				if !ok {
+					h = d.MCP["code"]
+				}
+				handler = h
+			})
+			if handler == nil {
 				http.NotFound(w, req)
 				return
-			}
-			profile := req.URL.Query().Get("profile")
-			if profile == "" {
-				profile = "code"
-			}
-			handler, ok := ri.MCPHandlers[profile]
-			if !ok {
-				handler = ri.MCPHandlers["code"]
 			}
 			handler.ServeHTTP(w, req)
 		}))

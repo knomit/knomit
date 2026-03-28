@@ -16,8 +16,8 @@ func TestHandleRepos(t *testing.T) {
 	gs := NewMockGitStore(ctrl)
 
 	rm := repos.New(context.Background(), repos.Deps{})
-	rm.Set("knomit", &repos.RepoInstance{Name: "knomit", AgentBranch: "agent/abc123", GS: gs})
-	rm.Set("work", &repos.RepoInstance{Name: "work", AgentBranch: "agent/abc123", GS: gs})
+	rm.Set("knomit", repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{Name: "knomit", AgentBranch: "agent/abc123", GS: gs}))
+	rm.Set("work", repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{Name: "work", AgentBranch: "agent/abc123", GS: gs}))
 
 	handler := handleRepos(rm)
 	req := httptest.NewRequest("GET", "/api/v1/repos", nil)

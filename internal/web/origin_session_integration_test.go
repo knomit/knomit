@@ -7,7 +7,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -96,18 +95,14 @@ func TestOriginSession_FullWorkflow(t *testing.T) {
 	sm := NewSessionManager()
 	t.Cleanup(sm.Shutdown)
 
-	ri := &repos.RepoInstance{
+	ri := repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
 		AgentBranch: testAgentBranch,
 		Name:        "knomit",
 		GS:          localGS,
 		Svc:         localSvc,
 		Hub:         hub,
-		SyncCancel:  func() {},
-		SyncWg:      &sync.WaitGroup{},
-		StartSync: func(url string) error {
-			return nil
-		},
-	}
+		StartSync:   func(url string) error { return nil },
+	})
 	rm.Set("knomit", ri)
 	handler := NewRouterWithSessionManager(rm, nil, false, "kb", testAgentBranch, sm)
 
@@ -276,7 +271,9 @@ func TestOriginSession_FullWorkflow(t *testing.T) {
 	if updatedRI == nil {
 		t.Fatal("repo instance not found after commit")
 	}
-	remote, err := updatedRI.Svc.GetRemote("origin")
+	var updatedSvc0 *store.Service
+	updatedRI.WithRead(func(d repos.StoreDeps) { updatedSvc0 = d.Svc })
+	remote, err := updatedSvc0.GetRemote("origin")
 	if err != nil {
 		t.Fatalf("GetRemote after commit: %v", err)
 	}
@@ -363,16 +360,14 @@ func TestOriginSession_RemoteWinsStrategy(t *testing.T) {
 	sm := NewSessionManager()
 	t.Cleanup(sm.Shutdown)
 
-	ri := &repos.RepoInstance{
+	ri := repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
 		AgentBranch: testAgentBranch,
-		Name:       "knomit",
-		GS:         localGS,
-		Svc:        localSvc,
-		Hub:        hub,
-		SyncCancel: func() {},
-		SyncWg:     &sync.WaitGroup{},
-		StartSync:  func(url string) error { return nil },
-	}
+		Name:        "knomit",
+		GS:          localGS,
+		Svc:         localSvc,
+		Hub:         hub,
+		StartSync:   func(url string) error { return nil },
+	})
 	rm.Set("knomit", ri)
 	handler := NewRouterWithSessionManager(rm, nil, false, "kb", testAgentBranch, sm)
 
@@ -435,7 +430,9 @@ func TestOriginSession_RemoteWinsStrategy(t *testing.T) {
 	findDoneEvent(t, parseSSEEvents(t, commitRec.Body.String()), "commit")
 
 	updatedRI := rm.Get("knomit")
-	remote, err := updatedRI.Svc.GetRemote("origin")
+	var updatedSvc2 *store.Service
+	updatedRI.WithRead(func(d repos.StoreDeps) { updatedSvc2 = d.Svc })
+	remote, err := updatedSvc2.GetRemote("origin")
 	if err != nil {
 		t.Fatalf("GetRemote: %v", err)
 	}
@@ -500,16 +497,14 @@ func TestOriginSession_SwitchStrategy(t *testing.T) {
 	sm := NewSessionManager()
 	t.Cleanup(sm.Shutdown)
 
-	ri := &repos.RepoInstance{
+	ri := repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
 		AgentBranch: testAgentBranch,
-		Name:       "knomit",
-		GS:         localGS,
-		Svc:        localSvc,
-		Hub:        hub,
-		SyncCancel: func() {},
-		SyncWg:     &sync.WaitGroup{},
-		StartSync:  func(url string) error { return nil },
-	}
+		Name:        "knomit",
+		GS:          localGS,
+		Svc:         localSvc,
+		Hub:         hub,
+		StartSync:   func(url string) error { return nil },
+	})
 	rm.Set("knomit", ri)
 	handler := NewRouterWithSessionManager(rm, nil, false, "kb", testAgentBranch, sm)
 
@@ -622,16 +617,14 @@ func TestOriginSession_ExistingAgentBranch(t *testing.T) {
 	sm := NewSessionManager()
 	t.Cleanup(sm.Shutdown)
 
-	ri := &repos.RepoInstance{
+	ri := repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
 		AgentBranch: testAgentBranch,
-		Name:       "knomit",
-		GS:         localGS,
-		Svc:        localSvc,
-		Hub:        hub,
-		SyncCancel: func() {},
-		SyncWg:     &sync.WaitGroup{},
-		StartSync:  func(url string) error { return nil },
-	}
+		Name:        "knomit",
+		GS:          localGS,
+		Svc:         localSvc,
+		Hub:         hub,
+		StartSync:   func(url string) error { return nil },
+	})
 	rm.Set("knomit", ri)
 	handler := NewRouterWithSessionManager(rm, nil, false, "kb", testAgentBranch, sm)
 
@@ -715,16 +708,14 @@ func TestOriginSession_CancelCleanup(t *testing.T) {
 	sm := NewSessionManager()
 	t.Cleanup(sm.Shutdown)
 
-	ri := &repos.RepoInstance{
+	ri := repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
 		AgentBranch: testAgentBranch,
-		Name:       "knomit",
-		GS:         localGS,
-		Svc:        localSvc,
-		Hub:        hub,
-		SyncCancel: func() {},
-		SyncWg:     &sync.WaitGroup{},
-		StartSync:  func(url string) error { return nil },
-	}
+		Name:        "knomit",
+		GS:          localGS,
+		Svc:         localSvc,
+		Hub:         hub,
+		StartSync:   func(url string) error { return nil },
+	})
 	rm.Set("knomit", ri)
 	handler := NewRouterWithSessionManager(rm, nil, false, "kb", testAgentBranch, sm)
 
@@ -839,16 +830,14 @@ func TestOriginSession_BranchSelection(t *testing.T) {
 	sm := NewSessionManager()
 	t.Cleanup(sm.Shutdown)
 
-	ri := &repos.RepoInstance{
+	ri := repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
 		AgentBranch: testAgentBranch,
-		Name:       "knomit",
-		GS:         localGS,
-		Svc:        localSvc,
-		Hub:        hub,
-		SyncCancel: func() {},
-		SyncWg:     &sync.WaitGroup{},
-		StartSync:  func(url string) error { return nil },
-	}
+		Name:        "knomit",
+		GS:          localGS,
+		Svc:         localSvc,
+		Hub:         hub,
+		StartSync:   func(url string) error { return nil },
+	})
 	rm.Set("knomit", ri)
 	handler := NewRouterWithSessionManager(rm, nil, false, "kb", testAgentBranch, sm)
 
@@ -915,7 +904,9 @@ func TestOriginSession_BranchSelection(t *testing.T) {
 
 	// Verify remote config saved with branch="main".
 	updatedRI := rm.Get("knomit")
-	remote, err := updatedRI.Svc.GetRemote("origin")
+	var updatedSvc3 *store.Service
+	updatedRI.WithRead(func(d repos.StoreDeps) { updatedSvc3 = d.Svc })
+	remote, err := updatedSvc3.GetRemote("origin")
 	if err != nil {
 		t.Fatalf("GetRemote: %v", err)
 	}
@@ -978,16 +969,14 @@ func TestOriginSession_RebuildAfterCommit(t *testing.T) {
 	sm := NewSessionManager()
 	t.Cleanup(sm.Shutdown)
 
-	ri := &repos.RepoInstance{
+	ri := repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
 		AgentBranch: testAgentBranch,
-		Name:       "knomit",
-		GS:         localGS,
-		Svc:        localSvc,
-		Hub:        hub,
-		SyncCancel: func() {},
-		SyncWg:     &sync.WaitGroup{},
-		StartSync:  func(url string) error { return nil },
-	}
+		Name:        "knomit",
+		GS:          localGS,
+		Svc:         localSvc,
+		Hub:         hub,
+		StartSync:   func(url string) error { return nil },
+	})
 	rm.Set("knomit", ri)
 	handler := NewRouterWithSessionManager(rm, nil, false, "kb", testAgentBranch, sm)
 
@@ -1035,7 +1024,9 @@ func TestOriginSession_RebuildAfterCommit(t *testing.T) {
 	if updatedRI == nil {
 		t.Fatal("repo instance not found after commit")
 	}
-	facts, total, err := updatedRI.Svc.Index().RecentFacts("", "", 100, 0, nil, nil, nil, nil, nil)
+	var updatedSvc4 *store.Service
+	updatedRI.WithRead(func(d repos.StoreDeps) { updatedSvc4 = d.Svc })
+	facts, total, err := updatedSvc4.Index().RecentFacts("", "", 100, 0, nil, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("RecentFacts: %v", err)
 	}
@@ -1093,16 +1084,14 @@ func TestOriginSession_ReviewWatermarkSetAfterCommit(t *testing.T) {
 	sm := NewSessionManager()
 	t.Cleanup(sm.Shutdown)
 
-	ri := &repos.RepoInstance{
+	ri := repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
 		AgentBranch: testAgentBranch,
-		Name:       "knomit",
-		GS:         localGS,
-		Svc:        localSvc,
-		Hub:        hub,
-		SyncCancel: func() {},
-		SyncWg:     &sync.WaitGroup{},
-		StartSync:  func(url string) error { return nil },
-	}
+		Name:        "knomit",
+		GS:          localGS,
+		Svc:         localSvc,
+		Hub:         hub,
+		StartSync:   func(url string) error { return nil },
+	})
 	rm.Set("knomit", ri)
 	handler := NewRouterWithSessionManager(rm, nil, false, "kb", testAgentBranch, sm)
 
@@ -1138,11 +1127,17 @@ func TestOriginSession_ReviewWatermarkSetAfterCommit(t *testing.T) {
 	// HEAD is the remote's agent branch ("agent/remote" in this test), which is
 	// what handleCommit uses as rebuildBranch (first entry in AgentBranches).
 	updatedRI := rm.Get("knomit")
-	idx := updatedRI.Svc.Index()
+	var updatedSvc5 *store.Service
+	var updatedGS repos.GitStore
+	updatedRI.WithRead(func(d repos.StoreDeps) {
+		updatedSvc5 = d.Svc
+		updatedGS = d.GS
+	})
+	idx := updatedSvc5.Index()
 	// The remote was initialized with "agent/remote" as its agent branch.
 	rebuildBranch := "agent/remote"
 
-	head, err := updatedRI.GS.HeadCommit(rebuildBranch)
+	head, err := updatedGS.HeadCommit(rebuildBranch)
 	if err != nil {
 		t.Fatalf("HeadCommit(%s): %v", rebuildBranch, err)
 	}
@@ -1220,16 +1215,14 @@ func TestOriginSession_DeadRefs(t *testing.T) {
 	sm := NewSessionManager()
 	t.Cleanup(sm.Shutdown)
 
-	ri := &repos.RepoInstance{
+	ri := repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
 		AgentBranch: testAgentBranch,
-		Name:       "knomit",
-		GS:         localGS,
-		Svc:        localSvc,
-		Hub:        hub,
-		SyncCancel: func() {},
-		SyncWg:     &sync.WaitGroup{},
-		StartSync:  func(url string) error { return nil },
-	}
+		Name:        "knomit",
+		GS:          localGS,
+		Svc:         localSvc,
+		Hub:         hub,
+		StartSync:   func(url string) error { return nil },
+	})
 	rm.Set("knomit", ri)
 	handler := NewRouterWithSessionManager(rm, nil, false, "kb", testAgentBranch, sm)
 
@@ -1334,16 +1327,14 @@ func TestOriginSession_NoDeadRefs(t *testing.T) {
 	sm := NewSessionManager()
 	t.Cleanup(sm.Shutdown)
 
-	ri := &repos.RepoInstance{
+	ri := repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
 		AgentBranch: testAgentBranch,
-		Name:       "knomit",
-		GS:         localGS,
-		Svc:        localSvc,
-		Hub:        hub,
-		SyncCancel: func() {},
-		SyncWg:     &sync.WaitGroup{},
-		StartSync:  func(url string) error { return nil },
-	}
+		Name:        "knomit",
+		GS:          localGS,
+		Svc:         localSvc,
+		Hub:         hub,
+		StartSync:   func(url string) error { return nil },
+	})
 	rm.Set("knomit", ri)
 	handler := NewRouterWithSessionManager(rm, nil, false, "kb", testAgentBranch, sm)
 

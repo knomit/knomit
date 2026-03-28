@@ -20,13 +20,13 @@ import (
 func newTestRouter(gs repos.GitStore, idx repos.SearchIndex) http.Handler {
 	hub := repos.NewTaskHub(context.Background())
 	rm := repos.New(context.Background(), repos.Deps{})
-	rm.Set("knomit", &repos.RepoInstance{
+	rm.Set("knomit", repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
 		Name:        "knomit",
 		AgentBranch: testAgentBranch,
 		GS:          gs,
 		Idx:         idx,
 		Hub:         hub,
-	})
+	}))
 	return NewRouter(rm, nil, false, "kb", testAgentBranch)
 }
 

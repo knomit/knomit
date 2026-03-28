@@ -338,13 +338,13 @@ func TestHandleCommitDetail_DeletedFileWithIndexFallback(t *testing.T) {
 
 	hub := repos.NewTaskHub(context.Background())
 	rm := repos.New(context.Background(), repos.Deps{})
-	rm.Set("knomit", &repos.RepoInstance{
+	rm.Set("knomit", repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
 		Name:        "knomit",
 		AgentBranch: testAgentBranch,
 		GS:          gs,
 		Idx:         mockIdx,
 		Hub:         hub,
-	})
+	}))
 	handler := NewRouter(rm, nil, false, "kb", testAgentBranch)
 	rr := doRequest(t, handler, http.MethodGet, "/api/v1/knomit/commit?hash=retract-idx", "")
 
@@ -510,13 +510,13 @@ func TestHandleSynthesizeStart_NoReviewer(t *testing.T) {
 	hub := repos.NewTaskHub(context.Background())
 	synthDeps := &repos.SynthDeps{Adapter: &fakeAdapter{}}
 	rm := repos.New(context.Background(), repos.Deps{})
-	rm.Set("knomit", &repos.RepoInstance{
+	rm.Set("knomit", repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
 		Name:        "knomit",
 		AgentBranch: testAgentBranch,
 		GS:          gs,
 		Hub:         hub,
-		SynthDeps:   synthDeps,
-	})
+		Synth:       synthDeps,
+	}))
 	handler := NewRouter(rm, nil, false, "kb", testAgentBranch)
 
 	rr := doRequest(t, handler, http.MethodPost, "/api/v1/knomit/synthesize", "")
@@ -537,13 +537,13 @@ func TestHandleEvents_InitialStatus(t *testing.T) {
 
 	hub := repos.NewTaskHub(context.Background())
 	rm := repos.New(context.Background(), repos.Deps{})
-	rm.Set("knomit", &repos.RepoInstance{
+	rm.Set("knomit", repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
 		Name:        "knomit",
 		AgentBranch: testAgentBranch,
 		GS:          gs,
 		Idx:         mockIdx,
 		Hub:         hub,
-	})
+	}))
 	handler := NewRouter(rm, nil, false, "kb", testAgentBranch)
 
 	// Use a context with timeout to end the SSE connection.
@@ -570,12 +570,12 @@ func TestHandleEvents_TaskEvents(t *testing.T) {
 
 	hub := repos.NewTaskHub(context.Background())
 	rm := repos.New(context.Background(), repos.Deps{})
-	rm.Set("knomit", &repos.RepoInstance{
+	rm.Set("knomit", repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
 		Name:        "knomit",
 		AgentBranch: testAgentBranch,
 		GS:          gs,
 		Hub:         hub,
-	})
+	}))
 	handler := NewRouter(rm, nil, false, "kb", testAgentBranch)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
@@ -698,12 +698,12 @@ func TestHandleEvents_SyncAndPushEvents(t *testing.T) {
 
 	hub := repos.NewTaskHub(context.Background())
 	rm := repos.New(context.Background(), repos.Deps{})
-	rm.Set("knomit", &repos.RepoInstance{
+	rm.Set("knomit", repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
 		Name:        "knomit",
 		AgentBranch: testAgentBranch,
 		GS:          gs,
 		Hub:         hub,
-	})
+	}))
 	handler := NewRouter(rm, nil, false, "kb", testAgentBranch)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
