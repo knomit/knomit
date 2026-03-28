@@ -76,11 +76,11 @@ func TestCommitLogIncrementalAppend(t *testing.T) {
 	var countBefore int
 	db.QueryRow(`SELECT COUNT(*) FROM commit_log`).Scan(&countBefore)
 
-	h1, _, err := store.WriteFile("kb/a.md", "# A\n", "add a", "learn")
+	h1, _, err := store.WriteFile(testBranch, "kb/a.md", "# A\n", "add a", "learn")
 	if err != nil {
 		t.Fatal(err)
 	}
-	h2, _, err := store.WriteFile("kb/b.md", "# B\n", "add b", "learn")
+	h2, _, err := store.WriteFile(testBranch, "kb/b.md", "# B\n", "add b", "learn")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,14 +116,14 @@ func TestCommitLogIncrementalAppend(t *testing.T) {
 // already-indexed commits works correctly).
 func TestPopulateCommitLogIsIncremental(t *testing.T) {
 	s := newInternalTestStorer(t)
-	store, err := InitWithStorer(s, nil, "")
+	store, err := InitWithStorer(s, nil, testBranch)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := store.WriteFile("kb/a.md", "# A\n", "add a", "learn"); err != nil {
+	if _, _, err := store.WriteFile(testBranch, "kb/a.md", "# A\n", "add a", "learn"); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := store.WriteFile("kb/b.md", "# B\n", "add b", "learn"); err != nil {
+	if _, _, err := store.WriteFile(testBranch, "kb/b.md", "# B\n", "add b", "learn"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -158,11 +158,11 @@ func TestAppendCommitLogDelete(t *testing.T) {
 	}
 
 	db := store.storer.DB()
-	h1, _, err := store.WriteFile("kb/del.md", "# Del\n", "add del", "learn")
+	h1, _, err := store.WriteFile(testBranch, "kb/del.md", "# Del\n", "add del", "learn")
 	if err != nil {
 		t.Fatal(err)
 	}
-	h2, err := store.DeleteFile("kb/del.md", "delete del", "retract")
+	h2, err := store.DeleteFile(testBranch, "kb/del.md", "delete del", "retract")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -193,19 +193,19 @@ func TestAppendCommitLogDelete(t *testing.T) {
 func TestCommitLogOperation(t *testing.T) {
 	store := newInternalTestStore(t)
 
-	agentID := store.AgentID()
+	agentID := deriveAgentID(testBranch)
 	db := store.storer.DB()
 
 	// learn
-	if _, _, err := store.WriteFile("kb/a.md", "# A\n", "add a", "learn"); err != nil {
+	if _, _, err := store.WriteFile(testBranch, "kb/a.md", "# A\n", "add a", "learn"); err != nil {
 		t.Fatal(err)
 	}
 	// update
-	if _, _, err := store.WriteFile("kb/a.md", "# A v2\n", "update a", "update"); err != nil {
+	if _, _, err := store.WriteFile(testBranch, "kb/a.md", "# A v2\n", "update a", "update"); err != nil {
 		t.Fatal(err)
 	}
 	// retract
-	if _, err := store.DeleteFile("kb/a.md", "retract a", "retract"); err != nil {
+	if _, err := store.DeleteFile(testBranch, "kb/a.md", "retract a", "retract"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -251,10 +251,10 @@ func TestParseOperation(t *testing.T) {
 		{"agent+learn@agents.knomit.io", "learn"},
 		{"bob+retract@gmail.com", "retract"},
 		{"host-abc+sync@agents.knomit.io", "sync"},
-		{"plain@example.com", ""},     // no +tag
-		{"noatsign", ""},              // no @ at all
-		{"+learn@example.com", "learn"}, // + at start is valid subaddress
-		{"a@b+c@d.com", ""},             // @ before + (malformed)
+		{"plain@example.com", ""},        // no +tag
+		{"noatsign", ""},                 // no @ at all
+		{"+learn@example.com", "learn"},  // + at start is valid subaddress
+		{"a@b+c@d.com", ""},              // @ before + (malformed)
 	}
 	for _, tt := range tests {
 		got := parseOperation(tt.email)
@@ -283,7 +283,7 @@ CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value BLOB NOT NULL);`
 	}
 
 	s := storegit.NewStorer(db)
-	store, err := InitWithStorer(s, nil, "agent/test")
+	store, err := InitWithStorer(s, nil, testBranch)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -292,12 +292,12 @@ CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value BLOB NOT NULL);`
 		t.Error("commitLog should be false when commit_log table is absent")
 	}
 
-	if _, _, err := store.WriteFile("kb/a.md", "# A\n", "add a", "learn"); err != nil {
+	if _, _, err := store.WriteFile(testBranch, "kb/a.md", "# A\n", "add a", "learn"); err != nil {
 		t.Fatal(err)
 	}
 
 	// Activity must fall back to go-git and return correct count.
-	a, err := store.Activity("kb")
+	a, err := store.Activity(testBranch, "kb")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -306,7 +306,7 @@ CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value BLOB NOT NULL);`
 	}
 
 	// WalkChangedFiles must also fall back to go-git.
-	files, _, err := store.WalkChangedFiles("", "kb", nil, 10)
+	files, _, err := store.WalkChangedFiles(testBranch, "", "kb", nil, 10)
 	if err != nil {
 		t.Fatal(err)
 	}

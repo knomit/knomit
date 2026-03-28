@@ -2,7 +2,6 @@
 package git
 
 import (
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -14,12 +13,7 @@ import (
 // resolves a normalised (lowercase) path against a commit that stored the file
 // with mixed-case path components (pre-normalisation history).
 func TestReadFileAtCommit_CaseInsensitiveFallback(t *testing.T) {
-	dir := t.TempDir()
-	store, err := Init(filepath.Join(dir, "test.db"), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newInternalTestStore(t)
 
 	// Write a file using the internal helper so we can bypass the ToLower
 	// enforcement in WriteFile and store an uppercase path — simulating a
@@ -36,7 +30,7 @@ func TestReadFileAtCommit_CaseInsensitiveFallback(t *testing.T) {
 		t.Fatalf("writeFileToStore: %v", err)
 	}
 	// Update the branch ref so ReadFileAtCommit can find the commit.
-	branchRef := plumbing.NewBranchReferenceName(store.branch)
+	branchRef := plumbing.NewBranchReferenceName(testBranch)
 	if err := store.storer.SetReference(plumbing.NewHashReference(branchRef, commitHash)); err != nil {
 		t.Fatalf("SetReference: %v", err)
 	}

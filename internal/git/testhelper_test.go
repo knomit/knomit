@@ -9,6 +9,9 @@ import (
 	storegit "knomit/internal/store/git"
 )
 
+// testBranch is the fixed branch used by all external tests.
+const testBranch = "agent/test"
+
 // newTestStorer creates an in-memory SQLite-backed storer with the git schema applied.
 func newTestStorer(t *testing.T) *storegit.Storer {
 	t.Helper()
@@ -20,10 +23,10 @@ func newTestStorer(t *testing.T) *storegit.Storer {
 	return s
 }
 
-// newTestStore initialises a fresh in-memory git store.
+// newTestStore initialises a fresh in-memory git store on testBranch.
 func newTestStore(t *testing.T) *git.Store {
 	t.Helper()
-	store, err := git.InitWithStorer(newTestStorer(t), nil, "")
+	store, err := git.InitWithStorer(newTestStorer(t), nil, testBranch)
 	if err != nil {
 		t.Fatal(err)
 	}
