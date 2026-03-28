@@ -409,7 +409,7 @@ func (m *Manager) openOne(name, dbPath string, isDefault bool) (*RepoInstance, e
 }
 
 // SetupMCP wires MCP handlers onto ri using the manager's ontology and deps.
-// It reads the current ri.GS and ri.Svc to get concrete types, so it is safe
+// It reads the current ri.gs and ri.svc to get concrete types, so it is safe
 // to call after SwapStore to rebind MCP handlers to the new database.
 // No-op if m.ontology is nil.
 func (m *Manager) SetupMCP(ri *RepoInstance) {
