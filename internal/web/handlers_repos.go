@@ -17,12 +17,9 @@ func handleRepos(rm *repos.Manager) http.HandlerFunc {
 
 		var repoList []repoEntry
 		rm.ForEach(func(name string, ri *repos.RepoInstance) {
-			ri.RLock()
-			branch := ri.GS.Branch()
-			ri.RUnlock()
 			repoList = append(repoList, repoEntry{
 				Name:   name,
-				Branch: branch,
+				Branch: ri.AgentBranch,
 			})
 		})
 

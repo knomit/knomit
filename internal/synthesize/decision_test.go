@@ -18,7 +18,7 @@ func TestApplyPruneDecisions_Retract(t *testing.T) {
 	gs := NewMockGitStore(ctrl)
 	idx := NewMockSearchIndex(ctrl)
 
-	gs.EXPECT().DeleteFile("kb/test/old.md", gomock.Any(), gomock.Any()).Return("c1", nil)
+	gs.EXPECT().DeleteFile("agent/test", "kb/test/old.md", gomock.Any(), gomock.Any()).Return("c1", nil)
 	idx.EXPECT().Delete("kb/test/old.md").Return(nil)
 
 
@@ -27,7 +27,7 @@ func TestApplyPruneDecisions_Retract(t *testing.T) {
 	}
 	progress := collectProgress()
 
-	stats, err := ApplyPruneDecisions(gs, idx, decisions, nil, "test", progress.fn)
+	stats, err := ApplyPruneDecisions(gs, idx, decisions, nil, "test", progress.fn, "agent/test")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -46,8 +46,8 @@ func TestApplyPruneDecisions_Update(t *testing.T) {
 	idx := NewMockSearchIndex(ctrl)
 
 	content := factContent("Test fact", "Some body text.")
-	gs.EXPECT().ReadFile("kb/test/upd.md").Return(content, nil)
-	gs.EXPECT().WriteFile("kb/test/upd.md", gomock.Any(), gomock.Any(), gomock.Any()).Return("c2", "b2", nil)
+	gs.EXPECT().ReadFile("agent/test", "kb/test/upd.md").Return(content, nil)
+	gs.EXPECT().WriteFile("agent/test", "kb/test/upd.md", gomock.Any(), gomock.Any(), gomock.Any()).Return("c2", "b2", nil)
 	idx.EXPECT().Upsert(gomock.Any()).DoAndReturn(func(r store.FactRecord) error {
 		if r.Confidence != 0.5 {
 			t.Errorf("expected confidence 0.5, got %f", r.Confidence)
@@ -61,7 +61,7 @@ func TestApplyPruneDecisions_Update(t *testing.T) {
 	}
 	progress := collectProgress()
 
-	stats, err := ApplyPruneDecisions(gs, idx, decisions, nil, "test", progress.fn)
+	stats, err := ApplyPruneDecisions(gs, idx, decisions, nil, "test", progress.fn, "agent/test")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -82,7 +82,7 @@ func TestApplyPruneDecisions_Keep(t *testing.T) {
 	}
 	progress := collectProgress()
 
-	stats, err := ApplyPruneDecisions(gs, idx, decisions, nil, "test", progress.fn)
+	stats, err := ApplyPruneDecisions(gs, idx, decisions, nil, "test", progress.fn, "agent/test")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -97,15 +97,15 @@ func TestApplyPruneDecisions_Merge(t *testing.T) {
 	idx := NewMockSearchIndex(ctrl)
 
 	// computeWeight reads sources before writing merged fact.
-	gs.EXPECT().ReadFile("kb/test/a.md").Return(factContent("Fact A", "Body A."), nil)
-	gs.EXPECT().ReadFile("kb/test/b.md").Return(factContent("Fact B", "Body B."), nil)
+	gs.EXPECT().ReadFile("agent/test", "kb/test/a.md").Return(factContent("Fact A", "Body A."), nil)
+	gs.EXPECT().ReadFile("agent/test", "kb/test/b.md").Return(factContent("Fact B", "Body B."), nil)
 	// Write merged fact.
-	gs.EXPECT().WriteFile("kb/test/merged.md", gomock.Any(), gomock.Any(), gomock.Any()).Return("c3", "b3", nil)
+	gs.EXPECT().WriteFile("agent/test", "kb/test/merged.md", gomock.Any(), gomock.Any(), gomock.Any()).Return("c3", "b3", nil)
 	idx.EXPECT().Upsert(gomock.Any()).Return(nil)
 	// Delete sources.
-	gs.EXPECT().DeleteFile("kb/test/a.md", gomock.Any(), gomock.Any()).Return("c4", nil)
+	gs.EXPECT().DeleteFile("agent/test", "kb/test/a.md", gomock.Any(), gomock.Any()).Return("c4", nil)
 	idx.EXPECT().Delete("kb/test/a.md").Return(nil)
-	gs.EXPECT().DeleteFile("kb/test/b.md", gomock.Any(), gomock.Any()).Return("c5", nil)
+	gs.EXPECT().DeleteFile("agent/test", "kb/test/b.md", gomock.Any(), gomock.Any()).Return("c5", nil)
 	idx.EXPECT().Delete("kb/test/b.md").Return(nil)
 
 
@@ -126,7 +126,7 @@ func TestApplyPruneDecisions_Merge(t *testing.T) {
 	}
 	progress := collectProgress()
 
-	stats, err := ApplyPruneDecisions(gs, idx, nil, merges, "test", progress.fn)
+	stats, err := ApplyPruneDecisions(gs, idx, nil, merges, "test", progress.fn, "agent/test")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -143,12 +143,12 @@ func TestApplyPruneDecisions_NoDoubleDelete(t *testing.T) {
 
 	// Path "kb/test/a.md" appears in both retract decision and merge sources.
 	// It should only be deleted once.
-	gs.EXPECT().DeleteFile("kb/test/a.md", gomock.Any(), gomock.Any()).Return("c1", nil).Times(1)
+	gs.EXPECT().DeleteFile("agent/test", "kb/test/a.md", gomock.Any(), gomock.Any()).Return("c1", nil).Times(1)
 	idx.EXPECT().Delete("kb/test/a.md").Return(nil).Times(1)
 	// computeWeight reads source before writing merged fact.
-	gs.EXPECT().ReadFile("kb/test/a.md").Return(factContent("Fact A", "Body A."), nil)
+	gs.EXPECT().ReadFile("agent/test", "kb/test/a.md").Return(factContent("Fact A", "Body A."), nil)
 	// Merge write.
-	gs.EXPECT().WriteFile("kb/test/merged.md", gomock.Any(), gomock.Any(), gomock.Any()).Return("c2", "b2", nil)
+	gs.EXPECT().WriteFile("agent/test", "kb/test/merged.md", gomock.Any(), gomock.Any(), gomock.Any()).Return("c2", "b2", nil)
 	idx.EXPECT().Upsert(gomock.Any()).Return(nil)
 
 	decisions := []PruneDecision{
@@ -166,7 +166,7 @@ func TestApplyPruneDecisions_NoDoubleDelete(t *testing.T) {
 		},
 	}
 
-	_, err := ApplyPruneDecisions(gs, idx, decisions, merges, "test", func(ProgressEvent) {})
+	_, err := ApplyPruneDecisions(gs, idx, decisions, merges, "test", func(ProgressEvent) {}, "agent/test")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -178,11 +178,11 @@ func TestApplyDistillDecisions_SynthesizeAndRetract(t *testing.T) {
 	idx := NewMockSearchIndex(ctrl)
 
 	// computeWeight reads local .md refs before writing synthesized fact.
-	gs.EXPECT().ReadFile("kb/test/src1.md").Return(factContent("Src 1", "Body 1."), nil)
-	gs.EXPECT().ReadFile("kb/test/src2.md").Return(factContent("Src 2", "Body 2."), nil)
+	gs.EXPECT().ReadFile("agent/test", "kb/test/src1.md").Return(factContent("Src 1", "Body 1."), nil)
+	gs.EXPECT().ReadFile("agent/test", "kb/test/src2.md").Return(factContent("Src 2", "Body 2."), nil)
 	// Synthesized fact write — path gets a UUID filename, so match on prefix.
-	gs.EXPECT().WriteFile(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
-		func(path, content, msg, operation string) (string, string, error) {
+	gs.EXPECT().WriteFile(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
+		func(branch, path, content, msg, operation string) (string, string, error) {
 			if !strings.HasPrefix(path, "kb/test/") || !strings.HasSuffix(path, ".md") {
 				t.Errorf("expected path kb/test/<uuid>.md, got %s", path)
 			}
@@ -202,7 +202,7 @@ func TestApplyDistillDecisions_SynthesizeAndRetract(t *testing.T) {
 	})
 
 	// Retract.
-	gs.EXPECT().DeleteFile("kb/test/old.md", gomock.Any(), gomock.Any()).Return("c2", nil)
+	gs.EXPECT().DeleteFile("agent/test", "kb/test/old.md", gomock.Any(), gomock.Any()).Return("c2", nil)
 	idx.EXPECT().Delete("kb/test/old.md").Return(nil)
 
 	synthesized := []distillFact{
@@ -220,7 +220,7 @@ func TestApplyDistillDecisions_SynthesizeAndRetract(t *testing.T) {
 	retract := []string{"kb/test/old.md"}
 	progress := collectProgress()
 
-	stats, _, err := ApplyDistillDecisions(gs, idx, synthesized, retract, "test", progress.fn)
+	stats, _, err := ApplyDistillDecisions(gs, idx, synthesized, retract, "test", progress.fn, "agent/test")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -240,7 +240,7 @@ func TestApplyDistillDecisions_NoRefs(t *testing.T) {
 	idx := NewMockSearchIndex(ctrl)
 
 	// Upsert handles DERIVED_FROM; no separate call needed.
-	gs.EXPECT().WriteFile(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return("c1", "b1", nil)
+	gs.EXPECT().WriteFile(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return("c1", "b1", nil)
 	idx.EXPECT().Upsert(gomock.Any()).Return(nil)
 
 	synthesized := []distillFact{
@@ -253,7 +253,7 @@ func TestApplyDistillDecisions_NoRefs(t *testing.T) {
 		},
 	}
 
-	stats, _, err := ApplyDistillDecisions(gs, idx, synthesized, nil, "test", func(ProgressEvent) {})
+	stats, _, err := ApplyDistillDecisions(gs, idx, synthesized, nil, "test", func(ProgressEvent) {}, "agent/test")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -280,7 +280,7 @@ func TestApplyDistillRejectsHypothesisType(t *testing.T) {
 	}
 	progress := collectProgress()
 
-	stats, written, err := ApplyDistillDecisions(gs, idx, synthesized, nil, "test", progress.fn)
+	stats, written, err := ApplyDistillDecisions(gs, idx, synthesized, nil, "test", progress.fn, "agent/test")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

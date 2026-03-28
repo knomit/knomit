@@ -37,20 +37,21 @@ type Reviewer struct {
 	embedder       Embedder
 	onProgress     func(ProgressEvent)
 	reflectChecked map[string]bool
+	agentBranch    string
 }
 
 // NewReviewer creates a new review orchestrator.
-func NewReviewer(gs GitStore, idx SearchIndex, reviewIdx PipelineIndex, embedder Embedder, onProgress func(ProgressEvent)) *Reviewer {
+func NewReviewer(gs GitStore, idx SearchIndex, reviewIdx PipelineIndex, embedder Embedder, onProgress func(ProgressEvent), agentBranch string) *Reviewer {
 	if onProgress == nil {
 		onProgress = func(ProgressEvent) {}
 	}
-	return &Reviewer{gs: gs, idx: idx, reviewIdx: reviewIdx, embedder: embedder, onProgress: onProgress, reflectChecked: make(map[string]bool)}
+	return &Reviewer{gs: gs, idx: idx, reviewIdx: reviewIdx, embedder: embedder, onProgress: onProgress, reflectChecked: make(map[string]bool), agentBranch: agentBranch}
 }
 
 // StartSession creates a new review session, identifies dirty facts, clusters
 // them, stores work items, and returns the first item to review.
 func (r *Reviewer) StartSession() (*mcp.ReviewResult, error) {
-	branch := r.gs.Branch()
+	branch := r.agentBranch
 
 	// GC old sessions.
 	if err := r.reviewIdx.GCPipelineSessions("review", branch, 5); err != nil {
@@ -79,7 +80,7 @@ func (r *Reviewer) StartSession() (*mcp.ReviewResult, error) {
 
 	// Dedup pass: merge near-duplicates within each cluster before enqueueing.
 	for i := range clusters {
-		surviving, err := dedupCluster(context.Background(), clusters[i], r.gs, r.idx, 0.92, "review", r.onProgress, r.embedder)
+		surviving, err := dedupCluster(context.Background(), clusters[i], r.gs, r.idx, 0.92, "review", r.onProgress, r.agentBranch, r.embedder)
 		if err != nil {
 			return nil, fmt.Errorf("review: dedup cluster %d: %w", i, err)
 		}
@@ -181,7 +182,7 @@ func (r *Reviewer) ContinueSession(sessionID, response string) (*mcp.ReviewResul
 		if err := validatePrunePaths(result, inputPaths); err != nil {
 			return nil, fmt.Errorf("review: validate prune: %w", err)
 		}
-		if _, err := ApplyPruneDecisions(r.gs, r.idx, result.Decisions, result.Merges, "review", r.onProgress); err != nil {
+		if _, err := ApplyPruneDecisions(r.gs, r.idx, result.Decisions, result.Merges, "review", r.onProgress, r.agentBranch); err != nil {
 			return nil, fmt.Errorf("review: apply prune: %w", err)
 		}
 
@@ -201,7 +202,7 @@ func (r *Reviewer) ContinueSession(sessionID, response string) (*mcp.ReviewResul
 		if err := validateDistillPaths(result, inputPaths); err != nil {
 			return nil, fmt.Errorf("review: validate distill: %w", err)
 		}
-		_, writtenFacts, err := ApplyDistillDecisions(r.gs, r.idx, result.Synthesize, result.Retract, "review", r.onProgress)
+		_, writtenFacts, err := ApplyDistillDecisions(r.gs, r.idx, result.Synthesize, result.Retract, "review", r.onProgress, r.agentBranch)
 		if err != nil {
 			return nil, fmt.Errorf("review: apply distill: %w", err)
 		}
@@ -326,7 +327,7 @@ func (r *Reviewer) dirtyFacts(branch string) ([]factForLLM, error) {
 	}
 
 	// Incremental: only changed facts since watermark.
-	added, modified, _, err := r.gs.DiffFiles(watermark)
+	added, modified, _, err := r.gs.DiffFiles(r.agentBranch, watermark)
 	if err != nil {
 		return nil, fmt.Errorf("diff files: %w", err)
 	}
@@ -336,7 +337,7 @@ func (r *Reviewer) dirtyFacts(branch string) ([]factForLLM, error) {
 		if !strings.HasSuffix(path, ".md") {
 			continue
 		}
-		content, err := r.gs.ReadFile(path)
+		content, err := r.gs.ReadFile(r.agentBranch, path)
 		if err != nil {
 			continue // deleted or unreadable
 		}
@@ -446,7 +447,7 @@ func (r *Reviewer) completeSession(sess *store.PipelineSession) (*mcp.ReviewResu
 		return nil, fmt.Errorf("review: complete session: %w", err)
 	}
 
-	headHash, err := r.gs.HeadCommit()
+	headHash, err := r.gs.HeadCommit(r.agentBranch)
 	if err != nil {
 		log.Warn().Err(err).Msg("review: could not get HEAD for watermark")
 	} else {
@@ -495,7 +496,7 @@ func (r *Reviewer) findHypothesisTransitions(sessionID string) ([]hypothesisTran
 		return nil, err
 	}
 
-	_, modified, deleted, err := r.gs.DiffFiles(watermark)
+	_, modified, deleted, err := r.gs.DiffFiles(r.agentBranch, watermark)
 	if err != nil {
 		return nil, err
 	}
@@ -529,7 +530,7 @@ func (r *Reviewer) findHypothesisTransitions(sessionID string) ([]hypothesisTran
 		if err != nil || oldFact.Type != fact.Hypothesis {
 			continue
 		}
-		newContent, err := r.gs.ReadFile(path)
+		newContent, err := r.gs.ReadFile(r.agentBranch, path)
 		if err != nil {
 			continue
 		}

@@ -58,7 +58,7 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 // When the path parameter is empty, it defaults to ontologyRoot — the
 // configured knowledge-base root — so the UI lands on a meaningful
 // starting directory rather than the repository top level.
-func handleBrowse(ontologyRoot string) http.HandlerFunc {
+func handleBrowse(ontologyRoot, agentBranch string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
 		ri.RLock()
@@ -68,7 +68,7 @@ func handleBrowse(ontologyRoot string) http.HandlerFunc {
 			path = ontologyRoot
 		}
 
-		entries, err := ri.GS.ListDir(path)
+		entries, err := ri.GS.ListDir(agentBranch, path)
 		if err != nil {
 			// Empty repo or missing directory — return empty list, not an error.
 			log.Debug().Err(err).Str("path", path).Msg("browse: directory not found, returning empty")
@@ -124,7 +124,7 @@ func handleBrowse(ontologyRoot string) http.HandlerFunc {
 }
 
 // handleFact handles GET /api/v1/{repo}/fact?path=<path>&commit=<hash>
-func handleFact() http.HandlerFunc {
+func handleFact(agentBranch string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
 		ri.RLock()
@@ -145,7 +145,7 @@ func handleFact() http.HandlerFunc {
 			if err != nil {
 				// File may have been deleted in this commit (e.g. retract).
 				// Fall back to the last commit where the file existed.
-				content, fromCommit, err = ri.GS.ReadFileLastCommit(path, commitHash)
+				content, fromCommit, err = ri.GS.ReadFileLastCommit(agentBranch, path, commitHash)
 			} else {
 				fromCommit = commitHash
 			}
@@ -164,7 +164,7 @@ func handleFact() http.HandlerFunc {
 				}
 			}
 		} else {
-			content, err = ri.GS.ReadFile(path)
+			content, err = ri.GS.ReadFile(agentBranch, path)
 		}
 		if err != nil {
 			log.Debug().Err(err).Str("path", path).Msg("fact not found")
@@ -242,7 +242,7 @@ func handleFact() http.HandlerFunc {
 // handleFactWrite handles PUT /api/v1/{repo}/fact — writes raw fact file content.
 // Request body: JSON {"path": "...", "content": "..."}
 // Response: the re-parsed fact JSON (or parse error if content is still invalid).
-func handleFactWrite() http.HandlerFunc {
+func handleFactWrite(agentBranch string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
 		ri.RLock()
@@ -262,7 +262,7 @@ func handleFactWrite() http.HandlerFunc {
 		}
 
 		msg := "edit: update " + req.Path + " via UI"
-		if _, _, err := ri.GS.WriteFile(req.Path, req.Content, msg, "update"); err != nil {
+		if _, _, err := ri.GS.WriteFile(agentBranch, req.Path, req.Content, msg, "update"); err != nil {
 			writeError(w, http.StatusInternalServerError, fmt.Sprintf("write failed: %v", err))
 			return
 		}
@@ -284,7 +284,7 @@ func handleFactWrite() http.HandlerFunc {
 
 // handleFactRetract handles DELETE /api/v1/{repo}/fact?path=<path>.
 // Deletes the fact file and commits with operation "retract".
-func handleFactRetract() http.HandlerFunc {
+func handleFactRetract(agentBranch string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
 		ri.RLock()
@@ -297,7 +297,7 @@ func handleFactRetract() http.HandlerFunc {
 		}
 
 		msg := "manual-review: retract " + path
-		commitHash, err := ri.GS.DeleteFile(path, msg, "retract")
+		commitHash, err := ri.GS.DeleteFile(agentBranch, path, msg, "retract")
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, fmt.Sprintf("retract failed: %v", err))
 			return
@@ -462,7 +462,7 @@ func handleSearch() http.HandlerFunc {
 }
 
 // handleHistoryPaginated handles GET /api/v1/{repo}/history?path=<path>&limit=50&after=<cursor>
-func handleHistoryPaginated() http.HandlerFunc {
+func handleHistoryPaginated(agentBranch string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
 		ri.RLock()
@@ -483,7 +483,7 @@ func handleHistoryPaginated() http.HandlerFunc {
 		from := r.URL.Query().Get("from")
 		before := r.URL.Query().Get("before")
 
-		entries, next, prev, err := ri.GS.LogPaginated(path, limit, after, from, before)
+		entries, next, prev, err := ri.GS.LogPaginated(agentBranch, path, limit, after, from, before)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, fmt.Sprintf("log error: %v", err))
 			return
@@ -504,7 +504,7 @@ func handleHistoryPaginated() http.HandlerFunc {
 }
 
 // handleCommitDetail handles GET /api/v1/{repo}/commit?hash=<hash>
-func handleCommitDetail() http.HandlerFunc {
+func handleCommitDetail(agentBranch string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
 		ri.RLock()
@@ -546,7 +546,7 @@ func handleCommitDetail() http.HandlerFunc {
 				}
 			}
 			// Last resort for deleted files: find the last commit where the file existed.
-			if content, _, err := ri.GS.ReadFileLastCommit(f.Path, hash); err == nil && content != "" {
+			if content, _, err := ri.GS.ReadFileLastCommit(agentBranch, f.Path, hash); err == nil && content != "" {
 				if parsed, perr := mcp.ParseFact(f.Path, content); perr == nil {
 					files[i].Title = parsed.Title
 				}
@@ -565,12 +565,12 @@ func handleCommitDetail() http.HandlerFunc {
 
 // handleActivity handles GET /api/v1/{repo}/activity?path=<path>.
 // Returns commit-activity metrics (last change, total commits, 7d/30d/90d counts).
-func handleActivity() http.HandlerFunc {
+func handleActivity(agentBranch string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
 		ri.RLock()
 		defer ri.RUnlock()
-		result, err := ri.GS.Activity(r.URL.Query().Get("path"))
+		result, err := ri.GS.Activity(agentBranch, r.URL.Query().Get("path"))
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, fmt.Sprintf("activity error: %v", err))
 			return
@@ -624,18 +624,18 @@ func handleStats() http.HandlerFunc {
 }
 
 // handleStatus handles GET /api/v1/{repo}/status
-func handleStatus(embeddingsEnabled bool, ontologyRoot string) http.HandlerFunc {
+func handleStatus(embeddingsEnabled bool, ontologyRoot, agentBranch string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
 		ri.RLock()
 		defer ri.RUnlock()
-		head, err := ri.GS.HeadCommit()
+		head, err := ri.GS.HeadCommit(agentBranch)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, fmt.Sprintf("head commit error: %v", err))
 			return
 		}
 
-		branch := ri.GS.Branch()
+		branch := agentBranch
 
 		indexCommit := ""
 		if ri.Idx != nil {

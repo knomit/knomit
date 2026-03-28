@@ -18,8 +18,8 @@ func TestHypothesizeFirstCallReturnsSynthesisFacts(t *testing.T) {
 	idx := NewMockSearchIndex(ctrl)
 	pIdx := NewMockPipelineIndex(ctrl)
 
-	gs.EXPECT().Branch().Return("machine/test").AnyTimes()
-	gs.EXPECT().HeadCommit().Return("abc123", nil).AnyTimes()
+	// branch from handler arg
+	gs.EXPECT().HeadCommit(testAgentBranch).Return("abc123", nil).AnyTimes()
 
 	// No watermark → first run.
 	pIdx.EXPECT().GCPipelineSessions("hypothesize", "machine/test", 5).Return(nil)
@@ -75,7 +75,7 @@ func TestHypothesizeFirstCallReturnsSynthesisFacts(t *testing.T) {
 	pIdx.EXPECT().NextPipelineWorkItem("sess-1").Return(workItem, nil)
 	pIdx.EXPECT().PipelineWorkItemStats("sess-1").Return(0, 1, nil)
 
-	handler := HypothesizeHandler(gs, idx, pIdx, "kb")
+	handler := HypothesizeHandler(gs, idx, pIdx, "kb", testAgentBranch)
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{}
 
@@ -116,8 +116,8 @@ func TestHypothesizeEmptySession(t *testing.T) {
 	idx := NewMockSearchIndex(ctrl)
 	pIdx := NewMockPipelineIndex(ctrl)
 
-	gs.EXPECT().Branch().Return("machine/test").AnyTimes()
-	gs.EXPECT().HeadCommit().Return("abc123", nil).AnyTimes()
+	// branch from handler arg
+	gs.EXPECT().HeadCommit(testAgentBranch).Return("abc123", nil).AnyTimes()
 
 	pIdx.EXPECT().GCPipelineSessions("hypothesize", "machine/test", 5).Return(nil)
 	pIdx.EXPECT().GetPipelineWatermark("hypothesize", "machine/test").Return("", nil)
@@ -131,7 +131,7 @@ func TestHypothesizeEmptySession(t *testing.T) {
 	// Should advance watermark.
 	pIdx.EXPECT().SetPipelineWatermark("hypothesize", "machine/test", "abc123").Return(nil)
 
-	handler := HypothesizeHandler(gs, idx, pIdx, "kb")
+	handler := HypothesizeHandler(gs, idx, pIdx, "kb", testAgentBranch)
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{}
 
@@ -156,8 +156,8 @@ func TestHypothesizeContinueSession(t *testing.T) {
 	idx := NewMockSearchIndex(ctrl)
 	pIdx := NewMockPipelineIndex(ctrl)
 
-	gs.EXPECT().Branch().Return("machine/test").AnyTimes()
-	gs.EXPECT().HeadCommit().Return("def456", nil).AnyTimes()
+	// branch from handler arg
+	gs.EXPECT().HeadCommit(testAgentBranch).Return("def456", nil).AnyTimes()
 
 	// Step 1: Start a session with 2 facts.
 	pIdx.EXPECT().GCPipelineSessions("hypothesize", "machine/test", 5).Return(nil)
@@ -204,7 +204,7 @@ func TestHypothesizeContinueSession(t *testing.T) {
 	pIdx.EXPECT().NextPipelineWorkItem("sess-2").Return(workItemA, nil)
 	pIdx.EXPECT().PipelineWorkItemStats("sess-2").Return(0, 2, nil)
 
-	handler := HypothesizeHandler(gs, idx, pIdx, "kb")
+	handler := HypothesizeHandler(gs, idx, pIdx, "kb", testAgentBranch)
 	startReq := mcpgo.CallToolRequest{}
 	startReq.Params.Arguments = map[string]interface{}{}
 	startResult, err := handler(context.Background(), startReq)
@@ -267,7 +267,7 @@ func TestHypothesizeContinueSessionNotFound(t *testing.T) {
 
 	pIdx.EXPECT().GetPipelineSession("nonexistent").Return(nil, nil)
 
-	handler := HypothesizeHandler(gs, idx, pIdx, "kb")
+	handler := HypothesizeHandler(gs, idx, pIdx, "kb", testAgentBranch)
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
 		"session_id": "nonexistent",
@@ -288,14 +288,14 @@ func TestHypothesizeIncrementalWithWatermark(t *testing.T) {
 	idx := NewMockSearchIndex(ctrl)
 	pIdx := NewMockPipelineIndex(ctrl)
 
-	gs.EXPECT().Branch().Return("machine/test").AnyTimes()
-	gs.EXPECT().HeadCommit().Return("def456", nil).AnyTimes()
+	// branch from handler arg
+	gs.EXPECT().HeadCommit(testAgentBranch).Return("def456", nil).AnyTimes()
 
 	pIdx.EXPECT().GCPipelineSessions("hypothesize", "machine/test", 5).Return(nil)
 	pIdx.EXPECT().GetPipelineWatermark("hypothesize", "machine/test").Return("abc123", nil)
 
 	// DiffFiles returns one added synthesis .md and one non-.md file.
-	gs.EXPECT().DiffFiles("abc123").Return(
+	gs.EXPECT().DiffFiles(testAgentBranch, "abc123").Return(
 		[]string{"kb/tech/new-synth.md", "kb/tech/data.json"},
 		[]string{},
 		[]string{},
@@ -314,7 +314,7 @@ refs: []
 
 Synthesized insight about channels.
 `
-	gs.EXPECT().ReadFile("kb/tech/new-synth.md").Return(synthContent, nil)
+	gs.EXPECT().ReadFile(testAgentBranch, "kb/tech/new-synth.md").Return(synthContent, nil)
 	// .json file should be skipped (not .md).
 
 	sess := &store.PipelineSession{ID: "sess-3", Status: "active"}
@@ -331,7 +331,7 @@ Synthesized insight about channels.
 	pIdx.EXPECT().NextPipelineWorkItem("sess-3").Return(workItem, nil)
 	pIdx.EXPECT().PipelineWorkItemStats("sess-3").Return(0, 1, nil)
 
-	handler := HypothesizeHandler(gs, idx, pIdx, "kb")
+	handler := HypothesizeHandler(gs, idx, pIdx, "kb", testAgentBranch)
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{}
 
@@ -360,7 +360,7 @@ func TestHypothesizeContinueExpiredSession(t *testing.T) {
 	sess := &store.PipelineSession{ID: "sess-expired", Status: "completed"}
 	pIdx.EXPECT().GetPipelineSession("sess-expired").Return(sess, nil)
 
-	handler := HypothesizeHandler(gs, idx, pIdx, "kb")
+	handler := HypothesizeHandler(gs, idx, pIdx, "kb", testAgentBranch)
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
 		"session_id": "sess-expired",
@@ -381,8 +381,8 @@ func TestHypothesizeContinueNilCurrentItem(t *testing.T) {
 	idx := NewMockSearchIndex(ctrl)
 	pIdx := NewMockPipelineIndex(ctrl)
 
-	gs.EXPECT().Branch().Return("machine/test").AnyTimes()
-	gs.EXPECT().HeadCommit().Return("abc123", nil).AnyTimes()
+	// branch from handler arg
+	gs.EXPECT().HeadCommit(testAgentBranch).Return("abc123", nil).AnyTimes()
 
 	sess := &store.PipelineSession{ID: "sess-nil", Status: "active"}
 	pIdx.EXPECT().GetPipelineSession("sess-nil").Return(sess, nil)
@@ -395,7 +395,7 @@ func TestHypothesizeContinueNilCurrentItem(t *testing.T) {
 	pIdx.EXPECT().CompletePipelineSession("sess-nil").Return(nil)
 	pIdx.EXPECT().SetPipelineWatermark("hypothesize", "machine/test", "abc123").Return(nil)
 
-	handler := HypothesizeHandler(gs, idx, pIdx, "kb")
+	handler := HypothesizeHandler(gs, idx, pIdx, "kb", testAgentBranch)
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
 		"session_id": "sess-nil",
@@ -423,7 +423,7 @@ func TestHypothesizeStartSearchError(t *testing.T) {
 	idx := NewMockSearchIndex(ctrl)
 	pIdx := NewMockPipelineIndex(ctrl)
 
-	gs.EXPECT().Branch().Return("machine/test").AnyTimes()
+	// branch from handler arg
 
 	pIdx.EXPECT().GCPipelineSessions("hypothesize", "machine/test", 5).Return(nil)
 	pIdx.EXPECT().GetPipelineWatermark("hypothesize", "machine/test").Return("", nil)
@@ -434,7 +434,7 @@ func TestHypothesizeStartSearchError(t *testing.T) {
 		Limit:        100000,
 	}).Return(nil, fmt.Errorf("database locked"))
 
-	handler := HypothesizeHandler(gs, idx, pIdx, "kb")
+	handler := HypothesizeHandler(gs, idx, pIdx, "kb", testAgentBranch)
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{}
 
@@ -453,8 +453,8 @@ func TestHypothesizeSessionCompletes(t *testing.T) {
 	idx := NewMockSearchIndex(ctrl)
 	pIdx := NewMockPipelineIndex(ctrl)
 
-	gs.EXPECT().Branch().Return("machine/test").AnyTimes()
-	gs.EXPECT().HeadCommit().Return("final789", nil).AnyTimes()
+	// branch from handler arg
+	gs.EXPECT().HeadCommit(testAgentBranch).Return("final789", nil).AnyTimes()
 
 	sess := &store.PipelineSession{ID: "sess-done", Status: "active"}
 	pIdx.EXPECT().GetPipelineSession("sess-done").Return(sess, nil)
@@ -469,7 +469,7 @@ func TestHypothesizeSessionCompletes(t *testing.T) {
 	pIdx.EXPECT().CompletePipelineSession("sess-done").Return(nil)
 	pIdx.EXPECT().SetPipelineWatermark("hypothesize", "machine/test", "final789").Return(nil)
 
-	handler := HypothesizeHandler(gs, idx, pIdx, "kb")
+	handler := HypothesizeHandler(gs, idx, pIdx, "kb", testAgentBranch)
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
 		"session_id": "sess-done",

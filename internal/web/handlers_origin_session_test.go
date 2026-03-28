@@ -217,11 +217,12 @@ func newTestRouterWithGitStore(t *testing.T, gs *git.Store) http.Handler {
 	hub := repos.NewTaskHub(context.Background())
 	rm := repos.New(context.Background(), repos.Deps{})
 	rm.Set("knomit", &repos.RepoInstance{
-		Name: "knomit",
-		GS:   gs,
-		Hub:  hub,
+		Name:        "knomit",
+		AgentBranch: testAgentBranch,
+		GS:          gs,
+		Hub:         hub,
 	})
-	return NewRouter(rm, nil, false, "kb")
+	return NewRouter(rm, nil, false, "kb", testAgentBranch)
 }
 
 // parseSSEEvents parses the SSE response body into a slice of JSON objects.
@@ -255,13 +256,13 @@ func TestTestConnectivity_SuccessfulClone(t *testing.T) {
 	}
 
 	// Write a fact so local has content.
-	if _, _, err := localStore.WriteFile("kb/local-fact.md", "# Local\n", "add local", "learn"); err != nil {
+	if _, _, err := localStore.WriteFile(testAgentBranch, "kb/local-fact.md", "# Local\n", "add local", "learn"); err != nil {
 		t.Fatal(err)
 	}
 
 	// Create a "remote" knomit store with shared history by cloning local.
 	// First, advance main to HEAD on local so clone can find it.
-	head, err := localStore.HeadCommit()
+	head, err := localStore.HeadCommit(testAgentBranch)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -277,10 +278,10 @@ func TestTestConnectivity_SuccessfulClone(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := remoteStore.WriteFile("kb/remote-fact.md", "# Remote\n", "add remote", "learn"); err != nil {
+	if _, _, err := remoteStore.WriteFile("agent/remote", "kb/remote-fact.md", "# Remote\n", "add remote", "learn"); err != nil {
 		t.Fatal(err)
 	}
-	remoteHead, err := remoteStore.HeadCommit()
+	remoteHead, err := remoteStore.HeadCommit("agent/remote")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -416,12 +417,13 @@ func newTestRouterWithSvcAndGitStore(t *testing.T) (http.Handler, *git.Store, *s
 	hub := repos.NewTaskHub(context.Background())
 	rm := repos.New(context.Background(), repos.Deps{})
 	rm.Set("knomit", &repos.RepoInstance{
-		Name: "knomit",
-		GS:   gs,
-		Svc:  svc,
-		Hub:  hub,
+		Name:        "knomit",
+		AgentBranch: testAgentBranch,
+		GS:          gs,
+		Svc:         svc,
+		Hub:         hub,
 	})
-	return NewRouter(rm, nil, false, "kb"), gs, svc
+	return NewRouter(rm, nil, false, "kb", testAgentBranch), gs, svc
 }
 
 // insertFact inserts a row into the facts table for testing.
@@ -441,7 +443,7 @@ func insertFact(t *testing.T, db *sql.DB, path, blobHash, commitHash string) {
 // content must be a valid knomit fact (YAML frontmatter + # Title body).
 func writeFact(t *testing.T, gs *git.Store, db *sql.DB, path, content string) {
 	t.Helper()
-	commitHash, blobHash, err := gs.WriteFile(path, content, "add "+path, "learn")
+	commitHash, blobHash, err := gs.WriteFile(testAgentBranch, path, content, "add "+path, "learn")
 	if err != nil {
 		t.Fatalf("WriteFile %q: %v", path, err)
 	}
@@ -472,13 +474,13 @@ func TestPreview_ComparesLocalAndRemote(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := remoteStore.WriteFile("kb/shared.md", sharedContent, "add shared", "learn"); err != nil {
+	if _, _, err := remoteStore.WriteFile("agent/remote", "kb/shared.md", sharedContent, "add shared", "learn"); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := remoteStore.WriteFile("kb/remote-only.md", "---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# Remote Only\n\nContent.\n", "add remote-only", "learn"); err != nil {
+	if _, _, err := remoteStore.WriteFile("agent/remote", "kb/remote-only.md", "---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# Remote Only\n\nContent.\n", "add remote-only", "learn"); err != nil {
 		t.Fatal(err)
 	}
-	remoteHead, err := remoteStore.HeadCommit()
+	remoteHead, err := remoteStore.HeadCommit("agent/remote")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -647,12 +649,12 @@ func setupTestedSession(t *testing.T) (http.Handler, string) {
 		t.Fatal(err)
 	}
 	remoteFact := "---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# Remote Fact\n\nContent.\n"
-	if _, _, err := remoteStore.WriteFile("kb/remote-fact.md", remoteFact, "add remote", "learn"); err != nil {
+	if _, _, err := remoteStore.WriteFile("agent/remote", "kb/remote-fact.md", remoteFact, "add remote", "learn"); err != nil {
 		t.Fatal(err)
 	}
 
 	// Set up main branch on remote (needed by Replay to create agent branch).
-	remoteHead, err := remoteStore.HeadCommit()
+	remoteHead, err := remoteStore.HeadCommit("agent/remote")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -674,7 +676,7 @@ func setupTestedSession(t *testing.T) (http.Handler, string) {
 		Svc:  svc,
 		Hub:  hub,
 	})
-	router := NewRouterWithSessionManager(rm, nil, false, "kb", sm)
+	router := NewRouterWithSessionManager(rm, nil, false, "kb", testAgentBranch, sm)
 
 	// Create session manually and inject it into StateTested with disjoint history.
 	sess, err := sm.Create("knomit", "inmem:///test-apply", AuthConfig{})
@@ -897,7 +899,7 @@ func setupAppliedSession(t *testing.T) (http.Handler, string, *repos.Manager, *S
 		t.Fatal(err)
 	}
 	remoteFact := "---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# Remote Fact\n\nContent.\n"
-	if _, _, err := remoteStore.WriteFile("kb/remote-fact.md", remoteFact, "add remote", "learn"); err != nil {
+	if _, _, err := remoteStore.WriteFile("agent/remote", "kb/remote-fact.md", remoteFact, "add remote", "learn"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -926,7 +928,7 @@ func setupAppliedSession(t *testing.T) (http.Handler, string, *repos.Manager, *S
 		},
 	}
 	rm.Set("knomit", ri)
-	router := NewRouterWithSessionManager(rm, nil, false, "kb", sm)
+	router := NewRouterWithSessionManager(rm, nil, false, "kb", testAgentBranch, sm)
 
 	// Create session and set it to StateApplied.
 	sess, err := sm.Create("knomit", "inmem:///test-commit", AuthConfig{
@@ -1059,7 +1061,7 @@ func TestCommit_WrongState(t *testing.T) {
 		Svc:  svc,
 		Hub:  hub,
 	})
-	router := NewRouterWithSessionManager(rm, nil, false, "kb", sm)
+	router := NewRouterWithSessionManager(rm, nil, false, "kb", testAgentBranch, sm)
 
 	// Create session in StateTested (not applied).
 	sess, err := sm.Create("knomit", "inmem:///test-wrong-state", AuthConfig{})
@@ -1190,7 +1192,7 @@ func TestApply_NoRemoteStore(t *testing.T) {
 		Svc:  svc,
 		Hub:  hub,
 	})
-	router := NewRouterWithSessionManager(rm, nil, false, "kb", sm)
+	router := NewRouterWithSessionManager(rm, nil, false, "kb", testAgentBranch, sm)
 
 	sess, err := sm.Create("knomit", "inmem:///test-no-remote", AuthConfig{})
 	if err != nil {
@@ -1245,7 +1247,7 @@ func TestApply_SharedHistory(t *testing.T) {
 		Svc:  svc,
 		Hub:  hub,
 	})
-	router := NewRouterWithSessionManager(rm, nil, false, "kb", sm)
+	router := NewRouterWithSessionManager(rm, nil, false, "kb", testAgentBranch, sm)
 
 	sess, err := sm.Create("knomit", "inmem:///test-shared", AuthConfig{})
 	if err != nil {
@@ -1326,7 +1328,7 @@ func TestCommit_NotApplied(t *testing.T) {
 		Svc:  svc,
 		Hub:  hub,
 	})
-	router := NewRouterWithSessionManager(rm, nil, false, "kb", sm)
+	router := NewRouterWithSessionManager(rm, nil, false, "kb", testAgentBranch, sm)
 
 	sess, err := sm.Create("knomit", "inmem:///test-not-applied", AuthConfig{})
 	if err != nil {

@@ -10,8 +10,8 @@ import (
 )
 
 // rebuildFacts bulk-inserts facts via SQL JOIN with knomit_parse_fact().
-func (idx *Index) rebuildFacts(git GitReader, head string, progress RebuildProgress) (int, error) {
-	paths, hashes, err := git.ListAllWithHash()
+func (idx *Index) rebuildFacts(git GitReader, branch, head string, progress RebuildProgress) (int, error) {
+	paths, hashes, err := git.ListAllWithHash(branch)
 	if err != nil {
 		return 0, fmt.Errorf("rebuildFacts: list all: %w", err)
 	}

@@ -148,7 +148,7 @@ func (m *Manager) Boot() error {
 	}
 
 	// Load ontology from knomit repo's git store.
-	ontologyYAML, readErr := knomitRI.GS.ReadFile("domains/ontology.yaml")
+	ontologyYAML, readErr := knomitRI.GS.ReadFile(m.deps.AgentBranch, "domains/ontology.yaml")
 	if readErr != nil {
 		log.Warn().Msg("domains/ontology.yaml not found, using default ontology")
 		m.ontology = fact.DefaultOntology()
@@ -259,10 +259,10 @@ func (m *Manager) openOne(name, dbPath string, isDefault bool) (*RepoInstance, e
 
 	gs.SetSigner(signer)
 
-	// Switch to the expected agent branch if the repo is on a different one.
-	if agentBranch != "" && gs.Branch() != agentBranch {
-		if err := gs.SwitchBranch(agentBranch); err != nil {
-			log.Warn().Err(err).Str("repo", name).Msg("branch switch failed")
+	// Ensure the expected agent branch exists.
+	if agentBranch != "" {
+		if err := gs.CreateBranch(agentBranch, agentBranch); err != nil {
+			log.Warn().Err(err).Str("repo", name).Msg("branch create/ensure failed")
 		}
 	}
 
@@ -279,7 +279,7 @@ func (m *Manager) openOne(name, dbPath string, isDefault bool) (*RepoInstance, e
 	}
 
 	// Initial index sync.
-	if err := idx.Sync(gs, gs.Branch()); err != nil {
+	if err := idx.Sync(gs, agentBranch); err != nil {
 		log.Warn().Err(err).Str("repo", name).Msg("initial index sync failed")
 	}
 
@@ -288,9 +288,9 @@ func (m *Manager) openOne(name, dbPath string, isDefault bool) (*RepoInstance, e
 	// fresh init, branch switches (new machine / key rotation), and any other
 	// scenario where an existing repo has no watermark for the current branch.
 	for _, tool := range []string{"review", "hypothesize"} {
-		if wm, _ := idx.GetPipelineWatermark(tool, gs.Branch()); wm == "" {
-			if head, err := gs.HeadCommit(); err == nil {
-				if err := idx.SetPipelineWatermark(tool, gs.Branch(), head); err != nil {
+		if wm, _ := idx.GetPipelineWatermark(tool, agentBranch); wm == "" {
+			if head, err := gs.HeadCommit(agentBranch); err == nil {
+				if err := idx.SetPipelineWatermark(tool, agentBranch, head); err != nil {
 					log.Warn().Err(err).Str("tool", tool).Msg("pipeline watermark: initial set failed")
 				}
 			}
@@ -312,12 +312,12 @@ func (m *Manager) openOne(name, dbPath string, isDefault bool) (*RepoInstance, e
 		if !ok {
 			return
 		}
-		if err := currentSvc.Index().Sync(currentGS, currentGS.Branch()); err != nil {
+		if err := currentSvc.Index().Sync(currentGS, agentBranch); err != nil {
 			log.Warn().Err(err).Str("repo", name).Msg("observer sync failed")
 		}
 		hub.BroadcastStatus(hash)
 	})
-	gs.SetOnCommit(obs.Notify)
+	gs.SetOnCommit(func(_, hash string) { obs.Notify(hash) })
 
 	// Background remote sync + push goroutines.
 	syncCtx, syncCancel := context.WithCancel(ctx)
@@ -336,20 +336,21 @@ func (m *Manager) openOne(name, dbPath string, isDefault bool) (*RepoInstance, e
 			log.Warn().Err(err).Str("repo", name).Msg("remote: configure failed")
 		} else {
 			syncWg.Add(2)
-			go runSyncLoop(syncCtx, &syncWg, gs, svc, hub, remote, name)
-			go runPushLoop(syncCtx, &syncWg, gs, svc, hub, remote, name)
+			go runSyncLoop(syncCtx, &syncWg, gs, svc, hub, remote, name, agentBranch)
+			go runPushLoop(syncCtx, &syncWg, gs, svc, hub, remote, name, agentBranch)
 		}
 	}
 
 	ri = &RepoInstance{
-		Name:       name,
-		DBPath:     dbPath,
-		GS:         gs,
-		Svc:        svc,
-		Idx:        idx,
-		Hub:        hub,
-		SyncCancel: syncCancel,
-		SyncWg:     &syncWg,
+		Name:        name,
+		DBPath:      dbPath,
+		AgentBranch: agentBranch,
+		GS:          gs,
+		Svc:         svc,
+		Idx:         idx,
+		Hub:         hub,
+		SyncCancel:  syncCancel,
+		SyncWg:      &syncWg,
 	}
 	ri.StartSync = func(remoteURL string) error {
 		// Use ri.GS and ri.Svc (not captured gs/svc) so that after SwapStore
@@ -388,11 +389,11 @@ func (m *Manager) openOne(name, dbPath string, isDefault bool) (*RepoInstance, e
 
 		// Re-register the observer on the current git store so local writes
 		// trigger index sync after a SwapStore replaced ri.GS.
-		currentGS.SetOnCommit(obs.Notify)
+		currentGS.SetOnCommit(func(_, hash string) { obs.Notify(hash) })
 
 		syncWg.Add(2)
-		go runSyncLoop(syncCtx, &syncWg, currentGS, currentSvc, hub, remote, name)
-		go runPushLoop(syncCtx, &syncWg, currentGS, currentSvc, hub, remote, name)
+		go runSyncLoop(syncCtx, &syncWg, currentGS, currentSvc, hub, remote, name, agentBranch)
+		go runPushLoop(syncCtx, &syncWg, currentGS, currentSvc, hub, remote, name, agentBranch)
 		return nil
 	}
 
@@ -430,22 +431,23 @@ func (m *Manager) SetupMCP(ri *RepoInstance) {
 	embedder := m.deps.Embedder
 	llmAdapter := m.deps.LLM
 
-	reviewer := synthesize.NewReviewer(gs, idx, idx, embedder, nil)
+	agentBranch := m.deps.AgentBranch
+	reviewer := synthesize.NewReviewer(gs, idx, idx, embedder, nil, agentBranch)
 	profiles := []string{"code", "chat", "generic"}
 	mcpHandlers := make(map[string]http.Handler, len(profiles))
 	for _, p := range profiles {
 		var mcpSrv *mcpserver.MCPServer
 		if embedder != nil {
-			mcpSrv = mcp.NewServer(gs, idx, idx, idx, reviewer, p, ontologyRoot, m.ontology, embedder)
+			mcpSrv = mcp.NewServer(gs, idx, idx, idx, reviewer, p, ontologyRoot, m.ontology, agentBranch, embedder)
 		} else {
-			mcpSrv = mcp.NewServer(gs, idx, idx, idx, reviewer, p, ontologyRoot, m.ontology)
+			mcpSrv = mcp.NewServer(gs, idx, idx, idx, reviewer, p, ontologyRoot, m.ontology, agentBranch)
 		}
 		mcpHandlers[p] = mcpserver.NewStreamableHTTPServer(mcpSrv)
 	}
 	ri.MCPHandlers = mcpHandlers
 
 	if llmAdapter != nil {
-		synthReviewer := synthesize.NewReviewer(gs, idx, idx, embedder, nil)
+		synthReviewer := synthesize.NewReviewer(gs, idx, idx, embedder, nil, agentBranch)
 		ri.SynthDeps = &SynthDeps{
 			GS:       gs,
 			Idx:      idx,

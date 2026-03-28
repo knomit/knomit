@@ -36,7 +36,7 @@ func TestQueryReturnsResults(t *testing.T) {
 		},
 	}, nil)
 
-	handler := QueryHandler(gs, idx)
+	handler := QueryHandler(gs, idx, testAgentBranch)
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
@@ -70,7 +70,7 @@ func TestQueryRequiresFilter(t *testing.T) {
 
 
 
-	handler := QueryHandler(gs, idx)
+	handler := QueryHandler(gs, idx, testAgentBranch)
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{}
@@ -93,7 +93,7 @@ func TestQueryEmptyResults(t *testing.T) {
 
 	idx.EXPECT().Search(gomock.Any()).Return(nil, nil)
 
-	handler := QueryHandler(gs, idx)
+	handler := QueryHandler(gs, idx, testAgentBranch)
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
@@ -149,7 +149,7 @@ func TestQueryDomainFilter(t *testing.T) {
 		return []SearchResult{r}, nil
 	})
 
-	handler := QueryHandler(gs, idx)
+	handler := QueryHandler(gs, idx, testAgentBranch)
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
@@ -185,7 +185,7 @@ func TestQueryEntityFilter(t *testing.T) {
 		return []SearchResult{r}, nil
 	})
 
-	handler := QueryHandler(gs, idx)
+	handler := QueryHandler(gs, idx, testAgentBranch)
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
@@ -219,7 +219,7 @@ func TestQueryPathPrefixFilter(t *testing.T) {
 		return []SearchResult{testSearchResult("general/ops/deploy.md", "Deploy", "body")}, nil
 	})
 
-	handler := QueryHandler(gs, idx)
+	handler := QueryHandler(gs, idx, testAgentBranch)
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
@@ -264,7 +264,7 @@ func TestQueryFrontmatterIncludesEvidenceWeight(t *testing.T) {
 		},
 	}, nil)
 
-	handler := QueryHandler(gs, idx)
+	handler := QueryHandler(gs, idx, testAgentBranch)
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{"text": "ew"}
 
@@ -319,7 +319,7 @@ func TestQueryMinConfidenceFilter(t *testing.T) {
 		return []SearchResult{r}, nil
 	})
 
-	handler := QueryHandler(gs, idx)
+	handler := QueryHandler(gs, idx, testAgentBranch)
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{

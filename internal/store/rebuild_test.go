@@ -77,7 +77,7 @@ func setupNFacts(t *testing.T, n int) (*Service, *git.Store) {
 			i, i, i,
 		)
 	}
-	if _, _, err := gs.BatchWrite(files, "add bench facts", "learn"); err != nil {
+	if _, _, err := gs.BatchWrite("agent/test", files, "add bench facts", "learn"); err != nil {
 		t.Fatal(err)
 	}
 	if err := svc.Index().Sync(gs, "agent/test"); err != nil {
@@ -114,7 +114,7 @@ func setupRebuildStore(t *testing.T, facts map[string]string) (*Service, *git.St
 	}
 
 	for path, content := range facts {
-		if _, _, err := gs.WriteFile(path, content, "add "+path, "learn"); err != nil {
+		if _, _, err := gs.WriteFile("agent/test", path, content, "add "+path, "learn"); err != nil {
 			t.Fatalf("WriteFile %s: %v", path, err)
 		}
 	}
@@ -266,13 +266,13 @@ func TestRebuildFacts_CommitLogJoin(t *testing.T) {
 	factV2 := "---\ntype: observation\ndomain: [testing]\nconfidence: 0.9\nsources: 2\nentities: [knomit]\nrefs: []\n---\n# Evolving Fact\n\nVersion 2 with updates.\n"
 
 	// Write v1.
-	commitV1, _, err := gs.WriteFile("kb/evolving.md", factV1, "add evolving v1", "learn")
+	commitV1, _, err := gs.WriteFile("agent/test", "kb/evolving.md", factV1, "add evolving v1", "learn")
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// Write v2 to same path — creates a second commit touching this file.
-	commitV2, _, err := gs.WriteFile("kb/evolving.md", factV2, "update evolving v2", "learn")
+	commitV2, _, err := gs.WriteFile("agent/test", "kb/evolving.md", factV2, "update evolving v2", "learn")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -364,7 +364,7 @@ func BenchmarkRebuild(b *testing.B) {
 	// Write 50 facts.
 	for i := 0; i < 50; i++ {
 		content := fmt.Sprintf("---\ntype: observation\ndomain: [bench]\nconfidence: 0.9\nsources: 1\nentities: [item%d]\nrefs: []\n---\n# Benchmark Fact %d\n\nBody content for fact number %d.\n", i, i, i)
-		if _, _, err := gs.WriteFile(fmt.Sprintf("kb/bench/fact-%03d.md", i), content, fmt.Sprintf("add fact %d", i), "learn"); err != nil {
+		if _, _, err := gs.WriteFile("agent/test", fmt.Sprintf("kb/bench/fact-%03d.md", i), content, fmt.Sprintf("add fact %d", i), "learn"); err != nil {
 			b.Fatal(err)
 		}
 	}
@@ -412,7 +412,7 @@ func TestRebuildEmbeddings_ChunkedProcessing(t *testing.T) {
 			"---\ntype: observation\ndomain: [chunked]\nconfidence: 0.9\nsources: 1\nentities: [item%d]\nrefs: []\n---\n# Chunked Fact %d\n\nBody for fact number %d.\n",
 			i, i, i,
 		)
-		if _, _, err := gs.WriteFile(fmt.Sprintf("kb/fact-%03d.md", i), content, fmt.Sprintf("add fact %d", i), "learn"); err != nil {
+		if _, _, err := gs.WriteFile("agent/test", fmt.Sprintf("kb/fact-%03d.md", i), content, fmt.Sprintf("add fact %d", i), "learn"); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -719,7 +719,7 @@ func BenchmarkRebuildEmbeddings(b *testing.B) {
 					i, i, i,
 				)
 			}
-			if _, _, err := gs.BatchWrite(files, "add bench facts", "learn"); err != nil {
+			if _, _, err := gs.BatchWrite("agent/test", files, "add bench facts", "learn"); err != nil {
 				b.Fatal(err)
 			}
 			if err := svc.Index().Sync(gs, "agent/test"); err != nil {

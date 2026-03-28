@@ -21,19 +21,18 @@ type Embedder interface {
 // GitStore is the narrow git interface needed by read-only query handlers
 // and the sync task handler. Accepts *git.Store at runtime.
 type GitStore interface {
-	ListDir(path string) ([]git.DirEntry, error)
-	ReadFile(path string) (string, error)
+	ListDir(branch, path string) ([]git.DirEntry, error)
+	ReadFile(branch, path string) (string, error)
 	ReadFileAtCommit(path, commitHash string) (string, error)
-	ReadFileLastCommit(path, beforeCommitHash string) (content string, fromCommit string, err error)
-	WriteFile(path, content, message, operation string) (commitHash, blobHash string, err error)
-	DeleteFile(path, message, operation string) (commitHash string, err error)
-	Log(path string) ([]git.LogEntry, error)
-	LogPaginated(path string, limit int, after, from, before string) ([]git.LogEntryWithTags, string, string, error)
+	ReadFileLastCommit(branch, path, beforeCommitHash string) (content string, fromCommit string, err error)
+	WriteFile(branch, path, content, message, operation string) (commitHash, blobHash string, err error)
+	DeleteFile(branch, path, message, operation string) (commitHash string, err error)
+	Log(branch, path string) ([]git.LogEntry, error)
+	LogPaginated(branch, path string, limit int, after, from, before string) ([]git.LogEntryWithTags, string, string, error)
 	CommitDetail(commitHash string) (*git.CommitDetailResult, error)
-	Activity(path string) (git.ActivityResult, error)
-	HeadCommit() (string, error)
-	Branch() string
-	ListAll() ([]string, error)
+	Activity(branch, path string) (git.ActivityResult, error)
+	HeadCommit(branch string) (string, error)
+	ListAll(branch string) ([]string, error)
 }
 
 // SearchIndex is the narrow search/index interface needed by query handlers.
@@ -70,6 +69,7 @@ type RepoInstance struct {
 	mu          sync.RWMutex   // protects GS, Svc, Idx during SwapStore
 	Name        string
 	DBPath      string // path to the SQLite database file
+	AgentBranch string // the branch this repo writes to (e.g. machine/<hostname>)
 	GS          GitStore
 	Svc         *store.Service
 	Idx         SearchIndex

@@ -27,10 +27,10 @@ func TestExplainFirstPage(t *testing.T) {
 	tmp.Refs = []string{"kb/tech/ref1.md", "https://example.com"}
 	factContent := SerializeFact(tmp)
 
-	gs.EXPECT().Branch().Return("machine/test").AnyTimes()
+	// branch from handler arg
 	sessionIdx.EXPECT().GCToolSessions("explain", "machine/test", 5).Return(nil)
-	gs.EXPECT().ReadFile("kb/root.md").Return(factContent, nil)
-	gs.EXPECT().Log("kb/root.md").Return([]LogEntry{
+	gs.EXPECT().ReadFile(testAgentBranch, "kb/root.md").Return(factContent, nil)
+	gs.EXPECT().Log(testAgentBranch, "kb/root.md").Return([]LogEntry{
 		{Commit: "abc12345", Date: "2026-03-14T10:00:00Z", Message: "learn: root"},
 	}, nil)
 	sessionIdx.EXPECT().CreateToolSession("explain", "machine/test", "kb/root.md").Return(&ToolSession{ID: "sess-1", Status: "active"}, nil)
@@ -40,7 +40,7 @@ func TestExplainFirstPage(t *testing.T) {
 	}).Return(nil)
 	sessionIdx.EXPECT().QueueSize("sess-1").Return(1, nil)
 
-	handler := ExplainHandler(gs, sessionIdx, "kb")
+	handler := ExplainHandler(gs, sessionIdx, "kb", testAgentBranch)
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
 		"file": "kb/root.md",
@@ -112,7 +112,7 @@ func TestExplainResumesSession(t *testing.T) {
 	}).Return(nil)
 	sessionIdx.EXPECT().QueueSize("sess-1").Return(1, nil)
 
-	handler := ExplainHandler(gs, sessionIdx, "kb")
+	handler := ExplainHandler(gs, sessionIdx, "kb", testAgentBranch)
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
 		"file":   "kb/root.md",
@@ -163,10 +163,10 @@ func TestExplainNoRefs(t *testing.T) {
 	tmp.Refs = []string{}
 	factContent := SerializeFact(tmp)
 
-	gs.EXPECT().Branch().Return("machine/test").AnyTimes()
+	// branch from handler arg
 	sessionIdx.EXPECT().GCToolSessions("explain", "machine/test", 5).Return(nil)
-	gs.EXPECT().ReadFile("kb/solo.md").Return(factContent, nil)
-	gs.EXPECT().Log("kb/solo.md").Return([]LogEntry{
+	gs.EXPECT().ReadFile(testAgentBranch, "kb/solo.md").Return(factContent, nil)
+	gs.EXPECT().Log(testAgentBranch, "kb/solo.md").Return([]LogEntry{
 		{Commit: "def456", Date: "2026-03-14T10:00:00Z", Message: "learn: solo"},
 	}, nil)
 	sessionIdx.EXPECT().CreateToolSession("explain", "machine/test", "kb/solo.md").Return(&ToolSession{ID: "sess-2", Status: "active"}, nil)
@@ -175,7 +175,7 @@ func TestExplainNoRefs(t *testing.T) {
 	sessionIdx.EXPECT().QueueSize("sess-2").Return(0, nil)
 	sessionIdx.EXPECT().UpdateToolSession("sess-2", "def456", "completed").Return(nil)
 
-	handler := ExplainHandler(gs, sessionIdx, "kb")
+	handler := ExplainHandler(gs, sessionIdx, "kb", testAgentBranch)
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
 		"file": "kb/solo.md",
@@ -214,7 +214,7 @@ func TestExplainExpiredSession(t *testing.T) {
 
 	sessionIdx.EXPECT().GetToolSession("expired-1").Return(nil, nil)
 
-	handler := ExplainHandler(gs, sessionIdx, "kb")
+	handler := ExplainHandler(gs, sessionIdx, "kb", testAgentBranch)
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
 		"file":   "kb/root.md",
@@ -252,14 +252,14 @@ func TestExplainDeletedRef(t *testing.T) {
 		{Path: "kb/good.md", CommitHash: "abc123", Depth: 1},
 	}, nil)
 	gs.EXPECT().ReadFileAtCommit("kb/deleted.md", "abc123").Return("", fmt.Errorf("not found"))
-	gs.EXPECT().LastCommitForPath("kb/deleted.md").Return("", nil)
+	gs.EXPECT().LastCommitForPath(testAgentBranch, "kb/deleted.md").Return("", nil)
 	gs.EXPECT().ReadFileAtCommit("kb/good.md", "abc123").Return(goodContent, nil)
 	sessionIdx.EXPECT().AddSeenPaths("sess-3", []string{"kb/good.md"}).Return(nil)
 	// No new local refs to enqueue.
 	sessionIdx.EXPECT().QueueSize("sess-3").Return(0, nil)
 	sessionIdx.EXPECT().UpdateToolSession("sess-3", "", "completed").Return(nil)
 
-	handler := ExplainHandler(gs, sessionIdx, "kb")
+	handler := ExplainHandler(gs, sessionIdx, "kb", testAgentBranch)
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
 		"file":   "kb/root.md",
@@ -317,7 +317,7 @@ func TestExplainMaxDepth(t *testing.T) {
 	sessionIdx.EXPECT().QueueSize("sess-4").Return(0, nil)
 	sessionIdx.EXPECT().UpdateToolSession("sess-4", "", "completed").Return(nil)
 
-	handler := ExplainHandler(gs, sessionIdx, "kb")
+	handler := ExplainHandler(gs, sessionIdx, "kb", testAgentBranch)
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
 		"file":   "kb/root.md",
@@ -365,10 +365,10 @@ func TestExplainExternalRefsOnly(t *testing.T) {
 	tmp.Refs = []string{"https://example.com", "https://go.dev"}
 	factContent := SerializeFact(tmp)
 
-	gs.EXPECT().Branch().Return("machine/test").AnyTimes()
+	// branch from handler arg
 	sessionIdx.EXPECT().GCToolSessions("explain", "machine/test", 5).Return(nil)
-	gs.EXPECT().ReadFile("kb/ext.md").Return(factContent, nil)
-	gs.EXPECT().Log("kb/ext.md").Return([]LogEntry{
+	gs.EXPECT().ReadFile(testAgentBranch, "kb/ext.md").Return(factContent, nil)
+	gs.EXPECT().Log(testAgentBranch, "kb/ext.md").Return([]LogEntry{
 		{Commit: "ext123", Date: "2026-03-14T10:00:00Z", Message: "learn: external"},
 	}, nil)
 	sessionIdx.EXPECT().CreateToolSession("explain", "machine/test", "kb/ext.md").Return(&ToolSession{ID: "sess-5", Status: "active"}, nil)
@@ -377,7 +377,7 @@ func TestExplainExternalRefsOnly(t *testing.T) {
 	sessionIdx.EXPECT().QueueSize("sess-5").Return(0, nil)
 	sessionIdx.EXPECT().UpdateToolSession("sess-5", "ext123", "completed").Return(nil)
 
-	handler := ExplainHandler(gs, sessionIdx, "kb")
+	handler := ExplainHandler(gs, sessionIdx, "kb", testAgentBranch)
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
 		"file": "kb/ext.md",
@@ -417,11 +417,11 @@ func TestExplainMissingFile(t *testing.T) {
 	gs := NewMockGitStore(ctrl)
 	sessionIdx := NewMockToolSessionIndex(ctrl)
 
-	gs.EXPECT().Branch().Return("machine/test")
+	// branch from handler arg
 	sessionIdx.EXPECT().GCToolSessions("explain", "machine/test", 5).Return(nil)
-	gs.EXPECT().ReadFile("kb/gone.md").Return("", fmt.Errorf("not found"))
+	gs.EXPECT().ReadFile(testAgentBranch, "kb/gone.md").Return("", fmt.Errorf("not found"))
 
-	handler := ExplainHandler(gs, sessionIdx, "kb")
+	handler := ExplainHandler(gs, sessionIdx, "kb", testAgentBranch)
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{"file": "kb/gone.md"}
 
@@ -439,7 +439,7 @@ func TestExplainRequiresFile(t *testing.T) {
 	gs := NewMockGitStore(ctrl)
 	sessionIdx := NewMockToolSessionIndex(ctrl)
 
-	handler := ExplainHandler(gs, sessionIdx, "kb")
+	handler := ExplainHandler(gs, sessionIdx, "kb", testAgentBranch)
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{}
 
@@ -465,7 +465,7 @@ func TestExplainResumeEmptyQueue(t *testing.T) {
 	sessionIdx.EXPECT().QueueSize("sess-done").Return(0, nil)
 	sessionIdx.EXPECT().UpdateToolSession("sess-done", "", "completed").Return(nil)
 
-	handler := ExplainHandler(gs, sessionIdx, "kb")
+	handler := ExplainHandler(gs, sessionIdx, "kb", testAgentBranch)
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
 		"file":   "kb/root.md",
@@ -516,13 +516,13 @@ func TestExplainRetractedRef(t *testing.T) {
 	// ReadFileAtCommit fails — file was retracted before merge-commit.
 	gs.EXPECT().ReadFileAtCommit("kb/retracted.md", "merge-commit").Return("", fmt.Errorf("not found"))
 	// Fallback: find the retraction commit, then read from just before it.
-	gs.EXPECT().LastCommitForPath("kb/retracted.md").Return("retract-commit", nil)
-	gs.EXPECT().ReadFileLastCommit("kb/retracted.md", "retract-commit").Return(retractedContent, "last-live-commit", nil)
+	gs.EXPECT().LastCommitForPath(testAgentBranch, "kb/retracted.md").Return("retract-commit", nil)
+	gs.EXPECT().ReadFileLastCommit(testAgentBranch, "kb/retracted.md", "retract-commit").Return(retractedContent, "last-live-commit", nil)
 	sessionIdx.EXPECT().AddSeenPaths("sess-ret", []string{"kb/retracted.md"}).Return(nil)
 	sessionIdx.EXPECT().QueueSize("sess-ret").Return(0, nil)
 	sessionIdx.EXPECT().UpdateToolSession("sess-ret", "", "completed").Return(nil)
 
-	handler := ExplainHandler(gs, sessionIdx, "kb")
+	handler := ExplainHandler(gs, sessionIdx, "kb", testAgentBranch)
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
 		"file":   "kb/root.md",
@@ -582,7 +582,7 @@ func TestExplainResumeParseError(t *testing.T) {
 	sessionIdx.EXPECT().QueueSize("sess-pe").Return(0, nil)
 	sessionIdx.EXPECT().UpdateToolSession("sess-pe", "", "completed").Return(nil)
 
-	handler := ExplainHandler(gs, sessionIdx, "kb")
+	handler := ExplainHandler(gs, sessionIdx, "kb", testAgentBranch)
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
 		"file":   "kb/root.md",
@@ -629,10 +629,10 @@ func TestExplainFirstPageIncludesAllFactFields(t *testing.T) {
 	tmp.EvidenceWeight = 0.7
 	factContent := SerializeFact(tmp)
 
-	gs.EXPECT().Branch().Return("machine/test").AnyTimes()
+	// branch from handler arg
 	sessionIdx.EXPECT().GCToolSessions("explain", "machine/test", 5).Return(nil)
-	gs.EXPECT().ReadFile("kb/full.md").Return(factContent, nil)
-	gs.EXPECT().Log("kb/full.md").Return([]LogEntry{
+	gs.EXPECT().ReadFile(testAgentBranch, "kb/full.md").Return(factContent, nil)
+	gs.EXPECT().Log(testAgentBranch, "kb/full.md").Return([]LogEntry{
 		{Commit: "deadbeef", Date: "2026-03-22T10:00:00Z", Message: "learn: full"},
 	}, nil)
 	sessionIdx.EXPECT().CreateToolSession("explain", "machine/test", "kb/full.md").Return(&ToolSession{ID: "sess-full", Status: "active"}, nil)
@@ -640,7 +640,7 @@ func TestExplainFirstPageIncludesAllFactFields(t *testing.T) {
 	sessionIdx.EXPECT().QueueSize("sess-full").Return(0, nil)
 	sessionIdx.EXPECT().UpdateToolSession("sess-full", "deadbeef", "completed").Return(nil)
 
-	handler := ExplainHandler(gs, sessionIdx, "kb")
+	handler := ExplainHandler(gs, sessionIdx, "kb", testAgentBranch)
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{"file": "kb/full.md"}
 
@@ -710,7 +710,7 @@ func TestExplainResumeIncludesAllFactFields(t *testing.T) {
 	sessionIdx.EXPECT().QueueSize("sess-r").Return(0, nil)
 	sessionIdx.EXPECT().UpdateToolSession("sess-r", "", "completed").Return(nil)
 
-	handler := ExplainHandler(gs, sessionIdx, "kb")
+	handler := ExplainHandler(gs, sessionIdx, "kb", testAgentBranch)
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
 		"file":   "kb/ref.md",

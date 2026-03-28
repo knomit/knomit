@@ -31,7 +31,7 @@ func handleEvents() http.HandlerFunc {
 
 		// Snapshot the initial head commit under RLock — GS may be swapped concurrently.
 		ri.RLock()
-		head, _ := ri.GS.HeadCommit()
+		head, _ := ri.GS.HeadCommit(ri.AgentBranch)
 		ri.RUnlock()
 		fmt.Fprintf(w, "event: status\ndata: {\"head\":\"%s\"}\n\n", head)
 

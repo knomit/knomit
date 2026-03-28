@@ -83,6 +83,7 @@ func dedupCluster(
 	threshold float64,
 	recipeName string,
 	onProgress func(ProgressEvent),
+	agentBranch string,
 	embedders ...Embedder,
 ) ([]factForLLM, error) {
 	if len(cluster) < 2 {
@@ -173,7 +174,7 @@ func dedupCluster(
 		onProgress(ProgressEvent{Phase: "dedup-merge", Message: fmt.Sprintf("%s <- %s (%.2f)", winnerFact.File, loserFact.File, p.similarity)})
 
 		// Read the winner's full fact from git to get its Refs.
-		winnerContent, err := gs.ReadFile(winnerFact.File)
+		winnerContent, err := gs.ReadFile(agentBranch, winnerFact.File)
 		if err != nil {
 			return nil, fmt.Errorf("dedupCluster: read winner %q: %w", winnerFact.File, err)
 		}
@@ -183,7 +184,7 @@ func dedupCluster(
 		}
 
 		// Read the loser's full fact to get its Refs.
-		loserContent, err := gs.ReadFile(loserFact.File)
+		loserContent, err := gs.ReadFile(agentBranch, loserFact.File)
 		if err != nil {
 			return nil, fmt.Errorf("dedupCluster: read loser %q: %w", loserFact.File, err)
 		}
@@ -204,7 +205,7 @@ func dedupCluster(
 
 		// Serialize and write the winner back to git.
 		newContent := mcp.SerializeFact(fullWinner)
-		commitHash, blobHash, err := gs.WriteFile(winnerFact.File, newContent, fmt.Sprintf("dedup: merge %s into %s [%s]", loserFact.File, winnerFact.File, recipeName), "subsume")
+		commitHash, blobHash, err := gs.WriteFile(agentBranch, winnerFact.File, newContent, fmt.Sprintf("dedup: merge %s into %s [%s]", loserFact.File, winnerFact.File, recipeName), "subsume")
 		if err != nil {
 			return nil, fmt.Errorf("dedupCluster: write winner %q: %w", winnerFact.File, err)
 		}
@@ -215,7 +216,7 @@ func dedupCluster(
 		}
 
 		// Delete the loser from git and the search index.
-		if _, err := gs.DeleteFile(loserFact.File, fmt.Sprintf("dedup: remove duplicate %s (merged into %s) [%s]", loserFact.File, winnerFact.File, recipeName), "retract"); err != nil {
+		if _, err := gs.DeleteFile(agentBranch, loserFact.File, fmt.Sprintf("dedup: remove duplicate %s (merged into %s) [%s]", loserFact.File, winnerFact.File, recipeName), "retract"); err != nil {
 			return nil, fmt.Errorf("dedupCluster: delete loser %q: %w", loserFact.File, err)
 		}
 		if err := idx.Delete(loserFact.File); err != nil {

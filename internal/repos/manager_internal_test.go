@@ -103,12 +103,11 @@ func TestOpenOne_DefaultCreatesNewRepo(t *testing.T) {
 	if ri.Hub == nil {
 		t.Error("ri.Hub is nil")
 	}
-	gs, ok := ri.GS.(*git.Store)
-	if !ok {
+	if _, ok := ri.GS.(*git.Store); !ok {
 		t.Fatal("ri.GS is not *git.Store")
 	}
-	if gs.Branch() != agentBranch {
-		t.Errorf("branch = %q, want %q", gs.Branch(), agentBranch)
+	if ri.AgentBranch != agentBranch {
+		t.Errorf("AgentBranch = %q, want %q", ri.AgentBranch, agentBranch)
 	}
 	// MCP handlers should be nil — SetupMCP not called yet
 	if ri.MCPHandlers != nil {

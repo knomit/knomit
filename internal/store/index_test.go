@@ -11,6 +11,8 @@ import (
 	"go.uber.org/mock/gomock"
 )
 
+const testBranch = "agent/test"
+
 // insertTestBlob inserts a fake blob into the objects table for testing.
 // If content has no frontmatter, it is wrapped with a default header.
 func insertTestBlob(t *testing.T, db *sql.DB, hash, content string) {
@@ -293,7 +295,7 @@ func TestIncrementalSync(t *testing.T) {
 	}
 	defer svc.Close()
 
-	gitStore, err := git.InitWithStorer(svc.GitStorer(), nil, "")
+	gitStore, err := git.InitWithStorer(svc.GitStorer(), nil, testBranch)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -304,14 +306,14 @@ func TestIncrementalSync(t *testing.T) {
 	fact1 := "---\ndomain: [databases]\nconfidence: 0.9\nsources: 2\nentities: [postgres]\nrefs: []\n---\n# Postgres MVCC\n\nPostgres uses multi-version concurrency control.\n"
 	fact2 := "---\ndomain: [caching]\nconfidence: 0.8\nsources: 1\nentities: [redis]\nrefs: []\n---\n# Redis Persistence\n\nRedis supports AOF and RDB persistence.\n"
 
-	if _, _, err := gitStore.WriteFile("kb/postgres-mvcc.md", fact1, "add postgres fact", "learn"); err != nil {
+	if _, _, err := gitStore.WriteFile(testBranch, "kb/postgres-mvcc.md", fact1, "add postgres fact", "learn"); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := gitStore.WriteFile("kb/redis-persistence.md", fact2, "add redis fact", "learn"); err != nil {
+	if _, _, err := gitStore.WriteFile(testBranch, "kb/redis-persistence.md", fact2, "add redis fact", "learn"); err != nil {
 		t.Fatal(err)
 	}
 
-	if err := idx.Sync(gitStore, gitStore.Branch()); err != nil {
+	if err := idx.Sync(gitStore, testBranch); err != nil {
 		t.Fatalf("Sync (full rebuild) failed: %v", err)
 	}
 
@@ -333,11 +335,11 @@ func TestIncrementalSync(t *testing.T) {
 	}
 
 	// Verify last_commit was set.
-	head, err := gitStore.HeadCommit()
+	head, err := gitStore.HeadCommit(testBranch)
 	if err != nil {
 		t.Fatal(err)
 	}
-	last, err := idx.GetLastCommit(gitStore.Branch())
+	last, err := idx.GetLastCommit(testBranch)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -348,11 +350,11 @@ func TestIncrementalSync(t *testing.T) {
 	// --- Incremental sync ---
 	// Write a third fact. Sync should only index the delta.
 	fact3 := "---\ndomain: [messaging]\nconfidence: 0.95\nsources: 3\nentities: [kafka]\nrefs: []\n---\n# Kafka Partitions\n\nKafka topics are split into partitions for parallelism.\n"
-	if _, _, err := gitStore.WriteFile("kb/kafka-partitions.md", fact3, "add kafka fact", "learn"); err != nil {
+	if _, _, err := gitStore.WriteFile(testBranch, "kb/kafka-partitions.md", fact3, "add kafka fact", "learn"); err != nil {
 		t.Fatal(err)
 	}
 
-	if err := idx.Sync(gitStore, gitStore.Branch()); err != nil {
+	if err := idx.Sync(gitStore, testBranch); err != nil {
 		t.Fatalf("Sync (incremental) failed: %v", err)
 	}
 
@@ -376,11 +378,11 @@ func TestIncrementalSync(t *testing.T) {
 
 	// --- Delete sync ---
 	// Delete the redis fact and sync; it should be removed from the index.
-	if _, err := gitStore.DeleteFile("kb/redis-persistence.md", "delete: remove redis fact", "retract"); err != nil {
+	if _, err := gitStore.DeleteFile(testBranch, "kb/redis-persistence.md", "delete: remove redis fact", "retract"); err != nil {
 		t.Fatal(err)
 	}
 
-	if err := idx.Sync(gitStore, gitStore.Branch()); err != nil {
+	if err := idx.Sync(gitStore, testBranch); err != nil {
 		t.Fatalf("Sync (delete) failed: %v", err)
 	}
 
@@ -393,14 +395,14 @@ func TestIncrementalSync(t *testing.T) {
 	}
 
 	// No-op sync: calling Sync again with same HEAD should be a no-op.
-	headAfter, err := gitStore.HeadCommit()
+	headAfter, err := gitStore.HeadCommit(testBranch)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := idx.Sync(gitStore, gitStore.Branch()); err != nil {
+	if err := idx.Sync(gitStore, testBranch); err != nil {
 		t.Fatalf("Sync (no-op) failed: %v", err)
 	}
-	lastAfter, err := idx.GetLastCommit(gitStore.Branch())
+	lastAfter, err := idx.GetLastCommit(testBranch)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -419,7 +421,7 @@ func TestSyncCommitHashIsLastTouch(t *testing.T) {
 	}
 	defer svc.Close()
 
-	gitStore, err := git.InitWithStorer(svc.GitStorer(), nil, "")
+	gitStore, err := git.InitWithStorer(svc.GitStorer(), nil, testBranch)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -430,18 +432,18 @@ func TestSyncCommitHashIsLastTouch(t *testing.T) {
 	fact2 := "---\ndomain: [b]\nconfidence: 0.8\nsources: 1\nentities: []\nrefs: []\n---\n# Fact B\n\nBody B.\n"
 
 	// Commit fact A first.
-	commitA, _, err := gitStore.WriteFile("kb/a.md", fact1, "add A", "learn")
+	commitA, _, err := gitStore.WriteFile(testBranch, "kb/a.md", fact1, "add A", "learn")
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// Commit fact B second — this becomes HEAD.
-	_, _, err = gitStore.WriteFile("kb/b.md", fact2, "add B", "learn")
+	_, _, err = gitStore.WriteFile(testBranch, "kb/b.md", fact2, "add B", "learn")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	head, err := gitStore.HeadCommit()
+	head, err := gitStore.HeadCommit(testBranch)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -450,7 +452,7 @@ func TestSyncCommitHashIsLastTouch(t *testing.T) {
 	}
 
 	// Full rebuild sync.
-	if err := idx.Sync(gitStore, gitStore.Branch()); err != nil {
+	if err := idx.Sync(gitStore, testBranch); err != nil {
 		t.Fatal(err)
 	}
 
@@ -476,12 +478,12 @@ func TestSyncCommitHashIsLastTouch(t *testing.T) {
 	commitBBefore := recB.CommitHash
 
 	fact1v2 := "---\ndomain: [a]\nconfidence: 0.95\nsources: 2\nentities: []\nrefs: []\n---\n# Fact A v2\n\nUpdated body.\n"
-	commitA2, _, err := gitStore.WriteFile("kb/a.md", fact1v2, "update A", "learn")
+	commitA2, _, err := gitStore.WriteFile(testBranch, "kb/a.md", fact1v2, "update A", "learn")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if err := idx.Sync(gitStore, gitStore.Branch()); err != nil {
+	if err := idx.Sync(gitStore, testBranch); err != nil {
 		t.Fatal(err)
 	}
 

@@ -148,11 +148,15 @@ func openTestDB(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.db")
-	gs, err := git.Init(path, nil)
+	svc, err := store.Open(path)
 	if err != nil {
-		t.Fatalf("openTestDB: git.Init: %v", err)
+		t.Fatalf("openTestDB: store.Open: %v", err)
 	}
-	gs.Close()
+	if _, err := git.InitWithStorer(svc.GitStorer(), nil, ""); err != nil {
+		svc.Close()
+		t.Fatalf("openTestDB: git.InitWithStorer: %v", err)
+	}
+	svc.Close()
 	return path
 }
 
@@ -281,9 +285,9 @@ func TestObserver_UsesCurrentIndexAfterSwapStore(t *testing.T) {
 
 	// Write a fact so the old index has some state.
 	gs := ri.GS.(interface {
-		WriteFile(path, content, message, operation string) (string, string, error)
+		WriteFile(branch, path, content, message, operation string) (string, string, error)
 	})
-	_, _, err := gs.WriteFile("kb/test/hello.md", "---\ntitle: hello\n---\n# hello\nworld\n", "test", "learn")
+	_, _, err := gs.WriteFile(ri.AgentBranch, "kb/test/hello.md", "---\ntitle: hello\n---\n# hello\nworld\n", "test", "learn")
 	if err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}

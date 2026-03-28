@@ -49,23 +49,22 @@ type PipelineWorkItem = storepkg.PipelineWorkItem
 // Only methods actually used by the tool handlers are listed here so that
 // tests can use lightweight mocks.
 type GitStore interface {
-	ReadFile(path string) (string, error)
+	ReadFile(branch, path string) (string, error)
 	ReadFileAtCommit(path, commitHash string) (string, error)
-	ReadFileWithHash(path string) (content, blobHash string, err error)
-	WriteFile(path, content, message, operation string) (commitHash, blobHash string, err error)
-	BatchWrite(files map[string]string, message, operation string) (commitHash string, blobHashes map[string]string, err error)
-	DeleteFile(path, message, operation string) (commitHash string, err error)
-	FileExists(path string) (bool, error)
-	ListDir(path string) ([]DirEntry, error)
-	ListAll() ([]string, error)
-	Log(path string) ([]LogEntry, error)
-	Grep(pattern string) ([]string, error)
-	DiffFiles(fromCommit string) (added, modified, deleted []string, err error)
-	HeadCommit() (string, error)
-	WalkChangedFiles(fromCommit, prefix string, seen map[string]bool, limit int) ([]FileRecency, string, error)
-	Branch() string
-	LastCommitForPath(path string) (string, error)
-	ReadFileLastCommit(path, beforeCommitHash string) (content, fromCommit string, err error)
+	ReadFileWithHash(branch, path string) (content, blobHash string, err error)
+	WriteFile(branch, path, content, message, operation string) (commitHash, blobHash string, err error)
+	BatchWrite(branch string, files map[string]string, message, operation string) (commitHash string, blobHashes map[string]string, err error)
+	DeleteFile(branch, path, message, operation string) (commitHash string, err error)
+	FileExists(branch, path string) (bool, error)
+	ListDir(branch, path string) ([]DirEntry, error)
+	ListAll(branch string) ([]string, error)
+	Log(branch, path string) ([]LogEntry, error)
+	Grep(branch, pattern string) ([]string, error)
+	DiffFiles(branch, fromCommit string) (added, modified, deleted []string, err error)
+	HeadCommit(branch string) (string, error)
+	WalkChangedFiles(branch, fromCommit, prefix string, seen map[string]bool, limit int) ([]FileRecency, string, error)
+	LastCommitForPath(branch, path string) (string, error)
+	ReadFileLastCommit(branch, path, beforeCommitHash string) (content, fromCommit string, err error)
 }
 
 // SearchIndex is the interface the MCP tools require from internal/store.
@@ -103,19 +102,19 @@ type PipelineIndex interface {
 
 // NewServer creates a new MCP server with all knomit tools registered.
 // If embedder is non-nil, the learn tool uses it for batch dedup embedding.
-func NewServer(gs GitStore, idx SearchIndex, sessionIdx ToolSessionIndex, pipelineIdx PipelineIndex, reviewer Reviewer, profile, ontologyRoot string, ontology *fact.Ontology, embedders ...BatchEmbedder) *server.MCPServer {
+func NewServer(gs GitStore, idx SearchIndex, sessionIdx ToolSessionIndex, pipelineIdx PipelineIndex, reviewer Reviewer, profile, ontologyRoot string, ontology *fact.Ontology, agentBranch string, embedders ...BatchEmbedder) *server.MCPServer {
 	s := server.NewMCPServer("knomit", "1.0.0",
 		server.WithInstructions(ProfileInstructions(profile, ontologyRoot, ontology)),
 	)
 
-	s.AddTool(learnTool(), LearnHandler(gs, idx, ontologyRoot, ontology, embedders...))
-	s.AddTool(queryTool(), QueryHandler(gs, idx))
-	s.AddTool(explainTool(), ExplainHandler(gs, sessionIdx, ontologyRoot))
-	s.AddTool(updateTool(), UpdateHandler(gs, ontologyRoot))
-	s.AddTool(exploreTool(ontologyRoot), ExploreHandler(gs, sessionIdx, ontologyRoot))
-	s.AddTool(retractTool(), RetractHandler(gs, ontologyRoot))
+	s.AddTool(learnTool(), LearnHandler(gs, idx, ontologyRoot, ontology, agentBranch, embedders...))
+	s.AddTool(queryTool(), QueryHandler(gs, idx, agentBranch))
+	s.AddTool(explainTool(), ExplainHandler(gs, sessionIdx, ontologyRoot, agentBranch))
+	s.AddTool(updateTool(), UpdateHandler(gs, ontologyRoot, agentBranch))
+	s.AddTool(exploreTool(ontologyRoot), ExploreHandler(gs, sessionIdx, ontologyRoot, agentBranch))
+	s.AddTool(retractTool(), RetractHandler(gs, ontologyRoot, agentBranch))
 
-	s.AddTool(hypothesizeTool(), HypothesizeHandler(gs, idx, pipelineIdx, ontologyRoot))
+	s.AddTool(hypothesizeTool(), HypothesizeHandler(gs, idx, pipelineIdx, ontologyRoot, agentBranch))
 
 	if reviewer != nil {
 		s.AddTool(reviewTool(), ReviewHandler(reviewer))

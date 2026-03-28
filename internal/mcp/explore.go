@@ -25,7 +25,7 @@ func exploreTool(ontologyRoot string) mcpgo.Tool {
 }
 
 // ExploreHandler returns the handler function for knomit_explore.
-func ExploreHandler(gs GitStore, sessionIdx ToolSessionIndex, ontologyRoot string) func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+func ExploreHandler(gs GitStore, sessionIdx ToolSessionIndex, ontologyRoot, agentBranch string) func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 	return func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 		ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
@@ -38,7 +38,7 @@ func ExploreHandler(gs GitStore, sessionIdx ToolSessionIndex, ontologyRoot strin
 
 		if cursor == "" {
 			// New session: GC old sessions, start fresh.
-			_ = sessionIdx.GCToolSessions("explore", gs.Branch(), 5)
+			_ = sessionIdx.GCToolSessions("explore", agentBranch, 5)
 		} else {
 			// Resume existing session.
 			session, err := sessionIdx.GetToolSession(cursor)
@@ -55,7 +55,7 @@ func ExploreHandler(gs GitStore, sessionIdx ToolSessionIndex, ontologyRoot strin
 			fromCommit = session.LastCommit
 		}
 
-		files, lastCommit, err := gs.WalkChangedFiles(fromCommit, path, seen, explorePageSize)
+		files, lastCommit, err := gs.WalkChangedFiles(agentBranch, fromCommit, path, seen, explorePageSize)
 		if err != nil {
 			return mcpgo.NewToolResultError(fmt.Sprintf("walk error: %v", err)), nil
 		}
@@ -71,7 +71,7 @@ func ExploreHandler(gs GitStore, sessionIdx ToolSessionIndex, ontologyRoot strin
 		var newPaths []string
 
 		for _, f := range files {
-			content, readErr := gs.ReadFile(f.Path)
+			content, readErr := gs.ReadFile(agentBranch, f.Path)
 			if readErr != nil {
 				continue // deleted or unreadable — skip
 			}
@@ -103,7 +103,7 @@ func ExploreHandler(gs GitStore, sessionIdx ToolSessionIndex, ontologyRoot strin
 		// Create session on first call.
 		var sessionID string
 		if cursor == "" {
-			session, err := sessionIdx.CreateToolSession("explore", gs.Branch(), path)
+			session, err := sessionIdx.CreateToolSession("explore", agentBranch, path)
 			if err != nil {
 				return mcpgo.NewToolResultError(fmt.Sprintf("create session error: %v", err)), nil
 			}

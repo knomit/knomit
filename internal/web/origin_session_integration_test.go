@@ -36,7 +36,7 @@ func TestOriginSession_FullWorkflow(t *testing.T) {
 	}
 	t.Cleanup(func() { localSvc.Close() })
 
-	localGS, err := git.InitWithStorer(localSvc.GitStorer(), nil, "agent/local")
+	localGS, err := git.InitWithStorer(localSvc.GitStorer(), nil, testAgentBranch)
 	if err != nil {
 		t.Fatalf("git.InitWithStorer local: %v", err)
 	}
@@ -62,18 +62,18 @@ func TestOriginSession_FullWorkflow(t *testing.T) {
 	}
 
 	// Shared fact on remote (same path).
-	if _, _, err := remoteStore.WriteFile("kb/shared.md", sharedContent, "add shared", "learn"); err != nil {
+	if _, _, err := remoteStore.WriteFile("agent/remote", "kb/shared.md", sharedContent, "add shared", "learn"); err != nil {
 		t.Fatalf("remote WriteFile shared: %v", err)
 	}
 
 	// Remote-only fact.
 	remoteFact := "---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# Remote Fact B\n\nOnly on remote.\n"
-	if _, _, err := remoteStore.WriteFile("kb/remote-b.md", remoteFact, "add remote-b", "learn"); err != nil {
+	if _, _, err := remoteStore.WriteFile("agent/remote", "kb/remote-b.md", remoteFact, "add remote-b", "learn"); err != nil {
 		t.Fatalf("remote WriteFile remote-b: %v", err)
 	}
 
 	// Advance main on remote so clone can find it.
-	remoteHead, err := remoteStore.HeadCommit()
+	remoteHead, err := remoteStore.HeadCommit("agent/remote")
 	if err != nil {
 		t.Fatalf("remote HeadCommit: %v", err)
 	}
@@ -97,18 +97,19 @@ func TestOriginSession_FullWorkflow(t *testing.T) {
 	t.Cleanup(sm.Shutdown)
 
 	ri := &repos.RepoInstance{
-		Name:       "knomit",
-		GS:         localGS,
-		Svc:        localSvc,
-		Hub:        hub,
-		SyncCancel: func() {},
-		SyncWg:     &sync.WaitGroup{},
+		AgentBranch: testAgentBranch,
+		Name:        "knomit",
+		GS:          localGS,
+		Svc:         localSvc,
+		Hub:         hub,
+		SyncCancel:  func() {},
+		SyncWg:      &sync.WaitGroup{},
 		StartSync: func(url string) error {
 			return nil
 		},
 	}
 	rm.Set("knomit", ri)
-	handler := NewRouterWithSessionManager(rm, nil, false, "kb", sm)
+	handler := NewRouterWithSessionManager(rm, nil, false, "kb", testAgentBranch, sm)
 
 	// ---- Step 3: POST /session -> create session ----
 
@@ -309,7 +310,7 @@ func TestOriginSession_RemoteWinsStrategy(t *testing.T) {
 	}
 	t.Cleanup(func() { localSvc.Close() })
 
-	localGS, err := git.InitWithStorer(localSvc.GitStorer(), nil, "agent/local")
+	localGS, err := git.InitWithStorer(localSvc.GitStorer(), nil, testAgentBranch)
 	if err != nil {
 		t.Fatalf("git.InitWithStorer local: %v", err)
 	}
@@ -331,19 +332,19 @@ func TestOriginSession_RemoteWinsStrategy(t *testing.T) {
 	}
 
 	sharedRemoteContent := "---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# Shared Fact\n\nRemote version of shared.\n"
-	if _, _, err := remoteStore.WriteFile("kb/shared.md", sharedRemoteContent, "add shared", "learn"); err != nil {
+	if _, _, err := remoteStore.WriteFile("agent/remote", "kb/shared.md", sharedRemoteContent, "add shared", "learn"); err != nil {
 		t.Fatalf("remote WriteFile shared: %v", err)
 	}
 	remoteFact := "---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# Remote B\n\nRemote only.\n"
-	if _, _, err := remoteStore.WriteFile("kb/remote-b.md", remoteFact, "add remote-b", "learn"); err != nil {
+	if _, _, err := remoteStore.WriteFile("agent/remote", "kb/remote-b.md", remoteFact, "add remote-b", "learn"); err != nil {
 		t.Fatalf("remote WriteFile remote-b: %v", err)
 	}
 	remoteFact2 := "---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# Remote C\n\nRemote only.\n"
-	if _, _, err := remoteStore.WriteFile("kb/remote-c.md", remoteFact2, "add remote-c", "learn"); err != nil {
+	if _, _, err := remoteStore.WriteFile("agent/remote", "kb/remote-c.md", remoteFact2, "add remote-c", "learn"); err != nil {
 		t.Fatalf("remote WriteFile remote-c: %v", err)
 	}
 
-	remoteHead, err := remoteStore.HeadCommit()
+	remoteHead, err := remoteStore.HeadCommit("agent/remote")
 	if err != nil {
 		t.Fatalf("remote HeadCommit: %v", err)
 	}
@@ -363,6 +364,7 @@ func TestOriginSession_RemoteWinsStrategy(t *testing.T) {
 	t.Cleanup(sm.Shutdown)
 
 	ri := &repos.RepoInstance{
+		AgentBranch: testAgentBranch,
 		Name:       "knomit",
 		GS:         localGS,
 		Svc:        localSvc,
@@ -372,7 +374,7 @@ func TestOriginSession_RemoteWinsStrategy(t *testing.T) {
 		StartSync:  func(url string) error { return nil },
 	}
 	rm.Set("knomit", ri)
-	handler := NewRouterWithSessionManager(rm, nil, false, "kb", sm)
+	handler := NewRouterWithSessionManager(rm, nil, false, "kb", testAgentBranch, sm)
 
 	// Create session.
 	rr := doRequest(t, handler, http.MethodPost, "/api/v1/knomit/origin/session",
@@ -459,7 +461,7 @@ func TestOriginSession_SwitchStrategy(t *testing.T) {
 	}
 	t.Cleanup(func() { localSvc.Close() })
 
-	localGS, err := git.InitWithStorer(localSvc.GitStorer(), nil, "agent/local")
+	localGS, err := git.InitWithStorer(localSvc.GitStorer(), nil, testAgentBranch)
 	if err != nil {
 		t.Fatalf("git.InitWithStorer: %v", err)
 	}
@@ -476,10 +478,10 @@ func TestOriginSession_SwitchStrategy(t *testing.T) {
 		t.Fatalf("git.InitWithStorer remote: %v", err)
 	}
 	sharedRemote := "---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# Shared\n\nRemote version.\n"
-	if _, _, err := remoteStore.WriteFile("kb/shared.md", sharedRemote, "add shared", "learn"); err != nil {
+	if _, _, err := remoteStore.WriteFile("agent/remote", "kb/shared.md", sharedRemote, "add shared", "learn"); err != nil {
 		t.Fatalf("remote WriteFile: %v", err)
 	}
-	remoteHead, err := remoteStore.HeadCommit()
+	remoteHead, err := remoteStore.HeadCommit("agent/remote")
 	if err != nil {
 		t.Fatalf("remote HeadCommit: %v", err)
 	}
@@ -499,6 +501,7 @@ func TestOriginSession_SwitchStrategy(t *testing.T) {
 	t.Cleanup(sm.Shutdown)
 
 	ri := &repos.RepoInstance{
+		AgentBranch: testAgentBranch,
 		Name:       "knomit",
 		GS:         localGS,
 		Svc:        localSvc,
@@ -508,7 +511,7 @@ func TestOriginSession_SwitchStrategy(t *testing.T) {
 		StartSync:  func(url string) error { return nil },
 	}
 	rm.Set("knomit", ri)
-	handler := NewRouterWithSessionManager(rm, nil, false, "kb", sm)
+	handler := NewRouterWithSessionManager(rm, nil, false, "kb", testAgentBranch, sm)
 
 	// Create session + test connectivity.
 	rr := doRequest(t, handler, http.MethodPost, "/api/v1/knomit/origin/session",
@@ -576,7 +579,7 @@ func TestOriginSession_ExistingAgentBranch(t *testing.T) {
 	}
 	t.Cleanup(func() { localSvc.Close() })
 
-	localGS, err := git.InitWithStorer(localSvc.GitStorer(), nil, "agent/local")
+	localGS, err := git.InitWithStorer(localSvc.GitStorer(), nil, testAgentBranch)
 	if err != nil {
 		t.Fatalf("git.InitWithStorer: %v", err)
 	}
@@ -586,21 +589,21 @@ func TestOriginSession_ExistingAgentBranch(t *testing.T) {
 
 	time.Sleep(1100 * time.Millisecond)
 
-	// Remote store with an agent branch matching "agent/local".
+	// Remote store with an agent branch matching the local agent branch.
 	remoteStorer := newTestStorerForWeb(t)
-	remoteStore, err := git.InitWithStorer(remoteStorer, nil, "agent/local")
+	remoteStore, err := git.InitWithStorer(remoteStorer, nil, testAgentBranch)
 	if err != nil {
 		t.Fatalf("git.InitWithStorer remote: %v", err)
 	}
 
 	// Write a fact on the agent branch so it has content.
 	existingFact := "---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# Existing Remote Fact\n\nAlready on agent branch.\n"
-	if _, _, err := remoteStore.WriteFile("kb/existing-remote.md", existingFact, "add existing", "learn"); err != nil {
+	if _, _, err := remoteStore.WriteFile(testAgentBranch, "kb/existing-remote.md", existingFact, "add existing", "learn"); err != nil {
 		t.Fatalf("remote WriteFile existing: %v", err)
 	}
 
 	// Set up main branch on remote.
-	remoteHead, err := remoteStore.HeadCommit()
+	remoteHead, err := remoteStore.HeadCommit(testAgentBranch)
 	if err != nil {
 		t.Fatalf("remote HeadCommit: %v", err)
 	}
@@ -620,6 +623,7 @@ func TestOriginSession_ExistingAgentBranch(t *testing.T) {
 	t.Cleanup(sm.Shutdown)
 
 	ri := &repos.RepoInstance{
+		AgentBranch: testAgentBranch,
 		Name:       "knomit",
 		GS:         localGS,
 		Svc:        localSvc,
@@ -629,7 +633,7 @@ func TestOriginSession_ExistingAgentBranch(t *testing.T) {
 		StartSync:  func(url string) error { return nil },
 	}
 	rm.Set("knomit", ri)
-	handler := NewRouterWithSessionManager(rm, nil, false, "kb", sm)
+	handler := NewRouterWithSessionManager(rm, nil, false, "kb", testAgentBranch, sm)
 
 	// Create session.
 	rr := doRequest(t, handler, http.MethodPost, "/api/v1/knomit/origin/session",
@@ -657,8 +661,8 @@ func TestOriginSession_ExistingAgentBranch(t *testing.T) {
 		t.Fatalf("test done missing result: %v", testDone)
 	}
 	matchedAgent, _ := testResult["matched_agent"].(string)
-	if matchedAgent != "agent/local" {
-		t.Errorf("expected matched_agent=agent/local, got %q", matchedAgent)
+	if matchedAgent != testAgentBranch {
+		t.Errorf("expected matched_agent=%q, got %q", testAgentBranch, matchedAgent)
 	}
 
 	// Apply with local_wins — should replay on top of existing agent branch.
@@ -701,7 +705,7 @@ func TestOriginSession_CancelCleanup(t *testing.T) {
 	}
 	t.Cleanup(func() { localSvc.Close() })
 
-	localGS, err := git.InitWithStorer(localSvc.GitStorer(), nil, "agent/local")
+	localGS, err := git.InitWithStorer(localSvc.GitStorer(), nil, testAgentBranch)
 	if err != nil {
 		t.Fatalf("git.InitWithStorer: %v", err)
 	}
@@ -712,6 +716,7 @@ func TestOriginSession_CancelCleanup(t *testing.T) {
 	t.Cleanup(sm.Shutdown)
 
 	ri := &repos.RepoInstance{
+		AgentBranch: testAgentBranch,
 		Name:       "knomit",
 		GS:         localGS,
 		Svc:        localSvc,
@@ -721,7 +726,7 @@ func TestOriginSession_CancelCleanup(t *testing.T) {
 		StartSync:  func(url string) error { return nil },
 	}
 	rm.Set("knomit", ri)
-	handler := NewRouterWithSessionManager(rm, nil, false, "kb", sm)
+	handler := NewRouterWithSessionManager(rm, nil, false, "kb", testAgentBranch, sm)
 
 	// Create session.
 	rr := doRequest(t, handler, http.MethodPost, "/api/v1/knomit/origin/session",
@@ -781,7 +786,7 @@ func TestOriginSession_BranchSelection(t *testing.T) {
 	}
 	t.Cleanup(func() { localSvc.Close() })
 
-	localGS, err := git.InitWithStorer(localSvc.GitStorer(), nil, "agent/local")
+	localGS, err := git.InitWithStorer(localSvc.GitStorer(), nil, testAgentBranch)
 	if err != nil {
 		t.Fatalf("git.InitWithStorer: %v", err)
 	}
@@ -799,11 +804,11 @@ func TestOriginSession_BranchSelection(t *testing.T) {
 		t.Fatalf("git.InitWithStorer remote: %v", err)
 	}
 	remoteFact := "---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# Remote Fact\n\nContent.\n"
-	if _, _, err := remoteStore.WriteFile("kb/remote.md", remoteFact, "add remote", "learn"); err != nil {
+	if _, _, err := remoteStore.WriteFile("agent/remote", "kb/remote.md", remoteFact, "add remote", "learn"); err != nil {
 		t.Fatalf("remote WriteFile: %v", err)
 	}
 
-	remoteHead, err := remoteStore.HeadCommit()
+	remoteHead, err := remoteStore.HeadCommit("agent/remote")
 	if err != nil {
 		t.Fatalf("remote HeadCommit: %v", err)
 	}
@@ -835,6 +840,7 @@ func TestOriginSession_BranchSelection(t *testing.T) {
 	t.Cleanup(sm.Shutdown)
 
 	ri := &repos.RepoInstance{
+		AgentBranch: testAgentBranch,
 		Name:       "knomit",
 		GS:         localGS,
 		Svc:        localSvc,
@@ -844,7 +850,7 @@ func TestOriginSession_BranchSelection(t *testing.T) {
 		StartSync:  func(url string) error { return nil },
 	}
 	rm.Set("knomit", ri)
-	handler := NewRouterWithSessionManager(rm, nil, false, "kb", sm)
+	handler := NewRouterWithSessionManager(rm, nil, false, "kb", testAgentBranch, sm)
 
 	// Create session.
 	rr := doRequest(t, handler, http.MethodPost, "/api/v1/knomit/origin/session",
@@ -934,7 +940,7 @@ func TestOriginSession_RebuildAfterCommit(t *testing.T) {
 	}
 	t.Cleanup(func() { localSvc.Close() })
 
-	localGS, err := git.InitWithStorer(localSvc.GitStorer(), nil, "agent/local")
+	localGS, err := git.InitWithStorer(localSvc.GitStorer(), nil, testAgentBranch)
 	if err != nil {
 		t.Fatalf("git.InitWithStorer: %v", err)
 	}
@@ -950,10 +956,10 @@ func TestOriginSession_RebuildAfterCommit(t *testing.T) {
 		t.Fatalf("git.InitWithStorer remote: %v", err)
 	}
 	remoteFact := "---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# Remote Fact\n\nDifferent content.\n"
-	if _, _, err := remoteStore.WriteFile("kb/remote.md", remoteFact, "add remote", "learn"); err != nil {
+	if _, _, err := remoteStore.WriteFile("agent/remote", "kb/remote.md", remoteFact, "add remote", "learn"); err != nil {
 		t.Fatalf("remote WriteFile: %v", err)
 	}
-	remoteHead, err := remoteStore.HeadCommit()
+	remoteHead, err := remoteStore.HeadCommit("agent/remote")
 	if err != nil {
 		t.Fatalf("remote HeadCommit: %v", err)
 	}
@@ -973,6 +979,7 @@ func TestOriginSession_RebuildAfterCommit(t *testing.T) {
 	t.Cleanup(sm.Shutdown)
 
 	ri := &repos.RepoInstance{
+		AgentBranch: testAgentBranch,
 		Name:       "knomit",
 		GS:         localGS,
 		Svc:        localSvc,
@@ -982,7 +989,7 @@ func TestOriginSession_RebuildAfterCommit(t *testing.T) {
 		StartSync:  func(url string) error { return nil },
 	}
 	rm.Set("knomit", ri)
-	handler := NewRouterWithSessionManager(rm, nil, false, "kb", sm)
+	handler := NewRouterWithSessionManager(rm, nil, false, "kb", testAgentBranch, sm)
 
 	// Create session.
 	rr := doRequest(t, handler, http.MethodPost, "/api/v1/knomit/origin/session",
@@ -1051,7 +1058,7 @@ func TestOriginSession_ReviewWatermarkSetAfterCommit(t *testing.T) {
 	}
 	t.Cleanup(func() { localSvc.Close() })
 
-	localGS, err := git.InitWithStorer(localSvc.GitStorer(), nil, "agent/local")
+	localGS, err := git.InitWithStorer(localSvc.GitStorer(), nil, testAgentBranch)
 	if err != nil {
 		t.Fatalf("git.InitWithStorer: %v", err)
 	}
@@ -1064,10 +1071,10 @@ func TestOriginSession_ReviewWatermarkSetAfterCommit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("git.InitWithStorer remote: %v", err)
 	}
-	if _, _, err := remoteStore.WriteFile("kb/cloned.md", remoteFact, "add fact", "learn"); err != nil {
+	if _, _, err := remoteStore.WriteFile("agent/remote", "kb/cloned.md", remoteFact, "add fact", "learn"); err != nil {
 		t.Fatalf("remote WriteFile: %v", err)
 	}
-	remoteHead, err := remoteStore.HeadCommit()
+	remoteHead, err := remoteStore.HeadCommit("agent/remote")
 	if err != nil {
 		t.Fatalf("remote HeadCommit: %v", err)
 	}
@@ -1087,6 +1094,7 @@ func TestOriginSession_ReviewWatermarkSetAfterCommit(t *testing.T) {
 	t.Cleanup(sm.Shutdown)
 
 	ri := &repos.RepoInstance{
+		AgentBranch: testAgentBranch,
 		Name:       "knomit",
 		GS:         localGS,
 		Svc:        localSvc,
@@ -1096,7 +1104,7 @@ func TestOriginSession_ReviewWatermarkSetAfterCommit(t *testing.T) {
 		StartSync:  func(url string) error { return nil },
 	}
 	rm.Set("knomit", ri)
-	handler := NewRouterWithSessionManager(rm, nil, false, "kb", sm)
+	handler := NewRouterWithSessionManager(rm, nil, false, "kb", testAgentBranch, sm)
 
 	// Run the full workflow: create -> test -> apply -> commit.
 	rr := doRequest(t, handler, http.MethodPost, "/api/v1/knomit/origin/session",
@@ -1126,19 +1134,23 @@ func TestOriginSession_ReviewWatermarkSetAfterCommit(t *testing.T) {
 	findDoneEvent(t, parseSSEEvents(t, commitRec.Body.String()), "commit")
 
 	// All pipeline watermarks should be set to HEAD after rebuild.
+	// After a shared-history commit, the swapped store is the clone. The clone's
+	// HEAD is the remote's agent branch ("agent/remote" in this test), which is
+	// what handleCommit uses as rebuildBranch (first entry in AgentBranches).
 	updatedRI := rm.Get("knomit")
 	idx := updatedRI.Svc.Index()
-	branch := updatedRI.GS.Branch()
+	// The remote was initialized with "agent/remote" as its agent branch.
+	rebuildBranch := "agent/remote"
 
-	head, err := updatedRI.GS.HeadCommit()
+	head, err := updatedRI.GS.HeadCommit(rebuildBranch)
 	if err != nil {
-		t.Fatalf("HeadCommit: %v", err)
+		t.Fatalf("HeadCommit(%s): %v", rebuildBranch, err)
 	}
 
 	for _, tool := range []string{"review", "hypothesize"} {
-		watermark, err := idx.GetPipelineWatermark(tool, branch)
+		watermark, err := idx.GetPipelineWatermark(tool, rebuildBranch)
 		if err != nil {
-			t.Fatalf("GetPipelineWatermark(%s): %v", tool, err)
+			t.Fatalf("GetPipelineWatermark(%s, %s): %v", tool, rebuildBranch, err)
 		}
 		if watermark == "" {
 			t.Fatalf("%s watermark should be set after origin session commit, but was empty", tool)
@@ -1164,7 +1176,7 @@ func TestOriginSession_DeadRefs(t *testing.T) {
 	}
 	t.Cleanup(func() { localSvc.Close() })
 
-	localGS, err := git.InitWithStorer(localSvc.GitStorer(), nil, "agent/local")
+	localGS, err := git.InitWithStorer(localSvc.GitStorer(), nil, testAgentBranch)
 	if err != nil {
 		t.Fatalf("git.InitWithStorer: %v", err)
 	}
@@ -1186,10 +1198,10 @@ func TestOriginSession_DeadRefs(t *testing.T) {
 		t.Fatalf("git.InitWithStorer remote: %v", err)
 	}
 	remoteFact := "---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# Remote Fact\n\nContent.\n"
-	if _, _, err := remoteStore.WriteFile("kb/remote.md", remoteFact, "add remote", "learn"); err != nil {
+	if _, _, err := remoteStore.WriteFile("agent/remote", "kb/remote.md", remoteFact, "add remote", "learn"); err != nil {
 		t.Fatalf("remote WriteFile: %v", err)
 	}
-	remoteHead, err := remoteStore.HeadCommit()
+	remoteHead, err := remoteStore.HeadCommit("agent/remote")
 	if err != nil {
 		t.Fatalf("remote HeadCommit: %v", err)
 	}
@@ -1209,6 +1221,7 @@ func TestOriginSession_DeadRefs(t *testing.T) {
 	t.Cleanup(sm.Shutdown)
 
 	ri := &repos.RepoInstance{
+		AgentBranch: testAgentBranch,
 		Name:       "knomit",
 		GS:         localGS,
 		Svc:        localSvc,
@@ -1218,7 +1231,7 @@ func TestOriginSession_DeadRefs(t *testing.T) {
 		StartSync:  func(url string) error { return nil },
 	}
 	rm.Set("knomit", ri)
-	handler := NewRouterWithSessionManager(rm, nil, false, "kb", sm)
+	handler := NewRouterWithSessionManager(rm, nil, false, "kb", testAgentBranch, sm)
 
 	// Create session.
 	rr := doRequest(t, handler, http.MethodPost, "/api/v1/knomit/origin/session",
@@ -1278,7 +1291,7 @@ func TestOriginSession_NoDeadRefs(t *testing.T) {
 	}
 	t.Cleanup(func() { localSvc.Close() })
 
-	localGS, err := git.InitWithStorer(localSvc.GitStorer(), nil, "agent/local")
+	localGS, err := git.InitWithStorer(localSvc.GitStorer(), nil, testAgentBranch)
 	if err != nil {
 		t.Fatalf("git.InitWithStorer: %v", err)
 	}
@@ -1299,10 +1312,10 @@ func TestOriginSession_NoDeadRefs(t *testing.T) {
 		t.Fatalf("git.InitWithStorer remote: %v", err)
 	}
 	remoteFact := "---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# Remote Fact\n\nContent.\n"
-	if _, _, err := remoteStore.WriteFile("kb/remote.md", remoteFact, "add remote", "learn"); err != nil {
+	if _, _, err := remoteStore.WriteFile("agent/remote", "kb/remote.md", remoteFact, "add remote", "learn"); err != nil {
 		t.Fatalf("remote WriteFile: %v", err)
 	}
-	remoteHead, err := remoteStore.HeadCommit()
+	remoteHead, err := remoteStore.HeadCommit("agent/remote")
 	if err != nil {
 		t.Fatalf("remote HeadCommit: %v", err)
 	}
@@ -1322,6 +1335,7 @@ func TestOriginSession_NoDeadRefs(t *testing.T) {
 	t.Cleanup(sm.Shutdown)
 
 	ri := &repos.RepoInstance{
+		AgentBranch: testAgentBranch,
 		Name:       "knomit",
 		GS:         localGS,
 		Svc:        localSvc,
@@ -1331,7 +1345,7 @@ func TestOriginSession_NoDeadRefs(t *testing.T) {
 		StartSync:  func(url string) error { return nil },
 	}
 	rm.Set("knomit", ri)
-	handler := NewRouterWithSessionManager(rm, nil, false, "kb", sm)
+	handler := NewRouterWithSessionManager(rm, nil, false, "kb", testAgentBranch, sm)
 
 	rr := doRequest(t, handler, http.MethodPost, "/api/v1/knomit/origin/session",
 		`{"url":"inmem:///no-dead-refs-test"}`)

@@ -9,6 +9,9 @@ import (
 	"knomit/internal/store"
 )
 
+// testReviewBranch is the branch used for review integration tests.
+const testReviewBranch = "agent/test"
+
 // TestReviewLoopIntegration exercises the full review loop end-to-end:
 // StartSession → ContinueSession (prune) → ContinueSession (distill) → done,
 // using a real git store and real SQLite-backed PipelineIndex.
@@ -25,7 +28,7 @@ func TestReviewLoopIntegration(t *testing.T) {
 	reviewIdx := svc.Index()
 
 	// Real git store backed by SQLite storer.
-	gitStore, err := git.InitWithStorer(svc.GitStorer(), nil, "")
+	gitStore, err := git.InitWithStorer(svc.GitStorer(), nil, testReviewBranch)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -37,7 +40,7 @@ func TestReviewLoopIntegration(t *testing.T) {
 		"kb/go/errors.md":      factContent("Go Error Handling", "Go uses explicit error returns instead of exceptions."),
 	}
 	for path, content := range facts {
-		if _, _, err := gitStore.WriteFile(path, content, "add "+path, "learn"); err != nil {
+		if _, _, err := gitStore.WriteFile(testReviewBranch, path, content, "add "+path, "learn"); err != nil {
 			t.Fatalf("write %s: %v", path, err)
 		}
 	}
@@ -57,7 +60,7 @@ func TestReviewLoopIntegration(t *testing.T) {
 	idx.EXPECT().Delete(gomock.Any()).Return(nil).AnyTimes()
 	idx.EXPECT().Upsert(gomock.Any()).Return(nil).AnyTimes()
 
-	r := NewReviewer(gitStore, idx, reviewIdx, NewMockEmbedder(ctrl), nil)
+	r := NewReviewer(gitStore, idx, reviewIdx, NewMockEmbedder(ctrl), nil, testReviewBranch)
 
 	// --- Step 1: StartSession — all 3 facts are dirty (no watermark). ---
 	result, err := r.StartSession()
@@ -97,16 +100,16 @@ func TestReviewLoopIntegration(t *testing.T) {
 		result.Done, result.Item != nil, result.Progress)
 
 	// Verify retracted fact is actually deleted from git.
-	_, readErr := gitStore.ReadFile("kb/go/errors.md")
+	_, readErr := gitStore.ReadFile(testReviewBranch, "kb/go/errors.md")
 	if readErr == nil {
 		t.Error("expected kb/go/errors.md to be deleted from git after retract")
 	}
 
 	// Kept facts should still be readable.
-	if _, err := gitStore.ReadFile("kb/go/concurrency.md"); err != nil {
+	if _, err := gitStore.ReadFile(testReviewBranch, "kb/go/concurrency.md"); err != nil {
 		t.Errorf("concurrency.md should still exist: %v", err)
 	}
-	if _, err := gitStore.ReadFile("kb/go/interfaces.md"); err != nil {
+	if _, err := gitStore.ReadFile(testReviewBranch, "kb/go/interfaces.md"); err != nil {
 		t.Errorf("interfaces.md should still exist: %v", err)
 	}
 
@@ -146,14 +149,14 @@ func TestReviewLoopIntegration(t *testing.T) {
 	t.Logf("Session complete: completed=%d", result.Progress.Completed)
 
 	// --- Step 5: Verify watermark was advanced. ---
-	watermark, err := reviewIdx.GetPipelineWatermark("review", gitStore.Branch())
+	watermark, err := reviewIdx.GetPipelineWatermark("review", testReviewBranch)
 	if err != nil {
 		t.Fatalf("GetReviewWatermark: %v", err)
 	}
 	if watermark == "" {
 		t.Fatal("expected watermark to be set after session completes")
 	}
-	headHash, err := gitStore.HeadCommit()
+	headHash, err := gitStore.HeadCommit(testReviewBranch)
 	if err != nil {
 		t.Fatalf("HeadCommit: %v", err)
 	}

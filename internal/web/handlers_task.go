@@ -63,7 +63,7 @@ func handleRebuild() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
 		ri.RLock()
-		svc, gs, hub, repo := ri.Svc, ri.GS, ri.Hub, ri.Name
+		svc, gs, hub, repo, agentBranch := ri.Svc, ri.GS, ri.Hub, ri.Name, ri.AgentBranch
 		ri.RUnlock()
 
 		if svc == nil {
@@ -78,7 +78,7 @@ func handleRebuild() http.HandlerFunc {
 		}
 
 		idx := svc.Index()
-		branch := gs.Branch()
+		branch := agentBranch
 
 		id, err := hub.Start("rebuild", func(ctx context.Context, emit func(repos.TaskEvent)) {
 			emit(repos.TaskEvent{Status: "running", Phase: "start", Message: "rebuilding index", Repo: repo})

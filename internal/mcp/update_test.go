@@ -27,14 +27,14 @@ func TestUpdateMergesFields(t *testing.T) {
 
 	var writtenContent string
 
-	gs.EXPECT().FileExists("kb/foo.md").Return(true, nil)
-	gs.EXPECT().ReadFile("kb/foo.md").Return(factContent, nil)
-	gs.EXPECT().WriteFile("kb/foo.md", gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(path, content, msg, operation string) (string, string, error) {
+	gs.EXPECT().FileExists(testAgentBranch, "kb/foo.md").Return(true, nil)
+	gs.EXPECT().ReadFile(testAgentBranch, "kb/foo.md").Return(factContent, nil)
+	gs.EXPECT().WriteFile(testAgentBranch, "kb/foo.md", gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(branch, path, content, msg, operation string) (string, string, error) {
 		writtenContent = content
 		return "abc123def456", "blob_foo", nil
 	})
 
-	handler := UpdateHandler(gs, "kb")
+	handler := UpdateHandler(gs, "kb", testAgentBranch)
 
 	newBody := "Updated body."
 	newConf := 0.95
@@ -93,9 +93,9 @@ func TestUpdateFileNotFound(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
 
-	gs.EXPECT().FileExists("kb/nonexistent.md").Return(false, nil)
+	gs.EXPECT().FileExists(testAgentBranch, "kb/nonexistent.md").Return(false, nil)
 
-	handler := UpdateHandler(gs, "kb")
+	handler := UpdateHandler(gs, "kb", testAgentBranch)
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
@@ -129,14 +129,14 @@ func TestUpdateRefsAppended(t *testing.T) {
 
 	var writtenContent string
 
-	gs.EXPECT().FileExists("kb/refs.md").Return(true, nil)
-	gs.EXPECT().ReadFile("kb/refs.md").Return(factContent, nil)
-	gs.EXPECT().WriteFile("kb/refs.md", gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(path, content, msg, operation string) (string, string, error) {
+	gs.EXPECT().FileExists(testAgentBranch, "kb/refs.md").Return(true, nil)
+	gs.EXPECT().ReadFile(testAgentBranch, "kb/refs.md").Return(factContent, nil)
+	gs.EXPECT().WriteFile(testAgentBranch, "kb/refs.md", gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(branch, path, content, msg, operation string) (string, string, error) {
 		writtenContent = content
 		return "abc123def456", "blob_refs", nil
 	})
 
-	handler := UpdateHandler(gs, "kb")
+	handler := UpdateHandler(gs, "kb", testAgentBranch)
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{

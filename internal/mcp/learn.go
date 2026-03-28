@@ -67,7 +67,7 @@ type BatchEmbedder interface {
 // LearnHandler returns the handler function for knomit_learn.
 // If embedder is non-nil, dedup checks batch-embed all incoming facts upfront
 // instead of embedding one-at-a-time inside each Search call.
-func LearnHandler(gs GitStore, idx SearchIndex, ontologyRoot string, ontology *fact.Ontology, embedders ...BatchEmbedder) func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+func LearnHandler(gs GitStore, idx SearchIndex, ontologyRoot string, ontology *fact.Ontology, agentBranch string, embedders ...BatchEmbedder) func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 	var batchEmb BatchEmbedder
 	if len(embedders) > 0 {
 		batchEmb = embedders[0]
@@ -192,7 +192,7 @@ func LearnHandler(gs GitStore, idx SearchIndex, ontologyRoot string, ontology *f
 
 			match := results[0]
 			// Read existing fact to get its full metadata (refs, etc.)
-			existingContent, readErr := gs.ReadFile(match.Path)
+			existingContent, readErr := gs.ReadFile(agentBranch, match.Path)
 			if readErr != nil {
 				continue
 			}
@@ -207,7 +207,7 @@ func LearnHandler(gs GitStore, idx SearchIndex, ontologyRoot string, ontology *f
 				// Write the observation as normal (don't merge into existing path).
 				// Retract the hypothesis.
 				retractMsg := fmt.Sprintf("learn: hypothesis %s subsumed by observation", match.Path)
-				gs.DeleteFile(match.Path, retractMsg, "retract")
+				gs.DeleteFile(agentBranch, match.Path, retractMsg, "retract")
 				// Add hypothesis path to observation's refs.
 				f.Refs = fact.AppendUnique(f.Refs, match.Path)
 				facts[i] = f
@@ -252,7 +252,7 @@ func LearnHandler(gs GitStore, idx SearchIndex, ontologyRoot string, ontology *f
 
 		// 4. BatchWrite all facts in one commit.
 		commitMsg := fmt.Sprintf("learn: %s", momentName)
-		hash, _, err := gs.BatchWrite(files, commitMsg, "learn")
+		hash, _, err := gs.BatchWrite(agentBranch, files, commitMsg, "learn")
 		if err != nil {
 			return mcpgo.NewToolResultError(fmt.Sprintf("write error: %v", err)), nil
 		}

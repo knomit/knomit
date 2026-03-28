@@ -22,7 +22,7 @@ import (
 func TestHandleBrowse_ListDirError(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
-	gs.EXPECT().ListDir("kb/missing").Return(nil, fmt.Errorf("not found"))
+	gs.EXPECT().ListDir(testAgentBranch, "kb/missing").Return(nil, fmt.Errorf("not found"))
 
 	handler := newTestRouter(gs, nil)
 	rr := doRequest(t, handler, http.MethodGet, "/api/v1/knomit/browse?path=kb/missing", "")
@@ -43,7 +43,7 @@ func TestHandleBrowse_ListDirError(t *testing.T) {
 func TestHandleFact_NotFound(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
-	gs.EXPECT().ReadFile("kb/missing.md").Return("", fmt.Errorf("not found"))
+	gs.EXPECT().ReadFile(testAgentBranch, "kb/missing.md").Return("", fmt.Errorf("not found"))
 
 	handler := newTestRouter(gs, nil)
 	rr := doRequest(t, handler, http.MethodGet, "/api/v1/knomit/fact?path=kb/missing.md", "")
@@ -57,7 +57,7 @@ func TestHandleFact_NonFactFallsBackToRaw(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
 	// Return content without frontmatter (e.g. kb.md manifest).
-	gs.EXPECT().ReadFile("kb.md").Return("# Knowledge Base\n\nRoot manifest.\n", nil)
+	gs.EXPECT().ReadFile(testAgentBranch, "kb.md").Return("# Knowledge Base\n\nRoot manifest.\n", nil)
 
 	handler := newTestRouter(gs, nil)
 	rr := doRequest(t, handler, http.MethodGet, "/api/v1/knomit/fact?path=kb.md", "")
@@ -217,7 +217,7 @@ func TestHandleSearch_IndexError(t *testing.T) {
 func TestHandleHistory_Error(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
-	gs.EXPECT().LogPaginated("kb/fact.md", 50, "", "", "").Return(nil, "", "", fmt.Errorf("git error"))
+	gs.EXPECT().LogPaginated(testAgentBranch, "kb/fact.md", 50, "", "", "").Return(nil, "", "", fmt.Errorf("git error"))
 
 	handler := newTestRouter(gs, nil)
 	rr := doRequest(t, handler, http.MethodGet, "/api/v1/knomit/history?path=kb/fact.md", "")
@@ -234,7 +234,7 @@ func TestHandleHistoryPaginated(t *testing.T) {
 	entries := []git.LogEntryWithTags{
 		{Commit: "abc12345", Date: "2026-03-14T10:00:00Z", Message: "add fact", Operation: "learn"},
 	}
-	gs.EXPECT().LogPaginated("kb/test", 50, "", "", "").Return(entries, "def67890", "", nil)
+	gs.EXPECT().LogPaginated(testAgentBranch, "kb/test", 50, "", "", "").Return(entries, "def67890", "", nil)
 
 	handler := newTestRouter(gs, nil)
 	rr := doRequest(t, handler, http.MethodGet, "/api/v1/knomit/history?path=kb/test", "")
@@ -265,7 +265,7 @@ func TestHandleCommitDetail(t *testing.T) {
 	}, nil)
 	// Title lookup fallback: no index, so handler tries ReadFileAtCommit
 	gs.EXPECT().ReadFileAtCommit("kb/test.md", "abc12345").Return("", fmt.Errorf("not found"))
-	gs.EXPECT().ReadFileLastCommit("kb/test.md", "abc12345").Return("", "", fmt.Errorf("not found"))
+	gs.EXPECT().ReadFileLastCommit(testAgentBranch, "kb/test.md", "abc12345").Return("", "", fmt.Errorf("not found"))
 
 	handler := newTestRouter(gs, nil)
 	rr := doRequest(t, handler, http.MethodGet, "/api/v1/knomit/commit?hash=abc12345", "")
@@ -296,7 +296,7 @@ func TestHandleCommitDetail_DeletedFileReturnsTitleViaLastCommit(t *testing.T) {
 	gs.EXPECT().ReadFileAtCommit("kb/deleted-fact.md", "retract99").Return("", fmt.Errorf("not found"))
 	// ReadFileLastCommit succeeds — returns the content from before deletion.
 	factContent := "---\ndomain: [test]\nconfidence: 0.8\nsources: 1\nentities: [x]\nrefs: []\n---\n# Deleted Fact Title\n\nThis fact was retracted.\n"
-	gs.EXPECT().ReadFileLastCommit("kb/deleted-fact.md", "retract99").Return(factContent, "prev-commit", nil)
+	gs.EXPECT().ReadFileLastCommit(testAgentBranch, "kb/deleted-fact.md", "retract99").Return(factContent, "prev-commit", nil)
 
 	handler := newTestRouter(gs, nil)
 	rr := doRequest(t, handler, http.MethodGet, "/api/v1/knomit/commit?hash=retract99", "")
@@ -339,12 +339,13 @@ func TestHandleCommitDetail_DeletedFileWithIndexFallback(t *testing.T) {
 	hub := repos.NewTaskHub(context.Background())
 	rm := repos.New(context.Background(), repos.Deps{})
 	rm.Set("knomit", &repos.RepoInstance{
-		Name: "knomit",
-		GS:   gs,
-		Idx:  mockIdx,
-		Hub:  hub,
+		Name:        "knomit",
+		AgentBranch: testAgentBranch,
+		GS:          gs,
+		Idx:         mockIdx,
+		Hub:         hub,
 	})
-	handler := NewRouter(rm, nil, false, "kb")
+	handler := NewRouter(rm, nil, false, "kb", testAgentBranch)
 	rr := doRequest(t, handler, http.MethodGet, "/api/v1/knomit/commit?hash=retract-idx", "")
 
 	if rr.Code != 200 {
@@ -478,7 +479,7 @@ func TestHandleStats_NoPath(t *testing.T) {
 func TestHandleStatus_HeadCommitError(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
-	gs.EXPECT().HeadCommit().Return("", fmt.Errorf("no HEAD"))
+	gs.EXPECT().HeadCommit(testAgentBranch).Return("", fmt.Errorf("no HEAD"))
 
 	handler := newTestRouter(gs, nil)
 	rr := doRequest(t, handler, http.MethodGet, "/api/v1/knomit/status", "")
@@ -510,12 +511,13 @@ func TestHandleSynthesizeStart_NoReviewer(t *testing.T) {
 	synthDeps := &repos.SynthDeps{Adapter: &fakeAdapter{}}
 	rm := repos.New(context.Background(), repos.Deps{})
 	rm.Set("knomit", &repos.RepoInstance{
-		Name:      "knomit",
-		GS:        gs,
-		Hub:       hub,
-		SynthDeps: synthDeps,
+		Name:        "knomit",
+		AgentBranch: testAgentBranch,
+		GS:          gs,
+		Hub:         hub,
+		SynthDeps:   synthDeps,
 	})
-	handler := NewRouter(rm, nil, false, "kb")
+	handler := NewRouter(rm, nil, false, "kb", testAgentBranch)
 
 	rr := doRequest(t, handler, http.MethodPost, "/api/v1/knomit/synthesize", "")
 
@@ -530,18 +532,19 @@ func TestHandleSynthesizeStart_NoReviewer(t *testing.T) {
 func TestHandleEvents_InitialStatus(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
-	gs.EXPECT().HeadCommit().Return("abc123", nil).AnyTimes()
+	gs.EXPECT().HeadCommit(testAgentBranch).Return("abc123", nil).AnyTimes()
 	mockIdx := NewMockSearchIndex(ctrl)
 
 	hub := repos.NewTaskHub(context.Background())
 	rm := repos.New(context.Background(), repos.Deps{})
 	rm.Set("knomit", &repos.RepoInstance{
-		Name: "knomit",
-		GS:   gs,
-		Idx:  mockIdx,
-		Hub:  hub,
+		Name:        "knomit",
+		AgentBranch: testAgentBranch,
+		GS:          gs,
+		Idx:         mockIdx,
+		Hub:         hub,
 	})
-	handler := NewRouter(rm, nil, false, "kb")
+	handler := NewRouter(rm, nil, false, "kb", testAgentBranch)
 
 	// Use a context with timeout to end the SSE connection.
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
@@ -563,16 +566,17 @@ func TestHandleEvents_InitialStatus(t *testing.T) {
 func TestHandleEvents_TaskEvents(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
-	gs.EXPECT().HeadCommit().Return("abc123", nil).AnyTimes()
+	gs.EXPECT().HeadCommit(testAgentBranch).Return("abc123", nil).AnyTimes()
 
 	hub := repos.NewTaskHub(context.Background())
 	rm := repos.New(context.Background(), repos.Deps{})
 	rm.Set("knomit", &repos.RepoInstance{
-		Name: "knomit",
-		GS:   gs,
-		Hub:  hub,
+		Name:        "knomit",
+		AgentBranch: testAgentBranch,
+		GS:          gs,
+		Hub:         hub,
 	})
-	handler := NewRouter(rm, nil, false, "kb")
+	handler := NewRouter(rm, nil, false, "kb", testAgentBranch)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
@@ -690,16 +694,17 @@ func TestWriteTaskConflict(t *testing.T) {
 func TestHandleEvents_SyncAndPushEvents(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
-	gs.EXPECT().HeadCommit().Return("abc123", nil).AnyTimes()
+	gs.EXPECT().HeadCommit(testAgentBranch).Return("abc123", nil).AnyTimes()
 
 	hub := repos.NewTaskHub(context.Background())
 	rm := repos.New(context.Background(), repos.Deps{})
 	rm.Set("knomit", &repos.RepoInstance{
-		Name: "knomit",
-		GS:   gs,
-		Hub:  hub,
+		Name:        "knomit",
+		AgentBranch: testAgentBranch,
+		GS:          gs,
+		Hub:         hub,
 	})
-	handler := NewRouter(rm, nil, false, "kb")
+	handler := NewRouter(rm, nil, false, "kb", testAgentBranch)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
@@ -772,7 +777,7 @@ func TestHandleSearch_EpFilter(t *testing.T) {
 func TestHandleFactRetract_Success(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
-	gs.EXPECT().DeleteFile("kb/test.md", "manual-review: retract kb/test.md", "retract").Return("abc1234", nil)
+	gs.EXPECT().DeleteFile(testAgentBranch, "kb/test.md", "manual-review: retract kb/test.md", "retract").Return("abc1234", nil)
 
 	handler := newTestRouter(gs, nil)
 	rr := doRequest(t, handler, http.MethodDelete, "/api/v1/knomit/fact?path=kb/test.md", "")
@@ -802,7 +807,7 @@ func TestHandleFactRetract_MissingPath(t *testing.T) {
 func TestHandleFactRetract_DeleteError(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
-	gs.EXPECT().DeleteFile("kb/missing.md", "manual-review: retract kb/missing.md", "retract").Return("", fmt.Errorf("file not found"))
+	gs.EXPECT().DeleteFile(testAgentBranch, "kb/missing.md", "manual-review: retract kb/missing.md", "retract").Return("", fmt.Errorf("file not found"))
 
 	handler := newTestRouter(gs, nil)
 	rr := doRequest(t, handler, http.MethodDelete, "/api/v1/knomit/fact?path=kb/missing.md", "")

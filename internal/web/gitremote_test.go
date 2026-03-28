@@ -33,11 +33,7 @@ func newTestRepoManager(repoName string, store *git.Store) *repos.Manager {
 // GET /git/knomit/info/refs?service=git-upload-pack redirected to
 // /?service=git-upload-pack.
 func TestGitCloneIntegration(t *testing.T) {
-	dir := t.TempDir()
-	store, err := git.Init(filepath.Join(dir, "test.db"), nil)
-	if err != nil {
-		t.Fatalf("git.Init: %v", err)
-	}
+	store := newWebTestStore(t)
 
 	gitHandler := GitRemoteHandler(newTestRepoManager("knomit", store))
 
@@ -94,13 +90,10 @@ func TestGitCloneIntegration(t *testing.T) {
 // a non-empty repo and this exercises the full fetch protocol.
 func TestGitCloneWithCommits(t *testing.T) {
 	dir := t.TempDir()
-	store, err := git.Init(filepath.Join(dir, "test.db"), nil)
-	if err != nil {
-		t.Fatalf("git.Init: %v", err)
-	}
+	store := newWebTestStore(t)
 
 	// Add a commit so the repo is non-empty.
-	if _, _, err := store.WriteFile("kb/hello.md", "# Hello\n", "init", "learn"); err != nil {
+	if _, _, err := store.WriteFile(testAgentBranch, "kb/hello.md", "# Hello\n", "init", "learn"); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
@@ -142,11 +135,7 @@ func TestGitRemoteHandler_GSNotGitRemoteStore(t *testing.T) {
 // TestGitRemoteHandler_UnknownRepo verifies that requests for an unknown repo
 // return 404.
 func TestGitRemoteHandler_UnknownRepo(t *testing.T) {
-	dir := t.TempDir()
-	store, err := git.Init(filepath.Join(dir, "test.db"), nil)
-	if err != nil {
-		t.Fatalf("git.Init: %v", err)
-	}
+	store := newWebTestStore(t)
 
 	handler := GitRemoteHandler(newTestRepoManager("knomit", store))
 
@@ -228,19 +217,13 @@ func TestRequestBody_PlainPassthrough(t *testing.T) {
 func TestGitRemoteHandler_MultiRepo(t *testing.T) {
 	dir := t.TempDir()
 
-	storeA, err := git.Init(filepath.Join(dir, "a.db"), nil)
-	if err != nil {
-		t.Fatalf("git.Init a: %v", err)
-	}
-	if _, _, err := storeA.WriteFile("kb/a.md", "# A\n", "init a", "learn"); err != nil {
+	storeA := newWebTestStore(t)
+	if _, _, err := storeA.WriteFile(testAgentBranch, "kb/a.md", "# A\n", "init a", "learn"); err != nil {
 		t.Fatalf("WriteFile a: %v", err)
 	}
 
-	storeB, err := git.Init(filepath.Join(dir, "b.db"), nil)
-	if err != nil {
-		t.Fatalf("git.Init b: %v", err)
-	}
-	if _, _, err := storeB.WriteFile("kb/b.md", "# B\n", "init b", "learn"); err != nil {
+	storeB := newWebTestStore(t)
+	if _, _, err := storeB.WriteFile(testAgentBranch, "kb/b.md", "# B\n", "init b", "learn"); err != nil {
 		t.Fatalf("WriteFile b: %v", err)
 	}
 
