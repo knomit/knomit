@@ -73,7 +73,7 @@ func ScopedCluster(
 		resolution = 1.0
 	}
 
-	result, err := idx.ClusterFacts(resolution, 2)
+	result, err := idx.ClusterFacts(agentBranch, resolution, 2)
 	if err != nil {
 		log.Debug().Err(err).Msg("scoped-cluster: Louvain failed, falling back to category grouping")
 		onProgress(ProgressEvent{Phase: "cluster", Message: "Louvain failed, using category fallback"})

@@ -189,18 +189,18 @@ func (m *MockSearchIndex) EXPECT() *MockSearchIndexMockRecorder {
 }
 
 // ClusterFacts mocks base method.
-func (m *MockSearchIndex) ClusterFacts(resolution float64, minCommunitySize int) (store.ClusterResult, error) {
+func (m *MockSearchIndex) ClusterFacts(branch string, resolution float64, minCommunitySize int) (store.ClusterResult, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "ClusterFacts", resolution, minCommunitySize)
+	ret := m.ctrl.Call(m, "ClusterFacts", branch, resolution, minCommunitySize)
 	ret0, _ := ret[0].(store.ClusterResult)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // ClusterFacts indicates an expected call of ClusterFacts.
-func (mr *MockSearchIndexMockRecorder) ClusterFacts(resolution, minCommunitySize any) *gomock.Call {
+func (mr *MockSearchIndexMockRecorder) ClusterFacts(branch, resolution, minCommunitySize any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ClusterFacts", reflect.TypeOf((*MockSearchIndex)(nil).ClusterFacts), resolution, minCommunitySize)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ClusterFacts", reflect.TypeOf((*MockSearchIndex)(nil).ClusterFacts), branch, resolution, minCommunitySize)
 }
 
 // Delete mocks base method.

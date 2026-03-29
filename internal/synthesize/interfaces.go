@@ -19,7 +19,7 @@ type SearchIndex interface {
 	Search(branch string, q store.SearchQuery) ([]store.SearchResult, error)
 	Upsert(branch, commitHash string, r store.FactRecord) error
 	Delete(branch, path string) error
-	ClusterFacts(resolution float64, minCommunitySize int) (store.ClusterResult, error)
+	ClusterFacts(branch string, resolution float64, minCommunitySize int) (store.ClusterResult, error)
 }
 
 // ProgressEvent carries progress information from the pipeline to the caller.

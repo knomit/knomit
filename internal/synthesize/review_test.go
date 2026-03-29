@@ -103,7 +103,7 @@ func TestStartSession_WatermarkEmpty_AllFactsDirty(t *testing.T) {
 	// ScopedCluster will search for neighbors.
 	idx.EXPECT().Search(gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
 	// ClusterFacts fails → fallback to category grouping (both in kb/go → one cluster).
-	idx.EXPECT().ClusterFacts(1.0, 2).Return(store.ClusterResult{}, fmt.Errorf("no embeddings"))
+	idx.EXPECT().ClusterFacts(gomock.Any(), 1.0, 2).Return(store.ClusterResult{}, fmt.Errorf("no embeddings"))
 
 	// Should insert one prune work item (cluster of 2) and one distill item (>1 seed).
 	ri.EXPECT().InsertPipelineWorkItem(gomock.Any()).DoAndReturn(func(item store.PipelineWorkItem) error {
@@ -178,7 +178,7 @@ func TestStartSession_WithWatermark(t *testing.T) {
 			{FactWithBody: store.FactWithBody{FactRecord: store.FactRecord{Path: "kb/go/two.md"}}},
 		}, nil
 	}).AnyTimes()
-	idx.EXPECT().ClusterFacts(1.0, 2).Return(store.ClusterResult{
+	idx.EXPECT().ClusterFacts(gomock.Any(), 1.0, 2).Return(store.ClusterResult{
 		Clusters: map[int][]string{0: {"kb/go/one.md", "kb/go/two.md"}},
 	}, nil)
 
@@ -428,7 +428,7 @@ func TestContinueSession_DistillResponse(t *testing.T) {
 	// RAPTOR: ScopedCluster on the 1 written fact — searches neighbors, clusters.
 	// Single fact → filterSmallClusters removes it → no new work items.
 	idx.EXPECT().Search(gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
-	idx.EXPECT().ClusterFacts(1.0, 2).Return(store.ClusterResult{}, fmt.Errorf("no embeddings"))
+	idx.EXPECT().ClusterFacts(gomock.Any(), 1.0, 2).Return(store.ClusterResult{}, fmt.Errorf("no embeddings"))
 
 	ri.EXPECT().SetPipelineWorkItemResponse(int64(2), distillResp).Return(nil)
 
@@ -630,7 +630,7 @@ func TestContinueSession_RAPTOR_EnqueuesDeeper(t *testing.T) {
 	idx.EXPECT().Search(gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
 	// ClusterFacts fails → fallback to category grouping.
 	// Both written facts share kb/go → one cluster of 2 facts.
-	idx.EXPECT().ClusterFacts(1.0, 2).Return(store.ClusterResult{}, fmt.Errorf("no embeddings"))
+	idx.EXPECT().ClusterFacts(gomock.Any(), 1.0, 2).Return(store.ClusterResult{}, fmt.Errorf("no embeddings"))
 
 	// Expect one new work item inserted at depth 1.
 	var insertedItem store.PipelineWorkItem
@@ -767,7 +767,7 @@ func TestRunAll_ProcessesAllWorkItems(t *testing.T) {
 
 	// ScopedCluster: search + cluster.
 	idx.EXPECT().Search(gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
-	idx.EXPECT().ClusterFacts(1.0, 2).Return(store.ClusterResult{}, fmt.Errorf("no embeddings")).AnyTimes()
+	idx.EXPECT().ClusterFacts(gomock.Any(), 1.0, 2).Return(store.ClusterResult{}, fmt.Errorf("no embeddings")).AnyTimes()
 
 	// Insert prune + distill work items (2 seeds, 1 cluster of 2).
 	ri.EXPECT().InsertPipelineWorkItem(gomock.Any()).Return(nil).Times(2)

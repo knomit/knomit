@@ -309,7 +309,7 @@ type ClusterResult struct {
 //
 // resolution controls Louvain granularity: higher = more, smaller communities.
 // minCommunitySize: communities smaller than this are relabeled as noise.
-func (idx *Index) ClusterFacts(resolution float64, minCommunitySize int) (ClusterResult, error) {
+func (idx *Index) ClusterFacts(branch string, resolution float64, minCommunitySize int) (ClusterResult, error) {
 	if minCommunitySize <= 0 {
 		minCommunitySize = 2
 	}
@@ -358,8 +358,14 @@ func (idx *Index) ClusterFacts(resolution float64, minCommunitySize int) (Cluste
 		return ClusterResult{}, fmt.Errorf("louvain rows: %w", err)
 	}
 
-	// Post-filter: exclude deleted facts (check existence in `facts` table),
-	// then apply minCommunitySize.
+	// Resolve branch to branchID for scoped filtering.
+	branchID, err := idx.BranchID(branch)
+	if err != nil {
+		return ClusterResult{}, fmt.Errorf("ClusterFacts: %w", err)
+	}
+
+	// Post-filter: exclude facts not visible on this branch (check existence
+	// in `branch_facts` table), then apply minCommunitySize.
 	allPaths := make([]string, 0)
 	for _, members := range communities {
 		allPaths = append(allPaths, members...)
@@ -372,7 +378,8 @@ func (idx *Index) ClusterFacts(resolution float64, minCommunitySize int) (Cluste
 			placeholders[i] = "?"
 			args[i] = p
 		}
-		qry := `SELECT path FROM facts WHERE path IN (` + strings.Join(placeholders, ",") + `)`
+		qry := `SELECT path FROM branch_facts WHERE branch_id = ? AND path IN (` + strings.Join(placeholders, ",") + `)`
+		args = append([]interface{}{branchID}, args...)
 		eRows, err := idx.db.Query(qry, args...)
 		if err == nil {
 			for eRows.Next() {

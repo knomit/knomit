@@ -400,7 +400,7 @@ func TestClusterFactsLouvain(t *testing.T) {
 		}
 	}
 
-	result, err := idx.ClusterFacts(1.0, 2)
+	result, err := idx.ClusterFacts(testBranch, 1.0, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -416,6 +416,68 @@ func TestClusterFactsLouvain(t *testing.T) {
 		total += len(members)
 	}
 	t.Logf("clusters: %d, total members: %d, noise: %d", len(result.Clusters), total, len(result.Noise))
+}
+
+func TestClusterFactsBranchScoped(t *testing.T) {
+	idx, err := New(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer idx.Close()
+	idx.SetEmbedder(&stubEmbedder768d{})
+
+	insertBlob(t, idx.db, "hash_a", "alpha content")
+	insertBlob(t, idx.db, "hash_b", "beta content")
+	insertBlob(t, idx.db, "hash_c", "gamma content")
+	insertBlob(t, idx.db, "hash_d", "delta content")
+
+	branchA := "agent/branch-a"
+	branchB := "agent/branch-b"
+
+	// Facts on branchA share entities Go+SQLite → they cluster together.
+	for _, f := range []FactRecord{
+		{Path: "kb/a.md", Title: "A", BlobHash: "hash_a", Domain: []string{"eng"}, Entities: []string{"Go", "SQLite"}, Refs: []string{}},
+		{Path: "kb/b.md", Title: "B", BlobHash: "hash_b", Domain: []string{"eng"}, Entities: []string{"Go", "SQLite"}, Refs: []string{}},
+	} {
+		if err := idx.Upsert(branchA, "commit1", f); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Facts on branchB share the same entities but live on a different branch.
+	for _, f := range []FactRecord{
+		{Path: "kb/c.md", Title: "C", BlobHash: "hash_c", Domain: []string{"eng"}, Entities: []string{"Go", "SQLite"}, Refs: []string{}},
+		{Path: "kb/d.md", Title: "D", BlobHash: "hash_d", Domain: []string{"eng"}, Entities: []string{"Go", "SQLite"}, Refs: []string{}},
+	} {
+		if err := idx.Upsert(branchB, "commit2", f); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// ClusterFacts scoped to branchA should only return branchA facts.
+	result, err := idx.ClusterFacts(branchA, 1.0, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	allPaths := make(map[string]bool)
+	for _, members := range result.Clusters {
+		for _, p := range members {
+			allPaths[p] = true
+		}
+	}
+	for _, p := range result.Noise {
+		allPaths[p] = true
+	}
+
+	// branchA facts must be present
+	if !allPaths["kb/a.md"] || !allPaths["kb/b.md"] {
+		t.Fatalf("expected branchA facts in results, got paths: %v", allPaths)
+	}
+	// branchB facts must be absent
+	if allPaths["kb/c.md"] || allPaths["kb/d.md"] {
+		t.Fatalf("branchB facts should not appear in branchA clusters, got paths: %v", allPaths)
+	}
 }
 
 func TestSearchWithGraphExpansion(t *testing.T) {

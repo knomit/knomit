@@ -55,7 +55,7 @@ func TestReviewLoopIntegration(t *testing.T) {
 	}, nil)
 	// ScopedCluster calls Search for neighbors.
 	idx.EXPECT().Search(gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
-	idx.EXPECT().ClusterFacts(gomock.Any(), gomock.Any()).Return(store.ClusterResult{}, fmt.Errorf("no embeddings")).AnyTimes()
+	idx.EXPECT().ClusterFacts(gomock.Any(), gomock.Any(), gomock.Any()).Return(store.ClusterResult{}, fmt.Errorf("no embeddings")).AnyTimes()
 	// For prune/distill apply: delete calls go to real git, index delete goes to mock.
 	idx.EXPECT().Delete(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 	idx.EXPECT().Upsert(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()

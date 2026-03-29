@@ -39,7 +39,7 @@ func TestScopedCluster_SeedsAndNeighborsClustered(t *testing.T) {
 
 	// ClusterFacts returns clusters that include both seed and neighbor in one cluster,
 	// and the unrelated fact in another.
-	idx.EXPECT().ClusterFacts(1.0, 2).Return(store.ClusterResult{
+	idx.EXPECT().ClusterFacts(gomock.Any(), 1.0, 2).Return(store.ClusterResult{
 		Clusters: map[int][]string{
 			0: {"kb/go/concurrency/channels.md", "kb/go/concurrency/goroutines.md"},
 			1: {"kb/python/async/await.md"},
@@ -82,7 +82,7 @@ func TestScopedCluster_CategoryFallbackOnLouvainError(t *testing.T) {
 	}, nil)
 
 	// ClusterFacts fails.
-	idx.EXPECT().ClusterFacts(1.0, 2).Return(store.ClusterResult{}, fmt.Errorf("no embeddings"))
+	idx.EXPECT().ClusterFacts(gomock.Any(), 1.0, 2).Return(store.ClusterResult{}, fmt.Errorf("no embeddings"))
 
 	result, err := ScopedCluster([]factForLLM{seed1, seed2}, idx, 1.0, nil, "agent/test")
 	if err != nil {
@@ -112,7 +112,7 @@ func TestScopedCluster_SingleFactClustersFiltered(t *testing.T) {
 	idx.EXPECT().Search(gomock.Any(), gomock.Any()).Return(nil, nil)
 
 	// ClusterFacts returns a single-element cluster.
-	idx.EXPECT().ClusterFacts(1.0, 2).Return(store.ClusterResult{
+	idx.EXPECT().ClusterFacts(gomock.Any(), 1.0, 2).Return(store.ClusterResult{
 		Clusters: map[int][]string{
 			0: {"kb/go/concurrency/channels.md"},
 		},
@@ -140,7 +140,7 @@ func TestScopedCluster_UnrelatedFactsExcluded(t *testing.T) {
 	}, nil)
 
 	// Louvain puts all three in one big cluster.
-	idx.EXPECT().ClusterFacts(1.0, 2).Return(store.ClusterResult{
+	idx.EXPECT().ClusterFacts(gomock.Any(), 1.0, 2).Return(store.ClusterResult{
 		Clusters: map[int][]string{
 			0: {"kb/go/concurrency/channels.md", "kb/go/concurrency/goroutines.md", "kb/rust/ownership/borrow.md"},
 		},
@@ -213,7 +213,7 @@ func TestScopedCluster_ExcludeTypesPassedToSearch(t *testing.T) {
 		}, nil
 	})
 
-	idx.EXPECT().ClusterFacts(1.0, 2).Return(store.ClusterResult{
+	idx.EXPECT().ClusterFacts(gomock.Any(), 1.0, 2).Return(store.ClusterResult{
 		Clusters: map[int][]string{
 			0: {"kb/go/concurrency/channels.md", "kb/go/concurrency/goroutines.md"},
 		},
@@ -242,7 +242,7 @@ func TestScopedCluster_NoExcludeTypesByDefault(t *testing.T) {
 		return nil, nil
 	})
 
-	idx.EXPECT().ClusterFacts(1.0, 2).Return(store.ClusterResult{}, fmt.Errorf("no embeddings"))
+	idx.EXPECT().ClusterFacts(gomock.Any(), 1.0, 2).Return(store.ClusterResult{}, fmt.Errorf("no embeddings"))
 
 	_, _ = ScopedCluster([]factForLLM{seed}, idx, 1.0, nil, "agent/test")
 }
