@@ -58,7 +58,7 @@ func (s *Store) WriteFile(branch, path, content, message, operation string) (com
 	// Notify and append commit log outside the lock — notifyCommit triggers
 	// index sync which may call back into Store for reads.
 	s.notifyCommit(branch, newCommitHash.String())
-	s.appendCommitLog(newCommitHash)
+	s.appendCommitLog(branch, newCommitHash)
 	return newCommitHash.String(), newBlobHash.String(), nil
 }
 
@@ -116,7 +116,7 @@ func (s *Store) DeleteFile(branch, path, message, operation string) (commitHash 
 	unlock()
 
 	s.notifyCommit(branch, newCommitHash.String())
-	s.appendCommitLog(newCommitHash)
+	s.appendCommitLog(branch, newCommitHash)
 	return newCommitHash.String(), nil
 }
 
@@ -154,7 +154,7 @@ func (s *Store) BatchWrite(branch string, files map[string]string, message, oper
 	// Notify and append commit log outside the lock — notifyCommit triggers
 	// index sync which may call back into Store for reads.
 	s.notifyCommit(branch, cHash.String())
-	s.appendCommitLog(cHash)
+	s.appendCommitLog(branch, cHash)
 	return cHash.String(), blobHashes, nil
 }
 

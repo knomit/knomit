@@ -81,9 +81,18 @@ func (s *Storer) commitLogTableExists() bool {
 // The commitLog atomic is marked true once the table is confirmed to exist
 // and has been previously written to (either via a new insert or confirmed
 // via an existing indexed commit).
-func (s *Storer) CommitLogSync(iter func() (hash string, entries []CommitLogEntry, err error)) error {
+func (s *Storer) CommitLogSync(branchName string, iter func() (hash string, entries []CommitLogEntry, err error)) error {
 	if !s.CommitLogAvailable() {
 		return nil
+	}
+
+	var branchID sql.NullInt64
+	if branchName != "" {
+		var id int64
+		err := s.db.QueryRow(`SELECT id FROM branches WHERE name = ?`, branchName).Scan(&id)
+		if err == nil {
+			branchID = sql.NullInt64{Int64: id, Valid: true}
+		}
 	}
 
 	for {
@@ -117,14 +126,14 @@ func (s *Storer) CommitLogSync(iter func() (hash string, entries []CommitLogEntr
 			return fmt.Errorf("CommitLogSync: begin tx: %w", err)
 		}
 
-		stmt, err := tx.Prepare(`INSERT OR IGNORE INTO commit_log (commit_hash, path, message, operation, author_email, action, committed_at) VALUES (?, ?, ?, ?, ?, ?, ?)`)
+		stmt, err := tx.Prepare(`INSERT OR IGNORE INTO commit_log (commit_hash, path, message, operation, author_email, action, committed_at, branch_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
 		if err != nil {
 			tx.Rollback()
 			return fmt.Errorf("CommitLogSync: prepare: %w", err)
 		}
 
 		for _, e := range entries {
-			if _, err := stmt.Exec(e.Hash, e.Path, e.Message, e.Operation, e.AuthorEmail, e.Action, e.CommittedAt); err != nil {
+			if _, err := stmt.Exec(e.Hash, e.Path, e.Message, e.Operation, e.AuthorEmail, e.Action, e.CommittedAt, branchID); err != nil {
 				stmt.Close()
 				tx.Rollback()
 				return fmt.Errorf("CommitLogSync: insert: %w", err)

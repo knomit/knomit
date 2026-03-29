@@ -130,7 +130,7 @@ func (s *Store) populateCommitLog(branch string) error {
 	defer logIter.Close()
 
 	var count int
-	err = s.storer.CommitLogSync(func() (string, []storegit.CommitLogEntry, error) {
+	err = s.storer.CommitLogSync(branch, func() (string, []storegit.CommitLogEntry, error) {
 		c, err := logIter.Next()
 		if err == io.EOF {
 			return "", nil, nil
@@ -156,7 +156,7 @@ func (s *Store) populateCommitLog(branch string) error {
 // appendCommitLog inserts a single new commit into commit_log.
 // New commits always get the highest rowid, preserving recency ordering.
 // Errors are logged and swallowed — commit_log is an index, not source of truth.
-func (s *Store) appendCommitLog(hash plumbing.Hash) {
+func (s *Store) appendCommitLog(branch string, hash plumbing.Hash) {
 	if !s.storer.CommitLogAvailable() {
 		return
 	}
@@ -172,7 +172,7 @@ func (s *Store) appendCommitLog(hash plumbing.Hash) {
 	}
 	done := false
 	entries := commitEntries(c, files)
-	if err := s.storer.CommitLogSync(func() (string, []storegit.CommitLogEntry, error) {
+	if err := s.storer.CommitLogSync(branch, func() (string, []storegit.CommitLogEntry, error) {
 		if done {
 			return "", nil, nil
 		}
