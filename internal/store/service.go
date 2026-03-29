@@ -1,7 +1,6 @@
 package store
 
 import (
-	"context"
 	"database/sql"
 	"fmt"
 
@@ -70,11 +69,6 @@ func (s *Service) GitStorer() *storegit.Storer { return s.gits }
 
 // Close closes the underlying database connection.
 func (s *Service) Close() error { return s.db.Close() }
-
-// BeginTx starts a new database transaction.
-func (s *Service) BeginTx(ctx context.Context, opts *sql.TxOptions) (*sql.Tx, error) {
-	return s.db.BeginTx(ctx, opts)
-}
 
 // GitWriter is the minimal interface needed for DeleteFact.
 type GitWriter interface {
