@@ -20,13 +20,14 @@ import (
 func newTestRouter(gs repos.GitStore, idx repos.SearchIndex) http.Handler {
 	hub := repos.NewTaskHub(context.Background())
 	rm := repos.New(context.Background(), repos.Deps{})
-	rm.Set("knomit", &repos.RepoInstance{
-		Name: "knomit",
-		GS:   gs,
-		Idx:  idx,
-		Hub:  hub,
-	})
-	return NewRouter(rm, nil, false, "kb")
+	rm.Set("knomit", repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
+		Name:        "knomit",
+		AgentBranch: testAgentBranch,
+		GS:          gs,
+		Idx:         idx,
+		Hub:         hub,
+	}))
+	return NewRouter(rm, nil, false, "kb", testAgentBranch)
 }
 
 func doRequest(t *testing.T, handler http.Handler, method, target string, body string) *httptest.ResponseRecorder {
@@ -89,7 +90,7 @@ func TestHandleBrowse(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			ctrl := gomock.NewController(t)
 			gs := NewMockGitStore(ctrl)
-			gs.EXPECT().ListDir(gomock.Any()).Return(tc.entries, nil).AnyTimes()
+			gs.EXPECT().ListDir(testAgentBranch, gomock.Any()).Return(tc.entries, nil).AnyTimes()
 
 			handler := newTestRouter(gs, nil)
 			rr := doRequest(t, handler, http.MethodGet, tc.query, "")
@@ -150,7 +151,7 @@ func TestHandleFact(t *testing.T) {
 			ctrl := gomock.NewController(t)
 			gs := NewMockGitStore(ctrl)
 			if tc.expectRead {
-				gs.EXPECT().ReadFile(gomock.Any()).Return(tc.content, nil)
+				gs.EXPECT().ReadFile(testAgentBranch, gomock.Any()).Return(tc.content, nil)
 			}
 
 			handler := newTestRouter(gs, nil)
@@ -179,7 +180,7 @@ func TestHandleFactParseError(t *testing.T) {
 
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
-	gs.EXPECT().ReadFile("kb/bad.md").Return(badContent, nil)
+	gs.EXPECT().ReadFile(testAgentBranch, "kb/bad.md").Return(badContent, nil)
 
 	handler := newTestRouter(gs, nil)
 	rr := doRequest(t, handler, http.MethodGet, "/api/v1/knomit/fact?path=kb/bad.md", "")
@@ -205,7 +206,7 @@ func TestHandleFactWrite(t *testing.T) {
 	t.Run("write valid content returns parsed fact", func(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		gs := NewMockGitStore(ctrl)
-		gs.EXPECT().WriteFile("kb/fact.md", validContent, gomock.Any(), gomock.Any()).Return("abc123", "def456", nil)
+		gs.EXPECT().WriteFile(testAgentBranch, "kb/fact.md", validContent, gomock.Any(), gomock.Any()).Return("abc123", "def456", nil)
 
 		handler := newTestRouter(gs, nil)
 		body := `{"path":"kb/fact.md","content":` + string(mustJSON(validContent)) + `}`
@@ -299,7 +300,7 @@ func TestHandleSearch(t *testing.T) {
 			var idx repos.SearchIndex
 			if tc.useIdx {
 				mockIdx := NewMockSearchIndex(ctrl)
-				mockIdx.EXPECT().Search(gomock.Any()).Return(tc.idxResults, nil)
+				mockIdx.EXPECT().Search(gomock.Any(), gomock.Any()).Return(tc.idxResults, nil)
 				idx = mockIdx
 			}
 
@@ -333,7 +334,7 @@ func TestHandleSearchMinSimilarity(t *testing.T) {
 	mockIdx := NewMockSearchIndex(ctrl)
 
 	// Expect the Search call to receive a SearchQuery with MinSimilarity set.
-	mockIdx.EXPECT().Search(gomock.Any()).DoAndReturn(func(q store.SearchQuery) ([]store.SearchResult, error) {
+	mockIdx.EXPECT().Search(gomock.Any(), gomock.Any()).DoAndReturn(func(branch string, q store.SearchQuery) ([]store.SearchResult, error) {
 		if q.MinSimilarity != 0.75 {
 			return nil, fmt.Errorf("expected MinSimilarity=0.75, got %v", q.MinSimilarity)
 		}
@@ -405,7 +406,7 @@ func TestHandleHistory(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			ctrl := gomock.NewController(t)
 			gs := NewMockGitStore(ctrl)
-			gs.EXPECT().LogPaginated(tc.path, 50, "").Return(tc.entries, "", nil)
+			gs.EXPECT().LogPaginated(testAgentBranch, tc.path, 50, "", "", "").Return(tc.entries, "", "", nil)
 
 			handler := newTestRouter(gs, nil)
 			rr := doRequest(t, handler, http.MethodGet, tc.query, "")
@@ -433,7 +434,6 @@ func TestHandleStatus(t *testing.T) {
 	tests := []struct {
 		name          string
 		head          string
-		branch        string
 		indexCommit   string
 		hasIdx        bool
 		wantStatus    int
@@ -444,22 +444,20 @@ func TestHandleStatus(t *testing.T) {
 		{
 			name:          "returns head and branch with index",
 			head:          "deadbeef",
-			branch:        "agent/laptop",
 			indexCommit:   "cafebabe",
 			hasIdx:        true,
 			wantStatus:    http.StatusOK,
 			wantHead:      "deadbeef",
-			wantBranch:    "agent/laptop",
+			wantBranch:    testAgentBranch,
 			wantIdxCommit: "cafebabe",
 		},
 		{
 			name:          "nil index returns empty index_commit",
 			head:          "deadbeef",
-			branch:        "agent/laptop",
 			hasIdx:        false,
 			wantStatus:    http.StatusOK,
 			wantHead:      "deadbeef",
-			wantBranch:    "agent/laptop",
+			wantBranch:    testAgentBranch,
 			wantIdxCommit: "",
 		},
 	}
@@ -468,13 +466,12 @@ func TestHandleStatus(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			ctrl := gomock.NewController(t)
 			gs := NewMockGitStore(ctrl)
-			gs.EXPECT().HeadCommit().Return(tc.head, nil)
-			gs.EXPECT().Branch().Return(tc.branch)
+			gs.EXPECT().HeadCommit(testAgentBranch).Return(tc.head, nil)
 
 			var idx repos.SearchIndex
 			if tc.hasIdx {
 				mockIdx := NewMockSearchIndex(ctrl)
-				mockIdx.EXPECT().GetLastCommit(tc.branch).Return(tc.indexCommit, nil)
+				mockIdx.EXPECT().GetLastCommit(testAgentBranch).Return(tc.indexCommit, nil)
 				idx = mockIdx
 			}
 

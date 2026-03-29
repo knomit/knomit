@@ -94,6 +94,38 @@ func RenderPruneWorkItem(facts []factForLLM) (*WorkItemContent, error) {
 	}, nil
 }
 
+const reflectResponseSchema = `{
+  "type": "object",
+  "properties": {
+    "methodology_facts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "title": {"type": "string"},
+          "body": {"type": "string"},
+          "domain": {"type": "array", "items": {"type": "string"}},
+          "entities": {"type": "array", "items": {"type": "string"}}
+        },
+        "required": ["title", "body"]
+      }
+    }
+  },
+  "required": ["methodology_facts"]
+}`
+
+// RenderReflectWorkItem renders a reflect prompt for hypothesis transition review.
+func RenderReflectWorkItem(transitionsJSON []byte) (*WorkItemContent, error) {
+	prompt, err := RenderTemplate("reflect", "user", PromptData{Facts: string(transitionsJSON)})
+	if err != nil {
+		return nil, fmt.Errorf("render reflect work item: %w", err)
+	}
+	return &WorkItemContent{
+		Prompt:         prompt,
+		ResponseSchema: reflectResponseSchema,
+	}, nil
+}
+
 // RenderDistillWorkItem renders a distill prompt for the hosting model.
 func RenderDistillWorkItem(facts []factForLLM) (*WorkItemContent, error) {
 	factsJSON, err := json.MarshalIndent(facts, "", "  ")

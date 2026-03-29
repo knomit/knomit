@@ -34,18 +34,20 @@ test.describe('Browse', () => {
     expect(names.length).toBeGreaterThan(0);
   });
 
-  test('navigating updates breadcrumbs', async () => {
+  test('navigating into a directory adds a path chip', async ({ page }) => {
     await browse.clickEntry('databases');
     await browse.waitForEntry('postgresql');
-    const crumbs = await browse.getBreadcrumbs();
-    expect(crumbs.join('/')).toContain('databases');
+    // In the new UI, navigating adds a path chip in the FilterBar
+    // Verify a chip with "databases" is visible
+    const chips = page.locator('span').filter({ hasText: /path:.*databases/ });
+    await expect(chips.first()).toBeVisible();
   });
 
-  test('clicking breadcrumb navigates back', async () => {
+  test('back button navigates to parent directory', async () => {
     await browse.clickEntry('databases');
     // Wait for databases children to load
     await browse.waitForEntry('postgresql');
-    await browse.clickBreadcrumb('kb');
+    await browse.navigateBack();
     // Wait for the root entries to reappear
     await browse.waitForEntry('databases');
     const entries = await browse.getDirectoryEntries();

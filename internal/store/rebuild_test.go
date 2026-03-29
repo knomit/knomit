@@ -9,6 +9,93 @@ import (
 	"knomit/internal/git"
 )
 
+// ── Stub embedders ─────────────────────────────────────────────────────────
+
+const vecDim768 = 768
+
+func make768vec() []float32 {
+	v := make([]float32, vecDim768)
+	v[0] = 1
+	return v
+}
+
+// countingBatchEmbedder implements BatchEmbedder and records per-call batch sizes.
+type countingBatchEmbedder struct {
+	batchSizes []int
+}
+
+func (e *countingBatchEmbedder) Embed(text string) ([]float32, error) {
+	e.batchSizes = append(e.batchSizes, 1)
+	return make768vec(), nil
+}
+
+func (e *countingBatchEmbedder) EmbedBatch(texts []string) ([][]float32, error) {
+	e.batchSizes = append(e.batchSizes, len(texts))
+	out := make([][]float32, len(texts))
+	for i := range texts {
+		out[i] = make768vec()
+	}
+	return out, nil
+}
+
+// countingSingleEmbedder implements only Embed (no EmbedBatch), exercising the
+// non-batch code path. errOnCall, if > 0, makes the Nth call return an error.
+type countingSingleEmbedder struct {
+	calls    int
+	errOnCall int
+}
+
+func (e *countingSingleEmbedder) Embed(_ string) ([]float32, error) {
+	e.calls++
+	if e.errOnCall > 0 && e.calls == e.errOnCall {
+		return nil, fmt.Errorf("stub embed error on call %d", e.calls)
+	}
+	return make768vec(), nil
+}
+
+// ── Helpers ─────────────────────────────────────────────────────────────────
+
+// setupNFacts creates a Service+GitStore with n synthetic facts already synced.
+func setupNFacts(t *testing.T, n int) (*Service, *git.Store) {
+	t.Helper()
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test.db")
+	svc, err := Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { svc.Close() })
+
+	gs, err := git.InitWithStorer(svc.GitStorer(), nil, "agent/test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	files := make(map[string]string, n)
+	for i := 0; i < n; i++ {
+		files[fmt.Sprintf("kb/fact-%04d.md", i)] = fmt.Sprintf(
+			"---\ntype: observation\ndomain: [testing]\nconfidence: 0.9\nsources: 1\nentities: [item%d]\nrefs: []\n---\n# Fact %d\n\nBody for fact %d.\n",
+			i, i, i,
+		)
+	}
+	if _, _, err := gs.BatchWrite("agent/test", files, "add bench facts", "learn"); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Index().Sync(gs, "agent/test"); err != nil {
+		t.Fatal(err)
+	}
+	return svc, gs
+}
+
+// countVec returns how many rows are in facts_vec.
+func countVec(t *testing.T, svc *Service) int {
+	t.Helper()
+	var n int
+	if err := svc.db.QueryRow("SELECT COUNT(*) FROM facts_vec").Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
 // setupRebuildStore creates a Service with a git store and some facts,
 // syncs the index, then returns everything needed for rebuild tests.
 func setupRebuildStore(t *testing.T, facts map[string]string) (*Service, *git.Store) {
@@ -27,7 +114,7 @@ func setupRebuildStore(t *testing.T, facts map[string]string) (*Service, *git.St
 	}
 
 	for path, content := range facts {
-		if _, _, err := gs.WriteFile(path, content, "add "+path, "learn"); err != nil {
+		if _, _, err := gs.WriteFile("agent/test", path, content, "add "+path, "learn"); err != nil {
 			t.Fatalf("WriteFile %s: %v", path, err)
 		}
 	}
@@ -42,7 +129,7 @@ func setupRebuildStore(t *testing.T, facts map[string]string) (*Service, *git.St
 func countFacts(t *testing.T, svc *Service) int {
 	t.Helper()
 	var n int
-	if err := svc.DB().QueryRow("SELECT COUNT(*) FROM facts").Scan(&n); err != nil {
+	if err := svc.db.QueryRow("SELECT COUNT(*) FROM facts").Scan(&n); err != nil {
 		t.Fatal(err)
 	}
 	return n
@@ -62,8 +149,11 @@ func TestRebuildFacts_BulkInsert(t *testing.T) {
 		t.Fatalf("expected 2 facts after sync, got %d", n)
 	}
 
-	// Clear the facts table.
-	if _, err := svc.DB().Exec("DELETE FROM facts"); err != nil {
+	// Clear the facts and branch_facts tables.
+	if _, err := svc.db.Exec("DELETE FROM branch_facts"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.db.Exec("DELETE FROM facts"); err != nil {
 		t.Fatal(err)
 	}
 	if n := countFacts(t, svc); n != 0 {
@@ -80,7 +170,7 @@ func TestRebuildFacts_BulkInsert(t *testing.T) {
 	}
 
 	// Verify individual facts.
-	rec, err := idx.GetByPath("kb/alpha.md")
+	rec, err := idx.GetByPath(testBranch, "kb/alpha.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,7 +184,7 @@ func TestRebuildFacts_BulkInsert(t *testing.T) {
 		t.Fatalf("expected confidence 0.9, got %v", rec.Confidence)
 	}
 
-	rec, err = idx.GetByPath("kb/beta.md")
+	rec, err = idx.GetByPath(testBranch, "kb/beta.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -122,7 +212,8 @@ func TestRebuildFacts_SkipsNonFacts(t *testing.T) {
 	idx := svc.Index()
 
 	// Clear and rebuild.
-	if _, err := svc.DB().Exec("DELETE FROM facts"); err != nil {
+	svc.db.Exec("DELETE FROM branch_facts")
+	if _, err := svc.db.Exec("DELETE FROM facts"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -135,7 +226,7 @@ func TestRebuildFacts_SkipsNonFacts(t *testing.T) {
 		t.Fatalf("expected 1 fact (only real-fact.md), got %d", n)
 	}
 
-	rec, err := idx.GetByPath("kb/real-fact.md")
+	rec, err := idx.GetByPath(testBranch, "kb/real-fact.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -144,7 +235,7 @@ func TestRebuildFacts_SkipsNonFacts(t *testing.T) {
 	}
 
 	// Non-facts should not appear.
-	rec, err = idx.GetByPath("ontology.yaml")
+	rec, err = idx.GetByPath(testBranch, "ontology.yaml")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,7 +243,7 @@ func TestRebuildFacts_SkipsNonFacts(t *testing.T) {
 		t.Fatal("ontology.yaml should not be indexed as a fact")
 	}
 
-	rec, err = idx.GetByPath("kb/no-title.md")
+	rec, err = idx.GetByPath(testBranch, "kb/no-title.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -179,13 +270,13 @@ func TestRebuildFacts_CommitLogJoin(t *testing.T) {
 	factV2 := "---\ntype: observation\ndomain: [testing]\nconfidence: 0.9\nsources: 2\nentities: [knomit]\nrefs: []\n---\n# Evolving Fact\n\nVersion 2 with updates.\n"
 
 	// Write v1.
-	commitV1, _, err := gs.WriteFile("kb/evolving.md", factV1, "add evolving v1", "learn")
+	commitV1, _, err := gs.WriteFile("agent/test", "kb/evolving.md", factV1, "add evolving v1", "learn")
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// Write v2 to same path — creates a second commit touching this file.
-	commitV2, _, err := gs.WriteFile("kb/evolving.md", factV2, "update evolving v2", "learn")
+	commitV2, _, err := gs.WriteFile("agent/test", "kb/evolving.md", factV2, "update evolving v2", "learn")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -200,7 +291,8 @@ func TestRebuildFacts_CommitLogJoin(t *testing.T) {
 	}
 
 	// Clear facts and rebuild.
-	if _, err := svc.DB().Exec("DELETE FROM facts"); err != nil {
+	svc.db.Exec("DELETE FROM branch_facts")
+	if _, err := svc.db.Exec("DELETE FROM facts"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -208,7 +300,7 @@ func TestRebuildFacts_CommitLogJoin(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	rec, err := svc.Index().GetByPath("kb/evolving.md")
+	rec, err := svc.Index().GetByPath(testBranch, "kb/evolving.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -235,7 +327,8 @@ func TestRebuild_PhaseTiming(t *testing.T) {
 	idx := svc.Index()
 
 	// Clear facts for rebuild.
-	if _, err := svc.DB().Exec("DELETE FROM facts"); err != nil {
+	svc.db.Exec("DELETE FROM branch_facts")
+	if _, err := svc.db.Exec("DELETE FROM facts"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -277,7 +370,7 @@ func BenchmarkRebuild(b *testing.B) {
 	// Write 50 facts.
 	for i := 0; i < 50; i++ {
 		content := fmt.Sprintf("---\ntype: observation\ndomain: [bench]\nconfidence: 0.9\nsources: 1\nentities: [item%d]\nrefs: []\n---\n# Benchmark Fact %d\n\nBody content for fact number %d.\n", i, i, i)
-		if _, _, err := gs.WriteFile(fmt.Sprintf("kb/bench/fact-%03d.md", i), content, fmt.Sprintf("add fact %d", i), "learn"); err != nil {
+		if _, _, err := gs.WriteFile("agent/test", fmt.Sprintf("kb/bench/fact-%03d.md", i), content, fmt.Sprintf("add fact %d", i), "learn"); err != nil {
 			b.Fatal(err)
 		}
 	}
@@ -287,15 +380,374 @@ func BenchmarkRebuild(b *testing.B) {
 		b.Fatal(err)
 	}
 
-	db := svc.DB()
+	db := svc.db
 	idx := svc.Index()
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		db.Exec("DELETE FROM facts")
+		db.Exec("DELETE FROM branch_facts"); db.Exec("DELETE FROM facts")
 		db.Exec("DELETE FROM facts_vec")
 		if err := idx.Rebuild(gs, "agent/test", nil); err != nil {
 			b.Fatal(err)
 		}
+	}
+}
+
+// TestRebuildEmbeddings_ChunkedProcessing verifies that rebuildEmbeddings
+// processes facts in bounded batches rather than loading all body text at once.
+// Uses 40 facts (> batchSize=32) so at least two EmbedBatch calls are made.
+func TestRebuildEmbeddings_ChunkedProcessing(t *testing.T) {
+	const nFacts = 40
+
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test.db")
+	svc, err := Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer svc.Close()
+
+	gs, err := git.InitWithStorer(svc.GitStorer(), nil, "agent/test")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Write nFacts facts.
+	for i := 0; i < nFacts; i++ {
+		content := fmt.Sprintf(
+			"---\ntype: observation\ndomain: [chunked]\nconfidence: 0.9\nsources: 1\nentities: [item%d]\nrefs: []\n---\n# Chunked Fact %d\n\nBody for fact number %d.\n",
+			i, i, i,
+		)
+		if _, _, err := gs.WriteFile("agent/test", fmt.Sprintf("kb/fact-%03d.md", i), content, fmt.Sprintf("add fact %d", i), "learn"); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Sync to populate the facts table and objects store.
+	if err := svc.Index().Sync(gs, "agent/test"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify all facts indexed, none yet embedded.
+	var factCount int
+	if err := svc.db.QueryRow("SELECT COUNT(*) FROM facts").Scan(&factCount); err != nil {
+		t.Fatal(err)
+	}
+	if factCount != nFacts {
+		t.Fatalf("expected %d facts, got %d", nFacts, factCount)
+	}
+	var vecCount int
+	svc.db.QueryRow("SELECT COUNT(*) FROM facts_vec").Scan(&vecCount)
+	if vecCount != 0 {
+		t.Fatalf("expected 0 embeddings before rebuild, got %d", vecCount)
+	}
+
+	// Attach counting embedder and run rebuildEmbeddings.
+	emb := &countingBatchEmbedder{}
+	idx := svc.Index()
+	idx.SetEmbedder(emb)
+
+	done, err := idx.rebuildEmbeddings(nil)
+	if err != nil {
+		t.Fatalf("rebuildEmbeddings: %v", err)
+	}
+	if done != nFacts {
+		t.Errorf("rebuildEmbeddings returned done=%d, want %d", done, nFacts)
+	}
+
+	// Verify all facts got embeddings.
+	svc.db.QueryRow("SELECT COUNT(*) FROM facts_vec").Scan(&vecCount)
+	if vecCount != nFacts {
+		t.Errorf("facts_vec has %d rows, want %d", vecCount, nFacts)
+	}
+
+	// Verify the embedder was called in batches of at most batchSize.
+	totalTexts := 0
+	for _, bsz := range emb.batchSizes {
+		if bsz > 32 {
+			t.Errorf("EmbedBatch called with %d texts, want <= 32", bsz)
+		}
+		totalTexts += bsz
+	}
+	if totalTexts != nFacts {
+		t.Errorf("embedder saw %d total texts, want %d", totalTexts, nFacts)
+	}
+	if len(emb.batchSizes) < 2 {
+		t.Errorf("expected >= 2 batch calls for %d facts, got %d", nFacts, len(emb.batchSizes))
+	}
+}
+
+func TestRebuildEmbeddings_NoEmbedder(t *testing.T) {
+	svc, _ := setupNFacts(t, 5)
+	done, err := svc.Index().rebuildEmbeddings(nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if done != 0 {
+		t.Errorf("done=%d, want 0 with no embedder", done)
+	}
+	if n := countVec(t, svc); n != 0 {
+		t.Errorf("facts_vec has %d rows, want 0", n)
+	}
+}
+
+func TestRebuildEmbeddings_NothingToEmbed(t *testing.T) {
+	svc, _ := setupNFacts(t, 5)
+	idx := svc.Index()
+	idx.SetEmbedder(&countingBatchEmbedder{})
+
+	// First pass embeds all 5.
+	if _, err := idx.rebuildEmbeddings(nil); err != nil {
+		t.Fatal(err)
+	}
+	if n := countVec(t, svc); n != 5 {
+		t.Fatalf("expected 5 after first pass, got %d", n)
+	}
+
+	// Second pass: nothing left to embed.
+	emb2 := &countingBatchEmbedder{}
+	idx.SetEmbedder(emb2)
+	done, err := idx.rebuildEmbeddings(nil)
+	if err != nil {
+		t.Fatalf("second pass error: %v", err)
+	}
+	if done != 0 {
+		t.Errorf("second pass done=%d, want 0", done)
+	}
+	if len(emb2.batchSizes) != 0 {
+		t.Errorf("embedder called %d times on second pass, want 0", len(emb2.batchSizes))
+	}
+}
+
+func TestRebuildEmbeddings_SingleBatch(t *testing.T) {
+	// Fewer than batchSize=32 facts → exactly one EmbedBatch call.
+	const n = 10
+	svc, _ := setupNFacts(t, n)
+	emb := &countingBatchEmbedder{}
+	idx := svc.Index()
+	idx.SetEmbedder(emb)
+
+	done, err := idx.rebuildEmbeddings(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if done != n {
+		t.Errorf("done=%d, want %d", done, n)
+	}
+	if countVec(t, svc) != n {
+		t.Errorf("facts_vec=%d, want %d", countVec(t, svc), n)
+	}
+	if len(emb.batchSizes) != 1 {
+		t.Errorf("expected 1 EmbedBatch call, got %d", len(emb.batchSizes))
+	}
+	if emb.batchSizes[0] != n {
+		t.Errorf("EmbedBatch called with %d texts, want %d", emb.batchSizes[0], n)
+	}
+}
+
+func TestRebuildEmbeddings_ExactBatchBoundary(t *testing.T) {
+	// Exactly batchSize=32 facts → one EmbedBatch call of size 32.
+	const n = 32
+	svc, _ := setupNFacts(t, n)
+	emb := &countingBatchEmbedder{}
+	idx := svc.Index()
+	idx.SetEmbedder(emb)
+
+	done, err := idx.rebuildEmbeddings(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if done != n {
+		t.Errorf("done=%d, want %d", done, n)
+	}
+	if len(emb.batchSizes) != 1 || emb.batchSizes[0] != 32 {
+		t.Errorf("batchSizes=%v, want [32]", emb.batchSizes)
+	}
+}
+
+func TestRebuildEmbeddings_NonBatchEmbedder(t *testing.T) {
+	// Single-embed path: embedder without EmbedBatch.
+	const n = 10
+	svc, _ := setupNFacts(t, n)
+	emb := &countingSingleEmbedder{}
+	idx := svc.Index()
+	idx.SetEmbedder(emb)
+
+	done, err := idx.rebuildEmbeddings(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if done != n {
+		t.Errorf("done=%d, want %d", done, n)
+	}
+	if emb.calls != n {
+		t.Errorf("Embed called %d times, want %d", emb.calls, n)
+	}
+	if countVec(t, svc) != n {
+		t.Errorf("facts_vec=%d, want %d", countVec(t, svc), n)
+	}
+}
+
+func TestRebuildEmbeddings_EmbedErrorSkipped(t *testing.T) {
+	// Single-embed path: one error → that fact is skipped, rest succeed.
+	const n = 5
+	svc, _ := setupNFacts(t, n)
+	emb := &countingSingleEmbedder{errOnCall: 3} // 3rd call fails
+	idx := svc.Index()
+	idx.SetEmbedder(emb)
+
+	done, err := idx.rebuildEmbeddings(nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if done != n-1 {
+		t.Errorf("done=%d, want %d (one skipped)", done, n-1)
+	}
+	if countVec(t, svc) != n-1 {
+		t.Errorf("facts_vec=%d, want %d", countVec(t, svc), n-1)
+	}
+}
+
+func TestRebuildEmbeddings_ProgressReporting(t *testing.T) {
+	const n = 40
+	svc, _ := setupNFacts(t, n)
+	emb := &countingBatchEmbedder{}
+	idx := svc.Index()
+	idx.SetEmbedder(emb)
+
+	type report struct{ done, total int }
+	var reports []report
+	progress := func(phase string, done, total int) {
+		if phase == "embeddings" {
+			reports = append(reports, report{done, total})
+		}
+	}
+
+	if _, err := idx.rebuildEmbeddings(progress); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(reports) == 0 {
+		t.Fatal("no progress reports for embeddings phase")
+	}
+	// First report: total must equal n.
+	if reports[0].total != n {
+		t.Errorf("first report total=%d, want %d", reports[0].total, n)
+	}
+	// Last report: done must equal n.
+	last := reports[len(reports)-1]
+	if last.done != n {
+		t.Errorf("last report done=%d, want %d", last.done, n)
+	}
+	// Done values must be non-decreasing.
+	for i := 1; i < len(reports); i++ {
+		if reports[i].done < reports[i-1].done {
+			t.Errorf("progress went backwards: %d → %d", reports[i-1].done, reports[i].done)
+		}
+	}
+}
+
+// ── Integration tests ────────────────────────────────────────────────────────
+
+// TestRebuild_WithEmbedder exercises the full three-phase Rebuild with an
+// embedder attached, verifying that facts_vec is populated after rebuild.
+func TestRebuild_WithEmbedder(t *testing.T) {
+	const n = 15
+	svc, gs := setupNFacts(t, n)
+	emb := &countingBatchEmbedder{}
+	idx := svc.Index()
+	idx.SetEmbedder(emb)
+
+	// Clear facts and facts_vec to simulate a fresh rebuild.
+	svc.db.Exec("DELETE FROM branch_facts")
+	svc.db.Exec("DELETE FROM facts")
+	svc.db.Exec("DELETE FROM facts_vec")
+
+	if err := idx.Rebuild(gs, "agent/test", nil); err != nil {
+		t.Fatalf("Rebuild: %v", err)
+	}
+
+	if countFacts(t, svc) != n {
+		t.Errorf("facts=%d after rebuild, want %d", countFacts(t, svc), n)
+	}
+	if countVec(t, svc) != n {
+		t.Errorf("facts_vec=%d after rebuild, want %d", countVec(t, svc), n)
+	}
+}
+
+// TestRebuild_WithEmbedder_Idempotent verifies that running Rebuild twice
+// does not double-insert rows into facts_vec.
+func TestRebuild_WithEmbedder_Idempotent(t *testing.T) {
+	const n = 10
+	svc, gs := setupNFacts(t, n)
+	idx := svc.Index()
+	idx.SetEmbedder(&countingBatchEmbedder{})
+
+	// First rebuild.
+	svc.db.Exec("DELETE FROM branch_facts")
+	svc.db.Exec("DELETE FROM facts")
+	svc.db.Exec("DELETE FROM facts_vec")
+	if err := idx.Rebuild(gs, "agent/test", nil); err != nil {
+		t.Fatalf("first Rebuild: %v", err)
+	}
+
+	// Second rebuild: facts_vec should not grow.
+	svc.db.Exec("DELETE FROM branch_facts")
+	svc.db.Exec("DELETE FROM facts")
+	if err := idx.Rebuild(gs, "agent/test", nil); err != nil {
+		t.Fatalf("second Rebuild: %v", err)
+	}
+	if v := countVec(t, svc); v != n {
+		t.Errorf("facts_vec=%d after second rebuild, want %d", v, n)
+	}
+}
+
+// ── Benchmarks ───────────────────────────────────────────────────────────────
+
+func BenchmarkRebuildEmbeddings(b *testing.B) {
+	for _, n := range []int{50, 200, 1000} {
+		n := n
+		b.Run(fmt.Sprintf("n=%d", n), func(b *testing.B) {
+			dir := b.TempDir()
+			dbPath := filepath.Join(dir, "bench.db")
+			svc, err := Open(dbPath)
+			if err != nil {
+				b.Fatal(err)
+			}
+			defer svc.Close()
+
+			gs, err := git.InitWithStorer(svc.GitStorer(), nil, "agent/test")
+			if err != nil {
+				b.Fatal(err)
+			}
+			// Write all facts in one commit — matches the real learn path (BatchWrite).
+			files := make(map[string]string, n)
+			for i := 0; i < n; i++ {
+				files[fmt.Sprintf("kb/fact-%05d.md", i)] = fmt.Sprintf(
+					"---\ntype: observation\ndomain: [bench]\nconfidence: 0.9\nsources: 1\nentities: [item%d]\nrefs: []\n---\n# Bench Fact %d\n\nBody content for benchmark fact %d.\n",
+					i, i, i,
+				)
+			}
+			if _, _, err := gs.BatchWrite("agent/test", files, "add bench facts", "learn"); err != nil {
+				b.Fatal(err)
+			}
+			if err := svc.Index().Sync(gs, "agent/test"); err != nil {
+				b.Fatal(err)
+			}
+
+			idx := svc.Index()
+			emb := &countingBatchEmbedder{}
+			idx.SetEmbedder(emb)
+			db := svc.db
+
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				db.Exec("DELETE FROM facts_vec")
+				emb.batchSizes = emb.batchSizes[:0]
+				if _, err := idx.rebuildEmbeddings(nil); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
 	}
 }

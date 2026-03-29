@@ -1,32 +1,10 @@
 package git_test
 
 import (
-	"os"
-	"path/filepath"
 	"testing"
 
 	git "knomit/internal/git"
 )
-
-func TestBranch(t *testing.T) {
-	dir := t.TempDir()
-	store, err := git.Init(filepath.Join(dir, "test.git.db"), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
-
-	hostname, err := os.Hostname()
-	if err != nil {
-		hostname = "local"
-	}
-
-	want := "agent/" + hostname
-	got := store.Branch()
-	if got != want {
-		t.Fatalf("Branch() = %q, want %q", got, want)
-	}
-}
 
 func TestDefaultConfig(t *testing.T) {
 	cfg := git.DefaultConfig()
@@ -43,29 +21,19 @@ func TestDefaultConfig(t *testing.T) {
 }
 
 func TestReadFileNotFound(t *testing.T) {
-	dir := t.TempDir()
-	store, err := git.Init(filepath.Join(dir, "test.git.db"), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 
-	_, err = store.ReadFile("general/nonexistent.md")
+	_, err := store.ReadFile(testBranch, "general/nonexistent.md")
 	if err == nil {
 		t.Fatal("expected error when reading nonexistent file")
 	}
 }
 
 func TestFileExistsAfterWriteAndDelete(t *testing.T) {
-	dir := t.TempDir()
-	store, err := git.Init(filepath.Join(dir, "test.git.db"), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 
 	// general.md exists after init.
-	exists, err := store.FileExists("kb.md")
+	exists, err := store.FileExists(testBranch, "kb.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,7 +42,7 @@ func TestFileExistsAfterWriteAndDelete(t *testing.T) {
 	}
 
 	// A file that was never created should not exist.
-	exists, err = store.FileExists("general/nope.md")
+	exists, err = store.FileExists(testBranch, "general/nope.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,7 +51,7 @@ func TestFileExistsAfterWriteAndDelete(t *testing.T) {
 	}
 
 	// A deeply nested nonexistent path should not exist (exercises directory-not-found path).
-	exists, err = store.FileExists("general/deep/nested/nothing.md")
+	exists, err = store.FileExists(testBranch, "general/deep/nested/nothing.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,20 +61,15 @@ func TestFileExistsAfterWriteAndDelete(t *testing.T) {
 }
 
 func TestDeleteFileRoundtrip(t *testing.T) {
-	dir := t.TempDir()
-	store, err := git.Init(filepath.Join(dir, "test.git.db"), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 
 	// Write a file.
-	if _, _, err := store.WriteFile("general/ephemeral.md", "# Ephemeral\n\nTemporary.\n", "add ephemeral", "learn"); err != nil {
+	if _, _, err := store.WriteFile(testBranch, "general/ephemeral.md", "# Ephemeral\n\nTemporary.\n", "add ephemeral", "learn"); err != nil {
 		t.Fatal(err)
 	}
 
 	// Verify it exists and is readable.
-	content, err := store.ReadFile("general/ephemeral.md")
+	content, err := store.ReadFile(testBranch, "general/ephemeral.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -115,12 +78,12 @@ func TestDeleteFileRoundtrip(t *testing.T) {
 	}
 
 	// Delete it.
-	if _, err := store.DeleteFile("general/ephemeral.md", "delete ephemeral", "retract"); err != nil {
+	if _, err := store.DeleteFile(testBranch, "general/ephemeral.md", "delete ephemeral", "retract"); err != nil {
 		t.Fatal(err)
 	}
 
 	// Verify it no longer exists.
-	exists, err := store.FileExists("general/ephemeral.md")
+	exists, err := store.FileExists(testBranch, "general/ephemeral.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,22 +92,17 @@ func TestDeleteFileRoundtrip(t *testing.T) {
 	}
 
 	// Reading it should error.
-	_, err = store.ReadFile("general/ephemeral.md")
+	_, err = store.ReadFile(testBranch, "general/ephemeral.md")
 	if err == nil {
 		t.Fatal("expected error reading deleted file")
 	}
 }
 
 func TestListAllEmptyStore(t *testing.T) {
-	dir := t.TempDir()
-	store, err := git.Init(filepath.Join(dir, "test.git.db"), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 
 	// A freshly initialized store should have exactly general.md.
-	paths, err := store.ListAll()
+	paths, err := store.ListAll(testBranch)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -157,22 +115,17 @@ func TestListAllEmptyStore(t *testing.T) {
 }
 
 func TestGrepMatchAndNoMatch(t *testing.T) {
-	dir := t.TempDir()
-	store, err := git.Init(filepath.Join(dir, "test.git.db"), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 
-	if _, _, err := store.WriteFile("general/cats.md", "# Cats\n\nCats are wonderful pets.\n", "add cats", "learn"); err != nil {
+	if _, _, err := store.WriteFile(testBranch, "general/cats.md", "# Cats\n\nCats are wonderful pets.\n", "add cats", "learn"); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := store.WriteFile("general/dogs.md", "# Dogs\n\nDogs are loyal companions.\n", "add dogs", "learn"); err != nil {
+	if _, _, err := store.WriteFile(testBranch, "general/dogs.md", "# Dogs\n\nDogs are loyal companions.\n", "add dogs", "learn"); err != nil {
 		t.Fatal(err)
 	}
 
 	// Grep for a term that matches one file.
-	matches, err := store.Grep("wonderful")
+	matches, err := store.Grep(testBranch, "wonderful")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -181,7 +134,7 @@ func TestGrepMatchAndNoMatch(t *testing.T) {
 	}
 
 	// Grep for a term that matches no files.
-	matches, err = store.Grep("elephant")
+	matches, err = store.Grep(testBranch, "elephant")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -190,7 +143,7 @@ func TestGrepMatchAndNoMatch(t *testing.T) {
 	}
 
 	// Grep with a regex pattern.
-	matches, err = store.Grep("loyal.*companions")
+	matches, err = store.Grep(testBranch, "loyal.*companions")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -199,7 +152,7 @@ func TestGrepMatchAndNoMatch(t *testing.T) {
 	}
 
 	// Grep for a term in both files.
-	matches, err = store.Grep("are")
+	matches, err = store.Grep(testBranch, "are")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -209,29 +162,24 @@ func TestGrepMatchAndNoMatch(t *testing.T) {
 }
 
 func TestDiffFilesWithDelete(t *testing.T) {
-	dir := t.TempDir()
-	store, err := git.Init(filepath.Join(dir, "test.git.db"), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 
 	// Write a file and record the commit hash.
-	if _, _, err := store.WriteFile("general/willdelete.md", "# Will Delete\n", "add willdelete", "learn"); err != nil {
+	if _, _, err := store.WriteFile(testBranch, "general/willdelete.md", "# Will Delete\n", "add willdelete", "learn"); err != nil {
 		t.Fatal(err)
 	}
-	afterAdd, err := store.HeadCommit()
+	afterAdd, err := store.HeadCommit(testBranch)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// Delete the file.
-	if _, err := store.DeleteFile("general/willdelete.md", "delete willdelete", "retract"); err != nil {
+	if _, err := store.DeleteFile(testBranch, "general/willdelete.md", "delete willdelete", "retract"); err != nil {
 		t.Fatal(err)
 	}
 
 	// Diff from the afterAdd commit to HEAD should show the file as deleted.
-	added, modified, deleted, err := store.DiffFiles(afterAdd)
+	added, modified, deleted, err := store.DiffFiles(testBranch, afterAdd)
 	if err != nil {
 		t.Fatal(err)
 	}

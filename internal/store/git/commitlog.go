@@ -1,0 +1,379 @@
+// Commit log SQL operations.
+// The commit_log table is a denormalized index of (commit_hash, path, committed_at, message)
+// that enables O(1) activity aggregates and efficient path-history queries.
+package git
+
+import (
+	"database/sql"
+	"fmt"
+	"strings"
+)
+
+// CommitLogEntry is one row inserted into commit_log.
+type CommitLogEntry struct {
+	Hash, Path, Message, Operation, AuthorEmail, Action string
+	CommittedAt                                         int64
+}
+
+// CommitLogRow is one result row from CommitLogQuery.
+type CommitLogRow struct {
+	Hash, Message, Operation string
+	Timestamp                int64
+}
+
+// CommitLogActivityResult holds aggregate activity metrics.
+type CommitLogActivityResult struct {
+	LastCommit                             sql.NullInt64
+	Total, Changes7d, Changes30d, Changes90d int
+}
+
+// CommitLogFileRecency is a file path + timestamp of its last commit.
+type CommitLogFileRecency struct {
+	Path      string
+	UpdatedAt int64
+}
+
+// CommitLogCursorType is the pagination direction.
+type CommitLogCursorType uint8
+
+const (
+	CommitLogCursorNone   CommitLogCursorType = iota
+	CommitLogCursorAfter
+	CommitLogCursorFrom
+	CommitLogCursorBefore
+)
+
+// CommitLogCursor identifies an anchor commit for paginated queries.
+type CommitLogCursor struct {
+	Type CommitLogCursorType
+	Hash string
+}
+
+// CommitLogAvailable returns true if the commit_log table is confirmed populated.
+// On first call it probes sqlite_master; if the table exists the atomic is set.
+func (s *Storer) CommitLogAvailable() bool {
+	if s.commitLog.Load() {
+		return true
+	}
+	if s.db == nil {
+		return false
+	}
+	if s.commitLogTableExists() {
+		s.commitLog.Store(true)
+		return true
+	}
+	return false
+}
+
+// commitLogTableExists checks whether the commit_log table exists in SQLite.
+func (s *Storer) commitLogTableExists() bool {
+	var n int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='commit_log'`).Scan(&n); err != nil || n == 0 {
+		return false
+	}
+	return true
+}
+
+// CommitLogSync is the core write method for commit_log.
+// It calls iter() repeatedly until it returns ("", nil, nil) (sentinel for done).
+// For each non-empty hash: if the hash already exists in commit_log, iteration stops
+// (backfill dedup). All entries for a hash are inserted in a single transaction.
+// The commitLog atomic is marked true once the table is confirmed to exist
+// and has been previously written to (either via a new insert or confirmed
+// via an existing indexed commit).
+func (s *Storer) CommitLogSync(branchName string, iter func() (hash string, entries []CommitLogEntry, err error)) error {
+	if !s.CommitLogAvailable() {
+		return nil
+	}
+
+	var branchID sql.NullInt64
+	if branchName != "" {
+		var id int64
+		err := s.db.QueryRow(`SELECT id FROM branches WHERE name = ?`, branchName).Scan(&id)
+		if err == nil {
+			branchID = sql.NullInt64{Int64: id, Valid: true}
+		}
+	}
+
+	for {
+		hash, entries, err := iter()
+		if err != nil {
+			return fmt.Errorf("CommitLogSync: iter: %w", err)
+		}
+		if hash == "" {
+			// Done.
+			s.commitLog.Store(true)
+			return nil
+		}
+
+		// Check if hash already exists (backfill dedup).
+		var cnt int
+		if err := s.db.QueryRow(`SELECT COUNT(*) FROM commit_log WHERE commit_hash = ?`, hash).Scan(&cnt); err != nil {
+			return fmt.Errorf("CommitLogSync: check hash: %w", err)
+		}
+		if cnt > 0 {
+			s.commitLog.Store(true)
+			return nil
+		}
+
+		// Insert all entries for this hash in a transaction.
+		if len(entries) == 0 {
+			continue
+		}
+
+		tx, err := s.db.Begin()
+		if err != nil {
+			return fmt.Errorf("CommitLogSync: begin tx: %w", err)
+		}
+
+		stmt, err := tx.Prepare(`INSERT OR IGNORE INTO commit_log (commit_hash, path, message, operation, author_email, action, committed_at, branch_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+		if err != nil {
+			tx.Rollback()
+			return fmt.Errorf("CommitLogSync: prepare: %w", err)
+		}
+
+		for _, e := range entries {
+			if _, err := stmt.Exec(e.Hash, e.Path, e.Message, e.Operation, e.AuthorEmail, e.Action, e.CommittedAt, branchID); err != nil {
+				stmt.Close()
+				tx.Rollback()
+				return fmt.Errorf("CommitLogSync: insert: %w", err)
+			}
+		}
+		stmt.Close()
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("CommitLogSync: commit: %w", err)
+		}
+		s.commitLog.Store(true)
+	}
+}
+
+// CommitLogQuery performs a paginated query on commit_log.
+// Returns rows, hasMore, error. Fetches limit+1 rows and returns limit.
+func (s *Storer) CommitLogQuery(path string, cursor CommitLogCursor, limit int) ([]CommitLogRow, bool, error) {
+	pathCond, pathArgs := commitLogPathCond(path)
+
+	lookupTS := func(hash string) (int64, error) {
+		var ts int64
+		err := s.db.QueryRow(
+			`SELECT MIN(committed_at) FROM commit_log WHERE commit_hash = ?`, hash,
+		).Scan(&ts)
+		return ts, err
+	}
+
+	lookupMaxRowid := func(hash string) (int64, error) {
+		var rid int64
+		err := s.db.QueryRow(
+			`SELECT MAX(rowid) FROM commit_log WHERE commit_hash = ?`, hash,
+		).Scan(&rid)
+		return rid, err
+	}
+
+	var cursorCond string
+	var cursorArgs []any
+	switch cursor.Type {
+	case CommitLogCursorBefore:
+		ts, err := lookupTS(cursor.Hash)
+		if err != nil {
+			return nil, false, fmt.Errorf("CommitLogQuery: before lookup: %w", err)
+		}
+		rid, err := lookupMaxRowid(cursor.Hash)
+		if err != nil {
+			return nil, false, fmt.Errorf("CommitLogQuery: before rowid lookup: %w", err)
+		}
+		cursorCond = "(ts > ? OR (ts = ? AND max_rid > ?))"
+		cursorArgs = []any{ts, ts, rid}
+	case CommitLogCursorFrom:
+		ts, err := lookupTS(cursor.Hash)
+		if err != nil {
+			return nil, false, fmt.Errorf("CommitLogQuery: from lookup: %w", err)
+		}
+		rid, err := lookupMaxRowid(cursor.Hash)
+		if err != nil {
+			return nil, false, fmt.Errorf("CommitLogQuery: from rowid lookup: %w", err)
+		}
+		cursorCond = "(ts < ? OR (ts = ? AND max_rid <= ?))"
+		cursorArgs = []any{ts, ts, rid}
+	case CommitLogCursorAfter:
+		ts, err := lookupTS(cursor.Hash)
+		if err != nil {
+			return nil, false, fmt.Errorf("CommitLogQuery: after lookup: %w", err)
+		}
+		rid, err := lookupMaxRowid(cursor.Hash)
+		if err != nil {
+			return nil, false, fmt.Errorf("CommitLogQuery: after rowid lookup: %w", err)
+		}
+		cursorCond = "(ts < ? OR (ts = ? AND max_rid < ?))"
+		cursorArgs = []any{ts, ts, rid}
+	default:
+		cursorCond = "1=1"
+	}
+
+	query := `
+SELECT commit_hash, ts, message, operation
+FROM (
+    SELECT commit_hash, MIN(committed_at) AS ts, MIN(message) AS message, MIN(operation) AS operation, MAX(rowid) AS max_rid
+    FROM commit_log
+    WHERE ` + pathCond + `
+    GROUP BY commit_hash
+)
+WHERE ` + cursorCond + `
+ORDER BY ts DESC, max_rid DESC
+LIMIT ?`
+
+	args := append(pathArgs, cursorArgs...)
+	args = append(args, limit+1)
+
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return nil, false, fmt.Errorf("CommitLogQuery: query: %w", err)
+	}
+	defer rows.Close()
+
+	var results []CommitLogRow
+	for rows.Next() {
+		var r CommitLogRow
+		if err := rows.Scan(&r.Hash, &r.Timestamp, &r.Message, &r.Operation); err != nil {
+			return nil, false, fmt.Errorf("CommitLogQuery: scan: %w", err)
+		}
+		results = append(results, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, false, fmt.Errorf("CommitLogQuery: rows: %w", err)
+	}
+
+	hasMore := len(results) > limit
+	if hasMore {
+		results = results[:limit]
+	}
+	return results, hasMore, nil
+}
+
+// CommitLogFileCounts returns map[commitHash]map[action]count for the given hashes.
+func (s *Storer) CommitLogFileCounts(hashes []string) (map[string]map[string]int, error) {
+	if len(hashes) == 0 {
+		return nil, nil
+	}
+
+	placeholders := make([]string, len(hashes))
+	args := make([]any, len(hashes))
+	for i, h := range hashes {
+		placeholders[i] = "?"
+		args[i] = h
+	}
+
+	query := `SELECT commit_hash, action, COUNT(*) FROM commit_log WHERE commit_hash IN (` +
+		strings.Join(placeholders, ",") +
+		`) GROUP BY commit_hash, action`
+
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("CommitLogFileCounts: query: %w", err)
+	}
+	defer rows.Close()
+
+	result := make(map[string]map[string]int)
+	for rows.Next() {
+		var hash, action string
+		var count int
+		if err := rows.Scan(&hash, &action, &count); err != nil {
+			return nil, fmt.Errorf("CommitLogFileCounts: scan: %w", err)
+		}
+		if result[hash] == nil {
+			result[hash] = make(map[string]int)
+		}
+		result[hash][action] = count
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("CommitLogFileCounts: rows: %w", err)
+	}
+	return result, nil
+}
+
+// CommitLogActivity returns aggregate activity metrics for the given path.
+func (s *Storer) CommitLogActivity(path string, cutoff7, cutoff30, cutoff90 int64) (CommitLogActivityResult, error) {
+	filter, pathArgs := commitLogPathCond(path)
+	args := append([]any{cutoff7, cutoff30, cutoff90}, pathArgs...)
+
+	q := fmt.Sprintf(`
+		SELECT MAX(committed_at),
+		       COUNT(DISTINCT commit_hash),
+		       COUNT(DISTINCT CASE WHEN committed_at > ? THEN commit_hash END),
+		       COUNT(DISTINCT CASE WHEN committed_at > ? THEN commit_hash END),
+		       COUNT(DISTINCT CASE WHEN committed_at > ? THEN commit_hash END)
+		FROM commit_log WHERE %s`, filter)
+
+	var r CommitLogActivityResult
+	if err := s.db.QueryRow(q, args...).Scan(&r.LastCommit, &r.Total, &r.Changes7d, &r.Changes30d, &r.Changes90d); err != nil {
+		return CommitLogActivityResult{}, fmt.Errorf("CommitLogActivity: %w", err)
+	}
+	return r, nil
+}
+
+// CommitLogWalkChanged returns file paths + timestamps ordered by most recently changed,
+// excluding paths in seen, up to limit results.
+func (s *Storer) CommitLogWalkChanged(prefix string, seen map[string]bool, limit int) ([]CommitLogFileRecency, error) {
+	var whereParts []string
+	var args []any
+
+	if prefix != "" {
+		whereParts = append(whereParts, "path GLOB ?")
+		args = append(args, prefix+"/*")
+	}
+	if len(seen) > 0 {
+		placeholders := make([]string, 0, len(seen))
+		for p := range seen {
+			placeholders = append(placeholders, "?")
+			args = append(args, p)
+		}
+		whereParts = append(whereParts, "path NOT IN ("+strings.Join(placeholders, ",")+")")
+	}
+
+	where := "1=1"
+	if len(whereParts) > 0 {
+		where = strings.Join(whereParts, " AND ")
+	}
+
+	q := fmt.Sprintf(`
+		SELECT path, MAX(committed_at) AS ts, MAX(rowid) AS last_rowid
+		FROM commit_log
+		WHERE %s
+		GROUP BY path
+		ORDER BY ts DESC, last_rowid DESC
+		LIMIT ?`, where)
+	args = append(args, limit)
+
+	rows, err := s.db.Query(q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("CommitLogWalkChanged: query: %w", err)
+	}
+	defer rows.Close()
+
+	var results []CommitLogFileRecency
+	for rows.Next() {
+		var path string
+		var ts, lastRowid int64
+		if err := rows.Scan(&path, &ts, &lastRowid); err != nil {
+			return nil, fmt.Errorf("CommitLogWalkChanged: scan: %w", err)
+		}
+		results = append(results, CommitLogFileRecency{
+			Path:      path,
+			UpdatedAt: ts,
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("CommitLogWalkChanged: rows: %w", err)
+	}
+	return results, nil
+}
+
+// commitLogPathCond returns the SQL WHERE fragment and bind args for filtering
+// commit_log rows by path. Empty path matches all rows.
+func commitLogPathCond(path string) (cond string, args []any) {
+	if path == "" {
+		return "1=1", nil
+	}
+	if strings.HasSuffix(path, ".md") {
+		return "path = ?", []any{path}
+	}
+	return "path GLOB ?", []any{path + "/*"}
+}

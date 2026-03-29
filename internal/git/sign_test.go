@@ -1,24 +1,18 @@
 package git_test
 
 import (
-	"path/filepath"
 	"testing"
 
 	"knomit/internal/git"
 )
 
 func TestSignCommitInPlace_SignsAndChangesHash(t *testing.T) {
-	dir := t.TempDir()
-	store, err := git.Init(filepath.Join(dir, "test.db"), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 
 	signer := generateTestSigner(t)
 	store.SetSigner(signer)
 
-	commitHash, _, err := store.WriteFile("kb/test.md", "# Test\n", "add test", "learn")
+	commitHash, _, err := store.WriteFile(testBranch, "kb/test.md", "# Test\n", "add test", "learn")
 	if err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
@@ -33,21 +27,16 @@ func TestSignCommitInPlace_SignsAndChangesHash(t *testing.T) {
 }
 
 func TestDeleteFile_SignsCommit(t *testing.T) {
-	dir := t.TempDir()
-	store, err := git.Init(filepath.Join(dir, "test.db"), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 
 	signer := generateTestSigner(t)
 	store.SetSigner(signer)
 
 	// Write a file first.
-	store.WriteFile("kb/temp.md", "# Temp\n", "add temp", "learn")
+	store.WriteFile(testBranch, "kb/temp.md", "# Temp\n", "add temp", "learn")
 
 	// Delete it — should also produce a signed commit.
-	commitHash, err := store.DeleteFile("kb/temp.md", "delete temp", "retract")
+	commitHash, err := store.DeleteFile(testBranch, "kb/temp.md", "delete temp", "retract")
 	if err != nil {
 		t.Fatalf("DeleteFile: %v", err)
 	}
@@ -62,12 +51,7 @@ func TestDeleteFile_SignsCommit(t *testing.T) {
 }
 
 func TestBatchWrite_SignsCommit(t *testing.T) {
-	dir := t.TempDir()
-	store, err := git.Init(filepath.Join(dir, "test.db"), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 
 	signer := generateTestSigner(t)
 	store.SetSigner(signer)
@@ -76,7 +60,7 @@ func TestBatchWrite_SignsCommit(t *testing.T) {
 		"kb/a.md": "# A\n",
 		"kb/b.md": "# B\n",
 	}
-	commitHash, _, err := store.BatchWrite(files, "batch add", "learn")
+	commitHash, _, err := store.BatchWrite(testBranch, files, "batch add", "learn")
 	if err != nil {
 		t.Fatalf("BatchWrite: %v", err)
 	}
@@ -91,15 +75,10 @@ func TestBatchWrite_SignsCommit(t *testing.T) {
 }
 
 func TestInitCommits_AreUnsigned(t *testing.T) {
-	dir := t.TempDir()
-	store, err := git.Init(filepath.Join(dir, "test.db"), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 
 	// Init commit (before any signer is set) should be unsigned.
-	headHash, err := store.HeadCommit()
+	headHash, err := store.HeadCommit(testBranch)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,29 +93,19 @@ func TestInitCommits_AreUnsigned(t *testing.T) {
 }
 
 func TestCommitHasSignature_BadHash(t *testing.T) {
-	dir := t.TempDir()
-	store, err := git.Init(filepath.Join(dir, "test.db"), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 
-	_, err = git.CommitHasSignature(store, "0000000000000000000000000000000000000000")
+	_, err := git.CommitHasSignature(store, "0000000000000000000000000000000000000000")
 	if err == nil {
 		t.Fatal("expected error for nonexistent commit hash")
 	}
 }
 
 func TestSignCommitInPlace_NoSignerNoSignature(t *testing.T) {
-	dir := t.TempDir()
-	store, err := git.Init(filepath.Join(dir, "test.db"), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 
 	// No signer — commit should be unsigned.
-	commitHash, _, err := store.WriteFile("kb/test.md", "# Test\n", "add test", "learn")
+	commitHash, _, err := store.WriteFile(testBranch, "kb/test.md", "# Test\n", "add test", "learn")
 	if err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}

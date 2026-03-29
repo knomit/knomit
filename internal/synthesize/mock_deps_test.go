@@ -41,9 +41,9 @@ func (m *MockGitStore) EXPECT() *MockGitStoreMockRecorder {
 }
 
 // BatchWrite mocks base method.
-func (m *MockGitStore) BatchWrite(files map[string]string, message, operation string) (string, map[string]string, error) {
+func (m *MockGitStore) BatchWrite(branch string, files map[string]string, message, operation string) (string, map[string]string, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "BatchWrite", files, message, operation)
+	ret := m.ctrl.Call(m, "BatchWrite", branch, files, message, operation)
 	ret0, _ := ret[0].(string)
 	ret1, _ := ret[1].(map[string]string)
 	ret2, _ := ret[2].(error)
@@ -51,44 +51,30 @@ func (m *MockGitStore) BatchWrite(files map[string]string, message, operation st
 }
 
 // BatchWrite indicates an expected call of BatchWrite.
-func (mr *MockGitStoreMockRecorder) BatchWrite(files, message, operation any) *gomock.Call {
+func (mr *MockGitStoreMockRecorder) BatchWrite(branch, files, message, operation any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "BatchWrite", reflect.TypeOf((*MockGitStore)(nil).BatchWrite), files, message, operation)
-}
-
-// Branch mocks base method.
-func (m *MockGitStore) Branch() string {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Branch")
-	ret0, _ := ret[0].(string)
-	return ret0
-}
-
-// Branch indicates an expected call of Branch.
-func (mr *MockGitStoreMockRecorder) Branch() *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Branch", reflect.TypeOf((*MockGitStore)(nil).Branch))
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "BatchWrite", reflect.TypeOf((*MockGitStore)(nil).BatchWrite), branch, files, message, operation)
 }
 
 // DeleteFile mocks base method.
-func (m *MockGitStore) DeleteFile(path, message, operation string) (string, error) {
+func (m *MockGitStore) DeleteFile(branch, path, message, operation string) (string, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "DeleteFile", path, message, operation)
+	ret := m.ctrl.Call(m, "DeleteFile", branch, path, message, operation)
 	ret0, _ := ret[0].(string)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // DeleteFile indicates an expected call of DeleteFile.
-func (mr *MockGitStoreMockRecorder) DeleteFile(path, message, operation any) *gomock.Call {
+func (mr *MockGitStoreMockRecorder) DeleteFile(branch, path, message, operation any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteFile", reflect.TypeOf((*MockGitStore)(nil).DeleteFile), path, message, operation)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteFile", reflect.TypeOf((*MockGitStore)(nil).DeleteFile), branch, path, message, operation)
 }
 
 // DiffFiles mocks base method.
-func (m *MockGitStore) DiffFiles(fromCommit string) ([]string, []string, []string, error) {
+func (m *MockGitStore) DiffFiles(branch, fromCommit string) ([]string, []string, []string, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "DiffFiles", fromCommit)
+	ret := m.ctrl.Call(m, "DiffFiles", branch, fromCommit)
 	ret0, _ := ret[0].([]string)
 	ret1, _ := ret[1].([]string)
 	ret2, _ := ret[2].([]string)
@@ -97,60 +83,75 @@ func (m *MockGitStore) DiffFiles(fromCommit string) ([]string, []string, []strin
 }
 
 // DiffFiles indicates an expected call of DiffFiles.
-func (mr *MockGitStoreMockRecorder) DiffFiles(fromCommit any) *gomock.Call {
+func (mr *MockGitStoreMockRecorder) DiffFiles(branch, fromCommit any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DiffFiles", reflect.TypeOf((*MockGitStore)(nil).DiffFiles), fromCommit)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DiffFiles", reflect.TypeOf((*MockGitStore)(nil).DiffFiles), branch, fromCommit)
 }
 
 // HeadCommit mocks base method.
-func (m *MockGitStore) HeadCommit() (string, error) {
+func (m *MockGitStore) HeadCommit(branch string) (string, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "HeadCommit")
+	ret := m.ctrl.Call(m, "HeadCommit", branch)
 	ret0, _ := ret[0].(string)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // HeadCommit indicates an expected call of HeadCommit.
-func (mr *MockGitStoreMockRecorder) HeadCommit() *gomock.Call {
+func (mr *MockGitStoreMockRecorder) HeadCommit(branch any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "HeadCommit", reflect.TypeOf((*MockGitStore)(nil).HeadCommit))
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "HeadCommit", reflect.TypeOf((*MockGitStore)(nil).HeadCommit), branch)
 }
 
 // ListAll mocks base method.
-func (m *MockGitStore) ListAll() ([]string, error) {
+func (m *MockGitStore) ListAll(branch string) ([]string, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "ListAll")
+	ret := m.ctrl.Call(m, "ListAll", branch)
 	ret0, _ := ret[0].([]string)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // ListAll indicates an expected call of ListAll.
-func (mr *MockGitStoreMockRecorder) ListAll() *gomock.Call {
+func (mr *MockGitStoreMockRecorder) ListAll(branch any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListAll", reflect.TypeOf((*MockGitStore)(nil).ListAll))
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListAll", reflect.TypeOf((*MockGitStore)(nil).ListAll), branch)
 }
 
 // ReadFile mocks base method.
-func (m *MockGitStore) ReadFile(path string) (string, error) {
+func (m *MockGitStore) ReadFile(branch, path string) (string, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "ReadFile", path)
+	ret := m.ctrl.Call(m, "ReadFile", branch, path)
 	ret0, _ := ret[0].(string)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // ReadFile indicates an expected call of ReadFile.
-func (mr *MockGitStoreMockRecorder) ReadFile(path any) *gomock.Call {
+func (mr *MockGitStoreMockRecorder) ReadFile(branch, path any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ReadFile", reflect.TypeOf((*MockGitStore)(nil).ReadFile), path)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ReadFile", reflect.TypeOf((*MockGitStore)(nil).ReadFile), branch, path)
+}
+
+// ReadFileAtCommit mocks base method.
+func (m *MockGitStore) ReadFileAtCommit(branch, path, commitHash string) (string, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ReadFileAtCommit", branch, path, commitHash)
+	ret0, _ := ret[0].(string)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// ReadFileAtCommit indicates an expected call of ReadFileAtCommit.
+func (mr *MockGitStoreMockRecorder) ReadFileAtCommit(branch, path, commitHash any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ReadFileAtCommit", reflect.TypeOf((*MockGitStore)(nil).ReadFileAtCommit), branch, path, commitHash)
 }
 
 // WriteFile mocks base method.
-func (m *MockGitStore) WriteFile(path, content, message, operation string) (string, string, error) {
+func (m *MockGitStore) WriteFile(branch, path, content, message, operation string) (string, string, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "WriteFile", path, content, message, operation)
+	ret := m.ctrl.Call(m, "WriteFile", branch, path, content, message, operation)
 	ret0, _ := ret[0].(string)
 	ret1, _ := ret[1].(string)
 	ret2, _ := ret[2].(error)
@@ -158,9 +159,9 @@ func (m *MockGitStore) WriteFile(path, content, message, operation string) (stri
 }
 
 // WriteFile indicates an expected call of WriteFile.
-func (mr *MockGitStoreMockRecorder) WriteFile(path, content, message, operation any) *gomock.Call {
+func (mr *MockGitStoreMockRecorder) WriteFile(branch, path, content, message, operation any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "WriteFile", reflect.TypeOf((*MockGitStore)(nil).WriteFile), path, content, message, operation)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "WriteFile", reflect.TypeOf((*MockGitStore)(nil).WriteFile), branch, path, content, message, operation)
 }
 
 // MockSearchIndex is a mock of SearchIndex interface.
@@ -188,75 +189,61 @@ func (m *MockSearchIndex) EXPECT() *MockSearchIndexMockRecorder {
 }
 
 // ClusterFacts mocks base method.
-func (m *MockSearchIndex) ClusterFacts(resolution float64, minCommunitySize int) (store.ClusterResult, error) {
+func (m *MockSearchIndex) ClusterFacts(branch string, resolution float64, minCommunitySize int) (store.ClusterResult, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "ClusterFacts", resolution, minCommunitySize)
+	ret := m.ctrl.Call(m, "ClusterFacts", branch, resolution, minCommunitySize)
 	ret0, _ := ret[0].(store.ClusterResult)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // ClusterFacts indicates an expected call of ClusterFacts.
-func (mr *MockSearchIndexMockRecorder) ClusterFacts(resolution, minCommunitySize any) *gomock.Call {
+func (mr *MockSearchIndexMockRecorder) ClusterFacts(branch, resolution, minCommunitySize any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ClusterFacts", reflect.TypeOf((*MockSearchIndex)(nil).ClusterFacts), resolution, minCommunitySize)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ClusterFacts", reflect.TypeOf((*MockSearchIndex)(nil).ClusterFacts), branch, resolution, minCommunitySize)
 }
 
 // Delete mocks base method.
-func (m *MockSearchIndex) Delete(path string) error {
+func (m *MockSearchIndex) Delete(branch, path string) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Delete", path)
+	ret := m.ctrl.Call(m, "Delete", branch, path)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // Delete indicates an expected call of Delete.
-func (mr *MockSearchIndexMockRecorder) Delete(path any) *gomock.Call {
+func (mr *MockSearchIndexMockRecorder) Delete(branch, path any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Delete", reflect.TypeOf((*MockSearchIndex)(nil).Delete), path)
-}
-
-// GraphAddDerivedFrom mocks base method.
-func (m *MockSearchIndex) GraphAddDerivedFrom(newPath string, sourcePaths []string) error {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GraphAddDerivedFrom", newPath, sourcePaths)
-	ret0, _ := ret[0].(error)
-	return ret0
-}
-
-// GraphAddDerivedFrom indicates an expected call of GraphAddDerivedFrom.
-func (mr *MockSearchIndexMockRecorder) GraphAddDerivedFrom(newPath, sourcePaths any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GraphAddDerivedFrom", reflect.TypeOf((*MockSearchIndex)(nil).GraphAddDerivedFrom), newPath, sourcePaths)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Delete", reflect.TypeOf((*MockSearchIndex)(nil).Delete), branch, path)
 }
 
 // Search mocks base method.
-func (m *MockSearchIndex) Search(q store.SearchQuery) ([]store.SearchResult, error) {
+func (m *MockSearchIndex) Search(branch string, q store.SearchQuery) ([]store.SearchResult, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Search", q)
+	ret := m.ctrl.Call(m, "Search", branch, q)
 	ret0, _ := ret[0].([]store.SearchResult)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // Search indicates an expected call of Search.
-func (mr *MockSearchIndexMockRecorder) Search(q any) *gomock.Call {
+func (mr *MockSearchIndexMockRecorder) Search(branch, q any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Search", reflect.TypeOf((*MockSearchIndex)(nil).Search), q)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Search", reflect.TypeOf((*MockSearchIndex)(nil).Search), branch, q)
 }
 
 // Upsert mocks base method.
-func (m *MockSearchIndex) Upsert(r store.FactRecord) error {
+func (m *MockSearchIndex) Upsert(branch, commitHash string, r store.FactRecord) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Upsert", r)
+	ret := m.ctrl.Call(m, "Upsert", branch, commitHash, r)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // Upsert indicates an expected call of Upsert.
-func (mr *MockSearchIndexMockRecorder) Upsert(r any) *gomock.Call {
+func (mr *MockSearchIndexMockRecorder) Upsert(branch, commitHash, r any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Upsert", reflect.TypeOf((*MockSearchIndex)(nil).Upsert), r)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Upsert", reflect.TypeOf((*MockSearchIndex)(nil).Upsert), branch, commitHash, r)
 }
 
 // MockEmbedder is a mock of Embedder interface.
@@ -296,4 +283,58 @@ func (m *MockEmbedder) Embed(text string) ([]float32, error) {
 func (mr *MockEmbedderMockRecorder) Embed(text any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Embed", reflect.TypeOf((*MockEmbedder)(nil).Embed), text)
+}
+
+// MockBatchEmbedder is a mock of BatchEmbedder interface.
+type MockBatchEmbedder struct {
+	ctrl     *gomock.Controller
+	recorder *MockBatchEmbedderMockRecorder
+	isgomock struct{}
+}
+
+// MockBatchEmbedderMockRecorder is the mock recorder for MockBatchEmbedder.
+type MockBatchEmbedderMockRecorder struct {
+	mock *MockBatchEmbedder
+}
+
+// NewMockBatchEmbedder creates a new mock instance.
+func NewMockBatchEmbedder(ctrl *gomock.Controller) *MockBatchEmbedder {
+	mock := &MockBatchEmbedder{ctrl: ctrl}
+	mock.recorder = &MockBatchEmbedderMockRecorder{mock}
+	return mock
+}
+
+// EXPECT returns an object that allows the caller to indicate expected use.
+func (m *MockBatchEmbedder) EXPECT() *MockBatchEmbedderMockRecorder {
+	return m.recorder
+}
+
+// Embed mocks base method.
+func (m *MockBatchEmbedder) Embed(text string) ([]float32, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Embed", text)
+	ret0, _ := ret[0].([]float32)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// Embed indicates an expected call of Embed.
+func (mr *MockBatchEmbedderMockRecorder) Embed(text any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Embed", reflect.TypeOf((*MockBatchEmbedder)(nil).Embed), text)
+}
+
+// EmbedBatch mocks base method.
+func (m *MockBatchEmbedder) EmbedBatch(texts []string) ([][]float32, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "EmbedBatch", texts)
+	ret0, _ := ret[0].([][]float32)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// EmbedBatch indicates an expected call of EmbedBatch.
+func (mr *MockBatchEmbedderMockRecorder) EmbedBatch(texts any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "EmbedBatch", reflect.TypeOf((*MockBatchEmbedder)(nil).EmbedBatch), texts)
 }

@@ -1,73 +1,172 @@
 import { describe, it, expect } from 'vitest';
-import { reducer, init } from './state';
+import { reducer, init, currentPath } from './state';
+import type { AppState, FilterChip } from './state';
 
-describe('reducer', () => {
-  it('NAVIGATE sets currentPath, clears selectedFact, resets rightMode', () => {
-    const s = { ...init, selectedFact: 'kb/foo', rightMode: 'fact' as const };
-    const next = reducer(s, { type: 'NAVIGATE', path: 'kb/bar' });
-    expect(next.currentPath).toBe('kb/bar');
-    expect(next.selectedFact).toBeNull();
-    expect(next.rightMode).toBe('summary');
+describe('reducer — filters', () => {
+  it('ADD_FILTER appends chip and pushes nav', () => {
+    const chip: FilterChip = { category: 'domain', value: 'tech' };
+    const s = reducer(init, { type: 'ADD_FILTER', chip });
+    expect(s.filters).toHaveLength(1);
+    expect(s.filters[0]).toEqual(chip);
+    expect(s.navStack.length).toBe(1);
   });
 
-  it('SELECT_FACT sets selectedFact and rightMode to fact', () => {
-    const next = reducer(init, { type: 'SELECT_FACT', path: 'kb/some-fact' });
-    expect(next.selectedFact).toBe('kb/some-fact');
-    expect(next.rightMode).toBe('fact');
+  it('ADD_FILTER with path category replaces existing path chip', () => {
+    const first: FilterChip = { category: 'path', value: 'kb/tech' };
+    const second: FilterChip = { category: 'path', value: 'kb/science' };
+    let s = reducer(init, { type: 'ADD_FILTER', chip: first });
+    s = reducer(s, { type: 'ADD_FILTER', chip: second });
+    const pathChips = s.filters.filter(f => f.category === 'path');
+    expect(pathChips).toHaveLength(1);
+    expect(pathChips[0].value).toBe('kb/science');
   });
 
-  it('PREVIEW_DIR clears selectedFact and sets previewPath', () => {
-    const s = { ...init, selectedFact: 'kb/x' };
-    const next = reducer(s, { type: 'PREVIEW_DIR', path: 'kb/subdir' });
-    expect(next.selectedFact).toBeNull();
-    expect(next.previewPath).toBe('kb/subdir');
+  it('ADD_FILTER with path category keeps other chips', () => {
+    let s = reducer(init, { type: 'ADD_FILTER', chip: { category: 'domain', value: 'tech' } });
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'path', value: 'kb/tech' } });
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'path', value: 'kb/science' } });
+    expect(s.filters.find(f => f.category === 'domain')?.value).toBe('tech');
+    expect(s.filters.filter(f => f.category === 'path')).toHaveLength(1);
   });
 
-  it('GO_UP navigates to parent path', () => {
-    const s = { ...init, currentPath: 'kb/science/physics' };
-    const next = reducer(s, { type: 'GO_UP' });
-    expect(next.currentPath).toBe('kb/science');
-    expect(next.selectedFact).toBeNull();
+  it('REMOVE_FILTER removes chip at given index and pushes nav', () => {
+    let s = reducer(init, { type: 'ADD_FILTER', chip: { category: 'domain', value: 'a' } });
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'entity', value: 'b' } });
+    const before = s.navStack.length;
+    s = reducer(s, { type: 'REMOVE_FILTER', index: 0 });
+    expect(s.filters).toHaveLength(1);
+    expect(s.filters[0].value).toBe('b');
+    expect(s.navStack.length).toBe(before + 1);
   });
 
-  it('GO_UP at root returns same state', () => {
-    const s = { ...init, currentPath: 'kb' };
-    const next = reducer(s, { type: 'GO_UP' });
-    expect(next).toBe(s); // same reference
+  it('SET_FREE_TEXT sets freeText without pushing nav', () => {
+    const s = reducer(init, { type: 'SET_FREE_TEXT', text: 'hello' });
+    expect(s.freeText).toBe('hello');
+    expect(s.navStack.length).toBe(0);
   });
 
-  it('SEARCH sets searchQuery and clears similarTo', () => {
-    const s = { ...init, similarTo: { path: 'x', text: 'y' } };
-    const next = reducer(s, { type: 'SEARCH', query: 'hello' });
-    expect(next.searchQuery).toBe('hello');
-    expect(next.similarTo).toBeNull();
+  it('CLEAR_FILTERS clears filters, freeText and pushes nav', () => {
+    let s: AppState = { ...init, filters: [{ category: 'domain', value: 'tech' }], freeText: 'q' };
+    s = reducer(s, { type: 'CLEAR_FILTERS' });
+    expect(s.filters).toHaveLength(0);
+    expect(s.freeText).toBe('');
+    expect(s.navStack.length).toBe(1);
+  });
+});
+
+describe('reducer — nav', () => {
+  it('NAV_BACK restores previous view/filters/freeText', () => {
+    let s: AppState = { ...init, freeText: 'q' };
+    s = reducer(s, { type: 'APPLY_NAV', view: 'chrono', historyCommit: null, factPath: null, factCommit: null });
+    s = reducer(s, { type: 'NAV_BACK' });
+    expect(s.view).toBe('tree');
+    expect(s.freeText).toBe('q');
+    expect(s.navStack.length).toBe(0);
   });
 
-  it('SIMILAR_SEARCH sets similarTo and clears searchQuery', () => {
-    const s = { ...init, searchQuery: 'old' };
-    const next = reducer(s, { type: 'SIMILAR_SEARCH', path: 'kb/a', text: 'some text' });
-    expect(next.similarTo).toEqual({ path: 'kb/a', text: 'some text' });
-    expect(next.searchQuery).toBe('');
+  it('NAV_BACK restores filters from stack', () => {
+    let s = reducer(init, { type: 'ADD_FILTER', chip: { category: 'domain', value: 'tech' } });
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'entity', value: 'ai' } });
+    const withFilters = s;
+    s = reducer(s, { type: 'CLEAR_FILTERS' });
+    s = reducer(s, { type: 'NAV_BACK' });
+    expect(s.filters).toEqual(withFilters.filters);
   });
 
-  it('CLEAR_SEARCH clears query, similarTo, and selectedFact', () => {
-    const s = { ...init, searchQuery: 'q', similarTo: { path: 'x', text: 'y' }, selectedFact: 'kb/f' };
-    const next = reducer(s, { type: 'CLEAR_SEARCH' });
-    expect(next.searchQuery).toBe('');
-    expect(next.similarTo).toBeNull();
-    expect(next.selectedFact).toBeNull();
+  it('NAV_BACK on empty stack is no-op', () => {
+    const s = reducer(init, { type: 'NAV_BACK' });
+    expect(s).toBe(init);
   });
 
-  it('SHOW_HISTORY sets rightMode to history', () => {
-    const next = reducer(init, { type: 'SHOW_HISTORY' });
-    expect(next.rightMode).toBe('history');
-  });
-
-  it('SHOW_HISTORY clears rightPanelFocused', () => {
-    const s = reducer({ ...init, rightPanelFocused: true }, { type: 'SHOW_HISTORY' });
+  it('NAV_BACK clears rightPanelFocused', () => {
+    let s = reducer(init, { type: 'APPLY_NAV', view: 'chrono', historyCommit: null, factPath: null, factCommit: null });
+    s = reducer({ ...s, rightPanelFocused: true }, { type: 'NAV_BACK' });
     expect(s.rightPanelFocused).toBe(false);
   });
 
+  it('nav stack caps at 20 entries', () => {
+    let s = init;
+    for (let i = 0; i < 22; i++) {
+      s = reducer(s, { type: 'APPLY_NAV', view: i % 2 === 0 ? 'chrono' : 'tree', historyCommit: null, factPath: null, factCommit: null });
+    }
+    expect(s.navStack.length).toBe(20);
+  });
+});
+
+describe('currentPath()', () => {
+  it('returns ontologyRoot when no path chip', () => {
+    const s = { ...init, ontologyRoot: 'kb/tech' };
+    expect(currentPath(s)).toBe('kb/tech');
+  });
+
+  it('returns path chip value when present', () => {
+    const s = { ...init, filters: [{ category: 'path' as const, value: 'kb/technology/ai' }] };
+    expect(currentPath(s)).toBe('kb/technology/ai');
+  });
+
+  it('returns ontologyRoot when no path chip exists', () => {
+    const s = { ...init, ontologyRoot: 'knowledge' };
+    expect(currentPath(s)).toBe('knowledge');
+  });
+
+  it('returns kb fallback when both empty', () => {
+    const s = { ...init, ontologyRoot: '' };
+    expect(currentPath(s)).toBe('kb');
+  });
+});
+
+describe('reducer — NAVIGATE', () => {
+  it('replaces path chip and pushes nav', () => {
+    const s = reducer(init, { type: 'NAVIGATE', path: 'kb/tech' });
+    expect(currentPath(s)).toBe('kb/tech');
+    expect(s.navStack.length).toBe(1);
+  });
+
+  it('does not affect non-path filter chips', () => {
+    let s: AppState = init;
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'domain', value: 'go' } });
+    s = reducer(s, { type: 'NAVIGATE', path: 'kb/tech' });
+    expect(currentPath(s)).toBe('kb/tech');
+    expect(s.filters.find(f => f.category === 'domain')!.value).toBe('go');
+  });
+});
+
+describe('reducer — GO_UP', () => {
+  it('removes last path segment from path chip', () => {
+    let s0 = reducer(init, { type: 'NAVIGATE', path: 'kb/tech/go' });
+    const s = reducer(s0, { type: 'GO_UP' });
+    expect(currentPath(s)).toBe('kb/tech');
+  });
+
+  it('does nothing at root', () => {
+    // With ontologyRoot='kb' and no path chip, currentPath = 'kb' (single segment)
+    const s = reducer(init, { type: 'GO_UP' });
+    expect(currentPath(s)).toBe('kb');
+  });
+});
+
+describe('reducer — SET_REPO', () => {
+  it('resets navigation state when switching repos', () => {
+    let s = reducer(init, { type: 'ADD_FILTER', chip: { category: 'domain', value: 'tech' } });
+    s = reducer(s, { type: 'APPLY_NAV', view: 'history', historyCommit: null, factPath: null, factCommit: null });
+    s = reducer(s, { type: 'SET_REPO', repo: 'work' });
+    expect(s.repo).toBe('work');
+    expect(s.view).toBe('tree');
+    expect(s.filters).toHaveLength(0);
+    expect(s.freeText).toBe('');
+    expect(s.navStack).toHaveLength(0);
+    expect(s.headCommit).toBe('');
+    expect(s.branch).toBe('');
+    expect(s.remoteError).toBe('');
+    expect(s.rightPanelFocused).toBe(false);
+  });
+
+  it('init has repo set to knomit', () => {
+    expect(init.repo).toBe('knomit');
+  });
+});
+
+describe('reducer — shared infrastructure', () => {
   it('SET_TASK updates task status', () => {
     const next = reducer(init, { type: 'SET_TASK', op: 'sync', status: 'running', message: 'syncing' });
     expect(next.tasks.sync).toEqual({ status: 'running', message: 'syncing' });
@@ -79,18 +178,18 @@ describe('reducer', () => {
     expect(next).toBe(s);
   });
 
-  it('SET_STATUS sets head, branch, embeddingsEnabled, currentPath from ontologyRoot', () => {
+  it('SET_STATUS sets head, branch, embeddingsEnabled, ontologyRoot', () => {
     const next = reducer(init, { type: 'SET_STATUS', head: 'abc123', branch: 'main', embeddingsEnabled: true, ontologyRoot: 'knowledge' });
     expect(next.headCommit).toBe('abc123');
     expect(next.branch).toBe('main');
     expect(next.embeddingsEnabled).toBe(true);
-    expect(next.currentPath).toBe('knowledge');
+    expect(next.ontologyRoot).toBe('knowledge');
   });
 
-  it('SET_STATUS keeps currentPath when ontologyRoot is empty', () => {
-    const s = { ...init, currentPath: 'kb/custom' };
+  it('SET_STATUS keeps ontologyRoot when empty string provided', () => {
+    const s = { ...init, ontologyRoot: 'kb/custom' };
     const next = reducer(s, { type: 'SET_STATUS', head: 'abc', branch: 'main', embeddingsEnabled: false, ontologyRoot: '' });
-    expect(next.currentPath).toBe('kb/custom');
+    expect(next.ontologyRoot).toBe('kb/custom');
   });
 
   it('SET_HEAD only updates headCommit', () => {
@@ -114,7 +213,7 @@ describe('reducer', () => {
     const next = reducer(s, { type: 'CONSOLE_LOG', level: 'error', message: 'overflow' });
     expect(next.consoleEntries).toHaveLength(500);
     expect(next.consoleEntries[499].message).toBe('overflow');
-    expect(next.consoleEntries[0].message).toBe('msg1'); // msg0 was trimmed
+    expect(next.consoleEntries[0].message).toBe('msg1');
   });
 
   it('CONSOLE_TOGGLE flips consoleOpen', () => {
@@ -128,221 +227,604 @@ describe('reducer', () => {
     expect(reducer(init, { type: 'CONSOLE_SET_HEIGHT', height: 300 }).consoleHeight).toBe(300);
     expect(reducer(init, { type: 'CONSOLE_SET_HEIGHT', height: 900 }).consoleHeight).toBe(600);
   });
-});
 
-describe('history mode', () => {
-  it('ENTER_HISTORY pushes to navStack and sets leftMode', () => {
-    const s = reducer(init, { type: 'ENTER_HISTORY' });
-    expect(s.leftMode).toBe('history');
-    expect(s.navStack.length).toBe(1);
-    expect(s.navStack[0].leftMode).toBe('browse');
-  });
-
-  it('EXIT_HISTORY resets to browse and clears historyCommit', () => {
-    let s = reducer(init, { type: 'ENTER_HISTORY' });
-    s = reducer(s, { type: 'SELECT_COMMIT', commit: 'abc123' });
-    s = reducer(s, { type: 'EXIT_HISTORY' });
-    expect(s.leftMode).toBe('browse');
-    expect(s.historyCommit).toBeNull();
-  });
-
-  it('SELECT_COMMIT sets historyCommit', () => {
-    const s = reducer(init, { type: 'SELECT_COMMIT', commit: 'abc123' });
-    expect(s.historyCommit).toBe('abc123');
-  });
-
-  it('NAV_BACK pops navStack and restores state', () => {
-    let s = reducer(init, { type: 'NAVIGATE', path: 'kb/tech' });
-    s = reducer(s, { type: 'ENTER_HISTORY' });
-    s = reducer(s, { type: 'NAV_BACK' });
-    expect(s.leftMode).toBe('browse');
-    expect(s.currentPath).toBe('kb/tech');
-  });
-
-  it('NAV_BACK on empty stack is no-op', () => {
-    const s = reducer(init, { type: 'NAV_BACK' });
-    expect(s).toBe(init);
-  });
-
-  it('navStack caps at 10 entries', () => {
-    let s = init;
-    for (let i = 0; i < 12; i++) {
-      s = reducer(s, { type: 'NAVIGATE', path: `kb/p${i}` });
-    }
-    expect(s.navStack.length).toBe(10);
-  });
-});
-
-describe('EXIT_HISTORY edge cases', () => {
-  it('EXIT_HISTORY from fact path restores parent dir and keeps fact selected', () => {
-    const s = { ...init, currentPath: 'kb/tech/fact.md', leftMode: 'history' as const, historyCommit: 'abc' };
-    const next = reducer(s, { type: 'EXIT_HISTORY' });
-    expect(next.leftMode).toBe('browse');
-    expect(next.currentPath).toBe('kb/tech');
-    expect(next.selectedFact).toBe('kb/tech/fact.md');
-    expect(next.rightMode).toBe('fact');
-    expect(next.historyCommit).toBeNull();
-  });
-
-  it('EXIT_HISTORY from recent mode clears selectedFact', () => {
-    const s = { ...init, leftMode: 'recent' as const, selectedFact: 'kb/x/y.md' };
-    const next = reducer(s, { type: 'EXIT_HISTORY' });
-    expect(next.leftMode).toBe('browse');
-    expect(next.selectedFact).toBeNull();
-    expect(next.rightMode).toBe('summary');
-  });
-});
-
-describe('ENTER_RECENT', () => {
-  it('switches to recent mode and pushes navStack', () => {
-    const s = reducer(init, { type: 'ENTER_RECENT' });
-    expect(s.leftMode).toBe('recent');
-    expect(s.navStack.length).toBe(1);
-    expect(s.rightPanelFocused).toBe(false);
-  });
-});
-
-describe('FACT_HISTORY', () => {
-  it('enters history mode for a specific fact with commit', () => {
-    const s = reducer(init, { type: 'FACT_HISTORY', factPath: 'kb/a/b.md', commit: 'abc123' });
-    expect(s.currentPath).toBe('kb/a/b.md');
-    expect(s.selectedFact).toBe('kb/a/b.md');
-    expect(s.leftMode).toBe('history');
-    expect(s.historyCommit).toBe('abc123');
-    expect(s.historyFocusPath).toBe('kb/a/b.md');
-    expect(s.navStack.length).toBe(1);
-  });
-
-  it('FACT_HISTORY without commit sets historyCommit to null', () => {
-    const s = reducer(init, { type: 'FACT_HISTORY', factPath: 'kb/a/b.md' });
-    expect(s.historyCommit).toBeNull();
-  });
-});
-
-describe('OPEN_FACT', () => {
-  it('navigates to parent dir and selects fact', () => {
-    const s = reducer(init, { type: 'OPEN_FACT', path: 'kb/tech/cyber/fact.md' });
-    expect(s.currentPath).toBe('kb/tech/cyber');
-    expect(s.selectedFact).toBe('kb/tech/cyber/fact.md');
-    expect(s.rightMode).toBe('fact');
-    expect(s.leftMode).toBe('browse');
-    expect(s.navStack.length).toBe(1);
-  });
-
-  it('OPEN_FACT with refCommit stores it', () => {
-    const s = reducer(init, { type: 'OPEN_FACT', path: 'kb/a/b.md', refCommit: 'abc' });
-    expect(s.refCommit).toBe('abc');
-  });
-
-  it('OPEN_FACT without refCommit clears it', () => {
-    const s = { ...init, refCommit: 'old' };
-    const next = reducer(s, { type: 'OPEN_FACT', path: 'kb/a/b.md' });
-    expect(next.refCommit).toBeNull();
-  });
-});
-
-describe('HISTORY_OPEN_PATH', () => {
-  it('sets currentPath and historyFocusPath, pushes navStack', () => {
-    const s = reducer(init, { type: 'HISTORY_OPEN_PATH', path: 'kb/tech/ref.md' });
-    expect(s.currentPath).toBe('kb/tech/ref.md');
-    expect(s.historyFocusPath).toBe('kb/tech/ref.md');
-    expect(s.navStack.length).toBe(1);
-  });
-});
-
-describe('SET_REMOTE_ERROR', () => {
-  it('sets remoteError', () => {
+  it('SET_REMOTE_ERROR sets remoteError', () => {
     const s = reducer(init, { type: 'SET_REMOTE_ERROR', error: 'auth failed' });
     expect(s.remoteError).toBe('auth failed');
   });
 
-  it('clears remoteError with empty string', () => {
-    const s = { ...init, remoteError: 'old error' };
-    const next = reducer(s, { type: 'SET_REMOTE_ERROR', error: '' });
-    expect(next.remoteError).toBe('');
-  });
-});
-
-describe('SET_REPO', () => {
-  it('resets navigation state when switching repos', () => {
-    let s = reducer(init, { type: 'NAVIGATE', path: 'kb/deep/path' });
-    s = reducer(s, { type: 'SELECT_FACT', path: 'kb/deep/path/fact.md' });
-    s = reducer(s, { type: 'SET_REPO', repo: 'work' });
-    expect(s.repo).toBe('work');
-    expect(s.currentPath).toBe('kb');
-    expect(s.selectedFact).toBeNull();
-    expect(s.rightMode).toBe('summary');
-    expect(s.searchQuery).toBe('');
-    expect(s.navStack).toHaveLength(0);
-    expect(s.leftMode).toBe('browse');
-    expect(s.historyCommit).toBeNull();
-    expect(s.headCommit).toBe('');
-    expect(s.branch).toBe('');
-  });
-
-  it('init has repo set to knomit', () => {
-    expect(init.repo).toBe('knomit');
-  });
-});
-
-describe('right panel focus', () => {
-  it('init has rightPanelFocused false', () => {
-    expect(init.rightPanelFocused).toBe(false);
-  });
-
   it('FOCUS_RIGHT_PANEL sets rightPanelFocused to true', () => {
-    const s = reducer(init, { type: 'FOCUS_RIGHT_PANEL' });
-    expect(s.rightPanelFocused).toBe(true);
+    expect(reducer(init, { type: 'FOCUS_RIGHT_PANEL' }).rightPanelFocused).toBe(true);
   });
 
   it('BLUR_RIGHT_PANEL sets rightPanelFocused to false', () => {
     const s = reducer({ ...init, rightPanelFocused: true }, { type: 'BLUR_RIGHT_PANEL' });
     expect(s.rightPanelFocused).toBe(false);
   });
+});
 
-  it('NAVIGATE clears rightPanelFocused', () => {
-    const s = reducer({ ...init, rightPanelFocused: true }, { type: 'NAVIGATE', path: 'kb/other' });
-    expect(s.rightPanelFocused).toBe(false);
+// ─── Regression tests for breadcrumb/path sync bugs ─────────────────────────
+
+describe('currentPath — path chip takes precedence', () => {
+  it('returns path chip value when both chip and ontologyRoot exist', () => {
+    const s: AppState = {
+      ...init,
+      filters: [{ category: 'path', value: 'kb/technology/ai' }],
+    };
+    expect(currentPath(s)).toBe('kb/technology/ai');
   });
 
-  it('SET_REPO clears rightPanelFocused', () => {
-    const s = reducer({ ...init, rightPanelFocused: true }, { type: 'SET_REPO', repo: 'other' });
-    expect(s.rightPanelFocused).toBe(false);
-  });
-
-  it('SEARCH clears rightPanelFocused', () => {
-    const s = reducer({ ...init, rightPanelFocused: true }, { type: 'SEARCH', query: 'test' });
-    expect(s.rightPanelFocused).toBe(false);
-  });
-
-  it('SIMILAR_SEARCH clears rightPanelFocused', () => {
-    const s = reducer({ ...init, rightPanelFocused: true }, { type: 'SIMILAR_SEARCH', path: 'kb/x', text: 'y' });
-    expect(s.rightPanelFocused).toBe(false);
-  });
-
-  it('ENTER_HISTORY clears rightPanelFocused', () => {
-    const s = reducer({ ...init, rightPanelFocused: true }, { type: 'ENTER_HISTORY' });
-    expect(s.rightPanelFocused).toBe(false);
-  });
-
-  it('EXIT_HISTORY clears rightPanelFocused', () => {
-    const s = reducer({ ...init, rightPanelFocused: true }, { type: 'EXIT_HISTORY' });
-    expect(s.rightPanelFocused).toBe(false);
-  });
-
-  it('NAV_BACK clears rightPanelFocused', () => {
-    let s = reducer(init, { type: 'NAVIGATE', path: 'kb/tech' });
-    s = reducer({ ...s, rightPanelFocused: true }, { type: 'NAV_BACK' });
-    expect(s.rightPanelFocused).toBe(false);
-  });
-
-  it('ENTER_RECENT clears historyCommit so right panel loads facts not commits', () => {
-    // Simulate: user was in history mode with a commit selected
-    const before = reducer({ ...init, historyCommit: 'abc123', historyFocusPath: 'kb/foo.md' }, { type: 'ENTER_HISTORY' });
-    // Switch to recent mode
-    const s = reducer(before, { type: 'ENTER_RECENT' });
-    expect(s.leftMode).toBe('recent');
-    expect(s.historyCommit).toBeNull();
-    expect(s.historyFocusPath).toBeNull();
+  it('falls back to ontologyRoot when no path chip', () => {
+    const s: AppState = {
+      ...init,
+      ontologyRoot: 'kb/technology',
+      filters: [{ category: 'domain', value: 'go' }],
+    };
+    expect(currentPath(s)).toBe('kb/technology');
   });
 });
+
+describe('breadcrumb and path chip stay in sync', () => {
+  it('ADD_FILTER with path replaces existing path chip (simulates breadcrumb click)', () => {
+    // Navigate deep: kb -> kb/technology -> kb/technology/ai -> kb/technology/ai/anthropic
+    let s: AppState = init;
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'path', value: 'kb/technology' } });
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'path', value: 'kb/technology/ai' } });
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'path', value: 'kb/technology/ai/anthropic' } });
+    expect(currentPath(s)).toBe('kb/technology/ai/anthropic');
+    expect(s.filters.filter(f => f.category === 'path')).toHaveLength(1);
+
+    // Click breadcrumb "kb/technology" — replaces path chip, doesn't add second one
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'path', value: 'kb/technology' } });
+    expect(currentPath(s)).toBe('kb/technology');
+    expect(s.filters.filter(f => f.category === 'path')).toHaveLength(1);
+    expect(s.filters.find(f => f.category === 'path')!.value).toBe('kb/technology');
+  });
+
+  it('non-path filters are preserved when path chip changes', () => {
+    let s: AppState = init;
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'domain', value: 'go' } });
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'path', value: 'kb/tech' } });
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'path', value: 'kb' } });
+    expect(s.filters).toHaveLength(2); // domain:go + path:kb
+    expect(s.filters.find(f => f.category === 'domain')!.value).toBe('go');
+    expect(s.filters.find(f => f.category === 'path')!.value).toBe('kb');
+  });
+});
+
+describe('removing path chip resets to ontology root', () => {
+  it('REMOVE_FILTER on path chip resets to ontologyRoot', () => {
+    let s: AppState = { ...init, ontologyRoot: 'kb' };
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'path', value: 'kb/technology/ai' } });
+    expect(currentPath(s)).toBe('kb/technology/ai');
+
+    // Remove the path chip (find its index)
+    const pathIdx = s.filters.findIndex(f => f.category === 'path');
+    s = reducer(s, { type: 'REMOVE_FILTER', index: pathIdx });
+    expect(s.filters.filter(f => f.category === 'path')).toHaveLength(0);
+    expect(currentPath(s)).toBe('kb');
+  });
+
+  it('REMOVE_FILTER on non-path chip does not reset path', () => {
+    let s: AppState = init;
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'path', value: 'kb/tech' } });
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'domain', value: 'go' } });
+
+    // Remove the domain chip
+    const domainIdx = s.filters.findIndex(f => f.category === 'domain');
+    s = reducer(s, { type: 'REMOVE_FILTER', index: domainIdx });
+    expect(currentPath(s)).toBe('kb/tech'); // path chip unchanged
+  });
+
+  it('CLEAR_FILTERS resets to ontologyRoot', () => {
+    let s: AppState = { ...init, ontologyRoot: 'kb' };
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'path', value: 'kb/deep/nested' } });
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'domain', value: 'go' } });
+    s = reducer(s, { type: 'CLEAR_FILTERS' });
+    expect(s.filters).toHaveLength(0);
+    expect(currentPath(s)).toBe('kb');
+  });
+});
+
+describe('back navigation restores path state', () => {
+  it('NAV_BACK after deep navigation restores previous path', () => {
+    let s: AppState = init;
+    // Navigate deep
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'path', value: 'kb/tech' } });
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'path', value: 'kb/tech/go' } });
+    expect(currentPath(s)).toBe('kb/tech/go');
+
+    // Go back
+    s = reducer(s, { type: 'NAV_BACK' });
+    expect(currentPath(s)).toBe('kb/tech');
+
+    // Go back again
+    s = reducer(s, { type: 'NAV_BACK' });
+    expect(currentPath(s)).toBe('kb');
+  });
+});
+
+// ─── Regression: NAVIGATE/GO_UP actions ─────────────────────────────────────
+
+describe('NAVIGATE action', () => {
+  it('sets path chip and pushes nav', () => {
+    const s = reducer(init, { type: 'NAVIGATE', path: 'kb/technology/ai' });
+    expect(currentPath(s)).toBe('kb/technology/ai');
+    expect(s.navStack.length).toBe(1);
+  });
+
+  it('does not affect non-path filter chips', () => {
+    let s: AppState = init;
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'domain', value: 'go' } });
+    s = reducer(s, { type: 'NAVIGATE', path: 'kb/tech' });
+    expect(currentPath(s)).toBe('kb/tech');
+    expect(s.filters.find(f => f.category === 'domain')!.value).toBe('go');
+  });
+});
+
+describe('GO_UP action', () => {
+  it('removes last path segment via path chip', () => {
+    let s = reducer(init, { type: 'NAVIGATE', path: 'kb/tech/go' });
+    s = reducer(s, { type: 'GO_UP' });
+    expect(currentPath(s)).toBe('kb/tech');
+  });
+
+  it('does nothing at single-segment root', () => {
+    // ontologyRoot='kb', no path chip => currentPath='kb' (single segment)
+    const s = reducer(init, { type: 'GO_UP' });
+    expect(currentPath(s)).toBe('kb');
+    expect(s.navStack.length).toBe(0); // no nav push when no-op
+  });
+
+});
+
+// ─── Regression: multiple same-category type chips (OR semantics) ───────────
+
+describe('multiple type chips accumulate (OR semantics)', () => {
+  it('adding two type chips keeps both', () => {
+    let s: AppState = init;
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'type', value: 'concept' } });
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'type', value: 'principle' } });
+    const typeChips = s.filters.filter(f => f.category === 'type');
+    expect(typeChips).toHaveLength(2);
+    expect(typeChips.map(c => c.value).sort()).toEqual(['concept', 'principle']);
+  });
+
+  it('removing one type chip keeps the other', () => {
+    let s: AppState = init;
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'type', value: 'concept' } });
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'type', value: 'principle' } });
+    // Remove first type chip (index 0)
+    s = reducer(s, { type: 'REMOVE_FILTER', index: 0 });
+    const typeChips = s.filters.filter(f => f.category === 'type');
+    expect(typeChips).toHaveLength(1);
+    expect(typeChips[0].value).toBe('principle');
+  });
+});
+
+// ─── Regression: multiple domain chips accumulate (OR semantics) ────────────
+
+describe('multiple domain chips accumulate (OR semantics)', () => {
+  it('adding two domain chips keeps both', () => {
+    let s: AppState = init;
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'domain', value: 'go' } });
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'domain', value: 'rust' } });
+    const domainChips = s.filters.filter(f => f.category === 'domain');
+    expect(domainChips).toHaveLength(2);
+  });
+});
+
+// ─── Regression: multiple entity chips accumulate (AND semantics) ───────────
+
+describe('multiple entity chips accumulate (AND semantics)', () => {
+  it('adding two entity chips keeps both', () => {
+    let s: AppState = init;
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'entity', value: 'goroutine' } });
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'entity', value: 'channel' } });
+    const entityChips = s.filters.filter(f => f.category === 'entity');
+    expect(entityChips).toHaveLength(2);
+  });
+});
+
+// ─── Regression: SET_STATUS ─────────────────────────────────────────────────
+
+describe('SET_STATUS initializes ontologyRoot', () => {
+  it('updates ontologyRoot on first load', () => {
+    const s = reducer(init, {
+      type: 'SET_STATUS', head: 'abc', branch: 'main',
+      embeddingsEnabled: true, ontologyRoot: 'knowledge',
+    });
+    expect(s.ontologyRoot).toBe('knowledge');
+    expect(currentPath(s)).toBe('knowledge');
+  });
+
+  it('does not overwrite ontologyRoot if already set and new is empty', () => {
+    let s: AppState = { ...init, ontologyRoot: 'kb/custom' };
+    s = reducer(s, {
+      type: 'SET_STATUS', head: 'abc', branch: 'main',
+      embeddingsEnabled: true, ontologyRoot: '',
+    });
+    expect(s.ontologyRoot).toBe('kb/custom');
+  });
+});
+
+// ─── Regression: mixed filters and path navigation ─────────────────────────
+
+describe('mixed filters with path navigation', () => {
+  it('adding type chip then navigating preserves type chip', () => {
+    let s: AppState = init;
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'type', value: 'concept' } });
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'path', value: 'kb/tech' } });
+    expect(s.filters).toHaveLength(2);
+    expect(s.filters.find(f => f.category === 'type')!.value).toBe('concept');
+    expect(currentPath(s)).toBe('kb/tech');
+  });
+
+  it('removing path chip preserves type chip and resets path', () => {
+    let s: AppState = { ...init, ontologyRoot: 'kb' };
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'type', value: 'concept' } });
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'path', value: 'kb/tech' } });
+    const pathIdx = s.filters.findIndex(f => f.category === 'path');
+    s = reducer(s, { type: 'REMOVE_FILTER', index: pathIdx });
+    expect(s.filters).toHaveLength(1);
+    expect(s.filters[0]).toEqual({ category: 'type', value: 'concept' });
+    expect(currentPath(s)).toBe('kb');
+  });
+
+  it('NAV_BACK restores both path and type filters', () => {
+    let s: AppState = init;
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'type', value: 'concept' } });
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'path', value: 'kb/tech' } });
+    // Clear everything
+    s = reducer(s, { type: 'CLEAR_FILTERS' });
+    expect(s.filters).toHaveLength(0);
+    // Go back — should restore both chips
+    s = reducer(s, { type: 'NAV_BACK' });
+    expect(s.filters).toHaveLength(2);
+    expect(s.filters.find(f => f.category === 'type')!.value).toBe('concept');
+    expect(currentPath(s)).toBe('kb/tech');
+  });
+});
+
+// ─── Regression: free text persistence ──────────────────────────────────────
+
+describe('free text state management', () => {
+  it('SET_FREE_TEXT sets freeText', () => {
+    const s = reducer(init, { type: 'SET_FREE_TEXT', text: 'enforcement is active' });
+    expect(s.freeText).toBe('enforcement is active');
+  });
+
+  it('SET_FREE_TEXT with empty string clears freeText', () => {
+    let s: AppState = { ...init, freeText: 'some query' };
+    s = reducer(s, { type: 'SET_FREE_TEXT', text: '' });
+    expect(s.freeText).toBe('');
+  });
+
+  it('SET_FREE_TEXT does not push to navStack (typing should not flood history)', () => {
+    const s = reducer(init, { type: 'SET_FREE_TEXT', text: 'hello' });
+    expect(s.navStack).toHaveLength(0);
+  });
+
+  it('APPLY_NAV tree→chrono preserves freeText', () => {
+    let s: AppState = init;
+    s = reducer(s, { type: 'SET_FREE_TEXT', text: 'search query' });
+    s = reducer(s, { type: 'APPLY_NAV', view: 'chrono', historyCommit: null, factPath: null, factCommit: null });
+    expect(s.freeText).toBe('search query');
+  });
+
+  it('CLEAR_FILTERS clears freeText', () => {
+    let s: AppState = { ...init, freeText: 'active query' };
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'domain', value: 'go' } });
+    s = reducer(s, { type: 'CLEAR_FILTERS' });
+    expect(s.freeText).toBe('');
+    expect(s.filters).toHaveLength(0);
+  });
+
+  it('NAV_BACK restores freeText from previous state', () => {
+    let s: AppState = init;
+    s = reducer(s, { type: 'SET_FREE_TEXT', text: 'original query' });
+    // ADD_FILTER pushes nav (which captures current freeText)
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'domain', value: 'go' } });
+    // Change freeText
+    s = reducer(s, { type: 'SET_FREE_TEXT', text: 'new query' });
+    // Clear everything
+    s = reducer(s, { type: 'CLEAR_FILTERS' });
+    expect(s.freeText).toBe('');
+    // Go back — should restore freeText from before CLEAR
+    s = reducer(s, { type: 'NAV_BACK' });
+    expect(s.freeText).toBe('new query');
+  });
+
+  it('SET_REPO clears freeText', () => {
+    let s: AppState = { ...init, freeText: 'active query' };
+    s = reducer(s, { type: 'SET_REPO', repo: 'other' });
+    expect(s.freeText).toBe('');
+  });
+});
+
+// ─── Regression: free text + filter chips coexist ───────────────────────────
+
+describe('free text and filter chips coexist', () => {
+  it('freeText and type chip both active simultaneously', () => {
+    let s: AppState = init;
+    s = reducer(s, { type: 'SET_FREE_TEXT', text: 'scheduling' });
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'type', value: 'concept' } });
+    expect(s.freeText).toBe('scheduling');
+    expect(s.filters).toHaveLength(1);
+    expect(s.filters[0]).toEqual({ category: 'type', value: 'concept' });
+  });
+
+  it('removing type chip preserves freeText', () => {
+    let s: AppState = init;
+    s = reducer(s, { type: 'SET_FREE_TEXT', text: 'scheduling' });
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'type', value: 'concept' } });
+    s = reducer(s, { type: 'REMOVE_FILTER', index: 0 });
+    expect(s.freeText).toBe('scheduling');
+    expect(s.filters).toHaveLength(0);
+  });
+
+  it('freeText + path chip + domain chip all active', () => {
+    let s: AppState = init;
+    s = reducer(s, { type: 'SET_FREE_TEXT', text: 'goroutine' });
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'path', value: 'kb/tech' } });
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'domain', value: 'go' } });
+    expect(s.freeText).toBe('goroutine');
+    expect(s.filters).toHaveLength(2);
+    expect(currentPath(s)).toBe('kb/tech');
+  });
+});
+
+// ─── Regression: history mode episode filtering ─────────────────────────────
+
+describe('episode (ep) chips in history mode', () => {
+  it('ep chip can be added alongside other filters', () => {
+    let s: AppState = init;
+    s = reducer(s, { type: 'APPLY_NAV', view: 'history', historyCommit: null, factPath: null, factCommit: null });
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'ep', value: 'learn' } });
+    expect(s.filters).toHaveLength(1);
+    expect(s.filters[0]).toEqual({ category: 'ep', value: 'learn' });
+  });
+
+  it('multiple ep chips accumulate (OR semantics)', () => {
+    let s: AppState = init;
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'ep', value: 'learn' } });
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'ep', value: 'retract' } });
+    const epChips = s.filters.filter(f => f.category === 'ep');
+    expect(epChips).toHaveLength(2);
+    expect(epChips.map(c => c.value).sort()).toEqual(['learn', 'retract']);
+  });
+
+  it('ep chips cleared when switching from history to tree', () => {
+    let s: AppState = init;
+    s = reducer(s, { type: 'APPLY_NAV', view: 'history', historyCommit: null, factPath: null, factCommit: null });
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'ep', value: 'learn' } });
+    s = reducer(s, { type: 'APPLY_NAV', view: 'tree', historyCommit: null, factPath: null, factCommit: null });
+    expect(s.filters.filter(f => f.category === 'ep')).toHaveLength(0);
+  });
+
+  it('CLEAR_FILTERS removes ep chips', () => {
+    let s: AppState = init;
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'ep', value: 'learn' } });
+    s = reducer(s, { type: 'CLEAR_FILTERS' });
+    expect(s.filters).toHaveLength(0);
+  });
+
+  it('ep chip + freeText coexist for history filtering', () => {
+    let s: AppState = init;
+    s = reducer(s, { type: 'APPLY_NAV', view: 'history', historyCommit: null, factPath: null, factCommit: null });
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'ep', value: 'retract' } });
+    s = reducer(s, { type: 'SET_FREE_TEXT', text: 'cybersecurity' });
+    expect(s.filters).toHaveLength(1);
+    expect(s.filters[0]).toEqual({ category: 'ep', value: 'retract' });
+    expect(s.freeText).toBe('cybersecurity');
+  });
+});
+
+
+// ─── Regression: history mode + fact mode filter isolation ──────────────────
+
+describe('filter isolation between fact and history modes', () => {
+  it('ep/freeText cleared when switching history → tree (only path kept)', () => {
+    let s: AppState = init;
+    s = reducer(s, { type: 'APPLY_NAV', view: 'history', historyCommit: null, factPath: null, factCommit: null });
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'ep', value: 'learn' } });
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'path', value: 'kb/tech' } });
+    s = reducer(s, { type: 'SET_FREE_TEXT', text: 'goroutine' });
+    s = reducer(s, { type: 'APPLY_NAV', view: 'tree', historyCommit: null, factPath: null, factCommit: null });
+    // ep and freeText cleared, path kept
+    expect(s.filters.filter(f => f.category === 'ep')).toHaveLength(0);
+    expect(s.freeText).toBe('');
+    expect(s.filters.find(f => f.category === 'path')!.value).toBe('kb/tech');
+  });
+
+  it('domain chips cleared when switching tree → history (only path kept)', () => {
+    let s: AppState = init;
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'domain', value: 'go' } });
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'path', value: 'kb/tech' } });
+    s = reducer(s, { type: 'APPLY_NAV', view: 'history', historyCommit: null, factPath: null, factCommit: null });
+    expect(s.filters.filter(f => f.category === 'domain')).toHaveLength(0);
+    expect(s.filters.find(f => f.category === 'path')!.value).toBe('kb/tech');
+  });
+
+  it('filters preserved when switching tree ↔ chrono (same data)', () => {
+    let s: AppState = init;
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'domain', value: 'go' } });
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'entity', value: 'goroutine' } });
+    s = reducer(s, { type: 'SET_FREE_TEXT', text: 'scheduling' });
+    s = reducer(s, { type: 'APPLY_NAV', view: 'chrono', historyCommit: null, factPath: null, factCommit: null });
+    expect(s.filters.find(f => f.category === 'domain')!.value).toBe('go');
+    expect(s.filters.find(f => f.category === 'entity')!.value).toBe('goroutine');
+    expect(s.freeText).toBe('scheduling');
+    s = reducer(s, { type: 'APPLY_NAV', view: 'tree', historyCommit: null, factPath: null, factCommit: null });
+    expect(s.filters.find(f => f.category === 'domain')!.value).toBe('go');
+    expect(s.freeText).toBe('scheduling');
+  });
+});
+
+
+// ─── Full workflow scenarios: operation hierarchy ────────────────────────────
+
+describe('operation hierarchy — full workflow scenarios', () => {
+  it('tree → history → APPLY_NAV commit → APPLY_NAV fact → NAV_BACK restores each step', () => {
+    let s: AppState = init;
+    // Start in tree with a fact open
+    s = reducer(s, { type: 'APPLY_NAV', view: 'tree', historyCommit: null, factPath: 'kb/tree-fact.md', factCommit: null });
+    expect(s.view).toBe('tree');
+    expect(s.factPath).toBe('kb/tree-fact.md');
+
+    // Switch to history
+    s = reducer(s, { type: 'APPLY_NAV', view: 'history', historyCommit: null, factPath: null, factCommit: null });
+    expect(s.view).toBe('history');
+
+    // APPLY_NAV: select a commit
+    s = reducer(s, { type: 'APPLY_NAV', view: 'history', historyCommit: 'ccc333', factPath: null, factCommit: null });
+    expect(s.historyCommit).toBe('ccc333');
+
+    // APPLY_NAV: select a fact in history
+    s = reducer(s, { type: 'APPLY_NAV', view: 'history', historyCommit: 'ccc333', factPath: 'kb/hist-fact.md', factCommit: 'ccc333' });
+    expect(s.factPath).toBe('kb/hist-fact.md');
+
+    // NAV_BACK: restore before fact selection
+    s = reducer(s, { type: 'NAV_BACK' });
+    expect(s.factPath).toBeNull();
+    expect(s.historyCommit).toBe('ccc333');
+
+    // NAV_BACK: restore before commit selection
+    s = reducer(s, { type: 'NAV_BACK' });
+    expect(s.historyCommit).toBeNull();
+
+    // NAV_BACK: restore before APPLY_NAV to history (back to tree)
+    s = reducer(s, { type: 'NAV_BACK' });
+    expect(s.view).toBe('tree');
+    expect(s.factPath).toBe('kb/tree-fact.md');
+  });
+
+  it('history with ep filter → change filter → NAV_BACK restores previous filter', () => {
+    let s: AppState = init;
+    s = reducer(s, { type: 'APPLY_NAV', view: 'history', historyCommit: null, factPath: null, factCommit: null });
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'ep', value: 'learn' } });
+    expect(s.filters).toHaveLength(1);
+    expect(s.filters[0]).toEqual({ category: 'ep', value: 'learn' });
+
+    // Add another ep filter
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'ep', value: 'retract' } });
+    expect(s.filters).toHaveLength(2);
+
+    // NAV_BACK: restore before adding retract
+    s = reducer(s, { type: 'NAV_BACK' });
+    expect(s.filters).toHaveLength(1);
+    expect(s.filters[0]).toEqual({ category: 'ep', value: 'learn' });
+  });
+
+  it('cross-mode: tree → history → commit → fact → NAV_BACK ×N returns to tree', () => {
+    let s: AppState = init;
+
+    // Tree mode: open a fact
+    s = reducer(s, { type: 'APPLY_NAV', view: 'tree', historyCommit: null, factPath: 'kb/original.md', factCommit: null });
+    expect(s.view).toBe('tree');
+    expect(s.factPath).toBe('kb/original.md');
+
+    // Switch to history
+    s = reducer(s, { type: 'APPLY_NAV', view: 'history', historyCommit: null, factPath: null, factCommit: null });
+
+    // APPLY_NAV commit
+    s = reducer(s, { type: 'APPLY_NAV', view: 'history', historyCommit: 'xxx', factPath: null, factCommit: null });
+
+    // APPLY_NAV fact in history
+    s = reducer(s, { type: 'APPLY_NAV', view: 'history', historyCommit: 'xxx', factPath: 'kb/history-fact.md', factCommit: 'xxx' });
+    expect(s.factPath).toBe('kb/history-fact.md');
+
+    // NAV_BACK ×3 should get us back to tree with original fact
+    s = reducer(s, { type: 'NAV_BACK' }); // undo APPLY_NAV fact
+    s = reducer(s, { type: 'NAV_BACK' }); // undo APPLY_NAV commit
+    s = reducer(s, { type: 'NAV_BACK' }); // undo APPLY_NAV to history → back to tree
+
+    expect(s.view).toBe('tree');
+    expect(s.factPath).toBe('kb/original.md');
+  });
+
+});
+
+describe('reducer — APPLY_NAV', () => {
+  it('sets historyCommit, factPath, factCommit atomically and pushes nav', () => {
+    const s = reducer(init, {
+      type: 'APPLY_NAV',
+      view: 'history',
+      historyCommit: 'abc123',
+      factPath: 'kb/foo.md',
+      factCommit: 'abc123',
+    });
+    expect(s.view).toBe('history');
+    expect(s.historyCommit).toBe('abc123');
+    expect(s.factPath).toBe('kb/foo.md');
+    expect(s.factCommit).toBe('abc123');
+    expect(s.navStack.length).toBe(1);
+  });
+
+  it('APPLY_NAV to tree clears historyCommit', () => {
+    const s = reducer(
+      { ...init, historyCommit: 'abc', factPath: 'kb/x.md', factCommit: 'abc' },
+      { type: 'APPLY_NAV', view: 'tree', historyCommit: null, factPath: 'kb/x.md', factCommit: null },
+    );
+    expect(s.historyCommit).toBeNull();
+    expect(s.factPath).toBe('kb/x.md');
+    expect(s.factCommit).toBeNull();
+  });
+
+  it('APPLY_NAV crossing history boundary clears non-path filters', () => {
+    const s = { ...init, filters: [{ category: 'domain' as const, value: 'tech' }] };
+    const next = reducer(s, {
+      type: 'APPLY_NAV',
+      view: 'history',
+      historyCommit: 'abc123',
+      factPath: null,
+      factCommit: null,
+      filters: [],
+      freeText: '',
+    });
+    expect(next.filters).toHaveLength(0);
+  });
+});
+
+describe('reducer — FACT_LOADED', () => {
+  it('sets factCommit without touching other fields', () => {
+    const s = { ...init, factPath: 'kb/foo.md', historyCommit: null, factCommit: null };
+    const next = reducer(s, { type: 'FACT_LOADED', commit: 'def456' });
+    expect(next.factCommit).toBe('def456');
+    expect(next.factPath).toBe('kb/foo.md');
+    expect(next.historyCommit).toBeNull();
+    // FACT_LOADED does NOT push nav
+    expect(next.navStack.length).toBe(0);
+  });
+});
+
+
+describe('reducer — NAV_BACK with new fields', () => {
+  it('NAV_BACK restores historyCommit, factPath, factCommit', () => {
+    const s = { ...init, historyCommit: 'abc', factPath: 'kb/f.md', factCommit: 'abc' };
+    const afterApply = reducer(s, {
+      type: 'APPLY_NAV', view: 'history',
+      historyCommit: 'xyz', factPath: 'kb/g.md', factCommit: 'xyz',
+    });
+    const back = reducer(afterApply, { type: 'NAV_BACK' });
+    expect(back.historyCommit).toBe('abc');
+    expect(back.factPath).toBe('kb/f.md');
+    expect(back.factCommit).toBe('abc');
+  });
+});
+
+describe('reducer — APPLY_NAV auto-clear path', () => {
+  it('APPLY_NAV crossing history boundary auto-clears non-path filters when caller omits filters', () => {
+    const s = { ...init, filters: [{ category: 'domain' as const, value: 'tech' }] };
+    const next = reducer(s, {
+      type: 'APPLY_NAV',
+      view: 'history',
+      historyCommit: 'abc123',
+      factPath: null,
+      factCommit: null,
+      // filters and freeText intentionally omitted
+    });
+    expect(next.filters).toHaveLength(0);
+  });
+});
+

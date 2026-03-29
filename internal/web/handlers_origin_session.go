@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/rs/zerolog/log"
@@ -140,7 +141,7 @@ type connectivityResult struct {
 }
 
 // handleTestConnectivity handles GET /api/v1/{repo}/origin/session/{sessionID}/test
-func handleTestConnectivity(rm *repos.Manager, sm *SessionManager) http.HandlerFunc {
+func handleTestConnectivity(rm *repos.Manager, sm *SessionManager, agentBranch string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repo := chi.URLParam(r, "repo")
 		sessionID := chi.URLParam(r, "sessionID")
@@ -152,6 +153,8 @@ func handleTestConnectivity(rm *repos.Manager, sm *SessionManager) http.HandlerF
 		}
 
 		ri := repos.RepoFromContext(r.Context())
+		var gs repos.GitStore
+		ri.WithRead(func(d repos.StoreDeps) { gs = d.GS })
 
 		sendEvent, ok := beginSSE(w)
 		if !ok {
@@ -187,7 +190,7 @@ CREATE TABLE IF NOT EXISTS objects (hash TEXT NOT NULL, type INTEGER NOT NULL, s
 CREATE TABLE IF NOT EXISTS refs (name TEXT PRIMARY KEY, target TEXT NOT NULL, is_symbolic INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value BLOB NOT NULL);
 `
-		if _, err := db.Exec(schema); err != nil {
+		if _, err := db.ExecContext(r.Context(), schema); err != nil {
 			db.Close()
 			sendEvent(map[string]string{"phase": "error", "message": fmt.Sprintf("init clone schema: %v", err)})
 			return
@@ -218,32 +221,31 @@ CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value BLOB NOT NULL);
 		// Get default branch.
 		defaultBranch, err := cloned.DefaultBranch()
 		if err != nil {
-			defaultBranch = cloned.Branch()
+			defaultBranch = agentBranch
 		}
 
 		// Collect all branch info in a single pass over refs.
-		localAgentBranch := ri.GS.Branch()
-		branches, agentBranches, matchedAgent := collectAllBranchInfo(storer, localAgentBranch)
+		branches, agentBranches, matchedAgent := collectAllBranchInfo(storer, agentBranch)
 
 		// Check shared history.
-		localGS, isRealStore := ri.GS.(*git.Store)
+		localGS, isRealStore := gs.(*git.Store)
 		history := "disjoint"
 		if isRealStore {
-			shared, err := localGS.HasSharedHistory(cloned)
+			shared, err := localGS.HasSharedHistory(agentBranch, cloned, defaultBranch)
 			if err == nil && shared {
 				history = "shared"
 			}
 		}
 
 		// Count remote facts (files in the cloned store).
-		remoteFiles, err := cloned.ListAll()
+		remoteFiles, err := cloned.ListAll(defaultBranch)
 		remoteFactCount := 0
 		if err == nil {
 			remoteFactCount = len(remoteFiles)
 		}
 
 		// Count local facts.
-		localFiles, err := ri.GS.ListAll()
+		localFiles, err := gs.ListAll(agentBranch)
 		localFactCount := 0
 		if err == nil {
 			localFactCount = len(localFiles)
@@ -267,6 +269,7 @@ CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value BLOB NOT NULL);
 		sess.State = StateTested
 		sess.TestResult = result
 		sess.RemoteStore = cloned
+		sess.RemoteDB = db
 		sess.mu.Unlock()
 
 		log.Info().Str("repo", repo).Str("session_id", sessionID).Str("history", history).Msg("test connectivity completed")
@@ -282,7 +285,7 @@ type previewResult struct {
 }
 
 // handlePreview handles GET /api/v1/{repo}/origin/session/{sessionID}/preview
-func handlePreview(rm *repos.Manager, sm *SessionManager) http.HandlerFunc {
+func handlePreview(rm *repos.Manager, sm *SessionManager, agentBranch string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repo := chi.URLParam(r, "repo")
 		sessionID := chi.URLParam(r, "sessionID")
@@ -296,6 +299,7 @@ func handlePreview(rm *repos.Manager, sm *SessionManager) http.HandlerFunc {
 		sess.mu.Lock()
 		state := sess.State
 		remoteStore := sess.RemoteStore
+		testResult, _ := sess.TestResult.(connectivityResult)
 		sess.mu.Unlock()
 
 		if state != StateTested && state != StatePreviewed && state != StateApplied {
@@ -307,7 +311,24 @@ func handlePreview(rm *repos.Manager, sm *SessionManager) http.HandlerFunc {
 			return
 		}
 
+		// Use the matched remote agent branch if available (from test step).
+		// If no match, fall back to the remote's default branch (e.g. "main"),
+		// which contains the merged state of all facts. Last resort: local branch name.
+		remoteAgentBranch := testResult.MatchedAgent
+		if remoteAgentBranch == "" {
+			remoteAgentBranch = testResult.DefaultBranch
+		}
+		if remoteAgentBranch == "" {
+			remoteAgentBranch = agentBranch
+		}
+
 		ri := repos.RepoFromContext(r.Context())
+		var gs repos.GitStore
+		var svc *store.Service
+		ri.WithRead(func(d repos.StoreDeps) {
+			gs = d.GS
+			svc = d.Svc
+		})
 
 		sendEvent, ok := beginSSE(w)
 		if !ok {
@@ -317,14 +338,9 @@ func handlePreview(rm *repos.Manager, sm *SessionManager) http.HandlerFunc {
 		sendEvent(map[string]string{"phase": "comparing"})
 
 		// Build local path set via FactsIter.
-		var localDB *sql.DB
-		if ri.Svc != nil {
-			localDB = ri.Svc.DB()
-		}
-
 		localPaths := make(map[string]struct{})
-		if localDB != nil {
-			iter, err := store.NewFactsIter(localDB)
+		if svc != nil {
+			iter, err := store.NewFactsIter(svc.Index(), agentBranch)
 			if err != nil {
 				log.Warn().Err(err).Str("repo", repo).Msg("preview: open facts iter")
 			} else {
@@ -341,7 +357,7 @@ func handlePreview(rm *repos.Manager, sm *SessionManager) http.HandlerFunc {
 
 		// List remote paths.
 		remotePaths := make(map[string]struct{})
-		remoteFiles, err := remoteStore.ListAll()
+		remoteFiles, err := remoteStore.ListAll(remoteAgentBranch)
 		if err != nil {
 			log.Warn().Err(err).Str("repo", repo).Msg("preview: list remote")
 		} else {
@@ -365,23 +381,47 @@ func handlePreview(rm *repos.Manager, sm *SessionManager) http.HandlerFunc {
 			}
 		}
 
-		// Dead ref detection: read each local fact and check refs.
-		deadRefs := 0
+		// Dead ref detection: read local facts in parallel (bounded concurrency).
+		// readMu is a conservative guard because *gogit.Repository is not documented
+		// as goroutine-safe for concurrent reads. Read paths appear stateless in
+		// practice but we serialize to be safe until confirmed otherwise. Note also
+		// that for :memory: SQLite test databases, concurrent *sql.DB connections
+		// each see a fresh empty DB.
+		const workers = 8
+		jobs := make(chan string, len(localPaths))
+		results := make(chan int, len(localPaths))
+		var readMu sync.Mutex
+
+		for i := 0; i < workers; i++ {
+			go func() {
+				for p := range jobs {
+					readMu.Lock()
+					content, err := gs.ReadFile(agentBranch, p)
+					readMu.Unlock()
+					if err != nil {
+						results <- 0
+						continue
+					}
+					dead := 0
+					for _, ref := range extractRefsFromFrontmatter(content) {
+						if strings.HasPrefix(ref, "http://") || strings.HasPrefix(ref, "https://") {
+							continue
+						}
+						if _, alive := localPaths[ref]; !alive {
+							dead++
+						}
+					}
+					results <- dead
+				}
+			}()
+		}
 		for p := range localPaths {
-			content, err := ri.GS.ReadFile(p)
-			if err != nil {
-				continue
-			}
-			refs := extractRefsFromFrontmatter(content)
-			for _, ref := range refs {
-				if strings.HasPrefix(ref, "http://") || strings.HasPrefix(ref, "https://") {
-					continue
-				}
-				if _, alive := localPaths[ref]; alive {
-					continue
-				}
-				deadRefs++
-			}
+			jobs <- p
+		}
+		close(jobs)
+		deadRefs := 0
+		for range localPaths {
+			deadRefs += <-results
 		}
 
 		result := previewResult{
@@ -422,7 +462,7 @@ type applyResult struct {
 }
 
 // handleApply handles POST /api/v1/{repo}/origin/session/{sessionID}/apply
-func handleApply(rm *repos.Manager, sm *SessionManager) http.HandlerFunc {
+func handleApply(rm *repos.Manager, sm *SessionManager, agentBranch string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repo := chi.URLParam(r, "repo")
 		sessionID := chi.URLParam(r, "sessionID")
@@ -474,6 +514,12 @@ func handleApply(rm *repos.Manager, sm *SessionManager) http.HandlerFunc {
 		}
 
 		ri := repos.RepoFromContext(r.Context())
+		var gs repos.GitStore
+		var svc *store.Service
+		ri.WithRead(func(d repos.StoreDeps) {
+			gs = d.GS
+			svc = d.Svc
+		})
 
 		sendEvent, ok := beginSSE(w)
 		if !ok {
@@ -484,22 +530,18 @@ func handleApply(rm *repos.Manager, sm *SessionManager) http.HandlerFunc {
 			sendEvent(map[string]string{"phase": "replaying"})
 
 			// Get the local store and local DB for replay.
-			localGS, isRealStore := ri.GS.(*git.Store)
+			localGS, isRealStore := gs.(*git.Store)
 			if !isRealStore {
 				sendEvent(map[string]string{"phase": "error", "message": "local store is not a git store"})
 				return
 			}
 
-			var localDB *sql.DB
-			if ri.Svc != nil {
-				localDB = ri.Svc.DB()
-			}
-			if localDB == nil {
+			if svc == nil {
 				sendEvent(map[string]string{"phase": "error", "message": "local database not available"})
 				return
 			}
 
-			factsIter, err := store.NewFactsIter(localDB)
+			factsIter, err := store.NewFactsIter(svc.Index(), agentBranch)
 			if err != nil {
 				sendEvent(map[string]string{"phase": "error", "message": fmt.Sprintf("open facts iterator: %v", err)})
 				return
@@ -507,14 +549,14 @@ func handleApply(rm *repos.Manager, sm *SessionManager) http.HandlerFunc {
 			iter := &storeFactIterAdapter{inner: factsIter}
 
 			// Use the matched remote agent branch if found, otherwise our local agent branch name.
-			agentBranch := tr.MatchedAgent
-			if agentBranch == "" {
-				agentBranch = ri.GS.Branch()
+			replayAgentBranch := tr.MatchedAgent
+			if replayAgentBranch == "" {
+				replayAgentBranch = agentBranch
 			}
 
 			cfg := git.ReplayConfig{
 				Strategy:          strategy,
-				AgentBranch:       agentBranch,
+				AgentBranch:       replayAgentBranch,
 				DefaultBranch:     remoteBranch,
 				UseExistingBranch: tr.MatchedAgent != "",
 				OnProgress: func(current, total int) {
@@ -526,7 +568,7 @@ func handleApply(rm *repos.Manager, sm *SessionManager) http.HandlerFunc {
 				},
 			}
 
-			replayRes, err := git.Replay(localGS, iter, remoteStore, cfg)
+			replayRes, err := git.Replay(localGS, agentBranch, iter, remoteStore, cfg)
 			if err != nil {
 				sendEvent(map[string]string{"phase": "error", "message": fmt.Sprintf("replay failed: %v", err)})
 				sess.mu.Lock()
@@ -550,6 +592,7 @@ func handleApply(rm *repos.Manager, sm *SessionManager) http.HandlerFunc {
 			sess.State = StateApplied
 			sess.ApplyResult = result
 			sess.RemoteBranch = remoteBranch
+			sess.AppliedBranch = replayAgentBranch
 			sess.mu.Unlock()
 
 			log.Info().Str("repo", repo).Str("session_id", sessionID).
@@ -565,10 +608,22 @@ func handleApply(rm *repos.Manager, sm *SessionManager) http.HandlerFunc {
 			result := applyResult{}
 			sendEvent(map[string]any{"phase": "done", "result": result})
 
+			// For shared history, the cloned store's HEAD is the remote's agent branch.
+			// Use the matched agent branch, or the first known remote agent branch,
+			// or fall back to localAgentBranch if none found.
+			sharedAppliedBranch := tr.MatchedAgent
+			if sharedAppliedBranch == "" && len(tr.AgentBranches) > 0 {
+				sharedAppliedBranch = tr.AgentBranches[0]
+			}
+			if sharedAppliedBranch == "" {
+				sharedAppliedBranch = agentBranch
+			}
+
 			sess.mu.Lock()
 			sess.State = StateApplied
 			sess.ApplyResult = result
 			sess.RemoteBranch = remoteBranch
+			sess.AppliedBranch = sharedAppliedBranch
 			sess.mu.Unlock()
 
 			log.Info().Str("repo", repo).Str("session_id", sessionID).
@@ -669,7 +724,7 @@ func collectAllBranchInfo(s *storegit.Storer, localAgentBranch string) (branches
 // handleCommit handles POST /api/v1/{repo}/origin/session/{sessionID}/commit
 // It finalizes the origin connection by swapping the session's remote store
 // into the repo instance, saving remote config, and starting sync loops.
-func handleCommit(rm *repos.Manager, sm *SessionManager) http.HandlerFunc {
+func handleCommit(rm *repos.Manager, sm *SessionManager, agentBranch string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repo := chi.URLParam(r, "repo")
 		sessionID := chi.URLParam(r, "sessionID")
@@ -683,9 +738,11 @@ func handleCommit(rm *repos.Manager, sm *SessionManager) http.HandlerFunc {
 		sess.mu.Lock()
 		state := sess.State
 		remoteStore := sess.RemoteStore
+		remoteDB := sess.RemoteDB
 		authCfg := sess.Auth
 		remoteURL := sess.URL
 		remoteBranch := sess.RemoteBranch
+		appliedBranch := sess.AppliedBranch
 		sess.mu.Unlock()
 
 		if state != StateApplied {
@@ -713,11 +770,11 @@ func handleCommit(rm *repos.Manager, sm *SessionManager) http.HandlerFunc {
 		sendEvent(map[string]string{"phase": "swapping"})
 
 		// Checkpoint the temp DB's WAL so all data is in the main .db file before copying.
-		if tempDB := remoteStore.Storer().DB(); tempDB != nil {
-			if _, err := tempDB.Exec("PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {
+		if remoteDB != nil {
+			if _, err := remoteDB.ExecContext(r.Context(), "PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {
 				log.Warn().Err(err).Msg("commit: WAL checkpoint failed")
 			}
-			tempDB.Close()
+			remoteDB.Close()
 		}
 
 		tempDBPath := filepath.Join(sess.TempDir, "clone.db")
@@ -726,25 +783,44 @@ func handleCommit(rm *repos.Manager, sm *SessionManager) http.HandlerFunc {
 			return
 		}
 
+		// Rebuild MCP handlers so they use the new database, not the closed one.
+		rm.SetupMCP(ri)
+
+		// Snapshot after swap — protect against concurrent SwapStore.
+		var svc *store.Service
+		var gs repos.GitStore
+		ri.WithRead(func(d repos.StoreDeps) {
+			svc = d.Svc
+			gs = d.GS
+		})
+		hub := ri.TaskHub()
+
 		// Phase: configuring — save remote config and start sync.
 		sendEvent(map[string]string{"phase": "configuring"})
 
-		if ri.Svc != nil {
+		if svc != nil {
 			// Build the auth token for storage.
 			authMethod := authCfg.Method
 			authToken := assembleAuthToken(authMethod, authCfg.Token, authCfg.User, authCfg.Password)
 
-			if err := ri.Svc.SetRemoteWithAuth("origin", remoteURL, remoteBranch, 300, 300, authMethod, authToken); err != nil {
+			if err := svc.SetRemoteWithAuth("origin", remoteURL, remoteBranch, 300, 300, authMethod, authToken); err != nil {
 				sendEvent(map[string]string{"phase": "error", "message": fmt.Sprintf("save remote config: %v", err)})
 				return
 			}
 		}
 
+		// Use the branch written during apply (may differ from local agentBranch
+		// when the swapped store is the clone, e.g. after shared-history merge).
+		rebuildBranch := appliedBranch
+		if rebuildBranch == "" {
+			rebuildBranch = agentBranch
+		}
+
 		// Rebuild the index from the new git store so facts/recent/search work.
 		sendEvent(map[string]any{"phase": "rebuilding", "current": 0, "total": 0})
-		if ri.Svc != nil {
-			if gitReader, ok := ri.GS.(store.GitReader); ok {
-				idx := ri.Svc.Index()
+		if svc != nil {
+			if gitReader, ok := gs.(store.GitReader); ok {
+				idx := svc.Index()
 				progress := func(subPhase string, done, total int) {
 					if done%20 == 0 || done == total {
 						sendEvent(map[string]any{
@@ -755,28 +831,35 @@ func handleCommit(rm *repos.Manager, sm *SessionManager) http.HandlerFunc {
 						})
 					}
 				}
-				if err := idx.Rebuild(gitReader, ri.GS.Branch(), progress); err != nil {
+				if err := idx.Rebuild(gitReader, rebuildBranch, progress); err != nil {
 					log.Warn().Err(err).Str("repo", repo).Msg("commit: index rebuild failed")
 				} else {
 					log.Info().Str("repo", repo).Msg("commit: index rebuilt from swapped store")
+					// Set pipeline watermarks to HEAD so the first review/hypothesize
+					// doesn't treat every cloned fact as dirty.
+					if head, err := gs.HeadCommit(rebuildBranch); err == nil {
+						for _, tool := range []string{"review", "hypothesize"} {
+							if err := idx.SetPipelineWatermark(tool, rebuildBranch, head); err != nil {
+								log.Warn().Err(err).Str("repo", repo).Str("tool", tool).Msg("commit: pipeline watermark set failed")
+							}
+						}
+					}
 				}
 			}
 		}
 
 		// Start sync/push loops.
-		if ri.StartSync != nil {
-			if err := ri.StartSync(remoteURL); err != nil {
-				log.Warn().Err(err).Str("repo", repo).Msg("commit: sync activation failed")
-				// Non-fatal: remote is configured, sync can be started later.
-			}
+		if err := ri.ActivateSync(remoteURL); err != nil {
+			log.Warn().Err(err).Str("repo", repo).Msg("commit: sync activation failed")
+			// Non-fatal: remote is configured, sync can be started later.
 		}
 
 		sendEvent(map[string]string{"phase": "done"})
 
 		// Broadcast status so the UI refreshes with the new HEAD.
-		if ri.Hub != nil {
-			if head, err := ri.GS.HeadCommit(); err == nil {
-				ri.Hub.BroadcastStatus(head)
+		if hub != nil {
+			if head, err := gs.HeadCommit(rebuildBranch); err == nil {
+				hub.BroadcastStatus(head)
 			}
 		}
 

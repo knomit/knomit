@@ -27,7 +27,7 @@ endif
 
 ORT_URL := https://github.com/microsoft/onnxruntime/releases/download/v$(ORT_VERSION)/onnxruntime-$(ORT_PLATFORM)-$(ORT_VERSION).tgz
 
-GRAPHQLITE_VERSION := 0.3.7
+GRAPHQLITE_VERSION := 0.3.10
 ifeq ($(UNAME_S),Darwin)
   ifeq ($(UNAME_M),arm64)
     GRAPHQLITE_ASSET := graphqlite-macos-arm64.dylib
@@ -68,6 +68,9 @@ download-graphqlite:
 	@if [ ! -f dist/lib/$(GRAPHQLITE_LIB) ]; then \
 		echo "Downloading graphqlite v$(GRAPHQLITE_VERSION)..."; \
 		curl -sL $(GRAPHQLITE_URL) -o dist/lib/$(GRAPHQLITE_LIB); \
+		if [ "$(UNAME_S)" = "Darwin" ]; then \
+			codesign --sign - --force dist/lib/$(GRAPHQLITE_LIB); \
+		fi; \
 		echo "graphqlite installed to dist/lib/"; \
 	fi
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"knomit/internal/fact"
 
@@ -26,8 +27,11 @@ func retractTool() mcpgo.Tool {
 }
 
 // RetractHandler returns the handler function for knomit_retract.
-func RetractHandler(gs GitStore, ontologyRoot string) func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+func RetractHandler(gs GitStore, ontologyRoot, agentBranch string) func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 	return func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+
 		// 1. Get arguments.
 		file := req.GetString("file", "")
 		if file == "" {
@@ -40,7 +44,7 @@ func RetractHandler(gs GitStore, ontologyRoot string) func(context.Context, mcpg
 		}
 
 		// 3. Check file exists.
-		exists, err := gs.FileExists(file)
+		exists, err := gs.FileExists(agentBranch, file)
 		if err != nil {
 			return mcpgo.NewToolResultError(fmt.Sprintf("file exists check error: %v", err)), nil
 		}
@@ -50,7 +54,7 @@ func RetractHandler(gs GitStore, ontologyRoot string) func(context.Context, mcpg
 
 		// 4. Delete the file.
 		commitMsg := fmt.Sprintf("retract(%s): %s", momentName, file)
-		hash, err := gs.DeleteFile(file, commitMsg, "retract")
+		hash, err := gs.DeleteFile(agentBranch, file, commitMsg, "retract")
 		if err != nil {
 			return mcpgo.NewToolResultError(fmt.Sprintf("delete error: %v", err)), nil
 		}

@@ -21,6 +21,8 @@ func ScopedCluster(
 	idx SearchIndex,
 	resolution float64,
 	onProgress func(ProgressEvent),
+	agentBranch string,
+	excludeTypes ...string,
 ) ([][]factForLLM, error) {
 	if len(seeds) == 0 {
 		return nil, nil
@@ -42,10 +44,11 @@ func ScopedCluster(
 		subgraph[seed.File] = true
 
 		cat := categoryDir(seed.File)
-		results, err := idx.Search(store.SearchQuery{
-			Text:  seed.Title + " " + seed.Body,
-			Path:  cat,
-			Limit: 10,
+		results, err := idx.Search(agentBranch, store.SearchQuery{
+			Text:         seed.Title + " " + seed.Body,
+			Path:         cat,
+			Limit:        10,
+			ExcludeTypes: excludeTypes,
 		})
 		if err != nil {
 			log.Debug().Err(err).Str("seed", seed.File).Msg("scoped-cluster: neighbor search failed")
@@ -70,7 +73,7 @@ func ScopedCluster(
 		resolution = 1.0
 	}
 
-	result, err := idx.ClusterFacts(resolution, 2)
+	result, err := idx.ClusterFacts(agentBranch, resolution, 2)
 	if err != nil {
 		log.Debug().Err(err).Msg("scoped-cluster: Louvain failed, falling back to category grouping")
 		onProgress(ProgressEvent{Phase: "cluster", Message: "Louvain failed, using category fallback"})

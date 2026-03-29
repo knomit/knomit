@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"knomit/internal/fact"
 
@@ -29,7 +30,7 @@ func learnTool() mcpgo.Tool {
 					"category":   map[string]any{"type": "string", "description": "Category path within the topic (e.g. languages/go/concurrency)."},
 					"title":      map[string]any{"type": "string", "description": "Fact title (short, descriptive)."},
 					"body":       map[string]any{"type": "string", "description": "Fact body in natural language."},
-					"type":       map[string]any{"type": "string", "description": "Epistemic type: observation (default, concrete facts), concept (definitions), process (procedures), principle (rules/heuristics), pattern (recurring structures), reference (specs/measurements), synthesis (derived from other facts).", "default": "observation"},
+					"type":       map[string]any{"type": "string", "description": "Epistemic type: observation (default, concrete facts), concept (definitions), process (procedures), principle (rules/heuristics), pattern (recurring structures), reference (specs/measurements), synthesis (derived from other facts), hypothesis (predictions from patterns — carries uncertainty), methodology (reasoning process lessons).", "default": "observation"},
 					"domain":     map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Cross-cutting domain tags."},
 					"confidence": map[string]any{"type": "number", "description": "Certainty level 0.0–1.0.", "default": 0.7},
 					"sources":    map[string]any{"type": "integer", "description": "Number of independent sources.", "default": 1},
@@ -66,12 +67,15 @@ type BatchEmbedder interface {
 // LearnHandler returns the handler function for knomit_learn.
 // If embedder is non-nil, dedup checks batch-embed all incoming facts upfront
 // instead of embedding one-at-a-time inside each Search call.
-func LearnHandler(gs GitStore, idx SearchIndex, ontologyRoot string, ontology *fact.Ontology, embedders ...BatchEmbedder) func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+func LearnHandler(gs GitStore, idx SearchIndex, ontologyRoot string, ontology *fact.Ontology, agentBranch string, embedders ...BatchEmbedder) func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 	var batchEmb BatchEmbedder
 	if len(embedders) > 0 {
 		batchEmb = embedders[0]
 	}
 	return func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+		defer cancel()
+
 		// 1. Parse arguments.
 		momentName := req.GetString("moment_name", "")
 		if momentName == "" {
@@ -85,6 +89,23 @@ func LearnHandler(gs GitStore, idx SearchIndex, ontologyRoot string, ontology *f
 		}
 		if len(factInputs) == 0 {
 			return mcpgo.NewToolResultError("facts must not be empty"), nil
+		}
+
+		// Validate batch type consistency: cannot mix observed and inferred types.
+		hasObserved, hasInferred := false, false
+		for _, fi := range factInputs {
+			eType := fact.EpistemicType(fi.Type)
+			if eType == "" {
+				eType = fact.DefaultType
+			}
+			if eType == fact.Hypothesis || eType == fact.Methodology {
+				hasInferred = true
+			} else {
+				hasObserved = true
+			}
+		}
+		if hasObserved && hasInferred {
+			return mcpgo.NewToolResultError("cannot mix observed types (observation, concept, etc.) and inferred types (hypothesis, methodology) in a single learn call"), nil
 		}
 
 		// 3. Validate inputs, build paths, and serialize facts.
@@ -128,17 +149,15 @@ func LearnHandler(gs GitStore, idx SearchIndex, ontologyRoot string, ontology *f
 			if err := eType.Validate(); err != nil {
 				return mcpgo.NewToolResultError(fmt.Sprintf("fact %d: %v", i, err)), nil
 			}
-			f := Fact{
-				Path:       path,
-				Title:      fi.Title,
-				Body:       fi.Body,
-				Type:       eType,
-				Domain:     domain,
-				Confidence: fi.Confidence,
-				Sources:    fi.Sources,
-				Entities:   entities,
-				Refs:       refs,
-			}
+			f := fact.NewFact(path)
+			f.Title = fi.Title
+			f.Body = fi.Body
+			f.Type = eType
+			f.Domain = domain
+			f.Confidence = fi.Confidence
+			f.Sources = fi.Sources
+			f.Entities = entities
+			f.Refs = refs
 			facts[i] = f
 			files[path] = SerializeFact(f)
 		}
@@ -156,7 +175,7 @@ func LearnHandler(gs GitStore, idx SearchIndex, ontologyRoot string, ontology *f
 			dedupVecs, _ = batchEmb.EmbedBatch(texts)
 		}
 		for i, f := range facts {
-			categoryDir := f.Path[:strings.LastIndex(f.Path, "/")]
+			categoryDir := f.Path()[:strings.LastIndex(f.Path(), "/")]
 			sq := SearchQuery{
 				Text:          f.Title + " " + f.Body,
 				Path:          categoryDir,
@@ -166,19 +185,33 @@ func LearnHandler(gs GitStore, idx SearchIndex, ontologyRoot string, ontology *f
 			if dedupVecs != nil && i < len(dedupVecs) && len(dedupVecs[i]) > 0 {
 				sq.QueryVec = dedupVecs[i]
 			}
-			results, err := idx.Search(sq)
+			results, err := idx.Search(agentBranch, sq)
 			if err != nil || len(results) == 0 {
 				continue
 			}
 
 			match := results[0]
 			// Read existing fact to get its full metadata (refs, etc.)
-			existingContent, readErr := gs.ReadFile(match.Path)
+			existingContent, readErr := gs.ReadFile(agentBranch, match.Path)
 			if readErr != nil {
 				continue
 			}
 			existingFact, parseErr := ParseFact(match.Path, existingContent)
 			if parseErr != nil {
+				continue
+			}
+
+			// Type-aware dedup: if existing fact is a hypothesis and new fact is not,
+			// the observation subsumes the hypothesis.
+			if existingFact.Type == fact.Hypothesis && f.Type != fact.Hypothesis {
+				// Write the observation as normal (don't merge into existing path).
+				// Retract the hypothesis.
+				retractMsg := fmt.Sprintf("learn: hypothesis %s subsumed by observation", match.Path)
+				gs.DeleteFile(agentBranch, match.Path, retractMsg, "retract")
+				// Add hypothesis path to observation's refs.
+				f.Refs = fact.AppendUnique(f.Refs, match.Path)
+				facts[i] = f
+				files[f.Path()] = SerializeFact(f)
 				continue
 			}
 
@@ -189,41 +222,37 @@ func LearnHandler(gs GitStore, idx SearchIndex, ontologyRoot string, ontology *f
 			var merged Fact
 			if newConf > existConf || (newConf == existConf && f.Sources >= existingFact.Sources) {
 				// New fact wins — keep new fact's title and body, write to existing path.
-				merged = Fact{
-					Path:       match.Path,
-					Title:      f.Title,
-					Body:       f.Body,
-					Type:       f.Type,
-					Domain:     fact.UnionStrings(f.Domain, existingFact.Domain),
-					Entities:   fact.UnionStrings(f.Entities, existingFact.Entities),
-					Confidence: max(newConf, existConf),
-					Sources:    f.Sources + existingFact.Sources,
-					Refs:       fact.AppendUnique(fact.UnionStrings(f.Refs, existingFact.Refs), match.Path),
-				}
+				merged = fact.NewFact(match.Path)
+				merged.Title = f.Title
+				merged.Body = f.Body
+				merged.Type = f.Type
+				merged.Domain = fact.UnionStrings(f.Domain, existingFact.Domain)
+				merged.Entities = fact.UnionStrings(f.Entities, existingFact.Entities)
+				merged.Confidence = max(newConf, existConf)
+				merged.Sources = f.Sources + existingFact.Sources
+				merged.Refs = fact.AppendUnique(fact.UnionStrings(f.Refs, existingFact.Refs), match.Path)
 			} else {
 				// Existing fact wins — keep existing title and body, update metadata.
-				merged = Fact{
-					Path:       match.Path,
-					Title:      existingFact.Title,
-					Body:       existingFact.Body,
-					Type:       existingFact.Type,
-					Domain:     fact.UnionStrings(f.Domain, existingFact.Domain),
-					Entities:   fact.UnionStrings(f.Entities, existingFact.Entities),
-					Confidence: max(newConf, existConf),
-					Sources:    f.Sources + existingFact.Sources,
-					Refs:       fact.AppendUnique(fact.UnionStrings(f.Refs, existingFact.Refs), match.Path),
-				}
+				merged = fact.NewFact(match.Path)
+				merged.Title = existingFact.Title
+				merged.Body = existingFact.Body
+				merged.Type = existingFact.Type
+				merged.Domain = fact.UnionStrings(f.Domain, existingFact.Domain)
+				merged.Entities = fact.UnionStrings(f.Entities, existingFact.Entities)
+				merged.Confidence = max(newConf, existConf)
+				merged.Sources = f.Sources + existingFact.Sources
+				merged.Refs = fact.AppendUnique(fact.UnionStrings(f.Refs, existingFact.Refs), match.Path)
 			}
 
 			// Remove the original new-fact path from the files map and add the merged one.
-			delete(files, f.Path)
-			files[merged.Path] = SerializeFact(merged)
+			delete(files, f.Path())
+			files[merged.Path()] = SerializeFact(merged)
 			facts[i] = merged
 		}
 
 		// 4. BatchWrite all facts in one commit.
 		commitMsg := fmt.Sprintf("learn: %s", momentName)
-		hash, _, err := gs.BatchWrite(files, commitMsg, "learn")
+		hash, _, err := gs.BatchWrite(agentBranch, files, commitMsg, "learn")
 		if err != nil {
 			return mcpgo.NewToolResultError(fmt.Sprintf("write error: %v", err)), nil
 		}
@@ -235,7 +264,7 @@ func LearnHandler(gs GitStore, idx SearchIndex, ontologyRoot string, ontology *f
 		}
 		commits := make([]commitEntry, len(facts))
 		for i, f := range facts {
-			commits[i] = commitEntry{File: f.Path, Hash: hash}
+			commits[i] = commitEntry{File: f.Path(), Hash: hash}
 		}
 
 		result := map[string]interface{}{

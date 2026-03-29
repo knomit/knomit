@@ -4,12 +4,21 @@ import (
 	"database/sql"
 	"fmt"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
 
 	sqlite3 "github.com/mattn/go-sqlite3"
 )
+
+// testVec creates a 768-dimensional vector padded with zeros. The provided values
+// set the leading components, preserving relative similarity between test vectors.
+func testVec(values ...float32) []float32 {
+	v := make([]float32, 768)
+	copy(v, values)
+	return v
+}
 
 // insertBlob inserts a fake blob into the objects table for testing.
 // content is the full raw file content (frontmatter + body).
@@ -26,20 +35,20 @@ func insertBlob(t *testing.T, db *sql.DB, hash, content string) {
 	}
 }
 
-// stubEmbedder4d returns deterministic 4-dimensional embeddings based on the text.
-type stubEmbedder4d struct{}
+// stubEmbedder768d returns deterministic 768-dimensional embeddings based on the text.
+type stubEmbedder768d struct{}
 
-func (s *stubEmbedder4d) Embed(text string) ([]float32, error) {
+func (s *stubEmbedder768d) Embed(text string) ([]float32, error) {
 	// Return similar vectors for different inputs so KNN finds neighbors
 	switch text {
 	case "alpha":
-		return []float32{1.0, 0.1, 0.0, 0.0}, nil
+		return testVec(1.0, 0.1, 0.0, 0.0), nil
 	case "beta":
-		return []float32{0.9, 0.2, 0.0, 0.0}, nil
+		return testVec(0.9, 0.2, 0.0, 0.0), nil
 	case "gamma":
-		return []float32{0.0, 0.0, 1.0, 0.1}, nil
+		return testVec(0.0, 0.0, 1.0, 0.1), nil
 	default:
-		return []float32{0.5, 0.5, 0.5, 0.5}, nil
+		return testVec(0.5, 0.5, 0.5, 0.5), nil
 	}
 }
 
@@ -53,29 +62,20 @@ func graphqliteTestPath(t *testing.T) string {
 	return filepath.Join(repoRoot, "dist", "lib", "graphqlite")
 }
 
-func TestSchemaMigrationV3ToV4(t *testing.T) {
+func TestNew_InitializesGraphQLite(t *testing.T) {
+	// Verifies that New() applies all migrations including GraphQLite init,
+	// which creates the nodes and edges EAV tables.
 	idx, err := New(":memory:")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer idx.Close()
 
-	var version string
-	err = idx.db.QueryRow(`SELECT value FROM meta WHERE key='schema_version'`).Scan(&version)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if version != "4" {
-		t.Fatalf("expected schema_version=4, got %q", version)
-	}
-
-	// Verify GraphQLite EAV tables exist.
-	tables := []string{"nodes", "edges"}
-	for _, table := range tables {
+	for _, table := range []string{"nodes", "edges"} {
 		var name string
 		err = idx.db.QueryRow(`SELECT name FROM sqlite_master WHERE type='table' AND name=?`, table).Scan(&name)
 		if err != nil {
-			t.Fatalf("expected GraphQLite table %q to exist: %v", table, err)
+			t.Fatalf("expected GraphQLite table %q to exist after New(): %v", table, err)
 		}
 	}
 }
@@ -232,21 +232,21 @@ func TestGraphDeleteFact(t *testing.T) {
 }
 
 func TestGraphBuildSimilarityEdges(t *testing.T) {
-	idx, err := New(":memory:", WithVecDimension(4))
+	idx, err := New(":memory:")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer idx.Close()
 
-	idx.SetEmbedder(&stubEmbedder4d{})
+	idx.SetEmbedder(&stubEmbedder768d{})
 	insertBlob(t, idx.db, "hash_alpha", "alpha")
 	insertBlob(t, idx.db, "hash_beta", "beta")
 	facts := []FactRecord{
-		{Path: "kb/a.md", Title: "A", BlobHash: "hash_alpha", Domain: []string{"test"}, Entities: []string{}, Refs: []string{}, CommitHash: "abc"},
-		{Path: "kb/b.md", Title: "B", BlobHash: "hash_beta", Domain: []string{"test"}, Entities: []string{}, Refs: []string{}, CommitHash: "abc"},
+		{Path: "kb/a.md", Title: "A", BlobHash: "hash_alpha", Domain: []string{"test"}, Entities: []string{}, Refs: []string{}},
+		{Path: "kb/b.md", Title: "B", BlobHash: "hash_beta", Domain: []string{"test"}, Entities: []string{}, Refs: []string{}},
 	}
 	for _, f := range facts {
-		if err := idx.Upsert(f); err != nil {
+		if err := idx.Upsert(testBranch, "abc", f); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -315,18 +315,18 @@ func TestGraphQLiteCoexistence(t *testing.T) {
 }
 
 func TestUpsertSyncsGraph(t *testing.T) {
-	idx, err := New(":memory:", WithVecDimension(4))
+	idx, err := New(":memory:")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer idx.Close()
-	idx.SetEmbedder(&stubEmbedder4d{})
+	idx.SetEmbedder(&stubEmbedder768d{})
 	insertBlob(t, idx.db, "hash_test", "test content")
 
-	err = idx.Upsert(FactRecord{
+	err = idx.Upsert(testBranch, "abc", FactRecord{
 		Path: "kb/eng/test.md", Title: "Test", BlobHash: "hash_test",
 		Domain: []string{"engineering/software"}, Entities: []string{"Go"},
-		Refs: []string{}, CommitHash: "abc",
+		Refs: []string{},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -348,20 +348,20 @@ func TestUpsertSyncsGraph(t *testing.T) {
 }
 
 func TestDeleteSyncsGraph(t *testing.T) {
-	idx, err := New(":memory:", WithVecDimension(4))
+	idx, err := New(":memory:")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer idx.Close()
-	idx.SetEmbedder(&stubEmbedder4d{})
+	idx.SetEmbedder(&stubEmbedder768d{})
 	insertBlob(t, idx.db, "hash_del", "delete test")
 
-	_ = idx.Upsert(FactRecord{
+	_ = idx.Upsert(testBranch, "abc", FactRecord{
 		Path: "kb/test.md", Title: "Test", BlobHash: "hash_del",
 		Domain: []string{"eng"}, Entities: []string{"Go"},
-		Refs: []string{}, CommitHash: "abc",
+		Refs: []string{},
 	})
-	err = idx.Delete("kb/test.md")
+	err = idx.Delete(testBranch, "kb/test.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -378,29 +378,29 @@ func TestDeleteSyncsGraph(t *testing.T) {
 }
 
 func TestClusterFactsLouvain(t *testing.T) {
-	idx, err := New(":memory:", WithVecDimension(4))
+	idx, err := New(":memory:")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer idx.Close()
-	idx.SetEmbedder(&stubEmbedder4d{})
+	idx.SetEmbedder(&stubEmbedder768d{})
 	insertBlob(t, idx.db, "hash_alpha", "alpha")
 	insertBlob(t, idx.db, "hash_beta", "beta")
 	insertBlob(t, idx.db, "hash_gamma", "gamma")
 
 	// Create facts that share entities (will form a cluster via TAGGED edges)
 	facts := []FactRecord{
-		{Path: "kb/a.md", Title: "A", BlobHash: "hash_alpha", Domain: []string{"eng"}, Entities: []string{"Go", "SQLite"}, Refs: []string{}, CommitHash: "abc"},
-		{Path: "kb/b.md", Title: "B", BlobHash: "hash_beta", Domain: []string{"eng"}, Entities: []string{"Go", "SQLite"}, Refs: []string{}, CommitHash: "abc"},
-		{Path: "kb/c.md", Title: "C", BlobHash: "hash_gamma", Domain: []string{"eng"}, Entities: []string{"Go"}, Refs: []string{}, CommitHash: "abc"},
+		{Path: "kb/a.md", Title: "A", BlobHash: "hash_alpha", Domain: []string{"eng"}, Entities: []string{"Go", "SQLite"}, Refs: []string{}},
+		{Path: "kb/b.md", Title: "B", BlobHash: "hash_beta", Domain: []string{"eng"}, Entities: []string{"Go", "SQLite"}, Refs: []string{}},
+		{Path: "kb/c.md", Title: "C", BlobHash: "hash_gamma", Domain: []string{"eng"}, Entities: []string{"Go"}, Refs: []string{}},
 	}
 	for _, f := range facts {
-		if err := idx.Upsert(f); err != nil {
+		if err := idx.Upsert(testBranch, "abc", f); err != nil {
 			t.Fatal(err)
 		}
 	}
 
-	result, err := idx.ClusterFacts(1.0, 2)
+	result, err := idx.ClusterFacts(testBranch, 1.0, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -418,28 +418,90 @@ func TestClusterFactsLouvain(t *testing.T) {
 	t.Logf("clusters: %d, total members: %d, noise: %d", len(result.Clusters), total, len(result.Noise))
 }
 
-func TestSearchWithGraphExpansion(t *testing.T) {
-	idx, err := New(":memory:", WithVecDimension(4))
+func TestClusterFactsBranchScoped(t *testing.T) {
+	idx, err := New(":memory:")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer idx.Close()
-	idx.SetEmbedder(&stubEmbedder4d{})
+	idx.SetEmbedder(&stubEmbedder768d{})
+
+	insertBlob(t, idx.db, "hash_a", "alpha content")
+	insertBlob(t, idx.db, "hash_b", "beta content")
+	insertBlob(t, idx.db, "hash_c", "gamma content")
+	insertBlob(t, idx.db, "hash_d", "delta content")
+
+	branchA := "agent/branch-a"
+	branchB := "agent/branch-b"
+
+	// Facts on branchA share entities Go+SQLite → they cluster together.
+	for _, f := range []FactRecord{
+		{Path: "kb/a.md", Title: "A", BlobHash: "hash_a", Domain: []string{"eng"}, Entities: []string{"Go", "SQLite"}, Refs: []string{}},
+		{Path: "kb/b.md", Title: "B", BlobHash: "hash_b", Domain: []string{"eng"}, Entities: []string{"Go", "SQLite"}, Refs: []string{}},
+	} {
+		if err := idx.Upsert(branchA, "commit1", f); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Facts on branchB share the same entities but live on a different branch.
+	for _, f := range []FactRecord{
+		{Path: "kb/c.md", Title: "C", BlobHash: "hash_c", Domain: []string{"eng"}, Entities: []string{"Go", "SQLite"}, Refs: []string{}},
+		{Path: "kb/d.md", Title: "D", BlobHash: "hash_d", Domain: []string{"eng"}, Entities: []string{"Go", "SQLite"}, Refs: []string{}},
+	} {
+		if err := idx.Upsert(branchB, "commit2", f); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// ClusterFacts scoped to branchA should only return branchA facts.
+	result, err := idx.ClusterFacts(branchA, 1.0, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	allPaths := make(map[string]bool)
+	for _, members := range result.Clusters {
+		for _, p := range members {
+			allPaths[p] = true
+		}
+	}
+	for _, p := range result.Noise {
+		allPaths[p] = true
+	}
+
+	// branchA facts must be present
+	if !allPaths["kb/a.md"] || !allPaths["kb/b.md"] {
+		t.Fatalf("expected branchA facts in results, got paths: %v", allPaths)
+	}
+	// branchB facts must be absent
+	if allPaths["kb/c.md"] || allPaths["kb/d.md"] {
+		t.Fatalf("branchB facts should not appear in branchA clusters, got paths: %v", allPaths)
+	}
+}
+
+func TestSearchWithGraphExpansion(t *testing.T) {
+	idx, err := New(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer idx.Close()
+	idx.SetEmbedder(&stubEmbedder768d{})
 	insertBlob(t, idx.db, "hash_alpha", "alpha")
 	insertBlob(t, idx.db, "hash_beta", "beta")
 
-	_ = idx.Upsert(FactRecord{
+	_ = idx.Upsert(testBranch, "abc", FactRecord{
 		Path: "kb/a.md", Title: "A", BlobHash: "hash_alpha",
 		Domain: []string{"eng"}, Entities: []string{"Go"},
-		Refs: []string{}, CommitHash: "abc",
+		Refs: []string{},
 	})
-	_ = idx.Upsert(FactRecord{
+	_ = idx.Upsert(testBranch, "abc", FactRecord{
 		Path: "kb/b.md", Title: "B", BlobHash: "hash_beta",
 		Domain: []string{"eng"}, Entities: []string{"Go"},
-		Refs: []string{}, CommitHash: "abc",
+		Refs: []string{},
 	})
 
-	results, err := idx.Search(SearchQuery{
+	results, err := idx.Search(testBranch, SearchQuery{
 		Text:      "alpha",
 		GraphHops: 1,
 		Limit:     10,
@@ -459,22 +521,126 @@ func TestSearchWithGraphExpansion(t *testing.T) {
 	}
 }
 
-type mockGitReader struct {
-	files      map[string]string
-	blobHashes map[string]string // path → blob hash
-	head       string
+func TestGraphExpandSearch_MultiSeed(t *testing.T) {
+	idx, err := New(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer idx.Close()
+	idx.SetEmbedder(&stubEmbedder768d{})
+
+	// alpha=[1,0.1,0,0], beta=[0.9,0.2,0,0] — highly similar (cosine > 0.60 threshold)
+	// gamma=[0,0,1,0.1] — dissimilar from alpha/beta
+	insertBlob(t, idx.db, "hash_alpha", "alpha")
+	insertBlob(t, idx.db, "hash_beta", "beta")
+	insertBlob(t, idx.db, "hash_gamma", "gamma")
+
+	// seed1=alpha, seed2=gamma; fact3=beta is similar to seed1 via SIMILAR_TO.
+	// With batch OR query, fact3 should be discovered from seed1.
+	facts := []FactRecord{
+		{Path: "kb/f1.md", Title: "F1", BlobHash: "hash_alpha", Domain: []string{"eng"}, Entities: []string{}, Refs: []string{}},
+		{Path: "kb/f2.md", Title: "F2", BlobHash: "hash_gamma", Domain: []string{"eng"}, Entities: []string{}, Refs: []string{}},
+		{Path: "kb/f3.md", Title: "F3", BlobHash: "hash_beta", Domain: []string{"eng"}, Entities: []string{}, Refs: []string{}},
+	}
+	for _, f := range facts {
+		if err := idx.Upsert(testBranch, "abc", f); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Build SIMILAR_TO edges so that kb/f1.md ↔ kb/f3.md are connected.
+	if err := idx.graphBuildSimilarityEdges("kb/f1.md"); err != nil {
+		t.Fatal(err)
+	}
+	if err := idx.graphBuildSimilarityEdges("kb/f3.md"); err != nil {
+		t.Fatal(err)
+	}
+
+	seeds := map[string]float64{
+		"kb/f1.md": 0.9,  // alpha — similar to beta (f3)
+		"kb/f2.md": 0.85, // gamma — dissimilar, no SIMILAR_TO neighbors
+	}
+	branchID, err := idx.BranchID(testBranch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expanded := idx.graphExpandSearch(branchID, seeds, 1)
+
+	// kb/f3.md should be discovered as a SIMILAR_TO neighbor of seed kb/f1.md
+	if _, ok := expanded["kb/f3.md"]; !ok {
+		t.Errorf("expected kb/f3.md to be discovered via SIMILAR_TO from seed kb/f1.md; got %v", expanded)
+	}
+	// Seeds must not appear in the expanded results
+	if _, ok := expanded["kb/f1.md"]; ok {
+		t.Error("seed kb/f1.md must not appear in expanded results")
+	}
+	if _, ok := expanded["kb/f2.md"]; ok {
+		t.Error("seed kb/f2.md must not appear in expanded results")
+	}
 }
 
-func (m *mockGitReader) DiffFiles(from string) (added, modified, deleted []string, err error) {
+func TestGraphExpandSearch_BranchScoped(t *testing.T) {
+	idx, err := New(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer idx.Close()
+	idx.SetEmbedder(&stubEmbedder768d{})
+
+	insertBlob(t, idx.db, "hash_alpha", "alpha")
+	insertBlob(t, idx.db, "hash_beta", "beta")
+
+	branchA := "agent/branch-a"
+	branchB := "agent/branch-b"
+
+	// Fact on branchA: shares entity "Go" with fact on branchB.
+	if err := idx.Upsert(branchA, "commit1", FactRecord{
+		Path: "kb/a.md", Title: "A", BlobHash: "hash_alpha",
+		Domain: []string{"eng"}, Entities: []string{"Go"}, Refs: []string{},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Fact on branchB: shares entity "Go" — would be a graph neighbor of kb/a.md.
+	if err := idx.Upsert(branchB, "commit2", FactRecord{
+		Path: "kb/b.md", Title: "B", BlobHash: "hash_beta",
+		Domain: []string{"eng"}, Entities: []string{"Go"}, Refs: []string{},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	branchAID, err := idx.BranchID(branchA)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	seeds := map[string]float64{"kb/a.md": 0.9}
+	expanded := idx.graphExpandSearch(branchAID, seeds, 1)
+
+	// kb/b.md is connected via shared entity "Go" but lives on branchB,
+	// so it must NOT appear when searching scoped to branchA.
+	if _, ok := expanded["kb/b.md"]; ok {
+		t.Errorf("cross-branch fact kb/b.md should not appear in branchA-scoped graph expansion; got %v", expanded)
+	}
+}
+
+type mockGitReader struct {
+	files       map[string]string
+	blobHashes  map[string]string            // path → blob hash
+	commitFiles map[string]map[string]string // commitHash → path → content
+	head        string
+}
+
+func (m *mockGitReader) DiffFiles(branch, from string) (added, modified, deleted []string, err error) {
 	return nil, nil, nil, nil
 }
-func (m *mockGitReader) ReadFile(path string) (string, error) {
+func (m *mockGitReader) ReadFile(branch, path string) (string, error) {
 	if c, ok := m.files[path]; ok {
 		return c, nil
 	}
 	return "", fmt.Errorf("not found: %s", path)
 }
-func (m *mockGitReader) ReadFileWithHash(path string) (string, string, error) {
+func (m *mockGitReader) ReadFileWithHash(branch, path string) (string, string, error) {
 	c, ok := m.files[path]
 	if !ok {
 		return "", "", fmt.Errorf("not found: %s", path)
@@ -487,15 +653,29 @@ func (m *mockGitReader) ReadFileWithHash(path string) (string, string, error) {
 	}
 	return c, hash, nil
 }
-func (m *mockGitReader) HeadCommit() (string, error) { return m.head, nil }
-func (m *mockGitReader) LastCommitForPath(path string) (string, error) {
+func (m *mockGitReader) HeadCommit(branch string) (string, error) { return m.head, nil }
+func (m *mockGitReader) LastCommitForPath(branch, path string) (string, error) {
 	return m.head, nil // mock: return head as the last commit
 }
-func (m *mockGitReader) ListAll() ([]string, error) {
-	paths, _, err := m.ListAllWithHash()
+func (m *mockGitReader) ReadFileAtCommit(branch, path, commitHash string) (string, error) {
+	if m.commitFiles != nil {
+		if byPath, ok := m.commitFiles[commitHash]; ok {
+			if c, ok := byPath[path]; ok {
+				return c, nil
+			}
+		}
+	}
+	// Fall back to current files
+	if c, ok := m.files[path]; ok {
+		return c, nil
+	}
+	return "", fmt.Errorf("ReadFileAtCommit: not found: %s@%s", path, commitHash)
+}
+func (m *mockGitReader) ListAll(branch string) ([]string, error) {
+	paths, _, err := m.ListAllWithHash(branch)
 	return paths, err
 }
-func (m *mockGitReader) ListAllWithHash() ([]string, []string, error) {
+func (m *mockGitReader) ListAllWithHash(branch string) ([]string, []string, error) {
 	var paths, hashes []string
 	for p := range m.files {
 		paths = append(paths, p)
@@ -510,13 +690,178 @@ func (m *mockGitReader) ListAllWithHash() ([]string, []string, error) {
 	return paths, hashes, nil
 }
 
-func TestSyncRebuildsGraph(t *testing.T) {
-	idx, err := New(":memory:", WithVecDimension(4))
+func TestDerivedFromInvariant(t *testing.T) {
+	idx, err := New(":memory:")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer idx.Close()
-	idx.SetEmbedder(&stubEmbedder4d{})
+
+	// Upsert a fact with two local refs and one external URL.
+	rec := FactRecord{
+		Path:       "kb/a.md",
+		Title:      "A",
+		Domain:     []string{"test"},
+		Refs:       []string{"kb/b.md", "kb/c.md", "https://example.com"},
+	}
+	// Upsert b and c first so the graph nodes exist.
+	for _, path := range []string{"kb/b.md", "kb/c.md"} {
+		if err := idx.Upsert(testBranch, "abc", FactRecord{Path: path, Title: path, Domain: []string{"test"}}); err != nil {
+			t.Fatalf("upsert %s: %v", path, err)
+		}
+	}
+	if err := idx.Upsert(testBranch, "abc", rec); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+
+	// Query DERIVED_FROM edges for kb/a.md.
+	got := derivedFromPaths(t, idx, "kb/a.md")
+	want := map[string]bool{"kb/b.md": true, "kb/c.md": true}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("DERIVED_FROM edges = %v, want %v", got, want)
+	}
+
+	// Re-upsert with changed refs: drop kb/c.md, add kb/d.md.
+	if err := idx.Upsert(testBranch, "abc", FactRecord{Path: "kb/d.md", Title: "D", Domain: []string{"test"}}); err != nil {
+		t.Fatalf("upsert d: %v", err)
+	}
+	rec.Refs = []string{"kb/b.md", "kb/d.md"}
+	rec.BlobHash = "bh_a_v2" // Different blob hash to avoid COW shortcut
+	if err := idx.Upsert(testBranch, "abc", rec); err != nil {
+		t.Fatalf("re-upsert: %v", err)
+	}
+	got = derivedFromPaths(t, idx, "kb/a.md")
+	want = map[string]bool{"kb/b.md": true, "kb/d.md": true}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("after re-upsert DERIVED_FROM = %v, want %v", got, want)
+	}
+}
+
+// derivedFromPaths returns the set of target paths for DERIVED_FROM edges from src.
+func derivedFromPaths(t *testing.T, idx *Index, src string) map[string]bool {
+	t.Helper()
+	pj := jsonParams("path", src)
+	rows, err := idx.db.Query(
+		`SELECT json_extract(value, '$.path') FROM json_each(cypher('MATCH (f:Fact {path: $path})-[:DERIVED_FROM]->(t:Fact) RETURN t.path AS path', ?))`,
+		pj,
+	)
+	if err != nil {
+		t.Fatalf("query DERIVED_FROM: %v", err)
+	}
+	defer rows.Close()
+	result := map[string]bool{}
+	for rows.Next() {
+		var p string
+		rows.Scan(&p)
+		if p != "" {
+			result[p] = true
+		}
+	}
+	return result
+}
+
+func TestExplainFact(t *testing.T) {
+	idx, err := New(":memory:")
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer idx.Close()
+
+	// Set up: a → b, a → c, d → a. All current (not deleted).
+	// Upsert targets before referrers so edges resolve (no self-loops).
+	facts := []FactRecord{
+		{Path: "kb/b.md", Title: "Fact B", Domain: []string{"test"}},
+		{Path: "kb/c.md", Title: "Fact C", Domain: []string{"test"}},
+		{Path: "kb/a.md", Title: "Fact A", Domain: []string{"test"}, Refs: []string{"kb/b.md", "kb/c.md"}},
+		{Path: "kb/d.md", Title: "Fact D", Domain: []string{"test"}, Refs: []string{"kb/a.md"}},
+	}
+	for _, f := range facts {
+		if err := idx.Upsert(testBranch, "abc", f); err != nil {
+			t.Fatalf("upsert %s: %v", f.Path, err)
+		}
+	}
+
+	res, err := idx.ExplainFact("kb/a.md")
+	if err != nil {
+		t.Fatalf("ExplainFact: %v", err)
+	}
+
+	// Incoming: d references a.
+	if len(res.Incoming) != 1 || res.Incoming[0].Path != "kb/d.md" || res.Incoming[0].Title != "Fact D" {
+		t.Errorf("Incoming = %+v, want [{kb/d.md Fact D}]", res.Incoming)
+	}
+	// Outgoing: a references b and c, both not deleted.
+	if len(res.Outgoing) != 2 {
+		t.Errorf("Outgoing len = %d, want 2", len(res.Outgoing))
+	}
+	for _, r := range res.Outgoing {
+		if r.Deleted {
+			t.Errorf("outgoing %s unexpectedly marked deleted", r.Path)
+		}
+	}
+
+	// Delete kb/c.md and re-explain: c should appear as deleted in outgoing.
+	if err := idx.Delete(testBranch, "kb/c.md"); err != nil {
+		t.Fatalf("delete c: %v", err)
+	}
+	res2, err := idx.ExplainFact("kb/a.md")
+	if err != nil {
+		t.Fatalf("ExplainFact after delete: %v", err)
+	}
+	deletedPaths := map[string]bool{}
+	for _, r := range res2.Outgoing {
+		if r.Deleted {
+			deletedPaths[r.Path] = true
+		}
+	}
+	if !deletedPaths["kb/c.md"] {
+		t.Errorf("expected kb/c.md to be marked deleted, outgoing = %+v", res2.Outgoing)
+	}
+}
+
+// TestExplainFact_SelfLoopFiltered verifies that ExplainFact strips self-loops.
+// When a fact is indexed with a ref to a node that doesn't exist yet, GraphQLite
+// creates a self-loop (f)-[:DERIVED_FROM]->(f). ExplainFact must not expose it.
+func TestExplainFact_SelfLoopFiltered(t *testing.T) {
+	idx, err := New(":memory:")
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer idx.Close()
+
+	// Index fact A with a ref to a non-existent target — causes a self-loop.
+	if err := idx.Upsert(testBranch, "abc", FactRecord{
+		Path:       "kb/a.md",
+		Title:      "Fact A",
+		Domain:     []string{"test"},
+		Refs:       []string{"kb/missing.md"},
+	}); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+
+	res, err := idx.ExplainFact("kb/a.md")
+	if err != nil {
+		t.Fatalf("ExplainFact: %v", err)
+	}
+	for _, r := range res.Outgoing {
+		if r.Path == "kb/a.md" {
+			t.Errorf("self-loop leaked into Outgoing: %+v", r)
+		}
+	}
+	for _, r := range res.Incoming {
+		if r.Path == "kb/a.md" {
+			t.Errorf("self-loop leaked into Incoming: %+v", r)
+		}
+	}
+}
+
+func TestSyncRebuildsGraph(t *testing.T) {
+	idx, err := New(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer idx.Close()
+	idx.SetEmbedder(&stubEmbedder768d{})
 
 	contentA := "---\ndomain: [eng]\nentities: [Go]\nconfidence: 0.9\nsources: 1\n---\n# A\n\nBody A"
 	contentB := "---\ndomain: [eng]\nentities: [Rust]\nconfidence: 0.8\nsources: 1\n---\n# B\n\nBody B"

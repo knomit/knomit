@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	_ "net/http/pprof" // registers /debug/pprof/* on http.DefaultServeMux
 	"os"
 	"path/filepath"
 	"strings"
@@ -117,7 +118,7 @@ func serveCmd() *cobra.Command {
 			}
 
 			// 5. Create chi router.
-			router := web.NewRouter(m, gitHandler, embeddingsEnabled, cfg.OntologyRoot)
+			router := web.NewRouter(m, gitHandler, embeddingsEnabled, cfg.OntologyRoot, agentBranch)
 
 			// 6. Startup summary.
 			pubKey := strings.TrimSpace(string(ssh.MarshalAuthorizedKey(signer.PublicKey())))
@@ -154,6 +155,16 @@ func serveCmd() *cobra.Command {
 					log.Fatal().Err(err).Msg("listen failed")
 				}
 			}()
+
+			// pprof debug server (localhost only).
+			if debugAddr := os.Getenv("KNOMIT_PPROF_ADDR"); debugAddr != "" {
+				go func() {
+					log.Info().Str("pprof", "http://"+debugAddr+"/debug/pprof/").Msg("pprof listening")
+					if err := http.ListenAndServe(debugAddr, nil); err != nil {
+						log.Warn().Err(err).Msg("pprof server failed")
+					}
+				}()
+			}
 
 			// Optional Unix socket listener.
 			if cfg.Socket != "" {

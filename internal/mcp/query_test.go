@@ -16,7 +16,7 @@ func TestQueryReturnsResults(t *testing.T) {
 
 
 
-	idx.EXPECT().Search(gomock.Any()).Return([]SearchResult{
+	idx.EXPECT().Search(gomock.Any(), gomock.Any()).Return([]SearchResult{
 		{
 			FactWithBody: FactWithBody{
 				FactRecord: FactRecord{
@@ -28,15 +28,15 @@ func TestQueryReturnsResults(t *testing.T) {
 					Confidence: 0.9,
 					Sources:    1,
 					Refs:       []string{},
-					CommitHash: "abc123",
 				},
-				Body: "Foo body.",
+				Body:       "Foo body.",
+				CommitHash: "abc123",
 			},
 			Score: 95.0,
 		},
 	}, nil)
 
-	handler := QueryHandler(gs, idx)
+	handler := QueryHandler(gs, idx, testAgentBranch)
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
@@ -70,7 +70,7 @@ func TestQueryRequiresFilter(t *testing.T) {
 
 
 
-	handler := QueryHandler(gs, idx)
+	handler := QueryHandler(gs, idx, testAgentBranch)
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{}
@@ -91,9 +91,9 @@ func TestQueryEmptyResults(t *testing.T) {
 
 
 
-	idx.EXPECT().Search(gomock.Any()).Return(nil, nil)
+	idx.EXPECT().Search(gomock.Any(), gomock.Any()).Return(nil, nil)
 
-	handler := QueryHandler(gs, idx)
+	handler := QueryHandler(gs, idx, testAgentBranch)
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
@@ -142,14 +142,14 @@ func TestQueryDomainFilter(t *testing.T) {
 
 
 
-	idx.EXPECT().Search(gomock.Any()).DoAndReturn(func(q SearchQuery) ([]SearchResult, error) {
+	idx.EXPECT().Search(gomock.Any(), gomock.Any()).DoAndReturn(func(branch string, q SearchQuery) ([]SearchResult, error) {
 		lastQuery = q
 		r := testSearchResult("general/foo.md", "Foo", "body")
 		r.Domain = []string{"infra"}
 		return []SearchResult{r}, nil
 	})
 
-	handler := QueryHandler(gs, idx)
+	handler := QueryHandler(gs, idx, testAgentBranch)
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
@@ -178,14 +178,14 @@ func TestQueryEntityFilter(t *testing.T) {
 
 
 
-	idx.EXPECT().Search(gomock.Any()).DoAndReturn(func(q SearchQuery) ([]SearchResult, error) {
+	idx.EXPECT().Search(gomock.Any(), gomock.Any()).DoAndReturn(func(branch string, q SearchQuery) ([]SearchResult, error) {
 		lastQuery = q
 		r := testSearchResult("general/bar.md", "Bar", "body")
 		r.Entities = []string{"db"}
 		return []SearchResult{r}, nil
 	})
 
-	handler := QueryHandler(gs, idx)
+	handler := QueryHandler(gs, idx, testAgentBranch)
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
@@ -214,12 +214,12 @@ func TestQueryPathPrefixFilter(t *testing.T) {
 
 
 
-	idx.EXPECT().Search(gomock.Any()).DoAndReturn(func(q SearchQuery) ([]SearchResult, error) {
+	idx.EXPECT().Search(gomock.Any(), gomock.Any()).DoAndReturn(func(branch string, q SearchQuery) ([]SearchResult, error) {
 		lastQuery = q
 		return []SearchResult{testSearchResult("general/ops/deploy.md", "Deploy", "body")}, nil
 	})
 
-	handler := QueryHandler(gs, idx)
+	handler := QueryHandler(gs, idx, testAgentBranch)
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
@@ -239,6 +239,70 @@ func TestQueryPathPrefixFilter(t *testing.T) {
 	}
 }
 
+func TestQueryFrontmatterIncludesEvidenceWeight(t *testing.T) {
+	// Regression: frontmatterOutput was missing evidence_weight.
+	ctrl := gomock.NewController(t)
+	gs := NewMockGitStore(ctrl)
+	idx := NewMockSearchIndex(ctrl)
+
+	idx.EXPECT().Search(gomock.Any(), gomock.Any()).Return([]SearchResult{
+		{
+			FactWithBody: FactWithBody{
+				FactRecord: FactRecord{
+					Path:           "general/ew.md",
+					Title:          "EW Fact",
+					Domain:         []string{"testing"},
+					Entities:       []string{},
+					Confidence:     0.8,
+					Sources:        2,
+					Refs:           []string{},
+					EvidenceWeight: 0.6,
+				},
+				Body: "Body.",
+			},
+			Score: 90.0,
+		},
+	}, nil)
+
+	handler := QueryHandler(gs, idx, testAgentBranch)
+	req := mcpgo.CallToolRequest{}
+	req.Params.Arguments = map[string]interface{}{"text": "ew"}
+
+	result, err := handler(context.Background(), req)
+	if err != nil {
+		t.Fatalf("handler error: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("tool error: %s", getResultText(t, result))
+	}
+
+	var resp struct {
+		Facts []struct {
+			Frontmatter struct {
+				EvidenceWeight float64 `json:"evidence_weight"`
+				Confidence     float64 `json:"confidence"`
+				Sources        int     `json:"sources"`
+			} `json:"frontmatter"`
+		} `json:"facts"`
+	}
+	if err := json.Unmarshal([]byte(getResultText(t, result)), &resp); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if len(resp.Facts) != 1 {
+		t.Fatalf("expected 1 fact, got %d", len(resp.Facts))
+	}
+	fm := resp.Facts[0].Frontmatter
+	if fm.EvidenceWeight != 0.6 {
+		t.Errorf("evidence_weight: got %v, want 0.6", fm.EvidenceWeight)
+	}
+	if fm.Confidence != 0.8 {
+		t.Errorf("confidence: got %v, want 0.8", fm.Confidence)
+	}
+	if fm.Sources != 2 {
+		t.Errorf("sources: got %v, want 2", fm.Sources)
+	}
+}
+
 func TestQueryMinConfidenceFilter(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
@@ -248,14 +312,14 @@ func TestQueryMinConfidenceFilter(t *testing.T) {
 
 
 
-	idx.EXPECT().Search(gomock.Any()).DoAndReturn(func(q SearchQuery) ([]SearchResult, error) {
+	idx.EXPECT().Search(gomock.Any(), gomock.Any()).DoAndReturn(func(branch string, q SearchQuery) ([]SearchResult, error) {
 		lastQuery = q
 		r := testSearchResult("general/sure.md", "Sure", "body")
 		r.Confidence = 0.95
 		return []SearchResult{r}, nil
 	})
 
-	handler := QueryHandler(gs, idx)
+	handler := QueryHandler(gs, idx, testAgentBranch)
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{

@@ -18,10 +18,10 @@ func newTestIndex(t *testing.T) *store.Index {
 
 // ── Watermark tests ──────────────────────────────────────────────────────────
 
-func TestGetReviewWatermark_Empty(t *testing.T) {
+func TestGetPipelineWatermark_Empty(t *testing.T) {
 	idx := newTestIndex(t)
 
-	hash, err := idx.GetReviewWatermark("machine/test")
+	hash, err := idx.GetPipelineWatermark("review", "machine/test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -30,14 +30,14 @@ func TestGetReviewWatermark_Empty(t *testing.T) {
 	}
 }
 
-func TestSetGetReviewWatermark(t *testing.T) {
+func TestSetGetPipelineWatermark(t *testing.T) {
 	idx := newTestIndex(t)
 
-	if err := idx.SetReviewWatermark("machine/test", "abc123"); err != nil {
+	if err := idx.SetPipelineWatermark("review", "machine/test", "abc123"); err != nil {
 		t.Fatal(err)
 	}
 
-	hash, err := idx.GetReviewWatermark("machine/test")
+	hash, err := idx.GetPipelineWatermark("review", "machine/test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,11 +46,11 @@ func TestSetGetReviewWatermark(t *testing.T) {
 	}
 
 	// Overwrite
-	if err := idx.SetReviewWatermark("machine/test", "def456"); err != nil {
+	if err := idx.SetPipelineWatermark("review", "machine/test", "def456"); err != nil {
 		t.Fatal(err)
 	}
 
-	hash, err = idx.GetReviewWatermark("machine/test")
+	hash, err = idx.GetPipelineWatermark("review", "machine/test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,21 +59,21 @@ func TestSetGetReviewWatermark(t *testing.T) {
 	}
 }
 
-func TestReviewWatermark_IndependentPerBranch(t *testing.T) {
+func TestPipelineWatermark_IndependentPerBranch(t *testing.T) {
 	idx := newTestIndex(t)
 
-	if err := idx.SetReviewWatermark("branch-a", "aaa"); err != nil {
+	if err := idx.SetPipelineWatermark("review", "branch-a", "aaa"); err != nil {
 		t.Fatal(err)
 	}
-	if err := idx.SetReviewWatermark("branch-b", "bbb"); err != nil {
+	if err := idx.SetPipelineWatermark("review", "branch-b", "bbb"); err != nil {
 		t.Fatal(err)
 	}
 
-	ha, err := idx.GetReviewWatermark("branch-a")
+	ha, err := idx.GetPipelineWatermark("review", "branch-a")
 	if err != nil {
 		t.Fatal(err)
 	}
-	hb, err := idx.GetReviewWatermark("branch-b")
+	hb, err := idx.GetPipelineWatermark("review", "branch-b")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,10 +84,10 @@ func TestReviewWatermark_IndependentPerBranch(t *testing.T) {
 
 // ── Session lifecycle tests ──────────────────────────────────────────────────
 
-func TestCreateAndGetReviewSession(t *testing.T) {
+func TestCreateAndGetPipelineSession(t *testing.T) {
 	idx := newTestIndex(t)
 
-	s, err := idx.CreateReviewSession("machine/test")
+	s, err := idx.CreatePipelineSession("review", "machine/test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -101,7 +101,7 @@ func TestCreateAndGetReviewSession(t *testing.T) {
 		t.Fatalf("expected active status, got %q", s.Status)
 	}
 
-	got, err := idx.GetReviewSession(s.ID)
+	got, err := idx.GetPipelineSession(s.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,10 +113,10 @@ func TestCreateAndGetReviewSession(t *testing.T) {
 	}
 }
 
-func TestGetReviewSession_NotFound(t *testing.T) {
+func TestGetPipelineSession_NotFound(t *testing.T) {
 	idx := newTestIndex(t)
 
-	got, err := idx.GetReviewSession("nonexistent-id")
+	got, err := idx.GetPipelineSession("nonexistent-id")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,19 +125,19 @@ func TestGetReviewSession_NotFound(t *testing.T) {
 	}
 }
 
-func TestCompleteReviewSession(t *testing.T) {
+func TestCompletePipelineSession(t *testing.T) {
 	idx := newTestIndex(t)
 
-	s, err := idx.CreateReviewSession("machine/test")
+	s, err := idx.CreatePipelineSession("review", "machine/test")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if err := idx.CompleteReviewSession(s.ID); err != nil {
+	if err := idx.CompletePipelineSession(s.ID); err != nil {
 		t.Fatal(err)
 	}
 
-	got, err := idx.GetReviewSession(s.ID)
+	got, err := idx.GetPipelineSession(s.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -146,16 +146,16 @@ func TestCompleteReviewSession(t *testing.T) {
 	}
 }
 
-func TestCreateReviewSession_AbandonsStale(t *testing.T) {
+func TestCreatePipelineSession_AbandonsStale(t *testing.T) {
 	idx := newTestIndex(t)
 
-	s1, err := idx.CreateReviewSession("machine/test")
+	s1, err := idx.CreatePipelineSession("review", "machine/test")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	// Creating a second session on the same branch should abandon the first.
-	s2, err := idx.CreateReviewSession("machine/test")
+	// Creating a second session on the same tool+branch should abandon the first.
+	s2, err := idx.CreatePipelineSession("review", "machine/test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -163,7 +163,7 @@ func TestCreateReviewSession_AbandonsStale(t *testing.T) {
 		t.Fatal("expected different session IDs")
 	}
 
-	got, err := idx.GetReviewSession(s1.ID)
+	got, err := idx.GetPipelineSession(s1.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -171,7 +171,7 @@ func TestCreateReviewSession_AbandonsStale(t *testing.T) {
 		t.Fatalf("expected abandoned, got %q", got.Status)
 	}
 
-	got2, err := idx.GetReviewSession(s2.ID)
+	got2, err := idx.GetPipelineSession(s2.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -180,21 +180,21 @@ func TestCreateReviewSession_AbandonsStale(t *testing.T) {
 	}
 }
 
-func TestCreateReviewSession_DoesNotAbandonOtherBranch(t *testing.T) {
+func TestCreatePipelineSession_DoesNotAbandonOtherBranch(t *testing.T) {
 	idx := newTestIndex(t)
 
-	s1, err := idx.CreateReviewSession("branch-a")
+	s1, err := idx.CreatePipelineSession("review", "branch-a")
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// Creating on a different branch should not touch branch-a's session.
-	_, err = idx.CreateReviewSession("branch-b")
+	_, err = idx.CreatePipelineSession("review", "branch-b")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	got, err := idx.GetReviewSession(s1.ID)
+	got, err := idx.GetPipelineSession(s1.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -205,16 +205,16 @@ func TestCreateReviewSession_DoesNotAbandonOtherBranch(t *testing.T) {
 
 // ── Work item tests ──────────────────────────────────────────────────────────
 
-func TestInsertAndNextWorkItem(t *testing.T) {
+func TestInsertAndNextPipelineWorkItem(t *testing.T) {
 	idx := newTestIndex(t)
 
-	s, err := idx.CreateReviewSession("machine/test")
+	s, err := idx.CreatePipelineSession("review", "machine/test")
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// Insert two items with different priorities.
-	if err := idx.InsertWorkItem(store.ReviewWorkItem{
+	if err := idx.InsertPipelineWorkItem(store.PipelineWorkItem{
 		SessionID:  s.ID,
 		StepType:   "prune",
 		ClusterKey: "cluster-low",
@@ -223,7 +223,7 @@ func TestInsertAndNextWorkItem(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := idx.InsertWorkItem(store.ReviewWorkItem{
+	if err := idx.InsertPipelineWorkItem(store.PipelineWorkItem{
 		SessionID:  s.ID,
 		StepType:   "distill",
 		ClusterKey: "cluster-high",
@@ -234,7 +234,7 @@ func TestInsertAndNextWorkItem(t *testing.T) {
 	}
 
 	// Next should return the highest priority item.
-	item, err := idx.NextWorkItem(s.ID)
+	item, err := idx.NextPipelineWorkItem(s.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -252,15 +252,15 @@ func TestInsertAndNextWorkItem(t *testing.T) {
 	}
 }
 
-func TestSetWorkItemResponse(t *testing.T) {
+func TestSetPipelineWorkItemResponse(t *testing.T) {
 	idx := newTestIndex(t)
 
-	s, err := idx.CreateReviewSession("machine/test")
+	s, err := idx.CreatePipelineSession("review", "machine/test")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if err := idx.InsertWorkItem(store.ReviewWorkItem{
+	if err := idx.InsertPipelineWorkItem(store.PipelineWorkItem{
 		SessionID:  s.ID,
 		StepType:   "prune",
 		ClusterKey: "cluster-a",
@@ -270,17 +270,17 @@ func TestSetWorkItemResponse(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	item, err := idx.NextWorkItem(s.ID)
+	item, err := idx.NextPipelineWorkItem(s.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if err := idx.SetWorkItemResponse(item.ID, "keep all"); err != nil {
+	if err := idx.SetPipelineWorkItemResponse(item.ID, "keep all"); err != nil {
 		t.Fatal(err)
 	}
 
-	// After responding, NextWorkItem should return nil (no unanswered items).
-	next, err := idx.NextWorkItem(s.ID)
+	// After responding, NextPipelineWorkItem should return nil (no unanswered items).
+	next, err := idx.NextPipelineWorkItem(s.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -289,22 +289,22 @@ func TestSetWorkItemResponse(t *testing.T) {
 	}
 }
 
-func TestNextWorkItem_SkipsAnswered(t *testing.T) {
+func TestNextPipelineWorkItem_SkipsAnswered(t *testing.T) {
 	idx := newTestIndex(t)
 
-	s, err := idx.CreateReviewSession("machine/test")
+	s, err := idx.CreatePipelineSession("review", "machine/test")
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// Insert two items: high priority and low priority.
-	if err := idx.InsertWorkItem(store.ReviewWorkItem{
+	if err := idx.InsertPipelineWorkItem(store.PipelineWorkItem{
 		SessionID: s.ID, StepType: "prune", ClusterKey: "high",
 		FactsJSON: `["a.md"]`, Priority: 10.0,
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := idx.InsertWorkItem(store.ReviewWorkItem{
+	if err := idx.InsertPipelineWorkItem(store.PipelineWorkItem{
 		SessionID: s.ID, StepType: "prune", ClusterKey: "low",
 		FactsJSON: `["b.md"]`, Priority: 1.0,
 	}); err != nil {
@@ -312,16 +312,16 @@ func TestNextWorkItem_SkipsAnswered(t *testing.T) {
 	}
 
 	// Answer the high-priority item.
-	high, err := idx.NextWorkItem(s.ID)
+	high, err := idx.NextPipelineWorkItem(s.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := idx.SetWorkItemResponse(high.ID, "done"); err != nil {
+	if err := idx.SetPipelineWorkItemResponse(high.ID, "done"); err != nil {
 		t.Fatal(err)
 	}
 
 	// Next should now return the low-priority item.
-	next, err := idx.NextWorkItem(s.ID)
+	next, err := idx.NextPipelineWorkItem(s.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -333,15 +333,15 @@ func TestNextWorkItem_SkipsAnswered(t *testing.T) {
 	}
 }
 
-func TestNextWorkItem_EmptySession(t *testing.T) {
+func TestNextPipelineWorkItem_EmptySession(t *testing.T) {
 	idx := newTestIndex(t)
 
-	s, err := idx.CreateReviewSession("machine/test")
+	s, err := idx.CreatePipelineSession("review", "machine/test")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	item, err := idx.NextWorkItem(s.ID)
+	item, err := idx.NextPipelineWorkItem(s.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -350,16 +350,16 @@ func TestNextWorkItem_EmptySession(t *testing.T) {
 	}
 }
 
-func TestWorkItemDepth(t *testing.T) {
+func TestPipelineWorkItemDepth(t *testing.T) {
 	idx := newTestIndex(t)
 
-	s, err := idx.CreateReviewSession("machine/test")
+	s, err := idx.CreatePipelineSession("review", "machine/test")
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// Insert a work item with Depth=2.
-	if err := idx.InsertWorkItem(store.ReviewWorkItem{
+	if err := idx.InsertPipelineWorkItem(store.PipelineWorkItem{
 		SessionID:  s.ID,
 		StepType:   "distill",
 		ClusterKey: "deep-cluster",
@@ -370,7 +370,7 @@ func TestWorkItemDepth(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	item, err := idx.NextWorkItem(s.ID)
+	item, err := idx.NextPipelineWorkItem(s.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -382,7 +382,7 @@ func TestWorkItemDepth(t *testing.T) {
 	}
 
 	// Verify default depth=0 for items inserted without explicit depth.
-	if err := idx.InsertWorkItem(store.ReviewWorkItem{
+	if err := idx.InsertPipelineWorkItem(store.PipelineWorkItem{
 		SessionID:  s.ID,
 		StepType:   "prune",
 		ClusterKey: "shallow-cluster",
@@ -392,12 +392,12 @@ func TestWorkItemDepth(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Answer the first item so NextWorkItem returns the second.
-	if err := idx.SetWorkItemResponse(item.ID, "ok"); err != nil {
+	// Answer the first item so NextPipelineWorkItem returns the second.
+	if err := idx.SetPipelineWorkItemResponse(item.ID, "ok"); err != nil {
 		t.Fatal(err)
 	}
 
-	item2, err := idx.NextWorkItem(s.ID)
+	item2, err := idx.NextPipelineWorkItem(s.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -409,18 +409,18 @@ func TestWorkItemDepth(t *testing.T) {
 	}
 }
 
-// ── WorkItemStats tests ──────────────────────────────────────────────────────
+// ── PipelineWorkItemStats tests ──────────────────────────────────────────────
 
-func TestWorkItemStats(t *testing.T) {
+func TestPipelineWorkItemStats(t *testing.T) {
 	idx := newTestIndex(t)
 
-	s, err := idx.CreateReviewSession("machine/test")
+	s, err := idx.CreatePipelineSession("review", "machine/test")
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// Initially: 0 completed, 0 remaining.
-	c, r, err := idx.WorkItemStats(s.ID)
+	c, r, err := idx.PipelineWorkItemStats(s.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -430,7 +430,7 @@ func TestWorkItemStats(t *testing.T) {
 
 	// Insert 3 items.
 	for i, key := range []string{"a", "b", "c"} {
-		if err := idx.InsertWorkItem(store.ReviewWorkItem{
+		if err := idx.InsertPipelineWorkItem(store.PipelineWorkItem{
 			SessionID: s.ID, StepType: "prune", ClusterKey: key,
 			FactsJSON: `["x.md"]`, Priority: float64(i),
 		}); err != nil {
@@ -438,7 +438,7 @@ func TestWorkItemStats(t *testing.T) {
 		}
 	}
 
-	c, r, err = idx.WorkItemStats(s.ID)
+	c, r, err = idx.PipelineWorkItemStats(s.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -447,12 +447,12 @@ func TestWorkItemStats(t *testing.T) {
 	}
 
 	// Answer one.
-	item, _ := idx.NextWorkItem(s.ID)
-	if err := idx.SetWorkItemResponse(item.ID, "ok"); err != nil {
+	item, _ := idx.NextPipelineWorkItem(s.ID)
+	if err := idx.SetPipelineWorkItemResponse(item.ID, "ok"); err != nil {
 		t.Fatal(err)
 	}
 
-	c, r, err = idx.WorkItemStats(s.ID)
+	c, r, err = idx.PipelineWorkItemStats(s.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -463,13 +463,13 @@ func TestWorkItemStats(t *testing.T) {
 
 // ── GC tests ─────────────────────────────────────────────────────────────────
 
-func TestGCReviewSessions(t *testing.T) {
+func TestGCPipelineSessions(t *testing.T) {
 	idx := newTestIndex(t)
 
 	// Create 5 sessions on the same branch.
 	var ids []string
 	for i := 0; i < 5; i++ {
-		s, err := idx.CreateReviewSession("machine/test")
+		s, err := idx.CreatePipelineSession("review", "machine/test")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -478,7 +478,7 @@ func TestGCReviewSessions(t *testing.T) {
 
 	// Only the last one should be active; the rest abandoned.
 	// Add a work item to session 3 (index 2) to test cascade.
-	if err := idx.InsertWorkItem(store.ReviewWorkItem{
+	if err := idx.InsertPipelineWorkItem(store.PipelineWorkItem{
 		SessionID: ids[2], StepType: "prune", ClusterKey: "gc-test",
 		FactsJSON: `["z.md"]`, Priority: 1.0,
 	}); err != nil {
@@ -486,13 +486,13 @@ func TestGCReviewSessions(t *testing.T) {
 	}
 
 	// Keep only 2 most recent sessions.
-	if err := idx.GCReviewSessions("machine/test", 2); err != nil {
+	if err := idx.GCPipelineSessions("review", "machine/test", 2); err != nil {
 		t.Fatal(err)
 	}
 
 	// Sessions 0, 1, 2 should be deleted; 3 and 4 should remain.
 	for _, id := range ids[:3] {
-		got, err := idx.GetReviewSession(id)
+		got, err := idx.GetPipelineSession(id)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -501,7 +501,7 @@ func TestGCReviewSessions(t *testing.T) {
 		}
 	}
 	for _, id := range ids[3:] {
-		got, err := idx.GetReviewSession(id)
+		got, err := idx.GetPipelineSession(id)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -512,8 +512,8 @@ func TestGCReviewSessions(t *testing.T) {
 
 	// Work items for deleted session should also be gone (cascade).
 	var count int
-	if err := idx.DB().QueryRow(
-		`SELECT COUNT(*) FROM review_work_items WHERE session_id = ?`, ids[2],
+	if err := idx.TestDB().QueryRow(
+		`SELECT COUNT(*) FROM pipeline_work_items WHERE session_id = ?`, ids[2],
 	).Scan(&count); err != nil {
 		t.Fatal(err)
 	}
@@ -522,25 +522,25 @@ func TestGCReviewSessions(t *testing.T) {
 	}
 }
 
-func TestGCReviewSessions_IndependentPerBranch(t *testing.T) {
+func TestGCPipelineSessions_IndependentPerBranch(t *testing.T) {
 	idx := newTestIndex(t)
 
 	// Create sessions on two branches.
-	sA, err := idx.CreateReviewSession("branch-a")
+	sA, err := idx.CreatePipelineSession("review", "branch-a")
 	if err != nil {
 		t.Fatal(err)
 	}
-	sB, err := idx.CreateReviewSession("branch-b")
+	sB, err := idx.CreatePipelineSession("review", "branch-b")
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// GC branch-a keeping 0 should not affect branch-b.
-	if err := idx.GCReviewSessions("branch-a", 0); err != nil {
+	if err := idx.GCPipelineSessions("review", "branch-a", 0); err != nil {
 		t.Fatal(err)
 	}
 
-	gotA, err := idx.GetReviewSession(sA.ID)
+	gotA, err := idx.GetPipelineSession(sA.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -548,7 +548,7 @@ func TestGCReviewSessions_IndependentPerBranch(t *testing.T) {
 		t.Fatal("expected branch-a session to be deleted")
 	}
 
-	gotB, err := idx.GetReviewSession(sB.ID)
+	gotB, err := idx.GetPipelineSession(sB.ID)
 	if err != nil {
 		t.Fatal(err)
 	}

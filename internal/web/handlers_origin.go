@@ -9,6 +9,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 	"knomit/internal/repos"
+	"knomit/internal/store"
 )
 
 // isGitURL returns true if s is a valid git remote URL.
@@ -48,11 +49,13 @@ func isGitURL(s string) bool {
 func handleGetOrigin() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
-		if ri.Svc == nil {
+		var svc *store.Service
+		ri.WithRead(func(d repos.StoreDeps) { svc = d.Svc })
+		if svc == nil {
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
-		remote, err := ri.Svc.GetRemote("origin")
+		remote, err := svc.GetRemote("origin")
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
@@ -79,7 +82,11 @@ type setOriginRequest struct {
 func handleSetOrigin() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
-		if ri.Svc == nil {
+		var svc *store.Service
+		ri.WithRead(func(d repos.StoreDeps) { svc = d.Svc })
+		repoName := ri.Name()
+
+		if svc == nil {
 			writeError(w, http.StatusInternalServerError, "no store available")
 			return
 		}
@@ -90,7 +97,7 @@ func handleSetOrigin() http.HandlerFunc {
 			return
 		}
 		// Load existing remote to support partial updates.
-		existing, _ := ri.Svc.GetRemote("origin")
+		existing, _ := svc.GetRemote("origin")
 
 		// Resolve URL: use request value, fall back to existing.
 		url := req.URL
@@ -133,21 +140,17 @@ func handleSetOrigin() http.HandlerFunc {
 			pushInterval = existing.PushInterval
 		}
 
-		if err := ri.Svc.SetRemoteWithAuth("origin", url, branch, interval, pushInterval, authMethod, authToken); err != nil {
-			log.Warn().Err(err).Str("repo", ri.Name).Msg("set origin failed")
+		if err := svc.SetRemoteWithAuth("origin", url, branch, interval, pushInterval, authMethod, authToken); err != nil {
+			log.Warn().Err(err).Str("repo", repoName).Msg("set origin failed")
 			writeError(w, http.StatusInternalServerError, "failed to save origin")
 			return
 		}
 
-		// Activate sync loops if the callback is set.
-		if ri.StartSync != nil {
-			if err := ri.StartSync(url); err != nil {
-				log.Warn().Err(err).Str("repo", ri.Name).Msg("sync activation failed")
-			} else {
-				log.Info().Str("repo", ri.Name).Str("url", url).Msg("origin configured and sync activated")
-			}
+		// Activate sync loops.
+		if err := ri.ActivateSync(url); err != nil {
+			log.Warn().Err(err).Str("repo", repoName).Msg("sync activation failed")
 		} else {
-			log.Info().Str("repo", ri.Name).Str("url", url).Msg("origin configured (restart to activate sync)")
+			log.Info().Str("repo", repoName).Str("url", url).Msg("origin configured and sync activated")
 		}
 
 		writeJSON(w, http.StatusOK, map[string]any{

@@ -20,13 +20,13 @@ import (
 //	# Title of the fact
 //
 //	Body content.
-func parseFact(path, content, commitHash string) (FactRecord, error) {
+func parseFact(path, content string) (FactRecord, error) {
 	f, err := fact.ParseFact(path, content)
 	if err != nil {
 		return FactRecord{}, err
 	}
 	return FactRecord{
-		Path:           f.Path,
+		Path:           f.Path(),
 		Title:          f.Title,
 		Type:           string(f.Type),
 		Domain:         f.Domain,
@@ -35,6 +35,5 @@ func parseFact(path, content, commitHash string) (FactRecord, error) {
 		Sources:        f.Sources,
 		Refs:           f.Refs,
 		EvidenceWeight: f.EvidenceWeight,
-		CommitHash:     commitHash,
 	}, nil
 }

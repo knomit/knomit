@@ -27,8 +27,12 @@ func writeTaskConflict(w http.ResponseWriter, op string, err error) {
 func handleSynthesizeStart() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
-		deps := ri.SynthDeps
-		if deps == nil || deps.Adapter == nil || deps.Reviewer == nil {
+		var synth *repos.SynthDeps
+		ri.WithRead(func(d repos.StoreDeps) { synth = d.Synth })
+		hub := ri.TaskHub()
+		repo := ri.Name()
+
+		if synth == nil || synth.Adapter == nil || synth.Reviewer == nil {
 			log.Warn().Msg("synthesize: not available (no LLM configured)")
 			writeError(w, http.StatusServiceUnavailable, "synthesis not available")
 			return
@@ -36,10 +40,9 @@ func handleSynthesizeStart() http.HandlerFunc {
 
 		log.Info().Msg("synthesize: starting review")
 
-		repo := ri.Name
-		id, err := ri.Hub.Start("synth", func(ctx context.Context, emit func(repos.TaskEvent)) {
+		id, err := hub.Start("synth", func(ctx context.Context, emit func(repos.TaskEvent)) {
 			emit(repos.TaskEvent{Status: "running", Phase: "start", Message: "review starting", Repo: repo})
-			if err := deps.Reviewer.RunAll(ctx, deps.Adapter); err != nil {
+			if err := synth.Reviewer.RunAll(ctx, synth.Adapter); err != nil {
 				emit(repos.TaskEvent{Status: "error", Message: err.Error(), Repo: repo})
 				return
 			}
@@ -60,22 +63,31 @@ func handleSynthesizeStart() http.HandlerFunc {
 func handleRebuild() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
-		if ri.Svc == nil {
+		var gs repos.GitStore
+		var svc *store.Service
+		ri.WithRead(func(d repos.StoreDeps) {
+			gs = d.GS
+			svc = d.Svc
+		})
+		hub := ri.TaskHub()
+		repo := ri.Name()
+		agentBranch := ri.Branch()
+
+		if svc == nil {
 			writeError(w, http.StatusServiceUnavailable, "index not available")
 			return
 		}
 
-		gitReader, ok := ri.GS.(store.GitReader)
+		gitReader, ok := gs.(store.GitReader)
 		if !ok {
 			writeError(w, http.StatusInternalServerError, "git store does not support rebuild")
 			return
 		}
 
-		idx := ri.Svc.Index()
-		branch := ri.GS.Branch()
+		idx := svc.Index()
+		branch := agentBranch
 
-		repo := ri.Name
-		id, err := ri.Hub.Start("rebuild", func(ctx context.Context, emit func(repos.TaskEvent)) {
+		id, err := hub.Start("rebuild", func(ctx context.Context, emit func(repos.TaskEvent)) {
 			emit(repos.TaskEvent{Status: "running", Phase: "start", Message: "rebuilding index", Repo: repo})
 			progress := func(subPhase string, done, total int) {
 				if done%10 == 0 || done == total {

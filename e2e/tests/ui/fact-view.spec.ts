@@ -66,6 +66,24 @@ test.describe('Fact View', () => {
     expect(body.length).toBeGreaterThan(10);
   });
 
+  test('displays fact type badge', async () => {
+    await browse.clickEntry('databases');
+    await browse.waitForEntry('postgresql');
+    await browse.clickEntry('postgresql');
+    await browse.waitForFactEntry();
+    const entries = await browse.getDirectoryEntries();
+    const facts = entries.filter(e => !e.isDir);
+    const mvcc = facts.find(f => f.name === 'mvcc.md');
+    await browse.clickEntry(mvcc ? mvcc.name : facts[0].name);
+
+    // Verify type badge is visible
+    await expect(factPanel.typeBadge).toBeVisible({ timeout: 5_000 });
+    const badgeText = await factPanel.typeBadge.textContent();
+    expect(badgeText).toBeTruthy();
+    // Should contain one of the known type labels
+    expect(badgeText).toMatch(/observation|concept|process|principle|pattern|reference|synthesis|hypothesis|methodology/);
+  });
+
   test('switching facts updates the panel', async () => {
     // Navigate to a directory with observation-type facts
     await browse.clickEntry('databases');
@@ -78,7 +96,11 @@ test.describe('Fact View', () => {
     const firstTitle = await factPanel.getTitle();
 
     // Go back to root and pick a different fact
-    await browse.clickBreadcrumb('kb');
+    // Use the back button multiple times to get to root
+    // Nav stack: [empty] -> [path:databases] -> [path:postgresql] -> [SELECT mvcc]
+    await browse.navigateBack(); // back to postgresql dir
+    await browse.navigateBack(); // back to databases dir
+    await browse.navigateBack(); // back to root
     await browse.waitForEntry('networking');
     await browse.clickEntry('networking');
     await browse.waitForEntry('dns');

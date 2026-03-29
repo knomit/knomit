@@ -17,7 +17,8 @@ import (
 // normalizeFactPath replaces the filename component of a path with an 8-char
 // UUID, matching the convention used by learn. This prevents LLM-generated
 // filenames (e.g. "chrome-extension-threat-surface-2026.md") from clashing
-// with each other or with learn-generated facts.
+// with each other or with learn-generated facts. Directory case is normalised
+// by fact.NewFact, which lowercases the full path unconditionally.
 func normalizeFactPath(path string) string {
 	dir := filepath.Dir(path)
 	id := uuid.New().String()[:8]
@@ -40,6 +41,7 @@ func ApplyPruneDecisions(
 	merges []MergeEntry,
 	recipeName string,
 	onProgress func(ProgressEvent),
+	agentBranch string,
 ) (*ReviewStats, error) {
 	stats := &ReviewStats{}
 	// Track deleted paths to avoid double-deletion when a path appears in
@@ -55,11 +57,11 @@ func ApplyPruneDecisions(
 		case "retract":
 			msg := fmt.Sprintf("synthesize-%s: retract %s", recipeName, d.Path)
 			deletedPaths[d.Path] = true
-			if _, err := gs.DeleteFile(d.Path, msg, "retract"); err != nil {
+			if _, err := gs.DeleteFile(agentBranch, d.Path, msg, "retract"); err != nil {
 				onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("retract %s: %v", d.Path, err)})
 				continue
 			}
-			if err := idx.Delete(d.Path); err != nil {
+			if err := idx.Delete(agentBranch, d.Path); err != nil {
 				onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("index delete %s: %v", d.Path, err)})
 			}
 		
@@ -67,7 +69,7 @@ func ApplyPruneDecisions(
 			stats.Pruned++
 
 		case "update":
-			content, err := gs.ReadFile(d.Path)
+			content, err := gs.ReadFile(agentBranch, d.Path)
 			if err != nil {
 				onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("update read %s: %v", d.Path, err)})
 				continue
@@ -80,12 +82,12 @@ func ApplyPruneDecisions(
 			f.Confidence = d.Confidence
 			updated := mcp.SerializeFact(f)
 			msg := fmt.Sprintf("synthesize-%s: update confidence %s → %.2f", recipeName, d.Path, d.Confidence)
-			commitHash, blobHash, err := gs.WriteFile(d.Path, updated, msg, "update")
+			commitHash, blobHash, err := gs.WriteFile(agentBranch, d.Path, updated, msg, "update")
 			if err != nil {
 				onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("update write %s: %v", d.Path, err)})
 				continue
 			}
-			if err := idx.Upsert(store.NewFactRecord(f, blobHash, commitHash)); err != nil {
+			if err := idx.Upsert(agentBranch, commitHash, store.NewFactRecord(f, blobHash)); err != nil {
 				onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("index upsert %s: %v", d.Path, err)})
 			}
 		
@@ -97,47 +99,41 @@ func ApplyPruneDecisions(
 	// Apply merges.
 	for _, m := range merges {
 		mf := m.Merged
-		weight := computeWeight(gs, m.Paths)
-		merged := mcp.Fact{
-			Path:           mf.Path,
-			Title:          mf.Title,
-			Body:           mf.Body,
-			Type:           fact.EpistemicType(mf.Type),
-			Domain:         mf.Domain,
-			Confidence:     mf.Confidence,
-			Sources:        mf.Sources,
-			Entities:       mf.Entities,
-			Refs:           mf.Refs,
-			EvidenceWeight: weight,
-		}
+		weight := computeWeight(gs, agentBranch, m.Paths)
+		merged := fact.NewFact(mf.Path)
+		merged.Title = mf.Title
+		merged.Body = mf.Body
+		merged.Type = fact.EpistemicType(mf.Type)
+		merged.Domain = mf.Domain
+		merged.Confidence = mf.Confidence
+		merged.Sources = mf.Sources
+		merged.Entities = mf.Entities
+		merged.Refs = mf.Refs
+		merged.EvidenceWeight = weight
 		content := mcp.SerializeFact(merged)
 		msg := fmt.Sprintf("synthesize-%s: merge %s", recipeName, strings.Join(m.Paths, ", "))
-		commitHash, blobHash, err := gs.WriteFile(mf.Path, content, msg, "subsume")
+		commitHash, blobHash, err := gs.WriteFile(agentBranch, merged.Path(), content, msg, "subsume")
 		if err != nil {
-			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("merge write %s: %v", mf.Path, err)})
+			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("merge write %s: %v", merged.Path(), err)})
 			continue
 		}
-		_ = idx.Upsert(store.NewFactRecord(merged, blobHash, commitHash))
-		if err := idx.GraphAddDerivedFrom(mf.Path, m.Paths); err != nil {
-			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("derived_from %s: %v", mf.Path, err)})
-		}
-	
+		_ = idx.Upsert(agentBranch, commitHash, store.NewFactRecord(merged, blobHash))
 
 		// Delete source facts (losers get retract tag).
 		for _, src := range m.Paths {
 			if deletedPaths[src] {
 				continue
 			}
-			srcMsg := fmt.Sprintf("synthesize-%s: subsumed by %s", recipeName, mf.Path)
-			if _, err := gs.DeleteFile(src, srcMsg, "retract"); err != nil {
+			srcMsg := fmt.Sprintf("synthesize-%s: subsumed by %s", recipeName, merged.Path())
+			if _, err := gs.DeleteFile(agentBranch, src, srcMsg, "retract"); err != nil {
 				onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("merge delete source %s: %v", src, err)})
 				continue
 			}
-			_ = idx.Delete(src)
+			_ = idx.Delete(agentBranch, src)
 			deletedPaths[src] = true
 		
 		}
-		onProgress(ProgressEvent{Phase: "detail-merge", Message: "merge " + mf.Path})
+		onProgress(ProgressEvent{Phase: "detail-merge", Message: "merge " + merged.Path()})
 		stats.Merged++
 	}
 
@@ -153,6 +149,7 @@ func ApplyDistillDecisions(
 	retract []string,
 	recipeName string,
 	onProgress func(ProgressEvent),
+	agentBranch string,
 ) (*ReviewStats, []distillFact, error) {
 	stats := &ReviewStats{}
 	var written []distillFact
@@ -161,6 +158,11 @@ func ApplyDistillDecisions(
 
 	// Commit synthesized facts.
 	for _, df := range synthesized {
+		// Distill cannot create hypothesis-type facts.
+		if fact.EpistemicType(df.Type) == fact.Hypothesis {
+			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("distill: skipping hypothesis-type output %s — distill cannot create hypotheses", df.Path)})
+			continue
+		}
 		// Replace LLM-generated filename with a UUID to match learn convention.
 		df.Path = normalizeFactPath(df.Path)
 		var localRefs []string
@@ -169,34 +171,28 @@ func ApplyDistillDecisions(
 				localRefs = append(localRefs, r)
 			}
 		}
-		weight := computeWeight(gs, localRefs)
-		f := mcp.Fact{
-			Path:           df.Path,
-			Title:          df.Title,
-			Body:           df.Body,
-			Type:           fact.EpistemicType(df.Type),
-			Domain:         df.Domain,
-			Confidence:     df.Confidence,
-			Sources:        1,
-			Entities:       df.Entities,
-			Refs:           df.Refs,
-			EvidenceWeight: weight,
-		}
+		weight := computeWeight(gs, agentBranch, localRefs)
+		f := fact.NewFact(df.Path)
+		f.Title = df.Title
+		f.Body = df.Body
+		f.Type = fact.EpistemicType(df.Type)
+		f.Domain = df.Domain
+		f.Confidence = df.Confidence
+		f.Sources = 1
+		f.Entities = df.Entities
+		f.Refs = df.Refs
+		f.EvidenceWeight = weight
+		df.Path = f.Path() // sync df so written slice reflects the canonical (lowercase) path
 		content := mcp.SerializeFact(f)
-		msg := fmt.Sprintf("synthesize-%s: distill %s", recipeName, df.Path)
-		commitHash, blobHash, err := gs.WriteFile(df.Path, content, msg, "subsume")
+		msg := fmt.Sprintf("synthesize-%s: distill %s", recipeName, f.Path())
+		commitHash, blobHash, err := gs.WriteFile(agentBranch, f.Path(), content, msg, "subsume")
 		if err != nil {
-			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("distill write %s: %v", df.Path, err)})
+			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("distill write %s: %v", f.Path(), err)})
 			continue
 		}
-		_ = idx.Upsert(store.NewFactRecord(f, blobHash, commitHash))
-		if len(df.Refs) > 0 {
-			if err := idx.GraphAddDerivedFrom(df.Path, df.Refs); err != nil {
-				onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("derived_from %s: %v", df.Path, err)})
-			}
-		}
-	
-		onProgress(ProgressEvent{Phase: "detail-learn", Message: "learn " + df.Path})
+		_ = idx.Upsert(agentBranch, commitHash, store.NewFactRecord(f, blobHash))
+
+		onProgress(ProgressEvent{Phase: "detail-learn", Message: "learn " + f.Path()})
 		stats.Synthesized++
 		written = append(written, df)
 	}
@@ -204,11 +200,11 @@ func ApplyDistillDecisions(
 	// Delete subsumed facts.
 	for _, path := range retract {
 		msg := fmt.Sprintf("synthesize-%s: subsumed by distilled fact", recipeName)
-		if _, err := gs.DeleteFile(path, msg, "retract"); err != nil {
+		if _, err := gs.DeleteFile(agentBranch, path, msg, "retract"); err != nil {
 			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("distill retract %s: %v", path, err)})
 			continue
 		}
-		_ = idx.Delete(path)
+		_ = idx.Delete(agentBranch, path)
 	
 		onProgress(ProgressEvent{Phase: "detail-distill-retract", Message: "retract " + path})
 		stats.Pruned++

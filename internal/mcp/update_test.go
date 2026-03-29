@@ -7,30 +7,34 @@ import (
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"go.uber.org/mock/gomock"
+
+	"knomit/internal/fact"
 )
 
 func TestUpdateMergesFields(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
 
-
-	factContent := SerializeFact(Fact{
-		Path: "kb/foo.md", Title: "Original Title", Body: "Original body.",
-		Domain: []string{"testing"}, Confidence: 0.7, Sources: 1,
-		Entities: []string{}, Refs: []string{"https://old.ref"},
-	})
+	tmp := fact.NewFact("kb/foo.md")
+	tmp.Title = "Original Title"
+	tmp.Body = "Original body."
+	tmp.Domain = []string{"testing"}
+	tmp.Confidence = 0.7
+	tmp.Sources = 1
+	tmp.Entities = []string{}
+	tmp.Refs = []string{"https://old.ref"}
+	factContent := SerializeFact(tmp)
 
 	var writtenContent string
 
-
-	gs.EXPECT().FileExists("kb/foo.md").Return(true, nil)
-	gs.EXPECT().ReadFile("kb/foo.md").Return(factContent, nil)
-	gs.EXPECT().WriteFile("kb/foo.md", gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(path, content, msg, operation string) (string, string, error) {
+	gs.EXPECT().FileExists(testAgentBranch, "kb/foo.md").Return(true, nil)
+	gs.EXPECT().ReadFile(testAgentBranch, "kb/foo.md").Return(factContent, nil)
+	gs.EXPECT().WriteFile(testAgentBranch, "kb/foo.md", gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(branch, path, content, msg, operation string) (string, string, error) {
 		writtenContent = content
 		return "abc123def456", "blob_foo", nil
 	})
 
-	handler := UpdateHandler(gs, "kb")
+	handler := UpdateHandler(gs, "kb", testAgentBranch)
 
 	newBody := "Updated body."
 	newConf := 0.95
@@ -89,11 +93,9 @@ func TestUpdateFileNotFound(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
 
+	gs.EXPECT().FileExists(testAgentBranch, "kb/nonexistent.md").Return(false, nil)
 
-
-	gs.EXPECT().FileExists("kb/nonexistent.md").Return(false, nil)
-
-	handler := UpdateHandler(gs, "kb")
+	handler := UpdateHandler(gs, "kb", testAgentBranch)
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
@@ -115,24 +117,26 @@ func TestUpdateRefsAppended(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
 
-
-	factContent := SerializeFact(Fact{
-		Path: "kb/refs.md", Title: "Refs Test", Body: "Body.",
-		Domain: []string{}, Confidence: 0.8, Sources: 1,
-		Entities: []string{}, Refs: []string{"https://existing.ref"},
-	})
+	tmp := fact.NewFact("kb/refs.md")
+	tmp.Title = "Refs Test"
+	tmp.Body = "Body."
+	tmp.Domain = []string{}
+	tmp.Confidence = 0.8
+	tmp.Sources = 1
+	tmp.Entities = []string{}
+	tmp.Refs = []string{"https://existing.ref"}
+	factContent := SerializeFact(tmp)
 
 	var writtenContent string
 
-
-	gs.EXPECT().FileExists("kb/refs.md").Return(true, nil)
-	gs.EXPECT().ReadFile("kb/refs.md").Return(factContent, nil)
-	gs.EXPECT().WriteFile("kb/refs.md", gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(path, content, msg, operation string) (string, string, error) {
+	gs.EXPECT().FileExists(testAgentBranch, "kb/refs.md").Return(true, nil)
+	gs.EXPECT().ReadFile(testAgentBranch, "kb/refs.md").Return(factContent, nil)
+	gs.EXPECT().WriteFile(testAgentBranch, "kb/refs.md", gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(branch, path, content, msg, operation string) (string, string, error) {
 		writtenContent = content
 		return "abc123def456", "blob_refs", nil
 	})
 
-	handler := UpdateHandler(gs, "kb")
+	handler := UpdateHandler(gs, "kb", testAgentBranch)
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{

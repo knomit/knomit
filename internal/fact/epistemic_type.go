@@ -14,6 +14,8 @@ const (
 	Pattern     EpistemicType = "pattern"
 	Reference   EpistemicType = "reference"
 	Synthesis   EpistemicType = "synthesis"
+	Hypothesis  EpistemicType = "hypothesis"
+	Methodology EpistemicType = "methodology"
 )
 
 // validTypes is the authoritative set of allowed epistemic types.
@@ -25,6 +27,8 @@ var validTypes = map[EpistemicType]bool{
 	Pattern:     true,
 	Reference:   true,
 	Synthesis:   true,
+	Hypothesis:  true,
+	Methodology: true,
 }
 
 // Valid reports whether t is one of the allowed epistemic types.
@@ -37,12 +41,12 @@ func (t EpistemicType) Validate() error {
 	if t.Valid() {
 		return nil
 	}
-	return fmt.Errorf("invalid epistemic type %q: must be one of observation, concept, process, principle, pattern, reference, synthesis", t)
+	return fmt.Errorf("invalid epistemic type %q: must be one of observation, concept, process, principle, pattern, reference, synthesis, hypothesis, methodology", t)
 }
 
 // AllTypes returns all valid epistemic types in a stable order.
 func AllTypes() []EpistemicType {
-	return []EpistemicType{Observation, Concept, Process, Principle, Pattern, Reference, Synthesis}
+	return []EpistemicType{Observation, Concept, Process, Principle, Pattern, Reference, Synthesis, Hypothesis, Methodology}
 }
 
 // DefaultType is the epistemic type used when none is specified.

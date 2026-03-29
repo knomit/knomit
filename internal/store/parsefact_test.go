@@ -2,11 +2,13 @@ package store
 
 import (
 	"testing"
+
+	"knomit/internal/fact"
 )
 
 func TestParseFact_TypeField(t *testing.T) {
 	content := "---\ntype: concept\ndomain: [test]\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# A concept\n\nBody.\n"
-	rec, err := parseFact("test/typed.md", content, "abc123")
+	rec, err := parseFact("test/typed.md", content)
 	if err != nil {
 		t.Fatalf("parseFact error: %v", err)
 	}
@@ -17,7 +19,7 @@ func TestParseFact_TypeField(t *testing.T) {
 
 func TestParseFact_TypeDefaultsToObservation(t *testing.T) {
 	content := "---\ndomain: [test]\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# No type\n\nBody.\n"
-	rec, err := parseFact("test/no-type.md", content, "abc123")
+	rec, err := parseFact("test/no-type.md", content)
 	if err != nil {
 		t.Fatalf("parseFact error: %v", err)
 	}
@@ -27,10 +29,10 @@ func TestParseFact_TypeDefaultsToObservation(t *testing.T) {
 }
 
 func TestParseFact_AllEpistemicTypes(t *testing.T) {
-	types := []string{"observation", "concept", "process", "principle", "pattern", "reference"}
-	for _, et := range types {
+	for _, ep := range fact.AllTypes() {
+		et := string(ep)
 		content := "---\ntype: " + et + "\ndomain: []\nconfidence: 0.5\nsources: 1\nentities: []\nrefs: []\n---\n# Title\n\nBody.\n"
-		rec, err := parseFact("test/"+et+".md", content, "abc")
+		rec, err := parseFact("test/"+et+".md", content)
 		if err != nil {
 			t.Fatalf("type %q: parseFact error: %v", et, err)
 		}
@@ -42,7 +44,7 @@ func TestParseFact_AllEpistemicTypes(t *testing.T) {
 
 func TestParseFact_EvidenceWeight(t *testing.T) {
 	content := "---\ndomain: [test]\nconfidence: 0.9\nsources: 5\nevidence_weight: 0.8\nentities: []\nrefs: []\n---\n# Weighted\n\nBody.\n"
-	rec, err := parseFact("kb/weighted.md", content, "abc123")
+	rec, err := parseFact("kb/weighted.md", content)
 	if err != nil {
 		t.Fatalf("parseFact: %v", err)
 	}
@@ -71,7 +73,7 @@ func TestParseFact_HeadingVariants(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			rec, err := parseFact("test/fact.md", tc.content, "abc123")
+			rec, err := parseFact("test/fact.md", tc.content)
 			if err != nil {
 				t.Fatalf("parseFact returned error: %v", err)
 			}

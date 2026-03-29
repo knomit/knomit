@@ -63,6 +63,8 @@ Each fact has YAML frontmatter with:
   - pattern: recurring solutions, idioms ("When X, do Y")
   - reference: specs, measurements, enumerations ("Sencha steeps at 70°C for 60s")
   - synthesis: higher-order facts derived from other facts (set automatically by the synthesize pipeline)
+  - hypothesis: predictions derived from patterns — carries inherent uncertainty, not grounded in direct observation
+  - methodology: reasoning process lessons learned from hypothesis outcomes (lives in meta/reasoning/)
 - **domain**: cross-cutting tags from additional classification systems (not the primary ontology path)
 - **entities**: all entities this fact mentions (for search and graph queries)
 - **confidence**: 0.0–1.0 certainty level
@@ -97,7 +99,25 @@ Call this tool to review and maintain the knowledge base. It works as a multi-tu
    - response: your JSON decisions matching the response_schema
 4. Repeat until the response contains "done": true
 
-You may stop at any time — progress is saved and the next session picks up remaining work.`, ontologyRoot, ontologyRoot, topicList, ontologyRoot, ontologyRoot, ontologyRoot, ontologyRoot)
+You may stop at any time — progress is saved and the next session picks up remaining work.
+
+## knomit_hypothesize — Hypothesis Generation
+
+Call this tool to generate hypotheses from synthesis facts. Works the same way as knomit_review:
+
+1. Call knomit_hypothesize with no arguments to start a session
+2. You'll receive a synthesis fact to investigate
+3. Use knomit_query (with path: "%s/meta/reasoning/" + domain/entity filters) to find applicable methodology
+4. Use knomit_explain on the synthesis fact to trace its provenance
+5. Gather additional evidence as needed
+6. If a hypothesis is warranted, call knomit_learn with type: hypothesis
+7. After writing the hypothesis, call knomit_learn with type: methodology, topic: "meta", category: "reasoning" to record the reasoning process — what worked, what evidence was decisive, which patterns applied, and any pitfalls
+8. Call knomit_hypothesize with session_id to get the next synthesis fact
+9. Repeat until done
+
+Hypothesis body must contain: hypothesis statement, evidence chain (with confidence/sources for each cited fact), reasoning step, known gaps, and falsification condition.
+
+Important: hypotheses must only cite observations and synthesis facts as evidence — never other hypotheses.`, ontologyRoot, ontologyRoot, topicList, ontologyRoot, ontologyRoot, ontologyRoot, ontologyRoot, ontologyRoot)
 }
 
 // ProfileInstructions returns the MCP server instructions for the given profile.

@@ -12,9 +12,10 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/object"
 )
 
-// WriteFile writes content to path in a new commit with message.
+// WriteFile writes content to path in a new commit with message on branch.
 // Returns the commit hash and the blob hash of the written file.
-func (s *Store) WriteFile(path, content, message, operation string) (commitHash string, blobHash string, err error) {
+func (s *Store) WriteFile(branch, path, content, message, operation string) (commitHash string, blobHash string, err error) {
+	path = strings.ToLower(path)
 	if path == "" {
 		return "", "", fmt.Errorf("git: WriteFile: path must not be empty")
 	}
@@ -22,49 +23,49 @@ func (s *Store) WriteFile(path, content, message, operation string) (commitHash 
 		return "", "", fmt.Errorf("git: WriteFile: path must not contain '..'")
 	}
 
-	s.mu.Lock()
+	unlock := s.lockBranch(branch)
 
-	headRef, err := s.repo.Head()
+	headHash, err := s.resolveRef(branch)
 	if err != nil {
-		s.mu.Unlock()
-		return "", "", fmt.Errorf("WriteFile: head: %w", err)
+		unlock()
+		return "", "", fmt.Errorf("WriteFile: ref: %w", err)
 	}
 
-	author := s.authorSig(operation)
-	committer := s.committerSig()
-	newCommitHash, newBlobHash, err := writeFileToStore(s.storer, headRef.Hash(), path, content, message, author, committer)
+	author := s.authorSig(branch, operation)
+	committer := s.committerSig(branch)
+	newCommitHash, newBlobHash, err := writeFileToStore(s.storer, headHash, path, content, message, author, committer)
 	if err != nil {
-		s.mu.Unlock()
+		unlock()
 		return "", "", err
 	}
 
 	if s.signer != nil {
 		newCommitHash, err = signCommitInPlace(s.storer, s.signer, newCommitHash)
 		if err != nil {
-			s.mu.Unlock()
+			unlock()
 			return "", "", err
 		}
 	}
 
 	// Update the branch ref to point to the new commit.
-	branchRefName := plumbing.NewBranchReferenceName(s.branch)
-	newRef := plumbing.NewHashReference(branchRefName, newCommitHash)
-	if err := s.storer.SetReference(newRef); err != nil {
-		s.mu.Unlock()
+	branchRefName := plumbing.NewBranchReferenceName(branch)
+	if err := s.storer.SetReference(plumbing.NewHashReference(branchRefName, newCommitHash)); err != nil {
+		unlock()
 		return "", "", err
 	}
-	s.mu.Unlock()
+	unlock()
 
 	// Notify and append commit log outside the lock — notifyCommit triggers
 	// index sync which may call back into Store for reads.
-	s.notifyCommit(newCommitHash.String())
-	s.appendCommitLog(newCommitHash)
+	s.notifyCommit(branch, newCommitHash.String())
+	s.appendCommitLog(branch, newCommitHash)
 	return newCommitHash.String(), newBlobHash.String(), nil
 }
 
-// DeleteFile removes path from HEAD and creates a commit.
+// DeleteFile removes path from branch and creates a commit.
 // Returns the commit hash of the new commit.
-func (s *Store) DeleteFile(path, message, operation string) (commitHash string, err error) {
+func (s *Store) DeleteFile(branch, path, message, operation string) (commitHash string, err error) {
+	path = strings.ToLower(path)
 	if path == "" {
 		return "", fmt.Errorf("git: DeleteFile: path must not be empty")
 	}
@@ -72,58 +73,66 @@ func (s *Store) DeleteFile(path, message, operation string) (commitHash string, 
 		return "", fmt.Errorf("git: DeleteFile: path must not contain '..'")
 	}
 
-	// Check if file exists before creating a commit.
-	exists, err := s.FileExists(path)
+	unlock := s.lockBranch(branch)
+
+	headHash, err := s.resolveRef(branch)
 	if err != nil {
+		unlock()
+		return "", fmt.Errorf("DeleteFile: ref: %w", err)
+	}
+
+	// Check existence inside the lock to avoid a TOCTOU race.
+	exists, err := s.FileExists(branch, path)
+	if err != nil {
+		unlock()
 		return "", fmt.Errorf("DeleteFile: check exists: %w", err)
 	}
 	if !exists {
+		unlock()
 		return "", fmt.Errorf("DeleteFile: file %q does not exist", path)
 	}
 
-	s.mu.Lock()
-
-	headRef, err := s.repo.Head()
+	author := s.authorSig(branch, operation)
+	committer := s.committerSig(branch)
+	newCommitHash, err := deleteFileFromStore(s.storer, headHash, path, message, author, committer)
 	if err != nil {
-		s.mu.Unlock()
-		return "", fmt.Errorf("DeleteFile: head: %w", err)
-	}
-
-	author := s.authorSig(operation)
-	committer := s.committerSig()
-	newCommitHash, err := deleteFileFromStore(s.storer, headRef.Hash(), path, message, author, committer)
-	if err != nil {
-		s.mu.Unlock()
+		unlock()
 		return "", err
 	}
 
 	if s.signer != nil {
 		newCommitHash, err = signCommitInPlace(s.storer, s.signer, newCommitHash)
 		if err != nil {
-			s.mu.Unlock()
+			unlock()
 			return "", err
 		}
 	}
 
-	branchRefName := plumbing.NewBranchReferenceName(s.branch)
-	newRef := plumbing.NewHashReference(branchRefName, newCommitHash)
-	if err := s.storer.SetReference(newRef); err != nil {
-		s.mu.Unlock()
+	branchRefName := plumbing.NewBranchReferenceName(branch)
+	if err := s.storer.SetReference(plumbing.NewHashReference(branchRefName, newCommitHash)); err != nil {
+		unlock()
 		return "", err
 	}
-	s.mu.Unlock()
+	unlock()
 
-	s.notifyCommit(newCommitHash.String())
-	s.appendCommitLog(newCommitHash)
+	s.notifyCommit(branch, newCommitHash.String())
+	s.appendCommitLog(branch, newCommitHash)
 	return newCommitHash.String(), nil
 }
 
-// BatchWrite writes multiple files in one commit.
+// BatchWrite writes multiple files in one commit on branch.
 // Returns the commit hash and a map of path → blob hash for each written file.
-func (s *Store) BatchWrite(files map[string]string, message, operation string) (commitHash string, blobHashes map[string]string, err error) {
+func (s *Store) BatchWrite(branch string, files map[string]string, message, operation string) (commitHash string, blobHashes map[string]string, err error) {
 	if len(files) == 0 {
 		return "", nil, nil
 	}
+
+	// Lowercase all paths.
+	lowered := make(map[string]string, len(files))
+	for path, content := range files {
+		lowered[strings.ToLower(path)] = content
+	}
+	files = lowered
 
 	// Pre-flight validation: reject empty paths and paths containing "..".
 	for path := range files {
@@ -135,28 +144,28 @@ func (s *Store) BatchWrite(files map[string]string, message, operation string) (
 		}
 	}
 
-	s.mu.Lock()
-	cHash, blobHashes, err := s.batchWriteLocked(files, message, operation)
-	s.mu.Unlock()
+	unlock := s.lockBranch(branch)
+	cHash, blobHashes, err := s.batchWriteLocked(branch, files, message, operation)
+	unlock()
 	if err != nil {
 		return "", nil, err
 	}
 
 	// Notify and append commit log outside the lock — notifyCommit triggers
 	// index sync which may call back into Store for reads.
-	s.notifyCommit(cHash.String())
-	s.appendCommitLog(cHash)
+	s.notifyCommit(branch, cHash.String())
+	s.appendCommitLog(branch, cHash)
 	return cHash.String(), blobHashes, nil
 }
 
-// batchWriteLocked performs the actual BatchWrite work. Caller must hold s.mu.
-func (s *Store) batchWriteLocked(files map[string]string, message, operation string) (plumbing.Hash, map[string]string, error) {
-	headRef, err := s.repo.Head()
+// batchWriteLocked performs the actual BatchWrite work. Caller must hold the branch lock.
+func (s *Store) batchWriteLocked(branch string, files map[string]string, message, operation string) (plumbing.Hash, map[string]string, error) {
+	headHash, err := s.resolveRef(branch)
 	if err != nil {
-		return plumbing.ZeroHash, nil, fmt.Errorf("BatchWrite: head: %w", err)
+		return plumbing.ZeroHash, nil, fmt.Errorf("BatchWrite: ref: %w", err)
 	}
 
-	parentHash := headRef.Hash()
+	parentHash := headHash
 
 	// Read existing root tree.
 	var rootTree *object.Tree
@@ -208,8 +217,8 @@ func (s *Store) batchWriteLocked(files map[string]string, message, operation str
 	}
 
 	// Create single commit.
-	author := s.authorSig(operation)
-	committer := s.committerSig()
+	author := s.authorSig(branch, operation)
+	committer := s.committerSig(branch)
 	commit := &object.Commit{
 		Author:    author,
 		Committer: committer,
@@ -236,24 +245,22 @@ func (s *Store) batchWriteLocked(files map[string]string, message, operation str
 		}
 	}
 
-	branchRefName := plumbing.NewBranchReferenceName(s.branch)
-	newRef := plumbing.NewHashReference(branchRefName, cHash)
-	if err := s.storer.SetReference(newRef); err != nil {
+	branchRefName := plumbing.NewBranchReferenceName(branch)
+	if err := s.storer.SetReference(plumbing.NewHashReference(branchRefName, cHash)); err != nil {
 		return plumbing.ZeroHash, nil, err
 	}
 	return cHash, blobHashes, nil
 }
 
-// Tag creates a lightweight tag ref at HEAD.
-func (s *Store) Tag(name string) error {
-	headRef, err := s.repo.Head()
+// Tag creates a lightweight tag ref at the tip of branch.
+func (s *Store) Tag(branch, name string) error {
+	headHash, err := s.resolveRef(branch)
 	if err != nil {
-		return fmt.Errorf("Tag: head: %w", err)
+		return fmt.Errorf("Tag: ref: %w", err)
 	}
 
 	tagRefName := plumbing.NewTagReferenceName(name)
-	tagRef := plumbing.NewHashReference(tagRefName, headRef.Hash())
-	return s.storer.SetReference(tagRef)
+	return s.storer.SetReference(plumbing.NewHashReference(tagRefName, headHash))
 }
 
 // TagsContaining returns tag names whose target is reachable from hash.

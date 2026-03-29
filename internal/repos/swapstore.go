@@ -17,19 +17,19 @@ import (
 // If DBPath is empty (in-memory/test), it falls back to a pointer swap.
 func (m *Manager) SwapStore(ri *RepoInstance, tempDBPath string) error {
 	// Stop existing sync loops so no goroutines reference the old store.
-	if ri.SyncCancel != nil {
-		ri.SyncCancel()
+	if ri.syncCancel != nil {
+		ri.syncCancel()
 	}
-	if ri.SyncWg != nil {
-		ri.SyncWg.Wait()
+	if ri.syncWg != nil {
+		ri.syncWg.Wait()
 	}
 
 	// In-memory / test mode: no persistent DB file, open the temp DB directly.
 	// The temp dir must NOT be cleaned up in this case (caller's responsibility).
-	if ri.DBPath == "" {
+	if ri.dbPath == "" {
 		svc, err := store.Open(tempDBPath)
 		if err != nil {
-			// Fallback: no file-based swap possible. Keep existing Svc.
+			// Fallback: no file-based swap possible. Keep existing svc.
 			log.Warn().Err(err).Msg("SwapStore: cannot open temp DB, keeping existing service")
 			return nil
 		}
@@ -39,47 +39,59 @@ func (m *Manager) SwapStore(ri *RepoInstance, tempDBPath string) error {
 			log.Warn().Err(err).Msg("SwapStore: cannot open temp git, keeping existing service")
 			return nil
 		}
-		ri.Svc = svc
-		ri.GS = gs
-		ri.Idx = svc.Index()
+		idx := svc.Index()
+		if m.deps.Embedder != nil {
+			idx.SetEmbedder(m.deps.Embedder)
+		}
+		ri.withWrite(func() {
+			ri.svc = svc
+			ri.gs = gs
+			ri.idx = idx
+		})
 		return nil
 	}
 
 	// Close the old database.
-	if ri.Svc != nil {
-		ri.Svc.Close()
+	if ri.svc != nil {
+		ri.svc.Close()
 	}
 
 	// Copy temp DB over the real one (backup first).
-	backupPath := ri.DBPath + ".bak"
-	if err := copyFile(ri.DBPath, backupPath); err != nil {
+	backupPath := ri.dbPath + ".bak"
+	if err := copyFile(ri.dbPath, backupPath); err != nil {
 		// Non-fatal: we can proceed without a backup.
 		log.Warn().Err(err).Msg("SwapStore: backup failed")
 	}
-	if err := copyFile(tempDBPath, ri.DBPath); err != nil {
+	if err := copyFile(tempDBPath, ri.dbPath); err != nil {
 		// Restore from backup.
-		_ = copyFile(backupPath, ri.DBPath)
+		_ = copyFile(backupPath, ri.dbPath)
 		return fmt.Errorf("SwapStore: copy temp DB: %w", err)
 	}
 
 	// Reopen from the real path.
-	svc, err := store.Open(ri.DBPath)
+	svc, err := store.Open(ri.dbPath)
 	if err != nil {
 		// Restore from backup.
-		_ = copyFile(backupPath, ri.DBPath)
+		_ = copyFile(backupPath, ri.dbPath)
 		return fmt.Errorf("SwapStore: reopen store: %w", err)
 	}
 
 	gs, err := git.OpenWithStorer(svc.GitStorer())
 	if err != nil {
 		svc.Close()
-		_ = copyFile(backupPath, ri.DBPath)
+		_ = copyFile(backupPath, ri.dbPath)
 		return fmt.Errorf("SwapStore: reopen git: %w", err)
 	}
 
-	ri.Svc = svc
-	ri.GS = gs
-	ri.Idx = svc.Index()
+	idx := svc.Index()
+	if m.deps.Embedder != nil {
+		idx.SetEmbedder(m.deps.Embedder)
+	}
+	ri.withWrite(func() {
+		ri.svc = svc
+		ri.gs = gs
+		ri.idx = idx
+	})
 
 	// Clean up backup — swap succeeded.
 	os.Remove(backupPath)

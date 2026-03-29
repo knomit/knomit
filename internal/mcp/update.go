@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	factpkg "knomit/internal/fact"
 
@@ -28,7 +29,7 @@ func updateTool() mcpgo.Tool {
 			mcpgo.Properties(map[string]any{
 				"title":      map[string]any{"type": "string", "description": "New title."},
 				"body":       map[string]any{"type": "string", "description": "New body text."},
-				"type":       map[string]any{"type": "string", "description": "Epistemic type: observation, concept, process, principle, pattern, reference, or synthesis."},
+				"type":       map[string]any{"type": "string", "description": "Epistemic type: observation, concept, process, principle, pattern, reference, synthesis, hypothesis, or methodology."},
 				"confidence": map[string]any{"type": "number", "description": "Certainty level 0.0–1.0."},
 				"sources":    map[string]any{"type": "integer", "description": "Number of independent sources."},
 				"domain":     map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Replaces domain tags."},
@@ -52,8 +53,11 @@ type updateInput struct {
 }
 
 // UpdateHandler returns the handler function for knomit_update.
-func UpdateHandler(gs GitStore, ontologyRoot string) func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+func UpdateHandler(gs GitStore, ontologyRoot, agentBranch string) func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 	return func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+
 		// 1. Get arguments.
 		file := req.GetString("file", "")
 		if file == "" {
@@ -66,7 +70,7 @@ func UpdateHandler(gs GitStore, ontologyRoot string) func(context.Context, mcpgo
 		}
 
 		// 3. Check file exists.
-		exists, err := gs.FileExists(file)
+		exists, err := gs.FileExists(agentBranch, file)
 		if err != nil {
 			return mcpgo.NewToolResultError(fmt.Sprintf("file exists check error: %v", err)), nil
 		}
@@ -75,7 +79,7 @@ func UpdateHandler(gs GitStore, ontologyRoot string) func(context.Context, mcpgo
 		}
 
 		// 4. Read and parse existing fact.
-		content, err := gs.ReadFile(file)
+		content, err := gs.ReadFile(agentBranch, file)
 		if err != nil {
 			return mcpgo.NewToolResultError(fmt.Sprintf("read file error: %v", err)), nil
 		}
@@ -123,7 +127,7 @@ func UpdateHandler(gs GitStore, ontologyRoot string) func(context.Context, mcpgo
 
 		// 7. Write updated fact.
 		commitMsg := fmt.Sprintf("update: %s", fact.Title)
-		hash, _, err := gs.WriteFile(file, SerializeFact(fact), commitMsg, "update")
+		hash, _, err := gs.WriteFile(agentBranch, file, SerializeFact(fact), commitMsg, "update")
 		if err != nil {
 			return mcpgo.NewToolResultError(fmt.Sprintf("write error: %v", err)), nil
 		}

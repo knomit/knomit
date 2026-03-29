@@ -19,7 +19,12 @@ import (
 //  4. Else → DiffFiles(last_commit), upsert added+modified, delete removed.
 //  5. Update meta.last_commit = HEAD.
 func (idx *Index) Sync(git GitReader, branch string) error {
-	head, err := git.HeadCommit()
+	// Ensure the branch exists in the branches table.
+	if _, err := idx.EnsureBranch(branch, "refs/heads/"+branch); err != nil {
+		return fmt.Errorf("sync: ensure branch: %w", err)
+	}
+
+	head, err := git.HeadCommit(branch)
 	if err != nil {
 		return fmt.Errorf("sync: head commit: %w", err)
 	}
@@ -37,19 +42,19 @@ func (idx *Index) Sync(git GitReader, branch string) error {
 	if last == "" {
 		// Full rebuild: no previous commit recorded, so index every file.
 		log.Info().Str("head", head[:8]).Msg("index sync: full rebuild (no previous commit)")
-		paths, err := git.ListAll()
+		paths, err := git.ListAll(branch)
 		if err != nil {
 			return fmt.Errorf("sync: list all: %w", err)
 		}
 		for _, path := range paths {
-			if err := idx.indexFile(git, path, head); err != nil {
+			if err := idx.indexFile(git, branch, path, head); err != nil {
 				return err
 			}
 		}
 		log.Info().Int("files", len(paths)).Msg("index sync: full rebuild complete")
 	} else {
 		// Incremental update: only process files changed since last_commit.
-		added, modified, deleted, err := git.DiffFiles(last)
+		added, modified, deleted, err := git.DiffFiles(branch, last)
 		if err != nil {
 			return fmt.Errorf("sync: diff files: %w", err)
 		}
@@ -58,12 +63,12 @@ func (idx *Index) Sync(git GitReader, branch string) error {
 			Int("added", len(added)).Int("modified", len(modified)).Int("deleted", len(deleted)).
 			Msg("index sync: incremental update")
 		for _, path := range append(added, modified...) {
-			if err := idx.indexFile(git, path, head); err != nil {
+			if err := idx.indexFile(git, branch, path, head); err != nil {
 				return err
 			}
 		}
 		for _, path := range deleted {
-			if err := idx.Delete(path); err != nil {
+			if err := idx.Delete(branch, path); err != nil {
 				return fmt.Errorf("sync: delete %q: %w", path, err)
 			}
 		}
@@ -82,14 +87,14 @@ func (idx *Index) Rebuild(git GitReader, branch string, progress RebuildProgress
 		return fmt.Errorf("rebuild: clear last commit: %w", err)
 	}
 
-	head, err := git.HeadCommit()
+	head, err := git.HeadCommit(branch)
 	if err != nil {
 		return fmt.Errorf("rebuild: head commit: %w", err)
 	}
 
 	// Phase 1: facts
 	start := time.Now()
-	n, err := idx.rebuildFacts(git, head, progress)
+	n, err := idx.rebuildFacts(git, branch, head, progress)
 	if err != nil {
 		return fmt.Errorf("rebuild: facts: %w", err)
 	}
@@ -111,6 +116,14 @@ func (idx *Index) Rebuild(git GitReader, branch string, progress RebuildProgress
 	}
 	log.Info().Int("graphed", graphed).Str("elapsed", fmt.Sprintf("%.1fs", time.Since(start).Seconds())).Msg("rebuild: phase 3 (graph) complete")
 
+	// Phase 4: history (FactVersion nodes from commit_log)
+	start = time.Now()
+	versioned, err := idx.rebuildGraphHistory(git, branch, progress)
+	if err != nil {
+		return fmt.Errorf("rebuild: history: %w", err)
+	}
+	log.Info().Int("versions", versioned).Str("elapsed", fmt.Sprintf("%.1fs", time.Since(start).Seconds())).Msg("rebuild: phase 4 (history) complete")
+
 	return idx.SetLastCommit(branch, head)
 }
 
@@ -120,22 +133,22 @@ func (idx *Index) Rebuild(git GitReader, branch string, progress RebuildProgress
 //
 // commitHash is the fallback; if commit_log has a more specific last-touch
 // commit for this path, that is used instead.
-func (idx *Index) indexFile(git GitReader, path, commitHash string) error {
-	content, blobHash, err := git.ReadFileWithHash(path)
+func (idx *Index) indexFile(git GitReader, branch, path, commitHash string) error {
+	content, blobHash, err := git.ReadFileWithHash(branch, path)
 	if err != nil {
 		return fmt.Errorf("indexFile: read %s: %w", path, err)
 	}
 
 	// Use the most recent non-merge commit that touched this file.
-	if last, lerr := git.LastCommitForPath(path); lerr == nil && last != "" {
+	if last, lerr := git.LastCommitForPath(branch, path); lerr == nil && last != "" {
 		commitHash = last
 	}
 
-	rec, err := parseFact(path, content, commitHash)
+	rec, err := parseFact(path, content)
 	if err != nil {
 		return nil // not a fact file (e.g. kb.md manifest, ontology.yaml)
 	}
 	rec.BlobHash = blobHash
 
-	return idx.Upsert(rec)
+	return idx.Upsert(branch, commitHash, rec)
 }
