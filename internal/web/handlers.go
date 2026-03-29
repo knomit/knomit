@@ -157,7 +157,7 @@ func handleFact(agentBranch string) http.HandlerFunc {
 				fromCommit = commitHash
 			}
 			if err != nil && svc != nil {
-				if lastHash, ok := svc.Index().LastCommitForPath(path); ok {
+				if lastHash, ok := svc.Index().LastCommitForPath(agentBranch, path); ok {
 					content, err = gs.ReadFileAtCommit(agentBranch, path, lastHash)
 					if err == nil {
 						fromCommit = lastHash

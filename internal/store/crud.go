@@ -549,12 +549,24 @@ func (idx *Index) recentFactsSearch(branch, pathPrefix, query string, limit, off
 // LastCommitForPath returns the commit hash of the most recent commit_log
 // entry for the given path, provided that entry's action is not 'deleted'.
 // Returns ("", false) if the path is not found or its latest action is deleted.
-func (idx *Index) LastCommitForPath(path string) (string, bool) {
+func (idx *Index) LastCommitForPath(branch, path string) (string, bool) {
+	branchID, err := idx.BranchID(branch)
+	if err != nil {
+		return "", false
+	}
 	var hash, action string
-	err := idx.db.QueryRow(
-		`SELECT commit_hash, action FROM commit_log WHERE path = ? ORDER BY rowid DESC LIMIT 1`,
-		path,
+	// Try branch-scoped query first (entries with branch_id set).
+	err = idx.db.QueryRow(
+		`SELECT commit_hash, action FROM commit_log WHERE branch_id = ? AND path = ? ORDER BY rowid DESC LIMIT 1`,
+		branchID, path,
 	).Scan(&hash, &action)
+	if err != nil {
+		// Fallback: legacy rows with NULL branch_id.
+		err = idx.db.QueryRow(
+			`SELECT commit_hash, action FROM commit_log WHERE path = ? ORDER BY rowid DESC LIMIT 1`,
+			path,
+		).Scan(&hash, &action)
+	}
 	if err != nil || hash == "" || action == "deleted" {
 		return "", false
 	}
