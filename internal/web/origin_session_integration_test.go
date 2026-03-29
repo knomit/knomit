@@ -42,11 +42,11 @@ func TestOriginSession_FullWorkflow(t *testing.T) {
 
 	// Write local-only facts.
 	localFactA := "---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# Local Fact A\n\nOnly on local.\n"
-	writeFact(t, localGS, localSvc.DB(), "kb/local-a.md", localFactA)
+	writeFact(t, localGS, localSvc,"kb/local-a.md", localFactA)
 
 	// A shared fact (same path, same content on both local and remote).
 	sharedContent := "---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# Shared Fact\n\nPresent in both repos.\n"
-	writeFact(t, localGS, localSvc.DB(), "kb/shared.md", sharedContent)
+	writeFact(t, localGS, localSvc,"kb/shared.md", sharedContent)
 
 	// ---- 2. Set up remote knomit instance with different facts ----
 	// Sleep >1s so the remote's root commit has a different timestamp,
@@ -313,10 +313,10 @@ func TestOriginSession_RemoteWinsStrategy(t *testing.T) {
 	}
 
 	localOnlyFact := "---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# Local Only\n\nLocal content.\n"
-	writeFact(t, localGS, localSvc.DB(), "kb/local-a.md", localOnlyFact)
+	writeFact(t, localGS, localSvc,"kb/local-a.md", localOnlyFact)
 
 	sharedLocalContent := "---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# Shared Fact\n\nLocal version of shared.\n"
-	writeFact(t, localGS, localSvc.DB(), "kb/shared.md", sharedLocalContent)
+	writeFact(t, localGS, localSvc,"kb/shared.md", sharedLocalContent)
 
 	// Disjoint history: sleep so root commits differ.
 	time.Sleep(1100 * time.Millisecond)
@@ -464,7 +464,7 @@ func TestOriginSession_SwitchStrategy(t *testing.T) {
 	}
 
 	sharedLocal := "---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# Shared\n\nLocal version.\n"
-	writeFact(t, localGS, localSvc.DB(), "kb/shared.md", sharedLocal)
+	writeFact(t, localGS, localSvc,"kb/shared.md", sharedLocal)
 
 	time.Sleep(1100 * time.Millisecond)
 
@@ -580,7 +580,7 @@ func TestOriginSession_ExistingAgentBranch(t *testing.T) {
 	}
 
 	localFact := "---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# Local Fact\n\nLocal content.\n"
-	writeFact(t, localGS, localSvc.DB(), "kb/local.md", localFact)
+	writeFact(t, localGS, localSvc,"kb/local.md", localFact)
 
 	time.Sleep(1100 * time.Millisecond)
 
@@ -783,7 +783,7 @@ func TestOriginSession_BranchSelection(t *testing.T) {
 	}
 
 	localFact := "---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# Local Fact\n\nContent.\n"
-	writeFact(t, localGS, localSvc.DB(), "kb/local.md", localFact)
+	writeFact(t, localGS, localSvc,"kb/local.md", localFact)
 
 	time.Sleep(1100 * time.Millisecond)
 
@@ -937,7 +937,7 @@ func TestOriginSession_RebuildAfterCommit(t *testing.T) {
 	}
 
 	localFact := "---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# Local Fact\n\nContent.\n"
-	writeFact(t, localGS, localSvc.DB(), "kb/local.md", localFact)
+	writeFact(t, localGS, localSvc,"kb/local.md", localFact)
 
 	time.Sleep(1100 * time.Millisecond)
 
@@ -1178,11 +1178,11 @@ func TestOriginSession_DeadRefs(t *testing.T) {
 
 	// A plain fact with no refs (dead_refs = 0 contribution).
 	validFact := "---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# Valid Fact\n\nNo refs.\n"
-	writeFact(t, localGS, localSvc.DB(), "kb/valid.md", validFact)
+	writeFact(t, localGS, localSvc,"kb/valid.md", validFact)
 
 	// A fact whose refs list contains a path that does not exist in the local store.
 	deadRefFact := "---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nrefs:\n  - kb/nonexistent.md\n---\n# Fact With Dead Ref\n\nPoints to a missing file.\n"
-	writeFact(t, localGS, localSvc.DB(), "kb/with-dead-ref.md", deadRefFact)
+	writeFact(t, localGS, localSvc,"kb/with-dead-ref.md", deadRefFact)
 
 	// ---- Remote store: minimal, just needs to be clonable ----
 	time.Sleep(1100 * time.Millisecond)
@@ -1291,11 +1291,11 @@ func TestOriginSession_NoDeadRefs(t *testing.T) {
 
 	// Two facts; one references the other (valid ref).
 	factA := "---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# Fact A\n\nContent.\n"
-	writeFact(t, localGS, localSvc.DB(), "kb/fact-a.md", factA)
+	writeFact(t, localGS, localSvc,"kb/fact-a.md", factA)
 
 	// This fact refs fact-a.md which exists.
 	factB := "---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nrefs:\n  - kb/fact-a.md\n---\n# Fact B\n\nReferences fact-a.\n"
-	writeFact(t, localGS, localSvc.DB(), "kb/fact-b.md", factB)
+	writeFact(t, localGS, localSvc,"kb/fact-b.md", factB)
 
 	time.Sleep(1100 * time.Millisecond)
 

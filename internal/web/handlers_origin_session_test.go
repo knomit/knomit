@@ -426,46 +426,48 @@ func newTestRouterWithSvcAndGitStore(t *testing.T) (http.Handler, *git.Store, *s
 }
 
 // insertFact inserts a row into the facts table for testing.
-func insertFact(t *testing.T, db *sql.DB, path, blobHash, commitHash string) {
+func insertFact(t *testing.T, svc *store.Service, path, blobHash, commitHash string) {
 	t.Helper()
-	_, err := db.Exec(
-		`INSERT INTO facts (path, title, blob_hash, type, domain, entities, confidence, sources, refs, commit_hash)
-		 VALUES (?, ?, ?, 'observation', '[]', '[]', 0.9, 1, '[]', ?)`,
-		path, path, blobHash, commitHash,
-	)
-	if err != nil {
+	if err := svc.Index().Upsert(store.FactRecord{
+		Path:       path,
+		Title:      path,
+		BlobHash:   blobHash,
+		Type:       "observation",
+		Confidence: 0.9,
+		Sources:    1,
+		CommitHash: commitHash,
+	}); err != nil {
 		t.Fatalf("insertFact %q: %v", path, err)
 	}
 }
 
 // writeFact writes a fact file to the git store and inserts it into the facts table.
 // content must be a valid knomit fact (YAML frontmatter + # Title body).
-func writeFact(t *testing.T, gs *git.Store, db *sql.DB, path, content string) {
+func writeFact(t *testing.T, gs *git.Store, svc *store.Service, path, content string) {
 	t.Helper()
 	commitHash, blobHash, err := gs.WriteFile(testAgentBranch, path, content, "add "+path, "learn")
 	if err != nil {
 		t.Fatalf("WriteFile %q: %v", path, err)
 	}
-	insertFact(t, db, path, blobHash, commitHash)
+	insertFact(t, svc, path, blobHash, commitHash)
 }
 
 // --- preview tests ---
 
 func TestPreview_ComparesLocalAndRemote(t *testing.T) {
 	handler, localGS, svc := newTestRouterWithSvcAndGitStore(t)
-	db := svc.DB()
 
 	// Local-only fact (with a dead ref and a live ref).
 	localOnlyContent := "---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: [kb/local-b.md, kb/missing.md]\n---\n# Local A\n\nContent.\n"
-	writeFact(t, localGS, db, "kb/local-a.md", localOnlyContent)
+	writeFact(t, localGS, svc, "kb/local-a.md", localOnlyContent)
 
 	// Local fact that will also be in remote (shared), no dead refs.
 	sharedContent := "---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# Shared\n\nContent.\n"
-	writeFact(t, localGS, db, "kb/shared.md", sharedContent)
+	writeFact(t, localGS, svc, "kb/shared.md", sharedContent)
 
 	// Another local fact (referenced by local-a so it's alive).
 	localBContent := "---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# Local B\n\nContent.\n"
-	writeFact(t, localGS, db, "kb/local-b.md", localBContent)
+	writeFact(t, localGS, svc, "kb/local-b.md", localBContent)
 
 	// Build remote store with: shared.md + remote-only.md
 	remoteStorer := newTestStorerForWeb(t)
@@ -639,7 +641,7 @@ func setupTestedSession(t *testing.T) (http.Handler, string) {
 
 	// Write a local fact.
 	factContent := "---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# Local Fact\n\nContent.\n"
-	writeFact(t, localGS, svc.DB(), "kb/local-fact.md", factContent)
+	writeFact(t, localGS, svc, "kb/local-fact.md", factContent)
 
 	// Build the remote store with its own independent storer (disjoint history).
 	remoteStorer := newTestStorerForWeb(t)
@@ -889,7 +891,7 @@ func setupAppliedSession(t *testing.T) (http.Handler, string, *repos.Manager, *S
 
 	// Write a local fact.
 	factContent := "---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# Local Fact\n\nContent.\n"
-	writeFact(t, localGS, svc.DB(), "kb/local-fact.md", factContent)
+	writeFact(t, localGS, svc, "kb/local-fact.md", factContent)
 
 	// Build the remote store (disjoint) — this simulates the result after apply.
 	remoteStorer := newTestStorerForWeb(t)
