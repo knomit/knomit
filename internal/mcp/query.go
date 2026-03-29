@@ -34,7 +34,7 @@ func queryTool() mcpgo.Tool {
 }
 
 // QueryHandler returns the handler function for knomit_query.
-func QueryHandler(gs GitStore, idx SearchIndex) func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+func QueryHandler(gs GitStore, idx SearchIndex, agentBranch string) func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 	return func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 		ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
@@ -61,7 +61,7 @@ func QueryHandler(gs GitStore, idx SearchIndex) func(context.Context, mcpgo.Call
 		}
 
 		// 4. Search.
-		results, err := idx.Search(q)
+		results, err := idx.Search(agentBranch, q)
 		if err != nil {
 			return mcpgo.NewToolResultError(fmt.Sprintf("search error: %v", err)), nil
 		}

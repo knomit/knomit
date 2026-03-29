@@ -27,11 +27,12 @@ func writeTaskConflict(w http.ResponseWriter, op string, err error) {
 func handleSynthesizeStart() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
-		ri.RLock()
-		deps, hub, repo := ri.SynthDeps, ri.Hub, ri.Name
-		ri.RUnlock()
+		var synth *repos.SynthDeps
+		ri.WithRead(func(d repos.StoreDeps) { synth = d.Synth })
+		hub := ri.TaskHub()
+		repo := ri.Name()
 
-		if deps == nil || deps.Adapter == nil || deps.Reviewer == nil {
+		if synth == nil || synth.Adapter == nil || synth.Reviewer == nil {
 			log.Warn().Msg("synthesize: not available (no LLM configured)")
 			writeError(w, http.StatusServiceUnavailable, "synthesis not available")
 			return
@@ -41,7 +42,7 @@ func handleSynthesizeStart() http.HandlerFunc {
 
 		id, err := hub.Start("synth", func(ctx context.Context, emit func(repos.TaskEvent)) {
 			emit(repos.TaskEvent{Status: "running", Phase: "start", Message: "review starting", Repo: repo})
-			if err := deps.Reviewer.RunAll(ctx, deps.Adapter); err != nil {
+			if err := synth.Reviewer.RunAll(ctx, synth.Adapter); err != nil {
 				emit(repos.TaskEvent{Status: "error", Message: err.Error(), Repo: repo})
 				return
 			}
@@ -62,9 +63,15 @@ func handleSynthesizeStart() http.HandlerFunc {
 func handleRebuild() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
-		ri.RLock()
-		svc, gs, hub, repo := ri.Svc, ri.GS, ri.Hub, ri.Name
-		ri.RUnlock()
+		var gs repos.GitStore
+		var svc *store.Service
+		ri.WithRead(func(d repos.StoreDeps) {
+			gs = d.GS
+			svc = d.Svc
+		})
+		hub := ri.TaskHub()
+		repo := ri.Name()
+		agentBranch := ri.Branch()
 
 		if svc == nil {
 			writeError(w, http.StatusServiceUnavailable, "index not available")
@@ -78,7 +85,7 @@ func handleRebuild() http.HandlerFunc {
 		}
 
 		idx := svc.Index()
-		branch := gs.Branch()
+		branch := agentBranch
 
 		id, err := hub.Start("rebuild", func(ctx context.Context, emit func(repos.TaskEvent)) {
 			emit(repos.TaskEvent{Status: "running", Phase: "start", Message: "rebuilding index", Repo: repo})

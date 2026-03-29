@@ -17,7 +17,6 @@ func TestStartSession_NoDirtyFacts(t *testing.T) {
 	idx := NewMockSearchIndex(ctrl)
 	ri := NewMockPipelineIndex(ctrl)
 
-	gs.EXPECT().Branch().Return("machine/test")
 	ri.EXPECT().GCPipelineSessions("review", "machine/test", 5).Return(nil)
 	ri.EXPECT().CreatePipelineSession("review", "machine/test").Return(&store.PipelineSession{
 		ID: "sess-1", Branch: "machine/test", Status: "active",
@@ -25,15 +24,15 @@ func TestStartSession_NoDirtyFacts(t *testing.T) {
 
 	// No watermark → all facts dirty, but index returns empty.
 	ri.EXPECT().GetPipelineWatermark("review", "machine/test").Return("", nil)
-	idx.EXPECT().Search(store.SearchQuery{Limit: 100_000}).Return(nil, nil)
+	idx.EXPECT().Search(gomock.Any(), store.SearchQuery{Limit: 100_000}).Return(nil, nil)
 
 	// Complete session immediately.
 	ri.EXPECT().CompletePipelineSession("sess-1").Return(nil)
-	gs.EXPECT().HeadCommit().Return("abc123", nil)
+	gs.EXPECT().HeadCommit("machine/test").Return("abc123", nil)
 	ri.EXPECT().SetPipelineWatermark("review", "machine/test", "abc123").Return(nil)
 	ri.EXPECT().PipelineWorkItemStats("sess-1").Return(0, 0, nil)
 
-	r := NewReviewer(gs, idx, ri, NewMockEmbedder(ctrl), nil)
+	r := NewReviewer(gs, idx, ri, NewMockEmbedder(ctrl), nil, "machine/test")
 	result, err := r.StartSession()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -55,7 +54,6 @@ func TestStartSession_WatermarkAtHead_NoDirtyFacts(t *testing.T) {
 	idx := NewMockSearchIndex(ctrl)
 	ri := NewMockPipelineIndex(ctrl)
 
-	gs.EXPECT().Branch().Return("machine/test")
 	ri.EXPECT().GCPipelineSessions("review", "machine/test", 5).Return(nil)
 	ri.EXPECT().CreatePipelineSession("review", "machine/test").Return(&store.PipelineSession{
 		ID: "sess-wm", Branch: "machine/test", Status: "active",
@@ -65,15 +63,15 @@ func TestStartSession_WatermarkAtHead_NoDirtyFacts(t *testing.T) {
 	ri.EXPECT().GetPipelineWatermark("review", "machine/test").Return("head-hash", nil)
 
 	// DiffFiles returns no changes since watermark == HEAD.
-	gs.EXPECT().DiffFiles("head-hash").Return(nil, nil, nil, nil)
+	gs.EXPECT().DiffFiles("machine/test", "head-hash").Return(nil, nil, nil, nil)
 
 	// No dirty facts → session completes immediately.
 	ri.EXPECT().CompletePipelineSession("sess-wm").Return(nil)
-	gs.EXPECT().HeadCommit().Return("head-hash", nil)
+	gs.EXPECT().HeadCommit("machine/test").Return("head-hash", nil)
 	ri.EXPECT().SetPipelineWatermark("review", "machine/test", "head-hash").Return(nil)
 	ri.EXPECT().PipelineWorkItemStats("sess-wm").Return(0, 0, nil)
 
-	r := NewReviewer(gs, idx, ri, NewMockEmbedder(ctrl), nil)
+	r := NewReviewer(gs, idx, ri, NewMockEmbedder(ctrl), nil, "machine/test")
 	result, err := r.StartSession()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -89,7 +87,6 @@ func TestStartSession_WatermarkEmpty_AllFactsDirty(t *testing.T) {
 	idx := NewMockSearchIndex(ctrl)
 	ri := NewMockPipelineIndex(ctrl)
 
-	gs.EXPECT().Branch().Return("machine/test")
 	ri.EXPECT().GCPipelineSessions("review", "machine/test", 5).Return(nil)
 	ri.EXPECT().CreatePipelineSession("review", "machine/test").Return(&store.PipelineSession{
 		ID: "sess-2", Branch: "machine/test", Status: "active",
@@ -98,13 +95,13 @@ func TestStartSession_WatermarkEmpty_AllFactsDirty(t *testing.T) {
 	ri.EXPECT().GetPipelineWatermark("review", "machine/test").Return("", nil)
 
 	// No watermark → index returns all facts.
-	idx.EXPECT().Search(store.SearchQuery{Limit: 100_000}).Return([]store.SearchResult{
+	idx.EXPECT().Search(gomock.Any(), store.SearchQuery{Limit: 100_000}).Return([]store.SearchResult{
 		{FactWithBody: store.FactWithBody{FactRecord: store.FactRecord{Path: "kb/go/one.md", Title: "Fact one", Type: "observation", Domain: []string{"testing"}, Confidence: 0.8, Sources: 1}, Body: "Body one."}},
 		{FactWithBody: store.FactWithBody{FactRecord: store.FactRecord{Path: "kb/go/two.md", Title: "Fact two", Type: "observation", Domain: []string{"testing"}, Confidence: 0.8, Sources: 1}, Body: "Body two."}},
 	}, nil)
 
 	// ScopedCluster will search for neighbors.
-	idx.EXPECT().Search(gomock.Any()).Return(nil, nil).AnyTimes()
+	idx.EXPECT().Search(gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
 	// ClusterFacts fails → fallback to category grouping (both in kb/go → one cluster).
 	idx.EXPECT().ClusterFacts(1.0, 2).Return(store.ClusterResult{}, fmt.Errorf("no embeddings"))
 
@@ -129,7 +126,7 @@ func TestStartSession_WatermarkEmpty_AllFactsDirty(t *testing.T) {
 	}, nil)
 	ri.EXPECT().PipelineWorkItemStats("sess-2").Return(0, 2, nil)
 
-	r := NewReviewer(gs, idx, ri, NewMockEmbedder(ctrl), nil)
+	r := NewReviewer(gs, idx, ri, NewMockEmbedder(ctrl), nil, "machine/test")
 	result, err := r.StartSession()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -157,7 +154,6 @@ func TestStartSession_WithWatermark(t *testing.T) {
 	idx := NewMockSearchIndex(ctrl)
 	ri := NewMockPipelineIndex(ctrl)
 
-	gs.EXPECT().Branch().Return("machine/test")
 	ri.EXPECT().GCPipelineSessions("review", "machine/test", 5).Return(nil)
 	ri.EXPECT().CreatePipelineSession("review", "machine/test").Return(&store.PipelineSession{
 		ID: "sess-3", Branch: "machine/test", Status: "active",
@@ -166,15 +162,15 @@ func TestStartSession_WithWatermark(t *testing.T) {
 	ri.EXPECT().GetPipelineWatermark("review", "machine/test").Return("old-hash", nil)
 
 	// DiffFiles: only one.md was modified since watermark.
-	gs.EXPECT().DiffFiles("old-hash").Return(nil, []string{"kb/go/one.md"}, nil, nil)
+	gs.EXPECT().DiffFiles("machine/test", "old-hash").Return(nil, []string{"kb/go/one.md"}, nil, nil)
 
 	// Incremental: only reads the changed file.
 	fact1Content := factContent("Fact one", "Body one.")
-	gs.EXPECT().ReadFile("kb/go/one.md").Return(fact1Content, nil)
+	gs.EXPECT().ReadFile("machine/test", "kb/go/one.md").Return(fact1Content, nil)
 
 	// ScopedCluster: one seed (one.md), searches neighbors.
 	// Dedup also calls Search with MinSimilarity=0.92; return empty for those.
-	idx.EXPECT().Search(gomock.Any()).DoAndReturn(func(q store.SearchQuery) ([]store.SearchResult, error) {
+	idx.EXPECT().Search(gomock.Any(), gomock.Any()).DoAndReturn(func(branch string, q store.SearchQuery) ([]store.SearchResult, error) {
 		if q.MinSimilarity >= 0.9 {
 			return nil, nil // dedup pass: no near-duplicates
 		}
@@ -207,7 +203,7 @@ func TestStartSession_WithWatermark(t *testing.T) {
 	}, nil)
 	ri.EXPECT().PipelineWorkItemStats("sess-3").Return(0, 1, nil)
 
-	r := NewReviewer(gs, idx, ri, NewMockEmbedder(ctrl), nil)
+	r := NewReviewer(gs, idx, ri, NewMockEmbedder(ctrl), nil, "machine/test")
 	result, err := r.StartSession()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -246,8 +242,8 @@ func TestContinueSession_PruneResponse(t *testing.T) {
 	pruneResp := `{"decisions": [{"path": "kb/go/one.md", "action": "keep"}, {"path": "kb/go/two.md", "action": "retract"}]}`
 
 	// ApplyPruneDecisions: retract two.md.
-	gs.EXPECT().DeleteFile("kb/go/two.md", gomock.Any(), gomock.Any()).Return("c1", nil)
-	idx.EXPECT().Delete("kb/go/two.md").Return(nil)
+	gs.EXPECT().DeleteFile("machine/test", "kb/go/two.md", gomock.Any(), gomock.Any()).Return("c1", nil)
+	idx.EXPECT().Delete(gomock.Any(), "kb/go/two.md").Return(nil)
 
 
 	ri.EXPECT().SetPipelineWorkItemResponse(int64(1), pruneResp).Return(nil)
@@ -264,11 +260,11 @@ func TestContinueSession_PruneResponse(t *testing.T) {
 		ID: "sess-1", Branch: "machine/test", Status: "active",
 	}, nil)
 	ri.EXPECT().CompletePipelineSession("sess-1").Return(nil)
-	gs.EXPECT().HeadCommit().Return("new-hash", nil)
+	gs.EXPECT().HeadCommit("machine/test").Return("new-hash", nil)
 	ri.EXPECT().SetPipelineWatermark("review", "machine/test", "new-hash").Return(nil)
 	ri.EXPECT().PipelineWorkItemStats("sess-1").Return(1, 0, nil)
 
-	r := NewReviewer(gs, idx, ri, NewMockEmbedder(ctrl), nil)
+	r := NewReviewer(gs, idx, ri, NewMockEmbedder(ctrl), nil, "machine/test")
 	result, err := r.ContinueSession("sess-1", pruneResp)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -320,7 +316,7 @@ func TestContinueSession_ReturnsNextItem(t *testing.T) {
 	}, nil)
 	ri.EXPECT().PipelineWorkItemStats("sess-1").Return(1, 1, nil)
 
-	r := NewReviewer(gs, idx, ri, NewMockEmbedder(ctrl), nil)
+	r := NewReviewer(gs, idx, ri, NewMockEmbedder(ctrl), nil, "machine/test")
 	result, err := r.ContinueSession("sess-1", pruneResp)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -344,7 +340,7 @@ func TestContinueSession_InvalidSession(t *testing.T) {
 
 	ri.EXPECT().GetPipelineSession("bad-id").Return(nil, nil)
 
-	r := NewReviewer(gs, idx, ri, NewMockEmbedder(ctrl), nil)
+	r := NewReviewer(gs, idx, ri, NewMockEmbedder(ctrl), nil, "machine/test")
 	_, err := r.ContinueSession("bad-id", "{}")
 	if err == nil {
 		t.Fatal("expected error for invalid session")
@@ -361,7 +357,7 @@ func TestContinueSession_CompletedSession(t *testing.T) {
 		ID: "done-sess", Branch: "machine/test", Status: "completed",
 	}, nil)
 
-	r := NewReviewer(gs, idx, ri, NewMockEmbedder(ctrl), nil)
+	r := NewReviewer(gs, idx, ri, NewMockEmbedder(ctrl), nil, "machine/test")
 	_, err := r.ContinueSession("done-sess", "{}")
 	if err == nil {
 		t.Fatal("expected error for completed session")
@@ -389,7 +385,7 @@ func TestContinueSession_InvalidJSON(t *testing.T) {
 		Priority:  2,
 	}, nil)
 
-	r := NewReviewer(gs, idx, ri, NewMockEmbedder(ctrl), nil)
+	r := NewReviewer(gs, idx, ri, NewMockEmbedder(ctrl), nil, "machine/test")
 	_, err := r.ContinueSession("sess-1", "not valid json at all")
 	if err == nil {
 		t.Fatal("expected error for invalid JSON response")
@@ -421,18 +417,17 @@ func TestContinueSession_DistillResponse(t *testing.T) {
 	distillResp := `{"synthesize": [{"path": "kb/go/combined.md", "title": "Combined", "body": "Merged insight.", "type": "observation", "domain": ["go"], "confidence": 0.9, "entities": [], "refs": ["kb/go/one.md", "kb/go/two.md"]}], "retract": ["kb/go/one.md"]}`
 
 	// ApplyDistillDecisions: computeWeight reads local .md refs, then write synth (path gets UUID), retract one.md.
-	gs.EXPECT().ReadFile("kb/go/one.md").Return(factContent("Fact one", "Body one."), nil)
-	gs.EXPECT().ReadFile("kb/go/two.md").Return(factContent("Fact two", "Body two."), nil)
-	gs.EXPECT().WriteFile(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return("c1", "b1", nil)
-	idx.EXPECT().Upsert(gomock.Any()).Return(nil)
-	idx.EXPECT().GraphAddDerivedFrom(gomock.Any(), gomock.Any()).Return(nil)
+	gs.EXPECT().ReadFile("machine/test", "kb/go/one.md").Return(factContent("Fact one", "Body one."), nil)
+	gs.EXPECT().ReadFile("machine/test", "kb/go/two.md").Return(factContent("Fact two", "Body two."), nil)
+	gs.EXPECT().WriteFile(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return("c1", "b1", nil)
+	idx.EXPECT().Upsert(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil)
 
-	gs.EXPECT().DeleteFile("kb/go/one.md", gomock.Any(), gomock.Any()).Return("c2", nil)
-	idx.EXPECT().Delete("kb/go/one.md").Return(nil)
+	gs.EXPECT().DeleteFile("machine/test", "kb/go/one.md", gomock.Any(), gomock.Any()).Return("c2", nil)
+	idx.EXPECT().Delete(gomock.Any(), "kb/go/one.md").Return(nil)
 
 	// RAPTOR: ScopedCluster on the 1 written fact — searches neighbors, clusters.
 	// Single fact → filterSmallClusters removes it → no new work items.
-	idx.EXPECT().Search(gomock.Any()).Return(nil, nil).AnyTimes()
+	idx.EXPECT().Search(gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
 	idx.EXPECT().ClusterFacts(1.0, 2).Return(store.ClusterResult{}, fmt.Errorf("no embeddings"))
 
 	ri.EXPECT().SetPipelineWorkItemResponse(int64(2), distillResp).Return(nil)
@@ -448,11 +443,11 @@ func TestContinueSession_DistillResponse(t *testing.T) {
 		ID: "sess-1", Branch: "machine/test", Status: "active",
 	}, nil)
 	ri.EXPECT().CompletePipelineSession("sess-1").Return(nil)
-	gs.EXPECT().HeadCommit().Return("new-hash", nil)
+	gs.EXPECT().HeadCommit("machine/test").Return("new-hash", nil)
 	ri.EXPECT().SetPipelineWatermark("review", "machine/test", "new-hash").Return(nil)
 	ri.EXPECT().PipelineWorkItemStats("sess-1").Return(1, 0, nil)
 
-	r := NewReviewer(gs, idx, ri, NewMockEmbedder(ctrl), nil)
+	r := NewReviewer(gs, idx, ri, NewMockEmbedder(ctrl), nil, "machine/test")
 	result, err := r.ContinueSession("sess-1", distillResp)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -486,7 +481,7 @@ func TestContinueSession_ValidationError(t *testing.T) {
 	// Response references unknown path.
 	badResp := `{"decisions": [{"path": "kb/go/nonexistent.md", "action": "retract"}]}`
 
-	r := NewReviewer(gs, idx, ri, NewMockEmbedder(ctrl), nil)
+	r := NewReviewer(gs, idx, ri, NewMockEmbedder(ctrl), nil, "machine/test")
 	_, err := r.ContinueSession("sess-1", badResp)
 	if err == nil {
 		t.Fatal("expected error for validation failure")
@@ -500,7 +495,7 @@ func TestDirtyFacts_NoWatermark_UsesIndex(t *testing.T) {
 	ri := NewMockPipelineIndex(ctrl)
 
 	ri.EXPECT().GetPipelineWatermark("review", "machine/test").Return("", nil)
-	idx.EXPECT().Search(store.SearchQuery{Limit: 100_000}).Return([]store.SearchResult{
+	idx.EXPECT().Search(gomock.Any(), store.SearchQuery{Limit: 100_000}).Return([]store.SearchResult{
 		{FactWithBody: store.FactWithBody{
 			FactRecord: store.FactRecord{Path: "kb/go/one.md", Title: "Fact one", Type: "observation", Domain: []string{"go"}, Entities: []string{"Go"}, Confidence: 0.9, Sources: 2},
 			Body:       "Body one.",
@@ -511,7 +506,7 @@ func TestDirtyFacts_NoWatermark_UsesIndex(t *testing.T) {
 		}},
 	}, nil)
 
-	r := NewReviewer(gs, idx, ri, NewMockEmbedder(ctrl), nil)
+	r := NewReviewer(gs, idx, ri, NewMockEmbedder(ctrl), nil, "machine/test")
 	facts, err := r.dirtyFacts("machine/test")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -537,7 +532,7 @@ func TestDirtyFacts_Incremental_OnlyChangedFiles(t *testing.T) {
 	ri := NewMockPipelineIndex(ctrl)
 
 	ri.EXPECT().GetPipelineWatermark("review", "machine/test").Return("abc123", nil)
-	gs.EXPECT().DiffFiles("abc123").Return(
+	gs.EXPECT().DiffFiles("machine/test", "abc123").Return(
 		[]string{"kb/go/new.md"},           // added
 		[]string{"kb/go/changed.md"},       // modified
 		[]string{"kb/go/deleted.md"},       // deleted (not read)
@@ -546,10 +541,10 @@ func TestDirtyFacts_Incremental_OnlyChangedFiles(t *testing.T) {
 
 	newContent := factContent("New fact", "Brand new.")
 	changedContent := factContent("Changed fact", "Updated body.")
-	gs.EXPECT().ReadFile("kb/go/new.md").Return(newContent, nil)
-	gs.EXPECT().ReadFile("kb/go/changed.md").Return(changedContent, nil)
+	gs.EXPECT().ReadFile("machine/test", "kb/go/new.md").Return(newContent, nil)
+	gs.EXPECT().ReadFile("machine/test", "kb/go/changed.md").Return(changedContent, nil)
 
-	r := NewReviewer(gs, idx, ri, NewMockEmbedder(ctrl), nil)
+	r := NewReviewer(gs, idx, ri, NewMockEmbedder(ctrl), nil, "machine/test")
 	facts, err := r.dirtyFacts("machine/test")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -570,16 +565,16 @@ func TestDirtyFacts_Incremental_SkipsDeletedAndNonMD(t *testing.T) {
 	ri := NewMockPipelineIndex(ctrl)
 
 	ri.EXPECT().GetPipelineWatermark("review", "machine/test").Return("abc123", nil)
-	gs.EXPECT().DiffFiles("abc123").Return(
+	gs.EXPECT().DiffFiles("machine/test", "abc123").Return(
 		[]string{"kb/go/gone.md", "README.txt"}, // added: one .md (unreadable), one non-.md
 		nil, nil, nil,
 	)
 
 	// gone.md returns error (deleted between diff and read).
-	gs.EXPECT().ReadFile("kb/go/gone.md").Return("", fmt.Errorf("not found"))
+	gs.EXPECT().ReadFile("machine/test", "kb/go/gone.md").Return("", fmt.Errorf("not found"))
 	// README.txt should not be read at all (not .md).
 
-	r := NewReviewer(gs, idx, ri, NewMockEmbedder(ctrl), nil)
+	r := NewReviewer(gs, idx, ri, NewMockEmbedder(ctrl), nil, "machine/test")
 	facts, err := r.dirtyFacts("machine/test")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -622,18 +617,17 @@ func TestContinueSession_RAPTOR_EnqueuesDeeper(t *testing.T) {
 		`], "retract": ["kb/go/three.md"]}`
 
 	// ApplyDistillDecisions: computeWeight reads local .md refs per fact, then write 2 synth facts, retract one.
-	gs.EXPECT().ReadFile("kb/go/one.md").Return(factContent("Fact one", "Body one."), nil)
-	gs.EXPECT().ReadFile("kb/go/two.md").Return(factContent("Fact two", "Body two."), nil)
-	gs.EXPECT().WriteFile(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return("c1", "b1", nil).Times(2)
-	idx.EXPECT().Upsert(gomock.Any()).Return(nil).Times(2)
-	idx.EXPECT().GraphAddDerivedFrom(gomock.Any(), gomock.Any()).Return(nil).Times(2)
+	gs.EXPECT().ReadFile("machine/test", "kb/go/one.md").Return(factContent("Fact one", "Body one."), nil)
+	gs.EXPECT().ReadFile("machine/test", "kb/go/two.md").Return(factContent("Fact two", "Body two."), nil)
+	gs.EXPECT().WriteFile(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return("c1", "b1", nil).Times(2)
+	idx.EXPECT().Upsert(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).Times(2)
 
-	gs.EXPECT().DeleteFile("kb/go/three.md", gomock.Any(), gomock.Any()).Return("c2", nil)
-	idx.EXPECT().Delete("kb/go/three.md").Return(nil)
+	gs.EXPECT().DeleteFile("machine/test", "kb/go/three.md", gomock.Any(), gomock.Any()).Return("c2", nil)
+	idx.EXPECT().Delete(gomock.Any(), "kb/go/three.md").Return(nil)
 
 	// RAPTOR: ScopedCluster on the 2 written facts.
 	// Search returns neighbors so cluster has >1 fact.
-	idx.EXPECT().Search(gomock.Any()).Return(nil, nil).AnyTimes()
+	idx.EXPECT().Search(gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
 	// ClusterFacts fails → fallback to category grouping.
 	// Both written facts share kb/go → one cluster of 2 facts.
 	idx.EXPECT().ClusterFacts(1.0, 2).Return(store.ClusterResult{}, fmt.Errorf("no embeddings"))
@@ -659,7 +653,7 @@ func TestContinueSession_RAPTOR_EnqueuesDeeper(t *testing.T) {
 	}, nil)
 	ri.EXPECT().PipelineWorkItemStats("sess-r").Return(1, 1, nil)
 
-	r := NewReviewer(gs, idx, ri, NewMockEmbedder(ctrl), nil)
+	r := NewReviewer(gs, idx, ri, NewMockEmbedder(ctrl), nil, "machine/test")
 	result, err := r.ContinueSession("sess-r", distillResp)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -719,8 +713,8 @@ func TestContinueSession_RAPTOR_StopsAtMaxDepth(t *testing.T) {
 	distillResp := `{"synthesize": [{"path": "kb/go/deep.md", "title": "Deep", "body": "Deep synthesis.", "type": "insight", "domain": ["go"], "confidence": 0.95, "entities": [], "refs": []}], "retract": []}`
 
 	// ApplyDistillDecisions writes the synth fact.
-	gs.EXPECT().WriteFile(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return("c1", "b1", nil)
-	idx.EXPECT().Upsert(gomock.Any()).Return(nil)
+	gs.EXPECT().WriteFile(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return("c1", "b1", nil)
+	idx.EXPECT().Upsert(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil)
 
 	// No InsertWorkItem expected — max depth reached.
 
@@ -737,11 +731,11 @@ func TestContinueSession_RAPTOR_StopsAtMaxDepth(t *testing.T) {
 		ID: "sess-max", Branch: "machine/test", Status: "active",
 	}, nil)
 	ri.EXPECT().CompletePipelineSession("sess-max").Return(nil)
-	gs.EXPECT().HeadCommit().Return("final-hash", nil)
+	gs.EXPECT().HeadCommit("machine/test").Return("final-hash", nil)
 	ri.EXPECT().SetPipelineWatermark("review", "machine/test", "final-hash").Return(nil)
 	ri.EXPECT().PipelineWorkItemStats("sess-max").Return(1, 0, nil)
 
-	r := NewReviewer(gs, idx, ri, NewMockEmbedder(ctrl), nil)
+	r := NewReviewer(gs, idx, ri, NewMockEmbedder(ctrl), nil, "machine/test")
 	result, err := r.ContinueSession("sess-max", distillResp)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -759,7 +753,6 @@ func TestRunAll_ProcessesAllWorkItems(t *testing.T) {
 	adapter := NewMockLLMAdapter(ctrl)
 
 	// --- StartSession setup ---
-	gs.EXPECT().Branch().Return("machine/test")
 	ri.EXPECT().GCPipelineSessions("review", "machine/test", 5).Return(nil)
 	ri.EXPECT().CreatePipelineSession("review", "machine/test").Return(&store.PipelineSession{
 		ID: "sess-run", Branch: "machine/test", Status: "active",
@@ -767,13 +760,13 @@ func TestRunAll_ProcessesAllWorkItems(t *testing.T) {
 
 	// No watermark → all facts dirty via index.
 	ri.EXPECT().GetPipelineWatermark("review", "machine/test").Return("", nil)
-	idx.EXPECT().Search(store.SearchQuery{Limit: 100_000}).Return([]store.SearchResult{
+	idx.EXPECT().Search(gomock.Any(), store.SearchQuery{Limit: 100_000}).Return([]store.SearchResult{
 		{FactWithBody: store.FactWithBody{FactRecord: store.FactRecord{Path: "kb/go/one.md", Title: "Fact one", Type: "observation", Domain: []string{"go"}, Confidence: 0.8, Sources: 1}, Body: "Body one."}},
 		{FactWithBody: store.FactWithBody{FactRecord: store.FactRecord{Path: "kb/go/two.md", Title: "Fact two", Type: "observation", Domain: []string{"go"}, Confidence: 0.8, Sources: 1}, Body: "Body two."}},
 	}, nil)
 
 	// ScopedCluster: search + cluster.
-	idx.EXPECT().Search(gomock.Any()).Return(nil, nil).AnyTimes()
+	idx.EXPECT().Search(gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
 	idx.EXPECT().ClusterFacts(1.0, 2).Return(store.ClusterResult{}, fmt.Errorf("no embeddings")).AnyTimes()
 
 	// Insert prune + distill work items (2 seeds, 1 cluster of 2).
@@ -833,7 +826,7 @@ func TestRunAll_ProcessesAllWorkItems(t *testing.T) {
 	ri.EXPECT().NextPipelineWorkItem("sess-run").Return(nil, nil)
 	ri.EXPECT().GetPipelineWatermark("review", "machine/test").Return("", nil)
 	ri.EXPECT().CompletePipelineSession("sess-run").Return(nil)
-	gs.EXPECT().HeadCommit().Return("final-hash", nil)
+	gs.EXPECT().HeadCommit("machine/test").Return("final-hash", nil)
 	ri.EXPECT().SetPipelineWatermark("review", "machine/test", "final-hash").Return(nil)
 	ri.EXPECT().PipelineWorkItemStats("sess-run").Return(2, 0, nil)
 
@@ -843,7 +836,7 @@ func TestRunAll_ProcessesAllWorkItems(t *testing.T) {
 		llm.CompletionOptions{ForceJSON: true}, nil,
 	).Return(distillResp, nil)
 
-	r := NewReviewer(gs, idx, ri, NewMockEmbedder(ctrl), nil)
+	r := NewReviewer(gs, idx, ri, NewMockEmbedder(ctrl), nil, "machine/test")
 	err := r.RunAll(context.Background(), adapter)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -857,7 +850,6 @@ func TestRunAll_NoDirtyFacts(t *testing.T) {
 	ri := NewMockPipelineIndex(ctrl)
 	adapter := NewMockLLMAdapter(ctrl)
 
-	gs.EXPECT().Branch().Return("machine/test")
 	ri.EXPECT().GCPipelineSessions("review", "machine/test", 5).Return(nil)
 	ri.EXPECT().CreatePipelineSession("review", "machine/test").Return(&store.PipelineSession{
 		ID: "sess-empty", Branch: "machine/test", Status: "active",
@@ -865,17 +857,17 @@ func TestRunAll_NoDirtyFacts(t *testing.T) {
 
 	// No watermark, index returns empty → no dirty facts.
 	ri.EXPECT().GetPipelineWatermark("review", "machine/test").Return("", nil)
-	idx.EXPECT().Search(store.SearchQuery{Limit: 100_000}).Return(nil, nil)
+	idx.EXPECT().Search(gomock.Any(), store.SearchQuery{Limit: 100_000}).Return(nil, nil)
 
 	// Complete session immediately.
 	ri.EXPECT().CompletePipelineSession("sess-empty").Return(nil)
-	gs.EXPECT().HeadCommit().Return("abc123", nil)
+	gs.EXPECT().HeadCommit("machine/test").Return("abc123", nil)
 	ri.EXPECT().SetPipelineWatermark("review", "machine/test", "abc123").Return(nil)
 	ri.EXPECT().PipelineWorkItemStats("sess-empty").Return(0, 0, nil)
 
 	// adapter.Complete should NOT be called at all.
 
-	r := NewReviewer(gs, idx, ri, NewMockEmbedder(ctrl), nil)
+	r := NewReviewer(gs, idx, ri, NewMockEmbedder(ctrl), nil, "machine/test")
 	err := r.RunAll(context.Background(), adapter)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -912,18 +904,18 @@ func TestReflectStepNotCreatedWhenNoHypotheses(t *testing.T) {
 	ri.EXPECT().NextPipelineWorkItem("sess-noh").Return(nil, nil)
 	// findHypothesisTransitions: watermark exists, DiffFiles returns only observation deletes.
 	ri.EXPECT().GetPipelineWatermark("review", "machine/test").Return("old-hash", nil)
-	gs.EXPECT().DiffFiles("old-hash").Return(nil, nil, []string{"kb/go/obs.md"}, nil)
+	gs.EXPECT().DiffFiles("machine/test", "old-hash").Return(nil, nil, []string{"kb/go/obs.md"}, nil)
 	// Deleted file was an observation, not a hypothesis.
-	gs.EXPECT().ReadFileAtCommit("kb/go/obs.md", "old-hash").Return(
+	gs.EXPECT().ReadFileAtCommit("machine/test", "kb/go/obs.md", "old-hash").Return(
 		"---\ntype: observation\ndomain: [go]\nconfidence: 0.8\nsources: 1\nentities: []\nrefs: []\n---\n# Observation\n\nJust an observation.\n", nil)
 
 	// No reflect item should be inserted — session completes directly.
 	ri.EXPECT().CompletePipelineSession("sess-noh").Return(nil)
-	gs.EXPECT().HeadCommit().Return("new-hash", nil)
+	gs.EXPECT().HeadCommit("machine/test").Return("new-hash", nil)
 	ri.EXPECT().SetPipelineWatermark("review", "machine/test", "new-hash").Return(nil)
 	ri.EXPECT().PipelineWorkItemStats("sess-noh").Return(1, 0, nil)
 
-	r := NewReviewer(gs, idx, ri, NewMockEmbedder(ctrl), nil)
+	r := NewReviewer(gs, idx, ri, NewMockEmbedder(ctrl), nil, "machine/test")
 	result, err := r.ContinueSession("sess-noh", pruneResp)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -958,8 +950,8 @@ func TestReflectStepCreatedWhenHypothesesRetracted(t *testing.T) {
 	pruneResp := `{"decisions": [{"path": "kb/go/hyp.md", "action": "retract"}]}`
 
 	// ApplyPruneDecisions: retract hyp.md.
-	gs.EXPECT().DeleteFile("kb/go/hyp.md", gomock.Any(), gomock.Any()).Return("c1", nil)
-	idx.EXPECT().Delete("kb/go/hyp.md").Return(nil)
+	gs.EXPECT().DeleteFile("machine/test", "kb/go/hyp.md", gomock.Any(), gomock.Any()).Return("c1", nil)
+	idx.EXPECT().Delete(gomock.Any(), "kb/go/hyp.md").Return(nil)
 
 	ri.EXPECT().SetPipelineWorkItemResponse(int64(1), pruneResp).Return(nil)
 
@@ -967,9 +959,9 @@ func TestReflectStepCreatedWhenHypothesesRetracted(t *testing.T) {
 	ri.EXPECT().NextPipelineWorkItem("sess-hyp").Return(nil, nil)
 	// findHypothesisTransitions: watermark exists, DiffFiles shows hyp.md deleted.
 	ri.EXPECT().GetPipelineWatermark("review", "machine/test").Return("old-hash", nil)
-	gs.EXPECT().DiffFiles("old-hash").Return(nil, nil, []string{"kb/go/hyp.md"}, nil)
+	gs.EXPECT().DiffFiles("machine/test", "old-hash").Return(nil, nil, []string{"kb/go/hyp.md"}, nil)
 	// Read the old version — it was a hypothesis.
-	gs.EXPECT().ReadFileAtCommit("kb/go/hyp.md", "old-hash").Return(
+	gs.EXPECT().ReadFileAtCommit("machine/test", "kb/go/hyp.md", "old-hash").Return(
 		"---\ntype: hypothesis\ndomain: [go]\nconfidence: 0.6\nsources: 1\nentities: []\nrefs: []\n---\n# Hypothesis\n\nA hypothesis.\n", nil)
 
 	// Reflect item should be enqueued.
@@ -990,7 +982,7 @@ func TestReflectStepCreatedWhenHypothesesRetracted(t *testing.T) {
 	}, nil)
 	ri.EXPECT().PipelineWorkItemStats("sess-hyp").Return(1, 1, nil)
 
-	r := NewReviewer(gs, idx, ri, NewMockEmbedder(ctrl), nil)
+	r := NewReviewer(gs, idx, ri, NewMockEmbedder(ctrl), nil, "machine/test")
 	result, err := r.ContinueSession("sess-hyp", pruneResp)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -1046,12 +1038,12 @@ func TestReflectStepCreatedWhenHypothesisPromoted(t *testing.T) {
 	ri.EXPECT().NextPipelineWorkItem("sess-prom").Return(nil, nil)
 	// findHypothesisTransitions: watermark exists, DiffFiles shows hyp.md modified.
 	ri.EXPECT().GetPipelineWatermark("review", "machine/test").Return("old-hash", nil)
-	gs.EXPECT().DiffFiles("old-hash").Return(nil, []string{"kb/go/hyp.md"}, nil, nil)
+	gs.EXPECT().DiffFiles("machine/test", "old-hash").Return(nil, []string{"kb/go/hyp.md"}, nil, nil)
 	// Old version was hypothesis.
-	gs.EXPECT().ReadFileAtCommit("kb/go/hyp.md", "old-hash").Return(
+	gs.EXPECT().ReadFileAtCommit("machine/test", "kb/go/hyp.md", "old-hash").Return(
 		"---\ntype: hypothesis\ndomain: [go]\nconfidence: 0.6\nsources: 1\nentities: []\nrefs: []\n---\n# Hypothesis\n\nWas a hypothesis.\n", nil)
 	// New version is observation (promoted).
-	gs.EXPECT().ReadFile("kb/go/hyp.md").Return(
+	gs.EXPECT().ReadFile("machine/test", "kb/go/hyp.md").Return(
 		"---\ntype: observation\ndomain: [go]\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# Hypothesis\n\nNow an observation.\n", nil)
 
 	// Reflect item should be enqueued.
@@ -1073,7 +1065,7 @@ func TestReflectStepCreatedWhenHypothesisPromoted(t *testing.T) {
 	}, nil)
 	ri.EXPECT().PipelineWorkItemStats("sess-prom").Return(1, 1, nil)
 
-	r := NewReviewer(gs, idx, ri, NewMockEmbedder(ctrl), nil)
+	r := NewReviewer(gs, idx, ri, NewMockEmbedder(ctrl), nil, "machine/test")
 	result, err := r.ContinueSession("sess-prom", pruneResp)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -1118,11 +1110,11 @@ func TestContinueSession_ReflectResponseCompletesSession(t *testing.T) {
 	ri.EXPECT().GetPipelineWatermark("review", "machine/test").Return("", nil)
 	// completeSession.
 	ri.EXPECT().CompletePipelineSession("sess-ref").Return(nil)
-	gs.EXPECT().HeadCommit().Return("final-hash", nil)
+	gs.EXPECT().HeadCommit("machine/test").Return("final-hash", nil)
 	ri.EXPECT().SetPipelineWatermark("review", "machine/test", "final-hash").Return(nil)
 	ri.EXPECT().PipelineWorkItemStats("sess-ref").Return(1, 0, nil)
 
-	r := NewReviewer(gs, idx, ri, NewMockEmbedder(ctrl), nil)
+	r := NewReviewer(gs, idx, ri, NewMockEmbedder(ctrl), nil, "machine/test")
 	result, err := r.ContinueSession("sess-ref", reflectResp)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -1142,15 +1134,15 @@ func TestFindHypothesisTransitions_ConfidenceUpdate(t *testing.T) {
 		ID: "sess-conf", Branch: "machine/test", Status: "active",
 	}, nil)
 	ri.EXPECT().GetPipelineWatermark("review", "machine/test").Return("old-hash", nil)
-	gs.EXPECT().DiffFiles("old-hash").Return(nil, []string{"kb/go/hyp.md"}, nil, nil)
+	gs.EXPECT().DiffFiles("machine/test", "old-hash").Return(nil, []string{"kb/go/hyp.md"}, nil, nil)
 	// Old version: hypothesis with confidence 0.5.
-	gs.EXPECT().ReadFileAtCommit("kb/go/hyp.md", "old-hash").Return(
+	gs.EXPECT().ReadFileAtCommit("machine/test", "kb/go/hyp.md", "old-hash").Return(
 		"---\ntype: hypothesis\ndomain: [go]\nconfidence: 0.5\nsources: 1\nentities: []\nrefs: []\n---\n# Hyp\n\nBody.\n", nil)
 	// New version: still hypothesis but confidence changed to 0.8.
-	gs.EXPECT().ReadFile("kb/go/hyp.md").Return(
+	gs.EXPECT().ReadFile("machine/test", "kb/go/hyp.md").Return(
 		"---\ntype: hypothesis\ndomain: [go]\nconfidence: 0.8\nsources: 1\nentities: []\nrefs: []\n---\n# Hyp\n\nBody.\n", nil)
 
-	r := NewReviewer(gs, idx, ri, NewMockEmbedder(ctrl), nil)
+	r := NewReviewer(gs, idx, ri, NewMockEmbedder(ctrl), nil, "machine/test")
 	transitions, err := r.findHypothesisTransitions("sess-conf")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -1176,9 +1168,9 @@ func TestFindHypothesisTransitions_DiffFilesError(t *testing.T) {
 		ID: "sess-diff-err", Branch: "machine/test", Status: "active",
 	}, nil)
 	ri.EXPECT().GetPipelineWatermark("review", "machine/test").Return("old-hash", nil)
-	gs.EXPECT().DiffFiles("old-hash").Return(nil, nil, nil, fmt.Errorf("git diff failed"))
+	gs.EXPECT().DiffFiles("machine/test", "old-hash").Return(nil, nil, nil, fmt.Errorf("git diff failed"))
 
-	r := NewReviewer(gs, idx, ri, NewMockEmbedder(ctrl), nil)
+	r := NewReviewer(gs, idx, ri, NewMockEmbedder(ctrl), nil, "machine/test")
 	_, err := r.findHypothesisTransitions("sess-diff-err")
 	if err == nil {
 		t.Fatal("expected error when DiffFiles fails")
@@ -1197,7 +1189,7 @@ func TestFindHypothesisTransitions_EmptyWatermark(t *testing.T) {
 	// Empty watermark → first run, no previous session to compare against.
 	ri.EXPECT().GetPipelineWatermark("review", "machine/test").Return("", nil)
 
-	r := NewReviewer(gs, idx, ri, NewMockEmbedder(ctrl), nil)
+	r := NewReviewer(gs, idx, ri, NewMockEmbedder(ctrl), nil, "machine/test")
 	transitions, err := r.findHypothesisTransitions("sess-no-wm")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -1217,12 +1209,12 @@ func TestFindHypothesisTransitions_ModifiedNonHypothesisSkipped(t *testing.T) {
 		ID: "sess-nonhyp", Branch: "machine/test", Status: "active",
 	}, nil)
 	ri.EXPECT().GetPipelineWatermark("review", "machine/test").Return("old-hash", nil)
-	gs.EXPECT().DiffFiles("old-hash").Return(nil, []string{"kb/go/obs.md"}, nil, nil)
+	gs.EXPECT().DiffFiles("machine/test", "old-hash").Return(nil, []string{"kb/go/obs.md"}, nil, nil)
 	// Old version was an observation, not a hypothesis → should be skipped.
-	gs.EXPECT().ReadFileAtCommit("kb/go/obs.md", "old-hash").Return(
+	gs.EXPECT().ReadFileAtCommit("machine/test", "kb/go/obs.md", "old-hash").Return(
 		"---\ntype: observation\ndomain: [go]\nconfidence: 0.8\nsources: 1\nentities: []\nrefs: []\n---\n# Observation\n\nJust an observation.\n", nil)
 
-	r := NewReviewer(gs, idx, ri, NewMockEmbedder(ctrl), nil)
+	r := NewReviewer(gs, idx, ri, NewMockEmbedder(ctrl), nil, "machine/test")
 	transitions, err := r.findHypothesisTransitions("sess-nonhyp")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)

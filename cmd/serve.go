@@ -118,7 +118,7 @@ func serveCmd() *cobra.Command {
 			}
 
 			// 5. Create chi router.
-			router := web.NewRouter(m, gitHandler, embeddingsEnabled, cfg.OntologyRoot)
+			router := web.NewRouter(m, gitHandler, embeddingsEnabled, cfg.OntologyRoot, agentBranch)
 
 			// 6. Startup summary.
 			pubKey := strings.TrimSpace(string(ssh.MarshalAuthorizedKey(signer.PublicKey())))

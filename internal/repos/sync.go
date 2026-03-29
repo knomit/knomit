@@ -15,7 +15,7 @@ import (
 // First sync fires immediately, then every remote.Interval seconds.
 // The interval is re-read from the database on each tick so that changes
 // made via PUT /api/v1/{repo}/origin take effect without a restart.
-func runSyncLoop(ctx context.Context, wg *sync.WaitGroup, gs *git.Store, svc *store.Service, hub *TaskHub, remote *store.Remote, repo string) {
+func runSyncLoop(ctx context.Context, wg *sync.WaitGroup, gs *git.Store, svc *store.Service, hub *TaskHub, remote *store.Remote, repo, agentBranch string) {
 	defer wg.Done()
 
 	interval := time.Duration(remote.Interval) * time.Second
@@ -26,7 +26,7 @@ func runSyncLoop(ctx context.Context, wg *sync.WaitGroup, gs *git.Store, svc *st
 	lg.Info().Dur("interval", interval).Msg("sync loop started")
 
 	doSync := func() {
-		result, err := gs.Sync(remote.Branch)
+		result, err := gs.Sync(agentBranch, remote.Branch)
 		if err != nil {
 			errMsg := err.Error()
 			_ = svc.UpdateRemoteStatus(remote.Name, "error", &errMsg)
@@ -71,7 +71,7 @@ func runSyncLoop(ctx context.Context, wg *sync.WaitGroup, gs *git.Store, svc *st
 // runPushLoop pushes the agent branch to origin on a fixed interval.
 // The interval is re-read from the database on each tick so that changes
 // made via PUT /api/v1/{repo}/origin take effect without a restart.
-func runPushLoop(ctx context.Context, wg *sync.WaitGroup, gs *git.Store, svc *store.Service, hub *TaskHub, remote *store.Remote, repo string) {
+func runPushLoop(ctx context.Context, wg *sync.WaitGroup, gs *git.Store, svc *store.Service, hub *TaskHub, remote *store.Remote, repo, agentBranch string) {
 	defer wg.Done()
 
 	interval := time.Duration(remote.PushInterval) * time.Second
@@ -82,7 +82,7 @@ func runPushLoop(ctx context.Context, wg *sync.WaitGroup, gs *git.Store, svc *st
 	lg.Info().Dur("interval", interval).Msg("push loop started")
 
 	doPush := func() {
-		result, err := gs.Push()
+		result, err := gs.Push(agentBranch)
 		if err != nil {
 			errMsg := err.Error()
 			_ = svc.UpdateRemotePushStatus(remote.Name, "error", &errMsg)
@@ -93,7 +93,7 @@ func runPushLoop(ctx context.Context, wg *sync.WaitGroup, gs *git.Store, svc *st
 		_ = svc.UpdateRemotePushStatus(remote.Name, "ok", nil)
 		if result.Pushed {
 			hub.BroadcastPushOK(remote.Name)
-			lg.Info().Str("branch", gs.Branch()).Msg("push: pushed changes")
+			lg.Info().Str("branch", agentBranch).Msg("push: pushed changes")
 		} else {
 			lg.Debug().Msg("push: up to date")
 		}

@@ -26,7 +26,6 @@
 package web
 
 import (
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -58,17 +57,21 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 // When the path parameter is empty, it defaults to ontologyRoot — the
 // configured knowledge-base root — so the UI lands on a meaningful
 // starting directory rather than the repository top level.
-func handleBrowse(ontologyRoot string) http.HandlerFunc {
+func handleBrowse(ontologyRoot, agentBranch string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
-		ri.RLock()
-		defer ri.RUnlock()
+		var gs repos.GitStore
+		var idx repos.SearchIndex
+		ri.WithRead(func(d repos.StoreDeps) {
+			gs = d.GS
+			idx = d.Idx
+		})
 		path := r.URL.Query().Get("path")
 		if path == "" {
 			path = ontologyRoot
 		}
 
-		entries, err := ri.GS.ListDir(path)
+		entries, err := gs.ListDir(agentBranch, path)
 		if err != nil {
 			// Empty repo or missing directory — return empty list, not an error.
 			log.Debug().Err(err).Str("path", path).Msg("browse: directory not found, returning empty")
@@ -89,7 +92,7 @@ func handleBrowse(ontologyRoot string) http.HandlerFunc {
 		// Batch-fetch epistemic types and titles for fact files from the index.
 		typeByPath := map[string]string{}
 		titleByPath := map[string]string{}
-		if ri.Idx != nil {
+		if idx != nil {
 			var factPaths []string
 			for _, e := range entries {
 				if !e.IsDir {
@@ -98,7 +101,7 @@ func handleBrowse(ontologyRoot string) http.HandlerFunc {
 			}
 			if len(factPaths) > 0 {
 				for _, fp := range factPaths {
-					if fb, err := ri.Idx.GetByPath(fp); err == nil && fb != nil {
+					if fb, err := idx.GetByPath(agentBranch, fp); err == nil && fb != nil {
 						typeByPath[fp] = fb.Type
 						titleByPath[fp] = fb.Title
 					}
@@ -124,11 +127,15 @@ func handleBrowse(ontologyRoot string) http.HandlerFunc {
 }
 
 // handleFact handles GET /api/v1/{repo}/fact?path=<path>&commit=<hash>
-func handleFact() http.HandlerFunc {
+func handleFact(agentBranch string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
-		ri.RLock()
-		defer ri.RUnlock()
+		var gs repos.GitStore
+		var svc *store.Service
+		ri.WithRead(func(d repos.StoreDeps) {
+			gs = d.GS
+			svc = d.Svc
+		})
 		path := r.URL.Query().Get("path")
 		if path == "" {
 			writeError(w, http.StatusBadRequest, "path query parameter is required")
@@ -141,30 +148,24 @@ func handleFact() http.HandlerFunc {
 		var fromCommit string
 		var err error
 		if commitHash != "" {
-			content, err = ri.GS.ReadFileAtCommit(path, commitHash)
+			content, err = gs.ReadFileAtCommit(agentBranch, path, commitHash)
 			if err != nil {
 				// File may have been deleted in this commit (e.g. retract).
 				// Fall back to the last commit where the file existed.
-				content, fromCommit, err = ri.GS.ReadFileLastCommit(path, commitHash)
+				content, fromCommit, err = gs.ReadFileLastCommit(agentBranch, path, commitHash)
 			} else {
 				fromCommit = commitHash
 			}
-			if err != nil && ri.Svc != nil {
-				// Commit may be invalid or file never on that branch.
-				// Fall back to the most recent commit_log entry for this path.
-				var lastHash string
-				if qerr := ri.Svc.DB().QueryRowContext(r.Context(),
-					`SELECT commit_hash FROM commit_log WHERE path = ? AND action != 'deleted' ORDER BY rowid DESC LIMIT 1`,
-					path,
-				).Scan(&lastHash); qerr == nil && lastHash != "" {
-					content, err = ri.GS.ReadFileAtCommit(path, lastHash)
+			if err != nil && svc != nil {
+				if lastHash, ok := svc.Index().LastCommitForPath(path); ok {
+					content, err = gs.ReadFileAtCommit(agentBranch, path, lastHash)
 					if err == nil {
 						fromCommit = lastHash
 					}
 				}
 			}
 		} else {
-			content, err = ri.GS.ReadFile(path)
+			content, err = gs.ReadFile(agentBranch, path)
 		}
 		if err != nil {
 			log.Debug().Err(err).Str("path", path).Msg("fact not found")
@@ -210,8 +211,8 @@ func handleFact() http.HandlerFunc {
 		}
 
 		// Browsing mode: enrich with commit hash and date from the store index.
-		if commitHash == "" && ri.Svc != nil {
-			if rec, lerr := ri.Svc.Index().GetByPath(path); lerr == nil && rec != nil && rec.CommitHash != "" {
+		if commitHash == "" && svc != nil {
+			if rec, lerr := svc.Index().GetByPath(agentBranch, path); lerr == nil && rec != nil && rec.CommitHash != "" {
 				resp := map[string]any{
 					"path":        fact.Path(),
 					"title":       fact.Title,
@@ -224,12 +225,8 @@ func handleFact() http.HandlerFunc {
 					"refs":        fact.Refs,
 					"commit_hash": rec.CommitHash,
 				}
-				var ts sql.NullInt64
-				if qerr := ri.Svc.DB().QueryRowContext(r.Context(),
-					`SELECT committed_at FROM commit_log WHERE commit_hash = ? LIMIT 1`,
-					rec.CommitHash,
-				).Scan(&ts); qerr == nil && ts.Valid {
-					resp["commit_date"] = time.Unix(ts.Int64, 0).UTC().Format(time.RFC3339)
+				if ts, ok := svc.Index().CommitTimestamp(rec.CommitHash); ok {
+					resp["commit_date"] = time.Unix(ts, 0).UTC().Format(time.RFC3339)
 				}
 				writeJSON(w, http.StatusOK, resp)
 				return
@@ -242,11 +239,11 @@ func handleFact() http.HandlerFunc {
 // handleFactWrite handles PUT /api/v1/{repo}/fact — writes raw fact file content.
 // Request body: JSON {"path": "...", "content": "..."}
 // Response: the re-parsed fact JSON (or parse error if content is still invalid).
-func handleFactWrite() http.HandlerFunc {
+func handleFactWrite(agentBranch string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
-		ri.RLock()
-		defer ri.RUnlock()
+		var gs repos.GitStore
+		ri.WithRead(func(d repos.StoreDeps) { gs = d.GS })
 
 		var req struct {
 			Path    string `json:"path"`
@@ -262,7 +259,7 @@ func handleFactWrite() http.HandlerFunc {
 		}
 
 		msg := "edit: update " + req.Path + " via UI"
-		if _, _, err := ri.GS.WriteFile(req.Path, req.Content, msg, "update"); err != nil {
+		if _, _, err := gs.WriteFile(agentBranch, req.Path, req.Content, msg, "update"); err != nil {
 			writeError(w, http.StatusInternalServerError, fmt.Sprintf("write failed: %v", err))
 			return
 		}
@@ -284,11 +281,11 @@ func handleFactWrite() http.HandlerFunc {
 
 // handleFactRetract handles DELETE /api/v1/{repo}/fact?path=<path>.
 // Deletes the fact file and commits with operation "retract".
-func handleFactRetract() http.HandlerFunc {
+func handleFactRetract(agentBranch string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
-		ri.RLock()
-		defer ri.RUnlock()
+		var gs repos.GitStore
+		ri.WithRead(func(d repos.StoreDeps) { gs = d.GS })
 
 		path := r.URL.Query().Get("path")
 		if path == "" {
@@ -297,7 +294,7 @@ func handleFactRetract() http.HandlerFunc {
 		}
 
 		msg := "manual-review: retract " + path
-		commitHash, err := ri.GS.DeleteFile(path, msg, "retract")
+		commitHash, err := gs.DeleteFile(agentBranch, path, msg, "retract")
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, fmt.Sprintf("retract failed: %v", err))
 			return
@@ -314,9 +311,10 @@ func handleFactRetract() http.HandlerFunc {
 func handleSearch() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
-		ri.RLock()
-		defer ri.RUnlock()
-		if ri.Idx == nil {
+		branch := ri.Branch()
+		var idx repos.SearchIndex
+		ri.WithRead(func(d repos.StoreDeps) { idx = d.Idx })
+		if idx == nil {
 			writeError(w, http.StatusBadRequest, "search index not available")
 			return
 		}
@@ -431,7 +429,7 @@ func handleSearch() http.HandlerFunc {
 
 		log.Debug().Str("q", text).Strs("entities", entities).Strs("domain", domain).Int("limit", limit).Msg("search")
 
-		results, err := ri.Idx.Search(store.SearchQuery{
+		results, err := idx.Search(branch, store.SearchQuery{
 			Text:          text,
 			Entities:      entities,
 			Domain:        domain,
@@ -462,11 +460,11 @@ func handleSearch() http.HandlerFunc {
 }
 
 // handleHistoryPaginated handles GET /api/v1/{repo}/history?path=<path>&limit=50&after=<cursor>
-func handleHistoryPaginated() http.HandlerFunc {
+func handleHistoryPaginated(agentBranch string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
-		ri.RLock()
-		defer ri.RUnlock()
+		var gs repos.GitStore
+		ri.WithRead(func(d repos.StoreDeps) { gs = d.GS })
 		path := r.URL.Query().Get("path")
 
 		limit := 50
@@ -483,7 +481,7 @@ func handleHistoryPaginated() http.HandlerFunc {
 		from := r.URL.Query().Get("from")
 		before := r.URL.Query().Get("before")
 
-		entries, next, prev, err := ri.GS.LogPaginated(path, limit, after, from, before)
+		entries, next, prev, err := gs.LogPaginated(agentBranch, path, limit, after, from, before)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, fmt.Sprintf("log error: %v", err))
 			return
@@ -504,18 +502,22 @@ func handleHistoryPaginated() http.HandlerFunc {
 }
 
 // handleCommitDetail handles GET /api/v1/{repo}/commit?hash=<hash>
-func handleCommitDetail() http.HandlerFunc {
+func handleCommitDetail(agentBranch string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
-		ri.RLock()
-		defer ri.RUnlock()
+		var gs repos.GitStore
+		var idx repos.SearchIndex
+		ri.WithRead(func(d repos.StoreDeps) {
+			gs = d.GS
+			idx = d.Idx
+		})
 		hash := r.URL.Query().Get("hash")
 		if hash == "" {
 			writeError(w, http.StatusBadRequest, "hash query parameter is required")
 			return
 		}
 
-		detail, err := ri.GS.CommitDetail(hash)
+		detail, err := gs.CommitDetail(hash)
 		if err != nil {
 			writeError(w, http.StatusNotFound, fmt.Sprintf("commit not found: %v", err))
 			return
@@ -531,22 +533,22 @@ func handleCommitDetail() http.HandlerFunc {
 		for i, f := range detail.Files {
 			files[i] = fileWithTitle{Path: f.Path, Action: f.Action}
 			// Try index first (fast, works for facts still in the current state).
-			if ri.Idx != nil {
-				if fb, err := ri.Idx.GetByPath(f.Path); err == nil && fb != nil {
+			if idx != nil {
+				if fb, err := idx.GetByPath(agentBranch, f.Path); err == nil && fb != nil {
 					files[i].Title = fb.Title
 					continue
 				}
 			}
 			// Fallback: read the file as it was at this commit and parse the title.
 			// Covers retracted facts, deleted files, and anything not in the current index.
-			if content, err := ri.GS.ReadFileAtCommit(f.Path, hash); err == nil && content != "" {
+			if content, err := gs.ReadFileAtCommit(agentBranch, f.Path, hash); err == nil && content != "" {
 				if parsed, perr := mcp.ParseFact(f.Path, content); perr == nil {
 					files[i].Title = parsed.Title
 					continue
 				}
 			}
 			// Last resort for deleted files: find the last commit where the file existed.
-			if content, _, err := ri.GS.ReadFileLastCommit(f.Path, hash); err == nil && content != "" {
+			if content, _, err := gs.ReadFileLastCommit(agentBranch, f.Path, hash); err == nil && content != "" {
 				if parsed, perr := mcp.ParseFact(f.Path, content); perr == nil {
 					files[i].Title = parsed.Title
 				}
@@ -565,12 +567,12 @@ func handleCommitDetail() http.HandlerFunc {
 
 // handleActivity handles GET /api/v1/{repo}/activity?path=<path>.
 // Returns commit-activity metrics (last change, total commits, 7d/30d/90d counts).
-func handleActivity() http.HandlerFunc {
+func handleActivity(agentBranch string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
-		ri.RLock()
-		defer ri.RUnlock()
-		result, err := ri.GS.Activity(r.URL.Query().Get("path"))
+		var gs repos.GitStore
+		ri.WithRead(func(d repos.StoreDeps) { gs = d.GS })
+		result, err := gs.Activity(agentBranch, r.URL.Query().Get("path"))
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, fmt.Sprintf("activity error: %v", err))
 			return
@@ -584,9 +586,9 @@ func handleActivity() http.HandlerFunc {
 func handleCompletions() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
-		ri.RLock()
-		idx := ri.Idx
-		ri.RUnlock()
+		branch := ri.Branch()
+		var idx repos.SearchIndex
+		ri.WithRead(func(d repos.StoreDeps) { idx = d.Idx })
 
 		category := r.URL.Query().Get("category")
 		prefix := r.URL.Query().Get("prefix")
@@ -594,7 +596,7 @@ func handleCompletions() http.HandlerFunc {
 			http.Error(w, "category required", http.StatusBadRequest)
 			return
 		}
-		vals, err := idx.Completions(category, prefix, 20)
+		vals, err := idx.Completions(branch, category, prefix, 20)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
@@ -608,13 +610,14 @@ func handleCompletions() http.HandlerFunc {
 func handleStats() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
-		ri.RLock()
-		defer ri.RUnlock()
-		if ri.Idx == nil {
+		branch := ri.Branch()
+		var idx repos.SearchIndex
+		ri.WithRead(func(d repos.StoreDeps) { idx = d.Idx })
+		if idx == nil {
 			writeError(w, http.StatusServiceUnavailable, "index not available")
 			return
 		}
-		stats, err := ri.Idx.Stats(r.URL.Query().Get("path"))
+		stats, err := idx.Stats(branch, r.URL.Query().Get("path"))
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, fmt.Sprintf("stats error: %v", err))
 			return
@@ -624,22 +627,26 @@ func handleStats() http.HandlerFunc {
 }
 
 // handleStatus handles GET /api/v1/{repo}/status
-func handleStatus(embeddingsEnabled bool, ontologyRoot string) http.HandlerFunc {
+func handleStatus(embeddingsEnabled bool, ontologyRoot, agentBranch string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
-		ri.RLock()
-		defer ri.RUnlock()
-		head, err := ri.GS.HeadCommit()
+		var gs repos.GitStore
+		var idx repos.SearchIndex
+		ri.WithRead(func(d repos.StoreDeps) {
+			gs = d.GS
+			idx = d.Idx
+		})
+		head, err := gs.HeadCommit(agentBranch)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, fmt.Sprintf("head commit error: %v", err))
 			return
 		}
 
-		branch := ri.GS.Branch()
+		branch := agentBranch
 
 		indexCommit := ""
-		if ri.Idx != nil {
-			indexCommit, _ = ri.Idx.GetLastCommit(branch)
+		if idx != nil {
+			indexCommit, _ = idx.GetLastCommit(branch)
 		}
 
 		writeJSON(w, http.StatusOK, map[string]any{
@@ -657,9 +664,10 @@ func handleStatus(embeddingsEnabled bool, ontologyRoot string) http.HandlerFunc 
 func handleRecent() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
-		ri.RLock()
-		defer ri.RUnlock()
-		if ri.Svc == nil {
+		branch := ri.Branch()
+		var svc *store.Service
+		ri.WithRead(func(d repos.StoreDeps) { svc = d.Svc })
+		if svc == nil {
 			writeError(w, http.StatusServiceUnavailable, "index not available")
 			return
 		}
@@ -730,7 +738,7 @@ func handleRecent() http.HandlerFunc {
 			}
 		}
 
-		entries, total, err := ri.Svc.Index().RecentFacts(path, query, limit, offset, includeTypes, excludeTypes, domain, entities, epOps)
+		entries, total, err := svc.Index().RecentFacts(branch, path, query, limit, offset, includeTypes, excludeTypes, domain, entities, epOps)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, fmt.Sprintf("recent error: %v", err))
 			return

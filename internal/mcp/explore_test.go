@@ -30,13 +30,13 @@ func TestExploreFirstPage(t *testing.T) {
 	tmp.Refs = []string{}
 	factContent := SerializeFact(tmp)
 
-	gs.EXPECT().Branch().Return("machine/test").AnyTimes()
+	// branch from handler arg
 	ei.EXPECT().GCToolSessions("explore", "machine/test", 5).Return(nil)
-	gs.EXPECT().WalkChangedFiles("", "kb", nil, 25).Return(
+	gs.EXPECT().WalkChangedFiles(testAgentBranch, "", "kb", nil, 25).Return(
 		[]FileRecency{{Path: "kb/foo.md", Timestamp: ts}},
 		"abc123", nil,
 	)
-	gs.EXPECT().ReadFile("kb/foo.md").Return(factContent, nil)
+	gs.EXPECT().ReadFile(testAgentBranch, "kb/foo.md").Return(factContent, nil)
 	ei.EXPECT().CreateToolSession("explore", "machine/test", "kb").Return(
 		&ToolSession{ID: "sess-1", Tool: "explore", Branch: "machine/test", PathPrefix: "kb", Status: "active"},
 		nil,
@@ -44,7 +44,7 @@ func TestExploreFirstPage(t *testing.T) {
 	ei.EXPECT().AddSeenPaths("sess-1", []string{"kb/foo.md"}).Return(nil)
 	ei.EXPECT().UpdateToolSession("sess-1", "abc123", "completed").Return(nil)
 
-	handler := ExploreHandler(gs, ei, "kb")
+	handler := ExploreHandler(gs, ei, "kb", testAgentBranch)
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{}
 
@@ -97,21 +97,21 @@ func TestExploreResumesSession(t *testing.T) {
 
 	seen := map[string]bool{"kb/foo.md": true}
 
-	gs.EXPECT().Branch().Return("machine/test").AnyTimes()
+	// branch from handler arg
 	ei.EXPECT().GetToolSession("sess-1").Return(
 		&ToolSession{ID: "sess-1", Tool: "explore", Branch: "machine/test", PathPrefix: "kb", LastCommit: "abc123", Status: "active"},
 		nil,
 	)
 	ei.EXPECT().GetSeenPaths("sess-1").Return(seen, nil)
-	gs.EXPECT().WalkChangedFiles("abc123", "kb", seen, 25).Return(
+	gs.EXPECT().WalkChangedFiles(testAgentBranch, "abc123", "kb", seen, 25).Return(
 		[]FileRecency{{Path: "kb/bar.md", Timestamp: ts}},
 		"def456", nil,
 	)
-	gs.EXPECT().ReadFile("kb/bar.md").Return(factContent, nil)
+	gs.EXPECT().ReadFile(testAgentBranch, "kb/bar.md").Return(factContent, nil)
 	ei.EXPECT().AddSeenPaths("sess-1", []string{"kb/bar.md"}).Return(nil)
 	ei.EXPECT().UpdateToolSession("sess-1", "def456", "completed").Return(nil)
 
-	handler := ExploreHandler(gs, ei, "kb")
+	handler := ExploreHandler(gs, ei, "kb", testAgentBranch)
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
 		"cursor": "sess-1",
@@ -145,11 +145,11 @@ func TestExploreEmptyKB(t *testing.T) {
 	gs := NewMockGitStore(ctrl)
 	ei := NewMockToolSessionIndex(ctrl)
 
-	gs.EXPECT().Branch().Return("machine/test").AnyTimes()
+	// branch from handler arg
 	ei.EXPECT().GCToolSessions("explore", "machine/test", 5).Return(nil)
-	gs.EXPECT().WalkChangedFiles("", "kb", nil, 25).Return(nil, "", nil)
+	gs.EXPECT().WalkChangedFiles(testAgentBranch, "", "kb", nil, 25).Return(nil, "", nil)
 
-	handler := ExploreHandler(gs, ei, "kb")
+	handler := ExploreHandler(gs, ei, "kb", testAgentBranch)
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{}
 
@@ -184,10 +184,10 @@ func TestExploreExpiredSession(t *testing.T) {
 	gs := NewMockGitStore(ctrl)
 	ei := NewMockToolSessionIndex(ctrl)
 
-	gs.EXPECT().Branch().Return("machine/test").AnyTimes()
+	// branch from handler arg
 	ei.EXPECT().GetToolSession("gone-sess").Return(nil, nil)
 
-	handler := ExploreHandler(gs, ei, "kb")
+	handler := ExploreHandler(gs, ei, "kb", testAgentBranch)
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
 		"cursor": "gone-sess",
@@ -219,17 +219,17 @@ func TestExploreDeletedFactSkipped(t *testing.T) {
 	tmp.Refs = []string{}
 	goodContent := SerializeFact(tmp)
 
-	gs.EXPECT().Branch().Return("machine/test").AnyTimes()
+	// branch from handler arg
 	ei.EXPECT().GCToolSessions("explore", "machine/test", 5).Return(nil)
-	gs.EXPECT().WalkChangedFiles("", "kb", nil, 25).Return(
+	gs.EXPECT().WalkChangedFiles(testAgentBranch, "", "kb", nil, 25).Return(
 		[]FileRecency{
 			{Path: "kb/deleted.md", Timestamp: ts},
 			{Path: "kb/good.md", Timestamp: ts},
 		},
 		"abc123", nil,
 	)
-	gs.EXPECT().ReadFile("kb/deleted.md").Return("", fmt.Errorf("not found"))
-	gs.EXPECT().ReadFile("kb/good.md").Return(goodContent, nil)
+	gs.EXPECT().ReadFile(testAgentBranch, "kb/deleted.md").Return("", fmt.Errorf("not found"))
+	gs.EXPECT().ReadFile(testAgentBranch, "kb/good.md").Return(goodContent, nil)
 	ei.EXPECT().CreateToolSession("explore", "machine/test", "kb").Return(
 		&ToolSession{ID: "sess-2", Tool: "explore", Branch: "machine/test", PathPrefix: "kb", Status: "active"},
 		nil,
@@ -237,7 +237,7 @@ func TestExploreDeletedFactSkipped(t *testing.T) {
 	ei.EXPECT().AddSeenPaths("sess-2", []string{"kb/good.md"}).Return(nil)
 	ei.EXPECT().UpdateToolSession("sess-2", "abc123", "completed").Return(nil)
 
-	handler := ExploreHandler(gs, ei, "kb")
+	handler := ExploreHandler(gs, ei, "kb", testAgentBranch)
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{}
 

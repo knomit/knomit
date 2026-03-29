@@ -28,12 +28,12 @@ func TestHandleGetOrigin_NoRemote(t *testing.T) {
 
 	hub := repos.NewTaskHub(context.Background())
 	rm := repos.New(context.Background(), repos.Deps{})
-	rm.Set("knomit", &repos.RepoInstance{
+	rm.Set("knomit", repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
 		Name: "knomit",
 		Svc:  svc,
 		Hub:  hub,
-	})
-	handler := NewRouter(rm, nil, false, "kb")
+	}))
+	handler := NewRouter(rm, nil, false, "kb", testAgentBranch)
 
 	rr := doRequest(t, handler, http.MethodGet, "/api/v1/knomit/origin", "")
 	if rr.Code != http.StatusNoContent {
@@ -54,12 +54,12 @@ func TestHandleGetOrigin_WithRemote(t *testing.T) {
 
 	hub := repos.NewTaskHub(context.Background())
 	rm := repos.New(context.Background(), repos.Deps{})
-	rm.Set("knomit", &repos.RepoInstance{
+	rm.Set("knomit", repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
 		Name: "knomit",
 		Svc:  svc,
 		Hub:  hub,
-	})
-	handler := NewRouter(rm, nil, false, "kb")
+	}))
+	handler := NewRouter(rm, nil, false, "kb", testAgentBranch)
 
 	rr := doRequest(t, handler, http.MethodGet, "/api/v1/knomit/origin", "")
 	if rr.Code != http.StatusOK {
@@ -90,12 +90,12 @@ func TestHandleSetOrigin_MissingURL(t *testing.T) {
 
 	hub := repos.NewTaskHub(context.Background())
 	rm := repos.New(context.Background(), repos.Deps{})
-	rm.Set("knomit", &repos.RepoInstance{
+	rm.Set("knomit", repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
 		Name: "knomit",
 		Svc:  svc,
 		Hub:  hub,
-	})
-	handler := NewRouter(rm, nil, false, "kb")
+	}))
+	handler := NewRouter(rm, nil, false, "kb", testAgentBranch)
 
 	rr := doRequest(t, handler, http.MethodPut, "/api/v1/knomit/origin", `{"auth_method":"token"}`)
 	if rr.Code != http.StatusBadRequest {
@@ -117,12 +117,12 @@ func TestHandleSetOrigin_ValidURL(t *testing.T) {
 
 	hub := repos.NewTaskHub(context.Background())
 	rm := repos.New(context.Background(), repos.Deps{})
-	rm.Set("knomit", &repos.RepoInstance{
+	rm.Set("knomit", repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
 		Name: "knomit",
 		Svc:  svc,
 		Hub:  hub,
-	})
-	handler := NewRouter(rm, nil, false, "kb")
+	}))
+	handler := NewRouter(rm, nil, false, "kb", testAgentBranch)
 
 	rr := doRequest(t, handler, http.MethodPut, "/api/v1/knomit/origin", `{"url":"https://github.com/org/new-kb.git","auth_method":"token","token":"ghp_abc"}`)
 	if rr.Code != http.StatusOK {
@@ -160,8 +160,8 @@ func TestHandleSetOrigin_SSHUrl(t *testing.T) {
 
 	hub := repos.NewTaskHub(context.Background())
 	rm := repos.New(context.Background(), repos.Deps{})
-	rm.Set("knomit", &repos.RepoInstance{Name: "knomit", Svc: svc, Hub: hub})
-	handler := NewRouter(rm, nil, false, "kb")
+	rm.Set("knomit", repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{Name: "knomit", Svc: svc, Hub: hub}))
+	handler := NewRouter(rm, nil, false, "kb", testAgentBranch)
 
 	rr := doRequest(t, handler, http.MethodPut, "/api/v1/knomit/origin", `{"url":"git@github.com:knomit/blank.git","auth_method":"ssh"}`)
 	if rr.Code != http.StatusOK {
@@ -178,8 +178,8 @@ func TestHandleSetOrigin_HTTPWithSSHAuth(t *testing.T) {
 
 	hub := repos.NewTaskHub(context.Background())
 	rm := repos.New(context.Background(), repos.Deps{})
-	rm.Set("knomit", &repos.RepoInstance{Name: "knomit", Svc: svc, Hub: hub})
-	handler := NewRouter(rm, nil, false, "kb")
+	rm.Set("knomit", repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{Name: "knomit", Svc: svc, Hub: hub}))
+	handler := NewRouter(rm, nil, false, "kb", testAgentBranch)
 
 	rr := doRequest(t, handler, http.MethodPut, "/api/v1/knomit/origin", `{"url":"https://github.com/org/repo.git","auth_method":"ssh"}`)
 	if rr.Code != http.StatusBadRequest {
@@ -196,8 +196,8 @@ func TestHandleSetOrigin_SSHWithTokenAuth(t *testing.T) {
 
 	hub := repos.NewTaskHub(context.Background())
 	rm := repos.New(context.Background(), repos.Deps{})
-	rm.Set("knomit", &repos.RepoInstance{Name: "knomit", Svc: svc, Hub: hub})
-	handler := NewRouter(rm, nil, false, "kb")
+	rm.Set("knomit", repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{Name: "knomit", Svc: svc, Hub: hub}))
+	handler := NewRouter(rm, nil, false, "kb", testAgentBranch)
 
 	rr := doRequest(t, handler, http.MethodPut, "/api/v1/knomit/origin", `{"url":"git@github.com:org/repo.git","auth_method":"token","token":"ghp_abc"}`)
 	if rr.Code != http.StatusBadRequest {

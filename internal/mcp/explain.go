@@ -77,7 +77,7 @@ func classifyRefs(refs []string) classifiedRefs {
 }
 
 // ExplainHandler returns the handler function for knomit_explain.
-func ExplainHandler(gs GitStore, sessionIdx ToolSessionIndex, ontologyRoot string) func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+func ExplainHandler(gs GitStore, sessionIdx ToolSessionIndex, ontologyRoot, agentBranch string) func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 	return func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 		ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
@@ -86,23 +86,23 @@ func ExplainHandler(gs GitStore, sessionIdx ToolSessionIndex, ontologyRoot strin
 		cursor := req.GetString("cursor", "")
 
 		if cursor == "" {
-			return explainFirstCall(gs, sessionIdx, ontologyRoot, file)
+			return explainFirstCall(gs, sessionIdx, ontologyRoot, agentBranch, file)
 		}
-		return explainResume(gs, sessionIdx, cursor)
+		return explainResume(gs, sessionIdx, agentBranch, cursor)
 	}
 }
 
-func explainFirstCall(gs GitStore, sessionIdx ToolSessionIndex, ontologyRoot, file string) (*mcpgo.CallToolResult, error) {
+func explainFirstCall(gs GitStore, sessionIdx ToolSessionIndex, ontologyRoot, agentBranch, file string) (*mcpgo.CallToolResult, error) {
 	if file == "" {
 		return mcpgo.NewToolResultError("file is required"), nil
 	}
 	file = fact.NormalizePath(ontologyRoot, file)
 
 	// GC old sessions.
-	_ = sessionIdx.GCToolSessions("explain", gs.Branch(), 5)
+	_ = sessionIdx.GCToolSessions("explain", agentBranch, 5)
 
 	// Read root fact.
-	content, err := gs.ReadFile(file)
+	content, err := gs.ReadFile(agentBranch, file)
 	if err != nil {
 		return mcpgo.NewToolResultError(fmt.Sprintf("read file error: %v", err)), nil
 	}
@@ -112,7 +112,7 @@ func explainFirstCall(gs GitStore, sessionIdx ToolSessionIndex, ontologyRoot, fi
 	}
 
 	// Get history.
-	logEntries, err := gs.Log(file)
+	logEntries, err := gs.Log(agentBranch, file)
 	if err != nil {
 		return mcpgo.NewToolResultError(fmt.Sprintf("log error: %v", err)), nil
 	}
@@ -134,7 +134,7 @@ func explainFirstCall(gs GitStore, sessionIdx ToolSessionIndex, ontologyRoot, fi
 	}
 
 	// Create session.
-	session, err := sessionIdx.CreateToolSession("explain", gs.Branch(), file)
+	session, err := sessionIdx.CreateToolSession("explain", agentBranch, file)
 	if err != nil {
 		return mcpgo.NewToolResultError(fmt.Sprintf("create session error: %v", err)), nil
 	}
@@ -201,7 +201,7 @@ func explainFirstCall(gs GitStore, sessionIdx ToolSessionIndex, ontologyRoot, fi
 	return mcpgo.NewToolResultText(string(out)), nil
 }
 
-func explainResume(gs GitStore, sessionIdx ToolSessionIndex, cursor string) (*mcpgo.CallToolResult, error) {
+func explainResume(gs GitStore, sessionIdx ToolSessionIndex, agentBranch, cursor string) (*mcpgo.CallToolResult, error) {
 	session, err := sessionIdx.GetToolSession(cursor)
 	if err != nil {
 		return mcpgo.NewToolResultError(fmt.Sprintf("session lookup error: %v", err)), nil
@@ -230,19 +230,19 @@ func explainResume(gs GitStore, sessionIdx ToolSessionIndex, cursor string) (*mc
 		}
 
 		for _, item := range items {
-			content, readErr := gs.ReadFileAtCommit(item.Path, item.CommitHash)
+			content, readErr := gs.ReadFileAtCommit(agentBranch, item.Path, item.CommitHash)
 			var retracted bool
 			var lastCommitHash string
 			if readErr != nil {
 				// LastCommitForPath skips git merge commits. In knomit, synthesis
 				// deletions are always regular commits (not merge commits), so this
 				// correctly returns the retraction commit.
-				retractCommit, lcErr := gs.LastCommitForPath(item.Path)
+				retractCommit, lcErr := gs.LastCommitForPath(agentBranch, item.Path)
 				if lcErr != nil || retractCommit == "" {
 					continue // file never existed in git
 				}
 				var fromCommit string
-				content, fromCommit, readErr = gs.ReadFileLastCommit(item.Path, retractCommit)
+				content, fromCommit, readErr = gs.ReadFileLastCommit(agentBranch, item.Path, retractCommit)
 				if readErr != nil {
 					continue
 				}

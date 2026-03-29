@@ -7,58 +7,53 @@
 // The package is split across several files:
 //
 //   - store.go    — Core types (Store, DirEntry, LogEntry, SyncResult),
-//                   lifecycle (Init, Open, Close), and metadata accessors.
+//     lifecycle (Init, Open, Close), and metadata accessors.
 //   - read.go     — Read-only operations: ReadFile, FileExists, ListDir,
-//                   ListAll, Log, Grep, DiffFiles.
+//     ListAll, Log, Grep, DiffFiles.
 //   - write.go    — Write operations: WriteFile, DeleteFile, BatchWrite,
-//                   Tag, TagsContaining.
+//     Tag, TagsContaining.
 //   - sync.go     — Remote synchronization: Sync, countAhead, isAncestor,
-//                   mergeTrees.
+//     mergeTrees.
 //   - plumbing.go — Low-level git tree manipulation: writeFileToStore,
-//                   buildTree, upsertEntry, deleteFileFromStore,
-//                   deleteFromTree, removeEntry.
+//     buildTree, upsertEntry, deleteFileFromStore,
+//     deleteFromTree, removeEntry.
 //   - config.go   — Configuration helpers.
 package git
 
 import (
-	"database/sql"
 	"fmt"
+	"net/http"
 	"os"
-	"path/filepath"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
+	"github.com/go-git/go-billy/v5/memfs"
 	gogit "github.com/go-git/go-git/v5"
 	gogitconfig "github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/go-git/go-git/v5/plumbing/storer"
 	"github.com/go-git/go-git/v5/plumbing/transport"
-	"github.com/go-git/go-billy/v5/memfs"
-	_ "github.com/mattn/go-sqlite3"
 	"golang.org/x/crypto/ssh"
 
-	"github.com/rs/zerolog/log"
 	storegit "knomit/internal/store/git"
+
+	"github.com/rs/zerolog/log"
 )
 
 // Store wraps go-git with knomit's logical operations.
 // All fact reads/writes go through go-git's plumbing API — NO filesystem reads/writes.
 type Store struct {
-	mu        sync.Mutex
-	repo      *gogit.Repository
-	storer    *storegit.Storer
-	db        *sql.DB      // non-nil when commit_log is available
-	commitLog atomic.Bool  // true once commit_log table is confirmed populated
-	ownsDB    bool         // true when Init/Open opened the DB (legacy path)
-	ownedDB   *sql.DB // non-nil when ownsDB is true
-	branch    string  // e.g. "agent/laptop"
-	agentID   string  // e.g. "laptop" (branch with "agent/" prefix stripped)
-	auth      transport.AuthMethod
-	signer    ssh.Signer // signs commits when set
-	onCommit  func(hash string)
+	branchMu    sync.Map     // keyed by branch name → *sync.Mutex
+	configMu    sync.Mutex   // guards ConfigureRemote
+	repo        *gogit.Repository
+	storer      *storegit.Storer
+	auth        transport.AuthMethod
+	signer      ssh.Signer // signs commits when set
+	onCommit    func(branch, hash string)
+	handlerOnce sync.Once
+	handler     http.Handler
 }
 
 // DirEntry represents a single entry in a knomit directory listing.
@@ -127,17 +122,22 @@ type SyncResult struct {
 	MergeCommit string // hash of merge commit (empty if ff or no-op)
 }
 
-// gitSchema is the minimal schema for standalone Init/Open (legacy path).
-// Includes commit_log so SQL-based Activity and WalkChangedFiles work.
-const gitSchema = `
-CREATE TABLE IF NOT EXISTS objects (hash TEXT NOT NULL, type INTEGER NOT NULL, size INTEGER NOT NULL, data BLOB NOT NULL, PRIMARY KEY (hash, type));
-CREATE TABLE IF NOT EXISTS refs (name TEXT PRIMARY KEY, target TEXT NOT NULL, is_symbolic INTEGER NOT NULL DEFAULT 0);
-CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value BLOB NOT NULL);
-CREATE TABLE IF NOT EXISTS commit_log (commit_hash TEXT NOT NULL, path TEXT NOT NULL, committed_at INTEGER NOT NULL, message TEXT NOT NULL, operation TEXT NOT NULL DEFAULT '', author_email TEXT NOT NULL DEFAULT '', action TEXT NOT NULL DEFAULT '', PRIMARY KEY (commit_hash, path));
-CREATE INDEX IF NOT EXISTS commit_log_path_time ON commit_log (path, committed_at DESC);
-CREATE INDEX IF NOT EXISTS commit_log_time ON commit_log (committed_at DESC);
-CREATE INDEX IF NOT EXISTS commit_log_operation ON commit_log (operation, committed_at DESC);
-`
+// resolveRef returns the commit hash at the tip of branch.
+func (s *Store) resolveRef(branch string) (plumbing.Hash, error) {
+	ref, err := s.storer.Reference(plumbing.NewBranchReferenceName(branch))
+	if err != nil {
+		return plumbing.ZeroHash, fmt.Errorf("resolveRef %q: %w", branch, err)
+	}
+	return ref.Hash(), nil
+}
+
+// lockBranch acquires the per-branch mutex and returns an unlock function.
+func (s *Store) lockBranch(branch string) func() {
+	v, _ := s.branchMu.LoadOrStore(branch, &sync.Mutex{})
+	mu := v.(*sync.Mutex)
+	mu.Lock()
+	return mu.Unlock
+}
 
 // InitWithStorer creates a new knomit git store using an externally provided storer.
 // The storer's schema must already be applied.
@@ -200,13 +200,10 @@ func InitWithStorer(s *storegit.Storer, initFiles map[string]string, agentBranch
 
 	log.Info().Str("branch", agentBranch).Msg("git store initialized")
 	gs := &Store{
-		repo:    repo,
-		storer:  s,
-		db:      s.DB(),
-		branch:  agentBranch,
-		agentID: deriveAgentID(agentBranch),
+		repo:   repo,
+		storer: s,
 	}
-	if err := gs.populateCommitLog(); err != nil {
+	if err := gs.populateCommitLog(agentBranch); err != nil {
 		log.Warn().Err(err).Msg("commit_log: initial populate failed")
 	}
 	return gs, nil
@@ -228,88 +225,17 @@ func OpenWithStorer(s *storegit.Storer) (*Store, error) {
 
 	log.Info().Str("branch", branch).Msg("git store opened")
 	gs := &Store{
-		repo:    repo,
-		storer:  s,
-		db:      s.DB(),
-		branch:  branch,
-		agentID: deriveAgentID(branch),
+		repo:   repo,
+		storer: s,
 	}
-	if err := gs.populateCommitLog(); err != nil {
+	if err := gs.populateCommitLog(branch); err != nil {
 		log.Warn().Err(err).Msg("commit_log: open populate failed")
 	}
 	return gs, nil
 }
 
-// Init creates a new knomit git store at dbPath.
-// Deprecated: use store.Open + InitWithStorer instead.
-func Init(dbPath string, initFiles map[string]string) (*Store, error) {
-	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
-		return nil, fmt.Errorf("git.Init: mkdir: %w", err)
-	}
-
-	dsn := dbPath
-	if dbPath != ":memory:" {
-		dsn = dbPath + "?_journal_mode=WAL&_busy_timeout=5000"
-	}
-	db, err := sql.Open("sqlite3", dsn)
-	if err != nil {
-		return nil, fmt.Errorf("git.Init: open db: %w", err)
-	}
-	if _, err := db.Exec(gitSchema); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("git.Init: schema: %w", err)
-	}
-
-	s := storegit.NewStorer(db)
-	store, err := InitWithStorer(s, initFiles, "")
-	if err != nil {
-		db.Close()
-		return nil, err
-	}
-	store.ownsDB = true
-	store.ownedDB = db
-	return store, nil
-}
-
-// Open opens an existing knomit git store at dbPath.
-// Deprecated: use store.Open + OpenWithStorer instead.
-func Open(dbPath string) (*Store, error) {
-	dsn := dbPath
-	if dbPath != ":memory:" {
-		dsn = dbPath + "?_journal_mode=WAL&_busy_timeout=5000"
-	}
-	db, err := sql.Open("sqlite3", dsn)
-	if err != nil {
-		return nil, fmt.Errorf("git.Open: open db: %w", err)
-	}
-	if _, err := db.Exec(gitSchema); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("git.Open: schema: %w", err)
-	}
-
-	s := storegit.NewStorer(db)
-	store, err := OpenWithStorer(s)
-	if err != nil {
-		db.Close()
-		return nil, err
-	}
-	store.ownsDB = true
-	store.ownedDB = db
-	return store, nil
-}
-
-// Close closes the underlying database if this Store owns it.
-func (s *Store) Close() error {
-	if s.ownsDB && s.ownedDB != nil {
-		return s.ownedDB.Close()
-	}
-	return nil
-}
-
-// Branch returns the agent branch name (e.g. "agent/laptop").
-func (s *Store) Branch() string {
-	return s.branch
-}
+// Close is a no-op. The database lifecycle is managed by the caller (via store.Service).
+func (s *Store) Close() error { return nil }
 
 // deriveAgentID extracts the agent identifier from a branch name.
 // "agent/laptop-abc" → "laptop-abc", "main" → "main".
@@ -320,84 +246,63 @@ func deriveAgentID(branch string) string {
 	return branch
 }
 
-// AgentID returns the agent identifier derived from the branch name.
-func (s *Store) AgentID() string { return s.agentID }
-
 // authorSig returns the author signature for a given operation.
-func (s *Store) authorSig(operation string) object.Signature {
+func (s *Store) authorSig(branch, operation string) object.Signature {
+	agentID := deriveAgentID(branch)
 	return object.Signature{
-		Name:  s.agentID,
-		Email: s.agentID + "+" + operation + "@agents.knomit.io",
+		Name:  agentID,
+		Email: agentID + "+" + operation + "@agents.knomit.io",
 		When:  time.Now(),
 	}
 }
 
 // committerSig returns the committer signature (stable per agent).
-func (s *Store) committerSig() object.Signature {
+func (s *Store) committerSig(branch string) object.Signature {
+	agentID := deriveAgentID(branch)
 	return object.Signature{
-		Name:  s.agentID,
-		Email: s.agentID + "@agents.knomit.io",
+		Name:  agentID,
+		Email: agentID + "@agents.knomit.io",
 		When:  time.Now(),
 	}
 }
 
-// HeadCommit returns the hash of the current HEAD commit as a hex string.
-func (s *Store) HeadCommit() (string, error) {
-	headRef, err := s.repo.Head()
+// HeadCommit returns the hash of the tip commit of branch as a hex string.
+func (s *Store) HeadCommit(branch string) (string, error) {
+	hash, err := s.resolveRef(branch)
 	if err != nil {
 		return "", fmt.Errorf("HeadCommit: %w", err)
 	}
-	return headRef.Hash().String(), nil
+	return hash.String(), nil
 }
 
 // SetOnCommit registers a callback invoked after every branch ref update.
 // Must be called before any writes (during init).
-func (s *Store) SetOnCommit(fn func(hash string)) {
+func (s *Store) SetOnCommit(fn func(branch, hash string)) {
 	s.onCommit = fn
 }
 
-func (s *Store) notifyCommit(hash string) {
+func (s *Store) notifyCommit(branch, hash string) {
 	if s.onCommit != nil {
-		s.onCommit(hash)
+		s.onCommit(branch, hash)
 	}
 }
 
-// SwitchBranch creates a new branch from the current HEAD and switches to it.
-// The old branch is left intact. No-op if already on the target branch.
-func (s *Store) SwitchBranch(newBranch string) error {
-	if s.branch == newBranch {
-		return nil
+// CreateBranch creates a new branch ref pointing at the tip of fromBranch.
+// No-op if branch already exists. Does not modify HEAD or any Store state.
+func (s *Store) CreateBranch(branch, fromBranch string) error {
+	newRefName := plumbing.NewBranchReferenceName(branch)
+	if _, err := s.storer.Reference(newRefName); err == nil {
+		return nil // already exists
 	}
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	// Resolve current HEAD commit.
-	head, err := s.repo.Head()
+	fromHash, err := s.resolveRef(fromBranch)
 	if err != nil {
-		return fmt.Errorf("SwitchBranch: read HEAD: %w", err)
+		return fmt.Errorf("CreateBranch: resolve source %q: %w", fromBranch, err)
 	}
-
-	newRefName := plumbing.NewBranchReferenceName(newBranch)
-
-	// Create new branch pointing at current HEAD.
-	if err := s.storer.SetReference(plumbing.NewHashReference(newRefName, head.Hash())); err != nil {
-		return fmt.Errorf("SwitchBranch: set new ref: %w", err)
+	if err := s.storer.SetReference(plumbing.NewHashReference(newRefName, fromHash)); err != nil {
+		return fmt.Errorf("CreateBranch: set ref: %w", err)
 	}
-
-	// Update HEAD to point to new branch.
-	if err := s.storer.SetReference(plumbing.NewSymbolicReference(plumbing.HEAD, newRefName)); err != nil {
-		return fmt.Errorf("SwitchBranch: update HEAD: %w", err)
-	}
-
-	log.Info().Str("from", s.branch).Str("to", newBranch).Msg("switched branch")
-	s.branch = newBranch
+	log.Info().Str("branch", branch).Str("from", fromBranch).Msg("created branch")
 	return nil
-}
-
-// Storer returns the underlying storer (used by the git remote handler).
-func (s *Store) Storer() *storegit.Storer {
-	return s.storer
 }
 
 // SetAuth sets the transport authentication method used by Sync and Push.
@@ -476,14 +381,11 @@ func InitFromRemote(s *storegit.Storer, originURL string, auth transport.AuthMet
 		}
 		log.Info().Str("branch", agentBranch).Str("origin", originURL).Msg("git store initialized (empty remote)")
 		gs := &Store{
-			repo:    repo,
-			storer:  s,
-			db:      s.DB(),
-			branch:  agentBranch,
-			agentID: deriveAgentID(agentBranch),
-			auth:    auth,
+			repo:   repo,
+			storer: s,
+			auth:   auth,
 		}
-		if err := gs.populateCommitLog(); err != nil {
+		if err := gs.populateCommitLog(agentBranch); err != nil {
 			log.Warn().Err(err).Msg("commit_log: empty-remote populate failed")
 		}
 		return gs, nil
@@ -539,14 +441,11 @@ func InitFromRemote(s *storegit.Storer, originURL string, auth transport.AuthMet
 
 	log.Info().Str("branch", agentBranch).Str("origin", originURL).Msg("git store initialized from remote")
 	gs := &Store{
-		repo:    repo,
-		storer:  s,
-		db:      s.DB(),
-		branch:  agentBranch,
-		agentID: deriveAgentID(agentBranch),
-		auth:    auth,
+		repo:   repo,
+		storer: s,
+		auth:   auth,
 	}
-	if err := gs.populateCommitLog(); err != nil {
+	if err := gs.populateCommitLog(agentBranch); err != nil {
 		log.Warn().Err(err).Msg("commit_log: remote populate failed")
 	}
 	return gs, nil
@@ -561,8 +460,8 @@ func (s *Store) DefaultBranch() (string, error) {
 	if head.Type() == plumbing.SymbolicReference {
 		return strings.TrimPrefix(head.Target().String(), "refs/heads/"), nil
 	}
-	// Detached HEAD — fall back to the branch field.
-	return s.branch, nil
+	// Detached HEAD — return empty string.
+	return "", nil
 }
 
 // progressWriter adapts a progress callback to io.Writer for use with CloneOptions.Progress.
@@ -598,27 +497,23 @@ func CloneInto(storer *storegit.Storer, url string, auth transport.AuthMethod, p
 
 	log.Info().Str("branch", branch).Str("url", url).Msg("cloned remote into storer")
 	return &Store{
-		repo:    repo,
-		storer:  storer,
-		db:      storer.DB(),
-		branch:  branch,
-		agentID: deriveAgentID(branch),
-		auth:    auth,
+		repo:   repo,
+		storer: storer,
+		auth:   auth,
 	}, nil
 }
 
-// HasSharedHistory checks whether the current repo shares any commits with the given remote store.
+// HasSharedHistory checks whether localBranch shares any commits with remoteBranch on the remote store.
 // Uses a bounded walk (max 1000 commits) to avoid scanning huge histories.
-func (s *Store) HasSharedHistory(remote *Store) (bool, error) {
+func (s *Store) HasSharedHistory(localBranch string, remote *Store, remoteBranch string) (bool, error) {
 	const maxCommits = 1000
 
-	// Collect local commit hashes.
-	localHashes := make(map[plumbing.Hash]struct{})
-	localHead, err := s.repo.Head()
+	localHash, err := s.resolveRef(localBranch)
 	if err != nil {
-		return false, fmt.Errorf("HasSharedHistory: local HEAD: %w", err)
+		return false, fmt.Errorf("HasSharedHistory: local ref: %w", err)
 	}
-	localIter, err := s.repo.Log(&gogit.LogOptions{From: localHead.Hash()})
+	localHashes := make(map[plumbing.Hash]struct{})
+	localIter, err := s.repo.Log(&gogit.LogOptions{From: localHash})
 	if err != nil {
 		return false, fmt.Errorf("HasSharedHistory: local log: %w", err)
 	}
@@ -634,12 +529,11 @@ func (s *Store) HasSharedHistory(remote *Store) (bool, error) {
 		return false, fmt.Errorf("HasSharedHistory: local walk: %w", err)
 	}
 
-	// Walk remote commits and check for overlap.
-	remoteHead, err := remote.repo.Head()
+	remoteHash, err := remote.resolveRef(remoteBranch)
 	if err != nil {
-		return false, fmt.Errorf("HasSharedHistory: remote HEAD: %w", err)
+		return false, fmt.Errorf("HasSharedHistory: remote ref: %w", err)
 	}
-	remoteIter, err := remote.repo.Log(&gogit.LogOptions{From: remoteHead.Hash()})
+	remoteIter, err := remote.repo.Log(&gogit.LogOptions{From: remoteHash})
 	if err != nil {
 		return false, fmt.Errorf("HasSharedHistory: remote log: %w", err)
 	}
@@ -655,9 +549,8 @@ func (s *Store) HasSharedHistory(remote *Store) (bool, error) {
 		}
 		count++
 		return nil
-	}); err != nil {
+	}); err != nil && !found {
 		return false, fmt.Errorf("HasSharedHistory: remote walk: %w", err)
 	}
-
 	return found, nil
 }

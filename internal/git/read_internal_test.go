@@ -2,7 +2,6 @@
 package git
 
 import (
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -14,12 +13,7 @@ import (
 // resolves a normalised (lowercase) path against a commit that stored the file
 // with mixed-case path components (pre-normalisation history).
 func TestReadFileAtCommit_CaseInsensitiveFallback(t *testing.T) {
-	dir := t.TempDir()
-	store, err := Init(filepath.Join(dir, "test.db"), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newInternalTestStore(t)
 
 	// Write a file using the internal helper so we can bypass the ToLower
 	// enforcement in WriteFile and store an uppercase path — simulating a
@@ -36,14 +30,14 @@ func TestReadFileAtCommit_CaseInsensitiveFallback(t *testing.T) {
 		t.Fatalf("writeFileToStore: %v", err)
 	}
 	// Update the branch ref so ReadFileAtCommit can find the commit.
-	branchRef := plumbing.NewBranchReferenceName(store.branch)
+	branchRef := plumbing.NewBranchReferenceName(testBranch)
 	if err := store.storer.SetReference(plumbing.NewHashReference(branchRef, commitHash)); err != nil {
 		t.Fatalf("SetReference: %v", err)
 	}
 
 	// ReadFileAtCommit with the normalised lowercase path must succeed.
 	lowercasePath := "kb/technology/ai/fact.md"
-	got, err := store.ReadFileAtCommit(lowercasePath, commitHash.String())
+	got, err := store.ReadFileAtCommit(testBranch, lowercasePath, commitHash.String())
 	if err != nil {
 		t.Fatalf("ReadFileAtCommit with lowercase path: %v", err)
 	}
@@ -52,7 +46,7 @@ func TestReadFileAtCommit_CaseInsensitiveFallback(t *testing.T) {
 	}
 
 	// Exact uppercase path must still work too.
-	got2, err := store.ReadFileAtCommit(uppercasePath, commitHash.String())
+	got2, err := store.ReadFileAtCommit(testBranch, uppercasePath, commitHash.String())
 	if err != nil {
 		t.Fatalf("ReadFileAtCommit with exact path: %v", err)
 	}

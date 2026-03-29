@@ -1,7 +1,6 @@
 package git_test
 
 import (
-	"database/sql"
 	"strings"
 	"testing"
 
@@ -12,41 +11,15 @@ import (
 	storegit "knomit/internal/store/git"
 )
 
-// factsSchema is the minimal schema needed for the facts table used by FactsIter.
-const factsSchema = `
-CREATE TABLE IF NOT EXISTS facts (
-    path        TEXT PRIMARY KEY,
-    title       TEXT NOT NULL,
-    blob_hash   TEXT NOT NULL,
-    type        TEXT NOT NULL DEFAULT 'observation',
-    domain      TEXT NOT NULL,
-    entities    TEXT NOT NULL,
-    confidence  REAL NOT NULL,
-    sources     INTEGER NOT NULL,
-    refs        TEXT NOT NULL,
-    commit_hash TEXT NOT NULL
-);
-`
-
-// newTestStorerForReplay creates a storer with both git and facts schemas.
-func newTestStorerForReplay(t *testing.T) (*storegit.Storer, *sql.DB) {
+// newTestStorerForReplay creates a storer backed by an in-memory store.Service.
+func newTestStorerForReplay(t *testing.T) (*storegit.Storer, *store.Service) {
 	t.Helper()
-	db, err := sql.Open("sqlite3", ":memory:")
+	svc, err := store.Open(":memory:")
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { db.Close() })
-
-	schema := `
-CREATE TABLE IF NOT EXISTS objects (hash TEXT NOT NULL, type INTEGER NOT NULL, size INTEGER NOT NULL, data BLOB NOT NULL, PRIMARY KEY (hash, type));
-CREATE TABLE IF NOT EXISTS refs (name TEXT PRIMARY KEY, target TEXT NOT NULL, is_symbolic INTEGER NOT NULL DEFAULT 0);
-CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value BLOB NOT NULL);
-CREATE TABLE IF NOT EXISTS commit_log (commit_hash TEXT NOT NULL, path TEXT NOT NULL, committed_at INTEGER NOT NULL, message TEXT NOT NULL, operation TEXT NOT NULL DEFAULT '', author_email TEXT NOT NULL DEFAULT '', action TEXT NOT NULL DEFAULT '', PRIMARY KEY (commit_hash, path));
-` + factsSchema
-	if _, err := db.Exec(schema); err != nil {
-		t.Fatal(err)
-	}
-	return storegit.NewStorer(db), db
+	t.Cleanup(func() { svc.Close() })
+	return svc.GitStorer(), svc
 }
 
 // storeIterAdapter wraps store.FactsIter to implement git.FactIter.
@@ -64,9 +37,9 @@ func (a *storeIterAdapter) Next() (*git.FactRow, error) {
 
 func (a *storeIterAdapter) Close() error { return a.inner.Close() }
 
-func mustNewIter(t *testing.T, db *sql.DB) git.FactIter {
+func mustNewIter(t *testing.T, idx *store.Index) git.FactIter {
 	t.Helper()
-	iter, err := store.NewFactsIter(db)
+	iter, err := store.NewFactsIter(idx, "agent/local")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,21 +47,23 @@ func mustNewIter(t *testing.T, db *sql.DB) git.FactIter {
 }
 
 // insertFact inserts a row into the facts table for the iterator.
-func insertFact(t *testing.T, db *sql.DB, path, blobHash, commitHash string) {
+func insertFact(t *testing.T, idx *store.Index, path, blobHash, commitHash string) {
 	t.Helper()
-	_, err := db.Exec(
-		`INSERT OR REPLACE INTO facts (path, title, blob_hash, type, domain, entities, confidence, sources, refs, commit_hash)
-		 VALUES (?, ?, ?, 'observation', '[]', '[]', 0.9, 1, '[]', ?)`,
-		path, "title", blobHash, commitHash,
-	)
-	if err != nil {
+	if err := idx.Upsert("agent/local", commitHash, store.FactRecord{
+		Path:       path,
+		Title:      "title",
+		BlobHash:   blobHash,
+		Type:       "observation",
+		Confidence: 0.9,
+		Sources:    1,
+	}); err != nil {
 		t.Fatal(err)
 	}
 }
 
 func TestReplay_CopiesFactsToTempBranch(t *testing.T) {
 	// Create local store with 3 facts.
-	localStorer, localDB := newTestStorerForReplay(t)
+	localStorer, localSvc := newTestStorerForReplay(t)
 	local, err := git.InitWithStorer(localStorer, nil, "agent/local")
 	if err != nil {
 		t.Fatal(err)
@@ -101,11 +76,11 @@ func TestReplay_CopiesFactsToTempBranch(t *testing.T) {
 	}
 
 	for path, content := range facts {
-		commitHash, blobHash, err := local.WriteFile(path, content, "add "+path, "learn")
+		commitHash, blobHash, err := local.WriteFile("agent/local", path, content, "add "+path, "learn")
 		if err != nil {
 			t.Fatal(err)
 		}
-		insertFact(t, localDB, path, blobHash, commitHash)
+		insertFact(t, localSvc.Index(), path, blobHash, commitHash)
 	}
 
 	// Create empty target store.
@@ -121,7 +96,7 @@ func TestReplay_CopiesFactsToTempBranch(t *testing.T) {
 		AgentBranch:   "agent/replay-test",
 		DefaultBranch: "main",
 	}
-	result, err := git.Replay(local, mustNewIter(t, localDB), target, cfg)
+	result, err := git.Replay(local, "agent/local", mustNewIter(t, localSvc.Index()), target, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,9 +105,9 @@ func TestReplay_CopiesFactsToTempBranch(t *testing.T) {
 		t.Fatalf("FromLocal = %d, want 3", result.FromLocal)
 	}
 
-	// Verify all 3 facts exist in target.
+	// Verify all 3 facts exist in target (Replay sets HEAD to cfg.AgentBranch).
 	for path := range facts {
-		content, err := target.ReadFile(path)
+		content, err := target.ReadFile(cfg.AgentBranch, path)
 		if err != nil {
 			t.Fatalf("expected %s in target, got error: %v", path, err)
 		}
@@ -141,26 +116,30 @@ func TestReplay_CopiesFactsToTempBranch(t *testing.T) {
 		}
 	}
 
-	// Verify target is on the replay branch.
-	if target.Branch() != "agent/replay-test" {
-		t.Fatalf("target branch = %q, want %q", target.Branch(), "agent/replay-test")
+	// Verify target HEAD is on the replay branch.
+	gotBranch, err := target.DefaultBranch()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotBranch != cfg.AgentBranch {
+		t.Fatalf("target branch = %q, want %q", gotBranch, cfg.AgentBranch)
 	}
 }
 
 func TestReplay_LocalWins_OverwritesSharedPath(t *testing.T) {
 	// Create local store with a fact.
-	localStorer, localDB := newTestStorerForReplay(t)
+	localStorer, localSvc := newTestStorerForReplay(t)
 	local, err := git.InitWithStorer(localStorer, nil, "agent/local")
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	localContent := "---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# Local Version\n\nLocal body.\n"
-	commitHash, blobHash, err := local.WriteFile("kb/shared.md", localContent, "add shared", "learn")
+	commitHash, blobHash, err := local.WriteFile("agent/local", "kb/shared.md", localContent, "add shared", "learn")
 	if err != nil {
 		t.Fatal(err)
 	}
-	insertFact(t, localDB, "kb/shared.md", blobHash, commitHash)
+	insertFact(t, localSvc.Index(), "kb/shared.md", blobHash, commitHash)
 
 	// Create target store with the same path but different content.
 	targetStorer, _ := newTestStorerForReplay(t)
@@ -170,18 +149,18 @@ func TestReplay_LocalWins_OverwritesSharedPath(t *testing.T) {
 	}
 
 	remoteContent := "---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# Remote Version\n\nRemote body.\n"
-	if _, _, err := target.WriteFile("kb/shared.md", remoteContent, "add shared remote", "learn"); err != nil {
+	if _, _, err := target.WriteFile("agent/target-placeholder", "kb/shared.md", remoteContent, "add shared remote", "learn"); err != nil {
 		t.Fatal(err)
 	}
 	// Advance main to HEAD so that the agent branch created from main has the file.
-	advanceMainToHead(t, target)
+	advanceMainToHead(t, target, targetStorer, "agent/target-placeholder")
 
 	cfg := git.ReplayConfig{
 		Strategy:      git.StrategyLocalWins,
 		AgentBranch:   "agent/replay-test",
 		DefaultBranch: "main",
 	}
-	result, err := git.Replay(local, mustNewIter(t, localDB), target, cfg)
+	result, err := git.Replay(local, "agent/local", mustNewIter(t, localSvc.Index()), target, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -191,7 +170,7 @@ func TestReplay_LocalWins_OverwritesSharedPath(t *testing.T) {
 	}
 
 	// The target should now have local content.
-	content, err := target.ReadFile("kb/shared.md")
+	content, err := target.ReadFile(cfg.AgentBranch, "kb/shared.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -202,18 +181,18 @@ func TestReplay_LocalWins_OverwritesSharedPath(t *testing.T) {
 
 func TestReplay_RemoteWins_KeepsRemoteOnSharedPath(t *testing.T) {
 	// Create local store with a fact.
-	localStorer, localDB := newTestStorerForReplay(t)
+	localStorer, localSvc := newTestStorerForReplay(t)
 	local, err := git.InitWithStorer(localStorer, nil, "agent/local")
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	localContent := "---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# Local Version\n\nLocal body.\n"
-	commitHash, blobHash, err := local.WriteFile("kb/shared.md", localContent, "add shared", "learn")
+	commitHash, blobHash, err := local.WriteFile("agent/local", "kb/shared.md", localContent, "add shared", "learn")
 	if err != nil {
 		t.Fatal(err)
 	}
-	insertFact(t, localDB, "kb/shared.md", blobHash, commitHash)
+	insertFact(t, localSvc.Index(), "kb/shared.md", blobHash, commitHash)
 
 	// Create target store with the same path but different content.
 	targetStorer, _ := newTestStorerForReplay(t)
@@ -223,17 +202,17 @@ func TestReplay_RemoteWins_KeepsRemoteOnSharedPath(t *testing.T) {
 	}
 
 	remoteContent := "---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# Remote Version\n\nRemote body.\n"
-	if _, _, err := target.WriteFile("kb/shared.md", remoteContent, "add shared remote", "learn"); err != nil {
+	if _, _, err := target.WriteFile("agent/target-placeholder", "kb/shared.md", remoteContent, "add shared remote", "learn"); err != nil {
 		t.Fatal(err)
 	}
-	advanceMainToHead(t, target)
+	advanceMainToHead(t, target, targetStorer, "agent/target-placeholder")
 
 	cfg := git.ReplayConfig{
 		Strategy:      git.StrategyRemoteWins,
 		AgentBranch:   "agent/replay-test",
 		DefaultBranch: "main",
 	}
-	result, err := git.Replay(local, mustNewIter(t, localDB), target, cfg)
+	result, err := git.Replay(local, "agent/local", mustNewIter(t, localSvc.Index()), target, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -246,7 +225,7 @@ func TestReplay_RemoteWins_KeepsRemoteOnSharedPath(t *testing.T) {
 	}
 
 	// The target should still have remote content.
-	content, err := target.ReadFile("kb/shared.md")
+	content, err := target.ReadFile(cfg.AgentBranch, "kb/shared.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -257,7 +236,7 @@ func TestReplay_RemoteWins_KeepsRemoteOnSharedPath(t *testing.T) {
 
 func TestReplay_ResolvesDeadRefs(t *testing.T) {
 	// Create local store.
-	localStorer, localDB := newTestStorerForReplay(t)
+	localStorer, localSvc := newTestStorerForReplay(t)
 	local, err := git.InitWithStorer(localStorer, nil, "agent/local")
 	if err != nil {
 		t.Fatal(err)
@@ -265,22 +244,22 @@ func TestReplay_ResolvesDeadRefs(t *testing.T) {
 
 	// Write fact B with an external URL ref.
 	factBContent := "---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: [https://example.com/source]\n---\n# Fact B\n\nBody B.\n"
-	if _, _, err := local.WriteFile("kb/fact-b.md", factBContent, "add fact B", "learn"); err != nil {
+	if _, _, err := local.WriteFile("agent/local", "kb/fact-b.md", factBContent, "add fact B", "learn"); err != nil {
 		t.Fatal(err)
 	}
 
 	// Delete fact B.
-	if _, err := local.DeleteFile("kb/fact-b.md", "delete fact B", "retract"); err != nil {
+	if _, err := local.DeleteFile("agent/local", "kb/fact-b.md", "delete fact B", "retract"); err != nil {
 		t.Fatal(err)
 	}
 
 	// Write fact A that refs the now-deleted fact B.
 	factAContent := "---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: [kb/fact-b.md]\n---\n# Fact A\n\nBody A.\n"
-	commitHash, blobHash, err := local.WriteFile("kb/fact-a.md", factAContent, "add fact A", "learn")
+	commitHash, blobHash, err := local.WriteFile("agent/local", "kb/fact-a.md", factAContent, "add fact A", "learn")
 	if err != nil {
 		t.Fatal(err)
 	}
-	insertFact(t, localDB, "kb/fact-a.md", blobHash, commitHash)
+	insertFact(t, localSvc.Index(), "kb/fact-a.md", blobHash, commitHash)
 
 	// Create empty target store.
 	targetStorer, _ := newTestStorerForReplay(t)
@@ -294,7 +273,7 @@ func TestReplay_ResolvesDeadRefs(t *testing.T) {
 		AgentBranch:   "agent/replay-test",
 		DefaultBranch: "main",
 	}
-	result, err := git.Replay(local, mustNewIter(t, localDB), target, cfg)
+	result, err := git.Replay(local, "agent/local", mustNewIter(t, localSvc.Index()), target, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -304,7 +283,7 @@ func TestReplay_ResolvesDeadRefs(t *testing.T) {
 	}
 
 	// Verify fact A now has the external URL from fact B.
-	content, err := target.ReadFile("kb/fact-a.md")
+	content, err := target.ReadFile(cfg.AgentBranch, "kb/fact-a.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -318,7 +297,7 @@ func TestReplay_ResolvesDeadRefs(t *testing.T) {
 
 func TestReplay_DropsOrphanDeadRefs(t *testing.T) {
 	// Create local store.
-	localStorer, localDB := newTestStorerForReplay(t)
+	localStorer, localSvc := newTestStorerForReplay(t)
 	local, err := git.InitWithStorer(localStorer, nil, "agent/local")
 	if err != nil {
 		t.Fatal(err)
@@ -326,22 +305,22 @@ func TestReplay_DropsOrphanDeadRefs(t *testing.T) {
 
 	// Write fact B with NO external refs.
 	factBContent := "---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# Fact B\n\nBody B with no external refs.\n"
-	if _, _, err := local.WriteFile("kb/fact-b.md", factBContent, "add fact B", "learn"); err != nil {
+	if _, _, err := local.WriteFile("agent/local", "kb/fact-b.md", factBContent, "add fact B", "learn"); err != nil {
 		t.Fatal(err)
 	}
 
 	// Delete fact B.
-	if _, err := local.DeleteFile("kb/fact-b.md", "delete fact B", "retract"); err != nil {
+	if _, err := local.DeleteFile("agent/local", "kb/fact-b.md", "delete fact B", "retract"); err != nil {
 		t.Fatal(err)
 	}
 
 	// Write fact A that refs the now-deleted fact B.
 	factAContent := "---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: [kb/fact-b.md]\n---\n# Fact A\n\nBody A.\n"
-	commitHash, blobHash, err := local.WriteFile("kb/fact-a.md", factAContent, "add fact A", "learn")
+	commitHash, blobHash, err := local.WriteFile("agent/local", "kb/fact-a.md", factAContent, "add fact A", "learn")
 	if err != nil {
 		t.Fatal(err)
 	}
-	insertFact(t, localDB, "kb/fact-a.md", blobHash, commitHash)
+	insertFact(t, localSvc.Index(), "kb/fact-a.md", blobHash, commitHash)
 
 	// Create empty target store.
 	targetStorer, _ := newTestStorerForReplay(t)
@@ -355,7 +334,7 @@ func TestReplay_DropsOrphanDeadRefs(t *testing.T) {
 		AgentBranch:   "agent/replay-test",
 		DefaultBranch: "main",
 	}
-	result, err := git.Replay(local, mustNewIter(t, localDB), target, cfg)
+	result, err := git.Replay(local, "agent/local", mustNewIter(t, localSvc.Index()), target, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -365,7 +344,7 @@ func TestReplay_DropsOrphanDeadRefs(t *testing.T) {
 	}
 
 	// Verify fact A has empty refs.
-	content, err := target.ReadFile("kb/fact-a.md")
+	content, err := target.ReadFile(cfg.AgentBranch, "kb/fact-a.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -376,18 +355,18 @@ func TestReplay_DropsOrphanDeadRefs(t *testing.T) {
 
 func TestReplay_UsesExistingAgentBranch(t *testing.T) {
 	// Create local store with a fact.
-	localStorer, localDB := newTestStorerForReplay(t)
+	localStorer, localSvc := newTestStorerForReplay(t)
 	local, err := git.InitWithStorer(localStorer, nil, "agent/local")
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	localContent := "---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# Local Fact\n\nLocal body.\n"
-	commitHash, blobHash, err := local.WriteFile("kb/local.md", localContent, "add local", "learn")
+	commitHash, blobHash, err := local.WriteFile("agent/local", "kb/local.md", localContent, "add local", "learn")
 	if err != nil {
 		t.Fatal(err)
 	}
-	insertFact(t, localDB, "kb/local.md", blobHash, commitHash)
+	insertFact(t, localSvc.Index(), "kb/local.md", blobHash, commitHash)
 
 	// Create target store that already has an agent branch with content.
 	targetStorer, _ := newTestStorerForReplay(t)
@@ -398,7 +377,7 @@ func TestReplay_UsesExistingAgentBranch(t *testing.T) {
 
 	// Write a fact on the agent branch that only exists there (not on main).
 	agentContent := "---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# Agent Fact\n\nFrom agent branch.\n"
-	if _, _, err := target.WriteFile("kb/agent-existing.md", agentContent, "add agent fact", "learn"); err != nil {
+	if _, _, err := target.WriteFile("agent/replay-test", "kb/agent-existing.md", agentContent, "add agent fact", "learn"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -409,7 +388,7 @@ func TestReplay_UsesExistingAgentBranch(t *testing.T) {
 		DefaultBranch:     "main",
 		UseExistingBranch: true,
 	}
-	result, err := git.Replay(local, mustNewIter(t, localDB), target, cfg)
+	result, err := git.Replay(local, "agent/local", mustNewIter(t, localSvc.Index()), target, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -419,7 +398,7 @@ func TestReplay_UsesExistingAgentBranch(t *testing.T) {
 	}
 
 	// The local fact should exist.
-	content, err := target.ReadFile("kb/local.md")
+	content, err := target.ReadFile(cfg.AgentBranch, "kb/local.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -428,7 +407,7 @@ func TestReplay_UsesExistingAgentBranch(t *testing.T) {
 	}
 
 	// The pre-existing agent fact should still be there.
-	content, err = target.ReadFile("kb/agent-existing.md")
+	content, err = target.ReadFile(cfg.AgentBranch, "kb/agent-existing.md")
 	if err != nil {
 		t.Fatalf("expected agent-existing.md to still exist, got error: %v", err)
 	}
@@ -438,13 +417,13 @@ func TestReplay_UsesExistingAgentBranch(t *testing.T) {
 }
 
 // advanceMainToHead sets the main branch ref to the current HEAD commit.
-func advanceMainToHead(t *testing.T, s *git.Store) {
+func advanceMainToHead(t *testing.T, s *git.Store, sto *storegit.Storer, branch string) {
 	t.Helper()
-	head, err := s.HeadCommit()
+	head, err := s.HeadCommit(branch)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Storer().SetReference(
+	if err := sto.SetReference(
 		plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), plumbing.NewHash(head)),
 	); err != nil {
 		t.Fatal(err)

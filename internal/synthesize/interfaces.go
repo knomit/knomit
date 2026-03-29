@@ -4,24 +4,22 @@ import "knomit/internal/store"
 
 // GitStore is the interface that the synthesize package requires from the git store.
 type GitStore interface {
-	ReadFile(path string) (string, error)
-	ReadFileAtCommit(path, commitHash string) (string, error)
-	WriteFile(path, content, message, operation string) (commitHash, blobHash string, err error)
-	BatchWrite(files map[string]string, message, operation string) (commitHash string, blobHashes map[string]string, err error)
-	DeleteFile(path, message, operation string) (commitHash string, err error)
-	ListAll() ([]string, error)
-	Branch() string
-	DiffFiles(fromCommit string) (added, modified, deleted []string, err error)
-	HeadCommit() (string, error)
+	ReadFile(branch, path string) (string, error)
+	ReadFileAtCommit(branch, path, commitHash string) (string, error)
+	WriteFile(branch, path, content, message, operation string) (commitHash, blobHash string, err error)
+	BatchWrite(branch string, files map[string]string, message, operation string) (commitHash string, blobHashes map[string]string, err error)
+	DeleteFile(branch, path, message, operation string) (commitHash string, err error)
+	ListAll(branch string) ([]string, error)
+	DiffFiles(branch, fromCommit string) (added, modified, deleted []string, err error)
+	HeadCommit(branch string) (string, error)
 }
 
 // SearchIndex is the interface that the synthesize package requires from the search index.
 type SearchIndex interface {
-	Search(q store.SearchQuery) ([]store.SearchResult, error)
-	Upsert(r store.FactRecord) error
-	Delete(path string) error
+	Search(branch string, q store.SearchQuery) ([]store.SearchResult, error)
+	Upsert(branch, commitHash string, r store.FactRecord) error
+	Delete(branch, path string) error
 	ClusterFacts(resolution float64, minCommunitySize int) (store.ClusterResult, error)
-	GraphAddDerivedFrom(newPath string, sourcePaths []string) error
 }
 
 // ProgressEvent carries progress information from the pipeline to the caller.

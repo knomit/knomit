@@ -14,11 +14,10 @@ import (
 func TestHandleRepos(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
-	gs.EXPECT().Branch().Return("agent/abc123").AnyTimes()
 
 	rm := repos.New(context.Background(), repos.Deps{})
-	rm.Set("knomit", &repos.RepoInstance{Name: "knomit", GS: gs})
-	rm.Set("work", &repos.RepoInstance{Name: "work", GS: gs})
+	rm.Set("knomit", repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{Name: "knomit", AgentBranch: "agent/abc123", GS: gs}))
+	rm.Set("work", repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{Name: "work", AgentBranch: "agent/abc123", GS: gs}))
 
 	handler := handleRepos(rm)
 	req := httptest.NewRequest("GET", "/api/v1/repos", nil)

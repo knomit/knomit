@@ -27,12 +27,12 @@ func handleEvents() http.HandlerFunc {
 
 		// Subscribe returns both a channel and a snapshot of recent events,
 		// providing reconnection recovery without maintaining client-side state.
-		events, snapshot := ri.Hub.Subscribe(r.Context())
+		events, snapshot := ri.TaskHub().Subscribe(r.Context())
 
-		// Snapshot the initial head commit under RLock — GS may be swapped concurrently.
-		ri.RLock()
-		head, _ := ri.GS.HeadCommit()
-		ri.RUnlock()
+		// Snapshot the initial head commit — GS may be swapped concurrently.
+		var gs repos.GitStore
+		ri.WithRead(func(d repos.StoreDeps) { gs = d.GS })
+		head, _ := gs.HeadCommit(ri.Branch())
 		fmt.Fprintf(w, "event: status\ndata: {\"head\":\"%s\"}\n\n", head)
 
 		// Replay snapshot (reconnect recovery).

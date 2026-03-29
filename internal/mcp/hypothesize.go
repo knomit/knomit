@@ -44,7 +44,7 @@ func hypothesizeTool() mcpgo.Tool {
 }
 
 // HypothesizeHandler returns the handler function for knomit_hypothesize.
-func HypothesizeHandler(gs GitStore, idx SearchIndex, pipelineIdx PipelineIndex, ontologyRoot string) func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+func HypothesizeHandler(gs GitStore, idx SearchIndex, pipelineIdx PipelineIndex, ontologyRoot, agentBranch string) func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 	return func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 		ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
@@ -56,9 +56,9 @@ func HypothesizeHandler(gs GitStore, idx SearchIndex, pipelineIdx PipelineIndex,
 		var err error
 
 		if sessionID == "" {
-			result, err = hypothesizeStart(gs, idx, pipelineIdx, ontologyRoot)
+			result, err = hypothesizeStart(gs, idx, pipelineIdx, ontologyRoot, agentBranch)
 		} else {
-			result, err = hypothesizeContinue(pipelineIdx, gs, ontologyRoot, sessionID, response)
+			result, err = hypothesizeContinue(pipelineIdx, gs, ontologyRoot, agentBranch, sessionID, response)
 		}
 
 		if err != nil {
@@ -71,8 +71,8 @@ func HypothesizeHandler(gs GitStore, idx SearchIndex, pipelineIdx PipelineIndex,
 }
 
 // hypothesizeStart creates a new session, finds synthesis facts, and returns the first item.
-func hypothesizeStart(gs GitStore, idx SearchIndex, pipelineIdx PipelineIndex, ontologyRoot string) (*HypothesizeResult, error) {
-	branch := gs.Branch()
+func hypothesizeStart(gs GitStore, idx SearchIndex, pipelineIdx PipelineIndex, ontologyRoot, agentBranch string) (*HypothesizeResult, error) {
+	branch := agentBranch
 
 	// GC old sessions.
 	_ = pipelineIdx.GCPipelineSessions("hypothesize", branch, 5)
@@ -87,7 +87,7 @@ func hypothesizeStart(gs GitStore, idx SearchIndex, pipelineIdx PipelineIndex, o
 
 	if watermark == "" {
 		// First run: search for all synthesis facts.
-		results, err := idx.Search(SearchQuery{
+		results, err := idx.Search(agentBranch, SearchQuery{
 			IncludeTypes: []string{"synthesis"},
 			Limit:        100000,
 		})
@@ -107,7 +107,7 @@ func hypothesizeStart(gs GitStore, idx SearchIndex, pipelineIdx PipelineIndex, o
 		}
 	} else {
 		// Incremental: find changed files since watermark.
-		added, modified, _, err := gs.DiffFiles(watermark)
+		added, modified, _, err := gs.DiffFiles(agentBranch, watermark)
 		if err != nil {
 			return nil, fmt.Errorf("diff files: %w", err)
 		}
@@ -116,7 +116,7 @@ func hypothesizeStart(gs GitStore, idx SearchIndex, pipelineIdx PipelineIndex, o
 			if !strings.HasSuffix(p, ".md") {
 				continue
 			}
-			content, readErr := gs.ReadFile(p)
+			content, readErr := gs.ReadFile(agentBranch, p)
 			if readErr != nil {
 				continue
 			}
@@ -133,7 +133,7 @@ func hypothesizeStart(gs GitStore, idx SearchIndex, pipelineIdx PipelineIndex, o
 	// No synthesis facts → done immediately.
 	if len(synthFacts) == 0 {
 		// Advance watermark even when empty so next run is incremental.
-		if head, err := gs.HeadCommit(); err == nil {
+		if head, err := gs.HeadCommit(agentBranch); err == nil {
 			_ = pipelineIdx.SetPipelineWatermark("hypothesize", branch, head)
 		}
 		return &HypothesizeResult{Done: true}, nil
@@ -160,11 +160,11 @@ func hypothesizeStart(gs GitStore, idx SearchIndex, pipelineIdx PipelineIndex, o
 		}
 	}
 
-	return hypothesizeNextItem(pipelineIdx, gs, ontologyRoot, sess.ID)
+	return hypothesizeNextItem(pipelineIdx, gs, ontologyRoot, agentBranch, sess.ID)
 }
 
 // hypothesizeContinue acknowledges the current work item and advances to the next.
-func hypothesizeContinue(pipelineIdx PipelineIndex, gs GitStore, ontologyRoot, sessionID, response string) (*HypothesizeResult, error) {
+func hypothesizeContinue(pipelineIdx PipelineIndex, gs GitStore, ontologyRoot, agentBranch, sessionID, response string) (*HypothesizeResult, error) {
 	// Verify session exists and is active.
 	sess, err := pipelineIdx.GetPipelineSession(sessionID)
 	if err != nil {
@@ -192,11 +192,11 @@ func hypothesizeContinue(pipelineIdx PipelineIndex, gs GitStore, ontologyRoot, s
 		}
 	}
 
-	return hypothesizeNextItem(pipelineIdx, gs, ontologyRoot, sessionID)
+	return hypothesizeNextItem(pipelineIdx, gs, ontologyRoot, agentBranch, sessionID)
 }
 
 // hypothesizeNextItem fetches the next unanswered work item or completes the session.
-func hypothesizeNextItem(pipelineIdx PipelineIndex, gs GitStore, ontologyRoot, sessionID string) (*HypothesizeResult, error) {
+func hypothesizeNextItem(pipelineIdx PipelineIndex, gs GitStore, ontologyRoot, agentBranch, sessionID string) (*HypothesizeResult, error) {
 	item, err := pipelineIdx.NextPipelineWorkItem(sessionID)
 	if err != nil {
 		return nil, fmt.Errorf("next item: %w", err)
@@ -207,9 +207,8 @@ func hypothesizeNextItem(pipelineIdx PipelineIndex, gs GitStore, ontologyRoot, s
 		if err := pipelineIdx.CompletePipelineSession(sessionID); err != nil {
 			return nil, fmt.Errorf("complete session: %w", err)
 		}
-		branch := gs.Branch()
-		if head, err := gs.HeadCommit(); err == nil {
-			_ = pipelineIdx.SetPipelineWatermark("hypothesize", branch, head)
+		if head, err := gs.HeadCommit(agentBranch); err == nil {
+			_ = pipelineIdx.SetPipelineWatermark("hypothesize", agentBranch, head)
 		}
 		return &HypothesizeResult{
 			SessionID: sessionID,

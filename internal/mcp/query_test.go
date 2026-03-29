@@ -16,7 +16,7 @@ func TestQueryReturnsResults(t *testing.T) {
 
 
 
-	idx.EXPECT().Search(gomock.Any()).Return([]SearchResult{
+	idx.EXPECT().Search(gomock.Any(), gomock.Any()).Return([]SearchResult{
 		{
 			FactWithBody: FactWithBody{
 				FactRecord: FactRecord{
@@ -28,15 +28,15 @@ func TestQueryReturnsResults(t *testing.T) {
 					Confidence: 0.9,
 					Sources:    1,
 					Refs:       []string{},
-					CommitHash: "abc123",
 				},
-				Body: "Foo body.",
+				Body:       "Foo body.",
+				CommitHash: "abc123",
 			},
 			Score: 95.0,
 		},
 	}, nil)
 
-	handler := QueryHandler(gs, idx)
+	handler := QueryHandler(gs, idx, testAgentBranch)
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
@@ -70,7 +70,7 @@ func TestQueryRequiresFilter(t *testing.T) {
 
 
 
-	handler := QueryHandler(gs, idx)
+	handler := QueryHandler(gs, idx, testAgentBranch)
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{}
@@ -91,9 +91,9 @@ func TestQueryEmptyResults(t *testing.T) {
 
 
 
-	idx.EXPECT().Search(gomock.Any()).Return(nil, nil)
+	idx.EXPECT().Search(gomock.Any(), gomock.Any()).Return(nil, nil)
 
-	handler := QueryHandler(gs, idx)
+	handler := QueryHandler(gs, idx, testAgentBranch)
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
@@ -142,14 +142,14 @@ func TestQueryDomainFilter(t *testing.T) {
 
 
 
-	idx.EXPECT().Search(gomock.Any()).DoAndReturn(func(q SearchQuery) ([]SearchResult, error) {
+	idx.EXPECT().Search(gomock.Any(), gomock.Any()).DoAndReturn(func(branch string, q SearchQuery) ([]SearchResult, error) {
 		lastQuery = q
 		r := testSearchResult("general/foo.md", "Foo", "body")
 		r.Domain = []string{"infra"}
 		return []SearchResult{r}, nil
 	})
 
-	handler := QueryHandler(gs, idx)
+	handler := QueryHandler(gs, idx, testAgentBranch)
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
@@ -178,14 +178,14 @@ func TestQueryEntityFilter(t *testing.T) {
 
 
 
-	idx.EXPECT().Search(gomock.Any()).DoAndReturn(func(q SearchQuery) ([]SearchResult, error) {
+	idx.EXPECT().Search(gomock.Any(), gomock.Any()).DoAndReturn(func(branch string, q SearchQuery) ([]SearchResult, error) {
 		lastQuery = q
 		r := testSearchResult("general/bar.md", "Bar", "body")
 		r.Entities = []string{"db"}
 		return []SearchResult{r}, nil
 	})
 
-	handler := QueryHandler(gs, idx)
+	handler := QueryHandler(gs, idx, testAgentBranch)
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
@@ -214,12 +214,12 @@ func TestQueryPathPrefixFilter(t *testing.T) {
 
 
 
-	idx.EXPECT().Search(gomock.Any()).DoAndReturn(func(q SearchQuery) ([]SearchResult, error) {
+	idx.EXPECT().Search(gomock.Any(), gomock.Any()).DoAndReturn(func(branch string, q SearchQuery) ([]SearchResult, error) {
 		lastQuery = q
 		return []SearchResult{testSearchResult("general/ops/deploy.md", "Deploy", "body")}, nil
 	})
 
-	handler := QueryHandler(gs, idx)
+	handler := QueryHandler(gs, idx, testAgentBranch)
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
@@ -245,7 +245,7 @@ func TestQueryFrontmatterIncludesEvidenceWeight(t *testing.T) {
 	gs := NewMockGitStore(ctrl)
 	idx := NewMockSearchIndex(ctrl)
 
-	idx.EXPECT().Search(gomock.Any()).Return([]SearchResult{
+	idx.EXPECT().Search(gomock.Any(), gomock.Any()).Return([]SearchResult{
 		{
 			FactWithBody: FactWithBody{
 				FactRecord: FactRecord{
@@ -264,7 +264,7 @@ func TestQueryFrontmatterIncludesEvidenceWeight(t *testing.T) {
 		},
 	}, nil)
 
-	handler := QueryHandler(gs, idx)
+	handler := QueryHandler(gs, idx, testAgentBranch)
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{"text": "ew"}
 
@@ -312,14 +312,14 @@ func TestQueryMinConfidenceFilter(t *testing.T) {
 
 
 
-	idx.EXPECT().Search(gomock.Any()).DoAndReturn(func(q SearchQuery) ([]SearchResult, error) {
+	idx.EXPECT().Search(gomock.Any(), gomock.Any()).DoAndReturn(func(branch string, q SearchQuery) ([]SearchResult, error) {
 		lastQuery = q
 		r := testSearchResult("general/sure.md", "Sure", "body")
 		r.Confidence = 0.95
 		return []SearchResult{r}, nil
 	})
 
-	handler := QueryHandler(gs, idx)
+	handler := QueryHandler(gs, idx, testAgentBranch)
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{

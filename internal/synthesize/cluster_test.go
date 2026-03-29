@@ -13,7 +13,7 @@ func TestScopedCluster_EmptySeeds(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	idx := NewMockSearchIndex(ctrl)
 
-	result, err := ScopedCluster(nil, idx, 1.0, nil)
+	result, err := ScopedCluster(nil, idx, 1.0, nil, "agent/test")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -29,7 +29,7 @@ func TestScopedCluster_SeedsAndNeighborsClustered(t *testing.T) {
 	seed := factForLLM{File: "kb/go/concurrency/channels.md", Title: "Go channels", Body: "channels in go"}
 
 	// Search returns the neighbor for the seed's category.
-	idx.EXPECT().Search(store.SearchQuery{
+	idx.EXPECT().Search(gomock.Any(), store.SearchQuery{
 		Text:  "Go channels channels in go",
 		Path:  "kb/go/concurrency",
 		Limit: 10,
@@ -46,7 +46,7 @@ func TestScopedCluster_SeedsAndNeighborsClustered(t *testing.T) {
 		},
 	}, nil)
 
-	result, err := ScopedCluster([]factForLLM{seed}, idx, 1.0, nil)
+	result, err := ScopedCluster([]factForLLM{seed}, idx, 1.0, nil, "agent/test")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -72,19 +72,19 @@ func TestScopedCluster_CategoryFallbackOnLouvainError(t *testing.T) {
 	seed2 := factForLLM{File: "kb/go/concurrency/goroutines.md", Title: "goroutines", Body: "gr"}
 
 	// Search for seed1's neighbors.
-	idx.EXPECT().Search(gomock.Any()).Return([]store.SearchResult{
+	idx.EXPECT().Search(gomock.Any(), gomock.Any()).Return([]store.SearchResult{
 		{FactWithBody: store.FactWithBody{FactRecord: store.FactRecord{Path: "kb/go/concurrency/goroutines.md"}}, Score: 80},
 	}, nil)
 
 	// Search for seed2's neighbors.
-	idx.EXPECT().Search(gomock.Any()).Return([]store.SearchResult{
+	idx.EXPECT().Search(gomock.Any(), gomock.Any()).Return([]store.SearchResult{
 		{FactWithBody: store.FactWithBody{FactRecord: store.FactRecord{Path: "kb/go/concurrency/channels.md"}}, Score: 80},
 	}, nil)
 
 	// ClusterFacts fails.
 	idx.EXPECT().ClusterFacts(1.0, 2).Return(store.ClusterResult{}, fmt.Errorf("no embeddings"))
 
-	result, err := ScopedCluster([]factForLLM{seed1, seed2}, idx, 1.0, nil)
+	result, err := ScopedCluster([]factForLLM{seed1, seed2}, idx, 1.0, nil, "agent/test")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -109,7 +109,7 @@ func TestScopedCluster_SingleFactClustersFiltered(t *testing.T) {
 	seed := factForLLM{File: "kb/go/concurrency/channels.md", Title: "channels", Body: "ch"}
 
 	// No neighbors found.
-	idx.EXPECT().Search(gomock.Any()).Return(nil, nil)
+	idx.EXPECT().Search(gomock.Any(), gomock.Any()).Return(nil, nil)
 
 	// ClusterFacts returns a single-element cluster.
 	idx.EXPECT().ClusterFacts(1.0, 2).Return(store.ClusterResult{
@@ -118,7 +118,7 @@ func TestScopedCluster_SingleFactClustersFiltered(t *testing.T) {
 		},
 	}, nil)
 
-	result, err := ScopedCluster([]factForLLM{seed}, idx, 1.0, nil)
+	result, err := ScopedCluster([]factForLLM{seed}, idx, 1.0, nil, "agent/test")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -135,7 +135,7 @@ func TestScopedCluster_UnrelatedFactsExcluded(t *testing.T) {
 
 	seed := factForLLM{File: "kb/go/concurrency/channels.md", Title: "channels", Body: "ch"}
 
-	idx.EXPECT().Search(gomock.Any()).Return([]store.SearchResult{
+	idx.EXPECT().Search(gomock.Any(), gomock.Any()).Return([]store.SearchResult{
 		{FactWithBody: store.FactWithBody{FactRecord: store.FactRecord{Path: "kb/go/concurrency/goroutines.md"}}, Score: 80},
 	}, nil)
 
@@ -146,7 +146,7 @@ func TestScopedCluster_UnrelatedFactsExcluded(t *testing.T) {
 		},
 	}, nil)
 
-	result, err := ScopedCluster([]factForLLM{seed}, idx, 1.0, nil)
+	result, err := ScopedCluster([]factForLLM{seed}, idx, 1.0, nil, "agent/test")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -204,7 +204,7 @@ func TestScopedCluster_ExcludeTypesPassedToSearch(t *testing.T) {
 	seed := factForLLM{File: "kb/go/concurrency/channels.md", Title: "channels", Body: "ch"}
 
 	// Expect Search to be called with ExcludeTypes populated.
-	idx.EXPECT().Search(gomock.Any()).DoAndReturn(func(q store.SearchQuery) ([]store.SearchResult, error) {
+	idx.EXPECT().Search(gomock.Any(), gomock.Any()).DoAndReturn(func(branch string, q store.SearchQuery) ([]store.SearchResult, error) {
 		if len(q.ExcludeTypes) != 1 || q.ExcludeTypes[0] != "hypothesis" {
 			t.Errorf("expected ExcludeTypes=[hypothesis], got %v", q.ExcludeTypes)
 		}
@@ -219,7 +219,7 @@ func TestScopedCluster_ExcludeTypesPassedToSearch(t *testing.T) {
 		},
 	}, nil)
 
-	result, err := ScopedCluster([]factForLLM{seed}, idx, 1.0, nil, "hypothesis")
+	result, err := ScopedCluster([]factForLLM{seed}, idx, 1.0, nil, "agent/test", "hypothesis")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -235,7 +235,7 @@ func TestScopedCluster_NoExcludeTypesByDefault(t *testing.T) {
 	seed := factForLLM{File: "kb/go/concurrency/channels.md", Title: "channels", Body: "ch"}
 
 	// Expect Search to be called without ExcludeTypes.
-	idx.EXPECT().Search(gomock.Any()).DoAndReturn(func(q store.SearchQuery) ([]store.SearchResult, error) {
+	idx.EXPECT().Search(gomock.Any(), gomock.Any()).DoAndReturn(func(branch string, q store.SearchQuery) ([]store.SearchResult, error) {
 		if len(q.ExcludeTypes) != 0 {
 			t.Errorf("expected empty ExcludeTypes, got %v", q.ExcludeTypes)
 		}
@@ -244,7 +244,7 @@ func TestScopedCluster_NoExcludeTypesByDefault(t *testing.T) {
 
 	idx.EXPECT().ClusterFacts(1.0, 2).Return(store.ClusterResult{}, fmt.Errorf("no embeddings"))
 
-	_, _ = ScopedCluster([]factForLLM{seed}, idx, 1.0, nil)
+	_, _ = ScopedCluster([]factForLLM{seed}, idx, 1.0, nil, "agent/test")
 }
 
 // clusterPaths extracts file paths from a cluster for easier assertions.

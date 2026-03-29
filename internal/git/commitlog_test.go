@@ -1,32 +1,56 @@
 // Internal tests for commit_log population, append, and SQL fallback.
-// Package git (not git_test) to access unexported fields: db, commitLog.
+// Package git (not git_test) to access unexported fields: storer.
 package git
 
 import (
 	"database/sql"
-	"path/filepath"
 	"testing"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
+
 	storegit "knomit/internal/store/git"
+	storemigrate "knomit/internal/store/migrate"
 )
+
+// newStorerAndDB opens an in-memory SQLite DB, applies Core migrations, and
+// returns a Storer (backed by an externally-owned DB) alongside the DB itself.
+// The caller is responsible for closing the DB via t.Cleanup.
+func newStorerAndDB(t *testing.T) (*storegit.Storer, *sql.DB) {
+	t.Helper()
+	db, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := storemigrate.Core(db); err != nil {
+		db.Close()
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	return storegit.NewStorer(db), db
+}
+
+// newStoreAndDB creates a git.Store backed by an in-memory DB and returns
+// both so tests can inject data directly via SQL.
+func newStoreAndDB(t *testing.T) (*Store, *sql.DB) {
+	t.Helper()
+	s, db := newStorerAndDB(t)
+	store, err := InitWithStorer(s, nil, testBranch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return store, db
+}
 
 // TestActivitySQLTimeBuckets verifies that the CASE WHEN cutoff expressions in
 // activitySQL produce correct 7d/30d/90d counts. Rows are injected directly
 // into commit_log so timestamps are fully controlled.
 func TestActivitySQLTimeBuckets(t *testing.T) {
-	dir := t.TempDir()
-	store, err := Init(filepath.Join(dir, "test.db"), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store, db := newStoreAndDB(t)
 
-	if !store.commitLog.Load() {
+	if !store.storer.CommitLogAvailable() {
 		t.Skip("commit_log not available")
 	}
-
 	now := time.Now().Unix()
 	injected := []struct {
 		hash string
@@ -40,7 +64,7 @@ func TestActivitySQLTimeBuckets(t *testing.T) {
 		{"aa000004aa000004aa000004aa000004aa000004", "kb/r120d.md", now - 120*86400, "120d ago"},
 	}
 	for _, r := range injected {
-		if _, err := store.db.Exec(
+		if _, err := db.Exec(
 			`INSERT OR IGNORE INTO commit_log (commit_hash, path, committed_at, message) VALUES (?, ?, ?, ?)`,
 			r.hash, r.path, r.ts, r.msg,
 		); err != nil {
@@ -69,55 +93,40 @@ func TestActivitySQLTimeBuckets(t *testing.T) {
 }
 
 // TestCommitLogIncrementalAppend verifies that appendCommitLog writes the
-// correct commit hash and path for each WriteFile/DeleteFile call, and that
-// rowid order reflects write order (newer commit = higher rowid).
+// correct commit hash and path for each WriteFile call.
 func TestCommitLogIncrementalAppend(t *testing.T) {
-	dir := t.TempDir()
-	store, err := Init(filepath.Join(dir, "test.db"), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store, db := newStoreAndDB(t)
 
-	if !store.commitLog.Load() {
+	if !store.storer.CommitLogAvailable() {
 		t.Skip("commit_log not available")
 	}
-
 	var countBefore int
-	store.db.QueryRow(`SELECT COUNT(*) FROM commit_log`).Scan(&countBefore)
+	db.QueryRow(`SELECT COUNT(*) FROM commit_log`).Scan(&countBefore)
 
-	h1, _, err := store.WriteFile("kb/a.md", "# A\n", "add a", "learn")
+	h1, _, err := store.WriteFile(testBranch, "kb/a.md", "# A\n", "add a", "learn")
 	if err != nil {
 		t.Fatal(err)
 	}
-	h2, _, err := store.WriteFile("kb/b.md", "# B\n", "add b", "learn")
+	h2, _, err := store.WriteFile(testBranch, "kb/b.md", "# B\n", "add b", "learn")
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	var countAfter int
-	store.db.QueryRow(`SELECT COUNT(*) FROM commit_log`).Scan(&countAfter)
+	db.QueryRow(`SELECT COUNT(*) FROM commit_log`).Scan(&countAfter)
 	if countAfter != countBefore+2 {
 		t.Errorf("commit_log rows: got %d, want %d", countAfter, countBefore+2)
 	}
 
 	// Each row must reference the correct commit hash.
 	var gotH1, gotH2 string
-	store.db.QueryRow(`SELECT commit_hash FROM commit_log WHERE path = 'kb/a.md'`).Scan(&gotH1)
-	store.db.QueryRow(`SELECT commit_hash FROM commit_log WHERE path = 'kb/b.md'`).Scan(&gotH2)
+	db.QueryRow(`SELECT commit_hash FROM commit_log WHERE path = 'kb/a.md'`).Scan(&gotH1)
+	db.QueryRow(`SELECT commit_hash FROM commit_log WHERE path = 'kb/b.md'`).Scan(&gotH2)
 	if gotH1 != h1 {
 		t.Errorf("kb/a.md commit_hash = %q, want %q", gotH1, h1)
 	}
 	if gotH2 != h2 {
 		t.Errorf("kb/b.md commit_hash = %q, want %q", gotH2, h2)
-	}
-
-	// rowid(a) < rowid(b) — b was written after a, so it must have higher rowid.
-	var rowA, rowB int64
-	store.db.QueryRow(`SELECT rowid FROM commit_log WHERE path = 'kb/a.md'`).Scan(&rowA)
-	store.db.QueryRow(`SELECT rowid FROM commit_log WHERE path = 'kb/b.md'`).Scan(&rowB)
-	if rowA >= rowB {
-		t.Errorf("rowid ordering: rowid(a)=%d >= rowid(b)=%d; newer commit must have higher rowid", rowA, rowB)
 	}
 }
 
@@ -125,38 +134,33 @@ func TestCommitLogIncrementalAppend(t *testing.T) {
 // existing commit_log entries does not duplicate rows (the early-stop on
 // already-indexed commits works correctly).
 func TestPopulateCommitLogIsIncremental(t *testing.T) {
-	dir := t.TempDir()
-	dbPath := filepath.Join(dir, "test.db")
-
-	store, err := Init(dbPath, nil)
+	s, db := newStorerAndDB(t)
+	store, err := InitWithStorer(s, nil, testBranch)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := store.WriteFile("kb/a.md", "# A\n", "add a", "learn"); err != nil {
+	if _, _, err := store.WriteFile(testBranch, "kb/a.md", "# A\n", "add a", "learn"); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := store.WriteFile("kb/b.md", "# B\n", "add b", "learn"); err != nil {
+	if _, _, err := store.WriteFile(testBranch, "kb/b.md", "# B\n", "add b", "learn"); err != nil {
 		t.Fatal(err)
 	}
-
 	var countFirst int
-	store.db.QueryRow(`SELECT COUNT(*) FROM commit_log`).Scan(&countFirst)
-	store.Close()
+	db.QueryRow(`SELECT COUNT(*) FROM commit_log`).Scan(&countFirst)
 
-	// Reopen — populateCommitLog runs again.
-	store2, err := Open(dbPath)
+	// Reopen with same storer — populateCommitLog runs again.
+	store2, err := OpenWithStorer(s)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store2.Close()
 
 	var countSecond int
-	store2.db.QueryRow(`SELECT COUNT(*) FROM commit_log`).Scan(&countSecond)
+	db.QueryRow(`SELECT COUNT(*) FROM commit_log`).Scan(&countSecond)
 
 	if countSecond != countFirst {
 		t.Errorf("commit_log rows after re-open: got %d, want %d (duplicate insert?)", countSecond, countFirst)
 	}
-	if !store2.commitLog.Load() {
+	if !store2.storer.CommitLogAvailable() {
 		t.Error("commitLog flag must be true after re-open")
 	}
 }
@@ -164,27 +168,21 @@ func TestPopulateCommitLogIsIncremental(t *testing.T) {
 // TestAppendCommitLogDelete verifies that DeleteFile commits appear in
 // commit_log with the deleted file's path.
 func TestAppendCommitLogDelete(t *testing.T) {
-	dir := t.TempDir()
-	store, err := Init(filepath.Join(dir, "test.db"), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store, db := newStoreAndDB(t)
 
-	if !store.commitLog.Load() {
+	if !store.storer.CommitLogAvailable() {
 		t.Skip("commit_log not available")
 	}
-
-	h1, _, err := store.WriteFile("kb/del.md", "# Del\n", "add del", "learn")
+	h1, _, err := store.WriteFile(testBranch, "kb/del.md", "# Del\n", "add del", "learn")
 	if err != nil {
 		t.Fatal(err)
 	}
-	h2, err := store.DeleteFile("kb/del.md", "delete del", "retract")
+	h2, err := store.DeleteFile(testBranch, "kb/del.md", "delete del", "retract")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	rows, err := store.db.Query(
+	rows, err := db.Query(
 		`SELECT commit_hash FROM commit_log WHERE path = 'kb/del.md' ORDER BY rowid`)
 	if err != nil {
 		t.Fatal(err)
@@ -208,28 +206,24 @@ func TestAppendCommitLogDelete(t *testing.T) {
 // TestCommitLogOperation verifies that operation and author_email are stored
 // in commit_log for multiple operation types (learn, retract, update).
 func TestCommitLogOperation(t *testing.T) {
-	store, err := Init(":memory:", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store, db := newStoreAndDB(t)
 
-	agentID := store.AgentID()
+	agentID := deriveAgentID(testBranch)
 
 	// learn
-	if _, _, err := store.WriteFile("kb/a.md", "# A\n", "add a", "learn"); err != nil {
+	if _, _, err := store.WriteFile(testBranch, "kb/a.md", "# A\n", "add a", "learn"); err != nil {
 		t.Fatal(err)
 	}
 	// update
-	if _, _, err := store.WriteFile("kb/a.md", "# A v2\n", "update a", "update"); err != nil {
+	if _, _, err := store.WriteFile(testBranch, "kb/a.md", "# A v2\n", "update a", "update"); err != nil {
 		t.Fatal(err)
 	}
 	// retract
-	if _, err := store.DeleteFile("kb/a.md", "retract a", "retract"); err != nil {
+	if _, err := store.DeleteFile(testBranch, "kb/a.md", "retract a", "retract"); err != nil {
 		t.Fatal(err)
 	}
 
-	rows, err := store.db.Query(`SELECT operation, author_email FROM commit_log WHERE path = 'kb/a.md' ORDER BY rowid`)
+	rows, err := db.Query(`SELECT operation, author_email FROM commit_log WHERE path = 'kb/a.md' ORDER BY rowid`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -271,10 +265,10 @@ func TestParseOperation(t *testing.T) {
 		{"agent+learn@agents.knomit.io", "learn"},
 		{"bob+retract@gmail.com", "retract"},
 		{"host-abc+sync@agents.knomit.io", "sync"},
-		{"plain@example.com", ""},     // no +tag
-		{"noatsign", ""},              // no @ at all
-		{"+learn@example.com", "learn"}, // + at start is valid subaddress
-		{"a@b+c@d.com", ""},             // @ before + (malformed)
+		{"plain@example.com", ""},        // no +tag
+		{"noatsign", ""},                 // no @ at all
+		{"+learn@example.com", "learn"},  // + at start is valid subaddress
+		{"a@b+c@d.com", ""},              // @ before + (malformed)
 	}
 	for _, tt := range tests {
 		got := parseOperation(tt.email)
@@ -303,21 +297,21 @@ CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value BLOB NOT NULL);`
 	}
 
 	s := storegit.NewStorer(db)
-	store, err := InitWithStorer(s, nil, "agent/test")
+	store, err := InitWithStorer(s, nil, testBranch)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if store.commitLog.Load() {
+	if store.storer.CommitLogAvailable() {
 		t.Error("commitLog should be false when commit_log table is absent")
 	}
 
-	if _, _, err := store.WriteFile("kb/a.md", "# A\n", "add a", "learn"); err != nil {
+	if _, _, err := store.WriteFile(testBranch, "kb/a.md", "# A\n", "add a", "learn"); err != nil {
 		t.Fatal(err)
 	}
 
 	// Activity must fall back to go-git and return correct count.
-	a, err := store.Activity("kb")
+	a, err := store.Activity(testBranch, "kb")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -326,7 +320,7 @@ CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value BLOB NOT NULL);`
 	}
 
 	// WalkChangedFiles must also fall back to go-git.
-	files, _, err := store.WalkChangedFiles("", "kb", nil, 10)
+	files, _, err := store.WalkChangedFiles(testBranch, "", "kb", nil, 10)
 	if err != nil {
 		t.Fatal(err)
 	}

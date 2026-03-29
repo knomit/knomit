@@ -21,6 +21,7 @@ func ScopedCluster(
 	idx SearchIndex,
 	resolution float64,
 	onProgress func(ProgressEvent),
+	agentBranch string,
 	excludeTypes ...string,
 ) ([][]factForLLM, error) {
 	if len(seeds) == 0 {
@@ -43,7 +44,7 @@ func ScopedCluster(
 		subgraph[seed.File] = true
 
 		cat := categoryDir(seed.File)
-		results, err := idx.Search(store.SearchQuery{
+		results, err := idx.Search(agentBranch, store.SearchQuery{
 			Text:         seed.Title + " " + seed.Body,
 			Path:         cat,
 			Limit:        10,

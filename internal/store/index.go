@@ -20,23 +20,8 @@ import (
 	"sync"
 
 	"knomit/internal/fact"
+	"knomit/internal/store/migrate"
 )
-
-// ────────────────────────────────────────────────────────────────────────────
-// Configuration
-// ────────────────────────────────────────────────────────────────────────────
-
-type indexConfig struct {
-	vecDim int
-}
-
-// Option configures an Index.
-type Option func(*indexConfig)
-
-// WithVecDimension sets the dimension of the facts_vec embedding column.
-func WithVecDimension(d int) Option {
-	return func(c *indexConfig) { c.vecDim = d }
-}
 
 // ────────────────────────────────────────────────────────────────────────────
 // Domain types
@@ -53,13 +38,12 @@ type FactRecord struct {
 	Confidence     float64  `json:"confidence"`
 	Sources        int      `json:"sources"`
 	Refs           []string `json:"refs"`
-	CommitHash     string   `json:"commit_hash,omitempty"`
 	EvidenceWeight float64  `json:"evidence_weight,omitempty"`
 }
 
 // NewFactRecord constructs a FactRecord from a parsed fact and git metadata.
-// blobHash is the blob SHA returned by WriteFile; commitHash is the commit SHA.
-func NewFactRecord(f fact.Fact, blobHash, commitHash string) FactRecord {
+// blobHash is the blob SHA returned by WriteFile.
+func NewFactRecord(f fact.Fact, blobHash string) FactRecord {
 	return FactRecord{
 		Path:           f.Path(),
 		Title:          f.Title,
@@ -70,7 +54,6 @@ func NewFactRecord(f fact.Fact, blobHash, commitHash string) FactRecord {
 		Confidence:     f.Confidence,
 		Sources:        f.Sources,
 		Refs:           f.Refs,
-		CommitHash:     commitHash,
 		EvidenceWeight: f.EvidenceWeight,
 	}
 }
@@ -78,7 +61,8 @@ func NewFactRecord(f fact.Fact, blobHash, commitHash string) FactRecord {
 // FactWithBody is returned by read operations that hydrate the body from git objects.
 type FactWithBody struct {
 	FactRecord
-	Body string `json:"body"`
+	Body       string `json:"body"`
+	CommitHash string `json:"commit_hash,omitempty"`
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -99,21 +83,24 @@ type BatchEmbedder interface {
 
 // GitReader is the interface that Index.Sync requires from the git store.
 type GitReader interface {
-	// DiffFiles returns paths added, modified, and deleted between fromCommit and HEAD.
-	DiffFiles(fromCommit string) (added, modified, deleted []string, err error)
-	// ReadFile reads the content of path from the HEAD commit.
-	ReadFile(path string) (string, error)
-	// ReadFileWithHash returns both the file content and the blob hash for the given path.
-	ReadFileWithHash(path string) (content string, blobHash string, err error)
-	// HeadCommit returns the hash of the current HEAD commit as a hex string.
-	HeadCommit() (string, error)
-	// ListAll returns paths of all .md files from HEAD.
-	ListAll() ([]string, error)
-	// ListAllWithHash returns all .md file paths and their blob hashes from HEAD.
+	// DiffFiles returns paths added, modified, and deleted between fromCommit and HEAD on branch.
+	DiffFiles(branch, fromCommit string) (added, modified, deleted []string, err error)
+	// ReadFile reads the content of path from the HEAD commit of branch.
+	ReadFile(branch, path string) (string, error)
+	// ReadFileWithHash returns both the file content and the blob hash for the given path on branch.
+	ReadFileWithHash(branch, path string) (content string, blobHash string, err error)
+	// HeadCommit returns the hash of the current HEAD commit of branch as a hex string.
+	HeadCommit(branch string) (string, error)
+	// ListAll returns paths of all .md files from HEAD of branch.
+	ListAll(branch string) ([]string, error)
+	// ListAllWithHash returns all .md file paths and their blob hashes from HEAD of branch.
 	// Single tree walk, no per-file I/O.
-	ListAllWithHash() (paths []string, blobHashes []string, err error)
-	// LastCommitForPath returns the hash of the most recent non-merge commit that touched path.
-	LastCommitForPath(path string) (string, error)
+	ListAllWithHash(branch string) (paths []string, blobHashes []string, err error)
+	// LastCommitForPath returns the hash of the most recent non-merge commit that touched path on branch.
+	LastCommitForPath(branch, path string) (string, error)
+	// ReadFileAtCommit reads the content of path at the given commit on branch.
+	// branch is used for repository context; commitHash uniquely identifies the version.
+	ReadFileAtCommit(branch, path, commitHash string) (string, error)
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -122,15 +109,16 @@ type GitReader interface {
 
 // Index is the search index backed by SQLite with sqlite-vec.
 type Index struct {
-	db      *sql.DB
-	embedMu sync.RWMutex
+	db       *sql.DB
+	embedMu  sync.RWMutex
 	embedder Embedder
+	branches *branchCache
 }
 
 // newIndex wraps an existing *sql.DB. Schema must already be applied.
 // Used by Service.Open to construct the Index over the shared database.
 func newIndex(db *sql.DB) *Index {
-	return &Index{db: db}
+	return &Index{db: db, branches: newBranchCache()}
 }
 
 // SetEmbedder attaches an Embedder to the index. When set, Upsert will call
@@ -155,15 +143,11 @@ func (idx *Index) getEmbedder() Embedder {
 	return idx.embedder
 }
 
-// New opens (or creates) a SQLite search index at path.
+// New opens (or creates) a SQLite search index at path and applies all
+// migrations including vec0 and GraphQLite.
 // Use ":memory:" for an in-memory database (useful in tests).
-func New(path string, opts ...Option) (*Index, error) {
+func New(path string) (*Index, error) {
 	registerVec()
-
-	cfg := indexConfig{vecDim: 768}
-	for _, o := range opts {
-		o(&cfg)
-	}
 
 	dsn := path
 	if path == ":memory:" {
@@ -176,52 +160,15 @@ func New(path string, opts ...Option) (*Index, error) {
 		return nil, fmt.Errorf("open sqlite: %w", err)
 	}
 	db.SetMaxOpenConns(4)
-
-	// Per-connection performance pragmas are applied in the ConnectHook (vec.go)
-	// so every pooled connection is configured, not just the first one.
-
-	// Update query planner statistics (one-time hint, not per-connection).
 	db.Exec("PRAGMA optimize")
 
-	// Use the same embedded schema.sql as Service.Open to keep DDL in one place.
-	if _, err := db.Exec(schemaSQL_); err != nil {
+	if err := migrate.All(db); err != nil {
 		db.Close()
-		return nil, fmt.Errorf("init schema: %w", err)
-	}
-	vecDDL := fmt.Sprintf(
-		`CREATE VIRTUAL TABLE IF NOT EXISTS facts_vec USING vec0(embedding FLOAT[%d] distance_metric=cosine)`,
-		cfg.vecDim,
-	)
-	if _, err := db.Exec(vecDDL); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("init vec0: %w", err)
-	}
-	if _, err = db.Exec(`INSERT OR IGNORE INTO meta(key, value) VALUES ('schema_version', '3')`); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("init schema_version: %w", err)
+		return nil, fmt.Errorf("store.New: %w", err)
 	}
 
-	// Migrate schema: ensure GraphQLite EAV tables are initialized and bump
-	// the version to 4. GraphQLite creates its EAV tables on the first
-	// cypher() call, so we trigger that here.
-	var currentVersion string
-	_ = db.QueryRow(`SELECT value FROM meta WHERE key='schema_version'`).Scan(&currentVersion)
-	if currentVersion == "" || currentVersion < "4" {
-		if _, err := db.Exec(`SELECT cypher('RETURN 1')`); err != nil {
-			db.Close()
-			return nil, fmt.Errorf("init graphqlite: %w", err)
-		}
-		if _, err := db.Exec(`INSERT OR REPLACE INTO meta(key, value) VALUES ('schema_version', '4')`); err != nil {
-			db.Close()
-			return nil, fmt.Errorf("update schema_version: %w", err)
-		}
-	}
-
-	return &Index{db: db}, nil
+	return &Index{db: db, branches: newBranchCache()}, nil
 }
-
-// DB returns the underlying *sql.DB handle.
-func (idx *Index) DB() *sql.DB { return idx.db }
 
 // Close closes the underlying database connection.
 func (idx *Index) Close() error {
@@ -249,20 +196,39 @@ func extractBody(raw []byte) string {
 }
 
 
-// Completions returns autocomplete suggestions for a given filter category and prefix.
+// Completions returns autocomplete suggestions for a given filter category and prefix,
+// scoped to the given branch.
 // Supported categories: "domain", "entity", "type", "ep", "path".
-func (idx *Index) Completions(category, prefix string, limit int) ([]string, error) {
+func (idx *Index) Completions(branch, category, prefix string, limit int) ([]string, error) {
+	branchID, err := idx.BranchID(branch)
+	if err != nil {
+		return nil, fmt.Errorf("completions: %w", err)
+	}
+
 	switch category {
 	case "domain":
-		return idx.queryDistinct("SELECT DISTINCT domain FROM fact_domains WHERE domain LIKE ? LIMIT ?", prefix+"%", limit)
+		return idx.queryDistinct(
+			`SELECT DISTINCT fd.domain FROM fact_domains fd
+			 JOIN branch_facts bf ON bf.fact_id = fd.fact_id
+			 WHERE bf.branch_id = ? AND fd.domain LIKE ? LIMIT ?`,
+			branchID, prefix+"%", limit)
 	case "entity":
-		return idx.queryDistinct("SELECT DISTINCT entity FROM fact_entities WHERE entity LIKE ? LIMIT ?", prefix+"%", limit)
+		return idx.queryDistinct(
+			`SELECT DISTINCT fe.entity FROM fact_entities fe
+			 JOIN branch_facts bf ON bf.fact_id = fe.fact_id
+			 WHERE bf.branch_id = ? AND fe.entity LIKE ? LIMIT ?`,
+			branchID, prefix+"%", limit)
 	case "type":
 		return []string{"observation", "concept", "process", "principle", "pattern", "reference", "synthesis", "hypothesis", "methodology"}, nil
 	case "ep":
 		return []string{"learn", "update", "retract", "subsume", "synthesize", "sync"}, nil
 	case "path":
-		rows, err := idx.db.Query(`SELECT DISTINCT path FROM facts WHERE path LIKE ? LIMIT 500`, prefix+"%")
+		rows, err := idx.db.Query(
+			`SELECT DISTINCT f.path
+			 FROM branch_facts bf
+			 JOIN facts f ON f.id = bf.fact_id
+			 WHERE bf.branch_id = ? AND f.path LIKE ? LIMIT 500`,
+			branchID, prefix+"%")
 		if err != nil {
 			return nil, err
 		}
@@ -321,20 +287,28 @@ type StatsResult struct {
 	Entities      map[string]int `json:"entities"`
 }
 
-// Stats returns aggregate statistics over all indexed facts, optionally
-// filtered to those whose path starts with pathPrefix.
-func (idx *Index) Stats(pathPrefix string) (StatsResult, error) {
+// Stats returns aggregate statistics over all indexed facts on a branch,
+// optionally filtered to those whose path starts with pathPrefix.
+func (idx *Index) Stats(branch, pathPrefix string) (StatsResult, error) {
 	res := StatsResult{
 		Domains:  make(map[string]int),
 		Entities: make(map[string]int),
 	}
 
+	branchID, err := idx.BranchID(branch)
+	if err != nil {
+		return res, fmt.Errorf("stats: %w", err)
+	}
+
 	// Total count and average confidence.
 	var avgConf *float64
-	q := `SELECT COUNT(*), AVG(confidence) FROM facts`
-	args := []any{}
+	q := `SELECT COUNT(*), AVG(f.confidence)
+	      FROM branch_facts bf
+	      JOIN facts f ON f.id = bf.fact_id
+	      WHERE bf.branch_id = ?`
+	args := []any{branchID}
 	if pathPrefix != "" {
-		q += ` WHERE path LIKE ?`
+		q += ` AND f.path LIKE ?`
 		args = append(args, pathPrefix+"%")
 	}
 	if err := idx.db.QueryRow(q, args...).Scan(&res.Total, &avgConf); err != nil {
@@ -346,12 +320,17 @@ func (idx *Index) Stats(pathPrefix string) (StatsResult, error) {
 	}
 
 	// Domain counts via json_each.
-	dq := `SELECT d.value, COUNT(*) FROM facts f, json_each(f.domain) d WHERE d.value IS NOT NULL`
+	dq := `SELECT d.value, COUNT(*)
+	       FROM branch_facts bf
+	       JOIN facts f ON f.id = bf.fact_id, json_each(f.domain) d
+	       WHERE bf.branch_id = ? AND d.value IS NOT NULL`
+	dargs := []any{branchID}
 	if pathPrefix != "" {
 		dq += ` AND f.path LIKE ?`
+		dargs = append(dargs, pathPrefix+"%")
 	}
 	dq += ` GROUP BY d.value`
-	drows, err := idx.db.Query(dq, args...)
+	drows, err := idx.db.Query(dq, dargs...)
 	if err != nil {
 		return res, err
 	}
@@ -366,12 +345,17 @@ func (idx *Index) Stats(pathPrefix string) (StatsResult, error) {
 	}
 
 	// Entity counts via json_each.
-	eq := `SELECT e.value, COUNT(*) FROM facts f, json_each(f.entities) e WHERE e.value IS NOT NULL`
+	eq := `SELECT e.value, COUNT(*)
+	       FROM branch_facts bf
+	       JOIN facts f ON f.id = bf.fact_id, json_each(f.entities) e
+	       WHERE bf.branch_id = ? AND e.value IS NOT NULL`
+	eargs := []any{branchID}
 	if pathPrefix != "" {
 		eq += ` AND f.path LIKE ?`
+		eargs = append(eargs, pathPrefix+"%")
 	}
 	eq += ` GROUP BY e.value`
-	erows, err := idx.db.Query(eq, args...)
+	erows, err := idx.db.Query(eq, eargs...)
 	if err != nil {
 		return res, err
 	}

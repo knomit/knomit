@@ -11,6 +11,16 @@ import (
 	"go.uber.org/mock/gomock"
 )
 
+const testBranch = "agent/test"
+
+// ensureTestBranch creates the test branch in the index if it doesn't exist.
+func ensureTestBranch(t *testing.T, idx *store.Index) {
+	t.Helper()
+	if _, err := idx.EnsureBranch(testBranch, "refs/heads/"+testBranch); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // insertTestBlob inserts a fake blob into the objects table for testing.
 // If content has no frontmatter, it is wrapped with a default header.
 func insertTestBlob(t *testing.T, db *sql.DB, hash, content string) {
@@ -32,9 +42,9 @@ func TestUpsertAndGetByPath(t *testing.T) {
 	}
 	defer idx.Close()
 
-	insertTestBlob(t, idx.DB(), "blob_foo", "This is about databases and postgres")
+	insertTestBlob(t, idx.TestDB(), "blob_foo", "This is about databases and postgres")
 
-	err = idx.Upsert(store.FactRecord{
+	err = idx.Upsert(testBranch, "abc", store.FactRecord{
 		Path:       "kb/test/foo.md",
 		Title:      "Foo fact",
 		BlobHash:   "blob_foo",
@@ -42,13 +52,12 @@ func TestUpsertAndGetByPath(t *testing.T) {
 		Entities:   []string{"postgres"},
 		Confidence: 0.9,
 		Sources:    1,
-		CommitHash: "abc",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	rec, err := idx.GetByPath("kb/test/foo.md")
+	rec, err := idx.GetByPath(testBranch, "kb/test/foo.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -67,7 +76,7 @@ func TestDelete(t *testing.T) {
 	}
 	defer idx.Close()
 
-	insertTestBlob(t, idx.DB(), "blob_bar", "This is about redis and caching")
+	insertTestBlob(t, idx.TestDB(), "blob_bar", "This is about redis and caching")
 
 	rec := store.FactRecord{
 		Path:       "kb/test/bar.md",
@@ -77,14 +86,13 @@ func TestDelete(t *testing.T) {
 		Entities:   []string{"redis"},
 		Confidence: 0.8,
 		Sources:    2,
-		CommitHash: "def",
 	}
 
-	if err := idx.Upsert(rec); err != nil {
+	if err := idx.Upsert(testBranch, "abc", rec); err != nil {
 		t.Fatal(err)
 	}
 
-	got, err := idx.GetByPath("kb/test/bar.md")
+	got, err := idx.GetByPath(testBranch, "kb/test/bar.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,11 +100,11 @@ func TestDelete(t *testing.T) {
 		t.Fatal("expected result before delete")
 	}
 
-	if err := idx.Delete("kb/test/bar.md"); err != nil {
+	if err := idx.Delete(testBranch, "kb/test/bar.md"); err != nil {
 		t.Fatal(err)
 	}
 
-	got, err = idx.GetByPath("kb/test/bar.md")
+	got, err = idx.GetByPath(testBranch, "kb/test/bar.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,9 +119,10 @@ func TestGetByPath(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer idx.Close()
+	ensureTestBranch(t, idx)
 
 	// Not found case
-	rec, err := idx.GetByPath("nonexistent.md")
+	rec, err := idx.GetByPath(testBranch, "nonexistent.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -122,7 +131,7 @@ func TestGetByPath(t *testing.T) {
 	}
 
 	// Insert and retrieve
-	insertTestBlob(t, idx.DB(), "blob_baz", "This is about golang")
+	insertTestBlob(t, idx.TestDB(), "blob_baz", "This is about golang")
 
 	original := store.FactRecord{
 		Path:       "kb/test/baz.md",
@@ -132,14 +141,13 @@ func TestGetByPath(t *testing.T) {
 		Entities:   []string{"golang", "go"},
 		Confidence: 0.95,
 		Sources:    3,
-		CommitHash: "ghi",
 	}
 
-	if err := idx.Upsert(original); err != nil {
+	if err := idx.Upsert(testBranch, "abc", original); err != nil {
 		t.Fatal(err)
 	}
 
-	got, err := idx.GetByPath("kb/test/baz.md")
+	got, err := idx.GetByPath(testBranch, "kb/test/baz.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -161,8 +169,8 @@ func TestUpsertOverwrite(t *testing.T) {
 	}
 	defer idx.Close()
 
-	insertTestBlob(t, idx.DB(), "blob_v1", "original body text about mysql")
-	insertTestBlob(t, idx.DB(), "blob_v2", "updated body text about postgresql")
+	insertTestBlob(t, idx.TestDB(), "blob_v1", "original body text about mysql")
+	insertTestBlob(t, idx.TestDB(), "blob_v2", "updated body text about postgresql")
 
 	rec := store.FactRecord{
 		Path:       "kb/test/overwrite.md",
@@ -172,10 +180,10 @@ func TestUpsertOverwrite(t *testing.T) {
 		Entities:   []string{"mysql"},
 		Confidence: 0.7,
 		Sources:    1,
-		CommitHash: "v1",
+		
 	}
 
-	if err := idx.Upsert(rec); err != nil {
+	if err := idx.Upsert(testBranch, "abc", rec); err != nil {
 		t.Fatal(err)
 	}
 
@@ -183,13 +191,12 @@ func TestUpsertOverwrite(t *testing.T) {
 	rec.Title = "Updated title"
 	rec.BlobHash = "blob_v2"
 	rec.Entities = []string{"postgresql"}
-	rec.CommitHash = "v2"
 
-	if err := idx.Upsert(rec); err != nil {
+	if err := idx.Upsert(testBranch, "v2", rec); err != nil {
 		t.Fatal(err)
 	}
 
-	got, err := idx.GetByPath("kb/test/overwrite.md")
+	got, err := idx.GetByPath(testBranch, "kb/test/overwrite.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -211,10 +218,10 @@ func TestCompletions(t *testing.T) {
 	}
 	defer idx.Close()
 
-	_ = idx.Upsert(store.FactRecord{
+	_ = idx.Upsert(testBranch, "abc", store.FactRecord{
 		Path: "kb/test.md", Title: "Test", BlobHash: "bh1",
 		Type: "concept", Domain: []string{"go", "concurrency"},
-		Entities: []string{"goroutine", "channel"}, Confidence: 0.9, Sources: 1, CommitHash: "abc",
+		Entities: []string{"goroutine", "channel"}, Confidence: 0.9, Sources: 1,
 	})
 
 	tests := []struct {
@@ -231,7 +238,7 @@ func TestCompletions(t *testing.T) {
 		{"path", "kb", 1},
 	}
 	for _, tt := range tests {
-		vals, err := idx.Completions(tt.category, tt.prefix, 20)
+		vals, err := idx.Completions(testBranch, tt.category, tt.prefix, 20)
 		if err != nil {
 			t.Errorf("Completions(%q, %q): %v", tt.category, tt.prefix, err)
 		}
@@ -293,7 +300,7 @@ func TestIncrementalSync(t *testing.T) {
 	}
 	defer svc.Close()
 
-	gitStore, err := git.InitWithStorer(svc.GitStorer(), nil, "")
+	gitStore, err := git.InitWithStorer(svc.GitStorer(), nil, testBranch)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -304,19 +311,19 @@ func TestIncrementalSync(t *testing.T) {
 	fact1 := "---\ndomain: [databases]\nconfidence: 0.9\nsources: 2\nentities: [postgres]\nrefs: []\n---\n# Postgres MVCC\n\nPostgres uses multi-version concurrency control.\n"
 	fact2 := "---\ndomain: [caching]\nconfidence: 0.8\nsources: 1\nentities: [redis]\nrefs: []\n---\n# Redis Persistence\n\nRedis supports AOF and RDB persistence.\n"
 
-	if _, _, err := gitStore.WriteFile("kb/postgres-mvcc.md", fact1, "add postgres fact", "learn"); err != nil {
+	if _, _, err := gitStore.WriteFile(testBranch, "kb/postgres-mvcc.md", fact1, "add postgres fact", "learn"); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := gitStore.WriteFile("kb/redis-persistence.md", fact2, "add redis fact", "learn"); err != nil {
+	if _, _, err := gitStore.WriteFile(testBranch, "kb/redis-persistence.md", fact2, "add redis fact", "learn"); err != nil {
 		t.Fatal(err)
 	}
 
-	if err := idx.Sync(gitStore, gitStore.Branch()); err != nil {
+	if err := idx.Sync(gitStore, testBranch); err != nil {
 		t.Fatalf("Sync (full rebuild) failed: %v", err)
 	}
 
 	// Both facts should now be retrievable.
-	rec, err := idx.GetByPath("kb/postgres-mvcc.md")
+	rec, err := idx.GetByPath(testBranch, "kb/postgres-mvcc.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -324,7 +331,7 @@ func TestIncrementalSync(t *testing.T) {
 		t.Fatal("expected postgres fact after full sync")
 	}
 
-	rec, err = idx.GetByPath("kb/redis-persistence.md")
+	rec, err = idx.GetByPath(testBranch, "kb/redis-persistence.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -333,11 +340,11 @@ func TestIncrementalSync(t *testing.T) {
 	}
 
 	// Verify last_commit was set.
-	head, err := gitStore.HeadCommit()
+	head, err := gitStore.HeadCommit(testBranch)
 	if err != nil {
 		t.Fatal(err)
 	}
-	last, err := idx.GetLastCommit(gitStore.Branch())
+	last, err := idx.GetLastCommit(testBranch)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -348,16 +355,16 @@ func TestIncrementalSync(t *testing.T) {
 	// --- Incremental sync ---
 	// Write a third fact. Sync should only index the delta.
 	fact3 := "---\ndomain: [messaging]\nconfidence: 0.95\nsources: 3\nentities: [kafka]\nrefs: []\n---\n# Kafka Partitions\n\nKafka topics are split into partitions for parallelism.\n"
-	if _, _, err := gitStore.WriteFile("kb/kafka-partitions.md", fact3, "add kafka fact", "learn"); err != nil {
+	if _, _, err := gitStore.WriteFile(testBranch, "kb/kafka-partitions.md", fact3, "add kafka fact", "learn"); err != nil {
 		t.Fatal(err)
 	}
 
-	if err := idx.Sync(gitStore, gitStore.Branch()); err != nil {
+	if err := idx.Sync(gitStore, testBranch); err != nil {
 		t.Fatalf("Sync (incremental) failed: %v", err)
 	}
 
 	// New fact should be retrievable.
-	rec, err = idx.GetByPath("kb/kafka-partitions.md")
+	rec, err = idx.GetByPath(testBranch, "kb/kafka-partitions.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -366,7 +373,7 @@ func TestIncrementalSync(t *testing.T) {
 	}
 
 	// Previously indexed facts should still be present.
-	rec, err = idx.GetByPath("kb/postgres-mvcc.md")
+	rec, err = idx.GetByPath(testBranch, "kb/postgres-mvcc.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -376,15 +383,15 @@ func TestIncrementalSync(t *testing.T) {
 
 	// --- Delete sync ---
 	// Delete the redis fact and sync; it should be removed from the index.
-	if _, err := gitStore.DeleteFile("kb/redis-persistence.md", "delete: remove redis fact", "retract"); err != nil {
+	if _, err := gitStore.DeleteFile(testBranch, "kb/redis-persistence.md", "delete: remove redis fact", "retract"); err != nil {
 		t.Fatal(err)
 	}
 
-	if err := idx.Sync(gitStore, gitStore.Branch()); err != nil {
+	if err := idx.Sync(gitStore, testBranch); err != nil {
 		t.Fatalf("Sync (delete) failed: %v", err)
 	}
 
-	rec, err = idx.GetByPath("kb/redis-persistence.md")
+	rec, err = idx.GetByPath(testBranch, "kb/redis-persistence.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -393,14 +400,14 @@ func TestIncrementalSync(t *testing.T) {
 	}
 
 	// No-op sync: calling Sync again with same HEAD should be a no-op.
-	headAfter, err := gitStore.HeadCommit()
+	headAfter, err := gitStore.HeadCommit(testBranch)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := idx.Sync(gitStore, gitStore.Branch()); err != nil {
+	if err := idx.Sync(gitStore, testBranch); err != nil {
 		t.Fatalf("Sync (no-op) failed: %v", err)
 	}
-	lastAfter, err := idx.GetLastCommit(gitStore.Branch())
+	lastAfter, err := idx.GetLastCommit(testBranch)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -419,7 +426,7 @@ func TestSyncCommitHashIsLastTouch(t *testing.T) {
 	}
 	defer svc.Close()
 
-	gitStore, err := git.InitWithStorer(svc.GitStorer(), nil, "")
+	gitStore, err := git.InitWithStorer(svc.GitStorer(), nil, testBranch)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -430,18 +437,18 @@ func TestSyncCommitHashIsLastTouch(t *testing.T) {
 	fact2 := "---\ndomain: [b]\nconfidence: 0.8\nsources: 1\nentities: []\nrefs: []\n---\n# Fact B\n\nBody B.\n"
 
 	// Commit fact A first.
-	commitA, _, err := gitStore.WriteFile("kb/a.md", fact1, "add A", "learn")
+	commitA, _, err := gitStore.WriteFile(testBranch, "kb/a.md", fact1, "add A", "learn")
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// Commit fact B second — this becomes HEAD.
-	_, _, err = gitStore.WriteFile("kb/b.md", fact2, "add B", "learn")
+	_, _, err = gitStore.WriteFile(testBranch, "kb/b.md", fact2, "add B", "learn")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	head, err := gitStore.HeadCommit()
+	head, err := gitStore.HeadCommit(testBranch)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -450,11 +457,11 @@ func TestSyncCommitHashIsLastTouch(t *testing.T) {
 	}
 
 	// Full rebuild sync.
-	if err := idx.Sync(gitStore, gitStore.Branch()); err != nil {
+	if err := idx.Sync(gitStore, testBranch); err != nil {
 		t.Fatal(err)
 	}
 
-	recA, err := idx.GetByPath("kb/a.md")
+	recA, err := idx.GetByPath(testBranch, "kb/a.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -469,28 +476,28 @@ func TestSyncCommitHashIsLastTouch(t *testing.T) {
 	}
 
 	// Now modify only fact A — after incremental sync, B should keep its original commit.
-	recB, err := idx.GetByPath("kb/b.md")
+	recB, err := idx.GetByPath(testBranch, "kb/b.md")
 	if err != nil {
 		t.Fatal(err)
 	}
 	commitBBefore := recB.CommitHash
 
 	fact1v2 := "---\ndomain: [a]\nconfidence: 0.95\nsources: 2\nentities: []\nrefs: []\n---\n# Fact A v2\n\nUpdated body.\n"
-	commitA2, _, err := gitStore.WriteFile("kb/a.md", fact1v2, "update A", "learn")
+	commitA2, _, err := gitStore.WriteFile(testBranch, "kb/a.md", fact1v2, "update A", "learn")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if err := idx.Sync(gitStore, gitStore.Branch()); err != nil {
+	if err := idx.Sync(gitStore, testBranch); err != nil {
 		t.Fatal(err)
 	}
 
-	recA, _ = idx.GetByPath("kb/a.md")
+	recA, _ = idx.GetByPath(testBranch, "kb/a.md")
 	if recA.CommitHash != commitA2 {
 		t.Fatalf("after update, fact A commit_hash = %q, want %q", recA.CommitHash, commitA2)
 	}
 
-	recB, _ = idx.GetByPath("kb/b.md")
+	recB, _ = idx.GetByPath(testBranch, "kb/b.md")
 	if recB.CommitHash != commitBBefore {
 		t.Fatalf("fact B commit_hash changed to %q after unrelated sync, want %q", recB.CommitHash, commitBBefore)
 	}
@@ -504,7 +511,7 @@ func TestVec0Available(t *testing.T) {
 	defer idx.Close()
 
 	var version string
-	err = idx.DB().QueryRow("SELECT vec_version()").Scan(&version)
+	err = idx.TestDB().QueryRow("SELECT vec_version()").Scan(&version)
 	if err != nil {
 		t.Fatalf("vec_version() failed: %v — sqlite-vec not registered", err)
 	}
@@ -515,14 +522,15 @@ func TestVec0Available(t *testing.T) {
 }
 
 func TestGetEmbedding(t *testing.T) {
-	idx, err := store.New(":memory:", store.WithVecDimension(4))
+	idx, err := store.New(":memory:")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer idx.Close()
+	ensureTestBranch(t, idx)
 
 	// Should return nil, nil for nonexistent path.
-	vec, err := idx.GetEmbedding("nonexistent.md")
+	vec, err := idx.GetEmbedding(testBranch, "nonexistent.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -530,8 +538,8 @@ func TestGetEmbedding(t *testing.T) {
 		t.Fatal("expected nil embedding for nonexistent path")
 	}
 
-	// Build a known 4-dim stub vector.
-	const dims = 4
+	// Build a known 768-dim stub vector.
+	const dims = 768
 	known := make([]float32, dims)
 	for i := range known {
 		known[i] = float32(i) * 0.001
@@ -542,7 +550,7 @@ func TestGetEmbedding(t *testing.T) {
 	emb.EXPECT().Embed(gomock.Any()).Return(known, nil).AnyTimes()
 	idx.SetEmbedder(emb)
 
-	insertTestBlob(t, idx.DB(), "blob_emb", "body text for embedding")
+	insertTestBlob(t, idx.TestDB(), "blob_emb", "body text for embedding")
 
 	rec := store.FactRecord{
 		Path:       "kb/test/emb.md",
@@ -552,13 +560,12 @@ func TestGetEmbedding(t *testing.T) {
 		Entities:   []string{},
 		Confidence: 1.0,
 		Sources:    1,
-		CommitHash: "emb1",
 	}
-	if err := idx.Upsert(rec); err != nil {
+	if err := idx.Upsert(testBranch, "abc", rec); err != nil {
 		t.Fatalf("Upsert: %v", err)
 	}
 
-	got, err := idx.GetEmbedding("kb/test/emb.md")
+	got, err := idx.GetEmbedding(testBranch, "kb/test/emb.md")
 	if err != nil {
 		t.Fatalf("GetEmbedding: %v", err)
 	}
@@ -581,26 +588,26 @@ func TestSearchFilter(t *testing.T) {
 	}
 	defer idx.Close()
 
-	insertTestBlob(t, idx.DB(), "blob_a", "postgres database replication")
-	insertTestBlob(t, idx.DB(), "blob_b", "redis cache cluster")
+	insertTestBlob(t, idx.TestDB(), "blob_a", "postgres database replication")
+	insertTestBlob(t, idx.TestDB(), "blob_b", "redis cache cluster")
 
-	if err := idx.Upsert(store.FactRecord{
+	if err := idx.Upsert(testBranch, "abc", store.FactRecord{
 		Path: "kb/a.md", Title: "Alpha", BlobHash: "blob_a",
 		Domain: []string{"databases"}, Entities: []string{"postgres"},
-		Confidence: 0.9, Sources: 1, CommitHash: "x",
+		Confidence: 0.9, Sources: 1,
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := idx.Upsert(store.FactRecord{
+	if err := idx.Upsert(testBranch, "abc", store.FactRecord{
 		Path: "kb/b.md", Title: "Beta", BlobHash: "blob_b",
 		Domain: []string{"infra"}, Entities: []string{"redis"},
-		Confidence: 0.8, Sources: 1, CommitHash: "x",
+		Confidence: 0.8, Sources: 1,
 	}); err != nil {
 		t.Fatal(err)
 	}
 
 	// Text-less search filtered by domain should return only the matching fact.
-	results, err := idx.Search(store.SearchQuery{Domain: []string{"databases"}, Limit: 10})
+	results, err := idx.Search(testBranch, store.SearchQuery{Domain: []string{"databases"}, Limit: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -612,7 +619,7 @@ func TestSearchFilter(t *testing.T) {
 	}
 
 	// Text-less search filtered by entity.
-	results, err = idx.Search(store.SearchQuery{Entities: []string{"redis"}, Limit: 10})
+	results, err = idx.Search(testBranch, store.SearchQuery{Entities: []string{"redis"}, Limit: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -624,7 +631,7 @@ func TestSearchFilter(t *testing.T) {
 	}
 
 	// Path filter should return only the fact whose path starts with "kb/a".
-	results, err = idx.Search(store.SearchQuery{Path: "kb/a", Limit: 10})
+	results, err = idx.Search(testBranch, store.SearchQuery{Path: "kb/a", Limit: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -636,7 +643,7 @@ func TestSearchFilter(t *testing.T) {
 	}
 
 	// MinConfidence filter should drop low-confidence records.
-	results, err = idx.Search(store.SearchQuery{MinConfidence: 0.85, Limit: 10})
+	results, err = idx.Search(testBranch, store.SearchQuery{MinConfidence: 0.85, Limit: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -649,18 +656,16 @@ func TestSearchFilter(t *testing.T) {
 }
 
 func TestSearchHybrid(t *testing.T) {
-	idx, err := store.New(":memory:", store.WithVecDimension(4))
+	idx, err := store.New(":memory:")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer idx.Close()
 
-	const dims = 4 // tiny dimension for test speed
-
 	// Fact A: embedding points toward [1,0,0,0].
-	vecA := []float32{1, 0, 0, 0}
+	vecA := testVec(1, 0, 0, 0)
 	// Fact B: embedding is related but less similar.
-	vecB := []float32{0.7, 0.7, 0, 0}
+	vecB := testVec(0.7, 0.7, 0, 0)
 
 	m := map[string][]float32{
 		"Alpha postgres database replication": vecA,
@@ -673,29 +678,29 @@ func TestSearchHybrid(t *testing.T) {
 		if v, ok := m[text]; ok {
 			return v, nil
 		}
-		return make([]float32, dims), nil
+		return make([]float32, 768), nil
 	}).AnyTimes()
 	idx.SetEmbedder(emb)
 
-	insertTestBlob(t, idx.DB(), "blob_ha", "postgres database replication")
-	insertTestBlob(t, idx.DB(), "blob_hb", "postgres cache storage")
+	insertTestBlob(t, idx.TestDB(), "blob_ha", "postgres database replication")
+	insertTestBlob(t, idx.TestDB(), "blob_hb", "postgres cache storage")
 
-	if err := idx.Upsert(store.FactRecord{
+	if err := idx.Upsert(testBranch, "abc", store.FactRecord{
 		Path: "kb/a.md", Title: "Alpha", BlobHash: "blob_ha",
 		Domain: []string{"databases"}, Entities: []string{"postgres"},
-		Confidence: 0.9, Sources: 1, CommitHash: "x",
+		Confidence: 0.9, Sources: 1,
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := idx.Upsert(store.FactRecord{
+	if err := idx.Upsert(testBranch, "abc", store.FactRecord{
 		Path: "kb/b.md", Title: "Beta", BlobHash: "blob_hb",
 		Domain: []string{"infra"}, Entities: []string{"postgres"},
-		Confidence: 0.8, Sources: 1, CommitHash: "x",
+		Confidence: 0.8, Sources: 1,
 	}); err != nil {
 		t.Fatal(err)
 	}
 
-	results, err := idx.Search(store.SearchQuery{Text: "postgres", Limit: 10})
+	results, err := idx.Search(testBranch, store.SearchQuery{Text: "postgres", Limit: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -720,7 +725,7 @@ func TestSearchHybrid(t *testing.T) {
 }
 
 func TestDeleteReferentialIntegrity(t *testing.T) {
-	idx, err := store.New(":memory:", store.WithVecDimension(4))
+	idx, err := store.New(":memory:")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -728,22 +733,22 @@ func TestDeleteReferentialIntegrity(t *testing.T) {
 
 	ctrl := gomock.NewController(t)
 	emb := NewMockEmbedder(ctrl)
-	emb.EXPECT().Embed(gomock.Any()).Return([]float32{1, 0, 0, 0}, nil).AnyTimes()
+	emb.EXPECT().Embed(gomock.Any()).Return(testVec(1, 0, 0, 0), nil).AnyTimes()
 	idx.SetEmbedder(emb)
 
-	insertTestBlob(t, idx.DB(), "blob_ri", "referential integrity")
+	insertTestBlob(t, idx.TestDB(), "blob_ri", "referential integrity")
 
 	rec := store.FactRecord{
 		Path: "kb/test/ri.md", Title: "RI Test", BlobHash: "blob_ri",
 		Domain: []string{"test"}, Entities: []string{},
-		Confidence: 1.0, Sources: 1, CommitHash: "ri1",
+		Confidence: 1.0, Sources: 1,
 	}
-	if err := idx.Upsert(rec); err != nil {
+	if err := idx.Upsert(testBranch, "abc", rec); err != nil {
 		t.Fatal(err)
 	}
 
 	// Verify embedding exists.
-	vec, err := idx.GetEmbedding("kb/test/ri.md")
+	vec, err := idx.GetEmbedding(testBranch, "kb/test/ri.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -752,12 +757,12 @@ func TestDeleteReferentialIntegrity(t *testing.T) {
 	}
 
 	// Delete the fact.
-	if err := idx.Delete("kb/test/ri.md"); err != nil {
+	if err := idx.Delete(testBranch, "kb/test/ri.md"); err != nil {
 		t.Fatal(err)
 	}
 
 	// Embedding must be gone.
-	vec, err = idx.GetEmbedding("kb/test/ri.md")
+	vec, err = idx.GetEmbedding(testBranch, "kb/test/ri.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -767,7 +772,7 @@ func TestDeleteReferentialIntegrity(t *testing.T) {
 
 	// facts_vec should be empty.
 	var count int
-	if err := idx.DB().QueryRow("SELECT count(*) FROM facts_vec").Scan(&count); err != nil {
+	if err := idx.TestDB().QueryRow("SELECT count(*) FROM facts_vec").Scan(&count); err != nil {
 		t.Fatal(err)
 	}
 	if count != 0 {
@@ -782,7 +787,7 @@ func TestDeleteReferentialIntegrity(t *testing.T) {
 // cosine similarity testing.
 func setupSimilarityIndex(t *testing.T) (*store.Index, *gomock.Controller) {
 	t.Helper()
-	idx, err := store.New(":memory:", store.WithVecDimension(4))
+	idx, err := store.New(":memory:")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -790,12 +795,12 @@ func setupSimilarityIndex(t *testing.T) (*store.Index, *gomock.Controller) {
 	// Vectors: tea=[1,0,0,0], music=[0,1,0,0], code=[0,0,1,0]
 	// Upsert embeds "Title Body", so keys include the title prefix.
 	vecs := map[string][]float32{
-		"Tea Preference Carol drinks green tea exclusively": {1, 0, 0, 0},
-		"Jazz Fan Bob listens to jazz regularly":            {0, 1, 0, 0},
-		"Python Dev Alice writes Python every day":          {0, 0, 1, 0},
-		"who likes tea":                                     {0.9, 0.1, 0, 0}, // close to tea
-		"music preferences":                                 {0.1, 0.9, 0, 0}, // close to music
-		"who likes guns":                                    {0.3, 0.3, 0.3, 0.1}, // no strong match
+		"Tea Preference Carol drinks green tea exclusively": testVec(1, 0, 0, 0),
+		"Jazz Fan Bob listens to jazz regularly":            testVec(0, 1, 0, 0),
+		"Python Dev Alice writes Python every day":          testVec(0, 0, 1, 0),
+		"who likes tea":                                     testVec(0.9, 0.1, 0, 0), // close to tea
+		"music preferences":                                 testVec(0.1, 0.9, 0, 0), // close to music
+		"who likes guns":                                    testVec(0.3, 0.3, 0.3, 0.1), // no strong match
 	}
 
 	ctrl := gomock.NewController(t)
@@ -804,24 +809,24 @@ func setupSimilarityIndex(t *testing.T) (*store.Index, *gomock.Controller) {
 		if v, ok := vecs[text]; ok {
 			return v, nil
 		}
-		return []float32{0.25, 0.25, 0.25, 0.25}, nil // default: equidistant
+		return testVec(0.25, 0.25, 0.25, 0.25), nil // default: equidistant
 	}).AnyTimes()
 	idx.SetEmbedder(emb)
 
-	insertTestBlob(t, idx.DB(), "blob_tea", "Carol drinks green tea exclusively")
-	insertTestBlob(t, idx.DB(), "blob_jazz", "Bob listens to jazz regularly")
-	insertTestBlob(t, idx.DB(), "blob_python", "Alice writes Python every day")
+	insertTestBlob(t, idx.TestDB(), "blob_tea", "Carol drinks green tea exclusively")
+	insertTestBlob(t, idx.TestDB(), "blob_jazz", "Bob listens to jazz regularly")
+	insertTestBlob(t, idx.TestDB(), "blob_python", "Alice writes Python every day")
 
 	facts := []store.FactRecord{
 		{Path: "kb/people/carol/tea.md", Title: "Tea Preference", BlobHash: "blob_tea",
-			Domain: []string{"preferences"}, Entities: []string{"carol"}, Confidence: 0.9, Sources: 1, CommitHash: "a"},
+			Domain: []string{"preferences"}, Entities: []string{"carol"}, Confidence: 0.9, Sources: 1, },
 		{Path: "kb/people/bob/jazz.md", Title: "Jazz Fan", BlobHash: "blob_jazz",
-			Domain: []string{"preferences"}, Entities: []string{"bob"}, Confidence: 0.8, Sources: 1, CommitHash: "a"},
+			Domain: []string{"preferences"}, Entities: []string{"bob"}, Confidence: 0.8, Sources: 1, },
 		{Path: "kb/people/alice/python.md", Title: "Python Dev", BlobHash: "blob_python",
-			Domain: []string{"engineering"}, Entities: []string{"alice"}, Confidence: 0.9, Sources: 2, CommitHash: "a"},
+			Domain: []string{"engineering"}, Entities: []string{"alice"}, Confidence: 0.9, Sources: 2, },
 	}
 	for _, f := range facts {
-		if err := idx.Upsert(f); err != nil {
+		if err := idx.Upsert(testBranch, "abc", f); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -834,7 +839,7 @@ func TestSearchSimilarityRanking(t *testing.T) {
 	defer idx.Close()
 	defer ctrl.Finish()
 
-	results, err := idx.Search(store.SearchQuery{Text: "who likes tea", Limit: 10})
+	results, err := idx.Search(testBranch, store.SearchQuery{Text: "who likes tea", Limit: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -851,7 +856,7 @@ func TestSearchSimilarityScoreIsAbsolute(t *testing.T) {
 	defer idx.Close()
 	defer ctrl.Finish()
 
-	results, err := idx.Search(store.SearchQuery{Text: "who likes tea", Limit: 10})
+	results, err := idx.Search(testBranch, store.SearchQuery{Text: "who likes tea", Limit: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -878,14 +883,14 @@ func TestSearchMinSimilarityThreshold(t *testing.T) {
 
 	// Default threshold (0.40): "who likes guns" has weak cosine to all facts.
 	// Vector [0.3,0.3,0.3,0.1] vs [1,0,0,0] = cosine ~0.53 — above default 0.40.
-	results, err := idx.Search(store.SearchQuery{Text: "who likes guns", Limit: 10})
+	results, err := idx.Search(testBranch, store.SearchQuery{Text: "who likes guns", Limit: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defaultCount := len(results)
 
 	// High threshold should return fewer or no results.
-	results, err = idx.Search(store.SearchQuery{Text: "who likes guns", MinSimilarity: 0.90, Limit: 10})
+	results, err = idx.Search(testBranch, store.SearchQuery{Text: "who likes guns", MinSimilarity: 0.90, Limit: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -894,7 +899,7 @@ func TestSearchMinSimilarityThreshold(t *testing.T) {
 	}
 
 	// Very low threshold should return more results.
-	results, err = idx.Search(store.SearchQuery{Text: "who likes guns", MinSimilarity: 0.01, Limit: 10})
+	results, err = idx.Search(testBranch, store.SearchQuery{Text: "who likes guns", MinSimilarity: 0.01, Limit: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -904,24 +909,24 @@ func TestSearchMinSimilarityThreshold(t *testing.T) {
 }
 
 func TestSearchVecOnlyNoEmbedder(t *testing.T) {
-	idx, err := store.New(":memory:", store.WithVecDimension(4))
+	idx, err := store.New(":memory:")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer idx.Close()
 
-	insertTestBlob(t, idx.DB(), "blob_tea_ne", "tea drinking habits")
+	insertTestBlob(t, idx.TestDB(), "blob_tea_ne", "tea drinking habits")
 
 	// Insert a fact without embedder.
-	if err := idx.Upsert(store.FactRecord{
+	if err := idx.Upsert(testBranch, "abc", store.FactRecord{
 		Path: "kb/a.md", Title: "Tea Lover", BlobHash: "blob_tea_ne",
-		Domain: []string{"pref"}, Entities: []string{}, Confidence: 0.9, Sources: 1, CommitHash: "x",
+		Domain: []string{"pref"}, Entities: []string{}, Confidence: 0.9, Sources: 1,
 	}); err != nil {
 		t.Fatal(err)
 	}
 
 	// Without embedder: text search returns nil (no vec hits).
-	results, err := idx.Search(store.SearchQuery{Text: "tea", Limit: 10})
+	results, err := idx.Search(testBranch, store.SearchQuery{Text: "tea", Limit: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -931,7 +936,7 @@ func TestSearchVecOnlyNoEmbedder(t *testing.T) {
 }
 
 func TestSearchVecScoringBoost(t *testing.T) {
-	idx, err := store.New(":memory:", store.WithVecDimension(4))
+	idx, err := store.New(":memory:")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -940,9 +945,9 @@ func TestSearchVecScoringBoost(t *testing.T) {
 	// Two facts with embeddings at different cosine distances.
 	// Upsert embeds "Title Body", so keys include the title prefix.
 	vecs := map[string][]float32{
-		"Brewing tea brewing techniques": {1, 0, 0, 0},
-		"Garden tea garden cultivation":  {0.95, 0.05, 0, 0}, // slightly less similar
-		"tea":                            {1, 0, 0, 0},        // query
+		"Brewing tea brewing techniques": testVec(1, 0, 0, 0),
+		"Garden tea garden cultivation":  testVec(0.95, 0.05, 0, 0), // slightly less similar
+		"tea":                            testVec(1, 0, 0, 0),        // query
 	}
 
 	ctrl := gomock.NewController(t)
@@ -951,27 +956,27 @@ func TestSearchVecScoringBoost(t *testing.T) {
 		if v, ok := vecs[text]; ok {
 			return v, nil
 		}
-		return []float32{0.25, 0.25, 0.25, 0.25}, nil
+		return testVec(0.25, 0.25, 0.25, 0.25), nil
 	}).AnyTimes()
 	idx.SetEmbedder(emb)
 
-	insertTestBlob(t, idx.DB(), "blob_brew", "tea brewing techniques")
-	insertTestBlob(t, idx.DB(), "blob_garden", "tea garden cultivation")
+	insertTestBlob(t, idx.TestDB(), "blob_brew", "tea brewing techniques")
+	insertTestBlob(t, idx.TestDB(), "blob_garden", "tea garden cultivation")
 
-	if err := idx.Upsert(store.FactRecord{
+	if err := idx.Upsert(testBranch, "abc", store.FactRecord{
 		Path: "kb/a.md", Title: "Brewing", BlobHash: "blob_brew",
-		Domain: []string{"food"}, Entities: []string{}, Confidence: 0.9, Sources: 1, CommitHash: "x",
+		Domain: []string{"food"}, Entities: []string{}, Confidence: 0.9, Sources: 1,
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := idx.Upsert(store.FactRecord{
+	if err := idx.Upsert(testBranch, "abc", store.FactRecord{
 		Path: "kb/b.md", Title: "Garden", BlobHash: "blob_garden",
-		Domain: []string{"food"}, Entities: []string{}, Confidence: 0.9, Sources: 1, CommitHash: "x",
+		Domain: []string{"food"}, Entities: []string{}, Confidence: 0.9, Sources: 1,
 	}); err != nil {
 		t.Fatal(err)
 	}
 
-	results, err := idx.Search(store.SearchQuery{Text: "tea", Limit: 10})
+	results, err := idx.Search(testBranch, store.SearchQuery{Text: "tea", Limit: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -998,8 +1003,9 @@ func TestStats_Empty(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer idx.Close()
+	ensureTestBranch(t, idx)
 
-	res, err := idx.Stats("")
+	res, err := idx.Stats(testBranch, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1018,23 +1024,23 @@ func TestStats_Aggregate(t *testing.T) {
 	}
 	defer idx.Close()
 
-	insertTestBlob(t, idx.DB(), "b1", "body1")
-	insertTestBlob(t, idx.DB(), "b2", "body2")
-	insertTestBlob(t, idx.DB(), "b3", "body3")
+	insertTestBlob(t, idx.TestDB(), "b1", "body1")
+	insertTestBlob(t, idx.TestDB(), "b2", "body2")
+	insertTestBlob(t, idx.TestDB(), "b3", "body3")
 
 	facts := []store.FactRecord{
-		{Path: "kb/a.md", Title: "A", BlobHash: "b1", Domain: []string{"go", "web"}, Entities: []string{"chi"}, Confidence: 0.9, Sources: 1, CommitHash: "x"},
-		{Path: "kb/b.md", Title: "B", BlobHash: "b2", Domain: []string{"go"}, Entities: []string{"chi", "mux"}, Confidence: 0.7, Sources: 1, CommitHash: "x"},
-		{Path: "other/c.md", Title: "C", BlobHash: "b3", Domain: []string{"infra"}, Entities: []string{"k8s"}, Confidence: 1.0, Sources: 1, CommitHash: "x"},
+		{Path: "kb/a.md", Title: "A", BlobHash: "b1", Domain: []string{"go", "web"}, Entities: []string{"chi"}, Confidence: 0.9, Sources: 1},
+		{Path: "kb/b.md", Title: "B", BlobHash: "b2", Domain: []string{"go"}, Entities: []string{"chi", "mux"}, Confidence: 0.7, Sources: 1},
+		{Path: "other/c.md", Title: "C", BlobHash: "b3", Domain: []string{"infra"}, Entities: []string{"k8s"}, Confidence: 1.0, Sources: 1},
 	}
 	for _, f := range facts {
-		if err := idx.Upsert(f); err != nil {
+		if err := idx.Upsert(testBranch, "abc", f); err != nil {
 			t.Fatal(err)
 		}
 	}
 
 	// All facts (no prefix filter).
-	res, err := idx.Stats("")
+	res, err := idx.Stats(testBranch, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1052,7 +1058,7 @@ func TestStats_Aggregate(t *testing.T) {
 	}
 
 	// Prefix-filtered: only kb/ facts.
-	res, err = idx.Stats("kb/")
+	res, err = idx.Stats(testBranch, "kb/")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1075,18 +1081,18 @@ func TestStats_NullDomainAndEntities(t *testing.T) {
 	}
 	defer idx.Close()
 
-	insertTestBlob(t, idx.DB(), "b1", "body1")
+	insertTestBlob(t, idx.TestDB(), "b1", "body1")
 
 	// Insert a fact with nil domain and entities (simulates missing frontmatter fields).
-	if err := idx.Upsert(store.FactRecord{
+	if err := idx.Upsert(testBranch, "abc", store.FactRecord{
 		Path: "kb/bare.md", Title: "Bare", BlobHash: "b1",
 		Domain: nil, Entities: nil,
-		Confidence: 0.5, Sources: 1, CommitHash: "x",
+		Confidence: 0.5, Sources: 1,
 	}); err != nil {
 		t.Fatal(err)
 	}
 
-	res, err := idx.Stats("")
+	res, err := idx.Stats(testBranch, "")
 	if err != nil {
 		t.Fatalf("Stats with NULL domain/entities should not error: %v", err)
 	}
@@ -1102,7 +1108,7 @@ func TestPragmasCacheSize(t *testing.T) {
 	}
 	defer idx.Close()
 	var cacheSize int
-	if err := idx.DB().QueryRow("PRAGMA cache_size").Scan(&cacheSize); err != nil {
+	if err := idx.TestDB().QueryRow("PRAGMA cache_size").Scan(&cacheSize); err != nil {
 		t.Fatal(err)
 	}
 	if cacheSize != -65536 {

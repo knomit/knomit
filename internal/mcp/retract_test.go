@@ -15,13 +15,13 @@ func TestRetractDeletesFile(t *testing.T) {
 
 	var deletedFile string
 
-	gs.EXPECT().FileExists("kb/foo.md").Return(true, nil)
-	gs.EXPECT().DeleteFile("kb/foo.md", gomock.Any(), gomock.Any()).DoAndReturn(func(path, msg, operation string) (string, error) {
+	gs.EXPECT().FileExists(testAgentBranch, "kb/foo.md").Return(true, nil)
+	gs.EXPECT().DeleteFile(testAgentBranch, "kb/foo.md", gomock.Any(), gomock.Any()).DoAndReturn(func(branch, path, msg, operation string) (string, error) {
 		deletedFile = path
 		return "abc123def456", nil
 	})
 
-	handler := RetractHandler(gs, "kb")
+	handler := RetractHandler(gs, "kb", testAgentBranch)
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{
@@ -61,9 +61,9 @@ func TestRetractFileNotFound(t *testing.T) {
 	gs := NewMockGitStore(ctrl)
 
 
-	gs.EXPECT().FileExists("kb/nonexistent.md").Return(false, nil)
+	gs.EXPECT().FileExists(testAgentBranch, "kb/nonexistent.md").Return(false, nil)
 
-	handler := RetractHandler(gs, "kb")
+	handler := RetractHandler(gs, "kb", testAgentBranch)
 
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{

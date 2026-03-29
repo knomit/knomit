@@ -41,6 +41,7 @@ func ApplyPruneDecisions(
 	merges []MergeEntry,
 	recipeName string,
 	onProgress func(ProgressEvent),
+	agentBranch string,
 ) (*ReviewStats, error) {
 	stats := &ReviewStats{}
 	// Track deleted paths to avoid double-deletion when a path appears in
@@ -56,11 +57,11 @@ func ApplyPruneDecisions(
 		case "retract":
 			msg := fmt.Sprintf("synthesize-%s: retract %s", recipeName, d.Path)
 			deletedPaths[d.Path] = true
-			if _, err := gs.DeleteFile(d.Path, msg, "retract"); err != nil {
+			if _, err := gs.DeleteFile(agentBranch, d.Path, msg, "retract"); err != nil {
 				onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("retract %s: %v", d.Path, err)})
 				continue
 			}
-			if err := idx.Delete(d.Path); err != nil {
+			if err := idx.Delete(agentBranch, d.Path); err != nil {
 				onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("index delete %s: %v", d.Path, err)})
 			}
 		
@@ -68,7 +69,7 @@ func ApplyPruneDecisions(
 			stats.Pruned++
 
 		case "update":
-			content, err := gs.ReadFile(d.Path)
+			content, err := gs.ReadFile(agentBranch, d.Path)
 			if err != nil {
 				onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("update read %s: %v", d.Path, err)})
 				continue
@@ -81,12 +82,12 @@ func ApplyPruneDecisions(
 			f.Confidence = d.Confidence
 			updated := mcp.SerializeFact(f)
 			msg := fmt.Sprintf("synthesize-%s: update confidence %s → %.2f", recipeName, d.Path, d.Confidence)
-			commitHash, blobHash, err := gs.WriteFile(d.Path, updated, msg, "update")
+			commitHash, blobHash, err := gs.WriteFile(agentBranch, d.Path, updated, msg, "update")
 			if err != nil {
 				onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("update write %s: %v", d.Path, err)})
 				continue
 			}
-			if err := idx.Upsert(store.NewFactRecord(f, blobHash, commitHash)); err != nil {
+			if err := idx.Upsert(agentBranch, commitHash, store.NewFactRecord(f, blobHash)); err != nil {
 				onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("index upsert %s: %v", d.Path, err)})
 			}
 		
@@ -98,7 +99,7 @@ func ApplyPruneDecisions(
 	// Apply merges.
 	for _, m := range merges {
 		mf := m.Merged
-		weight := computeWeight(gs, m.Paths)
+		weight := computeWeight(gs, agentBranch, m.Paths)
 		merged := fact.NewFact(mf.Path)
 		merged.Title = mf.Title
 		merged.Body = mf.Body
@@ -111,16 +112,12 @@ func ApplyPruneDecisions(
 		merged.EvidenceWeight = weight
 		content := mcp.SerializeFact(merged)
 		msg := fmt.Sprintf("synthesize-%s: merge %s", recipeName, strings.Join(m.Paths, ", "))
-		commitHash, blobHash, err := gs.WriteFile(merged.Path(), content, msg, "subsume")
+		commitHash, blobHash, err := gs.WriteFile(agentBranch, merged.Path(), content, msg, "subsume")
 		if err != nil {
 			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("merge write %s: %v", merged.Path(), err)})
 			continue
 		}
-		_ = idx.Upsert(store.NewFactRecord(merged, blobHash, commitHash))
-		if err := idx.GraphAddDerivedFrom(merged.Path(), m.Paths); err != nil {
-			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("derived_from %s: %v", merged.Path(), err)})
-		}
-
+		_ = idx.Upsert(agentBranch, commitHash, store.NewFactRecord(merged, blobHash))
 
 		// Delete source facts (losers get retract tag).
 		for _, src := range m.Paths {
@@ -128,11 +125,11 @@ func ApplyPruneDecisions(
 				continue
 			}
 			srcMsg := fmt.Sprintf("synthesize-%s: subsumed by %s", recipeName, merged.Path())
-			if _, err := gs.DeleteFile(src, srcMsg, "retract"); err != nil {
+			if _, err := gs.DeleteFile(agentBranch, src, srcMsg, "retract"); err != nil {
 				onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("merge delete source %s: %v", src, err)})
 				continue
 			}
-			_ = idx.Delete(src)
+			_ = idx.Delete(agentBranch, src)
 			deletedPaths[src] = true
 		
 		}
@@ -152,6 +149,7 @@ func ApplyDistillDecisions(
 	retract []string,
 	recipeName string,
 	onProgress func(ProgressEvent),
+	agentBranch string,
 ) (*ReviewStats, []distillFact, error) {
 	stats := &ReviewStats{}
 	var written []distillFact
@@ -173,7 +171,7 @@ func ApplyDistillDecisions(
 				localRefs = append(localRefs, r)
 			}
 		}
-		weight := computeWeight(gs, localRefs)
+		weight := computeWeight(gs, agentBranch, localRefs)
 		f := fact.NewFact(df.Path)
 		f.Title = df.Title
 		f.Body = df.Body
@@ -187,17 +185,12 @@ func ApplyDistillDecisions(
 		df.Path = f.Path() // sync df so written slice reflects the canonical (lowercase) path
 		content := mcp.SerializeFact(f)
 		msg := fmt.Sprintf("synthesize-%s: distill %s", recipeName, f.Path())
-		commitHash, blobHash, err := gs.WriteFile(f.Path(), content, msg, "subsume")
+		commitHash, blobHash, err := gs.WriteFile(agentBranch, f.Path(), content, msg, "subsume")
 		if err != nil {
 			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("distill write %s: %v", f.Path(), err)})
 			continue
 		}
-		_ = idx.Upsert(store.NewFactRecord(f, blobHash, commitHash))
-		if len(df.Refs) > 0 {
-			if err := idx.GraphAddDerivedFrom(f.Path(), df.Refs); err != nil {
-				onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("derived_from %s: %v", f.Path(), err)})
-			}
-		}
+		_ = idx.Upsert(agentBranch, commitHash, store.NewFactRecord(f, blobHash))
 
 		onProgress(ProgressEvent{Phase: "detail-learn", Message: "learn " + f.Path()})
 		stats.Synthesized++
@@ -207,11 +200,11 @@ func ApplyDistillDecisions(
 	// Delete subsumed facts.
 	for _, path := range retract {
 		msg := fmt.Sprintf("synthesize-%s: subsumed by distilled fact", recipeName)
-		if _, err := gs.DeleteFile(path, msg, "retract"); err != nil {
+		if _, err := gs.DeleteFile(agentBranch, path, msg, "retract"); err != nil {
 			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("distill retract %s: %v", path, err)})
 			continue
 		}
-		_ = idx.Delete(path)
+		_ = idx.Delete(agentBranch, path)
 	
 		onProgress(ProgressEvent{Phase: "detail-distill-retract", Message: "retract " + path})
 		stats.Pruned++

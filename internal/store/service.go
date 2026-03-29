@@ -1,16 +1,12 @@
 package store
 
 import (
-	"context"
 	"database/sql"
-	_ "embed"
 	"fmt"
 
 	storegit "knomit/internal/store/git"
+	"knomit/internal/store/migrate"
 )
-
-//go:embed schema.sql
-var schemaSQL_ string
 
 // BlobObjectType is the go-git integer for plumbing.BlobObject.
 const BlobObjectType = 3
@@ -28,12 +24,7 @@ type Service struct {
 // Open opens (or creates) a unified SQLite database at path, initializes the
 // schema, and returns a Service that provides access to both the git storer
 // and the search index.
-func Open(path string, opts ...Option) (*Service, error) {
-	cfg := indexConfig{vecDim: 768}
-	for _, o := range opts {
-		o(&cfg)
-	}
-
+func Open(path string) (*Service, error) {
 	registerVec() // one-time sqlite-vec + GraphQLite driver registration
 
 	dsn := path
@@ -56,52 +47,9 @@ func Open(path string, opts ...Option) (*Service, error) {
 	// Update query planner statistics (one-time hint, not per-connection).
 	db.Exec("PRAGMA optimize")
 
-	// Run embedded schema.
-	if _, err := db.Exec(schemaSQL_); err != nil {
+	if err := migrate.All(db); err != nil {
 		db.Close()
-		return nil, fmt.Errorf("store.Open schema: %w", err)
-	}
-
-	// Schema migrations for existing databases.
-	migrations := []string{
-		`ALTER TABLE remotes ADD COLUMN auth_method TEXT NOT NULL DEFAULT ''`,
-		`ALTER TABLE remotes ADD COLUMN auth_token TEXT NOT NULL DEFAULT ''`,
-		`ALTER TABLE review_work_items ADD COLUMN depth INTEGER NOT NULL DEFAULT 0`,
-		`ALTER TABLE facts ADD COLUMN evidence_weight REAL NOT NULL DEFAULT 0`,
-		// Pipeline table renames (review_* → pipeline_*)
-		`ALTER TABLE review_watermarks RENAME TO pipeline_watermarks`,
-		`ALTER TABLE pipeline_watermarks ADD COLUMN tool TEXT NOT NULL DEFAULT 'review'`,
-		`ALTER TABLE review_sessions RENAME TO pipeline_sessions`,
-		`ALTER TABLE pipeline_sessions ADD COLUMN tool TEXT NOT NULL DEFAULT 'review'`,
-		`ALTER TABLE review_work_items RENAME TO pipeline_work_items`,
-		`CREATE INDEX IF NOT EXISTS facts_type ON facts(type)`,
-		// Junction tables for indexed entity/domain filtering (idempotent).
-		`CREATE TABLE IF NOT EXISTS fact_entities (fact_path TEXT NOT NULL REFERENCES facts(path) ON DELETE CASCADE, entity TEXT NOT NULL COLLATE NOCASE, PRIMARY KEY (fact_path, entity))`,
-		`CREATE INDEX IF NOT EXISTS fact_entities_entity ON fact_entities(entity)`,
-		`CREATE TABLE IF NOT EXISTS fact_domains (fact_path TEXT NOT NULL REFERENCES facts(path) ON DELETE CASCADE, domain TEXT NOT NULL COLLATE NOCASE, PRIMARY KEY (fact_path, domain))`,
-		`CREATE INDEX IF NOT EXISTS fact_domains_domain ON fact_domains(domain)`,
-		// Backfill junction tables from existing JSON columns.
-		`INSERT OR IGNORE INTO fact_entities (fact_path, entity) SELECT f.path, je.value FROM facts f, json_each(f.entities) je WHERE je.value IS NOT NULL AND je.value != ''`,
-		`INSERT OR IGNORE INTO fact_domains (fact_path, domain) SELECT f.path, jd.value FROM facts f, json_each(f.domain) jd WHERE jd.value IS NOT NULL AND jd.value != ''`,
-	}
-	for _, m := range migrations {
-		db.Exec(m) // ignore "duplicate column" errors
-	}
-
-	// Create vec0 virtual table (dimension is configurable).
-	vecDDL := fmt.Sprintf(
-		`CREATE VIRTUAL TABLE IF NOT EXISTS facts_vec USING vec0(embedding FLOAT[%d] distance_metric=cosine)`,
-		cfg.vecDim,
-	)
-	if _, err := db.Exec(vecDDL); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("store.Open vec0: %w", err)
-	}
-
-	// Initialize GraphQLite EAV tables.
-	if _, err := db.Exec(`SELECT cypher('RETURN 1')`); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("store.Open graphqlite: %w", err)
+		return nil, fmt.Errorf("store.Open: %w", err)
 	}
 
 	gits := storegit.NewStorer(db)
@@ -119,26 +67,18 @@ func (s *Service) Index() *Index { return s.idx }
 // GitStorer returns the go-git storer.
 func (s *Service) GitStorer() *storegit.Storer { return s.gits }
 
-// DB returns the underlying *sql.DB handle.
-func (s *Service) DB() *sql.DB { return s.db }
-
 // Close closes the underlying database connection.
 func (s *Service) Close() error { return s.db.Close() }
 
-// BeginTx starts a new database transaction.
-func (s *Service) BeginTx(ctx context.Context, opts *sql.TxOptions) (*sql.Tx, error) {
-	return s.db.BeginTx(ctx, opts)
-}
-
 // GitWriter is the minimal interface needed for DeleteFact.
 type GitWriter interface {
-	DeleteFile(path, message, operation string) (string, error)
+	DeleteFile(branch, path, message, operation string) (string, error)
 }
 
-// DeleteFact deletes a fact from the git store; the onCommit observer
+// DeleteFact deletes a fact from the git store on the given branch; the onCommit observer
 // handles index cleanup automatically via idx.Sync.
-func (s *Service) DeleteFact(gw GitWriter, path, message string) error {
-	if _, err := gw.DeleteFile(path, message, "retract"); err != nil {
+func (s *Service) DeleteFact(gw GitWriter, branch, path, message string) error {
+	if _, err := gw.DeleteFile(branch, path, message, "retract"); err != nil {
 		return fmt.Errorf("DeleteFact git: %w", err)
 	}
 

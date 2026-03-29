@@ -512,7 +512,7 @@ func TestGCPipelineSessions(t *testing.T) {
 
 	// Work items for deleted session should also be gone (cascade).
 	var count int
-	if err := idx.DB().QueryRow(
+	if err := idx.TestDB().QueryRow(
 		`SELECT COUNT(*) FROM pipeline_work_items WHERE session_id = ?`, ids[2],
 	).Scan(&count); err != nil {
 		t.Fatal(err)
