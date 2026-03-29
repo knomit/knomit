@@ -82,13 +82,13 @@ func newFactFilter(q SearchQuery) *factFilter {
 		}
 		args[len(q.Entities)] = len(q.Entities)
 		f.add(
-			" AND (SELECT COUNT(DISTINCT entity) FROM fact_entities WHERE fact_path = f.path AND entity IN ("+ph+")) >= ?",
+			" AND (SELECT COUNT(DISTINCT entity) FROM fact_entities WHERE fact_id = f.id AND entity IN ("+ph+")) >= ?",
 			args...,
 		)
 	}
 	for _, d := range q.Domain {
 		f.add(
-			" AND EXISTS (SELECT 1 FROM fact_domains WHERE fact_path = f.path AND (domain = ? OR domain LIKE ?))",
+			" AND EXISTS (SELECT 1 FROM fact_domains WHERE fact_id = f.id AND (domain = ? OR domain LIKE ?))",
 			d, d+"/%",
 		)
 	}
@@ -172,7 +172,12 @@ func (idx *Index) filterByEpisodeOps(results []SearchResult, ops []string) ([]Se
 //
 // If Text is empty, all facts matching the non-text filters are returned with
 // score 100.
-func (idx *Index) Search(q SearchQuery) ([]SearchResult, error) {
+func (idx *Index) Search(branch string, q SearchQuery) ([]SearchResult, error) {
+	branchID, err := idx.BranchID(branch)
+	if err != nil {
+		return nil, fmt.Errorf("search: %w", err)
+	}
+
 	limit := q.Limit
 	if limit <= 0 {
 		limit = 100
@@ -182,11 +187,15 @@ func (idx *Index) Search(q SearchQuery) ([]SearchResult, error) {
 
 	// ── Text-less path: return all facts matching filters with score 100 ──
 	if q.Text == "" {
-		args := append(append([]any{BlobObjectType}, flt.args...), limit)
+		args := append(append([]any{BlobObjectType, branchID}, flt.args...), limit)
 		rows, err := idx.db.Query(
-			`SELECT f.path, f.title, f.blob_hash, f.type, f.domain, f.entities, f.confidence, f.sources, f.refs, f.commit_hash, f.evidence_weight, o.data
-			 FROM facts f
-			 JOIN objects o ON o.hash = f.blob_hash AND o.type = ?`+flt.SQL()+` LIMIT ?`,
+			`SELECT f.path, f.title, f.blob_hash, f.type, f.domain, f.entities,
+			        f.confidence, f.sources, f.refs, f.evidence_weight,
+			        bf.commit_hash, o.data
+			 FROM branch_facts bf
+			 JOIN facts f ON f.id = bf.fact_id
+			 JOIN objects o ON o.hash = f.blob_hash AND o.type = ?
+			 WHERE bf.branch_id = ?`+flt.SQL()+` LIMIT ?`,
 			args...,
 		)
 		if err != nil {
@@ -231,12 +240,6 @@ func (idx *Index) Search(q SearchQuery) ([]SearchResult, error) {
 			log.Warn().Msg("search: no query vector available")
 		} else {
 			vecBlob := float32SliceToBytes(queryVec)
-			// Adaptive k: performance optimisation, not a correctness guarantee.
-			// A higher MinSimilarity threshold lets us fetch fewer KNN candidates
-			// because, in practice, most documents that clear the threshold will
-			// fall within the smaller window. On very large indexes, rare near-threshold
-			// documents could theoretically fall outside the reduced candidate set —
-			// an acceptable precision trade-off for the performance gain.
 			kLimit := limit * 5
 			if q.MinSimilarity > 0.7 {
 				kLimit = limit * 2
@@ -246,10 +249,11 @@ func (idx *Index) Search(q SearchQuery) ([]SearchResult, error) {
 			rows, err := idx.db.Query(
 				`SELECT f.path, (1.0 - fv.distance) as similarity
 				 FROM facts_vec fv
-				 JOIN facts f ON f.rowid = fv.rowid
+				 JOIN facts f ON f.id = fv.rowid
+				 JOIN branch_facts bf ON bf.fact_id = f.id AND bf.branch_id = ?
 				 WHERE fv.embedding MATCH ? AND fv.k = ?
 				 ORDER BY fv.distance ASC`,
-				vecBlob, kLimit,
+				branchID, vecBlob, kLimit,
 			)
 			if err != nil {
 				log.Warn().Err(err).Msg("search: vec query failed")
@@ -297,15 +301,18 @@ func (idx *Index) Search(q SearchQuery) ([]SearchResult, error) {
 
 	// ── Phase 1: fetch metadata only (no body), apply filters, sort, trim ─
 	pathPH := strings.Repeat("?,", len(candidatePaths))
-	pathArgs := make([]any, len(candidatePaths))
-	for i, p := range candidatePaths {
-		pathArgs[i] = p
+	pathArgs := make([]any, 0, len(candidatePaths)+1)
+	pathArgs = append(pathArgs, branchID)
+	for _, p := range candidatePaths {
+		pathArgs = append(pathArgs, p)
 	}
 
 	metaRows, err := idx.db.Query(
-		`SELECT f.path, f.title, f.blob_hash, f.type, f.domain, f.entities, f.confidence, f.sources, f.refs, f.commit_hash, f.evidence_weight
-		 FROM facts f
-		 WHERE f.path IN (`+pathPH[:len(pathPH)-1]+`)`+flt.SQL(),
+		`SELECT f.path, f.title, f.blob_hash, f.type, f.domain, f.entities,
+		        f.confidence, f.sources, f.refs, f.evidence_weight
+		 FROM branch_facts bf
+		 JOIN facts f ON f.id = bf.fact_id
+		 WHERE bf.branch_id = ? AND f.path IN (`+pathPH[:len(pathPH)-1]+`)`+flt.SQL(),
 		append(pathArgs, flt.args...)...,
 	)
 	if err != nil {
