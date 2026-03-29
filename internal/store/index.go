@@ -110,15 +110,16 @@ type GitReader interface {
 
 // Index is the search index backed by SQLite with sqlite-vec.
 type Index struct {
-	db      *sql.DB
-	embedMu sync.RWMutex
+	db       *sql.DB
+	embedMu  sync.RWMutex
 	embedder Embedder
+	branches *branchCache
 }
 
 // newIndex wraps an existing *sql.DB. Schema must already be applied.
 // Used by Service.Open to construct the Index over the shared database.
 func newIndex(db *sql.DB) *Index {
-	return &Index{db: db}
+	return &Index{db: db, branches: newBranchCache()}
 }
 
 // SetEmbedder attaches an Embedder to the index. When set, Upsert will call
@@ -167,7 +168,7 @@ func New(path string) (*Index, error) {
 		return nil, fmt.Errorf("store.New: %w", err)
 	}
 
-	return &Index{db: db}, nil
+	return &Index{db: db, branches: newBranchCache()}, nil
 }
 
 // Close closes the underlying database connection.
