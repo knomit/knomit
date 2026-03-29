@@ -18,7 +18,7 @@ func openTestService(t *testing.T) *store.Service {
 
 func insertFact(t *testing.T, svc *store.Service, path, blobHash, commitHash string) {
 	t.Helper()
-	_, err := svc.DB().Exec(
+	_, err := svc.TestDB().Exec(
 		`INSERT INTO facts (path, title, blob_hash, type, domain, entities, confidence, sources, refs, commit_hash)
 		 VALUES (?, '', ?, 'observation', '', '', 1.0, 0, '', ?)`,
 		path, blobHash, commitHash,
@@ -98,7 +98,7 @@ func TestFactsIter_DedupsByPath(t *testing.T) {
 	// return each path only once.
 	insertFact(t, svc, "a/one.md", "blob_old", "commit_old")
 	// Replace with newer version:
-	_, err := svc.DB().Exec(
+	_, err := svc.TestDB().Exec(
 		`INSERT OR REPLACE INTO facts (path, title, blob_hash, type, domain, entities, confidence, sources, refs, commit_hash)
 		 VALUES ('a/one.md', '', 'blob_new', 'observation', '', '', 1.0, 0, '', 'commit_new')`,
 	)

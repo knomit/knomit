@@ -34,7 +34,7 @@ func TestSearchIncludeTypes(t *testing.T) {
 	}
 
 	for _, f := range facts {
-		insertTestBlob(t, idx.DB(), f.blobHash, f.body)
+		insertTestBlob(t, idx.TestDB(), f.blobHash, f.body)
 		if err := idx.Upsert(store.FactRecord{
 			Path:       f.path,
 			Title:      f.typ + " fact",
@@ -83,7 +83,7 @@ func TestSearchExcludeTypes(t *testing.T) {
 	}
 
 	for _, f := range facts {
-		insertTestBlob(t, idx.DB(), f.blobHash, f.body)
+		insertTestBlob(t, idx.TestDB(), f.blobHash, f.body)
 		if err := idx.Upsert(store.FactRecord{
 			Path:       f.path,
 			Title:      f.typ + " fact",
@@ -134,7 +134,7 @@ func TestSearchTypeFilterEmptyPassesAll(t *testing.T) {
 	}
 
 	for _, f := range facts {
-		insertTestBlob(t, idx.DB(), f.blobHash, f.body)
+		insertTestBlob(t, idx.TestDB(), f.blobHash, f.body)
 		if err := idx.Upsert(store.FactRecord{
 			Path:       f.path,
 			Title:      f.typ + " fact",
@@ -179,7 +179,7 @@ func TestSearchIncludeMultipleTypes(t *testing.T) {
 	}
 
 	for _, f := range facts {
-		insertTestBlob(t, idx.DB(), f.blobHash, f.body)
+		insertTestBlob(t, idx.TestDB(), f.blobHash, f.body)
 		if err := idx.Upsert(store.FactRecord{
 			Path:       f.path,
 			Title:      f.typ + " fact",
@@ -237,7 +237,7 @@ func TestSearchEntityFilterSQL(t *testing.T) {
 		{"kb/d.md", "blob_d", []string{"developer-platform", "CI/CD"}, []string{"tools", "devops"}},
 	}
 	for _, f := range facts {
-		insertTestBlob(t, idx.DB(), f.blobHash, "content for "+f.path)
+		insertTestBlob(t, idx.TestDB(), f.blobHash, "content for "+f.path)
 		if err := idx.Upsert(store.FactRecord{
 			Path: f.path, Title: f.path, BlobHash: f.blobHash,
 			Type: "observation", Domain: f.domain, Entities: f.entities,
@@ -316,7 +316,7 @@ func TestSearchEntityWithSpaces(t *testing.T) {
 		{"kb/c.md", "blob_c", []string{"Redis"}},
 	}
 	for _, f := range facts {
-		insertTestBlob(t, idx.DB(), f.blobHash, "content for "+f.path)
+		insertTestBlob(t, idx.TestDB(), f.blobHash, "content for "+f.path)
 		if err := idx.Upsert(store.FactRecord{
 			Path: f.path, Title: f.path, BlobHash: f.blobHash,
 			Type: "observation", Domain: []string{"test"}, Entities: f.entities,
@@ -358,7 +358,7 @@ func TestSearchEntityBeyondOldLimit(t *testing.T) {
 	for i := 0; i < 200; i++ {
 		bh := fmt.Sprintf("blob_filler_%d", i)
 		path := fmt.Sprintf("kb/filler/%d.md", i)
-		insertTestBlob(t, idx.DB(), bh, fmt.Sprintf("filler content %d", i))
+		insertTestBlob(t, idx.TestDB(), bh, fmt.Sprintf("filler content %d", i))
 		if err := idx.Upsert(store.FactRecord{
 			Path: path, Title: path, BlobHash: bh,
 			Type: "observation", Domain: []string{"test"}, Entities: []string{"filler"},
@@ -369,7 +369,7 @@ func TestSearchEntityBeyondOldLimit(t *testing.T) {
 	}
 
 	// Insert the needle — a hypothesis with a unique entity.
-	insertTestBlob(t, idx.DB(), "blob_needle", "the needle fact")
+	insertTestBlob(t, idx.TestDB(), "blob_needle", "the needle fact")
 	if err := idx.Upsert(store.FactRecord{
 		Path: "kb/needle.md", Title: "Needle", BlobHash: "blob_needle",
 		Type: "hypothesis", Domain: []string{"special"}, Entities: []string{"rare-entity"},
@@ -429,8 +429,8 @@ func TestSearchVecPathEntityFilter(t *testing.T) {
 	}).AnyTimes()
 	idx.SetEmbedder(emb)
 
-	insertTestBlob(t, idx.DB(), "blob_va", "caching content")
-	insertTestBlob(t, idx.DB(), "blob_vb", "caching content")
+	insertTestBlob(t, idx.TestDB(), "blob_va", "caching content")
+	insertTestBlob(t, idx.TestDB(), "blob_vb", "caching content")
 
 	if err := idx.Upsert(store.FactRecord{
 		Path: "kb/va.md", Title: "Alpha", BlobHash: "blob_va",
@@ -541,7 +541,7 @@ func TestSearchVecLimitReturnsTopNByScoreWithBodies(t *testing.T) {
 
 	for _, f := range facts {
 		bh := "blob_" + f.path
-		insertTestBlob(t, idx.DB(), bh, f.body)
+		insertTestBlob(t, idx.TestDB(), bh, f.body)
 		if err := idx.Upsert(store.FactRecord{
 			Path: f.path, Title: f.path, BlobHash: bh,
 			Type: "observation", Domain: []string{"test"}, Entities: []string{},
@@ -595,8 +595,8 @@ func TestMatchesFiltersWithTypes(t *testing.T) {
 	}
 	defer idx.Close()
 
-	insertTestBlob(t, idx.DB(), "blob_a", "content a")
-	insertTestBlob(t, idx.DB(), "blob_b", "content b")
+	insertTestBlob(t, idx.TestDB(), "blob_a", "content a")
+	insertTestBlob(t, idx.TestDB(), "blob_b", "content b")
 
 	if err := idx.Upsert(store.FactRecord{
 		Path: "kb/a.md", Title: "A", BlobHash: "blob_a", Type: "observation",
@@ -630,7 +630,7 @@ func TestMatchesFiltersWithTypes(t *testing.T) {
 // upsertFact is a test helper that inserts a blob and upserts a FactRecord.
 func upsertFact(t *testing.T, idx *store.Index, path, blobHash, typ string, domain, entities []string, confidence float64) {
 	t.Helper()
-	insertTestBlob(t, idx.DB(), blobHash, "content of "+path)
+	insertTestBlob(t, idx.TestDB(), blobHash, "content of "+path)
 	if err := idx.Upsert(store.FactRecord{
 		Path: path, Title: path, BlobHash: blobHash,
 		Type: typ, Domain: domain, Entities: entities,
@@ -816,8 +816,8 @@ func TestSearchMinSimilarity(t *testing.T) {
 	}).AnyTimes()
 	idx.SetEmbedder(emb)
 
-	insertTestBlob(t, idx.DB(), "bh_high", "close match")
-	insertTestBlob(t, idx.DB(), "bh_low", "distant match")
+	insertTestBlob(t, idx.TestDB(), "bh_high", "close match")
+	insertTestBlob(t, idx.TestDB(), "bh_low", "distant match")
 	if err := idx.Upsert(store.FactRecord{
 		Path: "kb/high.md", Title: "close", BlobHash: "bh_high",
 		Type: "observation", Domain: []string{"test"}, Entities: []string{},
@@ -874,8 +874,8 @@ func TestSearchAdaptiveKBranchMid(t *testing.T) {
 	}).AnyTimes()
 	idx.SetEmbedder(emb)
 
-	insertTestBlob(t, idx.DB(), "bh_high2", "close match")
-	insertTestBlob(t, idx.DB(), "bh_low2", "distant match")
+	insertTestBlob(t, idx.TestDB(), "bh_high2", "close match")
+	insertTestBlob(t, idx.TestDB(), "bh_low2", "distant match")
 	if err := idx.Upsert(store.FactRecord{
 		Path: "kb/high2.md", Title: "close", BlobHash: "bh_high2",
 		Type: "observation", Domain: []string{"test"}, Entities: []string{},
@@ -921,8 +921,8 @@ func TestSearchAdaptiveKBranchDefault(t *testing.T) {
 	}).AnyTimes()
 	idx.SetEmbedder(emb)
 
-	insertTestBlob(t, idx.DB(), "bh_high3", "close match")
-	insertTestBlob(t, idx.DB(), "bh_low3", "distant match")
+	insertTestBlob(t, idx.TestDB(), "bh_high3", "close match")
+	insertTestBlob(t, idx.TestDB(), "bh_low3", "distant match")
 	if err := idx.Upsert(store.FactRecord{
 		Path: "kb/high3.md", Title: "close", BlobHash: "bh_high3",
 		Type: "observation", Domain: []string{"test"}, Entities: []string{},
@@ -969,7 +969,7 @@ func TestSearchDomainPrefixFilter(t *testing.T) {
 		{"kb/d.md", "blob_d", []string{"technology/rust", "science/physics"}},
 	}
 	for _, f := range facts {
-		insertTestBlob(t, idx.DB(), f.blobHash, "content for "+f.path)
+		insertTestBlob(t, idx.TestDB(), f.blobHash, "content for "+f.path)
 		if err := idx.Upsert(store.FactRecord{
 			Path: f.path, Title: f.path, BlobHash: f.blobHash,
 			Type: "observation", Domain: f.domain, Entities: []string{},

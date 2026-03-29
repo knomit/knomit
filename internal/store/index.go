@@ -170,9 +170,6 @@ func New(path string) (*Index, error) {
 	return &Index{db: db}, nil
 }
 
-// DB returns the underlying *sql.DB handle.
-func (idx *Index) DB() *sql.DB { return idx.db }
-
 // Close closes the underlying database connection.
 func (idx *Index) Close() error {
 	return idx.db.Close()

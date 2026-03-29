@@ -34,7 +34,7 @@ func TestUpsertAndGetByPath(t *testing.T) {
 	}
 	defer idx.Close()
 
-	insertTestBlob(t, idx.DB(), "blob_foo", "This is about databases and postgres")
+	insertTestBlob(t, idx.TestDB(), "blob_foo", "This is about databases and postgres")
 
 	err = idx.Upsert(store.FactRecord{
 		Path:       "kb/test/foo.md",
@@ -69,7 +69,7 @@ func TestDelete(t *testing.T) {
 	}
 	defer idx.Close()
 
-	insertTestBlob(t, idx.DB(), "blob_bar", "This is about redis and caching")
+	insertTestBlob(t, idx.TestDB(), "blob_bar", "This is about redis and caching")
 
 	rec := store.FactRecord{
 		Path:       "kb/test/bar.md",
@@ -124,7 +124,7 @@ func TestGetByPath(t *testing.T) {
 	}
 
 	// Insert and retrieve
-	insertTestBlob(t, idx.DB(), "blob_baz", "This is about golang")
+	insertTestBlob(t, idx.TestDB(), "blob_baz", "This is about golang")
 
 	original := store.FactRecord{
 		Path:       "kb/test/baz.md",
@@ -163,8 +163,8 @@ func TestUpsertOverwrite(t *testing.T) {
 	}
 	defer idx.Close()
 
-	insertTestBlob(t, idx.DB(), "blob_v1", "original body text about mysql")
-	insertTestBlob(t, idx.DB(), "blob_v2", "updated body text about postgresql")
+	insertTestBlob(t, idx.TestDB(), "blob_v1", "original body text about mysql")
+	insertTestBlob(t, idx.TestDB(), "blob_v2", "updated body text about postgresql")
 
 	rec := store.FactRecord{
 		Path:       "kb/test/overwrite.md",
@@ -506,7 +506,7 @@ func TestVec0Available(t *testing.T) {
 	defer idx.Close()
 
 	var version string
-	err = idx.DB().QueryRow("SELECT vec_version()").Scan(&version)
+	err = idx.TestDB().QueryRow("SELECT vec_version()").Scan(&version)
 	if err != nil {
 		t.Fatalf("vec_version() failed: %v — sqlite-vec not registered", err)
 	}
@@ -544,7 +544,7 @@ func TestGetEmbedding(t *testing.T) {
 	emb.EXPECT().Embed(gomock.Any()).Return(known, nil).AnyTimes()
 	idx.SetEmbedder(emb)
 
-	insertTestBlob(t, idx.DB(), "blob_emb", "body text for embedding")
+	insertTestBlob(t, idx.TestDB(), "blob_emb", "body text for embedding")
 
 	rec := store.FactRecord{
 		Path:       "kb/test/emb.md",
@@ -583,8 +583,8 @@ func TestSearchFilter(t *testing.T) {
 	}
 	defer idx.Close()
 
-	insertTestBlob(t, idx.DB(), "blob_a", "postgres database replication")
-	insertTestBlob(t, idx.DB(), "blob_b", "redis cache cluster")
+	insertTestBlob(t, idx.TestDB(), "blob_a", "postgres database replication")
+	insertTestBlob(t, idx.TestDB(), "blob_b", "redis cache cluster")
 
 	if err := idx.Upsert(store.FactRecord{
 		Path: "kb/a.md", Title: "Alpha", BlobHash: "blob_a",
@@ -677,8 +677,8 @@ func TestSearchHybrid(t *testing.T) {
 	}).AnyTimes()
 	idx.SetEmbedder(emb)
 
-	insertTestBlob(t, idx.DB(), "blob_ha", "postgres database replication")
-	insertTestBlob(t, idx.DB(), "blob_hb", "postgres cache storage")
+	insertTestBlob(t, idx.TestDB(), "blob_ha", "postgres database replication")
+	insertTestBlob(t, idx.TestDB(), "blob_hb", "postgres cache storage")
 
 	if err := idx.Upsert(store.FactRecord{
 		Path: "kb/a.md", Title: "Alpha", BlobHash: "blob_ha",
@@ -731,7 +731,7 @@ func TestDeleteReferentialIntegrity(t *testing.T) {
 	emb.EXPECT().Embed(gomock.Any()).Return(testVec(1, 0, 0, 0), nil).AnyTimes()
 	idx.SetEmbedder(emb)
 
-	insertTestBlob(t, idx.DB(), "blob_ri", "referential integrity")
+	insertTestBlob(t, idx.TestDB(), "blob_ri", "referential integrity")
 
 	rec := store.FactRecord{
 		Path: "kb/test/ri.md", Title: "RI Test", BlobHash: "blob_ri",
@@ -767,7 +767,7 @@ func TestDeleteReferentialIntegrity(t *testing.T) {
 
 	// facts_vec should be empty.
 	var count int
-	if err := idx.DB().QueryRow("SELECT count(*) FROM facts_vec").Scan(&count); err != nil {
+	if err := idx.TestDB().QueryRow("SELECT count(*) FROM facts_vec").Scan(&count); err != nil {
 		t.Fatal(err)
 	}
 	if count != 0 {
@@ -808,9 +808,9 @@ func setupSimilarityIndex(t *testing.T) (*store.Index, *gomock.Controller) {
 	}).AnyTimes()
 	idx.SetEmbedder(emb)
 
-	insertTestBlob(t, idx.DB(), "blob_tea", "Carol drinks green tea exclusively")
-	insertTestBlob(t, idx.DB(), "blob_jazz", "Bob listens to jazz regularly")
-	insertTestBlob(t, idx.DB(), "blob_python", "Alice writes Python every day")
+	insertTestBlob(t, idx.TestDB(), "blob_tea", "Carol drinks green tea exclusively")
+	insertTestBlob(t, idx.TestDB(), "blob_jazz", "Bob listens to jazz regularly")
+	insertTestBlob(t, idx.TestDB(), "blob_python", "Alice writes Python every day")
 
 	facts := []store.FactRecord{
 		{Path: "kb/people/carol/tea.md", Title: "Tea Preference", BlobHash: "blob_tea",
@@ -910,7 +910,7 @@ func TestSearchVecOnlyNoEmbedder(t *testing.T) {
 	}
 	defer idx.Close()
 
-	insertTestBlob(t, idx.DB(), "blob_tea_ne", "tea drinking habits")
+	insertTestBlob(t, idx.TestDB(), "blob_tea_ne", "tea drinking habits")
 
 	// Insert a fact without embedder.
 	if err := idx.Upsert(store.FactRecord{
@@ -955,8 +955,8 @@ func TestSearchVecScoringBoost(t *testing.T) {
 	}).AnyTimes()
 	idx.SetEmbedder(emb)
 
-	insertTestBlob(t, idx.DB(), "blob_brew", "tea brewing techniques")
-	insertTestBlob(t, idx.DB(), "blob_garden", "tea garden cultivation")
+	insertTestBlob(t, idx.TestDB(), "blob_brew", "tea brewing techniques")
+	insertTestBlob(t, idx.TestDB(), "blob_garden", "tea garden cultivation")
 
 	if err := idx.Upsert(store.FactRecord{
 		Path: "kb/a.md", Title: "Brewing", BlobHash: "blob_brew",
@@ -1018,9 +1018,9 @@ func TestStats_Aggregate(t *testing.T) {
 	}
 	defer idx.Close()
 
-	insertTestBlob(t, idx.DB(), "b1", "body1")
-	insertTestBlob(t, idx.DB(), "b2", "body2")
-	insertTestBlob(t, idx.DB(), "b3", "body3")
+	insertTestBlob(t, idx.TestDB(), "b1", "body1")
+	insertTestBlob(t, idx.TestDB(), "b2", "body2")
+	insertTestBlob(t, idx.TestDB(), "b3", "body3")
 
 	facts := []store.FactRecord{
 		{Path: "kb/a.md", Title: "A", BlobHash: "b1", Domain: []string{"go", "web"}, Entities: []string{"chi"}, Confidence: 0.9, Sources: 1, CommitHash: "x"},
@@ -1075,7 +1075,7 @@ func TestStats_NullDomainAndEntities(t *testing.T) {
 	}
 	defer idx.Close()
 
-	insertTestBlob(t, idx.DB(), "b1", "body1")
+	insertTestBlob(t, idx.TestDB(), "b1", "body1")
 
 	// Insert a fact with nil domain and entities (simulates missing frontmatter fields).
 	if err := idx.Upsert(store.FactRecord{
@@ -1102,7 +1102,7 @@ func TestPragmasCacheSize(t *testing.T) {
 	}
 	defer idx.Close()
 	var cacheSize int
-	if err := idx.DB().QueryRow("PRAGMA cache_size").Scan(&cacheSize); err != nil {
+	if err := idx.TestDB().QueryRow("PRAGMA cache_size").Scan(&cacheSize); err != nil {
 		t.Fatal(err)
 	}
 	if cacheSize != -65536 {
