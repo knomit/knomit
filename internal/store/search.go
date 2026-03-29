@@ -273,7 +273,7 @@ func (idx *Index) Search(branch string, q SearchQuery) ([]SearchResult, error) {
 	}
 
 	if graphHops := q.GraphHops; graphHops > 0 && len(vecSimByPath) > 0 {
-		for path, score := range idx.graphExpandSearch(vecSimByPath, graphHops) {
+		for path, score := range idx.graphExpandSearch(branchID, vecSimByPath, graphHops) {
 			if _, exists := vecSimByPath[path]; !exists {
 				vecSimByPath[path] = score
 			}

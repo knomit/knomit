@@ -560,7 +560,11 @@ func TestGraphExpandSearch_MultiSeed(t *testing.T) {
 		"kb/f1.md": 0.9,  // alpha — similar to beta (f3)
 		"kb/f2.md": 0.85, // gamma — dissimilar, no SIMILAR_TO neighbors
 	}
-	expanded := idx.graphExpandSearch(seeds, 1)
+	branchID, err := idx.BranchID(testBranch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expanded := idx.graphExpandSearch(branchID, seeds, 1)
 
 	// kb/f3.md should be discovered as a SIMILAR_TO neighbor of seed kb/f1.md
 	if _, ok := expanded["kb/f3.md"]; !ok {
@@ -572,6 +576,51 @@ func TestGraphExpandSearch_MultiSeed(t *testing.T) {
 	}
 	if _, ok := expanded["kb/f2.md"]; ok {
 		t.Error("seed kb/f2.md must not appear in expanded results")
+	}
+}
+
+func TestGraphExpandSearch_BranchScoped(t *testing.T) {
+	idx, err := New(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer idx.Close()
+	idx.SetEmbedder(&stubEmbedder768d{})
+
+	insertBlob(t, idx.db, "hash_alpha", "alpha")
+	insertBlob(t, idx.db, "hash_beta", "beta")
+
+	branchA := "agent/branch-a"
+	branchB := "agent/branch-b"
+
+	// Fact on branchA: shares entity "Go" with fact on branchB.
+	if err := idx.Upsert(branchA, "commit1", FactRecord{
+		Path: "kb/a.md", Title: "A", BlobHash: "hash_alpha",
+		Domain: []string{"eng"}, Entities: []string{"Go"}, Refs: []string{},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Fact on branchB: shares entity "Go" — would be a graph neighbor of kb/a.md.
+	if err := idx.Upsert(branchB, "commit2", FactRecord{
+		Path: "kb/b.md", Title: "B", BlobHash: "hash_beta",
+		Domain: []string{"eng"}, Entities: []string{"Go"}, Refs: []string{},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	branchAID, err := idx.BranchID(branchA)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	seeds := map[string]float64{"kb/a.md": 0.9}
+	expanded := idx.graphExpandSearch(branchAID, seeds, 1)
+
+	// kb/b.md is connected via shared entity "Go" but lives on branchB,
+	// so it must NOT appear when searching scoped to branchA.
+	if _, ok := expanded["kb/b.md"]; ok {
+		t.Errorf("cross-branch fact kb/b.md should not appear in branchA-scoped graph expansion; got %v", expanded)
 	}
 }
 

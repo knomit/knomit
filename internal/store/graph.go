@@ -417,7 +417,7 @@ func (idx *Index) ClusterFacts(branch string, resolution float64, minCommunitySi
 //
 // Runs exactly 2 Cypher queries total (one per edge type) regardless of how
 // many seeds are provided, using OR-chaining to batch all seed paths.
-func (idx *Index) graphExpandSearch(seeds map[string]float64, maxHops int) map[string]float64 {
+func (idx *Index) graphExpandSearch(branchID int64, seeds map[string]float64, maxHops int) map[string]float64 {
 	if len(seeds) == 0 {
 		return nil
 	}
@@ -491,6 +491,35 @@ func (idx *Index) graphExpandSearch(seeds map[string]float64, maxHops int) map[s
 			}
 		}
 		rows.Close()
+	}
+
+	// Post-filter: keep only paths visible on this branch.
+	if len(expanded) > 0 {
+		placeholders := make([]string, 0, len(expanded))
+		args := make([]interface{}, 0, len(expanded)+1)
+		args = append(args, branchID)
+		for p := range expanded {
+			placeholders = append(placeholders, "?")
+			args = append(args, p)
+		}
+		visible := make(map[string]bool, len(expanded))
+		rows, err := idx.db.Query(
+			`SELECT path FROM branch_facts WHERE branch_id = ? AND path IN (`+strings.Join(placeholders, ",")+`)`,
+			args...,
+		)
+		if err == nil {
+			for rows.Next() {
+				var p string
+				rows.Scan(&p)
+				visible[p] = true
+			}
+			rows.Close()
+		}
+		for p := range expanded {
+			if !visible[p] {
+				delete(expanded, p)
+			}
+		}
 	}
 
 	return expanded
