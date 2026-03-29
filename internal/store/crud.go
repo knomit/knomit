@@ -440,6 +440,21 @@ func (idx *Index) recentFactsSearch(pathPrefix, query string, limit, offset int,
 	return all[offset:end], total, nil
 }
 
+// LastCommitForPath returns the commit hash of the most recent commit_log
+// entry for the given path, provided that entry's action is not 'deleted'.
+// Returns ("", false) if the path is not found or its latest action is deleted.
+func (idx *Index) LastCommitForPath(path string) (string, bool) {
+	var hash, action string
+	err := idx.db.QueryRow(
+		`SELECT commit_hash, action FROM commit_log WHERE path = ? ORDER BY rowid DESC LIMIT 1`,
+		path,
+	).Scan(&hash, &action)
+	if err != nil || hash == "" || action == "deleted" {
+		return "", false
+	}
+	return hash, true
+}
+
 func join(ss []string, sep string) string {
 	var b strings.Builder
 	for i, s := range ss {
