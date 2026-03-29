@@ -9,7 +9,6 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"time"
 
 	mcpserver "github.com/mark3labs/mcp-go/server"
 	"github.com/rs/zerolog/log"
@@ -20,7 +19,6 @@ import (
 	"knomit/internal/git"
 	"knomit/internal/llm"
 	"knomit/internal/mcp"
-	"knomit/internal/observe"
 	"knomit/internal/store"
 	"knomit/internal/synthesize"
 )
@@ -192,210 +190,30 @@ func (m *Manager) Add(name, dbPath string) error {
 // from scratch (or cloned from origin). Non-default repos that fail to
 // open are returned as errors so the caller can skip them gracefully.
 func (m *Manager) openOne(name, dbPath string, isDefault bool) (*RepoInstance, error) {
-	cfg := m.deps.Cfg
-	signer := m.deps.Signer
-	agentBranch := m.deps.AgentBranch
-	embedder := m.deps.Embedder
-	keyPath := m.deps.KeyPath
-	ctx := m.ctx
-
-	svc, err := store.Open(dbPath)
-	if err != nil {
-		return nil, fmt.Errorf("open store: %w", err)
-	}
-
-	// Set up credential encryption using the SSH private key.
-	if keyData, readErr := os.ReadFile(keyPath); readErr == nil {
-		if crypt, cryptErr := store.NewCrypt(keyData); cryptErr == nil {
-			svc.SetCrypt(crypt)
-		}
-	}
-
-	gs, err := git.OpenWithStorer(svc.GitStorer())
-	if err != nil {
-		if !isDefault {
-			svc.Close()
-			return nil, fmt.Errorf("open git: %w", err)
-		}
-		// Default repo — first run, init from remote or local.
-		if cfg.Git.Origin != "" {
-			auth, authErr := git.ResolveAuth(cfg.Remote, keyPath)
-			if authErr != nil {
-				svc.Close()
-				return nil, fmt.Errorf("resolve auth: %w", authErr)
-			}
-			gs, err = git.InitFromRemote(svc.GitStorer(), cfg.Git.Origin, auth, agentBranch)
-			if err != nil {
-				svc.Close()
-				return nil, fmt.Errorf("init from remote: %w", err)
-			}
-		} else {
-			ont := fact.DefaultOntology()
-			ontologyYAML, serErr := ont.Serialize()
-			if serErr != nil {
-				svc.Close()
-				return nil, fmt.Errorf("serialize ontology: %w", serErr)
-			}
-			initFiles := map[string]string{
-				"domains/ontology.yaml": string(ontologyYAML),
-			}
-			gs, err = git.InitWithStorer(svc.GitStorer(), initFiles, agentBranch)
-			if err != nil {
-				svc.Close()
-				return nil, fmt.Errorf("init git: %w", err)
-			}
-		}
-	}
-
-	gs.SetSigner(signer)
-
-	// Ensure the expected agent branch exists.
-	if agentBranch != "" {
-		if err := gs.CreateBranch(agentBranch, agentBranch); err != nil {
-			log.Warn().Err(err).Str("repo", name).Msg("branch create/ensure failed")
-		}
-	}
-
-	// Seed remotes table for default repo on first startup.
-	if isDefault && cfg.Git.Origin != "" {
-		if err := svc.SetRemote("origin", cfg.Git.Origin, "main", 300, 300); err != nil {
-			log.Warn().Err(err).Msg("failed to seed origin in remotes table")
-		}
-	}
-
-	idx := svc.Index()
-	if embedder != nil {
-		idx.SetEmbedder(embedder)
-	}
-
-	// Initial index sync.
-	if err := idx.Sync(gs, agentBranch); err != nil {
-		log.Warn().Err(err).Str("repo", name).Msg("initial index sync failed")
-	}
-
-	// If there is no pipeline watermark for this branch, set it to HEAD so the
-	// first run only processes facts written after this point. This covers
-	// fresh init, branch switches (new machine / key rotation), and any other
-	// scenario where an existing repo has no watermark for the current branch.
-	for _, tool := range []string{"review", "hypothesize"} {
-		if wm, _ := idx.GetPipelineWatermark(tool, agentBranch); wm == "" {
-			if head, err := gs.HeadCommit(agentBranch); err == nil {
-				if err := idx.SetPipelineWatermark(tool, agentBranch, head); err != nil {
-					log.Warn().Err(err).Str("tool", tool).Msg("pipeline watermark: initial set failed")
-				}
-			}
-		}
-	}
-
-	hub := NewTaskHub(ctx)
-
-	// Observer: sync index + push SSE on every git commit.
-	// The closure reads ri.GS and ri.Svc at call time so that after SwapStore
-	// it operates on the current (open) database, not the original (closed) one.
-	// ri is assigned below before any commits can fire.
-	var ri *RepoInstance
-	obs := observe.New(time.Second, func(hash string) {
-		ri.mu.RLock()
-		currentGS, ok := ri.gs.(*git.Store)
-		currentSvc := ri.svc
-		ri.mu.RUnlock()
-		if !ok {
-			return
-		}
-		if err := currentSvc.Index().Sync(currentGS, agentBranch); err != nil {
-			log.Warn().Err(err).Str("repo", name).Msg("observer sync failed")
-		}
-		hub.BroadcastStatus(hash)
-	})
-	gs.SetOnCommit(func(_, hash string) { obs.Notify(hash) })
-
-	// Background remote sync + push goroutines.
-	syncCtx, syncCancel := context.WithCancel(ctx)
-	var syncWg sync.WaitGroup
-	remote, _ := svc.GetRemote("origin")
-	if remote != nil {
-		authCfg := remoteAuthFromRecord(remote, cfg.Remote)
-		auth, authErr := git.ResolveAuthWithOrigin(authCfg, keyPath, remote.URL)
-		if authErr != nil {
-			log.Warn().Err(authErr).Str("repo", name).Msg("remote: auth resolution failed")
-		} else {
-			gs.SetAuth(auth)
-		}
-
-		if err := gs.ConfigureRemote(remote.URL, remote.Branch); err != nil {
-			log.Warn().Err(err).Str("repo", name).Msg("remote: configure failed")
-		} else {
-			syncWg.Add(2)
-			go runSyncLoop(syncCtx, &syncWg, gs, svc, hub, remote, name, agentBranch)
-			go runPushLoop(syncCtx, &syncWg, gs, svc, hub, remote, name, agentBranch)
-		}
-	}
-
-	ri = &RepoInstance{
+	b := repoBuilder{
 		name:        name,
 		dbPath:      dbPath,
-		agentBranch: agentBranch,
-		gs:          gs,
-		svc:         svc,
-		idx:         idx,
-		hub:         hub,
-		syncCancel:  syncCancel,
-		syncWg:      &syncWg,
-	}
-	ri.startSync = func(remoteURL string) error {
-		// Use ri.gs and ri.svc (not captured gs/svc) so that after SwapStore
-		// the sync loops operate on the current store, not the original one.
-		ri.mu.RLock()
-		currentGS, ok := ri.gs.(*git.Store)
-		currentSvc := ri.svc
-		ri.mu.RUnlock()
-		if !ok {
-			return fmt.Errorf("current store is not a *git.Store")
-		}
-
-		remote, err := currentSvc.GetRemote("origin")
-		if err != nil || remote == nil {
-			return fmt.Errorf("read remote: %w", err)
-		}
-
-		authCfg := remoteAuthFromRecord(remote, cfg.Remote)
-		auth, authErr := git.ResolveAuthWithOrigin(authCfg, keyPath, remoteURL)
-		if authErr != nil {
-			return fmt.Errorf("resolve auth: %w", authErr)
-		}
-		currentGS.SetAuth(auth)
-
-		if err := currentGS.ConfigureRemote(remoteURL, remote.Branch); err != nil {
-			return fmt.Errorf("configure remote: %w", err)
-		}
-
-		// Stop existing sync/push loops (if any) before starting new ones.
-		syncCancel()
-		syncWg.Wait()
-
-		// Create fresh context and update ri so shutdown cancels the right one.
-		syncCtx, syncCancel = context.WithCancel(ctx)
-		ri.syncCancel = syncCancel
-
-		// Re-register the observer on the current git store so local writes
-		// trigger index sync after a SwapStore replaced ri.gs.
-		currentGS.SetOnCommit(func(_, hash string) { obs.Notify(hash) })
-
-		syncWg.Add(2)
-		go runSyncLoop(syncCtx, &syncWg, currentGS, currentSvc, hub, remote, name, agentBranch)
-		go runPushLoop(syncCtx, &syncWg, currentGS, currentSvc, hub, remote, name, agentBranch)
-		return nil
+		isDefault:   isDefault,
+		cfg:         m.deps.Cfg,
+		signer:      m.deps.Signer,
+		agentBranch: m.deps.AgentBranch,
+		embedder:    m.deps.Embedder,
+		keyPath:     m.deps.KeyPath,
+		ctx:         m.ctx,
 	}
 
-	ri.closeFn = func() {
-		obs.Stop()
-		ri.mu.RLock()
-		svc := ri.svc
-		ri.mu.RUnlock()
-		svc.Close()
+	if err := b.openStore(); err != nil {
+		return nil, err
 	}
+	if err := b.openGit(); err != nil {
+		b.close()
+		return nil, err
+	}
+	b.ensureBranch()
+	b.setupIndex()
+	b.seedWatermarks()
 
-	return ri, nil
+	return b.build(), nil
 }
 
 // SetupMCP wires MCP handlers onto ri using the manager's ontology and deps.

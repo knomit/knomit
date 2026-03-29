@@ -5,11 +5,16 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
+
+	"github.com/go-git/go-git/v5/plumbing/transport/client"
+	"github.com/go-git/go-git/v5/plumbing/transport/server"
 
 	"knomit/internal/config"
 	"knomit/internal/fact"
 	"knomit/internal/git"
 	"knomit/internal/store"
+	storegit "knomit/internal/store/git"
 )
 
 // stubEmbedder satisfies repos.Embedder (and store.Embedder) without ONNX model files.
@@ -285,4 +290,158 @@ func TestSwapStoreRestoresEmbedder(t *testing.T) {
 
 	// After the swap the new index must have the embedder attached.
 	assertEmbedderSet(t, ri, "after SwapStore")
+}
+
+// ---------- remoteAuthFromRecord ----------
+
+func TestRemoteAuthFromRecord_UsesRecordFields(t *testing.T) {
+	fallback := git.RemoteAuthConfig{Token: "global-tok", AuthMethod: "token"}
+	remote := &store.Remote{AuthMethod: "basic", AuthToken: "alice:s3cret"}
+
+	got := remoteAuthFromRecord(remote, fallback)
+	if got.AuthMethod != "basic" {
+		t.Errorf("AuthMethod = %q, want %q", got.AuthMethod, "basic")
+	}
+	if got.User != "alice" || got.Password != "s3cret" {
+		t.Errorf("User:Password = %q:%q, want alice:s3cret", got.User, got.Password)
+	}
+}
+
+func TestRemoteAuthFromRecord_TokenFallback(t *testing.T) {
+	fallback := git.RemoteAuthConfig{Token: "global-tok", AuthMethod: "token"}
+	remote := &store.Remote{AuthToken: "override-tok"}
+
+	got := remoteAuthFromRecord(remote, fallback)
+	if got.Token != "override-tok" {
+		t.Errorf("Token = %q, want %q", got.Token, "override-tok")
+	}
+	if got.AuthMethod != "token" {
+		t.Errorf("AuthMethod = %q, want %q (from fallback)", got.AuthMethod, "token")
+	}
+}
+
+func TestRemoteAuthFromRecord_EmptyRecordUsesFallback(t *testing.T) {
+	fallback := git.RemoteAuthConfig{Token: "global", AuthMethod: "token", SSHKey: "/path/key"}
+	remote := &store.Remote{}
+
+	got := remoteAuthFromRecord(remote, fallback)
+	if got != fallback {
+		t.Errorf("expected fallback config unchanged, got %+v", got)
+	}
+}
+
+// ---------- openOne with in-memory remote ----------
+
+// setupOrigin creates an in-memory git store with content on main, registers
+// the inmem:// transport, and returns the origin store URL for use as
+// cfg.Git.Origin.
+func setupOrigin(t *testing.T) (originURL string) {
+	t.Helper()
+	originSto, err := storegit.NewMemoryStorer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { originSto.Close() })
+
+	origin, err := git.InitWithStorer(originSto, map[string]string{
+		"kb/seed.md": "---\ntitle: seed\n---\nhello\n",
+	}, "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = origin // keep for potential future use
+
+	loader := server.MapLoader{"inmem:///origin": originSto}
+	client.InstallProtocol("inmem", server.NewClient(loader))
+	t.Cleanup(func() { client.InstallProtocol("inmem", nil) })
+
+	return "inmem:///origin"
+}
+
+func TestOpenOne_WithRemote_StartsSyncLoops(t *testing.T) {
+	originURL := setupOrigin(t)
+	dir := t.TempDir()
+	deps, _ := defaultTestDeps(t, dir)
+	deps.Cfg.Git.Origin = originURL
+
+	m := New(context.Background(), deps)
+	dbPath := filepath.Join(dir, "knomit.db")
+
+	ri, err := m.openOne("knomit", dbPath, true)
+	if err != nil {
+		t.Fatalf("openOne: %v", err)
+	}
+	defer func() {
+		if ri.syncCancel != nil {
+			ri.syncCancel()
+		}
+		if ri.syncWg != nil {
+			ri.syncWg.Wait()
+		}
+		ri.Close()
+	}()
+
+	// The sync loops do an immediate sync/push on start. Give them a moment.
+	time.Sleep(200 * time.Millisecond)
+
+	// Verify the remote record was seeded.
+	remote, err := ri.svc.GetRemote("origin")
+	if err != nil {
+		t.Fatalf("GetRemote: %v", err)
+	}
+	if remote == nil {
+		t.Fatal("origin remote not seeded")
+	}
+	if remote.URL != originURL {
+		t.Errorf("remote URL = %q, want %q", remote.URL, originURL)
+	}
+
+	// Verify sync ran (status should be set by the loop).
+	if remote.LastStatus == nil {
+		t.Error("expected LastStatus to be set after sync loop ran")
+	}
+}
+
+func TestStartSync_Closure(t *testing.T) {
+	originURL := setupOrigin(t)
+	dir := t.TempDir()
+	deps, _ := defaultTestDeps(t, dir)
+	deps.Cfg.Git.Origin = originURL
+
+	m := New(context.Background(), deps)
+	dbPath := filepath.Join(dir, "knomit.db")
+
+	ri, err := m.openOne("knomit", dbPath, true)
+	if err != nil {
+		t.Fatalf("openOne: %v", err)
+	}
+	// Stop initial sync loops so we can test startSync fresh.
+	ri.syncCancel()
+	ri.syncWg.Wait()
+
+	defer func() {
+		if ri.syncCancel != nil {
+			ri.syncCancel()
+		}
+		if ri.syncWg != nil {
+			ri.syncWg.Wait()
+		}
+		ri.Close()
+	}()
+
+	// Call startSync — should restart loops.
+	if err := ri.startSync(originURL); err != nil {
+		t.Fatalf("startSync: %v", err)
+	}
+
+	time.Sleep(200 * time.Millisecond)
+
+	// Verify push status was updated by the new loops.
+	remote, err := ri.svc.GetRemote("origin")
+	if err != nil {
+		t.Fatalf("GetRemote: %v", err)
+	}
+	if remote.LastPushStatus == nil {
+		t.Error("expected LastPushStatus to be set after startSync re-launched loops")
+	}
 }
