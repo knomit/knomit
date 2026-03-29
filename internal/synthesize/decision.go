@@ -61,7 +61,7 @@ func ApplyPruneDecisions(
 				onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("retract %s: %v", d.Path, err)})
 				continue
 			}
-			if err := idx.Delete(d.Path); err != nil {
+			if err := idx.Delete(agentBranch, d.Path); err != nil {
 				onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("index delete %s: %v", d.Path, err)})
 			}
 		
@@ -87,7 +87,7 @@ func ApplyPruneDecisions(
 				onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("update write %s: %v", d.Path, err)})
 				continue
 			}
-			if err := idx.Upsert(store.NewFactRecord(f, blobHash, commitHash)); err != nil {
+			if err := idx.Upsert(agentBranch, commitHash, store.NewFactRecord(f, blobHash)); err != nil {
 				onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("index upsert %s: %v", d.Path, err)})
 			}
 		
@@ -117,7 +117,7 @@ func ApplyPruneDecisions(
 			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("merge write %s: %v", merged.Path(), err)})
 			continue
 		}
-		_ = idx.Upsert(store.NewFactRecord(merged, blobHash, commitHash))
+		_ = idx.Upsert(agentBranch, commitHash, store.NewFactRecord(merged, blobHash))
 
 		// Delete source facts (losers get retract tag).
 		for _, src := range m.Paths {
@@ -129,7 +129,7 @@ func ApplyPruneDecisions(
 				onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("merge delete source %s: %v", src, err)})
 				continue
 			}
-			_ = idx.Delete(src)
+			_ = idx.Delete(agentBranch, src)
 			deletedPaths[src] = true
 		
 		}
@@ -190,7 +190,7 @@ func ApplyDistillDecisions(
 			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("distill write %s: %v", f.Path(), err)})
 			continue
 		}
-		_ = idx.Upsert(store.NewFactRecord(f, blobHash, commitHash))
+		_ = idx.Upsert(agentBranch, commitHash, store.NewFactRecord(f, blobHash))
 
 		onProgress(ProgressEvent{Phase: "detail-learn", Message: "learn " + f.Path()})
 		stats.Synthesized++
@@ -204,7 +204,7 @@ func ApplyDistillDecisions(
 			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("distill retract %s: %v", path, err)})
 			continue
 		}
-		_ = idx.Delete(path)
+		_ = idx.Delete(agentBranch, path)
 	
 		onProgress(ProgressEvent{Phase: "detail-distill-retract", Message: "retract " + path})
 		stats.Pruned++

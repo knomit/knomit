@@ -149,7 +149,10 @@ func TestRebuildFacts_BulkInsert(t *testing.T) {
 		t.Fatalf("expected 2 facts after sync, got %d", n)
 	}
 
-	// Clear the facts table.
+	// Clear the facts and branch_facts tables.
+	if _, err := svc.db.Exec("DELETE FROM branch_facts"); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := svc.db.Exec("DELETE FROM facts"); err != nil {
 		t.Fatal(err)
 	}
@@ -167,7 +170,7 @@ func TestRebuildFacts_BulkInsert(t *testing.T) {
 	}
 
 	// Verify individual facts.
-	rec, err := idx.GetByPath("kb/alpha.md")
+	rec, err := idx.GetByPath(testBranch, "kb/alpha.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -181,7 +184,7 @@ func TestRebuildFacts_BulkInsert(t *testing.T) {
 		t.Fatalf("expected confidence 0.9, got %v", rec.Confidence)
 	}
 
-	rec, err = idx.GetByPath("kb/beta.md")
+	rec, err = idx.GetByPath(testBranch, "kb/beta.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -209,6 +212,7 @@ func TestRebuildFacts_SkipsNonFacts(t *testing.T) {
 	idx := svc.Index()
 
 	// Clear and rebuild.
+	svc.db.Exec("DELETE FROM branch_facts")
 	if _, err := svc.db.Exec("DELETE FROM facts"); err != nil {
 		t.Fatal(err)
 	}
@@ -222,7 +226,7 @@ func TestRebuildFacts_SkipsNonFacts(t *testing.T) {
 		t.Fatalf("expected 1 fact (only real-fact.md), got %d", n)
 	}
 
-	rec, err := idx.GetByPath("kb/real-fact.md")
+	rec, err := idx.GetByPath(testBranch, "kb/real-fact.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -231,7 +235,7 @@ func TestRebuildFacts_SkipsNonFacts(t *testing.T) {
 	}
 
 	// Non-facts should not appear.
-	rec, err = idx.GetByPath("ontology.yaml")
+	rec, err = idx.GetByPath(testBranch, "ontology.yaml")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -239,7 +243,7 @@ func TestRebuildFacts_SkipsNonFacts(t *testing.T) {
 		t.Fatal("ontology.yaml should not be indexed as a fact")
 	}
 
-	rec, err = idx.GetByPath("kb/no-title.md")
+	rec, err = idx.GetByPath(testBranch, "kb/no-title.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -287,6 +291,7 @@ func TestRebuildFacts_CommitLogJoin(t *testing.T) {
 	}
 
 	// Clear facts and rebuild.
+	svc.db.Exec("DELETE FROM branch_facts")
 	if _, err := svc.db.Exec("DELETE FROM facts"); err != nil {
 		t.Fatal(err)
 	}
@@ -295,7 +300,7 @@ func TestRebuildFacts_CommitLogJoin(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	rec, err := svc.Index().GetByPath("kb/evolving.md")
+	rec, err := svc.Index().GetByPath(testBranch, "kb/evolving.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -322,6 +327,7 @@ func TestRebuild_PhaseTiming(t *testing.T) {
 	idx := svc.Index()
 
 	// Clear facts for rebuild.
+	svc.db.Exec("DELETE FROM branch_facts")
 	if _, err := svc.db.Exec("DELETE FROM facts"); err != nil {
 		t.Fatal(err)
 	}
@@ -379,7 +385,7 @@ func BenchmarkRebuild(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		db.Exec("DELETE FROM facts")
+		db.Exec("DELETE FROM branch_facts"); db.Exec("DELETE FROM facts")
 		db.Exec("DELETE FROM facts_vec")
 		if err := idx.Rebuild(gs, "agent/test", nil); err != nil {
 			b.Fatal(err)
@@ -653,6 +659,7 @@ func TestRebuild_WithEmbedder(t *testing.T) {
 	idx.SetEmbedder(emb)
 
 	// Clear facts and facts_vec to simulate a fresh rebuild.
+	svc.db.Exec("DELETE FROM branch_facts")
 	svc.db.Exec("DELETE FROM facts")
 	svc.db.Exec("DELETE FROM facts_vec")
 
@@ -677,6 +684,7 @@ func TestRebuild_WithEmbedder_Idempotent(t *testing.T) {
 	idx.SetEmbedder(&countingBatchEmbedder{})
 
 	// First rebuild.
+	svc.db.Exec("DELETE FROM branch_facts")
 	svc.db.Exec("DELETE FROM facts")
 	svc.db.Exec("DELETE FROM facts_vec")
 	if err := idx.Rebuild(gs, "agent/test", nil); err != nil {
@@ -684,6 +692,7 @@ func TestRebuild_WithEmbedder_Idempotent(t *testing.T) {
 	}
 
 	// Second rebuild: facts_vec should not grow.
+	svc.db.Exec("DELETE FROM branch_facts")
 	svc.db.Exec("DELETE FROM facts")
 	if err := idx.Rebuild(gs, "agent/test", nil); err != nil {
 		t.Fatalf("second Rebuild: %v", err)

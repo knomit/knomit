@@ -235,7 +235,7 @@ const (
 // so it must be called AFTER the surrounding transaction has committed.
 // Calling it inside a transaction will not see uncommitted embedding writes.
 func (idx *Index) graphBuildSimilarityEdges(path string) error {
-	emb, err := idx.GetEmbedding(path)
+	emb, err := idx.getEmbeddingByFactPath(path)
 	if err != nil || emb == nil {
 		return nil
 	}
@@ -252,7 +252,7 @@ func (idx *Index) graphBuildSimilarityEdges(path string) error {
 	rows, err := idx.db.Query(
 		`SELECT f.path, (1.0 - fv.distance) as similarity
 		 FROM facts_vec fv
-		 JOIN facts f ON f.rowid = fv.rowid
+		 JOIN facts f ON f.id = fv.rowid
 		 WHERE fv.embedding MATCH ? AND fv.k = ?
 		 ORDER BY fv.distance ASC`,
 		vecBlob, knnK+1,

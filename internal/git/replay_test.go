@@ -39,7 +39,7 @@ func (a *storeIterAdapter) Close() error { return a.inner.Close() }
 
 func mustNewIter(t *testing.T, idx *store.Index) git.FactIter {
 	t.Helper()
-	iter, err := store.NewFactsIter(idx)
+	iter, err := store.NewFactsIter(idx, "agent/local")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -49,11 +49,10 @@ func mustNewIter(t *testing.T, idx *store.Index) git.FactIter {
 // insertFact inserts a row into the facts table for the iterator.
 func insertFact(t *testing.T, idx *store.Index, path, blobHash, commitHash string) {
 	t.Helper()
-	if err := idx.Upsert(store.FactRecord{
+	if err := idx.Upsert("agent/local", commitHash, store.FactRecord{
 		Path:       path,
 		Title:      "title",
 		BlobHash:   blobHash,
-		CommitHash: commitHash,
 		Type:       "observation",
 		Confidence: 0.9,
 		Sources:    1,

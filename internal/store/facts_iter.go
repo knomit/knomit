@@ -9,19 +9,31 @@ type FactRow struct {
 	CommitHash string
 }
 
-// FactsIter is a cursor-based iterator over the facts table. It yields facts
-// one at a time, newest-first (by rowid DESC), deduplicating by path so that
-// only the latest version of each fact is returned. It never loads all facts
-// into memory.
+// FactsIter is a cursor-based iterator over the branch_facts table. It yields
+// facts one at a time, newest-first (by fact_id DESC), deduplicating by path
+// so that only the latest version of each fact is returned. It never loads all
+// facts into memory.
 type FactsIter struct {
 	rows *sql.Rows
 	seen map[string]struct{}
 }
 
-// NewFactsIter opens a cursor over the facts table ordered by rowid DESC.
-// The caller must call Close() when done to release the underlying database cursor.
-func NewFactsIter(idx *Index) (*FactsIter, error) {
-	rows, err := idx.db.Query(`SELECT path, blob_hash, commit_hash FROM facts ORDER BY rowid DESC`)
+// NewFactsIter opens a cursor over facts for the given branch ordered by
+// fact_id DESC. The caller must call Close() when done to release the
+// underlying database cursor.
+func NewFactsIter(idx *Index, branch string) (*FactsIter, error) {
+	branchID, err := idx.BranchID(branch)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := idx.db.Query(
+		`SELECT bf.path, f.blob_hash, bf.commit_hash
+		 FROM branch_facts bf
+		 JOIN facts f ON f.id = bf.fact_id
+		 WHERE bf.branch_id = ?
+		 ORDER BY bf.fact_id DESC`,
+		branchID,
+	)
 	if err != nil {
 		return nil, err
 	}

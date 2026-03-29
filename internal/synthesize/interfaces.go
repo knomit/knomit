@@ -16,9 +16,9 @@ type GitStore interface {
 
 // SearchIndex is the interface that the synthesize package requires from the search index.
 type SearchIndex interface {
-	Search(q store.SearchQuery) ([]store.SearchResult, error)
-	Upsert(r store.FactRecord) error
-	Delete(path string) error
+	Search(branch string, q store.SearchQuery) ([]store.SearchResult, error)
+	Upsert(branch, commitHash string, r store.FactRecord) error
+	Delete(branch, path string) error
 	ClusterFacts(resolution float64, minCommunitySize int) (store.ClusterResult, error)
 }
 

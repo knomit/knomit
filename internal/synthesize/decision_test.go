@@ -19,7 +19,7 @@ func TestApplyPruneDecisions_Retract(t *testing.T) {
 	idx := NewMockSearchIndex(ctrl)
 
 	gs.EXPECT().DeleteFile("agent/test", "kb/test/old.md", gomock.Any(), gomock.Any()).Return("c1", nil)
-	idx.EXPECT().Delete("kb/test/old.md").Return(nil)
+	idx.EXPECT().Delete(gomock.Any(), "kb/test/old.md").Return(nil)
 
 
 	decisions := []PruneDecision{
@@ -48,7 +48,7 @@ func TestApplyPruneDecisions_Update(t *testing.T) {
 	content := factContent("Test fact", "Some body text.")
 	gs.EXPECT().ReadFile("agent/test", "kb/test/upd.md").Return(content, nil)
 	gs.EXPECT().WriteFile("agent/test", "kb/test/upd.md", gomock.Any(), gomock.Any(), gomock.Any()).Return("c2", "b2", nil)
-	idx.EXPECT().Upsert(gomock.Any()).DoAndReturn(func(r store.FactRecord) error {
+	idx.EXPECT().Upsert(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(branch, commitHash string, r store.FactRecord) error {
 		if r.Confidence != 0.5 {
 			t.Errorf("expected confidence 0.5, got %f", r.Confidence)
 		}
@@ -101,12 +101,12 @@ func TestApplyPruneDecisions_Merge(t *testing.T) {
 	gs.EXPECT().ReadFile("agent/test", "kb/test/b.md").Return(factContent("Fact B", "Body B."), nil)
 	// Write merged fact.
 	gs.EXPECT().WriteFile("agent/test", "kb/test/merged.md", gomock.Any(), gomock.Any(), gomock.Any()).Return("c3", "b3", nil)
-	idx.EXPECT().Upsert(gomock.Any()).Return(nil)
+	idx.EXPECT().Upsert(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil)
 	// Delete sources.
 	gs.EXPECT().DeleteFile("agent/test", "kb/test/a.md", gomock.Any(), gomock.Any()).Return("c4", nil)
-	idx.EXPECT().Delete("kb/test/a.md").Return(nil)
+	idx.EXPECT().Delete(gomock.Any(), "kb/test/a.md").Return(nil)
 	gs.EXPECT().DeleteFile("agent/test", "kb/test/b.md", gomock.Any(), gomock.Any()).Return("c5", nil)
-	idx.EXPECT().Delete("kb/test/b.md").Return(nil)
+	idx.EXPECT().Delete(gomock.Any(), "kb/test/b.md").Return(nil)
 
 
 	merges := []MergeEntry{
@@ -144,12 +144,12 @@ func TestApplyPruneDecisions_NoDoubleDelete(t *testing.T) {
 	// Path "kb/test/a.md" appears in both retract decision and merge sources.
 	// It should only be deleted once.
 	gs.EXPECT().DeleteFile("agent/test", "kb/test/a.md", gomock.Any(), gomock.Any()).Return("c1", nil).Times(1)
-	idx.EXPECT().Delete("kb/test/a.md").Return(nil).Times(1)
+	idx.EXPECT().Delete(gomock.Any(), "kb/test/a.md").Return(nil).Times(1)
 	// computeWeight reads source before writing merged fact.
 	gs.EXPECT().ReadFile("agent/test", "kb/test/a.md").Return(factContent("Fact A", "Body A."), nil)
 	// Merge write.
 	gs.EXPECT().WriteFile("agent/test", "kb/test/merged.md", gomock.Any(), gomock.Any(), gomock.Any()).Return("c2", "b2", nil)
-	idx.EXPECT().Upsert(gomock.Any()).Return(nil)
+	idx.EXPECT().Upsert(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil)
 
 	decisions := []PruneDecision{
 		{Path: "kb/test/a.md", Action: "retract"},
@@ -191,7 +191,7 @@ func TestApplyDistillDecisions_SynthesizeAndRetract(t *testing.T) {
 			}
 			return "c1", "b1", nil
 		})
-	idx.EXPECT().Upsert(gomock.Any()).DoAndReturn(func(r store.FactRecord) error {
+	idx.EXPECT().Upsert(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(branch, commitHash string, r store.FactRecord) error {
 		if !strings.HasPrefix(r.Path, "kb/test/") {
 			t.Errorf("expected path under kb/test/, got %s", r.Path)
 		}
@@ -203,7 +203,7 @@ func TestApplyDistillDecisions_SynthesizeAndRetract(t *testing.T) {
 
 	// Retract.
 	gs.EXPECT().DeleteFile("agent/test", "kb/test/old.md", gomock.Any(), gomock.Any()).Return("c2", nil)
-	idx.EXPECT().Delete("kb/test/old.md").Return(nil)
+	idx.EXPECT().Delete(gomock.Any(), "kb/test/old.md").Return(nil)
 
 	synthesized := []distillFact{
 		{
@@ -241,7 +241,7 @@ func TestApplyDistillDecisions_NoRefs(t *testing.T) {
 
 	// Upsert handles DERIVED_FROM; no separate call needed.
 	gs.EXPECT().WriteFile(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return("c1", "b1", nil)
-	idx.EXPECT().Upsert(gomock.Any()).Return(nil)
+	idx.EXPECT().Upsert(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil)
 
 	synthesized := []distillFact{
 		{

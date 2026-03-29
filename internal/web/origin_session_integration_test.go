@@ -1026,7 +1026,7 @@ func TestOriginSession_RebuildAfterCommit(t *testing.T) {
 	}
 	var updatedSvc4 *store.Service
 	updatedRI.WithRead(func(d repos.StoreDeps) { updatedSvc4 = d.Svc })
-	facts, total, err := updatedSvc4.Index().RecentFacts("", "", 100, 0, nil, nil, nil, nil, nil)
+	facts, total, err := updatedSvc4.Index().RecentFacts(testAgentBranch, "", "", 100, 0, nil, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("RecentFacts: %v", err)
 	}

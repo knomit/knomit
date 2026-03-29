@@ -168,7 +168,7 @@ func TestSetupMCP_RebindsAfterSwapStore(t *testing.T) {
 	}
 
 	// Verify the new index is usable (not closed).
-	_, err := newSvc.Index().Stats("")
+	_, err := newSvc.Index().GetLastCommit("_check")
 	if err != nil {
 		t.Fatalf("new index query failed (database closed?): %v", err)
 	}
@@ -222,12 +222,12 @@ func TestObserver_UsesCurrentIndexAfterSwapStore(t *testing.T) {
 	}
 
 	// Verify the new index is queryable (not closed).
-	if _, err := newIdx.Stats(""); err != nil {
+	if _, err := newIdx.GetLastCommit("_check"); err != nil {
 		t.Fatalf("new index Stats failed: %v", err)
 	}
 
 	// Verify the old index IS closed (confirms the bug scenario).
-	_, oldErr := oldIdx.Stats("")
+	_, oldErr := oldIdx.GetLastCommit("_check")
 	if oldErr == nil {
 		t.Fatal("expected old index to be closed after SwapStore")
 	}
@@ -263,7 +263,7 @@ func TestClose_ClosesCurrentSvcAfterSwapStore(t *testing.T) {
 	ri.Close()
 
 	// The new service's DB should now be closed.
-	_, err := newSvc.Index().Stats("")
+	_, err := newSvc.Index().GetLastCommit("_check")
 	if err == nil {
 		t.Fatal("expected new service to be closed after ri.Close()")
 	}

@@ -79,7 +79,7 @@ func TestHandleSearch_WithFilters(t *testing.T) {
 	gs := NewMockGitStore(ctrl)
 	mockIdx := NewMockSearchIndex(ctrl)
 
-	mockIdx.EXPECT().Search(gomock.Any()).DoAndReturn(func(q store.SearchQuery) ([]store.SearchResult, error) {
+	mockIdx.EXPECT().Search(gomock.Any(), gomock.Any()).DoAndReturn(func(branch string, q store.SearchQuery) ([]store.SearchResult, error) {
 		if len(q.Entities) != 2 || q.Entities[0] != "go" || q.Entities[1] != "chi" {
 			t.Errorf("entities = %v, want [go chi]", q.Entities)
 		}
@@ -112,7 +112,7 @@ func TestHandleSearch_TypeFilter(t *testing.T) {
 	gs := NewMockGitStore(ctrl)
 	mockIdx := NewMockSearchIndex(ctrl)
 
-	mockIdx.EXPECT().Search(gomock.Any()).DoAndReturn(func(q store.SearchQuery) ([]store.SearchResult, error) {
+	mockIdx.EXPECT().Search(gomock.Any(), gomock.Any()).DoAndReturn(func(branch string, q store.SearchQuery) ([]store.SearchResult, error) {
 		if len(q.IncludeTypes) != 1 || q.IncludeTypes[0] != "hypothesis" {
 			t.Errorf("IncludeTypes = %v, want [hypothesis]", q.IncludeTypes)
 		}
@@ -136,7 +136,7 @@ func TestHandleSearch_MultipleTypes(t *testing.T) {
 	gs := NewMockGitStore(ctrl)
 	mockIdx := NewMockSearchIndex(ctrl)
 
-	mockIdx.EXPECT().Search(gomock.Any()).DoAndReturn(func(q store.SearchQuery) ([]store.SearchResult, error) {
+	mockIdx.EXPECT().Search(gomock.Any(), gomock.Any()).DoAndReturn(func(branch string, q store.SearchQuery) ([]store.SearchResult, error) {
 		if len(q.IncludeTypes) != 2 {
 			t.Errorf("IncludeTypes = %v, want 2 items", q.IncludeTypes)
 		}
@@ -157,7 +157,7 @@ func TestHandleSearch_LimitCappedAt500(t *testing.T) {
 	gs := NewMockGitStore(ctrl)
 	mockIdx := NewMockSearchIndex(ctrl)
 
-	mockIdx.EXPECT().Search(gomock.Any()).DoAndReturn(func(q store.SearchQuery) ([]store.SearchResult, error) {
+	mockIdx.EXPECT().Search(gomock.Any(), gomock.Any()).DoAndReturn(func(branch string, q store.SearchQuery) ([]store.SearchResult, error) {
 		if q.Limit != 500 {
 			t.Errorf("limit = %d, want 500 (capped)", q.Limit)
 		}
@@ -202,7 +202,7 @@ func TestHandleSearch_IndexError(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
 	mockIdx := NewMockSearchIndex(ctrl)
-	mockIdx.EXPECT().Search(gomock.Any()).Return(nil, fmt.Errorf("index corrupt"))
+	mockIdx.EXPECT().Search(gomock.Any(), gomock.Any()).Return(nil, fmt.Errorf("index corrupt"))
 
 	handler := newTestRouter(gs, mockIdx)
 	rr := doRequest(t, handler, http.MethodGet, "/api/v1/knomit/search?q=test", "")
@@ -332,7 +332,7 @@ func TestHandleCommitDetail_DeletedFileWithIndexFallback(t *testing.T) {
 		Operation: "retract",
 		Files:     []git.ChangedFile{{Path: "kb/indexed-deleted.md", Action: "deleted"}},
 	}, nil)
-	mockIdx.EXPECT().GetByPath("kb/indexed-deleted.md").Return(&store.FactWithBody{
+	mockIdx.EXPECT().GetByPath(gomock.Any(), "kb/indexed-deleted.md").Return(&store.FactWithBody{
 		FactRecord: store.FactRecord{Title: "Indexed Deleted Title"},
 	}, nil)
 
@@ -383,7 +383,7 @@ func TestHandleStats(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
 	mockIdx := NewMockSearchIndex(ctrl)
-	mockIdx.EXPECT().Stats("kb/").Return(store.StatsResult{
+	mockIdx.EXPECT().Stats(gomock.Any(), "kb/").Return(store.StatsResult{
 		Total:         2,
 		AvgConfidence: 0.8,
 		Domains:       map[string]int{"go": 2, "web": 1},
@@ -428,7 +428,7 @@ func TestHandleStats_IndexError(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
 	mockIdx := NewMockSearchIndex(ctrl)
-	mockIdx.EXPECT().Stats("").Return(store.StatsResult{}, fmt.Errorf("db error"))
+	mockIdx.EXPECT().Stats(gomock.Any(), "").Return(store.StatsResult{}, fmt.Errorf("db error"))
 
 	handler := newTestRouter(gs, mockIdx)
 	rr := doRequest(t, handler, http.MethodGet, "/api/v1/knomit/stats", "")
@@ -454,7 +454,7 @@ func TestHandleStats_NoPath(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
 	mockIdx := NewMockSearchIndex(ctrl)
-	mockIdx.EXPECT().Stats("").Return(store.StatsResult{
+	mockIdx.EXPECT().Stats(gomock.Any(), "").Return(store.StatsResult{
 		Total:         2,
 		AvgConfidence: 0.75,
 		Domains:       map[string]int{"x": 2},
@@ -752,7 +752,7 @@ func TestHandleSearch_EpFilter(t *testing.T) {
 	gs := NewMockGitStore(ctrl)
 	mockIdx := NewMockSearchIndex(ctrl)
 
-	mockIdx.EXPECT().Search(gomock.Any()).DoAndReturn(func(q store.SearchQuery) ([]store.SearchResult, error) {
+	mockIdx.EXPECT().Search(gomock.Any(), gomock.Any()).DoAndReturn(func(branch string, q store.SearchQuery) ([]store.SearchResult, error) {
 		if len(q.EpisodeOps) != 2 {
 			t.Errorf("EpisodeOps = %v, want [learn update]", q.EpisodeOps)
 		} else {

@@ -53,7 +53,7 @@ func seedBenchIndex(b *testing.B, n int) *Index {
 			b.Fatalf("insert blob: %v", err)
 		}
 
-		if err := idx.Upsert(rec); err != nil {
+		if err := idx.Upsert(testBranch, "abc", rec); err != nil {
 			b.Fatalf("upsert fact %d: %v", i, err)
 		}
 	}
@@ -72,7 +72,7 @@ func BenchmarkEntityFilter_SQL(b *testing.B) {
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
 				rows, err := idx.db.Query(
-					`SELECT fact_path FROM fact_entities WHERE entity = ?`,
+					`SELECT fact_id FROM fact_entities WHERE entity = ?`,
 					"Entity3",
 				)
 				if err != nil {
@@ -138,7 +138,7 @@ func BenchmarkDomainFilter_SQL(b *testing.B) {
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
 				rows, err := idx.db.Query(
-					`SELECT fact_path FROM fact_domains WHERE domain = ? OR domain LIKE ?`,
+					`SELECT fact_id FROM fact_domains WHERE domain = ? OR domain LIKE ?`,
 					"domain2", "domain2/%",
 				)
 				if err != nil {

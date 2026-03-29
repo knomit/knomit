@@ -9,8 +9,14 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// rebuildFacts bulk-inserts facts via SQL JOIN with knomit_parse_fact().
+// rebuildFacts bulk-inserts facts via SQL JOIN with knomit_parse_fact(),
+// then populates branch_facts for the given branch.
 func (idx *Index) rebuildFacts(git GitReader, branch, head string, progress RebuildProgress) (int, error) {
+	branchID, err := idx.EnsureBranch(branch, "refs/heads/"+branch)
+	if err != nil {
+		return 0, fmt.Errorf("rebuildFacts: ensure branch: %w", err)
+	}
+
 	paths, hashes, err := git.ListAllWithHash(branch)
 	if err != nil {
 		return 0, fmt.Errorf("rebuildFacts: list all: %w", err)
@@ -51,44 +57,53 @@ func (idx *Index) rebuildFacts(git GitReader, branch, head string, progress Rebu
 		return 0, fmt.Errorf("rebuildFacts: commit entries: %w", err)
 	}
 
-	// Bulk INSERT OR REPLACE facts from parsed blob data.
+	// Bulk INSERT OR REPLACE facts from parsed blob data (no commit_hash in facts table).
 	res, err := idx.db.Exec(`
 		WITH parsed_entries AS (
 			SELECT e.path, e.blob_hash, knomit_parse_fact(o.data) AS parsed
 			FROM _rebuild_entries e
 			JOIN objects o ON o.hash = e.blob_hash AND o.type = ?
 		)
-		INSERT OR REPLACE INTO facts (path, title, blob_hash, type, domain, entities, confidence, sources, refs, commit_hash, evidence_weight)
+		INSERT OR REPLACE INTO facts (path, blob_hash, title, type, domain, entities, confidence, sources, refs, evidence_weight)
 		SELECT
 			pe.path,
-			json_extract(pe.parsed, '$.title'),
 			pe.blob_hash,
+			json_extract(pe.parsed, '$.title'),
 			json_extract(pe.parsed, '$.type'),
 			json_extract(pe.parsed, '$.domain'),
 			json_extract(pe.parsed, '$.entities'),
 			json_extract(pe.parsed, '$.confidence'),
 			json_extract(pe.parsed, '$.sources'),
 			json_extract(pe.parsed, '$.refs'),
-			COALESCE(cl.commit_hash, ''),
 			COALESCE(json_extract(pe.parsed, '$.evidence_weight'), 0)
 		FROM parsed_entries pe
-		LEFT JOIN (
-			SELECT path, commit_hash, ROW_NUMBER() OVER (PARTITION BY path ORDER BY committed_at DESC) AS rn
-			FROM commit_log
-		) cl ON cl.path = pe.path AND cl.rn = 1
 		WHERE pe.parsed IS NOT NULL
 	`, BlobObjectType)
 	if err != nil {
 		return 0, fmt.Errorf("rebuildFacts: bulk insert: %w", err)
 	}
 
+	affected, _ := res.RowsAffected()
+	n := int(affected)
+
+	// Populate branch_facts: link each fact to this branch with its commit_hash.
+	if _, err := idx.db.Exec(`
+		INSERT OR REPLACE INTO branch_facts (branch_id, path, fact_id, commit_hash)
+		SELECT ?, f.path, f.id, COALESCE(cl.commit_hash, '')
+		FROM facts f
+		JOIN _rebuild_entries e ON e.path = f.path AND e.blob_hash = f.blob_hash
+		LEFT JOIN (
+			SELECT path, commit_hash, ROW_NUMBER() OVER (PARTITION BY path ORDER BY committed_at DESC) AS rn
+			FROM commit_log
+		) cl ON cl.path = f.path AND cl.rn = 1
+	`, branchID); err != nil {
+		return 0, fmt.Errorf("rebuildFacts: populate branch_facts: %w", err)
+	}
+
 	// Clean up temp table.
 	if _, err := idx.db.Exec(`DROP TABLE IF EXISTS _rebuild_entries`); err != nil {
 		log.Warn().Err(err).Msg("rebuildFacts: drop temp table")
 	}
-
-	affected, _ := res.RowsAffected()
-	n := int(affected)
 
 	if progress != nil {
 		progress("facts", n, n)
@@ -259,7 +274,7 @@ func (idx *Index) rebuildGraph(progress RebuildProgress) (int, error) {
 	// Read all facts ordered by oldest commit first so that when a fact's
 	// DERIVED_FROM edges are created, its ref targets are already graph nodes.
 	rows, err := idx.db.Query(`
-		SELECT f.path, f.title, f.blob_hash, f.type, f.domain, f.entities, f.confidence, f.sources, f.refs, f.commit_hash, f.evidence_weight
+		SELECT f.path, f.title, f.blob_hash, f.type, f.domain, f.entities, f.confidence, f.sources, f.refs, f.evidence_weight
 		FROM facts f
 		LEFT JOIN (
 			SELECT path, MIN(committed_at) AS first_committed FROM commit_log GROUP BY path
@@ -275,7 +290,7 @@ func (idx *Index) rebuildGraph(progress RebuildProgress) (int, error) {
 		var domainJSON, entitiesJSON, refsJSON string
 		if err := rows.Scan(&rec.Path, &rec.Title, &rec.BlobHash, &rec.Type,
 			&domainJSON, &entitiesJSON, &rec.Confidence, &rec.Sources,
-			&refsJSON, &rec.CommitHash, &rec.EvidenceWeight); err != nil {
+			&refsJSON, &rec.EvidenceWeight); err != nil {
 			rows.Close()
 			return 0, fmt.Errorf("rebuildGraph: scan: %w", err)
 		}
@@ -319,7 +334,7 @@ func (idx *Index) rebuildGraph(progress RebuildProgress) (int, error) {
 		var edges []simEdge
 
 		for _, rec := range facts {
-			emb, err := idx.GetEmbedding(rec.Path)
+			emb, err := idx.getEmbeddingByFactPath(rec.Path)
 			if err != nil || emb == nil {
 				continue
 			}
@@ -327,7 +342,7 @@ func (idx *Index) rebuildGraph(progress RebuildProgress) (int, error) {
 			rows, err := idx.db.Query(
 				`SELECT f.path, (1.0 - fv.distance) as similarity
 				 FROM facts_vec fv
-				 JOIN facts f ON f.rowid = fv.rowid
+				 JOIN facts f ON f.id = fv.rowid
 				 WHERE fv.embedding MATCH ? AND fv.k = ?
 				 ORDER BY fv.distance ASC`,
 				vecBlob, knnK+1,

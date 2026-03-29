@@ -38,11 +38,11 @@ type GitStore interface {
 // SearchIndex is the narrow search/index interface needed by query handlers.
 // Accepts *store.Index at runtime.
 type SearchIndex interface {
-	Search(q store.SearchQuery) ([]store.SearchResult, error)
-	GetByPath(path string) (*store.FactWithBody, error)
+	Search(branch string, q store.SearchQuery) ([]store.SearchResult, error)
+	GetByPath(branch, path string) (*store.FactWithBody, error)
 	GetLastCommit(branch string) (string, error)
-	Stats(pathPrefix string) (store.StatsResult, error)
-	Completions(category, prefix string, limit int) ([]string, error)
+	Stats(branch, pathPrefix string) (store.StatsResult, error)
+	Completions(branch, category, prefix string, limit int) ([]string, error)
 	ExplainFact(path string) (store.ExplainResult, error)
 }
 

@@ -136,7 +136,7 @@ func TestRebuildGraphHistory_DerivedFromOnVersions(t *testing.T) {
 	blobHash := "deadbeef00000001"
 	idx.db.Exec(`INSERT OR IGNORE INTO objects(hash, type, size, data) VALUES (?, ?, ?, ?)`,
 		blobHash, BlobObjectType, 10, []byte(factContent("Target")))
-	idx.Upsert(FactRecord{
+	idx.Upsert(testBranch, "abc", FactRecord{
 		Path: target, Title: "Target", BlobHash: blobHash,
 		Type: "observation", Domain: []string{"test"}, Confidence: 0.8, Sources: 1,
 	})
@@ -257,7 +257,7 @@ func TestExplainFactAt_OutgoingRefs(t *testing.T) {
 	blobHash := "deadbeef00000002"
 	idx.db.Exec(`INSERT OR IGNORE INTO objects(hash, type, size, data) VALUES (?, ?, ?, ?)`,
 		blobHash, BlobObjectType, 10, []byte(factContent("Target")))
-	idx.Upsert(FactRecord{
+	idx.Upsert(testBranch, "abc", FactRecord{
 		Path: target, Title: "Target", BlobHash: blobHash,
 		Type: "observation", Domain: []string{"test"}, Confidence: 0.8, Sources: 1,
 	})
@@ -304,7 +304,7 @@ func TestExplainFactAt_IncomingRefs(t *testing.T) {
 	blobHash := "deadbeef00000003"
 	idx.db.Exec(`INSERT OR IGNORE INTO objects(hash, type, size, data) VALUES (?, ?, ?, ?)`,
 		blobHash, BlobObjectType, 10, []byte(factContent("Target")))
-	idx.Upsert(FactRecord{
+	idx.Upsert(testBranch, "abc", FactRecord{
 		Path: target, Title: "Target", BlobHash: blobHash,
 		Type: "observation", Domain: []string{"test"}, Confidence: 0.8, Sources: 1,
 	})
@@ -488,7 +488,7 @@ func TestExplainFactAt_MultipleRefsInAndOut(t *testing.T) {
 		title := []string{"A", "B", "C", "D"}[i]
 		idx.db.Exec(`INSERT OR IGNORE INTO objects(hash, type, size, data) VALUES (?, ?, ?, ?)`,
 			bh, BlobObjectType, 10, []byte(factContent(title)))
-		idx.Upsert(FactRecord{
+		idx.Upsert(testBranch, "abc", FactRecord{
 			Path: p, Title: title, BlobHash: bh,
 			Type: "observation", Domain: []string{"test"}, Confidence: 0.8, Sources: 1,
 		})
@@ -611,7 +611,7 @@ func TestExplainFactAt_RefsChangeWithHistory(t *testing.T) {
 		_ = i
 		idx.db.Exec(`INSERT OR IGNORE INTO objects(hash, type, size, data) VALUES (?, ?, ?, ?)`,
 			info.hash, BlobObjectType, 10, []byte(factContent(info.title)))
-		idx.Upsert(FactRecord{
+		idx.Upsert(testBranch, "abc", FactRecord{
 			Path: info.path, Title: info.title, BlobHash: info.hash,
 			Type: "observation", Domain: []string{"test"}, Confidence: 0.8, Sources: 1,
 		})

@@ -87,7 +87,7 @@ func hypothesizeStart(gs GitStore, idx SearchIndex, pipelineIdx PipelineIndex, o
 
 	if watermark == "" {
 		// First run: search for all synthesis facts.
-		results, err := idx.Search(SearchQuery{
+		results, err := idx.Search(agentBranch, SearchQuery{
 			IncludeTypes: []string{"synthesis"},
 			Limit:        100000,
 		})

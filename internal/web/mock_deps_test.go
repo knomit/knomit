@@ -250,18 +250,18 @@ func (m *MockSearchIndex) EXPECT() *MockSearchIndexMockRecorder {
 }
 
 // Completions mocks base method.
-func (m *MockSearchIndex) Completions(category, prefix string, limit int) ([]string, error) {
+func (m *MockSearchIndex) Completions(branch, category, prefix string, limit int) ([]string, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Completions", category, prefix, limit)
+	ret := m.ctrl.Call(m, "Completions", branch, category, prefix, limit)
 	ret0, _ := ret[0].([]string)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // Completions indicates an expected call of Completions.
-func (mr *MockSearchIndexMockRecorder) Completions(category, prefix, limit any) *gomock.Call {
+func (mr *MockSearchIndexMockRecorder) Completions(branch, category, prefix, limit any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Completions", reflect.TypeOf((*MockSearchIndex)(nil).Completions), category, prefix, limit)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Completions", reflect.TypeOf((*MockSearchIndex)(nil).Completions), branch, category, prefix, limit)
 }
 
 // ExplainFact mocks base method.
@@ -280,18 +280,18 @@ func (mr *MockSearchIndexMockRecorder) ExplainFact(path any) *gomock.Call {
 }
 
 // GetByPath mocks base method.
-func (m *MockSearchIndex) GetByPath(path string) (*store.FactWithBody, error) {
+func (m *MockSearchIndex) GetByPath(branch, path string) (*store.FactWithBody, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetByPath", path)
+	ret := m.ctrl.Call(m, "GetByPath", branch, path)
 	ret0, _ := ret[0].(*store.FactWithBody)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // GetByPath indicates an expected call of GetByPath.
-func (mr *MockSearchIndexMockRecorder) GetByPath(path any) *gomock.Call {
+func (mr *MockSearchIndexMockRecorder) GetByPath(branch, path any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetByPath", reflect.TypeOf((*MockSearchIndex)(nil).GetByPath), path)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetByPath", reflect.TypeOf((*MockSearchIndex)(nil).GetByPath), branch, path)
 }
 
 // GetLastCommit mocks base method.
@@ -310,31 +310,31 @@ func (mr *MockSearchIndexMockRecorder) GetLastCommit(branch any) *gomock.Call {
 }
 
 // Search mocks base method.
-func (m *MockSearchIndex) Search(q store.SearchQuery) ([]store.SearchResult, error) {
+func (m *MockSearchIndex) Search(branch string, q store.SearchQuery) ([]store.SearchResult, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Search", q)
+	ret := m.ctrl.Call(m, "Search", branch, q)
 	ret0, _ := ret[0].([]store.SearchResult)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // Search indicates an expected call of Search.
-func (mr *MockSearchIndexMockRecorder) Search(q any) *gomock.Call {
+func (mr *MockSearchIndexMockRecorder) Search(branch, q any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Search", reflect.TypeOf((*MockSearchIndex)(nil).Search), q)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Search", reflect.TypeOf((*MockSearchIndex)(nil).Search), branch, q)
 }
 
 // Stats mocks base method.
-func (m *MockSearchIndex) Stats(pathPrefix string) (store.StatsResult, error) {
+func (m *MockSearchIndex) Stats(branch, pathPrefix string) (store.StatsResult, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Stats", pathPrefix)
+	ret := m.ctrl.Call(m, "Stats", branch, pathPrefix)
 	ret0, _ := ret[0].(store.StatsResult)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // Stats indicates an expected call of Stats.
-func (mr *MockSearchIndexMockRecorder) Stats(pathPrefix any) *gomock.Call {
+func (mr *MockSearchIndexMockRecorder) Stats(branch, pathPrefix any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Stats", reflect.TypeOf((*MockSearchIndex)(nil).Stats), pathPrefix)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Stats", reflect.TypeOf((*MockSearchIndex)(nil).Stats), branch, pathPrefix)
 }
