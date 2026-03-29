@@ -300,7 +300,7 @@ func TestHandleSearch(t *testing.T) {
 			var idx repos.SearchIndex
 			if tc.useIdx {
 				mockIdx := NewMockSearchIndex(ctrl)
-				mockIdx.EXPECT().Search(gomock.Any()).Return(tc.idxResults, nil)
+				mockIdx.EXPECT().Search(gomock.Any(), gomock.Any()).Return(tc.idxResults, nil)
 				idx = mockIdx
 			}
 
@@ -334,7 +334,7 @@ func TestHandleSearchMinSimilarity(t *testing.T) {
 	mockIdx := NewMockSearchIndex(ctrl)
 
 	// Expect the Search call to receive a SearchQuery with MinSimilarity set.
-	mockIdx.EXPECT().Search(gomock.Any()).DoAndReturn(func(q store.SearchQuery) ([]store.SearchResult, error) {
+	mockIdx.EXPECT().Search(gomock.Any(), gomock.Any()).DoAndReturn(func(branch string, q store.SearchQuery) ([]store.SearchResult, error) {
 		if q.MinSimilarity != 0.75 {
 			return nil, fmt.Errorf("expected MinSimilarity=0.75, got %v", q.MinSimilarity)
 		}

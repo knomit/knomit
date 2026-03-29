@@ -428,14 +428,13 @@ func newTestRouterWithSvcAndGitStore(t *testing.T) (http.Handler, *git.Store, *s
 // insertFact inserts a row into the facts table for testing.
 func insertFact(t *testing.T, svc *store.Service, path, blobHash, commitHash string) {
 	t.Helper()
-	if err := svc.Index().Upsert(store.FactRecord{
+	if err := svc.Index().Upsert(testAgentBranch, commitHash, store.FactRecord{
 		Path:       path,
 		Title:      path,
 		BlobHash:   blobHash,
 		Type:       "observation",
 		Confidence: 0.9,
 		Sources:    1,
-		CommitHash: commitHash,
 	}); err != nil {
 		t.Fatalf("insertFact %q: %v", path, err)
 	}

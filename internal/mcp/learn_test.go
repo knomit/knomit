@@ -19,7 +19,7 @@ func TestLearnWritesFacts(t *testing.T) {
 	var capturedFiles map[string]string
 
 
-	idx.EXPECT().Search(gomock.Any()).Return(nil, nil).AnyTimes()
+	idx.EXPECT().Search(gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
 	gs.EXPECT().BatchWrite(testAgentBranch, gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(branch string, files map[string]string, msg, operation string) (string, map[string]string, error) {
 		capturedFiles = files
 		blobHashes := make(map[string]string, len(files))
@@ -187,7 +187,7 @@ func TestLearnMultipleFacts(t *testing.T) {
 	var capturedFiles map[string]string
 
 
-	idx.EXPECT().Search(gomock.Any()).Return(nil, nil).AnyTimes()
+	idx.EXPECT().Search(gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
 	gs.EXPECT().BatchWrite(testAgentBranch, gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(branch string, files map[string]string, msg, operation string) (string, map[string]string, error) {
 		capturedFiles = files
 		blobHashes := make(map[string]string, len(files))
@@ -250,7 +250,7 @@ func TestLearnHandler_DedupMergesNearDuplicate(t *testing.T) {
 
 
 	// Search returns an existing near-duplicate (score=95)
-	idx.EXPECT().Search(gomock.Any()).Return([]SearchResult{
+	idx.EXPECT().Search(gomock.Any(), gomock.Any()).Return([]SearchResult{
 		{FactWithBody: FactWithBody{
 			FactRecord: FactRecord{
 				Path:       "kb/technology/cameras/abc123.md",
@@ -395,7 +395,7 @@ func TestLearnBatchAllowsMultipleHypotheses(t *testing.T) {
 	gs := NewMockGitStore(ctrl)
 	idx := NewMockSearchIndex(ctrl)
 
-	idx.EXPECT().Search(gomock.Any()).Return(nil, nil).AnyTimes()
+	idx.EXPECT().Search(gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
 	gs.EXPECT().BatchWrite(testAgentBranch, gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(branch string, files map[string]string, msg, operation string) (string, map[string]string, error) {
 		blobHashes := make(map[string]string, len(files))
 		for path := range files {
@@ -442,7 +442,7 @@ func TestLearnDedupObservationSubsumesHypothesis(t *testing.T) {
 	idx := NewMockSearchIndex(ctrl)
 
 	// Search returns an existing hypothesis as near-duplicate.
-	idx.EXPECT().Search(gomock.Any()).Return([]SearchResult{
+	idx.EXPECT().Search(gomock.Any(), gomock.Any()).Return([]SearchResult{
 		{FactWithBody: FactWithBody{
 			FactRecord: FactRecord{
 				Path:       "kb/technology/go/testing/existing.md",

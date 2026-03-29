@@ -41,7 +41,7 @@ func TestHypothesizeFirstCallReturnsSynthesisFacts(t *testing.T) {
 		},
 		Score: 100,
 	}
-	idx.EXPECT().Search(SearchQuery{
+	idx.EXPECT().Search(gomock.Any(), SearchQuery{
 		IncludeTypes: []string{"synthesis"},
 		Limit:        100000,
 	}).Return([]SearchResult{synthResult}, nil)
@@ -123,7 +123,7 @@ func TestHypothesizeEmptySession(t *testing.T) {
 	pIdx.EXPECT().GetPipelineWatermark("hypothesize", "machine/test").Return("", nil)
 
 	// No synthesis facts.
-	idx.EXPECT().Search(SearchQuery{
+	idx.EXPECT().Search(gomock.Any(), SearchQuery{
 		IncludeTypes: []string{"synthesis"},
 		Limit:        100000,
 	}).Return(nil, nil)
@@ -187,7 +187,7 @@ func TestHypothesizeContinueSession(t *testing.T) {
 			Score: 100,
 		},
 	}
-	idx.EXPECT().Search(gomock.Any()).Return(results, nil)
+	idx.EXPECT().Search(gomock.Any(), gomock.Any()).Return(results, nil)
 
 	sess := &store.PipelineSession{ID: "sess-2", Status: "active"}
 	pIdx.EXPECT().CreatePipelineSession("hypothesize", "machine/test").Return(sess, nil)
@@ -429,7 +429,7 @@ func TestHypothesizeStartSearchError(t *testing.T) {
 	pIdx.EXPECT().GetPipelineWatermark("hypothesize", "machine/test").Return("", nil)
 
 	// Search returns an error.
-	idx.EXPECT().Search(SearchQuery{
+	idx.EXPECT().Search(gomock.Any(), SearchQuery{
 		IncludeTypes: []string{"synthesis"},
 		Limit:        100000,
 	}).Return(nil, fmt.Errorf("database locked"))

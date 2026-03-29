@@ -242,11 +242,11 @@ func TestGraphBuildSimilarityEdges(t *testing.T) {
 	insertBlob(t, idx.db, "hash_alpha", "alpha")
 	insertBlob(t, idx.db, "hash_beta", "beta")
 	facts := []FactRecord{
-		{Path: "kb/a.md", Title: "A", BlobHash: "hash_alpha", Domain: []string{"test"}, Entities: []string{}, Refs: []string{}, CommitHash: "abc"},
-		{Path: "kb/b.md", Title: "B", BlobHash: "hash_beta", Domain: []string{"test"}, Entities: []string{}, Refs: []string{}, CommitHash: "abc"},
+		{Path: "kb/a.md", Title: "A", BlobHash: "hash_alpha", Domain: []string{"test"}, Entities: []string{}, Refs: []string{}},
+		{Path: "kb/b.md", Title: "B", BlobHash: "hash_beta", Domain: []string{"test"}, Entities: []string{}, Refs: []string{}},
 	}
 	for _, f := range facts {
-		if err := idx.Upsert(f); err != nil {
+		if err := idx.Upsert(testBranch, "abc", f); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -323,10 +323,10 @@ func TestUpsertSyncsGraph(t *testing.T) {
 	idx.SetEmbedder(&stubEmbedder768d{})
 	insertBlob(t, idx.db, "hash_test", "test content")
 
-	err = idx.Upsert(FactRecord{
+	err = idx.Upsert(testBranch, "abc", FactRecord{
 		Path: "kb/eng/test.md", Title: "Test", BlobHash: "hash_test",
 		Domain: []string{"engineering/software"}, Entities: []string{"Go"},
-		Refs: []string{}, CommitHash: "abc",
+		Refs: []string{},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -356,12 +356,12 @@ func TestDeleteSyncsGraph(t *testing.T) {
 	idx.SetEmbedder(&stubEmbedder768d{})
 	insertBlob(t, idx.db, "hash_del", "delete test")
 
-	_ = idx.Upsert(FactRecord{
+	_ = idx.Upsert(testBranch, "abc", FactRecord{
 		Path: "kb/test.md", Title: "Test", BlobHash: "hash_del",
 		Domain: []string{"eng"}, Entities: []string{"Go"},
-		Refs: []string{}, CommitHash: "abc",
+		Refs: []string{},
 	})
-	err = idx.Delete("kb/test.md")
+	err = idx.Delete(testBranch, "kb/test.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -390,12 +390,12 @@ func TestClusterFactsLouvain(t *testing.T) {
 
 	// Create facts that share entities (will form a cluster via TAGGED edges)
 	facts := []FactRecord{
-		{Path: "kb/a.md", Title: "A", BlobHash: "hash_alpha", Domain: []string{"eng"}, Entities: []string{"Go", "SQLite"}, Refs: []string{}, CommitHash: "abc"},
-		{Path: "kb/b.md", Title: "B", BlobHash: "hash_beta", Domain: []string{"eng"}, Entities: []string{"Go", "SQLite"}, Refs: []string{}, CommitHash: "abc"},
-		{Path: "kb/c.md", Title: "C", BlobHash: "hash_gamma", Domain: []string{"eng"}, Entities: []string{"Go"}, Refs: []string{}, CommitHash: "abc"},
+		{Path: "kb/a.md", Title: "A", BlobHash: "hash_alpha", Domain: []string{"eng"}, Entities: []string{"Go", "SQLite"}, Refs: []string{}},
+		{Path: "kb/b.md", Title: "B", BlobHash: "hash_beta", Domain: []string{"eng"}, Entities: []string{"Go", "SQLite"}, Refs: []string{}},
+		{Path: "kb/c.md", Title: "C", BlobHash: "hash_gamma", Domain: []string{"eng"}, Entities: []string{"Go"}, Refs: []string{}},
 	}
 	for _, f := range facts {
-		if err := idx.Upsert(f); err != nil {
+		if err := idx.Upsert(testBranch, "abc", f); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -428,18 +428,18 @@ func TestSearchWithGraphExpansion(t *testing.T) {
 	insertBlob(t, idx.db, "hash_alpha", "alpha")
 	insertBlob(t, idx.db, "hash_beta", "beta")
 
-	_ = idx.Upsert(FactRecord{
+	_ = idx.Upsert(testBranch, "abc", FactRecord{
 		Path: "kb/a.md", Title: "A", BlobHash: "hash_alpha",
 		Domain: []string{"eng"}, Entities: []string{"Go"},
-		Refs: []string{}, CommitHash: "abc",
+		Refs: []string{},
 	})
-	_ = idx.Upsert(FactRecord{
+	_ = idx.Upsert(testBranch, "abc", FactRecord{
 		Path: "kb/b.md", Title: "B", BlobHash: "hash_beta",
 		Domain: []string{"eng"}, Entities: []string{"Go"},
-		Refs: []string{}, CommitHash: "abc",
+		Refs: []string{},
 	})
 
-	results, err := idx.Search(SearchQuery{
+	results, err := idx.Search(testBranch, SearchQuery{
 		Text:      "alpha",
 		GraphHops: 1,
 		Limit:     10,
@@ -476,12 +476,12 @@ func TestGraphExpandSearch_MultiSeed(t *testing.T) {
 	// seed1=alpha, seed2=gamma; fact3=beta is similar to seed1 via SIMILAR_TO.
 	// With batch OR query, fact3 should be discovered from seed1.
 	facts := []FactRecord{
-		{Path: "kb/f1.md", Title: "F1", BlobHash: "hash_alpha", Domain: []string{"eng"}, Entities: []string{}, Refs: []string{}, CommitHash: "abc"},
-		{Path: "kb/f2.md", Title: "F2", BlobHash: "hash_gamma", Domain: []string{"eng"}, Entities: []string{}, Refs: []string{}, CommitHash: "abc"},
-		{Path: "kb/f3.md", Title: "F3", BlobHash: "hash_beta", Domain: []string{"eng"}, Entities: []string{}, Refs: []string{}, CommitHash: "abc"},
+		{Path: "kb/f1.md", Title: "F1", BlobHash: "hash_alpha", Domain: []string{"eng"}, Entities: []string{}, Refs: []string{}},
+		{Path: "kb/f2.md", Title: "F2", BlobHash: "hash_gamma", Domain: []string{"eng"}, Entities: []string{}, Refs: []string{}},
+		{Path: "kb/f3.md", Title: "F3", BlobHash: "hash_beta", Domain: []string{"eng"}, Entities: []string{}, Refs: []string{}},
 	}
 	for _, f := range facts {
-		if err := idx.Upsert(f); err != nil {
+		if err := idx.Upsert(testBranch, "abc", f); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -592,15 +592,14 @@ func TestDerivedFromInvariant(t *testing.T) {
 		Title:      "A",
 		Domain:     []string{"test"},
 		Refs:       []string{"kb/b.md", "kb/c.md", "https://example.com"},
-		CommitHash: "abc",
 	}
 	// Upsert b and c first so the graph nodes exist.
 	for _, path := range []string{"kb/b.md", "kb/c.md"} {
-		if err := idx.Upsert(FactRecord{Path: path, Title: path, Domain: []string{"test"}, CommitHash: "abc"}); err != nil {
+		if err := idx.Upsert(testBranch, "abc", FactRecord{Path: path, Title: path, Domain: []string{"test"}}); err != nil {
 			t.Fatalf("upsert %s: %v", path, err)
 		}
 	}
-	if err := idx.Upsert(rec); err != nil {
+	if err := idx.Upsert(testBranch, "abc", rec); err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
 
@@ -612,11 +611,12 @@ func TestDerivedFromInvariant(t *testing.T) {
 	}
 
 	// Re-upsert with changed refs: drop kb/c.md, add kb/d.md.
-	if err := idx.Upsert(FactRecord{Path: "kb/d.md", Title: "D", Domain: []string{"test"}, CommitHash: "abc"}); err != nil {
+	if err := idx.Upsert(testBranch, "abc", FactRecord{Path: "kb/d.md", Title: "D", Domain: []string{"test"}}); err != nil {
 		t.Fatalf("upsert d: %v", err)
 	}
 	rec.Refs = []string{"kb/b.md", "kb/d.md"}
-	if err := idx.Upsert(rec); err != nil {
+	rec.BlobHash = "bh_a_v2" // Different blob hash to avoid COW shortcut
+	if err := idx.Upsert(testBranch, "abc", rec); err != nil {
 		t.Fatalf("re-upsert: %v", err)
 	}
 	got = derivedFromPaths(t, idx, "kb/a.md")
@@ -659,13 +659,13 @@ func TestExplainFact(t *testing.T) {
 	// Set up: a → b, a → c, d → a. All current (not deleted).
 	// Upsert targets before referrers so edges resolve (no self-loops).
 	facts := []FactRecord{
-		{Path: "kb/b.md", Title: "Fact B", Domain: []string{"test"}, CommitHash: "abc"},
-		{Path: "kb/c.md", Title: "Fact C", Domain: []string{"test"}, CommitHash: "abc"},
-		{Path: "kb/a.md", Title: "Fact A", Domain: []string{"test"}, Refs: []string{"kb/b.md", "kb/c.md"}, CommitHash: "abc"},
-		{Path: "kb/d.md", Title: "Fact D", Domain: []string{"test"}, Refs: []string{"kb/a.md"}, CommitHash: "abc"},
+		{Path: "kb/b.md", Title: "Fact B", Domain: []string{"test"}},
+		{Path: "kb/c.md", Title: "Fact C", Domain: []string{"test"}},
+		{Path: "kb/a.md", Title: "Fact A", Domain: []string{"test"}, Refs: []string{"kb/b.md", "kb/c.md"}},
+		{Path: "kb/d.md", Title: "Fact D", Domain: []string{"test"}, Refs: []string{"kb/a.md"}},
 	}
 	for _, f := range facts {
-		if err := idx.Upsert(f); err != nil {
+		if err := idx.Upsert(testBranch, "abc", f); err != nil {
 			t.Fatalf("upsert %s: %v", f.Path, err)
 		}
 	}
@@ -690,7 +690,7 @@ func TestExplainFact(t *testing.T) {
 	}
 
 	// Delete kb/c.md and re-explain: c should appear as deleted in outgoing.
-	if err := idx.Delete("kb/c.md"); err != nil {
+	if err := idx.Delete(testBranch, "kb/c.md"); err != nil {
 		t.Fatalf("delete c: %v", err)
 	}
 	res2, err := idx.ExplainFact("kb/a.md")
@@ -719,12 +719,11 @@ func TestExplainFact_SelfLoopFiltered(t *testing.T) {
 	defer idx.Close()
 
 	// Index fact A with a ref to a non-existent target — causes a self-loop.
-	if err := idx.Upsert(FactRecord{
+	if err := idx.Upsert(testBranch, "abc", FactRecord{
 		Path:       "kb/a.md",
 		Title:      "Fact A",
 		Domain:     []string{"test"},
 		Refs:       []string{"kb/missing.md"},
-		CommitHash: "abc",
 	}); err != nil {
 		t.Fatalf("upsert: %v", err)
 	}

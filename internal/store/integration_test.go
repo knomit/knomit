@@ -45,9 +45,9 @@ func TestDeleteFactAtomically(t *testing.T) {
 	rec := FactRecord{
 		Path: "kb/test.md", Title: "Test", BlobHash: blobHash,
 		Domain: []string{}, Entities: []string{}, Confidence: 1, Sources: 1, Refs: []string{},
-		CommitHash: "abc",
+		
 	}
-	if err := svc.Index().Upsert(rec); err != nil {
+	if err := svc.Index().Upsert(testBranch, "abc", rec); err != nil {
 		t.Fatal(err)
 	}
 
@@ -57,7 +57,7 @@ func TestDeleteFactAtomically(t *testing.T) {
 	}
 
 	// Verify: fact gone from index
-	got, _ := svc.Index().GetByPath("kb/test.md")
+	got, _ := svc.Index().GetByPath(testBranch, "kb/test.md")
 	if got != nil {
 		t.Fatal("expected fact to be deleted from index")
 	}
@@ -87,13 +87,13 @@ func TestEvidenceWeightRoundTrip(t *testing.T) {
 	rec := FactRecord{
 		Path: "kb/weighted.md", Title: "Weighted", BlobHash: blobHash,
 		Domain: []string{}, Entities: []string{}, Confidence: 0.9, Sources: 5,
-		Refs: []string{}, CommitHash: "abc", EvidenceWeight: 0.714,
+		Refs: []string{},  EvidenceWeight: 0.714,
 	}
-	if err := svc.Index().Upsert(rec); err != nil {
+	if err := svc.Index().Upsert(testBranch, "abc", rec); err != nil {
 		t.Fatalf("Upsert: %v", err)
 	}
 
-	got, err := svc.Index().GetByPath("kb/weighted.md")
+	got, err := svc.Index().GetByPath(testBranch, "kb/weighted.md")
 	if err != nil {
 		t.Fatalf("GetByPath: %v", err)
 	}
@@ -130,14 +130,14 @@ func TestFullRoundtrip(t *testing.T) {
 		Path: "kb/db/postgres.md", Title: "Postgres is great", BlobHash: blobHash,
 		Domain: []string{"databases"}, Entities: []string{"postgres"},
 		Confidence: 0.9, Sources: 1, Refs: []string{},
-		CommitHash: "abc123",
+		
 	}
-	if err := svc.Index().Upsert(rec); err != nil {
+	if err := svc.Index().Upsert(testBranch, "abc", rec); err != nil {
 		t.Fatal(err)
 	}
 
 	// Read back with body hydrated from git objects
-	got, err := svc.Index().GetByPath("kb/db/postgres.md")
+	got, err := svc.Index().GetByPath(testBranch, "kb/db/postgres.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -165,7 +165,7 @@ func TestFullRoundtrip(t *testing.T) {
 	}
 
 	// Verify gone
-	got, _ = svc.Index().GetByPath("kb/db/postgres.md")
+	got, _ = svc.Index().GetByPath(testBranch, "kb/db/postgres.md")
 	if got != nil {
 		t.Fatal("expected nil after delete")
 	}
