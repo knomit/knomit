@@ -1,8 +1,6 @@
 package store
 
-import (
-	"database/sql"
-)
+import "database/sql"
 
 // FactRow holds the minimal fields needed to replay a fact into another store.
 type FactRow struct {
@@ -22,8 +20,8 @@ type FactsIter struct {
 
 // NewFactsIter opens a cursor over the facts table ordered by rowid DESC.
 // The caller must call Close() when done to release the underlying database cursor.
-func NewFactsIter(db *sql.DB) (*FactsIter, error) {
-	rows, err := db.Query(`SELECT path, blob_hash, commit_hash FROM facts ORDER BY rowid DESC`)
+func NewFactsIter(idx *Index) (*FactsIter, error) {
+	rows, err := idx.db.Query(`SELECT path, blob_hash, commit_hash FROM facts ORDER BY rowid DESC`)
 	if err != nil {
 		return nil, err
 	}

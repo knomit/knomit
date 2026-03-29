@@ -31,7 +31,7 @@ func insertFact(t *testing.T, svc *store.Service, path, blobHash, commitHash str
 func TestFactsIter_EmptyDB(t *testing.T) {
 	svc := openTestService(t)
 
-	iter, err := store.NewFactsIter(svc.DB())
+	iter, err := store.NewFactsIter(svc.Index())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,7 +53,7 @@ func TestFactsIter_ReturnsAllFacts(t *testing.T) {
 	insertFact(t, svc, "b/two.md", "blob2", "commit2")
 	insertFact(t, svc, "c/three.md", "blob3", "commit3")
 
-	iter, err := store.NewFactsIter(svc.DB())
+	iter, err := store.NewFactsIter(svc.Index())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,7 +107,7 @@ func TestFactsIter_DedupsByPath(t *testing.T) {
 	}
 	insertFact(t, svc, "b/two.md", "blob2", "commit2")
 
-	iter, err := store.NewFactsIter(svc.DB())
+	iter, err := store.NewFactsIter(svc.Index())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -144,7 +144,7 @@ func TestFactsIter_DedupsByPath(t *testing.T) {
 func TestFactsIter_CloseIsIdempotent(t *testing.T) {
 	svc := openTestService(t)
 
-	iter, err := store.NewFactsIter(svc.DB())
+	iter, err := store.NewFactsIter(svc.Index())
 	if err != nil {
 		t.Fatal(err)
 	}
