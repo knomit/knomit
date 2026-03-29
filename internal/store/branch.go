@@ -87,6 +87,50 @@ func (idx *Index) BranchID(name string) (int64, error) {
 }
 
 // ListBranches returns all registered branches.
+// MergeBranch copies all branch_facts entries from src to dst.
+// Conflicting paths (same path on both branches) are overwritten with src's version.
+func (idx *Index) MergeBranch(src, dst string) error {
+	srcID, err := idx.BranchID(src)
+	if err != nil {
+		return fmt.Errorf("merge: src %w", err)
+	}
+	dstID, err := idx.EnsureBranch(dst, "refs/heads/"+dst)
+	if err != nil {
+		return fmt.Errorf("merge: dst %w", err)
+	}
+
+	_, err = idx.db.Exec(
+		`INSERT OR REPLACE INTO branch_facts(branch_id, path, fact_id, commit_hash)
+		 SELECT ?, path, fact_id, commit_hash
+		 FROM branch_facts WHERE branch_id = ?`,
+		dstID, srcID,
+	)
+	if err != nil {
+		return fmt.Errorf("merge branch_facts: %w", err)
+	}
+	return nil
+}
+
+// DropBranch removes a branch and all its branch_facts entries, then runs GC.
+func (idx *Index) DropBranch(name string) error {
+	id, err := idx.BranchID(name)
+	if err != nil {
+		return fmt.Errorf("drop branch: %w", err)
+	}
+
+	if _, err := idx.db.Exec(`DELETE FROM branch_facts WHERE branch_id = ?`, id); err != nil {
+		return fmt.Errorf("drop branch_facts: %w", err)
+	}
+	if _, err := idx.db.Exec(`DELETE FROM branches WHERE id = ?`, id); err != nil {
+		return fmt.Errorf("drop branch row: %w", err)
+	}
+
+	idx.branches.remove(name)
+
+	return idx.GC()
+}
+
+// ListBranches returns all registered branches.
 func (idx *Index) ListBranches() ([]Branch, error) {
 	rows, err := idx.db.Query(`SELECT id, name, git_ref FROM branches ORDER BY name`)
 	if err != nil {
