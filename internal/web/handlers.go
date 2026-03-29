@@ -26,7 +26,6 @@
 package web
 
 import (
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -158,13 +157,7 @@ func handleFact(agentBranch string) http.HandlerFunc {
 				fromCommit = commitHash
 			}
 			if err != nil && svc != nil {
-				// Commit may be invalid or file never on that branch.
-				// Fall back to the most recent commit_log entry for this path.
-				var lastHash string
-				if qerr := svc.DB().QueryRowContext(r.Context(),
-					`SELECT commit_hash FROM commit_log WHERE path = ? AND action != 'deleted' ORDER BY rowid DESC LIMIT 1`,
-					path,
-				).Scan(&lastHash); qerr == nil && lastHash != "" {
+				if lastHash, ok := svc.Index().LastCommitForPath(path); ok {
 					content, err = gs.ReadFileAtCommit(agentBranch, path, lastHash)
 					if err == nil {
 						fromCommit = lastHash
@@ -232,12 +225,8 @@ func handleFact(agentBranch string) http.HandlerFunc {
 					"refs":        fact.Refs,
 					"commit_hash": rec.CommitHash,
 				}
-				var ts sql.NullInt64
-				if qerr := svc.DB().QueryRowContext(r.Context(),
-					`SELECT committed_at FROM commit_log WHERE commit_hash = ? LIMIT 1`,
-					rec.CommitHash,
-				).Scan(&ts); qerr == nil && ts.Valid {
-					resp["commit_date"] = time.Unix(ts.Int64, 0).UTC().Format(time.RFC3339)
+				if ts, ok := svc.Index().CommitTimestamp(rec.CommitHash); ok {
+					resp["commit_date"] = time.Unix(ts, 0).UTC().Format(time.RFC3339)
 				}
 				writeJSON(w, http.StatusOK, resp)
 				return
