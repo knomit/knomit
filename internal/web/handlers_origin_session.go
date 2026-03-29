@@ -338,14 +338,9 @@ func handlePreview(rm *repos.Manager, sm *SessionManager, agentBranch string) ht
 		sendEvent(map[string]string{"phase": "comparing"})
 
 		// Build local path set via FactsIter.
-		var localDB *sql.DB
-		if svc != nil {
-			localDB = svc.DB()
-		}
-
 		localPaths := make(map[string]struct{})
-		if localDB != nil {
-			iter, err := store.NewFactsIter(localDB)
+		if svc != nil {
+			iter, err := store.NewFactsIter(svc.Index())
 			if err != nil {
 				log.Warn().Err(err).Str("repo", repo).Msg("preview: open facts iter")
 			} else {
@@ -541,16 +536,12 @@ func handleApply(rm *repos.Manager, sm *SessionManager, agentBranch string) http
 				return
 			}
 
-			var localDB *sql.DB
-			if svc != nil {
-				localDB = svc.DB()
-			}
-			if localDB == nil {
+			if svc == nil {
 				sendEvent(map[string]string{"phase": "error", "message": "local database not available"})
 				return
 			}
 
-			factsIter, err := store.NewFactsIter(localDB)
+			factsIter, err := store.NewFactsIter(svc.Index())
 			if err != nil {
 				sendEvent(map[string]string{"phase": "error", "message": fmt.Sprintf("open facts iterator: %v", err)})
 				return
