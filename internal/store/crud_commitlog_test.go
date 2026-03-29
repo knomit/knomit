@@ -51,3 +51,27 @@ func TestLastCommitForPath_NotFound(t *testing.T) {
 		t.Fatal("expected ok=false for missing path")
 	}
 }
+
+func TestCommitTimestamp_Found(t *testing.T) {
+	idx := newTestIndexInternal(t)
+	db := idx.db
+
+	db.Exec(`INSERT INTO commit_log (commit_hash, path, action, committed_at, message, operation) VALUES ('abc123', 'kb/test.md', 'added', 1700000000, 'add', 'learn')`)
+
+	ts, ok := idx.CommitTimestamp("abc123")
+	if !ok {
+		t.Fatal("expected ok=true")
+	}
+	if ts != 1700000000 {
+		t.Fatalf("expected 1700000000, got %d", ts)
+	}
+}
+
+func TestCommitTimestamp_NotFound(t *testing.T) {
+	idx := newTestIndexInternal(t)
+
+	_, ok := idx.CommitTimestamp("nonexistent")
+	if ok {
+		t.Fatal("expected ok=false for missing hash")
+	}
+}

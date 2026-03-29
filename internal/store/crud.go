@@ -455,6 +455,20 @@ func (idx *Index) LastCommitForPath(path string) (string, bool) {
 	return hash, true
 }
 
+// CommitTimestamp returns the committed_at unix timestamp for the given commit hash.
+// Returns (0, false) if the hash is not in commit_log.
+func (idx *Index) CommitTimestamp(commitHash string) (int64, bool) {
+	var ts sql.NullInt64
+	err := idx.db.QueryRow(
+		`SELECT committed_at FROM commit_log WHERE commit_hash = ? LIMIT 1`,
+		commitHash,
+	).Scan(&ts)
+	if err != nil || !ts.Valid {
+		return 0, false
+	}
+	return ts.Int64, true
+}
+
 func join(ss []string, sep string) string {
 	var b strings.Builder
 	for i, s := range ss {
