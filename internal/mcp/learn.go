@@ -185,7 +185,7 @@ func LearnHandler(gs GitStore, idx SearchIndex, ontologyRoot string, ontology *f
 			if dedupVecs != nil && i < len(dedupVecs) && len(dedupVecs[i]) > 0 {
 				sq.QueryVec = dedupVecs[i]
 			}
-			results, err := idx.Search(sq)
+			results, err := idx.Search(agentBranch, sq)
 			if err != nil || len(results) == 0 {
 				continue
 			}

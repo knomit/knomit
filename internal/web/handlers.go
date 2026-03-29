@@ -101,7 +101,7 @@ func handleBrowse(ontologyRoot, agentBranch string) http.HandlerFunc {
 			}
 			if len(factPaths) > 0 {
 				for _, fp := range factPaths {
-					if fb, err := idx.GetByPath(fp); err == nil && fb != nil {
+					if fb, err := idx.GetByPath(agentBranch, fp); err == nil && fb != nil {
 						typeByPath[fp] = fb.Type
 						titleByPath[fp] = fb.Title
 					}
@@ -212,7 +212,7 @@ func handleFact(agentBranch string) http.HandlerFunc {
 
 		// Browsing mode: enrich with commit hash and date from the store index.
 		if commitHash == "" && svc != nil {
-			if rec, lerr := svc.Index().GetByPath(path); lerr == nil && rec != nil && rec.CommitHash != "" {
+			if rec, lerr := svc.Index().GetByPath(agentBranch, path); lerr == nil && rec != nil && rec.CommitHash != "" {
 				resp := map[string]any{
 					"path":        fact.Path(),
 					"title":       fact.Title,
@@ -311,6 +311,7 @@ func handleFactRetract(agentBranch string) http.HandlerFunc {
 func handleSearch() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
+		branch := ri.Branch()
 		var idx repos.SearchIndex
 		ri.WithRead(func(d repos.StoreDeps) { idx = d.Idx })
 		if idx == nil {
@@ -428,7 +429,7 @@ func handleSearch() http.HandlerFunc {
 
 		log.Debug().Str("q", text).Strs("entities", entities).Strs("domain", domain).Int("limit", limit).Msg("search")
 
-		results, err := idx.Search(store.SearchQuery{
+		results, err := idx.Search(branch, store.SearchQuery{
 			Text:          text,
 			Entities:      entities,
 			Domain:        domain,
@@ -533,7 +534,7 @@ func handleCommitDetail(agentBranch string) http.HandlerFunc {
 			files[i] = fileWithTitle{Path: f.Path, Action: f.Action}
 			// Try index first (fast, works for facts still in the current state).
 			if idx != nil {
-				if fb, err := idx.GetByPath(f.Path); err == nil && fb != nil {
+				if fb, err := idx.GetByPath(agentBranch, f.Path); err == nil && fb != nil {
 					files[i].Title = fb.Title
 					continue
 				}
@@ -585,6 +586,7 @@ func handleActivity(agentBranch string) http.HandlerFunc {
 func handleCompletions() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
+		branch := ri.Branch()
 		var idx repos.SearchIndex
 		ri.WithRead(func(d repos.StoreDeps) { idx = d.Idx })
 
@@ -594,7 +596,7 @@ func handleCompletions() http.HandlerFunc {
 			http.Error(w, "category required", http.StatusBadRequest)
 			return
 		}
-		vals, err := idx.Completions(category, prefix, 20)
+		vals, err := idx.Completions(branch, category, prefix, 20)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
@@ -608,13 +610,14 @@ func handleCompletions() http.HandlerFunc {
 func handleStats() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
+		branch := ri.Branch()
 		var idx repos.SearchIndex
 		ri.WithRead(func(d repos.StoreDeps) { idx = d.Idx })
 		if idx == nil {
 			writeError(w, http.StatusServiceUnavailable, "index not available")
 			return
 		}
-		stats, err := idx.Stats(r.URL.Query().Get("path"))
+		stats, err := idx.Stats(branch, r.URL.Query().Get("path"))
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, fmt.Sprintf("stats error: %v", err))
 			return
@@ -661,6 +664,7 @@ func handleStatus(embeddingsEnabled bool, ontologyRoot, agentBranch string) http
 func handleRecent() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
+		branch := ri.Branch()
 		var svc *store.Service
 		ri.WithRead(func(d repos.StoreDeps) { svc = d.Svc })
 		if svc == nil {
@@ -734,7 +738,7 @@ func handleRecent() http.HandlerFunc {
 			}
 		}
 
-		entries, total, err := svc.Index().RecentFacts(path, query, limit, offset, includeTypes, excludeTypes, domain, entities, epOps)
+		entries, total, err := svc.Index().RecentFacts(branch, path, query, limit, offset, includeTypes, excludeTypes, domain, entities, epOps)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, fmt.Sprintf("recent error: %v", err))
 			return
