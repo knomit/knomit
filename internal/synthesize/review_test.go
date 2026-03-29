@@ -24,7 +24,7 @@ func TestStartSession_NoDirtyFacts(t *testing.T) {
 
 	// No watermark → all facts dirty, but index returns empty.
 	ri.EXPECT().GetPipelineWatermark("review", "machine/test").Return("", nil)
-	idx.EXPECT().Search(store.SearchQuery{Limit: 100_000}).Return(nil, nil)
+	idx.EXPECT().Search(gomock.Any(), store.SearchQuery{Limit: 100_000}).Return(nil, nil)
 
 	// Complete session immediately.
 	ri.EXPECT().CompletePipelineSession("sess-1").Return(nil)
@@ -95,13 +95,13 @@ func TestStartSession_WatermarkEmpty_AllFactsDirty(t *testing.T) {
 	ri.EXPECT().GetPipelineWatermark("review", "machine/test").Return("", nil)
 
 	// No watermark → index returns all facts.
-	idx.EXPECT().Search(store.SearchQuery{Limit: 100_000}).Return([]store.SearchResult{
+	idx.EXPECT().Search(gomock.Any(), store.SearchQuery{Limit: 100_000}).Return([]store.SearchResult{
 		{FactWithBody: store.FactWithBody{FactRecord: store.FactRecord{Path: "kb/go/one.md", Title: "Fact one", Type: "observation", Domain: []string{"testing"}, Confidence: 0.8, Sources: 1}, Body: "Body one."}},
 		{FactWithBody: store.FactWithBody{FactRecord: store.FactRecord{Path: "kb/go/two.md", Title: "Fact two", Type: "observation", Domain: []string{"testing"}, Confidence: 0.8, Sources: 1}, Body: "Body two."}},
 	}, nil)
 
 	// ScopedCluster will search for neighbors.
-	idx.EXPECT().Search(gomock.Any()).Return(nil, nil).AnyTimes()
+	idx.EXPECT().Search(gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
 	// ClusterFacts fails → fallback to category grouping (both in kb/go → one cluster).
 	idx.EXPECT().ClusterFacts(1.0, 2).Return(store.ClusterResult{}, fmt.Errorf("no embeddings"))
 
@@ -170,7 +170,7 @@ func TestStartSession_WithWatermark(t *testing.T) {
 
 	// ScopedCluster: one seed (one.md), searches neighbors.
 	// Dedup also calls Search with MinSimilarity=0.92; return empty for those.
-	idx.EXPECT().Search(gomock.Any()).DoAndReturn(func(q store.SearchQuery) ([]store.SearchResult, error) {
+	idx.EXPECT().Search(gomock.Any(), gomock.Any()).DoAndReturn(func(branch string, q store.SearchQuery) ([]store.SearchResult, error) {
 		if q.MinSimilarity >= 0.9 {
 			return nil, nil // dedup pass: no near-duplicates
 		}
@@ -243,7 +243,7 @@ func TestContinueSession_PruneResponse(t *testing.T) {
 
 	// ApplyPruneDecisions: retract two.md.
 	gs.EXPECT().DeleteFile("machine/test", "kb/go/two.md", gomock.Any(), gomock.Any()).Return("c1", nil)
-	idx.EXPECT().Delete("kb/go/two.md").Return(nil)
+	idx.EXPECT().Delete(gomock.Any(), "kb/go/two.md").Return(nil)
 
 
 	ri.EXPECT().SetPipelineWorkItemResponse(int64(1), pruneResp).Return(nil)
@@ -420,14 +420,14 @@ func TestContinueSession_DistillResponse(t *testing.T) {
 	gs.EXPECT().ReadFile("machine/test", "kb/go/one.md").Return(factContent("Fact one", "Body one."), nil)
 	gs.EXPECT().ReadFile("machine/test", "kb/go/two.md").Return(factContent("Fact two", "Body two."), nil)
 	gs.EXPECT().WriteFile(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return("c1", "b1", nil)
-	idx.EXPECT().Upsert(gomock.Any()).Return(nil)
+	idx.EXPECT().Upsert(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil)
 
 	gs.EXPECT().DeleteFile("machine/test", "kb/go/one.md", gomock.Any(), gomock.Any()).Return("c2", nil)
-	idx.EXPECT().Delete("kb/go/one.md").Return(nil)
+	idx.EXPECT().Delete(gomock.Any(), "kb/go/one.md").Return(nil)
 
 	// RAPTOR: ScopedCluster on the 1 written fact — searches neighbors, clusters.
 	// Single fact → filterSmallClusters removes it → no new work items.
-	idx.EXPECT().Search(gomock.Any()).Return(nil, nil).AnyTimes()
+	idx.EXPECT().Search(gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
 	idx.EXPECT().ClusterFacts(1.0, 2).Return(store.ClusterResult{}, fmt.Errorf("no embeddings"))
 
 	ri.EXPECT().SetPipelineWorkItemResponse(int64(2), distillResp).Return(nil)
@@ -495,7 +495,7 @@ func TestDirtyFacts_NoWatermark_UsesIndex(t *testing.T) {
 	ri := NewMockPipelineIndex(ctrl)
 
 	ri.EXPECT().GetPipelineWatermark("review", "machine/test").Return("", nil)
-	idx.EXPECT().Search(store.SearchQuery{Limit: 100_000}).Return([]store.SearchResult{
+	idx.EXPECT().Search(gomock.Any(), store.SearchQuery{Limit: 100_000}).Return([]store.SearchResult{
 		{FactWithBody: store.FactWithBody{
 			FactRecord: store.FactRecord{Path: "kb/go/one.md", Title: "Fact one", Type: "observation", Domain: []string{"go"}, Entities: []string{"Go"}, Confidence: 0.9, Sources: 2},
 			Body:       "Body one.",
@@ -620,14 +620,14 @@ func TestContinueSession_RAPTOR_EnqueuesDeeper(t *testing.T) {
 	gs.EXPECT().ReadFile("machine/test", "kb/go/one.md").Return(factContent("Fact one", "Body one."), nil)
 	gs.EXPECT().ReadFile("machine/test", "kb/go/two.md").Return(factContent("Fact two", "Body two."), nil)
 	gs.EXPECT().WriteFile(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return("c1", "b1", nil).Times(2)
-	idx.EXPECT().Upsert(gomock.Any()).Return(nil).Times(2)
+	idx.EXPECT().Upsert(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).Times(2)
 
 	gs.EXPECT().DeleteFile("machine/test", "kb/go/three.md", gomock.Any(), gomock.Any()).Return("c2", nil)
-	idx.EXPECT().Delete("kb/go/three.md").Return(nil)
+	idx.EXPECT().Delete(gomock.Any(), "kb/go/three.md").Return(nil)
 
 	// RAPTOR: ScopedCluster on the 2 written facts.
 	// Search returns neighbors so cluster has >1 fact.
-	idx.EXPECT().Search(gomock.Any()).Return(nil, nil).AnyTimes()
+	idx.EXPECT().Search(gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
 	// ClusterFacts fails → fallback to category grouping.
 	// Both written facts share kb/go → one cluster of 2 facts.
 	idx.EXPECT().ClusterFacts(1.0, 2).Return(store.ClusterResult{}, fmt.Errorf("no embeddings"))
@@ -714,7 +714,7 @@ func TestContinueSession_RAPTOR_StopsAtMaxDepth(t *testing.T) {
 
 	// ApplyDistillDecisions writes the synth fact.
 	gs.EXPECT().WriteFile(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return("c1", "b1", nil)
-	idx.EXPECT().Upsert(gomock.Any()).Return(nil)
+	idx.EXPECT().Upsert(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil)
 
 	// No InsertWorkItem expected — max depth reached.
 
@@ -760,13 +760,13 @@ func TestRunAll_ProcessesAllWorkItems(t *testing.T) {
 
 	// No watermark → all facts dirty via index.
 	ri.EXPECT().GetPipelineWatermark("review", "machine/test").Return("", nil)
-	idx.EXPECT().Search(store.SearchQuery{Limit: 100_000}).Return([]store.SearchResult{
+	idx.EXPECT().Search(gomock.Any(), store.SearchQuery{Limit: 100_000}).Return([]store.SearchResult{
 		{FactWithBody: store.FactWithBody{FactRecord: store.FactRecord{Path: "kb/go/one.md", Title: "Fact one", Type: "observation", Domain: []string{"go"}, Confidence: 0.8, Sources: 1}, Body: "Body one."}},
 		{FactWithBody: store.FactWithBody{FactRecord: store.FactRecord{Path: "kb/go/two.md", Title: "Fact two", Type: "observation", Domain: []string{"go"}, Confidence: 0.8, Sources: 1}, Body: "Body two."}},
 	}, nil)
 
 	// ScopedCluster: search + cluster.
-	idx.EXPECT().Search(gomock.Any()).Return(nil, nil).AnyTimes()
+	idx.EXPECT().Search(gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
 	idx.EXPECT().ClusterFacts(1.0, 2).Return(store.ClusterResult{}, fmt.Errorf("no embeddings")).AnyTimes()
 
 	// Insert prune + distill work items (2 seeds, 1 cluster of 2).
@@ -857,7 +857,7 @@ func TestRunAll_NoDirtyFacts(t *testing.T) {
 
 	// No watermark, index returns empty → no dirty facts.
 	ri.EXPECT().GetPipelineWatermark("review", "machine/test").Return("", nil)
-	idx.EXPECT().Search(store.SearchQuery{Limit: 100_000}).Return(nil, nil)
+	idx.EXPECT().Search(gomock.Any(), store.SearchQuery{Limit: 100_000}).Return(nil, nil)
 
 	// Complete session immediately.
 	ri.EXPECT().CompletePipelineSession("sess-empty").Return(nil)
@@ -951,7 +951,7 @@ func TestReflectStepCreatedWhenHypothesesRetracted(t *testing.T) {
 
 	// ApplyPruneDecisions: retract hyp.md.
 	gs.EXPECT().DeleteFile("machine/test", "kb/go/hyp.md", gomock.Any(), gomock.Any()).Return("c1", nil)
-	idx.EXPECT().Delete("kb/go/hyp.md").Return(nil)
+	idx.EXPECT().Delete(gomock.Any(), "kb/go/hyp.md").Return(nil)
 
 	ri.EXPECT().SetPipelineWorkItemResponse(int64(1), pruneResp).Return(nil)
 

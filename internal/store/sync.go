@@ -19,6 +19,11 @@ import (
 //  4. Else → DiffFiles(last_commit), upsert added+modified, delete removed.
 //  5. Update meta.last_commit = HEAD.
 func (idx *Index) Sync(git GitReader, branch string) error {
+	// Ensure the branch exists in the branches table.
+	if _, err := idx.EnsureBranch(branch, "refs/heads/"+branch); err != nil {
+		return fmt.Errorf("sync: ensure branch: %w", err)
+	}
+
 	head, err := git.HeadCommit(branch)
 	if err != nil {
 		return fmt.Errorf("sync: head commit: %w", err)
@@ -63,7 +68,7 @@ func (idx *Index) Sync(git GitReader, branch string) error {
 			}
 		}
 		for _, path := range deleted {
-			if err := idx.Delete(path); err != nil {
+			if err := idx.Delete(branch, path); err != nil {
 				return fmt.Errorf("sync: delete %q: %w", path, err)
 			}
 		}
@@ -139,11 +144,11 @@ func (idx *Index) indexFile(git GitReader, branch, path, commitHash string) erro
 		commitHash = last
 	}
 
-	rec, err := parseFact(path, content, commitHash)
+	rec, err := parseFact(path, content)
 	if err != nil {
 		return nil // not a fact file (e.g. kb.md manifest, ontology.yaml)
 	}
 	rec.BlobHash = blobHash
 
-	return idx.Upsert(rec)
+	return idx.Upsert(branch, commitHash, rec)
 }

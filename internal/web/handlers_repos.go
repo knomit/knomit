@@ -19,7 +19,7 @@ func handleRepos(rm *repos.Manager) http.HandlerFunc {
 		rm.ForEach(func(name string, ri *repos.RepoInstance) {
 			repoList = append(repoList, repoEntry{
 				Name:   name,
-				Branch: ri.AgentBranch,
+				Branch: ri.Branch(),
 			})
 		})
 

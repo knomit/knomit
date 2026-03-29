@@ -18,7 +18,7 @@ func TestNewFactRecord(t *testing.T) {
 	f.Refs = []string{"https://example.com"}
 	f.EvidenceWeight = 1.5
 
-	rec := store.NewFactRecord(f, "blobhash123", "commithash456")
+	rec := store.NewFactRecord(f, "blobhash123")
 
 	if rec.Path != "kb/alpha/test.md" { // NewFact lowercases
 		t.Errorf("path = %q, want %q", rec.Path, "kb/alpha/test.md")
@@ -46,9 +46,6 @@ func TestNewFactRecord(t *testing.T) {
 	}
 	if rec.BlobHash != "blobhash123" {
 		t.Errorf("blob_hash = %q", rec.BlobHash)
-	}
-	if rec.CommitHash != "commithash456" {
-		t.Errorf("commit_hash = %q", rec.CommitHash)
 	}
 	if rec.EvidenceWeight != 1.5 {
 		t.Errorf("evidence_weight = %f", rec.EvidenceWeight)

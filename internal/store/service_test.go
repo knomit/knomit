@@ -54,7 +54,7 @@ func TestServiceOpenMemory(t *testing.T) {
 	}
 	defer svc.Close()
 
-	if svc.DB() == nil {
+	if svc.db == nil {
 		t.Fatal("expected non-nil DB")
 	}
 }
@@ -72,7 +72,7 @@ func TestMigration_ReviewWorkItemsDepth(t *testing.T) {
 	}
 	// Drop and recreate review_work_items WITHOUT the depth column,
 	// simulating an old database.
-	db := svc.DB()
+	db := svc.db
 	if _, err := db.Exec(`DROP TABLE IF EXISTS review_work_items`); err != nil {
 		t.Fatal(err)
 	}

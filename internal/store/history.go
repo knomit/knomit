@@ -112,13 +112,13 @@ func (idx *Index) rebuildGraphHistory(git GitReader, branch string, progress Reb
 			continue
 		}
 
-		rec, err := parseFact(v.path, content, v.commitHash)
+		rec, err := parseFact(v.path, content)
 		if err != nil {
 			log.Debug().Err(err).Str("path", v.path).Msg("rebuildGraphHistory: skip (parse failed)")
 			continue
 		}
 
-		if err := idx.graphSyncFactVersionTx(tx, rec, v.committedAt); err != nil {
+		if err := idx.graphSyncFactVersionTx(tx, v.commitHash, rec, v.committedAt); err != nil {
 			log.Warn().Err(err).Str("path", v.path).Str("commit", v.commitHash[:8]).Msg("rebuildGraphHistory: sync version failed, skipping")
 			continue
 		}
@@ -150,7 +150,7 @@ func (idx *Index) rebuildGraphHistory(git GitReader, branch string, progress Reb
 	// the transaction has committed. GraphQLite MATCH+SET does not persist EAV
 	// properties when executed inside a *sql.Tx, so this must run post-commit.
 	for _, cv := range created {
-		if err := idx.graphSetFactVersionProps(cv.rec, cv.committedAt); err != nil {
+		if err := idx.graphSetFactVersionProps(cv.commitHash, cv.rec, cv.committedAt); err != nil {
 			log.Warn().Err(err).Str("path", cv.path).Str("commit", cv.commitHash[:8]).Msg("rebuildGraphHistory: set props failed")
 		}
 	}
@@ -200,9 +200,9 @@ func (idx *Index) rebuildGraphHistory(git GitReader, branch string, progress Reb
 // given transaction. Properties (title, committed_at) must be set after the
 // transaction commits via graphSetFactVersionProps, because GraphQLite's
 // MATCH+SET does not persist to EAV tables when executed inside a *sql.Tx.
-func (idx *Index) graphSyncFactVersionTx(tx execer, rec FactRecord, committedAt int64) error {
+func (idx *Index) graphSyncFactVersionTx(tx execer, commitHash string, rec FactRecord, committedAt int64) error {
 	p := escapeCypherKey(rec.Path)
-	ch := escapeCypherKey(rec.CommitHash)
+	ch := escapeCypherKey(commitHash)
 
 	// MERGE the FactVersion node (identity props only).
 	q := fmt.Sprintf(`SELECT cypher('MERGE (v:%s {path: "%s", commit_hash: "%s"})')`,
@@ -221,10 +221,10 @@ func (idx *Index) graphSyncFactVersionTx(tx execer, rec FactRecord, committedAt 
 //
 // Must be called after the transaction that created the node has committed,
 // because node IDs are only visible post-commit.
-func (idx *Index) graphSetFactVersionProps(rec FactRecord, committedAt int64) error {
-	nodeID, err := idx.graphNodeIDByProp(NodeFactVersion, "commit_hash", rec.CommitHash)
+func (idx *Index) graphSetFactVersionProps(commitHash string, rec FactRecord, committedAt int64) error {
+	nodeID, err := idx.graphNodeIDByProp(NodeFactVersion, "commit_hash", commitHash)
 	if err != nil || nodeID == 0 {
-		return fmt.Errorf("graphSetFactVersionProps: node not found for commit_hash=%s: %w", rec.CommitHash, err)
+		return fmt.Errorf("graphSetFactVersionProps: node not found for commit_hash=%s: %w", commitHash, err)
 	}
 
 	// Ensure property key IDs exist, then upsert values into EAV tables.

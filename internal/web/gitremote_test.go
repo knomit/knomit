@@ -21,7 +21,7 @@ import (
 // backed by store.
 func newTestRepoManager(repoName string, store *git.Store) *repos.Manager {
 	rm := repos.New(context.Background(), repos.Deps{})
-	rm.Set(repoName, &repos.RepoInstance{GS: store})
+	rm.Set(repoName, repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{GS: store}))
 	return rm
 }
 
@@ -119,7 +119,7 @@ func TestGitCloneWithCommits(t *testing.T) {
 func TestGitRemoteHandler_GSNotGitRemoteStore(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	rm := repos.New(context.Background(), repos.Deps{})
-	rm.Set("mocked", &repos.RepoInstance{GS: NewMockGitStore(ctrl)})
+	rm.Set("mocked", repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{GS: NewMockGitStore(ctrl)}))
 
 	handler := GitRemoteHandler(rm)
 	rr := httptest.NewRecorder()
@@ -175,8 +175,8 @@ func TestGitRemoteHandler_MultiRepo(t *testing.T) {
 	}
 
 	rm := repos.New(context.Background(), repos.Deps{})
-	rm.Set("repo-a", &repos.RepoInstance{GS: storeA})
-	rm.Set("repo-b", &repos.RepoInstance{GS: storeB})
+	rm.Set("repo-a", repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{GS: storeA}))
+	rm.Set("repo-b", repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{GS: storeB}))
 
 	r := chi.NewRouter()
 	r.Mount("/git", GitRemoteHandler(rm))

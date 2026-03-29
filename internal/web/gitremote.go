@@ -40,9 +40,9 @@ func GitRemoteHandler(rm *repos.Manager) http.Handler {
 			return
 		}
 
-		ri.RLock()
-		gs, ok := ri.GS.(gitHTTPProvider)
-		ri.RUnlock()
+		var rawGS repos.GitStore
+		ri.WithRead(func(d repos.StoreDeps) { rawGS = d.GS })
+		provider, ok := rawGS.(gitHTTPProvider)
 		if !ok {
 			http.Error(w, "git serving not supported for this repo", http.StatusInternalServerError)
 			return
@@ -55,6 +55,6 @@ func GitRemoteHandler(rm *repos.Manager) http.Handler {
 		u2.RawPath = ""
 		r2 := r.WithContext(r.Context())
 		r2.URL = &u2
-		gs.Handler().ServeHTTP(w, r2)
+		provider.Handler().ServeHTTP(w, r2)
 	})
 }

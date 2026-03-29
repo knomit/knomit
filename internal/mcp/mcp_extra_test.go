@@ -432,7 +432,7 @@ func TestLearnBatchWriteError(t *testing.T) {
 	idx := NewMockSearchIndex(ctrl)
 
 
-	idx.EXPECT().Search(gomock.Any()).Return(nil, nil).AnyTimes()
+	idx.EXPECT().Search(gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
 	gs.EXPECT().BatchWrite(testAgentBranch, gomock.Any(), gomock.Any(), gomock.Any()).Return("", nil, fmt.Errorf("write failed"))
 
 	handler := LearnHandler(gs, idx, "kb", fact.DefaultOntology(), testAgentBranch)
@@ -464,7 +464,7 @@ func TestLearnTagCollision(t *testing.T) {
 	idx := NewMockSearchIndex(ctrl)
 
 
-	idx.EXPECT().Search(gomock.Any()).Return(nil, nil).AnyTimes()
+	idx.EXPECT().Search(gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
 	gs.EXPECT().BatchWrite(testAgentBranch, gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(branch string, files map[string]string, msg, operation string) (string, map[string]string, error) {
 		blobHashes := make(map[string]string, len(files))
 		for path := range files {
@@ -505,7 +505,7 @@ func TestLearnNilDomainEntitiesRefs(t *testing.T) {
 	var capturedFiles map[string]string
 
 
-	idx.EXPECT().Search(gomock.Any()).Return(nil, nil).AnyTimes()
+	idx.EXPECT().Search(gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
 	gs.EXPECT().BatchWrite(testAgentBranch, gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(branch string, files map[string]string, msg, operation string) (string, map[string]string, error) {
 		capturedFiles = files
 		blobHashes := make(map[string]string, len(files))

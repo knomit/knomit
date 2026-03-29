@@ -311,33 +311,33 @@ func (m *MockSearchIndex) EXPECT() *MockSearchIndexMockRecorder {
 }
 
 // GetByPath mocks base method.
-func (m *MockSearchIndex) GetByPath(path string) (*FactWithBody, error) {
+func (m *MockSearchIndex) GetByPath(branch, path string) (*FactWithBody, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetByPath", path)
+	ret := m.ctrl.Call(m, "GetByPath", branch, path)
 	ret0, _ := ret[0].(*FactWithBody)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // GetByPath indicates an expected call of GetByPath.
-func (mr *MockSearchIndexMockRecorder) GetByPath(path any) *gomock.Call {
+func (mr *MockSearchIndexMockRecorder) GetByPath(branch, path any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetByPath", reflect.TypeOf((*MockSearchIndex)(nil).GetByPath), path)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetByPath", reflect.TypeOf((*MockSearchIndex)(nil).GetByPath), branch, path)
 }
 
 // Search mocks base method.
-func (m *MockSearchIndex) Search(q SearchQuery) ([]SearchResult, error) {
+func (m *MockSearchIndex) Search(branch string, q SearchQuery) ([]SearchResult, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Search", q)
+	ret := m.ctrl.Call(m, "Search", branch, q)
 	ret0, _ := ret[0].([]SearchResult)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // Search indicates an expected call of Search.
-func (mr *MockSearchIndexMockRecorder) Search(q any) *gomock.Call {
+func (mr *MockSearchIndexMockRecorder) Search(branch, q any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Search", reflect.TypeOf((*MockSearchIndex)(nil).Search), q)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Search", reflect.TypeOf((*MockSearchIndex)(nil).Search), branch, q)
 }
 
 // MockToolSessionIndex is a mock of ToolSessionIndex interface.

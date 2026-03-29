@@ -13,17 +13,17 @@ func TestJunctionTablesPopulatedOnUpsert(t *testing.T) {
 	}
 	defer idx.Close()
 
-	insertTestBlob(t, idx.DB(), "bh1", "test content")
-	if err := idx.Upsert(store.FactRecord{
+	insertTestBlob(t, idx.TestDB(), "bh1", "test content")
+	if err := idx.Upsert(testBranch, "abc", store.FactRecord{
 		Path: "kb/test.md", Title: "Test", BlobHash: "bh1",
 		Type: "observation", Domain: []string{"go", "testing"}, Entities: []string{"net/http", "encoding/json"},
-		Confidence: 0.8, Sources: 1, CommitHash: "abc",
+		Confidence: 0.8, Sources: 1,
 	}); err != nil {
 		t.Fatal(err)
 	}
 
 	var entityCount int
-	if err := idx.DB().QueryRow(`SELECT COUNT(*) FROM fact_entities WHERE fact_path = 'kb/test.md'`).Scan(&entityCount); err != nil {
+	if err := idx.TestDB().QueryRow(`SELECT COUNT(*) FROM fact_entities WHERE fact_id = (SELECT id FROM facts WHERE path = 'kb/test.md' ORDER BY id DESC LIMIT 1)`).Scan(&entityCount); err != nil {
 		t.Fatal(err)
 	}
 	if entityCount != 2 {
@@ -31,7 +31,7 @@ func TestJunctionTablesPopulatedOnUpsert(t *testing.T) {
 	}
 
 	var domainCount int
-	if err := idx.DB().QueryRow(`SELECT COUNT(*) FROM fact_domains WHERE fact_path = 'kb/test.md'`).Scan(&domainCount); err != nil {
+	if err := idx.TestDB().QueryRow(`SELECT COUNT(*) FROM fact_domains WHERE fact_id = (SELECT id FROM facts WHERE path = 'kb/test.md' ORDER BY id DESC LIMIT 1)`).Scan(&domainCount); err != nil {
 		t.Fatal(err)
 	}
 	if domainCount != 2 {
@@ -46,38 +46,39 @@ func TestJunctionTablesUpdatedOnReUpsert(t *testing.T) {
 	}
 	defer idx.Close()
 
-	insertTestBlob(t, idx.DB(), "bh1", "test content")
-	if err := idx.Upsert(store.FactRecord{
+	insertTestBlob(t, idx.TestDB(), "bh1", "test content")
+	if err := idx.Upsert(testBranch, "abc", store.FactRecord{
 		Path: "kb/test.md", Title: "Test", BlobHash: "bh1",
 		Type: "observation", Domain: []string{"go"}, Entities: []string{"net/http"},
-		Confidence: 0.8, Sources: 1, CommitHash: "abc",
+		Confidence: 0.8, Sources: 1,
 	}); err != nil {
 		t.Fatal(err)
 	}
 
-	// Re-upsert with different entities and domains.
-	if err := idx.Upsert(store.FactRecord{
-		Path: "kb/test.md", Title: "Test", BlobHash: "bh1",
+	// Re-upsert with different entities and domains (different blob hash to avoid COW shortcut).
+	insertTestBlob(t, idx.TestDB(), "bh2", "updated test content")
+	if err := idx.Upsert(testBranch, "abc", store.FactRecord{
+		Path: "kb/test.md", Title: "Test", BlobHash: "bh2",
 		Type: "observation", Domain: []string{"rust", "wasm"}, Entities: []string{"tokio"},
-		Confidence: 0.9, Sources: 2, CommitHash: "def",
+		Confidence: 0.9, Sources: 2,
 	}); err != nil {
 		t.Fatal(err)
 	}
 
 	var entityCount int
-	idx.DB().QueryRow(`SELECT COUNT(*) FROM fact_entities WHERE fact_path = 'kb/test.md'`).Scan(&entityCount)
+	idx.TestDB().QueryRow(`SELECT COUNT(*) FROM fact_entities WHERE fact_id = (SELECT id FROM facts WHERE path = 'kb/test.md' ORDER BY id DESC LIMIT 1)`).Scan(&entityCount)
 	if entityCount != 1 {
 		t.Errorf("fact_entities count after re-upsert = %d, want 1", entityCount)
 	}
 
 	var entity string
-	idx.DB().QueryRow(`SELECT entity FROM fact_entities WHERE fact_path = 'kb/test.md'`).Scan(&entity)
+	idx.TestDB().QueryRow(`SELECT entity FROM fact_entities WHERE fact_id = (SELECT id FROM facts WHERE path = 'kb/test.md' ORDER BY id DESC LIMIT 1)`).Scan(&entity)
 	if entity != "tokio" {
 		t.Errorf("entity = %q, want tokio", entity)
 	}
 
 	var domainCount int
-	idx.DB().QueryRow(`SELECT COUNT(*) FROM fact_domains WHERE fact_path = 'kb/test.md'`).Scan(&domainCount)
+	idx.TestDB().QueryRow(`SELECT COUNT(*) FROM fact_domains WHERE fact_id = (SELECT id FROM facts WHERE path = 'kb/test.md' ORDER BY id DESC LIMIT 1)`).Scan(&domainCount)
 	if domainCount != 2 {
 		t.Errorf("fact_domains count after re-upsert = %d, want 2", domainCount)
 	}
@@ -90,23 +91,23 @@ func TestJunctionTablesEmptyEntitiesAndDomains(t *testing.T) {
 	}
 	defer idx.Close()
 
-	insertTestBlob(t, idx.DB(), "bh1", "test content")
-	if err := idx.Upsert(store.FactRecord{
+	insertTestBlob(t, idx.TestDB(), "bh1", "test content")
+	if err := idx.Upsert(testBranch, "abc", store.FactRecord{
 		Path: "kb/test.md", Title: "Test", BlobHash: "bh1",
 		Type: "observation", Domain: []string{}, Entities: []string{},
-		Confidence: 0.8, Sources: 1, CommitHash: "abc",
+		Confidence: 0.8, Sources: 1,
 	}); err != nil {
 		t.Fatal(err)
 	}
 
 	var entityCount int
-	idx.DB().QueryRow(`SELECT COUNT(*) FROM fact_entities WHERE fact_path = 'kb/test.md'`).Scan(&entityCount)
+	idx.TestDB().QueryRow(`SELECT COUNT(*) FROM fact_entities WHERE fact_id = (SELECT id FROM facts WHERE path = 'kb/test.md' ORDER BY id DESC LIMIT 1)`).Scan(&entityCount)
 	if entityCount != 0 {
 		t.Errorf("fact_entities count = %d, want 0 for empty entities", entityCount)
 	}
 
 	var domainCount int
-	idx.DB().QueryRow(`SELECT COUNT(*) FROM fact_domains WHERE fact_path = 'kb/test.md'`).Scan(&domainCount)
+	idx.TestDB().QueryRow(`SELECT COUNT(*) FROM fact_domains WHERE fact_id = (SELECT id FROM facts WHERE path = 'kb/test.md' ORDER BY id DESC LIMIT 1)`).Scan(&domainCount)
 	if domainCount != 0 {
 		t.Errorf("fact_domains count = %d, want 0 for empty domains", domainCount)
 	}
@@ -119,28 +120,28 @@ func TestJunctionTablesCascadeOnDelete(t *testing.T) {
 	}
 	defer idx.Close()
 
-	insertTestBlob(t, idx.DB(), "bh1", "test content")
-	if err := idx.Upsert(store.FactRecord{
+	insertTestBlob(t, idx.TestDB(), "bh1", "test content")
+	if err := idx.Upsert(testBranch, "abc", store.FactRecord{
 		Path: "kb/test.md", Title: "Test", BlobHash: "bh1",
 		Type: "observation", Domain: []string{"go"}, Entities: []string{"net/http"},
-		Confidence: 0.8, Sources: 1, CommitHash: "abc",
+		Confidence: 0.8, Sources: 1,
 	}); err != nil {
 		t.Fatal(err)
 	}
 
 	// Delete the fact directly.
-	if err := idx.Delete("kb/test.md"); err != nil {
+	if err := idx.Delete(testBranch, "kb/test.md"); err != nil {
 		t.Fatal(err)
 	}
 
 	var entityCount int
-	idx.DB().QueryRow(`SELECT COUNT(*) FROM fact_entities WHERE fact_path = 'kb/test.md'`).Scan(&entityCount)
+	idx.TestDB().QueryRow(`SELECT COUNT(*) FROM fact_entities WHERE fact_id = (SELECT id FROM facts WHERE path = 'kb/test.md' ORDER BY id DESC LIMIT 1)`).Scan(&entityCount)
 	if entityCount != 0 {
 		t.Errorf("fact_entities count after delete = %d, want 0 (CASCADE)", entityCount)
 	}
 
 	var domainCount int
-	idx.DB().QueryRow(`SELECT COUNT(*) FROM fact_domains WHERE fact_path = 'kb/test.md'`).Scan(&domainCount)
+	idx.TestDB().QueryRow(`SELECT COUNT(*) FROM fact_domains WHERE fact_id = (SELECT id FROM facts WHERE path = 'kb/test.md' ORDER BY id DESC LIMIT 1)`).Scan(&domainCount)
 	if domainCount != 0 {
 		t.Errorf("fact_domains count after delete = %d, want 0 (CASCADE)", domainCount)
 	}

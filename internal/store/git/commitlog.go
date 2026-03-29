@@ -151,12 +151,12 @@ func (s *Storer) CommitLogQuery(path string, cursor CommitLogCursor, limit int) 
 		return ts, err
 	}
 
-	lookupPath := func(hash string) (string, error) {
-		var path string
+	lookupMaxRowid := func(hash string) (int64, error) {
+		var rid int64
 		err := s.db.QueryRow(
-			`SELECT MIN(path) FROM commit_log WHERE commit_hash = ?`, hash,
-		).Scan(&path)
-		return path, err
+			`SELECT MAX(rowid) FROM commit_log WHERE commit_hash = ?`, hash,
+		).Scan(&rid)
+		return rid, err
 	}
 
 	var cursorCond string
@@ -167,48 +167,48 @@ func (s *Storer) CommitLogQuery(path string, cursor CommitLogCursor, limit int) 
 		if err != nil {
 			return nil, false, fmt.Errorf("CommitLogQuery: before lookup: %w", err)
 		}
-		path, err := lookupPath(cursor.Hash)
+		rid, err := lookupMaxRowid(cursor.Hash)
 		if err != nil {
-			return nil, false, fmt.Errorf("CommitLogQuery: before path lookup: %w", err)
+			return nil, false, fmt.Errorf("CommitLogQuery: before rowid lookup: %w", err)
 		}
-		cursorCond = "(ts > ? OR (ts = ? AND min_path < ?))"
-		cursorArgs = []any{ts, ts, path}
+		cursorCond = "(ts > ? OR (ts = ? AND max_rid > ?))"
+		cursorArgs = []any{ts, ts, rid}
 	case CommitLogCursorFrom:
 		ts, err := lookupTS(cursor.Hash)
 		if err != nil {
 			return nil, false, fmt.Errorf("CommitLogQuery: from lookup: %w", err)
 		}
-		path, err := lookupPath(cursor.Hash)
+		rid, err := lookupMaxRowid(cursor.Hash)
 		if err != nil {
-			return nil, false, fmt.Errorf("CommitLogQuery: from path lookup: %w", err)
+			return nil, false, fmt.Errorf("CommitLogQuery: from rowid lookup: %w", err)
 		}
-		cursorCond = "(ts < ? OR (ts = ? AND min_path >= ?))"
-		cursorArgs = []any{ts, ts, path}
+		cursorCond = "(ts < ? OR (ts = ? AND max_rid <= ?))"
+		cursorArgs = []any{ts, ts, rid}
 	case CommitLogCursorAfter:
 		ts, err := lookupTS(cursor.Hash)
 		if err != nil {
 			return nil, false, fmt.Errorf("CommitLogQuery: after lookup: %w", err)
 		}
-		path, err := lookupPath(cursor.Hash)
+		rid, err := lookupMaxRowid(cursor.Hash)
 		if err != nil {
-			return nil, false, fmt.Errorf("CommitLogQuery: after path lookup: %w", err)
+			return nil, false, fmt.Errorf("CommitLogQuery: after rowid lookup: %w", err)
 		}
-		cursorCond = "(ts < ? OR (ts = ? AND min_path > ?))"
-		cursorArgs = []any{ts, ts, path}
+		cursorCond = "(ts < ? OR (ts = ? AND max_rid < ?))"
+		cursorArgs = []any{ts, ts, rid}
 	default:
 		cursorCond = "1=1"
 	}
 
 	query := `
-SELECT commit_hash, ts, message, operation, min_path
+SELECT commit_hash, ts, message, operation
 FROM (
-    SELECT commit_hash, MIN(committed_at) AS ts, MIN(message) AS message, MIN(operation) AS operation, MIN(path) AS min_path
+    SELECT commit_hash, MIN(committed_at) AS ts, MIN(message) AS message, MIN(operation) AS operation, MAX(rowid) AS max_rid
     FROM commit_log
     WHERE ` + pathCond + `
     GROUP BY commit_hash
 )
 WHERE ` + cursorCond + `
-ORDER BY ts DESC, min_path ASC
+ORDER BY ts DESC, max_rid DESC
 LIMIT ?`
 
 	args := append(pathArgs, cursorArgs...)
@@ -223,8 +223,7 @@ LIMIT ?`
 	var results []CommitLogRow
 	for rows.Next() {
 		var r CommitLogRow
-		var minPath string // selected for ORDER BY / cursor; not exposed to callers
-		if err := rows.Scan(&r.Hash, &r.Timestamp, &r.Message, &r.Operation, &minPath); err != nil {
+		if err := rows.Scan(&r.Hash, &r.Timestamp, &r.Message, &r.Operation); err != nil {
 			return nil, false, fmt.Errorf("CommitLogQuery: scan: %w", err)
 		}
 		results = append(results, r)

@@ -204,46 +204,46 @@ func (mr *MockSearchIndexMockRecorder) ClusterFacts(resolution, minCommunitySize
 }
 
 // Delete mocks base method.
-func (m *MockSearchIndex) Delete(path string) error {
+func (m *MockSearchIndex) Delete(branch, path string) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Delete", path)
+	ret := m.ctrl.Call(m, "Delete", branch, path)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // Delete indicates an expected call of Delete.
-func (mr *MockSearchIndexMockRecorder) Delete(path any) *gomock.Call {
+func (mr *MockSearchIndexMockRecorder) Delete(branch, path any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Delete", reflect.TypeOf((*MockSearchIndex)(nil).Delete), path)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Delete", reflect.TypeOf((*MockSearchIndex)(nil).Delete), branch, path)
 }
 
 // Search mocks base method.
-func (m *MockSearchIndex) Search(q store.SearchQuery) ([]store.SearchResult, error) {
+func (m *MockSearchIndex) Search(branch string, q store.SearchQuery) ([]store.SearchResult, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Search", q)
+	ret := m.ctrl.Call(m, "Search", branch, q)
 	ret0, _ := ret[0].([]store.SearchResult)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // Search indicates an expected call of Search.
-func (mr *MockSearchIndexMockRecorder) Search(q any) *gomock.Call {
+func (mr *MockSearchIndexMockRecorder) Search(branch, q any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Search", reflect.TypeOf((*MockSearchIndex)(nil).Search), q)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Search", reflect.TypeOf((*MockSearchIndex)(nil).Search), branch, q)
 }
 
 // Upsert mocks base method.
-func (m *MockSearchIndex) Upsert(r store.FactRecord) error {
+func (m *MockSearchIndex) Upsert(branch, commitHash string, r store.FactRecord) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Upsert", r)
+	ret := m.ctrl.Call(m, "Upsert", branch, commitHash, r)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // Upsert indicates an expected call of Upsert.
-func (mr *MockSearchIndexMockRecorder) Upsert(r any) *gomock.Call {
+func (mr *MockSearchIndexMockRecorder) Upsert(branch, commitHash, r any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Upsert", reflect.TypeOf((*MockSearchIndex)(nil).Upsert), r)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Upsert", reflect.TypeOf((*MockSearchIndex)(nil).Upsert), branch, commitHash, r)
 }
 
 // MockEmbedder is a mock of Embedder interface.

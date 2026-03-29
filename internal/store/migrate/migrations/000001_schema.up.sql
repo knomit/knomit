@@ -24,27 +24,45 @@ CREATE TABLE IF NOT EXISTS meta (
     value TEXT NOT NULL
 );
 
--- Search index (no body column — body lives in objects via blob_hash)
+-- Branch registry
+CREATE TABLE IF NOT EXISTS branches (
+    id      INTEGER PRIMARY KEY,
+    name    TEXT NOT NULL UNIQUE,
+    git_ref TEXT NOT NULL
+);
+
+-- Immutable fact content store (one row per unique path+content version)
 CREATE TABLE IF NOT EXISTS facts (
-    path        TEXT PRIMARY KEY,
-    title       TEXT NOT NULL,
-    blob_hash   TEXT NOT NULL,
-    type        TEXT NOT NULL DEFAULT 'observation',
-    domain      TEXT NOT NULL,
-    entities    TEXT NOT NULL,
-    confidence  REAL NOT NULL,
-    sources     INTEGER NOT NULL,
-    refs             TEXT NOT NULL,
-    commit_hash      TEXT NOT NULL,
-    evidence_weight  REAL NOT NULL DEFAULT 0
+    id              INTEGER PRIMARY KEY,
+    path            TEXT NOT NULL,
+    blob_hash       TEXT NOT NULL,
+    title           TEXT NOT NULL,
+    type            TEXT NOT NULL DEFAULT 'observation',
+    domain          TEXT NOT NULL,
+    entities        TEXT NOT NULL,
+    confidence      REAL NOT NULL,
+    sources         INTEGER NOT NULL,
+    refs            TEXT NOT NULL,
+    evidence_weight REAL NOT NULL DEFAULT 0,
+    UNIQUE(path, blob_hash)
 );
 
 CREATE INDEX IF NOT EXISTS facts_type ON facts(type);
 
+-- Branch view: which fact version each branch sees at each path
+CREATE TABLE IF NOT EXISTS branch_facts (
+    branch_id   INTEGER NOT NULL REFERENCES branches(id),
+    path        TEXT NOT NULL,
+    fact_id     INTEGER NOT NULL REFERENCES facts(id),
+    commit_hash TEXT NOT NULL,
+    UNIQUE(branch_id, path)
+);
+CREATE INDEX IF NOT EXISTS branch_facts_fact ON branch_facts(fact_id);
+
 -- Trigger: clean up embeddings when a fact is deleted
 CREATE TRIGGER IF NOT EXISTS facts_after_delete AFTER DELETE ON facts
 BEGIN
-    DELETE FROM facts_vec WHERE rowid = OLD.rowid;
+    DELETE FROM facts_vec WHERE rowid = OLD.id;
 END;
 
 -- Pipeline watermarks (track last-processed commit per tool per branch)
@@ -130,25 +148,27 @@ CREATE TABLE IF NOT EXISTS commit_log (
     operation    TEXT    NOT NULL DEFAULT '',
     author_email TEXT    NOT NULL DEFAULT '',
     action       TEXT    NOT NULL DEFAULT '',
+    branch_id    INTEGER REFERENCES branches(id),
     PRIMARY KEY (commit_hash, path)
 );
 CREATE INDEX IF NOT EXISTS commit_log_path_time ON commit_log (path, committed_at DESC);
 CREATE INDEX IF NOT EXISTS commit_log_time      ON commit_log (committed_at DESC);
 CREATE INDEX IF NOT EXISTS commit_log_operation ON commit_log (operation, committed_at DESC);
+CREATE INDEX IF NOT EXISTS commit_log_branch    ON commit_log (branch_id, committed_at DESC);
 
 -- Junction tables for indexed entity and domain filtering.
 -- Populated in sync with facts.entities / facts.domain JSON columns.
 -- ON DELETE CASCADE keeps them in sync when facts are deleted.
 CREATE TABLE IF NOT EXISTS fact_entities (
-    fact_path TEXT NOT NULL REFERENCES facts(path) ON DELETE CASCADE,
-    entity    TEXT NOT NULL COLLATE NOCASE,
-    PRIMARY KEY (fact_path, entity)
+    fact_id INTEGER NOT NULL REFERENCES facts(id) ON DELETE CASCADE,
+    entity  TEXT NOT NULL COLLATE NOCASE,
+    PRIMARY KEY (fact_id, entity)
 );
 CREATE INDEX IF NOT EXISTS fact_entities_entity ON fact_entities(entity);
 
 CREATE TABLE IF NOT EXISTS fact_domains (
-    fact_path TEXT NOT NULL REFERENCES facts(path) ON DELETE CASCADE,
-    domain    TEXT NOT NULL COLLATE NOCASE,
-    PRIMARY KEY (fact_path, domain)
+    fact_id INTEGER NOT NULL REFERENCES facts(id) ON DELETE CASCADE,
+    domain  TEXT NOT NULL COLLATE NOCASE,
+    PRIMARY KEY (fact_id, domain)
 );
 CREATE INDEX IF NOT EXISTS fact_domains_domain ON fact_domains(domain);

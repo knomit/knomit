@@ -18,12 +18,24 @@ func openTestService(t *testing.T) *store.Service {
 
 func insertFact(t *testing.T, svc *store.Service, path, blobHash, commitHash string) {
 	t.Helper()
-	_, err := svc.DB().Exec(
-		`INSERT INTO facts (path, title, blob_hash, type, domain, entities, confidence, sources, refs, commit_hash)
-		 VALUES (?, '', ?, 'observation', '', '', 1.0, 0, '', ?)`,
-		path, blobHash, commitHash,
+	// Insert a blob so Upsert can find it.
+	_, err := svc.TestDB().Exec(
+		`INSERT OR IGNORE INTO objects(hash, type, size, data) VALUES (?, 3, 10, ?)`,
+		blobHash, []byte("---\ndomain: [test]\nconfidence: 0.9\nsources: 1\n---\n# Title\n\nbody"),
 	)
 	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Index().Upsert(testBranch, commitHash, store.FactRecord{
+		Path:       path,
+		Title:      "title",
+		BlobHash:   blobHash,
+		Type:       "observation",
+		Domain:     []string{"test"},
+		Entities:   []string{},
+		Confidence: 0.9,
+		Sources:    1,
+	}); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -31,7 +43,12 @@ func insertFact(t *testing.T, svc *store.Service, path, blobHash, commitHash str
 func TestFactsIter_EmptyDB(t *testing.T) {
 	svc := openTestService(t)
 
-	iter, err := store.NewFactsIter(svc.DB())
+	// Ensure the branch exists before iterating.
+	if _, err := svc.Index().EnsureBranch(testBranch, "refs/heads/"+testBranch); err != nil {
+		t.Fatal(err)
+	}
+
+	iter, err := store.NewFactsIter(svc.Index(), testBranch)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,7 +70,7 @@ func TestFactsIter_ReturnsAllFacts(t *testing.T) {
 	insertFact(t, svc, "b/two.md", "blob2", "commit2")
 	insertFact(t, svc, "c/three.md", "blob3", "commit3")
 
-	iter, err := store.NewFactsIter(svc.DB())
+	iter, err := store.NewFactsIter(svc.Index(), testBranch)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,7 +92,7 @@ func TestFactsIter_ReturnsAllFacts(t *testing.T) {
 		t.Fatalf("expected 3 facts, got %d", len(rows))
 	}
 
-	// Newest-first (highest rowid first): c/three.md was inserted last.
+	// Newest-first (highest fact_id first): c/three.md was inserted last.
 	if rows[0].Path != "c/three.md" {
 		t.Errorf("expected first row path=c/three.md, got %s", rows[0].Path)
 	}
@@ -93,21 +110,31 @@ func TestFactsIter_ReturnsAllFacts(t *testing.T) {
 func TestFactsIter_DedupsByPath(t *testing.T) {
 	svc := openTestService(t)
 
-	// Since path is PRIMARY KEY, we simulate "multiple versions" by using
-	// INSERT OR REPLACE — the latest insert wins. The iterator should still
-	// return each path only once.
+	// Insert initial version, then overwrite with newer version via Upsert.
 	insertFact(t, svc, "a/one.md", "blob_old", "commit_old")
-	// Replace with newer version:
-	_, err := svc.DB().Exec(
-		`INSERT OR REPLACE INTO facts (path, title, blob_hash, type, domain, entities, confidence, sources, refs, commit_hash)
-		 VALUES ('a/one.md', '', 'blob_new', 'observation', '', '', 1.0, 0, '', 'commit_new')`,
+	// Overwrite: insert new blob, then Upsert with new blob hash.
+	_, err := svc.TestDB().Exec(
+		`INSERT OR IGNORE INTO objects(hash, type, size, data) VALUES (?, 3, 10, ?)`,
+		"blob_new", []byte("---\ndomain: [test]\nconfidence: 0.9\nsources: 1\n---\n# Title\n\nnew body"),
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := svc.Index().Upsert(testBranch, "commit_new", store.FactRecord{
+		Path:       "a/one.md",
+		Title:      "title",
+		BlobHash:   "blob_new",
+		Type:       "observation",
+		Domain:     []string{"test"},
+		Entities:   []string{},
+		Confidence: 0.9,
+		Sources:    1,
+	}); err != nil {
+		t.Fatal(err)
+	}
 	insertFact(t, svc, "b/two.md", "blob2", "commit2")
 
-	iter, err := store.NewFactsIter(svc.DB())
+	iter, err := store.NewFactsIter(svc.Index(), testBranch)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -144,7 +171,11 @@ func TestFactsIter_DedupsByPath(t *testing.T) {
 func TestFactsIter_CloseIsIdempotent(t *testing.T) {
 	svc := openTestService(t)
 
-	iter, err := store.NewFactsIter(svc.DB())
+	if _, err := svc.Index().EnsureBranch(testBranch, "refs/heads/"+testBranch); err != nil {
+		t.Fatal(err)
+	}
+
+	iter, err := store.NewFactsIter(svc.Index(), testBranch)
 	if err != nil {
 		t.Fatal(err)
 	}

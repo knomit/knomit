@@ -153,9 +153,8 @@ func handleTestConnectivity(rm *repos.Manager, sm *SessionManager, agentBranch s
 		}
 
 		ri := repos.RepoFromContext(r.Context())
-		ri.RLock()
-		gs := ri.GS
-		ri.RUnlock()
+		var gs repos.GitStore
+		ri.WithRead(func(d repos.StoreDeps) { gs = d.GS })
 
 		sendEvent, ok := beginSSE(w)
 		if !ok {
@@ -324,9 +323,12 @@ func handlePreview(rm *repos.Manager, sm *SessionManager, agentBranch string) ht
 		}
 
 		ri := repos.RepoFromContext(r.Context())
-		ri.RLock()
-		svc, gs := ri.Svc, ri.GS
-		ri.RUnlock()
+		var gs repos.GitStore
+		var svc *store.Service
+		ri.WithRead(func(d repos.StoreDeps) {
+			gs = d.GS
+			svc = d.Svc
+		})
 
 		sendEvent, ok := beginSSE(w)
 		if !ok {
@@ -336,14 +338,9 @@ func handlePreview(rm *repos.Manager, sm *SessionManager, agentBranch string) ht
 		sendEvent(map[string]string{"phase": "comparing"})
 
 		// Build local path set via FactsIter.
-		var localDB *sql.DB
-		if svc != nil {
-			localDB = svc.DB()
-		}
-
 		localPaths := make(map[string]struct{})
-		if localDB != nil {
-			iter, err := store.NewFactsIter(localDB)
+		if svc != nil {
+			iter, err := store.NewFactsIter(svc.Index(), agentBranch)
 			if err != nil {
 				log.Warn().Err(err).Str("repo", repo).Msg("preview: open facts iter")
 			} else {
@@ -517,9 +514,12 @@ func handleApply(rm *repos.Manager, sm *SessionManager, agentBranch string) http
 		}
 
 		ri := repos.RepoFromContext(r.Context())
-		ri.RLock()
-		svc, gs := ri.Svc, ri.GS
-		ri.RUnlock()
+		var gs repos.GitStore
+		var svc *store.Service
+		ri.WithRead(func(d repos.StoreDeps) {
+			gs = d.GS
+			svc = d.Svc
+		})
 
 		sendEvent, ok := beginSSE(w)
 		if !ok {
@@ -536,16 +536,12 @@ func handleApply(rm *repos.Manager, sm *SessionManager, agentBranch string) http
 				return
 			}
 
-			var localDB *sql.DB
-			if svc != nil {
-				localDB = svc.DB()
-			}
-			if localDB == nil {
+			if svc == nil {
 				sendEvent(map[string]string{"phase": "error", "message": "local database not available"})
 				return
 			}
 
-			factsIter, err := store.NewFactsIter(localDB)
+			factsIter, err := store.NewFactsIter(svc.Index(), agentBranch)
 			if err != nil {
 				sendEvent(map[string]string{"phase": "error", "message": fmt.Sprintf("open facts iterator: %v", err)})
 				return
@@ -791,9 +787,13 @@ func handleCommit(rm *repos.Manager, sm *SessionManager, agentBranch string) htt
 		rm.SetupMCP(ri)
 
 		// Snapshot after swap — protect against concurrent SwapStore.
-		ri.RLock()
-		svc, gs, hub, startSync := ri.Svc, ri.GS, ri.Hub, ri.StartSync
-		ri.RUnlock()
+		var svc *store.Service
+		var gs repos.GitStore
+		ri.WithRead(func(d repos.StoreDeps) {
+			svc = d.Svc
+			gs = d.GS
+		})
+		hub := ri.TaskHub()
 
 		// Phase: configuring — save remote config and start sync.
 		sendEvent(map[string]string{"phase": "configuring"})
@@ -849,11 +849,9 @@ func handleCommit(rm *repos.Manager, sm *SessionManager, agentBranch string) htt
 		}
 
 		// Start sync/push loops.
-		if startSync != nil {
-			if err := startSync(remoteURL); err != nil {
-				log.Warn().Err(err).Str("repo", repo).Msg("commit: sync activation failed")
-				// Non-fatal: remote is configured, sync can be started later.
-			}
+		if err := ri.ActivateSync(remoteURL); err != nil {
+			log.Warn().Err(err).Str("repo", repo).Msg("commit: sync activation failed")
+			// Non-fatal: remote is configured, sync can be started later.
 		}
 
 		sendEvent(map[string]string{"phase": "done"})

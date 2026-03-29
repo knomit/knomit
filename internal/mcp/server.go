@@ -69,8 +69,8 @@ type GitStore interface {
 
 // SearchIndex is the interface the MCP tools require from internal/store.
 type SearchIndex interface {
-	Search(q SearchQuery) ([]SearchResult, error)
-	GetByPath(path string) (*FactWithBody, error)
+	Search(branch string, q SearchQuery) ([]SearchResult, error)
+	GetByPath(branch, path string) (*FactWithBody, error)
 }
 
 // ToolSessionIndex is the interface tools require for session persistence.

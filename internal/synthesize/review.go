@@ -73,7 +73,7 @@ func (r *Reviewer) StartSession() (*mcp.ReviewResult, error) {
 	}
 
 	// Build scoped clusters.
-	clusters, err := ScopedCluster(seeds, r.idx, 1.0, r.onProgress)
+	clusters, err := ScopedCluster(seeds, r.idx, 1.0, r.onProgress, r.agentBranch)
 	if err != nil {
 		return nil, fmt.Errorf("review: cluster: %w", err)
 	}
@@ -221,7 +221,7 @@ func (r *Reviewer) ContinueSession(sessionID, response string) (*mcp.ReviewResul
 			}
 
 			// Cluster the new facts to find groups worth distilling further.
-			raptorClusters, clErr := ScopedCluster(newFacts, r.idx, 1.0, r.onProgress, "hypothesis")
+			raptorClusters, clErr := ScopedCluster(newFacts, r.idx, 1.0, r.onProgress, r.agentBranch, "hypothesis")
 			if clErr != nil {
 				log.Warn().Err(clErr).Msg("review: RAPTOR clustering failed")
 			} else {
@@ -306,7 +306,7 @@ func (r *Reviewer) dirtyFacts(branch string) ([]factForLLM, error) {
 
 	// No watermark → first run, all facts are dirty. Use the index (fast).
 	if watermark == "" {
-		results, err := r.idx.Search(store.SearchQuery{Limit: 100_000})
+		results, err := r.idx.Search(branch, store.SearchQuery{Limit: 100_000})
 		if err != nil {
 			return nil, fmt.Errorf("search all: %w", err)
 		}

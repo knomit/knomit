@@ -90,7 +90,7 @@ func setupNFacts(t *testing.T, n int) (*Service, *git.Store) {
 func countVec(t *testing.T, svc *Service) int {
 	t.Helper()
 	var n int
-	if err := svc.DB().QueryRow("SELECT COUNT(*) FROM facts_vec").Scan(&n); err != nil {
+	if err := svc.db.QueryRow("SELECT COUNT(*) FROM facts_vec").Scan(&n); err != nil {
 		t.Fatal(err)
 	}
 	return n
@@ -129,7 +129,7 @@ func setupRebuildStore(t *testing.T, facts map[string]string) (*Service, *git.St
 func countFacts(t *testing.T, svc *Service) int {
 	t.Helper()
 	var n int
-	if err := svc.DB().QueryRow("SELECT COUNT(*) FROM facts").Scan(&n); err != nil {
+	if err := svc.db.QueryRow("SELECT COUNT(*) FROM facts").Scan(&n); err != nil {
 		t.Fatal(err)
 	}
 	return n
@@ -149,8 +149,11 @@ func TestRebuildFacts_BulkInsert(t *testing.T) {
 		t.Fatalf("expected 2 facts after sync, got %d", n)
 	}
 
-	// Clear the facts table.
-	if _, err := svc.DB().Exec("DELETE FROM facts"); err != nil {
+	// Clear the facts and branch_facts tables.
+	if _, err := svc.db.Exec("DELETE FROM branch_facts"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.db.Exec("DELETE FROM facts"); err != nil {
 		t.Fatal(err)
 	}
 	if n := countFacts(t, svc); n != 0 {
@@ -167,7 +170,7 @@ func TestRebuildFacts_BulkInsert(t *testing.T) {
 	}
 
 	// Verify individual facts.
-	rec, err := idx.GetByPath("kb/alpha.md")
+	rec, err := idx.GetByPath(testBranch, "kb/alpha.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -181,7 +184,7 @@ func TestRebuildFacts_BulkInsert(t *testing.T) {
 		t.Fatalf("expected confidence 0.9, got %v", rec.Confidence)
 	}
 
-	rec, err = idx.GetByPath("kb/beta.md")
+	rec, err = idx.GetByPath(testBranch, "kb/beta.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -209,7 +212,8 @@ func TestRebuildFacts_SkipsNonFacts(t *testing.T) {
 	idx := svc.Index()
 
 	// Clear and rebuild.
-	if _, err := svc.DB().Exec("DELETE FROM facts"); err != nil {
+	svc.db.Exec("DELETE FROM branch_facts")
+	if _, err := svc.db.Exec("DELETE FROM facts"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -222,7 +226,7 @@ func TestRebuildFacts_SkipsNonFacts(t *testing.T) {
 		t.Fatalf("expected 1 fact (only real-fact.md), got %d", n)
 	}
 
-	rec, err := idx.GetByPath("kb/real-fact.md")
+	rec, err := idx.GetByPath(testBranch, "kb/real-fact.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -231,7 +235,7 @@ func TestRebuildFacts_SkipsNonFacts(t *testing.T) {
 	}
 
 	// Non-facts should not appear.
-	rec, err = idx.GetByPath("ontology.yaml")
+	rec, err = idx.GetByPath(testBranch, "ontology.yaml")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -239,7 +243,7 @@ func TestRebuildFacts_SkipsNonFacts(t *testing.T) {
 		t.Fatal("ontology.yaml should not be indexed as a fact")
 	}
 
-	rec, err = idx.GetByPath("kb/no-title.md")
+	rec, err = idx.GetByPath(testBranch, "kb/no-title.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -287,7 +291,8 @@ func TestRebuildFacts_CommitLogJoin(t *testing.T) {
 	}
 
 	// Clear facts and rebuild.
-	if _, err := svc.DB().Exec("DELETE FROM facts"); err != nil {
+	svc.db.Exec("DELETE FROM branch_facts")
+	if _, err := svc.db.Exec("DELETE FROM facts"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -295,7 +300,7 @@ func TestRebuildFacts_CommitLogJoin(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	rec, err := svc.Index().GetByPath("kb/evolving.md")
+	rec, err := svc.Index().GetByPath(testBranch, "kb/evolving.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -322,7 +327,8 @@ func TestRebuild_PhaseTiming(t *testing.T) {
 	idx := svc.Index()
 
 	// Clear facts for rebuild.
-	if _, err := svc.DB().Exec("DELETE FROM facts"); err != nil {
+	svc.db.Exec("DELETE FROM branch_facts")
+	if _, err := svc.db.Exec("DELETE FROM facts"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -374,12 +380,12 @@ func BenchmarkRebuild(b *testing.B) {
 		b.Fatal(err)
 	}
 
-	db := svc.DB()
+	db := svc.db
 	idx := svc.Index()
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		db.Exec("DELETE FROM facts")
+		db.Exec("DELETE FROM branch_facts"); db.Exec("DELETE FROM facts")
 		db.Exec("DELETE FROM facts_vec")
 		if err := idx.Rebuild(gs, "agent/test", nil); err != nil {
 			b.Fatal(err)
@@ -424,14 +430,14 @@ func TestRebuildEmbeddings_ChunkedProcessing(t *testing.T) {
 
 	// Verify all facts indexed, none yet embedded.
 	var factCount int
-	if err := svc.DB().QueryRow("SELECT COUNT(*) FROM facts").Scan(&factCount); err != nil {
+	if err := svc.db.QueryRow("SELECT COUNT(*) FROM facts").Scan(&factCount); err != nil {
 		t.Fatal(err)
 	}
 	if factCount != nFacts {
 		t.Fatalf("expected %d facts, got %d", nFacts, factCount)
 	}
 	var vecCount int
-	svc.DB().QueryRow("SELECT COUNT(*) FROM facts_vec").Scan(&vecCount)
+	svc.db.QueryRow("SELECT COUNT(*) FROM facts_vec").Scan(&vecCount)
 	if vecCount != 0 {
 		t.Fatalf("expected 0 embeddings before rebuild, got %d", vecCount)
 	}
@@ -450,7 +456,7 @@ func TestRebuildEmbeddings_ChunkedProcessing(t *testing.T) {
 	}
 
 	// Verify all facts got embeddings.
-	svc.DB().QueryRow("SELECT COUNT(*) FROM facts_vec").Scan(&vecCount)
+	svc.db.QueryRow("SELECT COUNT(*) FROM facts_vec").Scan(&vecCount)
 	if vecCount != nFacts {
 		t.Errorf("facts_vec has %d rows, want %d", vecCount, nFacts)
 	}
@@ -653,8 +659,9 @@ func TestRebuild_WithEmbedder(t *testing.T) {
 	idx.SetEmbedder(emb)
 
 	// Clear facts and facts_vec to simulate a fresh rebuild.
-	svc.DB().Exec("DELETE FROM facts")
-	svc.DB().Exec("DELETE FROM facts_vec")
+	svc.db.Exec("DELETE FROM branch_facts")
+	svc.db.Exec("DELETE FROM facts")
+	svc.db.Exec("DELETE FROM facts_vec")
 
 	if err := idx.Rebuild(gs, "agent/test", nil); err != nil {
 		t.Fatalf("Rebuild: %v", err)
@@ -677,14 +684,16 @@ func TestRebuild_WithEmbedder_Idempotent(t *testing.T) {
 	idx.SetEmbedder(&countingBatchEmbedder{})
 
 	// First rebuild.
-	svc.DB().Exec("DELETE FROM facts")
-	svc.DB().Exec("DELETE FROM facts_vec")
+	svc.db.Exec("DELETE FROM branch_facts")
+	svc.db.Exec("DELETE FROM facts")
+	svc.db.Exec("DELETE FROM facts_vec")
 	if err := idx.Rebuild(gs, "agent/test", nil); err != nil {
 		t.Fatalf("first Rebuild: %v", err)
 	}
 
 	// Second rebuild: facts_vec should not grow.
-	svc.DB().Exec("DELETE FROM facts")
+	svc.db.Exec("DELETE FROM branch_facts")
+	svc.db.Exec("DELETE FROM facts")
 	if err := idx.Rebuild(gs, "agent/test", nil); err != nil {
 		t.Fatalf("second Rebuild: %v", err)
 	}
@@ -729,7 +738,7 @@ func BenchmarkRebuildEmbeddings(b *testing.B) {
 			idx := svc.Index()
 			emb := &countingBatchEmbedder{}
 			idx.SetEmbedder(emb)
-			db := svc.DB()
+			db := svc.db
 
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {

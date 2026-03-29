@@ -121,7 +121,7 @@ func dedupCluster(
 		if clusterVecs != nil && i < len(clusterVecs) && len(clusterVecs[i]) > 0 {
 			sq.QueryVec = clusterVecs[i]
 		}
-		results, err := idx.Search(sq)
+		results, err := idx.Search(agentBranch, sq)
 		if err != nil {
 			return nil, fmt.Errorf("dedupCluster: search for %q: %w", fact.File, err)
 		}
@@ -211,7 +211,7 @@ func dedupCluster(
 		}
 
 		// Update the search index for the winner.
-		if err := idx.Upsert(store.NewFactRecord(fullWinner, blobHash, commitHash)); err != nil {
+		if err := idx.Upsert(agentBranch, commitHash, store.NewFactRecord(fullWinner, blobHash)); err != nil {
 			return nil, fmt.Errorf("dedupCluster: upsert winner %q: %w", winnerFact.File, err)
 		}
 
@@ -219,7 +219,7 @@ func dedupCluster(
 		if _, err := gs.DeleteFile(agentBranch, loserFact.File, fmt.Sprintf("dedup: remove duplicate %s (merged into %s) [%s]", loserFact.File, winnerFact.File, recipeName), "retract"); err != nil {
 			return nil, fmt.Errorf("dedupCluster: delete loser %q: %w", loserFact.File, err)
 		}
-		if err := idx.Delete(loserFact.File); err != nil {
+		if err := idx.Delete(agentBranch, loserFact.File); err != nil {
 			return nil, fmt.Errorf("dedupCluster: index delete loser %q: %w", loserFact.File, err)
 		}
 
