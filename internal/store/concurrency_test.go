@@ -2,10 +2,13 @@ package store
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
 	"testing"
+
+	"knomit/internal/git"
 )
 
 func TestSync_ConcurrentCAS(t *testing.T) {
@@ -186,5 +189,128 @@ func TestUpsert_ConcurrentCOW(t *testing.T) {
 		rec.Path, rec.BlobHash).Scan(&count)
 	if count != 1 {
 		t.Errorf("expected 1 fact row, got %d", count)
+	}
+}
+
+func TestConcurrent_WriteAndSync(t *testing.T) {
+	// Use a real Service + GitStore to test the full write pipeline.
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "e2e.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer svc.Close()
+	ctx := context.Background()
+
+	branch := "agent/e2e-concurrent"
+	gs, err := git.InitWithStorer(svc.GitStorer(), nil, branch)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	idx := svc.Index()
+
+	// 5 concurrent goroutines each write a distinct fact then sync.
+	var wg sync.WaitGroup
+	errs := make([]error, 5)
+	for i := 0; i < 5; i++ {
+		wg.Add(1)
+		go func(n int) {
+			defer wg.Done()
+			path := fmt.Sprintf("kb/fact-%d.md", n)
+			content := fmt.Sprintf("---\ntype: observation\ndomain: [test]\nconfidence: 0.9\nsources: 1\nentities: [item%d]\nrefs: []\n---\n# Fact %d\n\nBody %d.\n", n, n, n)
+			if _, _, err := gs.WriteFile(ctx, branch, path, content, fmt.Sprintf("add fact %d", n), "learn"); err != nil {
+				errs[n] = fmt.Errorf("WriteFile: %w", err)
+				return
+			}
+			if err := idx.Sync(ctx, gs, branch); err != nil {
+				errs[n] = fmt.Errorf("Sync: %w", err)
+			}
+		}(i)
+	}
+	wg.Wait()
+
+	for i, err := range errs {
+		if err != nil {
+			t.Errorf("goroutine %d: %v", i, err)
+		}
+	}
+
+	// All 5 facts should be indexed (Sync may need a final call to catch up).
+	if err := idx.Sync(ctx, gs, branch); err != nil {
+		t.Fatal(err)
+	}
+
+	branchID, err := idx.EnsureBranch(ctx, branch, "refs/heads/"+branch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var count int
+	idx.TestDB().QueryRow(`SELECT COUNT(*) FROM branch_facts WHERE branch_id = ?`, branchID).Scan(&count)
+	if count != 5 {
+		t.Errorf("expected 5 indexed facts, got %d", count)
+	}
+}
+
+func TestConcurrent_MultiBranchUpsert(t *testing.T) {
+	tmp := filepath.Join(t.TempDir(), "multibranch.db")
+	idx, err := New(tmp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer idx.Close()
+	ctx := context.Background()
+
+	branches := []string{"agent/branch-1", "agent/branch-2", "agent/branch-3"}
+
+	// 3 branches, 5 goroutines per branch upserting distinct facts.
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	var allErrs []error
+
+	for _, branch := range branches {
+		for i := 0; i < 5; i++ {
+			wg.Add(1)
+			go func(b string, n int) {
+				defer wg.Done()
+				rec := FactRecord{
+					Path:     fmt.Sprintf("kb/%s-fact-%d.md", b, n),
+					BlobHash: fmt.Sprintf("bh_%s_%d", b, n),
+					Title:    fmt.Sprintf("Fact %d on %s", n, b),
+					Domain:   []string{"test"},
+					Entities: []string{fmt.Sprintf("Entity%d", n)},
+				}
+				if err := idx.Upsert(ctx, b, "commit1", rec); err != nil {
+					mu.Lock()
+					allErrs = append(allErrs, fmt.Errorf("%s goroutine %d: %w", b, n, err))
+					mu.Unlock()
+				}
+			}(branch, i)
+		}
+	}
+	wg.Wait()
+
+	for _, err := range allErrs {
+		t.Error(err)
+	}
+
+	// Each branch should have exactly 5 facts, no cross-contamination.
+	for _, branch := range branches {
+		branchID, err := idx.EnsureBranch(ctx, branch, "refs/heads/"+branch)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var count int
+		idx.TestDB().QueryRow(`SELECT COUNT(*) FROM branch_facts WHERE branch_id = ?`, branchID).Scan(&count)
+		if count != 5 {
+			t.Errorf("branch %s: expected 5 facts, got %d", branch, count)
+		}
+	}
+
+	// Total facts should be 15 (5 per branch, all distinct blob_hashes).
+	var total int
+	idx.TestDB().QueryRow(`SELECT COUNT(*) FROM facts`).Scan(&total)
+	if total != 15 {
+		t.Errorf("expected 15 total facts, got %d", total)
 	}
 }
