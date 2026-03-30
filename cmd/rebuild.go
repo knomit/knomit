@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"path/filepath"
 
@@ -42,7 +43,7 @@ func rebuildCmd() *cobra.Command {
 				return fmt.Errorf("open git: %w", err)
 			}
 			idx := svc.Index()
-			if err := idx.Sync(gs, agentBranch); err != nil {
+			if err := idx.Sync(context.Background(), gs, agentBranch); err != nil {
 				return fmt.Errorf("rebuild: %w", err)
 			}
 			log.Info().Str("repo", repoName).Msg("Index rebuilt successfully")

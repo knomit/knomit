@@ -85,23 +85,23 @@ type BatchEmbedder interface {
 // GitReader is the interface that Index.Sync requires from the git store.
 type GitReader interface {
 	// DiffFiles returns paths added, modified, and deleted between fromCommit and HEAD on branch.
-	DiffFiles(branch, fromCommit string) (added, modified, deleted []string, err error)
+	DiffFiles(ctx context.Context, branch, fromCommit string) (added, modified, deleted []string, err error)
 	// ReadFile reads the content of path from the HEAD commit of branch.
-	ReadFile(branch, path string) (string, error)
+	ReadFile(ctx context.Context, branch, path string) (string, error)
 	// ReadFileWithHash returns both the file content and the blob hash for the given path on branch.
-	ReadFileWithHash(branch, path string) (content string, blobHash string, err error)
+	ReadFileWithHash(ctx context.Context, branch, path string) (content string, blobHash string, err error)
 	// HeadCommit returns the hash of the current HEAD commit of branch as a hex string.
-	HeadCommit(branch string) (string, error)
+	HeadCommit(ctx context.Context, branch string) (string, error)
 	// ListAll returns paths of all .md files from HEAD of branch.
-	ListAll(branch string) ([]string, error)
+	ListAll(ctx context.Context, branch string) ([]string, error)
 	// ListAllWithHash returns all .md file paths and their blob hashes from HEAD of branch.
 	// Single tree walk, no per-file I/O.
-	ListAllWithHash(branch string) (paths []string, blobHashes []string, err error)
+	ListAllWithHash(ctx context.Context, branch string) (paths []string, blobHashes []string, err error)
 	// LastCommitForPath returns the hash of the most recent non-merge commit that touched path on branch.
-	LastCommitForPath(branch, path string) (string, error)
+	LastCommitForPath(ctx context.Context, branch, path string) (string, error)
 	// ReadFileAtCommit reads the content of path at the given commit on branch.
 	// branch is used for repository context; commitHash uniquely identifies the version.
-	ReadFileAtCommit(branch, path, commitHash string) (string, error)
+	ReadFileAtCommit(ctx context.Context, branch, path, commitHash string) (string, error)
 }
 
 // ────────────────────────────────────────────────────────────────────────────

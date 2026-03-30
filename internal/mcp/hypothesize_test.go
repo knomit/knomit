@@ -19,11 +19,11 @@ func TestHypothesizeFirstCallReturnsSynthesisFacts(t *testing.T) {
 	pIdx := NewMockPipelineIndex(ctrl)
 
 	// branch from handler arg
-	gs.EXPECT().HeadCommit(testAgentBranch).Return("abc123", nil).AnyTimes()
+	gs.EXPECT().HeadCommit(gomock.Any(), testAgentBranch).Return("abc123", nil).AnyTimes()
 
 	// No watermark → first run.
-	pIdx.EXPECT().GCPipelineSessions("hypothesize", "machine/test", 5).Return(nil)
-	pIdx.EXPECT().GetPipelineWatermark("hypothesize", "machine/test").Return("", nil)
+	pIdx.EXPECT().GCPipelineSessions(gomock.Any(), "hypothesize", "machine/test", 5).Return(nil)
+	pIdx.EXPECT().GetPipelineWatermark(gomock.Any(), "hypothesize", "machine/test").Return("", nil)
 
 	// Return one synthesis fact and one observation (should be filtered by IncludeTypes).
 	synthResult := SearchResult{
@@ -41,17 +41,17 @@ func TestHypothesizeFirstCallReturnsSynthesisFacts(t *testing.T) {
 		},
 		Score: 100,
 	}
-	idx.EXPECT().Search(gomock.Any(), SearchQuery{
+	idx.EXPECT().Search(gomock.Any(), gomock.Any(), SearchQuery{
 		IncludeTypes: []string{"synthesis"},
 		Limit:        100000,
 	}).Return([]SearchResult{synthResult}, nil)
 
 	// Create session.
 	sess := &store.PipelineSession{ID: "sess-1", Status: "active"}
-	pIdx.EXPECT().CreatePipelineSession("hypothesize", "machine/test").Return(sess, nil)
+	pIdx.EXPECT().CreatePipelineSession(gomock.Any(), "hypothesize", "machine/test").Return(sess, nil)
 
 	// Insert work item.
-	pIdx.EXPECT().InsertPipelineWorkItem(gomock.Any()).Return(nil)
+	pIdx.EXPECT().InsertPipelineWorkItem(gomock.Any(), gomock.Any()).Return(nil)
 
 	// NextPipelineWorkItem for hypothesizeNextItem.
 	factJSON, _ := json.Marshal(map[string]interface{}{
@@ -72,8 +72,8 @@ func TestHypothesizeFirstCallReturnsSynthesisFacts(t *testing.T) {
 		FactsJSON:  string(factJSON),
 		Priority:   1,
 	}
-	pIdx.EXPECT().NextPipelineWorkItem("sess-1").Return(workItem, nil)
-	pIdx.EXPECT().PipelineWorkItemStats("sess-1").Return(0, 1, nil)
+	pIdx.EXPECT().NextPipelineWorkItem(gomock.Any(), "sess-1").Return(workItem, nil)
+	pIdx.EXPECT().PipelineWorkItemStats(gomock.Any(), "sess-1").Return(0, 1, nil)
 
 	handler := HypothesizeHandler(gs, idx, pIdx, "kb", testAgentBranch)
 	req := mcpgo.CallToolRequest{}
@@ -117,19 +117,19 @@ func TestHypothesizeEmptySession(t *testing.T) {
 	pIdx := NewMockPipelineIndex(ctrl)
 
 	// branch from handler arg
-	gs.EXPECT().HeadCommit(testAgentBranch).Return("abc123", nil).AnyTimes()
+	gs.EXPECT().HeadCommit(gomock.Any(), testAgentBranch).Return("abc123", nil).AnyTimes()
 
-	pIdx.EXPECT().GCPipelineSessions("hypothesize", "machine/test", 5).Return(nil)
-	pIdx.EXPECT().GetPipelineWatermark("hypothesize", "machine/test").Return("", nil)
+	pIdx.EXPECT().GCPipelineSessions(gomock.Any(), "hypothesize", "machine/test", 5).Return(nil)
+	pIdx.EXPECT().GetPipelineWatermark(gomock.Any(), "hypothesize", "machine/test").Return("", nil)
 
 	// No synthesis facts.
-	idx.EXPECT().Search(gomock.Any(), SearchQuery{
+	idx.EXPECT().Search(gomock.Any(), gomock.Any(), SearchQuery{
 		IncludeTypes: []string{"synthesis"},
 		Limit:        100000,
 	}).Return(nil, nil)
 
 	// Should advance watermark.
-	pIdx.EXPECT().SetPipelineWatermark("hypothesize", "machine/test", "abc123").Return(nil)
+	pIdx.EXPECT().SetPipelineWatermark(gomock.Any(), "hypothesize", "machine/test", "abc123").Return(nil)
 
 	handler := HypothesizeHandler(gs, idx, pIdx, "kb", testAgentBranch)
 	req := mcpgo.CallToolRequest{}
@@ -157,11 +157,11 @@ func TestHypothesizeContinueSession(t *testing.T) {
 	pIdx := NewMockPipelineIndex(ctrl)
 
 	// branch from handler arg
-	gs.EXPECT().HeadCommit(testAgentBranch).Return("def456", nil).AnyTimes()
+	gs.EXPECT().HeadCommit(gomock.Any(), testAgentBranch).Return("def456", nil).AnyTimes()
 
 	// Step 1: Start a session with 2 facts.
-	pIdx.EXPECT().GCPipelineSessions("hypothesize", "machine/test", 5).Return(nil)
-	pIdx.EXPECT().GetPipelineWatermark("hypothesize", "machine/test").Return("", nil)
+	pIdx.EXPECT().GCPipelineSessions(gomock.Any(), "hypothesize", "machine/test", 5).Return(nil)
+	pIdx.EXPECT().GetPipelineWatermark(gomock.Any(), "hypothesize", "machine/test").Return("", nil)
 
 	results := []SearchResult{
 		{
@@ -187,11 +187,11 @@ func TestHypothesizeContinueSession(t *testing.T) {
 			Score: 100,
 		},
 	}
-	idx.EXPECT().Search(gomock.Any(), gomock.Any()).Return(results, nil)
+	idx.EXPECT().Search(gomock.Any(), gomock.Any(), gomock.Any()).Return(results, nil)
 
 	sess := &store.PipelineSession{ID: "sess-2", Status: "active"}
-	pIdx.EXPECT().CreatePipelineSession("hypothesize", "machine/test").Return(sess, nil)
-	pIdx.EXPECT().InsertPipelineWorkItem(gomock.Any()).Return(nil).Times(2)
+	pIdx.EXPECT().CreatePipelineSession(gomock.Any(), "hypothesize", "machine/test").Return(sess, nil)
+	pIdx.EXPECT().InsertPipelineWorkItem(gomock.Any(), gomock.Any()).Return(nil).Times(2)
 
 	// First item returned by hypothesizeNextItem (called from hypothesizeStart).
 	factAJSON, _ := json.Marshal(map[string]interface{}{
@@ -201,8 +201,8 @@ func TestHypothesizeContinueSession(t *testing.T) {
 		ID: 1, SessionID: "sess-2", StepType: "hypothesize",
 		ClusterKey: "synth-0", FactsJSON: string(factAJSON), Priority: 2,
 	}
-	pIdx.EXPECT().NextPipelineWorkItem("sess-2").Return(workItemA, nil)
-	pIdx.EXPECT().PipelineWorkItemStats("sess-2").Return(0, 2, nil)
+	pIdx.EXPECT().NextPipelineWorkItem(gomock.Any(), "sess-2").Return(workItemA, nil)
+	pIdx.EXPECT().PipelineWorkItemStats(gomock.Any(), "sess-2").Return(0, 2, nil)
 
 	handler := HypothesizeHandler(gs, idx, pIdx, "kb", testAgentBranch)
 	startReq := mcpgo.CallToolRequest{}
@@ -219,11 +219,11 @@ func TestHypothesizeContinueSession(t *testing.T) {
 	}
 
 	// Step 2: Continue the session — should acknowledge item A and get item B.
-	pIdx.EXPECT().GetPipelineSession("sess-2").Return(sess, nil)
+	pIdx.EXPECT().GetPipelineSession(gomock.Any(), "sess-2").Return(sess, nil)
 
 	// NextPipelineWorkItem returns item A (current unanswered) to be acknowledged.
-	pIdx.EXPECT().NextPipelineWorkItem("sess-2").Return(workItemA, nil)
-	pIdx.EXPECT().SetPipelineWorkItemResponse(int64(1), "acknowledged").Return(nil)
+	pIdx.EXPECT().NextPipelineWorkItem(gomock.Any(), "sess-2").Return(workItemA, nil)
+	pIdx.EXPECT().SetPipelineWorkItemResponse(gomock.Any(), int64(1), "acknowledged").Return(nil)
 
 	// NextPipelineWorkItem returns item B (the next one).
 	factBJSON, _ := json.Marshal(map[string]interface{}{
@@ -233,8 +233,8 @@ func TestHypothesizeContinueSession(t *testing.T) {
 		ID: 2, SessionID: "sess-2", StepType: "hypothesize",
 		ClusterKey: "synth-1", FactsJSON: string(factBJSON), Priority: 1,
 	}
-	pIdx.EXPECT().NextPipelineWorkItem("sess-2").Return(workItemB, nil)
-	pIdx.EXPECT().PipelineWorkItemStats("sess-2").Return(1, 1, nil)
+	pIdx.EXPECT().NextPipelineWorkItem(gomock.Any(), "sess-2").Return(workItemB, nil)
+	pIdx.EXPECT().PipelineWorkItemStats(gomock.Any(), "sess-2").Return(1, 1, nil)
 
 	contReq := mcpgo.CallToolRequest{}
 	contReq.Params.Arguments = map[string]interface{}{
@@ -265,7 +265,7 @@ func TestHypothesizeContinueSessionNotFound(t *testing.T) {
 	idx := NewMockSearchIndex(ctrl)
 	pIdx := NewMockPipelineIndex(ctrl)
 
-	pIdx.EXPECT().GetPipelineSession("nonexistent").Return(nil, nil)
+	pIdx.EXPECT().GetPipelineSession(gomock.Any(), "nonexistent").Return(nil, nil)
 
 	handler := HypothesizeHandler(gs, idx, pIdx, "kb", testAgentBranch)
 	req := mcpgo.CallToolRequest{}
@@ -289,13 +289,13 @@ func TestHypothesizeIncrementalWithWatermark(t *testing.T) {
 	pIdx := NewMockPipelineIndex(ctrl)
 
 	// branch from handler arg
-	gs.EXPECT().HeadCommit(testAgentBranch).Return("def456", nil).AnyTimes()
+	gs.EXPECT().HeadCommit(gomock.Any(), testAgentBranch).Return("def456", nil).AnyTimes()
 
-	pIdx.EXPECT().GCPipelineSessions("hypothesize", "machine/test", 5).Return(nil)
-	pIdx.EXPECT().GetPipelineWatermark("hypothesize", "machine/test").Return("abc123", nil)
+	pIdx.EXPECT().GCPipelineSessions(gomock.Any(), "hypothesize", "machine/test", 5).Return(nil)
+	pIdx.EXPECT().GetPipelineWatermark(gomock.Any(), "hypothesize", "machine/test").Return("abc123", nil)
 
 	// DiffFiles returns one added synthesis .md and one non-.md file.
-	gs.EXPECT().DiffFiles(testAgentBranch, "abc123").Return(
+	gs.EXPECT().DiffFiles(gomock.Any(), testAgentBranch, "abc123").Return(
 		[]string{"kb/tech/new-synth.md", "kb/tech/data.json"},
 		[]string{},
 		[]string{},
@@ -314,12 +314,12 @@ refs: []
 
 Synthesized insight about channels.
 `
-	gs.EXPECT().ReadFile(testAgentBranch, "kb/tech/new-synth.md").Return(synthContent, nil)
+	gs.EXPECT().ReadFile(gomock.Any(), testAgentBranch, "kb/tech/new-synth.md").Return(synthContent, nil)
 	// .json file should be skipped (not .md).
 
 	sess := &store.PipelineSession{ID: "sess-3", Status: "active"}
-	pIdx.EXPECT().CreatePipelineSession("hypothesize", "machine/test").Return(sess, nil)
-	pIdx.EXPECT().InsertPipelineWorkItem(gomock.Any()).Return(nil)
+	pIdx.EXPECT().CreatePipelineSession(gomock.Any(), "hypothesize", "machine/test").Return(sess, nil)
+	pIdx.EXPECT().InsertPipelineWorkItem(gomock.Any(), gomock.Any()).Return(nil)
 
 	factJSON, _ := json.Marshal(map[string]interface{}{
 		"path": "kb/tech/new-synth.md", "title": "New synthesis",
@@ -328,8 +328,8 @@ Synthesized insight about channels.
 		ID: 1, SessionID: "sess-3", StepType: "hypothesize",
 		FactsJSON: string(factJSON), Priority: 1,
 	}
-	pIdx.EXPECT().NextPipelineWorkItem("sess-3").Return(workItem, nil)
-	pIdx.EXPECT().PipelineWorkItemStats("sess-3").Return(0, 1, nil)
+	pIdx.EXPECT().NextPipelineWorkItem(gomock.Any(), "sess-3").Return(workItem, nil)
+	pIdx.EXPECT().PipelineWorkItemStats(gomock.Any(), "sess-3").Return(0, 1, nil)
 
 	handler := HypothesizeHandler(gs, idx, pIdx, "kb", testAgentBranch)
 	req := mcpgo.CallToolRequest{}
@@ -358,7 +358,7 @@ func TestHypothesizeContinueExpiredSession(t *testing.T) {
 	pIdx := NewMockPipelineIndex(ctrl)
 
 	sess := &store.PipelineSession{ID: "sess-expired", Status: "completed"}
-	pIdx.EXPECT().GetPipelineSession("sess-expired").Return(sess, nil)
+	pIdx.EXPECT().GetPipelineSession(gomock.Any(), "sess-expired").Return(sess, nil)
 
 	handler := HypothesizeHandler(gs, idx, pIdx, "kb", testAgentBranch)
 	req := mcpgo.CallToolRequest{}
@@ -382,18 +382,18 @@ func TestHypothesizeContinueNilCurrentItem(t *testing.T) {
 	pIdx := NewMockPipelineIndex(ctrl)
 
 	// branch from handler arg
-	gs.EXPECT().HeadCommit(testAgentBranch).Return("abc123", nil).AnyTimes()
+	gs.EXPECT().HeadCommit(gomock.Any(), testAgentBranch).Return("abc123", nil).AnyTimes()
 
 	sess := &store.PipelineSession{ID: "sess-nil", Status: "active"}
-	pIdx.EXPECT().GetPipelineSession("sess-nil").Return(sess, nil)
+	pIdx.EXPECT().GetPipelineSession(gomock.Any(), "sess-nil").Return(sess, nil)
 
 	// First NextPipelineWorkItem call in hypothesizeContinue returns nil (nothing to mark).
-	pIdx.EXPECT().NextPipelineWorkItem("sess-nil").Return(nil, nil)
+	pIdx.EXPECT().NextPipelineWorkItem(gomock.Any(), "sess-nil").Return(nil, nil)
 
 	// Second NextPipelineWorkItem call in hypothesizeNextItem also returns nil → complete.
-	pIdx.EXPECT().NextPipelineWorkItem("sess-nil").Return(nil, nil)
-	pIdx.EXPECT().CompletePipelineSession("sess-nil").Return(nil)
-	pIdx.EXPECT().SetPipelineWatermark("hypothesize", "machine/test", "abc123").Return(nil)
+	pIdx.EXPECT().NextPipelineWorkItem(gomock.Any(), "sess-nil").Return(nil, nil)
+	pIdx.EXPECT().CompletePipelineSession(gomock.Any(), "sess-nil").Return(nil)
+	pIdx.EXPECT().SetPipelineWatermark(gomock.Any(), "hypothesize", "machine/test", "abc123").Return(nil)
 
 	handler := HypothesizeHandler(gs, idx, pIdx, "kb", testAgentBranch)
 	req := mcpgo.CallToolRequest{}
@@ -425,11 +425,11 @@ func TestHypothesizeStartSearchError(t *testing.T) {
 
 	// branch from handler arg
 
-	pIdx.EXPECT().GCPipelineSessions("hypothesize", "machine/test", 5).Return(nil)
-	pIdx.EXPECT().GetPipelineWatermark("hypothesize", "machine/test").Return("", nil)
+	pIdx.EXPECT().GCPipelineSessions(gomock.Any(), "hypothesize", "machine/test", 5).Return(nil)
+	pIdx.EXPECT().GetPipelineWatermark(gomock.Any(), "hypothesize", "machine/test").Return("", nil)
 
 	// Search returns an error.
-	idx.EXPECT().Search(gomock.Any(), SearchQuery{
+	idx.EXPECT().Search(gomock.Any(), gomock.Any(), SearchQuery{
 		IncludeTypes: []string{"synthesis"},
 		Limit:        100000,
 	}).Return(nil, fmt.Errorf("database locked"))
@@ -454,20 +454,20 @@ func TestHypothesizeSessionCompletes(t *testing.T) {
 	pIdx := NewMockPipelineIndex(ctrl)
 
 	// branch from handler arg
-	gs.EXPECT().HeadCommit(testAgentBranch).Return("final789", nil).AnyTimes()
+	gs.EXPECT().HeadCommit(gomock.Any(), testAgentBranch).Return("final789", nil).AnyTimes()
 
 	sess := &store.PipelineSession{ID: "sess-done", Status: "active"}
-	pIdx.EXPECT().GetPipelineSession("sess-done").Return(sess, nil)
+	pIdx.EXPECT().GetPipelineSession(gomock.Any(), "sess-done").Return(sess, nil)
 
 	// Current item to acknowledge.
 	workItem := &store.PipelineWorkItem{ID: 5, SessionID: "sess-done"}
-	pIdx.EXPECT().NextPipelineWorkItem("sess-done").Return(workItem, nil)
-	pIdx.EXPECT().SetPipelineWorkItemResponse(int64(5), "done processing").Return(nil)
+	pIdx.EXPECT().NextPipelineWorkItem(gomock.Any(), "sess-done").Return(workItem, nil)
+	pIdx.EXPECT().SetPipelineWorkItemResponse(gomock.Any(), int64(5), "done processing").Return(nil)
 
 	// No more items.
-	pIdx.EXPECT().NextPipelineWorkItem("sess-done").Return(nil, nil)
-	pIdx.EXPECT().CompletePipelineSession("sess-done").Return(nil)
-	pIdx.EXPECT().SetPipelineWatermark("hypothesize", "machine/test", "final789").Return(nil)
+	pIdx.EXPECT().NextPipelineWorkItem(gomock.Any(), "sess-done").Return(nil, nil)
+	pIdx.EXPECT().CompletePipelineSession(gomock.Any(), "sess-done").Return(nil)
+	pIdx.EXPECT().SetPipelineWatermark(gomock.Any(), "hypothesize", "machine/test", "final789").Return(nil)
 
 	handler := HypothesizeHandler(gs, idx, pIdx, "kb", testAgentBranch)
 	req := mcpgo.CallToolRequest{}

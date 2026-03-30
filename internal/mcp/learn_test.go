@@ -19,8 +19,8 @@ func TestLearnWritesFacts(t *testing.T) {
 	var capturedFiles map[string]string
 
 
-	idx.EXPECT().Search(gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
-	gs.EXPECT().BatchWrite(testAgentBranch, gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(branch string, files map[string]string, msg, operation string) (string, map[string]string, error) {
+	idx.EXPECT().Search(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
+	gs.EXPECT().BatchWrite(gomock.Any(), testAgentBranch, gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, branch string, files map[string]string, msg, operation string) (string, map[string]string, error) {
 		capturedFiles = files
 		blobHashes := make(map[string]string, len(files))
 		for path := range files {
@@ -187,8 +187,8 @@ func TestLearnMultipleFacts(t *testing.T) {
 	var capturedFiles map[string]string
 
 
-	idx.EXPECT().Search(gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
-	gs.EXPECT().BatchWrite(testAgentBranch, gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(branch string, files map[string]string, msg, operation string) (string, map[string]string, error) {
+	idx.EXPECT().Search(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
+	gs.EXPECT().BatchWrite(gomock.Any(), testAgentBranch, gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, branch string, files map[string]string, msg, operation string) (string, map[string]string, error) {
 		capturedFiles = files
 		blobHashes := make(map[string]string, len(files))
 		for path := range files {
@@ -250,7 +250,7 @@ func TestLearnHandler_DedupMergesNearDuplicate(t *testing.T) {
 
 
 	// Search returns an existing near-duplicate (score=95)
-	idx.EXPECT().Search(gomock.Any(), gomock.Any()).Return([]SearchResult{
+	idx.EXPECT().Search(gomock.Any(), gomock.Any(), gomock.Any()).Return([]SearchResult{
 		{FactWithBody: FactWithBody{
 			FactRecord: FactRecord{
 				Path:       "kb/technology/cameras/abc123.md",
@@ -266,12 +266,12 @@ func TestLearnHandler_DedupMergesNearDuplicate(t *testing.T) {
 	}, nil)
 
 	// Read existing fact to get full content
-	gs.EXPECT().ReadFile(testAgentBranch, "kb/technology/cameras/abc123.md").Return(
+	gs.EXPECT().ReadFile(gomock.Any(), testAgentBranch, "kb/technology/cameras/abc123.md").Return(
 		"---\ndomain: [tech]\nconfidence: 0.8\nsources: 1\nentities: [camera]\nrefs: []\n---\n# Camera Review\n\nGreat camera with clear video\n", nil)
 
 	// BatchWrite should write to existing path (merged)
 	var capturedFiles map[string]string
-	gs.EXPECT().BatchWrite(testAgentBranch, gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(branch string, files map[string]string, msg, operation string) (string, map[string]string, error) {
+	gs.EXPECT().BatchWrite(gomock.Any(), testAgentBranch, gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, branch string, files map[string]string, msg, operation string) (string, map[string]string, error) {
 		capturedFiles = files
 		blobHashes := make(map[string]string, len(files))
 		for path := range files {
@@ -395,8 +395,8 @@ func TestLearnBatchAllowsMultipleHypotheses(t *testing.T) {
 	gs := NewMockGitStore(ctrl)
 	idx := NewMockSearchIndex(ctrl)
 
-	idx.EXPECT().Search(gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
-	gs.EXPECT().BatchWrite(testAgentBranch, gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(branch string, files map[string]string, msg, operation string) (string, map[string]string, error) {
+	idx.EXPECT().Search(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
+	gs.EXPECT().BatchWrite(gomock.Any(), testAgentBranch, gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, branch string, files map[string]string, msg, operation string) (string, map[string]string, error) {
 		blobHashes := make(map[string]string, len(files))
 		for path := range files {
 			blobHashes[path] = "blob_" + path
@@ -442,7 +442,7 @@ func TestLearnDedupObservationSubsumesHypothesis(t *testing.T) {
 	idx := NewMockSearchIndex(ctrl)
 
 	// Search returns an existing hypothesis as near-duplicate.
-	idx.EXPECT().Search(gomock.Any(), gomock.Any()).Return([]SearchResult{
+	idx.EXPECT().Search(gomock.Any(), gomock.Any(), gomock.Any()).Return([]SearchResult{
 		{FactWithBody: FactWithBody{
 			FactRecord: FactRecord{
 				Path:       "kb/technology/go/testing/existing.md",
@@ -459,15 +459,15 @@ func TestLearnDedupObservationSubsumesHypothesis(t *testing.T) {
 	}, nil)
 
 	// Read existing hypothesis fact.
-	gs.EXPECT().ReadFile(testAgentBranch, "kb/technology/go/testing/existing.md").Return(
+	gs.EXPECT().ReadFile(gomock.Any(), testAgentBranch, "kb/technology/go/testing/existing.md").Return(
 		"---\ntype: hypothesis\ndomain: [testing]\nconfidence: 0.5\nsources: 1\nentities: []\nrefs: []\n---\n# Testing Hypothesis\n\nI predict tests will pass\n", nil)
 
 	// Expect the hypothesis to be deleted.
-	gs.EXPECT().DeleteFile(testAgentBranch, "kb/technology/go/testing/existing.md", gomock.Any(), "retract").Return("del123", nil)
+	gs.EXPECT().DeleteFile(gomock.Any(), testAgentBranch, "kb/technology/go/testing/existing.md", gomock.Any(), "retract").Return("del123", nil)
 
 	// BatchWrite should write the observation (not merged into existing path).
 	var capturedFiles map[string]string
-	gs.EXPECT().BatchWrite(testAgentBranch, gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(branch string, files map[string]string, msg, operation string) (string, map[string]string, error) {
+	gs.EXPECT().BatchWrite(gomock.Any(), testAgentBranch, gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, branch string, files map[string]string, msg, operation string) (string, map[string]string, error) {
 		capturedFiles = files
 		blobHashes := make(map[string]string, len(files))
 		for path := range files {

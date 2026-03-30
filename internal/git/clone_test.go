@@ -1,6 +1,7 @@
 package git_test
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -14,7 +15,7 @@ import (
 func TestDefaultBranch_ResolvesFromHEAD(t *testing.T) {
 	store := newTestStore(t)
 
-	branch, err := store.DefaultBranch()
+	branch, err := store.DefaultBranch(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -33,11 +34,11 @@ func TestCloneInto_ClonesRemoteToTempStorer(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, _, err := origin.WriteFile(testBranch, "kb/hello.md", "# Hello\n", "add hello", "learn"); err != nil {
+	if _, _, err := origin.WriteFile(context.Background(), testBranch, "kb/hello.md", "# Hello\n", "add hello", "learn"); err != nil {
 		t.Fatal(err)
 	}
 	// Advance main to HEAD.
-	head, err := origin.HeadCommit(testBranch)
+	head, err := origin.HeadCommit(context.Background(), testBranch)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,11 +63,11 @@ func TestCloneInto_ClonesRemoteToTempStorer(t *testing.T) {
 	// Should be able to read the file.
 	// CloneInto sets HEAD to the default branch of the remote, which may differ
 	// from testBranch. We use DefaultBranch to discover the branch.
-	clonedBranch, err := cloned.DefaultBranch()
+	clonedBranch, err := cloned.DefaultBranch(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	content, err := cloned.ReadFile(clonedBranch, "kb/hello.md")
+	content, err := cloned.ReadFile(context.Background(), clonedBranch, "kb/hello.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,7 +96,7 @@ func TestHasSharedHistory_DisjointRepos(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Write unique content so HEAD moves past the potentially-shared root.
-	if _, _, err := disjoint1.WriteFile("agent/alpha", "kb/only-a.md", "# A unique\n", "add a", "learn"); err != nil {
+	if _, _, err := disjoint1.WriteFile(context.Background(), "agent/alpha", "kb/only-a.md", "# A unique\n", "add a", "learn"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -107,11 +108,11 @@ func TestHasSharedHistory_DisjointRepos(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := disjoint2.WriteFile("agent/beta", "kb/only-b.md", "# B unique\n", "add b", "learn"); err != nil {
+	if _, _, err := disjoint2.WriteFile(context.Background(), "agent/beta", "kb/only-b.md", "# B unique\n", "add b", "learn"); err != nil {
 		t.Fatal(err)
 	}
 
-	shared, err := disjoint1.HasSharedHistory("agent/alpha", disjoint2, "agent/beta")
+	shared, err := disjoint1.HasSharedHistory(context.Background(), "agent/alpha", disjoint2, "agent/beta")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,7 +130,7 @@ func TestHasSharedHistory_SharedOrigin(t *testing.T) {
 	}
 
 	// Advance main.
-	head, err := origin.HeadCommit(testBranch)
+	head, err := origin.HeadCommit(context.Background(), testBranch)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,12 +152,12 @@ func TestHasSharedHistory_SharedOrigin(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	clonedBranch, err := cloned.DefaultBranch()
+	clonedBranch, err := cloned.DefaultBranch(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	shared, err := origin.HasSharedHistory(testBranch, cloned, clonedBranch)
+	shared, err := origin.HasSharedHistory(context.Background(), testBranch, cloned, clonedBranch)
 	if err != nil {
 		t.Fatal(err)
 	}

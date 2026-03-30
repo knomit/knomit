@@ -61,7 +61,7 @@ func QueryHandler(gs GitStore, idx SearchIndex, agentBranch string) func(context
 		}
 
 		// 4. Search.
-		results, err := idx.Search(agentBranch, q)
+		results, err := idx.Search(ctx, agentBranch, q)
 		if err != nil {
 			return mcpgo.NewToolResultError(fmt.Sprintf("search error: %v", err)), nil
 		}

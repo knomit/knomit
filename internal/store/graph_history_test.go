@@ -66,7 +66,7 @@ func openGraphTestStore(t *testing.T, branch string) (*Index, *git.Store) {
 func writeAndSync(t *testing.T, idx *Index, gs *git.Store, branch, path, content string) {
 	ctx := context.Background()
 	t.Helper()
-	if _, _, err := gs.WriteFile(branch, path, content, "add "+path, "learn"); err != nil {
+	if _, _, err := gs.WriteFile(context.Background(), branch, path, content, "add "+path, "learn"); err != nil {
 		t.Fatalf("WriteFile %s: %v", path, err)
 	}
 	if err := idx.Sync(ctx, gs, branch); err != nil {

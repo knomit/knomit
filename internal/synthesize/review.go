@@ -17,16 +17,16 @@ import (
 
 // PipelineIndex is the interface for pipeline session storage (subset of store.Index).
 type PipelineIndex interface {
-	GetPipelineWatermark(tool, branch string) (string, error)
-	SetPipelineWatermark(tool, branch, hash string) error
-	CreatePipelineSession(tool, branch string) (*store.PipelineSession, error)
-	GetPipelineSession(id string) (*store.PipelineSession, error)
-	CompletePipelineSession(id string) error
-	InsertPipelineWorkItem(item store.PipelineWorkItem) error
-	NextPipelineWorkItem(sessionID string) (*store.PipelineWorkItem, error)
-	SetPipelineWorkItemResponse(id int64, response string) error
-	PipelineWorkItemStats(sessionID string) (completed, remaining int, err error)
-	GCPipelineSessions(tool, branch string, keep int) error
+	GetPipelineWatermark(ctx context.Context, tool, branch string) (string, error)
+	SetPipelineWatermark(ctx context.Context, tool, branch, hash string) error
+	CreatePipelineSession(ctx context.Context, tool, branch string) (*store.PipelineSession, error)
+	GetPipelineSession(ctx context.Context, id string) (*store.PipelineSession, error)
+	CompletePipelineSession(ctx context.Context, id string) error
+	InsertPipelineWorkItem(ctx context.Context, item store.PipelineWorkItem) error
+	NextPipelineWorkItem(ctx context.Context, sessionID string) (*store.PipelineWorkItem, error)
+	SetPipelineWorkItemResponse(ctx context.Context, id int64, response string) error
+	PipelineWorkItemStats(ctx context.Context, sessionID string) (completed, remaining int, err error)
+	GCPipelineSessions(ctx context.Context, tool, branch string, keep int) error
 }
 
 // Reviewer orchestrates multi-turn review sessions.
@@ -50,30 +50,30 @@ func NewReviewer(gs GitStore, idx SearchIndex, reviewIdx PipelineIndex, embedder
 
 // StartSession creates a new review session, identifies dirty facts, clusters
 // them, stores work items, and returns the first item to review.
-func (r *Reviewer) StartSession() (*mcp.ReviewResult, error) {
+func (r *Reviewer) StartSession(ctx context.Context) (*mcp.ReviewResult, error) {
 	branch := r.agentBranch
 
 	// GC old sessions.
-	if err := r.reviewIdx.GCPipelineSessions("review", branch, 5); err != nil {
+	if err := r.reviewIdx.GCPipelineSessions(ctx, "review", branch, 5); err != nil {
 		log.Warn().Err(err).Msg("review: GC old sessions failed")
 	}
 
-	sess, err := r.reviewIdx.CreatePipelineSession("review", branch)
+	sess, err := r.reviewIdx.CreatePipelineSession(ctx, "review", branch)
 	if err != nil {
 		return nil, fmt.Errorf("review: create session: %w", err)
 	}
 
-	seeds, err := r.dirtyFacts(branch)
+	seeds, err := r.dirtyFacts(ctx, branch)
 	if err != nil {
 		return nil, fmt.Errorf("review: dirty facts: %w", err)
 	}
 
 	if len(seeds) == 0 {
-		return r.completeSession(sess)
+		return r.completeSession(ctx, sess)
 	}
 
 	// Build scoped clusters.
-	clusters, err := ScopedCluster(seeds, r.idx, 1.0, r.onProgress, r.agentBranch)
+	clusters, err := ScopedCluster(ctx, seeds, r.idx, 1.0, r.onProgress, r.agentBranch)
 	if err != nil {
 		return nil, fmt.Errorf("review: cluster: %w", err)
 	}
@@ -107,7 +107,7 @@ func (r *Reviewer) StartSession() (*mcp.ReviewResult, error) {
 			FactsJSON:  string(factsJSON),
 			Priority:   float64(len(cluster)),
 		}
-		if err := r.reviewIdx.InsertPipelineWorkItem(item); err != nil {
+		if err := r.reviewIdx.InsertPipelineWorkItem(ctx, item); err != nil {
 			return nil, fmt.Errorf("review: insert prune item: %w", err)
 		}
 	}
@@ -125,7 +125,7 @@ func (r *Reviewer) StartSession() (*mcp.ReviewResult, error) {
 			FactsJSON:  string(factsJSON),
 			Priority:   0.0,
 		}
-		if err := r.reviewIdx.InsertPipelineWorkItem(item); err != nil {
+		if err := r.reviewIdx.InsertPipelineWorkItem(ctx, item); err != nil {
 			return nil, fmt.Errorf("review: insert distill item: %w", err)
 		}
 	}
@@ -133,13 +133,13 @@ func (r *Reviewer) StartSession() (*mcp.ReviewResult, error) {
 	log.Info().Str("session", sess.ID).Int("clusters", len(pruneClusters)).Int("seeds", len(seeds)).Msg("review: session started")
 	r.onProgress(ProgressEvent{Phase: "review-start", Message: fmt.Sprintf("session %s: %d clusters, %d seeds", sess.ID, len(pruneClusters), len(seeds))})
 
-	return r.nextItem(sess.ID)
+	return r.nextItem(ctx, sess.ID)
 }
 
 // ContinueSession processes the model's response for the current work item
 // and returns the next item, or done if the session is complete.
-func (r *Reviewer) ContinueSession(sessionID, response string) (*mcp.ReviewResult, error) {
-	sess, err := r.reviewIdx.GetPipelineSession(sessionID)
+func (r *Reviewer) ContinueSession(ctx context.Context, sessionID, response string) (*mcp.ReviewResult, error) {
+	sess, err := r.reviewIdx.GetPipelineSession(ctx, sessionID)
 	if err != nil {
 		return nil, fmt.Errorf("review: get session: %w", err)
 	}
@@ -151,13 +151,13 @@ func (r *Reviewer) ContinueSession(sessionID, response string) (*mcp.ReviewResul
 	}
 
 	// Get the current (unanswered) work item.
-	item, err := r.reviewIdx.NextPipelineWorkItem(sessionID)
+	item, err := r.reviewIdx.NextPipelineWorkItem(ctx, sessionID)
 	if err != nil {
 		return nil, fmt.Errorf("review: next work item: %w", err)
 	}
 	if item == nil {
 		// No unanswered items — session should be done already.
-		return r.completeSession(sess)
+		return r.completeSession(ctx, sess)
 	}
 
 	// Apply based on step type.
@@ -182,7 +182,7 @@ func (r *Reviewer) ContinueSession(sessionID, response string) (*mcp.ReviewResul
 		if err := validatePrunePaths(result, inputPaths); err != nil {
 			return nil, fmt.Errorf("review: validate prune: %w", err)
 		}
-		if _, err := ApplyPruneDecisions(r.gs, r.idx, result.Decisions, result.Merges, "review", r.onProgress, r.agentBranch); err != nil {
+		if _, err := ApplyPruneDecisions(ctx, r.gs, r.idx, result.Decisions, result.Merges, "review", r.onProgress, r.agentBranch); err != nil {
 			return nil, fmt.Errorf("review: apply prune: %w", err)
 		}
 
@@ -202,7 +202,7 @@ func (r *Reviewer) ContinueSession(sessionID, response string) (*mcp.ReviewResul
 		if err := validateDistillPaths(result, inputPaths); err != nil {
 			return nil, fmt.Errorf("review: validate distill: %w", err)
 		}
-		_, writtenFacts, err := ApplyDistillDecisions(r.gs, r.idx, result.Synthesize, result.Retract, "review", r.onProgress, r.agentBranch)
+		_, writtenFacts, err := ApplyDistillDecisions(ctx, r.gs, r.idx, result.Synthesize, result.Retract, "review", r.onProgress, r.agentBranch)
 		if err != nil {
 			return nil, fmt.Errorf("review: apply distill: %w", err)
 		}
@@ -221,7 +221,7 @@ func (r *Reviewer) ContinueSession(sessionID, response string) (*mcp.ReviewResul
 			}
 
 			// Cluster the new facts to find groups worth distilling further.
-			raptorClusters, clErr := ScopedCluster(newFacts, r.idx, 1.0, r.onProgress, r.agentBranch, "hypothesis")
+			raptorClusters, clErr := ScopedCluster(ctx, newFacts, r.idx, 1.0, r.onProgress, r.agentBranch, "hypothesis")
 			if clErr != nil {
 				log.Warn().Err(clErr).Msg("review: RAPTOR clustering failed")
 			} else {
@@ -236,7 +236,7 @@ func (r *Reviewer) ContinueSession(sessionID, response string) (*mcp.ReviewResul
 						Priority:   float64(-nextDepth),
 						Depth:      nextDepth,
 					}
-					if err := r.reviewIdx.InsertPipelineWorkItem(wItem); err != nil {
+					if err := r.reviewIdx.InsertPipelineWorkItem(ctx, wItem); err != nil {
 						log.Warn().Err(err).Msg("review: RAPTOR enqueue failed")
 					}
 				}
@@ -251,18 +251,18 @@ func (r *Reviewer) ContinueSession(sessionID, response string) (*mcp.ReviewResul
 	}
 
 	// Mark item as answered.
-	if err := r.reviewIdx.SetPipelineWorkItemResponse(item.ID, response); err != nil {
+	if err := r.reviewIdx.SetPipelineWorkItemResponse(ctx, item.ID, response); err != nil {
 		return nil, fmt.Errorf("review: set response: %w", err)
 	}
 
-	return r.nextItem(sessionID)
+	return r.nextItem(ctx, sessionID)
 }
 
 // RunAll drives the review session to completion using an LLM adapter.
 // It starts a session, then loops: render prompt → LLM call → apply response
 // until all work items are processed.
 func (r *Reviewer) RunAll(ctx context.Context, adapter llm.LLMAdapter) error {
-	result, err := r.StartSession()
+	result, err := r.StartSession(ctx)
 	if err != nil {
 		return fmt.Errorf("RunAll: start: %w", err)
 	}
@@ -285,7 +285,7 @@ func (r *Reviewer) RunAll(ctx context.Context, adapter llm.LLMAdapter) error {
 			return fmt.Errorf("RunAll: LLM %s: %w", result.Item.Type, err)
 		}
 
-		result, err = r.ContinueSession(sessionID, response)
+		result, err = r.ContinueSession(ctx, sessionID, response)
 		if err != nil {
 			return fmt.Errorf("RunAll: continue: %w", err)
 		}
@@ -298,15 +298,15 @@ func (r *Reviewer) RunAll(ctx context.Context, adapter llm.LLMAdapter) error {
 // First run (no watermark): uses the search index to retrieve all facts
 // without reading every file from git.
 // Incremental (has watermark): uses DiffFiles to read only changed paths.
-func (r *Reviewer) dirtyFacts(branch string) ([]factForLLM, error) {
-	watermark, err := r.reviewIdx.GetPipelineWatermark("review", branch)
+func (r *Reviewer) dirtyFacts(ctx context.Context, branch string) ([]factForLLM, error) {
+	watermark, err := r.reviewIdx.GetPipelineWatermark(ctx, "review", branch)
 	if err != nil {
 		return nil, fmt.Errorf("get watermark: %w", err)
 	}
 
 	// No watermark → first run, all facts are dirty. Use the index (fast).
 	if watermark == "" {
-		results, err := r.idx.Search(branch, store.SearchQuery{Limit: 100_000})
+		results, err := r.idx.Search(ctx, branch, store.SearchQuery{Limit: 100_000})
 		if err != nil {
 			return nil, fmt.Errorf("search all: %w", err)
 		}
@@ -327,7 +327,7 @@ func (r *Reviewer) dirtyFacts(branch string) ([]factForLLM, error) {
 	}
 
 	// Incremental: only changed facts since watermark.
-	added, modified, _, err := r.gs.DiffFiles(r.agentBranch, watermark)
+	added, modified, _, err := r.gs.DiffFiles(ctx, r.agentBranch, watermark)
 	if err != nil {
 		return nil, fmt.Errorf("diff files: %w", err)
 	}
@@ -337,7 +337,7 @@ func (r *Reviewer) dirtyFacts(branch string) ([]factForLLM, error) {
 		if !strings.HasSuffix(path, ".md") {
 			continue
 		}
-		content, err := r.gs.ReadFile(r.agentBranch, path)
+		content, err := r.gs.ReadFile(ctx, r.agentBranch, path)
 		if err != nil {
 			continue // deleted or unreadable
 		}
@@ -361,8 +361,8 @@ func (r *Reviewer) dirtyFacts(branch string) ([]factForLLM, error) {
 
 // nextItem fetches the next unanswered work item, renders its prompt, and
 // returns a ReviewResult. If no items remain, completes the session.
-func (r *Reviewer) nextItem(sessionID string) (*mcp.ReviewResult, error) {
-	item, err := r.reviewIdx.NextPipelineWorkItem(sessionID)
+func (r *Reviewer) nextItem(ctx context.Context, sessionID string) (*mcp.ReviewResult, error) {
+	item, err := r.reviewIdx.NextPipelineWorkItem(ctx, sessionID)
 	if err != nil {
 		return nil, fmt.Errorf("review: next item: %w", err)
 	}
@@ -371,7 +371,7 @@ func (r *Reviewer) nextItem(sessionID string) (*mcp.ReviewResult, error) {
 		// Before completing, check if we should enqueue a reflect step.
 		if !r.reflectChecked[sessionID] {
 			r.reflectChecked[sessionID] = true
-			transitions, tErr := r.findHypothesisTransitions(sessionID)
+			transitions, tErr := r.findHypothesisTransitions(ctx, sessionID)
 			if tErr != nil {
 				log.Warn().Err(tErr).Msg("review: failed to find hypothesis transitions")
 			}
@@ -384,19 +384,19 @@ func (r *Reviewer) nextItem(sessionID string) (*mcp.ReviewResult, error) {
 					FactsJSON:  string(transJSON),
 					Priority:   -100,
 				}
-				if err := r.reviewIdx.InsertPipelineWorkItem(reflectItem); err != nil {
+				if err := r.reviewIdx.InsertPipelineWorkItem(ctx, reflectItem); err != nil {
 					log.Warn().Err(err).Msg("review: failed to enqueue reflect item")
 				} else {
 					// Recurse to fetch the just-enqueued reflect item.
-					return r.nextItem(sessionID)
+					return r.nextItem(ctx, sessionID)
 				}
 			}
 		}
-		sess, err := r.reviewIdx.GetPipelineSession(sessionID)
+		sess, err := r.reviewIdx.GetPipelineSession(ctx, sessionID)
 		if err != nil {
 			return nil, fmt.Errorf("review: get session for complete: %w", err)
 		}
-		return r.completeSession(sess)
+		return r.completeSession(ctx, sess)
 	}
 
 	var content *WorkItemContent
@@ -422,7 +422,7 @@ func (r *Reviewer) nextItem(sessionID string) (*mcp.ReviewResult, error) {
 		return nil, fmt.Errorf("review: render %s prompt: %w", item.StepType, err)
 	}
 
-	completed, remaining, err := r.reviewIdx.PipelineWorkItemStats(sessionID)
+	completed, remaining, err := r.reviewIdx.PipelineWorkItemStats(ctx, sessionID)
 	if err != nil {
 		return nil, fmt.Errorf("review: work item stats: %w", err)
 	}
@@ -442,21 +442,21 @@ func (r *Reviewer) nextItem(sessionID string) (*mcp.ReviewResult, error) {
 }
 
 // completeSession marks the session done and advances the watermark.
-func (r *Reviewer) completeSession(sess *store.PipelineSession) (*mcp.ReviewResult, error) {
-	if err := r.reviewIdx.CompletePipelineSession(sess.ID); err != nil {
+func (r *Reviewer) completeSession(ctx context.Context, sess *store.PipelineSession) (*mcp.ReviewResult, error) {
+	if err := r.reviewIdx.CompletePipelineSession(ctx, sess.ID); err != nil {
 		return nil, fmt.Errorf("review: complete session: %w", err)
 	}
 
-	headHash, err := r.gs.HeadCommit(r.agentBranch)
+	headHash, err := r.gs.HeadCommit(ctx, r.agentBranch)
 	if err != nil {
 		log.Warn().Err(err).Msg("review: could not get HEAD for watermark")
 	} else {
-		if err := r.reviewIdx.SetPipelineWatermark("review", sess.Branch, headHash); err != nil {
+		if err := r.reviewIdx.SetPipelineWatermark(ctx, "review", sess.Branch, headHash); err != nil {
 			log.Warn().Err(err).Msg("review: could not advance watermark")
 		}
 	}
 
-	completed, _, err := r.reviewIdx.PipelineWorkItemStats(sess.ID)
+	completed, _, err := r.reviewIdx.PipelineWorkItemStats(ctx, sess.ID)
 	if err != nil {
 		log.Warn().Err(err).Msg("review: could not get final stats")
 	}
@@ -482,8 +482,8 @@ type hypothesisTransition struct {
 
 // findHypothesisTransitions detects hypothesis facts that were promoted,
 // retracted, or had their confidence changed during the current review session.
-func (r *Reviewer) findHypothesisTransitions(sessionID string) ([]hypothesisTransition, error) {
-	sess, err := r.reviewIdx.GetPipelineSession(sessionID)
+func (r *Reviewer) findHypothesisTransitions(ctx context.Context, sessionID string) ([]hypothesisTransition, error) {
+	sess, err := r.reviewIdx.GetPipelineSession(ctx, sessionID)
 	if err != nil || sess == nil {
 		return nil, err
 	}
@@ -491,12 +491,12 @@ func (r *Reviewer) findHypothesisTransitions(sessionID string) ([]hypothesisTran
 	// Read the watermark set at the end of the previous session.
 	// Since we haven't advanced it yet (that happens in completeSession),
 	// all commits between here and HEAD are changes made during this session.
-	watermark, err := r.reviewIdx.GetPipelineWatermark("review", sess.Branch)
+	watermark, err := r.reviewIdx.GetPipelineWatermark(ctx, "review", sess.Branch)
 	if err != nil || watermark == "" {
 		return nil, err
 	}
 
-	_, modified, deleted, err := r.gs.DiffFiles(r.agentBranch, watermark)
+	_, modified, deleted, err := r.gs.DiffFiles(ctx, r.agentBranch, watermark)
 	if err != nil {
 		return nil, err
 	}
@@ -505,7 +505,7 @@ func (r *Reviewer) findHypothesisTransitions(sessionID string) ([]hypothesisTran
 
 	// Check deleted paths — were any hypotheses retracted?
 	for _, path := range deleted {
-		content, err := r.gs.ReadFileAtCommit(r.agentBranch, path, watermark)
+		content, err := r.gs.ReadFileAtCommit(ctx, r.agentBranch, path, watermark)
 		if err != nil {
 			continue
 		}
@@ -522,7 +522,7 @@ func (r *Reviewer) findHypothesisTransitions(sessionID string) ([]hypothesisTran
 
 	// Check modified paths — did any hypothesis change confidence or type?
 	for _, path := range modified {
-		oldContent, err := r.gs.ReadFileAtCommit(r.agentBranch, path, watermark)
+		oldContent, err := r.gs.ReadFileAtCommit(ctx, r.agentBranch, path, watermark)
 		if err != nil {
 			continue
 		}
@@ -530,7 +530,7 @@ func (r *Reviewer) findHypothesisTransitions(sessionID string) ([]hypothesisTran
 		if err != nil || oldFact.Type != fact.Hypothesis {
 			continue
 		}
-		newContent, err := r.gs.ReadFile(r.agentBranch, path)
+		newContent, err := r.gs.ReadFile(ctx, r.agentBranch, path)
 		if err != nil {
 			continue
 		}

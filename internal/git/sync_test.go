@@ -1,6 +1,7 @@
 package git_test
 
 import (
+	"context"
 	"testing"
 
 	gogitconfig "github.com/go-git/go-git/v5/config"
@@ -58,7 +59,7 @@ func setupOriginAndAgent(t *testing.T) (origin, agent *git.Store, originSto, age
 	}
 
 	// Initial sync so agent has origin/main.
-	if _, err := agent.Sync(testBranch, ""); err != nil {
+	if _, err := agent.Sync(context.Background(), testBranch, ""); err != nil {
 		t.Fatal(err)
 	}
 
@@ -68,7 +69,7 @@ func setupOriginAndAgent(t *testing.T) (origin, agent *git.Store, originSto, age
 // syncMainToHead sets a store's main branch ref to its current HEAD.
 func syncMainToHead(t *testing.T, s *git.Store, sto *storegit.Storer) {
 	t.Helper()
-	head, err := s.HeadCommit(testBranch)
+	head, err := s.HeadCommit(context.Background(), testBranch)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,7 +86,7 @@ func syncMainToHead(t *testing.T, s *git.Store, sto *storegit.Storer) {
 func advanceOriginMain(t *testing.T, origin *git.Store, originSto *storegit.Storer, files map[string]string) {
 	t.Helper()
 	for path, content := range files {
-		if _, _, err := origin.WriteFile(testBranch, path, content, "origin: "+path, "learn"); err != nil {
+		if _, _, err := origin.WriteFile(context.Background(), testBranch, path, content, "origin: "+path, "learn"); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -96,7 +97,7 @@ func advanceOriginMain(t *testing.T, origin *git.Store, originSto *storegit.Stor
 func deleteOnOriginMain(t *testing.T, origin *git.Store, originSto *storegit.Storer, paths []string) {
 	t.Helper()
 	for _, path := range paths {
-		if _, err := origin.DeleteFile(testBranch, path, "origin: delete "+path, "retract"); err != nil {
+		if _, err := origin.DeleteFile(context.Background(), testBranch, path, "origin: delete "+path, "retract"); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -145,7 +146,7 @@ func copyObjects(t *testing.T, src, dst *storegit.Storer) {
 func syncWithSimulatedFetch(t *testing.T, agent *git.Store, originSto, agentSto *storegit.Storer) git.SyncResult {
 	t.Helper()
 	simulateFetch(t, originSto, agentSto)
-	result, err := agent.Sync(testBranch, "")
+	result, err := agent.Sync(context.Background(), testBranch, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -159,7 +160,7 @@ func TestSyncThreeWay_AddedFile(t *testing.T) {
 		"kb/new-from-origin.md": "# New\nFrom origin.\n",
 	})
 
-	result, err := agent.Sync(testBranch, "")
+	result, err := agent.Sync(context.Background(), testBranch, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -167,7 +168,7 @@ func TestSyncThreeWay_AddedFile(t *testing.T) {
 		t.Fatal("expected Synced=true")
 	}
 
-	content, err := agent.ReadFile(testBranch, "kb/new-from-origin.md")
+	content, err := agent.ReadFile(context.Background(), testBranch, "kb/new-from-origin.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -182,7 +183,7 @@ func TestSyncThreeWay_ModifiedFile(t *testing.T) {
 	advanceOriginMain(t, origin, originSto, map[string]string{
 		"kb/shared.md": "# Shared v1\n",
 	})
-	if _, err := agent.Sync(testBranch, ""); err != nil {
+	if _, err := agent.Sync(context.Background(), testBranch, ""); err != nil {
 		t.Fatal(err)
 	}
 
@@ -190,7 +191,7 @@ func TestSyncThreeWay_ModifiedFile(t *testing.T) {
 		"kb/shared.md": "# Shared v2 (origin)\n",
 	})
 
-	result, err := agent.Sync(testBranch, "")
+	result, err := agent.Sync(context.Background(), testBranch, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -198,7 +199,7 @@ func TestSyncThreeWay_ModifiedFile(t *testing.T) {
 		t.Fatal("expected Synced=true")
 	}
 
-	content, err := agent.ReadFile(testBranch, "kb/shared.md")
+	content, err := agent.ReadFile(context.Background(), testBranch, "kb/shared.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -213,11 +214,11 @@ func TestSyncThreeWay_DeletedFile(t *testing.T) {
 	advanceOriginMain(t, origin, originSto, map[string]string{
 		"kb/to-delete.md": "# Will be deleted\n",
 	})
-	if _, err := agent.Sync(testBranch, ""); err != nil {
+	if _, err := agent.Sync(context.Background(), testBranch, ""); err != nil {
 		t.Fatal(err)
 	}
 
-	exists, err := agent.FileExists(testBranch, "kb/to-delete.md")
+	exists, err := agent.FileExists(context.Background(), testBranch, "kb/to-delete.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -227,7 +228,7 @@ func TestSyncThreeWay_DeletedFile(t *testing.T) {
 
 	deleteOnOriginMain(t, origin, originSto, []string{"kb/to-delete.md"})
 
-	result, err := agent.Sync(testBranch, "")
+	result, err := agent.Sync(context.Background(), testBranch, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -235,7 +236,7 @@ func TestSyncThreeWay_DeletedFile(t *testing.T) {
 		t.Fatal("expected Synced=true")
 	}
 
-	exists, err = agent.FileExists(testBranch, "kb/to-delete.md")
+	exists, err = agent.FileExists(context.Background(), testBranch, "kb/to-delete.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -248,7 +249,7 @@ func TestSyncThreeWay_AgentOnlyFilePreserved(t *testing.T) {
 	origin, agent, originSto, agentSto := setupOriginAndAgent(t)
 
 	// Agent adds its own file (diverges from origin).
-	if _, _, err := agent.WriteFile(testBranch, "kb/agent-only.md", "# Agent Only\n", "agent: add local", "learn"); err != nil {
+	if _, _, err := agent.WriteFile(context.Background(), testBranch, "kb/agent-only.md", "# Agent Only\n", "agent: add local", "learn"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -264,7 +265,7 @@ func TestSyncThreeWay_AgentOnlyFilePreserved(t *testing.T) {
 	}
 
 	// Agent-only file should still exist.
-	content, err := agent.ReadFile(testBranch, "kb/agent-only.md")
+	content, err := agent.ReadFile(context.Background(), testBranch, "kb/agent-only.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -273,7 +274,7 @@ func TestSyncThreeWay_AgentOnlyFilePreserved(t *testing.T) {
 	}
 
 	// Origin's file should also exist.
-	if _, err := agent.ReadFile(testBranch, "kb/origin-file.md"); err != nil {
+	if _, err := agent.ReadFile(context.Background(), testBranch, "kb/origin-file.md"); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -285,12 +286,12 @@ func TestSyncThreeWay_OriginOverwritesAgentChange(t *testing.T) {
 	advanceOriginMain(t, origin, originSto, map[string]string{
 		"kb/contested.md": "# Base version\n",
 	})
-	if _, err := agent.Sync(testBranch, ""); err != nil {
+	if _, err := agent.Sync(context.Background(), testBranch, ""); err != nil {
 		t.Fatal(err)
 	}
 
 	// Agent modifies the file (diverges).
-	if _, _, err := agent.WriteFile(testBranch, "kb/contested.md", "# Agent version\n", "agent: modify", "learn"); err != nil {
+	if _, _, err := agent.WriteFile(context.Background(), testBranch, "kb/contested.md", "# Agent version\n", "agent: modify", "learn"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -306,7 +307,7 @@ func TestSyncThreeWay_OriginOverwritesAgentChange(t *testing.T) {
 	}
 
 	// Origin wins.
-	content, err := agent.ReadFile(testBranch, "kb/contested.md")
+	content, err := agent.ReadFile(context.Background(), testBranch, "kb/contested.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -322,7 +323,7 @@ func TestSyncFastForward(t *testing.T) {
 		"kb/ff-file.md": "# Fast Forward\n",
 	})
 
-	result, err := agent.Sync(testBranch, "")
+	result, err := agent.Sync(context.Background(), testBranch, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -340,7 +341,7 @@ func TestSyncFastForward(t *testing.T) {
 func TestSyncNoOp(t *testing.T) {
 	_, agent, _, _ := setupOriginAndAgent(t)
 
-	result, err := agent.Sync(testBranch, "")
+	result, err := agent.Sync(context.Background(), testBranch, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -355,11 +356,11 @@ func TestSyncAlreadyMerged(t *testing.T) {
 	advanceOriginMain(t, origin, originSto, map[string]string{
 		"kb/merged.md": "# Merged\n",
 	})
-	if _, err := agent.Sync(testBranch, ""); err != nil {
+	if _, err := agent.Sync(context.Background(), testBranch, ""); err != nil {
 		t.Fatal(err)
 	}
 
-	result, err := agent.Sync(testBranch, "")
+	result, err := agent.Sync(context.Background(), testBranch, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -372,7 +373,7 @@ func TestSyncThreeWay_MergeCommitHasTwoParents(t *testing.T) {
 	origin, agent, originSto, agentSto := setupOriginAndAgent(t)
 
 	// Agent diverges.
-	if _, _, err := agent.WriteFile(testBranch, "kb/agent-file.md", "# Agent\n", "agent: diverge", "learn"); err != nil {
+	if _, _, err := agent.WriteFile(context.Background(), testBranch, "kb/agent-file.md", "# Agent\n", "agent: diverge", "learn"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -397,7 +398,7 @@ func TestSyncThreeWay_SubsequentMergesWork(t *testing.T) {
 	origin, agent, originSto, agentSto := setupOriginAndAgent(t)
 
 	// First divergence + merge.
-	if _, _, err := agent.WriteFile(testBranch, "kb/a.md", "# A\n", "agent: a", "learn"); err != nil {
+	if _, _, err := agent.WriteFile(context.Background(), testBranch, "kb/a.md", "# A\n", "agent: a", "learn"); err != nil {
 		t.Fatal(err)
 	}
 	advanceOriginMain(t, origin, originSto, map[string]string{
@@ -409,7 +410,7 @@ func TestSyncThreeWay_SubsequentMergesWork(t *testing.T) {
 	}
 
 	// Second divergence + merge.
-	if _, _, err := agent.WriteFile(testBranch, "kb/c.md", "# C\n", "agent: c", "learn"); err != nil {
+	if _, _, err := agent.WriteFile(context.Background(), testBranch, "kb/c.md", "# C\n", "agent: c", "learn"); err != nil {
 		t.Fatal(err)
 	}
 	advanceOriginMain(t, origin, originSto, map[string]string{
@@ -423,7 +424,7 @@ func TestSyncThreeWay_SubsequentMergesWork(t *testing.T) {
 
 	// All four files should exist.
 	for _, path := range []string{"kb/a.md", "kb/b.md", "kb/c.md", "kb/d.md"} {
-		exists, err := agent.FileExists(testBranch, path)
+		exists, err := agent.FileExists(context.Background(), testBranch, path)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -440,12 +441,12 @@ func TestSyncThreeWay_DeletedFileAgentModified(t *testing.T) {
 	advanceOriginMain(t, origin, originSto, map[string]string{
 		"kb/will-delete.md": "# Base\n",
 	})
-	if _, err := agent.Sync(testBranch, ""); err != nil {
+	if _, err := agent.Sync(context.Background(), testBranch, ""); err != nil {
 		t.Fatal(err)
 	}
 
 	// Agent modifies the file.
-	if _, _, err := agent.WriteFile(testBranch, "kb/will-delete.md", "# Agent modified\n", "agent: modify", "learn"); err != nil {
+	if _, _, err := agent.WriteFile(context.Background(), testBranch, "kb/will-delete.md", "# Agent modified\n", "agent: modify", "learn"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -458,7 +459,7 @@ func TestSyncThreeWay_DeletedFileAgentModified(t *testing.T) {
 	}
 
 	// Origin wins — file should be deleted even though agent modified it.
-	exists, err := agent.FileExists(testBranch, "kb/will-delete.md")
+	exists, err := agent.FileExists(context.Background(), testBranch, "kb/will-delete.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -471,7 +472,7 @@ func TestSyncNoRemote(t *testing.T) {
 	s := newTestStore(t)
 
 	// No remote configured — Sync should return empty result, no error.
-	result, err := s.Sync(testBranch, "")
+	result, err := s.Sync(context.Background(), testBranch, "")
 	if err != nil {
 		t.Fatalf("expected no error, got: %v", err)
 	}
@@ -495,7 +496,7 @@ func TestSyncDefaultRemoteBranch(t *testing.T) {
 	})
 
 	// Call Sync with empty string — should default to "main".
-	result, err := agent.Sync(testBranch, "")
+	result, err := agent.Sync(context.Background(), testBranch, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -504,7 +505,7 @@ func TestSyncDefaultRemoteBranch(t *testing.T) {
 	}
 
 	// Verify the file arrived.
-	content, err := agent.ReadFile(testBranch, "kb/default-branch.md")
+	content, err := agent.ReadFile(context.Background(), testBranch, "kb/default-branch.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -536,7 +537,7 @@ func TestSyncOriginRefNotFoundAfterFetch(t *testing.T) {
 	})
 
 	// Sync looking for "nonexistent" branch — origin/nonexistent won't exist.
-	result, err := agent.Sync(testBranch, "nonexistent")
+	result, err := agent.Sync(context.Background(), testBranch, "nonexistent")
 	if err != nil {
 		t.Fatalf("expected no error for missing origin ref, got: %v", err)
 	}
@@ -548,17 +549,17 @@ func TestSyncOriginRefNotFoundAfterFetch(t *testing.T) {
 func TestConfigureRemote(t *testing.T) {
 	store := newTestStore(t)
 
-	if err := store.ConfigureRemote("https://example.com/repo.git", "main"); err != nil {
+	if err := store.ConfigureRemote(context.Background(), "https://example.com/repo.git", "main"); err != nil {
 		t.Fatal(err)
 	}
 
 	// Idempotent.
-	if err := store.ConfigureRemote("https://example.com/repo.git", "main"); err != nil {
+	if err := store.ConfigureRemote(context.Background(), "https://example.com/repo.git", "main"); err != nil {
 		t.Fatal(err)
 	}
 
 	// Different URL replaces.
-	if err := store.ConfigureRemote("https://example.com/other.git", "master"); err != nil {
+	if err := store.ConfigureRemote(context.Background(), "https://example.com/other.git", "master"); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -569,11 +570,11 @@ func TestSyncOriginAlreadyAncestorOfAgent(t *testing.T) {
 	_, agent, _, _ := setupOriginAndAgent(t)
 
 	// Agent diverges ahead of origin (origin hasn't advanced).
-	if _, _, err := agent.WriteFile(testBranch, "kb/local.md", "# Local\n", "local write", "learn"); err != nil {
+	if _, _, err := agent.WriteFile(context.Background(), testBranch, "kb/local.md", "# Local\n", "local write", "learn"); err != nil {
 		t.Fatal(err)
 	}
 
-	result, err := agent.Sync(testBranch, "")
+	result, err := agent.Sync(context.Background(), testBranch, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -586,7 +587,7 @@ func TestPush(t *testing.T) {
 	t.Run("no remote returns Pushed=false", func(t *testing.T) {
 		s := newTestStore(t)
 
-		result, err := s.Push(testBranch)
+		result, err := s.Push(context.Background(), testBranch)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -599,12 +600,12 @@ func TestPush(t *testing.T) {
 		_, agent, originSto, _ := setupOriginAndAgent(t)
 
 		// Agent writes a file.
-		if _, _, err := agent.WriteFile(testBranch, "kb/agent-push.md", "# Push test\n", "agent: push test", "learn"); err != nil {
+		if _, _, err := agent.WriteFile(context.Background(), testBranch, "kb/agent-push.md", "# Push test\n", "agent: push test", "learn"); err != nil {
 			t.Fatal(err)
 		}
 
 		// Push agent branch to origin.
-		result, err := agent.Push(testBranch)
+		result, err := agent.Push(context.Background(), testBranch)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -627,13 +628,13 @@ func TestPush(t *testing.T) {
 		_, agent, _, _ := setupOriginAndAgent(t)
 
 		// Push with no local changes (initial push).
-		result, err := agent.Push(testBranch)
+		result, err := agent.Push(context.Background(), testBranch)
 		if err != nil {
 			t.Fatal(err)
 		}
 
 		// Second push should be no-op.
-		result, err = agent.Push(testBranch)
+		result, err = agent.Push(context.Background(), testBranch)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -649,20 +650,20 @@ func TestPush(t *testing.T) {
 		origin, agent, originSto, _ := setupOriginAndAgent(t)
 
 		// Agent writes and pushes a file.
-		if _, _, err := agent.WriteFile(testBranch, "kb/first.md", "# First\n", "first", "learn"); err != nil {
+		if _, _, err := agent.WriteFile(context.Background(), testBranch, "kb/first.md", "# First\n", "first", "learn"); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := agent.Push(testBranch); err != nil {
+		if _, err := agent.Push(context.Background(), testBranch); err != nil {
 			t.Fatal(err)
 		}
 
 		// Simulate divergence: write a different commit directly on origin's
 		// copy of the agent branch, so origin's agent branch is ahead.
-		if _, _, err := origin.WriteFile(testBranch, "kb/origin-only.md", "# Origin\n", "origin diverge", "learn"); err != nil {
+		if _, _, err := origin.WriteFile(context.Background(), testBranch, "kb/origin-only.md", "# Origin\n", "origin diverge", "learn"); err != nil {
 			t.Fatal(err)
 		}
 		// Point origin's agent branch ref at origin's HEAD (diverged).
-		originHead, _ := origin.HeadCommit(testBranch)
+		originHead, _ := origin.HeadCommit(context.Background(), testBranch)
 		originAgentRef := plumbing.NewHashReference(
 			plumbing.NewBranchReferenceName(testBranch),
 			plumbing.NewHash(originHead),
@@ -673,12 +674,12 @@ func TestPush(t *testing.T) {
 
 		// Agent writes another file locally — now its agent branch has diverged
 		// from origin's copy of the agent branch.
-		if _, _, err := agent.WriteFile(testBranch, "kb/second.md", "# Second\n", "second", "learn"); err != nil {
+		if _, _, err := agent.WriteFile(context.Background(), testBranch, "kb/second.md", "# Second\n", "second", "learn"); err != nil {
 			t.Fatal(err)
 		}
 
 		// Push should succeed via force push fallback.
-		result, err := agent.Push(testBranch)
+		result, err := agent.Push(context.Background(), testBranch)
 		if err != nil {
 			t.Fatalf("expected force push to succeed, got: %v", err)
 		}

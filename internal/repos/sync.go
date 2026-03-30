@@ -26,7 +26,7 @@ func runSyncLoop(ctx context.Context, wg *sync.WaitGroup, gs *git.Store, svc *st
 	lg.Info().Dur("interval", interval).Msg("sync loop started")
 
 	doSync := func() {
-		result, err := gs.Sync(agentBranch, remote.Branch)
+		result, err := gs.Sync(context.Background(), agentBranch, remote.Branch)
 		if err != nil {
 			errMsg := err.Error()
 			_ = svc.UpdateRemoteStatus(remote.Name, "error", &errMsg)
@@ -82,7 +82,7 @@ func runPushLoop(ctx context.Context, wg *sync.WaitGroup, gs *git.Store, svc *st
 	lg.Info().Dur("interval", interval).Msg("push loop started")
 
 	doPush := func() {
-		result, err := gs.Push(agentBranch)
+		result, err := gs.Push(context.Background(), agentBranch)
 		if err != nil {
 			errMsg := err.Error()
 			_ = svc.UpdateRemotePushStatus(remote.Name, "error", &errMsg)

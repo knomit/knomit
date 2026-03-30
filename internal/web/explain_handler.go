@@ -28,7 +28,7 @@ func handleExplain() http.HandlerFunc {
 			return
 		}
 
-		result, err := idx.ExplainFact(branch, path)
+		result, err := idx.ExplainFact(r.Context(), branch, path)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return

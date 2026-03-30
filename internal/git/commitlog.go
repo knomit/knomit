@@ -7,6 +7,7 @@
 package git
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"strings"
@@ -112,8 +113,8 @@ func changedFilesInCommit(c *object.Commit) ([]changedFile, error) {
 // populateCommitLog backfills commit_log from the tip of branch.
 // Commits are streamed directly from the iterator to CommitLogSync, which stops
 // as soon as it encounters a hash already in the table (dedup / incremental update).
-func (s *Store) populateCommitLog(branch string) error {
-	hash, err := s.resolveRef(branch)
+func (s *Store) populateCommitLog(ctx context.Context, branch string) error {
+	hash, err := s.resolveRef(ctx, branch)
 	if err != nil {
 		// Branch not found (empty repo) — just mark available if table exists.
 		_ = s.storer.CommitLogAvailable()
@@ -156,7 +157,7 @@ func (s *Store) populateCommitLog(branch string) error {
 // appendCommitLog inserts a single new commit into commit_log.
 // New commits always get the highest rowid, preserving recency ordering.
 // Errors are logged and swallowed — commit_log is an index, not source of truth.
-func (s *Store) appendCommitLog(branch string, hash plumbing.Hash) {
+func (s *Store) appendCommitLog(ctx context.Context, branch string, hash plumbing.Hash) {
 	if !s.storer.CommitLogAvailable() {
 		return
 	}

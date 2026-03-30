@@ -10,6 +10,7 @@
 package synthesize
 
 import (
+	context "context"
 	store "knomit/internal/store"
 	reflect "reflect"
 
@@ -41,111 +42,111 @@ func (m *MockPipelineIndex) EXPECT() *MockPipelineIndexMockRecorder {
 }
 
 // CompletePipelineSession mocks base method.
-func (m *MockPipelineIndex) CompletePipelineSession(id string) error {
+func (m *MockPipelineIndex) CompletePipelineSession(ctx context.Context, id string) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "CompletePipelineSession", id)
+	ret := m.ctrl.Call(m, "CompletePipelineSession", ctx, id)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // CompletePipelineSession indicates an expected call of CompletePipelineSession.
-func (mr *MockPipelineIndexMockRecorder) CompletePipelineSession(id any) *gomock.Call {
+func (mr *MockPipelineIndexMockRecorder) CompletePipelineSession(ctx, id any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CompletePipelineSession", reflect.TypeOf((*MockPipelineIndex)(nil).CompletePipelineSession), id)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CompletePipelineSession", reflect.TypeOf((*MockPipelineIndex)(nil).CompletePipelineSession), ctx, id)
 }
 
 // CreatePipelineSession mocks base method.
-func (m *MockPipelineIndex) CreatePipelineSession(tool, branch string) (*store.PipelineSession, error) {
+func (m *MockPipelineIndex) CreatePipelineSession(ctx context.Context, tool, branch string) (*store.PipelineSession, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "CreatePipelineSession", tool, branch)
+	ret := m.ctrl.Call(m, "CreatePipelineSession", ctx, tool, branch)
 	ret0, _ := ret[0].(*store.PipelineSession)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // CreatePipelineSession indicates an expected call of CreatePipelineSession.
-func (mr *MockPipelineIndexMockRecorder) CreatePipelineSession(tool, branch any) *gomock.Call {
+func (mr *MockPipelineIndexMockRecorder) CreatePipelineSession(ctx, tool, branch any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreatePipelineSession", reflect.TypeOf((*MockPipelineIndex)(nil).CreatePipelineSession), tool, branch)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreatePipelineSession", reflect.TypeOf((*MockPipelineIndex)(nil).CreatePipelineSession), ctx, tool, branch)
 }
 
 // GCPipelineSessions mocks base method.
-func (m *MockPipelineIndex) GCPipelineSessions(tool, branch string, keep int) error {
+func (m *MockPipelineIndex) GCPipelineSessions(ctx context.Context, tool, branch string, keep int) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GCPipelineSessions", tool, branch, keep)
+	ret := m.ctrl.Call(m, "GCPipelineSessions", ctx, tool, branch, keep)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // GCPipelineSessions indicates an expected call of GCPipelineSessions.
-func (mr *MockPipelineIndexMockRecorder) GCPipelineSessions(tool, branch, keep any) *gomock.Call {
+func (mr *MockPipelineIndexMockRecorder) GCPipelineSessions(ctx, tool, branch, keep any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GCPipelineSessions", reflect.TypeOf((*MockPipelineIndex)(nil).GCPipelineSessions), tool, branch, keep)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GCPipelineSessions", reflect.TypeOf((*MockPipelineIndex)(nil).GCPipelineSessions), ctx, tool, branch, keep)
 }
 
 // GetPipelineSession mocks base method.
-func (m *MockPipelineIndex) GetPipelineSession(id string) (*store.PipelineSession, error) {
+func (m *MockPipelineIndex) GetPipelineSession(ctx context.Context, id string) (*store.PipelineSession, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetPipelineSession", id)
+	ret := m.ctrl.Call(m, "GetPipelineSession", ctx, id)
 	ret0, _ := ret[0].(*store.PipelineSession)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // GetPipelineSession indicates an expected call of GetPipelineSession.
-func (mr *MockPipelineIndexMockRecorder) GetPipelineSession(id any) *gomock.Call {
+func (mr *MockPipelineIndexMockRecorder) GetPipelineSession(ctx, id any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetPipelineSession", reflect.TypeOf((*MockPipelineIndex)(nil).GetPipelineSession), id)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetPipelineSession", reflect.TypeOf((*MockPipelineIndex)(nil).GetPipelineSession), ctx, id)
 }
 
 // GetPipelineWatermark mocks base method.
-func (m *MockPipelineIndex) GetPipelineWatermark(tool, branch string) (string, error) {
+func (m *MockPipelineIndex) GetPipelineWatermark(ctx context.Context, tool, branch string) (string, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetPipelineWatermark", tool, branch)
+	ret := m.ctrl.Call(m, "GetPipelineWatermark", ctx, tool, branch)
 	ret0, _ := ret[0].(string)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // GetPipelineWatermark indicates an expected call of GetPipelineWatermark.
-func (mr *MockPipelineIndexMockRecorder) GetPipelineWatermark(tool, branch any) *gomock.Call {
+func (mr *MockPipelineIndexMockRecorder) GetPipelineWatermark(ctx, tool, branch any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetPipelineWatermark", reflect.TypeOf((*MockPipelineIndex)(nil).GetPipelineWatermark), tool, branch)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetPipelineWatermark", reflect.TypeOf((*MockPipelineIndex)(nil).GetPipelineWatermark), ctx, tool, branch)
 }
 
 // InsertPipelineWorkItem mocks base method.
-func (m *MockPipelineIndex) InsertPipelineWorkItem(item store.PipelineWorkItem) error {
+func (m *MockPipelineIndex) InsertPipelineWorkItem(ctx context.Context, item store.PipelineWorkItem) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "InsertPipelineWorkItem", item)
+	ret := m.ctrl.Call(m, "InsertPipelineWorkItem", ctx, item)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // InsertPipelineWorkItem indicates an expected call of InsertPipelineWorkItem.
-func (mr *MockPipelineIndexMockRecorder) InsertPipelineWorkItem(item any) *gomock.Call {
+func (mr *MockPipelineIndexMockRecorder) InsertPipelineWorkItem(ctx, item any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "InsertPipelineWorkItem", reflect.TypeOf((*MockPipelineIndex)(nil).InsertPipelineWorkItem), item)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "InsertPipelineWorkItem", reflect.TypeOf((*MockPipelineIndex)(nil).InsertPipelineWorkItem), ctx, item)
 }
 
 // NextPipelineWorkItem mocks base method.
-func (m *MockPipelineIndex) NextPipelineWorkItem(sessionID string) (*store.PipelineWorkItem, error) {
+func (m *MockPipelineIndex) NextPipelineWorkItem(ctx context.Context, sessionID string) (*store.PipelineWorkItem, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "NextPipelineWorkItem", sessionID)
+	ret := m.ctrl.Call(m, "NextPipelineWorkItem", ctx, sessionID)
 	ret0, _ := ret[0].(*store.PipelineWorkItem)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // NextPipelineWorkItem indicates an expected call of NextPipelineWorkItem.
-func (mr *MockPipelineIndexMockRecorder) NextPipelineWorkItem(sessionID any) *gomock.Call {
+func (mr *MockPipelineIndexMockRecorder) NextPipelineWorkItem(ctx, sessionID any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "NextPipelineWorkItem", reflect.TypeOf((*MockPipelineIndex)(nil).NextPipelineWorkItem), sessionID)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "NextPipelineWorkItem", reflect.TypeOf((*MockPipelineIndex)(nil).NextPipelineWorkItem), ctx, sessionID)
 }
 
 // PipelineWorkItemStats mocks base method.
-func (m *MockPipelineIndex) PipelineWorkItemStats(sessionID string) (int, int, error) {
+func (m *MockPipelineIndex) PipelineWorkItemStats(ctx context.Context, sessionID string) (int, int, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "PipelineWorkItemStats", sessionID)
+	ret := m.ctrl.Call(m, "PipelineWorkItemStats", ctx, sessionID)
 	ret0, _ := ret[0].(int)
 	ret1, _ := ret[1].(int)
 	ret2, _ := ret[2].(error)
@@ -153,35 +154,35 @@ func (m *MockPipelineIndex) PipelineWorkItemStats(sessionID string) (int, int, e
 }
 
 // PipelineWorkItemStats indicates an expected call of PipelineWorkItemStats.
-func (mr *MockPipelineIndexMockRecorder) PipelineWorkItemStats(sessionID any) *gomock.Call {
+func (mr *MockPipelineIndexMockRecorder) PipelineWorkItemStats(ctx, sessionID any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "PipelineWorkItemStats", reflect.TypeOf((*MockPipelineIndex)(nil).PipelineWorkItemStats), sessionID)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "PipelineWorkItemStats", reflect.TypeOf((*MockPipelineIndex)(nil).PipelineWorkItemStats), ctx, sessionID)
 }
 
 // SetPipelineWatermark mocks base method.
-func (m *MockPipelineIndex) SetPipelineWatermark(tool, branch, hash string) error {
+func (m *MockPipelineIndex) SetPipelineWatermark(ctx context.Context, tool, branch, hash string) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "SetPipelineWatermark", tool, branch, hash)
+	ret := m.ctrl.Call(m, "SetPipelineWatermark", ctx, tool, branch, hash)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // SetPipelineWatermark indicates an expected call of SetPipelineWatermark.
-func (mr *MockPipelineIndexMockRecorder) SetPipelineWatermark(tool, branch, hash any) *gomock.Call {
+func (mr *MockPipelineIndexMockRecorder) SetPipelineWatermark(ctx, tool, branch, hash any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetPipelineWatermark", reflect.TypeOf((*MockPipelineIndex)(nil).SetPipelineWatermark), tool, branch, hash)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetPipelineWatermark", reflect.TypeOf((*MockPipelineIndex)(nil).SetPipelineWatermark), ctx, tool, branch, hash)
 }
 
 // SetPipelineWorkItemResponse mocks base method.
-func (m *MockPipelineIndex) SetPipelineWorkItemResponse(id int64, response string) error {
+func (m *MockPipelineIndex) SetPipelineWorkItemResponse(ctx context.Context, id int64, response string) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "SetPipelineWorkItemResponse", id, response)
+	ret := m.ctrl.Call(m, "SetPipelineWorkItemResponse", ctx, id, response)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // SetPipelineWorkItemResponse indicates an expected call of SetPipelineWorkItemResponse.
-func (mr *MockPipelineIndexMockRecorder) SetPipelineWorkItemResponse(id, response any) *gomock.Call {
+func (mr *MockPipelineIndexMockRecorder) SetPipelineWorkItemResponse(ctx, id, response any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetPipelineWorkItemResponse", reflect.TypeOf((*MockPipelineIndex)(nil).SetPipelineWorkItemResponse), id, response)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetPipelineWorkItemResponse", reflect.TypeOf((*MockPipelineIndex)(nil).SetPipelineWorkItemResponse), ctx, id, response)
 }

@@ -18,11 +18,11 @@ type stubReviewer struct {
 	continueErr    error
 }
 
-func (s *stubReviewer) StartSession() (*ReviewResult, error) {
+func (s *stubReviewer) StartSession(_ context.Context) (*ReviewResult, error) {
 	return s.startResult, s.startErr
 }
 
-func (s *stubReviewer) ContinueSession(sessionID, response string) (*ReviewResult, error) {
+func (s *stubReviewer) ContinueSession(_ context.Context, sessionID, response string) (*ReviewResult, error) {
 	return s.continueResult, s.continueErr
 }
 

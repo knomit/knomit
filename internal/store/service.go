@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 
@@ -72,13 +73,13 @@ func (s *Service) Close() error { return s.db.Close() }
 
 // GitWriter is the minimal interface needed for DeleteFact.
 type GitWriter interface {
-	DeleteFile(branch, path, message, operation string) (string, error)
+	DeleteFile(ctx context.Context, branch, path, message, operation string) (string, error)
 }
 
 // DeleteFact deletes a fact from the git store on the given branch; the onCommit observer
 // handles index cleanup automatically via idx.Sync.
-func (s *Service) DeleteFact(gw GitWriter, branch, path, message string) error {
-	if _, err := gw.DeleteFile(branch, path, message, "retract"); err != nil {
+func (s *Service) DeleteFact(ctx context.Context, gw GitWriter, branch, path, message string) error {
+	if _, err := gw.DeleteFile(ctx, branch, path, message, "retract"); err != nil {
 		return fmt.Errorf("DeleteFact git: %w", err)
 	}
 

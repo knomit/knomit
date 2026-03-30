@@ -31,18 +31,18 @@ func TestExploreFirstPage(t *testing.T) {
 	factContent := SerializeFact(tmp)
 
 	// branch from handler arg
-	ei.EXPECT().GCToolSessions("explore", "machine/test", 5).Return(nil)
-	gs.EXPECT().WalkChangedFiles(testAgentBranch, "", "kb", nil, 25).Return(
+	ei.EXPECT().GCToolSessions(gomock.Any(), "explore", "machine/test", 5).Return(nil)
+	gs.EXPECT().WalkChangedFiles(gomock.Any(), testAgentBranch, "", "kb", nil, 25).Return(
 		[]FileRecency{{Path: "kb/foo.md", Timestamp: ts}},
 		"abc123", nil,
 	)
-	gs.EXPECT().ReadFile(testAgentBranch, "kb/foo.md").Return(factContent, nil)
-	ei.EXPECT().CreateToolSession("explore", "machine/test", "kb").Return(
+	gs.EXPECT().ReadFile(gomock.Any(), testAgentBranch, "kb/foo.md").Return(factContent, nil)
+	ei.EXPECT().CreateToolSession(gomock.Any(), "explore", "machine/test", "kb").Return(
 		&ToolSession{ID: "sess-1", Tool: "explore", Branch: "machine/test", PathPrefix: "kb", Status: "active"},
 		nil,
 	)
-	ei.EXPECT().AddSeenPaths("sess-1", []string{"kb/foo.md"}).Return(nil)
-	ei.EXPECT().UpdateToolSession("sess-1", "abc123", "completed").Return(nil)
+	ei.EXPECT().AddSeenPaths(gomock.Any(), "sess-1", []string{"kb/foo.md"}).Return(nil)
+	ei.EXPECT().UpdateToolSession(gomock.Any(), "sess-1", "abc123", "completed").Return(nil)
 
 	handler := ExploreHandler(gs, ei, "kb", testAgentBranch)
 	req := mcpgo.CallToolRequest{}
@@ -98,18 +98,18 @@ func TestExploreResumesSession(t *testing.T) {
 	seen := map[string]bool{"kb/foo.md": true}
 
 	// branch from handler arg
-	ei.EXPECT().GetToolSession("sess-1").Return(
+	ei.EXPECT().GetToolSession(gomock.Any(), "sess-1").Return(
 		&ToolSession{ID: "sess-1", Tool: "explore", Branch: "machine/test", PathPrefix: "kb", LastCommit: "abc123", Status: "active"},
 		nil,
 	)
-	ei.EXPECT().GetSeenPaths("sess-1").Return(seen, nil)
-	gs.EXPECT().WalkChangedFiles(testAgentBranch, "abc123", "kb", seen, 25).Return(
+	ei.EXPECT().GetSeenPaths(gomock.Any(), "sess-1").Return(seen, nil)
+	gs.EXPECT().WalkChangedFiles(gomock.Any(), testAgentBranch, "abc123", "kb", seen, 25).Return(
 		[]FileRecency{{Path: "kb/bar.md", Timestamp: ts}},
 		"def456", nil,
 	)
-	gs.EXPECT().ReadFile(testAgentBranch, "kb/bar.md").Return(factContent, nil)
-	ei.EXPECT().AddSeenPaths("sess-1", []string{"kb/bar.md"}).Return(nil)
-	ei.EXPECT().UpdateToolSession("sess-1", "def456", "completed").Return(nil)
+	gs.EXPECT().ReadFile(gomock.Any(), testAgentBranch, "kb/bar.md").Return(factContent, nil)
+	ei.EXPECT().AddSeenPaths(gomock.Any(), "sess-1", []string{"kb/bar.md"}).Return(nil)
+	ei.EXPECT().UpdateToolSession(gomock.Any(), "sess-1", "def456", "completed").Return(nil)
 
 	handler := ExploreHandler(gs, ei, "kb", testAgentBranch)
 	req := mcpgo.CallToolRequest{}
@@ -146,8 +146,8 @@ func TestExploreEmptyKB(t *testing.T) {
 	ei := NewMockToolSessionIndex(ctrl)
 
 	// branch from handler arg
-	ei.EXPECT().GCToolSessions("explore", "machine/test", 5).Return(nil)
-	gs.EXPECT().WalkChangedFiles(testAgentBranch, "", "kb", nil, 25).Return(nil, "", nil)
+	ei.EXPECT().GCToolSessions(gomock.Any(), "explore", "machine/test", 5).Return(nil)
+	gs.EXPECT().WalkChangedFiles(gomock.Any(), testAgentBranch, "", "kb", nil, 25).Return(nil, "", nil)
 
 	handler := ExploreHandler(gs, ei, "kb", testAgentBranch)
 	req := mcpgo.CallToolRequest{}
@@ -185,7 +185,7 @@ func TestExploreExpiredSession(t *testing.T) {
 	ei := NewMockToolSessionIndex(ctrl)
 
 	// branch from handler arg
-	ei.EXPECT().GetToolSession("gone-sess").Return(nil, nil)
+	ei.EXPECT().GetToolSession(gomock.Any(), "gone-sess").Return(nil, nil)
 
 	handler := ExploreHandler(gs, ei, "kb", testAgentBranch)
 	req := mcpgo.CallToolRequest{}
@@ -220,22 +220,22 @@ func TestExploreDeletedFactSkipped(t *testing.T) {
 	goodContent := SerializeFact(tmp)
 
 	// branch from handler arg
-	ei.EXPECT().GCToolSessions("explore", "machine/test", 5).Return(nil)
-	gs.EXPECT().WalkChangedFiles(testAgentBranch, "", "kb", nil, 25).Return(
+	ei.EXPECT().GCToolSessions(gomock.Any(), "explore", "machine/test", 5).Return(nil)
+	gs.EXPECT().WalkChangedFiles(gomock.Any(), testAgentBranch, "", "kb", nil, 25).Return(
 		[]FileRecency{
 			{Path: "kb/deleted.md", Timestamp: ts},
 			{Path: "kb/good.md", Timestamp: ts},
 		},
 		"abc123", nil,
 	)
-	gs.EXPECT().ReadFile(testAgentBranch, "kb/deleted.md").Return("", fmt.Errorf("not found"))
-	gs.EXPECT().ReadFile(testAgentBranch, "kb/good.md").Return(goodContent, nil)
-	ei.EXPECT().CreateToolSession("explore", "machine/test", "kb").Return(
+	gs.EXPECT().ReadFile(gomock.Any(), testAgentBranch, "kb/deleted.md").Return("", fmt.Errorf("not found"))
+	gs.EXPECT().ReadFile(gomock.Any(), testAgentBranch, "kb/good.md").Return(goodContent, nil)
+	ei.EXPECT().CreateToolSession(gomock.Any(), "explore", "machine/test", "kb").Return(
 		&ToolSession{ID: "sess-2", Tool: "explore", Branch: "machine/test", PathPrefix: "kb", Status: "active"},
 		nil,
 	)
-	ei.EXPECT().AddSeenPaths("sess-2", []string{"kb/good.md"}).Return(nil)
-	ei.EXPECT().UpdateToolSession("sess-2", "abc123", "completed").Return(nil)
+	ei.EXPECT().AddSeenPaths(gomock.Any(), "sess-2", []string{"kb/good.md"}).Return(nil)
+	ei.EXPECT().UpdateToolSession(gomock.Any(), "sess-2", "abc123", "completed").Return(nil)
 
 	handler := ExploreHandler(gs, ei, "kb", testAgentBranch)
 	req := mcpgo.CallToolRequest{}

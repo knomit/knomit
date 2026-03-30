@@ -44,7 +44,7 @@ func RetractHandler(gs GitStore, ontologyRoot, agentBranch string) func(context.
 		}
 
 		// 3. Check file exists.
-		exists, err := gs.FileExists(agentBranch, file)
+		exists, err := gs.FileExists(ctx, agentBranch, file)
 		if err != nil {
 			return mcpgo.NewToolResultError(fmt.Sprintf("file exists check error: %v", err)), nil
 		}
@@ -54,7 +54,7 @@ func RetractHandler(gs GitStore, ontologyRoot, agentBranch string) func(context.
 
 		// 4. Delete the file.
 		commitMsg := fmt.Sprintf("retract(%s): %s", momentName, file)
-		hash, err := gs.DeleteFile(agentBranch, file, commitMsg, "retract")
+		hash, err := gs.DeleteFile(ctx, agentBranch, file, commitMsg, "retract")
 		if err != nil {
 			return mcpgo.NewToolResultError(fmt.Sprintf("delete error: %v", err)), nil
 		}

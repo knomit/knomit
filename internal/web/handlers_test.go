@@ -90,7 +90,7 @@ func TestHandleBrowse(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			ctrl := gomock.NewController(t)
 			gs := NewMockGitStore(ctrl)
-			gs.EXPECT().ListDir(testAgentBranch, gomock.Any()).Return(tc.entries, nil).AnyTimes()
+			gs.EXPECT().ListDir(gomock.Any(), testAgentBranch, gomock.Any()).Return(tc.entries, nil).AnyTimes()
 
 			handler := newTestRouter(gs, nil)
 			rr := doRequest(t, handler, http.MethodGet, tc.query, "")
@@ -151,7 +151,7 @@ func TestHandleFact(t *testing.T) {
 			ctrl := gomock.NewController(t)
 			gs := NewMockGitStore(ctrl)
 			if tc.expectRead {
-				gs.EXPECT().ReadFile(testAgentBranch, gomock.Any()).Return(tc.content, nil)
+				gs.EXPECT().ReadFile(gomock.Any(), testAgentBranch, gomock.Any()).Return(tc.content, nil)
 			}
 
 			handler := newTestRouter(gs, nil)
@@ -180,7 +180,7 @@ func TestHandleFactParseError(t *testing.T) {
 
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
-	gs.EXPECT().ReadFile(testAgentBranch, "kb/bad.md").Return(badContent, nil)
+	gs.EXPECT().ReadFile(gomock.Any(), testAgentBranch, "kb/bad.md").Return(badContent, nil)
 
 	handler := newTestRouter(gs, nil)
 	rr := doRequest(t, handler, http.MethodGet, "/api/v1/knomit/fact?path=kb/bad.md", "")
@@ -206,7 +206,7 @@ func TestHandleFactWrite(t *testing.T) {
 	t.Run("write valid content returns parsed fact", func(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		gs := NewMockGitStore(ctrl)
-		gs.EXPECT().WriteFile(testAgentBranch, "kb/fact.md", validContent, gomock.Any(), gomock.Any()).Return("abc123", "def456", nil)
+		gs.EXPECT().WriteFile(gomock.Any(), testAgentBranch, "kb/fact.md", validContent, gomock.Any(), gomock.Any()).Return("abc123", "def456", nil)
 
 		handler := newTestRouter(gs, nil)
 		body := `{"path":"kb/fact.md","content":` + string(mustJSON(validContent)) + `}`
@@ -300,7 +300,7 @@ func TestHandleSearch(t *testing.T) {
 			var idx repos.SearchIndex
 			if tc.useIdx {
 				mockIdx := NewMockSearchIndex(ctrl)
-				mockIdx.EXPECT().Search(gomock.Any(), gomock.Any()).Return(tc.idxResults, nil)
+				mockIdx.EXPECT().Search(gomock.Any(), gomock.Any(), gomock.Any()).Return(tc.idxResults, nil)
 				idx = mockIdx
 			}
 
@@ -334,7 +334,7 @@ func TestHandleSearchMinSimilarity(t *testing.T) {
 	mockIdx := NewMockSearchIndex(ctrl)
 
 	// Expect the Search call to receive a SearchQuery with MinSimilarity set.
-	mockIdx.EXPECT().Search(gomock.Any(), gomock.Any()).DoAndReturn(func(branch string, q store.SearchQuery) ([]store.SearchResult, error) {
+	mockIdx.EXPECT().Search(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, branch string, q store.SearchQuery) ([]store.SearchResult, error) {
 		if q.MinSimilarity != 0.75 {
 			return nil, fmt.Errorf("expected MinSimilarity=0.75, got %v", q.MinSimilarity)
 		}
@@ -406,7 +406,7 @@ func TestHandleHistory(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			ctrl := gomock.NewController(t)
 			gs := NewMockGitStore(ctrl)
-			gs.EXPECT().LogPaginated(testAgentBranch, tc.path, 50, "", "", "").Return(tc.entries, "", "", nil)
+			gs.EXPECT().LogPaginated(gomock.Any(), testAgentBranch, tc.path, 50, "", "", "").Return(tc.entries, "", "", nil)
 
 			handler := newTestRouter(gs, nil)
 			rr := doRequest(t, handler, http.MethodGet, tc.query, "")
@@ -466,12 +466,12 @@ func TestHandleStatus(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			ctrl := gomock.NewController(t)
 			gs := NewMockGitStore(ctrl)
-			gs.EXPECT().HeadCommit(testAgentBranch).Return(tc.head, nil)
+			gs.EXPECT().HeadCommit(gomock.Any(), testAgentBranch).Return(tc.head, nil)
 
 			var idx repos.SearchIndex
 			if tc.hasIdx {
 				mockIdx := NewMockSearchIndex(ctrl)
-				mockIdx.EXPECT().GetLastCommit(testAgentBranch).Return(tc.indexCommit, nil)
+				mockIdx.EXPECT().GetLastCommit(gomock.Any(), testAgentBranch).Return(tc.indexCommit, nil)
 				idx = mockIdx
 			}
 

@@ -223,7 +223,7 @@ func TestDedupCluster_MergesNearDuplicates(t *testing.T) {
 	bContent := "---\ndomain: [testing]\nconfidence: 0.8\nsources: 1\nentities: [entity-b]\nrefs: []\n---\n# Fact B\n\nBody of fact B about topic X, similar to A.\n"
 
 	// Search for A → returns B (score 95)
-	idx.EXPECT().Search(gomock.Any(), store.SearchQuery{
+	idx.EXPECT().Search(gomock.Any(), gomock.Any(), store.SearchQuery{
 		Text:          factA.Title + " " + factA.Body,
 		MinSimilarity: defaultDedupThreshold,
 		Limit:         10,
@@ -232,7 +232,7 @@ func TestDedupCluster_MergesNearDuplicates(t *testing.T) {
 	}, nil)
 
 	// Search for B → returns A (score 95)
-	idx.EXPECT().Search(gomock.Any(), store.SearchQuery{
+	idx.EXPECT().Search(gomock.Any(), gomock.Any(), store.SearchQuery{
 		Text:          factB.Title + " " + factB.Body,
 		MinSimilarity: defaultDedupThreshold,
 		Limit:         10,
@@ -241,25 +241,25 @@ func TestDedupCluster_MergesNearDuplicates(t *testing.T) {
 	}, nil)
 
 	// Search for C → no matches
-	idx.EXPECT().Search(gomock.Any(), store.SearchQuery{
+	idx.EXPECT().Search(gomock.Any(), gomock.Any(), store.SearchQuery{
 		Text:          factC.Title + " " + factC.Body,
 		MinSimilarity: defaultDedupThreshold,
 		Limit:         10,
 	}).Return([]store.SearchResult{}, nil)
 
 	// Winner is A (higher confidence). Read both to get full facts with Refs.
-	gs.EXPECT().ReadFile("agent/test", "kb/a.md").Return(aContent, nil)
-	gs.EXPECT().ReadFile("agent/test", "kb/b.md").Return(bContent, nil)
+	gs.EXPECT().ReadFile(gomock.Any(), "agent/test", "kb/a.md").Return(aContent, nil)
+	gs.EXPECT().ReadFile(gomock.Any(), "agent/test", "kb/b.md").Return(bContent, nil)
 
 	// Write merged winner back to git.
-	gs.EXPECT().WriteFile("agent/test", "kb/a.md", gomock.Any(), gomock.Any(), gomock.Any()).Return("commit-hash-1", "blob-hash-1", nil)
+	gs.EXPECT().WriteFile(gomock.Any(), "agent/test", "kb/a.md", gomock.Any(), gomock.Any(), gomock.Any()).Return("commit-hash-1", "blob-hash-1", nil)
 
 	// Upsert updated winner into index.
-	idx.EXPECT().Upsert(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil)
+	idx.EXPECT().Upsert(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(nil)
 
 	// Delete loser from git and index.
-	gs.EXPECT().DeleteFile("agent/test", "kb/b.md", gomock.Any(), gomock.Any()).Return("commit-hash-2", nil)
-	idx.EXPECT().Delete(gomock.Any(), "kb/b.md").Return(nil)
+	gs.EXPECT().DeleteFile(gomock.Any(), "agent/test", "kb/b.md", gomock.Any(), gomock.Any()).Return("commit-hash-2", nil)
+	idx.EXPECT().Delete(gomock.Any(), gomock.Any(), "kb/b.md").Return(nil)
 
 	surviving, err := dedupCluster(context.Background(), cluster, gs, idx, defaultDedupThreshold, "test-recipe", func(ProgressEvent) {}, "agent/test")
 	if err != nil {
@@ -328,7 +328,7 @@ func TestDedupCluster_SkipsBelowThreshold(t *testing.T) {
 	cluster := []factForLLM{factA, factB}
 
 	// Both searches return empty (no near-duplicates).
-	idx.EXPECT().Search(gomock.Any(), gomock.Any()).Return([]store.SearchResult{}, nil).Times(2)
+	idx.EXPECT().Search(gomock.Any(), gomock.Any(), gomock.Any()).Return([]store.SearchResult{}, nil).Times(2)
 
 	// No git or index mutations should happen.
 	_ = gs // no expectations set — gomock will fail if any method is called

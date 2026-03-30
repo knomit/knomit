@@ -15,8 +15,8 @@ func TestRetractDeletesFile(t *testing.T) {
 
 	var deletedFile string
 
-	gs.EXPECT().FileExists(testAgentBranch, "kb/foo.md").Return(true, nil)
-	gs.EXPECT().DeleteFile(testAgentBranch, "kb/foo.md", gomock.Any(), gomock.Any()).DoAndReturn(func(branch, path, msg, operation string) (string, error) {
+	gs.EXPECT().FileExists(gomock.Any(), testAgentBranch, "kb/foo.md").Return(true, nil)
+	gs.EXPECT().DeleteFile(gomock.Any(), testAgentBranch, "kb/foo.md", gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, branch, path, msg, operation string) (string, error) {
 		deletedFile = path
 		return "abc123def456", nil
 	})
@@ -61,7 +61,7 @@ func TestRetractFileNotFound(t *testing.T) {
 	gs := NewMockGitStore(ctrl)
 
 
-	gs.EXPECT().FileExists(testAgentBranch, "kb/nonexistent.md").Return(false, nil)
+	gs.EXPECT().FileExists(gomock.Any(), testAgentBranch, "kb/nonexistent.md").Return(false, nil)
 
 	handler := RetractHandler(gs, "kb", testAgentBranch)
 

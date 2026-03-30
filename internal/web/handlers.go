@@ -71,7 +71,7 @@ func handleBrowse(ontologyRoot, agentBranch string) http.HandlerFunc {
 			path = ontologyRoot
 		}
 
-		entries, err := gs.ListDir(agentBranch, path)
+		entries, err := gs.ListDir(r.Context(), agentBranch, path)
 		if err != nil {
 			// Empty repo or missing directory — return empty list, not an error.
 			log.Debug().Err(err).Str("path", path).Msg("browse: directory not found, returning empty")
@@ -101,7 +101,7 @@ func handleBrowse(ontologyRoot, agentBranch string) http.HandlerFunc {
 			}
 			if len(factPaths) > 0 {
 				for _, fp := range factPaths {
-					if fb, err := idx.GetByPath(agentBranch, fp); err == nil && fb != nil {
+					if fb, err := idx.GetByPath(r.Context(), agentBranch, fp); err == nil && fb != nil {
 						typeByPath[fp] = fb.Type
 						titleByPath[fp] = fb.Title
 					}
@@ -148,24 +148,24 @@ func handleFact(agentBranch string) http.HandlerFunc {
 		var fromCommit string
 		var err error
 		if commitHash != "" {
-			content, err = gs.ReadFileAtCommit(agentBranch, path, commitHash)
+			content, err = gs.ReadFileAtCommit(r.Context(), agentBranch, path, commitHash)
 			if err != nil {
 				// File may have been deleted in this commit (e.g. retract).
 				// Fall back to the last commit where the file existed.
-				content, fromCommit, err = gs.ReadFileLastCommit(agentBranch, path, commitHash)
+				content, fromCommit, err = gs.ReadFileLastCommit(r.Context(), agentBranch, path, commitHash)
 			} else {
 				fromCommit = commitHash
 			}
 			if err != nil && svc != nil {
-				if lastHash, ok := svc.Index().LastCommitForPath(agentBranch, path); ok {
-					content, err = gs.ReadFileAtCommit(agentBranch, path, lastHash)
+				if lastHash, ok := svc.Index().LastCommitForPath(r.Context(), agentBranch, path); ok {
+					content, err = gs.ReadFileAtCommit(r.Context(), agentBranch, path, lastHash)
 					if err == nil {
 						fromCommit = lastHash
 					}
 				}
 			}
 		} else {
-			content, err = gs.ReadFile(agentBranch, path)
+			content, err = gs.ReadFile(r.Context(), agentBranch, path)
 		}
 		if err != nil {
 			log.Debug().Err(err).Str("path", path).Msg("fact not found")
@@ -212,7 +212,7 @@ func handleFact(agentBranch string) http.HandlerFunc {
 
 		// Browsing mode: enrich with commit hash and date from the store index.
 		if commitHash == "" && svc != nil {
-			if rec, lerr := svc.Index().GetByPath(agentBranch, path); lerr == nil && rec != nil && rec.CommitHash != "" {
+			if rec, lerr := svc.Index().GetByPath(r.Context(), agentBranch, path); lerr == nil && rec != nil && rec.CommitHash != "" {
 				resp := map[string]any{
 					"path":        fact.Path(),
 					"title":       fact.Title,
@@ -225,7 +225,7 @@ func handleFact(agentBranch string) http.HandlerFunc {
 					"refs":        fact.Refs,
 					"commit_hash": rec.CommitHash,
 				}
-				if ts, ok := svc.Index().CommitTimestamp(rec.CommitHash); ok {
+				if ts, ok := svc.Index().CommitTimestamp(r.Context(), rec.CommitHash); ok {
 					resp["commit_date"] = time.Unix(ts, 0).UTC().Format(time.RFC3339)
 				}
 				writeJSON(w, http.StatusOK, resp)
@@ -259,7 +259,7 @@ func handleFactWrite(agentBranch string) http.HandlerFunc {
 		}
 
 		msg := "edit: update " + req.Path + " via UI"
-		if _, _, err := gs.WriteFile(agentBranch, req.Path, req.Content, msg, "update"); err != nil {
+		if _, _, err := gs.WriteFile(r.Context(), agentBranch, req.Path, req.Content, msg, "update"); err != nil {
 			writeError(w, http.StatusInternalServerError, fmt.Sprintf("write failed: %v", err))
 			return
 		}
@@ -294,7 +294,7 @@ func handleFactRetract(agentBranch string) http.HandlerFunc {
 		}
 
 		msg := "manual-review: retract " + path
-		commitHash, err := gs.DeleteFile(agentBranch, path, msg, "retract")
+		commitHash, err := gs.DeleteFile(r.Context(), agentBranch, path, msg, "retract")
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, fmt.Sprintf("retract failed: %v", err))
 			return
@@ -429,7 +429,7 @@ func handleSearch() http.HandlerFunc {
 
 		log.Debug().Str("q", text).Strs("entities", entities).Strs("domain", domain).Int("limit", limit).Msg("search")
 
-		results, err := idx.Search(branch, store.SearchQuery{
+		results, err := idx.Search(r.Context(), branch, store.SearchQuery{
 			Text:          text,
 			Entities:      entities,
 			Domain:        domain,
@@ -481,7 +481,7 @@ func handleHistoryPaginated(agentBranch string) http.HandlerFunc {
 		from := r.URL.Query().Get("from")
 		before := r.URL.Query().Get("before")
 
-		entries, next, prev, err := gs.LogPaginated(agentBranch, path, limit, after, from, before)
+		entries, next, prev, err := gs.LogPaginated(r.Context(), agentBranch, path, limit, after, from, before)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, fmt.Sprintf("log error: %v", err))
 			return
@@ -517,7 +517,7 @@ func handleCommitDetail(agentBranch string) http.HandlerFunc {
 			return
 		}
 
-		detail, err := gs.CommitDetail(hash)
+		detail, err := gs.CommitDetail(r.Context(), hash)
 		if err != nil {
 			writeError(w, http.StatusNotFound, fmt.Sprintf("commit not found: %v", err))
 			return
@@ -534,21 +534,21 @@ func handleCommitDetail(agentBranch string) http.HandlerFunc {
 			files[i] = fileWithTitle{Path: f.Path, Action: f.Action}
 			// Try index first (fast, works for facts still in the current state).
 			if idx != nil {
-				if fb, err := idx.GetByPath(agentBranch, f.Path); err == nil && fb != nil {
+				if fb, err := idx.GetByPath(r.Context(), agentBranch, f.Path); err == nil && fb != nil {
 					files[i].Title = fb.Title
 					continue
 				}
 			}
 			// Fallback: read the file as it was at this commit and parse the title.
 			// Covers retracted facts, deleted files, and anything not in the current index.
-			if content, err := gs.ReadFileAtCommit(agentBranch, f.Path, hash); err == nil && content != "" {
+			if content, err := gs.ReadFileAtCommit(r.Context(), agentBranch, f.Path, hash); err == nil && content != "" {
 				if parsed, perr := mcp.ParseFact(f.Path, content); perr == nil {
 					files[i].Title = parsed.Title
 					continue
 				}
 			}
 			// Last resort for deleted files: find the last commit where the file existed.
-			if content, _, err := gs.ReadFileLastCommit(agentBranch, f.Path, hash); err == nil && content != "" {
+			if content, _, err := gs.ReadFileLastCommit(r.Context(), agentBranch, f.Path, hash); err == nil && content != "" {
 				if parsed, perr := mcp.ParseFact(f.Path, content); perr == nil {
 					files[i].Title = parsed.Title
 				}
@@ -572,7 +572,7 @@ func handleActivity(agentBranch string) http.HandlerFunc {
 		ri := repos.RepoFromContext(r.Context())
 		var gs repos.GitStore
 		ri.WithRead(func(d repos.StoreDeps) { gs = d.GS })
-		result, err := gs.Activity(agentBranch, r.URL.Query().Get("path"))
+		result, err := gs.Activity(r.Context(), agentBranch, r.URL.Query().Get("path"))
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, fmt.Sprintf("activity error: %v", err))
 			return
@@ -596,7 +596,7 @@ func handleCompletions() http.HandlerFunc {
 			http.Error(w, "category required", http.StatusBadRequest)
 			return
 		}
-		vals, err := idx.Completions(branch, category, prefix, 20)
+		vals, err := idx.Completions(r.Context(), branch, category, prefix, 20)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
@@ -617,7 +617,7 @@ func handleStats() http.HandlerFunc {
 			writeError(w, http.StatusServiceUnavailable, "index not available")
 			return
 		}
-		stats, err := idx.Stats(branch, r.URL.Query().Get("path"))
+		stats, err := idx.Stats(r.Context(), branch, r.URL.Query().Get("path"))
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, fmt.Sprintf("stats error: %v", err))
 			return
@@ -636,7 +636,7 @@ func handleStatus(embeddingsEnabled bool, ontologyRoot, agentBranch string) http
 			gs = d.GS
 			idx = d.Idx
 		})
-		head, err := gs.HeadCommit(agentBranch)
+		head, err := gs.HeadCommit(r.Context(), agentBranch)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, fmt.Sprintf("head commit error: %v", err))
 			return
@@ -646,7 +646,7 @@ func handleStatus(embeddingsEnabled bool, ontologyRoot, agentBranch string) http
 
 		indexCommit := ""
 		if idx != nil {
-			indexCommit, _ = idx.GetLastCommit(branch)
+			indexCommit, _ = idx.GetLastCommit(r.Context(), branch)
 		}
 
 		writeJSON(w, http.StatusOK, map[string]any{
@@ -738,7 +738,7 @@ func handleRecent() http.HandlerFunc {
 			}
 		}
 
-		entries, total, err := svc.Index().RecentFacts(branch, path, query, limit, offset, includeTypes, excludeTypes, domain, entities, epOps)
+		entries, total, err := svc.Index().RecentFacts(r.Context(), branch, path, query, limit, offset, includeTypes, excludeTypes, domain, entities, epOps)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, fmt.Sprintf("recent error: %v", err))
 			return

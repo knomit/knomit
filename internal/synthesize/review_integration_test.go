@@ -1,6 +1,7 @@
 package synthesize
 
 import (
+	"context"
 	"fmt"
 	"testing"
 
@@ -40,7 +41,7 @@ func TestReviewLoopIntegration(t *testing.T) {
 		"kb/go/errors.md":      factContent("Go Error Handling", "Go uses explicit error returns instead of exceptions."),
 	}
 	for path, content := range facts {
-		if _, _, err := gitStore.WriteFile(testReviewBranch, path, content, "add "+path, "learn"); err != nil {
+		if _, _, err := gitStore.WriteFile(context.Background(), testReviewBranch, path, content, "add "+path, "learn"); err != nil {
 			t.Fatalf("write %s: %v", path, err)
 		}
 	}
@@ -48,22 +49,22 @@ func TestReviewLoopIntegration(t *testing.T) {
 	// Mock SearchIndex.
 	idx := NewMockSearchIndex(ctrl)
 	// dirtyFacts (no watermark) calls Search with Limit=100_000 to get all facts from index.
-	idx.EXPECT().Search(gomock.Any(), store.SearchQuery{Limit: 100_000}).Return([]store.SearchResult{
+	idx.EXPECT().Search(gomock.Any(), gomock.Any(), store.SearchQuery{Limit: 100_000}).Return([]store.SearchResult{
 		{FactWithBody: store.FactWithBody{FactRecord: store.FactRecord{Path: "kb/go/concurrency.md", Title: "Go Concurrency", Type: "observation", Domain: []string{"testing"}, Confidence: 0.8, Sources: 1}, Body: "Go uses goroutines and channels for concurrency."}},
 		{FactWithBody: store.FactWithBody{FactRecord: store.FactRecord{Path: "kb/go/interfaces.md", Title: "Go Interfaces", Type: "observation", Domain: []string{"testing"}, Confidence: 0.8, Sources: 1}, Body: "Go interfaces are satisfied implicitly."}},
 		{FactWithBody: store.FactWithBody{FactRecord: store.FactRecord{Path: "kb/go/errors.md", Title: "Go Error Handling", Type: "observation", Domain: []string{"testing"}, Confidence: 0.8, Sources: 1}, Body: "Go uses explicit error returns instead of exceptions."}},
 	}, nil)
 	// ScopedCluster calls Search for neighbors.
-	idx.EXPECT().Search(gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
-	idx.EXPECT().ClusterFacts(gomock.Any(), gomock.Any(), gomock.Any()).Return(store.ClusterResult{}, fmt.Errorf("no embeddings")).AnyTimes()
+	idx.EXPECT().Search(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
+	idx.EXPECT().ClusterFacts(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(store.ClusterResult{}, fmt.Errorf("no embeddings")).AnyTimes()
 	// For prune/distill apply: delete calls go to real git, index delete goes to mock.
-	idx.EXPECT().Delete(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-	idx.EXPECT().Upsert(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+	idx.EXPECT().Delete(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+	idx.EXPECT().Upsert(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 
 	r := NewReviewer(gitStore, idx, reviewIdx, NewMockEmbedder(ctrl), nil, testReviewBranch)
 
 	// --- Step 1: StartSession — all 3 facts are dirty (no watermark). ---
-	result, err := r.StartSession()
+	result, err := r.StartSession(context.Background())
 	if err != nil {
 		t.Fatalf("StartSession: %v", err)
 	}
@@ -92,7 +93,7 @@ func TestReviewLoopIntegration(t *testing.T) {
 		{"path": "kb/go/errors.md", "action": "retract"}
 	]}`
 
-	result, err = r.ContinueSession(sessionID, pruneResp)
+	result, err = r.ContinueSession(context.Background(), sessionID, pruneResp)
 	if err != nil {
 		t.Fatalf("ContinueSession (prune): %v", err)
 	}
@@ -100,16 +101,16 @@ func TestReviewLoopIntegration(t *testing.T) {
 		result.Done, result.Item != nil, result.Progress)
 
 	// Verify retracted fact is actually deleted from git.
-	_, readErr := gitStore.ReadFile(testReviewBranch, "kb/go/errors.md")
+	_, readErr := gitStore.ReadFile(context.Background(), testReviewBranch, "kb/go/errors.md")
 	if readErr == nil {
 		t.Error("expected kb/go/errors.md to be deleted from git after retract")
 	}
 
 	// Kept facts should still be readable.
-	if _, err := gitStore.ReadFile(testReviewBranch, "kb/go/concurrency.md"); err != nil {
+	if _, err := gitStore.ReadFile(context.Background(), testReviewBranch, "kb/go/concurrency.md"); err != nil {
 		t.Errorf("concurrency.md should still exist: %v", err)
 	}
-	if _, err := gitStore.ReadFile(testReviewBranch, "kb/go/interfaces.md"); err != nil {
+	if _, err := gitStore.ReadFile(context.Background(), testReviewBranch, "kb/go/interfaces.md"); err != nil {
 		t.Errorf("interfaces.md should still exist: %v", err)
 	}
 
@@ -133,7 +134,7 @@ func TestReviewLoopIntegration(t *testing.T) {
 			t.Fatalf("unexpected item type: %s", result.Item.Type)
 		}
 
-		result, err = r.ContinueSession(sessionID, resp)
+		result, err = r.ContinueSession(context.Background(), sessionID, resp)
 		if err != nil {
 			t.Fatalf("ContinueSession (%s): %v", result.Item, err)
 		}
@@ -149,21 +150,21 @@ func TestReviewLoopIntegration(t *testing.T) {
 	t.Logf("Session complete: completed=%d", result.Progress.Completed)
 
 	// --- Step 5: Verify watermark was advanced. ---
-	watermark, err := reviewIdx.GetPipelineWatermark("review", testReviewBranch)
+	watermark, err := reviewIdx.GetPipelineWatermark(context.Background(), "review", testReviewBranch)
 	if err != nil {
 		t.Fatalf("GetReviewWatermark: %v", err)
 	}
 	if watermark == "" {
 		t.Fatal("expected watermark to be set after session completes")
 	}
-	headHash, err := gitStore.HeadCommit(testReviewBranch)
+	headHash, err := gitStore.HeadCommit(context.Background(), testReviewBranch)
 	if err != nil {
 		t.Fatalf("HeadCommit: %v", err)
 	}
 	t.Logf("Watermark=%s, HEAD=%s", watermark, headHash)
 
 	// --- Step 6: StartSession again — should return done (nothing changed). ---
-	result2, err := r.StartSession()
+	result2, err := r.StartSession(context.Background())
 	if err != nil {
 		t.Fatalf("second StartSession: %v", err)
 	}
@@ -173,7 +174,7 @@ func TestReviewLoopIntegration(t *testing.T) {
 	t.Logf("Second StartSession: done=%v", result2.Done)
 
 	// --- Step 7: Verify session was persisted and completed. ---
-	sess, err := reviewIdx.GetPipelineSession(sessionID)
+	sess, err := reviewIdx.GetPipelineSession(context.Background(), sessionID)
 	if err != nil {
 		t.Fatalf("GetPipelineSession: %v", err)
 	}

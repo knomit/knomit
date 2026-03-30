@@ -3,6 +3,7 @@
 package git
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"strings"
@@ -59,7 +60,7 @@ type ReplayResult struct {
 // It iterates facts from localDB (newest-first, deduped by path), reads their
 // blob content from the local store, resolves dead refs, and writes each fact
 // to the target store.
-func Replay(local *Store, localBranch string, iter FactIter, target *Store, cfg ReplayConfig) (*ReplayResult, error) {
+func Replay(ctx context.Context, local *Store, localBranch string, iter FactIter, target *Store, cfg ReplayConfig) (*ReplayResult, error) {
 	if cfg.AgentBranch == "" {
 		return nil, fmt.Errorf("Replay: AgentBranch must be set")
 	}
@@ -117,7 +118,7 @@ func Replay(local *Store, localBranch string, iter FactIter, target *Store, cfg 
 	}
 
 	// 3. Count remote facts for stats.
-	remotePaths, err := target.ListAll(cfg.AgentBranch)
+	remotePaths, err := target.ListAll(ctx, cfg.AgentBranch)
 	if err != nil {
 		return nil, fmt.Errorf("Replay: list remote facts: %w", err)
 	}
@@ -163,7 +164,7 @@ func Replay(local *Store, localBranch string, iter FactIter, target *Store, cfg 
 		}
 
 		// Resolve dead refs.
-		resolvedContent, resolvedCount, droppedCount, err := resolveDeadRefs(local, localBranch, content, f.path, localPathSet, remotePathSet)
+		resolvedContent, resolvedCount, droppedCount, err := resolveDeadRefs(ctx, local, localBranch, content, f.path, localPathSet, remotePathSet)
 		if err != nil {
 			log.Warn().Err(err).Str("path", f.path).Msg("replay: dead ref resolution failed, using original content")
 			resolvedContent = content
@@ -173,7 +174,7 @@ func Replay(local *Store, localBranch string, iter FactIter, target *Store, cfg 
 
 		// Write fact to target store and commit.
 		msg := fmt.Sprintf("replay: %s", f.path)
-		if _, _, err := target.WriteFile(cfg.AgentBranch, f.path, resolvedContent, msg, "replay"); err != nil {
+		if _, _, err := target.WriteFile(ctx, cfg.AgentBranch, f.path, resolvedContent, msg, "replay"); err != nil {
 			return nil, fmt.Errorf("Replay: write %s to target: %w", f.path, err)
 		}
 		result.FromLocal++
@@ -230,7 +231,7 @@ type replayFrontmatter struct {
 
 // resolveDeadRefs checks each ref in a fact's frontmatter and resolves dead local refs.
 // Returns: modified content, count of resolved refs, count of dropped refs.
-func resolveDeadRefs(local *Store, localBranch, content, path string, localPathSet, remotePathSet map[string]bool) (string, int, int, error) {
+func resolveDeadRefs(ctx context.Context, local *Store, localBranch, content, path string, localPathSet, remotePathSet map[string]bool) (string, int, int, error) {
 	fm, yamlBlock, body, err := parseFrontmatterRefs(content)
 	if err != nil {
 		// Not a valid frontmatter file — return as-is.
@@ -259,7 +260,7 @@ func resolveDeadRefs(local *Store, localBranch, content, path string, localPathS
 		}
 
 		// Dead local ref — try to resolve from history (1 level deep).
-		externalRefs, err := extractExternalRefsFromHistory(local, localBranch, ref)
+		externalRefs, err := extractExternalRefsFromHistory(ctx, local, localBranch, ref)
 		if err != nil {
 			log.Debug().Err(err).Str("ref", ref).Str("fact", path).Msg("replay: could not resolve dead ref from history")
 			droppedCount++
@@ -287,9 +288,9 @@ func resolveDeadRefs(local *Store, localBranch, content, path string, localPathS
 
 // extractExternalRefsFromHistory looks up the last version of a deleted fact in
 // local git history and extracts its external (http/https) refs.
-func extractExternalRefsFromHistory(local *Store, localBranch, deadPath string) ([]string, error) {
+func extractExternalRefsFromHistory(ctx context.Context, local *Store, localBranch, deadPath string) ([]string, error) {
 	// Walk the commit log for this path to find its last version.
-	localHash, err := local.resolveRef(localBranch)
+	localHash, err := local.resolveRef(ctx, localBranch)
 	if err != nil {
 		return nil, fmt.Errorf("extractExternalRefsFromHistory: ref: %w", err)
 	}

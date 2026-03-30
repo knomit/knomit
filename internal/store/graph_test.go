@@ -649,16 +649,16 @@ type mockGitReader struct {
 	head        string
 }
 
-func (m *mockGitReader) DiffFiles(branch, from string) (added, modified, deleted []string, err error) {
+func (m *mockGitReader) DiffFiles(_ context.Context, branch, from string) (added, modified, deleted []string, err error) {
 	return nil, nil, nil, nil
 }
-func (m *mockGitReader) ReadFile(branch, path string) (string, error) {
+func (m *mockGitReader) ReadFile(_ context.Context, branch, path string) (string, error) {
 	if c, ok := m.files[path]; ok {
 		return c, nil
 	}
 	return "", fmt.Errorf("not found: %s", path)
 }
-func (m *mockGitReader) ReadFileWithHash(branch, path string) (string, string, error) {
+func (m *mockGitReader) ReadFileWithHash(_ context.Context, branch, path string) (string, string, error) {
 	c, ok := m.files[path]
 	if !ok {
 		return "", "", fmt.Errorf("not found: %s", path)
@@ -671,11 +671,11 @@ func (m *mockGitReader) ReadFileWithHash(branch, path string) (string, string, e
 	}
 	return c, hash, nil
 }
-func (m *mockGitReader) HeadCommit(branch string) (string, error) { return m.head, nil }
-func (m *mockGitReader) LastCommitForPath(branch, path string) (string, error) {
+func (m *mockGitReader) HeadCommit(_ context.Context, branch string) (string, error) { return m.head, nil }
+func (m *mockGitReader) LastCommitForPath(_ context.Context, branch, path string) (string, error) {
 	return m.head, nil // mock: return head as the last commit
 }
-func (m *mockGitReader) ReadFileAtCommit(branch, path, commitHash string) (string, error) {
+func (m *mockGitReader) ReadFileAtCommit(_ context.Context, branch, path, commitHash string) (string, error) {
 	if m.commitFiles != nil {
 		if byPath, ok := m.commitFiles[commitHash]; ok {
 			if c, ok := byPath[path]; ok {
@@ -689,11 +689,11 @@ func (m *mockGitReader) ReadFileAtCommit(branch, path, commitHash string) (strin
 	}
 	return "", fmt.Errorf("ReadFileAtCommit: not found: %s@%s", path, commitHash)
 }
-func (m *mockGitReader) ListAll(branch string) ([]string, error) {
-	paths, _, err := m.ListAllWithHash(branch)
+func (m *mockGitReader) ListAll(_ context.Context, branch string) ([]string, error) {
+	paths, _, err := m.ListAllWithHash(context.Background(), branch)
 	return paths, err
 }
-func (m *mockGitReader) ListAllWithHash(branch string) ([]string, []string, error) {
+func (m *mockGitReader) ListAllWithHash(_ context.Context, branch string) ([]string, []string, error) {
 	var paths, hashes []string
 	for p := range m.files {
 		paths = append(paths, p)

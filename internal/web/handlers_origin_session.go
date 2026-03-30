@@ -219,7 +219,7 @@ CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value BLOB NOT NULL);
 		sendEvent(map[string]string{"phase": "analyzing"})
 
 		// Get default branch.
-		defaultBranch, err := cloned.DefaultBranch()
+		defaultBranch, err := cloned.DefaultBranch(r.Context())
 		if err != nil {
 			defaultBranch = agentBranch
 		}
@@ -231,21 +231,21 @@ CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value BLOB NOT NULL);
 		localGS, isRealStore := gs.(*git.Store)
 		history := "disjoint"
 		if isRealStore {
-			shared, err := localGS.HasSharedHistory(agentBranch, cloned, defaultBranch)
+			shared, err := localGS.HasSharedHistory(r.Context(), agentBranch, cloned, defaultBranch)
 			if err == nil && shared {
 				history = "shared"
 			}
 		}
 
 		// Count remote facts (files in the cloned store).
-		remoteFiles, err := cloned.ListAll(defaultBranch)
+		remoteFiles, err := cloned.ListAll(r.Context(), defaultBranch)
 		remoteFactCount := 0
 		if err == nil {
 			remoteFactCount = len(remoteFiles)
 		}
 
 		// Count local facts.
-		localFiles, err := gs.ListAll(agentBranch)
+		localFiles, err := gs.ListAll(r.Context(), agentBranch)
 		localFactCount := 0
 		if err == nil {
 			localFactCount = len(localFiles)
@@ -340,7 +340,7 @@ func handlePreview(rm *repos.Manager, sm *SessionManager, agentBranch string) ht
 		// Build local path set via FactsIter.
 		localPaths := make(map[string]struct{})
 		if svc != nil {
-			iter, err := store.NewFactsIter(svc.Index(), agentBranch)
+			iter, err := store.NewFactsIter(r.Context(), svc.Index(), agentBranch)
 			if err != nil {
 				log.Warn().Err(err).Str("repo", repo).Msg("preview: open facts iter")
 			} else {
@@ -357,7 +357,7 @@ func handlePreview(rm *repos.Manager, sm *SessionManager, agentBranch string) ht
 
 		// List remote paths.
 		remotePaths := make(map[string]struct{})
-		remoteFiles, err := remoteStore.ListAll(remoteAgentBranch)
+		remoteFiles, err := remoteStore.ListAll(r.Context(), remoteAgentBranch)
 		if err != nil {
 			log.Warn().Err(err).Str("repo", repo).Msg("preview: list remote")
 		} else {
@@ -396,7 +396,7 @@ func handlePreview(rm *repos.Manager, sm *SessionManager, agentBranch string) ht
 			go func() {
 				for p := range jobs {
 					readMu.Lock()
-					content, err := gs.ReadFile(agentBranch, p)
+					content, err := gs.ReadFile(r.Context(), agentBranch, p)
 					readMu.Unlock()
 					if err != nil {
 						results <- 0
@@ -541,7 +541,7 @@ func handleApply(rm *repos.Manager, sm *SessionManager, agentBranch string) http
 				return
 			}
 
-			factsIter, err := store.NewFactsIter(svc.Index(), agentBranch)
+			factsIter, err := store.NewFactsIter(r.Context(), svc.Index(), agentBranch)
 			if err != nil {
 				sendEvent(map[string]string{"phase": "error", "message": fmt.Sprintf("open facts iterator: %v", err)})
 				return
@@ -568,7 +568,7 @@ func handleApply(rm *repos.Manager, sm *SessionManager, agentBranch string) http
 				},
 			}
 
-			replayRes, err := git.Replay(localGS, agentBranch, iter, remoteStore, cfg)
+			replayRes, err := git.Replay(r.Context(), localGS, agentBranch, iter, remoteStore, cfg)
 			if err != nil {
 				sendEvent(map[string]string{"phase": "error", "message": fmt.Sprintf("replay failed: %v", err)})
 				sess.mu.Lock()
@@ -831,15 +831,15 @@ func handleCommit(rm *repos.Manager, sm *SessionManager, agentBranch string) htt
 						})
 					}
 				}
-				if err := idx.Rebuild(gitReader, rebuildBranch, progress); err != nil {
+				if err := idx.Rebuild(r.Context(), gitReader, rebuildBranch, progress); err != nil {
 					log.Warn().Err(err).Str("repo", repo).Msg("commit: index rebuild failed")
 				} else {
 					log.Info().Str("repo", repo).Msg("commit: index rebuilt from swapped store")
 					// Set pipeline watermarks to HEAD so the first review/hypothesize
 					// doesn't treat every cloned fact as dirty.
-					if head, err := gs.HeadCommit(rebuildBranch); err == nil {
+					if head, err := gs.HeadCommit(r.Context(), rebuildBranch); err == nil {
 						for _, tool := range []string{"review", "hypothesize"} {
-							if err := idx.SetPipelineWatermark(tool, rebuildBranch, head); err != nil {
+							if err := idx.SetPipelineWatermark(r.Context(), tool, rebuildBranch, head); err != nil {
 								log.Warn().Err(err).Str("repo", repo).Str("tool", tool).Msg("commit: pipeline watermark set failed")
 							}
 						}
@@ -858,7 +858,7 @@ func handleCommit(rm *repos.Manager, sm *SessionManager, agentBranch string) htt
 
 		// Broadcast status so the UI refreshes with the new HEAD.
 		if hub != nil {
-			if head, err := gs.HeadCommit(rebuildBranch); err == nil {
+			if head, err := gs.HeadCommit(r.Context(), rebuildBranch); err == nil {
 				hub.BroadcastStatus(head)
 			}
 		}

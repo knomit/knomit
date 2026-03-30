@@ -42,8 +42,8 @@ type ReviewStats struct {
 // Reviewer is the interface the review MCP tool requires from the synthesize
 // package. Using an interface breaks the import cycle (synthesize imports mcp).
 type Reviewer interface {
-	StartSession() (*ReviewResult, error)
-	ContinueSession(sessionID, response string) (*ReviewResult, error)
+	StartSession(ctx context.Context) (*ReviewResult, error)
+	ContinueSession(ctx context.Context, sessionID, response string) (*ReviewResult, error)
 }
 
 // reviewTool returns the Tool definition for knomit_review.
@@ -68,12 +68,12 @@ func ReviewHandler(reviewer Reviewer) func(context.Context, mcpgo.CallToolReques
 		var err error
 
 		if sessionID == "" {
-			result, err = reviewer.StartSession()
+			result, err = reviewer.StartSession(ctx)
 		} else {
 			if response == "" {
 				return mcpgo.NewToolResultError("response is required when continuing a session"), nil
 			}
-			result, err = reviewer.ContinueSession(sessionID, response)
+			result, err = reviewer.ContinueSession(ctx, sessionID, response)
 		}
 
 		if err != nil {

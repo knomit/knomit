@@ -10,6 +10,7 @@
 package web
 
 import (
+	context "context"
 	git "knomit/internal/git"
 	store "knomit/internal/store"
 	reflect "reflect"
@@ -42,114 +43,114 @@ func (m *MockGitStore) EXPECT() *MockGitStoreMockRecorder {
 }
 
 // Activity mocks base method.
-func (m *MockGitStore) Activity(branch, path string) (git.ActivityResult, error) {
+func (m *MockGitStore) Activity(ctx context.Context, branch, path string) (git.ActivityResult, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Activity", branch, path)
+	ret := m.ctrl.Call(m, "Activity", ctx, branch, path)
 	ret0, _ := ret[0].(git.ActivityResult)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // Activity indicates an expected call of Activity.
-func (mr *MockGitStoreMockRecorder) Activity(branch, path any) *gomock.Call {
+func (mr *MockGitStoreMockRecorder) Activity(ctx, branch, path any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Activity", reflect.TypeOf((*MockGitStore)(nil).Activity), branch, path)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Activity", reflect.TypeOf((*MockGitStore)(nil).Activity), ctx, branch, path)
 }
 
 // CommitDetail mocks base method.
-func (m *MockGitStore) CommitDetail(commitHash string) (*git.CommitDetailResult, error) {
+func (m *MockGitStore) CommitDetail(ctx context.Context, commitHash string) (*git.CommitDetailResult, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "CommitDetail", commitHash)
+	ret := m.ctrl.Call(m, "CommitDetail", ctx, commitHash)
 	ret0, _ := ret[0].(*git.CommitDetailResult)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // CommitDetail indicates an expected call of CommitDetail.
-func (mr *MockGitStoreMockRecorder) CommitDetail(commitHash any) *gomock.Call {
+func (mr *MockGitStoreMockRecorder) CommitDetail(ctx, commitHash any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CommitDetail", reflect.TypeOf((*MockGitStore)(nil).CommitDetail), commitHash)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CommitDetail", reflect.TypeOf((*MockGitStore)(nil).CommitDetail), ctx, commitHash)
 }
 
 // DeleteFile mocks base method.
-func (m *MockGitStore) DeleteFile(branch, path, message, operation string) (string, error) {
+func (m *MockGitStore) DeleteFile(ctx context.Context, branch, path, message, operation string) (string, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "DeleteFile", branch, path, message, operation)
+	ret := m.ctrl.Call(m, "DeleteFile", ctx, branch, path, message, operation)
 	ret0, _ := ret[0].(string)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // DeleteFile indicates an expected call of DeleteFile.
-func (mr *MockGitStoreMockRecorder) DeleteFile(branch, path, message, operation any) *gomock.Call {
+func (mr *MockGitStoreMockRecorder) DeleteFile(ctx, branch, path, message, operation any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteFile", reflect.TypeOf((*MockGitStore)(nil).DeleteFile), branch, path, message, operation)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteFile", reflect.TypeOf((*MockGitStore)(nil).DeleteFile), ctx, branch, path, message, operation)
 }
 
 // HeadCommit mocks base method.
-func (m *MockGitStore) HeadCommit(branch string) (string, error) {
+func (m *MockGitStore) HeadCommit(ctx context.Context, branch string) (string, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "HeadCommit", branch)
+	ret := m.ctrl.Call(m, "HeadCommit", ctx, branch)
 	ret0, _ := ret[0].(string)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // HeadCommit indicates an expected call of HeadCommit.
-func (mr *MockGitStoreMockRecorder) HeadCommit(branch any) *gomock.Call {
+func (mr *MockGitStoreMockRecorder) HeadCommit(ctx, branch any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "HeadCommit", reflect.TypeOf((*MockGitStore)(nil).HeadCommit), branch)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "HeadCommit", reflect.TypeOf((*MockGitStore)(nil).HeadCommit), ctx, branch)
 }
 
 // ListAll mocks base method.
-func (m *MockGitStore) ListAll(branch string) ([]string, error) {
+func (m *MockGitStore) ListAll(ctx context.Context, branch string) ([]string, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "ListAll", branch)
+	ret := m.ctrl.Call(m, "ListAll", ctx, branch)
 	ret0, _ := ret[0].([]string)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // ListAll indicates an expected call of ListAll.
-func (mr *MockGitStoreMockRecorder) ListAll(branch any) *gomock.Call {
+func (mr *MockGitStoreMockRecorder) ListAll(ctx, branch any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListAll", reflect.TypeOf((*MockGitStore)(nil).ListAll), branch)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListAll", reflect.TypeOf((*MockGitStore)(nil).ListAll), ctx, branch)
 }
 
 // ListDir mocks base method.
-func (m *MockGitStore) ListDir(branch, path string) ([]git.DirEntry, error) {
+func (m *MockGitStore) ListDir(ctx context.Context, branch, path string) ([]git.DirEntry, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "ListDir", branch, path)
+	ret := m.ctrl.Call(m, "ListDir", ctx, branch, path)
 	ret0, _ := ret[0].([]git.DirEntry)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // ListDir indicates an expected call of ListDir.
-func (mr *MockGitStoreMockRecorder) ListDir(branch, path any) *gomock.Call {
+func (mr *MockGitStoreMockRecorder) ListDir(ctx, branch, path any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListDir", reflect.TypeOf((*MockGitStore)(nil).ListDir), branch, path)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListDir", reflect.TypeOf((*MockGitStore)(nil).ListDir), ctx, branch, path)
 }
 
 // Log mocks base method.
-func (m *MockGitStore) Log(branch, path string) ([]git.LogEntry, error) {
+func (m *MockGitStore) Log(ctx context.Context, branch, path string) ([]git.LogEntry, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Log", branch, path)
+	ret := m.ctrl.Call(m, "Log", ctx, branch, path)
 	ret0, _ := ret[0].([]git.LogEntry)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // Log indicates an expected call of Log.
-func (mr *MockGitStoreMockRecorder) Log(branch, path any) *gomock.Call {
+func (mr *MockGitStoreMockRecorder) Log(ctx, branch, path any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Log", reflect.TypeOf((*MockGitStore)(nil).Log), branch, path)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Log", reflect.TypeOf((*MockGitStore)(nil).Log), ctx, branch, path)
 }
 
 // LogPaginated mocks base method.
-func (m *MockGitStore) LogPaginated(branch, path string, limit int, after, from, before string) ([]git.LogEntryWithTags, string, string, error) {
+func (m *MockGitStore) LogPaginated(ctx context.Context, branch, path string, limit int, after, from, before string) ([]git.LogEntryWithTags, string, string, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "LogPaginated", branch, path, limit, after, from, before)
+	ret := m.ctrl.Call(m, "LogPaginated", ctx, branch, path, limit, after, from, before)
 	ret0, _ := ret[0].([]git.LogEntryWithTags)
 	ret1, _ := ret[1].(string)
 	ret2, _ := ret[2].(string)
@@ -158,45 +159,45 @@ func (m *MockGitStore) LogPaginated(branch, path string, limit int, after, from,
 }
 
 // LogPaginated indicates an expected call of LogPaginated.
-func (mr *MockGitStoreMockRecorder) LogPaginated(branch, path, limit, after, from, before any) *gomock.Call {
+func (mr *MockGitStoreMockRecorder) LogPaginated(ctx, branch, path, limit, after, from, before any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "LogPaginated", reflect.TypeOf((*MockGitStore)(nil).LogPaginated), branch, path, limit, after, from, before)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "LogPaginated", reflect.TypeOf((*MockGitStore)(nil).LogPaginated), ctx, branch, path, limit, after, from, before)
 }
 
 // ReadFile mocks base method.
-func (m *MockGitStore) ReadFile(branch, path string) (string, error) {
+func (m *MockGitStore) ReadFile(ctx context.Context, branch, path string) (string, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "ReadFile", branch, path)
+	ret := m.ctrl.Call(m, "ReadFile", ctx, branch, path)
 	ret0, _ := ret[0].(string)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // ReadFile indicates an expected call of ReadFile.
-func (mr *MockGitStoreMockRecorder) ReadFile(branch, path any) *gomock.Call {
+func (mr *MockGitStoreMockRecorder) ReadFile(ctx, branch, path any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ReadFile", reflect.TypeOf((*MockGitStore)(nil).ReadFile), branch, path)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ReadFile", reflect.TypeOf((*MockGitStore)(nil).ReadFile), ctx, branch, path)
 }
 
 // ReadFileAtCommit mocks base method.
-func (m *MockGitStore) ReadFileAtCommit(branch, path, commitHash string) (string, error) {
+func (m *MockGitStore) ReadFileAtCommit(ctx context.Context, branch, path, commitHash string) (string, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "ReadFileAtCommit", branch, path, commitHash)
+	ret := m.ctrl.Call(m, "ReadFileAtCommit", ctx, branch, path, commitHash)
 	ret0, _ := ret[0].(string)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // ReadFileAtCommit indicates an expected call of ReadFileAtCommit.
-func (mr *MockGitStoreMockRecorder) ReadFileAtCommit(branch, path, commitHash any) *gomock.Call {
+func (mr *MockGitStoreMockRecorder) ReadFileAtCommit(ctx, branch, path, commitHash any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ReadFileAtCommit", reflect.TypeOf((*MockGitStore)(nil).ReadFileAtCommit), branch, path, commitHash)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ReadFileAtCommit", reflect.TypeOf((*MockGitStore)(nil).ReadFileAtCommit), ctx, branch, path, commitHash)
 }
 
 // ReadFileLastCommit mocks base method.
-func (m *MockGitStore) ReadFileLastCommit(branch, path, beforeCommitHash string) (string, string, error) {
+func (m *MockGitStore) ReadFileLastCommit(ctx context.Context, branch, path, beforeCommitHash string) (string, string, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "ReadFileLastCommit", branch, path, beforeCommitHash)
+	ret := m.ctrl.Call(m, "ReadFileLastCommit", ctx, branch, path, beforeCommitHash)
 	ret0, _ := ret[0].(string)
 	ret1, _ := ret[1].(string)
 	ret2, _ := ret[2].(error)
@@ -204,15 +205,15 @@ func (m *MockGitStore) ReadFileLastCommit(branch, path, beforeCommitHash string)
 }
 
 // ReadFileLastCommit indicates an expected call of ReadFileLastCommit.
-func (mr *MockGitStoreMockRecorder) ReadFileLastCommit(branch, path, beforeCommitHash any) *gomock.Call {
+func (mr *MockGitStoreMockRecorder) ReadFileLastCommit(ctx, branch, path, beforeCommitHash any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ReadFileLastCommit", reflect.TypeOf((*MockGitStore)(nil).ReadFileLastCommit), branch, path, beforeCommitHash)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ReadFileLastCommit", reflect.TypeOf((*MockGitStore)(nil).ReadFileLastCommit), ctx, branch, path, beforeCommitHash)
 }
 
 // WriteFile mocks base method.
-func (m *MockGitStore) WriteFile(branch, path, content, message, operation string) (string, string, error) {
+func (m *MockGitStore) WriteFile(ctx context.Context, branch, path, content, message, operation string) (string, string, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "WriteFile", branch, path, content, message, operation)
+	ret := m.ctrl.Call(m, "WriteFile", ctx, branch, path, content, message, operation)
 	ret0, _ := ret[0].(string)
 	ret1, _ := ret[1].(string)
 	ret2, _ := ret[2].(error)
@@ -220,9 +221,9 @@ func (m *MockGitStore) WriteFile(branch, path, content, message, operation strin
 }
 
 // WriteFile indicates an expected call of WriteFile.
-func (mr *MockGitStoreMockRecorder) WriteFile(branch, path, content, message, operation any) *gomock.Call {
+func (mr *MockGitStoreMockRecorder) WriteFile(ctx, branch, path, content, message, operation any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "WriteFile", reflect.TypeOf((*MockGitStore)(nil).WriteFile), branch, path, content, message, operation)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "WriteFile", reflect.TypeOf((*MockGitStore)(nil).WriteFile), ctx, branch, path, content, message, operation)
 }
 
 // MockSearchIndex is a mock of SearchIndex interface.
@@ -250,91 +251,91 @@ func (m *MockSearchIndex) EXPECT() *MockSearchIndexMockRecorder {
 }
 
 // Completions mocks base method.
-func (m *MockSearchIndex) Completions(branch, category, prefix string, limit int) ([]string, error) {
+func (m *MockSearchIndex) Completions(ctx context.Context, branch, category, prefix string, limit int) ([]string, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Completions", branch, category, prefix, limit)
+	ret := m.ctrl.Call(m, "Completions", ctx, branch, category, prefix, limit)
 	ret0, _ := ret[0].([]string)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // Completions indicates an expected call of Completions.
-func (mr *MockSearchIndexMockRecorder) Completions(branch, category, prefix, limit any) *gomock.Call {
+func (mr *MockSearchIndexMockRecorder) Completions(ctx, branch, category, prefix, limit any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Completions", reflect.TypeOf((*MockSearchIndex)(nil).Completions), branch, category, prefix, limit)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Completions", reflect.TypeOf((*MockSearchIndex)(nil).Completions), ctx, branch, category, prefix, limit)
 }
 
 // ExplainFact mocks base method.
-func (m *MockSearchIndex) ExplainFact(branch, path string) (store.ExplainResult, error) {
+func (m *MockSearchIndex) ExplainFact(ctx context.Context, branch, path string) (store.ExplainResult, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "ExplainFact", branch, path)
+	ret := m.ctrl.Call(m, "ExplainFact", ctx, branch, path)
 	ret0, _ := ret[0].(store.ExplainResult)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // ExplainFact indicates an expected call of ExplainFact.
-func (mr *MockSearchIndexMockRecorder) ExplainFact(branch, path any) *gomock.Call {
+func (mr *MockSearchIndexMockRecorder) ExplainFact(ctx, branch, path any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ExplainFact", reflect.TypeOf((*MockSearchIndex)(nil).ExplainFact), branch, path)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ExplainFact", reflect.TypeOf((*MockSearchIndex)(nil).ExplainFact), ctx, branch, path)
 }
 
 // GetByPath mocks base method.
-func (m *MockSearchIndex) GetByPath(branch, path string) (*store.FactWithBody, error) {
+func (m *MockSearchIndex) GetByPath(ctx context.Context, branch, path string) (*store.FactWithBody, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetByPath", branch, path)
+	ret := m.ctrl.Call(m, "GetByPath", ctx, branch, path)
 	ret0, _ := ret[0].(*store.FactWithBody)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // GetByPath indicates an expected call of GetByPath.
-func (mr *MockSearchIndexMockRecorder) GetByPath(branch, path any) *gomock.Call {
+func (mr *MockSearchIndexMockRecorder) GetByPath(ctx, branch, path any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetByPath", reflect.TypeOf((*MockSearchIndex)(nil).GetByPath), branch, path)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetByPath", reflect.TypeOf((*MockSearchIndex)(nil).GetByPath), ctx, branch, path)
 }
 
 // GetLastCommit mocks base method.
-func (m *MockSearchIndex) GetLastCommit(branch string) (string, error) {
+func (m *MockSearchIndex) GetLastCommit(ctx context.Context, branch string) (string, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetLastCommit", branch)
+	ret := m.ctrl.Call(m, "GetLastCommit", ctx, branch)
 	ret0, _ := ret[0].(string)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // GetLastCommit indicates an expected call of GetLastCommit.
-func (mr *MockSearchIndexMockRecorder) GetLastCommit(branch any) *gomock.Call {
+func (mr *MockSearchIndexMockRecorder) GetLastCommit(ctx, branch any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetLastCommit", reflect.TypeOf((*MockSearchIndex)(nil).GetLastCommit), branch)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetLastCommit", reflect.TypeOf((*MockSearchIndex)(nil).GetLastCommit), ctx, branch)
 }
 
 // Search mocks base method.
-func (m *MockSearchIndex) Search(branch string, q store.SearchQuery) ([]store.SearchResult, error) {
+func (m *MockSearchIndex) Search(ctx context.Context, branch string, q store.SearchQuery) ([]store.SearchResult, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Search", branch, q)
+	ret := m.ctrl.Call(m, "Search", ctx, branch, q)
 	ret0, _ := ret[0].([]store.SearchResult)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // Search indicates an expected call of Search.
-func (mr *MockSearchIndexMockRecorder) Search(branch, q any) *gomock.Call {
+func (mr *MockSearchIndexMockRecorder) Search(ctx, branch, q any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Search", reflect.TypeOf((*MockSearchIndex)(nil).Search), branch, q)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Search", reflect.TypeOf((*MockSearchIndex)(nil).Search), ctx, branch, q)
 }
 
 // Stats mocks base method.
-func (m *MockSearchIndex) Stats(branch, pathPrefix string) (store.StatsResult, error) {
+func (m *MockSearchIndex) Stats(ctx context.Context, branch, pathPrefix string) (store.StatsResult, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Stats", branch, pathPrefix)
+	ret := m.ctrl.Call(m, "Stats", ctx, branch, pathPrefix)
 	ret0, _ := ret[0].(store.StatsResult)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // Stats indicates an expected call of Stats.
-func (mr *MockSearchIndexMockRecorder) Stats(branch, pathPrefix any) *gomock.Call {
+func (mr *MockSearchIndexMockRecorder) Stats(ctx, branch, pathPrefix any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Stats", reflect.TypeOf((*MockSearchIndex)(nil).Stats), branch, pathPrefix)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Stats", reflect.TypeOf((*MockSearchIndex)(nil).Stats), ctx, branch, pathPrefix)
 }

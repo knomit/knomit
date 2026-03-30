@@ -38,7 +38,7 @@ func TestDeleteFactAtomically(t *testing.T) {
 	})
 
 	// Write a fact
-	_, blobHash, err := gs.WriteFile(testBranch, "kb/test.md", "---\ndomain: []\nconfidence: 1\nsources: 1\nentities: []\nrefs: []\n---\n# Test\n\nBody.", "add test", "learn")
+	_, blobHash, err := gs.WriteFile(context.Background(), testBranch, "kb/test.md", "---\ndomain: []\nconfidence: 1\nsources: 1\nentities: []\nrefs: []\n---\n# Test\n\nBody.", "add test", "learn")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,7 +54,7 @@ func TestDeleteFactAtomically(t *testing.T) {
 	}
 
 	// Delete
-	if err := svc.DeleteFact(gs, testBranch, "kb/test.md", "forget test"); err != nil {
+	if err := svc.DeleteFact(context.Background(), gs, testBranch, "kb/test.md", "forget test"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -65,7 +65,7 @@ func TestDeleteFactAtomically(t *testing.T) {
 	}
 
 	// Verify: file gone from git
-	exists, _ := gs.FileExists(testBranch, "kb/test.md")
+	exists, _ := gs.FileExists(context.Background(), testBranch, "kb/test.md")
 	if exists {
 		t.Fatal("expected file to be deleted from git")
 	}
@@ -79,7 +79,7 @@ func TestEvidenceWeightRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, blobHash, err := gs.WriteFile(testBranch, "kb/weighted.md",
+	_, blobHash, err := gs.WriteFile(context.Background(), testBranch, "kb/weighted.md",
 		"---\ndomain: []\nconfidence: 0.9\nsources: 5\nentities: []\nrefs: []\n---\n# Weighted\n\nBody.",
 		"add weighted", "learn",
 	)
@@ -124,7 +124,7 @@ func TestFullRoundtrip(t *testing.T) {
 
 	// Write a fact via git
 	content := "---\ndomain: [databases]\nconfidence: 0.9\nsources: 1\nentities: [postgres]\nrefs: []\n---\n# Postgres is great\n\nPostgreSQL is a powerful RDBMS."
-	_, blobHash, err := gs.WriteFile(testBranch, "kb/db/postgres.md", content, "learn postgres", "learn")
+	_, blobHash, err := gs.WriteFile(context.Background(), testBranch, "kb/db/postgres.md", content, "learn postgres", "learn")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -164,7 +164,7 @@ func TestFullRoundtrip(t *testing.T) {
 	}
 
 	// Delete
-	if err := svc.DeleteFact(gs, testBranch, "kb/db/postgres.md", "forget postgres"); err != nil {
+	if err := svc.DeleteFact(context.Background(), gs, testBranch, "kb/db/postgres.md", "forget postgres"); err != nil {
 		t.Fatal(err)
 	}
 

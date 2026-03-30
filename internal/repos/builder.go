@@ -107,7 +107,7 @@ func (b *repoBuilder) initDefaultGit() (*git.Store, error) {
 // the origin remote record for the default repo.
 func (b *repoBuilder) ensureBranch() {
 	if b.agentBranch != "" {
-		if err := b.gs.CreateBranch(b.agentBranch, b.agentBranch); err != nil {
+		if err := b.gs.CreateBranch(context.Background(), b.agentBranch, b.agentBranch); err != nil {
 			log.Warn().Err(err).Str("repo", b.name).Msg("branch create/ensure failed")
 		}
 	}
@@ -125,7 +125,7 @@ func (b *repoBuilder) setupIndex() {
 	if b.embedder != nil {
 		b.idx.SetEmbedder(b.embedder)
 	}
-	if err := b.idx.Sync(b.gs, b.agentBranch); err != nil {
+	if err := b.idx.Sync(context.Background(), b.gs, b.agentBranch); err != nil {
 		log.Warn().Err(err).Str("repo", b.name).Msg("initial index sync failed")
 	}
 }
@@ -135,9 +135,9 @@ func (b *repoBuilder) setupIndex() {
 // processes facts written after this point.
 func (b *repoBuilder) seedWatermarks() {
 	for _, tool := range []string{"review", "hypothesize"} {
-		if wm, _ := b.idx.GetPipelineWatermark(tool, b.agentBranch); wm == "" {
-			if head, err := b.gs.HeadCommit(b.agentBranch); err == nil {
-				if err := b.idx.SetPipelineWatermark(tool, b.agentBranch, head); err != nil {
+		if wm, _ := b.idx.GetPipelineWatermark(context.Background(), tool, b.agentBranch); wm == "" {
+			if head, err := b.gs.HeadCommit(context.Background(), b.agentBranch); err == nil {
+				if err := b.idx.SetPipelineWatermark(context.Background(), tool, b.agentBranch, head); err != nil {
 					log.Warn().Err(err).Str("tool", tool).Msg("pipeline watermark: initial set failed")
 				}
 			}
@@ -173,7 +173,7 @@ func (b *repoBuilder) build() *RepoInstance {
 		if !ok {
 			return
 		}
-		if err := currentSvc.Index().Sync(currentGS, b.agentBranch); err != nil {
+		if err := currentSvc.Index().Sync(context.Background(), currentGS, b.agentBranch); err != nil {
 			log.Warn().Err(err).Str("repo", b.name).Msg("observer sync failed")
 		}
 		hub.BroadcastStatus(hash)
@@ -216,7 +216,7 @@ func (b *repoBuilder) build() *RepoInstance {
 		}
 		currentGS.SetAuth(auth)
 
-		if err := currentGS.ConfigureRemote(remoteURL, remote.Branch); err != nil {
+		if err := currentGS.ConfigureRemote(context.Background(), remoteURL, remote.Branch); err != nil {
 			return fmt.Errorf("configure remote: %w", err)
 		}
 
@@ -262,7 +262,7 @@ func (b *repoBuilder) startSyncLoops(ctx context.Context, wg *sync.WaitGroup, hu
 	}
 	b.gs.SetAuth(auth)
 
-	if err := b.gs.ConfigureRemote(remote.URL, remote.Branch); err != nil {
+	if err := b.gs.ConfigureRemote(context.Background(), remote.URL, remote.Branch); err != nil {
 		log.Warn().Err(err).Str("repo", b.name).Msg("remote: configure failed")
 		return
 	}

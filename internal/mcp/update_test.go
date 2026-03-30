@@ -27,9 +27,9 @@ func TestUpdateMergesFields(t *testing.T) {
 
 	var writtenContent string
 
-	gs.EXPECT().FileExists(testAgentBranch, "kb/foo.md").Return(true, nil)
-	gs.EXPECT().ReadFile(testAgentBranch, "kb/foo.md").Return(factContent, nil)
-	gs.EXPECT().WriteFile(testAgentBranch, "kb/foo.md", gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(branch, path, content, msg, operation string) (string, string, error) {
+	gs.EXPECT().FileExists(gomock.Any(), testAgentBranch, "kb/foo.md").Return(true, nil)
+	gs.EXPECT().ReadFile(gomock.Any(), testAgentBranch, "kb/foo.md").Return(factContent, nil)
+	gs.EXPECT().WriteFile(gomock.Any(), testAgentBranch, "kb/foo.md", gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, branch, path, content, msg, operation string) (string, string, error) {
 		writtenContent = content
 		return "abc123def456", "blob_foo", nil
 	})
@@ -93,7 +93,7 @@ func TestUpdateFileNotFound(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
 
-	gs.EXPECT().FileExists(testAgentBranch, "kb/nonexistent.md").Return(false, nil)
+	gs.EXPECT().FileExists(gomock.Any(), testAgentBranch, "kb/nonexistent.md").Return(false, nil)
 
 	handler := UpdateHandler(gs, "kb", testAgentBranch)
 
@@ -129,9 +129,9 @@ func TestUpdateRefsAppended(t *testing.T) {
 
 	var writtenContent string
 
-	gs.EXPECT().FileExists(testAgentBranch, "kb/refs.md").Return(true, nil)
-	gs.EXPECT().ReadFile(testAgentBranch, "kb/refs.md").Return(factContent, nil)
-	gs.EXPECT().WriteFile(testAgentBranch, "kb/refs.md", gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(branch, path, content, msg, operation string) (string, string, error) {
+	gs.EXPECT().FileExists(gomock.Any(), testAgentBranch, "kb/refs.md").Return(true, nil)
+	gs.EXPECT().ReadFile(gomock.Any(), testAgentBranch, "kb/refs.md").Return(factContent, nil)
+	gs.EXPECT().WriteFile(gomock.Any(), testAgentBranch, "kb/refs.md", gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, branch, path, content, msg, operation string) (string, string, error) {
 		writtenContent = content
 		return "abc123def456", "blob_refs", nil
 	})

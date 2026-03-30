@@ -25,7 +25,7 @@ func (idx *Index) Sync(ctx context.Context, git GitReader, branch string) error 
 		return fmt.Errorf("sync: ensure branch: %w", err)
 	}
 
-	head, err := git.HeadCommit(branch)
+	head, err := git.HeadCommit(ctx, branch)
 	if err != nil {
 		return fmt.Errorf("sync: head commit: %w", err)
 	}
@@ -43,7 +43,7 @@ func (idx *Index) Sync(ctx context.Context, git GitReader, branch string) error 
 	if last == "" {
 		// Full rebuild: no previous commit recorded, so index every file.
 		log.Info().Str("head", head[:8]).Msg("index sync: full rebuild (no previous commit)")
-		paths, err := git.ListAll(branch)
+		paths, err := git.ListAll(ctx, branch)
 		if err != nil {
 			return fmt.Errorf("sync: list all: %w", err)
 		}
@@ -55,7 +55,7 @@ func (idx *Index) Sync(ctx context.Context, git GitReader, branch string) error 
 		log.Info().Int("files", len(paths)).Msg("index sync: full rebuild complete")
 	} else {
 		// Incremental update: only process files changed since last_commit.
-		added, modified, deleted, err := git.DiffFiles(branch, last)
+		added, modified, deleted, err := git.DiffFiles(ctx, branch, last)
 		if err != nil {
 			return fmt.Errorf("sync: diff files: %w", err)
 		}
@@ -95,7 +95,7 @@ func (idx *Index) Rebuild(ctx context.Context, git GitReader, branch string, pro
 		return fmt.Errorf("rebuild: clear last commit: %w", err)
 	}
 
-	head, err := git.HeadCommit(branch)
+	head, err := git.HeadCommit(ctx, branch)
 	if err != nil {
 		return fmt.Errorf("rebuild: head commit: %w", err)
 	}
@@ -142,13 +142,13 @@ func (idx *Index) Rebuild(ctx context.Context, git GitReader, branch string, pro
 // commitHash is the fallback; if commit_log has a more specific last-touch
 // commit for this path, that is used instead.
 func (idx *Index) indexFile(ctx context.Context, git GitReader, branch, path, commitHash string) error {
-	content, blobHash, err := git.ReadFileWithHash(branch, path)
+	content, blobHash, err := git.ReadFileWithHash(ctx, branch, path)
 	if err != nil {
 		return fmt.Errorf("indexFile: read %s: %w", path, err)
 	}
 
 	// Use the most recent non-merge commit that touched this file.
-	if last, lerr := git.LastCommitForPath(branch, path); lerr == nil && last != "" {
+	if last, lerr := git.LastCommitForPath(ctx, branch, path); lerr == nil && last != "" {
 		commitHash = last
 	}
 

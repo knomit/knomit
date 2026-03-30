@@ -61,18 +61,18 @@ func TestOriginSession_FullWorkflow(t *testing.T) {
 	}
 
 	// Shared fact on remote (same path).
-	if _, _, err := remoteStore.WriteFile("agent/remote", "kb/shared.md", sharedContent, "add shared", "learn"); err != nil {
+	if _, _, err := remoteStore.WriteFile(context.Background(), "agent/remote", "kb/shared.md", sharedContent, "add shared", "learn"); err != nil {
 		t.Fatalf("remote WriteFile shared: %v", err)
 	}
 
 	// Remote-only fact.
 	remoteFact := "---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# Remote Fact B\n\nOnly on remote.\n"
-	if _, _, err := remoteStore.WriteFile("agent/remote", "kb/remote-b.md", remoteFact, "add remote-b", "learn"); err != nil {
+	if _, _, err := remoteStore.WriteFile(context.Background(), "agent/remote", "kb/remote-b.md", remoteFact, "add remote-b", "learn"); err != nil {
 		t.Fatalf("remote WriteFile remote-b: %v", err)
 	}
 
 	// Advance main on remote so clone can find it.
-	remoteHead, err := remoteStore.HeadCommit("agent/remote")
+	remoteHead, err := remoteStore.HeadCommit(context.Background(), "agent/remote")
 	if err != nil {
 		t.Fatalf("remote HeadCommit: %v", err)
 	}
@@ -329,19 +329,19 @@ func TestOriginSession_RemoteWinsStrategy(t *testing.T) {
 	}
 
 	sharedRemoteContent := "---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# Shared Fact\n\nRemote version of shared.\n"
-	if _, _, err := remoteStore.WriteFile("agent/remote", "kb/shared.md", sharedRemoteContent, "add shared", "learn"); err != nil {
+	if _, _, err := remoteStore.WriteFile(context.Background(), "agent/remote", "kb/shared.md", sharedRemoteContent, "add shared", "learn"); err != nil {
 		t.Fatalf("remote WriteFile shared: %v", err)
 	}
 	remoteFact := "---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# Remote B\n\nRemote only.\n"
-	if _, _, err := remoteStore.WriteFile("agent/remote", "kb/remote-b.md", remoteFact, "add remote-b", "learn"); err != nil {
+	if _, _, err := remoteStore.WriteFile(context.Background(), "agent/remote", "kb/remote-b.md", remoteFact, "add remote-b", "learn"); err != nil {
 		t.Fatalf("remote WriteFile remote-b: %v", err)
 	}
 	remoteFact2 := "---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# Remote C\n\nRemote only.\n"
-	if _, _, err := remoteStore.WriteFile("agent/remote", "kb/remote-c.md", remoteFact2, "add remote-c", "learn"); err != nil {
+	if _, _, err := remoteStore.WriteFile(context.Background(), "agent/remote", "kb/remote-c.md", remoteFact2, "add remote-c", "learn"); err != nil {
 		t.Fatalf("remote WriteFile remote-c: %v", err)
 	}
 
-	remoteHead, err := remoteStore.HeadCommit("agent/remote")
+	remoteHead, err := remoteStore.HeadCommit(context.Background(), "agent/remote")
 	if err != nil {
 		t.Fatalf("remote HeadCommit: %v", err)
 	}
@@ -475,10 +475,10 @@ func TestOriginSession_SwitchStrategy(t *testing.T) {
 		t.Fatalf("git.InitWithStorer remote: %v", err)
 	}
 	sharedRemote := "---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# Shared\n\nRemote version.\n"
-	if _, _, err := remoteStore.WriteFile("agent/remote", "kb/shared.md", sharedRemote, "add shared", "learn"); err != nil {
+	if _, _, err := remoteStore.WriteFile(context.Background(), "agent/remote", "kb/shared.md", sharedRemote, "add shared", "learn"); err != nil {
 		t.Fatalf("remote WriteFile: %v", err)
 	}
-	remoteHead, err := remoteStore.HeadCommit("agent/remote")
+	remoteHead, err := remoteStore.HeadCommit(context.Background(), "agent/remote")
 	if err != nil {
 		t.Fatalf("remote HeadCommit: %v", err)
 	}
@@ -593,12 +593,12 @@ func TestOriginSession_ExistingAgentBranch(t *testing.T) {
 
 	// Write a fact on the agent branch so it has content.
 	existingFact := "---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# Existing Remote Fact\n\nAlready on agent branch.\n"
-	if _, _, err := remoteStore.WriteFile(testAgentBranch, "kb/existing-remote.md", existingFact, "add existing", "learn"); err != nil {
+	if _, _, err := remoteStore.WriteFile(context.Background(), testAgentBranch, "kb/existing-remote.md", existingFact, "add existing", "learn"); err != nil {
 		t.Fatalf("remote WriteFile existing: %v", err)
 	}
 
 	// Set up main branch on remote.
-	remoteHead, err := remoteStore.HeadCommit(testAgentBranch)
+	remoteHead, err := remoteStore.HeadCommit(context.Background(), testAgentBranch)
 	if err != nil {
 		t.Fatalf("remote HeadCommit: %v", err)
 	}
@@ -795,11 +795,11 @@ func TestOriginSession_BranchSelection(t *testing.T) {
 		t.Fatalf("git.InitWithStorer remote: %v", err)
 	}
 	remoteFact := "---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# Remote Fact\n\nContent.\n"
-	if _, _, err := remoteStore.WriteFile("agent/remote", "kb/remote.md", remoteFact, "add remote", "learn"); err != nil {
+	if _, _, err := remoteStore.WriteFile(context.Background(), "agent/remote", "kb/remote.md", remoteFact, "add remote", "learn"); err != nil {
 		t.Fatalf("remote WriteFile: %v", err)
 	}
 
-	remoteHead, err := remoteStore.HeadCommit("agent/remote")
+	remoteHead, err := remoteStore.HeadCommit(context.Background(), "agent/remote")
 	if err != nil {
 		t.Fatalf("remote HeadCommit: %v", err)
 	}
@@ -947,10 +947,10 @@ func TestOriginSession_RebuildAfterCommit(t *testing.T) {
 		t.Fatalf("git.InitWithStorer remote: %v", err)
 	}
 	remoteFact := "---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# Remote Fact\n\nDifferent content.\n"
-	if _, _, err := remoteStore.WriteFile("agent/remote", "kb/remote.md", remoteFact, "add remote", "learn"); err != nil {
+	if _, _, err := remoteStore.WriteFile(context.Background(), "agent/remote", "kb/remote.md", remoteFact, "add remote", "learn"); err != nil {
 		t.Fatalf("remote WriteFile: %v", err)
 	}
-	remoteHead, err := remoteStore.HeadCommit("agent/remote")
+	remoteHead, err := remoteStore.HeadCommit(context.Background(), "agent/remote")
 	if err != nil {
 		t.Fatalf("remote HeadCommit: %v", err)
 	}
@@ -1026,7 +1026,7 @@ func TestOriginSession_RebuildAfterCommit(t *testing.T) {
 	}
 	var updatedSvc4 *store.Service
 	updatedRI.WithRead(func(d repos.StoreDeps) { updatedSvc4 = d.Svc })
-	facts, total, err := updatedSvc4.Index().RecentFacts(testAgentBranch, "", "", 100, 0, nil, nil, nil, nil, nil)
+	facts, total, err := updatedSvc4.Index().RecentFacts(context.Background(), testAgentBranch, "", "", 100, 0, nil, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("RecentFacts: %v", err)
 	}
@@ -1062,10 +1062,10 @@ func TestOriginSession_ReviewWatermarkSetAfterCommit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("git.InitWithStorer remote: %v", err)
 	}
-	if _, _, err := remoteStore.WriteFile("agent/remote", "kb/cloned.md", remoteFact, "add fact", "learn"); err != nil {
+	if _, _, err := remoteStore.WriteFile(context.Background(), "agent/remote", "kb/cloned.md", remoteFact, "add fact", "learn"); err != nil {
 		t.Fatalf("remote WriteFile: %v", err)
 	}
-	remoteHead, err := remoteStore.HeadCommit("agent/remote")
+	remoteHead, err := remoteStore.HeadCommit(context.Background(), "agent/remote")
 	if err != nil {
 		t.Fatalf("remote HeadCommit: %v", err)
 	}
@@ -1137,13 +1137,13 @@ func TestOriginSession_ReviewWatermarkSetAfterCommit(t *testing.T) {
 	// The remote was initialized with "agent/remote" as its agent branch.
 	rebuildBranch := "agent/remote"
 
-	head, err := updatedGS.HeadCommit(rebuildBranch)
+	head, err := updatedGS.HeadCommit(context.Background(), rebuildBranch)
 	if err != nil {
 		t.Fatalf("HeadCommit(%s): %v", rebuildBranch, err)
 	}
 
 	for _, tool := range []string{"review", "hypothesize"} {
-		watermark, err := idx.GetPipelineWatermark(tool, rebuildBranch)
+		watermark, err := idx.GetPipelineWatermark(context.Background(), tool, rebuildBranch)
 		if err != nil {
 			t.Fatalf("GetPipelineWatermark(%s, %s): %v", tool, rebuildBranch, err)
 		}
@@ -1193,10 +1193,10 @@ func TestOriginSession_DeadRefs(t *testing.T) {
 		t.Fatalf("git.InitWithStorer remote: %v", err)
 	}
 	remoteFact := "---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# Remote Fact\n\nContent.\n"
-	if _, _, err := remoteStore.WriteFile("agent/remote", "kb/remote.md", remoteFact, "add remote", "learn"); err != nil {
+	if _, _, err := remoteStore.WriteFile(context.Background(), "agent/remote", "kb/remote.md", remoteFact, "add remote", "learn"); err != nil {
 		t.Fatalf("remote WriteFile: %v", err)
 	}
-	remoteHead, err := remoteStore.HeadCommit("agent/remote")
+	remoteHead, err := remoteStore.HeadCommit(context.Background(), "agent/remote")
 	if err != nil {
 		t.Fatalf("remote HeadCommit: %v", err)
 	}
@@ -1305,10 +1305,10 @@ func TestOriginSession_NoDeadRefs(t *testing.T) {
 		t.Fatalf("git.InitWithStorer remote: %v", err)
 	}
 	remoteFact := "---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# Remote Fact\n\nContent.\n"
-	if _, _, err := remoteStore.WriteFile("agent/remote", "kb/remote.md", remoteFact, "add remote", "learn"); err != nil {
+	if _, _, err := remoteStore.WriteFile(context.Background(), "agent/remote", "kb/remote.md", remoteFact, "add remote", "learn"); err != nil {
 		t.Fatalf("remote WriteFile: %v", err)
 	}
-	remoteHead, err := remoteStore.HeadCommit("agent/remote")
+	remoteHead, err := remoteStore.HeadCommit(context.Background(), "agent/remote")
 	if err != nil {
 		t.Fatalf("remote HeadCommit: %v", err)
 	}

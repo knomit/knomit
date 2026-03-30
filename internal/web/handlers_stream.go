@@ -32,7 +32,7 @@ func handleEvents() http.HandlerFunc {
 		// Snapshot the initial head commit — GS may be swapped concurrently.
 		var gs repos.GitStore
 		ri.WithRead(func(d repos.StoreDeps) { gs = d.GS })
-		head, _ := gs.HeadCommit(ri.AgentBranch())
+		head, _ := gs.HeadCommit(r.Context(), ri.AgentBranch())
 		fmt.Fprintf(w, "event: status\ndata: {\"head\":\"%s\"}\n\n", head)
 
 		// Replay snapshot (reconnect recovery).

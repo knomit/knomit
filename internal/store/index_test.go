@@ -320,10 +320,10 @@ func TestIncrementalSync(t *testing.T) {
 	fact1 := "---\ndomain: [databases]\nconfidence: 0.9\nsources: 2\nentities: [postgres]\nrefs: []\n---\n# Postgres MVCC\n\nPostgres uses multi-version concurrency control.\n"
 	fact2 := "---\ndomain: [caching]\nconfidence: 0.8\nsources: 1\nentities: [redis]\nrefs: []\n---\n# Redis Persistence\n\nRedis supports AOF and RDB persistence.\n"
 
-	if _, _, err := gitStore.WriteFile(testBranch, "kb/postgres-mvcc.md", fact1, "add postgres fact", "learn"); err != nil {
+	if _, _, err := gitStore.WriteFile(context.Background(), testBranch, "kb/postgres-mvcc.md", fact1, "add postgres fact", "learn"); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := gitStore.WriteFile(testBranch, "kb/redis-persistence.md", fact2, "add redis fact", "learn"); err != nil {
+	if _, _, err := gitStore.WriteFile(context.Background(), testBranch, "kb/redis-persistence.md", fact2, "add redis fact", "learn"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -349,7 +349,7 @@ func TestIncrementalSync(t *testing.T) {
 	}
 
 	// Verify last_commit was set.
-	head, err := gitStore.HeadCommit(testBranch)
+	head, err := gitStore.HeadCommit(context.Background(), testBranch)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -364,7 +364,7 @@ func TestIncrementalSync(t *testing.T) {
 	// --- Incremental sync ---
 	// Write a third fact. Sync should only index the delta.
 	fact3 := "---\ndomain: [messaging]\nconfidence: 0.95\nsources: 3\nentities: [kafka]\nrefs: []\n---\n# Kafka Partitions\n\nKafka topics are split into partitions for parallelism.\n"
-	if _, _, err := gitStore.WriteFile(testBranch, "kb/kafka-partitions.md", fact3, "add kafka fact", "learn"); err != nil {
+	if _, _, err := gitStore.WriteFile(context.Background(), testBranch, "kb/kafka-partitions.md", fact3, "add kafka fact", "learn"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -392,7 +392,7 @@ func TestIncrementalSync(t *testing.T) {
 
 	// --- Delete sync ---
 	// Delete the redis fact and sync; it should be removed from the index.
-	if _, err := gitStore.DeleteFile(testBranch, "kb/redis-persistence.md", "delete: remove redis fact", "retract"); err != nil {
+	if _, err := gitStore.DeleteFile(context.Background(), testBranch, "kb/redis-persistence.md", "delete: remove redis fact", "retract"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -409,7 +409,7 @@ func TestIncrementalSync(t *testing.T) {
 	}
 
 	// No-op sync: calling Sync again with same HEAD should be a no-op.
-	headAfter, err := gitStore.HeadCommit(testBranch)
+	headAfter, err := gitStore.HeadCommit(context.Background(), testBranch)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -447,18 +447,18 @@ func TestSyncCommitHashIsLastTouch(t *testing.T) {
 	fact2 := "---\ndomain: [b]\nconfidence: 0.8\nsources: 1\nentities: []\nrefs: []\n---\n# Fact B\n\nBody B.\n"
 
 	// Commit fact A first.
-	commitA, _, err := gitStore.WriteFile(testBranch, "kb/a.md", fact1, "add A", "learn")
+	commitA, _, err := gitStore.WriteFile(context.Background(), testBranch, "kb/a.md", fact1, "add A", "learn")
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// Commit fact B second — this becomes HEAD.
-	_, _, err = gitStore.WriteFile(testBranch, "kb/b.md", fact2, "add B", "learn")
+	_, _, err = gitStore.WriteFile(context.Background(), testBranch, "kb/b.md", fact2, "add B", "learn")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	head, err := gitStore.HeadCommit(testBranch)
+	head, err := gitStore.HeadCommit(context.Background(), testBranch)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -493,7 +493,7 @@ func TestSyncCommitHashIsLastTouch(t *testing.T) {
 	commitBBefore := recB.CommitHash
 
 	fact1v2 := "---\ndomain: [a]\nconfidence: 0.95\nsources: 2\nentities: []\nrefs: []\n---\n# Fact A v2\n\nUpdated body.\n"
-	commitA2, _, err := gitStore.WriteFile(testBranch, "kb/a.md", fact1v2, "update A", "learn")
+	commitA2, _, err := gitStore.WriteFile(context.Background(), testBranch, "kb/a.md", fact1v2, "update A", "learn")
 	if err != nil {
 		t.Fatal(err)
 	}

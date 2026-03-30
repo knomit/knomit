@@ -21,29 +21,29 @@ type Embedder interface {
 // GitStore is the narrow git interface needed by read-only query handlers
 // and the sync task handler. Accepts *git.Store at runtime.
 type GitStore interface {
-	ListDir(branch, path string) ([]git.DirEntry, error)
-	ReadFile(branch, path string) (string, error)
-	ReadFileAtCommit(branch, path, commitHash string) (string, error)
-	ReadFileLastCommit(branch, path, beforeCommitHash string) (content string, fromCommit string, err error)
-	WriteFile(branch, path, content, message, operation string) (commitHash, blobHash string, err error)
-	DeleteFile(branch, path, message, operation string) (commitHash string, err error)
-	Log(branch, path string) ([]git.LogEntry, error)
-	LogPaginated(branch, path string, limit int, after, from, before string) ([]git.LogEntryWithTags, string, string, error)
-	CommitDetail(commitHash string) (*git.CommitDetailResult, error)
-	Activity(branch, path string) (git.ActivityResult, error)
-	HeadCommit(branch string) (string, error)
-	ListAll(branch string) ([]string, error)
+	ListDir(ctx context.Context, branch, path string) ([]git.DirEntry, error)
+	ReadFile(ctx context.Context, branch, path string) (string, error)
+	ReadFileAtCommit(ctx context.Context, branch, path, commitHash string) (string, error)
+	ReadFileLastCommit(ctx context.Context, branch, path, beforeCommitHash string) (content string, fromCommit string, err error)
+	WriteFile(ctx context.Context, branch, path, content, message, operation string) (commitHash, blobHash string, err error)
+	DeleteFile(ctx context.Context, branch, path, message, operation string) (commitHash string, err error)
+	Log(ctx context.Context, branch, path string) ([]git.LogEntry, error)
+	LogPaginated(ctx context.Context, branch, path string, limit int, after, from, before string) ([]git.LogEntryWithTags, string, string, error)
+	CommitDetail(ctx context.Context, commitHash string) (*git.CommitDetailResult, error)
+	Activity(ctx context.Context, branch, path string) (git.ActivityResult, error)
+	HeadCommit(ctx context.Context, branch string) (string, error)
+	ListAll(ctx context.Context, branch string) ([]string, error)
 }
 
 // SearchIndex is the narrow search/index interface needed by query handlers.
 // Accepts *store.Index at runtime.
 type SearchIndex interface {
-	Search(branch string, q store.SearchQuery) ([]store.SearchResult, error)
-	GetByPath(branch, path string) (*store.FactWithBody, error)
-	GetLastCommit(branch string) (string, error)
-	Stats(branch, pathPrefix string) (store.StatsResult, error)
-	Completions(branch, category, prefix string, limit int) ([]string, error)
-	ExplainFact(branch, path string) (store.ExplainResult, error)
+	Search(ctx context.Context, branch string, q store.SearchQuery) ([]store.SearchResult, error)
+	GetByPath(ctx context.Context, branch, path string) (*store.FactWithBody, error)
+	GetLastCommit(ctx context.Context, branch string) (string, error)
+	Stats(ctx context.Context, branch, pathPrefix string) (store.StatsResult, error)
+	Completions(ctx context.Context, branch, category, prefix string, limit int) ([]string, error)
+	ExplainFact(ctx context.Context, branch, path string) (store.ExplainResult, error)
 }
 
 // SynthDeps bundles the dependencies needed by the synthesize handler.

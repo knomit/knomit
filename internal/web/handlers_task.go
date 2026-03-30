@@ -95,7 +95,7 @@ func handleRebuild() http.HandlerFunc {
 					emit(repos.TaskEvent{Status: "running", Phase: subPhase, Message: fmt.Sprintf("%d/%d", done, total), Repo: repo})
 				}
 			}
-			if err := idx.Rebuild(gitReader, branch, progress); err != nil {
+			if err := idx.Rebuild(r.Context(), gitReader, branch, progress); err != nil {
 				emit(repos.TaskEvent{Status: "error", Message: err.Error(), Repo: repo})
 				return
 			}

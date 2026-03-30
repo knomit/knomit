@@ -2,6 +2,7 @@
 package git
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"sort"
@@ -14,7 +15,7 @@ import (
 
 // WriteFile writes content to path in a new commit with message on branch.
 // Returns the commit hash and the blob hash of the written file.
-func (s *Store) WriteFile(branch, path, content, message, operation string) (commitHash string, blobHash string, err error) {
+func (s *Store) WriteFile(ctx context.Context, branch, path, content, message, operation string) (commitHash string, blobHash string, err error) {
 	path = strings.ToLower(path)
 	if path == "" {
 		return "", "", fmt.Errorf("git: WriteFile: path must not be empty")
@@ -25,7 +26,7 @@ func (s *Store) WriteFile(branch, path, content, message, operation string) (com
 
 	unlock := s.lockBranch(branch)
 
-	headHash, err := s.resolveRef(branch)
+	headHash, err := s.resolveRef(ctx, branch)
 	if err != nil {
 		unlock()
 		return "", "", fmt.Errorf("WriteFile: ref: %w", err)
@@ -58,13 +59,13 @@ func (s *Store) WriteFile(branch, path, content, message, operation string) (com
 	// Notify and append commit log outside the lock — notifyCommit triggers
 	// index sync which may call back into Store for reads.
 	s.notifyCommit(branch, newCommitHash.String())
-	s.appendCommitLog(branch, newCommitHash)
+	s.appendCommitLog(ctx, branch, newCommitHash)
 	return newCommitHash.String(), newBlobHash.String(), nil
 }
 
 // DeleteFile removes path from branch and creates a commit.
 // Returns the commit hash of the new commit.
-func (s *Store) DeleteFile(branch, path, message, operation string) (commitHash string, err error) {
+func (s *Store) DeleteFile(ctx context.Context, branch, path, message, operation string) (commitHash string, err error) {
 	path = strings.ToLower(path)
 	if path == "" {
 		return "", fmt.Errorf("git: DeleteFile: path must not be empty")
@@ -75,14 +76,14 @@ func (s *Store) DeleteFile(branch, path, message, operation string) (commitHash 
 
 	unlock := s.lockBranch(branch)
 
-	headHash, err := s.resolveRef(branch)
+	headHash, err := s.resolveRef(ctx, branch)
 	if err != nil {
 		unlock()
 		return "", fmt.Errorf("DeleteFile: ref: %w", err)
 	}
 
 	// Check existence inside the lock to avoid a TOCTOU race.
-	exists, err := s.FileExists(branch, path)
+	exists, err := s.FileExists(ctx, branch, path)
 	if err != nil {
 		unlock()
 		return "", fmt.Errorf("DeleteFile: check exists: %w", err)
@@ -116,13 +117,13 @@ func (s *Store) DeleteFile(branch, path, message, operation string) (commitHash 
 	unlock()
 
 	s.notifyCommit(branch, newCommitHash.String())
-	s.appendCommitLog(branch, newCommitHash)
+	s.appendCommitLog(ctx, branch, newCommitHash)
 	return newCommitHash.String(), nil
 }
 
 // BatchWrite writes multiple files in one commit on branch.
 // Returns the commit hash and a map of path → blob hash for each written file.
-func (s *Store) BatchWrite(branch string, files map[string]string, message, operation string) (commitHash string, blobHashes map[string]string, err error) {
+func (s *Store) BatchWrite(ctx context.Context, branch string, files map[string]string, message, operation string) (commitHash string, blobHashes map[string]string, err error) {
 	if len(files) == 0 {
 		return "", nil, nil
 	}
@@ -145,7 +146,7 @@ func (s *Store) BatchWrite(branch string, files map[string]string, message, oper
 	}
 
 	unlock := s.lockBranch(branch)
-	cHash, blobHashes, err := s.batchWriteLocked(branch, files, message, operation)
+	cHash, blobHashes, err := s.batchWriteLocked(ctx, branch, files, message, operation)
 	unlock()
 	if err != nil {
 		return "", nil, err
@@ -154,13 +155,13 @@ func (s *Store) BatchWrite(branch string, files map[string]string, message, oper
 	// Notify and append commit log outside the lock — notifyCommit triggers
 	// index sync which may call back into Store for reads.
 	s.notifyCommit(branch, cHash.String())
-	s.appendCommitLog(branch, cHash)
+	s.appendCommitLog(ctx, branch, cHash)
 	return cHash.String(), blobHashes, nil
 }
 
 // batchWriteLocked performs the actual BatchWrite work. Caller must hold the branch lock.
-func (s *Store) batchWriteLocked(branch string, files map[string]string, message, operation string) (plumbing.Hash, map[string]string, error) {
-	headHash, err := s.resolveRef(branch)
+func (s *Store) batchWriteLocked(ctx context.Context, branch string, files map[string]string, message, operation string) (plumbing.Hash, map[string]string, error) {
+	headHash, err := s.resolveRef(ctx, branch)
 	if err != nil {
 		return plumbing.ZeroHash, nil, fmt.Errorf("BatchWrite: ref: %w", err)
 	}
@@ -253,8 +254,8 @@ func (s *Store) batchWriteLocked(branch string, files map[string]string, message
 }
 
 // Tag creates a lightweight tag ref at the tip of branch.
-func (s *Store) Tag(branch, name string) error {
-	headHash, err := s.resolveRef(branch)
+func (s *Store) Tag(ctx context.Context, branch, name string) error {
+	headHash, err := s.resolveRef(ctx, branch)
 	if err != nil {
 		return fmt.Errorf("Tag: ref: %w", err)
 	}
@@ -267,7 +268,7 @@ func (s *Store) Tag(branch, name string) error {
 // Optimization: collect all commits reachable from hash in one walk, then
 // check each tag's target against that set — O(depth + tags) instead of
 // O(tags * depth).
-func (s *Store) TagsContaining(hash string) ([]string, error) {
+func (s *Store) TagsContaining(ctx context.Context, hash string) ([]string, error) {
 	targetHash := plumbing.NewHash(hash)
 
 	// Build set of all commits reachable from targetHash (one walk).

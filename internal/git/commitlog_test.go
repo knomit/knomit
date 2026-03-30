@@ -3,6 +3,7 @@
 package git
 
 import (
+	"context"
 	"database/sql"
 	"testing"
 	"time"
@@ -74,7 +75,7 @@ func TestActivitySQLTimeBuckets(t *testing.T) {
 
 	// Activity("kb") uses GLOB 'kb/*' — matches all 4 injected rows, not the
 	// init commit's kb.md (root-level, doesn't match 'kb/*').
-	a, err := store.activitySQL("kb")
+	a, err := store.activitySQL(context.Background(), "kb")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,11 +104,11 @@ func TestCommitLogIncrementalAppend(t *testing.T) {
 	var countBefore int
 	db.QueryRow(`SELECT COUNT(*) FROM commit_log`).Scan(&countBefore)
 
-	h1, _, err := store.WriteFile(testBranch, "kb/a.md", "# A\n", "add a", "learn")
+	h1, _, err := store.WriteFile(context.Background(), testBranch, "kb/a.md", "# A\n", "add a", "learn")
 	if err != nil {
 		t.Fatal(err)
 	}
-	h2, _, err := store.WriteFile(testBranch, "kb/b.md", "# B\n", "add b", "learn")
+	h2, _, err := store.WriteFile(context.Background(), testBranch, "kb/b.md", "# B\n", "add b", "learn")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,10 +140,10 @@ func TestPopulateCommitLogIsIncremental(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := store.WriteFile(testBranch, "kb/a.md", "# A\n", "add a", "learn"); err != nil {
+	if _, _, err := store.WriteFile(context.Background(), testBranch, "kb/a.md", "# A\n", "add a", "learn"); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := store.WriteFile(testBranch, "kb/b.md", "# B\n", "add b", "learn"); err != nil {
+	if _, _, err := store.WriteFile(context.Background(), testBranch, "kb/b.md", "# B\n", "add b", "learn"); err != nil {
 		t.Fatal(err)
 	}
 	var countFirst int
@@ -173,11 +174,11 @@ func TestAppendCommitLogDelete(t *testing.T) {
 	if !store.storer.CommitLogAvailable() {
 		t.Skip("commit_log not available")
 	}
-	h1, _, err := store.WriteFile(testBranch, "kb/del.md", "# Del\n", "add del", "learn")
+	h1, _, err := store.WriteFile(context.Background(), testBranch, "kb/del.md", "# Del\n", "add del", "learn")
 	if err != nil {
 		t.Fatal(err)
 	}
-	h2, err := store.DeleteFile(testBranch, "kb/del.md", "delete del", "retract")
+	h2, err := store.DeleteFile(context.Background(), testBranch, "kb/del.md", "delete del", "retract")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -211,15 +212,15 @@ func TestCommitLogOperation(t *testing.T) {
 	agentID := deriveAgentID(testBranch)
 
 	// learn
-	if _, _, err := store.WriteFile(testBranch, "kb/a.md", "# A\n", "add a", "learn"); err != nil {
+	if _, _, err := store.WriteFile(context.Background(), testBranch, "kb/a.md", "# A\n", "add a", "learn"); err != nil {
 		t.Fatal(err)
 	}
 	// update
-	if _, _, err := store.WriteFile(testBranch, "kb/a.md", "# A v2\n", "update a", "update"); err != nil {
+	if _, _, err := store.WriteFile(context.Background(), testBranch, "kb/a.md", "# A v2\n", "update a", "update"); err != nil {
 		t.Fatal(err)
 	}
 	// retract
-	if _, err := store.DeleteFile(testBranch, "kb/a.md", "retract a", "retract"); err != nil {
+	if _, err := store.DeleteFile(context.Background(), testBranch, "kb/a.md", "retract a", "retract"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -306,12 +307,12 @@ CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value BLOB NOT NULL);`
 		t.Error("commitLog should be false when commit_log table is absent")
 	}
 
-	if _, _, err := store.WriteFile(testBranch, "kb/a.md", "# A\n", "add a", "learn"); err != nil {
+	if _, _, err := store.WriteFile(context.Background(), testBranch, "kb/a.md", "# A\n", "add a", "learn"); err != nil {
 		t.Fatal(err)
 	}
 
 	// Activity must fall back to go-git and return correct count.
-	a, err := store.Activity(testBranch, "kb")
+	a, err := store.Activity(context.Background(), testBranch, "kb")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -320,7 +321,7 @@ CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value BLOB NOT NULL);`
 	}
 
 	// WalkChangedFiles must also fall back to go-git.
-	files, _, err := store.WalkChangedFiles(testBranch, "", "kb", nil, 10)
+	files, _, err := store.WalkChangedFiles(context.Background(), testBranch, "", "kb", nil, 10)
 	if err != nil {
 		t.Fatal(err)
 	}

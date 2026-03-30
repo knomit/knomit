@@ -21,6 +21,7 @@
 package git
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"os"
@@ -123,7 +124,7 @@ type SyncResult struct {
 }
 
 // resolveRef returns the commit hash at the tip of branch.
-func (s *Store) resolveRef(branch string) (plumbing.Hash, error) {
+func (s *Store) resolveRef(ctx context.Context, branch string) (plumbing.Hash, error) {
 	ref, err := s.storer.Reference(plumbing.NewBranchReferenceName(branch))
 	if err != nil {
 		return plumbing.ZeroHash, fmt.Errorf("resolveRef %q: %w", branch, err)
@@ -132,6 +133,8 @@ func (s *Store) resolveRef(branch string) (plumbing.Hash, error) {
 }
 
 // lockBranch acquires the per-branch mutex and returns an unlock function.
+// Redundant with SQLite write serialization at the Index level, but kept until
+// go-git's storer interface supports context-propagated transactions.
 func (s *Store) lockBranch(branch string) func() {
 	v, _ := s.branchMu.LoadOrStore(branch, &sync.Mutex{})
 	mu := v.(*sync.Mutex)
@@ -203,7 +206,7 @@ func InitWithStorer(s *storegit.Storer, initFiles map[string]string, agentBranch
 		repo:   repo,
 		storer: s,
 	}
-	if err := gs.populateCommitLog(agentBranch); err != nil {
+	if err := gs.populateCommitLog(context.Background(), agentBranch); err != nil {
 		log.Warn().Err(err).Msg("commit_log: initial populate failed")
 	}
 	return gs, nil
@@ -228,14 +231,14 @@ func OpenWithStorer(s *storegit.Storer) (*Store, error) {
 		repo:   repo,
 		storer: s,
 	}
-	if err := gs.populateCommitLog(branch); err != nil {
+	if err := gs.populateCommitLog(context.Background(), branch); err != nil {
 		log.Warn().Err(err).Msg("commit_log: open populate failed")
 	}
 	return gs, nil
 }
 
 // Close is a no-op. The database lifecycle is managed by the caller (via store.Service).
-func (s *Store) Close() error { return nil }
+func (s *Store) Close(_ context.Context) error { return nil }
 
 // deriveAgentID extracts the agent identifier from a branch name.
 // "agent/laptop-abc" → "laptop-abc", "main" → "main".
@@ -267,8 +270,8 @@ func (s *Store) committerSig(branch string) object.Signature {
 }
 
 // HeadCommit returns the hash of the tip commit of branch as a hex string.
-func (s *Store) HeadCommit(branch string) (string, error) {
-	hash, err := s.resolveRef(branch)
+func (s *Store) HeadCommit(ctx context.Context, branch string) (string, error) {
+	hash, err := s.resolveRef(ctx, branch)
 	if err != nil {
 		return "", fmt.Errorf("HeadCommit: %w", err)
 	}
@@ -289,12 +292,12 @@ func (s *Store) notifyCommit(branch, hash string) {
 
 // CreateBranch creates a new branch ref pointing at the tip of fromBranch.
 // No-op if branch already exists. Does not modify HEAD or any Store state.
-func (s *Store) CreateBranch(branch, fromBranch string) error {
+func (s *Store) CreateBranch(ctx context.Context, branch, fromBranch string) error {
 	newRefName := plumbing.NewBranchReferenceName(branch)
 	if _, err := s.storer.Reference(newRefName); err == nil {
 		return nil // already exists
 	}
-	fromHash, err := s.resolveRef(fromBranch)
+	fromHash, err := s.resolveRef(ctx, fromBranch)
 	if err != nil {
 		return fmt.Errorf("CreateBranch: resolve source %q: %w", fromBranch, err)
 	}
@@ -385,7 +388,7 @@ func InitFromRemote(s *storegit.Storer, originURL string, auth transport.AuthMet
 			storer: s,
 			auth:   auth,
 		}
-		if err := gs.populateCommitLog(agentBranch); err != nil {
+		if err := gs.populateCommitLog(context.Background(), agentBranch); err != nil {
 			log.Warn().Err(err).Msg("commit_log: empty-remote populate failed")
 		}
 		return gs, nil
@@ -445,14 +448,14 @@ func InitFromRemote(s *storegit.Storer, originURL string, auth transport.AuthMet
 		storer: s,
 		auth:   auth,
 	}
-	if err := gs.populateCommitLog(agentBranch); err != nil {
+	if err := gs.populateCommitLog(context.Background(), agentBranch); err != nil {
 		log.Warn().Err(err).Msg("commit_log: remote populate failed")
 	}
 	return gs, nil
 }
 
 // DefaultBranch resolves the default branch name from the repo's HEAD ref.
-func (s *Store) DefaultBranch() (string, error) {
+func (s *Store) DefaultBranch(ctx context.Context) (string, error) {
 	head, err := s.storer.Reference(plumbing.HEAD)
 	if err != nil {
 		return "", fmt.Errorf("DefaultBranch: resolve HEAD: %w", err)
@@ -505,10 +508,10 @@ func CloneInto(storer *storegit.Storer, url string, auth transport.AuthMethod, p
 
 // HasSharedHistory checks whether localBranch shares any commits with remoteBranch on the remote store.
 // Uses a bounded walk (max 1000 commits) to avoid scanning huge histories.
-func (s *Store) HasSharedHistory(localBranch string, remote *Store, remoteBranch string) (bool, error) {
+func (s *Store) HasSharedHistory(ctx context.Context, localBranch string, remote *Store, remoteBranch string) (bool, error) {
 	const maxCommits = 1000
 
-	localHash, err := s.resolveRef(localBranch)
+	localHash, err := s.resolveRef(ctx, localBranch)
 	if err != nil {
 		return false, fmt.Errorf("HasSharedHistory: local ref: %w", err)
 	}
@@ -529,7 +532,7 @@ func (s *Store) HasSharedHistory(localBranch string, remote *Store, remoteBranch
 		return false, fmt.Errorf("HasSharedHistory: local walk: %w", err)
 	}
 
-	remoteHash, err := remote.resolveRef(remoteBranch)
+	remoteHash, err := remote.resolveRef(ctx, remoteBranch)
 	if err != nil {
 		return false, fmt.Errorf("HasSharedHistory: remote ref: %w", err)
 	}

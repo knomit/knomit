@@ -136,7 +136,7 @@ func (m *Manager) Boot() error {
 	}
 
 	// Load ontology from knomit repo's git store.
-	ontologyYAML, readErr := knomitRI.gs.ReadFile(m.deps.AgentBranch, "domains/ontology.yaml")
+	ontologyYAML, readErr := knomitRI.gs.ReadFile(context.Background(), m.deps.AgentBranch, "domains/ontology.yaml")
 	if readErr != nil {
 		log.Warn().Msg("domains/ontology.yaml not found, using default ontology")
 		m.ontology = fact.DefaultOntology()

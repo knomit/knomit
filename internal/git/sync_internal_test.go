@@ -2,6 +2,7 @@
 package git
 
 import (
+	"context"
 	"testing"
 
 	"github.com/go-git/go-git/v5/plumbing"
@@ -32,7 +33,7 @@ func TestCommitAuthorCommitter(t *testing.T) {
 	agentID := deriveAgentID(testBranch)
 
 	// WriteFile with "learn" operation.
-	hash, _, err := store.WriteFile(testBranch, "kb/test.md", "# Test\n", "add test", "learn")
+	hash, _, err := store.WriteFile(context.Background(), testBranch, "kb/test.md", "# Test\n", "add test", "learn")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,7 +54,7 @@ func TestCommitAuthorCommitter(t *testing.T) {
 	}
 
 	// DeleteFile with "retract" operation.
-	delHash, err := store.DeleteFile(testBranch, "kb/test.md", "retract test", "retract")
+	delHash, err := store.DeleteFile(context.Background(), testBranch, "kb/test.md", "retract test", "retract")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,7 +71,7 @@ func TestCommitAuthorCommitter(t *testing.T) {
 	}
 
 	// BatchWrite with "subsume" operation.
-	batchHash, _, err := store.BatchWrite(testBranch, map[string]string{
+	batchHash, _, err := store.BatchWrite(context.Background(), testBranch, map[string]string{
 		"kb/x.md": "# X\n",
 		"kb/y.md": "# Y\n",
 	}, "batch add", "subsume")
@@ -93,7 +94,7 @@ func TestCommitAuthorCommitter(t *testing.T) {
 func TestSyncMergeCommitAuthor(t *testing.T) {
 	// Create origin with shared content.
 	origin := newInternalTestStore(t)
-	if _, _, err := origin.WriteFile(testBranch, "kb/shared.md", "# Shared\n", "origin: add shared", "learn"); err != nil {
+	if _, _, err := origin.WriteFile(context.Background(), testBranch, "kb/shared.md", "# Shared\n", "origin: add shared", "learn"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -101,10 +102,10 @@ func TestSyncMergeCommitAuthor(t *testing.T) {
 	agent := newInternalTestStore(t)
 
 	// Write divergent content on both sides.
-	if _, _, err := origin.WriteFile(testBranch, "kb/origin-only.md", "# Origin\n", "origin: diverge", "learn"); err != nil {
+	if _, _, err := origin.WriteFile(context.Background(), testBranch, "kb/origin-only.md", "# Origin\n", "origin: diverge", "learn"); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := agent.WriteFile(testBranch, "kb/agent-only.md", "# Agent\n", "agent: diverge", "learn"); err != nil {
+	if _, _, err := agent.WriteFile(context.Background(), testBranch, "kb/agent-only.md", "# Agent\n", "agent: diverge", "learn"); err != nil {
 		t.Fatal(err)
 	}
 

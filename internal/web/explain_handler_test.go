@@ -52,7 +52,7 @@ func TestHandleExplain(t *testing.T) {
 			var idx repos.SearchIndex
 			if tc.useIdx {
 				mockIdx := NewMockSearchIndex(ctrl)
-				mockIdx.EXPECT().ExplainFact("agent/test", "kb/a.md").Return(tc.result, nil)
+				mockIdx.EXPECT().ExplainFact(gomock.Any(), "agent/test", "kb/a.md").Return(tc.result, nil)
 				idx = mockIdx
 			}
 

@@ -1,6 +1,7 @@
 package git_test
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"sync"
@@ -19,10 +20,10 @@ func TestInitAndReadFile(t *testing.T) {
 	store := newTestStore(t)
 
 	content := "---\ndomain: [test]\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# Test Fact\n\nBody.\n"
-	if _, _, err := store.WriteFile(testBranch, "kb/test/fact.md", content, "test: write fact", "learn"); err != nil {
+	if _, _, err := store.WriteFile(context.Background(), testBranch, "kb/test/fact.md", content, "test: write fact", "learn"); err != nil {
 		t.Fatal(err)
 	}
-	got, err := store.ReadFile(testBranch, "kb/test/fact.md")
+	got, err := store.ReadFile(context.Background(), testBranch, "kb/test/fact.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -34,7 +35,7 @@ func TestInitAndReadFile(t *testing.T) {
 func TestFileExists(t *testing.T) {
 	store := newTestStore(t)
 
-	exists, err := store.FileExists(testBranch, "kb.md")
+	exists, err := store.FileExists(context.Background(), testBranch, "kb.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,7 +43,7 @@ func TestFileExists(t *testing.T) {
 		t.Fatal("general.md should exist after Init")
 	}
 
-	exists, err = store.FileExists(testBranch, "kb/nonexistent.md")
+	exists, err = store.FileExists(context.Background(), testBranch, "kb/nonexistent.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,14 +55,14 @@ func TestFileExists(t *testing.T) {
 func TestListDir(t *testing.T) {
 	store := newTestStore(t)
 
-	if _, _, err := store.WriteFile(testBranch, "kb/alpha.md", "---\ndomain: []\nconfidence: 0.5\nsources: 1\nentities: []\nrefs: []\n---\n# Alpha\n\nBody.\n", "add alpha", "learn"); err != nil {
+	if _, _, err := store.WriteFile(context.Background(), testBranch, "kb/alpha.md", "---\ndomain: []\nconfidence: 0.5\nsources: 1\nentities: []\nrefs: []\n---\n# Alpha\n\nBody.\n", "add alpha", "learn"); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := store.WriteFile(testBranch, "kb/sub/beta.md", "---\ndomain: []\nconfidence: 0.5\nsources: 1\nentities: []\nrefs: []\n---\n# Beta\n\nBody.\n", "add beta", "learn"); err != nil {
+	if _, _, err := store.WriteFile(context.Background(), testBranch, "kb/sub/beta.md", "---\ndomain: []\nconfidence: 0.5\nsources: 1\nentities: []\nrefs: []\n---\n# Beta\n\nBody.\n", "add beta", "learn"); err != nil {
 		t.Fatal(err)
 	}
 
-	entries, err := store.ListDir(testBranch, "kb")
+	entries, err := store.ListDir(context.Background(), testBranch, "kb")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,14 +87,14 @@ func TestListDir(t *testing.T) {
 func TestLog(t *testing.T) {
 	store := newTestStore(t)
 
-	if _, _, err := store.WriteFile(testBranch, "kb/test.md", "---\ndomain: []\nconfidence: 0.5\nsources: 1\nentities: []\nrefs: []\n---\n# T\n\nv1.\n", "add test", "learn"); err != nil {
+	if _, _, err := store.WriteFile(context.Background(), testBranch, "kb/test.md", "---\ndomain: []\nconfidence: 0.5\nsources: 1\nentities: []\nrefs: []\n---\n# T\n\nv1.\n", "add test", "learn"); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := store.WriteFile(testBranch, "kb/test.md", "---\ndomain: []\nconfidence: 0.5\nsources: 1\nentities: []\nrefs: []\n---\n# T\n\nv2.\n", "update test", "learn"); err != nil {
+	if _, _, err := store.WriteFile(context.Background(), testBranch, "kb/test.md", "---\ndomain: []\nconfidence: 0.5\nsources: 1\nentities: []\nrefs: []\n---\n# T\n\nv2.\n", "update test", "learn"); err != nil {
 		t.Fatal(err)
 	}
 
-	entries, err := store.Log(testBranch, "kb/test.md")
+	entries, err := store.Log(context.Background(), testBranch, "kb/test.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,7 +111,7 @@ func TestOpenRoundtrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	content := "# Hello\n\nWorld.\n"
-	if _, _, err := store.WriteFile(testBranch, "kb/hello.md", content, "add hello", "learn"); err != nil {
+	if _, _, err := store.WriteFile(context.Background(), testBranch, "kb/hello.md", content, "add hello", "learn"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -119,7 +120,7 @@ func TestOpenRoundtrip(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := store2.ReadFile(testBranch, "kb/hello.md")
+	got, err := store2.ReadFile(context.Background(), testBranch, "kb/hello.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,7 +132,7 @@ func TestOpenRoundtrip(t *testing.T) {
 func TestHeadCommit(t *testing.T) {
 	store := newTestStore(t)
 
-	h, err := store.HeadCommit(testBranch)
+	h, err := store.HeadCommit(context.Background(), testBranch)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,10 +144,10 @@ func TestHeadCommit(t *testing.T) {
 func TestWriteFileValidation(t *testing.T) {
 	store := newTestStore(t)
 
-	if _, _, err := store.WriteFile(testBranch, "", "content", "msg", "learn"); err == nil {
+	if _, _, err := store.WriteFile(context.Background(), testBranch, "", "content", "msg", "learn"); err == nil {
 		t.Fatal("expected error for empty path")
 	}
-	if _, _, err := store.WriteFile(testBranch, "../escape.md", "content", "msg", "learn"); err == nil {
+	if _, _, err := store.WriteFile(context.Background(), testBranch, "../escape.md", "content", "msg", "learn"); err == nil {
 		t.Fatal("expected error for path traversal")
 	}
 }
@@ -154,7 +155,7 @@ func TestWriteFileValidation(t *testing.T) {
 func TestListDirRoot(t *testing.T) {
 	store := newTestStore(t)
 
-	entries, err := store.ListDir(testBranch, "")
+	entries, err := store.ListDir(context.Background(), testBranch, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -174,10 +175,10 @@ func TestDeleteFile(t *testing.T) {
 	store := newTestStore(t)
 
 	// Write a file, then delete it.
-	if _, _, err := store.WriteFile(testBranch, "kb/todelete.md", "# Delete me\n", "add file", "learn"); err != nil {
+	if _, _, err := store.WriteFile(context.Background(), testBranch, "kb/todelete.md", "# Delete me\n", "add file", "learn"); err != nil {
 		t.Fatal(err)
 	}
-	exists, err := store.FileExists(testBranch, "kb/todelete.md")
+	exists, err := store.FileExists(context.Background(), testBranch, "kb/todelete.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -185,11 +186,11 @@ func TestDeleteFile(t *testing.T) {
 		t.Fatal("file should exist before deletion")
 	}
 
-	if _, err := store.DeleteFile(testBranch, "kb/todelete.md", "delete: remove todelete.md", "retract"); err != nil {
+	if _, err := store.DeleteFile(context.Background(), testBranch, "kb/todelete.md", "delete: remove todelete.md", "retract"); err != nil {
 		t.Fatal(err)
 	}
 
-	exists, err = store.FileExists(testBranch, "kb/todelete.md")
+	exists, err = store.FileExists(context.Background(), testBranch, "kb/todelete.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -201,15 +202,15 @@ func TestDeleteFile(t *testing.T) {
 func TestDeleteFile_AlreadyDeleted(t *testing.T) {
 	store := newTestStore(t)
 
-	if _, _, err := store.WriteFile(testBranch, "kb/gone.md", "# Gone\n", "add file", "learn"); err != nil {
+	if _, _, err := store.WriteFile(context.Background(), testBranch, "kb/gone.md", "# Gone\n", "add file", "learn"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.DeleteFile(testBranch, "kb/gone.md", "delete once", "retract"); err != nil {
+	if _, err := store.DeleteFile(context.Background(), testBranch, "kb/gone.md", "delete once", "retract"); err != nil {
 		t.Fatal(err)
 	}
 
 	// Second delete should return an error, not create a no-op commit.
-	_, err := store.DeleteFile(testBranch, "kb/gone.md", "delete twice", "retract")
+	_, err := store.DeleteFile(context.Background(), testBranch, "kb/gone.md", "delete twice", "retract")
 	if err == nil {
 		t.Fatal("expected error deleting already-deleted file")
 	}
@@ -221,7 +222,7 @@ func TestDeleteFile_ConcurrentDeleteRace(t *testing.T) {
 	// observe the file as existing, then one would fail inside deleteFileFromStore.
 	store := newTestStore(t)
 
-	if _, _, err := store.WriteFile(testBranch, "kb/race.md", "# Race\n", "add", "learn"); err != nil {
+	if _, _, err := store.WriteFile(context.Background(), testBranch, "kb/race.md", "# Race\n", "add", "learn"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -235,7 +236,7 @@ func TestDeleteFile_ConcurrentDeleteRace(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, err := store.DeleteFile(testBranch, "kb/race.md", "delete", "retract")
+			_, err := store.DeleteFile(context.Background(), testBranch, "kb/race.md", "delete", "retract")
 			mu.Lock()
 			if err == nil {
 				successes++
@@ -255,21 +256,21 @@ func TestDeleteFile_ConcurrentDeleteRace(t *testing.T) {
 func TestTag(t *testing.T) {
 	store := newTestStore(t)
 
-	if _, _, err := store.WriteFile(testBranch, "kb/tagged.md", "# Tagged\n", "add tagged file", "learn"); err != nil {
+	if _, _, err := store.WriteFile(context.Background(), testBranch, "kb/tagged.md", "# Tagged\n", "add tagged file", "learn"); err != nil {
 		t.Fatal(err)
 	}
 
-	if err := store.Tag(testBranch, "v1.0"); err != nil {
+	if err := store.Tag(context.Background(), testBranch, "v1.0"); err != nil {
 		t.Fatal(err)
 	}
 
 	// Check that the tag ref exists and points to HEAD.
-	headHash, err := store.HeadCommit(testBranch)
+	headHash, err := store.HeadCommit(context.Background(), testBranch)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	tags, err := store.TagsContaining(headHash)
+	tags, err := store.TagsContaining(context.Background(), headHash)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -288,14 +289,14 @@ func TestTag(t *testing.T) {
 func TestGrep(t *testing.T) {
 	store := newTestStore(t)
 
-	if _, _, err := store.WriteFile(testBranch, "kb/alpha.md", "# Alpha\n\nThis file contains the word elephant.\n", "add alpha", "learn"); err != nil {
+	if _, _, err := store.WriteFile(context.Background(), testBranch, "kb/alpha.md", "# Alpha\n\nThis file contains the word elephant.\n", "add alpha", "learn"); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := store.WriteFile(testBranch, "kb/beta.md", "# Beta\n\nThis file is about dogs.\n", "add beta", "learn"); err != nil {
+	if _, _, err := store.WriteFile(context.Background(), testBranch, "kb/beta.md", "# Beta\n\nThis file is about dogs.\n", "add beta", "learn"); err != nil {
 		t.Fatal(err)
 	}
 
-	matches, err := store.Grep(testBranch, "elephant")
+	matches, err := store.Grep(context.Background(), testBranch, "elephant")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -304,7 +305,7 @@ func TestGrep(t *testing.T) {
 	}
 
 	// Grep for something in both files.
-	matches, err = store.Grep(testBranch, "This file")
+	matches, err = store.Grep(context.Background(), testBranch, "This file")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -317,19 +318,19 @@ func TestDiffFiles(t *testing.T) {
 	store := newTestStore(t)
 
 	// Get the commit before any writes.
-	baseHash, err := store.HeadCommit(testBranch)
+	baseHash, err := store.HeadCommit(context.Background(), testBranch)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if _, _, err := store.WriteFile(testBranch, "kb/new.md", "# New\n", "add new", "learn"); err != nil {
+	if _, _, err := store.WriteFile(context.Background(), testBranch, "kb/new.md", "# New\n", "add new", "learn"); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := store.WriteFile(testBranch, "kb.md", "# Knowledge Base\n\nUpdated root.\n", "update root", "learn"); err != nil {
+	if _, _, err := store.WriteFile(context.Background(), testBranch, "kb.md", "# Knowledge Base\n\nUpdated root.\n", "update root", "learn"); err != nil {
 		t.Fatal(err)
 	}
 
-	added, modified, deleted, err := store.DiffFiles(testBranch, baseHash)
+	added, modified, deleted, err := store.DiffFiles(context.Background(), testBranch, baseHash)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -359,7 +360,7 @@ func TestDiffFilesFromEmpty(t *testing.T) {
 	store := newTestStore(t)
 
 	// DiffFiles with empty fromCommit = diff from empty tree.
-	added, modified, deleted, err := store.DiffFiles(testBranch, "")
+	added, modified, deleted, err := store.DiffFiles(context.Background(), testBranch, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -378,10 +379,10 @@ func TestDiffFilesFromEmpty(t *testing.T) {
 func TestBatchWriteValidation(t *testing.T) {
 	store := newTestStore(t)
 
-	if _, _, err := store.BatchWrite(testBranch, map[string]string{"": "content"}, "msg", "learn"); err == nil {
+	if _, _, err := store.BatchWrite(context.Background(), testBranch, map[string]string{"": "content"}, "msg", "learn"); err == nil {
 		t.Fatal("expected error for empty path in BatchWrite")
 	}
-	if _, _, err := store.BatchWrite(testBranch, map[string]string{"../escape.md": "content"}, "msg", "learn"); err == nil {
+	if _, _, err := store.BatchWrite(context.Background(), testBranch, map[string]string{"../escape.md": "content"}, "msg", "learn"); err == nil {
 		t.Fatal("expected error for path traversal in BatchWrite")
 	}
 }
@@ -391,7 +392,7 @@ func TestSync(t *testing.T) {
 	t.Run("no origin returns Synced=false", func(t *testing.T) {
 		store := newTestStore(t)
 
-		result, err := store.Sync(testBranch, "")
+		result, err := store.Sync(context.Background(), testBranch, "")
 		if err != nil {
 			t.Fatalf("Sync with no remote returned unexpected error: %v", err)
 		}
@@ -411,10 +412,10 @@ func TestSync(t *testing.T) {
 		// Add a commit to origin's agent branch (WriteFile always targets the
 		// agent branch), then advance origin's main ref to that commit so that
 		// origin/main has content the agent store has never seen.
-		if _, _, err := origin.WriteFile(testBranch, "kb/shared.md", "# Shared\n", "origin: add shared", "learn"); err != nil {
+		if _, _, err := origin.WriteFile(context.Background(), testBranch, "kb/shared.md", "# Shared\n", "origin: add shared", "learn"); err != nil {
 			t.Fatal(err)
 		}
-		originHead, err := origin.HeadCommit(testBranch)
+		originHead, err := origin.HeadCommit(context.Background(), testBranch)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -458,7 +459,7 @@ func TestSync(t *testing.T) {
 		}
 
 		// Sync should fetch origin/main and merge it.
-		result, err := store.Sync(testBranch, "")
+		result, err := store.Sync(context.Background(), testBranch, "")
 		if err != nil {
 			t.Fatalf("Sync returned unexpected error: %v", err)
 		}
@@ -467,7 +468,7 @@ func TestSync(t *testing.T) {
 		}
 
 		// The merged file should now be accessible.
-		exists, err := store.FileExists(testBranch, "kb/shared.md")
+		exists, err := store.FileExists(context.Background(), testBranch, "kb/shared.md")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -481,7 +482,7 @@ func TestListAll(t *testing.T) {
 	store := newTestStore(t)
 
 	// After Init, general.md exists at the root.
-	paths, err := store.ListAll(testBranch)
+	paths, err := store.ListAll(context.Background(), testBranch)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -496,14 +497,14 @@ func TestListAll(t *testing.T) {
 	}
 
 	// Add two more .md files and a non-.md file (no API for non-md, so skip that part).
-	if _, _, err := store.WriteFile(testBranch, "kb/alpha.md", "# Alpha\n\nAlpha body.\n", "add alpha", "learn"); err != nil {
+	if _, _, err := store.WriteFile(context.Background(), testBranch, "kb/alpha.md", "# Alpha\n\nAlpha body.\n", "add alpha", "learn"); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := store.WriteFile(testBranch, "kb/sub/beta.md", "# Beta\n\nBeta body.\n", "add beta", "learn"); err != nil {
+	if _, _, err := store.WriteFile(context.Background(), testBranch, "kb/sub/beta.md", "# Beta\n\nBeta body.\n", "add beta", "learn"); err != nil {
 		t.Fatal(err)
 	}
 
-	paths, err = store.ListAll(testBranch)
+	paths, err = store.ListAll(context.Background(), testBranch)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -524,14 +525,14 @@ func TestListAll(t *testing.T) {
 func TestListAllWithHash(t *testing.T) {
 	store := newTestStore(t)
 
-	if _, _, err := store.WriteFile(testBranch, "kb/alpha.md", "# Alpha\n\nAlpha body.\n", "add alpha", "learn"); err != nil {
+	if _, _, err := store.WriteFile(context.Background(), testBranch, "kb/alpha.md", "# Alpha\n\nAlpha body.\n", "add alpha", "learn"); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := store.WriteFile(testBranch, "kb/beta.md", "# Beta\n\nBeta body.\n", "add beta", "learn"); err != nil {
+	if _, _, err := store.WriteFile(context.Background(), testBranch, "kb/beta.md", "# Beta\n\nBeta body.\n", "add beta", "learn"); err != nil {
 		t.Fatal(err)
 	}
 
-	paths, hashes, err := store.ListAllWithHash(testBranch)
+	paths, hashes, err := store.ListAllWithHash(context.Background(), testBranch)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -557,7 +558,7 @@ func TestBatchWrite(t *testing.T) {
 		"kb/b.md": "# B\n\nContent B.\n",
 	}
 
-	commitHash, blobHashes, err := store.BatchWrite(testBranch, files, "batch: add a and b", "learn")
+	commitHash, blobHashes, err := store.BatchWrite(context.Background(), testBranch, files, "batch: add a and b", "learn")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -570,7 +571,7 @@ func TestBatchWrite(t *testing.T) {
 
 	// Verify both files exist and have correct content.
 	for path, want := range files {
-		got, err := store.ReadFile(testBranch, path)
+		got, err := store.ReadFile(context.Background(), testBranch, path)
 		if err != nil {
 			t.Fatalf("ReadFile(%q): %v", path, err)
 		}
@@ -580,7 +581,7 @@ func TestBatchWrite(t *testing.T) {
 	}
 
 	// A batch write should be a single commit (not two).
-	logEntries, err := store.Log(testBranch, "kb/a.md")
+	logEntries, err := store.Log(context.Background(), testBranch, "kb/a.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -595,7 +596,7 @@ func TestBatchWrite(t *testing.T) {
 func TestWriteFileReturnsBlobHash(t *testing.T) {
 	store := newTestStore(t)
 
-	commitHash, blobHash, err := store.WriteFile(testBranch, "kb/test.md", "# Test\n\nBody.\n", "add test", "learn")
+	commitHash, blobHash, err := store.WriteFile(context.Background(), testBranch, "kb/test.md", "# Test\n\nBody.\n", "add test", "learn")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -615,7 +616,7 @@ func TestOnCommitCallback(t *testing.T) {
 		called = append(called, hash)
 	})
 
-	hash, _, err := gs.WriteFile(testBranch, "kb/test.md", "---\ntitle: Test\ntype: observation\ndomain: [eng]\nentities: [Go]\nconfidence: 0.9\nsources: 1\n---\ntest content", "test commit", "learn")
+	hash, _, err := gs.WriteFile(context.Background(), testBranch, "kb/test.md", "---\ntitle: Test\ntype: observation\ndomain: [eng]\nentities: [Go]\nconfidence: 0.9\nsources: 1\n---\ntest content", "test commit", "learn")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -636,7 +637,7 @@ func TestOnCommitBatchAndDelete(t *testing.T) {
 		"kb/a.md": "---\ntitle: A\ntype: observation\ndomain: [eng]\nentities: [Go]\nconfidence: 0.9\nsources: 1\n---\na",
 		"kb/b.md": "---\ntitle: B\ntype: observation\ndomain: [eng]\nentities: [Go]\nconfidence: 0.9\nsources: 1\n---\nb",
 	}
-	batchHash, _, err := gs.BatchWrite(testBranch, files, "batch commit", "learn")
+	batchHash, _, err := gs.BatchWrite(context.Background(), testBranch, files, "batch commit", "learn")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -644,7 +645,7 @@ func TestOnCommitBatchAndDelete(t *testing.T) {
 		t.Fatalf("expected 1 call after BatchWrite, got %d", len(called))
 	}
 
-	delHash, err := gs.DeleteFile(testBranch, "kb/a.md", "delete a", "retract")
+	delHash, err := gs.DeleteFile(context.Background(), testBranch, "kb/a.md", "delete a", "retract")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -656,16 +657,16 @@ func TestOnCommitBatchAndDelete(t *testing.T) {
 func TestReadFileAtCommit(t *testing.T) {
 	store := newTestStore(t)
 
-	commitHash1, _, err := store.WriteFile(testBranch, "kb/test.md", "---\ndomain: []\nconfidence: 0.5\nsources: 1\nentities: []\nrefs: []\n---\n# T\n\nv1.\n", "add v1", "learn")
+	commitHash1, _, err := store.WriteFile(context.Background(), testBranch, "kb/test.md", "---\ndomain: []\nconfidence: 0.5\nsources: 1\nentities: []\nrefs: []\n---\n# T\n\nv1.\n", "add v1", "learn")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if _, _, err := store.WriteFile(testBranch, "kb/test.md", "---\ndomain: []\nconfidence: 0.5\nsources: 1\nentities: []\nrefs: []\n---\n# T\n\nv2.\n", "update v2", "learn"); err != nil {
+	if _, _, err := store.WriteFile(context.Background(), testBranch, "kb/test.md", "---\ndomain: []\nconfidence: 0.5\nsources: 1\nentities: []\nrefs: []\n---\n# T\n\nv2.\n", "update v2", "learn"); err != nil {
 		t.Fatal(err)
 	}
 
-	content, err := store.ReadFileAtCommit(testBranch, "kb/test.md", commitHash1)
+	content, err := store.ReadFileAtCommit(context.Background(), testBranch, "kb/test.md", commitHash1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -678,22 +679,22 @@ func TestReadFileLastCommit(t *testing.T) {
 	store := newTestStore(t)
 
 	const content = "---\ndomain: []\nconfidence: 0.5\nsources: 1\nentities: []\nrefs: []\n---\n# Fact\n\nBody.\n"
-	if _, _, err := store.WriteFile(testBranch, "kb/fact.md", content, "add fact", "learn"); err != nil {
+	if _, _, err := store.WriteFile(context.Background(), testBranch, "kb/fact.md", content, "add fact", "learn"); err != nil {
 		t.Fatal(err)
 	}
 
-	retractHash, err := store.DeleteFile(testBranch, "kb/fact.md", "retract fact", "retract")
+	retractHash, err := store.DeleteFile(context.Background(), testBranch, "kb/fact.md", "retract fact", "retract")
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// File must not be readable at the retract commit.
-	if _, err := store.ReadFileAtCommit(testBranch, "kb/fact.md", retractHash); err == nil {
+	if _, err := store.ReadFileAtCommit(context.Background(), testBranch, "kb/fact.md", retractHash); err == nil {
 		t.Fatal("expected error reading deleted file at retract commit, got nil")
 	}
 
 	// But ReadFileLastCommit must recover the content and return the source commit.
-	got, fromCommit, err := store.ReadFileLastCommit(testBranch, "kb/fact.md", retractHash)
+	got, fromCommit, err := store.ReadFileLastCommit(context.Background(), testBranch, "kb/fact.md", retractHash)
 	if err != nil {
 		t.Fatalf("ReadFileLastCommit: %v", err)
 	}
@@ -709,12 +710,12 @@ func TestReadFileWithHash(t *testing.T) {
 	store := newTestStore(t)
 
 	content := "# Test\n\nBody text.\n"
-	_, expectedBlobHash, err := store.WriteFile(testBranch, "kb/test.md", content, "add test", "learn")
+	_, expectedBlobHash, err := store.WriteFile(context.Background(), testBranch, "kb/test.md", content, "add test", "learn")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	gotContent, gotBlobHash, err := store.ReadFileWithHash(testBranch, "kb/test.md")
+	gotContent, gotBlobHash, err := store.ReadFileWithHash(context.Background(), testBranch, "kb/test.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -729,11 +730,11 @@ func TestReadFileWithHash(t *testing.T) {
 func TestCommitDetail(t *testing.T) {
 	store := newTestStore(t)
 
-	commitHash, _, err := store.WriteFile(testBranch, "kb/test.md", "---\ndomain: []\nconfidence: 0.5\nsources: 1\nentities: []\nrefs: []\n---\n# T\n\nBody.\n", "add test", "learn")
+	commitHash, _, err := store.WriteFile(context.Background(), testBranch, "kb/test.md", "---\ndomain: []\nconfidence: 0.5\nsources: 1\nentities: []\nrefs: []\n---\n# T\n\nBody.\n", "add test", "learn")
 	if err != nil {
 		t.Fatal(err)
 	}
-	detail, err := store.CommitDetail(commitHash)
+	detail, err := store.CommitDetail(context.Background(), commitHash)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -761,7 +762,7 @@ func TestCommitDetailBatchWrite(t *testing.T) {
 	store := newTestStore(t)
 
 	// First commit: anchor so BatchWrite has a parent.
-	if _, _, err := store.WriteFile(testBranch, "kb/anchor.md", "---\ndomain: []\nconfidence: 0.5\nsources: 1\nentities: []\nrefs: []\n---\n# A\n\nA.\n", "add anchor", "learn"); err != nil {
+	if _, _, err := store.WriteFile(context.Background(), testBranch, "kb/anchor.md", "---\ndomain: []\nconfidence: 0.5\nsources: 1\nentities: []\nrefs: []\n---\n# A\n\nA.\n", "add anchor", "learn"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -771,12 +772,12 @@ func TestCommitDetailBatchWrite(t *testing.T) {
 		"kb/b.md": "---\ndomain: []\nconfidence: 0.5\nsources: 1\nentities: []\nrefs: []\n---\n# B\n\nB.\n",
 		"kb/c.md": "---\ndomain: []\nconfidence: 0.5\nsources: 1\nentities: []\nrefs: []\n---\n# C\n\nC.\n",
 	}
-	commitHash, _, err := store.BatchWrite(testBranch, files, "batch add three facts", "learn")
+	commitHash, _, err := store.BatchWrite(context.Background(), testBranch, files, "batch add three facts", "learn")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	detail, err := store.CommitDetail(commitHash)
+	detail, err := store.CommitDetail(context.Background(), commitHash)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -800,11 +801,11 @@ func TestLogPaginated(t *testing.T) {
 
 	for i := 1; i <= 3; i++ {
 		content := fmt.Sprintf("---\ndomain: []\nconfidence: 0.5\nsources: 1\nentities: []\nrefs: []\n---\n# F%d\n\nFact %d.\n", i, i)
-		if _, _, err := store.WriteFile(testBranch, fmt.Sprintf("kb/f%d.md", i), content, fmt.Sprintf("add f%d", i), "learn"); err != nil {
+		if _, _, err := store.WriteFile(context.Background(), testBranch, fmt.Sprintf("kb/f%d.md", i), content, fmt.Sprintf("add f%d", i), "learn"); err != nil {
 			t.Fatal(err)
 		}
 	}
-	entries, next, _, err := store.LogPaginated(testBranch, "", 2, "", "", "")
+	entries, next, _, err := store.LogPaginated(context.Background(), testBranch, "", 2, "", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -818,7 +819,7 @@ func TestLogPaginated(t *testing.T) {
 		t.Errorf("expected operation learn on first entry, got %q", entries[0].Operation)
 	}
 
-	entries2, next2, _, err := store.LogPaginated(testBranch, "", 2, next, "", "")
+	entries2, next2, _, err := store.LogPaginated(context.Background(), testBranch, "", 2, next, "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -833,18 +834,18 @@ func TestLogPaginated_DirectoryFilter(t *testing.T) {
 
 	// Write files in two different directories.
 	fact := "---\ndomain: []\nconfidence: 0.5\nsources: 1\nentities: []\nrefs: []\n---\n# T\n\nBody.\n"
-	if _, _, err := store.WriteFile(testBranch, "kb/science/a.md", fact, "add science a", "learn"); err != nil {
+	if _, _, err := store.WriteFile(context.Background(), testBranch, "kb/science/a.md", fact, "add science a", "learn"); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := store.WriteFile(testBranch, "kb/tech/b.md", fact, "add tech b", "learn"); err != nil {
+	if _, _, err := store.WriteFile(context.Background(), testBranch, "kb/tech/b.md", fact, "add tech b", "learn"); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := store.WriteFile(testBranch, "kb/science/c.md", fact, "add science c", "learn"); err != nil {
+	if _, _, err := store.WriteFile(context.Background(), testBranch, "kb/science/c.md", fact, "add science c", "learn"); err != nil {
 		t.Fatal(err)
 	}
 
 	// Filter to kb/science — should only include commits that touched files under kb/science/.
-	entries, _, _, err := store.LogPaginated(testBranch, "kb/science", 50, "", "", "")
+	entries, _, _, err := store.LogPaginated(context.Background(), testBranch, "kb/science", 50, "", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -864,19 +865,19 @@ func TestWalkChangedFilesBasic(t *testing.T) {
 	store := newTestStore(t)
 
 	// Write 3 files in separate commits.
-	if _, _, err := store.WriteFile(testBranch, "kb/a.md", "# A\n", "add a", "learn"); err != nil {
+	if _, _, err := store.WriteFile(context.Background(), testBranch, "kb/a.md", "# A\n", "add a", "learn"); err != nil {
 		t.Fatal(err)
 	}
 	time.Sleep(10 * time.Millisecond) // ensure distinct timestamps
-	if _, _, err := store.WriteFile(testBranch, "kb/b.md", "# B\n", "add b", "learn"); err != nil {
+	if _, _, err := store.WriteFile(context.Background(), testBranch, "kb/b.md", "# B\n", "add b", "learn"); err != nil {
 		t.Fatal(err)
 	}
 	time.Sleep(10 * time.Millisecond)
-	if _, _, err := store.WriteFile(testBranch, "kb/c.md", "# C\n", "add c", "learn"); err != nil {
+	if _, _, err := store.WriteFile(context.Background(), testBranch, "kb/c.md", "# C\n", "add c", "learn"); err != nil {
 		t.Fatal(err)
 	}
 
-	files, lastHash, err := store.WalkChangedFiles(testBranch, "", "kb", nil, 10)
+	files, lastHash, err := store.WalkChangedFiles(context.Background(), testBranch, "", "kb", nil, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -912,17 +913,17 @@ func TestWalkChangedFilesBasic(t *testing.T) {
 func TestWalkChangedFilesPrefix(t *testing.T) {
 	store := newTestStore(t)
 
-	if _, _, err := store.WriteFile(testBranch, "kb/science/phys.md", "# Physics\n", "add phys", "learn"); err != nil {
+	if _, _, err := store.WriteFile(context.Background(), testBranch, "kb/science/phys.md", "# Physics\n", "add phys", "learn"); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := store.WriteFile(testBranch, "kb/tech/go.md", "# Go\n", "add go", "learn"); err != nil {
+	if _, _, err := store.WriteFile(context.Background(), testBranch, "kb/tech/go.md", "# Go\n", "add go", "learn"); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := store.WriteFile(testBranch, "kb/science/chem.md", "# Chemistry\n", "add chem", "learn"); err != nil {
+	if _, _, err := store.WriteFile(context.Background(), testBranch, "kb/science/chem.md", "# Chemistry\n", "add chem", "learn"); err != nil {
 		t.Fatal(err)
 	}
 
-	files, _, err := store.WalkChangedFiles(testBranch, "", "kb/science", nil, 10)
+	files, _, err := store.WalkChangedFiles(context.Background(), testBranch, "", "kb/science", nil, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -940,15 +941,15 @@ func TestWalkChangedFilesPrefix(t *testing.T) {
 func TestWalkChangedFilesSeen(t *testing.T) {
 	store := newTestStore(t)
 
-	if _, _, err := store.WriteFile(testBranch, "kb/a.md", "# A\n", "add a", "learn"); err != nil {
+	if _, _, err := store.WriteFile(context.Background(), testBranch, "kb/a.md", "# A\n", "add a", "learn"); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := store.WriteFile(testBranch, "kb/b.md", "# B\n", "add b", "learn"); err != nil {
+	if _, _, err := store.WriteFile(context.Background(), testBranch, "kb/b.md", "# B\n", "add b", "learn"); err != nil {
 		t.Fatal(err)
 	}
 
 	// Walk with limit=1 — should get the most recent file only.
-	files1, _, err := store.WalkChangedFiles(testBranch, "", "kb", nil, 1)
+	files1, _, err := store.WalkChangedFiles(context.Background(), testBranch, "", "kb", nil, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -958,7 +959,7 @@ func TestWalkChangedFilesSeen(t *testing.T) {
 
 	// Resume with the seen set from page 1.
 	seen := map[string]bool{files1[0].Path: true}
-	files2, _, err := store.WalkChangedFiles(testBranch, "", "kb", seen, 10)
+	files2, _, err := store.WalkChangedFiles(context.Background(), testBranch, "", "kb", seen, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -979,14 +980,14 @@ func TestWalkChangedFilesDedup(t *testing.T) {
 	store := newTestStore(t)
 
 	// Write the same file twice (two commits).
-	if _, _, err := store.WriteFile(testBranch, "kb/dup.md", "# Dup v1\n", "add dup", "learn"); err != nil {
+	if _, _, err := store.WriteFile(context.Background(), testBranch, "kb/dup.md", "# Dup v1\n", "add dup", "learn"); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := store.WriteFile(testBranch, "kb/dup.md", "# Dup v2\n", "update dup", "learn"); err != nil {
+	if _, _, err := store.WriteFile(context.Background(), testBranch, "kb/dup.md", "# Dup v2\n", "update dup", "learn"); err != nil {
 		t.Fatal(err)
 	}
 
-	files, _, err := store.WalkChangedFiles(testBranch, "", "kb", nil, 10)
+	files, _, err := store.WalkChangedFiles(context.Background(), testBranch, "", "kb", nil, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1010,11 +1011,11 @@ func TestInitFromRemote_WithContent(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, _, err := origin.WriteFile(testBranch, "kb/shared.md", "# Shared\n", "origin: add shared", "learn"); err != nil {
+	if _, _, err := origin.WriteFile(context.Background(), testBranch, "kb/shared.md", "# Shared\n", "origin: add shared", "learn"); err != nil {
 		t.Fatal(err)
 	}
 	// Advance main to HEAD.
-	head, err := origin.HeadCommit(testBranch)
+	head, err := origin.HeadCommit(context.Background(), testBranch)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1039,7 +1040,7 @@ func TestInitFromRemote_WithContent(t *testing.T) {
 	}
 
 	// Agent branch should be created from origin/main.
-	storeBranch, err := store.DefaultBranch()
+	storeBranch, err := store.DefaultBranch(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1048,7 +1049,7 @@ func TestInitFromRemote_WithContent(t *testing.T) {
 	}
 
 	// The shared file should be readable.
-	content, err := store.ReadFile(storeBranch, "kb/shared.md")
+	content, err := store.ReadFile(context.Background(), storeBranch, "kb/shared.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1066,12 +1067,12 @@ func TestInitFromRemote_ExistingAgentBranch(t *testing.T) {
 	}
 
 	// Write something on the agent branch (which is the default).
-	if _, _, err := origin.WriteFile(testBranch, "kb/agent-file.md", "# Agent File\n", "origin: agent file", "learn"); err != nil {
+	if _, _, err := origin.WriteFile(context.Background(), testBranch, "kb/agent-file.md", "# Agent File\n", "origin: agent file", "learn"); err != nil {
 		t.Fatal(err)
 	}
 
 	// Also advance main to current HEAD so origin/main exists.
-	head, err := origin.HeadCommit(testBranch)
+	head, err := origin.HeadCommit(context.Background(), testBranch)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1096,7 +1097,7 @@ func TestInitFromRemote_ExistingAgentBranch(t *testing.T) {
 	}
 
 	// Agent branch should match origin's agent branch.
-	storeBranch, err := store.DefaultBranch()
+	storeBranch, err := store.DefaultBranch(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1105,7 +1106,7 @@ func TestInitFromRemote_ExistingAgentBranch(t *testing.T) {
 	}
 
 	// The agent file should be readable (came from the agent branch, not just main).
-	content, err := store.ReadFile(storeBranch, "kb/agent-file.md")
+	content, err := store.ReadFile(context.Background(), storeBranch, "kb/agent-file.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1131,7 +1132,7 @@ func TestInitFromRemote_EmptyRemote(t *testing.T) {
 	}
 
 	// Should have a valid agent branch and the default kb.md.
-	storeBranch, err := store.DefaultBranch()
+	storeBranch, err := store.DefaultBranch(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1139,7 +1140,7 @@ func TestInitFromRemote_EmptyRemote(t *testing.T) {
 		t.Fatalf("expected agent branch, got %q", storeBranch)
 	}
 
-	exists, err := store.FileExists(storeBranch, "kb.md")
+	exists, err := store.FileExists(context.Background(), storeBranch, "kb.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1152,18 +1153,18 @@ func TestLogPaginated_FileFilter(t *testing.T) {
 	store := newTestStore(t)
 
 	fact := "---\ndomain: []\nconfidence: 0.5\nsources: 1\nentities: []\nrefs: []\n---\n# T\n\nBody.\n"
-	if _, _, err := store.WriteFile(testBranch, "kb/a.md", fact, "add a", "learn"); err != nil {
+	if _, _, err := store.WriteFile(context.Background(), testBranch, "kb/a.md", fact, "add a", "learn"); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := store.WriteFile(testBranch, "kb/b.md", fact, "add b", "learn"); err != nil {
+	if _, _, err := store.WriteFile(context.Background(), testBranch, "kb/b.md", fact, "add b", "learn"); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := store.WriteFile(testBranch, "kb/a.md", fact+"updated", "update a", "learn"); err != nil {
+	if _, _, err := store.WriteFile(context.Background(), testBranch, "kb/a.md", fact+"updated", "update a", "learn"); err != nil {
 		t.Fatal(err)
 	}
 
 	// Filter to specific file — should only include commits that touched kb/a.md.
-	entries, _, _, err := store.LogPaginated(testBranch, "kb/a.md", 50, "", "", "")
+	entries, _, _, err := store.LogPaginated(context.Background(), testBranch, "kb/a.md", 50, "", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1179,12 +1180,12 @@ func TestLastCommitForPath(t *testing.T) {
 	store := newTestStore(t)
 
 	fact := "---\ndomain: []\nconfidence: 0.5\nsources: 1\nentities: []\nrefs: []\n---\n# F\n\nBody.\n"
-	hash1, _, err := store.WriteFile(testBranch, "kb/f.md", fact, "add f", "learn")
+	hash1, _, err := store.WriteFile(context.Background(), testBranch, "kb/f.md", fact, "add f", "learn")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	got, err := store.LastCommitForPath(testBranch, "kb/f.md")
+	got, err := store.LastCommitForPath(context.Background(), testBranch, "kb/f.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1193,11 +1194,11 @@ func TestLastCommitForPath(t *testing.T) {
 	}
 
 	// After an update the last commit should change.
-	hash2, _, err := store.WriteFile(testBranch, "kb/f.md", fact+"updated", "update f", "learn")
+	hash2, _, err := store.WriteFile(context.Background(), testBranch, "kb/f.md", fact+"updated", "update f", "learn")
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err = store.LastCommitForPath(testBranch, "kb/f.md")
+	got, err = store.LastCommitForPath(context.Background(), testBranch, "kb/f.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1208,7 +1209,7 @@ func TestLastCommitForPath(t *testing.T) {
 
 func TestLastCommitForPath_NotFound(t *testing.T) {
 	store := newTestStore(t)
-	_, err := store.LastCommitForPath(testBranch, "kb/nonexistent.md")
+	_, err := store.LastCommitForPath(context.Background(), testBranch, "kb/nonexistent.md")
 	if err == nil {
 		t.Fatal("expected error for nonexistent path, got nil")
 	}
@@ -1219,13 +1220,13 @@ func TestLogPaginated_BeforeCursor(t *testing.T) {
 
 	fact := "---\ndomain: []\nconfidence: 0.5\nsources: 1\nentities: []\nrefs: []\n---\n# F\n\nBody.\n"
 	for i := range 5 {
-		if _, _, err := store.WriteFile(testBranch, fmt.Sprintf("kb/f%d.md", i), fact, fmt.Sprintf("add f%d", i), "learn"); err != nil {
+		if _, _, err := store.WriteFile(context.Background(), testBranch, fmt.Sprintf("kb/f%d.md", i), fact, fmt.Sprintf("add f%d", i), "learn"); err != nil {
 			t.Fatal(err)
 		}
 	}
 
 	// Get first page (newest 3).
-	page1, next, prev, err := store.LogPaginated(testBranch, "", 3, "", "", "")
+	page1, next, prev, err := store.LogPaginated(context.Background(), testBranch, "", 3, "", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1239,7 +1240,7 @@ func TestLogPaginated_BeforeCursor(t *testing.T) {
 
 	// Use the oldest entry on page1 as a "before" cursor → should return newer entries.
 	oldest := page1[len(page1)-1].Commit
-	page0, _, _, err := store.LogPaginated(testBranch, "", 10, "", "", oldest)
+	page0, _, _, err := store.LogPaginated(context.Background(), testBranch, "", 10, "", "", oldest)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1259,7 +1260,7 @@ func TestLogPaginated_FromCursor(t *testing.T) {
 	fact := "---\ndomain: []\nconfidence: 0.5\nsources: 1\nentities: []\nrefs: []\n---\n# F\n\nBody.\n"
 	var hashes []string
 	for i := range 4 {
-		h, _, err := store.WriteFile(testBranch, fmt.Sprintf("kb/g%d.md", i), fact, fmt.Sprintf("add g%d", i), "learn")
+		h, _, err := store.WriteFile(context.Background(), testBranch, fmt.Sprintf("kb/g%d.md", i), fact, fmt.Sprintf("add g%d", i), "learn")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1268,7 +1269,7 @@ func TestLogPaginated_FromCursor(t *testing.T) {
 
 	// Use the second-newest commit as a "from" anchor — should be included in results.
 	anchor := hashes[len(hashes)-2]
-	entries, _, _, err := store.LogPaginated(testBranch, "", 10, "", anchor, "")
+	entries, _, _, err := store.LogPaginated(context.Background(), testBranch, "", 10, "", anchor, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1290,20 +1291,20 @@ func TestCreateBranch(t *testing.T) {
 	store := newTestStore(t)
 
 	// Write a file on testBranch.
-	_, _, err := store.WriteFile(testBranch, "kb/fact.md", "test content", "add fact", "learn")
+	_, _, err := store.WriteFile(context.Background(), testBranch, "kb/fact.md", "test content", "add fact", "learn")
 	if err != nil {
 		t.Fatal(err)
 	}
-	headBefore, _ := store.HeadCommit(testBranch)
+	headBefore, _ := store.HeadCommit(context.Background(), testBranch)
 
 	// Create a new branch from testBranch.
 	newBranch := "agent/test-abc123"
-	if err := store.CreateBranch(newBranch, testBranch); err != nil {
+	if err := store.CreateBranch(context.Background(), newBranch, testBranch); err != nil {
 		t.Fatalf("CreateBranch: %v", err)
 	}
 
 	// New branch should point to the same commit as testBranch.
-	headNew, err := store.HeadCommit(newBranch)
+	headNew, err := store.HeadCommit(context.Background(), newBranch)
 	if err != nil {
 		t.Fatalf("HeadCommit on new branch: %v", err)
 	}
@@ -1312,7 +1313,7 @@ func TestCreateBranch(t *testing.T) {
 	}
 
 	// Data should be readable on the new branch.
-	content, err := store.ReadFile(newBranch, "kb/fact.md")
+	content, err := store.ReadFile(context.Background(), newBranch, "kb/fact.md")
 	if err != nil {
 		t.Fatalf("ReadFile on new branch: %v", err)
 	}
@@ -1321,7 +1322,7 @@ func TestCreateBranch(t *testing.T) {
 	}
 
 	// CreateBranch is idempotent when called again with the same args.
-	if err := store.CreateBranch(newBranch, testBranch); err != nil {
+	if err := store.CreateBranch(context.Background(), newBranch, testBranch); err != nil {
 		t.Fatalf("CreateBranch idempotent: %v", err)
 	}
 }
@@ -1331,17 +1332,17 @@ func TestCreateBranch_WritesToNewBranch(t *testing.T) {
 
 	// Create new branch from testBranch.
 	newBranch := "agent/new-branch"
-	if err := store.CreateBranch(newBranch, testBranch); err != nil {
+	if err := store.CreateBranch(context.Background(), newBranch, testBranch); err != nil {
 		t.Fatalf("CreateBranch: %v", err)
 	}
 
 	// Writes explicitly targeting the new branch should work.
-	_, _, err := store.WriteFile(newBranch, "kb/new-fact.md", "new content", "add after switch", "learn")
+	_, _, err := store.WriteFile(context.Background(), newBranch, "kb/new-fact.md", "new content", "add after switch", "learn")
 	if err != nil {
 		t.Fatalf("WriteFile on new branch: %v", err)
 	}
 
-	content, err := store.ReadFile(newBranch, "kb/new-fact.md")
+	content, err := store.ReadFile(context.Background(), newBranch, "kb/new-fact.md")
 	if err != nil {
 		t.Fatalf("ReadFile: %v", err)
 	}
@@ -1355,17 +1356,17 @@ func TestActivitySQL(t *testing.T) {
 
 	fact := "---\ndomain: []\nconfidence: 0.5\nsources: 1\nentities: []\nrefs: []\n---\n# T\n\nBody.\n"
 	for i := 0; i < 3; i++ {
-		if _, _, err := store.WriteFile(testBranch, fmt.Sprintf("kb/f%d.md", i), fact, fmt.Sprintf("add f%d", i), "learn"); err != nil {
+		if _, _, err := store.WriteFile(context.Background(), testBranch, fmt.Sprintf("kb/f%d.md", i), fact, fmt.Sprintf("add f%d", i), "learn"); err != nil {
 			t.Fatal(err)
 		}
 	}
 	// Write one file twice to test dedup.
-	if _, _, err := store.WriteFile(testBranch, "kb/f0.md", fact+"v2", "update f0", "learn"); err != nil {
+	if _, _, err := store.WriteFile(context.Background(), testBranch, "kb/f0.md", fact+"v2", "update f0", "learn"); err != nil {
 		t.Fatal(err)
 	}
 
 	// Activity for all paths: should include init commit + 4 writes.
-	a, err := store.Activity(testBranch, "")
+	a, err := store.Activity(context.Background(), testBranch, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1377,7 +1378,7 @@ func TestActivitySQL(t *testing.T) {
 	}
 
 	// Activity for directory: 4 commits touch kb/* (init doesn't touch kb/).
-	a2, err := store.Activity(testBranch, "kb")
+	a2, err := store.Activity(context.Background(), testBranch, "kb")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1386,7 +1387,7 @@ func TestActivitySQL(t *testing.T) {
 	}
 
 	// Activity for specific file touched twice.
-	a3, err := store.Activity(testBranch, "kb/f0.md")
+	a3, err := store.Activity(context.Background(), testBranch, "kb/f0.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1395,7 +1396,7 @@ func TestActivitySQL(t *testing.T) {
 	}
 
 	// Activity for specific file touched once.
-	a4, err := store.Activity(testBranch, "kb/f1.md")
+	a4, err := store.Activity(context.Background(), testBranch, "kb/f1.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1404,7 +1405,7 @@ func TestActivitySQL(t *testing.T) {
 	}
 
 	// Activity for a path with no commits must return zeros, not an error.
-	a5, err := store.Activity(testBranch, "kb/nonexistent.md")
+	a5, err := store.Activity(context.Background(), testBranch, "kb/nonexistent.md")
 	if err != nil {
 		t.Fatalf("Activity(nonexistent) unexpected error: %v", err)
 	}
@@ -1419,15 +1420,15 @@ func TestWalkChangedFilesEmptyPrefix(t *testing.T) {
 	store := newTestStore(t)
 
 	fact := "# F\n"
-	if _, _, err := store.WriteFile(testBranch, "kb/a.md", fact, "add kb/a", "learn"); err != nil {
+	if _, _, err := store.WriteFile(context.Background(), testBranch, "kb/a.md", fact, "add kb/a", "learn"); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := store.WriteFile(testBranch, "other/b.md", fact, "add other/b", "learn"); err != nil {
+	if _, _, err := store.WriteFile(context.Background(), testBranch, "other/b.md", fact, "add other/b", "learn"); err != nil {
 		t.Fatal(err)
 	}
 
 	// Empty prefix — should include files from both directories.
-	files, _, err := store.WalkChangedFiles(testBranch, "", "", nil, 50)
+	files, _, err := store.WalkChangedFiles(context.Background(), testBranch, "", "", nil, 50)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1448,12 +1449,12 @@ func TestWalkChangedFilesLimit(t *testing.T) {
 	store := newTestStore(t)
 
 	for i := 0; i < 5; i++ {
-		if _, _, err := store.WriteFile(testBranch, fmt.Sprintf("kb/f%d.md", i), "# F\n", fmt.Sprintf("add f%d", i), "learn"); err != nil {
+		if _, _, err := store.WriteFile(context.Background(), testBranch, fmt.Sprintf("kb/f%d.md", i), "# F\n", fmt.Sprintf("add f%d", i), "learn"); err != nil {
 			t.Fatal(err)
 		}
 	}
 
-	files, _, err := store.WalkChangedFiles(testBranch, "", "kb", nil, 3)
+	files, _, err := store.WalkChangedFiles(context.Background(), testBranch, "", "kb", nil, 3)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1467,16 +1468,16 @@ func TestWalkChangedFilesLimit(t *testing.T) {
 func TestWalkChangedFilesLastHashIsHEAD(t *testing.T) {
 	store := newTestStore(t)
 
-	if _, _, err := store.WriteFile(testBranch, "kb/a.md", "# A\n", "add a", "learn"); err != nil {
+	if _, _, err := store.WriteFile(context.Background(), testBranch, "kb/a.md", "# A\n", "add a", "learn"); err != nil {
 		t.Fatal(err)
 	}
 
-	head, err := store.HeadCommit(testBranch)
+	head, err := store.HeadCommit(context.Background(), testBranch)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	_, lastHash, err := store.WalkChangedFiles(testBranch, "", "kb", nil, 10)
+	_, lastHash, err := store.WalkChangedFiles(context.Background(), testBranch, "", "kb", nil, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1490,7 +1491,7 @@ func TestAgentID(t *testing.T) {
 	// We verify the convention via DefaultBranch.
 	store := newTestStore(t)
 
-	branch, err := store.DefaultBranch()
+	branch, err := store.DefaultBranch(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1509,14 +1510,14 @@ func TestCommitDetail_LowercasesPaths(t *testing.T) {
 	store := newTestStore(t)
 
 	// Write a file with mixed-case path.
-	hash, _, err := store.WriteFile(testBranch, "kb/Technology/AI/fact.md",
+	hash, _, err := store.WriteFile(context.Background(), testBranch, "kb/Technology/AI/fact.md",
 		"---\ndomain: [ai]\nconfidence: 0.8\nsources: 1\nentities: []\nrefs: []\n---\n# AI Fact\n\nBody.\n",
 		"add AI fact", "learn")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	detail, err := store.CommitDetail(hash)
+	detail, err := store.CommitDetail(context.Background(), hash)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1535,7 +1536,7 @@ func TestWriteFile_LowercasesPath(t *testing.T) {
 	store := newTestStore(t)
 
 	// Write with mixed-case path — git should store it lowercase.
-	_, _, err := store.WriteFile(testBranch, "kb/Technology/AI/fact.md",
+	_, _, err := store.WriteFile(context.Background(), testBranch, "kb/Technology/AI/fact.md",
 		"---\ndomain: [ai]\nconfidence: 0.8\nsources: 1\nentities: []\nrefs: []\n---\n# AI Fact\n\nBody.\n",
 		"add AI fact", "learn")
 	if err != nil {
@@ -1543,7 +1544,7 @@ func TestWriteFile_LowercasesPath(t *testing.T) {
 	}
 
 	// Reading with lowercase should work (that's how it's stored).
-	content, err := store.ReadFile(testBranch, "kb/technology/ai/fact.md")
+	content, err := store.ReadFile(context.Background(), testBranch, "kb/technology/ai/fact.md")
 	if err != nil {
 		t.Fatalf("lowercase read failed: %v", err)
 	}
@@ -1552,7 +1553,7 @@ func TestWriteFile_LowercasesPath(t *testing.T) {
 	}
 
 	// Reading with mixed case also works (ReadFile lowercases input).
-	content, err = store.ReadFile(testBranch, "kb/Technology/AI/fact.md")
+	content, err = store.ReadFile(context.Background(), testBranch, "kb/Technology/AI/fact.md")
 	if err != nil {
 		t.Fatalf("mixed case read failed: %v", err)
 	}
@@ -1565,18 +1566,18 @@ func TestDeleteFile_LowercasesPath(t *testing.T) {
 	store := newTestStore(t)
 
 	const content = "---\ndomain: []\nconfidence: 0.5\nsources: 1\nentities: []\nrefs: []\n---\n# Fact\n\nBody.\n"
-	if _, _, err := store.WriteFile(testBranch, "kb/Topic/SubTopic/fact.md", content, "add", "learn"); err != nil {
+	if _, _, err := store.WriteFile(context.Background(), testBranch, "kb/Topic/SubTopic/fact.md", content, "add", "learn"); err != nil {
 		t.Fatal(err)
 	}
 
 	// Delete with mixed case — should find the lowercase file.
-	_, err := store.DeleteFile(testBranch, "kb/Topic/SubTopic/fact.md", "retract", "retract")
+	_, err := store.DeleteFile(context.Background(), testBranch, "kb/Topic/SubTopic/fact.md", "retract", "retract")
 	if err != nil {
 		t.Fatalf("DeleteFile with mixed case failed: %v", err)
 	}
 
 	// File should be gone.
-	_, err = store.ReadFile(testBranch, "kb/topic/subtopic/fact.md")
+	_, err = store.ReadFile(context.Background(), testBranch, "kb/topic/subtopic/fact.md")
 	if err == nil {
 		t.Error("expected error reading deleted file, got nil")
 	}
@@ -1587,18 +1588,18 @@ func TestReadFileLastCommit_AfterRetract(t *testing.T) {
 
 	const content = "---\ndomain: []\nconfidence: 0.5\nsources: 1\nentities: []\nrefs: []\n---\n# Retracted Fact\n\nBody.\n"
 	// Write with mixed case (stored as lowercase).
-	if _, _, err := store.WriteFile(testBranch, "kb/Topic/SubTopic/fact.md", content, "add fact", "learn"); err != nil {
+	if _, _, err := store.WriteFile(context.Background(), testBranch, "kb/Topic/SubTopic/fact.md", content, "add fact", "learn"); err != nil {
 		t.Fatal(err)
 	}
 
 	// Retract with mixed case (lowercased internally).
-	retractHash, err := store.DeleteFile(testBranch, "kb/Topic/SubTopic/fact.md", "retract fact", "retract")
+	retractHash, err := store.DeleteFile(context.Background(), testBranch, "kb/Topic/SubTopic/fact.md", "retract fact", "retract")
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// ReadFileLastCommit with any case should work (both lowercased internally).
-	got, fromCommit, err := store.ReadFileLastCommit(testBranch, "kb/Topic/SubTopic/fact.md", retractHash)
+	got, fromCommit, err := store.ReadFileLastCommit(context.Background(), testBranch, "kb/Topic/SubTopic/fact.md", retractHash)
 	if err != nil {
 		t.Fatalf("ReadFileLastCommit failed: %v", err)
 	}
@@ -1614,7 +1615,7 @@ func TestBatchWrite_LowercasesPaths(t *testing.T) {
 	store := newTestStore(t)
 
 	// Anchor commit.
-	if _, _, err := store.WriteFile(testBranch, "kb/anchor.md",
+	if _, _, err := store.WriteFile(context.Background(), testBranch, "kb/anchor.md",
 		"---\ndomain: []\nconfidence: 0.5\nsources: 1\nentities: []\nrefs: []\n---\n# A\n\nA.\n",
 		"anchor", "learn"); err != nil {
 		t.Fatal(err)
@@ -1624,7 +1625,7 @@ func TestBatchWrite_LowercasesPaths(t *testing.T) {
 		"kb/Mixed/Case/a.md": "---\ndomain: []\nconfidence: 0.5\nsources: 1\nentities: []\nrefs: []\n---\n# A\n\nA.\n",
 		"kb/UPPER/b.md":      "---\ndomain: []\nconfidence: 0.5\nsources: 1\nentities: []\nrefs: []\n---\n# B\n\nB.\n",
 	}
-	_, hashes, err := store.BatchWrite(testBranch, files, "batch", "learn")
+	_, hashes, err := store.BatchWrite(context.Background(), testBranch, files, "batch", "learn")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1637,10 +1638,10 @@ func TestBatchWrite_LowercasesPaths(t *testing.T) {
 	}
 
 	// Files should be readable at lowercase paths.
-	if _, err := store.ReadFile(testBranch, "kb/mixed/case/a.md"); err != nil {
+	if _, err := store.ReadFile(context.Background(), testBranch, "kb/mixed/case/a.md"); err != nil {
 		t.Errorf("expected kb/mixed/case/a.md to be readable: %v", err)
 	}
-	if _, err := store.ReadFile(testBranch, "kb/upper/b.md"); err != nil {
+	if _, err := store.ReadFile(context.Background(), testBranch, "kb/upper/b.md"); err != nil {
 		t.Errorf("expected kb/upper/b.md to be readable: %v", err)
 	}
 }

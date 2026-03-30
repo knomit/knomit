@@ -1,6 +1,7 @@
 package git_test
 
 import (
+	"context"
 	"testing"
 
 	git "knomit/internal/git"
@@ -23,7 +24,7 @@ func TestDefaultConfig(t *testing.T) {
 func TestReadFileNotFound(t *testing.T) {
 	store := newTestStore(t)
 
-	_, err := store.ReadFile(testBranch, "general/nonexistent.md")
+	_, err := store.ReadFile(context.Background(), testBranch, "general/nonexistent.md")
 	if err == nil {
 		t.Fatal("expected error when reading nonexistent file")
 	}
@@ -33,7 +34,7 @@ func TestFileExistsAfterWriteAndDelete(t *testing.T) {
 	store := newTestStore(t)
 
 	// general.md exists after init.
-	exists, err := store.FileExists(testBranch, "kb.md")
+	exists, err := store.FileExists(context.Background(), testBranch, "kb.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,7 +43,7 @@ func TestFileExistsAfterWriteAndDelete(t *testing.T) {
 	}
 
 	// A file that was never created should not exist.
-	exists, err = store.FileExists(testBranch, "general/nope.md")
+	exists, err = store.FileExists(context.Background(), testBranch, "general/nope.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -51,7 +52,7 @@ func TestFileExistsAfterWriteAndDelete(t *testing.T) {
 	}
 
 	// A deeply nested nonexistent path should not exist (exercises directory-not-found path).
-	exists, err = store.FileExists(testBranch, "general/deep/nested/nothing.md")
+	exists, err = store.FileExists(context.Background(), testBranch, "general/deep/nested/nothing.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,12 +65,12 @@ func TestDeleteFileRoundtrip(t *testing.T) {
 	store := newTestStore(t)
 
 	// Write a file.
-	if _, _, err := store.WriteFile(testBranch, "general/ephemeral.md", "# Ephemeral\n\nTemporary.\n", "add ephemeral", "learn"); err != nil {
+	if _, _, err := store.WriteFile(context.Background(), testBranch, "general/ephemeral.md", "# Ephemeral\n\nTemporary.\n", "add ephemeral", "learn"); err != nil {
 		t.Fatal(err)
 	}
 
 	// Verify it exists and is readable.
-	content, err := store.ReadFile(testBranch, "general/ephemeral.md")
+	content, err := store.ReadFile(context.Background(), testBranch, "general/ephemeral.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,12 +79,12 @@ func TestDeleteFileRoundtrip(t *testing.T) {
 	}
 
 	// Delete it.
-	if _, err := store.DeleteFile(testBranch, "general/ephemeral.md", "delete ephemeral", "retract"); err != nil {
+	if _, err := store.DeleteFile(context.Background(), testBranch, "general/ephemeral.md", "delete ephemeral", "retract"); err != nil {
 		t.Fatal(err)
 	}
 
 	// Verify it no longer exists.
-	exists, err := store.FileExists(testBranch, "general/ephemeral.md")
+	exists, err := store.FileExists(context.Background(), testBranch, "general/ephemeral.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +93,7 @@ func TestDeleteFileRoundtrip(t *testing.T) {
 	}
 
 	// Reading it should error.
-	_, err = store.ReadFile(testBranch, "general/ephemeral.md")
+	_, err = store.ReadFile(context.Background(), testBranch, "general/ephemeral.md")
 	if err == nil {
 		t.Fatal("expected error reading deleted file")
 	}
@@ -102,7 +103,7 @@ func TestListAllEmptyStore(t *testing.T) {
 	store := newTestStore(t)
 
 	// A freshly initialized store should have exactly general.md.
-	paths, err := store.ListAll(testBranch)
+	paths, err := store.ListAll(context.Background(), testBranch)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,15 +118,15 @@ func TestListAllEmptyStore(t *testing.T) {
 func TestGrepMatchAndNoMatch(t *testing.T) {
 	store := newTestStore(t)
 
-	if _, _, err := store.WriteFile(testBranch, "general/cats.md", "# Cats\n\nCats are wonderful pets.\n", "add cats", "learn"); err != nil {
+	if _, _, err := store.WriteFile(context.Background(), testBranch, "general/cats.md", "# Cats\n\nCats are wonderful pets.\n", "add cats", "learn"); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := store.WriteFile(testBranch, "general/dogs.md", "# Dogs\n\nDogs are loyal companions.\n", "add dogs", "learn"); err != nil {
+	if _, _, err := store.WriteFile(context.Background(), testBranch, "general/dogs.md", "# Dogs\n\nDogs are loyal companions.\n", "add dogs", "learn"); err != nil {
 		t.Fatal(err)
 	}
 
 	// Grep for a term that matches one file.
-	matches, err := store.Grep(testBranch, "wonderful")
+	matches, err := store.Grep(context.Background(), testBranch, "wonderful")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -134,7 +135,7 @@ func TestGrepMatchAndNoMatch(t *testing.T) {
 	}
 
 	// Grep for a term that matches no files.
-	matches, err = store.Grep(testBranch, "elephant")
+	matches, err = store.Grep(context.Background(), testBranch, "elephant")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,7 +144,7 @@ func TestGrepMatchAndNoMatch(t *testing.T) {
 	}
 
 	// Grep with a regex pattern.
-	matches, err = store.Grep(testBranch, "loyal.*companions")
+	matches, err = store.Grep(context.Background(), testBranch, "loyal.*companions")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,7 +153,7 @@ func TestGrepMatchAndNoMatch(t *testing.T) {
 	}
 
 	// Grep for a term in both files.
-	matches, err = store.Grep(testBranch, "are")
+	matches, err = store.Grep(context.Background(), testBranch, "are")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -165,21 +166,21 @@ func TestDiffFilesWithDelete(t *testing.T) {
 	store := newTestStore(t)
 
 	// Write a file and record the commit hash.
-	if _, _, err := store.WriteFile(testBranch, "general/willdelete.md", "# Will Delete\n", "add willdelete", "learn"); err != nil {
+	if _, _, err := store.WriteFile(context.Background(), testBranch, "general/willdelete.md", "# Will Delete\n", "add willdelete", "learn"); err != nil {
 		t.Fatal(err)
 	}
-	afterAdd, err := store.HeadCommit(testBranch)
+	afterAdd, err := store.HeadCommit(context.Background(), testBranch)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// Delete the file.
-	if _, err := store.DeleteFile(testBranch, "general/willdelete.md", "delete willdelete", "retract"); err != nil {
+	if _, err := store.DeleteFile(context.Background(), testBranch, "general/willdelete.md", "delete willdelete", "retract"); err != nil {
 		t.Fatal(err)
 	}
 
 	// Diff from the afterAdd commit to HEAD should show the file as deleted.
-	added, modified, deleted, err := store.DiffFiles(testBranch, afterAdd)
+	added, modified, deleted, err := store.DiffFiles(context.Background(), testBranch, afterAdd)
 	if err != nil {
 		t.Fatal(err)
 	}

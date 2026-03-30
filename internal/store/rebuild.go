@@ -18,7 +18,7 @@ func (idx *Index) rebuildFacts(ctx context.Context, git GitReader, branch, head 
 		return 0, fmt.Errorf("rebuildFacts: ensure branch: %w", err)
 	}
 
-	paths, hashes, err := git.ListAllWithHash(branch)
+	paths, hashes, err := git.ListAllWithHash(ctx, branch)
 	if err != nil {
 		return 0, fmt.Errorf("rebuildFacts: list all: %w", err)
 	}

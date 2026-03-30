@@ -70,7 +70,7 @@ func UpdateHandler(gs GitStore, ontologyRoot, agentBranch string) func(context.C
 		}
 
 		// 3. Check file exists.
-		exists, err := gs.FileExists(agentBranch, file)
+		exists, err := gs.FileExists(ctx, agentBranch, file)
 		if err != nil {
 			return mcpgo.NewToolResultError(fmt.Sprintf("file exists check error: %v", err)), nil
 		}
@@ -79,7 +79,7 @@ func UpdateHandler(gs GitStore, ontologyRoot, agentBranch string) func(context.C
 		}
 
 		// 4. Read and parse existing fact.
-		content, err := gs.ReadFile(agentBranch, file)
+		content, err := gs.ReadFile(ctx, agentBranch, file)
 		if err != nil {
 			return mcpgo.NewToolResultError(fmt.Sprintf("read file error: %v", err)), nil
 		}
@@ -127,7 +127,7 @@ func UpdateHandler(gs GitStore, ontologyRoot, agentBranch string) func(context.C
 
 		// 7. Write updated fact.
 		commitMsg := fmt.Sprintf("update: %s", fact.Title)
-		hash, _, err := gs.WriteFile(agentBranch, file, SerializeFact(fact), commitMsg, "update")
+		hash, _, err := gs.WriteFile(ctx, agentBranch, file, SerializeFact(fact), commitMsg, "update")
 		if err != nil {
 			return mcpgo.NewToolResultError(fmt.Sprintf("write error: %v", err)), nil
 		}

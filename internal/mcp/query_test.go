@@ -16,7 +16,7 @@ func TestQueryReturnsResults(t *testing.T) {
 
 
 
-	idx.EXPECT().Search(gomock.Any(), gomock.Any()).Return([]SearchResult{
+	idx.EXPECT().Search(gomock.Any(), gomock.Any(), gomock.Any()).Return([]SearchResult{
 		{
 			FactWithBody: FactWithBody{
 				FactRecord: FactRecord{
@@ -91,7 +91,7 @@ func TestQueryEmptyResults(t *testing.T) {
 
 
 
-	idx.EXPECT().Search(gomock.Any(), gomock.Any()).Return(nil, nil)
+	idx.EXPECT().Search(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil, nil)
 
 	handler := QueryHandler(gs, idx, testAgentBranch)
 
@@ -142,7 +142,7 @@ func TestQueryDomainFilter(t *testing.T) {
 
 
 
-	idx.EXPECT().Search(gomock.Any(), gomock.Any()).DoAndReturn(func(branch string, q SearchQuery) ([]SearchResult, error) {
+	idx.EXPECT().Search(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, branch string, q SearchQuery) ([]SearchResult, error) {
 		lastQuery = q
 		r := testSearchResult("general/foo.md", "Foo", "body")
 		r.Domain = []string{"infra"}
@@ -178,7 +178,7 @@ func TestQueryEntityFilter(t *testing.T) {
 
 
 
-	idx.EXPECT().Search(gomock.Any(), gomock.Any()).DoAndReturn(func(branch string, q SearchQuery) ([]SearchResult, error) {
+	idx.EXPECT().Search(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, branch string, q SearchQuery) ([]SearchResult, error) {
 		lastQuery = q
 		r := testSearchResult("general/bar.md", "Bar", "body")
 		r.Entities = []string{"db"}
@@ -214,7 +214,7 @@ func TestQueryPathPrefixFilter(t *testing.T) {
 
 
 
-	idx.EXPECT().Search(gomock.Any(), gomock.Any()).DoAndReturn(func(branch string, q SearchQuery) ([]SearchResult, error) {
+	idx.EXPECT().Search(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, branch string, q SearchQuery) ([]SearchResult, error) {
 		lastQuery = q
 		return []SearchResult{testSearchResult("general/ops/deploy.md", "Deploy", "body")}, nil
 	})
@@ -245,7 +245,7 @@ func TestQueryFrontmatterIncludesEvidenceWeight(t *testing.T) {
 	gs := NewMockGitStore(ctrl)
 	idx := NewMockSearchIndex(ctrl)
 
-	idx.EXPECT().Search(gomock.Any(), gomock.Any()).Return([]SearchResult{
+	idx.EXPECT().Search(gomock.Any(), gomock.Any(), gomock.Any()).Return([]SearchResult{
 		{
 			FactWithBody: FactWithBody{
 				FactRecord: FactRecord{
@@ -312,7 +312,7 @@ func TestQueryMinConfidenceFilter(t *testing.T) {
 
 
 
-	idx.EXPECT().Search(gomock.Any(), gomock.Any()).DoAndReturn(func(branch string, q SearchQuery) ([]SearchResult, error) {
+	idx.EXPECT().Search(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, branch string, q SearchQuery) ([]SearchResult, error) {
 		lastQuery = q
 		r := testSearchResult("general/sure.md", "Sure", "body")
 		r.Confidence = 0.95

@@ -4,6 +4,7 @@
 package git
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -23,7 +24,7 @@ import (
 // notifyCommit (which triggers index sync and may call back into Store).
 //
 // If remoteBranch is empty, it defaults to "main".
-func (s *Store) Sync(localBranch, remoteBranch string) (SyncResult, error) {
+func (s *Store) Sync(ctx context.Context, localBranch, remoteBranch string) (SyncResult, error) {
 	if remoteBranch == "" {
 		remoteBranch = "main"
 	}
@@ -119,7 +120,7 @@ func (s *Store) Sync(localBranch, remoteBranch string) (SyncResult, error) {
 
 		log.Info().Str("to", originHash.String()[:8]).Msg("git sync: fast-forward")
 		s.notifyCommit(localBranch, originHash.String())
-		if err := s.populateCommitLog(localBranch); err != nil {
+		if err := s.populateCommitLog(ctx, localBranch); err != nil {
 			log.Warn().Err(err).Msg("commit_log: sync populate")
 		}
 		return SyncResult{Synced: true, FastForward: true}, nil
@@ -140,7 +141,7 @@ func (s *Store) Sync(localBranch, remoteBranch string) (SyncResult, error) {
 	log.Debug().Str("base", baseCommit.Hash.String()[:8]).Msg("git sync: merge base")
 
 	// Three-way merge: diff base→origin, apply to agent tree.
-	mergedTreeHash, err := s.threeWayMerge(baseCommit, originCommit, agentCommit)
+	mergedTreeHash, err := s.threeWayMerge(ctx, baseCommit, originCommit, agentCommit)
 	if err != nil {
 		unlock()
 		return SyncResult{}, fmt.Errorf("Sync: three-way merge: %w", err)
@@ -184,7 +185,7 @@ func (s *Store) Sync(localBranch, remoteBranch string) (SyncResult, error) {
 
 	log.Info().Str("merge_commit", mergeHash.String()[:8]).Msg("git sync: merged origin")
 	s.notifyCommit(localBranch, mergeHash.String())
-	if err := s.populateCommitLog(localBranch); err != nil {
+	if err := s.populateCommitLog(ctx, localBranch); err != nil {
 		log.Warn().Err(err).Msg("commit_log: sync populate")
 	}
 	return SyncResult{Synced: true, MergeCommit: mergeHash.String()}, nil
@@ -192,7 +193,7 @@ func (s *Store) Sync(localBranch, remoteBranch string) (SyncResult, error) {
 
 // threeWayMerge diffs base→origin and applies those changes to the agent tree.
 // Origin wins for all changes (added, modified, deleted).
-func (s *Store) threeWayMerge(baseCommit, originCommit, agentCommit *object.Commit) (plumbing.Hash, error) {
+func (s *Store) threeWayMerge(ctx context.Context, baseCommit, originCommit, agentCommit *object.Commit) (plumbing.Hash, error) {
 	baseTree, err := baseCommit.Tree()
 	if err != nil {
 		return plumbing.ZeroHash, fmt.Errorf("base tree: %w", err)
@@ -274,7 +275,7 @@ func (s *Store) threeWayMerge(baseCommit, originCommit, agentCommit *object.Comm
 
 // ConfigureRemote ensures the origin remote is configured with the given URL
 // and refspec for the specified branch.
-func (s *Store) ConfigureRemote(url, branch string) error {
+func (s *Store) ConfigureRemote(ctx context.Context, url, branch string) error {
 	s.configMu.Lock()
 	defer s.configMu.Unlock()
 
@@ -322,7 +323,7 @@ type PushResult struct {
 // push. This is safe because agent branches are per-machine — no other machine
 // writes to the same branch. Non-fast-forward errors typically happen after an
 // origin session clone+swap reconstructs the agent branch from remote data.
-func (s *Store) Push(branch string) (PushResult, error) {
+func (s *Store) Push(ctx context.Context, branch string) (PushResult, error) {
 	unlock := s.lockBranch(branch)
 	defer unlock()
 

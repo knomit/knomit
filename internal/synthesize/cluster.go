@@ -4,6 +4,7 @@
 package synthesize
 
 import (
+	"context"
 	"path"
 
 	"github.com/rs/zerolog/log"
@@ -16,7 +17,7 @@ import (
 // 2. Build subgraph of seeds + neighbors
 // 3. Run Louvain clustering (idx.ClusterFacts) over the full graph, then filter to subgraph paths
 // 4. Fallback to grouping by category path if Louvain fails or no embeddings
-func ScopedCluster(
+func ScopedCluster(ctx context.Context,
 	seeds []factForLLM,
 	idx SearchIndex,
 	resolution float64,
@@ -44,7 +45,7 @@ func ScopedCluster(
 		subgraph[seed.File] = true
 
 		cat := categoryDir(seed.File)
-		results, err := idx.Search(agentBranch, store.SearchQuery{
+		results, err := idx.Search(ctx, agentBranch, store.SearchQuery{
 			Text:         seed.Title + " " + seed.Body,
 			Path:         cat,
 			Limit:        10,
@@ -73,7 +74,7 @@ func ScopedCluster(
 		resolution = 1.0
 	}
 
-	result, err := idx.ClusterFacts(agentBranch, resolution, 2)
+	result, err := idx.ClusterFacts(ctx, agentBranch, resolution, 2)
 	if err != nil {
 		log.Debug().Err(err).Msg("scoped-cluster: Louvain failed, falling back to category grouping")
 		onProgress(ProgressEvent{Phase: "cluster", Message: "Louvain failed, using category fallback"})

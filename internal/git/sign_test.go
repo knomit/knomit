@@ -1,6 +1,7 @@
 package git_test
 
 import (
+	"context"
 	"testing"
 
 	"knomit/internal/git"
@@ -12,7 +13,7 @@ func TestSignCommitInPlace_SignsAndChangesHash(t *testing.T) {
 	signer := generateTestSigner(t)
 	store.SetSigner(signer)
 
-	commitHash, _, err := store.WriteFile(testBranch, "kb/test.md", "# Test\n", "add test", "learn")
+	commitHash, _, err := store.WriteFile(context.Background(), testBranch, "kb/test.md", "# Test\n", "add test", "learn")
 	if err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
@@ -33,10 +34,10 @@ func TestDeleteFile_SignsCommit(t *testing.T) {
 	store.SetSigner(signer)
 
 	// Write a file first.
-	store.WriteFile(testBranch, "kb/temp.md", "# Temp\n", "add temp", "learn")
+	store.WriteFile(context.Background(), testBranch, "kb/temp.md", "# Temp\n", "add temp", "learn")
 
 	// Delete it — should also produce a signed commit.
-	commitHash, err := store.DeleteFile(testBranch, "kb/temp.md", "delete temp", "retract")
+	commitHash, err := store.DeleteFile(context.Background(), testBranch, "kb/temp.md", "delete temp", "retract")
 	if err != nil {
 		t.Fatalf("DeleteFile: %v", err)
 	}
@@ -60,7 +61,7 @@ func TestBatchWrite_SignsCommit(t *testing.T) {
 		"kb/a.md": "# A\n",
 		"kb/b.md": "# B\n",
 	}
-	commitHash, _, err := store.BatchWrite(testBranch, files, "batch add", "learn")
+	commitHash, _, err := store.BatchWrite(context.Background(), testBranch, files, "batch add", "learn")
 	if err != nil {
 		t.Fatalf("BatchWrite: %v", err)
 	}
@@ -78,7 +79,7 @@ func TestInitCommits_AreUnsigned(t *testing.T) {
 	store := newTestStore(t)
 
 	// Init commit (before any signer is set) should be unsigned.
-	headHash, err := store.HeadCommit(testBranch)
+	headHash, err := store.HeadCommit(context.Background(), testBranch)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -105,7 +106,7 @@ func TestSignCommitInPlace_NoSignerNoSignature(t *testing.T) {
 	store := newTestStore(t)
 
 	// No signer — commit should be unsigned.
-	commitHash, _, err := store.WriteFile(testBranch, "kb/test.md", "# Test\n", "add test", "learn")
+	commitHash, _, err := store.WriteFile(context.Background(), testBranch, "kb/test.md", "# Test\n", "add test", "learn")
 	if err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
