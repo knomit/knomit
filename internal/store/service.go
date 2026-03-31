@@ -10,6 +10,7 @@ import (
 	"time"
 
 	gogit "github.com/go-git/go-git/v5"
+	gogitconfig "github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/go-git/go-git/v5/plumbing/storer"
@@ -48,6 +49,7 @@ type Service struct {
 	signer      ssh.Signer // signs commits when set
 	handlerOnce sync.Once
 	handler     http.Handler
+	onCommit    func(branch, hash string) // optional external callback
 }
 
 // Open opens (or creates) a unified SQLite database at path, initializes the
@@ -170,9 +172,20 @@ func (s *Service) committerSig(branch string) object.Signature {
 	}
 }
 
-// notifyCommit calls appendCommitLog directly (replaces the old onCommit callback).
+// SetOnCommit registers a callback invoked after every commit (after internal
+// bookkeeping). This allows callers to observe commits for side-effects such
+// as SSE broadcasting. The callback receives the branch name and commit hash.
+func (s *Service) SetOnCommit(fn func(branch, hash string)) {
+	s.onCommit = fn
+}
+
+// notifyCommit calls appendCommitLog directly and then the optional external
+// callback registered via SetOnCommit.
 func (s *Service) notifyCommit(ctx context.Context, branch string, hash plumbing.Hash) {
 	s.appendCommitLog(ctx, branch, hash)
+	if s.onCommit != nil {
+		s.onCommit(branch, hash.String())
+	}
 }
 
 // HeadCommit returns the hash of the tip commit of branch as a hex string.
@@ -199,6 +212,50 @@ func (s *Service) createBranch(ctx context.Context, branch, fromBranch string) e
 		return fmt.Errorf("createBranch: set ref: %w", err)
 	}
 	log.Info().Str("branch", branch).Str("from", fromBranch).Msg("created branch")
+	return nil
+}
+
+// CreateBranch creates a new branch ref pointing at the tip of fromBranch.
+// No-op if branch already exists.
+func (s *Service) CreateBranch(ctx context.Context, branch, fromBranch string) error {
+	return s.createBranch(ctx, branch, fromBranch)
+}
+
+// ConfigureRemote sets up (or reconfigures) the "origin" remote with the given
+// URL and fetch refspec for branch. Idempotent — returns nil if already correct.
+func (s *Service) ConfigureRemote(ctx context.Context, url, branch string) error {
+	s.configMu.Lock()
+	defer s.configMu.Unlock()
+
+	cfg, err := s.repo.Config()
+	if err != nil {
+		return fmt.Errorf("read config: %w", err)
+	}
+
+	refspec := fmt.Sprintf("+refs/heads/%s:refs/remotes/origin/%s", branch, branch)
+
+	if rc, ok := cfg.Remotes["origin"]; ok {
+		if len(rc.URLs) > 0 && rc.URLs[0] == url {
+			for _, rs := range rc.Fetch {
+				if string(rs) == refspec {
+					return nil // already configured
+				}
+			}
+		}
+	}
+
+	// Delete existing origin if present, then create fresh.
+	_ = s.repo.DeleteRemote("origin")
+	_, err = s.repo.CreateRemote(&gogitconfig.RemoteConfig{
+		Name: "origin",
+		URLs: []string{url},
+		Fetch: []gogitconfig.RefSpec{
+			gogitconfig.RefSpec(refspec),
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("create remote: %w", err)
+	}
 	return nil
 }
 

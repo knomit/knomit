@@ -7,21 +7,28 @@ import (
 
 	"github.com/BurntSushi/toml"
 
-	"knomit/internal/git"
+	"knomit/internal/identity"
 	"knomit/internal/llm"
 )
 
+// GitConfig holds git-related configuration.
+type GitConfig struct {
+	Origin string `toml:"origin"`
+	Serve  bool   `toml:"serve"`
+	Port   string `toml:"port"`
+}
+
 // Config is the root configuration, composed of section structs.
 type Config struct {
-	Home         string              `toml:"repo"`
-	Host         string              `toml:"host"`
-	Port         string              `toml:"port"`
-	Socket       string              `toml:"socket"`
-	OntologyRoot string              `toml:"ontology_root"`
-	ONNXLibPath  string              `toml:"onnx_lib_path"`
-	LLM          llm.Config          `toml:"llm"`
-	Remote       git.RemoteAuthConfig `toml:"remote"`
-	Git          git.Config          `toml:"git"`
+	Home         string                    `toml:"repo"`
+	Host         string                    `toml:"host"`
+	Port         string                    `toml:"port"`
+	Socket       string                    `toml:"socket"`
+	OntologyRoot string                    `toml:"ontology_root"`
+	ONNXLibPath  string                    `toml:"onnx_lib_path"`
+	LLM          llm.Config                `toml:"llm"`
+	Remote       identity.RemoteAuthConfig `toml:"remote"`
+	Git          GitConfig                 `toml:"git"`
 }
 
 // Defaults returns a Config populated with default values.
@@ -33,7 +40,7 @@ func Defaults() Config {
 		Port:         "19278",
 		OntologyRoot: "kb",
 		LLM:          llm.DefaultConfig(),
-		Git:          git.DefaultConfig(),
+		Git:          GitConfig{Serve: true},
 	}
 }
 
