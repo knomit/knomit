@@ -53,8 +53,13 @@ func TestDeleteFactAtomically(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// Open repo on Service so DeleteFact can use Service.DeleteFile
+	if err := svc.TestOpenRepo(); err != nil {
+		t.Fatal(err)
+	}
+
 	// Delete
-	if err := svc.DeleteFact(context.Background(), gs, testBranch, "kb/test.md", "forget test"); err != nil {
+	if err := svc.DeleteFact(context.Background(), testBranch, "kb/test.md", "forget test"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -163,8 +168,13 @@ func TestFullRoundtrip(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// Open repo on Service so DeleteFact can use Service.DeleteFile
+	if err := svc.TestOpenRepo(); err != nil {
+		t.Fatal(err)
+	}
+
 	// Delete
-	if err := svc.DeleteFact(context.Background(), gs, testBranch, "kb/db/postgres.md", "forget postgres"); err != nil {
+	if err := svc.DeleteFact(context.Background(), testBranch, "kb/db/postgres.md", "forget postgres"); err != nil {
 		t.Fatal(err)
 	}
 
