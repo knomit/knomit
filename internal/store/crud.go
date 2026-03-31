@@ -327,6 +327,32 @@ func (idx *Index) getEmbeddingByFact(ctx context.Context, path, blobHash string)
 	return bytesToFloat32Slice(blob)
 }
 
+// casLastCommit atomically updates the last-commit watermark for a branch,
+// but only if it currently equals prev. Returns true if the update succeeded.
+func (idx *Index) casLastCommit(ctx context.Context, branch, prev, next string) (bool, error) {
+	key := "last_commit:" + branch
+	db := conn(ctx, idx.db)
+
+	if prev == "" {
+		// First sync: insert only if key doesn't exist.
+		result, err := db.ExecContext(ctx,
+			`INSERT OR IGNORE INTO meta(key, value) VALUES (?, ?)`, key, next)
+		if err != nil {
+			return false, err
+		}
+		n, _ := result.RowsAffected()
+		return n > 0, nil
+	}
+
+	result, err := db.ExecContext(ctx,
+		`UPDATE meta SET value = ? WHERE key = ? AND value = ?`, next, key, prev)
+	if err != nil {
+		return false, err
+	}
+	n, _ := result.RowsAffected()
+	return n > 0, nil
+}
+
 // SetLastCommit stores the last processed commit hash in the meta table,
 // scoped to the given branch.
 func (idx *Index) SetLastCommit(ctx context.Context, branch, hash string) error {

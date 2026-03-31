@@ -75,7 +75,14 @@ func (idx *Index) Sync(ctx context.Context, git GitReader, branch string) error 
 		}
 	}
 
-	return idx.SetLastCommit(ctx, branch, head)
+	ok, err := idx.casLastCommit(ctx, branch, last, head)
+	if err != nil {
+		return fmt.Errorf("sync cas: %w", err)
+	}
+	if !ok {
+		log.Debug().Str("branch", branch).Msg("sync: CAS failed, another sync won")
+	}
+	return nil
 }
 
 // RebuildProgress is called during Rebuild to report progress.

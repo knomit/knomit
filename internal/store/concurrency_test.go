@@ -8,6 +8,92 @@ import (
 	"testing"
 )
 
+func TestSync_ConcurrentCAS(t *testing.T) {
+	tmp := filepath.Join(t.TempDir(), "sync-race.db")
+	idx, err := New(tmp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer idx.Close()
+	ctx := context.Background()
+
+	branch := "agent/sync-race"
+	content := "---\ndomain: [test]\nconfidence: 0.9\nsources: 1\nentities: [Go]\nrefs: []\n---\n# Fact\n\nBody.\n"
+	insertBlob(t, idx.db, "blob_kb/fact.md", content)
+
+	const headHash = "abc123def456"
+	git := &mockGitReader{
+		files: map[string]string{"kb/fact.md": content},
+		head:  headHash,
+	}
+
+	// Two concurrent Sync calls on the same branch.
+	var wg sync.WaitGroup
+	errs := make([]error, 2)
+	wg.Add(2)
+	go func() { defer wg.Done(); errs[0] = idx.Sync(ctx, git, branch) }()
+	go func() { defer wg.Done(); errs[1] = idx.Sync(ctx, git, branch) }()
+	wg.Wait()
+
+	// Both should succeed (one wins CAS, other is harmless no-op).
+	for i, err := range errs {
+		if err != nil {
+			t.Errorf("goroutine %d: %v", i, err)
+		}
+	}
+
+	// Last commit should be set.
+	last, _ := idx.GetLastCommit(ctx, branch)
+	if last != headHash {
+		t.Errorf("expected last commit %s, got %s", headHash, last)
+	}
+
+	// Exactly one fact should exist (COW dedup handles duplicate upserts).
+	var count int
+	idx.db.QueryRow(`SELECT COUNT(*) FROM facts WHERE path = 'kb/fact.md'`).Scan(&count)
+	if count != 1 {
+		t.Errorf("expected 1 fact, got %d", count)
+	}
+}
+
+func TestCreatePipelineSession_ConcurrentAbandon(t *testing.T) {
+	tmp := filepath.Join(t.TempDir(), "pipeline-race.db")
+	idx, err := New(tmp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer idx.Close()
+	ctx := context.Background()
+
+	tool := "review"
+	branch := "agent/pipeline-race"
+
+	// Two concurrent CreatePipelineSession calls.
+	var wg sync.WaitGroup
+	sessions := make([]*PipelineSession, 2)
+	errs := make([]error, 2)
+	wg.Add(2)
+	go func() { defer wg.Done(); sessions[0], errs[0] = idx.CreatePipelineSession(ctx, tool, branch) }()
+	go func() { defer wg.Done(); sessions[1], errs[1] = idx.CreatePipelineSession(ctx, tool, branch) }()
+	wg.Wait()
+
+	for i, err := range errs {
+		if err != nil {
+			t.Errorf("goroutine %d: %v", i, err)
+		}
+	}
+
+	// Exactly one active session should remain.
+	var activeCount int
+	idx.db.QueryRow(
+		`SELECT COUNT(*) FROM pipeline_sessions WHERE tool = ? AND branch = ? AND status = 'active'`,
+		tool, branch,
+	).Scan(&activeCount)
+	if activeCount != 1 {
+		t.Errorf("expected 1 active session, got %d", activeCount)
+	}
+}
+
 func TestDelete_ConcurrentRefcount(t *testing.T) {
 	tmp := filepath.Join(t.TempDir(), "concurrent_del.db")
 	idx, err := New(tmp)
