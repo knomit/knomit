@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"fmt"
 	"testing"
 )
@@ -30,6 +31,7 @@ func insertCommitLog(t *testing.T, idx *Index, path, commitHash string, committe
 }
 
 func TestRebuildGraphHistory_CreatesFactVersionNodes(t *testing.T) {
+	ctx := context.Background()
 	idx, err := New(":memory:")
 	if err != nil {
 		t.Fatal(err)
@@ -51,7 +53,7 @@ func TestRebuildGraphHistory_CreatesFactVersionNodes(t *testing.T) {
 		head: c2,
 	}
 
-	n, err := idx.rebuildGraphHistory(git, "machine/test", nil)
+	n, err := idx.rebuildGraphHistory(ctx, git, "machine/test", nil)
 	if err != nil {
 		t.Fatalf("rebuildGraphHistory: %v", err)
 	}
@@ -81,6 +83,7 @@ func TestRebuildGraphHistory_CreatesFactVersionNodes(t *testing.T) {
 }
 
 func TestRebuildGraphHistory_PrevVersionChain(t *testing.T) {
+	ctx := context.Background()
 	idx, err := New(":memory:")
 	if err != nil {
 		t.Fatal(err)
@@ -106,7 +109,7 @@ func TestRebuildGraphHistory_PrevVersionChain(t *testing.T) {
 		head:  c3,
 	}
 
-	if _, err := idx.rebuildGraphHistory(git, "machine/test", nil); err != nil {
+	if _, err := idx.rebuildGraphHistory(ctx, git, "machine/test", nil); err != nil {
 		t.Fatalf("rebuildGraphHistory: %v", err)
 	}
 
@@ -118,6 +121,7 @@ func TestRebuildGraphHistory_PrevVersionChain(t *testing.T) {
 }
 
 func TestRebuildGraphHistory_DerivedFromOnVersions(t *testing.T) {
+	ctx := context.Background()
 	idx, err := New(":memory:")
 	if err != nil {
 		t.Fatal(err)
@@ -136,7 +140,7 @@ func TestRebuildGraphHistory_DerivedFromOnVersions(t *testing.T) {
 	blobHash := "deadbeef00000001"
 	idx.db.Exec(`INSERT OR IGNORE INTO objects(hash, type, size, data) VALUES (?, ?, ?, ?)`,
 		blobHash, BlobObjectType, 10, []byte(factContent("Target")))
-	idx.Upsert(testBranch, "abc", FactRecord{
+	idx.Upsert(ctx, testBranch, "abc", FactRecord{
 		Path: target, Title: "Target", BlobHash: blobHash,
 		Type: "observation", Domain: []string{"test"}, Confidence: 0.8, Sources: 1,
 	})
@@ -153,7 +157,7 @@ func TestRebuildGraphHistory_DerivedFromOnVersions(t *testing.T) {
 		head: c2,
 	}
 
-	if _, err := idx.rebuildGraphHistory(git, "machine/test", nil); err != nil {
+	if _, err := idx.rebuildGraphHistory(ctx, git, "machine/test", nil); err != nil {
 		t.Fatalf("rebuildGraphHistory: %v", err)
 	}
 
@@ -165,6 +169,7 @@ func TestRebuildGraphHistory_DerivedFromOnVersions(t *testing.T) {
 }
 
 func TestRebuildGraphHistory_SkipsDeletedCommits(t *testing.T) {
+	ctx := context.Background()
 	idx, err := New(":memory:")
 	if err != nil {
 		t.Fatal(err)
@@ -187,7 +192,7 @@ func TestRebuildGraphHistory_SkipsDeletedCommits(t *testing.T) {
 		head:  c2,
 	}
 
-	n, err := idx.rebuildGraphHistory(git, "machine/test", nil)
+	n, err := idx.rebuildGraphHistory(ctx, git, "machine/test", nil)
 	if err != nil {
 		t.Fatalf("rebuildGraphHistory: %v", err)
 	}
@@ -198,12 +203,13 @@ func TestRebuildGraphHistory_SkipsDeletedCommits(t *testing.T) {
 }
 
 func TestFactVersionHistory(t *testing.T) {
+	ctx := context.Background()
 	idx, err := New(":memory:")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer idx.Close()
-	idx.EnsureBranch(testBranch, "refs/heads/"+testBranch)
+	idx.EnsureBranch(ctx, testBranch, "refs/heads/"+testBranch)
 
 	path := "kb/test/fact.md"
 	c1 := "aaa0000000000000000000000000000000000000aa"
@@ -220,11 +226,11 @@ func TestFactVersionHistory(t *testing.T) {
 		files: map[string]string{path: factContent("Version Two")},
 		head:  c2,
 	}
-	if _, err := idx.rebuildGraphHistory(git, "machine/test", nil); err != nil {
+	if _, err := idx.rebuildGraphHistory(ctx, git, "machine/test", nil); err != nil {
 		t.Fatalf("rebuildGraphHistory: %v", err)
 	}
 
-	versions, err := idx.FactVersionHistory(testBranch, path)
+	versions, err := idx.FactVersionHistory(ctx, testBranch, path)
 	if err != nil {
 		t.Fatalf("FactVersionHistory: %v", err)
 	}
@@ -241,6 +247,7 @@ func TestFactVersionHistory(t *testing.T) {
 }
 
 func TestExplainFactAt_OutgoingRefs(t *testing.T) {
+	ctx := context.Background()
 	idx, err := New(":memory:")
 	if err != nil {
 		t.Fatal(err)
@@ -258,7 +265,7 @@ func TestExplainFactAt_OutgoingRefs(t *testing.T) {
 	blobHash := "deadbeef00000002"
 	idx.db.Exec(`INSERT OR IGNORE INTO objects(hash, type, size, data) VALUES (?, ?, ?, ?)`,
 		blobHash, BlobObjectType, 10, []byte(factContent("Target")))
-	idx.Upsert(testBranch, "abc", FactRecord{
+	idx.Upsert(ctx, testBranch, "abc", FactRecord{
 		Path: target, Title: "Target", BlobHash: blobHash,
 		Type: "observation", Domain: []string{"test"}, Confidence: 0.8, Sources: 1,
 	})
@@ -274,11 +281,11 @@ func TestExplainFactAt_OutgoingRefs(t *testing.T) {
 		},
 		head: c2,
 	}
-	if _, err := idx.rebuildGraphHistory(git, "machine/test", nil); err != nil {
+	if _, err := idx.rebuildGraphHistory(ctx, git, "machine/test", nil); err != nil {
 		t.Fatalf("rebuildGraphHistory: %v", err)
 	}
 
-	result, err := idx.ExplainFactAt(testBranch, source, c2)
+	result, err := idx.ExplainFactAt(ctx, testBranch, source, c2)
 	if err != nil {
 		t.Fatalf("ExplainFactAt: %v", err)
 	}
@@ -288,6 +295,7 @@ func TestExplainFactAt_OutgoingRefs(t *testing.T) {
 }
 
 func TestExplainFactAt_IncomingRefs(t *testing.T) {
+	ctx := context.Background()
 	idx, err := New(":memory:")
 	if err != nil {
 		t.Fatal(err)
@@ -305,7 +313,7 @@ func TestExplainFactAt_IncomingRefs(t *testing.T) {
 	blobHash := "deadbeef00000003"
 	idx.db.Exec(`INSERT OR IGNORE INTO objects(hash, type, size, data) VALUES (?, ?, ?, ?)`,
 		blobHash, BlobObjectType, 10, []byte(factContent("Target")))
-	idx.Upsert(testBranch, "abc", FactRecord{
+	idx.Upsert(ctx, testBranch, "abc", FactRecord{
 		Path: target, Title: "Target", BlobHash: blobHash,
 		Type: "observation", Domain: []string{"test"}, Confidence: 0.8, Sources: 1,
 	})
@@ -321,11 +329,11 @@ func TestExplainFactAt_IncomingRefs(t *testing.T) {
 		},
 		head: c2,
 	}
-	if _, err := idx.rebuildGraphHistory(git, "machine/test", nil); err != nil {
+	if _, err := idx.rebuildGraphHistory(ctx, git, "machine/test", nil); err != nil {
 		t.Fatalf("rebuildGraphHistory: %v", err)
 	}
 
-	result, err := idx.ExplainFactAt(testBranch, target, c1)
+	result, err := idx.ExplainFactAt(ctx, testBranch, target, c1)
 	if err != nil {
 		t.Fatalf("ExplainFactAt: %v", err)
 	}
@@ -335,12 +343,13 @@ func TestExplainFactAt_IncomingRefs(t *testing.T) {
 }
 
 func TestHistoryNavigation_WalkUpAndDown(t *testing.T) {
+	ctx := context.Background()
 	idx, err := New(":memory:")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer idx.Close()
-	idx.EnsureBranch(testBranch, "refs/heads/"+testBranch)
+	idx.EnsureBranch(ctx, testBranch, "refs/heads/"+testBranch)
 
 	path := "kb/test/fact.md"
 	commits := []string{
@@ -368,12 +377,12 @@ func TestHistoryNavigation_WalkUpAndDown(t *testing.T) {
 		head:        commits[5],
 	}
 
-	if _, err := idx.rebuildGraphHistory(git, "machine/test", nil); err != nil {
+	if _, err := idx.rebuildGraphHistory(ctx, git, "machine/test", nil); err != nil {
 		t.Fatalf("rebuildGraphHistory: %v", err)
 	}
 
 	// Verify FactVersionHistory returns all 6 versions, newest first.
-	versions, err := idx.FactVersionHistory(testBranch, path)
+	versions, err := idx.FactVersionHistory(ctx, testBranch, path)
 	if err != nil {
 		t.Fatalf("FactVersionHistory: %v", err)
 	}
@@ -388,7 +397,7 @@ func TestHistoryNavigation_WalkUpAndDown(t *testing.T) {
 
 	// Walk backward via PREV_VERSION: newest → oldest.
 	prevByHash := func(hash string) string {
-		nodeID, err := idx.graphNodeIDByProp(NodeFactVersion, "commit_hash", hash)
+		nodeID, err := idx.graphNodeIDByProp(ctx, NodeFactVersion, "commit_hash", hash)
 		if err != nil || nodeID == 0 {
 			t.Fatalf("node not found for %s", hash[:8])
 		}
@@ -424,7 +433,7 @@ func TestHistoryNavigation_WalkUpAndDown(t *testing.T) {
 
 	// Walk forward via reverse PREV_VERSION: oldest → newest.
 	nextByHash := func(hash string) string {
-		nodeID, err := idx.graphNodeIDByProp(NodeFactVersion, "commit_hash", hash)
+		nodeID, err := idx.graphNodeIDByProp(ctx, NodeFactVersion, "commit_hash", hash)
 		if err != nil || nodeID == 0 {
 			t.Fatalf("node not found for %s", hash[:8])
 		}
@@ -460,6 +469,7 @@ func TestHistoryNavigation_WalkUpAndDown(t *testing.T) {
 }
 
 func TestExplainFactAt_MultipleRefsInAndOut(t *testing.T) {
+	ctx := context.Background()
 	idx, err := New(":memory:")
 	if err != nil {
 		t.Fatal(err)
@@ -490,7 +500,7 @@ func TestExplainFactAt_MultipleRefsInAndOut(t *testing.T) {
 		title := []string{"A", "B", "C", "D"}[i]
 		idx.db.Exec(`INSERT OR IGNORE INTO objects(hash, type, size, data) VALUES (?, ?, ?, ?)`,
 			bh, BlobObjectType, 10, []byte(factContent(title)))
-		idx.Upsert(testBranch, "abc", FactRecord{
+		idx.Upsert(ctx, testBranch, "abc", FactRecord{
 			Path: p, Title: title, BlobHash: bh,
 			Type: "observation", Domain: []string{"test"}, Confidence: 0.8, Sources: 1,
 		})
@@ -514,7 +524,7 @@ func TestExplainFactAt_MultipleRefsInAndOut(t *testing.T) {
 		head: cE,
 	}
 
-	if _, err := idx.rebuildGraphHistory(git, "machine/test", nil); err != nil {
+	if _, err := idx.rebuildGraphHistory(ctx, git, "machine/test", nil); err != nil {
 		t.Fatalf("rebuildGraphHistory: %v", err)
 	}
 
@@ -528,7 +538,7 @@ func TestExplainFactAt_MultipleRefsInAndOut(t *testing.T) {
 	}
 
 	// D's outgoing refs: A and B.
-	resD, err := idx.ExplainFactAt(testBranch, pathD, cD)
+	resD, err := idx.ExplainFactAt(ctx, testBranch, pathD, cD)
 	if err != nil {
 		t.Fatalf("ExplainFactAt(D): %v", err)
 	}
@@ -540,7 +550,7 @@ func TestExplainFactAt_MultipleRefsInAndOut(t *testing.T) {
 	}
 
 	// E's outgoing refs: C and D.
-	resE, err := idx.ExplainFactAt(testBranch, pathE, cE)
+	resE, err := idx.ExplainFactAt(ctx, testBranch, pathE, cE)
 	if err != nil {
 		t.Fatalf("ExplainFactAt(E): %v", err)
 	}
@@ -549,7 +559,7 @@ func TestExplainFactAt_MultipleRefsInAndOut(t *testing.T) {
 	}
 
 	// A's incoming: D's version references it.
-	resA, err := idx.ExplainFactAt(testBranch, pathA, cA)
+	resA, err := idx.ExplainFactAt(ctx, testBranch, pathA, cA)
 	if err != nil {
 		t.Fatalf("ExplainFactAt(A): %v", err)
 	}
@@ -558,7 +568,7 @@ func TestExplainFactAt_MultipleRefsInAndOut(t *testing.T) {
 	}
 
 	// B's incoming: D's version references it.
-	resB, err := idx.ExplainFactAt(testBranch, pathB, cB)
+	resB, err := idx.ExplainFactAt(ctx, testBranch, pathB, cB)
 	if err != nil {
 		t.Fatalf("ExplainFactAt(B): %v", err)
 	}
@@ -567,7 +577,7 @@ func TestExplainFactAt_MultipleRefsInAndOut(t *testing.T) {
 	}
 
 	// C's incoming: E's version references it.
-	resC, err := idx.ExplainFactAt(testBranch, pathC, cC)
+	resC, err := idx.ExplainFactAt(ctx, testBranch, pathC, cC)
 	if err != nil {
 		t.Fatalf("ExplainFactAt(C): %v", err)
 	}
@@ -582,6 +592,7 @@ func TestExplainFactAt_MultipleRefsInAndOut(t *testing.T) {
 }
 
 func TestExplainFactAt_RefsChangeWithHistory(t *testing.T) {
+	ctx := context.Background()
 	idx, err := New(":memory:")
 	if err != nil {
 		t.Fatal(err)
@@ -613,7 +624,7 @@ func TestExplainFactAt_RefsChangeWithHistory(t *testing.T) {
 		_ = i
 		idx.db.Exec(`INSERT OR IGNORE INTO objects(hash, type, size, data) VALUES (?, ?, ?, ?)`,
 			info.hash, BlobObjectType, 10, []byte(factContent(info.title)))
-		idx.Upsert(testBranch, "abc", FactRecord{
+		idx.Upsert(ctx, testBranch, "abc", FactRecord{
 			Path: info.path, Title: info.title, BlobHash: info.hash,
 			Type: "observation", Domain: []string{"test"}, Confidence: 0.8, Sources: 1,
 		})
@@ -635,7 +646,7 @@ func TestExplainFactAt_RefsChangeWithHistory(t *testing.T) {
 		head: cB3,
 	}
 
-	if _, err := idx.rebuildGraphHistory(git, "machine/test", nil); err != nil {
+	if _, err := idx.rebuildGraphHistory(ctx, git, "machine/test", nil); err != nil {
 		t.Fatalf("rebuildGraphHistory: %v", err)
 	}
 
@@ -649,7 +660,7 @@ func TestExplainFactAt_RefsChangeWithHistory(t *testing.T) {
 	}
 
 	// v1 outgoing: only A.
-	resB1, err := idx.ExplainFactAt(testBranch, pathB, cB1)
+	resB1, err := idx.ExplainFactAt(ctx, testBranch, pathB, cB1)
 	if err != nil {
 		t.Fatalf("ExplainFactAt(B,v1): %v", err)
 	}
@@ -661,7 +672,7 @@ func TestExplainFactAt_RefsChangeWithHistory(t *testing.T) {
 	}
 
 	// v2 outgoing: A and C.
-	resB2, err := idx.ExplainFactAt(testBranch, pathB, cB2)
+	resB2, err := idx.ExplainFactAt(ctx, testBranch, pathB, cB2)
 	if err != nil {
 		t.Fatalf("ExplainFactAt(B,v2): %v", err)
 	}
@@ -670,7 +681,7 @@ func TestExplainFactAt_RefsChangeWithHistory(t *testing.T) {
 	}
 
 	// v3 outgoing: only C.
-	resB3, err := idx.ExplainFactAt(testBranch, pathB, cB3)
+	resB3, err := idx.ExplainFactAt(ctx, testBranch, pathB, cB3)
 	if err != nil {
 		t.Fatalf("ExplainFactAt(B,v3): %v", err)
 	}
@@ -682,7 +693,7 @@ func TestExplainFactAt_RefsChangeWithHistory(t *testing.T) {
 	}
 
 	// Incoming to A: B referenced it in v1 and v2.
-	resA, err := idx.ExplainFactAt(testBranch, pathA, cA)
+	resA, err := idx.ExplainFactAt(ctx, testBranch, pathA, cA)
 	if err != nil {
 		t.Fatalf("ExplainFactAt(A): %v", err)
 	}
@@ -691,7 +702,7 @@ func TestExplainFactAt_RefsChangeWithHistory(t *testing.T) {
 	}
 
 	// Incoming to C: B referenced it in v2 and v3.
-	resC, err := idx.ExplainFactAt(testBranch, pathC, cC)
+	resC, err := idx.ExplainFactAt(ctx, testBranch, pathC, cC)
 	if err != nil {
 		t.Fatalf("ExplainFactAt(C): %v", err)
 	}
@@ -701,6 +712,7 @@ func TestExplainFactAt_RefsChangeWithHistory(t *testing.T) {
 }
 
 func TestRebuild_IncludesHistoryPhase(t *testing.T) {
+	ctx := context.Background()
 	idx, err := New(":memory:")
 	if err != nil {
 		t.Fatal(err)
@@ -730,12 +742,12 @@ func TestRebuild_IncludesHistoryPhase(t *testing.T) {
 	idx.db.Exec(`INSERT OR IGNORE INTO objects(hash, type, size, data) VALUES (?, ?, ?, ?)`,
 		blobHash, BlobObjectType, 10, []byte(factContent("Version Two")))
 
-	if err := idx.Rebuild(git, "machine/test", nil); err != nil {
+	if err := idx.Rebuild(ctx, git, "machine/test", nil); err != nil {
 		t.Fatalf("Rebuild: %v", err)
 	}
 
 	// After Rebuild, FactVersion nodes for both commits should exist.
-	versions, err := idx.FactVersionHistory("machine/test", path)
+	versions, err := idx.FactVersionHistory(ctx, "machine/test", path)
 	if err != nil {
 		t.Fatalf("FactVersionHistory: %v", err)
 	}

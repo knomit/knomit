@@ -4,6 +4,7 @@
 package store
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -99,7 +100,7 @@ func newFactFilter(q SearchQuery) *factFilter {
 // the allowed set. It performs a single bulk SQL lookup of operations by
 // commit_hash from commit_log (same database). If ops is empty, all results
 // are kept unchanged.
-func (idx *Index) filterByEpisodeOps(results []SearchResult, ops []string) ([]SearchResult, error) {
+func (idx *Index) filterByEpisodeOps(ctx context.Context, results []SearchResult, ops []string) ([]SearchResult, error) {
 	if len(ops) == 0 || len(results) == 0 {
 		return results, nil
 	}
@@ -129,7 +130,7 @@ func (idx *Index) filterByEpisodeOps(results []SearchResult, ops []string) ([]Se
 		args[i] = h
 	}
 
-	rows, err := idx.db.Query(
+	rows, err := conn(ctx, idx.db).QueryContext(ctx,
 		`SELECT commit_hash, operation FROM commit_log WHERE commit_hash IN (`+ph[:len(ph)-1]+`) GROUP BY commit_hash`,
 		args...,
 	)
@@ -172,8 +173,8 @@ func (idx *Index) filterByEpisodeOps(results []SearchResult, ops []string) ([]Se
 //
 // If Text is empty, all facts matching the non-text filters are returned with
 // score 100.
-func (idx *Index) Search(branch string, q SearchQuery) ([]SearchResult, error) {
-	branchID, err := idx.branchID(branch)
+func (idx *Index) Search(ctx context.Context, branch string, q SearchQuery) ([]SearchResult, error) {
+	branchID, err := idx.branchID(ctx, branch)
 	if err != nil {
 		return nil, fmt.Errorf("search: %w", err)
 	}
@@ -188,7 +189,7 @@ func (idx *Index) Search(branch string, q SearchQuery) ([]SearchResult, error) {
 	// ── Text-less path: return all facts matching filters with score 100 ──
 	if q.Text == "" {
 		args := append(append([]any{BlobObjectType, branchID}, flt.args...), limit)
-		rows, err := idx.db.Query(
+		rows, err := conn(ctx, idx.db).QueryContext(ctx,
 			`SELECT f.path, f.title, f.blob_hash, f.type, f.domain, f.entities,
 			        f.confidence, f.sources, f.refs, f.evidence_weight,
 			        bf.commit_hash, o.data
@@ -214,7 +215,7 @@ func (idx *Index) Search(branch string, q SearchQuery) ([]SearchResult, error) {
 		if err := rows.Err(); err != nil {
 			return nil, err
 		}
-		return idx.filterByEpisodeOps(out, q.EpisodeOps)
+		return idx.filterByEpisodeOps(ctx, out, q.EpisodeOps)
 	}
 
 	// ── Vector (embedding) search ─────────────────────────────────────────
@@ -246,7 +247,7 @@ func (idx *Index) Search(branch string, q SearchQuery) ([]SearchResult, error) {
 			} else if q.MinSimilarity > 0.5 {
 				kLimit = limit * 3
 			}
-			rows, err := idx.db.Query(
+			rows, err := conn(ctx, idx.db).QueryContext(ctx,
 				`SELECT f.path, (1.0 - fv.distance) as similarity
 				 FROM facts_vec fv
 				 JOIN facts f ON f.id = fv.rowid
@@ -273,7 +274,7 @@ func (idx *Index) Search(branch string, q SearchQuery) ([]SearchResult, error) {
 	}
 
 	if graphHops := q.GraphHops; graphHops > 0 && len(vecSimByPath) > 0 {
-		for path, score := range idx.graphExpandSearch(branchID, vecSimByPath, graphHops) {
+		for path, score := range idx.graphExpandSearch(ctx, branchID, vecSimByPath, graphHops) {
 			if _, exists := vecSimByPath[path]; !exists {
 				vecSimByPath[path] = score
 			}
@@ -307,7 +308,7 @@ func (idx *Index) Search(branch string, q SearchQuery) ([]SearchResult, error) {
 		pathArgs = append(pathArgs, p)
 	}
 
-	metaRows, err := idx.db.Query(
+	metaRows, err := conn(ctx, idx.db).QueryContext(ctx,
 		`SELECT f.path, f.title, f.blob_hash, f.type, f.domain, f.entities,
 		        f.confidence, f.sources, f.refs, f.evidence_weight
 		 FROM branch_facts bf
@@ -351,7 +352,7 @@ func (idx *Index) Search(branch string, q SearchQuery) ([]SearchResult, error) {
 	for _, c := range candidates {
 		bodyArgs = append(bodyArgs, c.rec.BlobHash)
 	}
-	bodyRows, err := idx.db.Query(
+	bodyRows, err := conn(ctx, idx.db).QueryContext(ctx,
 		`SELECT hash, data FROM objects WHERE type = ? AND hash IN (`+bodyPH[:len(bodyPH)-1]+`)`,
 		bodyArgs...,
 	)
@@ -379,5 +380,5 @@ func (idx *Index) Search(branch string, q SearchQuery) ([]SearchResult, error) {
 		c.rec.Body = bodies[c.rec.BlobHash]
 		out = append(out, SearchResult{FactWithBody: c.rec, Score: c.score * 100.0})
 	}
-	return idx.filterByEpisodeOps(out, q.EpisodeOps)
+	return idx.filterByEpisodeOps(ctx, out, q.EpisodeOps)
 }

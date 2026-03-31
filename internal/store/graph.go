@@ -11,6 +11,7 @@
 package store
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -46,12 +47,12 @@ const (
 //  4. MERGE Domain hierarchy + IN_DOMAIN edges
 //  5. MERGE OntologyNode hierarchy + UNDER edge
 //  6. Sync DERIVED_FROM edges from local refs
-func (idx *Index) graphSyncFact(rec FactRecord) error {
-	return idx.graphSyncFactTx(idx.db, rec)
+func (idx *Index) graphSyncFact(ctx context.Context, rec FactRecord) error {
+	return idx.graphSyncFactTx(ctx, idx.db, rec)
 }
 
 // graphSyncFactTx is the transactional version of graphSyncFact.
-func (idx *Index) graphSyncFactTx(tx execer, rec FactRecord) error {
+func (idx *Index) graphSyncFactTx(ctx context.Context, tx execer, rec FactRecord) error {
 	path := escapeCypherKey(rec.Path)
 	bh := escapeCypherKey(rec.BlobHash)
 	title := escapeCypherVal(rec.Title)
@@ -99,13 +100,13 @@ func (idx *Index) graphSyncFactTx(tx execer, rec FactRecord) error {
 
 	// 4. MERGE Domain hierarchy + IN_DOMAIN edges.
 	for _, domain := range rec.Domain {
-		if err := idx.graphMergeDomainHierarchy(tx, rec.Path, rec.BlobHash, domain); err != nil {
+		if err := idx.graphMergeDomainHierarchy(ctx, tx, rec.Path, rec.BlobHash, domain); err != nil {
 			return err
 		}
 	}
 
 	// 5. MERGE OntologyNode hierarchy + UNDER edge.
-	if err := idx.graphMergeOntologyHierarchy(tx, rec.Path, rec.BlobHash); err != nil {
+	if err := idx.graphMergeOntologyHierarchy(ctx, tx, rec.Path, rec.BlobHash); err != nil {
 		return err
 	}
 
@@ -117,7 +118,7 @@ func (idx *Index) graphSyncFactTx(tx execer, rec FactRecord) error {
 		}
 	}
 	if len(localRefs) > 0 {
-		if err := idx.graphAddDerivedFromTx(tx, rec.Path, rec.BlobHash, localRefs); err != nil {
+		if err := idx.graphAddDerivedFromTx(ctx, tx, rec.Path, rec.BlobHash, localRefs); err != nil {
 			return fmt.Errorf("graph sync derived_from: %w", err)
 		}
 	}
@@ -127,7 +128,7 @@ func (idx *Index) graphSyncFactTx(tx execer, rec FactRecord) error {
 
 // graphMergeDomainHierarchy creates the full domain ancestor chain and links
 // the fact to the leaf domain via IN_DOMAIN.
-func (idx *Index) graphMergeDomainHierarchy(tx execer, factPath, factBlobHash, domain string) error {
+func (idx *Index) graphMergeDomainHierarchy(ctx context.Context, tx execer, factPath, factBlobHash, domain string) error {
 	parts := strings.Split(domain, "/")
 	for i := range parts {
 		seg := strings.Join(parts[:i+1], "/")
@@ -156,7 +157,7 @@ func (idx *Index) graphMergeDomainHierarchy(tx execer, factPath, factBlobHash, d
 
 // graphMergeOntologyHierarchy creates OntologyNode chain from the fact's file
 // path and links the fact to the leaf via UNDER.
-func (idx *Index) graphMergeOntologyHierarchy(tx execer, factPath, factBlobHash string) error {
+func (idx *Index) graphMergeOntologyHierarchy(ctx context.Context, tx execer, factPath, factBlobHash string) error {
 	parts := strings.Split(factPath, "/")
 	if len(parts) < 2 {
 		return nil
@@ -190,11 +191,11 @@ func (idx *Index) graphMergeOntologyHierarchy(tx execer, factPath, factBlobHash 
 
 // graphDeleteFact marks a Fact node as deleted and removes its outgoing edges
 // (except incoming DERIVED_FROM, which preserves lineage).
-func (idx *Index) graphDeleteFact(path, blobHash string) error {
-	return idx.graphDeleteFactTx(idx.db, path, blobHash)
+func (idx *Index) graphDeleteFact(ctx context.Context, path, blobHash string) error {
+	return idx.graphDeleteFactTx(ctx, idx.db, path, blobHash)
 }
 
-func (idx *Index) graphDeleteFactTx(tx execer, path, blobHash string) error {
+func (idx *Index) graphDeleteFactTx(ctx context.Context, tx execer, path, blobHash string) error {
 	p := escapeCypherKey(path)
 	bh := escapeCypherKey(blobHash)
 	// Delete outgoing edges.
@@ -224,7 +225,7 @@ func (idx *Index) graphDeleteFactTx(tx execer, path, blobHash string) error {
 // self-loops at query time in ExplainFact instead of pre-checking (which would
 // silently drop valid edges when facts are indexed in different orders during
 // rebuild).
-func (idx *Index) graphAddDerivedFromTx(tx execer, newPath, newBlobHash string, sourcePaths []string) error {
+func (idx *Index) graphAddDerivedFromTx(ctx context.Context, tx execer, newPath, newBlobHash string, sourcePaths []string) error {
 	np := escapeCypherKey(newPath)
 	nbh := escapeCypherKey(newBlobHash)
 	for _, src := range sourcePaths {
@@ -249,8 +250,8 @@ const (
 // IMPORTANT: This function queries sqlite-vec (facts_vec) directly via idx.db,
 // so it must be called AFTER the surrounding transaction has committed.
 // Calling it inside a transaction will not see uncommitted embedding writes.
-func (idx *Index) graphBuildSimilarityEdges(path, blobHash string) error {
-	emb, err := idx.getEmbeddingByFact(path, blobHash)
+func (idx *Index) graphBuildSimilarityEdges(ctx context.Context, path, blobHash string) error {
+	emb, err := idx.getEmbeddingByFact(ctx, path, blobHash)
 	if err != nil || emb == nil {
 		return nil
 	}
@@ -265,7 +266,7 @@ func (idx *Index) graphBuildSimilarityEdges(path, blobHash string) error {
 		blobHash   string
 		similarity float64
 	}
-	rows, err := idx.db.Query(
+	rows, err := conn(ctx, idx.db).QueryContext(ctx,
 		`SELECT f.path, f.blob_hash, (1.0 - fv.distance) as similarity
 		 FROM facts_vec fv
 		 JOIN facts f ON f.id = fv.rowid
@@ -295,7 +296,7 @@ func (idx *Index) graphBuildSimilarityEdges(path, blobHash string) error {
 	p := escapeCypherKey(path)
 	bh := escapeCypherKey(blobHash)
 	q := fmt.Sprintf(`SELECT cypher('MATCH (f:%s {path: "%s"})-[r:%s]->() WHERE f.blob_hash = "%s" DELETE r')`, NodeFact, p, EdgeSimilarTo, bh)
-	if _, err := idx.db.Exec(q); err != nil {
+	if _, err := conn(ctx, idx.db).ExecContext(ctx, q); err != nil {
 		return fmt.Errorf("delete old SIMILAR_TO: %w", err)
 	}
 
@@ -309,7 +310,7 @@ func (idx *Index) graphBuildSimilarityEdges(path, blobHash string) error {
 		np := escapeCypherKey(n.path)
 		nbh := escapeCypherKey(n.blobHash)
 		q = fmt.Sprintf(`SELECT cypher('MATCH (a:%s {path: "%s"}), (b:%s {path: "%s"}) WHERE a.blob_hash = "%s" AND b.blob_hash = "%s" MERGE (a)-[:%s]->(b)')`, NodeFact, p, NodeFact, np, bh, nbh, EdgeSimilarTo)
-		if _, err := idx.db.Exec(q); err != nil {
+		if _, err := conn(ctx, idx.db).ExecContext(ctx, q); err != nil {
 			return fmt.Errorf("create SIMILAR_TO %s→%s: %w", path, n.path, err)
 		}
 	}
@@ -327,7 +328,7 @@ type ClusterResult struct {
 //
 // resolution controls Louvain granularity: higher = more, smaller communities.
 // minCommunitySize: communities smaller than this are relabeled as noise.
-func (idx *Index) ClusterFacts(branch string, resolution float64, minCommunitySize int) (ClusterResult, error) {
+func (idx *Index) ClusterFacts(ctx context.Context, branch string, resolution float64, minCommunitySize int) (ClusterResult, error) {
 	if minCommunitySize <= 0 {
 		minCommunitySize = 2
 	}
@@ -357,7 +358,7 @@ func (idx *Index) ClusterFacts(branch string, resolution float64, minCommunitySi
 			AND npt.key_id = (SELECT id FROM property_keys WHERE key = 'path' LIMIT 1)
 	`, resolution, NodeFact)
 
-	rows, err := idx.db.Query(query)
+	rows, err := conn(ctx, idx.db).QueryContext(ctx, query)
 	if err != nil {
 		return ClusterResult{}, fmt.Errorf("louvain: %w", err)
 	}
@@ -377,7 +378,7 @@ func (idx *Index) ClusterFacts(branch string, resolution float64, minCommunitySi
 	}
 
 	// Resolve branch to branchID for scoped filtering.
-	branchID, err := idx.branchID(branch)
+	branchID, err := idx.branchID(ctx, branch)
 	if err != nil {
 		return ClusterResult{}, fmt.Errorf("ClusterFacts: %w", err)
 	}
@@ -398,7 +399,7 @@ func (idx *Index) ClusterFacts(branch string, resolution float64, minCommunitySi
 		}
 		qry := `SELECT path FROM branch_facts WHERE branch_id = ? AND path IN (` + strings.Join(placeholders, ",") + `)`
 		args = append([]interface{}{branchID}, args...)
-		eRows, err := idx.db.Query(qry, args...)
+		eRows, err := conn(ctx, idx.db).QueryContext(ctx, qry, args...)
 		if err == nil {
 			for eRows.Next() {
 				var p string
@@ -435,7 +436,7 @@ func (idx *Index) ClusterFacts(branch string, resolution float64, minCommunitySi
 //
 // Runs exactly 2 Cypher queries total (one per edge type) regardless of how
 // many seeds are provided, using OR-chaining to batch all seed paths.
-func (idx *Index) graphExpandSearch(branchID int64, seeds map[string]float64, maxHops int) map[string]float64 {
+func (idx *Index) graphExpandSearch(ctx context.Context, branchID int64, seeds map[string]float64, maxHops int) map[string]float64 {
 	if len(seeds) == 0 {
 		return nil
 	}
@@ -470,7 +471,7 @@ func (idx *Index) graphExpandSearch(branchID int64, seeds map[string]float64, ma
 		`SELECT json_extract(value, '$.path') FROM json_each(cypher('MATCH (f:%s)-[:%s]-(neighbor:%s) WHERE (%s) AND NOT neighbor.deleted = true RETURN DISTINCT neighbor.path AS path'))`,
 		NodeFact, EdgeSimilarTo, NodeFact, pathFilter,
 	)
-	rows, err := idx.db.Query(q)
+	rows, err := conn(ctx, idx.db).QueryContext(ctx, q)
 	if err == nil {
 		for rows.Next() {
 			var neighborPath string
@@ -493,7 +494,7 @@ func (idx *Index) graphExpandSearch(branchID int64, seeds map[string]float64, ma
 		NodeFact, EdgeTagged, NodeEntity, EdgeTagged, NodeFact,
 		pathFilter,
 	)
-	rows, err = idx.db.Query(q)
+	rows, err = conn(ctx, idx.db).QueryContext(ctx, q)
 	if err == nil {
 		for rows.Next() {
 			var neighborPath string
@@ -521,7 +522,7 @@ func (idx *Index) graphExpandSearch(branchID int64, seeds map[string]float64, ma
 			args = append(args, p)
 		}
 		visible := make(map[string]bool, len(expanded))
-		rows, err := idx.db.Query(
+		rows, err := conn(ctx, idx.db).QueryContext(ctx,
 			`SELECT path FROM branch_facts WHERE branch_id = ? AND path IN (`+strings.Join(placeholders, ",")+`)`,
 			args...,
 		)

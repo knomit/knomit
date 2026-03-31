@@ -1,13 +1,15 @@
 package store
 
 import (
+	"context"
 	"testing"
 )
 
 func TestEnsureBranch_CreatesNew(t *testing.T) {
+	ctx := context.Background()
 	idx := newTestIndexInternal(t)
 
-	id, err := idx.EnsureBranch("main", "refs/heads/main")
+	id, err := idx.EnsureBranch(ctx, "main", "refs/heads/main")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -17,13 +19,14 @@ func TestEnsureBranch_CreatesNew(t *testing.T) {
 }
 
 func TestEnsureBranch_Idempotent(t *testing.T) {
+	ctx := context.Background()
 	idx := newTestIndexInternal(t)
 
-	id1, err := idx.EnsureBranch("main", "refs/heads/main")
+	id1, err := idx.EnsureBranch(ctx, "main", "refs/heads/main")
 	if err != nil {
 		t.Fatal(err)
 	}
-	id2, err := idx.EnsureBranch("main", "refs/heads/main")
+	id2, err := idx.EnsureBranch(ctx, "main", "refs/heads/main")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -33,23 +36,25 @@ func TestEnsureBranch_Idempotent(t *testing.T) {
 }
 
 func TestBranchID_NotFound(t *testing.T) {
+	ctx := context.Background()
 	idx := newTestIndexInternal(t)
 
-	_, err := idx.branchID("nonexistent")
+	_, err := idx.branchID(ctx, "nonexistent")
 	if err == nil {
 		t.Fatal("expected error for nonexistent branch")
 	}
 }
 
 func TestBranchID_Cached(t *testing.T) {
+	ctx := context.Background()
 	idx := newTestIndexInternal(t)
 
-	id1, err := idx.EnsureBranch("main", "refs/heads/main")
+	id1, err := idx.EnsureBranch(ctx, "main", "refs/heads/main")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	id2, err := idx.branchID("main")
+	id2, err := idx.branchID(ctx, "main")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,12 +64,13 @@ func TestBranchID_Cached(t *testing.T) {
 }
 
 func TestListBranches(t *testing.T) {
+	ctx := context.Background()
 	idx := newTestIndexInternal(t)
 
-	idx.EnsureBranch("main", "refs/heads/main")
-	idx.EnsureBranch("agent/dev", "refs/heads/agent/dev")
+	idx.EnsureBranch(ctx, "main", "refs/heads/main")
+	idx.EnsureBranch(ctx, "agent/dev", "refs/heads/agent/dev")
 
-	branches, err := idx.ListBranches()
+	branches, err := idx.ListBranches(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}

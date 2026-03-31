@@ -1,12 +1,14 @@
 package store_test
 
 import (
+	"context"
 	"testing"
 
 	"knomit/internal/store"
 )
 
 func TestJunctionTablesPopulatedOnUpsert(t *testing.T) {
+	ctx := context.Background()
 	idx, err := store.New(":memory:")
 	if err != nil {
 		t.Fatal(err)
@@ -14,7 +16,7 @@ func TestJunctionTablesPopulatedOnUpsert(t *testing.T) {
 	defer idx.Close()
 
 	insertTestBlob(t, idx.TestDB(), "bh1", "test content")
-	if err := idx.Upsert(testBranch, "abc", store.FactRecord{
+	if err := idx.Upsert(ctx, testBranch, "abc", store.FactRecord{
 		Path: "kb/test.md", Title: "Test", BlobHash: "bh1",
 		Type: "observation", Domain: []string{"go", "testing"}, Entities: []string{"net/http", "encoding/json"},
 		Confidence: 0.8, Sources: 1,
@@ -40,6 +42,7 @@ func TestJunctionTablesPopulatedOnUpsert(t *testing.T) {
 }
 
 func TestJunctionTablesUpdatedOnReUpsert(t *testing.T) {
+	ctx := context.Background()
 	idx, err := store.New(":memory:")
 	if err != nil {
 		t.Fatal(err)
@@ -47,7 +50,7 @@ func TestJunctionTablesUpdatedOnReUpsert(t *testing.T) {
 	defer idx.Close()
 
 	insertTestBlob(t, idx.TestDB(), "bh1", "test content")
-	if err := idx.Upsert(testBranch, "abc", store.FactRecord{
+	if err := idx.Upsert(ctx, testBranch, "abc", store.FactRecord{
 		Path: "kb/test.md", Title: "Test", BlobHash: "bh1",
 		Type: "observation", Domain: []string{"go"}, Entities: []string{"net/http"},
 		Confidence: 0.8, Sources: 1,
@@ -57,7 +60,7 @@ func TestJunctionTablesUpdatedOnReUpsert(t *testing.T) {
 
 	// Re-upsert with different entities and domains (different blob hash to avoid COW shortcut).
 	insertTestBlob(t, idx.TestDB(), "bh2", "updated test content")
-	if err := idx.Upsert(testBranch, "abc", store.FactRecord{
+	if err := idx.Upsert(ctx, testBranch, "abc", store.FactRecord{
 		Path: "kb/test.md", Title: "Test", BlobHash: "bh2",
 		Type: "observation", Domain: []string{"rust", "wasm"}, Entities: []string{"tokio"},
 		Confidence: 0.9, Sources: 2,
@@ -85,6 +88,7 @@ func TestJunctionTablesUpdatedOnReUpsert(t *testing.T) {
 }
 
 func TestJunctionTablesEmptyEntitiesAndDomains(t *testing.T) {
+	ctx := context.Background()
 	idx, err := store.New(":memory:")
 	if err != nil {
 		t.Fatal(err)
@@ -92,7 +96,7 @@ func TestJunctionTablesEmptyEntitiesAndDomains(t *testing.T) {
 	defer idx.Close()
 
 	insertTestBlob(t, idx.TestDB(), "bh1", "test content")
-	if err := idx.Upsert(testBranch, "abc", store.FactRecord{
+	if err := idx.Upsert(ctx, testBranch, "abc", store.FactRecord{
 		Path: "kb/test.md", Title: "Test", BlobHash: "bh1",
 		Type: "observation", Domain: []string{}, Entities: []string{},
 		Confidence: 0.8, Sources: 1,
@@ -114,6 +118,7 @@ func TestJunctionTablesEmptyEntitiesAndDomains(t *testing.T) {
 }
 
 func TestJunctionTablesCascadeOnDelete(t *testing.T) {
+	ctx := context.Background()
 	idx, err := store.New(":memory:")
 	if err != nil {
 		t.Fatal(err)
@@ -121,7 +126,7 @@ func TestJunctionTablesCascadeOnDelete(t *testing.T) {
 	defer idx.Close()
 
 	insertTestBlob(t, idx.TestDB(), "bh1", "test content")
-	if err := idx.Upsert(testBranch, "abc", store.FactRecord{
+	if err := idx.Upsert(ctx, testBranch, "abc", store.FactRecord{
 		Path: "kb/test.md", Title: "Test", BlobHash: "bh1",
 		Type: "observation", Domain: []string{"go"}, Entities: []string{"net/http"},
 		Confidence: 0.8, Sources: 1,
@@ -130,7 +135,7 @@ func TestJunctionTablesCascadeOnDelete(t *testing.T) {
 	}
 
 	// Delete the fact directly.
-	if err := idx.Delete(testBranch, "kb/test.md"); err != nil {
+	if err := idx.Delete(ctx, testBranch, "kb/test.md"); err != nil {
 		t.Fatal(err)
 	}
 

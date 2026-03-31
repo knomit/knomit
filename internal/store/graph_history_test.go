@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"fmt"
 	"path/filepath"
 	"testing"
@@ -63,11 +64,12 @@ func openGraphTestStore(t *testing.T, branch string) (*Index, *git.Store) {
 // writeAndSync writes a single file via the git store then syncs the index.
 // This ensures DERIVED_FROM targets exist before referencing facts are indexed.
 func writeAndSync(t *testing.T, idx *Index, gs *git.Store, branch, path, content string) {
+	ctx := context.Background()
 	t.Helper()
 	if _, _, err := gs.WriteFile(branch, path, content, "add "+path, "learn"); err != nil {
 		t.Fatalf("WriteFile %s: %v", path, err)
 	}
-	if err := idx.Sync(gs, branch); err != nil {
+	if err := idx.Sync(ctx, gs, branch); err != nil {
 		t.Fatalf("Sync after %s: %v", path, err)
 	}
 }
@@ -76,6 +78,7 @@ func writeAndSync(t *testing.T, idx *Index, gs *git.Store, branch, path, content
 // that reference each other produce correct DERIVED_FROM edges, and that ExplainFact
 // returns the relationships.
 func TestGraphRelationships_SameBranch(t *testing.T) {
+	ctx := context.Background()
 	branch := "agent/history-test"
 	idx, gs := openGraphTestStore(t, branch)
 
@@ -104,7 +107,7 @@ func TestGraphRelationships_SameBranch(t *testing.T) {
 	}
 
 	// Verify via ExplainFact.
-	res, err := idx.ExplainFact(branch, "kb/arch.md")
+	res, err := idx.ExplainFact(ctx, branch, "kb/arch.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,6 +124,7 @@ func TestGraphRelationships_SameBranch(t *testing.T) {
 // old graph nodes retain their edges (immutable per-version), and the new version
 // gets its own edges.
 func TestGraphRelationships_FactChanges(t *testing.T) {
+	ctx := context.Background()
 	branch := "agent/history-change"
 	idx, gs := openGraphTestStore(t, branch)
 
@@ -170,7 +174,7 @@ func TestGraphRelationships_FactChanges(t *testing.T) {
 	}
 
 	// After GC, v1 is orphaned (replaced by v2 on this branch).
-	if err := idx.GC(); err != nil {
+	if err := idx.GC(ctx); err != nil {
 		t.Fatal(err)
 	}
 	got = derivedFromPaths(t, idx, "kb/api.md", apiV2Hash)
@@ -186,6 +190,7 @@ func TestGraphRelationships_FactChanges(t *testing.T) {
 // Uses Upsert directly for multi-branch scenarios since git branch forking is
 // outside the scope of graph tests.
 func TestGraphRelationships_BranchDivergence(t *testing.T) {
+	ctx := context.Background()
 	idx, err := New(":memory:")
 	if err != nil {
 		t.Fatal(err)
@@ -197,33 +202,33 @@ func TestGraphRelationships_BranchDivergence(t *testing.T) {
 	branchB := "agent/branch-b"
 
 	// Shared base on root: arch + api → arch.
-	idx.Upsert(root, "c0", FactRecord{
+	idx.Upsert(ctx, root, "c0", FactRecord{
 		Path: "kb/arch.md", BlobHash: "bh_arch", Title: "Architecture",
 		Domain: []string{"eng"}, Entities: []string{"System"},
 	})
-	idx.Upsert(root, "c0", FactRecord{
+	idx.Upsert(ctx, root, "c0", FactRecord{
 		Path: "kb/api.md", BlobHash: "bh_api", Title: "API",
 		Domain: []string{"eng"}, Entities: []string{"System", "REST"},
 		Refs: []string{"kb/arch.md"},
 	})
 
 	// Fork via MergeBranch (COW — same fact rows, new branch_facts pointers).
-	idx.MergeBranch(root, branchA)
-	idx.MergeBranch(root, branchB)
+	idx.MergeBranch(ctx, root, branchA)
+	idx.MergeBranch(ctx, root, branchB)
 
 	// BranchA: add a db fact referencing api.
-	idx.Upsert(branchA, "cA1", FactRecord{
+	idx.Upsert(ctx, branchA, "cA1", FactRecord{
 		Path: "kb/db.md", BlobHash: "bh_db_a", Title: "DB (branch A)",
 		Domain: []string{"eng"}, Entities: []string{"PostgreSQL"},
 		Refs: []string{"kb/api.md"},
 	})
 
 	// BranchB: modify api to drop the arch ref, add a new fact.
-	idx.Upsert(branchB, "cB1", FactRecord{
+	idx.Upsert(ctx, branchB, "cB1", FactRecord{
 		Path: "kb/api.md", BlobHash: "bh_api_b", Title: "API (branch B)",
 		Domain: []string{"eng"}, Entities: []string{"System", "gRPC"},
 	})
-	idx.Upsert(branchB, "cB1", FactRecord{
+	idx.Upsert(ctx, branchB, "cB1", FactRecord{
 		Path: "kb/cache.md", BlobHash: "bh_cache_b", Title: "Cache (branch B)",
 		Domain: []string{"eng"}, Entities: []string{"Redis"},
 		Refs: []string{"kb/api.md"},
@@ -231,7 +236,7 @@ func TestGraphRelationships_BranchDivergence(t *testing.T) {
 
 	// --- Verify branch-scoped graph visibility via ClusterFacts ---
 
-	resultA, err := idx.ClusterFacts(branchA, 1.0, 1)
+	resultA, err := idx.ClusterFacts(ctx, branchA, 1.0, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -245,7 +250,7 @@ func TestGraphRelationships_BranchDivergence(t *testing.T) {
 		t.Error("branchA: cache.md (branchB only) should not be visible")
 	}
 
-	resultB, err := idx.ClusterFacts(branchB, 1.0, 1)
+	resultB, err := idx.ClusterFacts(ctx, branchB, 1.0, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -283,15 +288,15 @@ func TestGraphRelationships_BranchDivergence(t *testing.T) {
 
 	// --- Graph expansion should be branch-scoped ---
 
-	branchAID, _ := idx.branchID(branchA)
-	branchBID, _ := idx.branchID(branchB)
+	branchAID, _ := idx.branchID(ctx, branchA)
+	branchBID, _ := idx.branchID(ctx, branchB)
 
-	expandedA := idx.graphExpandSearch(branchAID, map[string]float64{"kb/arch.md": 0.9}, 1)
+	expandedA := idx.graphExpandSearch(ctx, branchAID, map[string]float64{"kb/arch.md": 0.9}, 1)
 	if _, ok := expandedA["kb/cache.md"]; ok {
 		t.Error("branchA expansion: cache.md should not leak from branchB")
 	}
 
-	expandedB := idx.graphExpandSearch(branchBID, map[string]float64{"kb/arch.md": 0.9}, 1)
+	expandedB := idx.graphExpandSearch(ctx, branchBID, map[string]float64{"kb/arch.md": 0.9}, 1)
 	if _, ok := expandedB["kb/db.md"]; ok {
 		t.Error("branchB expansion: db.md should not leak from branchA")
 	}
@@ -300,6 +305,7 @@ func TestGraphRelationships_BranchDivergence(t *testing.T) {
 // TestGraphRelationships_COWSharedFacts verifies that COW-shared facts (same path,
 // same blob_hash on multiple branches) produce a single graph node with shared edges.
 func TestGraphRelationships_COWSharedFacts(t *testing.T) {
+	ctx := context.Background()
 	idx, err := New(":memory:")
 	if err != nil {
 		t.Fatal(err)
@@ -310,16 +316,16 @@ func TestGraphRelationships_COWSharedFacts(t *testing.T) {
 	branchB := "agent/cow-b"
 
 	// Create on branchA, then COW to branchB via MergeBranch.
-	idx.Upsert(branchA, "c1", FactRecord{
+	idx.Upsert(ctx, branchA, "c1", FactRecord{
 		Path: "kb/target.md", BlobHash: "bh_target", Title: "Target",
 		Domain: []string{"eng"}, Entities: []string{"Go"},
 	})
-	idx.Upsert(branchA, "c1", FactRecord{
+	idx.Upsert(ctx, branchA, "c1", FactRecord{
 		Path: "kb/shared.md", BlobHash: "bh_shared", Title: "Shared",
 		Domain: []string{"eng"}, Entities: []string{"Go"},
 		Refs: []string{"kb/target.md"},
 	})
-	idx.MergeBranch(branchA, branchB)
+	idx.MergeBranch(ctx, branchA, branchB)
 
 	// Only ONE Fact node should exist for shared.md (same path + blob_hash).
 	var nodeCount int
@@ -338,7 +344,7 @@ func TestGraphRelationships_COWSharedFacts(t *testing.T) {
 
 	// Both branches see the fact.
 	for _, b := range []string{branchA, branchB} {
-		result, err := idx.ClusterFacts(b, 1.0, 1)
+		result, err := idx.ClusterFacts(ctx, b, 1.0, 1)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -352,6 +358,7 @@ func TestGraphRelationships_COWSharedFacts(t *testing.T) {
 // TestGraphRelationships_MergeBranchPreservesEdges verifies that merging branches
 // preserves graph relationships: src's fact versions become visible on dst.
 func TestGraphRelationships_MergeBranchPreservesEdges(t *testing.T) {
+	ctx := context.Background()
 	idx, err := New(":memory:")
 	if err != nil {
 		t.Fatal(err)
@@ -362,20 +369,20 @@ func TestGraphRelationships_MergeBranchPreservesEdges(t *testing.T) {
 	dst := "agent/main"
 
 	// Base fact on dst.
-	idx.Upsert(dst, "c0", FactRecord{
+	idx.Upsert(ctx, dst, "c0", FactRecord{
 		Path: "kb/base.md", BlobHash: "bh_base", Title: "Base",
 		Domain: []string{"eng"}, Entities: []string{"Core"},
 	})
 
 	// Feature branch adds a fact referencing base.
-	idx.Upsert(src, "c1", FactRecord{
+	idx.Upsert(ctx, src, "c1", FactRecord{
 		Path: "kb/feature.md", BlobHash: "bh_feature", Title: "Feature",
 		Domain: []string{"eng"}, Entities: []string{"Core", "NewThing"},
 		Refs: []string{"kb/base.md"},
 	})
 
 	// Before merge, dst should NOT see feature.md.
-	resultPre, err := idx.ClusterFacts(dst, 1.0, 1)
+	resultPre, err := idx.ClusterFacts(ctx, dst, 1.0, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -384,12 +391,12 @@ func TestGraphRelationships_MergeBranchPreservesEdges(t *testing.T) {
 	}
 
 	// Merge src → dst.
-	if err := idx.MergeBranch(src, dst); err != nil {
+	if err := idx.MergeBranch(ctx, src, dst); err != nil {
 		t.Fatal(err)
 	}
 
 	// After merge, dst sees both facts.
-	resultPost, err := idx.ClusterFacts(dst, 1.0, 1)
+	resultPost, err := idx.ClusterFacts(ctx, dst, 1.0, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -408,6 +415,7 @@ func TestGraphRelationships_MergeBranchPreservesEdges(t *testing.T) {
 // TestGraphRelationships_DropBranchCleansOrphans verifies that dropping a branch
 // GCs facts that are only referenced by that branch, including their graph nodes.
 func TestGraphRelationships_DropBranchCleansOrphans(t *testing.T) {
+	ctx := context.Background()
 	idx, err := New(":memory:")
 	if err != nil {
 		t.Fatal(err)
@@ -418,14 +426,14 @@ func TestGraphRelationships_DropBranchCleansOrphans(t *testing.T) {
 	drop := "agent/drop"
 
 	// Shared fact on both branches.
-	idx.Upsert(keep, "c1", FactRecord{
+	idx.Upsert(ctx, keep, "c1", FactRecord{
 		Path: "kb/shared.md", BlobHash: "bh_shared", Title: "Shared",
 		Domain: []string{"eng"}, Entities: []string{"Go"},
 	})
-	idx.MergeBranch(keep, drop)
+	idx.MergeBranch(ctx, keep, drop)
 
 	// Orphan-to-be: only on drop branch.
-	idx.Upsert(drop, "c1", FactRecord{
+	idx.Upsert(ctx, drop, "c1", FactRecord{
 		Path: "kb/orphan.md", BlobHash: "bh_orphan", Title: "Orphan",
 		Domain: []string{"eng"}, Entities: []string{"Temp"},
 		Refs: []string{"kb/shared.md"},
@@ -438,7 +446,7 @@ func TestGraphRelationships_DropBranchCleansOrphans(t *testing.T) {
 	}
 
 	// Drop the branch.
-	if err := idx.DropBranch(drop); err != nil {
+	if err := idx.DropBranch(ctx, drop); err != nil {
 		t.Fatal(err)
 	}
 
@@ -522,6 +530,7 @@ func TestGraphRelationships_EntitySharing_AcrossVersions(t *testing.T) {
 // To avoid this, both facts are first created without refs, then re-written with
 // refs in a second pass.
 func TestGraphRelationships_CircularRefs(t *testing.T) {
+	ctx := context.Background()
 	branch := "agent/circular"
 	idx, gs := openGraphTestStore(t, branch)
 
@@ -547,7 +556,7 @@ func TestGraphRelationships_CircularRefs(t *testing.T) {
 	}
 
 	// ExplainFact should show both directions.
-	resA, _ := idx.ExplainFact(branch, "kb/a.md")
+	resA, _ := idx.ExplainFact(ctx, branch, "kb/a.md")
 	outPaths := map[string]bool{}
 	for _, r := range resA.Outgoing {
 		outPaths[r.Path] = true
@@ -567,6 +576,7 @@ func TestGraphRelationships_CircularRefs(t *testing.T) {
 // TestGraphRelationships_MergeOverwrite verifies that merging branches where src
 // has a newer version of a fact correctly makes the new version visible on dst.
 func TestGraphRelationships_MergeOverwrite(t *testing.T) {
+	ctx := context.Background()
 	idx, err := New(":memory:")
 	if err != nil {
 		t.Fatal(err)
@@ -577,34 +587,34 @@ func TestGraphRelationships_MergeOverwrite(t *testing.T) {
 	dst := "agent/dst"
 
 	// dst has b.md, then a.md → b.md.
-	idx.Upsert(dst, "c1", FactRecord{
+	idx.Upsert(ctx, dst, "c1", FactRecord{
 		Path: "kb/b.md", BlobHash: "bh_b", Title: "B",
 		Domain: []string{"eng"}, Entities: []string{"X"},
 	})
-	idx.Upsert(dst, "c1", FactRecord{
+	idx.Upsert(ctx, dst, "c1", FactRecord{
 		Path: "kb/a.md", BlobHash: "bh_a_old", Title: "A (old)",
 		Domain: []string{"eng"}, Entities: []string{"Old"},
 		Refs: []string{"kb/b.md"},
 	})
 
 	// src has c.md, then a.md → c.md.
-	idx.Upsert(src, "c2", FactRecord{
+	idx.Upsert(ctx, src, "c2", FactRecord{
 		Path: "kb/c.md", BlobHash: "bh_c", Title: "C",
 		Domain: []string{"eng"}, Entities: []string{"Y"},
 	})
-	idx.Upsert(src, "c2", FactRecord{
+	idx.Upsert(ctx, src, "c2", FactRecord{
 		Path: "kb/a.md", BlobHash: "bh_a_new", Title: "A (new)",
 		Domain: []string{"eng"}, Entities: []string{"New"},
 		Refs: []string{"kb/c.md"},
 	})
 
 	// Merge src → dst.
-	if err := idx.MergeBranch(src, dst); err != nil {
+	if err := idx.MergeBranch(ctx, src, dst); err != nil {
 		t.Fatal(err)
 	}
 
 	// dst's view of a.md should now be the new version.
-	dstID, _ := idx.branchID(dst)
+	dstID, _ := idx.branchID(ctx, dst)
 	var mergedHash string
 	err = idx.db.QueryRow(
 		`SELECT f.blob_hash FROM branch_facts bf JOIN facts f ON f.id = bf.fact_id WHERE bf.branch_id = ? AND bf.path = ?`,
@@ -634,6 +644,7 @@ func TestGraphRelationships_MergeOverwrite(t *testing.T) {
 // by branch visibility: a fact on branchB referencing a shared fact should not
 // appear in branchA's ExplainFact incoming results.
 func TestExplainFact_BranchScoped(t *testing.T) {
+	ctx := context.Background()
 	idx, err := New(":memory:")
 	if err != nil {
 		t.Fatal(err)
@@ -644,26 +655,26 @@ func TestExplainFact_BranchScoped(t *testing.T) {
 	branchB := "agent/branch-b"
 
 	// Shared target on both branches.
-	idx.Upsert(branchA, "c1", FactRecord{
+	idx.Upsert(ctx, branchA, "c1", FactRecord{
 		Path: "kb/target.md", BlobHash: "bh_target", Title: "Target",
 		Domain: []string{"eng"}, Entities: []string{"Go"},
 	})
-	idx.MergeBranch(branchA, branchB)
+	idx.MergeBranch(ctx, branchA, branchB)
 
 	// branchA: refA → target.
-	idx.Upsert(branchA, "c2", FactRecord{
+	idx.Upsert(ctx, branchA, "c2", FactRecord{
 		Path: "kb/ref-a.md", BlobHash: "bh_ref_a", Title: "Ref A",
 		Domain: []string{"eng"}, Refs: []string{"kb/target.md"},
 	})
 
 	// branchB: refB → target.
-	idx.Upsert(branchB, "c3", FactRecord{
+	idx.Upsert(ctx, branchB, "c3", FactRecord{
 		Path: "kb/ref-b.md", BlobHash: "bh_ref_b", Title: "Ref B",
 		Domain: []string{"eng"}, Refs: []string{"kb/target.md"},
 	})
 
 	// ExplainFact on branchA: incoming should show ref-a but NOT ref-b.
-	resA, err := idx.ExplainFact(branchA, "kb/target.md")
+	resA, err := idx.ExplainFact(ctx, branchA, "kb/target.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -679,7 +690,7 @@ func TestExplainFact_BranchScoped(t *testing.T) {
 	}
 
 	// ExplainFact on branchB: incoming should show ref-b but NOT ref-a.
-	resB, err := idx.ExplainFact(branchB, "kb/target.md")
+	resB, err := idx.ExplainFact(ctx, branchB, "kb/target.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -699,6 +710,7 @@ func TestExplainFact_BranchScoped(t *testing.T) {
 // scenario: root creates shared knowledge, two branches diverge with independent
 // modifications, and the graph correctly reflects each branch's worldview.
 func TestGraphRelationships_ThreeBranchesSharedAndDiverged(t *testing.T) {
+	ctx := context.Background()
 	idx, err := New(":memory:")
 	if err != nil {
 		t.Fatal(err)
@@ -710,39 +722,39 @@ func TestGraphRelationships_ThreeBranchesSharedAndDiverged(t *testing.T) {
 	exp := "agent/experiment"
 
 	// Shared base: 3 interconnected facts (written in dependency order).
-	idx.Upsert(root, "c0", FactRecord{
+	idx.Upsert(ctx, root, "c0", FactRecord{
 		Path: "kb/design.md", BlobHash: "bh_design", Title: "Design",
 		Domain: []string{"eng/planning"}, Entities: []string{"System", "Architecture"},
 	})
-	idx.Upsert(root, "c0", FactRecord{
+	idx.Upsert(ctx, root, "c0", FactRecord{
 		Path: "kb/impl.md", BlobHash: "bh_impl", Title: "Implementation",
 		Domain: []string{"eng/code"}, Entities: []string{"System", "Go"},
 		Refs: []string{"kb/design.md"},
 	})
-	idx.Upsert(root, "c0", FactRecord{
+	idx.Upsert(ctx, root, "c0", FactRecord{
 		Path: "kb/test.md", BlobHash: "bh_test", Title: "Tests",
 		Domain: []string{"eng/quality"}, Entities: []string{"System", "Testing"},
 		Refs: []string{"kb/impl.md", "kb/design.md"},
 	})
 
 	// Fork branches.
-	idx.MergeBranch(root, dev)
-	idx.MergeBranch(root, exp)
+	idx.MergeBranch(ctx, root, dev)
+	idx.MergeBranch(ctx, root, exp)
 
 	// Dev branch: add perf.md, update impl to reference it.
-	idx.Upsert(dev, "c_dev1", FactRecord{
+	idx.Upsert(ctx, dev, "c_dev1", FactRecord{
 		Path: "kb/perf.md", BlobHash: "bh_perf", Title: "Performance",
 		Domain: []string{"eng/code"}, Entities: []string{"System", "Benchmark"},
 	})
-	idx.Upsert(dev, "c_dev2", FactRecord{
+	idx.Upsert(ctx, dev, "c_dev2", FactRecord{
 		Path: "kb/impl.md", BlobHash: "bh_impl_v2", Title: "Impl v2",
 		Domain: []string{"eng/code"}, Entities: []string{"System", "Go", "Optimization"},
 		Refs: []string{"kb/design.md", "kb/perf.md"},
 	})
 
 	// Exp branch: remove test.md, add experiment.md.
-	idx.Delete(exp, "kb/test.md")
-	idx.Upsert(exp, "c_exp1", FactRecord{
+	idx.Delete(ctx, exp, "kb/test.md")
+	idx.Upsert(ctx, exp, "c_exp1", FactRecord{
 		Path: "kb/experiment.md", BlobHash: "bh_experiment", Title: "Experiment",
 		Domain: []string{"eng/research"}, Entities: []string{"System", "ML"},
 		Refs: []string{"kb/design.md"},
@@ -772,15 +784,15 @@ func TestGraphRelationships_ThreeBranchesSharedAndDiverged(t *testing.T) {
 
 	// --- Graph expansion scoping ---
 
-	devID, _ := idx.branchID(dev)
-	expID, _ := idx.branchID(exp)
+	devID, _ := idx.branchID(ctx, dev)
+	expID, _ := idx.branchID(ctx, exp)
 
-	expandedDev := idx.graphExpandSearch(devID, map[string]float64{"kb/design.md": 0.9}, 1)
+	expandedDev := idx.graphExpandSearch(ctx, devID, map[string]float64{"kb/design.md": 0.9}, 1)
 	if _, ok := expandedDev["kb/experiment.md"]; ok {
 		t.Error("dev expansion should not find experiment.md (exp-only)")
 	}
 
-	expandedExp := idx.graphExpandSearch(expID, map[string]float64{"kb/design.md": 0.9}, 1)
+	expandedExp := idx.graphExpandSearch(ctx, expID, map[string]float64{"kb/design.md": 0.9}, 1)
 	if _, ok := expandedExp["kb/test.md"]; ok {
 		t.Error("exp expansion should not find test.md (deleted from exp)")
 	}
@@ -793,8 +805,9 @@ func TestGraphRelationships_ThreeBranchesSharedAndDiverged(t *testing.T) {
 
 // blobHash returns the blob_hash for a fact on a given branch.
 func blobHash(t *testing.T, idx *Index, branch, path string) string {
+	ctx := context.Background()
 	t.Helper()
-	branchID, err := idx.branchID(branch)
+	branchID, err := idx.branchID(ctx, branch)
 	if err != nil {
 		t.Fatalf("BranchID(%s): %v", branch, err)
 	}
@@ -849,8 +862,9 @@ func clusterPaths(result ClusterResult) map[string]bool {
 
 // assertBranchFacts checks that the given branch sees exactly the expected paths.
 func assertBranchFacts(t *testing.T, idx *Index, branch string, wantPaths []string) {
+	ctx := context.Background()
 	t.Helper()
-	branchID, err := idx.branchID(branch)
+	branchID, err := idx.branchID(ctx, branch)
 	if err != nil {
 		t.Fatalf("BranchID(%s): %v", branch, err)
 	}

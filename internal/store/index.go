@@ -13,6 +13,7 @@
 package store
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"sort"
@@ -199,21 +200,21 @@ func extractBody(raw []byte) string {
 // Completions returns autocomplete suggestions for a given filter category and prefix,
 // scoped to the given branch.
 // Supported categories: "domain", "entity", "type", "ep", "path".
-func (idx *Index) Completions(branch, category, prefix string, limit int) ([]string, error) {
-	branchID, err := idx.branchID(branch)
+func (idx *Index) Completions(ctx context.Context, branch, category, prefix string, limit int) ([]string, error) {
+	branchID, err := idx.branchID(ctx, branch)
 	if err != nil {
 		return nil, fmt.Errorf("completions: %w", err)
 	}
 
 	switch category {
 	case "domain":
-		return idx.queryDistinct(
+		return idx.queryDistinct(ctx,
 			`SELECT DISTINCT fd.domain FROM fact_domains fd
 			 JOIN branch_facts bf ON bf.fact_id = fd.fact_id
 			 WHERE bf.branch_id = ? AND fd.domain LIKE ? LIMIT ?`,
 			branchID, prefix+"%", limit)
 	case "entity":
-		return idx.queryDistinct(
+		return idx.queryDistinct(ctx,
 			`SELECT DISTINCT fe.entity FROM fact_entities fe
 			 JOIN branch_facts bf ON bf.fact_id = fe.fact_id
 			 WHERE bf.branch_id = ? AND fe.entity LIKE ? LIMIT ?`,
@@ -223,7 +224,7 @@ func (idx *Index) Completions(branch, category, prefix string, limit int) ([]str
 	case "ep":
 		return []string{"learn", "update", "retract", "subsume", "synthesize", "sync"}, nil
 	case "path":
-		rows, err := idx.db.Query(
+		rows, err := conn(ctx, idx.db).QueryContext(ctx,
 			`SELECT DISTINCT f.path
 			 FROM branch_facts bf
 			 JOIN facts f ON f.id = bf.fact_id
@@ -262,8 +263,8 @@ func (idx *Index) Completions(branch, category, prefix string, limit int) ([]str
 }
 
 // queryDistinct executes a query and returns distinct non-empty string values.
-func (idx *Index) queryDistinct(query string, args ...any) ([]string, error) {
-	rows, err := idx.db.Query(query, args...)
+func (idx *Index) queryDistinct(ctx context.Context, query string, args ...any) ([]string, error) {
+	rows, err := conn(ctx, idx.db).QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -289,13 +290,13 @@ type StatsResult struct {
 
 // Stats returns aggregate statistics over all indexed facts on a branch,
 // optionally filtered to those whose path starts with pathPrefix.
-func (idx *Index) Stats(branch, pathPrefix string) (StatsResult, error) {
+func (idx *Index) Stats(ctx context.Context, branch, pathPrefix string) (StatsResult, error) {
 	res := StatsResult{
 		Domains:  make(map[string]int),
 		Entities: make(map[string]int),
 	}
 
-	branchID, err := idx.branchID(branch)
+	branchID, err := idx.branchID(ctx, branch)
 	if err != nil {
 		return res, fmt.Errorf("stats: %w", err)
 	}
@@ -311,7 +312,7 @@ func (idx *Index) Stats(branch, pathPrefix string) (StatsResult, error) {
 		q += ` AND f.path LIKE ?`
 		args = append(args, pathPrefix+"%")
 	}
-	if err := idx.db.QueryRow(q, args...).Scan(&res.Total, &avgConf); err != nil {
+	if err := conn(ctx, idx.db).QueryRowContext(ctx, q, args...).Scan(&res.Total, &avgConf); err != nil {
 		return res, err
 	}
 	if avgConf != nil {
@@ -330,7 +331,7 @@ func (idx *Index) Stats(branch, pathPrefix string) (StatsResult, error) {
 		dargs = append(dargs, pathPrefix+"%")
 	}
 	dq += ` GROUP BY d.value`
-	drows, err := idx.db.Query(dq, dargs...)
+	drows, err := conn(ctx, idx.db).QueryContext(ctx, dq, dargs...)
 	if err != nil {
 		return res, err
 	}
@@ -355,7 +356,7 @@ func (idx *Index) Stats(branch, pathPrefix string) (StatsResult, error) {
 		eargs = append(eargs, pathPrefix+"%")
 	}
 	eq += ` GROUP BY e.value`
-	erows, err := idx.db.Query(eq, eargs...)
+	erows, err := conn(ctx, idx.db).QueryContext(ctx, eq, eargs...)
 	if err != nil {
 		return res, err
 	}

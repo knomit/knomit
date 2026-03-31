@@ -3,6 +3,7 @@
 package store
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 
@@ -11,8 +12,8 @@ import (
 
 // rebuildFacts bulk-inserts facts via SQL JOIN with knomit_parse_fact(),
 // then populates branch_facts for the given branch.
-func (idx *Index) rebuildFacts(git GitReader, branch, head string, progress RebuildProgress) (int, error) {
-	branchID, err := idx.EnsureBranch(branch, "refs/heads/"+branch)
+func (idx *Index) rebuildFacts(ctx context.Context, git GitReader, branch, head string, progress RebuildProgress) (int, error) {
+	branchID, err := idx.EnsureBranch(ctx, branch, "refs/heads/"+branch)
 	if err != nil {
 		return 0, fmt.Errorf("rebuildFacts: ensure branch: %w", err)
 	}
@@ -27,29 +28,29 @@ func (idx *Index) rebuildFacts(git GitReader, branch, head string, progress Rebu
 	}
 
 	// Create temp table for the rebuild entries.
-	if _, err := idx.db.Exec(`CREATE TEMP TABLE IF NOT EXISTS _rebuild_entries (path TEXT PRIMARY KEY, blob_hash TEXT NOT NULL)`); err != nil {
+	if _, err := conn(ctx, idx.db).ExecContext(ctx, `CREATE TEMP TABLE IF NOT EXISTS _rebuild_entries (path TEXT PRIMARY KEY, blob_hash TEXT NOT NULL)`); err != nil {
 		return 0, fmt.Errorf("rebuildFacts: create temp table: %w", err)
 	}
 	// Ensure it's empty (in case of prior incomplete rebuild).
-	if _, err := idx.db.Exec(`DELETE FROM _rebuild_entries`); err != nil {
+	if _, err := conn(ctx, idx.db).ExecContext(ctx, `DELETE FROM _rebuild_entries`); err != nil {
 		return 0, fmt.Errorf("rebuildFacts: clear temp table: %w", err)
 	}
 
 	// Bulk-insert all (path, blobHash) pairs in a single transaction.
-	tx, err := idx.db.Begin()
+	tx, err := idx.db.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, fmt.Errorf("rebuildFacts: begin insert tx: %w", err)
 	}
 	defer tx.Rollback()
 
-	stmt, err := tx.Prepare(`INSERT OR REPLACE INTO _rebuild_entries(path, blob_hash) VALUES (?, ?)`)
+	stmt, err := tx.PrepareContext(ctx, `INSERT OR REPLACE INTO _rebuild_entries(path, blob_hash) VALUES (?, ?)`)
 	if err != nil {
 		return 0, fmt.Errorf("rebuildFacts: prepare insert: %w", err)
 	}
 	defer stmt.Close()
 
 	for i := range paths {
-		if _, err := stmt.Exec(paths[i], hashes[i]); err != nil {
+		if _, err := stmt.ExecContext(ctx, paths[i], hashes[i]); err != nil {
 			return 0, fmt.Errorf("rebuildFacts: insert entry %s: %w", paths[i], err)
 		}
 	}
@@ -58,7 +59,7 @@ func (idx *Index) rebuildFacts(git GitReader, branch, head string, progress Rebu
 	}
 
 	// Bulk INSERT OR REPLACE facts from parsed blob data (no commit_hash in facts table).
-	res, err := idx.db.Exec(`
+	res, err := conn(ctx, idx.db).ExecContext(ctx, `
 		WITH parsed_entries AS (
 			SELECT e.path, e.blob_hash, knomit_parse_fact(o.data) AS parsed
 			FROM _rebuild_entries e
@@ -89,7 +90,7 @@ func (idx *Index) rebuildFacts(git GitReader, branch, head string, progress Rebu
 	// Populate branch_facts: link each fact to this branch with its commit_hash.
 	// Prefer commit_log entries scoped to this branch; fall back to legacy rows
 	// with NULL branch_id (written before the branch existed in the branches table).
-	if _, err := idx.db.Exec(`
+	if _, err := conn(ctx, idx.db).ExecContext(ctx, `
 		INSERT OR REPLACE INTO branch_facts (branch_id, path, fact_id, commit_hash)
 		SELECT ?, f.path, f.id, COALESCE(cl.commit_hash, '')
 		FROM facts f
@@ -104,7 +105,7 @@ func (idx *Index) rebuildFacts(git GitReader, branch, head string, progress Rebu
 	}
 
 	// Clean up temp table.
-	if _, err := idx.db.Exec(`DROP TABLE IF EXISTS _rebuild_entries`); err != nil {
+	if _, err := conn(ctx, idx.db).ExecContext(ctx, `DROP TABLE IF EXISTS _rebuild_entries`); err != nil {
 		log.Warn().Err(err).Msg("rebuildFacts: drop temp table")
 	}
 
@@ -118,7 +119,7 @@ func (idx *Index) rebuildFacts(git GitReader, branch, head string, progress Rebu
 // rebuildEmbeddings computes embeddings for all facts missing from facts_vec.
 // Bodies are fetched one chunk at a time so memory usage is bounded by batchSize,
 // not by the total number of facts.
-func (idx *Index) rebuildEmbeddings(progress RebuildProgress) (int, error) {
+func (idx *Index) rebuildEmbeddings(ctx context.Context, progress RebuildProgress) (int, error) {
 	emb := idx.getEmbedder()
 	if emb == nil {
 		return 0, nil
@@ -127,7 +128,7 @@ func (idx *Index) rebuildEmbeddings(progress RebuildProgress) (int, error) {
 	batcher, hasBatch := emb.(BatchEmbedder)
 
 	var total int
-	if err := idx.db.QueryRow(`SELECT COUNT(*) FROM facts WHERE rowid NOT IN (SELECT rowid FROM facts_vec)`).Scan(&total); err != nil {
+	if err := conn(ctx, idx.db).QueryRowContext(ctx, `SELECT COUNT(*) FROM facts WHERE rowid NOT IN (SELECT rowid FROM facts_vec)`).Scan(&total); err != nil {
 		return 0, fmt.Errorf("rebuildEmbeddings: count: %w", err)
 	}
 
@@ -144,7 +145,7 @@ func (idx *Index) rebuildEmbeddings(progress RebuildProgress) (int, error) {
 		rowid int64
 		path  string
 	}
-	rows, err := idx.db.Query(`SELECT rowid, path FROM facts WHERE rowid NOT IN (SELECT rowid FROM facts_vec)`)
+	rows, err := conn(ctx, idx.db).QueryContext(ctx, `SELECT rowid, path FROM facts WHERE rowid NOT IN (SELECT rowid FROM facts_vec)`)
 	if err != nil {
 		return 0, fmt.Errorf("rebuildEmbeddings: query rowids: %w", err)
 	}
@@ -192,7 +193,7 @@ func (idx *Index) rebuildEmbeddings(progress RebuildProgress) (int, error) {
 			WHERE f.rowid IN (` + string(placeholders) + `)`
 		qargs := append([]any{BlobObjectType}, args...)
 
-		bodyRows, err := idx.db.Query(q, qargs...)
+		bodyRows, err := conn(ctx, idx.db).QueryContext(ctx, q, qargs...)
 		if err != nil {
 			return done, fmt.Errorf("rebuildEmbeddings: query bodies: %w", err)
 		}
@@ -214,7 +215,7 @@ func (idx *Index) rebuildEmbeddings(progress RebuildProgress) (int, error) {
 			continue
 		}
 
-		tx, err := idx.db.Begin()
+		tx, err := idx.db.BeginTx(ctx, nil)
 		if err != nil {
 			return done, fmt.Errorf("rebuildEmbeddings: begin tx: %w", err)
 		}
@@ -233,7 +234,7 @@ func (idx *Index) rebuildEmbeddings(progress RebuildProgress) (int, error) {
 				if len(vec) == 0 {
 					continue
 				}
-				if _, err := tx.Exec(`INSERT INTO facts_vec(rowid, embedding) VALUES (?, ?)`,
+				if _, err := tx.ExecContext(ctx, `INSERT INTO facts_vec(rowid, embedding) VALUES (?, ?)`,
 					entries[j].rowid, float32SliceToBytes(vec)); err != nil {
 					tx.Rollback()
 					return done, fmt.Errorf("rebuildEmbeddings: insert vec %s: %w", entries[j].path, err)
@@ -250,7 +251,7 @@ func (idx *Index) rebuildEmbeddings(progress RebuildProgress) (int, error) {
 				if len(vec) == 0 {
 					continue
 				}
-				if _, err := tx.Exec(`INSERT INTO facts_vec(rowid, embedding) VALUES (?, ?)`,
+				if _, err := tx.ExecContext(ctx, `INSERT INTO facts_vec(rowid, embedding) VALUES (?, ?)`,
 					e.rowid, float32SliceToBytes(vec)); err != nil {
 					tx.Rollback()
 					return done, fmt.Errorf("rebuildEmbeddings: insert vec %s: %w", e.path, err)
@@ -273,10 +274,10 @@ func (idx *Index) rebuildEmbeddings(progress RebuildProgress) (int, error) {
 
 // rebuildGraph syncs graph nodes/edges for all facts in a single transaction,
 // then builds similarity edges after commit.
-func (idx *Index) rebuildGraph(progress RebuildProgress) (int, error) {
+func (idx *Index) rebuildGraph(ctx context.Context, progress RebuildProgress) (int, error) {
 	// Read all facts ordered by oldest commit first so that when a fact's
 	// DERIVED_FROM edges are created, its ref targets are already graph nodes.
-	rows, err := idx.db.Query(`
+	rows, err := conn(ctx, idx.db).QueryContext(ctx, `
 		SELECT f.path, f.title, f.blob_hash, f.type, f.domain, f.entities, f.confidence, f.sources, f.refs, f.evidence_weight
 		FROM facts f
 		LEFT JOIN (
@@ -310,14 +311,14 @@ func (idx *Index) rebuildGraph(progress RebuildProgress) (int, error) {
 	}
 
 	// Single transaction for all graph sync operations.
-	tx, err := idx.db.Begin()
+	tx, err := idx.db.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, fmt.Errorf("rebuildGraph: begin tx: %w", err)
 	}
 	defer tx.Rollback()
 
 	for i, rec := range facts {
-		if err := idx.graphSyncFactTx(tx, rec); err != nil {
+		if err := idx.graphSyncFactTx(ctx, tx, rec); err != nil {
 			log.Warn().Err(err).Str("path", rec.Path).Msg("rebuildGraph: sync failed, skipping")
 			continue
 		}
@@ -337,12 +338,12 @@ func (idx *Index) rebuildGraph(progress RebuildProgress) (int, error) {
 		var edges []simEdge
 
 		for _, rec := range facts {
-			emb, err := idx.getEmbeddingByFact(rec.Path, rec.BlobHash)
+			emb, err := idx.getEmbeddingByFact(ctx, rec.Path, rec.BlobHash)
 			if err != nil || emb == nil {
 				continue
 			}
 			vecBlob := float32SliceToBytes(emb)
-			rows, err := idx.db.Query(
+			rows, err := conn(ctx, idx.db).QueryContext(ctx,
 				`SELECT f.path, f.blob_hash, (1.0 - fv.distance) as similarity
 				 FROM facts_vec fv
 				 JOIN facts f ON f.id = fv.rowid
@@ -369,7 +370,7 @@ func (idx *Index) rebuildGraph(progress RebuildProgress) (int, error) {
 
 		// Batch-write all similarity edges in a single transaction.
 		if len(edges) > 0 {
-			simTx, err := idx.db.Begin()
+			simTx, err := idx.db.BeginTx(ctx, nil)
 			if err != nil {
 				log.Warn().Err(err).Msg("rebuildGraph: begin similarity tx")
 			} else {
@@ -379,7 +380,7 @@ func (idx *Index) rebuildGraph(progress RebuildProgress) (int, error) {
 					tp := escapeCypherKey(e.toPath)
 					tbh := escapeCypherKey(e.toBH)
 					q := fmt.Sprintf(`SELECT cypher('MATCH (a:%s {path: "%s"}), (b:%s {path: "%s"}) WHERE a.blob_hash = "%s" AND b.blob_hash = "%s" MERGE (a)-[:%s]->(b)')`, NodeFact, fp, NodeFact, tp, fbh, tbh, EdgeSimilarTo)
-					if _, err := simTx.Exec(q); err != nil {
+					if _, err := simTx.ExecContext(ctx, q); err != nil {
 						log.Warn().Err(err).Str("from", e.fromPath).Str("to", e.toPath).Msg("rebuildGraph: similarity edge failed")
 					}
 				}

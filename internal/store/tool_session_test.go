@@ -1,15 +1,17 @@
 package store_test
 
 import (
+	"context"
 	"testing"
 
 	"knomit/internal/store"
 )
 
 func TestCreateToolSession(t *testing.T) {
+	ctx := context.Background()
 	idx := newTestIndex(t)
 
-	s, err := idx.CreateToolSession("explore", "machine/test", "concepts/")
+	s, err := idx.CreateToolSession(ctx, "explore", "machine/test", "concepts/")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -40,14 +42,15 @@ func TestCreateToolSession(t *testing.T) {
 }
 
 func TestGetToolSession(t *testing.T) {
+	ctx := context.Background()
 	idx := newTestIndex(t)
 
-	s, err := idx.CreateToolSession("explore", "machine/test", "")
+	s, err := idx.CreateToolSession(ctx, "explore", "machine/test", "")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	got, err := idx.GetToolSession(s.ID)
+	got, err := idx.GetToolSession(ctx, s.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,7 +74,7 @@ func TestGetToolSession(t *testing.T) {
 	}
 
 	// Nonexistent returns nil, no error.
-	got2, err := idx.GetToolSession("nonexistent-id")
+	got2, err := idx.GetToolSession(ctx, "nonexistent-id")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,18 +84,19 @@ func TestGetToolSession(t *testing.T) {
 }
 
 func TestUpdateToolSession(t *testing.T) {
+	ctx := context.Background()
 	idx := newTestIndex(t)
 
-	s, err := idx.CreateToolSession("explore", "machine/test", "")
+	s, err := idx.CreateToolSession(ctx, "explore", "machine/test", "")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if err := idx.UpdateToolSession(s.ID, "abc123", "completed"); err != nil {
+	if err := idx.UpdateToolSession(ctx, s.ID, "abc123", "completed"); err != nil {
 		t.Fatal(err)
 	}
 
-	got, err := idx.GetToolSession(s.ID)
+	got, err := idx.GetToolSession(ctx, s.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,15 +112,16 @@ func TestUpdateToolSession(t *testing.T) {
 }
 
 func TestToolSeenPaths(t *testing.T) {
+	ctx := context.Background()
 	idx := newTestIndex(t)
 
-	s, err := idx.CreateToolSession("explore", "machine/test", "")
+	s, err := idx.CreateToolSession(ctx, "explore", "machine/test", "")
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// Initially empty.
-	seen, err := idx.GetSeenPaths(s.ID)
+	seen, err := idx.GetSeenPaths(ctx, s.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,11 +130,11 @@ func TestToolSeenPaths(t *testing.T) {
 	}
 
 	// Add some paths.
-	if err := idx.AddSeenPaths(s.ID, []string{"a.md", "b.md", "c.md"}); err != nil {
+	if err := idx.AddSeenPaths(ctx, s.ID, []string{"a.md", "b.md", "c.md"}); err != nil {
 		t.Fatal(err)
 	}
 
-	seen, err = idx.GetSeenPaths(s.ID)
+	seen, err = idx.GetSeenPaths(ctx, s.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,11 +148,11 @@ func TestToolSeenPaths(t *testing.T) {
 	}
 
 	// Add duplicates — should not grow beyond 4.
-	if err := idx.AddSeenPaths(s.ID, []string{"b.md", "c.md", "d.md"}); err != nil {
+	if err := idx.AddSeenPaths(ctx, s.ID, []string{"b.md", "c.md", "d.md"}); err != nil {
 		t.Fatal(err)
 	}
 
-	seen, err = idx.GetSeenPaths(s.ID)
+	seen, err = idx.GetSeenPaths(ctx, s.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -157,12 +162,13 @@ func TestToolSeenPaths(t *testing.T) {
 }
 
 func TestGCToolSessions(t *testing.T) {
+	ctx := context.Background()
 	idx := newTestIndex(t)
 
 	// Create 4 sessions on the same tool+branch.
 	var ids []string
 	for i := 0; i < 4; i++ {
-		s, err := idx.CreateToolSession("explore", "machine/test", "")
+		s, err := idx.CreateToolSession(ctx, "explore", "machine/test", "")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -170,24 +176,24 @@ func TestGCToolSessions(t *testing.T) {
 	}
 
 	// Add seen paths to session 1 to test cascade.
-	if err := idx.AddSeenPaths(ids[1], []string{"x.md", "y.md"}); err != nil {
+	if err := idx.AddSeenPaths(ctx, ids[1], []string{"x.md", "y.md"}); err != nil {
 		t.Fatal(err)
 	}
 
 	// Create a session for a different tool — should be untouched.
-	otherSess, err := idx.CreateToolSession("explain", "machine/test", "")
+	otherSess, err := idx.CreateToolSession(ctx, "explain", "machine/test", "")
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// Keep only 2 most recent.
-	if err := idx.GCToolSessions("explore", "machine/test", 2); err != nil {
+	if err := idx.GCToolSessions(ctx, "explore", "machine/test", 2); err != nil {
 		t.Fatal(err)
 	}
 
 	// Sessions 0, 1 should be deleted; 2, 3 should remain.
 	for _, id := range ids[:2] {
-		got, err := idx.GetToolSession(id)
+		got, err := idx.GetToolSession(ctx, id)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -196,7 +202,7 @@ func TestGCToolSessions(t *testing.T) {
 		}
 	}
 	for _, id := range ids[2:] {
-		got, err := idx.GetToolSession(id)
+		got, err := idx.GetToolSession(ctx, id)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -206,7 +212,7 @@ func TestGCToolSessions(t *testing.T) {
 	}
 
 	// Seen paths for deleted session should also be gone (cascade).
-	seen, err := idx.GetSeenPaths(ids[1])
+	seen, err := idx.GetSeenPaths(ctx, ids[1])
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -215,7 +221,7 @@ func TestGCToolSessions(t *testing.T) {
 	}
 
 	// Other tool's session should be untouched.
-	otherGot, err := idx.GetToolSession(otherSess.ID)
+	otherGot, err := idx.GetToolSession(ctx, otherSess.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -225,9 +231,10 @@ func TestGCToolSessions(t *testing.T) {
 }
 
 func TestEnqueueAndDequeuePaths(t *testing.T) {
+	ctx := context.Background()
 	idx := newTestIndex(t)
 
-	s, err := idx.CreateToolSession("explore", "machine/test", "")
+	s, err := idx.CreateToolSession(ctx, "explore", "machine/test", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -237,12 +244,12 @@ func TestEnqueueAndDequeuePaths(t *testing.T) {
 		{Path: "b.md", CommitHash: "bbb", Depth: 1},
 		{Path: "c.md", CommitHash: "ccc", Depth: 2},
 	}
-	if err := idx.EnqueuePaths(s.ID, items); err != nil {
+	if err := idx.EnqueuePaths(ctx, s.ID, items); err != nil {
 		t.Fatal(err)
 	}
 
 	// Dequeue 2 — should get depth-0 and depth-1 items (breadth-first).
-	got, err := idx.DequeuePaths(s.ID, 2)
+	got, err := idx.DequeuePaths(ctx, s.ID, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -257,7 +264,7 @@ func TestEnqueueAndDequeuePaths(t *testing.T) {
 	}
 
 	// Verify remaining count.
-	size, err := idx.QueueSize(s.ID)
+	size, err := idx.QueueSize(ctx, s.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -267,14 +274,15 @@ func TestEnqueueAndDequeuePaths(t *testing.T) {
 }
 
 func TestDequeuePathsEmpty(t *testing.T) {
+	ctx := context.Background()
 	idx := newTestIndex(t)
 
-	s, err := idx.CreateToolSession("explore", "machine/test", "")
+	s, err := idx.CreateToolSession(ctx, "explore", "machine/test", "")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	got, err := idx.DequeuePaths(s.ID, 10)
+	got, err := idx.DequeuePaths(ctx, s.ID, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -284,15 +292,16 @@ func TestDequeuePathsEmpty(t *testing.T) {
 }
 
 func TestQueueSize(t *testing.T) {
+	ctx := context.Background()
 	idx := newTestIndex(t)
 
-	s, err := idx.CreateToolSession("explore", "machine/test", "")
+	s, err := idx.CreateToolSession(ctx, "explore", "machine/test", "")
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// Initially zero.
-	size, err := idx.QueueSize(s.ID)
+	size, err := idx.QueueSize(ctx, s.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -305,11 +314,11 @@ func TestQueueSize(t *testing.T) {
 		{Path: "a.md", CommitHash: "aaa", Depth: 0},
 		{Path: "b.md", CommitHash: "bbb", Depth: 0},
 	}
-	if err := idx.EnqueuePaths(s.ID, items); err != nil {
+	if err := idx.EnqueuePaths(ctx, s.ID, items); err != nil {
 		t.Fatal(err)
 	}
 
-	size, err = idx.QueueSize(s.ID)
+	size, err = idx.QueueSize(ctx, s.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -318,11 +327,11 @@ func TestQueueSize(t *testing.T) {
 	}
 
 	// Dequeue all.
-	if _, err := idx.DequeuePaths(s.ID, 10); err != nil {
+	if _, err := idx.DequeuePaths(ctx, s.ID, 10); err != nil {
 		t.Fatal(err)
 	}
 
-	size, err = idx.QueueSize(s.ID)
+	size, err = idx.QueueSize(ctx, s.ID)
 	if err != nil {
 		t.Fatal(err)
 	}

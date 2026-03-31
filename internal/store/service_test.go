@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -62,6 +63,7 @@ func TestServiceOpenMemory(t *testing.T) {
 // TestMigration_ReviewWorkItemsDepth verifies that opening an existing database
 // whose review_work_items table lacks the depth column gets it added via migration.
 func TestMigration_ReviewWorkItemsDepth(t *testing.T) {
+	ctx := context.Background()
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "old.db")
 
@@ -99,11 +101,11 @@ func TestMigration_ReviewWorkItemsDepth(t *testing.T) {
 
 	// Step 3: Verify we can insert and read a work item with depth.
 	idx := svc2.Index()
-	sess, err := idx.CreatePipelineSession("review", "main")
+	sess, err := idx.CreatePipelineSession(ctx, "review", "main")
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = idx.InsertPipelineWorkItem(PipelineWorkItem{
+	err = idx.InsertPipelineWorkItem(ctx, PipelineWorkItem{
 		SessionID:  sess.ID,
 		StepType:   "distill",
 		ClusterKey: "raptor-d2",
@@ -115,7 +117,7 @@ func TestMigration_ReviewWorkItemsDepth(t *testing.T) {
 		t.Fatalf("InsertPipelineWorkItem with depth after migration: %v", err)
 	}
 
-	item, err := idx.NextPipelineWorkItem(sess.ID)
+	item, err := idx.NextPipelineWorkItem(ctx, sess.ID)
 	if err != nil {
 		t.Fatal(err)
 	}

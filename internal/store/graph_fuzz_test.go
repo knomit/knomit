@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"testing"
 )
 
@@ -9,6 +10,7 @@ import (
 // It catches SQL/Cypher injection bugs like the apostrophe issue where
 // a single quote in a title broke the outer SQL string wrapper.
 func FuzzGraphUpsert(f *testing.F) {
+	ctx := context.Background()
 	// Seed corpus: known-tricky characters.
 	seeds := []string{
 		"simple",
@@ -52,13 +54,13 @@ func FuzzGraphUpsert(f *testing.F) {
 			Confidence: 0.8,
 			Sources:    1,
 		}
-		err = idx.graphSyncFact(rec)
+		err = idx.graphSyncFact(ctx, rec)
 		if err != nil {
 			t.Fatalf("graphSyncFact failed: %v\npath=%q title=%q domain=%q entity=%q",
 				err, path, title, domain, entity)
 		}
 
-		err = idx.graphDeleteFact(rec.Path, rec.BlobHash)
+		err = idx.graphDeleteFact(ctx, rec.Path, rec.BlobHash)
 		if err != nil {
 			t.Fatalf("graphDeleteFact failed: %v\npath=%q", err, path)
 		}

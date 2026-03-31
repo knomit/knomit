@@ -4,6 +4,7 @@
 package store
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -18,9 +19,9 @@ import (
 //  3. If last_commit == HEAD → no-op.
 //  4. Else → DiffFiles(last_commit), upsert added+modified, delete removed.
 //  5. Update meta.last_commit = HEAD.
-func (idx *Index) Sync(git GitReader, branch string) error {
+func (idx *Index) Sync(ctx context.Context, git GitReader, branch string) error {
 	// Ensure the branch exists in the branches table.
-	if _, err := idx.EnsureBranch(branch, "refs/heads/"+branch); err != nil {
+	if _, err := idx.EnsureBranch(ctx, branch, "refs/heads/"+branch); err != nil {
 		return fmt.Errorf("sync: ensure branch: %w", err)
 	}
 
@@ -29,7 +30,7 @@ func (idx *Index) Sync(git GitReader, branch string) error {
 		return fmt.Errorf("sync: head commit: %w", err)
 	}
 
-	last, err := idx.GetLastCommit(branch)
+	last, err := idx.GetLastCommit(ctx, branch)
 	if err != nil {
 		return fmt.Errorf("sync: get last commit: %w", err)
 	}
@@ -47,7 +48,7 @@ func (idx *Index) Sync(git GitReader, branch string) error {
 			return fmt.Errorf("sync: list all: %w", err)
 		}
 		for _, path := range paths {
-			if err := idx.indexFile(git, branch, path, head); err != nil {
+			if err := idx.indexFile(ctx, git, branch, path, head); err != nil {
 				return err
 			}
 		}
@@ -63,18 +64,18 @@ func (idx *Index) Sync(git GitReader, branch string) error {
 			Int("added", len(added)).Int("modified", len(modified)).Int("deleted", len(deleted)).
 			Msg("index sync: incremental update")
 		for _, path := range append(added, modified...) {
-			if err := idx.indexFile(git, branch, path, head); err != nil {
+			if err := idx.indexFile(ctx, git, branch, path, head); err != nil {
 				return err
 			}
 		}
 		for _, path := range deleted {
-			if err := idx.Delete(branch, path); err != nil {
+			if err := idx.Delete(ctx, branch, path); err != nil {
 				return fmt.Errorf("sync: delete %q: %w", path, err)
 			}
 		}
 	}
 
-	return idx.SetLastCommit(branch, head)
+	return idx.SetLastCommit(ctx, branch, head)
 }
 
 // RebuildProgress is called during Rebuild to report progress.
@@ -82,8 +83,8 @@ type RebuildProgress func(phase string, done, total int)
 
 // Rebuild clears the last-commit marker and re-indexes every file from HEAD
 // using three phases: facts, embeddings, graph.
-func (idx *Index) Rebuild(git GitReader, branch string, progress RebuildProgress) error {
-	if err := idx.SetLastCommit(branch, ""); err != nil {
+func (idx *Index) Rebuild(ctx context.Context, git GitReader, branch string, progress RebuildProgress) error {
+	if err := idx.SetLastCommit(ctx, branch, ""); err != nil {
 		return fmt.Errorf("rebuild: clear last commit: %w", err)
 	}
 
@@ -94,7 +95,7 @@ func (idx *Index) Rebuild(git GitReader, branch string, progress RebuildProgress
 
 	// Phase 1: facts
 	start := time.Now()
-	n, err := idx.rebuildFacts(git, branch, head, progress)
+	n, err := idx.rebuildFacts(ctx, git, branch, head, progress)
 	if err != nil {
 		return fmt.Errorf("rebuild: facts: %w", err)
 	}
@@ -102,7 +103,7 @@ func (idx *Index) Rebuild(git GitReader, branch string, progress RebuildProgress
 
 	// Phase 2: embeddings
 	start = time.Now()
-	embedded, err := idx.rebuildEmbeddings(progress)
+	embedded, err := idx.rebuildEmbeddings(ctx, progress)
 	if err != nil {
 		return fmt.Errorf("rebuild: embeddings: %w", err)
 	}
@@ -110,7 +111,7 @@ func (idx *Index) Rebuild(git GitReader, branch string, progress RebuildProgress
 
 	// Phase 3: graph
 	start = time.Now()
-	graphed, err := idx.rebuildGraph(progress)
+	graphed, err := idx.rebuildGraph(ctx, progress)
 	if err != nil {
 		return fmt.Errorf("rebuild: graph: %w", err)
 	}
@@ -118,13 +119,13 @@ func (idx *Index) Rebuild(git GitReader, branch string, progress RebuildProgress
 
 	// Phase 4: history (FactVersion nodes from commit_log)
 	start = time.Now()
-	versioned, err := idx.rebuildGraphHistory(git, branch, progress)
+	versioned, err := idx.rebuildGraphHistory(ctx, git, branch, progress)
 	if err != nil {
 		return fmt.Errorf("rebuild: history: %w", err)
 	}
 	log.Info().Int("versions", versioned).Str("elapsed", fmt.Sprintf("%.1fs", time.Since(start).Seconds())).Msg("rebuild: phase 4 (history) complete")
 
-	return idx.SetLastCommit(branch, head)
+	return idx.SetLastCommit(ctx, branch, head)
 }
 
 // indexFile reads a single file from git, parses it as a fact, and upserts
@@ -133,7 +134,7 @@ func (idx *Index) Rebuild(git GitReader, branch string, progress RebuildProgress
 //
 // commitHash is the fallback; if commit_log has a more specific last-touch
 // commit for this path, that is used instead.
-func (idx *Index) indexFile(git GitReader, branch, path, commitHash string) error {
+func (idx *Index) indexFile(ctx context.Context, git GitReader, branch, path, commitHash string) error {
 	content, blobHash, err := git.ReadFileWithHash(branch, path)
 	if err != nil {
 		return fmt.Errorf("indexFile: read %s: %w", path, err)
@@ -150,5 +151,5 @@ func (idx *Index) indexFile(git GitReader, branch, path, commitHash string) erro
 	}
 	rec.BlobHash = blobHash
 
-	return idx.Upsert(branch, commitHash, rec)
+	return idx.Upsert(ctx, branch, commitHash, rec)
 }

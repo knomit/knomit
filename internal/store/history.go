@@ -9,6 +9,7 @@
 package store
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -17,9 +18,9 @@ import (
 
 // graphNodeIDByProp returns the node ID for a node with the given label, where
 // the property named propKey equals propVal. Returns 0 if not found.
-func (idx *Index) graphNodeIDByProp(label, propKey, propVal string) (int64, error) {
+func (idx *Index) graphNodeIDByProp(ctx context.Context, label, propKey, propVal string) (int64, error) {
 	var nodeID int64
-	err := idx.db.QueryRow(`
+	err := conn(ctx, idx.db).QueryRowContext(ctx, `
 		SELECT np.node_id
 		FROM node_props_text np
 		JOIN property_keys pk ON pk.id = np.key_id
@@ -35,8 +36,8 @@ func (idx *Index) graphNodeIDByProp(label, propKey, propVal string) (int64, erro
 
 // graphInsertEdge inserts an edge directly into the edges table, bypassing
 // the GraphQLite Cypher layer. This avoids the two-node MATCH self-loop bug.
-func (idx *Index) graphInsertEdge(sourceID, targetID int64, edgeType string) error {
-	_, err := idx.db.Exec(
+func (idx *Index) graphInsertEdge(ctx context.Context, sourceID, targetID int64, edgeType string) error {
+	_, err := conn(ctx, idx.db).ExecContext(ctx,
 		`INSERT OR IGNORE INTO edges (source_id, target_id, type) VALUES (?, ?, ?)`,
 		sourceID, targetID, edgeType,
 	)
@@ -49,8 +50,8 @@ func (idx *Index) graphInsertEdge(sourceID, targetID int64, edgeType string) err
 // to the corresponding Fact node. Deleted entries are skipped.
 //
 // Returns the number of FactVersion nodes successfully created.
-func (idx *Index) rebuildGraphHistory(git GitReader, branch string, progress RebuildProgress) (int, error) {
-	rows, err := idx.db.Query(`
+func (idx *Index) rebuildGraphHistory(ctx context.Context, git GitReader, branch string, progress RebuildProgress) (int, error) {
+	rows, err := conn(ctx, idx.db).QueryContext(ctx, `
 		SELECT path, commit_hash, committed_at
 		FROM commit_log
 		WHERE action != 'deleted'
@@ -94,7 +95,7 @@ func (idx *Index) rebuildGraphHistory(git GitReader, branch string, progress Reb
 		committedAt      int64
 	}
 
-	tx, err := idx.db.Begin()
+	tx, err := idx.db.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, fmt.Errorf("rebuildGraphHistory: begin tx: %w", err)
 	}
@@ -118,7 +119,7 @@ func (idx *Index) rebuildGraphHistory(git GitReader, branch string, progress Reb
 			continue
 		}
 
-		if err := idx.graphSyncFactVersionTx(tx, v.commitHash, rec, v.committedAt); err != nil {
+		if err := idx.graphSyncFactVersionTx(ctx, tx, v.commitHash, rec, v.committedAt); err != nil {
 			log.Warn().Err(err).Str("path", v.path).Str("commit", v.commitHash[:8]).Msg("rebuildGraphHistory: sync version failed, skipping")
 			continue
 		}
@@ -150,7 +151,7 @@ func (idx *Index) rebuildGraphHistory(git GitReader, branch string, progress Reb
 	// the transaction has committed. GraphQLite MATCH+SET does not persist EAV
 	// properties when executed inside a *sql.Tx, so this must run post-commit.
 	for _, cv := range created {
-		if err := idx.graphSetFactVersionProps(cv.commitHash, cv.rec, cv.committedAt); err != nil {
+		if err := idx.graphSetFactVersionProps(ctx, cv.commitHash, cv.rec, cv.committedAt); err != nil {
 			log.Warn().Err(err).Str("path", cv.path).Str("commit", cv.commitHash[:8]).Msg("rebuildGraphHistory: set props failed")
 		}
 	}
@@ -160,34 +161,34 @@ func (idx *Index) rebuildGraphHistory(git GitReader, branch string, progress Reb
 	// nodes share the same label, so we look up node IDs directly and INSERT.
 	for path, edges := range prevEdgesByPath {
 		for _, e := range edges {
-			newerID, err := idx.graphNodeIDByProp(NodeFactVersion, "commit_hash", e.newerHash)
+			newerID, err := idx.graphNodeIDByProp(ctx, NodeFactVersion, "commit_hash", e.newerHash)
 			if err != nil || newerID == 0 {
 				log.Warn().Str("path", path).Str("commit", e.newerHash[:8]).Msg("rebuildGraphHistory: newer node not found for PREV_VERSION")
 				continue
 			}
-			olderID, err := idx.graphNodeIDByProp(NodeFactVersion, "commit_hash", e.olderHash)
+			olderID, err := idx.graphNodeIDByProp(ctx, NodeFactVersion, "commit_hash", e.olderHash)
 			if err != nil || olderID == 0 {
 				log.Warn().Str("path", path).Str("commit", e.olderHash[:8]).Msg("rebuildGraphHistory: older node not found for PREV_VERSION")
 				continue
 			}
-			if err := idx.graphInsertEdge(newerID, olderID, EdgePrevVersion); err != nil {
+			if err := idx.graphInsertEdge(ctx, newerID, olderID, EdgePrevVersion); err != nil {
 				log.Warn().Err(err).Str("path", path).Msg("rebuildGraphHistory: PREV_VERSION insert failed")
 			}
 		}
 	}
 
 	for _, cv := range created {
-		versionID, err := idx.graphNodeIDByProp(NodeFactVersion, "commit_hash", cv.commitHash)
+		versionID, err := idx.graphNodeIDByProp(ctx, NodeFactVersion, "commit_hash", cv.commitHash)
 		if err != nil || versionID == 0 {
 			continue
 		}
 		for _, ref := range cv.refs {
-			targetID, err := idx.graphNodeIDByProp(NodeFact, "path", ref)
+			targetID, err := idx.graphNodeIDByProp(ctx, NodeFact, "path", ref)
 			if err != nil || targetID == 0 {
 				// Target Fact node doesn't exist — skip (no self-loop risk with direct SQL).
 				continue
 			}
-			if err := idx.graphInsertEdge(versionID, targetID, EdgeDerivedFrom); err != nil {
+			if err := idx.graphInsertEdge(ctx, versionID, targetID, EdgeDerivedFrom); err != nil {
 				log.Warn().Err(err).Str("ref", ref).Msg("rebuildGraphHistory: DERIVED_FROM insert failed")
 			}
 		}
@@ -200,7 +201,7 @@ func (idx *Index) rebuildGraphHistory(git GitReader, branch string, progress Reb
 // given transaction. Properties (title, committed_at) must be set after the
 // transaction commits via graphSetFactVersionProps, because GraphQLite's
 // MATCH+SET does not persist to EAV tables when executed inside a *sql.Tx.
-func (idx *Index) graphSyncFactVersionTx(tx execer, commitHash string, rec FactRecord, committedAt int64) error {
+func (idx *Index) graphSyncFactVersionTx(ctx context.Context, tx execer, commitHash string, rec FactRecord, committedAt int64) error {
 	p := escapeCypherKey(rec.Path)
 	ch := escapeCypherKey(commitHash)
 
@@ -221,8 +222,8 @@ func (idx *Index) graphSyncFactVersionTx(tx execer, commitHash string, rec FactR
 //
 // Must be called after the transaction that created the node has committed,
 // because node IDs are only visible post-commit.
-func (idx *Index) graphSetFactVersionProps(commitHash string, rec FactRecord, committedAt int64) error {
-	nodeID, err := idx.graphNodeIDByProp(NodeFactVersion, "commit_hash", commitHash)
+func (idx *Index) graphSetFactVersionProps(ctx context.Context, commitHash string, rec FactRecord, committedAt int64) error {
+	nodeID, err := idx.graphNodeIDByProp(ctx, NodeFactVersion, "commit_hash", commitHash)
 	if err != nil || nodeID == 0 {
 		return fmt.Errorf("graphSetFactVersionProps: node not found for commit_hash=%s: %w", commitHash, err)
 	}
@@ -236,14 +237,14 @@ func (idx *Index) graphSetFactVersionProps(commitHash string, rec FactRecord, co
 		{"title", rec.Title},
 	} {
 		// Ensure property_key row exists.
-		if _, err := idx.db.Exec(`INSERT OR IGNORE INTO property_keys(key) VALUES (?)`, p.key); err != nil {
+		if _, err := conn(ctx, idx.db).ExecContext(ctx, `INSERT OR IGNORE INTO property_keys(key) VALUES (?)`, p.key); err != nil {
 			return fmt.Errorf("graphSetFactVersionProps: ensure key %s: %w", p.key, err)
 		}
 		var keyID int64
-		if err := idx.db.QueryRow(`SELECT id FROM property_keys WHERE key = ?`, p.key).Scan(&keyID); err != nil {
+		if err := conn(ctx, idx.db).QueryRowContext(ctx, `SELECT id FROM property_keys WHERE key = ?`, p.key).Scan(&keyID); err != nil {
 			return fmt.Errorf("graphSetFactVersionProps: get key_id for %s: %w", p.key, err)
 		}
-		if _, err := idx.db.Exec(
+		if _, err := conn(ctx, idx.db).ExecContext(ctx,
 			`INSERT OR REPLACE INTO node_props_text(node_id, key_id, value) VALUES (?, ?, ?)`,
 			nodeID, keyID, p.value,
 		); err != nil {
@@ -252,14 +253,14 @@ func (idx *Index) graphSetFactVersionProps(commitHash string, rec FactRecord, co
 	}
 
 	// committed_at is an integer; store in node_props_real (GraphQLite uses REAL for numbers).
-	if _, err := idx.db.Exec(`INSERT OR IGNORE INTO property_keys(key) VALUES (?)`, "committed_at"); err != nil {
+	if _, err := conn(ctx, idx.db).ExecContext(ctx, `INSERT OR IGNORE INTO property_keys(key) VALUES (?)`, "committed_at"); err != nil {
 		return fmt.Errorf("graphSetFactVersionProps: ensure key committed_at: %w", err)
 	}
 	var caKeyID int64
-	if err := idx.db.QueryRow(`SELECT id FROM property_keys WHERE key = 'committed_at'`).Scan(&caKeyID); err != nil {
+	if err := conn(ctx, idx.db).QueryRowContext(ctx, `SELECT id FROM property_keys WHERE key = 'committed_at'`).Scan(&caKeyID); err != nil {
 		return fmt.Errorf("graphSetFactVersionProps: get key_id for committed_at: %w", err)
 	}
-	if _, err := idx.db.Exec(
+	if _, err := conn(ctx, idx.db).ExecContext(ctx,
 		`INSERT OR REPLACE INTO node_props_real(node_id, key_id, value) VALUES (?, ?, ?)`,
 		nodeID, caKeyID, committedAt,
 	); err != nil {

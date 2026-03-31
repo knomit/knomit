@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"fmt"
 	"testing"
 )
@@ -10,10 +11,11 @@ import (
 // insertRecentFact is a test helper that inserts a blob + fact record for
 // RecentFacts tests. commit_log is not populated so committed_at defaults to 0.
 func insertRecentFact(t *testing.T, idx *Index, path, typ string, confidence float64) {
+	ctx := context.Background()
 	t.Helper()
 	bh := "bh_" + path
 	insertBlob(t, idx.db, bh, "content of "+path)
-	if err := idx.Upsert(testBranch, "abc", FactRecord{
+	if err := idx.Upsert(ctx, testBranch, "abc", FactRecord{
 		Path:       path,
 		Title:      path,
 		BlobHash:   bh,
@@ -28,6 +30,7 @@ func insertRecentFact(t *testing.T, idx *Index, path, typ string, confidence flo
 }
 
 func TestRecentFacts_BasicListing(t *testing.T) {
+	ctx := context.Background()
 	idx, err := New(":memory:")
 	if err != nil {
 		t.Fatal(err)
@@ -38,7 +41,7 @@ func TestRecentFacts_BasicListing(t *testing.T) {
 	insertRecentFact(t, idx, "kb/alpha/two.md", "hypothesis", 0.8)
 	insertRecentFact(t, idx, "kb/beta/three.md", "observation", 0.7)
 
-	entries, total, err := idx.RecentFacts(testBranch, "kb/alpha", "", 10, 0, nil, nil, nil, nil, nil)
+	entries, total, err := idx.RecentFacts(ctx, testBranch, "kb/alpha", "", 10, 0, nil, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,6 +59,7 @@ func TestRecentFacts_BasicListing(t *testing.T) {
 }
 
 func TestRecentFacts_IncludeTypes(t *testing.T) {
+	ctx := context.Background()
 	idx, err := New(":memory:")
 	if err != nil {
 		t.Fatal(err)
@@ -66,7 +70,7 @@ func TestRecentFacts_IncludeTypes(t *testing.T) {
 	insertRecentFact(t, idx, "kb/hyp.md", "hypothesis", 0.8)
 	insertRecentFact(t, idx, "kb/syn.md", "synthesis", 0.7)
 
-	entries, total, err := idx.RecentFacts(testBranch, "kb", "", 10, 0, []string{"observation"}, nil, nil, nil, nil)
+	entries, total, err := idx.RecentFacts(ctx, testBranch, "kb", "", 10, 0, []string{"observation"}, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,6 +83,7 @@ func TestRecentFacts_IncludeTypes(t *testing.T) {
 }
 
 func TestRecentFacts_ExcludeTypes(t *testing.T) {
+	ctx := context.Background()
 	idx, err := New(":memory:")
 	if err != nil {
 		t.Fatal(err)
@@ -89,7 +94,7 @@ func TestRecentFacts_ExcludeTypes(t *testing.T) {
 	insertRecentFact(t, idx, "kb/hyp.md", "hypothesis", 0.8)
 	insertRecentFact(t, idx, "kb/syn.md", "synthesis", 0.7)
 
-	entries, total, err := idx.RecentFacts(testBranch, "kb", "", 10, 0, nil, []string{"hypothesis"}, nil, nil, nil)
+	entries, total, err := idx.RecentFacts(ctx, testBranch, "kb", "", 10, 0, nil, []string{"hypothesis"}, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,6 +109,7 @@ func TestRecentFacts_ExcludeTypes(t *testing.T) {
 }
 
 func TestRecentFacts_Pagination(t *testing.T) {
+	ctx := context.Background()
 	idx, err := New(":memory:")
 	if err != nil {
 		t.Fatal(err)
@@ -115,7 +121,7 @@ func TestRecentFacts_Pagination(t *testing.T) {
 	}
 
 	// Page 1.
-	entries, total, err := idx.RecentFacts(testBranch, "kb", "", 2, 0, nil, nil, nil, nil, nil)
+	entries, total, err := idx.RecentFacts(ctx, testBranch, "kb", "", 2, 0, nil, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,7 +133,7 @@ func TestRecentFacts_Pagination(t *testing.T) {
 	}
 
 	// Page 2.
-	entries, total, err = idx.RecentFacts(testBranch, "kb", "", 2, 2, nil, nil, nil, nil, nil)
+	entries, total, err = idx.RecentFacts(ctx, testBranch, "kb", "", 2, 2, nil, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,7 +145,7 @@ func TestRecentFacts_Pagination(t *testing.T) {
 	}
 
 	// Last page (1 item).
-	entries, total, err = idx.RecentFacts(testBranch, "kb", "", 2, 4, nil, nil, nil, nil, nil)
+	entries, total, err = idx.RecentFacts(ctx, testBranch, "kb", "", 2, 4, nil, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,6 +158,7 @@ func TestRecentFacts_Pagination(t *testing.T) {
 }
 
 func TestRecentFacts_EmptyPrefix(t *testing.T) {
+	ctx := context.Background()
 	idx, err := New(":memory:")
 	if err != nil {
 		t.Fatal(err)
@@ -162,7 +169,7 @@ func TestRecentFacts_EmptyPrefix(t *testing.T) {
 	insertRecentFact(t, idx, "notes/two.md", "hypothesis", 0.8)
 
 	// Empty prefix should return all facts.
-	_, total, err := idx.RecentFacts(testBranch, "", "", 100, 0, nil, nil, nil, nil, nil)
+	_, total, err := idx.RecentFacts(ctx, testBranch, "", "", 100, 0, nil, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -172,6 +179,7 @@ func TestRecentFacts_EmptyPrefix(t *testing.T) {
 }
 
 func TestRecentFacts_SearchPath(t *testing.T) {
+	ctx := context.Background()
 	// Exercises recentFactsSearch (query != "").
 	idx, err := New(":memory:")
 	if err != nil {
@@ -186,14 +194,14 @@ func TestRecentFacts_SearchPath(t *testing.T) {
 
 	insertBlob(t, idx.db, "bh_match", "alpha")
 	insertBlob(t, idx.db, "bh_other", "gamma") // far from query "alpha"
-	if err := idx.Upsert(testBranch, "c1", FactRecord{
+	if err := idx.Upsert(ctx, testBranch, "c1", FactRecord{
 		Path: "kb/match.md", Title: "alpha", BlobHash: "bh_match",
 		Type: "observation", Domain: []string{"test"}, Entities: []string{},
 		Confidence: 0.9, Sources: 1,
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := idx.Upsert(testBranch, "c2", FactRecord{
+	if err := idx.Upsert(ctx, testBranch, "c2", FactRecord{
 		Path: "kb/other.md", Title: "gamma", BlobHash: "bh_other",
 		Type: "observation", Domain: []string{"test"}, Entities: []string{},
 		Confidence: 0.9, Sources: 1,
@@ -201,7 +209,7 @@ func TestRecentFacts_SearchPath(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	entries, total, err := idx.RecentFacts(testBranch, "kb", "alpha", 10, 0, nil, nil, nil, nil, nil)
+	entries, total, err := idx.RecentFacts(ctx, testBranch, "kb", "alpha", 10, 0, nil, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -225,6 +233,7 @@ func TestRecentFacts_SearchPath(t *testing.T) {
 }
 
 func TestRecentFacts_SearchPath_Pagination(t *testing.T) {
+	ctx := context.Background()
 	// recentFactsSearch paginates in Go after fetching all results.
 	idx, err := New(":memory:")
 	if err != nil {
@@ -240,7 +249,7 @@ func TestRecentFacts_SearchPath_Pagination(t *testing.T) {
 		bh := fmt.Sprintf("bh_s%d", i)
 		path := fmt.Sprintf("kb/s%02d.md", i)
 		insertBlob(t, idx.db, bh, fmt.Sprintf("fact %d content", i))
-		if err := idx.Upsert(testBranch, "abc", FactRecord{
+		if err := idx.Upsert(ctx, testBranch, "abc", FactRecord{
 			Path: path, Title: fmt.Sprintf("fact %d", i), BlobHash: bh,
 			Type: "observation", Domain: []string{"test"}, Entities: []string{},
 			Confidence: 0.9, Sources: 1,
@@ -250,7 +259,7 @@ func TestRecentFacts_SearchPath_Pagination(t *testing.T) {
 	}
 
 	// Request page 1 (limit=2, offset=0).
-	entries, total, err := idx.RecentFacts(testBranch, "kb", "query", 2, 0, nil, nil, nil, nil, nil)
+	entries, total, err := idx.RecentFacts(ctx, testBranch, "kb", "query", 2, 0, nil, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -262,7 +271,7 @@ func TestRecentFacts_SearchPath_Pagination(t *testing.T) {
 	}
 
 	// Offset beyond total returns empty slice with correct total.
-	entries, total, err = idx.RecentFacts(testBranch, "kb", "query", 2, 10, nil, nil, nil, nil, nil)
+	entries, total, err = idx.RecentFacts(ctx, testBranch, "kb", "query", 2, 10, nil, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -277,10 +286,11 @@ func TestRecentFacts_SearchPath_Pagination(t *testing.T) {
 // insertRecentFactFull is like insertRecentFact but allows custom domain, entities,
 // and inserts a commit_log row so the operation field is populated.
 func insertRecentFactFull(t *testing.T, idx *Index, path, typ string, domain, entities []string, commitHash, operation string) {
+	ctx := context.Background()
 	t.Helper()
 	bh := "bh_" + path
 	insertBlob(t, idx.db, bh, "content of "+path)
-	if err := idx.Upsert(testBranch, commitHash, FactRecord{
+	if err := idx.Upsert(ctx, testBranch, commitHash, FactRecord{
 		Path:       path,
 		Title:      path,
 		BlobHash:   bh,
@@ -304,6 +314,7 @@ func insertRecentFactFull(t *testing.T, idx *Index, path, typ string, domain, en
 }
 
 func TestRecentFacts_DomainFilter(t *testing.T) {
+	ctx := context.Background()
 	idx, err := New(":memory:")
 	if err != nil {
 		t.Fatal(err)
@@ -315,7 +326,7 @@ func TestRecentFacts_DomainFilter(t *testing.T) {
 	insertRecentFactFull(t, idx, "kb/go-perf.md", "observation", []string{"go/performance"}, []string{}, "c3", "learn")
 
 	// Filter by top-level domain "go" — should match "go" and "go/performance" (LIKE pattern).
-	entries, total, err := idx.RecentFacts(testBranch, "kb", "", 10, 0, nil, nil, []string{"go"}, nil, nil)
+	entries, total, err := idx.RecentFacts(ctx, testBranch, "kb", "", 10, 0, nil, nil, []string{"go"}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -333,6 +344,7 @@ func TestRecentFacts_DomainFilter(t *testing.T) {
 }
 
 func TestRecentFacts_EntityFilter(t *testing.T) {
+	ctx := context.Background()
 	idx, err := New(":memory:")
 	if err != nil {
 		t.Fatal(err)
@@ -344,7 +356,7 @@ func TestRecentFacts_EntityFilter(t *testing.T) {
 	insertRecentFactFull(t, idx, "kb/other.md", "observation", []string{"go"}, []string{"other"}, "c3", "learn")
 
 	// Filter by entity "router" — should match chi and gin.
-	entries, total, err := idx.RecentFacts(testBranch, "kb", "", 10, 0, nil, nil, nil, []string{"router"}, nil)
+	entries, total, err := idx.RecentFacts(ctx, testBranch, "kb", "", 10, 0, nil, nil, nil, []string{"router"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -362,6 +374,7 @@ func TestRecentFacts_EntityFilter(t *testing.T) {
 }
 
 func TestRecentFacts_EpFilter(t *testing.T) {
+	ctx := context.Background()
 	idx, err := New(":memory:")
 	if err != nil {
 		t.Fatal(err)
@@ -373,7 +386,7 @@ func TestRecentFacts_EpFilter(t *testing.T) {
 	insertRecentFactFull(t, idx, "kb/retracted.md", "observation", []string{"test"}, []string{}, "c3", "retract")
 
 	// Filter ep=learn — only the learned fact.
-	entries, total, err := idx.RecentFacts(testBranch, "kb", "", 10, 0, nil, nil, nil, nil, []string{"learn"})
+	entries, total, err := idx.RecentFacts(ctx, testBranch, "kb", "", 10, 0, nil, nil, nil, nil, []string{"learn"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -385,7 +398,7 @@ func TestRecentFacts_EpFilter(t *testing.T) {
 	}
 
 	// Filter ep=learn,update — two facts.
-	entries, total, err = idx.RecentFacts(testBranch, "kb", "", 10, 0, nil, nil, nil, nil, []string{"learn", "update"})
+	entries, total, err = idx.RecentFacts(ctx, testBranch, "kb", "", 10, 0, nil, nil, nil, nil, []string{"learn", "update"})
 	if err != nil {
 		t.Fatal(err)
 	}

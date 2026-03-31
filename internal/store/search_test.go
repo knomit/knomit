@@ -1,6 +1,7 @@
 package store_test
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"testing"
@@ -16,6 +17,7 @@ func testVec(values ...float32) []float32 {
 }
 
 func TestSearchIncludeTypes(t *testing.T) {
+	ctx := context.Background()
 	idx, err := store.New(":memory:")
 	if err != nil {
 		t.Fatal(err)
@@ -35,7 +37,7 @@ func TestSearchIncludeTypes(t *testing.T) {
 
 	for _, f := range facts {
 		insertTestBlob(t, idx.TestDB(), f.blobHash, f.body)
-		if err := idx.Upsert(testBranch, "abc", store.FactRecord{
+		if err := idx.Upsert(ctx, testBranch, "abc", store.FactRecord{
 			Path:       f.path,
 			Title:      f.typ + " fact",
 			BlobHash:   f.blobHash,
@@ -49,7 +51,7 @@ func TestSearchIncludeTypes(t *testing.T) {
 		}
 	}
 
-	results, err := idx.Search(testBranch, store.SearchQuery{
+	results, err := idx.Search(ctx, testBranch, store.SearchQuery{
 		IncludeTypes: []string{"observation"},
 	})
 	if err != nil {
@@ -64,6 +66,7 @@ func TestSearchIncludeTypes(t *testing.T) {
 }
 
 func TestSearchExcludeTypes(t *testing.T) {
+	ctx := context.Background()
 	idx, err := store.New(":memory:")
 	if err != nil {
 		t.Fatal(err)
@@ -83,7 +86,7 @@ func TestSearchExcludeTypes(t *testing.T) {
 
 	for _, f := range facts {
 		insertTestBlob(t, idx.TestDB(), f.blobHash, f.body)
-		if err := idx.Upsert(testBranch, "abc", store.FactRecord{
+		if err := idx.Upsert(ctx, testBranch, "abc", store.FactRecord{
 			Path:       f.path,
 			Title:      f.typ + " fact",
 			BlobHash:   f.blobHash,
@@ -97,7 +100,7 @@ func TestSearchExcludeTypes(t *testing.T) {
 		}
 	}
 
-	results, err := idx.Search(testBranch, store.SearchQuery{
+	results, err := idx.Search(ctx, testBranch, store.SearchQuery{
 		ExcludeTypes: []string{"hypothesis"},
 	})
 	if err != nil {
@@ -114,6 +117,7 @@ func TestSearchExcludeTypes(t *testing.T) {
 }
 
 func TestSearchTypeFilterEmptyPassesAll(t *testing.T) {
+	ctx := context.Background()
 	idx, err := store.New(":memory:")
 	if err != nil {
 		t.Fatal(err)
@@ -133,7 +137,7 @@ func TestSearchTypeFilterEmptyPassesAll(t *testing.T) {
 
 	for _, f := range facts {
 		insertTestBlob(t, idx.TestDB(), f.blobHash, f.body)
-		if err := idx.Upsert(testBranch, "abc", store.FactRecord{
+		if err := idx.Upsert(ctx, testBranch, "abc", store.FactRecord{
 			Path:       f.path,
 			Title:      f.typ + " fact",
 			BlobHash:   f.blobHash,
@@ -147,7 +151,7 @@ func TestSearchTypeFilterEmptyPassesAll(t *testing.T) {
 		}
 	}
 
-	results, err := idx.Search(testBranch, store.SearchQuery{})
+	results, err := idx.Search(ctx, testBranch, store.SearchQuery{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -157,6 +161,7 @@ func TestSearchTypeFilterEmptyPassesAll(t *testing.T) {
 }
 
 func TestSearchIncludeMultipleTypes(t *testing.T) {
+	ctx := context.Background()
 	idx, err := store.New(":memory:")
 	if err != nil {
 		t.Fatal(err)
@@ -177,7 +182,7 @@ func TestSearchIncludeMultipleTypes(t *testing.T) {
 
 	for _, f := range facts {
 		insertTestBlob(t, idx.TestDB(), f.blobHash, f.body)
-		if err := idx.Upsert(testBranch, "abc", store.FactRecord{
+		if err := idx.Upsert(ctx, testBranch, "abc", store.FactRecord{
 			Path:       f.path,
 			Title:      f.typ + " fact",
 			BlobHash:   f.blobHash,
@@ -191,7 +196,7 @@ func TestSearchIncludeMultipleTypes(t *testing.T) {
 		}
 	}
 
-	results, err := idx.Search(testBranch, store.SearchQuery{
+	results, err := idx.Search(ctx, testBranch, store.SearchQuery{
 		IncludeTypes: []string{"observation", "hypothesis"},
 	})
 	if err != nil {
@@ -210,6 +215,7 @@ func TestSearchIncludeMultipleTypes(t *testing.T) {
 }
 
 func TestSearchEntityFilterSQL(t *testing.T) {
+	ctx := context.Background()
 	// Regression test: entity and domain filters must be applied in SQL
 	// (via json_each), not Go-side post-filtering. Before the fix, the
 	// text-less path used a LIMIT with Go-side filtering, which could miss
@@ -234,7 +240,7 @@ func TestSearchEntityFilterSQL(t *testing.T) {
 	}
 	for _, f := range facts {
 		insertTestBlob(t, idx.TestDB(), f.blobHash, "content for "+f.path)
-		if err := idx.Upsert(testBranch, "abc", store.FactRecord{
+		if err := idx.Upsert(ctx, testBranch, "abc", store.FactRecord{
 			Path: f.path, Title: f.path, BlobHash: f.blobHash,
 			Type: "observation", Domain: f.domain, Entities: f.entities,
 			Confidence: 0.9, Sources: 1,
@@ -244,7 +250,7 @@ func TestSearchEntityFilterSQL(t *testing.T) {
 	}
 
 	// Entity filter with a hyphenated name.
-	results, err := idx.Search(testBranch, store.SearchQuery{Entities: []string{"developer-platform"}})
+	results, err := idx.Search(ctx, testBranch, store.SearchQuery{Entities: []string{"developer-platform"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -260,7 +266,7 @@ func TestSearchEntityFilterSQL(t *testing.T) {
 	}
 
 	// Domain prefix filter.
-	results, err = idx.Search(testBranch, store.SearchQuery{Domain: []string{"tools"}})
+	results, err = idx.Search(ctx, testBranch, store.SearchQuery{Domain: []string{"tools"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -269,7 +275,7 @@ func TestSearchEntityFilterSQL(t *testing.T) {
 	}
 
 	// Combined entity + domain filter.
-	results, err = idx.Search(testBranch, store.SearchQuery{
+	results, err = idx.Search(ctx, testBranch, store.SearchQuery{
 		Entities: []string{"developer-platform"},
 		Domain:   []string{"devops"},
 	})
@@ -284,7 +290,7 @@ func TestSearchEntityFilterSQL(t *testing.T) {
 	}
 
 	// Entity filter is case-insensitive.
-	results, err = idx.Search(testBranch, store.SearchQuery{Entities: []string{"POSTGRESQL"}})
+	results, err = idx.Search(ctx, testBranch, store.SearchQuery{Entities: []string{"POSTGRESQL"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -294,6 +300,7 @@ func TestSearchEntityFilterSQL(t *testing.T) {
 }
 
 func TestSearchEntityWithSpaces(t *testing.T) {
+	ctx := context.Background()
 	// Regression: entities with spaces (e.g. "Composer 2", "supply chain security")
 	// must be findable via the text-less search path.
 	idx, err := store.New(":memory:")
@@ -313,7 +320,7 @@ func TestSearchEntityWithSpaces(t *testing.T) {
 	}
 	for _, f := range facts {
 		insertTestBlob(t, idx.TestDB(), f.blobHash, "content for "+f.path)
-		if err := idx.Upsert(testBranch, "abc", store.FactRecord{
+		if err := idx.Upsert(ctx, testBranch, "abc", store.FactRecord{
 			Path: f.path, Title: f.path, BlobHash: f.blobHash,
 			Type: "observation", Domain: []string{"test"}, Entities: f.entities,
 			Confidence: 0.9, Sources: 1,
@@ -322,7 +329,7 @@ func TestSearchEntityWithSpaces(t *testing.T) {
 		}
 	}
 
-	results, err := idx.Search(testBranch, store.SearchQuery{Entities: []string{"Composer 2"}})
+	results, err := idx.Search(ctx, testBranch, store.SearchQuery{Entities: []string{"Composer 2"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -330,7 +337,7 @@ func TestSearchEntityWithSpaces(t *testing.T) {
 		t.Fatalf("expected kb/a.md for entity 'Composer 2', got %d results", len(results))
 	}
 
-	results, err = idx.Search(testBranch, store.SearchQuery{Entities: []string{"supply chain security"}})
+	results, err = idx.Search(ctx, testBranch, store.SearchQuery{Entities: []string{"supply chain security"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -340,6 +347,7 @@ func TestSearchEntityWithSpaces(t *testing.T) {
 }
 
 func TestSearchEntityBeyondOldLimit(t *testing.T) {
+	ctx := context.Background()
 	// Regression: before pushing entity filters to SQL, the text-less path
 	// fetched LIMIT*3 rows and filtered in Go. If the matching fact was
 	// beyond that window it was silently missed. This test creates enough
@@ -355,7 +363,7 @@ func TestSearchEntityBeyondOldLimit(t *testing.T) {
 		bh := fmt.Sprintf("blob_filler_%d", i)
 		path := fmt.Sprintf("kb/filler/%d.md", i)
 		insertTestBlob(t, idx.TestDB(), bh, fmt.Sprintf("filler content %d", i))
-		if err := idx.Upsert(testBranch, "abc", store.FactRecord{
+		if err := idx.Upsert(ctx, testBranch, "abc", store.FactRecord{
 			Path: path, Title: path, BlobHash: bh,
 			Type: "observation", Domain: []string{"test"}, Entities: []string{"filler"},
 			Confidence: 0.9, Sources: 1,
@@ -366,7 +374,7 @@ func TestSearchEntityBeyondOldLimit(t *testing.T) {
 
 	// Insert the needle — a hypothesis with a unique entity.
 	insertTestBlob(t, idx.TestDB(), "blob_needle", "the needle fact")
-	if err := idx.Upsert(testBranch, "abc", store.FactRecord{
+	if err := idx.Upsert(ctx, testBranch, "abc", store.FactRecord{
 		Path: "kb/needle.md", Title: "Needle", BlobHash: "blob_needle",
 		Type: "hypothesis", Domain: []string{"special"}, Entities: []string{"rare-entity"},
 		Confidence: 0.6, Sources: 1,
@@ -376,7 +384,7 @@ func TestSearchEntityBeyondOldLimit(t *testing.T) {
 
 	// Search by the unique entity — must find the needle even though
 	// it's beyond the first 150 rows.
-	results, err := idx.Search(testBranch, store.SearchQuery{Entities: []string{"rare-entity"}})
+	results, err := idx.Search(ctx, testBranch, store.SearchQuery{Entities: []string{"rare-entity"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -388,7 +396,7 @@ func TestSearchEntityBeyondOldLimit(t *testing.T) {
 	}
 
 	// Also verify domain filter finds it.
-	results, err = idx.Search(testBranch, store.SearchQuery{Domain: []string{"special"}})
+	results, err = idx.Search(ctx, testBranch, store.SearchQuery{Domain: []string{"special"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -398,6 +406,7 @@ func TestSearchEntityBeyondOldLimit(t *testing.T) {
 }
 
 func TestSearchVecPathEntityFilter(t *testing.T) {
+	ctx := context.Background()
 	// Regression: the vector search path (text + entity filter) must apply
 	// entity/domain filters in SQL, not in Go post-filtering.
 	idx, err := store.New(":memory:")
@@ -428,14 +437,14 @@ func TestSearchVecPathEntityFilter(t *testing.T) {
 	insertTestBlob(t, idx.TestDB(), "blob_va", "caching content")
 	insertTestBlob(t, idx.TestDB(), "blob_vb", "caching content")
 
-	if err := idx.Upsert(testBranch, "abc", store.FactRecord{
+	if err := idx.Upsert(ctx, testBranch, "abc", store.FactRecord{
 		Path: "kb/va.md", Title: "Alpha", BlobHash: "blob_va",
 		Type: "observation", Domain: []string{"infra"}, Entities: []string{"Redis", "caching"},
 		Confidence: 0.9, Sources: 1,
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := idx.Upsert(testBranch, "abc", store.FactRecord{
+	if err := idx.Upsert(ctx, testBranch, "abc", store.FactRecord{
 		Path: "kb/vb.md", Title: "Beta", BlobHash: "blob_vb",
 		Type: "hypothesis", Domain: []string{"infra"}, Entities: []string{"Memcached", "caching"},
 		Confidence: 0.7, Sources: 1,
@@ -444,7 +453,7 @@ func TestSearchVecPathEntityFilter(t *testing.T) {
 	}
 
 	// Text search without entity filter — both should match.
-	results, err := idx.Search(testBranch, store.SearchQuery{Text: "caching", Limit: 10})
+	results, err := idx.Search(ctx, testBranch, store.SearchQuery{Text: "caching", Limit: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -453,7 +462,7 @@ func TestSearchVecPathEntityFilter(t *testing.T) {
 	}
 
 	// Text search + entity filter — only Redis fact should match.
-	results, err = idx.Search(testBranch, store.SearchQuery{Text: "caching", Entities: []string{"Redis"}, Limit: 10})
+	results, err = idx.Search(ctx, testBranch, store.SearchQuery{Text: "caching", Entities: []string{"Redis"}, Limit: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -465,7 +474,7 @@ func TestSearchVecPathEntityFilter(t *testing.T) {
 	}
 
 	// Text search + domain filter.
-	results, err = idx.Search(testBranch, store.SearchQuery{Text: "caching", Domain: []string{"infra"}, Limit: 10})
+	results, err = idx.Search(ctx, testBranch, store.SearchQuery{Text: "caching", Domain: []string{"infra"}, Limit: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -474,7 +483,7 @@ func TestSearchVecPathEntityFilter(t *testing.T) {
 	}
 
 	// Text search + entity filter for hypothesis type — should still find it.
-	results, err = idx.Search(testBranch, store.SearchQuery{Text: "caching", Entities: []string{"Memcached"}, Limit: 10})
+	results, err = idx.Search(ctx, testBranch, store.SearchQuery{Text: "caching", Entities: []string{"Memcached"}, Limit: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -487,6 +496,7 @@ func TestSearchVecPathEntityFilter(t *testing.T) {
 }
 
 func TestSearchVecLimitReturnsTopNByScoreWithBodies(t *testing.T) {
+	ctx := context.Background()
 	// Regression: the vector search path must return exactly Limit results,
 	// ranked by score descending, with body content correctly loaded.
 	// Previously, ALL candidate bodies were fetched before trimming to Limit,
@@ -538,7 +548,7 @@ func TestSearchVecLimitReturnsTopNByScoreWithBodies(t *testing.T) {
 	for _, f := range facts {
 		bh := "blob_" + f.path
 		insertTestBlob(t, idx.TestDB(), bh, f.body)
-		if err := idx.Upsert(testBranch, "abc", store.FactRecord{
+		if err := idx.Upsert(ctx, testBranch, "abc", store.FactRecord{
 			Path: f.path, Title: f.path, BlobHash: bh,
 			Type: "observation", Domain: []string{"test"}, Entities: []string{},
 			Confidence: 0.9, Sources: 1,
@@ -547,7 +557,7 @@ func TestSearchVecLimitReturnsTopNByScoreWithBodies(t *testing.T) {
 		}
 	}
 
-	results, err := idx.Search(testBranch, store.SearchQuery{
+	results, err := idx.Search(ctx, testBranch, store.SearchQuery{
 		Text:  "query",
 		Limit: 3,
 	})
@@ -584,6 +594,7 @@ func TestSearchVecLimitReturnsTopNByScoreWithBodies(t *testing.T) {
 }
 
 func TestMatchesFiltersWithTypes(t *testing.T) {
+	ctx := context.Background()
 	// Test matchesFilters via Search with combined filters.
 	idx, err := store.New(":memory:")
 	if err != nil {
@@ -594,13 +605,13 @@ func TestMatchesFiltersWithTypes(t *testing.T) {
 	insertTestBlob(t, idx.TestDB(), "blob_a", "content a")
 	insertTestBlob(t, idx.TestDB(), "blob_b", "content b")
 
-	if err := idx.Upsert(testBranch, "abc", store.FactRecord{
+	if err := idx.Upsert(ctx, testBranch, "abc", store.FactRecord{
 		Path: "kb/a.md", Title: "A", BlobHash: "blob_a", Type: "observation",
 		Domain: []string{"test"}, Entities: []string{}, Confidence: 0.9, Sources: 1,
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := idx.Upsert(testBranch, "abc", store.FactRecord{
+	if err := idx.Upsert(ctx, testBranch, "abc", store.FactRecord{
 		Path: "kb/b.md", Title: "B", BlobHash: "blob_b", Type: "hypothesis",
 		Domain: []string{"test"}, Entities: []string{}, Confidence: 0.5, Sources: 1,
 	}); err != nil {
@@ -608,7 +619,7 @@ func TestMatchesFiltersWithTypes(t *testing.T) {
 	}
 
 	// Exclude hypothesis + min confidence filter
-	results, err := idx.Search(testBranch, store.SearchQuery{
+	results, err := idx.Search(ctx, testBranch, store.SearchQuery{
 		ExcludeTypes:  []string{"hypothesis"},
 		MinConfidence: 0.8,
 	})
@@ -625,9 +636,10 @@ func TestMatchesFiltersWithTypes(t *testing.T) {
 
 // upsertFact is a test helper that inserts a blob and upserts a FactRecord.
 func upsertFact(t *testing.T, idx *store.Index, path, blobHash, typ string, domain, entities []string, confidence float64) {
+	ctx := context.Background()
 	t.Helper()
 	insertTestBlob(t, idx.TestDB(), blobHash, "content of "+path)
-	if err := idx.Upsert(testBranch, "abc", store.FactRecord{
+	if err := idx.Upsert(ctx, testBranch, "abc", store.FactRecord{
 		Path: path, Title: path, BlobHash: blobHash,
 		Type: typ, Domain: domain, Entities: entities,
 		Confidence: confidence, Sources: 1,
@@ -637,6 +649,7 @@ func upsertFact(t *testing.T, idx *store.Index, path, blobHash, typ string, doma
 }
 
 func TestSearchPathFilter(t *testing.T) {
+	ctx := context.Background()
 	idx, err := store.New(":memory:")
 	if err != nil {
 		t.Fatal(err)
@@ -647,7 +660,7 @@ func TestSearchPathFilter(t *testing.T) {
 	upsertFact(t, idx, "kb/alpha/two.md", "bh2", "observation", []string{"test"}, nil, 0.9)
 	upsertFact(t, idx, "kb/beta/three.md", "bh3", "observation", []string{"test"}, nil, 0.9)
 
-	results, err := idx.Search(testBranch, store.SearchQuery{Path: "kb/alpha/"})
+	results, err := idx.Search(ctx, testBranch, store.SearchQuery{Path: "kb/alpha/"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -661,7 +674,7 @@ func TestSearchPathFilter(t *testing.T) {
 	}
 
 	// Exact prefix — should match nothing beyond that subtree.
-	results, err = idx.Search(testBranch, store.SearchQuery{Path: "kb/beta/"})
+	results, err = idx.Search(ctx, testBranch, store.SearchQuery{Path: "kb/beta/"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -671,6 +684,7 @@ func TestSearchPathFilter(t *testing.T) {
 }
 
 func TestSearchLimitTextlessPath(t *testing.T) {
+	ctx := context.Background()
 	idx, err := store.New(":memory:")
 	if err != nil {
 		t.Fatal(err)
@@ -681,7 +695,7 @@ func TestSearchLimitTextlessPath(t *testing.T) {
 		upsertFact(t, idx, fmt.Sprintf("kb/f%02d.md", i), fmt.Sprintf("bh%d", i), "observation", []string{"test"}, nil, 0.9)
 	}
 
-	results, err := idx.Search(testBranch, store.SearchQuery{Limit: 3})
+	results, err := idx.Search(ctx, testBranch, store.SearchQuery{Limit: 3})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -691,6 +705,7 @@ func TestSearchLimitTextlessPath(t *testing.T) {
 }
 
 func TestSearchVecMinConfidence(t *testing.T) {
+	ctx := context.Background()
 	idx, err := store.New(":memory:")
 	if err != nil {
 		t.Fatal(err)
@@ -705,7 +720,7 @@ func TestSearchVecMinConfidence(t *testing.T) {
 	upsertFact(t, idx, "kb/high.md", "bh_high", "observation", []string{"test"}, nil, 0.9)
 	upsertFact(t, idx, "kb/low.md", "bh_low", "observation", []string{"test"}, nil, 0.3)
 
-	results, err := idx.Search(testBranch, store.SearchQuery{Text: "q", MinConfidence: 0.8, Limit: 10})
+	results, err := idx.Search(ctx, testBranch, store.SearchQuery{Text: "q", MinConfidence: 0.8, Limit: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -715,6 +730,7 @@ func TestSearchVecMinConfidence(t *testing.T) {
 }
 
 func TestSearchVecIncludeTypes(t *testing.T) {
+	ctx := context.Background()
 	idx, err := store.New(":memory:")
 	if err != nil {
 		t.Fatal(err)
@@ -729,7 +745,7 @@ func TestSearchVecIncludeTypes(t *testing.T) {
 	upsertFact(t, idx, "kb/obs.md", "bh_obs", "observation", []string{"test"}, nil, 0.9)
 	upsertFact(t, idx, "kb/hyp.md", "bh_hyp", "hypothesis", []string{"test"}, nil, 0.9)
 
-	results, err := idx.Search(testBranch, store.SearchQuery{Text: "q", IncludeTypes: []string{"observation"}, Limit: 10})
+	results, err := idx.Search(ctx, testBranch, store.SearchQuery{Text: "q", IncludeTypes: []string{"observation"}, Limit: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -739,6 +755,7 @@ func TestSearchVecIncludeTypes(t *testing.T) {
 }
 
 func TestSearchVecExcludeTypes(t *testing.T) {
+	ctx := context.Background()
 	idx, err := store.New(":memory:")
 	if err != nil {
 		t.Fatal(err)
@@ -753,7 +770,7 @@ func TestSearchVecExcludeTypes(t *testing.T) {
 	upsertFact(t, idx, "kb/obs.md", "bh_obs", "observation", []string{"test"}, nil, 0.9)
 	upsertFact(t, idx, "kb/hyp.md", "bh_hyp", "hypothesis", []string{"test"}, nil, 0.9)
 
-	results, err := idx.Search(testBranch, store.SearchQuery{Text: "q", ExcludeTypes: []string{"hypothesis"}, Limit: 10})
+	results, err := idx.Search(ctx, testBranch, store.SearchQuery{Text: "q", ExcludeTypes: []string{"hypothesis"}, Limit: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -763,6 +780,7 @@ func TestSearchVecExcludeTypes(t *testing.T) {
 }
 
 func TestSearchVecPathFilter(t *testing.T) {
+	ctx := context.Background()
 	idx, err := store.New(":memory:")
 	if err != nil {
 		t.Fatal(err)
@@ -778,7 +796,7 @@ func TestSearchVecPathFilter(t *testing.T) {
 	upsertFact(t, idx, "kb/alpha/two.md", "bh_a2", "observation", []string{"test"}, nil, 0.9)
 	upsertFact(t, idx, "kb/beta/three.md", "bh_b3", "observation", []string{"test"}, nil, 0.9)
 
-	results, err := idx.Search(testBranch, store.SearchQuery{Text: "q", Path: "kb/alpha/", Limit: 10})
+	results, err := idx.Search(ctx, testBranch, store.SearchQuery{Text: "q", Path: "kb/alpha/", Limit: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -793,6 +811,7 @@ func TestSearchVecPathFilter(t *testing.T) {
 }
 
 func TestSearchMinSimilarity(t *testing.T) {
+	ctx := context.Background()
 	// Two facts: one with high similarity, one below threshold.
 	idx, err := store.New(":memory:")
 	if err != nil {
@@ -814,14 +833,14 @@ func TestSearchMinSimilarity(t *testing.T) {
 
 	insertTestBlob(t, idx.TestDB(), "bh_high", "close match")
 	insertTestBlob(t, idx.TestDB(), "bh_low", "distant match")
-	if err := idx.Upsert(testBranch, "abc", store.FactRecord{
+	if err := idx.Upsert(ctx, testBranch, "abc", store.FactRecord{
 		Path: "kb/high.md", Title: "close", BlobHash: "bh_high",
 		Type: "observation", Domain: []string{"test"}, Entities: []string{},
 		Confidence: 0.9, Sources: 1,
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := idx.Upsert(testBranch, "abc", store.FactRecord{
+	if err := idx.Upsert(ctx, testBranch, "abc", store.FactRecord{
 		Path: "kb/low.md", Title: "distant", BlobHash: "bh_low",
 		Type: "observation", Domain: []string{"test"}, Entities: []string{},
 		Confidence: 0.9, Sources: 1,
@@ -830,7 +849,7 @@ func TestSearchMinSimilarity(t *testing.T) {
 	}
 
 	// Default threshold (0.40) — both should match.
-	results, err := idx.Search(testBranch, store.SearchQuery{Text: "q", Limit: 10})
+	results, err := idx.Search(ctx, testBranch, store.SearchQuery{Text: "q", Limit: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -839,7 +858,7 @@ func TestSearchMinSimilarity(t *testing.T) {
 	}
 
 	// High threshold (0.9) — only the high-similarity fact should match.
-	results, err = idx.Search(testBranch, store.SearchQuery{Text: "q", MinSimilarity: 0.9, Limit: 10})
+	results, err = idx.Search(ctx, testBranch, store.SearchQuery{Text: "q", MinSimilarity: 0.9, Limit: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -849,6 +868,7 @@ func TestSearchMinSimilarity(t *testing.T) {
 }
 
 func TestSearchAdaptiveKBranchMid(t *testing.T) {
+	ctx := context.Background()
 	// Behavioral test for the adaptive-k middle branch (MinSimilarity > 0.5 → kLimit = limit*3).
 	// The "close" fact has cosine ~1.0 with the query; the "distant" fact has cosine ~0.5.
 	// With MinSimilarity=0.6 the distant fact falls below the threshold, so only
@@ -872,14 +892,14 @@ func TestSearchAdaptiveKBranchMid(t *testing.T) {
 
 	insertTestBlob(t, idx.TestDB(), "bh_high2", "close match")
 	insertTestBlob(t, idx.TestDB(), "bh_low2", "distant match")
-	if err := idx.Upsert(testBranch, "abc", store.FactRecord{
+	if err := idx.Upsert(ctx, testBranch, "abc", store.FactRecord{
 		Path: "kb/high2.md", Title: "close", BlobHash: "bh_high2",
 		Type: "observation", Domain: []string{"test"}, Entities: []string{},
 		Confidence: 0.9, Sources: 1,
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := idx.Upsert(testBranch, "abc", store.FactRecord{
+	if err := idx.Upsert(ctx, testBranch, "abc", store.FactRecord{
 		Path: "kb/low2.md", Title: "distant", BlobHash: "bh_low2",
 		Type: "observation", Domain: []string{"test"}, Entities: []string{},
 		Confidence: 0.9, Sources: 1,
@@ -888,7 +908,7 @@ func TestSearchAdaptiveKBranchMid(t *testing.T) {
 	}
 
 	// MinSimilarity=0.6 exercises the >0.5 branch (kLimit = limit*3).
-	results, err := idx.Search(testBranch, store.SearchQuery{Text: "q", MinSimilarity: 0.6, Limit: 10})
+	results, err := idx.Search(ctx, testBranch, store.SearchQuery{Text: "q", MinSimilarity: 0.6, Limit: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -898,6 +918,7 @@ func TestSearchAdaptiveKBranchMid(t *testing.T) {
 }
 
 func TestSearchAdaptiveKBranchDefault(t *testing.T) {
+	ctx := context.Background()
 	// Behavioral test for the adaptive-k default branch (MinSimilarity=0 → kLimit = limit*5).
 	// Both facts have cosine above the default 0.40 floor, so both should be returned —
 	// confirming Search works correctly with the limit*5 candidate window.
@@ -919,14 +940,14 @@ func TestSearchAdaptiveKBranchDefault(t *testing.T) {
 
 	insertTestBlob(t, idx.TestDB(), "bh_high3", "close match")
 	insertTestBlob(t, idx.TestDB(), "bh_low3", "distant match")
-	if err := idx.Upsert(testBranch, "abc", store.FactRecord{
+	if err := idx.Upsert(ctx, testBranch, "abc", store.FactRecord{
 		Path: "kb/high3.md", Title: "close", BlobHash: "bh_high3",
 		Type: "observation", Domain: []string{"test"}, Entities: []string{},
 		Confidence: 0.9, Sources: 1,
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := idx.Upsert(testBranch, "abc", store.FactRecord{
+	if err := idx.Upsert(ctx, testBranch, "abc", store.FactRecord{
 		Path: "kb/low3.md", Title: "distant", BlobHash: "bh_low3",
 		Type: "observation", Domain: []string{"test"}, Entities: []string{},
 		Confidence: 0.9, Sources: 1,
@@ -936,7 +957,7 @@ func TestSearchAdaptiveKBranchDefault(t *testing.T) {
 
 	// MinSimilarity=0 exercises the default branch (kLimit = limit*5).
 	// Both facts clear the 0.40 default floor (cosine ~1.0 and ~0.5).
-	results, err := idx.Search(testBranch, store.SearchQuery{Text: "q", MinSimilarity: 0, Limit: 10})
+	results, err := idx.Search(ctx, testBranch, store.SearchQuery{Text: "q", MinSimilarity: 0, Limit: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -946,6 +967,7 @@ func TestSearchAdaptiveKBranchDefault(t *testing.T) {
 }
 
 func TestSearchDomainPrefixFilter(t *testing.T) {
+	ctx := context.Background()
 	// Domain prefix filtering: querying for "technology" should match facts
 	// with domain "technology" or "technology/go" but not "science".
 	idx, err := store.New(":memory:")
@@ -966,7 +988,7 @@ func TestSearchDomainPrefixFilter(t *testing.T) {
 	}
 	for _, f := range facts {
 		insertTestBlob(t, idx.TestDB(), f.blobHash, "content for "+f.path)
-		if err := idx.Upsert(testBranch, "abc", store.FactRecord{
+		if err := idx.Upsert(ctx, testBranch, "abc", store.FactRecord{
 			Path: f.path, Title: f.path, BlobHash: f.blobHash,
 			Type: "observation", Domain: f.domain, Entities: []string{},
 			Confidence: 0.9, Sources: 1,
@@ -976,7 +998,7 @@ func TestSearchDomainPrefixFilter(t *testing.T) {
 	}
 
 	// "technology" should match a (technology/go), b (technology), d (technology/rust).
-	results, err := idx.Search(testBranch, store.SearchQuery{Domain: []string{"technology"}})
+	results, err := idx.Search(ctx, testBranch, store.SearchQuery{Domain: []string{"technology"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -992,7 +1014,7 @@ func TestSearchDomainPrefixFilter(t *testing.T) {
 	}
 
 	// Combined domain prefix: "technology" AND "science" should match only d.
-	results, err = idx.Search(testBranch, store.SearchQuery{Domain: []string{"technology", "science"}})
+	results, err = idx.Search(ctx, testBranch, store.SearchQuery{Domain: []string{"technology", "science"}})
 	if err != nil {
 		t.Fatal(err)
 	}

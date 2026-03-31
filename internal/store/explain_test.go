@@ -1,12 +1,14 @@
 package store
 
 import (
+	"context"
 	"testing"
 )
 
 // TestExplainFact_Diamond verifies ExplainFact with a diamond-shaped ref graph:
 // d → a, d → b, a → c, b → c. Explain each node and verify incoming/outgoing.
 func TestExplainFact_Diamond(t *testing.T) {
+	ctx := context.Background()
 	branch := "agent/explain-diamond"
 	idx, gs := openGraphTestStore(t, branch)
 
@@ -21,7 +23,7 @@ func TestExplainFact_Diamond(t *testing.T) {
 		makeFact("D", []string{"eng"}, []string{"Top"}, "kb/a.md", "kb/b.md"))
 
 	// C: incoming from a and b, no outgoing.
-	res, err := idx.ExplainFact(branch, "kb/c.md")
+	res, err := idx.ExplainFact(ctx, branch, "kb/c.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -34,7 +36,7 @@ func TestExplainFact_Diamond(t *testing.T) {
 	}
 
 	// A: incoming from d, outgoing to c.
-	res, err = idx.ExplainFact(branch, "kb/a.md")
+	res, err = idx.ExplainFact(ctx, branch, "kb/a.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -48,7 +50,7 @@ func TestExplainFact_Diamond(t *testing.T) {
 	}
 
 	// D: no incoming, outgoing to a and b.
-	res, err = idx.ExplainFact(branch, "kb/d.md")
+	res, err = idx.ExplainFact(ctx, branch, "kb/d.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,6 +67,7 @@ func TestExplainFact_Diamond(t *testing.T) {
 // different refs, ExplainFact reflects the current version's outgoing edges,
 // and old targets lose their incoming ref.
 func TestExplainFact_RefsChangeOnUpdate(t *testing.T) {
+	ctx := context.Background()
 	branch := "agent/explain-update"
 	idx, gs := openGraphTestStore(t, branch)
 
@@ -79,7 +82,7 @@ func TestExplainFact_RefsChangeOnUpdate(t *testing.T) {
 		makeFact("Source v1", []string{"eng"}, nil, "kb/a.md", "kb/b.md"))
 
 	// Verify initial state.
-	res, err := idx.ExplainFact(branch, "kb/src.md")
+	res, err := idx.ExplainFact(ctx, branch, "kb/src.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -89,7 +92,7 @@ func TestExplainFact_RefsChangeOnUpdate(t *testing.T) {
 	}
 
 	// A should have src as incoming.
-	res, err = idx.ExplainFact(branch, "kb/a.md")
+	res, err = idx.ExplainFact(ctx, branch, "kb/a.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,7 +106,7 @@ func TestExplainFact_RefsChangeOnUpdate(t *testing.T) {
 		makeFact("Source v2", []string{"eng"}, nil, "kb/b.md", "kb/c.md"))
 
 	// src outgoing should now be {b, c}.
-	res, err = idx.ExplainFact(branch, "kb/src.md")
+	res, err = idx.ExplainFact(ctx, branch, "kb/src.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,7 +119,7 @@ func TestExplainFact_RefsChangeOnUpdate(t *testing.T) {
 	}
 
 	// C should now have src as incoming.
-	res, err = idx.ExplainFact(branch, "kb/c.md")
+	res, err = idx.ExplainFact(ctx, branch, "kb/c.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,6 +133,7 @@ func TestExplainFact_RefsChangeOnUpdate(t *testing.T) {
 // marks it as Deleted in the outgoing results, and that it disappears from
 // the incoming side of the deleted fact.
 func TestExplainFact_DeletedTargetMarked(t *testing.T) {
+	ctx := context.Background()
 	branch := "agent/explain-delete"
 	idx, gs := openGraphTestStore(t, branch)
 
@@ -139,7 +143,7 @@ func TestExplainFact_DeletedTargetMarked(t *testing.T) {
 		makeFact("Source", []string{"eng"}, nil, "kb/target.md"))
 
 	// Before delete: outgoing shows target as not deleted.
-	res, err := idx.ExplainFact(branch, "kb/src.md")
+	res, err := idx.ExplainFact(ctx, branch, "kb/src.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -148,12 +152,12 @@ func TestExplainFact_DeletedTargetMarked(t *testing.T) {
 	}
 
 	// Delete target.
-	if err := idx.Delete(branch, "kb/target.md"); err != nil {
+	if err := idx.Delete(ctx, branch, "kb/target.md"); err != nil {
 		t.Fatal(err)
 	}
 
 	// After delete: outgoing should still show target but marked Deleted.
-	res, err = idx.ExplainFact(branch, "kb/src.md")
+	res, err = idx.ExplainFact(ctx, branch, "kb/src.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -172,6 +176,7 @@ func TestExplainFact_DeletedTargetMarked(t *testing.T) {
 // direct neighbours, not transitive refs. a → b → c: explain(b) should show
 // a as incoming and c as outgoing, but explain(a) should NOT show c.
 func TestExplainFact_ChainIsDirectOnly(t *testing.T) {
+	ctx := context.Background()
 	branch := "agent/explain-chain"
 	idx, gs := openGraphTestStore(t, branch)
 
@@ -183,7 +188,7 @@ func TestExplainFact_ChainIsDirectOnly(t *testing.T) {
 		makeFact("A", []string{"eng"}, nil, "kb/b.md"))
 
 	// a → b: a's outgoing should be {b}, NOT {b, c}.
-	res, err := idx.ExplainFact(branch, "kb/a.md")
+	res, err := idx.ExplainFact(ctx, branch, "kb/a.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -193,7 +198,7 @@ func TestExplainFact_ChainIsDirectOnly(t *testing.T) {
 	}
 
 	// b: incoming {a}, outgoing {c}.
-	res, err = idx.ExplainFact(branch, "kb/b.md")
+	res, err = idx.ExplainFact(ctx, branch, "kb/b.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -207,7 +212,7 @@ func TestExplainFact_ChainIsDirectOnly(t *testing.T) {
 	}
 
 	// c: incoming {b}, no outgoing.
-	res, err = idx.ExplainFact(branch, "kb/c.md")
+	res, err = idx.ExplainFact(ctx, branch, "kb/c.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -223,6 +228,7 @@ func TestExplainFact_ChainIsDirectOnly(t *testing.T) {
 // TestExplainFact_MultipleIncoming verifies that a fact referenced by many
 // others shows all of them in incoming.
 func TestExplainFact_MultipleIncoming(t *testing.T) {
+	ctx := context.Background()
 	branch := "agent/explain-multi"
 	idx, gs := openGraphTestStore(t, branch)
 
@@ -234,7 +240,7 @@ func TestExplainFact_MultipleIncoming(t *testing.T) {
 			makeFact(name, []string{"eng"}, nil, "kb/hub.md"))
 	}
 
-	res, err := idx.ExplainFact(branch, "kb/hub.md")
+	res, err := idx.ExplainFact(ctx, branch, "kb/hub.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -252,13 +258,14 @@ func TestExplainFact_MultipleIncoming(t *testing.T) {
 // TestExplainFact_NoRefs verifies that a fact with no refs has empty
 // incoming and outgoing.
 func TestExplainFact_NoRefs(t *testing.T) {
+	ctx := context.Background()
 	branch := "agent/explain-norefs"
 	idx, gs := openGraphTestStore(t, branch)
 
 	writeAndSync(t, idx, gs, branch, "kb/lonely.md",
 		makeFact("Lonely", []string{"eng"}, nil))
 
-	res, err := idx.ExplainFact(branch, "kb/lonely.md")
+	res, err := idx.ExplainFact(ctx, branch, "kb/lonely.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -273,6 +280,7 @@ func TestExplainFact_NoRefs(t *testing.T) {
 // TestExplainFact_ExternalRefsIgnored verifies that HTTP/HTTPS refs in the
 // refs field do NOT produce DERIVED_FROM edges (only local paths do).
 func TestExplainFact_ExternalRefsIgnored(t *testing.T) {
+	ctx := context.Background()
 	branch := "agent/explain-external"
 	idx, gs := openGraphTestStore(t, branch)
 
@@ -281,7 +289,7 @@ func TestExplainFact_ExternalRefsIgnored(t *testing.T) {
 	writeAndSync(t, idx, gs, branch, "kb/src.md",
 		makeFact("Source", []string{"eng"}, nil, "kb/local.md", "https://example.com", "http://other.org"))
 
-	res, err := idx.ExplainFact(branch, "kb/src.md")
+	res, err := idx.ExplainFact(ctx, branch, "kb/src.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -297,12 +305,13 @@ func TestExplainFact_ExternalRefsIgnored(t *testing.T) {
 // TestFactVersionHistory_TracksUpdates verifies that FactVersionHistory returns
 // all versions of a fact after multiple updates, ordered newest first.
 func TestFactVersionHistory_TracksUpdates(t *testing.T) {
+	ctx := context.Background()
 	idx, err := New(":memory:")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer idx.Close()
-	idx.EnsureBranch(testBranch, "refs/heads/"+testBranch)
+	idx.EnsureBranch(ctx, testBranch, "refs/heads/"+testBranch)
 
 	path := "kb/evolving.md"
 	c1 := "aaa0000000000000000000000000000000000000a1"
@@ -323,11 +332,11 @@ func TestFactVersionHistory_TracksUpdates(t *testing.T) {
 		head:  c3,
 	}
 
-	if _, err := idx.rebuildGraphHistory(git, testBranch, nil); err != nil {
+	if _, err := idx.rebuildGraphHistory(ctx, git, testBranch, nil); err != nil {
 		t.Fatal(err)
 	}
 
-	versions, err := idx.FactVersionHistory(testBranch, path)
+	versions, err := idx.FactVersionHistory(ctx, testBranch, path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -347,6 +356,7 @@ func TestFactVersionHistory_TracksUpdates(t *testing.T) {
 // the outgoing refs that were declared in a specific historical version, not the
 // current version.
 func TestExplainFactAt_OutgoingRefsPerVersion(t *testing.T) {
+	ctx := context.Background()
 	idx, err := New(":memory:")
 	if err != nil {
 		t.Fatal(err)
@@ -373,7 +383,7 @@ func TestExplainFactAt_OutgoingRefsPerVersion(t *testing.T) {
 	} {
 		idx.db.Exec(`INSERT OR IGNORE INTO objects(hash, type, size, data) VALUES (?, ?, ?, ?)`,
 			info.hash, BlobObjectType, 10, []byte(factContent(info.title)))
-		idx.Upsert(testBranch, "abc", FactRecord{
+		idx.Upsert(ctx, testBranch, "abc", FactRecord{
 			Path: info.path, Title: info.title, BlobHash: info.hash,
 			Type: "observation", Domain: []string{"test"}, Confidence: 0.8, Sources: 1,
 		})
@@ -394,12 +404,12 @@ func TestExplainFactAt_OutgoingRefsPerVersion(t *testing.T) {
 		head: c2,
 	}
 
-	if _, err := idx.rebuildGraphHistory(git, testBranch, nil); err != nil {
+	if _, err := idx.rebuildGraphHistory(ctx, git, testBranch, nil); err != nil {
 		t.Fatal(err)
 	}
 
 	// ExplainFactAt v1: outgoing should be {a}.
-	res1, err := idx.ExplainFactAt(testBranch, pathSrc, c1)
+	res1, err := idx.ExplainFactAt(ctx, testBranch, pathSrc, c1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -409,7 +419,7 @@ func TestExplainFactAt_OutgoingRefsPerVersion(t *testing.T) {
 	}
 
 	// ExplainFactAt v2: outgoing should be {b}.
-	res2, err := idx.ExplainFactAt(testBranch, pathSrc, c2)
+	res2, err := idx.ExplainFactAt(ctx, testBranch, pathSrc, c2)
 	if err != nil {
 		t.Fatal(err)
 	}

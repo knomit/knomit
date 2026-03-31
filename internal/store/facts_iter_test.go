@@ -1,6 +1,7 @@
 package store_test
 
 import (
+	"context"
 	"testing"
 
 	"knomit/internal/store"
@@ -17,6 +18,7 @@ func openTestService(t *testing.T) *store.Service {
 }
 
 func insertFact(t *testing.T, svc *store.Service, path, blobHash, commitHash string) {
+	ctx := context.Background()
 	t.Helper()
 	// Insert a blob so Upsert can find it.
 	_, err := svc.TestDB().Exec(
@@ -26,7 +28,7 @@ func insertFact(t *testing.T, svc *store.Service, path, blobHash, commitHash str
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := svc.Index().Upsert(testBranch, commitHash, store.FactRecord{
+	if err := svc.Index().Upsert(ctx, testBranch, commitHash, store.FactRecord{
 		Path:       path,
 		Title:      "title",
 		BlobHash:   blobHash,
@@ -41,14 +43,15 @@ func insertFact(t *testing.T, svc *store.Service, path, blobHash, commitHash str
 }
 
 func TestFactsIter_EmptyDB(t *testing.T) {
+	ctx := context.Background()
 	svc := openTestService(t)
 
 	// Ensure the branch exists before iterating.
-	if _, err := svc.Index().EnsureBranch(testBranch, "refs/heads/"+testBranch); err != nil {
+	if _, err := svc.Index().EnsureBranch(ctx, testBranch, "refs/heads/"+testBranch); err != nil {
 		t.Fatal(err)
 	}
 
-	iter, err := store.NewFactsIter(svc.Index(), testBranch)
+	iter, err := store.NewFactsIter(ctx, svc.Index(), testBranch)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,13 +67,14 @@ func TestFactsIter_EmptyDB(t *testing.T) {
 }
 
 func TestFactsIter_ReturnsAllFacts(t *testing.T) {
+	ctx := context.Background()
 	svc := openTestService(t)
 
 	insertFact(t, svc, "a/one.md", "blob1", "commit1")
 	insertFact(t, svc, "b/two.md", "blob2", "commit2")
 	insertFact(t, svc, "c/three.md", "blob3", "commit3")
 
-	iter, err := store.NewFactsIter(svc.Index(), testBranch)
+	iter, err := store.NewFactsIter(ctx, svc.Index(), testBranch)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,6 +112,7 @@ func TestFactsIter_ReturnsAllFacts(t *testing.T) {
 }
 
 func TestFactsIter_DedupsByPath(t *testing.T) {
+	ctx := context.Background()
 	svc := openTestService(t)
 
 	// Insert initial version, then overwrite with newer version via Upsert.
@@ -120,7 +125,7 @@ func TestFactsIter_DedupsByPath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := svc.Index().Upsert(testBranch, "commit_new", store.FactRecord{
+	if err := svc.Index().Upsert(ctx, testBranch, "commit_new", store.FactRecord{
 		Path:       "a/one.md",
 		Title:      "title",
 		BlobHash:   "blob_new",
@@ -134,7 +139,7 @@ func TestFactsIter_DedupsByPath(t *testing.T) {
 	}
 	insertFact(t, svc, "b/two.md", "blob2", "commit2")
 
-	iter, err := store.NewFactsIter(svc.Index(), testBranch)
+	iter, err := store.NewFactsIter(ctx, svc.Index(), testBranch)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -169,13 +174,14 @@ func TestFactsIter_DedupsByPath(t *testing.T) {
 }
 
 func TestFactsIter_CloseIsIdempotent(t *testing.T) {
+	ctx := context.Background()
 	svc := openTestService(t)
 
-	if _, err := svc.Index().EnsureBranch(testBranch, "refs/heads/"+testBranch); err != nil {
+	if _, err := svc.Index().EnsureBranch(ctx, testBranch, "refs/heads/"+testBranch); err != nil {
 		t.Fatal(err)
 	}
 
-	iter, err := store.NewFactsIter(svc.Index(), testBranch)
+	iter, err := store.NewFactsIter(ctx, svc.Index(), testBranch)
 	if err != nil {
 		t.Fatal(err)
 	}

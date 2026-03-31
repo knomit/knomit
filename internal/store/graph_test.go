@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -104,13 +105,14 @@ func TestNewWithGraphQLite(t *testing.T) {
 }
 
 func TestGraphMergeFact(t *testing.T) {
+	ctx := context.Background()
 	idx, err := New(":memory:")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer idx.Close()
 
-	err = idx.graphSyncFact(FactRecord{
+	err = idx.graphSyncFact(ctx, FactRecord{
 		Path:     "kb/test/fact.md",
 		BlobHash: "bh_test",
 		Title:    "Test Fact",
@@ -133,6 +135,7 @@ func TestGraphMergeFact(t *testing.T) {
 }
 
 func TestGraphMergeFactWithApostrophe(t *testing.T) {
+	ctx := context.Background()
 	idx, err := New(":memory:")
 	if err != nil {
 		t.Fatal(err)
@@ -141,7 +144,7 @@ func TestGraphMergeFactWithApostrophe(t *testing.T) {
 
 	// Regression: apostrophe in title broke the outer SQL string in
 	// SELECT cypher('...'), producing: near "s": syntax error
-	err = idx.graphSyncFact(FactRecord{
+	err = idx.graphSyncFact(ctx, FactRecord{
 		Path:     "kb/people/dave/postgres-expert.md",
 		BlobHash: "bh_dave",
 		Title:    "Dave's Postgres expertise",
@@ -163,13 +166,14 @@ func TestGraphMergeFactWithApostrophe(t *testing.T) {
 }
 
 func TestGraphDomainHierarchy(t *testing.T) {
+	ctx := context.Background()
 	idx, err := New(":memory:")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer idx.Close()
 
-	err = idx.graphSyncFact(FactRecord{
+	err = idx.graphSyncFact(ctx, FactRecord{
 		Path:     "kb/test/fact.md",
 		BlobHash: "bh_dom",
 		Domain:   []string{"engineering/software/applications/web-server"},
@@ -206,6 +210,7 @@ func TestGraphDomainHierarchy(t *testing.T) {
 }
 
 func TestGraphDeleteFact(t *testing.T) {
+	ctx := context.Background()
 	idx, err := New(":memory:")
 	if err != nil {
 		t.Fatal(err)
@@ -213,13 +218,13 @@ func TestGraphDeleteFact(t *testing.T) {
 	defer idx.Close()
 
 	// Create then delete
-	_ = idx.graphSyncFact(FactRecord{
+	_ = idx.graphSyncFact(ctx, FactRecord{
 		Path:     "kb/test/fact.md",
 		BlobHash: "bh_del",
 		Domain:   []string{"eng"},
 		Entities: []string{"Go"},
 	})
-	err = idx.graphDeleteFact("kb/test/fact.md", "bh_del")
+	err = idx.graphDeleteFact(ctx, "kb/test/fact.md", "bh_del")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -237,6 +242,7 @@ func TestGraphDeleteFact(t *testing.T) {
 }
 
 func TestGraphBuildSimilarityEdges(t *testing.T) {
+	ctx := context.Background()
 	idx, err := New(":memory:")
 	if err != nil {
 		t.Fatal(err)
@@ -251,12 +257,12 @@ func TestGraphBuildSimilarityEdges(t *testing.T) {
 		{Path: "kb/b.md", Title: "B", BlobHash: "hash_beta", Domain: []string{"test"}, Entities: []string{}, Refs: []string{}},
 	}
 	for _, f := range facts {
-		if err := idx.Upsert(testBranch, "abc", f); err != nil {
+		if err := idx.Upsert(ctx, testBranch, "abc", f); err != nil {
 			t.Fatal(err)
 		}
 	}
 
-	err = idx.graphBuildSimilarityEdges("kb/a.md", "hash_alpha")
+	err = idx.graphBuildSimilarityEdges(ctx, "kb/a.md", "hash_alpha")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -320,6 +326,7 @@ func TestGraphQLiteCoexistence(t *testing.T) {
 }
 
 func TestUpsertSyncsGraph(t *testing.T) {
+	ctx := context.Background()
 	idx, err := New(":memory:")
 	if err != nil {
 		t.Fatal(err)
@@ -328,7 +335,7 @@ func TestUpsertSyncsGraph(t *testing.T) {
 	idx.SetEmbedder(&stubEmbedder768d{})
 	insertBlob(t, idx.db, "hash_test", "test content")
 
-	err = idx.Upsert(testBranch, "abc", FactRecord{
+	err = idx.Upsert(ctx, testBranch, "abc", FactRecord{
 		Path: "kb/eng/test.md", Title: "Test", BlobHash: "hash_test",
 		Domain: []string{"engineering/software"}, Entities: []string{"Go"},
 		Refs: []string{},
@@ -353,6 +360,7 @@ func TestUpsertSyncsGraph(t *testing.T) {
 }
 
 func TestDeleteSyncsGraph(t *testing.T) {
+	ctx := context.Background()
 	idx, err := New(":memory:")
 	if err != nil {
 		t.Fatal(err)
@@ -361,12 +369,12 @@ func TestDeleteSyncsGraph(t *testing.T) {
 	idx.SetEmbedder(&stubEmbedder768d{})
 	insertBlob(t, idx.db, "hash_del", "delete test")
 
-	_ = idx.Upsert(testBranch, "abc", FactRecord{
+	_ = idx.Upsert(ctx, testBranch, "abc", FactRecord{
 		Path: "kb/test.md", Title: "Test", BlobHash: "hash_del",
 		Domain: []string{"eng"}, Entities: []string{"Go"},
 		Refs: []string{},
 	})
-	err = idx.Delete(testBranch, "kb/test.md")
+	err = idx.Delete(ctx, testBranch, "kb/test.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -383,6 +391,7 @@ func TestDeleteSyncsGraph(t *testing.T) {
 }
 
 func TestClusterFactsLouvain(t *testing.T) {
+	ctx := context.Background()
 	idx, err := New(":memory:")
 	if err != nil {
 		t.Fatal(err)
@@ -400,12 +409,12 @@ func TestClusterFactsLouvain(t *testing.T) {
 		{Path: "kb/c.md", Title: "C", BlobHash: "hash_gamma", Domain: []string{"eng"}, Entities: []string{"Go"}, Refs: []string{}},
 	}
 	for _, f := range facts {
-		if err := idx.Upsert(testBranch, "abc", f); err != nil {
+		if err := idx.Upsert(ctx, testBranch, "abc", f); err != nil {
 			t.Fatal(err)
 		}
 	}
 
-	result, err := idx.ClusterFacts(testBranch, 1.0, 2)
+	result, err := idx.ClusterFacts(ctx, testBranch, 1.0, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -424,6 +433,7 @@ func TestClusterFactsLouvain(t *testing.T) {
 }
 
 func TestClusterFactsBranchScoped(t *testing.T) {
+	ctx := context.Background()
 	idx, err := New(":memory:")
 	if err != nil {
 		t.Fatal(err)
@@ -444,7 +454,7 @@ func TestClusterFactsBranchScoped(t *testing.T) {
 		{Path: "kb/a.md", Title: "A", BlobHash: "hash_a", Domain: []string{"eng"}, Entities: []string{"Go", "SQLite"}, Refs: []string{}},
 		{Path: "kb/b.md", Title: "B", BlobHash: "hash_b", Domain: []string{"eng"}, Entities: []string{"Go", "SQLite"}, Refs: []string{}},
 	} {
-		if err := idx.Upsert(branchA, "commit1", f); err != nil {
+		if err := idx.Upsert(ctx, branchA, "commit1", f); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -454,13 +464,13 @@ func TestClusterFactsBranchScoped(t *testing.T) {
 		{Path: "kb/c.md", Title: "C", BlobHash: "hash_c", Domain: []string{"eng"}, Entities: []string{"Go", "SQLite"}, Refs: []string{}},
 		{Path: "kb/d.md", Title: "D", BlobHash: "hash_d", Domain: []string{"eng"}, Entities: []string{"Go", "SQLite"}, Refs: []string{}},
 	} {
-		if err := idx.Upsert(branchB, "commit2", f); err != nil {
+		if err := idx.Upsert(ctx, branchB, "commit2", f); err != nil {
 			t.Fatal(err)
 		}
 	}
 
 	// ClusterFacts scoped to branchA should only return branchA facts.
-	result, err := idx.ClusterFacts(branchA, 1.0, 2)
+	result, err := idx.ClusterFacts(ctx, branchA, 1.0, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -486,6 +496,7 @@ func TestClusterFactsBranchScoped(t *testing.T) {
 }
 
 func TestSearchWithGraphExpansion(t *testing.T) {
+	ctx := context.Background()
 	idx, err := New(":memory:")
 	if err != nil {
 		t.Fatal(err)
@@ -495,18 +506,18 @@ func TestSearchWithGraphExpansion(t *testing.T) {
 	insertBlob(t, idx.db, "hash_alpha", "alpha")
 	insertBlob(t, idx.db, "hash_beta", "beta")
 
-	_ = idx.Upsert(testBranch, "abc", FactRecord{
+	_ = idx.Upsert(ctx, testBranch, "abc", FactRecord{
 		Path: "kb/a.md", Title: "A", BlobHash: "hash_alpha",
 		Domain: []string{"eng"}, Entities: []string{"Go"},
 		Refs: []string{},
 	})
-	_ = idx.Upsert(testBranch, "abc", FactRecord{
+	_ = idx.Upsert(ctx, testBranch, "abc", FactRecord{
 		Path: "kb/b.md", Title: "B", BlobHash: "hash_beta",
 		Domain: []string{"eng"}, Entities: []string{"Go"},
 		Refs: []string{},
 	})
 
-	results, err := idx.Search(testBranch, SearchQuery{
+	results, err := idx.Search(ctx, testBranch, SearchQuery{
 		Text:      "alpha",
 		GraphHops: 1,
 		Limit:     10,
@@ -527,6 +538,7 @@ func TestSearchWithGraphExpansion(t *testing.T) {
 }
 
 func TestGraphExpandSearch_MultiSeed(t *testing.T) {
+	ctx := context.Background()
 	idx, err := New(":memory:")
 	if err != nil {
 		t.Fatal(err)
@@ -548,16 +560,16 @@ func TestGraphExpandSearch_MultiSeed(t *testing.T) {
 		{Path: "kb/f3.md", Title: "F3", BlobHash: "hash_beta", Domain: []string{"eng"}, Entities: []string{}, Refs: []string{}},
 	}
 	for _, f := range facts {
-		if err := idx.Upsert(testBranch, "abc", f); err != nil {
+		if err := idx.Upsert(ctx, testBranch, "abc", f); err != nil {
 			t.Fatal(err)
 		}
 	}
 
 	// Build SIMILAR_TO edges so that kb/f1.md ↔ kb/f3.md are connected.
-	if err := idx.graphBuildSimilarityEdges("kb/f1.md", "hash_alpha"); err != nil {
+	if err := idx.graphBuildSimilarityEdges(ctx, "kb/f1.md", "hash_alpha"); err != nil {
 		t.Fatal(err)
 	}
-	if err := idx.graphBuildSimilarityEdges("kb/f3.md", "hash_beta"); err != nil {
+	if err := idx.graphBuildSimilarityEdges(ctx, "kb/f3.md", "hash_beta"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -565,11 +577,11 @@ func TestGraphExpandSearch_MultiSeed(t *testing.T) {
 		"kb/f1.md": 0.9,  // alpha — similar to beta (f3)
 		"kb/f2.md": 0.85, // gamma — dissimilar, no SIMILAR_TO neighbors
 	}
-	branchID, err := idx.branchID(testBranch)
+	branchID, err := idx.branchID(ctx, testBranch)
 	if err != nil {
 		t.Fatal(err)
 	}
-	expanded := idx.graphExpandSearch(branchID, seeds, 1)
+	expanded := idx.graphExpandSearch(ctx, branchID, seeds, 1)
 
 	// kb/f3.md should be discovered as a SIMILAR_TO neighbor of seed kb/f1.md
 	if _, ok := expanded["kb/f3.md"]; !ok {
@@ -585,6 +597,7 @@ func TestGraphExpandSearch_MultiSeed(t *testing.T) {
 }
 
 func TestGraphExpandSearch_BranchScoped(t *testing.T) {
+	ctx := context.Background()
 	idx, err := New(":memory:")
 	if err != nil {
 		t.Fatal(err)
@@ -599,7 +612,7 @@ func TestGraphExpandSearch_BranchScoped(t *testing.T) {
 	branchB := "agent/branch-b"
 
 	// Fact on branchA: shares entity "Go" with fact on branchB.
-	if err := idx.Upsert(branchA, "commit1", FactRecord{
+	if err := idx.Upsert(ctx, branchA, "commit1", FactRecord{
 		Path: "kb/a.md", Title: "A", BlobHash: "hash_alpha",
 		Domain: []string{"eng"}, Entities: []string{"Go"}, Refs: []string{},
 	}); err != nil {
@@ -607,20 +620,20 @@ func TestGraphExpandSearch_BranchScoped(t *testing.T) {
 	}
 
 	// Fact on branchB: shares entity "Go" — would be a graph neighbor of kb/a.md.
-	if err := idx.Upsert(branchB, "commit2", FactRecord{
+	if err := idx.Upsert(ctx, branchB, "commit2", FactRecord{
 		Path: "kb/b.md", Title: "B", BlobHash: "hash_beta",
 		Domain: []string{"eng"}, Entities: []string{"Go"}, Refs: []string{},
 	}); err != nil {
 		t.Fatal(err)
 	}
 
-	branchAID, err := idx.branchID(branchA)
+	branchAID, err := idx.branchID(ctx, branchA)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	seeds := map[string]float64{"kb/a.md": 0.9}
-	expanded := idx.graphExpandSearch(branchAID, seeds, 1)
+	expanded := idx.graphExpandSearch(ctx, branchAID, seeds, 1)
 
 	// kb/b.md is connected via shared entity "Go" but lives on branchB,
 	// so it must NOT appear when searching scoped to branchA.
@@ -698,6 +711,7 @@ func (m *mockGitReader) ListAllWithHash(branch string) ([]string, []string, erro
 // TestGraphPerVersionNodes verifies that Fact nodes are keyed by {path, blob_hash}:
 // two versions of the same path create separate graph nodes with independent edges.
 func TestGraphPerVersionNodes(t *testing.T) {
+	ctx := context.Background()
 	idx, err := New(":memory:")
 	if err != nil {
 		t.Fatal(err)
@@ -709,7 +723,7 @@ func TestGraphPerVersionNodes(t *testing.T) {
 	insertBlob(t, idx.db, "bh_v2", "beta")
 
 	// Upsert v1 with entity "Go".
-	if err := idx.Upsert(testBranch, "c1", FactRecord{
+	if err := idx.Upsert(ctx, testBranch, "c1", FactRecord{
 		Path: "kb/x.md", BlobHash: "bh_v1", Title: "V1",
 		Domain: []string{"eng"}, Entities: []string{"Go"}, Refs: []string{},
 	}); err != nil {
@@ -717,7 +731,7 @@ func TestGraphPerVersionNodes(t *testing.T) {
 	}
 
 	// Upsert v2 with entity "Rust" — same path, different blob_hash.
-	if err := idx.Upsert(testBranch, "c2", FactRecord{
+	if err := idx.Upsert(ctx, testBranch, "c2", FactRecord{
 		Path: "kb/x.md", BlobHash: "bh_v2", Title: "V2",
 		Domain: []string{"eng"}, Entities: []string{"Rust"}, Refs: []string{},
 	}); err != nil {
@@ -749,7 +763,7 @@ func TestGraphPerVersionNodes(t *testing.T) {
 	}
 
 	// GC should remove v1 (orphaned after v2 replaced it on the branch).
-	if err := idx.GC(); err != nil {
+	if err := idx.GC(ctx); err != nil {
 		t.Fatal(err)
 	}
 	idx.db.QueryRow(`SELECT count(*) FROM json_each(cypher('MATCH (f:Fact {path: "kb/x.md"}) RETURN f.path AS path'))`).Scan(&nodeCount)
@@ -762,6 +776,7 @@ func TestGraphPerVersionNodes(t *testing.T) {
 }
 
 func TestDerivedFromInvariant(t *testing.T) {
+	ctx := context.Background()
 	idx, err := New(":memory:")
 	if err != nil {
 		t.Fatal(err)
@@ -778,11 +793,11 @@ func TestDerivedFromInvariant(t *testing.T) {
 	}
 	// Upsert b and c first so the graph nodes exist.
 	for _, path := range []string{"kb/b.md", "kb/c.md"} {
-		if err := idx.Upsert(testBranch, "abc", FactRecord{Path: path, Title: path, Domain: []string{"test"}}); err != nil {
+		if err := idx.Upsert(ctx, testBranch, "abc", FactRecord{Path: path, Title: path, Domain: []string{"test"}}); err != nil {
 			t.Fatalf("upsert %s: %v", path, err)
 		}
 	}
-	if err := idx.Upsert(testBranch, "abc", rec); err != nil {
+	if err := idx.Upsert(ctx, testBranch, "abc", rec); err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
 
@@ -794,12 +809,12 @@ func TestDerivedFromInvariant(t *testing.T) {
 	}
 
 	// Re-upsert with changed refs: drop kb/c.md, add kb/d.md.
-	if err := idx.Upsert(testBranch, "abc", FactRecord{Path: "kb/d.md", Title: "D", Domain: []string{"test"}}); err != nil {
+	if err := idx.Upsert(ctx, testBranch, "abc", FactRecord{Path: "kb/d.md", Title: "D", Domain: []string{"test"}}); err != nil {
 		t.Fatalf("upsert d: %v", err)
 	}
 	rec.Refs = []string{"kb/b.md", "kb/d.md"}
 	rec.BlobHash = "bh_a_v2" // Different blob hash → new graph node (per-version)
-	if err := idx.Upsert(testBranch, "abc", rec); err != nil {
+	if err := idx.Upsert(ctx, testBranch, "abc", rec); err != nil {
 		t.Fatalf("re-upsert: %v", err)
 	}
 	// New version should have the new edges.
@@ -841,6 +856,7 @@ func derivedFromPaths(t *testing.T, idx *Index, src, blobHash string) map[string
 }
 
 func TestExplainFact(t *testing.T) {
+	ctx := context.Background()
 	idx, err := New(":memory:")
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -856,12 +872,12 @@ func TestExplainFact(t *testing.T) {
 		{Path: "kb/d.md", BlobHash: "bh_d", Title: "Fact D", Domain: []string{"test"}, Refs: []string{"kb/a.md"}},
 	}
 	for _, f := range facts {
-		if err := idx.Upsert(testBranch, "abc", f); err != nil {
+		if err := idx.Upsert(ctx, testBranch, "abc", f); err != nil {
 			t.Fatalf("upsert %s: %v", f.Path, err)
 		}
 	}
 
-	res, err := idx.ExplainFact(testBranch, "kb/a.md")
+	res, err := idx.ExplainFact(ctx, testBranch, "kb/a.md")
 	if err != nil {
 		t.Fatalf("ExplainFact: %v", err)
 	}
@@ -881,10 +897,10 @@ func TestExplainFact(t *testing.T) {
 	}
 
 	// Delete kb/c.md and re-explain: c should appear as deleted in outgoing.
-	if err := idx.Delete(testBranch, "kb/c.md"); err != nil {
+	if err := idx.Delete(ctx, testBranch, "kb/c.md"); err != nil {
 		t.Fatalf("delete c: %v", err)
 	}
-	res2, err := idx.ExplainFact(testBranch, "kb/a.md")
+	res2, err := idx.ExplainFact(ctx, testBranch, "kb/a.md")
 	if err != nil {
 		t.Fatalf("ExplainFact after delete: %v", err)
 	}
@@ -903,6 +919,7 @@ func TestExplainFact(t *testing.T) {
 // When a fact is indexed with a ref to a node that doesn't exist yet, GraphQLite
 // creates a self-loop (f)-[:DERIVED_FROM]->(f). ExplainFact must not expose it.
 func TestExplainFact_SelfLoopFiltered(t *testing.T) {
+	ctx := context.Background()
 	idx, err := New(":memory:")
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -910,7 +927,7 @@ func TestExplainFact_SelfLoopFiltered(t *testing.T) {
 	defer idx.Close()
 
 	// Index fact A with a ref to a non-existent target — causes a self-loop.
-	if err := idx.Upsert(testBranch, "abc", FactRecord{
+	if err := idx.Upsert(ctx, testBranch, "abc", FactRecord{
 		Path:       "kb/a.md",
 		BlobHash:   "bh_self",
 		Title:      "Fact A",
@@ -920,7 +937,7 @@ func TestExplainFact_SelfLoopFiltered(t *testing.T) {
 		t.Fatalf("upsert: %v", err)
 	}
 
-	res, err := idx.ExplainFact(testBranch, "kb/a.md")
+	res, err := idx.ExplainFact(ctx, testBranch, "kb/a.md")
 	if err != nil {
 		t.Fatalf("ExplainFact: %v", err)
 	}
@@ -937,6 +954,7 @@ func TestExplainFact_SelfLoopFiltered(t *testing.T) {
 }
 
 func TestSyncRebuildsGraph(t *testing.T) {
+	ctx := context.Background()
 	idx, err := New(":memory:")
 	if err != nil {
 		t.Fatal(err)
@@ -957,7 +975,7 @@ func TestSyncRebuildsGraph(t *testing.T) {
 		head: "abc123def456",
 	}
 
-	err = idx.Sync(git, "main")
+	err = idx.Sync(ctx, git, "main")
 	if err != nil {
 		t.Fatal(err)
 	}

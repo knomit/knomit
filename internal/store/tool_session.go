@@ -2,6 +2,7 @@
 package store
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"time"
@@ -29,7 +30,7 @@ type QueueItem struct {
 }
 
 // CreateToolSession creates a new tool session for the given tool, branch, and path prefix.
-func (idx *Index) CreateToolSession(tool, branch, pathPrefix string) (*ToolSession, error) {
+func (idx *Index) CreateToolSession(ctx context.Context, tool, branch, pathPrefix string) (*ToolSession, error) {
 	now := time.Now().UTC().Format(time.RFC3339)
 
 	s := &ToolSession{
@@ -43,7 +44,7 @@ func (idx *Index) CreateToolSession(tool, branch, pathPrefix string) (*ToolSessi
 		UpdatedAt:  now,
 	}
 
-	_, err := idx.db.Exec(
+	_, err := conn(ctx, idx.db).ExecContext(ctx,
 		`INSERT INTO tool_sessions(id, tool, branch, path_prefix, last_commit, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 		s.ID, s.Tool, s.Branch, s.PathPrefix, s.LastCommit, s.Status, s.CreatedAt, s.UpdatedAt,
 	)
@@ -54,9 +55,9 @@ func (idx *Index) CreateToolSession(tool, branch, pathPrefix string) (*ToolSessi
 }
 
 // GetToolSession returns the session with the given ID, or nil if not found.
-func (idx *Index) GetToolSession(id string) (*ToolSession, error) {
+func (idx *Index) GetToolSession(ctx context.Context, id string) (*ToolSession, error) {
 	var s ToolSession
-	err := idx.db.QueryRow(
+	err := conn(ctx, idx.db).QueryRowContext(ctx,
 		`SELECT id, tool, branch, path_prefix, last_commit, status, created_at, updated_at FROM tool_sessions WHERE id = ?`, id,
 	).Scan(&s.ID, &s.Tool, &s.Branch, &s.PathPrefix, &s.LastCommit, &s.Status, &s.CreatedAt, &s.UpdatedAt)
 	if err == sql.ErrNoRows {
@@ -69,9 +70,9 @@ func (idx *Index) GetToolSession(id string) (*ToolSession, error) {
 }
 
 // UpdateToolSession updates the last_commit, status, and updated_at for a session.
-func (idx *Index) UpdateToolSession(id, lastCommit, status string) error {
+func (idx *Index) UpdateToolSession(ctx context.Context, id, lastCommit, status string) error {
 	now := time.Now().UTC().Format(time.RFC3339)
-	_, err := idx.db.Exec(
+	_, err := conn(ctx, idx.db).ExecContext(ctx,
 		`UPDATE tool_sessions SET last_commit = ?, status = ?, updated_at = ? WHERE id = ?`,
 		lastCommit, status, now, id,
 	)
@@ -82,8 +83,8 @@ func (idx *Index) UpdateToolSession(id, lastCommit, status string) error {
 }
 
 // GetSeenPaths returns all seen paths for the given session as a set.
-func (idx *Index) GetSeenPaths(sessionID string) (map[string]bool, error) {
-	rows, err := idx.db.Query(
+func (idx *Index) GetSeenPaths(ctx context.Context, sessionID string) (map[string]bool, error) {
+	rows, err := conn(ctx, idx.db).QueryContext(ctx,
 		`SELECT path FROM tool_seen_paths WHERE session_id = ?`, sessionID,
 	)
 	if err != nil {
@@ -106,21 +107,21 @@ func (idx *Index) GetSeenPaths(sessionID string) (map[string]bool, error) {
 }
 
 // AddSeenPaths batch-inserts seen paths for a session, ignoring duplicates.
-func (idx *Index) AddSeenPaths(sessionID string, paths []string) error {
-	tx, err := idx.db.Begin()
+func (idx *Index) AddSeenPaths(ctx context.Context, sessionID string, paths []string) error {
+	tx, err := idx.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("AddSeenPaths begin: %w", err)
 	}
 	defer tx.Rollback()
 
-	stmt, err := tx.Prepare(`INSERT OR IGNORE INTO tool_seen_paths(session_id, path) VALUES (?, ?)`)
+	stmt, err := tx.PrepareContext(ctx, `INSERT OR IGNORE INTO tool_seen_paths(session_id, path) VALUES (?, ?)`)
 	if err != nil {
 		return fmt.Errorf("AddSeenPaths prepare: %w", err)
 	}
 	defer stmt.Close()
 
 	for _, p := range paths {
-		if _, err := stmt.Exec(sessionID, p); err != nil {
+		if _, err := stmt.ExecContext(ctx, sessionID, p); err != nil {
 			return fmt.Errorf("AddSeenPaths exec: %w", err)
 		}
 	}
@@ -133,8 +134,8 @@ func (idx *Index) AddSeenPaths(sessionID string, paths []string) error {
 
 // GCToolSessions deletes all but the most recent `keep` sessions for a given tool and branch.
 // Seen paths and queue items are cascaded via the foreign key constraint.
-func (idx *Index) GCToolSessions(tool, branch string, keep int) error {
-	_, err := idx.db.Exec(
+func (idx *Index) GCToolSessions(ctx context.Context, tool, branch string, keep int) error {
+	_, err := conn(ctx, idx.db).ExecContext(ctx,
 		`DELETE FROM tool_sessions
 		 WHERE tool = ? AND branch = ? AND id NOT IN (
 		     SELECT id FROM tool_sessions
@@ -151,21 +152,21 @@ func (idx *Index) GCToolSessions(tool, branch string, keep int) error {
 }
 
 // EnqueuePaths batch-inserts items into the tool_queue for a session, ignoring duplicates.
-func (idx *Index) EnqueuePaths(sessionID string, items []QueueItem) error {
-	tx, err := idx.db.Begin()
+func (idx *Index) EnqueuePaths(ctx context.Context, sessionID string, items []QueueItem) error {
+	tx, err := idx.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("EnqueuePaths begin: %w", err)
 	}
 	defer tx.Rollback()
 
-	stmt, err := tx.Prepare(`INSERT OR IGNORE INTO tool_queue(session_id, path, commit_hash, depth) VALUES (?, ?, ?, ?)`)
+	stmt, err := tx.PrepareContext(ctx, `INSERT OR IGNORE INTO tool_queue(session_id, path, commit_hash, depth) VALUES (?, ?, ?, ?)`)
 	if err != nil {
 		return fmt.Errorf("EnqueuePaths prepare: %w", err)
 	}
 	defer stmt.Close()
 
 	for _, item := range items {
-		if _, err := stmt.Exec(sessionID, item.Path, item.CommitHash, item.Depth); err != nil {
+		if _, err := stmt.ExecContext(ctx, sessionID, item.Path, item.CommitHash, item.Depth); err != nil {
 			return fmt.Errorf("EnqueuePaths exec: %w", err)
 		}
 	}
@@ -178,14 +179,14 @@ func (idx *Index) EnqueuePaths(sessionID string, items []QueueItem) error {
 
 // DequeuePaths atomically selects and deletes up to `limit` items from the queue,
 // ordered by depth ASC then rowid ASC (breadth-first).
-func (idx *Index) DequeuePaths(sessionID string, limit int) ([]QueueItem, error) {
-	tx, err := idx.db.Begin()
+func (idx *Index) DequeuePaths(ctx context.Context, sessionID string, limit int) ([]QueueItem, error) {
+	tx, err := idx.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, fmt.Errorf("DequeuePaths begin: %w", err)
 	}
 	defer tx.Rollback()
 
-	rows, err := tx.Query(
+	rows, err := tx.QueryContext(ctx,
 		`SELECT rowid, path, commit_hash, depth FROM tool_queue
 		 WHERE session_id = ?
 		 ORDER BY depth ASC, rowid ASC
@@ -215,7 +216,7 @@ func (idx *Index) DequeuePaths(sessionID string, limit int) ([]QueueItem, error)
 
 	// Delete the dequeued rows.
 	for _, rowID := range rowIDs {
-		if _, err := tx.Exec(`DELETE FROM tool_queue WHERE rowid = ?`, rowID); err != nil {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM tool_queue WHERE rowid = ?`, rowID); err != nil {
 			return nil, fmt.Errorf("DequeuePaths delete: %w", err)
 		}
 	}
@@ -227,9 +228,9 @@ func (idx *Index) DequeuePaths(sessionID string, limit int) ([]QueueItem, error)
 }
 
 // QueueSize returns the number of items in the queue for a session.
-func (idx *Index) QueueSize(sessionID string) (int, error) {
+func (idx *Index) QueueSize(ctx context.Context, sessionID string) (int, error) {
 	var count int
-	err := idx.db.QueryRow(
+	err := conn(ctx, idx.db).QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM tool_queue WHERE session_id = ?`, sessionID,
 	).Scan(&count)
 	if err != nil {

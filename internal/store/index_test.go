@@ -1,6 +1,7 @@
 package store_test
 
 import (
+	"context"
 	"database/sql"
 	"strings"
 	"sync"
@@ -15,8 +16,9 @@ const testBranch = "agent/test"
 
 // ensureTestBranch creates the test branch in the index if it doesn't exist.
 func ensureTestBranch(t *testing.T, idx *store.Index) {
+	ctx := context.Background()
 	t.Helper()
-	if _, err := idx.EnsureBranch(testBranch, "refs/heads/"+testBranch); err != nil {
+	if _, err := idx.EnsureBranch(ctx, testBranch, "refs/heads/"+testBranch); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -36,6 +38,7 @@ func insertTestBlob(t *testing.T, db *sql.DB, hash, content string) {
 }
 
 func TestUpsertAndGetByPath(t *testing.T) {
+	ctx := context.Background()
 	idx, err := store.New(":memory:")
 	if err != nil {
 		t.Fatal(err)
@@ -44,7 +47,7 @@ func TestUpsertAndGetByPath(t *testing.T) {
 
 	insertTestBlob(t, idx.TestDB(), "blob_foo", "This is about databases and postgres")
 
-	err = idx.Upsert(testBranch, "abc", store.FactRecord{
+	err = idx.Upsert(ctx, testBranch, "abc", store.FactRecord{
 		Path:       "kb/test/foo.md",
 		Title:      "Foo fact",
 		BlobHash:   "blob_foo",
@@ -57,7 +60,7 @@ func TestUpsertAndGetByPath(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	rec, err := idx.GetByPath(testBranch, "kb/test/foo.md")
+	rec, err := idx.GetByPath(ctx, testBranch, "kb/test/foo.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,6 +73,7 @@ func TestUpsertAndGetByPath(t *testing.T) {
 }
 
 func TestDelete(t *testing.T) {
+	ctx := context.Background()
 	idx, err := store.New(":memory:")
 	if err != nil {
 		t.Fatal(err)
@@ -88,11 +92,11 @@ func TestDelete(t *testing.T) {
 		Sources:    2,
 	}
 
-	if err := idx.Upsert(testBranch, "abc", rec); err != nil {
+	if err := idx.Upsert(ctx, testBranch, "abc", rec); err != nil {
 		t.Fatal(err)
 	}
 
-	got, err := idx.GetByPath(testBranch, "kb/test/bar.md")
+	got, err := idx.GetByPath(ctx, testBranch, "kb/test/bar.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,11 +104,11 @@ func TestDelete(t *testing.T) {
 		t.Fatal("expected result before delete")
 	}
 
-	if err := idx.Delete(testBranch, "kb/test/bar.md"); err != nil {
+	if err := idx.Delete(ctx, testBranch, "kb/test/bar.md"); err != nil {
 		t.Fatal(err)
 	}
 
-	got, err = idx.GetByPath(testBranch, "kb/test/bar.md")
+	got, err = idx.GetByPath(ctx, testBranch, "kb/test/bar.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,6 +118,7 @@ func TestDelete(t *testing.T) {
 }
 
 func TestGetByPath(t *testing.T) {
+	ctx := context.Background()
 	idx, err := store.New(":memory:")
 	if err != nil {
 		t.Fatal(err)
@@ -122,7 +127,7 @@ func TestGetByPath(t *testing.T) {
 	ensureTestBranch(t, idx)
 
 	// Not found case
-	rec, err := idx.GetByPath(testBranch, "nonexistent.md")
+	rec, err := idx.GetByPath(ctx, testBranch, "nonexistent.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,11 +148,11 @@ func TestGetByPath(t *testing.T) {
 		Sources:    3,
 	}
 
-	if err := idx.Upsert(testBranch, "abc", original); err != nil {
+	if err := idx.Upsert(ctx, testBranch, "abc", original); err != nil {
 		t.Fatal(err)
 	}
 
-	got, err := idx.GetByPath(testBranch, "kb/test/baz.md")
+	got, err := idx.GetByPath(ctx, testBranch, "kb/test/baz.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -163,6 +168,7 @@ func TestGetByPath(t *testing.T) {
 }
 
 func TestUpsertOverwrite(t *testing.T) {
+	ctx := context.Background()
 	idx, err := store.New(":memory:")
 	if err != nil {
 		t.Fatal(err)
@@ -183,7 +189,7 @@ func TestUpsertOverwrite(t *testing.T) {
 		
 	}
 
-	if err := idx.Upsert(testBranch, "abc", rec); err != nil {
+	if err := idx.Upsert(ctx, testBranch, "abc", rec); err != nil {
 		t.Fatal(err)
 	}
 
@@ -192,11 +198,11 @@ func TestUpsertOverwrite(t *testing.T) {
 	rec.BlobHash = "blob_v2"
 	rec.Entities = []string{"postgresql"}
 
-	if err := idx.Upsert(testBranch, "v2", rec); err != nil {
+	if err := idx.Upsert(ctx, testBranch, "v2", rec); err != nil {
 		t.Fatal(err)
 	}
 
-	got, err := idx.GetByPath(testBranch, "kb/test/overwrite.md")
+	got, err := idx.GetByPath(ctx, testBranch, "kb/test/overwrite.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -212,13 +218,14 @@ func TestUpsertOverwrite(t *testing.T) {
 }
 
 func TestCompletions(t *testing.T) {
+	ctx := context.Background()
 	idx, err := store.New(":memory:")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer idx.Close()
 
-	_ = idx.Upsert(testBranch, "abc", store.FactRecord{
+	_ = idx.Upsert(ctx, testBranch, "abc", store.FactRecord{
 		Path: "kb/test.md", Title: "Test", BlobHash: "bh1",
 		Type: "concept", Domain: []string{"go", "concurrency"},
 		Entities: []string{"goroutine", "channel"}, Confidence: 0.9, Sources: 1,
@@ -238,7 +245,7 @@ func TestCompletions(t *testing.T) {
 		{"path", "kb", 1},
 	}
 	for _, tt := range tests {
-		vals, err := idx.Completions(testBranch, tt.category, tt.prefix, 20)
+		vals, err := idx.Completions(ctx, testBranch, tt.category, tt.prefix, 20)
 		if err != nil {
 			t.Errorf("Completions(%q, %q): %v", tt.category, tt.prefix, err)
 		}
@@ -249,6 +256,7 @@ func TestCompletions(t *testing.T) {
 }
 
 func TestLastCommit(t *testing.T) {
+	ctx := context.Background()
 	idx, err := store.New(":memory:")
 	if err != nil {
 		t.Fatal(err)
@@ -256,7 +264,7 @@ func TestLastCommit(t *testing.T) {
 	defer idx.Close()
 
 	// Should be empty initially
-	hash, err := idx.GetLastCommit("main")
+	hash, err := idx.GetLastCommit(ctx, "main")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -265,11 +273,11 @@ func TestLastCommit(t *testing.T) {
 	}
 
 	// Set and retrieve
-	if err := idx.SetLastCommit("main", "abc123"); err != nil {
+	if err := idx.SetLastCommit(ctx, "main", "abc123"); err != nil {
 		t.Fatal(err)
 	}
 
-	hash, err = idx.GetLastCommit("main")
+	hash, err = idx.GetLastCommit(ctx, "main")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -278,11 +286,11 @@ func TestLastCommit(t *testing.T) {
 	}
 
 	// Overwrite
-	if err := idx.SetLastCommit("main", "def456"); err != nil {
+	if err := idx.SetLastCommit(ctx, "main", "def456"); err != nil {
 		t.Fatal(err)
 	}
 
-	hash, err = idx.GetLastCommit("main")
+	hash, err = idx.GetLastCommit(ctx, "main")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -292,6 +300,7 @@ func TestLastCommit(t *testing.T) {
 }
 
 func TestIncrementalSync(t *testing.T) {
+	ctx := context.Background()
 	// Use unified store.Service so git objects and index share one DB.
 	dir := t.TempDir()
 	svc, err := store.Open(dir + "/test.db")
@@ -318,12 +327,12 @@ func TestIncrementalSync(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := idx.Sync(gitStore, testBranch); err != nil {
+	if err := idx.Sync(ctx, gitStore, testBranch); err != nil {
 		t.Fatalf("Sync (full rebuild) failed: %v", err)
 	}
 
 	// Both facts should now be retrievable.
-	rec, err := idx.GetByPath(testBranch, "kb/postgres-mvcc.md")
+	rec, err := idx.GetByPath(ctx, testBranch, "kb/postgres-mvcc.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -331,7 +340,7 @@ func TestIncrementalSync(t *testing.T) {
 		t.Fatal("expected postgres fact after full sync")
 	}
 
-	rec, err = idx.GetByPath(testBranch, "kb/redis-persistence.md")
+	rec, err = idx.GetByPath(ctx, testBranch, "kb/redis-persistence.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -344,7 +353,7 @@ func TestIncrementalSync(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	last, err := idx.GetLastCommit(testBranch)
+	last, err := idx.GetLastCommit(ctx, testBranch)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -359,12 +368,12 @@ func TestIncrementalSync(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := idx.Sync(gitStore, testBranch); err != nil {
+	if err := idx.Sync(ctx, gitStore, testBranch); err != nil {
 		t.Fatalf("Sync (incremental) failed: %v", err)
 	}
 
 	// New fact should be retrievable.
-	rec, err = idx.GetByPath(testBranch, "kb/kafka-partitions.md")
+	rec, err = idx.GetByPath(ctx, testBranch, "kb/kafka-partitions.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -373,7 +382,7 @@ func TestIncrementalSync(t *testing.T) {
 	}
 
 	// Previously indexed facts should still be present.
-	rec, err = idx.GetByPath(testBranch, "kb/postgres-mvcc.md")
+	rec, err = idx.GetByPath(ctx, testBranch, "kb/postgres-mvcc.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -387,11 +396,11 @@ func TestIncrementalSync(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := idx.Sync(gitStore, testBranch); err != nil {
+	if err := idx.Sync(ctx, gitStore, testBranch); err != nil {
 		t.Fatalf("Sync (delete) failed: %v", err)
 	}
 
-	rec, err = idx.GetByPath(testBranch, "kb/redis-persistence.md")
+	rec, err = idx.GetByPath(ctx, testBranch, "kb/redis-persistence.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -404,10 +413,10 @@ func TestIncrementalSync(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := idx.Sync(gitStore, testBranch); err != nil {
+	if err := idx.Sync(ctx, gitStore, testBranch); err != nil {
 		t.Fatalf("Sync (no-op) failed: %v", err)
 	}
-	lastAfter, err := idx.GetLastCommit(testBranch)
+	lastAfter, err := idx.GetLastCommit(ctx, testBranch)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -419,6 +428,7 @@ func TestIncrementalSync(t *testing.T) {
 // Regression test: commit_hash in the index should be the commit that last
 // touched the file, not the HEAD commit at sync time.
 func TestSyncCommitHashIsLastTouch(t *testing.T) {
+	ctx := context.Background()
 	dir := t.TempDir()
 	svc, err := store.Open(dir + "/test.db")
 	if err != nil {
@@ -457,11 +467,11 @@ func TestSyncCommitHashIsLastTouch(t *testing.T) {
 	}
 
 	// Full rebuild sync.
-	if err := idx.Sync(gitStore, testBranch); err != nil {
+	if err := idx.Sync(ctx, gitStore, testBranch); err != nil {
 		t.Fatal(err)
 	}
 
-	recA, err := idx.GetByPath(testBranch, "kb/a.md")
+	recA, err := idx.GetByPath(ctx, testBranch, "kb/a.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -476,7 +486,7 @@ func TestSyncCommitHashIsLastTouch(t *testing.T) {
 	}
 
 	// Now modify only fact A — after incremental sync, B should keep its original commit.
-	recB, err := idx.GetByPath(testBranch, "kb/b.md")
+	recB, err := idx.GetByPath(ctx, testBranch, "kb/b.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -488,16 +498,16 @@ func TestSyncCommitHashIsLastTouch(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := idx.Sync(gitStore, testBranch); err != nil {
+	if err := idx.Sync(ctx, gitStore, testBranch); err != nil {
 		t.Fatal(err)
 	}
 
-	recA, _ = idx.GetByPath(testBranch, "kb/a.md")
+	recA, _ = idx.GetByPath(ctx, testBranch, "kb/a.md")
 	if recA.CommitHash != commitA2 {
 		t.Fatalf("after update, fact A commit_hash = %q, want %q", recA.CommitHash, commitA2)
 	}
 
-	recB, _ = idx.GetByPath(testBranch, "kb/b.md")
+	recB, _ = idx.GetByPath(ctx, testBranch, "kb/b.md")
 	if recB.CommitHash != commitBBefore {
 		t.Fatalf("fact B commit_hash changed to %q after unrelated sync, want %q", recB.CommitHash, commitBBefore)
 	}
@@ -522,6 +532,7 @@ func TestVec0Available(t *testing.T) {
 }
 
 func TestGetEmbedding(t *testing.T) {
+	ctx := context.Background()
 	idx, err := store.New(":memory:")
 	if err != nil {
 		t.Fatal(err)
@@ -530,7 +541,7 @@ func TestGetEmbedding(t *testing.T) {
 	ensureTestBranch(t, idx)
 
 	// Should return nil, nil for nonexistent path.
-	vec, err := idx.GetEmbedding(testBranch, "nonexistent.md")
+	vec, err := idx.GetEmbedding(ctx, testBranch, "nonexistent.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -561,11 +572,11 @@ func TestGetEmbedding(t *testing.T) {
 		Confidence: 1.0,
 		Sources:    1,
 	}
-	if err := idx.Upsert(testBranch, "abc", rec); err != nil {
+	if err := idx.Upsert(ctx, testBranch, "abc", rec); err != nil {
 		t.Fatalf("Upsert: %v", err)
 	}
 
-	got, err := idx.GetEmbedding(testBranch, "kb/test/emb.md")
+	got, err := idx.GetEmbedding(ctx, testBranch, "kb/test/emb.md")
 	if err != nil {
 		t.Fatalf("GetEmbedding: %v", err)
 	}
@@ -582,6 +593,7 @@ func TestGetEmbedding(t *testing.T) {
 // ── Search tests ──────────────────────────────────────────────────────────────
 
 func TestSearchFilter(t *testing.T) {
+	ctx := context.Background()
 	idx, err := store.New(":memory:")
 	if err != nil {
 		t.Fatal(err)
@@ -591,14 +603,14 @@ func TestSearchFilter(t *testing.T) {
 	insertTestBlob(t, idx.TestDB(), "blob_a", "postgres database replication")
 	insertTestBlob(t, idx.TestDB(), "blob_b", "redis cache cluster")
 
-	if err := idx.Upsert(testBranch, "abc", store.FactRecord{
+	if err := idx.Upsert(ctx, testBranch, "abc", store.FactRecord{
 		Path: "kb/a.md", Title: "Alpha", BlobHash: "blob_a",
 		Domain: []string{"databases"}, Entities: []string{"postgres"},
 		Confidence: 0.9, Sources: 1,
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := idx.Upsert(testBranch, "abc", store.FactRecord{
+	if err := idx.Upsert(ctx, testBranch, "abc", store.FactRecord{
 		Path: "kb/b.md", Title: "Beta", BlobHash: "blob_b",
 		Domain: []string{"infra"}, Entities: []string{"redis"},
 		Confidence: 0.8, Sources: 1,
@@ -607,7 +619,7 @@ func TestSearchFilter(t *testing.T) {
 	}
 
 	// Text-less search filtered by domain should return only the matching fact.
-	results, err := idx.Search(testBranch, store.SearchQuery{Domain: []string{"databases"}, Limit: 10})
+	results, err := idx.Search(ctx, testBranch, store.SearchQuery{Domain: []string{"databases"}, Limit: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -619,7 +631,7 @@ func TestSearchFilter(t *testing.T) {
 	}
 
 	// Text-less search filtered by entity.
-	results, err = idx.Search(testBranch, store.SearchQuery{Entities: []string{"redis"}, Limit: 10})
+	results, err = idx.Search(ctx, testBranch, store.SearchQuery{Entities: []string{"redis"}, Limit: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -631,7 +643,7 @@ func TestSearchFilter(t *testing.T) {
 	}
 
 	// Path filter should return only the fact whose path starts with "kb/a".
-	results, err = idx.Search(testBranch, store.SearchQuery{Path: "kb/a", Limit: 10})
+	results, err = idx.Search(ctx, testBranch, store.SearchQuery{Path: "kb/a", Limit: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -643,7 +655,7 @@ func TestSearchFilter(t *testing.T) {
 	}
 
 	// MinConfidence filter should drop low-confidence records.
-	results, err = idx.Search(testBranch, store.SearchQuery{MinConfidence: 0.85, Limit: 10})
+	results, err = idx.Search(ctx, testBranch, store.SearchQuery{MinConfidence: 0.85, Limit: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -656,6 +668,7 @@ func TestSearchFilter(t *testing.T) {
 }
 
 func TestSearchHybrid(t *testing.T) {
+	ctx := context.Background()
 	idx, err := store.New(":memory:")
 	if err != nil {
 		t.Fatal(err)
@@ -685,14 +698,14 @@ func TestSearchHybrid(t *testing.T) {
 	insertTestBlob(t, idx.TestDB(), "blob_ha", "postgres database replication")
 	insertTestBlob(t, idx.TestDB(), "blob_hb", "postgres cache storage")
 
-	if err := idx.Upsert(testBranch, "abc", store.FactRecord{
+	if err := idx.Upsert(ctx, testBranch, "abc", store.FactRecord{
 		Path: "kb/a.md", Title: "Alpha", BlobHash: "blob_ha",
 		Domain: []string{"databases"}, Entities: []string{"postgres"},
 		Confidence: 0.9, Sources: 1,
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := idx.Upsert(testBranch, "abc", store.FactRecord{
+	if err := idx.Upsert(ctx, testBranch, "abc", store.FactRecord{
 		Path: "kb/b.md", Title: "Beta", BlobHash: "blob_hb",
 		Domain: []string{"infra"}, Entities: []string{"postgres"},
 		Confidence: 0.8, Sources: 1,
@@ -700,7 +713,7 @@ func TestSearchHybrid(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	results, err := idx.Search(testBranch, store.SearchQuery{Text: "postgres", Limit: 10})
+	results, err := idx.Search(ctx, testBranch, store.SearchQuery{Text: "postgres", Limit: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -725,6 +738,7 @@ func TestSearchHybrid(t *testing.T) {
 }
 
 func TestDeleteReferentialIntegrity(t *testing.T) {
+	ctx := context.Background()
 	idx, err := store.New(":memory:")
 	if err != nil {
 		t.Fatal(err)
@@ -743,12 +757,12 @@ func TestDeleteReferentialIntegrity(t *testing.T) {
 		Domain: []string{"test"}, Entities: []string{},
 		Confidence: 1.0, Sources: 1,
 	}
-	if err := idx.Upsert(testBranch, "abc", rec); err != nil {
+	if err := idx.Upsert(ctx, testBranch, "abc", rec); err != nil {
 		t.Fatal(err)
 	}
 
 	// Verify embedding exists.
-	vec, err := idx.GetEmbedding(testBranch, "kb/test/ri.md")
+	vec, err := idx.GetEmbedding(ctx, testBranch, "kb/test/ri.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -757,12 +771,12 @@ func TestDeleteReferentialIntegrity(t *testing.T) {
 	}
 
 	// Delete the fact.
-	if err := idx.Delete(testBranch, "kb/test/ri.md"); err != nil {
+	if err := idx.Delete(ctx, testBranch, "kb/test/ri.md"); err != nil {
 		t.Fatal(err)
 	}
 
 	// Embedding must be gone.
-	vec, err = idx.GetEmbedding(testBranch, "kb/test/ri.md")
+	vec, err = idx.GetEmbedding(ctx, testBranch, "kb/test/ri.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -786,6 +800,7 @@ func TestDeleteReferentialIntegrity(t *testing.T) {
 // embedder that assigns orthogonal vectors to each fact, allowing controlled
 // cosine similarity testing.
 func setupSimilarityIndex(t *testing.T) (*store.Index, *gomock.Controller) {
+	ctx := context.Background()
 	t.Helper()
 	idx, err := store.New(":memory:")
 	if err != nil {
@@ -826,7 +841,7 @@ func setupSimilarityIndex(t *testing.T) (*store.Index, *gomock.Controller) {
 			Domain: []string{"engineering"}, Entities: []string{"alice"}, Confidence: 0.9, Sources: 2, },
 	}
 	for _, f := range facts {
-		if err := idx.Upsert(testBranch, "abc", f); err != nil {
+		if err := idx.Upsert(ctx, testBranch, "abc", f); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -835,11 +850,12 @@ func setupSimilarityIndex(t *testing.T) (*store.Index, *gomock.Controller) {
 }
 
 func TestSearchSimilarityRanking(t *testing.T) {
+	ctx := context.Background()
 	idx, ctrl := setupSimilarityIndex(t)
 	defer idx.Close()
 	defer ctrl.Finish()
 
-	results, err := idx.Search(testBranch, store.SearchQuery{Text: "who likes tea", Limit: 10})
+	results, err := idx.Search(ctx, testBranch, store.SearchQuery{Text: "who likes tea", Limit: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -852,11 +868,12 @@ func TestSearchSimilarityRanking(t *testing.T) {
 }
 
 func TestSearchSimilarityScoreIsAbsolute(t *testing.T) {
+	ctx := context.Background()
 	idx, ctrl := setupSimilarityIndex(t)
 	defer idx.Close()
 	defer ctrl.Finish()
 
-	results, err := idx.Search(testBranch, store.SearchQuery{Text: "who likes tea", Limit: 10})
+	results, err := idx.Search(ctx, testBranch, store.SearchQuery{Text: "who likes tea", Limit: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -877,20 +894,21 @@ func TestSearchSimilarityScoreIsAbsolute(t *testing.T) {
 }
 
 func TestSearchMinSimilarityThreshold(t *testing.T) {
+	ctx := context.Background()
 	idx, ctrl := setupSimilarityIndex(t)
 	defer idx.Close()
 	defer ctrl.Finish()
 
 	// Default threshold (0.40): "who likes guns" has weak cosine to all facts.
 	// Vector [0.3,0.3,0.3,0.1] vs [1,0,0,0] = cosine ~0.53 — above default 0.40.
-	results, err := idx.Search(testBranch, store.SearchQuery{Text: "who likes guns", Limit: 10})
+	results, err := idx.Search(ctx, testBranch, store.SearchQuery{Text: "who likes guns", Limit: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defaultCount := len(results)
 
 	// High threshold should return fewer or no results.
-	results, err = idx.Search(testBranch, store.SearchQuery{Text: "who likes guns", MinSimilarity: 0.90, Limit: 10})
+	results, err = idx.Search(ctx, testBranch, store.SearchQuery{Text: "who likes guns", MinSimilarity: 0.90, Limit: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -899,7 +917,7 @@ func TestSearchMinSimilarityThreshold(t *testing.T) {
 	}
 
 	// Very low threshold should return more results.
-	results, err = idx.Search(testBranch, store.SearchQuery{Text: "who likes guns", MinSimilarity: 0.01, Limit: 10})
+	results, err = idx.Search(ctx, testBranch, store.SearchQuery{Text: "who likes guns", MinSimilarity: 0.01, Limit: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -909,6 +927,7 @@ func TestSearchMinSimilarityThreshold(t *testing.T) {
 }
 
 func TestSearchVecOnlyNoEmbedder(t *testing.T) {
+	ctx := context.Background()
 	idx, err := store.New(":memory:")
 	if err != nil {
 		t.Fatal(err)
@@ -918,7 +937,7 @@ func TestSearchVecOnlyNoEmbedder(t *testing.T) {
 	insertTestBlob(t, idx.TestDB(), "blob_tea_ne", "tea drinking habits")
 
 	// Insert a fact without embedder.
-	if err := idx.Upsert(testBranch, "abc", store.FactRecord{
+	if err := idx.Upsert(ctx, testBranch, "abc", store.FactRecord{
 		Path: "kb/a.md", Title: "Tea Lover", BlobHash: "blob_tea_ne",
 		Domain: []string{"pref"}, Entities: []string{}, Confidence: 0.9, Sources: 1,
 	}); err != nil {
@@ -926,7 +945,7 @@ func TestSearchVecOnlyNoEmbedder(t *testing.T) {
 	}
 
 	// Without embedder: text search returns nil (no vec hits).
-	results, err := idx.Search(testBranch, store.SearchQuery{Text: "tea", Limit: 10})
+	results, err := idx.Search(ctx, testBranch, store.SearchQuery{Text: "tea", Limit: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -936,6 +955,7 @@ func TestSearchVecOnlyNoEmbedder(t *testing.T) {
 }
 
 func TestSearchVecScoringBoost(t *testing.T) {
+	ctx := context.Background()
 	idx, err := store.New(":memory:")
 	if err != nil {
 		t.Fatal(err)
@@ -963,20 +983,20 @@ func TestSearchVecScoringBoost(t *testing.T) {
 	insertTestBlob(t, idx.TestDB(), "blob_brew", "tea brewing techniques")
 	insertTestBlob(t, idx.TestDB(), "blob_garden", "tea garden cultivation")
 
-	if err := idx.Upsert(testBranch, "abc", store.FactRecord{
+	if err := idx.Upsert(ctx, testBranch, "abc", store.FactRecord{
 		Path: "kb/a.md", Title: "Brewing", BlobHash: "blob_brew",
 		Domain: []string{"food"}, Entities: []string{}, Confidence: 0.9, Sources: 1,
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := idx.Upsert(testBranch, "abc", store.FactRecord{
+	if err := idx.Upsert(ctx, testBranch, "abc", store.FactRecord{
 		Path: "kb/b.md", Title: "Garden", BlobHash: "blob_garden",
 		Domain: []string{"food"}, Entities: []string{}, Confidence: 0.9, Sources: 1,
 	}); err != nil {
 		t.Fatal(err)
 	}
 
-	results, err := idx.Search(testBranch, store.SearchQuery{Text: "tea", Limit: 10})
+	results, err := idx.Search(ctx, testBranch, store.SearchQuery{Text: "tea", Limit: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -998,6 +1018,7 @@ func TestSearchVecScoringBoost(t *testing.T) {
 // ── Stats tests ───────────────────────────────────────────────────────────────
 
 func TestStats_Empty(t *testing.T) {
+	ctx := context.Background()
 	idx, err := store.New(":memory:")
 	if err != nil {
 		t.Fatal(err)
@@ -1005,7 +1026,7 @@ func TestStats_Empty(t *testing.T) {
 	defer idx.Close()
 	ensureTestBranch(t, idx)
 
-	res, err := idx.Stats(testBranch, "")
+	res, err := idx.Stats(ctx, testBranch, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1018,6 +1039,7 @@ func TestStats_Empty(t *testing.T) {
 }
 
 func TestStats_Aggregate(t *testing.T) {
+	ctx := context.Background()
 	idx, err := store.New(":memory:")
 	if err != nil {
 		t.Fatal(err)
@@ -1034,13 +1056,13 @@ func TestStats_Aggregate(t *testing.T) {
 		{Path: "other/c.md", Title: "C", BlobHash: "b3", Domain: []string{"infra"}, Entities: []string{"k8s"}, Confidence: 1.0, Sources: 1},
 	}
 	for _, f := range facts {
-		if err := idx.Upsert(testBranch, "abc", f); err != nil {
+		if err := idx.Upsert(ctx, testBranch, "abc", f); err != nil {
 			t.Fatal(err)
 		}
 	}
 
 	// All facts (no prefix filter).
-	res, err := idx.Stats(testBranch, "")
+	res, err := idx.Stats(ctx, testBranch, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1058,7 +1080,7 @@ func TestStats_Aggregate(t *testing.T) {
 	}
 
 	// Prefix-filtered: only kb/ facts.
-	res, err = idx.Stats(testBranch, "kb/")
+	res, err = idx.Stats(ctx, testBranch, "kb/")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1075,6 +1097,7 @@ func TestStats_Aggregate(t *testing.T) {
 }
 
 func TestStats_NullDomainAndEntities(t *testing.T) {
+	ctx := context.Background()
 	idx, err := store.New(":memory:")
 	if err != nil {
 		t.Fatal(err)
@@ -1084,7 +1107,7 @@ func TestStats_NullDomainAndEntities(t *testing.T) {
 	insertTestBlob(t, idx.TestDB(), "b1", "body1")
 
 	// Insert a fact with nil domain and entities (simulates missing frontmatter fields).
-	if err := idx.Upsert(testBranch, "abc", store.FactRecord{
+	if err := idx.Upsert(ctx, testBranch, "abc", store.FactRecord{
 		Path: "kb/bare.md", Title: "Bare", BlobHash: "b1",
 		Domain: nil, Entities: nil,
 		Confidence: 0.5, Sources: 1,
@@ -1092,7 +1115,7 @@ func TestStats_NullDomainAndEntities(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	res, err := idx.Stats(testBranch, "")
+	res, err := idx.Stats(ctx, testBranch, "")
 	if err != nil {
 		t.Fatalf("Stats with NULL domain/entities should not error: %v", err)
 	}

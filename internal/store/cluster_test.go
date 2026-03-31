@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"fmt"
 	"testing"
 )
@@ -8,6 +9,7 @@ import (
 // TestClusterFacts_SharedEntities verifies that facts sharing the same entities
 // are more likely to cluster together than facts with disjoint entities.
 func TestClusterFacts_SharedEntities(t *testing.T) {
+	ctx := context.Background()
 	branch := "agent/cluster-entities"
 	idx, gs := openGraphTestStore(t, branch)
 
@@ -23,7 +25,7 @@ func TestClusterFacts_SharedEntities(t *testing.T) {
 	writeAndSync(t, idx, gs, branch, "kb/py2.md",
 		makeFact("Scikit Pipeline", []string{"eng"}, []string{"Python", "ML"}))
 
-	result, err := idx.ClusterFacts(branch, 1.0, 2)
+	result, err := idx.ClusterFacts(ctx, branch, 1.0, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,6 +49,7 @@ func TestClusterFacts_SharedEntities(t *testing.T) {
 // cluster together. Uses shared entities within each domain group to strengthen
 // the clustering signal (domains alone may be weaker than OntologyNode edges).
 func TestClusterFacts_SharedDomains(t *testing.T) {
+	ctx := context.Background()
 	branch := "agent/cluster-domains"
 	idx, gs := openGraphTestStore(t, branch)
 
@@ -62,7 +65,7 @@ func TestClusterFacts_SharedDomains(t *testing.T) {
 	writeAndSync(t, idx, gs, branch, "kb/sci2.md",
 		makeFact("Particle Model", []string{"science/physics"}, []string{"Physics"}))
 
-	result, err := idx.ClusterFacts(branch, 1.0, 2)
+	result, err := idx.ClusterFacts(ctx, branch, 1.0, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,6 +78,7 @@ func TestClusterFacts_SharedDomains(t *testing.T) {
 // TestClusterFacts_SemanticSimilarity verifies that facts cluster via SIMILAR_TO
 // edges when they have similar embeddings but no shared entities or domains.
 func TestClusterFacts_SemanticSimilarity(t *testing.T) {
+	ctx := context.Background()
 	branch := "agent/cluster-semantic"
 	idx, gs := openGraphTestStore(t, branch)
 	idx.SetEmbedder(&stubEmbedder768d{})
@@ -92,12 +96,12 @@ func TestClusterFacts_SemanticSimilarity(t *testing.T) {
 	// Build SIMILAR_TO edges.
 	for _, path := range []string{"kb/alpha.md", "kb/beta.md", "kb/gamma.md"} {
 		bh := blobHash(t, idx, branch, path)
-		if err := idx.graphBuildSimilarityEdges(path, bh); err != nil {
+		if err := idx.graphBuildSimilarityEdges(ctx, path, bh); err != nil {
 			t.Fatalf("build similarity for %s: %v", path, err)
 		}
 	}
 
-	result, err := idx.ClusterFacts(branch, 1.0, 2)
+	result, err := idx.ClusterFacts(ctx, branch, 1.0, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,6 +113,7 @@ func TestClusterFacts_SemanticSimilarity(t *testing.T) {
 // TestClusterFacts_NoiseClassification verifies that isolated facts with no
 // graph connections to others go to noise when minCommunitySize > 1.
 func TestClusterFacts_NoiseClassification(t *testing.T) {
+	ctx := context.Background()
 	branch := "agent/cluster-noise"
 	idx, gs := openGraphTestStore(t, branch)
 
@@ -119,7 +124,7 @@ func TestClusterFacts_NoiseClassification(t *testing.T) {
 		makeFact("Pair 2", []string{"eng"}, []string{"SharedEntity"}))
 
 	// With minCommunitySize=2: the pair should be a cluster.
-	result, err := idx.ClusterFacts(branch, 1.0, 2)
+	result, err := idx.ClusterFacts(ctx, branch, 1.0, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,7 +132,7 @@ func TestClusterFacts_NoiseClassification(t *testing.T) {
 	assertSameCluster(t, result, []string{"kb/pair1.md", "kb/pair2.md"}, "connected pair")
 
 	// With minCommunitySize=100: everything should be noise.
-	result2, err := idx.ClusterFacts(branch, 1.0, 100)
+	result2, err := idx.ClusterFacts(ctx, branch, 1.0, 100)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -146,6 +151,7 @@ func TestClusterFacts_NoiseClassification(t *testing.T) {
 // TestClusterFacts_DerivedFromEdges verifies that DERIVED_FROM edges between
 // facts influence clustering.
 func TestClusterFacts_DerivedFromEdges(t *testing.T) {
+	ctx := context.Background()
 	branch := "agent/cluster-derivation"
 	idx, gs := openGraphTestStore(t, branch)
 
@@ -156,7 +162,7 @@ func TestClusterFacts_DerivedFromEdges(t *testing.T) {
 	writeAndSync(t, idx, gs, branch, "kb/derived.md",
 		makeFact("Derived", []string{"domain-y"}, []string{"EntityY"}, "kb/base.md"))
 
-	result, err := idx.ClusterFacts(branch, 1.0, 2)
+	result, err := idx.ClusterFacts(ctx, branch, 1.0, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -174,6 +180,7 @@ func TestClusterFacts_DerivedFromEdges(t *testing.T) {
 // TestClusterFacts_OntologyHierarchy verifies that facts in the same directory
 // share OntologyNode connections.
 func TestClusterFacts_OntologyHierarchy(t *testing.T) {
+	ctx := context.Background()
 	branch := "agent/cluster-ontology"
 	idx, gs := openGraphTestStore(t, branch)
 
@@ -183,7 +190,7 @@ func TestClusterFacts_OntologyHierarchy(t *testing.T) {
 	writeAndSync(t, idx, gs, branch, "kb/project/impl.md",
 		makeFact("Impl", []string{"coding"}, []string{"ImplEnt"}))
 
-	result, err := idx.ClusterFacts(branch, 1.0, 2)
+	result, err := idx.ClusterFacts(ctx, branch, 1.0, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -195,6 +202,7 @@ func TestClusterFacts_OntologyHierarchy(t *testing.T) {
 // TestClusterFacts_MultiDomainBridge verifies that a fact belonging to multiple
 // domains connects the communities from those domains.
 func TestClusterFacts_MultiDomainBridge(t *testing.T) {
+	ctx := context.Background()
 	branch := "agent/cluster-bridge"
 	idx, gs := openGraphTestStore(t, branch)
 
@@ -216,7 +224,7 @@ func TestClusterFacts_MultiDomainBridge(t *testing.T) {
 
 	// Use minCommunitySize=1 so bridge doesn't get filtered as noise even
 	// if Louvain places it in its own singleton community.
-	result, err := idx.ClusterFacts(branch, 1.0, 1)
+	result, err := idx.ClusterFacts(ctx, branch, 1.0, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -238,6 +246,7 @@ func TestClusterFacts_MultiDomainBridge(t *testing.T) {
 // TestClusterFacts_EmptyBranch verifies that clustering an empty branch returns
 // empty results without errors.
 func TestClusterFacts_EmptyBranch(t *testing.T) {
+	ctx := context.Background()
 	idx, err := New(":memory:")
 	if err != nil {
 		t.Fatal(err)
@@ -245,9 +254,9 @@ func TestClusterFacts_EmptyBranch(t *testing.T) {
 	defer idx.Close()
 
 	branch := "agent/cluster-empty"
-	idx.EnsureBranch(branch, "refs/heads/"+branch)
+	idx.EnsureBranch(ctx, branch, "refs/heads/"+branch)
 
-	result, err := idx.ClusterFacts(branch, 1.0, 2)
+	result, err := idx.ClusterFacts(ctx, branch, 1.0, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -259,6 +268,7 @@ func TestClusterFacts_EmptyBranch(t *testing.T) {
 // TestClusterFacts_AllNoise verifies that when all facts have unique entities
 // and unique domains, and minCommunitySize is high, everything goes to noise.
 func TestClusterFacts_AllNoise(t *testing.T) {
+	ctx := context.Background()
 	branch := "agent/cluster-allnoise"
 	idx, gs := openGraphTestStore(t, branch)
 
@@ -271,7 +281,7 @@ func TestClusterFacts_AllNoise(t *testing.T) {
 		makeFact("Iso 3", []string{"unique-domain-3"}, []string{"Unique3"}))
 
 	// With a high minCommunitySize, all should be noise.
-	result, err := idx.ClusterFacts(branch, 1.0, 10)
+	result, err := idx.ClusterFacts(ctx, branch, 1.0, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -293,6 +303,7 @@ func TestClusterFacts_AllNoise(t *testing.T) {
 // TestClusterFacts_MixedSignals verifies clustering when facts share both
 // entities and domains — they should cluster together.
 func TestClusterFacts_MixedSignals(t *testing.T) {
+	ctx := context.Background()
 	branch := "agent/cluster-mixed"
 	idx, gs := openGraphTestStore(t, branch)
 
@@ -302,7 +313,7 @@ func TestClusterFacts_MixedSignals(t *testing.T) {
 	writeAndSync(t, idx, gs, branch, "kb/tight2.md",
 		makeFact("Go Router", []string{"eng/backend/api"}, []string{"Go", "HTTP"}))
 
-	result, err := idx.ClusterFacts(branch, 1.0, 2)
+	result, err := idx.ClusterFacts(ctx, branch, 1.0, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -314,6 +325,7 @@ func TestClusterFacts_MixedSignals(t *testing.T) {
 // TestClusterFacts_BranchIsolation verifies that facts on different branches
 // don't leak into each other's cluster results.
 func TestClusterFacts_BranchIsolation(t *testing.T) {
+	ctx := context.Background()
 	idx, err := New(":memory:")
 	if err != nil {
 		t.Fatal(err)
@@ -324,26 +336,26 @@ func TestClusterFacts_BranchIsolation(t *testing.T) {
 	branchB := "agent/iso-b"
 
 	// Shared entity on both branches, but different facts.
-	idx.Upsert(branchA, "c1", FactRecord{
+	idx.Upsert(ctx, branchA, "c1", FactRecord{
 		Path: "kb/a1.md", BlobHash: "bh_a1", Title: "A1",
 		Domain: []string{"eng"}, Entities: []string{"Shared"},
 	})
-	idx.Upsert(branchA, "c1", FactRecord{
+	idx.Upsert(ctx, branchA, "c1", FactRecord{
 		Path: "kb/a2.md", BlobHash: "bh_a2", Title: "A2",
 		Domain: []string{"eng"}, Entities: []string{"Shared"},
 	})
 
-	idx.Upsert(branchB, "c2", FactRecord{
+	idx.Upsert(ctx, branchB, "c2", FactRecord{
 		Path: "kb/b1.md", BlobHash: "bh_b1", Title: "B1",
 		Domain: []string{"eng"}, Entities: []string{"Shared"},
 	})
-	idx.Upsert(branchB, "c2", FactRecord{
+	idx.Upsert(ctx, branchB, "c2", FactRecord{
 		Path: "kb/b2.md", BlobHash: "bh_b2", Title: "B2",
 		Domain: []string{"eng"}, Entities: []string{"Shared"},
 	})
 
 	// BranchA clusters should not include branchB facts.
-	resultA, err := idx.ClusterFacts(branchA, 1.0, 1)
+	resultA, err := idx.ClusterFacts(ctx, branchA, 1.0, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -356,7 +368,7 @@ func TestClusterFacts_BranchIsolation(t *testing.T) {
 	}
 
 	// BranchB clusters should not include branchA facts.
-	resultB, err := idx.ClusterFacts(branchB, 1.0, 1)
+	resultB, err := idx.ClusterFacts(ctx, branchB, 1.0, 1)
 	if err != nil {
 		t.Fatal(err)
 	}

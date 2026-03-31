@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"path/filepath"
 	"testing"
 
@@ -23,6 +24,7 @@ func openTestService(t *testing.T) *Service {
 }
 
 func TestDeleteFactAtomically(t *testing.T) {
+	ctx := context.Background()
 	svc := openTestService(t)
 
 	gs, err := git.InitWithStorer(svc.GitStorer(), nil, testBranch)
@@ -30,7 +32,7 @@ func TestDeleteFactAtomically(t *testing.T) {
 		t.Fatal(err)
 	}
 	gs.SetOnCommit(func(_, _ string) {
-		if err := svc.Index().Sync(gs, testBranch); err != nil {
+		if err := svc.Index().Sync(ctx, gs, testBranch); err != nil {
 			t.Errorf("onCommit sync: %v", err)
 		}
 	})
@@ -47,7 +49,7 @@ func TestDeleteFactAtomically(t *testing.T) {
 		Domain: []string{}, Entities: []string{}, Confidence: 1, Sources: 1, Refs: []string{},
 		
 	}
-	if err := svc.Index().Upsert(testBranch, "abc", rec); err != nil {
+	if err := svc.Index().Upsert(ctx, testBranch, "abc", rec); err != nil {
 		t.Fatal(err)
 	}
 
@@ -57,7 +59,7 @@ func TestDeleteFactAtomically(t *testing.T) {
 	}
 
 	// Verify: fact gone from index
-	got, _ := svc.Index().GetByPath(testBranch, "kb/test.md")
+	got, _ := svc.Index().GetByPath(ctx, testBranch, "kb/test.md")
 	if got != nil {
 		t.Fatal("expected fact to be deleted from index")
 	}
@@ -70,6 +72,7 @@ func TestDeleteFactAtomically(t *testing.T) {
 }
 
 func TestEvidenceWeightRoundTrip(t *testing.T) {
+	ctx := context.Background()
 	svc := openTestService(t)
 	gs, err := git.InitWithStorer(svc.GitStorer(), nil, testBranch)
 	if err != nil {
@@ -89,11 +92,11 @@ func TestEvidenceWeightRoundTrip(t *testing.T) {
 		Domain: []string{}, Entities: []string{}, Confidence: 0.9, Sources: 5,
 		Refs: []string{},  EvidenceWeight: 0.714,
 	}
-	if err := svc.Index().Upsert(testBranch, "abc", rec); err != nil {
+	if err := svc.Index().Upsert(ctx, testBranch, "abc", rec); err != nil {
 		t.Fatalf("Upsert: %v", err)
 	}
 
-	got, err := svc.Index().GetByPath(testBranch, "kb/weighted.md")
+	got, err := svc.Index().GetByPath(ctx, testBranch, "kb/weighted.md")
 	if err != nil {
 		t.Fatalf("GetByPath: %v", err)
 	}
@@ -106,6 +109,7 @@ func TestEvidenceWeightRoundTrip(t *testing.T) {
 }
 
 func TestFullRoundtrip(t *testing.T) {
+	ctx := context.Background()
 	svc := openTestService(t)
 
 	gs, err := git.InitWithStorer(svc.GitStorer(), nil, testBranch)
@@ -113,7 +117,7 @@ func TestFullRoundtrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	gs.SetOnCommit(func(_, _ string) {
-		if err := svc.Index().Sync(gs, testBranch); err != nil {
+		if err := svc.Index().Sync(ctx, gs, testBranch); err != nil {
 			t.Errorf("onCommit sync: %v", err)
 		}
 	})
@@ -132,12 +136,12 @@ func TestFullRoundtrip(t *testing.T) {
 		Confidence: 0.9, Sources: 1, Refs: []string{},
 		
 	}
-	if err := svc.Index().Upsert(testBranch, "abc", rec); err != nil {
+	if err := svc.Index().Upsert(ctx, testBranch, "abc", rec); err != nil {
 		t.Fatal(err)
 	}
 
 	// Read back with body hydrated from git objects
-	got, err := svc.Index().GetByPath(testBranch, "kb/db/postgres.md")
+	got, err := svc.Index().GetByPath(ctx, testBranch, "kb/db/postgres.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -155,7 +159,7 @@ func TestFullRoundtrip(t *testing.T) {
 	}
 
 	// Sync should work
-	if err := svc.Index().Sync(gs, testBranch); err != nil {
+	if err := svc.Index().Sync(ctx, gs, testBranch); err != nil {
 		t.Fatal(err)
 	}
 
@@ -165,7 +169,7 @@ func TestFullRoundtrip(t *testing.T) {
 	}
 
 	// Verify gone
-	got, _ = svc.Index().GetByPath(testBranch, "kb/db/postgres.md")
+	got, _ = svc.Index().GetByPath(ctx, testBranch, "kb/db/postgres.md")
 	if got != nil {
 		t.Fatal("expected nil after delete")
 	}

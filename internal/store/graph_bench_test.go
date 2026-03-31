@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"fmt"
 	"testing"
 )
@@ -13,6 +14,7 @@ import (
 //   - 5 top-level domains (d0..d4), each with 2 sub-domains
 //   - 20% of facts have a DERIVED_FROM ref to another fact
 func seedBenchIndex(b *testing.B, n int) *Index {
+	ctx := context.Background()
 	b.Helper()
 	idx, err := New(":memory:")
 	if err != nil {
@@ -53,7 +55,7 @@ func seedBenchIndex(b *testing.B, n int) *Index {
 			b.Fatalf("insert blob: %v", err)
 		}
 
-		if err := idx.Upsert(testBranch, "abc", rec); err != nil {
+		if err := idx.Upsert(ctx, testBranch, "abc", rec); err != nil {
 			b.Fatalf("upsert fact %d: %v", i, err)
 		}
 	}
