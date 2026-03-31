@@ -192,52 +192,67 @@ func (idx *Index) Delete(ctx context.Context, branch, path string) error {
 		return fmt.Errorf("delete: %w", err)
 	}
 
-	// Look up the fact_id from branch_facts.
+	ctx, tx, ownTx, err := beginTxIfNeeded(ctx, idx.db)
+	if err != nil {
+		return fmt.Errorf("delete begin tx: %w", err)
+	}
+	if ownTx {
+		defer tx.Rollback()
+	}
+	db := conn(ctx, idx.db)
+
+	// Look up fact_id + blob_hash in one query.
 	var factID int64
-	err = conn(ctx, idx.db).QueryRowContext(ctx,
-		`SELECT fact_id FROM branch_facts WHERE branch_id = ? AND path = ?`,
-		branchID, path,
-	).Scan(&factID)
+	var blobHash string
+	err = db.QueryRowContext(ctx,
+		`SELECT bf.fact_id, f.blob_hash FROM branch_facts bf
+		 JOIN facts f ON f.id = bf.fact_id
+		 WHERE bf.branch_id = ? AND bf.path = ?`, branchID, path,
+	).Scan(&factID, &blobHash)
 	if err == sql.ErrNoRows {
-		return nil // nothing to delete
+		if ownTx {
+			tx.Commit()
+		}
+		return nil
 	}
 	if err != nil {
 		return fmt.Errorf("delete lookup: %w", err)
 	}
 
-	// Remove the branch_facts row.
-	if _, err := conn(ctx, idx.db).ExecContext(ctx,
-		`DELETE FROM branch_facts WHERE branch_id = ? AND path = ?`,
-		branchID, path,
+	// Delete branch_facts pointer.
+	if _, err := db.ExecContext(ctx,
+		`DELETE FROM branch_facts WHERE branch_id = ? AND path = ?`, branchID, path,
 	); err != nil {
 		return fmt.Errorf("delete branch_facts: %w", err)
 	}
 
-	// Check if any other branch still references this fact.
+	// Check remaining references atomically (within same tx).
 	var refCount int
-	if err := conn(ctx, idx.db).QueryRowContext(ctx,
+	db.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM branch_facts WHERE fact_id = ?`, factID,
-	).Scan(&refCount); err != nil {
-		return fmt.Errorf("delete refcount: %w", err)
-	}
+	).Scan(&refCount)
 
 	if refCount == 0 {
-		// Look up blob_hash before deleting (needed for graph node identification).
-		var blobHash string
-		_ = conn(ctx, idx.db).QueryRowContext(ctx, `SELECT blob_hash FROM facts WHERE id = ?`, factID).Scan(&blobHash)
-
-		// No more references — delete the underlying fact (cascade handles
-		// fact_entities, fact_domains; trigger handles facts_vec).
-		if _, err := conn(ctx, idx.db).ExecContext(ctx, `DELETE FROM facts WHERE id = ?`, factID); err != nil {
+		// Orphaned: delete the fact (cascades to junction tables, triggers facts_vec).
+		if _, err := db.ExecContext(ctx,
+			`DELETE FROM facts WHERE id = ?`, factID,
+		); err != nil {
 			return fmt.Errorf("delete fact: %w", err)
 		}
+	}
 
-		// Mark fact as deleted in graph (preserves lineage via incoming DERIVED_FROM).
+	if ownTx {
+		if err := tx.Commit(); err != nil {
+			return err
+		}
+	}
+
+	// Graph cleanup outside tx (idempotent).
+	if refCount == 0 {
 		if err := idx.graphDeleteFact(ctx, path, blobHash); err != nil {
 			log.Warn().Err(err).Str("path", path).Msg("graph delete failed")
 		}
 	}
-
 	return nil
 }
 
