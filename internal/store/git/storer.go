@@ -1,6 +1,7 @@
 package git
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"io"
@@ -22,7 +23,6 @@ var _ storage.Storer = (*Storer)(nil)
 type Storer struct {
 	db        *sql.DB
 	ownsDB    bool
-	tx        *sql.Tx
 	commitLog atomic.Bool
 	modules   map[string]*Storer
 }
@@ -63,23 +63,19 @@ func (s *Storer) Close() error {
 	return nil
 }
 
-// conn returns the active transaction if set, otherwise the raw *sql.DB.
+// conn returns the raw *sql.DB as an execer. Used by go-git interface methods
+// which don't accept context. For context-aware callers, use connCtx instead.
 func (s *Storer) conn() execer {
-	if s.tx != nil {
-		return s.tx
-	}
 	return s.db
 }
 
-// SetTx routes all subsequent operations through the given transaction.
-func (s *Storer) SetTx(tx *sql.Tx) {
-	s.tx = tx
+// connCtx returns the tx from context if present, otherwise the raw db.
+func (s *Storer) connCtx(ctx context.Context) CtxExecer {
+	return Conn(ctx, s.db)
 }
 
-// ClearTx reverts to using the raw *sql.DB for all operations.
-func (s *Storer) ClearTx() {
-	s.tx = nil
-}
+// DB returns the underlying database for callers that need to start transactions.
+func (s *Storer) DB() *sql.DB { return s.db }
 
 // --- EncodedObjectStorer ---
 

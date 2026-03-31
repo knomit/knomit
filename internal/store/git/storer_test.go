@@ -1,6 +1,7 @@
 package git_test
 
 import (
+	"context"
 	"database/sql"
 	"testing"
 
@@ -69,24 +70,25 @@ func TestNewStorer(t *testing.T) {
 	}
 }
 
-// --- SetTx / ClearTx ---
+// --- Context-based tx propagation ---
 
-func TestSetTxRoutesWritesThroughTransaction(t *testing.T) {
-	s, db := newTestStorer(t)
+func TestContextTxRoutesWritesThroughTransaction(t *testing.T) {
+	_, db := newTestStorer(t)
 
 	tx, err := db.Begin()
 	if err != nil {
 		t.Fatal(err)
 	}
-	s.SetTx(tx)
+	defer tx.Rollback()
 
-	// Write a blob through the transaction
-	obj := s.NewEncodedObject()
-	obj.SetType(plumbing.BlobObject)
-	w, _ := obj.Writer()
-	w.Write([]byte("hello"))
-	w.Close()
-	_, err = s.SetEncodedObject(obj)
+	ctx := storegit.WithTx(context.Background(), tx)
+
+	// Write through the context-propagated transaction
+	conn := storegit.Conn(ctx, db)
+	_, err = conn.ExecContext(ctx,
+		`INSERT INTO objects (hash, type, size, data) VALUES (?, ?, ?, ?)`,
+		"abcdabcdabcdabcdabcdabcdabcdabcdabcdabcd", 3, 5, []byte("hello"),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,7 +101,6 @@ func TestSetTxRoutesWritesThroughTransaction(t *testing.T) {
 	}
 
 	tx.Commit()
-	s.ClearTx()
 
 	// After commit, the object should be visible
 	db.QueryRow(`SELECT COUNT(*) FROM objects`).Scan(&count)
