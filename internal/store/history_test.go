@@ -203,6 +203,7 @@ func TestFactVersionHistory(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer idx.Close()
+	idx.EnsureBranch(testBranch, "refs/heads/"+testBranch)
 
 	path := "kb/test/fact.md"
 	c1 := "aaa0000000000000000000000000000000000000aa"
@@ -223,7 +224,7 @@ func TestFactVersionHistory(t *testing.T) {
 		t.Fatalf("rebuildGraphHistory: %v", err)
 	}
 
-	versions, err := idx.FactVersionHistory(path)
+	versions, err := idx.FactVersionHistory(testBranch, path)
 	if err != nil {
 		t.Fatalf("FactVersionHistory: %v", err)
 	}
@@ -277,7 +278,7 @@ func TestExplainFactAt_OutgoingRefs(t *testing.T) {
 		t.Fatalf("rebuildGraphHistory: %v", err)
 	}
 
-	result, err := idx.ExplainFactAt(source, c2)
+	result, err := idx.ExplainFactAt(testBranch, source, c2)
 	if err != nil {
 		t.Fatalf("ExplainFactAt: %v", err)
 	}
@@ -324,7 +325,7 @@ func TestExplainFactAt_IncomingRefs(t *testing.T) {
 		t.Fatalf("rebuildGraphHistory: %v", err)
 	}
 
-	result, err := idx.ExplainFactAt(target, c1)
+	result, err := idx.ExplainFactAt(testBranch, target, c1)
 	if err != nil {
 		t.Fatalf("ExplainFactAt: %v", err)
 	}
@@ -339,6 +340,7 @@ func TestHistoryNavigation_WalkUpAndDown(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer idx.Close()
+	idx.EnsureBranch(testBranch, "refs/heads/"+testBranch)
 
 	path := "kb/test/fact.md"
 	commits := []string{
@@ -371,7 +373,7 @@ func TestHistoryNavigation_WalkUpAndDown(t *testing.T) {
 	}
 
 	// Verify FactVersionHistory returns all 6 versions, newest first.
-	versions, err := idx.FactVersionHistory(path)
+	versions, err := idx.FactVersionHistory(testBranch, path)
 	if err != nil {
 		t.Fatalf("FactVersionHistory: %v", err)
 	}
@@ -526,7 +528,7 @@ func TestExplainFactAt_MultipleRefsInAndOut(t *testing.T) {
 	}
 
 	// D's outgoing refs: A and B.
-	resD, err := idx.ExplainFactAt(pathD, cD)
+	resD, err := idx.ExplainFactAt(testBranch, pathD, cD)
 	if err != nil {
 		t.Fatalf("ExplainFactAt(D): %v", err)
 	}
@@ -538,7 +540,7 @@ func TestExplainFactAt_MultipleRefsInAndOut(t *testing.T) {
 	}
 
 	// E's outgoing refs: C and D.
-	resE, err := idx.ExplainFactAt(pathE, cE)
+	resE, err := idx.ExplainFactAt(testBranch, pathE, cE)
 	if err != nil {
 		t.Fatalf("ExplainFactAt(E): %v", err)
 	}
@@ -547,7 +549,7 @@ func TestExplainFactAt_MultipleRefsInAndOut(t *testing.T) {
 	}
 
 	// A's incoming: D's version references it.
-	resA, err := idx.ExplainFactAt(pathA, cA)
+	resA, err := idx.ExplainFactAt(testBranch, pathA, cA)
 	if err != nil {
 		t.Fatalf("ExplainFactAt(A): %v", err)
 	}
@@ -556,7 +558,7 @@ func TestExplainFactAt_MultipleRefsInAndOut(t *testing.T) {
 	}
 
 	// B's incoming: D's version references it.
-	resB, err := idx.ExplainFactAt(pathB, cB)
+	resB, err := idx.ExplainFactAt(testBranch, pathB, cB)
 	if err != nil {
 		t.Fatalf("ExplainFactAt(B): %v", err)
 	}
@@ -565,7 +567,7 @@ func TestExplainFactAt_MultipleRefsInAndOut(t *testing.T) {
 	}
 
 	// C's incoming: E's version references it.
-	resC, err := idx.ExplainFactAt(pathC, cC)
+	resC, err := idx.ExplainFactAt(testBranch, pathC, cC)
 	if err != nil {
 		t.Fatalf("ExplainFactAt(C): %v", err)
 	}
@@ -621,9 +623,9 @@ func TestExplainFactAt_RefsChangeWithHistory(t *testing.T) {
 		commitFiles: map[string]map[string]string{
 			cA:  {pathA: factContent("A")},
 			cC:  {pathC: factContent("C")},
-			cB1: {pathB: factContent("B-v1", pathA)},           // v1: refs [A]
-			cB2: {pathB: factContent("B-v2", pathA, pathC)},    // v2: refs [A, C]
-			cB3: {pathB: factContent("B-v3", pathC)},           // v3: refs [C] only
+			cB1: {pathB: factContent("B-v1", pathA)},        // v1: refs [A]
+			cB2: {pathB: factContent("B-v2", pathA, pathC)}, // v2: refs [A, C]
+			cB3: {pathB: factContent("B-v3", pathC)},        // v3: refs [C] only
 		},
 		files: map[string]string{
 			pathA: factContent("A"),
@@ -647,7 +649,7 @@ func TestExplainFactAt_RefsChangeWithHistory(t *testing.T) {
 	}
 
 	// v1 outgoing: only A.
-	resB1, err := idx.ExplainFactAt(pathB, cB1)
+	resB1, err := idx.ExplainFactAt(testBranch, pathB, cB1)
 	if err != nil {
 		t.Fatalf("ExplainFactAt(B,v1): %v", err)
 	}
@@ -659,7 +661,7 @@ func TestExplainFactAt_RefsChangeWithHistory(t *testing.T) {
 	}
 
 	// v2 outgoing: A and C.
-	resB2, err := idx.ExplainFactAt(pathB, cB2)
+	resB2, err := idx.ExplainFactAt(testBranch, pathB, cB2)
 	if err != nil {
 		t.Fatalf("ExplainFactAt(B,v2): %v", err)
 	}
@@ -668,7 +670,7 @@ func TestExplainFactAt_RefsChangeWithHistory(t *testing.T) {
 	}
 
 	// v3 outgoing: only C.
-	resB3, err := idx.ExplainFactAt(pathB, cB3)
+	resB3, err := idx.ExplainFactAt(testBranch, pathB, cB3)
 	if err != nil {
 		t.Fatalf("ExplainFactAt(B,v3): %v", err)
 	}
@@ -680,7 +682,7 @@ func TestExplainFactAt_RefsChangeWithHistory(t *testing.T) {
 	}
 
 	// Incoming to A: B referenced it in v1 and v2.
-	resA, err := idx.ExplainFactAt(pathA, cA)
+	resA, err := idx.ExplainFactAt(testBranch, pathA, cA)
 	if err != nil {
 		t.Fatalf("ExplainFactAt(A): %v", err)
 	}
@@ -689,7 +691,7 @@ func TestExplainFactAt_RefsChangeWithHistory(t *testing.T) {
 	}
 
 	// Incoming to C: B referenced it in v2 and v3.
-	resC, err := idx.ExplainFactAt(pathC, cC)
+	resC, err := idx.ExplainFactAt(testBranch, pathC, cC)
 	if err != nil {
 		t.Fatalf("ExplainFactAt(C): %v", err)
 	}
@@ -733,7 +735,7 @@ func TestRebuild_IncludesHistoryPhase(t *testing.T) {
 	}
 
 	// After Rebuild, FactVersion nodes for both commits should exist.
-	versions, err := idx.FactVersionHistory(path)
+	versions, err := idx.FactVersionHistory("machine/test", path)
 	if err != nil {
 		t.Fatalf("FactVersionHistory: %v", err)
 	}

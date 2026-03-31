@@ -173,7 +173,7 @@ func (idx *Index) filterByEpisodeOps(results []SearchResult, ops []string) ([]Se
 // If Text is empty, all facts matching the non-text filters are returned with
 // score 100.
 func (idx *Index) Search(branch string, q SearchQuery) ([]SearchResult, error) {
-	branchID, err := idx.BranchID(branch)
+	branchID, err := idx.branchID(branch)
 	if err != nil {
 		return nil, fmt.Errorf("search: %w", err)
 	}

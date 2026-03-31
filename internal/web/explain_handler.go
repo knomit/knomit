@@ -12,7 +12,13 @@ func handleExplain() http.HandlerFunc {
 		var idx repos.SearchIndex
 		ri.WithRead(func(d repos.StoreDeps) { idx = d.Idx })
 
-		path := r.URL.Query().Get("path")
+		q := r.URL.Query()
+		branch := q.Get("branch")
+		if branch == "" {
+			writeError(w, http.StatusBadRequest, "branch query parameter is required")
+			return
+		}
+		path := q.Get("path")
 		if path == "" {
 			writeError(w, http.StatusBadRequest, "path query parameter is required")
 			return
@@ -22,7 +28,7 @@ func handleExplain() http.HandlerFunc {
 			return
 		}
 
-		result, err := idx.ExplainFact(path)
+		result, err := idx.ExplainFact(branch, path)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return

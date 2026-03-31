@@ -311,7 +311,7 @@ func handleFactRetract(agentBranch string) http.HandlerFunc {
 func handleSearch() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
-		branch := ri.Branch()
+		branch := ri.AgentBranch()
 		var idx repos.SearchIndex
 		ri.WithRead(func(d repos.StoreDeps) { idx = d.Idx })
 		if idx == nil {
@@ -586,7 +586,7 @@ func handleActivity(agentBranch string) http.HandlerFunc {
 func handleCompletions() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
-		branch := ri.Branch()
+		branch := ri.AgentBranch()
 		var idx repos.SearchIndex
 		ri.WithRead(func(d repos.StoreDeps) { idx = d.Idx })
 
@@ -610,7 +610,7 @@ func handleCompletions() http.HandlerFunc {
 func handleStats() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
-		branch := ri.Branch()
+		branch := ri.AgentBranch()
 		var idx repos.SearchIndex
 		ri.WithRead(func(d repos.StoreDeps) { idx = d.Idx })
 		if idx == nil {
@@ -664,7 +664,7 @@ func handleStatus(embeddingsEnabled bool, ontologyRoot, agentBranch string) http
 func handleRecent() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
-		branch := ri.Branch()
+		branch := ri.AgentBranch()
 		var svc *store.Service
 		ri.WithRead(func(d repos.StoreDeps) { svc = d.Svc })
 		if svc == nil {

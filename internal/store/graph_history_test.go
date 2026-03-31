@@ -104,7 +104,7 @@ func TestGraphRelationships_SameBranch(t *testing.T) {
 	}
 
 	// Verify via ExplainFact.
-	res, err := idx.ExplainFact("kb/arch.md")
+	res, err := idx.ExplainFact(branch, "kb/arch.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -283,8 +283,8 @@ func TestGraphRelationships_BranchDivergence(t *testing.T) {
 
 	// --- Graph expansion should be branch-scoped ---
 
-	branchAID, _ := idx.BranchID(branchA)
-	branchBID, _ := idx.BranchID(branchB)
+	branchAID, _ := idx.branchID(branchA)
+	branchBID, _ := idx.branchID(branchB)
 
 	expandedA := idx.graphExpandSearch(branchAID, map[string]float64{"kb/arch.md": 0.9}, 1)
 	if _, ok := expandedA["kb/cache.md"]; ok {
@@ -547,7 +547,7 @@ func TestGraphRelationships_CircularRefs(t *testing.T) {
 	}
 
 	// ExplainFact should show both directions.
-	resA, _ := idx.ExplainFact("kb/a.md")
+	resA, _ := idx.ExplainFact(branch, "kb/a.md")
 	outPaths := map[string]bool{}
 	for _, r := range resA.Outgoing {
 		outPaths[r.Path] = true
@@ -604,7 +604,7 @@ func TestGraphRelationships_MergeOverwrite(t *testing.T) {
 	}
 
 	// dst's view of a.md should now be the new version.
-	dstID, _ := idx.BranchID(dst)
+	dstID, _ := idx.branchID(dst)
 	var mergedHash string
 	err = idx.db.QueryRow(
 		`SELECT f.blob_hash FROM branch_facts bf JOIN facts f ON f.id = bf.fact_id WHERE bf.branch_id = ? AND bf.path = ?`,
@@ -627,6 +627,71 @@ func TestGraphRelationships_MergeOverwrite(t *testing.T) {
 	got = derivedFromPaths(t, idx, "kb/a.md", "bh_a_old")
 	if !got["kb/b.md"] || len(got) != 1 {
 		t.Errorf("old a.md DERIVED_FROM: want {b}, got %v", got)
+	}
+}
+
+// TestExplainFact_BranchScoped verifies that ExplainFact filters incoming refs
+// by branch visibility: a fact on branchB referencing a shared fact should not
+// appear in branchA's ExplainFact incoming results.
+func TestExplainFact_BranchScoped(t *testing.T) {
+	idx, err := New(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer idx.Close()
+
+	branchA := "agent/branch-a"
+	branchB := "agent/branch-b"
+
+	// Shared target on both branches.
+	idx.Upsert(branchA, "c1", FactRecord{
+		Path: "kb/target.md", BlobHash: "bh_target", Title: "Target",
+		Domain: []string{"eng"}, Entities: []string{"Go"},
+	})
+	idx.MergeBranch(branchA, branchB)
+
+	// branchA: refA → target.
+	idx.Upsert(branchA, "c2", FactRecord{
+		Path: "kb/ref-a.md", BlobHash: "bh_ref_a", Title: "Ref A",
+		Domain: []string{"eng"}, Refs: []string{"kb/target.md"},
+	})
+
+	// branchB: refB → target.
+	idx.Upsert(branchB, "c3", FactRecord{
+		Path: "kb/ref-b.md", BlobHash: "bh_ref_b", Title: "Ref B",
+		Domain: []string{"eng"}, Refs: []string{"kb/target.md"},
+	})
+
+	// ExplainFact on branchA: incoming should show ref-a but NOT ref-b.
+	resA, err := idx.ExplainFact(branchA, "kb/target.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	inA := map[string]bool{}
+	for _, r := range resA.Incoming {
+		inA[r.Path] = true
+	}
+	if !inA["kb/ref-a.md"] {
+		t.Errorf("branchA ExplainFact: want ref-a in incoming, got %v", inA)
+	}
+	if inA["kb/ref-b.md"] {
+		t.Errorf("branchA ExplainFact: ref-b should not appear (branchB only), got %v", inA)
+	}
+
+	// ExplainFact on branchB: incoming should show ref-b but NOT ref-a.
+	resB, err := idx.ExplainFact(branchB, "kb/target.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	inB := map[string]bool{}
+	for _, r := range resB.Incoming {
+		inB[r.Path] = true
+	}
+	if !inB["kb/ref-b.md"] {
+		t.Errorf("branchB ExplainFact: want ref-b in incoming, got %v", inB)
+	}
+	if inB["kb/ref-a.md"] {
+		t.Errorf("branchB ExplainFact: ref-a should not appear (branchA only), got %v", inB)
 	}
 }
 
@@ -707,8 +772,8 @@ func TestGraphRelationships_ThreeBranchesSharedAndDiverged(t *testing.T) {
 
 	// --- Graph expansion scoping ---
 
-	devID, _ := idx.BranchID(dev)
-	expID, _ := idx.BranchID(exp)
+	devID, _ := idx.branchID(dev)
+	expID, _ := idx.branchID(exp)
 
 	expandedDev := idx.graphExpandSearch(devID, map[string]float64{"kb/design.md": 0.9}, 1)
 	if _, ok := expandedDev["kb/experiment.md"]; ok {
@@ -729,7 +794,7 @@ func TestGraphRelationships_ThreeBranchesSharedAndDiverged(t *testing.T) {
 // blobHash returns the blob_hash for a fact on a given branch.
 func blobHash(t *testing.T, idx *Index, branch, path string) string {
 	t.Helper()
-	branchID, err := idx.BranchID(branch)
+	branchID, err := idx.branchID(branch)
 	if err != nil {
 		t.Fatalf("BranchID(%s): %v", branch, err)
 	}
@@ -785,7 +850,7 @@ func clusterPaths(result ClusterResult) map[string]bool {
 // assertBranchFacts checks that the given branch sees exactly the expected paths.
 func assertBranchFacts(t *testing.T, idx *Index, branch string, wantPaths []string) {
 	t.Helper()
-	branchID, err := idx.BranchID(branch)
+	branchID, err := idx.branchID(branch)
 	if err != nil {
 		t.Fatalf("BranchID(%s): %v", branch, err)
 	}

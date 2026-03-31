@@ -48,7 +48,6 @@ func TestGet_Unknown(t *testing.T) {
 	}
 }
 
-
 func TestForEach(t *testing.T) {
 	m := emptyManager()
 	m.Set("a", makeRI("a"))
@@ -197,7 +196,7 @@ func TestObserver_UsesCurrentIndexAfterSwapStore(t *testing.T) {
 	writer := gs.(interface {
 		WriteFile(branch, path, content, message, operation string) (string, string, error)
 	})
-	_, _, err := writer.WriteFile(ri.Branch(), "kb/test/hello.md", "---\ntitle: hello\n---\n# hello\nworld\n", "test", "learn")
+	_, _, err := writer.WriteFile(ri.AgentBranch(), "kb/test/hello.md", "---\ntitle: hello\n---\n# hello\nworld\n", "test", "learn")
 	if err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}

@@ -565,7 +565,7 @@ func TestGraphExpandSearch_MultiSeed(t *testing.T) {
 		"kb/f1.md": 0.9,  // alpha — similar to beta (f3)
 		"kb/f2.md": 0.85, // gamma — dissimilar, no SIMILAR_TO neighbors
 	}
-	branchID, err := idx.BranchID(testBranch)
+	branchID, err := idx.branchID(testBranch)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -614,7 +614,7 @@ func TestGraphExpandSearch_BranchScoped(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	branchAID, err := idx.BranchID(branchA)
+	branchAID, err := idx.branchID(branchA)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -861,7 +861,7 @@ func TestExplainFact(t *testing.T) {
 		}
 	}
 
-	res, err := idx.ExplainFact("kb/a.md")
+	res, err := idx.ExplainFact(testBranch, "kb/a.md")
 	if err != nil {
 		t.Fatalf("ExplainFact: %v", err)
 	}
@@ -884,7 +884,7 @@ func TestExplainFact(t *testing.T) {
 	if err := idx.Delete(testBranch, "kb/c.md"); err != nil {
 		t.Fatalf("delete c: %v", err)
 	}
-	res2, err := idx.ExplainFact("kb/a.md")
+	res2, err := idx.ExplainFact(testBranch, "kb/a.md")
 	if err != nil {
 		t.Fatalf("ExplainFact after delete: %v", err)
 	}
@@ -920,7 +920,7 @@ func TestExplainFact_SelfLoopFiltered(t *testing.T) {
 		t.Fatalf("upsert: %v", err)
 	}
 
-	res, err := idx.ExplainFact("kb/a.md")
+	res, err := idx.ExplainFact(testBranch, "kb/a.md")
 	if err != nil {
 		t.Fatalf("ExplainFact: %v", err)
 	}

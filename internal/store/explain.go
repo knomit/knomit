@@ -19,14 +19,33 @@ type ExplainResult struct {
 }
 
 // ExplainFact returns the incoming and outgoing [:DERIVED_FROM] neighbours for
-// the given fact path. Incoming excludes deleted referrers. Outgoing includes
-// deleted targets (marked with Deleted: true) so the UI can show them distinctly.
+// the given fact path, scoped to facts visible on the given branch.
+// Incoming excludes deleted referrers. Outgoing includes deleted targets
+// (marked with Deleted: true) so the UI can show them distinctly.
 // Self-loops are filtered out: GraphQLite creates (n)-[:DERIVED_FROM]->(n) when
 // the target node is absent at edge-creation time (upstream bug).
-func (idx *Index) ExplainFact(path string) (ExplainResult, error) {
-	params, _ := json.Marshal(map[string]string{"path": path})
+func (idx *Index) ExplainFact(branch, path string) (ExplainResult, error) {
+	branchID, err := idx.branchID(branch)
+	if err != nil {
+		return ExplainResult{}, fmt.Errorf("explain: %w", err)
+	}
+
+	// Resolve the blob_hash for this path on the given branch so we query
+	// the specific fact version visible on this branch, not all versions.
+	var blobHash string
+	err = idx.db.QueryRow(
+		`SELECT f.blob_hash FROM branch_facts bf JOIN facts f ON f.id = bf.fact_id
+		 WHERE bf.branch_id = ? AND bf.path = ?`, branchID, path,
+	).Scan(&blobHash)
+	if err != nil {
+		return ExplainResult{}, fmt.Errorf("explain: resolve blob_hash: %w", err)
+	}
+
+	params, _ := json.Marshal(map[string]string{"path": path, "blob_hash": blobHash})
 	pj := string(params)
 
+	// Incoming: all non-deleted facts that reference ANY version at this path.
+	// Scoped to branch-visible facts via filterByBranch.
 	incoming, err := idx.queryRefSummaries(
 		fmt.Sprintf(`MATCH (f:%s)-[:%s]->(t:%s {path: $path}) WHERE NOT f.deleted = true RETURN f.path AS path, f.title AS title, false AS deleted`,
 			NodeFact, EdgeDerivedFrom, NodeFact),
@@ -36,8 +55,9 @@ func (idx *Index) ExplainFact(path string) (ExplainResult, error) {
 		return ExplainResult{}, fmt.Errorf("explain incoming: %w", err)
 	}
 
+	// Outgoing: refs from the specific version visible on this branch.
 	outgoing, err := idx.queryRefSummaries(
-		fmt.Sprintf(`MATCH (f:%s {path: $path})-[:%s]->(t:%s) RETURN t.path AS path, t.title AS title, t.deleted AS deleted`,
+		fmt.Sprintf(`MATCH (f:%s {path: $path})-[:%s]->(t:%s) WHERE f.blob_hash = $blob_hash RETURN t.path AS path, t.title AS title, t.deleted AS deleted`,
 			NodeFact, EdgeDerivedFrom, NodeFact),
 		pj,
 	)
@@ -46,7 +66,7 @@ func (idx *Index) ExplainFact(path string) (ExplainResult, error) {
 	}
 
 	return ExplainResult{
-		Incoming: filterSelf(incoming, path),
+		Incoming: idx.filterByBranch(filterSelf(incoming, path), branchID),
 		Outgoing: filterSelf(outgoing, path),
 	}, nil
 }
@@ -56,6 +76,32 @@ func filterSelf(refs []RefSummary, selfPath string) []RefSummary {
 	out := refs[:0]
 	for _, r := range refs {
 		if r.Path != selfPath {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// filterByBranch keeps only RefSummary entries whose path is visible on the
+// given branch (present in branch_facts).
+func (idx *Index) filterByBranch(refs []RefSummary, branchID int64) []RefSummary {
+	if len(refs) == 0 {
+		return refs
+	}
+	visible := make(map[string]bool)
+	rows, err := idx.db.Query(`SELECT path FROM branch_facts WHERE branch_id = ?`, branchID)
+	if err != nil {
+		return refs
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var p string
+		rows.Scan(&p)
+		visible[p] = true
+	}
+	out := refs[:0]
+	for _, r := range refs {
+		if visible[r.Path] {
 			out = append(out, r)
 		}
 	}
@@ -88,7 +134,11 @@ type VersionSummary struct {
 // Only versions that have been graph-indexed (FactVersion nodes exist) are returned.
 // Uses direct SQL against EAV tables for reliability (GraphQLite parameterized
 // MATCH does not reliably return SET properties via json_each).
-func (idx *Index) FactVersionHistory(path string) ([]VersionSummary, error) {
+// branch is validated but not used for filtering — version history is commit-level.
+func (idx *Index) FactVersionHistory(branch, path string) ([]VersionSummary, error) {
+	if _, err := idx.branchID(branch); err != nil {
+		return nil, fmt.Errorf("FactVersionHistory: %w", err)
+	}
 	// committed_at is stored in node_props_real (graphSetFactVersionProps uses
 	// INSERT INTO node_props_real); title is in node_props_text.
 	rows, err := idx.db.Query(`
@@ -136,10 +186,19 @@ func (idx *Index) FactVersionHistory(path string) ([]VersionSummary, error) {
 //
 // Both queries use direct SQL against the EAV tables to avoid GraphQLite's
 // same-label two-node MATCH self-loop bug (established in Task 3).
-func (idx *Index) ExplainFactAt(path, commitHash string) (ExplainResult, error) {
+func (idx *Index) ExplainFactAt(branch, path, commitHash string) (ExplainResult, error) {
+	// branch is accepted for API consistency but not used for filtering:
+	// ExplainFactAt queries historical FactVersion nodes which exist outside
+	// branch scoping. The incoming/outgoing refs reflect what was true at
+	// the given commit, regardless of current branch state.
+	_, err := idx.branchID(branch)
+	if err != nil {
+		return ExplainResult{}, fmt.Errorf("ExplainFactAt: %w", err)
+	}
+
 	// Resolve FactVersion node ID for (path, commitHash).
 	var versionID int64
-	err := idx.db.QueryRow(`
+	err = idx.db.QueryRow(`
 		SELECT np.node_id
 		FROM node_props_text np
 		JOIN property_keys pk ON pk.id = np.key_id

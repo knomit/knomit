@@ -265,18 +265,18 @@ func (mr *MockSearchIndexMockRecorder) Completions(branch, category, prefix, lim
 }
 
 // ExplainFact mocks base method.
-func (m *MockSearchIndex) ExplainFact(path string) (store.ExplainResult, error) {
+func (m *MockSearchIndex) ExplainFact(branch, path string) (store.ExplainResult, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "ExplainFact", path)
+	ret := m.ctrl.Call(m, "ExplainFact", branch, path)
 	ret0, _ := ret[0].(store.ExplainResult)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // ExplainFact indicates an expected call of ExplainFact.
-func (mr *MockSearchIndexMockRecorder) ExplainFact(path any) *gomock.Call {
+func (mr *MockSearchIndexMockRecorder) ExplainFact(branch, path any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ExplainFact", reflect.TypeOf((*MockSearchIndex)(nil).ExplainFact), path)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ExplainFact", reflect.TypeOf((*MockSearchIndex)(nil).ExplainFact), branch, path)
 }
 
 // GetByPath mocks base method.

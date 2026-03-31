@@ -200,7 +200,7 @@ func extractBody(raw []byte) string {
 // scoped to the given branch.
 // Supported categories: "domain", "entity", "type", "ep", "path".
 func (idx *Index) Completions(branch, category, prefix string, limit int) ([]string, error) {
-	branchID, err := idx.BranchID(branch)
+	branchID, err := idx.branchID(branch)
 	if err != nil {
 		return nil, fmt.Errorf("completions: %w", err)
 	}
@@ -295,7 +295,7 @@ func (idx *Index) Stats(branch, pathPrefix string) (StatsResult, error) {
 		Entities: make(map[string]int),
 	}
 
-	branchID, err := idx.BranchID(branch)
+	branchID, err := idx.branchID(branch)
 	if err != nil {
 		return res, fmt.Errorf("stats: %w", err)
 	}

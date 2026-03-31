@@ -66,9 +66,9 @@ func (idx *Index) EnsureBranch(name, gitRef string) (int64, error) {
 	return id, nil
 }
 
-// BranchID returns the ID for a branch name, using the cache when possible.
+// branchID returns the ID for a branch name, using the cache when possible.
 // Returns an error if the branch does not exist.
-func (idx *Index) BranchID(name string) (int64, error) {
+func (idx *Index) branchID(name string) (int64, error) {
 	if id, ok := idx.branches.get(name); ok {
 		return id, nil
 	}
@@ -90,7 +90,7 @@ func (idx *Index) BranchID(name string) (int64, error) {
 // MergeBranch copies all branch_facts entries from src to dst.
 // Conflicting paths (same path on both branches) are overwritten with src's version.
 func (idx *Index) MergeBranch(src, dst string) error {
-	srcID, err := idx.BranchID(src)
+	srcID, err := idx.branchID(src)
 	if err != nil {
 		return fmt.Errorf("merge: src %w", err)
 	}
@@ -113,7 +113,7 @@ func (idx *Index) MergeBranch(src, dst string) error {
 
 // DropBranch removes a branch and all its branch_facts entries, then runs GC.
 func (idx *Index) DropBranch(name string) error {
-	id, err := idx.BranchID(name)
+	id, err := idx.branchID(name)
 	if err != nil {
 		return fmt.Errorf("drop branch: %w", err)
 	}

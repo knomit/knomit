@@ -377,7 +377,7 @@ func (idx *Index) ClusterFacts(branch string, resolution float64, minCommunitySi
 	}
 
 	// Resolve branch to branchID for scoped filtering.
-	branchID, err := idx.BranchID(branch)
+	branchID, err := idx.branchID(branch)
 	if err != nil {
 		return ClusterResult{}, fmt.Errorf("ClusterFacts: %w", err)
 	}

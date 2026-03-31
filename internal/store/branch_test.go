@@ -35,7 +35,7 @@ func TestEnsureBranch_Idempotent(t *testing.T) {
 func TestBranchID_NotFound(t *testing.T) {
 	idx := newTestIndexInternal(t)
 
-	_, err := idx.BranchID("nonexistent")
+	_, err := idx.branchID("nonexistent")
 	if err == nil {
 		t.Fatal("expected error for nonexistent branch")
 	}
@@ -49,7 +49,7 @@ func TestBranchID_Cached(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	id2, err := idx.BranchID("main")
+	id2, err := idx.branchID("main")
 	if err != nil {
 		t.Fatal(err)
 	}

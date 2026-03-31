@@ -171,7 +171,7 @@ func (idx *Index) Upsert(branch, commitHash string, rec FactRecord) error {
 // Delete removes a fact from the given branch. If no other branch references
 // the fact, the underlying facts row (and its vec/graph data) is also deleted.
 func (idx *Index) Delete(branch, path string) error {
-	branchID, err := idx.BranchID(branch)
+	branchID, err := idx.branchID(branch)
 	if err != nil {
 		return fmt.Errorf("delete: %w", err)
 	}
@@ -228,7 +228,7 @@ func (idx *Index) Delete(branch, path string) error {
 // GetByPath retrieves a FactWithBody by its path on the given branch,
 // hydrating the body from the objects table. Returns nil, nil if not found.
 func (idx *Index) GetByPath(branch, path string) (*FactWithBody, error) {
-	branchID, err := idx.BranchID(branch)
+	branchID, err := idx.branchID(branch)
 	if err != nil {
 		return nil, fmt.Errorf("getByPath: %w", err)
 	}
@@ -247,7 +247,7 @@ func (idx *Index) GetByPath(branch, path string) (*FactWithBody, error) {
 // GetEmbedding returns the stored embedding vector for a fact on the given branch.
 // Returns nil, nil if no embedding exists for this path.
 func (idx *Index) GetEmbedding(branch, path string) ([]float32, error) {
-	branchID, err := idx.BranchID(branch)
+	branchID, err := idx.branchID(branch)
 	if err != nil {
 		return nil, fmt.Errorf("getEmbedding: %w", err)
 	}
@@ -411,7 +411,7 @@ func (idx *Index) RecentFacts(branch, pathPrefix, query string, limit, offset in
 		return idx.recentFactsSearch(branch, pathPrefix, query, limit, offset, includeTypes, excludeTypes, domain, entities, epOps)
 	}
 
-	branchID, err := idx.BranchID(branch)
+	branchID, err := idx.branchID(branch)
 	if err != nil {
 		return nil, 0, fmt.Errorf("RecentFacts: %w", err)
 	}
@@ -479,7 +479,7 @@ func (idx *Index) RecentFacts(branch, pathPrefix, query string, limit, offset in
 // recentFactsSearch uses semantic search to find matching facts, then returns
 // them ordered by committed_at with pagination.
 func (idx *Index) recentFactsSearch(branch, pathPrefix, query string, limit, offset int, includeTypes, excludeTypes, domain, entities, epOps []string) ([]RecentFactEntry, int, error) {
-	branchID, err := idx.BranchID(branch)
+	branchID, err := idx.branchID(branch)
 	if err != nil {
 		return nil, 0, fmt.Errorf("RecentFacts search: %w", err)
 	}
@@ -554,7 +554,7 @@ func (idx *Index) recentFactsSearch(branch, pathPrefix, query string, limit, off
 // entry for the given path, provided that entry's action is not 'deleted'.
 // Returns ("", false) if the path is not found or its latest action is deleted.
 func (idx *Index) LastCommitForPath(branch, path string) (string, bool) {
-	branchID, err := idx.BranchID(branch)
+	branchID, err := idx.branchID(branch)
 	if err != nil {
 		return "", false
 	}

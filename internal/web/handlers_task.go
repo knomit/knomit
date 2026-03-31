@@ -7,9 +7,10 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/rs/zerolog/log"
 	"knomit/internal/repos"
 	"knomit/internal/store"
+
+	"github.com/rs/zerolog/log"
 )
 
 // writeTaskStarted writes a 200 response for a successfully started task.
@@ -71,7 +72,7 @@ func handleRebuild() http.HandlerFunc {
 		})
 		hub := ri.TaskHub()
 		repo := ri.Name()
-		agentBranch := ri.Branch()
+		agentBranch := ri.AgentBranch()
 
 		if svc == nil {
 			writeError(w, http.StatusServiceUnavailable, "index not available")

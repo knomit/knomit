@@ -24,14 +24,20 @@ func TestHandleExplain(t *testing.T) {
 		wantStatus int
 	}{
 		{
+			name:       "missing branch returns 400",
+			query:      "/api/v1/knomit/explain?path=kb/a.md",
+			useIdx:     false,
+			wantStatus: http.StatusBadRequest,
+		},
+		{
 			name:       "missing path returns 400",
-			query:      "/api/v1/knomit/explain",
+			query:      "/api/v1/knomit/explain?branch=agent/test",
 			useIdx:     false,
 			wantStatus: http.StatusBadRequest,
 		},
 		{
 			name:       "returns incoming and outgoing",
-			query:      "/api/v1/knomit/explain?path=kb/a.md",
+			query:      "/api/v1/knomit/explain?branch=agent/test&path=kb/a.md",
 			useIdx:     true,
 			result:     explainResult,
 			wantStatus: http.StatusOK,
@@ -46,7 +52,7 @@ func TestHandleExplain(t *testing.T) {
 			var idx repos.SearchIndex
 			if tc.useIdx {
 				mockIdx := NewMockSearchIndex(ctrl)
-				mockIdx.EXPECT().ExplainFact("kb/a.md").Return(tc.result, nil)
+				mockIdx.EXPECT().ExplainFact("agent/test", "kb/a.md").Return(tc.result, nil)
 				idx = mockIdx
 			}
 

@@ -43,7 +43,7 @@ type SearchIndex interface {
 	GetLastCommit(branch string) (string, error)
 	Stats(branch, pathPrefix string) (store.StatsResult, error)
 	Completions(branch, category, prefix string, limit int) ([]string, error)
-	ExplainFact(path string) (store.ExplainResult, error)
+	ExplainFact(branch, path string) (store.ExplainResult, error)
 }
 
 // SynthDeps bundles the dependencies needed by the synthesize handler.
@@ -111,8 +111,8 @@ func (ri *RepoInstance) withWrite(fn func()) {
 // Name returns the repository name.
 func (ri *RepoInstance) Name() string { return ri.name }
 
-// Branch returns the agent branch this repo writes to.
-func (ri *RepoInstance) Branch() string { return ri.agentBranch }
+// AgentBranch returns the agent branch this repo writes to.
+func (ri *RepoInstance) AgentBranch() string { return ri.agentBranch }
 
 // TaskHub returns the hub for broadcasting task status events.
 func (ri *RepoInstance) TaskHub() *TaskHub { return ri.hub }
