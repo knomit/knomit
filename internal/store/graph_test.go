@@ -2,6 +2,7 @@ package store
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"reflect"
@@ -111,6 +112,7 @@ func TestGraphMergeFact(t *testing.T) {
 
 	err = idx.graphSyncFact(FactRecord{
 		Path:     "kb/test/fact.md",
+		BlobHash: "bh_test",
 		Title:    "Test Fact",
 		Domain:   []string{"engineering/software"},
 		Entities: []string{"Go", "SQLite"},
@@ -141,6 +143,7 @@ func TestGraphMergeFactWithApostrophe(t *testing.T) {
 	// SELECT cypher('...'), producing: near "s": syntax error
 	err = idx.graphSyncFact(FactRecord{
 		Path:     "kb/people/dave/postgres-expert.md",
+		BlobHash: "bh_dave",
 		Title:    "Dave's Postgres expertise",
 		Domain:   []string{"engineering"},
 		Entities: []string{"Dave", "PostgreSQL"},
@@ -167,8 +170,9 @@ func TestGraphDomainHierarchy(t *testing.T) {
 	defer idx.Close()
 
 	err = idx.graphSyncFact(FactRecord{
-		Path:   "kb/test/fact.md",
-		Domain: []string{"engineering/software/applications/web-server"},
+		Path:     "kb/test/fact.md",
+		BlobHash: "bh_dom",
+		Domain:   []string{"engineering/software/applications/web-server"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -211,10 +215,11 @@ func TestGraphDeleteFact(t *testing.T) {
 	// Create then delete
 	_ = idx.graphSyncFact(FactRecord{
 		Path:     "kb/test/fact.md",
+		BlobHash: "bh_del",
 		Domain:   []string{"eng"},
 		Entities: []string{"Go"},
 	})
-	err = idx.graphDeleteFact("kb/test/fact.md")
+	err = idx.graphDeleteFact("kb/test/fact.md", "bh_del")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -222,7 +227,7 @@ func TestGraphDeleteFact(t *testing.T) {
 	// Fact node should be marked deleted.
 	// json_extract returns integer 1 for JSON boolean true (SQLite has no bool type).
 	var deleted int
-	err = idx.db.QueryRow(`SELECT json_extract(value, '$.deleted') FROM json_each(cypher('MATCH (f:Fact {path: "kb/test/fact.md"}) RETURN f.deleted AS deleted'))`).Scan(&deleted)
+	err = idx.db.QueryRow(`SELECT json_extract(value, '$.deleted') FROM json_each(cypher('MATCH (f:Fact {path: "kb/test/fact.md"}) WHERE f.blob_hash = "bh_del" RETURN f.deleted AS deleted'))`).Scan(&deleted)
 	if err != nil {
 		t.Fatalf("Fact node not found after delete: %v", err)
 	}
@@ -251,13 +256,13 @@ func TestGraphBuildSimilarityEdges(t *testing.T) {
 		}
 	}
 
-	err = idx.graphBuildSimilarityEdges("kb/a.md")
+	err = idx.graphBuildSimilarityEdges("kb/a.md", "hash_alpha")
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	var count int
-	err = idx.db.QueryRow(`SELECT count(*) FROM json_each(cypher('MATCH (:Fact {path: "kb/a.md"})-[:SIMILAR_TO]->(:Fact) RETURN 1 AS n'))`).Scan(&count)
+	err = idx.db.QueryRow(`SELECT count(*) FROM json_each(cypher('MATCH (a:Fact {path: "kb/a.md"})-[:SIMILAR_TO]->(b:Fact) WHERE a.blob_hash = "hash_alpha" RETURN 1 AS n'))`).Scan(&count)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -549,10 +554,10 @@ func TestGraphExpandSearch_MultiSeed(t *testing.T) {
 	}
 
 	// Build SIMILAR_TO edges so that kb/f1.md ↔ kb/f3.md are connected.
-	if err := idx.graphBuildSimilarityEdges("kb/f1.md"); err != nil {
+	if err := idx.graphBuildSimilarityEdges("kb/f1.md", "hash_alpha"); err != nil {
 		t.Fatal(err)
 	}
-	if err := idx.graphBuildSimilarityEdges("kb/f3.md"); err != nil {
+	if err := idx.graphBuildSimilarityEdges("kb/f3.md", "hash_beta"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -690,6 +695,72 @@ func (m *mockGitReader) ListAllWithHash(branch string) ([]string, []string, erro
 	return paths, hashes, nil
 }
 
+// TestGraphPerVersionNodes verifies that Fact nodes are keyed by {path, blob_hash}:
+// two versions of the same path create separate graph nodes with independent edges.
+func TestGraphPerVersionNodes(t *testing.T) {
+	idx, err := New(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer idx.Close()
+	idx.SetEmbedder(&stubEmbedder768d{})
+
+	insertBlob(t, idx.db, "bh_v1", "alpha")
+	insertBlob(t, idx.db, "bh_v2", "beta")
+
+	// Upsert v1 with entity "Go".
+	if err := idx.Upsert(testBranch, "c1", FactRecord{
+		Path: "kb/x.md", BlobHash: "bh_v1", Title: "V1",
+		Domain: []string{"eng"}, Entities: []string{"Go"}, Refs: []string{},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Upsert v2 with entity "Rust" — same path, different blob_hash.
+	if err := idx.Upsert(testBranch, "c2", FactRecord{
+		Path: "kb/x.md", BlobHash: "bh_v2", Title: "V2",
+		Domain: []string{"eng"}, Entities: []string{"Rust"}, Refs: []string{},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Two distinct Fact nodes should exist for the same path.
+	var nodeCount int
+	idx.db.QueryRow(`SELECT count(*) FROM json_each(cypher('MATCH (f:Fact {path: "kb/x.md"}) RETURN f.path AS path'))`).Scan(&nodeCount)
+	if nodeCount != 2 {
+		t.Fatalf("expected 2 Fact nodes for kb/x.md, got %d", nodeCount)
+	}
+
+	// V1 should be tagged with "Go", V2 with "Rust".
+	var v1entity string
+	idx.db.QueryRow(
+		`SELECT json_extract(value, '$.name') FROM json_each(cypher('MATCH (f:Fact {path: "kb/x.md"})-[:TAGGED]->(e:Entity) WHERE f.blob_hash = "bh_v1" RETURN e.name AS name'))`,
+	).Scan(&v1entity)
+	if v1entity != "Go" {
+		t.Errorf("v1 entity = %q, want Go", v1entity)
+	}
+
+	var v2entity string
+	idx.db.QueryRow(
+		`SELECT json_extract(value, '$.name') FROM json_each(cypher('MATCH (f:Fact {path: "kb/x.md"})-[:TAGGED]->(e:Entity) WHERE f.blob_hash = "bh_v2" RETURN e.name AS name'))`,
+	).Scan(&v2entity)
+	if v2entity != "Rust" {
+		t.Errorf("v2 entity = %q, want Rust", v2entity)
+	}
+
+	// GC should remove v1 (orphaned after v2 replaced it on the branch).
+	if err := idx.GC(); err != nil {
+		t.Fatal(err)
+	}
+	idx.db.QueryRow(`SELECT count(*) FROM json_each(cypher('MATCH (f:Fact {path: "kb/x.md"}) RETURN f.path AS path'))`).Scan(&nodeCount)
+	// After GC, v1 is orphaned → graphDeleteFact marks it deleted. 1 living node remains.
+	var livingCount int
+	idx.db.QueryRow(`SELECT count(*) FROM json_each(cypher('MATCH (f:Fact {path: "kb/x.md"}) WHERE NOT f.deleted = true RETURN f.path AS path'))`).Scan(&livingCount)
+	if livingCount != 1 {
+		t.Errorf("expected 1 living Fact node after GC, got %d", livingCount)
+	}
+}
+
 func TestDerivedFromInvariant(t *testing.T) {
 	idx, err := New(":memory:")
 	if err != nil {
@@ -701,6 +772,7 @@ func TestDerivedFromInvariant(t *testing.T) {
 	rec := FactRecord{
 		Path:       "kb/a.md",
 		Title:      "A",
+		BlobHash:   "bh_a_v1",
 		Domain:     []string{"test"},
 		Refs:       []string{"kb/b.md", "kb/c.md", "https://example.com"},
 	}
@@ -714,8 +786,8 @@ func TestDerivedFromInvariant(t *testing.T) {
 		t.Fatalf("upsert: %v", err)
 	}
 
-	// Query DERIVED_FROM edges for kb/a.md.
-	got := derivedFromPaths(t, idx, "kb/a.md")
+	// Query DERIVED_FROM edges for kb/a.md version 1.
+	got := derivedFromPaths(t, idx, "kb/a.md", "bh_a_v1")
 	want := map[string]bool{"kb/b.md": true, "kb/c.md": true}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("DERIVED_FROM edges = %v, want %v", got, want)
@@ -726,24 +798,32 @@ func TestDerivedFromInvariant(t *testing.T) {
 		t.Fatalf("upsert d: %v", err)
 	}
 	rec.Refs = []string{"kb/b.md", "kb/d.md"}
-	rec.BlobHash = "bh_a_v2" // Different blob hash to avoid COW shortcut
+	rec.BlobHash = "bh_a_v2" // Different blob hash → new graph node (per-version)
 	if err := idx.Upsert(testBranch, "abc", rec); err != nil {
 		t.Fatalf("re-upsert: %v", err)
 	}
-	got = derivedFromPaths(t, idx, "kb/a.md")
+	// New version should have the new edges.
+	got = derivedFromPaths(t, idx, "kb/a.md", "bh_a_v2")
 	want = map[string]bool{"kb/b.md": true, "kb/d.md": true}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("after re-upsert DERIVED_FROM = %v, want %v", got, want)
 	}
+	// Old version's edges are immutable (still point to b and c).
+	got = derivedFromPaths(t, idx, "kb/a.md", "bh_a_v1")
+	want = map[string]bool{"kb/b.md": true, "kb/c.md": true}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("old version DERIVED_FROM = %v, want %v", got, want)
+	}
 }
 
-// derivedFromPaths returns the set of target paths for DERIVED_FROM edges from src.
-func derivedFromPaths(t *testing.T, idx *Index, src string) map[string]bool {
+// derivedFromPaths returns the set of target paths for DERIVED_FROM edges
+// from a specific fact version identified by (src, blobHash).
+func derivedFromPaths(t *testing.T, idx *Index, src, blobHash string) map[string]bool {
 	t.Helper()
-	pj := jsonParams("path", src)
+	params, _ := json.Marshal(map[string]string{"path": src, "blob_hash": blobHash})
 	rows, err := idx.db.Query(
-		`SELECT json_extract(value, '$.path') FROM json_each(cypher('MATCH (f:Fact {path: $path})-[:DERIVED_FROM]->(t:Fact) RETURN t.path AS path', ?))`,
-		pj,
+		`SELECT json_extract(value, '$.path') FROM json_each(cypher('MATCH (f:Fact {path: $path, blob_hash: $blob_hash})-[:DERIVED_FROM]->(t:Fact) RETURN t.path AS path', ?))`,
+		string(params),
 	)
 	if err != nil {
 		t.Fatalf("query DERIVED_FROM: %v", err)
@@ -770,10 +850,10 @@ func TestExplainFact(t *testing.T) {
 	// Set up: a → b, a → c, d → a. All current (not deleted).
 	// Upsert targets before referrers so edges resolve (no self-loops).
 	facts := []FactRecord{
-		{Path: "kb/b.md", Title: "Fact B", Domain: []string{"test"}},
-		{Path: "kb/c.md", Title: "Fact C", Domain: []string{"test"}},
-		{Path: "kb/a.md", Title: "Fact A", Domain: []string{"test"}, Refs: []string{"kb/b.md", "kb/c.md"}},
-		{Path: "kb/d.md", Title: "Fact D", Domain: []string{"test"}, Refs: []string{"kb/a.md"}},
+		{Path: "kb/b.md", BlobHash: "bh_b", Title: "Fact B", Domain: []string{"test"}},
+		{Path: "kb/c.md", BlobHash: "bh_c", Title: "Fact C", Domain: []string{"test"}},
+		{Path: "kb/a.md", BlobHash: "bh_a", Title: "Fact A", Domain: []string{"test"}, Refs: []string{"kb/b.md", "kb/c.md"}},
+		{Path: "kb/d.md", BlobHash: "bh_d", Title: "Fact D", Domain: []string{"test"}, Refs: []string{"kb/a.md"}},
 	}
 	for _, f := range facts {
 		if err := idx.Upsert(testBranch, "abc", f); err != nil {
@@ -832,6 +912,7 @@ func TestExplainFact_SelfLoopFiltered(t *testing.T) {
 	// Index fact A with a ref to a non-existent target — causes a self-loop.
 	if err := idx.Upsert(testBranch, "abc", FactRecord{
 		Path:       "kb/a.md",
+		BlobHash:   "bh_self",
 		Title:      "Fact A",
 		Domain:     []string{"test"},
 		Refs:       []string{"kb/missing.md"},

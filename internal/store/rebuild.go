@@ -87,16 +87,19 @@ func (idx *Index) rebuildFacts(git GitReader, branch, head string, progress Rebu
 	n := int(affected)
 
 	// Populate branch_facts: link each fact to this branch with its commit_hash.
+	// Prefer commit_log entries scoped to this branch; fall back to legacy rows
+	// with NULL branch_id (written before the branch existed in the branches table).
 	if _, err := idx.db.Exec(`
 		INSERT OR REPLACE INTO branch_facts (branch_id, path, fact_id, commit_hash)
 		SELECT ?, f.path, f.id, COALESCE(cl.commit_hash, '')
 		FROM facts f
 		JOIN _rebuild_entries e ON e.path = f.path AND e.blob_hash = f.blob_hash
 		LEFT JOIN (
-			SELECT path, commit_hash, ROW_NUMBER() OVER (PARTITION BY path ORDER BY committed_at DESC) AS rn
+			SELECT path, commit_hash, ROW_NUMBER() OVER (PARTITION BY path ORDER BY (branch_id = ?) DESC, committed_at DESC) AS rn
 			FROM commit_log
+			WHERE branch_id = ? OR branch_id IS NULL
 		) cl ON cl.path = f.path AND cl.rn = 1
-	`, branchID); err != nil {
+	`, branchID, branchID, branchID); err != nil {
 		return 0, fmt.Errorf("rebuildFacts: populate branch_facts: %w", err)
 	}
 
@@ -330,17 +333,17 @@ func (idx *Index) rebuildGraph(progress RebuildProgress) (int, error) {
 	// Build similarity edges after commit (needs committed data for KNN).
 	// Batch: collect all neighbors first, then write all edges in one transaction.
 	if idx.getEmbedder() != nil {
-		type simEdge struct{ from, to string }
+		type simEdge struct{ fromPath, fromBH, toPath, toBH string }
 		var edges []simEdge
 
 		for _, rec := range facts {
-			emb, err := idx.getEmbeddingByFactPath(rec.Path)
+			emb, err := idx.getEmbeddingByFact(rec.Path, rec.BlobHash)
 			if err != nil || emb == nil {
 				continue
 			}
 			vecBlob := float32SliceToBytes(emb)
 			rows, err := idx.db.Query(
-				`SELECT f.path, (1.0 - fv.distance) as similarity
+				`SELECT f.path, f.blob_hash, (1.0 - fv.distance) as similarity
 				 FROM facts_vec fv
 				 JOIN facts f ON f.id = fv.rowid
 				 WHERE fv.embedding MATCH ? AND fv.k = ?
@@ -352,13 +355,13 @@ func (idx *Index) rebuildGraph(progress RebuildProgress) (int, error) {
 				continue
 			}
 			for rows.Next() {
-				var neighborPath string
+				var neighborPath, neighborBH string
 				var sim float64
-				if err := rows.Scan(&neighborPath, &sim); err != nil {
+				if err := rows.Scan(&neighborPath, &neighborBH, &sim); err != nil {
 					break
 				}
-				if neighborPath != rec.Path && sim >= knnThreshold {
-					edges = append(edges, simEdge{from: rec.Path, to: neighborPath})
+				if (neighborPath != rec.Path || neighborBH != rec.BlobHash) && sim >= knnThreshold {
+					edges = append(edges, simEdge{fromPath: rec.Path, fromBH: rec.BlobHash, toPath: neighborPath, toBH: neighborBH})
 				}
 			}
 			rows.Close()
@@ -371,11 +374,13 @@ func (idx *Index) rebuildGraph(progress RebuildProgress) (int, error) {
 				log.Warn().Err(err).Msg("rebuildGraph: begin similarity tx")
 			} else {
 				for _, e := range edges {
-					fp := escapeCypherKey(e.from)
-					tp := escapeCypherKey(e.to)
-					q := fmt.Sprintf(`SELECT cypher('MATCH (a:%s {path: "%s"}), (b:%s {path: "%s"}) MERGE (a)-[:%s]->(b)')`, NodeFact, fp, NodeFact, tp, EdgeSimilarTo)
+					fp := escapeCypherKey(e.fromPath)
+					fbh := escapeCypherKey(e.fromBH)
+					tp := escapeCypherKey(e.toPath)
+					tbh := escapeCypherKey(e.toBH)
+					q := fmt.Sprintf(`SELECT cypher('MATCH (a:%s {path: "%s"}), (b:%s {path: "%s"}) WHERE a.blob_hash = "%s" AND b.blob_hash = "%s" MERGE (a)-[:%s]->(b)')`, NodeFact, fp, NodeFact, tp, fbh, tbh, EdgeSimilarTo)
 					if _, err := simTx.Exec(q); err != nil {
-						log.Warn().Err(err).Str("from", e.from).Str("to", e.to).Msg("rebuildGraph: similarity edge failed")
+						log.Warn().Err(err).Str("from", e.fromPath).Str("to", e.toPath).Msg("rebuildGraph: similarity edge failed")
 					}
 				}
 				if err := simTx.Commit(); err != nil {

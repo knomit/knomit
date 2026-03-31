@@ -160,7 +160,7 @@ func (idx *Index) Upsert(branch, commitHash string, rec FactRecord) error {
 
 	// Build similarity edges if embeddings are available.
 	if idx.getEmbedder() != nil {
-		if err := idx.graphBuildSimilarityEdges(rec.Path); err != nil {
+		if err := idx.graphBuildSimilarityEdges(rec.Path, rec.BlobHash); err != nil {
 			log.Warn().Err(err).Str("path", rec.Path).Msg("graph similarity edges failed")
 		}
 	}
@@ -206,6 +206,10 @@ func (idx *Index) Delete(branch, path string) error {
 	}
 
 	if refCount == 0 {
+		// Look up blob_hash before deleting (needed for graph node identification).
+		var blobHash string
+		_ = idx.db.QueryRow(`SELECT blob_hash FROM facts WHERE id = ?`, factID).Scan(&blobHash)
+
 		// No more references — delete the underlying fact (cascade handles
 		// fact_entities, fact_domains; trigger handles facts_vec).
 		if _, err := idx.db.Exec(`DELETE FROM facts WHERE id = ?`, factID); err != nil {
@@ -213,7 +217,7 @@ func (idx *Index) Delete(branch, path string) error {
 		}
 
 		// Mark fact as deleted in graph (preserves lineage via incoming DERIVED_FROM).
-		if err := idx.graphDeleteFact(path); err != nil {
+		if err := idx.graphDeleteFact(path, blobHash); err != nil {
 			log.Warn().Err(err).Str("path", path).Msg("graph delete failed")
 		}
 	}
@@ -268,17 +272,17 @@ func (idx *Index) GetEmbedding(branch, path string) ([]float32, error) {
 	return bytesToFloat32Slice(blob)
 }
 
-// getEmbeddingByFactPath returns the stored embedding vector for a fact
-// looked up by path directly in the facts table (no branch scoping).
-// Used internally by rebuild operations that operate across all facts.
-func (idx *Index) getEmbeddingByFactPath(path string) ([]float32, error) {
+// getEmbeddingByFact returns the stored embedding vector for a specific fact
+// version identified by (path, blob_hash). No branch scoping.
+// Used internally by graph similarity edge computation.
+func (idx *Index) getEmbeddingByFact(path, blobHash string) ([]float32, error) {
 	var blob []byte
 	err := idx.db.QueryRow(
 		`SELECT fv.embedding
 		 FROM facts f
 		 JOIN facts_vec fv ON fv.rowid = f.id
-		 WHERE f.path = ?`,
-		path,
+		 WHERE f.path = ? AND f.blob_hash = ?`,
+		path, blobHash,
 	).Scan(&blob)
 	if err == sql.ErrNoRows {
 		return nil, nil

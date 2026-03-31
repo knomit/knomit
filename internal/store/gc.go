@@ -10,39 +10,41 @@ import (
 // nodes, orphaned Entity/Domain/OntologyNode graph nodes, and commit_log
 // entries for deleted branches.
 func (idx *Index) GC() error {
-	// 1. Collect orphaned fact paths before deleting (needed for graph cleanup).
+	// 1. Collect orphaned facts before deleting (needed for graph cleanup).
+	type orphanFact struct {
+		id       int64
+		path     string
+		blobHash string
+	}
 	rows, err := idx.db.Query(
-		`SELECT id, path FROM facts WHERE id NOT IN (SELECT fact_id FROM branch_facts)`,
+		`SELECT id, path, blob_hash FROM facts WHERE id NOT IN (SELECT fact_id FROM branch_facts)`,
 	)
 	if err != nil {
 		return fmt.Errorf("gc: find orphans: %w", err)
 	}
-	var orphanPaths []string
-	var orphanIDs []int64
+	var orphans []orphanFact
 	for rows.Next() {
-		var id int64
-		var path string
-		if err := rows.Scan(&id, &path); err != nil {
+		var o orphanFact
+		if err := rows.Scan(&o.id, &o.path, &o.blobHash); err != nil {
 			rows.Close()
 			return fmt.Errorf("gc: scan orphan: %w", err)
 		}
-		orphanIDs = append(orphanIDs, id)
-		orphanPaths = append(orphanPaths, path)
+		orphans = append(orphans, o)
 	}
 	rows.Close()
 
-	if len(orphanIDs) > 0 {
+	if len(orphans) > 0 {
 		// Delete orphaned facts (cascades to fact_entities, fact_domains, facts_vec via trigger).
-		for _, id := range orphanIDs {
-			if _, err := idx.db.Exec(`DELETE FROM facts WHERE id = ?`, id); err != nil {
-				return fmt.Errorf("gc: delete fact %d: %w", id, err)
+		for _, o := range orphans {
+			if _, err := idx.db.Exec(`DELETE FROM facts WHERE id = ?`, o.id); err != nil {
+				return fmt.Errorf("gc: delete fact %d: %w", o.id, err)
 			}
 		}
 
-		// 2. Clean up graph Fact nodes for orphaned paths.
-		for _, path := range orphanPaths {
-			if err := idx.graphDeleteFact(path); err != nil {
-				log.Warn().Err(err).Str("path", path).Msg("gc: graph delete fact failed")
+		// 2. Clean up graph Fact nodes for orphaned fact versions.
+		for _, o := range orphans {
+			if err := idx.graphDeleteFact(o.path, o.blobHash); err != nil {
+				log.Warn().Err(err).Str("path", o.path).Msg("gc: graph delete fact failed")
 			}
 		}
 	}

@@ -702,6 +702,77 @@ func TestRebuild_WithEmbedder_Idempotent(t *testing.T) {
 	}
 }
 
+// TestRebuildFacts_CommitLogBranchScoped verifies that rebuildFacts picks
+// commit_hash from the correct branch's commit_log, not from another branch
+// that happens to have a more recent entry for the same path.
+func TestRebuildFacts_CommitLogBranchScoped(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test.db")
+	svc, err := Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer svc.Close()
+
+	branchA := "agent/branch-a"
+	branchB := "agent/branch-b"
+
+	gs, err := git.InitWithStorer(svc.GitStorer(), nil, branchA)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	fact := "---\ntype: observation\ndomain: [testing]\nconfidence: 0.9\nsources: 1\nentities: [knomit]\nrefs: []\n---\n# Shared Fact\n\nBody.\n"
+
+	// Write fact on branchA first.
+	commitA, _, err := gs.WriteFile(branchA, "kb/shared.md", fact, "add on A", "learn")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Sync branchA to populate index and commit_log.
+	if err := svc.Index().Sync(gs, branchA); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create branchB from branchA, write same fact — gets a different commit.
+	if err := gs.CreateBranch(branchB, branchA); err != nil {
+		t.Fatal(err)
+	}
+	commitB, _, err := gs.WriteFile(branchB, "kb/shared.md", fact, "add on B", "learn")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Index().Sync(gs, branchB); err != nil {
+		t.Fatal(err)
+	}
+
+	if commitA == commitB {
+		t.Fatal("expected distinct commits for each branch")
+	}
+
+	// Clear facts and rebuild only branchA.
+	svc.db.Exec("DELETE FROM branch_facts")
+	svc.db.Exec("DELETE FROM facts")
+
+	if err := svc.Index().Rebuild(gs, branchA, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	rec, err := svc.Index().GetByPath(branchA, "kb/shared.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec == nil {
+		t.Fatal("expected fact after rebuild")
+	}
+
+	// The commit_hash must come from branchA's commit_log, not branchB's.
+	if rec.CommitHash != commitA {
+		t.Fatalf("commit_hash=%q, want branchA's %q (not branchB's %q)", rec.CommitHash, commitA, commitB)
+	}
+}
+
 // ── Benchmarks ───────────────────────────────────────────────────────────────
 
 func BenchmarkRebuildEmbeddings(b *testing.B) {

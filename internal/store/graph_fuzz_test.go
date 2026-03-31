@@ -45,6 +45,7 @@ func FuzzGraphUpsert(f *testing.F) {
 
 		rec := FactRecord{
 			Path:       "kb/" + path + ".md",
+			BlobHash:   "fuzz_bh",
 			Title:      title,
 			Domain:     []string{domain},
 			Entities:   []string{entity},
@@ -57,7 +58,7 @@ func FuzzGraphUpsert(f *testing.F) {
 				err, path, title, domain, entity)
 		}
 
-		err = idx.graphDeleteFact(rec.Path)
+		err = idx.graphDeleteFact(rec.Path, rec.BlobHash)
 		if err != nil {
 			t.Fatalf("graphDeleteFact failed: %v\npath=%q", err, path)
 		}
