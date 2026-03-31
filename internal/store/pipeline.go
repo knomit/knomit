@@ -66,12 +66,20 @@ func (idx *Index) SetPipelineWatermark(ctx context.Context, tool, branch, hash s
 func (idx *Index) CreatePipelineSession(ctx context.Context, tool, branch string) (*PipelineSession, error) {
 	now := time.Now().UTC().Format(time.RFC3339)
 
+	ctx, tx, ownTx, err := beginTxIfNeeded(ctx, idx.db)
+	if err != nil {
+		return nil, fmt.Errorf("CreatePipelineSession: begin tx: %w", err)
+	}
+	if ownTx {
+		defer tx.Rollback()
+	}
+	db := conn(ctx, idx.db)
+
 	// Abandon any active session for this tool+branch.
-	_, err := conn(ctx, idx.db).ExecContext(ctx,
+	if _, err := db.ExecContext(ctx,
 		`UPDATE pipeline_sessions SET status = 'abandoned', updated_at = ? WHERE tool = ? AND branch = ? AND status = 'active'`,
 		now, tool, branch,
-	)
-	if err != nil {
+	); err != nil {
 		return nil, fmt.Errorf("CreatePipelineSession abandon: %w", err)
 	}
 
@@ -84,12 +92,17 @@ func (idx *Index) CreatePipelineSession(ctx context.Context, tool, branch string
 		UpdatedAt: now,
 	}
 
-	_, err = conn(ctx, idx.db).ExecContext(ctx,
+	if _, err := db.ExecContext(ctx,
 		`INSERT INTO pipeline_sessions(id, tool, branch, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`,
 		s.ID, s.Tool, s.Branch, s.Status, s.CreatedAt, s.UpdatedAt,
-	)
-	if err != nil {
+	); err != nil {
 		return nil, fmt.Errorf("CreatePipelineSession insert: %w", err)
+	}
+
+	if ownTx {
+		if err := tx.Commit(); err != nil {
+			return nil, err
+		}
 	}
 	return s, nil
 }
