@@ -22,27 +22,7 @@ func (idx *Index) Upsert(ctx context.Context, branch, commitHash string, rec Fac
 		return fmt.Errorf("upsert: %w", err)
 	}
 
-	// COW check: does this exact (path, blob_hash) already exist?
-	var existingID int64
-	err = conn(ctx, idx.db).QueryRowContext(ctx,
-		`SELECT id FROM facts WHERE path = ? AND blob_hash = ?`,
-		rec.Path, rec.BlobHash,
-	).Scan(&existingID)
-	if err == nil {
-		// COW hit: fact content already exists, just update the branch pointer.
-		if _, err := conn(ctx, idx.db).ExecContext(ctx,
-			`INSERT OR REPLACE INTO branch_facts(branch_id, path, fact_id, commit_hash) VALUES (?, ?, ?, ?)`,
-			branchID, rec.Path, existingID, commitHash,
-		); err != nil {
-			return fmt.Errorf("upsert branch_facts (cow hit): %w", err)
-		}
-		return nil
-	}
-	if err != sql.ErrNoRows {
-		return fmt.Errorf("upsert cow check: %w", err)
-	}
-
-	// COW miss: full create path.
+	// Marshal JSON fields upfront (needed for both COW hit and miss).
 	domainJSON, err := json.Marshal(rec.Domain)
 	if err != nil {
 		return fmt.Errorf("marshal domain: %w", err)
@@ -56,10 +36,14 @@ func (idx *Index) Upsert(ctx context.Context, branch, commitHash string, rec Fac
 		return fmt.Errorf("marshal refs: %w", err)
 	}
 
+	factType := rec.Type
+	if factType == "" {
+		factType = "observation"
+	}
+
 	// Compute embedding vector if an embedder is configured.
 	var vecData []byte
 	if emb := idx.getEmbedder(); emb != nil {
-		// Read body from objects table for embedding computation.
 		var data []byte
 		err := conn(ctx, idx.db).QueryRowContext(ctx,
 			`SELECT data FROM objects WHERE hash = ? AND type = ?`,
@@ -75,21 +59,19 @@ func (idx *Index) Upsert(ctx context.Context, branch, commitHash string, rec Fac
 		}
 	}
 
-	tx, err := idx.db.BeginTx(ctx, nil)
+	// Begin transaction for atomic COW check + insert.
+	ctx, tx, ownTx, err := beginTxIfNeeded(ctx, idx.db)
 	if err != nil {
-		return fmt.Errorf("begin tx: %w", err)
+		return fmt.Errorf("upsert begin tx: %w", err)
 	}
-	defer tx.Rollback()
-
-	// Default type to "observation" if empty.
-	factType := rec.Type
-	if factType == "" {
-		factType = "observation"
+	if ownTx {
+		defer tx.Rollback()
 	}
+	db := conn(ctx, idx.db)
 
-	// Insert into facts.
-	result, err := tx.ExecContext(ctx,
-		`INSERT INTO facts(path, blob_hash, title, type, domain, entities, confidence, sources, refs, evidence_weight)
+	// Atomic: insert fact if it doesn't exist yet (no TOCTOU race).
+	_, err = db.ExecContext(ctx,
+		`INSERT OR IGNORE INTO facts(path, blob_hash, title, type, domain, entities, confidence, sources, refs, evidence_weight)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		rec.Path, rec.BlobHash, rec.Title, factType,
 		string(domainJSON), string(entitiesJSON),
@@ -100,17 +82,41 @@ func (idx *Index) Upsert(ctx context.Context, branch, commitHash string, rec Fac
 		return fmt.Errorf("upsert fact: %w", err)
 	}
 
-	factID, err := result.LastInsertId()
+	// Read the ID (works whether we just inserted or it already existed).
+	var factID int64
+	err = db.QueryRowContext(ctx,
+		`SELECT id FROM facts WHERE path = ? AND blob_hash = ?`,
+		rec.Path, rec.BlobHash,
+	).Scan(&factID)
 	if err != nil {
-		return fmt.Errorf("upsert last insert id: %w", err)
+		return fmt.Errorf("upsert select id: %w", err)
 	}
 
-	// Populate junction tables using fact_id.
+	// COW hit check: are junction tables already populated for this fact?
+	var junctionExists int
+	db.QueryRowContext(ctx,
+		`SELECT 1 FROM fact_entities WHERE fact_id = ? LIMIT 1`, factID,
+	).Scan(&junctionExists)
+	if junctionExists > 0 || (len(rec.Entities) == 0 && hasAnyBranchFact(ctx, db, factID)) {
+		// COW hit: fact fully indexed, just update branch pointer.
+		_, err = db.ExecContext(ctx,
+			`INSERT OR REPLACE INTO branch_facts(branch_id, path, fact_id, commit_hash) VALUES (?, ?, ?, ?)`,
+			branchID, rec.Path, factID, commitHash)
+		if err != nil {
+			return fmt.Errorf("upsert branch_facts (cow hit): %w", err)
+		}
+		if ownTx {
+			return tx.Commit()
+		}
+		return nil
+	}
+
+	// COW miss: populate junction tables, embeddings, branch_facts.
 	for _, entity := range rec.Entities {
 		if entity == "" {
 			continue
 		}
-		if _, err := tx.ExecContext(ctx,
+		if _, err := db.ExecContext(ctx,
 			`INSERT INTO fact_entities(fact_id, entity) VALUES (?, ?)`,
 			factID, entity,
 		); err != nil {
@@ -121,7 +127,7 @@ func (idx *Index) Upsert(ctx context.Context, branch, commitHash string, rec Fac
 		if domain == "" {
 			continue
 		}
-		if _, err := tx.ExecContext(ctx,
+		if _, err := db.ExecContext(ctx,
 			`INSERT INTO fact_domains(fact_id, domain) VALUES (?, ?)`,
 			factID, domain,
 		); err != nil {
@@ -131,10 +137,10 @@ func (idx *Index) Upsert(ctx context.Context, branch, commitHash string, rec Fac
 
 	// Insert embedding into facts_vec using the fact's id as rowid.
 	if vecData != nil {
-		if _, err := tx.ExecContext(ctx, `DELETE FROM facts_vec WHERE rowid = ?`, factID); err != nil {
+		if _, err := db.ExecContext(ctx, `DELETE FROM facts_vec WHERE rowid = ?`, factID); err != nil {
 			return fmt.Errorf("delete old vec row: %w", err)
 		}
-		if _, err := tx.ExecContext(ctx,
+		if _, err := db.ExecContext(ctx,
 			`INSERT INTO facts_vec(rowid, embedding) VALUES (?, ?)`,
 			factID, vecData,
 		); err != nil {
@@ -143,15 +149,17 @@ func (idx *Index) Upsert(ctx context.Context, branch, commitHash string, rec Fac
 	}
 
 	// Insert branch_facts pointer.
-	if _, err := tx.ExecContext(ctx,
+	if _, err := db.ExecContext(ctx,
 		`INSERT OR REPLACE INTO branch_facts(branch_id, path, fact_id, commit_hash) VALUES (?, ?, ?, ?)`,
 		branchID, rec.Path, factID, commitHash,
 	); err != nil {
 		return fmt.Errorf("upsert branch_facts: %w", err)
 	}
 
-	if err := tx.Commit(); err != nil {
-		return err
+	if ownTx {
+		if err := tx.Commit(); err != nil {
+			return err
+		}
 	}
 
 	// Sync graph: create/update nodes and edges for this fact.
@@ -167,6 +175,13 @@ func (idx *Index) Upsert(ctx context.Context, branch, commitHash string, rec Fac
 	}
 
 	return nil
+}
+
+// hasAnyBranchFact checks if any branch_facts row exists for the given fact_id.
+func hasAnyBranchFact(ctx context.Context, db ctxExecer, factID int64) bool {
+	var n int
+	db.QueryRowContext(ctx, `SELECT 1 FROM branch_facts WHERE fact_id = ? LIMIT 1`, factID).Scan(&n)
+	return n > 0
 }
 
 // Delete removes a fact from the given branch. If no other branch references
