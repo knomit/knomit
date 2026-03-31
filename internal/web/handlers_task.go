@@ -64,10 +64,8 @@ func handleSynthesizeStart() http.HandlerFunc {
 func handleRebuild() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
-		var gs repos.GitStore
 		var svc *store.Service
 		ri.WithRead(func(d repos.StoreDeps) {
-			gs = d.GS
 			svc = d.Svc
 		})
 		hub := ri.TaskHub()
@@ -76,12 +74,6 @@ func handleRebuild() http.HandlerFunc {
 
 		if svc == nil {
 			writeError(w, http.StatusServiceUnavailable, "index not available")
-			return
-		}
-
-		gitReader, ok := gs.(store.GitReader)
-		if !ok {
-			writeError(w, http.StatusInternalServerError, "git store does not support rebuild")
 			return
 		}
 
@@ -95,7 +87,7 @@ func handleRebuild() http.HandlerFunc {
 					emit(repos.TaskEvent{Status: "running", Phase: subPhase, Message: fmt.Sprintf("%d/%d", done, total), Repo: repo})
 				}
 			}
-			if err := idx.Rebuild(r.Context(), gitReader, branch, progress); err != nil {
+			if err := idx.Rebuild(r.Context(), svc, branch, progress); err != nil {
 				emit(repos.TaskEvent{Status: "error", Message: err.Error(), Repo: repo})
 				return
 			}

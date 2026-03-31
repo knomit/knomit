@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"sync"
 
-	"knomit/internal/git"
 	"knomit/internal/llm"
 	"knomit/internal/store"
 	"knomit/internal/synthesize"
@@ -19,18 +18,18 @@ type Embedder interface {
 }
 
 // GitStore is the narrow git interface needed by read-only query handlers
-// and the sync task handler. Accepts *git.Store at runtime.
+// and the sync task handler. Satisfied by *store.Service at runtime.
 type GitStore interface {
-	ListDir(ctx context.Context, branch, path string) ([]git.DirEntry, error)
+	ListDir(ctx context.Context, branch, path string) ([]store.DirEntry, error)
 	ReadFile(ctx context.Context, branch, path string) (string, error)
 	ReadFileAtCommit(ctx context.Context, branch, path, commitHash string) (string, error)
 	ReadFileLastCommit(ctx context.Context, branch, path, beforeCommitHash string) (content string, fromCommit string, err error)
 	WriteFile(ctx context.Context, branch, path, content, message, operation string) (commitHash, blobHash string, err error)
 	DeleteFile(ctx context.Context, branch, path, message, operation string) (commitHash string, err error)
-	Log(ctx context.Context, branch, path string) ([]git.LogEntry, error)
-	LogPaginated(ctx context.Context, branch, path string, limit int, after, from, before string) ([]git.LogEntryWithTags, string, string, error)
-	CommitDetail(ctx context.Context, commitHash string) (*git.CommitDetailResult, error)
-	Activity(ctx context.Context, branch, path string) (git.ActivityResult, error)
+	Log(ctx context.Context, branch, path string) ([]store.LogEntry, error)
+	LogPaginated(ctx context.Context, branch, path string, limit int, after, from, before string) ([]store.LogEntryWithTags, string, string, error)
+	CommitDetail(ctx context.Context, commitHash string) (*store.CommitDetailResult, error)
+	Activity(ctx context.Context, branch, path string) (store.ActivityResult, error)
 	HeadCommit(ctx context.Context, branch string) (string, error)
 	ListAll(ctx context.Context, branch string) ([]string, error)
 }
@@ -60,7 +59,6 @@ type SynthDeps struct {
 // StoreDeps bundles the lock-protected fields for read access via WithRead.
 // All five fields may be nil if the repo is not yet fully initialised.
 type StoreDeps struct {
-	GS    GitStore
 	Svc   *store.Service
 	Idx   SearchIndex
 	MCP   map[string]http.Handler
@@ -73,7 +71,6 @@ type RepoInstance struct {
 	name        string
 	dbPath      string
 	agentBranch string
-	gs          GitStore
 	svc         *store.Service
 	idx         SearchIndex
 	hub         *TaskHub
@@ -92,7 +89,6 @@ func (ri *RepoInstance) WithRead(fn func(StoreDeps)) {
 	ri.mu.RLock()
 	defer ri.mu.RUnlock()
 	fn(StoreDeps{
-		GS:    ri.gs,
 		Svc:   ri.svc,
 		Idx:   ri.idx,
 		MCP:   ri.mcpHandlers,
@@ -149,7 +145,6 @@ func NewTestInstance(name string) *RepoInstance {
 type TestInstanceConfig struct {
 	Name        string
 	AgentBranch string
-	GS          GitStore
 	Svc         *store.Service
 	Idx         SearchIndex
 	Hub         *TaskHub
@@ -166,7 +161,6 @@ func NewTestInstanceWithDeps(cfg TestInstanceConfig) *RepoInstance {
 	return &RepoInstance{
 		name:        cfg.Name,
 		agentBranch: cfg.AgentBranch,
-		gs:          cfg.GS,
 		svc:         cfg.Svc,
 		idx:         cfg.Idx,
 		hub:         cfg.Hub,

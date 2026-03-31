@@ -82,7 +82,7 @@ func (s *Service) DeleteFile(ctx context.Context, branch, path, message, operati
 	}
 
 	// Check existence inside the lock to avoid a TOCTOU race.
-	exists, err := s.fileExists(ctx, branch, path)
+	exists, err := s.FileExists(ctx, branch, path)
 	if err != nil {
 		unlock()
 		return "", fmt.Errorf("DeleteFile: check exists: %w", err)
@@ -117,9 +117,9 @@ func (s *Service) DeleteFile(ctx context.Context, branch, path, message, operati
 	return newCommitHash.String(), nil
 }
 
-// batchWrite writes multiple files in one commit on branch.
+// BatchWrite writes multiple files in one commit on branch.
 // Returns the commit hash and a map of path → blob hash for each written file.
-func (s *Service) batchWrite(ctx context.Context, branch string, files map[string]string, message, operation string) (commitHash string, blobHashes map[string]string, err error) {
+func (s *Service) BatchWrite(ctx context.Context, branch string, files map[string]string, message, operation string) (commitHash string, blobHashes map[string]string, err error) {
 	if len(files) == 0 {
 		return "", nil, nil
 	}

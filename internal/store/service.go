@@ -98,6 +98,9 @@ func (s *Service) Index() *Index { return s.idx }
 // GitStorer returns the go-git storer.
 func (s *Service) GitStorer() *storegit.Storer { return s.gits }
 
+// DB returns the underlying *sql.DB for low-level operations (e.g. WAL checkpoint).
+func (s *Service) DB() *sql.DB { return s.db }
+
 // Close closes the underlying database connection.
 func (s *Service) Close() error { return s.db.Close() }
 

@@ -7,18 +7,17 @@ import (
 	"github.com/mark3labs/mcp-go/server"
 
 	"knomit/internal/fact"
-	gitpkg "knomit/internal/git"
 	storepkg "knomit/internal/store"
 )
 
 // Re-export supporting types so MCP tool handlers can use them without
 // importing internal sub-packages directly.
 
-// DirEntry is re-exported from internal/git.
-type DirEntry = gitpkg.DirEntry
+// DirEntry is re-exported from internal/store.
+type DirEntry = storepkg.DirEntry
 
-// LogEntry is re-exported from internal/git.
-type LogEntry = gitpkg.LogEntry
+// LogEntry is re-exported from internal/store.
+type LogEntry = storepkg.LogEntry
 
 // SearchQuery is re-exported from internal/store.
 type SearchQuery = storepkg.SearchQuery
@@ -32,8 +31,8 @@ type FactRecord = storepkg.FactRecord
 // FactWithBody is re-exported from internal/store.
 type FactWithBody = storepkg.FactWithBody
 
-// FileRecency is re-exported from internal/git.
-type FileRecency = gitpkg.FileRecency
+// FileRecency is re-exported from internal/store.
+type FileRecency = storepkg.FileRecency
 
 // ToolSession is re-exported from internal/store.
 type ToolSession = storepkg.ToolSession

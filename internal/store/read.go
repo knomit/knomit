@@ -164,8 +164,8 @@ func (s *Service) ReadFile(ctx context.Context, branch, path string) (string, er
 	return content, err
 }
 
-// fileExists returns true if path exists at the tip of branch, false+nil if not found.
-func (s *Service) fileExists(ctx context.Context, branch, path string) (bool, error) {
+// FileExists returns true if path exists at the tip of branch, false+nil if not found.
+func (s *Service) FileExists(ctx context.Context, branch, path string) (bool, error) {
 	headHash, err := s.resolveRef(ctx, branch)
 	if err != nil {
 		return false, fmt.Errorf("fileExists: ref: %w", err)
@@ -315,8 +315,8 @@ func (s *Service) ListAll(ctx context.Context, branch string) ([]string, error) 
 	return paths, err
 }
 
-// log returns log entries for commits that modified path (up to 50).
-func (s *Service) log(ctx context.Context, branch, path string) ([]LogEntry, error) {
+// Log returns log entries for commits that modified path (up to 50).
+func (s *Service) Log(ctx context.Context, branch, path string) ([]LogEntry, error) {
 	headHash, err := s.resolveRef(ctx, branch)
 	if err != nil {
 		return nil, fmt.Errorf("log: ref: %w", err)
@@ -667,9 +667,9 @@ func (s *Service) CommitDetail(ctx context.Context, commitHash string) (*CommitD
 	}, nil
 }
 
-// walkChangedFiles returns .md files under prefix most recently changed,
+// WalkChangedFiles returns .md files under prefix most recently changed,
 // excluding already-seen paths, up to limit results.
-func (s *Service) walkChangedFiles(ctx context.Context, branch, fromCommit string, prefix string, seen map[string]bool, limit int) ([]FileRecency, string, error) {
+func (s *Service) WalkChangedFiles(ctx context.Context, branch, fromCommit string, prefix string, seen map[string]bool, limit int) ([]FileRecency, string, error) {
 	if s.gits.CommitLogAvailable() {
 		return s.walkChangedFilesSQL(ctx, branch, prefix, seen, limit)
 	}
@@ -780,8 +780,8 @@ func (s *Service) walkChangedFilesGit(ctx context.Context, branch, fromCommit st
 	return results, lastHash, nil
 }
 
-// grep searches all .md files at the tip of branch for pattern, returns matching paths.
-func (s *Service) grep(ctx context.Context, branch, pattern string) ([]string, error) {
+// Grep searches all .md files at the tip of branch for pattern, returns matching paths.
+func (s *Service) Grep(ctx context.Context, branch, pattern string) ([]string, error) {
 	re, err := regexp.Compile(pattern)
 	if err != nil {
 		return nil, fmt.Errorf("grep: compile pattern: %w", err)
