@@ -10,7 +10,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/transport/client"
 	"github.com/go-git/go-git/v5/plumbing/transport/server"
 	_ "github.com/mattn/go-sqlite3"
@@ -262,17 +261,6 @@ func TestTestConnectivity_SuccessfulClone(t *testing.T) {
 	}
 
 	// Create a "remote" knomit store with shared history by cloning local.
-	// First, advance main to HEAD on local so clone can find it.
-	head, err := localStore.HeadCommit(context.Background(), testAgentBranch)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := localStore.GitStorer().SetReference(
-		plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), plumbing.NewHash(head)),
-	); err != nil {
-		t.Fatal(err)
-	}
-
 	// Create a separate "remote" store with content.
 	remoteStore, err := store.Open(":memory:")
 	if err != nil {
@@ -285,18 +273,8 @@ func TestTestConnectivity_SuccessfulClone(t *testing.T) {
 	if _, _, err := remoteStore.WriteFile(context.Background(), "agent/remote", "kb/remote-fact.md", "# Remote\n", "add remote", "learn"); err != nil {
 		t.Fatal(err)
 	}
-	remoteHead, err := remoteStore.HeadCommit(context.Background(), "agent/remote")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := remoteStore.GitStorer().SetReference(
-		plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), plumbing.NewHash(remoteHead)),
-	); err != nil {
-		t.Fatal(err)
-	}
-
 	// Register in-process transport.
-	loader := server.MapLoader{"inmem:///test-connectivity": remoteStore.GitStorer()}
+	loader := server.MapLoader{"inmem:///test-connectivity": remoteStore.Storer()}
 	client.InstallProtocol("inmem", server.NewClient(loader))
 	t.Cleanup(func() { client.InstallProtocol("inmem", nil) })
 
@@ -488,18 +466,8 @@ func TestPreview_ComparesLocalAndRemote(t *testing.T) {
 	if _, _, err := remoteStore.WriteFile(context.Background(), "agent/remote", "kb/remote-only.md", "---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# Remote Only\n\nContent.\n", "add remote-only", "learn"); err != nil {
 		t.Fatal(err)
 	}
-	remoteHead, err := remoteStore.HeadCommit(context.Background(), "agent/remote")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := remoteStore.GitStorer().SetReference(
-		plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), plumbing.NewHash(remoteHead)),
-	); err != nil {
-		t.Fatal(err)
-	}
-
 	// Register in-process transport.
-	loader := server.MapLoader{"inmem:///test-preview": remoteStore.GitStorer()}
+	loader := server.MapLoader{"inmem:///test-preview": remoteStore.Storer()}
 	client.InstallProtocol("inmem", server.NewClient(loader))
 	t.Cleanup(func() { client.InstallProtocol("inmem", nil) })
 
@@ -659,17 +627,6 @@ func setupTestedSession(t *testing.T) (http.Handler, string) {
 	}
 	remoteFact := "---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# Remote Fact\n\nContent.\n"
 	if _, _, err := remoteStore.WriteFile(context.Background(), "agent/remote", "kb/remote-fact.md", remoteFact, "add remote", "learn"); err != nil {
-		t.Fatal(err)
-	}
-
-	// Set up main branch on remote (needed by Replay to create agent branch).
-	remoteHead, err := remoteStore.HeadCommit(context.Background(), "agent/remote")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := remoteStore.GitStorer().SetReference(
-		plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), plumbing.NewHash(remoteHead)),
-	); err != nil {
 		t.Fatal(err)
 	}
 

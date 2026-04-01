@@ -10,7 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/transport/client"
 	"github.com/go-git/go-git/v5/plumbing/transport/server"
 
@@ -72,20 +71,9 @@ func TestOriginSession_FullWorkflow(t *testing.T) {
 		t.Fatalf("remote WriteFile remote-b: %v", err)
 	}
 
-	// Advance main on remote so clone can find it.
-	remoteHead, err := remoteStore.HeadCommit(context.Background(), "agent/remote")
-	if err != nil {
-		t.Fatalf("remote HeadCommit: %v", err)
-	}
-	if err := remoteStore.GitStorer().SetReference(
-		plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), plumbing.NewHash(remoteHead)),
-	); err != nil {
-		t.Fatalf("remote SetReference main: %v", err)
-	}
-
 	// ---- 3. Wire in-process transport ----
 
-	loader := server.MapLoader{"inmem:///integration-remote": remoteStore.GitStorer()}
+	loader := server.MapLoader{"inmem:///integration-remote": remoteStore.Storer()}
 	client.InstallProtocol("inmem", server.NewClient(loader))
 	t.Cleanup(func() { client.InstallProtocol("inmem", nil) })
 
@@ -343,17 +331,7 @@ func TestOriginSession_RemoteWinsStrategy(t *testing.T) {
 		t.Fatalf("remote WriteFile remote-c: %v", err)
 	}
 
-	remoteHead, err := remoteStore.HeadCommit(context.Background(), "agent/remote")
-	if err != nil {
-		t.Fatalf("remote HeadCommit: %v", err)
-	}
-	if err := remoteStore.GitStorer().SetReference(
-		plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), plumbing.NewHash(remoteHead)),
-	); err != nil {
-		t.Fatalf("remote SetReference main: %v", err)
-	}
-
-	loader := server.MapLoader{"inmem:///remote-wins-test": remoteStore.GitStorer()}
+	loader := server.MapLoader{"inmem:///remote-wins-test": remoteStore.Storer()}
 	client.InstallProtocol("inmem", server.NewClient(loader))
 	t.Cleanup(func() { client.InstallProtocol("inmem", nil) })
 
@@ -481,17 +459,7 @@ func TestOriginSession_SwitchStrategy(t *testing.T) {
 	if _, _, err := remoteStore.WriteFile(context.Background(), "agent/remote", "kb/shared.md", sharedRemote, "add shared", "learn"); err != nil {
 		t.Fatalf("remote WriteFile: %v", err)
 	}
-	remoteHead, err := remoteStore.HeadCommit(context.Background(), "agent/remote")
-	if err != nil {
-		t.Fatalf("remote HeadCommit: %v", err)
-	}
-	if err := remoteStore.GitStorer().SetReference(
-		plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), plumbing.NewHash(remoteHead)),
-	); err != nil {
-		t.Fatalf("remote SetReference main: %v", err)
-	}
-
-	loader := server.MapLoader{"inmem:///switch-strategy": remoteStore.GitStorer()}
+	loader := server.MapLoader{"inmem:///switch-strategy": remoteStore.Storer()}
 	client.InstallProtocol("inmem", server.NewClient(loader))
 	t.Cleanup(func() { client.InstallProtocol("inmem", nil) })
 
@@ -601,18 +569,7 @@ func TestOriginSession_ExistingAgentBranch(t *testing.T) {
 		t.Fatalf("remote WriteFile existing: %v", err)
 	}
 
-	// Set up main branch on remote.
-	remoteHead, err := remoteStore.HeadCommit(context.Background(), testAgentBranch)
-	if err != nil {
-		t.Fatalf("remote HeadCommit: %v", err)
-	}
-	if err := remoteStore.GitStorer().SetReference(
-		plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), plumbing.NewHash(remoteHead)),
-	); err != nil {
-		t.Fatalf("remote SetReference main: %v", err)
-	}
-
-	loader := server.MapLoader{"inmem:///existing-agent": remoteStore.GitStorer()}
+	loader := server.MapLoader{"inmem:///existing-agent": remoteStore.Storer()}
 	client.InstallProtocol("inmem", server.NewClient(loader))
 	t.Cleanup(func() { client.InstallProtocol("inmem", nil) })
 
@@ -802,29 +759,14 @@ func TestOriginSession_BranchSelection(t *testing.T) {
 		t.Fatalf("remote WriteFile: %v", err)
 	}
 
-	remoteHead, err := remoteStore.HeadCommit(context.Background(), "agent/remote")
-	if err != nil {
-		t.Fatalf("remote HeadCommit: %v", err)
+	if err := remoteStore.CreateBranch(context.Background(), "develop", "agent/remote"); err != nil {
+		t.Fatalf("CreateBranch develop: %v", err)
 	}
-	// Create both branches.
-	if err := remoteStore.GitStorer().SetReference(
-		plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), plumbing.NewHash(remoteHead)),
-	); err != nil {
-		t.Fatalf("remote SetReference main: %v", err)
-	}
-	if err := remoteStore.GitStorer().SetReference(
-		plumbing.NewHashReference(plumbing.NewBranchReferenceName("develop"), plumbing.NewHash(remoteHead)),
-	); err != nil {
-		t.Fatalf("remote SetReference develop: %v", err)
-	}
-	// Point HEAD to main so clone checks out refs/heads/main.
-	if err := remoteStore.GitStorer().SetReference(
-		plumbing.NewSymbolicReference(plumbing.HEAD, plumbing.NewBranchReferenceName("main")),
-	); err != nil {
-		t.Fatalf("remote SetReference HEAD: %v", err)
+	if err := remoteStore.SetDefaultBranch("main"); err != nil {
+		t.Fatalf("SetDefaultBranch: %v", err)
 	}
 
-	loader := server.MapLoader{"inmem:///branch-selection": remoteStore.GitStorer()}
+	loader := server.MapLoader{"inmem:///branch-selection": remoteStore.Storer()}
 	client.InstallProtocol("inmem", server.NewClient(loader))
 	t.Cleanup(func() { client.InstallProtocol("inmem", nil) })
 
@@ -954,17 +896,7 @@ func TestOriginSession_RebuildAfterCommit(t *testing.T) {
 	if _, _, err := remoteStore.WriteFile(context.Background(), "agent/remote", "kb/remote.md", remoteFact, "add remote", "learn"); err != nil {
 		t.Fatalf("remote WriteFile: %v", err)
 	}
-	remoteHead, err := remoteStore.HeadCommit(context.Background(), "agent/remote")
-	if err != nil {
-		t.Fatalf("remote HeadCommit: %v", err)
-	}
-	if err := remoteStore.GitStorer().SetReference(
-		plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), plumbing.NewHash(remoteHead)),
-	); err != nil {
-		t.Fatalf("remote SetReference main: %v", err)
-	}
-
-	loader := server.MapLoader{"inmem:///rebuild-test": remoteStore.GitStorer()}
+	loader := server.MapLoader{"inmem:///rebuild-test": remoteStore.Storer()}
 	client.InstallProtocol("inmem", server.NewClient(loader))
 	t.Cleanup(func() { client.InstallProtocol("inmem", nil) })
 
@@ -1070,17 +1002,7 @@ func TestOriginSession_ReviewWatermarkSetAfterCommit(t *testing.T) {
 	if _, _, err := remoteStore.WriteFile(context.Background(), "agent/remote", "kb/cloned.md", remoteFact, "add fact", "learn"); err != nil {
 		t.Fatalf("remote WriteFile: %v", err)
 	}
-	remoteHead, err := remoteStore.HeadCommit(context.Background(), "agent/remote")
-	if err != nil {
-		t.Fatalf("remote HeadCommit: %v", err)
-	}
-	if err := remoteStore.GitStorer().SetReference(
-		plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), plumbing.NewHash(remoteHead)),
-	); err != nil {
-		t.Fatalf("remote SetReference main: %v", err)
-	}
-
-	loader := server.MapLoader{"inmem:///watermark-test": remoteStore.GitStorer()}
+	loader := server.MapLoader{"inmem:///watermark-test": remoteStore.Storer()}
 	client.InstallProtocol("inmem", server.NewClient(loader))
 	t.Cleanup(func() { client.InstallProtocol("inmem", nil) })
 
@@ -1202,17 +1124,7 @@ func TestOriginSession_DeadRefs(t *testing.T) {
 	if _, _, err := remoteStore.WriteFile(context.Background(), "agent/remote", "kb/remote.md", remoteFact, "add remote", "learn"); err != nil {
 		t.Fatalf("remote WriteFile: %v", err)
 	}
-	remoteHead, err := remoteStore.HeadCommit(context.Background(), "agent/remote")
-	if err != nil {
-		t.Fatalf("remote HeadCommit: %v", err)
-	}
-	if err := remoteStore.GitStorer().SetReference(
-		plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), plumbing.NewHash(remoteHead)),
-	); err != nil {
-		t.Fatalf("remote SetReference main: %v", err)
-	}
-
-	loader := server.MapLoader{"inmem:///dead-refs-test": remoteStore.GitStorer()}
+	loader := server.MapLoader{"inmem:///dead-refs-test": remoteStore.Storer()}
 	client.InstallProtocol("inmem", server.NewClient(loader))
 	t.Cleanup(func() { client.InstallProtocol("inmem", nil) })
 
@@ -1315,17 +1227,7 @@ func TestOriginSession_NoDeadRefs(t *testing.T) {
 	if _, _, err := remoteStore.WriteFile(context.Background(), "agent/remote", "kb/remote.md", remoteFact, "add remote", "learn"); err != nil {
 		t.Fatalf("remote WriteFile: %v", err)
 	}
-	remoteHead, err := remoteStore.HeadCommit(context.Background(), "agent/remote")
-	if err != nil {
-		t.Fatalf("remote HeadCommit: %v", err)
-	}
-	if err := remoteStore.GitStorer().SetReference(
-		plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), plumbing.NewHash(remoteHead)),
-	); err != nil {
-		t.Fatalf("remote SetReference main: %v", err)
-	}
-
-	loader := server.MapLoader{"inmem:///no-dead-refs-test": remoteStore.GitStorer()}
+	loader := server.MapLoader{"inmem:///no-dead-refs-test": remoteStore.Storer()}
 	client.InstallProtocol("inmem", server.NewClient(loader))
 	t.Cleanup(func() { client.InstallProtocol("inmem", nil) })
 

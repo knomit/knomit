@@ -20,8 +20,8 @@ func TestServiceOpen(t *testing.T) {
 	if svc.Index() == nil {
 		t.Fatal("expected non-nil Index")
 	}
-	if svc.GitStorer() == nil {
-		t.Fatal("expected non-nil GitStorer")
+	if svc.Storer() == nil {
+		t.Fatal("expected non-nil Storer")
 	}
 
 	// DB file should exist

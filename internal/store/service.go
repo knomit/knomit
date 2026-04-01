@@ -95,8 +95,9 @@ func (s *Service) SetCrypt(c *Crypt) { s.crypt = c }
 // Index returns the search index.
 func (s *Service) Index() *Index { return s.idx }
 
-// GitStorer returns the go-git storer.
-func (s *Service) GitStorer() *storegit.Storer { return s.gits }
+// Storer returns the go-git storer interface for use with git transport
+// (e.g. server.MapLoader for in-memory cloning).
+func (s *Service) Storer() storer.Storer { return s.gits }
 
 // Checkpoint flushes the WAL to the main database file so the .db file is
 // self-contained (e.g. before file-level copy). This is a no-op if WAL mode
@@ -278,6 +279,13 @@ func (s *Service) DefaultBranch(ctx context.Context) (string, error) {
 	}
 	// Detached HEAD — return empty string.
 	return "", nil
+}
+
+// SetDefaultBranch sets the symbolic HEAD to point at the given branch.
+func (s *Service) SetDefaultBranch(branch string) error {
+	return s.gits.SetReference(
+		plumbing.NewSymbolicReference(plumbing.HEAD, plumbing.NewBranchReferenceName(branch)),
+	)
 }
 
 // HasSharedHistory checks whether localBranch shares any commits with remoteBranch on the remote service.

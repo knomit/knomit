@@ -338,7 +338,7 @@ func setupOrigin(t *testing.T) (originURL string) {
 		t.Fatal(err)
 	}
 
-	loader := server.MapLoader{"inmem:///origin": originSvc.GitStorer()}
+	loader := server.MapLoader{"inmem:///origin": originSvc.Storer()}
 	client.InstallProtocol("inmem", server.NewClient(loader))
 	t.Cleanup(func() { client.InstallProtocol("inmem", nil) })
 
