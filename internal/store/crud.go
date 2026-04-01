@@ -11,6 +11,8 @@ import (
 	"strings"
 
 	"github.com/rs/zerolog/log"
+
+	storegit "knomit/internal/store/git"
 )
 
 // Upsert inserts or replaces a FactRecord on the given branch, keeping the
@@ -178,7 +180,7 @@ func (idx *Index) Upsert(ctx context.Context, branch, commitHash string, rec Fac
 }
 
 // hasAnyBranchFact checks if any branch_facts row exists for the given fact_id.
-func hasAnyBranchFact(ctx context.Context, db ctxExecer, factID int64) bool {
+func hasAnyBranchFact(ctx context.Context, db storegit.CtxExecer, factID int64) bool {
 	var n int
 	db.QueryRowContext(ctx, `SELECT 1 FROM branch_facts WHERE fact_id = ? LIMIT 1`, factID).Scan(&n)
 	return n > 0

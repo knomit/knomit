@@ -7,10 +7,7 @@ import (
 	storegit "knomit/internal/store/git"
 )
 
-// Re-export for internal use within the store package.
-type ctxExecer = storegit.CtxExecer
-
-func conn(ctx context.Context, db *sql.DB) ctxExecer {
+func conn(ctx context.Context, db *sql.DB) storegit.CtxExecer {
 	return storegit.Conn(ctx, db)
 }
 
