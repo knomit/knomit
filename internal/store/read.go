@@ -780,8 +780,8 @@ func (s *Service) walkChangedFilesGit(ctx context.Context, branch, fromCommit st
 	return results, lastHash, nil
 }
 
-// Grep searches all .md files at the tip of branch for pattern, returns matching paths.
-func (s *Service) Grep(ctx context.Context, branch, pattern string) ([]string, error) {
+// grep searches all .md files at the tip of branch for pattern, returns matching paths.
+func (s *Service) grep(ctx context.Context, branch, pattern string) ([]string, error) {
 	re, err := regexp.Compile(pattern)
 	if err != nil {
 		return nil, fmt.Errorf("grep: compile pattern: %w", err)

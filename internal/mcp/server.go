@@ -60,7 +60,6 @@ type GitStore interface {
 	ListDir(ctx context.Context, branch, path string) ([]DirEntry, error)
 	ListAll(ctx context.Context, branch string) ([]string, error)
 	Log(ctx context.Context, branch, path string) ([]LogEntry, error)
-	Grep(ctx context.Context, branch, pattern string) ([]string, error)
 	DiffFiles(ctx context.Context, branch, fromCommit string) (added, modified, deleted []string, err error)
 	HeadCommit(ctx context.Context, branch string) (string, error)
 	WalkChangedFiles(ctx context.Context, branch, fromCommit, prefix string, seen map[string]bool, limit int) ([]FileRecency, string, error)

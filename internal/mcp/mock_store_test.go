@@ -103,20 +103,6 @@ func (mr *MockGitStoreMockRecorder) FileExists(ctx, branch, path any) *gomock.Ca
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FileExists", reflect.TypeOf((*MockGitStore)(nil).FileExists), ctx, branch, path)
 }
 
-// Grep mocks base method.
-func (m *MockGitStore) Grep(ctx context.Context, branch, pattern string) ([]string, error) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Grep", ctx, branch, pattern)
-	ret0, _ := ret[0].([]string)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
-}
-
-// Grep indicates an expected call of Grep.
-func (mr *MockGitStoreMockRecorder) Grep(ctx, branch, pattern any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Grep", reflect.TypeOf((*MockGitStore)(nil).Grep), ctx, branch, pattern)
-}
 
 // HeadCommit mocks base method.
 func (m *MockGitStore) HeadCommit(ctx context.Context, branch string) (string, error) {
