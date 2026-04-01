@@ -109,3 +109,24 @@ type FactIter interface {
 	Next() (*FactRow, error)
 	Close() error
 }
+
+// ReadFactOpts controls which version of a fact to read.
+// nil opts reads from branch HEAD (the common case).
+type ReadFactOpts struct {
+	AtCommit     string // read at a specific commit hash (branch HEAD ignored)
+	BeforeCommit string // read the last version before this commit (for retracts)
+	WithHash     bool   // populate BlobHash in the result
+}
+
+// ReadFactResult holds the content and optional metadata from ReadFact.
+type ReadFactResult struct {
+	Content    string
+	BlobHash   string // only populated when WithHash is set
+	FromCommit string // only populated when BeforeCommit is used
+}
+
+// WriteFactResult holds the commit and blob hashes from a write operation.
+type WriteFactResult struct {
+	CommitHash string
+	BlobHash   string
+}
