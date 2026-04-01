@@ -57,7 +57,6 @@ type learnFactInput struct {
 	Refs       []string `json:"refs"`
 }
 
-
 // BatchEmbedder computes embedding vectors for multiple texts in a single call.
 type BatchEmbedder interface {
 	Embed(text string) ([]float32, error)
@@ -110,7 +109,7 @@ func LearnHandler(gs GitStore, idx SearchIndex, ontologyRoot string, ontology *f
 
 		// 3. Validate inputs, build paths, and serialize facts.
 		files := make(map[string]string, len(factInputs))
-		facts := make([]Fact, len(factInputs))
+		facts := make([]fact.Fact, len(factInputs))
 		for i, fi := range factInputs {
 			// Validate topic+category against ontology.
 			topicCategory := fi.Topic
@@ -159,7 +158,7 @@ func LearnHandler(gs GitStore, idx SearchIndex, ontologyRoot string, ontology *f
 			f.Entities = entities
 			f.Refs = refs
 			facts[i] = f
-			files[path] = SerializeFact(f)
+			files[path] = fact.SerializeFact(f)
 		}
 
 		// 3b. Dedup check: search for near-duplicates scoped to the same category directory.
@@ -196,7 +195,7 @@ func LearnHandler(gs GitStore, idx SearchIndex, ontologyRoot string, ontology *f
 			if readErr != nil {
 				continue
 			}
-			existingFact, parseErr := ParseFact(match.Path, readResult.Content)
+			existingFact, parseErr := fact.ParseFact(match.Path, readResult.Content)
 			if parseErr != nil {
 				continue
 			}
@@ -211,7 +210,7 @@ func LearnHandler(gs GitStore, idx SearchIndex, ontologyRoot string, ontology *f
 				// Add hypothesis path to observation's refs.
 				f.Refs = fact.AppendUnique(f.Refs, match.Path)
 				facts[i] = f
-				files[f.Path()] = SerializeFact(f)
+				files[f.Path()] = fact.SerializeFact(f)
 				continue
 			}
 
@@ -219,7 +218,7 @@ func LearnHandler(gs GitStore, idx SearchIndex, ontologyRoot string, ontology *f
 			newConf := f.Confidence
 			existConf := existingFact.Confidence
 
-			var merged Fact
+			var merged fact.Fact
 			if newConf > existConf || (newConf == existConf && f.Sources >= existingFact.Sources) {
 				// New fact wins — keep new fact's title and body, write to existing path.
 				merged = fact.NewFact(match.Path)
@@ -246,7 +245,7 @@ func LearnHandler(gs GitStore, idx SearchIndex, ontologyRoot string, ontology *f
 
 			// Remove the original new-fact path from the files map and add the merged one.
 			delete(files, f.Path())
-			files[merged.Path()] = SerializeFact(merged)
+			files[merged.Path()] = fact.SerializeFact(merged)
 			facts[i] = merged
 		}
 

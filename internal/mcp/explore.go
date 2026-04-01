@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"knomit/internal/fact"
 	"time"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
@@ -74,7 +75,7 @@ func ExploreHandler(gs GitStore, sessionIdx ToolSessionIndex, ontologyRoot, agen
 			if readErr != nil {
 				continue // deleted or unreadable — skip
 			}
-			parsed, parseErr := ParseFact(f.Path, readResult.Content)
+			parsed, parseErr := fact.ParseFact(f.Path, readResult.Content)
 			if parseErr != nil {
 				continue
 			}

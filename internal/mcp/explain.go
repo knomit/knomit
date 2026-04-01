@@ -103,7 +103,7 @@ func explainFirstCall(ctx context.Context, gs GitStore, sessionIdx ToolSessionIn
 	if err != nil {
 		return mcpgo.NewToolResultError(fmt.Sprintf("read file error: %v", err)), nil
 	}
-	fact, err := ParseFact(file, readResult.Content)
+	fact, err := fact.ParseFact(file, readResult.Content)
 	if err != nil {
 		return mcpgo.NewToolResultError(fmt.Sprintf("parse fact error: %v", err)), nil
 	}
@@ -245,7 +245,7 @@ func explainResume(ctx context.Context, gs GitStore, sessionIdx ToolSessionIndex
 				retracted = true
 				lastCommitHash = result.FromCommit
 			}
-			parsed, parseErr := ParseFact(item.Path, result.Content)
+			parsed, parseErr := fact.ParseFact(item.Path, result.Content)
 			if parseErr != nil {
 				continue
 			}

@@ -15,9 +15,9 @@ import (
 
 // HypothesizeResult is the JSON response returned by the hypothesize tool.
 type HypothesizeResult struct {
-	SessionID string              `json:"session_id"`
-	Item      *HypothesizeItem    `json:"item,omitempty"`
-	Done      bool                `json:"done"`
+	SessionID string               `json:"session_id"`
+	Item      *HypothesizeItem     `json:"item,omitempty"`
+	Done      bool                 `json:"done"`
 	Progress  *HypothesizeProgress `json:"progress,omitempty"`
 }
 
@@ -80,7 +80,7 @@ func hypothesizeStart(ctx context.Context, gs GitStore, idx SearchIndex, pipelin
 		return nil, fmt.Errorf("get watermark: %w", err)
 	}
 
-	var synthFacts []Fact
+	var synthFacts []fact.Fact
 
 	if watermark == "" {
 		// First run: search for all synthesis facts.
@@ -117,7 +117,7 @@ func hypothesizeStart(ctx context.Context, gs GitStore, idx SearchIndex, pipelin
 			if readErr != nil {
 				continue
 			}
-			f, parseErr := ParseFact(p, readResult.Content)
+			f, parseErr := fact.ParseFact(p, readResult.Content)
 			if parseErr != nil {
 				continue
 			}
@@ -243,4 +243,3 @@ func buildHypothesizeInstructions(ontologyRoot string) string {
 6. After writing the hypothesis, call knomit_learn with type: methodology, topic: "meta", category: "reasoning" to record the reasoning process used — what worked, what evidence was decisive, which patterns applied, and any pitfalls encountered
 7. Call knomit_hypothesize with session_id to continue to the next synthesis fact`, ontologyRoot)
 }
-
