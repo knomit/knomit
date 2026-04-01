@@ -7,7 +7,6 @@ import (
 	"sync"
 	"testing"
 
-	"knomit/internal/git"
 )
 
 // ── Stub embedders ─────────────────────────────────────────────────────────
@@ -57,7 +56,7 @@ func (e *countingSingleEmbedder) Embed(_ string) ([]float32, error) {
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
 // setupNFacts creates a Service+GitStore with n synthetic facts already synced.
-func setupNFacts(t *testing.T, n int) (*Service, *git.Store) {
+func setupNFacts(t *testing.T, n int) *Service {
 	ctx := context.Background()
 	t.Helper()
 	dir := t.TempDir()
@@ -68,7 +67,7 @@ func setupNFacts(t *testing.T, n int) (*Service, *git.Store) {
 	}
 	t.Cleanup(func() { svc.Close() })
 
-	gs, err := git.InitWithStorer(svc.GitStorer(), nil, "agent/test")
+	err = svc.InitRepo(nil, "agent/test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,13 +78,13 @@ func setupNFacts(t *testing.T, n int) (*Service, *git.Store) {
 			i, i, i,
 		)
 	}
-	if _, _, err := gs.BatchWrite(context.Background(), "agent/test", files, "add bench facts", "learn"); err != nil {
+	if _, _, err := svc.BatchWrite(context.Background(), "agent/test", files, "add bench facts", "learn"); err != nil {
 		t.Fatal(err)
 	}
-	if err := svc.Index().Sync(ctx, gs, "agent/test"); err != nil {
+	if err := svc.Index().Sync(ctx, svc, "agent/test"); err != nil {
 		t.Fatal(err)
 	}
-	return svc, gs
+	return svc
 }
 
 // countVec returns how many rows are in facts_vec.
@@ -100,7 +99,7 @@ func countVec(t *testing.T, svc *Service) int {
 
 // setupRebuildStore creates a Service with a git store and some facts,
 // syncs the index, then returns everything needed for rebuild tests.
-func setupRebuildStore(t *testing.T, facts map[string]string) (*Service, *git.Store) {
+func setupRebuildStore(t *testing.T, facts map[string]string) *Service {
 	ctx := context.Background()
 	t.Helper()
 	dir := t.TempDir()
@@ -111,22 +110,22 @@ func setupRebuildStore(t *testing.T, facts map[string]string) (*Service, *git.St
 	}
 	t.Cleanup(func() { svc.Close() })
 
-	gs, err := git.InitWithStorer(svc.GitStorer(), nil, "agent/test")
+	err = svc.InitRepo(nil, "agent/test")
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	for path, content := range facts {
-		if _, _, err := gs.WriteFile(context.Background(), "agent/test", path, content, "add "+path, "learn"); err != nil {
+		if _, _, err := svc.WriteFile(context.Background(), "agent/test", path, content, "add "+path, "learn"); err != nil {
 			t.Fatalf("WriteFile %s: %v", path, err)
 		}
 	}
 
-	if err := svc.Index().Sync(ctx, gs, "agent/test"); err != nil {
+	if err := svc.Index().Sync(ctx, svc, "agent/test"); err != nil {
 		t.Fatalf("initial Sync: %v", err)
 	}
 
-	return svc, gs
+	return svc
 }
 
 func countFacts(t *testing.T, svc *Service) int {
@@ -145,7 +144,7 @@ func TestRebuildFacts_BulkInsert(t *testing.T) {
 		"kb/beta.md":  "---\ntype: observation\ndomain: [dev]\nconfidence: 0.8\nsources: 2\nentities: [golang]\nrefs: []\n---\n# Beta Fact\n\nBeta body content.\n",
 	}
 
-	svc, gs := setupRebuildStore(t, facts)
+	svc := setupRebuildStore(t, facts)
 	idx := svc.Index()
 
 	// Verify facts exist after initial sync.
@@ -165,7 +164,7 @@ func TestRebuildFacts_BulkInsert(t *testing.T) {
 	}
 
 	// Rebuild should repopulate.
-	if err := idx.Rebuild(ctx, gs, "agent/test", nil); err != nil {
+	if err := idx.Rebuild(ctx, svc, "agent/test", nil); err != nil {
 		t.Fatalf("Rebuild: %v", err)
 	}
 
@@ -213,7 +212,7 @@ func TestRebuildFacts_SkipsNonFacts(t *testing.T) {
 		"kb/no-title.md":  "---\ntype: observation\ndomain: [testing]\nconfidence: 0.5\nsources: 1\nentities: []\nrefs: []\n---\nNo heading here, just text.\n",
 	}
 
-	svc, gs := setupRebuildStore(t, facts)
+	svc := setupRebuildStore(t, facts)
 	idx := svc.Index()
 
 	// Clear and rebuild.
@@ -222,7 +221,7 @@ func TestRebuildFacts_SkipsNonFacts(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := idx.Rebuild(ctx, gs, "agent/test", nil); err != nil {
+	if err := idx.Rebuild(ctx, svc, "agent/test", nil); err != nil {
 		t.Fatalf("Rebuild: %v", err)
 	}
 
@@ -267,7 +266,7 @@ func TestRebuildFacts_CommitLogJoin(t *testing.T) {
 	}
 	defer svc.Close()
 
-	gs, err := git.InitWithStorer(svc.GitStorer(), nil, "agent/test")
+	err = svc.InitRepo(nil, "agent/test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -276,13 +275,13 @@ func TestRebuildFacts_CommitLogJoin(t *testing.T) {
 	factV2 := "---\ntype: observation\ndomain: [testing]\nconfidence: 0.9\nsources: 2\nentities: [knomit]\nrefs: []\n---\n# Evolving Fact\n\nVersion 2 with updates.\n"
 
 	// Write v1.
-	commitV1, _, err := gs.WriteFile(context.Background(), "agent/test", "kb/evolving.md", factV1, "add evolving v1", "learn")
+	commitV1, _, err := svc.WriteFile(context.Background(), "agent/test", "kb/evolving.md", factV1, "add evolving v1", "learn")
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// Write v2 to same path — creates a second commit touching this file.
-	commitV2, _, err := gs.WriteFile(context.Background(), "agent/test", "kb/evolving.md", factV2, "update evolving v2", "learn")
+	commitV2, _, err := svc.WriteFile(context.Background(), "agent/test", "kb/evolving.md", factV2, "update evolving v2", "learn")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -292,7 +291,7 @@ func TestRebuildFacts_CommitLogJoin(t *testing.T) {
 	}
 
 	// Sync to populate index and commit_log.
-	if err := svc.Index().Sync(ctx, gs, "agent/test"); err != nil {
+	if err := svc.Index().Sync(ctx, svc, "agent/test"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -302,7 +301,7 @@ func TestRebuildFacts_CommitLogJoin(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := svc.Index().Rebuild(ctx, gs, "agent/test", nil); err != nil {
+	if err := svc.Index().Rebuild(ctx, svc, "agent/test", nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -330,7 +329,7 @@ func TestRebuild_PhaseTiming(t *testing.T) {
 		"kb/timing.md": "---\ntype: observation\ndomain: [testing]\nconfidence: 0.9\nsources: 1\nentities: [knomit]\nrefs: []\n---\n# Timing Test\n\nBody.\n",
 	}
 
-	svc, gs := setupRebuildStore(t, facts)
+	svc := setupRebuildStore(t, facts)
 	idx := svc.Index()
 
 	// Clear facts for rebuild.
@@ -347,7 +346,7 @@ func TestRebuild_PhaseTiming(t *testing.T) {
 		phases[phase] = true
 	}
 
-	if err := idx.Rebuild(ctx, gs, "agent/test", progress); err != nil {
+	if err := idx.Rebuild(ctx, svc, "agent/test", progress); err != nil {
 		t.Fatalf("Rebuild: %v", err)
 	}
 
@@ -370,7 +369,7 @@ func BenchmarkRebuild(b *testing.B) {
 	}
 	defer svc.Close()
 
-	gs, err := git.InitWithStorer(svc.GitStorer(), nil, "agent/test")
+	err = svc.InitRepo(nil, "agent/test")
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -378,13 +377,13 @@ func BenchmarkRebuild(b *testing.B) {
 	// Write 50 facts.
 	for i := 0; i < 50; i++ {
 		content := fmt.Sprintf("---\ntype: observation\ndomain: [bench]\nconfidence: 0.9\nsources: 1\nentities: [item%d]\nrefs: []\n---\n# Benchmark Fact %d\n\nBody content for fact number %d.\n", i, i, i)
-		if _, _, err := gs.WriteFile(context.Background(), "agent/test", fmt.Sprintf("kb/bench/fact-%03d.md", i), content, fmt.Sprintf("add fact %d", i), "learn"); err != nil {
+		if _, _, err := svc.WriteFile(context.Background(), "agent/test", fmt.Sprintf("kb/bench/fact-%03d.md", i), content, fmt.Sprintf("add fact %d", i), "learn"); err != nil {
 			b.Fatal(err)
 		}
 	}
 
 	// Initial sync to populate commit_log and objects.
-	if err := svc.Index().Sync(ctx, gs, "agent/test"); err != nil {
+	if err := svc.Index().Sync(ctx, svc, "agent/test"); err != nil {
 		b.Fatal(err)
 	}
 
@@ -395,7 +394,7 @@ func BenchmarkRebuild(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		db.Exec("DELETE FROM branch_facts"); db.Exec("DELETE FROM facts")
 		db.Exec("DELETE FROM facts_vec")
-		if err := idx.Rebuild(ctx, gs, "agent/test", nil); err != nil {
+		if err := idx.Rebuild(ctx, svc, "agent/test", nil); err != nil {
 			b.Fatal(err)
 		}
 	}
@@ -416,7 +415,7 @@ func TestRebuildEmbeddings_ChunkedProcessing(t *testing.T) {
 	}
 	defer svc.Close()
 
-	gs, err := git.InitWithStorer(svc.GitStorer(), nil, "agent/test")
+	err = svc.InitRepo(nil, "agent/test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -427,13 +426,13 @@ func TestRebuildEmbeddings_ChunkedProcessing(t *testing.T) {
 			"---\ntype: observation\ndomain: [chunked]\nconfidence: 0.9\nsources: 1\nentities: [item%d]\nrefs: []\n---\n# Chunked Fact %d\n\nBody for fact number %d.\n",
 			i, i, i,
 		)
-		if _, _, err := gs.WriteFile(context.Background(), "agent/test", fmt.Sprintf("kb/fact-%03d.md", i), content, fmt.Sprintf("add fact %d", i), "learn"); err != nil {
+		if _, _, err := svc.WriteFile(context.Background(), "agent/test", fmt.Sprintf("kb/fact-%03d.md", i), content, fmt.Sprintf("add fact %d", i), "learn"); err != nil {
 			t.Fatal(err)
 		}
 	}
 
 	// Sync to populate the facts table and objects store.
-	if err := svc.Index().Sync(ctx, gs, "agent/test"); err != nil {
+	if err := svc.Index().Sync(ctx, svc, "agent/test"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -488,7 +487,7 @@ func TestRebuildEmbeddings_ChunkedProcessing(t *testing.T) {
 
 func TestRebuildEmbeddings_NoEmbedder(t *testing.T) {
 	ctx := context.Background()
-	svc, _ := setupNFacts(t, 5)
+	svc := setupNFacts(t, 5)
 	done, err := svc.Index().rebuildEmbeddings(ctx, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -503,7 +502,7 @@ func TestRebuildEmbeddings_NoEmbedder(t *testing.T) {
 
 func TestRebuildEmbeddings_NothingToEmbed(t *testing.T) {
 	ctx := context.Background()
-	svc, _ := setupNFacts(t, 5)
+	svc := setupNFacts(t, 5)
 	idx := svc.Index()
 	idx.SetEmbedder(&countingBatchEmbedder{})
 
@@ -534,7 +533,7 @@ func TestRebuildEmbeddings_SingleBatch(t *testing.T) {
 	ctx := context.Background()
 	// Fewer than batchSize=32 facts → exactly one EmbedBatch call.
 	const n = 10
-	svc, _ := setupNFacts(t, n)
+	svc := setupNFacts(t, n)
 	emb := &countingBatchEmbedder{}
 	idx := svc.Index()
 	idx.SetEmbedder(emb)
@@ -561,7 +560,7 @@ func TestRebuildEmbeddings_ExactBatchBoundary(t *testing.T) {
 	ctx := context.Background()
 	// Exactly batchSize=32 facts → one EmbedBatch call of size 32.
 	const n = 32
-	svc, _ := setupNFacts(t, n)
+	svc := setupNFacts(t, n)
 	emb := &countingBatchEmbedder{}
 	idx := svc.Index()
 	idx.SetEmbedder(emb)
@@ -582,7 +581,7 @@ func TestRebuildEmbeddings_NonBatchEmbedder(t *testing.T) {
 	ctx := context.Background()
 	// Single-embed path: embedder without EmbedBatch.
 	const n = 10
-	svc, _ := setupNFacts(t, n)
+	svc := setupNFacts(t, n)
 	emb := &countingSingleEmbedder{}
 	idx := svc.Index()
 	idx.SetEmbedder(emb)
@@ -606,7 +605,7 @@ func TestRebuildEmbeddings_EmbedErrorSkipped(t *testing.T) {
 	ctx := context.Background()
 	// Single-embed path: one error → that fact is skipped, rest succeed.
 	const n = 5
-	svc, _ := setupNFacts(t, n)
+	svc := setupNFacts(t, n)
 	emb := &countingSingleEmbedder{errOnCall: 3} // 3rd call fails
 	idx := svc.Index()
 	idx.SetEmbedder(emb)
@@ -626,7 +625,7 @@ func TestRebuildEmbeddings_EmbedErrorSkipped(t *testing.T) {
 func TestRebuildEmbeddings_ProgressReporting(t *testing.T) {
 	ctx := context.Background()
 	const n = 40
-	svc, _ := setupNFacts(t, n)
+	svc := setupNFacts(t, n)
 	emb := &countingBatchEmbedder{}
 	idx := svc.Index()
 	idx.SetEmbedder(emb)
@@ -670,7 +669,7 @@ func TestRebuildEmbeddings_ProgressReporting(t *testing.T) {
 func TestRebuild_WithEmbedder(t *testing.T) {
 	ctx := context.Background()
 	const n = 15
-	svc, gs := setupNFacts(t, n)
+	svc := setupNFacts(t, n)
 	emb := &countingBatchEmbedder{}
 	idx := svc.Index()
 	idx.SetEmbedder(emb)
@@ -680,7 +679,7 @@ func TestRebuild_WithEmbedder(t *testing.T) {
 	svc.db.Exec("DELETE FROM facts")
 	svc.db.Exec("DELETE FROM facts_vec")
 
-	if err := idx.Rebuild(ctx, gs, "agent/test", nil); err != nil {
+	if err := idx.Rebuild(ctx, svc, "agent/test", nil); err != nil {
 		t.Fatalf("Rebuild: %v", err)
 	}
 
@@ -697,7 +696,7 @@ func TestRebuild_WithEmbedder(t *testing.T) {
 func TestRebuild_WithEmbedder_Idempotent(t *testing.T) {
 	ctx := context.Background()
 	const n = 10
-	svc, gs := setupNFacts(t, n)
+	svc := setupNFacts(t, n)
 	idx := svc.Index()
 	idx.SetEmbedder(&countingBatchEmbedder{})
 
@@ -705,14 +704,14 @@ func TestRebuild_WithEmbedder_Idempotent(t *testing.T) {
 	svc.db.Exec("DELETE FROM branch_facts")
 	svc.db.Exec("DELETE FROM facts")
 	svc.db.Exec("DELETE FROM facts_vec")
-	if err := idx.Rebuild(ctx, gs, "agent/test", nil); err != nil {
+	if err := idx.Rebuild(ctx, svc, "agent/test", nil); err != nil {
 		t.Fatalf("first Rebuild: %v", err)
 	}
 
 	// Second rebuild: facts_vec should not grow.
 	svc.db.Exec("DELETE FROM branch_facts")
 	svc.db.Exec("DELETE FROM facts")
-	if err := idx.Rebuild(ctx, gs, "agent/test", nil); err != nil {
+	if err := idx.Rebuild(ctx, svc, "agent/test", nil); err != nil {
 		t.Fatalf("second Rebuild: %v", err)
 	}
 	if v := countVec(t, svc); v != n {
@@ -736,7 +735,7 @@ func TestRebuildFacts_CommitLogBranchScoped(t *testing.T) {
 	branchA := "agent/branch-a"
 	branchB := "agent/branch-b"
 
-	gs, err := git.InitWithStorer(svc.GitStorer(), nil, branchA)
+	err = svc.InitRepo(nil, branchA)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -744,25 +743,25 @@ func TestRebuildFacts_CommitLogBranchScoped(t *testing.T) {
 	fact := "---\ntype: observation\ndomain: [testing]\nconfidence: 0.9\nsources: 1\nentities: [knomit]\nrefs: []\n---\n# Shared Fact\n\nBody.\n"
 
 	// Write fact on branchA first.
-	commitA, _, err := gs.WriteFile(context.Background(), branchA, "kb/shared.md", fact, "add on A", "learn")
+	commitA, _, err := svc.WriteFile(context.Background(), branchA, "kb/shared.md", fact, "add on A", "learn")
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// Sync branchA to populate index and commit_log.
-	if err := svc.Index().Sync(ctx, gs, branchA); err != nil {
+	if err := svc.Index().Sync(ctx, svc, branchA); err != nil {
 		t.Fatal(err)
 	}
 
 	// Create branchB from branchA, write same fact — gets a different commit.
-	if err := gs.CreateBranch(context.Background(), branchB, branchA); err != nil {
+	if err := svc.CreateBranch(context.Background(), branchB, branchA); err != nil {
 		t.Fatal(err)
 	}
-	commitB, _, err := gs.WriteFile(context.Background(), branchB, "kb/shared.md", fact, "add on B", "learn")
+	commitB, _, err := svc.WriteFile(context.Background(), branchB, "kb/shared.md", fact, "add on B", "learn")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := svc.Index().Sync(ctx, gs, branchB); err != nil {
+	if err := svc.Index().Sync(ctx, svc, branchB); err != nil {
 		t.Fatal(err)
 	}
 
@@ -774,7 +773,7 @@ func TestRebuildFacts_CommitLogBranchScoped(t *testing.T) {
 	svc.db.Exec("DELETE FROM branch_facts")
 	svc.db.Exec("DELETE FROM facts")
 
-	if err := svc.Index().Rebuild(ctx, gs, branchA, nil); err != nil {
+	if err := svc.Index().Rebuild(ctx, svc, branchA, nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -807,7 +806,7 @@ func BenchmarkRebuildEmbeddings(b *testing.B) {
 			}
 			defer svc.Close()
 
-			gs, err := git.InitWithStorer(svc.GitStorer(), nil, "agent/test")
+			err = svc.InitRepo(nil, "agent/test")
 			if err != nil {
 				b.Fatal(err)
 			}
@@ -819,10 +818,10 @@ func BenchmarkRebuildEmbeddings(b *testing.B) {
 					i, i, i,
 				)
 			}
-			if _, _, err := gs.BatchWrite(context.Background(), "agent/test", files, "add bench facts", "learn"); err != nil {
+			if _, _, err := svc.BatchWrite(context.Background(), "agent/test", files, "add bench facts", "learn"); err != nil {
 				b.Fatal(err)
 			}
-			if err := svc.Index().Sync(ctx, gs, "agent/test"); err != nil {
+			if err := svc.Index().Sync(ctx, svc, "agent/test"); err != nil {
 				b.Fatal(err)
 			}
 

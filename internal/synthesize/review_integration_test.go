@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"go.uber.org/mock/gomock"
-	"knomit/internal/git"
 	"knomit/internal/store"
 )
 
@@ -29,10 +28,10 @@ func TestReviewLoopIntegration(t *testing.T) {
 	reviewIdx := svc.Index()
 
 	// Real git store backed by SQLite storer.
-	gitStore, err := git.InitWithStorer(svc.GitStorer(), nil, testReviewBranch)
-	if err != nil {
+	if err := svc.InitRepo(nil, testReviewBranch); err != nil {
 		t.Fatal(err)
 	}
+	gitStore := svc
 
 	// Write 3 facts to real git so gatherAllFacts and ReadFile work.
 	facts := map[string]string{

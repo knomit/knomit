@@ -15,7 +15,6 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/transport/server"
 	_ "github.com/mattn/go-sqlite3"
 
-	"knomit/internal/git"
 	"knomit/internal/repos"
 	"knomit/internal/store"
 	storegit "knomit/internal/store/git"
@@ -210,15 +209,15 @@ CREATE TABLE IF NOT EXISTS commit_log (commit_hash TEXT NOT NULL, path TEXT NOT 
 	return storegit.NewStorer(db)
 }
 
-// newTestRouterWithGitStore creates a router backed by a real *git.Store.
-func newTestRouterWithGitStore(t *testing.T, gs *git.Store) http.Handler {
+// newTestRouterWithGitStore creates a router backed by a real *store.Service.
+func newTestRouterWithGitStore(t *testing.T, gs *store.Service) http.Handler {
 	t.Helper()
 	hub := repos.NewTaskHub(context.Background())
 	rm := repos.New(context.Background(), repos.Deps{})
 	rm.Set("knomit", repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
 		Name:        "knomit",
 		AgentBranch: testAgentBranch,
-		GS:          gs,
+		Svc:         gs,
 		Hub:         hub,
 	}))
 	return NewRouter(rm, nil, false, "kb", testAgentBranch)
@@ -248,9 +247,12 @@ func parseSSEEvents(t *testing.T, body string) []map[string]any {
 
 func TestTestConnectivity_SuccessfulClone(t *testing.T) {
 	// Create a local knomit store (the "local" repo).
-	localStorer := newTestStorerForWeb(t)
-	localStore, err := git.InitWithStorer(localStorer, nil, "agent/test")
+	localStore, err := store.Open(":memory:")
 	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { localStore.Close() })
+	if err := localStore.InitRepo(nil, "agent/test"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -265,16 +267,19 @@ func TestTestConnectivity_SuccessfulClone(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := localStorer.SetReference(
+	if err := localStore.GitStorer().SetReference(
 		plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), plumbing.NewHash(head)),
 	); err != nil {
 		t.Fatal(err)
 	}
 
 	// Create a separate "remote" store with content.
-	remoteStorer := newTestStorerForWeb(t)
-	remoteStore, err := git.InitWithStorer(remoteStorer, nil, "agent/remote")
+	remoteStore, err := store.Open(":memory:")
 	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { remoteStore.Close() })
+	if err := remoteStore.InitRepo(nil, "agent/remote"); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := remoteStore.WriteFile(context.Background(), "agent/remote", "kb/remote-fact.md", "# Remote\n", "add remote", "learn"); err != nil {
@@ -284,14 +289,14 @@ func TestTestConnectivity_SuccessfulClone(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := remoteStorer.SetReference(
+	if err := remoteStore.GitStorer().SetReference(
 		plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), plumbing.NewHash(remoteHead)),
 	); err != nil {
 		t.Fatal(err)
 	}
 
 	// Register in-process transport.
-	loader := server.MapLoader{"inmem:///test-connectivity": remoteStorer}
+	loader := server.MapLoader{"inmem:///test-connectivity": remoteStore.GitStorer()}
 	client.InstallProtocol("inmem", server.NewClient(loader))
 	t.Cleanup(func() { client.InstallProtocol("inmem", nil) })
 
@@ -383,9 +388,12 @@ func TestTestConnectivity_SuccessfulClone(t *testing.T) {
 }
 
 func TestTestConnectivity_SessionNotFound(t *testing.T) {
-	localStorer := newTestStorerForWeb(t)
-	localStore, err := git.InitWithStorer(localStorer, nil, "agent/test")
+	localStore, err := store.Open(":memory:")
 	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { localStore.Close() })
+	if err := localStore.InitRepo(nil, "agent/test"); err != nil {
 		t.Fatal(err)
 	}
 	handler := newTestRouterWithGitStore(t, localStore)
@@ -399,8 +407,8 @@ func TestTestConnectivity_SessionNotFound(t *testing.T) {
 // --- preview helpers ---
 
 // newTestRouterWithSvcAndGitStore creates a router backed by both a store.Service
-// and a *git.Store sharing the same in-memory database.
-func newTestRouterWithSvcAndGitStore(t *testing.T) (http.Handler, *git.Store, *store.Service) {
+// and a *store.Service sharing the same in-memory database.
+func newTestRouterWithSvcAndGitStore(t *testing.T) (http.Handler, *store.Service) {
 	t.Helper()
 	svc, err := store.Open(":memory:")
 	if err != nil {
@@ -408,9 +416,9 @@ func newTestRouterWithSvcAndGitStore(t *testing.T) (http.Handler, *git.Store, *s
 	}
 	t.Cleanup(func() { svc.Close() })
 
-	gs, err := git.InitWithStorer(svc.GitStorer(), nil, "agent/test")
+	err = svc.InitRepo(nil, "agent/test")
 	if err != nil {
-		t.Fatalf("git.InitWithStorer: %v", err)
+		t.Fatalf("InitRepo: %v", err)
 	}
 
 	hub := repos.NewTaskHub(context.Background())
@@ -418,11 +426,10 @@ func newTestRouterWithSvcAndGitStore(t *testing.T) (http.Handler, *git.Store, *s
 	rm.Set("knomit", repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
 		Name:        "knomit",
 		AgentBranch: testAgentBranch,
-		GS:          gs,
 		Svc:         svc,
 		Hub:         hub,
 	}))
-	return NewRouter(rm, nil, false, "kb", testAgentBranch), gs, svc
+	return NewRouter(rm, nil, false, "kb", testAgentBranch), svc
 }
 
 // insertFact inserts a row into the facts table for testing.
@@ -442,9 +449,9 @@ func insertFact(t *testing.T, svc *store.Service, path, blobHash, commitHash str
 
 // writeFact writes a fact file to the git store and inserts it into the facts table.
 // content must be a valid knomit fact (YAML frontmatter + # Title body).
-func writeFact(t *testing.T, gs *git.Store, svc *store.Service, path, content string) {
+func writeFact(t *testing.T, svc *store.Service, path, content string) {
 	t.Helper()
-	commitHash, blobHash, err := gs.WriteFile(context.Background(), testAgentBranch, path, content, "add "+path, "learn")
+	commitHash, blobHash, err := svc.WriteFile(context.Background(), testAgentBranch, path, content, "add "+path, "learn")
 	if err != nil {
 		t.Fatalf("WriteFile %q: %v", path, err)
 	}
@@ -454,24 +461,25 @@ func writeFact(t *testing.T, gs *git.Store, svc *store.Service, path, content st
 // --- preview tests ---
 
 func TestPreview_ComparesLocalAndRemote(t *testing.T) {
-	handler, localGS, svc := newTestRouterWithSvcAndGitStore(t)
+	handler, svc := newTestRouterWithSvcAndGitStore(t)
 
 	// Local-only fact (with a dead ref and a live ref).
 	localOnlyContent := "---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: [kb/local-b.md, kb/missing.md]\n---\n# Local A\n\nContent.\n"
-	writeFact(t, localGS, svc, "kb/local-a.md", localOnlyContent)
+	writeFact(t, svc, "kb/local-a.md", localOnlyContent)
 
 	// Local fact that will also be in remote (shared), no dead refs.
 	sharedContent := "---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# Shared\n\nContent.\n"
-	writeFact(t, localGS, svc, "kb/shared.md", sharedContent)
+	writeFact(t, svc, "kb/shared.md", sharedContent)
 
 	// Another local fact (referenced by local-a so it's alive).
 	localBContent := "---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# Local B\n\nContent.\n"
-	writeFact(t, localGS, svc, "kb/local-b.md", localBContent)
+	writeFact(t, svc, "kb/local-b.md", localBContent)
 
 	// Build remote store with: shared.md + remote-only.md
-	remoteStorer := newTestStorerForWeb(t)
-	remoteStore, err := git.InitWithStorer(remoteStorer, nil, "agent/remote")
-	if err != nil {
+	remoteStore, err := store.Open(":memory:")
+	if err != nil { t.Fatal(err) }
+	t.Cleanup(func() { remoteStore.Close() })
+	if err := remoteStore.InitRepo(nil, "agent/remote"); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := remoteStore.WriteFile(context.Background(), "agent/remote", "kb/shared.md", sharedContent, "add shared", "learn"); err != nil {
@@ -484,14 +492,14 @@ func TestPreview_ComparesLocalAndRemote(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := remoteStorer.SetReference(
+	if err := remoteStore.GitStorer().SetReference(
 		plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), plumbing.NewHash(remoteHead)),
 	); err != nil {
 		t.Fatal(err)
 	}
 
 	// Register in-process transport.
-	loader := server.MapLoader{"inmem:///test-preview": remoteStorer}
+	loader := server.MapLoader{"inmem:///test-preview": remoteStore.GitStorer()}
 	client.InstallProtocol("inmem", server.NewClient(loader))
 	t.Cleanup(func() { client.InstallProtocol("inmem", nil) })
 
@@ -589,7 +597,7 @@ func TestPreview_ComparesLocalAndRemote(t *testing.T) {
 }
 
 func TestPreview_SessionNotFound(t *testing.T) {
-	handler, _, _ := newTestRouterWithSvcAndGitStore(t)
+	handler, _ := newTestRouterWithSvcAndGitStore(t)
 
 	rr := doRequest(t, handler, http.MethodGet, "/api/v1/knomit/origin/session/nonexistent-id/preview", "")
 	if rr.Code != http.StatusNotFound {
@@ -598,7 +606,7 @@ func TestPreview_SessionNotFound(t *testing.T) {
 }
 
 func TestPreview_WrongState(t *testing.T) {
-	handler, _, _ := newTestRouterWithSvcAndGitStore(t)
+	handler, _ := newTestRouterWithSvcAndGitStore(t)
 
 	// Create a session (state=created, not tested).
 	rr := doRequest(t, handler, http.MethodPost, "/api/v1/knomit/origin/session",
@@ -633,19 +641,20 @@ func setupTestedSession(t *testing.T) (http.Handler, string) {
 	}
 	t.Cleanup(func() { svc.Close() })
 
-	localGS, err := git.InitWithStorer(svc.GitStorer(), nil, "agent/test")
+	err = svc.InitRepo(nil, "agent/test")
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// Write a local fact.
 	factContent := "---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# Local Fact\n\nContent.\n"
-	writeFact(t, localGS, svc, "kb/local-fact.md", factContent)
+	writeFact(t, svc, "kb/local-fact.md", factContent)
 
 	// Build the remote store with its own independent storer (disjoint history).
-	remoteStorer := newTestStorerForWeb(t)
-	remoteStore, err := git.InitWithStorer(remoteStorer, nil, "agent/remote")
-	if err != nil {
+	remoteStore, err := store.Open(":memory:")
+	if err != nil { t.Fatal(err) }
+	t.Cleanup(func() { remoteStore.Close() })
+	if err := remoteStore.InitRepo(nil, "agent/remote"); err != nil {
 		t.Fatal(err)
 	}
 	remoteFact := "---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# Remote Fact\n\nContent.\n"
@@ -658,7 +667,7 @@ func setupTestedSession(t *testing.T) (http.Handler, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := remoteStorer.SetReference(
+	if err := remoteStore.GitStorer().SetReference(
 		plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), plumbing.NewHash(remoteHead)),
 	); err != nil {
 		t.Fatal(err)
@@ -672,7 +681,7 @@ func setupTestedSession(t *testing.T) (http.Handler, string) {
 
 	rm.Set("knomit", repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
 		Name: "knomit",
-		GS:   localGS,
+		GS:   svc,
 		Svc:  svc,
 		Hub:  hub,
 	}))
@@ -838,7 +847,7 @@ func TestApply_CanBeCalledMultipleTimes(t *testing.T) {
 }
 
 func TestApply_SessionNotFound(t *testing.T) {
-	handler, _, _ := newTestRouterWithSvcAndGitStore(t)
+	handler, _ := newTestRouterWithSvcAndGitStore(t)
 
 	rr := doRequest(t, handler, http.MethodPost, "/api/v1/knomit/origin/session/nonexistent-id/apply",
 		`{"conflict_strategy":"local_wins"}`)
@@ -848,7 +857,7 @@ func TestApply_SessionNotFound(t *testing.T) {
 }
 
 func TestApply_WrongState(t *testing.T) {
-	handler, _, _ := newTestRouterWithSvcAndGitStore(t)
+	handler, _ := newTestRouterWithSvcAndGitStore(t)
 
 	// Create a session (state=created, not tested).
 	rr := doRequest(t, handler, http.MethodPost, "/api/v1/knomit/origin/session",
@@ -883,19 +892,22 @@ func setupAppliedSession(t *testing.T) (http.Handler, string, *repos.Manager, *S
 	}
 	t.Cleanup(func() { svc.Close() })
 
-	localGS, err := git.InitWithStorer(svc.GitStorer(), nil, "agent/test")
+	err = svc.InitRepo(nil, "agent/test")
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// Write a local fact.
 	factContent := "---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# Local Fact\n\nContent.\n"
-	writeFact(t, localGS, svc, "kb/local-fact.md", factContent)
+	writeFact(t, svc, "kb/local-fact.md", factContent)
 
 	// Build the remote store (disjoint) — this simulates the result after apply.
-	remoteStorer := newTestStorerForWeb(t)
-	remoteStore, err := git.InitWithStorer(remoteStorer, nil, "agent/remote")
+	remoteStore, err := store.Open(":memory:")
 	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { remoteStore.Close() })
+	if err := remoteStore.InitRepo(nil, "agent/remote"); err != nil {
 		t.Fatal(err)
 	}
 	remoteFact := "---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# Remote Fact\n\nContent.\n"
@@ -914,7 +926,7 @@ func setupAppliedSession(t *testing.T) (http.Handler, string, *repos.Manager, *S
 
 	ri := repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
 		Name: "knomit",
-		GS:   localGS,
+		GS:   svc,
 		Svc:  svc,
 		Hub:  hub,
 		StartSync: func(url string) error {
@@ -999,15 +1011,15 @@ func TestCommit_SwapsAndConfigures(t *testing.T) {
 	if ri == nil {
 		t.Fatal("repo instance not found after commit")
 	}
-	// The GS should now be the remote store (a *git.Store), not the original local.
+	// The GS should now be the remote store (a *store.Service), not the original local.
 	var gs repos.GitStore
 	var svc *store.Service
 	ri.WithRead(func(d repos.StoreDeps) {
-		gs = d.GS
+		gs = d.Svc
 		svc = d.Svc
 	})
-	if _, ok := gs.(*git.Store); !ok {
-		t.Errorf("expected ri.GS to be *git.Store after swap, got %T", gs)
+	if _, ok := gs.(*store.Service); !ok {
+		t.Errorf("expected ri.GS to be *store.Service after swap, got %T", gs)
 	}
 
 	// Verify remote config was saved to DB.
@@ -1033,7 +1045,7 @@ func TestCommit_SwapsAndConfigures(t *testing.T) {
 }
 
 func TestCommit_SessionNotFound(t *testing.T) {
-	handler, _, _ := newTestRouterWithSvcAndGitStore(t)
+	handler, _ := newTestRouterWithSvcAndGitStore(t)
 
 	rr := doRequest(t, handler, http.MethodPost, "/api/v1/knomit/origin/session/nonexistent-id/commit", "")
 	if rr.Code != http.StatusNotFound {
@@ -1049,7 +1061,7 @@ func TestCommit_WrongState(t *testing.T) {
 	}
 	t.Cleanup(func() { svc.Close() })
 
-	localGS, err := git.InitWithStorer(svc.GitStorer(), nil, "agent/test")
+	err = svc.InitRepo(nil, "agent/test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1061,7 +1073,7 @@ func TestCommit_WrongState(t *testing.T) {
 
 	rm.Set("knomit", repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
 		Name: "knomit",
-		GS:   localGS,
+		GS:   svc,
 		Svc:  svc,
 		Hub:  hub,
 	}))
@@ -1083,9 +1095,12 @@ func TestCommit_WrongState(t *testing.T) {
 }
 
 func TestTestConnectivity_CloneError(t *testing.T) {
-	localStorer := newTestStorerForWeb(t)
-	localStore, err := git.InitWithStorer(localStorer, nil, "agent/test")
+	localStore, err := store.Open(":memory:")
 	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { localStore.Close() })
+	if err := localStore.InitRepo(nil, "agent/test"); err != nil {
 		t.Fatal(err)
 	}
 	handler := newTestRouterWithGitStore(t, localStore)
@@ -1180,7 +1195,7 @@ func TestApply_NoRemoteStore(t *testing.T) {
 	}
 	t.Cleanup(func() { svc.Close() })
 
-	localGS, err := git.InitWithStorer(svc.GitStorer(), nil, "agent/test")
+	err = svc.InitRepo(nil, "agent/test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1192,7 +1207,7 @@ func TestApply_NoRemoteStore(t *testing.T) {
 
 	rm.Set("knomit", repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
 		Name: "knomit",
-		GS:   localGS,
+		GS:   svc,
 		Svc:  svc,
 		Hub:  hub,
 	}))
@@ -1228,15 +1243,18 @@ func TestApply_SharedHistory(t *testing.T) {
 	}
 	t.Cleanup(func() { svc.Close() })
 
-	localGS, err := git.InitWithStorer(svc.GitStorer(), nil, "agent/test")
+	err = svc.InitRepo(nil, "agent/test")
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// Need a remote store so the nil check passes.
-	remoteStorer := newTestStorerForWeb(t)
-	remoteStore, err := git.InitWithStorer(remoteStorer, nil, "agent/remote")
+	remoteStore, err := store.Open(":memory:")
 	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { remoteStore.Close() })
+	if err := remoteStore.InitRepo(nil, "agent/remote"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1247,7 +1265,7 @@ func TestApply_SharedHistory(t *testing.T) {
 
 	rm.Set("knomit", repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
 		Name: "knomit",
-		GS:   localGS,
+		GS:   svc,
 		Svc:  svc,
 		Hub:  hub,
 	}))
@@ -1316,7 +1334,7 @@ func TestCommit_NotApplied(t *testing.T) {
 	}
 	t.Cleanup(func() { svc.Close() })
 
-	localGS, err := git.InitWithStorer(svc.GitStorer(), nil, "agent/test")
+	err = svc.InitRepo(nil, "agent/test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1328,7 +1346,7 @@ func TestCommit_NotApplied(t *testing.T) {
 
 	rm.Set("knomit", repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
 		Name: "knomit",
-		GS:   localGS,
+		GS:   svc,
 		Svc:  svc,
 		Hub:  hub,
 	}))

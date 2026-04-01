@@ -62,7 +62,7 @@ func handleBrowse(ontologyRoot, agentBranch string) http.HandlerFunc {
 		var gs repos.GitStore
 		var idx repos.SearchIndex
 		ri.WithRead(func(d repos.StoreDeps) {
-			gs = d.Svc
+			gs = d.GS
 			idx = d.Idx
 		})
 		path := r.URL.Query().Get("path")
@@ -132,7 +132,7 @@ func handleFact(agentBranch string) http.HandlerFunc {
 		var gs repos.GitStore
 		var svc *store.Service
 		ri.WithRead(func(d repos.StoreDeps) {
-			gs = d.Svc
+			gs = d.GS
 			svc = d.Svc
 		})
 		path := r.URL.Query().Get("path")
@@ -242,7 +242,7 @@ func handleFactWrite(agentBranch string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
 		var gs repos.GitStore
-		ri.WithRead(func(d repos.StoreDeps) { gs = d.Svc })
+		ri.WithRead(func(d repos.StoreDeps) { gs = d.GS })
 
 		var req struct {
 			Path    string `json:"path"`
@@ -284,7 +284,7 @@ func handleFactRetract(agentBranch string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
 		var gs repos.GitStore
-		ri.WithRead(func(d repos.StoreDeps) { gs = d.Svc })
+		ri.WithRead(func(d repos.StoreDeps) { gs = d.GS })
 
 		path := r.URL.Query().Get("path")
 		if path == "" {
@@ -463,7 +463,7 @@ func handleHistoryPaginated(agentBranch string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
 		var gs repos.GitStore
-		ri.WithRead(func(d repos.StoreDeps) { gs = d.Svc })
+		ri.WithRead(func(d repos.StoreDeps) { gs = d.GS })
 		path := r.URL.Query().Get("path")
 
 		limit := 50
@@ -507,7 +507,7 @@ func handleCommitDetail(agentBranch string) http.HandlerFunc {
 		var gs repos.GitStore
 		var idx repos.SearchIndex
 		ri.WithRead(func(d repos.StoreDeps) {
-			gs = d.Svc
+			gs = d.GS
 			idx = d.Idx
 		})
 		hash := r.URL.Query().Get("hash")
@@ -570,7 +570,7 @@ func handleActivity(agentBranch string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
 		var gs repos.GitStore
-		ri.WithRead(func(d repos.StoreDeps) { gs = d.Svc })
+		ri.WithRead(func(d repos.StoreDeps) { gs = d.GS })
 		result, err := gs.Activity(r.Context(), agentBranch, r.URL.Query().Get("path"))
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, fmt.Sprintf("activity error: %v", err))
@@ -632,7 +632,7 @@ func handleStatus(embeddingsEnabled bool, ontologyRoot, agentBranch string) http
 		var gs repos.GitStore
 		var idx repos.SearchIndex
 		ri.WithRead(func(d repos.StoreDeps) {
-			gs = d.Svc
+			gs = d.GS
 			idx = d.Idx
 		})
 		head, err := gs.HeadCommit(r.Context(), agentBranch)

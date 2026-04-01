@@ -8,8 +8,7 @@ import (
 	"sync"
 	"testing"
 
-	"knomit/internal/git"
-)
+	)
 
 func TestSync_ConcurrentCAS(t *testing.T) {
 	tmp := filepath.Join(t.TempDir(), "sync-race.db")
@@ -203,7 +202,7 @@ func TestConcurrent_WriteAndSync(t *testing.T) {
 	ctx := context.Background()
 
 	branch := "agent/e2e-concurrent"
-	gs, err := git.InitWithStorer(svc.GitStorer(), nil, branch)
+	err = svc.InitRepo(nil, branch)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -219,11 +218,11 @@ func TestConcurrent_WriteAndSync(t *testing.T) {
 			defer wg.Done()
 			path := fmt.Sprintf("kb/fact-%d.md", n)
 			content := fmt.Sprintf("---\ntype: observation\ndomain: [test]\nconfidence: 0.9\nsources: 1\nentities: [item%d]\nrefs: []\n---\n# Fact %d\n\nBody %d.\n", n, n, n)
-			if _, _, err := gs.WriteFile(ctx, branch, path, content, fmt.Sprintf("add fact %d", n), "learn"); err != nil {
+			if _, _, err := svc.WriteFile(ctx, branch, path, content, fmt.Sprintf("add fact %d", n), "learn"); err != nil {
 				errs[n] = fmt.Errorf("WriteFile: %w", err)
 				return
 			}
-			if err := idx.Sync(ctx, gs, branch); err != nil {
+			if err := idx.Sync(ctx, svc, branch); err != nil {
 				errs[n] = fmt.Errorf("Sync: %w", err)
 			}
 		}(i)
@@ -237,7 +236,7 @@ func TestConcurrent_WriteAndSync(t *testing.T) {
 	}
 
 	// All 5 facts should be indexed (Sync may need a final call to catch up).
-	if err := idx.Sync(ctx, gs, branch); err != nil {
+	if err := idx.Sync(ctx, svc, branch); err != nil {
 		t.Fatal(err)
 	}
 

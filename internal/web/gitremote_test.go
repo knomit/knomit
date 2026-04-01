@@ -12,16 +12,15 @@ import (
 	"context"
 
 	"github.com/go-chi/chi/v5"
-	"go.uber.org/mock/gomock"
-	"knomit/internal/git"
+	"knomit/internal/store"
 	"knomit/internal/repos"
 )
 
 // newTestRepoManager creates a *repos.Manager with a single repo named repoName
 // backed by store.
-func newTestRepoManager(repoName string, store *git.Store) *repos.Manager {
+func newTestRepoManager(repoName string, store *store.Service) *repos.Manager {
 	rm := repos.New(context.Background(), repos.Deps{})
-	rm.Set(repoName, repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{GS: store}))
+	rm.Set(repoName, repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{Svc: store}))
 	return rm
 }
 
@@ -117,9 +116,9 @@ func TestGitCloneWithCommits(t *testing.T) {
 // TestGitRemoteHandler_GSNotGitRemoteStore verifies that a repo whose GS does
 // not implement GitRemoteStore returns 500 rather than panicking.
 func TestGitRemoteHandler_GSNotGitRemoteStore(t *testing.T) {
-	ctrl := gomock.NewController(t)
 	rm := repos.New(context.Background(), repos.Deps{})
-	rm.Set("mocked", repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{GS: NewMockGitStore(ctrl)}))
+	// Svc is nil — the handler should return 500 because it can't get a Handler().
+	rm.Set("mocked", repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{}))
 
 	handler := GitRemoteHandler(rm)
 	rr := httptest.NewRecorder()
@@ -175,8 +174,8 @@ func TestGitRemoteHandler_MultiRepo(t *testing.T) {
 	}
 
 	rm := repos.New(context.Background(), repos.Deps{})
-	rm.Set("repo-a", repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{GS: storeA}))
-	rm.Set("repo-b", repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{GS: storeB}))
+	rm.Set("repo-a", repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{Svc: storeA}))
+	rm.Set("repo-b", repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{Svc: storeB}))
 
 	r := chi.NewRouter()
 	r.Mount("/git", GitRemoteHandler(rm))

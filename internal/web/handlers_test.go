@@ -10,7 +10,6 @@ import (
 	"testing"
 
 	"go.uber.org/mock/gomock"
-	"knomit/internal/git"
 	"knomit/internal/repos"
 	"knomit/internal/store"
 )
@@ -50,7 +49,7 @@ func TestHandleBrowse(t *testing.T) {
 	tests := []struct {
 		name       string
 		query      string
-		entries    []git.DirEntry
+		entries    []store.DirEntry
 		wantStatus int
 		wantPath   string
 		wantLen    int
@@ -58,7 +57,7 @@ func TestHandleBrowse(t *testing.T) {
 		{
 			name:  "default path uses general",
 			query: "/api/v1/knomit/browse",
-			entries: []git.DirEntry{
+			entries: []store.DirEntry{
 				{Name: "subdir", IsDir: true},
 				{Name: "fact.md", IsDir: false},
 			},
@@ -69,7 +68,7 @@ func TestHandleBrowse(t *testing.T) {
 		{
 			name:  "explicit path",
 			query: "/api/v1/knomit/browse?path=kb/sub",
-			entries: []git.DirEntry{
+			entries: []store.DirEntry{
 				{Name: "item.md", IsDir: false},
 			},
 			wantStatus: http.StatusOK,
@@ -79,7 +78,7 @@ func TestHandleBrowse(t *testing.T) {
 		{
 			name:       "empty directory",
 			query:      "/api/v1/knomit/browse?path=kb/empty",
-			entries:    []git.DirEntry{},
+			entries:    []store.DirEntry{},
 			wantStatus: http.StatusOK,
 			wantPath:   "kb/empty",
 			wantLen:    0,
@@ -363,7 +362,7 @@ func TestHandleSearchInvalidMinSimilarity(t *testing.T) {
 }
 
 func TestHandleHistory(t *testing.T) {
-	logEntries := []git.LogEntryWithTags{
+	logEntries := []store.LogEntryWithTags{
 		{Commit: "abcd1234", Date: "2024-01-01T00:00:00Z", Message: "add fact"},
 		{Commit: "efgh5678", Date: "2024-01-02T00:00:00Z", Message: "update fact"},
 	}
@@ -372,7 +371,7 @@ func TestHandleHistory(t *testing.T) {
 		name       string
 		query      string
 		path       string
-		entries    []git.LogEntryWithTags
+		entries    []store.LogEntryWithTags
 		wantStatus int
 		wantLen    int
 	}{

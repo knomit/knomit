@@ -7,7 +7,6 @@ import (
 	"sync"
 	"testing"
 
-	git "knomit/internal/git"
 	"knomit/internal/store"
 	"go.uber.org/mock/gomock"
 )
@@ -309,10 +308,10 @@ func TestIncrementalSync(t *testing.T) {
 	}
 	defer svc.Close()
 
-	gitStore, err := git.InitWithStorer(svc.GitStorer(), nil, testBranch)
-	if err != nil {
+	if err := svc.InitRepo(nil, testBranch); err != nil {
 		t.Fatal(err)
 	}
+	gitStore := svc
 
 	idx := svc.Index()
 
@@ -436,10 +435,10 @@ func TestSyncCommitHashIsLastTouch(t *testing.T) {
 	}
 	defer svc.Close()
 
-	gitStore, err := git.InitWithStorer(svc.GitStorer(), nil, testBranch)
-	if err != nil {
+	if err := svc.InitRepo(nil, testBranch); err != nil {
 		t.Fatal(err)
 	}
+	gitStore := svc
 
 	idx := svc.Index()
 

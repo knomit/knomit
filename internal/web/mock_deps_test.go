@@ -11,7 +11,6 @@ package web
 
 import (
 	context "context"
-	git "knomit/internal/git"
 	store "knomit/internal/store"
 	reflect "reflect"
 
@@ -43,10 +42,10 @@ func (m *MockGitStore) EXPECT() *MockGitStoreMockRecorder {
 }
 
 // Activity mocks base method.
-func (m *MockGitStore) Activity(ctx context.Context, branch, path string) (git.ActivityResult, error) {
+func (m *MockGitStore) Activity(ctx context.Context, branch, path string) (store.ActivityResult, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "Activity", ctx, branch, path)
-	ret0, _ := ret[0].(git.ActivityResult)
+	ret0, _ := ret[0].(store.ActivityResult)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
@@ -58,10 +57,10 @@ func (mr *MockGitStoreMockRecorder) Activity(ctx, branch, path any) *gomock.Call
 }
 
 // CommitDetail mocks base method.
-func (m *MockGitStore) CommitDetail(ctx context.Context, commitHash string) (*git.CommitDetailResult, error) {
+func (m *MockGitStore) CommitDetail(ctx context.Context, commitHash string) (*store.CommitDetailResult, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "CommitDetail", ctx, commitHash)
-	ret0, _ := ret[0].(*git.CommitDetailResult)
+	ret0, _ := ret[0].(*store.CommitDetailResult)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
@@ -118,10 +117,10 @@ func (mr *MockGitStoreMockRecorder) ListAll(ctx, branch any) *gomock.Call {
 }
 
 // ListDir mocks base method.
-func (m *MockGitStore) ListDir(ctx context.Context, branch, path string) ([]git.DirEntry, error) {
+func (m *MockGitStore) ListDir(ctx context.Context, branch, path string) ([]store.DirEntry, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "ListDir", ctx, branch, path)
-	ret0, _ := ret[0].([]git.DirEntry)
+	ret0, _ := ret[0].([]store.DirEntry)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
@@ -133,10 +132,10 @@ func (mr *MockGitStoreMockRecorder) ListDir(ctx, branch, path any) *gomock.Call 
 }
 
 // Log mocks base method.
-func (m *MockGitStore) Log(ctx context.Context, branch, path string) ([]git.LogEntry, error) {
+func (m *MockGitStore) Log(ctx context.Context, branch, path string) ([]store.LogEntry, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "Log", ctx, branch, path)
-	ret0, _ := ret[0].([]git.LogEntry)
+	ret0, _ := ret[0].([]store.LogEntry)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
@@ -148,10 +147,10 @@ func (mr *MockGitStoreMockRecorder) Log(ctx, branch, path any) *gomock.Call {
 }
 
 // LogPaginated mocks base method.
-func (m *MockGitStore) LogPaginated(ctx context.Context, branch, path string, limit int, after, from, before string) ([]git.LogEntryWithTags, string, string, error) {
+func (m *MockGitStore) LogPaginated(ctx context.Context, branch, path string, limit int, after, from, before string) ([]store.LogEntryWithTags, string, string, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "LogPaginated", ctx, branch, path, limit, after, from, before)
-	ret0, _ := ret[0].([]git.LogEntryWithTags)
+	ret0, _ := ret[0].([]store.LogEntryWithTags)
 	ret1, _ := ret[1].(string)
 	ret2, _ := ret[2].(string)
 	ret3, _ := ret[3].(error)

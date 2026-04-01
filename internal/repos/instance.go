@@ -57,8 +57,10 @@ type SynthDeps struct {
 }
 
 // StoreDeps bundles the lock-protected fields for read access via WithRead.
-// All five fields may be nil if the repo is not yet fully initialised.
+// All fields may be nil if the repo is not yet fully initialised.
+// GS is populated from Svc in production; tests may set GS to a mock GitStore.
 type StoreDeps struct {
+	GS    GitStore
 	Svc   *store.Service
 	Idx   SearchIndex
 	MCP   map[string]http.Handler
@@ -71,6 +73,7 @@ type RepoInstance struct {
 	name        string
 	dbPath      string
 	agentBranch string
+	gsOverride  GitStore       // test-only: overrides svc as GS in StoreDeps
 	svc         *store.Service
 	idx         SearchIndex
 	hub         *TaskHub
@@ -88,7 +91,12 @@ type RepoInstance struct {
 func (ri *RepoInstance) WithRead(fn func(StoreDeps)) {
 	ri.mu.RLock()
 	defer ri.mu.RUnlock()
+	gs := GitStore(ri.svc)
+	if ri.gsOverride != nil {
+		gs = ri.gsOverride
+	}
 	fn(StoreDeps{
+		GS:    gs,
 		Svc:   ri.svc,
 		Idx:   ri.idx,
 		MCP:   ri.mcpHandlers,
@@ -145,6 +153,7 @@ func NewTestInstance(name string) *RepoInstance {
 type TestInstanceConfig struct {
 	Name        string
 	AgentBranch string
+	GS          GitStore
 	Svc         *store.Service
 	Idx         SearchIndex
 	Hub         *TaskHub
@@ -161,6 +170,7 @@ func NewTestInstanceWithDeps(cfg TestInstanceConfig) *RepoInstance {
 	return &RepoInstance{
 		name:        cfg.Name,
 		agentBranch: cfg.AgentBranch,
+		gsOverride:  cfg.GS,
 		svc:         cfg.Svc,
 		idx:         cfg.Idx,
 		hub:         cfg.Hub,

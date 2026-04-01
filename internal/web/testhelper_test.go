@@ -5,24 +5,22 @@ import (
 
 	_ "github.com/mattn/go-sqlite3"
 
-	"knomit/internal/git"
-	storegit "knomit/internal/store/git"
+	"knomit/internal/store"
 )
 
 // testAgentBranch is the branch used in web tests.
 const testAgentBranch = "agent/test"
 
 // newWebTestStore initialises a fresh in-memory git store for web tests.
-func newWebTestStore(t *testing.T) *git.Store {
+func newWebTestStore(t *testing.T) *store.Service {
 	t.Helper()
-	s, err := storegit.NewMemoryStorer()
+	svc, err := store.Open(":memory:")
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { s.Close() })
-	store, err := git.InitWithStorer(s, nil, testAgentBranch)
-	if err != nil {
+	t.Cleanup(func() { svc.Close() })
+	if err := svc.InitRepo(nil, testAgentBranch); err != nil {
 		t.Fatal(err)
 	}
-	return store
+	return svc
 }

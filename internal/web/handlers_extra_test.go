@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"go.uber.org/mock/gomock"
-	"knomit/internal/git"
 	"knomit/internal/llm"
 	"knomit/internal/repos"
 	"knomit/internal/store"
@@ -231,7 +230,7 @@ func TestHandleHistoryPaginated(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
 
-	entries := []git.LogEntryWithTags{
+	entries := []store.LogEntryWithTags{
 		{Commit: "abc12345", Date: "2026-03-14T10:00:00Z", Message: "add fact", Operation: "learn"},
 	}
 	gs.EXPECT().LogPaginated(gomock.Any(), testAgentBranch, "kb/test", 50, "", "", "").Return(entries, "def67890", "", nil)
@@ -258,10 +257,10 @@ func TestHandleCommitDetail(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
 
-	gs.EXPECT().CommitDetail(gomock.Any(), "abc12345").Return(&git.CommitDetailResult{
+	gs.EXPECT().CommitDetail(gomock.Any(), "abc12345").Return(&store.CommitDetailResult{
 		Commit: "abc12345", Date: "2026-03-14T10:00:00Z", Message: "add fact",
 		Operation: "learn",
-		Files:     []git.ChangedFile{{Path: "kb/test.md", Action: "added"}},
+		Files:     []store.ChangedFile{{Path: "kb/test.md", Action: "added"}},
 	}, nil)
 	// Title lookup fallback: no index, so handler tries ReadFileAtCommit
 	gs.EXPECT().ReadFileAtCommit(gomock.Any(), testAgentBranch, "kb/test.md", "abc12345").Return("", fmt.Errorf("not found"))
@@ -274,7 +273,7 @@ func TestHandleCommitDetail(t *testing.T) {
 		t.Fatalf("expected 200, got %d", rr.Code)
 	}
 
-	var resp git.CommitDetailResult
+	var resp store.CommitDetailResult
 	json.Unmarshal(rr.Body.Bytes(), &resp)
 	if len(resp.Files) != 1 || resp.Files[0].Path != "kb/test.md" {
 		t.Errorf("unexpected files: %v", resp.Files)
@@ -286,10 +285,10 @@ func TestHandleCommitDetail_DeletedFileReturnsTitleViaLastCommit(t *testing.T) {
 	gs := NewMockGitStore(ctrl)
 
 	// Simulate a retract commit where the file was deleted.
-	gs.EXPECT().CommitDetail(gomock.Any(), "retract99").Return(&git.CommitDetailResult{
+	gs.EXPECT().CommitDetail(gomock.Any(), "retract99").Return(&store.CommitDetailResult{
 		Commit: "retract99", Date: "2026-03-20T10:00:00Z", Message: "retract fact",
 		Operation: "retract",
-		Files:     []git.ChangedFile{{Path: "kb/deleted-fact.md", Action: "deleted"}},
+		Files:     []store.ChangedFile{{Path: "kb/deleted-fact.md", Action: "deleted"}},
 	}, nil)
 	// Index lookup: no index provided (nil), so skipped.
 	// ReadFileAtCommit fails (file doesn't exist at the retract commit).
@@ -327,10 +326,10 @@ func TestHandleCommitDetail_DeletedFileWithIndexFallback(t *testing.T) {
 	mockIdx := NewMockSearchIndex(ctrl)
 
 	// Simulate a commit with a deleted file where index still has the entry.
-	gs.EXPECT().CommitDetail(gomock.Any(), "retract-idx").Return(&git.CommitDetailResult{
+	gs.EXPECT().CommitDetail(gomock.Any(), "retract-idx").Return(&store.CommitDetailResult{
 		Commit: "retract-idx", Date: "2026-03-20T11:00:00Z", Message: "retract via index",
 		Operation: "retract",
-		Files:     []git.ChangedFile{{Path: "kb/indexed-deleted.md", Action: "deleted"}},
+		Files:     []store.ChangedFile{{Path: "kb/indexed-deleted.md", Action: "deleted"}},
 	}, nil)
 	mockIdx.EXPECT().GetByPath(gomock.Any(), gomock.Any(), "kb/indexed-deleted.md").Return(&store.FactWithBody{
 		FactRecord: store.FactRecord{Title: "Indexed Deleted Title"},
