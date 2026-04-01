@@ -4,7 +4,6 @@ import (
 	"context"
 
 	"knomit/internal/fact"
-	"knomit/internal/mcp"
 )
 
 // SourceWeight holds the confidence and sources count from a single source fact,
@@ -50,7 +49,7 @@ func computeWeight(ctx context.Context, gs GitStore, agentBranch string, sourceP
 		if err != nil {
 			continue
 		}
-		f, err := mcp.ParseFact(p, readResult.Content)
+		f, err := fact.ParseFact(p, readResult.Content)
 		if err != nil {
 			continue
 		}

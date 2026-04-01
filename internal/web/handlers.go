@@ -33,7 +33,7 @@ import (
 	"strings"
 	"time"
 
-	"knomit/internal/mcp"
+	"knomit/internal/fact"
 	"knomit/internal/repos"
 	"knomit/internal/store"
 
@@ -178,7 +178,7 @@ func handleFact(agentBranch string) http.HandlerFunc {
 			return
 		}
 
-		fact, err := mcp.ParseFact(path, content)
+		fact, err := fact.ParseFact(path, content)
 		if err != nil {
 			// File could not be parsed as a fact — return raw content with parse error.
 			writeJSON(w, http.StatusOK, map[string]any{
@@ -269,7 +269,7 @@ func handleFactWrite(agentBranch string) http.HandlerFunc {
 			return
 		}
 
-		fact, err := mcp.ParseFact(req.Path, req.Content)
+		fact, err := fact.ParseFact(req.Path, req.Content)
 		if err != nil {
 			writeJSON(w, http.StatusOK, map[string]any{
 				"path":        req.Path,
@@ -547,14 +547,14 @@ func handleCommitDetail(agentBranch string) http.HandlerFunc {
 			// Fallback: read the file as it was at this commit and parse the title.
 			// Covers retracted facts, deleted files, and anything not in the current index.
 			if result, err := gs.ReadFact(r.Context(), agentBranch, f.Path, &store.ReadFactOpts{AtCommit: hash}); err == nil && result.Content != "" {
-				if parsed, perr := mcp.ParseFact(f.Path, result.Content); perr == nil {
+				if parsed, perr := fact.ParseFact(f.Path, result.Content); perr == nil {
 					files[i].Title = parsed.Title
 					continue
 				}
 			}
 			// Last resort for deleted files: find the last commit where the file existed.
 			if result, err := gs.ReadFact(r.Context(), agentBranch, f.Path, &store.ReadFactOpts{BeforeCommit: hash}); err == nil && result.Content != "" {
-				if parsed, perr := mcp.ParseFact(f.Path, result.Content); perr == nil {
+				if parsed, perr := fact.ParseFact(f.Path, result.Content); perr == nil {
 					files[i].Title = parsed.Title
 				}
 			}

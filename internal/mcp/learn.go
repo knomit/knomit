@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"knomit/internal/fact"
+	"knomit/internal/store"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 )
@@ -175,7 +176,7 @@ func LearnHandler(gs GitStore, idx SearchIndex, ontologyRoot string, ontology *f
 		}
 		for i, f := range facts {
 			categoryDir := f.Path()[:strings.LastIndex(f.Path(), "/")]
-			sq := SearchQuery{
+			sq := store.SearchQuery{
 				Text:          f.Title + " " + f.Body,
 				Path:          categoryDir,
 				MinSimilarity: dedupThreshold,

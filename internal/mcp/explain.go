@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"knomit/internal/fact"
+	"knomit/internal/store"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 )
@@ -123,10 +124,10 @@ func explainFirstCall(ctx context.Context, gs GitStore, sessionIdx ToolSessionIn
 	refs := classifyRefs(fact.Refs)
 
 	// Build queue items from local refs.
-	var queueItems []QueueItem
+	var queueItems []store.QueueItem
 	for _, ref := range refs.Local {
 		if ref != file {
-			queueItems = append(queueItems, QueueItem{Path: ref, CommitHash: rootCommit, Depth: 1})
+			queueItems = append(queueItems, store.QueueItem{Path: ref, CommitHash: rootCommit, Depth: 1})
 		}
 	}
 
@@ -214,7 +215,7 @@ func explainResume(ctx context.Context, gs GitStore, sessionIdx ToolSessionIndex
 
 	var facts []explainFactEntry
 	var newPaths []string
-	var newQueue []QueueItem
+	var newQueue []store.QueueItem
 
 	// Retry dequeue up to 3 times if all items in a batch fail.
 	for attempt := 0; attempt < 3; attempt++ {
@@ -227,7 +228,7 @@ func explainResume(ctx context.Context, gs GitStore, sessionIdx ToolSessionIndex
 		}
 
 		for _, item := range items {
-			result, readErr := gs.ReadFact(ctx, agentBranch, item.Path, &ReadFactOpts{AtCommit: item.CommitHash})
+			result, readErr := gs.ReadFact(ctx, agentBranch, item.Path, &store.ReadFactOpts{AtCommit: item.CommitHash})
 			var retracted bool
 			var lastCommitHash string
 			if readErr != nil {
@@ -238,7 +239,7 @@ func explainResume(ctx context.Context, gs GitStore, sessionIdx ToolSessionIndex
 				if lcErr != nil || retractCommit == "" {
 					continue // file never existed in git
 				}
-				result, readErr = gs.ReadFact(ctx, agentBranch, item.Path, &ReadFactOpts{BeforeCommit: retractCommit})
+				result, readErr = gs.ReadFact(ctx, agentBranch, item.Path, &store.ReadFactOpts{BeforeCommit: retractCommit})
 				if readErr != nil {
 					continue
 				}
@@ -256,7 +257,7 @@ func explainResume(ctx context.Context, gs GitStore, sessionIdx ToolSessionIndex
 			if item.Depth < explainMaxDepth {
 				for _, ref := range refs.Local {
 					if !seen[ref] {
-						newQueue = append(newQueue, QueueItem{Path: ref, CommitHash: item.CommitHash, Depth: item.Depth + 1})
+						newQueue = append(newQueue, store.QueueItem{Path: ref, CommitHash: item.CommitHash, Depth: item.Depth + 1})
 						seen[ref] = true
 					}
 				}

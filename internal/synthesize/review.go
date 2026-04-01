@@ -8,11 +8,12 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/rs/zerolog/log"
 	"knomit/internal/fact"
 	"knomit/internal/llm"
 	"knomit/internal/mcp"
 	"knomit/internal/store"
+
+	"github.com/rs/zerolog/log"
 )
 
 // PipelineIndex is the interface for pipeline session storage (subset of store.Index).
@@ -335,7 +336,7 @@ func (r *Reviewer) dirtyFacts(ctx context.Context, branch string) ([]factForLLM,
 		if err != nil {
 			continue // deleted or unreadable
 		}
-		fact, err := mcp.ParseFact(path, result.Content)
+		fact, err := fact.ParseFact(path, result.Content)
 		if err != nil {
 			continue // not a valid fact
 		}
@@ -503,7 +504,7 @@ func (r *Reviewer) findHypothesisTransitions(ctx context.Context, sessionID stri
 		if err != nil {
 			continue
 		}
-		f, err := mcp.ParseFact(path, readResult.Content)
+		f, err := fact.ParseFact(path, readResult.Content)
 		if err != nil {
 			continue
 		}
@@ -520,7 +521,7 @@ func (r *Reviewer) findHypothesisTransitions(ctx context.Context, sessionID stri
 		if err != nil {
 			continue
 		}
-		oldFact, err := mcp.ParseFact(path, oldResult.Content)
+		oldFact, err := fact.ParseFact(path, oldResult.Content)
 		if err != nil || oldFact.Type != fact.Hypothesis {
 			continue
 		}
@@ -528,7 +529,7 @@ func (r *Reviewer) findHypothesisTransitions(ctx context.Context, sessionID stri
 		if err != nil {
 			continue
 		}
-		newFact, err := mcp.ParseFact(path, newResult.Content)
+		newFact, err := fact.ParseFact(path, newResult.Content)
 		if err != nil {
 			continue
 		}

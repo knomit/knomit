@@ -8,11 +8,11 @@ import (
 	"path/filepath"
 	"strings"
 
+	"knomit/internal/fact"
+	"knomit/internal/store"
+
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
-	"knomit/internal/fact"
-	"knomit/internal/mcp"
-	"knomit/internal/store"
 )
 
 // normalizeFactPath replaces the filename component of a path with an 8-char
@@ -65,7 +65,7 @@ func ApplyPruneDecisions(ctx context.Context,
 			if err := idx.Delete(ctx, agentBranch, d.Path); err != nil {
 				onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("index delete %s: %v", d.Path, err)})
 			}
-		
+
 			onProgress(ProgressEvent{Phase: "detail-retract", Message: "retract " + d.Path})
 			stats.Pruned++
 
@@ -75,13 +75,13 @@ func ApplyPruneDecisions(ctx context.Context,
 				onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("update read %s: %v", d.Path, err)})
 				continue
 			}
-			f, err := mcp.ParseFact(d.Path, readResult.Content)
+			f, err := fact.ParseFact(d.Path, readResult.Content)
 			if err != nil {
 				onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("update parse %s: %v", d.Path, err)})
 				continue
 			}
 			f.Confidence = d.Confidence
-			updated := mcp.SerializeFact(f)
+			updated := fact.SerializeFact(f)
 			msg := fmt.Sprintf("synthesize-%s: update confidence %s → %.2f", recipeName, d.Path, d.Confidence)
 			writeRes, err := gs.WriteFact(ctx, agentBranch, d.Path, updated, msg, "update")
 			if err != nil {
@@ -91,7 +91,7 @@ func ApplyPruneDecisions(ctx context.Context,
 			if err := idx.Upsert(ctx, agentBranch, writeRes.CommitHash, store.NewFactRecord(f, writeRes.BlobHash)); err != nil {
 				onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("index upsert %s: %v", d.Path, err)})
 			}
-		
+
 			onProgress(ProgressEvent{Phase: "detail-update", Message: fmt.Sprintf("update %.2f %s", d.Confidence, d.Path)})
 			stats.Updated++
 		}
@@ -111,7 +111,7 @@ func ApplyPruneDecisions(ctx context.Context,
 		merged.Entities = mf.Entities
 		merged.Refs = mf.Refs
 		merged.EvidenceWeight = weight
-		content := mcp.SerializeFact(merged)
+		content := fact.SerializeFact(merged)
 		msg := fmt.Sprintf("synthesize-%s: merge %s", recipeName, strings.Join(m.Paths, ", "))
 		writeRes, err := gs.WriteFact(ctx, agentBranch, merged.Path(), content, msg, "subsume")
 		if err != nil {
@@ -132,7 +132,7 @@ func ApplyPruneDecisions(ctx context.Context,
 			}
 			_ = idx.Delete(ctx, agentBranch, src)
 			deletedPaths[src] = true
-		
+
 		}
 		onProgress(ProgressEvent{Phase: "detail-merge", Message: "merge " + merged.Path()})
 		stats.Merged++
@@ -184,7 +184,7 @@ func ApplyDistillDecisions(ctx context.Context,
 		f.Refs = df.Refs
 		f.EvidenceWeight = weight
 		df.Path = f.Path() // sync df so written slice reflects the canonical (lowercase) path
-		content := mcp.SerializeFact(f)
+		content := fact.SerializeFact(f)
 		msg := fmt.Sprintf("synthesize-%s: distill %s", recipeName, f.Path())
 		writeRes, err := gs.WriteFact(ctx, agentBranch, f.Path(), content, msg, "subsume")
 		if err != nil {
@@ -206,7 +206,7 @@ func ApplyDistillDecisions(ctx context.Context,
 			continue
 		}
 		_ = idx.Delete(ctx, agentBranch, path)
-	
+
 		onProgress(ProgressEvent{Phase: "detail-distill-retract", Message: "retract " + path})
 		stats.Pruned++
 	}

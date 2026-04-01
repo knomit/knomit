@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"knomit/internal/store"
 	"time"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
@@ -51,7 +52,7 @@ func QueryHandler(gs GitStore, idx SearchIndex, agentBranch string) func(context
 			return mcpgo.NewToolResultError("at least one of text, entities, domain, path, or min_confidence is required"), nil
 		}
 
-		q := SearchQuery{
+		q := store.SearchQuery{
 			Text:          text,
 			Entities:      entities,
 			Domain:        domain,
@@ -68,13 +69,13 @@ func QueryHandler(gs GitStore, idx SearchIndex, agentBranch string) func(context
 
 		// 5. Build output.
 		type factOutput struct {
-			File        string      `json:"file"`
-			Title       string      `json:"title"`
-			Type        string      `json:"type"`
-			Body        string      `json:"body"`
-			LastModified string     `json:"last_modified,omitempty"`
-			Commit      string      `json:"commit"`
-			Frontmatter interface{} `json:"frontmatter"`
+			File         string      `json:"file"`
+			Title        string      `json:"title"`
+			Type         string      `json:"type"`
+			Body         string      `json:"body"`
+			LastModified string      `json:"last_modified,omitempty"`
+			Commit       string      `json:"commit"`
+			Frontmatter  interface{} `json:"frontmatter"`
 		}
 		type frontmatterOutput struct {
 			Domain         []string `json:"domain"`
