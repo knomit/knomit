@@ -17,7 +17,6 @@ import (
 
 	"knomit/internal/config"
 	"knomit/internal/embeddings"
-	"knomit/internal/identity"
 	"knomit/internal/llm"
 	"knomit/internal/repos"
 	"knomit/internal/web"
@@ -46,11 +45,11 @@ func serveCmd() *cobra.Command {
 			if keyPath == "" {
 				keyPath = filepath.Join(cfg.Home, "id_ed25519")
 			}
-			signer, keyFingerprint, err := identity.EnsureKeyPair(keyPath)
+			signer, keyFingerprint, err := EnsureKeyPair(keyPath)
 			if err != nil {
 				return fmt.Errorf("ensure keypair: %w", err)
 			}
-			agentBranch := identity.AgentBranch(keyFingerprint)
+			agentBranch := AgentBranch(keyFingerprint)
 
 			// 1. Ensure embedder model files are present (shared across repos).
 			var embedder *embeddings.Embedder

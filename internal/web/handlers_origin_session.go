@@ -12,7 +12,7 @@ import (
 	"github.com/rs/zerolog/log"
 	"gopkg.in/yaml.v3"
 
-	"knomit/internal/identity"
+	"knomit/internal/config"
 	"knomit/internal/repos"
 	"knomit/internal/store"
 )
@@ -114,8 +114,8 @@ func handleDeleteSession(rm *repos.Manager, sm *SessionManager) http.HandlerFunc
 
 // connectivityResult is the JSON payload sent in the "done" phase of a test connectivity SSE stream.
 type connectivityResult struct {
-	Branches        []string `json:"branches"`        // non-agent branches (selectable as main)
-	AgentBranches   []string `json:"agent_branches"`  // all agent/* branches on remote
+	Branches        []string `json:"branches"`       // non-agent branches (selectable as main)
+	AgentBranches   []string `json:"agent_branches"` // all agent/* branches on remote
 	DefaultBranch   string   `json:"default_branch"`
 	MatchedAgent    string   `json:"matched_agent,omitempty"` // agent branch matching our hostname (if any)
 	History         string   `json:"history"`                 // "shared" or "disjoint"
@@ -148,13 +148,13 @@ func handleTestConnectivity(rm *repos.Manager, sm *SessionManager, agentBranch s
 		sendEvent(map[string]string{"phase": "connecting"})
 
 		// Resolve auth from session config.
-		authCfg := identity.RemoteAuthConfig{
+		authCfg := config.RemoteAuthConfig{
 			AuthMethod: sess.Auth.Method,
 			Token:      sess.Auth.Token,
 			User:       sess.Auth.User,
 			Password:   sess.Auth.Password,
 		}
-		auth, err := identity.ResolveAuthWithOrigin(authCfg, "", sess.URL)
+		auth, err := repos.ResolveAuthWithOrigin(authCfg, "", sess.URL)
 		if err != nil {
 			sendEvent(map[string]string{"phase": "error", "message": fmt.Sprintf("auth resolution failed: %v", err)})
 			return
@@ -223,13 +223,13 @@ func handleTestConnectivity(rm *repos.Manager, sm *SessionManager, agentBranch s
 		}
 
 		result := connectivityResult{
-			Branches:      branches,
-			AgentBranches: agentBranches,
-			DefaultBranch: defaultBranch,
-			MatchedAgent:  matchedAgent,
-			History:             history,
-			RemoteFactCount:     remoteFactCount,
-			LocalFactCount:      localFactCount,
+			Branches:        branches,
+			AgentBranches:   agentBranches,
+			DefaultBranch:   defaultBranch,
+			MatchedAgent:    matchedAgent,
+			History:         history,
+			RemoteFactCount: remoteFactCount,
+			LocalFactCount:  localFactCount,
 		}
 
 		// Send done event.

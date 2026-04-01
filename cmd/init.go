@@ -9,7 +9,6 @@ import (
 
 	"knomit/internal/config"
 	"knomit/internal/fact"
-	"knomit/internal/identity"
 	"knomit/internal/store"
 )
 
@@ -34,11 +33,11 @@ func initCmd() *cobra.Command {
 			if keyPath == "" {
 				keyPath = filepath.Join(cfg.Home, "id_ed25519")
 			}
-			_, keyFingerprint, err := identity.EnsureKeyPair(keyPath)
+			_, keyFingerprint, err := EnsureKeyPair(keyPath)
 			if err != nil {
 				return fmt.Errorf("ensure keypair: %w", err)
 			}
-			agentBranch := identity.AgentBranch(keyFingerprint)
+			agentBranch := AgentBranch(keyFingerprint)
 
 			// Load ontology: custom file or embedded default.
 			ontology := fact.DefaultOntology()

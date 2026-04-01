@@ -11,8 +11,6 @@ import (
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
-
-	"knomit/internal/identity"
 )
 
 // WriteFile writes content to path in a new commit with message on branch.
@@ -42,7 +40,7 @@ func (s *Service) writeFile(ctx context.Context, branch, path, content, message,
 		return "", "", err
 	}
 
-	newCommitHash, err = identity.SignCommitInPlace(s.gits, s.signer, newCommitHash)
+	newCommitHash, err = signCommitInPlace(s.gits, s.signer, newCommitHash)
 	if err != nil {
 		unlock()
 		return "", "", err
@@ -100,7 +98,7 @@ func (s *Service) deleteFile(ctx context.Context, branch, path, message, operati
 		return "", err
 	}
 
-	newCommitHash, err = identity.SignCommitInPlace(s.gits, s.signer, newCommitHash)
+	newCommitHash, err = signCommitInPlace(s.gits, s.signer, newCommitHash)
 	if err != nil {
 		unlock()
 		return "", err
@@ -232,7 +230,7 @@ func (s *Service) batchWriteLocked(ctx context.Context, branch string, files map
 		return plumbing.ZeroHash, nil, fmt.Errorf("batchWrite: store commit: %w", err)
 	}
 
-	cHash, err = identity.SignCommitInPlace(s.gits, s.signer, cHash)
+	cHash, err = signCommitInPlace(s.gits, s.signer, cHash)
 	if err != nil {
 		return plumbing.ZeroHash, nil, err
 	}

@@ -1,4 +1,4 @@
-package identity
+package store
 
 import (
 	"fmt"
@@ -11,10 +11,10 @@ import (
 	storegit "knomit/internal/store/git"
 )
 
-// SignCommitInPlace reads the commit at hash, signs it, and stores the signed
+// signCommitInPlace reads the commit at hash, signs it, and stores the signed
 // version. Returns the new hash (signing changes the commit hash).
 // No-op if signer is nil, returning the original hash.
-func SignCommitInPlace(s *storegit.Storer, signer ssh.Signer, commitHash plumbing.Hash) (plumbing.Hash, error) {
+func signCommitInPlace(s *storegit.Storer, signer ssh.Signer, commitHash plumbing.Hash) (plumbing.Hash, error) {
 	if signer == nil {
 		return commitHash, nil
 	}
@@ -41,7 +41,7 @@ func SignCommitInPlace(s *storegit.Storer, signer ssh.Signer, commitHash plumbin
 	}
 
 	// Sign.
-	signature, err := SignCommit(signer, payload)
+	signature, err := signCommit(signer, payload)
 	if err != nil {
 		return plumbing.ZeroHash, fmt.Errorf("SignCommitInPlace: sign: %w", err)
 	}

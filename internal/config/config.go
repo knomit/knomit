@@ -7,7 +7,6 @@ import (
 
 	"github.com/BurntSushi/toml"
 
-	"knomit/internal/identity"
 	"knomit/internal/llm"
 )
 
@@ -18,17 +17,26 @@ type GitConfig struct {
 	Port   string `toml:"port"`
 }
 
+// RemoteAuthConfig holds git remote authentication settings.
+type RemoteAuthConfig struct {
+	Token      string `toml:"token"`
+	User       string `toml:"user"`
+	Password   string `toml:"password"`
+	SSHKey     string `toml:"ssh_key"`
+	AuthMethod string `toml:"auth_method"`
+}
+
 // Config is the root configuration, composed of section structs.
 type Config struct {
-	Home         string                    `toml:"repo"`
-	Host         string                    `toml:"host"`
-	Port         string                    `toml:"port"`
-	Socket       string                    `toml:"socket"`
-	OntologyRoot string                    `toml:"ontology_root"`
-	ONNXLibPath  string                    `toml:"onnx_lib_path"`
-	LLM          llm.Config                `toml:"llm"`
-	Remote       identity.RemoteAuthConfig `toml:"remote"`
-	Git          GitConfig                 `toml:"git"`
+	Home         string           `toml:"repo"`
+	Host         string           `toml:"host"`
+	Port         string           `toml:"port"`
+	Socket       string           `toml:"socket"`
+	OntologyRoot string           `toml:"ontology_root"`
+	ONNXLibPath  string           `toml:"onnx_lib_path"`
+	LLM          llm.Config       `toml:"llm"`
+	Remote       RemoteAuthConfig `toml:"remote"`
+	Git          GitConfig        `toml:"git"`
 }
 
 // Defaults returns a Config populated with default values.

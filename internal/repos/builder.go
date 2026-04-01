@@ -12,7 +12,6 @@ import (
 
 	"knomit/internal/config"
 	"knomit/internal/fact"
-	"knomit/internal/identity"
 	"knomit/internal/observe"
 	"knomit/internal/store"
 )
@@ -75,7 +74,7 @@ func (b *repoBuilder) openGit() error {
 // fresh repository with the default ontology seed files.
 func (b *repoBuilder) initDefaultGit() error {
 	if b.cfg.Git.Origin != "" {
-		auth, authErr := identity.ResolveAuth(b.cfg.Remote, b.keyPath)
+		auth, authErr := resolveAuth(b.cfg.Remote, b.keyPath)
 		if authErr != nil {
 			return fmt.Errorf("resolve auth: %w", authErr)
 		}
@@ -196,7 +195,7 @@ func (b *repoBuilder) build() *RepoInstance {
 		}
 
 		authCfg := remoteAuthFromRecord(remote, cfg.Remote)
-		auth, authErr := identity.ResolveAuthWithOrigin(authCfg, keyPath, remoteURL)
+		auth, authErr := ResolveAuthWithOrigin(authCfg, keyPath, remoteURL)
 		if authErr != nil {
 			return fmt.Errorf("resolve auth: %w", authErr)
 		}
@@ -241,7 +240,7 @@ func (b *repoBuilder) startSyncLoops(ctx context.Context, wg *sync.WaitGroup, hu
 	}
 
 	authCfg := remoteAuthFromRecord(remote, b.cfg.Remote)
-	auth, authErr := identity.ResolveAuthWithOrigin(authCfg, b.keyPath, remote.URL)
+	auth, authErr := ResolveAuthWithOrigin(authCfg, b.keyPath, remote.URL)
 	if authErr != nil {
 		log.Warn().Err(authErr).Str("repo", b.name).Msg("remote: auth resolution failed")
 		return

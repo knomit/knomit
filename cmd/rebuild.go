@@ -9,7 +9,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"knomit/internal/config"
-	"knomit/internal/identity"
 	"knomit/internal/store"
 )
 
@@ -27,11 +26,11 @@ func rebuildCmd() *cobra.Command {
 			if keyPath == "" {
 				keyPath = filepath.Join(cfg.Home, "id_ed25519")
 			}
-			_, keyFingerprint, err := identity.EnsureKeyPair(keyPath)
+			_, keyFingerprint, err := EnsureKeyPair(keyPath)
 			if err != nil {
 				return fmt.Errorf("ensure keypair: %w", err)
 			}
-			agentBranch := identity.AgentBranch(keyFingerprint)
+			agentBranch := AgentBranch(keyFingerprint)
 			dbPath := filepath.Join(cfg.Home, "repos", repoName+".db")
 			svc, err := store.Open(dbPath)
 			if err != nil {

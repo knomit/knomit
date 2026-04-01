@@ -16,7 +16,6 @@ import (
 
 	"knomit/internal/config"
 	"knomit/internal/fact"
-	"knomit/internal/identity"
 	"knomit/internal/llm"
 	"knomit/internal/mcp"
 	"knomit/internal/store"
@@ -28,8 +27,8 @@ type Deps struct {
 	Cfg         config.Config
 	Signer      ssh.Signer
 	AgentBranch string
-	Embedder    Embedder // nil if unavailable; must implement store.Embedder and mcp.BatchEmbedder
-	LLM         llm.LLMAdapter       // nil if unavailable
+	Embedder    Embedder       // nil if unavailable; must implement store.Embedder and mcp.BatchEmbedder
+	LLM         llm.LLMAdapter // nil if unavailable
 	KeyPath     string
 }
 
@@ -272,7 +271,7 @@ func (m *Manager) SetupMCP(ri *RepoInstance) {
 
 // remoteAuthFromRecord builds a RemoteAuthConfig from a stored remote record,
 // falling back to the global config for fields not set in the record.
-func remoteAuthFromRecord(remote *store.Remote, fallback identity.RemoteAuthConfig) identity.RemoteAuthConfig {
+func remoteAuthFromRecord(remote *store.Remote, fallback config.RemoteAuthConfig) config.RemoteAuthConfig {
 	cfg := fallback
 	if remote.AuthMethod != "" {
 		cfg.AuthMethod = remote.AuthMethod

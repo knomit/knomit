@@ -1,4 +1,4 @@
-package identity
+package store
 
 import (
 	"crypto/rand"
@@ -27,16 +27,16 @@ func appendSSHString(buf, data []byte) []byte {
 	return buf
 }
 
-// SignCommit signs a commit payload using the SSHSIG format.
+// signCommit signs a commit payload using the SSHSIG format.
 // Returns the armored signature string for the commit's PGPSignature field.
-func SignCommit(signer ssh.Signer, payload []byte) (string, error) {
+func signCommit(signer ssh.Signer, payload []byte) (string, error) {
 	// Build the "signed data" blob.
 	h := sha512.Sum512(payload)
 
 	var signed []byte
-	signed = append(signed, sshsigMagic...)                  // magic, raw, NOT length-prefixed
+	signed = append(signed, sshsigMagic...) // magic, raw, NOT length-prefixed
 	signed = appendSSHString(signed, []byte(sshsigNamespace))
-	signed = appendSSHString(signed, nil)                    // reserved
+	signed = appendSSHString(signed, nil) // reserved
 	signed = appendSSHString(signed, []byte(sshsigHashAlgo))
 	signed = appendSSHString(signed, h[:])
 
@@ -52,15 +52,15 @@ func SignCommit(signer ssh.Signer, payload []byte) (string, error) {
 	pubBlob := signer.PublicKey().Marshal()
 
 	var env []byte
-	env = append(env, sshsigMagic...)               // magic, raw
+	env = append(env, sshsigMagic...) // magic, raw
 	var verBuf [4]byte
 	binary.BigEndian.PutUint32(verBuf[:], sshsigVersion)
-	env = append(env, verBuf[:]...)                  // version
-	env = appendSSHString(env, pubBlob)              // public key
+	env = append(env, verBuf[:]...)     // version
+	env = appendSSHString(env, pubBlob) // public key
 	env = appendSSHString(env, []byte(sshsigNamespace))
-	env = appendSSHString(env, nil)                  // reserved
+	env = appendSSHString(env, nil) // reserved
 	env = appendSSHString(env, []byte(sshsigHashAlgo))
-	env = appendSSHString(env, sigBlob)              // signature blob
+	env = appendSSHString(env, sigBlob) // signature blob
 
 	return armor(env), nil
 }

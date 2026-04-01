@@ -14,8 +14,6 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/go-git/go-git/v5/utils/merkletrie"
 	"github.com/rs/zerolog/log"
-
-	"knomit/internal/identity"
 )
 
 // Sync fetches from origin and merges origin/<remoteBranch> into localBranch
@@ -168,7 +166,7 @@ func (s *Service) Sync(ctx context.Context, localBranch, remoteBranch string) (S
 		return SyncResult{}, fmt.Errorf("Sync: store merge commit: %w", err)
 	}
 
-	mergeHash, err = identity.SignCommitInPlace(s.gits, s.signer, mergeHash)
+	mergeHash, err = signCommitInPlace(s.gits, s.signer, mergeHash)
 	if err != nil {
 		unlock()
 		return SyncResult{}, fmt.Errorf("Sync: sign merge commit: %w", err)
