@@ -17,7 +17,6 @@ func TestStartSession_NoDirtyFacts(t *testing.T) {
 	idx := NewMockSearchIndex(ctrl)
 	ri := NewMockPipelineIndex(ctrl)
 
-	ri.EXPECT().GCPipelineSessions(gomock.Any(), "review", "machine/test", 5).Return(nil)
 	ri.EXPECT().CreatePipelineSession(gomock.Any(), "review", "machine/test").Return(&store.PipelineSession{
 		ID: "sess-1", Branch: "machine/test", Status: "active",
 	}, nil)
@@ -54,7 +53,6 @@ func TestStartSession_WatermarkAtHead_NoDirtyFacts(t *testing.T) {
 	idx := NewMockSearchIndex(ctrl)
 	ri := NewMockPipelineIndex(ctrl)
 
-	ri.EXPECT().GCPipelineSessions(gomock.Any(), "review", "machine/test", 5).Return(nil)
 	ri.EXPECT().CreatePipelineSession(gomock.Any(), "review", "machine/test").Return(&store.PipelineSession{
 		ID: "sess-wm", Branch: "machine/test", Status: "active",
 	}, nil)
@@ -87,7 +85,6 @@ func TestStartSession_WatermarkEmpty_AllFactsDirty(t *testing.T) {
 	idx := NewMockSearchIndex(ctrl)
 	ri := NewMockPipelineIndex(ctrl)
 
-	ri.EXPECT().GCPipelineSessions(gomock.Any(), "review", "machine/test", 5).Return(nil)
 	ri.EXPECT().CreatePipelineSession(gomock.Any(), "review", "machine/test").Return(&store.PipelineSession{
 		ID: "sess-2", Branch: "machine/test", Status: "active",
 	}, nil)
@@ -154,7 +151,6 @@ func TestStartSession_WithWatermark(t *testing.T) {
 	idx := NewMockSearchIndex(ctrl)
 	ri := NewMockPipelineIndex(ctrl)
 
-	ri.EXPECT().GCPipelineSessions(gomock.Any(), "review", "machine/test", 5).Return(nil)
 	ri.EXPECT().CreatePipelineSession(gomock.Any(), "review", "machine/test").Return(&store.PipelineSession{
 		ID: "sess-3", Branch: "machine/test", Status: "active",
 	}, nil)
@@ -753,7 +749,6 @@ func TestRunAll_ProcessesAllWorkItems(t *testing.T) {
 	adapter := NewMockLLMAdapter(ctrl)
 
 	// --- StartSession setup ---
-	ri.EXPECT().GCPipelineSessions(gomock.Any(), "review", "machine/test", 5).Return(nil)
 	ri.EXPECT().CreatePipelineSession(gomock.Any(), "review", "machine/test").Return(&store.PipelineSession{
 		ID: "sess-run", Branch: "machine/test", Status: "active",
 	}, nil)
@@ -850,7 +845,6 @@ func TestRunAll_NoDirtyFacts(t *testing.T) {
 	ri := NewMockPipelineIndex(ctrl)
 	adapter := NewMockLLMAdapter(ctrl)
 
-	ri.EXPECT().GCPipelineSessions(gomock.Any(), "review", "machine/test", 5).Return(nil)
 	ri.EXPECT().CreatePipelineSession(gomock.Any(), "review", "machine/test").Return(&store.PipelineSession{
 		ID: "sess-empty", Branch: "machine/test", Status: "active",
 	}, nil)

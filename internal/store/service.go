@@ -98,8 +98,13 @@ func (s *Service) Index() *Index { return s.idx }
 // GitStorer returns the go-git storer.
 func (s *Service) GitStorer() *storegit.Storer { return s.gits }
 
-// DB returns the underlying *sql.DB for low-level operations (e.g. WAL checkpoint).
-func (s *Service) DB() *sql.DB { return s.db }
+// Checkpoint flushes the WAL to the main database file so the .db file is
+// self-contained (e.g. before file-level copy). This is a no-op if WAL mode
+// is not enabled.
+func (s *Service) Checkpoint() error {
+	_, err := s.db.Exec("PRAGMA wal_checkpoint(TRUNCATE)")
+	return err
+}
 
 // Close closes the underlying database connection.
 func (s *Service) Close() error { return s.db.Close() }

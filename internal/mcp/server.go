@@ -80,7 +80,6 @@ type ToolSessionIndex interface {
 	UpdateToolSession(ctx context.Context, id, lastCommit, status string) error
 	GetSeenPaths(ctx context.Context, sessionID string) (map[string]bool, error)
 	AddSeenPaths(ctx context.Context, sessionID string, paths []string) error
-	GCToolSessions(ctx context.Context, tool, branch string, keep int) error
 	EnqueuePaths(ctx context.Context, sessionID string, items []QueueItem) error
 	DequeuePaths(ctx context.Context, sessionID string, limit int) ([]QueueItem, error)
 	QueueSize(ctx context.Context, sessionID string) (int, error)
@@ -95,7 +94,6 @@ type PipelineIndex interface {
 	NextPipelineWorkItem(ctx context.Context, sessionID string) (*PipelineWorkItem, error)
 	SetPipelineWorkItemResponse(ctx context.Context, id int64, response string) error
 	PipelineWorkItemStats(ctx context.Context, sessionID string) (completed, remaining int, err error)
-	GCPipelineSessions(ctx context.Context, tool, branch string, keep int) error
 	GetPipelineWatermark(ctx context.Context, tool, branch string) (string, error)
 	SetPipelineWatermark(ctx context.Context, tool, branch, hash string) error
 }

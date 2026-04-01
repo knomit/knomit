@@ -409,20 +409,6 @@ func (mr *MockToolSessionIndexMockRecorder) EnqueuePaths(ctx, sessionID, items a
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "EnqueuePaths", reflect.TypeOf((*MockToolSessionIndex)(nil).EnqueuePaths), ctx, sessionID, items)
 }
 
-// GCToolSessions mocks base method.
-func (m *MockToolSessionIndex) GCToolSessions(ctx context.Context, tool, branch string, keep int) error {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GCToolSessions", ctx, tool, branch, keep)
-	ret0, _ := ret[0].(error)
-	return ret0
-}
-
-// GCToolSessions indicates an expected call of GCToolSessions.
-func (mr *MockToolSessionIndexMockRecorder) GCToolSessions(ctx, tool, branch, keep any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GCToolSessions", reflect.TypeOf((*MockToolSessionIndex)(nil).GCToolSessions), ctx, tool, branch, keep)
-}
-
 // GetSeenPaths mocks base method.
 func (m *MockToolSessionIndex) GetSeenPaths(ctx context.Context, sessionID string) (map[string]bool, error) {
 	m.ctrl.T.Helper()
@@ -533,20 +519,6 @@ func (m *MockPipelineIndex) CreatePipelineSession(ctx context.Context, tool, bra
 func (mr *MockPipelineIndexMockRecorder) CreatePipelineSession(ctx, tool, branch any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreatePipelineSession", reflect.TypeOf((*MockPipelineIndex)(nil).CreatePipelineSession), ctx, tool, branch)
-}
-
-// GCPipelineSessions mocks base method.
-func (m *MockPipelineIndex) GCPipelineSessions(ctx context.Context, tool, branch string, keep int) error {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GCPipelineSessions", ctx, tool, branch, keep)
-	ret0, _ := ret[0].(error)
-	return ret0
-}
-
-// GCPipelineSessions indicates an expected call of GCPipelineSessions.
-func (mr *MockPipelineIndexMockRecorder) GCPipelineSessions(ctx, tool, branch, keep any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GCPipelineSessions", reflect.TypeOf((*MockPipelineIndex)(nil).GCPipelineSessions), ctx, tool, branch, keep)
 }
 
 // GetPipelineSession mocks base method.

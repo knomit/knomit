@@ -31,7 +31,6 @@ func TestExploreFirstPage(t *testing.T) {
 	factContent := SerializeFact(tmp)
 
 	// branch from handler arg
-	ei.EXPECT().GCToolSessions(gomock.Any(), "explore", "machine/test", 5).Return(nil)
 	gs.EXPECT().WalkChangedFiles(gomock.Any(), testAgentBranch, "", "kb", nil, 25).Return(
 		[]FileRecency{{Path: "kb/foo.md", Timestamp: ts}},
 		"abc123", nil,
@@ -146,7 +145,6 @@ func TestExploreEmptyKB(t *testing.T) {
 	ei := NewMockToolSessionIndex(ctrl)
 
 	// branch from handler arg
-	ei.EXPECT().GCToolSessions(gomock.Any(), "explore", "machine/test", 5).Return(nil)
 	gs.EXPECT().WalkChangedFiles(gomock.Any(), testAgentBranch, "", "kb", nil, 25).Return(nil, "", nil)
 
 	handler := ExploreHandler(gs, ei, "kb", testAgentBranch)
@@ -220,7 +218,6 @@ func TestExploreDeletedFactSkipped(t *testing.T) {
 	goodContent := SerializeFact(tmp)
 
 	// branch from handler arg
-	ei.EXPECT().GCToolSessions(gomock.Any(), "explore", "machine/test", 5).Return(nil)
 	gs.EXPECT().WalkChangedFiles(gomock.Any(), testAgentBranch, "", "kb", nil, 25).Return(
 		[]FileRecency{
 			{Path: "kb/deleted.md", Timestamp: ts},

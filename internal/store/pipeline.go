@@ -182,25 +182,6 @@ func (idx *Index) SetPipelineWorkItemResponse(ctx context.Context, id int64, res
 	return nil
 }
 
-// GCPipelineSessions deletes all but the most recent `keep` sessions for a tool+branch.
-// Work items are cascaded via the foreign key constraint.
-func (idx *Index) GCPipelineSessions(ctx context.Context, tool, branch string, keep int) error {
-	_, err := conn(ctx, idx.db).ExecContext(ctx,
-		`DELETE FROM pipeline_sessions
-		 WHERE tool = ? AND branch = ? AND id NOT IN (
-		     SELECT id FROM pipeline_sessions
-		     WHERE tool = ? AND branch = ?
-		     ORDER BY rowid DESC
-		     LIMIT ?
-		 )`,
-		tool, branch, tool, branch, keep,
-	)
-	if err != nil {
-		return fmt.Errorf("GCPipelineSessions: %w", err)
-	}
-	return nil
-}
-
 // PipelineWorkItemStats returns the count of completed and remaining work items for a session.
 func (idx *Index) PipelineWorkItemStats(ctx context.Context, sessionID string) (completed, remaining int, err error) {
 	err = conn(ctx, idx.db).QueryRowContext(ctx,

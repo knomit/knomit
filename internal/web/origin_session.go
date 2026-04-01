@@ -1,7 +1,6 @@
 package web
 
 import (
-	"database/sql"
 	"fmt"
 	"os"
 	"sync"
@@ -51,7 +50,6 @@ type OriginSession struct {
 	CreatedAt   time.Time
 	LastAccess  time.Time
 	RemoteStore   *store.Service  // cloned remote store, set by test handler
-	RemoteDB      *sql.DB    // DB backing RemoteStore; owned here for WAL checkpoint on commit
 	RemoteBranch  string     // remote branch to track, set by apply handler
 	AppliedBranch string     // agent branch written into the clone during apply; used by commit for rebuild
 	TestResult    any        // cached result from test step

@@ -26,7 +26,6 @@ type PipelineIndex interface {
 	NextPipelineWorkItem(ctx context.Context, sessionID string) (*store.PipelineWorkItem, error)
 	SetPipelineWorkItemResponse(ctx context.Context, id int64, response string) error
 	PipelineWorkItemStats(ctx context.Context, sessionID string) (completed, remaining int, err error)
-	GCPipelineSessions(ctx context.Context, tool, branch string, keep int) error
 }
 
 // Reviewer orchestrates multi-turn review sessions.
@@ -52,11 +51,6 @@ func NewReviewer(gs GitStore, idx SearchIndex, reviewIdx PipelineIndex, embedder
 // them, stores work items, and returns the first item to review.
 func (r *Reviewer) StartSession(ctx context.Context) (*mcp.ReviewResult, error) {
 	branch := r.agentBranch
-
-	// GC old sessions.
-	if err := r.reviewIdx.GCPipelineSessions(ctx, "review", branch, 5); err != nil {
-		log.Warn().Err(err).Msg("review: GC old sessions failed")
-	}
 
 	sess, err := r.reviewIdx.CreatePipelineSession(ctx, "review", branch)
 	if err != nil {

@@ -28,7 +28,6 @@ func TestExplainFirstPage(t *testing.T) {
 	factContent := SerializeFact(tmp)
 
 	// branch from handler arg
-	sessionIdx.EXPECT().GCToolSessions(gomock.Any(), "explain", "machine/test", 5).Return(nil)
 	gs.EXPECT().ReadFile(gomock.Any(), testAgentBranch, "kb/root.md").Return(factContent, nil)
 	gs.EXPECT().Log(gomock.Any(), testAgentBranch, "kb/root.md").Return([]LogEntry{
 		{Commit: "abc12345", Date: "2026-03-14T10:00:00Z", Message: "learn: root"},
@@ -164,7 +163,6 @@ func TestExplainNoRefs(t *testing.T) {
 	factContent := SerializeFact(tmp)
 
 	// branch from handler arg
-	sessionIdx.EXPECT().GCToolSessions(gomock.Any(), "explain", "machine/test", 5).Return(nil)
 	gs.EXPECT().ReadFile(gomock.Any(), testAgentBranch, "kb/solo.md").Return(factContent, nil)
 	gs.EXPECT().Log(gomock.Any(), testAgentBranch, "kb/solo.md").Return([]LogEntry{
 		{Commit: "def456", Date: "2026-03-14T10:00:00Z", Message: "learn: solo"},
@@ -366,7 +364,6 @@ func TestExplainExternalRefsOnly(t *testing.T) {
 	factContent := SerializeFact(tmp)
 
 	// branch from handler arg
-	sessionIdx.EXPECT().GCToolSessions(gomock.Any(), "explain", "machine/test", 5).Return(nil)
 	gs.EXPECT().ReadFile(gomock.Any(), testAgentBranch, "kb/ext.md").Return(factContent, nil)
 	gs.EXPECT().Log(gomock.Any(), testAgentBranch, "kb/ext.md").Return([]LogEntry{
 		{Commit: "ext123", Date: "2026-03-14T10:00:00Z", Message: "learn: external"},
@@ -418,7 +415,6 @@ func TestExplainMissingFile(t *testing.T) {
 	sessionIdx := NewMockToolSessionIndex(ctrl)
 
 	// branch from handler arg
-	sessionIdx.EXPECT().GCToolSessions(gomock.Any(), "explain", "machine/test", 5).Return(nil)
 	gs.EXPECT().ReadFile(gomock.Any(), testAgentBranch, "kb/gone.md").Return("", fmt.Errorf("not found"))
 
 	handler := ExplainHandler(gs, sessionIdx, "kb", testAgentBranch)
@@ -630,7 +626,6 @@ func TestExplainFirstPageIncludesAllFactFields(t *testing.T) {
 	factContent := SerializeFact(tmp)
 
 	// branch from handler arg
-	sessionIdx.EXPECT().GCToolSessions(gomock.Any(), "explain", "machine/test", 5).Return(nil)
 	gs.EXPECT().ReadFile(gomock.Any(), testAgentBranch, "kb/full.md").Return(factContent, nil)
 	gs.EXPECT().Log(gomock.Any(), testAgentBranch, "kb/full.md").Return([]LogEntry{
 		{Commit: "deadbeef", Date: "2026-03-22T10:00:00Z", Message: "learn: full"},

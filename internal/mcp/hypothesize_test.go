@@ -22,7 +22,6 @@ func TestHypothesizeFirstCallReturnsSynthesisFacts(t *testing.T) {
 	gs.EXPECT().HeadCommit(gomock.Any(), testAgentBranch).Return("abc123", nil).AnyTimes()
 
 	// No watermark → first run.
-	pIdx.EXPECT().GCPipelineSessions(gomock.Any(), "hypothesize", "machine/test", 5).Return(nil)
 	pIdx.EXPECT().GetPipelineWatermark(gomock.Any(), "hypothesize", "machine/test").Return("", nil)
 
 	// Return one synthesis fact and one observation (should be filtered by IncludeTypes).
@@ -119,7 +118,6 @@ func TestHypothesizeEmptySession(t *testing.T) {
 	// branch from handler arg
 	gs.EXPECT().HeadCommit(gomock.Any(), testAgentBranch).Return("abc123", nil).AnyTimes()
 
-	pIdx.EXPECT().GCPipelineSessions(gomock.Any(), "hypothesize", "machine/test", 5).Return(nil)
 	pIdx.EXPECT().GetPipelineWatermark(gomock.Any(), "hypothesize", "machine/test").Return("", nil)
 
 	// No synthesis facts.
@@ -160,7 +158,6 @@ func TestHypothesizeContinueSession(t *testing.T) {
 	gs.EXPECT().HeadCommit(gomock.Any(), testAgentBranch).Return("def456", nil).AnyTimes()
 
 	// Step 1: Start a session with 2 facts.
-	pIdx.EXPECT().GCPipelineSessions(gomock.Any(), "hypothesize", "machine/test", 5).Return(nil)
 	pIdx.EXPECT().GetPipelineWatermark(gomock.Any(), "hypothesize", "machine/test").Return("", nil)
 
 	results := []SearchResult{
@@ -291,7 +288,6 @@ func TestHypothesizeIncrementalWithWatermark(t *testing.T) {
 	// branch from handler arg
 	gs.EXPECT().HeadCommit(gomock.Any(), testAgentBranch).Return("def456", nil).AnyTimes()
 
-	pIdx.EXPECT().GCPipelineSessions(gomock.Any(), "hypothesize", "machine/test", 5).Return(nil)
 	pIdx.EXPECT().GetPipelineWatermark(gomock.Any(), "hypothesize", "machine/test").Return("abc123", nil)
 
 	// DiffFiles returns one added synthesis .md and one non-.md file.
@@ -425,7 +421,6 @@ func TestHypothesizeStartSearchError(t *testing.T) {
 
 	// branch from handler arg
 
-	pIdx.EXPECT().GCPipelineSessions(gomock.Any(), "hypothesize", "machine/test", 5).Return(nil)
 	pIdx.EXPECT().GetPipelineWatermark(gomock.Any(), "hypothesize", "machine/test").Return("", nil)
 
 	// Search returns an error.

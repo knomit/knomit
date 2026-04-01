@@ -15,7 +15,6 @@ import (
 	"knomit/internal/identity"
 	"knomit/internal/repos"
 	"knomit/internal/store"
-	storegit "knomit/internal/store/git"
 )
 
 // createSessionRequest is the expected JSON body for POST /origin/session.
@@ -196,7 +195,7 @@ func handleTestConnectivity(rm *repos.Manager, sm *SessionManager, agentBranch s
 		}
 
 		// Collect all branch info in a single pass over refs.
-		branches, agentBranches, matchedAgent := collectAllBranchInfo(remoteSvc.GitStorer(), agentBranch)
+		branches, agentBranches, matchedAgent := remoteSvc.BranchInfo(agentBranch)
 
 		// Check shared history.
 		history := "disjoint"
@@ -241,7 +240,6 @@ func handleTestConnectivity(rm *repos.Manager, sm *SessionManager, agentBranch s
 		sess.State = StateTested
 		sess.TestResult = result
 		sess.RemoteStore = remoteSvc
-		sess.RemoteDB = remoteSvc.DB()
 		sess.mu.Unlock()
 
 		log.Info().Str("repo", repo).Str("session_id", sessionID).Str("history", history).Msg("test connectivity completed")
@@ -630,52 +628,6 @@ func beginSSE(w http.ResponseWriter) (func(v any), bool) {
 	}, true
 }
 
-// collectAllBranchInfo does a single pass over refs, partitioning into non-agent
-// branches, agent branches, and finding the agent branch matching localAgentBranch.
-func collectAllBranchInfo(s *storegit.Storer, localAgentBranch string) (branches []string, agentBranches []string, matchedAgent string) {
-	refIter, err := s.IterReferences()
-	if err != nil {
-		return
-	}
-	defer refIter.Close()
-
-	agentSet := make(map[string]struct{})
-	for {
-		ref, err := refIter.Next()
-		if err != nil {
-			break
-		}
-		name := ref.Name().String()
-		var short string
-		switch {
-		case strings.HasPrefix(name, "refs/heads/"):
-			short = strings.TrimPrefix(name, "refs/heads/")
-		case strings.HasPrefix(name, "refs/remotes/origin/"):
-			short = strings.TrimPrefix(name, "refs/remotes/origin/")
-		default:
-			continue
-		}
-		if strings.HasPrefix(short, "agent/") {
-			if _, seen := agentSet[short]; !seen {
-				agentSet[short] = struct{}{}
-				if short == localAgentBranch {
-					matchedAgent = short
-				}
-			}
-		} else {
-			// Only count refs/heads/ as selectable branches (not remote tracking refs).
-			if strings.HasPrefix(name, "refs/heads/") {
-				branches = append(branches, short)
-			}
-		}
-	}
-	agentBranches = make([]string, 0, len(agentSet))
-	for b := range agentSet {
-		agentBranches = append(agentBranches, b)
-	}
-	return
-}
-
 // handleCommit handles POST /api/v1/{repo}/origin/session/{sessionID}/commit
 // It finalizes the origin connection by swapping the session's remote store
 // into the repo instance, saving remote config, and starting sync loops.
@@ -693,7 +645,6 @@ func handleCommit(rm *repos.Manager, sm *SessionManager, agentBranch string) htt
 		sess.mu.Lock()
 		state := sess.State
 		remoteStore := sess.RemoteStore
-		remoteDB := sess.RemoteDB
 		authCfg := sess.Auth
 		remoteURL := sess.URL
 		remoteBranch := sess.RemoteBranch
@@ -725,11 +676,11 @@ func handleCommit(rm *repos.Manager, sm *SessionManager, agentBranch string) htt
 		sendEvent(map[string]string{"phase": "swapping"})
 
 		// Checkpoint the temp DB's WAL so all data is in the main .db file before copying.
-		if remoteDB != nil {
-			if _, err := remoteDB.ExecContext(r.Context(), "PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {
+		if remoteStore != nil {
+			if err := remoteStore.Checkpoint(); err != nil {
 				log.Warn().Err(err).Msg("commit: WAL checkpoint failed")
 			}
-			remoteDB.Close()
+			remoteStore.Close()
 		}
 
 		tempDBPath := filepath.Join(sess.TempDir, "clone.db")

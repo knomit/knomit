@@ -74,9 +74,6 @@ func HypothesizeHandler(gs GitStore, idx SearchIndex, pipelineIdx PipelineIndex,
 func hypothesizeStart(ctx context.Context, gs GitStore, idx SearchIndex, pipelineIdx PipelineIndex, ontologyRoot, agentBranch string) (*HypothesizeResult, error) {
 	branch := agentBranch
 
-	// GC old sessions.
-	_ = pipelineIdx.GCPipelineSessions(ctx, "hypothesize", branch, 5)
-
 	// Get watermark.
 	watermark, err := pipelineIdx.GetPipelineWatermark(ctx, "hypothesize", branch)
 	if err != nil {

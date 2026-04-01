@@ -98,9 +98,6 @@ func explainFirstCall(ctx context.Context, gs GitStore, sessionIdx ToolSessionIn
 	}
 	file = fact.NormalizePath(ontologyRoot, file)
 
-	// GC old sessions.
-	_ = sessionIdx.GCToolSessions(ctx, "explain", agentBranch, 5)
-
 	// Read root fact.
 	content, err := gs.ReadFile(ctx, agentBranch, file)
 	if err != nil {
