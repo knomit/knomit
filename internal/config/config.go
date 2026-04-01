@@ -6,8 +6,6 @@ import (
 	"strings"
 
 	"github.com/BurntSushi/toml"
-
-	"knomit/internal/llm"
 )
 
 // GitConfig holds git-related configuration.
@@ -26,6 +24,15 @@ type RemoteAuthConfig struct {
 	AuthMethod string `toml:"auth_method"`
 }
 
+// Config holds LLM-related configuration.
+type LLMConfig struct {
+	Model    string `toml:"model"`
+	Provider string `toml:"provider"`
+	APIKey   string `toml:"api_key"`
+	Cache    bool   `toml:"cache"`
+	Batch    bool   `toml:"batch"`
+}
+
 // Config is the root configuration, composed of section structs.
 type Config struct {
 	Home         string           `toml:"repo"`
@@ -34,7 +41,7 @@ type Config struct {
 	Socket       string           `toml:"socket"`
 	OntologyRoot string           `toml:"ontology_root"`
 	ONNXLibPath  string           `toml:"onnx_lib_path"`
-	LLM          llm.Config       `toml:"llm"`
+	LLM          LLMConfig        `toml:"llm"`
 	Remote       RemoteAuthConfig `toml:"remote"`
 	Git          GitConfig        `toml:"git"`
 }
@@ -47,8 +54,11 @@ func Defaults() Config {
 		Host:         "localhost",
 		Port:         "19278",
 		OntologyRoot: "kb",
-		LLM:          llm.DefaultConfig(),
-		Git:          GitConfig{Serve: true},
+		LLM: LLMConfig{
+			Model:    "gemini-2.5-flash",
+			Provider: "gemini",
+		},
+		Git: GitConfig{Serve: true},
 	}
 }
 

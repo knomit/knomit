@@ -3,6 +3,7 @@ package llm
 import (
 	"context"
 	"fmt"
+	"knomit/internal/config"
 	"strings"
 )
 
@@ -45,8 +46,8 @@ func ResolveProvider(model, explicit string) (string, error) {
 // ResolveProvider) and a model string, it returns the corresponding
 // LLMAdapter. Each provider performs its own initialization (API client
 // creation, health checks, credential loading).
-func NewAdapter(ctx context.Context, provider, model string, cfg ...Config) (LLMAdapter, error) {
-	var c Config
+func NewAdapter(ctx context.Context, provider, model string, cfg ...config.LLMConfig) (LLMAdapter, error) {
+	var c config.LLMConfig
 	if len(cfg) > 0 {
 		c = cfg[0]
 	}
