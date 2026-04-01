@@ -98,38 +98,3 @@ func (s *Server) Handler() http.Handler {
 	return r
 }
 
-// NewRouter creates the chi router with all API routes, MCP endpoints,
-// git smart-HTTP remote, and the embedded SPA frontend.
-//
-// Route layout:
-//
-//	GET  /api/v1/{repo}/browse      — directory listing
-//	GET  /api/v1/{repo}/fact        — single fact content
-//	GET  /api/v1/{repo}/search      — vector similarity search
-//	GET  /api/v1/{repo}/history     — git log
-//	GET  /api/v1/{repo}/stats       — aggregate statistics
-//	GET  /api/v1/{repo}/status      — head commit, branch, index state
-//	POST /api/v1/{repo}/synthesize  — start async synthesis task
-//	GET  /api/v1/{repo}/events      — SSE event stream
-//	GET  /api/v1/openapi.yaml       — OpenAPI spec
-//	GET  /docs                      — Swagger UI
-//	/api/v1/{repo}/mcp              — MCP protocol endpoints (per-profile)
-//	/git                            — Smart HTTP git remote
-//	/*                              — Embedded SPA with client-side routing fallback
-func NewRouter(rm *repos.Manager, gitHandler http.Handler, embeddingsEnabled bool, ontologyRoot, agentBranch string) http.Handler {
-	return NewRouterWithSessionManager(rm, gitHandler, embeddingsEnabled, ontologyRoot, agentBranch, NewSessionManager())
-}
-
-// NewRouterWithSessionManager is like NewRouter but accepts an external SessionManager,
-// useful for testing where the test needs direct access to the session manager.
-func NewRouterWithSessionManager(rm *repos.Manager, gitHandler http.Handler, embeddingsEnabled bool, ontologyRoot, agentBranch string, sm *SessionManager) http.Handler {
-	s := &Server{
-		Manager:           rm,
-		GitHandler:        gitHandler,
-		EmbeddingsEnabled: embeddingsEnabled,
-		OntologyRoot:      ontologyRoot,
-		AgentBranch:       agentBranch,
-		SessionManager:    sm,
-	}
-	return s.Handler()
-}

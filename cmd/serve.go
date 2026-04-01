@@ -103,7 +103,6 @@ func serveCmd() *cobra.Command {
 				Signer:      signer,
 				AgentBranch: agentBranch,
 				Embedder:    embedder,
-				LLM:         llmAdapter,
 				KeyPath:     keyPath,
 			})
 			if err := m.Boot(); err != nil {
@@ -116,8 +115,18 @@ func serveCmd() *cobra.Command {
 				gitHandler = web.GitRemoteHandler(m)
 			}
 
-			// 5. Create chi router.
-			router := web.NewRouter(m, gitHandler, embeddingsEnabled, cfg.OntologyRoot, agentBranch)
+			// 5. Create HTTP server and chi router.
+			webSrv := &web.Server{
+				Manager:           m,
+				GitHandler:        gitHandler,
+				EmbeddingsEnabled: embeddingsEnabled,
+				OntologyRoot:      cfg.OntologyRoot,
+				AgentBranch:       agentBranch,
+				SessionManager:    web.NewSessionManager(),
+				LLMAdapter:        llmAdapter,
+				Embedder:          embedder,
+			}
+			router := webSrv.Handler()
 
 			// 6. Startup summary.
 			pubKey := strings.TrimSpace(string(ssh.MarshalAuthorizedKey(signer.PublicKey())))

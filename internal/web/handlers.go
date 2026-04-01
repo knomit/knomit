@@ -13,7 +13,7 @@
 //
 // Files in this package:
 //
-//   - server.go          — NewRouter: chi mux wiring, dependency interfaces.
+//   - server.go          — Server struct, Handler(): chi mux wiring.
 //   - handlers.go        — Read-only query handlers (browse, fact, search,
 //     history, stats, status) and JSON helpers.
 //   - handlers_task.go   — Async task handlers (synthesize, sync) and helpers.
@@ -59,8 +59,8 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 func handleBrowse(ontologyRoot, agentBranch string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
-		var gs repos.GitStore
-		var idx repos.SearchIndex
+		var gs store.GitStore
+		var idx store.SearchIndex
 		ri.WithRead(func(d repos.StoreDeps) {
 			gs = d.GS
 			idx = d.Idx
@@ -129,7 +129,7 @@ func handleBrowse(ontologyRoot, agentBranch string) http.HandlerFunc {
 func handleFact(agentBranch string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
-		var gs repos.GitStore
+		var gs store.GitStore
 		var svc *store.Service
 		ri.WithRead(func(d repos.StoreDeps) {
 			gs = d.GS
@@ -247,7 +247,7 @@ func handleFact(agentBranch string) http.HandlerFunc {
 func handleFactWrite(agentBranch string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
-		var gs repos.GitStore
+		var gs store.GitStore
 		ri.WithRead(func(d repos.StoreDeps) { gs = d.GS })
 
 		var req struct {
@@ -289,7 +289,7 @@ func handleFactWrite(agentBranch string) http.HandlerFunc {
 func handleFactRetract(agentBranch string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
-		var gs repos.GitStore
+		var gs store.GitStore
 		ri.WithRead(func(d repos.StoreDeps) { gs = d.GS })
 
 		path := r.URL.Query().Get("path")
@@ -317,7 +317,7 @@ func handleSearch() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
 		branch := ri.AgentBranch()
-		var idx repos.SearchIndex
+		var idx store.SearchIndex
 		ri.WithRead(func(d repos.StoreDeps) { idx = d.Idx })
 		if idx == nil {
 			writeError(w, http.StatusBadRequest, "search index not available")
@@ -468,7 +468,7 @@ func handleSearch() http.HandlerFunc {
 func handleHistoryPaginated(agentBranch string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
-		var gs repos.GitStore
+		var gs store.GitStore
 		ri.WithRead(func(d repos.StoreDeps) { gs = d.GS })
 		path := r.URL.Query().Get("path")
 
@@ -510,8 +510,8 @@ func handleHistoryPaginated(agentBranch string) http.HandlerFunc {
 func handleCommitDetail(agentBranch string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
-		var gs repos.GitStore
-		var idx repos.SearchIndex
+		var gs store.GitStore
+		var idx store.SearchIndex
 		ri.WithRead(func(d repos.StoreDeps) {
 			gs = d.GS
 			idx = d.Idx
@@ -575,7 +575,7 @@ func handleCommitDetail(agentBranch string) http.HandlerFunc {
 func handleActivity(agentBranch string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
-		var gs repos.GitStore
+		var gs store.GitStore
 		ri.WithRead(func(d repos.StoreDeps) { gs = d.GS })
 		result, err := gs.Activity(r.Context(), agentBranch, r.URL.Query().Get("path"))
 		if err != nil {
@@ -592,7 +592,7 @@ func handleCompletions() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
 		branch := ri.AgentBranch()
-		var idx repos.SearchIndex
+		var idx store.SearchIndex
 		ri.WithRead(func(d repos.StoreDeps) { idx = d.Idx })
 
 		category := r.URL.Query().Get("category")
@@ -616,7 +616,7 @@ func handleStats() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
 		branch := ri.AgentBranch()
-		var idx repos.SearchIndex
+		var idx store.SearchIndex
 		ri.WithRead(func(d repos.StoreDeps) { idx = d.Idx })
 		if idx == nil {
 			writeError(w, http.StatusServiceUnavailable, "index not available")
@@ -635,8 +635,8 @@ func handleStats() http.HandlerFunc {
 func handleStatus(embeddingsEnabled bool, ontologyRoot, agentBranch string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
-		var gs repos.GitStore
-		var idx repos.SearchIndex
+		var gs store.GitStore
+		var idx store.SearchIndex
 		ri.WithRead(func(d repos.StoreDeps) {
 			gs = d.GS
 			idx = d.Idx

@@ -16,7 +16,6 @@ import (
 
 	"knomit/internal/config"
 	"knomit/internal/fact"
-	"knomit/internal/llm"
 	"knomit/internal/mcp"
 	"knomit/internal/store"
 	"knomit/internal/synthesize"
@@ -27,8 +26,7 @@ type Deps struct {
 	Cfg         config.Config
 	Signer      ssh.Signer
 	AgentBranch string
-	Embedder    Embedder       // nil if unavailable; must implement store.Embedder and mcp.BatchEmbedder
-	LLM         llm.LLMAdapter // nil if unavailable
+	Embedder    store.BatchEmbedder // nil if unavailable
 	KeyPath     string
 }
 
@@ -235,8 +233,6 @@ func (m *Manager) SetupMCP(ri *RepoInstance) {
 
 	ontologyRoot := m.deps.Cfg.OntologyRoot
 	embedder := m.deps.Embedder
-	llmAdapter := m.deps.LLM
-
 	agentBranch := m.deps.AgentBranch
 	reviewer := synthesize.NewReviewer(svc, idx, idx, embedder, nil, agentBranch)
 	profiles := []string{"code", "chat", "generic"}
@@ -251,21 +247,8 @@ func (m *Manager) SetupMCP(ri *RepoInstance) {
 		mcpHandlers[p] = mcpserver.NewStreamableHTTPServer(mcpSrv)
 	}
 
-	var synthDeps *SynthDeps
-	if llmAdapter != nil {
-		synthReviewer := synthesize.NewReviewer(svc, idx, idx, embedder, nil, agentBranch)
-		synthDeps = &SynthDeps{
-			GS:       svc,
-			Idx:      idx,
-			Embedder: embedder,
-			Adapter:  llmAdapter,
-			Reviewer: synthReviewer,
-		}
-	}
-
 	ri.withWrite(func() {
 		ri.mcpHandlers = mcpHandlers
-		ri.synthDeps = synthDeps
 	})
 }
 
