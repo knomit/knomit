@@ -107,7 +107,7 @@ func (idx *Index) rebuildGraphHistory(ctx context.Context, git GitReader, branch
 	var created []createdVersion
 
 	for _, v := range versions {
-		content, err := git.ReadFileAtCommit(ctx, branch, v.path, v.commitHash)
+		content, err := git.readFileAtCommit(ctx, branch, v.path, v.commitHash)
 		if err != nil {
 			log.Debug().Err(err).Str("path", v.path).Str("commit", v.commitHash[:8]).Msg("rebuildGraphHistory: skip (file not found at commit)")
 			continue

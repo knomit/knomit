@@ -127,7 +127,7 @@ func Replay(ctx context.Context, local *Service, localBranch string, iter FactIt
 
 		// Write fact to target store and commit.
 		msg := fmt.Sprintf("replay: %s", f.path)
-		if _, _, err := target.WriteFile(ctx, cfg.AgentBranch, f.path, resolvedContent, msg, "replay"); err != nil {
+		if _, err := target.WriteFact(ctx, cfg.AgentBranch, f.path, resolvedContent, msg, "replay"); err != nil {
 			return nil, fmt.Errorf("Replay: write %s to target: %w", f.path, err)
 		}
 		result.FromLocal++
