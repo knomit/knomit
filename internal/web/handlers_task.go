@@ -9,8 +9,7 @@ import (
 
 	"knomit/internal/repos"
 	"knomit/internal/store"
-
-	"github.com/rs/zerolog/log"
+	"knomit/internal/synthesize"
 )
 
 // writeTaskStarted writes a 200 response for a successfully started task.
@@ -25,25 +24,28 @@ func writeTaskConflict(w http.ResponseWriter, op string, err error) {
 
 // handleSynthesizeStart handles POST /api/v1/{repo}/synthesize.
 // Runs the Reviewer (multi-turn review session) in the background via TaskHub.
-func handleSynthesizeStart() http.HandlerFunc {
+func (s *Server) handleSynthesizeStart() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		ri := repos.RepoFromContext(r.Context())
-		var synth *repos.SynthDeps
-		ri.WithRead(func(d repos.StoreDeps) { synth = d.Synth })
-		hub := ri.TaskHub()
-		repo := ri.Name()
-
-		if synth == nil || synth.Adapter == nil || synth.Reviewer == nil {
-			log.Warn().Msg("synthesize: not available (no LLM configured)")
+		if s.LLMAdapter == nil || s.Embedder == nil {
 			writeError(w, http.StatusServiceUnavailable, "synthesis not available")
 			return
 		}
 
-		log.Info().Msg("synthesize: starting review")
+		ri := repos.RepoFromContext(r.Context())
+		hub := ri.TaskHub()
+		repo := ri.Name()
+
+		var gs store.GitStore
+		var idx *store.Index
+		ri.WithRead(func(d repos.StoreDeps) {
+			gs = d.GS
+			idx = d.Svc.Index()
+		})
+		reviewer := synthesize.NewReviewer(gs, idx, idx, s.Embedder, nil, s.AgentBranch)
 
 		id, err := hub.Start("synth", func(ctx context.Context, emit func(repos.TaskEvent)) {
 			emit(repos.TaskEvent{Status: "running", Phase: "start", Message: "review starting", Repo: repo})
-			if err := synth.Reviewer.RunAll(ctx, synth.Adapter); err != nil {
+			if err := reviewer.RunAll(ctx, s.LLMAdapter); err != nil {
 				emit(repos.TaskEvent{Status: "error", Message: err.Error(), Repo: repo})
 				return
 			}
