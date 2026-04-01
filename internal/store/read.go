@@ -6,7 +6,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -24,32 +23,32 @@ func (s *Service) readFileWithHash(ctx context.Context, branch, path string) (st
 	path = strings.ToLower(path)
 	headHash, err := s.resolveRef(ctx, branch)
 	if err != nil {
-		return "", "", fmt.Errorf("ReadFileWithHash: ref: %w", err)
+		return "", "", fmt.Errorf("readFileWithHash: ref: %w", err)
 	}
 	commit, err := s.repo.CommitObject(headHash)
 	if err != nil {
-		return "", "", fmt.Errorf("ReadFileWithHash: commit: %w", err)
+		return "", "", fmt.Errorf("readFileWithHash: commit: %w", err)
 	}
 	tree, err := commit.Tree()
 	if err != nil {
-		return "", "", fmt.Errorf("ReadFileWithHash: tree: %w", err)
+		return "", "", fmt.Errorf("readFileWithHash: tree: %w", err)
 	}
 	entry, err := tree.FindEntry(path)
 	if err != nil {
-		return "", "", fmt.Errorf("ReadFileWithHash: entry %s: %w", path, err)
+		return "", "", fmt.Errorf("readFileWithHash: entry %s: %w", path, err)
 	}
 	blob, err := s.repo.BlobObject(entry.Hash)
 	if err != nil {
-		return "", "", fmt.Errorf("ReadFileWithHash: blob: %w", err)
+		return "", "", fmt.Errorf("readFileWithHash: blob: %w", err)
 	}
 	r, err := blob.Reader()
 	if err != nil {
-		return "", "", fmt.Errorf("ReadFileWithHash: reader: %w", err)
+		return "", "", fmt.Errorf("readFileWithHash: reader: %w", err)
 	}
 	defer r.Close()
 	b, err := io.ReadAll(r)
 	if err != nil {
-		return "", "", fmt.Errorf("ReadFileWithHash: read: %w", err)
+		return "", "", fmt.Errorf("readFileWithHash: read: %w", err)
 	}
 	return string(b), entry.Hash.String(), nil
 }
@@ -133,10 +132,10 @@ func (s *Service) readFileLastCommit(ctx context.Context, branch, path, beforeCo
 	startHash := plumbing.NewHash(beforeCommitHash)
 	startCommit, err := s.repo.CommitObject(startHash)
 	if err != nil {
-		return "", "", fmt.Errorf("ReadFileLastCommit: commit: %w", err)
+		return "", "", fmt.Errorf("readFileLastCommit: commit: %w", err)
 	}
 	if len(startCommit.ParentHashes) == 0 {
-		return "", "", fmt.Errorf("ReadFileLastCommit: %q: commit has no parents", path)
+		return "", "", fmt.Errorf("readFileLastCommit: %q: commit has no parents", path)
 	}
 
 	logIter, err := s.repo.Log(&gogit.LogOptions{
@@ -145,13 +144,13 @@ func (s *Service) readFileLastCommit(ctx context.Context, branch, path, beforeCo
 		Order:    gogit.LogOrderCommitterTime,
 	})
 	if err != nil {
-		return "", "", fmt.Errorf("ReadFileLastCommit: log: %w", err)
+		return "", "", fmt.Errorf("readFileLastCommit: log: %w", err)
 	}
 	defer logIter.Close()
 
 	lastCommit, err := logIter.Next()
 	if err != nil {
-		return "", "", fmt.Errorf("ReadFileLastCommit: %q: no prior commit found", path)
+		return "", "", fmt.Errorf("readFileLastCommit: %q: no prior commit found", path)
 	}
 
 	content, err = s.readFileAtCommitHash(ctx, path, lastCommit.Hash.String())
@@ -859,51 +858,6 @@ func (s *Service) BranchInfo(localAgent string) (branches, agentBranches []strin
 		agentBranches = append(agentBranches, b)
 	}
 	return
-}
-
-// grep searches all .md files at the tip of branch for pattern, returns matching paths.
-func (s *Service) grep(ctx context.Context, branch, pattern string) ([]string, error) {
-	re, err := regexp.Compile(pattern)
-	if err != nil {
-		return nil, fmt.Errorf("grep: compile pattern: %w", err)
-	}
-
-	headHash, err := s.resolveRef(ctx, branch)
-	if err != nil {
-		return nil, fmt.Errorf("grep: ref: %w", err)
-	}
-
-	commit, err := s.repo.CommitObject(headHash)
-	if err != nil {
-		return nil, fmt.Errorf("grep: commit: %w", err)
-	}
-
-	fileIter, err := commit.Files()
-	if err != nil {
-		return nil, fmt.Errorf("grep: files: %w", err)
-	}
-	defer fileIter.Close()
-
-	var matches []string
-	err = fileIter.ForEach(func(f *object.File) error {
-		if !strings.HasSuffix(f.Name, ".md") {
-			return nil
-		}
-		content, err := f.Contents()
-		if err != nil {
-			return fmt.Errorf("grep: read %q: %w", f.Name, err)
-		}
-		if re.MatchString(content) {
-			matches = append(matches, f.Name)
-		}
-		return nil
-	})
-	if err != nil {
-		return nil, fmt.Errorf("grep: iterate: %w", err)
-	}
-
-	sort.Strings(matches)
-	return matches, nil
 }
 
 // DiffFiles returns paths added/modified/deleted between fromCommit and the tip of branch.
