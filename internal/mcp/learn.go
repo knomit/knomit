@@ -192,11 +192,11 @@ func LearnHandler(gs GitStore, idx SearchIndex, ontologyRoot string, ontology *f
 
 			match := results[0]
 			// Read existing fact to get its full metadata (refs, etc.)
-			existingContent, readErr := gs.ReadFile(ctx, agentBranch, match.Path)
+			readResult, readErr := gs.ReadFact(ctx, agentBranch, match.Path, nil)
 			if readErr != nil {
 				continue
 			}
-			existingFact, parseErr := ParseFact(match.Path, existingContent)
+			existingFact, parseErr := ParseFact(match.Path, readResult.Content)
 			if parseErr != nil {
 				continue
 			}
@@ -207,7 +207,7 @@ func LearnHandler(gs GitStore, idx SearchIndex, ontologyRoot string, ontology *f
 				// Write the observation as normal (don't merge into existing path).
 				// Retract the hypothesis.
 				retractMsg := fmt.Sprintf("learn: hypothesis %s subsumed by observation", match.Path)
-				gs.DeleteFile(ctx, agentBranch, match.Path, retractMsg, "retract")
+				gs.DeleteFact(ctx, agentBranch, match.Path, retractMsg)
 				// Add hypothesis path to observation's refs.
 				f.Refs = fact.AppendUnique(f.Refs, match.Path)
 				facts[i] = f
@@ -252,7 +252,7 @@ func LearnHandler(gs GitStore, idx SearchIndex, ontologyRoot string, ontology *f
 
 		// 4. BatchWrite all facts in one commit.
 		commitMsg := fmt.Sprintf("learn: %s", momentName)
-		hash, _, err := gs.BatchWrite(ctx, agentBranch, files, commitMsg, "learn")
+		hash, _, err := gs.BatchWriteFacts(ctx, agentBranch, files, commitMsg, "learn")
 		if err != nil {
 			return mcpgo.NewToolResultError(fmt.Sprintf("write error: %v", err)), nil
 		}

@@ -21,11 +21,9 @@ type Embedder interface {
 // and the sync task handler. Satisfied by *store.Service at runtime.
 type GitStore interface {
 	ListDir(ctx context.Context, branch, path string) ([]store.DirEntry, error)
-	ReadFile(ctx context.Context, branch, path string) (string, error)
-	ReadFileAtCommit(ctx context.Context, branch, path, commitHash string) (string, error)
-	ReadFileLastCommit(ctx context.Context, branch, path, beforeCommitHash string) (content string, fromCommit string, err error)
-	WriteFile(ctx context.Context, branch, path, content, message, operation string) (commitHash, blobHash string, err error)
-	DeleteFile(ctx context.Context, branch, path, message, operation string) (commitHash string, err error)
+	ReadFact(ctx context.Context, branch, path string, opts *store.ReadFactOpts) (store.ReadFactResult, error)
+	WriteFact(ctx context.Context, branch, path, content, message, operation string) (store.WriteFactResult, error)
+	DeleteFact(ctx context.Context, branch, path, message string) (string, error)
 	Log(ctx context.Context, branch, path string) ([]store.LogEntry, error)
 	LogPaginated(ctx context.Context, branch, path string, limit int, after, from, before string) ([]store.LogEntryWithTags, string, string, error)
 	CommitDetail(ctx context.Context, commitHash string) (*store.CommitDetailResult, error)

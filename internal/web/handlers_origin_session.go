@@ -359,14 +359,14 @@ func handlePreview(rm *repos.Manager, sm *SessionManager, agentBranch string) ht
 			go func() {
 				for p := range jobs {
 					readMu.Lock()
-					content, err := svc.ReadFile(r.Context(), agentBranch, p)
+					readResult, err := svc.ReadFact(r.Context(), agentBranch, p, nil)
 					readMu.Unlock()
 					if err != nil {
 						results <- 0
 						continue
 					}
 					dead := 0
-					for _, ref := range extractRefsFromFrontmatter(content) {
+					for _, ref := range extractRefsFromFrontmatter(readResult.Content) {
 						if strings.HasPrefix(ref, "http://") || strings.HasPrefix(ref, "https://") {
 							continue
 						}

@@ -113,11 +113,11 @@ func hypothesizeStart(ctx context.Context, gs GitStore, idx SearchIndex, pipelin
 			if !strings.HasSuffix(p, ".md") {
 				continue
 			}
-			content, readErr := gs.ReadFile(ctx, agentBranch, p)
+			readResult, readErr := gs.ReadFact(ctx, agentBranch, p, nil)
 			if readErr != nil {
 				continue
 			}
-			f, parseErr := ParseFact(p, content)
+			f, parseErr := ParseFact(p, readResult.Content)
 			if parseErr != nil {
 				continue
 			}

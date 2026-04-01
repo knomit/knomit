@@ -70,11 +70,11 @@ func ExploreHandler(gs GitStore, sessionIdx ToolSessionIndex, ontologyRoot, agen
 		var newPaths []string
 
 		for _, f := range files {
-			content, readErr := gs.ReadFile(ctx, agentBranch, f.Path)
+			readResult, readErr := gs.ReadFact(ctx, agentBranch, f.Path, nil)
 			if readErr != nil {
 				continue // deleted or unreadable — skip
 			}
-			parsed, parseErr := ParseFact(f.Path, content)
+			parsed, parseErr := ParseFact(f.Path, readResult.Content)
 			if parseErr != nil {
 				continue
 			}

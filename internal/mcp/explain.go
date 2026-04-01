@@ -99,11 +99,11 @@ func explainFirstCall(ctx context.Context, gs GitStore, sessionIdx ToolSessionIn
 	file = fact.NormalizePath(ontologyRoot, file)
 
 	// Read root fact.
-	content, err := gs.ReadFile(ctx, agentBranch, file)
+	readResult, err := gs.ReadFact(ctx, agentBranch, file, nil)
 	if err != nil {
 		return mcpgo.NewToolResultError(fmt.Sprintf("read file error: %v", err)), nil
 	}
-	fact, err := ParseFact(file, content)
+	fact, err := ParseFact(file, readResult.Content)
 	if err != nil {
 		return mcpgo.NewToolResultError(fmt.Sprintf("parse fact error: %v", err)), nil
 	}
@@ -227,7 +227,7 @@ func explainResume(ctx context.Context, gs GitStore, sessionIdx ToolSessionIndex
 		}
 
 		for _, item := range items {
-			content, readErr := gs.ReadFileAtCommit(ctx, agentBranch, item.Path, item.CommitHash)
+			result, readErr := gs.ReadFact(ctx, agentBranch, item.Path, &ReadFactOpts{AtCommit: item.CommitHash})
 			var retracted bool
 			var lastCommitHash string
 			if readErr != nil {
@@ -238,15 +238,14 @@ func explainResume(ctx context.Context, gs GitStore, sessionIdx ToolSessionIndex
 				if lcErr != nil || retractCommit == "" {
 					continue // file never existed in git
 				}
-				var fromCommit string
-				content, fromCommit, readErr = gs.ReadFileLastCommit(ctx, agentBranch, item.Path, retractCommit)
+				result, readErr = gs.ReadFact(ctx, agentBranch, item.Path, &ReadFactOpts{BeforeCommit: retractCommit})
 				if readErr != nil {
 					continue
 				}
 				retracted = true
-				lastCommitHash = fromCommit
+				lastCommitHash = result.FromCommit
 			}
-			parsed, parseErr := ParseFact(item.Path, content)
+			parsed, parseErr := ParseFact(item.Path, result.Content)
 			if parseErr != nil {
 				continue
 			}

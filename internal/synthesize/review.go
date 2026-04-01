@@ -331,11 +331,11 @@ func (r *Reviewer) dirtyFacts(ctx context.Context, branch string) ([]factForLLM,
 		if !strings.HasSuffix(path, ".md") {
 			continue
 		}
-		content, err := r.gs.ReadFile(ctx, r.agentBranch, path)
+		result, err := r.gs.ReadFact(ctx, r.agentBranch, path, nil)
 		if err != nil {
 			continue // deleted or unreadable
 		}
-		fact, err := mcp.ParseFact(path, content)
+		fact, err := mcp.ParseFact(path, result.Content)
 		if err != nil {
 			continue // not a valid fact
 		}
@@ -499,11 +499,11 @@ func (r *Reviewer) findHypothesisTransitions(ctx context.Context, sessionID stri
 
 	// Check deleted paths — were any hypotheses retracted?
 	for _, path := range deleted {
-		content, err := r.gs.ReadFileAtCommit(ctx, r.agentBranch, path, watermark)
+		readResult, err := r.gs.ReadFact(ctx, r.agentBranch, path, &store.ReadFactOpts{AtCommit: watermark})
 		if err != nil {
 			continue
 		}
-		f, err := mcp.ParseFact(path, content)
+		f, err := mcp.ParseFact(path, readResult.Content)
 		if err != nil {
 			continue
 		}
@@ -516,19 +516,19 @@ func (r *Reviewer) findHypothesisTransitions(ctx context.Context, sessionID stri
 
 	// Check modified paths — did any hypothesis change confidence or type?
 	for _, path := range modified {
-		oldContent, err := r.gs.ReadFileAtCommit(ctx, r.agentBranch, path, watermark)
+		oldResult, err := r.gs.ReadFact(ctx, r.agentBranch, path, &store.ReadFactOpts{AtCommit: watermark})
 		if err != nil {
 			continue
 		}
-		oldFact, err := mcp.ParseFact(path, oldContent)
+		oldFact, err := mcp.ParseFact(path, oldResult.Content)
 		if err != nil || oldFact.Type != fact.Hypothesis {
 			continue
 		}
-		newContent, err := r.gs.ReadFile(ctx, r.agentBranch, path)
+		newResult, err := r.gs.ReadFact(ctx, r.agentBranch, path, nil)
 		if err != nil {
 			continue
 		}
-		newFact, err := mcp.ParseFact(path, newContent)
+		newFact, err := mcp.ParseFact(path, newResult.Content)
 		if err != nil {
 			continue
 		}

@@ -46,11 +46,11 @@ var DefaultWeightStrategy WeightStrategy = SumProductNorm{}
 func computeWeight(ctx context.Context, gs GitStore, agentBranch string, sourcePaths []string) float64 {
 	var srcs []SourceWeight
 	for _, p := range sourcePaths {
-		content, err := gs.ReadFile(ctx, agentBranch, p)
+		readResult, err := gs.ReadFact(ctx, agentBranch, p, nil)
 		if err != nil {
 			continue
 		}
-		f, err := mcp.ParseFact(p, content)
+		f, err := mcp.ParseFact(p, readResult.Content)
 		if err != nil {
 			continue
 		}

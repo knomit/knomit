@@ -147,24 +147,30 @@ func handleFact(agentBranch string) http.HandlerFunc {
 		var fromCommit string
 		var err error
 		if commitHash != "" {
-			content, err = gs.ReadFileAtCommit(r.Context(), agentBranch, path, commitHash)
-			if err != nil {
+			result, readErr := gs.ReadFact(r.Context(), agentBranch, path, &store.ReadFactOpts{AtCommit: commitHash})
+			if readErr != nil {
 				// File may have been deleted in this commit (e.g. retract).
 				// Fall back to the last commit where the file existed.
-				content, fromCommit, err = gs.ReadFileLastCommit(r.Context(), agentBranch, path, commitHash)
+				result, readErr = gs.ReadFact(r.Context(), agentBranch, path, &store.ReadFactOpts{BeforeCommit: commitHash})
+				if readErr == nil {
+					content, fromCommit = result.Content, result.FromCommit
+				}
 			} else {
-				fromCommit = commitHash
+				content, fromCommit = result.Content, commitHash
 			}
+			err = readErr
 			if err != nil && svc != nil {
 				if lastHash, ok := svc.Index().LastCommitForPath(r.Context(), agentBranch, path); ok {
-					content, err = gs.ReadFileAtCommit(r.Context(), agentBranch, path, lastHash)
-					if err == nil {
-						fromCommit = lastHash
+					result, readErr = gs.ReadFact(r.Context(), agentBranch, path, &store.ReadFactOpts{AtCommit: lastHash})
+					if readErr == nil {
+						content, fromCommit = result.Content, lastHash
+						err = nil
 					}
 				}
 			}
 		} else {
-			content, err = gs.ReadFile(r.Context(), agentBranch, path)
+			result, readErr := gs.ReadFact(r.Context(), agentBranch, path, nil)
+			content, err = result.Content, readErr
 		}
 		if err != nil {
 			log.Debug().Err(err).Str("path", path).Msg("fact not found")
@@ -258,7 +264,7 @@ func handleFactWrite(agentBranch string) http.HandlerFunc {
 		}
 
 		msg := "edit: update " + req.Path + " via UI"
-		if _, _, err := gs.WriteFile(r.Context(), agentBranch, req.Path, req.Content, msg, "update"); err != nil {
+		if _, err := gs.WriteFact(r.Context(), agentBranch, req.Path, req.Content, msg, "update"); err != nil {
 			writeError(w, http.StatusInternalServerError, fmt.Sprintf("write failed: %v", err))
 			return
 		}
@@ -293,7 +299,7 @@ func handleFactRetract(agentBranch string) http.HandlerFunc {
 		}
 
 		msg := "manual-review: retract " + path
-		commitHash, err := gs.DeleteFile(r.Context(), agentBranch, path, msg, "retract")
+		commitHash, err := gs.DeleteFact(r.Context(), agentBranch, path, msg)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, fmt.Sprintf("retract failed: %v", err))
 			return
@@ -540,15 +546,15 @@ func handleCommitDetail(agentBranch string) http.HandlerFunc {
 			}
 			// Fallback: read the file as it was at this commit and parse the title.
 			// Covers retracted facts, deleted files, and anything not in the current index.
-			if content, err := gs.ReadFileAtCommit(r.Context(), agentBranch, f.Path, hash); err == nil && content != "" {
-				if parsed, perr := mcp.ParseFact(f.Path, content); perr == nil {
+			if result, err := gs.ReadFact(r.Context(), agentBranch, f.Path, &store.ReadFactOpts{AtCommit: hash}); err == nil && result.Content != "" {
+				if parsed, perr := mcp.ParseFact(f.Path, result.Content); perr == nil {
 					files[i].Title = parsed.Title
 					continue
 				}
 			}
 			// Last resort for deleted files: find the last commit where the file existed.
-			if content, _, err := gs.ReadFileLastCommit(r.Context(), agentBranch, f.Path, hash); err == nil && content != "" {
-				if parsed, perr := mcp.ParseFact(f.Path, content); perr == nil {
+			if result, err := gs.ReadFact(r.Context(), agentBranch, f.Path, &store.ReadFactOpts{BeforeCommit: hash}); err == nil && result.Content != "" {
+				if parsed, perr := mcp.ParseFact(f.Path, result.Content); perr == nil {
 					files[i].Title = parsed.Title
 				}
 			}

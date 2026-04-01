@@ -136,12 +136,12 @@ func (m *Manager) Boot() error {
 	}
 
 	// Load ontology from knomit repo's git store.
-	ontologyYAML, readErr := knomitRI.svc.ReadFile(context.Background(), m.deps.AgentBranch, "domains/ontology.yaml")
+	readResult, readErr := knomitRI.svc.ReadFact(context.Background(), m.deps.AgentBranch, "domains/ontology.yaml", nil)
 	if readErr != nil {
 		log.Warn().Msg("domains/ontology.yaml not found, using default ontology")
 		m.ontology = fact.DefaultOntology()
 	} else {
-		m.ontology, err = fact.ParseOntology([]byte(ontologyYAML))
+		m.ontology, err = fact.ParseOntology([]byte(readResult.Content))
 		if err != nil {
 			knomitRI.closeFn()
 			return fmt.Errorf("parse ontology: %w", err)
