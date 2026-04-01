@@ -162,7 +162,7 @@ func TestStartSession_WithWatermark(t *testing.T) {
 
 	// Incremental: only reads the changed file.
 	fact1Content := factContent("Fact one", "Body one.")
-	gs.EXPECT().ReadFile(gomock.Any(), "machine/test", "kb/go/one.md").Return(fact1Content, nil)
+	gs.EXPECT().ReadFact(gomock.Any(), "machine/test", "kb/go/one.md", gomock.Any()).Return(store.ReadFactResult{Content: fact1Content}, nil)
 
 	// ScopedCluster: one seed (one.md), searches neighbors.
 	// Dedup also calls Search with MinSimilarity=0.92; return empty for those.
@@ -238,7 +238,7 @@ func TestContinueSession_PruneResponse(t *testing.T) {
 	pruneResp := `{"decisions": [{"path": "kb/go/one.md", "action": "keep"}, {"path": "kb/go/two.md", "action": "retract"}]}`
 
 	// ApplyPruneDecisions: retract two.md.
-	gs.EXPECT().DeleteFile(gomock.Any(), "machine/test", "kb/go/two.md", gomock.Any(), gomock.Any()).Return("c1", nil)
+	gs.EXPECT().DeleteFact(gomock.Any(), "machine/test", "kb/go/two.md", gomock.Any()).Return("c1", nil)
 	idx.EXPECT().Delete(gomock.Any(), gomock.Any(), "kb/go/two.md").Return(nil)
 
 
@@ -413,12 +413,12 @@ func TestContinueSession_DistillResponse(t *testing.T) {
 	distillResp := `{"synthesize": [{"path": "kb/go/combined.md", "title": "Combined", "body": "Merged insight.", "type": "observation", "domain": ["go"], "confidence": 0.9, "entities": [], "refs": ["kb/go/one.md", "kb/go/two.md"]}], "retract": ["kb/go/one.md"]}`
 
 	// ApplyDistillDecisions: computeWeight reads local .md refs, then write synth (path gets UUID), retract one.md.
-	gs.EXPECT().ReadFile(gomock.Any(), "machine/test", "kb/go/one.md").Return(factContent("Fact one", "Body one."), nil)
-	gs.EXPECT().ReadFile(gomock.Any(), "machine/test", "kb/go/two.md").Return(factContent("Fact two", "Body two."), nil)
-	gs.EXPECT().WriteFile(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return("c1", "b1", nil)
+	gs.EXPECT().ReadFact(gomock.Any(), "machine/test", "kb/go/one.md", gomock.Any()).Return(store.ReadFactResult{Content: factContent("Fact one", "Body one.")}, nil)
+	gs.EXPECT().ReadFact(gomock.Any(), "machine/test", "kb/go/two.md", gomock.Any()).Return(store.ReadFactResult{Content: factContent("Fact two", "Body two.")}, nil)
+	gs.EXPECT().WriteFact(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(store.WriteFactResult{CommitHash: "c1", BlobHash: "b1"}, nil)
 	idx.EXPECT().Upsert(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(nil)
 
-	gs.EXPECT().DeleteFile(gomock.Any(), "machine/test", "kb/go/one.md", gomock.Any(), gomock.Any()).Return("c2", nil)
+	gs.EXPECT().DeleteFact(gomock.Any(), "machine/test", "kb/go/one.md", gomock.Any()).Return("c2", nil)
 	idx.EXPECT().Delete(gomock.Any(), gomock.Any(), "kb/go/one.md").Return(nil)
 
 	// RAPTOR: ScopedCluster on the 1 written fact — searches neighbors, clusters.
@@ -537,8 +537,8 @@ func TestDirtyFacts_Incremental_OnlyChangedFiles(t *testing.T) {
 
 	newContent := factContent("New fact", "Brand new.")
 	changedContent := factContent("Changed fact", "Updated body.")
-	gs.EXPECT().ReadFile(gomock.Any(), "machine/test", "kb/go/new.md").Return(newContent, nil)
-	gs.EXPECT().ReadFile(gomock.Any(), "machine/test", "kb/go/changed.md").Return(changedContent, nil)
+	gs.EXPECT().ReadFact(gomock.Any(), "machine/test", "kb/go/new.md", gomock.Any()).Return(store.ReadFactResult{Content: newContent}, nil)
+	gs.EXPECT().ReadFact(gomock.Any(), "machine/test", "kb/go/changed.md", gomock.Any()).Return(store.ReadFactResult{Content: changedContent}, nil)
 
 	r := NewReviewer(gs, idx, ri, NewMockEmbedder(ctrl), nil, "machine/test")
 	facts, err := r.dirtyFacts(context.Background(), "machine/test")
@@ -567,7 +567,7 @@ func TestDirtyFacts_Incremental_SkipsDeletedAndNonMD(t *testing.T) {
 	)
 
 	// gone.md returns error (deleted between diff and read).
-	gs.EXPECT().ReadFile(gomock.Any(), "machine/test", "kb/go/gone.md").Return("", fmt.Errorf("not found"))
+	gs.EXPECT().ReadFact(gomock.Any(), "machine/test", "kb/go/gone.md", gomock.Any()).Return(store.ReadFactResult{}, fmt.Errorf("not found"))
 	// README.txt should not be read at all (not .md).
 
 	r := NewReviewer(gs, idx, ri, NewMockEmbedder(ctrl), nil, "machine/test")
@@ -613,12 +613,12 @@ func TestContinueSession_RAPTOR_EnqueuesDeeper(t *testing.T) {
 		`], "retract": ["kb/go/three.md"]}`
 
 	// ApplyDistillDecisions: computeWeight reads local .md refs per fact, then write 2 synth facts, retract one.
-	gs.EXPECT().ReadFile(gomock.Any(), "machine/test", "kb/go/one.md").Return(factContent("Fact one", "Body one."), nil)
-	gs.EXPECT().ReadFile(gomock.Any(), "machine/test", "kb/go/two.md").Return(factContent("Fact two", "Body two."), nil)
-	gs.EXPECT().WriteFile(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return("c1", "b1", nil).Times(2)
+	gs.EXPECT().ReadFact(gomock.Any(), "machine/test", "kb/go/one.md", gomock.Any()).Return(store.ReadFactResult{Content: factContent("Fact one", "Body one.")}, nil)
+	gs.EXPECT().ReadFact(gomock.Any(), "machine/test", "kb/go/two.md", gomock.Any()).Return(store.ReadFactResult{Content: factContent("Fact two", "Body two.")}, nil)
+	gs.EXPECT().WriteFact(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(store.WriteFactResult{CommitHash: "c1", BlobHash: "b1"}, nil).Times(2)
 	idx.EXPECT().Upsert(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).Times(2)
 
-	gs.EXPECT().DeleteFile(gomock.Any(), "machine/test", "kb/go/three.md", gomock.Any(), gomock.Any()).Return("c2", nil)
+	gs.EXPECT().DeleteFact(gomock.Any(), "machine/test", "kb/go/three.md", gomock.Any()).Return("c2", nil)
 	idx.EXPECT().Delete(gomock.Any(), gomock.Any(), "kb/go/three.md").Return(nil)
 
 	// RAPTOR: ScopedCluster on the 2 written facts.
@@ -709,7 +709,7 @@ func TestContinueSession_RAPTOR_StopsAtMaxDepth(t *testing.T) {
 	distillResp := `{"synthesize": [{"path": "kb/go/deep.md", "title": "Deep", "body": "Deep synthesis.", "type": "insight", "domain": ["go"], "confidence": 0.95, "entities": [], "refs": []}], "retract": []}`
 
 	// ApplyDistillDecisions writes the synth fact.
-	gs.EXPECT().WriteFile(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return("c1", "b1", nil)
+	gs.EXPECT().WriteFact(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(store.WriteFactResult{CommitHash: "c1", BlobHash: "b1"}, nil)
 	idx.EXPECT().Upsert(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(nil)
 
 	// No InsertWorkItem expected — max depth reached.
@@ -900,8 +900,8 @@ func TestReflectStepNotCreatedWhenNoHypotheses(t *testing.T) {
 	ri.EXPECT().GetPipelineWatermark(gomock.Any(), "review", "machine/test").Return("old-hash", nil)
 	gs.EXPECT().DiffFiles(gomock.Any(), "machine/test", "old-hash").Return(nil, nil, []string{"kb/go/obs.md"}, nil)
 	// Deleted file was an observation, not a hypothesis.
-	gs.EXPECT().ReadFileAtCommit(gomock.Any(), "machine/test", "kb/go/obs.md", "old-hash").Return(
-		"---\ntype: observation\ndomain: [go]\nconfidence: 0.8\nsources: 1\nentities: []\nrefs: []\n---\n# Observation\n\nJust an observation.\n", nil)
+	gs.EXPECT().ReadFact(gomock.Any(), "machine/test", "kb/go/obs.md", gomock.Any()).Return(
+		store.ReadFactResult{Content: "---\ntype: observation\ndomain: [go]\nconfidence: 0.8\nsources: 1\nentities: []\nrefs: []\n---\n# Observation\n\nJust an observation.\n"}, nil)
 
 	// No reflect item should be inserted — session completes directly.
 	ri.EXPECT().CompletePipelineSession(gomock.Any(), "sess-noh").Return(nil)
@@ -944,7 +944,7 @@ func TestReflectStepCreatedWhenHypothesesRetracted(t *testing.T) {
 	pruneResp := `{"decisions": [{"path": "kb/go/hyp.md", "action": "retract"}]}`
 
 	// ApplyPruneDecisions: retract hyp.md.
-	gs.EXPECT().DeleteFile(gomock.Any(), "machine/test", "kb/go/hyp.md", gomock.Any(), gomock.Any()).Return("c1", nil)
+	gs.EXPECT().DeleteFact(gomock.Any(), "machine/test", "kb/go/hyp.md", gomock.Any()).Return("c1", nil)
 	idx.EXPECT().Delete(gomock.Any(), gomock.Any(), "kb/go/hyp.md").Return(nil)
 
 	ri.EXPECT().SetPipelineWorkItemResponse(gomock.Any(), int64(1), pruneResp).Return(nil)
@@ -955,8 +955,8 @@ func TestReflectStepCreatedWhenHypothesesRetracted(t *testing.T) {
 	ri.EXPECT().GetPipelineWatermark(gomock.Any(), "review", "machine/test").Return("old-hash", nil)
 	gs.EXPECT().DiffFiles(gomock.Any(), "machine/test", "old-hash").Return(nil, nil, []string{"kb/go/hyp.md"}, nil)
 	// Read the old version — it was a hypothesis.
-	gs.EXPECT().ReadFileAtCommit(gomock.Any(), "machine/test", "kb/go/hyp.md", "old-hash").Return(
-		"---\ntype: hypothesis\ndomain: [go]\nconfidence: 0.6\nsources: 1\nentities: []\nrefs: []\n---\n# Hypothesis\n\nA hypothesis.\n", nil)
+	gs.EXPECT().ReadFact(gomock.Any(), "machine/test", "kb/go/hyp.md", gomock.Any()).Return(
+		store.ReadFactResult{Content: "---\ntype: hypothesis\ndomain: [go]\nconfidence: 0.6\nsources: 1\nentities: []\nrefs: []\n---\n# Hypothesis\n\nA hypothesis.\n"}, nil)
 
 	// Reflect item should be enqueued.
 	var insertedReflect store.PipelineWorkItem
@@ -1034,11 +1034,11 @@ func TestReflectStepCreatedWhenHypothesisPromoted(t *testing.T) {
 	ri.EXPECT().GetPipelineWatermark(gomock.Any(), "review", "machine/test").Return("old-hash", nil)
 	gs.EXPECT().DiffFiles(gomock.Any(), "machine/test", "old-hash").Return(nil, []string{"kb/go/hyp.md"}, nil, nil)
 	// Old version was hypothesis.
-	gs.EXPECT().ReadFileAtCommit(gomock.Any(), "machine/test", "kb/go/hyp.md", "old-hash").Return(
-		"---\ntype: hypothesis\ndomain: [go]\nconfidence: 0.6\nsources: 1\nentities: []\nrefs: []\n---\n# Hypothesis\n\nWas a hypothesis.\n", nil)
+	gs.EXPECT().ReadFact(gomock.Any(), "machine/test", "kb/go/hyp.md", gomock.Any()).Return(
+		store.ReadFactResult{Content: "---\ntype: hypothesis\ndomain: [go]\nconfidence: 0.6\nsources: 1\nentities: []\nrefs: []\n---\n# Hypothesis\n\nWas a hypothesis.\n"}, nil)
 	// New version is observation (promoted).
-	gs.EXPECT().ReadFile(gomock.Any(), "machine/test", "kb/go/hyp.md").Return(
-		"---\ntype: observation\ndomain: [go]\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# Hypothesis\n\nNow an observation.\n", nil)
+	gs.EXPECT().ReadFact(gomock.Any(), "machine/test", "kb/go/hyp.md", gomock.Any()).Return(
+		store.ReadFactResult{Content: "---\ntype: observation\ndomain: [go]\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# Hypothesis\n\nNow an observation.\n"}, nil)
 
 	// Reflect item should be enqueued.
 	ri.EXPECT().InsertPipelineWorkItem(gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, item store.PipelineWorkItem) error {
@@ -1130,11 +1130,11 @@ func TestFindHypothesisTransitions_ConfidenceUpdate(t *testing.T) {
 	ri.EXPECT().GetPipelineWatermark(gomock.Any(), "review", "machine/test").Return("old-hash", nil)
 	gs.EXPECT().DiffFiles(gomock.Any(), "machine/test", "old-hash").Return(nil, []string{"kb/go/hyp.md"}, nil, nil)
 	// Old version: hypothesis with confidence 0.5.
-	gs.EXPECT().ReadFileAtCommit(gomock.Any(), "machine/test", "kb/go/hyp.md", "old-hash").Return(
-		"---\ntype: hypothesis\ndomain: [go]\nconfidence: 0.5\nsources: 1\nentities: []\nrefs: []\n---\n# Hyp\n\nBody.\n", nil)
+	gs.EXPECT().ReadFact(gomock.Any(), "machine/test", "kb/go/hyp.md", gomock.Any()).Return(
+		store.ReadFactResult{Content: "---\ntype: hypothesis\ndomain: [go]\nconfidence: 0.5\nsources: 1\nentities: []\nrefs: []\n---\n# Hyp\n\nBody.\n"}, nil)
 	// New version: still hypothesis but confidence changed to 0.8.
-	gs.EXPECT().ReadFile(gomock.Any(), "machine/test", "kb/go/hyp.md").Return(
-		"---\ntype: hypothesis\ndomain: [go]\nconfidence: 0.8\nsources: 1\nentities: []\nrefs: []\n---\n# Hyp\n\nBody.\n", nil)
+	gs.EXPECT().ReadFact(gomock.Any(), "machine/test", "kb/go/hyp.md", gomock.Any()).Return(
+		store.ReadFactResult{Content: "---\ntype: hypothesis\ndomain: [go]\nconfidence: 0.8\nsources: 1\nentities: []\nrefs: []\n---\n# Hyp\n\nBody.\n"}, nil)
 
 	r := NewReviewer(gs, idx, ri, NewMockEmbedder(ctrl), nil, "machine/test")
 	transitions, err := r.findHypothesisTransitions(context.Background(), "sess-conf")
@@ -1205,8 +1205,8 @@ func TestFindHypothesisTransitions_ModifiedNonHypothesisSkipped(t *testing.T) {
 	ri.EXPECT().GetPipelineWatermark(gomock.Any(), "review", "machine/test").Return("old-hash", nil)
 	gs.EXPECT().DiffFiles(gomock.Any(), "machine/test", "old-hash").Return(nil, []string{"kb/go/obs.md"}, nil, nil)
 	// Old version was an observation, not a hypothesis → should be skipped.
-	gs.EXPECT().ReadFileAtCommit(gomock.Any(), "machine/test", "kb/go/obs.md", "old-hash").Return(
-		"---\ntype: observation\ndomain: [go]\nconfidence: 0.8\nsources: 1\nentities: []\nrefs: []\n---\n# Observation\n\nJust an observation.\n", nil)
+	gs.EXPECT().ReadFact(gomock.Any(), "machine/test", "kb/go/obs.md", gomock.Any()).Return(
+		store.ReadFactResult{Content: "---\ntype: observation\ndomain: [go]\nconfidence: 0.8\nsources: 1\nentities: []\nrefs: []\n---\n# Observation\n\nJust an observation.\n"}, nil)
 
 	r := NewReviewer(gs, idx, ri, NewMockEmbedder(ctrl), nil, "machine/test")
 	transitions, err := r.findHypothesisTransitions(context.Background(), "sess-nonhyp")

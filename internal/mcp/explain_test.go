@@ -28,7 +28,7 @@ func TestExplainFirstPage(t *testing.T) {
 	factContent := SerializeFact(tmp)
 
 	// branch from handler arg
-	gs.EXPECT().ReadFile(gomock.Any(), testAgentBranch, "kb/root.md").Return(factContent, nil)
+	gs.EXPECT().ReadFact(gomock.Any(), testAgentBranch, "kb/root.md", gomock.Any()).Return(ReadFactResult{Content: factContent}, nil)
 	gs.EXPECT().Log(gomock.Any(), testAgentBranch, "kb/root.md").Return([]LogEntry{
 		{Commit: "abc12345", Date: "2026-03-14T10:00:00Z", Message: "learn: root"},
 	}, nil)
@@ -104,7 +104,7 @@ func TestExplainResumesSession(t *testing.T) {
 	sessionIdx.EXPECT().DequeuePaths(gomock.Any(), "sess-1", 25).Return([]QueueItem{
 		{Path: "kb/ref1.md", CommitHash: "abc123", Depth: 1},
 	}, nil)
-	gs.EXPECT().ReadFileAtCommit(gomock.Any(), testAgentBranch, "kb/ref1.md", "abc123").Return(refContent, nil)
+	gs.EXPECT().ReadFact(gomock.Any(), testAgentBranch, "kb/ref1.md", gomock.Any()).Return(ReadFactResult{Content: refContent}, nil)
 	sessionIdx.EXPECT().AddSeenPaths(gomock.Any(), "sess-1", []string{"kb/ref1.md"}).Return(nil)
 	sessionIdx.EXPECT().EnqueuePaths(gomock.Any(), "sess-1", []QueueItem{
 		{Path: "kb/deep.md", CommitHash: "abc123", Depth: 2},
@@ -163,7 +163,7 @@ func TestExplainNoRefs(t *testing.T) {
 	factContent := SerializeFact(tmp)
 
 	// branch from handler arg
-	gs.EXPECT().ReadFile(gomock.Any(), testAgentBranch, "kb/solo.md").Return(factContent, nil)
+	gs.EXPECT().ReadFact(gomock.Any(), testAgentBranch, "kb/solo.md", gomock.Any()).Return(ReadFactResult{Content: factContent}, nil)
 	gs.EXPECT().Log(gomock.Any(), testAgentBranch, "kb/solo.md").Return([]LogEntry{
 		{Commit: "def456", Date: "2026-03-14T10:00:00Z", Message: "learn: solo"},
 	}, nil)
@@ -249,9 +249,9 @@ func TestExplainDeletedRef(t *testing.T) {
 		{Path: "kb/deleted.md", CommitHash: "abc123", Depth: 1},
 		{Path: "kb/good.md", CommitHash: "abc123", Depth: 1},
 	}, nil)
-	gs.EXPECT().ReadFileAtCommit(gomock.Any(), testAgentBranch, "kb/deleted.md", "abc123").Return("", fmt.Errorf("not found"))
+	gs.EXPECT().ReadFact(gomock.Any(), testAgentBranch, "kb/deleted.md", gomock.Any()).Return(ReadFactResult{}, fmt.Errorf("not found"))
 	gs.EXPECT().LastCommitForPath(gomock.Any(), testAgentBranch, "kb/deleted.md").Return("", nil)
-	gs.EXPECT().ReadFileAtCommit(gomock.Any(), testAgentBranch, "kb/good.md", "abc123").Return(goodContent, nil)
+	gs.EXPECT().ReadFact(gomock.Any(), testAgentBranch, "kb/good.md", gomock.Any()).Return(ReadFactResult{Content: goodContent}, nil)
 	sessionIdx.EXPECT().AddSeenPaths(gomock.Any(), "sess-3", []string{"kb/good.md"}).Return(nil)
 	// No new local refs to enqueue.
 	sessionIdx.EXPECT().QueueSize(gomock.Any(), "sess-3").Return(0, nil)
@@ -309,7 +309,7 @@ func TestExplainMaxDepth(t *testing.T) {
 	sessionIdx.EXPECT().DequeuePaths(gomock.Any(), "sess-4", 25).Return([]QueueItem{
 		{Path: "kb/deep.md", CommitHash: "abc123", Depth: 10},
 	}, nil)
-	gs.EXPECT().ReadFileAtCommit(gomock.Any(), testAgentBranch, "kb/deep.md", "abc123").Return(deepContent, nil)
+	gs.EXPECT().ReadFact(gomock.Any(), testAgentBranch, "kb/deep.md", gomock.Any()).Return(ReadFactResult{Content: deepContent}, nil)
 	sessionIdx.EXPECT().AddSeenPaths(gomock.Any(), "sess-4", []string{"kb/deep.md"}).Return(nil)
 	// EnqueuePaths should NOT be called — depth is at max.
 	sessionIdx.EXPECT().QueueSize(gomock.Any(), "sess-4").Return(0, nil)
@@ -364,7 +364,7 @@ func TestExplainExternalRefsOnly(t *testing.T) {
 	factContent := SerializeFact(tmp)
 
 	// branch from handler arg
-	gs.EXPECT().ReadFile(gomock.Any(), testAgentBranch, "kb/ext.md").Return(factContent, nil)
+	gs.EXPECT().ReadFact(gomock.Any(), testAgentBranch, "kb/ext.md", gomock.Any()).Return(ReadFactResult{Content: factContent}, nil)
 	gs.EXPECT().Log(gomock.Any(), testAgentBranch, "kb/ext.md").Return([]LogEntry{
 		{Commit: "ext123", Date: "2026-03-14T10:00:00Z", Message: "learn: external"},
 	}, nil)
@@ -415,7 +415,7 @@ func TestExplainMissingFile(t *testing.T) {
 	sessionIdx := NewMockToolSessionIndex(ctrl)
 
 	// branch from handler arg
-	gs.EXPECT().ReadFile(gomock.Any(), testAgentBranch, "kb/gone.md").Return("", fmt.Errorf("not found"))
+	gs.EXPECT().ReadFact(gomock.Any(), testAgentBranch, "kb/gone.md", gomock.Any()).Return(ReadFactResult{}, fmt.Errorf("not found"))
 
 	handler := ExplainHandler(gs, sessionIdx, "kb", testAgentBranch)
 	req := mcpgo.CallToolRequest{}
@@ -509,11 +509,11 @@ func TestExplainRetractedRef(t *testing.T) {
 	sessionIdx.EXPECT().DequeuePaths(gomock.Any(), "sess-ret", 25).Return([]QueueItem{
 		{Path: "kb/retracted.md", CommitHash: "merge-commit", Depth: 1},
 	}, nil)
-	// ReadFileAtCommit fails — file was retracted before merge-commit.
-	gs.EXPECT().ReadFileAtCommit(gomock.Any(), testAgentBranch, "kb/retracted.md", "merge-commit").Return("", fmt.Errorf("not found"))
+	// ReadFact with AtCommit fails — file was retracted before merge-commit.
+	gs.EXPECT().ReadFact(gomock.Any(), testAgentBranch, "kb/retracted.md", gomock.Any()).Return(ReadFactResult{}, fmt.Errorf("not found"))
 	// Fallback: find the retraction commit, then read from just before it.
 	gs.EXPECT().LastCommitForPath(gomock.Any(), testAgentBranch, "kb/retracted.md").Return("retract-commit", nil)
-	gs.EXPECT().ReadFileLastCommit(gomock.Any(), testAgentBranch, "kb/retracted.md", "retract-commit").Return(retractedContent, "last-live-commit", nil)
+	gs.EXPECT().ReadFact(gomock.Any(), testAgentBranch, "kb/retracted.md", gomock.Any()).Return(ReadFactResult{Content: retractedContent, FromCommit: "last-live-commit"}, nil)
 	sessionIdx.EXPECT().AddSeenPaths(gomock.Any(), "sess-ret", []string{"kb/retracted.md"}).Return(nil)
 	sessionIdx.EXPECT().QueueSize(gomock.Any(), "sess-ret").Return(0, nil)
 	sessionIdx.EXPECT().UpdateToolSession(gomock.Any(), "sess-ret", "", "completed").Return(nil)
@@ -568,11 +568,11 @@ func TestExplainResumeParseError(t *testing.T) {
 		ID: "sess-pe", Tool: "explain", Status: "active",
 	}, nil)
 	sessionIdx.EXPECT().GetSeenPaths(gomock.Any(), "sess-pe").Return(map[string]bool{"kb/root.md": true}, nil)
-	// First dequeue: one item, ReadFileAtCommit returns invalid content.
+	// First dequeue: one item, ReadFact returns invalid content.
 	sessionIdx.EXPECT().DequeuePaths(gomock.Any(), "sess-pe", 25).Return([]QueueItem{
 		{Path: "kb/bad.md", CommitHash: "abc123", Depth: 1},
 	}, nil)
-	gs.EXPECT().ReadFileAtCommit(gomock.Any(), testAgentBranch, "kb/bad.md", "abc123").Return("not valid frontmatter", nil)
+	gs.EXPECT().ReadFact(gomock.Any(), testAgentBranch, "kb/bad.md", gomock.Any()).Return(ReadFactResult{Content: "not valid frontmatter"}, nil)
 	// Retry dequeue: empty, stop.
 	sessionIdx.EXPECT().DequeuePaths(gomock.Any(), "sess-pe", 25).Return(nil, nil)
 	sessionIdx.EXPECT().QueueSize(gomock.Any(), "sess-pe").Return(0, nil)
@@ -626,7 +626,7 @@ func TestExplainFirstPageIncludesAllFactFields(t *testing.T) {
 	factContent := SerializeFact(tmp)
 
 	// branch from handler arg
-	gs.EXPECT().ReadFile(gomock.Any(), testAgentBranch, "kb/full.md").Return(factContent, nil)
+	gs.EXPECT().ReadFact(gomock.Any(), testAgentBranch, "kb/full.md", gomock.Any()).Return(ReadFactResult{Content: factContent}, nil)
 	gs.EXPECT().Log(gomock.Any(), testAgentBranch, "kb/full.md").Return([]LogEntry{
 		{Commit: "deadbeef", Date: "2026-03-22T10:00:00Z", Message: "learn: full"},
 	}, nil)
@@ -699,7 +699,7 @@ func TestExplainResumeIncludesAllFactFields(t *testing.T) {
 	sessionIdx.EXPECT().DequeuePaths(gomock.Any(), "sess-r", 25).Return([]QueueItem{
 		{Path: "kb/ref.md", CommitHash: "cafebabe", Depth: 1},
 	}, nil)
-	gs.EXPECT().ReadFileAtCommit(gomock.Any(), testAgentBranch, "kb/ref.md", "cafebabe").Return(factContent, nil)
+	gs.EXPECT().ReadFact(gomock.Any(), testAgentBranch, "kb/ref.md", gomock.Any()).Return(ReadFactResult{Content: factContent}, nil)
 	sessionIdx.EXPECT().AddSeenPaths(gomock.Any(), "sess-r", []string{"kb/ref.md"}).Return(nil)
 	sessionIdx.EXPECT().EnqueuePaths(gomock.Any(), gomock.Any(), gomock.Any()).AnyTimes().Return(nil)
 	sessionIdx.EXPECT().QueueSize(gomock.Any(), "sess-r").Return(0, nil)

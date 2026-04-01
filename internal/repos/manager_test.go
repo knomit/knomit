@@ -193,9 +193,9 @@ func TestObserver_UsesCurrentIndexAfterSwapStore(t *testing.T) {
 	// Write a fact so the old index has some state.
 	var svcW *store.Service
 	ri.WithRead(func(d repos.StoreDeps) { svcW = d.Svc })
-	_, _, err := svcW.WriteFile(context.Background(), ri.AgentBranch(), "kb/test/hello.md", "---\ntitle: hello\n---\n# hello\nworld\n", "test", "learn")
+	_, err := svcW.WriteFact(context.Background(), ri.AgentBranch(), "kb/test/hello.md", "---\ntitle: hello\n---\n# hello\nworld\n", "test", "learn")
 	if err != nil {
-		t.Fatalf("WriteFile: %v", err)
+		t.Fatalf("WriteFact: %v", err)
 	}
 
 	var oldSvc *store.Service

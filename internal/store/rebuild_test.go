@@ -78,7 +78,7 @@ func setupNFacts(t *testing.T, n int) *Service {
 			i, i, i,
 		)
 	}
-	if _, _, err := svc.BatchWrite(context.Background(), "agent/test", files, "add bench facts", "learn"); err != nil {
+	if _, _, err := svc.BatchWriteFacts(context.Background(), "agent/test", files, "add bench facts", "learn"); err != nil {
 		t.Fatal(err)
 	}
 	if err := svc.Index().Sync(ctx, svc, "agent/test"); err != nil {
@@ -116,8 +116,8 @@ func setupRebuildStore(t *testing.T, facts map[string]string) *Service {
 	}
 
 	for path, content := range facts {
-		if _, _, err := svc.WriteFile(context.Background(), "agent/test", path, content, "add "+path, "learn"); err != nil {
-			t.Fatalf("WriteFile %s: %v", path, err)
+		if _, err := svc.WriteFact(context.Background(), "agent/test", path, content, "add "+path, "learn"); err != nil {
+			t.Fatalf("WriteFact %s: %v", path, err)
 		}
 	}
 
@@ -275,16 +275,18 @@ func TestRebuildFacts_CommitLogJoin(t *testing.T) {
 	factV2 := "---\ntype: observation\ndomain: [testing]\nconfidence: 0.9\nsources: 2\nentities: [knomit]\nrefs: []\n---\n# Evolving Fact\n\nVersion 2 with updates.\n"
 
 	// Write v1.
-	commitV1, _, err := svc.WriteFile(context.Background(), "agent/test", "kb/evolving.md", factV1, "add evolving v1", "learn")
+	resV1, err := svc.WriteFact(context.Background(), "agent/test", "kb/evolving.md", factV1, "add evolving v1", "learn")
 	if err != nil {
 		t.Fatal(err)
 	}
+	commitV1 := resV1.CommitHash
 
 	// Write v2 to same path — creates a second commit touching this file.
-	commitV2, _, err := svc.WriteFile(context.Background(), "agent/test", "kb/evolving.md", factV2, "update evolving v2", "learn")
+	resV2, err := svc.WriteFact(context.Background(), "agent/test", "kb/evolving.md", factV2, "update evolving v2", "learn")
 	if err != nil {
 		t.Fatal(err)
 	}
+	commitV2 := resV2.CommitHash
 
 	if commitV1 == commitV2 {
 		t.Fatal("expected two distinct commits")
@@ -377,7 +379,7 @@ func BenchmarkRebuild(b *testing.B) {
 	// Write 50 facts.
 	for i := 0; i < 50; i++ {
 		content := fmt.Sprintf("---\ntype: observation\ndomain: [bench]\nconfidence: 0.9\nsources: 1\nentities: [item%d]\nrefs: []\n---\n# Benchmark Fact %d\n\nBody content for fact number %d.\n", i, i, i)
-		if _, _, err := svc.WriteFile(context.Background(), "agent/test", fmt.Sprintf("kb/bench/fact-%03d.md", i), content, fmt.Sprintf("add fact %d", i), "learn"); err != nil {
+		if _, err := svc.WriteFact(context.Background(), "agent/test", fmt.Sprintf("kb/bench/fact-%03d.md", i), content, fmt.Sprintf("add fact %d", i), "learn"); err != nil {
 			b.Fatal(err)
 		}
 	}
@@ -426,7 +428,7 @@ func TestRebuildEmbeddings_ChunkedProcessing(t *testing.T) {
 			"---\ntype: observation\ndomain: [chunked]\nconfidence: 0.9\nsources: 1\nentities: [item%d]\nrefs: []\n---\n# Chunked Fact %d\n\nBody for fact number %d.\n",
 			i, i, i,
 		)
-		if _, _, err := svc.WriteFile(context.Background(), "agent/test", fmt.Sprintf("kb/fact-%03d.md", i), content, fmt.Sprintf("add fact %d", i), "learn"); err != nil {
+		if _, err := svc.WriteFact(context.Background(), "agent/test", fmt.Sprintf("kb/fact-%03d.md", i), content, fmt.Sprintf("add fact %d", i), "learn"); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -743,10 +745,11 @@ func TestRebuildFacts_CommitLogBranchScoped(t *testing.T) {
 	fact := "---\ntype: observation\ndomain: [testing]\nconfidence: 0.9\nsources: 1\nentities: [knomit]\nrefs: []\n---\n# Shared Fact\n\nBody.\n"
 
 	// Write fact on branchA first.
-	commitA, _, err := svc.WriteFile(context.Background(), branchA, "kb/shared.md", fact, "add on A", "learn")
+	resA, err := svc.WriteFact(context.Background(), branchA, "kb/shared.md", fact, "add on A", "learn")
 	if err != nil {
 		t.Fatal(err)
 	}
+	commitA := resA.CommitHash
 
 	// Sync branchA to populate index and commit_log.
 	if err := svc.Index().Sync(ctx, svc, branchA); err != nil {
@@ -757,10 +760,11 @@ func TestRebuildFacts_CommitLogBranchScoped(t *testing.T) {
 	if err := svc.CreateBranch(context.Background(), branchB, branchA); err != nil {
 		t.Fatal(err)
 	}
-	commitB, _, err := svc.WriteFile(context.Background(), branchB, "kb/shared.md", fact, "add on B", "learn")
+	resB, err := svc.WriteFact(context.Background(), branchB, "kb/shared.md", fact, "add on B", "learn")
 	if err != nil {
 		t.Fatal(err)
 	}
+	commitB := resB.CommitHash
 	if err := svc.Index().Sync(ctx, svc, branchB); err != nil {
 		t.Fatal(err)
 	}
@@ -818,7 +822,7 @@ func BenchmarkRebuildEmbeddings(b *testing.B) {
 					i, i, i,
 				)
 			}
-			if _, _, err := svc.BatchWrite(context.Background(), "agent/test", files, "add bench facts", "learn"); err != nil {
+			if _, _, err := svc.BatchWriteFacts(context.Background(), "agent/test", files, "add bench facts", "learn"); err != nil {
 				b.Fatal(err)
 			}
 			if err := svc.Index().Sync(ctx, svc, "agent/test"); err != nil {

@@ -310,7 +310,7 @@ refs: []
 
 Synthesized insight about channels.
 `
-	gs.EXPECT().ReadFile(gomock.Any(), testAgentBranch, "kb/tech/new-synth.md").Return(synthContent, nil)
+	gs.EXPECT().ReadFact(gomock.Any(), testAgentBranch, "kb/tech/new-synth.md", gomock.Any()).Return(ReadFactResult{Content: synthContent}, nil)
 	// .json file should be skipped (not .md).
 
 	sess := &store.PipelineSession{ID: "sess-3", Status: "active"}

@@ -46,17 +46,24 @@ type PipelineSession = storepkg.PipelineSession
 // PipelineWorkItem is re-exported from internal/store.
 type PipelineWorkItem = storepkg.PipelineWorkItem
 
-// GitStore is the interface the MCP tools require from internal/git.
+// ReadFactOpts is re-exported from internal/store.
+type ReadFactOpts = storepkg.ReadFactOpts
+
+// ReadFactResult is re-exported from internal/store.
+type ReadFactResult = storepkg.ReadFactResult
+
+// WriteFactResult is re-exported from internal/store.
+type WriteFactResult = storepkg.WriteFactResult
+
+// GitStore is the interface the MCP tools require from internal/store.
 // Only methods actually used by the tool handlers are listed here so that
 // tests can use lightweight mocks.
 type GitStore interface {
-	ReadFile(ctx context.Context, branch, path string) (string, error)
-	ReadFileAtCommit(ctx context.Context, branch, path, commitHash string) (string, error)
-	ReadFileWithHash(ctx context.Context, branch, path string) (content, blobHash string, err error)
-	WriteFile(ctx context.Context, branch, path, content, message, operation string) (commitHash, blobHash string, err error)
-	BatchWrite(ctx context.Context, branch string, files map[string]string, message, operation string) (commitHash string, blobHashes map[string]string, err error)
-	DeleteFile(ctx context.Context, branch, path, message, operation string) (commitHash string, err error)
-	FileExists(ctx context.Context, branch, path string) (bool, error)
+	ReadFact(ctx context.Context, branch, path string, opts *ReadFactOpts) (ReadFactResult, error)
+	WriteFact(ctx context.Context, branch, path, content, message, operation string) (WriteFactResult, error)
+	BatchWriteFacts(ctx context.Context, branch string, files map[string]string, message, operation string) (commitHash string, blobHashes map[string]string, err error)
+	DeleteFact(ctx context.Context, branch, path, message string) (string, error)
+	FactExists(ctx context.Context, branch, path string) (bool, error)
 	ListDir(ctx context.Context, branch, path string) ([]DirEntry, error)
 	ListAll(ctx context.Context, branch string) ([]string, error)
 	Log(ctx context.Context, branch, path string) ([]LogEntry, error)
@@ -64,7 +71,6 @@ type GitStore interface {
 	HeadCommit(ctx context.Context, branch string) (string, error)
 	WalkChangedFiles(ctx context.Context, branch, fromCommit, prefix string, seen map[string]bool, limit int) ([]FileRecency, string, error)
 	LastCommitForPath(ctx context.Context, branch, path string) (string, error)
-	ReadFileLastCommit(ctx context.Context, branch, path, beforeCommitHash string) (content, fromCommit string, err error)
 }
 
 // SearchIndex is the interface the MCP tools require from internal/store.

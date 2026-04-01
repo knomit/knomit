@@ -218,8 +218,8 @@ func TestConcurrent_WriteAndSync(t *testing.T) {
 			defer wg.Done()
 			path := fmt.Sprintf("kb/fact-%d.md", n)
 			content := fmt.Sprintf("---\ntype: observation\ndomain: [test]\nconfidence: 0.9\nsources: 1\nentities: [item%d]\nrefs: []\n---\n# Fact %d\n\nBody %d.\n", n, n, n)
-			if _, _, err := svc.WriteFile(ctx, branch, path, content, fmt.Sprintf("add fact %d", n), "learn"); err != nil {
-				errs[n] = fmt.Errorf("WriteFile: %w", err)
+			if _, err := svc.WriteFact(ctx, branch, path, content, fmt.Sprintf("add fact %d", n), "learn"); err != nil {
+				errs[n] = fmt.Errorf("WriteFact: %w", err)
 				return
 			}
 			if err := idx.Sync(ctx, svc, branch); err != nil {

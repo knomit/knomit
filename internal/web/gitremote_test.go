@@ -90,8 +90,8 @@ func TestGitCloneWithCommits(t *testing.T) {
 	store := newWebTestStore(t)
 
 	// Add a commit so the repo is non-empty.
-	if _, _, err := store.WriteFile(context.Background(), testAgentBranch, "kb/hello.md", "# Hello\n", "init", "learn"); err != nil {
-		t.Fatalf("WriteFile: %v", err)
+	if _, err := store.WriteFact(context.Background(), testAgentBranch, "kb/hello.md", "# Hello\n", "init", "learn"); err != nil {
+		t.Fatalf("WriteFact: %v", err)
 	}
 
 	gitHandler := GitRemoteHandler(newTestRepoManager("knomit", store))
@@ -164,13 +164,13 @@ func TestGitRemoteHandler_MultiRepo(t *testing.T) {
 	dir := t.TempDir()
 
 	storeA := newWebTestStore(t)
-	if _, _, err := storeA.WriteFile(context.Background(), testAgentBranch, "kb/a.md", "# A\n", "init a", "learn"); err != nil {
-		t.Fatalf("WriteFile a: %v", err)
+	if _, err := storeA.WriteFact(context.Background(), testAgentBranch, "kb/a.md", "# A\n", "init a", "learn"); err != nil {
+		t.Fatalf("WriteFact a: %v", err)
 	}
 
 	storeB := newWebTestStore(t)
-	if _, _, err := storeB.WriteFile(context.Background(), testAgentBranch, "kb/b.md", "# B\n", "init b", "learn"); err != nil {
-		t.Fatalf("WriteFile b: %v", err)
+	if _, err := storeB.WriteFact(context.Background(), testAgentBranch, "kb/b.md", "# B\n", "init b", "learn"); err != nil {
+		t.Fatalf("WriteFact b: %v", err)
 	}
 
 	rm := repos.New(context.Background(), repos.Deps{})

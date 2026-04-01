@@ -150,7 +150,7 @@ func TestHandleFact(t *testing.T) {
 			ctrl := gomock.NewController(t)
 			gs := NewMockGitStore(ctrl)
 			if tc.expectRead {
-				gs.EXPECT().ReadFile(gomock.Any(), testAgentBranch, gomock.Any()).Return(tc.content, nil)
+				gs.EXPECT().ReadFact(gomock.Any(), testAgentBranch, gomock.Any(), gomock.Any()).Return(store.ReadFactResult{Content: tc.content}, nil)
 			}
 
 			handler := newTestRouter(gs, nil)
@@ -179,7 +179,7 @@ func TestHandleFactParseError(t *testing.T) {
 
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
-	gs.EXPECT().ReadFile(gomock.Any(), testAgentBranch, "kb/bad.md").Return(badContent, nil)
+	gs.EXPECT().ReadFact(gomock.Any(), testAgentBranch, "kb/bad.md", gomock.Any()).Return(store.ReadFactResult{Content: badContent}, nil)
 
 	handler := newTestRouter(gs, nil)
 	rr := doRequest(t, handler, http.MethodGet, "/api/v1/knomit/fact?path=kb/bad.md", "")
@@ -205,7 +205,7 @@ func TestHandleFactWrite(t *testing.T) {
 	t.Run("write valid content returns parsed fact", func(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		gs := NewMockGitStore(ctrl)
-		gs.EXPECT().WriteFile(gomock.Any(), testAgentBranch, "kb/fact.md", validContent, gomock.Any(), gomock.Any()).Return("abc123", "def456", nil)
+		gs.EXPECT().WriteFact(gomock.Any(), testAgentBranch, "kb/fact.md", validContent, gomock.Any(), gomock.Any()).Return(store.WriteFactResult{CommitHash: "abc123", BlobHash: "def456"}, nil)
 
 		handler := newTestRouter(gs, nil)
 		body := `{"path":"kb/fact.md","content":` + string(mustJSON(validContent)) + `}`

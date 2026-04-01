@@ -256,7 +256,7 @@ func TestTestConnectivity_SuccessfulClone(t *testing.T) {
 	}
 
 	// Write a fact so local has content.
-	if _, _, err := localStore.WriteFile(context.Background(), testAgentBranch, "kb/local-fact.md", "# Local\n", "add local", "learn"); err != nil {
+	if _, err := localStore.WriteFact(context.Background(), testAgentBranch, "kb/local-fact.md", "# Local\n", "add local", "learn"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -270,7 +270,7 @@ func TestTestConnectivity_SuccessfulClone(t *testing.T) {
 	if err := remoteStore.InitRepo(nil, "agent/remote"); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := remoteStore.WriteFile(context.Background(), "agent/remote", "kb/remote-fact.md", "# Remote\n", "add remote", "learn"); err != nil {
+	if _, err := remoteStore.WriteFact(context.Background(), "agent/remote", "kb/remote-fact.md", "# Remote\n", "add remote", "learn"); err != nil {
 		t.Fatal(err)
 	}
 	// Register in-process transport.
@@ -429,10 +429,11 @@ func insertFact(t *testing.T, svc *store.Service, path, blobHash, commitHash str
 // content must be a valid knomit fact (YAML frontmatter + # Title body).
 func writeFact(t *testing.T, svc *store.Service, path, content string) {
 	t.Helper()
-	commitHash, blobHash, err := svc.WriteFile(context.Background(), testAgentBranch, path, content, "add "+path, "learn")
+	res, err := svc.WriteFact(context.Background(), testAgentBranch, path, content, "add "+path, "learn")
 	if err != nil {
-		t.Fatalf("WriteFile %q: %v", path, err)
+		t.Fatalf("WriteFact %q: %v", path, err)
 	}
+	commitHash, blobHash := res.CommitHash, res.BlobHash
 	insertFact(t, svc, path, blobHash, commitHash)
 }
 
@@ -460,10 +461,10 @@ func TestPreview_ComparesLocalAndRemote(t *testing.T) {
 	if err := remoteStore.InitRepo(nil, "agent/remote"); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := remoteStore.WriteFile(context.Background(), "agent/remote", "kb/shared.md", sharedContent, "add shared", "learn"); err != nil {
+	if _, err := remoteStore.WriteFact(context.Background(), "agent/remote", "kb/shared.md", sharedContent, "add shared", "learn"); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := remoteStore.WriteFile(context.Background(), "agent/remote", "kb/remote-only.md", "---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# Remote Only\n\nContent.\n", "add remote-only", "learn"); err != nil {
+	if _, err := remoteStore.WriteFact(context.Background(), "agent/remote", "kb/remote-only.md", "---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# Remote Only\n\nContent.\n", "add remote-only", "learn"); err != nil {
 		t.Fatal(err)
 	}
 	// Register in-process transport.
@@ -626,7 +627,7 @@ func setupTestedSession(t *testing.T) (http.Handler, string) {
 		t.Fatal(err)
 	}
 	remoteFact := "---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# Remote Fact\n\nContent.\n"
-	if _, _, err := remoteStore.WriteFile(context.Background(), "agent/remote", "kb/remote-fact.md", remoteFact, "add remote", "learn"); err != nil {
+	if _, err := remoteStore.WriteFact(context.Background(), "agent/remote", "kb/remote-fact.md", remoteFact, "add remote", "learn"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -868,7 +869,7 @@ func setupAppliedSession(t *testing.T) (http.Handler, string, *repos.Manager, *S
 		t.Fatal(err)
 	}
 	remoteFact := "---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# Remote Fact\n\nContent.\n"
-	if _, _, err := remoteStore.WriteFile(context.Background(), "agent/remote", "kb/remote-fact.md", remoteFact, "add remote", "learn"); err != nil {
+	if _, err := remoteStore.WriteFact(context.Background(), "agent/remote", "kb/remote-fact.md", remoteFact, "add remote", "learn"); err != nil {
 		t.Fatal(err)
 	}
 

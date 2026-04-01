@@ -17,7 +17,7 @@ import (
 
 // WriteFile writes content to path in a new commit with message on branch.
 // Returns the commit hash and the blob hash of the written file.
-func (s *Service) WriteFile(ctx context.Context, branch, path, content, message, operation string) (commitHash string, blobHash string, err error) {
+func (s *Service) writeFile(ctx context.Context, branch, path, content, message, operation string) (commitHash string, blobHash string, err error) {
 	path = strings.ToLower(path)
 	if path == "" {
 		return "", "", fmt.Errorf("store: WriteFile: path must not be empty")
@@ -64,7 +64,7 @@ func (s *Service) WriteFile(ctx context.Context, branch, path, content, message,
 
 // DeleteFile removes path from branch and creates a commit.
 // Returns the commit hash of the new commit.
-func (s *Service) DeleteFile(ctx context.Context, branch, path, message, operation string) (commitHash string, err error) {
+func (s *Service) deleteFile(ctx context.Context, branch, path, message, operation string) (commitHash string, err error) {
 	path = strings.ToLower(path)
 	if path == "" {
 		return "", fmt.Errorf("store: DeleteFile: path must not be empty")
@@ -82,7 +82,7 @@ func (s *Service) DeleteFile(ctx context.Context, branch, path, message, operati
 	}
 
 	// Check existence inside the lock to avoid a TOCTOU race.
-	exists, err := s.FileExists(ctx, branch, path)
+	exists, err := s.fileExists(ctx, branch, path)
 	if err != nil {
 		unlock()
 		return "", fmt.Errorf("DeleteFile: check exists: %w", err)
@@ -119,7 +119,7 @@ func (s *Service) DeleteFile(ctx context.Context, branch, path, message, operati
 
 // BatchWrite writes multiple files in one commit on branch.
 // Returns the commit hash and a map of path → blob hash for each written file.
-func (s *Service) BatchWrite(ctx context.Context, branch string, files map[string]string, message, operation string) (commitHash string, blobHashes map[string]string, err error) {
+func (s *Service) batchWrite(ctx context.Context, branch string, files map[string]string, message, operation string) (commitHash string, blobHashes map[string]string, err error) {
 	if len(files) == 0 {
 		return "", nil, nil
 	}
@@ -242,6 +242,32 @@ func (s *Service) batchWriteLocked(ctx context.Context, branch string, files map
 		return plumbing.ZeroHash, nil, err
 	}
 	return cHash, blobHashes, nil
+}
+
+// WriteFact writes a fact to the store and returns the commit and blob hashes.
+func (s *Service) WriteFact(ctx context.Context, branch, path, content, message, operation string) (WriteFactResult, error) {
+	commitHash, blobHash, err := s.writeFile(ctx, branch, path, content, message, operation)
+	if err != nil {
+		return WriteFactResult{}, err
+	}
+	return WriteFactResult{CommitHash: commitHash, BlobHash: blobHash}, nil
+}
+
+// DeleteFact deletes a fact and syncs the index so the deletion is immediately visible.
+func (s *Service) DeleteFact(ctx context.Context, branch, path, message string) (string, error) {
+	commitHash, err := s.deleteFile(ctx, branch, path, message, "retract")
+	if err != nil {
+		return "", fmt.Errorf("DeleteFact git: %w", err)
+	}
+	if err := s.idx.Sync(ctx, s, branch); err != nil {
+		return "", fmt.Errorf("DeleteFact sync: %w", err)
+	}
+	return commitHash, nil
+}
+
+// BatchWriteFacts writes multiple facts in a single commit.
+func (s *Service) BatchWriteFacts(ctx context.Context, branch string, files map[string]string, message, operation string) (commitHash string, blobHashes map[string]string, err error) {
+	return s.batchWrite(ctx, branch, files, message, operation)
 }
 
 // tag creates a lightweight tag ref at the tip of branch.

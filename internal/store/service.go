@@ -110,20 +110,7 @@ func (s *Service) Checkpoint() error {
 // Close closes the underlying database connection.
 func (s *Service) Close() error { return s.db.Close() }
 
-// DeleteFact deletes a fact from the git store on the given branch and
-// syncs the index so the deletion is immediately visible.
-func (s *Service) DeleteFact(ctx context.Context, branch, path, message string) error {
-	if _, err := s.DeleteFile(ctx, branch, path, message, "retract"); err != nil {
-		return fmt.Errorf("DeleteFact git: %w", err)
-	}
 
-	// Sync the index so the deletion is reflected immediately.
-	if err := s.idx.Sync(ctx, s, branch); err != nil {
-		return fmt.Errorf("DeleteFact sync: %w", err)
-	}
-
-	return nil
-}
 
 // SetAuth sets the transport authentication method used by Sync and Push.
 func (s *Service) SetAuth(auth transport.AuthMethod) {

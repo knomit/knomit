@@ -65,8 +65,8 @@ func openGraphTestStore(t *testing.T, branch string) (*Service, *Index) {
 func writeAndSync(t *testing.T, svc *Service, idx *Index, branch, path, content string) {
 	ctx := context.Background()
 	t.Helper()
-	if _, _, err := svc.WriteFile(context.Background(), branch, path, content, "add "+path, "learn"); err != nil {
-		t.Fatalf("WriteFile %s: %v", path, err)
+	if _, err := svc.WriteFact(context.Background(), branch, path, content, "add "+path, "learn"); err != nil {
+		t.Fatalf("WriteFact %s: %v", path, err)
 	}
 	if err := idx.Sync(ctx, svc, branch); err != nil {
 		t.Fatalf("Sync after %s: %v", path, err)

@@ -17,7 +17,7 @@ func (s *Service) TestDB() *sql.DB { return s.db }
 
 // TestOpenRepo opens the go-git repo on the Service using the shared storer.
 // Only available in test builds. Call this after an external git.InitWithStorer
-// populates the storer, so that Service.DeleteFile and similar methods work.
+// populates the storer, so that Service.deleteFile and similar methods work.
 func (s *Service) TestOpenRepo() error {
 	repo, err := gogit.Open(s.gits, memfs.New())
 	if err != nil {

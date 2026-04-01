@@ -8,11 +8,10 @@ import (
 
 // GitStore is the interface that the synthesize package requires from the git store.
 type GitStore interface {
-	ReadFile(ctx context.Context, branch, path string) (string, error)
-	ReadFileAtCommit(ctx context.Context, branch, path, commitHash string) (string, error)
-	WriteFile(ctx context.Context, branch, path, content, message, operation string) (commitHash, blobHash string, err error)
-	BatchWrite(ctx context.Context, branch string, files map[string]string, message, operation string) (commitHash string, blobHashes map[string]string, err error)
-	DeleteFile(ctx context.Context, branch, path, message, operation string) (commitHash string, err error)
+	ReadFact(ctx context.Context, branch, path string, opts *store.ReadFactOpts) (store.ReadFactResult, error)
+	WriteFact(ctx context.Context, branch, path, content, message, operation string) (store.WriteFactResult, error)
+	BatchWriteFacts(ctx context.Context, branch string, files map[string]string, message, operation string) (commitHash string, blobHashes map[string]string, err error)
+	DeleteFact(ctx context.Context, branch, path, message string) (string, error)
 	ListAll(ctx context.Context, branch string) ([]string, error)
 	DiffFiles(ctx context.Context, branch, fromCommit string) (added, modified, deleted []string, err error)
 	HeadCommit(ctx context.Context, branch string) (string, error)

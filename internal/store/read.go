@@ -20,7 +20,7 @@ import (
 )
 
 // ReadFileWithHash returns both the file content and the blob hash for the given path.
-func (s *Service) ReadFileWithHash(ctx context.Context, branch, path string) (string, string, error) {
+func (s *Service) readFileWithHash(ctx context.Context, branch, path string) (string, string, error) {
 	path = strings.ToLower(path)
 	headHash, err := s.resolveRef(ctx, branch)
 	if err != nil {
@@ -82,7 +82,7 @@ func (s *Service) readFileAtCommitHash(ctx context.Context, path, commitHash str
 // ReadFileAtCommit reads the content of path at the given commit.
 // branch is accepted for interface consistency; the commit hash uniquely
 // identifies the version without branch resolution.
-func (s *Service) ReadFileAtCommit(ctx context.Context, branch, path, commitHash string) (string, error) {
+func (s *Service) readFileAtCommit(ctx context.Context, branch, path, commitHash string) (string, error) {
 	return s.readFileAtCommitHash(ctx, path, commitHash)
 }
 
@@ -128,7 +128,7 @@ func treeFileInsensitive(repo *gogit.Repository, tree *object.Tree, path string)
 // ReadFileLastCommit finds the most recent ancestor of beforeCommitHash where
 // path existed and returns its content and commit hash. Used to read facts
 // that were deleted in beforeCommitHash (e.g. retract commits).
-func (s *Service) ReadFileLastCommit(ctx context.Context, branch, path, beforeCommitHash string) (content string, fromCommit string, err error) {
+func (s *Service) readFileLastCommit(ctx context.Context, branch, path, beforeCommitHash string) (content string, fromCommit string, err error) {
 	path = strings.ToLower(path)
 	startHash := plumbing.NewHash(beforeCommitHash)
 	startCommit, err := s.repo.CommitObject(startHash)
@@ -159,13 +159,13 @@ func (s *Service) ReadFileLastCommit(ctx context.Context, branch, path, beforeCo
 }
 
 // ReadFile reads the content of path from the tip of branch.
-func (s *Service) ReadFile(ctx context.Context, branch, path string) (string, error) {
-	content, _, err := s.ReadFileWithHash(ctx, branch, path)
+func (s *Service) readFile(ctx context.Context, branch, path string) (string, error) {
+	content, _, err := s.readFileWithHash(ctx, branch, path)
 	return content, err
 }
 
 // FileExists returns true if path exists at the tip of branch, false+nil if not found.
-func (s *Service) FileExists(ctx context.Context, branch, path string) (bool, error) {
+func (s *Service) fileExists(ctx context.Context, branch, path string) (bool, error) {
 	headHash, err := s.resolveRef(ctx, branch)
 	if err != nil {
 		return false, fmt.Errorf("fileExists: ref: %w", err)
@@ -189,6 +189,44 @@ func (s *Service) FileExists(ctx context.Context, branch, path string) (bool, er
 		return false, fmt.Errorf("fileExists: find entry: %w", err)
 	}
 	return true, nil
+}
+
+// ReadFact reads a fact from the store. With nil opts it reads from branch HEAD.
+func (s *Service) ReadFact(ctx context.Context, branch, path string, opts *ReadFactOpts) (ReadFactResult, error) {
+	if opts == nil {
+		opts = &ReadFactOpts{}
+	}
+	switch {
+	case opts.BeforeCommit != "":
+		content, fromCommit, err := s.readFileLastCommit(ctx, branch, path, opts.BeforeCommit)
+		if err != nil {
+			return ReadFactResult{}, err
+		}
+		return ReadFactResult{Content: content, FromCommit: fromCommit}, nil
+	case opts.AtCommit != "":
+		content, err := s.readFileAtCommit(ctx, branch, path, opts.AtCommit)
+		if err != nil {
+			return ReadFactResult{}, err
+		}
+		return ReadFactResult{Content: content}, nil
+	case opts.WithHash:
+		content, blobHash, err := s.readFileWithHash(ctx, branch, path)
+		if err != nil {
+			return ReadFactResult{}, err
+		}
+		return ReadFactResult{Content: content, BlobHash: blobHash}, nil
+	default:
+		content, err := s.readFile(ctx, branch, path)
+		if err != nil {
+			return ReadFactResult{}, err
+		}
+		return ReadFactResult{Content: content}, nil
+	}
+}
+
+// FactExists returns true if a fact exists at path on branch HEAD.
+func (s *Service) FactExists(ctx context.Context, branch, path string) (bool, error) {
+	return s.fileExists(ctx, branch, path)
 }
 
 // ListDir returns entries under path at the tip of branch.

@@ -248,17 +248,17 @@ func TestDedupCluster_MergesNearDuplicates(t *testing.T) {
 	}).Return([]store.SearchResult{}, nil)
 
 	// Winner is A (higher confidence). Read both to get full facts with Refs.
-	gs.EXPECT().ReadFile(gomock.Any(), "agent/test", "kb/a.md").Return(aContent, nil)
-	gs.EXPECT().ReadFile(gomock.Any(), "agent/test", "kb/b.md").Return(bContent, nil)
+	gs.EXPECT().ReadFact(gomock.Any(), "agent/test", "kb/a.md", gomock.Any()).Return(store.ReadFactResult{Content: aContent}, nil)
+	gs.EXPECT().ReadFact(gomock.Any(), "agent/test", "kb/b.md", gomock.Any()).Return(store.ReadFactResult{Content: bContent}, nil)
 
 	// Write merged winner back to git.
-	gs.EXPECT().WriteFile(gomock.Any(), "agent/test", "kb/a.md", gomock.Any(), gomock.Any(), gomock.Any()).Return("commit-hash-1", "blob-hash-1", nil)
+	gs.EXPECT().WriteFact(gomock.Any(), "agent/test", "kb/a.md", gomock.Any(), gomock.Any(), gomock.Any()).Return(store.WriteFactResult{CommitHash: "commit-hash-1", BlobHash: "blob-hash-1"}, nil)
 
 	// Upsert updated winner into index.
 	idx.EXPECT().Upsert(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(nil)
 
 	// Delete loser from git and index.
-	gs.EXPECT().DeleteFile(gomock.Any(), "agent/test", "kb/b.md", gomock.Any(), gomock.Any()).Return("commit-hash-2", nil)
+	gs.EXPECT().DeleteFact(gomock.Any(), "agent/test", "kb/b.md", gomock.Any()).Return("commit-hash-2", nil)
 	idx.EXPECT().Delete(gomock.Any(), gomock.Any(), "kb/b.md").Return(nil)
 
 	surviving, err := dedupCluster(context.Background(), cluster, gs, idx, defaultDedupThreshold, "test-recipe", func(ProgressEvent) {}, "agent/test")

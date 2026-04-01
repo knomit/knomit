@@ -61,13 +61,13 @@ func TestOriginSession_FullWorkflow(t *testing.T) {
 	}
 
 	// Shared fact on remote (same path).
-	if _, _, err := remoteStore.WriteFile(context.Background(), "agent/remote", "kb/shared.md", sharedContent, "add shared", "learn"); err != nil {
+	if _, err := remoteStore.WriteFact(context.Background(), "agent/remote", "kb/shared.md", sharedContent, "add shared", "learn"); err != nil {
 		t.Fatalf("remote WriteFile shared: %v", err)
 	}
 
 	// Remote-only fact.
 	remoteFact := "---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# Remote Fact B\n\nOnly on remote.\n"
-	if _, _, err := remoteStore.WriteFile(context.Background(), "agent/remote", "kb/remote-b.md", remoteFact, "add remote-b", "learn"); err != nil {
+	if _, err := remoteStore.WriteFact(context.Background(), "agent/remote", "kb/remote-b.md", remoteFact, "add remote-b", "learn"); err != nil {
 		t.Fatalf("remote WriteFile remote-b: %v", err)
 	}
 
@@ -319,15 +319,15 @@ func TestOriginSession_RemoteWinsStrategy(t *testing.T) {
 	}
 
 	sharedRemoteContent := "---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# Shared Fact\n\nRemote version of shared.\n"
-	if _, _, err := remoteStore.WriteFile(context.Background(), "agent/remote", "kb/shared.md", sharedRemoteContent, "add shared", "learn"); err != nil {
+	if _, err := remoteStore.WriteFact(context.Background(), "agent/remote", "kb/shared.md", sharedRemoteContent, "add shared", "learn"); err != nil {
 		t.Fatalf("remote WriteFile shared: %v", err)
 	}
 	remoteFact := "---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# Remote B\n\nRemote only.\n"
-	if _, _, err := remoteStore.WriteFile(context.Background(), "agent/remote", "kb/remote-b.md", remoteFact, "add remote-b", "learn"); err != nil {
+	if _, err := remoteStore.WriteFact(context.Background(), "agent/remote", "kb/remote-b.md", remoteFact, "add remote-b", "learn"); err != nil {
 		t.Fatalf("remote WriteFile remote-b: %v", err)
 	}
 	remoteFact2 := "---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# Remote C\n\nRemote only.\n"
-	if _, _, err := remoteStore.WriteFile(context.Background(), "agent/remote", "kb/remote-c.md", remoteFact2, "add remote-c", "learn"); err != nil {
+	if _, err := remoteStore.WriteFact(context.Background(), "agent/remote", "kb/remote-c.md", remoteFact2, "add remote-c", "learn"); err != nil {
 		t.Fatalf("remote WriteFile remote-c: %v", err)
 	}
 
@@ -456,7 +456,7 @@ func TestOriginSession_SwitchStrategy(t *testing.T) {
 		t.Fatalf("InitRepo remote: %v", err)
 	}
 	sharedRemote := "---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# Shared\n\nRemote version.\n"
-	if _, _, err := remoteStore.WriteFile(context.Background(), "agent/remote", "kb/shared.md", sharedRemote, "add shared", "learn"); err != nil {
+	if _, err := remoteStore.WriteFact(context.Background(), "agent/remote", "kb/shared.md", sharedRemote, "add shared", "learn"); err != nil {
 		t.Fatalf("remote WriteFile: %v", err)
 	}
 	loader := server.MapLoader{"inmem:///switch-strategy": remoteStore.Storer()}
@@ -565,7 +565,7 @@ func TestOriginSession_ExistingAgentBranch(t *testing.T) {
 
 	// Write a fact on the agent branch so it has content.
 	existingFact := "---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# Existing Remote Fact\n\nAlready on agent branch.\n"
-	if _, _, err := remoteStore.WriteFile(context.Background(), testAgentBranch, "kb/existing-remote.md", existingFact, "add existing", "learn"); err != nil {
+	if _, err := remoteStore.WriteFact(context.Background(), testAgentBranch, "kb/existing-remote.md", existingFact, "add existing", "learn"); err != nil {
 		t.Fatalf("remote WriteFile existing: %v", err)
 	}
 
@@ -755,7 +755,7 @@ func TestOriginSession_BranchSelection(t *testing.T) {
 		t.Fatalf("InitRepo remote: %v", err)
 	}
 	remoteFact := "---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# Remote Fact\n\nContent.\n"
-	if _, _, err := remoteStore.WriteFile(context.Background(), "agent/remote", "kb/remote.md", remoteFact, "add remote", "learn"); err != nil {
+	if _, err := remoteStore.WriteFact(context.Background(), "agent/remote", "kb/remote.md", remoteFact, "add remote", "learn"); err != nil {
 		t.Fatalf("remote WriteFile: %v", err)
 	}
 
@@ -893,7 +893,7 @@ func TestOriginSession_RebuildAfterCommit(t *testing.T) {
 		t.Fatalf("InitRepo remote: %v", err)
 	}
 	remoteFact := "---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# Remote Fact\n\nDifferent content.\n"
-	if _, _, err := remoteStore.WriteFile(context.Background(), "agent/remote", "kb/remote.md", remoteFact, "add remote", "learn"); err != nil {
+	if _, err := remoteStore.WriteFact(context.Background(), "agent/remote", "kb/remote.md", remoteFact, "add remote", "learn"); err != nil {
 		t.Fatalf("remote WriteFile: %v", err)
 	}
 	loader := server.MapLoader{"inmem:///rebuild-test": remoteStore.Storer()}
@@ -999,7 +999,7 @@ func TestOriginSession_ReviewWatermarkSetAfterCommit(t *testing.T) {
 	if err := remoteStore.InitRepo(nil, "agent/remote"); err != nil {
 		t.Fatalf("InitRepo remote: %v", err)
 	}
-	if _, _, err := remoteStore.WriteFile(context.Background(), "agent/remote", "kb/cloned.md", remoteFact, "add fact", "learn"); err != nil {
+	if _, err := remoteStore.WriteFact(context.Background(), "agent/remote", "kb/cloned.md", remoteFact, "add fact", "learn"); err != nil {
 		t.Fatalf("remote WriteFile: %v", err)
 	}
 	loader := server.MapLoader{"inmem:///watermark-test": remoteStore.Storer()}
@@ -1121,7 +1121,7 @@ func TestOriginSession_DeadRefs(t *testing.T) {
 		t.Fatalf("InitRepo remote: %v", err)
 	}
 	remoteFact := "---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# Remote Fact\n\nContent.\n"
-	if _, _, err := remoteStore.WriteFile(context.Background(), "agent/remote", "kb/remote.md", remoteFact, "add remote", "learn"); err != nil {
+	if _, err := remoteStore.WriteFact(context.Background(), "agent/remote", "kb/remote.md", remoteFact, "add remote", "learn"); err != nil {
 		t.Fatalf("remote WriteFile: %v", err)
 	}
 	loader := server.MapLoader{"inmem:///dead-refs-test": remoteStore.Storer()}
@@ -1224,7 +1224,7 @@ func TestOriginSession_NoDeadRefs(t *testing.T) {
 		t.Fatalf("InitRepo remote: %v", err)
 	}
 	remoteFact := "---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# Remote Fact\n\nContent.\n"
-	if _, _, err := remoteStore.WriteFile(context.Background(), "agent/remote", "kb/remote.md", remoteFact, "add remote", "learn"); err != nil {
+	if _, err := remoteStore.WriteFact(context.Background(), "agent/remote", "kb/remote.md", remoteFact, "add remote", "learn"); err != nil {
 		t.Fatalf("remote WriteFile: %v", err)
 	}
 	loader := server.MapLoader{"inmem:///no-dead-refs-test": remoteStore.Storer()}

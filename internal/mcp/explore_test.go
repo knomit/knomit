@@ -35,7 +35,7 @@ func TestExploreFirstPage(t *testing.T) {
 		[]FileRecency{{Path: "kb/foo.md", Timestamp: ts}},
 		"abc123", nil,
 	)
-	gs.EXPECT().ReadFile(gomock.Any(), testAgentBranch, "kb/foo.md").Return(factContent, nil)
+	gs.EXPECT().ReadFact(gomock.Any(), testAgentBranch, "kb/foo.md", gomock.Any()).Return(ReadFactResult{Content: factContent}, nil)
 	ei.EXPECT().CreateToolSession(gomock.Any(), "explore", "machine/test", "kb").Return(
 		&ToolSession{ID: "sess-1", Tool: "explore", Branch: "machine/test", PathPrefix: "kb", Status: "active"},
 		nil,
@@ -106,7 +106,7 @@ func TestExploreResumesSession(t *testing.T) {
 		[]FileRecency{{Path: "kb/bar.md", Timestamp: ts}},
 		"def456", nil,
 	)
-	gs.EXPECT().ReadFile(gomock.Any(), testAgentBranch, "kb/bar.md").Return(factContent, nil)
+	gs.EXPECT().ReadFact(gomock.Any(), testAgentBranch, "kb/bar.md", gomock.Any()).Return(ReadFactResult{Content: factContent}, nil)
 	ei.EXPECT().AddSeenPaths(gomock.Any(), "sess-1", []string{"kb/bar.md"}).Return(nil)
 	ei.EXPECT().UpdateToolSession(gomock.Any(), "sess-1", "def456", "completed").Return(nil)
 
@@ -225,8 +225,8 @@ func TestExploreDeletedFactSkipped(t *testing.T) {
 		},
 		"abc123", nil,
 	)
-	gs.EXPECT().ReadFile(gomock.Any(), testAgentBranch, "kb/deleted.md").Return("", fmt.Errorf("not found"))
-	gs.EXPECT().ReadFile(gomock.Any(), testAgentBranch, "kb/good.md").Return(goodContent, nil)
+	gs.EXPECT().ReadFact(gomock.Any(), testAgentBranch, "kb/deleted.md", gomock.Any()).Return(ReadFactResult{}, fmt.Errorf("not found"))
+	gs.EXPECT().ReadFact(gomock.Any(), testAgentBranch, "kb/good.md", gomock.Any()).Return(ReadFactResult{Content: goodContent}, nil)
 	ei.EXPECT().CreateToolSession(gomock.Any(), "explore", "machine/test", "kb").Return(
 		&ToolSession{ID: "sess-2", Tool: "explore", Branch: "machine/test", PathPrefix: "kb", Status: "active"},
 		nil,
