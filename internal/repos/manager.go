@@ -13,7 +13,6 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"knomit/internal/config"
-	"knomit/internal/fact"
 	"knomit/internal/store"
 )
 
@@ -36,7 +35,6 @@ type Manager struct {
 	repos    map[string]*RepoInstance
 	ctx      context.Context
 	deps     Deps
-	ontology *fact.Ontology // loaded during Boot; used by setupMCP and Add
 }
 
 // New returns an uninitialised Manager. Call Boot to open repos.
@@ -83,9 +81,6 @@ func (m *Manager) Names() []string {
 	return names
 }
 
-// Ontology returns the loaded ontology (may be nil before Boot).
-func (m *Manager) Ontology() *fact.Ontology { return m.ontology }
-
 // SetOnRepoReady sets the callback invoked after a repo is opened or swapped.
 func (m *Manager) SetOnRepoReady(fn func(*RepoInstance)) { m.deps.OnRepoReady = fn }
 
@@ -122,40 +117,18 @@ func (m *Manager) Shutdown() {
 }
 
 // Boot opens all repositories under cfg.Home/repos/.
-// Phase 1: opens knomit.db, loads ontology, wires MCP.
-// Phase 2: discovers and opens remaining *.db files.
+// knomit.db is opened first; remaining *.db files are discovered and opened.
 func (m *Manager) Boot() error {
 	reposDir := filepath.Join(m.deps.Cfg.Home, "repos")
 	if err := os.MkdirAll(reposDir, 0o755); err != nil {
 		return fmt.Errorf("create repos dir: %w", err)
 	}
 
-	// Phase 1: open knomit.
 	defaultDB := filepath.Join(reposDir, "knomit.db")
-	knomitRI, err := m.openOne("knomit", defaultDB, true)
-	if err != nil {
+	if err := m.Add("knomit", defaultDB); err != nil {
 		return fmt.Errorf("open default repo: %w", err)
 	}
 
-	// Load ontology from knomit repo's git store.
-	readResult, readErr := knomitRI.svc.ReadFact(context.Background(), m.deps.AgentBranch, "domains/ontology.yaml", nil)
-	if readErr != nil {
-		log.Warn().Msg("domains/ontology.yaml not found, using default ontology")
-		m.ontology = fact.DefaultOntology()
-	} else {
-		m.ontology, err = fact.ParseOntology([]byte(readResult.Content))
-		if err != nil {
-			knomitRI.closeFn()
-			return fmt.Errorf("parse ontology: %w", err)
-		}
-	}
-
-	if m.deps.OnRepoReady != nil {
-		m.deps.OnRepoReady(knomitRI)
-	}
-	m.Set("knomit", knomitRI)
-
-	// Phase 2: discover remaining repos.
 	dbFiles, _ := filepath.Glob(filepath.Join(reposDir, "*.db"))
 	sort.Strings(dbFiles)
 	for _, dbPath := range dbFiles {

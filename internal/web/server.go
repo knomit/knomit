@@ -34,7 +34,7 @@ type Server struct {
 // SetupMCP wires MCP handlers onto ri using the server's ontology and deps.
 // Safe to call after SwapStore to rebind MCP handlers to the new database.
 func (s *Server) SetupMCP(ri *repos.RepoInstance) {
-	ontology := s.Manager.Ontology()
+	ontology := ri.Ontology()
 	if ontology == nil {
 		return
 	}
