@@ -2,6 +2,7 @@ package web
 
 import (
 	"net/http"
+	"sync"
 
 	mcpserver "github.com/mark3labs/mcp-go/server"
 	"github.com/go-chi/chi/v5"
@@ -25,6 +26,9 @@ type Server struct {
 	SessionManager    *SessionManager
 	LLMAdapter        llm.LLMAdapter     // nil if no LLM configured
 	Embedder          store.BatchEmbedder // nil if unavailable
+
+	mcpMu       sync.RWMutex
+	mcpHandlers map[string]map[string]http.Handler // repo → profile → handler
 }
 
 // SetupMCP wires MCP handlers onto ri using the server's ontology and deps.
@@ -56,7 +60,12 @@ func (s *Server) SetupMCP(ri *repos.RepoInstance) {
 		mcpHandlers[p] = mcpserver.NewStreamableHTTPServer(mcpSrv)
 	}
 
-	ri.SetMCPHandlers(mcpHandlers)
+	s.mcpMu.Lock()
+	if s.mcpHandlers == nil {
+		s.mcpHandlers = make(map[string]map[string]http.Handler)
+	}
+	s.mcpHandlers[ri.Name()] = mcpHandlers
+	s.mcpMu.Unlock()
 }
 
 // Handler returns the chi router with all routes mounted.
@@ -102,26 +111,26 @@ func (s *Server) Handler() http.Handler {
 
 		sub.Mount("/mcp", http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 			ri := repos.RepoFromContext(req.Context())
-			var handler http.Handler
-			ri.WithRead(func(d repos.StoreDeps) {
-				if len(d.MCP) == 0 {
-					return
-				}
-				profile := req.URL.Query().Get("profile")
-				if profile == "" {
-					profile = "code"
-				}
-				h, ok := d.MCP[profile]
-				if !ok {
-					h = d.MCP["code"]
-				}
-				handler = h
-			})
-			if handler == nil {
+			s.mcpMu.RLock()
+			handlers := s.mcpHandlers[ri.Name()]
+			s.mcpMu.RUnlock()
+			if len(handlers) == 0 {
 				http.NotFound(w, req)
 				return
 			}
-			handler.ServeHTTP(w, req)
+			profile := req.URL.Query().Get("profile")
+			if profile == "" {
+				profile = "code"
+			}
+			h, ok := handlers[profile]
+			if !ok {
+				h = handlers["code"]
+			}
+			if h == nil {
+				http.NotFound(w, req)
+				return
+			}
+			h.ServeHTTP(w, req)
 		}))
 	})
 

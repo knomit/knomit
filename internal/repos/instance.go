@@ -2,7 +2,6 @@ package repos
 
 import (
 	"context"
-	"net/http"
 	"sync"
 
 	"knomit/internal/store"
@@ -15,7 +14,6 @@ type StoreDeps struct {
 	GS  store.GitStore
 	Svc *store.Service
 	Idx store.SearchIndex
-	MCP map[string]http.Handler
 }
 
 // RepoInstance holds all runtime state for a single repository.
@@ -27,11 +25,10 @@ type RepoInstance struct {
 	gsOverride  store.GitStore  // test-only: overrides svc as GS in StoreDeps
 	svc         *store.Service
 	idx         store.SearchIndex
-	hub         *TaskHub
-	syncCancel  context.CancelFunc
-	syncWg      *sync.WaitGroup
-	mcpHandlers map[string]http.Handler
-	startSync   func(url string) error
+	hub        *TaskHub
+	syncCancel context.CancelFunc
+	syncWg     *sync.WaitGroup
+	startSync  func(url string) error
 	closeFn     func()
 }
 
@@ -49,15 +46,7 @@ func (ri *RepoInstance) WithRead(fn func(StoreDeps)) {
 		GS:  gs,
 		Svc: ri.svc,
 		Idx: ri.idx,
-		MCP: ri.mcpHandlers,
 	})
-}
-
-// SetMCPHandlers replaces the MCP handler map under a write lock.
-func (ri *RepoInstance) SetMCPHandlers(h map[string]http.Handler) {
-	ri.mu.Lock()
-	ri.mcpHandlers = h
-	ri.mu.Unlock()
 }
 
 // withWrite calls fn under a write lock. Only used within the repos package
@@ -112,9 +101,8 @@ type TestInstanceConfig struct {
 	GS          store.GitStore
 	Svc         *store.Service
 	Idx         store.SearchIndex
-	Hub         *TaskHub
-	MCP         map[string]http.Handler
-	StartSync   func(url string) error
+	Hub       *TaskHub
+	StartSync func(url string) error
 }
 
 // NewTestInstanceWithDeps creates a RepoInstance pre-populated with the given
@@ -128,9 +116,8 @@ func NewTestInstanceWithDeps(cfg TestInstanceConfig) *RepoInstance {
 		gsOverride:  cfg.GS,
 		svc:         cfg.Svc,
 		idx:         cfg.Idx,
-		hub:         cfg.Hub,
-		mcpHandlers: cfg.MCP,
-		startSync:   sc,
+		hub:       cfg.Hub,
+		startSync: sc,
 		syncCancel:  func() {},
 		syncWg:      &sync.WaitGroup{},
 	}
