@@ -107,7 +107,7 @@ func broadcastHead(svc *store.Service, branch string, hub *TaskHub) {
 		return
 	}
 	if head, err := svc.HeadCommit(context.Background(), branch); err == nil {
-		hub.BroadcastStatus(head)
+		hub.broadcastStatus(head)
 	}
 }
 

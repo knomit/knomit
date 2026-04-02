@@ -189,7 +189,7 @@ func (b *repoBuilder) build() *RepoInstance {
 		if err := currentSvc.Index().Sync(context.Background(), currentSvc, b.agentBranch); err != nil {
 			log.Warn().Err(err).Str("repo", b.name).Msg("observer sync failed")
 		}
-		hub.BroadcastStatus(hash)
+		hub.broadcastStatus(hash)
 	})
 	ri.onCommit = func(_, hash string) { obs.Notify(hash) }
 	b.svc.SetOnCommit(ri.onCommit)
