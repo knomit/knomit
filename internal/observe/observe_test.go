@@ -1,18 +1,16 @@
-package cmd
+package observe
 
 import (
 	"sync"
 	"testing"
 	"time"
-
-	"knomit/internal/observe"
 )
 
 func TestObserverDebounce(t *testing.T) {
 	var mu sync.Mutex
 	var calls []string
 
-	obs := observe.New(50*time.Millisecond, func(hash string) {
+	obs := New(50*time.Millisecond, func(hash string) {
 		mu.Lock()
 		calls = append(calls, hash)
 		mu.Unlock()
@@ -41,7 +39,7 @@ func TestObserverStopFlushes(t *testing.T) {
 	var mu sync.Mutex
 	var calls []string
 
-	obs := observe.New(1*time.Second, func(hash string) {
+	obs := New(1*time.Second, func(hash string) {
 		mu.Lock()
 		calls = append(calls, hash)
 		mu.Unlock()
