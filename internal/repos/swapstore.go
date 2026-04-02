@@ -45,6 +45,9 @@ func (m *Manager) SwapStore(ri *RepoInstance, tempDBPath string) error {
 			ri.svc = svc
 			ri.idx = idx
 		})
+		if ri.onCommit != nil {
+			svc.SetOnCommit(ri.onCommit)
+		}
 		return nil
 	}
 
@@ -87,6 +90,9 @@ func (m *Manager) SwapStore(ri *RepoInstance, tempDBPath string) error {
 		ri.svc = svc
 		ri.idx = idx
 	})
+	if ri.onCommit != nil {
+		svc.SetOnCommit(ri.onCommit)
+	}
 
 	// Clean up backup — swap succeeded.
 	os.Remove(backupPath)

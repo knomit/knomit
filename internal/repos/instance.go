@@ -23,8 +23,9 @@ type RepoInstance struct {
 	name        string
 	dbPath      string
 	agentBranch string
-	gsOverride  store.GitStore // test-only: overrides svc as GS in StoreDeps
+	gsOverride  store.GitStore    // test-only: overrides svc as GS in StoreDeps
 	ontology    *fact.Ontology
+	onCommit    func(string, string) // re-applied to new svc after SwapStore
 	svc         *store.Service
 	idx         store.SearchIndex
 	hub         *TaskHub

@@ -191,7 +191,8 @@ func (b *repoBuilder) build() *RepoInstance {
 		}
 		hub.BroadcastStatus(hash)
 	})
-	b.svc.SetOnCommit(func(_, hash string) { obs.Notify(hash) })
+	ri.onCommit = func(_, hash string) { obs.Notify(hash) }
+	b.svc.SetOnCommit(ri.onCommit)
 
 	// Background remote sync + push goroutines.
 	syncCtx, syncCancel := context.WithCancel(b.ctx)
@@ -236,7 +237,7 @@ func (b *repoBuilder) build() *RepoInstance {
 		newCtx, syncCancel = context.WithCancel(ctx)
 		ri.syncCancel = syncCancel
 
-		currentSvc.SetOnCommit(func(_, hash string) { obs.Notify(hash) })
+		currentSvc.SetOnCommit(ri.onCommit)
 
 		syncWg.Add(2)
 		go runSyncLoop(newCtx, &syncWg, currentSvc, hub, remote, name, agentBranch)
