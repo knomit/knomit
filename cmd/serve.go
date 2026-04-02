@@ -7,7 +7,6 @@ import (
 	"net/http"
 	_ "net/http/pprof" // registers /debug/pprof/* on http.DefaultServeMux
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -15,11 +14,8 @@ import (
 	"github.com/spf13/cobra"
 	"golang.org/x/crypto/ssh"
 
+	"knomit/internal/app"
 	"knomit/internal/config"
-	"knomit/internal/embeddings"
-	"knomit/internal/llm"
-	"knomit/internal/repos"
-	"knomit/internal/web"
 )
 
 func serveCmd() *cobra.Command {
@@ -32,109 +28,16 @@ func serveCmd() *cobra.Command {
 				return fmt.Errorf("load config: %w", err)
 			}
 
-			provider, _ := llm.ResolveProvider(cfg.LLM.Model, cfg.LLM.Provider)
-			log.Info().
-				Str("repo", cfg.Home).
-				Str("port", cfg.Port).
-				Str("llm_provider", provider).
-				Str("llm_model", cfg.LLM.Model).
-				Msg("config loaded")
-
-			// 0. Ensure SSH keypair exists.
-			keyPath := cfg.Remote.SSHKey
-			if keyPath == "" {
-				keyPath = filepath.Join(cfg.Home, "id_ed25519")
-			}
-			signer, keyFingerprint, err := EnsureKeyPair(keyPath)
+			a, err := app.New(cmd.Context(), cfg)
 			if err != nil {
-				return fmt.Errorf("ensure keypair: %w", err)
+				return err
 			}
-			agentBranch := AgentBranch(keyFingerprint)
+			defer a.Close()
 
-			// 1. Ensure embedder model files are present (shared across repos).
-			var embedder *embeddings.Embedder
-			modelPath, tokPath, err := embeddings.EnsureModel(filepath.Join(cfg.Home, "models"))
-			if err != nil {
-				log.Warn().Err(err).Msg("embedder model unavailable")
-			} else {
-				embedder, err = embeddings.NewEmbedder(modelPath, tokPath)
-				if err != nil {
-					log.Warn().Err(err).Msg("embedder init failed")
-				}
-			}
-			embeddingsEnabled := embedder != nil
-			if embedder != nil {
-				defer embedder.Close()
-			}
+			router := a.Handler()
 
-			// 2. Resolve LLM adapter (shared across repos).
-			ctx := cmd.Context()
-			var llmAdapter llm.LLMAdapter
-			provider, err = llm.ResolveProvider(cfg.LLM.Model, cfg.LLM.Provider)
-			if err != nil {
-				log.Warn().Err(err).Msg("LLM provider resolution failed")
-			} else {
-				llmAdapter, err = llm.NewAdapter(ctx, provider, cfg.LLM.Model, cfg.LLM)
-				if err != nil {
-					log.Warn().Err(err).Msg("LLM adapter init failed")
-				}
-			}
-
-			if tracePath := os.Getenv("KNOMIT_LLM_TRACE"); tracePath != "" && llmAdapter != nil {
-				tracer, err := llm.NewTracingAdapter(llmAdapter, tracePath)
-				if err != nil {
-					log.Warn().Err(err).Msg("LLM trace init failed")
-				} else {
-					llmAdapter = tracer
-					defer tracer.Close()
-					log.Info().Str("path", tracePath).Msg("LLM tracing enabled")
-				}
-			}
-
-			if llmAdapter != nil {
-				log.Info().Msg("synthesis enabled")
-			} else {
-				log.Warn().Msg("synthesis disabled (no LLM adapter)")
-			}
-
-			// 3. Create manager and web server.
-			m := repos.New(ctx, repos.Deps{
-				Cfg:         cfg,
-				Signer:      signer,
-				AgentBranch: agentBranch,
-				Embedder:    embedder,
-				KeyPath:     keyPath,
-			})
-
-			var gitHandler http.Handler
-			if cfg.Git.Serve {
-				gitHandler = web.GitRemoteHandler(m)
-			}
-
-			webSrv := &web.Server{
-				Manager:           m,
-				GitHandler:        gitHandler,
-				EmbeddingsEnabled: embeddingsEnabled,
-				OntologyRoot:      cfg.OntologyRoot,
-				AgentBranch:       agentBranch,
-				SessionManager:    web.NewSessionManager(),
-				LLMAdapter:        llmAdapter,
-				Embedder:          embedder,
-			}
-
-			// Wire MCP setup into repo lifecycle — called after Boot/Add/SwapStore.
-			m.SetOnRepoReady(webSrv.SetupMCP)
-
-			// 4. Boot all repositories.
-			if err := m.Boot(); err != nil {
-				return fmt.Errorf("boot: %w", err)
-			}
-
-			// 5. Create chi router.
-			router := webSrv.Handler()
-
-			// 6. Startup summary.
-			pubKey := strings.TrimSpace(string(ssh.MarshalAuthorizedKey(signer.PublicKey())))
+			// Startup summary.
+			pubKey := strings.TrimSpace(string(ssh.MarshalAuthorizedKey(a.Signer.PublicKey())))
 			listenAddr := cfg.Host + ":" + cfg.Port
 			httpAddr := "http://" + listenAddr
 
@@ -143,17 +46,17 @@ func serveCmd() *cobra.Command {
 				Str("api", httpAddr+"/api/v1/{repo}").
 				Str("mcp", httpAddr+"/api/v1/{repo}/mcp")
 
-			if gitHandler != nil {
+			if cfg.Git.Serve {
 				startupLog = startupLog.Str("git_remote", httpAddr+"/git")
 			}
 
 			startupLog.
 				Str("public_key", pubKey).
-				Str("branch", agentBranch).
-				Strs("repos", m.Names()).
+				Str("branch", a.AgentBranch).
+				Strs("repos", a.Manager.Names()).
 				Msg("knomit ready")
 
-			// 7. Graceful shutdown.
+			// HTTP server.
 			srv := &http.Server{
 				Addr:              listenAddr,
 				Handler:           router,
@@ -196,9 +99,8 @@ func serveCmd() *cobra.Command {
 				}()
 			}
 
-			<-ctx.Done()
-			m.Shutdown()
-			// Shared resource cleanup (embedder, tracer) happens via defers.
+			<-cmd.Context().Done()
+			// a.Close() runs via defer — shuts down repos and releases resources.
 			shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			return srv.Shutdown(shutCtx)

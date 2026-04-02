@@ -8,6 +8,7 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 
+	"knomit/internal/app"
 	"knomit/internal/config"
 	"knomit/internal/store"
 )
@@ -26,11 +27,11 @@ func rebuildCmd() *cobra.Command {
 			if keyPath == "" {
 				keyPath = filepath.Join(cfg.Home, "id_ed25519")
 			}
-			_, keyFingerprint, err := EnsureKeyPair(keyPath)
+			_, keyFingerprint, err := app.EnsureKeyPair(keyPath)
 			if err != nil {
 				return fmt.Errorf("ensure keypair: %w", err)
 			}
-			agentBranch := AgentBranch(keyFingerprint)
+			agentBranch := app.AgentBranch(keyFingerprint)
 			dbPath := filepath.Join(cfg.Home, "repos", repoName+".db")
 			svc, err := store.Open(dbPath)
 			if err != nil {
