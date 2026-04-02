@@ -3,31 +3,30 @@ package repos
 import (
 	"context"
 	"fmt"
-	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
 
-	mcpserver "github.com/mark3labs/mcp-go/server"
 	"github.com/rs/zerolog/log"
 	"golang.org/x/crypto/ssh"
 
 	"knomit/internal/config"
 	"knomit/internal/fact"
-	"knomit/internal/mcp"
 	"knomit/internal/store"
 )
 
 // Deps holds all shared resources needed to open and manage repos.
 type Deps struct {
-	Cfg           config.Config
-	Signer        ssh.Signer
-	AgentBranch   string
-	Embedder      store.BatchEmbedder // nil if unavailable
-	MakeReviewer  func(store.GitStore, store.SearchIndex, store.PipelineIndex, store.Embedder, string) mcp.Reviewer
-	KeyPath       string
+	Cfg         config.Config
+	Signer      ssh.Signer
+	AgentBranch string
+	Embedder    store.BatchEmbedder // nil if unavailable
+	KeyPath     string
+	// OnRepoReady is called after a repo is opened or its store is swapped.
+	// The web layer uses this to wire MCP handlers onto the repo.
+	OnRepoReady func(ri *RepoInstance)
 }
 
 // Manager owns the full lifecycle of all registered repositories:
@@ -83,6 +82,12 @@ func (m *Manager) Names() []string {
 	sort.Strings(names)
 	return names
 }
+
+// Ontology returns the loaded ontology (may be nil before Boot).
+func (m *Manager) Ontology() *fact.Ontology { return m.ontology }
+
+// SetOnRepoReady sets the callback invoked after a repo is opened or swapped.
+func (m *Manager) SetOnRepoReady(fn func(*RepoInstance)) { m.deps.OnRepoReady = fn }
 
 // Shutdown gracefully stops all registered repositories.
 // It performs a two-pass shutdown: cancel all sync loops first so they wind
@@ -145,7 +150,9 @@ func (m *Manager) Boot() error {
 		}
 	}
 
-	m.SetupMCP(knomitRI)
+	if m.deps.OnRepoReady != nil {
+		m.deps.OnRepoReady(knomitRI)
+	}
 	m.Set("knomit", knomitRI)
 
 	// Phase 2: discover remaining repos.
@@ -175,7 +182,9 @@ func (m *Manager) Add(name, dbPath string) error {
 	if err != nil {
 		return err
 	}
-	m.SetupMCP(ri)
+	if m.deps.OnRepoReady != nil {
+		m.deps.OnRepoReady(ri)
+	}
 	m.Set(name, ri)
 	return nil
 }
@@ -213,47 +222,6 @@ func (m *Manager) openOne(name, dbPath string, isDefault bool) (*RepoInstance, e
 	return b.build(), nil
 }
 
-// SetupMCP wires MCP handlers onto ri using the manager's ontology and deps.
-// It reads the current ri.svc to get concrete types, so it is safe
-// to call after SwapStore to rebind MCP handlers to the new database.
-// No-op if m.ontology is nil.
-func (m *Manager) SetupMCP(ri *RepoInstance) {
-	if m.ontology == nil {
-		return
-	}
-
-	ri.mu.RLock()
-	svc := ri.svc
-	ri.mu.RUnlock()
-	if svc == nil {
-		log.Warn().Msg("SetupMCP: ri.svc is nil, skipping")
-		return
-	}
-	idx := svc.Index()
-
-	ontologyRoot := m.deps.Cfg.OntologyRoot
-	embedder := m.deps.Embedder
-	agentBranch := m.deps.AgentBranch
-	var reviewer mcp.Reviewer
-	if m.deps.MakeReviewer != nil {
-		reviewer = m.deps.MakeReviewer(svc, idx, idx, embedder, agentBranch)
-	}
-	profiles := []string{"code", "chat", "generic"}
-	mcpHandlers := make(map[string]http.Handler, len(profiles))
-	for _, p := range profiles {
-		var mcpSrv *mcpserver.MCPServer
-		if embedder != nil {
-			mcpSrv = mcp.NewServer(svc, idx, idx, idx, reviewer, p, ontologyRoot, m.ontology, agentBranch, embedder)
-		} else {
-			mcpSrv = mcp.NewServer(svc, idx, idx, idx, reviewer, p, ontologyRoot, m.ontology, agentBranch)
-		}
-		mcpHandlers[p] = mcpserver.NewStreamableHTTPServer(mcpSrv)
-	}
-
-	ri.withWrite(func() {
-		ri.mcpHandlers = mcpHandlers
-	})
-}
 
 // remoteAuthFromRecord builds a RemoteAuthConfig from a stored remote record,
 // falling back to the global config for fields not set in the record.

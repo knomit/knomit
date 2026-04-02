@@ -53,8 +53,15 @@ func (ri *RepoInstance) WithRead(fn func(StoreDeps)) {
 	})
 }
 
+// SetMCPHandlers replaces the MCP handler map under a write lock.
+func (ri *RepoInstance) SetMCPHandlers(h map[string]http.Handler) {
+	ri.mu.Lock()
+	ri.mcpHandlers = h
+	ri.mu.Unlock()
+}
+
 // withWrite calls fn under a write lock. Only used within the repos package
-// (SwapStore, SetupMCP, StartSync closure).
+// (SwapStore, StartSync closure).
 func (ri *RepoInstance) withWrite(fn func()) {
 	ri.mu.Lock()
 	defer ri.mu.Unlock()

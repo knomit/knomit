@@ -18,10 +18,7 @@ import (
 	"knomit/internal/config"
 	"knomit/internal/embeddings"
 	"knomit/internal/llm"
-	"knomit/internal/mcp"
 	"knomit/internal/repos"
-	"knomit/internal/store"
-	"knomit/internal/synthesize"
 	"knomit/internal/web"
 )
 
@@ -100,28 +97,20 @@ func serveCmd() *cobra.Command {
 				log.Warn().Msg("synthesis disabled (no LLM adapter)")
 			}
 
-			// 3. Boot all repositories.
+			// 3. Create manager and web server.
 			m := repos.New(ctx, repos.Deps{
 				Cfg:         cfg,
 				Signer:      signer,
 				AgentBranch: agentBranch,
 				Embedder:    embedder,
-				MakeReviewer: func(gs store.GitStore, idx store.SearchIndex, pi store.PipelineIndex, emb store.Embedder, branch string) mcp.Reviewer {
-					return synthesize.NewReviewer(gs, idx, pi, emb, nil, branch)
-				},
-				KeyPath: keyPath,
+				KeyPath:     keyPath,
 			})
-			if err := m.Boot(); err != nil {
-				return fmt.Errorf("boot: %w", err)
-			}
 
-			// 4. Wire git remote handler (all repos via Manager).
 			var gitHandler http.Handler
 			if cfg.Git.Serve {
 				gitHandler = web.GitRemoteHandler(m)
 			}
 
-			// 5. Create HTTP server and chi router.
 			webSrv := &web.Server{
 				Manager:           m,
 				GitHandler:        gitHandler,
@@ -132,6 +121,16 @@ func serveCmd() *cobra.Command {
 				LLMAdapter:        llmAdapter,
 				Embedder:          embedder,
 			}
+
+			// Wire MCP setup into repo lifecycle — called after Boot/Add/SwapStore.
+			m.SetOnRepoReady(webSrv.SetupMCP)
+
+			// 4. Boot all repositories.
+			if err := m.Boot(); err != nil {
+				return fmt.Errorf("boot: %w", err)
+			}
+
+			// 5. Create chi router.
 			router := webSrv.Handler()
 
 			// 6. Startup summary.

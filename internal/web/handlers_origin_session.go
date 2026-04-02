@@ -631,7 +631,7 @@ func beginSSE(w http.ResponseWriter) (func(v any), bool) {
 // handleCommit handles POST /api/v1/{repo}/origin/session/{sessionID}/commit
 // It finalizes the origin connection by swapping the session's remote store
 // into the repo instance, saving remote config, and starting sync loops.
-func handleCommit(rm *repos.Manager, sm *SessionManager, agentBranch string) http.HandlerFunc {
+func (s *Server) handleCommit(rm *repos.Manager, sm *SessionManager, agentBranch string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repo := chi.URLParam(r, "repo")
 		sessionID := chi.URLParam(r, "sessionID")
@@ -690,7 +690,7 @@ func handleCommit(rm *repos.Manager, sm *SessionManager, agentBranch string) htt
 		}
 
 		// Rebuild MCP handlers so they use the new database, not the closed one.
-		rm.SetupMCP(ri)
+		s.SetupMCP(ri)
 
 		// Snapshot after swap — protect against concurrent SwapStore.
 		var svc *store.Service
