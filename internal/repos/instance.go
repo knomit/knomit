@@ -4,6 +4,7 @@ import (
 	"context"
 	"sync"
 
+	"knomit/internal/fact"
 	"knomit/internal/store"
 )
 
@@ -23,6 +24,7 @@ type RepoInstance struct {
 	dbPath      string
 	agentBranch string
 	gsOverride  store.GitStore  // test-only: overrides svc as GS in StoreDeps
+	ontology    *fact.Ontology
 	svc         *store.Service
 	idx         store.SearchIndex
 	hub        *TaskHub
@@ -63,6 +65,9 @@ func (ri *RepoInstance) Name() string { return ri.name }
 // AgentBranch returns the agent branch this repo writes to.
 func (ri *RepoInstance) AgentBranch() string { return ri.agentBranch }
 
+// Ontology returns the ontology loaded from this repo's git store at open time.
+func (ri *RepoInstance) Ontology() *fact.Ontology { return ri.ontology }
+
 // TaskHub returns the hub for broadcasting task status events.
 func (ri *RepoInstance) TaskHub() *TaskHub { return ri.hub }
 
@@ -101,6 +106,7 @@ type TestInstanceConfig struct {
 	GS          store.GitStore
 	Svc         *store.Service
 	Idx         store.SearchIndex
+	Ontology    *fact.Ontology
 	Hub       *TaskHub
 	StartSync func(url string) error
 }
@@ -116,6 +122,7 @@ func NewTestInstanceWithDeps(cfg TestInstanceConfig) *RepoInstance {
 		gsOverride:  cfg.GS,
 		svc:         cfg.Svc,
 		idx:         cfg.Idx,
+		ontology:    cfg.Ontology,
 		hub:       cfg.Hub,
 		startSync: sc,
 		syncCancel:  func() {},
