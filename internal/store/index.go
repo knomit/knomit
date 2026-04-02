@@ -66,22 +66,6 @@ type FactWithBody struct {
 	CommitHash string `json:"commit_hash,omitempty"`
 }
 
-// ────────────────────────────────────────────────────────────────────────────
-// Interfaces
-// ────────────────────────────────────────────────────────────────────────────
-
-// Embedder computes vector embeddings for text. When attached to an Index via
-// SetEmbedder, Upsert will embed each fact's body and store it in facts_vec.
-type Embedder interface {
-	Embed(text string) ([]float32, error)
-}
-
-// BatchEmbedder extends Embedder with batch inference support.
-type BatchEmbedder interface {
-	Embedder
-	EmbedBatch(texts []string) ([][]float32, error)
-}
-
 // GitReader is the interface that Index.Sync requires from the git store.
 type GitReader interface {
 	// DiffFiles returns paths added, modified, and deleted between fromCommit and HEAD on branch.

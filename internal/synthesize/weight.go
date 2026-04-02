@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"knomit/internal/fact"
+	"knomit/internal/store"
 )
 
 // SourceWeight holds the confidence and sources count from a single source fact,
@@ -42,7 +43,7 @@ var DefaultWeightStrategy WeightStrategy = SumProductNorm{}
 // computeWeight reads each source path from git, parses it, and returns a
 // normalized evidence weight. Sources that fail to read or parse contribute
 // nothing. Must be called before source facts are deleted.
-func computeWeight(ctx context.Context, gs GitStore, agentBranch string, sourcePaths []string) float64 {
+func computeWeight(ctx context.Context, gs store.GitStore, agentBranch string, sourcePaths []string) float64 {
 	var srcs []SourceWeight
 	for _, p := range sourcePaths {
 		readResult, err := gs.ReadFact(ctx, agentBranch, p, nil)

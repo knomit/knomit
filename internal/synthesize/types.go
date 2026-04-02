@@ -8,6 +8,12 @@ import (
 	"strings"
 )
 
+// ProgressEvent carries progress information from the pipeline to the caller.
+type ProgressEvent struct {
+	Phase   string
+	Message string
+}
+
 // flexStrings unmarshals from either a JSON string ("x") or array (["x","y"]).
 // Small LLMs sometimes return a bare string where an array is expected.
 type flexStrings []string

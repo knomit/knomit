@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"knomit/internal/fact"
+	"knomit/internal/store"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 )
@@ -27,7 +28,7 @@ func retractTool() mcpgo.Tool {
 }
 
 // RetractHandler returns the handler function for knomit_retract.
-func RetractHandler(gs GitStore, ontologyRoot, agentBranch string) func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+func RetractHandler(gs store.GitStore, ontologyRoot, agentBranch string) func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 	return func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 		ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()

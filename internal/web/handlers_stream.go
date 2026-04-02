@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"knomit/internal/repos"
+	"knomit/internal/store"
 )
 
 // handleEvents handles GET /api/v1/{repo}/events — SSE endpoint for real-time updates.
@@ -30,7 +31,7 @@ func handleEvents() http.HandlerFunc {
 		events, snapshot := ri.TaskHub().Subscribe(r.Context())
 
 		// Snapshot the initial head commit — GS may be swapped concurrently.
-		var gs repos.GitStore
+		var gs store.GitStore
 		ri.WithRead(func(d repos.StoreDeps) { gs = d.GS })
 		head, _ := gs.HeadCommit(r.Context(), ri.AgentBranch())
 		fmt.Fprintf(w, "event: status\ndata: {\"head\":\"%s\"}\n\n", head)

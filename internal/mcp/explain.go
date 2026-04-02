@@ -78,7 +78,7 @@ func classifyRefs(refs []string) classifiedRefs {
 }
 
 // ExplainHandler returns the handler function for knomit_explain.
-func ExplainHandler(gs GitStore, sessionIdx ToolSessionIndex, ontologyRoot, agentBranch string) func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+func ExplainHandler(gs store.GitStore, sessionIdx store.ToolSessionIndex, ontologyRoot, agentBranch string) func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 	return func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 		ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
@@ -93,7 +93,7 @@ func ExplainHandler(gs GitStore, sessionIdx ToolSessionIndex, ontologyRoot, agen
 	}
 }
 
-func explainFirstCall(ctx context.Context, gs GitStore, sessionIdx ToolSessionIndex, ontologyRoot, agentBranch, file string) (*mcpgo.CallToolResult, error) {
+func explainFirstCall(ctx context.Context, gs store.GitStore, sessionIdx store.ToolSessionIndex, ontologyRoot, agentBranch, file string) (*mcpgo.CallToolResult, error) {
 	if file == "" {
 		return mcpgo.NewToolResultError("file is required"), nil
 	}
@@ -199,7 +199,7 @@ func explainFirstCall(ctx context.Context, gs GitStore, sessionIdx ToolSessionIn
 	return mcpgo.NewToolResultText(string(out)), nil
 }
 
-func explainResume(ctx context.Context, gs GitStore, sessionIdx ToolSessionIndex, agentBranch, cursor string) (*mcpgo.CallToolResult, error) {
+func explainResume(ctx context.Context, gs store.GitStore, sessionIdx store.ToolSessionIndex, agentBranch, cursor string) (*mcpgo.CallToolResult, error) {
 	session, err := sessionIdx.GetToolSession(ctx, cursor)
 	if err != nil {
 		return mcpgo.NewToolResultError(fmt.Sprintf("session lookup error: %v", err)), nil

@@ -36,8 +36,8 @@ type ReviewStats struct {
 
 // ApplyPruneDecisions applies prune decisions (retract/update) and merges to the git store.
 func ApplyPruneDecisions(ctx context.Context,
-	gs GitStore,
-	idx SearchIndex,
+	gs store.GitStore,
+	idx store.SearchIndex,
 	decisions []PruneDecision,
 	merges []MergeEntry,
 	recipeName string,
@@ -144,8 +144,8 @@ func ApplyPruneDecisions(ctx context.Context,
 // ApplyDistillDecisions applies distill results: writes synthesized facts and retracts subsumed ones.
 // Returns stats, the written facts (with normalized paths), and any error.
 func ApplyDistillDecisions(ctx context.Context,
-	gs GitStore,
-	idx SearchIndex,
+	gs store.GitStore,
+	idx store.SearchIndex,
 	synthesized []distillFact,
 	retract []string,
 	recipeName string,

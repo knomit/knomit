@@ -16,32 +16,19 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// PipelineIndex is the interface for pipeline session storage (subset of store.Index).
-type PipelineIndex interface {
-	GetPipelineWatermark(ctx context.Context, tool, branch string) (string, error)
-	SetPipelineWatermark(ctx context.Context, tool, branch, hash string) error
-	CreatePipelineSession(ctx context.Context, tool, branch string) (*store.PipelineSession, error)
-	GetPipelineSession(ctx context.Context, id string) (*store.PipelineSession, error)
-	CompletePipelineSession(ctx context.Context, id string) error
-	InsertPipelineWorkItem(ctx context.Context, item store.PipelineWorkItem) error
-	NextPipelineWorkItem(ctx context.Context, sessionID string) (*store.PipelineWorkItem, error)
-	SetPipelineWorkItemResponse(ctx context.Context, id int64, response string) error
-	PipelineWorkItemStats(ctx context.Context, sessionID string) (completed, remaining int, err error)
-}
-
 // Reviewer orchestrates multi-turn review sessions.
 type Reviewer struct {
-	gs             GitStore
-	idx            SearchIndex
-	reviewIdx      PipelineIndex
-	embedder       Embedder
+	gs             store.GitStore
+	idx            store.SearchIndex
+	reviewIdx      store.PipelineIndex
+	embedder       store.Embedder
 	onProgress     func(ProgressEvent)
 	reflectChecked map[string]bool
 	agentBranch    string
 }
 
 // NewReviewer creates a new review orchestrator.
-func NewReviewer(gs GitStore, idx SearchIndex, reviewIdx PipelineIndex, embedder Embedder, onProgress func(ProgressEvent), agentBranch string) *Reviewer {
+func NewReviewer(gs store.GitStore, idx store.SearchIndex, reviewIdx store.PipelineIndex, embedder store.Embedder, onProgress func(ProgressEvent), agentBranch string) *Reviewer {
 	if onProgress == nil {
 		onProgress = func(ProgressEvent) {}
 	}

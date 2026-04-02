@@ -19,7 +19,7 @@ import (
 // 4. Fallback to grouping by category path if Louvain fails or no embeddings
 func ScopedCluster(ctx context.Context,
 	seeds []factForLLM,
-	idx SearchIndex,
+	idx store.SearchIndex,
 	resolution float64,
 	onProgress func(ProgressEvent),
 	agentBranch string,

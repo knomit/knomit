@@ -78,13 +78,13 @@ func applyGreedyMerges(pairs []mergePair) []mergePair {
 func dedupCluster(
 	ctx context.Context,
 	cluster []factForLLM,
-	gs GitStore,
-	idx SearchIndex,
+	gs store.GitStore,
+	idx store.SearchIndex,
 	threshold float64,
 	recipeName string,
 	onProgress func(ProgressEvent),
 	agentBranch string,
-	embedders ...Embedder,
+	embedders ...store.Embedder,
 ) ([]factForLLM, error) {
 	if len(cluster) < 2 {
 		return cluster, nil
@@ -99,7 +99,7 @@ func dedupCluster(
 	// Batch-embed all cluster facts upfront if a BatchEmbedder is available.
 	var clusterVecs [][]float32
 	if len(embedders) > 0 {
-		if batcher, ok := embedders[0].(BatchEmbedder); ok {
+		if batcher, ok := embedders[0].(store.BatchEmbedder); ok {
 			texts := make([]string, len(cluster))
 			for i, f := range cluster {
 				texts[i] = f.Title + " " + f.Body

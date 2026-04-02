@@ -27,7 +27,7 @@ type repoBuilder struct {
 	cfg         config.Config
 	signer      ssh.Signer
 	agentBranch string
-	embedder    Embedder
+	embedder    store.BatchEmbedder
 	keyPath     string
 	ctx         context.Context
 
