@@ -697,7 +697,6 @@ func (s *Server) handleCommit(rm *repos.Manager, sm *SessionManager, agentBranch
 		ri.WithRead(func(d repos.StoreDeps) {
 			svc = d.Svc
 		})
-		hub := ri.TaskHub()
 
 		// Phase: configuring — save remote config and start sync.
 		sendEvent(map[string]string{"phase": "configuring"})
@@ -757,13 +756,6 @@ func (s *Server) handleCommit(rm *repos.Manager, sm *SessionManager, agentBranch
 		}
 
 		sendEvent(map[string]string{"phase": "done"})
-
-		// Broadcast status so the UI refreshes with the new HEAD.
-		if hub != nil {
-			if head, err := svc.HeadCommit(r.Context(), rebuildBranch); err == nil {
-				hub.BroadcastStatus(head)
-			}
-		}
 
 		// Update session state and clean up.
 		sess.mu.Lock()

@@ -1,6 +1,7 @@
 package repos
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -48,6 +49,7 @@ func (m *Manager) SwapStore(ri *RepoInstance, tempDBPath string) error {
 		if ri.onCommit != nil {
 			svc.SetOnCommit(ri.onCommit)
 		}
+		broadcastHead(svc, ri.agentBranch, ri.hub)
 		return nil
 	}
 
@@ -93,10 +95,20 @@ func (m *Manager) SwapStore(ri *RepoInstance, tempDBPath string) error {
 	if ri.onCommit != nil {
 		svc.SetOnCommit(ri.onCommit)
 	}
+	broadcastHead(svc, ri.agentBranch, ri.hub)
 
 	// Clean up backup — swap succeeded.
 	os.Remove(backupPath)
 	return nil
+}
+
+func broadcastHead(svc *store.Service, branch string, hub *TaskHub) {
+	if hub == nil {
+		return
+	}
+	if head, err := svc.HeadCommit(context.Background(), branch); err == nil {
+		hub.BroadcastStatus(head)
+	}
 }
 
 // copyFile copies src to dst, creating dst if needed.
