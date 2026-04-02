@@ -18,7 +18,10 @@ import (
 	"knomit/internal/config"
 	"knomit/internal/embeddings"
 	"knomit/internal/llm"
+	"knomit/internal/mcp"
 	"knomit/internal/repos"
+	"knomit/internal/store"
+	"knomit/internal/synthesize"
 	"knomit/internal/web"
 )
 
@@ -103,7 +106,10 @@ func serveCmd() *cobra.Command {
 				Signer:      signer,
 				AgentBranch: agentBranch,
 				Embedder:    embedder,
-				KeyPath:     keyPath,
+				MakeReviewer: func(gs store.GitStore, idx store.SearchIndex, pi store.PipelineIndex, emb store.Embedder, branch string) mcp.Reviewer {
+					return synthesize.NewReviewer(gs, idx, pi, emb, nil, branch)
+				},
+				KeyPath: keyPath,
 			})
 			if err := m.Boot(); err != nil {
 				return fmt.Errorf("boot: %w", err)

@@ -18,16 +18,16 @@ import (
 	"knomit/internal/fact"
 	"knomit/internal/mcp"
 	"knomit/internal/store"
-	"knomit/internal/synthesize"
 )
 
 // Deps holds all shared resources needed to open and manage repos.
 type Deps struct {
-	Cfg         config.Config
-	Signer      ssh.Signer
-	AgentBranch string
-	Embedder    store.BatchEmbedder // nil if unavailable
-	KeyPath     string
+	Cfg           config.Config
+	Signer        ssh.Signer
+	AgentBranch   string
+	Embedder      store.BatchEmbedder // nil if unavailable
+	MakeReviewer  func(store.GitStore, store.SearchIndex, store.PipelineIndex, store.Embedder, string) mcp.Reviewer
+	KeyPath       string
 }
 
 // Manager owns the full lifecycle of all registered repositories:
@@ -234,7 +234,10 @@ func (m *Manager) SetupMCP(ri *RepoInstance) {
 	ontologyRoot := m.deps.Cfg.OntologyRoot
 	embedder := m.deps.Embedder
 	agentBranch := m.deps.AgentBranch
-	reviewer := synthesize.NewReviewer(svc, idx, idx, embedder, nil, agentBranch)
+	var reviewer mcp.Reviewer
+	if m.deps.MakeReviewer != nil {
+		reviewer = m.deps.MakeReviewer(svc, idx, idx, embedder, agentBranch)
+	}
 	profiles := []string{"code", "chat", "generic"}
 	mcpHandlers := make(map[string]http.Handler, len(profiles))
 	for _, p := range profiles {
