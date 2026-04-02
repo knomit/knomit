@@ -23,14 +23,14 @@ type RepoInstance struct {
 	name        string
 	dbPath      string
 	agentBranch string
-	gsOverride  store.GitStore  // test-only: overrides svc as GS in StoreDeps
+	gsOverride  store.GitStore // test-only: overrides svc as GS in StoreDeps
 	ontology    *fact.Ontology
 	svc         *store.Service
 	idx         store.SearchIndex
-	hub        *TaskHub
-	syncCancel context.CancelFunc
-	syncWg     *sync.WaitGroup
-	startSync  func(url string) error
+	hub         *TaskHub
+	syncCancel  context.CancelFunc
+	syncWg      *sync.WaitGroup
+	startSync   func(url string) error
 	closeFn     func()
 }
 
@@ -107,8 +107,8 @@ type TestInstanceConfig struct {
 	Svc         *store.Service
 	Idx         store.SearchIndex
 	Ontology    *fact.Ontology
-	Hub       *TaskHub
-	StartSync func(url string) error
+	Hub         *TaskHub
+	StartSync   func(url string) error
 }
 
 // NewTestInstanceWithDeps creates a RepoInstance pre-populated with the given
@@ -123,8 +123,8 @@ func NewTestInstanceWithDeps(cfg TestInstanceConfig) *RepoInstance {
 		svc:         cfg.Svc,
 		idx:         cfg.Idx,
 		ontology:    cfg.Ontology,
-		hub:       cfg.Hub,
-		startSync: sc,
+		hub:         cfg.Hub,
+		startSync:   sc,
 		syncCancel:  func() {},
 		syncWg:      &sync.WaitGroup{},
 	}

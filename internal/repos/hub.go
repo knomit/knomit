@@ -13,9 +13,9 @@ import (
 // Status progresses through: "running" → "done" | "error".
 // Phase and Message carry provider-specific detail (e.g. "raptor-depth 2/3").
 type TaskEvent struct {
-	Op      string `json:"op"`      // operation name, e.g. "synth", "sync"
-	ID      string `json:"id"`      // unique task ID, e.g. "synth-3"
-	Status  string `json:"status"`  // "running", "done", or "error"
+	Op      string `json:"op"`     // operation name, e.g. "synth", "sync"
+	ID      string `json:"id"`     // unique task ID, e.g. "synth-3"
+	Status  string `json:"status"` // "running", "done", or "error"
 	Phase   string `json:"phase,omitempty"`
 	Message string `json:"message,omitempty"`
 	Repo    string `json:"repo,omitempty"` // repository name for log context

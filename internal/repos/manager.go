@@ -223,7 +223,6 @@ func (m *Manager) openOne(name, dbPath string, isDefault bool) (*RepoInstance, e
 	return b.build(), nil
 }
 
-
 // remoteAuthFromRecord builds a RemoteAuthConfig from a stored remote record,
 // falling back to the global config for fields not set in the record.
 func remoteAuthFromRecord(remote *store.Remote, fallback config.RemoteAuthConfig) config.RemoteAuthConfig {
