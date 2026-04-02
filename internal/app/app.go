@@ -21,13 +21,18 @@ import (
 
 // App holds the assembled application and its closeable resources.
 type App struct {
-	Manager     *repos.Manager
-	Server      *web.Server
-	Signer      ssh.Signer
-	AgentBranch string
+	manager     *repos.Manager
+	server      *web.Server
+	signer      ssh.Signer
+	agentBranch string
 
 	closers []func()
 }
+
+func (a *App) Manager() *repos.Manager { return a.manager }
+func (a *App) Server() *web.Server     { return a.server }
+func (a *App) Signer() ssh.Signer      { return a.signer }
+func (a *App) AgentBranch() string     { return a.agentBranch }
 
 // New creates and boots the application from the given config and context.
 func New(ctx context.Context, cfg config.Config) (*App, error) {
@@ -38,12 +43,12 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 	if keyPath == "" {
 		keyPath = filepath.Join(cfg.Home, "id_ed25519")
 	}
-	signer, keyFingerprint, err := EnsureKeyPair(keyPath)
+	signer, keyFingerprint, err := ensureKeyPair(keyPath)
 	if err != nil {
 		return nil, fmt.Errorf("ensure keypair: %w", err)
 	}
-	a.Signer = signer
-	a.AgentBranch = AgentBranch(keyFingerprint)
+	a.signer = signer
+	a.agentBranch = agentBranch(keyFingerprint)
 
 	// Embedder.
 	var embedder *embeddings.Embedder
@@ -90,10 +95,10 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 	}
 
 	// Repo manager.
-	a.Manager = repos.New(ctx, repos.Deps{
+	a.manager = repos.New(ctx, repos.Deps{
 		Cfg:         cfg,
 		Signer:      signer,
-		AgentBranch: a.AgentBranch,
+		AgentBranch: a.agentBranch,
 		Embedder:    embedder,
 		KeyPath:     keyPath,
 	})
@@ -101,25 +106,25 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 	// Web server.
 	var gitHandler http.Handler
 	if cfg.Git.Serve {
-		gitHandler = web.GitRemoteHandler(a.Manager)
+		gitHandler = web.GitRemoteHandler(a.manager)
 	}
 
-	a.Server = &web.Server{
-		Manager:           a.Manager,
+	a.server = &web.Server{
+		Manager:           a.manager,
 		GitHandler:        gitHandler,
 		EmbeddingsEnabled: embedder != nil,
 		OntologyRoot:      cfg.OntologyRoot,
-		AgentBranch:       a.AgentBranch,
+		AgentBranch:       a.agentBranch,
 		SessionManager:    web.NewSessionManager(),
 		LLMAdapter:        llmAdapter,
 		Embedder:          embedder,
 	}
 
 	// Wire MCP setup into repo lifecycle.
-	a.Manager.SetOnRepoReady(a.Server.SetupMCP)
+	a.manager.SetOnRepoReady(a.server.SetupMCP)
 
 	// Boot repos.
-	if err := a.Manager.Boot(); err != nil {
+	if err := a.manager.Boot(); err != nil {
 		a.Close()
 		return nil, fmt.Errorf("boot: %w", err)
 	}
@@ -129,12 +134,12 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 
 // Handler returns the wired HTTP handler.
 func (a *App) Handler() http.Handler {
-	return a.Server.Handler()
+	return a.server.Handler()
 }
 
 // Close shuts down repos and releases all resources.
 func (a *App) Close() {
-	a.Manager.Shutdown()
+	a.manager.Shutdown()
 	for i := len(a.closers) - 1; i >= 0; i-- {
 		a.closers[i]()
 	}

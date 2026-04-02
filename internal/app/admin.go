@@ -26,11 +26,11 @@ func InitRepo(cfg config.Config, repoName, ontologyPath string) error {
 	if keyPath == "" {
 		keyPath = filepath.Join(cfg.Home, "id_ed25519")
 	}
-	_, keyFingerprint, err := EnsureKeyPair(keyPath)
+	_, keyFingerprint, err := ensureKeyPair(keyPath)
 	if err != nil {
 		return fmt.Errorf("ensure keypair: %w", err)
 	}
-	agentBranch := AgentBranch(keyFingerprint)
+	agentBranch := agentBranch(keyFingerprint)
 
 	ontology := fact.DefaultOntology()
 	if ontologyPath != "" {
@@ -70,11 +70,11 @@ func RebuildIndex(ctx context.Context, cfg config.Config, repoName string) error
 	if keyPath == "" {
 		keyPath = filepath.Join(cfg.Home, "id_ed25519")
 	}
-	_, keyFingerprint, err := EnsureKeyPair(keyPath)
+	_, keyFingerprint, err := ensureKeyPair(keyPath)
 	if err != nil {
 		return fmt.Errorf("ensure keypair: %w", err)
 	}
-	agentBranch := AgentBranch(keyFingerprint)
+	agentBranch := agentBranch(keyFingerprint)
 
 	dbPath := filepath.Join(cfg.Home, "repos", repoName+".db")
 	svc, err := store.Open(dbPath)

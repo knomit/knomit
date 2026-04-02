@@ -37,7 +37,7 @@ func serveCmd() *cobra.Command {
 			router := a.Handler()
 
 			// Startup summary.
-			pubKey := strings.TrimSpace(string(ssh.MarshalAuthorizedKey(a.Signer.PublicKey())))
+			pubKey := strings.TrimSpace(string(ssh.MarshalAuthorizedKey(a.Signer().PublicKey())))
 			listenAddr := cfg.Host + ":" + cfg.Port
 			httpAddr := "http://" + listenAddr
 
@@ -52,8 +52,8 @@ func serveCmd() *cobra.Command {
 
 			startupLog.
 				Str("public_key", pubKey).
-				Str("branch", a.AgentBranch).
-				Strs("repos", a.Manager.Names()).
+				Str("branch", a.AgentBranch()).
+				Strs("repos", a.Manager().Names()).
 				Msg("knomit ready")
 
 			// HTTP server.

@@ -15,10 +15,10 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
-// EnsureKeyPair loads or generates an Ed25519 keypair at the given path.
+// ensureKeyPair loads or generates an Ed25519 keypair at the given path.
 // If the key does not exist, it is generated and the public key is logged to stderr.
 // Returns the signer and the key's short fingerprint (first 8 hex chars of SHA256 of public key).
-func EnsureKeyPair(path string) (ssh.Signer, string, error) {
+func ensureKeyPair(path string) (ssh.Signer, string, error) {
 	data, err := os.ReadFile(path)
 	if err == nil {
 		signer, err := ssh.ParsePrivateKey(data)
@@ -91,16 +91,16 @@ func fingerprint(pub ssh.PublicKey) string {
 	return hex.EncodeToString(h[:])[:8]
 }
 
-// AgentBranch returns the agent branch name for this machine and key fingerprint.
+// agentBranch returns the agent branch name for this machine and key fingerprint.
 // Format: agent/<sanitized-hostname>-<fingerprint8>
-func AgentBranch(fp string) string {
+func agentBranch(fp string) string {
 	hostname, _ := os.Hostname()
-	return "agent/" + SanitizeHostname(hostname) + "-" + fp
+	return "agent/" + sanitizeHostname(hostname) + "-" + fp
 }
 
-// SanitizeHostname replaces chars invalid in git ref names with "-".
+// sanitizeHostname replaces chars invalid in git ref names with "-".
 // Falls back to "local" if hostname is empty.
-func SanitizeHostname(hostname string) string {
+func sanitizeHostname(hostname string) string {
 	if hostname == "" {
 		return "local"
 	}
