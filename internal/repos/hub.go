@@ -178,8 +178,8 @@ func (h *TaskHub) Subscribe(ctx context.Context) (goob.Events, []TaskEvent) {
 	return events, snapshot
 }
 
-// BroadcastStatus publishes a HEAD change to all SSE subscribers.
-func (h *TaskHub) BroadcastStatus(head string) {
+// broadcastStatus publishes a HEAD change to all SSE subscribers.
+func (h *TaskHub) broadcastStatus(head string) {
 	h.ob.Publish(StatusEvent{Head: head})
 }
 
@@ -192,8 +192,8 @@ type SyncEvent struct {
 	Error       string `json:"error,omitempty"`
 }
 
-// BroadcastSyncOK publishes a successful sync event.
-func (h *TaskHub) BroadcastSyncOK(remote, mergeCommit string, fastForward bool) {
+// broadcastSyncOK publishes a successful sync event.
+func (h *TaskHub) broadcastSyncOK(remote, mergeCommit string, fastForward bool) {
 	h.ob.Publish(SyncEvent{
 		Remote:      remote,
 		Status:      "sync_ok",
@@ -203,7 +203,7 @@ func (h *TaskHub) BroadcastSyncOK(remote, mergeCommit string, fastForward bool) 
 }
 
 // BroadcastSyncError publishes a sync failure event.
-func (h *TaskHub) BroadcastSyncError(remote, errMsg string) {
+func (h *TaskHub) broadcastSyncError(remote, errMsg string) {
 	h.ob.Publish(SyncEvent{
 		Remote: remote,
 		Status: "sync_error",
@@ -218,8 +218,8 @@ type PushEvent struct {
 	Error  string `json:"error,omitempty"`
 }
 
-// BroadcastPushOK publishes a successful push event.
-func (h *TaskHub) BroadcastPushOK(remote string) {
+// broadcastPushOK publishes a successful push event.
+func (h *TaskHub) broadcastPushOK(remote string) {
 	h.ob.Publish(PushEvent{
 		Remote: remote,
 		Status: "push_ok",
@@ -227,7 +227,7 @@ func (h *TaskHub) BroadcastPushOK(remote string) {
 }
 
 // BroadcastPushError publishes a push failure event.
-func (h *TaskHub) BroadcastPushError(remote, errMsg string) {
+func (h *TaskHub) broadcastPushError(remote, errMsg string) {
 	h.ob.Publish(PushEvent{
 		Remote: remote,
 		Status: "push_error",
