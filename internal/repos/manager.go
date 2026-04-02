@@ -215,6 +215,7 @@ func (m *Manager) openOne(name, dbPath string, isDefault bool) (*RepoInstance, e
 		b.close()
 		return nil, err
 	}
+	b.loadOntology()
 	b.ensureBranch()
 	b.setupIndex()
 	b.seedWatermarks()

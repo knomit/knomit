@@ -32,8 +32,9 @@ type repoBuilder struct {
 	ctx         context.Context
 
 	// accumulated state
-	svc *store.Service
-	idx *store.Index
+	svc      *store.Service
+	idx      *store.Index
+	ontology *fact.Ontology
 }
 
 // openStore opens the SQLite-backed store and configures credential encryption.
@@ -67,6 +68,28 @@ func (b *repoBuilder) openGit() error {
 	}
 	b.svc.SetSigner(b.signer)
 	return nil
+}
+
+// loadOntology reads domains/ontology.yaml from the repo's agent branch.
+// Falls back to the default ontology if the file is absent or unparseable.
+func (b *repoBuilder) loadOntology() {
+	if b.svc == nil {
+		b.ontology = fact.DefaultOntology()
+		return
+	}
+	result, err := b.svc.ReadFact(context.Background(), b.agentBranch, "domains/ontology.yaml", nil)
+	if err != nil || result.Content == "" {
+		log.Warn().Str("repo", b.name).Msg("domains/ontology.yaml not found, using default ontology")
+		b.ontology = fact.DefaultOntology()
+		return
+	}
+	ont, err := fact.ParseOntology([]byte(result.Content))
+	if err != nil {
+		log.Warn().Err(err).Str("repo", b.name).Msg("failed to parse ontology, using default")
+		b.ontology = fact.DefaultOntology()
+		return
+	}
+	b.ontology = ont
 }
 
 // initDefaultGit creates the git store for the default ("knomit") repo on
@@ -152,6 +175,7 @@ func (b *repoBuilder) build() *RepoInstance {
 		name:        b.name,
 		dbPath:      b.dbPath,
 		agentBranch: b.agentBranch,
+		ontology:    b.ontology,
 		svc:         b.svc,
 		idx:         b.idx,
 		hub:         hub,
