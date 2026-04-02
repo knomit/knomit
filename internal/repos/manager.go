@@ -149,7 +149,7 @@ func (m *Manager) Boot() error {
 }
 
 // Add opens a single repository and registers it under name.
-// Uses the ontology already loaded by Boot (or nil if Boot not yet called).
+// Each repo loads its own ontology from its git store during initialization.
 func (m *Manager) Add(name, dbPath string) error {
 	ri, err := m.openOne(name, dbPath, false)
 	if err != nil {
