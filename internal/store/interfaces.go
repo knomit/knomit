@@ -38,8 +38,8 @@ type SearchIndex interface {
 	ClusterFacts(ctx context.Context, branch string, resolution float64, minCommunitySize int) (ClusterResult, error)
 	RecentFacts(ctx context.Context, branch, pathPrefix, query string, limit, offset int, includeTypes, excludeTypes, domain, entities, epOps []string) ([]RecentFactEntry, int, error)
 	SetEmbedder(e Embedder)
-	Sync(ctx context.Context, git gitReader, branch string) error
-	Rebuild(ctx context.Context, git gitReader, branch string, progress RebuildProgress) error
+	Sync(ctx context.Context, branch string) error
+	Rebuild(ctx context.Context, branch string, progress RebuildProgress) error
 }
 
 // ToolSessionIndex is the interface for tool session persistence. Implemented by *Index.
