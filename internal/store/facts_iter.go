@@ -1,9 +1,6 @@
 package store
 
-import (
-	"context"
-	"database/sql"
-)
+import "database/sql"
 
 // FactRow holds the minimal fields needed to replay a fact into another store.
 type FactRow struct {
@@ -19,28 +16,6 @@ type FactRow struct {
 type FactsIter struct {
 	rows *sql.Rows
 	seen map[string]struct{}
-}
-
-// FactsIter opens a cursor over facts for the given branch ordered by
-// fact_id DESC. The caller must call Close() when done to release the
-// underlying database cursor.
-func (fi *factIndex) FactsIter(ctx context.Context, branch string) (*FactsIter, error) {
-	branchID, err := fi.rh.branchID(ctx, branch)
-	if err != nil {
-		return nil, err
-	}
-	rows, err := conn(ctx, fi.rh.db).QueryContext(ctx,
-		`SELECT bf.path, f.blob_hash, bf.commit_hash
-		 FROM branch_facts bf
-		 JOIN facts f ON f.id = bf.fact_id
-		 WHERE bf.branch_id = ?
-		 ORDER BY bf.fact_id DESC`,
-		branchID,
-	)
-	if err != nil {
-		return nil, err
-	}
-	return &FactsIter{rows: rows, seen: make(map[string]struct{})}, nil
 }
 
 // Next returns the next unique fact, or nil when iteration is complete.
