@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"time"
 
+	"knomit/internal/fact"
 	factpkg "knomit/internal/fact"
+	"knomit/internal/store"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 )
@@ -42,18 +44,18 @@ func updateTool() mcpgo.Tool {
 
 // updateInput represents the updates object in the request.
 type updateInput struct {
-	Type       *string   `json:"type"`
-	Confidence *float64  `json:"confidence"`
-	Sources    *int      `json:"sources"`
-	Body       *string   `json:"body"`
-	Title      *string   `json:"title"`
-	Refs       []string  `json:"refs"`
-	Domain     []string  `json:"domain"`
-	Entities   []string  `json:"entities"`
+	Type       *string  `json:"type"`
+	Confidence *float64 `json:"confidence"`
+	Sources    *int     `json:"sources"`
+	Body       *string  `json:"body"`
+	Title      *string  `json:"title"`
+	Refs       []string `json:"refs"`
+	Domain     []string `json:"domain"`
+	Entities   []string `json:"entities"`
 }
 
 // UpdateHandler returns the handler function for knomit_update.
-func UpdateHandler(gs GitStore, ontologyRoot, agentBranch string) func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+func UpdateHandler(gs store.FactIndex, ontologyRoot, agentBranch string) func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 	return func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 		ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
@@ -84,7 +86,7 @@ func UpdateHandler(gs GitStore, ontologyRoot, agentBranch string) func(context.C
 			return mcpgo.NewToolResultError(fmt.Sprintf("read file error: %v", err)), nil
 		}
 		content := readResult.Content
-		fact, err := ParseFact(file, content)
+		fact, err := fact.ParseFact(file, content)
 		if err != nil {
 			return mcpgo.NewToolResultError(fmt.Sprintf("parse fact error: %v", err)), nil
 		}
@@ -128,7 +130,7 @@ func UpdateHandler(gs GitStore, ontologyRoot, agentBranch string) func(context.C
 
 		// 7. Write updated fact.
 		commitMsg := fmt.Sprintf("update: %s", fact.Title)
-		writeRes, err := gs.WriteFact(ctx, agentBranch, file, SerializeFact(fact), commitMsg, "update")
+		writeRes, err := gs.WriteFact(ctx, agentBranch, file, factpkg.SerializeFact(fact), commitMsg, "update")
 		if err != nil {
 			return mcpgo.NewToolResultError(fmt.Sprintf("write error: %v", err)), nil
 		}

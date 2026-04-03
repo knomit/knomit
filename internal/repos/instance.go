@@ -2,68 +2,11 @@ package repos
 
 import (
 	"context"
-	"net/http"
 	"sync"
 
-	"knomit/internal/llm"
+	"knomit/internal/fact"
 	"knomit/internal/store"
-	"knomit/internal/synthesize"
 )
-
-// Embedder is the interface required of the embedding model across all repos
-// subsystems. Satisfied by *embeddings.Embedder at runtime; injectable in tests.
-type Embedder interface {
-	Embed(text string) ([]float32, error)
-	EmbedBatch(texts []string) ([][]float32, error)
-}
-
-// GitStore is the narrow git interface needed by read-only query handlers
-// and the sync task handler. Satisfied by *store.Service at runtime.
-type GitStore interface {
-	ListDir(ctx context.Context, branch, path string) ([]store.DirEntry, error)
-	ReadFact(ctx context.Context, branch, path string, opts *store.ReadFactOpts) (store.ReadFactResult, error)
-	WriteFact(ctx context.Context, branch, path, content, message, operation string) (store.WriteFactResult, error)
-	DeleteFact(ctx context.Context, branch, path, message string) (string, error)
-	Log(ctx context.Context, branch, path string) ([]store.LogEntry, error)
-	LogPaginated(ctx context.Context, branch, path string, limit int, after, from, before string) ([]store.LogEntryWithTags, string, string, error)
-	CommitDetail(ctx context.Context, commitHash string) (*store.CommitDetailResult, error)
-	Activity(ctx context.Context, branch, path string) (store.ActivityResult, error)
-	HeadCommit(ctx context.Context, branch string) (string, error)
-	ListAll(ctx context.Context, branch string) ([]string, error)
-}
-
-// SearchIndex is the narrow search/index interface needed by query handlers.
-// Accepts *store.Index at runtime.
-type SearchIndex interface {
-	Search(ctx context.Context, branch string, q store.SearchQuery) ([]store.SearchResult, error)
-	GetByPath(ctx context.Context, branch, path string) (*store.FactWithBody, error)
-	GetLastCommit(ctx context.Context, branch string) (string, error)
-	Stats(ctx context.Context, branch, pathPrefix string) (store.StatsResult, error)
-	Completions(ctx context.Context, branch, category, prefix string, limit int) ([]string, error)
-	ExplainFact(ctx context.Context, branch, path string) (store.ExplainResult, error)
-}
-
-// SynthDeps bundles the dependencies needed by the synthesize handler.
-// May be nil if no LLM is configured — the synth handler returns 503
-// in that case rather than panicking.
-type SynthDeps struct {
-	GS       synthesize.GitStore
-	Idx      synthesize.SearchIndex
-	Embedder Embedder
-	Adapter  llm.LLMAdapter
-	Reviewer *synthesize.Reviewer
-}
-
-// StoreDeps bundles the lock-protected fields for read access via WithRead.
-// All fields may be nil if the repo is not yet fully initialised.
-// GS is populated from Svc in production; tests may set GS to a mock GitStore.
-type StoreDeps struct {
-	GS    GitStore
-	Svc   *store.Service
-	Idx   SearchIndex
-	MCP   map[string]http.Handler
-	Synth *SynthDeps
-}
 
 // RepoInstance holds all runtime state for a single repository.
 type RepoInstance struct {
@@ -71,39 +14,26 @@ type RepoInstance struct {
 	name        string
 	dbPath      string
 	agentBranch string
-	gsOverride  GitStore       // test-only: overrides svc as GS in StoreDeps
+	ontology    *fact.Ontology
+	onCommit    func(string, string) // re-applied to new svc after SwapStore
 	svc         *store.Service
-	idx         SearchIndex
 	hub         *TaskHub
 	syncCancel  context.CancelFunc
 	syncWg      *sync.WaitGroup
-	mcpHandlers map[string]http.Handler
-	synthDeps   *SynthDeps
 	startSync   func(url string) error
 	closeFn     func()
 }
 
-// WithRead calls fn with all lock-protected fields under a read lock.
-// This is the only way external code may access gs, svc, idx, mcpHandlers,
-// and synthDeps.
-func (ri *RepoInstance) WithRead(fn func(StoreDeps)) {
+// WithRead calls fn with the store service under a read lock.
+// This is the only way external code may access svc.
+func (ri *RepoInstance) WithRead(fn func(*store.Service)) {
 	ri.mu.RLock()
 	defer ri.mu.RUnlock()
-	gs := GitStore(ri.svc)
-	if ri.gsOverride != nil {
-		gs = ri.gsOverride
-	}
-	fn(StoreDeps{
-		GS:    gs,
-		Svc:   ri.svc,
-		Idx:   ri.idx,
-		MCP:   ri.mcpHandlers,
-		Synth: ri.synthDeps,
-	})
+	fn(ri.svc)
 }
 
 // withWrite calls fn under a write lock. Only used within the repos package
-// (SwapStore, SetupMCP, StartSync closure).
+// (SwapStore, StartSync closure).
 func (ri *RepoInstance) withWrite(fn func()) {
 	ri.mu.Lock()
 	defer ri.mu.Unlock()
@@ -115,6 +45,9 @@ func (ri *RepoInstance) Name() string { return ri.name }
 
 // AgentBranch returns the agent branch this repo writes to.
 func (ri *RepoInstance) AgentBranch() string { return ri.agentBranch }
+
+// Ontology returns the ontology loaded from this repo's git store at open time.
+func (ri *RepoInstance) Ontology() *fact.Ontology { return ri.ontology }
 
 // TaskHub returns the hub for broadcasting task status events.
 func (ri *RepoInstance) TaskHub() *TaskHub { return ri.hub }
@@ -151,12 +84,9 @@ func NewTestInstance(name string) *RepoInstance {
 type TestInstanceConfig struct {
 	Name        string
 	AgentBranch string
-	GS          GitStore
 	Svc         *store.Service
-	Idx         SearchIndex
+	Ontology    *fact.Ontology
 	Hub         *TaskHub
-	MCP         map[string]http.Handler
-	Synth       *SynthDeps
 	StartSync   func(url string) error
 }
 
@@ -164,17 +94,13 @@ type TestInstanceConfig struct {
 // dependencies. Intended for handler/integration tests in sibling packages.
 // Production code must use Manager.openOne instead.
 func NewTestInstanceWithDeps(cfg TestInstanceConfig) *RepoInstance {
-	sc := cfg.StartSync
 	return &RepoInstance{
 		name:        cfg.Name,
 		agentBranch: cfg.AgentBranch,
-		gsOverride:  cfg.GS,
 		svc:         cfg.Svc,
-		idx:         cfg.Idx,
+		ontology:    cfg.Ontology,
 		hub:         cfg.Hub,
-		mcpHandlers: cfg.MCP,
-		synthDeps:   cfg.Synth,
-		startSync:   sc,
+		startSync:   cfg.StartSync,
 		syncCancel:  func() {},
 		syncWg:      &sync.WaitGroup{},
 	}

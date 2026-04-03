@@ -8,39 +8,27 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/rs/zerolog/log"
 	"knomit/internal/fact"
 	"knomit/internal/llm"
 	"knomit/internal/mcp"
 	"knomit/internal/store"
-)
 
-// PipelineIndex is the interface for pipeline session storage (subset of store.Index).
-type PipelineIndex interface {
-	GetPipelineWatermark(ctx context.Context, tool, branch string) (string, error)
-	SetPipelineWatermark(ctx context.Context, tool, branch, hash string) error
-	CreatePipelineSession(ctx context.Context, tool, branch string) (*store.PipelineSession, error)
-	GetPipelineSession(ctx context.Context, id string) (*store.PipelineSession, error)
-	CompletePipelineSession(ctx context.Context, id string) error
-	InsertPipelineWorkItem(ctx context.Context, item store.PipelineWorkItem) error
-	NextPipelineWorkItem(ctx context.Context, sessionID string) (*store.PipelineWorkItem, error)
-	SetPipelineWorkItemResponse(ctx context.Context, id int64, response string) error
-	PipelineWorkItemStats(ctx context.Context, sessionID string) (completed, remaining int, err error)
-}
+	"github.com/rs/zerolog/log"
+)
 
 // Reviewer orchestrates multi-turn review sessions.
 type Reviewer struct {
-	gs             GitStore
-	idx            SearchIndex
-	reviewIdx      PipelineIndex
-	embedder       Embedder
+	gs             store.FactIndex
+	idx            store.SearchIndex
+	reviewIdx      store.PipelineIndex
+	embedder       store.Embedder
 	onProgress     func(ProgressEvent)
 	reflectChecked map[string]bool
 	agentBranch    string
 }
 
 // NewReviewer creates a new review orchestrator.
-func NewReviewer(gs GitStore, idx SearchIndex, reviewIdx PipelineIndex, embedder Embedder, onProgress func(ProgressEvent), agentBranch string) *Reviewer {
+func NewReviewer(gs store.FactIndex, idx store.SearchIndex, reviewIdx store.PipelineIndex, embedder store.Embedder, onProgress func(ProgressEvent), agentBranch string) *Reviewer {
 	if onProgress == nil {
 		onProgress = func(ProgressEvent) {}
 	}
@@ -335,7 +323,7 @@ func (r *Reviewer) dirtyFacts(ctx context.Context, branch string) ([]factForLLM,
 		if err != nil {
 			continue // deleted or unreadable
 		}
-		fact, err := mcp.ParseFact(path, result.Content)
+		fact, err := fact.ParseFact(path, result.Content)
 		if err != nil {
 			continue // not a valid fact
 		}
@@ -503,7 +491,7 @@ func (r *Reviewer) findHypothesisTransitions(ctx context.Context, sessionID stri
 		if err != nil {
 			continue
 		}
-		f, err := mcp.ParseFact(path, readResult.Content)
+		f, err := fact.ParseFact(path, readResult.Content)
 		if err != nil {
 			continue
 		}
@@ -520,7 +508,7 @@ func (r *Reviewer) findHypothesisTransitions(ctx context.Context, sessionID stri
 		if err != nil {
 			continue
 		}
-		oldFact, err := mcp.ParseFact(path, oldResult.Content)
+		oldFact, err := fact.ParseFact(path, oldResult.Content)
 		if err != nil || oldFact.Type != fact.Hypothesis {
 			continue
 		}
@@ -528,7 +516,7 @@ func (r *Reviewer) findHypothesisTransitions(ctx context.Context, sessionID stri
 		if err != nil {
 			continue
 		}
-		newFact, err := mcp.ParseFact(path, newResult.Content)
+		newFact, err := fact.ParseFact(path, newResult.Content)
 		if err != nil {
 			continue
 		}

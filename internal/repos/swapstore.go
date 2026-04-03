@@ -1,6 +1,7 @@
 package repos
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -37,14 +38,16 @@ func (m *Manager) SwapStore(ri *RepoInstance, tempDBPath string) error {
 			log.Warn().Err(err).Msg("SwapStore: cannot open temp git, keeping existing service")
 			return nil
 		}
-		idx := svc.Index()
 		if m.deps.Embedder != nil {
-			idx.SetEmbedder(m.deps.Embedder)
+			svc.Search().SetEmbedder(m.deps.Embedder)
 		}
 		ri.withWrite(func() {
 			ri.svc = svc
-			ri.idx = idx
 		})
+		if ri.onCommit != nil {
+			svc.SetOnCommit(ri.onCommit)
+		}
+		broadcastHead(svc, ri.agentBranch, ri.hub)
 		return nil
 	}
 
@@ -79,18 +82,29 @@ func (m *Manager) SwapStore(ri *RepoInstance, tempDBPath string) error {
 		return fmt.Errorf("SwapStore: reopen git: %w", err)
 	}
 
-	idx := svc.Index()
 	if m.deps.Embedder != nil {
-		idx.SetEmbedder(m.deps.Embedder)
+		svc.Search().SetEmbedder(m.deps.Embedder)
 	}
 	ri.withWrite(func() {
 		ri.svc = svc
-		ri.idx = idx
 	})
+	if ri.onCommit != nil {
+		svc.SetOnCommit(ri.onCommit)
+	}
+	broadcastHead(svc, ri.agentBranch, ri.hub)
 
 	// Clean up backup — swap succeeded.
 	os.Remove(backupPath)
 	return nil
+}
+
+func broadcastHead(svc *store.Service, branch string, hub *TaskHub) {
+	if hub == nil {
+		return
+	}
+	if head, err := svc.Facts().HeadCommit(context.Background(), branch); err == nil {
+		hub.broadcastStatus(head)
+	}
 }
 
 // copyFile copies src to dst, creating dst if needed.

@@ -24,7 +24,7 @@ import (
 //   - POST /git-upload-pack                   — serve a fetch
 func (s *Service) Handler() http.Handler {
 	s.handlerOnce.Do(func() {
-		s.handler = newGitHTTPHandler(s.gits)
+		s.handler = newGitHTTPHandler(s.rh.gits)
 	})
 	return s.handler
 }

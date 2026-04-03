@@ -4,6 +4,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"io"
 	"strings"
@@ -13,6 +14,49 @@ import (
 	"github.com/rs/zerolog/log"
 	"gopkg.in/yaml.v3"
 )
+
+// FactRow holds the minimal fields needed to replay a fact into another store.
+type FactRow struct {
+	Path       string
+	BlobHash   string
+	CommitHash string
+}
+
+// FactsIter is a cursor-based iterator over the branch_facts table. It yields
+// facts one at a time, newest-first (by fact_id DESC), deduplicating by path
+// so that only the latest version of each fact is returned. It never loads all
+// facts into memory.
+type FactsIter struct {
+	rows *sql.Rows
+	seen map[string]struct{}
+}
+
+// Next returns the next unique fact, or nil when iteration is complete.
+// It skips paths that have already been yielded (dedup).
+func (it *FactsIter) Next() (*FactRow, error) {
+	for it.rows.Next() {
+		var row FactRow
+		if err := it.rows.Scan(&row.Path, &row.BlobHash, &row.CommitHash); err != nil {
+			return nil, err
+		}
+		if _, dup := it.seen[row.Path]; dup {
+			continue
+		}
+		it.seen[row.Path] = struct{}{}
+		return &row, nil
+	}
+	return nil, it.rows.Err()
+}
+
+// Close releases the underlying database cursor. It is safe to call multiple times.
+func (it *FactsIter) Close() error {
+	if it.rows != nil {
+		err := it.rows.Close()
+		it.rows = nil
+		return err
+	}
+	return nil
+}
 
 // Replay copies local facts into a target service's agent branch.
 // It iterates facts from the iterator (newest-first, deduped by path), reads their
@@ -31,24 +75,24 @@ func Replay(ctx context.Context, local *Service, localBranch string, iter FactIt
 
 	// 1. Set up agent branch in target store.
 	agentRefName := plumbing.NewBranchReferenceName(cfg.AgentBranch)
-	existingAgentRef, err := target.gits.Reference(agentRefName)
+	existingAgentRef, err := target.rh.gits.Reference(agentRefName)
 	if cfg.UseExistingBranch && err == nil && existingAgentRef != nil {
 		// Agent branch exists on remote and caller wants to reuse it — switch to it.
-		if err := target.gits.SetReference(plumbing.NewSymbolicReference(plumbing.HEAD, agentRefName)); err != nil {
+		if err := target.rh.gits.SetReference(plumbing.NewSymbolicReference(plumbing.HEAD, agentRefName)); err != nil {
 			return nil, fmt.Errorf("Replay: set HEAD to existing agent branch: %w", err)
 		}
 		log.Debug().Str("agent_branch", cfg.AgentBranch).Msg("replay: using existing remote agent branch as base")
 	} else {
 		// No existing agent branch — create from the selected main branch.
 		defaultRefName := plumbing.NewBranchReferenceName(cfg.DefaultBranch)
-		defaultRef, err := target.gits.Reference(defaultRefName)
+		defaultRef, err := target.rh.gits.Reference(defaultRefName)
 		if err != nil {
 			return nil, fmt.Errorf("Replay: resolve default branch %q: %w", cfg.DefaultBranch, err)
 		}
-		if err := target.gits.SetReference(plumbing.NewHashReference(agentRefName, defaultRef.Hash())); err != nil {
+		if err := target.rh.gits.SetReference(plumbing.NewHashReference(agentRefName, defaultRef.Hash())); err != nil {
 			return nil, fmt.Errorf("Replay: create agent branch: %w", err)
 		}
-		if err := target.gits.SetReference(plumbing.NewSymbolicReference(plumbing.HEAD, agentRefName)); err != nil {
+		if err := target.rh.gits.SetReference(plumbing.NewSymbolicReference(plumbing.HEAD, agentRefName)); err != nil {
 			return nil, fmt.Errorf("Replay: set HEAD: %w", err)
 		}
 		log.Debug().Str("agent_branch", cfg.AgentBranch).Str("from", cfg.DefaultBranch).Msg("replay: created agent branch from main")
@@ -73,7 +117,7 @@ func Replay(ctx context.Context, local *Service, localBranch string, iter FactIt
 	}
 
 	// 3. Count remote facts for stats.
-	remotePaths, err := target.ListAll(ctx, cfg.AgentBranch)
+	remotePaths, err := target.rh.ListAll(ctx, cfg.AgentBranch)
 	if err != nil {
 		return nil, fmt.Errorf("Replay: list remote facts: %w", err)
 	}
@@ -127,7 +171,7 @@ func Replay(ctx context.Context, local *Service, localBranch string, iter FactIt
 
 		// Write fact to target store and commit.
 		msg := fmt.Sprintf("replay: %s", f.path)
-		if _, err := target.WriteFact(ctx, cfg.AgentBranch, f.path, resolvedContent, msg, "replay"); err != nil {
+		if _, err := target.fi.WriteFact(ctx, cfg.AgentBranch, f.path, resolvedContent, msg, "replay"); err != nil {
 			return nil, fmt.Errorf("Replay: write %s to target: %w", f.path, err)
 		}
 		result.FromLocal++
@@ -156,7 +200,7 @@ func Replay(ctx context.Context, local *Service, localBranch string, iter FactIt
 // readBlobByHash reads the content of a blob by its hash from the service's git repo.
 func readBlobByHash(s *Service, hashStr string) (string, error) {
 	h := plumbing.NewHash(hashStr)
-	blob, err := s.repo.BlobObject(h)
+	blob, err := s.rh.repo.BlobObject(h)
 	if err != nil {
 		return "", fmt.Errorf("readBlobByHash: %w", err)
 	}
@@ -241,12 +285,12 @@ func resolveDeadRefs(ctx context.Context, local *Service, localBranch, content, 
 // extractExternalRefsFromHistory looks up the last version of a deleted fact in
 // local git history and extracts its external (http/https) refs.
 func extractExternalRefsFromHistory(ctx context.Context, local *Service, localBranch, deadPath string) ([]string, error) {
-	localHash, err := local.resolveRef(ctx, localBranch)
+	localHash, err := local.rh.resolveRef(ctx, localBranch)
 	if err != nil {
 		return nil, fmt.Errorf("extractExternalRefsFromHistory: ref: %w", err)
 	}
 
-	logIter, err := local.repo.Log(&gogit.LogOptions{
+	logIter, err := local.rh.repo.Log(&gogit.LogOptions{
 		From:     localHash,
 		FileName: &deadPath,
 	})

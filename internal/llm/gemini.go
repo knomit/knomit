@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
+	"knomit/internal/config"
 	"os"
 	"sync"
 	"time"
@@ -26,7 +27,7 @@ type GeminiAdapter struct {
 
 // NewGeminiAdapter creates a streaming Gemini adapter for the given model
 // (e.g. "gemini-2.5-flash"). Returns an error if no API key is found.
-func NewGeminiAdapter(ctx context.Context, model string, cfg Config) (*GeminiAdapter, error) {
+func NewGeminiAdapter(ctx context.Context, model string, cfg config.LLMConfig) (*GeminiAdapter, error) {
 	apiKey := os.Getenv("GEMINI_API_KEY")
 	if apiKey == "" {
 		apiKey = os.Getenv("GOOGLE_AI_API_KEY")

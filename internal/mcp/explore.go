@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"knomit/internal/fact"
+	"knomit/internal/store"
 	"time"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
@@ -25,7 +27,7 @@ func exploreTool(ontologyRoot string) mcpgo.Tool {
 }
 
 // ExploreHandler returns the handler function for knomit_explore.
-func ExploreHandler(gs GitStore, sessionIdx ToolSessionIndex, ontologyRoot, agentBranch string) func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+func ExploreHandler(gs store.FactIndex, sessionIdx store.ToolSessionIndex, ontologyRoot, agentBranch string) func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 	return func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 		ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
@@ -74,7 +76,7 @@ func ExploreHandler(gs GitStore, sessionIdx ToolSessionIndex, ontologyRoot, agen
 			if readErr != nil {
 				continue // deleted or unreadable — skip
 			}
-			parsed, parseErr := ParseFact(f.Path, readResult.Content)
+			parsed, parseErr := fact.ParseFact(f.Path, readResult.Content)
 			if parseErr != nil {
 				continue
 			}

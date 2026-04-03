@@ -3,7 +3,7 @@
 //
 // Architecture:
 //
-//   - All handlers accept narrow interfaces (GitStore, SearchIndex) rather
+//   - All handlers accept narrow interfaces (FactIndex, SearchIndex) rather
 //     than concrete types, making them testable with hand-rolled mocks.
 //   - Long-running operations (synthesis, git sync) execute asynchronously
 //     via TaskHub; clients observe progress through the SSE /api/v1/events
@@ -13,7 +13,7 @@
 //
 // Files in this package:
 //
-//   - server.go          — NewRouter: chi mux wiring, dependency interfaces.
+//   - server.go          — Server struct, Handler(): chi mux wiring.
 //   - handlers.go        — Read-only query handlers (browse, fact, search,
 //     history, stats, status) and JSON helpers.
 //   - handlers_task.go   — Async task handlers (synthesize, sync) and helpers.
@@ -33,7 +33,7 @@ import (
 	"strings"
 	"time"
 
-	"knomit/internal/mcp"
+	"knomit/internal/fact"
 	"knomit/internal/repos"
 	"knomit/internal/store"
 
@@ -59,11 +59,13 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 func handleBrowse(ontologyRoot, agentBranch string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
-		var gs repos.GitStore
-		var idx repos.SearchIndex
-		ri.WithRead(func(d repos.StoreDeps) {
-			gs = d.GS
-			idx = d.Idx
+		var gs store.FactIndex
+		var idx store.SearchIndex
+		ri.WithRead(func(svc *store.Service) {
+			if svc != nil {
+				gs = svc.Facts()
+				idx = svc.Search()
+			}
 		})
 		path := r.URL.Query().Get("path")
 		if path == "" {
@@ -129,11 +131,13 @@ func handleBrowse(ontologyRoot, agentBranch string) http.HandlerFunc {
 func handleFact(agentBranch string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
-		var gs repos.GitStore
-		var svc *store.Service
-		ri.WithRead(func(d repos.StoreDeps) {
-			gs = d.GS
-			svc = d.Svc
+		var gs store.FactIndex
+		var idx store.SearchIndex
+		ri.WithRead(func(svc *store.Service) {
+			if svc != nil {
+				gs = svc.Facts()
+				idx = svc.Search()
+			}
 		})
 		path := r.URL.Query().Get("path")
 		if path == "" {
@@ -159,8 +163,8 @@ func handleFact(agentBranch string) http.HandlerFunc {
 				content, fromCommit = result.Content, commitHash
 			}
 			err = readErr
-			if err != nil && svc != nil {
-				if lastHash, ok := svc.Index().LastCommitForPath(r.Context(), agentBranch, path); ok {
+			if err != nil && idx != nil {
+				if lastHash, ok := idx.LastCommitForPath(r.Context(), agentBranch, path); ok {
 					result, readErr = gs.ReadFact(r.Context(), agentBranch, path, &store.ReadFactOpts{AtCommit: lastHash})
 					if readErr == nil {
 						content, fromCommit = result.Content, lastHash
@@ -178,7 +182,7 @@ func handleFact(agentBranch string) http.HandlerFunc {
 			return
 		}
 
-		fact, err := mcp.ParseFact(path, content)
+		fact, err := fact.ParseFact(path, content)
 		if err != nil {
 			// File could not be parsed as a fact — return raw content with parse error.
 			writeJSON(w, http.StatusOK, map[string]any{
@@ -216,8 +220,8 @@ func handleFact(agentBranch string) http.HandlerFunc {
 		}
 
 		// Browsing mode: enrich with commit hash and date from the store index.
-		if commitHash == "" && svc != nil {
-			if rec, lerr := svc.Index().GetByPath(r.Context(), agentBranch, path); lerr == nil && rec != nil && rec.CommitHash != "" {
+		if commitHash == "" && idx != nil {
+			if rec, lerr := idx.GetByPath(r.Context(), agentBranch, path); lerr == nil && rec != nil && rec.CommitHash != "" {
 				resp := map[string]any{
 					"path":        fact.Path(),
 					"title":       fact.Title,
@@ -230,8 +234,8 @@ func handleFact(agentBranch string) http.HandlerFunc {
 					"refs":        fact.Refs,
 					"commit_hash": rec.CommitHash,
 				}
-				if ts, ok := svc.Index().CommitTimestamp(r.Context(), rec.CommitHash); ok {
-					resp["commit_date"] = time.Unix(ts, 0).UTC().Format(time.RFC3339)
+				if rec.CommittedAt != 0 {
+					resp["commit_date"] = time.Unix(rec.CommittedAt, 0).UTC().Format(time.RFC3339)
 				}
 				writeJSON(w, http.StatusOK, resp)
 				return
@@ -247,8 +251,12 @@ func handleFact(agentBranch string) http.HandlerFunc {
 func handleFactWrite(agentBranch string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
-		var gs repos.GitStore
-		ri.WithRead(func(d repos.StoreDeps) { gs = d.GS })
+		var gs store.FactIndex
+		ri.WithRead(func(svc *store.Service) {
+			if svc != nil {
+				gs = svc.Facts()
+			}
+		})
 
 		var req struct {
 			Path    string `json:"path"`
@@ -269,7 +277,7 @@ func handleFactWrite(agentBranch string) http.HandlerFunc {
 			return
 		}
 
-		fact, err := mcp.ParseFact(req.Path, req.Content)
+		fact, err := fact.ParseFact(req.Path, req.Content)
 		if err != nil {
 			writeJSON(w, http.StatusOK, map[string]any{
 				"path":        req.Path,
@@ -289,8 +297,12 @@ func handleFactWrite(agentBranch string) http.HandlerFunc {
 func handleFactRetract(agentBranch string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
-		var gs repos.GitStore
-		ri.WithRead(func(d repos.StoreDeps) { gs = d.GS })
+		var gs store.FactIndex
+		ri.WithRead(func(svc *store.Service) {
+			if svc != nil {
+				gs = svc.Facts()
+			}
+		})
 
 		path := r.URL.Query().Get("path")
 		if path == "" {
@@ -317,8 +329,12 @@ func handleSearch() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
 		branch := ri.AgentBranch()
-		var idx repos.SearchIndex
-		ri.WithRead(func(d repos.StoreDeps) { idx = d.Idx })
+		var idx store.SearchIndex
+		ri.WithRead(func(svc *store.Service) {
+			if svc != nil {
+				idx = svc.Search()
+			}
+		})
 		if idx == nil {
 			writeError(w, http.StatusBadRequest, "search index not available")
 			return
@@ -468,8 +484,12 @@ func handleSearch() http.HandlerFunc {
 func handleHistoryPaginated(agentBranch string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
-		var gs repos.GitStore
-		ri.WithRead(func(d repos.StoreDeps) { gs = d.GS })
+		var gs store.FactIndex
+		ri.WithRead(func(svc *store.Service) {
+			if svc != nil {
+				gs = svc.Facts()
+			}
+		})
 		path := r.URL.Query().Get("path")
 
 		limit := 50
@@ -510,11 +530,13 @@ func handleHistoryPaginated(agentBranch string) http.HandlerFunc {
 func handleCommitDetail(agentBranch string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
-		var gs repos.GitStore
-		var idx repos.SearchIndex
-		ri.WithRead(func(d repos.StoreDeps) {
-			gs = d.GS
-			idx = d.Idx
+		var gs store.FactIndex
+		var idx store.SearchIndex
+		ri.WithRead(func(svc *store.Service) {
+			if svc != nil {
+				gs = svc.Facts()
+				idx = svc.Search()
+			}
 		})
 		hash := r.URL.Query().Get("hash")
 		if hash == "" {
@@ -547,14 +569,14 @@ func handleCommitDetail(agentBranch string) http.HandlerFunc {
 			// Fallback: read the file as it was at this commit and parse the title.
 			// Covers retracted facts, deleted files, and anything not in the current index.
 			if result, err := gs.ReadFact(r.Context(), agentBranch, f.Path, &store.ReadFactOpts{AtCommit: hash}); err == nil && result.Content != "" {
-				if parsed, perr := mcp.ParseFact(f.Path, result.Content); perr == nil {
+				if parsed, perr := fact.ParseFact(f.Path, result.Content); perr == nil {
 					files[i].Title = parsed.Title
 					continue
 				}
 			}
 			// Last resort for deleted files: find the last commit where the file existed.
 			if result, err := gs.ReadFact(r.Context(), agentBranch, f.Path, &store.ReadFactOpts{BeforeCommit: hash}); err == nil && result.Content != "" {
-				if parsed, perr := mcp.ParseFact(f.Path, result.Content); perr == nil {
+				if parsed, perr := fact.ParseFact(f.Path, result.Content); perr == nil {
 					files[i].Title = parsed.Title
 				}
 			}
@@ -575,8 +597,12 @@ func handleCommitDetail(agentBranch string) http.HandlerFunc {
 func handleActivity(agentBranch string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
-		var gs repos.GitStore
-		ri.WithRead(func(d repos.StoreDeps) { gs = d.GS })
+		var gs store.FactIndex
+		ri.WithRead(func(svc *store.Service) {
+			if svc != nil {
+				gs = svc.Facts()
+			}
+		})
 		result, err := gs.Activity(r.Context(), agentBranch, r.URL.Query().Get("path"))
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, fmt.Sprintf("activity error: %v", err))
@@ -592,8 +618,12 @@ func handleCompletions() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
 		branch := ri.AgentBranch()
-		var idx repos.SearchIndex
-		ri.WithRead(func(d repos.StoreDeps) { idx = d.Idx })
+		var idx store.SearchIndex
+		ri.WithRead(func(svc *store.Service) {
+			if svc != nil {
+				idx = svc.Search()
+			}
+		})
 
 		category := r.URL.Query().Get("category")
 		prefix := r.URL.Query().Get("prefix")
@@ -616,8 +646,12 @@ func handleStats() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
 		branch := ri.AgentBranch()
-		var idx repos.SearchIndex
-		ri.WithRead(func(d repos.StoreDeps) { idx = d.Idx })
+		var idx store.SearchIndex
+		ri.WithRead(func(svc *store.Service) {
+			if svc != nil {
+				idx = svc.Search()
+			}
+		})
 		if idx == nil {
 			writeError(w, http.StatusServiceUnavailable, "index not available")
 			return
@@ -635,11 +669,13 @@ func handleStats() http.HandlerFunc {
 func handleStatus(embeddingsEnabled bool, ontologyRoot, agentBranch string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
-		var gs repos.GitStore
-		var idx repos.SearchIndex
-		ri.WithRead(func(d repos.StoreDeps) {
-			gs = d.GS
-			idx = d.Idx
+		var gs store.FactIndex
+		var idx store.SearchIndex
+		ri.WithRead(func(svc *store.Service) {
+			if svc != nil {
+				gs = svc.Facts()
+				idx = svc.Search()
+			}
 		})
 		head, err := gs.HeadCommit(r.Context(), agentBranch)
 		if err != nil {
@@ -670,9 +706,13 @@ func handleRecent() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
 		branch := ri.AgentBranch()
-		var svc *store.Service
-		ri.WithRead(func(d repos.StoreDeps) { svc = d.Svc })
-		if svc == nil {
+		var idx store.SearchIndex
+		ri.WithRead(func(svc *store.Service) {
+			if svc != nil {
+				idx = svc.Search()
+			}
+		})
+		if idx == nil {
 			writeError(w, http.StatusServiceUnavailable, "index not available")
 			return
 		}
@@ -743,7 +783,7 @@ func handleRecent() http.HandlerFunc {
 			}
 		}
 
-		entries, total, err := svc.Index().RecentFacts(r.Context(), branch, path, query, limit, offset, includeTypes, excludeTypes, domain, entities, epOps)
+		entries, total, err := idx.RecentFacts(r.Context(), branch, path, query, limit, offset, includeTypes, excludeTypes, domain, entities, epOps)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, fmt.Sprintf("recent error: %v", err))
 			return

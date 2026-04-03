@@ -4,13 +4,18 @@ import (
 	"net/http"
 
 	"knomit/internal/repos"
+	"knomit/internal/store"
 )
 
 func handleExplain() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
-		var idx repos.SearchIndex
-		ri.WithRead(func(d repos.StoreDeps) { idx = d.Idx })
+		var idx store.SearchIndex
+		ri.WithRead(func(svc *store.Service) {
+			if svc != nil {
+				idx = svc.Search()
+			}
+		})
 
 		q := r.URL.Query()
 		branch := q.Get("branch")

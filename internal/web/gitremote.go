@@ -42,7 +42,7 @@ func GitRemoteHandler(rm *repos.Manager) http.Handler {
 		}
 
 		var svc *store.Service
-		ri.WithRead(func(d repos.StoreDeps) { svc = d.Svc })
+		ri.WithRead(func(s *store.Service) { svc = s })
 		if svc == nil {
 			http.Error(w, "git serving not supported for this repo", http.StatusInternalServerError)
 			return

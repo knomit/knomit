@@ -15,9 +15,9 @@ import (
 
 // HypothesizeResult is the JSON response returned by the hypothesize tool.
 type HypothesizeResult struct {
-	SessionID string              `json:"session_id"`
-	Item      *HypothesizeItem    `json:"item,omitempty"`
-	Done      bool                `json:"done"`
+	SessionID string               `json:"session_id"`
+	Item      *HypothesizeItem     `json:"item,omitempty"`
+	Done      bool                 `json:"done"`
 	Progress  *HypothesizeProgress `json:"progress,omitempty"`
 }
 
@@ -44,7 +44,7 @@ func hypothesizeTool() mcpgo.Tool {
 }
 
 // HypothesizeHandler returns the handler function for knomit_hypothesize.
-func HypothesizeHandler(gs GitStore, idx SearchIndex, pipelineIdx PipelineIndex, ontologyRoot, agentBranch string) func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+func HypothesizeHandler(gs store.FactIndex, idx store.SearchIndex, pipelineIdx store.PipelineIndex, ontologyRoot, agentBranch string) func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 	return func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 		ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
@@ -71,7 +71,7 @@ func HypothesizeHandler(gs GitStore, idx SearchIndex, pipelineIdx PipelineIndex,
 }
 
 // hypothesizeStart creates a new session, finds synthesis facts, and returns the first item.
-func hypothesizeStart(ctx context.Context, gs GitStore, idx SearchIndex, pipelineIdx PipelineIndex, ontologyRoot, agentBranch string) (*HypothesizeResult, error) {
+func hypothesizeStart(ctx context.Context, gs store.FactIndex, idx store.SearchIndex, pipelineIdx store.PipelineIndex, ontologyRoot, agentBranch string) (*HypothesizeResult, error) {
 	branch := agentBranch
 
 	// Get watermark.
@@ -80,11 +80,11 @@ func hypothesizeStart(ctx context.Context, gs GitStore, idx SearchIndex, pipelin
 		return nil, fmt.Errorf("get watermark: %w", err)
 	}
 
-	var synthFacts []Fact
+	var synthFacts []fact.Fact
 
 	if watermark == "" {
 		// First run: search for all synthesis facts.
-		results, err := idx.Search(ctx, agentBranch, SearchQuery{
+		results, err := idx.Search(ctx, agentBranch, store.SearchQuery{
 			IncludeTypes: []string{"synthesis"},
 			Limit:        100000,
 		})
@@ -117,7 +117,7 @@ func hypothesizeStart(ctx context.Context, gs GitStore, idx SearchIndex, pipelin
 			if readErr != nil {
 				continue
 			}
-			f, parseErr := ParseFact(p, readResult.Content)
+			f, parseErr := fact.ParseFact(p, readResult.Content)
 			if parseErr != nil {
 				continue
 			}
@@ -161,7 +161,7 @@ func hypothesizeStart(ctx context.Context, gs GitStore, idx SearchIndex, pipelin
 }
 
 // hypothesizeContinue acknowledges the current work item and advances to the next.
-func hypothesizeContinue(ctx context.Context, pipelineIdx PipelineIndex, gs GitStore, ontologyRoot, agentBranch, sessionID, response string) (*HypothesizeResult, error) {
+func hypothesizeContinue(ctx context.Context, pipelineIdx store.PipelineIndex, gs store.FactIndex, ontologyRoot, agentBranch, sessionID, response string) (*HypothesizeResult, error) {
 	// Verify session exists and is active.
 	sess, err := pipelineIdx.GetPipelineSession(ctx, sessionID)
 	if err != nil {
@@ -193,7 +193,7 @@ func hypothesizeContinue(ctx context.Context, pipelineIdx PipelineIndex, gs GitS
 }
 
 // hypothesizeNextItem fetches the next unanswered work item or completes the session.
-func hypothesizeNextItem(ctx context.Context, pipelineIdx PipelineIndex, gs GitStore, ontologyRoot, agentBranch, sessionID string) (*HypothesizeResult, error) {
+func hypothesizeNextItem(ctx context.Context, pipelineIdx store.PipelineIndex, gs store.FactIndex, ontologyRoot, agentBranch, sessionID string) (*HypothesizeResult, error) {
 	item, err := pipelineIdx.NextPipelineWorkItem(ctx, sessionID)
 	if err != nil {
 		return nil, fmt.Errorf("next item: %w", err)
@@ -243,4 +243,3 @@ func buildHypothesizeInstructions(ontologyRoot string) string {
 6. After writing the hypothesis, call knomit_learn with type: methodology, topic: "meta", category: "reasoning" to record the reasoning process used — what worked, what evidence was decisive, which patterns applied, and any pitfalls encountered
 7. Call knomit_hypothesize with session_id to continue to the next synthesis fact`, ontologyRoot)
 }
-

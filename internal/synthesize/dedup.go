@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/rs/zerolog/log"
 	"knomit/internal/fact"
-	"knomit/internal/mcp"
 	"knomit/internal/store"
+
+	"github.com/rs/zerolog/log"
 )
 
 const defaultDedupThreshold = 0.92
@@ -78,13 +78,13 @@ func applyGreedyMerges(pairs []mergePair) []mergePair {
 func dedupCluster(
 	ctx context.Context,
 	cluster []factForLLM,
-	gs GitStore,
-	idx SearchIndex,
+	gs store.FactIndex,
+	idx store.SearchIndex,
 	threshold float64,
 	recipeName string,
 	onProgress func(ProgressEvent),
 	agentBranch string,
-	embedders ...Embedder,
+	embedders ...store.Embedder,
 ) ([]factForLLM, error) {
 	if len(cluster) < 2 {
 		return cluster, nil
@@ -99,7 +99,7 @@ func dedupCluster(
 	// Batch-embed all cluster facts upfront if a BatchEmbedder is available.
 	var clusterVecs [][]float32
 	if len(embedders) > 0 {
-		if batcher, ok := embedders[0].(BatchEmbedder); ok {
+		if batcher, ok := embedders[0].(store.BatchEmbedder); ok {
 			texts := make([]string, len(cluster))
 			for i, f := range cluster {
 				texts[i] = f.Title + " " + f.Body
@@ -178,7 +178,7 @@ func dedupCluster(
 		if err != nil {
 			return nil, fmt.Errorf("dedupCluster: read winner %q: %w", winnerFact.File, err)
 		}
-		fullWinner, err := mcp.ParseFact(winnerFact.File, winnerResult.Content)
+		fullWinner, err := fact.ParseFact(winnerFact.File, winnerResult.Content)
 		if err != nil {
 			return nil, fmt.Errorf("dedupCluster: parse winner %q: %w", winnerFact.File, err)
 		}
@@ -188,7 +188,7 @@ func dedupCluster(
 		if err != nil {
 			return nil, fmt.Errorf("dedupCluster: read loser %q: %w", loserFact.File, err)
 		}
-		fullLoser, err := mcp.ParseFact(loserFact.File, loserResult.Content)
+		fullLoser, err := fact.ParseFact(loserFact.File, loserResult.Content)
 		if err != nil {
 			return nil, fmt.Errorf("dedupCluster: parse loser %q: %w", loserFact.File, err)
 		}
@@ -204,7 +204,7 @@ func dedupCluster(
 		fullWinner.Refs = mergedRefs
 
 		// Serialize and write the winner back to git.
-		newContent := mcp.SerializeFact(fullWinner)
+		newContent := fact.SerializeFact(fullWinner)
 		writeRes, err := gs.WriteFact(ctx, agentBranch, winnerFact.File, newContent, fmt.Sprintf("dedup: merge %s into %s [%s]", loserFact.File, winnerFact.File, recipeName), "subsume")
 		if err != nil {
 			return nil, fmt.Errorf("dedupCluster: write winner %q: %w", winnerFact.File, err)

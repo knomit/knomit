@@ -6,9 +6,6 @@ import (
 	"strings"
 
 	"github.com/BurntSushi/toml"
-
-	"knomit/internal/identity"
-	"knomit/internal/llm"
 )
 
 // GitConfig holds git-related configuration.
@@ -18,17 +15,35 @@ type GitConfig struct {
 	Port   string `toml:"port"`
 }
 
+// RemoteAuthConfig holds git remote authentication settings.
+type RemoteAuthConfig struct {
+	Token      string `toml:"token"`
+	User       string `toml:"user"`
+	Password   string `toml:"password"`
+	SSHKey     string `toml:"ssh_key"`
+	AuthMethod string `toml:"auth_method"`
+}
+
+// Config holds LLM-related configuration.
+type LLMConfig struct {
+	Model    string `toml:"model"`
+	Provider string `toml:"provider"`
+	APIKey   string `toml:"api_key"`
+	Cache    bool   `toml:"cache"`
+	Batch    bool   `toml:"batch"`
+}
+
 // Config is the root configuration, composed of section structs.
 type Config struct {
-	Home         string                    `toml:"repo"`
-	Host         string                    `toml:"host"`
-	Port         string                    `toml:"port"`
-	Socket       string                    `toml:"socket"`
-	OntologyRoot string                    `toml:"ontology_root"`
-	ONNXLibPath  string                    `toml:"onnx_lib_path"`
-	LLM          llm.Config                `toml:"llm"`
-	Remote       identity.RemoteAuthConfig `toml:"remote"`
-	Git          GitConfig                 `toml:"git"`
+	Home         string           `toml:"repo"`
+	Host         string           `toml:"host"`
+	Port         string           `toml:"port"`
+	Socket       string           `toml:"socket"`
+	OntologyRoot string           `toml:"ontology_root"`
+	ONNXLibPath  string           `toml:"onnx_lib_path"`
+	LLM          LLMConfig        `toml:"llm"`
+	Remote       RemoteAuthConfig `toml:"remote"`
+	Git          GitConfig        `toml:"git"`
 }
 
 // Defaults returns a Config populated with default values.
@@ -39,8 +54,11 @@ func Defaults() Config {
 		Host:         "localhost",
 		Port:         "19278",
 		OntologyRoot: "kb",
-		LLM:          llm.DefaultConfig(),
-		Git:          GitConfig{Serve: true},
+		LLM: LLMConfig{
+			Model:    "gemini-2.5-flash",
+			Provider: "gemini",
+		},
+		Git: GitConfig{Serve: true},
 	}
 }
 

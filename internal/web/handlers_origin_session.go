@@ -12,7 +12,7 @@ import (
 	"github.com/rs/zerolog/log"
 	"gopkg.in/yaml.v3"
 
-	"knomit/internal/identity"
+	"knomit/internal/config"
 	"knomit/internal/repos"
 	"knomit/internal/store"
 )
@@ -114,8 +114,8 @@ func handleDeleteSession(rm *repos.Manager, sm *SessionManager) http.HandlerFunc
 
 // connectivityResult is the JSON payload sent in the "done" phase of a test connectivity SSE stream.
 type connectivityResult struct {
-	Branches        []string `json:"branches"`        // non-agent branches (selectable as main)
-	AgentBranches   []string `json:"agent_branches"`  // all agent/* branches on remote
+	Branches        []string `json:"branches"`       // non-agent branches (selectable as main)
+	AgentBranches   []string `json:"agent_branches"` // all agent/* branches on remote
 	DefaultBranch   string   `json:"default_branch"`
 	MatchedAgent    string   `json:"matched_agent,omitempty"` // agent branch matching our hostname (if any)
 	History         string   `json:"history"`                 // "shared" or "disjoint"
@@ -137,7 +137,7 @@ func handleTestConnectivity(rm *repos.Manager, sm *SessionManager, agentBranch s
 
 		ri := repos.RepoFromContext(r.Context())
 		var localSvc *store.Service
-		ri.WithRead(func(d repos.StoreDeps) { localSvc = d.Svc })
+		ri.WithRead(func(s *store.Service) { localSvc = s })
 
 		sendEvent, ok := beginSSE(w)
 		if !ok {
@@ -148,13 +148,13 @@ func handleTestConnectivity(rm *repos.Manager, sm *SessionManager, agentBranch s
 		sendEvent(map[string]string{"phase": "connecting"})
 
 		// Resolve auth from session config.
-		authCfg := identity.RemoteAuthConfig{
+		authCfg := config.RemoteAuthConfig{
 			AuthMethod: sess.Auth.Method,
 			Token:      sess.Auth.Token,
 			User:       sess.Auth.User,
 			Password:   sess.Auth.Password,
 		}
-		auth, err := identity.ResolveAuthWithOrigin(authCfg, "", sess.URL)
+		auth, err := repos.ResolveAuthWithOrigin(authCfg, "", sess.URL)
 		if err != nil {
 			sendEvent(map[string]string{"phase": "error", "message": fmt.Sprintf("auth resolution failed: %v", err)})
 			return
@@ -189,13 +189,13 @@ func handleTestConnectivity(rm *repos.Manager, sm *SessionManager, agentBranch s
 		sendEvent(map[string]string{"phase": "analyzing"})
 
 		// Get default branch.
-		defaultBranch, err := remoteSvc.DefaultBranch(r.Context())
+		defaultBranch, err := remoteSvc.Branches().DefaultBranch(r.Context())
 		if err != nil {
 			defaultBranch = agentBranch
 		}
 
 		// Collect all branch info in a single pass over refs.
-		branches, agentBranches, matchedAgent := remoteSvc.BranchInfo(agentBranch)
+		branches, agentBranches, matchedAgent := remoteSvc.Facts().BranchInfo(agentBranch)
 
 		// Check shared history.
 		history := "disjoint"
@@ -207,7 +207,7 @@ func handleTestConnectivity(rm *repos.Manager, sm *SessionManager, agentBranch s
 		}
 
 		// Count remote facts (files in the cloned store).
-		remoteFiles, err := remoteSvc.ListAll(r.Context(), defaultBranch)
+		remoteFiles, err := remoteSvc.Facts().ListAll(r.Context(), defaultBranch)
 		remoteFactCount := 0
 		if err == nil {
 			remoteFactCount = len(remoteFiles)
@@ -216,20 +216,20 @@ func handleTestConnectivity(rm *repos.Manager, sm *SessionManager, agentBranch s
 		// Count local facts.
 		localFactCount := 0
 		if localSvc != nil {
-			localFiles, err := localSvc.ListAll(r.Context(), agentBranch)
+			localFiles, err := localSvc.Facts().ListAll(r.Context(), agentBranch)
 			if err == nil {
 				localFactCount = len(localFiles)
 			}
 		}
 
 		result := connectivityResult{
-			Branches:      branches,
-			AgentBranches: agentBranches,
-			DefaultBranch: defaultBranch,
-			MatchedAgent:  matchedAgent,
-			History:             history,
-			RemoteFactCount:     remoteFactCount,
-			LocalFactCount:      localFactCount,
+			Branches:        branches,
+			AgentBranches:   agentBranches,
+			DefaultBranch:   defaultBranch,
+			MatchedAgent:    matchedAgent,
+			History:         history,
+			RemoteFactCount: remoteFactCount,
+			LocalFactCount:  localFactCount,
 		}
 
 		// Send done event.
@@ -294,9 +294,7 @@ func handlePreview(rm *repos.Manager, sm *SessionManager, agentBranch string) ht
 
 		ri := repos.RepoFromContext(r.Context())
 		var svc *store.Service
-		ri.WithRead(func(d repos.StoreDeps) {
-			svc = d.Svc
-		})
+		ri.WithRead(func(s *store.Service) { svc = s })
 
 		sendEvent, ok := beginSSE(w)
 		if !ok {
@@ -308,7 +306,7 @@ func handlePreview(rm *repos.Manager, sm *SessionManager, agentBranch string) ht
 		// Build local path set via FactsIter.
 		localPaths := make(map[string]struct{})
 		if svc != nil {
-			iter, err := store.NewFactsIter(r.Context(), svc.Index(), agentBranch)
+			iter, err := svc.Facts().FactsIter(r.Context(), agentBranch)
 			if err != nil {
 				log.Warn().Err(err).Str("repo", repo).Msg("preview: open facts iter")
 			} else {
@@ -325,7 +323,7 @@ func handlePreview(rm *repos.Manager, sm *SessionManager, agentBranch string) ht
 
 		// List remote paths.
 		remotePaths := make(map[string]struct{})
-		remoteFiles, err := remoteStore.ListAll(r.Context(), remoteAgentBranch)
+		remoteFiles, err := remoteStore.Facts().ListAll(r.Context(), remoteAgentBranch)
 		if err != nil {
 			log.Warn().Err(err).Str("repo", repo).Msg("preview: list remote")
 		} else {
@@ -359,7 +357,7 @@ func handlePreview(rm *repos.Manager, sm *SessionManager, agentBranch string) ht
 			go func() {
 				for p := range jobs {
 					readMu.Lock()
-					readResult, err := svc.ReadFact(r.Context(), agentBranch, p, nil)
+					readResult, err := svc.Facts().ReadFact(r.Context(), agentBranch, p, nil)
 					readMu.Unlock()
 					if err != nil {
 						results <- 0
@@ -478,9 +476,7 @@ func handleApply(rm *repos.Manager, sm *SessionManager, agentBranch string) http
 
 		ri := repos.RepoFromContext(r.Context())
 		var svc *store.Service
-		ri.WithRead(func(d repos.StoreDeps) {
-			svc = d.Svc
-		})
+		ri.WithRead(func(s *store.Service) { svc = s })
 
 		sendEvent, ok := beginSSE(w)
 		if !ok {
@@ -495,7 +491,7 @@ func handleApply(rm *repos.Manager, sm *SessionManager, agentBranch string) http
 				return
 			}
 
-			factsIter, err := store.NewFactsIter(r.Context(), svc.Index(), agentBranch)
+			factsIter, err := svc.Facts().FactsIter(r.Context(), agentBranch)
 			if err != nil {
 				sendEvent(map[string]string{"phase": "error", "message": fmt.Sprintf("open facts iterator: %v", err)})
 				return
@@ -631,7 +627,7 @@ func beginSSE(w http.ResponseWriter) (func(v any), bool) {
 // handleCommit handles POST /api/v1/{repo}/origin/session/{sessionID}/commit
 // It finalizes the origin connection by swapping the session's remote store
 // into the repo instance, saving remote config, and starting sync loops.
-func handleCommit(rm *repos.Manager, sm *SessionManager, agentBranch string) http.HandlerFunc {
+func (s *Server) handleCommit(rm *repos.Manager, sm *SessionManager, agentBranch string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repo := chi.URLParam(r, "repo")
 		sessionID := chi.URLParam(r, "sessionID")
@@ -690,14 +686,11 @@ func handleCommit(rm *repos.Manager, sm *SessionManager, agentBranch string) htt
 		}
 
 		// Rebuild MCP handlers so they use the new database, not the closed one.
-		rm.SetupMCP(ri)
+		s.SetupMCP(ri)
 
 		// Snapshot after swap — protect against concurrent SwapStore.
 		var svc *store.Service
-		ri.WithRead(func(d repos.StoreDeps) {
-			svc = d.Svc
-		})
-		hub := ri.TaskHub()
+		ri.WithRead(func(s *store.Service) { svc = s })
 
 		// Phase: configuring — save remote config and start sync.
 		sendEvent(map[string]string{"phase": "configuring"})
@@ -707,7 +700,7 @@ func handleCommit(rm *repos.Manager, sm *SessionManager, agentBranch string) htt
 			authMethod := authCfg.Method
 			authToken := assembleAuthToken(authMethod, authCfg.Token, authCfg.User, authCfg.Password)
 
-			if err := svc.SetRemoteWithAuth("origin", remoteURL, remoteBranch, 300, 300, authMethod, authToken); err != nil {
+			if err := svc.SetRemote("origin", remoteURL, remoteBranch, 300, 300, authMethod, authToken); err != nil {
 				sendEvent(map[string]string{"phase": "error", "message": fmt.Sprintf("save remote config: %v", err)})
 				return
 			}
@@ -723,7 +716,6 @@ func handleCommit(rm *repos.Manager, sm *SessionManager, agentBranch string) htt
 		// Rebuild the index from the new git store so facts/recent/search work.
 		sendEvent(map[string]any{"phase": "rebuilding", "current": 0, "total": 0})
 		if svc != nil {
-			idx := svc.Index()
 			progress := func(subPhase string, done, total int) {
 				if done%20 == 0 || done == total {
 					sendEvent(map[string]any{
@@ -734,15 +726,15 @@ func handleCommit(rm *repos.Manager, sm *SessionManager, agentBranch string) htt
 					})
 				}
 			}
-			if err := idx.Rebuild(r.Context(), svc, rebuildBranch, progress); err != nil {
+			if err := svc.Search().Rebuild(r.Context(), rebuildBranch, progress); err != nil {
 				log.Warn().Err(err).Str("repo", repo).Msg("commit: index rebuild failed")
 			} else {
 				log.Info().Str("repo", repo).Msg("commit: index rebuilt from swapped store")
 				// Set pipeline watermarks to HEAD so the first review/hypothesize
 				// doesn't treat every cloned fact as dirty.
-				if head, err := svc.HeadCommit(r.Context(), rebuildBranch); err == nil {
+				if head, err := svc.Facts().HeadCommit(r.Context(), rebuildBranch); err == nil {
 					for _, tool := range []string{"review", "hypothesize"} {
-						if err := idx.SetPipelineWatermark(r.Context(), tool, rebuildBranch, head); err != nil {
+						if err := svc.Pipeline().SetPipelineWatermark(r.Context(), tool, rebuildBranch, head); err != nil {
 							log.Warn().Err(err).Str("repo", repo).Str("tool", tool).Msg("commit: pipeline watermark set failed")
 						}
 					}
@@ -757,13 +749,6 @@ func handleCommit(rm *repos.Manager, sm *SessionManager, agentBranch string) htt
 		}
 
 		sendEvent(map[string]string{"phase": "done"})
-
-		// Broadcast status so the UI refreshes with the new HEAD.
-		if hub != nil {
-			if head, err := svc.HeadCommit(r.Context(), rebuildBranch); err == nil {
-				hub.BroadcastStatus(head)
-			}
-		}
 
 		// Update session state and clean up.
 		sess.mu.Lock()
