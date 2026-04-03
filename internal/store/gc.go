@@ -66,7 +66,32 @@ func (idx *Index) GC(ctx context.Context) error {
 		return fmt.Errorf("gc: clean commit_log: %w", err)
 	}
 
+	// 7. GC tool sessions: keep 5 most recent per (tool, branch).
+	if err := idx.gcSessionTable(ctx, "tool_sessions"); err != nil {
+		return fmt.Errorf("gc: tool sessions: %w", err)
+	}
+
+	// 8. GC pipeline sessions: keep 5 most recent per (tool, branch).
+	if err := idx.gcSessionTable(ctx, "pipeline_sessions"); err != nil {
+		return fmt.Errorf("gc: pipeline sessions: %w", err)
+	}
+
 	return nil
+}
+
+// gcSessionTable deletes all but the 5 most recent sessions per (tool, branch)
+// from the given table. Child rows are cascade-deleted via foreign keys.
+func (idx *Index) gcSessionTable(ctx context.Context, table string) error {
+	_, err := conn(ctx, idx.db).ExecContext(ctx,
+		fmt.Sprintf(
+			`DELETE FROM %s WHERE rowid NOT IN (
+			    SELECT rowid FROM (
+			        SELECT rowid, ROW_NUMBER() OVER (PARTITION BY tool, branch ORDER BY rowid DESC) AS rn
+			        FROM %s
+			    ) WHERE rn <= 5
+			)`, table, table),
+	)
+	return err
 }
 
 // gcOrphanedGraphNodes removes graph nodes of the given label that have no

@@ -9,7 +9,7 @@ import (
 
 	"knomit/internal/config"
 	"knomit/internal/fact"
-	"knomit/internal/git"
+	"knomit/internal/identity"
 	"knomit/internal/store"
 )
 
@@ -34,11 +34,11 @@ func initCmd() *cobra.Command {
 			if keyPath == "" {
 				keyPath = filepath.Join(cfg.Home, "id_ed25519")
 			}
-			_, keyFingerprint, err := git.EnsureKeyPair(keyPath)
+			_, keyFingerprint, err := identity.EnsureKeyPair(keyPath)
 			if err != nil {
 				return fmt.Errorf("ensure keypair: %w", err)
 			}
-			agentBranch := git.AgentBranch(keyFingerprint)
+			agentBranch := identity.AgentBranch(keyFingerprint)
 
 			// Load ontology: custom file or embedded default.
 			ontology := fact.DefaultOntology()
@@ -67,7 +67,7 @@ func initCmd() *cobra.Command {
 			initFiles := map[string]string{
 				"domains/ontology.yaml": string(ontologyYAML),
 			}
-			if _, err := git.InitWithStorer(svc.GitStorer(), initFiles, agentBranch); err != nil {
+			if err := svc.InitRepo(initFiles, agentBranch); err != nil {
 				return fmt.Errorf("init git: %w", err)
 			}
 			fmt.Printf("Initialized knomit repo %q at %s\n", repoName, dbPath)

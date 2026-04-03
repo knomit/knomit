@@ -11,18 +11,18 @@ import (
 func TestClusterFacts_SharedEntities(t *testing.T) {
 	ctx := context.Background()
 	branch := "agent/cluster-entities"
-	idx, gs := openGraphTestStore(t, branch)
+	svc, idx := openGraphTestStore(t, branch)
 
 	// Group 1: Go + SQLite (3 facts).
-	writeAndSync(t, idx, gs, branch, "kb/go1.md",
+	writeAndSync(t, svc, idx, branch, "kb/go1.md",
 		makeFact("Go DB Layer", []string{"eng"}, []string{"Go", "SQLite"}))
-	writeAndSync(t, idx, gs, branch, "kb/go2.md",
+	writeAndSync(t, svc, idx, branch, "kb/go2.md",
 		makeFact("Go DB Tests", []string{"eng"}, []string{"Go", "SQLite"}))
 
 	// Group 2: Python + ML (2 facts).
-	writeAndSync(t, idx, gs, branch, "kb/py1.md",
+	writeAndSync(t, svc, idx, branch, "kb/py1.md",
 		makeFact("PyTorch Training", []string{"eng"}, []string{"Python", "ML"}))
-	writeAndSync(t, idx, gs, branch, "kb/py2.md",
+	writeAndSync(t, svc, idx, branch, "kb/py2.md",
 		makeFact("Scikit Pipeline", []string{"eng"}, []string{"Python", "ML"}))
 
 	result, err := idx.ClusterFacts(ctx, branch, 1.0, 2)
@@ -51,18 +51,18 @@ func TestClusterFacts_SharedEntities(t *testing.T) {
 func TestClusterFacts_SharedDomains(t *testing.T) {
 	ctx := context.Background()
 	branch := "agent/cluster-domains"
-	idx, gs := openGraphTestStore(t, branch)
+	svc, idx := openGraphTestStore(t, branch)
 
 	// Backend group: same leaf domain + shared entity to reinforce clustering.
-	writeAndSync(t, idx, gs, branch, "kb/back1.md",
+	writeAndSync(t, svc, idx, branch, "kb/back1.md",
 		makeFact("API Server", []string{"eng/backend/api"}, []string{"Backend"}))
-	writeAndSync(t, idx, gs, branch, "kb/back2.md",
+	writeAndSync(t, svc, idx, branch, "kb/back2.md",
 		makeFact("Auth Handler", []string{"eng/backend/api"}, []string{"Backend"}))
 
 	// Science group: completely separate domain + shared entity.
-	writeAndSync(t, idx, gs, branch, "kb/sci1.md",
+	writeAndSync(t, svc, idx, branch, "kb/sci1.md",
 		makeFact("Physics Sim", []string{"science/physics"}, []string{"Physics"}))
-	writeAndSync(t, idx, gs, branch, "kb/sci2.md",
+	writeAndSync(t, svc, idx, branch, "kb/sci2.md",
 		makeFact("Particle Model", []string{"science/physics"}, []string{"Physics"}))
 
 	result, err := idx.ClusterFacts(ctx, branch, 1.0, 2)
@@ -80,17 +80,17 @@ func TestClusterFacts_SharedDomains(t *testing.T) {
 func TestClusterFacts_SemanticSimilarity(t *testing.T) {
 	ctx := context.Background()
 	branch := "agent/cluster-semantic"
-	idx, gs := openGraphTestStore(t, branch)
+	svc, idx := openGraphTestStore(t, branch)
 	idx.SetEmbedder(&stubEmbedder768d{})
 
 	// "alpha" and "beta" produce similar vectors (cosine > 0.60).
 	// "gamma" is dissimilar to both.
 	// No shared entities or domains — clustering must come from SIMILAR_TO.
-	writeAndSync(t, idx, gs, branch, "kb/alpha.md",
+	writeAndSync(t, svc, idx, branch, "kb/alpha.md",
 		makeFact("alpha", []string{"domain-a"}, []string{"EntityA"}))
-	writeAndSync(t, idx, gs, branch, "kb/beta.md",
+	writeAndSync(t, svc, idx, branch, "kb/beta.md",
 		makeFact("beta", []string{"domain-b"}, []string{"EntityB"}))
-	writeAndSync(t, idx, gs, branch, "kb/gamma.md",
+	writeAndSync(t, svc, idx, branch, "kb/gamma.md",
 		makeFact("gamma", []string{"domain-c"}, []string{"EntityC"}))
 
 	// Build SIMILAR_TO edges.
@@ -115,12 +115,12 @@ func TestClusterFacts_SemanticSimilarity(t *testing.T) {
 func TestClusterFacts_NoiseClassification(t *testing.T) {
 	ctx := context.Background()
 	branch := "agent/cluster-noise"
-	idx, gs := openGraphTestStore(t, branch)
+	svc, idx := openGraphTestStore(t, branch)
 
 	// Connected pair: shared entities.
-	writeAndSync(t, idx, gs, branch, "kb/pair1.md",
+	writeAndSync(t, svc, idx, branch, "kb/pair1.md",
 		makeFact("Pair 1", []string{"eng"}, []string{"SharedEntity"}))
-	writeAndSync(t, idx, gs, branch, "kb/pair2.md",
+	writeAndSync(t, svc, idx, branch, "kb/pair2.md",
 		makeFact("Pair 2", []string{"eng"}, []string{"SharedEntity"}))
 
 	// With minCommunitySize=2: the pair should be a cluster.
@@ -153,13 +153,13 @@ func TestClusterFacts_NoiseClassification(t *testing.T) {
 func TestClusterFacts_DerivedFromEdges(t *testing.T) {
 	ctx := context.Background()
 	branch := "agent/cluster-derivation"
-	idx, gs := openGraphTestStore(t, branch)
+	svc, idx := openGraphTestStore(t, branch)
 
 	// Chain: a ← b (b refs a). Unique entities and domains so only DERIVED_FROM
 	// and shared OntologyNode (kb/) connect them.
-	writeAndSync(t, idx, gs, branch, "kb/base.md",
+	writeAndSync(t, svc, idx, branch, "kb/base.md",
 		makeFact("Base", []string{"domain-x"}, []string{"EntityX"}))
-	writeAndSync(t, idx, gs, branch, "kb/derived.md",
+	writeAndSync(t, svc, idx, branch, "kb/derived.md",
 		makeFact("Derived", []string{"domain-y"}, []string{"EntityY"}, "kb/base.md"))
 
 	result, err := idx.ClusterFacts(ctx, branch, 1.0, 2)
@@ -182,12 +182,12 @@ func TestClusterFacts_DerivedFromEdges(t *testing.T) {
 func TestClusterFacts_OntologyHierarchy(t *testing.T) {
 	ctx := context.Background()
 	branch := "agent/cluster-ontology"
-	idx, gs := openGraphTestStore(t, branch)
+	svc, idx := openGraphTestStore(t, branch)
 
 	// Same directory, unique entities and domains.
-	writeAndSync(t, idx, gs, branch, "kb/project/design.md",
+	writeAndSync(t, svc, idx, branch, "kb/project/design.md",
 		makeFact("Design", []string{"planning"}, []string{"DesignEnt"}))
-	writeAndSync(t, idx, gs, branch, "kb/project/impl.md",
+	writeAndSync(t, svc, idx, branch, "kb/project/impl.md",
 		makeFact("Impl", []string{"coding"}, []string{"ImplEnt"}))
 
 	result, err := idx.ClusterFacts(ctx, branch, 1.0, 2)
@@ -204,22 +204,22 @@ func TestClusterFacts_OntologyHierarchy(t *testing.T) {
 func TestClusterFacts_MultiDomainBridge(t *testing.T) {
 	ctx := context.Background()
 	branch := "agent/cluster-bridge"
-	idx, gs := openGraphTestStore(t, branch)
+	svc, idx := openGraphTestStore(t, branch)
 
 	// Backend group with shared entity.
-	writeAndSync(t, idx, gs, branch, "kb/back1.md",
+	writeAndSync(t, svc, idx, branch, "kb/back1.md",
 		makeFact("Backend 1", []string{"eng/backend"}, []string{"BackTeam"}))
-	writeAndSync(t, idx, gs, branch, "kb/back2.md",
+	writeAndSync(t, svc, idx, branch, "kb/back2.md",
 		makeFact("Backend 2", []string{"eng/backend"}, []string{"BackTeam"}))
 
 	// Frontend group with shared entity.
-	writeAndSync(t, idx, gs, branch, "kb/front1.md",
+	writeAndSync(t, svc, idx, branch, "kb/front1.md",
 		makeFact("Frontend 1", []string{"eng/frontend"}, []string{"FrontTeam"}))
-	writeAndSync(t, idx, gs, branch, "kb/front2.md",
+	writeAndSync(t, svc, idx, branch, "kb/front2.md",
 		makeFact("Frontend 2", []string{"eng/frontend"}, []string{"FrontTeam"}))
 
 	// Bridge: belongs to both domains AND shares entities with both.
-	writeAndSync(t, idx, gs, branch, "kb/bridge.md",
+	writeAndSync(t, svc, idx, branch, "kb/bridge.md",
 		makeFact("Bridge", []string{"eng/backend", "eng/frontend"}, []string{"BackTeam", "FrontTeam"}))
 
 	// Use minCommunitySize=1 so bridge doesn't get filtered as noise even
@@ -270,14 +270,14 @@ func TestClusterFacts_EmptyBranch(t *testing.T) {
 func TestClusterFacts_AllNoise(t *testing.T) {
 	ctx := context.Background()
 	branch := "agent/cluster-allnoise"
-	idx, gs := openGraphTestStore(t, branch)
+	svc, idx := openGraphTestStore(t, branch)
 
 	// Each fact has unique entities and unique leaf domain.
-	writeAndSync(t, idx, gs, branch, "kb/iso1.md",
+	writeAndSync(t, svc, idx, branch, "kb/iso1.md",
 		makeFact("Iso 1", []string{"unique-domain-1"}, []string{"Unique1"}))
-	writeAndSync(t, idx, gs, branch, "kb/iso2.md",
+	writeAndSync(t, svc, idx, branch, "kb/iso2.md",
 		makeFact("Iso 2", []string{"unique-domain-2"}, []string{"Unique2"}))
-	writeAndSync(t, idx, gs, branch, "kb/iso3.md",
+	writeAndSync(t, svc, idx, branch, "kb/iso3.md",
 		makeFact("Iso 3", []string{"unique-domain-3"}, []string{"Unique3"}))
 
 	// With a high minCommunitySize, all should be noise.
@@ -305,12 +305,12 @@ func TestClusterFacts_AllNoise(t *testing.T) {
 func TestClusterFacts_MixedSignals(t *testing.T) {
 	ctx := context.Background()
 	branch := "agent/cluster-mixed"
-	idx, gs := openGraphTestStore(t, branch)
+	svc, idx := openGraphTestStore(t, branch)
 
 	// Tight group: same leaf domain + same entities.
-	writeAndSync(t, idx, gs, branch, "kb/tight1.md",
+	writeAndSync(t, svc, idx, branch, "kb/tight1.md",
 		makeFact("Go Handler", []string{"eng/backend/api"}, []string{"Go", "HTTP"}))
-	writeAndSync(t, idx, gs, branch, "kb/tight2.md",
+	writeAndSync(t, svc, idx, branch, "kb/tight2.md",
 		makeFact("Go Router", []string{"eng/backend/api"}, []string{"Go", "HTTP"}))
 
 	result, err := idx.ClusterFacts(ctx, branch, 1.0, 2)

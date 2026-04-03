@@ -132,25 +132,6 @@ func (idx *Index) AddSeenPaths(ctx context.Context, sessionID string, paths []st
 	return nil
 }
 
-// GCToolSessions deletes all but the most recent `keep` sessions for a given tool and branch.
-// Seen paths and queue items are cascaded via the foreign key constraint.
-func (idx *Index) GCToolSessions(ctx context.Context, tool, branch string, keep int) error {
-	_, err := conn(ctx, idx.db).ExecContext(ctx,
-		`DELETE FROM tool_sessions
-		 WHERE tool = ? AND branch = ? AND id NOT IN (
-		     SELECT id FROM tool_sessions
-		     WHERE tool = ? AND branch = ?
-		     ORDER BY rowid DESC
-		     LIMIT ?
-		 )`,
-		tool, branch, tool, branch, keep,
-	)
-	if err != nil {
-		return fmt.Errorf("GCToolSessions: %w", err)
-	}
-	return nil
-}
-
 // EnqueuePaths batch-inserts items into the tool_queue for a session, ignoring duplicates.
 func (idx *Index) EnqueuePaths(ctx context.Context, sessionID string, items []QueueItem) error {
 	tx, err := idx.db.BeginTx(ctx, nil)

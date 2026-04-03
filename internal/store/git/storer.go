@@ -74,9 +74,6 @@ func (s *Storer) connCtx(ctx context.Context) CtxExecer {
 	return Conn(ctx, s.db)
 }
 
-// DB returns the underlying database for callers that need to start transactions.
-func (s *Storer) DB() *sql.DB { return s.db }
-
 // --- EncodedObjectStorer ---
 
 // NewEncodedObject returns a new in-memory object ready to be written.

@@ -1,6 +1,6 @@
 // Replay algorithm: copies local facts into a target store's agent branch.
 // Used when two knomit instances with disjoint histories connect.
-package git
+package store
 
 import (
 	"context"
@@ -14,53 +14,11 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// FactIter is the interface expected by Replay for iterating local facts.
-// Implemented by store.FactsIter.
-type FactIter interface {
-	Next() (*FactRow, error)
-	Close() error
-}
-
-// FactRow holds the minimal fields needed to replay a fact.
-// Matches store.FactRow.
-type FactRow struct {
-	Path       string
-	BlobHash   string
-	CommitHash string
-}
-
-// ConflictStrategy determines how shared-path conflicts are resolved during replay.
-type ConflictStrategy string
-
-const (
-	StrategyLocalWins  ConflictStrategy = "local_wins"
-	StrategyRemoteWins ConflictStrategy = "remote_wins"
-)
-
-// ReplayConfig controls replay behavior.
-type ReplayConfig struct {
-	Strategy          ConflictStrategy
-	AgentBranch       string
-	DefaultBranch     string
-	UseExistingBranch bool // if true and AgentBranch exists on target, replay on top of it
-	OnProgress        func(current, total int)
-}
-
-// ReplayResult reports what happened during replay.
-type ReplayResult struct {
-	TotalFacts           int
-	FromLocal            int
-	FromRemote           int
-	Overwrites           int
-	RefsResolvedFromHist int
-	DanglingRefsDropped  int
-}
-
-// Replay copies local facts into a target store's agent branch.
-// It iterates facts from localDB (newest-first, deduped by path), reads their
+// Replay copies local facts into a target service's agent branch.
+// It iterates facts from the iterator (newest-first, deduped by path), reads their
 // blob content from the local store, resolves dead refs, and writes each fact
 // to the target store.
-func Replay(ctx context.Context, local *Store, localBranch string, iter FactIter, target *Store, cfg ReplayConfig) (*ReplayResult, error) {
+func Replay(ctx context.Context, local *Service, localBranch string, iter FactIter, target *Service, cfg ReplayConfig) (*ReplayResult, error) {
 	if cfg.AgentBranch == "" {
 		return nil, fmt.Errorf("Replay: AgentBranch must be set")
 	}
@@ -72,28 +30,25 @@ func Replay(ctx context.Context, local *Store, localBranch string, iter FactIter
 	}
 
 	// 1. Set up agent branch in target store.
-	// If the remote already has a branch with the same agent name, use it as
-	// the replay base (preserving any work already on it). Otherwise, create
-	// a fresh agent branch from the selected main branch.
 	agentRefName := plumbing.NewBranchReferenceName(cfg.AgentBranch)
-	existingAgentRef, err := target.storer.Reference(agentRefName)
+	existingAgentRef, err := target.gits.Reference(agentRefName)
 	if cfg.UseExistingBranch && err == nil && existingAgentRef != nil {
 		// Agent branch exists on remote and caller wants to reuse it — switch to it.
-		if err := target.storer.SetReference(plumbing.NewSymbolicReference(plumbing.HEAD, agentRefName)); err != nil {
+		if err := target.gits.SetReference(plumbing.NewSymbolicReference(plumbing.HEAD, agentRefName)); err != nil {
 			return nil, fmt.Errorf("Replay: set HEAD to existing agent branch: %w", err)
 		}
 		log.Debug().Str("agent_branch", cfg.AgentBranch).Msg("replay: using existing remote agent branch as base")
 	} else {
 		// No existing agent branch — create from the selected main branch.
 		defaultRefName := plumbing.NewBranchReferenceName(cfg.DefaultBranch)
-		defaultRef, err := target.storer.Reference(defaultRefName)
+		defaultRef, err := target.gits.Reference(defaultRefName)
 		if err != nil {
 			return nil, fmt.Errorf("Replay: resolve default branch %q: %w", cfg.DefaultBranch, err)
 		}
-		if err := target.storer.SetReference(plumbing.NewHashReference(agentRefName, defaultRef.Hash())); err != nil {
+		if err := target.gits.SetReference(plumbing.NewHashReference(agentRefName, defaultRef.Hash())); err != nil {
 			return nil, fmt.Errorf("Replay: create agent branch: %w", err)
 		}
-		if err := target.storer.SetReference(plumbing.NewSymbolicReference(plumbing.HEAD, agentRefName)); err != nil {
+		if err := target.gits.SetReference(plumbing.NewSymbolicReference(plumbing.HEAD, agentRefName)); err != nil {
 			return nil, fmt.Errorf("Replay: set HEAD: %w", err)
 		}
 		log.Debug().Str("agent_branch", cfg.AgentBranch).Str("from", cfg.DefaultBranch).Msg("replay: created agent branch from main")
@@ -158,8 +113,6 @@ func Replay(ctx context.Context, local *Store, localBranch string, iter FactIter
 				continue
 			case StrategyLocalWins:
 				result.Overwrites++
-				// Overwrite count tracked, but not in FromRemote reduction —
-				// the remote fact is still counted in TotalFacts.
 			}
 		}
 
@@ -174,7 +127,7 @@ func Replay(ctx context.Context, local *Store, localBranch string, iter FactIter
 
 		// Write fact to target store and commit.
 		msg := fmt.Sprintf("replay: %s", f.path)
-		if _, _, err := target.WriteFile(ctx, cfg.AgentBranch, f.path, resolvedContent, msg, "replay"); err != nil {
+		if _, err := target.WriteFact(ctx, cfg.AgentBranch, f.path, resolvedContent, msg, "replay"); err != nil {
 			return nil, fmt.Errorf("Replay: write %s to target: %w", f.path, err)
 		}
 		result.FromLocal++
@@ -200,8 +153,8 @@ func Replay(ctx context.Context, local *Store, localBranch string, iter FactIter
 	return result, nil
 }
 
-// readBlobByHash reads the content of a blob by its hash from the store's git repo.
-func readBlobByHash(s *Store, hashStr string) (string, error) {
+// readBlobByHash reads the content of a blob by its hash from the service's git repo.
+func readBlobByHash(s *Service, hashStr string) (string, error) {
 	h := plumbing.NewHash(hashStr)
 	blob, err := s.repo.BlobObject(h)
 	if err != nil {
@@ -231,7 +184,7 @@ type replayFrontmatter struct {
 
 // resolveDeadRefs checks each ref in a fact's frontmatter and resolves dead local refs.
 // Returns: modified content, count of resolved refs, count of dropped refs.
-func resolveDeadRefs(ctx context.Context, local *Store, localBranch, content, path string, localPathSet, remotePathSet map[string]bool) (string, int, int, error) {
+func resolveDeadRefs(ctx context.Context, local *Service, localBranch, content, path string, localPathSet, remotePathSet map[string]bool) (string, int, int, error) {
 	fm, yamlBlock, body, err := parseFrontmatterRefs(content)
 	if err != nil {
 		// Not a valid frontmatter file — return as-is.
@@ -268,7 +221,6 @@ func resolveDeadRefs(ctx context.Context, local *Store, localBranch, content, pa
 		}
 
 		if len(externalRefs) == 0 {
-			// Dead fact had no external refs — drop.
 			droppedCount++
 			continue
 		}
@@ -288,8 +240,7 @@ func resolveDeadRefs(ctx context.Context, local *Store, localBranch, content, pa
 
 // extractExternalRefsFromHistory looks up the last version of a deleted fact in
 // local git history and extracts its external (http/https) refs.
-func extractExternalRefsFromHistory(ctx context.Context, local *Store, localBranch, deadPath string) ([]string, error) {
-	// Walk the commit log for this path to find its last version.
+func extractExternalRefsFromHistory(ctx context.Context, local *Service, localBranch, deadPath string) ([]string, error) {
 	localHash, err := local.resolveRef(ctx, localBranch)
 	if err != nil {
 		return nil, fmt.Errorf("extractExternalRefsFromHistory: ref: %w", err)
@@ -304,8 +255,6 @@ func extractExternalRefsFromHistory(ctx context.Context, local *Store, localBran
 	}
 	defer logIter.Close()
 
-	// Walk commits that touched this path and find one where the file actually
-	// exists in the tree (the first hit may be the delete commit).
 	var deadContent string
 	for {
 		c, err := logIter.Next()
@@ -380,8 +329,6 @@ func rebuildContent(yamlBlock, body string, newRefs []string) string {
 
 // replaceRefsInYAML does a targeted replacement of the refs: block inside a
 // raw YAML string, preserving all other fields exactly as they appear.
-// If refs are empty, the refs: section is removed. If no refs: line exists and
-// newRefs is non-empty, refs: is appended before the end.
 func replaceRefsInYAML(yamlBlock string, newRefs []string) string {
 	lines := strings.Split(yamlBlock, "\n")
 
@@ -408,18 +355,14 @@ func replaceRefsInYAML(yamlBlock string, newRefs []string) string {
 
 	var resultLines []string
 	if refsStart == -1 {
-		// No refs: line exists.
 		if len(newRefs) > 0 {
-			// Append refs before the closing boundary.
 			resultLines = append(lines, newRefsLine)
 		} else {
 			resultLines = lines
 		}
 	} else if len(newRefs) == 0 {
-		// Remove the refs: section entirely.
 		resultLines = append(lines[:refsStart], lines[refsEnd:]...)
 	} else {
-		// Replace the refs: section with the new single-line form.
 		resultLines = make([]string, 0, len(lines)-(refsEnd-refsStart)+1)
 		resultLines = append(resultLines, lines[:refsStart]...)
 		resultLines = append(resultLines, newRefsLine)

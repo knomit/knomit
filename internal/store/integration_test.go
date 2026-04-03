@@ -4,8 +4,6 @@ import (
 	"context"
 	"path/filepath"
 	"testing"
-
-	"knomit/internal/git"
 )
 
 const testBranch = "agent/test"
@@ -23,38 +21,44 @@ func openTestService(t *testing.T) *Service {
 	return svc
 }
 
-func TestDeleteFactAtomically(t *testing.T) {
-	ctx := context.Background()
+// openTestServiceWithRepo creates a temporary Service with an initialized repo.
+func openTestServiceWithRepo(t *testing.T) *Service {
+	t.Helper()
 	svc := openTestService(t)
-
-	gs, err := git.InitWithStorer(svc.GitStorer(), nil, testBranch)
-	if err != nil {
+	if err := svc.InitRepo(nil, testBranch); err != nil {
 		t.Fatal(err)
 	}
-	gs.SetOnCommit(func(_, _ string) {
-		if err := svc.Index().Sync(ctx, gs, testBranch); err != nil {
+	return svc
+}
+
+func TestDeleteFactAtomically(t *testing.T) {
+	ctx := context.Background()
+	svc := openTestServiceWithRepo(t)
+
+	svc.SetOnCommit(func(_, _ string) {
+		if err := svc.Index().Sync(ctx, svc, testBranch); err != nil {
 			t.Errorf("onCommit sync: %v", err)
 		}
 	})
 
 	// Write a fact
-	_, blobHash, err := gs.WriteFile(context.Background(), testBranch, "kb/test.md", "---\ndomain: []\nconfidence: 1\nsources: 1\nentities: []\nrefs: []\n---\n# Test\n\nBody.", "add test", "learn")
+	res, err := svc.WriteFact(context.Background(), testBranch, "kb/test.md", "---\ndomain: []\nconfidence: 1\nsources: 1\nentities: []\nrefs: []\n---\n# Test\n\nBody.", "add test", "learn")
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// Upsert to index
 	rec := FactRecord{
-		Path: "kb/test.md", Title: "Test", BlobHash: blobHash,
+		Path: "kb/test.md", Title: "Test", BlobHash: res.BlobHash,
 		Domain: []string{}, Entities: []string{}, Confidence: 1, Sources: 1, Refs: []string{},
-		
+
 	}
 	if err := svc.Index().Upsert(ctx, testBranch, "abc", rec); err != nil {
 		t.Fatal(err)
 	}
 
 	// Delete
-	if err := svc.DeleteFact(context.Background(), gs, testBranch, "kb/test.md", "forget test"); err != nil {
+	if _, err := svc.DeleteFact(context.Background(), testBranch, "kb/test.md", "forget test"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -65,7 +69,7 @@ func TestDeleteFactAtomically(t *testing.T) {
 	}
 
 	// Verify: file gone from git
-	exists, _ := gs.FileExists(context.Background(), testBranch, "kb/test.md")
+	exists, _ := svc.FactExists(context.Background(), testBranch, "kb/test.md")
 	if exists {
 		t.Fatal("expected file to be deleted from git")
 	}
@@ -73,13 +77,9 @@ func TestDeleteFactAtomically(t *testing.T) {
 
 func TestEvidenceWeightRoundTrip(t *testing.T) {
 	ctx := context.Background()
-	svc := openTestService(t)
-	gs, err := git.InitWithStorer(svc.GitStorer(), nil, testBranch)
-	if err != nil {
-		t.Fatal(err)
-	}
+	svc := openTestServiceWithRepo(t)
 
-	_, blobHash, err := gs.WriteFile(context.Background(), testBranch, "kb/weighted.md",
+	resW, err := svc.WriteFact(context.Background(), testBranch, "kb/weighted.md",
 		"---\ndomain: []\nconfidence: 0.9\nsources: 5\nentities: []\nrefs: []\n---\n# Weighted\n\nBody.",
 		"add weighted", "learn",
 	)
@@ -88,7 +88,7 @@ func TestEvidenceWeightRoundTrip(t *testing.T) {
 	}
 
 	rec := FactRecord{
-		Path: "kb/weighted.md", Title: "Weighted", BlobHash: blobHash,
+		Path: "kb/weighted.md", Title: "Weighted", BlobHash: resW.BlobHash,
 		Domain: []string{}, Entities: []string{}, Confidence: 0.9, Sources: 5,
 		Refs: []string{},  EvidenceWeight: 0.714,
 	}
@@ -110,31 +110,27 @@ func TestEvidenceWeightRoundTrip(t *testing.T) {
 
 func TestFullRoundtrip(t *testing.T) {
 	ctx := context.Background()
-	svc := openTestService(t)
+	svc := openTestServiceWithRepo(t)
 
-	gs, err := git.InitWithStorer(svc.GitStorer(), nil, testBranch)
-	if err != nil {
-		t.Fatal(err)
-	}
-	gs.SetOnCommit(func(_, _ string) {
-		if err := svc.Index().Sync(ctx, gs, testBranch); err != nil {
+	svc.SetOnCommit(func(_, _ string) {
+		if err := svc.Index().Sync(ctx, svc, testBranch); err != nil {
 			t.Errorf("onCommit sync: %v", err)
 		}
 	})
 
 	// Write a fact via git
 	content := "---\ndomain: [databases]\nconfidence: 0.9\nsources: 1\nentities: [postgres]\nrefs: []\n---\n# Postgres is great\n\nPostgreSQL is a powerful RDBMS."
-	_, blobHash, err := gs.WriteFile(context.Background(), testBranch, "kb/db/postgres.md", content, "learn postgres", "learn")
+	resP, err := svc.WriteFact(context.Background(), testBranch, "kb/db/postgres.md", content, "learn postgres", "learn")
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// Upsert to index
 	rec := FactRecord{
-		Path: "kb/db/postgres.md", Title: "Postgres is great", BlobHash: blobHash,
+		Path: "kb/db/postgres.md", Title: "Postgres is great", BlobHash: resP.BlobHash,
 		Domain: []string{"databases"}, Entities: []string{"postgres"},
 		Confidence: 0.9, Sources: 1, Refs: []string{},
-		
+
 	}
 	if err := svc.Index().Upsert(ctx, testBranch, "abc", rec); err != nil {
 		t.Fatal(err)
@@ -151,7 +147,7 @@ func TestFullRoundtrip(t *testing.T) {
 	if got.Body != "PostgreSQL is a powerful RDBMS." {
 		t.Fatalf("unexpected body: %q", got.Body)
 	}
-	if got.BlobHash != blobHash {
+	if got.BlobHash != resP.BlobHash {
 		t.Fatalf("unexpected blob_hash: %q", got.BlobHash)
 	}
 	if got.Title != "Postgres is great" {
@@ -159,12 +155,12 @@ func TestFullRoundtrip(t *testing.T) {
 	}
 
 	// Sync should work
-	if err := svc.Index().Sync(ctx, gs, testBranch); err != nil {
+	if err := svc.Index().Sync(ctx, svc, testBranch); err != nil {
 		t.Fatal(err)
 	}
 
 	// Delete
-	if err := svc.DeleteFact(context.Background(), gs, testBranch, "kb/db/postgres.md", "forget postgres"); err != nil {
+	if _, err := svc.DeleteFact(context.Background(), testBranch, "kb/db/postgres.md", "forget postgres"); err != nil {
 		t.Fatal(err)
 	}
 

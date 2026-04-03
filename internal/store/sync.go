@@ -142,7 +142,7 @@ func (idx *Index) Rebuild(ctx context.Context, git GitReader, branch string, pro
 // commitHash is the fallback; if commit_log has a more specific last-touch
 // commit for this path, that is used instead.
 func (idx *Index) indexFile(ctx context.Context, git GitReader, branch, path, commitHash string) error {
-	content, blobHash, err := git.ReadFileWithHash(ctx, branch, path)
+	content, blobHash, err := git.readFileWithHash(ctx, branch, path)
 	if err != nil {
 		return fmt.Errorf("indexFile: read %s: %w", path, err)
 	}

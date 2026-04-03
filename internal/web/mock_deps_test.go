@@ -11,7 +11,6 @@ package web
 
 import (
 	context "context"
-	git "knomit/internal/git"
 	store "knomit/internal/store"
 	reflect "reflect"
 
@@ -43,10 +42,10 @@ func (m *MockGitStore) EXPECT() *MockGitStoreMockRecorder {
 }
 
 // Activity mocks base method.
-func (m *MockGitStore) Activity(ctx context.Context, branch, path string) (git.ActivityResult, error) {
+func (m *MockGitStore) Activity(ctx context.Context, branch, path string) (store.ActivityResult, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "Activity", ctx, branch, path)
-	ret0, _ := ret[0].(git.ActivityResult)
+	ret0, _ := ret[0].(store.ActivityResult)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
@@ -58,10 +57,10 @@ func (mr *MockGitStoreMockRecorder) Activity(ctx, branch, path any) *gomock.Call
 }
 
 // CommitDetail mocks base method.
-func (m *MockGitStore) CommitDetail(ctx context.Context, commitHash string) (*git.CommitDetailResult, error) {
+func (m *MockGitStore) CommitDetail(ctx context.Context, commitHash string) (*store.CommitDetailResult, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "CommitDetail", ctx, commitHash)
-	ret0, _ := ret[0].(*git.CommitDetailResult)
+	ret0, _ := ret[0].(*store.CommitDetailResult)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
@@ -72,19 +71,19 @@ func (mr *MockGitStoreMockRecorder) CommitDetail(ctx, commitHash any) *gomock.Ca
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CommitDetail", reflect.TypeOf((*MockGitStore)(nil).CommitDetail), ctx, commitHash)
 }
 
-// DeleteFile mocks base method.
-func (m *MockGitStore) DeleteFile(ctx context.Context, branch, path, message, operation string) (string, error) {
+// DeleteFact mocks base method.
+func (m *MockGitStore) DeleteFact(ctx context.Context, branch, path, message string) (string, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "DeleteFile", ctx, branch, path, message, operation)
+	ret := m.ctrl.Call(m, "DeleteFact", ctx, branch, path, message)
 	ret0, _ := ret[0].(string)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
-// DeleteFile indicates an expected call of DeleteFile.
-func (mr *MockGitStoreMockRecorder) DeleteFile(ctx, branch, path, message, operation any) *gomock.Call {
+// DeleteFact indicates an expected call of DeleteFact.
+func (mr *MockGitStoreMockRecorder) DeleteFact(ctx, branch, path, message any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteFile", reflect.TypeOf((*MockGitStore)(nil).DeleteFile), ctx, branch, path, message, operation)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteFact", reflect.TypeOf((*MockGitStore)(nil).DeleteFact), ctx, branch, path, message)
 }
 
 // HeadCommit mocks base method.
@@ -118,10 +117,10 @@ func (mr *MockGitStoreMockRecorder) ListAll(ctx, branch any) *gomock.Call {
 }
 
 // ListDir mocks base method.
-func (m *MockGitStore) ListDir(ctx context.Context, branch, path string) ([]git.DirEntry, error) {
+func (m *MockGitStore) ListDir(ctx context.Context, branch, path string) ([]store.DirEntry, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "ListDir", ctx, branch, path)
-	ret0, _ := ret[0].([]git.DirEntry)
+	ret0, _ := ret[0].([]store.DirEntry)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
@@ -133,10 +132,10 @@ func (mr *MockGitStoreMockRecorder) ListDir(ctx, branch, path any) *gomock.Call 
 }
 
 // Log mocks base method.
-func (m *MockGitStore) Log(ctx context.Context, branch, path string) ([]git.LogEntry, error) {
+func (m *MockGitStore) Log(ctx context.Context, branch, path string) ([]store.LogEntry, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "Log", ctx, branch, path)
-	ret0, _ := ret[0].([]git.LogEntry)
+	ret0, _ := ret[0].([]store.LogEntry)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
@@ -148,10 +147,10 @@ func (mr *MockGitStoreMockRecorder) Log(ctx, branch, path any) *gomock.Call {
 }
 
 // LogPaginated mocks base method.
-func (m *MockGitStore) LogPaginated(ctx context.Context, branch, path string, limit int, after, from, before string) ([]git.LogEntryWithTags, string, string, error) {
+func (m *MockGitStore) LogPaginated(ctx context.Context, branch, path string, limit int, after, from, before string) ([]store.LogEntryWithTags, string, string, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "LogPaginated", ctx, branch, path, limit, after, from, before)
-	ret0, _ := ret[0].([]git.LogEntryWithTags)
+	ret0, _ := ret[0].([]store.LogEntryWithTags)
 	ret1, _ := ret[1].(string)
 	ret2, _ := ret[2].(string)
 	ret3, _ := ret[3].(error)
@@ -164,66 +163,34 @@ func (mr *MockGitStoreMockRecorder) LogPaginated(ctx, branch, path, limit, after
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "LogPaginated", reflect.TypeOf((*MockGitStore)(nil).LogPaginated), ctx, branch, path, limit, after, from, before)
 }
 
-// ReadFile mocks base method.
-func (m *MockGitStore) ReadFile(ctx context.Context, branch, path string) (string, error) {
+// ReadFact mocks base method.
+func (m *MockGitStore) ReadFact(ctx context.Context, branch, path string, opts *store.ReadFactOpts) (store.ReadFactResult, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "ReadFile", ctx, branch, path)
-	ret0, _ := ret[0].(string)
+	ret := m.ctrl.Call(m, "ReadFact", ctx, branch, path, opts)
+	ret0, _ := ret[0].(store.ReadFactResult)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
-// ReadFile indicates an expected call of ReadFile.
-func (mr *MockGitStoreMockRecorder) ReadFile(ctx, branch, path any) *gomock.Call {
+// ReadFact indicates an expected call of ReadFact.
+func (mr *MockGitStoreMockRecorder) ReadFact(ctx, branch, path, opts any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ReadFile", reflect.TypeOf((*MockGitStore)(nil).ReadFile), ctx, branch, path)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ReadFact", reflect.TypeOf((*MockGitStore)(nil).ReadFact), ctx, branch, path, opts)
 }
 
-// ReadFileAtCommit mocks base method.
-func (m *MockGitStore) ReadFileAtCommit(ctx context.Context, branch, path, commitHash string) (string, error) {
+// WriteFact mocks base method.
+func (m *MockGitStore) WriteFact(ctx context.Context, branch, path, content, message, operation string) (store.WriteFactResult, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "ReadFileAtCommit", ctx, branch, path, commitHash)
-	ret0, _ := ret[0].(string)
+	ret := m.ctrl.Call(m, "WriteFact", ctx, branch, path, content, message, operation)
+	ret0, _ := ret[0].(store.WriteFactResult)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
-// ReadFileAtCommit indicates an expected call of ReadFileAtCommit.
-func (mr *MockGitStoreMockRecorder) ReadFileAtCommit(ctx, branch, path, commitHash any) *gomock.Call {
+// WriteFact indicates an expected call of WriteFact.
+func (mr *MockGitStoreMockRecorder) WriteFact(ctx, branch, path, content, message, operation any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ReadFileAtCommit", reflect.TypeOf((*MockGitStore)(nil).ReadFileAtCommit), ctx, branch, path, commitHash)
-}
-
-// ReadFileLastCommit mocks base method.
-func (m *MockGitStore) ReadFileLastCommit(ctx context.Context, branch, path, beforeCommitHash string) (string, string, error) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "ReadFileLastCommit", ctx, branch, path, beforeCommitHash)
-	ret0, _ := ret[0].(string)
-	ret1, _ := ret[1].(string)
-	ret2, _ := ret[2].(error)
-	return ret0, ret1, ret2
-}
-
-// ReadFileLastCommit indicates an expected call of ReadFileLastCommit.
-func (mr *MockGitStoreMockRecorder) ReadFileLastCommit(ctx, branch, path, beforeCommitHash any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ReadFileLastCommit", reflect.TypeOf((*MockGitStore)(nil).ReadFileLastCommit), ctx, branch, path, beforeCommitHash)
-}
-
-// WriteFile mocks base method.
-func (m *MockGitStore) WriteFile(ctx context.Context, branch, path, content, message, operation string) (string, string, error) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "WriteFile", ctx, branch, path, content, message, operation)
-	ret0, _ := ret[0].(string)
-	ret1, _ := ret[1].(string)
-	ret2, _ := ret[2].(error)
-	return ret0, ret1, ret2
-}
-
-// WriteFile indicates an expected call of WriteFile.
-func (mr *MockGitStoreMockRecorder) WriteFile(ctx, branch, path, content, message, operation any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "WriteFile", reflect.TypeOf((*MockGitStore)(nil).WriteFile), ctx, branch, path, content, message, operation)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "WriteFact", reflect.TypeOf((*MockGitStore)(nil).WriteFact), ctx, branch, path, content, message, operation)
 }
 
 // MockSearchIndex is a mock of SearchIndex interface.

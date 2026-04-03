@@ -37,8 +37,7 @@ func ExploreHandler(gs GitStore, sessionIdx ToolSessionIndex, ontologyRoot, agen
 		var fromCommit string
 
 		if cursor == "" {
-			// New session: GC old sessions, start fresh.
-			_ = sessionIdx.GCToolSessions(ctx, "explore", agentBranch, 5)
+			// New session: start fresh.
 		} else {
 			// Resume existing session.
 			session, err := sessionIdx.GetToolSession(ctx, cursor)
@@ -71,11 +70,11 @@ func ExploreHandler(gs GitStore, sessionIdx ToolSessionIndex, ontologyRoot, agen
 		var newPaths []string
 
 		for _, f := range files {
-			content, readErr := gs.ReadFile(ctx, agentBranch, f.Path)
+			readResult, readErr := gs.ReadFact(ctx, agentBranch, f.Path, nil)
 			if readErr != nil {
 				continue // deleted or unreadable — skip
 			}
-			parsed, parseErr := ParseFact(f.Path, content)
+			parsed, parseErr := ParseFact(f.Path, readResult.Content)
 			if parseErr != nil {
 				continue
 			}

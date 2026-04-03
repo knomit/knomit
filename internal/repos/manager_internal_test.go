@@ -12,9 +12,8 @@ import (
 
 	"knomit/internal/config"
 	"knomit/internal/fact"
-	"knomit/internal/git"
+	"knomit/internal/identity"
 	"knomit/internal/store"
-	storegit "knomit/internal/store/git"
 )
 
 // stubEmbedder satisfies repos.Embedder (and store.Embedder) without ONNX model files.
@@ -48,11 +47,11 @@ func assertEmbedderSet(t *testing.T, ri *RepoInstance, msg string) {
 func defaultTestDeps(t *testing.T, dir string) (Deps, string) {
 	t.Helper()
 	keyPath := filepath.Join(dir, "id_ed25519")
-	signer, fp, err := git.EnsureKeyPair(keyPath)
+	signer, fp, err := identity.EnsureKeyPair(keyPath)
 	if err != nil {
 		t.Fatalf("EnsureKeyPair: %v", err)
 	}
-	agentBranch := git.AgentBranch(fp)
+	agentBranch := identity.AgentBranch(fp)
 	deps := Deps{
 		Cfg:         config.Config{},
 		Signer:      signer,
@@ -74,7 +73,7 @@ func openTestDB(t *testing.T) string {
 	if err != nil {
 		t.Fatalf("openTestDB: store.Open: %v", err)
 	}
-	if _, err := git.InitWithStorer(svc.GitStorer(), nil, ""); err != nil {
+	if err := svc.InitRepo(nil, ""); err != nil {
 		svc.Close()
 		t.Fatalf("openTestDB: git.InitWithStorer: %v", err)
 	}
@@ -116,9 +115,6 @@ func TestOpenOne_DefaultCreatesNewRepo(t *testing.T) {
 	if ri.name != "knomit" {
 		t.Errorf("ri.name = %q, want %q", ri.name, "knomit")
 	}
-	if ri.gs == nil {
-		t.Error("ri.gs is nil")
-	}
 	if ri.svc == nil {
 		t.Error("ri.svc is nil")
 	}
@@ -127,9 +123,6 @@ func TestOpenOne_DefaultCreatesNewRepo(t *testing.T) {
 	}
 	if ri.hub == nil {
 		t.Error("ri.hub is nil")
-	}
-	if _, ok := ri.gs.(*git.Store); !ok {
-		t.Fatal("ri.gs is not *git.Store")
 	}
 	if ri.agentBranch != agentBranch {
 		t.Errorf("agentBranch = %q, want %q", ri.agentBranch, agentBranch)
@@ -223,9 +216,6 @@ func TestSwapStore_FileSwap(t *testing.T) {
 	if ri.svc == nil {
 		t.Fatal("expected ri.svc to be set after file swap")
 	}
-	if ri.gs == nil {
-		t.Fatal("expected ri.gs to be set after file swap")
-	}
 	if ri.idx == nil {
 		t.Fatal("expected ri.idx to be set after file swap")
 	}
@@ -295,7 +285,7 @@ func TestSwapStoreRestoresEmbedder(t *testing.T) {
 // ---------- remoteAuthFromRecord ----------
 
 func TestRemoteAuthFromRecord_UsesRecordFields(t *testing.T) {
-	fallback := git.RemoteAuthConfig{Token: "global-tok", AuthMethod: "token"}
+	fallback := identity.RemoteAuthConfig{Token: "global-tok", AuthMethod: "token"}
 	remote := &store.Remote{AuthMethod: "basic", AuthToken: "alice:s3cret"}
 
 	got := remoteAuthFromRecord(remote, fallback)
@@ -308,7 +298,7 @@ func TestRemoteAuthFromRecord_UsesRecordFields(t *testing.T) {
 }
 
 func TestRemoteAuthFromRecord_TokenFallback(t *testing.T) {
-	fallback := git.RemoteAuthConfig{Token: "global-tok", AuthMethod: "token"}
+	fallback := identity.RemoteAuthConfig{Token: "global-tok", AuthMethod: "token"}
 	remote := &store.Remote{AuthToken: "override-tok"}
 
 	got := remoteAuthFromRecord(remote, fallback)
@@ -321,7 +311,7 @@ func TestRemoteAuthFromRecord_TokenFallback(t *testing.T) {
 }
 
 func TestRemoteAuthFromRecord_EmptyRecordUsesFallback(t *testing.T) {
-	fallback := git.RemoteAuthConfig{Token: "global", AuthMethod: "token", SSHKey: "/path/key"}
+	fallback := identity.RemoteAuthConfig{Token: "global", AuthMethod: "token", SSHKey: "/path/key"}
 	remote := &store.Remote{}
 
 	got := remoteAuthFromRecord(remote, fallback)
@@ -337,21 +327,18 @@ func TestRemoteAuthFromRecord_EmptyRecordUsesFallback(t *testing.T) {
 // cfg.Git.Origin.
 func setupOrigin(t *testing.T) (originURL string) {
 	t.Helper()
-	originSto, err := storegit.NewMemoryStorer()
+	originSvc, err := store.Open(":memory:")
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { originSto.Close() })
-
-	origin, err := git.InitWithStorer(originSto, map[string]string{
+	t.Cleanup(func() { originSvc.Close() })
+	if err := originSvc.InitRepo(map[string]string{
 		"kb/seed.md": "---\ntitle: seed\n---\nhello\n",
-	}, "main")
-	if err != nil {
+	}, "main"); err != nil {
 		t.Fatal(err)
 	}
-	_ = origin // keep for potential future use
 
-	loader := server.MapLoader{"inmem:///origin": originSto}
+	loader := server.MapLoader{"inmem:///origin": originSvc.Storer()}
 	client.InstallProtocol("inmem", server.NewClient(loader))
 	t.Cleanup(func() { client.InstallProtocol("inmem", nil) })
 

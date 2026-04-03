@@ -1,6 +1,8 @@
 // Low-level git plumbing: blob creation, tree building/modification, and commit
 // creation. These helpers are used by the higher-level read/write/sync operations.
-package git
+//
+// All functions are unexported and take *storegit.Storer parameters.
+package store
 
 import (
 	"fmt"

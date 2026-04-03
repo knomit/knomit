@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"go.uber.org/mock/gomock"
-	"knomit/internal/git"
 	"knomit/internal/store"
 )
 
@@ -29,10 +28,10 @@ func TestReviewLoopIntegration(t *testing.T) {
 	reviewIdx := svc.Index()
 
 	// Real git store backed by SQLite storer.
-	gitStore, err := git.InitWithStorer(svc.GitStorer(), nil, testReviewBranch)
-	if err != nil {
+	if err := svc.InitRepo(nil, testReviewBranch); err != nil {
 		t.Fatal(err)
 	}
+	gitStore := svc
 
 	// Write 3 facts to real git so gatherAllFacts and ReadFile work.
 	facts := map[string]string{
@@ -41,7 +40,7 @@ func TestReviewLoopIntegration(t *testing.T) {
 		"kb/go/errors.md":      factContent("Go Error Handling", "Go uses explicit error returns instead of exceptions."),
 	}
 	for path, content := range facts {
-		if _, _, err := gitStore.WriteFile(context.Background(), testReviewBranch, path, content, "add "+path, "learn"); err != nil {
+		if _, err := gitStore.WriteFact(context.Background(), testReviewBranch, path, content, "add "+path, "learn"); err != nil {
 			t.Fatalf("write %s: %v", path, err)
 		}
 	}
@@ -101,16 +100,16 @@ func TestReviewLoopIntegration(t *testing.T) {
 		result.Done, result.Item != nil, result.Progress)
 
 	// Verify retracted fact is actually deleted from git.
-	_, readErr := gitStore.ReadFile(context.Background(), testReviewBranch, "kb/go/errors.md")
+	_, readErr := gitStore.ReadFact(context.Background(), testReviewBranch, "kb/go/errors.md", nil)
 	if readErr == nil {
 		t.Error("expected kb/go/errors.md to be deleted from git after retract")
 	}
 
 	// Kept facts should still be readable.
-	if _, err := gitStore.ReadFile(context.Background(), testReviewBranch, "kb/go/concurrency.md"); err != nil {
+	if _, err := gitStore.ReadFact(context.Background(), testReviewBranch, "kb/go/concurrency.md", nil); err != nil {
 		t.Errorf("concurrency.md should still exist: %v", err)
 	}
-	if _, err := gitStore.ReadFile(context.Background(), testReviewBranch, "kb/go/interfaces.md"); err != nil {
+	if _, err := gitStore.ReadFact(context.Background(), testReviewBranch, "kb/go/interfaces.md", nil); err != nil {
 		t.Errorf("interfaces.md should still exist: %v", err)
 	}
 

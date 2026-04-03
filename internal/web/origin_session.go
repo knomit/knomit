@@ -1,7 +1,6 @@
 package web
 
 import (
-	"database/sql"
 	"fmt"
 	"os"
 	"sync"
@@ -9,7 +8,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
-	"knomit/internal/git"
+	"knomit/internal/store"
 )
 
 // AuthConfig holds authentication credentials for a remote connection attempt.
@@ -50,8 +49,7 @@ type OriginSession struct {
 	State       SessionState
 	CreatedAt   time.Time
 	LastAccess  time.Time
-	RemoteStore   *git.Store  // cloned remote store, set by test handler
-	RemoteDB      *sql.DB    // DB backing RemoteStore; owned here for WAL checkpoint on commit
+	RemoteStore   *store.Service  // cloned remote store, set by test handler
 	RemoteBranch  string     // remote branch to track, set by apply handler
 	AppliedBranch string     // agent branch written into the clone during apply; used by commit for rebuild
 	TestResult    any        // cached result from test step

@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"knomit/internal/config"
-	"knomit/internal/git"
+	"knomit/internal/identity"
 	"knomit/internal/repos"
 	"knomit/internal/store"
 )
@@ -105,9 +105,9 @@ func openTestDB(t *testing.T) string {
 	if err != nil {
 		t.Fatalf("openTestDB: store.Open: %v", err)
 	}
-	if _, err := git.InitWithStorer(svc.GitStorer(), nil, ""); err != nil {
+	if err := svc.InitRepo(nil, ""); err != nil {
 		svc.Close()
-		t.Fatalf("openTestDB: git.InitWithStorer: %v", err)
+		t.Fatalf("openTestDB: InitRepo: %v", err)
 	}
 	svc.Close()
 	return path
@@ -191,14 +191,11 @@ func TestObserver_UsesCurrentIndexAfterSwapStore(t *testing.T) {
 	}
 
 	// Write a fact so the old index has some state.
-	var gs repos.GitStore
-	ri.WithRead(func(d repos.StoreDeps) { gs = d.GS })
-	writer := gs.(interface {
-		WriteFile(ctx context.Context, branch, path, content, message, operation string) (string, string, error)
-	})
-	_, _, err := writer.WriteFile(context.Background(), ri.AgentBranch(), "kb/test/hello.md", "---\ntitle: hello\n---\n# hello\nworld\n", "test", "learn")
+	var svcW *store.Service
+	ri.WithRead(func(d repos.StoreDeps) { svcW = d.Svc })
+	_, err := svcW.WriteFact(context.Background(), ri.AgentBranch(), "kb/test/hello.md", "---\ntitle: hello\n---\n# hello\nworld\n", "test", "learn")
 	if err != nil {
-		t.Fatalf("WriteFile: %v", err)
+		t.Fatalf("WriteFact: %v", err)
 	}
 
 	var oldSvc *store.Service
@@ -273,14 +270,14 @@ func TestClose_ClosesCurrentSvcAfterSwapStore(t *testing.T) {
 func bootManager(t *testing.T, dir string) *repos.Manager {
 	t.Helper()
 	keyPath := filepath.Join(dir, "id_ed25519")
-	signer, fp, err := git.EnsureKeyPair(keyPath)
+	signer, fp, err := identity.EnsureKeyPair(keyPath)
 	if err != nil {
 		t.Fatalf("EnsureKeyPair: %v", err)
 	}
 	return repos.New(context.Background(), repos.Deps{
 		Cfg:         config.Config{Home: dir},
 		Signer:      signer,
-		AgentBranch: git.AgentBranch(fp),
+		AgentBranch: identity.AgentBranch(fp),
 		KeyPath:     keyPath,
 	})
 }
@@ -366,7 +363,6 @@ func TestRepoInstance_SwapStore_ConcurrentRead(t *testing.T) {
 					return
 				default:
 					ri.WithRead(func(d repos.StoreDeps) {
-						_ = d.GS
 						_ = d.Svc
 						_ = d.Idx
 					})

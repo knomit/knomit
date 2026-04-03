@@ -10,11 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/transport/client"
 	"github.com/go-git/go-git/v5/plumbing/transport/server"
 
-	"knomit/internal/git"
 	"knomit/internal/repos"
 	"knomit/internal/store"
 )
@@ -35,18 +33,17 @@ func TestOriginSession_FullWorkflow(t *testing.T) {
 	}
 	t.Cleanup(func() { localSvc.Close() })
 
-	localGS, err := git.InitWithStorer(localSvc.GitStorer(), nil, testAgentBranch)
-	if err != nil {
-		t.Fatalf("git.InitWithStorer local: %v", err)
+	if err := localSvc.InitRepo(nil, testAgentBranch); err != nil {
+		t.Fatalf("InitRepo local: %v", err)
 	}
 
 	// Write local-only facts.
 	localFactA := "---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# Local Fact A\n\nOnly on local.\n"
-	writeFact(t, localGS, localSvc,"kb/local-a.md", localFactA)
+	writeFact(t, localSvc,"kb/local-a.md", localFactA)
 
 	// A shared fact (same path, same content on both local and remote).
 	sharedContent := "---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# Shared Fact\n\nPresent in both repos.\n"
-	writeFact(t, localGS, localSvc,"kb/shared.md", sharedContent)
+	writeFact(t, localSvc,"kb/shared.md", sharedContent)
 
 	// ---- 2. Set up remote knomit instance with different facts ----
 	// Sleep >1s so the remote's root commit has a different timestamp,
@@ -54,37 +51,29 @@ func TestOriginSession_FullWorkflow(t *testing.T) {
 	// not the unimplemented shared-merge stub).
 	time.Sleep(1100 * time.Millisecond)
 
-	remoteStorer := newTestStorerForWeb(t)
-	remoteStore, err := git.InitWithStorer(remoteStorer, nil, "agent/remote")
+	remoteStore, err := store.Open(":memory:")
 	if err != nil {
-		t.Fatalf("git.InitWithStorer remote: %v", err)
+		t.Fatalf("store.Open remote: %v", err)
+	}
+	t.Cleanup(func() { remoteStore.Close() })
+	if err := remoteStore.InitRepo(nil, "agent/remote"); err != nil {
+		t.Fatalf("InitRepo remote: %v", err)
 	}
 
 	// Shared fact on remote (same path).
-	if _, _, err := remoteStore.WriteFile(context.Background(), "agent/remote", "kb/shared.md", sharedContent, "add shared", "learn"); err != nil {
+	if _, err := remoteStore.WriteFact(context.Background(), "agent/remote", "kb/shared.md", sharedContent, "add shared", "learn"); err != nil {
 		t.Fatalf("remote WriteFile shared: %v", err)
 	}
 
 	// Remote-only fact.
 	remoteFact := "---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# Remote Fact B\n\nOnly on remote.\n"
-	if _, _, err := remoteStore.WriteFile(context.Background(), "agent/remote", "kb/remote-b.md", remoteFact, "add remote-b", "learn"); err != nil {
+	if _, err := remoteStore.WriteFact(context.Background(), "agent/remote", "kb/remote-b.md", remoteFact, "add remote-b", "learn"); err != nil {
 		t.Fatalf("remote WriteFile remote-b: %v", err)
-	}
-
-	// Advance main on remote so clone can find it.
-	remoteHead, err := remoteStore.HeadCommit(context.Background(), "agent/remote")
-	if err != nil {
-		t.Fatalf("remote HeadCommit: %v", err)
-	}
-	if err := remoteStorer.SetReference(
-		plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), plumbing.NewHash(remoteHead)),
-	); err != nil {
-		t.Fatalf("remote SetReference main: %v", err)
 	}
 
 	// ---- 3. Wire in-process transport ----
 
-	loader := server.MapLoader{"inmem:///integration-remote": remoteStorer}
+	loader := server.MapLoader{"inmem:///integration-remote": remoteStore.Storer()}
 	client.InstallProtocol("inmem", server.NewClient(loader))
 	t.Cleanup(func() { client.InstallProtocol("inmem", nil) })
 
@@ -98,7 +87,6 @@ func TestOriginSession_FullWorkflow(t *testing.T) {
 	ri := repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
 		AgentBranch: testAgentBranch,
 		Name:        "knomit",
-		GS:          localGS,
 		Svc:         localSvc,
 		Hub:         hub,
 		StartSync:   func(url string) error { return nil },
@@ -307,51 +295,43 @@ func TestOriginSession_RemoteWinsStrategy(t *testing.T) {
 	}
 	t.Cleanup(func() { localSvc.Close() })
 
-	localGS, err := git.InitWithStorer(localSvc.GitStorer(), nil, testAgentBranch)
-	if err != nil {
-		t.Fatalf("git.InitWithStorer local: %v", err)
+	if err := localSvc.InitRepo(nil, testAgentBranch); err != nil {
+		t.Fatalf("InitRepo local: %v", err)
 	}
 
 	localOnlyFact := "---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# Local Only\n\nLocal content.\n"
-	writeFact(t, localGS, localSvc,"kb/local-a.md", localOnlyFact)
+	writeFact(t, localSvc,"kb/local-a.md", localOnlyFact)
 
 	sharedLocalContent := "---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# Shared Fact\n\nLocal version of shared.\n"
-	writeFact(t, localGS, localSvc,"kb/shared.md", sharedLocalContent)
+	writeFact(t, localSvc,"kb/shared.md", sharedLocalContent)
 
 	// Disjoint history: sleep so root commits differ.
 	time.Sleep(1100 * time.Millisecond)
 
 	// Remote: 3 facts (shared.md, remote-b.md, remote-c.md). 1 shared path = kb/shared.md.
-	remoteStorer := newTestStorerForWeb(t)
-	remoteStore, err := git.InitWithStorer(remoteStorer, nil, "agent/remote")
+	remoteStore, err := store.Open(":memory:")
 	if err != nil {
-		t.Fatalf("git.InitWithStorer remote: %v", err)
+		t.Fatalf("store.Open remote: %v", err)
+	}
+	t.Cleanup(func() { remoteStore.Close() })
+	if err := remoteStore.InitRepo(nil, "agent/remote"); err != nil {
+		t.Fatalf("InitRepo remote: %v", err)
 	}
 
 	sharedRemoteContent := "---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# Shared Fact\n\nRemote version of shared.\n"
-	if _, _, err := remoteStore.WriteFile(context.Background(), "agent/remote", "kb/shared.md", sharedRemoteContent, "add shared", "learn"); err != nil {
+	if _, err := remoteStore.WriteFact(context.Background(), "agent/remote", "kb/shared.md", sharedRemoteContent, "add shared", "learn"); err != nil {
 		t.Fatalf("remote WriteFile shared: %v", err)
 	}
 	remoteFact := "---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# Remote B\n\nRemote only.\n"
-	if _, _, err := remoteStore.WriteFile(context.Background(), "agent/remote", "kb/remote-b.md", remoteFact, "add remote-b", "learn"); err != nil {
+	if _, err := remoteStore.WriteFact(context.Background(), "agent/remote", "kb/remote-b.md", remoteFact, "add remote-b", "learn"); err != nil {
 		t.Fatalf("remote WriteFile remote-b: %v", err)
 	}
 	remoteFact2 := "---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# Remote C\n\nRemote only.\n"
-	if _, _, err := remoteStore.WriteFile(context.Background(), "agent/remote", "kb/remote-c.md", remoteFact2, "add remote-c", "learn"); err != nil {
+	if _, err := remoteStore.WriteFact(context.Background(), "agent/remote", "kb/remote-c.md", remoteFact2, "add remote-c", "learn"); err != nil {
 		t.Fatalf("remote WriteFile remote-c: %v", err)
 	}
 
-	remoteHead, err := remoteStore.HeadCommit(context.Background(), "agent/remote")
-	if err != nil {
-		t.Fatalf("remote HeadCommit: %v", err)
-	}
-	if err := remoteStorer.SetReference(
-		plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), plumbing.NewHash(remoteHead)),
-	); err != nil {
-		t.Fatalf("remote SetReference main: %v", err)
-	}
-
-	loader := server.MapLoader{"inmem:///remote-wins-test": remoteStorer}
+	loader := server.MapLoader{"inmem:///remote-wins-test": remoteStore.Storer()}
 	client.InstallProtocol("inmem", server.NewClient(loader))
 	t.Cleanup(func() { client.InstallProtocol("inmem", nil) })
 
@@ -363,7 +343,6 @@ func TestOriginSession_RemoteWinsStrategy(t *testing.T) {
 	ri := repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
 		AgentBranch: testAgentBranch,
 		Name:        "knomit",
-		GS:          localGS,
 		Svc:         localSvc,
 		Hub:         hub,
 		StartSync:   func(url string) error { return nil },
@@ -458,37 +437,29 @@ func TestOriginSession_SwitchStrategy(t *testing.T) {
 	}
 	t.Cleanup(func() { localSvc.Close() })
 
-	localGS, err := git.InitWithStorer(localSvc.GitStorer(), nil, testAgentBranch)
-	if err != nil {
-		t.Fatalf("git.InitWithStorer: %v", err)
+	if err := localSvc.InitRepo(nil, testAgentBranch); err != nil {
+		t.Fatalf("InitRepo: %v", err)
 	}
 
 	sharedLocal := "---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# Shared\n\nLocal version.\n"
-	writeFact(t, localGS, localSvc,"kb/shared.md", sharedLocal)
+	writeFact(t, localSvc,"kb/shared.md", sharedLocal)
 
 	time.Sleep(1100 * time.Millisecond)
 
 	// Remote has the same shared path with different content.
-	remoteStorer := newTestStorerForWeb(t)
-	remoteStore, err := git.InitWithStorer(remoteStorer, nil, "agent/remote")
+	remoteStore, err := store.Open(":memory:")
 	if err != nil {
-		t.Fatalf("git.InitWithStorer remote: %v", err)
+		t.Fatalf("store.Open remote: %v", err)
+	}
+	t.Cleanup(func() { remoteStore.Close() })
+	if err := remoteStore.InitRepo(nil, "agent/remote"); err != nil {
+		t.Fatalf("InitRepo remote: %v", err)
 	}
 	sharedRemote := "---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# Shared\n\nRemote version.\n"
-	if _, _, err := remoteStore.WriteFile(context.Background(), "agent/remote", "kb/shared.md", sharedRemote, "add shared", "learn"); err != nil {
+	if _, err := remoteStore.WriteFact(context.Background(), "agent/remote", "kb/shared.md", sharedRemote, "add shared", "learn"); err != nil {
 		t.Fatalf("remote WriteFile: %v", err)
 	}
-	remoteHead, err := remoteStore.HeadCommit(context.Background(), "agent/remote")
-	if err != nil {
-		t.Fatalf("remote HeadCommit: %v", err)
-	}
-	if err := remoteStorer.SetReference(
-		plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), plumbing.NewHash(remoteHead)),
-	); err != nil {
-		t.Fatalf("remote SetReference main: %v", err)
-	}
-
-	loader := server.MapLoader{"inmem:///switch-strategy": remoteStorer}
+	loader := server.MapLoader{"inmem:///switch-strategy": remoteStore.Storer()}
 	client.InstallProtocol("inmem", server.NewClient(loader))
 	t.Cleanup(func() { client.InstallProtocol("inmem", nil) })
 
@@ -500,7 +471,6 @@ func TestOriginSession_SwitchStrategy(t *testing.T) {
 	ri := repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
 		AgentBranch: testAgentBranch,
 		Name:        "knomit",
-		GS:          localGS,
 		Svc:         localSvc,
 		Hub:         hub,
 		StartSync:   func(url string) error { return nil },
@@ -574,41 +544,32 @@ func TestOriginSession_ExistingAgentBranch(t *testing.T) {
 	}
 	t.Cleanup(func() { localSvc.Close() })
 
-	localGS, err := git.InitWithStorer(localSvc.GitStorer(), nil, testAgentBranch)
-	if err != nil {
-		t.Fatalf("git.InitWithStorer: %v", err)
+	if err := localSvc.InitRepo(nil, testAgentBranch); err != nil {
+		t.Fatalf("InitRepo: %v", err)
 	}
 
 	localFact := "---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# Local Fact\n\nLocal content.\n"
-	writeFact(t, localGS, localSvc,"kb/local.md", localFact)
+	writeFact(t, localSvc,"kb/local.md", localFact)
 
 	time.Sleep(1100 * time.Millisecond)
 
 	// Remote store with an agent branch matching the local agent branch.
-	remoteStorer := newTestStorerForWeb(t)
-	remoteStore, err := git.InitWithStorer(remoteStorer, nil, testAgentBranch)
+	remoteStore, err := store.Open(":memory:")
 	if err != nil {
-		t.Fatalf("git.InitWithStorer remote: %v", err)
+		t.Fatalf("store.Open remote: %v", err)
+	}
+	t.Cleanup(func() { remoteStore.Close() })
+	if err := remoteStore.InitRepo(nil, testAgentBranch); err != nil {
+		t.Fatalf("InitRepo remote: %v", err)
 	}
 
 	// Write a fact on the agent branch so it has content.
 	existingFact := "---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# Existing Remote Fact\n\nAlready on agent branch.\n"
-	if _, _, err := remoteStore.WriteFile(context.Background(), testAgentBranch, "kb/existing-remote.md", existingFact, "add existing", "learn"); err != nil {
+	if _, err := remoteStore.WriteFact(context.Background(), testAgentBranch, "kb/existing-remote.md", existingFact, "add existing", "learn"); err != nil {
 		t.Fatalf("remote WriteFile existing: %v", err)
 	}
 
-	// Set up main branch on remote.
-	remoteHead, err := remoteStore.HeadCommit(context.Background(), testAgentBranch)
-	if err != nil {
-		t.Fatalf("remote HeadCommit: %v", err)
-	}
-	if err := remoteStorer.SetReference(
-		plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), plumbing.NewHash(remoteHead)),
-	); err != nil {
-		t.Fatalf("remote SetReference main: %v", err)
-	}
-
-	loader := server.MapLoader{"inmem:///existing-agent": remoteStorer}
+	loader := server.MapLoader{"inmem:///existing-agent": remoteStore.Storer()}
 	client.InstallProtocol("inmem", server.NewClient(loader))
 	t.Cleanup(func() { client.InstallProtocol("inmem", nil) })
 
@@ -620,7 +581,6 @@ func TestOriginSession_ExistingAgentBranch(t *testing.T) {
 	ri := repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
 		AgentBranch: testAgentBranch,
 		Name:        "knomit",
-		GS:          localGS,
 		Svc:         localSvc,
 		Hub:         hub,
 		StartSync:   func(url string) error { return nil },
@@ -698,9 +658,8 @@ func TestOriginSession_CancelCleanup(t *testing.T) {
 	}
 	t.Cleanup(func() { localSvc.Close() })
 
-	localGS, err := git.InitWithStorer(localSvc.GitStorer(), nil, testAgentBranch)
-	if err != nil {
-		t.Fatalf("git.InitWithStorer: %v", err)
+	if err := localSvc.InitRepo(nil, testAgentBranch); err != nil {
+		t.Fatalf("InitRepo: %v", err)
 	}
 
 	hub := repos.NewTaskHub(context.Background())
@@ -711,7 +670,6 @@ func TestOriginSession_CancelCleanup(t *testing.T) {
 	ri := repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
 		AgentBranch: testAgentBranch,
 		Name:        "knomit",
-		GS:          localGS,
 		Svc:         localSvc,
 		Hub:         hub,
 		StartSync:   func(url string) error { return nil },
@@ -777,51 +735,38 @@ func TestOriginSession_BranchSelection(t *testing.T) {
 	}
 	t.Cleanup(func() { localSvc.Close() })
 
-	localGS, err := git.InitWithStorer(localSvc.GitStorer(), nil, testAgentBranch)
-	if err != nil {
-		t.Fatalf("git.InitWithStorer: %v", err)
+	if err := localSvc.InitRepo(nil, testAgentBranch); err != nil {
+		t.Fatalf("InitRepo: %v", err)
 	}
 
 	localFact := "---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# Local Fact\n\nContent.\n"
-	writeFact(t, localGS, localSvc,"kb/local.md", localFact)
+	writeFact(t, localSvc,"kb/local.md", localFact)
 
 	time.Sleep(1100 * time.Millisecond)
 
 	// Remote with "main" and "develop" branches. HEAD set to "main" so the
 	// clone checks out refs/heads/main (making it available in branches list).
-	remoteStorer := newTestStorerForWeb(t)
-	remoteStore, err := git.InitWithStorer(remoteStorer, nil, "agent/remote")
+	remoteStore, err := store.Open(":memory:")
 	if err != nil {
-		t.Fatalf("git.InitWithStorer remote: %v", err)
+		t.Fatalf("store.Open remote: %v", err)
+	}
+	t.Cleanup(func() { remoteStore.Close() })
+	if err := remoteStore.InitRepo(nil, "agent/remote"); err != nil {
+		t.Fatalf("InitRepo remote: %v", err)
 	}
 	remoteFact := "---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# Remote Fact\n\nContent.\n"
-	if _, _, err := remoteStore.WriteFile(context.Background(), "agent/remote", "kb/remote.md", remoteFact, "add remote", "learn"); err != nil {
+	if _, err := remoteStore.WriteFact(context.Background(), "agent/remote", "kb/remote.md", remoteFact, "add remote", "learn"); err != nil {
 		t.Fatalf("remote WriteFile: %v", err)
 	}
 
-	remoteHead, err := remoteStore.HeadCommit(context.Background(), "agent/remote")
-	if err != nil {
-		t.Fatalf("remote HeadCommit: %v", err)
+	if err := remoteStore.CreateBranch(context.Background(), "develop", "agent/remote"); err != nil {
+		t.Fatalf("CreateBranch develop: %v", err)
 	}
-	// Create both branches.
-	if err := remoteStorer.SetReference(
-		plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), plumbing.NewHash(remoteHead)),
-	); err != nil {
-		t.Fatalf("remote SetReference main: %v", err)
-	}
-	if err := remoteStorer.SetReference(
-		plumbing.NewHashReference(plumbing.NewBranchReferenceName("develop"), plumbing.NewHash(remoteHead)),
-	); err != nil {
-		t.Fatalf("remote SetReference develop: %v", err)
-	}
-	// Point HEAD to main so clone checks out refs/heads/main.
-	if err := remoteStorer.SetReference(
-		plumbing.NewSymbolicReference(plumbing.HEAD, plumbing.NewBranchReferenceName("main")),
-	); err != nil {
-		t.Fatalf("remote SetReference HEAD: %v", err)
+	if err := remoteStore.SetDefaultBranch("main"); err != nil {
+		t.Fatalf("SetDefaultBranch: %v", err)
 	}
 
-	loader := server.MapLoader{"inmem:///branch-selection": remoteStorer}
+	loader := server.MapLoader{"inmem:///branch-selection": remoteStore.Storer()}
 	client.InstallProtocol("inmem", server.NewClient(loader))
 	t.Cleanup(func() { client.InstallProtocol("inmem", nil) })
 
@@ -833,7 +778,6 @@ func TestOriginSession_BranchSelection(t *testing.T) {
 	ri := repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
 		AgentBranch: testAgentBranch,
 		Name:        "knomit",
-		GS:          localGS,
 		Svc:         localSvc,
 		Hub:         hub,
 		StartSync:   func(url string) error { return nil },
@@ -931,36 +875,28 @@ func TestOriginSession_RebuildAfterCommit(t *testing.T) {
 	}
 	t.Cleanup(func() { localSvc.Close() })
 
-	localGS, err := git.InitWithStorer(localSvc.GitStorer(), nil, testAgentBranch)
-	if err != nil {
-		t.Fatalf("git.InitWithStorer: %v", err)
+	if err := localSvc.InitRepo(nil, testAgentBranch); err != nil {
+		t.Fatalf("InitRepo: %v", err)
 	}
 
 	localFact := "---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# Local Fact\n\nContent.\n"
-	writeFact(t, localGS, localSvc,"kb/local.md", localFact)
+	writeFact(t, localSvc,"kb/local.md", localFact)
 
 	time.Sleep(1100 * time.Millisecond)
 
-	remoteStorer := newTestStorerForWeb(t)
-	remoteStore, err := git.InitWithStorer(remoteStorer, nil, "agent/remote")
+	remoteStore, err := store.Open(":memory:")
 	if err != nil {
-		t.Fatalf("git.InitWithStorer remote: %v", err)
+		t.Fatalf("store.Open remote: %v", err)
+	}
+	t.Cleanup(func() { remoteStore.Close() })
+	if err := remoteStore.InitRepo(nil, "agent/remote"); err != nil {
+		t.Fatalf("InitRepo remote: %v", err)
 	}
 	remoteFact := "---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# Remote Fact\n\nDifferent content.\n"
-	if _, _, err := remoteStore.WriteFile(context.Background(), "agent/remote", "kb/remote.md", remoteFact, "add remote", "learn"); err != nil {
+	if _, err := remoteStore.WriteFact(context.Background(), "agent/remote", "kb/remote.md", remoteFact, "add remote", "learn"); err != nil {
 		t.Fatalf("remote WriteFile: %v", err)
 	}
-	remoteHead, err := remoteStore.HeadCommit(context.Background(), "agent/remote")
-	if err != nil {
-		t.Fatalf("remote HeadCommit: %v", err)
-	}
-	if err := remoteStorer.SetReference(
-		plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), plumbing.NewHash(remoteHead)),
-	); err != nil {
-		t.Fatalf("remote SetReference main: %v", err)
-	}
-
-	loader := server.MapLoader{"inmem:///rebuild-test": remoteStorer}
+	loader := server.MapLoader{"inmem:///rebuild-test": remoteStore.Storer()}
 	client.InstallProtocol("inmem", server.NewClient(loader))
 	t.Cleanup(func() { client.InstallProtocol("inmem", nil) })
 
@@ -972,7 +908,6 @@ func TestOriginSession_RebuildAfterCommit(t *testing.T) {
 	ri := repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
 		AgentBranch: testAgentBranch,
 		Name:        "knomit",
-		GS:          localGS,
 		Svc:         localSvc,
 		Hub:         hub,
 		StartSync:   func(url string) error { return nil },
@@ -1049,33 +984,25 @@ func TestOriginSession_ReviewWatermarkSetAfterCommit(t *testing.T) {
 	}
 	t.Cleanup(func() { localSvc.Close() })
 
-	localGS, err := git.InitWithStorer(localSvc.GitStorer(), nil, testAgentBranch)
-	if err != nil {
-		t.Fatalf("git.InitWithStorer: %v", err)
+	if err := localSvc.InitRepo(nil, testAgentBranch); err != nil {
+		t.Fatalf("InitRepo: %v", err)
 	}
 
 	// Write a fact so the remote has content.
 	remoteFact := "---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# Cloned Fact\n\nThis was cloned.\n"
 
-	remoteStorer := newTestStorerForWeb(t)
-	remoteStore, err := git.InitWithStorer(remoteStorer, nil, "agent/remote")
+	remoteStore, err := store.Open(":memory:")
 	if err != nil {
-		t.Fatalf("git.InitWithStorer remote: %v", err)
+		t.Fatalf("store.Open remote: %v", err)
 	}
-	if _, _, err := remoteStore.WriteFile(context.Background(), "agent/remote", "kb/cloned.md", remoteFact, "add fact", "learn"); err != nil {
+	t.Cleanup(func() { remoteStore.Close() })
+	if err := remoteStore.InitRepo(nil, "agent/remote"); err != nil {
+		t.Fatalf("InitRepo remote: %v", err)
+	}
+	if _, err := remoteStore.WriteFact(context.Background(), "agent/remote", "kb/cloned.md", remoteFact, "add fact", "learn"); err != nil {
 		t.Fatalf("remote WriteFile: %v", err)
 	}
-	remoteHead, err := remoteStore.HeadCommit(context.Background(), "agent/remote")
-	if err != nil {
-		t.Fatalf("remote HeadCommit: %v", err)
-	}
-	if err := remoteStorer.SetReference(
-		plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), plumbing.NewHash(remoteHead)),
-	); err != nil {
-		t.Fatalf("remote SetReference main: %v", err)
-	}
-
-	loader := server.MapLoader{"inmem:///watermark-test": remoteStorer}
+	loader := server.MapLoader{"inmem:///watermark-test": remoteStore.Storer()}
 	client.InstallProtocol("inmem", server.NewClient(loader))
 	t.Cleanup(func() { client.InstallProtocol("inmem", nil) })
 
@@ -1087,7 +1014,6 @@ func TestOriginSession_ReviewWatermarkSetAfterCommit(t *testing.T) {
 	ri := repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
 		AgentBranch: testAgentBranch,
 		Name:        "knomit",
-		GS:          localGS,
 		Svc:         localSvc,
 		Hub:         hub,
 		StartSync:   func(url string) error { return nil },
@@ -1171,42 +1097,34 @@ func TestOriginSession_DeadRefs(t *testing.T) {
 	}
 	t.Cleanup(func() { localSvc.Close() })
 
-	localGS, err := git.InitWithStorer(localSvc.GitStorer(), nil, testAgentBranch)
-	if err != nil {
-		t.Fatalf("git.InitWithStorer: %v", err)
+	if err := localSvc.InitRepo(nil, testAgentBranch); err != nil {
+		t.Fatalf("InitRepo: %v", err)
 	}
 
 	// A plain fact with no refs (dead_refs = 0 contribution).
 	validFact := "---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# Valid Fact\n\nNo refs.\n"
-	writeFact(t, localGS, localSvc,"kb/valid.md", validFact)
+	writeFact(t, localSvc,"kb/valid.md", validFact)
 
 	// A fact whose refs list contains a path that does not exist in the local store.
 	deadRefFact := "---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nrefs:\n  - kb/nonexistent.md\n---\n# Fact With Dead Ref\n\nPoints to a missing file.\n"
-	writeFact(t, localGS, localSvc,"kb/with-dead-ref.md", deadRefFact)
+	writeFact(t, localSvc,"kb/with-dead-ref.md", deadRefFact)
 
 	// ---- Remote store: minimal, just needs to be clonable ----
 	time.Sleep(1100 * time.Millisecond)
 
-	remoteStorer := newTestStorerForWeb(t)
-	remoteStore, err := git.InitWithStorer(remoteStorer, nil, "agent/remote")
+	remoteStore, err := store.Open(":memory:")
 	if err != nil {
-		t.Fatalf("git.InitWithStorer remote: %v", err)
+		t.Fatalf("store.Open remote: %v", err)
+	}
+	t.Cleanup(func() { remoteStore.Close() })
+	if err := remoteStore.InitRepo(nil, "agent/remote"); err != nil {
+		t.Fatalf("InitRepo remote: %v", err)
 	}
 	remoteFact := "---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# Remote Fact\n\nContent.\n"
-	if _, _, err := remoteStore.WriteFile(context.Background(), "agent/remote", "kb/remote.md", remoteFact, "add remote", "learn"); err != nil {
+	if _, err := remoteStore.WriteFact(context.Background(), "agent/remote", "kb/remote.md", remoteFact, "add remote", "learn"); err != nil {
 		t.Fatalf("remote WriteFile: %v", err)
 	}
-	remoteHead, err := remoteStore.HeadCommit(context.Background(), "agent/remote")
-	if err != nil {
-		t.Fatalf("remote HeadCommit: %v", err)
-	}
-	if err := remoteStorer.SetReference(
-		plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), plumbing.NewHash(remoteHead)),
-	); err != nil {
-		t.Fatalf("remote SetReference main: %v", err)
-	}
-
-	loader := server.MapLoader{"inmem:///dead-refs-test": remoteStorer}
+	loader := server.MapLoader{"inmem:///dead-refs-test": remoteStore.Storer()}
 	client.InstallProtocol("inmem", server.NewClient(loader))
 	t.Cleanup(func() { client.InstallProtocol("inmem", nil) })
 
@@ -1218,7 +1136,6 @@ func TestOriginSession_DeadRefs(t *testing.T) {
 	ri := repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
 		AgentBranch: testAgentBranch,
 		Name:        "knomit",
-		GS:          localGS,
 		Svc:         localSvc,
 		Hub:         hub,
 		StartSync:   func(url string) error { return nil },
@@ -1284,41 +1201,33 @@ func TestOriginSession_NoDeadRefs(t *testing.T) {
 	}
 	t.Cleanup(func() { localSvc.Close() })
 
-	localGS, err := git.InitWithStorer(localSvc.GitStorer(), nil, testAgentBranch)
-	if err != nil {
-		t.Fatalf("git.InitWithStorer: %v", err)
+	if err := localSvc.InitRepo(nil, testAgentBranch); err != nil {
+		t.Fatalf("InitRepo: %v", err)
 	}
 
 	// Two facts; one references the other (valid ref).
 	factA := "---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# Fact A\n\nContent.\n"
-	writeFact(t, localGS, localSvc,"kb/fact-a.md", factA)
+	writeFact(t, localSvc,"kb/fact-a.md", factA)
 
 	// This fact refs fact-a.md which exists.
 	factB := "---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nrefs:\n  - kb/fact-a.md\n---\n# Fact B\n\nReferences fact-a.\n"
-	writeFact(t, localGS, localSvc,"kb/fact-b.md", factB)
+	writeFact(t, localSvc,"kb/fact-b.md", factB)
 
 	time.Sleep(1100 * time.Millisecond)
 
-	remoteStorer := newTestStorerForWeb(t)
-	remoteStore, err := git.InitWithStorer(remoteStorer, nil, "agent/remote")
+	remoteStore, err := store.Open(":memory:")
 	if err != nil {
-		t.Fatalf("git.InitWithStorer remote: %v", err)
+		t.Fatalf("store.Open remote: %v", err)
+	}
+	t.Cleanup(func() { remoteStore.Close() })
+	if err := remoteStore.InitRepo(nil, "agent/remote"); err != nil {
+		t.Fatalf("InitRepo remote: %v", err)
 	}
 	remoteFact := "---\ntype: observation\ndomain: []\nconfidence: 0.9\nsources: 1\nentities: []\nrefs: []\n---\n# Remote Fact\n\nContent.\n"
-	if _, _, err := remoteStore.WriteFile(context.Background(), "agent/remote", "kb/remote.md", remoteFact, "add remote", "learn"); err != nil {
+	if _, err := remoteStore.WriteFact(context.Background(), "agent/remote", "kb/remote.md", remoteFact, "add remote", "learn"); err != nil {
 		t.Fatalf("remote WriteFile: %v", err)
 	}
-	remoteHead, err := remoteStore.HeadCommit(context.Background(), "agent/remote")
-	if err != nil {
-		t.Fatalf("remote HeadCommit: %v", err)
-	}
-	if err := remoteStorer.SetReference(
-		plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), plumbing.NewHash(remoteHead)),
-	); err != nil {
-		t.Fatalf("remote SetReference main: %v", err)
-	}
-
-	loader := server.MapLoader{"inmem:///no-dead-refs-test": remoteStorer}
+	loader := server.MapLoader{"inmem:///no-dead-refs-test": remoteStore.Storer()}
 	client.InstallProtocol("inmem", server.NewClient(loader))
 	t.Cleanup(func() { client.InstallProtocol("inmem", nil) })
 
@@ -1330,7 +1239,6 @@ func TestOriginSession_NoDeadRefs(t *testing.T) {
 	ri := repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
 		AgentBranch: testAgentBranch,
 		Name:        "knomit",
-		GS:          localGS,
 		Svc:         localSvc,
 		Hub:         hub,
 		StartSync:   func(url string) error { return nil },

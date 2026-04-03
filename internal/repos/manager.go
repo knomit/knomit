@@ -16,7 +16,7 @@ import (
 
 	"knomit/internal/config"
 	"knomit/internal/fact"
-	"knomit/internal/git"
+	"knomit/internal/identity"
 	"knomit/internal/llm"
 	"knomit/internal/mcp"
 	"knomit/internal/store"
@@ -136,12 +136,12 @@ func (m *Manager) Boot() error {
 	}
 
 	// Load ontology from knomit repo's git store.
-	ontologyYAML, readErr := knomitRI.gs.ReadFile(context.Background(), m.deps.AgentBranch, "domains/ontology.yaml")
+	readResult, readErr := knomitRI.svc.ReadFact(context.Background(), m.deps.AgentBranch, "domains/ontology.yaml", nil)
 	if readErr != nil {
 		log.Warn().Msg("domains/ontology.yaml not found, using default ontology")
 		m.ontology = fact.DefaultOntology()
 	} else {
-		m.ontology, err = fact.ParseOntology([]byte(ontologyYAML))
+		m.ontology, err = fact.ParseOntology([]byte(readResult.Content))
 		if err != nil {
 			knomitRI.closeFn()
 			return fmt.Errorf("parse ontology: %w", err)
@@ -217,7 +217,7 @@ func (m *Manager) openOne(name, dbPath string, isDefault bool) (*RepoInstance, e
 }
 
 // SetupMCP wires MCP handlers onto ri using the manager's ontology and deps.
-// It reads the current ri.gs and ri.svc to get concrete types, so it is safe
+// It reads the current ri.svc to get concrete types, so it is safe
 // to call after SwapStore to rebind MCP handlers to the new database.
 // No-op if m.ontology is nil.
 func (m *Manager) SetupMCP(ri *RepoInstance) {
@@ -226,11 +226,10 @@ func (m *Manager) SetupMCP(ri *RepoInstance) {
 	}
 
 	ri.mu.RLock()
-	gs, ok := ri.gs.(*git.Store)
 	svc := ri.svc
 	ri.mu.RUnlock()
-	if !ok {
-		log.Warn().Msg("SetupMCP: ri.gs is not *git.Store, skipping")
+	if svc == nil {
+		log.Warn().Msg("SetupMCP: ri.svc is nil, skipping")
 		return
 	}
 	idx := svc.Index()
@@ -240,24 +239,24 @@ func (m *Manager) SetupMCP(ri *RepoInstance) {
 	llmAdapter := m.deps.LLM
 
 	agentBranch := m.deps.AgentBranch
-	reviewer := synthesize.NewReviewer(gs, idx, idx, embedder, nil, agentBranch)
+	reviewer := synthesize.NewReviewer(svc, idx, idx, embedder, nil, agentBranch)
 	profiles := []string{"code", "chat", "generic"}
 	mcpHandlers := make(map[string]http.Handler, len(profiles))
 	for _, p := range profiles {
 		var mcpSrv *mcpserver.MCPServer
 		if embedder != nil {
-			mcpSrv = mcp.NewServer(gs, idx, idx, idx, reviewer, p, ontologyRoot, m.ontology, agentBranch, embedder)
+			mcpSrv = mcp.NewServer(svc, idx, idx, idx, reviewer, p, ontologyRoot, m.ontology, agentBranch, embedder)
 		} else {
-			mcpSrv = mcp.NewServer(gs, idx, idx, idx, reviewer, p, ontologyRoot, m.ontology, agentBranch)
+			mcpSrv = mcp.NewServer(svc, idx, idx, idx, reviewer, p, ontologyRoot, m.ontology, agentBranch)
 		}
 		mcpHandlers[p] = mcpserver.NewStreamableHTTPServer(mcpSrv)
 	}
 
 	var synthDeps *SynthDeps
 	if llmAdapter != nil {
-		synthReviewer := synthesize.NewReviewer(gs, idx, idx, embedder, nil, agentBranch)
+		synthReviewer := synthesize.NewReviewer(svc, idx, idx, embedder, nil, agentBranch)
 		synthDeps = &SynthDeps{
-			GS:       gs,
+			GS:       svc,
 			Idx:      idx,
 			Embedder: embedder,
 			Adapter:  llmAdapter,
@@ -273,7 +272,7 @@ func (m *Manager) SetupMCP(ri *RepoInstance) {
 
 // remoteAuthFromRecord builds a RemoteAuthConfig from a stored remote record,
 // falling back to the global config for fields not set in the record.
-func remoteAuthFromRecord(remote *store.Remote, fallback git.RemoteAuthConfig) git.RemoteAuthConfig {
+func remoteAuthFromRecord(remote *store.Remote, fallback identity.RemoteAuthConfig) identity.RemoteAuthConfig {
 	cfg := fallback
 	if remote.AuthMethod != "" {
 		cfg.AuthMethod = remote.AuthMethod

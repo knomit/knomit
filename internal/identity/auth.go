@@ -1,4 +1,4 @@
-package git
+package identity
 
 import (
 	"fmt"
@@ -9,6 +9,15 @@ import (
 	gitssh "github.com/go-git/go-git/v5/plumbing/transport/ssh"
 	gossh "golang.org/x/crypto/ssh"
 )
+
+// RemoteAuthConfig holds git remote authentication settings.
+type RemoteAuthConfig struct {
+	Token      string `toml:"token"`
+	User       string `toml:"user"`
+	Password   string `toml:"password"`
+	SSHKey     string `toml:"ssh_key"`
+	AuthMethod string `toml:"auth_method"`
+}
 
 // ResolveAuth returns a go-git transport.AuthMethod based on the remote config.
 // Returns nil if no credentials are configured (anonymous access).

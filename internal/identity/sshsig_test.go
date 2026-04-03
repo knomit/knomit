@@ -1,4 +1,4 @@
-package git_test
+package identity_test
 
 import (
 	"crypto/ed25519"
@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"knomit/internal/git"
+	"knomit/internal/identity"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -26,7 +26,7 @@ func generateTestSigner(t *testing.T) ssh.Signer {
 
 func TestSignCommit_ProducesArmoredSignature(t *testing.T) {
 	signer := generateTestSigner(t)
-	sig, err := git.SignCommit(signer, []byte("tree abc\nauthor test"))
+	sig, err := identity.SignCommit(signer, []byte("tree abc\nauthor test"))
 	if err != nil {
 		t.Fatalf("SignCommit: %v", err)
 	}
@@ -40,7 +40,7 @@ func TestSignCommit_ProducesArmoredSignature(t *testing.T) {
 
 func TestSignCommit_EnvelopeHasMagic(t *testing.T) {
 	signer := generateTestSigner(t)
-	sig, err := git.SignCommit(signer, []byte("tree def\nauthor test"))
+	sig, err := identity.SignCommit(signer, []byte("tree def\nauthor test"))
 	if err != nil {
 		t.Fatalf("SignCommit: %v", err)
 	}
@@ -68,11 +68,11 @@ func TestSignCommit_EnvelopeHasMagic(t *testing.T) {
 
 func TestSignCommit_DifferentPayloadsProduceDifferentSignatures(t *testing.T) {
 	signer := generateTestSigner(t)
-	sig1, err := git.SignCommit(signer, []byte("payload one"))
+	sig1, err := identity.SignCommit(signer, []byte("payload one"))
 	if err != nil {
 		t.Fatalf("SignCommit(1): %v", err)
 	}
-	sig2, err := git.SignCommit(signer, []byte("payload two"))
+	sig2, err := identity.SignCommit(signer, []byte("payload two"))
 	if err != nil {
 		t.Fatalf("SignCommit(2): %v", err)
 	}

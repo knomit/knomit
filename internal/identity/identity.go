@@ -1,4 +1,4 @@
-package git
+package identity
 
 import (
 	"crypto/ed25519"

@@ -1,16 +1,16 @@
-package git_test
+package identity_test
 
 import (
 	"path/filepath"
 	"testing"
 
-	"knomit/internal/git"
+	"knomit/internal/identity"
 
 	githttp "github.com/go-git/go-git/v5/plumbing/transport/http"
 )
 
 func TestResolveAuth_EmptyConfig(t *testing.T) {
-	auth, err := git.ResolveAuth(git.RemoteAuthConfig{}, "")
+	auth, err := identity.ResolveAuth(identity.RemoteAuthConfig{}, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -20,7 +20,7 @@ func TestResolveAuth_EmptyConfig(t *testing.T) {
 }
 
 func TestResolveAuth_TokenWithUser(t *testing.T) {
-	auth, err := git.ResolveAuth(git.RemoteAuthConfig{
+	auth, err := identity.ResolveAuth(identity.RemoteAuthConfig{
 		AuthMethod: "token",
 		Token:      "ghp_abc123",
 		User:       "myuser",
@@ -41,7 +41,7 @@ func TestResolveAuth_TokenWithUser(t *testing.T) {
 }
 
 func TestResolveAuth_TokenWithoutUser(t *testing.T) {
-	auth, err := git.ResolveAuth(git.RemoteAuthConfig{
+	auth, err := identity.ResolveAuth(identity.RemoteAuthConfig{
 		AuthMethod: "token",
 		Token:      "ghp_abc123",
 	}, "")
@@ -58,7 +58,7 @@ func TestResolveAuth_TokenWithoutUser(t *testing.T) {
 }
 
 func TestResolveAuth_Basic(t *testing.T) {
-	auth, err := git.ResolveAuth(git.RemoteAuthConfig{
+	auth, err := identity.ResolveAuth(identity.RemoteAuthConfig{
 		AuthMethod: "basic",
 		User:       "alice",
 		Password:   "secret",
@@ -79,7 +79,7 @@ func TestResolveAuth_Basic(t *testing.T) {
 }
 
 func TestResolveAuth_InferToken(t *testing.T) {
-	auth, err := git.ResolveAuth(git.RemoteAuthConfig{
+	auth, err := identity.ResolveAuth(identity.RemoteAuthConfig{
 		Token: "ghp_inferred",
 	}, "")
 	if err != nil {
@@ -98,7 +98,7 @@ func TestResolveAuth_InferToken(t *testing.T) {
 }
 
 func TestResolveAuth_UnknownMethod(t *testing.T) {
-	_, err := git.ResolveAuth(git.RemoteAuthConfig{
+	_, err := identity.ResolveAuth(identity.RemoteAuthConfig{
 		AuthMethod: "kerberos",
 	}, "")
 	if err == nil {
@@ -107,7 +107,7 @@ func TestResolveAuth_UnknownMethod(t *testing.T) {
 }
 
 func TestResolveAuth_SSHKeyNotFound(t *testing.T) {
-	_, err := git.ResolveAuth(git.RemoteAuthConfig{
+	_, err := identity.ResolveAuth(identity.RemoteAuthConfig{
 		AuthMethod: "ssh",
 		SSHKey:     "/nonexistent/id_rsa",
 	}, "")
@@ -119,12 +119,12 @@ func TestResolveAuth_SSHKeyNotFound(t *testing.T) {
 func TestResolveAuth_SSHDefaultKeyFallback(t *testing.T) {
 	dir := t.TempDir()
 	keyPath := filepath.Join(dir, "id_ed25519")
-	_, _, err := git.EnsureKeyPair(keyPath)
+	_, _, err := identity.EnsureKeyPair(keyPath)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	auth, err := git.ResolveAuth(git.RemoteAuthConfig{
+	auth, err := identity.ResolveAuth(identity.RemoteAuthConfig{
 		AuthMethod: "ssh",
 		// SSHKey empty — should fall back to defaultKeyPath.
 	}, keyPath)
@@ -138,7 +138,7 @@ func TestResolveAuth_SSHDefaultKeyFallback(t *testing.T) {
 
 func TestResolveAuth_SSHNoKeyAvailable(t *testing.T) {
 	// SSH method with no SSHKey and no defaultKeyPath → error.
-	_, err := git.ResolveAuth(git.RemoteAuthConfig{
+	_, err := identity.ResolveAuth(identity.RemoteAuthConfig{
 		AuthMethod: "ssh",
 	}, "")
 	if err == nil {
@@ -149,12 +149,12 @@ func TestResolveAuth_SSHNoKeyAvailable(t *testing.T) {
 func TestResolveAuthWithOrigin_GitURL(t *testing.T) {
 	dir := t.TempDir()
 	keyPath := filepath.Join(dir, "id_ed25519")
-	_, _, err := git.EnsureKeyPair(keyPath)
+	_, _, err := identity.EnsureKeyPair(keyPath)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	auth, err := git.ResolveAuthWithOrigin(git.RemoteAuthConfig{}, keyPath, "git@github.com:org/repo.git")
+	auth, err := identity.ResolveAuthWithOrigin(identity.RemoteAuthConfig{}, keyPath, "git@github.com:org/repo.git")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -166,12 +166,12 @@ func TestResolveAuthWithOrigin_GitURL(t *testing.T) {
 func TestResolveAuthWithOrigin_SSHURL(t *testing.T) {
 	dir := t.TempDir()
 	keyPath := filepath.Join(dir, "id_ed25519")
-	_, _, err := git.EnsureKeyPair(keyPath)
+	_, _, err := identity.EnsureKeyPair(keyPath)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	auth, err := git.ResolveAuthWithOrigin(git.RemoteAuthConfig{}, keyPath, "ssh://git@github.com/org/repo.git")
+	auth, err := identity.ResolveAuthWithOrigin(identity.RemoteAuthConfig{}, keyPath, "ssh://git@github.com/org/repo.git")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -182,7 +182,7 @@ func TestResolveAuthWithOrigin_SSHURL(t *testing.T) {
 
 func TestResolveAuthWithOrigin_HTTPSURL(t *testing.T) {
 	// HTTPS URL should not auto-detect SSH.
-	auth, err := git.ResolveAuthWithOrigin(git.RemoteAuthConfig{}, "", "https://github.com/org/repo.git")
+	auth, err := identity.ResolveAuthWithOrigin(identity.RemoteAuthConfig{}, "", "https://github.com/org/repo.git")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

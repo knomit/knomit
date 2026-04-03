@@ -1,4 +1,4 @@
-package git
+package store
 
 import (
 	"compress/gzip"
@@ -6,11 +6,11 @@ import (
 	"net/http"
 	"strings"
 
-	gogitserver "github.com/go-git/go-git/v5/plumbing/transport/server"
 	"github.com/go-git/go-git/v5/plumbing/format/pktline"
 	"github.com/go-git/go-git/v5/plumbing/protocol/packp"
-	"github.com/go-git/go-git/v5/plumbing/transport"
 	"github.com/go-git/go-git/v5/plumbing/storer"
+	"github.com/go-git/go-git/v5/plumbing/transport"
+	gogitserver "github.com/go-git/go-git/v5/plumbing/transport/server"
 
 	storegit "knomit/internal/store/git"
 )
@@ -22,9 +22,9 @@ import (
 //
 //   - GET  /info/refs?service=git-upload-pack — advertise refs
 //   - POST /git-upload-pack                   — serve a fetch
-func (s *Store) Handler() http.Handler {
+func (s *Service) Handler() http.Handler {
 	s.handlerOnce.Do(func() {
-		s.handler = newGitHTTPHandler(s.storer)
+		s.handler = newGitHTTPHandler(s.gits)
 	})
 	return s.handler
 }

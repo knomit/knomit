@@ -1,4 +1,4 @@
-package git
+package identity
 
 import (
 	"crypto/rand"
@@ -34,9 +34,9 @@ func SignCommit(signer ssh.Signer, payload []byte) (string, error) {
 	h := sha512.Sum512(payload)
 
 	var signed []byte
-	signed = append(signed, sshsigMagic...)        // magic, raw, NOT length-prefixed
+	signed = append(signed, sshsigMagic...)                  // magic, raw, NOT length-prefixed
 	signed = appendSSHString(signed, []byte(sshsigNamespace))
-	signed = appendSSHString(signed, nil)           // reserved
+	signed = appendSSHString(signed, nil)                    // reserved
 	signed = appendSSHString(signed, []byte(sshsigHashAlgo))
 	signed = appendSSHString(signed, h[:])
 

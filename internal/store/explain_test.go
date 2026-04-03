@@ -10,16 +10,16 @@ import (
 func TestExplainFact_Diamond(t *testing.T) {
 	ctx := context.Background()
 	branch := "agent/explain-diamond"
-	idx, gs := openGraphTestStore(t, branch)
+	svc, idx := openGraphTestStore(t, branch)
 
 	// Write in dependency order: targets first.
-	writeAndSync(t, idx, gs, branch, "kb/c.md",
+	writeAndSync(t, svc, idx, branch, "kb/c.md",
 		makeFact("C", []string{"eng"}, []string{"Core"}))
-	writeAndSync(t, idx, gs, branch, "kb/a.md",
+	writeAndSync(t, svc, idx, branch, "kb/a.md",
 		makeFact("A", []string{"eng"}, []string{"Go"}, "kb/c.md"))
-	writeAndSync(t, idx, gs, branch, "kb/b.md",
+	writeAndSync(t, svc, idx, branch, "kb/b.md",
 		makeFact("B", []string{"eng"}, []string{"Rust"}, "kb/c.md"))
-	writeAndSync(t, idx, gs, branch, "kb/d.md",
+	writeAndSync(t, svc, idx, branch, "kb/d.md",
 		makeFact("D", []string{"eng"}, []string{"Top"}, "kb/a.md", "kb/b.md"))
 
 	// C: incoming from a and b, no outgoing.
@@ -69,16 +69,16 @@ func TestExplainFact_Diamond(t *testing.T) {
 func TestExplainFact_RefsChangeOnUpdate(t *testing.T) {
 	ctx := context.Background()
 	branch := "agent/explain-update"
-	idx, gs := openGraphTestStore(t, branch)
+	svc, idx := openGraphTestStore(t, branch)
 
 	// Initial: a, b, c exist. src → a, src → b.
-	writeAndSync(t, idx, gs, branch, "kb/a.md",
+	writeAndSync(t, svc, idx, branch, "kb/a.md",
 		makeFact("A", []string{"eng"}, nil))
-	writeAndSync(t, idx, gs, branch, "kb/b.md",
+	writeAndSync(t, svc, idx, branch, "kb/b.md",
 		makeFact("B", []string{"eng"}, nil))
-	writeAndSync(t, idx, gs, branch, "kb/c.md",
+	writeAndSync(t, svc, idx, branch, "kb/c.md",
 		makeFact("C", []string{"eng"}, nil))
-	writeAndSync(t, idx, gs, branch, "kb/src.md",
+	writeAndSync(t, svc, idx, branch, "kb/src.md",
 		makeFact("Source v1", []string{"eng"}, nil, "kb/a.md", "kb/b.md"))
 
 	// Verify initial state.
@@ -102,7 +102,7 @@ func TestExplainFact_RefsChangeOnUpdate(t *testing.T) {
 	}
 
 	// Update: src → b, src → c (dropped a, added c).
-	writeAndSync(t, idx, gs, branch, "kb/src.md",
+	writeAndSync(t, svc, idx, branch, "kb/src.md",
 		makeFact("Source v2", []string{"eng"}, nil, "kb/b.md", "kb/c.md"))
 
 	// src outgoing should now be {b, c}.
@@ -135,11 +135,11 @@ func TestExplainFact_RefsChangeOnUpdate(t *testing.T) {
 func TestExplainFact_DeletedTargetMarked(t *testing.T) {
 	ctx := context.Background()
 	branch := "agent/explain-delete"
-	idx, gs := openGraphTestStore(t, branch)
+	svc, idx := openGraphTestStore(t, branch)
 
-	writeAndSync(t, idx, gs, branch, "kb/target.md",
+	writeAndSync(t, svc, idx, branch, "kb/target.md",
 		makeFact("Target", []string{"eng"}, nil))
-	writeAndSync(t, idx, gs, branch, "kb/src.md",
+	writeAndSync(t, svc, idx, branch, "kb/src.md",
 		makeFact("Source", []string{"eng"}, nil, "kb/target.md"))
 
 	// Before delete: outgoing shows target as not deleted.
@@ -178,13 +178,13 @@ func TestExplainFact_DeletedTargetMarked(t *testing.T) {
 func TestExplainFact_ChainIsDirectOnly(t *testing.T) {
 	ctx := context.Background()
 	branch := "agent/explain-chain"
-	idx, gs := openGraphTestStore(t, branch)
+	svc, idx := openGraphTestStore(t, branch)
 
-	writeAndSync(t, idx, gs, branch, "kb/c.md",
+	writeAndSync(t, svc, idx, branch, "kb/c.md",
 		makeFact("C", []string{"eng"}, nil))
-	writeAndSync(t, idx, gs, branch, "kb/b.md",
+	writeAndSync(t, svc, idx, branch, "kb/b.md",
 		makeFact("B", []string{"eng"}, nil, "kb/c.md"))
-	writeAndSync(t, idx, gs, branch, "kb/a.md",
+	writeAndSync(t, svc, idx, branch, "kb/a.md",
 		makeFact("A", []string{"eng"}, nil, "kb/b.md"))
 
 	// a → b: a's outgoing should be {b}, NOT {b, c}.
@@ -230,13 +230,13 @@ func TestExplainFact_ChainIsDirectOnly(t *testing.T) {
 func TestExplainFact_MultipleIncoming(t *testing.T) {
 	ctx := context.Background()
 	branch := "agent/explain-multi"
-	idx, gs := openGraphTestStore(t, branch)
+	svc, idx := openGraphTestStore(t, branch)
 
-	writeAndSync(t, idx, gs, branch, "kb/hub.md",
+	writeAndSync(t, svc, idx, branch, "kb/hub.md",
 		makeFact("Hub", []string{"eng"}, nil))
 
 	for _, name := range []string{"kb/s1.md", "kb/s2.md", "kb/s3.md", "kb/s4.md"} {
-		writeAndSync(t, idx, gs, branch, name,
+		writeAndSync(t, svc, idx, branch, name,
 			makeFact(name, []string{"eng"}, nil, "kb/hub.md"))
 	}
 
@@ -260,9 +260,9 @@ func TestExplainFact_MultipleIncoming(t *testing.T) {
 func TestExplainFact_NoRefs(t *testing.T) {
 	ctx := context.Background()
 	branch := "agent/explain-norefs"
-	idx, gs := openGraphTestStore(t, branch)
+	svc, idx := openGraphTestStore(t, branch)
 
-	writeAndSync(t, idx, gs, branch, "kb/lonely.md",
+	writeAndSync(t, svc, idx, branch, "kb/lonely.md",
 		makeFact("Lonely", []string{"eng"}, nil))
 
 	res, err := idx.ExplainFact(ctx, branch, "kb/lonely.md")
@@ -282,11 +282,11 @@ func TestExplainFact_NoRefs(t *testing.T) {
 func TestExplainFact_ExternalRefsIgnored(t *testing.T) {
 	ctx := context.Background()
 	branch := "agent/explain-external"
-	idx, gs := openGraphTestStore(t, branch)
+	svc, idx := openGraphTestStore(t, branch)
 
-	writeAndSync(t, idx, gs, branch, "kb/local.md",
+	writeAndSync(t, svc, idx, branch, "kb/local.md",
 		makeFact("Local", []string{"eng"}, nil))
-	writeAndSync(t, idx, gs, branch, "kb/src.md",
+	writeAndSync(t, svc, idx, branch, "kb/src.md",
 		makeFact("Source", []string{"eng"}, nil, "kb/local.md", "https://example.com", "http://other.org"))
 
 	res, err := idx.ExplainFact(ctx, branch, "kb/src.md")

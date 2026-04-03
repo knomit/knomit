@@ -74,9 +74,6 @@ func HypothesizeHandler(gs GitStore, idx SearchIndex, pipelineIdx PipelineIndex,
 func hypothesizeStart(ctx context.Context, gs GitStore, idx SearchIndex, pipelineIdx PipelineIndex, ontologyRoot, agentBranch string) (*HypothesizeResult, error) {
 	branch := agentBranch
 
-	// GC old sessions.
-	_ = pipelineIdx.GCPipelineSessions(ctx, "hypothesize", branch, 5)
-
 	// Get watermark.
 	watermark, err := pipelineIdx.GetPipelineWatermark(ctx, "hypothesize", branch)
 	if err != nil {
@@ -116,11 +113,11 @@ func hypothesizeStart(ctx context.Context, gs GitStore, idx SearchIndex, pipelin
 			if !strings.HasSuffix(p, ".md") {
 				continue
 			}
-			content, readErr := gs.ReadFile(ctx, agentBranch, p)
+			readResult, readErr := gs.ReadFact(ctx, agentBranch, p, nil)
 			if readErr != nil {
 				continue
 			}
-			f, parseErr := ParseFact(p, content)
+			f, parseErr := ParseFact(p, readResult.Content)
 			if parseErr != nil {
 				continue
 			}

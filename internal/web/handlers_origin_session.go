@@ -1,7 +1,6 @@
 package web
 
 import (
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -13,26 +12,10 @@ import (
 	"github.com/rs/zerolog/log"
 	"gopkg.in/yaml.v3"
 
-	"knomit/internal/git"
+	"knomit/internal/identity"
 	"knomit/internal/repos"
 	"knomit/internal/store"
-	storegit "knomit/internal/store/git"
 )
-
-// storeFactIterAdapter wraps store.FactsIter to implement git.FactIter.
-type storeFactIterAdapter struct {
-	inner *store.FactsIter
-}
-
-func (a *storeFactIterAdapter) Next() (*git.FactRow, error) {
-	row, err := a.inner.Next()
-	if err != nil || row == nil {
-		return nil, err
-	}
-	return &git.FactRow{Path: row.Path, BlobHash: row.BlobHash, CommitHash: row.CommitHash}, nil
-}
-
-func (a *storeFactIterAdapter) Close() error { return a.inner.Close() }
 
 // createSessionRequest is the expected JSON body for POST /origin/session.
 type createSessionRequest struct {
@@ -153,8 +136,8 @@ func handleTestConnectivity(rm *repos.Manager, sm *SessionManager, agentBranch s
 		}
 
 		ri := repos.RepoFromContext(r.Context())
-		var gs repos.GitStore
-		ri.WithRead(func(d repos.StoreDeps) { gs = d.GS })
+		var localSvc *store.Service
+		ri.WithRead(func(d repos.StoreDeps) { localSvc = d.Svc })
 
 		sendEvent, ok := beginSSE(w)
 		if !ok {
@@ -165,37 +148,25 @@ func handleTestConnectivity(rm *repos.Manager, sm *SessionManager, agentBranch s
 		sendEvent(map[string]string{"phase": "connecting"})
 
 		// Resolve auth from session config.
-		authCfg := git.RemoteAuthConfig{
+		authCfg := identity.RemoteAuthConfig{
 			AuthMethod: sess.Auth.Method,
 			Token:      sess.Auth.Token,
 			User:       sess.Auth.User,
 			Password:   sess.Auth.Password,
 		}
-		auth, err := git.ResolveAuthWithOrigin(authCfg, "", sess.URL)
+		auth, err := identity.ResolveAuthWithOrigin(authCfg, "", sess.URL)
 		if err != nil {
 			sendEvent(map[string]string{"phase": "error", "message": fmt.Sprintf("auth resolution failed: %v", err)})
 			return
 		}
 
-		// Create a storer for the clone in the session temp dir.
+		// Create a temp store.Service for the clone.
 		dbPath := filepath.Join(sess.TempDir, "clone.db")
-		dsn := dbPath + "?_journal_mode=WAL&_busy_timeout=5000"
-		db, err := sql.Open("sqlite3", dsn)
+		remoteSvc, err := store.Open(dbPath)
 		if err != nil {
 			sendEvent(map[string]string{"phase": "error", "message": fmt.Sprintf("open clone db: %v", err)})
 			return
 		}
-		schema := `
-CREATE TABLE IF NOT EXISTS objects (hash TEXT NOT NULL, type INTEGER NOT NULL, size INTEGER NOT NULL, data BLOB NOT NULL, PRIMARY KEY (hash, type));
-CREATE TABLE IF NOT EXISTS refs (name TEXT PRIMARY KEY, target TEXT NOT NULL, is_symbolic INTEGER NOT NULL DEFAULT 0);
-CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value BLOB NOT NULL);
-`
-		if _, err := db.ExecContext(r.Context(), schema); err != nil {
-			db.Close()
-			sendEvent(map[string]string{"phase": "error", "message": fmt.Sprintf("init clone schema: %v", err)})
-			return
-		}
-		storer := storegit.NewStorer(db)
 
 		// Phase: cloning.
 		sendEvent(map[string]string{"phase": "cloning"})
@@ -204,9 +175,8 @@ CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value BLOB NOT NULL);
 			sendEvent(map[string]string{"phase": "cloning", "progress": msg})
 		}
 
-		cloned, err := git.CloneInto(storer, sess.URL, auth, progressFn)
-		if err != nil {
-			db.Close()
+		if err := remoteSvc.CloneFrom(sess.URL, auth, progressFn); err != nil {
+			remoteSvc.Close()
 			log.Warn().Err(err).Str("repo", repo).Str("url", sess.URL).Msg("test connectivity: clone failed")
 			sendEvent(map[string]string{"phase": "error", "message": fmt.Sprintf("clone failed: %v", err)})
 			sess.mu.Lock()
@@ -219,36 +189,37 @@ CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value BLOB NOT NULL);
 		sendEvent(map[string]string{"phase": "analyzing"})
 
 		// Get default branch.
-		defaultBranch, err := cloned.DefaultBranch(r.Context())
+		defaultBranch, err := remoteSvc.DefaultBranch(r.Context())
 		if err != nil {
 			defaultBranch = agentBranch
 		}
 
 		// Collect all branch info in a single pass over refs.
-		branches, agentBranches, matchedAgent := collectAllBranchInfo(storer, agentBranch)
+		branches, agentBranches, matchedAgent := remoteSvc.BranchInfo(agentBranch)
 
 		// Check shared history.
-		localGS, isRealStore := gs.(*git.Store)
 		history := "disjoint"
-		if isRealStore {
-			shared, err := localGS.HasSharedHistory(r.Context(), agentBranch, cloned, defaultBranch)
+		if localSvc != nil {
+			shared, err := localSvc.HasSharedHistory(r.Context(), agentBranch, remoteSvc, defaultBranch)
 			if err == nil && shared {
 				history = "shared"
 			}
 		}
 
 		// Count remote facts (files in the cloned store).
-		remoteFiles, err := cloned.ListAll(r.Context(), defaultBranch)
+		remoteFiles, err := remoteSvc.ListAll(r.Context(), defaultBranch)
 		remoteFactCount := 0
 		if err == nil {
 			remoteFactCount = len(remoteFiles)
 		}
 
 		// Count local facts.
-		localFiles, err := gs.ListAll(r.Context(), agentBranch)
 		localFactCount := 0
-		if err == nil {
-			localFactCount = len(localFiles)
+		if localSvc != nil {
+			localFiles, err := localSvc.ListAll(r.Context(), agentBranch)
+			if err == nil {
+				localFactCount = len(localFiles)
+			}
 		}
 
 		result := connectivityResult{
@@ -268,8 +239,7 @@ CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value BLOB NOT NULL);
 		sess.mu.Lock()
 		sess.State = StateTested
 		sess.TestResult = result
-		sess.RemoteStore = cloned
-		sess.RemoteDB = db
+		sess.RemoteStore = remoteSvc
 		sess.mu.Unlock()
 
 		log.Info().Str("repo", repo).Str("session_id", sessionID).Str("history", history).Msg("test connectivity completed")
@@ -323,10 +293,8 @@ func handlePreview(rm *repos.Manager, sm *SessionManager, agentBranch string) ht
 		}
 
 		ri := repos.RepoFromContext(r.Context())
-		var gs repos.GitStore
 		var svc *store.Service
 		ri.WithRead(func(d repos.StoreDeps) {
-			gs = d.GS
 			svc = d.Svc
 		})
 
@@ -382,11 +350,6 @@ func handlePreview(rm *repos.Manager, sm *SessionManager, agentBranch string) ht
 		}
 
 		// Dead ref detection: read local facts in parallel (bounded concurrency).
-		// readMu is a conservative guard because *gogit.Repository is not documented
-		// as goroutine-safe for concurrent reads. Read paths appear stateless in
-		// practice but we serialize to be safe until confirmed otherwise. Note also
-		// that for :memory: SQLite test databases, concurrent *sql.DB connections
-		// each see a fresh empty DB.
 		const workers = 8
 		jobs := make(chan string, len(localPaths))
 		results := make(chan int, len(localPaths))
@@ -396,14 +359,14 @@ func handlePreview(rm *repos.Manager, sm *SessionManager, agentBranch string) ht
 			go func() {
 				for p := range jobs {
 					readMu.Lock()
-					content, err := gs.ReadFile(r.Context(), agentBranch, p)
+					readResult, err := svc.ReadFact(r.Context(), agentBranch, p, nil)
 					readMu.Unlock()
 					if err != nil {
 						results <- 0
 						continue
 					}
 					dead := 0
-					for _, ref := range extractRefsFromFrontmatter(content) {
+					for _, ref := range extractRefsFromFrontmatter(readResult.Content) {
 						if strings.HasPrefix(ref, "http://") || strings.HasPrefix(ref, "https://") {
 							continue
 						}
@@ -494,8 +457,8 @@ func handleApply(rm *repos.Manager, sm *SessionManager, agentBranch string) http
 			return
 		}
 
-		strategy := git.ConflictStrategy(req.ConflictStrategy)
-		if strategy != git.StrategyLocalWins && strategy != git.StrategyRemoteWins {
+		strategy := store.ConflictStrategy(req.ConflictStrategy)
+		if strategy != store.StrategyLocalWins && strategy != store.StrategyRemoteWins {
 			writeError(w, http.StatusBadRequest, "conflict_strategy must be local_wins or remote_wins")
 			return
 		}
@@ -514,10 +477,8 @@ func handleApply(rm *repos.Manager, sm *SessionManager, agentBranch string) http
 		}
 
 		ri := repos.RepoFromContext(r.Context())
-		var gs repos.GitStore
 		var svc *store.Service
 		ri.WithRead(func(d repos.StoreDeps) {
-			gs = d.GS
 			svc = d.Svc
 		})
 
@@ -529,13 +490,6 @@ func handleApply(rm *repos.Manager, sm *SessionManager, agentBranch string) http
 		if tr.History == "disjoint" {
 			sendEvent(map[string]string{"phase": "replaying"})
 
-			// Get the local store and local DB for replay.
-			localGS, isRealStore := gs.(*git.Store)
-			if !isRealStore {
-				sendEvent(map[string]string{"phase": "error", "message": "local store is not a git store"})
-				return
-			}
-
 			if svc == nil {
 				sendEvent(map[string]string{"phase": "error", "message": "local database not available"})
 				return
@@ -546,7 +500,6 @@ func handleApply(rm *repos.Manager, sm *SessionManager, agentBranch string) http
 				sendEvent(map[string]string{"phase": "error", "message": fmt.Sprintf("open facts iterator: %v", err)})
 				return
 			}
-			iter := &storeFactIterAdapter{inner: factsIter}
 
 			// Use the matched remote agent branch if found, otherwise our local agent branch name.
 			replayAgentBranch := tr.MatchedAgent
@@ -554,7 +507,7 @@ func handleApply(rm *repos.Manager, sm *SessionManager, agentBranch string) http
 				replayAgentBranch = agentBranch
 			}
 
-			cfg := git.ReplayConfig{
+			cfg := store.ReplayConfig{
 				Strategy:          strategy,
 				AgentBranch:       replayAgentBranch,
 				DefaultBranch:     remoteBranch,
@@ -568,7 +521,7 @@ func handleApply(rm *repos.Manager, sm *SessionManager, agentBranch string) http
 				},
 			}
 
-			replayRes, err := git.Replay(r.Context(), localGS, agentBranch, iter, remoteStore, cfg)
+			replayRes, err := store.Replay(r.Context(), svc, agentBranch, factsIter, remoteStore, cfg)
 			if err != nil {
 				sendEvent(map[string]string{"phase": "error", "message": fmt.Sprintf("replay failed: %v", err)})
 				sess.mu.Lock()
@@ -675,52 +628,6 @@ func beginSSE(w http.ResponseWriter) (func(v any), bool) {
 	}, true
 }
 
-// collectAllBranchInfo does a single pass over refs, partitioning into non-agent
-// branches, agent branches, and finding the agent branch matching localAgentBranch.
-func collectAllBranchInfo(s *storegit.Storer, localAgentBranch string) (branches []string, agentBranches []string, matchedAgent string) {
-	refIter, err := s.IterReferences()
-	if err != nil {
-		return
-	}
-	defer refIter.Close()
-
-	agentSet := make(map[string]struct{})
-	for {
-		ref, err := refIter.Next()
-		if err != nil {
-			break
-		}
-		name := ref.Name().String()
-		var short string
-		switch {
-		case strings.HasPrefix(name, "refs/heads/"):
-			short = strings.TrimPrefix(name, "refs/heads/")
-		case strings.HasPrefix(name, "refs/remotes/origin/"):
-			short = strings.TrimPrefix(name, "refs/remotes/origin/")
-		default:
-			continue
-		}
-		if strings.HasPrefix(short, "agent/") {
-			if _, seen := agentSet[short]; !seen {
-				agentSet[short] = struct{}{}
-				if short == localAgentBranch {
-					matchedAgent = short
-				}
-			}
-		} else {
-			// Only count refs/heads/ as selectable branches (not remote tracking refs).
-			if strings.HasPrefix(name, "refs/heads/") {
-				branches = append(branches, short)
-			}
-		}
-	}
-	agentBranches = make([]string, 0, len(agentSet))
-	for b := range agentSet {
-		agentBranches = append(agentBranches, b)
-	}
-	return
-}
-
 // handleCommit handles POST /api/v1/{repo}/origin/session/{sessionID}/commit
 // It finalizes the origin connection by swapping the session's remote store
 // into the repo instance, saving remote config, and starting sync loops.
@@ -738,7 +645,6 @@ func handleCommit(rm *repos.Manager, sm *SessionManager, agentBranch string) htt
 		sess.mu.Lock()
 		state := sess.State
 		remoteStore := sess.RemoteStore
-		remoteDB := sess.RemoteDB
 		authCfg := sess.Auth
 		remoteURL := sess.URL
 		remoteBranch := sess.RemoteBranch
@@ -770,11 +676,11 @@ func handleCommit(rm *repos.Manager, sm *SessionManager, agentBranch string) htt
 		sendEvent(map[string]string{"phase": "swapping"})
 
 		// Checkpoint the temp DB's WAL so all data is in the main .db file before copying.
-		if remoteDB != nil {
-			if _, err := remoteDB.ExecContext(r.Context(), "PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {
+		if remoteStore != nil {
+			if err := remoteStore.Checkpoint(); err != nil {
 				log.Warn().Err(err).Msg("commit: WAL checkpoint failed")
 			}
-			remoteDB.Close()
+			remoteStore.Close()
 		}
 
 		tempDBPath := filepath.Join(sess.TempDir, "clone.db")
@@ -788,10 +694,8 @@ func handleCommit(rm *repos.Manager, sm *SessionManager, agentBranch string) htt
 
 		// Snapshot after swap — protect against concurrent SwapStore.
 		var svc *store.Service
-		var gs repos.GitStore
 		ri.WithRead(func(d repos.StoreDeps) {
 			svc = d.Svc
-			gs = d.GS
 		})
 		hub := ri.TaskHub()
 
@@ -819,29 +723,27 @@ func handleCommit(rm *repos.Manager, sm *SessionManager, agentBranch string) htt
 		// Rebuild the index from the new git store so facts/recent/search work.
 		sendEvent(map[string]any{"phase": "rebuilding", "current": 0, "total": 0})
 		if svc != nil {
-			if gitReader, ok := gs.(store.GitReader); ok {
-				idx := svc.Index()
-				progress := func(subPhase string, done, total int) {
-					if done%20 == 0 || done == total {
-						sendEvent(map[string]any{
-							"phase":     "rebuilding",
-							"sub_phase": subPhase,
-							"current":   done,
-							"total":     total,
-						})
-					}
+			idx := svc.Index()
+			progress := func(subPhase string, done, total int) {
+				if done%20 == 0 || done == total {
+					sendEvent(map[string]any{
+						"phase":     "rebuilding",
+						"sub_phase": subPhase,
+						"current":   done,
+						"total":     total,
+					})
 				}
-				if err := idx.Rebuild(r.Context(), gitReader, rebuildBranch, progress); err != nil {
-					log.Warn().Err(err).Str("repo", repo).Msg("commit: index rebuild failed")
-				} else {
-					log.Info().Str("repo", repo).Msg("commit: index rebuilt from swapped store")
-					// Set pipeline watermarks to HEAD so the first review/hypothesize
-					// doesn't treat every cloned fact as dirty.
-					if head, err := gs.HeadCommit(r.Context(), rebuildBranch); err == nil {
-						for _, tool := range []string{"review", "hypothesize"} {
-							if err := idx.SetPipelineWatermark(r.Context(), tool, rebuildBranch, head); err != nil {
-								log.Warn().Err(err).Str("repo", repo).Str("tool", tool).Msg("commit: pipeline watermark set failed")
-							}
+			}
+			if err := idx.Rebuild(r.Context(), svc, rebuildBranch, progress); err != nil {
+				log.Warn().Err(err).Str("repo", repo).Msg("commit: index rebuild failed")
+			} else {
+				log.Info().Str("repo", repo).Msg("commit: index rebuilt from swapped store")
+				// Set pipeline watermarks to HEAD so the first review/hypothesize
+				// doesn't treat every cloned fact as dirty.
+				if head, err := svc.HeadCommit(r.Context(), rebuildBranch); err == nil {
+					for _, tool := range []string{"review", "hypothesize"} {
+						if err := idx.SetPipelineWatermark(r.Context(), tool, rebuildBranch, head); err != nil {
+							log.Warn().Err(err).Str("repo", repo).Str("tool", tool).Msg("commit: pipeline watermark set failed")
 						}
 					}
 				}
@@ -858,7 +760,7 @@ func handleCommit(rm *repos.Manager, sm *SessionManager, agentBranch string) htt
 
 		// Broadcast status so the UI refreshes with the new HEAD.
 		if hub != nil {
-			if head, err := gs.HeadCommit(r.Context(), rebuildBranch); err == nil {
+			if head, err := svc.HeadCommit(r.Context(), rebuildBranch); err == nil {
 				hub.BroadcastStatus(head)
 			}
 		}

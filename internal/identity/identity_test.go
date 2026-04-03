@@ -1,4 +1,4 @@
-package git_test
+package identity_test
 
 import (
 	"os"
@@ -6,14 +6,14 @@ import (
 	"strings"
 	"testing"
 
-	"knomit/internal/git"
+	"knomit/internal/identity"
 )
 
 func TestEnsureKeyPair_GeneratesNewKey(t *testing.T) {
 	dir := t.TempDir()
 	keyPath := filepath.Join(dir, "id_ed25519")
 
-	signer, fp, err := git.EnsureKeyPair(keyPath)
+	signer, fp, err := identity.EnsureKeyPair(keyPath)
 	if err != nil {
 		t.Fatalf("EnsureKeyPair: %v", err)
 	}
@@ -60,12 +60,12 @@ func TestEnsureKeyPair_LoadsExistingKey(t *testing.T) {
 	dir := t.TempDir()
 	keyPath := filepath.Join(dir, "id_ed25519")
 
-	_, fp1, err := git.EnsureKeyPair(keyPath)
+	_, fp1, err := identity.EnsureKeyPair(keyPath)
 	if err != nil {
 		t.Fatalf("first EnsureKeyPair: %v", err)
 	}
 
-	_, fp2, err := git.EnsureKeyPair(keyPath)
+	_, fp2, err := identity.EnsureKeyPair(keyPath)
 	if err != nil {
 		t.Fatalf("second EnsureKeyPair: %v", err)
 	}
@@ -79,7 +79,7 @@ func TestEnsureKeyPair_CreatesParentDir(t *testing.T) {
 	dir := t.TempDir()
 	keyPath := filepath.Join(dir, "deep", "nested", "dir", "id_ed25519")
 
-	_, _, err := git.EnsureKeyPair(keyPath)
+	_, _, err := identity.EnsureKeyPair(keyPath)
 	if err != nil {
 		t.Fatalf("EnsureKeyPair in nested dir: %v", err)
 	}
@@ -91,7 +91,7 @@ func TestEnsureKeyPair_CreatesParentDir(t *testing.T) {
 
 func TestAgentBranch_Format(t *testing.T) {
 	fp := "abcd1234"
-	branch := git.AgentBranch(fp)
+	branch := identity.AgentBranch(fp)
 
 	if !strings.HasPrefix(branch, "agent/") {
 		t.Errorf("branch %q missing agent/ prefix", branch)
@@ -110,7 +110,7 @@ func TestEnsureKeyPair_CorruptKeyFile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, _, err := git.EnsureKeyPair(keyPath)
+	_, _, err := identity.EnsureKeyPair(keyPath)
 	if err == nil {
 		t.Fatal("expected error for corrupt key file")
 	}
@@ -131,7 +131,7 @@ func TestSanitizeHostname(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
-			got := git.SanitizeHostname(tt.input)
+			got := identity.SanitizeHostname(tt.input)
 			if got != tt.want {
 				t.Errorf("SanitizeHostname(%q) = %q, want %q", tt.input, got, tt.want)
 			}

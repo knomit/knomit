@@ -6,8 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"knomit/internal/git"
-)
+	)
 
 // makeFact builds a minimal valid fact markdown with the given title, entities, and refs.
 func makeFact(title string, domain []string, entities []string, refs ...string) string {
@@ -44,7 +43,7 @@ func makeFact(title string, domain []string, entities []string, refs ...string) 
 // openGraphTestStore creates a Service + GitStore for graph tests using the full
 // write pipeline. Writes and syncs each file individually in order so that
 // DERIVED_FROM targets exist before referencing facts are indexed.
-func openGraphTestStore(t *testing.T, branch string) (*Index, *git.Store) {
+func openGraphTestStore(t *testing.T, branch string) (*Service, *Index) {
 	t.Helper()
 	dir := t.TempDir()
 	svc, err := Open(filepath.Join(dir, "test.db"))
@@ -53,23 +52,23 @@ func openGraphTestStore(t *testing.T, branch string) (*Index, *git.Store) {
 	}
 	t.Cleanup(func() { svc.Close() })
 
-	gs, err := git.InitWithStorer(svc.GitStorer(), nil, branch)
+	err = svc.InitRepo(nil, branch)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	return svc.Index(), gs
+	return svc, svc.Index()
 }
 
 // writeAndSync writes a single file via the git store then syncs the index.
 // This ensures DERIVED_FROM targets exist before referencing facts are indexed.
-func writeAndSync(t *testing.T, idx *Index, gs *git.Store, branch, path, content string) {
+func writeAndSync(t *testing.T, svc *Service, idx *Index, branch, path, content string) {
 	ctx := context.Background()
 	t.Helper()
-	if _, _, err := gs.WriteFile(context.Background(), branch, path, content, "add "+path, "learn"); err != nil {
-		t.Fatalf("WriteFile %s: %v", path, err)
+	if _, err := svc.WriteFact(context.Background(), branch, path, content, "add "+path, "learn"); err != nil {
+		t.Fatalf("WriteFact %s: %v", path, err)
 	}
-	if err := idx.Sync(ctx, gs, branch); err != nil {
+	if err := idx.Sync(ctx, svc, branch); err != nil {
 		t.Fatalf("Sync after %s: %v", path, err)
 	}
 }
@@ -80,14 +79,14 @@ func writeAndSync(t *testing.T, idx *Index, gs *git.Store, branch, path, content
 func TestGraphRelationships_SameBranch(t *testing.T) {
 	ctx := context.Background()
 	branch := "agent/history-test"
-	idx, gs := openGraphTestStore(t, branch)
+	svc, idx := openGraphTestStore(t, branch)
 
 	// Write in dependency order: targets first, then referencing facts.
-	writeAndSync(t, idx, gs, branch, "kb/arch.md",
+	writeAndSync(t, svc, idx, branch, "kb/arch.md",
 		makeFact("Architecture", []string{"eng/software"}, []string{"System"}))
-	writeAndSync(t, idx, gs, branch, "kb/api.md",
+	writeAndSync(t, svc, idx, branch, "kb/api.md",
 		makeFact("API Design", []string{"eng/software"}, []string{"System", "REST"}, "kb/arch.md"))
-	writeAndSync(t, idx, gs, branch, "kb/db.md",
+	writeAndSync(t, svc, idx, branch, "kb/db.md",
 		makeFact("Database Schema", []string{"eng/software"}, []string{"System", "PostgreSQL"}, "kb/arch.md", "kb/api.md"))
 
 	// Verify DERIVED_FROM edges.
@@ -126,14 +125,14 @@ func TestGraphRelationships_SameBranch(t *testing.T) {
 func TestGraphRelationships_FactChanges(t *testing.T) {
 	ctx := context.Background()
 	branch := "agent/history-change"
-	idx, gs := openGraphTestStore(t, branch)
+	svc, idx := openGraphTestStore(t, branch)
 
 	// Phase 1: arch, db (no refs), then api → arch.
-	writeAndSync(t, idx, gs, branch, "kb/arch.md",
+	writeAndSync(t, svc, idx, branch, "kb/arch.md",
 		makeFact("Architecture v1", []string{"eng"}, []string{"System"}))
-	writeAndSync(t, idx, gs, branch, "kb/db.md",
+	writeAndSync(t, svc, idx, branch, "kb/db.md",
 		makeFact("Database v1", []string{"eng"}, []string{"PostgreSQL"}))
-	writeAndSync(t, idx, gs, branch, "kb/api.md",
+	writeAndSync(t, svc, idx, branch, "kb/api.md",
 		makeFact("API v1", []string{"eng"}, []string{"REST"}, "kb/arch.md"))
 
 	apiV1Hash := blobHash(t, idx, branch, "kb/api.md")
@@ -143,7 +142,7 @@ func TestGraphRelationships_FactChanges(t *testing.T) {
 	}
 
 	// Phase 2: api changes — now refs db instead of arch.
-	writeAndSync(t, idx, gs, branch, "kb/api.md",
+	writeAndSync(t, svc, idx, branch, "kb/api.md",
 		makeFact("API v2", []string{"eng"}, []string{"REST", "gRPC"}, "kb/db.md"))
 
 	apiV2Hash := blobHash(t, idx, branch, "kb/api.md")
@@ -482,16 +481,16 @@ func TestGraphRelationships_DropBranchCleansOrphans(t *testing.T) {
 // entity node if another version still uses it.
 func TestGraphRelationships_EntitySharing_AcrossVersions(t *testing.T) {
 	branch := "agent/entity-test"
-	idx, gs := openGraphTestStore(t, branch)
+	svc, idx := openGraphTestStore(t, branch)
 
 	// v1: tagged with Go and SQLite.
-	writeAndSync(t, idx, gs, branch, "kb/tool.md",
+	writeAndSync(t, svc, idx, branch, "kb/tool.md",
 		makeFact("Tool v1", []string{"eng"}, []string{"Go", "SQLite"}))
 
 	v1Hash := blobHash(t, idx, branch, "kb/tool.md")
 
 	// v2: tagged with Go and Redis (dropped SQLite, added Redis).
-	writeAndSync(t, idx, gs, branch, "kb/tool.md",
+	writeAndSync(t, svc, idx, branch, "kb/tool.md",
 		makeFact("Tool v2", []string{"eng"}, []string{"Go", "Redis"}))
 
 	v2Hash := blobHash(t, idx, branch, "kb/tool.md")
@@ -532,15 +531,15 @@ func TestGraphRelationships_EntitySharing_AcrossVersions(t *testing.T) {
 func TestGraphRelationships_CircularRefs(t *testing.T) {
 	ctx := context.Background()
 	branch := "agent/circular"
-	idx, gs := openGraphTestStore(t, branch)
+	svc, idx := openGraphTestStore(t, branch)
 
 	// Phase 1: create both facts without refs (so graph nodes exist).
-	writeAndSync(t, idx, gs, branch, "kb/a.md", makeFact("A", []string{"test"}, nil))
-	writeAndSync(t, idx, gs, branch, "kb/b.md", makeFact("B", []string{"test"}, nil))
+	writeAndSync(t, svc, idx, branch, "kb/a.md", makeFact("A", []string{"test"}, nil))
+	writeAndSync(t, svc, idx, branch, "kb/b.md", makeFact("B", []string{"test"}, nil))
 
 	// Phase 2: re-write with refs (new content = new blob_hash = new graph nodes).
-	writeAndSync(t, idx, gs, branch, "kb/a.md", makeFact("A v2", []string{"test"}, nil, "kb/b.md"))
-	writeAndSync(t, idx, gs, branch, "kb/b.md", makeFact("B v2", []string{"test"}, nil, "kb/a.md"))
+	writeAndSync(t, svc, idx, branch, "kb/a.md", makeFact("A v2", []string{"test"}, nil, "kb/b.md"))
+	writeAndSync(t, svc, idx, branch, "kb/b.md", makeFact("B v2", []string{"test"}, nil, "kb/a.md"))
 
 	aV2Hash := blobHash(t, idx, branch, "kb/a.md")
 	bV2Hash := blobHash(t, idx, branch, "kb/b.md")

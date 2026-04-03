@@ -9,7 +9,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"knomit/internal/config"
-	"knomit/internal/git"
+	"knomit/internal/identity"
 	"knomit/internal/store"
 )
 
@@ -27,23 +27,22 @@ func rebuildCmd() *cobra.Command {
 			if keyPath == "" {
 				keyPath = filepath.Join(cfg.Home, "id_ed25519")
 			}
-			_, keyFingerprint, err := git.EnsureKeyPair(keyPath)
+			_, keyFingerprint, err := identity.EnsureKeyPair(keyPath)
 			if err != nil {
 				return fmt.Errorf("ensure keypair: %w", err)
 			}
-			agentBranch := git.AgentBranch(keyFingerprint)
+			agentBranch := identity.AgentBranch(keyFingerprint)
 			dbPath := filepath.Join(cfg.Home, "repos", repoName+".db")
 			svc, err := store.Open(dbPath)
 			if err != nil {
 				return fmt.Errorf("open store: %w", err)
 			}
 			defer svc.Close()
-			gs, err := git.OpenWithStorer(svc.GitStorer())
-			if err != nil {
+			if err := svc.OpenRepo(); err != nil {
 				return fmt.Errorf("open git: %w", err)
 			}
 			idx := svc.Index()
-			if err := idx.Sync(context.Background(), gs, agentBranch); err != nil {
+			if err := idx.Sync(context.Background(), svc, agentBranch); err != nil {
 				return fmt.Errorf("rebuild: %w", err)
 			}
 			log.Info().Str("repo", repoName).Msg("Index rebuilt successfully")

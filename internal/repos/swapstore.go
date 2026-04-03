@@ -7,13 +7,12 @@ import (
 
 	"github.com/rs/zerolog/log"
 
-	"knomit/internal/git"
 	"knomit/internal/store"
 )
 
 // SwapStore replaces the repo's SQLite database with the one from tempDBPath.
 // It stops sync loops, closes the old DB, copies the temp file over the real
-// one, and reopens store.Service + git.Store from the real path.
+// one, and reopens store.Service from the real path.
 // If DBPath is empty (in-memory/test), it falls back to a pointer swap.
 func (m *Manager) SwapStore(ri *RepoInstance, tempDBPath string) error {
 	// Stop existing sync loops so no goroutines reference the old store.
@@ -33,8 +32,7 @@ func (m *Manager) SwapStore(ri *RepoInstance, tempDBPath string) error {
 			log.Warn().Err(err).Msg("SwapStore: cannot open temp DB, keeping existing service")
 			return nil
 		}
-		gs, err := git.OpenWithStorer(svc.GitStorer())
-		if err != nil {
+		if err := svc.OpenRepo(); err != nil {
 			svc.Close()
 			log.Warn().Err(err).Msg("SwapStore: cannot open temp git, keeping existing service")
 			return nil
@@ -45,7 +43,6 @@ func (m *Manager) SwapStore(ri *RepoInstance, tempDBPath string) error {
 		}
 		ri.withWrite(func() {
 			ri.svc = svc
-			ri.gs = gs
 			ri.idx = idx
 		})
 		return nil
@@ -76,8 +73,7 @@ func (m *Manager) SwapStore(ri *RepoInstance, tempDBPath string) error {
 		return fmt.Errorf("SwapStore: reopen store: %w", err)
 	}
 
-	gs, err := git.OpenWithStorer(svc.GitStorer())
-	if err != nil {
+	if err := svc.OpenRepo(); err != nil {
 		svc.Close()
 		_ = copyFile(backupPath, ri.dbPath)
 		return fmt.Errorf("SwapStore: reopen git: %w", err)
@@ -89,7 +85,6 @@ func (m *Manager) SwapStore(ri *RepoInstance, tempDBPath string) error {
 	}
 	ri.withWrite(func() {
 		ri.svc = svc
-		ri.gs = gs
 		ri.idx = idx
 	})
 

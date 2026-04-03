@@ -10,7 +10,6 @@ import (
 	"testing"
 
 	"go.uber.org/mock/gomock"
-	"knomit/internal/git"
 	"knomit/internal/repos"
 	"knomit/internal/store"
 )
@@ -50,7 +49,7 @@ func TestHandleBrowse(t *testing.T) {
 	tests := []struct {
 		name       string
 		query      string
-		entries    []git.DirEntry
+		entries    []store.DirEntry
 		wantStatus int
 		wantPath   string
 		wantLen    int
@@ -58,7 +57,7 @@ func TestHandleBrowse(t *testing.T) {
 		{
 			name:  "default path uses general",
 			query: "/api/v1/knomit/browse",
-			entries: []git.DirEntry{
+			entries: []store.DirEntry{
 				{Name: "subdir", IsDir: true},
 				{Name: "fact.md", IsDir: false},
 			},
@@ -69,7 +68,7 @@ func TestHandleBrowse(t *testing.T) {
 		{
 			name:  "explicit path",
 			query: "/api/v1/knomit/browse?path=kb/sub",
-			entries: []git.DirEntry{
+			entries: []store.DirEntry{
 				{Name: "item.md", IsDir: false},
 			},
 			wantStatus: http.StatusOK,
@@ -79,7 +78,7 @@ func TestHandleBrowse(t *testing.T) {
 		{
 			name:       "empty directory",
 			query:      "/api/v1/knomit/browse?path=kb/empty",
-			entries:    []git.DirEntry{},
+			entries:    []store.DirEntry{},
 			wantStatus: http.StatusOK,
 			wantPath:   "kb/empty",
 			wantLen:    0,
@@ -151,7 +150,7 @@ func TestHandleFact(t *testing.T) {
 			ctrl := gomock.NewController(t)
 			gs := NewMockGitStore(ctrl)
 			if tc.expectRead {
-				gs.EXPECT().ReadFile(gomock.Any(), testAgentBranch, gomock.Any()).Return(tc.content, nil)
+				gs.EXPECT().ReadFact(gomock.Any(), testAgentBranch, gomock.Any(), gomock.Any()).Return(store.ReadFactResult{Content: tc.content}, nil)
 			}
 
 			handler := newTestRouter(gs, nil)
@@ -180,7 +179,7 @@ func TestHandleFactParseError(t *testing.T) {
 
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
-	gs.EXPECT().ReadFile(gomock.Any(), testAgentBranch, "kb/bad.md").Return(badContent, nil)
+	gs.EXPECT().ReadFact(gomock.Any(), testAgentBranch, "kb/bad.md", gomock.Any()).Return(store.ReadFactResult{Content: badContent}, nil)
 
 	handler := newTestRouter(gs, nil)
 	rr := doRequest(t, handler, http.MethodGet, "/api/v1/knomit/fact?path=kb/bad.md", "")
@@ -206,7 +205,7 @@ func TestHandleFactWrite(t *testing.T) {
 	t.Run("write valid content returns parsed fact", func(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		gs := NewMockGitStore(ctrl)
-		gs.EXPECT().WriteFile(gomock.Any(), testAgentBranch, "kb/fact.md", validContent, gomock.Any(), gomock.Any()).Return("abc123", "def456", nil)
+		gs.EXPECT().WriteFact(gomock.Any(), testAgentBranch, "kb/fact.md", validContent, gomock.Any(), gomock.Any()).Return(store.WriteFactResult{CommitHash: "abc123", BlobHash: "def456"}, nil)
 
 		handler := newTestRouter(gs, nil)
 		body := `{"path":"kb/fact.md","content":` + string(mustJSON(validContent)) + `}`
@@ -363,7 +362,7 @@ func TestHandleSearchInvalidMinSimilarity(t *testing.T) {
 }
 
 func TestHandleHistory(t *testing.T) {
-	logEntries := []git.LogEntryWithTags{
+	logEntries := []store.LogEntryWithTags{
 		{Commit: "abcd1234", Date: "2024-01-01T00:00:00Z", Message: "add fact"},
 		{Commit: "efgh5678", Date: "2024-01-02T00:00:00Z", Message: "update fact"},
 	}
@@ -372,7 +371,7 @@ func TestHandleHistory(t *testing.T) {
 		name       string
 		query      string
 		path       string
-		entries    []git.LogEntryWithTags
+		entries    []store.LogEntryWithTags
 		wantStatus int
 		wantLen    int
 	}{

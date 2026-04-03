@@ -7,18 +7,17 @@ import (
 	"github.com/mark3labs/mcp-go/server"
 
 	"knomit/internal/fact"
-	gitpkg "knomit/internal/git"
 	storepkg "knomit/internal/store"
 )
 
 // Re-export supporting types so MCP tool handlers can use them without
 // importing internal sub-packages directly.
 
-// DirEntry is re-exported from internal/git.
-type DirEntry = gitpkg.DirEntry
+// DirEntry is re-exported from internal/store.
+type DirEntry = storepkg.DirEntry
 
-// LogEntry is re-exported from internal/git.
-type LogEntry = gitpkg.LogEntry
+// LogEntry is re-exported from internal/store.
+type LogEntry = storepkg.LogEntry
 
 // SearchQuery is re-exported from internal/store.
 type SearchQuery = storepkg.SearchQuery
@@ -32,8 +31,8 @@ type FactRecord = storepkg.FactRecord
 // FactWithBody is re-exported from internal/store.
 type FactWithBody = storepkg.FactWithBody
 
-// FileRecency is re-exported from internal/git.
-type FileRecency = gitpkg.FileRecency
+// FileRecency is re-exported from internal/store.
+type FileRecency = storepkg.FileRecency
 
 // ToolSession is re-exported from internal/store.
 type ToolSession = storepkg.ToolSession
@@ -47,26 +46,31 @@ type PipelineSession = storepkg.PipelineSession
 // PipelineWorkItem is re-exported from internal/store.
 type PipelineWorkItem = storepkg.PipelineWorkItem
 
-// GitStore is the interface the MCP tools require from internal/git.
+// ReadFactOpts is re-exported from internal/store.
+type ReadFactOpts = storepkg.ReadFactOpts
+
+// ReadFactResult is re-exported from internal/store.
+type ReadFactResult = storepkg.ReadFactResult
+
+// WriteFactResult is re-exported from internal/store.
+type WriteFactResult = storepkg.WriteFactResult
+
+// GitStore is the interface the MCP tools require from internal/store.
 // Only methods actually used by the tool handlers are listed here so that
 // tests can use lightweight mocks.
 type GitStore interface {
-	ReadFile(ctx context.Context, branch, path string) (string, error)
-	ReadFileAtCommit(ctx context.Context, branch, path, commitHash string) (string, error)
-	ReadFileWithHash(ctx context.Context, branch, path string) (content, blobHash string, err error)
-	WriteFile(ctx context.Context, branch, path, content, message, operation string) (commitHash, blobHash string, err error)
-	BatchWrite(ctx context.Context, branch string, files map[string]string, message, operation string) (commitHash string, blobHashes map[string]string, err error)
-	DeleteFile(ctx context.Context, branch, path, message, operation string) (commitHash string, err error)
-	FileExists(ctx context.Context, branch, path string) (bool, error)
+	ReadFact(ctx context.Context, branch, path string, opts *ReadFactOpts) (ReadFactResult, error)
+	WriteFact(ctx context.Context, branch, path, content, message, operation string) (WriteFactResult, error)
+	BatchWriteFacts(ctx context.Context, branch string, files map[string]string, message, operation string) (commitHash string, blobHashes map[string]string, err error)
+	DeleteFact(ctx context.Context, branch, path, message string) (string, error)
+	FactExists(ctx context.Context, branch, path string) (bool, error)
 	ListDir(ctx context.Context, branch, path string) ([]DirEntry, error)
 	ListAll(ctx context.Context, branch string) ([]string, error)
 	Log(ctx context.Context, branch, path string) ([]LogEntry, error)
-	Grep(ctx context.Context, branch, pattern string) ([]string, error)
 	DiffFiles(ctx context.Context, branch, fromCommit string) (added, modified, deleted []string, err error)
 	HeadCommit(ctx context.Context, branch string) (string, error)
 	WalkChangedFiles(ctx context.Context, branch, fromCommit, prefix string, seen map[string]bool, limit int) ([]FileRecency, string, error)
 	LastCommitForPath(ctx context.Context, branch, path string) (string, error)
-	ReadFileLastCommit(ctx context.Context, branch, path, beforeCommitHash string) (content, fromCommit string, err error)
 }
 
 // SearchIndex is the interface the MCP tools require from internal/store.
@@ -82,7 +86,6 @@ type ToolSessionIndex interface {
 	UpdateToolSession(ctx context.Context, id, lastCommit, status string) error
 	GetSeenPaths(ctx context.Context, sessionID string) (map[string]bool, error)
 	AddSeenPaths(ctx context.Context, sessionID string, paths []string) error
-	GCToolSessions(ctx context.Context, tool, branch string, keep int) error
 	EnqueuePaths(ctx context.Context, sessionID string, items []QueueItem) error
 	DequeuePaths(ctx context.Context, sessionID string, limit int) ([]QueueItem, error)
 	QueueSize(ctx context.Context, sessionID string) (int, error)
@@ -97,7 +100,6 @@ type PipelineIndex interface {
 	NextPipelineWorkItem(ctx context.Context, sessionID string) (*PipelineWorkItem, error)
 	SetPipelineWorkItemResponse(ctx context.Context, id int64, response string) error
 	PipelineWorkItemStats(ctx context.Context, sessionID string) (completed, remaining int, err error)
-	GCPipelineSessions(ctx context.Context, tool, branch string, keep int) error
 	GetPipelineWatermark(ctx context.Context, tool, branch string) (string, error)
 	SetPipelineWatermark(ctx context.Context, tool, branch, hash string) error
 }

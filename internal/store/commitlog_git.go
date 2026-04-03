@@ -4,7 +4,7 @@
 //
 // Queries use commit_hash as a tiebreaker when commits share the same committed_at timestamp,
 // giving deterministic and stable pagination without depending on insertion order.
-package git
+package store
 
 import (
 	"context"
@@ -43,8 +43,15 @@ func firstLine(s string) string {
 	return s
 }
 
-// commitEntries converts changedFile results from a commit into CommitLogEntry structs.
-func commitEntries(c *object.Commit, files []changedFile) []storegit.CommitLogEntry {
+// changedFileEntry represents a file changed in a commit (internal to commitlog).
+// Named changedFileEntry to avoid conflict with the exported ChangedFile in types.go.
+type changedFileEntry struct {
+	path   string
+	action string // "added", "modified", "deleted"
+}
+
+// commitEntries converts changedFileEntry results from a commit into CommitLogEntry structs.
+func commitEntries(c *object.Commit, files []changedFileEntry) []storegit.CommitLogEntry {
 	hashStr := c.Hash.String()
 	ts := c.Committer.When.Unix()
 	msg := firstLine(c.Message)
@@ -66,13 +73,8 @@ func commitEntries(c *object.Commit, files []changedFile) []storegit.CommitLogEn
 	return entries
 }
 
-type changedFile struct {
-	path   string
-	action string // "added", "modified", "deleted"
-}
-
 // changedFilesInCommit returns the .md files added/modified/deleted in c.
-func changedFilesInCommit(c *object.Commit) ([]changedFile, error) {
+func changedFilesInCommit(c *object.Commit) ([]changedFileEntry, error) {
 	toTree, err := c.Tree()
 	if err != nil {
 		return nil, fmt.Errorf("changedFilesInCommit: tree: %w", err)
@@ -92,7 +94,7 @@ func changedFilesInCommit(c *object.Commit) ([]changedFile, error) {
 	if err != nil {
 		return nil, fmt.Errorf("changedFilesInCommit: diff: %w", err)
 	}
-	var files []changedFile
+	var files []changedFileEntry
 	for _, ch := range changes {
 		var path, action string
 		switch {
@@ -104,7 +106,7 @@ func changedFilesInCommit(c *object.Commit) ([]changedFile, error) {
 			path, action = ch.To.Name, "modified"
 		}
 		if strings.HasSuffix(path, ".md") {
-			files = append(files, changedFile{path: strings.ToLower(path), action: action})
+			files = append(files, changedFileEntry{path: strings.ToLower(path), action: action})
 		}
 	}
 	return files, nil
@@ -113,11 +115,11 @@ func changedFilesInCommit(c *object.Commit) ([]changedFile, error) {
 // populateCommitLog backfills commit_log from the tip of branch.
 // Commits are streamed directly from the iterator to CommitLogSync, which stops
 // as soon as it encounters a hash already in the table (dedup / incremental update).
-func (s *Store) populateCommitLog(ctx context.Context, branch string) error {
+func (s *Service) populateCommitLog(ctx context.Context, branch string) error {
 	hash, err := s.resolveRef(ctx, branch)
 	if err != nil {
 		// Branch not found (empty repo) — just mark available if table exists.
-		_ = s.storer.CommitLogAvailable()
+		_ = s.gits.CommitLogAvailable()
 		return nil
 	}
 
@@ -131,7 +133,7 @@ func (s *Store) populateCommitLog(ctx context.Context, branch string) error {
 	defer logIter.Close()
 
 	var count int
-	err = s.storer.CommitLogSync(branch, func() (string, []storegit.CommitLogEntry, error) {
+	err = s.gits.CommitLogSync(branch, func() (string, []storegit.CommitLogEntry, error) {
 		c, err := logIter.Next()
 		if err == io.EOF {
 			return "", nil, nil
@@ -157,8 +159,8 @@ func (s *Store) populateCommitLog(ctx context.Context, branch string) error {
 // appendCommitLog inserts a single new commit into commit_log.
 // New commits always get the highest rowid, preserving recency ordering.
 // Errors are logged and swallowed — commit_log is an index, not source of truth.
-func (s *Store) appendCommitLog(ctx context.Context, branch string, hash plumbing.Hash) {
-	if !s.storer.CommitLogAvailable() {
+func (s *Service) appendCommitLog(ctx context.Context, branch string, hash plumbing.Hash) {
+	if !s.gits.CommitLogAvailable() {
 		return
 	}
 	c, err := s.repo.CommitObject(hash)
@@ -173,7 +175,7 @@ func (s *Store) appendCommitLog(ctx context.Context, branch string, hash plumbin
 	}
 	done := false
 	entries := commitEntries(c, files)
-	if err := s.storer.CommitLogSync(branch, func() (string, []storegit.CommitLogEntry, error) {
+	if err := s.gits.CommitLogSync(branch, func() (string, []storegit.CommitLogEntry, error) {
 		if done {
 			return "", nil, nil
 		}

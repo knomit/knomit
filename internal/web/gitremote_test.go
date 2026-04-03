@@ -12,16 +12,15 @@ import (
 	"context"
 
 	"github.com/go-chi/chi/v5"
-	"go.uber.org/mock/gomock"
-	"knomit/internal/git"
+	"knomit/internal/store"
 	"knomit/internal/repos"
 )
 
 // newTestRepoManager creates a *repos.Manager with a single repo named repoName
 // backed by store.
-func newTestRepoManager(repoName string, store *git.Store) *repos.Manager {
+func newTestRepoManager(repoName string, store *store.Service) *repos.Manager {
 	rm := repos.New(context.Background(), repos.Deps{})
-	rm.Set(repoName, repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{GS: store}))
+	rm.Set(repoName, repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{Svc: store}))
 	return rm
 }
 
@@ -91,8 +90,8 @@ func TestGitCloneWithCommits(t *testing.T) {
 	store := newWebTestStore(t)
 
 	// Add a commit so the repo is non-empty.
-	if _, _, err := store.WriteFile(context.Background(), testAgentBranch, "kb/hello.md", "# Hello\n", "init", "learn"); err != nil {
-		t.Fatalf("WriteFile: %v", err)
+	if _, err := store.WriteFact(context.Background(), testAgentBranch, "kb/hello.md", "# Hello\n", "init", "learn"); err != nil {
+		t.Fatalf("WriteFact: %v", err)
 	}
 
 	gitHandler := GitRemoteHandler(newTestRepoManager("knomit", store))
@@ -117,9 +116,9 @@ func TestGitCloneWithCommits(t *testing.T) {
 // TestGitRemoteHandler_GSNotGitRemoteStore verifies that a repo whose GS does
 // not implement GitRemoteStore returns 500 rather than panicking.
 func TestGitRemoteHandler_GSNotGitRemoteStore(t *testing.T) {
-	ctrl := gomock.NewController(t)
 	rm := repos.New(context.Background(), repos.Deps{})
-	rm.Set("mocked", repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{GS: NewMockGitStore(ctrl)}))
+	// Svc is nil — the handler should return 500 because it can't get a Handler().
+	rm.Set("mocked", repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{}))
 
 	handler := GitRemoteHandler(rm)
 	rr := httptest.NewRecorder()
@@ -165,18 +164,18 @@ func TestGitRemoteHandler_MultiRepo(t *testing.T) {
 	dir := t.TempDir()
 
 	storeA := newWebTestStore(t)
-	if _, _, err := storeA.WriteFile(context.Background(), testAgentBranch, "kb/a.md", "# A\n", "init a", "learn"); err != nil {
-		t.Fatalf("WriteFile a: %v", err)
+	if _, err := storeA.WriteFact(context.Background(), testAgentBranch, "kb/a.md", "# A\n", "init a", "learn"); err != nil {
+		t.Fatalf("WriteFact a: %v", err)
 	}
 
 	storeB := newWebTestStore(t)
-	if _, _, err := storeB.WriteFile(context.Background(), testAgentBranch, "kb/b.md", "# B\n", "init b", "learn"); err != nil {
-		t.Fatalf("WriteFile b: %v", err)
+	if _, err := storeB.WriteFact(context.Background(), testAgentBranch, "kb/b.md", "# B\n", "init b", "learn"); err != nil {
+		t.Fatalf("WriteFact b: %v", err)
 	}
 
 	rm := repos.New(context.Background(), repos.Deps{})
-	rm.Set("repo-a", repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{GS: storeA}))
-	rm.Set("repo-b", repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{GS: storeB}))
+	rm.Set("repo-a", repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{Svc: storeA}))
+	rm.Set("repo-b", repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{Svc: storeB}))
 
 	r := chi.NewRouter()
 	r.Mount("/git", GitRemoteHandler(rm))

@@ -70,20 +70,6 @@ func (mr *MockPipelineIndexMockRecorder) CreatePipelineSession(ctx, tool, branch
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreatePipelineSession", reflect.TypeOf((*MockPipelineIndex)(nil).CreatePipelineSession), ctx, tool, branch)
 }
 
-// GCPipelineSessions mocks base method.
-func (m *MockPipelineIndex) GCPipelineSessions(ctx context.Context, tool, branch string, keep int) error {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GCPipelineSessions", ctx, tool, branch, keep)
-	ret0, _ := ret[0].(error)
-	return ret0
-}
-
-// GCPipelineSessions indicates an expected call of GCPipelineSessions.
-func (mr *MockPipelineIndexMockRecorder) GCPipelineSessions(ctx, tool, branch, keep any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GCPipelineSessions", reflect.TypeOf((*MockPipelineIndex)(nil).GCPipelineSessions), ctx, tool, branch, keep)
-}
-
 // GetPipelineSession mocks base method.
 func (m *MockPipelineIndex) GetPipelineSession(ctx context.Context, id string) (*store.PipelineSession, error) {
 	m.ctrl.T.Helper()

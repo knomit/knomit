@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"sync"
 
-	"knomit/internal/git"
 	"knomit/internal/llm"
 	"knomit/internal/store"
 	"knomit/internal/synthesize"
@@ -19,18 +18,16 @@ type Embedder interface {
 }
 
 // GitStore is the narrow git interface needed by read-only query handlers
-// and the sync task handler. Accepts *git.Store at runtime.
+// and the sync task handler. Satisfied by *store.Service at runtime.
 type GitStore interface {
-	ListDir(ctx context.Context, branch, path string) ([]git.DirEntry, error)
-	ReadFile(ctx context.Context, branch, path string) (string, error)
-	ReadFileAtCommit(ctx context.Context, branch, path, commitHash string) (string, error)
-	ReadFileLastCommit(ctx context.Context, branch, path, beforeCommitHash string) (content string, fromCommit string, err error)
-	WriteFile(ctx context.Context, branch, path, content, message, operation string) (commitHash, blobHash string, err error)
-	DeleteFile(ctx context.Context, branch, path, message, operation string) (commitHash string, err error)
-	Log(ctx context.Context, branch, path string) ([]git.LogEntry, error)
-	LogPaginated(ctx context.Context, branch, path string, limit int, after, from, before string) ([]git.LogEntryWithTags, string, string, error)
-	CommitDetail(ctx context.Context, commitHash string) (*git.CommitDetailResult, error)
-	Activity(ctx context.Context, branch, path string) (git.ActivityResult, error)
+	ListDir(ctx context.Context, branch, path string) ([]store.DirEntry, error)
+	ReadFact(ctx context.Context, branch, path string, opts *store.ReadFactOpts) (store.ReadFactResult, error)
+	WriteFact(ctx context.Context, branch, path, content, message, operation string) (store.WriteFactResult, error)
+	DeleteFact(ctx context.Context, branch, path, message string) (string, error)
+	Log(ctx context.Context, branch, path string) ([]store.LogEntry, error)
+	LogPaginated(ctx context.Context, branch, path string, limit int, after, from, before string) ([]store.LogEntryWithTags, string, string, error)
+	CommitDetail(ctx context.Context, commitHash string) (*store.CommitDetailResult, error)
+	Activity(ctx context.Context, branch, path string) (store.ActivityResult, error)
 	HeadCommit(ctx context.Context, branch string) (string, error)
 	ListAll(ctx context.Context, branch string) ([]string, error)
 }
@@ -58,7 +55,8 @@ type SynthDeps struct {
 }
 
 // StoreDeps bundles the lock-protected fields for read access via WithRead.
-// All five fields may be nil if the repo is not yet fully initialised.
+// All fields may be nil if the repo is not yet fully initialised.
+// GS is populated from Svc in production; tests may set GS to a mock GitStore.
 type StoreDeps struct {
 	GS    GitStore
 	Svc   *store.Service
@@ -73,7 +71,7 @@ type RepoInstance struct {
 	name        string
 	dbPath      string
 	agentBranch string
-	gs          GitStore
+	gsOverride  GitStore       // test-only: overrides svc as GS in StoreDeps
 	svc         *store.Service
 	idx         SearchIndex
 	hub         *TaskHub
@@ -91,8 +89,12 @@ type RepoInstance struct {
 func (ri *RepoInstance) WithRead(fn func(StoreDeps)) {
 	ri.mu.RLock()
 	defer ri.mu.RUnlock()
+	gs := GitStore(ri.svc)
+	if ri.gsOverride != nil {
+		gs = ri.gsOverride
+	}
 	fn(StoreDeps{
-		GS:    ri.gs,
+		GS:    gs,
 		Svc:   ri.svc,
 		Idx:   ri.idx,
 		MCP:   ri.mcpHandlers,
@@ -166,7 +168,7 @@ func NewTestInstanceWithDeps(cfg TestInstanceConfig) *RepoInstance {
 	return &RepoInstance{
 		name:        cfg.Name,
 		agentBranch: cfg.AgentBranch,
-		gs:          cfg.GS,
+		gsOverride:  cfg.GS,
 		svc:         cfg.Svc,
 		idx:         cfg.Idx,
 		hub:         cfg.Hub,

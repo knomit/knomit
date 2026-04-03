@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"go.uber.org/mock/gomock"
+	"knomit/internal/store"
 )
 
 func TestSumProductNorm(t *testing.T) {
@@ -57,8 +58,8 @@ func TestComputeWeightSkipsHypothesis(t *testing.T) {
 	obsContent := "---\ndomain: []\nconfidence: 0.8\nsources: 2\nentities: []\nrefs: []\ntype: observation\n---\n# Obs\n\nBody."
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
-	gs.EXPECT().ReadFile(gomock.Any(), "machine/test", "kb/hyp.md").Return(hypContent, nil)
-	gs.EXPECT().ReadFile(gomock.Any(), "machine/test", "kb/obs.md").Return(obsContent, nil)
+	gs.EXPECT().ReadFact(gomock.Any(), "machine/test", "kb/hyp.md", gomock.Any()).Return(store.ReadFactResult{Content: hypContent}, nil)
+	gs.EXPECT().ReadFact(gomock.Any(), "machine/test", "kb/obs.md", gomock.Any()).Return(store.ReadFactResult{Content: obsContent}, nil)
 	w := computeWeight(context.Background(), gs, "machine/test", []string{"kb/hyp.md", "kb/obs.md"})
 	// Only the observation contributes: sum = 0.8*2 = 1.6; weight = 1.6/2.6
 	want := 1.6 / 2.6
@@ -70,7 +71,7 @@ func TestComputeWeightSkipsHypothesis(t *testing.T) {
 func TestComputeWeight_AllMissing(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
-	gs.EXPECT().ReadFile(gomock.Any(), "machine/test", "kb/missing.md").Return("", fmt.Errorf("not found"))
+	gs.EXPECT().ReadFact(gomock.Any(), "machine/test", "kb/missing.md", gomock.Any()).Return(store.ReadFactResult{}, fmt.Errorf("not found"))
 	w := computeWeight(context.Background(), gs, "machine/test", []string{"kb/missing.md"})
 	if w != 0 {
 		t.Fatalf("expected 0 for missing sources, got %v", w)
@@ -81,8 +82,8 @@ func TestComputeWeight_PartialMissing(t *testing.T) {
 	content := "---\ndomain: []\nconfidence: 0.8\nsources: 3\nentities: []\nrefs: []\n---\n# Source\n\nBody."
 	ctrl := gomock.NewController(t)
 	gs := NewMockGitStore(ctrl)
-	gs.EXPECT().ReadFile(gomock.Any(), "machine/test", "kb/missing.md").Return("", fmt.Errorf("not found"))
-	gs.EXPECT().ReadFile(gomock.Any(), "machine/test", "kb/present.md").Return(content, nil)
+	gs.EXPECT().ReadFact(gomock.Any(), "machine/test", "kb/missing.md", gomock.Any()).Return(store.ReadFactResult{}, fmt.Errorf("not found"))
+	gs.EXPECT().ReadFact(gomock.Any(), "machine/test", "kb/present.md", gomock.Any()).Return(store.ReadFactResult{Content: content}, nil)
 	w := computeWeight(context.Background(), gs, "machine/test", []string{"kb/missing.md", "kb/present.md"})
 	// sum = 0.8*3 = 2.4; weight = 2.4/3.4
 	want := 2.4 / 3.4
