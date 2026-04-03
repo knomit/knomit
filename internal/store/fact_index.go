@@ -20,32 +20,19 @@ import (
 	storegit "knomit/internal/store/git"
 )
 
+// Compile-time interface checks.
+var _ FactIndex = (*factIndex)(nil)
+
 // factIndex owns all git-backed fact operations: reading, writing, and commit-log
 // management. It is embedded in Service so that Service satisfies FactIndex and
 // gitReader without code duplication.
 type factIndex struct {
 	rh         *repoHandler
-	gits       *storegit.Storer
-	repo       *gogit.Repository // nil until OpenRepo/InitRepo/Clone called
-	branchMu   sync.Map          // per-branch write serialization
-	configMu   sync.Mutex        // guards ConfigureRemote
+	branchMu   sync.Map // per-branch write serialization
 	auth       transport.AuthMethod
 	signer     ssh.Signer
 	onCommit   func(branch, hash string)
 	postCommit func(ctx context.Context, git gitReader, branch string) error // wired to si.Sync in Step 6
-}
-
-// Compile-time interface checks.
-var _ gitReader = (*factIndex)(nil)
-var _ FactIndex = (*factIndex)(nil)
-
-// resolveRef returns the commit hash at the tip of branch.
-func (fi *factIndex) resolveRef(ctx context.Context, branch string) (plumbing.Hash, error) {
-	ref, err := fi.gits.Reference(plumbing.NewBranchReferenceName(branch))
-	if err != nil {
-		return plumbing.ZeroHash, fmt.Errorf("resolveRef %q: %w", branch, err)
-	}
-	return ref.Hash(), nil
 }
 
 // lockBranch acquires the per-branch mutex and returns an unlock function.
@@ -86,7 +73,7 @@ func (fi *factIndex) notifyCommit(ctx context.Context, branch string, hash plumb
 
 // HeadCommit returns the hash of the tip commit of branch as a hex string.
 func (fi *factIndex) HeadCommit(ctx context.Context, branch string) (string, error) {
-	hash, err := fi.resolveRef(ctx, branch)
+	hash, err := fi.rh.resolveRef(ctx, branch)
 	if err != nil {
 		return "", fmt.Errorf("HeadCommit: %w", err)
 	}
@@ -97,14 +84,14 @@ func (fi *factIndex) HeadCommit(ctx context.Context, branch string) (string, err
 // No-op if branch already exists.
 func (fi *factIndex) createBranch(ctx context.Context, branch, fromBranch string) error {
 	newRefName := plumbing.NewBranchReferenceName(branch)
-	if _, err := fi.gits.Reference(newRefName); err == nil {
+	if _, err := fi.rh.gits.Reference(newRefName); err == nil {
 		return nil // already exists
 	}
-	fromHash, err := fi.resolveRef(ctx, fromBranch)
+	fromHash, err := fi.rh.resolveRef(ctx, fromBranch)
 	if err != nil {
 		return fmt.Errorf("createBranch: resolve source %q: %w", fromBranch, err)
 	}
-	if err := fi.gits.SetReference(plumbing.NewHashReference(newRefName, fromHash)); err != nil {
+	if err := fi.rh.gits.SetReference(plumbing.NewHashReference(newRefName, fromHash)); err != nil {
 		return fmt.Errorf("createBranch: set ref: %w", err)
 	}
 	log.Info().Str("branch", branch).Str("from", fromBranch).Msg("created branch")
@@ -118,11 +105,11 @@ func (fi *factIndex) createBranch(ctx context.Context, branch, fromBranch string
 // ReadFileWithHash returns both the file content and the blob hash for the given path.
 func (fi *factIndex) readFileWithHash(ctx context.Context, branch, path string) (string, string, error) {
 	path = strings.ToLower(path)
-	headHash, err := fi.resolveRef(ctx, branch)
+	headHash, err := fi.rh.resolveRef(ctx, branch)
 	if err != nil {
 		return "", "", fmt.Errorf("readFileWithHash: ref: %w", err)
 	}
-	commit, err := fi.repo.CommitObject(headHash)
+	commit, err := fi.rh.repo.CommitObject(headHash)
 	if err != nil {
 		return "", "", fmt.Errorf("readFileWithHash: commit: %w", err)
 	}
@@ -134,7 +121,7 @@ func (fi *factIndex) readFileWithHash(ctx context.Context, branch, path string) 
 	if err != nil {
 		return "", "", fmt.Errorf("readFileWithHash: entry %s: %w", path, err)
 	}
-	blob, err := fi.repo.BlobObject(entry.Hash)
+	blob, err := fi.rh.repo.BlobObject(entry.Hash)
 	if err != nil {
 		return "", "", fmt.Errorf("readFileWithHash: blob: %w", err)
 	}
@@ -156,7 +143,7 @@ func (fi *factIndex) readFileWithHash(ctx context.Context, branch, path string) 
 // pre-normalisation commits that stored paths with mixed case.
 func (fi *factIndex) readFileAtCommitHash(ctx context.Context, path, commitHash string) (string, error) {
 	hash := plumbing.NewHash(commitHash)
-	commit, err := fi.repo.CommitObject(hash)
+	commit, err := fi.rh.repo.CommitObject(hash)
 	if err != nil {
 		return "", fmt.Errorf("readFileAtCommitHash: commit: %w", err)
 	}
@@ -168,7 +155,7 @@ func (fi *factIndex) readFileAtCommitHash(ctx context.Context, path, commitHash 
 		return f.Contents()
 	}
 	// Exact lookup failed — try case-insensitive walk.
-	content, err := treeFileInsensitive(fi.repo, tree, path)
+	content, err := treeFileInsensitive(fi.rh.repo, tree, path)
 	if err != nil {
 		return "", fmt.Errorf("readFileAtCommitHash: file %q not found (case-insensitive): %w", path, err)
 	}
@@ -179,7 +166,7 @@ func (fi *factIndex) readFileAtCommitHash(ctx context.Context, path, commitHash 
 // branch is accepted for interface consistency; the commit hash uniquely
 // identifies the version without branch resolution.
 func (fi *factIndex) readFileAtCommit(ctx context.Context, branch, path, commitHash string) (string, error) {
-	return fi.readFileAtCommitHash(ctx, path, commitHash)
+	return fi.rh.readFileAtCommitHash(ctx, path, commitHash)
 }
 
 // treeFileInsensitive walks a git tree matching each path component
@@ -227,7 +214,7 @@ func treeFileInsensitive(repo *gogit.Repository, tree *object.Tree, path string)
 func (fi *factIndex) readFileLastCommit(ctx context.Context, branch, path, beforeCommitHash string) (content string, fromCommit string, err error) {
 	path = strings.ToLower(path)
 	startHash := plumbing.NewHash(beforeCommitHash)
-	startCommit, err := fi.repo.CommitObject(startHash)
+	startCommit, err := fi.rh.repo.CommitObject(startHash)
 	if err != nil {
 		return "", "", fmt.Errorf("readFileLastCommit: commit: %w", err)
 	}
@@ -235,7 +222,7 @@ func (fi *factIndex) readFileLastCommit(ctx context.Context, branch, path, befor
 		return "", "", fmt.Errorf("readFileLastCommit: %q: commit has no parents", path)
 	}
 
-	logIter, err := fi.repo.Log(&gogit.LogOptions{
+	logIter, err := fi.rh.repo.Log(&gogit.LogOptions{
 		From:     startCommit.ParentHashes[0],
 		FileName: &path,
 		Order:    gogit.LogOrderCommitterTime,
@@ -250,7 +237,7 @@ func (fi *factIndex) readFileLastCommit(ctx context.Context, branch, path, befor
 		return "", "", fmt.Errorf("readFileLastCommit: %q: no prior commit found", path)
 	}
 
-	content, err = fi.readFileAtCommitHash(ctx, path, lastCommit.Hash.String())
+	content, err = fi.rh.readFileAtCommitHash(ctx, path, lastCommit.Hash.String())
 	return content, lastCommit.Hash.String(), err
 }
 
@@ -262,12 +249,12 @@ func (fi *factIndex) readFile(ctx context.Context, branch, path string) (string,
 
 // FileExists returns true if path exists at the tip of branch, false+nil if not found.
 func (fi *factIndex) fileExists(ctx context.Context, branch, path string) (bool, error) {
-	headHash, err := fi.resolveRef(ctx, branch)
+	headHash, err := fi.rh.resolveRef(ctx, branch)
 	if err != nil {
 		return false, fmt.Errorf("fileExists: ref: %w", err)
 	}
 
-	commit, err := fi.repo.CommitObject(headHash)
+	commit, err := fi.rh.repo.CommitObject(headHash)
 	if err != nil {
 		return false, fmt.Errorf("fileExists: commit: %w", err)
 	}
@@ -329,12 +316,12 @@ func (fi *factIndex) FactExists(ctx context.Context, branch, path string) (bool,
 // Subdirectories have IsDir=true, .md files have IsDir=false.
 func (fi *factIndex) ListDir(ctx context.Context, branch, path string) ([]DirEntry, error) {
 	path = strings.ToLower(path)
-	headHash, err := fi.resolveRef(ctx, branch)
+	headHash, err := fi.rh.resolveRef(ctx, branch)
 	if err != nil {
 		return nil, fmt.Errorf("ListDir: ref: %w", err)
 	}
 
-	commit, err := fi.repo.CommitObject(headHash)
+	commit, err := fi.rh.repo.CommitObject(headHash)
 	if err != nil {
 		return nil, fmt.Errorf("ListDir: commit: %w", err)
 	}
@@ -371,12 +358,12 @@ func (fi *factIndex) ListDir(ctx context.Context, branch, path string) ([]DirEnt
 // that touched path. Merges are skipped because they duplicate authoring
 // commits from the merged branch.
 func (fi *factIndex) LastCommitForPath(ctx context.Context, branch, path string) (string, error) {
-	headHash, err := fi.resolveRef(ctx, branch)
+	headHash, err := fi.rh.resolveRef(ctx, branch)
 	if err != nil {
 		return "", fmt.Errorf("LastCommitForPath: ref: %w", err)
 	}
 
-	logIter, err := fi.repo.Log(&gogit.LogOptions{
+	logIter, err := fi.rh.repo.Log(&gogit.LogOptions{
 		From:     headHash,
 		FileName: &path,
 		Order:    gogit.LogOrderCommitterTime,
@@ -411,12 +398,12 @@ func (ps pathHashSorter) Swap(i, j int) {
 // ListAllWithHash returns all .md files at the tip of branch with their blob hashes.
 // Single tree walk — no per-file I/O.
 func (fi *factIndex) ListAllWithHash(ctx context.Context, branch string) ([]string, []string, error) {
-	headHash, err := fi.resolveRef(ctx, branch)
+	headHash, err := fi.rh.resolveRef(ctx, branch)
 	if err != nil {
 		return nil, nil, fmt.Errorf("ListAllWithHash: ref: %w", err)
 	}
 
-	commit, err := fi.repo.CommitObject(headHash)
+	commit, err := fi.rh.repo.CommitObject(headHash)
 	if err != nil {
 		return nil, nil, fmt.Errorf("ListAllWithHash: commit: %w", err)
 	}
@@ -451,12 +438,12 @@ func (fi *factIndex) ListAll(ctx context.Context, branch string) ([]string, erro
 
 // Log returns log entries for commits that modified path (up to 50).
 func (fi *factIndex) Log(ctx context.Context, branch, path string) ([]LogEntry, error) {
-	headHash, err := fi.resolveRef(ctx, branch)
+	headHash, err := fi.rh.resolveRef(ctx, branch)
 	if err != nil {
 		return nil, fmt.Errorf("log: ref: %w", err)
 	}
 
-	logIter, err := fi.repo.Log(&gogit.LogOptions{
+	logIter, err := fi.rh.repo.Log(&gogit.LogOptions{
 		From:     headHash,
 		FileName: &path,
 		Order:    gogit.LogOrderCommitterTime,
@@ -497,7 +484,7 @@ func (fi *factIndex) Log(ctx context.Context, branch, path string) ([]LogEntry, 
 // It returns (entries, next, prev, error) where next is a cursor for loading
 // older commits and prev is a cursor for loading newer commits (empty = none).
 func (fi *factIndex) LogPaginated(ctx context.Context, branch, path string, limit int, after, from, before string) ([]LogEntryWithTags, string, string, error) {
-	if fi.gits.CommitLogAvailable() {
+	if fi.rh.gits.CommitLogAvailable() {
 		entries, next, prev, err := fi.logPaginatedSQL(ctx, path, limit, after, from, before)
 		if err == nil {
 			return entries, next, prev, nil
@@ -519,7 +506,7 @@ func (fi *factIndex) logPaginatedSQL(ctx context.Context, path string, limit int
 		cursor = storegit.CommitLogCursor{Type: storegit.CommitLogCursorAfter, Hash: after}
 	}
 
-	rows, hasMore, err := fi.gits.CommitLogQuery(path, cursor, limit)
+	rows, hasMore, err := fi.rh.gits.CommitLogQuery(path, cursor, limit)
 	if err != nil {
 		return nil, "", "", fmt.Errorf("logPaginatedSQL: %w", err)
 	}
@@ -561,7 +548,7 @@ func (fi *factIndex) logPaginatedSQL(ctx context.Context, path string, limit int
 
 // logPaginatedGit is the go-git fallback for LogPaginated.
 func (fi *factIndex) logPaginatedGit(ctx context.Context, branch, path string, limit int, after string) ([]LogEntryWithTags, string, error) {
-	headHash, err := fi.resolveRef(ctx, branch)
+	headHash, err := fi.rh.resolveRef(ctx, branch)
 	if err != nil {
 		return nil, "", fmt.Errorf("LogPaginated: ref: %w", err)
 	}
@@ -581,7 +568,7 @@ func (fi *factIndex) logPaginatedGit(ctx context.Context, branch, path string, l
 		}
 	}
 
-	logIter, err := fi.repo.Log(opts)
+	logIter, err := fi.rh.repo.Log(opts)
 	if err != nil {
 		return nil, "", fmt.Errorf("LogPaginated: %w", err)
 	}
@@ -622,7 +609,7 @@ func (fi *factIndex) logPaginatedGit(ctx context.Context, branch, path string, l
 	})
 
 	// Batch-fetch file change counts from commit_log if available.
-	if fi.gits.CommitLogAvailable() && len(entries) > 0 {
+	if fi.rh.gits.CommitLogAvailable() && len(entries) > 0 {
 		fi.enrichFileCounts(entries)
 	}
 
@@ -638,7 +625,7 @@ func (fi *factIndex) enrichFileCounts(entries []LogEntryWithTags) {
 		idx[e.Commit] = i
 	}
 
-	counts, err := fi.gits.CommitLogFileCounts(hashes)
+	counts, err := fi.rh.gits.CommitLogFileCounts(hashes)
 	if err != nil {
 		return
 	}
@@ -657,7 +644,7 @@ func (fi *factIndex) enrichFileCounts(entries []LogEntryWithTags) {
 // Activity computes commit-activity metrics for path using a SQL aggregate
 // query when commit_log is available, or a capped go-git walk otherwise.
 func (fi *factIndex) Activity(ctx context.Context, branch, path string) (ActivityResult, error) {
-	if fi.gits.CommitLogAvailable() {
+	if fi.rh.gits.CommitLogAvailable() {
 		return fi.activitySQL(ctx, path)
 	}
 	return fi.activityGit(ctx, branch, path)
@@ -668,7 +655,7 @@ func (fi *factIndex) activitySQL(ctx context.Context, path string) (ActivityResu
 	cutoff30 := commitLogAge(30)
 	cutoff90 := commitLogAge(90)
 
-	r, err := fi.gits.CommitLogActivity(path, cutoff7, cutoff30, cutoff90)
+	r, err := fi.rh.gits.CommitLogActivity(path, cutoff7, cutoff30, cutoff90)
 	if err != nil {
 		return ActivityResult{}, fmt.Errorf("activitySQL: %w", err)
 	}
@@ -689,7 +676,7 @@ func (fi *factIndex) activitySQL(ctx context.Context, path string) (ActivityResu
 func (fi *factIndex) activityGit(ctx context.Context, branch, path string) (ActivityResult, error) {
 	const maxCommits = 500
 
-	headHash, err := fi.resolveRef(ctx, branch)
+	headHash, err := fi.rh.resolveRef(ctx, branch)
 	if err != nil {
 		return ActivityResult{}, fmt.Errorf("Activity: ref: %w", err)
 	}
@@ -707,7 +694,7 @@ func (fi *factIndex) activityGit(ctx context.Context, branch, path string) (Acti
 		}
 	}
 
-	logIter, err := fi.repo.Log(opts)
+	logIter, err := fi.rh.repo.Log(opts)
 	if err != nil {
 		return ActivityResult{}, fmt.Errorf("Activity: log: %w", err)
 	}
@@ -745,7 +732,7 @@ func (fi *factIndex) activityGit(ctx context.Context, branch, path string) (Acti
 // CommitDetail returns metadata and changed files for a specific commit.
 func (fi *factIndex) CommitDetail(ctx context.Context, commitHash string) (*CommitDetailResult, error) {
 	hash := plumbing.NewHash(commitHash)
-	commit, err := fi.repo.CommitObject(hash)
+	commit, err := fi.rh.repo.CommitObject(hash)
 	if err != nil {
 		return nil, fmt.Errorf("CommitDetail: commit: %w", err)
 	}
@@ -804,14 +791,14 @@ func (fi *factIndex) CommitDetail(ctx context.Context, commitHash string) (*Comm
 // WalkChangedFiles returns .md files under prefix most recently changed,
 // excluding already-seen paths, up to limit results.
 func (fi *factIndex) WalkChangedFiles(ctx context.Context, branch, fromCommit string, prefix string, seen map[string]bool, limit int) ([]FileRecency, string, error) {
-	if fi.gits.CommitLogAvailable() {
+	if fi.rh.gits.CommitLogAvailable() {
 		return fi.walkChangedFilesSQL(ctx, branch, prefix, seen, limit)
 	}
 	return fi.walkChangedFilesGit(ctx, branch, fromCommit, prefix, seen, limit)
 }
 
 func (fi *factIndex) walkChangedFilesSQL(ctx context.Context, branch, prefix string, seen map[string]bool, limit int) ([]FileRecency, string, error) {
-	rows, err := fi.gits.CommitLogWalkChanged(prefix, seen, limit)
+	rows, err := fi.rh.gits.CommitLogWalkChanged(prefix, seen, limit)
 	if err != nil {
 		return nil, "", fmt.Errorf("walkChangedFilesSQL: %w", err)
 	}
@@ -824,7 +811,7 @@ func (fi *factIndex) walkChangedFilesSQL(ctx context.Context, branch, prefix str
 		})
 	}
 
-	headHash, err := fi.resolveRef(ctx, branch)
+	headHash, err := fi.rh.resolveRef(ctx, branch)
 	if err != nil {
 		return results, "", nil
 	}
@@ -836,14 +823,14 @@ func (fi *factIndex) walkChangedFilesGit(ctx context.Context, branch, fromCommit
 	if fromCommit != "" {
 		from = plumbing.NewHash(fromCommit)
 	} else {
-		headHash, err := fi.resolveRef(ctx, branch)
+		headHash, err := fi.rh.resolveRef(ctx, branch)
 		if err != nil {
 			return nil, "", fmt.Errorf("walkChangedFiles: ref: %w", err)
 		}
 		from = headHash
 	}
 
-	logIter, err := fi.repo.Log(&gogit.LogOptions{
+	logIter, err := fi.rh.repo.Log(&gogit.LogOptions{
 		From:  from,
 		Order: gogit.LogOrderCommitterTime,
 	})
@@ -917,7 +904,7 @@ func (fi *factIndex) walkChangedFilesGit(ctx context.Context, branch, fromCommit
 // BranchInfo returns all branches partitioned into regular branches, agent
 // branches (prefixed "agent/"), and the agent branch matching localAgent (if any).
 func (fi *factIndex) BranchInfo(localAgent string) (branches, agentBranches []string, matchedAgent string) {
-	refIter, err := fi.gits.IterReferences()
+	refIter, err := fi.rh.gits.IterReferences()
 	if err != nil {
 		return
 	}
@@ -960,12 +947,12 @@ func (fi *factIndex) BranchInfo(localAgent string) (branches, agentBranches []st
 // DiffFiles returns paths added/modified/deleted between fromCommit and the tip of branch.
 // Only .md files are returned. If fromCommit is empty, diffs from empty tree.
 func (fi *factIndex) DiffFiles(ctx context.Context, branch, fromCommit string) (added, modified, deleted []string, err error) {
-	headHash, err := fi.resolveRef(ctx, branch)
+	headHash, err := fi.rh.resolveRef(ctx, branch)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("DiffFiles: ref: %w", err)
 	}
 
-	toCommit, err := fi.repo.CommitObject(headHash)
+	toCommit, err := fi.rh.repo.CommitObject(headHash)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("DiffFiles: to commit: %w", err)
 	}
@@ -977,7 +964,7 @@ func (fi *factIndex) DiffFiles(ctx context.Context, branch, fromCommit string) (
 	var fromTree *object.Tree
 	if fromCommit != "" {
 		fromHash := plumbing.NewHash(fromCommit)
-		fc, err := fi.repo.CommitObject(fromHash)
+		fc, err := fi.rh.repo.CommitObject(fromHash)
 		if err != nil {
 			return nil, nil, nil, fmt.Errorf("DiffFiles: from commit: %w", err)
 		}
@@ -1034,7 +1021,7 @@ func (fi *factIndex) writeFile(ctx context.Context, branch, path, content, messa
 
 	unlock := fi.lockBranch(branch)
 
-	headHash, err := fi.resolveRef(ctx, branch)
+	headHash, err := fi.rh.resolveRef(ctx, branch)
 	if err != nil {
 		unlock()
 		return "", "", fmt.Errorf("WriteFile: ref: %w", err)
@@ -1042,13 +1029,13 @@ func (fi *factIndex) writeFile(ctx context.Context, branch, path, content, messa
 
 	author := fi.authorSig(branch, operation)
 	committer := fi.committerSig(branch)
-	newCommitHash, newBlobHash, err := writeFileToStore(fi.gits, headHash, path, content, message, author, committer)
+	newCommitHash, newBlobHash, err := writeFileToStore(fi.rh.gits, headHash, path, content, message, author, committer)
 	if err != nil {
 		unlock()
 		return "", "", err
 	}
 
-	newCommitHash, err = signCommitInPlace(fi.gits, fi.signer, newCommitHash)
+	newCommitHash, err = signCommitInPlace(fi.rh.gits, fi.signer, newCommitHash)
 	if err != nil {
 		unlock()
 		return "", "", err
@@ -1056,7 +1043,7 @@ func (fi *factIndex) writeFile(ctx context.Context, branch, path, content, messa
 
 	// Update the branch ref to point to the new commit.
 	branchRefName := plumbing.NewBranchReferenceName(branch)
-	if err := fi.gits.SetReference(plumbing.NewHashReference(branchRefName, newCommitHash)); err != nil {
+	if err := fi.rh.gits.SetReference(plumbing.NewHashReference(branchRefName, newCommitHash)); err != nil {
 		unlock()
 		return "", "", err
 	}
@@ -1081,7 +1068,7 @@ func (fi *factIndex) deleteFile(ctx context.Context, branch, path, message, oper
 
 	unlock := fi.lockBranch(branch)
 
-	headHash, err := fi.resolveRef(ctx, branch)
+	headHash, err := fi.rh.resolveRef(ctx, branch)
 	if err != nil {
 		unlock()
 		return "", fmt.Errorf("DeleteFile: ref: %w", err)
@@ -1100,20 +1087,20 @@ func (fi *factIndex) deleteFile(ctx context.Context, branch, path, message, oper
 
 	author := fi.authorSig(branch, operation)
 	committer := fi.committerSig(branch)
-	newCommitHash, err := deleteFileFromStore(fi.gits, headHash, path, message, author, committer)
+	newCommitHash, err := deleteFileFromStore(fi.rh.gits, headHash, path, message, author, committer)
 	if err != nil {
 		unlock()
 		return "", err
 	}
 
-	newCommitHash, err = signCommitInPlace(fi.gits, fi.signer, newCommitHash)
+	newCommitHash, err = signCommitInPlace(fi.rh.gits, fi.signer, newCommitHash)
 	if err != nil {
 		unlock()
 		return "", err
 	}
 
 	branchRefName := plumbing.NewBranchReferenceName(branch)
-	if err := fi.gits.SetReference(plumbing.NewHashReference(branchRefName, newCommitHash)); err != nil {
+	if err := fi.rh.gits.SetReference(plumbing.NewHashReference(branchRefName, newCommitHash)); err != nil {
 		unlock()
 		return "", err
 	}
@@ -1160,7 +1147,7 @@ func (fi *factIndex) batchWrite(ctx context.Context, branch string, files map[st
 
 // batchWriteLocked performs the actual batchWrite work. Caller must hold the branch lock.
 func (fi *factIndex) batchWriteLocked(ctx context.Context, branch string, files map[string]string, message, operation string) (plumbing.Hash, map[string]string, error) {
-	headHash, err := fi.resolveRef(ctx, branch)
+	headHash, err := fi.rh.resolveRef(ctx, branch)
 	if err != nil {
 		return plumbing.ZeroHash, nil, fmt.Errorf("batchWrite: ref: %w", err)
 	}
@@ -1170,7 +1157,7 @@ func (fi *factIndex) batchWriteLocked(ctx context.Context, branch string, files 
 	// Read existing root tree.
 	var rootTree *object.Tree
 	if parentHash != plumbing.ZeroHash {
-		parentCommit, err := object.GetCommit(fi.gits, parentHash)
+		parentCommit, err := object.GetCommit(fi.rh.gits, parentHash)
 		if err != nil {
 			return plumbing.ZeroHash, nil, fmt.Errorf("batchWrite: get parent commit: %w", err)
 		}
@@ -1186,7 +1173,7 @@ func (fi *factIndex) batchWriteLocked(ctx context.Context, branch string, files 
 	var currentRootHash plumbing.Hash
 	for path, content := range files {
 		// Create blob.
-		blobObj := fi.gits.NewEncodedObject()
+		blobObj := fi.rh.gits.NewEncodedObject()
 		blobObj.SetType(plumbing.BlobObject)
 		bw, err := blobObj.Writer()
 		if err != nil {
@@ -1197,20 +1184,20 @@ func (fi *factIndex) batchWriteLocked(ctx context.Context, branch string, files 
 			return plumbing.ZeroHash, nil, fmt.Errorf("batchWrite: blob write for %q: %w", path, err)
 		}
 		bw.Close()
-		blobHash, err := fi.gits.SetEncodedObject(blobObj)
+		blobHash, err := fi.rh.gits.SetEncodedObject(blobObj)
 		if err != nil {
 			return plumbing.ZeroHash, nil, fmt.Errorf("batchWrite: store blob for %q: %w", path, err)
 		}
 		blobHashes[path] = blobHash.String()
 
 		// Update tree.
-		currentRootHash, err = buildTree(fi.gits, rootTree, path, blobHash)
+		currentRootHash, err = buildTree(fi.rh.gits, rootTree, path, blobHash)
 		if err != nil {
 			return plumbing.ZeroHash, nil, fmt.Errorf("batchWrite: build tree for %q: %w", path, err)
 		}
 
 		// Load updated root tree for next iteration.
-		rootTree, err = object.GetTree(fi.gits, currentRootHash)
+		rootTree, err = object.GetTree(fi.rh.gits, currentRootHash)
 		if err != nil {
 			return plumbing.ZeroHash, nil, fmt.Errorf("batchWrite: get updated tree: %w", err)
 		}
@@ -1229,22 +1216,22 @@ func (fi *factIndex) batchWriteLocked(ctx context.Context, branch string, files 
 		commit.ParentHashes = []plumbing.Hash{parentHash}
 	}
 
-	commitObj := fi.gits.NewEncodedObject()
+	commitObj := fi.rh.gits.NewEncodedObject()
 	if err := commit.Encode(commitObj); err != nil {
 		return plumbing.ZeroHash, nil, fmt.Errorf("batchWrite: encode commit: %w", err)
 	}
-	cHash, err := fi.gits.SetEncodedObject(commitObj)
+	cHash, err := fi.rh.gits.SetEncodedObject(commitObj)
 	if err != nil {
 		return plumbing.ZeroHash, nil, fmt.Errorf("batchWrite: store commit: %w", err)
 	}
 
-	cHash, err = signCommitInPlace(fi.gits, fi.signer, cHash)
+	cHash, err = signCommitInPlace(fi.rh.gits, fi.signer, cHash)
 	if err != nil {
 		return plumbing.ZeroHash, nil, err
 	}
 
 	branchRefName := plumbing.NewBranchReferenceName(branch)
-	if err := fi.gits.SetReference(plumbing.NewHashReference(branchRefName, cHash)); err != nil {
+	if err := fi.rh.gits.SetReference(plumbing.NewHashReference(branchRefName, cHash)); err != nil {
 		return plumbing.ZeroHash, nil, err
 	}
 	return cHash, blobHashes, nil
@@ -1280,13 +1267,13 @@ func (fi *factIndex) BatchWriteFacts(ctx context.Context, branch string, files m
 
 // tag creates a lightweight tag ref at the tip of branch.
 func (fi *factIndex) tag(ctx context.Context, branch, name string) error {
-	headHash, err := fi.resolveRef(ctx, branch)
+	headHash, err := fi.rh.resolveRef(ctx, branch)
 	if err != nil {
 		return fmt.Errorf("tag: ref: %w", err)
 	}
 
 	tagRefName := plumbing.NewTagReferenceName(name)
-	return fi.gits.SetReference(plumbing.NewHashReference(tagRefName, headHash))
+	return fi.rh.gits.SetReference(plumbing.NewHashReference(tagRefName, headHash))
 }
 
 // tagsContaining returns tag names whose target is reachable from hash.
@@ -1295,7 +1282,7 @@ func (fi *factIndex) tagsContaining(ctx context.Context, hash string) ([]string,
 
 	// Build set of all commits reachable from targetHash (one walk).
 	reachable := make(map[plumbing.Hash]bool)
-	logIter, err := fi.repo.Log(&gogit.LogOptions{From: targetHash})
+	logIter, err := fi.rh.repo.Log(&gogit.LogOptions{From: targetHash})
 	if err != nil {
 		return nil, fmt.Errorf("tagsContaining: log from target: %w", err)
 	}
@@ -1305,7 +1292,7 @@ func (fi *factIndex) tagsContaining(ctx context.Context, hash string) ([]string,
 	})
 	logIter.Close()
 
-	refIter, err := fi.gits.IterReferences()
+	refIter, err := fi.rh.gits.IterReferences()
 	if err != nil {
 		return nil, fmt.Errorf("tagsContaining: iter refs: %w", err)
 	}
@@ -1457,14 +1444,14 @@ func changedFilesInCommit(c *object.Commit) ([]changedFileEntry, error) {
 // Commits are streamed directly from the iterator to CommitLogSync, which stops
 // as soon as it encounters a hash already in the table (dedup / incremental update).
 func (fi *factIndex) populateCommitLog(ctx context.Context, branch string) error {
-	hash, err := fi.resolveRef(ctx, branch)
+	hash, err := fi.rh.resolveRef(ctx, branch)
 	if err != nil {
 		// Branch not found (empty repo) — just mark available if table exists.
-		_ = fi.gits.CommitLogAvailable()
+		_ = fi.rh.gits.CommitLogAvailable()
 		return nil
 	}
 
-	logIter, err := fi.repo.Log(&gogit.LogOptions{
+	logIter, err := fi.rh.repo.Log(&gogit.LogOptions{
 		From:  hash,
 		Order: gogit.LogOrderDefault,
 	})
@@ -1474,7 +1461,7 @@ func (fi *factIndex) populateCommitLog(ctx context.Context, branch string) error
 	defer logIter.Close()
 
 	var count int
-	err = fi.gits.CommitLogSync(branch, func() (string, []storegit.CommitLogEntry, error) {
+	err = fi.rh.gits.CommitLogSync(branch, func() (string, []storegit.CommitLogEntry, error) {
 		c, err := logIter.Next()
 		if err == io.EOF {
 			return "", nil, nil
@@ -1501,10 +1488,10 @@ func (fi *factIndex) populateCommitLog(ctx context.Context, branch string) error
 // New commits always get the highest rowid, preserving recency ordering.
 // Errors are logged and swallowed — commit_log is an index, not source of truth.
 func (fi *factIndex) appendCommitLog(ctx context.Context, branch string, hash plumbing.Hash) {
-	if !fi.gits.CommitLogAvailable() {
+	if !fi.rh.gits.CommitLogAvailable() {
 		return
 	}
-	c, err := fi.repo.CommitObject(hash)
+	c, err := fi.rh.repo.CommitObject(hash)
 	if err != nil {
 		log.Warn().Err(err).Str("hash", hash.String()[:8]).Msg("commit_log: get commit")
 		return
@@ -1516,7 +1503,7 @@ func (fi *factIndex) appendCommitLog(ctx context.Context, branch string, hash pl
 	}
 	done := false
 	entries := commitEntries(c, files)
-	if err := fi.gits.CommitLogSync(branch, func() (string, []storegit.CommitLogEntry, error) {
+	if err := fi.rh.gits.CommitLogSync(branch, func() (string, []storegit.CommitLogEntry, error) {
 		if done {
 			return "", nil, nil
 		}

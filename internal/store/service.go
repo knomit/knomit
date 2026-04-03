@@ -85,7 +85,7 @@ func Open(path string) (*Service, error) {
 	rh := newRepoHandler(db, gits)
 	si := &searchIndex{rh: rh}
 	rh.onDrop = si.GC
-	fi := &factIndex{rh: rh, gits: gits}
+	fi := &factIndex{rh: rh}
 	fi.postCommit = si.Sync
 	return &Service{
 		rh: rh,
@@ -116,7 +116,7 @@ func (s *Service) Branches() BranchIndex { return s.rh }
 
 // Storer returns the go-git storer interface for use with git transport
 // (e.g. server.MapLoader for in-memory cloning).
-func (s *Service) Storer() storer.Storer { return s.fi.gits }
+func (s *Service) Storer() storer.Storer { return s.rh.gits }
 
 // Checkpoint flushes the WAL to the main database file so the .db file is
 // self-contained (e.g. before file-level copy). This is a no-op if WAL mode
@@ -155,10 +155,10 @@ func (s *Service) CreateBranch(ctx context.Context, branch, fromBranch string) e
 // ConfigureRemote sets up (or reconfigures) the "origin" remote with the given
 // URL and fetch refspec for branch. Idempotent — returns nil if already correct.
 func (s *Service) ConfigureRemote(ctx context.Context, url, branch string) error {
-	s.fi.configMu.Lock()
-	defer s.fi.configMu.Unlock()
+	s.rh.configMu.Lock()
+	defer s.rh.configMu.Unlock()
 
-	cfg, err := s.fi.repo.Config()
+	cfg, err := s.rh.repo.Config()
 	if err != nil {
 		return fmt.Errorf("read config: %w", err)
 	}
@@ -176,8 +176,8 @@ func (s *Service) ConfigureRemote(ctx context.Context, url, branch string) error
 	}
 
 	// Delete existing origin if present, then create fresh.
-	_ = s.fi.repo.DeleteRemote("origin")
-	_, err = s.fi.repo.CreateRemote(&gogitconfig.RemoteConfig{
+	_ = s.rh.repo.DeleteRemote("origin")
+	_, err = s.rh.repo.CreateRemote(&gogitconfig.RemoteConfig{
 		Name: "origin",
 		URLs: []string{url},
 		Fetch: []gogitconfig.RefSpec{
@@ -192,7 +192,7 @@ func (s *Service) ConfigureRemote(ctx context.Context, url, branch string) error
 
 // DefaultBranch resolves the default branch name from the repo's HEAD ref.
 func (s *Service) DefaultBranch(ctx context.Context) (string, error) {
-	head, err := s.fi.gits.Reference(plumbing.HEAD)
+	head, err := s.rh.gits.Reference(plumbing.HEAD)
 	if err != nil {
 		return "", fmt.Errorf("DefaultBranch: resolve HEAD: %w", err)
 	}
@@ -205,7 +205,7 @@ func (s *Service) DefaultBranch(ctx context.Context) (string, error) {
 
 // SetDefaultBranch sets the symbolic HEAD to point at the given branch.
 func (s *Service) SetDefaultBranch(branch string) error {
-	return s.fi.gits.SetReference(
+	return s.rh.gits.SetReference(
 		plumbing.NewSymbolicReference(plumbing.HEAD, plumbing.NewBranchReferenceName(branch)),
 	)
 }
@@ -215,12 +215,12 @@ func (s *Service) SetDefaultBranch(branch string) error {
 func (s *Service) HasSharedHistory(ctx context.Context, localBranch string, remote *Service, remoteBranch string) (bool, error) {
 	const maxCommits = 1000
 
-	localHash, err := s.fi.resolveRef(ctx, localBranch)
+	localHash, err := s.rh.resolveRef(ctx, localBranch)
 	if err != nil {
 		return false, fmt.Errorf("HasSharedHistory: local ref: %w", err)
 	}
 	localHashes := make(map[plumbing.Hash]struct{})
-	localIter, err := s.fi.repo.Log(&gogit.LogOptions{From: localHash})
+	localIter, err := s.rh.repo.Log(&gogit.LogOptions{From: localHash})
 	if err != nil {
 		return false, fmt.Errorf("HasSharedHistory: local log: %w", err)
 	}
@@ -236,11 +236,11 @@ func (s *Service) HasSharedHistory(ctx context.Context, localBranch string, remo
 		return false, fmt.Errorf("HasSharedHistory: local walk: %w", err)
 	}
 
-	remoteHash, err := remote.fi.resolveRef(ctx, remoteBranch)
+	remoteHash, err := remote.rh.resolveRef(ctx, remoteBranch)
 	if err != nil {
 		return false, fmt.Errorf("HasSharedHistory: remote ref: %w", err)
 	}
-	remoteIter, err := remote.fi.repo.Log(&gogit.LogOptions{From: remoteHash})
+	remoteIter, err := remote.rh.repo.Log(&gogit.LogOptions{From: remoteHash})
 	if err != nil {
 		return false, fmt.Errorf("HasSharedHistory: remote log: %w", err)
 	}
