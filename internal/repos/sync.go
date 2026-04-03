@@ -31,6 +31,7 @@ func resolveRemoteAuth(remote *store.Remote, fallbackAuth config.RemoteAuthConfi
 func runSyncLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Service, hub *TaskHub, repo, agentBranch, keyPath string, fallbackAuth config.RemoteAuthConfig) {
 	defer wg.Done()
 
+	//todo: it's possible the remote will change while the job is still running
 	remote, _ := svc.GetRemote("origin")
 	if remote == nil {
 		return
@@ -91,6 +92,7 @@ func runSyncLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Service, hu
 func runPushLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Service, hub *TaskHub, repo, agentBranch, keyPath string, fallbackAuth config.RemoteAuthConfig) {
 	defer wg.Done()
 
+	//todo: it's possible the remote will change while the job is still running
 	remote, _ := svc.GetRemote("origin")
 	if remote == nil {
 		return
