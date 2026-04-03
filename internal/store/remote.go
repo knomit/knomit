@@ -24,17 +24,9 @@ type Remote struct {
 }
 
 // SetRemote inserts or replaces a remote configuration.
-func (s *Service) SetRemote(name, url, branch string, interval, pushInterval int) error {
-	_, err := s.rh.db.Exec(
-		`INSERT OR REPLACE INTO remotes (name, url, branch, interval, push_interval) VALUES (?, ?, ?, ?, ?)`,
-		name, url, branch, interval, pushInterval,
-	)
-	return err
-}
-
-// SetRemoteWithAuth inserts or replaces a remote configuration including auth credentials.
-// Credentials are encrypted at rest if a Crypt instance is configured.
-func (s *Service) SetRemoteWithAuth(name, url, branch string, interval, pushInterval int, authMethod, authToken string) error {
+// authMethod and authToken are optional; if authToken is non-empty it is
+// encrypted at rest when a Crypt instance is configured.
+func (s *Service) SetRemote(name, url, branch string, interval, pushInterval int, authMethod, authToken string) error {
 	storedToken := authToken
 	if s.crypt != nil && authToken != "" {
 		enc, err := s.crypt.Encrypt(authToken)

@@ -700,7 +700,7 @@ func (s *Server) handleCommit(rm *repos.Manager, sm *SessionManager, agentBranch
 			authMethod := authCfg.Method
 			authToken := assembleAuthToken(authMethod, authCfg.Token, authCfg.User, authCfg.Password)
 
-			if err := svc.SetRemoteWithAuth("origin", remoteURL, remoteBranch, 300, 300, authMethod, authToken); err != nil {
+			if err := svc.SetRemote("origin", remoteURL, remoteBranch, 300, 300, authMethod, authToken); err != nil {
 				sendEvent(map[string]string{"phase": "error", "message": fmt.Sprintf("save remote config: %v", err)})
 				return
 			}

@@ -140,7 +140,7 @@ func handleSetOrigin() http.HandlerFunc {
 			pushInterval = existing.PushInterval
 		}
 
-		if err := svc.SetRemoteWithAuth("origin", url, branch, interval, pushInterval, authMethod, authToken); err != nil {
+		if err := svc.SetRemote("origin", url, branch, interval, pushInterval, authMethod, authToken); err != nil {
 			log.Warn().Err(err).Str("repo", repoName).Msg("set origin failed")
 			writeError(w, http.StatusInternalServerError, "failed to save origin")
 			return
