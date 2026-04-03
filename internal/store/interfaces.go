@@ -78,6 +78,28 @@ type BranchIndex interface {
 	SetDefaultBranch(branch string) error
 }
 
+// gitReader is the git-read contract implemented by repoHandler and used internally by searchIndex.
+type gitReader interface {
+	// DiffFiles returns paths added, modified, and deleted between fromCommit and HEAD on branch.
+	DiffFiles(ctx context.Context, branch, fromCommit string) (added, modified, deleted []string, err error)
+	// readFile reads the content of path from the HEAD commit of branch.
+	readFile(ctx context.Context, branch, path string) (string, error)
+	// readFileWithHash returns both the file content and the blob hash for the given path on branch.
+	readFileWithHash(ctx context.Context, branch, path string) (content string, blobHash string, err error)
+	// HeadCommit returns the hash of the current HEAD commit of branch as a hex string.
+	HeadCommit(ctx context.Context, branch string) (string, error)
+	// ListAll returns paths of all .md files from HEAD of branch.
+	ListAll(ctx context.Context, branch string) ([]string, error)
+	// ListAllWithHash returns all .md file paths and their blob hashes from HEAD of branch.
+	// Single tree walk, no per-file I/O.
+	ListAllWithHash(ctx context.Context, branch string) (paths []string, blobHashes []string, err error)
+	// LastCommitForPath returns the hash of the most recent non-merge commit that touched path on branch.
+	LastCommitForPath(ctx context.Context, branch, path string) (string, error)
+	// readFileAtCommit reads the content of path at the given commit on branch.
+	// branch is used for repository context; commitHash uniquely identifies the version.
+	readFileAtCommit(ctx context.Context, branch, path, commitHash string) (string, error)
+}
+
 // Embedder computes vector embeddings for text.
 type Embedder interface {
 	Embed(text string) ([]float32, error)

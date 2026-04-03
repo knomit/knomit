@@ -1,28 +1,17 @@
-// Package store implements the knomit search index backed by SQLite and
-// sqlite-vec. It provides vector similarity search and filtered search over
-// a git-backed knowledge base of fact files.
-//
-// The package is split across several files:
-//
-//   - index.go          — Core domain types, shared interfaces, and helpers.
-//   - search_index.go   — searchIndex type: search, sync, rebuild, graph, and embedder wiring.
-//   - fact_index.go     — factIndex type: FactIndex interface implementation.
-//   - pipeline_index.go — pipelineIndex type: PipelineIndex interface.
-//   - tool_index.go     — toolIndex type: ToolSessionIndex interface.
-//   - crud.go           — Upsert, Delete, GetByPath, GetEmbedding, meta ops.
-//   - search.go         — Vector search, filters, and hybrid scoring.
-//   - sync.go           — Git sync (full rebuild + incremental diff).
-//   - parse.go          — Fact markdown file parsing (YAML frontmatter + body).
-//   - vec.go            — Vector encoding/decoding, pairwise distances, sqlite-vec init.
+// Package store implements the knomit knowledge base backed by SQLite, sqlite-vec,
+// and a bare git repository. It provides vector similarity search and filtered
+// search over git-backed fact files.
 package store
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"sort"
 	"strings"
 
 	"knomit/internal/fact"
+	storegit "knomit/internal/store/git"
 )
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -68,31 +57,14 @@ type FactWithBody struct {
 	CommittedAt int64  `json:"committed_at,omitempty"`
 }
 
-// gitReader is the git-read contract implemented by repoHandler and used internally by searchIndex.
-type gitReader interface {
-	// DiffFiles returns paths added, modified, and deleted between fromCommit and HEAD on branch.
-	DiffFiles(ctx context.Context, branch, fromCommit string) (added, modified, deleted []string, err error)
-	// readFile reads the content of path from the HEAD commit of branch.
-	readFile(ctx context.Context, branch, path string) (string, error)
-	// readFileWithHash returns both the file content and the blob hash for the given path on branch.
-	readFileWithHash(ctx context.Context, branch, path string) (content string, blobHash string, err error)
-	// HeadCommit returns the hash of the current HEAD commit of branch as a hex string.
-	HeadCommit(ctx context.Context, branch string) (string, error)
-	// ListAll returns paths of all .md files from HEAD of branch.
-	ListAll(ctx context.Context, branch string) ([]string, error)
-	// ListAllWithHash returns all .md file paths and their blob hashes from HEAD of branch.
-	// Single tree walk, no per-file I/O.
-	ListAllWithHash(ctx context.Context, branch string) (paths []string, blobHashes []string, err error)
-	// LastCommitForPath returns the hash of the most recent non-merge commit that touched path on branch.
-	LastCommitForPath(ctx context.Context, branch, path string) (string, error)
-	// readFileAtCommit reads the content of path at the given commit on branch.
-	// branch is used for repository context; commitHash uniquely identifies the version.
-	readFileAtCommit(ctx context.Context, branch, path, commitHash string) (string, error)
+
+func conn(ctx context.Context, db *sql.DB) storegit.CtxExecer {
+	return storegit.Conn(ctx, db)
 }
 
-// ────────────────────────────────────────────────────────────────────────────
-// Schema DDL
-// ────────────────────────────────────────────────────────────────────────────
+func beginTxIfNeeded(ctx context.Context, db *sql.DB) (context.Context, *sql.Tx, bool, error) {
+	return storegit.BeginTxIfNeeded(ctx, db)
+}
 
 // extractBody strips YAML frontmatter from raw markdown and returns just the body.
 // It assumes the format: ---\n...\n---\n# Title\n\nBody
