@@ -21,11 +21,8 @@ import (
 // blobObjectType is the go-git integer for plumbing.BlobObject.
 const blobObjectType = 3
 
-// Compile-time checks.
-var _ FactIndex        = (*factIndex)(nil)
-var _ SearchIndex      = (*searchIndex)(nil)
-var _ PipelineIndex    = (*pipelineIndex)(nil)
-var _ ToolSessionIndex = (*toolIndex)(nil)
+// Compile-time check (SearchIndex has no assertion in its own file).
+var _ SearchIndex = (*searchIndex)(nil)
 
 // Service is the single entry point for all database and git access. It opens one
 // SQLite file with sqlite-vec + GraphQLite extensions, runs the embedded
