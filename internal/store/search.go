@@ -100,7 +100,7 @@ func newFactFilter(q SearchQuery) *factFilter {
 // the allowed set. It performs a single bulk SQL lookup of operations by
 // commit_hash from commit_log (same database). If ops is empty, all results
 // are kept unchanged.
-func (idx *Index) filterByEpisodeOps(ctx context.Context, results []SearchResult, ops []string) ([]SearchResult, error) {
+func (idx *store) filterByEpisodeOps(ctx context.Context, results []SearchResult, ops []string) ([]SearchResult, error) {
 	if len(ops) == 0 || len(results) == 0 {
 		return results, nil
 	}
@@ -173,7 +173,7 @@ func (idx *Index) filterByEpisodeOps(ctx context.Context, results []SearchResult
 //
 // If Text is empty, all facts matching the non-text filters are returned with
 // score 100.
-func (idx *Index) Search(ctx context.Context, branch string, q SearchQuery) ([]SearchResult, error) {
+func (idx *store) Search(ctx context.Context, branch string, q SearchQuery) ([]SearchResult, error) {
 	branchID, err := idx.branchID(ctx, branch)
 	if err != nil {
 		return nil, fmt.Errorf("search: %w", err)

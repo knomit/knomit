@@ -35,7 +35,7 @@ func queryTool() mcpgo.Tool {
 }
 
 // QueryHandler returns the handler function for knomit_query.
-func QueryHandler(gs store.GitStore, idx store.SearchIndex, agentBranch string) func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+func QueryHandler(gs store.FactIndex, idx store.SearchIndex, agentBranch string) func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 	return func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 		ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()

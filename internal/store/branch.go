@@ -44,7 +44,7 @@ func (c *branchCache) remove(name string) {
 }
 
 // EnsureBranch creates the branch if it doesn't exist, returns its ID.
-func (idx *Index) EnsureBranch(ctx context.Context, name, gitRef string) (int64, error) {
+func (idx *store) EnsureBranch(ctx context.Context, name, gitRef string) (int64, error) {
 	if id, ok := idx.branches.get(name); ok {
 		return id, nil
 	}
@@ -69,7 +69,7 @@ func (idx *Index) EnsureBranch(ctx context.Context, name, gitRef string) (int64,
 
 // branchID returns the ID for a branch name, using the cache when possible.
 // Returns an error if the branch does not exist.
-func (idx *Index) branchID(ctx context.Context, name string) (int64, error) {
+func (idx *store) branchID(ctx context.Context, name string) (int64, error) {
 	if id, ok := idx.branches.get(name); ok {
 		return id, nil
 	}
@@ -90,7 +90,7 @@ func (idx *Index) branchID(ctx context.Context, name string) (int64, error) {
 // ListBranches returns all registered branches.
 // MergeBranch copies all branch_facts entries from src to dst.
 // Conflicting paths (same path on both branches) are overwritten with src's version.
-func (idx *Index) MergeBranch(ctx context.Context, src, dst string) error {
+func (idx *store) MergeBranch(ctx context.Context, src, dst string) error {
 	srcID, err := idx.branchID(ctx, src)
 	if err != nil {
 		return fmt.Errorf("merge: src %w", err)
@@ -113,7 +113,7 @@ func (idx *Index) MergeBranch(ctx context.Context, src, dst string) error {
 }
 
 // DropBranch removes a branch and all its branch_facts entries, then runs GC.
-func (idx *Index) DropBranch(ctx context.Context, name string) error {
+func (idx *store) DropBranch(ctx context.Context, name string) error {
 	id, err := idx.branchID(ctx, name)
 	if err != nil {
 		return fmt.Errorf("drop branch: %w", err)
@@ -132,7 +132,7 @@ func (idx *Index) DropBranch(ctx context.Context, name string) error {
 }
 
 // ListBranches returns all registered branches.
-func (idx *Index) ListBranches(ctx context.Context) ([]Branch, error) {
+func (idx *store) ListBranches(ctx context.Context) ([]Branch, error) {
 	rows, err := conn(ctx, idx.db).QueryContext(ctx, `SELECT id, name, git_ref FROM branches ORDER BY name`)
 	if err != nil {
 		return nil, fmt.Errorf("list branches: %w", err)

@@ -35,7 +35,7 @@ type PipelineWorkItem struct {
 
 // GetPipelineWatermark returns the last-processed commit hash for the given tool+branch,
 // or "" if no watermark has been set.
-func (idx *Index) GetPipelineWatermark(ctx context.Context, tool, branch string) (string, error) {
+func (idx *store) GetPipelineWatermark(ctx context.Context, tool, branch string) (string, error) {
 	var hash string
 	err := conn(ctx, idx.db).QueryRowContext(ctx,
 		`SELECT commit_hash FROM pipeline_watermarks WHERE tool = ? AND branch = ?`, tool, branch,
@@ -50,7 +50,7 @@ func (idx *Index) GetPipelineWatermark(ctx context.Context, tool, branch string)
 }
 
 // SetPipelineWatermark upserts the last-processed commit hash for a tool+branch.
-func (idx *Index) SetPipelineWatermark(ctx context.Context, tool, branch, hash string) error {
+func (idx *store) SetPipelineWatermark(ctx context.Context, tool, branch, hash string) error {
 	_, err := conn(ctx, idx.db).ExecContext(ctx,
 		`INSERT OR REPLACE INTO pipeline_watermarks(tool, branch, commit_hash) VALUES (?, ?, ?)`,
 		tool, branch, hash,
@@ -63,7 +63,7 @@ func (idx *Index) SetPipelineWatermark(ctx context.Context, tool, branch, hash s
 
 // CreatePipelineSession creates a new session for the given tool+branch.
 // Any existing active session for the same tool+branch is abandoned first.
-func (idx *Index) CreatePipelineSession(ctx context.Context, tool, branch string) (*PipelineSession, error) {
+func (idx *store) CreatePipelineSession(ctx context.Context, tool, branch string) (*PipelineSession, error) {
 	now := time.Now().UTC().Format(time.RFC3339)
 
 	ctx, tx, ownTx, err := beginTxIfNeeded(ctx, idx.db)
@@ -108,7 +108,7 @@ func (idx *Index) CreatePipelineSession(ctx context.Context, tool, branch string
 }
 
 // GetPipelineSession returns the session with the given ID, or nil if not found.
-func (idx *Index) GetPipelineSession(ctx context.Context, id string) (*PipelineSession, error) {
+func (idx *store) GetPipelineSession(ctx context.Context, id string) (*PipelineSession, error) {
 	var s PipelineSession
 	err := conn(ctx, idx.db).QueryRowContext(ctx,
 		`SELECT id, tool, branch, status, created_at, updated_at FROM pipeline_sessions WHERE id = ?`, id,
@@ -123,7 +123,7 @@ func (idx *Index) GetPipelineSession(ctx context.Context, id string) (*PipelineS
 }
 
 // CompletePipelineSession marks the session as completed.
-func (idx *Index) CompletePipelineSession(ctx context.Context, id string) error {
+func (idx *store) CompletePipelineSession(ctx context.Context, id string) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 	_, err := conn(ctx, idx.db).ExecContext(ctx,
 		`UPDATE pipeline_sessions SET status = 'completed', updated_at = ? WHERE id = ?`,
@@ -136,7 +136,7 @@ func (idx *Index) CompletePipelineSession(ctx context.Context, id string) error 
 }
 
 // InsertPipelineWorkItem inserts a new work item into the pipeline_work_items table.
-func (idx *Index) InsertPipelineWorkItem(ctx context.Context, item PipelineWorkItem) error {
+func (idx *store) InsertPipelineWorkItem(ctx context.Context, item PipelineWorkItem) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 	_, err := conn(ctx, idx.db).ExecContext(ctx,
 		`INSERT INTO pipeline_work_items(session_id, step_type, cluster_key, facts_json, response, priority, depth, created_at)
@@ -151,7 +151,7 @@ func (idx *Index) InsertPipelineWorkItem(ctx context.Context, item PipelineWorkI
 
 // NextPipelineWorkItem returns the highest-priority unanswered work item for the given
 // session, or nil if all items have been answered.
-func (idx *Index) NextPipelineWorkItem(ctx context.Context, sessionID string) (*PipelineWorkItem, error) {
+func (idx *store) NextPipelineWorkItem(ctx context.Context, sessionID string) (*PipelineWorkItem, error) {
 	var item PipelineWorkItem
 	err := conn(ctx, idx.db).QueryRowContext(ctx,
 		`SELECT id, session_id, step_type, cluster_key, facts_json, response, priority, depth, created_at
@@ -171,7 +171,7 @@ func (idx *Index) NextPipelineWorkItem(ctx context.Context, sessionID string) (*
 }
 
 // SetPipelineWorkItemResponse records the response for a work item.
-func (idx *Index) SetPipelineWorkItemResponse(ctx context.Context, id int64, response string) error {
+func (idx *store) SetPipelineWorkItemResponse(ctx context.Context, id int64, response string) error {
 	_, err := conn(ctx, idx.db).ExecContext(ctx,
 		`UPDATE pipeline_work_items SET response = ? WHERE id = ?`,
 		response, id,
@@ -183,7 +183,7 @@ func (idx *Index) SetPipelineWorkItemResponse(ctx context.Context, id int64, res
 }
 
 // PipelineWorkItemStats returns the count of completed and remaining work items for a session.
-func (idx *Index) PipelineWorkItemStats(ctx context.Context, sessionID string) (completed, remaining int, err error) {
+func (idx *store) PipelineWorkItemStats(ctx context.Context, sessionID string) (completed, remaining int, err error) {
 	err = conn(ctx, idx.db).QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM pipeline_work_items WHERE session_id = ? AND response IS NOT NULL`,
 		sessionID,

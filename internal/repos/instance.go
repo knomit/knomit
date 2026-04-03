@@ -10,29 +10,33 @@ import (
 
 // StoreDeps bundles the lock-protected fields for read access via WithRead.
 // All fields may be nil if the repo is not yet fully initialised.
-// GS is populated from Svc in production; tests may set GS to a mock GitStore.
+// GS is populated from Svc in production; tests may set GS to a mock FactIndex.
 type StoreDeps struct {
-	GS  store.GitStore
-	Svc *store.Service
-	Idx store.SearchIndex
+	GS          store.FactIndex
+	Svc         *store.Service
+	Idx         store.SearchIndex
+	Pipeline    store.PipelineIndex
+	ToolSession store.ToolSessionIndex
 }
 
 // RepoInstance holds all runtime state for a single repository.
 type RepoInstance struct {
-	mu          sync.RWMutex
-	name        string
-	dbPath      string
-	agentBranch string
-	gsOverride  store.GitStore    // test-only: overrides svc as GS in StoreDeps
-	ontology    *fact.Ontology
-	onCommit    func(string, string) // re-applied to new svc after SwapStore
-	svc         *store.Service
-	idx         store.SearchIndex
-	hub         *TaskHub
-	syncCancel  context.CancelFunc
-	syncWg      *sync.WaitGroup
-	startSync   func(url string) error
-	closeFn     func()
+	mu                  sync.RWMutex
+	name                string
+	dbPath              string
+	agentBranch         string
+	gsOverride          store.FactIndex         // test-only: overrides svc as GS in StoreDeps
+	pipelineOverride    store.PipelineIndex    // test-only: overrides svc.Index() as Pipeline in StoreDeps
+	toolSessionOverride store.ToolSessionIndex // test-only: overrides svc.Index() as ToolSession in StoreDeps
+	ontology            *fact.Ontology
+	onCommit            func(string, string) // re-applied to new svc after SwapStore
+	svc                 *store.Service
+	idx                 store.SearchIndex
+	hub                 *TaskHub
+	syncCancel          context.CancelFunc
+	syncWg              *sync.WaitGroup
+	startSync           func(url string) error
+	closeFn             func()
 }
 
 // WithRead calls fn with all lock-protected fields under a read lock.
@@ -41,14 +45,28 @@ type RepoInstance struct {
 func (ri *RepoInstance) WithRead(fn func(StoreDeps)) {
 	ri.mu.RLock()
 	defer ri.mu.RUnlock()
-	gs := store.GitStore(ri.svc)
+	gs := store.FactIndex(ri.svc)
 	if ri.gsOverride != nil {
 		gs = ri.gsOverride
 	}
+	var pipeline store.PipelineIndex
+	if ri.pipelineOverride != nil {
+		pipeline = ri.pipelineOverride
+	} else if ri.svc != nil {
+		pipeline = ri.svc.Index()
+	}
+	var toolSession store.ToolSessionIndex
+	if ri.toolSessionOverride != nil {
+		toolSession = ri.toolSessionOverride
+	} else if ri.svc != nil {
+		toolSession = ri.svc.Index()
+	}
 	fn(StoreDeps{
-		GS:  gs,
-		Svc: ri.svc,
-		Idx: ri.idx,
+		GS:          gs,
+		Svc:         ri.svc,
+		Idx:         ri.idx,
+		Pipeline:    pipeline,
+		ToolSession: toolSession,
 	})
 }
 
@@ -104,9 +122,11 @@ func NewTestInstance(name string) *RepoInstance {
 type TestInstanceConfig struct {
 	Name        string
 	AgentBranch string
-	GS          store.GitStore
+	GS          store.FactIndex
 	Svc         *store.Service
 	Idx         store.SearchIndex
+	Pipeline    store.PipelineIndex
+	ToolSession store.ToolSessionIndex
 	Ontology    *fact.Ontology
 	Hub         *TaskHub
 	StartSync   func(url string) error
@@ -118,15 +138,17 @@ type TestInstanceConfig struct {
 func NewTestInstanceWithDeps(cfg TestInstanceConfig) *RepoInstance {
 	sc := cfg.StartSync
 	return &RepoInstance{
-		name:        cfg.Name,
-		agentBranch: cfg.AgentBranch,
-		gsOverride:  cfg.GS,
-		svc:         cfg.Svc,
-		idx:         cfg.Idx,
-		ontology:    cfg.Ontology,
-		hub:         cfg.Hub,
-		startSync:   sc,
-		syncCancel:  func() {},
-		syncWg:      &sync.WaitGroup{},
+		name:                cfg.Name,
+		agentBranch:         cfg.AgentBranch,
+		gsOverride:          cfg.GS,
+		pipelineOverride:    cfg.Pipeline,
+		toolSessionOverride: cfg.ToolSession,
+		svc:                 cfg.Svc,
+		idx:                 cfg.Idx,
+		ontology:            cfg.Ontology,
+		hub:                 cfg.Hub,
+		startSync:           sc,
+		syncCancel:          func() {},
+		syncWg:              &sync.WaitGroup{},
 	}
 }

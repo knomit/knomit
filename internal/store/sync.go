@@ -19,7 +19,7 @@ import (
 //  3. If last_commit == HEAD → no-op.
 //  4. Else → DiffFiles(last_commit), upsert added+modified, delete removed.
 //  5. Update meta.last_commit = HEAD.
-func (idx *Index) Sync(ctx context.Context, git GitReader, branch string) error {
+func (idx *store) Sync(ctx context.Context, git *Service, branch string) error {
 	// Ensure the branch exists in the branches table.
 	if _, err := idx.EnsureBranch(ctx, branch, "refs/heads/"+branch); err != nil {
 		return fmt.Errorf("sync: ensure branch: %w", err)
@@ -90,7 +90,7 @@ type RebuildProgress func(phase string, done, total int)
 
 // Rebuild clears the last-commit marker and re-indexes every file from HEAD
 // using three phases: facts, embeddings, graph.
-func (idx *Index) Rebuild(ctx context.Context, git GitReader, branch string, progress RebuildProgress) error {
+func (idx *store) Rebuild(ctx context.Context, git *Service, branch string, progress RebuildProgress) error {
 	if err := idx.SetLastCommit(ctx, branch, ""); err != nil {
 		return fmt.Errorf("rebuild: clear last commit: %w", err)
 	}
@@ -141,7 +141,7 @@ func (idx *Index) Rebuild(ctx context.Context, git GitReader, branch string, pro
 //
 // commitHash is the fallback; if commit_log has a more specific last-touch
 // commit for this path, that is used instead.
-func (idx *Index) indexFile(ctx context.Context, git GitReader, branch, path, commitHash string) error {
+func (idx *store) indexFile(ctx context.Context, git *Service, branch, path, commitHash string) error {
 	content, blobHash, err := git.readFileWithHash(ctx, branch, path)
 	if err != nil {
 		return fmt.Errorf("indexFile: read %s: %w", path, err)

@@ -3,7 +3,7 @@
 //
 // Architecture:
 //
-//   - All handlers accept narrow interfaces (GitStore, SearchIndex) rather
+//   - All handlers accept narrow interfaces (FactIndex, SearchIndex) rather
 //     than concrete types, making them testable with hand-rolled mocks.
 //   - Long-running operations (synthesis, git sync) execute asynchronously
 //     via TaskHub; clients observe progress through the SSE /api/v1/events
@@ -59,7 +59,7 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 func handleBrowse(ontologyRoot, agentBranch string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
-		var gs store.GitStore
+		var gs store.FactIndex
 		var idx store.SearchIndex
 		ri.WithRead(func(d repos.StoreDeps) {
 			gs = d.GS
@@ -129,11 +129,11 @@ func handleBrowse(ontologyRoot, agentBranch string) http.HandlerFunc {
 func handleFact(agentBranch string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
-		var gs store.GitStore
-		var svc *store.Service
+		var gs store.FactIndex
+		var idx store.SearchIndex
 		ri.WithRead(func(d repos.StoreDeps) {
 			gs = d.GS
-			svc = d.Svc
+			idx = d.Idx
 		})
 		path := r.URL.Query().Get("path")
 		if path == "" {
@@ -159,8 +159,8 @@ func handleFact(agentBranch string) http.HandlerFunc {
 				content, fromCommit = result.Content, commitHash
 			}
 			err = readErr
-			if err != nil && svc != nil {
-				if lastHash, ok := svc.Index().LastCommitForPath(r.Context(), agentBranch, path); ok {
+			if err != nil && idx != nil {
+				if lastHash, ok := idx.LastCommitForPath(r.Context(), agentBranch, path); ok {
 					result, readErr = gs.ReadFact(r.Context(), agentBranch, path, &store.ReadFactOpts{AtCommit: lastHash})
 					if readErr == nil {
 						content, fromCommit = result.Content, lastHash
@@ -216,8 +216,8 @@ func handleFact(agentBranch string) http.HandlerFunc {
 		}
 
 		// Browsing mode: enrich with commit hash and date from the store index.
-		if commitHash == "" && svc != nil {
-			if rec, lerr := svc.Index().GetByPath(r.Context(), agentBranch, path); lerr == nil && rec != nil && rec.CommitHash != "" {
+		if commitHash == "" && idx != nil {
+			if rec, lerr := idx.GetByPath(r.Context(), agentBranch, path); lerr == nil && rec != nil && rec.CommitHash != "" {
 				resp := map[string]any{
 					"path":        fact.Path(),
 					"title":       fact.Title,
@@ -230,8 +230,8 @@ func handleFact(agentBranch string) http.HandlerFunc {
 					"refs":        fact.Refs,
 					"commit_hash": rec.CommitHash,
 				}
-				if ts, ok := svc.Index().CommitTimestamp(r.Context(), rec.CommitHash); ok {
-					resp["commit_date"] = time.Unix(ts, 0).UTC().Format(time.RFC3339)
+				if rec.CommittedAt != 0 {
+					resp["commit_date"] = time.Unix(rec.CommittedAt, 0).UTC().Format(time.RFC3339)
 				}
 				writeJSON(w, http.StatusOK, resp)
 				return
@@ -247,7 +247,7 @@ func handleFact(agentBranch string) http.HandlerFunc {
 func handleFactWrite(agentBranch string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
-		var gs store.GitStore
+		var gs store.FactIndex
 		ri.WithRead(func(d repos.StoreDeps) { gs = d.GS })
 
 		var req struct {
@@ -289,7 +289,7 @@ func handleFactWrite(agentBranch string) http.HandlerFunc {
 func handleFactRetract(agentBranch string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
-		var gs store.GitStore
+		var gs store.FactIndex
 		ri.WithRead(func(d repos.StoreDeps) { gs = d.GS })
 
 		path := r.URL.Query().Get("path")
@@ -468,7 +468,7 @@ func handleSearch() http.HandlerFunc {
 func handleHistoryPaginated(agentBranch string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
-		var gs store.GitStore
+		var gs store.FactIndex
 		ri.WithRead(func(d repos.StoreDeps) { gs = d.GS })
 		path := r.URL.Query().Get("path")
 
@@ -510,7 +510,7 @@ func handleHistoryPaginated(agentBranch string) http.HandlerFunc {
 func handleCommitDetail(agentBranch string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
-		var gs store.GitStore
+		var gs store.FactIndex
 		var idx store.SearchIndex
 		ri.WithRead(func(d repos.StoreDeps) {
 			gs = d.GS
@@ -575,7 +575,7 @@ func handleCommitDetail(agentBranch string) http.HandlerFunc {
 func handleActivity(agentBranch string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
-		var gs store.GitStore
+		var gs store.FactIndex
 		ri.WithRead(func(d repos.StoreDeps) { gs = d.GS })
 		result, err := gs.Activity(r.Context(), agentBranch, r.URL.Query().Get("path"))
 		if err != nil {
@@ -635,7 +635,7 @@ func handleStats() http.HandlerFunc {
 func handleStatus(embeddingsEnabled bool, ontologyRoot, agentBranch string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
-		var gs store.GitStore
+		var gs store.FactIndex
 		var idx store.SearchIndex
 		ri.WithRead(func(d repos.StoreDeps) {
 			gs = d.GS
@@ -670,9 +670,9 @@ func handleRecent() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
 		branch := ri.AgentBranch()
-		var svc *store.Service
-		ri.WithRead(func(d repos.StoreDeps) { svc = d.Svc })
-		if svc == nil {
+		var idx store.SearchIndex
+		ri.WithRead(func(d repos.StoreDeps) { idx = d.Idx })
+		if idx == nil {
 			writeError(w, http.StatusServiceUnavailable, "index not available")
 			return
 		}
@@ -743,7 +743,7 @@ func handleRecent() http.HandlerFunc {
 			}
 		}
 
-		entries, total, err := svc.Index().RecentFacts(r.Context(), branch, path, query, limit, offset, includeTypes, excludeTypes, domain, entities, epOps)
+		entries, total, err := idx.RecentFacts(r.Context(), branch, path, query, limit, offset, includeTypes, excludeTypes, domain, entities, epOps)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, fmt.Sprintf("recent error: %v", err))
 			return

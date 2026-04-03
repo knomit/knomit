@@ -25,7 +25,7 @@ type ExplainResult struct {
 // (marked with Deleted: true) so the UI can show them distinctly.
 // Self-loops are filtered out: GraphQLite creates (n)-[:DERIVED_FROM]->(n) when
 // the target node is absent at edge-creation time (upstream bug).
-func (idx *Index) ExplainFact(ctx context.Context, branch, path string) (ExplainResult, error) {
+func (idx *store) ExplainFact(ctx context.Context, branch, path string) (ExplainResult, error) {
 	branchID, err := idx.branchID(ctx, branch)
 	if err != nil {
 		return ExplainResult{}, fmt.Errorf("explain: %w", err)
@@ -85,7 +85,7 @@ func filterSelf(refs []RefSummary, selfPath string) []RefSummary {
 
 // filterByBranch keeps only RefSummary entries whose path is visible on the
 // given branch (present in branch_facts).
-func (idx *Index) filterByBranch(ctx context.Context, refs []RefSummary, branchID int64) []RefSummary {
+func (idx *store) filterByBranch(ctx context.Context, refs []RefSummary, branchID int64) []RefSummary {
 	if len(refs) == 0 {
 		return refs
 	}
@@ -136,7 +136,7 @@ type VersionSummary struct {
 // Uses direct SQL against EAV tables for reliability (GraphQLite parameterized
 // MATCH does not reliably return SET properties via json_each).
 // branch is validated but not used for filtering — version history is commit-level.
-func (idx *Index) FactVersionHistory(ctx context.Context, branch, path string) ([]VersionSummary, error) {
+func (idx *store) FactVersionHistory(ctx context.Context, branch, path string) ([]VersionSummary, error) {
 	if _, err := idx.branchID(ctx, branch); err != nil {
 		return nil, fmt.Errorf("FactVersionHistory: %w", err)
 	}
@@ -187,7 +187,7 @@ func (idx *Index) FactVersionHistory(ctx context.Context, branch, path string) (
 //
 // Both queries use direct SQL against the EAV tables to avoid GraphQLite's
 // same-label two-node MATCH self-loop bug (established in Task 3).
-func (idx *Index) ExplainFactAt(ctx context.Context, branch, path, commitHash string) (ExplainResult, error) {
+func (idx *store) ExplainFactAt(ctx context.Context, branch, path, commitHash string) (ExplainResult, error) {
 	// branch is accepted for API consistency but not used for filtering:
 	// ExplainFactAt queries historical FactVersion nodes which exist outside
 	// branch scoping. The incoming/outgoing refs reflect what was true at
@@ -240,7 +240,7 @@ func (idx *Index) ExplainFactAt(ctx context.Context, branch, path, commitHash st
 // refSummariesByEdgeSource returns RefSummary entries for all target nodes
 // reachable from sourceNodeID via edges of edgeType, where the target has label targetLabel.
 // It reads path and title properties from the EAV tables.
-func (idx *Index) refSummariesByEdgeSource(ctx context.Context, sourceNodeID int64, edgeType, targetLabel string) ([]RefSummary, error) {
+func (idx *store) refSummariesByEdgeSource(ctx context.Context, sourceNodeID int64, edgeType, targetLabel string) ([]RefSummary, error) {
 	rows, err := conn(ctx, idx.db).QueryContext(ctx, `
 		SELECT DISTINCT
 			path_prop.value AS path,
@@ -263,7 +263,7 @@ func (idx *Index) refSummariesByEdgeSource(ctx context.Context, sourceNodeID int
 // refSummariesByEdgeTarget returns RefSummary entries for all source nodes
 // pointing to targetNodeID via edges of edgeType, where the source has label sourceLabel.
 // It reads path and title properties from the EAV tables.
-func (idx *Index) refSummariesByEdgeTarget(ctx context.Context, targetNodeID int64, edgeType, sourceLabel string) ([]RefSummary, error) {
+func (idx *store) refSummariesByEdgeTarget(ctx context.Context, targetNodeID int64, edgeType, sourceLabel string) ([]RefSummary, error) {
 	rows, err := conn(ctx, idx.db).QueryContext(ctx, `
 		SELECT DISTINCT
 			path_prop.value AS path,
@@ -306,7 +306,7 @@ func scanRefSummaryRows(rows interface {
 // queryRefSummaries runs a Cypher query that returns (path, title, deleted) rows.
 // cypherQuery must contain only $param placeholders (no embedded values).
 // paramsJSON is the JSON-encoded parameter object passed as cypher()'s second arg.
-func (idx *Index) queryRefSummaries(ctx context.Context, cypherQuery, paramsJSON string) ([]RefSummary, error) {
+func (idx *store) queryRefSummaries(ctx context.Context, cypherQuery, paramsJSON string) ([]RefSummary, error) {
 	q := `SELECT json_extract(value, '$.path'), json_extract(value, '$.title'), json_extract(value, '$.deleted') FROM json_each(cypher('` + cypherQuery + `', ?))`
 	rows, err := conn(ctx, idx.db).QueryContext(ctx, q, paramsJSON)
 	if err != nil {

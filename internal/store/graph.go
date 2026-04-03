@@ -47,12 +47,12 @@ const (
 //  4. MERGE Domain hierarchy + IN_DOMAIN edges
 //  5. MERGE OntologyNode hierarchy + UNDER edge
 //  6. Sync DERIVED_FROM edges from local refs
-func (idx *Index) graphSyncFact(ctx context.Context, rec FactRecord) error {
+func (idx *store) graphSyncFact(ctx context.Context, rec FactRecord) error {
 	return idx.graphSyncFactTx(ctx, idx.db, rec)
 }
 
 // graphSyncFactTx is the transactional version of graphSyncFact.
-func (idx *Index) graphSyncFactTx(ctx context.Context, tx execer, rec FactRecord) error {
+func (idx *store) graphSyncFactTx(ctx context.Context, tx execer, rec FactRecord) error {
 	path := escapeCypherKey(rec.Path)
 	bh := escapeCypherKey(rec.BlobHash)
 	title := escapeCypherVal(rec.Title)
@@ -128,7 +128,7 @@ func (idx *Index) graphSyncFactTx(ctx context.Context, tx execer, rec FactRecord
 
 // graphMergeDomainHierarchy creates the full domain ancestor chain and links
 // the fact to the leaf domain via IN_DOMAIN.
-func (idx *Index) graphMergeDomainHierarchy(ctx context.Context, tx execer, factPath, factBlobHash, domain string) error {
+func (idx *store) graphMergeDomainHierarchy(ctx context.Context, tx execer, factPath, factBlobHash, domain string) error {
 	parts := strings.Split(domain, "/")
 	for i := range parts {
 		seg := strings.Join(parts[:i+1], "/")
@@ -157,7 +157,7 @@ func (idx *Index) graphMergeDomainHierarchy(ctx context.Context, tx execer, fact
 
 // graphMergeOntologyHierarchy creates OntologyNode chain from the fact's file
 // path and links the fact to the leaf via UNDER.
-func (idx *Index) graphMergeOntologyHierarchy(ctx context.Context, tx execer, factPath, factBlobHash string) error {
+func (idx *store) graphMergeOntologyHierarchy(ctx context.Context, tx execer, factPath, factBlobHash string) error {
 	parts := strings.Split(factPath, "/")
 	if len(parts) < 2 {
 		return nil
@@ -191,11 +191,11 @@ func (idx *Index) graphMergeOntologyHierarchy(ctx context.Context, tx execer, fa
 
 // graphDeleteFact marks a Fact node as deleted and removes its outgoing edges
 // (except incoming DERIVED_FROM, which preserves lineage).
-func (idx *Index) graphDeleteFact(ctx context.Context, path, blobHash string) error {
+func (idx *store) graphDeleteFact(ctx context.Context, path, blobHash string) error {
 	return idx.graphDeleteFactTx(ctx, idx.db, path, blobHash)
 }
 
-func (idx *Index) graphDeleteFactTx(ctx context.Context, tx execer, path, blobHash string) error {
+func (idx *store) graphDeleteFactTx(ctx context.Context, tx execer, path, blobHash string) error {
 	p := escapeCypherKey(path)
 	bh := escapeCypherKey(blobHash)
 	// Delete outgoing edges.
@@ -225,7 +225,7 @@ func (idx *Index) graphDeleteFactTx(ctx context.Context, tx execer, path, blobHa
 // self-loops at query time in ExplainFact instead of pre-checking (which would
 // silently drop valid edges when facts are indexed in different orders during
 // rebuild).
-func (idx *Index) graphAddDerivedFromTx(ctx context.Context, tx execer, newPath, newBlobHash string, sourcePaths []string) error {
+func (idx *store) graphAddDerivedFromTx(ctx context.Context, tx execer, newPath, newBlobHash string, sourcePaths []string) error {
 	np := escapeCypherKey(newPath)
 	nbh := escapeCypherKey(newBlobHash)
 	for _, src := range sourcePaths {
@@ -250,7 +250,7 @@ const (
 // IMPORTANT: This function queries sqlite-vec (facts_vec) directly via idx.db,
 // so it must be called AFTER the surrounding transaction has committed.
 // Calling it inside a transaction will not see uncommitted embedding writes.
-func (idx *Index) graphBuildSimilarityEdges(ctx context.Context, path, blobHash string) error {
+func (idx *store) graphBuildSimilarityEdges(ctx context.Context, path, blobHash string) error {
 	emb, err := idx.getEmbeddingByFact(ctx, path, blobHash)
 	if err != nil || emb == nil {
 		return nil
@@ -328,7 +328,7 @@ type ClusterResult struct {
 //
 // resolution controls Louvain granularity: higher = more, smaller communities.
 // minCommunitySize: communities smaller than this are relabeled as noise.
-func (idx *Index) ClusterFacts(ctx context.Context, branch string, resolution float64, minCommunitySize int) (ClusterResult, error) {
+func (idx *store) ClusterFacts(ctx context.Context, branch string, resolution float64, minCommunitySize int) (ClusterResult, error) {
 	if minCommunitySize <= 0 {
 		minCommunitySize = 2
 	}
@@ -436,7 +436,7 @@ func (idx *Index) ClusterFacts(ctx context.Context, branch string, resolution fl
 //
 // Runs exactly 2 Cypher queries total (one per edge type) regardless of how
 // many seeds are provided, using OR-chaining to batch all seed paths.
-func (idx *Index) graphExpandSearch(ctx context.Context, branchID int64, seeds map[string]float64, maxHops int) map[string]float64 {
+func (idx *store) graphExpandSearch(ctx context.Context, branchID int64, seeds map[string]float64, maxHops int) map[string]float64 {
 	if len(seeds) == 0 {
 		return nil
 	}

@@ -18,7 +18,7 @@ import (
 
 // graphNodeIDByProp returns the node ID for a node with the given label, where
 // the property named propKey equals propVal. Returns 0 if not found.
-func (idx *Index) graphNodeIDByProp(ctx context.Context, label, propKey, propVal string) (int64, error) {
+func (idx *store) graphNodeIDByProp(ctx context.Context, label, propKey, propVal string) (int64, error) {
 	var nodeID int64
 	err := conn(ctx, idx.db).QueryRowContext(ctx, `
 		SELECT np.node_id
@@ -36,7 +36,7 @@ func (idx *Index) graphNodeIDByProp(ctx context.Context, label, propKey, propVal
 
 // graphInsertEdge inserts an edge directly into the edges table, bypassing
 // the GraphQLite Cypher layer. This avoids the two-node MATCH self-loop bug.
-func (idx *Index) graphInsertEdge(ctx context.Context, sourceID, targetID int64, edgeType string) error {
+func (idx *store) graphInsertEdge(ctx context.Context, sourceID, targetID int64, edgeType string) error {
 	_, err := conn(ctx, idx.db).ExecContext(ctx,
 		`INSERT OR IGNORE INTO edges (source_id, target_id, type) VALUES (?, ?, ?)`,
 		sourceID, targetID, edgeType,
@@ -50,7 +50,7 @@ func (idx *Index) graphInsertEdge(ctx context.Context, sourceID, targetID int64,
 // to the corresponding Fact node. Deleted entries are skipped.
 //
 // Returns the number of FactVersion nodes successfully created.
-func (idx *Index) rebuildGraphHistory(ctx context.Context, git GitReader, branch string, progress RebuildProgress) (int, error) {
+func (idx *store) rebuildGraphHistory(ctx context.Context, git *Service, branch string, progress RebuildProgress) (int, error) {
 	rows, err := conn(ctx, idx.db).QueryContext(ctx, `
 		SELECT path, commit_hash, committed_at
 		FROM commit_log
@@ -201,7 +201,7 @@ func (idx *Index) rebuildGraphHistory(ctx context.Context, git GitReader, branch
 // given transaction. Properties (title, committed_at) must be set after the
 // transaction commits via graphSetFactVersionProps, because GraphQLite's
 // MATCH+SET does not persist to EAV tables when executed inside a *sql.Tx.
-func (idx *Index) graphSyncFactVersionTx(ctx context.Context, tx execer, commitHash string, rec FactRecord, committedAt int64) error {
+func (idx *store) graphSyncFactVersionTx(ctx context.Context, tx execer, commitHash string, rec FactRecord, committedAt int64) error {
 	p := escapeCypherKey(rec.Path)
 	ch := escapeCypherKey(commitHash)
 
@@ -222,7 +222,7 @@ func (idx *Index) graphSyncFactVersionTx(ctx context.Context, tx execer, commitH
 //
 // Must be called after the transaction that created the node has committed,
 // because node IDs are only visible post-commit.
-func (idx *Index) graphSetFactVersionProps(ctx context.Context, commitHash string, rec FactRecord, committedAt int64) error {
+func (idx *store) graphSetFactVersionProps(ctx context.Context, commitHash string, rec FactRecord, committedAt int64) error {
 	nodeID, err := idx.graphNodeIDByProp(ctx, NodeFactVersion, "commit_hash", commitHash)
 	if err != nil || nodeID == 0 {
 		return fmt.Errorf("graphSetFactVersionProps: node not found for commit_hash=%s: %w", commitHash, err)

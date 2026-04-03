@@ -78,7 +78,7 @@ func applyGreedyMerges(pairs []mergePair) []mergePair {
 func dedupCluster(
 	ctx context.Context,
 	cluster []factForLLM,
-	gs store.GitStore,
+	gs store.FactIndex,
 	idx store.SearchIndex,
 	threshold float64,
 	recipeName string,

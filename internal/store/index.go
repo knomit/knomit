@@ -62,12 +62,13 @@ func NewFactRecord(f fact.Fact, blobHash string) FactRecord {
 // FactWithBody is returned by read operations that hydrate the body from git objects.
 type FactWithBody struct {
 	FactRecord
-	Body       string `json:"body"`
-	CommitHash string `json:"commit_hash,omitempty"`
+	Body        string `json:"body"`
+	CommitHash  string `json:"commit_hash,omitempty"`
+	CommittedAt int64  `json:"committed_at,omitempty"`
 }
 
-// GitReader is the interface that Index.Sync requires from the git store.
-type GitReader interface {
+// gitReader is the interface that Index.Sync requires from the git store.
+type gitReader interface {
 	// DiffFiles returns paths added, modified, and deleted between fromCommit and HEAD on branch.
 	DiffFiles(ctx context.Context, branch, fromCommit string) (added, modified, deleted []string, err error)
 	// readFile reads the content of path from the HEAD commit of branch.
@@ -93,7 +94,7 @@ type GitReader interface {
 // ────────────────────────────────────────────────────────────────────────────
 
 // Index is the search index backed by SQLite with sqlite-vec.
-type Index struct {
+type store struct {
 	db       *sql.DB
 	embedMu  sync.RWMutex
 	embedder Embedder
@@ -102,27 +103,27 @@ type Index struct {
 
 // newIndex wraps an existing *sql.DB. Schema must already be applied.
 // Used by Service.Open to construct the Index over the shared database.
-func newIndex(db *sql.DB) *Index {
-	return &Index{db: db, branches: newBranchCache()}
+func newIndex(db *sql.DB) *store {
+	return &store{db: db, branches: newBranchCache()}
 }
 
 // SetEmbedder attaches an Embedder to the index. When set, Upsert will call
 // Embed on each record's body and persist the result in facts_vec.
-func (idx *Index) SetEmbedder(e Embedder) {
+func (idx *store) SetEmbedder(e Embedder) {
 	idx.embedMu.Lock()
 	defer idx.embedMu.Unlock()
 	idx.embedder = e
 }
 
 // EmbedderSet reports whether an Embedder has been attached to this index.
-func (idx *Index) EmbedderSet() bool {
+func (idx *store) EmbedderSet() bool {
 	idx.embedMu.RLock()
 	defer idx.embedMu.RUnlock()
 	return idx.embedder != nil
 }
 
 // getEmbedder returns the current Embedder under a read lock.
-func (idx *Index) getEmbedder() Embedder {
+func (idx *store) getEmbedder() Embedder {
 	idx.embedMu.RLock()
 	defer idx.embedMu.RUnlock()
 	return idx.embedder
@@ -131,7 +132,7 @@ func (idx *Index) getEmbedder() Embedder {
 // New opens (or creates) a SQLite search index at path and applies all
 // migrations including vec0 and GraphQLite.
 // Use ":memory:" for an in-memory database (useful in tests).
-func New(path string) (*Index, error) {
+func New(path string) (Store, error) {
 	registerVec()
 
 	dsn := path
@@ -152,11 +153,11 @@ func New(path string) (*Index, error) {
 		return nil, fmt.Errorf("store.New: %w", err)
 	}
 
-	return &Index{db: db, branches: newBranchCache()}, nil
+	return &store{db: db, branches: newBranchCache()}, nil
 }
 
 // Close closes the underlying database connection.
-func (idx *Index) Close() error {
+func (idx *store) Close() error {
 	return idx.db.Close()
 }
 
@@ -184,7 +185,7 @@ func extractBody(raw []byte) string {
 // Completions returns autocomplete suggestions for a given filter category and prefix,
 // scoped to the given branch.
 // Supported categories: "domain", "entity", "type", "ep", "path".
-func (idx *Index) Completions(ctx context.Context, branch, category, prefix string, limit int) ([]string, error) {
+func (idx *store) Completions(ctx context.Context, branch, category, prefix string, limit int) ([]string, error) {
 	branchID, err := idx.branchID(ctx, branch)
 	if err != nil {
 		return nil, fmt.Errorf("completions: %w", err)
@@ -247,7 +248,7 @@ func (idx *Index) Completions(ctx context.Context, branch, category, prefix stri
 }
 
 // queryDistinct executes a query and returns distinct non-empty string values.
-func (idx *Index) queryDistinct(ctx context.Context, query string, args ...any) ([]string, error) {
+func (idx *store) queryDistinct(ctx context.Context, query string, args ...any) ([]string, error) {
 	rows, err := conn(ctx, idx.db).QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
@@ -274,7 +275,7 @@ type StatsResult struct {
 
 // Stats returns aggregate statistics over all indexed facts on a branch,
 // optionally filtered to those whose path starts with pathPrefix.
-func (idx *Index) Stats(ctx context.Context, branch, pathPrefix string) (StatsResult, error) {
+func (idx *store) Stats(ctx context.Context, branch, pathPrefix string) (StatsResult, error) {
 	res := StatsResult{
 		Domains:  make(map[string]int),
 		Entities: make(map[string]int),

@@ -25,8 +25,10 @@ import (
 // BlobObjectType is the go-git integer for plumbing.BlobObject.
 const BlobObjectType = 3
 
-// Compile-time check that *Service satisfies the GitReader interface.
-var _ GitReader = (*Service)(nil)
+// Compile-time checks.
+var _ gitReader = (*Service)(nil)
+var _ Store = (*store)(nil)
+var _ FactIndex = (*Service)(nil)
 
 // Service is the single entry point for all database and git access. It opens one
 // SQLite file with sqlite-vec + GraphQLite extensions, runs the embedded
@@ -37,7 +39,7 @@ var _ GitReader = (*Service)(nil)
 // and are nil/zero when Service is used in DB-only mode via Open().
 type Service struct {
 	db    *sql.DB
-	idx   *Index
+	idx   *store
 	gits  *storegit.Storer
 	crypt *Crypt // nil if no key material provided
 
@@ -92,8 +94,8 @@ func Open(path string) (*Service, error) {
 // SetCrypt sets the encryption provider for credential storage.
 func (s *Service) SetCrypt(c *Crypt) { s.crypt = c }
 
-// Index returns the search index.
-func (s *Service) Index() *Index { return s.idx }
+// Index returns the store index.
+func (s *Service) Index() Store { return s.idx }
 
 // Storer returns the go-git storer interface for use with git transport
 // (e.g. server.MapLoader for in-memory cloning).

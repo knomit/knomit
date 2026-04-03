@@ -35,13 +35,15 @@ func (s *Server) handleSynthesizeStart() http.HandlerFunc {
 		hub := ri.TaskHub()
 		repo := ri.Name()
 
-		var gs store.GitStore
-		var idx *store.Index
+		var gs store.FactIndex
+		var idx store.SearchIndex
+		var pipelineIdx store.PipelineIndex
 		ri.WithRead(func(d repos.StoreDeps) {
 			gs = d.GS
-			idx = d.Svc.Index()
+			idx = d.Idx
+			pipelineIdx = d.Pipeline
 		})
-		reviewer := synthesize.NewReviewer(gs, idx, idx, s.Embedder, nil, s.AgentBranch)
+		reviewer := synthesize.NewReviewer(gs, idx, pipelineIdx, s.Embedder, nil, s.AgentBranch)
 
 		id, err := hub.Start("synth", func(ctx context.Context, emit func(repos.TaskEvent)) {
 			emit(repos.TaskEvent{Status: "running", Phase: "start", Message: "review starting", Repo: repo})

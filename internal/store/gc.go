@@ -10,7 +10,7 @@ import (
 // GC removes orphaned data: facts not referenced by any branch, their graph
 // nodes, orphaned Entity/Domain/OntologyNode graph nodes, and commit_log
 // entries for deleted branches.
-func (idx *Index) GC(ctx context.Context) error {
+func (idx *store) GC(ctx context.Context) error {
 	// 1. Collect orphaned facts before deleting (needed for graph cleanup).
 	type orphanFact struct {
 		id       int64
@@ -81,7 +81,7 @@ func (idx *Index) GC(ctx context.Context) error {
 
 // gcSessionTable deletes all but the 5 most recent sessions per (tool, branch)
 // from the given table. Child rows are cascade-deleted via foreign keys.
-func (idx *Index) gcSessionTable(ctx context.Context, table string) error {
+func (idx *store) gcSessionTable(ctx context.Context, table string) error {
 	_, err := conn(ctx, idx.db).ExecContext(ctx,
 		fmt.Sprintf(
 			`DELETE FROM %s WHERE rowid NOT IN (
@@ -96,7 +96,7 @@ func (idx *Index) gcSessionTable(ctx context.Context, table string) error {
 
 // gcOrphanedGraphNodes removes graph nodes of the given label that have no
 // incoming edges of edgeType from any Fact node.
-func (idx *Index) gcOrphanedGraphNodes(ctx context.Context, label, edgeType string) {
+func (idx *store) gcOrphanedGraphNodes(ctx context.Context, label, edgeType string) {
 	q := fmt.Sprintf(
 		`SELECT json_extract(value, '$.path') FROM json_each(cypher('MATCH (n:%s) WHERE NOT (:%s)-[:%s]->(n) RETURN n.path AS path'))`,
 		label, NodeFact, edgeType,

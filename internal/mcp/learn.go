@@ -61,7 +61,7 @@ type learnFactInput struct {
 // LearnHandler returns the handler function for knomit_learn.
 // If embedder is non-nil, dedup checks batch-embed all incoming facts upfront
 // instead of embedding one-at-a-time inside each Search call.
-func LearnHandler(gs store.GitStore, idx store.SearchIndex, ontologyRoot string, ontology *fact.Ontology, agentBranch string, embedders ...store.BatchEmbedder) func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+func LearnHandler(gs store.FactIndex, idx store.SearchIndex, ontologyRoot string, ontology *fact.Ontology, agentBranch string, embedders ...store.BatchEmbedder) func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 	var batchEmb store.BatchEmbedder
 	if len(embedders) > 0 {
 		batchEmb = embedders[0]

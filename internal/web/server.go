@@ -39,23 +39,30 @@ func (s *Server) SetupMCP(ri *repos.RepoInstance) {
 		return
 	}
 
-	var svc *store.Service
-	ri.WithRead(func(d repos.StoreDeps) { svc = d.Svc })
-	if svc == nil {
+	var gs store.FactIndex
+	var idx store.SearchIndex
+	var pipelineIdx store.PipelineIndex
+	var toolSessionIdx store.ToolSessionIndex
+	ri.WithRead(func(d repos.StoreDeps) {
+		gs = d.GS
+		idx = d.Idx
+		pipelineIdx = d.Pipeline
+		toolSessionIdx = d.ToolSession
+	})
+	if gs == nil {
 		log.Warn().Msg("SetupMCP: svc is nil, skipping")
 		return
 	}
-	idx := svc.Index()
 
-	reviewer := synthesize.NewReviewer(svc, idx, idx, s.Embedder, nil, s.AgentBranch)
+	reviewer := synthesize.NewReviewer(gs, idx, pipelineIdx, s.Embedder, nil, s.AgentBranch)
 	profiles := []string{"code", "chat", "generic"}
 	mcpHandlers := make(map[string]http.Handler, len(profiles))
 	for _, p := range profiles {
 		var mcpSrv *mcpserver.MCPServer
 		if s.Embedder != nil {
-			mcpSrv = mcp.NewServer(svc, idx, idx, idx, reviewer, p, s.OntologyRoot, ontology, s.AgentBranch, s.Embedder)
+			mcpSrv = mcp.NewServer(gs, idx, toolSessionIdx, pipelineIdx, reviewer, p, s.OntologyRoot, ontology, s.AgentBranch, s.Embedder)
 		} else {
-			mcpSrv = mcp.NewServer(svc, idx, idx, idx, reviewer, p, s.OntologyRoot, ontology, s.AgentBranch)
+			mcpSrv = mcp.NewServer(gs, idx, toolSessionIdx, pipelineIdx, reviewer, p, s.OntologyRoot, ontology, s.AgentBranch)
 		}
 		mcpHandlers[p] = mcpserver.NewStreamableHTTPServer(mcpSrv)
 	}

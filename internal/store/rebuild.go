@@ -12,7 +12,7 @@ import (
 
 // rebuildFacts bulk-inserts facts via SQL JOIN with knomit_parse_fact(),
 // then populates branch_facts for the given branch.
-func (idx *Index) rebuildFacts(ctx context.Context, git GitReader, branch, head string, progress RebuildProgress) (int, error) {
+func (idx *store) rebuildFacts(ctx context.Context, git *Service, branch, head string, progress RebuildProgress) (int, error) {
 	branchID, err := idx.EnsureBranch(ctx, branch, "refs/heads/"+branch)
 	if err != nil {
 		return 0, fmt.Errorf("rebuildFacts: ensure branch: %w", err)
@@ -119,7 +119,7 @@ func (idx *Index) rebuildFacts(ctx context.Context, git GitReader, branch, head 
 // rebuildEmbeddings computes embeddings for all facts missing from facts_vec.
 // Bodies are fetched one chunk at a time so memory usage is bounded by batchSize,
 // not by the total number of facts.
-func (idx *Index) rebuildEmbeddings(ctx context.Context, progress RebuildProgress) (int, error) {
+func (idx *store) rebuildEmbeddings(ctx context.Context, progress RebuildProgress) (int, error) {
 	emb := idx.getEmbedder()
 	if emb == nil {
 		return 0, nil
@@ -274,7 +274,7 @@ func (idx *Index) rebuildEmbeddings(ctx context.Context, progress RebuildProgres
 
 // rebuildGraph syncs graph nodes/edges for all facts in a single transaction,
 // then builds similarity edges after commit.
-func (idx *Index) rebuildGraph(ctx context.Context, progress RebuildProgress) (int, error) {
+func (idx *store) rebuildGraph(ctx context.Context, progress RebuildProgress) (int, error) {
 	// Read all facts ordered by oldest commit first so that when a fact's
 	// DERIVED_FROM edges are created, its ref targets are already graph nodes.
 	rows, err := conn(ctx, idx.db).QueryContext(ctx, `

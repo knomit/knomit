@@ -18,7 +18,7 @@ import (
 
 // Reviewer orchestrates multi-turn review sessions.
 type Reviewer struct {
-	gs             store.GitStore
+	gs             store.FactIndex
 	idx            store.SearchIndex
 	reviewIdx      store.PipelineIndex
 	embedder       store.Embedder
@@ -28,7 +28,7 @@ type Reviewer struct {
 }
 
 // NewReviewer creates a new review orchestrator.
-func NewReviewer(gs store.GitStore, idx store.SearchIndex, reviewIdx store.PipelineIndex, embedder store.Embedder, onProgress func(ProgressEvent), agentBranch string) *Reviewer {
+func NewReviewer(gs store.FactIndex, idx store.SearchIndex, reviewIdx store.PipelineIndex, embedder store.Embedder, onProgress func(ProgressEvent), agentBranch string) *Reviewer {
 	if onProgress == nil {
 		onProgress = func(ProgressEvent) {}
 	}

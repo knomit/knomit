@@ -33,7 +33,7 @@ type repoBuilder struct {
 
 	// accumulated state
 	svc      *store.Service
-	idx      *store.Index
+	idx      store.Store
 	ontology *fact.Ontology
 }
 

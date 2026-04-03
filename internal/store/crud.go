@@ -18,7 +18,7 @@ import (
 // Upsert inserts or replaces a FactRecord on the given branch, keeping the
 // vec0 index in sync. COW dedup: if (path, blob_hash) already exists in the
 // facts table, only the branch_facts pointer is updated.
-func (idx *Index) Upsert(ctx context.Context, branch, commitHash string, rec FactRecord) error {
+func (idx *store) Upsert(ctx context.Context, branch, commitHash string, rec FactRecord) error {
 	branchID, err := idx.EnsureBranch(ctx, branch, "refs/heads/"+branch)
 	if err != nil {
 		return fmt.Errorf("upsert: %w", err)
@@ -188,7 +188,7 @@ func hasAnyBranchFact(ctx context.Context, db storegit.CtxExecer, factID int64) 
 
 // Delete removes a fact from the given branch. If no other branch references
 // the fact, the underlying facts row (and its vec/graph data) is also deleted.
-func (idx *Index) Delete(ctx context.Context, branch, path string) error {
+func (idx *store) Delete(ctx context.Context, branch, path string) error {
 	branchID, err := idx.branchID(ctx, branch)
 	if err != nil {
 		return fmt.Errorf("delete: %w", err)
@@ -260,7 +260,7 @@ func (idx *Index) Delete(ctx context.Context, branch, path string) error {
 
 // GetByPath retrieves a FactWithBody by its path on the given branch,
 // hydrating the body from the objects table. Returns nil, nil if not found.
-func (idx *Index) GetByPath(ctx context.Context, branch, path string) (*FactWithBody, error) {
+func (idx *store) GetByPath(ctx context.Context, branch, path string) (*FactWithBody, error) {
 	branchID, err := idx.branchID(ctx, branch)
 	if err != nil {
 		return nil, fmt.Errorf("getByPath: %w", err)
@@ -268,10 +268,11 @@ func (idx *Index) GetByPath(ctx context.Context, branch, path string) (*FactWith
 	row := conn(ctx, idx.db).QueryRowContext(ctx,
 		`SELECT f.path, f.title, f.blob_hash, f.type, f.domain, f.entities,
 		        f.confidence, f.sources, f.refs, f.evidence_weight,
-		        bf.commit_hash, o.data
+		        bf.commit_hash, o.data, cl.committed_at
 		 FROM branch_facts bf
 		 JOIN facts f ON f.id = bf.fact_id
 		 JOIN objects o ON o.hash = f.blob_hash AND o.type = ?
+		 LEFT JOIN commit_log cl ON cl.commit_hash = bf.commit_hash AND cl.path = bf.path
 		 WHERE bf.branch_id = ? AND bf.path = ?`, BlobObjectType, branchID, path,
 	)
 	return scanFactWithBody(row)
@@ -279,7 +280,7 @@ func (idx *Index) GetByPath(ctx context.Context, branch, path string) (*FactWith
 
 // GetEmbedding returns the stored embedding vector for a fact on the given branch.
 // Returns nil, nil if no embedding exists for this path.
-func (idx *Index) GetEmbedding(ctx context.Context, branch, path string) ([]float32, error) {
+func (idx *store) GetEmbedding(ctx context.Context, branch, path string) ([]float32, error) {
 	branchID, err := idx.branchID(ctx, branch)
 	if err != nil {
 		return nil, fmt.Errorf("getEmbedding: %w", err)
@@ -308,7 +309,7 @@ func (idx *Index) GetEmbedding(ctx context.Context, branch, path string) ([]floa
 // getEmbeddingByFact returns the stored embedding vector for a specific fact
 // version identified by (path, blob_hash). No branch scoping.
 // Used internally by graph similarity edge computation.
-func (idx *Index) getEmbeddingByFact(ctx context.Context, path, blobHash string) ([]float32, error) {
+func (idx *store) getEmbeddingByFact(ctx context.Context, path, blobHash string) ([]float32, error) {
 	var blob []byte
 	err := conn(ctx, idx.db).QueryRowContext(ctx,
 		`SELECT fv.embedding
@@ -331,7 +332,7 @@ func (idx *Index) getEmbeddingByFact(ctx context.Context, path, blobHash string)
 
 // casLastCommit atomically updates the last-commit watermark for a branch,
 // but only if it currently equals prev. Returns true if the update succeeded.
-func (idx *Index) casLastCommit(ctx context.Context, branch, prev, next string) (bool, error) {
+func (idx *store) casLastCommit(ctx context.Context, branch, prev, next string) (bool, error) {
 	key := "last_commit:" + branch
 	db := conn(ctx, idx.db)
 
@@ -357,7 +358,7 @@ func (idx *Index) casLastCommit(ctx context.Context, branch, prev, next string) 
 
 // SetLastCommit stores the last processed commit hash in the meta table,
 // scoped to the given branch.
-func (idx *Index) SetLastCommit(ctx context.Context, branch, hash string) error {
+func (idx *store) SetLastCommit(ctx context.Context, branch, hash string) error {
 	key := "last_commit:" + branch
 	_, err := conn(ctx, idx.db).ExecContext(ctx,
 		`INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)`,
@@ -368,7 +369,7 @@ func (idx *Index) SetLastCommit(ctx context.Context, branch, hash string) error 
 
 // GetLastCommit returns the last processed commit hash for the given branch,
 // or "" if not set.
-func (idx *Index) GetLastCommit(ctx context.Context, branch string) (string, error) {
+func (idx *store) GetLastCommit(ctx context.Context, branch string) (string, error) {
 	key := "last_commit:" + branch
 	var hash string
 	err := conn(ctx, idx.db).QueryRowContext(ctx, `SELECT value FROM meta WHERE key=?`, key).Scan(&hash)
@@ -381,18 +382,19 @@ func (idx *Index) GetLastCommit(ctx context.Context, branch string) (string, err
 	return hash, nil
 }
 
-// scanFactWithBody scans a FactWithBody from a *sql.Row (branch_facts JOIN facts JOIN objects).
+// scanFactWithBody scans a FactWithBody from a *sql.Row (branch_facts JOIN facts JOIN objects LEFT JOIN commit_log).
 // Expected column order: path, title, blob_hash, type, domain, entities,
-// confidence, sources, refs, evidence_weight, commit_hash, data.
+// confidence, sources, refs, evidence_weight, commit_hash, data, committed_at.
 func scanFactWithBody(row *sql.Row) (*FactWithBody, error) {
 	var f FactWithBody
 	var domainJSON, entitiesJSON, refsJSON string
 	var rawData []byte
+	var committedAt sql.NullInt64
 	err := row.Scan(
 		&f.Path, &f.Title, &f.BlobHash, &f.Type,
 		&domainJSON, &entitiesJSON,
 		&f.Confidence, &f.Sources,
-		&refsJSON, &f.EvidenceWeight, &f.CommitHash, &rawData,
+		&refsJSON, &f.EvidenceWeight, &f.CommitHash, &rawData, &committedAt,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -404,6 +406,9 @@ func scanFactWithBody(row *sql.Row) (*FactWithBody, error) {
 	json.Unmarshal([]byte(entitiesJSON), &f.Entities)
 	json.Unmarshal([]byte(refsJSON), &f.Refs)
 	f.Body = extractBody(rawData)
+	if committedAt.Valid {
+		f.CommittedAt = committedAt.Int64
+	}
 	return &f, nil
 }
 
@@ -465,7 +470,7 @@ type RecentFactEntry struct {
 // most recent commit, paginated by offset/limit. If query is non-empty, it
 // performs a semantic search first and returns only matching facts (still
 // ordered by time). domain, entities, and epOps are optional additional filters.
-func (idx *Index) RecentFacts(ctx context.Context, branch, pathPrefix, query string, limit, offset int, includeTypes, excludeTypes, domain, entities, epOps []string) ([]RecentFactEntry, int, error) {
+func (idx *store) RecentFacts(ctx context.Context, branch, pathPrefix, query string, limit, offset int, includeTypes, excludeTypes, domain, entities, epOps []string) ([]RecentFactEntry, int, error) {
 	if query != "" {
 		return idx.recentFactsSearch(ctx, branch, pathPrefix, query, limit, offset, includeTypes, excludeTypes, domain, entities, epOps)
 	}
@@ -537,7 +542,7 @@ func (idx *Index) RecentFacts(ctx context.Context, branch, pathPrefix, query str
 
 // recentFactsSearch uses semantic search to find matching facts, then returns
 // them ordered by committed_at with pagination.
-func (idx *Index) recentFactsSearch(ctx context.Context, branch, pathPrefix, query string, limit, offset int, includeTypes, excludeTypes, domain, entities, epOps []string) ([]RecentFactEntry, int, error) {
+func (idx *store) recentFactsSearch(ctx context.Context, branch, pathPrefix, query string, limit, offset int, includeTypes, excludeTypes, domain, entities, epOps []string) ([]RecentFactEntry, int, error) {
 	branchID, err := idx.branchID(ctx, branch)
 	if err != nil {
 		return nil, 0, fmt.Errorf("RecentFacts search: %w", err)
@@ -612,7 +617,7 @@ func (idx *Index) recentFactsSearch(ctx context.Context, branch, pathPrefix, que
 // LastCommitForPath returns the commit hash of the most recent commit_log
 // entry for the given path, provided that entry's action is not 'deleted'.
 // Returns ("", false) if the path is not found or its latest action is deleted.
-func (idx *Index) LastCommitForPath(ctx context.Context, branch, path string) (string, bool) {
+func (idx *store) LastCommitForPath(ctx context.Context, branch, path string) (string, bool) {
 	branchID, err := idx.branchID(ctx, branch)
 	if err != nil {
 		return "", false
@@ -636,19 +641,6 @@ func (idx *Index) LastCommitForPath(ctx context.Context, branch, path string) (s
 	return hash, true
 }
 
-// CommitTimestamp returns the committed_at unix timestamp for the given commit hash.
-// Returns (0, false) if the hash is not in commit_log.
-func (idx *Index) CommitTimestamp(ctx context.Context, commitHash string) (int64, bool) {
-	var ts sql.NullInt64
-	err := conn(ctx, idx.db).QueryRowContext(ctx,
-		`SELECT committed_at FROM commit_log WHERE commit_hash = ? LIMIT 1`,
-		commitHash,
-	).Scan(&ts)
-	if err != nil || !ts.Valid {
-		return 0, false
-	}
-	return ts.Int64, true
-}
 
 func join(ss []string, sep string) string {
 	var b strings.Builder
