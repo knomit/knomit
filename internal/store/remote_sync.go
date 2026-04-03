@@ -24,11 +24,11 @@ import (
 // notifyCommit (which triggers index sync and may call back into Service).
 //
 // If remoteBranch is empty, it defaults to "main".
-func (s *Service) Sync(ctx context.Context, localBranch string, auth transport.AuthMethod) (res syncResult, retErr error) {
+func (s *Service) Sync(ctx context.Context, localBranch string, auth transport.AuthMethod) (res SyncResult, retErr error) {
 	remote, err := s.GetRemote("origin")
 	if err != nil || remote == nil {
 		log.Debug().Msg("git sync: no origin remote configured, skipping")
-		return syncResult{}, nil
+		return SyncResult{}, nil
 	}
 	remoteBranch := remote.Branch
 	if remoteBranch == "" {
@@ -51,7 +51,7 @@ func (s *Service) Sync(ctx context.Context, localBranch string, auth transport.A
 	if _, err := s.rh.repo.Remote("origin"); err != nil {
 		unlock()
 		log.Debug().Msg("git sync: no origin remote configured, skipping")
-		return syncResult{}, nil
+		return SyncResult{}, nil
 	}
 
 	// Fetch from origin.
@@ -62,7 +62,7 @@ func (s *Service) Sync(ctx context.Context, localBranch string, auth transport.A
 	})
 	if err != nil && err != gogit.NoErrAlreadyUpToDate {
 		unlock()
-		return syncResult{}, fmt.Errorf("Sync: fetch: %w", err)
+		return SyncResult{}, fmt.Errorf("Sync: fetch: %w", err)
 	}
 
 	// Resolve origin/<remoteBranch> ref.
@@ -70,7 +70,7 @@ func (s *Service) Sync(ctx context.Context, localBranch string, auth transport.A
 	if err != nil {
 		unlock()
 		log.Debug().Str("branch", remoteBranch).Msg("git sync: origin ref not found, skipping")
-		return syncResult{}, nil
+		return SyncResult{}, nil
 	}
 	originHash := originRef.Hash()
 
@@ -79,7 +79,7 @@ func (s *Service) Sync(ctx context.Context, localBranch string, auth transport.A
 	agentRef, err := s.rh.gits.Reference(agentRefName)
 	if err != nil {
 		unlock()
-		return syncResult{}, fmt.Errorf("Sync: agent ref: %w", err)
+		return SyncResult{}, fmt.Errorf("Sync: agent ref: %w", err)
 	}
 	agentHash := agentRef.Hash()
 
@@ -92,44 +92,44 @@ func (s *Service) Sync(ctx context.Context, localBranch string, auth transport.A
 	// Same hash — no-op.
 	if originHash == agentHash {
 		unlock()
-		return syncResult{}, nil
+		return SyncResult{}, nil
 	}
 
 	originCommit, err := s.rh.repo.CommitObject(originHash)
 	if err != nil {
 		unlock()
-		return syncResult{}, fmt.Errorf("Sync: origin commit: %w", err)
+		return SyncResult{}, fmt.Errorf("Sync: origin commit: %w", err)
 	}
 
 	agentCommit, err := s.rh.repo.CommitObject(agentHash)
 	if err != nil {
 		unlock()
-		return syncResult{}, fmt.Errorf("Sync: agent commit: %w", err)
+		return SyncResult{}, fmt.Errorf("Sync: agent commit: %w", err)
 	}
 
 	// Check if origin is already an ancestor of agent (already merged).
 	isOriginAncestor, err := originCommit.IsAncestor(agentCommit)
 	if err != nil {
 		unlock()
-		return syncResult{}, fmt.Errorf("Sync: check origin ancestor: %w", err)
+		return SyncResult{}, fmt.Errorf("Sync: check origin ancestor: %w", err)
 	}
 	if isOriginAncestor {
 		unlock()
 		log.Debug().Msg("git sync: origin already merged, nothing to do")
-		return syncResult{}, nil
+		return SyncResult{}, nil
 	}
 
 	// Check if agent HEAD is ancestor of origin → fast-forward.
 	isAgentAncestor, err := agentCommit.IsAncestor(originCommit)
 	if err != nil {
 		unlock()
-		return syncResult{}, fmt.Errorf("Sync: check agent ancestor: %w", err)
+		return SyncResult{}, fmt.Errorf("Sync: check agent ancestor: %w", err)
 	}
 	if isAgentAncestor {
 		newRef := plumbing.NewHashReference(agentRefName, originHash)
 		if err := s.rh.gits.SetReference(newRef); err != nil {
 			unlock()
-			return syncResult{}, fmt.Errorf("Sync: fast-forward ref: %w", err)
+			return SyncResult{}, fmt.Errorf("Sync: fast-forward ref: %w", err)
 		}
 		unlock()
 
@@ -138,18 +138,18 @@ func (s *Service) Sync(ctx context.Context, localBranch string, auth transport.A
 		if err := s.fi.populateCommitLog(ctx, localBranch); err != nil {
 			log.Warn().Err(err).Msg("commit_log: sync populate")
 		}
-		return syncResult{Synced: true, FastForward: true}, nil
+		return SyncResult{Synced: true, FastForward: true}, nil
 	}
 
 	// Find merge base.
 	bases, err := agentCommit.MergeBase(originCommit)
 	if err != nil {
 		unlock()
-		return syncResult{}, fmt.Errorf("Sync: merge base: %w", err)
+		return SyncResult{}, fmt.Errorf("Sync: merge base: %w", err)
 	}
 	if len(bases) == 0 {
 		unlock()
-		return syncResult{}, fmt.Errorf("Sync: no common ancestor found (disjoint histories)")
+		return SyncResult{}, fmt.Errorf("Sync: no common ancestor found (disjoint histories)")
 	}
 	baseCommit := bases[0]
 
@@ -159,7 +159,7 @@ func (s *Service) Sync(ctx context.Context, localBranch string, auth transport.A
 	mergedTreeHash, err := s.threeWayMerge(ctx, baseCommit, originCommit, agentCommit)
 	if err != nil {
 		unlock()
-		return syncResult{}, fmt.Errorf("Sync: three-way merge: %w", err)
+		return SyncResult{}, fmt.Errorf("Sync: three-way merge: %w", err)
 	}
 
 	// Create merge commit.
@@ -174,24 +174,24 @@ func (s *Service) Sync(ctx context.Context, localBranch string, auth transport.A
 	commitObj := s.rh.gits.NewEncodedObject()
 	if err := mc.Encode(commitObj); err != nil {
 		unlock()
-		return syncResult{}, fmt.Errorf("Sync: encode merge commit: %w", err)
+		return SyncResult{}, fmt.Errorf("Sync: encode merge commit: %w", err)
 	}
 	mergeHash, err := s.rh.gits.SetEncodedObject(commitObj)
 	if err != nil {
 		unlock()
-		return syncResult{}, fmt.Errorf("Sync: store merge commit: %w", err)
+		return SyncResult{}, fmt.Errorf("Sync: store merge commit: %w", err)
 	}
 
 	mergeHash, err = signCommitInPlace(s.rh.gits, s.fi.signer, mergeHash)
 	if err != nil {
 		unlock()
-		return syncResult{}, fmt.Errorf("Sync: sign merge commit: %w", err)
+		return SyncResult{}, fmt.Errorf("Sync: sign merge commit: %w", err)
 	}
 
 	newRef := plumbing.NewHashReference(agentRefName, mergeHash)
 	if err := s.rh.gits.SetReference(newRef); err != nil {
 		unlock()
-		return syncResult{}, fmt.Errorf("Sync: update ref: %w", err)
+		return SyncResult{}, fmt.Errorf("Sync: update ref: %w", err)
 	}
 
 	unlock()
@@ -201,7 +201,7 @@ func (s *Service) Sync(ctx context.Context, localBranch string, auth transport.A
 	if err := s.fi.populateCommitLog(ctx, localBranch); err != nil {
 		log.Warn().Err(err).Msg("commit_log: sync populate")
 	}
-	return syncResult{Synced: true, MergeCommit: mergeHash.String()}, nil
+	return SyncResult{Synced: true, MergeCommit: mergeHash.String()}, nil
 }
 
 // threeWayMerge diffs base→origin and applies those changes to the agent tree.
@@ -288,18 +288,18 @@ func (s *Service) threeWayMerge(ctx context.Context, baseCommit, originCommit, a
 
 
 // Push pushes the given branch to origin.
-// Returns pushResult{Pushed: false} if already up to date.
+// Returns PushResult{Pushed: false} if already up to date.
 //
 // If the push fails with a non-fast-forward error, it retries with a force
 // push. This is safe because agent branches are per-machine — no other machine
 // writes to the same branch.
-func (s *Service) Push(ctx context.Context, branch string, auth transport.AuthMethod) (res pushResult, retErr error) {
+func (s *Service) Push(ctx context.Context, branch string, auth transport.AuthMethod) (res PushResult, retErr error) {
 	unlock := s.fi.lockBranch(branch)
 	defer unlock()
 
 	if _, err := s.rh.repo.Remote("origin"); err != nil {
 		log.Debug().Msg("git push: no origin remote configured, skipping")
-		return pushResult{}, nil
+		return PushResult{}, nil
 	}
 
 	// Past the "no remote" gate — write status on every return from here.
@@ -321,7 +321,7 @@ func (s *Service) Push(ctx context.Context, branch string, auth transport.AuthMe
 		Auth:       auth,
 	})
 	if err == gogit.NoErrAlreadyUpToDate {
-		return pushResult{Pushed: false}, nil
+		return PushResult{Pushed: false}, nil
 	}
 	if err != nil && strings.Contains(err.Error(), "non-fast-forward") {
 		forceRefspec := fmt.Sprintf("+refs/heads/%s:refs/heads/%s", branch, branch)
@@ -332,9 +332,9 @@ func (s *Service) Push(ctx context.Context, branch string, auth transport.AuthMe
 		})
 	}
 	if err != nil {
-		return pushResult{}, fmt.Errorf("Push: %w", err)
+		return PushResult{}, fmt.Errorf("Push: %w", err)
 	}
 
 	log.Info().Str("branch", branch).Msg("git push: pushed branch")
-	return pushResult{Pushed: true}, nil
+	return PushResult{Pushed: true}, nil
 }
