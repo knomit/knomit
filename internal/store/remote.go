@@ -6,6 +6,15 @@ import (
 	"time"
 )
 
+// remoteIndex owns remote configuration and git sync/push operations.
+// It holds a back-reference to factIndex for commit signing and branch locking.
+type remoteIndex struct {
+	rh    *repoHandler
+	fi    *factIndex
+	crypt *Crypt
+}
+
+
 // Remote represents a configured git remote for sync and push.
 type Remote struct {
 	Name           string  `json:"name"`
@@ -27,16 +36,16 @@ type Remote struct {
 // remote in the underlying repository so that Sync and Push can use it
 // immediately. authMethod and authToken are optional; if authToken is
 // non-empty it is encrypted at rest when a Crypt instance is configured.
-func (s *Service) SetRemote(name, url, branch string, interval, pushInterval int, authMethod, authToken string) error {
+func (ri *remoteIndex) SetRemote(name, url, branch string, interval, pushInterval int, authMethod, authToken string) error {
 	storedToken := authToken
-	if s.crypt != nil && authToken != "" {
-		enc, err := s.crypt.encrypt(authToken)
+	if ri.crypt != nil && authToken != "" {
+		enc, err := ri.crypt.encrypt(authToken)
 		if err != nil {
 			return fmt.Errorf("encrypt token: %w", err)
 		}
 		storedToken = enc
 	}
-	_, err := s.rh.db.Exec(
+	_, err := ri.rh.db.Exec(
 		`INSERT OR REPLACE INTO remotes (name, url, branch, interval, push_interval, auth_method, auth_token) VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		name, url, branch, interval, pushInterval, authMethod, storedToken,
 	)
@@ -45,8 +54,8 @@ func (s *Service) SetRemote(name, url, branch string, interval, pushInterval int
 	}
 	// Sync the git config so go-git can fetch/push by remote name.
 	// No-op when the repo has not been initialised yet (DB-only mode).
-	if s.rh.repo != nil {
-		if err := s.rh.configureRemote(url, branch); err != nil {
+	if ri.rh.repo != nil {
+		if err := ri.rh.configureRemote(url, branch); err != nil {
 			return fmt.Errorf("configure git remote: %w", err)
 		}
 	}
@@ -54,9 +63,9 @@ func (s *Service) SetRemote(name, url, branch string, interval, pushInterval int
 }
 
 // GetRemote reads a remote configuration by name.
-func (s *Service) GetRemote(name string) (*Remote, error) {
+func (ri *remoteIndex) GetRemote(name string) (*Remote, error) {
 	r := &Remote{}
-	err := s.rh.db.QueryRow(
+	err := ri.rh.db.QueryRow(
 		`SELECT name, url, branch, interval, last_sync_at, last_status, last_error,
 		        push_interval, last_push_at, last_push_status, last_push_error,
 		        auth_method, auth_token
@@ -72,8 +81,8 @@ func (s *Service) GetRemote(name string) (*Remote, error) {
 		return nil, err
 	}
 	// Decrypt token if encrypted.
-	if s.crypt != nil && r.AuthToken != "" {
-		dec, decErr := s.crypt.decrypt(r.AuthToken)
+	if ri.crypt != nil && r.AuthToken != "" {
+		dec, decErr := ri.crypt.decrypt(r.AuthToken)
 		if decErr != nil {
 			// May be plaintext from before encryption was enabled — use as-is.
 			_ = decErr
@@ -85,9 +94,9 @@ func (s *Service) GetRemote(name string) (*Remote, error) {
 }
 
 // updateRemoteStatus updates the pull-sync status fields for a remote.
-func (s *Service) updateRemoteStatus(name, status string, syncErr *string) error {
+func (ri *remoteIndex) updateRemoteStatus(name, status string, syncErr *string) error {
 	now := time.Now().UTC().Format(time.RFC3339)
-	_, err := s.rh.db.Exec(
+	_, err := ri.rh.db.Exec(
 		`UPDATE remotes SET last_sync_at = ?, last_status = ?, last_error = ? WHERE name = ?`,
 		now, status, syncErr, name,
 	)
@@ -95,9 +104,9 @@ func (s *Service) updateRemoteStatus(name, status string, syncErr *string) error
 }
 
 // updateRemotePushStatus updates the push status fields for a remote.
-func (s *Service) updateRemotePushStatus(name, status string, pushErr *string) error {
+func (ri *remoteIndex) updateRemotePushStatus(name, status string, pushErr *string) error {
 	now := time.Now().UTC().Format(time.RFC3339)
-	_, err := s.rh.db.Exec(
+	_, err := ri.rh.db.Exec(
 		`UPDATE remotes SET last_push_at = ?, last_push_status = ?, last_push_error = ? WHERE name = ?`,
 		now, status, pushErr, name,
 	)
