@@ -81,8 +81,8 @@ func Open(path string) (*Service, error) {
 		return nil, fmt.Errorf("store.Open: %w", err)
 	}
 
-	rh := newRepoHandler(db)
 	gits := storegit.NewStorer(db)
+	rh := newRepoHandler(db, gits)
 	si := &searchIndex{rh: rh}
 	rh.onDrop = si.GC
 	fi := &factIndex{rh: rh, gits: gits}

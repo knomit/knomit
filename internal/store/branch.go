@@ -4,7 +4,16 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"io"
+	"sort"
+	"strings"
 	"sync"
+
+	gogit "github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/object"
+
+	storegit "knomit/internal/store/git"
 )
 
 // Branch holds metadata about an indexed branch.
@@ -45,16 +54,20 @@ func (c *branchCache) remove(name string) {
 
 // repoHandler owns the database handle, branch cache, and branch operations.
 type repoHandler struct {
-	db     *sql.DB
-	cache  *branchCache
-	onDrop func(context.Context) error
+	db       *sql.DB
+	cache    *branchCache
+	onDrop   func(context.Context) error
+	gits     *storegit.Storer
+	repo     *gogit.Repository // nil until OpenRepo/InitRepo/Clone called
+	configMu sync.Mutex        // guards ConfigureRemote / remote wiring
 }
 
-// Compile-time assertion.
+// Compile-time assertions.
 var _ BranchIndex = (*repoHandler)(nil)
+var _ gitReader    = (*repoHandler)(nil)
 
-func newRepoHandler(db *sql.DB) *repoHandler {
-	return &repoHandler{db: db, cache: newBranchCache()}
+func newRepoHandler(db *sql.DB, gits *storegit.Storer) *repoHandler {
+	return &repoHandler{db: db, cache: newBranchCache(), gits: gits}
 }
 
 // EnsureBranch creates the branch if it doesn't exist, returns its ID.
@@ -165,4 +178,229 @@ func (rh *repoHandler) ListBranches(ctx context.Context) ([]Branch, error) {
 		branches = append(branches, b)
 	}
 	return branches, rows.Err()
+}
+
+// ── git read methods ──────────────────────────────────────────────────────────
+
+// resolveRef returns the commit hash at the tip of branch.
+func (rh *repoHandler) resolveRef(ctx context.Context, branch string) (plumbing.Hash, error) {
+	ref, err := rh.gits.Reference(plumbing.NewBranchReferenceName(branch))
+	if err != nil {
+		return plumbing.ZeroHash, fmt.Errorf("resolveRef %q: %w", branch, err)
+	}
+	return ref.Hash(), nil
+}
+
+// readFileAtCommitHash reads the content of path from a specific commit.
+// If the exact path is not found, it falls back to a case-insensitive tree
+// walk so that normalised (lowercase) index paths resolve correctly against
+// pre-normalisation commits that stored paths with mixed case.
+func (rh *repoHandler) readFileAtCommitHash(ctx context.Context, path, commitHash string) (string, error) {
+	hash := plumbing.NewHash(commitHash)
+	commit, err := rh.repo.CommitObject(hash)
+	if err != nil {
+		return "", fmt.Errorf("readFileAtCommitHash: commit: %w", err)
+	}
+	tree, err := commit.Tree()
+	if err != nil {
+		return "", fmt.Errorf("readFileAtCommitHash: tree: %w", err)
+	}
+	if f, err := tree.File(path); err == nil {
+		return f.Contents()
+	}
+	// Exact lookup failed — try case-insensitive walk.
+	content, err := treeFileInsensitive(rh.repo, tree, path)
+	if err != nil {
+		return "", fmt.Errorf("readFileAtCommitHash: file %q not found (case-insensitive): %w", path, err)
+	}
+	return content, nil
+}
+
+// HeadCommit returns the hash of the tip commit of branch as a hex string.
+func (rh *repoHandler) HeadCommit(ctx context.Context, branch string) (string, error) {
+	hash, err := rh.resolveRef(ctx, branch)
+	if err != nil {
+		return "", fmt.Errorf("HeadCommit: %w", err)
+	}
+	return hash.String(), nil
+}
+
+// readFileWithHash returns both the file content and the blob hash for the given path.
+func (rh *repoHandler) readFileWithHash(ctx context.Context, branch, path string) (string, string, error) {
+	headHash, err := rh.resolveRef(ctx, branch)
+	if err != nil {
+		return "", "", fmt.Errorf("readFileWithHash: ref: %w", err)
+	}
+	commit, err := rh.repo.CommitObject(headHash)
+	if err != nil {
+		return "", "", fmt.Errorf("readFileWithHash: commit: %w", err)
+	}
+	tree, err := commit.Tree()
+	if err != nil {
+		return "", "", fmt.Errorf("readFileWithHash: tree: %w", err)
+	}
+	entry, err := tree.FindEntry(path)
+	if err != nil {
+		return "", "", fmt.Errorf("readFileWithHash: entry %s: %w", path, err)
+	}
+	blob, err := rh.repo.BlobObject(entry.Hash)
+	if err != nil {
+		return "", "", fmt.Errorf("readFileWithHash: blob: %w", err)
+	}
+	r, err := blob.Reader()
+	if err != nil {
+		return "", "", fmt.Errorf("readFileWithHash: reader: %w", err)
+	}
+	defer r.Close()
+	b, err := io.ReadAll(r)
+	if err != nil {
+		return "", "", fmt.Errorf("readFileWithHash: read: %w", err)
+	}
+	return string(b), entry.Hash.String(), nil
+}
+
+// readFile reads the content of path from the tip of branch.
+func (rh *repoHandler) readFile(ctx context.Context, branch, path string) (string, error) {
+	content, _, err := rh.readFileWithHash(ctx, branch, path)
+	return content, err
+}
+
+// readFileAtCommit reads the content of path at the given commit.
+// branch is accepted for interface consistency; the commit hash uniquely
+// identifies the version without branch resolution.
+func (rh *repoHandler) readFileAtCommit(ctx context.Context, branch, path, commitHash string) (string, error) {
+	return rh.readFileAtCommitHash(ctx, path, commitHash)
+}
+
+// ListAllWithHash returns all .md files at the tip of branch with their blob hashes.
+// Single tree walk — no per-file I/O.
+func (rh *repoHandler) ListAllWithHash(ctx context.Context, branch string) ([]string, []string, error) {
+	headHash, err := rh.resolveRef(ctx, branch)
+	if err != nil {
+		return nil, nil, fmt.Errorf("ListAllWithHash: ref: %w", err)
+	}
+
+	commit, err := rh.repo.CommitObject(headHash)
+	if err != nil {
+		return nil, nil, fmt.Errorf("ListAllWithHash: commit: %w", err)
+	}
+
+	fileIter, err := commit.Files()
+	if err != nil {
+		return nil, nil, fmt.Errorf("ListAllWithHash: files: %w", err)
+	}
+	defer fileIter.Close()
+
+	var paths, blobHashes []string
+	err = fileIter.ForEach(func(f *object.File) error {
+		if strings.HasSuffix(f.Name, ".md") {
+			paths = append(paths, f.Name)
+			blobHashes = append(blobHashes, f.Hash.String())
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("ListAllWithHash: iterate: %w", err)
+	}
+
+	sort.Sort(pathHashSorter{paths, blobHashes})
+	return paths, blobHashes, nil
+}
+
+// ListAll returns paths of all .md files at the tip of branch.
+func (rh *repoHandler) ListAll(ctx context.Context, branch string) ([]string, error) {
+	paths, _, err := rh.ListAllWithHash(ctx, branch)
+	return paths, err
+}
+
+// LastCommitForPath returns the hash of the most recent non-merge commit
+// that touched path. Merges are skipped because they duplicate authoring
+// commits from the merged branch.
+func (rh *repoHandler) LastCommitForPath(ctx context.Context, branch, path string) (string, error) {
+	headHash, err := rh.resolveRef(ctx, branch)
+	if err != nil {
+		return "", fmt.Errorf("LastCommitForPath: ref: %w", err)
+	}
+
+	logIter, err := rh.repo.Log(&gogit.LogOptions{
+		From:     headHash,
+		FileName: &path,
+		Order:    gogit.LogOrderCommitterTime,
+	})
+	if err != nil {
+		return "", fmt.Errorf("LastCommitForPath: log: %w", err)
+	}
+	defer logIter.Close()
+
+	for {
+		c, err := logIter.Next()
+		if err != nil {
+			return "", fmt.Errorf("LastCommitForPath: %q: no commit found", path)
+		}
+		// Skip merge commits (more than one parent).
+		if c.NumParents() <= 1 {
+			return c.Hash.String(), nil
+		}
+	}
+}
+
+// DiffFiles returns paths added/modified/deleted between fromCommit and the tip of branch.
+// Only .md files are returned. If fromCommit is empty, diffs from empty tree.
+func (rh *repoHandler) DiffFiles(ctx context.Context, branch, fromCommit string) (added, modified, deleted []string, err error) {
+	headHash, err := rh.resolveRef(ctx, branch)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("DiffFiles: ref: %w", err)
+	}
+
+	toCommit, err := rh.repo.CommitObject(headHash)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("DiffFiles: to commit: %w", err)
+	}
+	toTree, err := toCommit.Tree()
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("DiffFiles: to tree: %w", err)
+	}
+
+	var fromTree *object.Tree
+	if fromCommit != "" {
+		fromHash := plumbing.NewHash(fromCommit)
+		fc, err := rh.repo.CommitObject(fromHash)
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("DiffFiles: from commit: %w", err)
+		}
+		fromTree, err = fc.Tree()
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("DiffFiles: from tree: %w", err)
+		}
+	}
+
+	changes, err := object.DiffTree(fromTree, toTree)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("DiffFiles: diff tree: %w", err)
+	}
+
+	for _, ch := range changes {
+		from := ch.From.Name
+		to := ch.To.Name
+
+		switch {
+		case from == "" && to != "":
+			if strings.HasSuffix(to, ".md") {
+				added = append(added, to)
+			}
+		case from != "" && to == "":
+			if strings.HasSuffix(from, ".md") {
+				deleted = append(deleted, from)
+			}
+		default:
+			if strings.HasSuffix(to, ".md") {
+				modified = append(modified, to)
+			}
+		}
+	}
+
+	sort.Strings(added)
+	sort.Strings(modified)
+	sort.Strings(deleted)
+	return added, modified, deleted, nil
 }
