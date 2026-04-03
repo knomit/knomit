@@ -114,7 +114,6 @@ func (rh *repoHandler) branchID(ctx context.Context, name string) (int64, error)
 	return id, nil
 }
 
-// ListBranches returns all registered branches.
 // MergeBranch copies all branch_facts entries from src to dst.
 // Conflicting paths (same path on both branches) are overwritten with src's version.
 func (rh *repoHandler) MergeBranch(ctx context.Context, src, dst string) error {

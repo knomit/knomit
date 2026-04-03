@@ -5,7 +5,7 @@
 // The package is split across several files:
 //
 //   - index.go          — Core domain types, shared interfaces, and helpers.
-//   - search_index.go   — searchIndex type: Open, schema DDL, embedder wiring.
+//   - search_index.go   — searchIndex type: search, sync, rebuild, graph, and embedder wiring.
 //   - fact_index.go     — factIndex type: FactIndex interface implementation.
 //   - pipeline_index.go — pipelineIndex type: PipelineIndex interface.
 //   - tool_index.go     — toolIndex type: ToolSessionIndex interface.
@@ -68,7 +68,7 @@ type FactWithBody struct {
 	CommittedAt int64  `json:"committed_at,omitempty"`
 }
 
-// gitReader is the interface that Index.Sync requires from the git store.
+// gitReader is the git-read contract implemented by repoHandler and used internally by searchIndex.
 type gitReader interface {
 	// DiffFiles returns paths added, modified, and deleted between fromCommit and HEAD on branch.
 	DiffFiles(ctx context.Context, branch, fromCommit string) (added, modified, deleted []string, err error)
