@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"knomit/internal/store"
 	"time"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
@@ -34,7 +35,7 @@ func queryTool() mcpgo.Tool {
 }
 
 // QueryHandler returns the handler function for knomit_query.
-func QueryHandler(gs GitStore, idx SearchIndex, agentBranch string) func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+func QueryHandler(gs store.FactIndex, idx store.SearchIndex, agentBranch string) func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 	return func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 		ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
@@ -51,7 +52,7 @@ func QueryHandler(gs GitStore, idx SearchIndex, agentBranch string) func(context
 			return mcpgo.NewToolResultError("at least one of text, entities, domain, path, or min_confidence is required"), nil
 		}
 
-		q := SearchQuery{
+		q := store.SearchQuery{
 			Text:          text,
 			Entities:      entities,
 			Domain:        domain,
@@ -61,20 +62,20 @@ func QueryHandler(gs GitStore, idx SearchIndex, agentBranch string) func(context
 		}
 
 		// 4. Search.
-		results, err := idx.Search(agentBranch, q)
+		results, err := idx.Search(ctx, agentBranch, q)
 		if err != nil {
 			return mcpgo.NewToolResultError(fmt.Sprintf("search error: %v", err)), nil
 		}
 
 		// 5. Build output.
 		type factOutput struct {
-			File        string      `json:"file"`
-			Title       string      `json:"title"`
-			Type        string      `json:"type"`
-			Body        string      `json:"body"`
-			LastModified string     `json:"last_modified,omitempty"`
-			Commit      string      `json:"commit"`
-			Frontmatter interface{} `json:"frontmatter"`
+			File         string      `json:"file"`
+			Title        string      `json:"title"`
+			Type         string      `json:"type"`
+			Body         string      `json:"body"`
+			LastModified string      `json:"last_modified,omitempty"`
+			Commit       string      `json:"commit"`
+			Frontmatter  interface{} `json:"frontmatter"`
 		}
 		type frontmatterOutput struct {
 			Domain         []string `json:"domain"`

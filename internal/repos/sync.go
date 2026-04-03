@@ -5,38 +5,55 @@ import (
 	"sync"
 	"time"
 
+	"github.com/go-git/go-git/v5/plumbing/transport"
 	"github.com/rs/zerolog/log"
 
-	"knomit/internal/git"
+	"knomit/internal/config"
 	"knomit/internal/store"
 )
 
+// resolveRemoteAuth builds a transport.AuthMethod from the remote DB record and
+// the static fallback config. Returns nil on error (anonymous access).
+func resolveRemoteAuth(remote *store.Remote, fallbackAuth config.RemoteAuthConfig, keyPath string) transport.AuthMethod {
+	authCfg := remoteAuthFromRecord(remote, fallbackAuth)
+	auth, err := ResolveAuthWithOrigin(authCfg, keyPath, remote.URL)
+	if err != nil {
+		log.Warn().Err(err).Str("remote", remote.URL).Msg("sync: auth resolution failed, using anonymous")
+		return nil
+	}
+	return auth
+}
+
 // runSyncLoop pulls from the configured remote on a fixed interval.
 // First sync fires immediately, then every remote.Interval seconds.
-// The interval is re-read from the database on each tick so that changes
-// made via PUT /api/v1/{repo}/origin take effect without a restart.
-func runSyncLoop(ctx context.Context, wg *sync.WaitGroup, gs *git.Store, svc *store.Service, hub *TaskHub, remote *store.Remote, repo, agentBranch string) {
+// The interval and auth are re-read from the database on each tick so that
+// changes made via PUT /api/v1/{repo}/origin take effect without a restart.
+func runSyncLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Service, hub *TaskHub, repo, agentBranch, keyPath string, fallbackAuth config.RemoteAuthConfig) {
 	defer wg.Done()
 
+	//todo: it's possible the remote will change while the job is still running
+	remote, _ := svc.GetRemote("origin")
+	if remote == nil {
+		return
+	}
 	interval := time.Duration(remote.Interval) * time.Second
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
+
+	auth := resolveRemoteAuth(remote, fallbackAuth, keyPath)
 
 	lg := log.With().Str("repo", repo).Str("remote", remote.URL).Logger()
 	lg.Info().Dur("interval", interval).Msg("sync loop started")
 
 	doSync := func() {
-		result, err := gs.Sync(agentBranch, remote.Branch)
+		result, err := svc.Sync(context.Background(), agentBranch, auth)
 		if err != nil {
-			errMsg := err.Error()
-			_ = svc.UpdateRemoteStatus(remote.Name, "error", &errMsg)
-			hub.BroadcastSyncError(remote.Name, errMsg)
+			hub.broadcastSyncError("origin", err.Error())
 			lg.Warn().Err(err).Msg("sync: pull failed")
 			return
 		}
-		_ = svc.UpdateRemoteStatus(remote.Name, "ok", nil)
 		if result.Synced {
-			hub.BroadcastSyncOK(remote.Name, result.MergeCommit, result.FastForward)
+			hub.broadcastSyncOK("origin", result.MergeCommit, result.FastForward)
 			lg.Info().
 				Bool("fast_forward", result.FastForward).
 				Str("merge_commit", result.MergeCommit).
@@ -55,13 +72,14 @@ func runSyncLoop(ctx context.Context, wg *sync.WaitGroup, gs *git.Store, svc *st
 			lg.Info().Msg("sync loop stopped")
 			return
 		case <-ticker.C:
-			// Re-read remote config so interval changes via PUT /origin take effect.
-			if fresh, err := svc.GetRemote(remote.Name); err == nil && fresh != nil {
+			// Re-read remote config so interval and auth changes take effect.
+			if fresh, err := svc.GetRemote("origin"); err == nil && fresh != nil {
 				if d := time.Duration(fresh.Interval) * time.Second; d != interval {
 					lg.Info().Dur("old", interval).Dur("new", d).Msg("sync: interval changed")
 					interval = d
 					ticker.Reset(interval)
 				}
+				auth = resolveRemoteAuth(fresh, fallbackAuth, keyPath)
 			}
 			doSync()
 		}
@@ -69,30 +87,34 @@ func runSyncLoop(ctx context.Context, wg *sync.WaitGroup, gs *git.Store, svc *st
 }
 
 // runPushLoop pushes the agent branch to origin on a fixed interval.
-// The interval is re-read from the database on each tick so that changes
-// made via PUT /api/v1/{repo}/origin take effect without a restart.
-func runPushLoop(ctx context.Context, wg *sync.WaitGroup, gs *git.Store, svc *store.Service, hub *TaskHub, remote *store.Remote, repo, agentBranch string) {
+// The interval and auth are re-read from the database on each tick so that
+// changes made via PUT /api/v1/{repo}/origin take effect without a restart.
+func runPushLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Service, hub *TaskHub, repo, agentBranch, keyPath string, fallbackAuth config.RemoteAuthConfig) {
 	defer wg.Done()
 
+	//todo: it's possible the remote will change while the job is still running
+	remote, _ := svc.GetRemote("origin")
+	if remote == nil {
+		return
+	}
 	interval := time.Duration(remote.PushInterval) * time.Second
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
+
+	auth := resolveRemoteAuth(remote, fallbackAuth, keyPath)
 
 	lg := log.With().Str("repo", repo).Str("remote", remote.URL).Logger()
 	lg.Info().Dur("interval", interval).Msg("push loop started")
 
 	doPush := func() {
-		result, err := gs.Push(agentBranch)
+		result, err := svc.Push(context.Background(), agentBranch, auth)
 		if err != nil {
-			errMsg := err.Error()
-			_ = svc.UpdateRemotePushStatus(remote.Name, "error", &errMsg)
-			hub.BroadcastPushError(remote.Name, errMsg)
+			hub.broadcastPushError("origin", err.Error())
 			lg.Warn().Err(err).Msg("push: failed")
 			return
 		}
-		_ = svc.UpdateRemotePushStatus(remote.Name, "ok", nil)
 		if result.Pushed {
-			hub.BroadcastPushOK(remote.Name)
+			hub.broadcastPushOK("origin")
 			lg.Info().Str("branch", agentBranch).Msg("push: pushed changes")
 		} else {
 			lg.Debug().Msg("push: up to date")
@@ -108,13 +130,14 @@ func runPushLoop(ctx context.Context, wg *sync.WaitGroup, gs *git.Store, svc *st
 			lg.Info().Msg("push loop stopped")
 			return
 		case <-ticker.C:
-			// Re-read remote config so interval changes via PUT /origin take effect.
-			if fresh, err := svc.GetRemote(remote.Name); err == nil && fresh != nil {
+			// Re-read remote config so interval and auth changes take effect.
+			if fresh, err := svc.GetRemote("origin"); err == nil && fresh != nil {
 				if d := time.Duration(fresh.PushInterval) * time.Second; d != interval {
 					lg.Info().Dur("old", interval).Dur("new", d).Msg("push: interval changed")
 					interval = d
 					ticker.Reset(interval)
 				}
+				auth = resolveRemoteAuth(fresh, fallbackAuth, keyPath)
 			}
 			doPush()
 		}

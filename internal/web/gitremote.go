@@ -6,6 +6,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"knomit/internal/repos"
+	"knomit/internal/store"
 )
 
 // gitHTTPProvider is the narrow interface GitRemoteHandler needs — just the
@@ -40,9 +41,13 @@ func GitRemoteHandler(rm *repos.Manager) http.Handler {
 			return
 		}
 
-		var rawGS repos.GitStore
-		ri.WithRead(func(d repos.StoreDeps) { rawGS = d.GS })
-		provider, ok := rawGS.(gitHTTPProvider)
+		var svc *store.Service
+		ri.WithRead(func(s *store.Service) { svc = s })
+		if svc == nil {
+			http.Error(w, "git serving not supported for this repo", http.StatusInternalServerError)
+			return
+		}
+		provider, ok := (interface{})(svc).(gitHTTPProvider)
 		if !ok {
 			http.Error(w, "git serving not supported for this repo", http.StatusInternalServerError)
 			return

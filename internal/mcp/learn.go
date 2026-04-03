@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"knomit/internal/fact"
+	"knomit/internal/store"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 )
@@ -57,18 +58,11 @@ type learnFactInput struct {
 	Refs       []string `json:"refs"`
 }
 
-
-// BatchEmbedder computes embedding vectors for multiple texts in a single call.
-type BatchEmbedder interface {
-	Embed(text string) ([]float32, error)
-	EmbedBatch(texts []string) ([][]float32, error)
-}
-
 // LearnHandler returns the handler function for knomit_learn.
 // If embedder is non-nil, dedup checks batch-embed all incoming facts upfront
 // instead of embedding one-at-a-time inside each Search call.
-func LearnHandler(gs GitStore, idx SearchIndex, ontologyRoot string, ontology *fact.Ontology, agentBranch string, embedders ...BatchEmbedder) func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-	var batchEmb BatchEmbedder
+func LearnHandler(gs store.FactIndex, idx store.SearchIndex, ontologyRoot string, ontology *fact.Ontology, agentBranch string, embedders ...store.BatchEmbedder) func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+	var batchEmb store.BatchEmbedder
 	if len(embedders) > 0 {
 		batchEmb = embedders[0]
 	}
@@ -110,7 +104,7 @@ func LearnHandler(gs GitStore, idx SearchIndex, ontologyRoot string, ontology *f
 
 		// 3. Validate inputs, build paths, and serialize facts.
 		files := make(map[string]string, len(factInputs))
-		facts := make([]Fact, len(factInputs))
+		facts := make([]fact.Fact, len(factInputs))
 		for i, fi := range factInputs {
 			// Validate topic+category against ontology.
 			topicCategory := fi.Topic
@@ -159,7 +153,7 @@ func LearnHandler(gs GitStore, idx SearchIndex, ontologyRoot string, ontology *f
 			f.Entities = entities
 			f.Refs = refs
 			facts[i] = f
-			files[path] = SerializeFact(f)
+			files[path] = fact.SerializeFact(f)
 		}
 
 		// 3b. Dedup check: search for near-duplicates scoped to the same category directory.
@@ -176,7 +170,7 @@ func LearnHandler(gs GitStore, idx SearchIndex, ontologyRoot string, ontology *f
 		}
 		for i, f := range facts {
 			categoryDir := f.Path()[:strings.LastIndex(f.Path(), "/")]
-			sq := SearchQuery{
+			sq := store.SearchQuery{
 				Text:          f.Title + " " + f.Body,
 				Path:          categoryDir,
 				MinSimilarity: dedupThreshold,
@@ -185,18 +179,18 @@ func LearnHandler(gs GitStore, idx SearchIndex, ontologyRoot string, ontology *f
 			if dedupVecs != nil && i < len(dedupVecs) && len(dedupVecs[i]) > 0 {
 				sq.QueryVec = dedupVecs[i]
 			}
-			results, err := idx.Search(agentBranch, sq)
+			results, err := idx.Search(ctx, agentBranch, sq)
 			if err != nil || len(results) == 0 {
 				continue
 			}
 
 			match := results[0]
 			// Read existing fact to get its full metadata (refs, etc.)
-			existingContent, readErr := gs.ReadFile(agentBranch, match.Path)
+			readResult, readErr := gs.ReadFact(ctx, agentBranch, match.Path, nil)
 			if readErr != nil {
 				continue
 			}
-			existingFact, parseErr := ParseFact(match.Path, existingContent)
+			existingFact, parseErr := fact.ParseFact(match.Path, readResult.Content)
 			if parseErr != nil {
 				continue
 			}
@@ -207,11 +201,11 @@ func LearnHandler(gs GitStore, idx SearchIndex, ontologyRoot string, ontology *f
 				// Write the observation as normal (don't merge into existing path).
 				// Retract the hypothesis.
 				retractMsg := fmt.Sprintf("learn: hypothesis %s subsumed by observation", match.Path)
-				gs.DeleteFile(agentBranch, match.Path, retractMsg, "retract")
+				gs.DeleteFact(ctx, agentBranch, match.Path, retractMsg)
 				// Add hypothesis path to observation's refs.
 				f.Refs = fact.AppendUnique(f.Refs, match.Path)
 				facts[i] = f
-				files[f.Path()] = SerializeFact(f)
+				files[f.Path()] = fact.SerializeFact(f)
 				continue
 			}
 
@@ -219,7 +213,7 @@ func LearnHandler(gs GitStore, idx SearchIndex, ontologyRoot string, ontology *f
 			newConf := f.Confidence
 			existConf := existingFact.Confidence
 
-			var merged Fact
+			var merged fact.Fact
 			if newConf > existConf || (newConf == existConf && f.Sources >= existingFact.Sources) {
 				// New fact wins — keep new fact's title and body, write to existing path.
 				merged = fact.NewFact(match.Path)
@@ -246,13 +240,13 @@ func LearnHandler(gs GitStore, idx SearchIndex, ontologyRoot string, ontology *f
 
 			// Remove the original new-fact path from the files map and add the merged one.
 			delete(files, f.Path())
-			files[merged.Path()] = SerializeFact(merged)
+			files[merged.Path()] = fact.SerializeFact(merged)
 			facts[i] = merged
 		}
 
 		// 4. BatchWrite all facts in one commit.
 		commitMsg := fmt.Sprintf("learn: %s", momentName)
-		hash, _, err := gs.BatchWrite(agentBranch, files, commitMsg, "learn")
+		hash, _, err := gs.BatchWriteFacts(ctx, agentBranch, files, commitMsg, "learn")
 		if err != nil {
 			return mcpgo.NewToolResultError(fmt.Sprintf("write error: %v", err)), nil
 		}

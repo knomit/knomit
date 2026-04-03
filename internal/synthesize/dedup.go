@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/rs/zerolog/log"
 	"knomit/internal/fact"
-	"knomit/internal/mcp"
 	"knomit/internal/store"
+
+	"github.com/rs/zerolog/log"
 )
 
 const defaultDedupThreshold = 0.92
@@ -78,13 +78,13 @@ func applyGreedyMerges(pairs []mergePair) []mergePair {
 func dedupCluster(
 	ctx context.Context,
 	cluster []factForLLM,
-	gs GitStore,
-	idx SearchIndex,
+	gs store.FactIndex,
+	idx store.SearchIndex,
 	threshold float64,
 	recipeName string,
 	onProgress func(ProgressEvent),
 	agentBranch string,
-	embedders ...Embedder,
+	embedders ...store.Embedder,
 ) ([]factForLLM, error) {
 	if len(cluster) < 2 {
 		return cluster, nil
@@ -99,7 +99,7 @@ func dedupCluster(
 	// Batch-embed all cluster facts upfront if a BatchEmbedder is available.
 	var clusterVecs [][]float32
 	if len(embedders) > 0 {
-		if batcher, ok := embedders[0].(BatchEmbedder); ok {
+		if batcher, ok := embedders[0].(store.BatchEmbedder); ok {
 			texts := make([]string, len(cluster))
 			for i, f := range cluster {
 				texts[i] = f.Title + " " + f.Body
@@ -121,7 +121,7 @@ func dedupCluster(
 		if clusterVecs != nil && i < len(clusterVecs) && len(clusterVecs[i]) > 0 {
 			sq.QueryVec = clusterVecs[i]
 		}
-		results, err := idx.Search(agentBranch, sq)
+		results, err := idx.Search(ctx, agentBranch, sq)
 		if err != nil {
 			return nil, fmt.Errorf("dedupCluster: search for %q: %w", fact.File, err)
 		}
@@ -174,21 +174,21 @@ func dedupCluster(
 		onProgress(ProgressEvent{Phase: "dedup-merge", Message: fmt.Sprintf("%s <- %s (%.2f)", winnerFact.File, loserFact.File, p.similarity)})
 
 		// Read the winner's full fact from git to get its Refs.
-		winnerContent, err := gs.ReadFile(agentBranch, winnerFact.File)
+		winnerResult, err := gs.ReadFact(ctx, agentBranch, winnerFact.File, nil)
 		if err != nil {
 			return nil, fmt.Errorf("dedupCluster: read winner %q: %w", winnerFact.File, err)
 		}
-		fullWinner, err := mcp.ParseFact(winnerFact.File, winnerContent)
+		fullWinner, err := fact.ParseFact(winnerFact.File, winnerResult.Content)
 		if err != nil {
 			return nil, fmt.Errorf("dedupCluster: parse winner %q: %w", winnerFact.File, err)
 		}
 
 		// Read the loser's full fact to get its Refs.
-		loserContent, err := gs.ReadFile(agentBranch, loserFact.File)
+		loserResult, err := gs.ReadFact(ctx, agentBranch, loserFact.File, nil)
 		if err != nil {
 			return nil, fmt.Errorf("dedupCluster: read loser %q: %w", loserFact.File, err)
 		}
-		fullLoser, err := mcp.ParseFact(loserFact.File, loserContent)
+		fullLoser, err := fact.ParseFact(loserFact.File, loserResult.Content)
 		if err != nil {
 			return nil, fmt.Errorf("dedupCluster: parse loser %q: %w", loserFact.File, err)
 		}
@@ -204,22 +204,22 @@ func dedupCluster(
 		fullWinner.Refs = mergedRefs
 
 		// Serialize and write the winner back to git.
-		newContent := mcp.SerializeFact(fullWinner)
-		commitHash, blobHash, err := gs.WriteFile(agentBranch, winnerFact.File, newContent, fmt.Sprintf("dedup: merge %s into %s [%s]", loserFact.File, winnerFact.File, recipeName), "subsume")
+		newContent := fact.SerializeFact(fullWinner)
+		writeRes, err := gs.WriteFact(ctx, agentBranch, winnerFact.File, newContent, fmt.Sprintf("dedup: merge %s into %s [%s]", loserFact.File, winnerFact.File, recipeName), "subsume")
 		if err != nil {
 			return nil, fmt.Errorf("dedupCluster: write winner %q: %w", winnerFact.File, err)
 		}
 
 		// Update the search index for the winner.
-		if err := idx.Upsert(agentBranch, commitHash, store.NewFactRecord(fullWinner, blobHash)); err != nil {
+		if err := idx.Upsert(ctx, agentBranch, writeRes.CommitHash, store.NewFactRecord(fullWinner, writeRes.BlobHash)); err != nil {
 			return nil, fmt.Errorf("dedupCluster: upsert winner %q: %w", winnerFact.File, err)
 		}
 
 		// Delete the loser from git and the search index.
-		if _, err := gs.DeleteFile(agentBranch, loserFact.File, fmt.Sprintf("dedup: remove duplicate %s (merged into %s) [%s]", loserFact.File, winnerFact.File, recipeName), "retract"); err != nil {
+		if _, err := gs.DeleteFact(ctx, agentBranch, loserFact.File, fmt.Sprintf("dedup: remove duplicate %s (merged into %s) [%s]", loserFact.File, winnerFact.File, recipeName)); err != nil {
 			return nil, fmt.Errorf("dedupCluster: delete loser %q: %w", loserFact.File, err)
 		}
-		if err := idx.Delete(agentBranch, loserFact.File); err != nil {
+		if err := idx.Delete(ctx, agentBranch, loserFact.File); err != nil {
 			return nil, fmt.Errorf("dedupCluster: index delete loser %q: %w", loserFact.File, err)
 		}
 

@@ -3,24 +3,17 @@ package repos
 import (
 	"context"
 	"fmt"
-	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
 
-	mcpserver "github.com/mark3labs/mcp-go/server"
 	"github.com/rs/zerolog/log"
 	"golang.org/x/crypto/ssh"
 
 	"knomit/internal/config"
-	"knomit/internal/fact"
-	"knomit/internal/git"
-	"knomit/internal/llm"
-	"knomit/internal/mcp"
 	"knomit/internal/store"
-	"knomit/internal/synthesize"
 )
 
 // Deps holds all shared resources needed to open and manage repos.
@@ -28,9 +21,11 @@ type Deps struct {
 	Cfg         config.Config
 	Signer      ssh.Signer
 	AgentBranch string
-	Embedder    Embedder // nil if unavailable; must implement store.Embedder and mcp.BatchEmbedder
-	LLM         llm.LLMAdapter       // nil if unavailable
+	Embedder    store.BatchEmbedder // nil if unavailable
 	KeyPath     string
+	// OnRepoReady is called after a repo is opened or its store is swapped.
+	// The web layer uses this to wire MCP handlers onto the repo.
+	OnRepoReady func(ri *RepoInstance)
 }
 
 // Manager owns the full lifecycle of all registered repositories:
@@ -40,7 +35,6 @@ type Manager struct {
 	repos    map[string]*RepoInstance
 	ctx      context.Context
 	deps     Deps
-	ontology *fact.Ontology // loaded during Boot; used by setupMCP and Add
 }
 
 // New returns an uninitialised Manager. Call Boot to open repos.
@@ -87,6 +81,9 @@ func (m *Manager) Names() []string {
 	return names
 }
 
+// SetOnRepoReady sets the callback invoked after a repo is opened or swapped.
+func (m *Manager) SetOnRepoReady(fn func(*RepoInstance)) { m.deps.OnRepoReady = fn }
+
 // Shutdown gracefully stops all registered repositories.
 // It performs a two-pass shutdown: cancel all sync loops first so they wind
 // down concurrently, then wait and release resources repo by repo.
@@ -120,38 +117,18 @@ func (m *Manager) Shutdown() {
 }
 
 // Boot opens all repositories under cfg.Home/repos/.
-// Phase 1: opens knomit.db, loads ontology, wires MCP.
-// Phase 2: discovers and opens remaining *.db files.
+// knomit.db is opened first; remaining *.db files are discovered and opened.
 func (m *Manager) Boot() error {
 	reposDir := filepath.Join(m.deps.Cfg.Home, "repos")
 	if err := os.MkdirAll(reposDir, 0o755); err != nil {
 		return fmt.Errorf("create repos dir: %w", err)
 	}
 
-	// Phase 1: open knomit.
 	defaultDB := filepath.Join(reposDir, "knomit.db")
-	knomitRI, err := m.openOne("knomit", defaultDB, true)
-	if err != nil {
+	if err := m.Add("knomit", defaultDB); err != nil {
 		return fmt.Errorf("open default repo: %w", err)
 	}
 
-	// Load ontology from knomit repo's git store.
-	ontologyYAML, readErr := knomitRI.gs.ReadFile(m.deps.AgentBranch, "domains/ontology.yaml")
-	if readErr != nil {
-		log.Warn().Msg("domains/ontology.yaml not found, using default ontology")
-		m.ontology = fact.DefaultOntology()
-	} else {
-		m.ontology, err = fact.ParseOntology([]byte(ontologyYAML))
-		if err != nil {
-			knomitRI.closeFn()
-			return fmt.Errorf("parse ontology: %w", err)
-		}
-	}
-
-	m.SetupMCP(knomitRI)
-	m.Set("knomit", knomitRI)
-
-	// Phase 2: discover remaining repos.
 	dbFiles, _ := filepath.Glob(filepath.Join(reposDir, "*.db"))
 	sort.Strings(dbFiles)
 	for _, dbPath := range dbFiles {
@@ -172,13 +149,15 @@ func (m *Manager) Boot() error {
 }
 
 // Add opens a single repository and registers it under name.
-// Uses the ontology already loaded by Boot (or nil if Boot not yet called).
+// Each repo loads its own ontology from its git store during initialization.
 func (m *Manager) Add(name, dbPath string) error {
 	ri, err := m.openOne(name, dbPath, false)
 	if err != nil {
 		return err
 	}
-	m.SetupMCP(ri)
+	if m.deps.OnRepoReady != nil {
+		m.deps.OnRepoReady(ri)
+	}
 	m.Set(name, ri)
 	return nil
 }
@@ -209,6 +188,7 @@ func (m *Manager) openOne(name, dbPath string, isDefault bool) (*RepoInstance, e
 		b.close()
 		return nil, err
 	}
+	b.loadOntology()
 	b.ensureBranch()
 	b.setupIndex()
 	b.seedWatermarks()
@@ -216,64 +196,9 @@ func (m *Manager) openOne(name, dbPath string, isDefault bool) (*RepoInstance, e
 	return b.build(), nil
 }
 
-// SetupMCP wires MCP handlers onto ri using the manager's ontology and deps.
-// It reads the current ri.gs and ri.svc to get concrete types, so it is safe
-// to call after SwapStore to rebind MCP handlers to the new database.
-// No-op if m.ontology is nil.
-func (m *Manager) SetupMCP(ri *RepoInstance) {
-	if m.ontology == nil {
-		return
-	}
-
-	ri.mu.RLock()
-	gs, ok := ri.gs.(*git.Store)
-	svc := ri.svc
-	ri.mu.RUnlock()
-	if !ok {
-		log.Warn().Msg("SetupMCP: ri.gs is not *git.Store, skipping")
-		return
-	}
-	idx := svc.Index()
-
-	ontologyRoot := m.deps.Cfg.OntologyRoot
-	embedder := m.deps.Embedder
-	llmAdapter := m.deps.LLM
-
-	agentBranch := m.deps.AgentBranch
-	reviewer := synthesize.NewReviewer(gs, idx, idx, embedder, nil, agentBranch)
-	profiles := []string{"code", "chat", "generic"}
-	mcpHandlers := make(map[string]http.Handler, len(profiles))
-	for _, p := range profiles {
-		var mcpSrv *mcpserver.MCPServer
-		if embedder != nil {
-			mcpSrv = mcp.NewServer(gs, idx, idx, idx, reviewer, p, ontologyRoot, m.ontology, agentBranch, embedder)
-		} else {
-			mcpSrv = mcp.NewServer(gs, idx, idx, idx, reviewer, p, ontologyRoot, m.ontology, agentBranch)
-		}
-		mcpHandlers[p] = mcpserver.NewStreamableHTTPServer(mcpSrv)
-	}
-
-	var synthDeps *SynthDeps
-	if llmAdapter != nil {
-		synthReviewer := synthesize.NewReviewer(gs, idx, idx, embedder, nil, agentBranch)
-		synthDeps = &SynthDeps{
-			GS:       gs,
-			Idx:      idx,
-			Embedder: embedder,
-			Adapter:  llmAdapter,
-			Reviewer: synthReviewer,
-		}
-	}
-
-	ri.withWrite(func() {
-		ri.mcpHandlers = mcpHandlers
-		ri.synthDeps = synthDeps
-	})
-}
-
 // remoteAuthFromRecord builds a RemoteAuthConfig from a stored remote record,
 // falling back to the global config for fields not set in the record.
-func remoteAuthFromRecord(remote *store.Remote, fallback git.RemoteAuthConfig) git.RemoteAuthConfig {
+func remoteAuthFromRecord(remote *store.Remote, fallback config.RemoteAuthConfig) config.RemoteAuthConfig {
 	cfg := fallback
 	if remote.AuthMethod != "" {
 		cfg.AuthMethod = remote.AuthMethod

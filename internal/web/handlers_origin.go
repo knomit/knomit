@@ -50,7 +50,7 @@ func handleGetOrigin() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
 		var svc *store.Service
-		ri.WithRead(func(d repos.StoreDeps) { svc = d.Svc })
+		ri.WithRead(func(s *store.Service) { svc = s })
 		if svc == nil {
 			w.WriteHeader(http.StatusNoContent)
 			return
@@ -83,7 +83,7 @@ func handleSetOrigin() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
 		var svc *store.Service
-		ri.WithRead(func(d repos.StoreDeps) { svc = d.Svc })
+		ri.WithRead(func(s *store.Service) { svc = s })
 		repoName := ri.Name()
 
 		if svc == nil {
@@ -140,7 +140,7 @@ func handleSetOrigin() http.HandlerFunc {
 			pushInterval = existing.PushInterval
 		}
 
-		if err := svc.SetRemoteWithAuth("origin", url, branch, interval, pushInterval, authMethod, authToken); err != nil {
+		if err := svc.SetRemote("origin", url, branch, interval, pushInterval, authMethod, authToken); err != nil {
 			log.Warn().Err(err).Str("repo", repoName).Msg("set origin failed")
 			writeError(w, http.StatusInternalServerError, "failed to save origin")
 			return

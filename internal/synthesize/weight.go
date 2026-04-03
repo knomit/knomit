@@ -1,8 +1,10 @@
 package synthesize
 
 import (
+	"context"
+
 	"knomit/internal/fact"
-	"knomit/internal/mcp"
+	"knomit/internal/store"
 )
 
 // SourceWeight holds the confidence and sources count from a single source fact,
@@ -41,14 +43,14 @@ var DefaultWeightStrategy WeightStrategy = SumProductNorm{}
 // computeWeight reads each source path from git, parses it, and returns a
 // normalized evidence weight. Sources that fail to read or parse contribute
 // nothing. Must be called before source facts are deleted.
-func computeWeight(gs GitStore, agentBranch string, sourcePaths []string) float64 {
+func computeWeight(ctx context.Context, gs store.FactIndex, agentBranch string, sourcePaths []string) float64 {
 	var srcs []SourceWeight
 	for _, p := range sourcePaths {
-		content, err := gs.ReadFile(agentBranch, p)
+		readResult, err := gs.ReadFact(ctx, agentBranch, p, nil)
 		if err != nil {
 			continue
 		}
-		f, err := mcp.ParseFact(p, content)
+		f, err := fact.ParseFact(p, readResult.Content)
 		if err != nil {
 			continue
 		}

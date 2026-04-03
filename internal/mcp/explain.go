@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"knomit/internal/fact"
+	"knomit/internal/store"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 )
@@ -77,7 +78,7 @@ func classifyRefs(refs []string) classifiedRefs {
 }
 
 // ExplainHandler returns the handler function for knomit_explain.
-func ExplainHandler(gs GitStore, sessionIdx ToolSessionIndex, ontologyRoot, agentBranch string) func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+func ExplainHandler(gs store.FactIndex, sessionIdx store.ToolSessionIndex, ontologyRoot, agentBranch string) func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 	return func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 		ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
@@ -86,33 +87,30 @@ func ExplainHandler(gs GitStore, sessionIdx ToolSessionIndex, ontologyRoot, agen
 		cursor := req.GetString("cursor", "")
 
 		if cursor == "" {
-			return explainFirstCall(gs, sessionIdx, ontologyRoot, agentBranch, file)
+			return explainFirstCall(ctx, gs, sessionIdx, ontologyRoot, agentBranch, file)
 		}
-		return explainResume(gs, sessionIdx, agentBranch, cursor)
+		return explainResume(ctx, gs, sessionIdx, agentBranch, cursor)
 	}
 }
 
-func explainFirstCall(gs GitStore, sessionIdx ToolSessionIndex, ontologyRoot, agentBranch, file string) (*mcpgo.CallToolResult, error) {
+func explainFirstCall(ctx context.Context, gs store.FactIndex, sessionIdx store.ToolSessionIndex, ontologyRoot, agentBranch, file string) (*mcpgo.CallToolResult, error) {
 	if file == "" {
 		return mcpgo.NewToolResultError("file is required"), nil
 	}
 	file = fact.NormalizePath(ontologyRoot, file)
 
-	// GC old sessions.
-	_ = sessionIdx.GCToolSessions("explain", agentBranch, 5)
-
 	// Read root fact.
-	content, err := gs.ReadFile(agentBranch, file)
+	readResult, err := gs.ReadFact(ctx, agentBranch, file, nil)
 	if err != nil {
 		return mcpgo.NewToolResultError(fmt.Sprintf("read file error: %v", err)), nil
 	}
-	fact, err := ParseFact(file, content)
+	fact, err := fact.ParseFact(file, readResult.Content)
 	if err != nil {
 		return mcpgo.NewToolResultError(fmt.Sprintf("parse fact error: %v", err)), nil
 	}
 
 	// Get history.
-	logEntries, err := gs.Log(agentBranch, file)
+	logEntries, err := gs.Log(ctx, agentBranch, file)
 	if err != nil {
 		return mcpgo.NewToolResultError(fmt.Sprintf("log error: %v", err)), nil
 	}
@@ -126,37 +124,37 @@ func explainFirstCall(gs GitStore, sessionIdx ToolSessionIndex, ontologyRoot, ag
 	refs := classifyRefs(fact.Refs)
 
 	// Build queue items from local refs.
-	var queueItems []QueueItem
+	var queueItems []store.QueueItem
 	for _, ref := range refs.Local {
 		if ref != file {
-			queueItems = append(queueItems, QueueItem{Path: ref, CommitHash: rootCommit, Depth: 1})
+			queueItems = append(queueItems, store.QueueItem{Path: ref, CommitHash: rootCommit, Depth: 1})
 		}
 	}
 
 	// Create session.
-	session, err := sessionIdx.CreateToolSession("explain", agentBranch, file)
+	session, err := sessionIdx.CreateToolSession(ctx, "explain", agentBranch, file)
 	if err != nil {
 		return mcpgo.NewToolResultError(fmt.Sprintf("create session error: %v", err)), nil
 	}
 
 	// Add root to seen.
-	if err := sessionIdx.AddSeenPaths(session.ID, []string{file}); err != nil {
+	if err := sessionIdx.AddSeenPaths(ctx, session.ID, []string{file}); err != nil {
 		return mcpgo.NewToolResultError(fmt.Sprintf("add seen paths error: %v", err)), nil
 	}
 
 	// Enqueue local refs.
 	if len(queueItems) > 0 {
-		if err := sessionIdx.EnqueuePaths(session.ID, queueItems); err != nil {
+		if err := sessionIdx.EnqueuePaths(ctx, session.ID, queueItems); err != nil {
 			return mcpgo.NewToolResultError(fmt.Sprintf("enqueue error: %v", err)), nil
 		}
 	}
 
 	// Check if there's more.
-	queueSize, _ := sessionIdx.QueueSize(session.ID)
+	queueSize, _ := sessionIdx.QueueSize(ctx, session.ID)
 	hasMore := queueSize > 0
 
 	if !hasMore {
-		_ = sessionIdx.UpdateToolSession(session.ID, rootCommit, "completed")
+		_ = sessionIdx.UpdateToolSession(ctx, session.ID, rootCommit, "completed")
 	}
 
 	// Build history for root fact.
@@ -201,8 +199,8 @@ func explainFirstCall(gs GitStore, sessionIdx ToolSessionIndex, ontologyRoot, ag
 	return mcpgo.NewToolResultText(string(out)), nil
 }
 
-func explainResume(gs GitStore, sessionIdx ToolSessionIndex, agentBranch, cursor string) (*mcpgo.CallToolResult, error) {
-	session, err := sessionIdx.GetToolSession(cursor)
+func explainResume(ctx context.Context, gs store.FactIndex, sessionIdx store.ToolSessionIndex, agentBranch, cursor string) (*mcpgo.CallToolResult, error) {
+	session, err := sessionIdx.GetToolSession(ctx, cursor)
 	if err != nil {
 		return mcpgo.NewToolResultError(fmt.Sprintf("session lookup error: %v", err)), nil
 	}
@@ -210,18 +208,18 @@ func explainResume(gs GitStore, sessionIdx ToolSessionIndex, agentBranch, cursor
 		return mcpgo.NewToolResultError("session expired or not found — omit cursor to start a new session"), nil
 	}
 
-	seen, err := sessionIdx.GetSeenPaths(cursor)
+	seen, err := sessionIdx.GetSeenPaths(ctx, cursor)
 	if err != nil {
 		return mcpgo.NewToolResultError(fmt.Sprintf("seen paths error: %v", err)), nil
 	}
 
 	var facts []explainFactEntry
 	var newPaths []string
-	var newQueue []QueueItem
+	var newQueue []store.QueueItem
 
 	// Retry dequeue up to 3 times if all items in a batch fail.
 	for attempt := 0; attempt < 3; attempt++ {
-		items, err := sessionIdx.DequeuePaths(cursor, explainPageSize)
+		items, err := sessionIdx.DequeuePaths(ctx, cursor, explainPageSize)
 		if err != nil {
 			return mcpgo.NewToolResultError(fmt.Sprintf("dequeue error: %v", err)), nil
 		}
@@ -230,26 +228,25 @@ func explainResume(gs GitStore, sessionIdx ToolSessionIndex, agentBranch, cursor
 		}
 
 		for _, item := range items {
-			content, readErr := gs.ReadFileAtCommit(agentBranch, item.Path, item.CommitHash)
+			result, readErr := gs.ReadFact(ctx, agentBranch, item.Path, &store.ReadFactOpts{AtCommit: item.CommitHash})
 			var retracted bool
 			var lastCommitHash string
 			if readErr != nil {
 				// LastCommitForPath skips git merge commits. In knomit, synthesis
 				// deletions are always regular commits (not merge commits), so this
 				// correctly returns the retraction commit.
-				retractCommit, lcErr := gs.LastCommitForPath(agentBranch, item.Path)
+				retractCommit, lcErr := gs.LastCommitForPath(ctx, agentBranch, item.Path)
 				if lcErr != nil || retractCommit == "" {
 					continue // file never existed in git
 				}
-				var fromCommit string
-				content, fromCommit, readErr = gs.ReadFileLastCommit(agentBranch, item.Path, retractCommit)
+				result, readErr = gs.ReadFact(ctx, agentBranch, item.Path, &store.ReadFactOpts{BeforeCommit: retractCommit})
 				if readErr != nil {
 					continue
 				}
 				retracted = true
-				lastCommitHash = fromCommit
+				lastCommitHash = result.FromCommit
 			}
-			parsed, parseErr := ParseFact(item.Path, content)
+			parsed, parseErr := fact.ParseFact(item.Path, result.Content)
 			if parseErr != nil {
 				continue
 			}
@@ -260,7 +257,7 @@ func explainResume(gs GitStore, sessionIdx ToolSessionIndex, agentBranch, cursor
 			if item.Depth < explainMaxDepth {
 				for _, ref := range refs.Local {
 					if !seen[ref] {
-						newQueue = append(newQueue, QueueItem{Path: ref, CommitHash: item.CommitHash, Depth: item.Depth + 1})
+						newQueue = append(newQueue, store.QueueItem{Path: ref, CommitHash: item.CommitHash, Depth: item.Depth + 1})
 						seen[ref] = true
 					}
 				}
@@ -293,24 +290,24 @@ func explainResume(gs GitStore, sessionIdx ToolSessionIndex, agentBranch, cursor
 
 	// Record new seen paths.
 	if len(newPaths) > 0 {
-		if err := sessionIdx.AddSeenPaths(cursor, newPaths); err != nil {
+		if err := sessionIdx.AddSeenPaths(ctx, cursor, newPaths); err != nil {
 			return mcpgo.NewToolResultError(fmt.Sprintf("add seen paths error: %v", err)), nil
 		}
 	}
 
 	// Enqueue newly discovered refs.
 	if len(newQueue) > 0 {
-		if err := sessionIdx.EnqueuePaths(cursor, newQueue); err != nil {
+		if err := sessionIdx.EnqueuePaths(ctx, cursor, newQueue); err != nil {
 			return mcpgo.NewToolResultError(fmt.Sprintf("enqueue error: %v", err)), nil
 		}
 	}
 
 	// Check queue size.
-	queueSize, _ := sessionIdx.QueueSize(cursor)
+	queueSize, _ := sessionIdx.QueueSize(ctx, cursor)
 	hasMore := queueSize > 0
 
 	if !hasMore {
-		_ = sessionIdx.UpdateToolSession(cursor, "", "completed")
+		_ = sessionIdx.UpdateToolSession(ctx, cursor, "", "completed")
 	}
 
 	var cursorOut interface{} = cursor
