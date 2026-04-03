@@ -14,9 +14,13 @@ import (
 // First sync fires immediately, then every remote.Interval seconds.
 // The interval is re-read from the database on each tick so that changes
 // made via PUT /api/v1/{repo}/origin take effect without a restart.
-func runSyncLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Service, hub *TaskHub, remote *store.Remote, repo, agentBranch string) {
+func runSyncLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Service, hub *TaskHub, repo, agentBranch string) {
 	defer wg.Done()
 
+	remote, _ := svc.GetRemote("origin")
+	if remote == nil {
+		return
+	}
 	interval := time.Duration(remote.Interval) * time.Second
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
@@ -27,12 +31,12 @@ func runSyncLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Service, hu
 	doSync := func() {
 		result, err := svc.Sync(context.Background(), agentBranch)
 		if err != nil {
-			hub.broadcastSyncError(remote.Name, err.Error())
+			hub.broadcastSyncError("origin", err.Error())
 			lg.Warn().Err(err).Msg("sync: pull failed")
 			return
 		}
 		if result.Synced {
-			hub.broadcastSyncOK(remote.Name, result.MergeCommit, result.FastForward)
+			hub.broadcastSyncOK("origin", result.MergeCommit, result.FastForward)
 			lg.Info().
 				Bool("fast_forward", result.FastForward).
 				Str("merge_commit", result.MergeCommit).
@@ -52,7 +56,7 @@ func runSyncLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Service, hu
 			return
 		case <-ticker.C:
 			// Re-read remote config so interval changes via PUT /origin take effect.
-			if fresh, err := svc.GetRemote(remote.Name); err == nil && fresh != nil {
+			if fresh, err := svc.GetRemote("origin"); err == nil && fresh != nil {
 				if d := time.Duration(fresh.Interval) * time.Second; d != interval {
 					lg.Info().Dur("old", interval).Dur("new", d).Msg("sync: interval changed")
 					interval = d
@@ -67,9 +71,13 @@ func runSyncLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Service, hu
 // runPushLoop pushes the agent branch to origin on a fixed interval.
 // The interval is re-read from the database on each tick so that changes
 // made via PUT /api/v1/{repo}/origin take effect without a restart.
-func runPushLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Service, hub *TaskHub, remote *store.Remote, repo, agentBranch string) {
+func runPushLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Service, hub *TaskHub, repo, agentBranch string) {
 	defer wg.Done()
 
+	remote, _ := svc.GetRemote("origin")
+	if remote == nil {
+		return
+	}
 	interval := time.Duration(remote.PushInterval) * time.Second
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
@@ -80,12 +88,12 @@ func runPushLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Service, hu
 	doPush := func() {
 		result, err := svc.Push(context.Background(), agentBranch)
 		if err != nil {
-			hub.broadcastPushError(remote.Name, err.Error())
+			hub.broadcastPushError("origin", err.Error())
 			lg.Warn().Err(err).Msg("push: failed")
 			return
 		}
 		if result.Pushed {
-			hub.broadcastPushOK(remote.Name)
+			hub.broadcastPushOK("origin")
 			lg.Info().Str("branch", agentBranch).Msg("push: pushed changes")
 		} else {
 			lg.Debug().Msg("push: up to date")
@@ -102,7 +110,7 @@ func runPushLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Service, hu
 			return
 		case <-ticker.C:
 			// Re-read remote config so interval changes via PUT /origin take effect.
-			if fresh, err := svc.GetRemote(remote.Name); err == nil && fresh != nil {
+			if fresh, err := svc.GetRemote("origin"); err == nil && fresh != nil {
 				if d := time.Duration(fresh.PushInterval) * time.Second; d != interval {
 					lg.Info().Dur("old", interval).Dur("new", d).Msg("push: interval changed")
 					interval = d
