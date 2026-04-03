@@ -24,8 +24,8 @@ import (
 // notifyCommit (which triggers index sync and may call back into Service).
 //
 // If remoteBranch is empty, it defaults to "main".
-func (s *Service) Sync(ctx context.Context, localBranch string, auth transport.AuthMethod) (res SyncResult, retErr error) {
-	remote, err := s.GetRemote("origin")
+func (ri *remoteIndex) Sync(ctx context.Context, localBranch string, auth transport.AuthMethod) (res SyncResult, retErr error) {
+	remote, err := ri.GetRemote("origin")
 	if err != nil || remote == nil {
 		log.Debug().Msg("git sync: no origin remote configured, skipping")
 		return SyncResult{}, nil
@@ -39,16 +39,16 @@ func (s *Service) Sync(ctx context.Context, localBranch string, auth transport.A
 	defer func() {
 		if retErr != nil {
 			errMsg := retErr.Error()
-			_ = s.updateRemoteStatus("origin", "error", &errMsg)
+			_ = ri.updateRemoteStatus("origin", "error", &errMsg)
 		} else {
-			_ = s.updateRemoteStatus("origin", "ok", nil)
+			_ = ri.updateRemoteStatus("origin", "ok", nil)
 		}
 	}()
 
-	unlock := s.fi.lockBranch(localBranch)
+	unlock := ri.fi.lockBranch(localBranch)
 
 	// Check if origin remote exists in git config.
-	if _, err := s.rh.repo.Remote("origin"); err != nil {
+	if _, err := ri.rh.repo.Remote("origin"); err != nil {
 		unlock()
 		log.Debug().Msg("git sync: no origin remote configured, skipping")
 		return SyncResult{}, nil
@@ -56,7 +56,7 @@ func (s *Service) Sync(ctx context.Context, localBranch string, auth transport.A
 
 	// Fetch from origin.
 	log.Debug().Msg("git sync: fetching from origin")
-	err = s.rh.repo.Fetch(&gogit.FetchOptions{
+	err = ri.rh.repo.Fetch(&gogit.FetchOptions{
 		RemoteName: "origin",
 		Auth:       auth,
 	})
@@ -66,7 +66,7 @@ func (s *Service) Sync(ctx context.Context, localBranch string, auth transport.A
 	}
 
 	// Resolve origin/<remoteBranch> ref.
-	originRef, err := s.rh.gits.Reference(plumbing.NewRemoteReferenceName("origin", remoteBranch))
+	originRef, err := ri.rh.gits.Reference(plumbing.NewRemoteReferenceName("origin", remoteBranch))
 	if err != nil {
 		unlock()
 		log.Debug().Str("branch", remoteBranch).Msg("git sync: origin ref not found, skipping")
@@ -76,7 +76,7 @@ func (s *Service) Sync(ctx context.Context, localBranch string, auth transport.A
 
 	// Get current agent branch HEAD.
 	agentRefName := plumbing.NewBranchReferenceName(localBranch)
-	agentRef, err := s.rh.gits.Reference(agentRefName)
+	agentRef, err := ri.rh.gits.Reference(agentRefName)
 	if err != nil {
 		unlock()
 		return SyncResult{}, fmt.Errorf("Sync: agent ref: %w", err)
@@ -95,13 +95,13 @@ func (s *Service) Sync(ctx context.Context, localBranch string, auth transport.A
 		return SyncResult{}, nil
 	}
 
-	originCommit, err := s.rh.repo.CommitObject(originHash)
+	originCommit, err := ri.rh.repo.CommitObject(originHash)
 	if err != nil {
 		unlock()
 		return SyncResult{}, fmt.Errorf("Sync: origin commit: %w", err)
 	}
 
-	agentCommit, err := s.rh.repo.CommitObject(agentHash)
+	agentCommit, err := ri.rh.repo.CommitObject(agentHash)
 	if err != nil {
 		unlock()
 		return SyncResult{}, fmt.Errorf("Sync: agent commit: %w", err)
@@ -127,15 +127,15 @@ func (s *Service) Sync(ctx context.Context, localBranch string, auth transport.A
 	}
 	if isAgentAncestor {
 		newRef := plumbing.NewHashReference(agentRefName, originHash)
-		if err := s.rh.gits.SetReference(newRef); err != nil {
+		if err := ri.rh.gits.SetReference(newRef); err != nil {
 			unlock()
 			return SyncResult{}, fmt.Errorf("Sync: fast-forward ref: %w", err)
 		}
 		unlock()
 
 		log.Info().Str("to", originHash.String()[:8]).Msg("git sync: fast-forward")
-		s.fi.notifyCommit(ctx, localBranch, originHash)
-		if err := s.fi.populateCommitLog(ctx, localBranch); err != nil {
+		ri.fi.notifyCommit(ctx, localBranch, originHash)
+		if err := ri.fi.populateCommitLog(ctx, localBranch); err != nil {
 			log.Warn().Err(err).Msg("commit_log: sync populate")
 		}
 		return SyncResult{Synced: true, FastForward: true}, nil
@@ -156,7 +156,7 @@ func (s *Service) Sync(ctx context.Context, localBranch string, auth transport.A
 	log.Debug().Str("base", baseCommit.Hash.String()[:8]).Msg("git sync: merge base")
 
 	// Three-way merge: diff base→origin, apply to agent tree.
-	mergedTreeHash, err := s.threeWayMerge(ctx, baseCommit, originCommit, agentCommit)
+	mergedTreeHash, err := ri.threeWayMerge(ctx, baseCommit, originCommit, agentCommit)
 	if err != nil {
 		unlock()
 		return SyncResult{}, fmt.Errorf("Sync: three-way merge: %w", err)
@@ -164,32 +164,32 @@ func (s *Service) Sync(ctx context.Context, localBranch string, auth transport.A
 
 	// Create merge commit.
 	mc := &object.Commit{
-		Author:       s.fi.authorSig(localBranch, "sync"),
-		Committer:    s.fi.committerSig(localBranch),
+		Author:       ri.fi.authorSig(localBranch, "sync"),
+		Committer:    ri.fi.committerSig(localBranch),
 		Message:      fmt.Sprintf("sync: merge origin/%s into %s", remoteBranch, localBranch),
 		TreeHash:     mergedTreeHash,
 		ParentHashes: []plumbing.Hash{agentHash, originHash},
 	}
 
-	commitObj := s.rh.gits.NewEncodedObject()
+	commitObj := ri.rh.gits.NewEncodedObject()
 	if err := mc.Encode(commitObj); err != nil {
 		unlock()
 		return SyncResult{}, fmt.Errorf("Sync: encode merge commit: %w", err)
 	}
-	mergeHash, err := s.rh.gits.SetEncodedObject(commitObj)
+	mergeHash, err := ri.rh.gits.SetEncodedObject(commitObj)
 	if err != nil {
 		unlock()
 		return SyncResult{}, fmt.Errorf("Sync: store merge commit: %w", err)
 	}
 
-	mergeHash, err = signCommitInPlace(s.rh.gits, s.fi.signer, mergeHash)
+	mergeHash, err = signCommitInPlace(ri.rh.gits, ri.fi.signer, mergeHash)
 	if err != nil {
 		unlock()
 		return SyncResult{}, fmt.Errorf("Sync: sign merge commit: %w", err)
 	}
 
 	newRef := plumbing.NewHashReference(agentRefName, mergeHash)
-	if err := s.rh.gits.SetReference(newRef); err != nil {
+	if err := ri.rh.gits.SetReference(newRef); err != nil {
 		unlock()
 		return SyncResult{}, fmt.Errorf("Sync: update ref: %w", err)
 	}
@@ -197,8 +197,8 @@ func (s *Service) Sync(ctx context.Context, localBranch string, auth transport.A
 	unlock()
 
 	log.Info().Str("merge_commit", mergeHash.String()[:8]).Msg("git sync: merged origin")
-	s.fi.notifyCommit(ctx, localBranch, mergeHash)
-	if err := s.fi.populateCommitLog(ctx, localBranch); err != nil {
+	ri.fi.notifyCommit(ctx, localBranch, mergeHash)
+	if err := ri.fi.populateCommitLog(ctx, localBranch); err != nil {
 		log.Warn().Err(err).Msg("commit_log: sync populate")
 	}
 	return SyncResult{Synced: true, MergeCommit: mergeHash.String()}, nil
@@ -206,7 +206,7 @@ func (s *Service) Sync(ctx context.Context, localBranch string, auth transport.A
 
 // threeWayMerge diffs base→origin and applies those changes to the agent tree.
 // Origin wins for all changes (added, modified, deleted).
-func (s *Service) threeWayMerge(ctx context.Context, baseCommit, originCommit, agentCommit *object.Commit) (plumbing.Hash, error) {
+func (ri *remoteIndex) threeWayMerge(ctx context.Context, baseCommit, originCommit, agentCommit *object.Commit) (plumbing.Hash, error) {
 	baseTree, err := baseCommit.Tree()
 	if err != nil {
 		return plumbing.ZeroHash, fmt.Errorf("base tree: %w", err)
@@ -251,11 +251,11 @@ func (s *Service) threeWayMerge(ctx context.Context, baseCommit, originCommit, a
 				}
 			}
 
-			newRootHash, err := buildTree(s.rh.gits, currentTree, path, blobHash)
+			newRootHash, err := buildTree(ri.rh.gits, currentTree, path, blobHash)
 			if err != nil {
 				return plumbing.ZeroHash, fmt.Errorf("apply %s %q: %w", action, path, err)
 			}
-			currentTree, err = object.GetTree(s.rh.gits, newRootHash)
+			currentTree, err = object.GetTree(ri.rh.gits, newRootHash)
 			if err != nil {
 				return plumbing.ZeroHash, fmt.Errorf("reload tree after %q: %w", path, err)
 			}
@@ -270,13 +270,13 @@ func (s *Service) threeWayMerge(ctx context.Context, baseCommit, originCommit, a
 				log.Warn().Str("path", path).Msg("sync: master deletes agent-modified file")
 			}
 
-			newRootHash, err := deleteFromTree(s.rh.gits, currentTree, path)
+			newRootHash, err := deleteFromTree(ri.rh.gits, currentTree, path)
 			if err != nil {
 				// File might not exist in agent tree — skip.
 				log.Debug().Str("path", path).Err(err).Msg("sync: skip delete (not in agent tree)")
 				continue
 			}
-			currentTree, err = object.GetTree(s.rh.gits, newRootHash)
+			currentTree, err = object.GetTree(ri.rh.gits, newRootHash)
 			if err != nil {
 				return plumbing.ZeroHash, fmt.Errorf("reload tree after delete %q: %w", path, err)
 			}
@@ -293,11 +293,11 @@ func (s *Service) threeWayMerge(ctx context.Context, baseCommit, originCommit, a
 // If the push fails with a non-fast-forward error, it retries with a force
 // push. This is safe because agent branches are per-machine — no other machine
 // writes to the same branch.
-func (s *Service) Push(ctx context.Context, branch string, auth transport.AuthMethod) (res PushResult, retErr error) {
-	unlock := s.fi.lockBranch(branch)
+func (ri *remoteIndex) Push(ctx context.Context, branch string, auth transport.AuthMethod) (res PushResult, retErr error) {
+	unlock := ri.fi.lockBranch(branch)
 	defer unlock()
 
-	if _, err := s.rh.repo.Remote("origin"); err != nil {
+	if _, err := ri.rh.repo.Remote("origin"); err != nil {
 		log.Debug().Msg("git push: no origin remote configured, skipping")
 		return PushResult{}, nil
 	}
@@ -306,16 +306,16 @@ func (s *Service) Push(ctx context.Context, branch string, auth transport.AuthMe
 	defer func() {
 		if retErr != nil {
 			errMsg := retErr.Error()
-			_ = s.updateRemotePushStatus("origin", "error", &errMsg)
+			_ = ri.updateRemotePushStatus("origin", "error", &errMsg)
 		} else {
-			_ = s.updateRemotePushStatus("origin", "ok", nil)
+			_ = ri.updateRemotePushStatus("origin", "ok", nil)
 		}
 	}()
 
 	refspec := fmt.Sprintf("refs/heads/%s:refs/heads/%s", branch, branch)
 
 	log.Debug().Str("branch", branch).Msg("git push: pushing branch")
-	err := s.rh.repo.Push(&gogit.PushOptions{
+	err := ri.rh.repo.Push(&gogit.PushOptions{
 		RemoteName: "origin",
 		RefSpecs:   []gogitconfig.RefSpec{gogitconfig.RefSpec(refspec)},
 		Auth:       auth,
@@ -325,7 +325,7 @@ func (s *Service) Push(ctx context.Context, branch string, auth transport.AuthMe
 	}
 	if err != nil && strings.Contains(err.Error(), "non-fast-forward") {
 		forceRefspec := fmt.Sprintf("+refs/heads/%s:refs/heads/%s", branch, branch)
-		err = s.rh.repo.Push(&gogit.PushOptions{
+		err = ri.rh.repo.Push(&gogit.PushOptions{
 			RemoteName: "origin",
 			RefSpecs:   []gogitconfig.RefSpec{gogitconfig.RefSpec(forceRefspec)},
 			Auth:       auth,

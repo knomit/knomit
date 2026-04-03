@@ -14,6 +14,7 @@ type remoteIndex struct {
 	crypt *Crypt
 }
 
+var _ RemoteIndex = (*remoteIndex)(nil)
 
 // Remote represents a configured git remote for sync and push.
 type Remote struct {
