@@ -62,6 +62,14 @@ type PipelineIndex interface {
 	SetPipelineWatermark(ctx context.Context, tool, branch, hash string) error
 }
 
+// BranchIndex is the interface for branch lifecycle operations. Implemented by *repoHandler.
+type BranchIndex interface {
+	EnsureBranch(ctx context.Context, name, gitRef string) (int64, error)
+	MergeBranch(ctx context.Context, src, dst string) error
+	DropBranch(ctx context.Context, name string) error
+	ListBranches(ctx context.Context) ([]Branch, error)
+}
+
 // Store is the composite interface for all index operations on a fact store.
 // Implemented by *Index.
 type Store interface {

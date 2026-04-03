@@ -17,7 +17,7 @@ func (idx *store) GC(ctx context.Context) error {
 		path     string
 		blobHash string
 	}
-	rows, err := conn(ctx, idx.db).QueryContext(ctx,
+	rows, err := conn(ctx, idx.rh.db).QueryContext(ctx,
 		`SELECT id, path, blob_hash FROM facts WHERE id NOT IN (SELECT fact_id FROM branch_facts)`,
 	)
 	if err != nil {
@@ -37,7 +37,7 @@ func (idx *store) GC(ctx context.Context) error {
 	if len(orphans) > 0 {
 		// Delete orphaned facts (cascades to fact_entities, fact_domains, facts_vec via trigger).
 		for _, o := range orphans {
-			if _, err := conn(ctx, idx.db).ExecContext(ctx, `DELETE FROM facts WHERE id = ?`, o.id); err != nil {
+			if _, err := conn(ctx, idx.rh.db).ExecContext(ctx, `DELETE FROM facts WHERE id = ?`, o.id); err != nil {
 				return fmt.Errorf("gc: delete fact %d: %w", o.id, err)
 			}
 		}
@@ -60,7 +60,7 @@ func (idx *store) GC(ctx context.Context) error {
 	idx.gcOrphanedGraphNodes(ctx, NodeOntologyNode, EdgeUnder)
 
 	// 6. Delete commit_log entries for deleted branches.
-	if _, err := conn(ctx, idx.db).ExecContext(ctx,
+	if _, err := conn(ctx, idx.rh.db).ExecContext(ctx,
 		`DELETE FROM commit_log WHERE branch_id IS NOT NULL AND branch_id NOT IN (SELECT id FROM branches)`,
 	); err != nil {
 		return fmt.Errorf("gc: clean commit_log: %w", err)
@@ -82,7 +82,7 @@ func (idx *store) GC(ctx context.Context) error {
 // gcSessionTable deletes all but the 5 most recent sessions per (tool, branch)
 // from the given table. Child rows are cascade-deleted via foreign keys.
 func (idx *store) gcSessionTable(ctx context.Context, table string) error {
-	_, err := conn(ctx, idx.db).ExecContext(ctx,
+	_, err := conn(ctx, idx.rh.db).ExecContext(ctx,
 		fmt.Sprintf(
 			`DELETE FROM %s WHERE rowid NOT IN (
 			    SELECT rowid FROM (
@@ -101,7 +101,7 @@ func (idx *store) gcOrphanedGraphNodes(ctx context.Context, label, edgeType stri
 		`SELECT json_extract(value, '$.path') FROM json_each(cypher('MATCH (n:%s) WHERE NOT (:%s)-[:%s]->(n) RETURN n.path AS path'))`,
 		label, NodeFact, edgeType,
 	)
-	rows, err := conn(ctx, idx.db).QueryContext(ctx, q)
+	rows, err := conn(ctx, idx.rh.db).QueryContext(ctx, q)
 	if err != nil {
 		log.Warn().Err(err).Str("label", label).Msg("gc: query orphaned nodes failed")
 		return
@@ -115,7 +115,7 @@ func (idx *store) gcOrphanedGraphNodes(ctx context.Context, label, edgeType stri
 		}
 		ep := escapeCypherKey(path)
 		delQ := fmt.Sprintf(`SELECT cypher('MATCH (n:%s {path: "%s"}) DETACH DELETE n')`, label, ep)
-		if _, err := conn(ctx, idx.db).ExecContext(ctx, delQ); err != nil {
+		if _, err := conn(ctx, idx.rh.db).ExecContext(ctx, delQ); err != nil {
 			log.Warn().Err(err).Str("label", label).Str("path", path).Msg("gc: delete orphaned node failed")
 		}
 	}

@@ -20,7 +20,7 @@ import (
 // the property named propKey equals propVal. Returns 0 if not found.
 func (idx *store) graphNodeIDByProp(ctx context.Context, label, propKey, propVal string) (int64, error) {
 	var nodeID int64
-	err := conn(ctx, idx.db).QueryRowContext(ctx, `
+	err := conn(ctx, idx.rh.db).QueryRowContext(ctx, `
 		SELECT np.node_id
 		FROM node_props_text np
 		JOIN property_keys pk ON pk.id = np.key_id
@@ -37,7 +37,7 @@ func (idx *store) graphNodeIDByProp(ctx context.Context, label, propKey, propVal
 // graphInsertEdge inserts an edge directly into the edges table, bypassing
 // the GraphQLite Cypher layer. This avoids the two-node MATCH self-loop bug.
 func (idx *store) graphInsertEdge(ctx context.Context, sourceID, targetID int64, edgeType string) error {
-	_, err := conn(ctx, idx.db).ExecContext(ctx,
+	_, err := conn(ctx, idx.rh.db).ExecContext(ctx,
 		`INSERT OR IGNORE INTO edges (source_id, target_id, type) VALUES (?, ?, ?)`,
 		sourceID, targetID, edgeType,
 	)
@@ -51,7 +51,7 @@ func (idx *store) graphInsertEdge(ctx context.Context, sourceID, targetID int64,
 //
 // Returns the number of FactVersion nodes successfully created.
 func (idx *store) rebuildGraphHistory(ctx context.Context, git *Service, branch string, progress RebuildProgress) (int, error) {
-	rows, err := conn(ctx, idx.db).QueryContext(ctx, `
+	rows, err := conn(ctx, idx.rh.db).QueryContext(ctx, `
 		SELECT path, commit_hash, committed_at
 		FROM commit_log
 		WHERE action != 'deleted'
@@ -95,7 +95,7 @@ func (idx *store) rebuildGraphHistory(ctx context.Context, git *Service, branch 
 		committedAt      int64
 	}
 
-	tx, err := idx.db.BeginTx(ctx, nil)
+	tx, err := idx.rh.db.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, fmt.Errorf("rebuildGraphHistory: begin tx: %w", err)
 	}
@@ -237,14 +237,14 @@ func (idx *store) graphSetFactVersionProps(ctx context.Context, commitHash strin
 		{"title", rec.Title},
 	} {
 		// Ensure property_key row exists.
-		if _, err := conn(ctx, idx.db).ExecContext(ctx, `INSERT OR IGNORE INTO property_keys(key) VALUES (?)`, p.key); err != nil {
+		if _, err := conn(ctx, idx.rh.db).ExecContext(ctx, `INSERT OR IGNORE INTO property_keys(key) VALUES (?)`, p.key); err != nil {
 			return fmt.Errorf("graphSetFactVersionProps: ensure key %s: %w", p.key, err)
 		}
 		var keyID int64
-		if err := conn(ctx, idx.db).QueryRowContext(ctx, `SELECT id FROM property_keys WHERE key = ?`, p.key).Scan(&keyID); err != nil {
+		if err := conn(ctx, idx.rh.db).QueryRowContext(ctx, `SELECT id FROM property_keys WHERE key = ?`, p.key).Scan(&keyID); err != nil {
 			return fmt.Errorf("graphSetFactVersionProps: get key_id for %s: %w", p.key, err)
 		}
-		if _, err := conn(ctx, idx.db).ExecContext(ctx,
+		if _, err := conn(ctx, idx.rh.db).ExecContext(ctx,
 			`INSERT OR REPLACE INTO node_props_text(node_id, key_id, value) VALUES (?, ?, ?)`,
 			nodeID, keyID, p.value,
 		); err != nil {
@@ -253,14 +253,14 @@ func (idx *store) graphSetFactVersionProps(ctx context.Context, commitHash strin
 	}
 
 	// committed_at is an integer; store in node_props_real (GraphQLite uses REAL for numbers).
-	if _, err := conn(ctx, idx.db).ExecContext(ctx, `INSERT OR IGNORE INTO property_keys(key) VALUES (?)`, "committed_at"); err != nil {
+	if _, err := conn(ctx, idx.rh.db).ExecContext(ctx, `INSERT OR IGNORE INTO property_keys(key) VALUES (?)`, "committed_at"); err != nil {
 		return fmt.Errorf("graphSetFactVersionProps: ensure key committed_at: %w", err)
 	}
 	var caKeyID int64
-	if err := conn(ctx, idx.db).QueryRowContext(ctx, `SELECT id FROM property_keys WHERE key = 'committed_at'`).Scan(&caKeyID); err != nil {
+	if err := conn(ctx, idx.rh.db).QueryRowContext(ctx, `SELECT id FROM property_keys WHERE key = 'committed_at'`).Scan(&caKeyID); err != nil {
 		return fmt.Errorf("graphSetFactVersionProps: get key_id for committed_at: %w", err)
 	}
-	if _, err := conn(ctx, idx.db).ExecContext(ctx,
+	if _, err := conn(ctx, idx.rh.db).ExecContext(ctx,
 		`INSERT OR REPLACE INTO node_props_real(node_id, key_id, value) VALUES (?, ?, ?)`,
 		nodeID, caKeyID, committedAt,
 	); err != nil {

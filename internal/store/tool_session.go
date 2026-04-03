@@ -44,7 +44,7 @@ func (idx *store) CreateToolSession(ctx context.Context, tool, branch, pathPrefi
 		UpdatedAt:  now,
 	}
 
-	_, err := conn(ctx, idx.db).ExecContext(ctx,
+	_, err := conn(ctx, idx.rh.db).ExecContext(ctx,
 		`INSERT INTO tool_sessions(id, tool, branch, path_prefix, last_commit, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 		s.ID, s.Tool, s.Branch, s.PathPrefix, s.LastCommit, s.Status, s.CreatedAt, s.UpdatedAt,
 	)
@@ -57,7 +57,7 @@ func (idx *store) CreateToolSession(ctx context.Context, tool, branch, pathPrefi
 // GetToolSession returns the session with the given ID, or nil if not found.
 func (idx *store) GetToolSession(ctx context.Context, id string) (*ToolSession, error) {
 	var s ToolSession
-	err := conn(ctx, idx.db).QueryRowContext(ctx,
+	err := conn(ctx, idx.rh.db).QueryRowContext(ctx,
 		`SELECT id, tool, branch, path_prefix, last_commit, status, created_at, updated_at FROM tool_sessions WHERE id = ?`, id,
 	).Scan(&s.ID, &s.Tool, &s.Branch, &s.PathPrefix, &s.LastCommit, &s.Status, &s.CreatedAt, &s.UpdatedAt)
 	if err == sql.ErrNoRows {
@@ -72,7 +72,7 @@ func (idx *store) GetToolSession(ctx context.Context, id string) (*ToolSession, 
 // UpdateToolSession updates the last_commit, status, and updated_at for a session.
 func (idx *store) UpdateToolSession(ctx context.Context, id, lastCommit, status string) error {
 	now := time.Now().UTC().Format(time.RFC3339)
-	_, err := conn(ctx, idx.db).ExecContext(ctx,
+	_, err := conn(ctx, idx.rh.db).ExecContext(ctx,
 		`UPDATE tool_sessions SET last_commit = ?, status = ?, updated_at = ? WHERE id = ?`,
 		lastCommit, status, now, id,
 	)
@@ -84,7 +84,7 @@ func (idx *store) UpdateToolSession(ctx context.Context, id, lastCommit, status 
 
 // GetSeenPaths returns all seen paths for the given session as a set.
 func (idx *store) GetSeenPaths(ctx context.Context, sessionID string) (map[string]bool, error) {
-	rows, err := conn(ctx, idx.db).QueryContext(ctx,
+	rows, err := conn(ctx, idx.rh.db).QueryContext(ctx,
 		`SELECT path FROM tool_seen_paths WHERE session_id = ?`, sessionID,
 	)
 	if err != nil {
@@ -108,7 +108,7 @@ func (idx *store) GetSeenPaths(ctx context.Context, sessionID string) (map[strin
 
 // AddSeenPaths batch-inserts seen paths for a session, ignoring duplicates.
 func (idx *store) AddSeenPaths(ctx context.Context, sessionID string, paths []string) error {
-	tx, err := idx.db.BeginTx(ctx, nil)
+	tx, err := idx.rh.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("AddSeenPaths begin: %w", err)
 	}
@@ -134,7 +134,7 @@ func (idx *store) AddSeenPaths(ctx context.Context, sessionID string, paths []st
 
 // EnqueuePaths batch-inserts items into the tool_queue for a session, ignoring duplicates.
 func (idx *store) EnqueuePaths(ctx context.Context, sessionID string, items []QueueItem) error {
-	tx, err := idx.db.BeginTx(ctx, nil)
+	tx, err := idx.rh.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("EnqueuePaths begin: %w", err)
 	}
@@ -161,7 +161,7 @@ func (idx *store) EnqueuePaths(ctx context.Context, sessionID string, items []Qu
 // DequeuePaths atomically selects and deletes up to `limit` items from the queue,
 // ordered by depth ASC then rowid ASC (breadth-first).
 func (idx *store) DequeuePaths(ctx context.Context, sessionID string, limit int) ([]QueueItem, error) {
-	tx, err := idx.db.BeginTx(ctx, nil)
+	tx, err := idx.rh.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, fmt.Errorf("DequeuePaths begin: %w", err)
 	}
@@ -211,7 +211,7 @@ func (idx *store) DequeuePaths(ctx context.Context, sessionID string, limit int)
 // QueueSize returns the number of items in the queue for a session.
 func (idx *store) QueueSize(ctx context.Context, sessionID string) (int, error) {
 	var count int
-	err := conn(ctx, idx.db).QueryRowContext(ctx,
+	err := conn(ctx, idx.rh.db).QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM tool_queue WHERE session_id = ?`, sessionID,
 	).Scan(&count)
 	if err != nil {

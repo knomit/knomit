@@ -48,7 +48,7 @@ const (
 //  5. MERGE OntologyNode hierarchy + UNDER edge
 //  6. Sync DERIVED_FROM edges from local refs
 func (idx *store) graphSyncFact(ctx context.Context, rec FactRecord) error {
-	return idx.graphSyncFactTx(ctx, idx.db, rec)
+	return idx.graphSyncFactTx(ctx, idx.rh.db, rec)
 }
 
 // graphSyncFactTx is the transactional version of graphSyncFact.
@@ -192,7 +192,7 @@ func (idx *store) graphMergeOntologyHierarchy(ctx context.Context, tx execer, fa
 // graphDeleteFact marks a Fact node as deleted and removes its outgoing edges
 // (except incoming DERIVED_FROM, which preserves lineage).
 func (idx *store) graphDeleteFact(ctx context.Context, path, blobHash string) error {
-	return idx.graphDeleteFactTx(ctx, idx.db, path, blobHash)
+	return idx.graphDeleteFactTx(ctx, idx.rh.db, path, blobHash)
 }
 
 func (idx *store) graphDeleteFactTx(ctx context.Context, tx execer, path, blobHash string) error {
@@ -266,7 +266,7 @@ func (idx *store) graphBuildSimilarityEdges(ctx context.Context, path, blobHash 
 		blobHash   string
 		similarity float64
 	}
-	rows, err := conn(ctx, idx.db).QueryContext(ctx,
+	rows, err := conn(ctx, idx.rh.db).QueryContext(ctx,
 		`SELECT f.path, f.blob_hash, (1.0 - fv.distance) as similarity
 		 FROM facts_vec fv
 		 JOIN facts f ON f.id = fv.rowid
@@ -296,7 +296,7 @@ func (idx *store) graphBuildSimilarityEdges(ctx context.Context, path, blobHash 
 	p := escapeCypherKey(path)
 	bh := escapeCypherKey(blobHash)
 	q := fmt.Sprintf(`SELECT cypher('MATCH (f:%s {path: "%s"})-[r:%s]->() WHERE f.blob_hash = "%s" DELETE r')`, NodeFact, p, EdgeSimilarTo, bh)
-	if _, err := conn(ctx, idx.db).ExecContext(ctx, q); err != nil {
+	if _, err := conn(ctx, idx.rh.db).ExecContext(ctx, q); err != nil {
 		return fmt.Errorf("delete old SIMILAR_TO: %w", err)
 	}
 
@@ -310,7 +310,7 @@ func (idx *store) graphBuildSimilarityEdges(ctx context.Context, path, blobHash 
 		np := escapeCypherKey(n.path)
 		nbh := escapeCypherKey(n.blobHash)
 		q = fmt.Sprintf(`SELECT cypher('MATCH (a:%s {path: "%s"}), (b:%s {path: "%s"}) WHERE a.blob_hash = "%s" AND b.blob_hash = "%s" MERGE (a)-[:%s]->(b)')`, NodeFact, p, NodeFact, np, bh, nbh, EdgeSimilarTo)
-		if _, err := conn(ctx, idx.db).ExecContext(ctx, q); err != nil {
+		if _, err := conn(ctx, idx.rh.db).ExecContext(ctx, q); err != nil {
 			return fmt.Errorf("create SIMILAR_TO %s→%s: %w", path, n.path, err)
 		}
 	}
@@ -358,7 +358,7 @@ func (idx *store) ClusterFacts(ctx context.Context, branch string, resolution fl
 			AND npt.key_id = (SELECT id FROM property_keys WHERE key = 'path' LIMIT 1)
 	`, resolution, NodeFact)
 
-	rows, err := conn(ctx, idx.db).QueryContext(ctx, query)
+	rows, err := conn(ctx, idx.rh.db).QueryContext(ctx, query)
 	if err != nil {
 		return ClusterResult{}, fmt.Errorf("louvain: %w", err)
 	}
@@ -378,7 +378,7 @@ func (idx *store) ClusterFacts(ctx context.Context, branch string, resolution fl
 	}
 
 	// Resolve branch to branchID for scoped filtering.
-	branchID, err := idx.branchID(ctx, branch)
+	branchID, err := idx.rh.branchID(ctx, branch)
 	if err != nil {
 		return ClusterResult{}, fmt.Errorf("ClusterFacts: %w", err)
 	}
@@ -399,7 +399,7 @@ func (idx *store) ClusterFacts(ctx context.Context, branch string, resolution fl
 		}
 		qry := `SELECT path FROM branch_facts WHERE branch_id = ? AND path IN (` + strings.Join(placeholders, ",") + `)`
 		args = append([]interface{}{branchID}, args...)
-		eRows, err := conn(ctx, idx.db).QueryContext(ctx, qry, args...)
+		eRows, err := conn(ctx, idx.rh.db).QueryContext(ctx, qry, args...)
 		if err == nil {
 			for eRows.Next() {
 				var p string
@@ -471,7 +471,7 @@ func (idx *store) graphExpandSearch(ctx context.Context, branchID int64, seeds m
 		`SELECT json_extract(value, '$.path') FROM json_each(cypher('MATCH (f:%s)-[:%s]-(neighbor:%s) WHERE (%s) AND NOT neighbor.deleted = true RETURN DISTINCT neighbor.path AS path'))`,
 		NodeFact, EdgeSimilarTo, NodeFact, pathFilter,
 	)
-	rows, err := conn(ctx, idx.db).QueryContext(ctx, q)
+	rows, err := conn(ctx, idx.rh.db).QueryContext(ctx, q)
 	if err == nil {
 		for rows.Next() {
 			var neighborPath string
@@ -494,7 +494,7 @@ func (idx *store) graphExpandSearch(ctx context.Context, branchID int64, seeds m
 		NodeFact, EdgeTagged, NodeEntity, EdgeTagged, NodeFact,
 		pathFilter,
 	)
-	rows, err = conn(ctx, idx.db).QueryContext(ctx, q)
+	rows, err = conn(ctx, idx.rh.db).QueryContext(ctx, q)
 	if err == nil {
 		for rows.Next() {
 			var neighborPath string
@@ -522,7 +522,7 @@ func (idx *store) graphExpandSearch(ctx context.Context, branchID int64, seeds m
 			args = append(args, p)
 		}
 		visible := make(map[string]bool, len(expanded))
-		rows, err := conn(ctx, idx.db).QueryContext(ctx,
+		rows, err := conn(ctx, idx.rh.db).QueryContext(ctx,
 			`SELECT path FROM branch_facts WHERE branch_id = ? AND path IN (`+strings.Join(placeholders, ",")+`)`,
 			args...,
 		)

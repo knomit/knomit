@@ -25,7 +25,7 @@ type FactsIter struct {
 // fact_id DESC. The caller must call Close() when done to release the
 // underlying database cursor.
 func (s *Service) FactsIter(ctx context.Context, branch string) (*FactsIter, error) {
-	branchID, err := s.idx.branchID(ctx, branch)
+	branchID, err := s.idx.rh.branchID(ctx, branch)
 	if err != nil {
 		return nil, err
 	}

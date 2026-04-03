@@ -130,7 +130,7 @@ func (idx *store) filterByEpisodeOps(ctx context.Context, results []SearchResult
 		args[i] = h
 	}
 
-	rows, err := conn(ctx, idx.db).QueryContext(ctx,
+	rows, err := conn(ctx, idx.rh.db).QueryContext(ctx,
 		`SELECT commit_hash, operation FROM commit_log WHERE commit_hash IN (`+ph[:len(ph)-1]+`) GROUP BY commit_hash`,
 		args...,
 	)
@@ -174,7 +174,7 @@ func (idx *store) filterByEpisodeOps(ctx context.Context, results []SearchResult
 // If Text is empty, all facts matching the non-text filters are returned with
 // score 100.
 func (idx *store) Search(ctx context.Context, branch string, q SearchQuery) ([]SearchResult, error) {
-	branchID, err := idx.branchID(ctx, branch)
+	branchID, err := idx.rh.branchID(ctx, branch)
 	if err != nil {
 		return nil, fmt.Errorf("search: %w", err)
 	}
@@ -189,7 +189,7 @@ func (idx *store) Search(ctx context.Context, branch string, q SearchQuery) ([]S
 	// ── Text-less path: return all facts matching filters with score 100 ──
 	if q.Text == "" {
 		args := append(append([]any{BlobObjectType, branchID}, flt.args...), limit)
-		rows, err := conn(ctx, idx.db).QueryContext(ctx,
+		rows, err := conn(ctx, idx.rh.db).QueryContext(ctx,
 			`SELECT f.path, f.title, f.blob_hash, f.type, f.domain, f.entities,
 			        f.confidence, f.sources, f.refs, f.evidence_weight,
 			        bf.commit_hash, o.data
@@ -247,7 +247,7 @@ func (idx *store) Search(ctx context.Context, branch string, q SearchQuery) ([]S
 			} else if q.MinSimilarity > 0.5 {
 				kLimit = limit * 3
 			}
-			rows, err := conn(ctx, idx.db).QueryContext(ctx,
+			rows, err := conn(ctx, idx.rh.db).QueryContext(ctx,
 				`SELECT f.path, (1.0 - fv.distance) as similarity
 				 FROM facts_vec fv
 				 JOIN facts f ON f.id = fv.rowid
@@ -308,7 +308,7 @@ func (idx *store) Search(ctx context.Context, branch string, q SearchQuery) ([]S
 		pathArgs = append(pathArgs, p)
 	}
 
-	metaRows, err := conn(ctx, idx.db).QueryContext(ctx,
+	metaRows, err := conn(ctx, idx.rh.db).QueryContext(ctx,
 		`SELECT f.path, f.title, f.blob_hash, f.type, f.domain, f.entities,
 		        f.confidence, f.sources, f.refs, f.evidence_weight
 		 FROM branch_facts bf
@@ -352,7 +352,7 @@ func (idx *store) Search(ctx context.Context, branch string, q SearchQuery) ([]S
 	for _, c := range candidates {
 		bodyArgs = append(bodyArgs, c.rec.BlobHash)
 	}
-	bodyRows, err := conn(ctx, idx.db).QueryContext(ctx,
+	bodyRows, err := conn(ctx, idx.rh.db).QueryContext(ctx,
 		`SELECT hash, data FROM objects WHERE type = ? AND hash IN (`+bodyPH[:len(bodyPH)-1]+`)`,
 		bodyArgs...,
 	)

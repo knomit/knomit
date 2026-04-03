@@ -21,7 +21,7 @@ import (
 //  5. Update meta.last_commit = HEAD.
 func (idx *store) Sync(ctx context.Context, git *Service, branch string) error {
 	// Ensure the branch exists in the branches table.
-	if _, err := idx.EnsureBranch(ctx, branch, "refs/heads/"+branch); err != nil {
+	if _, err := idx.rh.EnsureBranch(ctx, branch, "refs/heads/"+branch); err != nil {
 		return fmt.Errorf("sync: ensure branch: %w", err)
 	}
 

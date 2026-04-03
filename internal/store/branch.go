@@ -43,13 +43,27 @@ func (c *branchCache) remove(name string) {
 	delete(c.byName, name)
 }
 
+// repoHandler owns the database handle, branch cache, and branch operations.
+type repoHandler struct {
+	db     *sql.DB
+	cache  *branchCache
+	onDrop func(context.Context) error
+}
+
+// Compile-time assertion.
+var _ BranchIndex = (*repoHandler)(nil)
+
+func newRepoHandler(db *sql.DB) *repoHandler {
+	return &repoHandler{db: db, cache: newBranchCache()}
+}
+
 // EnsureBranch creates the branch if it doesn't exist, returns its ID.
-func (idx *store) EnsureBranch(ctx context.Context, name, gitRef string) (int64, error) {
-	if id, ok := idx.branches.get(name); ok {
+func (rh *repoHandler) EnsureBranch(ctx context.Context, name, gitRef string) (int64, error) {
+	if id, ok := rh.cache.get(name); ok {
 		return id, nil
 	}
 
-	_, err := conn(ctx, idx.db).ExecContext(ctx,
+	_, err := conn(ctx, rh.db).ExecContext(ctx,
 		`INSERT OR IGNORE INTO branches(name, git_ref) VALUES (?, ?)`,
 		name, gitRef,
 	)
@@ -58,24 +72,24 @@ func (idx *store) EnsureBranch(ctx context.Context, name, gitRef string) (int64,
 	}
 
 	var id int64
-	err = conn(ctx, idx.db).QueryRowContext(ctx, `SELECT id FROM branches WHERE name = ?`, name).Scan(&id)
+	err = conn(ctx, rh.db).QueryRowContext(ctx, `SELECT id FROM branches WHERE name = ?`, name).Scan(&id)
 	if err != nil {
 		return 0, fmt.Errorf("ensure branch lookup: %w", err)
 	}
 
-	idx.branches.set(name, id)
+	rh.cache.set(name, id)
 	return id, nil
 }
 
 // branchID returns the ID for a branch name, using the cache when possible.
 // Returns an error if the branch does not exist.
-func (idx *store) branchID(ctx context.Context, name string) (int64, error) {
-	if id, ok := idx.branches.get(name); ok {
+func (rh *repoHandler) branchID(ctx context.Context, name string) (int64, error) {
+	if id, ok := rh.cache.get(name); ok {
 		return id, nil
 	}
 
 	var id int64
-	err := conn(ctx, idx.db).QueryRowContext(ctx, `SELECT id FROM branches WHERE name = ?`, name).Scan(&id)
+	err := conn(ctx, rh.db).QueryRowContext(ctx, `SELECT id FROM branches WHERE name = ?`, name).Scan(&id)
 	if err == sql.ErrNoRows {
 		return 0, fmt.Errorf("branch %q not found", name)
 	}
@@ -83,24 +97,24 @@ func (idx *store) branchID(ctx context.Context, name string) (int64, error) {
 		return 0, fmt.Errorf("branch lookup: %w", err)
 	}
 
-	idx.branches.set(name, id)
+	rh.cache.set(name, id)
 	return id, nil
 }
 
 // ListBranches returns all registered branches.
 // MergeBranch copies all branch_facts entries from src to dst.
 // Conflicting paths (same path on both branches) are overwritten with src's version.
-func (idx *store) MergeBranch(ctx context.Context, src, dst string) error {
-	srcID, err := idx.branchID(ctx, src)
+func (rh *repoHandler) MergeBranch(ctx context.Context, src, dst string) error {
+	srcID, err := rh.branchID(ctx, src)
 	if err != nil {
 		return fmt.Errorf("merge: src %w", err)
 	}
-	dstID, err := idx.EnsureBranch(ctx, dst, "refs/heads/"+dst)
+	dstID, err := rh.EnsureBranch(ctx, dst, "refs/heads/"+dst)
 	if err != nil {
 		return fmt.Errorf("merge: dst %w", err)
 	}
 
-	_, err = conn(ctx, idx.db).ExecContext(ctx,
+	_, err = conn(ctx, rh.db).ExecContext(ctx,
 		`INSERT OR REPLACE INTO branch_facts(branch_id, path, fact_id, commit_hash)
 		 SELECT ?, path, fact_id, commit_hash
 		 FROM branch_facts WHERE branch_id = ?`,
@@ -113,27 +127,30 @@ func (idx *store) MergeBranch(ctx context.Context, src, dst string) error {
 }
 
 // DropBranch removes a branch and all its branch_facts entries, then runs GC.
-func (idx *store) DropBranch(ctx context.Context, name string) error {
-	id, err := idx.branchID(ctx, name)
+func (rh *repoHandler) DropBranch(ctx context.Context, name string) error {
+	id, err := rh.branchID(ctx, name)
 	if err != nil {
 		return fmt.Errorf("drop branch: %w", err)
 	}
 
-	if _, err := conn(ctx, idx.db).ExecContext(ctx, `DELETE FROM branch_facts WHERE branch_id = ?`, id); err != nil {
+	if _, err := conn(ctx, rh.db).ExecContext(ctx, `DELETE FROM branch_facts WHERE branch_id = ?`, id); err != nil {
 		return fmt.Errorf("drop branch_facts: %w", err)
 	}
-	if _, err := conn(ctx, idx.db).ExecContext(ctx, `DELETE FROM branches WHERE id = ?`, id); err != nil {
+	if _, err := conn(ctx, rh.db).ExecContext(ctx, `DELETE FROM branches WHERE id = ?`, id); err != nil {
 		return fmt.Errorf("drop branch row: %w", err)
 	}
 
-	idx.branches.remove(name)
+	rh.cache.remove(name)
 
-	return idx.GC(ctx)
+	if rh.onDrop != nil {
+		return rh.onDrop(ctx)
+	}
+	return nil
 }
 
 // ListBranches returns all registered branches.
-func (idx *store) ListBranches(ctx context.Context) ([]Branch, error) {
-	rows, err := conn(ctx, idx.db).QueryContext(ctx, `SELECT id, name, git_ref FROM branches ORDER BY name`)
+func (rh *repoHandler) ListBranches(ctx context.Context) ([]Branch, error) {
+	rows, err := conn(ctx, rh.db).QueryContext(ctx, `SELECT id, name, git_ref FROM branches ORDER BY name`)
 	if err != nil {
 		return nil, fmt.Errorf("list branches: %w", err)
 	}

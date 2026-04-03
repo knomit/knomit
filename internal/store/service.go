@@ -40,6 +40,7 @@ var _ FactIndex = (*Service)(nil)
 type Service struct {
 	db    *sql.DB
 	idx   *store
+	rh    *repoHandler
 	gits  *storegit.Storer
 	crypt *Crypt // nil if no key material provided
 
@@ -86,9 +87,11 @@ func Open(path string) (*Service, error) {
 	}
 
 	gits := storegit.NewStorer(db)
-	idx := newIndex(db)
+	rh := newRepoHandler(db)
+	idx := newIndex(rh)
+	rh.onDrop = idx.GC
 
-	return &Service{db: db, idx: idx, gits: gits}, nil
+	return &Service{db: db, idx: idx, rh: rh, gits: gits}, nil
 }
 
 // SetCrypt sets the encryption provider for credential storage.
@@ -96,6 +99,9 @@ func (s *Service) SetCrypt(c *Crypt) { s.crypt = c }
 
 // Index returns the store index.
 func (s *Service) Index() Store { return s.idx }
+
+// Branches returns the branch index.
+func (s *Service) Branches() BranchIndex { return s.rh }
 
 // Storer returns the go-git storer interface for use with git transport
 // (e.g. server.MapLoader for in-memory cloning).
