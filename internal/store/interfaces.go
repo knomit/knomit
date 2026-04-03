@@ -22,7 +22,7 @@ type FactIndex interface {
 	FactsIter(ctx context.Context, branch string) (*FactsIter, error)
 }
 
-// SearchIndex is the interface for the fact search index. Implemented by *Index.
+// SearchIndex is the interface for the fact search index. Implemented by *searchIndex.
 type SearchIndex interface {
 	Search(ctx context.Context, branch string, q SearchQuery) ([]SearchResult, error)
 	GetByPath(ctx context.Context, branch, path string) (*FactWithBody, error)
@@ -35,6 +35,9 @@ type SearchIndex interface {
 	ExplainFact(ctx context.Context, branch, path string) (ExplainResult, error)
 	ClusterFacts(ctx context.Context, branch string, resolution float64, minCommunitySize int) (ClusterResult, error)
 	RecentFacts(ctx context.Context, branch, pathPrefix, query string, limit, offset int, includeTypes, excludeTypes, domain, entities, epOps []string) ([]RecentFactEntry, int, error)
+	SetEmbedder(e Embedder)
+	Sync(ctx context.Context, git gitReader, branch string) error
+	Rebuild(ctx context.Context, git gitReader, branch string, progress RebuildProgress) error
 }
 
 // ToolSessionIndex is the interface for tool session persistence. Implemented by *Index.
@@ -71,14 +74,11 @@ type BranchIndex interface {
 }
 
 // Store is the composite interface for all index operations on a fact store.
-// Implemented by *Index.
+// Implemented by *store.
 type Store interface {
 	SearchIndex
 	PipelineIndex
 	ToolSessionIndex
-	SetEmbedder(e Embedder)
-	Sync(ctx context.Context, git *Service, branch string) error
-	Rebuild(ctx context.Context, git *Service, branch string, progress RebuildProgress) error
 }
 
 // Embedder computes vector embeddings for text.

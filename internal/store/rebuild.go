@@ -12,8 +12,8 @@ import (
 
 // rebuildFacts bulk-inserts facts via SQL JOIN with knomit_parse_fact(),
 // then populates branch_facts for the given branch.
-func (idx *store) rebuildFacts(ctx context.Context, git *Service, branch, head string, progress RebuildProgress) (int, error) {
-	branchID, err := idx.rh.EnsureBranch(ctx, branch, "refs/heads/"+branch)
+func (si *searchIndex) rebuildFacts(ctx context.Context, git gitReader, branch, head string, progress RebuildProgress) (int, error) {
+	branchID, err := si.rh.EnsureBranch(ctx, branch, "refs/heads/"+branch)
 	if err != nil {
 		return 0, fmt.Errorf("rebuildFacts: ensure branch: %w", err)
 	}
@@ -28,16 +28,16 @@ func (idx *store) rebuildFacts(ctx context.Context, git *Service, branch, head s
 	}
 
 	// Create temp table for the rebuild entries.
-	if _, err := conn(ctx, idx.rh.db).ExecContext(ctx, `CREATE TEMP TABLE IF NOT EXISTS _rebuild_entries (path TEXT PRIMARY KEY, blob_hash TEXT NOT NULL)`); err != nil {
+	if _, err := conn(ctx, si.rh.db).ExecContext(ctx, `CREATE TEMP TABLE IF NOT EXISTS _rebuild_entries (path TEXT PRIMARY KEY, blob_hash TEXT NOT NULL)`); err != nil {
 		return 0, fmt.Errorf("rebuildFacts: create temp table: %w", err)
 	}
 	// Ensure it's empty (in case of prior incomplete rebuild).
-	if _, err := conn(ctx, idx.rh.db).ExecContext(ctx, `DELETE FROM _rebuild_entries`); err != nil {
+	if _, err := conn(ctx, si.rh.db).ExecContext(ctx, `DELETE FROM _rebuild_entries`); err != nil {
 		return 0, fmt.Errorf("rebuildFacts: clear temp table: %w", err)
 	}
 
 	// Bulk-insert all (path, blobHash) pairs in a single transaction.
-	tx, err := idx.rh.db.BeginTx(ctx, nil)
+	tx, err := si.rh.db.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, fmt.Errorf("rebuildFacts: begin insert tx: %w", err)
 	}
@@ -59,7 +59,7 @@ func (idx *store) rebuildFacts(ctx context.Context, git *Service, branch, head s
 	}
 
 	// Bulk INSERT OR REPLACE facts from parsed blob data (no commit_hash in facts table).
-	res, err := conn(ctx, idx.rh.db).ExecContext(ctx, `
+	res, err := conn(ctx, si.rh.db).ExecContext(ctx, `
 		WITH parsed_entries AS (
 			SELECT e.path, e.blob_hash, knomit_parse_fact(o.data) AS parsed
 			FROM _rebuild_entries e
@@ -90,7 +90,7 @@ func (idx *store) rebuildFacts(ctx context.Context, git *Service, branch, head s
 	// Populate branch_facts: link each fact to this branch with its commit_hash.
 	// Prefer commit_log entries scoped to this branch; fall back to legacy rows
 	// with NULL branch_id (written before the branch existed in the branches table).
-	if _, err := conn(ctx, idx.rh.db).ExecContext(ctx, `
+	if _, err := conn(ctx, si.rh.db).ExecContext(ctx, `
 		INSERT OR REPLACE INTO branch_facts (branch_id, path, fact_id, commit_hash)
 		SELECT ?, f.path, f.id, COALESCE(cl.commit_hash, '')
 		FROM facts f
@@ -105,7 +105,7 @@ func (idx *store) rebuildFacts(ctx context.Context, git *Service, branch, head s
 	}
 
 	// Clean up temp table.
-	if _, err := conn(ctx, idx.rh.db).ExecContext(ctx, `DROP TABLE IF EXISTS _rebuild_entries`); err != nil {
+	if _, err := conn(ctx, si.rh.db).ExecContext(ctx, `DROP TABLE IF EXISTS _rebuild_entries`); err != nil {
 		log.Warn().Err(err).Msg("rebuildFacts: drop temp table")
 	}
 
@@ -119,8 +119,8 @@ func (idx *store) rebuildFacts(ctx context.Context, git *Service, branch, head s
 // rebuildEmbeddings computes embeddings for all facts missing from facts_vec.
 // Bodies are fetched one chunk at a time so memory usage is bounded by batchSize,
 // not by the total number of facts.
-func (idx *store) rebuildEmbeddings(ctx context.Context, progress RebuildProgress) (int, error) {
-	emb := idx.getEmbedder()
+func (si *searchIndex) rebuildEmbeddings(ctx context.Context, progress RebuildProgress) (int, error) {
+	emb := si.getEmbedder()
 	if emb == nil {
 		return 0, nil
 	}
@@ -128,7 +128,7 @@ func (idx *store) rebuildEmbeddings(ctx context.Context, progress RebuildProgres
 	batcher, hasBatch := emb.(BatchEmbedder)
 
 	var total int
-	if err := conn(ctx, idx.rh.db).QueryRowContext(ctx, `SELECT COUNT(*) FROM facts WHERE rowid NOT IN (SELECT rowid FROM facts_vec)`).Scan(&total); err != nil {
+	if err := conn(ctx, si.rh.db).QueryRowContext(ctx, `SELECT COUNT(*) FROM facts WHERE rowid NOT IN (SELECT rowid FROM facts_vec)`).Scan(&total); err != nil {
 		return 0, fmt.Errorf("rebuildEmbeddings: count: %w", err)
 	}
 
@@ -145,7 +145,7 @@ func (idx *store) rebuildEmbeddings(ctx context.Context, progress RebuildProgres
 		rowid int64
 		path  string
 	}
-	rows, err := conn(ctx, idx.rh.db).QueryContext(ctx, `SELECT rowid, path FROM facts WHERE rowid NOT IN (SELECT rowid FROM facts_vec)`)
+	rows, err := conn(ctx, si.rh.db).QueryContext(ctx, `SELECT rowid, path FROM facts WHERE rowid NOT IN (SELECT rowid FROM facts_vec)`)
 	if err != nil {
 		return 0, fmt.Errorf("rebuildEmbeddings: query rowids: %w", err)
 	}
@@ -193,7 +193,7 @@ func (idx *store) rebuildEmbeddings(ctx context.Context, progress RebuildProgres
 			WHERE f.rowid IN (` + string(placeholders) + `)`
 		qargs := append([]any{BlobObjectType}, args...)
 
-		bodyRows, err := conn(ctx, idx.rh.db).QueryContext(ctx, q, qargs...)
+		bodyRows, err := conn(ctx, si.rh.db).QueryContext(ctx, q, qargs...)
 		if err != nil {
 			return done, fmt.Errorf("rebuildEmbeddings: query bodies: %w", err)
 		}
@@ -215,7 +215,7 @@ func (idx *store) rebuildEmbeddings(ctx context.Context, progress RebuildProgres
 			continue
 		}
 
-		tx, err := idx.rh.db.BeginTx(ctx, nil)
+		tx, err := si.rh.db.BeginTx(ctx, nil)
 		if err != nil {
 			return done, fmt.Errorf("rebuildEmbeddings: begin tx: %w", err)
 		}
@@ -274,10 +274,10 @@ func (idx *store) rebuildEmbeddings(ctx context.Context, progress RebuildProgres
 
 // rebuildGraph syncs graph nodes/edges for all facts in a single transaction,
 // then builds similarity edges after commit.
-func (idx *store) rebuildGraph(ctx context.Context, progress RebuildProgress) (int, error) {
+func (si *searchIndex) rebuildGraph(ctx context.Context, progress RebuildProgress) (int, error) {
 	// Read all facts ordered by oldest commit first so that when a fact's
 	// DERIVED_FROM edges are created, its ref targets are already graph nodes.
-	rows, err := conn(ctx, idx.rh.db).QueryContext(ctx, `
+	rows, err := conn(ctx, si.rh.db).QueryContext(ctx, `
 		SELECT f.path, f.title, f.blob_hash, f.type, f.domain, f.entities, f.confidence, f.sources, f.refs, f.evidence_weight
 		FROM facts f
 		LEFT JOIN (
@@ -311,14 +311,14 @@ func (idx *store) rebuildGraph(ctx context.Context, progress RebuildProgress) (i
 	}
 
 	// Single transaction for all graph sync operations.
-	tx, err := idx.rh.db.BeginTx(ctx, nil)
+	tx, err := si.rh.db.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, fmt.Errorf("rebuildGraph: begin tx: %w", err)
 	}
 	defer tx.Rollback()
 
 	for i, rec := range facts {
-		if err := idx.graphSyncFactTx(ctx, tx, rec); err != nil {
+		if err := si.graphSyncFactTx(ctx, tx, rec); err != nil {
 			log.Warn().Err(err).Str("path", rec.Path).Msg("rebuildGraph: sync failed, skipping")
 			continue
 		}
@@ -333,17 +333,17 @@ func (idx *store) rebuildGraph(ctx context.Context, progress RebuildProgress) (i
 
 	// Build similarity edges after commit (needs committed data for KNN).
 	// Batch: collect all neighbors first, then write all edges in one transaction.
-	if idx.getEmbedder() != nil {
+	if si.getEmbedder() != nil {
 		type simEdge struct{ fromPath, fromBH, toPath, toBH string }
 		var edges []simEdge
 
 		for _, rec := range facts {
-			emb, err := idx.getEmbeddingByFact(ctx, rec.Path, rec.BlobHash)
+			emb, err := si.getEmbeddingByFact(ctx, rec.Path, rec.BlobHash)
 			if err != nil || emb == nil {
 				continue
 			}
 			vecBlob := float32SliceToBytes(emb)
-			rows, err := conn(ctx, idx.rh.db).QueryContext(ctx,
+			rows, err := conn(ctx, si.rh.db).QueryContext(ctx,
 				`SELECT f.path, f.blob_hash, (1.0 - fv.distance) as similarity
 				 FROM facts_vec fv
 				 JOIN facts f ON f.id = fv.rowid
@@ -370,7 +370,7 @@ func (idx *store) rebuildGraph(ctx context.Context, progress RebuildProgress) (i
 
 		// Batch-write all similarity edges in a single transaction.
 		if len(edges) > 0 {
-			simTx, err := idx.rh.db.BeginTx(ctx, nil)
+			simTx, err := si.rh.db.BeginTx(ctx, nil)
 			if err != nil {
 				log.Warn().Err(err).Msg("rebuildGraph: begin similarity tx")
 			} else {

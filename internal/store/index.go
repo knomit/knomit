@@ -18,7 +18,6 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-	"sync"
 
 	"knomit/internal/fact"
 	"knomit/internal/store/migrate"
@@ -95,37 +94,14 @@ type gitReader interface {
 
 // Index is the search index backed by SQLite with sqlite-vec.
 type store struct {
-	rh      *repoHandler
-	embedMu sync.RWMutex
-	embedder Embedder
+	rh *repoHandler
+	*searchIndex
 }
 
 // newIndex wraps an existing *repoHandler. Schema must already be applied.
 // Used by Service.Open to construct the Index over the shared database.
 func newIndex(rh *repoHandler) *store {
-	return &store{rh: rh}
-}
-
-// SetEmbedder attaches an Embedder to the index. When set, Upsert will call
-// Embed on each record's body and persist the result in facts_vec.
-func (idx *store) SetEmbedder(e Embedder) {
-	idx.embedMu.Lock()
-	defer idx.embedMu.Unlock()
-	idx.embedder = e
-}
-
-// EmbedderSet reports whether an Embedder has been attached to this index.
-func (idx *store) EmbedderSet() bool {
-	idx.embedMu.RLock()
-	defer idx.embedMu.RUnlock()
-	return idx.embedder != nil
-}
-
-// getEmbedder returns the current Embedder under a read lock.
-func (idx *store) getEmbedder() Embedder {
-	idx.embedMu.RLock()
-	defer idx.embedMu.RUnlock()
-	return idx.embedder
+	return &store{rh: rh, searchIndex: &searchIndex{rh: rh}}
 }
 
 // New opens (or creates) a SQLite search index at path and applies all
@@ -153,7 +129,7 @@ func New(path string) (Store, error) {
 	}
 
 	rh := newRepoHandler(db)
-	idx := &store{rh: rh}
+	idx := newIndex(rh)
 	rh.onDrop = idx.GC
 	return idx, nil
 }
@@ -187,21 +163,21 @@ func extractBody(raw []byte) string {
 // Completions returns autocomplete suggestions for a given filter category and prefix,
 // scoped to the given branch.
 // Supported categories: "domain", "entity", "type", "ep", "path".
-func (idx *store) Completions(ctx context.Context, branch, category, prefix string, limit int) ([]string, error) {
-	branchID, err := idx.rh.branchID(ctx, branch)
+func (si *searchIndex) Completions(ctx context.Context, branch, category, prefix string, limit int) ([]string, error) {
+	branchID, err := si.rh.branchID(ctx, branch)
 	if err != nil {
 		return nil, fmt.Errorf("completions: %w", err)
 	}
 
 	switch category {
 	case "domain":
-		return idx.queryDistinct(ctx,
+		return si.queryDistinct(ctx,
 			`SELECT DISTINCT fd.domain FROM fact_domains fd
 			 JOIN branch_facts bf ON bf.fact_id = fd.fact_id
 			 WHERE bf.branch_id = ? AND fd.domain LIKE ? LIMIT ?`,
 			branchID, prefix+"%", limit)
 	case "entity":
-		return idx.queryDistinct(ctx,
+		return si.queryDistinct(ctx,
 			`SELECT DISTINCT fe.entity FROM fact_entities fe
 			 JOIN branch_facts bf ON bf.fact_id = fe.fact_id
 			 WHERE bf.branch_id = ? AND fe.entity LIKE ? LIMIT ?`,
@@ -211,7 +187,7 @@ func (idx *store) Completions(ctx context.Context, branch, category, prefix stri
 	case "ep":
 		return []string{"learn", "update", "retract", "subsume", "synthesize", "sync"}, nil
 	case "path":
-		rows, err := conn(ctx, idx.rh.db).QueryContext(ctx,
+		rows, err := conn(ctx, si.rh.db).QueryContext(ctx,
 			`SELECT DISTINCT f.path
 			 FROM branch_facts bf
 			 JOIN facts f ON f.id = bf.fact_id
@@ -250,8 +226,8 @@ func (idx *store) Completions(ctx context.Context, branch, category, prefix stri
 }
 
 // queryDistinct executes a query and returns distinct non-empty string values.
-func (idx *store) queryDistinct(ctx context.Context, query string, args ...any) ([]string, error) {
-	rows, err := conn(ctx, idx.rh.db).QueryContext(ctx, query, args...)
+func (si *searchIndex) queryDistinct(ctx context.Context, query string, args ...any) ([]string, error) {
+	rows, err := conn(ctx, si.rh.db).QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -277,13 +253,13 @@ type StatsResult struct {
 
 // Stats returns aggregate statistics over all indexed facts on a branch,
 // optionally filtered to those whose path starts with pathPrefix.
-func (idx *store) Stats(ctx context.Context, branch, pathPrefix string) (StatsResult, error) {
+func (si *searchIndex) Stats(ctx context.Context, branch, pathPrefix string) (StatsResult, error) {
 	res := StatsResult{
 		Domains:  make(map[string]int),
 		Entities: make(map[string]int),
 	}
 
-	branchID, err := idx.rh.branchID(ctx, branch)
+	branchID, err := si.rh.branchID(ctx, branch)
 	if err != nil {
 		return res, fmt.Errorf("stats: %w", err)
 	}
@@ -299,7 +275,7 @@ func (idx *store) Stats(ctx context.Context, branch, pathPrefix string) (StatsRe
 		q += ` AND f.path LIKE ?`
 		args = append(args, pathPrefix+"%")
 	}
-	if err := conn(ctx, idx.rh.db).QueryRowContext(ctx, q, args...).Scan(&res.Total, &avgConf); err != nil {
+	if err := conn(ctx, si.rh.db).QueryRowContext(ctx, q, args...).Scan(&res.Total, &avgConf); err != nil {
 		return res, err
 	}
 	if avgConf != nil {
@@ -318,7 +294,7 @@ func (idx *store) Stats(ctx context.Context, branch, pathPrefix string) (StatsRe
 		dargs = append(dargs, pathPrefix+"%")
 	}
 	dq += ` GROUP BY d.value`
-	drows, err := conn(ctx, idx.rh.db).QueryContext(ctx, dq, dargs...)
+	drows, err := conn(ctx, si.rh.db).QueryContext(ctx, dq, dargs...)
 	if err != nil {
 		return res, err
 	}
@@ -343,7 +319,7 @@ func (idx *store) Stats(ctx context.Context, branch, pathPrefix string) (StatsRe
 		eargs = append(eargs, pathPrefix+"%")
 	}
 	eq += ` GROUP BY e.value`
-	erows, err := conn(ctx, idx.rh.db).QueryContext(ctx, eq, eargs...)
+	erows, err := conn(ctx, si.rh.db).QueryContext(ctx, eq, eargs...)
 	if err != nil {
 		return res, err
 	}

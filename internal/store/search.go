@@ -100,7 +100,7 @@ func newFactFilter(q SearchQuery) *factFilter {
 // the allowed set. It performs a single bulk SQL lookup of operations by
 // commit_hash from commit_log (same database). If ops is empty, all results
 // are kept unchanged.
-func (idx *store) filterByEpisodeOps(ctx context.Context, results []SearchResult, ops []string) ([]SearchResult, error) {
+func (si *searchIndex) filterByEpisodeOps(ctx context.Context, results []SearchResult, ops []string) ([]SearchResult, error) {
 	if len(ops) == 0 || len(results) == 0 {
 		return results, nil
 	}
@@ -130,7 +130,7 @@ func (idx *store) filterByEpisodeOps(ctx context.Context, results []SearchResult
 		args[i] = h
 	}
 
-	rows, err := conn(ctx, idx.rh.db).QueryContext(ctx,
+	rows, err := conn(ctx, si.rh.db).QueryContext(ctx,
 		`SELECT commit_hash, operation FROM commit_log WHERE commit_hash IN (`+ph[:len(ph)-1]+`) GROUP BY commit_hash`,
 		args...,
 	)
@@ -173,8 +173,8 @@ func (idx *store) filterByEpisodeOps(ctx context.Context, results []SearchResult
 //
 // If Text is empty, all facts matching the non-text filters are returned with
 // score 100.
-func (idx *store) Search(ctx context.Context, branch string, q SearchQuery) ([]SearchResult, error) {
-	branchID, err := idx.rh.branchID(ctx, branch)
+func (si *searchIndex) Search(ctx context.Context, branch string, q SearchQuery) ([]SearchResult, error) {
+	branchID, err := si.rh.branchID(ctx, branch)
 	if err != nil {
 		return nil, fmt.Errorf("search: %w", err)
 	}
@@ -189,7 +189,7 @@ func (idx *store) Search(ctx context.Context, branch string, q SearchQuery) ([]S
 	// ── Text-less path: return all facts matching filters with score 100 ──
 	if q.Text == "" {
 		args := append(append([]any{BlobObjectType, branchID}, flt.args...), limit)
-		rows, err := conn(ctx, idx.rh.db).QueryContext(ctx,
+		rows, err := conn(ctx, si.rh.db).QueryContext(ctx,
 			`SELECT f.path, f.title, f.blob_hash, f.type, f.domain, f.entities,
 			        f.confidence, f.sources, f.refs, f.evidence_weight,
 			        bf.commit_hash, o.data
@@ -215,7 +215,7 @@ func (idx *store) Search(ctx context.Context, branch string, q SearchQuery) ([]S
 		if err := rows.Err(); err != nil {
 			return nil, err
 		}
-		return idx.filterByEpisodeOps(ctx, out, q.EpisodeOps)
+		return si.filterByEpisodeOps(ctx, out, q.EpisodeOps)
 	}
 
 	// ── Vector (embedding) search ─────────────────────────────────────────
@@ -225,7 +225,7 @@ func (idx *store) Search(ctx context.Context, branch string, q SearchQuery) ([]S
 	}
 
 	vecSimByPath := make(map[string]float64)
-	emb := idx.getEmbedder()
+	emb := si.getEmbedder()
 	if emb == nil && len(q.QueryVec) == 0 {
 		log.Debug().Msg("search: no embedder configured, skipping vec search")
 	} else {
@@ -247,7 +247,7 @@ func (idx *store) Search(ctx context.Context, branch string, q SearchQuery) ([]S
 			} else if q.MinSimilarity > 0.5 {
 				kLimit = limit * 3
 			}
-			rows, err := conn(ctx, idx.rh.db).QueryContext(ctx,
+			rows, err := conn(ctx, si.rh.db).QueryContext(ctx,
 				`SELECT f.path, (1.0 - fv.distance) as similarity
 				 FROM facts_vec fv
 				 JOIN facts f ON f.id = fv.rowid
@@ -274,7 +274,7 @@ func (idx *store) Search(ctx context.Context, branch string, q SearchQuery) ([]S
 	}
 
 	if graphHops := q.GraphHops; graphHops > 0 && len(vecSimByPath) > 0 {
-		for path, score := range idx.graphExpandSearch(ctx, branchID, vecSimByPath, graphHops) {
+		for path, score := range si.graphExpandSearch(ctx, branchID, vecSimByPath, graphHops) {
 			if _, exists := vecSimByPath[path]; !exists {
 				vecSimByPath[path] = score
 			}
@@ -308,7 +308,7 @@ func (idx *store) Search(ctx context.Context, branch string, q SearchQuery) ([]S
 		pathArgs = append(pathArgs, p)
 	}
 
-	metaRows, err := conn(ctx, idx.rh.db).QueryContext(ctx,
+	metaRows, err := conn(ctx, si.rh.db).QueryContext(ctx,
 		`SELECT f.path, f.title, f.blob_hash, f.type, f.domain, f.entities,
 		        f.confidence, f.sources, f.refs, f.evidence_weight
 		 FROM branch_facts bf
@@ -352,7 +352,7 @@ func (idx *store) Search(ctx context.Context, branch string, q SearchQuery) ([]S
 	for _, c := range candidates {
 		bodyArgs = append(bodyArgs, c.rec.BlobHash)
 	}
-	bodyRows, err := conn(ctx, idx.rh.db).QueryContext(ctx,
+	bodyRows, err := conn(ctx, si.rh.db).QueryContext(ctx,
 		`SELECT hash, data FROM objects WHERE type = ? AND hash IN (`+bodyPH[:len(bodyPH)-1]+`)`,
 		bodyArgs...,
 	)
@@ -380,5 +380,5 @@ func (idx *store) Search(ctx context.Context, branch string, q SearchQuery) ([]S
 		c.rec.Body = bodies[c.rec.BlobHash]
 		out = append(out, SearchResult{FactWithBody: c.rec, Score: c.score * 100.0})
 	}
-	return idx.filterByEpisodeOps(ctx, out, q.EpisodeOps)
+	return si.filterByEpisodeOps(ctx, out, q.EpisodeOps)
 }
