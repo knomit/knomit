@@ -90,7 +90,7 @@ func handleRebuild() http.HandlerFunc {
 					emit(repos.TaskEvent{Status: "running", Phase: subPhase, Message: fmt.Sprintf("%d/%d", done, total), Repo: repo})
 				}
 			}
-			if err := svc.Search().Rebuild(r.Context(), svc, branch, progress); err != nil {
+			if err := svc.Search().Rebuild(r.Context(), branch, progress); err != nil {
 				emit(repos.TaskEvent{Status: "error", Message: err.Error(), Repo: repo})
 				return
 			}

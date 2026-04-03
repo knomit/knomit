@@ -216,7 +216,7 @@ func handleTestConnectivity(rm *repos.Manager, sm *SessionManager, agentBranch s
 		// Count local facts.
 		localFactCount := 0
 		if localSvc != nil {
-			localFiles, err := localSvc.ListAll(r.Context(), agentBranch)
+			localFiles, err := localSvc.Facts().ListAll(r.Context(), agentBranch)
 			if err == nil {
 				localFactCount = len(localFiles)
 			}
@@ -325,7 +325,7 @@ func handlePreview(rm *repos.Manager, sm *SessionManager, agentBranch string) ht
 
 		// List remote paths.
 		remotePaths := make(map[string]struct{})
-		remoteFiles, err := remoteStore.ListAll(r.Context(), remoteAgentBranch)
+		remoteFiles, err := remoteStore.Facts().ListAll(r.Context(), remoteAgentBranch)
 		if err != nil {
 			log.Warn().Err(err).Str("repo", repo).Msg("preview: list remote")
 		} else {
@@ -732,13 +732,13 @@ func (s *Server) handleCommit(rm *repos.Manager, sm *SessionManager, agentBranch
 					})
 				}
 			}
-			if err := svc.Search().Rebuild(r.Context(), svc, rebuildBranch, progress); err != nil {
+			if err := svc.Search().Rebuild(r.Context(), rebuildBranch, progress); err != nil {
 				log.Warn().Err(err).Str("repo", repo).Msg("commit: index rebuild failed")
 			} else {
 				log.Info().Str("repo", repo).Msg("commit: index rebuilt from swapped store")
 				// Set pipeline watermarks to HEAD so the first review/hypothesize
 				// doesn't treat every cloned fact as dirty.
-				if head, err := svc.HeadCommit(r.Context(), rebuildBranch); err == nil {
+				if head, err := svc.Facts().HeadCommit(r.Context(), rebuildBranch); err == nil {
 					for _, tool := range []string{"review", "hypothesize"} {
 						if err := svc.Pipeline().SetPipelineWatermark(r.Context(), tool, rebuildBranch, head); err != nil {
 							log.Warn().Err(err).Str("repo", repo).Str("tool", tool).Msg("commit: pipeline watermark set failed")

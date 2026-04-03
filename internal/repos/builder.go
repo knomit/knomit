@@ -142,7 +142,7 @@ func (b *repoBuilder) setupIndex() {
 	if b.embedder != nil {
 		b.idx.SetEmbedder(b.embedder)
 	}
-	if err := b.idx.Sync(context.Background(), b.svc, b.agentBranch); err != nil {
+	if err := b.idx.Sync(context.Background(), b.agentBranch); err != nil {
 		log.Warn().Err(err).Str("repo", b.name).Msg("initial index sync failed")
 	}
 }
@@ -153,7 +153,7 @@ func (b *repoBuilder) setupIndex() {
 func (b *repoBuilder) seedWatermarks() {
 	for _, tool := range []string{"review", "hypothesize"} {
 		if wm, _ := b.svc.Pipeline().GetPipelineWatermark(context.Background(), tool, b.agentBranch); wm == "" {
-			if head, err := b.svc.HeadCommit(context.Background(), b.agentBranch); err == nil {
+			if head, err := b.svc.Facts().HeadCommit(context.Background(), b.agentBranch); err == nil {
 				if err := b.svc.Pipeline().SetPipelineWatermark(context.Background(), tool, b.agentBranch, head); err != nil {
 					log.Warn().Err(err).Str("tool", tool).Msg("pipeline watermark: initial set failed")
 				}
@@ -186,7 +186,7 @@ func (b *repoBuilder) build() *RepoInstance {
 		ri.mu.RLock()
 		currentSvc := ri.svc
 		ri.mu.RUnlock()
-		if err := currentSvc.Search().Sync(context.Background(), currentSvc, b.agentBranch); err != nil {
+		if err := currentSvc.Search().Sync(context.Background(), b.agentBranch); err != nil {
 			log.Warn().Err(err).Str("repo", b.name).Msg("observer sync failed")
 		}
 		hub.broadcastStatus(hash)
