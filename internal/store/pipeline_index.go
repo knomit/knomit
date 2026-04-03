@@ -191,18 +191,14 @@ func (pi *pipelineIndex) SetPipelineWorkItemResponse(ctx context.Context, id int
 // PipelineWorkItemStats returns the count of completed and remaining work items for a session.
 func (pi *pipelineIndex) PipelineWorkItemStats(ctx context.Context, sessionID string) (completed, remaining int, err error) {
 	err = conn(ctx, pi.rh.db).QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM pipeline_work_items WHERE session_id = ? AND response IS NOT NULL`,
+		`SELECT
+			SUM(CASE WHEN response IS NOT NULL THEN 1 ELSE 0 END),
+			SUM(CASE WHEN response IS NULL     THEN 1 ELSE 0 END)
+		 FROM pipeline_work_items WHERE session_id = ?`,
 		sessionID,
-	).Scan(&completed)
+	).Scan(&completed, &remaining)
 	if err != nil {
-		return 0, 0, fmt.Errorf("PipelineWorkItemStats completed: %w", err)
-	}
-	err = conn(ctx, pi.rh.db).QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM pipeline_work_items WHERE session_id = ? AND response IS NULL`,
-		sessionID,
-	).Scan(&remaining)
-	if err != nil {
-		return 0, 0, fmt.Errorf("PipelineWorkItemStats remaining: %w", err)
+		return 0, 0, fmt.Errorf("PipelineWorkItemStats: %w", err)
 	}
 	return completed, remaining, nil
 }

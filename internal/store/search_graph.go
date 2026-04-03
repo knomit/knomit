@@ -93,12 +93,22 @@ func (si *searchIndex) filterByBranch(ctx context.Context, refs []RefSummary, br
 	if len(refs) == 0 {
 		return refs
 	}
-	visible := make(map[string]bool)
-	rows, err := conn(ctx, si.rh.db).QueryContext(ctx, `SELECT path FROM branch_facts WHERE branch_id = ?`, branchID)
+	placeholders := make([]string, len(refs))
+	args := make([]any, len(refs)+1)
+	args[0] = branchID
+	for i, r := range refs {
+		placeholders[i] = "?"
+		args[i+1] = r.Path
+	}
+	rows, err := conn(ctx, si.rh.db).QueryContext(ctx,
+		`SELECT path FROM branch_facts WHERE branch_id = ? AND path IN (`+strings.Join(placeholders, ",")+`)`,
+		args...,
+	)
 	if err != nil {
 		return refs
 	}
 	defer rows.Close()
+	visible := make(map[string]bool, len(refs))
 	for rows.Next() {
 		var p string
 		rows.Scan(&p)

@@ -18,17 +18,7 @@ func parseFact(path, content string) (FactRecord, error) {
 	if err != nil {
 		return FactRecord{}, err
 	}
-	return FactRecord{
-		Path:           f.Path(),
-		Title:          f.Title,
-		Type:           string(f.Type),
-		Domain:         f.Domain,
-		Entities:       f.Entities,
-		Confidence:     f.Confidence,
-		Sources:        f.Sources,
-		Refs:           f.Refs,
-		EvidenceWeight: f.EvidenceWeight,
-	}, nil
+	return NewFactRecord(f, ""), nil
 }
 
 // Compile-time interface checks.

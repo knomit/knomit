@@ -133,7 +133,7 @@ func (si *searchIndex) recentFactsSearch(ctx context.Context, branch, pathPrefix
 		 FROM branch_facts bf
 		 JOIN facts f ON f.id = bf.fact_id
 		 LEFT JOIN commit_log cl ON bf.commit_hash = cl.commit_hash AND f.path = cl.path
-		 WHERE bf.branch_id = ? AND f.path IN (`+join(placeholders, ",")+`)
+		 WHERE bf.branch_id = ? AND f.path IN (`+strings.Join(placeholders, ",")+`)
 		 ORDER BY cl.committed_at DESC, f.path ASC`,
 		args...,
 	)
@@ -191,17 +191,6 @@ func (si *searchIndex) LastCommitForPath(ctx context.Context, branch, path strin
 		return "", false
 	}
 	return hash, true
-}
-
-func join(ss []string, sep string) string {
-	var b strings.Builder
-	for i, s := range ss {
-		if i > 0 {
-			b.WriteString(sep)
-		}
-		b.WriteString(s)
-	}
-	return b.String()
 }
 
 // ── Search ────────────────────────────────────────────────────────────────────

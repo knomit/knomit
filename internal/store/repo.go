@@ -19,6 +19,33 @@ import (
 
 )
 
+// initRepoConfig stamps the repo config with the knomit identity and disables
+// GPG signing, which must be done for both fresh and remote-initialized repos.
+func initRepoConfig(repo *gogit.Repository, label string) error {
+	cfg, err := repo.Config()
+	if err != nil {
+		return fmt.Errorf("%s: read config: %w", label, err)
+	}
+	cfg.User.Name = "knomit"
+	cfg.User.Email = "knomit@local"
+	if cfg.Raw != nil {
+		cfg.Raw.Section("commit").SetOption("gpgsign", "false")
+	}
+	if err := repo.SetConfig(cfg); err != nil {
+		return fmt.Errorf("%s: set config: %w", label, err)
+	}
+	return nil
+}
+
+// defaultAgentBranch returns "agent/<hostname>", falling back to "agent/local".
+func defaultAgentBranch() string {
+	hostname, err := os.Hostname()
+	if err != nil || hostname == "" {
+		hostname = "local"
+	}
+	return "agent/" + hostname
+}
+
 // OpenRepo opens an existing knomit git repo using the Service's storer.
 // Populates s.rh.repo and backfills the commit log.
 func (s *Service) OpenRepo() error {
@@ -51,17 +78,8 @@ func (s *Service) InitRepo(initFiles map[string]string, agentBranch string) erro
 		return fmt.Errorf("InitRepo: git init: %w", err)
 	}
 
-	cfg, err := repo.Config()
-	if err != nil {
-		return fmt.Errorf("InitRepo: read config: %w", err)
-	}
-	cfg.User.Name = "knomit"
-	cfg.User.Email = "knomit@local"
-	if cfg.Raw != nil {
-		cfg.Raw.Section("commit").SetOption("gpgsign", "false")
-	}
-	if err := repo.SetConfig(cfg); err != nil {
-		return fmt.Errorf("InitRepo: set config: %w", err)
+	if err := initRepoConfig(repo, "InitRepo"); err != nil {
+		return err
 	}
 
 	rootManifest := "# Knowledge Base\n\nRoot manifest.\n"
@@ -79,11 +97,7 @@ func (s *Service) InitRepo(initFiles map[string]string, agentBranch string) erro
 	}
 
 	if agentBranch == "" {
-		hostname, err := os.Hostname()
-		if err != nil {
-			hostname = "local"
-		}
-		agentBranch = "agent/" + hostname
+		agentBranch = defaultAgentBranch()
 	}
 	agentRefName := plumbing.NewBranchReferenceName(agentBranch)
 
@@ -157,17 +171,8 @@ func (s *Service) InitFromRemote(originURL string, auth transport.AuthMethod, ag
 		return fmt.Errorf("InitFromRemote: git init: %w", err)
 	}
 
-	cfg, err := repo.Config()
-	if err != nil {
-		return fmt.Errorf("InitFromRemote: read config: %w", err)
-	}
-	cfg.User.Name = "knomit"
-	cfg.User.Email = "knomit@local"
-	if cfg.Raw != nil {
-		cfg.Raw.Section("commit").SetOption("gpgsign", "false")
-	}
-	if err := repo.SetConfig(cfg); err != nil {
-		return fmt.Errorf("InitFromRemote: set config: %w", err)
+	if err := initRepoConfig(repo, "InitFromRemote"); err != nil {
+		return err
 	}
 
 	_, err = repo.CreateRemote(&gogitconfig.RemoteConfig{
@@ -193,11 +198,7 @@ func (s *Service) InitFromRemote(originURL string, auth transport.AuthMethod, ag
 	}
 
 	if agentBranch == "" {
-		hostname, err := os.Hostname()
-		if err != nil {
-			hostname = "local"
-		}
-		agentBranch = "agent/" + hostname
+		agentBranch = defaultAgentBranch()
 	}
 	agentRefName := plumbing.NewBranchReferenceName(agentBranch)
 
@@ -255,11 +256,7 @@ func (s *Service) initFromEmptyRemote(repo *gogit.Repository, originURL string, 
 		return fmt.Errorf("InitFromRemote: empty remote fallback: %w", writeErr)
 	}
 	if agentBranch == "" {
-		hostname, _ := os.Hostname()
-		if hostname == "" {
-			hostname = "local"
-		}
-		agentBranch = "agent/" + hostname
+		agentBranch = defaultAgentBranch()
 	}
 	agentRefName := plumbing.NewBranchReferenceName(agentBranch)
 	if writeErr = s.rh.gits.SetReference(plumbing.NewHashReference(agentRefName, lastCommit)); writeErr != nil {

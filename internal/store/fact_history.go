@@ -38,9 +38,6 @@ func (fi *factIndex) Log(ctx context.Context, branch, path string) ([]LogEntry, 
 			return io.EOF
 		}
 		hash := c.Hash.String()
-		if len(hash) > 8 {
-			hash = hash[:8]
-		}
 		fl := c.Message
 		if idx := strings.IndexByte(fl, '\n'); idx >= 0 {
 			fl = fl[:idx]
