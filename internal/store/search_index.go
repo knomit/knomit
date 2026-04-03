@@ -2005,7 +2005,7 @@ func (si *searchIndex) graphInsertEdge(ctx context.Context, sourceID, targetID i
 // to the corresponding Fact node. Deleted entries are skipped.
 //
 // Returns the number of FactVersion nodes successfully created.
-func (si *searchIndex) rebuildGraphHistory(ctx context.Context, git gitReader, branch string, progress RebuildProgress) (int, error) {
+func (si *searchIndex) rebuildGraphHistory(ctx context.Context, branch string, progress RebuildProgress) (int, error) {
 	rows, err := conn(ctx, si.rh.db).QueryContext(ctx, `
 		SELECT path, commit_hash, committed_at
 		FROM commit_log
@@ -2062,7 +2062,7 @@ func (si *searchIndex) rebuildGraphHistory(ctx context.Context, git gitReader, b
 	var created []createdVersion
 
 	for _, v := range versions {
-		content, err := git.readFileAtCommit(ctx, branch, v.path, v.commitHash)
+		content, err := si.rh.readFileAtCommit(ctx, branch, v.path, v.commitHash)
 		if err != nil {
 			log.Debug().Err(err).Str("path", v.path).Str("commit", v.commitHash[:8]).Msg("rebuildGraphHistory: skip (file not found at commit)")
 			continue
@@ -2231,13 +2231,13 @@ func (si *searchIndex) graphSetFactVersionProps(ctx context.Context, commitHash 
 
 // rebuildFacts bulk-inserts facts via SQL JOIN with knomit_parse_fact(),
 // then populates branch_facts for the given branch.
-func (si *searchIndex) rebuildFacts(ctx context.Context, git gitReader, branch, head string, progress RebuildProgress) (int, error) {
+func (si *searchIndex) rebuildFacts(ctx context.Context, branch, head string, progress RebuildProgress) (int, error) {
 	branchID, err := si.rh.EnsureBranch(ctx, branch, "refs/heads/"+branch)
 	if err != nil {
 		return 0, fmt.Errorf("rebuildFacts: ensure branch: %w", err)
 	}
 
-	paths, hashes, err := git.ListAllWithHash(ctx, branch)
+	paths, hashes, err := si.rh.ListAllWithHash(ctx, branch)
 	if err != nil {
 		return 0, fmt.Errorf("rebuildFacts: list all: %w", err)
 	}
@@ -2626,13 +2626,13 @@ func (si *searchIndex) rebuildGraph(ctx context.Context, progress RebuildProgres
 //  3. If last_commit == HEAD → no-op.
 //  4. Else → DiffFiles(last_commit), upsert added+modified, delete removed.
 //  5. Update meta.last_commit = HEAD.
-func (si *searchIndex) Sync(ctx context.Context, git gitReader, branch string) error {
+func (si *searchIndex) Sync(ctx context.Context, branch string) error {
 	// Ensure the branch exists in the branches table.
 	if _, err := si.rh.EnsureBranch(ctx, branch, "refs/heads/"+branch); err != nil {
 		return fmt.Errorf("sync: ensure branch: %w", err)
 	}
 
-	head, err := git.HeadCommit(ctx, branch)
+	head, err := si.rh.HeadCommit(ctx, branch)
 	if err != nil {
 		return fmt.Errorf("sync: head commit: %w", err)
 	}
@@ -2650,19 +2650,19 @@ func (si *searchIndex) Sync(ctx context.Context, git gitReader, branch string) e
 	if last == "" {
 		// Full rebuild: no previous commit recorded, so index every file.
 		log.Info().Str("head", head[:8]).Msg("index sync: full rebuild (no previous commit)")
-		paths, err := git.ListAll(ctx, branch)
+		paths, err := si.rh.ListAll(ctx, branch)
 		if err != nil {
 			return fmt.Errorf("sync: list all: %w", err)
 		}
 		for _, path := range paths {
-			if err := si.indexFile(ctx, git, branch, path, head); err != nil {
+			if err := si.indexFile(ctx, branch, path, head); err != nil {
 				return err
 			}
 		}
 		log.Info().Int("files", len(paths)).Msg("index sync: full rebuild complete")
 	} else {
 		// Incremental update: only process files changed since last_commit.
-		added, modified, deleted, err := git.DiffFiles(ctx, branch, last)
+		added, modified, deleted, err := si.rh.DiffFiles(ctx, branch, last)
 		if err != nil {
 			return fmt.Errorf("sync: diff files: %w", err)
 		}
@@ -2671,7 +2671,7 @@ func (si *searchIndex) Sync(ctx context.Context, git gitReader, branch string) e
 			Int("added", len(added)).Int("modified", len(modified)).Int("deleted", len(deleted)).
 			Msg("index sync: incremental update")
 		for _, path := range append(added, modified...) {
-			if err := si.indexFile(ctx, git, branch, path, head); err != nil {
+			if err := si.indexFile(ctx, branch, path, head); err != nil {
 				return err
 			}
 		}
@@ -2697,19 +2697,19 @@ type RebuildProgress func(phase string, done, total int)
 
 // Rebuild clears the last-commit marker and re-indexes every file from HEAD
 // using three phases: facts, embeddings, graph.
-func (si *searchIndex) Rebuild(ctx context.Context, git gitReader, branch string, progress RebuildProgress) error {
+func (si *searchIndex) Rebuild(ctx context.Context, branch string, progress RebuildProgress) error {
 	if err := si.SetLastCommit(ctx, branch, ""); err != nil {
 		return fmt.Errorf("rebuild: clear last commit: %w", err)
 	}
 
-	head, err := git.HeadCommit(ctx, branch)
+	head, err := si.rh.HeadCommit(ctx, branch)
 	if err != nil {
 		return fmt.Errorf("rebuild: head commit: %w", err)
 	}
 
 	// Phase 1: facts
 	start := time.Now()
-	n, err := si.rebuildFacts(ctx, git, branch, head, progress)
+	n, err := si.rebuildFacts(ctx, branch, head, progress)
 	if err != nil {
 		return fmt.Errorf("rebuild: facts: %w", err)
 	}
@@ -2733,7 +2733,7 @@ func (si *searchIndex) Rebuild(ctx context.Context, git gitReader, branch string
 
 	// Phase 4: history (FactVersion nodes from commit_log)
 	start = time.Now()
-	versioned, err := si.rebuildGraphHistory(ctx, git, branch, progress)
+	versioned, err := si.rebuildGraphHistory(ctx, branch, progress)
 	if err != nil {
 		return fmt.Errorf("rebuild: history: %w", err)
 	}
@@ -2748,14 +2748,14 @@ func (si *searchIndex) Rebuild(ctx context.Context, git gitReader, branch string
 //
 // commitHash is the fallback; if commit_log has a more specific last-touch
 // commit for this path, that is used instead.
-func (si *searchIndex) indexFile(ctx context.Context, git gitReader, branch, path, commitHash string) error {
-	content, blobHash, err := git.readFileWithHash(ctx, branch, path)
+func (si *searchIndex) indexFile(ctx context.Context, branch, path, commitHash string) error {
+	content, blobHash, err := si.rh.readFileWithHash(ctx, branch, path)
 	if err != nil {
 		return fmt.Errorf("indexFile: read %s: %w", path, err)
 	}
 
 	// Use the most recent non-merge commit that touched this file.
-	if last, lerr := git.LastCommitForPath(ctx, branch, path); lerr == nil && last != "" {
+	if last, lerr := si.rh.LastCommitForPath(ctx, branch, path); lerr == nil && last != "" {
 		commitHash = last
 	}
 

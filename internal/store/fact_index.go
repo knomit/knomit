@@ -32,7 +32,7 @@ type factIndex struct {
 	auth       transport.AuthMethod
 	signer     ssh.Signer
 	onCommit   func(branch, hash string)
-	postCommit func(ctx context.Context, git gitReader, branch string) error // wired to si.Sync in Step 6
+	postCommit func(ctx context.Context, branch string) error // wired to si.Sync
 }
 
 // lockBranch acquires the per-branch mutex and returns an unlock function.
@@ -1057,7 +1057,7 @@ func (fi *factIndex) DeleteFact(ctx context.Context, branch, path, message strin
 		return "", fmt.Errorf("DeleteFact git: %w", err)
 	}
 	if fi.postCommit != nil {
-		if err := fi.postCommit(ctx, fi.rh, branch); err != nil {
+		if err := fi.postCommit(ctx, branch); err != nil {
 			return "", fmt.Errorf("DeleteFact sync: %w", err)
 		}
 	}
