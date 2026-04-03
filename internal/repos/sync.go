@@ -32,7 +32,7 @@ func runSyncLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Service, hu
 	defer wg.Done()
 
 	//todo: it's possible the remote will change while the job is still running
-	remote, _ := svc.GetRemote("origin")
+	remote, _ := svc.Remote().GetRemote("origin")
 	if remote == nil {
 		return
 	}
@@ -46,7 +46,7 @@ func runSyncLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Service, hu
 	lg.Info().Dur("interval", interval).Msg("sync loop started")
 
 	doSync := func() {
-		result, err := svc.Sync(context.Background(), agentBranch, auth)
+		result, err := svc.Remote().Sync(context.Background(), agentBranch, auth)
 		if err != nil {
 			hub.broadcastSyncError("origin", err.Error())
 			lg.Warn().Err(err).Msg("sync: pull failed")
@@ -73,7 +73,7 @@ func runSyncLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Service, hu
 			return
 		case <-ticker.C:
 			// Re-read remote config so interval and auth changes take effect.
-			if fresh, err := svc.GetRemote("origin"); err == nil && fresh != nil {
+			if fresh, err := svc.Remote().GetRemote("origin"); err == nil && fresh != nil {
 				if d := time.Duration(fresh.Interval) * time.Second; d != interval {
 					lg.Info().Dur("old", interval).Dur("new", d).Msg("sync: interval changed")
 					interval = d
@@ -93,7 +93,7 @@ func runPushLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Service, hu
 	defer wg.Done()
 
 	//todo: it's possible the remote will change while the job is still running
-	remote, _ := svc.GetRemote("origin")
+	remote, _ := svc.Remote().GetRemote("origin")
 	if remote == nil {
 		return
 	}
@@ -107,7 +107,7 @@ func runPushLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Service, hu
 	lg.Info().Dur("interval", interval).Msg("push loop started")
 
 	doPush := func() {
-		result, err := svc.Push(context.Background(), agentBranch, auth)
+		result, err := svc.Remote().Push(context.Background(), agentBranch, auth)
 		if err != nil {
 			hub.broadcastPushError("origin", err.Error())
 			lg.Warn().Err(err).Msg("push: failed")
@@ -131,7 +131,7 @@ func runPushLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Service, hu
 			return
 		case <-ticker.C:
 			// Re-read remote config so interval and auth changes take effect.
-			if fresh, err := svc.GetRemote("origin"); err == nil && fresh != nil {
+			if fresh, err := svc.Remote().GetRemote("origin"); err == nil && fresh != nil {
 				if d := time.Duration(fresh.PushInterval) * time.Second; d != interval {
 					lg.Info().Dur("old", interval).Dur("new", d).Msg("push: interval changed")
 					interval = d

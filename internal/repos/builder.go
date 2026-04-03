@@ -128,7 +128,7 @@ func (b *repoBuilder) ensureBranch() {
 		}
 	}
 	if b.isDefault && b.cfg.Git.Origin != "" {
-		if err := b.svc.SetRemote("origin", b.cfg.Git.Origin, "main", 300, 300, "", ""); err != nil {
+		if err := b.svc.Remote().SetRemote("origin", b.cfg.Git.Origin, "main", 300, 300, "", ""); err != nil {
 			log.Warn().Err(err).Msg("failed to seed origin in remotes table")
 		}
 	}
@@ -211,7 +211,7 @@ func (b *repoBuilder) build() *RepoInstance {
 		currentSvc := ri.svc
 		ri.mu.RUnlock()
 
-		remote, err := currentSvc.GetRemote("origin")
+		remote, err := currentSvc.Remote().GetRemote("origin")
 		if err != nil || remote == nil {
 			return fmt.Errorf("read remote: %w", err)
 		}
@@ -245,7 +245,7 @@ func (b *repoBuilder) build() *RepoInstance {
 // startSyncLoops launches the background pull and push goroutines if a remote
 // named "origin" is configured.
 func (b *repoBuilder) startSyncLoops(ctx context.Context, wg *sync.WaitGroup, hub *TaskHub) {
-	remote, _ := b.svc.GetRemote("origin")
+	remote, _ := b.svc.Remote().GetRemote("origin")
 	if remote == nil {
 		return
 	}
