@@ -9,11 +9,9 @@ import (
 	"sync"
 
 	gogit "github.com/go-git/go-git/v5"
-	gogitconfig "github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/go-git/go-git/v5/plumbing/storer"
-	"github.com/go-git/go-git/v5/plumbing/transport"
 	"golang.org/x/crypto/ssh"
 
 	storegit "knomit/internal/store/git"
@@ -123,11 +121,6 @@ func (s *Service) Checkpoint() error {
 // Close closes the underlying database connection.
 func (s *Service) Close() error { return s.rh.db.Close() }
 
-// SetAuth sets the transport authentication method used by Sync and Push.
-func (s *Service) SetAuth(auth transport.AuthMethod) {
-	s.fi.auth = auth
-}
-
 // SetSigner sets the SSH signer used for commit signing.
 func (s *Service) SetSigner(signer ssh.Signer) {
 	s.fi.signer = signer
@@ -140,44 +133,6 @@ func (s *Service) SetOnCommit(fn func(branch, hash string)) {
 	s.fi.onCommit = fn
 }
 
-
-// ConfigureRemote sets up (or reconfigures) the "origin" remote with the given
-// URL and fetch refspec for branch. Idempotent — returns nil if already correct.
-func (s *Service) ConfigureRemote(ctx context.Context, url, branch string) error {
-	s.rh.configMu.Lock()
-	defer s.rh.configMu.Unlock()
-
-	cfg, err := s.rh.repo.Config()
-	if err != nil {
-		return fmt.Errorf("read config: %w", err)
-	}
-
-	refspec := fmt.Sprintf("+refs/heads/%s:refs/remotes/origin/%s", branch, branch)
-
-	if rc, ok := cfg.Remotes["origin"]; ok {
-		if len(rc.URLs) > 0 && rc.URLs[0] == url {
-			for _, rs := range rc.Fetch {
-				if string(rs) == refspec {
-					return nil // already configured
-				}
-			}
-		}
-	}
-
-	// Delete existing origin if present, then create fresh.
-	_ = s.rh.repo.DeleteRemote("origin")
-	_, err = s.rh.repo.CreateRemote(&gogitconfig.RemoteConfig{
-		Name: "origin",
-		URLs: []string{url},
-		Fetch: []gogitconfig.RefSpec{
-			gogitconfig.RefSpec(refspec),
-		},
-	})
-	if err != nil {
-		return fmt.Errorf("create remote: %w", err)
-	}
-	return nil
-}
 
 
 // HasSharedHistory checks whether localBranch shares any commits with remoteBranch on the remote service.

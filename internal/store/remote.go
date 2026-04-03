@@ -23,9 +23,10 @@ type Remote struct {
 	AuthToken      string  `json:"auth_token,omitempty"`
 }
 
-// SetRemote inserts or replaces a remote configuration.
-// authMethod and authToken are optional; if authToken is non-empty it is
-// encrypted at rest when a Crypt instance is configured.
+// SetRemote inserts or replaces a remote configuration and wires the git
+// remote in the underlying repository so that Sync and Push can use it
+// immediately. authMethod and authToken are optional; if authToken is
+// non-empty it is encrypted at rest when a Crypt instance is configured.
 func (s *Service) SetRemote(name, url, branch string, interval, pushInterval int, authMethod, authToken string) error {
 	storedToken := authToken
 	if s.crypt != nil && authToken != "" {
@@ -39,7 +40,17 @@ func (s *Service) SetRemote(name, url, branch string, interval, pushInterval int
 		`INSERT OR REPLACE INTO remotes (name, url, branch, interval, push_interval, auth_method, auth_token) VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		name, url, branch, interval, pushInterval, authMethod, storedToken,
 	)
-	return err
+	if err != nil {
+		return err
+	}
+	// Sync the git config so go-git can fetch/push by remote name.
+	// No-op when the repo has not been initialised yet (DB-only mode).
+	if s.rh.repo != nil {
+		if err := s.rh.configureRemote(url, branch); err != nil {
+			return fmt.Errorf("configure git remote: %w", err)
+		}
+	}
+	return nil
 }
 
 // GetRemote reads a remote configuration by name.

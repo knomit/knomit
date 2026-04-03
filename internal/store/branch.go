@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	gogit "github.com/go-git/go-git/v5"
+	gogitconfig "github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/rs/zerolog/log"
@@ -216,6 +217,40 @@ func (rh *repoHandler) SetDefaultBranch(branch string) error {
 	return rh.gits.SetReference(
 		plumbing.NewSymbolicReference(plumbing.HEAD, plumbing.NewBranchReferenceName(branch)),
 	)
+}
+
+// configureRemote ensures the named remote is registered in the git config
+// with the given URL and fetch refspec for branch. Idempotent.
+func (rh *repoHandler) configureRemote(url, branch string) error {
+	rh.configMu.Lock()
+	defer rh.configMu.Unlock()
+
+	cfg, err := rh.repo.Config()
+	if err != nil {
+		return fmt.Errorf("read config: %w", err)
+	}
+
+	refspec := fmt.Sprintf("+refs/heads/%s:refs/remotes/origin/%s", branch, branch)
+
+	if rc, ok := cfg.Remotes["origin"]; ok {
+		if len(rc.URLs) > 0 && rc.URLs[0] == url {
+			for _, rs := range rc.Fetch {
+				if string(rs) == refspec {
+					return nil // already configured
+				}
+			}
+		}
+	}
+
+	_ = rh.repo.DeleteRemote("origin")
+	_, err = rh.repo.CreateRemote(&gogitconfig.RemoteConfig{
+		Name: "origin",
+		URLs: []string{url},
+		Fetch: []gogitconfig.RefSpec{
+			gogitconfig.RefSpec(refspec),
+		},
+	})
+	return err
 }
 
 // ── git read methods ──────────────────────────────────────────────────────────

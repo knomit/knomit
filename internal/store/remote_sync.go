@@ -12,6 +12,7 @@ import (
 	gogitconfig "github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
+	"github.com/go-git/go-git/v5/plumbing/transport"
 	"github.com/go-git/go-git/v5/utils/merkletrie"
 	"github.com/rs/zerolog/log"
 )
@@ -23,7 +24,7 @@ import (
 // notifyCommit (which triggers index sync and may call back into Service).
 //
 // If remoteBranch is empty, it defaults to "main".
-func (s *Service) Sync(ctx context.Context, localBranch string) (res SyncResult, retErr error) {
+func (s *Service) Sync(ctx context.Context, localBranch string, auth transport.AuthMethod) (res SyncResult, retErr error) {
 	remote, err := s.GetRemote("origin")
 	if err != nil || remote == nil {
 		log.Debug().Msg("git sync: no origin remote configured, skipping")
@@ -57,7 +58,7 @@ func (s *Service) Sync(ctx context.Context, localBranch string) (res SyncResult,
 	log.Debug().Msg("git sync: fetching from origin")
 	err = s.rh.repo.Fetch(&gogit.FetchOptions{
 		RemoteName: "origin",
-		Auth:       s.fi.auth,
+		Auth:       auth,
 	})
 	if err != nil && err != gogit.NoErrAlreadyUpToDate {
 		unlock()
@@ -285,43 +286,6 @@ func (s *Service) threeWayMerge(ctx context.Context, baseCommit, originCommit, a
 	return currentTree.Hash, nil
 }
 
-// configureRemote ensures the origin remote is configured with the given URL
-// and refspec for the specified branch.
-func (s *Service) configureRemote(ctx context.Context, url, branch string) error {
-	s.rh.configMu.Lock()
-	defer s.rh.configMu.Unlock()
-
-	cfg, err := s.rh.repo.Config()
-	if err != nil {
-		return fmt.Errorf("read config: %w", err)
-	}
-
-	refspec := fmt.Sprintf("+refs/heads/%s:refs/remotes/origin/%s", branch, branch)
-
-	if rc, ok := cfg.Remotes["origin"]; ok {
-		if len(rc.URLs) > 0 && rc.URLs[0] == url {
-			for _, rs := range rc.Fetch {
-				if string(rs) == refspec {
-					return nil // already configured
-				}
-			}
-		}
-	}
-
-	// Delete existing origin if present, then create fresh.
-	_ = s.rh.repo.DeleteRemote("origin")
-	_, err = s.rh.repo.CreateRemote(&gogitconfig.RemoteConfig{
-		Name: "origin",
-		URLs: []string{url},
-		Fetch: []gogitconfig.RefSpec{
-			gogitconfig.RefSpec(refspec),
-		},
-	})
-	if err != nil {
-		return fmt.Errorf("create remote: %w", err)
-	}
-	return nil
-}
 
 // Push pushes the given branch to origin.
 // Returns PushResult{Pushed: false} if already up to date.
@@ -329,7 +293,7 @@ func (s *Service) configureRemote(ctx context.Context, url, branch string) error
 // If the push fails with a non-fast-forward error, it retries with a force
 // push. This is safe because agent branches are per-machine — no other machine
 // writes to the same branch.
-func (s *Service) Push(ctx context.Context, branch string) (res PushResult, retErr error) {
+func (s *Service) Push(ctx context.Context, branch string, auth transport.AuthMethod) (res PushResult, retErr error) {
 	unlock := s.fi.lockBranch(branch)
 	defer unlock()
 
@@ -354,7 +318,7 @@ func (s *Service) Push(ctx context.Context, branch string) (res PushResult, retE
 	err := s.rh.repo.Push(&gogit.PushOptions{
 		RemoteName: "origin",
 		RefSpecs:   []gogitconfig.RefSpec{gogitconfig.RefSpec(refspec)},
-		Auth:       s.fi.auth,
+		Auth:       auth,
 	})
 	if err == gogit.NoErrAlreadyUpToDate {
 		return PushResult{Pushed: false}, nil
@@ -364,7 +328,7 @@ func (s *Service) Push(ctx context.Context, branch string) (res PushResult, retE
 		err = s.rh.repo.Push(&gogit.PushOptions{
 			RemoteName: "origin",
 			RefSpecs:   []gogitconfig.RefSpec{gogitconfig.RefSpec(forceRefspec)},
-			Auth:       s.fi.auth,
+			Auth:       auth,
 		})
 	}
 	if err != nil {

@@ -216,17 +216,6 @@ func (b *repoBuilder) build() *RepoInstance {
 			return fmt.Errorf("read remote: %w", err)
 		}
 
-		authCfg := remoteAuthFromRecord(remote, cfg.Remote)
-		auth, authErr := ResolveAuthWithOrigin(authCfg, keyPath, remoteURL)
-		if authErr != nil {
-			return fmt.Errorf("resolve auth: %w", authErr)
-		}
-		currentSvc.SetAuth(auth)
-
-		if err := currentSvc.ConfigureRemote(context.Background(), remoteURL, remote.Branch); err != nil {
-			return fmt.Errorf("configure remote: %w", err)
-		}
-
 		syncCancel()
 		syncWg.Wait()
 
@@ -237,8 +226,8 @@ func (b *repoBuilder) build() *RepoInstance {
 		currentSvc.SetOnCommit(ri.onCommit)
 
 		syncWg.Add(2)
-		go runSyncLoop(newCtx, &syncWg, currentSvc, hub, name, agentBranch)
-		go runPushLoop(newCtx, &syncWg, currentSvc, hub, name, agentBranch)
+		go runSyncLoop(newCtx, &syncWg, currentSvc, hub, name, agentBranch, keyPath, cfg.Remote)
+		go runPushLoop(newCtx, &syncWg, currentSvc, hub, name, agentBranch, keyPath, cfg.Remote)
 		return nil
 	}
 
@@ -261,22 +250,9 @@ func (b *repoBuilder) startSyncLoops(ctx context.Context, wg *sync.WaitGroup, hu
 		return
 	}
 
-	authCfg := remoteAuthFromRecord(remote, b.cfg.Remote)
-	auth, authErr := ResolveAuthWithOrigin(authCfg, b.keyPath, remote.URL)
-	if authErr != nil {
-		log.Warn().Err(authErr).Str("repo", b.name).Msg("remote: auth resolution failed")
-		return
-	}
-	b.svc.SetAuth(auth)
-
-	if err := b.svc.ConfigureRemote(context.Background(), remote.URL, remote.Branch); err != nil {
-		log.Warn().Err(err).Str("repo", b.name).Msg("remote: configure failed")
-		return
-	}
-
 	wg.Add(2)
-	go runSyncLoop(ctx, wg, b.svc, hub, b.name, b.agentBranch)
-	go runPushLoop(ctx, wg, b.svc, hub, b.name, b.agentBranch)
+	go runSyncLoop(ctx, wg, b.svc, hub, b.name, b.agentBranch, b.keyPath, b.cfg.Remote)
+	go runPushLoop(ctx, wg, b.svc, hub, b.name, b.agentBranch, b.keyPath, b.cfg.Remote)
 }
 
 // close releases resources opened so far. Safe to call at any point during
