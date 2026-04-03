@@ -1,6 +1,3 @@
-// Consolidated exported types for the store package.
-// These mirror the types previously defined in internal/git and are used by
-// the Service facade methods.
 package store
 
 import "time"

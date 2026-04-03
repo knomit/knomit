@@ -38,10 +38,7 @@ func (fi *factIndex) Log(ctx context.Context, branch, path string) ([]LogEntry, 
 			return io.EOF
 		}
 		hash := c.Hash.String()
-		fl := c.Message
-		if idx := strings.IndexByte(fl, '\n'); idx >= 0 {
-			fl = fl[:idx]
-		}
+		fl := firstLine(c.Message)
 		entries = append(entries, LogEntry{
 			Commit:  hash,
 			Date:    c.Committer.When.UTC().Format(time.RFC3339),
@@ -170,10 +167,7 @@ func (fi *factIndex) logPaginatedGit(ctx context.Context, branch, path string, l
 		}
 
 		hash := c.Hash.String()
-		fl := c.Message
-		if idx := strings.IndexByte(fl, '\n'); idx >= 0 {
-			fl = fl[:idx]
-		}
+		fl := firstLine(c.Message)
 
 		entries = append(entries, LogEntryWithTags{
 			Commit:    hash,
