@@ -96,12 +96,17 @@ type gitReader interface {
 type store struct {
 	rh *repoHandler
 	*searchIndex
+	*pipelineIndex
 }
 
 // newIndex wraps an existing *repoHandler. Schema must already be applied.
 // Used by Service.Open to construct the Index over the shared database.
 func newIndex(rh *repoHandler) *store {
-	return &store{rh: rh, searchIndex: &searchIndex{rh: rh}}
+	return &store{
+		rh:             rh,
+		searchIndex:    &searchIndex{rh: rh},
+		pipelineIndex:  &pipelineIndex{rh: rh},
+	}
 }
 
 // New opens (or creates) a SQLite search index at path and applies all
