@@ -19,13 +19,13 @@ import (
 )
 
 // ReadFileWithHash returns both the file content and the blob hash for the given path.
-func (s *Service) readFileWithHash(ctx context.Context, branch, path string) (string, string, error) {
+func (fi *factIndex) readFileWithHash(ctx context.Context, branch, path string) (string, string, error) {
 	path = strings.ToLower(path)
-	headHash, err := s.resolveRef(ctx, branch)
+	headHash, err := fi.resolveRef(ctx, branch)
 	if err != nil {
 		return "", "", fmt.Errorf("readFileWithHash: ref: %w", err)
 	}
-	commit, err := s.repo.CommitObject(headHash)
+	commit, err := fi.repo.CommitObject(headHash)
 	if err != nil {
 		return "", "", fmt.Errorf("readFileWithHash: commit: %w", err)
 	}
@@ -37,7 +37,7 @@ func (s *Service) readFileWithHash(ctx context.Context, branch, path string) (st
 	if err != nil {
 		return "", "", fmt.Errorf("readFileWithHash: entry %s: %w", path, err)
 	}
-	blob, err := s.repo.BlobObject(entry.Hash)
+	blob, err := fi.repo.BlobObject(entry.Hash)
 	if err != nil {
 		return "", "", fmt.Errorf("readFileWithHash: blob: %w", err)
 	}
@@ -57,9 +57,9 @@ func (s *Service) readFileWithHash(ctx context.Context, branch, path string) (st
 // If the exact path is not found, it falls back to a case-insensitive tree
 // walk so that normalised (lowercase) index paths resolve correctly against
 // pre-normalisation commits that stored paths with mixed case.
-func (s *Service) readFileAtCommitHash(ctx context.Context, path, commitHash string) (string, error) {
+func (fi *factIndex) readFileAtCommitHash(ctx context.Context, path, commitHash string) (string, error) {
 	hash := plumbing.NewHash(commitHash)
-	commit, err := s.repo.CommitObject(hash)
+	commit, err := fi.repo.CommitObject(hash)
 	if err != nil {
 		return "", fmt.Errorf("readFileAtCommitHash: commit: %w", err)
 	}
@@ -71,7 +71,7 @@ func (s *Service) readFileAtCommitHash(ctx context.Context, path, commitHash str
 		return f.Contents()
 	}
 	// Exact lookup failed — try case-insensitive walk.
-	content, err := treeFileInsensitive(s.repo, tree, path)
+	content, err := treeFileInsensitive(fi.repo, tree, path)
 	if err != nil {
 		return "", fmt.Errorf("readFileAtCommitHash: file %q not found (case-insensitive): %w", path, err)
 	}
@@ -81,8 +81,8 @@ func (s *Service) readFileAtCommitHash(ctx context.Context, path, commitHash str
 // ReadFileAtCommit reads the content of path at the given commit.
 // branch is accepted for interface consistency; the commit hash uniquely
 // identifies the version without branch resolution.
-func (s *Service) readFileAtCommit(ctx context.Context, branch, path, commitHash string) (string, error) {
-	return s.readFileAtCommitHash(ctx, path, commitHash)
+func (fi *factIndex) readFileAtCommit(ctx context.Context, branch, path, commitHash string) (string, error) {
+	return fi.readFileAtCommitHash(ctx, path, commitHash)
 }
 
 // treeFileInsensitive walks a git tree matching each path component
@@ -127,10 +127,10 @@ func treeFileInsensitive(repo *gogit.Repository, tree *object.Tree, path string)
 // ReadFileLastCommit finds the most recent ancestor of beforeCommitHash where
 // path existed and returns its content and commit hash. Used to read facts
 // that were deleted in beforeCommitHash (e.g. retract commits).
-func (s *Service) readFileLastCommit(ctx context.Context, branch, path, beforeCommitHash string) (content string, fromCommit string, err error) {
+func (fi *factIndex) readFileLastCommit(ctx context.Context, branch, path, beforeCommitHash string) (content string, fromCommit string, err error) {
 	path = strings.ToLower(path)
 	startHash := plumbing.NewHash(beforeCommitHash)
-	startCommit, err := s.repo.CommitObject(startHash)
+	startCommit, err := fi.repo.CommitObject(startHash)
 	if err != nil {
 		return "", "", fmt.Errorf("readFileLastCommit: commit: %w", err)
 	}
@@ -138,7 +138,7 @@ func (s *Service) readFileLastCommit(ctx context.Context, branch, path, beforeCo
 		return "", "", fmt.Errorf("readFileLastCommit: %q: commit has no parents", path)
 	}
 
-	logIter, err := s.repo.Log(&gogit.LogOptions{
+	logIter, err := fi.repo.Log(&gogit.LogOptions{
 		From:     startCommit.ParentHashes[0],
 		FileName: &path,
 		Order:    gogit.LogOrderCommitterTime,
@@ -153,24 +153,24 @@ func (s *Service) readFileLastCommit(ctx context.Context, branch, path, beforeCo
 		return "", "", fmt.Errorf("readFileLastCommit: %q: no prior commit found", path)
 	}
 
-	content, err = s.readFileAtCommitHash(ctx, path, lastCommit.Hash.String())
+	content, err = fi.readFileAtCommitHash(ctx, path, lastCommit.Hash.String())
 	return content, lastCommit.Hash.String(), err
 }
 
 // ReadFile reads the content of path from the tip of branch.
-func (s *Service) readFile(ctx context.Context, branch, path string) (string, error) {
-	content, _, err := s.readFileWithHash(ctx, branch, path)
+func (fi *factIndex) readFile(ctx context.Context, branch, path string) (string, error) {
+	content, _, err := fi.readFileWithHash(ctx, branch, path)
 	return content, err
 }
 
 // FileExists returns true if path exists at the tip of branch, false+nil if not found.
-func (s *Service) fileExists(ctx context.Context, branch, path string) (bool, error) {
-	headHash, err := s.resolveRef(ctx, branch)
+func (fi *factIndex) fileExists(ctx context.Context, branch, path string) (bool, error) {
+	headHash, err := fi.resolveRef(ctx, branch)
 	if err != nil {
 		return false, fmt.Errorf("fileExists: ref: %w", err)
 	}
 
-	commit, err := s.repo.CommitObject(headHash)
+	commit, err := fi.repo.CommitObject(headHash)
 	if err != nil {
 		return false, fmt.Errorf("fileExists: commit: %w", err)
 	}
@@ -191,31 +191,31 @@ func (s *Service) fileExists(ctx context.Context, branch, path string) (bool, er
 }
 
 // ReadFact reads a fact from the store. With nil opts it reads from branch HEAD.
-func (s *Service) ReadFact(ctx context.Context, branch, path string, opts *ReadFactOpts) (ReadFactResult, error) {
+func (fi *factIndex) ReadFact(ctx context.Context, branch, path string, opts *ReadFactOpts) (ReadFactResult, error) {
 	if opts == nil {
 		opts = &ReadFactOpts{}
 	}
 	switch {
 	case opts.BeforeCommit != "":
-		content, fromCommit, err := s.readFileLastCommit(ctx, branch, path, opts.BeforeCommit)
+		content, fromCommit, err := fi.readFileLastCommit(ctx, branch, path, opts.BeforeCommit)
 		if err != nil {
 			return ReadFactResult{}, err
 		}
 		return ReadFactResult{Content: content, FromCommit: fromCommit}, nil
 	case opts.AtCommit != "":
-		content, err := s.readFileAtCommit(ctx, branch, path, opts.AtCommit)
+		content, err := fi.readFileAtCommit(ctx, branch, path, opts.AtCommit)
 		if err != nil {
 			return ReadFactResult{}, err
 		}
 		return ReadFactResult{Content: content}, nil
 	case opts.WithHash:
-		content, blobHash, err := s.readFileWithHash(ctx, branch, path)
+		content, blobHash, err := fi.readFileWithHash(ctx, branch, path)
 		if err != nil {
 			return ReadFactResult{}, err
 		}
 		return ReadFactResult{Content: content, BlobHash: blobHash}, nil
 	default:
-		content, err := s.readFile(ctx, branch, path)
+		content, err := fi.readFile(ctx, branch, path)
 		if err != nil {
 			return ReadFactResult{}, err
 		}
@@ -224,20 +224,20 @@ func (s *Service) ReadFact(ctx context.Context, branch, path string, opts *ReadF
 }
 
 // FactExists returns true if a fact exists at path on branch HEAD.
-func (s *Service) FactExists(ctx context.Context, branch, path string) (bool, error) {
-	return s.fileExists(ctx, branch, path)
+func (fi *factIndex) FactExists(ctx context.Context, branch, path string) (bool, error) {
+	return fi.fileExists(ctx, branch, path)
 }
 
 // ListDir returns entries under path at the tip of branch.
 // Subdirectories have IsDir=true, .md files have IsDir=false.
-func (s *Service) ListDir(ctx context.Context, branch, path string) ([]DirEntry, error) {
+func (fi *factIndex) ListDir(ctx context.Context, branch, path string) ([]DirEntry, error) {
 	path = strings.ToLower(path)
-	headHash, err := s.resolveRef(ctx, branch)
+	headHash, err := fi.resolveRef(ctx, branch)
 	if err != nil {
 		return nil, fmt.Errorf("ListDir: ref: %w", err)
 	}
 
-	commit, err := s.repo.CommitObject(headHash)
+	commit, err := fi.repo.CommitObject(headHash)
 	if err != nil {
 		return nil, fmt.Errorf("ListDir: commit: %w", err)
 	}
@@ -273,13 +273,13 @@ func (s *Service) ListDir(ctx context.Context, branch, path string) ([]DirEntry,
 // LastCommitForPath returns the hash of the most recent non-merge commit
 // that touched path. Merges are skipped because they duplicate authoring
 // commits from the merged branch.
-func (s *Service) LastCommitForPath(ctx context.Context, branch, path string) (string, error) {
-	headHash, err := s.resolveRef(ctx, branch)
+func (fi *factIndex) LastCommitForPath(ctx context.Context, branch, path string) (string, error) {
+	headHash, err := fi.resolveRef(ctx, branch)
 	if err != nil {
 		return "", fmt.Errorf("LastCommitForPath: ref: %w", err)
 	}
 
-	logIter, err := s.repo.Log(&gogit.LogOptions{
+	logIter, err := fi.repo.Log(&gogit.LogOptions{
 		From:     headHash,
 		FileName: &path,
 		Order:    gogit.LogOrderCommitterTime,
@@ -313,13 +313,13 @@ func (ps pathHashSorter) Swap(i, j int) {
 
 // ListAllWithHash returns all .md files at the tip of branch with their blob hashes.
 // Single tree walk — no per-file I/O.
-func (s *Service) ListAllWithHash(ctx context.Context, branch string) ([]string, []string, error) {
-	headHash, err := s.resolveRef(ctx, branch)
+func (fi *factIndex) ListAllWithHash(ctx context.Context, branch string) ([]string, []string, error) {
+	headHash, err := fi.resolveRef(ctx, branch)
 	if err != nil {
 		return nil, nil, fmt.Errorf("ListAllWithHash: ref: %w", err)
 	}
 
-	commit, err := s.repo.CommitObject(headHash)
+	commit, err := fi.repo.CommitObject(headHash)
 	if err != nil {
 		return nil, nil, fmt.Errorf("ListAllWithHash: commit: %w", err)
 	}
@@ -347,19 +347,19 @@ func (s *Service) ListAllWithHash(ctx context.Context, branch string) ([]string,
 }
 
 // ListAll returns paths of all .md files at the tip of branch.
-func (s *Service) ListAll(ctx context.Context, branch string) ([]string, error) {
-	paths, _, err := s.ListAllWithHash(ctx, branch)
+func (fi *factIndex) ListAll(ctx context.Context, branch string) ([]string, error) {
+	paths, _, err := fi.ListAllWithHash(ctx, branch)
 	return paths, err
 }
 
 // Log returns log entries for commits that modified path (up to 50).
-func (s *Service) Log(ctx context.Context, branch, path string) ([]LogEntry, error) {
-	headHash, err := s.resolveRef(ctx, branch)
+func (fi *factIndex) Log(ctx context.Context, branch, path string) ([]LogEntry, error) {
+	headHash, err := fi.resolveRef(ctx, branch)
 	if err != nil {
 		return nil, fmt.Errorf("log: ref: %w", err)
 	}
 
-	logIter, err := s.repo.Log(&gogit.LogOptions{
+	logIter, err := fi.repo.Log(&gogit.LogOptions{
 		From:     headHash,
 		FileName: &path,
 		Order:    gogit.LogOrderCommitterTime,
@@ -399,19 +399,19 @@ func (s *Service) Log(ctx context.Context, branch, path string) ([]LogEntry, err
 // LogPaginated returns log entries with pagination and tags.
 // It returns (entries, next, prev, error) where next is a cursor for loading
 // older commits and prev is a cursor for loading newer commits (empty = none).
-func (s *Service) LogPaginated(ctx context.Context, branch, path string, limit int, after, from, before string) ([]LogEntryWithTags, string, string, error) {
-	if s.gits.CommitLogAvailable() {
-		entries, next, prev, err := s.logPaginatedSQL(ctx, path, limit, after, from, before)
+func (fi *factIndex) LogPaginated(ctx context.Context, branch, path string, limit int, after, from, before string) ([]LogEntryWithTags, string, string, error) {
+	if fi.gits.CommitLogAvailable() {
+		entries, next, prev, err := fi.logPaginatedSQL(ctx, path, limit, after, from, before)
 		if err == nil {
 			return entries, next, prev, nil
 		}
 	}
-	entries, next, err := s.logPaginatedGit(ctx, branch, path, limit, after)
+	entries, next, err := fi.logPaginatedGit(ctx, branch, path, limit, after)
 	return entries, next, "", err
 }
 
 // logPaginatedSQL queries the commit_log table for paginated history.
-func (s *Service) logPaginatedSQL(ctx context.Context, path string, limit int, after, from, before string) ([]LogEntryWithTags, string, string, error) {
+func (fi *factIndex) logPaginatedSQL(ctx context.Context, path string, limit int, after, from, before string) ([]LogEntryWithTags, string, string, error) {
 	var cursor storegit.CommitLogCursor
 	switch {
 	case before != "":
@@ -422,7 +422,7 @@ func (s *Service) logPaginatedSQL(ctx context.Context, path string, limit int, a
 		cursor = storegit.CommitLogCursor{Type: storegit.CommitLogCursorAfter, Hash: after}
 	}
 
-	rows, hasMore, err := s.gits.CommitLogQuery(path, cursor, limit)
+	rows, hasMore, err := fi.gits.CommitLogQuery(path, cursor, limit)
 	if err != nil {
 		return nil, "", "", fmt.Errorf("logPaginatedSQL: %w", err)
 	}
@@ -457,14 +457,14 @@ func (s *Service) logPaginatedSQL(ctx context.Context, path string, limit int, a
 	}
 
 	if len(entries) > 0 {
-		s.enrichFileCounts(entries)
+		fi.enrichFileCounts(entries)
 	}
 	return entries, nextCursor, prevCursor, nil
 }
 
 // logPaginatedGit is the go-git fallback for LogPaginated.
-func (s *Service) logPaginatedGit(ctx context.Context, branch, path string, limit int, after string) ([]LogEntryWithTags, string, error) {
-	headHash, err := s.resolveRef(ctx, branch)
+func (fi *factIndex) logPaginatedGit(ctx context.Context, branch, path string, limit int, after string) ([]LogEntryWithTags, string, error) {
+	headHash, err := fi.resolveRef(ctx, branch)
 	if err != nil {
 		return nil, "", fmt.Errorf("LogPaginated: ref: %w", err)
 	}
@@ -484,7 +484,7 @@ func (s *Service) logPaginatedGit(ctx context.Context, branch, path string, limi
 		}
 	}
 
-	logIter, err := s.repo.Log(opts)
+	logIter, err := fi.repo.Log(opts)
 	if err != nil {
 		return nil, "", fmt.Errorf("LogPaginated: %w", err)
 	}
@@ -525,15 +525,15 @@ func (s *Service) logPaginatedGit(ctx context.Context, branch, path string, limi
 	})
 
 	// Batch-fetch file change counts from commit_log if available.
-	if s.gits.CommitLogAvailable() && len(entries) > 0 {
-		s.enrichFileCounts(entries)
+	if fi.gits.CommitLogAvailable() && len(entries) > 0 {
+		fi.enrichFileCounts(entries)
 	}
 
 	return entries, nextCursor, nil
 }
 
 // enrichFileCounts batch-queries commit_log for A/M/D counts per commit.
-func (s *Service) enrichFileCounts(entries []LogEntryWithTags) {
+func (fi *factIndex) enrichFileCounts(entries []LogEntryWithTags) {
 	hashes := make([]string, len(entries))
 	idx := make(map[string]int, len(entries))
 	for i, e := range entries {
@@ -541,7 +541,7 @@ func (s *Service) enrichFileCounts(entries []LogEntryWithTags) {
 		idx[e.Commit] = i
 	}
 
-	counts, err := s.gits.CommitLogFileCounts(hashes)
+	counts, err := fi.gits.CommitLogFileCounts(hashes)
 	if err != nil {
 		return
 	}
@@ -559,19 +559,19 @@ func (s *Service) enrichFileCounts(entries []LogEntryWithTags) {
 
 // Activity computes commit-activity metrics for path using a SQL aggregate
 // query when commit_log is available, or a capped go-git walk otherwise.
-func (s *Service) Activity(ctx context.Context, branch, path string) (ActivityResult, error) {
-	if s.gits.CommitLogAvailable() {
-		return s.activitySQL(ctx, path)
+func (fi *factIndex) Activity(ctx context.Context, branch, path string) (ActivityResult, error) {
+	if fi.gits.CommitLogAvailable() {
+		return fi.activitySQL(ctx, path)
 	}
-	return s.activityGit(ctx, branch, path)
+	return fi.activityGit(ctx, branch, path)
 }
 
-func (s *Service) activitySQL(ctx context.Context, path string) (ActivityResult, error) {
+func (fi *factIndex) activitySQL(ctx context.Context, path string) (ActivityResult, error) {
 	cutoff7 := commitLogAge(7)
 	cutoff30 := commitLogAge(30)
 	cutoff90 := commitLogAge(90)
 
-	r, err := s.gits.CommitLogActivity(path, cutoff7, cutoff30, cutoff90)
+	r, err := fi.gits.CommitLogActivity(path, cutoff7, cutoff30, cutoff90)
 	if err != nil {
 		return ActivityResult{}, fmt.Errorf("activitySQL: %w", err)
 	}
@@ -589,10 +589,10 @@ func (s *Service) activitySQL(ctx context.Context, path string) (ActivityResult,
 	}, nil
 }
 
-func (s *Service) activityGit(ctx context.Context, branch, path string) (ActivityResult, error) {
+func (fi *factIndex) activityGit(ctx context.Context, branch, path string) (ActivityResult, error) {
 	const maxCommits = 500
 
-	headHash, err := s.resolveRef(ctx, branch)
+	headHash, err := fi.resolveRef(ctx, branch)
 	if err != nil {
 		return ActivityResult{}, fmt.Errorf("Activity: ref: %w", err)
 	}
@@ -610,7 +610,7 @@ func (s *Service) activityGit(ctx context.Context, branch, path string) (Activit
 		}
 	}
 
-	logIter, err := s.repo.Log(opts)
+	logIter, err := fi.repo.Log(opts)
 	if err != nil {
 		return ActivityResult{}, fmt.Errorf("Activity: log: %w", err)
 	}
@@ -646,9 +646,9 @@ func (s *Service) activityGit(ctx context.Context, branch, path string) (Activit
 }
 
 // CommitDetail returns metadata and changed files for a specific commit.
-func (s *Service) CommitDetail(ctx context.Context, commitHash string) (*CommitDetailResult, error) {
+func (fi *factIndex) CommitDetail(ctx context.Context, commitHash string) (*CommitDetailResult, error) {
 	hash := plumbing.NewHash(commitHash)
-	commit, err := s.repo.CommitObject(hash)
+	commit, err := fi.repo.CommitObject(hash)
 	if err != nil {
 		return nil, fmt.Errorf("CommitDetail: commit: %w", err)
 	}
@@ -706,15 +706,15 @@ func (s *Service) CommitDetail(ctx context.Context, commitHash string) (*CommitD
 
 // WalkChangedFiles returns .md files under prefix most recently changed,
 // excluding already-seen paths, up to limit results.
-func (s *Service) WalkChangedFiles(ctx context.Context, branch, fromCommit string, prefix string, seen map[string]bool, limit int) ([]FileRecency, string, error) {
-	if s.gits.CommitLogAvailable() {
-		return s.walkChangedFilesSQL(ctx, branch, prefix, seen, limit)
+func (fi *factIndex) WalkChangedFiles(ctx context.Context, branch, fromCommit string, prefix string, seen map[string]bool, limit int) ([]FileRecency, string, error) {
+	if fi.gits.CommitLogAvailable() {
+		return fi.walkChangedFilesSQL(ctx, branch, prefix, seen, limit)
 	}
-	return s.walkChangedFilesGit(ctx, branch, fromCommit, prefix, seen, limit)
+	return fi.walkChangedFilesGit(ctx, branch, fromCommit, prefix, seen, limit)
 }
 
-func (s *Service) walkChangedFilesSQL(ctx context.Context, branch, prefix string, seen map[string]bool, limit int) ([]FileRecency, string, error) {
-	rows, err := s.gits.CommitLogWalkChanged(prefix, seen, limit)
+func (fi *factIndex) walkChangedFilesSQL(ctx context.Context, branch, prefix string, seen map[string]bool, limit int) ([]FileRecency, string, error) {
+	rows, err := fi.gits.CommitLogWalkChanged(prefix, seen, limit)
 	if err != nil {
 		return nil, "", fmt.Errorf("walkChangedFilesSQL: %w", err)
 	}
@@ -727,26 +727,26 @@ func (s *Service) walkChangedFilesSQL(ctx context.Context, branch, prefix string
 		})
 	}
 
-	headHash, err := s.resolveRef(ctx, branch)
+	headHash, err := fi.resolveRef(ctx, branch)
 	if err != nil {
 		return results, "", nil
 	}
 	return results, headHash.String(), nil
 }
 
-func (s *Service) walkChangedFilesGit(ctx context.Context, branch, fromCommit string, prefix string, seen map[string]bool, limit int) ([]FileRecency, string, error) {
+func (fi *factIndex) walkChangedFilesGit(ctx context.Context, branch, fromCommit string, prefix string, seen map[string]bool, limit int) ([]FileRecency, string, error) {
 	var from plumbing.Hash
 	if fromCommit != "" {
 		from = plumbing.NewHash(fromCommit)
 	} else {
-		headHash, err := s.resolveRef(ctx, branch)
+		headHash, err := fi.resolveRef(ctx, branch)
 		if err != nil {
 			return nil, "", fmt.Errorf("walkChangedFiles: ref: %w", err)
 		}
 		from = headHash
 	}
 
-	logIter, err := s.repo.Log(&gogit.LogOptions{
+	logIter, err := fi.repo.Log(&gogit.LogOptions{
 		From:  from,
 		Order: gogit.LogOrderCommitterTime,
 	})
@@ -819,8 +819,8 @@ func (s *Service) walkChangedFilesGit(ctx context.Context, branch, fromCommit st
 
 // BranchInfo returns all branches partitioned into regular branches, agent
 // branches (prefixed "agent/"), and the agent branch matching localAgent (if any).
-func (s *Service) BranchInfo(localAgent string) (branches, agentBranches []string, matchedAgent string) {
-	refIter, err := s.gits.IterReferences()
+func (fi *factIndex) BranchInfo(localAgent string) (branches, agentBranches []string, matchedAgent string) {
+	refIter, err := fi.gits.IterReferences()
 	if err != nil {
 		return
 	}
@@ -862,13 +862,13 @@ func (s *Service) BranchInfo(localAgent string) (branches, agentBranches []strin
 
 // DiffFiles returns paths added/modified/deleted between fromCommit and the tip of branch.
 // Only .md files are returned. If fromCommit is empty, diffs from empty tree.
-func (s *Service) DiffFiles(ctx context.Context, branch, fromCommit string) (added, modified, deleted []string, err error) {
-	headHash, err := s.resolveRef(ctx, branch)
+func (fi *factIndex) DiffFiles(ctx context.Context, branch, fromCommit string) (added, modified, deleted []string, err error) {
+	headHash, err := fi.resolveRef(ctx, branch)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("DiffFiles: ref: %w", err)
 	}
 
-	toCommit, err := s.repo.CommitObject(headHash)
+	toCommit, err := fi.repo.CommitObject(headHash)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("DiffFiles: to commit: %w", err)
 	}
@@ -880,7 +880,7 @@ func (s *Service) DiffFiles(ctx context.Context, branch, fromCommit string) (add
 	var fromTree *object.Tree
 	if fromCommit != "" {
 		fromHash := plumbing.NewHash(fromCommit)
-		fc, err := s.repo.CommitObject(fromHash)
+		fc, err := fi.repo.CommitObject(fromHash)
 		if err != nil {
 			return nil, nil, nil, fmt.Errorf("DiffFiles: from commit: %w", err)
 		}

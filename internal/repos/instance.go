@@ -26,8 +26,8 @@ type RepoInstance struct {
 	dbPath              string
 	agentBranch         string
 	gsOverride          store.FactIndex         // test-only: overrides svc as GS in StoreDeps
-	pipelineOverride    store.PipelineIndex    // test-only: overrides svc.Index() as Pipeline in StoreDeps
-	toolSessionOverride store.ToolSessionIndex // test-only: overrides svc.Index() as ToolSession in StoreDeps
+	pipelineOverride    store.PipelineIndex    // test-only: overrides svc.Pipeline() in StoreDeps
+	toolSessionOverride store.ToolSessionIndex // test-only: overrides svc.ToolSession() in StoreDeps
 	ontology            *fact.Ontology
 	onCommit            func(string, string) // re-applied to new svc after SwapStore
 	svc                 *store.Service

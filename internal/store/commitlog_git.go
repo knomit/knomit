@@ -35,7 +35,7 @@ func parseOperation(email string) string {
 	return email[plusIdx+1 : atIdx]
 }
 
-// firstLine returns the first line of s.
+// firstLine returns the first line of fi.
 func firstLine(s string) string {
 	if idx := strings.IndexByte(s, '\n'); idx >= 0 {
 		return s[:idx]
@@ -115,15 +115,15 @@ func changedFilesInCommit(c *object.Commit) ([]changedFileEntry, error) {
 // populateCommitLog backfills commit_log from the tip of branch.
 // Commits are streamed directly from the iterator to CommitLogSync, which stops
 // as soon as it encounters a hash already in the table (dedup / incremental update).
-func (s *Service) populateCommitLog(ctx context.Context, branch string) error {
-	hash, err := s.resolveRef(ctx, branch)
+func (fi *factIndex) populateCommitLog(ctx context.Context, branch string) error {
+	hash, err := fi.resolveRef(ctx, branch)
 	if err != nil {
 		// Branch not found (empty repo) — just mark available if table exists.
-		_ = s.gits.CommitLogAvailable()
+		_ = fi.gits.CommitLogAvailable()
 		return nil
 	}
 
-	logIter, err := s.repo.Log(&gogit.LogOptions{
+	logIter, err := fi.repo.Log(&gogit.LogOptions{
 		From:  hash,
 		Order: gogit.LogOrderDefault,
 	})
@@ -133,7 +133,7 @@ func (s *Service) populateCommitLog(ctx context.Context, branch string) error {
 	defer logIter.Close()
 
 	var count int
-	err = s.gits.CommitLogSync(branch, func() (string, []storegit.CommitLogEntry, error) {
+	err = fi.gits.CommitLogSync(branch, func() (string, []storegit.CommitLogEntry, error) {
 		c, err := logIter.Next()
 		if err == io.EOF {
 			return "", nil, nil
@@ -159,11 +159,11 @@ func (s *Service) populateCommitLog(ctx context.Context, branch string) error {
 // appendCommitLog inserts a single new commit into commit_log.
 // New commits always get the highest rowid, preserving recency ordering.
 // Errors are logged and swallowed — commit_log is an index, not source of truth.
-func (s *Service) appendCommitLog(ctx context.Context, branch string, hash plumbing.Hash) {
-	if !s.gits.CommitLogAvailable() {
+func (fi *factIndex) appendCommitLog(ctx context.Context, branch string, hash plumbing.Hash) {
+	if !fi.gits.CommitLogAvailable() {
 		return
 	}
-	c, err := s.repo.CommitObject(hash)
+	c, err := fi.repo.CommitObject(hash)
 	if err != nil {
 		log.Warn().Err(err).Str("hash", hash.String()[:8]).Msg("commit_log: get commit")
 		return
@@ -175,7 +175,7 @@ func (s *Service) appendCommitLog(ctx context.Context, branch string, hash plumb
 	}
 	done := false
 	entries := commitEntries(c, files)
-	if err := s.gits.CommitLogSync(branch, func() (string, []storegit.CommitLogEntry, error) {
+	if err := fi.gits.CommitLogSync(branch, func() (string, []storegit.CommitLogEntry, error) {
 		if done {
 			return "", nil, nil
 		}

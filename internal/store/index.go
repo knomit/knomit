@@ -4,12 +4,16 @@
 //
 // The package is split across several files:
 //
-//   - index.go   — Core types, interfaces, Index constructor, and schema DDL.
-//   - crud.go    — Upsert, Delete, GetByPath, GetEmbedding, meta key-value ops.
-//   - search.go  — Vector search, filters, and hybrid scoring.
-//   - sync.go    — Git sync (full rebuild + incremental diff).
-//   - parse.go   — Fact markdown file parsing (YAML frontmatter + body).
-//   - vec.go     — Vector encoding/decoding, pairwise distances, sqlite-vec init.
+//   - index.go          — Core domain types, shared interfaces, and helpers.
+//   - search_index.go   — searchIndex type: Open, schema DDL, embedder wiring.
+//   - fact_index.go     — factIndex type: FactIndex interface implementation.
+//   - pipeline_index.go — pipelineIndex type: PipelineIndex interface.
+//   - tool_index.go     — toolIndex type: ToolSessionIndex interface.
+//   - crud.go           — Upsert, Delete, GetByPath, GetEmbedding, meta ops.
+//   - search.go         — Vector search, filters, and hybrid scoring.
+//   - sync.go           — Git sync (full rebuild + incremental diff).
+//   - parse.go          — Fact markdown file parsing (YAML frontmatter + body).
+//   - vec.go            — Vector encoding/decoding, pairwise distances, sqlite-vec init.
 package store
 
 import (

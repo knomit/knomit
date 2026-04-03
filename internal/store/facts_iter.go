@@ -24,12 +24,12 @@ type FactsIter struct {
 // FactsIter opens a cursor over facts for the given branch ordered by
 // fact_id DESC. The caller must call Close() when done to release the
 // underlying database cursor.
-func (s *Service) FactsIter(ctx context.Context, branch string) (*FactsIter, error) {
-	branchID, err := s.idx.rh.branchID(ctx, branch)
+func (fi *factIndex) FactsIter(ctx context.Context, branch string) (*FactsIter, error) {
+	branchID, err := fi.rh.branchID(ctx, branch)
 	if err != nil {
 		return nil, err
 	}
-	rows, err := conn(ctx, s.db).QueryContext(ctx,
+	rows, err := conn(ctx, fi.rh.db).QueryContext(ctx,
 		`SELECT bf.path, f.blob_hash, bf.commit_hash
 		 FROM branch_facts bf
 		 JOIN facts f ON f.id = bf.fact_id
