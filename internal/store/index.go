@@ -97,6 +97,7 @@ type store struct {
 	rh *repoHandler
 	*searchIndex
 	*pipelineIndex
+	*toolIndex
 }
 
 // newIndex wraps an existing *repoHandler. Schema must already be applied.
@@ -106,6 +107,7 @@ func newIndex(rh *repoHandler) *store {
 		rh:             rh,
 		searchIndex:    &searchIndex{rh: rh},
 		pipelineIndex:  &pipelineIndex{rh: rh},
+		toolIndex:      &toolIndex{rh: rh},
 	}
 }
 
