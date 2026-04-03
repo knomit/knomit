@@ -33,13 +33,13 @@ var _ SearchIndex = (*searchIndex)(nil)
 // when Service is used in DB-only mode via Open().
 type Service struct {
 	rh          *repoHandler
-	crypt       *Crypt // nil if no key material provided
 	handlerOnce sync.Once
 	handler     http.Handler
 	fi          *factIndex
 	si          *searchIndex
 	pi          *pipelineIndex
 	ti          *toolIndex
+	ri          *remoteIndex
 }
 
 // Open opens (or creates) a unified SQLite database at path, initializes the
@@ -79,17 +79,22 @@ func Open(path string) (*Service, error) {
 	rh.onDrop = si.GC
 	fi := &factIndex{rh: rh}
 	fi.postCommit = si.Sync
+	ri := &remoteIndex{rh: rh, fi: fi}
 	return &Service{
 		rh: rh,
 		fi: fi,
 		si: si,
 		pi: &pipelineIndex{rh: rh},
 		ti: &toolIndex{rh: rh},
+		ri: ri,
 	}, nil
 }
 
 // SetCrypt sets the encryption provider for credential storage.
-func (s *Service) SetCrypt(c *Crypt) { s.crypt = c }
+func (s *Service) SetCrypt(c *Crypt) { s.ri.crypt = c }
+
+// Remote returns the RemoteIndex for git remote configuration and sync.
+func (s *Service) Remote() RemoteIndex { return s.ri }
 
 // Facts returns the FactIndex for git-backed fact operations.
 func (s *Service) Facts() FactIndex { return s.fi }
