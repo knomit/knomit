@@ -303,33 +303,6 @@ func (si *searchIndex) GetByPath(ctx context.Context, branch, path string) (*Fac
 	return scanFactWithBody(row)
 }
 
-// GetEmbedding returns the stored embedding vector for a fact on the given branch.
-// Returns nil, nil if no embedding exists for this path.
-func (si *searchIndex) GetEmbedding(ctx context.Context, branch, path string) ([]float32, error) {
-	branchID, err := si.rh.branchID(ctx, branch)
-	if err != nil {
-		return nil, fmt.Errorf("getEmbedding: %w", err)
-	}
-	var blob []byte
-	err = conn(ctx, si.rh.db).QueryRowContext(ctx,
-		`SELECT fv.embedding
-		 FROM branch_facts bf
-		 JOIN facts f ON f.id = bf.fact_id
-		 JOIN facts_vec fv ON fv.rowid = f.id
-		 WHERE bf.branch_id = ? AND bf.path = ?`,
-		branchID, path,
-	).Scan(&blob)
-	if err == sql.ErrNoRows {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("get embedding: %w", err)
-	}
-	if len(blob) == 0 {
-		return nil, nil
-	}
-	return bytesToFloat32Slice(blob)
-}
 
 // getEmbeddingByFact returns the stored embedding vector for a specific fact
 // version identified by (path, blob_hash). No branch scoping.
@@ -381,9 +354,9 @@ func (si *searchIndex) casLastCommit(ctx context.Context, branch, prev, next str
 	return n > 0, nil
 }
 
-// SetLastCommit stores the last processed commit hash in the meta table,
+// setLastCommit stores the last processed commit hash in the meta table,
 // scoped to the given branch.
-func (si *searchIndex) SetLastCommit(ctx context.Context, branch, hash string) error {
+func (si *searchIndex) setLastCommit(ctx context.Context, branch, hash string) error {
 	key := "last_commit:" + branch
 	_, err := conn(ctx, si.rh.db).ExecContext(ctx,
 		`INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)`,
@@ -1172,118 +1145,6 @@ func isDeletedVal(v interface{}) bool {
 	return false
 }
 
-// VersionSummary is one entry in a fact's version history.
-type VersionSummary struct {
-	CommitHash  string `json:"commit_hash"`
-	CommittedAt int64  `json:"committed_at"`
-	Title       string `json:"title"`
-}
-
-// FactVersionHistory returns all known historical versions of path, newest first.
-// Only versions that have been graph-indexed (FactVersion nodes exist) are returned.
-// Uses direct SQL against EAV tables for reliability (GraphQLite parameterized
-// MATCH does not reliably return SET properties via json_each).
-// branch is validated but not used for filtering — version history is commit-level.
-func (si *searchIndex) FactVersionHistory(ctx context.Context, branch, path string) ([]VersionSummary, error) {
-	if _, err := si.rh.branchID(ctx, branch); err != nil {
-		return nil, fmt.Errorf("FactVersionHistory: %w", err)
-	}
-	// committed_at is stored in node_props_real (graphSetFactVersionProps uses
-	// INSERT INTO node_props_real); title is in node_props_text.
-	rows, err := conn(ctx, si.rh.db).QueryContext(ctx, `
-		SELECT
-			COALESCE(ch_prop.value, '') AS commit_hash,
-			CAST(COALESCE(ca_prop.value, 0) AS INTEGER) AS committed_at,
-			COALESCE(title_prop.value, '') AS title
-		FROM node_labels nl
-		JOIN node_props_text path_prop ON path_prop.node_id = nl.node_id
-			AND path_prop.key_id = (SELECT id FROM property_keys WHERE key = 'path' LIMIT 1)
-		LEFT JOIN node_props_text ch_prop ON ch_prop.node_id = nl.node_id
-			AND ch_prop.key_id = (SELECT id FROM property_keys WHERE key = 'commit_hash' LIMIT 1)
-		LEFT JOIN node_props_real ca_prop ON ca_prop.node_id = nl.node_id
-			AND ca_prop.key_id = (SELECT id FROM property_keys WHERE key = 'committed_at' LIMIT 1)
-		LEFT JOIN node_props_text title_prop ON title_prop.node_id = nl.node_id
-			AND title_prop.key_id = (SELECT id FROM property_keys WHERE key = 'title' LIMIT 1)
-		WHERE nl.label = ? AND path_prop.value = ?
-		ORDER BY COALESCE(ca_prop.value, 0) DESC
-	`, NodeFactVersion, path)
-	if err != nil {
-		return nil, fmt.Errorf("FactVersionHistory: %w", err)
-	}
-	defer rows.Close()
-
-	var result []VersionSummary
-	for rows.Next() {
-		var v VersionSummary
-		if err := rows.Scan(&v.CommitHash, &v.CommittedAt, &v.Title); err != nil {
-			return nil, fmt.Errorf("FactVersionHistory: scan: %w", err)
-		}
-		if v.CommitHash == "" {
-			continue
-		}
-		result = append(result, v)
-	}
-	return result, rows.Err()
-}
-
-// ExplainFactAt returns the incoming and outgoing DERIVED_FROM neighbours for
-// the FactVersion identified by (path, commitHash).
-//
-// Outgoing: refs declared in this specific version (FactVersion→Fact edges).
-// Incoming: all FactVersions that reference this path's Fact node.
-// Self-loops are filtered out.
-//
-// Both queries use direct SQL against the EAV tables to avoid GraphQLite's
-// same-label two-node MATCH self-loop bug (established in Task 3).
-func (si *searchIndex) ExplainFactAt(ctx context.Context, branch, path, commitHash string) (ExplainResult, error) {
-	// branch is accepted for API consistency but not used for filtering:
-	// ExplainFactAt queries historical FactVersion nodes which exist outside
-	// branch scoping. The incoming/outgoing refs reflect what was true at
-	// the given commit, regardless of current branch state.
-	_, err := si.rh.branchID(ctx, branch)
-	if err != nil {
-		return ExplainResult{}, fmt.Errorf("ExplainFactAt: %w", err)
-	}
-
-	// Resolve FactVersion node ID for (path, commitHash).
-	var versionID int64
-	err = conn(ctx, si.rh.db).QueryRowContext(ctx, `
-		SELECT np.node_id
-		FROM node_props_text np
-		JOIN property_keys pk ON pk.id = np.key_id
-		JOIN node_labels nl ON nl.node_id = np.node_id
-		WHERE pk.key = 'commit_hash' AND np.value = ? AND nl.label = ?
-		LIMIT 1
-	`, commitHash, NodeFactVersion).Scan(&versionID)
-	if err != nil {
-		return ExplainResult{}, fmt.Errorf("ExplainFactAt: resolve version node: %w", err)
-	}
-
-	// Outgoing: DERIVED_FROM edges from this FactVersion to Fact nodes.
-	outgoing, err := si.refSummariesByEdgeSource(ctx, versionID, EdgeDerivedFrom, NodeFact)
-	if err != nil {
-		return ExplainResult{}, fmt.Errorf("ExplainFactAt outgoing: %w", err)
-	}
-
-	// Incoming: DERIVED_FROM edges from any FactVersion to the Fact node for path.
-	factID, err := si.graphNodeIDByProp(ctx, NodeFact, "path", path)
-	if err != nil || factID == 0 {
-		// No Fact node means no incoming refs — return what we have.
-		return ExplainResult{
-			Outgoing: filterSelf(outgoing, path),
-			Incoming: []RefSummary{},
-		}, nil
-	}
-	incoming, err := si.refSummariesByEdgeTarget(ctx, factID, EdgeDerivedFrom, NodeFactVersion)
-	if err != nil {
-		return ExplainResult{}, fmt.Errorf("ExplainFactAt incoming: %w", err)
-	}
-
-	return ExplainResult{
-		Incoming: filterSelf(incoming, path),
-		Outgoing: filterSelf(outgoing, path),
-	}, nil
-}
 
 // refSummariesByEdgeSource returns RefSummary entries for all target nodes
 // reachable from sourceNodeID via edges of edgeType, where the target has label targetLabel.
@@ -2698,7 +2559,7 @@ type RebuildProgress func(phase string, done, total int)
 // Rebuild clears the last-commit marker and re-indexes every file from HEAD
 // using three phases: facts, embeddings, graph.
 func (si *searchIndex) Rebuild(ctx context.Context, branch string, progress RebuildProgress) error {
-	if err := si.SetLastCommit(ctx, branch, ""); err != nil {
+	if err := si.setLastCommit(ctx, branch, ""); err != nil {
 		return fmt.Errorf("rebuild: clear last commit: %w", err)
 	}
 
@@ -2739,7 +2600,7 @@ func (si *searchIndex) Rebuild(ctx context.Context, branch string, progress Rebu
 	}
 	log.Info().Int("versions", versioned).Str("elapsed", fmt.Sprintf("%.1fs", time.Since(start).Seconds())).Msg("rebuild: phase 4 (history) complete")
 
-	return si.SetLastCommit(ctx, branch, head)
+	return si.setLastCommit(ctx, branch, head)
 }
 
 // indexFile reads a single file from git, parses it as a fact, and upserts

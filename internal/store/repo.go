@@ -4,7 +4,6 @@ package store
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"os"
 	"strings"
@@ -18,7 +17,6 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/transport"
 	"github.com/rs/zerolog/log"
 
-	storegit "knomit/internal/store/git"
 )
 
 // OpenRepo opens an existing knomit git repo using the Service's storer.
@@ -282,9 +280,3 @@ func (s *Service) initFromEmptyRemote(repo *gogit.Repository, originURL string, 
 	return nil
 }
 
-// NewStorerForClone creates a new storegit.Storer backed by the given *sql.DB.
-// This is a convenience for callers that need a storer without a full Service
-// (e.g. temporary clone targets).
-func NewStorerForClone(db *sql.DB) *storegit.Storer {
-	return storegit.NewStorer(db)
-}

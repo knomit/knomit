@@ -111,9 +111,6 @@ func (s *Service) ToolSession() ToolSessionIndex { return s.ti }
 // Branches returns the branch index.
 func (s *Service) Branches() BranchIndex { return s.rh }
 
-// Storer returns the go-git storer interface for use with git transport
-// (e.g. server.MapLoader for in-memory cloning).
-func (s *Service) Storer() storer.Storer { return s.rh.gits }
 
 // Checkpoint flushes the WAL to the main database file so the .db file is
 // self-contained (e.g. before file-level copy). This is a no-op if WAL mode
