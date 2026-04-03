@@ -64,15 +64,15 @@ type FileRecency struct {
 	Timestamp time.Time
 }
 
-// SyncResult is returned by Sync to report what happened during synchronization.
-type SyncResult struct {
+// syncResult is returned by Sync to report what happened during synchronization.
+type syncResult struct {
 	Synced      bool   // true if tree changed (merge or fast-forward)
 	FastForward bool   // true if fast-forward (no merge commit)
 	MergeCommit string // hash of merge commit (empty if ff or no-op)
 }
 
-// PushResult is returned by Push to report what happened.
-type PushResult struct {
+// pushResult is returned by Push to report what happened.
+type pushResult struct {
 	Pushed bool // true if refs were updated on remote
 }
 

@@ -60,12 +60,3 @@ func signCommitInPlace(s *storegit.Storer, signer ssh.Signer, commitHash plumbin
 	return newHash, nil
 }
 
-// CommitHasSignature returns true if the commit at hash has a PGPSignature.
-func CommitHasSignature(s *storegit.Storer, commitHashStr string) (bool, error) {
-	hash := plumbing.NewHash(commitHashStr)
-	commit, err := object.GetCommit(s, hash)
-	if err != nil {
-		return false, err
-	}
-	return commit.PGPSignature != "", nil
-}

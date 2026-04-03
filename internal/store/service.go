@@ -18,8 +18,8 @@ import (
 	"knomit/internal/store/migrate"
 )
 
-// BlobObjectType is the go-git integer for plumbing.BlobObject.
-const BlobObjectType = 3
+// blobObjectType is the go-git integer for plumbing.BlobObject.
+const blobObjectType = 3
 
 // Compile-time checks.
 var _ FactIndex        = (*factIndex)(nil)

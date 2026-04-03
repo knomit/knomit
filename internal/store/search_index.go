@@ -74,7 +74,7 @@ func (si *searchIndex) Upsert(ctx context.Context, branch, commitHash string, re
 		var data []byte
 		err := conn(ctx, si.rh.db).QueryRowContext(ctx,
 			`SELECT data FROM objects WHERE hash = ? AND type = ?`,
-			rec.BlobHash, BlobObjectType,
+			rec.BlobHash, blobObjectType,
 		).Scan(&data)
 		if err != nil {
 			return fmt.Errorf("upsert: blob %s not found: %w", rec.BlobHash, err)
@@ -298,7 +298,7 @@ func (si *searchIndex) GetByPath(ctx context.Context, branch, path string) (*Fac
 		 JOIN facts f ON f.id = bf.fact_id
 		 JOIN objects o ON o.hash = f.blob_hash AND o.type = ?
 		 LEFT JOIN commit_log cl ON cl.commit_hash = bf.commit_hash AND cl.path = bf.path
-		 WHERE bf.branch_id = ? AND bf.path = ?`, BlobObjectType, branchID, path,
+		 WHERE bf.branch_id = ? AND bf.path = ?`, blobObjectType, branchID, path,
 	)
 	return scanFactWithBody(row)
 }
@@ -830,7 +830,7 @@ func (si *searchIndex) Search(ctx context.Context, branch string, q SearchQuery)
 
 	// ── Text-less path: return all facts matching filters with score 100 ──
 	if q.Text == "" {
-		args := append(append([]any{BlobObjectType, branchID}, flt.args...), limit)
+		args := append(append([]any{blobObjectType, branchID}, flt.args...), limit)
 		rows, err := conn(ctx, si.rh.db).QueryContext(ctx,
 			`SELECT f.path, f.title, f.blob_hash, f.type, f.domain, f.entities,
 			        f.confidence, f.sources, f.refs, f.evidence_weight,
@@ -990,7 +990,7 @@ func (si *searchIndex) Search(ctx context.Context, branch string, q SearchQuery)
 	// ── Phase 2: fetch bodies for the top-limit facts only ────────────────
 	bodyPH := strings.Repeat("?,", len(candidates))
 	bodyArgs := make([]any, 0, len(candidates)+1)
-	bodyArgs = append(bodyArgs, BlobObjectType)
+	bodyArgs = append(bodyArgs, blobObjectType)
 	for _, c := range candidates {
 		bodyArgs = append(bodyArgs, c.rec.BlobHash)
 	}
@@ -2159,7 +2159,7 @@ func (si *searchIndex) rebuildFacts(ctx context.Context, branch, head string, pr
 			COALESCE(json_extract(pe.parsed, '$.evidence_weight'), 0)
 		FROM parsed_entries pe
 		WHERE pe.parsed IS NOT NULL
-	`, BlobObjectType)
+	`, blobObjectType)
 	if err != nil {
 		return 0, fmt.Errorf("rebuildFacts: bulk insert: %w", err)
 	}
@@ -2271,7 +2271,7 @@ func (si *searchIndex) rebuildEmbeddings(ctx context.Context, progress RebuildPr
 			FROM facts f
 			JOIN objects o ON o.hash = f.blob_hash AND o.type = ?
 			WHERE f.rowid IN (` + string(placeholders) + `)`
-		qargs := append([]any{BlobObjectType}, args...)
+		qargs := append([]any{blobObjectType}, args...)
 
 		bodyRows, err := conn(ctx, si.rh.db).QueryContext(ctx, q, qargs...)
 		if err != nil {

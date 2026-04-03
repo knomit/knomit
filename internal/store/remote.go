@@ -30,7 +30,7 @@ type Remote struct {
 func (s *Service) SetRemote(name, url, branch string, interval, pushInterval int, authMethod, authToken string) error {
 	storedToken := authToken
 	if s.crypt != nil && authToken != "" {
-		enc, err := s.crypt.Encrypt(authToken)
+		enc, err := s.crypt.encrypt(authToken)
 		if err != nil {
 			return fmt.Errorf("encrypt token: %w", err)
 		}
@@ -73,7 +73,7 @@ func (s *Service) GetRemote(name string) (*Remote, error) {
 	}
 	// Decrypt token if encrypted.
 	if s.crypt != nil && r.AuthToken != "" {
-		dec, decErr := s.crypt.Decrypt(r.AuthToken)
+		dec, decErr := s.crypt.decrypt(r.AuthToken)
 		if decErr != nil {
 			// May be plaintext from before encryption was enabled — use as-is.
 			_ = decErr

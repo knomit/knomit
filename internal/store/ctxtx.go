@@ -14,7 +14,3 @@ func conn(ctx context.Context, db *sql.DB) storegit.CtxExecer {
 func beginTxIfNeeded(ctx context.Context, db *sql.DB) (context.Context, *sql.Tx, bool, error) {
 	return storegit.BeginTxIfNeeded(ctx, db)
 }
-
-// WithTx and TxFromContext are re-exported for external callers (synthesize, etc.)
-var WithTx = storegit.WithTx
-var TxFromContext = storegit.TxFromContext
