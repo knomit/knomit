@@ -81,7 +81,6 @@ func handleRebuild() http.HandlerFunc {
 			return
 		}
 
-		idx := svc.Index()
 		branch := agentBranch
 
 		id, err := hub.Start("rebuild", func(ctx context.Context, emit func(repos.TaskEvent)) {
@@ -91,7 +90,7 @@ func handleRebuild() http.HandlerFunc {
 					emit(repos.TaskEvent{Status: "running", Phase: subPhase, Message: fmt.Sprintf("%d/%d", done, total), Repo: repo})
 				}
 			}
-			if err := idx.Rebuild(r.Context(), svc, branch, progress); err != nil {
+			if err := svc.Search().Rebuild(r.Context(), svc, branch, progress); err != nil {
 				emit(repos.TaskEvent{Status: "error", Message: err.Error(), Repo: repo})
 				return
 			}

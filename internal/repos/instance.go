@@ -45,21 +45,23 @@ type RepoInstance struct {
 func (ri *RepoInstance) WithRead(fn func(StoreDeps)) {
 	ri.mu.RLock()
 	defer ri.mu.RUnlock()
-	gs := store.FactIndex(ri.svc)
+	var gs store.FactIndex
 	if ri.gsOverride != nil {
 		gs = ri.gsOverride
+	} else if ri.svc != nil {
+		gs = ri.svc.Facts()
 	}
 	var pipeline store.PipelineIndex
 	if ri.pipelineOverride != nil {
 		pipeline = ri.pipelineOverride
 	} else if ri.svc != nil {
-		pipeline = ri.svc.Index()
+		pipeline = ri.svc.Pipeline()
 	}
 	var toolSession store.ToolSessionIndex
 	if ri.toolSessionOverride != nil {
 		toolSession = ri.toolSessionOverride
 	} else if ri.svc != nil {
-		toolSession = ri.svc.Index()
+		toolSession = ri.svc.ToolSession()
 	}
 	fn(StoreDeps{
 		GS:          gs,

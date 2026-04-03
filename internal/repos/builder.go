@@ -33,7 +33,7 @@ type repoBuilder struct {
 
 	// accumulated state
 	svc      *store.Service
-	idx      store.Store
+	idx      store.SearchIndex
 	ontology *fact.Ontology
 }
 
@@ -77,7 +77,7 @@ func (b *repoBuilder) loadOntology() {
 		b.ontology = fact.DefaultOntology()
 		return
 	}
-	result, err := b.svc.ReadFact(context.Background(), b.agentBranch, "domains/ontology.yaml", nil)
+	result, err := b.svc.Facts().ReadFact(context.Background(), b.agentBranch, "domains/ontology.yaml", nil)
 	if err != nil || result.Content == "" {
 		log.Warn().Str("repo", b.name).Msg("domains/ontology.yaml not found, using default ontology")
 		b.ontology = fact.DefaultOntology()
@@ -138,7 +138,7 @@ func (b *repoBuilder) ensureBranch() {
 // setupIndex configures the search index with the embedder and runs an initial
 // sync against the git store.
 func (b *repoBuilder) setupIndex() {
-	b.idx = b.svc.Index()
+	b.idx = b.svc.Search()
 	if b.embedder != nil {
 		b.idx.SetEmbedder(b.embedder)
 	}
@@ -152,9 +152,9 @@ func (b *repoBuilder) setupIndex() {
 // processes facts written after this point.
 func (b *repoBuilder) seedWatermarks() {
 	for _, tool := range []string{"review", "hypothesize"} {
-		if wm, _ := b.idx.GetPipelineWatermark(context.Background(), tool, b.agentBranch); wm == "" {
+		if wm, _ := b.svc.Pipeline().GetPipelineWatermark(context.Background(), tool, b.agentBranch); wm == "" {
 			if head, err := b.svc.HeadCommit(context.Background(), b.agentBranch); err == nil {
-				if err := b.idx.SetPipelineWatermark(context.Background(), tool, b.agentBranch, head); err != nil {
+				if err := b.svc.Pipeline().SetPipelineWatermark(context.Background(), tool, b.agentBranch, head); err != nil {
 					log.Warn().Err(err).Str("tool", tool).Msg("pipeline watermark: initial set failed")
 				}
 			}
@@ -186,7 +186,7 @@ func (b *repoBuilder) build() *RepoInstance {
 		ri.mu.RLock()
 		currentSvc := ri.svc
 		ri.mu.RUnlock()
-		if err := currentSvc.Index().Sync(context.Background(), currentSvc, b.agentBranch); err != nil {
+		if err := currentSvc.Search().Sync(context.Background(), currentSvc, b.agentBranch); err != nil {
 			log.Warn().Err(err).Str("repo", b.name).Msg("observer sync failed")
 		}
 		hub.broadcastStatus(hash)

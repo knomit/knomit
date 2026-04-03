@@ -25,7 +25,7 @@ type Remote struct {
 
 // SetRemote inserts or replaces a remote configuration.
 func (s *Service) SetRemote(name, url, branch string, interval, pushInterval int) error {
-	_, err := s.db.Exec(
+	_, err := s.rh.db.Exec(
 		`INSERT OR REPLACE INTO remotes (name, url, branch, interval, push_interval) VALUES (?, ?, ?, ?, ?)`,
 		name, url, branch, interval, pushInterval,
 	)
@@ -43,7 +43,7 @@ func (s *Service) SetRemoteWithAuth(name, url, branch string, interval, pushInte
 		}
 		storedToken = enc
 	}
-	_, err := s.db.Exec(
+	_, err := s.rh.db.Exec(
 		`INSERT OR REPLACE INTO remotes (name, url, branch, interval, push_interval, auth_method, auth_token) VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		name, url, branch, interval, pushInterval, authMethod, storedToken,
 	)
@@ -53,7 +53,7 @@ func (s *Service) SetRemoteWithAuth(name, url, branch string, interval, pushInte
 // GetRemote reads a remote configuration by name.
 func (s *Service) GetRemote(name string) (*Remote, error) {
 	r := &Remote{}
-	err := s.db.QueryRow(
+	err := s.rh.db.QueryRow(
 		`SELECT name, url, branch, interval, last_sync_at, last_status, last_error,
 		        push_interval, last_push_at, last_push_status, last_push_error,
 		        auth_method, auth_token
@@ -84,7 +84,7 @@ func (s *Service) GetRemote(name string) (*Remote, error) {
 // UpdateRemoteStatus updates the pull-sync status fields for a remote.
 func (s *Service) UpdateRemoteStatus(name, status string, syncErr *string) error {
 	now := time.Now().UTC().Format(time.RFC3339)
-	_, err := s.db.Exec(
+	_, err := s.rh.db.Exec(
 		`UPDATE remotes SET last_sync_at = ?, last_status = ?, last_error = ? WHERE name = ?`,
 		now, status, syncErr, name,
 	)
@@ -94,7 +94,7 @@ func (s *Service) UpdateRemoteStatus(name, status string, syncErr *string) error
 // UpdateRemotePushStatus updates the push status fields for a remote.
 func (s *Service) UpdateRemotePushStatus(name, status string, pushErr *string) error {
 	now := time.Now().UTC().Format(time.RFC3339)
-	_, err := s.db.Exec(
+	_, err := s.rh.db.Exec(
 		`UPDATE remotes SET last_push_at = ?, last_push_status = ?, last_push_error = ? WHERE name = ?`,
 		now, status, pushErr, name,
 	)

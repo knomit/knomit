@@ -11,6 +11,7 @@ type FactIndex interface {
 	FactExists(ctx context.Context, branch, path string) (bool, error)
 	ListDir(ctx context.Context, branch, path string) ([]DirEntry, error)
 	ListAll(ctx context.Context, branch string) ([]string, error)
+	ListAllWithHash(ctx context.Context, branch string) (paths []string, blobHashes []string, err error)
 	Log(ctx context.Context, branch, path string) ([]LogEntry, error)
 	LogPaginated(ctx context.Context, branch, path string, limit int, after, from, before string) ([]LogEntryWithTags, string, string, error)
 	CommitDetail(ctx context.Context, commitHash string) (*CommitDetailResult, error)
@@ -20,6 +21,7 @@ type FactIndex interface {
 	DiffFiles(ctx context.Context, branch, fromCommit string) (added, modified, deleted []string, err error)
 	WalkChangedFiles(ctx context.Context, branch, fromCommit, prefix string, seen map[string]bool, limit int) ([]FileRecency, string, error)
 	FactsIter(ctx context.Context, branch string) (*FactsIter, error)
+	BranchInfo(localAgent string) (branches, agentBranches []string, matchedAgent string)
 }
 
 // SearchIndex is the interface for the fact search index. Implemented by *searchIndex.
@@ -71,14 +73,6 @@ type BranchIndex interface {
 	MergeBranch(ctx context.Context, src, dst string) error
 	DropBranch(ctx context.Context, name string) error
 	ListBranches(ctx context.Context) ([]Branch, error)
-}
-
-// Store is the composite interface for all index operations on a fact store.
-// Implemented by *store.
-type Store interface {
-	SearchIndex
-	PipelineIndex
-	ToolSessionIndex
 }
 
 // Embedder computes vector embeddings for text.

@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"strings"
 	"sync"
-	"time"
 
 	gogit "github.com/go-git/go-git/v5"
 	gogitconfig "github.com/go-git/go-git/v5/config"
@@ -15,7 +14,6 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/go-git/go-git/v5/plumbing/storer"
 	"github.com/go-git/go-git/v5/plumbing/transport"
-	"github.com/rs/zerolog/log"
 	"golang.org/x/crypto/ssh"
 
 	storegit "knomit/internal/store/git"
@@ -26,33 +24,30 @@ import (
 const BlobObjectType = 3
 
 // Compile-time checks.
-var _ gitReader = (*Service)(nil)
-var _ Store = (*store)(nil)
-var _ FactIndex = (*Service)(nil)
+var _ BranchIndex      = (*repoHandler)(nil)
+var _ gitReader        = (*factIndex)(nil)
+var _ gitReader        = (*Service)(nil)
+var _ FactIndex        = (*factIndex)(nil)
+var _ SearchIndex      = (*searchIndex)(nil)
+var _ PipelineIndex    = (*pipelineIndex)(nil)
+var _ ToolSessionIndex = (*toolIndex)(nil)
 
 // Service is the single entry point for all database and git access. It opens one
 // SQLite file with sqlite-vec + GraphQLite extensions, runs the embedded
-// schema, and provides both a go-git Storer and an Index over the shared *sql.DB.
+// schema, and provides both a go-git Storer and typed index accessors.
 //
-// The git-related fields (repo, branchMu, configMu, auth, signer, handler,
-// handlerOnce) are populated by the repo constructors (OpenRepo, InitRepo, etc.)
-// and are nil/zero when Service is used in DB-only mode via Open().
+// Git-backed fact operations are delegated to fi (*factIndex), which is
+// populated by the repo constructors (OpenRepo, InitRepo, etc.) and is nil/zero
+// when Service is used in DB-only mode via Open().
 type Service struct {
-	db    *sql.DB
-	idx   *store
-	rh    *repoHandler
-	gits  *storegit.Storer
-	crypt *Crypt // nil if no key material provided
-
-	// Git-store fields — populated by OpenRepo / InitRepo / CloneFrom / InitFromRemote.
-	repo        *gogit.Repository
-	branchMu    sync.Map   // keyed by branch name → *sync.Mutex
-	configMu    sync.Mutex // guards configureRemote
-	auth        transport.AuthMethod
-	signer      ssh.Signer // signs commits when set
+	rh          *repoHandler
+	crypt       *Crypt // nil if no key material provided
 	handlerOnce sync.Once
 	handler     http.Handler
-	onCommit    func(branch, hash string) // optional external callback
+	fi          *factIndex
+	si          *searchIndex
+	pi          *pipelineIndex
+	ti          *toolIndex
 }
 
 // Open opens (or creates) a unified SQLite database at path, initializes the
@@ -86,152 +81,84 @@ func Open(path string) (*Service, error) {
 		return nil, fmt.Errorf("store.Open: %w", err)
 	}
 
-	gits := storegit.NewStorer(db)
 	rh := newRepoHandler(db)
-	idx := newIndex(rh)
-	rh.onDrop = idx.GC
-
-	return &Service{db: db, idx: idx, rh: rh, gits: gits}, nil
+	gits := storegit.NewStorer(db)
+	si := &searchIndex{rh: rh}
+	rh.onDrop = si.GC
+	fi := &factIndex{rh: rh, gits: gits}
+	fi.postCommit = si.Sync
+	return &Service{
+		rh: rh,
+		fi: fi,
+		si: si,
+		pi: &pipelineIndex{rh: rh},
+		ti: &toolIndex{rh: rh},
+	}, nil
 }
 
 // SetCrypt sets the encryption provider for credential storage.
 func (s *Service) SetCrypt(c *Crypt) { s.crypt = c }
 
-// Index returns the store index.
-func (s *Service) Index() Store { return s.idx }
+// Facts returns the FactIndex for git-backed fact operations.
+func (s *Service) Facts() FactIndex { return s.fi }
+
+// Search returns the SearchIndex for full-text and vector search.
+func (s *Service) Search() SearchIndex { return s.si }
+
+// Pipeline returns the PipelineIndex for pipeline session management.
+func (s *Service) Pipeline() PipelineIndex { return s.pi }
+
+// ToolSession returns the ToolSessionIndex for tool session persistence.
+func (s *Service) ToolSession() ToolSessionIndex { return s.ti }
 
 // Branches returns the branch index.
 func (s *Service) Branches() BranchIndex { return s.rh }
 
 // Storer returns the go-git storer interface for use with git transport
 // (e.g. server.MapLoader for in-memory cloning).
-func (s *Service) Storer() storer.Storer { return s.gits }
+func (s *Service) Storer() storer.Storer { return s.fi.gits }
 
 // Checkpoint flushes the WAL to the main database file so the .db file is
 // self-contained (e.g. before file-level copy). This is a no-op if WAL mode
 // is not enabled.
 func (s *Service) Checkpoint() error {
-	_, err := s.db.Exec("PRAGMA wal_checkpoint(TRUNCATE)")
+	_, err := s.rh.db.Exec("PRAGMA wal_checkpoint(TRUNCATE)")
 	return err
 }
 
 // Close closes the underlying database connection.
-func (s *Service) Close() error { return s.db.Close() }
-
-
+func (s *Service) Close() error { return s.rh.db.Close() }
 
 // SetAuth sets the transport authentication method used by Sync and Push.
 func (s *Service) SetAuth(auth transport.AuthMethod) {
-	s.auth = auth
+	s.fi.auth = auth
 }
 
 // SetSigner sets the SSH signer used for commit signing.
 func (s *Service) SetSigner(signer ssh.Signer) {
-	s.signer = signer
-}
-
-// resolveRef returns the commit hash at the tip of branch.
-func (s *Service) resolveRef(ctx context.Context, branch string) (plumbing.Hash, error) {
-	ref, err := s.gits.Reference(plumbing.NewBranchReferenceName(branch))
-	if err != nil {
-		return plumbing.ZeroHash, fmt.Errorf("resolveRef %q: %w", branch, err)
-	}
-	return ref.Hash(), nil
-}
-
-// lockBranch acquires the per-branch mutex and returns an unlock function.
-func (s *Service) lockBranch(branch string) func() {
-	v, _ := s.branchMu.LoadOrStore(branch, &sync.Mutex{})
-	mu := v.(*sync.Mutex)
-	mu.Lock()
-	return mu.Unlock
-}
-
-// deriveAgentID extracts the agent identifier from a branch name.
-// "agent/laptop-abc" → "laptop-abc", "main" → "main".
-func deriveAgentID(branch string) string {
-	if after, ok := strings.CutPrefix(branch, "agent/"); ok {
-		return after
-	}
-	return branch
-}
-
-// authorSig returns the author signature for a given operation.
-func (s *Service) authorSig(branch, operation string) object.Signature {
-	agentID := deriveAgentID(branch)
-	return object.Signature{
-		Name:  agentID,
-		Email: agentID + "+" + operation + "@agents.knomit.io",
-		When:  time.Now(),
-	}
-}
-
-// committerSig returns the committer signature (stable per agent).
-func (s *Service) committerSig(branch string) object.Signature {
-	agentID := deriveAgentID(branch)
-	return object.Signature{
-		Name:  agentID,
-		Email: agentID + "@agents.knomit.io",
-		When:  time.Now(),
-	}
+	s.fi.signer = signer
 }
 
 // SetOnCommit registers a callback invoked after every commit (after internal
 // bookkeeping). This allows callers to observe commits for side-effects such
 // as SSE broadcasting. The callback receives the branch name and commit hash.
 func (s *Service) SetOnCommit(fn func(branch, hash string)) {
-	s.onCommit = fn
-}
-
-// notifyCommit calls appendCommitLog directly and then the optional external
-// callback registered via SetOnCommit.
-func (s *Service) notifyCommit(ctx context.Context, branch string, hash plumbing.Hash) {
-	s.appendCommitLog(ctx, branch, hash)
-	if s.onCommit != nil {
-		s.onCommit(branch, hash.String())
-	}
-}
-
-// HeadCommit returns the hash of the tip commit of branch as a hex string.
-func (s *Service) HeadCommit(ctx context.Context, branch string) (string, error) {
-	hash, err := s.resolveRef(ctx, branch)
-	if err != nil {
-		return "", fmt.Errorf("HeadCommit: %w", err)
-	}
-	return hash.String(), nil
-}
-
-// createBranch creates a new branch ref pointing at the tip of fromBranch.
-// No-op if branch already exists.
-func (s *Service) createBranch(ctx context.Context, branch, fromBranch string) error {
-	newRefName := plumbing.NewBranchReferenceName(branch)
-	if _, err := s.gits.Reference(newRefName); err == nil {
-		return nil // already exists
-	}
-	fromHash, err := s.resolveRef(ctx, fromBranch)
-	if err != nil {
-		return fmt.Errorf("createBranch: resolve source %q: %w", fromBranch, err)
-	}
-	if err := s.gits.SetReference(plumbing.NewHashReference(newRefName, fromHash)); err != nil {
-		return fmt.Errorf("createBranch: set ref: %w", err)
-	}
-	log.Info().Str("branch", branch).Str("from", fromBranch).Msg("created branch")
-	return nil
+	s.fi.onCommit = fn
 }
 
 // CreateBranch creates a new branch ref pointing at the tip of fromBranch.
 // No-op if branch already exists.
 func (s *Service) CreateBranch(ctx context.Context, branch, fromBranch string) error {
-	return s.createBranch(ctx, branch, fromBranch)
+	return s.fi.createBranch(ctx, branch, fromBranch)
 }
 
 // ConfigureRemote sets up (or reconfigures) the "origin" remote with the given
 // URL and fetch refspec for branch. Idempotent — returns nil if already correct.
 func (s *Service) ConfigureRemote(ctx context.Context, url, branch string) error {
-	s.configMu.Lock()
-	defer s.configMu.Unlock()
+	s.fi.configMu.Lock()
+	defer s.fi.configMu.Unlock()
 
-	cfg, err := s.repo.Config()
+	cfg, err := s.fi.repo.Config()
 	if err != nil {
 		return fmt.Errorf("read config: %w", err)
 	}
@@ -249,8 +176,8 @@ func (s *Service) ConfigureRemote(ctx context.Context, url, branch string) error
 	}
 
 	// Delete existing origin if present, then create fresh.
-	_ = s.repo.DeleteRemote("origin")
-	_, err = s.repo.CreateRemote(&gogitconfig.RemoteConfig{
+	_ = s.fi.repo.DeleteRemote("origin")
+	_, err = s.fi.repo.CreateRemote(&gogitconfig.RemoteConfig{
 		Name: "origin",
 		URLs: []string{url},
 		Fetch: []gogitconfig.RefSpec{
@@ -265,7 +192,7 @@ func (s *Service) ConfigureRemote(ctx context.Context, url, branch string) error
 
 // DefaultBranch resolves the default branch name from the repo's HEAD ref.
 func (s *Service) DefaultBranch(ctx context.Context) (string, error) {
-	head, err := s.gits.Reference(plumbing.HEAD)
+	head, err := s.fi.gits.Reference(plumbing.HEAD)
 	if err != nil {
 		return "", fmt.Errorf("DefaultBranch: resolve HEAD: %w", err)
 	}
@@ -278,7 +205,7 @@ func (s *Service) DefaultBranch(ctx context.Context) (string, error) {
 
 // SetDefaultBranch sets the symbolic HEAD to point at the given branch.
 func (s *Service) SetDefaultBranch(branch string) error {
-	return s.gits.SetReference(
+	return s.fi.gits.SetReference(
 		plumbing.NewSymbolicReference(plumbing.HEAD, plumbing.NewBranchReferenceName(branch)),
 	)
 }
@@ -288,12 +215,12 @@ func (s *Service) SetDefaultBranch(branch string) error {
 func (s *Service) HasSharedHistory(ctx context.Context, localBranch string, remote *Service, remoteBranch string) (bool, error) {
 	const maxCommits = 1000
 
-	localHash, err := s.resolveRef(ctx, localBranch)
+	localHash, err := s.fi.resolveRef(ctx, localBranch)
 	if err != nil {
 		return false, fmt.Errorf("HasSharedHistory: local ref: %w", err)
 	}
 	localHashes := make(map[plumbing.Hash]struct{})
-	localIter, err := s.repo.Log(&gogit.LogOptions{From: localHash})
+	localIter, err := s.fi.repo.Log(&gogit.LogOptions{From: localHash})
 	if err != nil {
 		return false, fmt.Errorf("HasSharedHistory: local log: %w", err)
 	}
@@ -309,11 +236,11 @@ func (s *Service) HasSharedHistory(ctx context.Context, localBranch string, remo
 		return false, fmt.Errorf("HasSharedHistory: local walk: %w", err)
 	}
 
-	remoteHash, err := remote.resolveRef(ctx, remoteBranch)
+	remoteHash, err := remote.fi.resolveRef(ctx, remoteBranch)
 	if err != nil {
 		return false, fmt.Errorf("HasSharedHistory: remote ref: %w", err)
 	}
-	remoteIter, err := remote.repo.Log(&gogit.LogOptions{From: remoteHash})
+	remoteIter, err := remote.fi.repo.Log(&gogit.LogOptions{From: remoteHash})
 	if err != nil {
 		return false, fmt.Errorf("HasSharedHistory: remote log: %w", err)
 	}
@@ -333,4 +260,48 @@ func (s *Service) HasSharedHistory(ctx context.Context, localBranch string, remo
 		return false, fmt.Errorf("HasSharedHistory: remote walk: %w", err)
 	}
 	return found, nil
+}
+
+// gitReader forwarding methods — delegate to fi so *Service satisfies gitReader
+// and can be passed to SearchIndex.Sync / SearchIndex.Rebuild.
+
+func (s *Service) DiffFiles(ctx context.Context, branch, fromCommit string) (added, modified, deleted []string, err error) {
+	return s.fi.DiffFiles(ctx, branch, fromCommit)
+}
+
+func (s *Service) readFile(ctx context.Context, branch, path string) (string, error) {
+	return s.fi.readFile(ctx, branch, path)
+}
+
+func (s *Service) readFileWithHash(ctx context.Context, branch, path string) (string, string, error) {
+	return s.fi.readFileWithHash(ctx, branch, path)
+}
+
+func (s *Service) HeadCommit(ctx context.Context, branch string) (string, error) {
+	return s.fi.HeadCommit(ctx, branch)
+}
+
+func (s *Service) ListAll(ctx context.Context, branch string) ([]string, error) {
+	return s.fi.ListAll(ctx, branch)
+}
+
+func (s *Service) ListAllWithHash(ctx context.Context, branch string) ([]string, []string, error) {
+	return s.fi.ListAllWithHash(ctx, branch)
+}
+
+func (s *Service) LastCommitForPath(ctx context.Context, branch, path string) (string, error) {
+	return s.fi.LastCommitForPath(ctx, branch, path)
+}
+
+func (s *Service) readFileAtCommit(ctx context.Context, branch, path, commitHash string) (string, error) {
+	return s.fi.readFileAtCommit(ctx, branch, path, commitHash)
+}
+
+// deriveAgentID extracts the agent identifier from a branch name.
+// "agent/laptop-abc" → "laptop-abc", "main" → "main".
+func deriveAgentID(branch string) string {
+	if after, ok := strings.CutPrefix(branch, "agent/"); ok {
+		return after
+	}
+	return branch
 }

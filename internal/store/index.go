@@ -14,13 +14,11 @@ package store
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"sort"
 	"strings"
 
 	"knomit/internal/fact"
-	"knomit/internal/store/migrate"
 )
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -86,64 +84,6 @@ type gitReader interface {
 	// readFileAtCommit reads the content of path at the given commit on branch.
 	// branch is used for repository context; commitHash uniquely identifies the version.
 	readFileAtCommit(ctx context.Context, branch, path, commitHash string) (string, error)
-}
-
-// ────────────────────────────────────────────────────────────────────────────
-// Index (constructor + lifecycle)
-// ────────────────────────────────────────────────────────────────────────────
-
-// Index is the search index backed by SQLite with sqlite-vec.
-type store struct {
-	rh *repoHandler
-	*searchIndex
-	*pipelineIndex
-	*toolIndex
-}
-
-// newIndex wraps an existing *repoHandler. Schema must already be applied.
-// Used by Service.Open to construct the Index over the shared database.
-func newIndex(rh *repoHandler) *store {
-	return &store{
-		rh:             rh,
-		searchIndex:    &searchIndex{rh: rh},
-		pipelineIndex:  &pipelineIndex{rh: rh},
-		toolIndex:      &toolIndex{rh: rh},
-	}
-}
-
-// New opens (or creates) a SQLite search index at path and applies all
-// migrations including vec0 and GraphQLite.
-// Use ":memory:" for an in-memory database (useful in tests).
-func New(path string) (Store, error) {
-	registerVec()
-
-	dsn := path
-	if path == ":memory:" {
-		dsn = path + "?_foreign_keys=1"
-	} else {
-		dsn = path + "?_journal_mode=WAL&_busy_timeout=5000&_foreign_keys=1"
-	}
-	db, err := sql.Open("sqlite3_knomit", dsn)
-	if err != nil {
-		return nil, fmt.Errorf("open sqlite: %w", err)
-	}
-	db.SetMaxOpenConns(4)
-	db.Exec("PRAGMA optimize")
-
-	if err := migrate.All(db); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("store.New: %w", err)
-	}
-
-	rh := newRepoHandler(db)
-	idx := newIndex(rh)
-	rh.onDrop = idx.GC
-	return idx, nil
-}
-
-// Close closes the underlying database connection.
-func (idx *store) Close() error {
-	return idx.rh.db.Close()
 }
 
 // ────────────────────────────────────────────────────────────────────────────

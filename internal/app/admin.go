@@ -86,7 +86,7 @@ func RebuildIndex(ctx context.Context, cfg config.Config, repoName string) error
 	if err := svc.OpenRepo(); err != nil {
 		return fmt.Errorf("open git: %w", err)
 	}
-	if err := svc.Index().Sync(ctx, svc, agentBranch); err != nil {
+	if err := svc.Search().Sync(ctx, svc, agentBranch); err != nil {
 		return fmt.Errorf("rebuild: %w", err)
 	}
 	log.Info().Str("repo", repoName).Msg("Index rebuilt successfully")

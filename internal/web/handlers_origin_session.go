@@ -195,7 +195,7 @@ func handleTestConnectivity(rm *repos.Manager, sm *SessionManager, agentBranch s
 		}
 
 		// Collect all branch info in a single pass over refs.
-		branches, agentBranches, matchedAgent := remoteSvc.BranchInfo(agentBranch)
+		branches, agentBranches, matchedAgent := remoteSvc.Facts().BranchInfo(agentBranch)
 
 		// Check shared history.
 		history := "disjoint"
@@ -207,7 +207,7 @@ func handleTestConnectivity(rm *repos.Manager, sm *SessionManager, agentBranch s
 		}
 
 		// Count remote facts (files in the cloned store).
-		remoteFiles, err := remoteSvc.ListAll(r.Context(), defaultBranch)
+		remoteFiles, err := remoteSvc.Facts().ListAll(r.Context(), defaultBranch)
 		remoteFactCount := 0
 		if err == nil {
 			remoteFactCount = len(remoteFiles)
@@ -308,7 +308,7 @@ func handlePreview(rm *repos.Manager, sm *SessionManager, agentBranch string) ht
 		// Build local path set via FactsIter.
 		localPaths := make(map[string]struct{})
 		if svc != nil {
-			iter, err := svc.FactsIter(r.Context(), agentBranch)
+			iter, err := svc.Facts().FactsIter(r.Context(), agentBranch)
 			if err != nil {
 				log.Warn().Err(err).Str("repo", repo).Msg("preview: open facts iter")
 			} else {
@@ -359,7 +359,7 @@ func handlePreview(rm *repos.Manager, sm *SessionManager, agentBranch string) ht
 			go func() {
 				for p := range jobs {
 					readMu.Lock()
-					readResult, err := svc.ReadFact(r.Context(), agentBranch, p, nil)
+					readResult, err := svc.Facts().ReadFact(r.Context(), agentBranch, p, nil)
 					readMu.Unlock()
 					if err != nil {
 						results <- 0
@@ -495,7 +495,7 @@ func handleApply(rm *repos.Manager, sm *SessionManager, agentBranch string) http
 				return
 			}
 
-			factsIter, err := svc.FactsIter(r.Context(), agentBranch)
+			factsIter, err := svc.Facts().FactsIter(r.Context(), agentBranch)
 			if err != nil {
 				sendEvent(map[string]string{"phase": "error", "message": fmt.Sprintf("open facts iterator: %v", err)})
 				return
@@ -722,7 +722,6 @@ func (s *Server) handleCommit(rm *repos.Manager, sm *SessionManager, agentBranch
 		// Rebuild the index from the new git store so facts/recent/search work.
 		sendEvent(map[string]any{"phase": "rebuilding", "current": 0, "total": 0})
 		if svc != nil {
-			idx := svc.Index()
 			progress := func(subPhase string, done, total int) {
 				if done%20 == 0 || done == total {
 					sendEvent(map[string]any{
@@ -733,7 +732,7 @@ func (s *Server) handleCommit(rm *repos.Manager, sm *SessionManager, agentBranch
 					})
 				}
 			}
-			if err := idx.Rebuild(r.Context(), svc, rebuildBranch, progress); err != nil {
+			if err := svc.Search().Rebuild(r.Context(), svc, rebuildBranch, progress); err != nil {
 				log.Warn().Err(err).Str("repo", repo).Msg("commit: index rebuild failed")
 			} else {
 				log.Info().Str("repo", repo).Msg("commit: index rebuilt from swapped store")
@@ -741,7 +740,7 @@ func (s *Server) handleCommit(rm *repos.Manager, sm *SessionManager, agentBranch
 				// doesn't treat every cloned fact as dirty.
 				if head, err := svc.HeadCommit(r.Context(), rebuildBranch); err == nil {
 					for _, tool := range []string{"review", "hypothesize"} {
-						if err := idx.SetPipelineWatermark(r.Context(), tool, rebuildBranch, head); err != nil {
+						if err := svc.Pipeline().SetPipelineWatermark(r.Context(), tool, rebuildBranch, head); err != nil {
 							log.Warn().Err(err).Str("repo", repo).Str("tool", tool).Msg("commit: pipeline watermark set failed")
 						}
 					}

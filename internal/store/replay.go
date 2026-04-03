@@ -31,24 +31,24 @@ func Replay(ctx context.Context, local *Service, localBranch string, iter FactIt
 
 	// 1. Set up agent branch in target store.
 	agentRefName := plumbing.NewBranchReferenceName(cfg.AgentBranch)
-	existingAgentRef, err := target.gits.Reference(agentRefName)
+	existingAgentRef, err := target.fi.gits.Reference(agentRefName)
 	if cfg.UseExistingBranch && err == nil && existingAgentRef != nil {
 		// Agent branch exists on remote and caller wants to reuse it — switch to it.
-		if err := target.gits.SetReference(plumbing.NewSymbolicReference(plumbing.HEAD, agentRefName)); err != nil {
+		if err := target.fi.gits.SetReference(plumbing.NewSymbolicReference(plumbing.HEAD, agentRefName)); err != nil {
 			return nil, fmt.Errorf("Replay: set HEAD to existing agent branch: %w", err)
 		}
 		log.Debug().Str("agent_branch", cfg.AgentBranch).Msg("replay: using existing remote agent branch as base")
 	} else {
 		// No existing agent branch — create from the selected main branch.
 		defaultRefName := plumbing.NewBranchReferenceName(cfg.DefaultBranch)
-		defaultRef, err := target.gits.Reference(defaultRefName)
+		defaultRef, err := target.fi.gits.Reference(defaultRefName)
 		if err != nil {
 			return nil, fmt.Errorf("Replay: resolve default branch %q: %w", cfg.DefaultBranch, err)
 		}
-		if err := target.gits.SetReference(plumbing.NewHashReference(agentRefName, defaultRef.Hash())); err != nil {
+		if err := target.fi.gits.SetReference(plumbing.NewHashReference(agentRefName, defaultRef.Hash())); err != nil {
 			return nil, fmt.Errorf("Replay: create agent branch: %w", err)
 		}
-		if err := target.gits.SetReference(plumbing.NewSymbolicReference(plumbing.HEAD, agentRefName)); err != nil {
+		if err := target.fi.gits.SetReference(plumbing.NewSymbolicReference(plumbing.HEAD, agentRefName)); err != nil {
 			return nil, fmt.Errorf("Replay: set HEAD: %w", err)
 		}
 		log.Debug().Str("agent_branch", cfg.AgentBranch).Str("from", cfg.DefaultBranch).Msg("replay: created agent branch from main")
@@ -127,7 +127,7 @@ func Replay(ctx context.Context, local *Service, localBranch string, iter FactIt
 
 		// Write fact to target store and commit.
 		msg := fmt.Sprintf("replay: %s", f.path)
-		if _, err := target.WriteFact(ctx, cfg.AgentBranch, f.path, resolvedContent, msg, "replay"); err != nil {
+		if _, err := target.fi.WriteFact(ctx, cfg.AgentBranch, f.path, resolvedContent, msg, "replay"); err != nil {
 			return nil, fmt.Errorf("Replay: write %s to target: %w", f.path, err)
 		}
 		result.FromLocal++
@@ -156,7 +156,7 @@ func Replay(ctx context.Context, local *Service, localBranch string, iter FactIt
 // readBlobByHash reads the content of a blob by its hash from the service's git repo.
 func readBlobByHash(s *Service, hashStr string) (string, error) {
 	h := plumbing.NewHash(hashStr)
-	blob, err := s.repo.BlobObject(h)
+	blob, err := s.fi.repo.BlobObject(h)
 	if err != nil {
 		return "", fmt.Errorf("readBlobByHash: %w", err)
 	}
@@ -241,12 +241,12 @@ func resolveDeadRefs(ctx context.Context, local *Service, localBranch, content, 
 // extractExternalRefsFromHistory looks up the last version of a deleted fact in
 // local git history and extracts its external (http/https) refs.
 func extractExternalRefsFromHistory(ctx context.Context, local *Service, localBranch, deadPath string) ([]string, error) {
-	localHash, err := local.resolveRef(ctx, localBranch)
+	localHash, err := local.fi.resolveRef(ctx, localBranch)
 	if err != nil {
 		return nil, fmt.Errorf("extractExternalRefsFromHistory: ref: %w", err)
 	}
 
-	logIter, err := local.repo.Log(&gogit.LogOptions{
+	logIter, err := local.fi.repo.Log(&gogit.LogOptions{
 		From:     localHash,
 		FileName: &deadPath,
 	})

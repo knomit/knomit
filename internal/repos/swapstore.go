@@ -38,13 +38,12 @@ func (m *Manager) SwapStore(ri *RepoInstance, tempDBPath string) error {
 			log.Warn().Err(err).Msg("SwapStore: cannot open temp git, keeping existing service")
 			return nil
 		}
-		idx := svc.Index()
 		if m.deps.Embedder != nil {
-			idx.SetEmbedder(m.deps.Embedder)
+			svc.Search().SetEmbedder(m.deps.Embedder)
 		}
 		ri.withWrite(func() {
 			ri.svc = svc
-			ri.idx = idx
+			ri.idx = svc.Search()
 		})
 		if ri.onCommit != nil {
 			svc.SetOnCommit(ri.onCommit)
@@ -84,13 +83,12 @@ func (m *Manager) SwapStore(ri *RepoInstance, tempDBPath string) error {
 		return fmt.Errorf("SwapStore: reopen git: %w", err)
 	}
 
-	idx := svc.Index()
 	if m.deps.Embedder != nil {
-		idx.SetEmbedder(m.deps.Embedder)
+		svc.Search().SetEmbedder(m.deps.Embedder)
 	}
 	ri.withWrite(func() {
 		ri.svc = svc
-		ri.idx = idx
+		ri.idx = svc.Search()
 	})
 	if ri.onCommit != nil {
 		svc.SetOnCommit(ri.onCommit)
