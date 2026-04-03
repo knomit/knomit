@@ -670,12 +670,12 @@ func (fi *factIndex) appendCommitLog(ctx context.Context, branch string, hash pl
 	}
 	c, err := fi.rh.repo.CommitObject(hash)
 	if err != nil {
-		log.Warn().Err(err).Str("hash", hash.String()[:8]).Msg("commit_log: get commit")
+		log.Warn().Err(err).Str("hash", hash.String()).Msg("commit_log: get commit")
 		return
 	}
 	files, err := changedFilesInCommit(c)
 	if err != nil {
-		log.Warn().Err(err).Str("hash", hash.String()[:8]).Msg("commit_log: changed files")
+		log.Warn().Err(err).Str("hash", hash.String()).Msg("commit_log: changed files")
 		return
 	}
 	done := false
@@ -687,7 +687,7 @@ func (fi *factIndex) appendCommitLog(ctx context.Context, branch string, hash pl
 		done = true
 		return hash.String(), entries, nil
 	}); err != nil {
-		log.Warn().Err(err).Str("hash", hash.String()[:8]).Msg("commit_log: append sync failed")
+		log.Warn().Err(err).Str("hash", hash.String()).Msg("commit_log: append sync failed")
 	}
 }
 
