@@ -25,15 +25,12 @@ func runSyncLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Service, hu
 	lg.Info().Dur("interval", interval).Msg("sync loop started")
 
 	doSync := func() {
-		result, err := svc.Sync(context.Background(), agentBranch, remote.Branch)
+		result, err := svc.Sync(context.Background(), agentBranch)
 		if err != nil {
-			errMsg := err.Error()
-			_ = svc.UpdateRemoteStatus(remote.Name, "error", &errMsg)
-			hub.broadcastSyncError(remote.Name, errMsg)
+			hub.broadcastSyncError(remote.Name, err.Error())
 			lg.Warn().Err(err).Msg("sync: pull failed")
 			return
 		}
-		_ = svc.UpdateRemoteStatus(remote.Name, "ok", nil)
 		if result.Synced {
 			hub.broadcastSyncOK(remote.Name, result.MergeCommit, result.FastForward)
 			lg.Info().
@@ -83,13 +80,10 @@ func runPushLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Service, hu
 	doPush := func() {
 		result, err := svc.Push(context.Background(), agentBranch)
 		if err != nil {
-			errMsg := err.Error()
-			_ = svc.UpdateRemotePushStatus(remote.Name, "error", &errMsg)
-			hub.broadcastPushError(remote.Name, errMsg)
+			hub.broadcastPushError(remote.Name, err.Error())
 			lg.Warn().Err(err).Msg("push: failed")
 			return
 		}
-		_ = svc.UpdateRemotePushStatus(remote.Name, "ok", nil)
 		if result.Pushed {
 			hub.broadcastPushOK(remote.Name)
 			lg.Info().Str("branch", agentBranch).Msg("push: pushed changes")

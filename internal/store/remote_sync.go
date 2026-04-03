@@ -23,16 +23,31 @@ import (
 // notifyCommit (which triggers index sync and may call back into Service).
 //
 // If remoteBranch is empty, it defaults to "main".
-func (s *Service) Sync(ctx context.Context, localBranch, remoteBranch string) (SyncResult, error) {
+func (s *Service) Sync(ctx context.Context, localBranch string) (res SyncResult, retErr error) {
+	remote, err := s.GetRemote("origin")
+	if err != nil || remote == nil {
+		log.Debug().Msg("git sync: no origin remote configured, skipping")
+		return SyncResult{}, nil
+	}
+	remoteBranch := remote.Branch
 	if remoteBranch == "" {
 		remoteBranch = "main"
 	}
 
+	// Past the "no remote" gate — write status on every return from here.
+	defer func() {
+		if retErr != nil {
+			errMsg := retErr.Error()
+			_ = s.updateRemoteStatus("origin", "error", &errMsg)
+		} else {
+			_ = s.updateRemoteStatus("origin", "ok", nil)
+		}
+	}()
+
 	unlock := s.fi.lockBranch(localBranch)
 
-	// Check if origin remote exists.
-	_, err := s.rh.repo.Remote("origin")
-	if err != nil {
+	// Check if origin remote exists in git config.
+	if _, err := s.rh.repo.Remote("origin"); err != nil {
 		unlock()
 		log.Debug().Msg("git sync: no origin remote configured, skipping")
 		return SyncResult{}, nil
@@ -314,20 +329,29 @@ func (s *Service) configureRemote(ctx context.Context, url, branch string) error
 // If the push fails with a non-fast-forward error, it retries with a force
 // push. This is safe because agent branches are per-machine — no other machine
 // writes to the same branch.
-func (s *Service) Push(ctx context.Context, branch string) (PushResult, error) {
+func (s *Service) Push(ctx context.Context, branch string) (res PushResult, retErr error) {
 	unlock := s.fi.lockBranch(branch)
 	defer unlock()
 
-	_, err := s.rh.repo.Remote("origin")
-	if err != nil {
+	if _, err := s.rh.repo.Remote("origin"); err != nil {
 		log.Debug().Msg("git push: no origin remote configured, skipping")
 		return PushResult{}, nil
 	}
 
+	// Past the "no remote" gate — write status on every return from here.
+	defer func() {
+		if retErr != nil {
+			errMsg := retErr.Error()
+			_ = s.updateRemotePushStatus("origin", "error", &errMsg)
+		} else {
+			_ = s.updateRemotePushStatus("origin", "ok", nil)
+		}
+	}()
+
 	refspec := fmt.Sprintf("refs/heads/%s:refs/heads/%s", branch, branch)
 
 	log.Debug().Str("branch", branch).Msg("git push: pushing branch")
-	err = s.rh.repo.Push(&gogit.PushOptions{
+	err := s.rh.repo.Push(&gogit.PushOptions{
 		RemoteName: "origin",
 		RefSpecs:   []gogitconfig.RefSpec{gogitconfig.RefSpec(refspec)},
 		Auth:       s.fi.auth,

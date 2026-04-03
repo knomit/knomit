@@ -81,8 +81,8 @@ func (s *Service) GetRemote(name string) (*Remote, error) {
 	return r, nil
 }
 
-// UpdateRemoteStatus updates the pull-sync status fields for a remote.
-func (s *Service) UpdateRemoteStatus(name, status string, syncErr *string) error {
+// updateRemoteStatus updates the pull-sync status fields for a remote.
+func (s *Service) updateRemoteStatus(name, status string, syncErr *string) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 	_, err := s.rh.db.Exec(
 		`UPDATE remotes SET last_sync_at = ?, last_status = ?, last_error = ? WHERE name = ?`,
@@ -91,8 +91,8 @@ func (s *Service) UpdateRemoteStatus(name, status string, syncErr *string) error
 	return err
 }
 
-// UpdateRemotePushStatus updates the push status fields for a remote.
-func (s *Service) UpdateRemotePushStatus(name, status string, pushErr *string) error {
+// updateRemotePushStatus updates the push status fields for a remote.
+func (s *Service) updateRemotePushStatus(name, status string, pushErr *string) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 	_, err := s.rh.db.Exec(
 		`UPDATE remotes SET last_push_at = ?, last_push_status = ?, last_push_error = ? WHERE name = ?`,
