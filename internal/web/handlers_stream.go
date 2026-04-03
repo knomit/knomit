@@ -32,7 +32,11 @@ func handleEvents() http.HandlerFunc {
 
 		// Snapshot the initial head commit — GS may be swapped concurrently.
 		var gs store.FactIndex
-		ri.WithRead(func(d repos.StoreDeps) { gs = d.GS })
+		ri.WithRead(func(svc *store.Service) {
+			if svc != nil {
+				gs = svc.Facts()
+			}
+		})
 		head, _ := gs.HeadCommit(r.Context(), ri.AgentBranch())
 		fmt.Fprintf(w, "event: status\ndata: {\"head\":\"%s\"}\n\n", head)
 

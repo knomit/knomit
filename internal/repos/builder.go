@@ -33,7 +33,6 @@ type repoBuilder struct {
 
 	// accumulated state
 	svc      *store.Service
-	idx      store.SearchIndex
 	ontology *fact.Ontology
 }
 
@@ -124,7 +123,7 @@ func (b *repoBuilder) initDefaultGit() error {
 // the origin remote record for the default repo.
 func (b *repoBuilder) ensureBranch() {
 	if b.agentBranch != "" {
-		if err := b.svc.CreateBranch(context.Background(), b.agentBranch, b.agentBranch); err != nil {
+		if err := b.svc.Branches().CreateBranch(context.Background(), b.agentBranch, b.agentBranch); err != nil {
 			log.Warn().Err(err).Str("repo", b.name).Msg("branch create/ensure failed")
 		}
 	}
@@ -138,11 +137,10 @@ func (b *repoBuilder) ensureBranch() {
 // setupIndex configures the search index with the embedder and runs an initial
 // sync against the git store.
 func (b *repoBuilder) setupIndex() {
-	b.idx = b.svc.Search()
 	if b.embedder != nil {
-		b.idx.SetEmbedder(b.embedder)
+		b.svc.Search().SetEmbedder(b.embedder)
 	}
-	if err := b.idx.Sync(context.Background(), b.agentBranch); err != nil {
+	if err := b.svc.Search().Sync(context.Background(), b.agentBranch); err != nil {
 		log.Warn().Err(err).Str("repo", b.name).Msg("initial index sync failed")
 	}
 }
@@ -177,7 +175,6 @@ func (b *repoBuilder) build() *RepoInstance {
 		agentBranch: b.agentBranch,
 		ontology:    b.ontology,
 		svc:         b.svc,
-		idx:         b.idx,
 		hub:         hub,
 	}
 

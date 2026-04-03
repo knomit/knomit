@@ -43,7 +43,6 @@ func (m *Manager) SwapStore(ri *RepoInstance, tempDBPath string) error {
 		}
 		ri.withWrite(func() {
 			ri.svc = svc
-			ri.idx = svc.Search()
 		})
 		if ri.onCommit != nil {
 			svc.SetOnCommit(ri.onCommit)
@@ -88,7 +87,6 @@ func (m *Manager) SwapStore(ri *RepoInstance, tempDBPath string) error {
 	}
 	ri.withWrite(func() {
 		ri.svc = svc
-		ri.idx = svc.Search()
 	})
 	if ri.onCommit != nil {
 		svc.SetOnCommit(ri.onCommit)

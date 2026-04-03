@@ -43,11 +43,13 @@ func (s *Server) SetupMCP(ri *repos.RepoInstance) {
 	var idx store.SearchIndex
 	var pipelineIdx store.PipelineIndex
 	var toolSessionIdx store.ToolSessionIndex
-	ri.WithRead(func(d repos.StoreDeps) {
-		gs = d.GS
-		idx = d.Idx
-		pipelineIdx = d.Pipeline
-		toolSessionIdx = d.ToolSession
+	ri.WithRead(func(svc *store.Service) {
+		if svc != nil {
+			gs = svc.Facts()
+			idx = svc.Search()
+			pipelineIdx = svc.Pipeline()
+			toolSessionIdx = svc.ToolSession()
+		}
 	})
 	if gs == nil {
 		log.Warn().Msg("SetupMCP: svc is nil, skipping")

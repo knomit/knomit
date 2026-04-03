@@ -76,24 +76,6 @@ func (fi *factIndex) HeadCommit(ctx context.Context, branch string) (string, err
 	return fi.rh.HeadCommit(ctx, branch)
 }
 
-// createBranch creates a new branch ref pointing at the tip of fromBranch.
-// No-op if branch already exists.
-func (fi *factIndex) createBranch(ctx context.Context, branch, fromBranch string) error {
-	newRefName := plumbing.NewBranchReferenceName(branch)
-	if _, err := fi.rh.gits.Reference(newRefName); err == nil {
-		return nil // already exists
-	}
-	fromHash, err := fi.rh.resolveRef(ctx, fromBranch)
-	if err != nil {
-		return fmt.Errorf("createBranch: resolve source %q: %w", fromBranch, err)
-	}
-	if err := fi.rh.gits.SetReference(plumbing.NewHashReference(newRefName, fromHash)); err != nil {
-		return fmt.Errorf("createBranch: set ref: %w", err)
-	}
-	log.Info().Str("branch", branch).Str("from", fromBranch).Msg("created branch")
-	return nil
-}
-
 // ── Read-only operations ──────────────────────────────────────────────────────
 // Read-only operations on the git store: file reads, directory listings, log,
 // grep, and diffing. None of these methods modify the repository.

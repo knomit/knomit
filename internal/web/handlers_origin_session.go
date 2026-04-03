@@ -137,7 +137,7 @@ func handleTestConnectivity(rm *repos.Manager, sm *SessionManager, agentBranch s
 
 		ri := repos.RepoFromContext(r.Context())
 		var localSvc *store.Service
-		ri.WithRead(func(d repos.StoreDeps) { localSvc = d.Svc })
+		ri.WithRead(func(s *store.Service) { localSvc = s })
 
 		sendEvent, ok := beginSSE(w)
 		if !ok {
@@ -189,7 +189,7 @@ func handleTestConnectivity(rm *repos.Manager, sm *SessionManager, agentBranch s
 		sendEvent(map[string]string{"phase": "analyzing"})
 
 		// Get default branch.
-		defaultBranch, err := remoteSvc.DefaultBranch(r.Context())
+		defaultBranch, err := remoteSvc.Branches().DefaultBranch(r.Context())
 		if err != nil {
 			defaultBranch = agentBranch
 		}
@@ -294,9 +294,7 @@ func handlePreview(rm *repos.Manager, sm *SessionManager, agentBranch string) ht
 
 		ri := repos.RepoFromContext(r.Context())
 		var svc *store.Service
-		ri.WithRead(func(d repos.StoreDeps) {
-			svc = d.Svc
-		})
+		ri.WithRead(func(s *store.Service) { svc = s })
 
 		sendEvent, ok := beginSSE(w)
 		if !ok {
@@ -478,9 +476,7 @@ func handleApply(rm *repos.Manager, sm *SessionManager, agentBranch string) http
 
 		ri := repos.RepoFromContext(r.Context())
 		var svc *store.Service
-		ri.WithRead(func(d repos.StoreDeps) {
-			svc = d.Svc
-		})
+		ri.WithRead(func(s *store.Service) { svc = s })
 
 		sendEvent, ok := beginSSE(w)
 		if !ok {
@@ -694,9 +690,7 @@ func (s *Server) handleCommit(rm *repos.Manager, sm *SessionManager, agentBranch
 
 		// Snapshot after swap — protect against concurrent SwapStore.
 		var svc *store.Service
-		ri.WithRead(func(d repos.StoreDeps) {
-			svc = d.Svc
-		})
+		ri.WithRead(func(s *store.Service) { svc = s })
 
 		// Phase: configuring — save remote config and start sync.
 		sendEvent(map[string]string{"phase": "configuring"})

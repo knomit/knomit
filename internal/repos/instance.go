@@ -8,68 +8,28 @@ import (
 	"knomit/internal/store"
 )
 
-// StoreDeps bundles the lock-protected fields for read access via WithRead.
-// All fields may be nil if the repo is not yet fully initialised.
-// GS is populated from Svc in production; tests may set GS to a mock FactIndex.
-type StoreDeps struct {
-	GS          store.FactIndex
-	Svc         *store.Service
-	Idx         store.SearchIndex
-	Pipeline    store.PipelineIndex
-	ToolSession store.ToolSessionIndex
-}
-
 // RepoInstance holds all runtime state for a single repository.
 type RepoInstance struct {
-	mu                  sync.RWMutex
-	name                string
-	dbPath              string
-	agentBranch         string
-	gsOverride          store.FactIndex         // test-only: overrides svc as GS in StoreDeps
-	pipelineOverride    store.PipelineIndex    // test-only: overrides svc.Pipeline() in StoreDeps
-	toolSessionOverride store.ToolSessionIndex // test-only: overrides svc.ToolSession() in StoreDeps
-	ontology            *fact.Ontology
-	onCommit            func(string, string) // re-applied to new svc after SwapStore
-	svc                 *store.Service
-	idx                 store.SearchIndex
-	hub                 *TaskHub
-	syncCancel          context.CancelFunc
-	syncWg              *sync.WaitGroup
-	startSync           func(url string) error
-	closeFn             func()
+	mu          sync.RWMutex
+	name        string
+	dbPath      string
+	agentBranch string
+	ontology    *fact.Ontology
+	onCommit    func(string, string) // re-applied to new svc after SwapStore
+	svc         *store.Service
+	hub         *TaskHub
+	syncCancel  context.CancelFunc
+	syncWg      *sync.WaitGroup
+	startSync   func(url string) error
+	closeFn     func()
 }
 
-// WithRead calls fn with all lock-protected fields under a read lock.
-// This is the only way external code may access gs, svc, idx, mcpHandlers,
-// and synthDeps.
-func (ri *RepoInstance) WithRead(fn func(StoreDeps)) {
+// WithRead calls fn with the store service under a read lock.
+// This is the only way external code may access svc.
+func (ri *RepoInstance) WithRead(fn func(*store.Service)) {
 	ri.mu.RLock()
 	defer ri.mu.RUnlock()
-	var gs store.FactIndex
-	if ri.gsOverride != nil {
-		gs = ri.gsOverride
-	} else if ri.svc != nil {
-		gs = ri.svc.Facts()
-	}
-	var pipeline store.PipelineIndex
-	if ri.pipelineOverride != nil {
-		pipeline = ri.pipelineOverride
-	} else if ri.svc != nil {
-		pipeline = ri.svc.Pipeline()
-	}
-	var toolSession store.ToolSessionIndex
-	if ri.toolSessionOverride != nil {
-		toolSession = ri.toolSessionOverride
-	} else if ri.svc != nil {
-		toolSession = ri.svc.ToolSession()
-	}
-	fn(StoreDeps{
-		GS:          gs,
-		Svc:         ri.svc,
-		Idx:         ri.idx,
-		Pipeline:    pipeline,
-		ToolSession: toolSession,
-	})
+	fn(ri.svc)
 }
 
 // withWrite calls fn under a write lock. Only used within the repos package
@@ -124,11 +84,7 @@ func NewTestInstance(name string) *RepoInstance {
 type TestInstanceConfig struct {
 	Name        string
 	AgentBranch string
-	GS          store.FactIndex
 	Svc         *store.Service
-	Idx         store.SearchIndex
-	Pipeline    store.PipelineIndex
-	ToolSession store.ToolSessionIndex
 	Ontology    *fact.Ontology
 	Hub         *TaskHub
 	StartSync   func(url string) error
@@ -138,19 +94,14 @@ type TestInstanceConfig struct {
 // dependencies. Intended for handler/integration tests in sibling packages.
 // Production code must use Manager.openOne instead.
 func NewTestInstanceWithDeps(cfg TestInstanceConfig) *RepoInstance {
-	sc := cfg.StartSync
 	return &RepoInstance{
-		name:                cfg.Name,
-		agentBranch:         cfg.AgentBranch,
-		gsOverride:          cfg.GS,
-		pipelineOverride:    cfg.Pipeline,
-		toolSessionOverride: cfg.ToolSession,
-		svc:                 cfg.Svc,
-		idx:                 cfg.Idx,
-		ontology:            cfg.Ontology,
-		hub:                 cfg.Hub,
-		startSync:           sc,
-		syncCancel:          func() {},
-		syncWg:              &sync.WaitGroup{},
+		name:        cfg.Name,
+		agentBranch: cfg.AgentBranch,
+		svc:         cfg.Svc,
+		ontology:    cfg.Ontology,
+		hub:         cfg.Hub,
+		startSync:   cfg.StartSync,
+		syncCancel:  func() {},
+		syncWg:      &sync.WaitGroup{},
 	}
 }

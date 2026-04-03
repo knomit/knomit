@@ -11,7 +11,11 @@ func handleExplain() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
 		var idx store.SearchIndex
-		ri.WithRead(func(d repos.StoreDeps) { idx = d.Idx })
+		ri.WithRead(func(svc *store.Service) {
+			if svc != nil {
+				idx = svc.Search()
+			}
+		})
 
 		q := r.URL.Query()
 		branch := q.Get("branch")

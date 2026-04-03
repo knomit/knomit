@@ -12,6 +12,7 @@ import (
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
+	"github.com/rs/zerolog/log"
 
 	storegit "knomit/internal/store/git"
 )
@@ -177,6 +178,44 @@ func (rh *repoHandler) ListBranches(ctx context.Context) ([]Branch, error) {
 		branches = append(branches, b)
 	}
 	return branches, rows.Err()
+}
+
+// CreateBranch creates a new git branch ref pointing at the tip of fromBranch.
+// No-op if the branch already exists.
+func (rh *repoHandler) CreateBranch(ctx context.Context, branch, fromBranch string) error {
+	newRefName := plumbing.NewBranchReferenceName(branch)
+	if _, err := rh.gits.Reference(newRefName); err == nil {
+		return nil // already exists
+	}
+	fromHash, err := rh.resolveRef(ctx, fromBranch)
+	if err != nil {
+		return fmt.Errorf("CreateBranch: resolve source %q: %w", fromBranch, err)
+	}
+	if err := rh.gits.SetReference(plumbing.NewHashReference(newRefName, fromHash)); err != nil {
+		return fmt.Errorf("CreateBranch: set ref: %w", err)
+	}
+	log.Info().Str("branch", branch).Str("from", fromBranch).Msg("created branch")
+	return nil
+}
+
+// DefaultBranch resolves the default branch name from the repo's HEAD ref.
+// Returns an empty string if HEAD is detached.
+func (rh *repoHandler) DefaultBranch(_ context.Context) (string, error) {
+	head, err := rh.gits.Reference(plumbing.HEAD)
+	if err != nil {
+		return "", fmt.Errorf("DefaultBranch: resolve HEAD: %w", err)
+	}
+	if head.Type() == plumbing.SymbolicReference {
+		return strings.TrimPrefix(head.Target().String(), "refs/heads/"), nil
+	}
+	return "", nil
+}
+
+// SetDefaultBranch sets the symbolic HEAD to point at the given branch.
+func (rh *repoHandler) SetDefaultBranch(branch string) error {
+	return rh.gits.SetReference(
+		plumbing.NewSymbolicReference(plumbing.HEAD, plumbing.NewBranchReferenceName(branch)),
+	)
 }
 
 // ── git read methods ──────────────────────────────────────────────────────────

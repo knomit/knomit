@@ -73,6 +73,9 @@ type BranchIndex interface {
 	MergeBranch(ctx context.Context, src, dst string) error
 	DropBranch(ctx context.Context, name string) error
 	ListBranches(ctx context.Context) ([]Branch, error)
+	CreateBranch(ctx context.Context, branch, fromBranch string) error
+	DefaultBranch(ctx context.Context) (string, error)
+	SetDefaultBranch(branch string) error
 }
 
 // Embedder computes vector embeddings for text.

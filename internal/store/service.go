@@ -143,11 +143,6 @@ func (s *Service) SetOnCommit(fn func(branch, hash string)) {
 	s.fi.onCommit = fn
 }
 
-// CreateBranch creates a new branch ref pointing at the tip of fromBranch.
-// No-op if branch already exists.
-func (s *Service) CreateBranch(ctx context.Context, branch, fromBranch string) error {
-	return s.fi.createBranch(ctx, branch, fromBranch)
-}
 
 // ConfigureRemote sets up (or reconfigures) the "origin" remote with the given
 // URL and fetch refspec for branch. Idempotent — returns nil if already correct.
@@ -187,25 +182,6 @@ func (s *Service) ConfigureRemote(ctx context.Context, url, branch string) error
 	return nil
 }
 
-// DefaultBranch resolves the default branch name from the repo's HEAD ref.
-func (s *Service) DefaultBranch(ctx context.Context) (string, error) {
-	head, err := s.rh.gits.Reference(plumbing.HEAD)
-	if err != nil {
-		return "", fmt.Errorf("DefaultBranch: resolve HEAD: %w", err)
-	}
-	if head.Type() == plumbing.SymbolicReference {
-		return strings.TrimPrefix(head.Target().String(), "refs/heads/"), nil
-	}
-	// Detached HEAD — return empty string.
-	return "", nil
-}
-
-// SetDefaultBranch sets the symbolic HEAD to point at the given branch.
-func (s *Service) SetDefaultBranch(branch string) error {
-	return s.rh.gits.SetReference(
-		plumbing.NewSymbolicReference(plumbing.HEAD, plumbing.NewBranchReferenceName(branch)),
-	)
-}
 
 // HasSharedHistory checks whether localBranch shares any commits with remoteBranch on the remote service.
 // Uses a bounded walk (max 1000 commits) to avoid scanning huge histories.

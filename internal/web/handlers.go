@@ -61,9 +61,11 @@ func handleBrowse(ontologyRoot, agentBranch string) http.HandlerFunc {
 		ri := repos.RepoFromContext(r.Context())
 		var gs store.FactIndex
 		var idx store.SearchIndex
-		ri.WithRead(func(d repos.StoreDeps) {
-			gs = d.GS
-			idx = d.Idx
+		ri.WithRead(func(svc *store.Service) {
+			if svc != nil {
+				gs = svc.Facts()
+				idx = svc.Search()
+			}
 		})
 		path := r.URL.Query().Get("path")
 		if path == "" {
@@ -131,9 +133,11 @@ func handleFact(agentBranch string) http.HandlerFunc {
 		ri := repos.RepoFromContext(r.Context())
 		var gs store.FactIndex
 		var idx store.SearchIndex
-		ri.WithRead(func(d repos.StoreDeps) {
-			gs = d.GS
-			idx = d.Idx
+		ri.WithRead(func(svc *store.Service) {
+			if svc != nil {
+				gs = svc.Facts()
+				idx = svc.Search()
+			}
 		})
 		path := r.URL.Query().Get("path")
 		if path == "" {
@@ -248,7 +252,11 @@ func handleFactWrite(agentBranch string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
 		var gs store.FactIndex
-		ri.WithRead(func(d repos.StoreDeps) { gs = d.GS })
+		ri.WithRead(func(svc *store.Service) {
+			if svc != nil {
+				gs = svc.Facts()
+			}
+		})
 
 		var req struct {
 			Path    string `json:"path"`
@@ -290,7 +298,11 @@ func handleFactRetract(agentBranch string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
 		var gs store.FactIndex
-		ri.WithRead(func(d repos.StoreDeps) { gs = d.GS })
+		ri.WithRead(func(svc *store.Service) {
+			if svc != nil {
+				gs = svc.Facts()
+			}
+		})
 
 		path := r.URL.Query().Get("path")
 		if path == "" {
@@ -318,7 +330,11 @@ func handleSearch() http.HandlerFunc {
 		ri := repos.RepoFromContext(r.Context())
 		branch := ri.AgentBranch()
 		var idx store.SearchIndex
-		ri.WithRead(func(d repos.StoreDeps) { idx = d.Idx })
+		ri.WithRead(func(svc *store.Service) {
+			if svc != nil {
+				idx = svc.Search()
+			}
+		})
 		if idx == nil {
 			writeError(w, http.StatusBadRequest, "search index not available")
 			return
@@ -469,7 +485,11 @@ func handleHistoryPaginated(agentBranch string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
 		var gs store.FactIndex
-		ri.WithRead(func(d repos.StoreDeps) { gs = d.GS })
+		ri.WithRead(func(svc *store.Service) {
+			if svc != nil {
+				gs = svc.Facts()
+			}
+		})
 		path := r.URL.Query().Get("path")
 
 		limit := 50
@@ -512,9 +532,11 @@ func handleCommitDetail(agentBranch string) http.HandlerFunc {
 		ri := repos.RepoFromContext(r.Context())
 		var gs store.FactIndex
 		var idx store.SearchIndex
-		ri.WithRead(func(d repos.StoreDeps) {
-			gs = d.GS
-			idx = d.Idx
+		ri.WithRead(func(svc *store.Service) {
+			if svc != nil {
+				gs = svc.Facts()
+				idx = svc.Search()
+			}
 		})
 		hash := r.URL.Query().Get("hash")
 		if hash == "" {
@@ -576,7 +598,11 @@ func handleActivity(agentBranch string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
 		var gs store.FactIndex
-		ri.WithRead(func(d repos.StoreDeps) { gs = d.GS })
+		ri.WithRead(func(svc *store.Service) {
+			if svc != nil {
+				gs = svc.Facts()
+			}
+		})
 		result, err := gs.Activity(r.Context(), agentBranch, r.URL.Query().Get("path"))
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, fmt.Sprintf("activity error: %v", err))
@@ -593,7 +619,11 @@ func handleCompletions() http.HandlerFunc {
 		ri := repos.RepoFromContext(r.Context())
 		branch := ri.AgentBranch()
 		var idx store.SearchIndex
-		ri.WithRead(func(d repos.StoreDeps) { idx = d.Idx })
+		ri.WithRead(func(svc *store.Service) {
+			if svc != nil {
+				idx = svc.Search()
+			}
+		})
 
 		category := r.URL.Query().Get("category")
 		prefix := r.URL.Query().Get("prefix")
@@ -617,7 +647,11 @@ func handleStats() http.HandlerFunc {
 		ri := repos.RepoFromContext(r.Context())
 		branch := ri.AgentBranch()
 		var idx store.SearchIndex
-		ri.WithRead(func(d repos.StoreDeps) { idx = d.Idx })
+		ri.WithRead(func(svc *store.Service) {
+			if svc != nil {
+				idx = svc.Search()
+			}
+		})
 		if idx == nil {
 			writeError(w, http.StatusServiceUnavailable, "index not available")
 			return
@@ -637,9 +671,11 @@ func handleStatus(embeddingsEnabled bool, ontologyRoot, agentBranch string) http
 		ri := repos.RepoFromContext(r.Context())
 		var gs store.FactIndex
 		var idx store.SearchIndex
-		ri.WithRead(func(d repos.StoreDeps) {
-			gs = d.GS
-			idx = d.Idx
+		ri.WithRead(func(svc *store.Service) {
+			if svc != nil {
+				gs = svc.Facts()
+				idx = svc.Search()
+			}
 		})
 		head, err := gs.HeadCommit(r.Context(), agentBranch)
 		if err != nil {
@@ -671,7 +707,11 @@ func handleRecent() http.HandlerFunc {
 		ri := repos.RepoFromContext(r.Context())
 		branch := ri.AgentBranch()
 		var idx store.SearchIndex
-		ri.WithRead(func(d repos.StoreDeps) { idx = d.Idx })
+		ri.WithRead(func(svc *store.Service) {
+			if svc != nil {
+				idx = svc.Search()
+			}
+		})
 		if idx == nil {
 			writeError(w, http.StatusServiceUnavailable, "index not available")
 			return
