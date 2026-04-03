@@ -73,11 +73,7 @@ func (fi *factIndex) notifyCommit(ctx context.Context, branch string, hash plumb
 
 // HeadCommit returns the hash of the tip commit of branch as a hex string.
 func (fi *factIndex) HeadCommit(ctx context.Context, branch string) (string, error) {
-	hash, err := fi.rh.resolveRef(ctx, branch)
-	if err != nil {
-		return "", fmt.Errorf("HeadCommit: %w", err)
-	}
-	return hash.String(), nil
+	return fi.rh.HeadCommit(ctx, branch)
 }
 
 // createBranch creates a new branch ref pointing at the tip of fromBranch.
@@ -101,73 +97,6 @@ func (fi *factIndex) createBranch(ctx context.Context, branch, fromBranch string
 // ── Read-only operations ──────────────────────────────────────────────────────
 // Read-only operations on the git store: file reads, directory listings, log,
 // grep, and diffing. None of these methods modify the repository.
-
-// ReadFileWithHash returns both the file content and the blob hash for the given path.
-func (fi *factIndex) readFileWithHash(ctx context.Context, branch, path string) (string, string, error) {
-	path = strings.ToLower(path)
-	headHash, err := fi.rh.resolveRef(ctx, branch)
-	if err != nil {
-		return "", "", fmt.Errorf("readFileWithHash: ref: %w", err)
-	}
-	commit, err := fi.rh.repo.CommitObject(headHash)
-	if err != nil {
-		return "", "", fmt.Errorf("readFileWithHash: commit: %w", err)
-	}
-	tree, err := commit.Tree()
-	if err != nil {
-		return "", "", fmt.Errorf("readFileWithHash: tree: %w", err)
-	}
-	entry, err := tree.FindEntry(path)
-	if err != nil {
-		return "", "", fmt.Errorf("readFileWithHash: entry %s: %w", path, err)
-	}
-	blob, err := fi.rh.repo.BlobObject(entry.Hash)
-	if err != nil {
-		return "", "", fmt.Errorf("readFileWithHash: blob: %w", err)
-	}
-	r, err := blob.Reader()
-	if err != nil {
-		return "", "", fmt.Errorf("readFileWithHash: reader: %w", err)
-	}
-	defer r.Close()
-	b, err := io.ReadAll(r)
-	if err != nil {
-		return "", "", fmt.Errorf("readFileWithHash: read: %w", err)
-	}
-	return string(b), entry.Hash.String(), nil
-}
-
-// readFileAtCommitHash reads the content of path from a specific commit.
-// If the exact path is not found, it falls back to a case-insensitive tree
-// walk so that normalised (lowercase) index paths resolve correctly against
-// pre-normalisation commits that stored paths with mixed case.
-func (fi *factIndex) readFileAtCommitHash(ctx context.Context, path, commitHash string) (string, error) {
-	hash := plumbing.NewHash(commitHash)
-	commit, err := fi.rh.repo.CommitObject(hash)
-	if err != nil {
-		return "", fmt.Errorf("readFileAtCommitHash: commit: %w", err)
-	}
-	tree, err := commit.Tree()
-	if err != nil {
-		return "", fmt.Errorf("readFileAtCommitHash: tree: %w", err)
-	}
-	if f, err := tree.File(path); err == nil {
-		return f.Contents()
-	}
-	// Exact lookup failed — try case-insensitive walk.
-	content, err := treeFileInsensitive(fi.rh.repo, tree, path)
-	if err != nil {
-		return "", fmt.Errorf("readFileAtCommitHash: file %q not found (case-insensitive): %w", path, err)
-	}
-	return content, nil
-}
-
-// ReadFileAtCommit reads the content of path at the given commit.
-// branch is accepted for interface consistency; the commit hash uniquely
-// identifies the version without branch resolution.
-func (fi *factIndex) readFileAtCommit(ctx context.Context, branch, path, commitHash string) (string, error) {
-	return fi.rh.readFileAtCommitHash(ctx, path, commitHash)
-}
 
 // treeFileInsensitive walks a git tree matching each path component
 // case-insensitively and returns the file contents.
@@ -241,12 +170,6 @@ func (fi *factIndex) readFileLastCommit(ctx context.Context, branch, path, befor
 	return content, lastCommit.Hash.String(), err
 }
 
-// ReadFile reads the content of path from the tip of branch.
-func (fi *factIndex) readFile(ctx context.Context, branch, path string) (string, error) {
-	content, _, err := fi.readFileWithHash(ctx, branch, path)
-	return content, err
-}
-
 // FileExists returns true if path exists at the tip of branch, false+nil if not found.
 func (fi *factIndex) fileExists(ctx context.Context, branch, path string) (bool, error) {
 	headHash, err := fi.rh.resolveRef(ctx, branch)
@@ -287,19 +210,19 @@ func (fi *factIndex) ReadFact(ctx context.Context, branch, path string, opts *Re
 		}
 		return ReadFactResult{Content: content, FromCommit: fromCommit}, nil
 	case opts.AtCommit != "":
-		content, err := fi.readFileAtCommit(ctx, branch, path, opts.AtCommit)
+		content, err := fi.rh.readFileAtCommit(ctx, branch, path, opts.AtCommit)
 		if err != nil {
 			return ReadFactResult{}, err
 		}
 		return ReadFactResult{Content: content}, nil
 	case opts.WithHash:
-		content, blobHash, err := fi.readFileWithHash(ctx, branch, path)
+		content, blobHash, err := fi.rh.readFileWithHash(ctx, branch, path)
 		if err != nil {
 			return ReadFactResult{}, err
 		}
 		return ReadFactResult{Content: content, BlobHash: blobHash}, nil
 	default:
-		content, err := fi.readFile(ctx, branch, path)
+		content, err := fi.rh.readFile(ctx, branch, path)
 		if err != nil {
 			return ReadFactResult{}, err
 		}
@@ -358,82 +281,18 @@ func (fi *factIndex) ListDir(ctx context.Context, branch, path string) ([]DirEnt
 // that touched path. Merges are skipped because they duplicate authoring
 // commits from the merged branch.
 func (fi *factIndex) LastCommitForPath(ctx context.Context, branch, path string) (string, error) {
-	headHash, err := fi.rh.resolveRef(ctx, branch)
-	if err != nil {
-		return "", fmt.Errorf("LastCommitForPath: ref: %w", err)
-	}
-
-	logIter, err := fi.rh.repo.Log(&gogit.LogOptions{
-		From:     headHash,
-		FileName: &path,
-		Order:    gogit.LogOrderCommitterTime,
-	})
-	if err != nil {
-		return "", fmt.Errorf("LastCommitForPath: log: %w", err)
-	}
-	defer logIter.Close()
-
-	for {
-		c, err := logIter.Next()
-		if err != nil {
-			return "", fmt.Errorf("LastCommitForPath: %q: no commit found", path)
-		}
-		// Skip merge commits (more than one parent).
-		if c.NumParents() <= 1 {
-			return c.Hash.String(), nil
-		}
-	}
-}
-
-// pathHashSorter sorts two parallel slices (paths and hashes) together by path.
-type pathHashSorter struct{ paths, hashes []string }
-
-func (ps pathHashSorter) Len() int           { return len(ps.paths) }
-func (ps pathHashSorter) Less(i, j int) bool { return ps.paths[i] < ps.paths[j] }
-func (ps pathHashSorter) Swap(i, j int) {
-	ps.paths[i], ps.paths[j] = ps.paths[j], ps.paths[i]
-	ps.hashes[i], ps.hashes[j] = ps.hashes[j], ps.hashes[i]
+	return fi.rh.LastCommitForPath(ctx, branch, path)
 }
 
 // ListAllWithHash returns all .md files at the tip of branch with their blob hashes.
 // Single tree walk — no per-file I/O.
 func (fi *factIndex) ListAllWithHash(ctx context.Context, branch string) ([]string, []string, error) {
-	headHash, err := fi.rh.resolveRef(ctx, branch)
-	if err != nil {
-		return nil, nil, fmt.Errorf("ListAllWithHash: ref: %w", err)
-	}
-
-	commit, err := fi.rh.repo.CommitObject(headHash)
-	if err != nil {
-		return nil, nil, fmt.Errorf("ListAllWithHash: commit: %w", err)
-	}
-
-	fileIter, err := commit.Files()
-	if err != nil {
-		return nil, nil, fmt.Errorf("ListAllWithHash: files: %w", err)
-	}
-	defer fileIter.Close()
-
-	var paths, blobHashes []string
-	err = fileIter.ForEach(func(f *object.File) error {
-		if strings.HasSuffix(f.Name, ".md") {
-			paths = append(paths, f.Name)
-			blobHashes = append(blobHashes, f.Hash.String())
-		}
-		return nil
-	})
-	if err != nil {
-		return nil, nil, fmt.Errorf("ListAllWithHash: iterate: %w", err)
-	}
-
-	sort.Sort(pathHashSorter{paths, blobHashes})
-	return paths, blobHashes, nil
+	return fi.rh.ListAllWithHash(ctx, branch)
 }
 
 // ListAll returns paths of all .md files at the tip of branch.
 func (fi *factIndex) ListAll(ctx context.Context, branch string) ([]string, error) {
-	paths, _, err := fi.ListAllWithHash(ctx, branch)
-	return paths, err
+	return fi.rh.ListAll(ctx, branch)
 }
 
 // Log returns log entries for commits that modified path (up to 50).
@@ -947,62 +806,7 @@ func (fi *factIndex) BranchInfo(localAgent string) (branches, agentBranches []st
 // DiffFiles returns paths added/modified/deleted between fromCommit and the tip of branch.
 // Only .md files are returned. If fromCommit is empty, diffs from empty tree.
 func (fi *factIndex) DiffFiles(ctx context.Context, branch, fromCommit string) (added, modified, deleted []string, err error) {
-	headHash, err := fi.rh.resolveRef(ctx, branch)
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("DiffFiles: ref: %w", err)
-	}
-
-	toCommit, err := fi.rh.repo.CommitObject(headHash)
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("DiffFiles: to commit: %w", err)
-	}
-	toTree, err := toCommit.Tree()
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("DiffFiles: to tree: %w", err)
-	}
-
-	var fromTree *object.Tree
-	if fromCommit != "" {
-		fromHash := plumbing.NewHash(fromCommit)
-		fc, err := fi.rh.repo.CommitObject(fromHash)
-		if err != nil {
-			return nil, nil, nil, fmt.Errorf("DiffFiles: from commit: %w", err)
-		}
-		fromTree, err = fc.Tree()
-		if err != nil {
-			return nil, nil, nil, fmt.Errorf("DiffFiles: from tree: %w", err)
-		}
-	}
-
-	changes, err := object.DiffTree(fromTree, toTree)
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("DiffFiles: diff tree: %w", err)
-	}
-
-	for _, ch := range changes {
-		from := ch.From.Name
-		to := ch.To.Name
-
-		switch {
-		case from == "" && to != "":
-			if strings.HasSuffix(to, ".md") {
-				added = append(added, to)
-			}
-		case from != "" && to == "":
-			if strings.HasSuffix(from, ".md") {
-				deleted = append(deleted, from)
-			}
-		default:
-			if strings.HasSuffix(to, ".md") {
-				modified = append(modified, to)
-			}
-		}
-	}
-
-	sort.Strings(added)
-	sort.Strings(modified)
-	sort.Strings(deleted)
-	return added, modified, deleted, nil
+	return fi.rh.DiffFiles(ctx, branch, fromCommit)
 }
 
 // ── Write operations ──────────────────────────────────────────────────────────
@@ -1253,7 +1057,7 @@ func (fi *factIndex) DeleteFact(ctx context.Context, branch, path, message strin
 		return "", fmt.Errorf("DeleteFact git: %w", err)
 	}
 	if fi.postCommit != nil {
-		if err := fi.postCommit(ctx, fi, branch); err != nil {
+		if err := fi.postCommit(ctx, fi.rh, branch); err != nil {
 			return "", fmt.Errorf("DeleteFact sync: %w", err)
 		}
 	}

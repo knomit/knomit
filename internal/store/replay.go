@@ -73,7 +73,7 @@ func Replay(ctx context.Context, local *Service, localBranch string, iter FactIt
 	}
 
 	// 3. Count remote facts for stats.
-	remotePaths, err := target.ListAll(ctx, cfg.AgentBranch)
+	remotePaths, err := target.rh.ListAll(ctx, cfg.AgentBranch)
 	if err != nil {
 		return nil, fmt.Errorf("Replay: list remote facts: %w", err)
 	}

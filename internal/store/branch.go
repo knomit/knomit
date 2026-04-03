@@ -272,6 +272,16 @@ func (rh *repoHandler) readFileAtCommit(ctx context.Context, branch, path, commi
 	return rh.readFileAtCommitHash(ctx, path, commitHash)
 }
 
+// pathHashSorter sorts two parallel slices (paths and hashes) together by path.
+type pathHashSorter struct{ paths, hashes []string }
+
+func (ps pathHashSorter) Len() int           { return len(ps.paths) }
+func (ps pathHashSorter) Less(i, j int) bool { return ps.paths[i] < ps.paths[j] }
+func (ps pathHashSorter) Swap(i, j int) {
+	ps.paths[i], ps.paths[j] = ps.paths[j], ps.paths[i]
+	ps.hashes[i], ps.hashes[j] = ps.hashes[j], ps.hashes[i]
+}
+
 // ListAllWithHash returns all .md files at the tip of branch with their blob hashes.
 // Single tree walk — no per-file I/O.
 func (rh *repoHandler) ListAllWithHash(ctx context.Context, branch string) ([]string, []string, error) {

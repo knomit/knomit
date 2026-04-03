@@ -25,7 +25,6 @@ const BlobObjectType = 3
 
 // Compile-time checks.
 var _ BranchIndex      = (*repoHandler)(nil)
-var _ gitReader        = (*factIndex)(nil)
 var _ gitReader        = (*Service)(nil)
 var _ FactIndex        = (*factIndex)(nil)
 var _ SearchIndex      = (*searchIndex)(nil)
@@ -262,39 +261,39 @@ func (s *Service) HasSharedHistory(ctx context.Context, localBranch string, remo
 	return found, nil
 }
 
-// gitReader forwarding methods — delegate to fi so *Service satisfies gitReader
+// gitReader forwarding methods — delegate to rh so *Service satisfies gitReader
 // and can be passed to SearchIndex.Sync / SearchIndex.Rebuild.
 
 func (s *Service) DiffFiles(ctx context.Context, branch, fromCommit string) (added, modified, deleted []string, err error) {
-	return s.fi.DiffFiles(ctx, branch, fromCommit)
+	return s.rh.DiffFiles(ctx, branch, fromCommit)
 }
 
 func (s *Service) readFile(ctx context.Context, branch, path string) (string, error) {
-	return s.fi.readFile(ctx, branch, path)
+	return s.rh.readFile(ctx, branch, path)
 }
 
 func (s *Service) readFileWithHash(ctx context.Context, branch, path string) (string, string, error) {
-	return s.fi.readFileWithHash(ctx, branch, path)
+	return s.rh.readFileWithHash(ctx, branch, path)
 }
 
 func (s *Service) HeadCommit(ctx context.Context, branch string) (string, error) {
-	return s.fi.HeadCommit(ctx, branch)
+	return s.rh.HeadCommit(ctx, branch)
 }
 
 func (s *Service) ListAll(ctx context.Context, branch string) ([]string, error) {
-	return s.fi.ListAll(ctx, branch)
+	return s.rh.ListAll(ctx, branch)
 }
 
 func (s *Service) ListAllWithHash(ctx context.Context, branch string) ([]string, []string, error) {
-	return s.fi.ListAllWithHash(ctx, branch)
+	return s.rh.ListAllWithHash(ctx, branch)
 }
 
 func (s *Service) LastCommitForPath(ctx context.Context, branch, path string) (string, error) {
-	return s.fi.LastCommitForPath(ctx, branch, path)
+	return s.rh.LastCommitForPath(ctx, branch, path)
 }
 
 func (s *Service) readFileAtCommit(ctx context.Context, branch, path, commitHash string) (string, error) {
-	return s.fi.readFileAtCommit(ctx, branch, path, commitHash)
+	return s.rh.readFileAtCommit(ctx, branch, path, commitHash)
 }
 
 // deriveAgentID extracts the agent identifier from a branch name.
