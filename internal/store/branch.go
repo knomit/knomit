@@ -80,9 +80,8 @@ func (rh *repoHandler) getEmbedder() Embedder {
 	return rh.embedder
 }
 
-// Compile-time assertions.
+// Compile-time assertion.
 var _ BranchIndex = (*repoHandler)(nil)
-var _ gitReader    = (*repoHandler)(nil)
 
 func newRepoHandler(db *sql.DB, gits *storegit.Storer) *repoHandler {
 	return &repoHandler{db: db, cache: newBranchCache(), gits: gits}
