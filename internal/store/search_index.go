@@ -18,7 +18,7 @@ type searchIndex struct {
 	embedder Embedder
 }
 
-// SetEmbedder attaches an Embedder to the index. When set, Upsert will call
+// SetEmbedder attaches an Embedder to the index. When set, upsert will call
 // Embed on each record's body and persist the result in facts_vec.
 func (si *searchIndex) SetEmbedder(e Embedder) {
 	si.embedMu.Lock()
@@ -70,9 +70,9 @@ func (si *searchIndex) setLastCommit(ctx context.Context, branch, hash string) e
 	return err
 }
 
-// GetLastCommit returns the last processed commit hash for the given branch,
+// SyncWatermark returns the last processed commit hash for the given branch,
 // or "" if not set.
-func (si *searchIndex) GetLastCommit(ctx context.Context, branch string) (string, error) {
+func (si *searchIndex) SyncWatermark(ctx context.Context, branch string) (string, error) {
 	key := "last_commit:" + branch
 	var hash string
 	err := conn(ctx, si.rh.db).QueryRowContext(ctx, `SELECT value FROM meta WHERE key=?`, key).Scan(&hash)
@@ -109,7 +109,7 @@ func (si *searchIndex) Sync(ctx context.Context, branch string) error {
 		return fmt.Errorf("sync: head commit: %w", err)
 	}
 
-	last, err := si.GetLastCommit(ctx, branch)
+	last, err := si.SyncWatermark(ctx, branch)
 	if err != nil {
 		return fmt.Errorf("sync: get last commit: %w", err)
 	}
@@ -148,7 +148,7 @@ func (si *searchIndex) Sync(ctx context.Context, branch string) error {
 			}
 		}
 		for _, path := range deleted {
-			if err := si.Delete(ctx, branch, path); err != nil {
+			if err := si.delete(ctx, branch, path); err != nil {
 				return fmt.Errorf("sync: delete %q: %w", path, err)
 			}
 		}
@@ -237,7 +237,7 @@ func (si *searchIndex) indexFile(ctx context.Context, branch, path, commitHash s
 	}
 	rec.BlobHash = blobHash
 
-	return si.Upsert(ctx, branch, commitHash, rec)
+	return si.upsert(ctx, branch, commitHash, rec)
 }
 
 // ── GC ────────────────────────────────────────────────────────────────────────

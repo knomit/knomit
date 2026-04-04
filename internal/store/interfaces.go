@@ -25,17 +25,14 @@ type FactIndex interface {
 	DiffFiles(ctx context.Context, branch, fromCommit string) (added, modified, deleted []string, err error)
 	WalkChangedFiles(ctx context.Context, branch, fromCommit, prefix string, seen map[string]bool, limit int) ([]FileRecency, string, error)
 	FactsIter(ctx context.Context, branch string) (*FactsIter, error)
-	BranchInfo(localAgent string) (branches, agentBranches []string, matchedAgent string)
 }
 
 // SearchIndex is the interface for the fact search index. Implemented by *searchIndex.
 type SearchIndex interface {
 	Search(ctx context.Context, branch string, q SearchQuery) ([]SearchResult, error)
 	GetByPath(ctx context.Context, branch, path string) (*FactWithBody, error)
-	GetLastCommit(ctx context.Context, branch string) (string, error)
+	SyncWatermark(ctx context.Context, branch string) (string, error)
 	LastCommitForPath(ctx context.Context, branch, path string) (string, bool)
-	Upsert(ctx context.Context, branch, commitHash string, r FactRecord) error
-	Delete(ctx context.Context, branch, path string) error
 	Stats(ctx context.Context, branch, pathPrefix string) (StatsResult, error)
 	Completions(ctx context.Context, branch, category, prefix string, limit int) ([]string, error)
 	ExplainFact(ctx context.Context, branch, path string) (ExplainResult, error)
@@ -80,6 +77,7 @@ type BranchIndex interface {
 	CreateBranch(ctx context.Context, branch, fromBranch string) error
 	DefaultBranch(ctx context.Context) (string, error)
 	SetDefaultBranch(branch string) error
+	BranchInfo(localAgent string) (branches, agentBranches []string, matchedAgent string)
 }
 
 // gitReader is the git-read contract implemented by repoHandler and used internally by searchIndex.

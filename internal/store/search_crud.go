@@ -16,10 +16,10 @@ import (
 // embedding retrieval, and meta key-value storage (last_commit tracking).
 // All mutations keep the vec0 index in sync within transactions.
 
-// Upsert inserts or replaces a FactRecord on the given branch, keeping the
+// upsert inserts or replaces a FactRecord on the given branch, keeping the
 // vec0 index in sync. COW dedup: if (path, blob_hash) already exists in the
 // facts table, only the branch_facts pointer is updated.
-func (si *searchIndex) Upsert(ctx context.Context, branch, commitHash string, rec FactRecord) error {
+func (si *searchIndex) upsert(ctx context.Context, branch, commitHash string, rec FactRecord) error {
 	branchID, err := si.rh.EnsureBranch(ctx, branch, "refs/heads/"+branch)
 	if err != nil {
 		return fmt.Errorf("upsert: %w", err)
@@ -63,13 +63,11 @@ func (si *searchIndex) Upsert(ctx context.Context, branch, commitHash string, re
 	}
 
 	// Begin transaction for atomic COW check + insert.
-	ctx, tx, ownTx, err := beginTxIfNeeded(ctx, si.rh.db)
+	ctx, tx, _, err := beginTxIfNeeded(ctx, si.rh.db)
 	if err != nil {
 		return fmt.Errorf("upsert begin tx: %w", err)
 	}
-	if ownTx {
-		defer tx.Rollback()
-	}
+	defer tx.Rollback()
 	db := conn(ctx, si.rh.db)
 
 	// Atomic: insert fact if it doesn't exist yet (no TOCTOU race).
@@ -108,10 +106,7 @@ func (si *searchIndex) Upsert(ctx context.Context, branch, commitHash string, re
 		if err != nil {
 			return fmt.Errorf("upsert branch_facts (cow hit): %w", err)
 		}
-		if ownTx {
-			return tx.Commit()
-		}
-		return nil
+		return tx.Commit()
 	}
 
 	// COW miss: populate junction tables, embeddings, branch_facts.
@@ -159,10 +154,8 @@ func (si *searchIndex) Upsert(ctx context.Context, branch, commitHash string, re
 		return fmt.Errorf("upsert branch_facts: %w", err)
 	}
 
-	if ownTx {
-		if err := tx.Commit(); err != nil {
-			return err
-		}
+	if err := tx.Commit(); err != nil {
+		return err
 	}
 
 	// Sync graph: create/update nodes and edges for this fact.
@@ -187,21 +180,19 @@ func hasAnyBranchFact(ctx context.Context, db storegit.CtxExecer, factID int64) 
 	return n > 0
 }
 
-// Delete removes a fact from the given branch. If no other branch references
+// delete removes a fact from the given branch. If no other branch references
 // the fact, the underlying facts row (and its vec/graph data) is also deleted.
-func (si *searchIndex) Delete(ctx context.Context, branch, path string) error {
+func (si *searchIndex) delete(ctx context.Context, branch, path string) error {
 	branchID, err := si.rh.branchID(ctx, branch)
 	if err != nil {
 		return fmt.Errorf("delete: %w", err)
 	}
 
-	ctx, tx, ownTx, err := beginTxIfNeeded(ctx, si.rh.db)
+	ctx, tx, _, err := beginTxIfNeeded(ctx, si.rh.db)
 	if err != nil {
 		return fmt.Errorf("delete begin tx: %w", err)
 	}
-	if ownTx {
-		defer tx.Rollback()
-	}
+	defer tx.Rollback()
 	db := conn(ctx, si.rh.db)
 
 	// Look up fact_id + blob_hash in one query.
@@ -213,10 +204,7 @@ func (si *searchIndex) Delete(ctx context.Context, branch, path string) error {
 		 WHERE bf.branch_id = ? AND bf.path = ?`, branchID, path,
 	).Scan(&factID, &blobHash)
 	if err == sql.ErrNoRows {
-		if ownTx {
-			tx.Commit()
-		}
-		return nil
+		return tx.Commit()
 	}
 	if err != nil {
 		return fmt.Errorf("delete lookup: %w", err)
@@ -244,10 +232,8 @@ func (si *searchIndex) Delete(ctx context.Context, branch, path string) error {
 		}
 	}
 
-	if ownTx {
-		if err := tx.Commit(); err != nil {
-			return err
-		}
+	if err := tx.Commit(); err != nil {
+		return err
 	}
 
 	// Graph cleanup outside tx (idempotent).

@@ -687,7 +687,7 @@ func handleStatus(embeddingsEnabled bool, ontologyRoot, agentBranch string) http
 
 		indexCommit := ""
 		if idx != nil {
-			indexCommit, _ = idx.GetLastCommit(r.Context(), branch)
+			indexCommit, _ = idx.SyncWatermark(r.Context(), branch)
 		}
 
 		writeJSON(w, http.StatusOK, map[string]any{

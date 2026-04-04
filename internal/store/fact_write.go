@@ -247,6 +247,11 @@ func (fi *factIndex) WriteFact(ctx context.Context, branch, path, content, messa
 	if err != nil {
 		return WriteFactResult{}, err
 	}
+	if fi.postCommit != nil {
+		if err := fi.postCommit(ctx, branch); err != nil {
+			return WriteFactResult{}, fmt.Errorf("WriteFact sync: %w", err)
+		}
+	}
 	return WriteFactResult{CommitHash: commitHash, BlobHash: blobHash}, nil
 }
 
@@ -266,7 +271,16 @@ func (fi *factIndex) DeleteFact(ctx context.Context, branch, path, message strin
 
 // BatchWriteFacts writes multiple facts in a single commit.
 func (fi *factIndex) BatchWriteFacts(ctx context.Context, branch string, files map[string]string, message, operation string) (commitHash string, blobHashes map[string]string, err error) {
-	return fi.batchWrite(ctx, branch, files, message, operation)
+	commitHash, blobHashes, err = fi.batchWrite(ctx, branch, files, message, operation)
+	if err != nil {
+		return
+	}
+	if fi.postCommit != nil {
+		if err = fi.postCommit(ctx, branch); err != nil {
+			err = fmt.Errorf("BatchWriteFacts sync: %w", err)
+		}
+	}
+	return
 }
 
 // tag creates a lightweight tag ref at the tip of branch.

@@ -195,7 +195,7 @@ func handleTestConnectivity(rm *repos.Manager, sm *SessionManager, agentBranch s
 		}
 
 		// Collect all branch info in a single pass over refs.
-		branches, agentBranches, matchedAgent := remoteSvc.Facts().BranchInfo(agentBranch)
+		branches, agentBranches, matchedAgent := remoteSvc.Branches().BranchInfo(agentBranch)
 
 		// Check shared history.
 		history := "disjoint"

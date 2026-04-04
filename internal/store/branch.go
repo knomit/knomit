@@ -487,3 +487,46 @@ func (rh *repoHandler) DiffFiles(ctx context.Context, branch, fromCommit string)
 	sort.Strings(deleted)
 	return added, modified, deleted, nil
 }
+
+// BranchInfo returns all branches partitioned into regular branches, agent
+// branches (prefixed "agent/"), and the agent branch matching localAgent (if any).
+func (rh *repoHandler) BranchInfo(localAgent string) (branches, agentBranches []string, matchedAgent string) {
+	refIter, err := rh.gits.IterReferences()
+	if err != nil {
+		return
+	}
+	defer refIter.Close()
+
+	agentSet := make(map[string]struct{})
+	for {
+		ref, err := refIter.Next()
+		if err != nil {
+			break
+		}
+		name := ref.Name().String()
+		var short string
+		switch {
+		case strings.HasPrefix(name, "refs/heads/"):
+			short = strings.TrimPrefix(name, "refs/heads/")
+		case strings.HasPrefix(name, "refs/remotes/origin/"):
+			short = strings.TrimPrefix(name, "refs/remotes/origin/")
+		default:
+			continue
+		}
+		if strings.HasPrefix(short, "agent/") {
+			if _, seen := agentSet[short]; !seen {
+				agentSet[short] = struct{}{}
+				if short == localAgent {
+					matchedAgent = short
+				}
+			}
+		} else if strings.HasPrefix(name, "refs/heads/") {
+			branches = append(branches, short)
+		}
+	}
+	agentBranches = make([]string, 0, len(agentSet))
+	for b := range agentSet {
+		agentBranches = append(agentBranches, b)
+	}
+	return
+}

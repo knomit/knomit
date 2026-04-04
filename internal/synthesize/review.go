@@ -164,7 +164,7 @@ func (r *Reviewer) ContinueSession(ctx context.Context, sessionID, response stri
 		if err := validatePrunePaths(result, inputPaths); err != nil {
 			return nil, fmt.Errorf("review: validate prune: %w", err)
 		}
-		if _, err := ApplyPruneDecisions(ctx, r.gs, r.idx, result.Decisions, result.Merges, "review", r.onProgress, r.agentBranch); err != nil {
+		if _, err := ApplyPruneDecisions(ctx, r.gs, result.Decisions, result.Merges, "review", r.onProgress, r.agentBranch); err != nil {
 			return nil, fmt.Errorf("review: apply prune: %w", err)
 		}
 
@@ -184,7 +184,7 @@ func (r *Reviewer) ContinueSession(ctx context.Context, sessionID, response stri
 		if err := validateDistillPaths(result, inputPaths); err != nil {
 			return nil, fmt.Errorf("review: validate distill: %w", err)
 		}
-		_, writtenFacts, err := ApplyDistillDecisions(ctx, r.gs, r.idx, result.Synthesize, result.Retract, "review", r.onProgress, r.agentBranch)
+		_, writtenFacts, err := ApplyDistillDecisions(ctx, r.gs, result.Synthesize, result.Retract, "review", r.onProgress, r.agentBranch)
 		if err != nil {
 			return nil, fmt.Errorf("review: apply distill: %w", err)
 		}
