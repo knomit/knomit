@@ -95,10 +95,16 @@ func (si *searchIndex) upsert(ctx context.Context, branch, commitHash string, re
 
 	// COW hit check: are junction tables already populated for this fact?
 	var junctionExists int
-	db.QueryRowContext(ctx,
+	if err := db.QueryRowContext(ctx,
 		`SELECT 1 FROM fact_entities WHERE fact_id = ? LIMIT 1`, factID,
-	).Scan(&junctionExists)
-	if junctionExists > 0 || (len(rec.Entities) == 0 && hasAnyBranchFact(ctx, db, factID)) {
+	).Scan(&junctionExists); err != nil && err != sql.ErrNoRows {
+		return fmt.Errorf("upsert cow check: %w", err)
+	}
+	anyBranch, err := hasAnyBranchFact(ctx, db, factID)
+	if err != nil {
+		return fmt.Errorf("upsert cow check branch: %w", err)
+	}
+	if junctionExists > 0 || (len(rec.Entities) == 0 && anyBranch) {
 		// COW hit: fact fully indexed, just update branch pointer.
 		_, err = db.ExecContext(ctx,
 			`INSERT OR REPLACE INTO branch_facts(branch_id, path, fact_id, commit_hash) VALUES (?, ?, ?, ?)`,
@@ -174,10 +180,13 @@ func (si *searchIndex) upsert(ctx context.Context, branch, commitHash string, re
 }
 
 // hasAnyBranchFact checks if any branch_facts row exists for the given fact_id.
-func hasAnyBranchFact(ctx context.Context, db storegit.CtxExecer, factID int64) bool {
+func hasAnyBranchFact(ctx context.Context, db storegit.CtxExecer, factID int64) (bool, error) {
 	var n int
-	db.QueryRowContext(ctx, `SELECT 1 FROM branch_facts WHERE fact_id = ? LIMIT 1`, factID).Scan(&n)
-	return n > 0
+	err := db.QueryRowContext(ctx, `SELECT 1 FROM branch_facts WHERE fact_id = ? LIMIT 1`, factID).Scan(&n)
+	if err != nil && err != sql.ErrNoRows {
+		return false, fmt.Errorf("hasAnyBranchFact: %w", err)
+	}
+	return n > 0, nil
 }
 
 // delete removes a fact from the given branch. If no other branch references
@@ -219,9 +228,11 @@ func (si *searchIndex) delete(ctx context.Context, branch, path string) error {
 
 	// Check remaining references atomically (within same tx).
 	var refCount int
-	db.QueryRowContext(ctx,
+	if err := db.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM branch_facts WHERE fact_id = ?`, factID,
-	).Scan(&refCount)
+	).Scan(&refCount); err != nil {
+		return fmt.Errorf("delete refcount: %w", err)
+	}
 
 	if refCount == 0 {
 		// Orphaned: delete the fact (cascades to junction tables, triggers facts_vec).

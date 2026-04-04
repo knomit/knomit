@@ -160,7 +160,9 @@ func (si *searchIndex) queryDistinct(ctx context.Context, query string, args ...
 	var vals []string
 	for rows.Next() {
 		var v string
-		rows.Scan(&v)
+		if err := rows.Scan(&v); err != nil {
+			return nil, fmt.Errorf("queryDistinct scan: %w", err)
+		}
 		if v != "" {
 			vals = append(vals, v)
 		}

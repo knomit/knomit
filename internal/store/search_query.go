@@ -181,9 +181,9 @@ func (si *searchIndex) LastCommitForPath(ctx context.Context, branch, path strin
 		branchID, path,
 	).Scan(&hash, &action)
 	if err != nil {
-		// Fallback: legacy rows with NULL branch_id.
+		// Fallback: legacy rows written before branch_id scoping was introduced.
 		err = conn(ctx, si.rh.db).QueryRowContext(ctx,
-			`SELECT commit_hash, action FROM commit_log WHERE path = ? ORDER BY rowid DESC LIMIT 1`,
+			`SELECT commit_hash, action FROM commit_log WHERE branch_id IS NULL AND path = ? ORDER BY rowid DESC LIMIT 1`,
 			path,
 		).Scan(&hash, &action)
 	}

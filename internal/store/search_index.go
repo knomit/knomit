@@ -268,13 +268,19 @@ func (si *searchIndex) GC(ctx context.Context) error {
 	}
 
 	// 3. Clean up orphaned Entity nodes (no TAGGED edges from any living Fact).
-	si.gcOrphanedGraphNodes(ctx, NodeEntity, EdgeTagged)
+	if err := si.gcOrphanedGraphNodes(ctx, NodeEntity, EdgeTagged); err != nil {
+		return fmt.Errorf("gc: orphaned entities: %w", err)
+	}
 
 	// 4. Clean up orphaned Domain nodes (no IN_DOMAIN edges from any living Fact).
-	si.gcOrphanedGraphNodes(ctx, NodeDomain, EdgeInDomain)
+	if err := si.gcOrphanedGraphNodes(ctx, NodeDomain, EdgeInDomain); err != nil {
+		return fmt.Errorf("gc: orphaned domains: %w", err)
+	}
 
 	// 5. Clean up orphaned OntologyNode nodes (no UNDER edges from any living Fact).
-	si.gcOrphanedGraphNodes(ctx, NodeOntologyNode, EdgeUnder)
+	if err := si.gcOrphanedGraphNodes(ctx, NodeOntologyNode, EdgeUnder); err != nil {
+		return fmt.Errorf("gc: orphaned ontology nodes: %w", err)
+	}
 
 	// 6. Delete commit_log entries for deleted branches.
 	if _, err := conn(ctx, si.rh.db).ExecContext(ctx,
@@ -313,15 +319,14 @@ func (si *searchIndex) gcSessionTable(ctx context.Context, table string) error {
 
 // gcOrphanedGraphNodes removes graph nodes of the given label that have no
 // incoming edges of edgeType from any Fact node.
-func (si *searchIndex) gcOrphanedGraphNodes(ctx context.Context, label, edgeType string) {
+func (si *searchIndex) gcOrphanedGraphNodes(ctx context.Context, label, edgeType string) error {
 	q := fmt.Sprintf(
 		`SELECT json_extract(value, '$.path') FROM json_each(cypher('MATCH (n:%s) WHERE NOT (:%s)-[:%s]->(n) RETURN n.path AS path'))`,
 		label, NodeFact, edgeType,
 	)
 	rows, err := conn(ctx, si.rh.db).QueryContext(ctx, q)
 	if err != nil {
-		log.Warn().Err(err).Str("label", label).Msg("gc: query orphaned nodes failed")
-		return
+		return fmt.Errorf("gc orphaned %s query: %w", label, err)
 	}
 	defer rows.Close()
 
@@ -333,9 +338,10 @@ func (si *searchIndex) gcOrphanedGraphNodes(ctx context.Context, label, edgeType
 		ep := escapeCypherKey(path)
 		delQ := fmt.Sprintf(`SELECT cypher('MATCH (n:%s {path: "%s"}) DETACH DELETE n')`, label, ep)
 		if _, err := conn(ctx, si.rh.db).ExecContext(ctx, delQ); err != nil {
-			log.Warn().Err(err).Str("label", label).Str("path", path).Msg("gc: delete orphaned node failed")
+			return fmt.Errorf("gc orphaned %s delete %q: %w", label, path, err)
 		}
 	}
+	return rows.Err()
 }
 
 // ── Rebuild ───────────────────────────────────────────────────────────────────
