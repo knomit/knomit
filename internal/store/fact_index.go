@@ -25,12 +25,11 @@ var _ FactIndex = (*factIndex)(nil)
 
 // factIndex owns all git-backed fact operations: reading and writing.
 type factIndex struct {
-	rh         *repoHandler
-	auth       transport.AuthMethod
-	signer     ssh.Signer
-	onCommit   func(branch, hash string)
-	postCommit func(ctx context.Context, branch string) error // wired to si.Sync
-	appendLog  func(ctx context.Context, branch, hash string) // wired to si.appendCommitLog
+	rh       *repoHandler
+	auth     transport.AuthMethod
+	signer   ssh.Signer
+	im       IndexManager           // index synchronization after each commit
+	onCommit func(branch, hash string) // external observer (e.g. SSE broadcast)
 }
 
 // authorSig returns the author signature for a given operation.
@@ -53,10 +52,10 @@ func (fi *factIndex) committerSig(branch string) object.Signature {
 	}
 }
 
-// notifyCommit appends to commit_log (via callback) and invokes the external observer.
+// notifyCommit appends to commit_log and invokes the external observer.
 func (fi *factIndex) notifyCommit(ctx context.Context, branch string, hash plumbing.Hash) {
-	if fi.appendLog != nil {
-		fi.appendLog(ctx, branch, hash.String())
+	if fi.im != nil {
+		fi.im.AppendCommitLog(ctx, branch, hash.String())
 	}
 	if fi.onCommit != nil {
 		fi.onCommit(branch, hash.String())

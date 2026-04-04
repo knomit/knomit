@@ -250,8 +250,8 @@ func (fi *factIndex) WriteFact(ctx context.Context, branch, path, content, messa
 	if err != nil {
 		return WriteFactResult{}, err
 	}
-	if fi.postCommit != nil {
-		if err := fi.postCommit(ctx, branch); err != nil {
+	if fi.im != nil {
+		if err := fi.im.Sync(ctx, branch); err != nil {
 			return WriteFactResult{}, fmt.Errorf("WriteFact sync: %w", err)
 		}
 	}
@@ -264,8 +264,8 @@ func (fi *factIndex) DeleteFact(ctx context.Context, branch, path, message strin
 	if err != nil {
 		return "", fmt.Errorf("DeleteFact git: %w", err)
 	}
-	if fi.postCommit != nil {
-		if err := fi.postCommit(ctx, branch); err != nil {
+	if fi.im != nil {
+		if err := fi.im.Sync(ctx, branch); err != nil {
 			return "", fmt.Errorf("DeleteFact sync: %w", err)
 		}
 	}
@@ -278,8 +278,8 @@ func (fi *factIndex) BatchWriteFacts(ctx context.Context, branch string, files m
 	if err != nil {
 		return
 	}
-	if fi.postCommit != nil {
-		if err = fi.postCommit(ctx, branch); err != nil {
+	if fi.im != nil {
+		if err = fi.im.Sync(ctx, branch); err != nil {
 			err = fmt.Errorf("BatchWriteFacts sync: %w", err)
 		}
 	}

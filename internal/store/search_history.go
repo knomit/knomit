@@ -253,8 +253,8 @@ func (si *searchIndex) populateCommitLog(ctx context.Context, branch string) err
 	return nil
 }
 
-// appendCommitLog inserts a single new commit into commit_log.
-func (si *searchIndex) appendCommitLog(ctx context.Context, branch, hashStr string) {
+// AppendCommitLog inserts a single new commit into commit_log.
+func (si *searchIndex) AppendCommitLog(ctx context.Context, branch, hashStr string) {
 	if !si.rh.gits.CommitLogAvailable() {
 		return
 	}
