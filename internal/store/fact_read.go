@@ -80,7 +80,7 @@ func (fi *factIndex) readFileLastCommit(ctx context.Context, branch, path, befor
 		return "", "", fmt.Errorf("readFileLastCommit: %q: no prior commit found", path)
 	}
 
-	content, err = fi.rh.readFileAtCommitHash(ctx, path, lastCommit.Hash.String())
+	content, err = fi.rh.readFileAtCommit(ctx, path, lastCommit.Hash.String())
 	return content, lastCommit.Hash.String(), err
 }
 

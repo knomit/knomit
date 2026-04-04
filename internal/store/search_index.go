@@ -262,7 +262,7 @@ func (si *searchIndex) GC(ctx context.Context) error {
 		// 2. Clean up graph Fact nodes for orphaned fact versions.
 		for _, o := range orphans {
 			if err := si.graphDeleteFact(ctx, o.path, o.blobHash); err != nil {
-				log.Warn().Err(err).Str("path", o.path).Msg("gc: graph delete fact failed")
+				return fmt.Errorf("gc: graph delete fact %q: %w", o.path, err)
 			}
 		}
 	}

@@ -12,15 +12,24 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/object"
 )
 
+// validatePath returns an error if path is empty or contains "..".
+// It does not normalise case; callers must lower-case before calling.
+func validatePath(path string) error {
+	if path == "" {
+		return fmt.Errorf("path must not be empty")
+	}
+	if strings.Contains(path, "..") {
+		return fmt.Errorf("path must not contain '..'")
+	}
+	return nil
+}
+
 // writeFile writes content to path in a new commit with message on branch.
 // Returns the commit hash and the blob hash of the written file.
 func (fi *factIndex) writeFile(ctx context.Context, branch, path, content, message, operation string) (commitHash string, blobHash string, err error) {
 	path = strings.ToLower(path)
-	if path == "" {
-		return "", "", fmt.Errorf("store: WriteFile: path must not be empty")
-	}
-	if strings.Contains(path, "..") {
-		return "", "", fmt.Errorf("store: WriteFile: path must not contain '..'")
+	if err := validatePath(path); err != nil {
+		return "", "", fmt.Errorf("store: WriteFile: %w", err)
 	}
 
 	unlock := fi.rh.lockBranch(branch)
@@ -63,11 +72,8 @@ func (fi *factIndex) writeFile(ctx context.Context, branch, path, content, messa
 // Returns the commit hash of the new commit.
 func (fi *factIndex) deleteFile(ctx context.Context, branch, path, message, operation string) (commitHash string, err error) {
 	path = strings.ToLower(path)
-	if path == "" {
-		return "", fmt.Errorf("store: DeleteFile: path must not be empty")
-	}
-	if strings.Contains(path, "..") {
-		return "", fmt.Errorf("store: DeleteFile: path must not contain '..'")
+	if err := validatePath(path); err != nil {
+		return "", fmt.Errorf("store: DeleteFile: %w", err)
 	}
 
 	unlock := fi.rh.lockBranch(branch)
@@ -130,11 +136,8 @@ func (fi *factIndex) batchWrite(ctx context.Context, branch string, files map[st
 
 	// Pre-flight validation: reject empty paths and paths containing "..".
 	for path := range files {
-		if path == "" {
-			return "", nil, fmt.Errorf("store: batchWrite: path must not be empty")
-		}
-		if strings.Contains(path, "..") {
-			return "", nil, fmt.Errorf("store: batchWrite: path must not contain '..'")
+		if err := validatePath(path); err != nil {
+			return "", nil, fmt.Errorf("store: batchWrite: %w", err)
 		}
 	}
 

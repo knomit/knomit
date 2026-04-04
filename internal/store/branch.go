@@ -289,19 +289,19 @@ func (rh *repoHandler) resolveRef(ctx context.Context, branch string) (plumbing.
 	return ref.Hash(), nil
 }
 
-// readFileAtCommitHash reads the content of path from a specific commit.
+// readFileAtCommit reads the content of path from a specific commit.
 // If the exact path is not found, it falls back to a case-insensitive tree
 // walk so that normalised (lowercase) index paths resolve correctly against
 // pre-normalisation commits that stored paths with mixed case.
-func (rh *repoHandler) readFileAtCommitHash(ctx context.Context, path, commitHash string) (string, error) {
+func (rh *repoHandler) readFileAtCommit(ctx context.Context, path, commitHash string) (string, error) {
 	hash := plumbing.NewHash(commitHash)
 	commit, err := rh.repo.CommitObject(hash)
 	if err != nil {
-		return "", fmt.Errorf("readFileAtCommitHash: commit: %w", err)
+		return "", fmt.Errorf("readFileAtCommit: commit: %w", err)
 	}
 	tree, err := commit.Tree()
 	if err != nil {
-		return "", fmt.Errorf("readFileAtCommitHash: tree: %w", err)
+		return "", fmt.Errorf("readFileAtCommit: tree: %w", err)
 	}
 	if f, err := tree.File(path); err == nil {
 		return f.Contents()
@@ -309,7 +309,7 @@ func (rh *repoHandler) readFileAtCommitHash(ctx context.Context, path, commitHas
 	// Exact lookup failed — try case-insensitive walk.
 	content, err := treeFileInsensitive(rh.repo, tree, path)
 	if err != nil {
-		return "", fmt.Errorf("readFileAtCommitHash: file %q not found (case-insensitive): %w", path, err)
+		return "", fmt.Errorf("readFileAtCommit: file %q not found (case-insensitive): %w", path, err)
 	}
 	return content, nil
 }
@@ -363,10 +363,6 @@ func (rh *repoHandler) readFile(ctx context.Context, branch, path string) (strin
 	return content, err
 }
 
-// readFileAtCommit reads the content of path at the given commit.
-func (rh *repoHandler) readFileAtCommit(ctx context.Context, path, commitHash string) (string, error) {
-	return rh.readFileAtCommitHash(ctx, path, commitHash)
-}
 
 // pathHashSorter sorts two parallel slices (paths and hashes) together by path.
 type pathHashSorter struct{ paths, hashes []string }
