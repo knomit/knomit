@@ -79,7 +79,8 @@ func Open(path string) (*Service, error) {
 	rh.onDrop = si.GC
 	fi := &factIndex{rh: rh}
 	fi.postCommit = si.Sync
-	ri := &remoteIndex{rh: rh, fi: fi}
+	fi.appendLog = si.appendCommitLog
+	ri := &remoteIndex{rh: rh, fi: fi, si: si}
 	return &Service{
 		rh: rh,
 		fi: fi,
@@ -101,6 +102,12 @@ func (s *Service) Facts() FactIndex { return s.fi }
 
 // Search returns the SearchIndex for full-text and vector search.
 func (s *Service) Search() SearchIndex { return s.si }
+
+// IndexManager returns the IndexManager for search index lifecycle operations.
+func (s *Service) IndexManager() IndexManager { return s.si }
+
+// SetEmbedder configures the embedder used by the search index for vector operations.
+func (s *Service) SetEmbedder(e BatchEmbedder) { s.rh.setEmbedder(e) }
 
 // Pipeline returns the PipelineIndex for pipeline session management.
 func (s *Service) Pipeline() PipelineIndex { return s.pi }

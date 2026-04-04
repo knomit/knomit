@@ -62,6 +62,22 @@ type repoHandler struct {
 	gits     *storegit.Storer
 	repo     *gogit.Repository // nil until OpenRepo/InitRepo/Clone called
 	configMu sync.Mutex        // guards ConfigureRemote / remote wiring
+	embedMu  sync.RWMutex      // guards embedder
+	embedder Embedder
+}
+
+// setEmbedder attaches an Embedder. Called once during service construction.
+func (rh *repoHandler) setEmbedder(e Embedder) {
+	rh.embedMu.Lock()
+	defer rh.embedMu.Unlock()
+	rh.embedder = e
+}
+
+// getEmbedder returns the current Embedder under a read lock.
+func (rh *repoHandler) getEmbedder() Embedder {
+	rh.embedMu.RLock()
+	defer rh.embedMu.RUnlock()
+	return rh.embedder
 }
 
 // Compile-time assertions.

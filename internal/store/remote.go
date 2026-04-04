@@ -7,10 +7,10 @@ import (
 )
 
 // remoteIndex owns remote configuration and git sync/push operations.
-// It holds a back-reference to factIndex for commit signing and branch locking.
 type remoteIndex struct {
 	rh    *repoHandler
 	fi    *factIndex
+	si    *searchIndex
 	crypt *Crypt
 }
 

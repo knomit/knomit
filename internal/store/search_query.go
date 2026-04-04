@@ -410,7 +410,7 @@ func (si *searchIndex) Search(ctx context.Context, branch string, q SearchQuery)
 	}
 
 	vecSimByPath := make(map[string]float64)
-	emb := si.getEmbedder()
+	emb := si.rh.getEmbedder()
 	if emb == nil && len(q.QueryVec) == 0 {
 		log.Debug().Msg("search: no embedder configured, skipping vec search")
 	} else {

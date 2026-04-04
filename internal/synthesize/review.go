@@ -21,6 +21,7 @@ type Reviewer struct {
 	gs             store.FactIndex
 	idx            store.SearchIndex
 	reviewIdx      store.PipelineIndex
+	branches       store.BranchIndex
 	embedder       store.Embedder
 	onProgress     func(ProgressEvent)
 	reflectChecked map[string]bool
@@ -28,11 +29,11 @@ type Reviewer struct {
 }
 
 // NewReviewer creates a new review orchestrator.
-func NewReviewer(gs store.FactIndex, idx store.SearchIndex, reviewIdx store.PipelineIndex, embedder store.Embedder, onProgress func(ProgressEvent), agentBranch string) *Reviewer {
+func NewReviewer(gs store.FactIndex, idx store.SearchIndex, reviewIdx store.PipelineIndex, branches store.BranchIndex, embedder store.Embedder, onProgress func(ProgressEvent), agentBranch string) *Reviewer {
 	if onProgress == nil {
 		onProgress = func(ProgressEvent) {}
 	}
-	return &Reviewer{gs: gs, idx: idx, reviewIdx: reviewIdx, embedder: embedder, onProgress: onProgress, reflectChecked: make(map[string]bool), agentBranch: agentBranch}
+	return &Reviewer{gs: gs, idx: idx, reviewIdx: reviewIdx, branches: branches, embedder: embedder, onProgress: onProgress, reflectChecked: make(map[string]bool), agentBranch: agentBranch}
 }
 
 // StartSession creates a new review session, identifies dirty facts, clusters
@@ -429,7 +430,7 @@ func (r *Reviewer) completeSession(ctx context.Context, sess *store.PipelineSess
 		return nil, fmt.Errorf("review: complete session: %w", err)
 	}
 
-	headHash, err := r.gs.HeadCommit(ctx, r.agentBranch)
+	headHash, err := r.branches.HeadCommit(ctx, r.agentBranch)
 	if err != nil {
 		log.Warn().Err(err).Msg("review: could not get HEAD for watermark")
 	} else {

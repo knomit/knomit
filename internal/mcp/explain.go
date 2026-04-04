@@ -78,7 +78,7 @@ func classifyRefs(refs []string) classifiedRefs {
 }
 
 // ExplainHandler returns the handler function for knomit_explain.
-func ExplainHandler(gs store.FactIndex, sessionIdx store.ToolSessionIndex, ontologyRoot, agentBranch string) func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+func ExplainHandler(gs store.FactIndex, idx store.SearchIndex, sessionIdx store.ToolSessionIndex, ontologyRoot, agentBranch string) func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 	return func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 		ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
@@ -87,13 +87,13 @@ func ExplainHandler(gs store.FactIndex, sessionIdx store.ToolSessionIndex, ontol
 		cursor := req.GetString("cursor", "")
 
 		if cursor == "" {
-			return explainFirstCall(ctx, gs, sessionIdx, ontologyRoot, agentBranch, file)
+			return explainFirstCall(ctx, gs, idx, sessionIdx, ontologyRoot, agentBranch, file)
 		}
-		return explainResume(ctx, gs, sessionIdx, agentBranch, cursor)
+		return explainResume(ctx, gs, idx, sessionIdx, agentBranch, cursor)
 	}
 }
 
-func explainFirstCall(ctx context.Context, gs store.FactIndex, sessionIdx store.ToolSessionIndex, ontologyRoot, agentBranch, file string) (*mcpgo.CallToolResult, error) {
+func explainFirstCall(ctx context.Context, gs store.FactIndex, idx store.SearchIndex, sessionIdx store.ToolSessionIndex, ontologyRoot, agentBranch, file string) (*mcpgo.CallToolResult, error) {
 	if file == "" {
 		return mcpgo.NewToolResultError("file is required"), nil
 	}
@@ -110,7 +110,7 @@ func explainFirstCall(ctx context.Context, gs store.FactIndex, sessionIdx store.
 	}
 
 	// Get history.
-	logEntries, err := gs.Log(ctx, agentBranch, file)
+	logEntries, err := idx.Log(ctx, agentBranch, file)
 	if err != nil {
 		return mcpgo.NewToolResultError(fmt.Sprintf("log error: %v", err)), nil
 	}
@@ -199,7 +199,7 @@ func explainFirstCall(ctx context.Context, gs store.FactIndex, sessionIdx store.
 	return mcpgo.NewToolResultText(string(out)), nil
 }
 
-func explainResume(ctx context.Context, gs store.FactIndex, sessionIdx store.ToolSessionIndex, agentBranch, cursor string) (*mcpgo.CallToolResult, error) {
+func explainResume(ctx context.Context, gs store.FactIndex, idx store.SearchIndex, sessionIdx store.ToolSessionIndex, agentBranch, cursor string) (*mcpgo.CallToolResult, error) {
 	session, err := sessionIdx.GetToolSession(ctx, cursor)
 	if err != nil {
 		return mcpgo.NewToolResultError(fmt.Sprintf("session lookup error: %v", err)), nil
@@ -232,12 +232,12 @@ func explainResume(ctx context.Context, gs store.FactIndex, sessionIdx store.Too
 			var retracted bool
 			var lastCommitHash string
 			if readErr != nil {
-				// LastCommitForPath skips git merge commits. In knomit, synthesis
-				// deletions are always regular commits (not merge commits), so this
-				// correctly returns the retraction commit.
-				retractCommit, lcErr := gs.LastCommitForPath(ctx, agentBranch, item.Path)
-				if lcErr != nil || retractCommit == "" {
-					continue // file never existed in git
+				// LastCommitForPath queries the SQLite commit_log for the retraction
+				// commit. Synthesis deletions are always regular (non-merge) commits,
+				// so commit_log reliably captures them.
+				retractCommit, ok := idx.LastCommitForPath(ctx, agentBranch, item.Path)
+				if !ok || retractCommit == "" {
+					continue // file never existed or not yet indexed
 				}
 				result, readErr = gs.ReadFact(ctx, agentBranch, item.Path, &store.ReadFactOpts{BeforeCommit: retractCommit})
 				if readErr != nil {

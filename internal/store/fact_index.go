@@ -24,16 +24,15 @@ func parseFact(path, content string) (FactRecord, error) {
 // Compile-time interface checks.
 var _ FactIndex = (*factIndex)(nil)
 
-// factIndex owns all git-backed fact operations: reading, writing, and commit-log
-// management. It is embedded in Service so that Service satisfies FactIndex and
-// gitReader without code duplication.
+// factIndex owns all git-backed fact operations: reading and writing.
 type factIndex struct {
 	rh         *repoHandler
 	branchMu   sync.Map // per-branch write serialization
 	auth       transport.AuthMethod
 	signer     ssh.Signer
 	onCommit   func(branch, hash string)
-	postCommit func(ctx context.Context, branch string) error // wired to si.Sync
+	postCommit func(ctx context.Context, branch string) error      // wired to si.Sync
+	appendLog  func(ctx context.Context, branch string, hash plumbing.Hash) // wired to si.appendCommitLog
 }
 
 // lockBranch acquires the per-branch mutex and returns an unlock function.
@@ -64,15 +63,12 @@ func (fi *factIndex) committerSig(branch string) object.Signature {
 	}
 }
 
-// notifyCommit calls appendCommitLog and then the optional external callback.
+// notifyCommit appends to commit_log (via callback) and invokes the external observer.
 func (fi *factIndex) notifyCommit(ctx context.Context, branch string, hash plumbing.Hash) {
-	fi.appendCommitLog(ctx, branch, hash)
+	if fi.appendLog != nil {
+		fi.appendLog(ctx, branch, hash)
+	}
 	if fi.onCommit != nil {
 		fi.onCommit(branch, hash.String())
 	}
-}
-
-// HeadCommit returns the hash of the tip commit of branch as a hex string.
-func (fi *factIndex) HeadCommit(ctx context.Context, branch string) (string, error) {
-	return fi.rh.HeadCommit(ctx, branch)
 }

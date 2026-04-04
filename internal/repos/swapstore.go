@@ -39,7 +39,7 @@ func (m *Manager) SwapStore(ri *RepoInstance, tempDBPath string) error {
 			return nil
 		}
 		if m.deps.Embedder != nil {
-			svc.Search().SetEmbedder(m.deps.Embedder)
+			svc.SetEmbedder(m.deps.Embedder)
 		}
 		ri.withWrite(func() {
 			ri.svc = svc
@@ -83,7 +83,7 @@ func (m *Manager) SwapStore(ri *RepoInstance, tempDBPath string) error {
 	}
 
 	if m.deps.Embedder != nil {
-		svc.Search().SetEmbedder(m.deps.Embedder)
+		svc.SetEmbedder(m.deps.Embedder)
 	}
 	ri.withWrite(func() {
 		ri.svc = svc
@@ -102,7 +102,7 @@ func broadcastHead(svc *store.Service, branch string, hub *TaskHub) {
 	if hub == nil {
 		return
 	}
-	if head, err := svc.Facts().HeadCommit(context.Background(), branch); err == nil {
+	if head, err := svc.Branches().HeadCommit(context.Background(), branch); err == nil {
 		hub.broadcastStatus(head)
 	}
 }

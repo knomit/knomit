@@ -46,7 +46,7 @@ func (si *searchIndex) upsert(ctx context.Context, branch, commitHash string, re
 
 	// Compute embedding vector if an embedder is configured.
 	var vecData []byte
-	if emb := si.getEmbedder(); emb != nil {
+	if emb := si.rh.getEmbedder(); emb != nil {
 		var data []byte
 		err := conn(ctx, si.rh.db).QueryRowContext(ctx,
 			`SELECT data FROM objects WHERE hash = ? AND type = ?`,
@@ -164,7 +164,7 @@ func (si *searchIndex) upsert(ctx context.Context, branch, commitHash string, re
 	}
 
 	// Build similarity edges if embeddings are available.
-	if si.getEmbedder() != nil {
+	if si.rh.getEmbedder() != nil {
 		if err := si.graphBuildSimilarityEdges(ctx, rec.Path, rec.BlobHash); err != nil {
 			log.Warn().Err(err).Str("path", rec.Path).Msg("graph similarity edges failed")
 		}

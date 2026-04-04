@@ -44,7 +44,7 @@ func hypothesizeTool() mcpgo.Tool {
 }
 
 // HypothesizeHandler returns the handler function for knomit_hypothesize.
-func HypothesizeHandler(gs store.FactIndex, idx store.SearchIndex, pipelineIdx store.PipelineIndex, ontologyRoot, agentBranch string) func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+func HypothesizeHandler(gs store.FactIndex, idx store.SearchIndex, pipelineIdx store.PipelineIndex, branches store.BranchIndex, ontologyRoot, agentBranch string) func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 	return func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 		ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
@@ -56,9 +56,9 @@ func HypothesizeHandler(gs store.FactIndex, idx store.SearchIndex, pipelineIdx s
 		var err error
 
 		if sessionID == "" {
-			result, err = hypothesizeStart(ctx, gs, idx, pipelineIdx, ontologyRoot, agentBranch)
+			result, err = hypothesizeStart(ctx, gs, idx, pipelineIdx, branches, ontologyRoot, agentBranch)
 		} else {
-			result, err = hypothesizeContinue(ctx, pipelineIdx, gs, ontologyRoot, agentBranch, sessionID, response)
+			result, err = hypothesizeContinue(ctx, pipelineIdx, branches, ontologyRoot, agentBranch, sessionID, response)
 		}
 
 		if err != nil {
@@ -71,7 +71,7 @@ func HypothesizeHandler(gs store.FactIndex, idx store.SearchIndex, pipelineIdx s
 }
 
 // hypothesizeStart creates a new session, finds synthesis facts, and returns the first item.
-func hypothesizeStart(ctx context.Context, gs store.FactIndex, idx store.SearchIndex, pipelineIdx store.PipelineIndex, ontologyRoot, agentBranch string) (*HypothesizeResult, error) {
+func hypothesizeStart(ctx context.Context, gs store.FactIndex, idx store.SearchIndex, pipelineIdx store.PipelineIndex, branches store.BranchIndex, ontologyRoot, agentBranch string) (*HypothesizeResult, error) {
 	branch := agentBranch
 
 	// Get watermark.
@@ -130,7 +130,7 @@ func hypothesizeStart(ctx context.Context, gs store.FactIndex, idx store.SearchI
 	// No synthesis facts → done immediately.
 	if len(synthFacts) == 0 {
 		// Advance watermark even when empty so next run is incremental.
-		if head, err := gs.HeadCommit(ctx, agentBranch); err == nil {
+		if head, err := branches.HeadCommit(ctx, agentBranch); err == nil {
 			_ = pipelineIdx.SetPipelineWatermark(ctx, "hypothesize", branch, head)
 		}
 		return &HypothesizeResult{Done: true}, nil
@@ -157,11 +157,11 @@ func hypothesizeStart(ctx context.Context, gs store.FactIndex, idx store.SearchI
 		}
 	}
 
-	return hypothesizeNextItem(ctx, pipelineIdx, gs, ontologyRoot, agentBranch, sess.ID)
+	return hypothesizeNextItem(ctx, pipelineIdx, branches, ontologyRoot, agentBranch, sess.ID)
 }
 
 // hypothesizeContinue acknowledges the current work item and advances to the next.
-func hypothesizeContinue(ctx context.Context, pipelineIdx store.PipelineIndex, gs store.FactIndex, ontologyRoot, agentBranch, sessionID, response string) (*HypothesizeResult, error) {
+func hypothesizeContinue(ctx context.Context, pipelineIdx store.PipelineIndex, branches store.BranchIndex, ontologyRoot, agentBranch, sessionID, response string) (*HypothesizeResult, error) {
 	// Verify session exists and is active.
 	sess, err := pipelineIdx.GetPipelineSession(ctx, sessionID)
 	if err != nil {
@@ -189,11 +189,11 @@ func hypothesizeContinue(ctx context.Context, pipelineIdx store.PipelineIndex, g
 		}
 	}
 
-	return hypothesizeNextItem(ctx, pipelineIdx, gs, ontologyRoot, agentBranch, sessionID)
+	return hypothesizeNextItem(ctx, pipelineIdx, branches, ontologyRoot, agentBranch, sessionID)
 }
 
 // hypothesizeNextItem fetches the next unanswered work item or completes the session.
-func hypothesizeNextItem(ctx context.Context, pipelineIdx store.PipelineIndex, gs store.FactIndex, ontologyRoot, agentBranch, sessionID string) (*HypothesizeResult, error) {
+func hypothesizeNextItem(ctx context.Context, pipelineIdx store.PipelineIndex, branches store.BranchIndex, ontologyRoot, agentBranch, sessionID string) (*HypothesizeResult, error) {
 	item, err := pipelineIdx.NextPipelineWorkItem(ctx, sessionID)
 	if err != nil {
 		return nil, fmt.Errorf("next item: %w", err)
@@ -204,7 +204,7 @@ func hypothesizeNextItem(ctx context.Context, pipelineIdx store.PipelineIndex, g
 		if err := pipelineIdx.CompletePipelineSession(ctx, sessionID); err != nil {
 			return nil, fmt.Errorf("complete session: %w", err)
 		}
-		if head, err := gs.HeadCommit(ctx, agentBranch); err == nil {
+		if head, err := branches.HeadCommit(ctx, agentBranch); err == nil {
 			_ = pipelineIdx.SetPipelineWatermark(ctx, "hypothesize", agentBranch, head)
 		}
 		return &HypothesizeResult{

@@ -6,31 +6,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/rs/zerolog/log"
 )
 
 type searchIndex struct {
-	rh       *repoHandler
-	embedMu  sync.RWMutex
-	embedder Embedder
-}
-
-// SetEmbedder attaches an Embedder to the index. When set, upsert will call
-// Embed on each record's body and persist the result in facts_vec.
-func (si *searchIndex) SetEmbedder(e Embedder) {
-	si.embedMu.Lock()
-	defer si.embedMu.Unlock()
-	si.embedder = e
-}
-
-// getEmbedder returns the current Embedder under a read lock.
-func (si *searchIndex) getEmbedder() Embedder {
-	si.embedMu.RLock()
-	defer si.embedMu.RUnlock()
-	return si.embedder
+	rh *repoHandler
 }
 
 // casLastCommit atomically updates the last-commit watermark for a branch,
@@ -470,7 +452,7 @@ func (si *searchIndex) rebuildFacts(ctx context.Context, branch, head string, pr
 // Bodies are fetched one chunk at a time so memory usage is bounded by batchSize,
 // not by the total number of facts.
 func (si *searchIndex) rebuildEmbeddings(ctx context.Context, progress RebuildProgress) (int, error) {
-	emb := si.getEmbedder()
+	emb := si.rh.getEmbedder()
 	if emb == nil {
 		return 0, nil
 	}
@@ -683,7 +665,7 @@ func (si *searchIndex) rebuildGraph(ctx context.Context, progress RebuildProgres
 
 	// Build similarity edges after commit (needs committed data for KNN).
 	// Batch: collect all neighbors first, then write all edges in one transaction.
-	if si.getEmbedder() != nil {
+	if si.rh.getEmbedder() != nil {
 		type simEdge struct{ fromPath, fromBH, toPath, toBH string }
 		var edges []simEdge
 
