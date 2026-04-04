@@ -45,7 +45,7 @@ func (ri *remoteIndex) Sync(ctx context.Context, localBranch string, auth transp
 		}
 	}()
 
-	unlock := ri.fi.lockBranch(localBranch)
+	unlock := ri.rh.lockBranch(localBranch)
 
 	// Check if origin remote exists in git config.
 	if _, err := ri.rh.repo.Remote("origin"); err != nil {
@@ -294,7 +294,7 @@ func (ri *remoteIndex) threeWayMerge(ctx context.Context, baseCommit, originComm
 // push. This is safe because agent branches are per-machine — no other machine
 // writes to the same branch.
 func (ri *remoteIndex) Push(ctx context.Context, branch string, auth transport.AuthMethod) (res PushResult, retErr error) {
-	unlock := ri.fi.lockBranch(branch)
+	unlock := ri.rh.lockBranch(branch)
 	defer unlock()
 
 	if _, err := ri.rh.repo.Remote("origin"); err != nil {

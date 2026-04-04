@@ -56,14 +56,24 @@ func (c *branchCache) remove(name string) {
 
 // repoHandler owns the database handle, branch cache, and branch operations.
 type repoHandler struct {
-	db       *sql.DB
-	cache    *branchCache
-	onDrop   func(context.Context) error
-	gits     *storegit.Storer
-	repo     *gogit.Repository // nil until OpenRepo/InitRepo/Clone called
-	configMu sync.Mutex        // guards ConfigureRemote / remote wiring
-	embedMu  sync.RWMutex      // guards embedder
-	embedder Embedder
+	db        *sql.DB
+	cache     *branchCache
+	onDrop    func(context.Context) error
+	gits      *storegit.Storer
+	repo      *gogit.Repository // nil until OpenRepo/InitRepo/Clone called
+	configMu  sync.Mutex        // guards ConfigureRemote / remote wiring
+	embedMu   sync.RWMutex      // guards embedder
+	embedder  Embedder
+	branchMu  sync.Map          // per-branch write serialization
+}
+
+// lockBranch acquires the per-branch write mutex and returns an unlock function.
+// Used by factIndex and remoteIndex to serialize writes on a given branch.
+func (rh *repoHandler) lockBranch(branch string) func() {
+	v, _ := rh.branchMu.LoadOrStore(branch, &sync.Mutex{})
+	mu := v.(*sync.Mutex)
+	mu.Lock()
+	return mu.Unlock
 }
 
 // setEmbedder attaches an Embedder. Called once during service construction.
@@ -354,9 +364,7 @@ func (rh *repoHandler) readFile(ctx context.Context, branch, path string) (strin
 }
 
 // readFileAtCommit reads the content of path at the given commit.
-// branch is accepted for interface consistency; the commit hash uniquely
-// identifies the version without branch resolution.
-func (rh *repoHandler) readFileAtCommit(ctx context.Context, branch, path, commitHash string) (string, error) {
+func (rh *repoHandler) readFileAtCommit(ctx context.Context, path, commitHash string) (string, error) {
 	return rh.readFileAtCommitHash(ctx, path, commitHash)
 }
 
@@ -544,4 +552,43 @@ func (rh *repoHandler) BranchInfo(localAgent string) (branches, agentBranches []
 		agentBranches = append(agentBranches, b)
 	}
 	return
+}
+
+// ── Commit-log wrappers ───────────────────────────────────────────────────────
+// These methods hide storegit cursor types and branch-ID resolution from callers.
+
+// commitLogQuery resolves branch to its numeric ID and delegates to
+// storegit.CommitLogQuery, hiding cursor construction from callers.
+func (rh *repoHandler) commitLogQuery(ctx context.Context, branch, path, after, from, before string, limit int) ([]storegit.CommitLogRow, bool, error) {
+	branchID, _ := rh.branchID(ctx, branch) // 0 on error → no filter
+	var cursor storegit.CommitLogCursor
+	switch {
+	case before != "":
+		cursor = storegit.CommitLogCursor{Type: storegit.CommitLogCursorBefore, Hash: before}
+	case from != "":
+		cursor = storegit.CommitLogCursor{Type: storegit.CommitLogCursorFrom, Hash: from}
+	case after != "":
+		cursor = storegit.CommitLogCursor{Type: storegit.CommitLogCursorAfter, Hash: after}
+	}
+	return rh.gits.CommitLogQuery(branchID, path, cursor, limit)
+}
+
+// commitLogActivity resolves branch to its numeric ID and delegates to
+// storegit.CommitLogActivity.
+func (rh *repoHandler) commitLogActivity(ctx context.Context, branch, path string, cutoff7, cutoff30, cutoff90 int64) (storegit.CommitLogActivityResult, error) {
+	branchID, _ := rh.branchID(ctx, branch)
+	return rh.gits.CommitLogActivity(branchID, path, cutoff7, cutoff30, cutoff90)
+}
+
+// commitLogWalkChanged resolves branch to its numeric ID and delegates to
+// storegit.CommitLogWalkChanged.
+func (rh *repoHandler) commitLogWalkChanged(ctx context.Context, branch, prefix string, seen map[string]bool, limit int) ([]storegit.CommitLogFileRecency, error) {
+	branchID, _ := rh.branchID(ctx, branch)
+	return rh.gits.CommitLogWalkChanged(branchID, prefix, seen, limit)
+}
+
+// commitLogFileCounts delegates to storegit.CommitLogFileCounts.
+// No branch filter needed — commit hashes already identify the branch.
+func (rh *repoHandler) commitLogFileCounts(hashes []string) (map[string]map[string]int, error) {
+	return rh.gits.CommitLogFileCounts(hashes)
 }

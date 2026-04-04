@@ -23,7 +23,7 @@ func (fi *factIndex) writeFile(ctx context.Context, branch, path, content, messa
 		return "", "", fmt.Errorf("store: WriteFile: path must not contain '..'")
 	}
 
-	unlock := fi.lockBranch(branch)
+	unlock := fi.rh.lockBranch(branch)
 
 	headHash, err := fi.rh.resolveRef(ctx, branch)
 	if err != nil {
@@ -70,7 +70,7 @@ func (fi *factIndex) deleteFile(ctx context.Context, branch, path, message, oper
 		return "", fmt.Errorf("store: DeleteFile: path must not contain '..'")
 	}
 
-	unlock := fi.lockBranch(branch)
+	unlock := fi.rh.lockBranch(branch)
 
 	headHash, err := fi.rh.resolveRef(ctx, branch)
 	if err != nil {
@@ -138,7 +138,7 @@ func (fi *factIndex) batchWrite(ctx context.Context, branch string, files map[st
 		}
 	}
 
-	unlock := fi.lockBranch(branch)
+	unlock := fi.rh.lockBranch(branch)
 	cHash, blobHashes, err := fi.batchWriteLocked(ctx, branch, files, message, operation)
 	unlock()
 	if err != nil {

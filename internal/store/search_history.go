@@ -16,7 +16,7 @@ import (
 // Log returns up to 50 log entries for commits that modified path on branch.
 // Queries commit_log directly; branch is accepted for interface compatibility.
 func (si *searchIndex) Log(ctx context.Context, branch, path string) ([]LogEntry, error) {
-	rows, _, err := si.rh.gits.CommitLogQuery(path, storegit.CommitLogCursor{}, 50)
+	rows, _, err := si.rh.commitLogQuery(ctx, branch, path, "", "", "", 50)
 	if err != nil {
 		return nil, fmt.Errorf("Log: %w", err)
 	}
@@ -33,17 +33,7 @@ func (si *searchIndex) Log(ctx context.Context, branch, path string) ([]LogEntry
 
 // LogPaginated returns paginated log entries with file-count tags.
 func (si *searchIndex) LogPaginated(ctx context.Context, branch, path string, limit int, after, from, before string) ([]LogEntryWithTags, string, string, error) {
-	var cursor storegit.CommitLogCursor
-	switch {
-	case before != "":
-		cursor = storegit.CommitLogCursor{Type: storegit.CommitLogCursorBefore, Hash: before}
-	case from != "":
-		cursor = storegit.CommitLogCursor{Type: storegit.CommitLogCursorFrom, Hash: from}
-	case after != "":
-		cursor = storegit.CommitLogCursor{Type: storegit.CommitLogCursorAfter, Hash: after}
-	}
-
-	rows, hasMore, err := si.rh.gits.CommitLogQuery(path, cursor, limit)
+	rows, hasMore, err := si.rh.commitLogQuery(ctx, branch, path, after, from, before, limit)
 	if err != nil {
 		return nil, "", "", fmt.Errorf("LogPaginated: %w", err)
 	}
@@ -92,7 +82,7 @@ func (si *searchIndex) enrichFileCounts(entries []LogEntryWithTags) {
 		idx[e.Commit] = i
 	}
 
-	counts, err := si.rh.gits.CommitLogFileCounts(hashes)
+	counts, err := si.rh.commitLogFileCounts(hashes)
 	if err != nil {
 		return
 	}
@@ -159,7 +149,7 @@ func (si *searchIndex) Activity(ctx context.Context, branch, path string) (Activ
 	cutoff30 := commitLogAge(30)
 	cutoff90 := commitLogAge(90)
 
-	r, err := si.rh.gits.CommitLogActivity(path, cutoff7, cutoff30, cutoff90)
+	r, err := si.rh.commitLogActivity(ctx, branch, path, cutoff7, cutoff30, cutoff90)
 	if err != nil {
 		return ActivityResult{}, fmt.Errorf("Activity: %w", err)
 	}
@@ -180,7 +170,7 @@ func (si *searchIndex) Activity(ctx context.Context, branch, path string) (Activ
 // WalkChangedFiles returns .md files under prefix most recently changed,
 // excluding already-seen paths, up to limit results.
 func (si *searchIndex) WalkChangedFiles(ctx context.Context, branch, fromCommit, prefix string, seen map[string]bool, limit int) ([]FileRecency, string, error) {
-	rows, err := si.rh.gits.CommitLogWalkChanged(prefix, seen, limit)
+	rows, err := si.rh.commitLogWalkChanged(ctx, branch, prefix, seen, limit)
 	if err != nil {
 		return nil, "", fmt.Errorf("WalkChangedFiles: %w", err)
 	}
@@ -264,18 +254,19 @@ func (si *searchIndex) populateCommitLog(ctx context.Context, branch string) err
 }
 
 // appendCommitLog inserts a single new commit into commit_log.
-func (si *searchIndex) appendCommitLog(ctx context.Context, branch string, hash plumbing.Hash) {
+func (si *searchIndex) appendCommitLog(ctx context.Context, branch, hashStr string) {
 	if !si.rh.gits.CommitLogAvailable() {
 		return
 	}
+	hash := plumbing.NewHash(hashStr)
 	c, err := si.rh.repo.CommitObject(hash)
 	if err != nil {
-		log.Warn().Err(err).Str("hash", hash.String()).Msg("commit_log: get commit")
+		log.Warn().Err(err).Str("hash", hashStr).Msg("commit_log: get commit")
 		return
 	}
 	files, err := changedFilesInCommit(c)
 	if err != nil {
-		log.Warn().Err(err).Str("hash", hash.String()).Msg("commit_log: changed files")
+		log.Warn().Err(err).Str("hash", hashStr).Msg("commit_log: changed files")
 		return
 	}
 	done := false

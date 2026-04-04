@@ -124,7 +124,7 @@ func (fi *factIndex) ReadFact(ctx context.Context, branch, path string, opts *Re
 		}
 		return ReadFactResult{Content: content, FromCommit: fromCommit}, nil
 	case opts.AtCommit != "":
-		content, err := fi.rh.readFileAtCommit(ctx, branch, path, opts.AtCommit)
+		content, err := fi.rh.readFileAtCommit(ctx, path, opts.AtCommit)
 		if err != nil {
 			return ReadFactResult{}, err
 		}

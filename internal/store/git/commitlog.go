@@ -147,10 +147,12 @@ func (s *Storer) CommitLogSync(branchName string, iter func() (hash string, entr
 	}
 }
 
-// CommitLogQuery performs a paginated query on commit_log.
+// CommitLogQuery performs a paginated query on commit_log scoped to branchID.
 // Returns rows, hasMore, error. Fetches limit+1 rows and returns limit.
-func (s *Storer) CommitLogQuery(path string, cursor CommitLogCursor, limit int) ([]CommitLogRow, bool, error) {
+// branchID == 0 means no branch filter (not used in normal operation).
+func (s *Storer) CommitLogQuery(branchID int64, path string, cursor CommitLogCursor, limit int) ([]CommitLogRow, bool, error) {
 	pathCond, pathArgs := commitLogPathCond(path)
+	branchCond, branchArgs := commitLogBranchCond(branchID)
 
 	lookupTS := func(hash string) (int64, error) {
 		var ts int64
@@ -213,14 +215,15 @@ SELECT commit_hash, ts, message, operation
 FROM (
     SELECT commit_hash, MIN(committed_at) AS ts, MIN(message) AS message, MIN(operation) AS operation, MAX(rowid) AS max_rid
     FROM commit_log
-    WHERE ` + pathCond + `
+    WHERE ` + branchCond + ` AND ` + pathCond + `
     GROUP BY commit_hash
 )
 WHERE ` + cursorCond + `
 ORDER BY ts DESC, max_rid DESC
 LIMIT ?`
 
-	args := append(pathArgs, cursorArgs...)
+	args := append(branchArgs, pathArgs...)
+	args = append(args, cursorArgs...)
 	args = append(args, limit+1)
 
 	rows, err := s.db.Query(query, args...)
@@ -289,10 +292,14 @@ func (s *Storer) CommitLogFileCounts(hashes []string) (map[string]map[string]int
 	return result, nil
 }
 
-// CommitLogActivity returns aggregate activity metrics for the given path.
-func (s *Storer) CommitLogActivity(path string, cutoff7, cutoff30, cutoff90 int64) (CommitLogActivityResult, error) {
-	filter, pathArgs := commitLogPathCond(path)
-	args := append([]any{cutoff7, cutoff30, cutoff90}, pathArgs...)
+// CommitLogActivity returns aggregate activity metrics for the given path,
+// scoped to branchID (0 = no filter).
+func (s *Storer) CommitLogActivity(branchID int64, path string, cutoff7, cutoff30, cutoff90 int64) (CommitLogActivityResult, error) {
+	branchCond, branchArgs := commitLogBranchCond(branchID)
+	pathCond, pathArgs := commitLogPathCond(path)
+	filter := branchCond + " AND " + pathCond
+	args := append([]any{cutoff7, cutoff30, cutoff90}, branchArgs...)
+	args = append(args, pathArgs...)
 
 	q := fmt.Sprintf(`
 		SELECT MAX(committed_at),
@@ -310,10 +317,14 @@ func (s *Storer) CommitLogActivity(path string, cutoff7, cutoff30, cutoff90 int6
 }
 
 // CommitLogWalkChanged returns file paths + timestamps ordered by most recently changed,
-// excluding paths in seen, up to limit results.
-func (s *Storer) CommitLogWalkChanged(prefix string, seen map[string]bool, limit int) ([]CommitLogFileRecency, error) {
+// excluding paths in seen, up to limit results, scoped to branchID (0 = no filter).
+func (s *Storer) CommitLogWalkChanged(branchID int64, prefix string, seen map[string]bool, limit int) ([]CommitLogFileRecency, error) {
+	branchCond, branchArgs := commitLogBranchCond(branchID)
 	var whereParts []string
 	var args []any
+
+	whereParts = append(whereParts, branchCond)
+	args = append(args, branchArgs...)
 
 	if prefix != "" {
 		whereParts = append(whereParts, "path GLOB ?")
@@ -328,10 +339,7 @@ func (s *Storer) CommitLogWalkChanged(prefix string, seen map[string]bool, limit
 		whereParts = append(whereParts, "path NOT IN ("+strings.Join(placeholders, ",")+")")
 	}
 
-	where := "1=1"
-	if len(whereParts) > 0 {
-		where = strings.Join(whereParts, " AND ")
-	}
+	where := strings.Join(whereParts, " AND ")
 
 	q := fmt.Sprintf(`
 		SELECT path, MAX(committed_at) AS ts, MAX(rowid) AS last_rowid
@@ -376,4 +384,13 @@ func commitLogPathCond(path string) (cond string, args []any) {
 		return "path = ?", []any{path}
 	}
 	return "path GLOB ?", []any{path + "/*"}
+}
+
+// commitLogBranchCond returns the SQL WHERE fragment and bind args for filtering
+// commit_log rows by branch_id. branchID == 0 means no filter.
+func commitLogBranchCond(branchID int64) (cond string, args []any) {
+	if branchID == 0 {
+		return "1=1", nil
+	}
+	return "branch_id = ?", []any{branchID}
 }

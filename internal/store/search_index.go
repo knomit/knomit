@@ -789,7 +789,7 @@ func (si *searchIndex) rebuildGraphHistory(ctx context.Context, branch string, p
 	var created []createdVersion
 
 	for _, v := range versions {
-		content, err := si.rh.readFileAtCommit(ctx, branch, v.path, v.commitHash)
+		content, err := si.rh.readFileAtCommit(ctx, v.path, v.commitHash)
 		if err != nil {
 			log.Debug().Err(err).Str("path", v.path).Str("commit", v.commitHash[:8]).Msg("rebuildGraphHistory: skip (file not found at commit)")
 			continue

@@ -6,7 +6,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/transport"
 )
 
-// FactIndex is the interface for git-backed fact storage. Implemented by *Service.
+// FactIndex is the interface for fact storage. Implemented by *factIndex.
 type FactIndex interface {
 	ReadFact(ctx context.Context, branch, path string, opts *ReadFactOpts) (ReadFactResult, error)
 	WriteFact(ctx context.Context, branch, path, content, message, operation string) (WriteFactResult, error)
@@ -66,7 +66,7 @@ type BranchIndex interface {
 	HeadCommit(ctx context.Context, branch string) (string, error)
 }
 
-// ToolSessionIndex is the interface for tool session persistence. Implemented by *Index.
+// ToolSessionIndex is the interface for tool session persistence. Implemented by *toolIndex.
 type ToolSessionIndex interface {
 	CreateToolSession(ctx context.Context, tool, branch, pathPrefix string) (*ToolSession, error)
 	GetToolSession(ctx context.Context, id string) (*ToolSession, error)
@@ -78,7 +78,7 @@ type ToolSessionIndex interface {
 	QueueSize(ctx context.Context, sessionID string) (int, error)
 }
 
-// PipelineIndex is the interface for pipeline session management. Implemented by *Index.
+// PipelineIndex is the interface for pipeline session management. Implemented by *pipelineIndex.
 type PipelineIndex interface {
 	CreatePipelineSession(ctx context.Context, tool, branch string) (*PipelineSession, error)
 	GetPipelineSession(ctx context.Context, id string) (*PipelineSession, error)
