@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -24,4 +25,34 @@ func TestVerify_FreshRepoIsClean(t *testing.T) {
 	require.True(t, report.IsClean(), "fresh repo must be clean, got issues: %v", report.Issues)
 	require.True(t, report.IsStrictlyClean(), "fresh repo must be strictly clean")
 	require.Contains(t, report.Branches, "agent/test")
+}
+
+// TestVerify_DetectsMissingBlob asserts that deleting a blob object from the
+// storer causes Verify to report a git-reachability Error naming the missing blob.
+func TestVerify_DetectsMissingBlob(t *testing.T) {
+	t.Log("Scenario: write a fact, delete its blob from the storer, expect git-reachability Error")
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	defer svc.Close()
+	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+
+	res, err := svc.Facts().WriteFact(context.Background(), "agent/test", "kb/x.md", "---\ntype: observation\n---\nbody", "add x", "test")
+	require.NoError(t, err)
+	require.NotEmpty(t, res.BlobHash)
+
+	// Delete the blob from the storer directly.
+	require.NoError(t, svc.deleteObjectForTest(res.BlobHash))
+
+	report, err := svc.Verify(context.Background(), VerifyOpts{})
+	require.NoError(t, err)
+	require.False(t, report.IsClean(), "deleted blob must produce an Error")
+	found := false
+	for _, i := range report.Issues {
+		if i.Category == CategoryGitReachability && i.Severity == SeverityError && strings.Contains(i.Detail, res.BlobHash) {
+			found = true
+			break
+		}
+	}
+	require.True(t, found, "expected git-reachability Error naming blob %s, got: %v", res.BlobHash, report.Issues)
 }

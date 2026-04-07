@@ -183,6 +183,13 @@ func (s *Storer) AddAlternate(remote string) error {
 	return fmt.Errorf("storegit: alternates not supported")
 }
 
+// DeleteObjectForTest removes an object from the SQLite-backed object store.
+// Test-only escape hatch for integrity-check tests.
+func (s *Storer) DeleteObjectForTest(hash plumbing.Hash) error {
+	_, err := s.db.Exec(`DELETE FROM objects WHERE hash = ?`, hash.String())
+	return err
+}
+
 // --- objectIter ---
 
 type objectIter struct {

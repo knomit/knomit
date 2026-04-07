@@ -19,6 +19,8 @@ import (
 	"time"
 
 	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/filemode"
+	"github.com/go-git/go-git/v5/plumbing/object"
 )
 
 // Severity classifies an integrity issue.
@@ -172,9 +174,88 @@ func (s *Service) listBranchRefsForVerify(_ context.Context) ([]string, error) {
 	return out, err
 }
 
-// All check stubs return nil for now. Implementations land in tasks 1.2–1.8.
-func (s *Service) checkGitReachability(_ context.Context, _ string) []IntegrityIssue {
-	return nil
+// deleteObjectForTest removes an object from the storer by hash. EXISTS ONLY
+// FOR INTEGRITY-CHECK TESTS that need to corrupt state. Do not call from
+// production code paths.
+func (s *Service) deleteObjectForTest(hash string) error {
+	return s.rh.gits.DeleteObjectForTest(plumbing.NewHash(hash))
+}
+
+// checkGitReachability walks the commit chain from the branch ref to the root.
+// For every commit it verifies the tree object exists and recursively that
+// every tree entry resolves to an existing blob or subtree. Reports any
+// missing object as a git-reachability Error naming the offending hash and
+// (when known) the path that referenced it.
+func (s *Service) checkGitReachability(_ context.Context, branch string) []IntegrityIssue {
+	var issues []IntegrityIssue
+	ref, err := s.rh.gits.Reference(plumbing.NewBranchReferenceName(branch))
+	if err != nil {
+		return []IntegrityIssue{{
+			Severity: SeverityError, Category: CategoryGitReachability, Branch: branch,
+			Detail: fmt.Sprintf("ref not found: %v", err),
+		}}
+	}
+
+	// Walk commit chain to root.
+	cur := ref.Hash()
+	visited := map[string]bool{}
+	for !cur.IsZero() {
+		if visited[cur.String()] {
+			break // safety: should never happen on a DAG without cycles
+		}
+		visited[cur.String()] = true
+
+		commit, err := object.GetCommit(s.rh.gits, cur)
+		if err != nil {
+			issues = append(issues, IntegrityIssue{
+				Severity: SeverityError, Category: CategoryGitReachability, Branch: branch, Commit: cur.String(),
+				Detail: fmt.Sprintf("commit not found: %v", err),
+			})
+			break
+		}
+
+		// Walk this commit's tree.
+		issues = append(issues, s.walkTreeReachable(branch, cur.String(), commit.TreeHash, "")...)
+
+		if len(commit.ParentHashes) == 0 {
+			break
+		}
+		cur = commit.ParentHashes[0]
+	}
+	return issues
+}
+
+// walkTreeReachable recursively walks a tree and reports any unreachable
+// blobs or subtrees. pathPrefix is the path accumulated so far; "" at root.
+func (s *Service) walkTreeReachable(branch, commit string, treeHash plumbing.Hash, pathPrefix string) []IntegrityIssue {
+	tree, err := object.GetTree(s.rh.gits, treeHash)
+	if err != nil {
+		return []IntegrityIssue{{
+			Severity: SeverityError, Category: CategoryGitReachability, Branch: branch, Commit: commit, Path: pathPrefix,
+			Detail: fmt.Sprintf("tree %s not found: %v", treeHash, err),
+		}}
+	}
+	var issues []IntegrityIssue
+	for _, e := range tree.Entries {
+		childPath := e.Name
+		if pathPrefix != "" {
+			childPath = pathPrefix + "/" + e.Name
+		}
+		switch e.Mode {
+		case filemode.Dir:
+			issues = append(issues, s.walkTreeReachable(branch, commit, e.Hash, childPath)...)
+		default:
+			// Verify the blob object exists.
+			if _, err := s.rh.gits.EncodedObject(plumbing.BlobObject, e.Hash); err != nil {
+				issues = append(issues, IntegrityIssue{
+					Severity: SeverityError, Category: CategoryGitReachability,
+					Branch: branch, Commit: commit, Path: childPath,
+					Detail: fmt.Sprintf("blob %s not found: %v", e.Hash, err),
+				})
+			}
+		}
+	}
+	return issues
 }
 func (s *Service) checkCommitLogParity(_ context.Context, _ string) []IntegrityIssue {
 	return nil
