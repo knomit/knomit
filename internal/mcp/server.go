@@ -6,11 +6,12 @@ import (
 
 	"knomit/internal/fact"
 	"knomit/internal/store"
+	"knomit/internal/synthesize"
 )
 
 // NewServer creates a new MCP server with all knomit tools registered.
 // If embedder is non-nil, the learn tool uses it for batch dedup embedding.
-func NewServer(gs store.FactIndex, idx store.SearchIndex, sessionIdx store.ToolSessionIndex, pipelineIdx store.PipelineIndex, branches store.BranchIndex, reviewer Reviewer, profile, ontologyRoot string, ontology *fact.Ontology, agentBranch string, embedders ...store.BatchEmbedder) *server.MCPServer {
+func NewServer(gs store.FactIndex, idx store.SearchIndex, sessionIdx store.ToolSessionIndex, pipelineIdx store.PipelineIndex, branches store.BranchIndex, reviewer *synthesize.Reviewer, profile, ontologyRoot string, ontology *fact.Ontology, agentBranch string, embedders ...store.BatchEmbedder) *server.MCPServer {
 	s := server.NewMCPServer("knomit", "1.0.0",
 		server.WithInstructions(ProfileInstructions(profile, ontologyRoot, ontology)),
 	)

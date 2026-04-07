@@ -10,7 +10,6 @@ import (
 
 	"knomit/internal/fact"
 	"knomit/internal/llm"
-	"knomit/internal/mcp"
 	"knomit/internal/store"
 
 	"github.com/rs/zerolog/log"
@@ -38,7 +37,7 @@ func NewReviewer(gs store.FactIndex, idx store.SearchIndex, reviewIdx store.Pipe
 
 // StartSession creates a new review session, identifies dirty facts, clusters
 // them, stores work items, and returns the first item to review.
-func (r *Reviewer) StartSession(ctx context.Context) (*mcp.ReviewResult, error) {
+func (r *Reviewer) StartSession(ctx context.Context) (*ReviewResult, error) {
 	branch := r.agentBranch
 
 	sess, err := r.reviewIdx.CreatePipelineSession(ctx, "review", branch)
@@ -121,7 +120,7 @@ func (r *Reviewer) StartSession(ctx context.Context) (*mcp.ReviewResult, error) 
 
 // ContinueSession processes the model's response for the current work item
 // and returns the next item, or done if the session is complete.
-func (r *Reviewer) ContinueSession(ctx context.Context, sessionID, response string) (*mcp.ReviewResult, error) {
+func (r *Reviewer) ContinueSession(ctx context.Context, sessionID, response string) (*ReviewResult, error) {
 	sess, err := r.reviewIdx.GetPipelineSession(ctx, sessionID)
 	if err != nil {
 		return nil, fmt.Errorf("review: get session: %w", err)
@@ -344,7 +343,7 @@ func (r *Reviewer) dirtyFacts(ctx context.Context, branch string) ([]factForLLM,
 
 // nextItem fetches the next unanswered work item, renders its prompt, and
 // returns a ReviewResult. If no items remain, completes the session.
-func (r *Reviewer) nextItem(ctx context.Context, sessionID string) (*mcp.ReviewResult, error) {
+func (r *Reviewer) nextItem(ctx context.Context, sessionID string) (*ReviewResult, error) {
 	item, err := r.reviewIdx.NextPipelineWorkItem(ctx, sessionID)
 	if err != nil {
 		return nil, fmt.Errorf("review: next item: %w", err)
@@ -410,14 +409,14 @@ func (r *Reviewer) nextItem(ctx context.Context, sessionID string) (*mcp.ReviewR
 		return nil, fmt.Errorf("review: work item stats: %w", err)
 	}
 
-	return &mcp.ReviewResult{
+	return &ReviewResult{
 		SessionID: sessionID,
-		Item: &mcp.ReviewItem{
+		Item: &ReviewItem{
 			Type:           item.StepType,
 			Prompt:         content.Prompt,
 			ResponseSchema: content.ResponseSchema,
 		},
-		Progress: &mcp.ReviewProgress{
+		Progress: &ReviewProgress{
 			Completed: completed,
 			Remaining: remaining,
 		},
@@ -425,7 +424,7 @@ func (r *Reviewer) nextItem(ctx context.Context, sessionID string) (*mcp.ReviewR
 }
 
 // completeSession marks the session done and advances the watermark.
-func (r *Reviewer) completeSession(ctx context.Context, sess *store.PipelineSession) (*mcp.ReviewResult, error) {
+func (r *Reviewer) completeSession(ctx context.Context, sess *store.PipelineSession) (*ReviewResult, error) {
 	if err := r.reviewIdx.CompletePipelineSession(ctx, sess.ID); err != nil {
 		return nil, fmt.Errorf("review: complete session: %w", err)
 	}
@@ -447,11 +446,11 @@ func (r *Reviewer) completeSession(ctx context.Context, sess *store.PipelineSess
 	log.Info().Str("session", sess.ID).Int("completed", completed).Msg("review: session complete")
 	r.onProgress(ProgressEvent{Phase: "review-done", Message: fmt.Sprintf("session %s complete", sess.ID)})
 
-	return &mcp.ReviewResult{
+	return &ReviewResult{
 		SessionID: sess.ID,
 		Done:      true,
-		Summary:   &mcp.ReviewStats{},
-		Progress:  &mcp.ReviewProgress{Completed: completed, Remaining: 0},
+		Summary:   &ReviewStats{},
+		Progress:  &ReviewProgress{Completed: completed, Remaining: 0},
 	}, nil
 }
 
