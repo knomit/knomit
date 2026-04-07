@@ -97,8 +97,11 @@ func (m *Manager) Shutdown() {
 
 	// Pass 1: cancel all sync loops so they can wind down concurrently.
 	for _, ri := range instances {
-		if ri.syncCancel != nil {
-			ri.syncCancel()
+		ri.mu.RLock()
+		cancel := ri.syncCancel
+		ri.mu.RUnlock()
+		if cancel != nil {
+			cancel()
 		}
 	}
 
@@ -124,10 +127,17 @@ func (m *Manager) Boot() error {
 		return fmt.Errorf("create repos dir: %w", err)
 	}
 
+	// Open the default repo with isDefault=true so that initDefaultGit is
+	// called on first run (no git data in a fresh DB).
 	defaultDB := filepath.Join(reposDir, "knomit.db")
-	if err := m.Add("knomit", defaultDB); err != nil {
+	ri, err := m.openOne("knomit", defaultDB, true)
+	if err != nil {
 		return fmt.Errorf("open default repo: %w", err)
 	}
+	if m.deps.OnRepoReady != nil {
+		m.deps.OnRepoReady(ri)
+	}
+	m.Set("knomit", ri)
 
 	dbFiles, _ := filepath.Glob(filepath.Join(reposDir, "*.db"))
 	sort.Strings(dbFiles)
@@ -194,27 +204,6 @@ func (m *Manager) openOne(name, dbPath string, isDefault bool) (*RepoInstance, e
 	b.seedWatermarks()
 
 	return b.build(), nil
-}
-
-// remoteAuthFromRecord builds a RemoteAuthConfig from a stored remote record,
-// falling back to the global config for fields not set in the record.
-func remoteAuthFromRecord(remote *store.Remote, fallback config.RemoteAuthConfig) config.RemoteAuthConfig {
-	cfg := fallback
-	if remote.AuthMethod != "" {
-		cfg.AuthMethod = remote.AuthMethod
-	}
-	if remote.AuthToken != "" {
-		if cfg.AuthMethod == "basic" {
-			// token field stores user:password
-			if parts := strings.SplitN(remote.AuthToken, ":", 2); len(parts) == 2 {
-				cfg.User = parts[0]
-				cfg.Password = parts[1]
-			}
-		} else {
-			cfg.Token = remote.AuthToken
-		}
-	}
-	return cfg
 }
 
 // isValidRepoName checks that a repo name contains only lowercase letters,

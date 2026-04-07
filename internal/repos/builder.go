@@ -221,7 +221,9 @@ func (b *repoBuilder) build() *RepoInstance {
 
 		var newCtx context.Context
 		newCtx, syncCancel = context.WithCancel(ctx)
+		ri.mu.Lock()
 		ri.syncCancel = syncCancel
+		ri.mu.Unlock()
 
 		currentSvc.SetOnCommit(ri.onCommit)
 

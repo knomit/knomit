@@ -17,8 +17,11 @@ import (
 // If DBPath is empty (in-memory/test), it falls back to a pointer swap.
 func (m *Manager) SwapStore(ri *RepoInstance, tempDBPath string) error {
 	// Stop existing sync loops so no goroutines reference the old store.
-	if ri.syncCancel != nil {
-		ri.syncCancel()
+	ri.mu.RLock()
+	cancel := ri.syncCancel
+	ri.mu.RUnlock()
+	if cancel != nil {
+		cancel()
 	}
 	if ri.syncWg != nil {
 		ri.syncWg.Wait()
