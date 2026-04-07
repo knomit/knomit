@@ -47,10 +47,23 @@ type VerifyOpts struct {
 	Deep bool
 }
 
+// Canonical issue category strings. Implementations of the per-category
+// checks (tasks 1.2-1.8) MUST use exactly these constants when populating
+// IntegrityIssue.Category — no string literals at the call sites.
+const (
+	CategoryGitReachability  = "git-reachability"
+	CategoryCommitLog        = "commit-log"
+	CategorySearchIndex      = "search-index"
+	CategoryVectorDim        = "vector-dim"
+	CategoryBranchesTable    = "branches-table"
+	CategoryBranchFactsTable = "branch-facts-table"
+	CategoryFactFormat       = "fact-format"
+)
+
 // IntegrityIssue is a single finding from Verify.
 type IntegrityIssue struct {
 	Severity Severity
-	Category string // "git-reachability" | "commit-log" | "search-index" | "vector-dim" | "branches-table" | "branch-facts-table" | "fact-format"
+	Category string // one of the Category* constants above
 	Branch   string // "" if not branch-scoped
 	Path     string // "" if not path-scoped
 	Commit   string // "" if not commit-scoped
@@ -59,6 +72,10 @@ type IntegrityIssue struct {
 
 // IntegrityReport collects all issues from a Verify run.
 type IntegrityReport struct {
+	// Repo is populated by the RepoInstance.Verify wrapper from the
+	// repository's registered name. Service.Verify itself leaves it empty
+	// because Service has no notion of a logical repo name — only the
+	// containing manager does.
 	Repo      string
 	CheckedAt time.Time
 	Branches  []string
@@ -119,6 +136,9 @@ func (s *Service) Verify(ctx context.Context, opts VerifyOpts) (IntegrityReport,
 	report.Branches = branches
 
 	// Per-category check stubs — implementations land in subsequent tasks.
+	// TODO(verify): once the stubs are implemented in tasks 1.2-1.8 and start
+	// doing real I/O, add a `select { case <-ctx.Done(): return report, ctx.Err() }`
+	// check between branches so cancellation can interrupt long verifies.
 	for _, br := range branches {
 		report.Issues = append(report.Issues, s.checkGitReachability(ctx, br)...)
 		report.Issues = append(report.Issues, s.checkCommitLogParity(ctx, br)...)
@@ -144,9 +164,8 @@ func (s *Service) listBranchRefsForVerify(_ context.Context) ([]string, error) {
 	}
 	var out []string
 	err = iter.ForEach(func(ref *plumbing.Reference) error {
-		name := ref.Name().String()
-		if strings.HasPrefix(name, "refs/heads/") {
-			out = append(out, strings.TrimPrefix(name, "refs/heads/"))
+		if name, ok := strings.CutPrefix(ref.Name().String(), "refs/heads/"); ok {
+			out = append(out, name)
 		}
 		return nil
 	})
