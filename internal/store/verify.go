@@ -220,6 +220,9 @@ func (s *Service) checkGitReachability(_ context.Context, branch string) []Integ
 		if len(commit.ParentHashes) == 0 {
 			break
 		}
+		// Only follow first parent. Knomit branches are linear; merge commits
+		// are not expected on agent branches today. If merge-to-main lands as
+		// a real merge (not a fast-forward), this walk must visit all parents.
 		cur = commit.ParentHashes[0]
 	}
 	return issues
@@ -245,8 +248,9 @@ func (s *Service) walkTreeReachable(branch, commit string, treeHash plumbing.Has
 		case filemode.Dir:
 			issues = append(issues, s.walkTreeReachable(branch, commit, e.Hash, childPath)...)
 		default:
-			// Verify the blob object exists.
-			if _, err := s.rh.gits.EncodedObject(plumbing.BlobObject, e.Hash); err != nil {
+			// Verify the blob object exists. HasEncodedObject is a COUNT(*)
+			// query — much cheaper than EncodedObject which loads blob data.
+			if err := s.rh.gits.HasEncodedObject(e.Hash); err != nil {
 				issues = append(issues, IntegrityIssue{
 					Severity: SeverityError, Category: CategoryGitReachability,
 					Branch: branch, Commit: commit, Path: childPath,
@@ -257,6 +261,7 @@ func (s *Service) walkTreeReachable(branch, commit string, treeHash plumbing.Has
 	}
 	return issues
 }
+
 func (s *Service) checkCommitLogParity(_ context.Context, _ string) []IntegrityIssue {
 	return nil
 }
