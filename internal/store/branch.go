@@ -56,17 +56,42 @@ func (c *branchCache) remove(name string) {
 
 // repoHandler owns the database handle, branch cache, and branch operations.
 type repoHandler struct {
-	db       *sql.DB
-	cache    *branchCache
-	onDrop   func(context.Context) error
-	gits     *storegit.Storer
-	repo     *gogit.Repository // nil until OpenRepo/InitRepo/Clone called
-	configMu sync.Mutex        // guards ConfigureRemote / remote wiring
+	db        *sql.DB
+	cache     *branchCache
+	onDrop    func(context.Context) error
+	gits      *storegit.Storer
+	repo      *gogit.Repository // nil until OpenRepo/InitRepo/Clone called
+	configMu  sync.Mutex        // guards ConfigureRemote / remote wiring
+	embedMu   sync.RWMutex      // guards embedder
+	embedder  Embedder
+	branchMu  sync.Map          // per-branch write serialization
 }
 
-// Compile-time assertions.
+// lockBranch acquires the per-branch write mutex and returns an unlock function.
+// Used by factIndex and remoteIndex to serialize writes on a given branch.
+func (rh *repoHandler) lockBranch(branch string) func() {
+	v, _ := rh.branchMu.LoadOrStore(branch, &sync.Mutex{})
+	mu := v.(*sync.Mutex)
+	mu.Lock()
+	return mu.Unlock
+}
+
+// setEmbedder attaches an Embedder. Called once during service construction.
+func (rh *repoHandler) setEmbedder(e Embedder) {
+	rh.embedMu.Lock()
+	defer rh.embedMu.Unlock()
+	rh.embedder = e
+}
+
+// getEmbedder returns the current Embedder under a read lock.
+func (rh *repoHandler) getEmbedder() Embedder {
+	rh.embedMu.RLock()
+	defer rh.embedMu.RUnlock()
+	return rh.embedder
+}
+
+// Compile-time assertion.
 var _ BranchIndex = (*repoHandler)(nil)
-var _ gitReader    = (*repoHandler)(nil)
 
 func newRepoHandler(db *sql.DB, gits *storegit.Storer) *repoHandler {
 	return &repoHandler{db: db, cache: newBranchCache(), gits: gits}
@@ -264,19 +289,19 @@ func (rh *repoHandler) resolveRef(ctx context.Context, branch string) (plumbing.
 	return ref.Hash(), nil
 }
 
-// readFileAtCommitHash reads the content of path from a specific commit.
+// readFileAtCommit reads the content of path from a specific commit.
 // If the exact path is not found, it falls back to a case-insensitive tree
 // walk so that normalised (lowercase) index paths resolve correctly against
 // pre-normalisation commits that stored paths with mixed case.
-func (rh *repoHandler) readFileAtCommitHash(ctx context.Context, path, commitHash string) (string, error) {
+func (rh *repoHandler) readFileAtCommit(ctx context.Context, path, commitHash string) (string, error) {
 	hash := plumbing.NewHash(commitHash)
 	commit, err := rh.repo.CommitObject(hash)
 	if err != nil {
-		return "", fmt.Errorf("readFileAtCommitHash: commit: %w", err)
+		return "", fmt.Errorf("readFileAtCommit: commit: %w", err)
 	}
 	tree, err := commit.Tree()
 	if err != nil {
-		return "", fmt.Errorf("readFileAtCommitHash: tree: %w", err)
+		return "", fmt.Errorf("readFileAtCommit: tree: %w", err)
 	}
 	if f, err := tree.File(path); err == nil {
 		return f.Contents()
@@ -284,7 +309,7 @@ func (rh *repoHandler) readFileAtCommitHash(ctx context.Context, path, commitHas
 	// Exact lookup failed — try case-insensitive walk.
 	content, err := treeFileInsensitive(rh.repo, tree, path)
 	if err != nil {
-		return "", fmt.Errorf("readFileAtCommitHash: file %q not found (case-insensitive): %w", path, err)
+		return "", fmt.Errorf("readFileAtCommit: file %q not found (case-insensitive): %w", path, err)
 	}
 	return content, nil
 }
@@ -338,12 +363,6 @@ func (rh *repoHandler) readFile(ctx context.Context, branch, path string) (strin
 	return content, err
 }
 
-// readFileAtCommit reads the content of path at the given commit.
-// branch is accepted for interface consistency; the commit hash uniquely
-// identifies the version without branch resolution.
-func (rh *repoHandler) readFileAtCommit(ctx context.Context, branch, path, commitHash string) (string, error) {
-	return rh.readFileAtCommitHash(ctx, path, commitHash)
-}
 
 // pathHashSorter sorts two parallel slices (paths and hashes) together by path.
 type pathHashSorter struct{ paths, hashes []string }
@@ -486,4 +505,86 @@ func (rh *repoHandler) DiffFiles(ctx context.Context, branch, fromCommit string)
 	sort.Strings(modified)
 	sort.Strings(deleted)
 	return added, modified, deleted, nil
+}
+
+// BranchInfo returns all branches partitioned into regular branches, agent
+// branches (prefixed "agent/"), and the agent branch matching localAgent (if any).
+func (rh *repoHandler) BranchInfo(localAgent string) (branches, agentBranches []string, matchedAgent string) {
+	refIter, err := rh.gits.IterReferences()
+	if err != nil {
+		return
+	}
+	defer refIter.Close()
+
+	agentSet := make(map[string]struct{})
+	for {
+		ref, err := refIter.Next()
+		if err != nil {
+			break
+		}
+		name := ref.Name().String()
+		var short string
+		switch {
+		case strings.HasPrefix(name, "refs/heads/"):
+			short = strings.TrimPrefix(name, "refs/heads/")
+		case strings.HasPrefix(name, "refs/remotes/origin/"):
+			short = strings.TrimPrefix(name, "refs/remotes/origin/")
+		default:
+			continue
+		}
+		if strings.HasPrefix(short, "agent/") {
+			if _, seen := agentSet[short]; !seen {
+				agentSet[short] = struct{}{}
+				if short == localAgent {
+					matchedAgent = short
+				}
+			}
+		} else if strings.HasPrefix(name, "refs/heads/") {
+			branches = append(branches, short)
+		}
+	}
+	agentBranches = make([]string, 0, len(agentSet))
+	for b := range agentSet {
+		agentBranches = append(agentBranches, b)
+	}
+	return
+}
+
+// ── Commit-log wrappers ───────────────────────────────────────────────────────
+// These methods hide storegit cursor types and branch-ID resolution from callers.
+
+// commitLogQuery resolves branch to its numeric ID and delegates to
+// storegit.CommitLogQuery, hiding cursor construction from callers.
+func (rh *repoHandler) commitLogQuery(ctx context.Context, branch, path, after, from, before string, limit int) ([]storegit.CommitLogRow, bool, error) {
+	branchID, _ := rh.branchID(ctx, branch) // 0 on error → no filter
+	var cursor storegit.CommitLogCursor
+	switch {
+	case before != "":
+		cursor = storegit.CommitLogCursor{Type: storegit.CommitLogCursorBefore, Hash: before}
+	case from != "":
+		cursor = storegit.CommitLogCursor{Type: storegit.CommitLogCursorFrom, Hash: from}
+	case after != "":
+		cursor = storegit.CommitLogCursor{Type: storegit.CommitLogCursorAfter, Hash: after}
+	}
+	return rh.gits.CommitLogQuery(branchID, path, cursor, limit)
+}
+
+// commitLogActivity resolves branch to its numeric ID and delegates to
+// storegit.CommitLogActivity.
+func (rh *repoHandler) commitLogActivity(ctx context.Context, branch, path string, cutoff7, cutoff30, cutoff90 int64) (storegit.CommitLogActivityResult, error) {
+	branchID, _ := rh.branchID(ctx, branch)
+	return rh.gits.CommitLogActivity(branchID, path, cutoff7, cutoff30, cutoff90)
+}
+
+// commitLogWalkChanged resolves branch to its numeric ID and delegates to
+// storegit.CommitLogWalkChanged.
+func (rh *repoHandler) commitLogWalkChanged(ctx context.Context, branch, prefix string, seen map[string]bool, limit int) ([]storegit.CommitLogFileRecency, error) {
+	branchID, _ := rh.branchID(ctx, branch)
+	return rh.gits.CommitLogWalkChanged(branchID, prefix, seen, limit)
+}
+
+// commitLogFileCounts delegates to storegit.CommitLogFileCounts.
+// No branch filter needed — commit hashes already identify the branch.
+func (rh *repoHandler) commitLogFileCounts(hashes []string) (map[string]map[string]int, error) {
+	return rh.gits.CommitLogFileCounts(hashes)
 }

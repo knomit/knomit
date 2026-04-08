@@ -2,7 +2,6 @@ package store
 
 import (
 	"context"
-	"sync"
 	"time"
 
 	"github.com/go-git/go-git/v5/plumbing"
@@ -24,24 +23,13 @@ func parseFact(path, content string) (FactRecord, error) {
 // Compile-time interface checks.
 var _ FactIndex = (*factIndex)(nil)
 
-// factIndex owns all git-backed fact operations: reading, writing, and commit-log
-// management. It is embedded in Service so that Service satisfies FactIndex and
-// gitReader without code duplication.
+// factIndex owns all git-backed fact operations: reading and writing.
 type factIndex struct {
-	rh         *repoHandler
-	branchMu   sync.Map // per-branch write serialization
-	auth       transport.AuthMethod
-	signer     ssh.Signer
-	onCommit   func(branch, hash string)
-	postCommit func(ctx context.Context, branch string) error // wired to si.Sync
-}
-
-// lockBranch acquires the per-branch mutex and returns an unlock function.
-func (fi *factIndex) lockBranch(branch string) func() {
-	v, _ := fi.branchMu.LoadOrStore(branch, &sync.Mutex{})
-	mu := v.(*sync.Mutex)
-	mu.Lock()
-	return mu.Unlock
+	rh       *repoHandler
+	auth     transport.AuthMethod
+	signer   ssh.Signer
+	im       IndexManager           // index synchronization after each commit
+	onCommit func(branch, hash string) // external observer (e.g. SSE broadcast)
 }
 
 // authorSig returns the author signature for a given operation.
@@ -64,15 +52,12 @@ func (fi *factIndex) committerSig(branch string) object.Signature {
 	}
 }
 
-// notifyCommit calls appendCommitLog and then the optional external callback.
+// notifyCommit appends to commit_log and invokes the external observer.
 func (fi *factIndex) notifyCommit(ctx context.Context, branch string, hash plumbing.Hash) {
-	fi.appendCommitLog(ctx, branch, hash)
+	if fi.im != nil {
+		fi.im.AppendCommitLog(ctx, branch, hash.String())
+	}
 	if fi.onCommit != nil {
 		fi.onCommit(branch, hash.String())
 	}
-}
-
-// HeadCommit returns the hash of the tip commit of branch as a hex string.
-func (fi *factIndex) HeadCommit(ctx context.Context, branch string) (string, error) {
-	return fi.rh.HeadCommit(ctx, branch)
 }

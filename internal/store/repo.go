@@ -63,7 +63,7 @@ func (s *Service) OpenRepo() error {
 
 	log.Info().Str("branch", branch).Msg("git store opened")
 	s.rh.repo = repo
-	if err := s.fi.populateCommitLog(context.Background(), branch); err != nil {
+	if err := s.si.populateCommitLog(context.Background(), branch); err != nil {
 		log.Warn().Err(err).Msg("commit_log: open populate failed")
 	}
 	return nil
@@ -118,7 +118,7 @@ func (s *Service) InitRepo(initFiles map[string]string, agentBranch string) erro
 
 	log.Info().Str("branch", agentBranch).Msg("git store initialized")
 	s.rh.repo = repo
-	if err := s.fi.populateCommitLog(context.Background(), agentBranch); err != nil {
+	if err := s.si.populateCommitLog(context.Background(), agentBranch); err != nil {
 		log.Warn().Err(err).Msg("commit_log: initial populate failed")
 	}
 	return nil
@@ -241,7 +241,7 @@ func (s *Service) InitFromRemote(originURL string, auth transport.AuthMethod, ag
 	log.Info().Str("branch", agentBranch).Str("origin", originURL).Msg("git store initialized from remote")
 	s.rh.repo = repo
 	s.fi.auth = auth
-	if err := s.fi.populateCommitLog(context.Background(), agentBranch); err != nil {
+	if err := s.si.populateCommitLog(context.Background(), agentBranch); err != nil {
 		log.Warn().Err(err).Msg("commit_log: remote populate failed")
 	}
 	return nil
@@ -271,7 +271,7 @@ func (s *Service) initFromEmptyRemote(repo *gogit.Repository, originURL string, 
 	log.Info().Str("branch", agentBranch).Str("origin", originURL).Msg("git store initialized (empty remote)")
 	s.rh.repo = repo
 	s.fi.auth = auth
-	if err := s.fi.populateCommitLog(context.Background(), agentBranch); err != nil {
+	if err := s.si.populateCommitLog(context.Background(), agentBranch); err != nil {
 		log.Warn().Err(err).Msg("commit_log: empty-remote populate failed")
 	}
 	return nil

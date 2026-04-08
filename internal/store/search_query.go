@@ -181,9 +181,9 @@ func (si *searchIndex) LastCommitForPath(ctx context.Context, branch, path strin
 		branchID, path,
 	).Scan(&hash, &action)
 	if err != nil {
-		// Fallback: legacy rows with NULL branch_id.
+		// Fallback: legacy rows written before branch_id scoping was introduced.
 		err = conn(ctx, si.rh.db).QueryRowContext(ctx,
-			`SELECT commit_hash, action FROM commit_log WHERE path = ? ORDER BY rowid DESC LIMIT 1`,
+			`SELECT commit_hash, action FROM commit_log WHERE branch_id IS NULL AND path = ? ORDER BY rowid DESC LIMIT 1`,
 			path,
 		).Scan(&hash, &action)
 	}
@@ -410,7 +410,7 @@ func (si *searchIndex) Search(ctx context.Context, branch string, q SearchQuery)
 	}
 
 	vecSimByPath := make(map[string]float64)
-	emb := si.getEmbedder()
+	emb := si.rh.getEmbedder()
 	if emb == nil && len(q.QueryVec) == 0 {
 		log.Debug().Msg("search: no embedder configured, skipping vec search")
 	} else {

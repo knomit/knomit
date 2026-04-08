@@ -124,7 +124,9 @@ func (si *searchIndex) Completions(ctx context.Context, branch, category, prefix
 		prefixLen := len(prefix)
 		for rows.Next() {
 			var p string
-			rows.Scan(&p)
+			if err := rows.Scan(&p); err != nil {
+				return nil, fmt.Errorf("completions: scan path: %w", err)
+			}
 			// Find the next '/' after the prefix to extract directory components
 			rest := p[prefixLen:]
 			if i := strings.Index(rest, "/"); i >= 0 {
@@ -158,7 +160,9 @@ func (si *searchIndex) queryDistinct(ctx context.Context, query string, args ...
 	var vals []string
 	for rows.Next() {
 		var v string
-		rows.Scan(&v)
+		if err := rows.Scan(&v); err != nil {
+			return nil, fmt.Errorf("queryDistinct scan: %w", err)
+		}
 		if v != "" {
 			vals = append(vals, v)
 		}

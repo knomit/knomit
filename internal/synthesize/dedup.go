@@ -205,22 +205,13 @@ func dedupCluster(
 
 		// Serialize and write the winner back to git.
 		newContent := fact.SerializeFact(fullWinner)
-		writeRes, err := gs.WriteFact(ctx, agentBranch, winnerFact.File, newContent, fmt.Sprintf("dedup: merge %s into %s [%s]", loserFact.File, winnerFact.File, recipeName), "subsume")
-		if err != nil {
+		if _, err := gs.WriteFact(ctx, agentBranch, winnerFact.File, newContent, fmt.Sprintf("dedup: merge %s into %s [%s]", loserFact.File, winnerFact.File, recipeName), "subsume"); err != nil {
 			return nil, fmt.Errorf("dedupCluster: write winner %q: %w", winnerFact.File, err)
 		}
 
-		// Update the search index for the winner.
-		if err := idx.Upsert(ctx, agentBranch, writeRes.CommitHash, store.NewFactRecord(fullWinner, writeRes.BlobHash)); err != nil {
-			return nil, fmt.Errorf("dedupCluster: upsert winner %q: %w", winnerFact.File, err)
-		}
-
-		// Delete the loser from git and the search index.
+		// Delete the loser from git.
 		if _, err := gs.DeleteFact(ctx, agentBranch, loserFact.File, fmt.Sprintf("dedup: remove duplicate %s (merged into %s) [%s]", loserFact.File, winnerFact.File, recipeName)); err != nil {
 			return nil, fmt.Errorf("dedupCluster: delete loser %q: %w", loserFact.File, err)
-		}
-		if err := idx.Delete(ctx, agentBranch, loserFact.File); err != nil {
-			return nil, fmt.Errorf("dedupCluster: index delete loser %q: %w", loserFact.File, err)
 		}
 
 		removedPaths[loserFact.File] = true

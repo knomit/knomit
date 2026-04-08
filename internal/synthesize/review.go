@@ -10,7 +10,6 @@ import (
 
 	"knomit/internal/fact"
 	"knomit/internal/llm"
-	"knomit/internal/mcp"
 	"knomit/internal/store"
 
 	"github.com/rs/zerolog/log"
@@ -21,6 +20,7 @@ type Reviewer struct {
 	gs             store.FactIndex
 	idx            store.SearchIndex
 	reviewIdx      store.PipelineIndex
+	branches       store.BranchIndex
 	embedder       store.Embedder
 	onProgress     func(ProgressEvent)
 	reflectChecked map[string]bool
@@ -28,16 +28,16 @@ type Reviewer struct {
 }
 
 // NewReviewer creates a new review orchestrator.
-func NewReviewer(gs store.FactIndex, idx store.SearchIndex, reviewIdx store.PipelineIndex, embedder store.Embedder, onProgress func(ProgressEvent), agentBranch string) *Reviewer {
+func NewReviewer(gs store.FactIndex, idx store.SearchIndex, reviewIdx store.PipelineIndex, branches store.BranchIndex, embedder store.Embedder, onProgress func(ProgressEvent), agentBranch string) *Reviewer {
 	if onProgress == nil {
 		onProgress = func(ProgressEvent) {}
 	}
-	return &Reviewer{gs: gs, idx: idx, reviewIdx: reviewIdx, embedder: embedder, onProgress: onProgress, reflectChecked: make(map[string]bool), agentBranch: agentBranch}
+	return &Reviewer{gs: gs, idx: idx, reviewIdx: reviewIdx, branches: branches, embedder: embedder, onProgress: onProgress, reflectChecked: make(map[string]bool), agentBranch: agentBranch}
 }
 
 // StartSession creates a new review session, identifies dirty facts, clusters
 // them, stores work items, and returns the first item to review.
-func (r *Reviewer) StartSession(ctx context.Context) (*mcp.ReviewResult, error) {
+func (r *Reviewer) StartSession(ctx context.Context) (*ReviewResult, error) {
 	branch := r.agentBranch
 
 	sess, err := r.reviewIdx.CreatePipelineSession(ctx, "review", branch)
@@ -120,7 +120,7 @@ func (r *Reviewer) StartSession(ctx context.Context) (*mcp.ReviewResult, error) 
 
 // ContinueSession processes the model's response for the current work item
 // and returns the next item, or done if the session is complete.
-func (r *Reviewer) ContinueSession(ctx context.Context, sessionID, response string) (*mcp.ReviewResult, error) {
+func (r *Reviewer) ContinueSession(ctx context.Context, sessionID, response string) (*ReviewResult, error) {
 	sess, err := r.reviewIdx.GetPipelineSession(ctx, sessionID)
 	if err != nil {
 		return nil, fmt.Errorf("review: get session: %w", err)
@@ -164,7 +164,7 @@ func (r *Reviewer) ContinueSession(ctx context.Context, sessionID, response stri
 		if err := validatePrunePaths(result, inputPaths); err != nil {
 			return nil, fmt.Errorf("review: validate prune: %w", err)
 		}
-		if _, err := ApplyPruneDecisions(ctx, r.gs, r.idx, result.Decisions, result.Merges, "review", r.onProgress, r.agentBranch); err != nil {
+		if _, err := ApplyPruneDecisions(ctx, r.gs, result.Decisions, result.Merges, "review", r.onProgress, r.agentBranch); err != nil {
 			return nil, fmt.Errorf("review: apply prune: %w", err)
 		}
 
@@ -184,7 +184,7 @@ func (r *Reviewer) ContinueSession(ctx context.Context, sessionID, response stri
 		if err := validateDistillPaths(result, inputPaths); err != nil {
 			return nil, fmt.Errorf("review: validate distill: %w", err)
 		}
-		_, writtenFacts, err := ApplyDistillDecisions(ctx, r.gs, r.idx, result.Synthesize, result.Retract, "review", r.onProgress, r.agentBranch)
+		_, writtenFacts, err := ApplyDistillDecisions(ctx, r.gs, result.Synthesize, result.Retract, "review", r.onProgress, r.agentBranch)
 		if err != nil {
 			return nil, fmt.Errorf("review: apply distill: %w", err)
 		}
@@ -343,7 +343,7 @@ func (r *Reviewer) dirtyFacts(ctx context.Context, branch string) ([]factForLLM,
 
 // nextItem fetches the next unanswered work item, renders its prompt, and
 // returns a ReviewResult. If no items remain, completes the session.
-func (r *Reviewer) nextItem(ctx context.Context, sessionID string) (*mcp.ReviewResult, error) {
+func (r *Reviewer) nextItem(ctx context.Context, sessionID string) (*ReviewResult, error) {
 	item, err := r.reviewIdx.NextPipelineWorkItem(ctx, sessionID)
 	if err != nil {
 		return nil, fmt.Errorf("review: next item: %w", err)
@@ -409,14 +409,14 @@ func (r *Reviewer) nextItem(ctx context.Context, sessionID string) (*mcp.ReviewR
 		return nil, fmt.Errorf("review: work item stats: %w", err)
 	}
 
-	return &mcp.ReviewResult{
+	return &ReviewResult{
 		SessionID: sessionID,
-		Item: &mcp.ReviewItem{
+		Item: &ReviewItem{
 			Type:           item.StepType,
 			Prompt:         content.Prompt,
 			ResponseSchema: content.ResponseSchema,
 		},
-		Progress: &mcp.ReviewProgress{
+		Progress: &ReviewProgress{
 			Completed: completed,
 			Remaining: remaining,
 		},
@@ -424,12 +424,12 @@ func (r *Reviewer) nextItem(ctx context.Context, sessionID string) (*mcp.ReviewR
 }
 
 // completeSession marks the session done and advances the watermark.
-func (r *Reviewer) completeSession(ctx context.Context, sess *store.PipelineSession) (*mcp.ReviewResult, error) {
+func (r *Reviewer) completeSession(ctx context.Context, sess *store.PipelineSession) (*ReviewResult, error) {
 	if err := r.reviewIdx.CompletePipelineSession(ctx, sess.ID); err != nil {
 		return nil, fmt.Errorf("review: complete session: %w", err)
 	}
 
-	headHash, err := r.gs.HeadCommit(ctx, r.agentBranch)
+	headHash, err := r.branches.HeadCommit(ctx, r.agentBranch)
 	if err != nil {
 		log.Warn().Err(err).Msg("review: could not get HEAD for watermark")
 	} else {
@@ -446,11 +446,11 @@ func (r *Reviewer) completeSession(ctx context.Context, sess *store.PipelineSess
 	log.Info().Str("session", sess.ID).Int("completed", completed).Msg("review: session complete")
 	r.onProgress(ProgressEvent{Phase: "review-done", Message: fmt.Sprintf("session %s complete", sess.ID)})
 
-	return &mcp.ReviewResult{
+	return &ReviewResult{
 		SessionID: sess.ID,
 		Done:      true,
-		Summary:   &mcp.ReviewStats{},
-		Progress:  &mcp.ReviewProgress{Completed: completed, Remaining: 0},
+		Summary:   &ReviewStats{},
+		Progress:  &ReviewProgress{Completed: completed, Remaining: 0},
 	}, nil
 }
 

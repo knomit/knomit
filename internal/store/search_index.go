@@ -6,31 +6,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/rs/zerolog/log"
 )
 
 type searchIndex struct {
-	rh       *repoHandler
-	embedMu  sync.RWMutex
-	embedder Embedder
-}
-
-// SetEmbedder attaches an Embedder to the index. When set, Upsert will call
-// Embed on each record's body and persist the result in facts_vec.
-func (si *searchIndex) SetEmbedder(e Embedder) {
-	si.embedMu.Lock()
-	defer si.embedMu.Unlock()
-	si.embedder = e
-}
-
-// getEmbedder returns the current Embedder under a read lock.
-func (si *searchIndex) getEmbedder() Embedder {
-	si.embedMu.RLock()
-	defer si.embedMu.RUnlock()
-	return si.embedder
+	rh *repoHandler
 }
 
 // casLastCommit atomically updates the last-commit watermark for a branch,
@@ -70,9 +52,9 @@ func (si *searchIndex) setLastCommit(ctx context.Context, branch, hash string) e
 	return err
 }
 
-// GetLastCommit returns the last processed commit hash for the given branch,
+// SyncWatermark returns the last processed commit hash for the given branch,
 // or "" if not set.
-func (si *searchIndex) GetLastCommit(ctx context.Context, branch string) (string, error) {
+func (si *searchIndex) SyncWatermark(ctx context.Context, branch string) (string, error) {
 	key := "last_commit:" + branch
 	var hash string
 	err := conn(ctx, si.rh.db).QueryRowContext(ctx, `SELECT value FROM meta WHERE key=?`, key).Scan(&hash)
@@ -109,7 +91,7 @@ func (si *searchIndex) Sync(ctx context.Context, branch string) error {
 		return fmt.Errorf("sync: head commit: %w", err)
 	}
 
-	last, err := si.GetLastCommit(ctx, branch)
+	last, err := si.SyncWatermark(ctx, branch)
 	if err != nil {
 		return fmt.Errorf("sync: get last commit: %w", err)
 	}
@@ -148,7 +130,7 @@ func (si *searchIndex) Sync(ctx context.Context, branch string) error {
 			}
 		}
 		for _, path := range deleted {
-			if err := si.Delete(ctx, branch, path); err != nil {
+			if err := si.delete(ctx, branch, path); err != nil {
 				return fmt.Errorf("sync: delete %q: %w", path, err)
 			}
 		}
@@ -237,7 +219,7 @@ func (si *searchIndex) indexFile(ctx context.Context, branch, path, commitHash s
 	}
 	rec.BlobHash = blobHash
 
-	return si.Upsert(ctx, branch, commitHash, rec)
+	return si.upsert(ctx, branch, commitHash, rec)
 }
 
 // ── GC ────────────────────────────────────────────────────────────────────────
@@ -280,19 +262,25 @@ func (si *searchIndex) GC(ctx context.Context) error {
 		// 2. Clean up graph Fact nodes for orphaned fact versions.
 		for _, o := range orphans {
 			if err := si.graphDeleteFact(ctx, o.path, o.blobHash); err != nil {
-				log.Warn().Err(err).Str("path", o.path).Msg("gc: graph delete fact failed")
+				return fmt.Errorf("gc: graph delete fact %q: %w", o.path, err)
 			}
 		}
 	}
 
 	// 3. Clean up orphaned Entity nodes (no TAGGED edges from any living Fact).
-	si.gcOrphanedGraphNodes(ctx, NodeEntity, EdgeTagged)
+	if err := si.gcOrphanedGraphNodes(ctx, NodeEntity, EdgeTagged); err != nil {
+		return fmt.Errorf("gc: orphaned entities: %w", err)
+	}
 
 	// 4. Clean up orphaned Domain nodes (no IN_DOMAIN edges from any living Fact).
-	si.gcOrphanedGraphNodes(ctx, NodeDomain, EdgeInDomain)
+	if err := si.gcOrphanedGraphNodes(ctx, NodeDomain, EdgeInDomain); err != nil {
+		return fmt.Errorf("gc: orphaned domains: %w", err)
+	}
 
 	// 5. Clean up orphaned OntologyNode nodes (no UNDER edges from any living Fact).
-	si.gcOrphanedGraphNodes(ctx, NodeOntologyNode, EdgeUnder)
+	if err := si.gcOrphanedGraphNodes(ctx, NodeOntologyNode, EdgeUnder); err != nil {
+		return fmt.Errorf("gc: orphaned ontology nodes: %w", err)
+	}
 
 	// 6. Delete commit_log entries for deleted branches.
 	if _, err := conn(ctx, si.rh.db).ExecContext(ctx,
@@ -331,15 +319,14 @@ func (si *searchIndex) gcSessionTable(ctx context.Context, table string) error {
 
 // gcOrphanedGraphNodes removes graph nodes of the given label that have no
 // incoming edges of edgeType from any Fact node.
-func (si *searchIndex) gcOrphanedGraphNodes(ctx context.Context, label, edgeType string) {
+func (si *searchIndex) gcOrphanedGraphNodes(ctx context.Context, label, edgeType string) error {
 	q := fmt.Sprintf(
 		`SELECT json_extract(value, '$.path') FROM json_each(cypher('MATCH (n:%s) WHERE NOT (:%s)-[:%s]->(n) RETURN n.path AS path'))`,
 		label, NodeFact, edgeType,
 	)
 	rows, err := conn(ctx, si.rh.db).QueryContext(ctx, q)
 	if err != nil {
-		log.Warn().Err(err).Str("label", label).Msg("gc: query orphaned nodes failed")
-		return
+		return fmt.Errorf("gc orphaned %s query: %w", label, err)
 	}
 	defer rows.Close()
 
@@ -351,9 +338,10 @@ func (si *searchIndex) gcOrphanedGraphNodes(ctx context.Context, label, edgeType
 		ep := escapeCypherKey(path)
 		delQ := fmt.Sprintf(`SELECT cypher('MATCH (n:%s {path: "%s"}) DETACH DELETE n')`, label, ep)
 		if _, err := conn(ctx, si.rh.db).ExecContext(ctx, delQ); err != nil {
-			log.Warn().Err(err).Str("label", label).Str("path", path).Msg("gc: delete orphaned node failed")
+			return fmt.Errorf("gc orphaned %s delete %q: %w", label, path, err)
 		}
 	}
+	return rows.Err()
 }
 
 // ── Rebuild ───────────────────────────────────────────────────────────────────
@@ -470,7 +458,7 @@ func (si *searchIndex) rebuildFacts(ctx context.Context, branch, head string, pr
 // Bodies are fetched one chunk at a time so memory usage is bounded by batchSize,
 // not by the total number of facts.
 func (si *searchIndex) rebuildEmbeddings(ctx context.Context, progress RebuildProgress) (int, error) {
-	emb := si.getEmbedder()
+	emb := si.rh.getEmbedder()
 	if emb == nil {
 		return 0, nil
 	}
@@ -683,7 +671,7 @@ func (si *searchIndex) rebuildGraph(ctx context.Context, progress RebuildProgres
 
 	// Build similarity edges after commit (needs committed data for KNN).
 	// Batch: collect all neighbors first, then write all edges in one transaction.
-	if si.getEmbedder() != nil {
+	if si.rh.getEmbedder() != nil {
 		type simEdge struct{ fromPath, fromBH, toPath, toBH string }
 		var edges []simEdge
 
@@ -807,7 +795,7 @@ func (si *searchIndex) rebuildGraphHistory(ctx context.Context, branch string, p
 	var created []createdVersion
 
 	for _, v := range versions {
-		content, err := si.rh.readFileAtCommit(ctx, branch, v.path, v.commitHash)
+		content, err := si.rh.readFileAtCommit(ctx, v.path, v.commitHash)
 		if err != nil {
 			log.Debug().Err(err).Str("path", v.path).Str("commit", v.commitHash[:8]).Msg("rebuildGraphHistory: skip (file not found at commit)")
 			continue

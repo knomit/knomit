@@ -43,12 +43,14 @@ func (s *Server) SetupMCP(ri *repos.RepoInstance) {
 	var idx store.SearchIndex
 	var pipelineIdx store.PipelineIndex
 	var toolSessionIdx store.ToolSessionIndex
+	var branches store.BranchIndex
 	ri.WithRead(func(svc *store.Service) {
 		if svc != nil {
 			gs = svc.Facts()
 			idx = svc.Search()
 			pipelineIdx = svc.Pipeline()
 			toolSessionIdx = svc.ToolSession()
+			branches = svc.Branches()
 		}
 	})
 	if gs == nil {
@@ -56,15 +58,15 @@ func (s *Server) SetupMCP(ri *repos.RepoInstance) {
 		return
 	}
 
-	reviewer := synthesize.NewReviewer(gs, idx, pipelineIdx, s.Embedder, nil, s.AgentBranch)
+	reviewer := synthesize.NewReviewer(gs, idx, pipelineIdx, branches, s.Embedder, nil, s.AgentBranch)
 	profiles := []string{"code", "chat", "generic"}
 	mcpHandlers := make(map[string]http.Handler, len(profiles))
 	for _, p := range profiles {
 		var mcpSrv *mcpserver.MCPServer
 		if s.Embedder != nil {
-			mcpSrv = mcp.NewServer(gs, idx, toolSessionIdx, pipelineIdx, reviewer, p, s.OntologyRoot, ontology, s.AgentBranch, s.Embedder)
+			mcpSrv = mcp.NewServer(gs, idx, toolSessionIdx, pipelineIdx, branches, reviewer, p, s.OntologyRoot, ontology, s.AgentBranch, s.Embedder)
 		} else {
-			mcpSrv = mcp.NewServer(gs, idx, toolSessionIdx, pipelineIdx, reviewer, p, s.OntologyRoot, ontology, s.AgentBranch)
+			mcpSrv = mcp.NewServer(gs, idx, toolSessionIdx, pipelineIdx, branches, reviewer, p, s.OntologyRoot, ontology, s.AgentBranch)
 		}
 		mcpHandlers[p] = mcpserver.NewStreamableHTTPServer(mcpSrv)
 	}

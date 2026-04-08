@@ -16,10 +16,10 @@ import (
 // embedding retrieval, and meta key-value storage (last_commit tracking).
 // All mutations keep the vec0 index in sync within transactions.
 
-// Upsert inserts or replaces a FactRecord on the given branch, keeping the
+// upsert inserts or replaces a FactRecord on the given branch, keeping the
 // vec0 index in sync. COW dedup: if (path, blob_hash) already exists in the
 // facts table, only the branch_facts pointer is updated.
-func (si *searchIndex) Upsert(ctx context.Context, branch, commitHash string, rec FactRecord) error {
+func (si *searchIndex) upsert(ctx context.Context, branch, commitHash string, rec FactRecord) error {
 	branchID, err := si.rh.EnsureBranch(ctx, branch, "refs/heads/"+branch)
 	if err != nil {
 		return fmt.Errorf("upsert: %w", err)
@@ -46,7 +46,7 @@ func (si *searchIndex) Upsert(ctx context.Context, branch, commitHash string, re
 
 	// Compute embedding vector if an embedder is configured.
 	var vecData []byte
-	if emb := si.getEmbedder(); emb != nil {
+	if emb := si.rh.getEmbedder(); emb != nil {
 		var data []byte
 		err := conn(ctx, si.rh.db).QueryRowContext(ctx,
 			`SELECT data FROM objects WHERE hash = ? AND type = ?`,
@@ -63,13 +63,11 @@ func (si *searchIndex) Upsert(ctx context.Context, branch, commitHash string, re
 	}
 
 	// Begin transaction for atomic COW check + insert.
-	ctx, tx, ownTx, err := beginTxIfNeeded(ctx, si.rh.db)
+	ctx, tx, _, err := beginTxIfNeeded(ctx, si.rh.db)
 	if err != nil {
 		return fmt.Errorf("upsert begin tx: %w", err)
 	}
-	if ownTx {
-		defer tx.Rollback()
-	}
+	defer tx.Rollback()
 	db := conn(ctx, si.rh.db)
 
 	// Atomic: insert fact if it doesn't exist yet (no TOCTOU race).
@@ -97,10 +95,16 @@ func (si *searchIndex) Upsert(ctx context.Context, branch, commitHash string, re
 
 	// COW hit check: are junction tables already populated for this fact?
 	var junctionExists int
-	db.QueryRowContext(ctx,
+	if err := db.QueryRowContext(ctx,
 		`SELECT 1 FROM fact_entities WHERE fact_id = ? LIMIT 1`, factID,
-	).Scan(&junctionExists)
-	if junctionExists > 0 || (len(rec.Entities) == 0 && hasAnyBranchFact(ctx, db, factID)) {
+	).Scan(&junctionExists); err != nil && err != sql.ErrNoRows {
+		return fmt.Errorf("upsert cow check: %w", err)
+	}
+	anyBranch, err := hasAnyBranchFact(ctx, db, factID)
+	if err != nil {
+		return fmt.Errorf("upsert cow check branch: %w", err)
+	}
+	if junctionExists > 0 || (len(rec.Entities) == 0 && anyBranch) {
 		// COW hit: fact fully indexed, just update branch pointer.
 		_, err = db.ExecContext(ctx,
 			`INSERT OR REPLACE INTO branch_facts(branch_id, path, fact_id, commit_hash) VALUES (?, ?, ?, ?)`,
@@ -108,10 +112,7 @@ func (si *searchIndex) Upsert(ctx context.Context, branch, commitHash string, re
 		if err != nil {
 			return fmt.Errorf("upsert branch_facts (cow hit): %w", err)
 		}
-		if ownTx {
-			return tx.Commit()
-		}
-		return nil
+		return tx.Commit()
 	}
 
 	// COW miss: populate junction tables, embeddings, branch_facts.
@@ -159,10 +160,8 @@ func (si *searchIndex) Upsert(ctx context.Context, branch, commitHash string, re
 		return fmt.Errorf("upsert branch_facts: %w", err)
 	}
 
-	if ownTx {
-		if err := tx.Commit(); err != nil {
-			return err
-		}
+	if err := tx.Commit(); err != nil {
+		return err
 	}
 
 	// Sync graph: create/update nodes and edges for this fact.
@@ -171,7 +170,7 @@ func (si *searchIndex) Upsert(ctx context.Context, branch, commitHash string, re
 	}
 
 	// Build similarity edges if embeddings are available.
-	if si.getEmbedder() != nil {
+	if si.rh.getEmbedder() != nil {
 		if err := si.graphBuildSimilarityEdges(ctx, rec.Path, rec.BlobHash); err != nil {
 			log.Warn().Err(err).Str("path", rec.Path).Msg("graph similarity edges failed")
 		}
@@ -181,27 +180,28 @@ func (si *searchIndex) Upsert(ctx context.Context, branch, commitHash string, re
 }
 
 // hasAnyBranchFact checks if any branch_facts row exists for the given fact_id.
-func hasAnyBranchFact(ctx context.Context, db storegit.CtxExecer, factID int64) bool {
+func hasAnyBranchFact(ctx context.Context, db storegit.CtxExecer, factID int64) (bool, error) {
 	var n int
-	db.QueryRowContext(ctx, `SELECT 1 FROM branch_facts WHERE fact_id = ? LIMIT 1`, factID).Scan(&n)
-	return n > 0
+	err := db.QueryRowContext(ctx, `SELECT 1 FROM branch_facts WHERE fact_id = ? LIMIT 1`, factID).Scan(&n)
+	if err != nil && err != sql.ErrNoRows {
+		return false, fmt.Errorf("hasAnyBranchFact: %w", err)
+	}
+	return n > 0, nil
 }
 
-// Delete removes a fact from the given branch. If no other branch references
+// delete removes a fact from the given branch. If no other branch references
 // the fact, the underlying facts row (and its vec/graph data) is also deleted.
-func (si *searchIndex) Delete(ctx context.Context, branch, path string) error {
+func (si *searchIndex) delete(ctx context.Context, branch, path string) error {
 	branchID, err := si.rh.branchID(ctx, branch)
 	if err != nil {
 		return fmt.Errorf("delete: %w", err)
 	}
 
-	ctx, tx, ownTx, err := beginTxIfNeeded(ctx, si.rh.db)
+	ctx, tx, _, err := beginTxIfNeeded(ctx, si.rh.db)
 	if err != nil {
 		return fmt.Errorf("delete begin tx: %w", err)
 	}
-	if ownTx {
-		defer tx.Rollback()
-	}
+	defer tx.Rollback()
 	db := conn(ctx, si.rh.db)
 
 	// Look up fact_id + blob_hash in one query.
@@ -213,10 +213,7 @@ func (si *searchIndex) Delete(ctx context.Context, branch, path string) error {
 		 WHERE bf.branch_id = ? AND bf.path = ?`, branchID, path,
 	).Scan(&factID, &blobHash)
 	if err == sql.ErrNoRows {
-		if ownTx {
-			tx.Commit()
-		}
-		return nil
+		return tx.Commit()
 	}
 	if err != nil {
 		return fmt.Errorf("delete lookup: %w", err)
@@ -231,9 +228,11 @@ func (si *searchIndex) Delete(ctx context.Context, branch, path string) error {
 
 	// Check remaining references atomically (within same tx).
 	var refCount int
-	db.QueryRowContext(ctx,
+	if err := db.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM branch_facts WHERE fact_id = ?`, factID,
-	).Scan(&refCount)
+	).Scan(&refCount); err != nil {
+		return fmt.Errorf("delete refcount: %w", err)
+	}
 
 	if refCount == 0 {
 		// Orphaned: delete the fact (cascades to junction tables, triggers facts_vec).
@@ -244,10 +243,8 @@ func (si *searchIndex) Delete(ctx context.Context, branch, path string) error {
 		}
 	}
 
-	if ownTx {
-		if err := tx.Commit(); err != nil {
-			return err
-		}
+	if err := tx.Commit(); err != nil {
+		return err
 	}
 
 	// Graph cleanup outside tx (idempotent).

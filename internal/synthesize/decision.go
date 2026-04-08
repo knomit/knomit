@@ -37,7 +37,6 @@ type ReviewStats struct {
 // ApplyPruneDecisions applies prune decisions (retract/update) and merges to the git store.
 func ApplyPruneDecisions(ctx context.Context,
 	gs store.FactIndex,
-	idx store.SearchIndex,
 	decisions []PruneDecision,
 	merges []MergeEntry,
 	recipeName string,
@@ -62,10 +61,6 @@ func ApplyPruneDecisions(ctx context.Context,
 				onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("retract %s: %v", d.Path, err)})
 				continue
 			}
-			if err := idx.Delete(ctx, agentBranch, d.Path); err != nil {
-				onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("index delete %s: %v", d.Path, err)})
-			}
-
 			onProgress(ProgressEvent{Phase: "detail-retract", Message: "retract " + d.Path})
 			stats.Pruned++
 
@@ -83,15 +78,10 @@ func ApplyPruneDecisions(ctx context.Context,
 			f.Confidence = d.Confidence
 			updated := fact.SerializeFact(f)
 			msg := fmt.Sprintf("synthesize-%s: update confidence %s → %.2f", recipeName, d.Path, d.Confidence)
-			writeRes, err := gs.WriteFact(ctx, agentBranch, d.Path, updated, msg, "update")
-			if err != nil {
+			if _, err := gs.WriteFact(ctx, agentBranch, d.Path, updated, msg, "update"); err != nil {
 				onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("update write %s: %v", d.Path, err)})
 				continue
 			}
-			if err := idx.Upsert(ctx, agentBranch, writeRes.CommitHash, store.NewFactRecord(f, writeRes.BlobHash)); err != nil {
-				onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("index upsert %s: %v", d.Path, err)})
-			}
-
 			onProgress(ProgressEvent{Phase: "detail-update", Message: fmt.Sprintf("update %.2f %s", d.Confidence, d.Path)})
 			stats.Updated++
 		}
@@ -113,12 +103,10 @@ func ApplyPruneDecisions(ctx context.Context,
 		merged.EvidenceWeight = weight
 		content := fact.SerializeFact(merged)
 		msg := fmt.Sprintf("synthesize-%s: merge %s", recipeName, strings.Join(m.Paths, ", "))
-		writeRes, err := gs.WriteFact(ctx, agentBranch, merged.Path(), content, msg, "subsume")
-		if err != nil {
+		if _, err := gs.WriteFact(ctx, agentBranch, merged.Path(), content, msg, "subsume"); err != nil {
 			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("merge write %s: %v", merged.Path(), err)})
 			continue
 		}
-		_ = idx.Upsert(ctx, agentBranch, writeRes.CommitHash, store.NewFactRecord(merged, writeRes.BlobHash))
 
 		// Delete source facts (losers get retract tag).
 		for _, src := range m.Paths {
@@ -130,9 +118,7 @@ func ApplyPruneDecisions(ctx context.Context,
 				onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("merge delete source %s: %v", src, err)})
 				continue
 			}
-			_ = idx.Delete(ctx, agentBranch, src)
 			deletedPaths[src] = true
-
 		}
 		onProgress(ProgressEvent{Phase: "detail-merge", Message: "merge " + merged.Path()})
 		stats.Merged++
@@ -145,7 +131,6 @@ func ApplyPruneDecisions(ctx context.Context,
 // Returns stats, the written facts (with normalized paths), and any error.
 func ApplyDistillDecisions(ctx context.Context,
 	gs store.FactIndex,
-	idx store.SearchIndex,
 	synthesized []distillFact,
 	retract []string,
 	recipeName string,
@@ -186,13 +171,10 @@ func ApplyDistillDecisions(ctx context.Context,
 		df.Path = f.Path() // sync df so written slice reflects the canonical (lowercase) path
 		content := fact.SerializeFact(f)
 		msg := fmt.Sprintf("synthesize-%s: distill %s", recipeName, f.Path())
-		writeRes, err := gs.WriteFact(ctx, agentBranch, f.Path(), content, msg, "subsume")
-		if err != nil {
+		if _, err := gs.WriteFact(ctx, agentBranch, f.Path(), content, msg, "subsume"); err != nil {
 			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("distill write %s: %v", f.Path(), err)})
 			continue
 		}
-		_ = idx.Upsert(ctx, agentBranch, writeRes.CommitHash, store.NewFactRecord(f, writeRes.BlobHash))
-
 		onProgress(ProgressEvent{Phase: "detail-learn", Message: "learn " + f.Path()})
 		stats.Synthesized++
 		written = append(written, df)
@@ -205,8 +187,6 @@ func ApplyDistillDecisions(ctx context.Context,
 			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("distill retract %s: %v", path, err)})
 			continue
 		}
-		_ = idx.Delete(ctx, agentBranch, path)
-
 		onProgress(ProgressEvent{Phase: "detail-distill-retract", Message: "retract " + path})
 		stats.Pruned++
 	}

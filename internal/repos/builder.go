@@ -128,7 +128,7 @@ func (b *repoBuilder) ensureBranch() {
 		}
 	}
 	if b.isDefault && b.cfg.Git.Origin != "" {
-		if err := b.svc.SetRemote("origin", b.cfg.Git.Origin, "main", 300, 300, "", ""); err != nil {
+		if err := b.svc.Remote().SetRemote("origin", b.cfg.Git.Origin, "main", 300, 300, "", ""); err != nil {
 			log.Warn().Err(err).Msg("failed to seed origin in remotes table")
 		}
 	}
@@ -138,9 +138,9 @@ func (b *repoBuilder) ensureBranch() {
 // sync against the git store.
 func (b *repoBuilder) setupIndex() {
 	if b.embedder != nil {
-		b.svc.Search().SetEmbedder(b.embedder)
+		b.svc.SetEmbedder(b.embedder)
 	}
-	if err := b.svc.Search().Sync(context.Background(), b.agentBranch); err != nil {
+	if err := b.svc.IndexManager().Sync(context.Background(), b.agentBranch); err != nil {
 		log.Warn().Err(err).Str("repo", b.name).Msg("initial index sync failed")
 	}
 }
@@ -151,7 +151,7 @@ func (b *repoBuilder) setupIndex() {
 func (b *repoBuilder) seedWatermarks() {
 	for _, tool := range []string{"review", "hypothesize"} {
 		if wm, _ := b.svc.Pipeline().GetPipelineWatermark(context.Background(), tool, b.agentBranch); wm == "" {
-			if head, err := b.svc.Facts().HeadCommit(context.Background(), b.agentBranch); err == nil {
+			if head, err := b.svc.Branches().HeadCommit(context.Background(), b.agentBranch); err == nil {
 				if err := b.svc.Pipeline().SetPipelineWatermark(context.Background(), tool, b.agentBranch, head); err != nil {
 					log.Warn().Err(err).Str("tool", tool).Msg("pipeline watermark: initial set failed")
 				}
@@ -183,7 +183,7 @@ func (b *repoBuilder) build() *RepoInstance {
 		ri.mu.RLock()
 		currentSvc := ri.svc
 		ri.mu.RUnlock()
-		if err := currentSvc.Search().Sync(context.Background(), b.agentBranch); err != nil {
+		if err := currentSvc.IndexManager().Sync(context.Background(), b.agentBranch); err != nil {
 			log.Warn().Err(err).Str("repo", b.name).Msg("observer sync failed")
 		}
 		hub.broadcastStatus(hash)
@@ -211,7 +211,7 @@ func (b *repoBuilder) build() *RepoInstance {
 		currentSvc := ri.svc
 		ri.mu.RUnlock()
 
-		remote, err := currentSvc.GetRemote("origin")
+		remote, err := currentSvc.Remote().GetRemote("origin")
 		if err != nil || remote == nil {
 			return fmt.Errorf("read remote: %w", err)
 		}
@@ -221,7 +221,9 @@ func (b *repoBuilder) build() *RepoInstance {
 
 		var newCtx context.Context
 		newCtx, syncCancel = context.WithCancel(ctx)
+		ri.mu.Lock()
 		ri.syncCancel = syncCancel
+		ri.mu.Unlock()
 
 		currentSvc.SetOnCommit(ri.onCommit)
 
@@ -245,7 +247,7 @@ func (b *repoBuilder) build() *RepoInstance {
 // startSyncLoops launches the background pull and push goroutines if a remote
 // named "origin" is configured.
 func (b *repoBuilder) startSyncLoops(ctx context.Context, wg *sync.WaitGroup, hub *TaskHub) {
-	remote, _ := b.svc.GetRemote("origin")
+	remote, _ := b.svc.Remote().GetRemote("origin")
 	if remote == nil {
 		return
 	}
