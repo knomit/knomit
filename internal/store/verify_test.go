@@ -149,3 +149,60 @@ func TestVerify_DetectsBranchFactsBlobMismatch(t *testing.T) {
 	}
 	require.True(t, found, "expected facts-coherence Error for kb/x.md, got: %v", report.Issues)
 }
+
+// stub768Embedder is a deterministic 768-dim embedder for Verify tests.
+// vec0 requires exactly 768-float32 vectors. Task 2.1 will introduce a
+// proper DeterministicEmbedder in testenv; for Phase 1 we keep this inline
+// so verify_test.go has no testenv dependency.
+type stub768Embedder struct{}
+
+func (e *stub768Embedder) Embed(text string) ([]float32, error) {
+	out := make([]float32, 768)
+	for i := 0; i < 768; i++ {
+		out[i] = float32((len(text)*31+i)%256) / 256.0
+	}
+	return out, nil
+}
+
+func (e *stub768Embedder) EmbedBatch(texts []string) ([][]float32, error) {
+	out := make([][]float32, len(texts))
+	for i, t := range texts {
+		v, _ := e.Embed(t)
+		out[i] = v
+	}
+	return out, nil
+}
+
+// TestVerify_DetectsMissingEmbedding asserts that when an embedder is
+// configured and a facts row exists but its facts_vec row is missing,
+// Verify reports an embeddings-coverage Error.
+func TestVerify_DetectsMissingEmbedding(t *testing.T) {
+	t.Log("Scenario: write fact with embedder configured, delete its facts_vec row, expect embeddings-coverage Error")
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	defer svc.Close()
+	svc.SetEmbedder(&stub768Embedder{})
+	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+
+	_, err = svc.Facts().WriteFact(context.Background(), "agent/test", "kb/x.md", "---\ntype: observation\n---\n# Test Fact\n\nbody", "add x", "test")
+	require.NoError(t, err)
+
+	// Look up the facts row and delete its embedding.
+	var factID int64
+	err = svc.rh.gits.DB().QueryRow(`SELECT id FROM facts WHERE path = ?`, "kb/x.md").Scan(&factID)
+	require.NoError(t, err)
+	require.NoError(t, svc.deleteEmbeddingForTest(factID))
+
+	report, err := svc.Verify(context.Background(), VerifyOpts{})
+	require.NoError(t, err)
+	require.False(t, report.IsClean())
+	found := false
+	for _, i := range report.Issues {
+		if i.Category == CategoryEmbeddingsCoverage && i.Severity == SeverityError {
+			found = true
+			break
+		}
+	}
+	require.True(t, found, "expected embeddings-coverage Error, got: %v", report.Issues)
+}

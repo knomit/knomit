@@ -57,7 +57,7 @@ const (
 	CategoryGitReachability  = "git-reachability"
 	CategoryCommitLog        = "commit-log"
 	CategoryFactsCoherence   = "facts-coherence"
-	CategoryVectorDim        = "vector-dim"
+	CategoryEmbeddingsCoverage = "embeddings-coverage"
 	CategoryBranchesTable    = "branches-table"
 	CategoryBranchFactsTable = "branch-facts-table"
 	CategoryFactFormat       = "fact-format"
@@ -146,13 +146,13 @@ func (s *Service) Verify(ctx context.Context, opts VerifyOpts) (IntegrityReport,
 		report.Issues = append(report.Issues, s.checkGitReachability(ctx, br)...)
 		report.Issues = append(report.Issues, s.checkCommitLogParity(ctx, br)...)
 		report.Issues = append(report.Issues, s.checkFactsCoherence(ctx, br)...)
-		report.Issues = append(report.Issues, s.checkVectorDim(ctx, br)...)
 		report.Issues = append(report.Issues, s.checkBranchFactsParity(ctx, br)...)
 		if opts.Deep {
 			report.Issues = append(report.Issues, s.checkFactFormat(ctx, br)...)
 		}
 	}
 	report.Issues = append(report.Issues, s.checkBranchesTable(ctx, branches)...)
+	report.Issues = append(report.Issues, s.checkEmbeddingsCoverage(ctx)...)
 
 	return report, nil
 }
@@ -467,8 +467,90 @@ func (s *Service) checkFactsCoherence(ctx context.Context, branch string) []Inte
 
 	return issues
 }
-func (s *Service) checkVectorDim(_ context.Context, _ string) []IntegrityIssue {
-	return nil
+// deleteEmbeddingForTest removes a facts_vec row for the given facts.id.
+// Test-only escape hatch.
+func (s *Service) deleteEmbeddingForTest(factID int64) error {
+	_, err := s.rh.gits.DB().Exec(`DELETE FROM facts_vec WHERE rowid = ?`, factID)
+	return err
+}
+
+// checkEmbeddingsCoverage verifies, when an embedder is configured, that
+// every facts row has a facts_vec row and vice versa. Skipped entirely when
+// no embedder is configured because upsert only populates facts_vec when
+// Service.SetEmbedder was called.
+//
+// This check is not branch-scoped — facts_vec is keyed by facts.id which is
+// branch-agnostic under knomit's COW fact model. It is called once per
+// Verify run, not per branch.
+func (s *Service) checkEmbeddingsCoverage(ctx context.Context) []IntegrityIssue {
+	if s.rh.getEmbedder() == nil {
+		return nil
+	}
+	var issues []IntegrityIssue
+
+	// Direction 1: facts rows without facts_vec rows.
+	rows, err := s.rh.gits.DB().QueryContext(ctx,
+		`SELECT f.id, f.path FROM facts f
+		 WHERE f.id NOT IN (SELECT rowid FROM facts_vec)`)
+	if err != nil {
+		return []IntegrityIssue{{
+			Severity: SeverityError, Category: CategoryEmbeddingsCoverage,
+			Detail: fmt.Sprintf("query facts missing embeddings: %v", err),
+		}}
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id int64
+		var path string
+		if err := rows.Scan(&id, &path); err != nil {
+			return []IntegrityIssue{{
+				Severity: SeverityError, Category: CategoryEmbeddingsCoverage,
+				Detail: fmt.Sprintf("scan facts row: %v", err),
+			}}
+		}
+		issues = append(issues, IntegrityIssue{
+			Severity: SeverityError, Category: CategoryEmbeddingsCoverage, Path: path,
+			Detail: fmt.Sprintf("facts row id=%d has no facts_vec entry", id),
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return []IntegrityIssue{{
+			Severity: SeverityError, Category: CategoryEmbeddingsCoverage,
+			Detail: fmt.Sprintf("iterate facts: %v", err),
+		}}
+	}
+
+	// Direction 2: facts_vec rows without facts rows (trigger regression detection).
+	orphanRows, err := s.rh.gits.DB().QueryContext(ctx,
+		`SELECT rowid FROM facts_vec WHERE rowid NOT IN (SELECT id FROM facts)`)
+	if err != nil {
+		return append(issues, IntegrityIssue{
+			Severity: SeverityError, Category: CategoryEmbeddingsCoverage,
+			Detail: fmt.Sprintf("query facts_vec orphans: %v", err),
+		})
+	}
+	defer orphanRows.Close()
+	for orphanRows.Next() {
+		var id int64
+		if err := orphanRows.Scan(&id); err != nil {
+			return append(issues, IntegrityIssue{
+				Severity: SeverityError, Category: CategoryEmbeddingsCoverage,
+				Detail: fmt.Sprintf("scan facts_vec row: %v", err),
+			})
+		}
+		issues = append(issues, IntegrityIssue{
+			Severity: SeverityError, Category: CategoryEmbeddingsCoverage,
+			Detail: fmt.Sprintf("facts_vec rowid=%d has no corresponding facts row (trigger regression)", id),
+		})
+	}
+	if err := orphanRows.Err(); err != nil {
+		return append(issues, IntegrityIssue{
+			Severity: SeverityError, Category: CategoryEmbeddingsCoverage,
+			Detail: fmt.Sprintf("iterate facts_vec: %v", err),
+		})
+	}
+
+	return issues
 }
 func (s *Service) checkBranchFactsParity(_ context.Context, _ string) []IntegrityIssue {
 	return nil
