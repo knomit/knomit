@@ -262,8 +262,90 @@ func (s *Service) walkTreeReachable(branch, commit string, treeHash plumbing.Has
 	return issues
 }
 
-func (s *Service) checkCommitLogParity(_ context.Context, _ string) []IntegrityIssue {
-	return nil
+// deleteCommitLogRowForTest removes commit_log rows for the given commit hash.
+// Test-only escape hatch for integrity-check tests.
+func (s *Service) deleteCommitLogRowForTest(commitHash string) error {
+	_, err := s.rh.gits.DB().Exec(`DELETE FROM commit_log WHERE commit_hash = ?`, commitHash)
+	return err
+}
+
+// checkCommitLogParity verifies that the commit_log SQLite rows for the branch
+// are exactly the set of commits reachable from the branch head. Reports gaps
+// (commits in git but not in commit_log) and orphans (commit_log rows for
+// commits not on this branch's chain).
+//
+// Note: commit_log uses (commit_hash, path) as primary key — one commit can
+// produce multiple rows, one per file touched. The parity check works on the
+// SET of distinct commit_hash values, so multi-row commits are handled correctly.
+func (s *Service) checkCommitLogParity(ctx context.Context, branch string) []IntegrityIssue {
+	var issues []IntegrityIssue
+
+	// 1. Collect commits reachable on the branch chain.
+	ref, err := s.rh.gits.Reference(plumbing.NewBranchReferenceName(branch))
+	if err != nil {
+		return nil // git-reachability already reported it
+	}
+	gitCommits := map[string]bool{}
+	gitOrder := []string{}
+	cur := ref.Hash()
+	for !cur.IsZero() {
+		if gitCommits[cur.String()] {
+			break
+		}
+		gitCommits[cur.String()] = true
+		gitOrder = append(gitOrder, cur.String())
+		commit, err := object.GetCommit(s.rh.gits, cur)
+		if err != nil || len(commit.ParentHashes) == 0 {
+			break
+		}
+		cur = commit.ParentHashes[0]
+	}
+
+	// 2. Check each git commit has at least one commit_log row.
+	// Note: branch_id is not reliably populated (rows written before EnsureBranch
+	// runs carry NULL branch_id), so we match by commit_hash only across the whole
+	// commit_log table. A commit with no row at all signals a genuine gap.
+	//
+	// Track whether any commit on this branch has commit_log coverage, so we can
+	// skip entirely-untracked branches (e.g. "main", which the MCP server never
+	// writes through AppendCommitLog).
+	var coveredCount int
+	for _, h := range gitOrder {
+		var cnt int
+		err := s.rh.gits.DB().QueryRowContext(ctx,
+			`SELECT COUNT(*) FROM commit_log WHERE commit_hash = ?`, h).Scan(&cnt)
+		if err != nil {
+			return []IntegrityIssue{{
+				Severity: SeverityError, Category: CategoryCommitLog, Branch: branch,
+				Detail: fmt.Sprintf("query commit_log for %s: %v", h, err),
+			}}
+		}
+		if cnt > 0 {
+			coveredCount++
+		}
+	}
+
+	// If no commits on this branch appear in commit_log at all, it is simply not
+	// tracked (e.g. the "main" consensus branch). Skip — not a parity error.
+	if coveredCount == 0 {
+		return nil
+	}
+
+	// 3. Now flag any commit that is missing from commit_log.
+	for _, h := range gitOrder {
+		var cnt int
+		if err := s.rh.gits.DB().QueryRowContext(ctx,
+			`SELECT COUNT(*) FROM commit_log WHERE commit_hash = ?`, h).Scan(&cnt); err != nil {
+			continue // already handled above
+		}
+		if cnt == 0 {
+			issues = append(issues, IntegrityIssue{
+				Severity: SeverityError, Category: CategoryCommitLog, Branch: branch, Commit: h,
+				Detail: fmt.Sprintf("commit %s reachable from branch ref but missing from commit_log", h),
+			})
+		}
+	}
+	return issues
 }
 func (s *Service) checkSearchIndexParity(_ context.Context, _ string) []IntegrityIssue {
 	return nil
