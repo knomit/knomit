@@ -555,8 +555,78 @@ func (s *Service) checkEmbeddingsCoverage(ctx context.Context) []IntegrityIssue 
 func (s *Service) checkBranchFactsParity(_ context.Context, _ string) []IntegrityIssue {
 	return nil
 }
-func (s *Service) checkBranchesTable(_ context.Context, _ []string) []IntegrityIssue {
-	return nil
+// checkBranchesTable verifies that the branches SQLite table exactly mirrors
+// the git branch refs. Every git ref in refs/heads/* must have a row in
+// branches whose name matches and whose git_ref equals "refs/heads/" + name.
+// Every row in branches must correspond to a git ref.
+//
+// This check is called once per Verify (not per branch) with the full list
+// of git branch names enumerated by listBranchRefsForVerify.
+func (s *Service) checkBranchesTable(ctx context.Context, gitBranches []string) []IntegrityIssue {
+	var issues []IntegrityIssue
+
+	rows, err := s.rh.gits.DB().QueryContext(ctx, `SELECT name, git_ref FROM branches`)
+	if err != nil {
+		return []IntegrityIssue{{
+			Severity: SeverityError, Category: CategoryBranchesTable,
+			Detail: fmt.Sprintf("query branches: %v", err),
+		}}
+	}
+	defer rows.Close()
+
+	tableRows := make(map[string]string)
+	for rows.Next() {
+		var name, gitRef string
+		if err := rows.Scan(&name, &gitRef); err != nil {
+			return []IntegrityIssue{{
+				Severity: SeverityError, Category: CategoryBranchesTable,
+				Detail: fmt.Sprintf("scan branches: %v", err),
+			}}
+		}
+		tableRows[name] = gitRef
+	}
+	if err := rows.Err(); err != nil {
+		return []IntegrityIssue{{
+			Severity: SeverityError, Category: CategoryBranchesTable,
+			Detail: fmt.Sprintf("iterate branches: %v", err),
+		}}
+	}
+
+	gitSet := make(map[string]bool, len(gitBranches))
+	for _, b := range gitBranches {
+		gitSet[b] = true
+	}
+
+	// Direction 1: every git ref has a matching branches row with correct git_ref.
+	for _, b := range gitBranches {
+		ref, ok := tableRows[b]
+		if !ok {
+			issues = append(issues, IntegrityIssue{
+				Severity: SeverityError, Category: CategoryBranchesTable, Branch: b,
+				Detail: "git ref exists but no row in branches table",
+			})
+			continue
+		}
+		expected := "refs/heads/" + b
+		if ref != expected {
+			issues = append(issues, IntegrityIssue{
+				Severity: SeverityError, Category: CategoryBranchesTable, Branch: b,
+				Detail: fmt.Sprintf("branches.git_ref=%q does not match expected %q", ref, expected),
+			})
+		}
+	}
+
+	// Direction 2: every branches row corresponds to a git ref.
+	for name := range tableRows {
+		if !gitSet[name] {
+			issues = append(issues, IntegrityIssue{
+				Severity: SeverityError, Category: CategoryBranchesTable, Branch: name,
+				Detail: "branches table row exists but no git ref",
+			})
+		}
+	}
+
+	return issues
 }
 func (s *Service) checkFactFormat(_ context.Context, _ string) []IntegrityIssue {
 	return nil

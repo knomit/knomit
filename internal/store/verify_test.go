@@ -206,3 +206,62 @@ func TestVerify_DetectsMissingEmbedding(t *testing.T) {
 	}
 	require.True(t, found, "expected embeddings-coverage Error, got: %v", report.Issues)
 }
+
+// TestVerify_DetectsMissingBranchesTableRow asserts that deleting a branches
+// table row for an existing git ref produces a branches-table Error.
+func TestVerify_DetectsMissingBranchesTableRow(t *testing.T) {
+	t.Log("Scenario: write fact (creates branches row via EnsureBranch), delete row, expect branches-table Error")
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	defer svc.Close()
+	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+	_, err = svc.Facts().WriteFact(context.Background(), "agent/test", "kb/x.md", "---\ntype: observation\n---\n# Test Fact\n\nbody", "add x", "test")
+	require.NoError(t, err)
+
+	// branch_facts references branches(id) without CASCADE, so remove dependent
+	// rows before deleting the branch row to avoid a FK constraint failure.
+	_, err = svc.rh.gits.DB().Exec(`DELETE FROM branch_facts WHERE branch_id = (SELECT id FROM branches WHERE name = 'agent/test')`)
+	require.NoError(t, err)
+	_, err = svc.rh.gits.DB().Exec(`DELETE FROM branches WHERE name = 'agent/test'`)
+	require.NoError(t, err)
+
+	report, err := svc.Verify(context.Background(), VerifyOpts{})
+	require.NoError(t, err)
+	require.False(t, report.IsClean())
+	found := false
+	for _, i := range report.Issues {
+		if i.Category == CategoryBranchesTable && i.Severity == SeverityError {
+			found = true
+			break
+		}
+	}
+	require.True(t, found, "expected branches-table Error, got: %v", report.Issues)
+}
+
+// TestVerify_DetectsBranchesTableRefMismatch asserts that a branches row
+// with a git_ref that doesn't match the expected "refs/heads/<name>" format
+// produces a branches-table Error.
+func TestVerify_DetectsBranchesTableRefMismatch(t *testing.T) {
+	t.Log("Scenario: write fact, overwrite branches.git_ref to a wrong value, expect branches-table Error mentioning git_ref")
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	defer svc.Close()
+	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+
+	_, err = svc.rh.gits.DB().Exec(`UPDATE branches SET git_ref = 'refs/heads/wrong' WHERE name = 'agent/test'`)
+	require.NoError(t, err)
+
+	report, err := svc.Verify(context.Background(), VerifyOpts{})
+	require.NoError(t, err)
+	require.False(t, report.IsClean())
+	found := false
+	for _, i := range report.Issues {
+		if i.Category == CategoryBranchesTable && i.Severity == SeverityError && strings.Contains(i.Detail, "git_ref") {
+			found = true
+			break
+		}
+	}
+	require.True(t, found, "expected branches-table git_ref Error, got: %v", report.Issues)
+}
