@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/go-git/go-git/v5/plumbing/transport"
 	"github.com/rs/zerolog/log"
 	"golang.org/x/crypto/ssh"
 
@@ -35,6 +36,12 @@ type Manager struct {
 	repos    map[string]*RepoInstance
 	ctx      context.Context
 	deps     Deps
+}
+
+// ResolveAuth resolves a transport.AuthMethod for the given config and remote
+// URL, using the manager's own key path as the SSH key fallback.
+func (m *Manager) ResolveAuth(cfg config.RemoteAuthConfig, url string) (transport.AuthMethod, error) {
+	return resolveAuthWithOrigin(cfg, m.deps.KeyPath, url)
 }
 
 // New returns an uninitialised Manager. Call Boot to open repos.

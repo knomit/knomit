@@ -12,23 +12,29 @@ import (
 	"knomit/internal/store"
 )
 
-// resolveRemoteAuth builds a transport.AuthMethod from the remote DB record and
-// the static fallback config. Returns nil on error (anonymous access).
-func resolveRemoteAuth(remote *store.Remote, fallbackAuth config.RemoteAuthConfig, keyPath string) transport.AuthMethod {
-	authCfg := remoteAuthFromRecord(remote, fallbackAuth)
-	auth, err := ResolveAuthWithOrigin(authCfg, keyPath, remote.URL)
-	if err != nil {
-		log.Warn().Err(err).Str("remote", remote.URL).Msg("sync: auth resolution failed, using anonymous")
-		return nil
+// remoteAuthFn returns a transport.AuthMethod for the given remote record.
+// It is constructed by the builder and captures the key path and fallback config.
+type remoteAuthFn func(remote *store.Remote) transport.AuthMethod
+
+// makeRemoteAuthFn builds a remoteAuthFn that resolves auth from a remote
+// record using the given fallback config and key path.
+func makeRemoteAuthFn(fallbackAuth config.RemoteAuthConfig, keyPath string) remoteAuthFn {
+	return func(remote *store.Remote) transport.AuthMethod {
+		authCfg := remoteAuthFromRecord(remote, fallbackAuth)
+		auth, err := resolveAuthWithOrigin(authCfg, keyPath, remote.URL)
+		if err != nil {
+			log.Warn().Err(err).Str("remote", remote.URL).Msg("sync: auth resolution failed, using anonymous")
+			return nil
+		}
+		return auth
 	}
-	return auth
 }
 
 // runSyncLoop pulls from the configured remote on a fixed interval.
 // First sync fires immediately, then every remote.Interval seconds.
 // The interval and auth are re-read from the database on each tick so that
 // changes made via PUT /api/v1/{repo}/origin take effect without a restart.
-func runSyncLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Service, hub *TaskHub, repo, agentBranch, keyPath string, fallbackAuth config.RemoteAuthConfig) {
+func runSyncLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Service, hub *TaskHub, repo, agentBranch string, resolveAuth remoteAuthFn) {
 	defer wg.Done()
 
 	//todo: it's possible the remote will change while the job is still running
@@ -40,7 +46,7 @@ func runSyncLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Service, hu
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
-	auth := resolveRemoteAuth(remote, fallbackAuth, keyPath)
+	auth := resolveAuth(remote)
 
 	lg := log.With().Str("repo", repo).Str("remote", remote.URL).Logger()
 	lg.Info().Dur("interval", interval).Msg("sync loop started")
@@ -79,7 +85,7 @@ func runSyncLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Service, hu
 					interval = d
 					ticker.Reset(interval)
 				}
-				auth = resolveRemoteAuth(fresh, fallbackAuth, keyPath)
+				auth = resolveAuth(fresh)
 			}
 			doSync()
 		}
@@ -89,7 +95,7 @@ func runSyncLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Service, hu
 // runPushLoop pushes the agent branch to origin on a fixed interval.
 // The interval and auth are re-read from the database on each tick so that
 // changes made via PUT /api/v1/{repo}/origin take effect without a restart.
-func runPushLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Service, hub *TaskHub, repo, agentBranch, keyPath string, fallbackAuth config.RemoteAuthConfig) {
+func runPushLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Service, hub *TaskHub, repo, agentBranch string, resolveAuth remoteAuthFn) {
 	defer wg.Done()
 
 	//todo: it's possible the remote will change while the job is still running
@@ -101,7 +107,7 @@ func runPushLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Service, hu
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
-	auth := resolveRemoteAuth(remote, fallbackAuth, keyPath)
+	auth := resolveAuth(remote)
 
 	lg := log.With().Str("repo", repo).Str("remote", remote.URL).Logger()
 	lg.Info().Dur("interval", interval).Msg("push loop started")
@@ -137,7 +143,7 @@ func runPushLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Service, hu
 					interval = d
 					ticker.Reset(interval)
 				}
-				auth = resolveRemoteAuth(fresh, fallbackAuth, keyPath)
+				auth = resolveAuth(fresh)
 			}
 			doPush()
 		}

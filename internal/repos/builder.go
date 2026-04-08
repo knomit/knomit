@@ -228,8 +228,9 @@ func (b *repoBuilder) build() *RepoInstance {
 		currentSvc.SetOnCommit(ri.onCommit)
 
 		syncWg.Add(2)
-		go runSyncLoop(newCtx, &syncWg, currentSvc, hub, name, agentBranch, keyPath, cfg.Remote)
-		go runPushLoop(newCtx, &syncWg, currentSvc, hub, name, agentBranch, keyPath, cfg.Remote)
+		authFn := makeRemoteAuthFn(cfg.Remote, keyPath)
+		go runSyncLoop(newCtx, &syncWg, currentSvc, hub, name, agentBranch, authFn)
+		go runPushLoop(newCtx, &syncWg, currentSvc, hub, name, agentBranch, authFn)
 		return nil
 	}
 
@@ -252,9 +253,10 @@ func (b *repoBuilder) startSyncLoops(ctx context.Context, wg *sync.WaitGroup, hu
 		return
 	}
 
+	authFn := makeRemoteAuthFn(b.cfg.Remote, b.keyPath)
 	wg.Add(2)
-	go runSyncLoop(ctx, wg, b.svc, hub, b.name, b.agentBranch, b.keyPath, b.cfg.Remote)
-	go runPushLoop(ctx, wg, b.svc, hub, b.name, b.agentBranch, b.keyPath, b.cfg.Remote)
+	go runSyncLoop(ctx, wg, b.svc, hub, b.name, b.agentBranch, authFn)
+	go runPushLoop(ctx, wg, b.svc, hub, b.name, b.agentBranch, authFn)
 }
 
 // close releases resources opened so far. Safe to call at any point during
