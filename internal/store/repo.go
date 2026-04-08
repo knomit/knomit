@@ -4,6 +4,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -16,8 +17,13 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/go-git/go-git/v5/plumbing/transport"
 	"github.com/rs/zerolog/log"
-
 )
+
+// ErrEmptyRemote is returned by CloneFrom when the remote repository exists
+// but contains no branches/commits. Knomit's sync model requires the remote
+// to have at least one branch (typically "main") to merge into the agent
+// branch, so an empty remote cannot be connected.
+var ErrEmptyRemote = errors.New("remote repository has no branches")
 
 // initRepoConfig stamps the repo config with the knomit identity and disables
 // GPG signing, which must be done for both fresh and remote-initialized repos.
@@ -135,6 +141,8 @@ func (pw *progressWriter) Write(p []byte) (int, error) {
 }
 
 // CloneFrom clones a remote URL into the Service's storer.
+// Returns ErrEmptyRemote when the remote exists but has no branches yet —
+// knomit's sync model requires at least one branch on the remote.
 func (s *Service) CloneFrom(url string, auth transport.AuthMethod, progress func(string)) error {
 	opts := &gogit.CloneOptions{
 		URL:  url,
@@ -144,9 +152,12 @@ func (s *Service) CloneFrom(url string, auth transport.AuthMethod, progress func
 		opts.Progress = &progressWriter{fn: progress}
 	}
 
-	repo, err := gogit.Clone(s.rh.gits, memfs.New(), opts)
-	if err != nil {
-		return fmt.Errorf("CloneFrom: clone: %w", err)
+	repo, cloneErr := gogit.Clone(s.rh.gits, memfs.New(), opts)
+	if errors.Is(cloneErr, transport.ErrEmptyRemoteRepository) {
+		return ErrEmptyRemote
+	}
+	if cloneErr != nil {
+		return fmt.Errorf("CloneFrom: clone: %w", cloneErr)
 	}
 
 	head, err := repo.Head()

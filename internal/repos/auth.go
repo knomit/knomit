@@ -89,8 +89,8 @@ func remoteAuthFromRecord(remote *store.Remote, fallback config.RemoteAuthConfig
 	return cfg
 }
 
-// ResolveAuthWithOrigin resolves auth, auto-detecting SSH for git@ or ssh:// URLs.
-func ResolveAuthWithOrigin(cfg config.RemoteAuthConfig, defaultKeyPath, originURL string) (transport.AuthMethod, error) {
+// resolveAuthWithOrigin resolves auth, auto-detecting SSH for git@ or ssh:// URLs.
+func resolveAuthWithOrigin(cfg config.RemoteAuthConfig, defaultKeyPath, originURL string) (transport.AuthMethod, error) {
 	if cfg.AuthMethod == "" && originURL != "" {
 		if strings.HasPrefix(originURL, "git@") || strings.HasPrefix(originURL, "ssh://") {
 			cfg.AuthMethod = "ssh"

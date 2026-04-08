@@ -2,6 +2,7 @@ package web
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"path/filepath"
@@ -154,7 +155,7 @@ func handleTestConnectivity(rm *repos.Manager, sm *SessionManager, agentBranch s
 			User:       sess.Auth.User,
 			Password:   sess.Auth.Password,
 		}
-		auth, err := repos.ResolveAuthWithOrigin(authCfg, "", sess.URL)
+		auth, err := rm.ResolveAuth(authCfg, sess.URL)
 		if err != nil {
 			sendEvent(map[string]string{"phase": "error", "message": fmt.Sprintf("auth resolution failed: %v", err)})
 			return
@@ -175,10 +176,15 @@ func handleTestConnectivity(rm *repos.Manager, sm *SessionManager, agentBranch s
 			sendEvent(map[string]string{"phase": "cloning", "progress": msg})
 		}
 
-		if err := remoteSvc.CloneFrom(sess.URL, auth, progressFn); err != nil {
+		cloneErr := remoteSvc.CloneFrom(sess.URL, auth, progressFn)
+		if cloneErr != nil {
 			remoteSvc.Close()
-			log.Warn().Err(err).Str("repo", repo).Str("url", sess.URL).Msg("test connectivity: clone failed")
-			sendEvent(map[string]string{"phase": "error", "message": fmt.Sprintf("clone failed: %v", err)})
+			msg := fmt.Sprintf("clone failed: %v", cloneErr)
+			if errors.Is(cloneErr, store.ErrEmptyRemote) {
+				msg = "Remote repository has no branches. Initialize it with at least one branch (e.g. `main` with an initial commit) before connecting."
+			}
+			log.Warn().Err(cloneErr).Str("repo", repo).Str("url", sess.URL).Msg("test connectivity: clone failed")
+			sendEvent(map[string]string{"phase": "error", "message": msg})
 			sess.mu.Lock()
 			sess.State = StateError
 			sess.mu.Unlock()
