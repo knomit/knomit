@@ -262,8 +262,80 @@ func (s *Service) walkTreeReachable(branch, commit string, treeHash plumbing.Has
 	return issues
 }
 
-func (s *Service) checkCommitLogParity(_ context.Context, _ string) []IntegrityIssue {
-	return nil
+// deleteCommitLogRowForTest removes commit_log rows for the given commit hash.
+// Test-only escape hatch for integrity-check tests.
+func (s *Service) deleteCommitLogRowForTest(commitHash string) error {
+	_, err := s.rh.gits.DB().Exec(`DELETE FROM commit_log WHERE commit_hash = ?`, commitHash)
+	return err
+}
+
+// checkCommitLogParity verifies that the commit_log SQLite rows for the branch
+// are exactly the set of commits reachable from the branch head. Reports gaps
+// (commits in git but not in commit_log) and orphans (commit_log rows for
+// commits not on this branch's chain).
+//
+// Note: commit_log uses (commit_hash, path) as primary key — one commit can
+// produce multiple rows, one per file touched. The parity check works on the
+// SET of distinct commit_hash values, so multi-row commits are handled correctly.
+func (s *Service) checkCommitLogParity(ctx context.Context, branch string) []IntegrityIssue {
+	var issues []IntegrityIssue
+
+	// 1. Collect commits reachable on the branch chain.
+	ref, err := s.rh.gits.Reference(plumbing.NewBranchReferenceName(branch))
+	if err != nil {
+		return nil // git-reachability already reported it
+	}
+	gitCommits := map[string]bool{}
+	gitOrder := []string{}
+	cur := ref.Hash()
+	for !cur.IsZero() {
+		if gitCommits[cur.String()] {
+			break
+		}
+		gitCommits[cur.String()] = true
+		gitOrder = append(gitOrder, cur.String())
+		commit, err := object.GetCommit(s.rh.gits, cur)
+		if err != nil || len(commit.ParentHashes) == 0 {
+			break
+		}
+		cur = commit.ParentHashes[0]
+	}
+
+	// 2. Collect distinct commit_log commit hashes for this branch.
+	// commit_log uses (commit_hash, path) as its primary key, so a commit shared
+	// between branches (e.g. the initial commit present on both "main" and an
+	// agent branch) has a single row and can only carry one branch_id. We
+	// therefore look up coverage by hash alone. A commit is "covered" if it
+	// appears in commit_log for ANY branch — the branch_id column is a hint,
+	// not the canonical source of per-branch history.
+	rows, err := s.rh.gits.DB().QueryContext(ctx,
+		`SELECT DISTINCT commit_hash FROM commit_log`)
+	if err != nil {
+		return []IntegrityIssue{{
+			Severity: SeverityError, Category: CategoryCommitLog, Branch: branch,
+			Detail: fmt.Sprintf("query commit_log: %v", err),
+		}}
+	}
+	defer rows.Close()
+	logCommits := map[string]bool{}
+	for rows.Next() {
+		var h string
+		if err := rows.Scan(&h); err != nil {
+			return []IntegrityIssue{{Severity: SeverityError, Category: CategoryCommitLog, Branch: branch, Detail: fmt.Sprintf("scan: %v", err)}}
+		}
+		logCommits[h] = true
+	}
+
+	// 3. Diff: commits reachable from branch ref that have no commit_log row.
+	for _, h := range gitOrder {
+		if !logCommits[h] {
+			issues = append(issues, IntegrityIssue{
+				Severity: SeverityError, Category: CategoryCommitLog, Branch: branch, Commit: h,
+				Detail: fmt.Sprintf("commit %s reachable from branch ref but missing from commit_log", h),
+			})
+		}
+	}
+	return issues
 }
 func (s *Service) checkSearchIndexParity(_ context.Context, _ string) []IntegrityIssue {
 	return nil

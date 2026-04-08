@@ -86,13 +86,14 @@ func (s *Storer) CommitLogSync(branchName string, iter func() (hash string, entr
 		return nil
 	}
 
-	var branchID sql.NullInt64
-	if branchName != "" {
-		var id int64
-		err := s.db.QueryRow(`SELECT id FROM branches WHERE name = ?`, branchName).Scan(&id)
-		if err == nil {
-			branchID = sql.NullInt64{Int64: id, Valid: true}
-		}
+	// Require branch to exist. Callers must EnsureBranch before this runs.
+	if branchName == "" {
+		return fmt.Errorf("CommitLogSync: branchName is empty")
+	}
+	var branchID int64
+	err := s.db.QueryRow(`SELECT id FROM branches WHERE name = ?`, branchName).Scan(&branchID)
+	if err != nil {
+		return fmt.Errorf("CommitLogSync: branch %q not registered in branches table: %w", branchName, err)
 	}
 
 	for {
@@ -106,9 +107,9 @@ func (s *Storer) CommitLogSync(branchName string, iter func() (hash string, entr
 			return nil
 		}
 
-		// Check if hash already exists (backfill dedup).
+		// Check if hash already exists for this branch (backfill dedup).
 		var cnt int
-		if err := s.db.QueryRow(`SELECT COUNT(*) FROM commit_log WHERE commit_hash = ?`, hash).Scan(&cnt); err != nil {
+		if err := s.db.QueryRow(`SELECT COUNT(*) FROM commit_log WHERE commit_hash = ? AND branch_id = ?`, hash, branchID).Scan(&cnt); err != nil {
 			return fmt.Errorf("CommitLogSync: check hash: %w", err)
 		}
 		if cnt > 0 {

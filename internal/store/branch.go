@@ -220,6 +220,9 @@ func (rh *repoHandler) CreateBranch(ctx context.Context, branch, fromBranch stri
 	if err := rh.gits.SetReference(plumbing.NewHashReference(newRefName, fromHash)); err != nil {
 		return fmt.Errorf("CreateBranch: set ref: %w", err)
 	}
+	if _, err := rh.EnsureBranch(ctx, branch, "refs/heads/"+branch); err != nil {
+		return fmt.Errorf("CreateBranch: ensure branches row for %q: %w", branch, err)
+	}
 	log.Info().Str("branch", branch).Str("from", fromBranch).Msg("created branch")
 	return nil
 }

@@ -56,3 +56,34 @@ func TestVerify_DetectsMissingBlob(t *testing.T) {
 	}
 	require.True(t, found, "expected git-reachability Error naming blob %s, got: %v", res.BlobHash, report.Issues)
 }
+
+// TestVerify_DetectsCommitLogGap asserts that removing a row from commit_log
+// causes Verify to report a commit-log Error naming the missing commit.
+func TestVerify_DetectsCommitLogGap(t *testing.T) {
+	t.Log("Scenario: write two facts, delete second commit's commit_log row, expect commit-log Error")
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	defer svc.Close()
+	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+
+	r1, err := svc.Facts().WriteFact(context.Background(), "agent/test", "kb/x.md", "---\ntype: observation\n---\na", "add x", "test")
+	require.NoError(t, err)
+	r2, err := svc.Facts().WriteFact(context.Background(), "agent/test", "kb/y.md", "---\ntype: observation\n---\nb", "add y", "test")
+	require.NoError(t, err)
+	_ = r1
+
+	require.NoError(t, svc.deleteCommitLogRowForTest(r2.CommitHash))
+
+	report, err := svc.Verify(context.Background(), VerifyOpts{})
+	require.NoError(t, err)
+	require.False(t, report.IsClean())
+	found := false
+	for _, i := range report.Issues {
+		if i.Category == CategoryCommitLog && i.Severity == SeverityError && strings.Contains(i.Detail, r2.CommitHash) {
+			found = true
+			break
+		}
+	}
+	require.True(t, found, "expected commit-log Error naming commit %s, got: %v", r2.CommitHash, report.Issues)
+}

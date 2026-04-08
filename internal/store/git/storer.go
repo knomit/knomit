@@ -63,6 +63,10 @@ func (s *Storer) Close() error {
 	return nil
 }
 
+// DB returns the underlying SQL DB. Used by integrity tests and the verify tool
+// for read-only schema introspection.
+func (s *Storer) DB() *sql.DB { return s.db }
+
 // conn returns the raw *sql.DB as an execer. Used by go-git interface methods
 // which don't accept context. For context-aware callers, use connCtx instead.
 func (s *Storer) conn() execer {

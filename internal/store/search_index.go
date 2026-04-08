@@ -426,19 +426,19 @@ func (si *searchIndex) rebuildFacts(ctx context.Context, branch, head string, pr
 	n := int(affected)
 
 	// Populate branch_facts: link each fact to this branch with its commit_hash.
-	// Prefer commit_log entries scoped to this branch; fall back to legacy rows
-	// with NULL branch_id (written before the branch existed in the branches table).
+	// All commit_log rows must have a valid branch_id (guaranteed by EnsureBranch
+	// running before populateCommitLog in every repo init path).
 	if _, err := conn(ctx, si.rh.db).ExecContext(ctx, `
 		INSERT OR REPLACE INTO branch_facts (branch_id, path, fact_id, commit_hash)
 		SELECT ?, f.path, f.id, COALESCE(cl.commit_hash, '')
 		FROM facts f
 		JOIN _rebuild_entries e ON e.path = f.path AND e.blob_hash = f.blob_hash
 		LEFT JOIN (
-			SELECT path, commit_hash, ROW_NUMBER() OVER (PARTITION BY path ORDER BY (branch_id = ?) DESC, committed_at DESC) AS rn
+			SELECT path, commit_hash, ROW_NUMBER() OVER (PARTITION BY path ORDER BY committed_at DESC) AS rn
 			FROM commit_log
-			WHERE branch_id = ? OR branch_id IS NULL
+			WHERE branch_id = ?
 		) cl ON cl.path = f.path AND cl.rn = 1
-	`, branchID, branchID, branchID); err != nil {
+	`, branchID, branchID); err != nil {
 		return 0, fmt.Errorf("rebuildFacts: populate branch_facts: %w", err)
 	}
 

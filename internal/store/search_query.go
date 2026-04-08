@@ -175,18 +175,10 @@ func (si *searchIndex) LastCommitForPath(ctx context.Context, branch, path strin
 		return "", false
 	}
 	var hash, action string
-	// Try branch-scoped query first (entries with branch_id set).
 	err = conn(ctx, si.rh.db).QueryRowContext(ctx,
 		`SELECT commit_hash, action FROM commit_log WHERE branch_id = ? AND path = ? ORDER BY rowid DESC LIMIT 1`,
 		branchID, path,
 	).Scan(&hash, &action)
-	if err != nil {
-		// Fallback: legacy rows written before branch_id scoping was introduced.
-		err = conn(ctx, si.rh.db).QueryRowContext(ctx,
-			`SELECT commit_hash, action FROM commit_log WHERE branch_id IS NULL AND path = ? ORDER BY rowid DESC LIMIT 1`,
-			path,
-		).Scan(&hash, &action)
-	}
 	if err != nil || hash == "" || action == "deleted" {
 		return "", false
 	}
