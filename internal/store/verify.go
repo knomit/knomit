@@ -19,6 +19,8 @@ import (
 	"strings"
 	"time"
 
+	"knomit/internal/fact"
+
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/filemode"
 	"github.com/go-git/go-git/v5/plumbing/object"
@@ -630,8 +632,39 @@ func (s *Service) checkBranchesTable(ctx context.Context, gitBranches []string) 
 
 	return issues
 }
-func (s *Service) checkFactFormat(_ context.Context, _ string) []IntegrityIssue {
-	return nil
+// checkFactFormat parses every .md file under kb/ at the branch's HEAD tree
+// via fact.ParseFact. Files that fail to parse produce Warning-severity
+// issues — they represent data problems (bad YAML, missing title), not
+// structural corruption. Only runs when opts.Deep is true.
+func (s *Service) checkFactFormat(ctx context.Context, branch string) []IntegrityIssue {
+	var issues []IntegrityIssue
+
+	treePaths, _, err := s.rh.ListAllWithHash(ctx, branch)
+	if err != nil {
+		return nil // git-reachability reports this.
+	}
+
+	for _, p := range treePaths {
+		if !strings.HasPrefix(p, "kb/") || !strings.HasSuffix(p, ".md") {
+			continue
+		}
+		content, err := s.rh.readFile(ctx, branch, p)
+		if err != nil {
+			issues = append(issues, IntegrityIssue{
+				Severity: SeverityWarning, Category: CategoryFactFormat, Branch: branch, Path: p,
+				Detail: fmt.Sprintf("read failed: %v", err),
+			})
+			continue
+		}
+		if _, err := fact.ParseFact(p, content); err != nil {
+			issues = append(issues, IntegrityIssue{
+				Severity: SeverityWarning, Category: CategoryFactFormat, Branch: branch, Path: p,
+				Detail: fmt.Sprintf("parse failed: %v", err),
+			})
+		}
+	}
+
+	return issues
 }
 
 // deleteGraphFactNodeForTest removes a Fact node from the cypher graph for
