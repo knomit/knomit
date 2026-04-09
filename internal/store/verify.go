@@ -471,6 +471,7 @@ func (s *Service) checkFactsCoherence(ctx context.Context, branch string) []Inte
 
 	return issues
 }
+
 // deleteEmbeddingForTest removes a facts_vec row for the given facts.id.
 // Test-only escape hatch.
 func (s *Service) deleteEmbeddingForTest(factID int64) error {
@@ -507,10 +508,10 @@ func (s *Service) checkEmbeddingsCoverage(ctx context.Context) []IntegrityIssue 
 		var id int64
 		var path string
 		if err := rows.Scan(&id, &path); err != nil {
-			return []IntegrityIssue{{
+			return append(issues, IntegrityIssue{
 				Severity: SeverityError, Category: CategoryEmbeddingsCoverage,
 				Detail: fmt.Sprintf("scan facts row: %v", err),
-			}}
+			})
 		}
 		issues = append(issues, IntegrityIssue{
 			Severity: SeverityError, Category: CategoryEmbeddingsCoverage, Path: path,
@@ -518,10 +519,10 @@ func (s *Service) checkEmbeddingsCoverage(ctx context.Context) []IntegrityIssue 
 		})
 	}
 	if err := rows.Err(); err != nil {
-		return []IntegrityIssue{{
+		return append(issues, IntegrityIssue{
 			Severity: SeverityError, Category: CategoryEmbeddingsCoverage,
 			Detail: fmt.Sprintf("iterate facts: %v", err),
-		}}
+		})
 	}
 
 	// Direction 2: facts_vec rows without facts rows (trigger regression detection).
