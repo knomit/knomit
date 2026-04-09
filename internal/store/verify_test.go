@@ -310,6 +310,32 @@ func TestVerify_DeepDetectsBadYAML(t *testing.T) {
 	}
 }
 
+// TestVerify_SoftDeletedGraphNodeIsClean asserts that the normal production
+// delete path (WriteFact + DeleteFact) leaves the repo integrity-clean.
+// DeleteFact triggers graphDeleteFact which soft-deletes the Fact node
+// (sets f.deleted = true) while leaving the node in place — this is
+// intentional lineage preservation. The graph-coherence check must NOT
+// flag such historical nodes, since by design they have no facts row.
+func TestVerify_SoftDeletedGraphNodeIsClean(t *testing.T) {
+	t.Log("Scenario: write fact, delete via production DeleteFact, verify stays clean (graph node soft-deleted)")
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	defer svc.Close()
+	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+
+	_, err = svc.Facts().WriteFact(context.Background(), "agent/test", "kb/x.md", "---\ntype: observation\n---\n# Test Fact\n\nbody", "add x", "test")
+	require.NoError(t, err)
+
+	_, err = svc.Facts().DeleteFact(context.Background(), "agent/test", "kb/x.md", "retract x")
+	require.NoError(t, err)
+
+	report, err := svc.Verify(context.Background(), VerifyOpts{Deep: true})
+	require.NoError(t, err)
+	require.True(t, report.IsClean(),
+		"post-delete repo must be clean; soft-deleted graph node must not be flagged; issues: %v", report.Issues)
+}
+
 // TestVerify_DetectsMissingGraphFactNode asserts that when a facts row exists
 // but its corresponding graphqlite Fact node is missing, Verify reports a
 // graph-coherence Error naming the path.

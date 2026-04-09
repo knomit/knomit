@@ -679,15 +679,31 @@ func (s *Service) deleteGraphFactNodeForTest(path, blobHash string) error {
 }
 
 // checkGraphCoherence verifies bidirectional parity between the facts
-// SQLite table and the graphqlite Fact nodes. Every facts row must have a
-// corresponding Fact node keyed by (path, blob_hash), and vice versa.
+// SQLite table and the LIVE graphqlite Fact nodes (those with
+// deleted != true). Every facts row must have a live Fact node keyed by
+// (path, blob_hash), and every live Fact node must have a facts row.
+//
+// The graphqlite model is intentionally a permanent temporal graph:
+//   - Soft-deleted Fact nodes (deleted = true) persist forever after
+//     graphDeleteFact runs, preserving lineage for DERIVED_FROM walks.
+//   - FactVersion nodes (one per fact-at-commit) also persist forever as
+//     the historical snapshot layer.
+//
+// This check explicitly scopes itself to LIVE Fact nodes. Soft-deleted
+// nodes and FactVersion nodes are out of scope.
 //
 // This check is global (not branch-scoped) because facts and graph Fact
 // nodes have no branch dimension — both are deduplicated by (path, blob_hash)
 // via the COW model.
 //
-// TODO(verify): extend to Entity, Domain, OntologyNode parity once the basic
-// Fact-node check is stable.
+// TODO(verify): extend to FactVersion node parity against commit history.
+// Every (path, commit_hash) pair where a fact was visible on some branch
+// should have a matching FactVersion node. Requires walking commit history
+// per branch and correlating, which is significantly more expensive than
+// the current check.
+//
+// TODO(verify): extend to Entity, Domain, OntologyNode parity once the
+// basic Fact-node check is stable.
 func (s *Service) checkGraphCoherence(ctx context.Context) []IntegrityIssue {
 	var issues []IntegrityIssue
 
@@ -718,40 +734,36 @@ func (s *Service) checkGraphCoherence(ctx context.Context) []IntegrityIssue {
 		}}
 	}
 
-	// 2. Collect all Fact nodes from the graph via EAV tables.
-	// This uses the same direct-table pattern as ClusterFacts and
-	// refSummariesByEdgeSource — more reliable than json_each(cypher(...))
-	// for bulk reads, and avoids JSON array parsing entirely.
-	graphRows, err := s.rh.gits.DB().QueryContext(ctx, `
-		SELECT
-			path_prop.value AS path,
-			blob_prop.value AS blob_hash
-		FROM node_labels nl
-		JOIN node_props_text path_prop
-			ON path_prop.node_id = nl.node_id
-			AND path_prop.key_id = (SELECT id FROM property_keys WHERE key = 'path' LIMIT 1)
-		JOIN node_props_text blob_prop
-			ON blob_prop.node_id = nl.node_id
-			AND blob_prop.key_id = (SELECT id FROM property_keys WHERE key = 'blob_hash' LIMIT 1)
-		WHERE nl.label = ?
-	`, NodeFact)
+	// 2. Collect LIVE Fact nodes via cypher + json_each. We use cypher here
+	// rather than the direct-EAV pattern because the `deleted` property is
+	// stored as a JSON boolean and filtering it reliably in raw SQL is
+	// fiddly (see the comment at search_graph.go around line 697 and the
+	// isDeletedVal helper). Cypher handles the comparison natively.
+	q := fmt.Sprintf(
+		`SELECT json_extract(value, '$.path'), json_extract(value, '$.blob_hash') `+
+			`FROM json_each(cypher('MATCH (f:%s) WHERE NOT f.deleted = true RETURN f.path AS path, f.blob_hash AS blob_hash'))`,
+		NodeFact)
+	graphRows, err := s.rh.gits.DB().QueryContext(ctx, q)
 	if err != nil {
 		return []IntegrityIssue{{
 			Severity: SeverityError, Category: CategoryGraphCoherence,
-			Detail: fmt.Sprintf("query graph Fact nodes: %v", err),
+			Detail: fmt.Sprintf("query live graph Fact nodes: %v", err),
 		}}
 	}
 	defer graphRows.Close()
 	graphSet := make(map[string]bool)
 	for graphRows.Next() {
-		var path, blob string
+		var path, blob sql.NullString
 		if err := graphRows.Scan(&path, &blob); err != nil {
 			return []IntegrityIssue{{
 				Severity: SeverityError, Category: CategoryGraphCoherence,
 				Detail: fmt.Sprintf("scan graph Fact node: %v", err),
 			}}
 		}
-		graphSet[path+"|"+blob] = true
+		if !path.Valid || !blob.Valid {
+			continue
+		}
+		graphSet[path.String+"|"+blob.String] = true
 	}
 	if err := graphRows.Err(); err != nil {
 		return []IntegrityIssue{{
@@ -760,17 +772,25 @@ func (s *Service) checkGraphCoherence(ctx context.Context) []IntegrityIssue {
 		}}
 	}
 
-	// 3. Direction 1: facts rows without graph Fact nodes.
+	// 3. Direction 1: facts row exists but no live Fact node.
+	// This fires if the facts-row was inserted but graphSyncFact failed
+	// (logged as a warning in search_crud.go) OR if the Fact node was
+	// incorrectly soft-deleted while the facts row is still live.
 	for key, path := range sqlSet {
 		if !graphSet[key] {
 			issues = append(issues, IntegrityIssue{
 				Severity: SeverityError, Category: CategoryGraphCoherence, Path: path,
-				Detail: fmt.Sprintf("facts row %s has no graph Fact node", key),
+				Detail: fmt.Sprintf("facts row %s has no live graph Fact node (missing or soft-deleted)", key),
 			})
 		}
 	}
 
-	// 4. Direction 2: graph Fact nodes without facts rows.
+	// 4. Direction 2: live Fact node exists but no facts row.
+	// Historical soft-deleted nodes are already filtered out by the cypher
+	// query above, so hitting this branch means a Fact node still has
+	// deleted = false but the corresponding facts row is gone — the delete
+	// path ran partially (facts DELETE succeeded, graphDeleteFact soft-delete
+	// did not run or was reverted).
 	for key := range graphSet {
 		if _, ok := sqlSet[key]; !ok {
 			parts := strings.SplitN(key, "|", 2)
@@ -780,7 +800,7 @@ func (s *Service) checkGraphCoherence(ctx context.Context) []IntegrityIssue {
 			}
 			issues = append(issues, IntegrityIssue{
 				Severity: SeverityError, Category: CategoryGraphCoherence, Path: path,
-				Detail: fmt.Sprintf("graph Fact node %s has no facts row (orphan)", key),
+				Detail: fmt.Sprintf("live graph Fact node %s has no facts row (delete path left node live)", key),
 			})
 		}
 	}
