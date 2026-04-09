@@ -170,12 +170,20 @@ func (r *RepoHandle) VerifyWith(opts store.VerifyOpts) store.IntegrityReport {
 	return report
 }
 
-// BranchHandle is a per-branch DSL handle. Mutations will be added in
-// Task 2.4; this task only establishes the type and Name accessor.
+// BranchHandle is a per-branch DSL handle. Mutations (Write, Update,
+// Delete) auto-commit and return a Snapshot pinning the resulting commit.
+// Every mutation also runs AssertIntegrity on the repo unless the parent
+// Storyboard has AutoVerify disabled.
 type BranchHandle struct {
-	repo *RepoHandle
-	name string
+	repo      *RepoHandle
+	name      string
+	snapshots []*Snapshot
 }
 
 // Name returns the branch's git ref name (without the refs/heads/ prefix).
 func (b *BranchHandle) Name() string { return b.name }
+
+// SnapshotsForTest exposes the snapshot stack for unit tests within the
+// testenv package. Do not use from scenario tests — use At/AtIndex/AtName
+// (Task 2.7) or the return values of mutation methods instead.
+func (b *BranchHandle) SnapshotsForTest() []*Snapshot { return b.snapshots }
