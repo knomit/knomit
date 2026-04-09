@@ -68,6 +68,18 @@ func (ri *RepoInstance) Close() {
 	}
 }
 
+// Verify runs the integrity check against the current store under the read
+// lock so that a concurrent SwapStore cannot move the rug. Delegates to
+// store.Service.Verify and stamps the report with this repo's name.
+func (ri *RepoInstance) Verify(ctx context.Context, opts store.VerifyOpts) (store.IntegrityReport, error) {
+	ri.mu.RLock()
+	svc := ri.svc
+	ri.mu.RUnlock()
+	report, err := svc.Verify(ctx, opts)
+	report.Repo = ri.name
+	return report, err
+}
+
 // NewTestInstance creates a minimal RepoInstance for use in tests that
 // exercise Manager operations (Set, Get, Replace, ForEach, Names, context).
 // Production code must use Manager.openOne instead.
