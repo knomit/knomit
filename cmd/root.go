@@ -9,5 +9,6 @@ func RootCmd() *cobra.Command {
 	root.AddCommand(initCmd())
 	root.AddCommand(rebuildCmd())
 	root.AddCommand(resetCmd())
+	root.AddCommand(verifyCmd())
 	return root
 }
