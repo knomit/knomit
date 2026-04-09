@@ -139,6 +139,7 @@ func TestVerify_DetectsBranchFactsBlobMismatch(t *testing.T) {
 
 	report, err := svc.Verify(context.Background(), VerifyOpts{})
 	require.NoError(t, err)
+	require.False(t, report.IsClean())
 	found := false
 	for _, i := range report.Issues {
 		if i.Category == CategoryFactsCoherence && i.Severity == SeverityError && i.Path == "kb/x.md" {

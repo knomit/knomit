@@ -317,6 +317,12 @@ func (s *Service) checkCommitLogParity(ctx context.Context, branch string) []Int
 		}
 		logCommits[h] = true
 	}
+	if err := rows.Err(); err != nil {
+		return []IntegrityIssue{{
+			Severity: SeverityError, Category: CategoryCommitLog, Branch: branch,
+			Detail: fmt.Sprintf("iterate commit_log: %v", err),
+		}}
+	}
 
 	// 3. Diff: commits in git not in log.
 	for h := range gitCommits {
@@ -338,6 +344,7 @@ func (s *Service) checkCommitLogParity(ctx context.Context, branch string) []Int
 	}
 	return issues
 }
+
 // deleteBranchFactsRowForTest removes a branch_facts row for (branch, path).
 // Test-only escape hatch for integrity-check tests.
 func (s *Service) deleteBranchFactsRowForTest(branch, path string) error {
@@ -409,6 +416,12 @@ func (s *Service) checkFactsCoherence(ctx context.Context, branch string) []Inte
 			}}
 		}
 		branchFactsMap[bfPath] = row
+	}
+	if err := rows.Err(); err != nil {
+		return []IntegrityIssue{{
+			Severity: SeverityError, Category: CategoryFactsCoherence, Branch: branch,
+			Detail: fmt.Sprintf("iterate branch_facts: %v", err),
+		}}
 	}
 
 	// 1. Every tree file has a branch_facts row with correct blob_hash.
