@@ -272,11 +272,7 @@ func (s *Service) deleteCommitLogRowForTest(commitHash string) error {
 // checkCommitLogParity verifies that the commit_log SQLite rows for the branch
 // are exactly the set of commits reachable from the branch head. Reports gaps
 // (commits in git but not in commit_log) and orphans (commit_log rows for
-// commits not on this branch's chain).
-//
-// Note: commit_log uses (commit_hash, path) as primary key — one commit can
-// produce multiple rows, one per file touched. The parity check works on the
-// SET of distinct commit_hash values, so multi-row commits are handled correctly.
+// commits not on this branch's chain, via branch_commits).
 func (s *Service) checkCommitLogParity(ctx context.Context, branch string) []IntegrityIssue {
 	var issues []IntegrityIssue
 
@@ -286,14 +282,12 @@ func (s *Service) checkCommitLogParity(ctx context.Context, branch string) []Int
 		return nil // git-reachability already reported it
 	}
 	gitCommits := map[string]bool{}
-	gitOrder := []string{}
 	cur := ref.Hash()
 	for !cur.IsZero() {
 		if gitCommits[cur.String()] {
 			break
 		}
 		gitCommits[cur.String()] = true
-		gitOrder = append(gitOrder, cur.String())
 		commit, err := object.GetCommit(s.rh.gits, cur)
 		if err != nil || len(commit.ParentHashes) == 0 {
 			break
@@ -301,15 +295,12 @@ func (s *Service) checkCommitLogParity(ctx context.Context, branch string) []Int
 		cur = commit.ParentHashes[0]
 	}
 
-	// 2. Collect distinct commit_log commit hashes for this branch.
-	// commit_log uses (commit_hash, path) as its primary key, so a commit shared
-	// between branches (e.g. the initial commit present on both "main" and an
-	// agent branch) has a single row and can only carry one branch_id. We
-	// therefore look up coverage by hash alone. A commit is "covered" if it
-	// appears in commit_log for ANY branch — the branch_id column is a hint,
-	// not the canonical source of per-branch history.
+	// 2. Collect distinct commit_log commit hashes visible on this branch.
 	rows, err := s.rh.gits.DB().QueryContext(ctx,
-		`SELECT DISTINCT commit_hash FROM commit_log`)
+		`SELECT DISTINCT cl.commit_hash FROM commit_log cl
+		 JOIN branch_commits bc ON bc.commit_hash = cl.commit_hash
+		 JOIN branches b ON b.id = bc.branch_id
+		 WHERE b.name = ?`, branch)
 	if err != nil {
 		return []IntegrityIssue{{
 			Severity: SeverityError, Category: CategoryCommitLog, Branch: branch,
@@ -326,12 +317,21 @@ func (s *Service) checkCommitLogParity(ctx context.Context, branch string) []Int
 		logCommits[h] = true
 	}
 
-	// 3. Diff: commits reachable from branch ref that have no commit_log row.
-	for _, h := range gitOrder {
+	// 3. Diff: commits in git not in log.
+	for h := range gitCommits {
 		if !logCommits[h] {
 			issues = append(issues, IntegrityIssue{
 				Severity: SeverityError, Category: CategoryCommitLog, Branch: branch, Commit: h,
 				Detail: fmt.Sprintf("commit %s reachable from branch ref but missing from commit_log", h),
+			})
+		}
+	}
+	// 4. Diff: commits claimed visible on this branch but not reachable from its ref.
+	for h := range logCommits {
+		if !gitCommits[h] {
+			issues = append(issues, IntegrityIssue{
+				Severity: SeverityError, Category: CategoryCommitLog, Branch: branch, Commit: h,
+				Detail: fmt.Sprintf("branch_commits row %s not reachable from branch ref", h),
 			})
 		}
 	}

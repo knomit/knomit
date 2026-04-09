@@ -107,18 +107,25 @@ func (s *Storer) CommitLogSync(branchName string, iter func() (hash string, entr
 			return nil
 		}
 
-		// Check if hash already exists for this branch (backfill dedup).
+		// Dedup: is this commit already recorded as visible on this branch?
 		var cnt int
-		if err := s.db.QueryRow(`SELECT COUNT(*) FROM commit_log WHERE commit_hash = ? AND branch_id = ?`, hash, branchID).Scan(&cnt); err != nil {
-			return fmt.Errorf("CommitLogSync: check hash: %w", err)
+		if err := s.db.QueryRow(
+			`SELECT COUNT(*) FROM branch_commits WHERE branch_id = ? AND commit_hash = ?`,
+			branchID, hash).Scan(&cnt); err != nil {
+			return fmt.Errorf("CommitLogSync: dedup check: %w", err)
 		}
 		if cnt > 0 {
 			s.commitLog.Store(true)
 			return nil
 		}
 
-		// Insert all entries for this hash in a transaction.
 		if len(entries) == 0 {
+			// Still record visibility even if no path entries (edge case).
+			if _, err := s.db.Exec(
+				`INSERT OR IGNORE INTO branch_commits (branch_id, commit_hash) VALUES (?, ?)`,
+				branchID, hash); err != nil {
+				return fmt.Errorf("CommitLogSync: record visibility: %w", err)
+			}
 			continue
 		}
 
@@ -127,22 +134,31 @@ func (s *Storer) CommitLogSync(branchName string, iter func() (hash string, entr
 			return fmt.Errorf("CommitLogSync: begin tx: %w", err)
 		}
 
-		stmt, err := tx.Prepare(`INSERT OR IGNORE INTO commit_log (commit_hash, path, message, operation, author_email, action, committed_at, branch_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+		stmt, err := tx.Prepare(`INSERT OR IGNORE INTO commit_log (commit_hash, path, message, operation, author_email, action, committed_at) VALUES (?, ?, ?, ?, ?, ?, ?)`)
 		if err != nil {
 			tx.Rollback()
-			return fmt.Errorf("CommitLogSync: prepare: %w", err)
+			return fmt.Errorf("CommitLogSync: prepare commit_log: %w", err)
 		}
 
 		for _, e := range entries {
-			if _, err := stmt.Exec(e.Hash, e.Path, e.Message, e.Operation, e.AuthorEmail, e.Action, e.CommittedAt, branchID); err != nil {
+			if _, err := stmt.Exec(e.Hash, e.Path, e.Message, e.Operation, e.AuthorEmail, e.Action, e.CommittedAt); err != nil {
 				stmt.Close()
 				tx.Rollback()
-				return fmt.Errorf("CommitLogSync: insert: %w", err)
+				return fmt.Errorf("CommitLogSync: insert commit_log: %w", err)
 			}
 		}
 		stmt.Close()
+
+		// Record visibility for this commit on this branch.
+		if _, err := tx.Exec(
+			`INSERT OR IGNORE INTO branch_commits (branch_id, commit_hash) VALUES (?, ?)`,
+			branchID, hash); err != nil {
+			tx.Rollback()
+			return fmt.Errorf("CommitLogSync: insert branch_commits: %w", err)
+		}
+
 		if err := tx.Commit(); err != nil {
-			return fmt.Errorf("CommitLogSync: commit: %w", err)
+			return fmt.Errorf("CommitLogSync: commit tx: %w", err)
 		}
 		s.commitLog.Store(true)
 	}
@@ -152,8 +168,8 @@ func (s *Storer) CommitLogSync(branchName string, iter func() (hash string, entr
 // Returns rows, hasMore, error. Fetches limit+1 rows and returns limit.
 // branchID == 0 means no branch filter (not used in normal operation).
 func (s *Storer) CommitLogQuery(branchID int64, path string, cursor CommitLogCursor, limit int) ([]CommitLogRow, bool, error) {
-	pathCond, pathArgs := commitLogPathCond(path)
-	branchCond, branchArgs := commitLogBranchCond(branchID)
+	pathCond, pathArgs := commitLogPathCondPrefixed(path, "cl.")
+	branchJoin, branchWhere, branchArgs := branchCommitsJoin(branchID)
 
 	lookupTS := func(hash string) (int64, error) {
 		var ts int64
@@ -214,10 +230,11 @@ func (s *Storer) CommitLogQuery(branchID int64, path string, cursor CommitLogCur
 	query := `
 SELECT commit_hash, ts, message, operation
 FROM (
-    SELECT commit_hash, MIN(committed_at) AS ts, MIN(message) AS message, MIN(operation) AS operation, MAX(rowid) AS max_rid
-    FROM commit_log
-    WHERE ` + branchCond + ` AND ` + pathCond + `
-    GROUP BY commit_hash
+    SELECT cl.commit_hash, MIN(cl.committed_at) AS ts, MIN(cl.message) AS message, MIN(cl.operation) AS operation, MAX(cl.rowid) AS max_rid
+    FROM commit_log cl
+    ` + branchJoin + `
+    WHERE ` + branchWhere + ` AND ` + pathCond + `
+    GROUP BY cl.commit_hash
 )
 WHERE ` + cursorCond + `
 ORDER BY ts DESC, max_rid DESC
@@ -296,19 +313,18 @@ func (s *Storer) CommitLogFileCounts(hashes []string) (map[string]map[string]int
 // CommitLogActivity returns aggregate activity metrics for the given path,
 // scoped to branchID (0 = no filter).
 func (s *Storer) CommitLogActivity(branchID int64, path string, cutoff7, cutoff30, cutoff90 int64) (CommitLogActivityResult, error) {
-	branchCond, branchArgs := commitLogBranchCond(branchID)
-	pathCond, pathArgs := commitLogPathCond(path)
-	filter := branchCond + " AND " + pathCond
+	branchJoin, branchWhere, branchArgs := branchCommitsJoin(branchID)
+	pathCond, pathArgs := commitLogPathCondPrefixed(path, "cl.")
 	args := append([]any{cutoff7, cutoff30, cutoff90}, branchArgs...)
 	args = append(args, pathArgs...)
 
 	q := fmt.Sprintf(`
-		SELECT MAX(committed_at),
-		       COUNT(DISTINCT commit_hash),
-		       COUNT(DISTINCT CASE WHEN committed_at > ? THEN commit_hash END),
-		       COUNT(DISTINCT CASE WHEN committed_at > ? THEN commit_hash END),
-		       COUNT(DISTINCT CASE WHEN committed_at > ? THEN commit_hash END)
-		FROM commit_log WHERE %s`, filter)
+		SELECT MAX(cl.committed_at),
+		       COUNT(DISTINCT cl.commit_hash),
+		       COUNT(DISTINCT CASE WHEN cl.committed_at > ? THEN cl.commit_hash END),
+		       COUNT(DISTINCT CASE WHEN cl.committed_at > ? THEN cl.commit_hash END),
+		       COUNT(DISTINCT CASE WHEN cl.committed_at > ? THEN cl.commit_hash END)
+		FROM commit_log cl %s WHERE %s AND %s`, branchJoin, branchWhere, pathCond)
 
 	var r CommitLogActivityResult
 	if err := s.db.QueryRow(q, args...).Scan(&r.LastCommit, &r.Total, &r.Changes7d, &r.Changes30d, &r.Changes90d); err != nil {
@@ -320,15 +336,15 @@ func (s *Storer) CommitLogActivity(branchID int64, path string, cutoff7, cutoff3
 // CommitLogWalkChanged returns file paths + timestamps ordered by most recently changed,
 // excluding paths in seen, up to limit results, scoped to branchID (0 = no filter).
 func (s *Storer) CommitLogWalkChanged(branchID int64, prefix string, seen map[string]bool, limit int) ([]CommitLogFileRecency, error) {
-	branchCond, branchArgs := commitLogBranchCond(branchID)
+	branchJoin, branchWhere, branchArgs := branchCommitsJoin(branchID)
 	var whereParts []string
 	var args []any
 
-	whereParts = append(whereParts, branchCond)
+	whereParts = append(whereParts, branchWhere)
 	args = append(args, branchArgs...)
 
 	if prefix != "" {
-		whereParts = append(whereParts, "path GLOB ?")
+		whereParts = append(whereParts, "cl.path GLOB ?")
 		args = append(args, prefix+"/*")
 	}
 	if len(seen) > 0 {
@@ -337,18 +353,19 @@ func (s *Storer) CommitLogWalkChanged(branchID int64, prefix string, seen map[st
 			placeholders = append(placeholders, "?")
 			args = append(args, p)
 		}
-		whereParts = append(whereParts, "path NOT IN ("+strings.Join(placeholders, ",")+")")
+		whereParts = append(whereParts, "cl.path NOT IN ("+strings.Join(placeholders, ",")+")")
 	}
 
 	where := strings.Join(whereParts, " AND ")
 
 	q := fmt.Sprintf(`
-		SELECT path, MAX(committed_at) AS ts, MAX(rowid) AS last_rowid
-		FROM commit_log
+		SELECT cl.path, MAX(cl.committed_at) AS ts, MAX(cl.rowid) AS last_rowid
+		FROM commit_log cl
+		%s
 		WHERE %s
-		GROUP BY path
+		GROUP BY cl.path
 		ORDER BY ts DESC, last_rowid DESC
-		LIMIT ?`, where)
+		LIMIT ?`, branchJoin, where)
 	args = append(args, limit)
 
 	rows, err := s.db.Query(q, args...)
@@ -378,20 +395,31 @@ func (s *Storer) CommitLogWalkChanged(branchID int64, prefix string, seen map[st
 // commitLogPathCond returns the SQL WHERE fragment and bind args for filtering
 // commit_log rows by path. Empty path matches all rows.
 func commitLogPathCond(path string) (cond string, args []any) {
+	return commitLogPathCondPrefixed(path, "")
+}
+
+// commitLogPathCondPrefixed is like commitLogPathCond but prepends the given
+// table alias (e.g. "cl.") to the path column. Used when the commit_log table
+// is joined with branch_commits and path must be disambiguated.
+func commitLogPathCondPrefixed(path, prefix string) (cond string, args []any) {
+	col := prefix + "path"
 	if path == "" {
 		return "1=1", nil
 	}
 	if strings.HasSuffix(path, ".md") {
-		return "path = ?", []any{path}
+		return col + " = ?", []any{path}
 	}
-	return "path GLOB ?", []any{path + "/*"}
+	return col + " GLOB ?", []any{path + "/*"}
 }
 
-// commitLogBranchCond returns the SQL WHERE fragment and bind args for filtering
-// commit_log rows by branch_id. branchID == 0 means no filter.
-func commitLogBranchCond(branchID int64) (cond string, args []any) {
+// branchCommitsJoin returns a SQL JOIN fragment scoping commit_log (aliased as
+// cl) to a branch via branch_commits. If branchID == 0, returns an empty JOIN
+// and a tautology WHERE predicate so callers can unconditionally concatenate.
+func branchCommitsJoin(branchID int64) (join, where string, args []any) {
 	if branchID == 0 {
-		return "1=1", nil
+		return "", "1=1", nil
 	}
-	return "branch_id = ?", []any{branchID}
+	return "JOIN branch_commits bc ON bc.commit_hash = cl.commit_hash",
+		"bc.branch_id = ?",
+		[]any{branchID}
 }

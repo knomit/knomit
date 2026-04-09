@@ -220,8 +220,19 @@ func (rh *repoHandler) CreateBranch(ctx context.Context, branch, fromBranch stri
 	if err := rh.gits.SetReference(plumbing.NewHashReference(newRefName, fromHash)); err != nil {
 		return fmt.Errorf("CreateBranch: set ref: %w", err)
 	}
-	if _, err := rh.EnsureBranch(ctx, branch, "refs/heads/"+branch); err != nil {
+	newBranchID, err := rh.EnsureBranch(ctx, branch, "refs/heads/"+branch)
+	if err != nil {
 		return fmt.Errorf("CreateBranch: ensure branches row for %q: %w", branch, err)
+	}
+	// Clone parent branch's visibility: every commit visible on fromBranch is
+	// now also visible on the new branch. This matches git's "branch contains
+	// all parent commits" semantics without copying commit_log rows.
+	if _, err := conn(ctx, rh.db).ExecContext(ctx, `
+		INSERT OR IGNORE INTO branch_commits (branch_id, commit_hash)
+		SELECT ?, commit_hash FROM branch_commits
+		WHERE branch_id = (SELECT id FROM branches WHERE name = ?)`,
+		newBranchID, fromBranch); err != nil {
+		return fmt.Errorf("CreateBranch: clone branch_commits from %q: %w", fromBranch, err)
 	}
 	log.Info().Str("branch", branch).Str("from", fromBranch).Msg("created branch")
 	return nil
