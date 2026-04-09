@@ -20,3 +20,10 @@ type Snapshot struct {
 
 // CommitHash returns the git commit hash for this snapshot.
 func (s *Snapshot) CommitHash() string { return s.Commit }
+
+// Fact returns a FactHandle for path resolved at this snapshot's commit.
+// The handle carries state (Exists / Missing / Broken / External) so
+// callers can branch on it explicitly via MustExist / MustNotExist etc.
+func (s *Snapshot) Fact(path string) *FactHandle {
+	return resolveFactAtCommit(s.Branch.repo.sb.t, s.Branch, s.Commit, path)
+}
