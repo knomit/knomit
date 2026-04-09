@@ -87,3 +87,64 @@ func TestVerify_DetectsCommitLogGap(t *testing.T) {
 	}
 	require.True(t, found, "expected commit-log Error naming commit %s, got: %v", r2.CommitHash, report.Issues)
 }
+
+// TestVerify_DetectsBranchFactsGap asserts that a .md file present in the tree
+// at HEAD but without a matching branch_facts row produces a facts-coherence
+// Error naming the path.
+func TestVerify_DetectsBranchFactsGap(t *testing.T) {
+	t.Log("Scenario: write fact, delete branch_facts row, expect facts-coherence Error naming path")
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	defer svc.Close()
+	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+
+	_, err = svc.Facts().WriteFact(context.Background(), "agent/test", "kb/x.md", "---\ntype: observation\n---\n# Test Fact\n\nbody", "add x", "test")
+	require.NoError(t, err)
+
+	require.NoError(t, svc.deleteBranchFactsRowForTest("agent/test", "kb/x.md"))
+
+	report, err := svc.Verify(context.Background(), VerifyOpts{})
+	require.NoError(t, err)
+	require.False(t, report.IsClean())
+	found := false
+	for _, i := range report.Issues {
+		if i.Category == CategoryFactsCoherence && i.Severity == SeverityError && i.Path == "kb/x.md" {
+			found = true
+			break
+		}
+	}
+	require.True(t, found, "expected facts-coherence Error for kb/x.md, got: %v", report.Issues)
+}
+
+// TestVerify_DetectsBranchFactsBlobMismatch asserts that a branch_facts row
+// whose linked facts row has a blob_hash that does not match the actual blob
+// at HEAD produces a facts-coherence Error.
+func TestVerify_DetectsBranchFactsBlobMismatch(t *testing.T) {
+	t.Log("Scenario: write fact, corrupt facts.blob_hash to a wrong value, expect facts-coherence Error")
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	defer svc.Close()
+	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+
+	_, err = svc.Facts().WriteFact(context.Background(), "agent/test", "kb/x.md", "---\ntype: observation\n---\n# Test Fact\n\nbody", "add x", "test")
+	require.NoError(t, err)
+
+	// Look up the facts row for this path and tamper with its blob_hash.
+	var factID int64
+	err = svc.rh.gits.DB().QueryRow(`SELECT id FROM facts WHERE path = ?`, "kb/x.md").Scan(&factID)
+	require.NoError(t, err)
+	require.NoError(t, svc.corruptFactsBlobHashForTest(factID, "0000000000000000000000000000000000000000"))
+
+	report, err := svc.Verify(context.Background(), VerifyOpts{})
+	require.NoError(t, err)
+	found := false
+	for _, i := range report.Issues {
+		if i.Category == CategoryFactsCoherence && i.Severity == SeverityError && i.Path == "kb/x.md" {
+			found = true
+			break
+		}
+	}
+	require.True(t, found, "expected facts-coherence Error for kb/x.md, got: %v", report.Issues)
+}

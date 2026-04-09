@@ -13,6 +13,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"sort"
 	"strings"
@@ -55,7 +56,7 @@ type VerifyOpts struct {
 const (
 	CategoryGitReachability  = "git-reachability"
 	CategoryCommitLog        = "commit-log"
-	CategorySearchIndex      = "search-index"
+	CategoryFactsCoherence   = "facts-coherence"
 	CategoryVectorDim        = "vector-dim"
 	CategoryBranchesTable    = "branches-table"
 	CategoryBranchFactsTable = "branch-facts-table"
@@ -144,7 +145,7 @@ func (s *Service) Verify(ctx context.Context, opts VerifyOpts) (IntegrityReport,
 	for _, br := range branches {
 		report.Issues = append(report.Issues, s.checkGitReachability(ctx, br)...)
 		report.Issues = append(report.Issues, s.checkCommitLogParity(ctx, br)...)
-		report.Issues = append(report.Issues, s.checkSearchIndexParity(ctx, br)...)
+		report.Issues = append(report.Issues, s.checkFactsCoherence(ctx, br)...)
 		report.Issues = append(report.Issues, s.checkVectorDim(ctx, br)...)
 		report.Issues = append(report.Issues, s.checkBranchFactsParity(ctx, br)...)
 		if opts.Deep {
@@ -337,8 +338,121 @@ func (s *Service) checkCommitLogParity(ctx context.Context, branch string) []Int
 	}
 	return issues
 }
-func (s *Service) checkSearchIndexParity(_ context.Context, _ string) []IntegrityIssue {
-	return nil
+// deleteBranchFactsRowForTest removes a branch_facts row for (branch, path).
+// Test-only escape hatch for integrity-check tests.
+func (s *Service) deleteBranchFactsRowForTest(branch, path string) error {
+	_, err := s.rh.gits.DB().Exec(
+		`DELETE FROM branch_facts
+		 WHERE branch_id = (SELECT id FROM branches WHERE name = ?) AND path = ?`,
+		branch, path)
+	return err
+}
+
+// corruptFactsBlobHashForTest overwrites the blob_hash column on a facts row
+// so it no longer matches the tree's blob hash at HEAD. Test-only escape hatch.
+func (s *Service) corruptFactsBlobHashForTest(factID int64, newBlobHash string) error {
+	_, err := s.rh.gits.DB().Exec(
+		`UPDATE facts SET blob_hash = ? WHERE id = ?`, newBlobHash, factID)
+	return err
+}
+
+// checkFactsCoherence verifies the three-way triangle for every branch:
+//
+//	branch_facts ↔ facts ↔ tree blob_hash
+//
+// For every .md file under kb/ at the branch's HEAD tree, there must be a
+// branch_facts row linking to a facts row whose path matches and whose
+// blob_hash equals the tree's blob for that path. For every branch_facts row
+// on this branch, the referenced facts row must exist and its path must match.
+func (s *Service) checkFactsCoherence(ctx context.Context, branch string) []IntegrityIssue {
+	var issues []IntegrityIssue
+
+	// Tree contents at HEAD (path -> blob_hash).
+	treePaths, treeBlobs, err := s.rh.ListAllWithHash(ctx, branch)
+	if err != nil {
+		return nil // git-reachability reports this.
+	}
+	treeMap := make(map[string]string, len(treePaths))
+	for i, p := range treePaths {
+		if !strings.HasPrefix(p, "kb/") || !strings.HasSuffix(p, ".md") {
+			continue
+		}
+		treeMap[p] = treeBlobs[i]
+	}
+
+	// branch_facts rows for this branch joined against facts.
+	rows, err := s.rh.gits.DB().QueryContext(ctx,
+		`SELECT bf.path, bf.fact_id, f.path, f.blob_hash
+		 FROM branch_facts bf
+		 LEFT JOIN facts f ON f.id = bf.fact_id
+		 WHERE bf.branch_id = (SELECT id FROM branches WHERE name = ?)`, branch)
+	if err != nil {
+		return []IntegrityIssue{{
+			Severity: SeverityError, Category: CategoryFactsCoherence, Branch: branch,
+			Detail: fmt.Sprintf("query branch_facts: %v", err),
+		}}
+	}
+	defer rows.Close()
+	type bfRow struct {
+		factID   int64
+		factPath sql.NullString
+		factBlob sql.NullString
+	}
+	branchFactsMap := make(map[string]bfRow)
+	for rows.Next() {
+		var bfPath string
+		var row bfRow
+		if err := rows.Scan(&bfPath, &row.factID, &row.factPath, &row.factBlob); err != nil {
+			return []IntegrityIssue{{
+				Severity: SeverityError, Category: CategoryFactsCoherence, Branch: branch,
+				Detail: fmt.Sprintf("scan branch_facts: %v", err),
+			}}
+		}
+		branchFactsMap[bfPath] = row
+	}
+
+	// 1. Every tree file has a branch_facts row with correct blob_hash.
+	for path, blob := range treeMap {
+		bf, ok := branchFactsMap[path]
+		if !ok {
+			issues = append(issues, IntegrityIssue{
+				Severity: SeverityError, Category: CategoryFactsCoherence, Branch: branch, Path: path,
+				Detail: "fact present in tree at HEAD but no branch_facts row",
+			})
+			continue
+		}
+		if !bf.factPath.Valid || !bf.factBlob.Valid {
+			issues = append(issues, IntegrityIssue{
+				Severity: SeverityError, Category: CategoryFactsCoherence, Branch: branch, Path: path,
+				Detail: fmt.Sprintf("branch_facts.fact_id=%d refers to missing facts row", bf.factID),
+			})
+			continue
+		}
+		if bf.factPath.String != path {
+			issues = append(issues, IntegrityIssue{
+				Severity: SeverityError, Category: CategoryFactsCoherence, Branch: branch, Path: path,
+				Detail: fmt.Sprintf("branch_facts.path=%q but facts.path=%q for fact_id=%d", path, bf.factPath.String, bf.factID),
+			})
+		}
+		if bf.factBlob.String != blob {
+			issues = append(issues, IntegrityIssue{
+				Severity: SeverityError, Category: CategoryFactsCoherence, Branch: branch, Path: path,
+				Detail: fmt.Sprintf("facts.blob_hash=%s does not match tree blob %s", bf.factBlob.String, blob),
+			})
+		}
+	}
+
+	// 2. Every branch_facts row corresponds to a file in the tree.
+	for path := range branchFactsMap {
+		if _, ok := treeMap[path]; !ok {
+			issues = append(issues, IntegrityIssue{
+				Severity: SeverityError, Category: CategoryFactsCoherence, Branch: branch, Path: path,
+				Detail: "branch_facts row for path not present in tree at HEAD (ghost)",
+			})
+		}
+	}
+
+	return issues
 }
 func (s *Service) checkVectorDim(_ context.Context, _ string) []IntegrityIssue {
 	return nil
