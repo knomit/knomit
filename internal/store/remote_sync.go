@@ -133,9 +133,11 @@ func (ri *remoteIndex) Sync(ctx context.Context, localBranch string, auth transp
 		unlock()
 
 		log.Info().Str("to", originHash.String()[:8]).Msg("git sync: fast-forward")
-		ri.rh.notifyCommit(ctx, localBranch, originHash)
 		if err := ri.rh.populateCommitLog(ctx, localBranch); err != nil {
 			log.Warn().Err(err).Msg("commit_log: sync populate")
+		}
+		if err := ri.rh.notifyCommit(ctx, localBranch, originHash); err != nil {
+			return SyncResult{}, fmt.Errorf("Sync: fast-forward notify: %w", err)
 		}
 		return SyncResult{Synced: true, FastForward: true}, nil
 	}
@@ -197,9 +199,11 @@ func (ri *remoteIndex) Sync(ctx context.Context, localBranch string, auth transp
 	unlock()
 
 	log.Info().Str("merge_commit", mergeHash.String()[:8]).Msg("git sync: merged origin")
-	ri.rh.notifyCommit(ctx, localBranch, mergeHash)
 	if err := ri.rh.populateCommitLog(ctx, localBranch); err != nil {
 		log.Warn().Err(err).Msg("commit_log: sync populate")
+	}
+	if err := ri.rh.notifyCommit(ctx, localBranch, mergeHash); err != nil {
+		return SyncResult{}, fmt.Errorf("Sync: merge notify: %w", err)
 	}
 	return SyncResult{Synced: true, MergeCommit: mergeHash.String()}, nil
 }

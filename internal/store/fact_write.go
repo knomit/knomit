@@ -62,9 +62,11 @@ func (fi *factIndex) writeFile(ctx context.Context, branch, path, content, messa
 	}
 	unlock()
 
-	// Notify outside the lock — appendCommitLog triggers index sync which
-	// may call back into Service for reads.
-	fi.rh.notifyCommit(ctx, branch, newCommitHash)
+	// Notify outside the lock — notifyCommit appends to commit_log and
+	// triggers im.Sync which may call back into Service for reads.
+	if err := fi.rh.notifyCommit(ctx, branch, newCommitHash); err != nil {
+		return "", "", err
+	}
 	return newCommitHash.String(), newBlobHash.String(), nil
 }
 
@@ -116,7 +118,9 @@ func (fi *factIndex) deleteFile(ctx context.Context, branch, path, message, oper
 	}
 	unlock()
 
-	fi.rh.notifyCommit(ctx, branch, newCommitHash)
+	if err := fi.rh.notifyCommit(ctx, branch, newCommitHash); err != nil {
+		return "", err
+	}
 	return newCommitHash.String(), nil
 }
 
@@ -148,7 +152,9 @@ func (fi *factIndex) batchWrite(ctx context.Context, branch string, files map[st
 		return "", nil, err
 	}
 
-	fi.rh.notifyCommit(ctx, branch, cHash)
+	if err := fi.rh.notifyCommit(ctx, branch, cHash); err != nil {
+		return "", nil, err
+	}
 	return cHash.String(), blobHashes, nil
 }
 
@@ -245,44 +251,30 @@ func (fi *factIndex) batchWriteLocked(ctx context.Context, branch string, files 
 }
 
 // WriteFact writes a fact to the store and returns the commit and blob hashes.
+// Index sync (branch_facts / facts_vec / graph) is triggered inside writeFile
+// via rh.notifyCommit — no redundant fi.im.Sync call here.
 func (fi *factIndex) WriteFact(ctx context.Context, branch, path, content, message, operation string) (WriteFactResult, error) {
 	commitHash, blobHash, err := fi.writeFile(ctx, branch, path, content, message, operation)
 	if err != nil {
 		return WriteFactResult{}, err
 	}
-	if fi.im != nil {
-		if err := fi.im.Sync(ctx, branch); err != nil {
-			return WriteFactResult{}, fmt.Errorf("WriteFact sync: %w", err)
-		}
-	}
 	return WriteFactResult{CommitHash: commitHash, BlobHash: blobHash}, nil
 }
 
-// DeleteFact deletes a fact and syncs the index so the deletion is immediately visible.
+// DeleteFact deletes a fact. Index sync happens inside deleteFile via
+// rh.notifyCommit.
 func (fi *factIndex) DeleteFact(ctx context.Context, branch, path, message string) (string, error) {
 	commitHash, err := fi.deleteFile(ctx, branch, path, message, "retract")
 	if err != nil {
 		return "", fmt.Errorf("DeleteFact git: %w", err)
 	}
-	if fi.im != nil {
-		if err := fi.im.Sync(ctx, branch); err != nil {
-			return "", fmt.Errorf("DeleteFact sync: %w", err)
-		}
-	}
 	return commitHash, nil
 }
 
-// BatchWriteFacts writes multiple facts in a single commit.
+// BatchWriteFacts writes multiple facts in a single commit. Index sync
+// happens inside batchWrite via rh.notifyCommit.
 func (fi *factIndex) BatchWriteFacts(ctx context.Context, branch string, files map[string]string, message, operation string) (commitHash string, blobHashes map[string]string, err error) {
 	commitHash, blobHashes, err = fi.batchWrite(ctx, branch, files, message, operation)
-	if err != nil {
-		return
-	}
-	if fi.im != nil {
-		if err = fi.im.Sync(ctx, branch); err != nil {
-			err = fmt.Errorf("BatchWriteFacts sync: %w", err)
-		}
-	}
 	return
 }
 

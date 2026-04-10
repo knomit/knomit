@@ -69,8 +69,16 @@ type repoHandler struct {
 	repo     *gogit.Repository // nil until OpenRepo/InitRepo/Clone called
 	signer   ssh.Signer        // SSH signer for commit signing (shared)
 	onCommit func(branch, hash string) // external observer (e.g. SSE broadcast)
-	configMu sync.Mutex        // guards ConfigureRemote / remote wiring
-	embedMu  sync.RWMutex      // guards embedder
+
+	// im is the search-index manager. notifyCommit calls im.Sync after every
+	// commit so branch_facts / facts_vec / graph stay in sync with the new
+	// tree at HEAD. Set by Service.Open (via bindIndexManager). If nil,
+	// notifyCommit skips the sync — useful for bare repoHandler tests that
+	// don't exercise the index.
+	im IndexManager
+
+	configMu sync.Mutex   // guards ConfigureRemote / remote wiring
+	embedMu  sync.RWMutex // guards embedder
 	embedder Embedder
 	branchMu sync.Map // per-branch write serialization
 }
@@ -214,6 +222,11 @@ func (rh *repoHandler) ListBranches(ctx context.Context) ([]Branch, error) {
 }
 
 // CreateBranch creates a new git branch ref pointing at the tip of fromBranch.
+// The child branch inherits the parent's full state: git ref position,
+// branch_commits visibility, AND branch_facts (the per-branch view of which
+// fact version is visible at each path). This matches git's "branch contains
+// everything the parent contains at the moment of creation" semantics.
+//
 // No-op if the branch already exists.
 func (rh *repoHandler) CreateBranch(ctx context.Context, branch, fromBranch string) error {
 	newRefName := plumbing.NewBranchReferenceName(branch)
@@ -240,6 +253,33 @@ func (rh *repoHandler) CreateBranch(ctx context.Context, branch, fromBranch stri
 		WHERE branch_id = (SELECT id FROM branches WHERE name = ?)`,
 		newBranchID, fromBranch); err != nil {
 		return fmt.Errorf("CreateBranch: clone branch_commits from %q: %w", fromBranch, err)
+	}
+	// Clone parent branch's per-path fact view: every branch_facts row on
+	// fromBranch becomes a row on the new branch pointing at the same
+	// (fact_id, commit_hash). Without this step, the child's tree at HEAD
+	// contains inherited files that have no matching branch_facts row, which
+	// Verify's facts-coherence check correctly flags as a gap.
+	if _, err := conn(ctx, rh.db).ExecContext(ctx, `
+		INSERT OR IGNORE INTO branch_facts (branch_id, path, fact_id, commit_hash)
+		SELECT ?, path, fact_id, commit_hash FROM branch_facts
+		WHERE branch_id = (SELECT id FROM branches WHERE name = ?)`,
+		newBranchID, fromBranch); err != nil {
+		return fmt.Errorf("CreateBranch: clone branch_facts from %q: %w", fromBranch, err)
+	}
+	// Inherit the parent's sync watermark so the child's first im.Sync does
+	// an efficient incremental diff from the same baseline rather than a
+	// wasteful full rebuild that would re-upsert every already-indexed fact.
+	var parentWatermark string
+	err = conn(ctx, rh.db).QueryRowContext(ctx,
+		`SELECT value FROM meta WHERE key = ?`, "last_commit:"+fromBranch,
+	).Scan(&parentWatermark)
+	if err == nil && parentWatermark != "" {
+		if _, err := conn(ctx, rh.db).ExecContext(ctx,
+			`INSERT OR IGNORE INTO meta(key, value) VALUES (?, ?)`,
+			"last_commit:"+branch, parentWatermark,
+		); err != nil {
+			return fmt.Errorf("CreateBranch: inherit watermark: %w", err)
+		}
 	}
 	log.Info().Str("branch", branch).Str("from", fromBranch).Msg("created branch")
 	return nil

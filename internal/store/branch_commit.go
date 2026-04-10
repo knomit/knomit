@@ -6,6 +6,7 @@ package store
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/go-git/go-git/v5/plumbing"
@@ -32,12 +33,31 @@ func (rh *repoHandler) committerSig(branch string) object.Signature {
 	}
 }
 
-// notifyCommit appends the commit to commit_log and invokes the external
-// observer (if registered). Called after every write that produces a new
-// commit on a branch, outside the branch lock.
-func (rh *repoHandler) notifyCommit(ctx context.Context, branch string, hash plumbing.Hash) {
+// notifyCommit runs the post-commit side effects for a new commit on branch:
+//
+//  1. Appends the commit to commit_log (branch-agnostic row + branch_commits
+//     visibility row).
+//  2. Calls im.Sync(ctx, branch) so branch_facts / facts_vec / graph catch
+//     up with the new tree at HEAD. This is the contract EVERY mutation path
+//     (WriteFact, DeleteFact, BatchWriteFacts, MergeBranch, remote Sync) must
+//     honor — skipping it leaves per-branch tables stale relative to the git
+//     tree and trips the facts-coherence Verify check.
+//  3. Calls the external onCommit observer if registered (e.g. SSE broadcast).
+//
+// Called outside the branch lock — Sync may call back into Service for reads,
+// and the observer runs user code.
+//
+// Returns an error iff the index sync fails. Callers must propagate the
+// error so the failing operation is visible at its own call site.
+func (rh *repoHandler) notifyCommit(ctx context.Context, branch string, hash plumbing.Hash) error {
 	rh.AppendCommitLog(ctx, branch, hash.String())
+	if rh.im != nil {
+		if err := rh.im.Sync(ctx, branch); err != nil {
+			return fmt.Errorf("notifyCommit: im.Sync(%s): %w", branch, err)
+		}
+	}
 	if rh.onCommit != nil {
 		rh.onCommit(branch, hash.String())
 	}
+	return nil
 }

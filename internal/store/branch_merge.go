@@ -94,7 +94,9 @@ func (rh *repoHandler) MergeBranch(ctx context.Context, src, dst string, strateg
 		if err := rh.populateCommitLog(ctx, dst); err != nil {
 			log.Warn().Err(err).Msg("MergeBranch: fast-forward populate failed")
 		}
-		rh.notifyCommit(ctx, dst, srcHash)
+		if err := rh.notifyCommit(ctx, dst, srcHash); err != nil {
+			return fmt.Errorf("MergeBranch: fast-forward notify: %w", err)
+		}
 		log.Info().
 			Str("src", src).Str("dst", dst).
 			Str("to", srcHash.String()[:8]).
@@ -161,7 +163,9 @@ func (rh *repoHandler) MergeBranch(ctx context.Context, src, dst string, strateg
 	if err := rh.populateCommitLog(ctx, dst); err != nil {
 		log.Warn().Err(err).Msg("MergeBranch: populate commit_log failed")
 	}
-	rh.notifyCommit(ctx, dst, mergeHash)
+	if err := rh.notifyCommit(ctx, dst, mergeHash); err != nil {
+		return fmt.Errorf("MergeBranch: three-way notify: %w", err)
+	}
 
 	log.Info().
 		Str("src", src).

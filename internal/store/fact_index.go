@@ -18,10 +18,11 @@ func parseFact(path, content string) (FactRecord, error) {
 var _ FactIndex = (*factIndex)(nil)
 
 // factIndex owns all git-backed fact operations: reading and writing.
-// Shared git-level plumbing (signer, authorSig, committerSig, notifyCommit)
-// lives on repoHandler — factIndex reaches up via fi.rh.*.
+// All shared git-level plumbing lives on repoHandler — factIndex reaches up
+// via fi.rh.*. In particular, index sync after a commit happens inside
+// rh.notifyCommit (which is called from writeFile / deleteFile / batchWrite),
+// so factIndex no longer holds its own IndexManager back-reference.
 type factIndex struct {
 	rh   *repoHandler
 	auth transport.AuthMethod
-	im   IndexManager // index synchronization after each commit
 }

@@ -77,7 +77,8 @@ func Open(path string) (*Service, error) {
 	rh := newRepoHandler(db, gits)
 	si := &searchIndex{rh: rh}
 	rh.onDrop = si.GC
-	fi := &factIndex{rh: rh, im: si}
+	rh.im = si // notifyCommit delegates to im.Sync after every commit.
+	fi := &factIndex{rh: rh}
 	ri := &remoteIndex{rh: rh}
 	return &Service{
 		rh: rh,
