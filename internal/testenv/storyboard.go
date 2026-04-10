@@ -145,6 +145,29 @@ func (r *RepoHandle) Branch(name string) *BranchHandle {
 	return b
 }
 
+// BranchFrom creates a new branch named `name` as a child of `fromBranch`
+// (the child inherits every commit reachable from the parent at creation
+// time). Returns a BranchHandle for the newly-created branch. Fails the
+// test if the create fails — use for scenario tests that need a fresh
+// child branch to diverge from an existing one.
+func (r *RepoHandle) BranchFrom(name, fromBranch string) *BranchHandle {
+	t := r.sb.t
+	t.Helper()
+	if _, ok := r.branches[name]; ok {
+		t.Fatalf("BranchFrom: branch %q already tracked by DSL", name)
+	}
+	var createErr error
+	r.ri.WithRead(func(svc *store.Service) {
+		createErr = svc.Branches().CreateBranch(context.Background(), name, fromBranch)
+	})
+	if createErr != nil {
+		t.Fatalf("BranchFrom(%s from %s): %v", name, fromBranch, createErr)
+	}
+	b := &BranchHandle{repo: r, name: name}
+	r.branches[name] = b
+	return b
+}
+
 // ExpectDirty marks the repo as deliberately corrupted. The Storyboard
 // teardown auto-verify will skip this repo. Call after CorruptObject /
 // RawSQL / RawGitWrite in G-category tests.
