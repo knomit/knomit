@@ -114,6 +114,7 @@ func (sb *Storyboard) Repo(name string) *RepoHandle {
 		name:     name,
 		ri:       ri,
 		manager:  m,
+		cfg:      cfg,
 		branches: map[string]*BranchHandle{},
 	}
 	sb.repos[name] = r
@@ -129,6 +130,7 @@ type RepoHandle struct {
 	name        string
 	ri          *repos.RepoInstance
 	manager     *repos.Manager
+	cfg         config.Config
 	branches    map[string]*BranchHandle
 	expectDirty bool
 }
@@ -195,6 +197,39 @@ func (r *RepoHandle) Connect(remote *RemoteHandle) *RepoHandle {
 		t.Fatalf("Connect(%s): SetRemote: %v", remote.Name(), setErr)
 	}
 	return r
+}
+
+// Restart shuts down the current manager and re-boots a fresh one against
+// the same on-disk home directory. Used by Category I "survives restart"
+// tests to assert that the index persists across process boundaries. All
+// existing BranchHandle references become stale after Restart — callers
+// must re-fetch via Branch(name).
+//
+// The parent Storyboard's managers map is updated to point at the new
+// manager so teardown calls Shutdown on the live instance.
+func (r *RepoHandle) Restart() {
+	t := r.sb.t
+	t.Helper()
+	r.manager.Shutdown()
+
+	m := repos.New(context.Background(), repos.Deps{
+		Cfg:         r.cfg,
+		AgentBranch: "agent/test",
+		Embedder:    r.sb.embedder,
+	})
+	if err := m.Boot(); err != nil {
+		t.Fatalf("Restart(%q): manager re-boot failed: %v", r.name, err)
+	}
+	ri := m.Get("knomit")
+	if ri == nil {
+		t.Fatalf("Restart(%q): manager.Get(knomit) returned nil after Boot", r.name)
+	}
+	r.manager = m
+	r.ri = ri
+	r.branches = map[string]*BranchHandle{}
+	r.sb.mu.Lock()
+	r.sb.managers[r.name] = m
+	r.sb.mu.Unlock()
 }
 
 // ExpectDirty marks the repo as deliberately corrupted. The Storyboard
