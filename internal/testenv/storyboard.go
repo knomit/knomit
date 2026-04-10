@@ -2,6 +2,7 @@ package testenv
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -97,9 +98,10 @@ func (sb *Storyboard) Repo(name string) *RepoHandle {
 	homeSub := filepath.Join(sb.homeDir, name)
 	cfg := config.Config{Home: homeSub}
 	m := repos.New(context.Background(), repos.Deps{
-		Cfg:         cfg,
-		AgentBranch: "agent/test",
-		Embedder:    sb.embedder,
+		Cfg:                   cfg,
+		AgentBranch:           "agent/test",
+		Embedder:              sb.embedder,
+		DisableBackgroundSync: true,
 	})
 	if err := m.Boot(); err != nil {
 		sb.t.Fatalf("Repo(%q): manager boot failed: %v", name, err)
@@ -171,31 +173,77 @@ func (r *RepoHandle) BranchFrom(name, fromBranch string) *BranchHandle {
 }
 
 // Connect wires this repo to use the given RemoteHandle as its origin.
-// Calls store.Remote().SetRemote with file:// URL, main as the default
-// remote branch, and no auth. Returns the same RepoHandle for chaining:
+// It shuts down the current manager, sets cfg.Git.Origin to the
+// remote's file:// URL, and re-boots the manager. The re-boot drives
+// the production InitFromRemote path — exactly what knomit does in
+// production when a repo is opened with an origin configured — which
+// either clones the remote's existing state (non-empty remote) or
+// seeds the repo inline (empty remote) and registers "origin" in both
+// the git config and the remotes SQLite table.
 //
-//	agent := sb.Repo("a").Connect(remote).Branch("agent/test")
+// This approach mirrors production semantics precisely: no hand-
+// rolled fetch, no direct ref manipulation, no bypassing of index
+// synchronization. The trade-off is that Connect MUST be called
+// before any Branch() writes — the re-boot discards all of the
+// initial manager's in-memory state including branch handles. The
+// on-disk SQLite database is the same file, so anything persisted
+// survives.
 //
-// Connect is idempotent — calling it twice with the same remote is harmless
-// (SetRemote is INSERT OR REPLACE under the hood).
+// Calling Connect() twice is a no-op after the first successful
+// call.
 func (r *RepoHandle) Connect(remote *RemoteHandle) *RepoHandle {
 	t := r.sb.t
 	t.Helper()
-	var setErr error
-	r.ri.WithRead(func(svc *store.Service) {
-		setErr = svc.Remote().SetRemote(
-			"origin",
-			remote.URL(),
-			"main", // remote branch
-			300,    // sync interval seconds (unused in tests)
-			300,    // push interval seconds (unused in tests)
-			"",     // auth method (file:// needs none)
-			"",     // auth token
-		)
-	})
-	if setErr != nil {
-		t.Fatalf("Connect(%s): SetRemote: %v", remote.Name(), setErr)
+
+	if r.cfg.Git.Origin == remote.URL() {
+		return r // idempotent
 	}
+
+	// The Storyboard boots repos via InitRepo, which leaves the local
+	// SQLite DB populated with an unrelated init commit on main. To
+	// drive the production InitFromRemote path cleanly we shut the
+	// manager down, blow away the on-disk DB files, and re-boot with
+	// cfg.Git.Origin set. repoBuilder.openGit → initDefaultGit →
+	// InitFromRemote then clones from the remote (or seeds from
+	// scratch against an empty remote) exactly as production would.
+	//
+	// This is why Connect MUST be called BEFORE any Branch() writes —
+	// wiping the DB is destructive. Tests that write first and
+	// connect later aren't supported and would lose their data here.
+	r.manager.Shutdown()
+
+	reposDir := filepath.Join(r.cfg.Home, "repos")
+	entries, _ := os.ReadDir(reposDir)
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		full := filepath.Join(reposDir, e.Name())
+		if err := os.Remove(full); err != nil {
+			t.Fatalf("Connect(%s): remove %s: %v", remote.Name(), full, err)
+		}
+	}
+
+	r.cfg.Git.Origin = remote.URL()
+	m := repos.New(context.Background(), repos.Deps{
+		Cfg:                   r.cfg,
+		AgentBranch:           "agent/test",
+		Embedder:              r.sb.embedder,
+		DisableBackgroundSync: true,
+	})
+	if err := m.Boot(); err != nil {
+		t.Fatalf("Connect(%s): re-boot failed: %v", remote.Name(), err)
+	}
+	ri := m.Get("knomit")
+	if ri == nil {
+		t.Fatalf("Connect(%s): manager.Get(knomit) returned nil after re-boot", remote.Name())
+	}
+	r.manager = m
+	r.ri = ri
+	r.branches = map[string]*BranchHandle{}
+	r.sb.mu.Lock()
+	r.sb.managers[r.name] = m
+	r.sb.mu.Unlock()
 	return r
 }
 
@@ -213,9 +261,10 @@ func (r *RepoHandle) Restart() {
 	r.manager.Shutdown()
 
 	m := repos.New(context.Background(), repos.Deps{
-		Cfg:         r.cfg,
-		AgentBranch: "agent/test",
-		Embedder:    r.sb.embedder,
+		Cfg:                   r.cfg,
+		AgentBranch:           "agent/test",
+		Embedder:              r.sb.embedder,
+		DisableBackgroundSync: true,
 	})
 	if err := m.Boot(); err != nil {
 		t.Fatalf("Restart(%q): manager re-boot failed: %v", r.name, err)

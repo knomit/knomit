@@ -58,20 +58,23 @@ func (rh *repoHandler) populateCommitLog(ctx context.Context, branch string) err
 }
 
 // AppendCommitLog inserts a single new commit into commit_log.
-func (rh *repoHandler) AppendCommitLog(ctx context.Context, branch, hashStr string) {
+// Returns an error so callers (notifyCommit) can propagate append failures
+// — previously the error was swallowed to a log.Warn which let silent
+// branches drift out of commit_log parity. The property test P3 surfaced
+// a case where AppendCommitLog failed mid-sequence on a freshly-created
+// child branch and the resulting gap was only caught by a later Verify.
+func (rh *repoHandler) AppendCommitLog(ctx context.Context, branch, hashStr string) error {
 	if !rh.gits.CommitLogAvailable() {
-		return
+		return nil
 	}
 	hash := plumbing.NewHash(hashStr)
 	c, err := rh.repo.CommitObject(hash)
 	if err != nil {
-		log.Warn().Err(err).Str("hash", hashStr).Msg("commit_log: get commit")
-		return
+		return fmt.Errorf("AppendCommitLog: get commit %s: %w", hashStr, err)
 	}
 	files, err := changedFilesInCommit(c)
 	if err != nil {
-		log.Warn().Err(err).Str("hash", hashStr).Msg("commit_log: changed files")
-		return
+		return fmt.Errorf("AppendCommitLog: changed files %s: %w", hashStr, err)
 	}
 	done := false
 	entries := commitEntries(c, files)
@@ -82,6 +85,7 @@ func (rh *repoHandler) AppendCommitLog(ctx context.Context, branch, hashStr stri
 		done = true
 		return hash.String(), entries, nil
 	}); err != nil {
-		log.Warn().Err(err).Str("hash", hash.String()).Msg("commit_log: append sync failed")
+		return fmt.Errorf("AppendCommitLog: sync %s: %w", hashStr, err)
 	}
+	return nil
 }

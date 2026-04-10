@@ -342,10 +342,18 @@ func (s *Service) checkCommitLogParity(ctx context.Context, branch string) []Int
 		cur = commit.ParentHashes[0]
 	}
 
-	// 2. Collect distinct commit_log commit hashes visible on this branch.
+	// 2. Collect distinct commit hashes visible on this branch via
+	// branch_commits. Previously this joined branch_commits ↔ commit_log,
+	// which produced false parity gaps for legitimate no-op commits (a
+	// write whose new blob equals the parent's blob at the same path has
+	// zero tree changes, so changedFilesInCommit returns an empty slice
+	// and CommitLogSync records only the branch_commits visibility row
+	// without any commit_log path entries). Branch visibility is the
+	// authoritative invariant — every reachable commit must have a
+	// branch_commits row — and commit_log is a path-indexed projection
+	// that legitimately has no rows for no-op commits.
 	rows, err := s.rh.gits.DB().QueryContext(ctx,
-		`SELECT DISTINCT cl.commit_hash FROM commit_log cl
-		 JOIN branch_commits bc ON bc.commit_hash = cl.commit_hash
+		`SELECT bc.commit_hash FROM branch_commits bc
 		 JOIN branches b ON b.id = bc.branch_id
 		 WHERE b.name = ?`, branch)
 	if err != nil {
@@ -370,12 +378,12 @@ func (s *Service) checkCommitLogParity(ctx context.Context, branch string) []Int
 		}}
 	}
 
-	// 3. Diff: commits in git not in log.
+	// 3. Diff: commits in git not visible on this branch (via branch_commits).
 	for h := range gitCommits {
 		if !logCommits[h] {
 			issues = append(issues, IntegrityIssue{
 				Severity: SeverityError, Category: CategoryCommitLog, Branch: branch, Commit: h,
-				Detail: fmt.Sprintf("commit %s reachable from branch ref but missing from commit_log", h),
+				Detail: fmt.Sprintf("commit %s reachable from branch ref but no branch_commits row", h),
 			})
 		}
 	}

@@ -27,6 +27,12 @@ type Deps struct {
 	// OnRepoReady is called after a repo is opened or its store is swapped.
 	// The web layer uses this to wire MCP handlers onto the repo.
 	OnRepoReady func(ri *RepoInstance)
+	// DisableBackgroundSync suppresses the background pull and push loops
+	// that would otherwise run on every managed repo. Tests use this to
+	// prevent non-deterministic sync/push behavior — the loops call
+	// doSync/doPush immediately on startup which can race with test
+	// assertions about remote state. Production leaves this unset.
+	DisableBackgroundSync bool
 }
 
 // Manager owns the full lifecycle of all registered repositories:
@@ -187,15 +193,16 @@ func (m *Manager) Add(name, dbPath string) error {
 // open are returned as errors so the caller can skip them gracefully.
 func (m *Manager) openOne(name, dbPath string, isDefault bool) (*RepoInstance, error) {
 	b := repoBuilder{
-		name:        name,
-		dbPath:      dbPath,
-		isDefault:   isDefault,
-		cfg:         m.deps.Cfg,
-		signer:      m.deps.Signer,
-		agentBranch: m.deps.AgentBranch,
-		embedder:    m.deps.Embedder,
-		keyPath:     m.deps.KeyPath,
-		ctx:         m.ctx,
+		name:                  name,
+		dbPath:                dbPath,
+		isDefault:             isDefault,
+		cfg:                   m.deps.Cfg,
+		signer:                m.deps.Signer,
+		agentBranch:           m.deps.AgentBranch,
+		embedder:              m.deps.Embedder,
+		keyPath:               m.deps.KeyPath,
+		ctx:                   m.ctx,
+		disableBackgroundSync: m.deps.DisableBackgroundSync,
 	}
 
 	if err := b.openStore(); err != nil {

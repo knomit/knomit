@@ -50,7 +50,9 @@ func (rh *repoHandler) committerSig(branch string) object.Signature {
 // Returns an error iff the index sync fails. Callers must propagate the
 // error so the failing operation is visible at its own call site.
 func (rh *repoHandler) notifyCommit(ctx context.Context, branch string, hash plumbing.Hash) error {
-	rh.AppendCommitLog(ctx, branch, hash.String())
+	if err := rh.AppendCommitLog(ctx, branch, hash.String()); err != nil {
+		return fmt.Errorf("notifyCommit: AppendCommitLog(%s): %w", branch, err)
+	}
 	if rh.im != nil {
 		if err := rh.im.Sync(ctx, branch); err != nil {
 			return fmt.Errorf("notifyCommit: im.Sync(%s): %w", branch, err)

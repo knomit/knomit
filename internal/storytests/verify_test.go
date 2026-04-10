@@ -79,18 +79,26 @@ func TestVerify_DetectsMissingBlob(t *testing.T) {
 // ── G3 ────────────────────────────────────────────────────────────────────
 
 // TestVerify_DetectsCommitLogGap writes two facts and deletes the second
-// commit's commit_log rows via raw SQL. The commit-log parity check must
-// detect the missing commit.
+// commit's branch_commits row via raw SQL. The commit-log parity check
+// must detect the missing visibility row. (The check was updated
+// 2026-04-09 to key off branch_commits instead of commit_log — a
+// legitimate no-op commit with zero file changes has a branch_commits
+// row but no commit_log row, and the earlier check falsely flagged
+// those. branch_commits is now the authoritative visibility invariant.)
 func TestVerify_DetectsCommitLogGap(t *testing.T) {
-	t.Log("G3: 2 facts, delete commit_log rows for the second commit, Verify reports commit-log Error")
+	t.Log("G3: 2 facts, delete branch_commits row for the second commit, Verify reports commit-log Error")
 	sb := testenv.NewStoryboard(t)
 	r := sb.Repo("alpha")
 	agent := r.Branch("agent/test")
 	agent.Write("kb/a.md", testenv.Fact("a"), "add a")
 	c2 := agent.Write("kb/b.md", testenv.Fact("b"), "add b")
 
-	// Delete ALL commit_log rows for c2's commit.
-	_, err := r.RawSQL().Exec(`DELETE FROM commit_log WHERE commit_hash = ?`, c2.Commit)
+	// Delete the branch_commits visibility row for c2's commit on agent/test.
+	_, err := r.RawSQL().Exec(
+		`DELETE FROM branch_commits
+		 WHERE commit_hash = ?
+		   AND branch_id = (SELECT id FROM branches WHERE name = 'agent/test')`,
+		c2.Commit)
 	require.NoError(t, err)
 	r.ExpectDirty()
 
