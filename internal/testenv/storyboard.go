@@ -168,6 +168,35 @@ func (r *RepoHandle) BranchFrom(name, fromBranch string) *BranchHandle {
 	return b
 }
 
+// Connect wires this repo to use the given RemoteHandle as its origin.
+// Calls store.Remote().SetRemote with file:// URL, main as the default
+// remote branch, and no auth. Returns the same RepoHandle for chaining:
+//
+//	agent := sb.Repo("a").Connect(remote).Branch("agent/test")
+//
+// Connect is idempotent — calling it twice with the same remote is harmless
+// (SetRemote is INSERT OR REPLACE under the hood).
+func (r *RepoHandle) Connect(remote *RemoteHandle) *RepoHandle {
+	t := r.sb.t
+	t.Helper()
+	var setErr error
+	r.ri.WithRead(func(svc *store.Service) {
+		setErr = svc.Remote().SetRemote(
+			"origin",
+			remote.URL(),
+			"main", // remote branch
+			300,    // sync interval seconds (unused in tests)
+			300,    // push interval seconds (unused in tests)
+			"",     // auth method (file:// needs none)
+			"",     // auth token
+		)
+	})
+	if setErr != nil {
+		t.Fatalf("Connect(%s): SetRemote: %v", remote.Name(), setErr)
+	}
+	return r
+}
+
 // ExpectDirty marks the repo as deliberately corrupted. The Storyboard
 // teardown auto-verify will skip this repo. Call after CorruptObject /
 // RawSQL / RawGitWrite in G-category tests.
