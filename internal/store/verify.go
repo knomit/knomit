@@ -179,11 +179,39 @@ func (s *Service) listBranchRefsForVerify(_ context.Context) ([]string, error) {
 	return out, err
 }
 
-// deleteObjectForTest removes an object from the storer by hash. EXISTS ONLY
-// FOR INTEGRITY-CHECK TESTS that need to corrupt state. Do not call from
-// production code paths.
-func (s *Service) deleteObjectForTest(hash string) error {
+// DeleteObjectForTest removes a git object (blob, tree, or commit) from the
+// storer by hash. EXISTS ONLY for integrity-check tests that need to corrupt
+// the store. Do not call from production code paths.
+//
+// Exported (vs. the previous lowercase form) so the testenv DSL's
+// CorruptObject helper in a different package can call it.
+func (s *Service) DeleteObjectForTest(hash string) error {
 	return s.rh.gits.DeleteObjectForTest(plumbing.NewHash(hash))
+}
+
+// RawDBForTest returns the underlying *sql.DB handle. EXISTS ONLY for
+// integrity-check tests that need to tamper with SQLite rows directly —
+// deleting commit_log entries, inserting ghost rows, corrupting
+// facts.blob_hash, etc. Do not call from production code paths.
+func (s *Service) RawDBForTest() *sql.DB {
+	return s.rh.gits.DB()
+}
+
+// RawWriteForTest commits raw content to a path on the given branch,
+// bypassing fact.ParseFact validation. EXISTS ONLY for integrity-check
+// tests that need to inject deliberately malformed fact content (e.g. to
+// exercise the deep fact-format check). The normal WriteFact path rejects
+// invalid YAML at write time, which this escape hatch skips.
+//
+// The commit is created with the standard author/committer signatures and
+// is signed. commit_log and the index are synced so the post-state is
+// structurally consistent — only the FACT FORMAT is broken.
+func (s *Service) RawWriteForTest(ctx context.Context, branch, path, content, message string) (string, error) {
+	commitHash, _, err := s.fi.writeFile(ctx, branch, path, content, message, "raw-write-test")
+	if err != nil {
+		return "", err
+	}
+	return commitHash, nil
 }
 
 // checkGitReachability walks the commit chain from the branch ref to the root.

@@ -42,7 +42,7 @@ func TestVerify_DetectsMissingBlob(t *testing.T) {
 	require.NotEmpty(t, res.BlobHash)
 
 	// Delete the blob from the storer directly.
-	require.NoError(t, svc.deleteObjectForTest(res.BlobHash))
+	require.NoError(t, svc.DeleteObjectForTest(res.BlobHash))
 
 	report, err := svc.Verify(context.Background(), VerifyOpts{})
 	require.NoError(t, err)
