@@ -138,8 +138,9 @@ CREATE TABLE IF NOT EXISTS tool_queue (
 );
 
 -- Denormalized commit log for O(1) activity queries and efficient path history.
--- Populated on open (INSERT OR IGNORE) and appended after each write/sync.
--- Insertion order mirrors commit age: oldest first → rowid order reflects recency.
+-- Branch-agnostic: one row per (commit_hash, path). Branch visibility is
+-- tracked separately in branch_commits below. Populated on open
+-- (INSERT OR IGNORE) and appended after each write/sync.
 CREATE TABLE IF NOT EXISTS commit_log (
     commit_hash  TEXT    NOT NULL,
     path         TEXT    NOT NULL,
@@ -148,13 +149,22 @@ CREATE TABLE IF NOT EXISTS commit_log (
     operation    TEXT    NOT NULL DEFAULT '',
     author_email TEXT    NOT NULL DEFAULT '',
     action       TEXT    NOT NULL DEFAULT '',
-    branch_id    INTEGER REFERENCES branches(id),
     PRIMARY KEY (commit_hash, path)
 );
 CREATE INDEX IF NOT EXISTS commit_log_path_time ON commit_log (path, committed_at DESC);
 CREATE INDEX IF NOT EXISTS commit_log_time      ON commit_log (committed_at DESC);
 CREATE INDEX IF NOT EXISTS commit_log_operation ON commit_log (operation, committed_at DESC);
-CREATE INDEX IF NOT EXISTS commit_log_branch    ON commit_log (branch_id, committed_at DESC);
+
+-- Many-to-many: which branches see which commits.
+-- A commit is on a branch iff it is reachable by walking parents from the branch ref.
+-- Populated by populateCommitLog (git walk) and CreateBranch (clone from parent).
+-- ON DELETE CASCADE: dropping a branch row also drops its visibility rows.
+CREATE TABLE IF NOT EXISTS branch_commits (
+    branch_id   INTEGER NOT NULL REFERENCES branches(id) ON DELETE CASCADE,
+    commit_hash TEXT    NOT NULL,
+    PRIMARY KEY (branch_id, commit_hash)
+);
+CREATE INDEX IF NOT EXISTS branch_commits_hash ON branch_commits (commit_hash);
 
 -- Junction tables for indexed entity and domain filtering.
 -- Populated in sync with facts.entities / facts.domain JSON columns.
