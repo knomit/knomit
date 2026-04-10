@@ -13,7 +13,6 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/go-git/go-git/v5/plumbing/transport"
-	"github.com/go-git/go-git/v5/utils/merkletrie"
 	"github.com/rs/zerolog/log"
 )
 
@@ -155,8 +154,9 @@ func (ri *remoteIndex) Sync(ctx context.Context, localBranch string, auth transp
 
 	log.Debug().Str("base", baseCommit.Hash.String()[:8]).Msg("git sync: merge base")
 
-	// Three-way merge: diff base→origin, apply to agent tree.
-	mergedTreeHash, err := ri.threeWayMerge(ctx, baseCommit, originCommit, agentCommit)
+	// Three-way merge: diff base→origin, apply to agent tree with
+	// RemoteWins semantics (origin is the authoritative side for pulls).
+	mergedTreeHash, err := ri.rh.mergeTreesWithStrategy(ctx, baseCommit, originCommit, agentCommit, StrategyRemoteWins)
 	if err != nil {
 		unlock()
 		return SyncResult{}, fmt.Errorf("Sync: three-way merge: %w", err)
@@ -203,89 +203,6 @@ func (ri *remoteIndex) Sync(ctx context.Context, localBranch string, auth transp
 	}
 	return SyncResult{Synced: true, MergeCommit: mergeHash.String()}, nil
 }
-
-// threeWayMerge diffs base→origin and applies those changes to the agent tree.
-// Origin wins for all changes (added, modified, deleted).
-func (ri *remoteIndex) threeWayMerge(ctx context.Context, baseCommit, originCommit, agentCommit *object.Commit) (plumbing.Hash, error) {
-	baseTree, err := baseCommit.Tree()
-	if err != nil {
-		return plumbing.ZeroHash, fmt.Errorf("base tree: %w", err)
-	}
-	originTree, err := originCommit.Tree()
-	if err != nil {
-		return plumbing.ZeroHash, fmt.Errorf("origin tree: %w", err)
-	}
-	agentTree, err := agentCommit.Tree()
-	if err != nil {
-		return plumbing.ZeroHash, fmt.Errorf("agent tree: %w", err)
-	}
-
-	changes, err := object.DiffTree(baseTree, originTree)
-	if err != nil {
-		return plumbing.ZeroHash, fmt.Errorf("diff tree: %w", err)
-	}
-
-	if len(changes) == 0 {
-		return agentTree.Hash, nil
-	}
-
-	currentTree := agentTree
-
-	for _, change := range changes {
-		action, err := change.Action()
-		if err != nil {
-			return plumbing.ZeroHash, fmt.Errorf("change action: %w", err)
-		}
-
-		switch action {
-		case merkletrie.Insert, merkletrie.Modify:
-			path := change.To.Name
-			blobHash := change.To.TreeEntry.Hash
-
-			if action == merkletrie.Modify {
-				// Log if agent also modified this file relative to base.
-				agentFile, agentErr := agentTree.File(path)
-				baseFile, baseErr := baseTree.File(path)
-				if agentErr == nil && baseErr == nil && agentFile.Hash != baseFile.Hash {
-					log.Info().Str("path", path).Msg("sync: master overwrites agent change")
-				}
-			}
-
-			newRootHash, err := buildTree(ri.rh.gits, currentTree, path, blobHash)
-			if err != nil {
-				return plumbing.ZeroHash, fmt.Errorf("apply %s %q: %w", action, path, err)
-			}
-			currentTree, err = object.GetTree(ri.rh.gits, newRootHash)
-			if err != nil {
-				return plumbing.ZeroHash, fmt.Errorf("reload tree after %q: %w", path, err)
-			}
-
-		case merkletrie.Delete:
-			path := change.From.Name
-
-			// Log if agent modified the file that origin deleted.
-			agentFile, agentErr := agentTree.File(path)
-			baseFile, baseErr := baseTree.File(path)
-			if agentErr == nil && baseErr == nil && agentFile.Hash != baseFile.Hash {
-				log.Warn().Str("path", path).Msg("sync: master deletes agent-modified file")
-			}
-
-			newRootHash, err := deleteFromTree(ri.rh.gits, currentTree, path)
-			if err != nil {
-				// File might not exist in agent tree — skip.
-				log.Debug().Str("path", path).Err(err).Msg("sync: skip delete (not in agent tree)")
-				continue
-			}
-			currentTree, err = object.GetTree(ri.rh.gits, newRootHash)
-			if err != nil {
-				return plumbing.ZeroHash, fmt.Errorf("reload tree after delete %q: %w", path, err)
-			}
-		}
-	}
-
-	return currentTree.Hash, nil
-}
-
 
 // Push pushes the given branch to origin.
 // Returns PushResult{Pushed: false} if already up to date.
