@@ -83,13 +83,29 @@ type repoHandler struct {
 	branchMu sync.Map // per-branch write serialization
 }
 
-// lockBranch acquires the per-branch write mutex and returns an unlock function.
-// Used by factIndex and remoteIndex to serialize writes on a given branch.
+// lockBranch acquires the per-branch write lock and returns an unlock function.
+// Used by factIndex, remoteIndex, and MergeBranch to serialize writes on a
+// given branch AND to exclude concurrent Verify runs (which take the read side
+// via lockBranchRead). The lock is held for the full mutation — from the
+// initial ref resolution through SetReference AND notifyCommit's index sync —
+// so no reader can observe the window between "git HEAD advanced" and "SQL
+// branch_facts / graph updated".
 func (rh *repoHandler) lockBranch(branch string) func() {
-	v, _ := rh.branchMu.LoadOrStore(branch, &sync.Mutex{})
-	mu := v.(*sync.Mutex)
+	v, _ := rh.branchMu.LoadOrStore(branch, &sync.RWMutex{})
+	mu := v.(*sync.RWMutex)
 	mu.Lock()
 	return mu.Unlock
+}
+
+// lockBranchRead acquires the per-branch read lock. Multiple readers can hold
+// it concurrently, but no writer can proceed while any reader holds it. Used
+// by Verify to take a consistent snapshot of a branch's git tree + SQL index
+// state without blocking parallel read-only operations.
+func (rh *repoHandler) lockBranchRead(branch string) func() {
+	v, _ := rh.branchMu.LoadOrStore(branch, &sync.RWMutex{})
+	mu := v.(*sync.RWMutex)
+	mu.RLock()
+	return mu.RUnlock
 }
 
 // setEmbedder attaches an Embedder. Called once during service construction.

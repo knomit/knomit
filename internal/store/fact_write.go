@@ -33,10 +33,10 @@ func (fi *factIndex) writeFile(ctx context.Context, branch, path, content, messa
 	}
 
 	unlock := fi.rh.lockBranch(branch)
+	defer unlock()
 
 	headHash, err := fi.rh.resolveRef(ctx, branch)
 	if err != nil {
-		unlock()
 		return "", "", fmt.Errorf("WriteFile: ref: %w", err)
 	}
 
@@ -44,26 +44,26 @@ func (fi *factIndex) writeFile(ctx context.Context, branch, path, content, messa
 	committer := fi.rh.committerSig(branch)
 	newCommitHash, newBlobHash, err := writeFileToStore(fi.rh.gits, headHash, path, content, message, author, committer)
 	if err != nil {
-		unlock()
 		return "", "", err
 	}
 
 	newCommitHash, err = signCommitInPlace(fi.rh.gits, fi.rh.signer, newCommitHash)
 	if err != nil {
-		unlock()
 		return "", "", err
 	}
 
 	// Update the branch ref to point to the new commit.
 	branchRefName := plumbing.NewBranchReferenceName(branch)
 	if err := fi.rh.gits.SetReference(plumbing.NewHashReference(branchRefName, newCommitHash)); err != nil {
-		unlock()
 		return "", "", err
 	}
-	unlock()
 
-	// Notify outside the lock — notifyCommit appends to commit_log and
-	// triggers im.Sync which may call back into Service for reads.
+	// Notify inside the lock — the ref advance, commit_log append, and
+	// im.Sync (which updates branch_facts / graph) must be atomic w.r.t.
+	// concurrent readers (including Verify, which takes lockBranchRead).
+	// A reader observing the window after SetReference but before
+	// notifyCommit would see a torn state: git HEAD at the new commit,
+	// SQL index still at the previous one.
 	if err := fi.rh.notifyCommit(ctx, branch, newCommitHash); err != nil {
 		return "", "", err
 	}
@@ -79,21 +79,19 @@ func (fi *factIndex) deleteFile(ctx context.Context, branch, path, message, oper
 	}
 
 	unlock := fi.rh.lockBranch(branch)
+	defer unlock()
 
 	headHash, err := fi.rh.resolveRef(ctx, branch)
 	if err != nil {
-		unlock()
 		return "", fmt.Errorf("DeleteFile: ref: %w", err)
 	}
 
 	// Check existence inside the lock to avoid a TOCTOU race.
 	exists, err := fi.fileExists(ctx, branch, path)
 	if err != nil {
-		unlock()
 		return "", fmt.Errorf("DeleteFile: check exists: %w", err)
 	}
 	if !exists {
-		unlock()
 		return "", fmt.Errorf("DeleteFile: file %q does not exist", path)
 	}
 
@@ -101,23 +99,20 @@ func (fi *factIndex) deleteFile(ctx context.Context, branch, path, message, oper
 	committer := fi.rh.committerSig(branch)
 	newCommitHash, err := deleteFileFromStore(fi.rh.gits, headHash, path, message, author, committer)
 	if err != nil {
-		unlock()
 		return "", err
 	}
 
 	newCommitHash, err = signCommitInPlace(fi.rh.gits, fi.rh.signer, newCommitHash)
 	if err != nil {
-		unlock()
 		return "", err
 	}
 
 	branchRefName := plumbing.NewBranchReferenceName(branch)
 	if err := fi.rh.gits.SetReference(plumbing.NewHashReference(branchRefName, newCommitHash)); err != nil {
-		unlock()
 		return "", err
 	}
-	unlock()
 
+	// notifyCommit runs inside the branch lock — see writeFile for rationale.
 	if err := fi.rh.notifyCommit(ctx, branch, newCommitHash); err != nil {
 		return "", err
 	}
@@ -146,12 +141,13 @@ func (fi *factIndex) batchWrite(ctx context.Context, branch string, files map[st
 	}
 
 	unlock := fi.rh.lockBranch(branch)
+	defer unlock()
 	cHash, blobHashes, err := fi.batchWriteLocked(ctx, branch, files, message, operation)
-	unlock()
 	if err != nil {
 		return "", nil, err
 	}
 
+	// notifyCommit runs inside the branch lock — see writeFile for rationale.
 	if err := fi.rh.notifyCommit(ctx, branch, cHash); err != nil {
 		return "", nil, err
 	}

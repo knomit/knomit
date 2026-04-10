@@ -45,10 +45,10 @@ func (ri *remoteIndex) Sync(ctx context.Context, localBranch string, auth transp
 	}()
 
 	unlock := ri.rh.lockBranch(localBranch)
+	defer unlock()
 
 	// Check if origin remote exists in git config.
 	if _, err := ri.rh.repo.Remote("origin"); err != nil {
-		unlock()
 		log.Debug().Msg("git sync: no origin remote configured, skipping")
 		return SyncResult{}, nil
 	}
@@ -60,14 +60,12 @@ func (ri *remoteIndex) Sync(ctx context.Context, localBranch string, auth transp
 		Auth:       auth,
 	})
 	if err != nil && err != gogit.NoErrAlreadyUpToDate {
-		unlock()
 		return SyncResult{}, fmt.Errorf("Sync: fetch: %w", err)
 	}
 
 	// Resolve origin/<remoteBranch> ref.
 	originRef, err := ri.rh.gits.Reference(plumbing.NewRemoteReferenceName("origin", remoteBranch))
 	if err != nil {
-		unlock()
 		log.Debug().Str("branch", remoteBranch).Msg("git sync: origin ref not found, skipping")
 		return SyncResult{}, nil
 	}
@@ -77,7 +75,6 @@ func (ri *remoteIndex) Sync(ctx context.Context, localBranch string, auth transp
 	agentRefName := plumbing.NewBranchReferenceName(localBranch)
 	agentRef, err := ri.rh.gits.Reference(agentRefName)
 	if err != nil {
-		unlock()
 		return SyncResult{}, fmt.Errorf("Sync: agent ref: %w", err)
 	}
 	agentHash := agentRef.Hash()
@@ -90,30 +87,25 @@ func (ri *remoteIndex) Sync(ctx context.Context, localBranch string, auth transp
 
 	// Same hash — no-op.
 	if originHash == agentHash {
-		unlock()
 		return SyncResult{}, nil
 	}
 
 	originCommit, err := ri.rh.repo.CommitObject(originHash)
 	if err != nil {
-		unlock()
 		return SyncResult{}, fmt.Errorf("Sync: origin commit: %w", err)
 	}
 
 	agentCommit, err := ri.rh.repo.CommitObject(agentHash)
 	if err != nil {
-		unlock()
 		return SyncResult{}, fmt.Errorf("Sync: agent commit: %w", err)
 	}
 
 	// Check if origin is already an ancestor of agent (already merged).
 	isOriginAncestor, err := originCommit.IsAncestor(agentCommit)
 	if err != nil {
-		unlock()
 		return SyncResult{}, fmt.Errorf("Sync: check origin ancestor: %w", err)
 	}
 	if isOriginAncestor {
-		unlock()
 		log.Debug().Msg("git sync: origin already merged, nothing to do")
 		return SyncResult{}, nil
 	}
@@ -121,21 +113,20 @@ func (ri *remoteIndex) Sync(ctx context.Context, localBranch string, auth transp
 	// Check if agent HEAD is ancestor of origin → fast-forward.
 	isAgentAncestor, err := agentCommit.IsAncestor(originCommit)
 	if err != nil {
-		unlock()
 		return SyncResult{}, fmt.Errorf("Sync: check agent ancestor: %w", err)
 	}
 	if isAgentAncestor {
 		newRef := plumbing.NewHashReference(agentRefName, originHash)
 		if err := ri.rh.gits.SetReference(newRef); err != nil {
-			unlock()
 			return SyncResult{}, fmt.Errorf("Sync: fast-forward ref: %w", err)
 		}
-		unlock()
 
 		log.Info().Str("to", originHash.String()[:8]).Msg("git sync: fast-forward")
 		if err := ri.rh.populateCommitLog(ctx, localBranch); err != nil {
 			log.Warn().Err(err).Msg("commit_log: sync populate")
 		}
+		// notifyCommit runs inside the branch lock — see fact_write.go writeFile
+		// for rationale.
 		if err := ri.rh.notifyCommit(ctx, localBranch, originHash); err != nil {
 			return SyncResult{}, fmt.Errorf("Sync: fast-forward notify: %w", err)
 		}
@@ -145,11 +136,9 @@ func (ri *remoteIndex) Sync(ctx context.Context, localBranch string, auth transp
 	// Find merge base.
 	bases, err := agentCommit.MergeBase(originCommit)
 	if err != nil {
-		unlock()
 		return SyncResult{}, fmt.Errorf("Sync: merge base: %w", err)
 	}
 	if len(bases) == 0 {
-		unlock()
 		return SyncResult{}, fmt.Errorf("Sync: no common ancestor found (disjoint histories)")
 	}
 	baseCommit := bases[0]
@@ -160,7 +149,6 @@ func (ri *remoteIndex) Sync(ctx context.Context, localBranch string, auth transp
 	// RemoteWins semantics (origin is the authoritative side for pulls).
 	mergedTreeHash, err := ri.rh.mergeTreesWithStrategy(ctx, baseCommit, originCommit, agentCommit, StrategyRemoteWins)
 	if err != nil {
-		unlock()
 		return SyncResult{}, fmt.Errorf("Sync: three-way merge: %w", err)
 	}
 
@@ -175,33 +163,28 @@ func (ri *remoteIndex) Sync(ctx context.Context, localBranch string, auth transp
 
 	commitObj := ri.rh.gits.NewEncodedObject()
 	if err := mc.Encode(commitObj); err != nil {
-		unlock()
 		return SyncResult{}, fmt.Errorf("Sync: encode merge commit: %w", err)
 	}
 	mergeHash, err := ri.rh.gits.SetEncodedObject(commitObj)
 	if err != nil {
-		unlock()
 		return SyncResult{}, fmt.Errorf("Sync: store merge commit: %w", err)
 	}
 
 	mergeHash, err = signCommitInPlace(ri.rh.gits, ri.rh.signer, mergeHash)
 	if err != nil {
-		unlock()
 		return SyncResult{}, fmt.Errorf("Sync: sign merge commit: %w", err)
 	}
 
 	newRef := plumbing.NewHashReference(agentRefName, mergeHash)
 	if err := ri.rh.gits.SetReference(newRef); err != nil {
-		unlock()
 		return SyncResult{}, fmt.Errorf("Sync: update ref: %w", err)
 	}
-
-	unlock()
 
 	log.Info().Str("merge_commit", mergeHash.String()[:8]).Msg("git sync: merged origin")
 	if err := ri.rh.populateCommitLog(ctx, localBranch); err != nil {
 		log.Warn().Err(err).Msg("commit_log: sync populate")
 	}
+	// notifyCommit runs inside the branch lock — see fact_write.go writeFile.
 	if err := ri.rh.notifyCommit(ctx, localBranch, mergeHash); err != nil {
 		return SyncResult{}, fmt.Errorf("Sync: merge notify: %w", err)
 	}
@@ -234,6 +217,7 @@ func (ri *remoteIndex) Push(ctx context.Context, branch string, auth transport.A
 	}()
 
 	refspec := fmt.Sprintf("refs/heads/%s:refs/heads/%s", branch, branch)
+	forceRefspec := fmt.Sprintf("+refs/heads/%s:refs/heads/%s", branch, branch)
 
 	log.Debug().Str("branch", branch).Msg("git push: pushing branch")
 	err := ri.rh.repo.Push(&gogit.PushOptions{
@@ -244,8 +228,24 @@ func (ri *remoteIndex) Push(ctx context.Context, branch string, auth transport.A
 	if err == gogit.NoErrAlreadyUpToDate {
 		return PushResult{Pushed: false}, nil
 	}
-	if err != nil && strings.Contains(err.Error(), "non-fast-forward") {
-		forceRefspec := fmt.Sprintf("+refs/heads/%s:refs/heads/%s", branch, branch)
+	// Retry with a force-push on any non-fast-forward condition. Two
+	// distinct error strings cover the same scenario:
+	//
+	//   - "non-fast-forward": go-git observed a non-ff ref state before
+	//     the push; the remote's branch already has commits not in our
+	//     local history.
+	//   - "incorrect old value provided": the remote's transport did a
+	//     compare-and-swap ref update and the ref advanced between our
+	//     advertise and update phases (typical under concurrent pushes
+	//     from two processes to the same bare remote).
+	//
+	// Both are safe to resolve with a force-push because agent branches
+	// are per-machine — no other machine writes to the same branch — and
+	// the branch-lock retry loop on the caller side ensures any local
+	// commits that would be overwritten are still reachable on the losing
+	// pusher's local history.
+	if err != nil && (strings.Contains(err.Error(), "non-fast-forward") ||
+		strings.Contains(err.Error(), "incorrect old value provided")) {
 		err = ri.rh.repo.Push(&gogit.PushOptions{
 			RemoteName: "origin",
 			RefSpecs:   []gogitconfig.RefSpec{gogitconfig.RefSpec(forceRefspec)},

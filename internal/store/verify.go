@@ -141,9 +141,23 @@ func (s *Service) Verify(ctx context.Context, opts VerifyOpts) (IntegrityReport,
 	sort.Strings(branches)
 	report.Branches = branches
 
-	// Per-category check stubs — implementations land in subsequent tasks.
-	// TODO(verify): once the stubs are implemented in tasks 1.2-1.8 and start
-	// doing real I/O, add a `select { case <-ctx.Done(): return report, ctx.Err() }`
+	// Acquire the per-branch read lock on every branch we're about to
+	// check and hold it for the whole Verify run. This gives us a
+	// consistent snapshot: no writer can advance a ref, mutate
+	// branch_facts, or rewrite graph nodes while any check is running,
+	// so torn mid-write states (e.g. HEAD advanced but branch_facts not
+	// yet updated) cannot appear in the report. Writers serialize on the
+	// write side of the same RWMutex via lockBranch, so they block until
+	// Verify completes. This is the read-locking behavior promised in
+	// the package doc.
+	for _, br := range branches {
+		unlock := s.rh.lockBranchRead(br)
+		defer unlock()
+	}
+
+	// Per-category checks. Each check runs against the frozen snapshot
+	// held by the read locks above.
+	// TODO(verify): add a `select { case <-ctx.Done(): return report, ctx.Err() }`
 	// check between branches so cancellation can interrupt long verifies.
 	for _, br := range branches {
 		report.Issues = append(report.Issues, s.checkGitReachability(ctx, br)...)
