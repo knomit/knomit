@@ -95,25 +95,27 @@ func (b *repoBuilder) loadOntology() {
 // first run — either by cloning from a configured origin or by creating a
 // fresh repository with the default ontology seed files.
 func (b *repoBuilder) initDefaultGit() error {
-	if b.cfg.Git.Origin != "" {
-		auth, authErr := resolveAuth(b.cfg.Remote, b.keyPath)
-		if authErr != nil {
-			return fmt.Errorf("resolve auth: %w", authErr)
-		}
-		if err := b.svc.InitFromRemote(b.cfg.Git.Origin, auth, b.agentBranch); err != nil {
-			return fmt.Errorf("init from remote: %w", err)
-		}
-		return nil
-	}
-
 	ont := fact.DefaultOntology()
 	ontologyYAML, err := ont.Serialize()
 	if err != nil {
 		return fmt.Errorf("serialize ontology: %w", err)
 	}
-	if err := b.svc.InitRepo(map[string]string{
+	seedFiles := map[string]string{
 		"domains/ontology.yaml": string(ontologyYAML),
-	}, b.agentBranch); err != nil {
+	}
+
+	if b.cfg.Git.Origin != "" {
+		auth, authErr := resolveAuth(b.cfg.Remote, b.keyPath)
+		if authErr != nil {
+			return fmt.Errorf("resolve auth: %w", authErr)
+		}
+		if err := b.svc.InitFromRemote(b.cfg.Git.Origin, auth, b.agentBranch, seedFiles); err != nil {
+			return fmt.Errorf("init from remote: %w", err)
+		}
+		return nil
+	}
+
+	if err := b.svc.InitRepo(seedFiles, b.agentBranch); err != nil {
 		return fmt.Errorf("init git: %w", err)
 	}
 	return nil
