@@ -151,16 +151,37 @@ func (rh *repoHandler) branchID(ctx context.Context, name string) (int64, error)
 
 // MergeBranch lives in branch_merge.go alongside mergeTreesWithStrategy.
 
-// DropBranch removes a branch and all its branch_facts entries, then runs GC.
+// DropBranch removes a branch from both the git storer (ref deletion) and
+// every SQLite table that references it. Follows the blueprint's promise
+// that deleting a branch "does not affect other branches": the git ref is
+// gone, `branches` is gone, `branch_facts` is gone, `branch_commits` is
+// gone via ON DELETE CASCADE, and the orphaned commits themselves remain
+// in the object store (shared via COW — other branches may still reach
+// them). Verify's branches-table check catches any residue.
 func (rh *repoHandler) DropBranch(ctx context.Context, name string) error {
 	id, err := rh.branchID(ctx, name)
 	if err != nil {
 		return fmt.Errorf("drop branch: %w", err)
 	}
 
+	// Acquire the per-branch write lock so concurrent writes can't race
+	// the deletion. Released when the function returns.
+	unlock := rh.lockBranch(name)
+	defer unlock()
+
+	// 1. Delete the git ref first. If this fails, we leave the SQLite
+	// state untouched so the operation is retryable — better than a
+	// half-removed state where the ref is gone but rows remain.
+	if err := rh.gits.RemoveReference(plumbing.NewBranchReferenceName(name)); err != nil {
+		return fmt.Errorf("drop branch: remove git ref: %w", err)
+	}
+
+	// 2. Delete branch_facts rows (branch_commits cascades from branches).
 	if _, err := conn(ctx, rh.db).ExecContext(ctx, `DELETE FROM branch_facts WHERE branch_id = ?`, id); err != nil {
 		return fmt.Errorf("drop branch_facts: %w", err)
 	}
+	// 3. Delete the branches row. This cascades into branch_commits via
+	// the FK defined in migration 000004.
 	if _, err := conn(ctx, rh.db).ExecContext(ctx, `DELETE FROM branches WHERE id = ?`, id); err != nil {
 		return fmt.Errorf("drop branch row: %w", err)
 	}
