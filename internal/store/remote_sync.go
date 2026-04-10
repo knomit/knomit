@@ -134,8 +134,8 @@ func (ri *remoteIndex) Sync(ctx context.Context, localBranch string, auth transp
 		unlock()
 
 		log.Info().Str("to", originHash.String()[:8]).Msg("git sync: fast-forward")
-		ri.fi.notifyCommit(ctx, localBranch, originHash)
-		if err := ri.si.populateCommitLog(ctx, localBranch); err != nil {
+		ri.rh.notifyCommit(ctx, localBranch, originHash)
+		if err := ri.rh.populateCommitLog(ctx, localBranch); err != nil {
 			log.Warn().Err(err).Msg("commit_log: sync populate")
 		}
 		return SyncResult{Synced: true, FastForward: true}, nil
@@ -164,8 +164,8 @@ func (ri *remoteIndex) Sync(ctx context.Context, localBranch string, auth transp
 
 	// Create merge commit.
 	mc := &object.Commit{
-		Author:       ri.fi.authorSig(localBranch, "sync"),
-		Committer:    ri.fi.committerSig(localBranch),
+		Author:       ri.rh.authorSig(localBranch, "sync"),
+		Committer:    ri.rh.committerSig(localBranch),
 		Message:      fmt.Sprintf("sync: merge origin/%s into %s", remoteBranch, localBranch),
 		TreeHash:     mergedTreeHash,
 		ParentHashes: []plumbing.Hash{agentHash, originHash},
@@ -182,7 +182,7 @@ func (ri *remoteIndex) Sync(ctx context.Context, localBranch string, auth transp
 		return SyncResult{}, fmt.Errorf("Sync: store merge commit: %w", err)
 	}
 
-	mergeHash, err = signCommitInPlace(ri.rh.gits, ri.fi.signer, mergeHash)
+	mergeHash, err = signCommitInPlace(ri.rh.gits, ri.rh.signer, mergeHash)
 	if err != nil {
 		unlock()
 		return SyncResult{}, fmt.Errorf("Sync: sign merge commit: %w", err)
@@ -197,8 +197,8 @@ func (ri *remoteIndex) Sync(ctx context.Context, localBranch string, auth transp
 	unlock()
 
 	log.Info().Str("merge_commit", mergeHash.String()[:8]).Msg("git sync: merged origin")
-	ri.fi.notifyCommit(ctx, localBranch, mergeHash)
-	if err := ri.si.populateCommitLog(ctx, localBranch); err != nil {
+	ri.rh.notifyCommit(ctx, localBranch, mergeHash)
+	if err := ri.rh.populateCommitLog(ctx, localBranch); err != nil {
 		log.Warn().Err(err).Msg("commit_log: sync populate")
 	}
 	return SyncResult{Synced: true, MergeCommit: mergeHash.String()}, nil

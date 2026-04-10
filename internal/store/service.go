@@ -78,7 +78,7 @@ func Open(path string) (*Service, error) {
 	si := &searchIndex{rh: rh}
 	rh.onDrop = si.GC
 	fi := &factIndex{rh: rh, im: si}
-	ri := &remoteIndex{rh: rh, fi: fi, si: si}
+	ri := &remoteIndex{rh: rh}
 	return &Service{
 		rh: rh,
 		fi: fi,
@@ -130,14 +130,14 @@ func (s *Service) Close() error { return s.rh.db.Close() }
 
 // SetSigner sets the SSH signer used for commit signing.
 func (s *Service) SetSigner(signer ssh.Signer) {
-	s.fi.signer = signer
+	s.rh.signer = signer
 }
 
 // SetOnCommit registers a callback invoked after every commit (after internal
 // bookkeeping). This allows callers to observe commits for side-effects such
 // as SSE broadcasting. The callback receives the branch name and commit hash.
 func (s *Service) SetOnCommit(fn func(branch, hash string)) {
-	s.fi.onCommit = fn
+	s.rh.onCommit = fn
 }
 
 

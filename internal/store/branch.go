@@ -14,6 +14,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/rs/zerolog/log"
+	"golang.org/x/crypto/ssh"
 
 	storegit "knomit/internal/store/git"
 )
@@ -55,16 +56,23 @@ func (c *branchCache) remove(name string) {
 }
 
 // repoHandler owns the database handle, branch cache, and branch operations.
+// It is also the home for shared git-level plumbing that used to be scattered
+// across factIndex / searchIndex: the SSH commit signer, the onCommit
+// observer, the author/committer signature helpers, and the commit-log
+// maintenance methods. Consumers reach UP to repoHandler for these — they
+// never reach sideways through a sibling subsystem.
 type repoHandler struct {
-	db        *sql.DB
-	cache     *branchCache
-	onDrop    func(context.Context) error
-	gits      *storegit.Storer
-	repo      *gogit.Repository // nil until OpenRepo/InitRepo/Clone called
-	configMu  sync.Mutex        // guards ConfigureRemote / remote wiring
-	embedMu   sync.RWMutex      // guards embedder
-	embedder  Embedder
-	branchMu  sync.Map          // per-branch write serialization
+	db       *sql.DB
+	cache    *branchCache
+	onDrop   func(context.Context) error
+	gits     *storegit.Storer
+	repo     *gogit.Repository // nil until OpenRepo/InitRepo/Clone called
+	signer   ssh.Signer        // SSH signer for commit signing (shared)
+	onCommit func(branch, hash string) // external observer (e.g. SSE broadcast)
+	configMu sync.Mutex        // guards ConfigureRemote / remote wiring
+	embedMu  sync.RWMutex      // guards embedder
+	embedder Embedder
+	branchMu sync.Map // per-branch write serialization
 }
 
 // lockBranch acquires the per-branch write mutex and returns an unlock function.

@@ -40,15 +40,15 @@ func (fi *factIndex) writeFile(ctx context.Context, branch, path, content, messa
 		return "", "", fmt.Errorf("WriteFile: ref: %w", err)
 	}
 
-	author := fi.authorSig(branch, operation)
-	committer := fi.committerSig(branch)
+	author := fi.rh.authorSig(branch, operation)
+	committer := fi.rh.committerSig(branch)
 	newCommitHash, newBlobHash, err := writeFileToStore(fi.rh.gits, headHash, path, content, message, author, committer)
 	if err != nil {
 		unlock()
 		return "", "", err
 	}
 
-	newCommitHash, err = signCommitInPlace(fi.rh.gits, fi.signer, newCommitHash)
+	newCommitHash, err = signCommitInPlace(fi.rh.gits, fi.rh.signer, newCommitHash)
 	if err != nil {
 		unlock()
 		return "", "", err
@@ -64,7 +64,7 @@ func (fi *factIndex) writeFile(ctx context.Context, branch, path, content, messa
 
 	// Notify outside the lock — appendCommitLog triggers index sync which
 	// may call back into Service for reads.
-	fi.notifyCommit(ctx, branch, newCommitHash)
+	fi.rh.notifyCommit(ctx, branch, newCommitHash)
 	return newCommitHash.String(), newBlobHash.String(), nil
 }
 
@@ -95,15 +95,15 @@ func (fi *factIndex) deleteFile(ctx context.Context, branch, path, message, oper
 		return "", fmt.Errorf("DeleteFile: file %q does not exist", path)
 	}
 
-	author := fi.authorSig(branch, operation)
-	committer := fi.committerSig(branch)
+	author := fi.rh.authorSig(branch, operation)
+	committer := fi.rh.committerSig(branch)
 	newCommitHash, err := deleteFileFromStore(fi.rh.gits, headHash, path, message, author, committer)
 	if err != nil {
 		unlock()
 		return "", err
 	}
 
-	newCommitHash, err = signCommitInPlace(fi.rh.gits, fi.signer, newCommitHash)
+	newCommitHash, err = signCommitInPlace(fi.rh.gits, fi.rh.signer, newCommitHash)
 	if err != nil {
 		unlock()
 		return "", err
@@ -116,7 +116,7 @@ func (fi *factIndex) deleteFile(ctx context.Context, branch, path, message, oper
 	}
 	unlock()
 
-	fi.notifyCommit(ctx, branch, newCommitHash)
+	fi.rh.notifyCommit(ctx, branch, newCommitHash)
 	return newCommitHash.String(), nil
 }
 
@@ -148,7 +148,7 @@ func (fi *factIndex) batchWrite(ctx context.Context, branch string, files map[st
 		return "", nil, err
 	}
 
-	fi.notifyCommit(ctx, branch, cHash)
+	fi.rh.notifyCommit(ctx, branch, cHash)
 	return cHash.String(), blobHashes, nil
 }
 
@@ -211,8 +211,8 @@ func (fi *factIndex) batchWriteLocked(ctx context.Context, branch string, files 
 	}
 
 	// Create single commit.
-	author := fi.authorSig(branch, operation)
-	committer := fi.committerSig(branch)
+	author := fi.rh.authorSig(branch, operation)
+	committer := fi.rh.committerSig(branch)
 	commit := &object.Commit{
 		Author:    author,
 		Committer: committer,
@@ -232,7 +232,7 @@ func (fi *factIndex) batchWriteLocked(ctx context.Context, branch string, files 
 		return plumbing.ZeroHash, nil, fmt.Errorf("batchWrite: store commit: %w", err)
 	}
 
-	cHash, err = signCommitInPlace(fi.rh.gits, fi.signer, cHash)
+	cHash, err = signCommitInPlace(fi.rh.gits, fi.rh.signer, cHash)
 	if err != nil {
 		return plumbing.ZeroHash, nil, err
 	}

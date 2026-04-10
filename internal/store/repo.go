@@ -72,7 +72,7 @@ func (s *Service) OpenRepo() error {
 	if _, err := s.rh.EnsureBranch(context.Background(), branch, "refs/heads/"+branch); err != nil {
 		return fmt.Errorf("OpenRepo: ensure branch %q: %w", branch, err)
 	}
-	if err := s.si.populateCommitLog(context.Background(), branch); err != nil {
+	if err := s.rh.populateCommitLog(context.Background(), branch); err != nil {
 		log.Warn().Err(err).Msg("commit_log: open populate failed")
 	}
 	return nil
@@ -133,10 +133,10 @@ func (s *Service) InitRepo(initFiles map[string]string, agentBranch string) erro
 	if _, err := s.rh.EnsureBranch(context.Background(), "main", "refs/heads/main"); err != nil {
 		return fmt.Errorf("InitRepo: ensure main branch: %w", err)
 	}
-	if err := s.si.populateCommitLog(context.Background(), agentBranch); err != nil {
+	if err := s.rh.populateCommitLog(context.Background(), agentBranch); err != nil {
 		log.Warn().Err(err).Msg("commit_log: initial populate failed")
 	}
-	if err := s.si.populateCommitLog(context.Background(), "main"); err != nil {
+	if err := s.rh.populateCommitLog(context.Background(), "main"); err != nil {
 		log.Warn().Err(err).Msg("commit_log: initial populate (main) failed")
 	}
 	return nil
@@ -272,10 +272,10 @@ func (s *Service) InitFromRemote(originURL string, auth transport.AuthMethod, ag
 	if _, err := s.rh.EnsureBranch(context.Background(), "main", "refs/heads/main"); err != nil {
 		return fmt.Errorf("InitFromRemote: ensure main branch: %w", err)
 	}
-	if err := s.si.populateCommitLog(context.Background(), agentBranch); err != nil {
+	if err := s.rh.populateCommitLog(context.Background(), agentBranch); err != nil {
 		log.Warn().Err(err).Msg("commit_log: remote populate failed")
 	}
-	if err := s.si.populateCommitLog(context.Background(), "main"); err != nil {
+	if err := s.rh.populateCommitLog(context.Background(), "main"); err != nil {
 		log.Warn().Err(err).Msg("commit_log: remote populate (main) failed")
 	}
 	return nil
@@ -319,10 +319,10 @@ func (s *Service) initFromEmptyRemote(repo *gogit.Repository, originURL string, 
 	if _, err := s.rh.EnsureBranch(context.Background(), "main", "refs/heads/main"); err != nil {
 		return fmt.Errorf("InitFromRemote: empty remote ensure main branch: %w", err)
 	}
-	if err := s.si.populateCommitLog(context.Background(), agentBranch); err != nil {
+	if err := s.rh.populateCommitLog(context.Background(), agentBranch); err != nil {
 		log.Warn().Err(err).Msg("commit_log: empty-remote populate failed")
 	}
-	if err := s.si.populateCommitLog(context.Background(), "main"); err != nil {
+	if err := s.rh.populateCommitLog(context.Background(), "main"); err != nil {
 		log.Warn().Err(err).Msg("commit_log: empty-remote populate (main) failed")
 	}
 	return nil

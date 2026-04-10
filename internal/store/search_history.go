@@ -3,14 +3,7 @@ package store
 import (
 	"context"
 	"fmt"
-	"io"
 	"time"
-
-	gogit "github.com/go-git/go-git/v5"
-	"github.com/go-git/go-git/v5/plumbing"
-	"github.com/rs/zerolog/log"
-
-	storegit "knomit/internal/store/git"
 )
 
 // Log returns up to 50 log entries for commits that modified path on branch.
@@ -209,75 +202,4 @@ func (si *searchIndex) FactsIter(ctx context.Context, branch string) (*FactsIter
 		return nil, err
 	}
 	return &FactsIter{rows: rows, seen: make(map[string]struct{})}, nil
-}
-
-// populateCommitLog backfills commit_log from the tip of branch.
-func (si *searchIndex) populateCommitLog(ctx context.Context, branch string) error {
-	hash, err := si.rh.resolveRef(ctx, branch)
-	if err != nil {
-		// Branch not found (empty repo) — just mark available if table exists.
-		_ = si.rh.gits.CommitLogAvailable()
-		return nil
-	}
-
-	logIter, err := si.rh.repo.Log(&gogit.LogOptions{
-		From:  hash,
-		Order: gogit.LogOrderDefault,
-	})
-	if err != nil {
-		return fmt.Errorf("populateCommitLog: log: %w", err)
-	}
-	defer logIter.Close()
-
-	var count int
-	err = si.rh.gits.CommitLogSync(branch, func() (string, []storegit.CommitLogEntry, error) {
-		c, err := logIter.Next()
-		if err == io.EOF {
-			return "", nil, nil
-		}
-		if err != nil {
-			return "", nil, err
-		}
-		count++
-		files, err := changedFilesInCommit(c)
-		if err != nil {
-			return "", nil, err
-		}
-		return c.Hash.String(), commitEntries(c, files), nil
-	})
-	if err != nil {
-		return fmt.Errorf("populateCommitLog: sync: %w", err)
-	}
-
-	log.Debug().Int("commits", count).Msg("commit_log: populated")
-	return nil
-}
-
-// AppendCommitLog inserts a single new commit into commit_log.
-func (si *searchIndex) AppendCommitLog(ctx context.Context, branch, hashStr string) {
-	if !si.rh.gits.CommitLogAvailable() {
-		return
-	}
-	hash := plumbing.NewHash(hashStr)
-	c, err := si.rh.repo.CommitObject(hash)
-	if err != nil {
-		log.Warn().Err(err).Str("hash", hashStr).Msg("commit_log: get commit")
-		return
-	}
-	files, err := changedFilesInCommit(c)
-	if err != nil {
-		log.Warn().Err(err).Str("hash", hashStr).Msg("commit_log: changed files")
-		return
-	}
-	done := false
-	entries := commitEntries(c, files)
-	if err := si.rh.gits.CommitLogSync(branch, func() (string, []storegit.CommitLogEntry, error) {
-		if done {
-			return "", nil, nil
-		}
-		done = true
-		return hash.String(), entries, nil
-	}); err != nil {
-		log.Warn().Err(err).Str("hash", hash.String()).Msg("commit_log: append sync failed")
-	}
 }
