@@ -54,6 +54,71 @@ func (r *RemoteHandle) Dir() string { return r.dir }
 // error messages and debugging).
 func (r *RemoteHandle) Name() string { return r.name }
 
+// MergeIntoMain merges the named branch into main on the bare remote.
+// Simulates the planned merge-to-main feature: an agent's branch has
+// been pushed to the remote, and now its content is being promoted into
+// the consensus main branch (which knomit's MCP server never writes
+// directly — it's a remote-side operation in the blueprint).
+//
+// Implemented via a clone-merge-push cycle: clone the bare repo into a
+// scratch worktree, check out main, merge the named branch, push back
+// to the bare repo. The bare repo never has a worktree, so the merge
+// must happen in a transient clone.
+//
+// The branch must already exist on the bare repo (i.e. some agent
+// previously pushed it). This is the helper Phase 3 Category E and the
+// blueprint scenario rely on.
+func (r *RemoteHandle) MergeIntoMain(branch, message string) {
+	t := r.sb.t
+	t.Helper()
+
+	work := t.TempDir()
+	mustGit(t, "", "clone", r.dir, work)
+
+	// Make sure main exists locally and is checked out. The clone
+	// inherits whatever HEAD the bare repo had — usually main if any
+	// agent has pushed main, otherwise the first pushed branch. Force
+	// a checkout of main if the clone landed on something else.
+	mustGit(t, work, "checkout", "-B", "main", "origin/main")
+
+	// Merge the named branch with --no-ff so a real merge commit is
+	// created (otherwise a fast-forward would just advance the ref and
+	// not produce a distinct merge commit, which the test scenario
+	// expects to be visible).
+	mustGit(t, work, "merge", "--no-ff", "-m", message,
+		"--allow-unrelated-histories", "origin/"+branch)
+
+	mustGit(t, work, "push", "origin", "main")
+}
+
+// WriteMain writes a fact directly to main on the bare remote in a new
+// commit. Simulates a "third-party agent's already-promoted change" —
+// the test pretends another agent pushed and merged-to-main a fact, so
+// when our agent under test syncs, it sees that fact arrive from origin/main.
+//
+// Implemented via the same clone-edit-push pattern as MergeIntoMain.
+// The branch's main must exist on the bare repo before this is called
+// (typically because some other agent has already pushed at least once).
+func (r *RemoteHandle) WriteMain(path string, spec FactSpec, message string) {
+	t := r.sb.t
+	t.Helper()
+
+	work := t.TempDir()
+	mustGit(t, "", "clone", r.dir, work)
+	mustGit(t, work, "checkout", "-B", "main", "origin/main")
+
+	full := filepath.Join(work, path)
+	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+		t.Fatalf("WriteMain: mkdir %s: %v", filepath.Dir(full), err)
+	}
+	if err := os.WriteFile(full, []byte(spec.Build()), 0o644); err != nil {
+		t.Fatalf("WriteMain: write %s: %v", full, err)
+	}
+	mustGit(t, work, "add", path)
+	mustGit(t, work, "commit", "-m", message)
+	mustGit(t, work, "push", "origin", "main")
+}
+
 // mustGit runs `git <args>` in dir (or the process cwd if dir is ""),
 // failing the test with the full stdout+stderr output on any non-zero
 // exit. Used by BareRemote, MergeIntoMain, and WriteMain.
