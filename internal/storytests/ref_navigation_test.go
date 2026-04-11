@@ -153,4 +153,48 @@ func TestRefNavigation_FullLifecycle(t *testing.T) {
 
 	// 11. And from c3 (before any retractions), gamma still reaches beta.
 	c3.Fact("kb/gamma.md").FollowRef("kb/beta.md").Confidence().MustEqual(0.8)
+
+	// 12. Full walk from zeta at c8 — every node reachable through
+	//     historical navigation even though at HEAD only alpha and zeta
+	//     survive. At c8, gamma and epsilon are still alive (deleted in
+	//     later commits), delta is gone (retracted at c7), beta is gone
+	//     (retracted at c4).
+	//
+	//     zeta → gamma (alive at c8)
+	c8.Fact("kb/zeta.md").FollowRef("kb/gamma.md").MustExist()
+	//     zeta → gamma → alpha (alive at c8, confidence 0.9)
+	c8.Fact("kb/zeta.md").
+		FollowRef("kb/gamma.md").
+		FollowRef("kb/alpha.md").
+		Confidence().MustEqual(0.9)
+	//     zeta → gamma → beta (broken — retracted at c4)
+	c8.Fact("kb/zeta.md").
+		FollowRef("kb/gamma.md").
+		FollowRef("kb/beta.md").
+		MustBeBroken()
+	//     zeta → epsilon (alive at c8)
+	c8.Fact("kb/zeta.md").FollowRef("kb/epsilon.md").MustExist()
+	//     zeta → epsilon → gamma → alpha (4 hops, all alive at c8)
+	c8.Fact("kb/zeta.md").
+		FollowRef("kb/epsilon.md").
+		FollowRef("kb/gamma.md").
+		FollowRef("kb/alpha.md").
+		Confidence().MustEqual(0.9)
+	//     zeta → epsilon → delta (broken — retracted at c7)
+	c8.Fact("kb/zeta.md").
+		FollowRef("kb/epsilon.md").
+		FollowRef("kb/delta.md").
+		MustBeBroken()
+
+	// 13. To reach beta from zeta we need a time machine: go back to
+	//     c3 where gamma→beta was alive, then walk that link.
+	//     This proves every node in the graph (alpha, beta, gamma,
+	//     delta, epsilon, zeta) is reachable via temporal navigation
+	//     even though four of six are deleted at HEAD.
+	c3.Fact("kb/gamma.md").
+		FollowRef("kb/beta.md").
+		Confidence().MustEqual(0.8)
+	c3.Fact("kb/gamma.md").
+		FollowRef("kb/alpha.md").
+		Confidence().MustEqual(0.9)
 }
