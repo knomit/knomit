@@ -176,7 +176,7 @@ func (b *repoBuilder) seedWatermarks() {
 // build assembles the final RepoInstance, starts the commit observer and
 // background sync loops, and wires up the startSync and closeFn closures.
 // Must be called after openStore, openGit, ensureBranch, setupIndex, and
-// seedWatermarks. The returned instance is ready for SetupMCP and registration.
+// seedWatermarks. The returned instance is ready for registration with the Manager.
 func (b *repoBuilder) build() *RepoInstance {
 	hub := NewTaskHub(b.ctx)
 
