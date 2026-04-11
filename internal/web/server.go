@@ -33,6 +33,8 @@ type Server struct {
 	branchesLister func(ri *repos.RepoInstance) ([]store.Branch, error)
 
 	branchRootReader func(ri *repos.RepoInstance, branch string) (branchRootInfo, error)
+
+	factReader FactReader
 }
 
 // buildMCPHandlers constructs one MCP server per profile, shared across all

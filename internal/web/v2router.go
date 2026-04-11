@@ -59,5 +59,14 @@ func (s *Server) NewV2Router() chi.Router {
 		handleV2Branch(b, s.Manager, reader, s.AgentBranch, s.EmbeddingsEnabled),
 	)
 
+	factReader := s.factReader
+	if factReader == nil {
+		factReader = defaultFactReader{}
+	}
+	r.With(BranchMiddleware).Get(
+		"/repos/{repo}/branches/{branch}/facts/*",
+		handleV2Fact(b, s.Manager, factReader),
+	)
+
 	return r
 }
