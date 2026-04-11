@@ -58,9 +58,9 @@ func (b URLBuilder) Branch(repo string, a Anchor) string {
 	return b.Branches(repo) + "/" + EncodeBranch(a.Branch)
 }
 
-// branchOrCommitPrefix returns the path prefix under which a resource lives,
+// BranchOrCommitPrefix returns the path prefix under which a resource lives,
 // respecting the anchor's commit pin if any.
-func (b URLBuilder) branchOrCommitPrefix(repo string, a Anchor) string {
+func (b URLBuilder) BranchOrCommitPrefix(repo string, a Anchor) string {
 	p := b.Branch(repo, a)
 	if !a.IsHEAD() {
 		p += "/commits/" + a.Commit
@@ -71,7 +71,7 @@ func (b URLBuilder) branchOrCommitPrefix(repo string, a Anchor) string {
 // Fact returns the URL for a single fact at the given anchor. Path is the
 // git-relative fact path (e.g. "know/ai/ml/abc12345.md").
 func (b URLBuilder) Fact(repo string, a Anchor, path string) string {
-	return b.branchOrCommitPrefix(repo, a) + "/facts/" + path
+	return b.BranchOrCommitPrefix(repo, a) + "/facts/" + path
 }
 
 // FactIncoming returns the URL for a fact's incoming-edges collection.
