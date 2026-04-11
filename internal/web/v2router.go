@@ -41,6 +41,8 @@ func (s *Server) NewV2Router() chi.Router {
 
 	b := hal.URLBuilder{Base: V2URLBase}
 	r.Get("/", handleV2APIRoot(b))
+	r.Get("/repos", handleV2Repos(b, s.Manager))
+	r.Get("/repos/{repo}", handleV2Repo(b, s.Manager))
 
 	return r
 }

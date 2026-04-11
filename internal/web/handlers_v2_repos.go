@@ -1,0 +1,66 @@
+package web
+
+import (
+	"net/http"
+	"sort"
+
+	"github.com/go-chi/chi/v5"
+
+	"knomit/internal/repos"
+	"knomit/internal/web/hal"
+)
+
+// repoSummary is the minimal shape for an item inside the /repos collection.
+// Per hard rule §3 #7, embedded items carry only _links.self (plus minimal
+// display fields — the name is the display field here).
+type repoSummary struct {
+	Name  string      `json:"name"`
+	Links hal.LinkMap `json:"_links"`
+}
+
+// handleV2Repos serves GET /api/v1-new/repos.
+func handleV2Repos(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		names := make([]string, 0)
+		m.ForEach(func(name string, _ *repos.RepoInstance) {
+			names = append(names, name)
+		})
+		sort.Strings(names) // deterministic order
+
+		items := make([]repoSummary, 0, len(names))
+		for _, name := range names {
+			items = append(items, repoSummary{
+				Name:  name,
+				Links: hal.LinkMap{"self": {Href: b.Repo(name)}},
+			})
+		}
+
+		body := hal.CollectionView[repoSummary]{
+			Count:    len(items),
+			Links:    hal.LinkMap{"self": {Href: b.Repos()}},
+			Embedded: map[string][]repoSummary{"repos": items},
+		}
+		hal.WriteHAL(w, http.StatusOK, body)
+	}
+}
+
+// handleV2Repo serves GET /api/v1-new/repos/{repo}.
+func handleV2Repo(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		name := chi.URLParam(r, "repo")
+		ri := m.Get(name)
+		if ri == nil {
+			hal.WriteProblem(w, http.StatusNotFound, "Repo not found",
+				`no repo named "`+name+`"`, r.URL.Path)
+			return
+		}
+		body := map[string]any{
+			"name": name,
+			"_links": hal.LinkMap{
+				"self":     {Href: b.Repo(name)},
+				"branches": {Href: b.Branches(name)},
+			},
+		}
+		hal.WriteHAL(w, http.StatusOK, body)
+	}
+}
