@@ -34,26 +34,15 @@ type Server struct {
 // SetupMCP wires MCP handlers onto ri using the server's ontology and deps.
 // Safe to call after SwapStore to rebind MCP handlers to the new database.
 func (s *Server) SetupMCP(ri *repos.RepoInstance) {
-	ontology := ri.Ontology()
-	if ontology == nil {
+	if ri.Ontology() == nil {
 		return
 	}
-
-	var gs store.FactIndex
-	var idx store.SearchIndex
-	var pipelineIdx store.PipelineIndex
-	var toolSessionIdx store.ToolSessionIndex
-	var branches store.BranchIndex
+	// Skip setup if the repo's store is currently nil (mid-swap).
+	var hasStore bool
 	ri.WithRead(func(svc *store.Service) {
-		if svc != nil {
-			gs = svc.Facts()
-			idx = svc.Search()
-			pipelineIdx = svc.Pipeline()
-			toolSessionIdx = svc.ToolSession()
-			branches = svc.Branches()
-		}
+		hasStore = svc != nil
 	})
-	if gs == nil {
+	if !hasStore {
 		log.Warn().Msg("SetupMCP: svc is nil, skipping")
 		return
 	}
@@ -64,9 +53,9 @@ func (s *Server) SetupMCP(ri *repos.RepoInstance) {
 	for _, p := range profiles {
 		var mcpSrv *mcpserver.MCPServer
 		if s.Embedder != nil {
-			mcpSrv = mcp.NewServer(gs, idx, toolSessionIdx, pipelineIdx, branches, reviewer, p, s.OntologyRoot, ontology, s.AgentBranch, s.Embedder)
+			mcpSrv = mcp.NewServer(ri, reviewer, p, s.Embedder)
 		} else {
-			mcpSrv = mcp.NewServer(gs, idx, toolSessionIdx, pipelineIdx, branches, reviewer, p, s.OntologyRoot, ontology, s.AgentBranch)
+			mcpSrv = mcp.NewServer(ri, reviewer, p)
 		}
 		mcpHandlers[p] = mcpserver.NewStreamableHTTPServer(mcpSrv)
 	}
