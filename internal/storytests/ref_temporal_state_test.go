@@ -102,8 +102,25 @@ func TestRefTemporal_StateAtDefinitionTime(t *testing.T) {
 		FollowRef("kb/alpha.md").
 		Body().MustContain("init alpha")
 
-	// 5. At HEAD, everything has been updated.
+	// 5. What gamma reaches at HEAD vs c3.
+	//    At HEAD: gamma itself was updated ("gamma update 1"), and its
+	//    targets have their latest values.
 	head := agent.Head()
+	head.Fact("kb/gamma.md").Body().MustContain("gamma update 1")
+	head.Fact("kb/gamma.md").FollowRef("kb/alpha.md").Confidence().MustEqual(0.9)
+	head.Fact("kb/gamma.md").FollowRef("kb/alpha.md").Body().MustContain("alpha update 1")
+	head.Fact("kb/gamma.md").FollowRef("kb/beta.md").Confidence().MustEqual(0.9)
+	head.Fact("kb/gamma.md").FollowRef("kb/beta.md").Body().MustContain("beta update 1")
+
+	//    At c3: gamma has "init gamma", and its targets are at their
+	//    original state — both alpha and beta at 0.8.
+	c3.Fact("kb/gamma.md").Body().MustContain("init gamma")
+	c3.Fact("kb/gamma.md").FollowRef("kb/alpha.md").Confidence().MustEqual(0.8)
+	c3.Fact("kb/gamma.md").FollowRef("kb/alpha.md").Body().MustContain("init alpha")
+	c3.Fact("kb/gamma.md").FollowRef("kb/beta.md").Confidence().MustEqual(0.8)
+	c3.Fact("kb/gamma.md").FollowRef("kb/beta.md").Body().MustContain("init beta")
+
+	// 6. What delta reaches at HEAD vs c6.
 	head.Fact("kb/delta.md").FollowRef("kb/gamma.md").Body().MustContain("gamma update 1")
 	head.Fact("kb/delta.md").
 		FollowRef("kb/gamma.md").
