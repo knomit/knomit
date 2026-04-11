@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"knomit/internal/fact"
+	"knomit/internal/repos"
 	"knomit/internal/store"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
@@ -61,7 +62,7 @@ type learnFactInput struct {
 // LearnHandler returns the handler function for knomit_learn.
 // If embedder is non-nil, dedup checks batch-embed all incoming facts upfront
 // instead of embedding one-at-a-time inside each Search call.
-func LearnHandler(gs store.FactIndex, idx store.SearchIndex, ontologyRoot string, ontology *fact.Ontology, agentBranch string, embedders ...store.BatchEmbedder) func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+func LearnHandler(ri *repos.RepoInstance, embedders ...store.BatchEmbedder) func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 	var batchEmb store.BatchEmbedder
 	if len(embedders) > 0 {
 		batchEmb = embedders[0]
@@ -69,6 +70,10 @@ func LearnHandler(gs store.FactIndex, idx store.SearchIndex, ontologyRoot string
 	return func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 		ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 		defer cancel()
+		s := storeIndices(ri)
+		agentBranch := ri.AgentBranch()
+		ontologyRoot := ri.OntologyRoot()
+		ontology := ri.Ontology()
 
 		// 1. Parse arguments.
 		momentName := req.GetString("moment_name", "")
@@ -179,14 +184,14 @@ func LearnHandler(gs store.FactIndex, idx store.SearchIndex, ontologyRoot string
 			if dedupVecs != nil && i < len(dedupVecs) && len(dedupVecs[i]) > 0 {
 				sq.QueryVec = dedupVecs[i]
 			}
-			results, err := idx.Search(ctx, agentBranch, sq)
+			results, err := s.search.Search(ctx, agentBranch, sq)
 			if err != nil || len(results) == 0 {
 				continue
 			}
 
 			match := results[0]
 			// Read existing fact to get its full metadata (refs, etc.)
-			readResult, readErr := gs.ReadFact(ctx, agentBranch, match.Path, nil)
+			readResult, readErr := s.facts.ReadFact(ctx, agentBranch, match.Path, nil)
 			if readErr != nil {
 				continue
 			}
@@ -201,7 +206,7 @@ func LearnHandler(gs store.FactIndex, idx store.SearchIndex, ontologyRoot string
 				// Write the observation as normal (don't merge into existing path).
 				// Retract the hypothesis.
 				retractMsg := fmt.Sprintf("learn: hypothesis %s subsumed by observation", match.Path)
-				gs.DeleteFact(ctx, agentBranch, match.Path, retractMsg)
+				s.facts.DeleteFact(ctx, agentBranch, match.Path, retractMsg)
 				// Add hypothesis path to observation's refs.
 				f.Refs = fact.AppendUnique(f.Refs, match.Path)
 				facts[i] = f
@@ -246,7 +251,7 @@ func LearnHandler(gs store.FactIndex, idx store.SearchIndex, ontologyRoot string
 
 		// 4. BatchWrite all facts in one commit.
 		commitMsg := fmt.Sprintf("learn: %s", momentName)
-		hash, _, err := gs.BatchWriteFacts(ctx, agentBranch, files, commitMsg, "learn")
+		hash, _, err := s.facts.BatchWriteFacts(ctx, agentBranch, files, commitMsg, "learn")
 		if err != nil {
 			return mcpgo.NewToolResultError(fmt.Sprintf("write error: %v", err)), nil
 		}
