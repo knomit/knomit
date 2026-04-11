@@ -10,6 +10,7 @@ import (
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 
 	"knomit/internal/fact"
+	"knomit/internal/repos"
 	"knomit/internal/store"
 )
 
@@ -44,10 +45,15 @@ func hypothesizeTool() mcpgo.Tool {
 }
 
 // HypothesizeHandler returns the handler function for knomit_hypothesize.
-func HypothesizeHandler(gs store.FactIndex, idx store.SearchIndex, pipelineIdx store.PipelineIndex, branches store.BranchIndex, ontologyRoot, agentBranch string) func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+func HypothesizeHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 	return func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 		ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
+
+		ri := repos.RepoFromContext(ctx)
+		s := storeIndices(ri)
+		agentBranch := ri.AgentBranch()
+		ontologyRoot := ri.OntologyRoot()
 
 		sessionID := req.GetString("session_id", "")
 		response := req.GetString("response", "")
@@ -56,9 +62,9 @@ func HypothesizeHandler(gs store.FactIndex, idx store.SearchIndex, pipelineIdx s
 		var err error
 
 		if sessionID == "" {
-			result, err = hypothesizeStart(ctx, gs, idx, pipelineIdx, branches, ontologyRoot, agentBranch)
+			result, err = hypothesizeStart(ctx, s, ontologyRoot, agentBranch)
 		} else {
-			result, err = hypothesizeContinue(ctx, pipelineIdx, branches, ontologyRoot, agentBranch, sessionID, response)
+			result, err = hypothesizeContinue(ctx, s, ontologyRoot, agentBranch, sessionID, response)
 		}
 
 		if err != nil {
@@ -71,11 +77,11 @@ func HypothesizeHandler(gs store.FactIndex, idx store.SearchIndex, pipelineIdx s
 }
 
 // hypothesizeStart creates a new session, finds synthesis facts, and returns the first item.
-func hypothesizeStart(ctx context.Context, gs store.FactIndex, idx store.SearchIndex, pipelineIdx store.PipelineIndex, branches store.BranchIndex, ontologyRoot, agentBranch string) (*HypothesizeResult, error) {
+func hypothesizeStart(ctx context.Context, s mcpStore, ontologyRoot, agentBranch string) (*HypothesizeResult, error) {
 	branch := agentBranch
 
 	// Get watermark.
-	watermark, err := pipelineIdx.GetPipelineWatermark(ctx, "hypothesize", branch)
+	watermark, err := s.pipeline.GetPipelineWatermark(ctx, "hypothesize", branch)
 	if err != nil {
 		return nil, fmt.Errorf("get watermark: %w", err)
 	}
@@ -84,7 +90,7 @@ func hypothesizeStart(ctx context.Context, gs store.FactIndex, idx store.SearchI
 
 	if watermark == "" {
 		// First run: search for all synthesis facts.
-		results, err := idx.Search(ctx, agentBranch, store.SearchQuery{
+		results, err := s.search.Search(ctx, agentBranch, store.SearchQuery{
 			IncludeTypes: []string{"synthesis"},
 			Limit:        100000,
 		})
@@ -104,7 +110,7 @@ func hypothesizeStart(ctx context.Context, gs store.FactIndex, idx store.SearchI
 		}
 	} else {
 		// Incremental: find changed files since watermark.
-		added, modified, _, err := gs.DiffFiles(ctx, agentBranch, watermark)
+		added, modified, _, err := s.facts.DiffFiles(ctx, agentBranch, watermark)
 		if err != nil {
 			return nil, fmt.Errorf("diff files: %w", err)
 		}
@@ -113,7 +119,7 @@ func hypothesizeStart(ctx context.Context, gs store.FactIndex, idx store.SearchI
 			if !strings.HasSuffix(p, ".md") {
 				continue
 			}
-			readResult, readErr := gs.ReadFact(ctx, agentBranch, p, nil)
+			readResult, readErr := s.facts.ReadFact(ctx, agentBranch, p, nil)
 			if readErr != nil {
 				continue
 			}
@@ -130,14 +136,14 @@ func hypothesizeStart(ctx context.Context, gs store.FactIndex, idx store.SearchI
 	// No synthesis facts → done immediately.
 	if len(synthFacts) == 0 {
 		// Advance watermark even when empty so next run is incremental.
-		if head, err := branches.HeadCommit(ctx, agentBranch); err == nil {
-			_ = pipelineIdx.SetPipelineWatermark(ctx, "hypothesize", branch, head)
+		if head, err := s.branches.HeadCommit(ctx, agentBranch); err == nil {
+			_ = s.pipeline.SetPipelineWatermark(ctx, "hypothesize", branch, head)
 		}
 		return &HypothesizeResult{Done: true}, nil
 	}
 
 	// Create session.
-	sess, err := pipelineIdx.CreatePipelineSession(ctx, "hypothesize", branch)
+	sess, err := s.pipeline.CreatePipelineSession(ctx, "hypothesize", branch)
 	if err != nil {
 		return nil, fmt.Errorf("create session: %w", err)
 	}
@@ -152,18 +158,18 @@ func hypothesizeStart(ctx context.Context, gs store.FactIndex, idx store.SearchI
 			FactsJSON:  string(factJSON),
 			Priority:   float64(len(synthFacts) - i),
 		}
-		if err := pipelineIdx.InsertPipelineWorkItem(ctx, item); err != nil {
+		if err := s.pipeline.InsertPipelineWorkItem(ctx, item); err != nil {
 			return nil, fmt.Errorf("insert work item: %w", err)
 		}
 	}
 
-	return hypothesizeNextItem(ctx, pipelineIdx, branches, ontologyRoot, agentBranch, sess.ID)
+	return hypothesizeNextItem(ctx, s, ontologyRoot, agentBranch, sess.ID)
 }
 
 // hypothesizeContinue acknowledges the current work item and advances to the next.
-func hypothesizeContinue(ctx context.Context, pipelineIdx store.PipelineIndex, branches store.BranchIndex, ontologyRoot, agentBranch, sessionID, response string) (*HypothesizeResult, error) {
+func hypothesizeContinue(ctx context.Context, s mcpStore, ontologyRoot, agentBranch, sessionID, response string) (*HypothesizeResult, error) {
 	// Verify session exists and is active.
-	sess, err := pipelineIdx.GetPipelineSession(ctx, sessionID)
+	sess, err := s.pipeline.GetPipelineSession(ctx, sessionID)
 	if err != nil {
 		return nil, fmt.Errorf("get session: %w", err)
 	}
@@ -175,7 +181,7 @@ func hypothesizeContinue(ctx context.Context, pipelineIdx store.PipelineIndex, b
 	}
 
 	// Get current unanswered work item and mark it as answered.
-	current, err := pipelineIdx.NextPipelineWorkItem(ctx, sessionID)
+	current, err := s.pipeline.NextPipelineWorkItem(ctx, sessionID)
 	if err != nil {
 		return nil, fmt.Errorf("get current item: %w", err)
 	}
@@ -184,28 +190,28 @@ func hypothesizeContinue(ctx context.Context, pipelineIdx store.PipelineIndex, b
 		if resp == "" {
 			resp = "acknowledged"
 		}
-		if err := pipelineIdx.SetPipelineWorkItemResponse(ctx, current.ID, resp); err != nil {
+		if err := s.pipeline.SetPipelineWorkItemResponse(ctx, current.ID, resp); err != nil {
 			return nil, fmt.Errorf("set response: %w", err)
 		}
 	}
 
-	return hypothesizeNextItem(ctx, pipelineIdx, branches, ontologyRoot, agentBranch, sessionID)
+	return hypothesizeNextItem(ctx, s, ontologyRoot, agentBranch, sessionID)
 }
 
 // hypothesizeNextItem fetches the next unanswered work item or completes the session.
-func hypothesizeNextItem(ctx context.Context, pipelineIdx store.PipelineIndex, branches store.BranchIndex, ontologyRoot, agentBranch, sessionID string) (*HypothesizeResult, error) {
-	item, err := pipelineIdx.NextPipelineWorkItem(ctx, sessionID)
+func hypothesizeNextItem(ctx context.Context, s mcpStore, ontologyRoot, agentBranch, sessionID string) (*HypothesizeResult, error) {
+	item, err := s.pipeline.NextPipelineWorkItem(ctx, sessionID)
 	if err != nil {
 		return nil, fmt.Errorf("next item: %w", err)
 	}
 
 	// No more items → complete session and advance watermark.
 	if item == nil {
-		if err := pipelineIdx.CompletePipelineSession(ctx, sessionID); err != nil {
+		if err := s.pipeline.CompletePipelineSession(ctx, sessionID); err != nil {
 			return nil, fmt.Errorf("complete session: %w", err)
 		}
-		if head, err := branches.HeadCommit(ctx, agentBranch); err == nil {
-			_ = pipelineIdx.SetPipelineWatermark(ctx, "hypothesize", agentBranch, head)
+		if head, err := s.branches.HeadCommit(ctx, agentBranch); err == nil {
+			_ = s.pipeline.SetPipelineWatermark(ctx, "hypothesize", agentBranch, head)
 		}
 		return &HypothesizeResult{
 			SessionID: sessionID,
@@ -216,7 +222,7 @@ func hypothesizeNextItem(ctx context.Context, pipelineIdx store.PipelineIndex, b
 	// Build instructions.
 	instructions := buildHypothesizeInstructions(ontologyRoot)
 
-	completed, remaining, _ := pipelineIdx.PipelineWorkItemStats(ctx, sessionID)
+	completed, remaining, _ := s.pipeline.PipelineWorkItemStats(ctx, sessionID)
 
 	return &HypothesizeResult{
 		SessionID: sessionID,

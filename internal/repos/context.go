@@ -20,3 +20,13 @@ func RepoFromContext(ctx context.Context) *RepoInstance {
 	}
 	return ri
 }
+
+// RepoFromContextOpt retrieves the RepoInstance from the context if present.
+// Returns (nil, false) if the context has no RepoInstance. Use this from code
+// paths where the repo may legitimately be absent (e.g. MCP initialize hooks
+// called outside a request-scoped middleware chain). Most code should use
+// RepoFromContext instead, which panics to enforce the middleware contract.
+func RepoFromContextOpt(ctx context.Context) (*RepoInstance, bool) {
+	ri, ok := ctx.Value(repoInstanceKey).(*RepoInstance)
+	return ri, ok
+}

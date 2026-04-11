@@ -176,19 +176,21 @@ func (b *repoBuilder) seedWatermarks() {
 // build assembles the final RepoInstance, starts the commit observer and
 // background sync loops, and wires up the startSync and closeFn closures.
 // Must be called after openStore, openGit, ensureBranch, setupIndex, and
-// seedWatermarks. The returned instance is ready for SetupMCP and registration.
+// seedWatermarks. The returned instance is ready for registration with the Manager.
 func (b *repoBuilder) build() *RepoInstance {
 	hub := NewTaskHub(b.ctx)
 
 	// Allocate ri first — the observer and closures capture the pointer so
 	// they follow SwapStore field replacements via the read lock.
 	ri := &RepoInstance{
-		name:        b.name,
-		dbPath:      b.dbPath,
-		agentBranch: b.agentBranch,
-		ontology:    b.ontology,
-		svc:         b.svc,
-		hub:         hub,
+		name:         b.name,
+		dbPath:       b.dbPath,
+		agentBranch:  b.agentBranch,
+		ontology:     b.ontology,
+		embedder:     b.embedder,
+		ontologyRoot: b.cfg.OntologyRoot,
+		svc:          b.svc,
+		hub:          hub,
 	}
 
 	// Observer: sync index + push SSE on every git commit.

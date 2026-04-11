@@ -24,9 +24,6 @@ type Deps struct {
 	AgentBranch string
 	Embedder    store.BatchEmbedder // nil if unavailable
 	KeyPath     string
-	// OnRepoReady is called after a repo is opened or its store is swapped.
-	// The web layer uses this to wire MCP handlers onto the repo.
-	OnRepoReady func(ri *RepoInstance)
 	// DisableBackgroundSync suppresses the background pull and push loops
 	// that would otherwise run on every managed repo. Tests use this to
 	// prevent non-deterministic sync/push behavior — the loops call
@@ -94,9 +91,6 @@ func (m *Manager) Names() []string {
 	return names
 }
 
-// SetOnRepoReady sets the callback invoked after a repo is opened or swapped.
-func (m *Manager) SetOnRepoReady(fn func(*RepoInstance)) { m.deps.OnRepoReady = fn }
-
 // Shutdown gracefully stops all registered repositories.
 // It performs a two-pass shutdown: cancel all sync loops first so they wind
 // down concurrently, then wait and release resources repo by repo.
@@ -147,9 +141,6 @@ func (m *Manager) Boot() error {
 	if err != nil {
 		return fmt.Errorf("open default repo: %w", err)
 	}
-	if m.deps.OnRepoReady != nil {
-		m.deps.OnRepoReady(ri)
-	}
 	m.Set("knomit", ri)
 
 	dbFiles, _ := filepath.Glob(filepath.Join(reposDir, "*.db"))
@@ -177,9 +168,6 @@ func (m *Manager) Add(name, dbPath string) error {
 	ri, err := m.openOne(name, dbPath, false)
 	if err != nil {
 		return err
-	}
-	if m.deps.OnRepoReady != nil {
-		m.deps.OnRepoReady(ri)
 	}
 	m.Set(name, ri)
 	return nil

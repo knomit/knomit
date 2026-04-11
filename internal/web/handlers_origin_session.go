@@ -691,8 +691,8 @@ func (s *Server) handleCommit(rm *repos.Manager, sm *SessionManager, agentBranch
 			return
 		}
 
-		// Rebuild MCP handlers so they use the new database, not the closed one.
-		s.SetupMCP(ri)
+		// MCP handlers are stateless — they read the current svc via ri.WithRead
+		// on each request, so no rebind is needed after SwapStore.
 
 		// Snapshot after swap — protect against concurrent SwapStore.
 		var svc *store.Service

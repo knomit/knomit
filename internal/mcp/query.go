@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"knomit/internal/repos"
 	"knomit/internal/store"
 	"time"
 
@@ -35,10 +36,15 @@ func queryTool() mcpgo.Tool {
 }
 
 // QueryHandler returns the handler function for knomit_query.
-func QueryHandler(gs store.FactIndex, idx store.SearchIndex, agentBranch string) func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+// The repo is resolved from the request context at call time via RepoMiddleware.
+func QueryHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 	return func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 		ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
+
+		ri := repos.RepoFromContext(ctx)
+		s := storeIndices(ri)
+		agentBranch := ri.AgentBranch()
 
 		// 1. Build query.
 		text := req.GetString("text", "")
@@ -62,7 +68,7 @@ func QueryHandler(gs store.FactIndex, idx store.SearchIndex, agentBranch string)
 		}
 
 		// 4. Search.
-		results, err := idx.Search(ctx, agentBranch, q)
+		results, err := s.search.Search(ctx, agentBranch, q)
 		if err != nil {
 			return mcpgo.NewToolResultError(fmt.Sprintf("search error: %v", err)), nil
 		}
