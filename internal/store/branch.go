@@ -14,6 +14,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/rs/zerolog/log"
+	"golang.org/x/crypto/ssh"
 
 	storegit "knomit/internal/store/git"
 )
@@ -55,25 +56,56 @@ func (c *branchCache) remove(name string) {
 }
 
 // repoHandler owns the database handle, branch cache, and branch operations.
+// It is also the home for shared git-level plumbing that used to be scattered
+// across factIndex / searchIndex: the SSH commit signer, the onCommit
+// observer, the author/committer signature helpers, and the commit-log
+// maintenance methods. Consumers reach UP to repoHandler for these — they
+// never reach sideways through a sibling subsystem.
 type repoHandler struct {
-	db        *sql.DB
-	cache     *branchCache
-	onDrop    func(context.Context) error
-	gits      *storegit.Storer
-	repo      *gogit.Repository // nil until OpenRepo/InitRepo/Clone called
-	configMu  sync.Mutex        // guards ConfigureRemote / remote wiring
-	embedMu   sync.RWMutex      // guards embedder
-	embedder  Embedder
-	branchMu  sync.Map          // per-branch write serialization
+	db       *sql.DB
+	cache    *branchCache
+	onDrop   func(context.Context) error
+	gits     *storegit.Storer
+	repo     *gogit.Repository // nil until OpenRepo/InitRepo/Clone called
+	signer   ssh.Signer        // SSH signer for commit signing (shared)
+	onCommit func(branch, hash string) // external observer (e.g. SSE broadcast)
+
+	// im is the search-index manager. notifyCommit calls im.Sync after every
+	// commit so branch_facts / facts_vec / graph stay in sync with the new
+	// tree at HEAD. Set by Service.Open (via bindIndexManager). If nil,
+	// notifyCommit skips the sync — useful for bare repoHandler tests that
+	// don't exercise the index.
+	im IndexManager
+
+	configMu sync.Mutex   // guards ConfigureRemote / remote wiring
+	embedMu  sync.RWMutex // guards embedder
+	embedder Embedder
+	branchMu sync.Map // per-branch write serialization
 }
 
-// lockBranch acquires the per-branch write mutex and returns an unlock function.
-// Used by factIndex and remoteIndex to serialize writes on a given branch.
+// lockBranch acquires the per-branch write lock and returns an unlock function.
+// Used by factIndex, remoteIndex, and MergeBranch to serialize writes on a
+// given branch AND to exclude concurrent Verify runs (which take the read side
+// via lockBranchRead). The lock is held for the full mutation — from the
+// initial ref resolution through SetReference AND notifyCommit's index sync —
+// so no reader can observe the window between "git HEAD advanced" and "SQL
+// branch_facts / graph updated".
 func (rh *repoHandler) lockBranch(branch string) func() {
-	v, _ := rh.branchMu.LoadOrStore(branch, &sync.Mutex{})
-	mu := v.(*sync.Mutex)
+	v, _ := rh.branchMu.LoadOrStore(branch, &sync.RWMutex{})
+	mu := v.(*sync.RWMutex)
 	mu.Lock()
 	return mu.Unlock
+}
+
+// lockBranchRead acquires the per-branch read lock. Multiple readers can hold
+// it concurrently, but no writer can proceed while any reader holds it. Used
+// by Verify to take a consistent snapshot of a branch's git tree + SQL index
+// state without blocking parallel read-only operations.
+func (rh *repoHandler) lockBranchRead(branch string) func() {
+	v, _ := rh.branchMu.LoadOrStore(branch, &sync.RWMutex{})
+	mu := v.(*sync.RWMutex)
+	mu.RLock()
+	return mu.RUnlock
 }
 
 // setEmbedder attaches an Embedder. Called once during service construction.
@@ -141,40 +173,39 @@ func (rh *repoHandler) branchID(ctx context.Context, name string) (int64, error)
 	return id, nil
 }
 
-// MergeBranch copies all branch_facts entries from src to dst.
-// Conflicting paths (same path on both branches) are overwritten with src's version.
-func (rh *repoHandler) MergeBranch(ctx context.Context, src, dst string) error {
-	srcID, err := rh.branchID(ctx, src)
-	if err != nil {
-		return fmt.Errorf("merge: src %w", err)
-	}
-	dstID, err := rh.EnsureBranch(ctx, dst, "refs/heads/"+dst)
-	if err != nil {
-		return fmt.Errorf("merge: dst %w", err)
-	}
+// MergeBranch lives in branch_merge.go alongside mergeTreesWithStrategy.
 
-	_, err = conn(ctx, rh.db).ExecContext(ctx,
-		`INSERT OR REPLACE INTO branch_facts(branch_id, path, fact_id, commit_hash)
-		 SELECT ?, path, fact_id, commit_hash
-		 FROM branch_facts WHERE branch_id = ?`,
-		dstID, srcID,
-	)
-	if err != nil {
-		return fmt.Errorf("merge branch_facts: %w", err)
-	}
-	return nil
-}
-
-// DropBranch removes a branch and all its branch_facts entries, then runs GC.
+// DropBranch removes a branch from both the git storer (ref deletion) and
+// every SQLite table that references it. Follows the blueprint's promise
+// that deleting a branch "does not affect other branches": the git ref is
+// gone, `branches` is gone, `branch_facts` is gone, `branch_commits` is
+// gone via ON DELETE CASCADE, and the orphaned commits themselves remain
+// in the object store (shared via COW — other branches may still reach
+// them). Verify's branches-table check catches any residue.
 func (rh *repoHandler) DropBranch(ctx context.Context, name string) error {
 	id, err := rh.branchID(ctx, name)
 	if err != nil {
 		return fmt.Errorf("drop branch: %w", err)
 	}
 
+	// Acquire the per-branch write lock so concurrent writes can't race
+	// the deletion. Released when the function returns.
+	unlock := rh.lockBranch(name)
+	defer unlock()
+
+	// 1. Delete the git ref first. If this fails, we leave the SQLite
+	// state untouched so the operation is retryable — better than a
+	// half-removed state where the ref is gone but rows remain.
+	if err := rh.gits.RemoveReference(plumbing.NewBranchReferenceName(name)); err != nil {
+		return fmt.Errorf("drop branch: remove git ref: %w", err)
+	}
+
+	// 2. Delete branch_facts rows (branch_commits cascades from branches).
 	if _, err := conn(ctx, rh.db).ExecContext(ctx, `DELETE FROM branch_facts WHERE branch_id = ?`, id); err != nil {
 		return fmt.Errorf("drop branch_facts: %w", err)
 	}
+	// 3. Delete the branches row. This cascades into branch_commits via
+	// the FK defined in migration 000004.
 	if _, err := conn(ctx, rh.db).ExecContext(ctx, `DELETE FROM branches WHERE id = ?`, id); err != nil {
 		return fmt.Errorf("drop branch row: %w", err)
 	}
@@ -207,6 +238,11 @@ func (rh *repoHandler) ListBranches(ctx context.Context) ([]Branch, error) {
 }
 
 // CreateBranch creates a new git branch ref pointing at the tip of fromBranch.
+// The child branch inherits the parent's full state: git ref position,
+// branch_commits visibility, AND branch_facts (the per-branch view of which
+// fact version is visible at each path). This matches git's "branch contains
+// everything the parent contains at the moment of creation" semantics.
+//
 // No-op if the branch already exists.
 func (rh *repoHandler) CreateBranch(ctx context.Context, branch, fromBranch string) error {
 	newRefName := plumbing.NewBranchReferenceName(branch)
@@ -219,6 +255,47 @@ func (rh *repoHandler) CreateBranch(ctx context.Context, branch, fromBranch stri
 	}
 	if err := rh.gits.SetReference(plumbing.NewHashReference(newRefName, fromHash)); err != nil {
 		return fmt.Errorf("CreateBranch: set ref: %w", err)
+	}
+	newBranchID, err := rh.EnsureBranch(ctx, branch, "refs/heads/"+branch)
+	if err != nil {
+		return fmt.Errorf("CreateBranch: ensure branches row for %q: %w", branch, err)
+	}
+	// Clone parent branch's visibility: every commit visible on fromBranch is
+	// now also visible on the new branch. This matches git's "branch contains
+	// all parent commits" semantics without copying commit_log rows.
+	if _, err := conn(ctx, rh.db).ExecContext(ctx, `
+		INSERT OR IGNORE INTO branch_commits (branch_id, commit_hash)
+		SELECT ?, commit_hash FROM branch_commits
+		WHERE branch_id = (SELECT id FROM branches WHERE name = ?)`,
+		newBranchID, fromBranch); err != nil {
+		return fmt.Errorf("CreateBranch: clone branch_commits from %q: %w", fromBranch, err)
+	}
+	// Clone parent branch's per-path fact view: every branch_facts row on
+	// fromBranch becomes a row on the new branch pointing at the same
+	// (fact_id, commit_hash). Without this step, the child's tree at HEAD
+	// contains inherited files that have no matching branch_facts row, which
+	// Verify's facts-coherence check correctly flags as a gap.
+	if _, err := conn(ctx, rh.db).ExecContext(ctx, `
+		INSERT OR IGNORE INTO branch_facts (branch_id, path, fact_id, commit_hash)
+		SELECT ?, path, fact_id, commit_hash FROM branch_facts
+		WHERE branch_id = (SELECT id FROM branches WHERE name = ?)`,
+		newBranchID, fromBranch); err != nil {
+		return fmt.Errorf("CreateBranch: clone branch_facts from %q: %w", fromBranch, err)
+	}
+	// Inherit the parent's sync watermark so the child's first im.Sync does
+	// an efficient incremental diff from the same baseline rather than a
+	// wasteful full rebuild that would re-upsert every already-indexed fact.
+	var parentWatermark string
+	err = conn(ctx, rh.db).QueryRowContext(ctx,
+		`SELECT value FROM meta WHERE key = ?`, "last_commit:"+fromBranch,
+	).Scan(&parentWatermark)
+	if err == nil && parentWatermark != "" {
+		if _, err := conn(ctx, rh.db).ExecContext(ctx,
+			`INSERT OR IGNORE INTO meta(key, value) VALUES (?, ?)`,
+			"last_commit:"+branch, parentWatermark,
+		); err != nil {
+			return fmt.Errorf("CreateBranch: inherit watermark: %w", err)
+		}
 	}
 	log.Info().Str("branch", branch).Str("from", fromBranch).Msg("created branch")
 	return nil

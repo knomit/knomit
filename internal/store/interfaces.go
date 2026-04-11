@@ -42,7 +42,6 @@ type IndexManager interface {
 	Sync(ctx context.Context, branch string) error
 	Rebuild(ctx context.Context, branch string, progress RebuildProgress) error
 	SyncWatermark(ctx context.Context, branch string) (string, error)
-	AppendCommitLog(ctx context.Context, branch, hash string)
 }
 
 // RemoteIndex is the interface for git remote configuration and synchronization.
@@ -57,7 +56,7 @@ type RemoteIndex interface {
 // BranchIndex is the interface for branch lifecycle operations. Implemented by *repoHandler.
 type BranchIndex interface {
 	EnsureBranch(ctx context.Context, name, gitRef string) (int64, error)
-	MergeBranch(ctx context.Context, src, dst string) error
+	MergeBranch(ctx context.Context, src, dst string, strategy ConflictStrategy) error
 	DropBranch(ctx context.Context, name string) error
 	ListBranches(ctx context.Context) ([]Branch, error)
 	CreateBranch(ctx context.Context, branch, fromBranch string) error

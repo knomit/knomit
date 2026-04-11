@@ -282,12 +282,8 @@ func (si *searchIndex) GC(ctx context.Context) error {
 		return fmt.Errorf("gc: orphaned ontology nodes: %w", err)
 	}
 
-	// 6. Delete commit_log entries for deleted branches.
-	if _, err := conn(ctx, si.rh.db).ExecContext(ctx,
-		`DELETE FROM commit_log WHERE branch_id IS NOT NULL AND branch_id NOT IN (SELECT id FROM branches)`,
-	); err != nil {
-		return fmt.Errorf("gc: clean commit_log: %w", err)
-	}
+	// 6. Branch-scoped commit_log cleanup is handled automatically by
+	// branch_commits ON DELETE CASCADE when a branch row is dropped.
 
 	// 7. GC tool sessions: keep 5 most recent per (tool, branch).
 	if err := si.gcSessionTable(ctx, "tool_sessions"); err != nil {
@@ -426,19 +422,21 @@ func (si *searchIndex) rebuildFacts(ctx context.Context, branch, head string, pr
 	n := int(affected)
 
 	// Populate branch_facts: link each fact to this branch with its commit_hash.
-	// Prefer commit_log entries scoped to this branch; fall back to legacy rows
-	// with NULL branch_id (written before the branch existed in the branches table).
+	// We pick the most recent commit_log row per path whose commit is visible on
+	// this branch (via branch_commits).
 	if _, err := conn(ctx, si.rh.db).ExecContext(ctx, `
 		INSERT OR REPLACE INTO branch_facts (branch_id, path, fact_id, commit_hash)
 		SELECT ?, f.path, f.id, COALESCE(cl.commit_hash, '')
 		FROM facts f
 		JOIN _rebuild_entries e ON e.path = f.path AND e.blob_hash = f.blob_hash
 		LEFT JOIN (
-			SELECT path, commit_hash, ROW_NUMBER() OVER (PARTITION BY path ORDER BY (branch_id = ?) DESC, committed_at DESC) AS rn
-			FROM commit_log
-			WHERE branch_id = ? OR branch_id IS NULL
+			SELECT cl.path, cl.commit_hash,
+			       ROW_NUMBER() OVER (PARTITION BY cl.path ORDER BY cl.committed_at DESC) AS rn
+			FROM commit_log cl
+			JOIN branch_commits bc ON bc.commit_hash = cl.commit_hash
+			WHERE bc.branch_id = ?
 		) cl ON cl.path = f.path AND cl.rn = 1
-	`, branchID, branchID, branchID); err != nil {
+	`, branchID, branchID); err != nil {
 		return 0, fmt.Errorf("rebuildFacts: populate branch_facts: %w", err)
 	}
 

@@ -7,10 +7,11 @@ import (
 )
 
 // remoteIndex owns remote configuration and git sync/push operations.
+// All git-level plumbing (signer, authorSig, committerSig, notifyCommit,
+// populateCommitLog) lives on repoHandler; remoteIndex reaches UP via ri.rh.*
+// and never through a sibling subsystem.
 type remoteIndex struct {
 	rh    *repoHandler
-	fi    *factIndex
-	si    *searchIndex
 	crypt *Crypt
 }
 

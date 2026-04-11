@@ -69,7 +69,10 @@ func (s *Service) OpenRepo() error {
 
 	log.Info().Str("branch", branch).Msg("git store opened")
 	s.rh.repo = repo
-	if err := s.si.populateCommitLog(context.Background(), branch); err != nil {
+	if _, err := s.rh.EnsureBranch(context.Background(), branch, "refs/heads/"+branch); err != nil {
+		return fmt.Errorf("OpenRepo: ensure branch %q: %w", branch, err)
+	}
+	if err := s.rh.populateCommitLog(context.Background(), branch); err != nil {
 		log.Warn().Err(err).Msg("commit_log: open populate failed")
 	}
 	return nil
@@ -124,8 +127,17 @@ func (s *Service) InitRepo(initFiles map[string]string, agentBranch string) erro
 
 	log.Info().Str("branch", agentBranch).Msg("git store initialized")
 	s.rh.repo = repo
-	if err := s.si.populateCommitLog(context.Background(), agentBranch); err != nil {
+	if _, err := s.rh.EnsureBranch(context.Background(), agentBranch, "refs/heads/"+agentBranch); err != nil {
+		return fmt.Errorf("InitRepo: ensure agent branch %q: %w", agentBranch, err)
+	}
+	if _, err := s.rh.EnsureBranch(context.Background(), "main", "refs/heads/main"); err != nil {
+		return fmt.Errorf("InitRepo: ensure main branch: %w", err)
+	}
+	if err := s.rh.populateCommitLog(context.Background(), agentBranch); err != nil {
 		log.Warn().Err(err).Msg("commit_log: initial populate failed")
+	}
+	if err := s.rh.populateCommitLog(context.Background(), "main"); err != nil {
+		log.Warn().Err(err).Msg("commit_log: initial populate (main) failed")
 	}
 	return nil
 }
@@ -175,8 +187,10 @@ func (s *Service) CloneFrom(url string, auth transport.AuthMethod, progress func
 // InitFromRemote initializes a knomit git repo by fetching from a remote origin.
 // If the remote has an existing agent branch for this hostname, it is used.
 // Otherwise a new agent branch is created from origin/main.
-// If the remote is empty (no refs), falls back to creating initial content inline.
-func (s *Service) InitFromRemote(originURL string, auth transport.AuthMethod, agentBranch string) error {
+// If the remote is empty (no refs), falls back to creating initial content
+// inline — initFiles are written as seed files on the new agent branch in
+// that case, and are ignored when the remote already has branches.
+func (s *Service) InitFromRemote(originURL string, auth transport.AuthMethod, agentBranch string, initFiles map[string]string) error {
 	repo, err := gogit.Init(s.rh.gits, memfs.New())
 	if err != nil {
 		return fmt.Errorf("InitFromRemote: git init: %w", err)
@@ -202,7 +216,7 @@ func (s *Service) InitFromRemote(originURL string, auth transport.AuthMethod, ag
 		Auth:       auth,
 	})
 	if err == transport.ErrEmptyRemoteRepository {
-		return s.initFromEmptyRemote(repo, originURL, auth, agentBranch)
+		return s.initFromEmptyRemote(repo, originURL, auth, agentBranch, initFiles)
 	}
 	if err != nil {
 		return fmt.Errorf("InitFromRemote: fetch: %w", err)
@@ -252,19 +266,36 @@ func (s *Service) InitFromRemote(originURL string, auth transport.AuthMethod, ag
 	log.Info().Str("branch", agentBranch).Str("origin", originURL).Msg("git store initialized from remote")
 	s.rh.repo = repo
 	s.fi.auth = auth
-	if err := s.si.populateCommitLog(context.Background(), agentBranch); err != nil {
+	if _, err := s.rh.EnsureBranch(context.Background(), agentBranch, "refs/heads/"+agentBranch); err != nil {
+		return fmt.Errorf("InitFromRemote: ensure agent branch %q: %w", agentBranch, err)
+	}
+	if _, err := s.rh.EnsureBranch(context.Background(), "main", "refs/heads/main"); err != nil {
+		return fmt.Errorf("InitFromRemote: ensure main branch: %w", err)
+	}
+	if err := s.rh.populateCommitLog(context.Background(), agentBranch); err != nil {
 		log.Warn().Err(err).Msg("commit_log: remote populate failed")
+	}
+	if err := s.rh.populateCommitLog(context.Background(), "main"); err != nil {
+		log.Warn().Err(err).Msg("commit_log: remote populate (main) failed")
 	}
 	return nil
 }
 
 // initFromEmptyRemote handles the empty-remote fallback for InitFromRemote.
-func (s *Service) initFromEmptyRemote(repo *gogit.Repository, originURL string, auth transport.AuthMethod, agentBranch string) error {
+// initFiles are written as additional seed files on top of the root manifest
+// so the new agent branch matches the layout produced by InitRepo.
+func (s *Service) initFromEmptyRemote(repo *gogit.Repository, originURL string, auth transport.AuthMethod, agentBranch string, initFiles map[string]string) error {
 	rootManifest := "# Knowledge Base\n\nRoot manifest.\n"
 	initSig := object.Signature{Name: "knomit", Email: "knomit@local", When: time.Now()}
 	lastCommit, _, writeErr := writeFileToStore(s.rh.gits, plumbing.ZeroHash, "kb.md", rootManifest, "init: create knowledge base", initSig, initSig)
 	if writeErr != nil {
 		return fmt.Errorf("InitFromRemote: empty remote fallback: %w", writeErr)
+	}
+	for path, content := range initFiles {
+		lastCommit, _, writeErr = writeFileToStore(s.rh.gits, lastCommit, path, content, "init: "+path, initSig, initSig)
+		if writeErr != nil {
+			return fmt.Errorf("InitFromRemote: empty remote write %s: %w", path, writeErr)
+		}
 	}
 	if agentBranch == "" {
 		agentBranch = defaultAgentBranch()
@@ -282,8 +313,17 @@ func (s *Service) initFromEmptyRemote(repo *gogit.Repository, originURL string, 
 	log.Info().Str("branch", agentBranch).Str("origin", originURL).Msg("git store initialized (empty remote)")
 	s.rh.repo = repo
 	s.fi.auth = auth
-	if err := s.si.populateCommitLog(context.Background(), agentBranch); err != nil {
+	if _, err := s.rh.EnsureBranch(context.Background(), agentBranch, "refs/heads/"+agentBranch); err != nil {
+		return fmt.Errorf("InitFromRemote: empty remote ensure agent branch %q: %w", agentBranch, err)
+	}
+	if _, err := s.rh.EnsureBranch(context.Background(), "main", "refs/heads/main"); err != nil {
+		return fmt.Errorf("InitFromRemote: empty remote ensure main branch: %w", err)
+	}
+	if err := s.rh.populateCommitLog(context.Background(), agentBranch); err != nil {
 		log.Warn().Err(err).Msg("commit_log: empty-remote populate failed")
+	}
+	if err := s.rh.populateCommitLog(context.Background(), "main"); err != nil {
+		log.Warn().Err(err).Msg("commit_log: empty-remote populate (main) failed")
 	}
 	return nil
 }

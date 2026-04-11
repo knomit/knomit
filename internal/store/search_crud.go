@@ -160,16 +160,25 @@ func (si *searchIndex) upsert(ctx context.Context, branch, commitHash string, re
 		return fmt.Errorf("upsert branch_facts: %w", err)
 	}
 
+	// Sync graph: create/update nodes and edges for this fact. Runs INSIDE
+	// the transaction so the facts row and its matching live Fact node are
+	// committed atomically. Previously this ran post-commit with the error
+	// swallowed by log.Warn — which produced graph-coherence holes under
+	// concurrent writes (one writer's facts row committed while another's
+	// graph sync races or fails). The graph-coherence Verify check
+	// catches those holes, so any failure here must propagate.
+	if err := si.graphSyncFactTx(ctx, tx, rec); err != nil {
+		return fmt.Errorf("upsert graph sync: %w", err)
+	}
+
 	if err := tx.Commit(); err != nil {
 		return err
 	}
 
-	// Sync graph: create/update nodes and edges for this fact.
-	if err := si.graphSyncFact(ctx, rec); err != nil {
-		log.Warn().Err(err).Str("path", rec.Path).Msg("graph sync failed on upsert")
-	}
-
-	// Build similarity edges if embeddings are available.
+	// Build similarity edges if embeddings are available. This runs AFTER
+	// commit because it queries facts_vec rows that must be visible outside
+	// the tx; a failure here is non-fatal because similarity edges are not
+	// covered by Verify.
 	if si.rh.getEmbedder() != nil {
 		if err := si.graphBuildSimilarityEdges(ctx, rec.Path, rec.BlobHash); err != nil {
 			log.Warn().Err(err).Str("path", rec.Path).Msg("graph similarity edges failed")

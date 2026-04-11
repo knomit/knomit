@@ -21,15 +21,16 @@ import (
 // step and can clean up with close() on failure.
 type repoBuilder struct {
 	// inputs
-	name        string
-	dbPath      string
-	isDefault   bool
-	cfg         config.Config
-	signer      ssh.Signer
-	agentBranch string
-	embedder    store.BatchEmbedder
-	keyPath     string
-	ctx         context.Context
+	name                  string
+	dbPath                string
+	isDefault             bool
+	cfg                   config.Config
+	signer                ssh.Signer
+	agentBranch           string
+	embedder              store.BatchEmbedder
+	keyPath               string
+	ctx                   context.Context
+	disableBackgroundSync bool
 
 	// accumulated state
 	svc      *store.Service
@@ -95,25 +96,27 @@ func (b *repoBuilder) loadOntology() {
 // first run — either by cloning from a configured origin or by creating a
 // fresh repository with the default ontology seed files.
 func (b *repoBuilder) initDefaultGit() error {
-	if b.cfg.Git.Origin != "" {
-		auth, authErr := resolveAuth(b.cfg.Remote, b.keyPath)
-		if authErr != nil {
-			return fmt.Errorf("resolve auth: %w", authErr)
-		}
-		if err := b.svc.InitFromRemote(b.cfg.Git.Origin, auth, b.agentBranch); err != nil {
-			return fmt.Errorf("init from remote: %w", err)
-		}
-		return nil
-	}
-
 	ont := fact.DefaultOntology()
 	ontologyYAML, err := ont.Serialize()
 	if err != nil {
 		return fmt.Errorf("serialize ontology: %w", err)
 	}
-	if err := b.svc.InitRepo(map[string]string{
+	seedFiles := map[string]string{
 		"domains/ontology.yaml": string(ontologyYAML),
-	}, b.agentBranch); err != nil {
+	}
+
+	if b.cfg.Git.Origin != "" {
+		auth, authErr := resolveAuth(b.cfg.Remote, b.keyPath)
+		if authErr != nil {
+			return fmt.Errorf("resolve auth: %w", authErr)
+		}
+		if err := b.svc.InitFromRemote(b.cfg.Git.Origin, auth, b.agentBranch, seedFiles); err != nil {
+			return fmt.Errorf("init from remote: %w", err)
+		}
+		return nil
+	}
+
+	if err := b.svc.InitRepo(seedFiles, b.agentBranch); err != nil {
 		return fmt.Errorf("init git: %w", err)
 	}
 	return nil
@@ -135,13 +138,23 @@ func (b *repoBuilder) ensureBranch() {
 }
 
 // setupIndex configures the search index with the embedder and runs an initial
-// sync against the git store.
+// sync against the git store. When an origin is configured, main is also
+// synced — InitFromRemote populates commit_log for both agent/* and main,
+// but without an explicit index sync main's branch_facts / facts_vec / graph
+// tables would be empty even though the tree at HEAD has content cloned from
+// origin. Without this, Verify's facts-coherence check correctly fires on
+// main whenever the cloned tree has any facts.
 func (b *repoBuilder) setupIndex() {
 	if b.embedder != nil {
 		b.svc.SetEmbedder(b.embedder)
 	}
 	if err := b.svc.IndexManager().Sync(context.Background(), b.agentBranch); err != nil {
 		log.Warn().Err(err).Str("repo", b.name).Msg("initial index sync failed")
+	}
+	if b.cfg.Git.Origin != "" {
+		if err := b.svc.IndexManager().Sync(context.Background(), "main"); err != nil {
+			log.Warn().Err(err).Str("repo", b.name).Msg("initial index sync (main) failed")
+		}
 	}
 }
 
@@ -246,8 +259,13 @@ func (b *repoBuilder) build() *RepoInstance {
 }
 
 // startSyncLoops launches the background pull and push goroutines if a remote
-// named "origin" is configured.
+// named "origin" is configured. Skipped entirely when Deps.DisableBackgroundSync
+// is set — test harnesses use that flag to prevent the first-tick immediate
+// doSync/doPush call from racing with test assertions.
 func (b *repoBuilder) startSyncLoops(ctx context.Context, wg *sync.WaitGroup, hub *TaskHub) {
+	if b.disableBackgroundSync {
+		return
+	}
 	remote, _ := b.svc.Remote().GetRemote("origin")
 	if remote == nil {
 		return

@@ -33,38 +33,40 @@ func (fi *factIndex) writeFile(ctx context.Context, branch, path, content, messa
 	}
 
 	unlock := fi.rh.lockBranch(branch)
+	defer unlock()
 
 	headHash, err := fi.rh.resolveRef(ctx, branch)
 	if err != nil {
-		unlock()
 		return "", "", fmt.Errorf("WriteFile: ref: %w", err)
 	}
 
-	author := fi.authorSig(branch, operation)
-	committer := fi.committerSig(branch)
+	author := fi.rh.authorSig(branch, operation)
+	committer := fi.rh.committerSig(branch)
 	newCommitHash, newBlobHash, err := writeFileToStore(fi.rh.gits, headHash, path, content, message, author, committer)
 	if err != nil {
-		unlock()
 		return "", "", err
 	}
 
-	newCommitHash, err = signCommitInPlace(fi.rh.gits, fi.signer, newCommitHash)
+	newCommitHash, err = signCommitInPlace(fi.rh.gits, fi.rh.signer, newCommitHash)
 	if err != nil {
-		unlock()
 		return "", "", err
 	}
 
 	// Update the branch ref to point to the new commit.
 	branchRefName := plumbing.NewBranchReferenceName(branch)
 	if err := fi.rh.gits.SetReference(plumbing.NewHashReference(branchRefName, newCommitHash)); err != nil {
-		unlock()
 		return "", "", err
 	}
-	unlock()
 
-	// Notify outside the lock — appendCommitLog triggers index sync which
-	// may call back into Service for reads.
-	fi.notifyCommit(ctx, branch, newCommitHash)
+	// Notify inside the lock — the ref advance, commit_log append, and
+	// im.Sync (which updates branch_facts / graph) must be atomic w.r.t.
+	// concurrent readers (including Verify, which takes lockBranchRead).
+	// A reader observing the window after SetReference but before
+	// notifyCommit would see a torn state: git HEAD at the new commit,
+	// SQL index still at the previous one.
+	if err := fi.rh.notifyCommit(ctx, branch, newCommitHash); err != nil {
+		return "", "", err
+	}
 	return newCommitHash.String(), newBlobHash.String(), nil
 }
 
@@ -77,46 +79,43 @@ func (fi *factIndex) deleteFile(ctx context.Context, branch, path, message, oper
 	}
 
 	unlock := fi.rh.lockBranch(branch)
+	defer unlock()
 
 	headHash, err := fi.rh.resolveRef(ctx, branch)
 	if err != nil {
-		unlock()
 		return "", fmt.Errorf("DeleteFile: ref: %w", err)
 	}
 
 	// Check existence inside the lock to avoid a TOCTOU race.
 	exists, err := fi.fileExists(ctx, branch, path)
 	if err != nil {
-		unlock()
 		return "", fmt.Errorf("DeleteFile: check exists: %w", err)
 	}
 	if !exists {
-		unlock()
 		return "", fmt.Errorf("DeleteFile: file %q does not exist", path)
 	}
 
-	author := fi.authorSig(branch, operation)
-	committer := fi.committerSig(branch)
+	author := fi.rh.authorSig(branch, operation)
+	committer := fi.rh.committerSig(branch)
 	newCommitHash, err := deleteFileFromStore(fi.rh.gits, headHash, path, message, author, committer)
 	if err != nil {
-		unlock()
 		return "", err
 	}
 
-	newCommitHash, err = signCommitInPlace(fi.rh.gits, fi.signer, newCommitHash)
+	newCommitHash, err = signCommitInPlace(fi.rh.gits, fi.rh.signer, newCommitHash)
 	if err != nil {
-		unlock()
 		return "", err
 	}
 
 	branchRefName := plumbing.NewBranchReferenceName(branch)
 	if err := fi.rh.gits.SetReference(plumbing.NewHashReference(branchRefName, newCommitHash)); err != nil {
-		unlock()
 		return "", err
 	}
-	unlock()
 
-	fi.notifyCommit(ctx, branch, newCommitHash)
+	// notifyCommit runs inside the branch lock — see writeFile for rationale.
+	if err := fi.rh.notifyCommit(ctx, branch, newCommitHash); err != nil {
+		return "", err
+	}
 	return newCommitHash.String(), nil
 }
 
@@ -142,13 +141,16 @@ func (fi *factIndex) batchWrite(ctx context.Context, branch string, files map[st
 	}
 
 	unlock := fi.rh.lockBranch(branch)
+	defer unlock()
 	cHash, blobHashes, err := fi.batchWriteLocked(ctx, branch, files, message, operation)
-	unlock()
 	if err != nil {
 		return "", nil, err
 	}
 
-	fi.notifyCommit(ctx, branch, cHash)
+	// notifyCommit runs inside the branch lock — see writeFile for rationale.
+	if err := fi.rh.notifyCommit(ctx, branch, cHash); err != nil {
+		return "", nil, err
+	}
 	return cHash.String(), blobHashes, nil
 }
 
@@ -211,8 +213,8 @@ func (fi *factIndex) batchWriteLocked(ctx context.Context, branch string, files 
 	}
 
 	// Create single commit.
-	author := fi.authorSig(branch, operation)
-	committer := fi.committerSig(branch)
+	author := fi.rh.authorSig(branch, operation)
+	committer := fi.rh.committerSig(branch)
 	commit := &object.Commit{
 		Author:    author,
 		Committer: committer,
@@ -232,7 +234,7 @@ func (fi *factIndex) batchWriteLocked(ctx context.Context, branch string, files 
 		return plumbing.ZeroHash, nil, fmt.Errorf("batchWrite: store commit: %w", err)
 	}
 
-	cHash, err = signCommitInPlace(fi.rh.gits, fi.signer, cHash)
+	cHash, err = signCommitInPlace(fi.rh.gits, fi.rh.signer, cHash)
 	if err != nil {
 		return plumbing.ZeroHash, nil, err
 	}
@@ -245,44 +247,30 @@ func (fi *factIndex) batchWriteLocked(ctx context.Context, branch string, files 
 }
 
 // WriteFact writes a fact to the store and returns the commit and blob hashes.
+// Index sync (branch_facts / facts_vec / graph) is triggered inside writeFile
+// via rh.notifyCommit — no redundant fi.im.Sync call here.
 func (fi *factIndex) WriteFact(ctx context.Context, branch, path, content, message, operation string) (WriteFactResult, error) {
 	commitHash, blobHash, err := fi.writeFile(ctx, branch, path, content, message, operation)
 	if err != nil {
 		return WriteFactResult{}, err
 	}
-	if fi.im != nil {
-		if err := fi.im.Sync(ctx, branch); err != nil {
-			return WriteFactResult{}, fmt.Errorf("WriteFact sync: %w", err)
-		}
-	}
 	return WriteFactResult{CommitHash: commitHash, BlobHash: blobHash}, nil
 }
 
-// DeleteFact deletes a fact and syncs the index so the deletion is immediately visible.
+// DeleteFact deletes a fact. Index sync happens inside deleteFile via
+// rh.notifyCommit.
 func (fi *factIndex) DeleteFact(ctx context.Context, branch, path, message string) (string, error) {
 	commitHash, err := fi.deleteFile(ctx, branch, path, message, "retract")
 	if err != nil {
 		return "", fmt.Errorf("DeleteFact git: %w", err)
 	}
-	if fi.im != nil {
-		if err := fi.im.Sync(ctx, branch); err != nil {
-			return "", fmt.Errorf("DeleteFact sync: %w", err)
-		}
-	}
 	return commitHash, nil
 }
 
-// BatchWriteFacts writes multiple facts in a single commit.
+// BatchWriteFacts writes multiple facts in a single commit. Index sync
+// happens inside batchWrite via rh.notifyCommit.
 func (fi *factIndex) BatchWriteFacts(ctx context.Context, branch string, files map[string]string, message, operation string) (commitHash string, blobHashes map[string]string, err error) {
 	commitHash, blobHashes, err = fi.batchWrite(ctx, branch, files, message, operation)
-	if err != nil {
-		return
-	}
-	if fi.im != nil {
-		if err = fi.im.Sync(ctx, branch); err != nil {
-			err = fmt.Errorf("BatchWriteFacts sync: %w", err)
-		}
-	}
 	return
 }
 

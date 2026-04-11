@@ -68,7 +68,13 @@ func commitEntries(c *object.Commit, files []changedFileEntry) []storegit.Commit
 	return entries
 }
 
-// changedFilesInCommit returns the .md files added/modified/deleted in c.
+// changedFilesInCommit returns every file added/modified/deleted in c.
+// Historically this filtered to .md files only, but that left commit_log
+// sparse for any commit that touched non-.md files (e.g. the InitRepo
+// commit that seeds domains/ontology.yaml). The Verify tool's commit-log
+// parity check (Task 1.3) requires every reachable commit to have at least
+// one commit_log row, so the filter was removed in 2026-04-08. Callers
+// that need a .md-only view must filter themselves.
 func changedFilesInCommit(c *object.Commit) ([]changedFileEntry, error) {
 	toTree, err := c.Tree()
 	if err != nil {
@@ -100,9 +106,7 @@ func changedFilesInCommit(c *object.Commit) ([]changedFileEntry, error) {
 		default:
 			path, action = ch.To.Name, "modified"
 		}
-		if strings.HasSuffix(path, ".md") {
-			files = append(files, changedFileEntry{path: strings.ToLower(path), action: action})
-		}
+		files = append(files, changedFileEntry{path: strings.ToLower(path), action: action})
 	}
 	return files, nil
 }

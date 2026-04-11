@@ -30,6 +30,51 @@ make e2e      # build + run e2e tests
 make e2e-ui   # build + run e2e tests (headed browser)
 ```
 
+### Testing
+
+Three test layers cover the store and repos packages:
+
+```sh
+# Unit + scenario tests (fast, always on).
+go test ./...
+
+# Same, with the race detector — used in CI.
+go test ./... -race
+
+# Run just the 58 scenario tests in the Storyboard DSL.
+go test ./internal/storytests/ -v
+
+# Run just the Verify tool's unit tests.
+go test ./internal/store/ -run TestVerify -v
+```
+
+**Property tests** (6 tests, opt-in) exercise random op sequences
+against real store state. They live in
+[internal/storytests/property_test.go](internal/storytests/property_test.go)
+and are gated behind `KNOMIT_PROPTESTS=1`:
+
+```sh
+# Run all property tests (time-based seed, new coverage every run).
+KNOMIT_PROPTESTS=1 go test ./internal/storytests/ -run TestProperty -v
+
+# Reproduce a failure deterministically — the seed is logged on every run.
+KNOMIT_PROPTESTS=1 KNOMIT_PROPTEST_SEED=1712345678 \
+  go test ./internal/storytests/ -run TestProperty -v
+
+# Run one specific property test under -race.
+KNOMIT_PROPTESTS=1 go test ./internal/storytests/ \
+  -run TestProperty_IntegrityHoldsUnderRandomOps -race -v
+```
+
+The `knomit verify` CLI subcommand runs the same integrity checks
+against a live on-disk repo:
+
+```sh
+knomit verify                 # verify the default repo
+knomit verify --name work     # verify a specific repo
+knomit verify --all --deep    # every repo, including fact-format check
+```
+
 ## Usage
 
 ```sh
