@@ -187,6 +187,7 @@ func (b *repoBuilder) build() *RepoInstance {
 		dbPath:      b.dbPath,
 		agentBranch: b.agentBranch,
 		ontology:    b.ontology,
+		embedder:    b.embedder,
 		svc:         b.svc,
 		hub:         hub,
 	}

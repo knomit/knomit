@@ -15,6 +15,7 @@ type RepoInstance struct {
 	dbPath      string
 	agentBranch string
 	ontology    *fact.Ontology
+	embedder    store.BatchEmbedder
 	onCommit    func(string, string) // re-applied to new svc after SwapStore
 	svc         *store.Service
 	hub         *TaskHub
@@ -48,6 +49,9 @@ func (ri *RepoInstance) AgentBranch() string { return ri.agentBranch }
 
 // Ontology returns the ontology loaded from this repo's git store at open time.
 func (ri *RepoInstance) Ontology() *fact.Ontology { return ri.ontology }
+
+// Embedder returns the batch embedder for this repo, or nil if unavailable.
+func (ri *RepoInstance) Embedder() store.BatchEmbedder { return ri.embedder }
 
 // TaskHub returns the hub for broadcasting task status events.
 func (ri *RepoInstance) TaskHub() *TaskHub { return ri.hub }
@@ -99,6 +103,7 @@ type TestInstanceConfig struct {
 	Svc         *store.Service
 	Ontology    *fact.Ontology
 	Hub         *TaskHub
+	Embedder    store.BatchEmbedder
 	StartSync   func(url string) error
 }
 
@@ -111,6 +116,7 @@ func NewTestInstanceWithDeps(cfg TestInstanceConfig) *RepoInstance {
 		agentBranch: cfg.AgentBranch,
 		svc:         cfg.Svc,
 		ontology:    cfg.Ontology,
+		embedder:    cfg.Embedder,
 		hub:         cfg.Hub,
 		startSync:   cfg.StartSync,
 		syncCancel:  func() {},
