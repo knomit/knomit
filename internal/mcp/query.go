@@ -36,11 +36,13 @@ func queryTool() mcpgo.Tool {
 }
 
 // QueryHandler returns the handler function for knomit_query.
-func QueryHandler(ri *repos.RepoInstance) func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+// The repo is resolved from the request context at call time via RepoMiddleware.
+func QueryHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 	return func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 		ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
 
+		ri := repos.RepoFromContext(ctx)
 		s := storeIndices(ri)
 		agentBranch := ri.AgentBranch()
 
