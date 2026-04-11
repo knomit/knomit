@@ -105,6 +105,10 @@ func (s *Server) Handler() http.Handler {
 		}))
 	})
 
+	// Mount the HAL v2 router under a temporary prefix. Plan 03 renames this
+	// to /api/v1 and retires the legacy routes registered above.
+	r.Mount(V2URLBase, s.NewV2Router())
+
 	// Serve embedded web UI
 	staticHandler := StaticHandler()
 	r.Handle("/assets/*", staticHandler)

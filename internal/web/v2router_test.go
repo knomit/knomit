@@ -37,3 +37,19 @@ func TestV2Router_MethodNotAllowedReturnsProblem(t *testing.T) {
 		t.Errorf("content-type: got %q, want application/problem+json", got)
 	}
 }
+
+func TestServerHandler_MountsV2RouterAtV2Base(t *testing.T) {
+	s := &Server{}
+	h := s.Handler() // the full mux — should now include /api/v1-new
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, V2URLBase+"/nonsense", nil)
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("status: got %d, want 404", rec.Code)
+	}
+	if got := rec.Header().Get("Content-Type"); got != "application/problem+json" {
+		t.Errorf("content-type: got %q, want application/problem+json", got)
+	}
+}
