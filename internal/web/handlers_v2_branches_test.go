@@ -95,3 +95,80 @@ func TestHandleV2Branches_ReturnsCollection(t *testing.T) {
 		t.Error("agent/test not in collection")
 	}
 }
+
+func TestHandleV2Branch_ReturnsStatusAndFullLinkMap(t *testing.T) {
+	m := newTestManagerWithRepos(t, "alpha")
+	s := &Server{
+		Manager:           m,
+		EmbeddingsEnabled: true,
+		AgentBranch:       "agent/test",
+		branchRootReader: func(_ *repos.RepoInstance, name string) (branchRootInfo, error) {
+			return branchRootInfo{
+				Head:        "7f3a8b2c",
+				IndexCommit: "7f3a8b2c",
+			}, nil
+		},
+	}
+	r := s.NewV2Router()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/repos/alpha/branches/agent:test", nil)
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: %d, body=%s", rec.Code, rec.Body.String())
+	}
+
+	var body struct {
+		Name              string      `json:"name"`
+		Head              string      `json:"head"`
+		IndexCommit       string      `json:"index_commit"`
+		EmbeddingsEnabled bool        `json:"embeddings_enabled"`
+		IsAgentBranch     bool        `json:"is_agent_branch"`
+		Links             hal.LinkMap `json:"_links"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	if body.Name != "agent/test" {
+		t.Errorf("name: %q (must be decoded)", body.Name)
+	}
+	if body.Head != "7f3a8b2c" {
+		t.Errorf("head: %q", body.Head)
+	}
+	if !body.EmbeddingsEnabled {
+		t.Error("embeddings_enabled should be true")
+	}
+	if !body.IsAgentBranch {
+		t.Error("is_agent_branch should be true when branch matches Server.AgentBranch")
+	}
+
+	// Full link set per design spec §3 branch-root example.
+	wantRels := []string{
+		"self", "facts", "topics", "commits", "search",
+		"domains", "stats", "events", "synthesis-runs",
+		"index-rebuilds", "mcp", "repo",
+	}
+	for _, rel := range wantRels {
+		if _, ok := body.Links[rel]; !ok {
+			t.Errorf("missing link %q", rel)
+		}
+	}
+	// self must be branch-anchored, no commit.
+	wantSelf := V2URLBase + "/repos/alpha/branches/agent:test"
+	if got := body.Links["self"].Href; got != wantSelf {
+		t.Errorf("self: got %q, want %q", got, wantSelf)
+	}
+}
+
+func TestHandleV2Branch_UnknownRepoReturns404(t *testing.T) {
+	s := &Server{Manager: newTestManagerWithRepos(t)}
+	r := s.NewV2Router()
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/repos/missing/branches/main", nil)
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("status: %d", rec.Code)
+	}
+}
