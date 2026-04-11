@@ -8,6 +8,7 @@ import (
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 
+	"knomit/internal/repos"
 	"knomit/internal/synthesize"
 )
 
@@ -21,10 +22,14 @@ func reviewTool() mcpgo.Tool {
 }
 
 // ReviewHandler returns the handler function for knomit_review.
-func ReviewHandler(reviewer *synthesize.Reviewer) func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+// A fresh synthesize.Reviewer is constructed per call from the repo in ctx.
+func ReviewHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 	return func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 		ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
+
+		ri := repos.RepoFromContext(ctx)
+		reviewer := synthesize.NewReviewer(ri, nil)
 
 		sessionID := req.GetString("session_id", "")
 		response := req.GetString("response", "")
