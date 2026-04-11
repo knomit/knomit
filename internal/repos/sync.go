@@ -12,27 +12,33 @@ import (
 	"knomit/internal/store"
 )
 
-// resolveRemoteAuth builds a transport.AuthMethod from the remote DB record and
-// the static fallback config. Returns nil on error (anonymous access).
-func resolveRemoteAuth(remote *store.Remote, fallbackAuth config.RemoteAuthConfig, keyPath string) transport.AuthMethod {
-	authCfg := remoteAuthFromRecord(remote, fallbackAuth)
-	auth, err := ResolveAuthWithOrigin(authCfg, keyPath, remote.URL)
-	if err != nil {
-		log.Warn().Err(err).Str("remote", remote.URL).Msg("sync: auth resolution failed, using anonymous")
-		return nil
+// remoteAuthFn returns a transport.AuthMethod for the given remote record.
+// It is constructed by the builder and captures the key path and fallback config.
+type remoteAuthFn func(remote *store.Remote) transport.AuthMethod
+
+// makeRemoteAuthFn builds a remoteAuthFn that resolves auth from a remote
+// record using the given fallback config and key path.
+func makeRemoteAuthFn(fallbackAuth config.RemoteAuthConfig, keyPath string) remoteAuthFn {
+	return func(remote *store.Remote) transport.AuthMethod {
+		authCfg := remoteAuthFromRecord(remote, fallbackAuth)
+		auth, err := resolveAuthWithOrigin(authCfg, keyPath, remote.URL)
+		if err != nil {
+			log.Warn().Err(err).Str("remote", remote.URL).Msg("sync: auth resolution failed, using anonymous")
+			return nil
+		}
+		return auth
 	}
-	return auth
 }
 
 // runSyncLoop pulls from the configured remote on a fixed interval.
 // First sync fires immediately, then every remote.Interval seconds.
 // The interval and auth are re-read from the database on each tick so that
 // changes made via PUT /api/v1/{repo}/origin take effect without a restart.
-func runSyncLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Service, hub *TaskHub, repo, agentBranch, keyPath string, fallbackAuth config.RemoteAuthConfig) {
+func runSyncLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Service, hub *TaskHub, repo, agentBranch string, resolveAuth remoteAuthFn) {
 	defer wg.Done()
 
 	//todo: it's possible the remote will change while the job is still running
-	remote, _ := svc.GetRemote("origin")
+	remote, _ := svc.Remote().GetRemote("origin")
 	if remote == nil {
 		return
 	}
@@ -40,13 +46,13 @@ func runSyncLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Service, hu
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
-	auth := resolveRemoteAuth(remote, fallbackAuth, keyPath)
+	auth := resolveAuth(remote)
 
 	lg := log.With().Str("repo", repo).Str("remote", remote.URL).Logger()
 	lg.Info().Dur("interval", interval).Msg("sync loop started")
 
 	doSync := func() {
-		result, err := svc.Sync(context.Background(), agentBranch, auth)
+		result, err := svc.Remote().Sync(context.Background(), agentBranch, auth)
 		if err != nil {
 			hub.broadcastSyncError("origin", err.Error())
 			lg.Warn().Err(err).Msg("sync: pull failed")
@@ -73,13 +79,13 @@ func runSyncLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Service, hu
 			return
 		case <-ticker.C:
 			// Re-read remote config so interval and auth changes take effect.
-			if fresh, err := svc.GetRemote("origin"); err == nil && fresh != nil {
+			if fresh, err := svc.Remote().GetRemote("origin"); err == nil && fresh != nil {
 				if d := time.Duration(fresh.Interval) * time.Second; d != interval {
 					lg.Info().Dur("old", interval).Dur("new", d).Msg("sync: interval changed")
 					interval = d
 					ticker.Reset(interval)
 				}
-				auth = resolveRemoteAuth(fresh, fallbackAuth, keyPath)
+				auth = resolveAuth(fresh)
 			}
 			doSync()
 		}
@@ -89,11 +95,11 @@ func runSyncLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Service, hu
 // runPushLoop pushes the agent branch to origin on a fixed interval.
 // The interval and auth are re-read from the database on each tick so that
 // changes made via PUT /api/v1/{repo}/origin take effect without a restart.
-func runPushLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Service, hub *TaskHub, repo, agentBranch, keyPath string, fallbackAuth config.RemoteAuthConfig) {
+func runPushLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Service, hub *TaskHub, repo, agentBranch string, resolveAuth remoteAuthFn) {
 	defer wg.Done()
 
 	//todo: it's possible the remote will change while the job is still running
-	remote, _ := svc.GetRemote("origin")
+	remote, _ := svc.Remote().GetRemote("origin")
 	if remote == nil {
 		return
 	}
@@ -101,13 +107,13 @@ func runPushLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Service, hu
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
-	auth := resolveRemoteAuth(remote, fallbackAuth, keyPath)
+	auth := resolveAuth(remote)
 
 	lg := log.With().Str("repo", repo).Str("remote", remote.URL).Logger()
 	lg.Info().Dur("interval", interval).Msg("push loop started")
 
 	doPush := func() {
-		result, err := svc.Push(context.Background(), agentBranch, auth)
+		result, err := svc.Remote().Push(context.Background(), agentBranch, auth)
 		if err != nil {
 			hub.broadcastPushError("origin", err.Error())
 			lg.Warn().Err(err).Msg("push: failed")
@@ -131,13 +137,13 @@ func runPushLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Service, hu
 			return
 		case <-ticker.C:
 			// Re-read remote config so interval and auth changes take effect.
-			if fresh, err := svc.GetRemote("origin"); err == nil && fresh != nil {
+			if fresh, err := svc.Remote().GetRemote("origin"); err == nil && fresh != nil {
 				if d := time.Duration(fresh.PushInterval) * time.Second; d != interval {
 					lg.Info().Dur("old", interval).Dur("new", d).Msg("push: interval changed")
 					interval = d
 					ticker.Reset(interval)
 				}
-				auth = resolveRemoteAuth(fresh, fallbackAuth, keyPath)
+				auth = resolveAuth(fresh)
 			}
 			doPush()
 		}

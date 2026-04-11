@@ -111,7 +111,9 @@ func (si *searchIndex) filterByBranch(ctx context.Context, refs []RefSummary, br
 	visible := make(map[string]bool, len(refs))
 	for rows.Next() {
 		var p string
-		rows.Scan(&p)
+		if err := rows.Scan(&p); err != nil {
+			return refs
+		}
 		visible[p] = true
 	}
 	out := refs[:0]

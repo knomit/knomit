@@ -31,13 +31,13 @@ func handleEvents() http.HandlerFunc {
 		events, snapshot := ri.TaskHub().Subscribe(r.Context())
 
 		// Snapshot the initial head commit — GS may be swapped concurrently.
-		var gs store.FactIndex
+		var branches store.BranchIndex
 		ri.WithRead(func(svc *store.Service) {
 			if svc != nil {
-				gs = svc.Facts()
+				branches = svc.Branches()
 			}
 		})
-		head, _ := gs.HeadCommit(r.Context(), ri.AgentBranch())
+		head, _ := branches.HeadCommit(r.Context(), ri.AgentBranch())
 		fmt.Fprintf(w, "event: status\ndata: {\"head\":\"%s\"}\n\n", head)
 
 		// Replay snapshot (reconnect recovery).

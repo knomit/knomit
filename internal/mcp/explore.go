@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"knomit/internal/fact"
-	"knomit/internal/store"
+	"knomit/internal/repos"
 	"time"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
@@ -27,10 +27,15 @@ func exploreTool(ontologyRoot string) mcpgo.Tool {
 }
 
 // ExploreHandler returns the handler function for knomit_explore.
-func ExploreHandler(gs store.FactIndex, sessionIdx store.ToolSessionIndex, ontologyRoot, agentBranch string) func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+func ExploreHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 	return func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 		ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
+
+		ri := repos.RepoFromContext(ctx)
+		s := storeIndices(ri)
+		agentBranch := ri.AgentBranch()
+		ontologyRoot := ri.OntologyRoot()
 
 		path := req.GetString("path", ontologyRoot)
 		cursor := req.GetString("cursor", "")
@@ -42,21 +47,21 @@ func ExploreHandler(gs store.FactIndex, sessionIdx store.ToolSessionIndex, ontol
 			// New session: start fresh.
 		} else {
 			// Resume existing session.
-			session, err := sessionIdx.GetToolSession(ctx, cursor)
+			session, err := s.toolSession.GetToolSession(ctx, cursor)
 			if err != nil {
 				return mcpgo.NewToolResultError(fmt.Sprintf("session lookup error: %v", err)), nil
 			}
 			if session == nil || session.Status != "active" {
 				return mcpgo.NewToolResultError("session expired or not found — omit cursor to start a new session"), nil
 			}
-			seen, err = sessionIdx.GetSeenPaths(ctx, cursor)
+			seen, err = s.toolSession.GetSeenPaths(ctx, cursor)
 			if err != nil {
 				return mcpgo.NewToolResultError(fmt.Sprintf("seen paths error: %v", err)), nil
 			}
 			fromCommit = session.LastCommit
 		}
 
-		files, lastCommit, err := gs.WalkChangedFiles(ctx, agentBranch, fromCommit, path, seen, explorePageSize)
+		files, lastCommit, err := s.search.WalkChangedFiles(ctx, agentBranch, fromCommit, path, seen, explorePageSize)
 		if err != nil {
 			return mcpgo.NewToolResultError(fmt.Sprintf("walk error: %v", err)), nil
 		}
@@ -72,7 +77,7 @@ func ExploreHandler(gs store.FactIndex, sessionIdx store.ToolSessionIndex, ontol
 		var newPaths []string
 
 		for _, f := range files {
-			readResult, readErr := gs.ReadFact(ctx, agentBranch, f.Path, nil)
+			readResult, readErr := s.facts.ReadFact(ctx, agentBranch, f.Path, nil)
 			if readErr != nil {
 				continue // deleted or unreadable — skip
 			}
@@ -104,7 +109,7 @@ func ExploreHandler(gs store.FactIndex, sessionIdx store.ToolSessionIndex, ontol
 		// Create session on first call.
 		var sessionID string
 		if cursor == "" {
-			session, err := sessionIdx.CreateToolSession(ctx, "explore", agentBranch, path)
+			session, err := s.toolSession.CreateToolSession(ctx, "explore", agentBranch, path)
 			if err != nil {
 				return mcpgo.NewToolResultError(fmt.Sprintf("create session error: %v", err)), nil
 			}
@@ -115,7 +120,7 @@ func ExploreHandler(gs store.FactIndex, sessionIdx store.ToolSessionIndex, ontol
 
 		// Record seen paths.
 		if len(newPaths) > 0 {
-			if err := sessionIdx.AddSeenPaths(ctx, sessionID, newPaths); err != nil {
+			if err := s.toolSession.AddSeenPaths(ctx, sessionID, newPaths); err != nil {
 				return mcpgo.NewToolResultError(fmt.Sprintf("add seen paths error: %v", err)), nil
 			}
 		}
@@ -125,7 +130,7 @@ func ExploreHandler(gs store.FactIndex, sessionIdx store.ToolSessionIndex, ontol
 		if !hasMore {
 			status = "completed"
 		}
-		if err := sessionIdx.UpdateToolSession(ctx, sessionID, lastCommit, status); err != nil {
+		if err := s.toolSession.UpdateToolSession(ctx, sessionID, lastCommit, status); err != nil {
 			return mcpgo.NewToolResultError(fmt.Sprintf("update session error: %v", err)), nil
 		}
 

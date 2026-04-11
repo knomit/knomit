@@ -55,7 +55,7 @@ func handleGetOrigin() http.HandlerFunc {
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
-		remote, err := svc.GetRemote("origin")
+		remote, err := svc.Remote().GetRemote("origin")
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
@@ -97,7 +97,7 @@ func handleSetOrigin() http.HandlerFunc {
 			return
 		}
 		// Load existing remote to support partial updates.
-		existing, _ := svc.GetRemote("origin")
+		existing, _ := svc.Remote().GetRemote("origin")
 
 		// Resolve URL: use request value, fall back to existing.
 		url := req.URL
@@ -140,7 +140,7 @@ func handleSetOrigin() http.HandlerFunc {
 			pushInterval = existing.PushInterval
 		}
 
-		if err := svc.SetRemote("origin", url, branch, interval, pushInterval, authMethod, authToken); err != nil {
+		if err := svc.Remote().SetRemote("origin", url, branch, interval, pushInterval, authMethod, authToken); err != nil {
 			log.Warn().Err(err).Str("repo", repoName).Msg("set origin failed")
 			writeError(w, http.StatusInternalServerError, "failed to save origin")
 			return

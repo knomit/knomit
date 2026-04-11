@@ -35,17 +35,7 @@ func (s *Server) handleSynthesizeStart() http.HandlerFunc {
 		hub := ri.TaskHub()
 		repo := ri.Name()
 
-		var gs store.FactIndex
-		var idx store.SearchIndex
-		var pipelineIdx store.PipelineIndex
-		ri.WithRead(func(svc *store.Service) {
-			if svc != nil {
-				gs = svc.Facts()
-				idx = svc.Search()
-				pipelineIdx = svc.Pipeline()
-			}
-		})
-		reviewer := synthesize.NewReviewer(gs, idx, pipelineIdx, s.Embedder, nil, s.AgentBranch)
+		reviewer := synthesize.NewReviewer(ri, nil)
 
 		id, err := hub.Start("synth", func(ctx context.Context, emit func(repos.TaskEvent)) {
 			emit(repos.TaskEvent{Status: "running", Phase: "start", Message: "review starting", Repo: repo})
@@ -90,7 +80,7 @@ func handleRebuild() http.HandlerFunc {
 					emit(repos.TaskEvent{Status: "running", Phase: subPhase, Message: fmt.Sprintf("%d/%d", done, total), Repo: repo})
 				}
 			}
-			if err := svc.Search().Rebuild(r.Context(), branch, progress); err != nil {
+			if err := svc.IndexManager().Rebuild(r.Context(), branch, progress); err != nil {
 				emit(repos.TaskEvent{Status: "error", Message: err.Error(), Repo: repo})
 				return
 			}

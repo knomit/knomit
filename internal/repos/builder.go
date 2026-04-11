@@ -21,15 +21,16 @@ import (
 // step and can clean up with close() on failure.
 type repoBuilder struct {
 	// inputs
-	name        string
-	dbPath      string
-	isDefault   bool
-	cfg         config.Config
-	signer      ssh.Signer
-	agentBranch string
-	embedder    store.BatchEmbedder
-	keyPath     string
-	ctx         context.Context
+	name                  string
+	dbPath                string
+	isDefault             bool
+	cfg                   config.Config
+	signer                ssh.Signer
+	agentBranch           string
+	embedder              store.BatchEmbedder
+	keyPath               string
+	ctx                   context.Context
+	disableBackgroundSync bool
 
 	// accumulated state
 	svc      *store.Service
@@ -95,25 +96,27 @@ func (b *repoBuilder) loadOntology() {
 // first run — either by cloning from a configured origin or by creating a
 // fresh repository with the default ontology seed files.
 func (b *repoBuilder) initDefaultGit() error {
-	if b.cfg.Git.Origin != "" {
-		auth, authErr := resolveAuth(b.cfg.Remote, b.keyPath)
-		if authErr != nil {
-			return fmt.Errorf("resolve auth: %w", authErr)
-		}
-		if err := b.svc.InitFromRemote(b.cfg.Git.Origin, auth, b.agentBranch); err != nil {
-			return fmt.Errorf("init from remote: %w", err)
-		}
-		return nil
-	}
-
 	ont := fact.DefaultOntology()
 	ontologyYAML, err := ont.Serialize()
 	if err != nil {
 		return fmt.Errorf("serialize ontology: %w", err)
 	}
-	if err := b.svc.InitRepo(map[string]string{
+	seedFiles := map[string]string{
 		"domains/ontology.yaml": string(ontologyYAML),
-	}, b.agentBranch); err != nil {
+	}
+
+	if b.cfg.Git.Origin != "" {
+		auth, authErr := resolveAuth(b.cfg.Remote, b.keyPath)
+		if authErr != nil {
+			return fmt.Errorf("resolve auth: %w", authErr)
+		}
+		if err := b.svc.InitFromRemote(b.cfg.Git.Origin, auth, b.agentBranch, seedFiles); err != nil {
+			return fmt.Errorf("init from remote: %w", err)
+		}
+		return nil
+	}
+
+	if err := b.svc.InitRepo(seedFiles, b.agentBranch); err != nil {
 		return fmt.Errorf("init git: %w", err)
 	}
 	return nil
@@ -128,20 +131,30 @@ func (b *repoBuilder) ensureBranch() {
 		}
 	}
 	if b.isDefault && b.cfg.Git.Origin != "" {
-		if err := b.svc.SetRemote("origin", b.cfg.Git.Origin, "main", 300, 300, "", ""); err != nil {
+		if err := b.svc.Remote().SetRemote("origin", b.cfg.Git.Origin, "main", 300, 300, "", ""); err != nil {
 			log.Warn().Err(err).Msg("failed to seed origin in remotes table")
 		}
 	}
 }
 
 // setupIndex configures the search index with the embedder and runs an initial
-// sync against the git store.
+// sync against the git store. When an origin is configured, main is also
+// synced — InitFromRemote populates commit_log for both agent/* and main,
+// but without an explicit index sync main's branch_facts / facts_vec / graph
+// tables would be empty even though the tree at HEAD has content cloned from
+// origin. Without this, Verify's facts-coherence check correctly fires on
+// main whenever the cloned tree has any facts.
 func (b *repoBuilder) setupIndex() {
 	if b.embedder != nil {
-		b.svc.Search().SetEmbedder(b.embedder)
+		b.svc.SetEmbedder(b.embedder)
 	}
-	if err := b.svc.Search().Sync(context.Background(), b.agentBranch); err != nil {
+	if err := b.svc.IndexManager().Sync(context.Background(), b.agentBranch); err != nil {
 		log.Warn().Err(err).Str("repo", b.name).Msg("initial index sync failed")
+	}
+	if b.cfg.Git.Origin != "" {
+		if err := b.svc.IndexManager().Sync(context.Background(), "main"); err != nil {
+			log.Warn().Err(err).Str("repo", b.name).Msg("initial index sync (main) failed")
+		}
 	}
 }
 
@@ -151,7 +164,7 @@ func (b *repoBuilder) setupIndex() {
 func (b *repoBuilder) seedWatermarks() {
 	for _, tool := range []string{"review", "hypothesize"} {
 		if wm, _ := b.svc.Pipeline().GetPipelineWatermark(context.Background(), tool, b.agentBranch); wm == "" {
-			if head, err := b.svc.Facts().HeadCommit(context.Background(), b.agentBranch); err == nil {
+			if head, err := b.svc.Branches().HeadCommit(context.Background(), b.agentBranch); err == nil {
 				if err := b.svc.Pipeline().SetPipelineWatermark(context.Background(), tool, b.agentBranch, head); err != nil {
 					log.Warn().Err(err).Str("tool", tool).Msg("pipeline watermark: initial set failed")
 				}
@@ -163,19 +176,21 @@ func (b *repoBuilder) seedWatermarks() {
 // build assembles the final RepoInstance, starts the commit observer and
 // background sync loops, and wires up the startSync and closeFn closures.
 // Must be called after openStore, openGit, ensureBranch, setupIndex, and
-// seedWatermarks. The returned instance is ready for SetupMCP and registration.
+// seedWatermarks. The returned instance is ready for registration with the Manager.
 func (b *repoBuilder) build() *RepoInstance {
 	hub := NewTaskHub(b.ctx)
 
 	// Allocate ri first — the observer and closures capture the pointer so
 	// they follow SwapStore field replacements via the read lock.
 	ri := &RepoInstance{
-		name:        b.name,
-		dbPath:      b.dbPath,
-		agentBranch: b.agentBranch,
-		ontology:    b.ontology,
-		svc:         b.svc,
-		hub:         hub,
+		name:         b.name,
+		dbPath:       b.dbPath,
+		agentBranch:  b.agentBranch,
+		ontology:     b.ontology,
+		embedder:     b.embedder,
+		ontologyRoot: b.cfg.OntologyRoot,
+		svc:          b.svc,
+		hub:          hub,
 	}
 
 	// Observer: sync index + push SSE on every git commit.
@@ -183,7 +198,7 @@ func (b *repoBuilder) build() *RepoInstance {
 		ri.mu.RLock()
 		currentSvc := ri.svc
 		ri.mu.RUnlock()
-		if err := currentSvc.Search().Sync(context.Background(), b.agentBranch); err != nil {
+		if err := currentSvc.IndexManager().Sync(context.Background(), b.agentBranch); err != nil {
 			log.Warn().Err(err).Str("repo", b.name).Msg("observer sync failed")
 		}
 		hub.broadcastStatus(hash)
@@ -211,7 +226,7 @@ func (b *repoBuilder) build() *RepoInstance {
 		currentSvc := ri.svc
 		ri.mu.RUnlock()
 
-		remote, err := currentSvc.GetRemote("origin")
+		remote, err := currentSvc.Remote().GetRemote("origin")
 		if err != nil || remote == nil {
 			return fmt.Errorf("read remote: %w", err)
 		}
@@ -221,13 +236,16 @@ func (b *repoBuilder) build() *RepoInstance {
 
 		var newCtx context.Context
 		newCtx, syncCancel = context.WithCancel(ctx)
+		ri.mu.Lock()
 		ri.syncCancel = syncCancel
+		ri.mu.Unlock()
 
 		currentSvc.SetOnCommit(ri.onCommit)
 
 		syncWg.Add(2)
-		go runSyncLoop(newCtx, &syncWg, currentSvc, hub, name, agentBranch, keyPath, cfg.Remote)
-		go runPushLoop(newCtx, &syncWg, currentSvc, hub, name, agentBranch, keyPath, cfg.Remote)
+		authFn := makeRemoteAuthFn(cfg.Remote, keyPath)
+		go runSyncLoop(newCtx, &syncWg, currentSvc, hub, name, agentBranch, authFn)
+		go runPushLoop(newCtx, &syncWg, currentSvc, hub, name, agentBranch, authFn)
 		return nil
 	}
 
@@ -243,16 +261,22 @@ func (b *repoBuilder) build() *RepoInstance {
 }
 
 // startSyncLoops launches the background pull and push goroutines if a remote
-// named "origin" is configured.
+// named "origin" is configured. Skipped entirely when Deps.DisableBackgroundSync
+// is set — test harnesses use that flag to prevent the first-tick immediate
+// doSync/doPush call from racing with test assertions.
 func (b *repoBuilder) startSyncLoops(ctx context.Context, wg *sync.WaitGroup, hub *TaskHub) {
-	remote, _ := b.svc.GetRemote("origin")
+	if b.disableBackgroundSync {
+		return
+	}
+	remote, _ := b.svc.Remote().GetRemote("origin")
 	if remote == nil {
 		return
 	}
 
+	authFn := makeRemoteAuthFn(b.cfg.Remote, b.keyPath)
 	wg.Add(2)
-	go runSyncLoop(ctx, wg, b.svc, hub, b.name, b.agentBranch, b.keyPath, b.cfg.Remote)
-	go runPushLoop(ctx, wg, b.svc, hub, b.name, b.agentBranch, b.keyPath, b.cfg.Remote)
+	go runSyncLoop(ctx, wg, b.svc, hub, b.name, b.agentBranch, authFn)
+	go runPushLoop(ctx, wg, b.svc, hub, b.name, b.agentBranch, authFn)
 }
 
 // close releases resources opened so far. Safe to call at any point during

@@ -63,6 +63,10 @@ func (s *Storer) Close() error {
 	return nil
 }
 
+// DB returns the underlying SQL DB. Used by integrity tests and the verify tool
+// for read-only schema introspection.
+func (s *Storer) DB() *sql.DB { return s.db }
+
 // conn returns the raw *sql.DB as an execer. Used by go-git interface methods
 // which don't accept context. For context-aware callers, use connCtx instead.
 func (s *Storer) conn() execer {
@@ -181,6 +185,13 @@ func (s *Storer) EncodedObjectSize(h plumbing.Hash) (int64, error) {
 // AddAlternate is not supported by this backend.
 func (s *Storer) AddAlternate(remote string) error {
 	return fmt.Errorf("storegit: alternates not supported")
+}
+
+// DeleteObjectForTest removes an object from the SQLite-backed object store.
+// Test-only escape hatch for integrity-check tests.
+func (s *Storer) DeleteObjectForTest(hash plumbing.Hash) error {
+	_, err := s.db.Exec(`DELETE FROM objects WHERE hash = ?`, hash.String())
+	return err
 }
 
 // --- objectIter ---

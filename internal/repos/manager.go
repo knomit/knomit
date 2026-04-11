@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/go-git/go-git/v5/plumbing/transport"
 	"github.com/rs/zerolog/log"
 	"golang.org/x/crypto/ssh"
 
@@ -23,9 +24,12 @@ type Deps struct {
 	AgentBranch string
 	Embedder    store.BatchEmbedder // nil if unavailable
 	KeyPath     string
-	// OnRepoReady is called after a repo is opened or its store is swapped.
-	// The web layer uses this to wire MCP handlers onto the repo.
-	OnRepoReady func(ri *RepoInstance)
+	// DisableBackgroundSync suppresses the background pull and push loops
+	// that would otherwise run on every managed repo. Tests use this to
+	// prevent non-deterministic sync/push behavior — the loops call
+	// doSync/doPush immediately on startup which can race with test
+	// assertions about remote state. Production leaves this unset.
+	DisableBackgroundSync bool
 }
 
 // Manager owns the full lifecycle of all registered repositories:
@@ -35,6 +39,12 @@ type Manager struct {
 	repos    map[string]*RepoInstance
 	ctx      context.Context
 	deps     Deps
+}
+
+// ResolveAuth resolves a transport.AuthMethod for the given config and remote
+// URL, using the manager's own key path as the SSH key fallback.
+func (m *Manager) ResolveAuth(cfg config.RemoteAuthConfig, url string) (transport.AuthMethod, error) {
+	return resolveAuthWithOrigin(cfg, m.deps.KeyPath, url)
 }
 
 // New returns an uninitialised Manager. Call Boot to open repos.
@@ -81,9 +91,6 @@ func (m *Manager) Names() []string {
 	return names
 }
 
-// SetOnRepoReady sets the callback invoked after a repo is opened or swapped.
-func (m *Manager) SetOnRepoReady(fn func(*RepoInstance)) { m.deps.OnRepoReady = fn }
-
 // Shutdown gracefully stops all registered repositories.
 // It performs a two-pass shutdown: cancel all sync loops first so they wind
 // down concurrently, then wait and release resources repo by repo.
@@ -97,8 +104,11 @@ func (m *Manager) Shutdown() {
 
 	// Pass 1: cancel all sync loops so they can wind down concurrently.
 	for _, ri := range instances {
-		if ri.syncCancel != nil {
-			ri.syncCancel()
+		ri.mu.RLock()
+		cancel := ri.syncCancel
+		ri.mu.RUnlock()
+		if cancel != nil {
+			cancel()
 		}
 	}
 
@@ -124,10 +134,14 @@ func (m *Manager) Boot() error {
 		return fmt.Errorf("create repos dir: %w", err)
 	}
 
+	// Open the default repo with isDefault=true so that initDefaultGit is
+	// called on first run (no git data in a fresh DB).
 	defaultDB := filepath.Join(reposDir, "knomit.db")
-	if err := m.Add("knomit", defaultDB); err != nil {
+	ri, err := m.openOne("knomit", defaultDB, true)
+	if err != nil {
 		return fmt.Errorf("open default repo: %w", err)
 	}
+	m.Set("knomit", ri)
 
 	dbFiles, _ := filepath.Glob(filepath.Join(reposDir, "*.db"))
 	sort.Strings(dbFiles)
@@ -155,9 +169,6 @@ func (m *Manager) Add(name, dbPath string) error {
 	if err != nil {
 		return err
 	}
-	if m.deps.OnRepoReady != nil {
-		m.deps.OnRepoReady(ri)
-	}
 	m.Set(name, ri)
 	return nil
 }
@@ -170,15 +181,16 @@ func (m *Manager) Add(name, dbPath string) error {
 // open are returned as errors so the caller can skip them gracefully.
 func (m *Manager) openOne(name, dbPath string, isDefault bool) (*RepoInstance, error) {
 	b := repoBuilder{
-		name:        name,
-		dbPath:      dbPath,
-		isDefault:   isDefault,
-		cfg:         m.deps.Cfg,
-		signer:      m.deps.Signer,
-		agentBranch: m.deps.AgentBranch,
-		embedder:    m.deps.Embedder,
-		keyPath:     m.deps.KeyPath,
-		ctx:         m.ctx,
+		name:                  name,
+		dbPath:                dbPath,
+		isDefault:             isDefault,
+		cfg:                   m.deps.Cfg,
+		signer:                m.deps.Signer,
+		agentBranch:           m.deps.AgentBranch,
+		embedder:              m.deps.Embedder,
+		keyPath:               m.deps.KeyPath,
+		ctx:                   m.ctx,
+		disableBackgroundSync: m.deps.DisableBackgroundSync,
 	}
 
 	if err := b.openStore(); err != nil {
@@ -194,27 +206,6 @@ func (m *Manager) openOne(name, dbPath string, isDefault bool) (*RepoInstance, e
 	b.seedWatermarks()
 
 	return b.build(), nil
-}
-
-// remoteAuthFromRecord builds a RemoteAuthConfig from a stored remote record,
-// falling back to the global config for fields not set in the record.
-func remoteAuthFromRecord(remote *store.Remote, fallback config.RemoteAuthConfig) config.RemoteAuthConfig {
-	cfg := fallback
-	if remote.AuthMethod != "" {
-		cfg.AuthMethod = remote.AuthMethod
-	}
-	if remote.AuthToken != "" {
-		if cfg.AuthMethod == "basic" {
-			// token field stores user:password
-			if parts := strings.SplitN(remote.AuthToken, ":", 2); len(parts) == 2 {
-				cfg.User = parts[0]
-				cfg.Password = parts[1]
-			}
-		} else {
-			cfg.Token = remote.AuthToken
-		}
-	}
-	return cfg
 }
 
 // isValidRepoName checks that a repo name contains only lowercase letters,

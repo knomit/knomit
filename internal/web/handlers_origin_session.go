@@ -2,6 +2,7 @@ package web
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"path/filepath"
@@ -154,7 +155,7 @@ func handleTestConnectivity(rm *repos.Manager, sm *SessionManager, agentBranch s
 			User:       sess.Auth.User,
 			Password:   sess.Auth.Password,
 		}
-		auth, err := repos.ResolveAuthWithOrigin(authCfg, "", sess.URL)
+		auth, err := rm.ResolveAuth(authCfg, sess.URL)
 		if err != nil {
 			sendEvent(map[string]string{"phase": "error", "message": fmt.Sprintf("auth resolution failed: %v", err)})
 			return
@@ -175,10 +176,15 @@ func handleTestConnectivity(rm *repos.Manager, sm *SessionManager, agentBranch s
 			sendEvent(map[string]string{"phase": "cloning", "progress": msg})
 		}
 
-		if err := remoteSvc.CloneFrom(sess.URL, auth, progressFn); err != nil {
+		cloneErr := remoteSvc.CloneFrom(sess.URL, auth, progressFn)
+		if cloneErr != nil {
 			remoteSvc.Close()
-			log.Warn().Err(err).Str("repo", repo).Str("url", sess.URL).Msg("test connectivity: clone failed")
-			sendEvent(map[string]string{"phase": "error", "message": fmt.Sprintf("clone failed: %v", err)})
+			msg := fmt.Sprintf("clone failed: %v", cloneErr)
+			if errors.Is(cloneErr, store.ErrEmptyRemote) {
+				msg = "Remote repository has no branches. Initialize it with at least one branch (e.g. `main` with an initial commit) before connecting."
+			}
+			log.Warn().Err(cloneErr).Str("repo", repo).Str("url", sess.URL).Msg("test connectivity: clone failed")
+			sendEvent(map[string]string{"phase": "error", "message": msg})
 			sess.mu.Lock()
 			sess.State = StateError
 			sess.mu.Unlock()
@@ -195,7 +201,7 @@ func handleTestConnectivity(rm *repos.Manager, sm *SessionManager, agentBranch s
 		}
 
 		// Collect all branch info in a single pass over refs.
-		branches, agentBranches, matchedAgent := remoteSvc.Facts().BranchInfo(agentBranch)
+		branches, agentBranches, matchedAgent := remoteSvc.Branches().BranchInfo(agentBranch)
 
 		// Check shared history.
 		history := "disjoint"
@@ -306,7 +312,7 @@ func handlePreview(rm *repos.Manager, sm *SessionManager, agentBranch string) ht
 		// Build local path set via FactsIter.
 		localPaths := make(map[string]struct{})
 		if svc != nil {
-			iter, err := svc.Facts().FactsIter(r.Context(), agentBranch)
+			iter, err := svc.Search().FactsIter(r.Context(), agentBranch)
 			if err != nil {
 				log.Warn().Err(err).Str("repo", repo).Msg("preview: open facts iter")
 			} else {
@@ -491,7 +497,7 @@ func handleApply(rm *repos.Manager, sm *SessionManager, agentBranch string) http
 				return
 			}
 
-			factsIter, err := svc.Facts().FactsIter(r.Context(), agentBranch)
+			factsIter, err := svc.Search().FactsIter(r.Context(), agentBranch)
 			if err != nil {
 				sendEvent(map[string]string{"phase": "error", "message": fmt.Sprintf("open facts iterator: %v", err)})
 				return
@@ -685,8 +691,8 @@ func (s *Server) handleCommit(rm *repos.Manager, sm *SessionManager, agentBranch
 			return
 		}
 
-		// Rebuild MCP handlers so they use the new database, not the closed one.
-		s.SetupMCP(ri)
+		// MCP handlers are stateless — they read the current svc via ri.WithRead
+		// on each request, so no rebind is needed after SwapStore.
 
 		// Snapshot after swap — protect against concurrent SwapStore.
 		var svc *store.Service
@@ -700,7 +706,7 @@ func (s *Server) handleCommit(rm *repos.Manager, sm *SessionManager, agentBranch
 			authMethod := authCfg.Method
 			authToken := assembleAuthToken(authMethod, authCfg.Token, authCfg.User, authCfg.Password)
 
-			if err := svc.SetRemote("origin", remoteURL, remoteBranch, 300, 300, authMethod, authToken); err != nil {
+			if err := svc.Remote().SetRemote("origin", remoteURL, remoteBranch, 300, 300, authMethod, authToken); err != nil {
 				sendEvent(map[string]string{"phase": "error", "message": fmt.Sprintf("save remote config: %v", err)})
 				return
 			}
@@ -726,13 +732,13 @@ func (s *Server) handleCommit(rm *repos.Manager, sm *SessionManager, agentBranch
 					})
 				}
 			}
-			if err := svc.Search().Rebuild(r.Context(), rebuildBranch, progress); err != nil {
+			if err := svc.IndexManager().Rebuild(r.Context(), rebuildBranch, progress); err != nil {
 				log.Warn().Err(err).Str("repo", repo).Msg("commit: index rebuild failed")
 			} else {
 				log.Info().Str("repo", repo).Msg("commit: index rebuilt from swapped store")
 				// Set pipeline watermarks to HEAD so the first review/hypothesize
 				// doesn't treat every cloned fact as dirty.
-				if head, err := svc.Facts().HeadCommit(r.Context(), rebuildBranch); err == nil {
+				if head, err := svc.Branches().HeadCommit(r.Context(), rebuildBranch); err == nil {
 					for _, tool := range []string{"review", "hypothesize"} {
 						if err := svc.Pipeline().SetPipelineWatermark(r.Context(), tool, rebuildBranch, head); err != nil {
 							log.Warn().Err(err).Str("repo", repo).Str("tool", tool).Msg("commit: pipeline watermark set failed")

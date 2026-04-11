@@ -21,11 +21,8 @@ import (
 // blobObjectType is the go-git integer for plumbing.BlobObject.
 const blobObjectType = 3
 
-// Compile-time checks.
-var _ FactIndex        = (*factIndex)(nil)
-var _ SearchIndex      = (*searchIndex)(nil)
-var _ PipelineIndex    = (*pipelineIndex)(nil)
-var _ ToolSessionIndex = (*toolIndex)(nil)
+// Compile-time check (SearchIndex has no assertion in its own file).
+var _ SearchIndex = (*searchIndex)(nil)
 
 // Service is the single entry point for all database and git access. It opens one
 // SQLite file with sqlite-vec + GraphQLite extensions, runs the embedded
@@ -36,13 +33,13 @@ var _ ToolSessionIndex = (*toolIndex)(nil)
 // when Service is used in DB-only mode via Open().
 type Service struct {
 	rh          *repoHandler
-	crypt       *Crypt // nil if no key material provided
 	handlerOnce sync.Once
 	handler     http.Handler
 	fi          *factIndex
 	si          *searchIndex
 	pi          *pipelineIndex
 	ti          *toolIndex
+	ri          *remoteIndex
 }
 
 // Open opens (or creates) a unified SQLite database at path, initializes the
@@ -80,25 +77,36 @@ func Open(path string) (*Service, error) {
 	rh := newRepoHandler(db, gits)
 	si := &searchIndex{rh: rh}
 	rh.onDrop = si.GC
+	rh.im = si // notifyCommit delegates to im.Sync after every commit.
 	fi := &factIndex{rh: rh}
-	fi.postCommit = si.Sync
+	ri := &remoteIndex{rh: rh}
 	return &Service{
 		rh: rh,
 		fi: fi,
 		si: si,
 		pi: &pipelineIndex{rh: rh},
 		ti: &toolIndex{rh: rh},
+		ri: ri,
 	}, nil
 }
 
 // SetCrypt sets the encryption provider for credential storage.
-func (s *Service) SetCrypt(c *Crypt) { s.crypt = c }
+func (s *Service) SetCrypt(c *Crypt) { s.ri.crypt = c }
+
+// Remote returns the RemoteIndex for git remote configuration and sync.
+func (s *Service) Remote() RemoteIndex { return s.ri }
 
 // Facts returns the FactIndex for git-backed fact operations.
 func (s *Service) Facts() FactIndex { return s.fi }
 
 // Search returns the SearchIndex for full-text and vector search.
 func (s *Service) Search() SearchIndex { return s.si }
+
+// IndexManager returns the IndexManager for search index lifecycle operations.
+func (s *Service) IndexManager() IndexManager { return s.si }
+
+// SetEmbedder configures the embedder used by the search index for vector operations.
+func (s *Service) SetEmbedder(e BatchEmbedder) { s.rh.setEmbedder(e) }
 
 // Pipeline returns the PipelineIndex for pipeline session management.
 func (s *Service) Pipeline() PipelineIndex { return s.pi }
@@ -123,14 +131,14 @@ func (s *Service) Close() error { return s.rh.db.Close() }
 
 // SetSigner sets the SSH signer used for commit signing.
 func (s *Service) SetSigner(signer ssh.Signer) {
-	s.fi.signer = signer
+	s.rh.signer = signer
 }
 
 // SetOnCommit registers a callback invoked after every commit (after internal
 // bookkeeping). This allows callers to observe commits for side-effects such
 // as SSE broadcasting. The callback receives the branch name and commit hash.
 func (s *Service) SetOnCommit(fn func(branch, hash string)) {
-	s.fi.onCommit = fn
+	s.rh.onCommit = fn
 }
 
 

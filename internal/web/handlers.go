@@ -484,10 +484,10 @@ func handleSearch() http.HandlerFunc {
 func handleHistoryPaginated(agentBranch string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
-		var gs store.FactIndex
+		var idx store.SearchIndex
 		ri.WithRead(func(svc *store.Service) {
 			if svc != nil {
-				gs = svc.Facts()
+				idx = svc.Search()
 			}
 		})
 		path := r.URL.Query().Get("path")
@@ -506,7 +506,7 @@ func handleHistoryPaginated(agentBranch string) http.HandlerFunc {
 		from := r.URL.Query().Get("from")
 		before := r.URL.Query().Get("before")
 
-		entries, next, prev, err := gs.LogPaginated(r.Context(), agentBranch, path, limit, after, from, before)
+		entries, next, prev, err := idx.LogPaginated(r.Context(), agentBranch, path, limit, after, from, before)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, fmt.Sprintf("log error: %v", err))
 			return
@@ -544,7 +544,7 @@ func handleCommitDetail(agentBranch string) http.HandlerFunc {
 			return
 		}
 
-		detail, err := gs.CommitDetail(r.Context(), hash)
+		detail, err := idx.CommitDetail(r.Context(), hash)
 		if err != nil {
 			writeError(w, http.StatusNotFound, fmt.Sprintf("commit not found: %v", err))
 			return
@@ -597,13 +597,13 @@ func handleCommitDetail(agentBranch string) http.HandlerFunc {
 func handleActivity(agentBranch string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
-		var gs store.FactIndex
+		var idx store.SearchIndex
 		ri.WithRead(func(svc *store.Service) {
 			if svc != nil {
-				gs = svc.Facts()
+				idx = svc.Search()
 			}
 		})
-		result, err := gs.Activity(r.Context(), agentBranch, r.URL.Query().Get("path"))
+		result, err := idx.Activity(r.Context(), agentBranch, r.URL.Query().Get("path"))
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, fmt.Sprintf("activity error: %v", err))
 			return
@@ -669,15 +669,15 @@ func handleStats() http.HandlerFunc {
 func handleStatus(embeddingsEnabled bool, ontologyRoot, agentBranch string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
-		var gs store.FactIndex
-		var idx store.SearchIndex
+		var branches store.BranchIndex
+		var im store.IndexManager
 		ri.WithRead(func(svc *store.Service) {
 			if svc != nil {
-				gs = svc.Facts()
-				idx = svc.Search()
+				branches = svc.Branches()
+				im = svc.IndexManager()
 			}
 		})
-		head, err := gs.HeadCommit(r.Context(), agentBranch)
+		head, err := branches.HeadCommit(r.Context(), agentBranch)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, fmt.Sprintf("head commit error: %v", err))
 			return
@@ -686,8 +686,8 @@ func handleStatus(embeddingsEnabled bool, ontologyRoot, agentBranch string) http
 		branch := agentBranch
 
 		indexCommit := ""
-		if idx != nil {
-			indexCommit, _ = idx.GetLastCommit(r.Context(), branch)
+		if im != nil {
+			indexCommit, _ = im.SyncWatermark(r.Context(), branch)
 		}
 
 		writeJSON(w, http.StatusOK, map[string]any{

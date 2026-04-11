@@ -120,9 +120,6 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 		Embedder:          embedder,
 	}
 
-	// Wire MCP setup into repo lifecycle.
-	a.manager.SetOnRepoReady(a.server.SetupMCP)
-
 	// Boot repos.
 	if err := a.manager.Boot(); err != nil {
 		a.Close()

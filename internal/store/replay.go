@@ -12,7 +12,8 @@ import (
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/rs/zerolog/log"
-	"gopkg.in/yaml.v3"
+
+	"knomit/internal/fact"
 )
 
 // FactRow holds the minimal fields needed to replay a fact into another store.
@@ -216,26 +217,16 @@ func readBlobByHash(s *Service, hashStr string) (string, error) {
 	return string(b), nil
 }
 
-// replayFrontmatter is the YAML structure for parsing refs from fact frontmatter.
-type replayFrontmatter struct {
-	Type       string   `yaml:"type"`
-	Domain     []string `yaml:"domain"`
-	Confidence float64  `yaml:"confidence"`
-	Sources    int      `yaml:"sources"`
-	Entities   []string `yaml:"entities"`
-	Refs       []string `yaml:"refs"`
-}
-
 // resolveDeadRefs checks each ref in a fact's frontmatter and resolves dead local refs.
 // Returns: modified content, count of resolved refs, count of dropped refs.
 func resolveDeadRefs(ctx context.Context, local *Service, localBranch, content, path string, localPathSet, remotePathSet map[string]bool) (string, int, int, error) {
-	fm, yamlBlock, body, err := parseFrontmatterRefs(content)
+	f, err := fact.ParseFact(path, content)
 	if err != nil {
-		// Not a valid frontmatter file — return as-is.
+		// Not a valid fact file — return as-is.
 		return content, 0, 0, nil
 	}
 
-	if len(fm.Refs) == 0 {
+	if len(f.Refs) == 0 {
 		return content, 0, 0, nil
 	}
 
@@ -243,7 +234,7 @@ func resolveDeadRefs(ctx context.Context, local *Service, localBranch, content, 
 	resolvedCount := 0
 	droppedCount := 0
 
-	for _, ref := range fm.Refs {
+	for _, ref := range f.Refs {
 		// External URL — always keep.
 		if strings.HasPrefix(ref, "http://") || strings.HasPrefix(ref, "https://") {
 			newRefs = append(newRefs, ref)
@@ -278,8 +269,8 @@ func resolveDeadRefs(ctx context.Context, local *Service, localBranch, content, 
 		return content, 0, 0, nil
 	}
 
-	// Rebuild the content with updated refs, preserving all other frontmatter fields.
-	return rebuildContent(yamlBlock, body, newRefs), resolvedCount, droppedCount, nil
+	f.Refs = newRefs
+	return fact.SerializeFact(f), resolvedCount, droppedCount, nil
 }
 
 // extractExternalRefsFromHistory looks up the last version of a deleted fact in
@@ -320,116 +311,16 @@ func extractExternalRefsFromHistory(ctx context.Context, local *Service, localBr
 		break
 	}
 
-	deadFM, _, _, err := parseFrontmatterRefs(deadContent)
+	deadFact, err := fact.ParseFact(deadPath, deadContent)
 	if err != nil {
 		return nil, fmt.Errorf("extractExternalRefsFromHistory: parse frontmatter: %w", err)
 	}
 
 	var externalRefs []string
-	for _, ref := range deadFM.Refs {
+	for _, ref := range deadFact.Refs {
 		if strings.HasPrefix(ref, "http://") || strings.HasPrefix(ref, "https://") {
 			externalRefs = append(externalRefs, ref)
 		}
 	}
 	return externalRefs, nil
-}
-
-// parseFrontmatterRefs parses YAML frontmatter from fact content.
-// Returns the parsed frontmatter, the raw YAML block, and the body after the closing ---.
-func parseFrontmatterRefs(content string) (*replayFrontmatter, string, string, error) {
-	content = strings.ReplaceAll(content, "\r\n", "\n")
-
-	if !strings.HasPrefix(content, "---\n") {
-		return nil, "", "", fmt.Errorf("missing opening frontmatter delimiter")
-	}
-
-	rest := content[4:]
-	closeIdx := strings.Index(rest, "\n---\n")
-	if closeIdx < 0 {
-		return nil, "", "", fmt.Errorf("missing closing frontmatter delimiter")
-	}
-
-	yamlBlock := rest[:closeIdx]
-	body := rest[closeIdx+4:] // skip "\n---"
-
-	var fm replayFrontmatter
-	if err := yaml.Unmarshal([]byte(yamlBlock), &fm); err != nil {
-		return nil, "", "", fmt.Errorf("yaml parse: %w", err)
-	}
-
-	if fm.Refs == nil {
-		fm.Refs = []string{}
-	}
-
-	return &fm, yamlBlock, body, nil
-}
-
-// rebuildContent reconstructs a fact file with updated refs, doing a targeted
-// replacement of the refs: block in the raw YAML to preserve all other fields.
-func rebuildContent(yamlBlock, body string, newRefs []string) string {
-	updatedYAML := replaceRefsInYAML(yamlBlock, newRefs)
-	return "---\n" + updatedYAML + "\n---\n" + body
-}
-
-// replaceRefsInYAML does a targeted replacement of the refs: block inside a
-// raw YAML string, preserving all other fields exactly as they appear.
-func replaceRefsInYAML(yamlBlock string, newRefs []string) string {
-	lines := strings.Split(yamlBlock, "\n")
-
-	// Find the refs: line and its indented continuation lines.
-	refsStart := -1
-	refsEnd := -1 // exclusive
-	for i, line := range lines {
-		if refsStart == -1 {
-			if strings.HasPrefix(line, "refs:") {
-				refsStart = i
-				refsEnd = i + 1
-			}
-		} else {
-			// Continuation: indented lines (list items) belong to refs:.
-			if len(line) > 0 && (line[0] == ' ' || line[0] == '\t') {
-				refsEnd = i + 1
-			} else {
-				break
-			}
-		}
-	}
-
-	newRefsLine := "refs: " + serializeRefList(newRefs)
-
-	var resultLines []string
-	if refsStart == -1 {
-		if len(newRefs) > 0 {
-			resultLines = append(lines, newRefsLine)
-		} else {
-			resultLines = lines
-		}
-	} else if len(newRefs) == 0 {
-		resultLines = append(lines[:refsStart], lines[refsEnd:]...)
-	} else {
-		resultLines = make([]string, 0, len(lines)-(refsEnd-refsStart)+1)
-		resultLines = append(resultLines, lines[:refsStart]...)
-		resultLines = append(resultLines, newRefsLine)
-		resultLines = append(resultLines, lines[refsEnd:]...)
-	}
-
-	return strings.Join(resultLines, "\n")
-}
-
-// serializeRefList renders a []string as a YAML inline list: [a, b, c] or [].
-func serializeRefList(items []string) string {
-	if len(items) == 0 {
-		return "[]"
-	}
-	quoted := make([]string, len(items))
-	for i, item := range items {
-		if strings.ContainsAny(item, ",]\"") {
-			escaped := strings.ReplaceAll(item, `\`, `\\`)
-			escaped = strings.ReplaceAll(escaped, `"`, `\"`)
-			quoted[i] = `"` + escaped + `"`
-		} else {
-			quoted[i] = item
-		}
-	}
-	return "[" + strings.Join(quoted, ", ") + "]"
 }

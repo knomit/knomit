@@ -138,6 +138,28 @@ func chunkFacts(facts []factForLLM, maxBytes int) [][]factForLLM {
 	return chunks
 }
 
+// ReviewResult is returned from StartSession and ContinueSession.
+type ReviewResult struct {
+	SessionID string          `json:"session_id"`
+	Item      *ReviewItem     `json:"item,omitempty"`
+	Done      bool            `json:"done,omitempty"`
+	Summary   *ReviewStats    `json:"summary,omitempty"`
+	Progress  *ReviewProgress `json:"progress,omitempty"`
+}
+
+// ReviewItem describes a single work item for the hosting model.
+type ReviewItem struct {
+	Type           string `json:"type"` // "prune" or "distill"
+	Prompt         string `json:"prompt"`
+	ResponseSchema string `json:"response_schema"`
+}
+
+// ReviewProgress tracks completed/remaining counts.
+type ReviewProgress struct {
+	Completed int `json:"completed"`
+	Remaining int `json:"remaining"`
+}
+
 // DistillResult is the LLM JSON response for a distill step.
 type DistillResult struct {
 	Synthesize []distillFact `json:"synthesize"`

@@ -1,6 +1,3 @@
-// Consolidated exported types for the store package.
-// These mirror the types previously defined in internal/git and are used by
-// the Service facade methods.
 package store
 
 import "time"
@@ -56,15 +53,15 @@ type FileRecency struct {
 	Timestamp time.Time
 }
 
-// syncResult is returned by Sync to report what happened during synchronization.
-type syncResult struct {
+// SyncResult is returned by Sync to report what happened during synchronization.
+type SyncResult struct {
 	Synced      bool   // true if tree changed (merge or fast-forward)
 	FastForward bool   // true if fast-forward (no merge commit)
 	MergeCommit string // hash of merge commit (empty if ff or no-op)
 }
 
-// pushResult is returned by Push to report what happened.
-type pushResult struct {
+// PushResult is returned by Push to report what happened.
+type PushResult struct {
 	Pushed bool // true if refs were updated on remote
 }
 
