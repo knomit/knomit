@@ -58,7 +58,7 @@ func (s *Server) SetupMCP(ri *repos.RepoInstance) {
 		return
 	}
 
-	reviewer := synthesize.NewReviewer(gs, idx, pipelineIdx, branches, s.Embedder, nil, s.AgentBranch)
+	reviewer := synthesize.NewReviewer(ri, nil)
 	profiles := []string{"code", "chat", "generic"}
 	mcpHandlers := make(map[string]http.Handler, len(profiles))
 	for _, p := range profiles {
