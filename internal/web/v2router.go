@@ -39,6 +39,8 @@ func (s *Server) NewV2Router() chi.Router {
 			"method "+req.Method+" not allowed on "+req.URL.Path, req.URL.Path)
 	})
 
-	// Routes for specific resources are registered in Milestones 4-6.
+	b := hal.URLBuilder{Base: V2URLBase}
+	r.Get("/", handleV2APIRoot(b))
+
 	return r
 }
