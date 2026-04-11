@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"knomit/internal/fact"
+	"knomit/internal/repos"
 	"knomit/internal/store"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
@@ -78,29 +79,33 @@ func classifyRefs(refs []string) classifiedRefs {
 }
 
 // ExplainHandler returns the handler function for knomit_explain.
-func ExplainHandler(gs store.FactIndex, idx store.SearchIndex, sessionIdx store.ToolSessionIndex, ontologyRoot, agentBranch string) func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+func ExplainHandler(ri *repos.RepoInstance) func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 	return func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 		ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
+
+		s := storeIndices(ri)
+		agentBranch := ri.AgentBranch()
+		ontologyRoot := ri.OntologyRoot()
 
 		file := req.GetString("file", "")
 		cursor := req.GetString("cursor", "")
 
 		if cursor == "" {
-			return explainFirstCall(ctx, gs, idx, sessionIdx, ontologyRoot, agentBranch, file)
+			return explainFirstCall(ctx, s, ontologyRoot, agentBranch, file)
 		}
-		return explainResume(ctx, gs, idx, sessionIdx, agentBranch, cursor)
+		return explainResume(ctx, s, agentBranch, cursor)
 	}
 }
 
-func explainFirstCall(ctx context.Context, gs store.FactIndex, idx store.SearchIndex, sessionIdx store.ToolSessionIndex, ontologyRoot, agentBranch, file string) (*mcpgo.CallToolResult, error) {
+func explainFirstCall(ctx context.Context, s mcpStore, ontologyRoot, agentBranch, file string) (*mcpgo.CallToolResult, error) {
 	if file == "" {
 		return mcpgo.NewToolResultError("file is required"), nil
 	}
 	file = fact.NormalizePath(ontologyRoot, file)
 
 	// Read root fact.
-	readResult, err := gs.ReadFact(ctx, agentBranch, file, nil)
+	readResult, err := s.facts.ReadFact(ctx, agentBranch, file, nil)
 	if err != nil {
 		return mcpgo.NewToolResultError(fmt.Sprintf("read file error: %v", err)), nil
 	}
@@ -110,7 +115,7 @@ func explainFirstCall(ctx context.Context, gs store.FactIndex, idx store.SearchI
 	}
 
 	// Get history.
-	logEntries, err := idx.Log(ctx, agentBranch, file)
+	logEntries, err := s.search.Log(ctx, agentBranch, file)
 	if err != nil {
 		return mcpgo.NewToolResultError(fmt.Sprintf("log error: %v", err)), nil
 	}
@@ -132,29 +137,29 @@ func explainFirstCall(ctx context.Context, gs store.FactIndex, idx store.SearchI
 	}
 
 	// Create session.
-	session, err := sessionIdx.CreateToolSession(ctx, "explain", agentBranch, file)
+	session, err := s.toolSession.CreateToolSession(ctx, "explain", agentBranch, file)
 	if err != nil {
 		return mcpgo.NewToolResultError(fmt.Sprintf("create session error: %v", err)), nil
 	}
 
 	// Add root to seen.
-	if err := sessionIdx.AddSeenPaths(ctx, session.ID, []string{file}); err != nil {
+	if err := s.toolSession.AddSeenPaths(ctx, session.ID, []string{file}); err != nil {
 		return mcpgo.NewToolResultError(fmt.Sprintf("add seen paths error: %v", err)), nil
 	}
 
 	// Enqueue local refs.
 	if len(queueItems) > 0 {
-		if err := sessionIdx.EnqueuePaths(ctx, session.ID, queueItems); err != nil {
+		if err := s.toolSession.EnqueuePaths(ctx, session.ID, queueItems); err != nil {
 			return mcpgo.NewToolResultError(fmt.Sprintf("enqueue error: %v", err)), nil
 		}
 	}
 
 	// Check if there's more.
-	queueSize, _ := sessionIdx.QueueSize(ctx, session.ID)
+	queueSize, _ := s.toolSession.QueueSize(ctx, session.ID)
 	hasMore := queueSize > 0
 
 	if !hasMore {
-		_ = sessionIdx.UpdateToolSession(ctx, session.ID, rootCommit, "completed")
+		_ = s.toolSession.UpdateToolSession(ctx, session.ID, rootCommit, "completed")
 	}
 
 	// Build history for root fact.
@@ -199,8 +204,8 @@ func explainFirstCall(ctx context.Context, gs store.FactIndex, idx store.SearchI
 	return mcpgo.NewToolResultText(string(out)), nil
 }
 
-func explainResume(ctx context.Context, gs store.FactIndex, idx store.SearchIndex, sessionIdx store.ToolSessionIndex, agentBranch, cursor string) (*mcpgo.CallToolResult, error) {
-	session, err := sessionIdx.GetToolSession(ctx, cursor)
+func explainResume(ctx context.Context, s mcpStore, agentBranch, cursor string) (*mcpgo.CallToolResult, error) {
+	session, err := s.toolSession.GetToolSession(ctx, cursor)
 	if err != nil {
 		return mcpgo.NewToolResultError(fmt.Sprintf("session lookup error: %v", err)), nil
 	}
@@ -208,7 +213,7 @@ func explainResume(ctx context.Context, gs store.FactIndex, idx store.SearchInde
 		return mcpgo.NewToolResultError("session expired or not found — omit cursor to start a new session"), nil
 	}
 
-	seen, err := sessionIdx.GetSeenPaths(ctx, cursor)
+	seen, err := s.toolSession.GetSeenPaths(ctx, cursor)
 	if err != nil {
 		return mcpgo.NewToolResultError(fmt.Sprintf("seen paths error: %v", err)), nil
 	}
@@ -219,7 +224,7 @@ func explainResume(ctx context.Context, gs store.FactIndex, idx store.SearchInde
 
 	// Retry dequeue up to 3 times if all items in a batch fail.
 	for attempt := 0; attempt < 3; attempt++ {
-		items, err := sessionIdx.DequeuePaths(ctx, cursor, explainPageSize)
+		items, err := s.toolSession.DequeuePaths(ctx, cursor, explainPageSize)
 		if err != nil {
 			return mcpgo.NewToolResultError(fmt.Sprintf("dequeue error: %v", err)), nil
 		}
@@ -228,18 +233,18 @@ func explainResume(ctx context.Context, gs store.FactIndex, idx store.SearchInde
 		}
 
 		for _, item := range items {
-			result, readErr := gs.ReadFact(ctx, agentBranch, item.Path, &store.ReadFactOpts{AtCommit: item.CommitHash})
+			result, readErr := s.facts.ReadFact(ctx, agentBranch, item.Path, &store.ReadFactOpts{AtCommit: item.CommitHash})
 			var retracted bool
 			var lastCommitHash string
 			if readErr != nil {
 				// LastCommitForPath queries the SQLite commit_log for the retraction
 				// commit. Synthesis deletions are always regular (non-merge) commits,
 				// so commit_log reliably captures them.
-				retractCommit, ok := idx.LastCommitForPath(ctx, agentBranch, item.Path)
+				retractCommit, ok := s.search.LastCommitForPath(ctx, agentBranch, item.Path)
 				if !ok || retractCommit == "" {
 					continue // file never existed or not yet indexed
 				}
-				result, readErr = gs.ReadFact(ctx, agentBranch, item.Path, &store.ReadFactOpts{BeforeCommit: retractCommit})
+				result, readErr = s.facts.ReadFact(ctx, agentBranch, item.Path, &store.ReadFactOpts{BeforeCommit: retractCommit})
 				if readErr != nil {
 					continue
 				}
@@ -290,24 +295,24 @@ func explainResume(ctx context.Context, gs store.FactIndex, idx store.SearchInde
 
 	// Record new seen paths.
 	if len(newPaths) > 0 {
-		if err := sessionIdx.AddSeenPaths(ctx, cursor, newPaths); err != nil {
+		if err := s.toolSession.AddSeenPaths(ctx, cursor, newPaths); err != nil {
 			return mcpgo.NewToolResultError(fmt.Sprintf("add seen paths error: %v", err)), nil
 		}
 	}
 
 	// Enqueue newly discovered refs.
 	if len(newQueue) > 0 {
-		if err := sessionIdx.EnqueuePaths(ctx, cursor, newQueue); err != nil {
+		if err := s.toolSession.EnqueuePaths(ctx, cursor, newQueue); err != nil {
 			return mcpgo.NewToolResultError(fmt.Sprintf("enqueue error: %v", err)), nil
 		}
 	}
 
 	// Check queue size.
-	queueSize, _ := sessionIdx.QueueSize(ctx, cursor)
+	queueSize, _ := s.toolSession.QueueSize(ctx, cursor)
 	hasMore := queueSize > 0
 
 	if !hasMore {
-		_ = sessionIdx.UpdateToolSession(ctx, cursor, "", "completed")
+		_ = s.toolSession.UpdateToolSession(ctx, cursor, "", "completed")
 	}
 
 	var cursorOut interface{} = cursor
