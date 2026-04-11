@@ -10,6 +10,7 @@ import (
 
 	"knomit/internal/fact"
 	"knomit/internal/llm"
+	"knomit/internal/repos"
 	"knomit/internal/store"
 
 	"github.com/rs/zerolog/log"
@@ -17,35 +18,50 @@ import (
 
 // Reviewer orchestrates multi-turn review sessions.
 type Reviewer struct {
-	gs             store.FactIndex
-	idx            store.SearchIndex
-	reviewIdx      store.PipelineIndex
-	branches       store.BranchIndex
-	embedder       store.Embedder
+	ri             *repos.RepoInstance
 	onProgress     func(ProgressEvent)
 	reflectChecked map[string]bool
-	agentBranch    string
 }
 
 // NewReviewer creates a new review orchestrator.
-func NewReviewer(gs store.FactIndex, idx store.SearchIndex, reviewIdx store.PipelineIndex, branches store.BranchIndex, embedder store.Embedder, onProgress func(ProgressEvent), agentBranch string) *Reviewer {
+func NewReviewer(ri *repos.RepoInstance, onProgress func(ProgressEvent)) *Reviewer {
 	if onProgress == nil {
 		onProgress = func(ProgressEvent) {}
 	}
-	return &Reviewer{gs: gs, idx: idx, reviewIdx: reviewIdx, branches: branches, embedder: embedder, onProgress: onProgress, reflectChecked: make(map[string]bool), agentBranch: agentBranch}
+	return &Reviewer{ri: ri, onProgress: onProgress, reflectChecked: make(map[string]bool)}
+}
+
+// storeIndices returns the four store indices under the repo read lock.
+func (r *Reviewer) storeIndices() (store.FactIndex, store.SearchIndex, store.PipelineIndex, store.BranchIndex) {
+	var gs store.FactIndex
+	var idx store.SearchIndex
+	var pipelineIdx store.PipelineIndex
+	var branches store.BranchIndex
+	r.ri.WithRead(func(svc *store.Service) {
+		gs = svc.Facts()
+		idx = svc.Search()
+		pipelineIdx = svc.Pipeline()
+		branches = svc.Branches()
+	})
+	return gs, idx, pipelineIdx, branches
+}
+
+func (r *Reviewer) branch() string {
+	return r.ri.AgentBranch()
 }
 
 // StartSession creates a new review session, identifies dirty facts, clusters
 // them, stores work items, and returns the first item to review.
 func (r *Reviewer) StartSession(ctx context.Context) (*ReviewResult, error) {
-	branch := r.agentBranch
+	gs, idx, pipelineIdx, _ := r.storeIndices()
+	branch := r.branch()
 
-	sess, err := r.reviewIdx.CreatePipelineSession(ctx, "review", branch)
+	sess, err := pipelineIdx.CreatePipelineSession(ctx, "review", branch)
 	if err != nil {
 		return nil, fmt.Errorf("review: create session: %w", err)
 	}
 
-	seeds, err := r.dirtyFacts(ctx, branch)
+	seeds, err := r.dirtyFacts(ctx, branch, gs, idx, pipelineIdx)
 	if err != nil {
 		return nil, fmt.Errorf("review: dirty facts: %w", err)
 	}
@@ -55,14 +71,14 @@ func (r *Reviewer) StartSession(ctx context.Context) (*ReviewResult, error) {
 	}
 
 	// Build scoped clusters.
-	clusters, err := ScopedCluster(ctx, seeds, r.idx, 1.0, r.onProgress, r.agentBranch)
+	clusters, err := ScopedCluster(ctx, seeds, idx, 1.0, r.onProgress, branch)
 	if err != nil {
 		return nil, fmt.Errorf("review: cluster: %w", err)
 	}
 
 	// Dedup pass: merge near-duplicates within each cluster before enqueueing.
 	for i := range clusters {
-		surviving, err := dedupCluster(context.Background(), clusters[i], r.gs, r.idx, 0.92, "review", r.onProgress, r.agentBranch, r.embedder)
+		surviving, err := dedupCluster(context.Background(), clusters[i], gs, idx, 0.92, "review", r.onProgress, branch, r.ri.Embedder())
 		if err != nil {
 			return nil, fmt.Errorf("review: dedup cluster %d: %w", i, err)
 		}
@@ -89,7 +105,7 @@ func (r *Reviewer) StartSession(ctx context.Context) (*ReviewResult, error) {
 			FactsJSON:  string(factsJSON),
 			Priority:   float64(len(cluster)),
 		}
-		if err := r.reviewIdx.InsertPipelineWorkItem(ctx, item); err != nil {
+		if err := pipelineIdx.InsertPipelineWorkItem(ctx, item); err != nil {
 			return nil, fmt.Errorf("review: insert prune item: %w", err)
 		}
 	}
@@ -107,7 +123,7 @@ func (r *Reviewer) StartSession(ctx context.Context) (*ReviewResult, error) {
 			FactsJSON:  string(factsJSON),
 			Priority:   0.0,
 		}
-		if err := r.reviewIdx.InsertPipelineWorkItem(ctx, item); err != nil {
+		if err := pipelineIdx.InsertPipelineWorkItem(ctx, item); err != nil {
 			return nil, fmt.Errorf("review: insert distill item: %w", err)
 		}
 	}
@@ -121,7 +137,10 @@ func (r *Reviewer) StartSession(ctx context.Context) (*ReviewResult, error) {
 // ContinueSession processes the model's response for the current work item
 // and returns the next item, or done if the session is complete.
 func (r *Reviewer) ContinueSession(ctx context.Context, sessionID, response string) (*ReviewResult, error) {
-	sess, err := r.reviewIdx.GetPipelineSession(ctx, sessionID)
+	gs, idx, pipelineIdx, _ := r.storeIndices()
+	branch := r.branch()
+
+	sess, err := pipelineIdx.GetPipelineSession(ctx, sessionID)
 	if err != nil {
 		return nil, fmt.Errorf("review: get session: %w", err)
 	}
@@ -133,7 +152,7 @@ func (r *Reviewer) ContinueSession(ctx context.Context, sessionID, response stri
 	}
 
 	// Get the current (unanswered) work item.
-	item, err := r.reviewIdx.NextPipelineWorkItem(ctx, sessionID)
+	item, err := pipelineIdx.NextPipelineWorkItem(ctx, sessionID)
 	if err != nil {
 		return nil, fmt.Errorf("review: next work item: %w", err)
 	}
@@ -164,7 +183,7 @@ func (r *Reviewer) ContinueSession(ctx context.Context, sessionID, response stri
 		if err := validatePrunePaths(result, inputPaths); err != nil {
 			return nil, fmt.Errorf("review: validate prune: %w", err)
 		}
-		if _, err := ApplyPruneDecisions(ctx, r.gs, result.Decisions, result.Merges, "review", r.onProgress, r.agentBranch); err != nil {
+		if _, err := ApplyPruneDecisions(ctx, gs, result.Decisions, result.Merges, "review", r.onProgress, branch); err != nil {
 			return nil, fmt.Errorf("review: apply prune: %w", err)
 		}
 
@@ -184,7 +203,7 @@ func (r *Reviewer) ContinueSession(ctx context.Context, sessionID, response stri
 		if err := validateDistillPaths(result, inputPaths); err != nil {
 			return nil, fmt.Errorf("review: validate distill: %w", err)
 		}
-		_, writtenFacts, err := ApplyDistillDecisions(ctx, r.gs, result.Synthesize, result.Retract, "review", r.onProgress, r.agentBranch)
+		_, writtenFacts, err := ApplyDistillDecisions(ctx, gs, result.Synthesize, result.Retract, "review", r.onProgress, branch)
 		if err != nil {
 			return nil, fmt.Errorf("review: apply distill: %w", err)
 		}
@@ -203,7 +222,7 @@ func (r *Reviewer) ContinueSession(ctx context.Context, sessionID, response stri
 			}
 
 			// Cluster the new facts to find groups worth distilling further.
-			raptorClusters, clErr := ScopedCluster(ctx, newFacts, r.idx, 1.0, r.onProgress, r.agentBranch, "hypothesis")
+			raptorClusters, clErr := ScopedCluster(ctx, newFacts, idx, 1.0, r.onProgress, branch, "hypothesis")
 			if clErr != nil {
 				log.Warn().Err(clErr).Msg("review: RAPTOR clustering failed")
 			} else {
@@ -218,7 +237,7 @@ func (r *Reviewer) ContinueSession(ctx context.Context, sessionID, response stri
 						Priority:   float64(-nextDepth),
 						Depth:      nextDepth,
 					}
-					if err := r.reviewIdx.InsertPipelineWorkItem(ctx, wItem); err != nil {
+					if err := pipelineIdx.InsertPipelineWorkItem(ctx, wItem); err != nil {
 						log.Warn().Err(err).Msg("review: RAPTOR enqueue failed")
 					}
 				}
@@ -233,7 +252,7 @@ func (r *Reviewer) ContinueSession(ctx context.Context, sessionID, response stri
 	}
 
 	// Mark item as answered.
-	if err := r.reviewIdx.SetPipelineWorkItemResponse(ctx, item.ID, response); err != nil {
+	if err := pipelineIdx.SetPipelineWorkItemResponse(ctx, item.ID, response); err != nil {
 		return nil, fmt.Errorf("review: set response: %w", err)
 	}
 
@@ -280,15 +299,15 @@ func (r *Reviewer) RunAll(ctx context.Context, adapter llm.LLMAdapter) error {
 // First run (no watermark): uses the search index to retrieve all facts
 // without reading every file from git.
 // Incremental (has watermark): uses DiffFiles to read only changed paths.
-func (r *Reviewer) dirtyFacts(ctx context.Context, branch string) ([]factForLLM, error) {
-	watermark, err := r.reviewIdx.GetPipelineWatermark(ctx, "review", branch)
+func (r *Reviewer) dirtyFacts(ctx context.Context, branch string, gs store.FactIndex, idx store.SearchIndex, pipelineIdx store.PipelineIndex) ([]factForLLM, error) {
+	watermark, err := pipelineIdx.GetPipelineWatermark(ctx, "review", branch)
 	if err != nil {
 		return nil, fmt.Errorf("get watermark: %w", err)
 	}
 
 	// No watermark → first run, all facts are dirty. Use the index (fast).
 	if watermark == "" {
-		results, err := r.idx.Search(ctx, branch, store.SearchQuery{Limit: 100_000})
+		results, err := idx.Search(ctx, branch, store.SearchQuery{Limit: 100_000})
 		if err != nil {
 			return nil, fmt.Errorf("search all: %w", err)
 		}
@@ -309,7 +328,7 @@ func (r *Reviewer) dirtyFacts(ctx context.Context, branch string) ([]factForLLM,
 	}
 
 	// Incremental: only changed facts since watermark.
-	added, modified, _, err := r.gs.DiffFiles(ctx, r.agentBranch, watermark)
+	added, modified, _, err := gs.DiffFiles(ctx, branch, watermark)
 	if err != nil {
 		return nil, fmt.Errorf("diff files: %w", err)
 	}
@@ -319,7 +338,7 @@ func (r *Reviewer) dirtyFacts(ctx context.Context, branch string) ([]factForLLM,
 		if !strings.HasSuffix(path, ".md") {
 			continue
 		}
-		result, err := r.gs.ReadFact(ctx, r.agentBranch, path, nil)
+		result, err := gs.ReadFact(ctx, branch, path, nil)
 		if err != nil {
 			continue // deleted or unreadable
 		}
@@ -344,7 +363,9 @@ func (r *Reviewer) dirtyFacts(ctx context.Context, branch string) ([]factForLLM,
 // nextItem fetches the next unanswered work item, renders its prompt, and
 // returns a ReviewResult. If no items remain, completes the session.
 func (r *Reviewer) nextItem(ctx context.Context, sessionID string) (*ReviewResult, error) {
-	item, err := r.reviewIdx.NextPipelineWorkItem(ctx, sessionID)
+	_, _, pipelineIdx, _ := r.storeIndices()
+
+	item, err := pipelineIdx.NextPipelineWorkItem(ctx, sessionID)
 	if err != nil {
 		return nil, fmt.Errorf("review: next item: %w", err)
 	}
@@ -366,7 +387,7 @@ func (r *Reviewer) nextItem(ctx context.Context, sessionID string) (*ReviewResul
 					FactsJSON:  string(transJSON),
 					Priority:   -100,
 				}
-				if err := r.reviewIdx.InsertPipelineWorkItem(ctx, reflectItem); err != nil {
+				if err := pipelineIdx.InsertPipelineWorkItem(ctx, reflectItem); err != nil {
 					log.Warn().Err(err).Msg("review: failed to enqueue reflect item")
 				} else {
 					// Recurse to fetch the just-enqueued reflect item.
@@ -374,7 +395,7 @@ func (r *Reviewer) nextItem(ctx context.Context, sessionID string) (*ReviewResul
 				}
 			}
 		}
-		sess, err := r.reviewIdx.GetPipelineSession(ctx, sessionID)
+		sess, err := pipelineIdx.GetPipelineSession(ctx, sessionID)
 		if err != nil {
 			return nil, fmt.Errorf("review: get session for complete: %w", err)
 		}
@@ -404,7 +425,7 @@ func (r *Reviewer) nextItem(ctx context.Context, sessionID string) (*ReviewResul
 		return nil, fmt.Errorf("review: render %s prompt: %w", item.StepType, err)
 	}
 
-	completed, remaining, err := r.reviewIdx.PipelineWorkItemStats(ctx, sessionID)
+	completed, remaining, err := pipelineIdx.PipelineWorkItemStats(ctx, sessionID)
 	if err != nil {
 		return nil, fmt.Errorf("review: work item stats: %w", err)
 	}
@@ -425,20 +446,23 @@ func (r *Reviewer) nextItem(ctx context.Context, sessionID string) (*ReviewResul
 
 // completeSession marks the session done and advances the watermark.
 func (r *Reviewer) completeSession(ctx context.Context, sess *store.PipelineSession) (*ReviewResult, error) {
-	if err := r.reviewIdx.CompletePipelineSession(ctx, sess.ID); err != nil {
+	_, _, pipelineIdx, branches := r.storeIndices()
+	branch := r.branch()
+
+	if err := pipelineIdx.CompletePipelineSession(ctx, sess.ID); err != nil {
 		return nil, fmt.Errorf("review: complete session: %w", err)
 	}
 
-	headHash, err := r.branches.HeadCommit(ctx, r.agentBranch)
+	headHash, err := branches.HeadCommit(ctx, branch)
 	if err != nil {
 		log.Warn().Err(err).Msg("review: could not get HEAD for watermark")
 	} else {
-		if err := r.reviewIdx.SetPipelineWatermark(ctx, "review", sess.Branch, headHash); err != nil {
+		if err := pipelineIdx.SetPipelineWatermark(ctx, "review", sess.Branch, headHash); err != nil {
 			log.Warn().Err(err).Msg("review: could not advance watermark")
 		}
 	}
 
-	completed, _, err := r.reviewIdx.PipelineWorkItemStats(ctx, sess.ID)
+	completed, _, err := pipelineIdx.PipelineWorkItemStats(ctx, sess.ID)
 	if err != nil {
 		log.Warn().Err(err).Msg("review: could not get final stats")
 	}
@@ -465,7 +489,10 @@ type hypothesisTransition struct {
 // findHypothesisTransitions detects hypothesis facts that were promoted,
 // retracted, or had their confidence changed during the current review session.
 func (r *Reviewer) findHypothesisTransitions(ctx context.Context, sessionID string) ([]hypothesisTransition, error) {
-	sess, err := r.reviewIdx.GetPipelineSession(ctx, sessionID)
+	gs, _, pipelineIdx, _ := r.storeIndices()
+	branch := r.branch()
+
+	sess, err := pipelineIdx.GetPipelineSession(ctx, sessionID)
 	if err != nil || sess == nil {
 		return nil, err
 	}
@@ -473,12 +500,12 @@ func (r *Reviewer) findHypothesisTransitions(ctx context.Context, sessionID stri
 	// Read the watermark set at the end of the previous session.
 	// Since we haven't advanced it yet (that happens in completeSession),
 	// all commits between here and HEAD are changes made during this session.
-	watermark, err := r.reviewIdx.GetPipelineWatermark(ctx, "review", sess.Branch)
+	watermark, err := pipelineIdx.GetPipelineWatermark(ctx, "review", sess.Branch)
 	if err != nil || watermark == "" {
 		return nil, err
 	}
 
-	_, modified, deleted, err := r.gs.DiffFiles(ctx, r.agentBranch, watermark)
+	_, modified, deleted, err := gs.DiffFiles(ctx, branch, watermark)
 	if err != nil {
 		return nil, err
 	}
@@ -487,7 +514,7 @@ func (r *Reviewer) findHypothesisTransitions(ctx context.Context, sessionID stri
 
 	// Check deleted paths — were any hypotheses retracted?
 	for _, path := range deleted {
-		readResult, err := r.gs.ReadFact(ctx, r.agentBranch, path, &store.ReadFactOpts{AtCommit: watermark})
+		readResult, err := gs.ReadFact(ctx, branch, path, &store.ReadFactOpts{AtCommit: watermark})
 		if err != nil {
 			continue
 		}
@@ -504,7 +531,7 @@ func (r *Reviewer) findHypothesisTransitions(ctx context.Context, sessionID stri
 
 	// Check modified paths — did any hypothesis change confidence or type?
 	for _, path := range modified {
-		oldResult, err := r.gs.ReadFact(ctx, r.agentBranch, path, &store.ReadFactOpts{AtCommit: watermark})
+		oldResult, err := gs.ReadFact(ctx, branch, path, &store.ReadFactOpts{AtCommit: watermark})
 		if err != nil {
 			continue
 		}
@@ -512,7 +539,7 @@ func (r *Reviewer) findHypothesisTransitions(ctx context.Context, sessionID stri
 		if err != nil || oldFact.Type != fact.Hypothesis {
 			continue
 		}
-		newResult, err := r.gs.ReadFact(ctx, r.agentBranch, path, nil)
+		newResult, err := gs.ReadFact(ctx, branch, path, nil)
 		if err != nil {
 			continue
 		}
