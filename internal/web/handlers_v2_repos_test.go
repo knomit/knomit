@@ -73,6 +73,53 @@ func TestHandleV2Repos_ReturnsCollection(t *testing.T) {
 	}
 }
 
+func TestHandleV2Repo_ReturnsRepoWithBranchesLink(t *testing.T) {
+	s := &Server{Manager: newTestManagerWithRepos(t, "alpha")}
+	r := s.NewV2Router()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/repos/alpha", nil)
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: %d", rec.Code)
+	}
+	var body struct {
+		Name  string      `json:"name"`
+		Links hal.LinkMap `json:"_links"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if body.Name != "alpha" {
+		t.Errorf("name: got %q", body.Name)
+	}
+	for _, rel := range []string{"self", "branches"} {
+		if _, ok := body.Links[rel]; !ok {
+			t.Errorf("missing link %q", rel)
+		}
+	}
+	if got := body.Links["branches"].Href; got != V2URLBase+"/repos/alpha/branches" {
+		t.Errorf("branches link: %q", got)
+	}
+}
+
+func TestHandleV2Repo_UnknownReturns404Problem(t *testing.T) {
+	s := &Server{Manager: newTestManagerWithRepos(t, "alpha")}
+	r := s.NewV2Router()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/repos/missing", nil)
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("status: got %d, want 404", rec.Code)
+	}
+	if got := rec.Header().Get("Content-Type"); got != "application/problem+json" {
+		t.Errorf("content-type: got %q", got)
+	}
+}
+
 func TestHandleV2Repos_EmptyManagerReturnsEmptyCollection(t *testing.T) {
 	s := &Server{Manager: newTestManagerWithRepos(t)}
 	r := s.NewV2Router()
