@@ -8,7 +8,7 @@ import (
 
 	"knomit/internal/fact"
 	factpkg "knomit/internal/fact"
-	"knomit/internal/store"
+	"knomit/internal/repos"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 )
@@ -55,10 +55,14 @@ type updateInput struct {
 }
 
 // UpdateHandler returns the handler function for knomit_update.
-func UpdateHandler(gs store.FactIndex, ontologyRoot, agentBranch string) func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+func UpdateHandler(ri *repos.RepoInstance) func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 	return func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 		ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
+
+		s := storeIndices(ri)
+		agentBranch := ri.AgentBranch()
+		ontologyRoot := ri.OntologyRoot()
 
 		// 1. Get arguments.
 		file := req.GetString("file", "")
@@ -72,7 +76,7 @@ func UpdateHandler(gs store.FactIndex, ontologyRoot, agentBranch string) func(co
 		}
 
 		// 3. Check file exists.
-		exists, err := gs.FactExists(ctx, agentBranch, file)
+		exists, err := s.facts.FactExists(ctx, agentBranch, file)
 		if err != nil {
 			return mcpgo.NewToolResultError(fmt.Sprintf("file exists check error: %v", err)), nil
 		}
@@ -81,7 +85,7 @@ func UpdateHandler(gs store.FactIndex, ontologyRoot, agentBranch string) func(co
 		}
 
 		// 4. Read and parse existing fact.
-		readResult, err := gs.ReadFact(ctx, agentBranch, file, nil)
+		readResult, err := s.facts.ReadFact(ctx, agentBranch, file, nil)
 		if err != nil {
 			return mcpgo.NewToolResultError(fmt.Sprintf("read file error: %v", err)), nil
 		}
@@ -130,7 +134,7 @@ func UpdateHandler(gs store.FactIndex, ontologyRoot, agentBranch string) func(co
 
 		// 7. Write updated fact.
 		commitMsg := fmt.Sprintf("update: %s", fact.Title)
-		writeRes, err := gs.WriteFact(ctx, agentBranch, file, factpkg.SerializeFact(fact), commitMsg, "update")
+		writeRes, err := s.facts.WriteFact(ctx, agentBranch, file, factpkg.SerializeFact(fact), commitMsg, "update")
 		if err != nil {
 			return mcpgo.NewToolResultError(fmt.Sprintf("write error: %v", err)), nil
 		}
