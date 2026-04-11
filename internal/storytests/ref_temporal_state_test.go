@@ -20,17 +20,17 @@ import (
 //	c2: beta   (confidence 0.8, body "init beta")
 //	c3: gamma → [alpha, beta]  (body "init gamma")
 //	c4: update beta  (confidence 0.9, body "beta update 1")
-//	c5: update alpha (confidence 0.9, body "alpha update 1")
-//	c6: delta → [gamma]
+//	c5: delta → [gamma]
+//	c6: update alpha (confidence 0.9, body "alpha update 1")
 //	c7: update gamma (body "gamma update 1")
 //
 // At c3, gamma was written when alpha="init alpha" and beta="init beta".
 // Following gamma→beta at c3 must return beta's c2 state, not c4.
 //
-// At c6, delta was written when gamma="init gamma", beta="beta update 1",
-// alpha="alpha update 1". Following delta→gamma→beta at c6 must return
-// beta at c6 (which is "beta update 1"), and gamma at c6 (which is
-// "init gamma" — the c7 update hasn't happened yet).
+// At c5, delta was written when gamma="init gamma", beta="beta update 1",
+// alpha="init alpha". Following delta→gamma→alpha at c5 must return
+// alpha's ORIGINAL state (0.8, "init alpha") — the update to 0.9
+// happens AFTER delta was created.
 func TestRefTemporal_StateAtDefinitionTime(t *testing.T) {
 	t.Log("C9: FollowRef returns the target's state at the moment the ref was defined, not HEAD")
 	sb := testenv.NewStoryboard(t)
@@ -49,12 +49,12 @@ func TestRefTemporal_StateAtDefinitionTime(t *testing.T) {
 	agent.Update("kb/beta.md",
 		testenv.Fact("beta").Confidence(0.9).Body("beta update 1"),
 		"update beta")
-	agent.Update("kb/alpha.md",
-		testenv.Fact("alpha").Confidence(0.9).Body("alpha update 1"),
-		"update alpha")
 	c6 := agent.Write("kb/delta.md",
 		testenv.Fact("delta").Refs("kb/gamma.md").Body("init delta"),
 		"delta refs gamma")
+	agent.Update("kb/alpha.md",
+		testenv.Fact("alpha").Confidence(0.9).Body("alpha update 1"),
+		"update alpha")
 	agent.Update("kb/gamma.md",
 		testenv.Fact("gamma").Refs("kb/alpha.md", "kb/beta.md").Body("gamma update 1"),
 		"update gamma")
@@ -91,22 +91,30 @@ func TestRefTemporal_StateAtDefinitionTime(t *testing.T) {
 		Body().MustContain("beta update 1")
 
 	// 4. Walk delta → gamma → alpha at c6.
-	//    Alpha was updated at c5 (before c6), so at c6 alpha has
-	//    confidence 0.9 and body "alpha update 1".
+	//    Alpha has NOT been updated yet (update happens after c6),
+	//    so at c6 alpha still has confidence 0.8 and body "init alpha".
 	c6.Fact("kb/delta.md").
 		FollowRef("kb/gamma.md").
 		FollowRef("kb/alpha.md").
-		Confidence().MustEqual(0.9)
+		Confidence().MustEqual(0.8)
 	c6.Fact("kb/delta.md").
+		FollowRef("kb/gamma.md").
+		FollowRef("kb/alpha.md").
+		Body().MustContain("init alpha")
+
+	// 5. At HEAD, everything has been updated.
+	head := agent.Head()
+	head.Fact("kb/delta.md").FollowRef("kb/gamma.md").Body().MustContain("gamma update 1")
+	head.Fact("kb/delta.md").
 		FollowRef("kb/gamma.md").
 		FollowRef("kb/alpha.md").
 		Body().MustContain("alpha update 1")
 
-	// 5. At HEAD, gamma has been updated to "gamma update 1".
-	//    Walking delta→gamma at HEAD returns the UPDATED gamma.
-	head := agent.Head()
-	head.Fact("kb/delta.md").FollowRef("kb/gamma.md").Body().MustContain("gamma update 1")
-
-	// But from c6, gamma is still "init gamma" — temporal invariant holds.
+	// But from c6, gamma is still "init gamma" and alpha is still
+	// "init alpha" — temporal invariant holds.
 	c6.Fact("kb/delta.md").FollowRef("kb/gamma.md").Body().MustContain("init gamma")
+	c6.Fact("kb/delta.md").
+		FollowRef("kb/gamma.md").
+		FollowRef("kb/alpha.md").
+		Body().MustContain("init alpha")
 }
