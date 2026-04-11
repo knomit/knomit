@@ -44,5 +44,20 @@ func (s *Server) NewV2Router() chi.Router {
 	r.Get("/repos", handleV2Repos(b, s.Manager))
 	r.Get("/repos/{repo}", handleV2Repo(b, s.Manager))
 
+	lister := s.branchesLister
+	if lister == nil {
+		lister = defaultBranchesLister
+	}
+	r.Get("/repos/{repo}/branches", handleV2Branches(b, s.Manager, lister))
+
+	reader := s.branchRootReader
+	if reader == nil {
+		reader = defaultBranchRootReader
+	}
+	r.With(BranchMiddleware).Get(
+		"/repos/{repo}/branches/{branch}",
+		handleV2Branch(b, s.Manager, reader, s.AgentBranch, s.EmbeddingsEnabled),
+	)
+
 	return r
 }
