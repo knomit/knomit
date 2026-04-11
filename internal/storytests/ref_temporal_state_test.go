@@ -120,18 +120,38 @@ func TestRefTemporal_StateAtDefinitionTime(t *testing.T) {
 	c3.Fact("kb/gamma.md").FollowRef("kb/beta.md").Confidence().MustEqual(0.8)
 	c3.Fact("kb/gamma.md").FollowRef("kb/beta.md").Body().MustContain("init beta")
 
-	// 6. What delta reaches at HEAD vs c6.
+	// 6. What delta reaches at HEAD (latest state of everything):
+	//    gamma was updated after delta, alpha was updated after delta,
+	//    so at HEAD we see all the latest values.
 	head.Fact("kb/delta.md").FollowRef("kb/gamma.md").Body().MustContain("gamma update 1")
 	head.Fact("kb/delta.md").
 		FollowRef("kb/gamma.md").
 		FollowRef("kb/alpha.md").
 		Body().MustContain("alpha update 1")
+	head.Fact("kb/delta.md").
+		FollowRef("kb/gamma.md").
+		FollowRef("kb/beta.md").
+		Body().MustContain("beta update 1")
 
-	// But from c6, gamma is still "init gamma" and alpha is still
-	// "init alpha" — temporal invariant holds.
+	// 7. What delta reaches at c6 (when it was CREATED):
+	//    gamma and alpha were both updated AFTER delta was created,
+	//    so from c6 we must see their pre-update state.
+	//    Beta was updated BEFORE delta, so we see the updated beta.
 	c6.Fact("kb/delta.md").FollowRef("kb/gamma.md").Body().MustContain("init gamma")
 	c6.Fact("kb/delta.md").
 		FollowRef("kb/gamma.md").
 		FollowRef("kb/alpha.md").
+		Confidence().MustEqual(0.8)
+	c6.Fact("kb/delta.md").
+		FollowRef("kb/gamma.md").
+		FollowRef("kb/alpha.md").
 		Body().MustContain("init alpha")
+	c6.Fact("kb/delta.md").
+		FollowRef("kb/gamma.md").
+		FollowRef("kb/beta.md").
+		Confidence().MustEqual(0.9)
+	c6.Fact("kb/delta.md").
+		FollowRef("kb/gamma.md").
+		FollowRef("kb/beta.md").
+		Body().MustContain("beta update 1")
 }
