@@ -2,7 +2,6 @@ package web
 
 import (
 	"net/http"
-	"sync"
 
 	mcpserver "github.com/mark3labs/mcp-go/server"
 	"github.com/go-chi/chi/v5"
@@ -13,7 +12,6 @@ import (
 	"knomit/internal/mcp"
 	"knomit/internal/repos"
 	"knomit/internal/store"
-	"knomit/internal/synthesize"
 )
 
 // Server holds server-wide state for the HTTP layer.
@@ -27,49 +25,30 @@ type Server struct {
 	LLMAdapter        llm.LLMAdapter     // nil if no LLM configured
 	Embedder          store.BatchEmbedder // nil if unavailable
 
-	mcpMu       sync.RWMutex
-	mcpHandlers map[string]map[string]http.Handler // repo → profile → handler
+	mcpHandlers map[string]http.Handler // profile → handler
 }
 
-// SetupMCP wires MCP handlers onto ri using the server's ontology and deps.
-// Safe to call after SwapStore to rebind MCP handlers to the new database.
-func (s *Server) SetupMCP(ri *repos.RepoInstance) {
-	if ri.Ontology() == nil {
-		return
-	}
-	// Skip setup if the repo's store is currently nil (mid-swap).
-	var hasStore bool
-	ri.WithRead(func(svc *store.Service) {
-		hasStore = svc != nil
-	})
-	if !hasStore {
-		log.Warn().Msg("SetupMCP: svc is nil, skipping")
-		return
-	}
-
-	reviewer := synthesize.NewReviewer(ri, nil)
+// buildMCPHandlers constructs one MCP server per profile, shared across all
+// repos. Each handler resolves the repo from the request context at call time.
+func (s *Server) buildMCPHandlers() {
 	profiles := []string{"code", "chat", "generic"}
-	mcpHandlers := make(map[string]http.Handler, len(profiles))
+	s.mcpHandlers = make(map[string]http.Handler, len(profiles))
 	for _, p := range profiles {
 		var mcpSrv *mcpserver.MCPServer
 		if s.Embedder != nil {
-			mcpSrv = mcp.NewServer(ri, reviewer, p, s.Embedder)
+			mcpSrv = mcp.NewServer(p, s.OntologyRoot, s.Embedder)
 		} else {
-			mcpSrv = mcp.NewServer(ri, reviewer, p)
+			mcpSrv = mcp.NewServer(p, s.OntologyRoot)
 		}
-		mcpHandlers[p] = mcpserver.NewStreamableHTTPServer(mcpSrv)
+		s.mcpHandlers[p] = mcpserver.NewStreamableHTTPServer(mcpSrv)
 	}
-
-	s.mcpMu.Lock()
-	if s.mcpHandlers == nil {
-		s.mcpHandlers = make(map[string]map[string]http.Handler)
-	}
-	s.mcpHandlers[ri.Name()] = mcpHandlers
-	s.mcpMu.Unlock()
 }
 
 // Handler returns the chi router with all routes mounted.
 func (s *Server) Handler() http.Handler {
+	if s.mcpHandlers == nil {
+		s.buildMCPHandlers()
+	}
 	r := chi.NewRouter()
 	r.Use(middleware.Recoverer)
 	if s.GitHandler != nil {
@@ -110,21 +89,13 @@ func (s *Server) Handler() http.Handler {
 		sub.Post("/origin/session/{sessionID}/commit", s.handleCommit(s.Manager, s.SessionManager, s.AgentBranch))
 
 		sub.Mount("/mcp", http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-			ri := repos.RepoFromContext(req.Context())
-			s.mcpMu.RLock()
-			handlers := s.mcpHandlers[ri.Name()]
-			s.mcpMu.RUnlock()
-			if len(handlers) == 0 {
-				http.NotFound(w, req)
-				return
-			}
 			profile := req.URL.Query().Get("profile")
 			if profile == "" {
 				profile = "code"
 			}
-			h, ok := handlers[profile]
+			h, ok := s.mcpHandlers[profile]
 			if !ok {
-				h = handlers["code"]
+				h = s.mcpHandlers["code"]
 			}
 			if h == nil {
 				http.NotFound(w, req)
