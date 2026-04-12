@@ -5,7 +5,9 @@ test.describe('API: Repos', () => {
     const res = await request.get(`${sharedBaseURL}/api/v1/repos`);
     expect(res.ok()).toBeTruthy();
     const body = await res.json();
-    expect(Array.isArray(body)).toBeTruthy();
-    expect(body.some((r: any) => r.name === 'knomit')).toBeTruthy();
+    // HAL CollectionView: {count, _links, _embedded: {repos: [{name, _links}]}}
+    expect(typeof body.count).toBe('number');
+    expect(Array.isArray(body._embedded?.repos)).toBeTruthy();
+    expect(body._embedded.repos.some((r: any) => r.name === 'knomit')).toBeTruthy();
   });
 });

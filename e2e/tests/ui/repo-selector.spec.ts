@@ -3,10 +3,11 @@ import { test, expect } from '../../fixtures/knomit.js';
 test.describe('Repo Selector', () => {
   test('with one repo, shows repo name as plain text (no dropdown)', async ({ freshKnomit, page }) => {
     // Seed a fact so at least one repo exists
-    await freshKnomit.api.put(`${freshKnomit.baseURL}/api/v1/knomit/fact`, {
-      data: {
-        path: 'kb/repo-test.md',
-        content: `---
+    await freshKnomit.api.put(
+      `${freshKnomit.baseURL}/api/v1/repos/knomit/branches/${freshKnomit.branch}/facts/kb/repo-test.md`,
+      {
+        data: {
+          content: `---
 type: observation
 confidence: 0.9
 entities:
@@ -16,8 +17,9 @@ refs: []
 # Repo Test
 
 Single repo test fact.`,
+        },
       },
-    });
+    );
 
     await page.goto(freshKnomit.baseURL);
     await page.waitForLoadState('domcontentloaded');

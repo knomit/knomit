@@ -1,27 +1,27 @@
 import { test, expect } from '../../fixtures/knomit.js';
 
-test.describe('API: History', () => {
-  test('returns entries for kb path', async ({ request, sharedBaseURL }) => {
-    const res = await request.get(`${sharedBaseURL}/api/v1/knomit/history?path=kb`);
+test.describe('API: History (commits)', () => {
+  test('returns commit entries for branch', async ({ request, sharedBaseURL, sharedBranch }) => {
+    const res = await request.get(`${sharedBaseURL}/api/v1/repos/knomit/branches/${sharedBranch}/commits`);
     expect(res.ok()).toBeTruthy();
     const body = await res.json();
-    expect(body.entries).toBeDefined();
-    expect(Array.isArray(body.entries)).toBeTruthy();
-    expect(body.entries.length).toBeGreaterThan(0);
+    // HAL CollectionView: {count, _links, _embedded: {commits: [...]}}
+    expect(Array.isArray(body._embedded?.commits)).toBeTruthy();
+    expect(body._embedded.commits.length).toBeGreaterThan(0);
   });
 
-  test('respects limit parameter', async ({ request, sharedBaseURL }) => {
-    const res = await request.get(`${sharedBaseURL}/api/v1/knomit/history?path=kb&limit=2`);
+  test('respects limit parameter', async ({ request, sharedBaseURL, sharedBranch }) => {
+    const res = await request.get(`${sharedBaseURL}/api/v1/repos/knomit/branches/${sharedBranch}/commits?limit=2`);
     expect(res.ok()).toBeTruthy();
     const body = await res.json();
-    expect(body.entries.length).toBeLessThanOrEqual(2);
+    expect(body._embedded.commits.length).toBeLessThanOrEqual(2);
   });
 
-  test('response has cursor field for pagination', async ({ request, sharedBaseURL }) => {
-    const res = await request.get(`${sharedBaseURL}/api/v1/knomit/history?path=kb`);
+  test('response has pagination links', async ({ request, sharedBaseURL, sharedBranch }) => {
+    const res = await request.get(`${sharedBaseURL}/api/v1/repos/knomit/branches/${sharedBranch}/commits`);
     expect(res.ok()).toBeTruthy();
     const body = await res.json();
-    // Pagination uses 'next' cursor field (present when more pages exist)
-    expect('entries' in body).toBeTruthy();
+    expect(body).toHaveProperty('_links');
+    expect(Array.isArray(body._embedded?.commits)).toBeTruthy();
   });
 });

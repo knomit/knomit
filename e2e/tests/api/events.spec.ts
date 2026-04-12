@@ -6,9 +6,10 @@ test.describe('API: Events (SSE)', () => {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 2000);
     try {
-      const res = await fetch(`${freshKnomit.baseURL}/api/v1/knomit/events`, {
-        signal: controller.signal,
-      });
+      const res = await fetch(
+        `${freshKnomit.baseURL}/api/v1/repos/knomit/branches/${freshKnomit.branch}/events`,
+        { signal: controller.signal },
+      );
       expect(res.status).toBe(200);
       expect(res.headers.get('content-type')).toContain('text/event-stream');
     } catch (err: any) {

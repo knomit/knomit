@@ -3,10 +3,11 @@ import { test, expect } from '../../fixtures/knomit.js';
 test.describe('Remote Setup', () => {
   test('open connect remote modal → enter URL → verify UI flow', async ({ freshKnomit, page }) => {
     // Seed a fact so the repo exists
-    const seedRes = await freshKnomit.api.put(`${freshKnomit.baseURL}/api/v1/knomit/fact`, {
-      data: {
-        path: 'kb/remote-setup-seed.md',
-        content: `---
+    const seedRes = await freshKnomit.api.put(
+      `${freshKnomit.baseURL}/api/v1/repos/knomit/branches/${freshKnomit.branch}/facts/kb/remote-setup-seed.md`,
+      {
+        data: {
+          content: `---
 type: observation
 domain: [testing]
 confidence: 0.9
@@ -17,8 +18,9 @@ refs: []
 # Remote Setup Seed
 
 Seed fact so the repo exists.`,
+        },
       },
-    });
+    );
     expect(seedRes.ok()).toBeTruthy();
 
     await page.goto(freshKnomit.baseURL);
@@ -61,7 +63,7 @@ Seed fact so the repo exists.`,
     await expect(modal).not.toBeVisible();
 
     // No origin should be configured (we didn't complete the flow)
-    const originRes = await freshKnomit.api.get(`${freshKnomit.baseURL}/api/v1/knomit/origin`);
+    const originRes = await freshKnomit.api.get(`${freshKnomit.baseURL}/api/v1/repos/knomit/origin`);
     expect(originRes.status()).toBe(204); // no content = no origin configured
   });
 });

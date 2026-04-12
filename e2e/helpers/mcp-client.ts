@@ -39,9 +39,11 @@ export class McpClient {
     baseURL: string,
     repo = "knomit",
     profile = "code",
+    branch?: string,
   ) {
     const base = baseURL.replace(/\/$/, "");
-    this.url = `${base}/api/v1/${repo}/mcp?profile=${profile}`;
+    const encodedBranch = branch ?? "agent";
+    this.url = `${base}/api/v1/repos/${repo}/branches/${encodedBranch}/mcp?profile=${profile}`;
   }
 
   /** Send initialize, capture session ID, then send initialized notification. */

@@ -40,7 +40,7 @@ test.describe('knomit_explore', () => {
   let client: McpClient;
 
   test.beforeEach(async ({ freshKnomit }) => {
-    client = new McpClient(freshKnomit.baseURL, 'knomit', 'code');
+    client = new McpClient(freshKnomit.baseURL, 'knomit', 'code', freshKnomit.branch);
     await client.initialize();
   });
 
