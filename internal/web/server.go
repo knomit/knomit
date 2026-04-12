@@ -53,6 +53,8 @@ type Server struct {
 	factsCollectionProvider factsCollectionProvider
 
 	activityProvider activityProvider
+
+	factWriter FactWriter
 }
 
 // buildMCPHandlers constructs one MCP server per profile, shared across all

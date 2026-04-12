@@ -70,6 +70,19 @@ func (s *Server) NewAPIRouter() chi.Router {
 		"/repos/{repo}/branches/{branch}/facts/*",
 		handleHALFact(b, s.Manager, factReader, fsp),
 	)
+
+	factWriter := s.factWriter
+	if factWriter == nil {
+		factWriter = defaultFactWriter{}
+	}
+	r.With(BranchMiddleware).Put(
+		"/repos/{repo}/branches/{branch}/facts/*",
+		handleFactUpdate(b, s.Manager, factWriter),
+	)
+	r.With(BranchMiddleware).Delete(
+		"/repos/{repo}/branches/{branch}/facts/*",
+		handleFactDelete(b, s.Manager, factWriter),
+	)
 	r.With(BranchMiddleware).Get(
 		"/repos/{repo}/branches/{branch}/commits/{sha}/facts/*",
 		handleCommitAnchoredFact(b, s.Manager, factReader, fsp),
