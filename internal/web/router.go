@@ -146,6 +146,11 @@ func (s *Server) NewAPIRouter() chi.Router {
 		handleHALStats(b, s.Manager, sp2),
 	)
 
+	r.With(BranchMiddleware).Get(
+		"/repos/{repo}/branches/{branch}/events",
+		handleHALEvents(s.Manager),
+	)
+
 	cp := s.commitsProvider
 	if cp == nil {
 		cp = defaultCommitsProvider{}
