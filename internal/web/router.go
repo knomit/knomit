@@ -151,6 +151,15 @@ func (s *Server) NewAPIRouter() chi.Router {
 		handleHALEvents(s.Manager),
 	)
 
+	r.With(BranchMiddleware).Post(
+		"/repos/{repo}/branches/{branch}/synthesis-runs",
+		handleStartSynthesis(s.Manager, s.LLMAdapter),
+	)
+	r.With(BranchMiddleware).Post(
+		"/repos/{repo}/branches/{branch}/index-rebuilds",
+		handleStartRebuild(s.Manager),
+	)
+
 	cp := s.commitsProvider
 	if cp == nil {
 		cp = defaultCommitsProvider{}
