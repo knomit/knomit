@@ -248,11 +248,11 @@ func (s *Server) NewAPIRouter() chi.Router {
 	}
 	r.With(BranchMiddleware).Get(
 		"/repos/{repo}/branches/{branch}/commits",
-		handleHALCommitsList(b, s.Manager, cp),
+		handleHALCommitsList(b, s.Manager, cp, s.OntologyRoot),
 	)
 	r.With(BranchMiddleware).Get(
 		"/repos/{repo}/branches/{branch}/commits/{sha}",
-		handleHALCommitDetail(b, s.Manager, cp),
+		handleHALCommitDetail(b, s.Manager, cp, s.OntologyRoot),
 	)
 
 	op := s.originProvider

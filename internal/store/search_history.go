@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"time"
 )
@@ -92,8 +93,9 @@ func (si *searchIndex) enrichFileCounts(entries []LogEntryWithTags) {
 }
 
 // CommitDetail returns metadata and changed files for a specific commit,
-// queried from commit_log.
-func (si *searchIndex) CommitDetail(ctx context.Context, commitHash string) (*CommitDetailResult, error) {
+// queried from commit_log. When pathPrefix is non-empty, only files under
+// that directory are returned.
+func (si *searchIndex) CommitDetail(ctx context.Context, commitHash, pathPrefix string) (*CommitDetailResult, error) {
 	db := conn(ctx, si.rh.db)
 
 	var committedAt int64
@@ -106,10 +108,18 @@ func (si *searchIndex) CommitDetail(ctx context.Context, commitHash string) (*Co
 		return nil, fmt.Errorf("CommitDetail: commit not found in history index: %s", commitHash)
 	}
 
-	fileRows, err := db.QueryContext(ctx,
-		`SELECT DISTINCT path, action FROM commit_log WHERE commit_hash = ? ORDER BY path`,
-		commitHash,
-	)
+	var fileRows *sql.Rows
+	if pathPrefix != "" {
+		fileRows, err = db.QueryContext(ctx,
+			`SELECT DISTINCT path, action FROM commit_log WHERE commit_hash = ? AND path GLOB ? ORDER BY path`,
+			commitHash, pathPrefix+"/*",
+		)
+	} else {
+		fileRows, err = db.QueryContext(ctx,
+			`SELECT DISTINCT path, action FROM commit_log WHERE commit_hash = ? ORDER BY path`,
+			commitHash,
+		)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("CommitDetail: files: %w", err)
 	}

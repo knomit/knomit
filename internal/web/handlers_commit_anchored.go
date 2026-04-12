@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/rs/zerolog/log"
 
 	"knomit/internal/repos"
 	"knomit/internal/web/hal"
@@ -61,6 +62,7 @@ func handleCommitAnchoredFact(b hal.URLBuilder, m *repos.Manager, reader FactRea
 					`no fact at path "`+path+`" on branch "`+branch+`" at commit "`+sha+`"`, r.URL.Path)
 				return
 			}
+			log.Error().Err(err).Str("path", path).Str("branch", branch).Str("sha", sha).Msg("commit-anchored fact read failed")
 			hal.WriteProblem(w, http.StatusInternalServerError,
 				"Failed to read fact", err.Error(), r.URL.Path)
 			return

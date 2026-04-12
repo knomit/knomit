@@ -29,7 +29,7 @@ func (s *stubCommitsProvider) LogPaginated(
 }
 
 func (s *stubCommitsProvider) CommitDetail(
-	_ *repos.RepoInstance, _, _ string,
+	_ *repos.RepoInstance, _, _, _ string,
 ) (*store.CommitDetailResult, []commitFileView, error) {
 	return s.detail, s.detailFiles, s.detailErr
 }

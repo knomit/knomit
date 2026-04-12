@@ -21,7 +21,8 @@ func BranchMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		urlSeg := chi.URLParam(r, "branch")
 		if urlSeg == "" {
-			next.ServeHTTP(w, r)
+			hal.WriteProblem(w, http.StatusBadRequest,
+				"Missing branch", "the {branch} URL segment is required", r.URL.Path)
 			return
 		}
 		name := hal.DecodeBranch(urlSeg)

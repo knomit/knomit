@@ -256,8 +256,9 @@ async function getAgentBranch(repo: string): Promise<string> {
   const data = await fetch(`${repoBase(repo)}/branches`).then(r => r.json());
   const branches: Array<{ name: string }> =
     (data._embedded?.branches as Array<{ name: string }>) || [];
-  const agent = branches.find(b => b.name.startsWith('machine/'));
-  return (agent || branches[0])?.name || 'main';
+  const agent = branches.find(b => b.name.startsWith('agent/'));
+  const main = branches.find(b => b.name === 'main');
+  return (agent || main || branches[0])?.name || 'main';
 }
 
 export const api = {

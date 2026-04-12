@@ -600,15 +600,10 @@ func (rh *repoHandler) BranchInfo(localAgent string) (branches, agentBranches []
 			break
 		}
 		name := ref.Name().String()
-		var short string
-		switch {
-		case strings.HasPrefix(name, "refs/heads/"):
-			short = strings.TrimPrefix(name, "refs/heads/")
-		case strings.HasPrefix(name, "refs/remotes/origin/"):
-			short = strings.TrimPrefix(name, "refs/remotes/origin/")
-		default:
+		if !strings.HasPrefix(name, "refs/heads/") {
 			continue
 		}
+		short := strings.TrimPrefix(name, "refs/heads/")
 		if strings.HasPrefix(short, "agent/") {
 			if _, seen := agentSet[short]; !seen {
 				agentSet[short] = struct{}{}
@@ -616,7 +611,7 @@ func (rh *repoHandler) BranchInfo(localAgent string) (branches, agentBranches []
 					matchedAgent = short
 				}
 			}
-		} else if strings.HasPrefix(name, "refs/heads/") {
+		} else {
 			branches = append(branches, short)
 		}
 	}

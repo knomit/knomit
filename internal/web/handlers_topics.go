@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/rs/zerolog/log"
 
 	"knomit/internal/repos"
 	"knomit/internal/store"
@@ -223,6 +224,7 @@ func topicHandler(b hal.URLBuilder, m *repos.Manager, ontologyRoot string, liste
 
 		entries, err := lister.ListDir(ri, branch, dirPath)
 		if err != nil {
+			log.Error().Err(err).Str("branch", branch).Str("path", dirPath).Msg("ListDir failed")
 			hal.WriteProblem(w, http.StatusInternalServerError,
 				"Failed to list topics", err.Error(), r.URL.Path)
 			return
