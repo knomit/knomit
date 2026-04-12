@@ -218,6 +218,17 @@ func (s *Server) NewAPIRouter() chi.Router {
 	r.Put("/repos/{repo}/origin", handleHALSetOrigin(b, s.Manager, op))
 	r.Delete("/repos/{repo}/origin", handleHALDeleteOrigin(b, s.Manager, op))
 
+	r.Route("/repos/{repo}/origin-sessions", func(sub chi.Router) {
+		sub.Use(repos.RepoMiddleware(s.Manager))
+		sub.Post("/", handleCreateSession(s.Manager, s.SessionManager))
+		sub.Get("/{sessionID}", handleGetSession(s.Manager, s.SessionManager))
+		sub.Delete("/{sessionID}", handleDeleteSession(s.Manager, s.SessionManager))
+		sub.Get("/{sessionID}/test", handleTestConnectivity(s.Manager, s.SessionManager, s.AgentBranch))
+		sub.Get("/{sessionID}/preview", handlePreview(s.Manager, s.SessionManager, s.AgentBranch))
+		sub.Post("/{sessionID}/apply", handleApply(s.Manager, s.SessionManager, s.AgentBranch))
+		sub.Post("/{sessionID}/commit", s.handleCommit(s.Manager, s.SessionManager, s.AgentBranch))
+	})
+
 	// Legacy routes — kept under /{repo}/... until each is converted to HAL.
 	// Chi matches literal "/repos" before the param "/{repo}", so these
 	// coexist with the new HAL routes above without conflict.
