@@ -67,6 +67,19 @@ func (s *Server) NewAPIRouter() chi.Router {
 		handleHALFact(b, s.Manager, factReader),
 	)
 
+	topicLister := s.topicLister
+	if topicLister == nil {
+		topicLister = defaultTopicLister{}
+	}
+	r.With(BranchMiddleware).Get(
+		"/repos/{repo}/branches/{branch}/topics",
+		handleTopics(b, s.Manager, s.OntologyRoot, topicLister),
+	)
+	r.With(BranchMiddleware).Get(
+		"/repos/{repo}/branches/{branch}/topics/*",
+		handleTopicNode(b, s.Manager, s.OntologyRoot, topicLister),
+	)
+
 	// Legacy routes — kept under /{repo}/... until each is converted to HAL.
 	// Chi matches literal "/repos" before the param "/{repo}", so these
 	// coexist with the new HAL routes above without conflict.
