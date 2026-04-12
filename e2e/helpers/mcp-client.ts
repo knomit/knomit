@@ -42,7 +42,7 @@ export class McpClient {
     branch?: string,
   ) {
     const base = baseURL.replace(/\/$/, "");
-    const encodedBranch = branch ?? "agent";
+    const encodedBranch = (branch ?? "agent").replaceAll("/", ":");
     this.url = `${base}/api/v1/repos/${repo}/branches/${encodedBranch}/mcp?profile=${profile}`;
   }
 
