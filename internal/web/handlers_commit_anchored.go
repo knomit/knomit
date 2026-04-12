@@ -71,13 +71,17 @@ func handleCommitAnchoredFact(b hal.URLBuilder, m *repos.Manager, reader FactRea
 	}
 }
 
-// handleCommitAnchoredOutgoing serves the outgoing graph for a fact at a
-// specific commit. Uses ExplainFact as a pragmatic approximation — it reads
-// from the current index rather than re-computing the graph from the commit
-// blob.
+// handleCommitAnchoredOutgoing serves
+// GET /repos/{repo}/branches/{branch}/commits/{sha}/facts/*/outgoing.
 //
-// TODO(Plan 02): replace with OutgoingFromBlob(ri, a.Branch, a.Commit, factPath)
-// once the store exposes true commit-anchored graph reads.
+// Uses ExplainFact as a pragmatic approximation — it reads from the current
+// index state rather than re-computing the outgoing graph from the commit blob.
+// This means the outgoing list reflects the current branch HEAD index, not
+// strictly the state at the pinned SHA.
+//
+// TODO(Plan 02): replace ExplainFact with OutgoingFromBlob(ri, a.Branch, a.Commit, factPath)
+// once the store exposes true commit-anchored graph reads. The store interface
+// change is tracked in the store-refactor backlog under "OutgoingFromBlob".
 func handleCommitAnchoredOutgoing(
 	b hal.URLBuilder,
 	m *repos.Manager,
