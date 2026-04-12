@@ -41,7 +41,7 @@ function TreeView({ state, dispatch, navigate }: Props) {
     const entities = state.filters.filter(f => f.category === 'entity').map(f => f.value);
     const types = state.filters.filter(f => f.category === 'type').map(f => f.value);
     const eps = state.filters.filter(f => f.category === 'ep').map(f => f.value);
-    api.search(state.repo, state.freeText, path, 0, { types, eps, domains, entities }).then(r => {
+    api.search(state.repo, state.branch, state.freeText, path, 0, { types, eps, domains, entities }).then(r => {
       if (stale()) return;
       const items: DirChild[] = (r.results || []).map(sr => ({
         name: sr.path.split('/').pop() || sr.path,
@@ -58,12 +58,12 @@ function TreeView({ state, dispatch, navigate }: Props) {
         dispatch({ type: 'AMEND_NAV', historyCommit: null, factPath: items[0].fullPath, factCommit: null });
       }
     }).catch(() => { if (!stale()) setChildren([]); });
-  }, [path, state.headCommit, state.freeText, shouldSearch, state.repo, filtersKey]);
+  }, [path, state.headCommit, state.freeText, shouldSearch, state.repo, state.branch, filtersKey]);
 
   // Browse: fetch directory when path/headCommit/selectedFact changes
   useAsync((stale) => {
     if (shouldSearch) return;
-    api.browse(state.repo, path).then(r => {
+    api.browse(state.repo, state.branch, path, state.ontologyRoot).then(r => {
       if (stale()) return;
       const c = (r.children || []).slice().sort((a, b) => {
         if (a.is_dir !== b.is_dir) return a.is_dir ? -1 : 1;
@@ -78,7 +78,7 @@ function TreeView({ state, dispatch, navigate }: Props) {
         setSelectedIdx(-1);
       }
     }).catch(() => { if (!stale()) setChildren([]); });
-  }, [path, state.headCommit, shouldSearch, state.repo, state.factPath]);
+  }, [path, state.headCommit, shouldSearch, state.repo, state.branch, state.ontologyRoot, state.factPath]);
 
   const moveSelection = useCallback((delta: 1 | -1) => {
     const len = children.length;
@@ -217,7 +217,7 @@ function ChronoView({ state, dispatch, navigate }: Props) {
     setFacts([]);
     setTotal(0);
     setSelectedIdx(0);
-    api.recent(state.repo, path, state.freeText, 50, 0, {
+    api.recent(state.repo, state.branch, path, state.freeText, 50, 0, {
       typeFilter,
       domains: domains.length ? domains : undefined,
       entities: entities.length ? entities : undefined,
@@ -234,7 +234,7 @@ function ChronoView({ state, dispatch, navigate }: Props) {
         dispatch({ type: 'AMEND_NAV', historyCommit: null, factPath: loaded[0].path, factCommit: null });
       }
     }).catch(() => { if (!stale()) { setFacts([]); setLoading(false); } });
-  }, [path, state.headCommit, state.freeText, state.repo, typeFilter, filtersKey]);
+  }, [path, state.headCommit, state.freeText, state.repo, state.branch, typeFilter, filtersKey]);
 
   // Infinite scroll — loadingRef keeps loadMore stable so the IntersectionObserver
   // doesn't reconnect on every loading state flip.
@@ -244,7 +244,7 @@ function ChronoView({ state, dispatch, navigate }: Props) {
   const loadMore = useCallback(() => {
     if (loadingRef.current || facts.length >= total) return;
     setLoading(true);
-    api.recent(state.repo, path, state.freeText, 50, facts.length, {
+    api.recent(state.repo, state.branch, path, state.freeText, 50, facts.length, {
       typeFilter,
       domains: domains.length ? domains : undefined,
       entities: entities.length ? entities : undefined,
@@ -253,7 +253,7 @@ function ChronoView({ state, dispatch, navigate }: Props) {
       setFacts(prev => [...prev, ...(r.facts || [])]);
       setLoading(false);
     }).catch(() => setLoading(false));
-  }, [facts.length, total, state.repo, path, state.freeText, typeFilter, filtersKey]);
+  }, [facts.length, total, state.repo, state.branch, path, state.freeText, typeFilter, filtersKey]);
 
   useEffect(() => {
     const sentinel = sentinelRef.current;

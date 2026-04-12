@@ -26,15 +26,24 @@ export default function App() {
   }, []);
 
   // Load status when repo changes (also fires on mount).
+  // The branch root endpoint requires knowing the branch. We bootstrap by
+  // fetching the branches list and picking the agent branch (is_agent_branch),
+  // then calling the branch root for full status.
   useEffect(() => {
-    api.status(state.repo).then(s =>
-      dispatch({ type: 'SET_STATUS', head: s.head, branch: s.branch, embeddingsEnabled: s.embeddings_enabled, ontologyRoot: s.ontology_root })
-    ).catch(() => {});
+    (async () => {
+      try {
+        // If we already know the branch (e.g. after SET_REPO), use it directly.
+        const branchToQuery = state.branch || await api.getAgentBranch(state.repo);
+        const s = await api.status(state.repo, branchToQuery);
+        dispatch({ type: 'SET_STATUS', head: s.head, branch: s.branch, embeddingsEnabled: s.embeddings_enabled, ontologyRoot: s.ontology_root });
+      } catch {}
+    })();
   }, [state.repo]);
 
-  // SSE for task and status events — reconnects when repo changes.
+  // SSE for task and status events — reconnects when repo/branch changes.
   useEffect(() => {
-    const es = new EventSource(`/api/v1/${state.repo}/events`);
+    if (!state.branch) return; // wait until branch is known from status bootstrap
+    const es = new EventSource(`/api/v1/repos/${state.repo}/branches/${state.branch.replaceAll('/', ':')}/events`);
     es.addEventListener('task', (e) => {
       const ev = JSON.parse(e.data);
       dispatch({ type: 'SET_TASK', op: ev.op, status: ev.status, message: ev.message || '' });
@@ -43,7 +52,7 @@ export default function App() {
       dispatch({ type: 'CONSOLE_LOG', level, message: `[${repo}${ev.op}] ${ev.message || ev.status}` });
       // Refresh head when a task completes.
       if (ev.status === 'done' || ev.status === 'error') {
-        api.status(state.repo).then(s => dispatch({ type: 'SET_HEAD', head: s.head })).catch(() => {});
+        api.status(state.repo, state.branch).then(s => dispatch({ type: 'SET_HEAD', head: s.head })).catch(() => {});
       }
     });
     es.addEventListener('status', (e) => {
@@ -64,7 +73,7 @@ export default function App() {
     es.addEventListener('push_ok', handleRemoteEvent);
     es.addEventListener('push_error', handleRemoteEvent);
     return () => es.close();
-  }, [state.repo]);
+  }, [state.repo, state.branch]);
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -101,6 +110,7 @@ export default function App() {
         <div style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
           <ExplainView
             repo={state.repo}
+            branch={state.branch}
             initialEntry={explainEntry}
             onClose={() => setExplainEntry(null)}
           />

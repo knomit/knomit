@@ -53,7 +53,7 @@ export async function resolveNavRequest(
   if (req.view === 'history' && req.factPath === null) {
     // historyCommit given but factPath needs resolving (e.g. timeline click).
     try {
-      const detail = await api.commitDetail(state.repo, req.historyCommit);
+      const detail = await api.commitDetail(state.repo, state.branch, req.historyCommit);
       const first = (detail.files || [])[0];
       dispatch({ type: 'APPLY_NAV', view: 'history', historyCommit: req.historyCommit, factPath: first?.path ?? null, factCommit: req.historyCommit });
     } catch {

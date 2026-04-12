@@ -196,7 +196,7 @@ function renderFact(fact: Fact, navigate: (req: NavRequest) => void, dispatch: D
   );
 }
 
-function FactEditor({ fact, repo, onSaved }: { fact: Fact; repo: string; onSaved: (updated: Fact) => void }) {
+function FactEditor({ fact, repo, branch, onSaved }: { fact: Fact; repo: string; branch: string; onSaved: (updated: Fact) => void }) {
   const [raw, setRaw] = useState(fact.body);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -204,7 +204,7 @@ function FactEditor({ fact, repo, onSaved }: { fact: Fact; repo: string; onSaved
   const save = () => {
     setSaving(true);
     setSaveError(null);
-    api.updateFact(repo, fact.path, raw)
+    api.updateFact(repo, branch, fact.path, raw)
       .then(updated => { setSaving(false); onSaved(updated); })
       .catch(e => { setSaving(false); setSaveError(String(e)); });
   };
@@ -252,9 +252,10 @@ const DEFAULT_LIST_HEIGHT = 3 * ROW_HEIGHT;
 const MIN_LIST_HEIGHT = ROW_HEIGHT;
 const MAX_LIST_HEIGHT = 12 * ROW_HEIGHT;
 
-function CommitPanel({ historyCommit, repo, selectedFact, navigate, rightPanelFocused, dispatch }: {
+function CommitPanel({ historyCommit, repo, branch, selectedFact, navigate, rightPanelFocused, dispatch }: {
   historyCommit: string;
   repo: string;
+  branch: string;
   selectedFact: string | null;
   navigate: (req: NavRequest) => void;
   rightPanelFocused: boolean;
@@ -267,7 +268,7 @@ function CommitPanel({ historyCommit, repo, selectedFact, navigate, rightPanelFo
   const draggingRef = useRef(false);
 
   useAsync((stale) => {
-    api.commitDetail(repo, historyCommit)
+    api.commitDetail(repo, branch, historyCommit)
       .then(d => { if (!stale()) setDetail(d); })
       .catch(() => { if (!stale()) setDetail(null); });
   }, [historyCommit, repo]);
@@ -500,7 +501,7 @@ export function RightPanel({ state, dispatch, navigate, onExplain }: {
   useAsync((stale) => {
     if (!factPath) { setFact(null); setError(null); return; }
     setError(null);
-    api.fact(state.repo, factPath, factCommit ?? undefined)
+    api.fact(state.repo, state.branch, factPath, factCommit ?? undefined)
       .then(f => {
         if (stale()) return;
         setFact(f);
@@ -512,8 +513,8 @@ export function RightPanel({ state, dispatch, navigate, onExplain }: {
   useAsync((stale) => {
     if (factPath || state.view === 'history') return;
     Promise.all([
-      api.stats(state.repo, path).catch(() => null),
-      api.activity(state.repo, path).catch(() => null),
+      api.stats(state.repo, state.branch, path).catch(() => null),
+      api.activity(state.repo, state.branch, path).catch(() => null),
     ]).then(([s, a]) => {
       if (stale()) return;
       setStats(s);
@@ -525,7 +526,7 @@ export function RightPanel({ state, dispatch, navigate, onExplain }: {
     if (!fact || retracting) return;
     setConfirmRetract(false);
     setRetracting(true);
-    api.retractFact(state.repo, fact.path)
+    api.retractFact(state.repo, state.branch, fact.path)
       .then(() => {
         setRetracting(false);
         // Clear the fact without touching headCommit. The git observer will
@@ -553,7 +554,7 @@ export function RightPanel({ state, dispatch, navigate, onExplain }: {
   if (error) return <div style={{ padding: 24, color: '#f44' }}>{error}</div>;
 
   const commitPanel = state.view === 'history' && historyCommit
-    ? <CommitPanel historyCommit={historyCommit} repo={state.repo} selectedFact={factPath} navigate={navigate} rightPanelFocused={state.rightPanelFocused} dispatch={dispatch} />
+    ? <CommitPanel historyCommit={historyCommit} repo={state.repo} branch={state.branch} selectedFact={factPath} navigate={navigate} rightPanelFocused={state.rightPanelFocused} dispatch={dispatch} />
     : null;
 
   // Summary view: no fact selected
@@ -599,7 +600,7 @@ export function RightPanel({ state, dispatch, navigate, onExplain }: {
   // Fact view (normal or time-travel)
   if (!fact) return <div style={{ padding: 24, color: '#666' }}>Loading...</div>;
 
-  if (fact.parse_error) return <FactEditor fact={fact} repo={state.repo} onSaved={setFact} />;
+  if (fact.parse_error) return <FactEditor fact={fact} repo={state.repo} branch={state.branch} onSaved={setFact} />;
 
   const canRetract = state.view !== 'history';
 

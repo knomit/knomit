@@ -7,11 +7,12 @@ interface RefSummary { path: string; title: string; deleted?: boolean; }
 
 interface Props {
   repo: string;
+  branch: string;
   initialEntry: ExplainEntry;
   onClose: () => void;
 }
 
-export function ExplainView({ repo, initialEntry, onClose }: Props) {
+export function ExplainView({ repo, branch, initialEntry, onClose }: Props) {
   const [current, setCurrent] = useState<ExplainEntry>(initialEntry);
   const [backStack, setBackStack] = useState<ExplainEntry[]>([]);
   const [fact, setFact] = useState<Fact | null>(null);
@@ -28,9 +29,9 @@ export function ExplainView({ repo, initialEntry, onClose }: Props) {
     setIncoming([]);
     setOutgoing([]);
 
-    const factPromise = api.fact(repo, current.path, current.commit ?? undefined);
+    const factPromise = api.fact(repo, branch, current.path, current.commit ?? undefined);
     const explainPromise = current.commit === null
-      ? api.explain(repo, current.path)
+      ? api.explain(repo, branch, current.path)
       : Promise.resolve({ incoming: [], outgoing: [] });
 
     Promise.all([factPromise, explainPromise])
@@ -44,7 +45,7 @@ export function ExplainView({ repo, initialEntry, onClose }: Props) {
       .finally(() => { if (!cancelled) setLoading(false); });
 
     return () => { cancelled = true; };
-  }, [current, repo]);
+  }, [current, repo, branch]);
 
   const navigateTo = (entry: ExplainEntry) => {
     setBackStack(prev => [...prev, current]);

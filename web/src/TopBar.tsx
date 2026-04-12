@@ -133,7 +133,7 @@ export function TopBar({ state, repos, dispatch, onSettingsClick }: Props) {
             data-testid="menu-rebuild"
             onClick={() => {
               if (!rebuilding) {
-                api.rebuild(state.repo);
+                api.rebuild(state.repo, state.branch);
                 setMenuOpen(false);
               }
             }}

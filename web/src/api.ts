@@ -1,10 +1,45 @@
-function base(repo: string) { return `/api/v1/${repo}`; }
+function encodeBranch(name: string): string {
+  return name.replaceAll('/', ':');
+}
 
-export interface RepoInfo { name: string; branch: string }
+function repoBase(repo: string): string {
+  return `/api/v1/repos/${repo}`;
+}
+
+function branchBase(repo: string, branch: string): string {
+  return `${repoBase(repo)}/branches/${encodeBranch(branch)}`;
+}
+
+export interface RepoInfo { name: string }
 
 export interface DirChild { name: string; is_dir: boolean; type?: string; title?: string; fullPath?: string }
 export interface BrowseResponse { path: string; children: DirChild[] }
 export interface Fact { path: string; title: string; type?: string; body: string; domain: string[]; confidence: number; sources: number; entities: string[]; refs: string[]; parse_error?: string; from_commit?: string; commit_hash?: string; commit_date?: string }
+
+// normalizeFactResponse maps the new HAL FactView shape to the Fact interface.
+// The new API returns refs as [{raw, kind, _links}] and uses as_of.commit
+// instead of commit_hash; this normalizer keeps component code unchanged.
+function normalizeFactResponse(data: any): Fact {
+  let refs: string[] = [];
+  if (Array.isArray(data.refs)) {
+    refs = data.refs.map((r: any) => (typeof r === 'string' ? r : r.raw));
+  }
+  return {
+    path: data.path,
+    title: data.title,
+    type: data.type,
+    body: data.body,
+    domain: data.domain || [],
+    confidence: data.confidence,
+    sources: data.sources,
+    entities: data.entities || [],
+    refs,
+    parse_error: data.parse_error,
+    from_commit: data.from_commit,
+    commit_hash: data.commit_hash ?? data.as_of?.commit,
+    commit_date: data.commit_date ?? data.as_of?.date,
+  };
+}
 export interface SearchResult { path: string; title: string; body: string; score: number; type?: string; domain?: string[]; entities?: string[] }
 export interface HistoryEntry { commit: string; date: string; message: string }
 export interface FileCounts { added?: number; modified?: number; deleted?: number }
@@ -130,7 +165,7 @@ export type SSEEvent =
   | { phase: "error"; message: string };
 
 function sessionBase(repo: string, sessionId: string) {
-  return `${base(repo)}/origin/session/${sessionId}`;
+  return `${repoBase(repo)}/origin-sessions/${sessionId}`;
 }
 
 function parseSSELines(text: string): SSEEvent[] {
@@ -163,7 +198,7 @@ async function readSSEStream(res: Response, onEvent?: (e: SSEEvent) => void): Pr
 }
 
 export function createSession(repo: string, opts: { url: string; auth_method?: string; token?: string; user?: string; password?: string }): Promise<SessionCreateResponse> {
-  return fetch(`${base(repo)}/origin/session`, {
+  return fetch(`${repoBase(repo)}/origin-sessions`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(opts),
@@ -204,15 +239,66 @@ export function deleteSession(repo: string, sessionId: string): Promise<void> {
   return fetch(`${sessionBase(repo, sessionId)}`, { method: 'DELETE' }).then(r => { if (!r.ok) throw new Error(r.statusText); });
 }
 
+// stripOntologyRoot removes the ontology root prefix from a full path.
+// e.g. ontologyRoot="kb", path="kb/ai/ml" -> "ai/ml"
+//      ontologyRoot="kb", path="kb"        -> ""  (root)
+function stripOntologyRoot(ontologyRoot: string, path: string): string {
+  if (path === ontologyRoot) return '';
+  const prefix = ontologyRoot + '/';
+  if (path.startsWith(prefix)) return path.slice(prefix.length);
+  return path;
+}
+
+// getAgentBranch fetches the branches list for a repo and returns the agent
+// branch name. It picks the first branch whose name starts with "machine/"
+// (the knomit machine-branch convention), falling back to the first branch.
+async function getAgentBranch(repo: string): Promise<string> {
+  const data = await fetch(`${repoBase(repo)}/branches`).then(r => r.json());
+  const branches: Array<{ name: string }> =
+    (data._embedded?.branches as Array<{ name: string }>) || [];
+  const agent = branches.find(b => b.name.startsWith('machine/'));
+  return (agent || branches[0])?.name || 'main';
+}
+
 export const api = {
-  repos: (): Promise<RepoInfo[]> => fetch('/api/v1/repos').then(r => r.json()),
-  browse: (repo: string, path: string): Promise<BrowseResponse> => fetch(`${base(repo)}/browse?path=${encodeURIComponent(path)}`).then(r => r.json()),
-  fact: (repo: string, path: string, commit?: string): Promise<Fact> => {
-    const p = new URLSearchParams({ path });
-    if (commit) p.set('commit', commit);
-    return fetch(`${base(repo)}/fact?${p}`).then(r => { if (!r.ok) throw new Error(r.statusText); return r.json(); });
+  getAgentBranch,
+
+  repos: (): Promise<RepoInfo[]> =>
+    fetch('/api/v1/repos').then(r => r.json()).then(data => {
+      // New endpoint returns HAL: {count, _links, _embedded: {repos: [{name, _links}]}}
+      if (data && data._embedded && Array.isArray(data._embedded.repos)) {
+        return data._embedded.repos as RepoInfo[];
+      }
+      // Fallback: flat array (legacy)
+      return Array.isArray(data) ? data : [];
+    }),
+
+  browse: (repo: string, branch: string, path: string, ontologyRoot: string): Promise<BrowseResponse> => {
+    const relative = stripOntologyRoot(ontologyRoot, path);
+    const url = relative
+      ? `${branchBase(repo, branch)}/topics/${encodeURIComponent(relative)}`
+      : `${branchBase(repo, branch)}/topics`;
+    return fetch(url).then(r => r.json()).then(data => {
+      // HAL: {_embedded: {topics: [{name, is_dir, type?, title?, _links}]}}
+      const items: DirChild[] = ((data._embedded?.topics as any[]) || []).map((e: any) => ({
+        name: e.name,
+        is_dir: e.is_dir,
+        type: e.type,
+        title: e.title,
+        fullPath: e.is_dir ? undefined : (relative ? `${ontologyRoot}/${relative}/${e.name}` : `${ontologyRoot}/${e.name}`),
+      }));
+      return { path, children: items };
+    });
   },
-  search: (repo: string, q: string, path = '', minConfidence = 0,
+
+  fact: (repo: string, branch: string, path: string, commit?: string): Promise<Fact> => {
+    const url = commit
+      ? `${branchBase(repo, branch)}/commits/${encodeURIComponent(commit)}/facts/${encodeURIComponent(path)}`
+      : `${branchBase(repo, branch)}/facts/${encodeURIComponent(path)}`;
+    return fetch(url).then(r => { if (!r.ok) throw new Error(r.statusText); return r.json(); }).then(normalizeFactResponse);
+  },
+
+  search: (repo: string, branch: string, q: string, path = '', minConfidence = 0,
     opts?: { types?: string[]; eps?: string[]; domains?: string[]; entities?: string[] }
   ): Promise<{ results: SearchResult[] }> => {
     const { text, domains, entities } = parseSearchQuery(q);
@@ -226,61 +312,126 @@ export const api = {
     if (minConfidence) p.set('min_confidence', String(minConfidence));
     if (opts?.types?.length) p.set('type', opts.types.join(','));
     if (opts?.eps?.length) p.set('ep', opts.eps.join(','));
-    return fetch(`${base(repo)}/search?${p}`).then(r => r.json());
+    return fetch(`${branchBase(repo, branch)}/search?${p}`)
+      .then(r => r.json())
+      .then(data => ({
+        // HAL CollectionView: {_embedded: {results: [...]}}
+        results: data._embedded?.results || data.results || [],
+      }));
   },
-  history: (repo: string, path: string, after?: string, from?: string, before?: string): Promise<HistoryResponse> => {
-    const p = new URLSearchParams({ path, limit: '50' });
+
+  history: (repo: string, branch: string, path: string, after?: string, from?: string, before?: string): Promise<HistoryResponse> => {
+    const p = new URLSearchParams({ limit: '50' });
     if (after) p.set('after', after);
     if (from) p.set('from', from);
     if (before) p.set('before', before);
-    return fetch(`${base(repo)}/history?${p}`).then(r => r.json());
+    return fetch(`${branchBase(repo, branch)}/facts/${encodeURIComponent(path)}/commits?${p}`)
+      .then(r => r.json())
+      .then(data => {
+        // HAL CollectionView: {count, _links: {next?, prev?}, _embedded: {commits: [...]}}
+        const entries: HistoryEntryWithTags[] = data._embedded?.commits || data.entries || [];
+        // Extract next/prev cursor from _links href query params
+        const nextLink: string | undefined = data._links?.next?.href;
+        const prevLink: string | undefined = data._links?.prev?.href;
+        const extractAfter = (href: string | undefined): string | undefined => {
+          if (!href) return undefined;
+          try { return new URL(href, 'http://x').searchParams.get('after') ?? undefined; } catch { return undefined; }
+        };
+        return {
+          entries,
+          next: extractAfter(nextLink),
+          prev: extractAfter(prevLink),
+        };
+      });
   },
-  commitDetail: (repo: string, hash: string): Promise<CommitDetail> =>
-    fetch(`${base(repo)}/commit?hash=${encodeURIComponent(hash)}`).then(r => r.json()),
-  updateFact: (repo: string, path: string, content: string): Promise<Fact> =>
-    fetch(`${base(repo)}/fact`, {
+
+  commitDetail: (repo: string, branch: string, hash: string): Promise<CommitDetail> =>
+    fetch(`${branchBase(repo, branch)}/commits/${encodeURIComponent(hash)}`).then(r => r.json()),
+
+  updateFact: (repo: string, branch: string, path: string, content: string): Promise<Fact> =>
+    fetch(`${branchBase(repo, branch)}/facts/${encodeURIComponent(path)}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ path, content }),
-    }).then(r => { if (!r.ok) throw new Error(r.statusText); return r.json(); }),
-  stats: (repo: string, path: string): Promise<Stats> => fetch(`${base(repo)}/stats?path=${encodeURIComponent(path)}`).then(r => r.json()),
-  activity: (repo: string, path: string): Promise<ActivityStats> => fetch(`${base(repo)}/activity?path=${encodeURIComponent(path)}`).then(r => r.json()),
-  status: (repo: string): Promise<Status> => fetch(`${base(repo)}/status`).then(r => r.json()),
-  sync: (repo: string): Promise<{ op: string; id?: string; status: string; message?: string }> =>
-    fetch(`${base(repo)}/sync`, { method: 'POST' }).then(r => r.json()),
-  synthesize: (repo: string, recipe = ''): Promise<{ op: string; id?: string; status: string; message?: string }> =>
-    fetch(`${base(repo)}/synthesize`, { method: 'POST', body: recipe }).then(r => r.json()),
-  rebuild: (repo: string): Promise<{ op: string; id?: string; status: string; message?: string }> =>
-    fetch(`${base(repo)}/rebuild`, { method: 'POST' }).then(r => r.json()),
-  recent: (repo: string, path: string, query = '', limit = 50, offset = 0,
+      body: JSON.stringify({ content }),
+    }).then(r => { if (!r.ok) throw new Error(r.statusText); return r.json(); }).then(normalizeFactResponse),
+
+  stats: (repo: string, branch: string, path: string): Promise<Stats> =>
+    fetch(`${branchBase(repo, branch)}/stats?path=${encodeURIComponent(path)}`).then(r => r.json()),
+
+  activity: (repo: string, branch: string, path: string): Promise<ActivityStats> =>
+    fetch(`${branchBase(repo, branch)}/activity?path=${encodeURIComponent(path)}`).then(r => r.json()),
+
+  status: (repo: string, branch: string): Promise<Status> =>
+    fetch(`${branchBase(repo, branch)}`).then(r => r.json()).then(data => ({
+      head: data.head,
+      branch: branch,
+      index_commit: data.index_commit,
+      embeddings_enabled: data.embeddings_enabled,
+      // ontology_root not in new response — caller preserves existing state value
+      ontology_root: data.ontology_root || '',
+    })),
+
+  synthesize: (repo: string, branch: string, recipe = ''): Promise<{ op: string; id?: string; status: string; message?: string }> =>
+    fetch(`${branchBase(repo, branch)}/synthesis-runs`, { method: 'POST', body: recipe }).then(r => r.json()),
+
+  rebuild: (repo: string, branch: string): Promise<{ op: string; id?: string; status: string; message?: string }> =>
+    fetch(`${branchBase(repo, branch)}/index-rebuilds`, { method: 'POST' }).then(r => r.json()),
+
+  recent: (repo: string, branch: string, path: string, query = '', limit = 50, offset = 0,
     opts?: { typeFilter?: string; excludeType?: string; domains?: string[]; entities?: string[]; eps?: string[] }
   ): Promise<RecentResponse> => {
-    const p = new URLSearchParams({ path, limit: String(limit), offset: String(offset) });
+    const p = new URLSearchParams({ sort: 'recent', path, limit: String(limit), offset: String(offset) });
     if (query) p.set('q', query);
     if (opts?.typeFilter) p.set('type', opts.typeFilter);
     if (opts?.excludeType) p.set('exclude_type', opts.excludeType);
     if (opts?.domains?.length) p.set('domain', opts.domains.join(','));
     if (opts?.entities?.length) p.set('entities', opts.entities.join(','));
     if (opts?.eps?.length) p.set('ep', opts.eps.join(','));
-    return fetch(`${base(repo)}/recent?${p}`).then(r => r.json());
+    return fetch(`${branchBase(repo, branch)}/facts?${p}`)
+      .then(r => r.json())
+      .then(data => ({
+        // HAL CollectionView: count = total, _embedded.facts = items
+        facts: data._embedded?.facts || data.facts || [],
+        total: data.count ?? data.total ?? 0,
+      }));
   },
+
   getOrigin: (repo: string): Promise<OriginResponse | null> =>
-    fetch(`${base(repo)}/origin`).then(r => r.status === 204 ? null : r.json()),
+    fetch(`${repoBase(repo)}/origin`).then(r => r.status === 204 ? null : r.json()),
+
   setOrigin: (repo: string, opts: { url?: string; auth_method?: string; token?: string; user?: string; password?: string }): Promise<OriginSetResponse> =>
-    fetch(`${base(repo)}/origin`, {
+    fetch(`${repoBase(repo)}/origin`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(opts),
     }).then(r => { if (!r.ok) throw new Error(r.statusText); return r.json(); }),
-  retractFact: (repo: string, path: string): Promise<{ commit: string }> =>
-    fetch(`${base(repo)}/fact?path=${encodeURIComponent(path)}`, { method: 'DELETE' })
+
+  retractFact: (repo: string, branch: string, path: string): Promise<{ commit: string }> =>
+    fetch(`${branchBase(repo, branch)}/facts/${encodeURIComponent(path)}`, { method: 'DELETE' })
       .then(r => { if (!r.ok) return r.json().then(e => { throw new Error(e.error || r.statusText); }); return r.json(); }),
-  completions: (repo: string, category: string, prefix = ''): Promise<{ values: string[] }> =>
-    fetch(`${base(repo)}/completions?category=${encodeURIComponent(category)}&prefix=${encodeURIComponent(prefix)}`).then(r => r.json()),
-  explain: (repo: string, path: string): Promise<{
+
+  completions: (repo: string, branch: string, category: string, prefix = ''): Promise<{ values: string[] }> =>
+    fetch(`${branchBase(repo, branch)}/completions?category=${encodeURIComponent(category)}&prefix=${encodeURIComponent(prefix)}`).then(r => r.json()),
+
+  explain: (repo: string, branch: string, path: string): Promise<{
     incoming: { path: string; title: string }[];
     outgoing: { path: string; title: string; deleted: boolean }[];
-  }> =>
-    fetch(`${base(repo)}/explain?path=${encodeURIComponent(path)}`)
-      .then(r => r.ok ? r.json() : r.json().then((e: { error: string }) => { throw new Error(e.error || r.statusText); })),
+  }> => {
+    const factURL = `${branchBase(repo, branch)}/facts/${encodeURIComponent(path)}`;
+    const parseRefs = (data: any): { path: string; title: string; deleted: boolean }[] => {
+      // HAL CollectionView: {_embedded: {refs: [...]}}
+      if (data && data._embedded && Array.isArray(data._embedded.refs)) {
+        return data._embedded.refs;
+      }
+      // Fallback: flat array
+      return Array.isArray(data) ? data : [];
+    };
+    return Promise.all([
+      fetch(`${factURL}/incoming`).then(r => r.ok ? r.json() : r.json().then((e: { error: string }) => { throw new Error(e.error || r.statusText); })),
+      fetch(`${factURL}/outgoing`).then(r => r.ok ? r.json() : r.json().then((e: { error: string }) => { throw new Error(e.error || r.statusText); })),
+    ]).then(([inc, out]) => ({
+      incoming: parseRefs(inc),
+      outgoing: parseRefs(out),
+    }));
+  },
 };

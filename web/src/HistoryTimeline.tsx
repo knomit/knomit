@@ -44,7 +44,7 @@ export function HistoryTimeline({ state, dispatch, navigate }: Props) {
     setNextCursor(undefined);
     setPrevCursor(undefined);
     setSelectedIdx(0);
-    api.history(state.repo, path, undefined, state.historyCommit || undefined).then(r => {
+    api.history(state.repo, state.branch, path, undefined, state.historyCommit || undefined).then(r => {
       if (stale()) return;
       const e = r.entries || [];
       setEntries(e);
@@ -64,7 +64,7 @@ export function HistoryTimeline({ state, dispatch, navigate }: Props) {
     }).catch(() => {
       if (!stale()) { setEntries([]); setLoading(false); }
     });
-  }, [path, state.repo]);
+  }, [path, state.repo, state.branch]);
 
   const loadingRef = useRef(loading);
   loadingRef.current = loading;
@@ -72,18 +72,18 @@ export function HistoryTimeline({ state, dispatch, navigate }: Props) {
   const loadMore = useCallback(() => {
     if (loadingRef.current || !nextCursor) return;
     setLoading(true);
-    api.history(state.repo, path, nextCursor).then(r => {
+    api.history(state.repo, state.branch, path, nextCursor).then(r => {
       setEntries(prev => [...prev, ...(r.entries || [])]);
       setNextCursor(r.next);
       setLoading(false);
     }).catch(() => setLoading(false));
-  }, [nextCursor, path, state.repo]);
+  }, [nextCursor, path, state.repo, state.branch]);
 
   const loadPrev = useCallback(() => {
     if (loadingRef.current || !prevCursor) return;
     setLoading(true);
     scrollHeightBeforeRef.current = scrollElRef.current?.scrollHeight ?? 0;
-    api.history(state.repo, path, undefined, undefined, prevCursor).then(r => {
+    api.history(state.repo, state.branch, path, undefined, undefined, prevCursor).then(r => {
       const newEntries = r.entries || [];
       if (newEntries.length === 0) {
         scrollHeightBeforeRef.current = 0;
@@ -96,7 +96,7 @@ export function HistoryTimeline({ state, dispatch, navigate }: Props) {
       setPrevCursor(r.prev);
       setLoading(false);
     }).catch(() => { scrollHeightBeforeRef.current = 0; setLoading(false); });
-  }, [prevCursor, path, state.repo]);
+  }, [prevCursor, path, state.repo, state.branch]);
 
   // After prepending entries, restore scroll position so the viewport doesn't jump.
   useLayoutEffect(() => {
