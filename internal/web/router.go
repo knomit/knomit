@@ -93,6 +93,19 @@ func (s *Server) NewAPIRouter() chi.Router {
 		handleSearch(b, s.Manager, sp, s.Embedder),
 	)
 
+	dp := s.domainsProvider
+	if dp == nil {
+		dp = defaultDomainsProvider{}
+	}
+	r.With(BranchMiddleware).Get(
+		"/repos/{repo}/branches/{branch}/domains",
+		handleHALDomains(b, s.Manager, dp),
+	)
+	r.With(BranchMiddleware).Get(
+		"/repos/{repo}/branches/{branch}/domains/{name}",
+		handleHALDomainFacts(b, s.Manager, dp),
+	)
+
 	sp2 := s.statsProvider
 	if sp2 == nil {
 		sp2 = defaultStatsProvider{}
