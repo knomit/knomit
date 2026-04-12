@@ -229,54 +229,5 @@ func (s *Server) NewAPIRouter() chi.Router {
 		sub.Post("/{sessionID}/commit", s.handleCommit(s.Manager, s.SessionManager, s.AgentBranch))
 	})
 
-	// Legacy routes — kept under /{repo}/... until each is converted to HAL.
-	// Chi matches literal "/repos" before the param "/{repo}", so these
-	// coexist with the new HAL routes above without conflict.
-	r.Get("/openapi.yaml", handleOpenAPISpec())
-	r.Route("/{repo}", func(sub chi.Router) {
-		sub.Use(repos.RepoMiddleware(s.Manager))
-		sub.Get("/browse", handleBrowse(s.OntologyRoot, s.AgentBranch))
-		sub.Get("/fact", handleFact(s.AgentBranch))
-		sub.Put("/fact", handleFactWrite(s.AgentBranch))
-		sub.Delete("/fact", handleFactRetract(s.AgentBranch))
-		sub.Get("/search", handleLegacySearch())
-		sub.Get("/explain", handleExplain())
-		sub.Get("/history", handleHistoryPaginated(s.AgentBranch))
-		sub.Get("/commit", handleCommitDetail(s.AgentBranch))
-		sub.Get("/stats", handleStats())
-		sub.Get("/activity", handleActivity(s.AgentBranch))
-		sub.Get("/status", handleStatus(s.EmbeddingsEnabled, s.OntologyRoot, s.AgentBranch))
-		sub.Post("/synthesize", s.handleSynthesizeStart())
-		sub.Post("/rebuild", handleRebuild())
-		sub.Get("/completions", handleCompletions())
-		sub.Get("/recent", handleRecent())
-		sub.Get("/events", handleEvents())
-		sub.Get("/origin", handleGetOrigin())
-		sub.Put("/origin", handleSetOrigin())
-		sub.Post("/origin/session", handleCreateSession(s.Manager, s.SessionManager))
-		sub.Get("/origin/session/{sessionID}", handleGetSession(s.Manager, s.SessionManager))
-		sub.Delete("/origin/session/{sessionID}", handleDeleteSession(s.Manager, s.SessionManager))
-		sub.Get("/origin/session/{sessionID}/test", handleTestConnectivity(s.Manager, s.SessionManager, s.AgentBranch))
-		sub.Get("/origin/session/{sessionID}/preview", handlePreview(s.Manager, s.SessionManager, s.AgentBranch))
-		sub.Post("/origin/session/{sessionID}/apply", handleApply(s.Manager, s.SessionManager, s.AgentBranch))
-		sub.Post("/origin/session/{sessionID}/commit", s.handleCommit(s.Manager, s.SessionManager, s.AgentBranch))
-
-		sub.Mount("/mcp", http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-			profile := req.URL.Query().Get("profile")
-			if profile == "" {
-				profile = "code"
-			}
-			h, ok := s.mcpHandlers[profile]
-			if !ok {
-				h = s.mcpHandlers["code"]
-			}
-			if h == nil {
-				http.NotFound(w, req)
-				return
-			}
-			h.ServeHTTP(w, req)
-		}))
-	})
-
 	return r
 }
