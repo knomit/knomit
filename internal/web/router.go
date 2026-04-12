@@ -210,6 +210,14 @@ func (s *Server) NewAPIRouter() chi.Router {
 		handleHALCommitDetail(b, s.Manager, cp),
 	)
 
+	op := s.originProvider
+	if op == nil {
+		op = defaultOriginProvider{}
+	}
+	r.Get("/repos/{repo}/origin", handleHALGetOrigin(b, s.Manager, op))
+	r.Put("/repos/{repo}/origin", handleHALSetOrigin(b, s.Manager, op))
+	r.Delete("/repos/{repo}/origin", handleHALDeleteOrigin(b, s.Manager, op))
+
 	// Legacy routes — kept under /{repo}/... until each is converted to HAL.
 	// Chi matches literal "/repos" before the param "/{repo}", so these
 	// coexist with the new HAL routes above without conflict.

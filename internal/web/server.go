@@ -55,6 +55,8 @@ type Server struct {
 	activityProvider activityProvider
 
 	factWriter FactWriter
+
+	originProvider originProvider
 }
 
 // buildMCPHandlers constructs one MCP server per profile, shared across all
