@@ -160,6 +160,30 @@ func (s *Server) NewAPIRouter() chi.Router {
 		handleStartRebuild(s.Manager),
 	)
 
+	mcpDispatch := http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		profile := req.URL.Query().Get("profile")
+		if profile == "" {
+			profile = "code"
+		}
+		h, ok := s.mcpHandlers[profile]
+		if !ok {
+			h = s.mcpHandlers["code"]
+		}
+		if h == nil {
+			http.NotFound(w, req)
+			return
+		}
+		h.ServeHTTP(w, req)
+	})
+	r.With(BranchMiddleware).HandleFunc(
+		"/repos/{repo}/branches/{branch}/mcp",
+		mcpDispatch.ServeHTTP,
+	)
+	r.With(BranchMiddleware).HandleFunc(
+		"/repos/{repo}/branches/{branch}/mcp/*",
+		mcpDispatch.ServeHTTP,
+	)
+
 	cp := s.commitsProvider
 	if cp == nil {
 		cp = defaultCommitsProvider{}
