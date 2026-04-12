@@ -93,6 +93,15 @@ func (s *Server) NewAPIRouter() chi.Router {
 		handleSearch(b, s.Manager, sp, s.Embedder),
 	)
 
+	cop := s.completionsProvider
+	if cop == nil {
+		cop = defaultCompletionsProvider{}
+	}
+	r.With(BranchMiddleware).Get(
+		"/repos/{repo}/branches/{branch}/completions",
+		handleHALCompletions(b, s.Manager, cop),
+	)
+
 	dp := s.domainsProvider
 	if dp == nil {
 		dp = defaultDomainsProvider{}
