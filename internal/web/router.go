@@ -70,6 +70,10 @@ func (s *Server) NewAPIRouter() chi.Router {
 		"/repos/{repo}/branches/{branch}/facts/*",
 		handleHALFact(b, s.Manager, factReader, fsp),
 	)
+	r.With(BranchMiddleware).Get(
+		"/repos/{repo}/branches/{branch}/commits/{sha}/facts/*",
+		handleCommitAnchoredFact(b, s.Manager, factReader, fsp),
+	)
 
 	topicLister := s.topicLister
 	if topicLister == nil {
