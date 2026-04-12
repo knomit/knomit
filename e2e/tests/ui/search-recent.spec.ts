@@ -58,7 +58,7 @@ test.describe('Search in Chrono View', () => {
     const filterInput = page.locator('#filter-input');
     await filterInput.fill('postgresql');
     // Wait for debounce + API response
-    await page.waitForResponse(resp => resp.url().includes('/recent'));
+    await page.waitForResponse(resp => resp.url().includes('/facts') && resp.url().includes('sort=recent'));
     await page.waitForTimeout(500);
 
     const filteredCount = await items.count();
@@ -73,7 +73,7 @@ test.describe('Search in Chrono View', () => {
   test('selecting a filtered chrono item opens the correct fact', async ({ page }) => {
     const filterInput = page.locator('#filter-input');
     await filterInput.fill('postgresql');
-    await page.waitForResponse(resp => resp.url().includes('/recent'));
+    await page.waitForResponse(resp => resp.url().includes('/facts') && resp.url().includes('sort=recent'));
     await page.waitForTimeout(500);
 
     const items = page.getByTestId('chrono-item');
@@ -120,7 +120,7 @@ test.describe('Search in Chrono View', () => {
 
     // Now search from tree view
     await filterInput.fill('PostgreSQL');
-    await page.waitForResponse(resp => resp.url().includes('/search') || resp.url().includes('/browse'));
+    await page.waitForResponse(resp => resp.url().includes('/search') || resp.url().includes('/topics'));
 
     // Results should appear and selecting one updates the right panel
     const results = page.getByTestId('dir-entry');
@@ -138,14 +138,14 @@ test.describe('Search in Chrono View', () => {
     // Filter
     const filterInput = page.locator('#filter-input');
     await filterInput.fill('postgresql');
-    await page.waitForResponse(resp => resp.url().includes('/recent'));
+    await page.waitForResponse(resp => resp.url().includes('/facts') && resp.url().includes('sort=recent'));
     await page.waitForTimeout(500);
     const filteredCount = await items.count();
     expect(filteredCount).toBeLessThan(initialCount);
 
     // Clear filter input
     await filterInput.clear();
-    await page.waitForResponse(resp => resp.url().includes('/recent'));
+    await page.waitForResponse(resp => resp.url().includes('/facts') && resp.url().includes('sort=recent'));
     await page.waitForTimeout(500);
 
     const resetCount = await items.count();
