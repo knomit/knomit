@@ -84,6 +84,9 @@ func TestHandleV2Repo_ReturnsRepoWithBranchesLink(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status: %d", rec.Code)
 	}
+	if got := rec.Header().Get("Content-Type"); got != hal.ContentType {
+		t.Errorf("content-type: got %q, want %q", got, hal.ContentType)
+	}
 	var body struct {
 		Name  string      `json:"name"`
 		Links hal.LinkMap `json:"_links"`

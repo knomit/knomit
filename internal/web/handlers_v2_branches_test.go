@@ -58,6 +58,9 @@ func TestHandleV2Branches_ReturnsCollection(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status: %d, body=%s", rec.Code, rec.Body.String())
 	}
+	if got := rec.Header().Get("Content-Type"); got != hal.ContentType {
+		t.Errorf("content-type: got %q, want %q", got, hal.ContentType)
+	}
 
 	var body struct {
 		Count    int         `json:"count"`
@@ -117,6 +120,9 @@ func TestHandleV2Branch_ReturnsStatusAndFullLinkMap(t *testing.T) {
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status: %d, body=%s", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("Content-Type"); got != hal.ContentType {
+		t.Errorf("content-type: got %q, want %q", got, hal.ContentType)
 	}
 
 	var body struct {

@@ -2,6 +2,7 @@ package web
 
 import (
 	"encoding/json"
+	"strings"
 
 	knomitfact "knomit/internal/fact"
 	"knomit/internal/web/hal"
@@ -125,38 +126,14 @@ func buildFactLinks(
 // `know/ai/ml/abc12345.md` has parent topic `/topics/ai/ml`. The first
 // path segment is the ontology root ("know") and is stripped.
 func factParentTopic(b hal.URLBuilder, repo string, a hal.Anchor, path string) string {
-	segs := splitSegments(path)
+	segs := strings.Split(path, "/")
 	if len(segs) < 2 {
 		return b.BranchOrCommitPrefix(repo, a) + "/topics"
 	}
+	// Drop the filename (last segment) and the ontology root (first segment).
 	parent := segs[1 : len(segs)-1]
-	return b.BranchOrCommitPrefix(repo, a) + "/topics/" + joinSegments(parent)
-}
-
-func splitSegments(p string) []string {
-	out := []string{}
-	start := 0
-	for i := 0; i < len(p); i++ {
-		if p[i] == '/' {
-			if i > start {
-				out = append(out, p[start:i])
-			}
-			start = i + 1
-		}
+	if len(parent) == 0 {
+		return b.BranchOrCommitPrefix(repo, a) + "/topics"
 	}
-	if start < len(p) {
-		out = append(out, p[start:])
-	}
-	return out
-}
-
-func joinSegments(parts []string) string {
-	if len(parts) == 0 {
-		return ""
-	}
-	out := parts[0]
-	for _, p := range parts[1:] {
-		out += "/" + p
-	}
-	return out
+	return b.BranchOrCommitPrefix(repo, a) + "/topics/" + strings.Join(parent, "/")
 }
