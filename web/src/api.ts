@@ -276,7 +276,7 @@ export const api = {
   browse: (repo: string, branch: string, path: string, ontologyRoot: string): Promise<BrowseResponse> => {
     const relative = stripOntologyRoot(ontologyRoot, path);
     const url = relative
-      ? `${branchBase(repo, branch)}/topics/${encodeURIComponent(relative)}`
+      ? `${branchBase(repo, branch)}/topics/${relative}`
       : `${branchBase(repo, branch)}/topics`;
     return fetch(url).then(r => r.json()).then(data => {
       // HAL: {_embedded: {topics: [{name, is_dir, type?, title?, _links}]}}
@@ -293,8 +293,8 @@ export const api = {
 
   fact: (repo: string, branch: string, path: string, commit?: string): Promise<Fact> => {
     const url = commit
-      ? `${branchBase(repo, branch)}/commits/${encodeURIComponent(commit)}/facts/${encodeURIComponent(path)}`
-      : `${branchBase(repo, branch)}/facts/${encodeURIComponent(path)}`;
+      ? `${branchBase(repo, branch)}/commits/${commit}/facts/${path}`
+      : `${branchBase(repo, branch)}/facts/${path}`;
     return fetch(url).then(r => { if (!r.ok) throw new Error(r.statusText); return r.json(); }).then(normalizeFactResponse);
   },
 
@@ -325,7 +325,7 @@ export const api = {
     if (after) p.set('after', after);
     if (from) p.set('from', from);
     if (before) p.set('before', before);
-    return fetch(`${branchBase(repo, branch)}/facts/${encodeURIComponent(path)}/commits?${p}`)
+    return fetch(`${branchBase(repo, branch)}/facts/${path}/commits?${p}`)
       .then(r => r.json())
       .then(data => {
         // HAL CollectionView: {count, _links: {next?, prev?}, _embedded: {commits: [...]}}
@@ -346,10 +346,10 @@ export const api = {
   },
 
   commitDetail: (repo: string, branch: string, hash: string): Promise<CommitDetail> =>
-    fetch(`${branchBase(repo, branch)}/commits/${encodeURIComponent(hash)}`).then(r => r.json()),
+    fetch(`${branchBase(repo, branch)}/commits/${hash}`).then(r => r.json()),
 
   updateFact: (repo: string, branch: string, path: string, content: string): Promise<Fact> =>
-    fetch(`${branchBase(repo, branch)}/facts/${encodeURIComponent(path)}`, {
+    fetch(`${branchBase(repo, branch)}/facts/${path}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ content }),
@@ -407,7 +407,7 @@ export const api = {
     }).then(r => { if (!r.ok) throw new Error(r.statusText); return r.json(); }),
 
   retractFact: (repo: string, branch: string, path: string): Promise<{ commit: string }> =>
-    fetch(`${branchBase(repo, branch)}/facts/${encodeURIComponent(path)}`, { method: 'DELETE' })
+    fetch(`${branchBase(repo, branch)}/facts/${path}`, { method: 'DELETE' })
       .then(r => { if (!r.ok) return r.json().then(e => { throw new Error(e.error || r.statusText); }); return r.json(); }),
 
   completions: (repo: string, branch: string, category: string, prefix = ''): Promise<{ values: string[] }> =>
@@ -417,7 +417,7 @@ export const api = {
     incoming: { path: string; title: string }[];
     outgoing: { path: string; title: string; deleted: boolean }[];
   }> => {
-    const factURL = `${branchBase(repo, branch)}/facts/${encodeURIComponent(path)}`;
+    const factURL = `${branchBase(repo, branch)}/facts/${path}`;
     const parseRefs = (data: any): { path: string; title: string; deleted: boolean }[] => {
       // HAL CollectionView: {_embedded: {refs: [...]}}
       if (data && data._embedded && Array.isArray(data._embedded.refs)) {
