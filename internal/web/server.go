@@ -28,6 +28,8 @@ type Server struct {
 
 	mcpHandlers map[string]http.Handler // profile → handler
 
+	JobRegistry *JobRegistry // tracks synthesis-run and index-rebuild jobs
+
 	// branchesLister is a per-repo branch enumeration hook. Injected for
 	// tests; production wires it to ri.WithRead → svc.Branches().ListBranches.
 	branchesLister func(ri *repos.RepoInstance) ([]store.Branch, error)

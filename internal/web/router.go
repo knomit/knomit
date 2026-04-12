@@ -173,9 +173,41 @@ func (s *Server) NewAPIRouter() chi.Router {
 		"/repos/{repo}/branches/{branch}/synthesis-runs",
 		handleStartSynthesis(s.Manager, s.LLMAdapter),
 	)
+	r.With(BranchMiddleware).Get(
+		"/repos/{repo}/branches/{branch}/synthesis-runs",
+		handleListJobs(s.JobRegistry, "synthesis-run"),
+	)
+	r.With(BranchMiddleware).Get(
+		"/repos/{repo}/branches/{branch}/synthesis-runs/{id}",
+		handleGetJob(s.JobRegistry),
+	)
+	r.With(BranchMiddleware).Delete(
+		"/repos/{repo}/branches/{branch}/synthesis-runs/{id}",
+		handleDeleteJob(s.JobRegistry),
+	)
+	r.With(BranchMiddleware).Get(
+		"/repos/{repo}/branches/{branch}/synthesis-runs/{id}/events",
+		handleJobEvents(s.Manager, s.JobRegistry),
+	)
 	r.With(BranchMiddleware).Post(
 		"/repos/{repo}/branches/{branch}/index-rebuilds",
 		handleStartRebuild(s.Manager),
+	)
+	r.With(BranchMiddleware).Get(
+		"/repos/{repo}/branches/{branch}/index-rebuilds",
+		handleListJobs(s.JobRegistry, "index-rebuild"),
+	)
+	r.With(BranchMiddleware).Get(
+		"/repos/{repo}/branches/{branch}/index-rebuilds/{id}",
+		handleGetJob(s.JobRegistry),
+	)
+	r.With(BranchMiddleware).Delete(
+		"/repos/{repo}/branches/{branch}/index-rebuilds/{id}",
+		handleDeleteJob(s.JobRegistry),
+	)
+	r.With(BranchMiddleware).Get(
+		"/repos/{repo}/branches/{branch}/index-rebuilds/{id}/events",
+		handleJobEvents(s.Manager, s.JobRegistry),
 	)
 
 	mcpDispatch := http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
