@@ -40,6 +40,7 @@ func (s *Server) NewAPIRouter() chi.Router {
 
 	b := hal.URLBuilder{Base: APIBase}
 	r.Get("/", handleAPIRoot(b))
+	r.Get("/openapi.yaml", handleOpenAPISpec())
 	r.Get("/repos", handleHALRepos(b, s.Manager))
 	r.Get("/repos/{repo}", handleHALRepo(b, s.Manager))
 
@@ -126,6 +127,10 @@ func (s *Server) NewAPIRouter() chi.Router {
 	r.With(BranchMiddleware).Get(
 		"/repos/{repo}/branches/{branch}/facts",
 		handleHALFactsCollection(b, s.Manager, fcp),
+	)
+	r.With(BranchMiddleware).Post(
+		"/repos/{repo}/branches/{branch}/facts",
+		handleFactCreate(b, s.Manager, s.OntologyRoot, factWriter),
 	)
 
 	cop := s.completionsProvider
@@ -220,6 +225,7 @@ func (s *Server) NewAPIRouter() chi.Router {
 
 	r.Route("/repos/{repo}/origin-sessions", func(sub chi.Router) {
 		sub.Use(repos.RepoMiddleware(s.Manager))
+		sub.Get("/", handleListSessions(s.Manager, s.SessionManager))
 		sub.Post("/", handleCreateSession(s.Manager, s.SessionManager))
 		sub.Get("/{sessionID}", handleGetSession(s.Manager, s.SessionManager))
 		sub.Delete("/{sessionID}", handleDeleteSession(s.Manager, s.SessionManager))

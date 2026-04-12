@@ -630,6 +630,35 @@ func beginSSE(w http.ResponseWriter) (func(v any), bool) {
 	}, true
 }
 
+// handleListSessions serves GET /repos/{repo}/origin-sessions.
+// Returns a JSON array of active sessions for the given repo.
+func handleListSessions(rm *repos.Manager, sm *SessionManager) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		repo := chi.URLParam(r, "repo")
+		if rm.Get(repo) == nil {
+			writeError(w, http.StatusNotFound, "repo not found")
+			return
+		}
+		sessions := sm.ListByRepo(repo)
+		type sessionSummary struct {
+			SessionID string `json:"session_id"`
+			State     string `json:"state"`
+			URL       string `json:"url"`
+		}
+		out := make([]sessionSummary, 0, len(sessions))
+		for _, s := range sessions {
+			s.mu.Lock()
+			out = append(out, sessionSummary{
+				SessionID: s.ID,
+				State:     string(s.State),
+				URL:       s.URL,
+			})
+			s.mu.Unlock()
+		}
+		writeJSON(w, http.StatusOK, out)
+	}
+}
+
 // handleCommit handles POST /api/v1/{repo}/origin/session/{sessionID}/commit
 // It finalizes the origin connection by swapping the session's remote store
 // into the repo instance, saving remote config, and starting sync loops.
