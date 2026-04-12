@@ -15,12 +15,12 @@ func TestCollectionView_Marshal_HasCountAndEmbedded(t *testing.T) {
 	c := CollectionView[stubItem]{
 		Count: 2,
 		Links: LinkMap{
-			"self": {Href: "/api/v1-new/repos"},
+			"self": {Href: "/api/v1/repos"},
 		},
 		Embedded: map[string][]stubItem{
 			"repos": {
-				{Name: "alpha", Links: LinkMap{"self": {Href: "/api/v1-new/repos/alpha"}}},
-				{Name: "beta", Links: LinkMap{"self": {Href: "/api/v1-new/repos/beta"}}},
+				{Name: "alpha", Links: LinkMap{"self": {Href: "/api/v1/repos/alpha"}}},
+				{Name: "beta", Links: LinkMap{"self": {Href: "/api/v1/repos/beta"}}},
 			},
 		},
 	}
@@ -31,7 +31,7 @@ func TestCollectionView_Marshal_HasCountAndEmbedded(t *testing.T) {
 	s := string(b)
 	for _, want := range []string{
 		`"count":2`,
-		`"_links":{"self":{"href":"/api/v1-new/repos"}}`,
+		`"_links":{"self":{"href":"/api/v1/repos"}}`,
 		`"_embedded":{"repos":[`,
 		`"name":"alpha"`,
 		`"name":"beta"`,

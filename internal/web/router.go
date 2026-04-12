@@ -10,12 +10,12 @@ import (
 	"knomit/internal/web/hal"
 )
 
-// V2URLBase is the URL prefix for the API router.
-const V2URLBase = "/api/v1"
+// APIBase is the URL prefix for the API router.
+const APIBase = "/api/v1"
 
-// NewV2Router constructs the HAL v2 chi router for this Server. The router
-// is rooted at "/" — the caller mounts it under V2URLBase via chi.Mount.
-// Everything below this router assumes V2URLBase as the Server-level prefix.
+// NewAPIRouter constructs the HAL chi router for this Server. The router
+// is rooted at "/" — the caller mounts it under APIBase via chi.Mount.
+// Everything below this router assumes APIBase as the Server-level prefix.
 //
 // Middleware order:
 //  1. Recoverer — catch panics, return 500 problem+json
@@ -25,7 +25,7 @@ const V2URLBase = "/api/v1"
 // Per-route middleware (BranchMiddleware, RepoMiddleware) is attached at
 // the route-group level where branches/repos appear in the path, not at
 // the router root.
-func (s *Server) NewV2Router() chi.Router {
+func (s *Server) NewAPIRouter() chi.Router {
 	r := chi.NewRouter()
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.Compress(5))
@@ -38,16 +38,16 @@ func (s *Server) NewV2Router() chi.Router {
 			"method "+req.Method+" not allowed on "+req.URL.Path, req.URL.Path)
 	})
 
-	b := hal.URLBuilder{Base: V2URLBase}
-	r.Get("/", handleV2APIRoot(b))
-	r.Get("/repos", handleV2Repos(b, s.Manager))
-	r.Get("/repos/{repo}", handleV2Repo(b, s.Manager))
+	b := hal.URLBuilder{Base: APIBase}
+	r.Get("/", handleAPIRoot(b))
+	r.Get("/repos", handleHALRepos(b, s.Manager))
+	r.Get("/repos/{repo}", handleHALRepo(b, s.Manager))
 
 	lister := s.branchesLister
 	if lister == nil {
 		lister = defaultBranchesLister
 	}
-	r.Get("/repos/{repo}/branches", handleV2Branches(b, s.Manager, lister))
+	r.Get("/repos/{repo}/branches", handleHALBranches(b, s.Manager, lister))
 
 	reader := s.branchRootReader
 	if reader == nil {
@@ -55,7 +55,7 @@ func (s *Server) NewV2Router() chi.Router {
 	}
 	r.With(BranchMiddleware).Get(
 		"/repos/{repo}/branches/{branch}",
-		handleV2Branch(b, s.Manager, reader, s.AgentBranch, s.EmbeddingsEnabled),
+		handleHALBranch(b, s.Manager, reader, s.AgentBranch, s.EmbeddingsEnabled),
 	)
 
 	factReader := s.factReader
@@ -64,7 +64,7 @@ func (s *Server) NewV2Router() chi.Router {
 	}
 	r.With(BranchMiddleware).Get(
 		"/repos/{repo}/branches/{branch}/facts/*",
-		handleV2Fact(b, s.Manager, factReader),
+		handleHALFact(b, s.Manager, factReader),
 	)
 
 	// Legacy routes — kept under /{repo}/... until each is converted to HAL.

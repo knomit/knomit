@@ -67,7 +67,8 @@ func (s *Server) Handler() http.Handler {
 
 	r.Get("/docs", handleSwaggerUI())
 
-	r.Mount(V2URLBase, s.NewV2Router())
+	// Mount the API router.
+	r.Mount(APIBase, s.NewAPIRouter())
 
 	// Serve embedded web UI
 	staticHandler := StaticHandler()

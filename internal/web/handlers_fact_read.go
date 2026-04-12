@@ -17,7 +17,7 @@ import (
 // defaultFactReader when FactIndex.ReadFact surfaces a not-found condition.
 var errFactNotFound = errors.New("fact not found")
 
-// FactReader is the narrow interface the v2 single-fact handler depends on.
+// FactReader is the narrow interface the HAL fact handler depends on.
 // It combines reading a fact-at-anchor with checking whether a ref target
 // exists at the same anchor. Splitting these two concerns into one interface
 // lets the handler treat them as a single dependency for test injection;
@@ -90,8 +90,8 @@ func (defaultFactReader) Read(
 // says otherwise.
 func (defaultFactReader) Exists(string) bool { return false }
 
-// handleV2Fact serves GET /api/v1-new/repos/{repo}/branches/{branch}/facts/{path...}.
-func handleV2Fact(b hal.URLBuilder, m *repos.Manager, reader FactReader) http.HandlerFunc {
+// handleHALFact serves GET /api/v1/repos/{repo}/branches/{branch}/facts/{path...}.
+func handleHALFact(b hal.URLBuilder, m *repos.Manager, reader FactReader) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repoName := chi.URLParam(r, "repo")
 		ri := m.Get(repoName)

@@ -23,9 +23,9 @@ func newTestManagerWithRepos(t *testing.T, names ...string) *repos.Manager {
 	return m
 }
 
-func TestHandleV2Repos_ReturnsCollection(t *testing.T) {
+func TestHandleHALRepos_ReturnsCollection(t *testing.T) {
 	s := &Server{Manager: newTestManagerWithRepos(t, "alpha", "beta")}
-	r := s.NewV2Router()
+	r := s.NewAPIRouter()
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/repos", nil)
@@ -73,9 +73,9 @@ func TestHandleV2Repos_ReturnsCollection(t *testing.T) {
 	}
 }
 
-func TestHandleV2Repo_ReturnsRepoWithBranchesLink(t *testing.T) {
+func TestHandleHALRepo_ReturnsRepoWithBranchesLink(t *testing.T) {
 	s := &Server{Manager: newTestManagerWithRepos(t, "alpha")}
-	r := s.NewV2Router()
+	r := s.NewAPIRouter()
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/repos/alpha", nil)
@@ -102,14 +102,14 @@ func TestHandleV2Repo_ReturnsRepoWithBranchesLink(t *testing.T) {
 			t.Errorf("missing link %q", rel)
 		}
 	}
-	if got := body.Links["branches"].Href; got != V2URLBase+"/repos/alpha/branches" {
+	if got := body.Links["branches"].Href; got != APIBase+"/repos/alpha/branches" {
 		t.Errorf("branches link: %q", got)
 	}
 }
 
-func TestHandleV2Repo_UnknownReturns404Problem(t *testing.T) {
+func TestHandleHALRepo_UnknownReturns404Problem(t *testing.T) {
 	s := &Server{Manager: newTestManagerWithRepos(t, "alpha")}
-	r := s.NewV2Router()
+	r := s.NewAPIRouter()
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/repos/missing", nil)
@@ -123,9 +123,9 @@ func TestHandleV2Repo_UnknownReturns404Problem(t *testing.T) {
 	}
 }
 
-func TestHandleV2Repos_EmptyManagerReturnsEmptyCollection(t *testing.T) {
+func TestHandleHALRepos_EmptyManagerReturnsEmptyCollection(t *testing.T) {
 	s := &Server{Manager: newTestManagerWithRepos(t)}
-	r := s.NewV2Router()
+	r := s.NewAPIRouter()
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/repos", nil)

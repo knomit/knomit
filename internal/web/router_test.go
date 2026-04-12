@@ -6,9 +6,9 @@ import (
 	"testing"
 )
 
-func TestV2Router_UnknownRepoReturns404Problem(t *testing.T) {
+func TestAPIRouter_UnknownRepoReturns404Problem(t *testing.T) {
 	s := &Server{Manager: newTestManagerWithRepos(t)}
-	r := s.NewV2Router()
+	r := s.NewAPIRouter()
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/repos/missing", nil)
@@ -22,12 +22,12 @@ func TestV2Router_UnknownRepoReturns404Problem(t *testing.T) {
 	}
 }
 
-func TestServerHandler_MountsV2RouterAtV2Base(t *testing.T) {
+func TestServerHandler_MountsAPIRouter(t *testing.T) {
 	s := &Server{Manager: newTestManagerWithRepos(t)}
 	h := s.Handler()
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, V2URLBase+"/repos/missing", nil)
+	req := httptest.NewRequest(http.MethodGet, APIBase+"/repos/missing", nil)
 	h.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusNotFound {
