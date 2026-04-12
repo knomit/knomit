@@ -6,13 +6,12 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 
+	"knomit/internal/repos"
 	"knomit/internal/web/hal"
 )
 
-// V2URLBase is the URL prefix under which the new HAL router is mounted
-// during Plans 01 and 02. Plan 03 renames this to "/api/v1" as part of the
-// final swap that retires the legacy handlers.
-const V2URLBase = "/api/v1-new"
+// V2URLBase is the URL prefix for the API router.
+const V2URLBase = "/api/v1"
 
 // NewV2Router constructs the HAL v2 chi router for this Server. The router
 // is rooted at "/" — the caller mounts it under V2URLBase via chi.Mount.
@@ -67,6 +66,55 @@ func (s *Server) NewV2Router() chi.Router {
 		"/repos/{repo}/branches/{branch}/facts/*",
 		handleV2Fact(b, s.Manager, factReader),
 	)
+
+	// Legacy routes — kept under /{repo}/... until each is converted to HAL.
+	// Chi matches literal "/repos" before the param "/{repo}", so these
+	// coexist with the new HAL routes above without conflict.
+	r.Get("/openapi.yaml", handleOpenAPISpec())
+	r.Route("/{repo}", func(sub chi.Router) {
+		sub.Use(repos.RepoMiddleware(s.Manager))
+		sub.Get("/browse", handleBrowse(s.OntologyRoot, s.AgentBranch))
+		sub.Get("/fact", handleFact(s.AgentBranch))
+		sub.Put("/fact", handleFactWrite(s.AgentBranch))
+		sub.Delete("/fact", handleFactRetract(s.AgentBranch))
+		sub.Get("/search", handleSearch())
+		sub.Get("/explain", handleExplain())
+		sub.Get("/history", handleHistoryPaginated(s.AgentBranch))
+		sub.Get("/commit", handleCommitDetail(s.AgentBranch))
+		sub.Get("/stats", handleStats())
+		sub.Get("/activity", handleActivity(s.AgentBranch))
+		sub.Get("/status", handleStatus(s.EmbeddingsEnabled, s.OntologyRoot, s.AgentBranch))
+		sub.Post("/synthesize", s.handleSynthesizeStart())
+		sub.Post("/rebuild", handleRebuild())
+		sub.Get("/completions", handleCompletions())
+		sub.Get("/recent", handleRecent())
+		sub.Get("/events", handleEvents())
+		sub.Get("/origin", handleGetOrigin())
+		sub.Put("/origin", handleSetOrigin())
+		sub.Post("/origin/session", handleCreateSession(s.Manager, s.SessionManager))
+		sub.Get("/origin/session/{sessionID}", handleGetSession(s.Manager, s.SessionManager))
+		sub.Delete("/origin/session/{sessionID}", handleDeleteSession(s.Manager, s.SessionManager))
+		sub.Get("/origin/session/{sessionID}/test", handleTestConnectivity(s.Manager, s.SessionManager, s.AgentBranch))
+		sub.Get("/origin/session/{sessionID}/preview", handlePreview(s.Manager, s.SessionManager, s.AgentBranch))
+		sub.Post("/origin/session/{sessionID}/apply", handleApply(s.Manager, s.SessionManager, s.AgentBranch))
+		sub.Post("/origin/session/{sessionID}/commit", s.handleCommit(s.Manager, s.SessionManager, s.AgentBranch))
+
+		sub.Mount("/mcp", http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			profile := req.URL.Query().Get("profile")
+			if profile == "" {
+				profile = "code"
+			}
+			h, ok := s.mcpHandlers[profile]
+			if !ok {
+				h = s.mcpHandlers["code"]
+			}
+			if h == nil {
+				http.NotFound(w, req)
+				return
+			}
+			h.ServeHTTP(w, req)
+		}))
+	})
 
 	return r
 }

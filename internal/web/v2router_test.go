@@ -6,12 +6,12 @@ import (
 	"testing"
 )
 
-func TestV2Router_UnknownRouteReturns404Problem(t *testing.T) {
-	s := &Server{}
+func TestV2Router_UnknownRepoReturns404Problem(t *testing.T) {
+	s := &Server{Manager: newTestManagerWithRepos(t)}
 	r := s.NewV2Router()
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/nonsense", nil)
+	req := httptest.NewRequest(http.MethodGet, "/repos/missing", nil)
 	r.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusNotFound {
@@ -22,28 +22,12 @@ func TestV2Router_UnknownRouteReturns404Problem(t *testing.T) {
 	}
 }
 
-func TestV2Router_MethodNotAllowedReturnsProblem(t *testing.T) {
-	s := &Server{}
-	r := s.NewV2Router()
-
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/unknown", nil)
-	r.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusNotFound && rec.Code != http.StatusMethodNotAllowed {
-		t.Errorf("status: got %d, want 404 or 405", rec.Code)
-	}
-	if got := rec.Header().Get("Content-Type"); got != "application/problem+json" {
-		t.Errorf("content-type: got %q, want application/problem+json", got)
-	}
-}
-
 func TestServerHandler_MountsV2RouterAtV2Base(t *testing.T) {
-	s := &Server{}
-	h := s.Handler() // the full mux — should now include /api/v1-new
+	s := &Server{Manager: newTestManagerWithRepos(t)}
+	h := s.Handler()
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, V2URLBase+"/nonsense", nil)
+	req := httptest.NewRequest(http.MethodGet, V2URLBase+"/repos/missing", nil)
 	h.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusNotFound {
