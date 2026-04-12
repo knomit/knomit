@@ -93,6 +93,15 @@ func (s *Server) NewAPIRouter() chi.Router {
 		handleSearch(b, s.Manager, sp, s.Embedder),
 	)
 
+	sp2 := s.statsProvider
+	if sp2 == nil {
+		sp2 = defaultStatsProvider{}
+	}
+	r.With(BranchMiddleware).Get(
+		"/repos/{repo}/branches/{branch}/stats",
+		handleHALStats(b, s.Manager, sp2),
+	)
+
 	cp := s.commitsProvider
 	if cp == nil {
 		cp = defaultCommitsProvider{}
