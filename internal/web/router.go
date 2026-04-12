@@ -62,9 +62,13 @@ func (s *Server) NewAPIRouter() chi.Router {
 	if factReader == nil {
 		factReader = defaultFactReader{}
 	}
+	fsp := s.factSubProvider
+	if fsp == nil {
+		fsp = defaultFactSubProvider{}
+	}
 	r.With(BranchMiddleware).Get(
 		"/repos/{repo}/branches/{branch}/facts/*",
-		handleHALFact(b, s.Manager, factReader),
+		handleHALFact(b, s.Manager, factReader, fsp),
 	)
 
 	topicLister := s.topicLister

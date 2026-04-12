@@ -91,16 +91,23 @@ func (defaultFactReader) Read(
 func (defaultFactReader) Exists(string) bool { return false }
 
 // handleHALFact serves GET /api/v1/repos/{repo}/branches/{branch}/facts/{path...}.
-func handleHALFact(b hal.URLBuilder, m *repos.Manager, reader FactReader) http.HandlerFunc {
+// It also dispatches sub-resource requests (*/commits, */incoming, */outgoing).
+func handleHALFact(b hal.URLBuilder, m *repos.Manager, reader FactReader, subProvider factSubProvider) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repoName := chi.URLParam(r, "repo")
+		branch := BranchFromContext(r.Context())
+
+		// Dispatch sub-resource requests before any other processing.
+		if dispatchFactSubResource(b, m, subProvider, repoName, branch, w, r) {
+			return
+		}
+
 		ri := m.Get(repoName)
 		if ri == nil {
 			hal.WriteProblem(w, http.StatusNotFound, "Repo not found",
 				`no repo named "`+repoName+`"`, r.URL.Path)
 			return
 		}
-		branch := BranchFromContext(r.Context())
 		path := chi.URLParam(r, "*")
 		if path == "" {
 			hal.WriteProblem(w, http.StatusBadRequest, "Missing fact path",
