@@ -93,6 +93,15 @@ func (s *Server) NewAPIRouter() chi.Router {
 		handleSearch(b, s.Manager, sp, s.Embedder),
 	)
 
+	ap := s.activityProvider
+	if ap == nil {
+		ap = defaultActivityProvider{}
+	}
+	r.With(BranchMiddleware).Get(
+		"/repos/{repo}/branches/{branch}/activity",
+		handleHALActivity(b, s.Manager, ap),
+	)
+
 	fcp := s.factsCollectionProvider
 	if fcp == nil {
 		fcp = defaultFactsCollectionProvider{}
