@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"net/http"
 
 	mcpserver "github.com/mark3labs/mcp-go/server"
@@ -26,6 +27,14 @@ type Server struct {
 	Embedder          store.BatchEmbedder // nil if unavailable
 
 	mcpHandlers map[string]http.Handler // profile → handler
+
+	// branchesLister is a per-repo branch enumeration hook. Injected for
+	// tests; production wires it to ri.WithRead → svc.Branches().ListBranches.
+	branchesLister func(ri *repos.RepoInstance) ([]store.Branch, error)
+
+	branchRootReader func(ri *repos.RepoInstance, branch string) (branchRootInfo, error)
+
+	factReader FactReader
 }
 
 // buildMCPHandlers constructs one MCP server per profile, shared across all
@@ -105,6 +114,10 @@ func (s *Server) Handler() http.Handler {
 		}))
 	})
 
+	// Mount the HAL v2 router under a temporary prefix. Plan 03 renames this
+	// to /api/v1 and retires the legacy routes registered above.
+	r.Mount(V2URLBase, s.NewV2Router())
+
 	// Serve embedded web UI
 	staticHandler := StaticHandler()
 	r.Handle("/assets/*", staticHandler)
@@ -112,4 +125,53 @@ func (s *Server) Handler() http.Handler {
 
 	return r
 }
+
+// defaultBranchesLister reads the branch list from a repo's store via
+// WithRead. Returns nil, nil if the store is unavailable (e.g. the repo is
+// still opening) so handlers can distinguish "no data yet" from "error".
+func defaultBranchesLister(ri *repos.RepoInstance) ([]store.Branch, error) {
+	var (
+		out []store.Branch
+		err error
+	)
+	ri.WithRead(func(svc *store.Service) {
+		if svc == nil {
+			return
+		}
+		out, err = svc.Branches().ListBranches(contextTODO())
+	})
+	return out, err
+}
+
+// defaultBranchRootReader reads head + index watermark via the store. Plan
+// 02 may expand this to include more fields (branch metadata, last commit
+// time) as those handlers come online.
+func defaultBranchRootReader(ri *repos.RepoInstance, branch string) (branchRootInfo, error) {
+	var (
+		info branchRootInfo
+		err  error
+	)
+	ri.WithRead(func(svc *store.Service) {
+		if svc == nil {
+			return
+		}
+		head, herr := svc.Branches().HeadCommit(contextTODO(), branch)
+		if herr != nil {
+			err = herr
+			return
+		}
+		info.Head = head
+		idx, ierr := svc.IndexManager().SyncWatermark(contextTODO(), branch)
+		if ierr == nil {
+			info.IndexCommit = idx
+		}
+	})
+	return info, err
+}
+
+// contextTODO is a placeholder for context propagation. Plan 02 replaces
+// this with the request context where applicable; for now the lister is
+// only called from handler scopes that already hold a request context but
+// don't need cancellation for a trivial read.
+func contextTODO() context.Context { return context.Background() }
 
