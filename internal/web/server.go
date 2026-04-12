@@ -49,6 +49,8 @@ type Server struct {
 	domainsProvider domainsProvider
 
 	completionsProvider completionsProvider
+
+	factsCollectionProvider factsCollectionProvider
 }
 
 // buildMCPHandlers constructs one MCP server per profile, shared across all

@@ -93,6 +93,15 @@ func (s *Server) NewAPIRouter() chi.Router {
 		handleSearch(b, s.Manager, sp, s.Embedder),
 	)
 
+	fcp := s.factsCollectionProvider
+	if fcp == nil {
+		fcp = defaultFactsCollectionProvider{}
+	}
+	r.With(BranchMiddleware).Get(
+		"/repos/{repo}/branches/{branch}/facts",
+		handleHALFactsCollection(b, s.Manager, fcp),
+	)
+
 	cop := s.completionsProvider
 	if cop == nil {
 		cop = defaultCompletionsProvider{}
