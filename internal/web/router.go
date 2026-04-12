@@ -80,6 +80,15 @@ func (s *Server) NewAPIRouter() chi.Router {
 		handleTopicNode(b, s.Manager, s.OntologyRoot, topicLister),
 	)
 
+	sp := s.searchProvider
+	if sp == nil {
+		sp = defaultSearchProvider{}
+	}
+	r.With(BranchMiddleware).Get(
+		"/repos/{repo}/branches/{branch}/search",
+		handleSearch(b, s.Manager, sp, s.Embedder),
+	)
+
 	// Legacy routes — kept under /{repo}/... until each is converted to HAL.
 	// Chi matches literal "/repos" before the param "/{repo}", so these
 	// coexist with the new HAL routes above without conflict.
@@ -90,7 +99,7 @@ func (s *Server) NewAPIRouter() chi.Router {
 		sub.Get("/fact", handleFact(s.AgentBranch))
 		sub.Put("/fact", handleFactWrite(s.AgentBranch))
 		sub.Delete("/fact", handleFactRetract(s.AgentBranch))
-		sub.Get("/search", handleSearch())
+		sub.Get("/search", handleLegacySearch())
 		sub.Get("/explain", handleExplain())
 		sub.Get("/history", handleHistoryPaginated(s.AgentBranch))
 		sub.Get("/commit", handleCommitDetail(s.AgentBranch))

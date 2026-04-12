@@ -325,7 +325,7 @@ func handleFactRetract(agentBranch string) http.HandlerFunc {
 // The entities and domain filters are AND-combined (all specified values
 // must match). Each accepts a comma-separated list of terms.
 // Additional filters: type=<t1,t2>, exclude_type=<t1>, ep=<op1,op2>
-func handleSearch() http.HandlerFunc {
+func handleLegacySearch() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
 		branch := ri.AgentBranch()

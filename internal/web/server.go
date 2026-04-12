@@ -37,6 +37,8 @@ type Server struct {
 	factReader FactReader
 
 	topicLister TopicLister
+
+	searchProvider searchProvider
 }
 
 // buildMCPHandlers constructs one MCP server per profile, shared across all
