@@ -89,6 +89,19 @@ func (s *Server) NewAPIRouter() chi.Router {
 		handleSearch(b, s.Manager, sp, s.Embedder),
 	)
 
+	cp := s.commitsProvider
+	if cp == nil {
+		cp = defaultCommitsProvider{}
+	}
+	r.With(BranchMiddleware).Get(
+		"/repos/{repo}/branches/{branch}/commits",
+		handleHALCommitsList(b, s.Manager, cp),
+	)
+	r.With(BranchMiddleware).Get(
+		"/repos/{repo}/branches/{branch}/commits/{sha}",
+		handleHALCommitDetail(b, s.Manager, cp),
+	)
+
 	// Legacy routes — kept under /{repo}/... until each is converted to HAL.
 	// Chi matches literal "/repos" before the param "/{repo}", so these
 	// coexist with the new HAL routes above without conflict.
