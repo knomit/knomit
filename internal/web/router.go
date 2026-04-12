@@ -188,11 +188,11 @@ func (s *Server) NewAPIRouter() chi.Router {
 		}
 		h.ServeHTTP(w, req)
 	})
-	r.With(BranchMiddleware).HandleFunc(
+	r.With(BranchMiddleware, repos.RepoMiddleware(s.Manager)).HandleFunc(
 		"/repos/{repo}/branches/{branch}/mcp",
 		mcpDispatch.ServeHTTP,
 	)
-	r.With(BranchMiddleware).HandleFunc(
+	r.With(BranchMiddleware, repos.RepoMiddleware(s.Manager)).HandleFunc(
 		"/repos/{repo}/branches/{branch}/mcp/*",
 		mcpDispatch.ServeHTTP,
 	)
