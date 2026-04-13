@@ -241,14 +241,16 @@ func TestConcurrency_ParallelReadsDuringWrites(t *testing.T) {
 // ── F6 ────────────────────────────────────────────────────────────────────
 
 // TestConcurrency_ParallelPushesToSharedRemote: two repos share one
-// bare remote. Both write divergent commits on main and Push at the
-// same time. The production Push retries with force-push on
-// non-fast-forward, so both calls must succeed without error and the
-// final remote must be integral (one of the two pushes wins the race;
-// the other's force-push retry overwrites it). Both local repos remain
-// strictly clean.
+// bare remote. Both write disjoint commits on main (A adds kb/a.md, B
+// adds kb/b.md) and Push at the same time. The loser's push sees a
+// ref-update conflict, merges origin/main into its local main with
+// "local wins" semantics (which preserves A's non-overlapping changes
+// since they don't touch the same paths), and retries. Both pushes
+// must succeed, both locals remain clean, and an observer cloning the
+// remote after the dust settles must see all three files — baseline,
+// A's file, and B's file.
 func TestConcurrency_ParallelPushesToSharedRemote(t *testing.T) {
-	t.Log("F6: two repos push divergently to the same remote in parallel; both succeed; both locals clean")
+	t.Log("F6: two repos push disjoint commits in parallel; both succeed via fetch-merge-retry; observer sees all files")
 	sb := testenv.NewStoryboard(t)
 	remote := sb.BareRemote("origin")
 
@@ -269,7 +271,8 @@ func TestConcurrency_ParallelPushesToSharedRemote(t *testing.T) {
 	bMain.Sync()
 	bMain.Write("kb/b.md", testenv.Fact("b"), "B writes b")
 
-	// Push both in parallel. Force-push fallback must make both succeed.
+	// Push both in parallel. Whichever loses the ref-update race must
+	// fetch-merge-retry under StrategyLocalWins and still succeed.
 	var wg sync.WaitGroup
 	wg.Add(2)
 	go func() {
@@ -283,6 +286,178 @@ func TestConcurrency_ParallelPushesToSharedRemote(t *testing.T) {
 	wg.Wait()
 
 	// Both local repos remain strictly clean.
+	a.MustVerify()
+	b.MustVerify()
+
+	// Bring both locals up to date — whichever lost the ref race
+	// already merged; the winner still needs to Sync to see the
+	// loser's merge commit. After that, both mains must see all
+	// three files.
+	aMain.Sync()
+	bMain.Sync()
+	for _, repo := range []*testenv.RepoHandle{a, b} {
+		head := branchHead(t, repo, "main")
+		snap := &testenv.Snapshot{Commit: head, Branch: repo.Branch("main")}
+		snap.Fact("kb/base.md").MustExist()
+		snap.Fact("kb/a.md").MustExist()
+		snap.Fact("kb/b.md").MustExist()
+	}
+}
+
+// branchHead resolves the current git HEAD commit hash for the named
+// branch directly via the store API, bypassing the DSL's snapshot
+// stack. Needed when a commit was produced inside the store (e.g. via
+// Push's internal fetch-merge-retry) without going through a DSL
+// mutation, so b.Head() would return a stale pre-push snapshot.
+func branchHead(t *testing.T, r *testenv.RepoHandle, branch string) string {
+	t.Helper()
+	var hash string
+	var err error
+	r.Instance().WithRead(func(svc *store.Service) {
+		hash, err = svc.Branches().HeadCommit(context.Background(), branch)
+	})
+	if err != nil {
+		t.Fatalf("HeadCommit(%s): %v", branch, err)
+	}
+	return hash
+}
+
+// ── F7 ────────────────────────────────────────────────────────────────────
+
+// TestConcurrency_PushContentConflict_LocalWins: two repos both write
+// to the same path on main with different content, then push in
+// parallel. Both pushes must succeed. The loser of the ref-update race
+// reconciles with StrategyLocalWins, which means its version of the
+// overlapping path wins — so the final remote content for kb/shared.md
+// equals whichever pusher pushed LAST (the loser of the ref-race is
+// the winner of the content). Non-overlapping baseline survives.
+func TestConcurrency_PushContentConflict_LocalWins(t *testing.T) {
+	t.Log("F7: two repos push conflicting content to same path; both succeed; final content matches one of the two")
+	sb := testenv.NewStoryboard(t)
+	remote := sb.BareRemote("origin")
+
+	seed := sb.Repo("seed").Connect(remote)
+	seedMain := seed.Branch("main")
+	seedMain.Write("kb/base.md", testenv.Fact("base"), "baseline")
+	seedMain.Push()
+
+	a := sb.Repo("a").Connect(remote)
+	aMain := a.Branch("main")
+	aMain.Sync()
+	aMain.Write("kb/shared.md", testenv.Fact("shared").Body("A version"), "A writes shared")
+
+	b := sb.Repo("b").Connect(remote)
+	bMain := b.Branch("main")
+	bMain.Sync()
+	bMain.Write("kb/shared.md", testenv.Fact("shared").Body("B version"), "B writes shared")
+
+	barrier := sb.NewBarrier(2)
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		barrier.Wait()
+		aMain.Push()
+	}()
+	go func() {
+		defer wg.Done()
+		barrier.Wait()
+		bMain.Push()
+	}()
+	wg.Wait()
+
+	a.MustVerify()
+	b.MustVerify()
+
+	// Sync both so they converge on the final remote state, then
+	// verify the content resolution. The last pusher's local-wins
+	// merge overwrites the first pusher's version, so both
+	// mains must now agree on some single content for kb/shared.md.
+	aMain.Sync()
+	bMain.Sync()
+
+	aHead := &testenv.Snapshot{Commit: branchHead(t, a, "main"), Branch: aMain}
+	bHead := &testenv.Snapshot{Commit: branchHead(t, b, "main"), Branch: bMain}
+
+	aShared := aHead.Fact("kb/shared.md").MustExist()
+	bShared := bHead.Fact("kb/shared.md").MustExist()
+	require.Equal(t, aShared.Raw().Body, bShared.Raw().Body,
+		"after both syncs the two repos must converge on the same shared.md body")
+	body := aShared.Raw().Body
+	if body != "A version" && body != "B version" {
+		t.Fatalf("kb/shared.md body = %q; expected \"A version\" or \"B version\"", body)
+	}
+	// Baseline from the non-overlapping path must survive on both.
+	aHead.Fact("kb/base.md").MustExist()
+	bHead.Fact("kb/base.md").MustExist()
+}
+
+// ── F8 ────────────────────────────────────────────────────────────────────
+
+// TestConcurrency_PushRetryExhaustion: lower the push retry budget to
+// 1 attempt, then force two disjoint-commit pushes to race. Exactly
+// one wins (the first to update the ref); the other hits the ref-
+// update conflict on its single allowed attempt and exhausts the
+// retry budget. The failing push must surface the "exhausted N
+// attempts" error rather than livelocking or silently succeeding.
+func TestConcurrency_PushRetryExhaustion(t *testing.T) {
+	t.Log("F8: maxPushAttempts=1 + two racing pushers; loser reports \"exhausted\" error; winner succeeds")
+	restore := store.SetMaxPushAttemptsForTest(1)
+	defer restore()
+
+	sb := testenv.NewStoryboard(t)
+	remote := sb.BareRemote("origin")
+
+	seed := sb.Repo("seed").Connect(remote)
+	seedMain := seed.Branch("main")
+	seedMain.Write("kb/base.md", testenv.Fact("base"), "baseline")
+	seedMain.Push()
+
+	a := sb.Repo("a").Connect(remote)
+	aMain := a.Branch("main")
+	aMain.Sync()
+	aMain.Write("kb/a.md", testenv.Fact("a"), "A writes")
+
+	b := sb.Repo("b").Connect(remote)
+	bMain := b.Branch("main")
+	bMain.Sync()
+	bMain.Write("kb/b.md", testenv.Fact("b"), "B writes")
+
+	barrier := sb.NewBarrier(2)
+	var wg sync.WaitGroup
+	var aErr, bErr error
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		barrier.Wait()
+		a.Instance().WithRead(func(svc *store.Service) {
+			_, aErr = svc.Remote().Push(context.Background(), "main", nil)
+		})
+	}()
+	go func() {
+		defer wg.Done()
+		barrier.Wait()
+		b.Instance().WithRead(func(svc *store.Service) {
+			_, bErr = svc.Remote().Push(context.Background(), "main", nil)
+		})
+	}()
+	wg.Wait()
+
+	// Exactly one push succeeds and one fails with the exhaustion error.
+	succeeded := 0
+	failed := 0
+	for _, err := range []error{aErr, bErr} {
+		if err == nil {
+			succeeded++
+			continue
+		}
+		failed++
+		require.Contains(t, err.Error(), "exhausted",
+			"failure must be retry-budget exhaustion, got: %v", err)
+	}
+	require.Equal(t, 1, succeeded, "exactly one push must succeed (aErr=%v, bErr=%v)", aErr, bErr)
+	require.Equal(t, 1, failed, "exactly one push must exhaust retries (aErr=%v, bErr=%v)", aErr, bErr)
+
 	a.MustVerify()
 	b.MustVerify()
 }

@@ -1,6 +1,5 @@
 // Remote synchronization: fetches from origin and merges the remote branch
-// into the agent branch using a common-ancestor-aware three-way merge with
-// "origin wins" semantics.
+// into the local branch using a common-ancestor-aware three-way merge.
 package store
 
 import (
@@ -15,6 +14,27 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/transport"
 	"github.com/rs/zerolog/log"
 )
+
+// maxPushAttempts bounds the total number of push attempts (initial + retries)
+// in the fetch-merge-retry loop on concurrent push conflicts. Under sustained
+// contention the loop eventually surfaces an error rather than livelocking.
+//
+// Declared as a var so tests can lower it to force exhaustion deterministically
+// via SetMaxPushAttempts. Not part of the public API.
+var maxPushAttempts = 5
+
+// isRefUpdateConflict reports whether err looks like a concurrent ref-update
+// race on push — the remote's branch advanced between our advertise and
+// update phases, or is otherwise ahead of our local history.
+func isRefUpdateConflict(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "non-fast-forward") ||
+		strings.Contains(msg, "incorrect old value provided") ||
+		strings.Contains(msg, "failed to update ref")
+}
 
 // Sync fetches from origin and merges origin/<remoteBranch> into localBranch
 // using a three-way merge with "origin wins" semantics.
@@ -53,9 +73,23 @@ func (ri *remoteIndex) Sync(ctx context.Context, localBranch string, auth transp
 		return SyncResult{}, nil
 	}
 
-	// Fetch from origin.
+	return ri.syncLocked(ctx, localBranch, remoteBranch, auth, StrategyRemoteWins)
+}
+
+// syncLocked fetches from origin and merges origin/<remoteBranch> into
+// <localBranch> using the given conflict strategy.
+//
+// The caller must hold ri.rh.lockBranch(localBranch). This helper does NOT
+// update the remote status row — that is the outer caller's responsibility
+// (Sync writes sync-status; Push writes push-status).
+func (ri *remoteIndex) syncLocked(
+	ctx context.Context,
+	localBranch, remoteBranch string,
+	auth transport.AuthMethod,
+	strategy ConflictStrategy,
+) (SyncResult, error) {
 	log.Debug().Msg("git sync: fetching from origin")
-	err = ri.rh.repo.Fetch(&gogit.FetchOptions{
+	err := ri.rh.repo.Fetch(&gogit.FetchOptions{
 		RemoteName: "origin",
 		Auth:       auth,
 	})
@@ -71,7 +105,7 @@ func (ri *remoteIndex) Sync(ctx context.Context, localBranch string, auth transp
 	}
 	originHash := originRef.Hash()
 
-	// Get current agent branch HEAD.
+	// Get current local branch HEAD.
 	agentRefName := plumbing.NewBranchReferenceName(localBranch)
 	agentRef, err := ri.rh.gits.Reference(agentRefName)
 	if err != nil {
@@ -145,9 +179,13 @@ func (ri *remoteIndex) Sync(ctx context.Context, localBranch string, auth transp
 
 	log.Debug().Str("base", baseCommit.Hash.String()[:8]).Msg("git sync: merge base")
 
-	// Three-way merge: diff base→origin, apply to agent tree with
-	// RemoteWins semantics (origin is the authoritative side for pulls).
-	mergedTreeHash, err := ri.rh.mergeTreesWithStrategy(ctx, baseCommit, originCommit, agentCommit, StrategyRemoteWins)
+	// Three-way merge: diff base→origin, apply to agent tree. Conflict
+	// resolution is per the caller's strategy:
+	//   - StrategyRemoteWins: used by Sync (pull). Origin is authoritative.
+	//   - StrategyLocalWins:  used by Push retry. The pusher's changes are
+	//     authoritative; origin's concurrent changes are preserved for
+	//     non-overlapping paths.
+	mergedTreeHash, err := ri.rh.mergeTreesWithStrategy(ctx, baseCommit, originCommit, agentCommit, strategy)
 	if err != nil {
 		return SyncResult{}, fmt.Errorf("Sync: three-way merge: %w", err)
 	}
@@ -194,9 +232,14 @@ func (ri *remoteIndex) Sync(ctx context.Context, localBranch string, auth transp
 // Push pushes the given branch to origin.
 // Returns PushResult{Pushed: false} if already up to date.
 //
-// If the push fails with a non-fast-forward error, it retries with a force
-// push. This is safe because agent branches are per-machine — no other machine
-// writes to the same branch.
+// On a ref-update conflict (remote's branch advanced during our push), Push
+// fetches origin, merges origin/<branch> into <branch> locally with
+// StrategyLocalWins (the pusher's changes are authoritative for overlapping
+// paths), then retries the push. This preserves both sides' work for
+// non-overlapping paths — the common case on shared branches like main.
+//
+// The retry loop is bounded by maxPushAttempts to avoid livelock under
+// sustained contention.
 func (ri *remoteIndex) Push(ctx context.Context, branch string, auth transport.AuthMethod) (res PushResult, retErr error) {
 	unlock := ri.rh.lockBranch(branch)
 	defer unlock()
@@ -217,45 +260,38 @@ func (ri *remoteIndex) Push(ctx context.Context, branch string, auth transport.A
 	}()
 
 	refspec := fmt.Sprintf("refs/heads/%s:refs/heads/%s", branch, branch)
-	forceRefspec := fmt.Sprintf("+refs/heads/%s:refs/heads/%s", branch, branch)
 
-	log.Debug().Str("branch", branch).Msg("git push: pushing branch")
-	err := ri.rh.repo.Push(&gogit.PushOptions{
-		RemoteName: "origin",
-		RefSpecs:   []gogitconfig.RefSpec{gogitconfig.RefSpec(refspec)},
-		Auth:       auth,
-	})
-	if err == gogit.NoErrAlreadyUpToDate {
-		return PushResult{Pushed: false}, nil
-	}
-	// Retry with a force-push on any non-fast-forward condition. Two
-	// distinct error strings cover the same scenario:
-	//
-	//   - "non-fast-forward": go-git observed a non-ff ref state before
-	//     the push; the remote's branch already has commits not in our
-	//     local history.
-	//   - "incorrect old value provided": the remote's transport did a
-	//     compare-and-swap ref update and the ref advanced between our
-	//     advertise and update phases (typical under concurrent pushes
-	//     from two processes to the same bare remote).
-	//
-	// Both are safe to resolve with a force-push because agent branches
-	// are per-machine — no other machine writes to the same branch — and
-	// the branch-lock retry loop on the caller side ensures any local
-	// commits that would be overwritten are still reachable on the losing
-	// pusher's local history.
-	if err != nil && (strings.Contains(err.Error(), "non-fast-forward") ||
-		strings.Contains(err.Error(), "incorrect old value provided")) {
-		err = ri.rh.repo.Push(&gogit.PushOptions{
+	var lastErr error
+	for attempt := 0; attempt < maxPushAttempts; attempt++ {
+		log.Debug().Str("branch", branch).Int("attempt", attempt).Msg("git push: pushing branch")
+		err := ri.rh.repo.Push(&gogit.PushOptions{
 			RemoteName: "origin",
-			RefSpecs:   []gogitconfig.RefSpec{gogitconfig.RefSpec(forceRefspec)},
+			RefSpecs:   []gogitconfig.RefSpec{gogitconfig.RefSpec(refspec)},
 			Auth:       auth,
 		})
-	}
-	if err != nil {
-		return PushResult{}, fmt.Errorf("Push: %w", err)
+		if err == gogit.NoErrAlreadyUpToDate {
+			return PushResult{Pushed: false}, nil
+		}
+		if err == nil {
+			log.Info().Str("branch", branch).Msg("git push: pushed branch")
+			return PushResult{Pushed: true}, nil
+		}
+		if !isRefUpdateConflict(err) {
+			return PushResult{}, fmt.Errorf("Push: %w", err)
+		}
+
+		// Remote advanced under us. Fetch, merge origin/<branch> into
+		// local <branch> with "local wins" semantics, and retry the push.
+		// Skip the merge on the final attempt — no retry will follow.
+		lastErr = err
+		if attempt+1 >= maxPushAttempts {
+			break
+		}
+		log.Debug().Err(err).Int("attempt", attempt).Msg("git push: ref conflict, merging remote before retry")
+		if _, merr := ri.syncLocked(ctx, branch, branch, auth, StrategyLocalWins); merr != nil {
+			return PushResult{}, fmt.Errorf("Push: reconcile after conflict: %w", merr)
+		}
 	}
 
-	log.Info().Str("branch", branch).Msg("git push: pushed branch")
-	return PushResult{Pushed: true}, nil
+	return PushResult{}, fmt.Errorf("Push: exhausted %d attempts after conflict: %w", maxPushAttempts, lastErr)
 }
