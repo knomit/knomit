@@ -407,9 +407,9 @@ export const api = {
       body: JSON.stringify(opts),
     }).then(r => { if (!r.ok) throw new Error(r.statusText); return r.json(); }),
 
-  retractFact: (repo: string, branch: string, path: string): Promise<{ commit: string }> =>
+  retractFact: (repo: string, branch: string, path: string): Promise<void> =>
     fetch(`${branchBase(repo, branch)}/facts/${path}`, { method: 'DELETE' })
-      .then(r => { if (!r.ok) return r.json().then(e => { throw new Error(e.error || r.statusText); }); return r.json(); }),
+      .then(r => { if (!r.ok) return r.json().then(e => { throw new Error(e.title || e.detail || r.statusText); }); }),
 
   completions: (repo: string, branch: string, category: string, prefix = ''): Promise<{ values: string[] }> =>
     fetch(`${branchBase(repo, branch)}/completions?category=${encodeURIComponent(category)}&prefix=${encodeURIComponent(prefix)}`).then(r => r.json()),

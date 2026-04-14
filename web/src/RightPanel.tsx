@@ -567,6 +567,7 @@ export function RightPanel({ state, dispatch, navigate, onExplain }: {
 
     return (
       <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
+        {commitPanel}
         <div data-testid="stats-view" style={{ flex: 1, padding: '24px 28px', overflowY: 'auto', boxSizing: 'border-box' }}>
           {stats ? (
             <>
