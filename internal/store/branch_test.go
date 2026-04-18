@@ -29,3 +29,19 @@ func TestResolveRef_MissingBranch_WrapsErrBranchNotFound(t *testing.T) {
 		t.Errorf("error should also wrap plumbing.ErrReferenceNotFound, got: %v", err)
 	}
 }
+
+func TestBranchID_MissingBranch_WrapsErrBranchNotFound(t *testing.T) {
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	defer svc.Close()
+	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+
+	_, err = svc.rh.branchID(context.Background(), "does-not-exist")
+	if err == nil {
+		t.Fatalf("expected error for missing branch, got nil")
+	}
+	if !errors.Is(err, ErrBranchNotFound) {
+		t.Errorf("error should wrap ErrBranchNotFound, got: %v", err)
+	}
+}

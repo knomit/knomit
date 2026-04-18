@@ -164,7 +164,7 @@ func (rh *repoHandler) branchID(ctx context.Context, name string) (int64, error)
 	var id int64
 	err := conn(ctx, rh.db).QueryRowContext(ctx, `SELECT id FROM branches WHERE name = ?`, name).Scan(&id)
 	if err == sql.ErrNoRows {
-		return 0, fmt.Errorf("branch %q not found", name)
+		return 0, fmt.Errorf("branch %q: %w", name, ErrBranchNotFound)
 	}
 	if err != nil {
 		return 0, fmt.Errorf("branch lookup: %w", err)
