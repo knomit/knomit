@@ -57,8 +57,7 @@ func handleHALStats(b hal.URLBuilder, m *repos.Manager, provider statsProvider) 
 
 		result, err := provider.Stats(ri, branch, "")
 		if err != nil {
-			hal.WriteProblem(w, http.StatusInternalServerError,
-				"Failed to load stats", err.Error(), r.URL.Path)
+			writeStoreError(w, r, err, "Failed to load stats", branch)
 			return
 		}
 
