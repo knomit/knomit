@@ -94,8 +94,7 @@ func handleFactUpdate(b hal.URLBuilder, m *repos.Manager, writer FactWriter) htt
 
 		msg := "edit: update " + path + " via API"
 		if _, err := writer.Write(ri, branch, path, body.Content, msg); err != nil {
-			hal.WriteProblem(w, http.StatusInternalServerError,
-				"Failed to write fact", err.Error(), r.URL.Path)
+			writeStoreError(w, r, err, "Failed to write fact", branch)
 			return
 		}
 
@@ -134,8 +133,7 @@ func handleFactDelete(b hal.URLBuilder, m *repos.Manager, writer FactWriter) htt
 
 		msg := "manual-review: retract " + path
 		if _, err := writer.Delete(ri, branch, path, msg); err != nil {
-			hal.WriteProblem(w, http.StatusInternalServerError,
-				"Failed to delete fact", err.Error(), r.URL.Path)
+			writeStoreError(w, r, err, "Failed to delete fact", branch)
 			return
 		}
 
