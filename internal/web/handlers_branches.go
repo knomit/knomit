@@ -91,8 +91,7 @@ func handleHALBranch(
 		branch := BranchFromContext(r.Context())
 		info, err := reader(ri, branch)
 		if err != nil {
-			hal.WriteProblem(w, http.StatusInternalServerError,
-				"Failed to read branch", err.Error(), r.URL.Path)
+			writeStoreError(w, r, err, "Failed to read branch", branch)
 			return
 		}
 
