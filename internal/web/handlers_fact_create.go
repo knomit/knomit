@@ -96,8 +96,7 @@ func handleFactCreate(b hal.URLBuilder, m *repos.Manager, ontologyRoot string, w
 		msg := "create: " + req.Title + " via API"
 
 		if _, err := writer.Write(ri, branch, path, content, msg); err != nil {
-			hal.WriteProblem(w, http.StatusInternalServerError,
-				"Failed to write fact", err.Error(), r.URL.Path)
+			writeStoreError(w, r, err, "Failed to write fact", branch)
 			return
 		}
 
