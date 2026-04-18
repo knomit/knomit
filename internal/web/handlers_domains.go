@@ -91,8 +91,7 @@ func handleHALDomains(b hal.URLBuilder, m *repos.Manager, provider domainsProvid
 
 		domains, err := provider.DomainStats(ri, branch)
 		if err != nil {
-			hal.WriteProblem(w, http.StatusInternalServerError,
-				"Failed to load domains", err.Error(), r.URL.Path)
+			writeStoreError(w, r, err, "Failed to load domains", branch)
 			return
 		}
 		if domains == nil {
@@ -147,8 +146,7 @@ func handleHALDomainFacts(b hal.URLBuilder, m *repos.Manager, provider domainsPr
 
 		results, err := provider.DomainFacts(ri, branch, domainName)
 		if err != nil {
-			hal.WriteProblem(w, http.StatusInternalServerError,
-				"Failed to load domain facts", err.Error(), r.URL.Path)
+			writeStoreError(w, r, err, "Failed to load domain facts", branch)
 			return
 		}
 		if results == nil {
