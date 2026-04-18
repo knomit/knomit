@@ -59,8 +59,7 @@ func handleHALActivity(b hal.URLBuilder, m *repos.Manager, provider activityProv
 
 		result, err := provider.Activity(ri, branch, path)
 		if err != nil {
-			hal.WriteProblem(w, http.StatusInternalServerError,
-				"Failed to load activity", err.Error(), r.URL.Path)
+			writeStoreError(w, r, err, "Failed to load activity", branch)
 			return
 		}
 
