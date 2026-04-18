@@ -143,8 +143,7 @@ func handleSearch(b hal.URLBuilder, m *repos.Manager, provider searchProvider, e
 		results, err := provider.Search(ri, emb, branch, q)
 		if err != nil {
 			log.Debug().Err(err).Msg("hal search failed")
-			hal.WriteProblem(w, http.StatusInternalServerError,
-				"Search failed", err.Error(), r.URL.Path)
+			writeStoreError(w, r, err, "Search failed", branch)
 			return
 		}
 
