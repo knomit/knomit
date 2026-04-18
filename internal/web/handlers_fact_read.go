@@ -123,8 +123,7 @@ func handleHALFact(b hal.URLBuilder, m *repos.Manager, reader FactReader, subPro
 					`no fact at path "`+path+`" on branch "`+branch+`"`, r.URL.Path)
 				return
 			}
-			hal.WriteProblem(w, http.StatusInternalServerError,
-				"Failed to read fact", err.Error(), r.URL.Path)
+			writeStoreError(w, r, err, "Failed to read fact", branch)
 			return
 		}
 

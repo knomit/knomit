@@ -149,8 +149,7 @@ func handleHALCommitsList(b hal.URLBuilder, m *repos.Manager, provider commitsPr
 
 		entries, next, prev, err := provider.LogPaginated(ri, branch, ontologyRoot, limit, after, from, before)
 		if err != nil {
-			hal.WriteProblem(w, http.StatusInternalServerError,
-				"Failed to list commits", err.Error(), r.URL.Path)
+			writeStoreError(w, r, err, "Failed to list commits", branch)
 			return
 		}
 		if entries == nil {

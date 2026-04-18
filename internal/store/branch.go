@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"io"
 	"sort"
@@ -163,7 +164,7 @@ func (rh *repoHandler) branchID(ctx context.Context, name string) (int64, error)
 	var id int64
 	err := conn(ctx, rh.db).QueryRowContext(ctx, `SELECT id FROM branches WHERE name = ?`, name).Scan(&id)
 	if err == sql.ErrNoRows {
-		return 0, fmt.Errorf("branch %q not found", name)
+		return 0, fmt.Errorf("branch %q: %w", name, ErrBranchNotFound)
 	}
 	if err != nil {
 		return 0, fmt.Errorf("branch lookup: %w", err)
@@ -361,6 +362,9 @@ func (rh *repoHandler) configureRemote(url, branch string) error {
 func (rh *repoHandler) resolveRef(ctx context.Context, branch string) (plumbing.Hash, error) {
 	ref, err := rh.gits.Reference(plumbing.NewBranchReferenceName(branch))
 	if err != nil {
+		if errors.Is(err, plumbing.ErrReferenceNotFound) {
+			return plumbing.ZeroHash, fmt.Errorf("resolveRef %q: %w: %w", branch, ErrBranchNotFound, err)
+		}
 		return plumbing.ZeroHash, fmt.Errorf("resolveRef %q: %w", branch, err)
 	}
 	return ref.Hash(), nil

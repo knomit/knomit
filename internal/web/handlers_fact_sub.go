@@ -103,8 +103,7 @@ func handleFactCommits(b hal.URLBuilder, m *repos.Manager, provider factSubProvi
 
 	entries, next, prev, err := provider.LogPaginatedForPath(ri, branch, factPath, limit, after, from, before)
 	if err != nil {
-		hal.WriteProblem(w, http.StatusInternalServerError,
-			"Failed to list commits", err.Error(), r.URL.Path)
+		writeStoreError(w, r, err, "Failed to list commits", branch)
 		return
 	}
 	if entries == nil {
@@ -162,8 +161,7 @@ func handleFactIncoming(b hal.URLBuilder, m *repos.Manager, provider factSubProv
 
 	result, err := provider.ExplainFact(ri, branch, factPath)
 	if err != nil {
-		hal.WriteProblem(w, http.StatusInternalServerError,
-			"Failed to load incoming refs", err.Error(), r.URL.Path)
+		writeStoreError(w, r, err, "Failed to load incoming refs", branch)
 		return
 	}
 
@@ -192,8 +190,7 @@ func handleFactOutgoing(b hal.URLBuilder, m *repos.Manager, provider factSubProv
 
 	result, err := provider.ExplainFact(ri, branch, factPath)
 	if err != nil {
-		hal.WriteProblem(w, http.StatusInternalServerError,
-			"Failed to load outgoing refs", err.Error(), r.URL.Path)
+		writeStoreError(w, r, err, "Failed to load outgoing refs", branch)
 		return
 	}
 

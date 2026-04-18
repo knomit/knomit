@@ -63,8 +63,7 @@ func handleCommitAnchoredFact(b hal.URLBuilder, m *repos.Manager, reader FactRea
 				return
 			}
 			log.Error().Err(err).Str("path", path).Str("branch", branch).Str("sha", sha).Msg("commit-anchored fact read failed")
-			hal.WriteProblem(w, http.StatusInternalServerError,
-				"Failed to read fact", err.Error(), r.URL.Path)
+			writeStoreError(w, r, err, "Failed to read fact", branch)
 			return
 		}
 
@@ -103,8 +102,7 @@ func handleCommitAnchoredOutgoing(
 
 	result, err := subProvider.ExplainFact(ri, a.Branch, factPath)
 	if err != nil {
-		hal.WriteProblem(w, http.StatusInternalServerError,
-			"Failed to load outgoing refs", err.Error(), r.URL.Path)
+		writeStoreError(w, r, err, "Failed to load outgoing refs", a.Branch)
 		return
 	}
 

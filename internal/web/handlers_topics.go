@@ -107,8 +107,7 @@ func handleTopicFacts(b hal.URLBuilder, m *repos.Manager, ontologyRoot string, l
 		dirPath := ontologyRoot + "/" + topicPath
 		entries, err := lister.ListDir(ri, branch, dirPath)
 		if err != nil {
-			hal.WriteProblem(w, http.StatusInternalServerError,
-				"Failed to list topic facts", err.Error(), r.URL.Path)
+			writeStoreError(w, r, err, "Failed to list topic facts", branch)
 			return
 		}
 
@@ -169,8 +168,7 @@ func handleTopicStats(b hal.URLBuilder, m *repos.Manager, ontologyRoot string, t
 		// Tests that need stub stats should test via the full server with a wired provider.
 		result, err := defaultStatsProvider{}.Stats(ri, branch, pathPrefix)
 		if err != nil {
-			hal.WriteProblem(w, http.StatusInternalServerError,
-				"Failed to load stats", err.Error(), r.URL.Path)
+			writeStoreError(w, r, err, "Failed to load stats", branch)
 			return
 		}
 
@@ -225,8 +223,7 @@ func topicHandler(b hal.URLBuilder, m *repos.Manager, ontologyRoot string, liste
 		entries, err := lister.ListDir(ri, branch, dirPath)
 		if err != nil {
 			log.Error().Err(err).Str("branch", branch).Str("path", dirPath).Msg("ListDir failed")
-			hal.WriteProblem(w, http.StatusInternalServerError,
-				"Failed to list topics", err.Error(), r.URL.Path)
+			writeStoreError(w, r, err, "Failed to list topics", branch)
 			return
 		}
 

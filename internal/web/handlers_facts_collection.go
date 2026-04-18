@@ -105,8 +105,7 @@ func handleHALFactsCollection(b hal.URLBuilder, m *repos.Manager, provider facts
 
 		entries, total, err := provider.RecentFacts(ri, branch, pathPrefix, query, limit, offset, includeTypes, excludeTypes, domain, entities, epOps)
 		if err != nil {
-			hal.WriteProblem(w, http.StatusInternalServerError,
-				"Failed to list facts", err.Error(), r.URL.Path)
+			writeStoreError(w, r, err, "Failed to list facts", branch)
 			return
 		}
 		if entries == nil {

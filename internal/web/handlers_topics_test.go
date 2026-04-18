@@ -2,6 +2,7 @@ package web
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -230,5 +231,33 @@ func TestHandleTopicNode_UnknownRepo_Returns404(t *testing.T) {
 	}
 	if got := rec.Header().Get("Content-Type"); got != "application/problem+json" {
 		t.Errorf("content-type: got %q, want application/problem+json", got)
+	}
+}
+
+func TestHandleTopics_MissingBranch_Returns404(t *testing.T) {
+	lister := &stubTopicLister{
+		listErr: fmt.Errorf("ListDir: ref: %w", store.ErrBranchNotFound),
+	}
+	s := &Server{
+		Manager:      newTestManagerWithRepos(t, "alpha"),
+		OntologyRoot: "ontology",
+		topicLister:  lister,
+	}
+	r := s.NewAPIRouter()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet,
+		"/repos/alpha/branches/does-not-exist/topics", nil)
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404; body=%s", rec.Code, rec.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if body["title"] != "Branch not found" {
+		t.Errorf("title = %q, want Branch not found", body["title"])
 	}
 }

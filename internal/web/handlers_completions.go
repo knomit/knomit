@@ -57,8 +57,7 @@ func handleHALCompletions(b hal.URLBuilder, m *repos.Manager, provider completio
 
 		values, err := provider.Completions(ri, branch, category, prefix, 20)
 		if err != nil {
-			hal.WriteProblem(w, http.StatusInternalServerError,
-				"Failed to load completions", err.Error(), r.URL.Path)
+			writeStoreError(w, r, err, "Failed to load completions", branch)
 			return
 		}
 		if values == nil {
