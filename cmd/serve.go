@@ -19,13 +19,23 @@ import (
 )
 
 func serveCmd() *cobra.Command {
-	return &cobra.Command{
+	var (
+		portOverride string
+		hostOverride string
+	)
+	cmd := &cobra.Command{
 		Use:   "serve",
 		Short: "Start the knomit HTTP server",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := config.Load()
 			if err != nil {
 				return fmt.Errorf("load config: %w", err)
+			}
+			if portOverride != "" {
+				cfg.Port = portOverride
+			}
+			if hostOverride != "" {
+				cfg.Host = hostOverride
 			}
 
 			a, err := app.New(cmd.Context(), cfg)
@@ -106,4 +116,7 @@ func serveCmd() *cobra.Command {
 			return srv.Shutdown(shutCtx)
 		},
 	}
+	cmd.Flags().StringVar(&portOverride, "port", "", "override the listen port (default: from config)")
+	cmd.Flags().StringVar(&hostOverride, "host", "", "override the listen host (default: from config)")
+	return cmd
 }
