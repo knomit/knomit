@@ -6,24 +6,24 @@ import (
 )
 
 func TestLink_MarshalJSON_PlainHref(t *testing.T) {
-	l := Link{Href: "/api/v1-new/repos/alpha"}
+	l := Link{Href: "/api/v1/repos/alpha"}
 	b, err := json.Marshal(l)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
-	want := `{"href":"/api/v1-new/repos/alpha"}`
+	want := `{"href":"/api/v1/repos/alpha"}`
 	if string(b) != want {
 		t.Errorf("got %s, want %s", b, want)
 	}
 }
 
 func TestLink_MarshalJSON_Templated(t *testing.T) {
-	l := Link{Href: "/api/v1-new/search{?q,limit}", Templated: true}
+	l := Link{Href: "/api/v1/search{?q,limit}", Templated: true}
 	b, err := json.Marshal(l)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
-	want := `{"href":"/api/v1-new/search{?q,limit}","templated":true}`
+	want := `{"href":"/api/v1/search{?q,limit}","templated":true}`
 	if string(b) != want {
 		t.Errorf("got %s, want %s", b, want)
 	}

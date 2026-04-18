@@ -23,7 +23,7 @@ func makeTestFact() knomitfact.Fact {
 }
 
 func TestFactView_HEAD_RequiredLinks(t *testing.T) {
-	b := hal.URLBuilder{Base: "/api/v1-new"}
+	b := hal.URLBuilder{Base: "/api/v1"}
 	a := hal.Anchor{Branch: "agent/test"} // HEAD: empty Commit
 	headCommit := "7f3a8b2c"
 	resolver := &stubRefResolver{existing: map[string]bool{"know/ai/ml/xyz99999.md": true}}
@@ -49,7 +49,7 @@ func TestFactView_HEAD_RequiredLinks(t *testing.T) {
 }
 
 func TestFactView_CommitAnchored_HasLiveNoIncomingNoSnapshot(t *testing.T) {
-	b := hal.URLBuilder{Base: "/api/v1-new"}
+	b := hal.URLBuilder{Base: "/api/v1"}
 	a := hal.Anchor{Branch: "agent/test", Commit: "abc12399999999999999999999999999999999"}
 	resolver := &stubRefResolver{existing: map[string]bool{"know/ai/ml/xyz99999.md": true}}
 
@@ -78,7 +78,7 @@ func TestFactView_CommitAnchored_HasLiveNoIncomingNoSnapshot(t *testing.T) {
 }
 
 func TestFactView_RefsAreStructured_AnchorPropagates(t *testing.T) {
-	b := hal.URLBuilder{Base: "/api/v1-new"}
+	b := hal.URLBuilder{Base: "/api/v1"}
 	a := hal.Anchor{Branch: "agent/test", Commit: "abc12399999999999999999999999999999999"}
 	resolver := &stubRefResolver{existing: map[string]bool{"know/ai/ml/xyz99999.md": true}}
 
@@ -102,7 +102,7 @@ func TestFactView_RefsAreStructured_AnchorPropagates(t *testing.T) {
 }
 
 func TestFactView_AsOf_HEADUsesHeadCommit(t *testing.T) {
-	b := hal.URLBuilder{Base: "/api/v1-new"}
+	b := hal.URLBuilder{Base: "/api/v1"}
 	a := hal.Anchor{Branch: "agent/test"}
 	resolver := &stubRefResolver{}
 
@@ -113,7 +113,7 @@ func TestFactView_AsOf_HEADUsesHeadCommit(t *testing.T) {
 }
 
 func TestFactView_AsOf_CommitAnchoredUsesAnchorCommit(t *testing.T) {
-	b := hal.URLBuilder{Base: "/api/v1-new"}
+	b := hal.URLBuilder{Base: "/api/v1"}
 	a := hal.Anchor{Branch: "agent/test", Commit: "abc123"}
 	resolver := &stubRefResolver{}
 

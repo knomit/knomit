@@ -61,7 +61,7 @@ export function FilterBar({ state, dispatch }: Props) {
       window.clearTimeout(debounceRef.current);
       debounceRef.current = window.setTimeout(async () => {
         try {
-          const res = await api.completions(state.repo, category, prefix);
+          const res = await api.completions(state.repo, state.branch, category, prefix);
           setSuggestions(res.values || []);
           setSuggestIdx(0);
         } catch {
@@ -183,7 +183,7 @@ export function FilterBar({ state, dispatch }: Props) {
     setCategorySearch('');
     if (cat === 'path') setPathPrefix(prefix);
     try {
-      const res = await api.completions(state.repo, cat, prefix);
+      const res = await api.completions(state.repo, state.branch, cat, prefix);
       setCategoryValues(res.values || []);
     } catch {
       setCategoryValues([]);
@@ -193,7 +193,7 @@ export function FilterBar({ state, dispatch }: Props) {
   function drillIntoPath(dir: string) {
     setPathPrefix(dir);
     setCategorySearch('');
-    api.completions(state.repo, 'path', dir + '/').then(res => {
+    api.completions(state.repo, state.branch, 'path', dir + '/').then(res => {
       setCategoryValues(res.values || []);
     }).catch(() => setCategoryValues([]));
   }
@@ -353,7 +353,7 @@ export function FilterBar({ state, dispatch }: Props) {
                       ? pathPrefix + '/' + e.target.value
                       : e.target.value;
                     const seq = ++catSearchSeqRef.current;
-                    api.completions(state.repo, activeCategory, prefix).then(res => {
+                    api.completions(state.repo, state.branch, activeCategory, prefix).then(res => {
                       if (seq === catSearchSeqRef.current) setCategoryValues(res.values || []);
                     }).catch(() => {});
                   }}

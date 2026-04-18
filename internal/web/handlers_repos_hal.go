@@ -18,8 +18,8 @@ type repoSummary struct {
 	Links hal.LinkMap `json:"_links"`
 }
 
-// handleV2Repos serves GET /api/v1-new/repos.
-func handleV2Repos(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
+// handleHALRepos serves GET /api/v1/repos.
+func handleHALRepos(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		names := make([]string, 0)
 		m.ForEach(func(name string, _ *repos.RepoInstance) {
@@ -44,8 +44,8 @@ func handleV2Repos(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 	}
 }
 
-// handleV2Repo serves GET /api/v1-new/repos/{repo}.
-func handleV2Repo(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
+// handleHALRepo serves GET /api/v1/repos/{repo}.
+func handleHALRepo(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		name := chi.URLParam(r, "repo")
 		ri := m.Get(name)

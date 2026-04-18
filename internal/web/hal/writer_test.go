@@ -30,15 +30,15 @@ func TestWriteHAL_Success_SetsContentType(t *testing.T) {
 func TestWriteHAL_Created_WithLocation(t *testing.T) {
 	rec := httptest.NewRecorder()
 	body := map[string]any{"id": "xyz"}
-	WriteHALCreated(rec, "/api/v1-new/repos/alpha/branches/agent:test/facts/know/x.md", body)
+	WriteHALCreated(rec, "/api/v1/repos/alpha/branches/agent:test/facts/know/x.md", body)
 
 	if got := rec.Code; got != http.StatusCreated {
 		t.Errorf("status: got %d, want 201", got)
 	}
-	if got := rec.Header().Get("Location"); got != "/api/v1-new/repos/alpha/branches/agent:test/facts/know/x.md" {
+	if got := rec.Header().Get("Location"); got != "/api/v1/repos/alpha/branches/agent:test/facts/know/x.md" {
 		t.Errorf("location: got %q", got)
 	}
-	if got := rec.Header().Get("Content-Location"); got != "/api/v1-new/repos/alpha/branches/agent:test/facts/know/x.md" {
+	if got := rec.Header().Get("Content-Location"); got != "/api/v1/repos/alpha/branches/agent:test/facts/know/x.md" {
 		t.Errorf("content-location: got %q", got)
 	}
 }

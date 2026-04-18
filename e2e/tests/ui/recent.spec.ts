@@ -39,7 +39,7 @@ test.describe('Chrono View (Recent)', () => {
     const filterInput = page.locator('#filter-input');
     await filterInput.fill('postgresql');
     // Wait for debounce (300ms) + response
-    await page.waitForResponse(resp => resp.url().includes('/recent'));
+    await page.waitForResponse(resp => resp.url().includes('/facts') && resp.url().includes('sort=recent'));
     // Wait for DOM to settle
     await page.waitForTimeout(500);
 
@@ -56,7 +56,7 @@ test.describe('Chrono View (Recent)', () => {
     // Type a filter
     const filterInput = page.locator('#filter-input');
     await filterInput.fill('postgresql');
-    await page.waitForResponse(resp => resp.url().includes('/recent'));
+    await page.waitForResponse(resp => resp.url().includes('/facts') && resp.url().includes('sort=recent'));
     await page.waitForTimeout(500);
     const filteredCount = await items.count();
 
@@ -64,7 +64,7 @@ test.describe('Chrono View (Recent)', () => {
     await filterInput.clear();
 
     // Wait for unfiltered results
-    await page.waitForResponse(resp => resp.url().includes('/recent'));
+    await page.waitForResponse(resp => resp.url().includes('/facts') && resp.url().includes('sort=recent'));
     await page.waitForTimeout(500);
 
     const resetCount = await items.count();
@@ -86,7 +86,7 @@ test.describe('Chrono View (Recent)', () => {
 
     // Register response listener before the action that triggers the API call
     const responsePromise = page.waitForResponse(resp =>
-      resp.url().includes('/recent') && resp.url().includes('type=observation')
+      resp.url().includes('/facts') && resp.url().includes('sort=recent') && resp.url().includes('type=observation')
     );
 
     // Type a type filter prefix in the filter bar

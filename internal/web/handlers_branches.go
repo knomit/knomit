@@ -18,8 +18,8 @@ type branchSummary struct {
 	Links hal.LinkMap `json:"_links"`
 }
 
-// handleV2Branches serves GET /api/v1-new/repos/{repo}/branches.
-func handleV2Branches(
+// handleHALBranches serves GET /api/v1/repos/{repo}/branches.
+func handleHALBranches(
 	b hal.URLBuilder,
 	m *repos.Manager,
 	lister func(*repos.RepoInstance) ([]store.Branch, error),
@@ -70,10 +70,10 @@ type branchRootInfo struct {
 	IndexCommit string
 }
 
-// handleV2Branch serves GET /api/v1-new/repos/{repo}/branches/{branch}.
+// handleHALBranch serves GET /api/v1/repos/{repo}/branches/{branch}.
 // This is the HAL entry point for a branch: the client bookmarks it and
 // navigates every sub-collection via _links.
-func handleV2Branch(
+func handleHALBranch(
 	b hal.URLBuilder,
 	m *repos.Manager,
 	reader func(*repos.RepoInstance, string) (branchRootInfo, error),

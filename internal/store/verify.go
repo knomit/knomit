@@ -323,23 +323,29 @@ func (s *Service) deleteCommitLogRowForTest(commitHash string) error {
 func (s *Service) checkCommitLogParity(ctx context.Context, branch string) []IntegrityIssue {
 	var issues []IntegrityIssue
 
-	// 1. Collect commits reachable on the branch chain.
+	// 1. Collect every commit reachable on the branch chain. Merge
+	// commits have multiple parents and branch_commits records
+	// visibility via every edge, so a first-parent-only walk would
+	// flag the non-first-parent side as "unreachable" even though
+	// it's genuinely in the ancestry. Walk the full parent DAG.
 	ref, err := s.rh.gits.Reference(plumbing.NewBranchReferenceName(branch))
 	if err != nil {
 		return nil // git-reachability already reported it
 	}
 	gitCommits := map[string]bool{}
-	cur := ref.Hash()
-	for !cur.IsZero() {
-		if gitCommits[cur.String()] {
-			break
+	stack := []plumbing.Hash{ref.Hash()}
+	for len(stack) > 0 {
+		cur := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		if cur.IsZero() || gitCommits[cur.String()] {
+			continue
 		}
 		gitCommits[cur.String()] = true
 		commit, err := object.GetCommit(s.rh.gits, cur)
-		if err != nil || len(commit.ParentHashes) == 0 {
-			break
+		if err != nil {
+			continue
 		}
-		cur = commit.ParentHashes[0]
+		stack = append(stack, commit.ParentHashes...)
 	}
 
 	// 2. Collect distinct commit hashes visible on this branch via

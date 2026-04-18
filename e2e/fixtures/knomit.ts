@@ -11,6 +11,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { test as base, expect, type APIRequestContext } from '@playwright/test';
 import getPort from 'get-port';
+import { discoverAgentBranch } from './seed.js';
 
 const PROJECT_ROOT = resolve(import.meta.dirname, '..', '..');
 const STATE_FILE = resolve(import.meta.dirname, '..', '.e2e-state.json');
@@ -26,6 +27,7 @@ interface E2EState {
 
 interface FreshKnomit {
   baseURL: string;
+  branch: string;
   api: APIRequestContext;
 }
 
@@ -69,6 +71,7 @@ async function waitForHealthy(baseURL: string, timeoutMs = 60_000): Promise<void
 
 export const test = base.extend<{
   sharedBaseURL: string;
+  sharedBranch: string;
   freshKnomit: FreshKnomit;
 }>({
   /**
@@ -78,6 +81,15 @@ export const test = base.extend<{
   sharedBaseURL: async ({}, use) => {
     const state = readState();
     await use(state.baseURL);
+  },
+
+  /**
+   * The encoded agent branch name for the shared knomit instance.
+   * Discovered once per test via GET /api/v1/repos/knomit/branches.
+   */
+  sharedBranch: async ({ sharedBaseURL }, use) => {
+    const branch = await discoverAgentBranch(sharedBaseURL);
+    await use(branch);
   },
 
   /**
@@ -132,10 +144,11 @@ export const test = base.extend<{
     const baseURL = `http://localhost:${port}`;
     await waitForHealthy(baseURL);
 
+    const branch = await discoverAgentBranch(baseURL);
     const api = await playwright.request.newContext({ baseURL });
 
     try {
-      await use({ baseURL, api });
+      await use({ baseURL, branch, api });
     } finally {
       await api.dispose();
 

@@ -1,482 +1,1277 @@
 openapi: 3.0.3
 info:
   title: Knomit API
-  version: 1.0.0
-  description: Git-backed knowledge base API
+  version: 2.0.0
+  description: |
+    Git-backed knowledge base API (HAL/HATEOAS).
+
+    All successful responses are `application/hal+json` (except SSE streams
+    and the raw OpenAPI spec). Collection responses use an envelope with
+    `count`, `_links`, and `_embedded.<rel>`. All error responses are
+    RFC 9457 `application/problem+json`.
 
 servers:
   - url: /api/v1
     description: v1
 
+tags:
+  - name: discovery
+  - name: repos
+  - name: branches
+  - name: facts
+  - name: topics
+  - name: search
+  - name: stats
+  - name: commits
+  - name: jobs
+  - name: origin
+  - name: events
+  - name: mcp
+
 paths:
-  /browse:
+  /:
     get:
-      summary: List directory contents
-      operationId: browse
-      parameters:
-        - name: path
-          in: query
-          description: Directory path to list (defaults to "know")
-          schema:
-            type: string
+      tags: [discovery]
+      summary: API root
+      operationId: getRoot
       responses:
         "200":
-          description: Directory listing
+          description: Root with discovery links
           content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/BrowseResponse"
-        "404":
-          description: Path not found
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
-
-  /fact:
-    get:
-      summary: Read a single fact
-      operationId: getFact
-      parameters:
-        - name: path
-          in: query
-          required: true
-          description: Git path to the fact file
-          schema:
-            type: string
-      responses:
-        "200":
-          description: Fact content
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Fact"
-        "400":
-          description: Missing path parameter
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
-        "404":
-          description: Fact not found
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
-        "500":
-          description: Parse error
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
-
-  /search:
-    get:
-      summary: Search facts
-      operationId: search
-      parameters:
-        - name: q
-          in: query
-          description: Full-text search query
-          schema:
-            type: string
-        - name: entities
-          in: query
-          description: Comma-separated list of entity filters
-          schema:
-            type: string
-        - name: domain
-          in: query
-          description: Comma-separated list of domain filters
-          schema:
-            type: string
-        - name: path
-          in: query
-          description: Path prefix filter
-          schema:
-            type: string
-        - name: min_confidence
-          in: query
-          description: Minimum confidence threshold
-          schema:
-            type: number
-            format: double
-        - name: limit
-          in: query
-          description: Maximum number of results (default 50, max 500)
-          schema:
-            type: integer
-      responses:
-        "200":
-          description: Search results
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/SearchResponse"
-        "400":
-          description: Search index not available or invalid parameters
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
-        "500":
-          description: Search error
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
-
-  /history:
-    get:
-      summary: Get commit history for a path
-      operationId: getHistory
-      parameters:
-        - name: path
-          in: query
-          description: File path to get history for (optional, returns all commits if omitted)
-          schema:
-            type: string
-      responses:
-        "200":
-          description: Commit history
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/HistoryResponse"
-        "500":
-          description: Log error
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
-
-  /stats:
-    get:
-      summary: Get knowledge base statistics
-      operationId: getStats
-      parameters:
-        - name: path
-          in: query
-          description: Path prefix to scope stats to
-          schema:
-            type: string
-      responses:
-        "200":
-          description: Statistics
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/StatsResponse"
-        "500":
-          description: Internal error
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
-
-  /status:
-    get:
-      summary: Get repository status
-      operationId: getStatus
-      responses:
-        "200":
-          description: Repository status
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/StatusResponse"
-        "500":
-          description: Internal error
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
-
-  /synthesize:
-    post:
-      summary: Start a synthesis run
-      operationId: startSynthesis
-      requestBody:
-        description: Recipe name or body (plain text)
-        required: true
-        content:
-          text/plain:
-            schema:
-              type: string
-      responses:
-        "200":
-          description: Synthesis started
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/SynthesizeStartResponse"
-        "400":
-          description: Bad request
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
-        "500":
-          description: Internal error
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
-        "503":
-          description: Synthesis not available
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
-
-  /synthesize/{recipe}:
-    get:
-      summary: Get synthesis run status
-      operationId: getSynthesisStatus
-      parameters:
-        - name: recipe
-          in: path
-          required: true
-          description: Synthesis run ID
-          schema:
-            type: string
-      responses:
-        "200":
-          description: Synthesis status
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/SynthesizeStatusResponse"
-        "503":
-          description: Synthesis not available
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
-
-  /sync:
-    post:
-      summary: Sync with origin/main
-      operationId: sync
-      responses:
-        "200":
-          description: Sync result
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/SyncResponse"
-        "500":
-          description: Sync error
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
-
-  /events:
-    get:
-      summary: SSE stream of real-time status events
-      operationId: events
-      responses:
-        "200":
-          description: Server-sent event stream
-          content:
-            text/event-stream:
-              schema:
-                type: string
-                description: >
-                  Newline-delimited SSE events. Each event has type "status"
-                  and data JSON with field "head" (current HEAD commit hash).
-        "500":
-          description: Streaming not supported
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
+            application/hal+json:
+              schema: { $ref: "#/components/schemas/Root" }
 
   /openapi.yaml:
     get:
-      summary: OpenAPI specification
+      tags: [discovery]
+      summary: OpenAPI 3 specification (YAML)
       operationId: getOpenAPISpec
       responses:
         "200":
-          description: OpenAPI 3.0.3 spec in YAML
+          description: OpenAPI spec
           content:
             application/yaml:
+              schema: { type: string }
+
+  /repos:
+    get:
+      tags: [repos]
+      summary: List repositories
+      operationId: listRepos
+      responses:
+        "200":
+          description: Collection of repos
+          content:
+            application/hal+json:
+              schema: { $ref: "#/components/schemas/ReposCollection" }
+        "500": { $ref: "#/components/responses/Problem" }
+
+  /repos/{repo}:
+    parameters:
+      - $ref: "#/components/parameters/Repo"
+    get:
+      tags: [repos]
+      summary: Get repository
+      operationId: getRepo
+      responses:
+        "200":
+          description: Repository
+          content:
+            application/hal+json:
+              schema: { $ref: "#/components/schemas/Repo" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "500": { $ref: "#/components/responses/Problem" }
+
+  /repos/{repo}/branches:
+    parameters:
+      - $ref: "#/components/parameters/Repo"
+    get:
+      tags: [branches]
+      summary: List branches
+      operationId: listBranches
+      responses:
+        "200":
+          description: Collection of branches
+          content:
+            application/hal+json:
+              schema: { $ref: "#/components/schemas/BranchesCollection" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "500": { $ref: "#/components/responses/Problem" }
+
+  /repos/{repo}/branches/{branch}:
+    parameters:
+      - $ref: "#/components/parameters/Repo"
+      - $ref: "#/components/parameters/Branch"
+    get:
+      tags: [branches]
+      summary: Branch root with discoverable links
+      operationId: getBranch
+      responses:
+        "200":
+          description: Branch
+          content:
+            application/hal+json:
+              schema: { $ref: "#/components/schemas/Branch" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "500": { $ref: "#/components/responses/Problem" }
+
+  /repos/{repo}/branches/{branch}/facts:
+    parameters:
+      - $ref: "#/components/parameters/Repo"
+      - $ref: "#/components/parameters/Branch"
+    get:
+      tags: [facts]
+      summary: List facts (recent, filtered, paginated)
+      operationId: listFacts
+      parameters:
+        - { name: limit,        in: query, schema: { type: integer, default: 50, maximum: 500 } }
+        - { name: offset,       in: query, schema: { type: integer, default: 0 } }
+        - { name: path,         in: query, schema: { type: string } }
+        - { name: q,            in: query, schema: { type: string } }
+        - { name: domain,       in: query, description: CSV, schema: { type: string } }
+        - { name: entities,     in: query, description: CSV, schema: { type: string } }
+        - { name: type,         in: query, description: CSV, schema: { type: string } }
+        - { name: exclude_type, in: query, description: CSV, schema: { type: string } }
+        - { name: ep,           in: query, description: CSV (epistemic types), schema: { type: string } }
+      responses:
+        "200":
+          description: Collection of facts
+          content:
+            application/hal+json:
+              schema: { $ref: "#/components/schemas/FactsCollection" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "500": { $ref: "#/components/responses/Problem" }
+    post:
+      tags: [facts]
+      summary: Create a fact
+      operationId: createFact
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/FactCreateRequest" }
+      responses:
+        "201":
+          description: Fact created
+          headers:
+            Location:
+              schema: { type: string }
+              description: URI of the new fact
+          content:
+            application/hal+json:
+              schema: { $ref: "#/components/schemas/Fact" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "500": { $ref: "#/components/responses/Problem" }
+
+  /repos/{repo}/branches/{branch}/facts/{path}:
+    parameters:
+      - $ref: "#/components/parameters/Repo"
+      - $ref: "#/components/parameters/Branch"
+      - $ref: "#/components/parameters/FactPath"
+    get:
+      tags: [facts]
+      summary: Read a fact (anchored at HEAD)
+      description: |
+        When the path terminates with `/incoming` or `/outgoing`, the response
+        is a collection of referencing/referenced facts instead of a fact view.
+      operationId: getFact
+      responses:
+        "200":
+          description: Fact or ref collection
+          content:
+            application/hal+json:
               schema:
-                type: string
+                oneOf:
+                  - { $ref: "#/components/schemas/Fact" }
+                  - { $ref: "#/components/schemas/RefsCollection" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "500": { $ref: "#/components/responses/Problem" }
+    put:
+      tags: [facts]
+      summary: Update a fact (full content replace)
+      operationId: updateFact
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/FactUpdateRequest" }
+      responses:
+        "200":
+          description: Updated fact
+          content:
+            application/hal+json:
+              schema: { $ref: "#/components/schemas/Fact" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
+        "500": { $ref: "#/components/responses/Problem" }
+    delete:
+      tags: [facts]
+      summary: Delete a fact
+      operationId: deleteFact
+      responses:
+        "204": { description: Deleted }
+        "400": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "500": { $ref: "#/components/responses/Problem" }
+
+  /repos/{repo}/branches/{branch}/commits/{sha}/facts/{path}:
+    parameters:
+      - $ref: "#/components/parameters/Repo"
+      - $ref: "#/components/parameters/Branch"
+      - $ref: "#/components/parameters/Sha"
+      - $ref: "#/components/parameters/FactPath"
+    get:
+      tags: [facts, commits]
+      summary: Read a fact anchored at a specific commit
+      operationId: getFactAtCommit
+      responses:
+        "200":
+          description: Fact as of the commit
+          content:
+            application/hal+json:
+              schema: { $ref: "#/components/schemas/Fact" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "501": { $ref: "#/components/responses/Problem" }
+
+  /repos/{repo}/branches/{branch}/commits/{sha}/topics:
+    parameters:
+      - $ref: "#/components/parameters/Repo"
+      - $ref: "#/components/parameters/Branch"
+      - $ref: "#/components/parameters/Sha"
+    get:
+      tags: [topics, commits]
+      summary: Browse ontology at a specific commit (not implemented)
+      operationId: getTopicsAtCommit
+      responses:
+        "501": { $ref: "#/components/responses/Problem" }
+
+  /repos/{repo}/branches/{branch}/commits/{sha}/topics/{path}:
+    parameters:
+      - $ref: "#/components/parameters/Repo"
+      - $ref: "#/components/parameters/Branch"
+      - $ref: "#/components/parameters/Sha"
+      - { name: path, in: path, required: true, schema: { type: string } }
+    get:
+      tags: [topics, commits]
+      summary: Topic node at a specific commit (not implemented)
+      operationId: getTopicAtCommit
+      responses:
+        "501": { $ref: "#/components/responses/Problem" }
+
+  /repos/{repo}/branches/{branch}/topics:
+    parameters:
+      - $ref: "#/components/parameters/Repo"
+      - $ref: "#/components/parameters/Branch"
+    get:
+      tags: [topics]
+      summary: Browse ontology tree (root)
+      operationId: listTopics
+      responses:
+        "200":
+          description: Collection of topic nodes
+          content:
+            application/hal+json:
+              schema: { $ref: "#/components/schemas/TopicsCollection" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "500": { $ref: "#/components/responses/Problem" }
+
+  /repos/{repo}/branches/{branch}/topics/{path}:
+    parameters:
+      - $ref: "#/components/parameters/Repo"
+      - $ref: "#/components/parameters/Branch"
+      - { name: path, in: path, required: true, schema: { type: string } }
+    get:
+      tags: [topics]
+      summary: Topic node (dispatches to /facts and /stats sub-resources)
+      operationId: getTopic
+      responses:
+        "200":
+          description: Topic node, facts, or stats
+          content:
+            application/hal+json:
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/TopicsCollection" }
+                  - { $ref: "#/components/schemas/FactsCollection" }
+                  - { $ref: "#/components/schemas/Stats" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "500": { $ref: "#/components/responses/Problem" }
+
+  /repos/{repo}/branches/{branch}/search:
+    parameters:
+      - $ref: "#/components/parameters/Repo"
+      - $ref: "#/components/parameters/Branch"
+    get:
+      tags: [search]
+      summary: Full-text / semantic search
+      operationId: search
+      parameters:
+        - { name: q,              in: query, schema: { type: string } }
+        - { name: entities,       in: query, description: CSV, schema: { type: string } }
+        - { name: domain,         in: query, description: CSV, schema: { type: string } }
+        - { name: path,           in: query, schema: { type: string } }
+        - { name: min_confidence, in: query, schema: { type: number, format: double } }
+        - { name: limit,          in: query, schema: { type: integer, default: 50, maximum: 500 } }
+        - { name: type,           in: query, description: CSV, schema: { type: string } }
+        - { name: exclude_type,   in: query, description: CSV, schema: { type: string } }
+        - { name: ep,             in: query, description: CSV, schema: { type: string } }
+      responses:
+        "200":
+          description: Collection of search results
+          content:
+            application/hal+json:
+              schema: { $ref: "#/components/schemas/SearchCollection" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "500": { $ref: "#/components/responses/Problem" }
+
+  /repos/{repo}/branches/{branch}/activity:
+    parameters:
+      - $ref: "#/components/parameters/Repo"
+      - $ref: "#/components/parameters/Branch"
+    get:
+      tags: [stats]
+      summary: Activity metrics
+      operationId: getActivity
+      parameters:
+        - { name: path, in: query, schema: { type: string } }
+      responses:
+        "200":
+          description: Activity
+          content:
+            application/hal+json:
+              schema: { $ref: "#/components/schemas/Activity" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "500": { $ref: "#/components/responses/Problem" }
+
+  /repos/{repo}/branches/{branch}/completions:
+    parameters:
+      - $ref: "#/components/parameters/Repo"
+      - $ref: "#/components/parameters/Branch"
+    get:
+      tags: [search]
+      summary: Autocomplete suggestions
+      operationId: getCompletions
+      parameters:
+        - { name: category, in: query, schema: { type: string } }
+        - { name: prefix,   in: query, schema: { type: string } }
+      responses:
+        "200":
+          description: Completion values
+          content:
+            application/hal+json:
+              schema: { $ref: "#/components/schemas/Completions" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "500": { $ref: "#/components/responses/Problem" }
+
+  /repos/{repo}/branches/{branch}/domains:
+    parameters:
+      - $ref: "#/components/parameters/Repo"
+      - $ref: "#/components/parameters/Branch"
+    get:
+      tags: [stats]
+      summary: Domain histogram
+      operationId: listDomains
+      responses:
+        "200":
+          description: Collection of domains
+          content:
+            application/hal+json:
+              schema: { $ref: "#/components/schemas/DomainsCollection" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "500": { $ref: "#/components/responses/Problem" }
+
+  /repos/{repo}/branches/{branch}/domains/{name}:
+    parameters:
+      - $ref: "#/components/parameters/Repo"
+      - $ref: "#/components/parameters/Branch"
+      - { name: name, in: path, required: true, schema: { type: string } }
+    get:
+      tags: [stats, facts]
+      summary: Facts by domain
+      operationId: getDomainFacts
+      responses:
+        "200":
+          description: Facts in the domain
+          content:
+            application/hal+json:
+              schema: { $ref: "#/components/schemas/FactsCollection" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "500": { $ref: "#/components/responses/Problem" }
+
+  /repos/{repo}/branches/{branch}/stats:
+    parameters:
+      - $ref: "#/components/parameters/Repo"
+      - $ref: "#/components/parameters/Branch"
+    get:
+      tags: [stats]
+      summary: Branch-wide statistics
+      operationId: getStats
+      responses:
+        "200":
+          description: Stats
+          content:
+            application/hal+json:
+              schema: { $ref: "#/components/schemas/Stats" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "500": { $ref: "#/components/responses/Problem" }
+
+  /repos/{repo}/branches/{branch}/events:
+    parameters:
+      - $ref: "#/components/parameters/Repo"
+      - $ref: "#/components/parameters/Branch"
+    get:
+      tags: [events]
+      summary: Server-Sent Events stream for branch (status, task, sync)
+      operationId: streamBranchEvents
+      responses:
+        "200":
+          description: SSE stream
+          content:
+            text/event-stream:
+              schema: { type: string }
+        "404": { $ref: "#/components/responses/Problem" }
+        "500": { $ref: "#/components/responses/Problem" }
+
+  /repos/{repo}/branches/{branch}/synthesis-runs:
+    parameters:
+      - $ref: "#/components/parameters/Repo"
+      - $ref: "#/components/parameters/Branch"
+    get:
+      tags: [jobs]
+      summary: List synthesis runs
+      operationId: listSynthesisRuns
+      responses:
+        "200":
+          description: Collection of jobs
+          content:
+            application/hal+json:
+              schema: { $ref: "#/components/schemas/JobsCollection" }
+        "404": { $ref: "#/components/responses/Problem" }
+    post:
+      tags: [jobs]
+      summary: Start synthesis run
+      operationId: startSynthesisRun
+      responses:
+        "201":
+          description: Job started
+          content:
+            application/hal+json:
+              schema: { $ref: "#/components/schemas/Job" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "503": { $ref: "#/components/responses/Problem" }
+
+  /repos/{repo}/branches/{branch}/synthesis-runs/{id}:
+    parameters:
+      - $ref: "#/components/parameters/Repo"
+      - $ref: "#/components/parameters/Branch"
+      - $ref: "#/components/parameters/JobID"
+    get:
+      tags: [jobs]
+      summary: Get synthesis run
+      operationId: getSynthesisRun
+      responses:
+        "200":
+          description: Job
+          content:
+            application/hal+json:
+              schema: { $ref: "#/components/schemas/Job" }
+        "404": { $ref: "#/components/responses/Problem" }
+    delete:
+      tags: [jobs]
+      summary: Delete/archive synthesis run
+      operationId: deleteSynthesisRun
+      responses:
+        "204": { description: Deleted }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+
+  /repos/{repo}/branches/{branch}/synthesis-runs/{id}/events:
+    parameters:
+      - $ref: "#/components/parameters/Repo"
+      - $ref: "#/components/parameters/Branch"
+      - $ref: "#/components/parameters/JobID"
+    get:
+      tags: [events, jobs]
+      summary: SSE stream of synthesis-run progress
+      operationId: streamSynthesisEvents
+      responses:
+        "200":
+          description: SSE stream
+          content:
+            text/event-stream:
+              schema: { type: string }
+        "404": { $ref: "#/components/responses/Problem" }
+        "503": { $ref: "#/components/responses/Problem" }
+
+  /repos/{repo}/branches/{branch}/index-rebuilds:
+    parameters:
+      - $ref: "#/components/parameters/Repo"
+      - $ref: "#/components/parameters/Branch"
+    get:
+      tags: [jobs]
+      summary: List index rebuilds
+      operationId: listIndexRebuilds
+      responses:
+        "200":
+          description: Collection of jobs
+          content:
+            application/hal+json:
+              schema: { $ref: "#/components/schemas/JobsCollection" }
+        "404": { $ref: "#/components/responses/Problem" }
+    post:
+      tags: [jobs]
+      summary: Start index rebuild
+      operationId: startIndexRebuild
+      responses:
+        "201":
+          description: Job started
+          content:
+            application/hal+json:
+              schema: { $ref: "#/components/schemas/Job" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+
+  /repos/{repo}/branches/{branch}/index-rebuilds/{id}:
+    parameters:
+      - $ref: "#/components/parameters/Repo"
+      - $ref: "#/components/parameters/Branch"
+      - $ref: "#/components/parameters/JobID"
+    get:
+      tags: [jobs]
+      summary: Get index rebuild
+      operationId: getIndexRebuild
+      responses:
+        "200":
+          description: Job
+          content:
+            application/hal+json:
+              schema: { $ref: "#/components/schemas/Job" }
+        "404": { $ref: "#/components/responses/Problem" }
+    delete:
+      tags: [jobs]
+      summary: Delete/archive index rebuild
+      operationId: deleteIndexRebuild
+      responses:
+        "204": { description: Deleted }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+
+  /repos/{repo}/branches/{branch}/index-rebuilds/{id}/events:
+    parameters:
+      - $ref: "#/components/parameters/Repo"
+      - $ref: "#/components/parameters/Branch"
+      - $ref: "#/components/parameters/JobID"
+    get:
+      tags: [events, jobs]
+      summary: SSE stream of index-rebuild progress
+      operationId: streamIndexRebuildEvents
+      responses:
+        "200":
+          description: SSE stream
+          content:
+            text/event-stream:
+              schema: { type: string }
+        "404": { $ref: "#/components/responses/Problem" }
+        "503": { $ref: "#/components/responses/Problem" }
+
+  /repos/{repo}/branches/{branch}/commits:
+    parameters:
+      - $ref: "#/components/parameters/Repo"
+      - $ref: "#/components/parameters/Branch"
+    get:
+      tags: [commits]
+      summary: List commits
+      operationId: listCommits
+      parameters:
+        - { name: limit,  in: query, schema: { type: integer, default: 50, maximum: 500 } }
+        - { name: after,  in: query, schema: { type: string }, description: cursor }
+        - { name: from,   in: query, schema: { type: string } }
+        - { name: before, in: query, schema: { type: string } }
+      responses:
+        "200":
+          description: Collection of commits
+          content:
+            application/hal+json:
+              schema: { $ref: "#/components/schemas/CommitsCollection" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "500": { $ref: "#/components/responses/Problem" }
+
+  /repos/{repo}/branches/{branch}/commits/{sha}:
+    parameters:
+      - $ref: "#/components/parameters/Repo"
+      - $ref: "#/components/parameters/Branch"
+      - $ref: "#/components/parameters/Sha"
+    get:
+      tags: [commits]
+      summary: Commit detail with affected files
+      operationId: getCommit
+      responses:
+        "200":
+          description: Commit
+          content:
+            application/hal+json:
+              schema: { $ref: "#/components/schemas/CommitDetail" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "500": { $ref: "#/components/responses/Problem" }
+
+  /repos/{repo}/origin:
+    parameters:
+      - $ref: "#/components/parameters/Repo"
+    get:
+      tags: [origin]
+      summary: Get configured remote origin
+      operationId: getOrigin
+      responses:
+        "200":
+          description: Origin configuration
+          content:
+            application/hal+json:
+              schema: { $ref: "#/components/schemas/Origin" }
+        "204": { description: No origin configured }
+        "404": { $ref: "#/components/responses/Problem" }
+        "500": { $ref: "#/components/responses/Problem" }
+    put:
+      tags: [origin]
+      summary: Configure remote origin
+      operationId: setOrigin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/OriginConfigRequest" }
+      responses:
+        "200":
+          description: Origin configured
+          content:
+            application/hal+json:
+              schema: { $ref: "#/components/schemas/OriginSetResponse" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "500": { $ref: "#/components/responses/Problem" }
+    delete:
+      tags: [origin]
+      summary: Remove origin configuration
+      operationId: deleteOrigin
+      responses:
+        "204": { description: Deleted }
+        "404": { $ref: "#/components/responses/Problem" }
+        "500": { $ref: "#/components/responses/Problem" }
+
+  /repos/{repo}/origin-sessions:
+    parameters:
+      - $ref: "#/components/parameters/Repo"
+    get:
+      tags: [origin]
+      summary: List active origin sessions
+      operationId: listOriginSessions
+      responses:
+        "200":
+          description: Sessions
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/OriginSessionSummary" }
+        "404": { $ref: "#/components/responses/Problem" }
+    post:
+      tags: [origin]
+      summary: Create origin session
+      operationId: createOriginSession
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/OriginConfigRequest" }
+      responses:
+        "200":
+          description: Session created
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [session_id]
+                properties:
+                  session_id: { type: string }
+        "400": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "500": { $ref: "#/components/responses/Problem" }
+
+  /repos/{repo}/origin-sessions/{sessionID}:
+    parameters:
+      - $ref: "#/components/parameters/Repo"
+      - $ref: "#/components/parameters/SessionID"
+    get:
+      tags: [origin]
+      summary: Get session state
+      operationId: getOriginSession
+      responses:
+        "200":
+          description: Session detail
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OriginSessionDetail" }
+        "404": { $ref: "#/components/responses/Problem" }
+    delete:
+      tags: [origin]
+      summary: Delete session (idempotent)
+      operationId: deleteOriginSession
+      responses:
+        "204": { description: Deleted }
+
+  /repos/{repo}/origin-sessions/{sessionID}/test:
+    parameters:
+      - $ref: "#/components/parameters/Repo"
+      - $ref: "#/components/parameters/SessionID"
+    get:
+      tags: [origin, events]
+      summary: Test connectivity (SSE stream)
+      operationId: testOriginSession
+      responses:
+        "200":
+          description: SSE stream (phases connecting → cloning → analyzing → done)
+          content:
+            text/event-stream:
+              schema: { type: string }
+        "400": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+
+  /repos/{repo}/origin-sessions/{sessionID}/preview:
+    parameters:
+      - $ref: "#/components/parameters/Repo"
+      - $ref: "#/components/parameters/SessionID"
+    get:
+      tags: [origin, events]
+      summary: Preview merge/replay (SSE stream)
+      operationId: previewOriginSession
+      responses:
+        "200":
+          description: SSE stream (phases comparing → done)
+          content:
+            text/event-stream:
+              schema: { type: string }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+
+  /repos/{repo}/origin-sessions/{sessionID}/apply:
+    parameters:
+      - $ref: "#/components/parameters/Repo"
+      - $ref: "#/components/parameters/SessionID"
+    post:
+      tags: [origin, events]
+      summary: Apply merge/replay (SSE stream)
+      operationId: applyOriginSession
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/OriginApplyRequest" }
+      responses:
+        "200":
+          description: SSE stream (phases replaying/merging → done)
+          content:
+            text/event-stream:
+              schema: { type: string }
+        "400": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+
+  /repos/{repo}/origin-sessions/{sessionID}/commit:
+    parameters:
+      - $ref: "#/components/parameters/Repo"
+      - $ref: "#/components/parameters/SessionID"
+    post:
+      tags: [origin, events]
+      summary: Finalize connection (SSE stream)
+      operationId: commitOriginSession
+      responses:
+        "200":
+          description: SSE stream (phases swapping → configuring → rebuilding → done)
+          content:
+            text/event-stream:
+              schema: { type: string }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+
+  /repos/{repo}/branches/{branch}/mcp:
+    parameters:
+      - $ref: "#/components/parameters/Repo"
+      - $ref: "#/components/parameters/Branch"
+      - { name: profile, in: query, schema: { type: string, default: code } }
+    get: &mcp
+      tags: [mcp]
+      summary: MCP server proxy
+      description: |
+        Dispatches to the configured MCP handler for the given profile.
+        Accepts any HTTP method; request/response shape is defined by the
+        Model Context Protocol.
+      operationId: mcpDispatch
+      responses:
+        "200": { description: MCP response (shape varies) }
+        "404": { $ref: "#/components/responses/Problem" }
+    post: *mcp
+    put: *mcp
+    delete: *mcp
+
+  /repos/{repo}/branches/{branch}/mcp/{path}:
+    parameters:
+      - $ref: "#/components/parameters/Repo"
+      - $ref: "#/components/parameters/Branch"
+      - { name: path, in: path, required: true, schema: { type: string } }
+      - { name: profile, in: query, schema: { type: string, default: code } }
+    get: &mcpSub
+      tags: [mcp]
+      summary: MCP server proxy (sub-path)
+      operationId: mcpDispatchSub
+      responses:
+        "200": { description: MCP response (shape varies) }
+        "404": { $ref: "#/components/responses/Problem" }
+    post: *mcpSub
+    put: *mcpSub
+    delete: *mcpSub
 
 components:
-  schemas:
-    Error:
-      type: object
-      required: [error]
-      properties:
-        error:
-          type: string
+  parameters:
+    Repo:      { name: repo,      in: path, required: true, schema: { type: string } }
+    Branch:    { name: branch,    in: path, required: true, schema: { type: string } }
+    Sha:       { name: sha,       in: path, required: true, schema: { type: string } }
+    JobID:     { name: id,        in: path, required: true, schema: { type: string } }
+    SessionID: { name: sessionID, in: path, required: true, schema: { type: string } }
+    FactPath:
+      name: path
+      in: path
+      required: true
+      description: Fact path under the ontology root (may contain slashes).
+      schema: { type: string }
 
-    DirChild:
+  responses:
+    Problem:
+      description: RFC 9457 problem+json
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+
+  schemas:
+    # HAL primitives
+    Link:
       type: object
-      required: [name, is_dir]
+      required: [href]
       properties:
-        name:
-          type: string
-        is_dir:
-          type: boolean
+        href:      { type: string }
+        templated: { type: boolean }
+
+    LinkMap:
+      type: object
+      additionalProperties: { $ref: "#/components/schemas/Link" }
+
+    CollectionBase:
+      type: object
+      required: [count, _links]
+      properties:
+        count:     { type: integer }
+        _links:    { $ref: "#/components/schemas/LinkMap" }
+        _embedded: { type: object }
+
+    Problem:
+      type: object
+      required: [title, status]
+      properties:
+        type:     { type: string, default: "about:blank" }
+        title:    { type: string }
+        status:   { type: integer }
+        detail:   { type: string }
+        instance: { type: string }
+
+    # Discovery / repos / branches
+    Root:
+      type: object
+      required: [_links]
+      properties:
+        _links: { $ref: "#/components/schemas/LinkMap" }
+
+    RepoSummary:
+      type: object
+      required: [name, _links]
+      properties:
+        name:   { type: string }
+        _links: { $ref: "#/components/schemas/LinkMap" }
+
+    ReposCollection:
+      allOf:
+        - $ref: "#/components/schemas/CollectionBase"
+        - type: object
+          properties:
+            _embedded:
+              type: object
+              properties:
+                repos:
+                  type: array
+                  items: { $ref: "#/components/schemas/RepoSummary" }
+
+    Repo:
+      type: object
+      required: [name, _links]
+      properties:
+        name:   { type: string }
+        _links: { $ref: "#/components/schemas/LinkMap" }
+
+    BranchSummary:
+      type: object
+      required: [name, _links]
+      properties:
+        name:   { type: string }
+        _links: { $ref: "#/components/schemas/LinkMap" }
+
+    BranchesCollection:
+      allOf:
+        - $ref: "#/components/schemas/CollectionBase"
+        - type: object
+          properties:
+            _embedded:
+              type: object
+              properties:
+                branches:
+                  type: array
+                  items: { $ref: "#/components/schemas/BranchSummary" }
+
+    Branch:
+      type: object
+      required: [name, head, _links]
+      properties:
+        name:               { type: string }
+        head:               { type: string, description: HEAD commit hash }
+        index_commit:       { type: string }
+        embeddings_enabled: { type: boolean }
+        is_agent_branch:    { type: boolean }
+        _links:             { $ref: "#/components/schemas/LinkMap" }
+
+    # Facts
+    FactAsOf:
+      type: object
+      properties:
+        branch: { type: string }
+        commit: { type: string }
 
     Fact:
       type: object
-      required: [path, title, body, domain, entities, confidence, sources, refs]
+      required: [path, title, _links]
       properties:
-        path:
-          type: string
-        title:
-          type: string
-        body:
-          type: string
+        path:       { type: string }
+        title:      { type: string }
+        body:       { type: string }
         type:
           type: string
           enum: [observation, concept, process, principle, pattern, reference, synthesis, hypothesis, methodology]
-          description: Epistemic type of the fact
-        domain:
-          type: array
-          items:
-            type: string
-        entities:
-          type: array
-          items:
-            type: string
-        confidence:
-          type: number
-          format: double
-        sources:
-          type: integer
+        domain:     { type: array, items: { type: string } }
+        entities:   { type: array, items: { type: string } }
         refs:
           type: array
-          items:
-            type: string
+          items: { $ref: "#/components/schemas/Ref" }
+        confidence: { type: number, format: double }
+        sources:   { type: integer }
+        as_of:     { $ref: "#/components/schemas/FactAsOf" }
+        _links:    { $ref: "#/components/schemas/LinkMap" }
 
-    SearchResult:
+    FactSummary:
+      type: object
+      required: [path, title, _links]
+      properties:
+        path:         { type: string }
+        title:        { type: string }
+        type:         { type: string }
+        confidence:   { type: number, format: double }
+        committed_at: { type: string, format: date-time }
+        operation:    { type: string }
+        _links:       { $ref: "#/components/schemas/LinkMap" }
+
+    Ref:
+      type: object
+      required: [path]
+      properties:
+        path:   { type: string }
+        type:   { type: string }
+        _links: { $ref: "#/components/schemas/LinkMap" }
+
+    FactsCollection:
       allOf:
-        - $ref: "#/components/schemas/Fact"
+        - $ref: "#/components/schemas/CollectionBase"
         - type: object
-          required: [score]
           properties:
-            score:
-              type: number
-              format: double
-              description: Relevance score in [0, 100]
+            _embedded:
+              type: object
+              properties:
+                facts:
+                  type: array
+                  items: { $ref: "#/components/schemas/FactSummary" }
 
-    HistoryEntry:
-      type: object
-      required: [commit, message, date]
-      properties:
-        commit:
-          type: string
-          description: Short commit hash (8 chars)
-        message:
-          type: string
-        date:
-          type: string
-          format: date-time
+    RefsCollection:
+      allOf:
+        - $ref: "#/components/schemas/CollectionBase"
+        - type: object
+          properties:
+            _embedded:
+              type: object
+              properties:
+                refs:
+                  type: array
+                  items: { $ref: "#/components/schemas/Ref" }
 
-    StatusResponse:
+    FactCreateRequest:
       type: object
-      required: [head, branch, index_commit, embeddings_enabled]
+      required: [title]
       properties:
-        head:
-          type: string
-          description: Current HEAD commit hash
-        branch:
-          type: string
-          description: Current agent branch name
-        index_commit:
-          type: string
-          description: Last commit processed by the search index
-        embeddings_enabled:
-          type: boolean
+        title:      { type: string }
+        body:       { type: string }
+        type:       { type: string }
+        domain:     { type: array, items: { type: string } }
+        entities:   { type: array, items: { type: string } }
+        refs:       { type: array, items: { type: string } }
+        confidence: { type: number, format: double }
+        sources:    { type: integer }
 
-    StatsResponse:
+    FactUpdateRequest:
       type: object
-      required: [total, domains, avg_confidence]
+      required: [content]
       properties:
-        total:
-          type: integer
-          description: Total number of facts
+        content:
+          type: string
+          description: Full markdown document with YAML frontmatter.
+
+    # Topics
+    TopicNode:
+      type: object
+      required: [name, _links]
+      properties:
+        name:   { type: string }
+        is_dir: { type: boolean }
+        type:   { type: string }
+        title:  { type: string }
+        _links: { $ref: "#/components/schemas/LinkMap" }
+
+    TopicsCollection:
+      allOf:
+        - $ref: "#/components/schemas/CollectionBase"
+        - type: object
+          properties:
+            _embedded:
+              type: object
+              properties:
+                topics:
+                  type: array
+                  items: { $ref: "#/components/schemas/TopicNode" }
+
+    # Search
+    SearchHit:
+      allOf:
+        - $ref: "#/components/schemas/FactSummary"
+        - type: object
+          properties:
+            score:    { type: number, format: double }
+            domain:   { type: array, items: { type: string } }
+            entities: { type: array, items: { type: string } }
+
+    SearchCollection:
+      allOf:
+        - $ref: "#/components/schemas/CollectionBase"
+        - type: object
+          properties:
+            _embedded:
+              type: object
+              properties:
+                results:
+                  type: array
+                  items: { $ref: "#/components/schemas/SearchHit" }
+
+    # Stats / activity / completions / domains
+    Activity:
+      type: object
+      required: [_links]
+      properties:
+        last_commit: { type: string, format: date-time }
+        total:       { type: integer }
+        changes_7d:  { type: integer }
+        changes_30d: { type: integer }
+        changes_90d: { type: integer }
+        _links:      { $ref: "#/components/schemas/LinkMap" }
+
+    Completions:
+      type: object
+      required: [values, _links]
+      properties:
+        values: { type: array, items: { type: string } }
+        _links: { $ref: "#/components/schemas/LinkMap" }
+
+    DomainEntry:
+      type: object
+      required: [name, count, _links]
+      properties:
+        name:   { type: string }
+        count:  { type: integer }
+        _links: { $ref: "#/components/schemas/LinkMap" }
+
+    DomainsCollection:
+      allOf:
+        - $ref: "#/components/schemas/CollectionBase"
+        - type: object
+          properties:
+            _embedded:
+              type: object
+              properties:
+                domains:
+                  type: array
+                  items: { $ref: "#/components/schemas/DomainEntry" }
+
+    Stats:
+      type: object
+      required: [total, _links]
+      properties:
+        total:          { type: integer }
+        avg_confidence: { type: number, format: double }
         domains:
           type: object
-          additionalProperties:
-            type: integer
-          description: Count of facts per domain
-        avg_confidence:
-          type: number
-          format: double
+          additionalProperties: { type: integer }
+        entities:
+          type: object
+          additionalProperties: { type: integer }
+        _links: { $ref: "#/components/schemas/LinkMap" }
 
-    BrowseResponse:
+    # Commits
+    FileCounts:
       type: object
-      required: [path, children]
       properties:
-        path:
-          type: string
-        children:
+        added:    { type: integer }
+        modified: { type: integer }
+        deleted:  { type: integer }
+
+    CommitSummary:
+      type: object
+      required: [commit, date, _links]
+      properties:
+        commit:    { type: string }
+        date:      { type: string, format: date-time }
+        message:   { type: string }
+        operation: { type: string }
+        files:     { $ref: "#/components/schemas/FileCounts" }
+        _links:    { $ref: "#/components/schemas/LinkMap" }
+
+    CommitsCollection:
+      allOf:
+        - $ref: "#/components/schemas/CollectionBase"
+        - type: object
+          properties:
+            _embedded:
+              type: object
+              properties:
+                commits:
+                  type: array
+                  items: { $ref: "#/components/schemas/CommitSummary" }
+
+    CommitFile:
+      type: object
+      required: [path, action]
+      properties:
+        path:   { type: string }
+        action: { type: string, enum: [added, modified, deleted] }
+        title:  { type: string }
+        _links: { $ref: "#/components/schemas/LinkMap" }
+
+    CommitDetail:
+      type: object
+      required: [commit, date, _links]
+      properties:
+        commit:    { type: string }
+        date:      { type: string, format: date-time }
+        message:   { type: string }
+        operation: { type: string }
+        files:
           type: array
-          items:
-            $ref: "#/components/schemas/DirChild"
+          items: { $ref: "#/components/schemas/CommitFile" }
+        _links: { $ref: "#/components/schemas/LinkMap" }
 
-    SearchResponse:
+    # Jobs
+    Job:
       type: object
-      required: [results]
+      required: [id, kind, state, _links]
       properties:
-        results:
-          type: array
-          items:
-            $ref: "#/components/schemas/SearchResult"
+        id:         { type: string }
+        kind:       { type: string, enum: [synthesis-run, index-rebuild] }
+        state:      { type: string, enum: [pending, running, succeeded, failed, cancelled] }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        progress:   { type: number, format: double }
+        error:      { type: string }
+        _links:     { $ref: "#/components/schemas/LinkMap" }
 
-    HistoryResponse:
-      type: object
-      required: [entries]
-      properties:
-        entries:
-          type: array
-          items:
-            $ref: "#/components/schemas/HistoryEntry"
+    JobsCollection:
+      allOf:
+        - $ref: "#/components/schemas/CollectionBase"
+        - type: object
+          properties:
+            _embedded:
+              type: object
+              properties:
+                jobs:
+                  type: array
+                  items: { $ref: "#/components/schemas/Job" }
 
-    SynthesizeStartResponse:
+    # Origin
+    Origin:
       type: object
-      required: [id, status]
+      required: [url, _links]
       properties:
-        id:
-          type: string
-          description: Synthesis run ID
-        status:
-          type: string
-          example: started
+        name:        { type: string }
+        url:         { type: string }
+        branch:      { type: string }
+        auth_method: { type: string, enum: [token, basic, ssh] }
+        _links:      { $ref: "#/components/schemas/LinkMap" }
 
-    SynthesizeStatusResponse:
+    OriginConfigRequest:
       type: object
-      required: [id, events, done]
+      required: [url]
       properties:
-        id:
-          type: string
-        events:
-          type: array
-          items:
-            type: string
-        done:
-          type: boolean
+        url:         { type: string }
+        auth_method: { type: string, enum: [token, basic, ssh] }
+        token:       { type: string }
+        user:        { type: string }
+        password:    { type: string }
 
-    SyncResponse:
+    OriginSetResponse:
       type: object
-      required: [status]
+      required: [status, _links]
       properties:
-        status:
+        status: { type: string, enum: [ok] }
+        _links: { $ref: "#/components/schemas/LinkMap" }
+
+    OriginSessionSummary:
+      type: object
+      required: [session_id, state]
+      properties:
+        session_id: { type: string }
+        state:      { type: string, enum: [created, tested, previewed, applied, committed, error] }
+        url:        { type: string }
+
+    OriginSessionDetail:
+      allOf:
+        - $ref: "#/components/schemas/OriginSessionSummary"
+        - type: object
+          properties:
+            history:      { type: string, enum: [shared, disjoint] }
+            last_preview: { type: object, additionalProperties: true }
+            last_apply:   { type: object, additionalProperties: true }
+
+    OriginApplyRequest:
+      type: object
+      required: [conflict_strategy]
+      properties:
+        conflict_strategy:
           type: string
-          enum: [ok, error]
-        commit:
+          enum: [local_wins, remote_wins]
+        branch:
           type: string
-          description: Current HEAD commit after sync
-        message:
-          type: string
-          description: Human-readable sync result message
-        error:
-          type: string
-          description: Error message (only present when status is "error")
+          description: Optional remote branch override.

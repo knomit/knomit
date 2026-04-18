@@ -3,10 +3,11 @@ import { test, expect } from '../../fixtures/knomit.js';
 test.describe('Connect Remote Modal', () => {
   test('open modal, enter URL, and close via cancel', async ({ freshKnomit, page }) => {
     // Seed a fact so the repo exists
-    await freshKnomit.api.put(`${freshKnomit.baseURL}/api/v1/knomit/fact`, {
-      data: {
-        path: 'kb/origin-test.md',
-        content: `---
+    await freshKnomit.api.put(
+      `${freshKnomit.baseURL}/api/v1/repos/knomit/branches/${freshKnomit.branch}/facts/kb/origin-test.md`,
+      {
+        data: {
+          content: `---
 type: observation
 domain: [testing]
 confidence: 0.9
@@ -17,8 +18,9 @@ refs: []
 # Origin Test Fact
 
 Fact created to ensure the repo exists.`,
+        },
       },
-    });
+    );
 
     await page.goto(freshKnomit.baseURL);
     await page.waitForLoadState('domcontentloaded');
@@ -52,10 +54,11 @@ Fact created to ensure the repo exists.`,
   });
 
   test('close button dismisses the modal', async ({ freshKnomit, page }) => {
-    await freshKnomit.api.put(`${freshKnomit.baseURL}/api/v1/knomit/fact`, {
-      data: {
-        path: 'kb/close-test.md',
-        content: `---
+    await freshKnomit.api.put(
+      `${freshKnomit.baseURL}/api/v1/repos/knomit/branches/${freshKnomit.branch}/facts/kb/close-test.md`,
+      {
+        data: {
+          content: `---
 type: observation
 domain: [testing]
 confidence: 0.5
@@ -66,8 +69,9 @@ refs: []
 # Close Test
 
 Seed fact.`,
+        },
       },
-    });
+    );
 
     await page.goto(freshKnomit.baseURL);
     await page.waitForLoadState('domcontentloaded');

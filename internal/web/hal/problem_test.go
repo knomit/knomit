@@ -14,7 +14,7 @@ func TestProblem_Marshal_RequiredFields(t *testing.T) {
 		Title:    "Fact not found",
 		Status:   404,
 		Detail:   `no fact at path "know/nope.md"`,
-		Instance: "/api/v1-new/repos/alpha/branches/agent:test/facts/know/nope.md",
+		Instance: "/api/v1/repos/alpha/branches/agent:test/facts/know/nope.md",
 	}
 	b, err := json.Marshal(p)
 	if err != nil {
@@ -25,7 +25,7 @@ func TestProblem_Marshal_RequiredFields(t *testing.T) {
 		`"title":"Fact not found"`,
 		`"status":404`,
 		`"detail":"no fact at path \"know/nope.md\""`,
-		`"instance":"/api/v1-new/repos/alpha/branches/agent:test/facts/know/nope.md"`,
+		`"instance":"/api/v1/repos/alpha/branches/agent:test/facts/know/nope.md"`,
 	} {
 		if !strings.Contains(string(b), want) {
 			t.Errorf("missing %q in %s", want, b)

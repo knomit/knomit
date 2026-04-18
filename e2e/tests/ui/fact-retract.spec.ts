@@ -16,9 +16,10 @@ This fact will be retracted.`;
 test.describe('Fact Retract', () => {
   test('retract button appears in tree mode and retracts the fact', async ({ freshKnomit, page }) => {
     // Seed the fact
-    const res = await freshKnomit.api.put(`${freshKnomit.baseURL}/api/v1/knomit/fact`, {
-      data: { path: 'kb/to-retract.md', content: FACT_CONTENT },
-    });
+    const res = await freshKnomit.api.put(
+      `${freshKnomit.baseURL}/api/v1/repos/knomit/branches/${freshKnomit.branch}/facts/kb/to-retract.md`,
+      { data: { content: FACT_CONTENT } },
+    );
     expect(res.ok()).toBeTruthy();
 
     await page.goto(freshKnomit.baseURL);
@@ -34,10 +35,13 @@ test.describe('Fact Retract', () => {
     const retractBtn = page.getByTestId('retract-btn');
     await expect(retractBtn).toBeVisible();
 
-    // Click retract and wait for DELETE response
+    // Click retract to open the confirmation modal, then confirm.
+    await retractBtn.click();
+    const confirmBtn = page.getByTestId('retract-confirm-btn');
+    await expect(confirmBtn).toBeVisible();
     const [response] = await Promise.all([
-      page.waitForResponse(resp => resp.url().includes('/fact') && resp.request().method() === 'DELETE'),
-      retractBtn.click(),
+      page.waitForResponse(resp => resp.url().includes('/facts/') && resp.request().method() === 'DELETE'),
+      confirmBtn.click(),
     ]);
     expect(response.ok()).toBeTruthy();
 
@@ -51,24 +55,24 @@ test.describe('Fact Retract', () => {
 
   test('retract commits with correct message and operation', async ({ freshKnomit }) => {
     // Seed the fact
-    await freshKnomit.api.put(`${freshKnomit.baseURL}/api/v1/knomit/fact`, {
-      data: { path: 'kb/retract-check.md', content: FACT_CONTENT },
-    });
+    await freshKnomit.api.put(
+      `${freshKnomit.baseURL}/api/v1/repos/knomit/branches/${freshKnomit.branch}/facts/kb/retract-check.md`,
+      { data: { content: FACT_CONTENT } },
+    );
 
-    // Retract via API directly
+    // Retract via API directly. The HAL endpoint returns 204 No Content with an empty body.
     const retractRes = await freshKnomit.api.delete(
-      `${freshKnomit.baseURL}/api/v1/knomit/fact?path=kb/retract-check.md`,
+      `${freshKnomit.baseURL}/api/v1/repos/knomit/branches/${freshKnomit.branch}/facts/kb/retract-check.md`,
     );
     expect(retractRes.ok()).toBeTruthy();
-    const body = await retractRes.json();
-    expect(body.commit).toBeTruthy();
+    expect(retractRes.status()).toBe(204);
 
-    // Verify the commit message and operation via history
+    // Verify the commit message and operation via commits list (filter by path)
     const histRes = await freshKnomit.api.get(
-      `${freshKnomit.baseURL}/api/v1/knomit/history?path=kb/retract-check.md`,
+      `${freshKnomit.baseURL}/api/v1/repos/knomit/branches/${freshKnomit.branch}/commits`,
     );
     const hist = await histRes.json();
-    const latest = hist.entries[0];
+    const latest = hist._embedded.commits[0];
     expect(latest.message).toBe('manual-review: retract kb/retract-check.md');
     expect(latest.operation).toBe('retract');
   });

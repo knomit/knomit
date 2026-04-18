@@ -15,7 +15,7 @@ type stubRefResolver struct {
 func (s *stubRefResolver) Exists(path string) bool { return s.existing[path] }
 
 func TestBuildRefViews_URLKind_ExternalHttp(t *testing.T) {
-	b := hal.URLBuilder{Base: "/api/v1-new"}
+	b := hal.URLBuilder{Base: "/api/v1"}
 	a := hal.Anchor{Branch: "agent/test"}
 	resolver := &stubRefResolver{existing: map[string]bool{}}
 
@@ -32,7 +32,7 @@ func TestBuildRefViews_URLKind_ExternalHttp(t *testing.T) {
 }
 
 func TestBuildRefViews_URLKind_NoMdSuffix(t *testing.T) {
-	b := hal.URLBuilder{Base: "/api/v1-new"}
+	b := hal.URLBuilder{Base: "/api/v1"}
 	a := hal.Anchor{Branch: "agent/test"}
 	resolver := &stubRefResolver{}
 
@@ -43,7 +43,7 @@ func TestBuildRefViews_URLKind_NoMdSuffix(t *testing.T) {
 }
 
 func TestBuildRefViews_FactKind_WithTargetLink(t *testing.T) {
-	b := hal.URLBuilder{Base: "/api/v1-new"}
+	b := hal.URLBuilder{Base: "/api/v1"}
 	a := hal.Anchor{Branch: "agent/test"}
 	resolver := &stubRefResolver{existing: map[string]bool{"know/exists.md": true}}
 
@@ -51,14 +51,14 @@ func TestBuildRefViews_FactKind_WithTargetLink(t *testing.T) {
 	if got[0].Kind != "fact" {
 		t.Errorf("kind: %q", got[0].Kind)
 	}
-	want := "/api/v1-new/repos/alpha/branches/agent:test/facts/know/exists.md"
+	want := "/api/v1/repos/alpha/branches/agent:test/facts/know/exists.md"
 	if href := got[0].Links["target"].Href; href != want {
 		t.Errorf("target: got %q, want %q", href, want)
 	}
 }
 
 func TestBuildRefViews_BrokenKind_NoTargetLink(t *testing.T) {
-	b := hal.URLBuilder{Base: "/api/v1-new"}
+	b := hal.URLBuilder{Base: "/api/v1"}
 	a := hal.Anchor{Branch: "agent/test"}
 	resolver := &stubRefResolver{existing: map[string]bool{}}
 
@@ -72,12 +72,12 @@ func TestBuildRefViews_BrokenKind_NoTargetLink(t *testing.T) {
 }
 
 func TestBuildRefViews_CommitAnchoredTarget_CarriesShaSegment(t *testing.T) {
-	b := hal.URLBuilder{Base: "/api/v1-new"}
+	b := hal.URLBuilder{Base: "/api/v1"}
 	a := hal.Anchor{Branch: "agent/test", Commit: "abc123"}
 	resolver := &stubRefResolver{existing: map[string]bool{"know/exists.md": true}}
 
 	got := BuildRefViews(b, "alpha", a, []string{"know/exists.md"}, resolver)
-	want := "/api/v1-new/repos/alpha/branches/agent:test/commits/abc123/facts/know/exists.md"
+	want := "/api/v1/repos/alpha/branches/agent:test/commits/abc123/facts/know/exists.md"
 	if href := got[0].Links["target"].Href; href != want {
 		t.Errorf("target: got %q, want %q", href, want)
 	}

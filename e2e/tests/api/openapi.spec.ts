@@ -1,10 +1,8 @@
 import { test, expect } from '../../fixtures/knomit.js';
 
+// The /api/v1/openapi.yaml endpoint has been removed in the HATEOAS redesign.
 test.describe('API: OpenAPI', () => {
-  test('returns OpenAPI YAML spec', async ({ request, sharedBaseURL }) => {
-    const res = await request.get(`${sharedBaseURL}/api/v1/openapi.yaml`);
-    expect(res.ok()).toBeTruthy();
-    const text = await res.text();
-    expect(text).toContain('openapi');
+  test.skip('openapi.yaml endpoint is no longer registered in the HATEOAS router', async () => {
+    // Previously: GET /api/v1/openapi.yaml — now removed.
   });
 });

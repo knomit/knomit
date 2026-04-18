@@ -39,6 +39,19 @@ func TestBranchMiddleware_PassesThroughPlainNames(t *testing.T) {
 	}
 }
 
+func TestBranchMiddleware_DecodesPercentEncodedColon(t *testing.T) {
+	r := chi.NewRouter()
+	r.With(BranchMiddleware).Get("/b/{branch}", func(w http.ResponseWriter, req *http.Request) {
+		_, _ = w.Write([]byte(BranchFromContext(req.Context())))
+	})
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/b/agent%3Amacdev-0a21104c", nil)
+	r.ServeHTTP(rec, req)
+	if rec.Body.String() != "agent/macdev-0a21104c" {
+		t.Errorf("got %q, want %q", rec.Body.String(), "agent/macdev-0a21104c")
+	}
+}
+
 func TestBranchFromContext_PanicsWhenMissing(t *testing.T) {
 	defer func() {
 		if recover() == nil {

@@ -11,7 +11,7 @@ import (
 	"knomit/internal/web/hal"
 )
 
-// stubFactReader implements the minimal interface the v2 fact handler needs.
+// stubFactReader implements the minimal interface the HAL fact handler needs.
 type stubFactReader struct {
 	fact    knomitfact.Fact
 	exists  map[string]bool
@@ -25,7 +25,7 @@ func (s *stubFactReader) Read(_ *repos.RepoInstance, _ hal.Anchor, _ string) (kn
 
 func (s *stubFactReader) Exists(path string) bool { return s.exists[path] }
 
-func TestHandleV2Fact_ReturnsHALEnvelope(t *testing.T) {
+func TestHandleHALFact_ReturnsHALEnvelope(t *testing.T) {
 	f := knomitfact.NewFact("know/ai/ml/abc12345.md")
 	f.Title = "Attention"
 	f.Body = "Body"
@@ -45,7 +45,7 @@ func TestHandleV2Fact_ReturnsHALEnvelope(t *testing.T) {
 		Manager:    newTestManagerWithRepos(t, "alpha"),
 		factReader: reader,
 	}
-	r := s.NewV2Router()
+	r := s.NewAPIRouter()
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet,
@@ -93,12 +93,12 @@ func TestHandleV2Fact_ReturnsHALEnvelope(t *testing.T) {
 	}
 }
 
-func TestHandleV2Fact_NotFound_ReturnsProblem(t *testing.T) {
+func TestHandleHALFact_NotFound_ReturnsProblem(t *testing.T) {
 	s := &Server{
 		Manager:    newTestManagerWithRepos(t, "alpha"),
 		factReader: &stubFactReader{readErr: errFactNotFound},
 	}
-	r := s.NewV2Router()
+	r := s.NewAPIRouter()
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet,

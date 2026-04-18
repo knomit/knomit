@@ -31,7 +31,7 @@ type SearchIndex interface {
 	RecentFacts(ctx context.Context, branch, pathPrefix, query string, limit, offset int, includeTypes, excludeTypes, domain, entities, epOps []string) ([]RecentFactEntry, int, error)
 	Log(ctx context.Context, branch, path string) ([]LogEntry, error)
 	LogPaginated(ctx context.Context, branch, path string, limit int, after, from, before string) ([]LogEntryWithTags, string, string, error)
-	CommitDetail(ctx context.Context, commitHash string) (*CommitDetailResult, error)
+	CommitDetail(ctx context.Context, commitHash, pathPrefix string) (*CommitDetailResult, error)
 	Activity(ctx context.Context, branch, path string) (ActivityResult, error)
 	WalkChangedFiles(ctx context.Context, branch, fromCommit, prefix string, seen map[string]bool, limit int) ([]FileRecency, string, error)
 	FactsIter(ctx context.Context, branch string) (*FactsIter, error)

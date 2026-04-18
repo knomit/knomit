@@ -9,9 +9,9 @@ import (
 	"knomit/internal/web/hal"
 )
 
-func TestHandleV2APIRoot_LinksToReposAndSpec(t *testing.T) {
+func TestHandleAPIRoot_LinksToReposAndSpec(t *testing.T) {
 	s := &Server{}
-	r := s.NewV2Router()
+	r := s.NewAPIRouter()
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
@@ -36,7 +36,7 @@ func TestHandleV2APIRoot_LinksToReposAndSpec(t *testing.T) {
 			t.Errorf("missing link %q: %+v", rel, body.Links)
 		}
 	}
-	if got := body.Links["repos"].Href; got != V2URLBase+"/repos" {
+	if got := body.Links["repos"].Href; got != APIBase+"/repos" {
 		t.Errorf("repos link: got %q", got)
 	}
 }

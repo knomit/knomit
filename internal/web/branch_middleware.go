@@ -3,6 +3,7 @@ package web
 import (
 	"context"
 	"net/http"
+	"net/url"
 
 	"github.com/go-chi/chi/v5"
 
@@ -21,10 +22,17 @@ func BranchMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		urlSeg := chi.URLParam(r, "branch")
 		if urlSeg == "" {
-			next.ServeHTTP(w, r)
+			hal.WriteProblem(w, http.StatusBadRequest,
+				"Missing branch", "the {branch} URL segment is required", r.URL.Path)
 			return
 		}
-		name := hal.DecodeBranch(urlSeg)
+		unescaped, err := url.PathUnescape(urlSeg)
+		if err != nil {
+			hal.WriteProblem(w, http.StatusBadRequest,
+				"Invalid branch", "branch segment is not valid percent-encoded UTF-8", r.URL.Path)
+			return
+		}
+		name := hal.DecodeBranch(unescaped)
 		ctx := context.WithValue(r.Context(), branchCtxKey{}, name)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})

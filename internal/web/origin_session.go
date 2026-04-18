@@ -153,6 +153,17 @@ func (sm *SessionManager) Shutdown() {
 	log.Debug().Msg("session manager shut down")
 }
 
+// ListByRepo returns all active sessions for the given repo name.
+// The current model stores at most one session per repo, but the return type
+// is a slice so callers don't need to know the storage layout.
+func (sm *SessionManager) ListByRepo(repo string) []*OriginSession {
+	v, ok := sm.sessions.Load(repo)
+	if !ok {
+		return nil
+	}
+	return []*OriginSession{v.(*OriginSession)}
+}
+
 // deleteByRepo removes the session for repo unconditionally (no ID check).
 func (sm *SessionManager) deleteByRepo(repo string) {
 	v, ok := sm.sessions.LoadAndDelete(repo)

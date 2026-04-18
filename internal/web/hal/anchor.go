@@ -5,7 +5,7 @@ import "strings"
 // Anchor captures the temporal context for a fact URL: which branch and,
 // optionally, which commit. An empty Commit means "branch HEAD"; a set
 // Commit means "the fact as it existed at this commit". All URL construction
-// for the v2 API goes through an Anchor so the commit-anchored rule is
+// for the API goes through an Anchor so the commit-anchored rule is
 // enforced by construction: links built from a commit-anchored Anchor carry
 // the /commits/{sha}/ segment.
 type Anchor struct {
@@ -28,13 +28,11 @@ func DecodeBranch(urlSegment string) string {
 	return strings.ReplaceAll(urlSegment, ":", "/")
 }
 
-// URLBuilder constructs v2 API URLs. All URL construction in the v2 router
+// URLBuilder constructs API URLs. All URL construction in the API router
 // goes through this type so the branch-name substitution and the
 // commit-anchor propagation are enforced in exactly one place.
 //
-// Base is the prefix under which the v2 router is mounted (e.g.
-// "/api/v1-new" during development, "/api/v1" after the final swap in
-// Plan 03).
+// Base is the prefix under which the API router is mounted (e.g. "/api/v1").
 type URLBuilder struct {
 	Base string
 }

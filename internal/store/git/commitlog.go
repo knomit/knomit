@@ -108,6 +108,11 @@ func (s *Storer) CommitLogSync(branchName string, iter func() (hash string, entr
 		}
 
 		// Dedup: is this commit already recorded as visible on this branch?
+		// For linear history an existing row means all ancestors are already
+		// recorded too, so we could stop. But for merge commits the iterator
+		// is walking a DAG — hitting a known commit on one parent's line says
+		// nothing about the other parent's ancestry. Skip this commit and
+		// continue walking rather than short-circuiting.
 		var cnt int
 		if err := s.db.QueryRow(
 			`SELECT COUNT(*) FROM branch_commits WHERE branch_id = ? AND commit_hash = ?`,
@@ -116,7 +121,7 @@ func (s *Storer) CommitLogSync(branchName string, iter func() (hash string, entr
 		}
 		if cnt > 0 {
 			s.commitLog.Store(true)
-			return nil
+			continue
 		}
 
 		if len(entries) == 0 {

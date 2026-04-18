@@ -9,10 +9,12 @@ import { api } from './api';
 vi.mock('./api', () => ({
   api: {
     commitDetail: vi.fn(),
+    history: vi.fn(),
   },
 }));
 
 const mockCommitDetail = api.commitDetail as ReturnType<typeof vi.fn>;
+const mockHistory = api.history as ReturnType<typeof vi.fn>;
 
 function makeState(overrides: Partial<AppState> = {}): AppState {
   return { ...init, repo: 'myrepo', headCommit: 'head1', ...overrides };
@@ -50,7 +52,7 @@ describe('resolveNavRequest', () => {
     });
     const req: NavRequest = { view: 'history', historyCommit: 'abc123', factPath: null };
     await resolveNavRequest(req, makeState(), dispatch);
-    expect(mockCommitDetail).toHaveBeenCalledWith('myrepo', 'abc123');
+    expect(mockCommitDetail).toHaveBeenCalledWith('myrepo', '', 'abc123');
     expect(dispatch).toHaveBeenCalledWith({ type: 'APPLY_NAV', view: 'history', historyCommit: 'abc123', factPath: 'kb/first.md', factCommit: 'abc123' });
   });
 
@@ -82,10 +84,18 @@ describe('resolveNavRequest', () => {
 
   // ── Mode-switch: { view } ─────────────────────────────────────────────────
 
-  it('mode-switch to history with known factCommit dispatches immediately preserving path filter', async () => {
+  it('mode-switch to history with factPath resolves fact last-touched commit via history()', async () => {
+    mockHistory.mockResolvedValue({ entries: [{ commit: 'last999', date: '', message: '' }] });
     const state = makeState({ factPath: 'kb/foo.md', factCommit: 'abc123' });
     await resolveNavRequest({ view: 'history' }, state, dispatch);
-    expect(mockCommitDetail).not.toHaveBeenCalled();
+    expect(mockHistory).toHaveBeenCalledWith('myrepo', '', 'kb/foo.md');
+    expect(dispatch).toHaveBeenCalledWith({ type: 'APPLY_NAV', view: 'history', historyCommit: 'last999', factPath: 'kb/foo.md', factCommit: 'last999' });
+  });
+
+  it('mode-switch to history with factPath falls back to factCommit on history() failure', async () => {
+    mockHistory.mockRejectedValue(new Error('boom'));
+    const state = makeState({ factPath: 'kb/foo.md', factCommit: 'abc123' });
+    await resolveNavRequest({ view: 'history' }, state, dispatch);
     expect(dispatch).toHaveBeenCalledWith({ type: 'APPLY_NAV', view: 'history', historyCommit: 'abc123', factPath: 'kb/foo.md', factCommit: 'abc123' });
   });
 

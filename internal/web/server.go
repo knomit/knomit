@@ -28,6 +28,8 @@ type Server struct {
 
 	mcpHandlers map[string]http.Handler // profile → handler
 
+	JobRegistry *JobRegistry // tracks synthesis-run and index-rebuild jobs
+
 	// branchesLister is a per-repo branch enumeration hook. Injected for
 	// tests; production wires it to ri.WithRead → svc.Branches().ListBranches.
 	branchesLister func(ri *repos.RepoInstance) ([]store.Branch, error)
@@ -35,6 +37,28 @@ type Server struct {
 	branchRootReader func(ri *repos.RepoInstance, branch string) (branchRootInfo, error)
 
 	factReader FactReader
+
+	topicLister TopicLister
+
+	searchProvider searchProvider
+
+	commitsProvider commitsProvider
+
+	factSubProvider factSubProvider
+
+	statsProvider statsProvider
+
+	domainsProvider domainsProvider
+
+	completionsProvider completionsProvider
+
+	factsCollectionProvider factsCollectionProvider
+
+	activityProvider activityProvider
+
+	factWriter FactWriter
+
+	originProvider originProvider
 }
 
 // buildMCPHandlers constructs one MCP server per profile, shared across all
@@ -65,58 +89,10 @@ func (s *Server) Handler() http.Handler {
 		r.Mount("/git", s.GitHandler)
 	}
 
-	r.Get("/api/v1/openapi.yaml", handleOpenAPISpec())
-	r.Get("/api/v1/repos", handleRepos(s.Manager))
 	r.Get("/docs", handleSwaggerUI())
 
-	r.Route("/api/v1/{repo}", func(sub chi.Router) {
-		sub.Use(repos.RepoMiddleware(s.Manager))
-		sub.Get("/browse", handleBrowse(s.OntologyRoot, s.AgentBranch))
-		sub.Get("/fact", handleFact(s.AgentBranch))
-		sub.Put("/fact", handleFactWrite(s.AgentBranch))
-		sub.Delete("/fact", handleFactRetract(s.AgentBranch))
-		sub.Get("/search", handleSearch())
-		sub.Get("/explain", handleExplain())
-		sub.Get("/history", handleHistoryPaginated(s.AgentBranch))
-		sub.Get("/commit", handleCommitDetail(s.AgentBranch))
-		sub.Get("/stats", handleStats())
-		sub.Get("/activity", handleActivity(s.AgentBranch))
-		sub.Get("/status", handleStatus(s.EmbeddingsEnabled, s.OntologyRoot, s.AgentBranch))
-		sub.Post("/synthesize", s.handleSynthesizeStart())
-		sub.Post("/rebuild", handleRebuild())
-		sub.Get("/completions", handleCompletions())
-		sub.Get("/recent", handleRecent())
-		sub.Get("/events", handleEvents())
-		sub.Get("/origin", handleGetOrigin())
-		sub.Put("/origin", handleSetOrigin())
-		sub.Post("/origin/session", handleCreateSession(s.Manager, s.SessionManager))
-		sub.Get("/origin/session/{sessionID}", handleGetSession(s.Manager, s.SessionManager))
-		sub.Delete("/origin/session/{sessionID}", handleDeleteSession(s.Manager, s.SessionManager))
-		sub.Get("/origin/session/{sessionID}/test", handleTestConnectivity(s.Manager, s.SessionManager, s.AgentBranch))
-		sub.Get("/origin/session/{sessionID}/preview", handlePreview(s.Manager, s.SessionManager, s.AgentBranch))
-		sub.Post("/origin/session/{sessionID}/apply", handleApply(s.Manager, s.SessionManager, s.AgentBranch))
-		sub.Post("/origin/session/{sessionID}/commit", s.handleCommit(s.Manager, s.SessionManager, s.AgentBranch))
-
-		sub.Mount("/mcp", http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-			profile := req.URL.Query().Get("profile")
-			if profile == "" {
-				profile = "code"
-			}
-			h, ok := s.mcpHandlers[profile]
-			if !ok {
-				h = s.mcpHandlers["code"]
-			}
-			if h == nil {
-				http.NotFound(w, req)
-				return
-			}
-			h.ServeHTTP(w, req)
-		}))
-	})
-
-	// Mount the HAL v2 router under a temporary prefix. Plan 03 renames this
-	// to /api/v1 and retires the legacy routes registered above.
-	r.Mount(V2URLBase, s.NewV2Router())
+	// Mount the API router.
+	r.Mount(APIBase, s.NewAPIRouter())
 
 	// Serve embedded web UI
 	staticHandler := StaticHandler()

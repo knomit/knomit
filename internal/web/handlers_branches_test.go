@@ -37,7 +37,7 @@ func newTestRepoWithBranches(_ *testing.T, _ []store.Branch) *repos.RepoInstance
 	return &repos.RepoInstance{}
 }
 
-func TestHandleV2Branches_ReturnsCollection(t *testing.T) {
+func TestHandleHALBranches_ReturnsCollection(t *testing.T) {
 	// Wire a manager with one repo.
 	m := newTestManagerWithRepos(t, "alpha")
 	s := &Server{
@@ -49,7 +49,7 @@ func TestHandleV2Branches_ReturnsCollection(t *testing.T) {
 			}, nil
 		},
 	}
-	r := s.NewV2Router()
+	r := s.NewAPIRouter()
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/repos/alpha/branches", nil)
@@ -88,7 +88,7 @@ func TestHandleV2Branches_ReturnsCollection(t *testing.T) {
 	for _, br := range body.Embedded.Branches {
 		if br.Name == "agent/test" {
 			found = true
-			want := V2URLBase + "/repos/alpha/branches/agent:test"
+			want := APIBase + "/repos/alpha/branches/agent:test"
 			if got := br.Links["self"].Href; got != want {
 				t.Errorf("self: got %q, want %q", got, want)
 			}
@@ -99,7 +99,7 @@ func TestHandleV2Branches_ReturnsCollection(t *testing.T) {
 	}
 }
 
-func TestHandleV2Branch_ReturnsStatusAndFullLinkMap(t *testing.T) {
+func TestHandleHALBranch_ReturnsStatusAndFullLinkMap(t *testing.T) {
 	m := newTestManagerWithRepos(t, "alpha")
 	s := &Server{
 		Manager:           m,
@@ -112,7 +112,7 @@ func TestHandleV2Branch_ReturnsStatusAndFullLinkMap(t *testing.T) {
 			}, nil
 		},
 	}
-	r := s.NewV2Router()
+	r := s.NewAPIRouter()
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/repos/alpha/branches/agent:test", nil)
@@ -162,15 +162,15 @@ func TestHandleV2Branch_ReturnsStatusAndFullLinkMap(t *testing.T) {
 		}
 	}
 	// self must be branch-anchored, no commit.
-	wantSelf := V2URLBase + "/repos/alpha/branches/agent:test"
+	wantSelf := APIBase + "/repos/alpha/branches/agent:test"
 	if got := body.Links["self"].Href; got != wantSelf {
 		t.Errorf("self: got %q, want %q", got, wantSelf)
 	}
 }
 
-func TestHandleV2Branch_UnknownRepoReturns404(t *testing.T) {
+func TestHandleHALBranch_UnknownRepoReturns404(t *testing.T) {
 	s := &Server{Manager: newTestManagerWithRepos(t)}
-	r := s.NewV2Router()
+	r := s.NewAPIRouter()
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/repos/missing/branches/main", nil)
 	r.ServeHTTP(rec, req)

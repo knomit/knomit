@@ -1,6 +1,5 @@
-// Server-Sent Events (SSE) endpoint for real-time task progress and
-// status updates. Clients connect to /api/v1/{repo}/events and receive task
-// lifecycle events plus periodic head-commit heartbeats.
+// HAL SSE endpoint for branch-scoped real-time task progress and status updates.
+// Clients connect to /api/v1/repos/{repo}/branches/{branch}/events.
 package web
 
 import (
@@ -9,14 +8,26 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/go-chi/chi/v5"
+
 	"knomit/internal/repos"
 	"knomit/internal/store"
+	"knomit/internal/web/hal"
 )
 
-// handleEvents handles GET /api/v1/{repo}/events — SSE endpoint for real-time updates.
-func handleEvents() http.HandlerFunc {
+// handleHALEvents handles GET /api/v1/repos/{repo}/branches/{branch}/events.
+// SSE stream for branch task progress and head-commit status updates.
+func handleHALEvents(m *repos.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		ri := repos.RepoFromContext(r.Context())
+		repoName := chi.URLParam(r, "repo")
+		ri := m.Get(repoName)
+		if ri == nil {
+			hal.WriteProblem(w, http.StatusNotFound, "Repo not found",
+				`no repo named "`+repoName+`"`, r.URL.Path)
+			return
+		}
+		branch := BranchFromContext(r.Context())
+
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.Header().Set("Cache-Control", "no-cache")
 		w.Header().Set("Connection", "keep-alive")
@@ -26,19 +37,22 @@ func handleEvents() http.HandlerFunc {
 			return
 		}
 
-		// Subscribe returns both a channel and a snapshot of recent events,
-		// providing reconnection recovery without maintaining client-side state.
+		// Subscribe and obtain snapshot atomically before sending the initial status.
 		events, snapshot := ri.TaskHub().Subscribe(r.Context())
 
-		// Snapshot the initial head commit — GS may be swapped concurrently.
+		// Snapshot the initial head commit.
 		var branches store.BranchIndex
 		ri.WithRead(func(svc *store.Service) {
 			if svc != nil {
 				branches = svc.Branches()
 			}
 		})
-		head, _ := branches.HeadCommit(r.Context(), ri.AgentBranch())
-		fmt.Fprintf(w, "event: status\ndata: {\"head\":\"%s\"}\n\n", head)
+		if branches != nil {
+			head, _ := branches.HeadCommit(r.Context(), branch)
+			fmt.Fprintf(w, "event: status\ndata: {\"head\":\"%s\"}\n\n", head)
+		} else {
+			fmt.Fprintf(w, "event: status\ndata: {\"head\":\"\"}\n\n")
+		}
 
 		// Replay snapshot (reconnect recovery).
 		for _, ev := range snapshot {

@@ -175,7 +175,8 @@ func (fi *factIndex) ListDir(ctx context.Context, branch, path string) ([]DirEnt
 	} else {
 		subtree, err = tree.Tree(path)
 		if err != nil {
-			return nil, fmt.Errorf("ListDir: subtree %q: %w", path, err)
+			// Directory doesn't exist yet — return empty list, not an error.
+			return nil, nil
 		}
 	}
 

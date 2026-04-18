@@ -26,9 +26,22 @@ export async function resolveNavRequest(
   if (!('factPath' in req)) {
     if (req.view === 'history') {
       const { factPath, factCommit, headCommit } = state;
-      if (factPath && factCommit) {
-        // Already have a fact at a known commit — land there immediately.
-        dispatch({ type: 'APPLY_NAV', view: 'history', historyCommit: factCommit, factPath, factCommit });
+      if (factPath) {
+        // Resolve the fact's most-recent commit — factCommit is `as_of.commit` (HEAD
+        // for at-HEAD reads), which may not have modified this fact. Use /commits so
+        // CommitPanel opens a commit whose file list actually contains factPath.
+        try {
+          const hist = await api.history(state.repo, state.branch, factPath);
+          const lastTouched = hist.entries[0]?.commit ?? factCommit ?? headCommit ?? null;
+          if (lastTouched) {
+            dispatch({ type: 'APPLY_NAV', view: 'history', historyCommit: lastTouched, factPath, factCommit: lastTouched });
+          } else {
+            dispatch({ type: 'APPLY_NAV', view: 'history', historyCommit: null, factPath, factCommit: null });
+          }
+        } catch {
+          const fallback = factCommit ?? headCommit ?? null;
+          dispatch({ type: 'APPLY_NAV', view: 'history', historyCommit: fallback, factPath, factCommit: fallback });
+        }
       } else if (headCommit) {
         // Land at HEAD; CommitPanel will auto-select the first file via AMEND_NAV once detail loads.
         dispatch({ type: 'APPLY_NAV', view: 'history', historyCommit: headCommit, factPath: null, factCommit: headCommit });
@@ -53,7 +66,7 @@ export async function resolveNavRequest(
   if (req.view === 'history' && req.factPath === null) {
     // historyCommit given but factPath needs resolving (e.g. timeline click).
     try {
-      const detail = await api.commitDetail(state.repo, req.historyCommit);
+      const detail = await api.commitDetail(state.repo, state.branch, req.historyCommit);
       const first = (detail.files || [])[0];
       dispatch({ type: 'APPLY_NAV', view: 'history', historyCommit: req.historyCommit, factPath: first?.path ?? null, factCommit: req.historyCommit });
     } catch {
