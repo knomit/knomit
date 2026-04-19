@@ -3,6 +3,7 @@
 ORT_VERSION := 1.24.3
 UNAME_S := $(shell uname -s)
 UNAME_M := $(shell uname -m)
+TRAY_VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 
 # Detect platform for ORT download
 ifeq ($(UNAME_S),Darwin)
@@ -109,14 +110,24 @@ e2e-ui: dist
 e2e-report:
 	cd e2e && npx playwright show-report playwright-report
 
-# ---- knomit-tray (macOS phase 1) --------------------------------------------
+# ---- knomit-tray (macOS phase 1 + Linux phase 2) ----------------------------
 
 tray:
 ifeq ($(UNAME_S),Darwin)
-	CGO_ENABLED=1 go build -ldflags "-X knomit/tools/tray/cmd.version=$(shell git describe --tags --always --dirty 2>/dev/null || echo dev)" -o dist/knomit-tray ./tools/tray
+	CGO_ENABLED=1 go build -ldflags "-X knomit/tools/tray/cmd.version=$(TRAY_VERSION)" -o dist/knomit-tray ./tools/tray
 	@echo "Built dist/knomit-tray (macOS)"
+else ifeq ($(UNAME_S),Linux)
+	CGO_ENABLED=1 go build -ldflags "-X knomit/tools/tray/cmd.version=$(TRAY_VERSION)" -o dist/knomit-tray ./tools/tray
+	@go run tools/tray/linux/genicon.go
+	@sed -e 's|{{BINARY}}|$(CURDIR)/dist/knomit-tray|g' \
+	     -e 's|{{ICON}}|$(CURDIR)/dist/knomit.png|g' \
+	     tools/tray/linux/knomit.desktop.tmpl > dist/knomit.desktop
+	@sed -e 's|{{BINARY}}|$(CURDIR)/dist/knomit-tray|g' \
+	     -e 's|{{KNOMIT_BIN}}|$(CURDIR)/dist/knomit|g' \
+	     tools/tray/linux/knomit-tray.service.tmpl > dist/knomit-tray.service
+	@echo "Built dist/knomit-tray, dist/knomit.png, dist/knomit.desktop, dist/knomit-tray.service (Linux)"
 else
-	@echo "knomit-tray build is macOS-only in phase 1; current platform: $(UNAME_S)"
+	@echo "knomit-tray build is macOS/Linux only; current platform: $(UNAME_S)"
 	@exit 1
 endif
 
