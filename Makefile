@@ -1,4 +1,4 @@
-.PHONY: build web test clean run dev setup dist download-ort download-graphqlite e2e e2e-ui e2e-setup e2e-report
+.PHONY: build web test clean run dev setup dist download-ort download-graphqlite e2e e2e-ui e2e-setup e2e-report tray tray-run
 
 ORT_VERSION := 1.24.3
 UNAME_S := $(shell uname -s)
@@ -108,3 +108,18 @@ e2e-ui: dist
 
 e2e-report:
 	cd e2e && npx playwright show-report playwright-report
+
+# ---- knomit-tray (macOS phase 1) --------------------------------------------
+
+tray:
+ifeq ($(UNAME_S),Darwin)
+	CGO_ENABLED=1 go build -ldflags "-X knomit/tools/tray/cmd.version=$(shell git describe --tags --always --dirty 2>/dev/null || echo dev)" -o dist/knomit-tray ./tools/tray
+	@echo "Built dist/knomit-tray (macOS)"
+else
+	@echo "knomit-tray build is macOS-only in phase 1; current platform: $(UNAME_S)"
+	@exit 1
+endif
+
+# Run the tray against the already-built main binary in dist/.
+tray-run: build tray
+	KNOMIT_BIN=$(PWD)/dist/knomit ./dist/knomit-tray
