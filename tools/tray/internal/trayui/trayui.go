@@ -11,20 +11,13 @@ import (
 	"fyne.io/systray"
 	"github.com/rs/zerolog/log"
 
+	"knomit/tools/tray/internal/autostart"
 	"knomit/tools/tray/internal/supervisor"
 )
 
-// AutostartToggler abstracts the per-OS autostart mechanism so this file
-// stays GUI-only. Implemented by knomit/tools/tray/internal/autostart.
-type AutostartToggler interface {
-	Enabled() (bool, error)
-	Enable() error
-	Disable() error
-}
-
 type Deps struct {
 	Supervisor *supervisor.Supervisor
-	Autostart  AutostartToggler
+	Autostart  autostart.Toggler
 	TrayBinary string // absolute path to knomit-tray, used to spawn windows
 }
 
@@ -115,7 +108,13 @@ func spawnWindow(d Deps) error {
 	cmd := exec.Command(d.TrayBinary, "window", "--url", url)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	return cmd.Start() // do NOT wait — window lives independently
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	// Reap asynchronously so the child doesn't linger as a zombie.
+	// The window lives independently; we don't care about its exit status.
+	go func() { _ = cmd.Wait() }()
+	return nil
 }
 
 func restart(d Deps) {
