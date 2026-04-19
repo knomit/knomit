@@ -57,6 +57,9 @@ type Supervisor struct {
 	lastErr  error
 	logFile  *os.File
 	onChange func(State)
+	// exited is closed by the wait goroutine once cmd.Wait() returns.
+	// Stop selects on it instead of calling cmd.Wait() a second time.
+	exited chan struct{}
 }
 
 // New creates a Supervisor with the given config. Call Start to launch the child.
@@ -92,9 +95,10 @@ func (s *Supervisor) Start() error {
 		return fmt.Errorf("open log: %w", err)
 	}
 
-	// Always pass "serve" as the first argument so the command matches the
-	// real knomit CLI.  The test's fake binary is written to skip argv[1]
-	// when it equals "serve" before calling flag.CommandLine.Parse.
+	// Always pass "serve" as the first argument so the invocation matches the
+	// real knomit CLI (`knomit serve --port N --host 127.0.0.1`).
+	// The test's fake binary is written to strip argv[1] when it equals
+	// "serve" before calling flag.CommandLine.Parse.
 	args := []string{"serve", "--port", strconv.Itoa(port), "--host", "127.0.0.1"}
 
 	cmd := exec.Command(s.cfg.Binary, args...)
@@ -110,17 +114,19 @@ func (s *Supervisor) Start() error {
 	s.cmd = cmd
 	s.port = port
 	s.logFile = logFile
+	s.exited = make(chan struct{})
 	s.setStateLocked(StateRunning, nil)
 
-	go s.wait(cmd)
+	go s.wait(cmd, s.exited)
 	return nil
 }
 
-// wait blocks until the child exits, then transitions state accordingly.
-// cmd.Wait() is intentionally called OUTSIDE the mutex to avoid deadlocking
-// with Stop (which also calls cmd.Wait via a goroutine).
-func (s *Supervisor) wait(cmd *exec.Cmd) {
+// wait blocks until the child exits, closes the exited channel, then
+// transitions state accordingly.  cmd.Wait() is called OUTSIDE the mutex so
+// that Stop (which holds no lock while selecting on exited) does not deadlock.
+func (s *Supervisor) wait(cmd *exec.Cmd, exited chan struct{}) {
 	err := cmd.Wait()
+	close(exited)
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -130,7 +136,7 @@ func (s *Supervisor) wait(cmd *exec.Cmd) {
 		s.logFile = nil
 	}
 	// Stop() pre-sets state to StateStopped before sending SIGTERM, so if
-	// we see StateStopped here we know Stop() already handled it.
+	// we see StateStopped here we know Stop() already handled the transition.
 	if s.state == StateStopped {
 		return
 	}
@@ -155,29 +161,27 @@ func (s *Supervisor) Stop(timeout time.Duration) error {
 	// goroutine (which re-acquires the lock after cmd.Wait returns) sees
 	// StateStopped and does not transition to StateCrashed.
 	s.setStateLocked(StateStopped, nil)
+	exited := s.exited
 	s.mu.Unlock()
 
-	pgid, err := syscall.Getpgid(cmd.Process.Pid)
-	if err != nil || pgid <= 0 {
+	pgid, pgidErr := syscall.Getpgid(cmd.Process.Pid)
+	if pgidErr != nil || pgid <= 0 {
 		// Fallback: signal only the process itself.
 		_ = cmd.Process.Signal(syscall.SIGTERM)
 	} else {
 		_ = syscall.Kill(-pgid, syscall.SIGTERM)
 	}
 
-	done := make(chan error, 1)
-	go func() { done <- cmd.Wait() }()
-
 	select {
-	case <-done:
+	case <-exited:
 		return nil
 	case <-time.After(timeout):
-		if err == nil && pgid > 0 {
+		if pgidErr == nil && pgid > 0 {
 			_ = syscall.Kill(-pgid, syscall.SIGKILL)
 		} else {
 			_ = cmd.Process.Kill()
 		}
-		<-done
+		<-exited
 		return fmt.Errorf("supervisor: serve did not exit within %s; sent SIGKILL", timeout)
 	}
 }
