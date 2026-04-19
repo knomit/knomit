@@ -65,6 +65,11 @@ func main() {
 	baseURL := "http://localhost:19278"
 	if flag.NArg() >= 1 {
 		baseURL = strings.TrimRight(flag.Arg(0), "/")
+	} else if url, err := readLockfileBaseURL(); err == nil && url != "" {
+		baseURL = url
+		logDebug("discovered base-url from lockfile: %s", baseURL)
+	} else if err != nil {
+		logDebug("lockfile read failed, falling back to default: %v", err)
 	}
 	serverURL := fmt.Sprintf("%s/api/v1/%s/mcp?profile=%s", baseURL, *repo, *profile)
 	logDebug("repo=%s profile=%s url=%s", *repo, *profile, serverURL)
@@ -244,4 +249,39 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return s[:n] + "..."
+}
+
+// readLockfileBaseURL returns http://127.0.0.1:<port> from the knomit-tray
+// lockfile, or ("", nil) if the file does not exist.
+func readLockfileBaseURL() (string, error) {
+	path, err := lockfilePath()
+	if err != nil {
+		return "", err
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", nil
+		}
+		return "", err
+	}
+	var info struct {
+		Port int `json:"port"`
+	}
+	if err := json.Unmarshal(data, &info); err != nil {
+		return "", fmt.Errorf("parse lockfile %s: %w", path, err)
+	}
+	if info.Port <= 0 {
+		return "", nil
+	}
+	return fmt.Sprintf("http://127.0.0.1:%d", info.Port), nil
+}
+
+func lockfilePath() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	// macOS only in phase 1; Windows path is added in phase 2.
+	return home + "/Library/Application Support/knomit/server.json", nil
 }
