@@ -38,6 +38,8 @@ import (
 	"mime"
 	"net/http"
 	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 )
@@ -282,6 +284,14 @@ func lockfilePath() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	// macOS only in phase 1; Windows path is added in phase 2.
-	return home + "/Library/Application Support/knomit/server.json", nil
+	switch runtime.GOOS {
+	case "darwin":
+		return filepath.Join(home, "Library", "Application Support", "knomit", "server.json"), nil
+	case "linux":
+		if xdg := os.Getenv("XDG_STATE_HOME"); xdg != "" {
+			return filepath.Join(xdg, "knomit", "server.json"), nil
+		}
+		return filepath.Join(home, ".local", "state", "knomit", "server.json"), nil
+	}
+	return "", fmt.Errorf("lockfile path: unsupported platform %s", runtime.GOOS)
 }
