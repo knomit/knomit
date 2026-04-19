@@ -87,9 +87,11 @@ func runTray(ctx context.Context) error {
 
 	// Run the tray UI. This blocks until Quit is clicked.
 	trayui.Run(trayui.Deps{
-		Supervisor: sup,
-		Autostart:  as,
-		TrayBinary: trayBin,
+		Autostart:    as,
+		LockfilePath: lockPath,
+		Supervisor:   sup,
+		TrayBinary:   trayBin,
+		Version:      version,
 	})
 
 	// Tray exited; ensure child is stopped.

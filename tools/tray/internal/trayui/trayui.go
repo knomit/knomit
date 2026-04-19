@@ -12,13 +12,16 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"knomit/tools/tray/internal/autostart"
+	"knomit/tools/tray/internal/lockfile"
 	"knomit/tools/tray/internal/supervisor"
 )
 
 type Deps struct {
-	Supervisor *supervisor.Supervisor
-	Autostart  autostart.Toggler
-	TrayBinary string // absolute path to knomit-tray, used to spawn windows
+	Autostart    autostart.Toggler
+	LockfilePath string
+	Supervisor   *supervisor.Supervisor
+	TrayBinary   string // absolute path to knomit-tray, used to spawn windows
+	Version      string
 }
 
 // Run blocks running the systray until Quit is clicked.
@@ -117,13 +120,31 @@ func spawnWindow(d Deps) error {
 	return nil
 }
 
+// restart stops the server and brings it back up, then republishes the
+// lockfile in case the port changed. Runs asynchronously so it doesn't
+// block the systray event loop.
 func restart(d Deps) {
-	if err := d.Supervisor.Stop(3 * time.Second); err != nil {
-		log.Warn().Err(err).Msg("stop failed during restart")
-	}
-	if err := d.Supervisor.Start(); err != nil {
-		log.Error().Err(err).Msg("restart failed")
-	}
+	go func() {
+		if err := d.Supervisor.Stop(3 * time.Second); err != nil {
+			log.Warn().Err(err).Msg("stop failed during restart")
+		}
+		if err := d.Supervisor.Start(); err != nil {
+			log.Error().Err(err).Msg("restart failed")
+			return
+		}
+		if err := d.Supervisor.WaitForHealthy(10 * time.Second); err != nil {
+			log.Error().Err(err).Msg("serve did not become healthy after restart")
+			return
+		}
+		info := lockfile.Info{
+			PID:     os.Getpid(),
+			Port:    d.Supervisor.Port(),
+			Version: d.Version,
+		}
+		if err := lockfile.Write(d.LockfilePath, info); err != nil {
+			log.Error().Err(err).Msg("rewrite lockfile after restart")
+		}
+	}()
 }
 
 func toggleAutostart(d Deps, item *systray.MenuItem) {
