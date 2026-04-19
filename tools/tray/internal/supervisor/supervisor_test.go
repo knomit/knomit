@@ -79,6 +79,37 @@ func TestSupervisor_StartsAndServes(t *testing.T) {
 	t.Fatalf("server never came up at %s", s.URL())
 }
 
+func TestSupervisor_OnStateChange_CanCallAccessors(t *testing.T) {
+	bin := buildFakeServer(t)
+	s := supervisor.New(supervisor.Config{
+		Binary:  bin,
+		Port:    0,
+		LogsDir: t.TempDir(),
+	})
+
+	// Record port observed from within the callback. If the callback
+	// held the supervisor's mutex, Port() would deadlock here.
+	portCh := make(chan int, 4)
+	s.OnStateChange(func(st supervisor.State) {
+		// Port() acquires s.mu; must not deadlock.
+		portCh <- s.Port()
+	})
+
+	if err := s.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer s.Stop(2 * time.Second)
+
+	select {
+	case p := <-portCh:
+		if p == 0 {
+			t.Errorf("callback saw port 0; wanted > 0")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("callback never fired (likely deadlock)")
+	}
+}
+
 func TestSupervisor_StopKillsChild(t *testing.T) {
 	bin := buildFakeServer(t)
 	s := supervisor.New(supervisor.Config{

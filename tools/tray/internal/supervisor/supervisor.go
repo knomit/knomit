@@ -71,9 +71,9 @@ func New(cfg Config) *Supervisor {
 // the child cannot be started.
 func (s *Supervisor) Start() error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	if s.state == StateRunning {
+		s.mu.Unlock()
 		return fmt.Errorf("supervisor: already running")
 	}
 
@@ -81,17 +81,20 @@ func (s *Supervisor) Start() error {
 	if port == 0 {
 		p, err := netutil.PickPort()
 		if err != nil {
+			s.mu.Unlock()
 			return err
 		}
 		port = p
 	}
 
 	if err := os.MkdirAll(s.cfg.LogsDir, 0o755); err != nil {
+		s.mu.Unlock()
 		return fmt.Errorf("mkdir logs: %w", err)
 	}
 	logPath := filepath.Join(s.cfg.LogsDir, "serve.log")
 	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
+		s.mu.Unlock()
 		return fmt.Errorf("open log: %w", err)
 	}
 
@@ -108,6 +111,7 @@ func (s *Supervisor) Start() error {
 
 	if err := cmd.Start(); err != nil {
 		logFile.Close()
+		s.mu.Unlock()
 		return fmt.Errorf("start %s: %w", s.cfg.Binary, err)
 	}
 
@@ -115,9 +119,17 @@ func (s *Supervisor) Start() error {
 	s.port = port
 	s.logFile = logFile
 	s.exited = make(chan struct{})
-	s.setStateLocked(StateRunning, nil)
+	fire := s.setStateLocked(StateRunning, nil)
+	exited := s.exited
+	s.mu.Unlock()
 
-	go s.wait(cmd, s.exited)
+	// Fire the callback after releasing the lock so that accessors are safe to
+	// call from within the callback.
+	if fire != nil {
+		fire()
+	}
+
+	go s.wait(cmd, exited)
 	return nil
 }
 
@@ -129,8 +141,6 @@ func (s *Supervisor) wait(cmd *exec.Cmd, exited chan struct{}) {
 	close(exited)
 
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	if s.logFile != nil {
 		s.logFile.Close()
 		s.logFile = nil
@@ -138,13 +148,20 @@ func (s *Supervisor) wait(cmd *exec.Cmd, exited chan struct{}) {
 	// Stop() pre-sets state to StateStopped before sending SIGTERM, so if
 	// we see StateStopped here we know Stop() already handled the transition.
 	if s.state == StateStopped {
+		s.mu.Unlock()
 		return
 	}
+	var fire func()
 	if err != nil {
 		log.Error().Err(err).Msg("knomit serve exited with error")
-		s.setStateLocked(StateCrashed, err)
+		fire = s.setStateLocked(StateCrashed, err)
 	} else {
-		s.setStateLocked(StateStopped, nil)
+		fire = s.setStateLocked(StateStopped, nil)
+	}
+	s.mu.Unlock()
+
+	if fire != nil {
+		fire()
 	}
 }
 
@@ -160,9 +177,14 @@ func (s *Supervisor) Stop(timeout time.Duration) error {
 	// Pre-set state to Stopped before releasing the lock so that the wait
 	// goroutine (which re-acquires the lock after cmd.Wait returns) sees
 	// StateStopped and does not transition to StateCrashed.
-	s.setStateLocked(StateStopped, nil)
+	fire := s.setStateLocked(StateStopped, nil)
 	exited := s.exited
 	s.mu.Unlock()
+
+	// Fire callback after releasing the lock so accessors are safe to call.
+	if fire != nil {
+		fire()
+	}
 
 	pgid, pgidErr := syscall.Getpgid(cmd.Process.Pid)
 	if pgidErr != nil || pgid <= 0 {
@@ -172,10 +194,12 @@ func (s *Supervisor) Stop(timeout time.Duration) error {
 		_ = syscall.Kill(-pgid, syscall.SIGTERM)
 	}
 
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
 	select {
 	case <-exited:
 		return nil
-	case <-time.After(timeout):
+	case <-timer.C:
 		if pgidErr == nil && pgid > 0 {
 			_ = syscall.Kill(-pgid, syscall.SIGKILL)
 		} else {
@@ -218,22 +242,27 @@ func (s *Supervisor) LastError() error {
 }
 
 // OnStateChange registers a callback invoked on every state transition.
-// The callback runs while holding the supervisor's internal mutex — do NOT
-// call back into the supervisor from it (risk of deadlock).
+// The callback is invoked WITHOUT the supervisor's internal mutex held, so it
+// is safe to call any supervisor accessor (Port, URL, State, PID, LastError)
+// from within the callback.
 func (s *Supervisor) OnStateChange(fn func(State)) {
 	s.mu.Lock()
 	s.onChange = fn
 	s.mu.Unlock()
 }
 
-// setStateLocked transitions to next state and fires onChange.
+// setStateLocked mutates the state fields and returns a function that fires
+// the OnStateChange callback (or nil). The caller MUST invoke the returned
+// function AFTER releasing the mutex, not before.
 // Caller must hold s.mu.
-func (s *Supervisor) setStateLocked(next State, err error) {
+func (s *Supervisor) setStateLocked(next State, err error) func() {
 	s.state = next
 	s.lastErr = err
-	if s.onChange != nil {
-		s.onChange(next)
+	if s.onChange == nil {
+		return nil
 	}
+	cb := s.onChange
+	return func() { cb(next) }
 }
 
 // PID returns the child's process ID, or 0 if not running.
