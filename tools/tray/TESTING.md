@@ -84,3 +84,74 @@ Click **Quit knomit**. Expected:
   at next login, run `launchctl list | grep com.knomit.tray` to confirm
   it's registered, and check `~/Library/Logs/knomit/serve.log` for errors
   after logging back in.
+
+---
+
+# Linux E2E (GNOME / KDE)
+
+## 1. Install prereqs
+
+Pick the line matching your distro:
+
+    sudo apt install libwebkit2gtk-4.1-dev    # Debian/Ubuntu
+    sudo dnf install webkit2gtk4.1-devel      # Fedora
+    sudo pacman -S webkit2gtk-4.1             # Arch
+
+## 2. Build
+
+    make build tray
+
+Expected: `dist/knomit`, `dist/knomit-remote`, `dist/knomit-tray`, plus
+`dist/knomit.desktop`, `dist/knomit-tray.service`, `dist/knomit.png`.
+
+## 3. Install the launcher
+
+    cp dist/knomit.desktop ~/.local/share/applications/
+
+## 4. Start the supervisor
+
+    ./dist/knomit-tray
+
+Expected: startup log line `knomit running; press Ctrl-C to stop` with a
+port. `~/.local/state/knomit/server.json` exists. `~/.local/state/knomit/serve.log`
+contains knomit's startup logs.
+
+## 5. Open a window via the DE launcher
+
+Press Super (GNOME) or Alt+F2/KRunner (KDE), type "Knomit", hit Enter.
+Expected: a native WebKitGTK window opens showing the knomit web UI.
+
+## 6. Confirm remote discovery
+
+In a new terminal (supervisor still running):
+
+    echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"0"}}}' | ./dist/knomit-remote
+
+Expected: a valid JSON-RPC response. With `KNOMIT_MCP_DEBUG=1`, stderr shows
+`discovered base-url from lockfile: http://127.0.0.1:<port>`.
+
+## 7. Second-launch single-instance check
+
+In another terminal:
+
+    ./dist/knomit-tray
+
+Expected: exits immediately with `knomit-tray is already running.`
+
+## 8. Shutdown
+
+Ctrl-C the supervisor process. Expected:
+
+- Supervisor exits cleanly.
+- `knomit serve` process gone: `pgrep -f "knomit serve"` returns nothing.
+- Lockfile `~/.local/state/knomit/server.json` removed.
+
+## 9. systemd user unit (optional)
+
+    cp dist/knomit-tray.service ~/.config/systemd/user/
+    systemctl --user daemon-reload
+    systemctl --user enable --now knomit-tray
+    systemctl --user status knomit-tray
+
+Expected: service reports active. Repeat steps 5 & 6 against the
+systemd-managed supervisor. Stop with `systemctl --user stop knomit-tray`.
