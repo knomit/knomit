@@ -93,9 +93,9 @@ Click **Quit knomit**. Expected:
 
 Pick the line matching your distro:
 
-    sudo apt install libwebkit2gtk-4.1-dev    # Debian/Ubuntu
-    sudo dnf install webkit2gtk4.1-devel      # Fedora
-    sudo pacman -S webkit2gtk-4.1             # Arch
+    sudo apt install libwebkit2gtk-4.0-dev    # Debian/Ubuntu
+    sudo dnf install webkit2gtk3-devel        # Fedora
+    sudo pacman -S webkit2gtk                 # Arch
 
 ## 2. Build
 

@@ -30,9 +30,11 @@ One-time per distro:
 
 | Distro | Install |
 |--------|---------|
-| Debian / Ubuntu | `sudo apt install libwebkit2gtk-4.1-dev` (or `-4.0-dev` on older releases) |
-| Fedora | `sudo dnf install webkit2gtk4.1-devel` |
-| Arch / Manjaro | `sudo pacman -S webkit2gtk-4.1` |
+| Debian / Ubuntu | `sudo apt install libwebkit2gtk-4.0-dev` |
+| Fedora | `sudo dnf install webkit2gtk3-devel` |
+| Arch / Manjaro | `sudo pacman -S webkit2gtk` |
+
+> **Note:** The `webview_go` library currently pinned in this repo requires WebKitGTK **4.0** headers. The 4.0 series is deprecated on recent distros (Debian 12+, Ubuntu 24.04+, Fedora 39+). On those, install from an older repo or a PPA, or wait for a future `webview_go` bump to the 4.1 ABI.
 
 ### Build
 
