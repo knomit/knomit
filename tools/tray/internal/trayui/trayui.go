@@ -1,5 +1,3 @@
-//go:build darwin
-
 // Package trayui owns the systray menu and wires menu events to the supervisor.
 package trayui
 

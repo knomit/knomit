@@ -11,15 +11,14 @@ import (
 
 	"github.com/rs/zerolog/log"
 
+	"knomit/tools/tray/internal/autostart"
 	"knomit/tools/tray/internal/lockfile"
 	"knomit/tools/tray/internal/paths"
 	"knomit/tools/tray/internal/singleinstance"
 	"knomit/tools/tray/internal/supervisor"
+	"knomit/tools/tray/internal/trayui"
 )
 
-// runTray runs the headless knomit-tray supervisor on Linux. No systray is
-// shown; the user opens the UI via `knomit-tray window` (typically wired to
-// a .desktop launcher). The process blocks on ctx until SIGINT/SIGTERM.
 func runTray(ctx context.Context) error {
 	lockPath, err := paths.LockfilePath()
 	if err != nil {
@@ -36,6 +35,10 @@ func runTray(ctx context.Context) error {
 	knomitBin, err := locateKnomit()
 	if err != nil {
 		return err
+	}
+	trayBin, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("locate self: %w", err)
 	}
 
 	logsDir, err := paths.LogsDir()
@@ -63,15 +66,21 @@ func runTray(ctx context.Context) error {
 	}
 	defer lockfile.Remove(lockPath)
 
-	log.Info().
-		Int("port", sup.Port()).
-		Str("url", sup.URL()).
-		Msg("knomit running; press Ctrl-C to stop")
+	as := autostart.New()
 
-	<-ctx.Done()
+	// Run the tray UI. This blocks until Quit is clicked.
+	trayui.Run(trayui.Deps{
+		Autostart:    as,
+		LockfilePath: lockPath,
+		Supervisor:   sup,
+		TrayBinary:   trayBin,
+		Version:      version,
+	})
 
+	// Tray exited; ensure child is stopped.
 	if err := sup.Stop(5 * time.Second); err != nil {
 		log.Warn().Err(err).Msg("supervisor stop on exit failed")
 	}
+	_ = ctx
 	return nil
 }
