@@ -17,7 +17,11 @@ ifeq ($(UNAME_S),Darwin)
     ORT_LIB_VERSIONED := libonnxruntime.$(ORT_VERSION).dylib
   endif
 else ifeq ($(UNAME_S),Linux)
-  ORT_PLATFORM := linux-x64
+  ifeq ($(UNAME_M),aarch64)
+    ORT_PLATFORM := linux-aarch64
+  else
+    ORT_PLATFORM := linux-x64
+  endif
   ORT_LIB_NAME := libonnxruntime.so
   ORT_LIB_VERSIONED := libonnxruntime.so.$(ORT_VERSION)
 else
