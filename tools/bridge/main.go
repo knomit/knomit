@@ -1,15 +1,22 @@
-// knomit-remote bridges stdio ↔ streamable-http for MCP.
+// knomit-bridge bridges stdio ↔ streamable-http for MCP.
 //
 // Claude Desktop (and other stdio-only MCP clients) launches this binary.
 // It reads JSON-RPC messages from stdin, POSTs them to a knomit MCP
 // endpoint, and writes responses back to stdout.
 //
+// The MCP endpoint is branch-scoped:
+//
+//	/api/v1/repos/{repo}/branches/{branch}/mcp?profile={profile}
+//
+// knomit-bridge discovers the agent branch automatically by querying
+// GET /api/v1/repos/{repo} and reading the agent_branch field.
+//
 // Usage:
 //
-//	knomit-remote [--repo <name>] [--profile <profile>] [base-url]
-//	knomit-remote
-//	knomit-remote --repo work --profile chat
-//	knomit-remote http://myhost:8080
+//	knomit-bridge [--repo <name>] [--profile <profile>] [base-url]
+//	knomit-bridge
+//	knomit-bridge --repo work --profile chat
+//	knomit-bridge http://myhost:8080
 //
 // The base-url defaults to http://localhost:19278.
 //
@@ -18,10 +25,10 @@
 //	{
 //	  "mcpServers": {
 //	    "knomit": {
-//	      "command": "/path/to/knomit-remote"
+//	      "command": "/path/to/knomit-bridge"
 //	    },
 //	    "work-kb": {
-//	      "command": "/path/to/knomit-remote",
+//	      "command": "/path/to/knomit-bridge",
 //	      "args": ["--repo", "work", "--profile", "chat"]
 //	    }
 //	  }
@@ -48,7 +55,7 @@ var debug = os.Getenv("KNOMIT_MCP_DEBUG") != ""
 
 func logDebug(format string, args ...any) {
 	if debug {
-		fmt.Fprintf(os.Stderr, "[knomit-remote] "+format+"\n", args...)
+		fmt.Fprintf(os.Stderr, "[knomit-bridge] "+format+"\n", args...)
 	}
 }
 
@@ -56,10 +63,10 @@ func main() {
 	repo := flag.String("repo", "knomit", "repository name")
 	profile := flag.String("profile", "code", "MCP profile (code, chat, generic)")
 	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "usage: knomit-remote [--repo <name>] [--profile <profile>] [base-url]\n")
-		fmt.Fprintf(os.Stderr, "example: knomit-remote\n")
-		fmt.Fprintf(os.Stderr, "         knomit-remote http://myhost:8080\n")
-		fmt.Fprintf(os.Stderr, "         knomit-remote --repo work --profile chat\n")
+		fmt.Fprintf(os.Stderr, "usage: knomit-bridge [--repo <name>] [--profile <profile>] [base-url]\n")
+		fmt.Fprintf(os.Stderr, "example: knomit-bridge\n")
+		fmt.Fprintf(os.Stderr, "         knomit-bridge http://myhost:8080\n")
+		fmt.Fprintf(os.Stderr, "         knomit-bridge --repo work --profile chat\n")
 		flag.PrintDefaults()
 	}
 	flag.Parse()
@@ -73,8 +80,15 @@ func main() {
 	} else if err != nil {
 		logDebug("lockfile read failed, falling back to default: %v", err)
 	}
-	serverURL := fmt.Sprintf("%s/api/v1/%s/mcp?profile=%s", baseURL, *repo, *profile)
-	logDebug("repo=%s profile=%s url=%s", *repo, *profile, serverURL)
+	branch, err := discoverAgentBranch(baseURL, *repo)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "knomit-bridge: failed to discover agent branch for repo %q: %v\n", *repo, err)
+		os.Exit(1)
+	}
+	logDebug("discovered agent branch: %s", branch)
+	encodedBranch := strings.ReplaceAll(branch, "/", ":")
+	serverURL := fmt.Sprintf("%s/api/v1/repos/%s/branches/%s/mcp?profile=%s", baseURL, *repo, encodedBranch, *profile)
+	logDebug("repo=%s branch=%s profile=%s url=%s", *repo, branch, *profile, serverURL)
 	client := &http.Client{}
 
 	var (
@@ -251,6 +265,31 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return s[:n] + "..."
+}
+
+// discoverAgentBranch queries GET /api/v1/repos/{repo} and returns the
+// agent_branch field. This is the branch the local server writes facts to.
+func discoverAgentBranch(baseURL, repo string) (string, error) {
+	url := fmt.Sprintf("%s/api/v1/repos/%s", baseURL, repo)
+	resp, err := http.Get(url) //nolint:noctx
+	if err != nil {
+		return "", fmt.Errorf("GET %s: %w", url, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("GET %s: status %d: %s", url, resp.StatusCode, body)
+	}
+	var body struct {
+		AgentBranch string `json:"agent_branch"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		return "", fmt.Errorf("decode repo response: %w", err)
+	}
+	if body.AgentBranch == "" {
+		return "", fmt.Errorf("server did not return agent_branch for repo %q", repo)
+	}
+	return body.AgentBranch, nil
 }
 
 // readLockfileBaseURL returns http://127.0.0.1:<port> from the knomit-tray

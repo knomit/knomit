@@ -15,7 +15,7 @@ Knomit stores structured facts as markdown files in a Git repository, organized 
 
 ```sh
 make setup    # download ONNX Runtime
-make build    # build Go binary + React frontend → dist/knomit
+make build    # build Go binary + React frontend → dist/knomit, dist/knomit-bridge
 ```
 
 Individual targets:
@@ -32,8 +32,6 @@ make e2e-ui   # build + run e2e tests (headed browser)
 
 ### Testing
 
-Three test layers cover the store and repos packages:
-
 ```sh
 # Unit + scenario tests (fast, always on).
 go test ./...
@@ -41,15 +39,14 @@ go test ./...
 # Same, with the race detector — used in CI.
 go test ./... -race
 
-# Run just the 58 scenario tests in the Storyboard DSL.
+# Run just the scenario tests in the Storyboard DSL.
 go test ./internal/storytests/ -v
 
 # Run just the Verify tool's unit tests.
 go test ./internal/store/ -run TestVerify -v
 ```
 
-**Property tests** (6 tests, opt-in) exercise random op sequences
-against real store state. They live in
+**Property tests** (opt-in) exercise random op sequences against real store state. They live in
 [internal/storytests/property_test.go](internal/storytests/property_test.go)
 and are gated behind `KNOMIT_PROPTESTS=1`:
 
@@ -60,14 +57,9 @@ KNOMIT_PROPTESTS=1 go test ./internal/storytests/ -run TestProperty -v
 # Reproduce a failure deterministically — the seed is logged on every run.
 KNOMIT_PROPTESTS=1 KNOMIT_PROPTEST_SEED=1712345678 \
   go test ./internal/storytests/ -run TestProperty -v
-
-# Run one specific property test under -race.
-KNOMIT_PROPTESTS=1 go test ./internal/storytests/ \
-  -run TestProperty_IntegrityHoldsUnderRandomOps -race -v
 ```
 
-The `knomit verify` CLI subcommand runs the same integrity checks
-against a live on-disk repo:
+The `knomit verify` CLI subcommand runs the same integrity checks against a live on-disk repo:
 
 ```sh
 knomit verify                 # verify the default repo
@@ -91,7 +83,7 @@ knomit reset --name work      # wipe a specific repo
 
 All data lives under `KNOMIT_HOME` (default `~/.knomit`):
 
-```
+```text
 ~/.knomit/
   repos/
     knomit.db        # default repo (auto-created)
@@ -129,126 +121,98 @@ make e2e         # build binary + run all tests (headless)
 make e2e-ui      # same but with a visible browser
 ```
 
-Tests use `KNOMIT_HOME` pointed at a temp directory for full isolation. A shared instance is seeded with fixture data for read-only tests; mutating tests spin up fresh instances per test.
+Tests use `KNOMIT_HOME` pointed at a temp directory for full isolation.
 
 ### Configuration
 
-Place a `knomit.toml` next to the binary or in the data directory. See `dist/knomit.toml` for a full reference. All settings can be overridden via environment variables.
+Place a `knomit.toml` next to the binary or in the data directory (`~/.knomit/knomit.toml`). All settings can also be set via environment variables (see below).
 
 ### Remote Sync
 
-Each repo can sync with a git remote. Configure via the web UI (gear icon in the top bar) or `knomit.toml` for the default repo.
+Each repo can sync with a git remote. Configure via the web UI (gear icon in the top bar) or environment variables.
 
 Supported auth methods:
 
 | Method | URL format | Credentials |
-|--------|-----------|-------------|
+|--------|------------|-------------|
 | SSH | `git@github.com:user/repo.git` | Knomit's SSH key (`~/.knomit/id_ed25519`) |
 | Token | `https://github.com/user/repo.git` | GitHub PAT or similar |
 | Basic | `https://github.com/user/repo.git` | Username + password |
 
 Credentials are encrypted at rest using a key derived from the SSH private key.
 
-Sync and push run on independent intervals (default 300s each). If push fails (e.g. read-only token), sync continues working. Remote errors are visible via the gear icon indicator in the UI.
+Sync and push run on independent intervals. Remote errors are visible via the gear icon indicator in the UI.
 
 ### MCP Server
 
-The MCP endpoint is available per-repo at `/api/v1/{repo}/mcp`. Configure your AI tool to point at it.
+The MCP endpoint is branch-scoped:
+
+```
+/api/v1/repos/{repo}/branches/{branch}/mcp?profile={profile}
+```
+
+The agent branch is logged on startup (`branch=agent/hostname-abc123`) and is also available via `GET /api/v1/repos/{repo}` (the `agent_branch` field). Branch names use `:` in place of `/` in URL path segments (e.g. `agent:hostname-abc123`).
 
 Profiles tailor the MCP instructions for different use cases:
 
-| Profile | URL | Use case |
-|---------|-----|----------|
-| `code` (default) | `/api/v1/knomit/mcp?profile=code` | Code editors — anchors facts to git commits |
-| `chat` | `/api/v1/knomit/mcp?profile=chat` | Conversational tools — anchors facts to URLs, documents |
-| `generic` | `/api/v1/knomit/mcp?profile=generic` | Minimal instructions for any integration |
+| Profile | Use case |
+|---------|----------|
+| `code` (default) | Code editors — anchors facts to git commits |
+| `chat` | Conversational tools — anchors facts to URLs, documents |
+| `generic` | Minimal instructions for any integration |
 
 #### Claude Code
 
-Add to your project's `.mcp.json` (or `~/.claude/mcp.json` for global):
+Add to your project's `.mcp.json` (or `~/.claude/mcp.json` for global), substituting the branch logged on startup:
 
 ```json
 {
   "mcpServers": {
     "knomit": {
       "type": "streamable-http",
-      "url": "http://localhost:19278/api/v1/knomit/mcp"
+      "url": "http://localhost:19278/api/v1/repos/knomit/branches/agent:hostname-abc123/mcp"
     }
   }
 }
 ```
 
-Knomit's tool descriptions carry all the behavioral guidance the model needs — no `CLAUDE.md` setup required. The model will automatically query for context and learn decisions as they arise.
+Knomit's tool descriptions carry all the behavioral guidance the model needs — no `CLAUDE.md` setup required.
 
-#### Claude Desktop
+#### stdio clients (Claude Desktop, etc.)
 
-Claude Desktop only supports stdio transports. Use the included `knomit-remote` bridge (built automatically by `make build`):
-
-Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or `%APPDATA%\Claude\claude_desktop_config.json` (Windows):
-
-```json
-{
-  "mcpServers": {
-    "knomit": {
-      "command": "/path/to/dist/knomit-remote"
-    }
-  }
-}
-```
-
-For multiple repos:
-
-```json
-{
-  "mcpServers": {
-    "knomit": {
-      "command": "/path/to/dist/knomit-remote"
-    },
-    "work-kb": {
-      "command": "/path/to/dist/knomit-remote",
-      "args": ["--repo", "work", "--profile", "chat"]
-    }
-  }
-}
-```
-
-Flags: `--repo <name>` (default: `knomit`), `--profile <profile>` (default: `code`). Base URL defaults to `http://localhost:19278` and can be overridden as a positional argument.
-
-The bridge reads JSON-RPC from stdin, forwards to the knomit HTTP endpoint, and writes responses to stdout.
-
-Use this initial prompt:
-
-```
-You have access to a knowledge base called knomit. Use knomit_learn to save important facts, decisions, and preferences from our conversations. Use knomit_query to check if you already know something before asking me. Use knomit_explore to browse what you know. Use knomit_review to review and maintain the knowledge base — it guides you through evaluating facts step by step.
-```
+Claude Desktop and other stdio-only MCP clients use `knomit-bridge`, a thin adapter built by `make build`. It auto-discovers the agent branch from the server. See [tools/bridge/README.md](tools/bridge/README.md) for setup and configuration.
 
 ### Web UI
 
 The server embeds a React SPA at `/`. Browse facts, search, trigger synthesis, and monitor tasks in real time via SSE.
 
-The top bar shows a repo selector (when multiple repos exist) and a gear icon for remote origin configuration. Remote sync/push errors are indicated by a red dot on the gear icon.
+The top bar shows a repo selector (when multiple repos exist) and a gear icon for remote origin configuration.
+
+### Desktop tray (macOS / Linux)
+
+`knomit-tray` runs knomit as a background service with a menu-bar icon (macOS) or system tray (GNOME/KDE). See [tools/tray/README.md](tools/tray/README.md) for setup.
 
 ### Synthesize
 
-Automated knowledge base maintenance — prune stale/duplicate facts and distill higher-order insights using an LLM. Trigger via the web UI or the HTTP API:
+Automated knowledge base maintenance — prune stale/duplicate facts and distill higher-order insights using an LLM. Trigger via the web UI or:
 
 ```
-POST /api/v1/{repo}/synthesize
+POST /api/v1/repos/{repo}/branches/{branch}/synthesis-runs
 ```
 
 #### LLM Configuration
 
 Set the model and API key via environment variables:
 
-| Provider   | Variables                                                                                                |
-|------------|----------------------------------------------------------------------------------------------------------|
-| Anthropic  | `KNOMIT_LLM_MODEL=claude-sonnet-4-6` `ANTHROPIC_API_KEY=...`                                            |
-| Gemini     | `KNOMIT_LLM_MODEL=gemini-2.0-flash` `GOOGLE_AI_API_KEY=...`                                             |
+| Provider   | Variables |
+|------------|-----------|
+| Gemini     | `KNOMIT_LLM_MODEL=gemini-2.5-flash` `GOOGLE_AI_API_KEY=...` |
+| Anthropic  | `KNOMIT_LLM_MODEL=claude-sonnet-4-6` `ANTHROPIC_API_KEY=...` |
 | Bedrock    | `KNOMIT_LLM_MODEL=us.anthropic.claude-sonnet-4-6-v1` `AWS_ACCESS_KEY_ID=...` `AWS_SECRET_ACCESS_KEY=...` |
-| Claude CLI | `KNOMIT_LLM_PROVIDER=claude-cli` — uses the `claude` CLI (no API key needed, works with Anthropic Max)   |
-| Gemini CLI | `KNOMIT_LLM_PROVIDER=gemini-cli` — uses the `gemini` CLI (no API key needed, works with Google AI Pro)   |
+| Claude CLI | `KNOMIT_LLM_PROVIDER=claude-cli` — uses the `claude` CLI (no API key needed, works with Anthropic Max) |
+| Gemini CLI | `KNOMIT_LLM_PROVIDER=gemini-cli` — uses the `gemini` CLI (no API key needed, works with Google AI Pro) |
 
-The default model is `claude-sonnet-4-6` (Anthropic). The provider is auto-detected from the model name for API providers. CLI providers must be set explicitly via `KNOMIT_LLM_PROVIDER`.
+The default model is `gemini-2.5-flash`. The provider is auto-detected from the model name for API providers; CLI providers must be set explicitly via `KNOMIT_LLM_PROVIDER`.
 
 Synthesis is incremental — it only processes facts that changed since the last run. The pipeline prunes stale/duplicate facts first, then distills higher-order insights using RAPTOR (recursive abstractive processing) across multiple depth levels.
 
@@ -256,12 +220,14 @@ Synthesis is incremental — it only processes facts that changed since the last
 
 | Tool | Description |
 |------|-------------|
-| `knomit_learn` | Persist facts — preferences, decisions, conclusions |
-| `knomit_query` | Search by free text, entity, domain, or path |
-| `knomit_explore` | Browse facts by recency (paginated, 25/page) |
-| `knomit_explain` | Explain a fact's provenance graph (paginated BFS) |
-| `knomit_update` | Revise an existing fact (confidence, body, refs) |
+| `knomit_learn` | Write one or more facts to the knowledge base in a single commit |
+| `knomit_query` | Search by free text, entity, domain, path, or confidence threshold |
+| `knomit_explore` | Browse facts by recency (paginated) |
+| `knomit_explain` | Traverse a fact's provenance graph via its refs (paginated BFS) |
+| `knomit_update` | Revise an existing fact |
 | `knomit_retract` | Remove a fact (git history retains provenance) |
+| `knomit_review` | Interactive session to review and maintain the knowledge base |
+| `knomit_hypothesize` | Generate hypotheses from synthesis facts |
 
 ## How it works
 
@@ -269,6 +235,7 @@ Facts are markdown files with YAML frontmatter:
 
 ```markdown
 ---
+type: observation
 confidence: 0.8
 domain: [music]
 entities: [alice]
@@ -279,15 +246,15 @@ refs:
 Alice prefers rock music over jazz.
 ```
 
+The `type` field classifies the kind of knowledge: `observation` (default), `concept`, `process`, `principle`, `pattern`, `reference`, `synthesis`, `hypothesis`, or `methodology`.
+
 The directory tree under the ontology root (`kb/` by default) forms an ontological hierarchy. Facts placed at higher levels apply to everything below them — a fact at `kb/geography/` is inherited by `kb/geography/europe/uk/london/`.
 
-Each learning moment is an atomic git commit tagged with `learn/<moment-name>`, giving full provenance tracking.
+Each learning moment is an atomic git commit, giving full provenance tracking.
 
 ### Agent Identity
 
-Each knomit instance generates an Ed25519 SSH keypair at `~/.knomit/id_ed25519`. The key fingerprint determines the agent branch name (e.g. `agent/hostname-abc123`), ensuring each machine gets its own branch. The same key is used for SSH remote auth and commit signing.
-
-When opening an existing repo that uses an older branch naming convention, knomit automatically creates a new branch from the current HEAD and switches to it.
+Each knomit instance generates an Ed25519 SSH keypair at `~/.knomit/id_ed25519`. The key fingerprint determines the agent branch name (`agent/hostname-<fingerprint>`), ensuring each machine gets its own branch. The same key is used for SSH remote auth and commit signing.
 
 ### Refs and the `knomit:` URI scheme
 
@@ -299,28 +266,36 @@ Refs anchor facts to their source material using the `knomit:` URI scheme:
 | Absolute (with host) | External repo | `knomit://github.com/org/repo/src/main.ts` |
 | Plain URL | Any web resource | `https://example.com/doc` |
 
-Synthesize automatically resolves file-path refs to `knomit:/<path>` URIs.
-
 ## HTTP API
 
-All repo-scoped endpoints use the pattern `/api/v1/{repo}/...`.
+All endpoints are under `/api/v1`. The API follows HAL+JSON — start at `GET /api/v1` and follow `_links`.
+
+Branch names use `:` in place of `/` in URL path segments.
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/api/v1/repos` | List all repos |
-| GET | `/api/v1/{repo}/browse` | Browse ontology hierarchy |
-| GET | `/api/v1/{repo}/search` | Full-text + vector search |
-| GET | `/api/v1/{repo}/fact` | Read a single fact |
-| GET | `/api/v1/{repo}/history` | Commit history |
-| GET | `/api/v1/{repo}/stats` | Knowledge base statistics |
-| GET | `/api/v1/{repo}/status` | System status |
-| POST | `/api/v1/{repo}/synthesize` | Trigger synthesis |
-| POST | `/api/v1/{repo}/sync` | Sync with remote |
-| GET | `/api/v1/{repo}/origin` | Get remote origin config |
-| PUT | `/api/v1/{repo}/origin` | Set remote origin config |
-| GET | `/api/v1/{repo}/events` | SSE event stream |
-| ALL | `/api/v1/{repo}/mcp` | MCP server endpoint |
-| GET | `/docs` | Swagger UI |
+| GET | `/api/v1/repos` | List repos |
+| GET | `/api/v1/repos/{repo}` | Repo detail + agent branch |
+| GET | `/api/v1/repos/{repo}/branches` | List branches |
+| GET | `/api/v1/repos/{repo}/branches/{branch}` | Branch detail + links |
+| GET | `/api/v1/repos/{repo}/branches/{branch}/facts` | List facts |
+| POST | `/api/v1/repos/{repo}/branches/{branch}/facts` | Create fact |
+| GET | `/api/v1/repos/{repo}/branches/{branch}/facts/*` | Read fact |
+| PUT | `/api/v1/repos/{repo}/branches/{branch}/facts/*` | Update fact |
+| DELETE | `/api/v1/repos/{repo}/branches/{branch}/facts/*` | Delete fact |
+| GET | `/api/v1/repos/{repo}/branches/{branch}/search` | Full-text + vector search |
+| GET | `/api/v1/repos/{repo}/branches/{branch}/topics` | Browse ontology hierarchy |
+| GET | `/api/v1/repos/{repo}/branches/{branch}/domains` | List domains |
+| GET | `/api/v1/repos/{repo}/branches/{branch}/stats` | Knowledge base statistics |
+| GET | `/api/v1/repos/{repo}/branches/{branch}/commits` | Commit history |
+| GET | `/api/v1/repos/{repo}/branches/{branch}/events` | SSE event stream |
+| POST | `/api/v1/repos/{repo}/branches/{branch}/synthesis-runs` | Start synthesis |
+| POST | `/api/v1/repos/{repo}/branches/{branch}/index-rebuilds` | Rebuild search index |
+| ALL | `/api/v1/repos/{repo}/branches/{branch}/mcp` | MCP endpoint |
+| GET | `/api/v1/repos/{repo}/origin` | Get remote origin |
+| PUT | `/api/v1/repos/{repo}/origin` | Set remote origin |
+| DELETE | `/api/v1/repos/{repo}/origin` | Delete remote origin |
+| GET | `/api/v1/openapi.yaml` | OpenAPI spec |
 
 ## Environment variables
 
@@ -328,20 +303,25 @@ All repo-scoped endpoints use the pattern `/api/v1/{repo}/...`.
 |----------|---------|-------------|
 | `KNOMIT_HOME` | `~/.knomit` | Path to the data directory |
 | `KNOMIT_REPO` | — | Alias for `KNOMIT_HOME` (backward compat) |
+| `KNOMIT_HOST` | `""` | Listen host |
 | `KNOMIT_PORT` | `19278` | HTTP server port |
-| `KNOMIT_SOCKET` | — | Unix socket path (e.g. `knomit.sock`); enables socket listener when set |
-| `KNOMIT_LLM_MODEL` | `claude-sonnet-4-6` | Model name for synthesis |
+| `KNOMIT_SOCKET` | — | Unix socket path; enables socket listener when set |
+| `KNOMIT_LLM_MODEL` | `gemini-2.5-flash` | Model name for synthesis |
 | `KNOMIT_LLM_PROVIDER` | auto-detected | LLM provider: `anthropic`, `gemini`, `bedrock`, `claude-cli`, `gemini-cli` |
+| `KNOMIT_API_KEY` | — | LLM API key |
+| `KNOMIT_LLM_CACHE` | `false` | Enable LLM prompt caching |
+| `KNOMIT_LLM_BATCH` | `false` | Enable LLM batch processing |
 | `KNOMIT_GIT_ORIGIN` | — | Remote origin URL (seeds default repo) |
-| `KNOMIT_GIT_SERVE` | `false` | Enable git smart-HTTP remote at `/git` |
-| `KNOMIT_API_KEY` | — | API key for LLM and git remote auth |
+| `KNOMIT_GIT_SERVE` | `false` | Enable git smart-HTTP at `/git` |
+| `KNOMIT_GIT_PORT` | — | Port for git smart-HTTP listener |
 | `KNOMIT_REMOTE_AUTH` | auto-detected | Remote auth method: `token`, `basic`, `ssh` |
 | `KNOMIT_REMOTE_TOKEN` | — | Token for remote auth |
-| `KNOMIT_REMOTE_SSH_KEY` | — | Path to SSH key (default: `~/.knomit/id_ed25519`) |
-| `KNOMIT_LLM_TRACE` | — | File path to log LLM requests |
+| `KNOMIT_REMOTE_USER` | — | Username for basic auth |
+| `KNOMIT_REMOTE_PASSWORD` | — | Password for basic auth |
+| `KNOMIT_REMOTE_SSH_KEY` | `~/.knomit/id_ed25519` | Path to SSH key |
 | `ANTHROPIC_API_KEY` | — | Anthropic API key |
 | `GOOGLE_AI_API_KEY` | — | Gemini API key |
 | `AWS_ACCESS_KEY_ID` | — | AWS access key for Bedrock |
 | `AWS_SECRET_ACCESS_KEY` | — | AWS secret key for Bedrock |
 | `AWS_REGION` | `us-east-1` | AWS region for Bedrock |
-| `ORT_LIB_PATH` | — | Override ONNX Runtime library path |
+| `ONNXRUNTIME_SHARED_LIBRARY` | — | Override ONNX Runtime library path |

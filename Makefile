@@ -79,9 +79,9 @@ download-graphqlite:
 		echo "graphqlite installed to dist/lib/"; \
 	fi
 
-build: web
+build: web tray
 	CGO_ENABLED=1 go build -o dist/knomit .
-	go build -o dist/knomit-remote ./tools/remote/
+	go build -o dist/knomit-bridge ./tools/bridge/
 
 web:
 	cd web && npm ci && npm run build

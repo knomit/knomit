@@ -87,5 +87,5 @@ Logs: `journalctl --user -u knomit-tray` or the log file at
 - macOS: `~/Library/Application Support/knomit/server.json`
 - Linux: `$XDG_STATE_HOME/knomit/server.json` (default `~/.local/state/knomit/server.json`)
 
-`knomit-remote` and `knomit-tray window` read this file to auto-discover
+`knomit-bridge` and `knomit-tray window` read this file to auto-discover
 the running server's port.

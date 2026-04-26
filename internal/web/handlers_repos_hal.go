@@ -45,7 +45,7 @@ func handleHALRepos(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 }
 
 // handleHALRepo serves GET /api/v1/repos/{repo}.
-func handleHALRepo(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
+func handleHALRepo(b hal.URLBuilder, m *repos.Manager, agentBranch string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		name := chi.URLParam(r, "repo")
 		ri := m.Get(name)
@@ -54,11 +54,14 @@ func handleHALRepo(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 				`no repo named "`+name+`"`, r.URL.Path)
 			return
 		}
+		a := hal.Anchor{Branch: agentBranch}
 		body := map[string]any{
-			"name": name,
+			"name":         name,
+			"agent_branch": agentBranch,
 			"_links": hal.LinkMap{
 				"self":     {Href: b.Repo(name)},
 				"branches": {Href: b.Branches(name)},
+				"mcp":      {Href: b.Branch(name, a) + "/mcp{?profile}", Templated: true},
 			},
 		}
 		hal.WriteHAL(w, http.StatusOK, body)

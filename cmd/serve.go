@@ -53,8 +53,8 @@ func serveCmd() *cobra.Command {
 
 			startupLog := log.Info().
 				Str("http", httpAddr).
-				Str("api", httpAddr+"/api/v1/{repo}").
-				Str("mcp", httpAddr+"/api/v1/{repo}/mcp")
+				Str("api", httpAddr+"/api/v1/repos/{repo}").
+				Str("mcp", httpAddr+"/api/v1/repos/{repo}/branches/{branch}/mcp")
 
 			if cfg.Git.Serve {
 				startupLog = startupLog.Str("git_remote", httpAddr+"/git")
