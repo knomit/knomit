@@ -36,7 +36,7 @@ var (
 )
 
 func onReady(d Deps) {
-	systray.SetTemplateIcon(IconBytes(), IconBytes())
+	systray.SetIcon(IconBytes())
 	systray.SetTitle("")
 	systray.SetTooltip("Knomit")
 
