@@ -67,6 +67,7 @@ func runWindow(url, title string, w, h int) error {
 	}
 	defer wv.Destroy()
 
+	customizeWindow(wv)
 	wv.SetTitle(title)
 	wv.SetSize(w, h, webview.HintNone)
 	wv.Navigate(url)
