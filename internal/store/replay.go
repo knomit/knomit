@@ -99,6 +99,14 @@ func Replay(ctx context.Context, local *Service, localBranch string, iter FactIt
 		log.Debug().Str("agent_branch", cfg.AgentBranch).Str("from", cfg.DefaultBranch).Msg("replay: created agent branch from main")
 	}
 
+	// Register the agent branch in target's branches table so the WriteFact →
+	// notifyCommit → CommitLogSync path can find it. The cloned target store
+	// has only git refs at this point; CloneFrom does not populate the branches
+	// table.
+	if _, err := target.rh.EnsureBranch(ctx, cfg.AgentBranch, "refs/heads/"+cfg.AgentBranch); err != nil {
+		return nil, fmt.Errorf("Replay: ensure agent branch in target: %w", err)
+	}
+
 	// 2. Collect all facts from the iterator for progress reporting.
 	defer iter.Close()
 	type localFact struct {

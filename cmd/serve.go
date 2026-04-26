@@ -19,13 +19,23 @@ import (
 )
 
 func serveCmd() *cobra.Command {
-	return &cobra.Command{
+	var (
+		portOverride string
+		hostOverride string
+	)
+	cmd := &cobra.Command{
 		Use:   "serve",
 		Short: "Start the knomit HTTP server",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := config.Load()
 			if err != nil {
 				return fmt.Errorf("load config: %w", err)
+			}
+			if portOverride != "" {
+				cfg.Port = portOverride
+			}
+			if hostOverride != "" {
+				cfg.Host = hostOverride
 			}
 
 			a, err := app.New(cmd.Context(), cfg)
@@ -57,6 +67,10 @@ func serveCmd() *cobra.Command {
 				Msg("knomit ready")
 
 			// HTTP server.
+			// BaseContext propagates cmd.Context() into every request context so
+			// that SSE handlers (which select on r.Context().Done()) are unblocked
+			// immediately when SIGTERM cancels the command context, allowing
+			// Shutdown to return promptly instead of waiting for idle connections.
 			srv := &http.Server{
 				Addr:              listenAddr,
 				Handler:           router,
@@ -64,6 +78,7 @@ func serveCmd() *cobra.Command {
 				ReadTimeout:       30 * time.Second,
 				WriteTimeout:      0, // 0 = no limit for SSE long-poll
 				IdleTimeout:       60 * time.Second,
+				BaseContext:       func(_ net.Listener) context.Context { return cmd.Context() },
 			}
 
 			go func() {
@@ -106,4 +121,7 @@ func serveCmd() *cobra.Command {
 			return srv.Shutdown(shutCtx)
 		},
 	}
+	cmd.Flags().StringVar(&portOverride, "port", "", "override the listen port (default: from config)")
+	cmd.Flags().StringVar(&hostOverride, "host", "", "override the listen host (default: from config)")
+	return cmd
 }
