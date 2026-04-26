@@ -29,6 +29,9 @@ test.describe('History Mode Data Flow', () => {
     const history = new HistoryPage(page);
     await history.timeline.waitFor({ timeout: 10_000 });
 
+    // Wait for at least two commits to render before sampling the list.
+    await expect(page.getByTestId('history-commit').nth(1)).toBeVisible({ timeout: 10_000 });
+
     const commits = await history.getCommits();
     expect(commits.length).toBeGreaterThanOrEqual(2);
 
