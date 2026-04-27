@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	gogit "github.com/go-git/go-git/v5"
 	gogitconfig "github.com/go-git/go-git/v5/config"
@@ -402,6 +403,21 @@ func (rh *repoHandler) HeadCommit(ctx context.Context, branch string) (string, e
 		return "", fmt.Errorf("HeadCommit: %w", err)
 	}
 	return hash.String(), nil
+}
+
+// HeadCommitInfo returns both the HEAD commit hash and its committer
+// timestamp. Used by the cluster-cache background checker to detect "activity
+// has settled for N seconds" before triggering a recompute.
+func (rh *repoHandler) HeadCommitInfo(ctx context.Context, branch string) (string, time.Time, error) {
+	hash, err := rh.resolveRef(ctx, branch)
+	if err != nil {
+		return "", time.Time{}, fmt.Errorf("HeadCommitInfo: %w", err)
+	}
+	commit, err := rh.repo.CommitObject(hash)
+	if err != nil {
+		return "", time.Time{}, fmt.Errorf("HeadCommitInfo: commit object: %w", err)
+	}
+	return hash.String(), commit.Committer.When, nil
 }
 
 // readFileWithHash returns both the file content and the blob hash for the given path.

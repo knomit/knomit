@@ -562,6 +562,25 @@ func (si *searchIndex) ClusterFacts(ctx context.Context, branch string, resoluti
 		minCommunitySize = 2
 	}
 
+	// Resolve branch ID up front so we can short-circuit on empty branches
+	// before invoking Louvain. GraphQLite's louvain() aborts the statement
+	// (`abort due to ROLLBACK`) when the graph has no Fact nodes, and the
+	// background cluster-cache checker would otherwise log a warning every
+	// tick on freshly-initialised repos.
+	branchID, err := si.rh.branchID(ctx, branch)
+	if err != nil {
+		return ClusterResult{}, fmt.Errorf("ClusterFacts: %w", err)
+	}
+	var hasFacts bool
+	if err := conn(ctx, si.rh.db).QueryRowContext(ctx,
+		`SELECT EXISTS(SELECT 1 FROM branch_facts WHERE branch_id = ?)`, branchID,
+	).Scan(&hasFacts); err != nil {
+		return ClusterResult{}, fmt.Errorf("ClusterFacts: branch_facts probe: %w", err)
+	}
+	if !hasFacts {
+		return ClusterResult{Clusters: map[int][]string{}}, nil
+	}
+
 	// GraphQLite's louvain() returns a single JSON string of the form:
 	//   [{"column_0": [{"node_id": N, "user_id": null, "community": N}, ...]}]
 	//
@@ -604,12 +623,6 @@ func (si *searchIndex) ClusterFacts(ctx context.Context, branch string, resoluti
 	}
 	if err := rows.Err(); err != nil {
 		return ClusterResult{}, fmt.Errorf("louvain rows: %w", err)
-	}
-
-	// Resolve branch to branchID for scoped filtering.
-	branchID, err := si.rh.branchID(ctx, branch)
-	if err != nil {
-		return ClusterResult{}, fmt.Errorf("ClusterFacts: %w", err)
 	}
 
 	// Post-filter: exclude facts not visible on this branch (check existence

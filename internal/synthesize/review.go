@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"knomit/internal/fact"
 	"knomit/internal/llm"
@@ -19,16 +20,34 @@ import (
 // Reviewer orchestrates multi-turn review sessions.
 type Reviewer struct {
 	ri             *repos.RepoInstance
+	clusterFn      ClusterFn
 	onProgress     func(ProgressEvent)
 	reflectChecked map[string]bool
 }
 
-// NewReviewer creates a new review orchestrator.
-func NewReviewer(ri *repos.RepoInstance, onProgress func(ProgressEvent)) *Reviewer {
+// NewReviewer creates a new review orchestrator. clusterFn is the
+// (typically cache-backed) Louvain entry point used by ScopedCluster; if
+// nil, the raw store.SearchIndex.ClusterFacts is used (no caching).
+func NewReviewer(ri *repos.RepoInstance, clusterFn ClusterFn, onProgress func(ProgressEvent)) *Reviewer {
 	if onProgress == nil {
 		onProgress = func(ProgressEvent) {}
 	}
-	return &Reviewer{ri: ri, onProgress: onProgress, reflectChecked: make(map[string]bool)}
+	if clusterFn == nil {
+		clusterFn = func(ctx context.Context, branch string, resolution float64, minCommunitySize int) (store.ClusterResult, error) {
+			var (
+				result store.ClusterResult
+				err    error
+			)
+			ri.WithRead(func(svc *store.Service) {
+				if svc == nil {
+					return
+				}
+				result, err = svc.Search().ClusterFacts(ctx, branch, resolution, minCommunitySize)
+			})
+			return result, err
+		}
+	}
+	return &Reviewer{ri: ri, clusterFn: clusterFn, onProgress: onProgress, reflectChecked: make(map[string]bool)}
 }
 
 // storeIndices returns the four store indices under the repo read lock.
@@ -53,6 +72,7 @@ func (r *Reviewer) branch() string {
 // StartSession creates a new review session, identifies dirty facts, clusters
 // them, stores work items, and returns the first item to review.
 func (r *Reviewer) StartSession(ctx context.Context) (*ReviewResult, error) {
+	totalStart := time.Now()
 	gs, idx, pipelineIdx, _ := r.storeIndices()
 	branch := r.branch()
 
@@ -61,29 +81,35 @@ func (r *Reviewer) StartSession(ctx context.Context) (*ReviewResult, error) {
 		return nil, fmt.Errorf("review: create session: %w", err)
 	}
 
+	t := time.Now()
 	seeds, err := r.dirtyFacts(ctx, branch, gs, idx, pipelineIdx)
 	if err != nil {
 		return nil, fmt.Errorf("review: dirty facts: %w", err)
 	}
+	log.Info().Str("session", sess.ID).Int("seeds", len(seeds)).Dur("elapsed", time.Since(t)).Msg("review: dirty facts")
 
 	if len(seeds) == 0 {
 		return r.completeSession(ctx, sess)
 	}
 
 	// Build scoped clusters.
-	clusters, err := ScopedCluster(ctx, seeds, idx, 1.0, r.onProgress, branch)
+	t = time.Now()
+	clusters, err := ScopedCluster(ctx, seeds, idx, r.clusterFn, 1.0, r.onProgress, branch)
 	if err != nil {
 		return nil, fmt.Errorf("review: cluster: %w", err)
 	}
+	log.Info().Str("session", sess.ID).Int("clusters", len(clusters)).Dur("elapsed", time.Since(t)).Msg("review: clustering done")
 
 	// Dedup pass: merge near-duplicates within each cluster before enqueueing.
+	t = time.Now()
 	for i := range clusters {
-		surviving, err := dedupCluster(context.Background(), clusters[i], gs, idx, 0.92, "review", r.onProgress, branch, r.ri.Embedder())
+		surviving, err := dedupCluster(context.Background(), clusters[i], gs, idx, 0.92, "review", r.onProgress, branch)
 		if err != nil {
 			return nil, fmt.Errorf("review: dedup cluster %d: %w", i, err)
 		}
 		clusters[i] = surviving
 	}
+	log.Info().Str("session", sess.ID).Int("clusters", len(clusters)).Dur("elapsed", time.Since(t)).Msg("review: dedup done")
 	// Filter to clusters with > 1 fact (nothing for LLM to reason about with just 1).
 	var pruneClusters [][]factForLLM
 	for _, c := range clusters {
@@ -128,7 +154,12 @@ func (r *Reviewer) StartSession(ctx context.Context) (*ReviewResult, error) {
 		}
 	}
 
-	log.Info().Str("session", sess.ID).Int("clusters", len(pruneClusters)).Int("seeds", len(seeds)).Msg("review: session started")
+	log.Info().
+		Str("session", sess.ID).
+		Int("prune_clusters", len(pruneClusters)).
+		Int("seeds", len(seeds)).
+		Dur("total", time.Since(totalStart)).
+		Msg("review: session started")
 	r.onProgress(ProgressEvent{Phase: "review-start", Message: fmt.Sprintf("session %s: %d clusters, %d seeds", sess.ID, len(pruneClusters), len(seeds))})
 
 	return r.nextItem(ctx, sess.ID)
@@ -183,7 +214,7 @@ func (r *Reviewer) ContinueSession(ctx context.Context, sessionID, response stri
 		if err := validatePrunePaths(result, inputPaths); err != nil {
 			return nil, fmt.Errorf("review: validate prune: %w", err)
 		}
-		if _, err := ApplyPruneDecisions(ctx, gs, result.Decisions, result.Merges, "review", r.onProgress, branch); err != nil {
+		if _, err := ApplyPruneDecisions(ctx, gs, result.Decisions, result.Merges, "review", r.onProgress, branch, r.ri.OntologyRoot()); err != nil {
 			return nil, fmt.Errorf("review: apply prune: %w", err)
 		}
 
@@ -203,7 +234,7 @@ func (r *Reviewer) ContinueSession(ctx context.Context, sessionID, response stri
 		if err := validateDistillPaths(result, inputPaths); err != nil {
 			return nil, fmt.Errorf("review: validate distill: %w", err)
 		}
-		_, writtenFacts, err := ApplyDistillDecisions(ctx, gs, result.Synthesize, result.Retract, "review", r.onProgress, branch)
+		_, writtenFacts, err := ApplyDistillDecisions(ctx, gs, result.Synthesize, result.Retract, "review", r.onProgress, branch, r.ri.OntologyRoot())
 		if err != nil {
 			return nil, fmt.Errorf("review: apply distill: %w", err)
 		}
@@ -222,7 +253,7 @@ func (r *Reviewer) ContinueSession(ctx context.Context, sessionID, response stri
 			}
 
 			// Cluster the new facts to find groups worth distilling further.
-			raptorClusters, clErr := ScopedCluster(ctx, newFacts, idx, 1.0, r.onProgress, branch, "hypothesis")
+			raptorClusters, clErr := ScopedCluster(ctx, newFacts, idx, r.clusterFn, 1.0, r.onProgress, branch, "hypothesis")
 			if clErr != nil {
 				log.Warn().Err(clErr).Msg("review: RAPTOR clustering failed")
 			} else {
@@ -402,6 +433,7 @@ func (r *Reviewer) nextItem(ctx context.Context, sessionID string) (*ReviewResul
 		return r.completeSession(ctx, sess)
 	}
 
+	ontologyRoot := r.ri.OntologyRoot()
 	var content *WorkItemContent
 	switch item.StepType {
 	case "prune":
@@ -409,15 +441,15 @@ func (r *Reviewer) nextItem(ctx context.Context, sessionID string) (*ReviewResul
 		if err := json.Unmarshal([]byte(item.FactsJSON), &facts); err != nil {
 			return nil, fmt.Errorf("review: unmarshal facts for prompt: %w", err)
 		}
-		content, err = RenderPruneWorkItem(facts)
+		content, err = RenderPruneWorkItem(facts, ontologyRoot)
 	case "distill":
 		var facts []factForLLM
 		if err := json.Unmarshal([]byte(item.FactsJSON), &facts); err != nil {
 			return nil, fmt.Errorf("review: unmarshal facts for prompt: %w", err)
 		}
-		content, err = RenderDistillWorkItem(facts)
+		content, err = RenderDistillWorkItem(facts, ontologyRoot)
 	case "reflect":
-		content, err = RenderReflectWorkItem([]byte(item.FactsJSON))
+		content, err = RenderReflectWorkItem([]byte(item.FactsJSON), ontologyRoot)
 	default:
 		return nil, fmt.Errorf("review: unknown step type %q", item.StepType)
 	}

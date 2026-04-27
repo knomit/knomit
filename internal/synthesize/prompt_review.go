@@ -77,13 +77,15 @@ const distillResponseSchema = `{
 }`
 
 // RenderPruneWorkItem renders a prune prompt for the hosting model.
-func RenderPruneWorkItem(facts []factForLLM) (*WorkItemContent, error) {
+// ontologyRoot is substituted into the prompt's example paths so the LLM
+// emits paths under the configured root instead of a hardcoded placeholder.
+func RenderPruneWorkItem(facts []factForLLM, ontologyRoot string) (*WorkItemContent, error) {
 	factsJSON, err := json.MarshalIndent(facts, "", "  ")
 	if err != nil {
 		return nil, fmt.Errorf("marshal facts for prune work item: %w", err)
 	}
 
-	prompt, err := RenderTemplate("prune", "user", PromptData{Facts: string(factsJSON)})
+	prompt, err := RenderTemplate("prune", "user", PromptData{Facts: string(factsJSON), OntologyRoot: ontologyRoot})
 	if err != nil {
 		return nil, fmt.Errorf("render prune work item: %w", err)
 	}
@@ -115,8 +117,8 @@ const reflectResponseSchema = `{
 }`
 
 // RenderReflectWorkItem renders a reflect prompt for hypothesis transition review.
-func RenderReflectWorkItem(transitionsJSON []byte) (*WorkItemContent, error) {
-	prompt, err := RenderTemplate("reflect", "user", PromptData{Facts: string(transitionsJSON)})
+func RenderReflectWorkItem(transitionsJSON []byte, ontologyRoot string) (*WorkItemContent, error) {
+	prompt, err := RenderTemplate("reflect", "user", PromptData{Facts: string(transitionsJSON), OntologyRoot: ontologyRoot})
 	if err != nil {
 		return nil, fmt.Errorf("render reflect work item: %w", err)
 	}
@@ -127,13 +129,15 @@ func RenderReflectWorkItem(transitionsJSON []byte) (*WorkItemContent, error) {
 }
 
 // RenderDistillWorkItem renders a distill prompt for the hosting model.
-func RenderDistillWorkItem(facts []factForLLM) (*WorkItemContent, error) {
+// ontologyRoot is substituted into the prompt's example paths so the LLM
+// emits paths under the configured root instead of a hardcoded placeholder.
+func RenderDistillWorkItem(facts []factForLLM, ontologyRoot string) (*WorkItemContent, error) {
 	factsJSON, err := json.MarshalIndent(facts, "", "  ")
 	if err != nil {
 		return nil, fmt.Errorf("marshal facts for distill work item: %w", err)
 	}
 
-	prompt, err := RenderTemplate("distill", "user", PromptData{Facts: string(factsJSON)})
+	prompt, err := RenderTemplate("distill", "user", PromptData{Facts: string(factsJSON), OntologyRoot: ontologyRoot})
 	if err != nil {
 		return nil, fmt.Errorf("render distill work item: %w", err)
 	}

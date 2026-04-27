@@ -2,9 +2,11 @@ package web
 
 import (
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/rs/zerolog/log"
 
 	"knomit/internal/repos"
 	"knomit/internal/web/hal"
@@ -179,7 +181,7 @@ func (s *Server) NewAPIRouter() chi.Router {
 
 	r.With(BranchMiddleware).Post(
 		"/repos/{repo}/branches/{branch}/synthesis-runs",
-		handleStartSynthesis(s.Manager, s.LLMAdapter),
+		handleStartSynthesis(s.Manager, s.LLMAdapter, s.ClusterCache),
 	)
 	r.With(BranchMiddleware).Get(
 		"/repos/{repo}/branches/{branch}/synthesis-runs",
@@ -231,7 +233,22 @@ func (s *Server) NewAPIRouter() chi.Router {
 			http.NotFound(w, req)
 			return
 		}
-		h.ServeHTTP(w, req)
+		mw := &mcpStatusRecorder{ResponseWriter: w, status: http.StatusOK}
+		start := time.Now()
+		log.Info().
+			Str("method", req.Method).
+			Str("path", req.URL.Path).
+			Str("ua", req.Header.Get("User-Agent")).
+			Str("session", req.Header.Get("Mcp-Session-Id")).
+			Msg("mcp: request in")
+		h.ServeHTTP(mw, req)
+		log.Info().
+			Str("method", req.Method).
+			Str("path", req.URL.Path).
+			Int("status", mw.status).
+			Str("response_content_type", mw.Header().Get("Content-Type")).
+			Dur("elapsed", time.Since(start)).
+			Msg("mcp: request done")
 	})
 	r.With(BranchMiddleware, repos.RepoMiddleware(s.Manager)).HandleFunc(
 		"/repos/{repo}/branches/{branch}/mcp",
@@ -276,4 +293,34 @@ func (s *Server) NewAPIRouter() chi.Router {
 	})
 
 	return r
+}
+
+// mcpStatusRecorder wraps http.ResponseWriter to capture the final status
+// code for MCP request logging. It preserves http.Flusher so SSE streaming
+// from mcp-go's streamable HTTP transport still works.
+type mcpStatusRecorder struct {
+	http.ResponseWriter
+	status      int
+	wroteHeader bool
+}
+
+func (m *mcpStatusRecorder) WriteHeader(code int) {
+	if !m.wroteHeader {
+		m.status = code
+		m.wroteHeader = true
+	}
+	m.ResponseWriter.WriteHeader(code)
+}
+
+func (m *mcpStatusRecorder) Write(b []byte) (int, error) {
+	if !m.wroteHeader {
+		m.wroteHeader = true
+	}
+	return m.ResponseWriter.Write(b)
+}
+
+func (m *mcpStatusRecorder) Flush() {
+	if f, ok := m.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
 }

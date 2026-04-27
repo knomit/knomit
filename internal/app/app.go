@@ -8,16 +8,33 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/rs/zerolog/log"
 	"golang.org/x/crypto/ssh"
 
+	"knomit/internal/clustercache"
 	"knomit/internal/config"
 	"knomit/internal/embeddings"
 	"knomit/internal/llm"
 	"knomit/internal/repos"
 	"knomit/internal/web"
 )
+
+// parseMCPHeartbeat returns the configured heartbeat interval. Returns 0 to
+// disable heartbeats on parse failure or empty/zero input. Logs a warning
+// when an unparseable value is supplied so misconfigurations are visible.
+func parseMCPHeartbeat(s string) time.Duration {
+	if s == "" || s == "0" || s == "0s" {
+		return 0
+	}
+	d, err := time.ParseDuration(s)
+	if err != nil {
+		log.Warn().Err(err).Str("value", s).Msg("invalid mcp_heartbeat config; disabling heartbeats")
+		return 0
+	}
+	return d
+}
 
 // App holds the assembled application and its closeable resources.
 type App struct {
@@ -27,6 +44,8 @@ type App struct {
 	agentBranch string
 
 	closers []func()
+
+	clusterCacheStop func()
 }
 
 func (a *App) Manager() *repos.Manager { return a.manager }
@@ -103,6 +122,14 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 		KeyPath:     keyPath,
 	})
 
+	// Cluster cache + background checker.
+	ccCfg, err := clustercache.ConfigFrom(cfg.ClusterCache)
+	if err != nil {
+		return nil, fmt.Errorf("cluster cache config: %w", err)
+	}
+	cache := clustercache.New(ccCfg)
+	a.clusterCacheStop = cache.StartChecker(a.manager)
+
 	// Web server.
 	var gitHandler http.Handler
 	if cfg.Git.Serve {
@@ -118,6 +145,8 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 		SessionManager:    web.NewSessionManager(),
 		LLMAdapter:        llmAdapter,
 		Embedder:          embedder,
+		MCPHeartbeat:      parseMCPHeartbeat(cfg.MCPHeartbeat),
+		ClusterCache:      cache,
 	}
 
 	// Boot repos.
@@ -136,6 +165,9 @@ func (a *App) Handler() http.Handler {
 
 // Close shuts down repos and releases all resources.
 func (a *App) Close() {
+	if a.clusterCacheStop != nil {
+		a.clusterCacheStop()
+	}
 	a.manager.Shutdown()
 	for i := len(a.closers) - 1; i >= 0; i-- {
 		a.closers[i]()

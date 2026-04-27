@@ -174,6 +174,14 @@ func LearnHandler(embedders ...store.BatchEmbedder) func(context.Context, mcpgo.
 			}
 			dedupVecs, _ = batchEmb.EmbedBatch(texts)
 		}
+		// donatePaths[i] is the on-disk path that dedupVecs[i] corresponds to,
+		// or "" to suppress donation (used when the dedup-merge branch decided
+		// to keep the existing fact's title+body, so our vector — computed
+		// over f.Title+f.Body — would not match what gets written).
+		donatePaths := make([]string, len(facts))
+		for i, f := range facts {
+			donatePaths[i] = f.Path()
+		}
 		for i, f := range facts {
 			categoryDir := f.Path()[:strings.LastIndex(f.Path(), "/")]
 			sq := store.SearchQuery{
@@ -231,6 +239,9 @@ func LearnHandler(embedders ...store.BatchEmbedder) func(context.Context, mcpgo.
 				merged.Confidence = max(newConf, existConf)
 				merged.Sources = f.Sources + existingFact.Sources
 				merged.Refs = fact.AppendUnique(fact.UnionStrings(f.Refs, existingFact.Refs), match.Path)
+				// dedup vector still describes the merged content (same title+body
+				// as the new fact); just retarget to the existing path it now lives at.
+				donatePaths[i] = merged.Path()
 			} else {
 				// Existing fact wins — keep existing title and body, update metadata.
 				merged = fact.NewFact(match.Path)
@@ -242,6 +253,10 @@ func LearnHandler(embedders ...store.BatchEmbedder) func(context.Context, mcpgo.
 				merged.Confidence = max(newConf, existConf)
 				merged.Sources = f.Sources + existingFact.Sources
 				merged.Refs = fact.AppendUnique(fact.UnionStrings(f.Refs, existingFact.Refs), match.Path)
+				// dedup vector was computed over f's title+body; existing wins so
+				// merged content differs. Drop the donation — upsert will fall
+				// through to a fresh embed.
+				donatePaths[i] = ""
 			}
 
 			// Remove the original new-fact path from the files map and add the merged one.
@@ -249,6 +264,21 @@ func LearnHandler(embedders ...store.BatchEmbedder) func(context.Context, mcpgo.
 			files[merged.Path()] = fact.SerializeFact(merged)
 			facts[i] = merged
 		}
+
+		// Build the precomputed-embedding donation map keyed by final on-disk
+		// path. upsert reads this from ctx and skips its own ONNX call when an
+		// entry is present. Empty/missing entries fall through to embedding.
+		embByPath := make(map[string][]float32, len(facts))
+		for i := range donatePaths {
+			if donatePaths[i] == "" {
+				continue
+			}
+			if i >= len(dedupVecs) || len(dedupVecs[i]) == 0 {
+				continue
+			}
+			embByPath[donatePaths[i]] = dedupVecs[i]
+		}
+		ctx = store.WithPrecomputedEmbeddings(ctx, embByPath)
 
 		// 4. BatchWrite all facts in one commit.
 		commitMsg := fmt.Sprintf("learn: %s", momentName)

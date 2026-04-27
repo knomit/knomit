@@ -19,9 +19,10 @@ Respond as JSON (no markdown wrapping):
     {
       "paths": ["file1.md", "file2.md"],
       "merged": {
-        "path": "know/...",
+        "path": "{{.OntologyRoot}}/...",
         "title": "...",
         "body": "...",
+        "type": "synthesis|methodology|observation|concept|process|principle|pattern|reference",
         "domain": [],
         "confidence": 0.X,
         "sources": 2,
@@ -31,6 +32,10 @@ Respond as JSON (no markdown wrapping):
     }
   ]
 }
+
+Merge output requirements (mandatory):
+- `merged.path` MUST start with `{{.OntologyRoot}}/`. Merges with any other prefix are rejected.
+- `merged.type` MUST be set to one of the listed values. Empty or missing type rejects the merge.
 
 ## Hypothesis handling
 

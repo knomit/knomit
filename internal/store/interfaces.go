@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"time"
 
 	"github.com/go-git/go-git/v5/plumbing/transport"
 )
@@ -64,6 +65,7 @@ type BranchIndex interface {
 	SetDefaultBranch(branch string) error
 	BranchInfo(localAgent string) (branches, agentBranches []string, matchedAgent string)
 	HeadCommit(ctx context.Context, branch string) (string, error)
+	HeadCommitInfo(ctx context.Context, branch string) (hash string, committedAt time.Time, err error)
 }
 
 // ToolSessionIndex is the interface for tool session persistence. Implemented by *toolIndex.

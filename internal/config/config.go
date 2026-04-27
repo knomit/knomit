@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/BurntSushi/toml"
@@ -33,6 +34,17 @@ type LLMConfig struct {
 	Batch    bool   `toml:"batch"`
 }
 
+// ClusterCacheConfig governs the Louvain-cluster cache: how long to wait for
+// activity to settle before a background recompute, how often the checker
+// wakes, and how many concurrent recomputes are allowed across all
+// repos/branches. CheckInterval=="0" or "0s" disables the background
+// checker entirely (read-path stale-then-refresh still applies).
+type ClusterCacheConfig struct {
+	QuietThreshold string `toml:"quiet_threshold"`
+	CheckInterval  string `toml:"check_interval"`
+	MaxConcurrent  int    `toml:"max_concurrent"`
+}
+
 // Config is the root configuration, composed of section structs.
 type Config struct {
 	Home         string           `toml:"repo"`
@@ -41,9 +53,15 @@ type Config struct {
 	Socket       string           `toml:"socket"`
 	OntologyRoot string           `toml:"ontology_root"`
 	ONNXLibPath  string           `toml:"onnx_lib_path"`
-	LLM          LLMConfig        `toml:"llm"`
-	Remote       RemoteAuthConfig `toml:"remote"`
-	Git          GitConfig        `toml:"git"`
+	// MCPHeartbeat is the interval between progress notifications emitted
+	// during long-running MCP tool calls (e.g. knomit_review). Any string
+	// time.ParseDuration accepts ("5s", "10s", "1m"); empty or "0s" disables
+	// heartbeats. Default "5s".
+	MCPHeartbeat string             `toml:"mcp_heartbeat"`
+	ClusterCache ClusterCacheConfig `toml:"cluster_cache"`
+	LLM          LLMConfig          `toml:"llm"`
+	Remote       RemoteAuthConfig   `toml:"remote"`
+	Git          GitConfig          `toml:"git"`
 }
 
 // Defaults returns a Config populated with default values.
@@ -54,6 +72,12 @@ func Defaults() Config {
 		Host:         "localhost",
 		Port:         "19278",
 		OntologyRoot: "kb",
+		MCPHeartbeat: "5s",
+		ClusterCache: ClusterCacheConfig{
+			QuietThreshold: "10s",
+			CheckInterval:  "5s",
+			MaxConcurrent:  1,
+		},
 		LLM: LLMConfig{
 			Model:    "gemini-2.5-flash",
 			Provider: "gemini",
@@ -102,6 +126,10 @@ func Load() (Config, error) {
 	envOr("KNOMIT_REMOTE_SSH_KEY", &cfg.Remote.SSHKey)
 	envOr("KNOMIT_REMOTE_AUTH", &cfg.Remote.AuthMethod)
 	envOr("ONNXRUNTIME_SHARED_LIBRARY", &cfg.ONNXLibPath)
+	envOr("KNOMIT_MCP_HEARTBEAT", &cfg.MCPHeartbeat)
+	envOr("KNOMIT_CLUSTER_CACHE_QUIET_THRESHOLD", &cfg.ClusterCache.QuietThreshold)
+	envOr("KNOMIT_CLUSTER_CACHE_CHECK_INTERVAL", &cfg.ClusterCache.CheckInterval)
+	envIntOr("KNOMIT_CLUSTER_CACHE_MAX_CONCURRENT", &cfg.ClusterCache.MaxConcurrent)
 
 	// Expand tildes in path fields.
 	expandTilde(&cfg.Home)
@@ -140,6 +168,14 @@ func envOr(key string, target *string) {
 func envBoolOr(key string, target *bool) {
 	if v := os.Getenv(key); v != "" {
 		*target = v == "true"
+	}
+}
+
+func envIntOr(key string, target *int) {
+	if v := os.Getenv(key); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			*target = n
+		}
 	}
 }
 

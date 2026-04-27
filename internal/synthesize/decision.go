@@ -26,6 +26,31 @@ func normalizeFactPath(path string) string {
 	return dir + "/" + id + ".md"
 }
 
+// validateOutputPath rejects LLM-emitted fact paths that don't live under
+// the configured ontology root. Returns nil on success or a descriptive
+// error suitable for the onProgress warn channel. Paths are compared
+// case-insensitively because fact.NewFact lowercases all paths
+// unconditionally before persisting.
+func validateOutputPath(path, ontologyRoot string) error {
+	if ontologyRoot == "" {
+		return fmt.Errorf("ontology root not configured")
+	}
+	prefix := strings.ToLower(ontologyRoot) + "/"
+	if !strings.HasPrefix(strings.ToLower(path), prefix) {
+		return fmt.Errorf("path %q is outside ontology root %q", path, ontologyRoot)
+	}
+	return nil
+}
+
+// validateOutputType rejects LLM-emitted facts with empty or invalid
+// epistemic type. Returns nil on success. Empty type is the most common
+// failure (LLM omits the field) and historically slipped through to disk
+// as `type:` blanks; the API silently masked these by defaulting to
+// "observation" on read, hiding the bug.
+func validateOutputType(t string) error {
+	return fact.EpistemicType(t).Validate()
+}
+
 // ReviewStats tracks what actions were taken during a review.
 type ReviewStats struct {
 	Pruned      int
@@ -35,6 +60,9 @@ type ReviewStats struct {
 }
 
 // ApplyPruneDecisions applies prune decisions (retract/update) and merges to the git store.
+// ontologyRoot is the configured fact root (e.g. "kb"); merge outputs whose
+// path falls outside this root or whose epistemic type is empty/invalid are
+// rejected with a warn rather than written.
 func ApplyPruneDecisions(ctx context.Context,
 	gs store.FactIndex,
 	decisions []PruneDecision,
@@ -42,6 +70,7 @@ func ApplyPruneDecisions(ctx context.Context,
 	recipeName string,
 	onProgress func(ProgressEvent),
 	agentBranch string,
+	ontologyRoot string,
 ) (*ReviewStats, error) {
 	stats := &ReviewStats{}
 	// Track deleted paths to avoid double-deletion when a path appears in
@@ -90,6 +119,14 @@ func ApplyPruneDecisions(ctx context.Context,
 	// Apply merges.
 	for _, m := range merges {
 		mf := m.Merged
+		if err := validateOutputPath(mf.Path, ontologyRoot); err != nil {
+			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("merge rejected: %v", err)})
+			continue
+		}
+		if err := validateOutputType(mf.Type); err != nil {
+			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("merge %s rejected: %v", mf.Path, err)})
+			continue
+		}
 		weight := computeWeight(ctx, gs, agentBranch, m.Paths)
 		merged := fact.NewFact(mf.Path)
 		merged.Title = mf.Title
@@ -129,6 +166,9 @@ func ApplyPruneDecisions(ctx context.Context,
 
 // ApplyDistillDecisions applies distill results: writes synthesized facts and retracts subsumed ones.
 // Returns stats, the written facts (with normalized paths), and any error.
+// ontologyRoot is the configured fact root (e.g. "kb"); synthesized facts
+// whose path falls outside this root or whose epistemic type is
+// empty/invalid are rejected with a warn rather than written.
 func ApplyDistillDecisions(ctx context.Context,
 	gs store.FactIndex,
 	synthesized []distillFact,
@@ -136,6 +176,7 @@ func ApplyDistillDecisions(ctx context.Context,
 	recipeName string,
 	onProgress func(ProgressEvent),
 	agentBranch string,
+	ontologyRoot string,
 ) (*ReviewStats, []distillFact, error) {
 	stats := &ReviewStats{}
 	var written []distillFact
@@ -144,6 +185,14 @@ func ApplyDistillDecisions(ctx context.Context,
 
 	// Commit synthesized facts.
 	for _, df := range synthesized {
+		if err := validateOutputPath(df.Path, ontologyRoot); err != nil {
+			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("distill rejected: %v", err)})
+			continue
+		}
+		if err := validateOutputType(df.Type); err != nil {
+			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("distill %s rejected: %v", df.Path, err)})
+			continue
+		}
 		// Distill cannot create hypothesis-type facts.
 		if fact.EpistemicType(df.Type) == fact.Hypothesis {
 			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("distill: skipping hypothesis-type output %s — distill cannot create hypotheses", df.Path)})
