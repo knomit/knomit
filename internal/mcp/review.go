@@ -4,11 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"sync/atomic"
-	"time"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
-	mcpserver "github.com/mark3labs/mcp-go/server"
+	"github.com/rs/zerolog/log"
 
 	"knomit/internal/clustercache"
 	"knomit/internal/repos"
@@ -45,42 +43,18 @@ func reviewTool() mcpgo.Tool {
 // keeps the values (notably the repo) but suppresses the cancellation that
 // comes from the request lifecycle ending; client-initiated cancellation via
 // tasks/cancel still works because mcp-go uses a separate cancel func.
-//
-// While the slow work runs, a heartbeat goroutine fires periodic
-// notifications/message events with the latest phase from the synthesize
-// layer so MCP clients can show progress and (depending on their
-// implementation) avoid response timeouts. Heartbeat interval comes from
-// config; zero disables it.
-func ReviewHandler(srv *mcpserver.MCPServer, heartbeat time.Duration, cache *clustercache.Cache) func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+func ReviewHandler(cache *clustercache.Cache) func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 	return func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 		if req.Params.Task != nil {
 			ctx = context.WithoutCancel(ctx)
 		}
 		ri := repos.RepoFromContext(ctx)
 
-		// Capture the latest phase event from the synthesize layer so the
-		// heartbeat can include it in the user-facing message.
-		var latestPhase atomic.Pointer[string]
 		var clusterFn synthesize.ClusterFn
 		if cache != nil {
 			clusterFn = synthesize.ClusterFn(cache.ClusterFnFor(ri))
 		}
-		reviewer := synthesize.NewReviewer(ri, clusterFn, func(e synthesize.ProgressEvent) {
-			s := e.Phase
-			if e.Message != "" {
-				s += ": " + e.Message
-			}
-			latestPhase.Store(&s)
-		})
-
-		// Start the heartbeat goroutine. stop is closed in the deferred call
-		// regardless of how the handler returns, so the goroutine never
-		// outlives the request.
-		stop := make(chan struct{})
-		defer close(stop)
-		if heartbeat > 0 {
-			go runHeartbeat(srv, ctx, stop, &latestPhase, time.Now(), heartbeat)
-		}
+		reviewer := synthesize.NewReviewer(ri, clusterFn, logProgress)
 
 		sessionID := req.GetString("session_id", "")
 		response := req.GetString("response", "")
@@ -106,31 +80,14 @@ func ReviewHandler(srv *mcpserver.MCPServer, heartbeat time.Duration, cache *clu
 	}
 }
 
-// runHeartbeat sends a notifications/message event to the client every
-// `interval` until `stop` closes or `ctx` is done. The message includes
-// elapsed time and the most recent phase string set by the synthesize
-// onProgress callback. Errors are ignored — losing a heartbeat is fine.
-func runHeartbeat(srv *mcpserver.MCPServer, ctx context.Context, stop <-chan struct{}, latest *atomic.Pointer[string], start time.Time, interval time.Duration) {
-	t := time.NewTicker(interval)
-	defer t.Stop()
-	for {
-		select {
-		case <-stop:
-			return
-		case <-ctx.Done():
-			return
-		case <-t.C:
-			phase := "starting"
-			if p := latest.Load(); p != nil && *p != "" {
-				phase = *p
-			}
-			elapsed := time.Since(start).Round(time.Second)
-			data := fmt.Sprintf("knomit_review: working (%s elapsed, phase: %s)", elapsed, phase)
-			_ = srv.SendNotificationToClient(ctx, "notifications/message", map[string]any{
-				"level":  "info",
-				"logger": "knomit",
-				"data":   data,
-			})
-		}
+// logProgress surfaces synthesize.ProgressEvent emissions to the server log.
+// "warn" phases (e.g. validation rejections from ApplyDistillDecisions) go
+// out at WARN; everything else at DEBUG so the server log stays usable
+// during long review sessions.
+func logProgress(e synthesize.ProgressEvent) {
+	if e.Phase == "warn" {
+		log.Warn().Str("phase", e.Phase).Msg(e.Message)
+		return
 	}
+	log.Debug().Str("phase", e.Phase).Msg(e.Message)
 }

@@ -51,13 +51,8 @@ type Config struct {
 	Host         string           `toml:"host"`
 	Port         string           `toml:"port"`
 	Socket       string           `toml:"socket"`
-	OntologyRoot string           `toml:"ontology_root"`
-	ONNXLibPath  string           `toml:"onnx_lib_path"`
-	// MCPHeartbeat is the interval between progress notifications emitted
-	// during long-running MCP tool calls (e.g. knomit_review). Any string
-	// time.ParseDuration accepts ("5s", "10s", "1m"); empty or "0s" disables
-	// heartbeats. Default "5s".
-	MCPHeartbeat string             `toml:"mcp_heartbeat"`
+	OntologyRoot string             `toml:"ontology_root"`
+	ONNXLibPath  string             `toml:"onnx_lib_path"`
 	ClusterCache ClusterCacheConfig `toml:"cluster_cache"`
 	LLM          LLMConfig          `toml:"llm"`
 	Remote       RemoteAuthConfig   `toml:"remote"`
@@ -72,7 +67,6 @@ func Defaults() Config {
 		Host:         "localhost",
 		Port:         "19278",
 		OntologyRoot: "kb",
-		MCPHeartbeat: "5s",
 		ClusterCache: ClusterCacheConfig{
 			QuietThreshold: "10s",
 			CheckInterval:  "5s",
@@ -126,7 +120,6 @@ func Load() (Config, error) {
 	envOr("KNOMIT_REMOTE_SSH_KEY", &cfg.Remote.SSHKey)
 	envOr("KNOMIT_REMOTE_AUTH", &cfg.Remote.AuthMethod)
 	envOr("ONNXRUNTIME_SHARED_LIBRARY", &cfg.ONNXLibPath)
-	envOr("KNOMIT_MCP_HEARTBEAT", &cfg.MCPHeartbeat)
 	envOr("KNOMIT_CLUSTER_CACHE_QUIET_THRESHOLD", &cfg.ClusterCache.QuietThreshold)
 	envOr("KNOMIT_CLUSTER_CACHE_CHECK_INTERVAL", &cfg.ClusterCache.CheckInterval)
 	envIntOr("KNOMIT_CLUSTER_CACHE_MAX_CONCURRENT", &cfg.ClusterCache.MaxConcurrent)

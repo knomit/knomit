@@ -3,7 +3,6 @@ package web
 import (
 	"context"
 	"net/http"
-	"time"
 
 	mcpserver "github.com/mark3labs/mcp-go/server"
 	"github.com/go-chi/chi/v5"
@@ -27,10 +26,6 @@ type Server struct {
 	SessionManager    *SessionManager
 	LLMAdapter        llm.LLMAdapter     // nil if no LLM configured
 	Embedder          store.BatchEmbedder // nil if unavailable
-
-	// MCPHeartbeat is the interval at which long-running MCP tools emit
-	// progress notifications. Zero disables heartbeats.
-	MCPHeartbeat time.Duration
 
 	// ClusterCache wraps idx.ClusterFacts with an SQLite-backed cache.
 	// Required by knomit_review (MCP) and the synthesis-run job; nil is
@@ -80,9 +75,9 @@ func (s *Server) buildMCPHandlers() {
 	for _, p := range profiles {
 		var mcpSrv *mcpserver.MCPServer
 		if s.Embedder != nil {
-			mcpSrv = mcp.NewServer(p, s.OntologyRoot, s.MCPHeartbeat, s.ClusterCache, s.Embedder)
+			mcpSrv = mcp.NewServer(p, s.OntologyRoot, s.ClusterCache, s.Embedder)
 		} else {
-			mcpSrv = mcp.NewServer(p, s.OntologyRoot, s.MCPHeartbeat, s.ClusterCache)
+			mcpSrv = mcp.NewServer(p, s.OntologyRoot, s.ClusterCache)
 		}
 		s.mcpHandlers[p] = mcpserver.NewStreamableHTTPServer(mcpSrv)
 	}

@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"time"
 
 	"github.com/rs/zerolog/log"
 	"golang.org/x/crypto/ssh"
@@ -20,21 +19,6 @@ import (
 	"knomit/internal/repos"
 	"knomit/internal/web"
 )
-
-// parseMCPHeartbeat returns the configured heartbeat interval. Returns 0 to
-// disable heartbeats on parse failure or empty/zero input. Logs a warning
-// when an unparseable value is supplied so misconfigurations are visible.
-func parseMCPHeartbeat(s string) time.Duration {
-	if s == "" || s == "0" || s == "0s" {
-		return 0
-	}
-	d, err := time.ParseDuration(s)
-	if err != nil {
-		log.Warn().Err(err).Str("value", s).Msg("invalid mcp_heartbeat config; disabling heartbeats")
-		return 0
-	}
-	return d
-}
 
 // App holds the assembled application and its closeable resources.
 type App struct {
@@ -145,7 +129,6 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 		SessionManager:    web.NewSessionManager(),
 		LLMAdapter:        llmAdapter,
 		Embedder:          embedder,
-		MCPHeartbeat:      parseMCPHeartbeat(cfg.MCPHeartbeat),
 		ClusterCache:      cache,
 	}
 
