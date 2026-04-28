@@ -12,7 +12,6 @@ import (
 	"github.com/rs/zerolog/log"
 	"golang.org/x/crypto/ssh"
 
-	"knomit/internal/clustercache"
 	"knomit/internal/config"
 	"knomit/internal/embeddings"
 	"knomit/internal/llm"
@@ -106,13 +105,15 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 		KeyPath:     keyPath,
 	})
 
-	// Cluster cache + background checker.
-	ccCfg, err := clustercache.ConfigFrom(cfg.ClusterCache)
+	// Background cluster-cache warmer. The cache decision logic lives on
+	// store.SearchIndex.CachedClusterFacts (per-repo Service); this loop
+	// just nudges stale branches during quiet periods so the next review
+	// hits a fresh row.
+	checkerCfg, err := repos.ParseClusterCheckerConfig(cfg.ClusterCache)
 	if err != nil {
-		return nil, fmt.Errorf("cluster cache config: %w", err)
+		return nil, fmt.Errorf("cluster checker config: %w", err)
 	}
-	cache := clustercache.New(ccCfg)
-	a.clusterCacheStop = cache.StartChecker(a.manager)
+	a.clusterCacheStop = a.manager.StartClusterChecker(checkerCfg)
 
 	// Web server.
 	var gitHandler http.Handler
@@ -129,7 +130,6 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 		SessionManager:    web.NewSessionManager(),
 		LLMAdapter:        llmAdapter,
 		Embedder:          embedder,
-		ClusterCache:      cache,
 	}
 
 	// Boot repos.

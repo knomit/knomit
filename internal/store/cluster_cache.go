@@ -6,11 +6,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"time"
+
+	"github.com/rs/zerolog/log"
 )
 
 // ClusterCacheStore is the interface for reading and writing cached Louvain
-// cluster results. The actual cache decision logic (cold/stale/fresh,
-// singleflight, async refresh) lives in internal/clustercache; this layer
+// cluster results. The cache decision logic (cold/stale/fresh, singleflight,
+// async refresh) lives on *searchIndex via CachedClusterFacts; this layer
 // only handles SQL CRUD on the cluster_cache table.
 type ClusterCacheStore interface {
 	Get(ctx context.Context, branch string, resolution float64, minCommunitySize int) (ClusterCacheRow, bool, error)
@@ -114,4 +116,104 @@ func (s *clusterCacheStore) Put(ctx context.Context, branch string, resolution f
 		return fmt.Errorf("cluster cache upsert: %w", err)
 	}
 	return nil
+}
+
+// CachedClusterFacts is the cache-aware entry point preferred by the review
+// pipeline. The decision tree:
+//
+//   - Cold cache (no row): compute synchronously, write, return. The
+//     background checker (repos.Manager.StartClusterChecker) is supposed to
+//     warm cold caches before any caller asks; this branch is the safety
+//     net, not the steady state.
+//   - Fresh cache (row HEAD == current HEAD): return cached.
+//   - Stale cache (row HEAD differs): return cached value immediately and
+//     fire an asynchronous refresh whose lifetime is decoupled from the
+//     request context. Next caller benefits.
+//
+// Concurrent calls to this method (e.g. a review + the checker, or two
+// reviews) for the same (branch, resolution, minCommunitySize) collapse via
+// the per-searchIndex singleflight group so Louvain runs at most once per
+// key at any moment.
+func (si *searchIndex) CachedClusterFacts(ctx context.Context, branch string, resolution float64, minCommunitySize int) (ClusterResult, error) {
+	headCommit, err := si.rh.HeadCommit(ctx, branch)
+	if err != nil {
+		return ClusterResult{}, fmt.Errorf("CachedClusterFacts head: %w", err)
+	}
+	cacheStore := &clusterCacheStore{rh: si.rh}
+	row, found, err := cacheStore.Get(ctx, branch, resolution, minCommunitySize)
+	if err != nil {
+		return ClusterResult{}, fmt.Errorf("CachedClusterFacts get: %w", err)
+	}
+
+	if !found {
+		log.Info().Str("branch", branch).Msg("cluster cache: cold, computing synchronously")
+		return si.computeAndCacheClusters(ctx, branch, resolution, minCommunitySize)
+	}
+
+	if row.HeadCommit != headCommit {
+		log.Debug().
+			Str("branch", branch).
+			Str("cached_head", shortHash(row.HeadCommit)).
+			Str("current_head", shortHash(headCommit)).
+			Msg("cluster cache: stale, returning cached + async refresh")
+		si.refreshClustersAsync(branch, resolution, minCommunitySize)
+	}
+	return row.Result, nil
+}
+
+// computeAndCacheClusters runs ClusterFacts under the singleflight group,
+// writes the result to the cache table, and returns it. Used by the
+// cold-cache sync path and by refreshClustersAsync.
+func (si *searchIndex) computeAndCacheClusters(ctx context.Context, branch string, resolution float64, minCommunitySize int) (ClusterResult, error) {
+	key := fmt.Sprintf("%s|%g|%d", branch, resolution, minCommunitySize)
+	v, err, _ := si.clusterSF.Do(key, func() (any, error) {
+		start := time.Now()
+		headCommit, err := si.rh.HeadCommit(ctx, branch)
+		if err != nil {
+			return ClusterResult{}, fmt.Errorf("compute head: %w", err)
+		}
+		result, err := si.ClusterFacts(ctx, branch, resolution, minCommunitySize)
+		if err != nil {
+			return ClusterResult{}, err
+		}
+		cacheStore := &clusterCacheStore{rh: si.rh}
+		if err := cacheStore.Put(ctx, branch, resolution, minCommunitySize, headCommit, result); err != nil {
+			return ClusterResult{}, fmt.Errorf("compute put: %w", err)
+		}
+		log.Info().
+			Str("branch", branch).
+			Str("head", shortHash(headCommit)).
+			Int("clusters", len(result.Clusters)).
+			Int("noise", len(result.Noise)).
+			Dur("elapsed", time.Since(start)).
+			Msg("cluster cache: refreshed")
+		return result, nil
+	})
+	if err != nil {
+		return ClusterResult{}, err
+	}
+	return v.(ClusterResult), nil
+}
+
+// refreshClustersAsync fires a background recompute that outlives the
+// request context. The 5-minute ceiling matches the order of magnitude of
+// a worst-case Louvain on a very large knowledge base; without it a hung
+// query could pin a goroutine indefinitely. Errors are logged, not
+// surfaced — the worst case is the cache stays stale until the next
+// trigger.
+func (si *searchIndex) refreshClustersAsync(branch string, resolution float64, minCommunitySize int) {
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+		if _, err := si.computeAndCacheClusters(ctx, branch, resolution, minCommunitySize); err != nil {
+			log.Warn().Err(err).Str("branch", branch).Msg("cluster cache: async refresh failed")
+		}
+	}()
+}
+
+func shortHash(h string) string {
+	if len(h) > 8 {
+		return h[:8]
+	}
+	return h
 }

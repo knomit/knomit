@@ -181,7 +181,7 @@ func (s *Server) NewAPIRouter() chi.Router {
 
 	r.With(BranchMiddleware).Post(
 		"/repos/{repo}/branches/{branch}/synthesis-runs",
-		handleStartSynthesis(s.Manager, s.LLMAdapter, s.ClusterCache),
+		handleStartSynthesis(s.Manager, s.LLMAdapter),
 	)
 	r.With(BranchMiddleware).Get(
 		"/repos/{repo}/branches/{branch}/synthesis-runs",

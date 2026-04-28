@@ -9,7 +9,6 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/rs/zerolog/log"
 
-	"knomit/internal/clustercache"
 	"knomit/internal/llm"
 	"knomit/internal/mcp"
 	"knomit/internal/repos"
@@ -26,11 +25,6 @@ type Server struct {
 	SessionManager    *SessionManager
 	LLMAdapter        llm.LLMAdapter     // nil if no LLM configured
 	Embedder          store.BatchEmbedder // nil if unavailable
-
-	// ClusterCache wraps idx.ClusterFacts with an SQLite-backed cache.
-	// Required by knomit_review (MCP) and the synthesis-run job; nil is
-	// only valid during partial test setups.
-	ClusterCache *clustercache.Cache
 
 	mcpHandlers map[string]http.Handler // profile → handler
 
@@ -75,9 +69,9 @@ func (s *Server) buildMCPHandlers() {
 	for _, p := range profiles {
 		var mcpSrv *mcpserver.MCPServer
 		if s.Embedder != nil {
-			mcpSrv = mcp.NewServer(p, s.OntologyRoot, s.ClusterCache, s.Embedder)
+			mcpSrv = mcp.NewServer(p, s.OntologyRoot, s.Embedder)
 		} else {
-			mcpSrv = mcp.NewServer(p, s.OntologyRoot, s.ClusterCache)
+			mcpSrv = mcp.NewServer(p, s.OntologyRoot)
 		}
 		s.mcpHandlers[p] = mcpserver.NewStreamableHTTPServer(mcpSrv)
 	}

@@ -8,7 +8,6 @@ import (
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/rs/zerolog/log"
 
-	"knomit/internal/clustercache"
 	"knomit/internal/repos"
 	"knomit/internal/synthesize"
 )
@@ -43,18 +42,14 @@ func reviewTool() mcpgo.Tool {
 // keeps the values (notably the repo) but suppresses the cancellation that
 // comes from the request lifecycle ending; client-initiated cancellation via
 // tasks/cancel still works because mcp-go uses a separate cancel func.
-func ReviewHandler(cache *clustercache.Cache) func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+func ReviewHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 	return func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 		if req.Params.Task != nil {
 			ctx = context.WithoutCancel(ctx)
 		}
 		ri := repos.RepoFromContext(ctx)
 
-		var clusterFn synthesize.ClusterFn
-		if cache != nil {
-			clusterFn = synthesize.ClusterFn(cache.ClusterFnFor(ri))
-		}
-		reviewer := synthesize.NewReviewer(ri, clusterFn, logProgress)
+		reviewer := synthesize.NewReviewer(ri, logProgress)
 
 		sessionID := req.GetString("session_id", "")
 		response := req.GetString("response", "")

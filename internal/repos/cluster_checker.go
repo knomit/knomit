@@ -1,0 +1,239 @@
+package repos
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"time"
+
+	"github.com/rs/zerolog/log"
+
+	"knomit/internal/config"
+	"knomit/internal/store"
+)
+
+// ClusterCheckerConfig holds the parsed runtime parameters for the
+// background cluster cache warmer. Built once at app startup from
+// config.ClusterCacheConfig (raw TOML/env strings) via
+// ParseClusterCheckerConfig. CheckInterval == 0 disables the loop.
+type ClusterCheckerConfig struct {
+	QuietThreshold time.Duration
+	CheckInterval  time.Duration
+	MaxConcurrent  int
+}
+
+// ParseClusterCheckerConfig parses the raw config.ClusterCacheConfig
+// duration strings into a runtime ClusterCheckerConfig. Returns an
+// error rather than silently substituting defaults so misconfigurations
+// surface at boot, not at first review.
+func ParseClusterCheckerConfig(raw config.ClusterCacheConfig) (ClusterCheckerConfig, error) {
+	q, err := parseClusterDur("quiet_threshold", raw.QuietThreshold, 10*time.Second)
+	if err != nil {
+		return ClusterCheckerConfig{}, err
+	}
+	c, err := parseClusterDur("check_interval", raw.CheckInterval, 5*time.Second)
+	if err != nil {
+		return ClusterCheckerConfig{}, err
+	}
+	maxC := raw.MaxConcurrent
+	if maxC <= 0 {
+		maxC = 1
+	}
+	return ClusterCheckerConfig{QuietThreshold: q, CheckInterval: c, MaxConcurrent: maxC}, nil
+}
+
+func parseClusterDur(field, s string, def time.Duration) (time.Duration, error) {
+	if s == "" {
+		return def, nil
+	}
+	d, err := time.ParseDuration(s)
+	if err != nil {
+		return 0, fmt.Errorf("cluster_cache.%s: %w", field, err)
+	}
+	return d, nil
+}
+
+// clusterKey is one (resolution, minCommunitySize) combination the
+// checker proactively keeps warm. defaultClusterKeys mirrors the values
+// synthesize.ScopedCluster passes to CachedClusterFacts (resolution=1.0,
+// minCommunitySize=2). Callers using a different key fall through to the
+// lazy compute on first read; the checker only warms the common case.
+type clusterKey struct {
+	Resolution       float64
+	MinCommunitySize int
+}
+
+var defaultClusterKeys = []clusterKey{{Resolution: 1.0, MinCommunitySize: 2}}
+
+// StartClusterChecker launches a background goroutine that periodically
+// scans every open repo and triggers a Louvain refresh for branches
+// whose HEAD has advanced AND whose newest commit is older than
+// QuietThreshold ("activity has settled"). The returned stop func
+// cancels the loop and joins the goroutine.
+//
+// CheckInterval == 0 disables the loop entirely; the returned stop is a
+// no-op. Refreshes are dispatched as goroutines bounded by MaxConcurrent
+// so a server hosting many repos cannot launch unbounded simultaneous
+// Louvain runs. Within a single repo, the per-Service singleflight in
+// CachedClusterFacts collapses the checker's trigger and any concurrent
+// review-path call to one compute.
+func (m *Manager) StartClusterChecker(cfg ClusterCheckerConfig) (stop func()) {
+	if cfg.CheckInterval <= 0 {
+		log.Info().Msg("cluster cache: background checker disabled (check_interval=0)")
+		return func() {}
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	sem := make(chan struct{}, cfg.MaxConcurrent)
+
+	go func() {
+		defer close(done)
+		log.Info().
+			Dur("interval", cfg.CheckInterval).
+			Dur("quiet_threshold", cfg.QuietThreshold).
+			Int("max_concurrent", cfg.MaxConcurrent).
+			Msg("cluster cache: background checker started")
+
+		t := time.NewTicker(cfg.CheckInterval)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				log.Info().Msg("cluster cache: background checker stopped")
+				return
+			case <-t.C:
+				m.tickClusterChecker(ctx, cfg, sem)
+			}
+		}
+	}()
+	return func() {
+		cancel()
+		<-done
+	}
+}
+
+// tickClusterChecker runs one pass over every repo. Quiet on the happy
+// path; logs at info when it fires a refresh.
+func (m *Manager) tickClusterChecker(ctx context.Context, cfg ClusterCheckerConfig, sem chan struct{}) {
+	m.ForEach(func(name string, ri *RepoInstance) {
+		checkRepoClusters(ctx, ri, cfg, sem)
+	})
+}
+
+// checkRepoClusters iterates a repo's branches and dispatches refreshes
+// for those that are both stale AND settled.
+func checkRepoClusters(ctx context.Context, ri *RepoInstance, cfg ClusterCheckerConfig, sem chan struct{}) {
+	var (
+		branches []store.Branch
+		err      error
+	)
+	ri.WithRead(func(svc *store.Service) {
+		if svc == nil {
+			return
+		}
+		branches, err = svc.Branches().ListBranches(ctx)
+	})
+	if err != nil {
+		log.Debug().Err(err).Str("repo", ri.Name()).Msg("cluster cache: list branches failed")
+		return
+	}
+
+	now := time.Now()
+	for _, b := range branches {
+		checkBranchClusters(ctx, ri, b.Name, now, cfg, sem)
+	}
+}
+
+// checkBranchClusters evaluates a single branch against every default
+// key and fires async refreshes (gated by sem) when stale + settled.
+// Returns without dispatching anything if the branch has no commits,
+// HEAD already matches a fresh cache row, or activity hasn't settled.
+func checkBranchClusters(ctx context.Context, ri *RepoInstance, branch string, now time.Time, cfg ClusterCheckerConfig, sem chan struct{}) {
+	var (
+		head      string
+		committed time.Time
+		headErr   error
+	)
+	ri.WithRead(func(svc *store.Service) {
+		if svc == nil {
+			return
+		}
+		head, committed, headErr = svc.Branches().HeadCommitInfo(ctx, branch)
+	})
+	if headErr != nil {
+		// ErrBranchNotFound is normal for branches that exist in the
+		// branches table but have no git ref yet (race during repo init).
+		if !errors.Is(headErr, store.ErrBranchNotFound) {
+			log.Debug().Err(headErr).Str("repo", ri.Name()).Str("branch", branch).Msg("cluster cache: head info failed")
+		}
+		return
+	}
+
+	if now.Sub(committed) < cfg.QuietThreshold {
+		// Activity is too recent; wait for it to settle.
+		return
+	}
+
+	for _, k := range defaultClusterKeys {
+		var (
+			row   store.ClusterCacheRow
+			found bool
+			err   error
+		)
+		ri.WithRead(func(svc *store.Service) {
+			if svc == nil {
+				return
+			}
+			row, found, err = svc.ClusterCache().Get(ctx, branch, k.Resolution, k.MinCommunitySize)
+		})
+		if err != nil {
+			log.Debug().Err(err).Str("repo", ri.Name()).Str("branch", branch).Msg("cluster cache: lookup failed")
+			continue
+		}
+		if found && row.HeadCommit == head {
+			continue
+		}
+		log.Info().
+			Str("repo", ri.Name()).
+			Str("branch", branch).
+			Bool("cold", !found).
+			Msg("cluster cache: triggering refresh")
+		dispatchRefresh(ri, branch, k.Resolution, k.MinCommunitySize, sem)
+	}
+}
+
+// dispatchRefresh launches a goroutine that calls CachedClusterFacts
+// with a detached context. The per-Service singleflight in store
+// collapses concurrent triggers for the same key, so even if the
+// checker re-fires on the next tick before the previous compute
+// finishes, only one Louvain run is in flight per (branch, key) at any
+// moment. The semaphore caps the cross-repo total.
+func dispatchRefresh(ri *RepoInstance, branch string, resolution float64, minCommunitySize int, sem chan struct{}) {
+	go func() {
+		select {
+		case sem <- struct{}{}:
+		default:
+			// Pool full — drop this trigger. Singleflight in the Service
+			// will collapse with whatever's running; the next tick will
+			// re-evaluate.
+			log.Debug().Str("repo", ri.Name()).Str("branch", branch).Msg("cluster cache: refresh skipped (pool full)")
+			return
+		}
+		defer func() { <-sem }()
+
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+		var err error
+		ri.WithRead(func(svc *store.Service) {
+			if svc == nil {
+				err = errors.New("store unavailable")
+				return
+			}
+			_, err = svc.Search().CachedClusterFacts(ctx, branch, resolution, minCommunitySize)
+		})
+		if err != nil {
+			log.Warn().Err(err).Str("repo", ri.Name()).Str("branch", branch).Msg("cluster cache: refresh failed")
+		}
+	}()
+}

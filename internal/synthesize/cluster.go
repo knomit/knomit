@@ -19,21 +19,15 @@ import (
 // without overwhelming the search backend.
 const maxConcurrentNeighborSearches = 8
 
-// ClusterFn returns Louvain community detection results for the given key.
-// Production callers pass clustercache.Cache.ClusterFnFor(ri) so results
-// are served from the cluster_cache SQLite table; tests can pass a stub.
-type ClusterFn func(ctx context.Context, branch string, resolution float64, minCommunitySize int) (store.ClusterResult, error)
-
 // ScopedCluster builds clusters containing only seed facts and their nearest neighbors.
 // Algorithm:
 // 1. For each seed, find neighbors via idx.Search (semantic similarity) scoped to same category
 // 2. Build subgraph of seeds + neighbors
-// 3. Run Louvain clustering (clusterFn) over the full graph, then filter to subgraph paths
+// 3. Run Louvain clustering (idx.CachedClusterFacts) over the full graph, then filter to subgraph paths
 // 4. Fallback to grouping by category path if Louvain fails or no embeddings
 func ScopedCluster(ctx context.Context,
 	seeds []factForLLM,
 	idx store.SearchIndex,
-	clusterFn ClusterFn,
 	resolution float64,
 	onProgress func(ProgressEvent),
 	agentBranch string,
@@ -109,7 +103,7 @@ func ScopedCluster(ctx context.Context,
 		resolution = 1.0
 	}
 
-	result, err := clusterFn(ctx, agentBranch, resolution, 2)
+	result, err := idx.CachedClusterFacts(ctx, agentBranch, resolution, 2)
 	if err != nil {
 		log.Debug().Err(err).Msg("scoped-cluster: Louvain failed, falling back to category grouping")
 		onProgress(ProgressEvent{Phase: "cluster", Message: "Louvain failed, using category fallback"})

@@ -7,7 +7,6 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 
-	"knomit/internal/clustercache"
 	"knomit/internal/repos"
 	"knomit/internal/store"
 )
@@ -21,10 +20,10 @@ import (
 // static exploreTool description (the actual default path at request time
 // comes from ri.OntologyRoot()).
 //
-// cache is the cluster-cache facade used by knomit_review to avoid
-// recomputing Louvain on every call; may be nil in tests, in which case
-// Reviewer falls back to direct ClusterFacts.
-func NewServer(profile, defaultOntologyRoot string, cache *clustercache.Cache, embedders ...store.BatchEmbedder) *server.MCPServer {
+// The Louvain cluster cache is reached transparently via the per-repo
+// store.SearchIndex (CachedClusterFacts) — it does not need to be threaded
+// here. The background warmer lives on repos.Manager.StartClusterChecker.
+func NewServer(profile, defaultOntologyRoot string, embedders ...store.BatchEmbedder) *server.MCPServer {
 	hooks := &server.Hooks{}
 	hooks.AddAfterInitialize(func(ctx context.Context, id any, req *mcp.InitializeRequest, result *mcp.InitializeResult) {
 		ri, ok := repos.RepoFromContextOpt(ctx)
@@ -51,7 +50,7 @@ func NewServer(profile, defaultOntologyRoot string, cache *clustercache.Cache, e
 	s.AddTool(exploreTool(defaultOntologyRoot), ExploreHandler())
 	s.AddTool(retractTool(), RetractHandler())
 	s.AddTool(hypothesizeTool(), HypothesizeHandler())
-	s.AddTool(reviewTool(), ReviewHandler(cache))
+	s.AddTool(reviewTool(), ReviewHandler())
 
 	return s
 }

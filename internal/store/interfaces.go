@@ -29,6 +29,7 @@ type SearchIndex interface {
 	Completions(ctx context.Context, branch, category, prefix string, limit int) ([]string, error)
 	ExplainFact(ctx context.Context, branch, path string) (ExplainResult, error)
 	ClusterFacts(ctx context.Context, branch string, resolution float64, minCommunitySize int) (ClusterResult, error)
+	CachedClusterFacts(ctx context.Context, branch string, resolution float64, minCommunitySize int) (ClusterResult, error)
 	RecentFacts(ctx context.Context, branch, pathPrefix, query string, limit, offset int, includeTypes, excludeTypes, domain, entities, epOps []string) ([]RecentFactEntry, int, error)
 	Log(ctx context.Context, branch, path string) ([]LogEntry, error)
 	LogPaginated(ctx context.Context, branch, path string, limit int, after, from, before string) ([]LogEntryWithTags, string, string, error)

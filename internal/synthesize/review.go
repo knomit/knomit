@@ -20,34 +20,18 @@ import (
 // Reviewer orchestrates multi-turn review sessions.
 type Reviewer struct {
 	ri             *repos.RepoInstance
-	clusterFn      ClusterFn
 	onProgress     func(ProgressEvent)
 	reflectChecked map[string]bool
 }
 
-// NewReviewer creates a new review orchestrator. clusterFn is the
-// (typically cache-backed) Louvain entry point used by ScopedCluster; if
-// nil, the raw store.SearchIndex.ClusterFacts is used (no caching).
-func NewReviewer(ri *repos.RepoInstance, clusterFn ClusterFn, onProgress func(ProgressEvent)) *Reviewer {
+// NewReviewer creates a new review orchestrator. ScopedCluster reaches the
+// cache via store.SearchIndex.CachedClusterFacts on the per-repo Service;
+// no separate cache parameter is threaded through the synthesize layer.
+func NewReviewer(ri *repos.RepoInstance, onProgress func(ProgressEvent)) *Reviewer {
 	if onProgress == nil {
 		onProgress = func(ProgressEvent) {}
 	}
-	if clusterFn == nil {
-		clusterFn = func(ctx context.Context, branch string, resolution float64, minCommunitySize int) (store.ClusterResult, error) {
-			var (
-				result store.ClusterResult
-				err    error
-			)
-			ri.WithRead(func(svc *store.Service) {
-				if svc == nil {
-					return
-				}
-				result, err = svc.Search().ClusterFacts(ctx, branch, resolution, minCommunitySize)
-			})
-			return result, err
-		}
-	}
-	return &Reviewer{ri: ri, clusterFn: clusterFn, onProgress: onProgress, reflectChecked: make(map[string]bool)}
+	return &Reviewer{ri: ri, onProgress: onProgress, reflectChecked: make(map[string]bool)}
 }
 
 // storeIndices returns the four store indices under the repo read lock.
@@ -94,7 +78,7 @@ func (r *Reviewer) StartSession(ctx context.Context) (*ReviewResult, error) {
 
 	// Build scoped clusters.
 	t = time.Now()
-	clusters, err := ScopedCluster(ctx, seeds, idx, r.clusterFn, 1.0, r.onProgress, branch)
+	clusters, err := ScopedCluster(ctx, seeds, idx, 1.0, r.onProgress, branch)
 	if err != nil {
 		return nil, fmt.Errorf("review: cluster: %w", err)
 	}
@@ -253,7 +237,7 @@ func (r *Reviewer) ContinueSession(ctx context.Context, sessionID, response stri
 			}
 
 			// Cluster the new facts to find groups worth distilling further.
-			raptorClusters, clErr := ScopedCluster(ctx, newFacts, idx, r.clusterFn, 1.0, r.onProgress, branch, "hypothesis")
+			raptorClusters, clErr := ScopedCluster(ctx, newFacts, idx, 1.0, r.onProgress, branch, "hypothesis")
 			if clErr != nil {
 				log.Warn().Err(clErr).Msg("review: RAPTOR clustering failed")
 			} else {

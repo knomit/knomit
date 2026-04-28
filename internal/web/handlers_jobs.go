@@ -12,7 +12,6 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"knomit/internal/clustercache"
 	"knomit/internal/llm"
 	"knomit/internal/repos"
 	"knomit/internal/store"
@@ -49,7 +48,7 @@ func jobEnvelopeFromEntry(e *JobEntry) jobEnvelope {
 // Starts a synthesis review job in the background via TaskHub and returns a
 // job envelope. Returns 503 if no LLM adapter is configured, 409 if a
 // synthesis job is already running.
-func handleStartSynthesis(m *repos.Manager, llmAdapter llm.LLMAdapter, cache *clustercache.Cache) http.HandlerFunc {
+func handleStartSynthesis(m *repos.Manager, llmAdapter llm.LLMAdapter) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if llmAdapter == nil {
 			hal.WriteProblem(w, http.StatusServiceUnavailable, "Synthesis unavailable",
@@ -72,11 +71,7 @@ func handleStartSynthesis(m *repos.Manager, llmAdapter llm.LLMAdapter, cache *cl
 			return
 		}
 
-		var clusterFn synthesize.ClusterFn
-		if cache != nil {
-			clusterFn = synthesize.ClusterFn(cache.ClusterFnFor(ri))
-		}
-		reviewer := synthesize.NewReviewer(ri, clusterFn, nil)
+		reviewer := synthesize.NewReviewer(ri, nil)
 		repo := ri.Name()
 
 		id, err := hub.Start("synth", func(ctx context.Context, emit func(repos.TaskEvent)) {
