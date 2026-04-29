@@ -20,7 +20,7 @@ func TestBoot_firstRunInitializesDefaultRepo(t *testing.T) {
 		Cfg:         config.Config{Home: dir},
 		AgentBranch: "machine/test",
 	})
-	err := m.Boot()
+	err := m.Start()
 	require.NoError(t, err)
 	require.NotNil(t, m.Get("knomit"), "default repo must be registered after Boot")
 }
@@ -64,7 +64,7 @@ func TestShutdown_concurrentSyncCancelUpdate(t *testing.T) {
 		defer wg.Done()
 		<-ready
 		for i := 0; i < n; i++ {
-			m.Shutdown()
+			m.Close()
 		}
 	}()
 

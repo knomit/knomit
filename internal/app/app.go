@@ -27,8 +27,6 @@ type App struct {
 	agentBranch string
 
 	closers []func()
-
-	clusterCacheStop func()
 }
 
 func (a *App) Manager() *repos.Manager { return a.manager }
@@ -105,16 +103,6 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 		KeyPath:     keyPath,
 	})
 
-	// Background cluster-cache warmer. The cache decision logic lives on
-	// store.SearchIndex.CachedClusterFacts (per-repo Service); this loop
-	// just nudges stale branches during quiet periods so the next review
-	// hits a fresh row.
-	checkerCfg, err := repos.ParseClusterCheckerConfig(cfg.ClusterCache)
-	if err != nil {
-		return nil, fmt.Errorf("cluster checker config: %w", err)
-	}
-	a.clusterCacheStop = a.manager.StartClusterChecker(checkerCfg)
-
 	// Web server.
 	var gitHandler http.Handler
 	if cfg.Git.Serve {
@@ -132,10 +120,12 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 		Embedder:          embedder,
 	}
 
-	// Boot repos.
-	if err := a.manager.Boot(); err != nil {
+	// Start the manager (opens repos, launches background cluster
+	// checker). Manager owns its own internal lifecycle — app does not
+	// reach into checker config or stop hooks.
+	if err := a.manager.Start(); err != nil {
 		a.Close()
-		return nil, fmt.Errorf("boot: %w", err)
+		return nil, fmt.Errorf("start manager: %w", err)
 	}
 
 	return a, nil
@@ -148,10 +138,7 @@ func (a *App) Handler() http.Handler {
 
 // Close shuts down repos and releases all resources.
 func (a *App) Close() {
-	if a.clusterCacheStop != nil {
-		a.clusterCacheStop()
-	}
-	a.manager.Shutdown()
+	_ = a.manager.Close()
 	for i := len(a.closers) - 1; i >= 0; i-- {
 		a.closers[i]()
 	}

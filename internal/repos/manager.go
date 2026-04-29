@@ -33,12 +33,21 @@ type Deps struct {
 }
 
 // Manager owns the full lifecycle of all registered repositories:
-// discovery, initialisation, MCP wiring, sync loop management, and shutdown.
+// discovery, initialisation, MCP wiring, sync loop management, the
+// background cluster-cache warmer, and shutdown. Callers drive the
+// lifecycle via Start/Close — internals (sync loops, cluster checker)
+// are not exposed.
 type Manager struct {
-	mu       sync.RWMutex
-	repos    map[string]*RepoInstance
-	ctx      context.Context
-	deps     Deps
+	mu    sync.RWMutex
+	repos map[string]*RepoInstance
+	ctx   context.Context
+	deps  Deps
+
+	// clusterCheckerStop is set by Start when the background cluster
+	// cache warmer is launched, and invoked by Close to wind it down.
+	// nil when Start hasn't been called or the checker is disabled
+	// (cluster_cache.check_interval = 0).
+	clusterCheckerStop func()
 }
 
 // ResolveAuth resolves a transport.AuthMethod for the given config and remote
@@ -91,10 +100,20 @@ func (m *Manager) Names() []string {
 	return names
 }
 
-// Shutdown gracefully stops all registered repositories.
-// It performs a two-pass shutdown: cancel all sync loops first so they wind
-// down concurrently, then wait and release resources repo by repo.
-func (m *Manager) Shutdown() {
+// Close gracefully stops all registered repositories and any background
+// goroutines Start launched (currently the cluster-cache warmer).
+//
+// Two-pass repo shutdown: cancel all sync loops first so they wind down
+// concurrently, then wait and release resources repo by repo. The
+// cluster checker is stopped before the sync passes because its
+// Service-side reads rely on the repos still being open. Returns nil
+// today; the error return matches io.Closer for forward compatibility.
+func (m *Manager) Close() error {
+	if m.clusterCheckerStop != nil {
+		m.clusterCheckerStop()
+		m.clusterCheckerStop = nil
+	}
+
 	m.mu.RLock()
 	instances := make([]*RepoInstance, 0, len(m.repos))
 	for _, ri := range m.repos {
@@ -124,11 +143,15 @@ func (m *Manager) Shutdown() {
 			ri.closeFn()
 		}
 	}
+	return nil
 }
 
-// Boot opens all repositories under cfg.Home/repos/.
-// knomit.db is opened first; remaining *.db files are discovered and opened.
-func (m *Manager) Boot() error {
+// Start opens all repositories under cfg.Home/repos/ and launches the
+// background cluster-cache warmer. knomit.db is opened first; remaining
+// *.db files are discovered and opened. The warmer's behaviour comes
+// from m.deps.Cfg.ClusterCache; check_interval=0 disables it. Callers
+// must pair Start with a Close.
+func (m *Manager) Start() error {
 	reposDir := filepath.Join(m.deps.Cfg.Home, "repos")
 	if err := os.MkdirAll(reposDir, 0o755); err != nil {
 		return fmt.Errorf("create repos dir: %w", err)
@@ -159,6 +182,15 @@ func (m *Manager) Boot() error {
 			log.Warn().Err(err).Str("repo", name).Msg("skipping repo")
 		}
 	}
+
+	// Launch the background cluster-cache warmer. Returning the error
+	// here means a misconfigured cluster_cache block surfaces at boot
+	// rather than silently disabling the warmer.
+	checkerCfg, err := parseClusterCheckerConfig(m.deps.Cfg.ClusterCache)
+	if err != nil {
+		return fmt.Errorf("cluster checker config: %w", err)
+	}
+	m.clusterCheckerStop = m.startClusterChecker(checkerCfg)
 	return nil
 }
 

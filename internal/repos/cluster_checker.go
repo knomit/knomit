@@ -12,34 +12,34 @@ import (
 	"knomit/internal/store"
 )
 
-// ClusterCheckerConfig holds the parsed runtime parameters for the
-// background cluster cache warmer. Built once at app startup from
-// config.ClusterCacheConfig (raw TOML/env strings) via
-// ParseClusterCheckerConfig. CheckInterval == 0 disables the loop.
-type ClusterCheckerConfig struct {
+// clusterCheckerConfig holds the parsed runtime parameters for the
+// background cluster cache warmer. Built once inside Manager.Start
+// from config.ClusterCacheConfig (raw TOML/env strings) via
+// parseClusterCheckerConfig. CheckInterval == 0 disables the loop.
+type clusterCheckerConfig struct {
 	QuietThreshold time.Duration
 	CheckInterval  time.Duration
 	MaxConcurrent  int
 }
 
-// ParseClusterCheckerConfig parses the raw config.ClusterCacheConfig
-// duration strings into a runtime ClusterCheckerConfig. Returns an
+// parseClusterCheckerConfig parses the raw config.ClusterCacheConfig
+// duration strings into a runtime clusterCheckerConfig. Returns an
 // error rather than silently substituting defaults so misconfigurations
 // surface at boot, not at first review.
-func ParseClusterCheckerConfig(raw config.ClusterCacheConfig) (ClusterCheckerConfig, error) {
+func parseClusterCheckerConfig(raw config.ClusterCacheConfig) (clusterCheckerConfig, error) {
 	q, err := parseClusterDur("quiet_threshold", raw.QuietThreshold, 10*time.Second)
 	if err != nil {
-		return ClusterCheckerConfig{}, err
+		return clusterCheckerConfig{}, err
 	}
 	c, err := parseClusterDur("check_interval", raw.CheckInterval, 5*time.Second)
 	if err != nil {
-		return ClusterCheckerConfig{}, err
+		return clusterCheckerConfig{}, err
 	}
 	maxC := raw.MaxConcurrent
 	if maxC <= 0 {
 		maxC = 1
 	}
-	return ClusterCheckerConfig{QuietThreshold: q, CheckInterval: c, MaxConcurrent: maxC}, nil
+	return clusterCheckerConfig{QuietThreshold: q, CheckInterval: c, MaxConcurrent: maxC}, nil
 }
 
 func parseClusterDur(field, s string, def time.Duration) (time.Duration, error) {
@@ -65,7 +65,7 @@ type clusterKey struct {
 
 var defaultClusterKeys = []clusterKey{{Resolution: 1.0, MinCommunitySize: 2}}
 
-// StartClusterChecker launches a background goroutine that periodically
+// startClusterChecker launches a background goroutine that periodically
 // scans every open repo and triggers a Louvain refresh for branches
 // whose HEAD has advanced AND whose newest commit is older than
 // QuietThreshold ("activity has settled"). The returned stop func
@@ -77,7 +77,9 @@ var defaultClusterKeys = []clusterKey{{Resolution: 1.0, MinCommunitySize: 2}}
 // Louvain runs. Within a single repo, the per-Service singleflight in
 // CachedClusterFacts collapses the checker's trigger and any concurrent
 // review-path call to one compute.
-func (m *Manager) StartClusterChecker(cfg ClusterCheckerConfig) (stop func()) {
+//
+// Called by Manager.Start; not part of the public API.
+func (m *Manager) startClusterChecker(cfg clusterCheckerConfig) (stop func()) {
 	if cfg.CheckInterval <= 0 {
 		log.Info().Msg("cluster cache: background checker disabled (check_interval=0)")
 		return func() {}
@@ -115,7 +117,7 @@ func (m *Manager) StartClusterChecker(cfg ClusterCheckerConfig) (stop func()) {
 
 // tickClusterChecker runs one pass over every repo. Quiet on the happy
 // path; logs at info when it fires a refresh.
-func (m *Manager) tickClusterChecker(ctx context.Context, cfg ClusterCheckerConfig, sem chan struct{}) {
+func (m *Manager) tickClusterChecker(ctx context.Context, cfg clusterCheckerConfig, sem chan struct{}) {
 	m.ForEach(func(name string, ri *RepoInstance) {
 		checkRepoClusters(ctx, ri, cfg, sem)
 	})
@@ -123,7 +125,7 @@ func (m *Manager) tickClusterChecker(ctx context.Context, cfg ClusterCheckerConf
 
 // checkRepoClusters iterates a repo's branches and dispatches refreshes
 // for those that are both stale AND settled.
-func checkRepoClusters(ctx context.Context, ri *RepoInstance, cfg ClusterCheckerConfig, sem chan struct{}) {
+func checkRepoClusters(ctx context.Context, ri *RepoInstance, cfg clusterCheckerConfig, sem chan struct{}) {
 	var (
 		branches []store.Branch
 		err      error
@@ -149,7 +151,7 @@ func checkRepoClusters(ctx context.Context, ri *RepoInstance, cfg ClusterChecker
 // key and fires async refreshes (gated by sem) when stale + settled.
 // Returns without dispatching anything if the branch has no commits,
 // HEAD already matches a fresh cache row, or activity hasn't settled.
-func checkBranchClusters(ctx context.Context, ri *RepoInstance, branch string, now time.Time, cfg ClusterCheckerConfig, sem chan struct{}) {
+func checkBranchClusters(ctx context.Context, ri *RepoInstance, branch string, now time.Time, cfg clusterCheckerConfig, sem chan struct{}) {
 	var (
 		head      string
 		committed time.Time
