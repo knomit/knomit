@@ -138,7 +138,9 @@ func (a *App) Handler() http.Handler {
 
 // Close shuts down repos and releases all resources.
 func (a *App) Close() {
-	_ = a.manager.Close()
+	if err := a.manager.Close(); err != nil {
+		log.Warn().Err(err).Msg("app: manager close failed")
+	}
 	for i := len(a.closers) - 1; i >= 0; i-- {
 		a.closers[i]()
 	}

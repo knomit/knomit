@@ -12,6 +12,7 @@ import (
 	"knomit/internal/store"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
+	"github.com/rs/zerolog/log"
 )
 
 // learnTool returns the Tool definition for knomit_learn.
@@ -172,7 +173,12 @@ func LearnHandler(embedders ...store.BatchEmbedder) func(context.Context, mcpgo.
 			for i, f := range facts {
 				texts[i] = f.Title + " " + f.Body
 			}
-			dedupVecs, _ = batchEmb.EmbedBatch(texts)
+			var embErr error
+			dedupVecs, embErr = batchEmb.EmbedBatch(texts)
+			if embErr != nil {
+				log.Warn().Err(embErr).Int("count", len(texts)).Msg("learn: batch embed failed; dedup falls back to per-fact embedding and donations are skipped")
+				dedupVecs = nil
+			}
 		}
 		// donatePaths[i] is the on-disk path that dedupVecs[i] corresponds to,
 		// or "" to suppress donation (used when the dedup-merge branch decided

@@ -127,6 +127,7 @@ func (si *searchIndex) upsert(ctx context.Context, branch, commitHash string, re
 			return fmt.Errorf("upsert: donated embedding for %q has %d dims, expected %d", rec.Path, len(vec), factsVecDim)
 		}
 		vecData = float32SliceToBytes(vec)
+		log.Debug().Str("path", rec.Path).Str("blob_hash", rec.BlobHash).Msg("upsert: using donated embedding")
 	} else if emb := si.rh.getEmbedder(); emb != nil {
 		var data []byte
 		err := db.QueryRowContext(ctx,
