@@ -175,6 +175,15 @@ func (si *searchIndex) CachedClusterFacts(ctx context.Context, branch string, re
 //   - DoChan + select on ctx.Done lets a cancelled caller return promptly
 //     while the detached compute continues in the singleflight goroutine
 //     and populates the cache for the next request.
+//
+// The cache watermark (head_commit column) is captured *after* ClusterFacts
+// returns. Capturing before would let a commit arriving during the compute
+// stamp the cache with the pre-compute HEAD, leaving the next caller's
+// freshness check permanently mismatched against the current HEAD on active
+// branches and triggering an async-refresh loop that never converges to
+// "fresh" while writes keep arriving. The git ref is the canonical source
+// of "latest commit on branch": sequential commits advance it atomically,
+// without the second-resolution ties that affect commit_log timestamps.
 func (si *searchIndex) computeAndCacheClusters(ctx context.Context, branch string, resolution float64, minCommunitySize int) (ClusterResult, error) {
 	key := fmt.Sprintf("%s|%g|%d", branch, resolution, minCommunitySize)
 	ch := si.clusterSF.DoChan(key, func() (any, error) {
@@ -182,13 +191,16 @@ func (si *searchIndex) computeAndCacheClusters(ctx context.Context, branch strin
 		defer cancel()
 
 		start := time.Now()
-		headCommit, err := si.rh.HeadCommit(workCtx, branch)
-		if err != nil {
-			return ClusterResult{}, fmt.Errorf("compute head: %w", err)
-		}
 		result, err := si.ClusterFacts(workCtx, branch, resolution, minCommunitySize)
 		if err != nil {
 			return ClusterResult{}, err
+		}
+		if hook := clusterCachePostComputeHook; hook != nil {
+			hook()
+		}
+		headCommit, err := si.rh.HeadCommit(workCtx, branch)
+		if err != nil {
+			return ClusterResult{}, fmt.Errorf("compute head: %w", err)
 		}
 		cacheStore := &clusterCacheStore{rh: si.rh}
 		if err := cacheStore.Put(workCtx, branch, resolution, minCommunitySize, headCommit, result); err != nil {

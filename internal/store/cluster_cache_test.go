@@ -56,9 +56,55 @@ func TestComputeAndCacheClusters_CallerCtxCanceled_StillPopulatesCache(t *testin
 			"otherwise a single timed-out request poisons the shared compute")
 }
 
-func writeClusterTestFact(t *testing.T, svc *Service, branch, path, title, body string) {
+func writeClusterTestFact(t *testing.T, svc *Service, branch, path, title, body string) string {
 	t.Helper()
 	content := "---\ntype: observation\n---\n# " + title + "\n\n" + body + "\n"
-	_, err := svc.Facts().WriteFact(context.Background(), branch, path, content, "test", "test")
+	res, err := svc.Facts().WriteFact(context.Background(), branch, path, content, "test", "test")
 	require.NoError(t, err)
+	return res.CommitHash
+}
+
+// TestComputeAndCacheClusters_CommitDuringCompute regresses the cache-key
+// drift bug: the head_commit stored on the cache row was captured *before*
+// ClusterFacts ran, so a commit arriving during the compute would stamp the
+// cache with the pre-compute HEAD. The next request would see current HEAD
+// ≠ cached → mark stale → fire another async refresh that races against
+// any further activity, and the cache would never converge to "fresh"
+// while writes kept arriving.
+//
+// Fix: capture HEAD *after* ClusterFacts returns, so the cache row reflects
+// the latest commit observed by the index at the moment the compute
+// finished — including any that landed during it.
+//
+// The test injects a commit deterministically between ClusterFacts and the
+// HEAD capture using clusterCachePostComputeHook. After the compute, the
+// cache row's head_commit must equal the *post-hook* commit hash, not the
+// HEAD that existed before compute started.
+func TestComputeAndCacheClusters_CommitDuringCompute_CacheTracksLatestCommit(t *testing.T) {
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = svc.Close() })
+	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+
+	writeClusterTestFact(t, svc, "main", "kb/a.md", "a", "alpha body")
+
+	var commitDuringCompute string
+	cleanup := SetClusterCachePostComputeHookForTest(func() {
+		commitDuringCompute = writeClusterTestFact(t, svc, "main", "kb/b.md", "b", "beta body")
+	})
+	t.Cleanup(cleanup)
+
+	_, err = svc.si.computeAndCacheClusters(context.Background(), "main", 1.0, 2)
+	require.NoError(t, err)
+	require.NotEmpty(t, commitDuringCompute, "hook must have written the during-compute commit")
+
+	cacheStore := &clusterCacheStore{rh: svc.rh}
+	row, found, err := cacheStore.Get(context.Background(), "main", 1.0, 2)
+	require.NoError(t, err)
+	require.True(t, found, "cache row must exist after compute")
+	require.Equal(t, commitDuringCompute, row.HeadCommit,
+		"cache key must reflect the latest commit observed by the index, "+
+			"including ones that landed during ClusterFacts — otherwise active "+
+			"branches loop refreshing forever and never converge to fresh")
 }
