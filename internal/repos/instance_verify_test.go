@@ -20,7 +20,7 @@ func TestRepoInstance_Verify(t *testing.T) {
 		Cfg:         config.Config{Home: dir},
 		AgentBranch: "agent/test",
 	})
-	require.NoError(t, m.Boot())
+	require.NoError(t, m.Start())
 	ri := m.Get("knomit")
 	require.NotNil(t, ri)
 

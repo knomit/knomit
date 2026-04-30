@@ -16,6 +16,12 @@ import (
 // embedding retrieval, and meta key-value storage (last_commit tracking).
 // All mutations keep the vec0 index in sync within transactions.
 
+// factsVecDim must match the FLOAT[N] dimension declared on the
+// facts_vec virtual table in 000002_facts_vec.up.sql. Any donated or
+// freshly computed embedding vector with a different length cannot be
+// stored — the schema is a hard invariant.
+const factsVecDim = 768
+
 // upsert inserts or replaces a FactRecord on the given branch, keeping the
 // vec0 index in sync. COW dedup: if (path, blob_hash) already exists in the
 // facts table, only the branch_facts pointer is updated.
@@ -44,23 +50,11 @@ func (si *searchIndex) upsert(ctx context.Context, branch, commitHash string, re
 		factType = "observation"
 	}
 
-	// Compute embedding vector if an embedder is configured.
+	// Embedding is computed below, AFTER the COW check, so we don't pay
+	// ONNX inference cost for facts whose (path, blob_hash) is already
+	// indexed (the COW-hit path returns without touching facts_vec).
+	// vecData stays nil here and is populated only on the COW-miss path.
 	var vecData []byte
-	if emb := si.rh.getEmbedder(); emb != nil {
-		var data []byte
-		err := conn(ctx, si.rh.db).QueryRowContext(ctx,
-			`SELECT data FROM objects WHERE hash = ? AND type = ?`,
-			rec.BlobHash, blobObjectType,
-		).Scan(&data)
-		if err != nil {
-			return fmt.Errorf("upsert: blob %s not found: %w", rec.BlobHash, err)
-		}
-		text := rec.Title + " " + extractBody(data)
-		vec, err := emb.Embed(text)
-		if err == nil && len(vec) > 0 {
-			vecData = float32SliceToBytes(vec)
-		}
-	}
 
 	// Begin transaction for atomic COW check + insert.
 	ctx, tx, _, err := beginTxIfNeeded(ctx, si.rh.db)
@@ -105,7 +99,10 @@ func (si *searchIndex) upsert(ctx context.Context, branch, commitHash string, re
 		return fmt.Errorf("upsert cow check branch: %w", err)
 	}
 	if junctionExists > 0 || (len(rec.Entities) == 0 && anyBranch) {
-		// COW hit: fact fully indexed, just update branch pointer.
+		// COW hit: fact fully indexed (junction tables + facts_vec
+		// already populated under this fact_id), just update branch
+		// pointer. No embedding needed — the existing facts_vec row
+		// is the right vector for this (path, blob_hash).
 		_, err = db.ExecContext(ctx,
 			`INSERT OR REPLACE INTO branch_facts(branch_id, path, fact_id, commit_hash) VALUES (?, ?, ?, ?)`,
 			branchID, rec.Path, factID, commitHash)
@@ -116,6 +113,37 @@ func (si *searchIndex) upsert(ctx context.Context, branch, commitHash string, re
 	}
 
 	// COW miss: populate junction tables, embeddings, branch_facts.
+	//
+	// Embedding source preference (cheapest first):
+	//   1. context-donated vector (caller already embedded this content,
+	//      e.g. mcp/learn during its dedup pass);
+	//   2. fresh ONNX inference via the configured embedder.
+	// Either source produces a 768-dim []float32; vecData stays nil if
+	// neither is available, in which case the fact is indexed without a
+	// vector (search-by-text on this fact will still work via the
+	// keyword path — sqlite-vec just won't return it).
+	if vec, ok := precomputedEmbedding(ctx, rec.Path); ok && len(vec) > 0 {
+		if len(vec) != factsVecDim {
+			return fmt.Errorf("upsert: donated embedding for %q has %d dims, expected %d", rec.Path, len(vec), factsVecDim)
+		}
+		vecData = float32SliceToBytes(vec)
+		log.Debug().Str("path", rec.Path).Str("blob_hash", rec.BlobHash).Msg("upsert: using donated embedding")
+	} else if emb := si.rh.getEmbedder(); emb != nil {
+		var data []byte
+		err := db.QueryRowContext(ctx,
+			`SELECT data FROM objects WHERE hash = ? AND type = ?`,
+			rec.BlobHash, blobObjectType,
+		).Scan(&data)
+		if err != nil {
+			return fmt.Errorf("upsert: blob %s not found: %w", rec.BlobHash, err)
+		}
+		text := rec.Title + " " + extractBody(data)
+		vec, err := emb.Embed(text)
+		if err == nil && len(vec) > 0 {
+			vecData = float32SliceToBytes(vec)
+		}
+	}
+
 	for _, entity := range rec.Entities {
 		if entity == "" {
 			continue

@@ -20,7 +20,7 @@ func TestBoot_firstRunWritesOntologyToAgentBranch(t *testing.T) {
 		Cfg:         config.Config{Home: dir},
 		AgentBranch: "agent/test-abc",
 	})
-	err := m.Boot()
+	err := m.Start()
 	require.NoError(t, err)
 	ri := m.Get("knomit")
 	require.NotNil(t, ri)
@@ -46,7 +46,7 @@ func TestBoot_firstRunWithEmptyRemoteWritesOntology(t *testing.T) {
 		},
 		AgentBranch: "agent/test-abc",
 	})
-	err := m.Boot()
+	err := m.Start()
 	require.NoError(t, err)
 	ri := m.Get("knomit")
 	require.NotNil(t, ri)

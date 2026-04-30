@@ -120,10 +120,12 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 		Embedder:          embedder,
 	}
 
-	// Boot repos.
-	if err := a.manager.Boot(); err != nil {
+	// Start the manager (opens repos, launches background cluster
+	// checker). Manager owns its own internal lifecycle — app does not
+	// reach into checker config or stop hooks.
+	if err := a.manager.Start(); err != nil {
 		a.Close()
-		return nil, fmt.Errorf("boot: %w", err)
+		return nil, fmt.Errorf("start manager: %w", err)
 	}
 
 	return a, nil
@@ -136,7 +138,9 @@ func (a *App) Handler() http.Handler {
 
 // Close shuts down repos and releases all resources.
 func (a *App) Close() {
-	a.manager.Shutdown()
+	if err := a.manager.Close(); err != nil {
+		log.Warn().Err(err).Msg("app: manager close failed")
+	}
 	for i := len(a.closers) - 1; i >= 0; i-- {
 		a.closers[i]()
 	}

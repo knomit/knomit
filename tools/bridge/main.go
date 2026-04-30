@@ -49,14 +49,33 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"time"
+
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
+	"gopkg.in/natefinch/lumberjack.v2"
 )
 
 var debug = os.Getenv("KNOMIT_MCP_DEBUG") != ""
 
-func logDebug(format string, args ...any) {
-	if debug {
-		fmt.Fprintf(os.Stderr, "[knomit-bridge] "+format+"\n", args...)
+// initLog wires zerolog to a rotating file at /tmp/knomit-bridge.log so
+// callers can tail one file regardless of which process spawned the bridge
+// (Claude Desktop captures stderr; sandboxed launchers may not). Lumberjack
+// rotates at 10 MB and keeps 3 backups for 7 days.
+func initLog() {
+	writer := &lumberjack.Logger{
+		Filename:   "/tmp/knomit-bridge.log",
+		MaxSize:    10,
+		MaxBackups: 3,
+		MaxAge:     7,
+		Compress:   false,
 	}
+	level := zerolog.InfoLevel
+	if debug {
+		level = zerolog.DebugLevel
+	}
+	log.Logger = zerolog.New(writer).Level(level).With().Timestamp().Int("pid", os.Getpid()).Logger()
+	fmt.Fprintf(os.Stderr, "[knomit-bridge] log file: /tmp/knomit-bridge.log (pid=%d)\n", os.Getpid())
 }
 
 func main() {
@@ -71,24 +90,27 @@ func main() {
 	}
 	flag.Parse()
 
+	initLog()
+	log.Info().Str("repo", *repo).Str("profile", *profile).Msg("bridge starting")
+
 	baseURL := "http://localhost:19278"
 	if flag.NArg() >= 1 {
 		baseURL = strings.TrimRight(flag.Arg(0), "/")
 	} else if url, err := readLockfileBaseURL(); err == nil && url != "" {
 		baseURL = url
-		logDebug("discovered base-url from lockfile: %s", baseURL)
+		log.Debug().Str("base_url", baseURL).Msg("discovered base-url from lockfile")
 	} else if err != nil {
-		logDebug("lockfile read failed, falling back to default: %v", err)
+		log.Debug().Err(err).Msg("lockfile read failed, falling back to default")
 	}
 	branch, err := discoverAgentBranch(baseURL, *repo)
 	if err != nil {
+		log.Error().Err(err).Str("repo", *repo).Msg("failed to discover agent branch")
 		fmt.Fprintf(os.Stderr, "knomit-bridge: failed to discover agent branch for repo %q: %v\n", *repo, err)
 		os.Exit(1)
 	}
-	logDebug("discovered agent branch: %s", branch)
 	encodedBranch := strings.ReplaceAll(branch, "/", ":")
 	serverURL := fmt.Sprintf("%s/api/v1/repos/%s/branches/%s/mcp?profile=%s", baseURL, *repo, encodedBranch, *profile)
-	logDebug("repo=%s branch=%s profile=%s url=%s", *repo, branch, *profile, serverURL)
+	log.Info().Str("repo", *repo).Str("branch", branch).Str("profile", *profile).Str("url", serverURL).Msg("bridge configured")
 	client := &http.Client{}
 
 	var (
@@ -106,12 +128,18 @@ func main() {
 			continue
 		}
 
-		logDebug("← stdin: %s", truncate(line, 200))
+		log.Debug().Str("line", truncate(line, 200)).Msg("← stdin")
 
 		// Validate it's actual JSON before sending.
 		if !json.Valid([]byte(line)) {
-			logDebug("  skipping invalid JSON")
+			log.Debug().Msg("skipping invalid JSON")
 			continue
+		}
+
+		method, toolName := extractMethod(line)
+		label := method
+		if toolName != "" {
+			label = method + " " + toolName
 		}
 
 		req, err := http.NewRequest(http.MethodPost, serverURL, bytes.NewReader([]byte(line)))
@@ -125,24 +153,28 @@ func main() {
 			req.Header.Set("Mcp-Session-Id", sessionID)
 		}
 
+		reqStart := time.Now()
+		log.Info().Str("label", label).Msg("→ http")
 		resp, err := client.Do(req)
+		elapsed := time.Since(reqStart)
 		if err != nil {
+			log.Warn().Err(err).Str("label", label).Dur("elapsed", elapsed).Msg("← http error")
 			writeError(os.Stdout, &mu, extractID(line), fmt.Sprintf("http request: %v", err))
 			continue
 		}
 
-		logDebug("  → HTTP %d, Content-Type: %s", resp.StatusCode, resp.Header.Get("Content-Type"))
+		log.Info().Str("label", label).Int("status", resp.StatusCode).Dur("elapsed", elapsed).Str("content_type", resp.Header.Get("Content-Type")).Msg("← http response headers")
 
 		// Capture session ID from initialize response.
 		if sid := resp.Header.Get("Mcp-Session-Id"); sid != "" {
 			sessionID = sid
-			logDebug("  session: %s", sid)
+			log.Debug().Str("session", sid).Msg("captured session id")
 		}
 
 		if resp.StatusCode == http.StatusAccepted {
 			// Notification accepted, no response body.
 			resp.Body.Close()
-			logDebug("  202 accepted (notification)")
+			log.Debug().Msg("202 accepted (notification)")
 			continue
 		}
 
@@ -161,7 +193,7 @@ func main() {
 			if len(body) > 0 && json.Valid(body) {
 				writeLine(os.Stdout, &mu, body)
 			} else {
-				logDebug("  empty or invalid JSON response body")
+				log.Debug().Msg("empty or invalid JSON response body")
 			}
 
 		case "text/event-stream":
@@ -189,7 +221,7 @@ func writeLine(w io.Writer, mu *sync.Mutex, data []byte) {
 	if len(data) == 0 {
 		return
 	}
-	logDebug("→ stdout: %s", truncate(string(data), 200))
+	log.Debug().Str("data", truncate(string(data), 200)).Msg("→ stdout")
 	// Single write call to avoid partial reads on the pipe.
 	msg := make([]byte, len(data)+1)
 	copy(msg, data)
@@ -219,9 +251,18 @@ func handleSSE(r io.Reader, w io.Writer, mu *sync.Mutex) {
 			data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
 			// Only forward "message" events with valid JSON content.
 			if eventType == "message" && len(data) > 0 && json.Valid([]byte(data)) {
+				// Log notifications (have method, no id) so SSE delivery is
+				// visible at info level without enabling debug.
+				var envelope struct {
+					Method string          `json:"method"`
+					ID     json.RawMessage `json:"id"`
+				}
+				if json.Unmarshal([]byte(data), &envelope) == nil && envelope.Method != "" && envelope.ID == nil {
+					log.Info().Str("method", envelope.Method).Msg("← SSE notification")
+				}
 				writeLine(w, mu, []byte(data))
 			} else if len(data) > 0 {
-				logDebug("  SSE event=%q data=%s", eventType, truncate(data, 200))
+				log.Debug().Str("event", eventType).Str("data", truncate(data, 200)).Msg("SSE event")
 			}
 			continue
 		}
@@ -231,6 +272,23 @@ func handleSSE(r io.Reader, w io.Writer, mu *sync.Mutex) {
 			eventType = ""
 		}
 	}
+}
+
+// extractMethod returns the JSON-RPC method and, for tools/call, the tool name.
+func extractMethod(line string) (method, toolName string) {
+	var msg struct {
+		Method string `json:"method"`
+		Params struct {
+			Name string `json:"name"`
+		} `json:"params"`
+	}
+	if json.Unmarshal([]byte(line), &msg) == nil {
+		method = msg.Method
+		if method == "tools/call" {
+			toolName = msg.Params.Name
+		}
+	}
+	return method, toolName
 }
 
 // extractID pulls the "id" field from a JSON-RPC message for error responses.

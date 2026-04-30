@@ -6,16 +6,24 @@ package synthesize
 import (
 	"context"
 	"path"
+	"sync"
 
 	"github.com/rs/zerolog/log"
+	"golang.org/x/sync/errgroup"
 	"knomit/internal/store"
 )
+
+// maxConcurrentNeighborSearches caps the number of in-flight idx.Search
+// calls during scoped clustering. Each search is I/O-bound (vector query +
+// optional embedding) so a small worker pool keeps wall-clock time low
+// without overwhelming the search backend.
+const maxConcurrentNeighborSearches = 8
 
 // ScopedCluster builds clusters containing only seed facts and their nearest neighbors.
 // Algorithm:
 // 1. For each seed, find neighbors via idx.Search (semantic similarity) scoped to same category
 // 2. Build subgraph of seeds + neighbors
-// 3. Run Louvain clustering (idx.ClusterFacts) over the full graph, then filter to subgraph paths
+// 3. Run Louvain clustering (idx.CachedClusterFacts) over the full graph, then filter to subgraph paths
 // 4. Fallback to grouping by category path if Louvain fails or no embeddings
 func ScopedCluster(ctx context.Context,
 	seeds []factForLLM,
@@ -39,32 +47,53 @@ func ScopedCluster(ctx context.Context,
 		factByPath[s.File] = s
 	}
 
-	// Step 1: Build subgraph of seeds + neighbors.
+	// Step 1: Build subgraph of seeds + neighbors. Searches are dispatched
+	// concurrently with bounded parallelism since each idx.Search is
+	// independent and dominates wall-clock time. A single mutex protects the
+	// shared subgraph and factByPath maps; goroutines that fail their search
+	// just skip (matching the serial behavior).
 	subgraph := make(map[string]bool)
+	var mu sync.Mutex
+	g, gctx := errgroup.WithContext(ctx)
+	g.SetLimit(maxConcurrentNeighborSearches)
 	for _, seed := range seeds {
-		subgraph[seed.File] = true
+		g.Go(func() error {
+			cat := categoryDir(seed.File)
+			// QueryByPath skips ONNX embedding entirely — the seed already
+			// has a stored vector in facts_vec from when it was learned.
+			// One SQL statement (subquery resolves the source vector inside
+			// the MATCH operand) replaces an embedding inference + KNN.
+			results, err := idx.Search(gctx, agentBranch, store.SearchQuery{
+				QueryByPath:  seed.File,
+				Path:         cat,
+				Limit:        10,
+				ExcludeTypes: excludeTypes,
+			})
 
-		cat := categoryDir(seed.File)
-		results, err := idx.Search(ctx, agentBranch, store.SearchQuery{
-			Text:         seed.Title + " " + seed.Body,
-			Path:         cat,
-			Limit:        10,
-			ExcludeTypes: excludeTypes,
-		})
-		if err != nil {
-			log.Debug().Err(err).Str("seed", seed.File).Msg("scoped-cluster: neighbor search failed")
-			continue
-		}
-		for _, r := range results {
-			subgraph[r.Path] = true
-			if _, exists := factByPath[r.Path]; !exists {
-				factByPath[r.Path] = factForLLM{
-					File: r.Path, Title: r.Title, Body: r.Body,
-					Type: r.Type, Domain: r.Domain, Entities: r.Entities,
-					Confidence: r.Confidence, Sources: r.Sources,
+			mu.Lock()
+			defer mu.Unlock()
+			subgraph[seed.File] = true
+			if err != nil {
+				log.Debug().Err(err).Str("seed", seed.File).Msg("scoped-cluster: neighbor search failed")
+				return nil
+			}
+			for _, r := range results {
+				subgraph[r.Path] = true
+				if _, exists := factByPath[r.Path]; !exists {
+					factByPath[r.Path] = factForLLM{
+						File: r.Path, Title: r.Title, Body: r.Body,
+						Type: r.Type, Domain: r.Domain, Entities: r.Entities,
+						Confidence: r.Confidence, Sources: r.Sources,
+					}
 				}
 			}
-		}
+			return nil
+		})
+	}
+	// Goroutines never return errors (we swallow search failures), so Wait
+	// here is just a barrier; checking err for completeness.
+	if err := g.Wait(); err != nil {
+		return nil, err
 	}
 
 	onProgress(ProgressEvent{Phase: "cluster", Message: "scoped clustering: subgraph built"})
@@ -74,7 +103,7 @@ func ScopedCluster(ctx context.Context,
 		resolution = 1.0
 	}
 
-	result, err := idx.ClusterFacts(ctx, agentBranch, resolution, 2)
+	result, err := idx.CachedClusterFacts(ctx, agentBranch, resolution, 2)
 	if err != nil {
 		log.Debug().Err(err).Msg("scoped-cluster: Louvain failed, falling back to category grouping")
 		onProgress(ProgressEvent{Phase: "cluster", Message: "Louvain failed, using category fallback"})

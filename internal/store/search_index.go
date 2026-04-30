@@ -9,10 +9,17 @@ import (
 	"time"
 
 	"github.com/rs/zerolog/log"
+	"golang.org/x/sync/singleflight"
 )
 
 type searchIndex struct {
 	rh *repoHandler
+
+	// clusterSF deduplicates concurrent CachedClusterFacts compute paths
+	// keyed by branch|resolution|minCommunitySize. Two concurrent reviews
+	// (or a review + the background checker) on the same key collapse to
+	// one Louvain run; both wait on the singleflight result.
+	clusterSF singleflight.Group
 }
 
 // casLastCommit atomically updates the last-commit watermark for a branch,

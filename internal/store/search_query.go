@@ -205,6 +205,7 @@ type SearchQuery struct {
 	Limit         int
 	GraphHops     int       // number of graph traversal hops to expand results (0 = disabled)
 	QueryVec      []float32 // pre-computed embedding vector; if set, skips Embed(Text)
+	QueryByPath   string    // resolve query vector from this branch+path's stored embedding via SQL join; skips Embed(Text). Lower priority than QueryVec.
 	IncludeTypes  []string  // only return facts with these types (empty = all)
 	ExcludeTypes  []string  // exclude facts with these types
 	EpisodeOps    []string  // filter by episode operation type (e.g. "learn", "update", "retract"); filtered post-query in Go
@@ -368,7 +369,7 @@ func (si *searchIndex) Search(ctx context.Context, branch string, q SearchQuery)
 	flt := newFactFilter(q)
 
 	// ── Text-less path: return all facts matching filters with score 100 ──
-	if q.Text == "" {
+	if q.Text == "" && q.QueryByPath == "" && len(q.QueryVec) == 0 {
 		args := append(append([]any{blobObjectType, branchID}, flt.args...), limit)
 		rows, err := conn(ctx, si.rh.db).QueryContext(ctx,
 			`SELECT f.path, f.title, f.blob_hash, f.type, f.domain, f.entities,
@@ -406,50 +407,88 @@ func (si *searchIndex) Search(ctx context.Context, branch string, q SearchQuery)
 	}
 
 	vecSimByPath := make(map[string]float64)
-	emb := si.rh.getEmbedder()
-	if emb == nil && len(q.QueryVec) == 0 {
-		log.Debug().Msg("search: no embedder configured, skipping vec search")
-	} else {
-		queryVec := q.QueryVec
-		if len(queryVec) == 0 {
-			var embedErr error
-			queryVec, embedErr = emb.Embed(q.Text)
-			if embedErr != nil {
-				log.Warn().Err(embedErr).Msg("search: embed query failed")
-			}
-		}
-		if queryVec == nil {
-			log.Warn().Msg("search: no query vector available")
+	kLimit := limit * 5
+	if q.MinSimilarity > 0.7 {
+		kLimit = limit * 2
+	} else if q.MinSimilarity > 0.5 {
+		kLimit = limit * 3
+	}
+
+	// QueryByPath path: do the source-embedding lookup and the KNN match in
+	// one SQL statement, eliminating the round-trip and the embedding
+	// inference. The subquery in MATCH resolves to the stored vector for the
+	// (branch, path) pair; if the pair has no row in facts_vec, MATCH gets
+	// NULL and the outer query returns no rows (caller falls back to filter
+	// search, same as if there were no embedder).
+	if q.QueryByPath != "" && len(q.QueryVec) == 0 {
+		rows, err := conn(ctx, si.rh.db).QueryContext(ctx,
+			`SELECT f.path, (1.0 - fv.distance) as similarity
+			 FROM facts_vec fv
+			 JOIN facts f ON f.id = fv.rowid
+			 JOIN branch_facts bf ON bf.fact_id = f.id AND bf.branch_id = ?
+			 WHERE fv.embedding MATCH (
+			     SELECT fv2.embedding
+			     FROM branch_facts bf2
+			     JOIN facts_vec fv2 ON fv2.rowid = bf2.fact_id
+			     WHERE bf2.branch_id = ? AND bf2.path = ?
+			 ) AND fv.k = ?
+			 ORDER BY fv.distance ASC`,
+			branchID, branchID, q.QueryByPath, kLimit,
+		)
+		if err != nil {
+			log.Warn().Err(err).Str("source_path", q.QueryByPath).Msg("search: query-by-path failed")
 		} else {
-			vecBlob := float32SliceToBytes(queryVec)
-			kLimit := limit * 5
-			if q.MinSimilarity > 0.7 {
-				kLimit = limit * 2
-			} else if q.MinSimilarity > 0.5 {
-				kLimit = limit * 3
-			}
-			rows, err := conn(ctx, si.rh.db).QueryContext(ctx,
-				`SELECT f.path, (1.0 - fv.distance) as similarity
-				 FROM facts_vec fv
-				 JOIN facts f ON f.id = fv.rowid
-				 JOIN branch_facts bf ON bf.fact_id = f.id AND bf.branch_id = ?
-				 WHERE fv.embedding MATCH ? AND fv.k = ?
-				 ORDER BY fv.distance ASC`,
-				branchID, vecBlob, kLimit,
-			)
-			if err != nil {
-				log.Warn().Err(err).Msg("search: vec query failed")
-			} else {
-				for rows.Next() {
-					var path string
-					var sim float64
-					if err := rows.Scan(&path, &sim); err != nil {
-						break
-					}
-					vecSimByPath[path] = sim
+			for rows.Next() {
+				var path string
+				var sim float64
+				if err := rows.Scan(&path, &sim); err != nil {
+					break
 				}
-				rows.Close()
-				log.Debug().Int("vec_hits", len(vecSimByPath)).Msg("vec search complete")
+				vecSimByPath[path] = sim
+			}
+			rows.Close()
+			log.Debug().Int("vec_hits", len(vecSimByPath)).Str("source_path", q.QueryByPath).Msg("vec search complete (via path)")
+		}
+	} else {
+		emb := si.rh.getEmbedder()
+		if emb == nil && len(q.QueryVec) == 0 {
+			log.Debug().Msg("search: no embedder configured, skipping vec search")
+		} else {
+			queryVec := q.QueryVec
+			if len(queryVec) == 0 {
+				var embedErr error
+				queryVec, embedErr = emb.Embed(q.Text)
+				if embedErr != nil {
+					log.Warn().Err(embedErr).Msg("search: embed query failed")
+				}
+			}
+			if queryVec == nil {
+				log.Warn().Msg("search: no query vector available")
+			} else {
+				vecBlob := float32SliceToBytes(queryVec)
+				rows, err := conn(ctx, si.rh.db).QueryContext(ctx,
+					`SELECT f.path, (1.0 - fv.distance) as similarity
+					 FROM facts_vec fv
+					 JOIN facts f ON f.id = fv.rowid
+					 JOIN branch_facts bf ON bf.fact_id = f.id AND bf.branch_id = ?
+					 WHERE fv.embedding MATCH ? AND fv.k = ?
+					 ORDER BY fv.distance ASC`,
+					branchID, vecBlob, kLimit,
+				)
+				if err != nil {
+					log.Warn().Err(err).Msg("search: vec query failed")
+				} else {
+					for rows.Next() {
+						var path string
+						var sim float64
+						if err := rows.Scan(&path, &sim); err != nil {
+							break
+						}
+						vecSimByPath[path] = sim
+					}
+					rows.Close()
+					log.Debug().Int("vec_hits", len(vecSimByPath)).Msg("vec search complete")
+				}
 			}
 		}
 	}

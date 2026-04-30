@@ -11,9 +11,10 @@ Respond as JSON (no markdown wrapping):
 {
   "synthesize": [
     {
-      "path": "know/...",
+      "path": "{{.OntologyRoot}}/...",
       "title": "...",
       "body": "...",
+      "type": "synthesis|methodology|observation|concept|process|principle|pattern|reference",
       "domain": [],
       "confidence": 0.X,
       "entities": [],
@@ -23,8 +24,12 @@ Respond as JSON (no markdown wrapping):
   "retract": ["file1.md", "file2.md"]
 }
 
+Path and type are MANDATORY:
+- Every output fact's path MUST start with `{{.OntologyRoot}}/`. Outputs with any other prefix are rejected.
+- Every output fact MUST set `type` to one of the listed values. Outputs with empty or missing type are rejected. Default to "synthesis" for higher-order facts derived from observations.
+
 ## Hypothesis handling
 
 - Do NOT use hypothesis-type facts as inputs for creating new synthesis facts. Hypotheses are unconfirmed predictions.
 - If a hypothesis is confirmed by other evidence in the batch, retract it and include the hypothesis path in the new synthesis fact's refs.
-- When all input facts are type "methodology", the output must also be type "methodology" — not "synthesis". Methodology facts are about reasoning process, not domain content. Always use a path under `knomit/meta/reasoning/` for methodology-type output (e.g. `knomit/meta/reasoning/descriptive-name.md`).
+- When all input facts are type "methodology", the output must also be type "methodology" — not "synthesis". Methodology facts are about reasoning process, not domain content. Always use a path under `{{.OntologyRoot}}/meta/reasoning/` for methodology-type output (e.g. `{{.OntologyRoot}}/meta/reasoning/descriptive-name.md`).

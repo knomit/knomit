@@ -1,8 +1,10 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/BurntSushi/toml"
@@ -33,17 +35,29 @@ type LLMConfig struct {
 	Batch    bool   `toml:"batch"`
 }
 
+// ClusterCacheConfig governs the Louvain-cluster cache: how long to wait for
+// activity to settle before a background recompute, how often the checker
+// wakes, and how many concurrent recomputes are allowed across all
+// repos/branches. CheckInterval=="0" or "0s" disables the background
+// checker entirely (read-path stale-then-refresh still applies).
+type ClusterCacheConfig struct {
+	QuietThreshold string `toml:"quiet_threshold"`
+	CheckInterval  string `toml:"check_interval"`
+	MaxConcurrent  int    `toml:"max_concurrent"`
+}
+
 // Config is the root configuration, composed of section structs.
 type Config struct {
 	Home         string           `toml:"repo"`
 	Host         string           `toml:"host"`
 	Port         string           `toml:"port"`
 	Socket       string           `toml:"socket"`
-	OntologyRoot string           `toml:"ontology_root"`
-	ONNXLibPath  string           `toml:"onnx_lib_path"`
-	LLM          LLMConfig        `toml:"llm"`
-	Remote       RemoteAuthConfig `toml:"remote"`
-	Git          GitConfig        `toml:"git"`
+	OntologyRoot string             `toml:"ontology_root"`
+	ONNXLibPath  string             `toml:"onnx_lib_path"`
+	ClusterCache ClusterCacheConfig `toml:"cluster_cache"`
+	LLM          LLMConfig          `toml:"llm"`
+	Remote       RemoteAuthConfig   `toml:"remote"`
+	Git          GitConfig          `toml:"git"`
 }
 
 // Defaults returns a Config populated with default values.
@@ -54,6 +68,11 @@ func Defaults() Config {
 		Host:         "localhost",
 		Port:         "19278",
 		OntologyRoot: "kb",
+		ClusterCache: ClusterCacheConfig{
+			QuietThreshold: "10s",
+			CheckInterval:  "5s",
+			MaxConcurrent:  1,
+		},
 		LLM: LLMConfig{
 			Model:    "gemini-2.5-flash",
 			Provider: "gemini",
@@ -102,13 +121,30 @@ func Load() (Config, error) {
 	envOr("KNOMIT_REMOTE_SSH_KEY", &cfg.Remote.SSHKey)
 	envOr("KNOMIT_REMOTE_AUTH", &cfg.Remote.AuthMethod)
 	envOr("ONNXRUNTIME_SHARED_LIBRARY", &cfg.ONNXLibPath)
+	envOr("KNOMIT_CLUSTER_CACHE_QUIET_THRESHOLD", &cfg.ClusterCache.QuietThreshold)
+	envOr("KNOMIT_CLUSTER_CACHE_CHECK_INTERVAL", &cfg.ClusterCache.CheckInterval)
+	envIntOr("KNOMIT_CLUSTER_CACHE_MAX_CONCURRENT", &cfg.ClusterCache.MaxConcurrent)
 
 	// Expand tildes in path fields.
 	expandTilde(&cfg.Home)
 	expandTilde(&cfg.ONNXLibPath)
 	expandTilde(&cfg.Remote.SSHKey)
 
+	if err := cfg.Validate(); err != nil {
+		return Config{}, err
+	}
 	return cfg, nil
+}
+
+// Validate checks that the config is internally consistent. Called from
+// Load so that a misconfigured TOML or env var (notably an empty
+// ontology_root) surfaces at boot rather than later as silently-dropped
+// synthesize outputs.
+func (c Config) Validate() error {
+	if strings.TrimSpace(c.OntologyRoot) == "" {
+		return fmt.Errorf("config: ontology_root must not be empty")
+	}
+	return nil
 }
 
 // findConfigFile looks for knomit.toml next to the binary, then in homePath.
@@ -140,6 +176,14 @@ func envOr(key string, target *string) {
 func envBoolOr(key string, target *bool) {
 	if v := os.Getenv(key); v != "" {
 		*target = v == "true"
+	}
+}
+
+func envIntOr(key string, target *int) {
+	if v := os.Getenv(key); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			*target = n
+		}
 	}
 }
 

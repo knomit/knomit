@@ -19,6 +19,10 @@ import (
 // defaultOntologyRoot is the config-level ontology root used only for the
 // static exploreTool description (the actual default path at request time
 // comes from ri.OntologyRoot()).
+//
+// The Louvain cluster cache is reached transparently via the per-repo
+// store.SearchIndex (CachedClusterFacts) — it does not need to be threaded
+// here. The background warmer lives on repos.Manager.StartClusterChecker.
 func NewServer(profile, defaultOntologyRoot string, embedders ...store.BatchEmbedder) *server.MCPServer {
 	hooks := &server.Hooks{}
 	hooks.AddAfterInitialize(func(ctx context.Context, id any, req *mcp.InitializeRequest, result *mcp.InitializeResult) {
@@ -33,6 +37,10 @@ func NewServer(profile, defaultOntologyRoot string, embedders ...store.BatchEmbe
 
 	s := server.NewMCPServer("knomit", "1.0.0",
 		server.WithHooks(hooks),
+		// Advertise tasks capability so clients that support it can invoke
+		// long-running tools (knomit_review) asynchronously and poll for
+		// completion via tasks/get instead of blocking on a single response.
+		server.WithTaskCapabilities(true, true, true),
 	)
 
 	s.AddTool(learnTool(), LearnHandler(embedders...))

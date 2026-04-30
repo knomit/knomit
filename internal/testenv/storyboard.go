@@ -80,7 +80,7 @@ func (sb *Storyboard) teardown() {
 		}
 	}
 	for _, m := range managerList {
-		m.Shutdown()
+		m.Close()
 	}
 }
 
@@ -103,7 +103,7 @@ func (sb *Storyboard) Repo(name string) *RepoHandle {
 		Embedder:              sb.embedder,
 		DisableBackgroundSync: true,
 	})
-	if err := m.Boot(); err != nil {
+	if err := m.Start(); err != nil {
 		sb.t.Fatalf("Repo(%q): manager boot failed: %v", name, err)
 	}
 	ri := m.Get("knomit")
@@ -210,7 +210,7 @@ func (r *RepoHandle) Connect(remote *RemoteHandle) *RepoHandle {
 	// This is why Connect MUST be called BEFORE any Branch() writes —
 	// wiping the DB is destructive. Tests that write first and
 	// connect later aren't supported and would lose their data here.
-	r.manager.Shutdown()
+	r.manager.Close()
 
 	reposDir := filepath.Join(r.cfg.Home, "repos")
 	entries, _ := os.ReadDir(reposDir)
@@ -231,7 +231,7 @@ func (r *RepoHandle) Connect(remote *RemoteHandle) *RepoHandle {
 		Embedder:              r.sb.embedder,
 		DisableBackgroundSync: true,
 	})
-	if err := m.Boot(); err != nil {
+	if err := m.Start(); err != nil {
 		t.Fatalf("Connect(%s): re-boot failed: %v", remote.Name(), err)
 	}
 	ri := m.Get("knomit")
@@ -258,7 +258,7 @@ func (r *RepoHandle) Connect(remote *RemoteHandle) *RepoHandle {
 func (r *RepoHandle) Restart() {
 	t := r.sb.t
 	t.Helper()
-	r.manager.Shutdown()
+	r.manager.Close()
 
 	m := repos.New(context.Background(), repos.Deps{
 		Cfg:                   r.cfg,
@@ -266,7 +266,7 @@ func (r *RepoHandle) Restart() {
 		Embedder:              r.sb.embedder,
 		DisableBackgroundSync: true,
 	})
-	if err := m.Boot(); err != nil {
+	if err := m.Start(); err != nil {
 		t.Fatalf("Restart(%q): manager re-boot failed: %v", r.name, err)
 	}
 	ri := m.Get("knomit")
