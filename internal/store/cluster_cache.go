@@ -164,20 +164,34 @@ func (si *searchIndex) CachedClusterFacts(ctx context.Context, branch string, re
 // computeAndCacheClusters runs ClusterFacts under the singleflight group,
 // writes the result to the cache table, and returns it. Used by the
 // cold-cache sync path and by refreshClustersAsync.
+//
+// Two ctx-related properties matter here:
+//
+//   - The singleflight closure is detached from the calling ctx (via
+//     WithoutCancel + a 5-minute timeout). The result is shared with every
+//     other waiter — concurrent reviewers, the background checker — so a
+//     single cancelled caller must not poison the compute and leave the
+//     cache cold for everyone else.
+//   - DoChan + select on ctx.Done lets a cancelled caller return promptly
+//     while the detached compute continues in the singleflight goroutine
+//     and populates the cache for the next request.
 func (si *searchIndex) computeAndCacheClusters(ctx context.Context, branch string, resolution float64, minCommunitySize int) (ClusterResult, error) {
 	key := fmt.Sprintf("%s|%g|%d", branch, resolution, minCommunitySize)
-	v, err, _ := si.clusterSF.Do(key, func() (any, error) {
+	ch := si.clusterSF.DoChan(key, func() (any, error) {
+		workCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Minute)
+		defer cancel()
+
 		start := time.Now()
-		headCommit, err := si.rh.HeadCommit(ctx, branch)
+		headCommit, err := si.rh.HeadCommit(workCtx, branch)
 		if err != nil {
 			return ClusterResult{}, fmt.Errorf("compute head: %w", err)
 		}
-		result, err := si.ClusterFacts(ctx, branch, resolution, minCommunitySize)
+		result, err := si.ClusterFacts(workCtx, branch, resolution, minCommunitySize)
 		if err != nil {
 			return ClusterResult{}, err
 		}
 		cacheStore := &clusterCacheStore{rh: si.rh}
-		if err := cacheStore.Put(ctx, branch, resolution, minCommunitySize, headCommit, result); err != nil {
+		if err := cacheStore.Put(workCtx, branch, resolution, minCommunitySize, headCommit, result); err != nil {
 			return ClusterResult{}, fmt.Errorf("compute put: %w", err)
 		}
 		log.Info().
@@ -189,10 +203,15 @@ func (si *searchIndex) computeAndCacheClusters(ctx context.Context, branch strin
 			Msg("cluster cache: refreshed")
 		return result, nil
 	})
-	if err != nil {
-		return ClusterResult{}, err
+	select {
+	case <-ctx.Done():
+		return ClusterResult{}, ctx.Err()
+	case res := <-ch:
+		if res.Err != nil {
+			return ClusterResult{}, res.Err
+		}
+		return res.Val.(ClusterResult), nil
 	}
-	return v.(ClusterResult), nil
 }
 
 // refreshClustersAsync fires a background recompute that outlives the
