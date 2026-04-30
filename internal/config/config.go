@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -129,7 +130,21 @@ func Load() (Config, error) {
 	expandTilde(&cfg.ONNXLibPath)
 	expandTilde(&cfg.Remote.SSHKey)
 
+	if err := cfg.Validate(); err != nil {
+		return Config{}, err
+	}
 	return cfg, nil
+}
+
+// Validate checks that the config is internally consistent. Called from
+// Load so that a misconfigured TOML or env var (notably an empty
+// ontology_root) surfaces at boot rather than later as silently-dropped
+// synthesize outputs.
+func (c Config) Validate() error {
+	if strings.TrimSpace(c.OntologyRoot) == "" {
+		return fmt.Errorf("config: ontology_root must not be empty")
+	}
+	return nil
 }
 
 // findConfigFile looks for knomit.toml next to the binary, then in homePath.

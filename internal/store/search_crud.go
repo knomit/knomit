@@ -16,6 +16,12 @@ import (
 // embedding retrieval, and meta key-value storage (last_commit tracking).
 // All mutations keep the vec0 index in sync within transactions.
 
+// factsVecDim must match the FLOAT[N] dimension declared on the
+// facts_vec virtual table in 000002_facts_vec.up.sql. Any donated or
+// freshly computed embedding vector with a different length cannot be
+// stored — the schema is a hard invariant.
+const factsVecDim = 768
+
 // upsert inserts or replaces a FactRecord on the given branch, keeping the
 // vec0 index in sync. COW dedup: if (path, blob_hash) already exists in the
 // facts table, only the branch_facts pointer is updated.
@@ -117,6 +123,9 @@ func (si *searchIndex) upsert(ctx context.Context, branch, commitHash string, re
 	// vector (search-by-text on this fact will still work via the
 	// keyword path — sqlite-vec just won't return it).
 	if vec, ok := precomputedEmbedding(ctx, rec.Path); ok && len(vec) > 0 {
+		if len(vec) != factsVecDim {
+			return fmt.Errorf("upsert: donated embedding for %q has %d dims, expected %d", rec.Path, len(vec), factsVecDim)
+		}
 		vecData = float32SliceToBytes(vec)
 	} else if emb := si.rh.getEmbedder(); emb != nil {
 		var data []byte

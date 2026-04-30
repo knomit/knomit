@@ -26,6 +26,11 @@ func TestValidateOutputPath_RejectsOutsideOntologyRoot(t *testing.T) {
 		{"root without trailing slash", "kb", "kb", true, "outside ontology root"},
 		{"sibling dir whose name starts with root", "kb-archive/x.md", "kb", true, "outside ontology root"},
 		{"empty ontology root config", "kb/x.md", "", true, "ontology root not configured"},
+		// Trailing slashes in ontology root must be tolerated. Without
+		// trim, prefix becomes "kb//" and every legitimate "kb/foo.md"
+		// is rejected.
+		{"trailing slash on root", "kb/foo.md", "kb/", false, ""},
+		{"multiple trailing slashes", "kb/foo.md", "kb//", false, ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

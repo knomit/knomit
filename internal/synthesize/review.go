@@ -87,7 +87,7 @@ func (r *Reviewer) StartSession(ctx context.Context) (*ReviewResult, error) {
 	// Dedup pass: merge near-duplicates within each cluster before enqueueing.
 	t = time.Now()
 	for i := range clusters {
-		surviving, err := dedupCluster(context.Background(), clusters[i], gs, idx, 0.92, "review", r.onProgress, branch)
+		surviving, err := dedupCluster(ctx, clusters[i], gs, idx, 0.92, "review", r.onProgress, branch)
 		if err != nil {
 			return nil, fmt.Errorf("review: dedup cluster %d: %w", i, err)
 		}

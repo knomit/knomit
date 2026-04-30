@@ -103,3 +103,38 @@ func TestUpsert_DonatedVectorSkipsEmbedder(t *testing.T) {
 		require.Equal(t, byte(0x3F), vecBytes[3])
 	}
 }
+
+// TestUpsert_DonatedVectorWrongDimRejected regresses the bug where a
+// donated vector of the wrong dimension (e.g. test stub or model
+// version skew producing 384-dim while facts_vec is FLOAT[768]) was
+// inserted as a malformed BLOB without a sanity check. The schema
+// dimension is a hard invariant — wrong dim must be rejected.
+func TestUpsert_DonatedVectorWrongDimRejected(t *testing.T) {
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	defer svc.Close()
+
+	emb := &countingEmbedder{}
+	svc.SetEmbedder(emb)
+	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+
+	ctx := context.Background()
+
+	// Donate a 384-dim vector — half of what the schema demands.
+	wrongDim := make([]float32, 384)
+	donateCtx := WithPrecomputedEmbeddings(ctx, map[string][]float32{
+		"kb/wrong.md": wrongDim,
+	})
+
+	_, err = svc.Facts().WriteFact(donateCtx, "agent/test", "kb/wrong.md",
+		"---\ntype: observation\n---\n# Wrong\n\nbody-wrong", "add wrong", "test")
+	require.Error(t, err, "donating a wrong-dim vector must surface an error from the upsert path")
+	// Must come from the explicit guard at the donation site — not the
+	// sqlite-vec "Dimension mismatch for inserted vector" message
+	// produced after the upsert is mid-flight.
+	require.Contains(t, err.Error(), "donated embedding",
+		"error must come from upsert's explicit dim check, not from sqlite-vec internals; got: %v", err)
+	require.Contains(t, err.Error(), "384")
+	require.Contains(t, err.Error(), "768")
+}

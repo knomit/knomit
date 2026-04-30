@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -65,11 +66,22 @@ type clusterKey struct {
 
 var defaultClusterKeys = []clusterKey{{Resolution: 1.0, MinCommunitySize: 2}}
 
+// clusterDispatcher bundles the concurrency primitives shared across
+// the per-tick traversal: sem caps cross-repo Louvain runs in flight,
+// and wg lets stop() join any goroutines launched via dispatchRefresh
+// before returning. Both are owned by startClusterChecker for the
+// lifetime of the loop.
+type clusterDispatcher struct {
+	sem chan struct{}
+	wg  *sync.WaitGroup
+}
+
 // startClusterChecker launches a background goroutine that periodically
 // scans every open repo and triggers a Louvain refresh for branches
 // whose HEAD has advanced AND whose newest commit is older than
 // QuietThreshold ("activity has settled"). The returned stop func
-// cancels the loop and joins the goroutine.
+// cancels the loop, joins the ticker goroutine, and waits for any
+// in-flight refresh goroutines so they cannot outlive the store.
 //
 // CheckInterval == 0 disables the loop entirely; the returned stop is a
 // no-op. Refreshes are dispatched as goroutines bounded by MaxConcurrent
@@ -87,7 +99,10 @@ func (m *Manager) startClusterChecker(cfg clusterCheckerConfig) (stop func()) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
-	sem := make(chan struct{}, cfg.MaxConcurrent)
+	disp := &clusterDispatcher{
+		sem: make(chan struct{}, cfg.MaxConcurrent),
+		wg:  &sync.WaitGroup{},
+	}
 
 	go func() {
 		defer close(done)
@@ -105,27 +120,32 @@ func (m *Manager) startClusterChecker(cfg clusterCheckerConfig) (stop func()) {
 				log.Info().Msg("cluster cache: background checker stopped")
 				return
 			case <-t.C:
-				m.tickClusterChecker(ctx, cfg, sem)
+				m.tickClusterChecker(ctx, cfg, disp)
 			}
 		}
 	}()
 	return func() {
 		cancel()
 		<-done
+		// Block until every goroutine launched via dispatchRefresh has
+		// returned. Without this, refreshes that grabbed a sem slot
+		// just before cancel can keep talking to the (about-to-close)
+		// SQL store and log "refresh failed" warnings during shutdown.
+		disp.wg.Wait()
 	}
 }
 
 // tickClusterChecker runs one pass over every repo. Quiet on the happy
 // path; logs at info when it fires a refresh.
-func (m *Manager) tickClusterChecker(ctx context.Context, cfg clusterCheckerConfig, sem chan struct{}) {
+func (m *Manager) tickClusterChecker(ctx context.Context, cfg clusterCheckerConfig, disp *clusterDispatcher) {
 	m.ForEach(func(name string, ri *RepoInstance) {
-		checkRepoClusters(ctx, ri, cfg, sem)
+		checkRepoClusters(ctx, ri, cfg, disp)
 	})
 }
 
 // checkRepoClusters iterates a repo's branches and dispatches refreshes
 // for those that are both stale AND settled.
-func checkRepoClusters(ctx context.Context, ri *RepoInstance, cfg clusterCheckerConfig, sem chan struct{}) {
+func checkRepoClusters(ctx context.Context, ri *RepoInstance, cfg clusterCheckerConfig, disp *clusterDispatcher) {
 	var (
 		branches []store.Branch
 		err      error
@@ -143,15 +163,15 @@ func checkRepoClusters(ctx context.Context, ri *RepoInstance, cfg clusterChecker
 
 	now := time.Now()
 	for _, b := range branches {
-		checkBranchClusters(ctx, ri, b.Name, now, cfg, sem)
+		checkBranchClusters(ctx, ri, b.Name, now, cfg, disp)
 	}
 }
 
 // checkBranchClusters evaluates a single branch against every default
-// key and fires async refreshes (gated by sem) when stale + settled.
+// key and fires async refreshes (gated by disp) when stale + settled.
 // Returns without dispatching anything if the branch has no commits,
 // HEAD already matches a fresh cache row, or activity hasn't settled.
-func checkBranchClusters(ctx context.Context, ri *RepoInstance, branch string, now time.Time, cfg clusterCheckerConfig, sem chan struct{}) {
+func checkBranchClusters(ctx context.Context, ri *RepoInstance, branch string, now time.Time, cfg clusterCheckerConfig, disp *clusterDispatcher) {
 	var (
 		head      string
 		committed time.Time
@@ -201,8 +221,24 @@ func checkBranchClusters(ctx context.Context, ri *RepoInstance, branch string, n
 			Str("branch", branch).
 			Bool("cold", !found).
 			Msg("cluster cache: triggering refresh")
-		dispatchRefresh(ri, branch, k.Resolution, k.MinCommunitySize, sem)
+		dispatchRefresh(ri, branch, k.Resolution, k.MinCommunitySize, disp)
 	}
+}
+
+// runRefresh performs the actual cluster-cache recompute for one
+// (repo, branch, key). Extracted from dispatchRefresh as a package var
+// so tests can replace it with a controllable stub to verify the
+// WaitGroup tracking behavior of dispatchRefresh.
+var runRefresh = func(ctx context.Context, ri *RepoInstance, branch string, resolution float64, minCommunitySize int) error {
+	var err error
+	ri.WithRead(func(svc *store.Service) {
+		if svc == nil {
+			err = errors.New("store unavailable")
+			return
+		}
+		_, err = svc.Search().CachedClusterFacts(ctx, branch, resolution, minCommunitySize)
+	})
+	return err
 }
 
 // dispatchRefresh launches a goroutine that calls CachedClusterFacts
@@ -210,11 +246,17 @@ func checkBranchClusters(ctx context.Context, ri *RepoInstance, branch string, n
 // collapses concurrent triggers for the same key, so even if the
 // checker re-fires on the next tick before the previous compute
 // finishes, only one Louvain run is in flight per (branch, key) at any
-// moment. The semaphore caps the cross-repo total.
-func dispatchRefresh(ri *RepoInstance, branch string, resolution float64, minCommunitySize int, sem chan struct{}) {
+// moment. disp.sem caps the cross-repo total; disp.wg lets stop() join
+// every dispatched goroutine before returning, so refreshes cannot
+// outlive the store they read from.
+func dispatchRefresh(ri *RepoInstance, branch string, resolution float64, minCommunitySize int, disp *clusterDispatcher) {
+	// Track BEFORE launching the goroutine — otherwise stop() can race
+	// past wg.Wait() while the goroutine hasn't yet incremented.
+	disp.wg.Add(1)
 	go func() {
+		defer disp.wg.Done()
 		select {
-		case sem <- struct{}{}:
+		case disp.sem <- struct{}{}:
 		default:
 			// Pool full — drop this trigger. Singleflight in the Service
 			// will collapse with whatever's running; the next tick will
@@ -222,19 +264,11 @@ func dispatchRefresh(ri *RepoInstance, branch string, resolution float64, minCom
 			log.Debug().Str("repo", ri.Name()).Str("branch", branch).Msg("cluster cache: refresh skipped (pool full)")
 			return
 		}
-		defer func() { <-sem }()
+		defer func() { <-disp.sem }()
 
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 		defer cancel()
-		var err error
-		ri.WithRead(func(svc *store.Service) {
-			if svc == nil {
-				err = errors.New("store unavailable")
-				return
-			}
-			_, err = svc.Search().CachedClusterFacts(ctx, branch, resolution, minCommunitySize)
-		})
-		if err != nil {
+		if err := runRefresh(ctx, ri, branch, resolution, minCommunitySize); err != nil {
 			log.Warn().Err(err).Str("repo", ri.Name()).Str("branch", branch).Msg("cluster cache: refresh failed")
 		}
 	}()

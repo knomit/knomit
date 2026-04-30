@@ -32,10 +32,11 @@ func normalizeFactPath(path string) string {
 // case-insensitively because fact.NewFact lowercases all paths
 // unconditionally before persisting.
 func validateOutputPath(path, ontologyRoot string) error {
-	if ontologyRoot == "" {
+	root := strings.TrimRight(ontologyRoot, "/")
+	if root == "" {
 		return fmt.Errorf("ontology root not configured")
 	}
-	prefix := strings.ToLower(ontologyRoot) + "/"
+	prefix := strings.ToLower(root) + "/"
 	if !strings.HasPrefix(strings.ToLower(path), prefix) {
 		return fmt.Errorf("path %q is outside ontology root %q", path, ontologyRoot)
 	}
