@@ -24,106 +24,35 @@ type ExplainResult struct {
 	Outgoing []RefSummary `json:"outgoing"`
 }
 
-// ExplainFact returns the incoming and outgoing [:DERIVED_FROM] neighbours for
-// the given fact path, scoped to facts visible on the given branch.
-// Incoming excludes deleted referrers. Outgoing includes deleted targets
-// (marked with Deleted: true) so the UI can show them distinctly.
-// Self-loops are filtered out: GraphQLite creates (n)-[:DERIVED_FROM]->(n) when
-// the target node is absent at edge-creation time (upstream bug).
+// ExplainFact returns the incoming and outgoing refs for path on branch at
+// HEAD by resolving the path's HEAD-active commit and delegating to the
+// commit-anchored methods. This unifies the HEAD and commit-anchored read
+// paths on a single underlying query.
 func (si *searchIndex) ExplainFact(ctx context.Context, branch, path string) (ExplainResult, error) {
 	branchID, err := si.rh.branchID(ctx, branch)
 	if err != nil {
-		return ExplainResult{}, fmt.Errorf("explain: %w", err)
+		return ExplainResult{}, fmt.Errorf("ExplainFact: branchID: %w", err)
 	}
 
-	// Resolve the blob_hash for this path on the given branch so we query
-	// the specific fact version visible on this branch, not all versions.
-	var blobHash string
+	// active_commit_for(path, branch) lives in branch_facts.commit_hash.
+	var activeCommit string
 	err = conn(ctx, si.rh.db).QueryRowContext(ctx,
-		`SELECT f.blob_hash FROM branch_facts bf JOIN facts f ON f.id = bf.fact_id
-		 WHERE bf.branch_id = ? AND bf.path = ?`, branchID, path,
-	).Scan(&blobHash)
+		`SELECT commit_hash FROM branch_facts WHERE branch_id = ? AND path = ?`,
+		branchID, path,
+	).Scan(&activeCommit)
 	if err != nil {
-		return ExplainResult{}, fmt.Errorf("explain: resolve blob_hash: %w", err)
+		return ExplainResult{}, fmt.Errorf("ExplainFact: resolve active commit: %w", err)
 	}
 
-	params, _ := json.Marshal(map[string]string{"path": path, "blob_hash": blobHash})
-	pj := string(params)
-
-	// Incoming: all non-deleted facts that reference ANY version at this path.
-	// Scoped to branch-visible facts via filterByBranch.
-	incoming, err := si.queryRefSummaries(ctx,
-		fmt.Sprintf(`MATCH (f:%s)-[:%s]->(t:%s {path: $path}) WHERE NOT f.deleted = true RETURN f.path AS path, f.title AS title, false AS deleted`,
-			NodeFact, EdgeDerivedFrom, NodeFact),
-		pj,
-	)
+	in, err := si.IncomingAtCommit(ctx, branch, path, activeCommit)
 	if err != nil {
-		return ExplainResult{}, fmt.Errorf("explain incoming: %w", err)
+		return ExplainResult{}, fmt.Errorf("ExplainFact incoming: %w", err)
 	}
-
-	// Outgoing: refs from the specific version visible on this branch.
-	outgoing, err := si.queryRefSummaries(ctx,
-		fmt.Sprintf(`MATCH (f:%s {path: $path})-[:%s]->(t:%s) WHERE f.blob_hash = $blob_hash RETURN t.path AS path, t.title AS title, t.deleted AS deleted`,
-			NodeFact, EdgeDerivedFrom, NodeFact),
-		pj,
-	)
+	out, err := si.OutgoingAtCommit(ctx, branch, path, activeCommit)
 	if err != nil {
-		return ExplainResult{}, fmt.Errorf("explain outgoing: %w", err)
+		return ExplainResult{}, fmt.Errorf("ExplainFact outgoing: %w", err)
 	}
-
-	return ExplainResult{
-		Incoming: si.filterByBranch(ctx, filterSelf(incoming, path), branchID),
-		Outgoing: filterSelf(outgoing, path),
-	}, nil
-}
-
-// filterSelf removes any RefSummary whose path equals selfPath (self-loops).
-func filterSelf(refs []RefSummary, selfPath string) []RefSummary {
-	out := refs[:0]
-	for _, r := range refs {
-		if r.Path != selfPath {
-			out = append(out, r)
-		}
-	}
-	return out
-}
-
-// filterByBranch keeps only RefSummary entries whose path is visible on the
-// given branch (present in branch_facts).
-func (si *searchIndex) filterByBranch(ctx context.Context, refs []RefSummary, branchID int64) []RefSummary {
-	if len(refs) == 0 {
-		return refs
-	}
-	placeholders := make([]string, len(refs))
-	args := make([]any, len(refs)+1)
-	args[0] = branchID
-	for i, r := range refs {
-		placeholders[i] = "?"
-		args[i+1] = r.Path
-	}
-	rows, err := conn(ctx, si.rh.db).QueryContext(ctx,
-		`SELECT path FROM branch_facts WHERE branch_id = ? AND path IN (`+strings.Join(placeholders, ",")+`)`,
-		args...,
-	)
-	if err != nil {
-		return refs
-	}
-	defer rows.Close()
-	visible := make(map[string]bool, len(refs))
-	for rows.Next() {
-		var p string
-		if err := rows.Scan(&p); err != nil {
-			return refs
-		}
-		visible[p] = true
-	}
-	out := refs[:0]
-	for _, r := range refs {
-		if visible[r.Path] {
-			out = append(out, r)
-		}
-	}
-	return out
+	return ExplainResult{Incoming: in, Outgoing: out}, nil
 }
 
 // isDeletedVal interprets the raw value returned by json_extract for a boolean
@@ -139,101 +68,6 @@ func isDeletedVal(v interface{}) bool {
 		return string(val) == "1"
 	}
 	return false
-}
-
-// refSummariesByEdgeSource returns RefSummary entries for all target nodes
-// reachable from sourceNodeID via edges of edgeType, where the target has label targetLabel.
-// It reads path and title properties from the EAV tables.
-func (si *searchIndex) refSummariesByEdgeSource(ctx context.Context, sourceNodeID int64, edgeType, targetLabel string) ([]RefSummary, error) {
-	rows, err := conn(ctx, si.rh.db).QueryContext(ctx, `
-		SELECT DISTINCT
-			path_prop.value AS path,
-			COALESCE(title_prop.value, '') AS title
-		FROM edges e
-		JOIN node_labels nl ON nl.node_id = e.target_id AND nl.label = ?
-		JOIN node_props_text path_prop ON path_prop.node_id = e.target_id
-			AND path_prop.key_id = (SELECT id FROM property_keys WHERE key = 'path' LIMIT 1)
-		LEFT JOIN node_props_text title_prop ON title_prop.node_id = e.target_id
-			AND title_prop.key_id = (SELECT id FROM property_keys WHERE key = 'title' LIMIT 1)
-		WHERE e.source_id = ? AND e.type = ?
-	`, targetLabel, sourceNodeID, edgeType)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	return scanRefSummaryRows(rows)
-}
-
-// refSummariesByEdgeTarget returns RefSummary entries for all source nodes
-// pointing to targetNodeID via edges of edgeType, where the source has label sourceLabel.
-// It reads path and title properties from the EAV tables.
-func (si *searchIndex) refSummariesByEdgeTarget(ctx context.Context, targetNodeID int64, edgeType, sourceLabel string) ([]RefSummary, error) {
-	rows, err := conn(ctx, si.rh.db).QueryContext(ctx, `
-		SELECT DISTINCT
-			path_prop.value AS path,
-			COALESCE(title_prop.value, '') AS title
-		FROM edges e
-		JOIN node_labels nl ON nl.node_id = e.source_id AND nl.label = ?
-		JOIN node_props_text path_prop ON path_prop.node_id = e.source_id
-			AND path_prop.key_id = (SELECT id FROM property_keys WHERE key = 'path' LIMIT 1)
-		LEFT JOIN node_props_text title_prop ON title_prop.node_id = e.source_id
-			AND title_prop.key_id = (SELECT id FROM property_keys WHERE key = 'title' LIMIT 1)
-		WHERE e.target_id = ? AND e.type = ?
-	`, sourceLabel, targetNodeID, edgeType)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	return scanRefSummaryRows(rows)
-}
-
-// scanRefSummaryRows scans (path, title) rows into []RefSummary.
-func scanRefSummaryRows(rows interface {
-	Next() bool
-	Scan(dest ...any) error
-	Err() error
-}) ([]RefSummary, error) {
-	var result []RefSummary
-	for rows.Next() {
-		var path, title string
-		if err := rows.Scan(&path, &title); err != nil {
-			return nil, fmt.Errorf("scan ref summary: %w", err)
-		}
-		if path == "" {
-			continue
-		}
-		result = append(result, RefSummary{Path: path, Title: title})
-	}
-	return result, rows.Err()
-}
-
-// queryRefSummaries runs a Cypher query that returns (path, title, deleted) rows.
-// cypherQuery must contain only $param placeholders (no embedded values).
-// paramsJSON is the JSON-encoded parameter object passed as cypher()'s second arg.
-func (si *searchIndex) queryRefSummaries(ctx context.Context, cypherQuery, paramsJSON string) ([]RefSummary, error) {
-	q := `SELECT json_extract(value, '$.path'), json_extract(value, '$.title'), json_extract(value, '$.deleted') FROM json_each(cypher('` + cypherQuery + `', ?))`
-	rows, err := conn(ctx, si.rh.db).QueryContext(ctx, q, paramsJSON)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	result := []RefSummary{}
-	for rows.Next() {
-		var path, title string
-		// json_extract on a JSON boolean returns an integer in SQLite (1=true, 0=false).
-		// However, Cypher literal `false AS col` may return the string "0".
-		// Scan into interface{} to handle both cases uniformly.
-		var deletedRaw interface{}
-		if err := rows.Scan(&path, &title, &deletedRaw); err != nil {
-			return nil, fmt.Errorf("scan ref summary: %w", err)
-		}
-		if path == "" {
-			continue
-		}
-		deleted := isDeletedVal(deletedRaw)
-		result = append(result, RefSummary{Path: path, Title: title, Deleted: deleted})
-	}
-	return result, rows.Err()
 }
 
 // ── Graph operations ──────────────────────────────────────────────────────────

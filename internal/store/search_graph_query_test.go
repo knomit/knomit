@@ -61,3 +61,40 @@ func TestOutgoingAtCommit(t *testing.T) {
 	require.Equal(t, "kb/e.md", got[0].Path)
 	require.Equal(t, c0Res.CommitHash, got[0].Commit)
 }
+
+// TestExplainFact_MatchesIncomingAtCommit_AtHEAD verifies design scenario 6:
+// HEAD ExplainFact returns the same incoming items as IncomingAtCommit
+// invoked with the branch's HEAD-active commit for the path.
+func TestExplainFact_MatchesIncomingAtCommit_AtHEAD(t *testing.T) {
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	defer svc.Close()
+	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+
+	ctx := context.Background()
+	branch := "main"
+
+	c0Res, err := svc.Facts().WriteFact(ctx, branch, "kb/e.md", testFactBody("e", 0.9, nil), "init e", "")
+	require.NoError(t, err)
+	_, err = svc.Facts().WriteFact(ctx, branch, "kb/d1.md", testFactBody("d1", 0.8, []string{"kb/e.md"}), "d1→e", "")
+	require.NoError(t, err)
+	_, err = svc.Facts().WriteFact(ctx, branch, "kb/d2.md", testFactBody("d2", 0.7, []string{"kb/e.md"}), "d2→e", "")
+	require.NoError(t, err)
+
+	headExplain, err := svc.Search().ExplainFact(ctx, branch, "kb/e.md")
+	require.NoError(t, err)
+
+	atC0, err := svc.Search().IncomingAtCommit(ctx, branch, "kb/e.md", c0Res.CommitHash)
+	require.NoError(t, err)
+
+	require.ElementsMatch(t, refSummaryPaths(headExplain.Incoming), refSummaryPaths(atC0))
+}
+
+func refSummaryPaths(rs []RefSummary) []string {
+	out := make([]string, len(rs))
+	for i, r := range rs {
+		out[i] = r.Path
+	}
+	return out
+}
