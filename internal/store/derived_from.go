@@ -4,8 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-)
 
+	"github.com/rs/zerolog/log"
+)
 
 // resolveTargetCommit walks ancestors of sourceCommit on the given branch
 // looking for the FIRST commit_log row that touches refPath, and returns
@@ -116,6 +117,8 @@ func (si *searchIndex) graphAddDerivedFromAtCommitTx(
 		if tgtID == 0 {
 			// Target Fact node missing despite resolveTargetCommit succeeding.
 			// Indicates an indexing race or stale state; skip rather than fail.
+			log.Warn().Str("branch", branch).Str("ref", refPath).Str("target_commit", targetCommit).
+				Msg("graphAddDerivedFromAtCommitTx: target Fact node not found, skipping edge (indexing race or stale state)")
 			continue
 		}
 

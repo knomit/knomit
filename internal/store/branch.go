@@ -399,6 +399,11 @@ func (rh *repoHandler) readFileAtCommit(ctx context.Context, path, commitHash st
 // readBlobHashAtCommit returns the blob hash for path in the git tree at
 // commitHash. Used to bridge (path, commit) → blob_hash when wiring graph
 // edges that point to a specific Fact(path, blob_hash) version.
+//
+// No case-insensitive fallback: refs are stored normalised and target_commit
+// is known-good (returned by resolveTargetCommit), so an exact lookup is
+// sufficient. Compare with readFileAtCommit above which falls back for
+// pre-normalisation legacy paths.
 func (rh *repoHandler) readBlobHashAtCommit(ctx context.Context, path, commitHash string) (string, error) {
 	hash := plumbing.NewHash(commitHash)
 	commit, err := rh.repo.CommitObject(hash)
