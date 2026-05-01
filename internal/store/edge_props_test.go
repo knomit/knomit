@@ -52,6 +52,8 @@ func TestGraphSetEdgeProps_WritesAndReadsText(t *testing.T) {
 	require.True(t, rows.Next())
 	var sc, tc string
 	require.NoError(t, rows.Scan(&sc, &tc))
+	require.False(t, rows.Next(), "expected exactly one edge row")
+	require.NoError(t, rows.Err())
 	require.Equal(t, "1234abc", sc)
 	require.Equal(t, "5678def", tc)
 }

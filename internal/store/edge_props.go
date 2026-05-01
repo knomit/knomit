@@ -9,6 +9,8 @@ import (
 // and returns its rowid. Uses INSERT (no OR IGNORE) because (source_id,
 // target_id, type) has no uniqueness constraint in this graphqlite build —
 // multi-edges are intentional for time-aware DERIVED_FROM.
+// Callers are responsible for deduplication when idempotency is required;
+// this function always produces a new row.
 func (si *searchIndex) graphInsertEdgeReturningID(ctx context.Context, sourceID, targetID int64, edgeType string) (int64, error) {
 	res, err := conn(ctx, si.rh.db).ExecContext(ctx,
 		`INSERT INTO edges (source_id, target_id, type) VALUES (?, ?, ?)`,
