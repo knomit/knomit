@@ -137,6 +137,35 @@ func TestGraphAddDerivedFromAtCommitTx_WritesEdgeWithBothCommits(t *testing.T) {
 	require.Equal(t, c1, got[0].tc)
 }
 
+// TestUpsert_WritesDerivedFromEdges_PostCommit regresses the bug where
+// upsert's post-commit writePostCommitDerivedFrom silently failed because ctx
+// still carried the committed *sql.Tx. conn(ctx, db) returned the closed tx,
+// and QueryRowContext on it returned "transaction has already been committed or
+// rolled back". The fix strips the tx from ctx via storegit.WithoutTx before
+// any post-commit call, so conn falls through to the bare *sql.DB.
+func TestUpsert_WritesDerivedFromEdges_PostCommit(t *testing.T) {
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	defer svc.Close()
+	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+
+	ctx := context.Background()
+	branch := "main"
+
+	// E first, then D ref'ing E.
+	_, err = svc.Facts().WriteFact(ctx, branch, "kb/e.md", testFactBody("e", 0.9, nil), "init e", "")
+	require.NoError(t, err)
+	_, err = svc.Facts().WriteFact(ctx, branch, "kb/d.md", testFactBody("d", 0.8, []string{"kb/e.md"}), "d→e", "")
+	require.NoError(t, err)
+
+	si := svc.Search().(*searchIndex)
+	var count int
+	require.NoError(t, si.rh.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM edges WHERE type = ?`, EdgeDerivedFrom).Scan(&count))
+	require.Equal(t, 1, count, "WriteFact should produce one DERIVED_FROM edge for D→E without needing Rebuild")
+}
+
 // TestGraphAddDerivedFromAtCommitTx_SkipsForwardBroken: ref to a path that
 // has never been created produces no edge.
 func TestGraphAddDerivedFromAtCommitTx_SkipsForwardBroken(t *testing.T) {

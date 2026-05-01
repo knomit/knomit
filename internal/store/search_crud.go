@@ -113,6 +113,9 @@ func (si *searchIndex) upsert(ctx context.Context, branch, commitHash string, re
 		if err := tx.Commit(); err != nil {
 			return err
 		}
+		// Post-commit work uses ctx without the (now-closed) tx so conn(ctx,db)
+		// resolves to the bare *sql.DB rather than the committed tx.
+		ctx = storegit.WithoutTx(ctx)
 		// Write time-aware DERIVED_FROM edges for the new (path, commit) ref-event.
 		// Each new commit asserting the same content is its own ref-event.
 		si.writePostCommitDerivedFrom(ctx, branch, rec.Path, rec.BlobHash, commitHash, rec.Refs)
@@ -214,6 +217,10 @@ func (si *searchIndex) upsert(ctx context.Context, branch, commitHash string, re
 	if err := tx.Commit(); err != nil {
 		return err
 	}
+
+	// Post-commit work uses ctx without the (now-closed) tx so conn(ctx,db)
+	// resolves to the bare *sql.DB rather than the committed tx.
+	ctx = storegit.WithoutTx(ctx)
 
 	// Write time-aware DERIVED_FROM edges. Runs AFTER commit because direct-SQL
 	// reads against the GraphQLite EAV tables cannot see nodes MERGE'd via
