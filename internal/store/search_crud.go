@@ -202,6 +202,11 @@ func (si *searchIndex) upsert(ctx context.Context, branch, commitHash string, re
 	// concurrent writes (one writer's facts row committed while another's
 	// graph sync races or fails). The graph-coherence Verify check
 	// catches those holes, so any failure here must propagate.
+	//
+	// DERIVED_FROM edges are an exception — they run post-commit via
+	// writePostCommitDerivedFrom because graphAddDerivedFromAtCommitTx
+	// requires node IDs that are only visible after the source Fact's
+	// MERGE has committed.
 	if err := si.graphSyncFactTx(ctx, tx, rec); err != nil {
 		return fmt.Errorf("upsert graph sync: %w", err)
 	}

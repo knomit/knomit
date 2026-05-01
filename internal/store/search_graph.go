@@ -268,14 +268,18 @@ const (
 	EdgePrevVersion     = "PREV_VERSION"      // FactVersion → older FactVersion (same path)
 )
 
-// graphSyncFact creates or updates graph nodes and edges for a fact.
-// This implements the Learn mutation from the spec:
+// graphSyncFact creates or updates graph nodes and node-edge relationships
+// (entity / domain / ontology) for a fact. DERIVED_FROM edges are NOT
+// written here — they are written post-commit by writePostCommitDerivedFrom
+// in search_crud.go, because the new graphAddDerivedFromAtCommitTx requires
+// node IDs that are only visible after the surrounding tx commits.
+//
+// Steps:
 //  1. MERGE Fact node
 //  2. Delete old TAGGED, IN_DOMAIN, UNDER, DERIVED_FROM edges
 //  3. MERGE Entity nodes + TAGGED edges
 //  4. MERGE Domain hierarchy + IN_DOMAIN edges
 //  5. MERGE OntologyNode hierarchy + UNDER edge
-//  6. Sync DERIVED_FROM edges from local refs
 func (si *searchIndex) graphSyncFact(ctx context.Context, rec FactRecord) error {
 	return si.graphSyncFactTx(ctx, si.rh.db, rec)
 }
