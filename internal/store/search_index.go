@@ -12,6 +12,16 @@ import (
 	"golang.org/x/sync/singleflight"
 )
 
+// GraphSchemaVersion is the expected version of the GraphQLite graph layout.
+// Incremented when the graph schema changes in a way that requires a forced
+// rebuild on existing deployments. Persisted in meta.graph_schema_version
+// after every successful Rebuild; checked on Open.
+//
+// Version 2: DERIVED_FROM edges carry source_commit + target_commit
+// properties (commit-anchored /incoming + /outgoing); FactVersion subsystem
+// retired.
+const GraphSchemaVersion = "2"
+
 type searchIndex struct {
 	rh *repoHandler
 
@@ -88,6 +98,22 @@ func (si *searchIndex) SyncWatermark(ctx context.Context, branch string) (string
 //  4. Else → DiffFiles(last_commit), upsert added+modified, delete removed.
 //  5. Update meta.last_commit = HEAD.
 func (si *searchIndex) Sync(ctx context.Context, branch string) error {
+	// Detect graph schema mismatch on entry. Older deployments may have a
+	// graph laid out by a previous version; this PR changed the DERIVED_FROM
+	// edge shape, so a forced rebuild is required to bring the graph current.
+	var persistedVer string
+	if err := conn(ctx, si.rh.db).QueryRowContext(ctx,
+		`SELECT value FROM meta WHERE key = 'graph_schema_version'`,
+	).Scan(&persistedVer); err != nil && err != sql.ErrNoRows {
+		return fmt.Errorf("sync: read graph_schema_version: %w", err)
+	}
+	if persistedVer != GraphSchemaVersion {
+		log.Warn().
+			Str("persisted", persistedVer).
+			Str("expected", GraphSchemaVersion).
+			Msg("graph schema version mismatch — run `knomit rebuild` to update the graph layout")
+	}
+
 	// Ensure the branch exists in the branches table.
 	if _, err := si.rh.EnsureBranch(ctx, branch, "refs/heads/"+branch); err != nil {
 		return fmt.Errorf("sync: ensure branch: %w", err)
@@ -218,6 +244,13 @@ func (si *searchIndex) Rebuild(ctx context.Context, branch string, progress Rebu
 		return fmt.Errorf("rebuild: graph: %w", err)
 	}
 	log.Info().Int("graphed", graphed).Str("elapsed", fmt.Sprintf("%.1fs", time.Since(start).Seconds())).Msg("rebuild: phase 3 (graph) complete")
+
+	if _, err := conn(ctx, si.rh.db).ExecContext(ctx,
+		`INSERT OR REPLACE INTO meta(key, value) VALUES ('graph_schema_version', ?)`,
+		GraphSchemaVersion,
+	); err != nil {
+		return fmt.Errorf("rebuild: bump graph schema version: %w", err)
+	}
 
 	return si.setLastCommit(ctx, branch, head)
 }

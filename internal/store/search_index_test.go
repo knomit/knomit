@@ -8,6 +8,24 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// TestRebuild_BumpsGraphSchemaVersion verifies that a successful Rebuild
+// writes meta.graph_schema_version to the current expected value, signalling
+// that the graph layout has been updated to match this binary.
+func TestRebuild_BumpsGraphSchemaVersion(t *testing.T) {
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	defer svc.Close()
+	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+
+	require.NoError(t, svc.Search().(*searchIndex).Rebuild(context.Background(), "main", nil))
+
+	si := svc.Search().(*searchIndex)
+	var version string
+	require.NoError(t, si.rh.db.QueryRow(`SELECT value FROM meta WHERE key = 'graph_schema_version'`).Scan(&version))
+	require.Equal(t, GraphSchemaVersion, version)
+}
+
 // TestRebuildGraph_WritesEdgePerRefEvent verifies that after a full
 // rebuild, the total DERIVED_FROM edge count equals the total number of
 // ref-events in commit_log (added/modified rows × number of local refs
