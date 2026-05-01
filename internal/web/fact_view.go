@@ -86,13 +86,14 @@ func BuildFactView(
 // set depends on whether the anchor is HEAD or a specific commit:
 //
 //	HEAD view:       self, incoming, outgoing, commits, snapshot, parent, branch
-//	Commit-anchored: self, outgoing, commits, live, commit, parent, branch
+//	Commit-anchored: self, incoming, outgoing, commits, live, commit, parent, branch
 //
 // The `parent` link points at the topic node containing this fact.
 // `snapshot` on a HEAD view is the commit-anchored citation pin at the
 // current head sha; it's the only way to get a stable URL out of a HEAD
 // view. On a commit-anchored view, `self` is already the stable URL so
-// `snapshot` is omitted (it would duplicate `self`).
+// `snapshot` is omitted (it would duplicate `self`). `incoming` appears on
+// both shapes: commit-anchored incoming returns the version-aware lineage.
 func buildFactLinks(
 	b hal.URLBuilder,
 	repo string,
@@ -103,13 +104,13 @@ func buildFactLinks(
 	branchURL := b.Branch(repo, hal.Anchor{Branch: a.Branch})
 	links := hal.LinkMap{
 		"self":     {Href: b.Fact(repo, a, path)},
+		"incoming": {Href: b.FactIncoming(repo, a, path)},
 		"outgoing": {Href: b.FactOutgoing(repo, a, path)},
 		"commits":  {Href: b.FactCommits(repo, a, path)},
 		"parent":   {Href: factParentTopic(b, repo, a, path)},
 		"branch":   {Href: branchURL},
 	}
 	if a.IsHEAD() {
-		links["incoming"] = hal.Link{Href: b.FactIncoming(repo, a, path)}
 		if headCommit != "" {
 			snapshotAnchor := hal.Anchor{Branch: a.Branch, Commit: headCommit}
 			links["snapshot"] = hal.Link{Href: b.Fact(repo, snapshotAnchor, path)}

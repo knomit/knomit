@@ -78,27 +78,27 @@ func TestHandleCommitAnchoredFact_ReturnsHALEnvelope(t *testing.T) {
 		t.Errorf("live href %q should not contain /commits/", liveLink.Href)
 	}
 
-	// Commit-anchored views must NOT have incoming link.
-	if _, ok := body.Links["incoming"]; ok {
-		t.Error("commit-anchored view must not expose _links.incoming")
+	// Commit-anchored views must have both incoming and outgoing links.
+	if _, ok := body.Links["incoming"]; !ok {
+		t.Error("missing _links.incoming on commit-anchored view")
 	}
-
-	// Must have outgoing link.
 	if _, ok := body.Links["outgoing"]; !ok {
 		t.Error("missing _links.outgoing")
 	}
 }
 
-// TestHandleCommitAnchoredFact_IncomingReturns404 verifies that hitting
-// /commits/{sha}/facts/.../incoming returns 404 (not 405).
-func TestHandleCommitAnchoredFact_IncomingReturns404(t *testing.T) {
-	reader := &stubFactReader{
-		fact: knomitfact.NewFact("know/a.md"),
-		head: "abc123",
+// TestHandleCommitAnchoredFact_IncomingReturns200 verifies that hitting
+// /commits/{sha}/facts/.../incoming returns a HAL collection (not 404).
+func TestHandleCommitAnchoredFact_IncomingReturns200(t *testing.T) {
+	provider := &stubFactSubProvider{
+		incoming: []store.RefSummary{
+			{Path: "know/b.md", Title: "B", Commit: "abc123"},
+		},
 	}
 	s := &Server{
-		Manager:    newTestManagerWithRepos(t, "alpha"),
-		factReader: reader,
+		Manager:         newTestManagerWithRepos(t, "alpha"),
+		factSubProvider: provider,
+		factReader:      &stubFactReader{readErr: errors.New("should not be called")},
 	}
 	r := s.NewAPIRouter()
 
@@ -107,8 +107,11 @@ func TestHandleCommitAnchoredFact_IncomingReturns404(t *testing.T) {
 		"/repos/alpha/branches/agent:test/commits/abc123/facts/know/a.md/incoming", nil)
 	r.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusNotFound {
-		t.Errorf("status: got %d, want 404", rec.Code)
+	if rec.Code != http.StatusOK {
+		t.Errorf("status: got %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("Content-Type"); got != hal.ContentType {
+		t.Errorf("content-type: %q", got)
 	}
 }
 
@@ -139,10 +142,8 @@ func TestHandleCommitAnchoredFact_NotFound(t *testing.T) {
 // self URL (containing /commits/{sha}/).
 func TestHandleCommitAnchoredOutgoing_ReturnsCollection(t *testing.T) {
 	provider := &stubFactSubProvider{
-		explain: store.ExplainResult{
-			Outgoing: []store.RefSummary{
-				{Path: "know/b.md", Title: "Fact B"},
-			},
+		outgoing: []store.RefSummary{
+			{Path: "know/b.md", Title: "Fact B", Commit: "abc123"},
 		},
 	}
 	s := &Server{
