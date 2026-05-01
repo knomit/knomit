@@ -73,6 +73,15 @@ func (si *searchIndex) resolveTargetCommit(ctx context.Context, branch, refPath,
 // was upserted when refPath was originally indexed at target_commit. The
 // target's blob_hash is the blob in the target_commit's tree for refPath,
 // resolved via repoHandler.readBlobHashAtCommit.
+//
+// IMPORTANT: must be called AFTER the source Fact node's MERGE has been
+// committed. Direct-SQL reads against the GraphQLite EAV tables cannot see
+// nodes MERGE'd via Cypher inside the same *sql.Tx — node IDs only become
+// visible post-commit. This mirrors the rebuildGraphHistory Phase 1.5 /
+// Phase 2 split (see internal/store/search_index.go) and the equivalent
+// caveat on graphSetFactVersionProps. The tx parameter is currently unused
+// for this reason; it is retained in the signature for symmetry with
+// graphSyncFactTx and future call-site flexibility.
 func (si *searchIndex) graphAddDerivedFromAtCommitTx(
 	ctx context.Context,
 	tx execer,
