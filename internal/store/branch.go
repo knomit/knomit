@@ -396,6 +396,26 @@ func (rh *repoHandler) readFileAtCommit(ctx context.Context, path, commitHash st
 	return content, nil
 }
 
+// readBlobHashAtCommit returns the blob hash for path in the git tree at
+// commitHash. Used to bridge (path, commit) → blob_hash when wiring graph
+// edges that point to a specific Fact(path, blob_hash) version.
+func (rh *repoHandler) readBlobHashAtCommit(ctx context.Context, path, commitHash string) (string, error) {
+	hash := plumbing.NewHash(commitHash)
+	commit, err := rh.repo.CommitObject(hash)
+	if err != nil {
+		return "", fmt.Errorf("readBlobHashAtCommit: commit: %w", err)
+	}
+	tree, err := commit.Tree()
+	if err != nil {
+		return "", fmt.Errorf("readBlobHashAtCommit: tree: %w", err)
+	}
+	f, err := tree.File(path)
+	if err != nil {
+		return "", fmt.Errorf("readBlobHashAtCommit: file %q at %s: %w", path, commitHash, err)
+	}
+	return f.Hash.String(), nil
+}
+
 // HeadCommit returns the hash of the tip commit of branch as a hex string.
 func (rh *repoHandler) HeadCommit(ctx context.Context, branch string) (string, error) {
 	hash, err := rh.resolveRef(ctx, branch)
