@@ -6,6 +6,12 @@ import (
 	"knomit/internal/store"
 )
 
+// WithRead delegates to the underlying RepoInstance.WithRead, exposing the
+// store.Service to test code for direct API calls.
+func (b *BranchHandle) WithRead(fn func(*store.Service)) {
+	b.repo.ri.WithRead(fn)
+}
+
 // Drop removes the branch from the repo. Wraps store.Branches().DropBranch
 // which (after production fix in commit ae8c684) deletes both the git ref
 // and the SQLite branches / branch_facts / branch_commits rows. Also

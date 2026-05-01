@@ -108,6 +108,16 @@ func (si *searchIndex) Sync(ctx context.Context, branch string) error {
 		return nil
 	}
 
+	// indexed collects every FactRecord successfully upserted in this sync
+	// pass. After all fact nodes are committed (pass 1), a second pass writes
+	// DERIVED_FROM edges for all of them. This two-pass order is required for
+	// intra-commit refs: when A.md and B.md land in the same git commit and
+	// A.md refs B.md, B.md's Fact node must exist before A.md's outgoing edge
+	// can be wired. Pass 1 commits all nodes; pass 2 retries all edges (with
+	// the dedup guard in graphAddDerivedFromAtCommitTx preventing duplicates
+	// for refs that were already wired successfully in pass 1).
+	var indexed []FactRecord
+
 	if last == "" {
 		// Full rebuild: no previous commit recorded, so index every file.
 		log.Info().Str("head", head[:8]).Msg("index sync: full rebuild (no previous commit)")
@@ -116,8 +126,12 @@ func (si *searchIndex) Sync(ctx context.Context, branch string) error {
 			return fmt.Errorf("sync: list all: %w", err)
 		}
 		for _, path := range paths {
-			if err := si.indexFile(ctx, branch, path, head); err != nil {
+			rec, err := si.indexFile(ctx, branch, path, head)
+			if err != nil {
 				return err
+			}
+			if rec != nil {
+				indexed = append(indexed, *rec)
 			}
 		}
 		log.Info().Int("files", len(paths)).Msg("index sync: full rebuild complete")
@@ -132,8 +146,12 @@ func (si *searchIndex) Sync(ctx context.Context, branch string) error {
 			Int("added", len(added)).Int("modified", len(modified)).Int("deleted", len(deleted)).
 			Msg("index sync: incremental update")
 		for _, path := range append(added, modified...) {
-			if err := si.indexFile(ctx, branch, path, head); err != nil {
+			rec, err := si.indexFile(ctx, branch, path, head)
+			if err != nil {
 				return err
+			}
+			if rec != nil {
+				indexed = append(indexed, *rec)
 			}
 		}
 		for _, path := range deleted {
@@ -141,6 +159,15 @@ func (si *searchIndex) Sync(ctx context.Context, branch string) error {
 				return fmt.Errorf("sync: delete %q: %w", path, err)
 			}
 		}
+	}
+
+	// Pass 2: retry DERIVED_FROM edge writes for every fact indexed above.
+	// This resolves intra-commit refs that were skipped in pass 1 because the
+	// target Fact node had not been committed yet at that point. The dedup
+	// guard in graphAddDerivedFromAtCommitTx makes these calls idempotent —
+	// edges already written in pass 1 are not duplicated.
+	for _, rec := range indexed {
+		si.writePostCommitDerivedFrom(ctx, branch, rec.Path, rec.BlobHash, rec.SourceCommit, rec.Refs)
 	}
 
 	ok, err := si.casLastCommit(ctx, branch, last, head)
@@ -201,10 +228,14 @@ func (si *searchIndex) Rebuild(ctx context.Context, branch string, progress Rebu
 //
 // commitHash is the fallback; if commit_log has a more specific last-touch
 // commit for this path, that is used instead.
-func (si *searchIndex) indexFile(ctx context.Context, branch, path, commitHash string) error {
+//
+// Returns the FactRecord that was upserted, or nil if the file was skipped
+// (not a fact file). The commit stored in FactRecord.SourceCommit is the
+// resolved per-path commit, NOT the fallback passed in.
+func (si *searchIndex) indexFile(ctx context.Context, branch, path, commitHash string) (*FactRecord, error) {
 	content, blobHash, err := si.rh.readFileWithHash(ctx, branch, path)
 	if err != nil {
-		return fmt.Errorf("indexFile: read %s: %w", path, err)
+		return nil, fmt.Errorf("indexFile: read %s: %w", path, err)
 	}
 
 	// Use the most recent non-merge commit that touched this file.
@@ -214,11 +245,12 @@ func (si *searchIndex) indexFile(ctx context.Context, branch, path, commitHash s
 
 	rec, err := parseFact(path, content)
 	if err != nil {
-		return nil // not a fact file (e.g. kb.md manifest, ontology.yaml)
+		return nil, nil // not a fact file (e.g. kb.md manifest, ontology.yaml)
 	}
 	rec.BlobHash = blobHash
+	rec.SourceCommit = commitHash
 
-	return si.upsert(ctx, branch, commitHash, rec)
+	return &rec, si.upsert(ctx, branch, commitHash, rec)
 }
 
 // ── GC ────────────────────────────────────────────────────────────────────────

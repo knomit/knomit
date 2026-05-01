@@ -120,6 +120,18 @@ func (si *searchIndex) graphAddDerivedFromAtCommitTx(
 			continue
 		}
 
+		// Dedup guard: skip if this exact (src→tgt, source_commit, target_commit)
+		// edge already exists. Prevents duplicates when the two-pass sync in
+		// Sync() calls writePostCommitDerivedFrom a second time for intra-batch
+		// refs that succeeded on the first attempt.
+		exists, err := si.graphDerivedFromEdgeExists(ctx, srcID, tgtID, sourceCommit, targetCommit)
+		if err != nil {
+			return fmt.Errorf("graphAddDerivedFromAtCommitTx: dedup check: %w", err)
+		}
+		if exists {
+			continue
+		}
+
 		edgeID, err := si.graphInsertEdgeReturningID(ctx, srcID, tgtID, EdgeDerivedFrom)
 		if err != nil {
 			return fmt.Errorf("graphAddDerivedFromAtCommitTx: insert edge: %w", err)
@@ -132,6 +144,30 @@ func (si *searchIndex) graphAddDerivedFromAtCommitTx(
 		}
 	}
 	return nil
+}
+
+// graphDerivedFromEdgeExists reports whether a DERIVED_FROM edge with the
+// given source_id → target_id and (source_commit, target_commit) properties
+// already exists. Used by graphAddDerivedFromAtCommitTx as a dedup guard to
+// prevent duplicate edges when the two-pass sync retries edge writes for
+// refs that were already successfully wired in pass 1.
+func (si *searchIndex) graphDerivedFromEdgeExists(ctx context.Context, srcID, tgtID int64, sourceCommit, targetCommit string) (bool, error) {
+	var n int
+	err := conn(ctx, si.rh.db).QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM edges e
+		JOIN edge_props_text sc ON sc.edge_id = e.id
+		JOIN property_keys ksc ON ksc.id = sc.key_id AND ksc.key = 'source_commit'
+		JOIN edge_props_text tc ON tc.edge_id = e.id
+		JOIN property_keys ktc ON ktc.id = tc.key_id AND ktc.key = 'target_commit'
+		WHERE e.source_id = ? AND e.target_id = ? AND e.type = ?
+		  AND sc.value = ? AND tc.value = ?
+		LIMIT 1
+	`, srcID, tgtID, EdgeDerivedFrom, sourceCommit, targetCommit).Scan(&n)
+	if err != nil {
+		return false, err
+	}
+	return n > 0, nil
 }
 
 // graphNodeIDByBlob looks up the Fact node id for (path, blob_hash). Both
