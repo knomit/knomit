@@ -53,7 +53,7 @@ func TestResolveTargetCommit(t *testing.T) {
 	c4Res, err := svc.Facts().WriteFact(ctx, branch, "kb/f.md", testFactBody("f", 0.5, []string{"kb/e.md"}), "init f", "")
 	require.NoError(t, err)
 	c4 := c4Res.CommitHash
-	_ = c3
+	require.NotEmpty(t, c3)
 
 	// F's ref to E at c4: first ancestor touching E is c3 (deleted) → not ok.
 	_, ok, err = si.resolveTargetCommit(ctx, branch, "kb/e.md", c4)

@@ -3,7 +3,6 @@ package store
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
 )
 
@@ -30,7 +29,7 @@ func (si *searchIndex) resolveTargetCommit(ctx context.Context, branch, refPath,
 		`SELECT committed_at FROM commit_log WHERE commit_hash = ? LIMIT 1`,
 		sourceCommit,
 	).Scan(&sourceCommittedAt)
-	if errors.Is(err, sql.ErrNoRows) {
+	if err == sql.ErrNoRows {
 		// Source commit isn't in commit_log yet (caller passed an arg before
 		// commit_log is populated, or the arg is invalid). No edges resolvable.
 		return "", false, nil
@@ -47,10 +46,10 @@ func (si *searchIndex) resolveTargetCommit(ctx context.Context, branch, refPath,
 		WHERE bc.branch_id = ?
 		  AND cl.path = ?
 		  AND cl.committed_at <= ?
-		ORDER BY cl.committed_at DESC, cl.rowid DESC
+		ORDER BY cl.committed_at DESC, cl.rowid DESC -- rowid is monotonic (no WITHOUT ROWID)
 		LIMIT 1
 	`, branchID, refPath, sourceCommittedAt).Scan(&targetCommit, &action)
-	if errors.Is(err, sql.ErrNoRows) {
+	if err == sql.ErrNoRows {
 		return "", false, nil
 	}
 	if err != nil {
