@@ -28,6 +28,8 @@ type SearchIndex interface {
 	Stats(ctx context.Context, branch, pathPrefix string) (StatsResult, error)
 	Completions(ctx context.Context, branch, category, prefix string, limit int) ([]string, error)
 	ExplainFact(ctx context.Context, branch, path string) (ExplainResult, error)
+	IncomingAtCommit(ctx context.Context, branch, path, commitHash string) ([]RefSummary, error)
+	OutgoingAtCommit(ctx context.Context, branch, path, commitHash string) ([]RefSummary, error)
 	ClusterFacts(ctx context.Context, branch string, resolution float64, minCommunitySize int) (ClusterResult, error)
 	CachedClusterFacts(ctx context.Context, branch string, resolution float64, minCommunitySize int) (ClusterResult, error)
 	RecentFacts(ctx context.Context, branch, pathPrefix, query string, limit, offset int, includeTypes, excludeTypes, domain, entities, epOps []string) ([]RecentFactEntry, int, error)

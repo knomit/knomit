@@ -14,6 +14,7 @@ import (
 type RefSummary struct {
 	Path    string `json:"path"`
 	Title   string `json:"title"`
+	Commit  string `json:"commit,omitempty"` // source_commit for incoming, target_commit for outgoing
 	Deleted bool   `json:"deleted,omitempty"`
 }
 
