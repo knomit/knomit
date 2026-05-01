@@ -339,19 +339,6 @@ func (si *searchIndex) graphSyncFactTx(ctx context.Context, tx execer, rec FactR
 		return err
 	}
 
-	// 6. Sync DERIVED_FROM edges from local refs (invariant: always matches rec.Refs).
-	var localRefs []string
-	for _, r := range rec.Refs {
-		if !strings.HasPrefix(r, "http://") && !strings.HasPrefix(r, "https://") {
-			localRefs = append(localRefs, r)
-		}
-	}
-	if len(localRefs) > 0 {
-		if err := si.graphAddDerivedFromTx(ctx, tx, rec.Path, rec.BlobHash, localRefs); err != nil {
-			return fmt.Errorf("graph sync derived_from: %w", err)
-		}
-	}
-
 	return nil
 }
 
@@ -445,27 +432,6 @@ func (si *searchIndex) graphDeleteFactTx(ctx context.Context, tx execer, path, b
 	return nil
 }
 
-// graphAddDerivedFromTx creates DERIVED_FROM edges from a new fact version to
-// its source facts. The source (new fact) is matched by {path, blob_hash}; the
-// target is matched by path only (any version at that path).
-//
-// GraphQLite bug: when the target node is absent, MATCH degenerates and MERGE
-// creates a self-loop (n)-[:DERIVED_FROM]->(n). We accept this and filter
-// self-loops at query time in ExplainFact instead of pre-checking (which would
-// silently drop valid edges when facts are indexed in different orders during
-// rebuild).
-func (si *searchIndex) graphAddDerivedFromTx(ctx context.Context, tx execer, newPath, newBlobHash string, sourcePaths []string) error {
-	np := escapeCypherKey(newPath)
-	nbh := escapeCypherKey(newBlobHash)
-	for _, src := range sourcePaths {
-		sp := escapeCypherKey(src)
-		q := fmt.Sprintf(`SELECT cypher('MATCH (n:%s {path: "%s"}), (s:%s {path: "%s"}) WHERE n.blob_hash = "%s" MERGE (n)-[:%s]->(s)')`, NodeFact, np, NodeFact, sp, nbh, EdgeDerivedFrom)
-		if _, err := tx.Exec(q); err != nil {
-			return fmt.Errorf("graph derived_from %s→%s: %w", newPath, src, err)
-		}
-	}
-	return nil
-}
 
 const (
 	knnK         = 10   // top-K nearest neighbors per fact

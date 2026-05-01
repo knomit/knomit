@@ -30,6 +30,7 @@ type FactRecord struct {
 	Sources        int      `json:"sources"`
 	Refs           []string `json:"refs"`
 	EvidenceWeight float64  `json:"evidence_weight,omitempty"`
+	SourceCommit   string   `json:"source_commit,omitempty"` // commit at which this version was written
 }
 
 // NewFactRecord constructs a FactRecord from a parsed fact and git metadata.
