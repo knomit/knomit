@@ -115,8 +115,8 @@ func (si *searchIndex) graphAddDerivedFromAtCommitTx(
 		if tgtID == 0 {
 			// Target Fact node missing despite resolveTargetCommit succeeding.
 			// Indicates an indexing race or stale state; skip rather than fail.
-			log.Warn().Str("branch", branch).Str("ref", refPath).Str("target_commit", targetCommit).
-				Msg("graphAddDerivedFromAtCommitTx: target Fact node not found, skipping edge (indexing race or stale state)")
+			log.Debug().Str("branch", branch).Str("ref", refPath).Str("target_commit", targetCommit).
+				Msg("graphAddDerivedFromAtCommitTx: target Fact node not found, skipping (likely intra-commit ordering — Sync pass 2 will retry)")
 			continue
 		}
 

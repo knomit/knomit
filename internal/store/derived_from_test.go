@@ -99,8 +99,9 @@ func TestGraphAddDerivedFromAtCommitTx_WritesEdgeWithBothCommits(t *testing.T) {
 
 	si := svc.Search().(*searchIndex)
 
-	// TODO(Task 4): remove this clear-out once graphSyncFactTx no longer
-	// auto-writes DERIVED_FROM edges via the legacy graphAddDerivedFromTx.
+	// Reset DERIVED_FROM edges written by the upsert pipeline so we can
+	// verify graphAddDerivedFromAtCommitTx's standalone behaviour without
+	// the auto-wired edges interfering with the assertions below.
 	_, err = si.rh.db.Exec(`DELETE FROM edge_props_text WHERE edge_id IN (SELECT id FROM edges WHERE type = ?)`, EdgeDerivedFrom)
 	require.NoError(t, err)
 	_, err = si.rh.db.Exec(`DELETE FROM edges WHERE type = ?`, EdgeDerivedFrom)
@@ -186,8 +187,9 @@ func TestGraphAddDerivedFromAtCommitTx_SkipsForwardBroken(t *testing.T) {
 
 	si := svc.Search().(*searchIndex)
 
-	// TODO(Task 4): remove this clear-out once graphSyncFactTx no longer
-	// auto-writes DERIVED_FROM edges via the legacy graphAddDerivedFromTx.
+	// Reset DERIVED_FROM edges written by the upsert pipeline so we can
+	// verify graphAddDerivedFromAtCommitTx's standalone behaviour without
+	// the auto-wired edges interfering with the assertions below.
 	_, err = si.rh.db.Exec(`DELETE FROM edge_props_text WHERE edge_id IN (SELECT id FROM edges WHERE type = ?)`, EdgeDerivedFrom)
 	require.NoError(t, err)
 	_, err = si.rh.db.Exec(`DELETE FROM edges WHERE type = ?`, EdgeDerivedFrom)
