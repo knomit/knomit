@@ -27,9 +27,8 @@ func (si *searchIndex) graphInsertEdgeReturningID(ctx context.Context, sourceID,
 }
 
 // graphSetEdgeProps writes text-typed properties on an edge via the EAV
-// table edge_props_text. Mirrors graphSetFactVersionProps for nodes:
-// GraphQLite's MATCH+SET does not persist EAV writes inside *sql.Tx, so we
-// bypass Cypher and INSERT OR REPLACE directly.
+// table edge_props_text. GraphQLite's MATCH+SET does not persist EAV writes
+// inside *sql.Tx, so we bypass Cypher and INSERT OR REPLACE directly.
 func (si *searchIndex) graphSetEdgeProps(ctx context.Context, edgeID int64, props map[string]string) error {
 	db := conn(ctx, si.rh.db)
 	for key, value := range props {

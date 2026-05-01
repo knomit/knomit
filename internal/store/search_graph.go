@@ -253,7 +253,6 @@ const (
 	NodeEntity       = "Entity"
 	NodeDomain       = "Domain"
 	NodeOntologyNode = "OntologyNode"
-	NodeFactVersion  = "FactVersion" // historical snapshot of a Fact at a specific commit
 )
 
 // Edge types used in GraphQLite Cypher queries.
@@ -265,7 +264,6 @@ const (
 	EdgeSimilarTo       = "SIMILAR_TO"        // Fact ↔ Fact (KNN similarity)
 	EdgeDomainChildOf   = "DOMAIN_CHILD_OF"   // Domain → Domain (hierarchy)
 	EdgeOntologyChildOf = "ONTOLOGY_CHILD_OF" // OntologyNode → OntologyNode (hierarchy)
-	EdgePrevVersion     = "PREV_VERSION"      // FactVersion → older FactVersion (same path)
 )
 
 // graphSyncFact creates or updates graph nodes and node-edge relationships
@@ -799,16 +797,6 @@ func escapeCypherVal(s string) string {
 	return s
 }
 
-// ── History graph phase ───────────────────────────────────────────────────────
-// History graph phase: creates FactVersion nodes from commit_log entries,
-// linking them with PREV_VERSION chains and DERIVED_FROM edges.
-//
-// GraphQLite limitation: MATCH (a:L {p1: "x"}), (b:L {p1: "y"}) does not
-// correctly find two distinct nodes of the same label by property values — it
-// degenerates into a self-loop (a)-[:R]->(a). To work around this, PREV_VERSION
-// and DERIVED_FROM edges are created via direct SQL INSERT INTO edges after
-// looking up node IDs through the EAV property tables.
-
 // graphNodeIDByProp returns the node ID for a node with the given label, where
 // the property named propKey equals propVal. Returns 0 if not found.
 func (si *searchIndex) graphNodeIDByProp(ctx context.Context, label, propKey, propVal string) (int64, error) {
@@ -837,75 +825,3 @@ func (si *searchIndex) graphInsertEdge(ctx context.Context, sourceID, targetID i
 	return err
 }
 
-// graphSyncFactVersionTx creates a FactVersion node (MERGE only) within the
-// given transaction. Properties (title, committed_at) must be set after the
-// transaction commits via graphSetFactVersionProps, because GraphQLite's
-// MATCH+SET does not persist to EAV tables when executed inside a *sql.Tx.
-func (si *searchIndex) graphSyncFactVersionTx(ctx context.Context, tx execer, commitHash string, rec FactRecord, committedAt int64) error {
-	p := escapeCypherKey(rec.Path)
-	ch := escapeCypherKey(commitHash)
-
-	// MERGE the FactVersion node (identity props only).
-	q := fmt.Sprintf(`SELECT cypher('MERGE (v:%s {path: "%s", commit_hash: "%s"})')`,
-		NodeFactVersion, p, ch)
-	if _, err := tx.Exec(q); err != nil {
-		return fmt.Errorf("graphSyncFactVersionTx: merge node: %w", err)
-	}
-	return nil
-}
-
-// graphSetFactVersionProps sets title and committed_at on an existing FactVersion
-// node via direct SQL INSERTs into the EAV tables. GraphQLite's MATCH+SET
-// silently drops property writes (confirmed: title/committed_at never appear
-// in node_props_text or node_props_real after a Cypher SET), so we bypass
-// Cypher entirely and INSERT directly into the EAV tables.
-//
-// Must be called after the transaction that created the node has committed,
-// because node IDs are only visible post-commit.
-func (si *searchIndex) graphSetFactVersionProps(ctx context.Context, commitHash string, rec FactRecord, committedAt int64) error {
-	nodeID, err := si.graphNodeIDByProp(ctx, NodeFactVersion, "commit_hash", commitHash)
-	if err != nil || nodeID == 0 {
-		return fmt.Errorf("graphSetFactVersionProps: node not found for commit_hash=%s: %w", commitHash, err)
-	}
-
-	// Ensure property key IDs exist, then upsert values into EAV tables.
-	type textProp struct {
-		key   string
-		value string
-	}
-	for _, p := range []textProp{
-		{"title", rec.Title},
-	} {
-		// Ensure property_key row exists.
-		if _, err := conn(ctx, si.rh.db).ExecContext(ctx, `INSERT OR IGNORE INTO property_keys(key) VALUES (?)`, p.key); err != nil {
-			return fmt.Errorf("graphSetFactVersionProps: ensure key %s: %w", p.key, err)
-		}
-		var keyID int64
-		if err := conn(ctx, si.rh.db).QueryRowContext(ctx, `SELECT id FROM property_keys WHERE key = ?`, p.key).Scan(&keyID); err != nil {
-			return fmt.Errorf("graphSetFactVersionProps: get key_id for %s: %w", p.key, err)
-		}
-		if _, err := conn(ctx, si.rh.db).ExecContext(ctx,
-			`INSERT OR REPLACE INTO node_props_text(node_id, key_id, value) VALUES (?, ?, ?)`,
-			nodeID, keyID, p.value,
-		); err != nil {
-			return fmt.Errorf("graphSetFactVersionProps: set text prop %s: %w", p.key, err)
-		}
-	}
-
-	// committed_at is an integer; store in node_props_real (GraphQLite uses REAL for numbers).
-	if _, err := conn(ctx, si.rh.db).ExecContext(ctx, `INSERT OR IGNORE INTO property_keys(key) VALUES (?)`, "committed_at"); err != nil {
-		return fmt.Errorf("graphSetFactVersionProps: ensure key committed_at: %w", err)
-	}
-	var caKeyID int64
-	if err := conn(ctx, si.rh.db).QueryRowContext(ctx, `SELECT id FROM property_keys WHERE key = 'committed_at'`).Scan(&caKeyID); err != nil {
-		return fmt.Errorf("graphSetFactVersionProps: get key_id for committed_at: %w", err)
-	}
-	if _, err := conn(ctx, si.rh.db).ExecContext(ctx,
-		`INSERT OR REPLACE INTO node_props_real(node_id, key_id, value) VALUES (?, ?, ?)`,
-		nodeID, caKeyID, committedAt,
-	); err != nil {
-		return fmt.Errorf("graphSetFactVersionProps: set committed_at: %w", err)
-	}
-
-	return nil
-}

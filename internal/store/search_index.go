@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -191,14 +190,6 @@ func (si *searchIndex) Rebuild(ctx context.Context, branch string, progress Rebu
 		return fmt.Errorf("rebuild: graph: %w", err)
 	}
 	log.Info().Int("graphed", graphed).Str("elapsed", fmt.Sprintf("%.1fs", time.Since(start).Seconds())).Msg("rebuild: phase 3 (graph) complete")
-
-	// Phase 4: history (FactVersion nodes from commit_log)
-	start = time.Now()
-	versioned, err := si.rebuildGraphHistory(ctx, branch, progress)
-	if err != nil {
-		return fmt.Errorf("rebuild: history: %w", err)
-	}
-	log.Info().Int("versions", versioned).Str("elapsed", fmt.Sprintf("%.1fs", time.Since(start).Seconds())).Msg("rebuild: phase 4 (history) complete")
 
 	return si.setLastCommit(ctx, branch, head)
 }
@@ -737,155 +728,3 @@ func (si *searchIndex) rebuildGraph(ctx context.Context, progress RebuildProgres
 	return total, nil
 }
 
-// rebuildGraphHistory creates FactVersion nodes for every (path, commit_hash)
-// row in commit_log. Versions of the same path are chained newest→oldest via
-// PREV_VERSION. Each version's refs (local paths only) get DERIVED_FROM edges
-// to the corresponding Fact node. Deleted entries are skipped.
-//
-// Returns the number of FactVersion nodes successfully created.
-func (si *searchIndex) rebuildGraphHistory(ctx context.Context, branch string, progress RebuildProgress) (int, error) {
-	rows, err := conn(ctx, si.rh.db).QueryContext(ctx, `
-		SELECT path, commit_hash, committed_at
-		FROM commit_log
-		WHERE action != 'deleted'
-		ORDER BY path ASC, committed_at ASC
-	`)
-	if err != nil {
-		return 0, fmt.Errorf("rebuildGraphHistory: query: %w", err)
-	}
-
-	type versionRow struct {
-		path, commitHash string
-		committedAt      int64
-	}
-	var versions []versionRow
-	for rows.Next() {
-		var v versionRow
-		if err := rows.Scan(&v.path, &v.commitHash, &v.committedAt); err != nil {
-			rows.Close()
-			return 0, fmt.Errorf("rebuildGraphHistory: scan: %w", err)
-		}
-		versions = append(versions, v)
-	}
-	rows.Close()
-
-	total := len(versions)
-	if progress != nil {
-		progress("history", 0, total)
-	}
-
-	// Phase 1: create all FactVersion nodes in a single transaction.
-	// Edges and property SETs must be applied after commit: node IDs are only
-	// visible post-commit, and GraphQLite MATCH+SET doesn't persist EAV properties
-	// inside a *sql.Tx.
-	type prevEdge struct {
-		newerHash, olderHash string
-	}
-	type createdVersion struct {
-		path, commitHash string
-		refs             []string
-		rec              FactRecord
-		committedAt      int64
-	}
-
-	tx, err := si.rh.db.BeginTx(ctx, nil)
-	if err != nil {
-		return 0, fmt.Errorf("rebuildGraphHistory: begin tx: %w", err)
-	}
-	defer tx.Rollback()
-
-	done := 0
-	prevByPath := make(map[string]string)         // path → previous commit_hash
-	prevEdgesByPath := make(map[string][]prevEdge) // path → edges to create
-	var created []createdVersion
-
-	for _, v := range versions {
-		content, err := si.rh.readFileAtCommit(ctx, v.path, v.commitHash)
-		if err != nil {
-			log.Debug().Err(err).Str("path", v.path).Str("commit", v.commitHash[:8]).Msg("rebuildGraphHistory: skip (file not found at commit)")
-			continue
-		}
-
-		rec, err := parseFact(v.path, content)
-		if err != nil {
-			log.Debug().Err(err).Str("path", v.path).Msg("rebuildGraphHistory: skip (parse failed)")
-			continue
-		}
-
-		if err := si.graphSyncFactVersionTx(ctx, tx, v.commitHash, rec, v.committedAt); err != nil {
-			log.Warn().Err(err).Str("path", v.path).Str("commit", v.commitHash[:8]).Msg("rebuildGraphHistory: sync version failed, skipping")
-			continue
-		}
-
-		if prev, ok := prevByPath[v.path]; ok {
-			prevEdgesByPath[v.path] = append(prevEdgesByPath[v.path], prevEdge{v.commitHash, prev})
-		}
-		prevByPath[v.path] = v.commitHash
-
-		var localRefs []string
-		for _, ref := range rec.Refs {
-			if !strings.HasPrefix(ref, "http://") && !strings.HasPrefix(ref, "https://") {
-				localRefs = append(localRefs, ref)
-			}
-		}
-		created = append(created, createdVersion{v.path, v.commitHash, localRefs, rec, v.committedAt})
-		done++
-	}
-
-	if err := tx.Commit(); err != nil {
-		return 0, fmt.Errorf("rebuildGraphHistory: commit nodes tx: %w", err)
-	}
-
-	if progress != nil {
-		progress("history", done, total)
-	}
-
-	// Phase 1.5: set title and committed_at on each FactVersion node now that
-	// the transaction has committed. GraphQLite MATCH+SET does not persist EAV
-	// properties when executed inside a *sql.Tx, so this must run post-commit.
-	for _, cv := range created {
-		if err := si.graphSetFactVersionProps(ctx, cv.commitHash, cv.rec, cv.committedAt); err != nil {
-			log.Warn().Err(err).Str("path", cv.path).Str("commit", cv.commitHash[:8]).Msg("rebuildGraphHistory: set props failed")
-		}
-	}
-
-	// Phase 2: create PREV_VERSION and DERIVED_FROM edges via direct SQL.
-	// GraphQLite's two-node MATCH-MERGE pattern creates self-loops when both
-	// nodes share the same label, so we look up node IDs directly and INSERT.
-	for path, edges := range prevEdgesByPath {
-		for _, e := range edges {
-			newerID, err := si.graphNodeIDByProp(ctx, NodeFactVersion, "commit_hash", e.newerHash)
-			if err != nil || newerID == 0 {
-				log.Warn().Str("path", path).Str("commit", e.newerHash[:8]).Msg("rebuildGraphHistory: newer node not found for PREV_VERSION")
-				continue
-			}
-			olderID, err := si.graphNodeIDByProp(ctx, NodeFactVersion, "commit_hash", e.olderHash)
-			if err != nil || olderID == 0 {
-				log.Warn().Str("path", path).Str("commit", e.olderHash[:8]).Msg("rebuildGraphHistory: older node not found for PREV_VERSION")
-				continue
-			}
-			if err := si.graphInsertEdge(ctx, newerID, olderID, EdgePrevVersion); err != nil {
-				log.Warn().Err(err).Str("path", path).Msg("rebuildGraphHistory: PREV_VERSION insert failed")
-			}
-		}
-	}
-
-	for _, cv := range created {
-		versionID, err := si.graphNodeIDByProp(ctx, NodeFactVersion, "commit_hash", cv.commitHash)
-		if err != nil || versionID == 0 {
-			continue
-		}
-		for _, ref := range cv.refs {
-			targetID, err := si.graphNodeIDByProp(ctx, NodeFact, "path", ref)
-			if err != nil || targetID == 0 {
-				// Target Fact node doesn't exist — skip (no self-loop risk with direct SQL).
-				continue
-			}
-			if err := si.graphInsertEdge(ctx, versionID, targetID, EdgeDerivedFrom); err != nil {
-				log.Warn().Err(err).Str("ref", ref).Msg("rebuildGraphHistory: DERIVED_FROM insert failed")
-			}
-		}
-	}
-
-	return done, nil
-}

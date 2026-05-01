@@ -742,21 +742,13 @@ func (s *Service) deleteGraphFactNodeForTest(path, blobHash string) error {
 // The graphqlite model is intentionally a permanent temporal graph:
 //   - Soft-deleted Fact nodes (deleted = true) persist forever after
 //     graphDeleteFact runs, preserving lineage for DERIVED_FROM walks.
-//   - FactVersion nodes (one per fact-at-commit) also persist forever as
-//     the historical snapshot layer.
 //
 // This check explicitly scopes itself to LIVE Fact nodes. Soft-deleted
-// nodes and FactVersion nodes are out of scope.
+// nodes are out of scope.
 //
 // This check is global (not branch-scoped) because facts and graph Fact
 // nodes have no branch dimension — both are deduplicated by (path, blob_hash)
 // via the COW model.
-//
-// TODO(verify): extend to FactVersion node parity against commit history.
-// Every (path, commit_hash) pair where a fact was visible on some branch
-// should have a matching FactVersion node. Requires walking commit history
-// per branch and correlating, which is significantly more expensive than
-// the current check.
 //
 // TODO(verify): extend to Entity, Domain, OntologyNode parity once the
 // basic Fact-node check is stable.
