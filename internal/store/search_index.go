@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -185,7 +186,7 @@ func (si *searchIndex) Rebuild(ctx context.Context, branch string, progress Rebu
 
 	// Phase 3: graph
 	start = time.Now()
-	graphed, err := si.rebuildGraph(ctx, progress)
+	graphed, err := si.rebuildGraph(ctx, branch, progress)
 	if err != nil {
 		return fmt.Errorf("rebuild: graph: %w", err)
 	}
@@ -388,6 +389,14 @@ func (si *searchIndex) rebuildFacts(ctx context.Context, branch, head string, pr
 	}
 	if err := tx.Commit(); err != nil {
 		return 0, fmt.Errorf("rebuildFacts: commit entries: %w", err)
+	}
+
+	// Clear branch_facts for this branch before replacing facts rows.
+	// INSERT OR REPLACE on facts does DELETE+INSERT (changes the row id), which
+	// would violate the branch_facts FK if any row still references the old id.
+	// The INSERT OR REPLACE INTO branch_facts below repopulates them.
+	if _, err := conn(ctx, si.rh.db).ExecContext(ctx, `DELETE FROM branch_facts WHERE branch_id = ?`, branchID); err != nil {
+		return 0, fmt.Errorf("rebuildFacts: clear branch_facts: %w", err)
 	}
 
 	// Bulk INSERT OR REPLACE facts from parsed blob data (no commit_hash in facts table).
@@ -608,7 +617,7 @@ func (si *searchIndex) rebuildEmbeddings(ctx context.Context, progress RebuildPr
 
 // rebuildGraph syncs graph nodes/edges for all facts in a single transaction,
 // then builds similarity edges after commit.
-func (si *searchIndex) rebuildGraph(ctx context.Context, progress RebuildProgress) (int, error) {
+func (si *searchIndex) rebuildGraph(ctx context.Context, branch string, progress RebuildProgress) (int, error) {
 	// Read all facts ordered by oldest commit first so that when a fact's
 	// DERIVED_FROM edges are created, its ref targets are already graph nodes.
 	rows, err := conn(ctx, si.rh.db).QueryContext(ctx, `
@@ -663,6 +672,75 @@ func (si *searchIndex) rebuildGraph(ctx context.Context, progress RebuildProgres
 
 	if err := tx.Commit(); err != nil {
 		return 0, fmt.Errorf("rebuildGraph: commit: %w", err)
+	}
+
+	// Phase B: walk commit_log to write DERIVED_FROM edges per ref-event.
+	// Each (commit_hash, path, action != 'deleted') tuple is one ref-event:
+	// the version of `path` committed at `commit_hash` had its blob's refs
+	// asserted at that time. We resolve each ref's target via
+	// resolveTargetCommit (called from inside graphAddDerivedFromAtCommitTx).
+	//
+	// Runs POST-commit because graphAddDerivedFromAtCommitTx uses direct-SQL
+	// reads against the GraphQLite EAV tables, which cannot see Fact nodes
+	// MERGE'd via Cypher inside the same *sql.Tx.
+	//
+	// We pass si.rh.db as the execer to satisfy the helper's signature; the
+	// helper's tx parameter is currently inert (see its doc comment).
+	clRows, err := conn(ctx, si.rh.db).QueryContext(ctx, `
+	    SELECT cl.commit_hash, cl.path
+	    FROM commit_log cl
+	    JOIN branch_commits bc ON bc.commit_hash = cl.commit_hash
+	    WHERE bc.branch_id = (SELECT id FROM branches WHERE name = ?)
+	      AND cl.action != 'deleted'
+	    ORDER BY cl.committed_at ASC, cl.rowid ASC
+	`, branch)
+	if err != nil {
+		return total, fmt.Errorf("rebuildGraph phaseB: query commit_log: %w", err)
+	}
+	type historicalRow struct {
+		commitHash string
+		path       string
+	}
+	var rows2 []historicalRow
+	for clRows.Next() {
+		var r historicalRow
+		if err := clRows.Scan(&r.commitHash, &r.path); err != nil {
+			clRows.Close()
+			return total, fmt.Errorf("rebuildGraph phaseB: scan: %w", err)
+		}
+		rows2 = append(rows2, r)
+	}
+	clRows.Close()
+
+	for _, r := range rows2 {
+		content, err := si.rh.readFileAtCommit(ctx, r.path, r.commitHash)
+		if err != nil {
+			log.Debug().Err(err).Str("path", r.path).Str("commit", r.commitHash[:8]).Msg("rebuildGraph phaseB: skip (file not at commit)")
+			continue
+		}
+		rec, err := parseFact(r.path, content)
+		if err != nil {
+			log.Debug().Err(err).Str("path", r.path).Msg("rebuildGraph phaseB: skip (parse failed)")
+			continue
+		}
+		blobHash, err := si.rh.readBlobHashAtCommit(ctx, r.path, r.commitHash)
+		if err != nil {
+			log.Warn().Err(err).Str("path", r.path).Str("commit", r.commitHash[:8]).Msg("rebuildGraph phaseB: blob_hash lookup failed")
+			continue
+		}
+
+		var localRefs []string
+		for _, ref := range rec.Refs {
+			if !strings.HasPrefix(ref, "http://") && !strings.HasPrefix(ref, "https://") {
+				localRefs = append(localRefs, ref)
+			}
+		}
+		if len(localRefs) == 0 {
+			continue
+		}
+		if err := si.graphAddDerivedFromAtCommitTx(ctx, si.rh.db, branch, r.path, blobHash, r.commitHash, localRefs); err != nil {
+			log.Warn().Err(err).Str("path", r.path).Str("commit", r.commitHash[:8]).Msg("rebuildGraph phaseB: edge write failed")
+		}
 	}
 
 	// Build similarity edges after commit (needs committed data for KNN).
