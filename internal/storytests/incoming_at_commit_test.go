@@ -122,4 +122,61 @@ func TestIncomingAtCommit_StoryScenarios(t *testing.T) {
 		view.MustHaveItem("kb/d.md", cD1.Commit)
 		view.MustHaveItem("kb/d.md", cD2.Commit)
 	})
+
+	// Scenario 8 — covers the topological vs committed_at divergence
+	// flagged in .claude/plans/2026-05-01-topological-ordering-followup.md.
+	//
+	// Setup:
+	//   main:  cM1 (add E v1) → cM2 (modify E to v2-main)
+	//   agent: forked from cM1; cB1 modifies E to v2-branch AND adds F.
+	//
+	// main then merges agent with StrategyLocalWins. The merge:
+	//   - For E: both sides changed it relative to base (cM1) → conflict;
+	//     LocalWins keeps main's version (E stays at cM2's content). The
+	//     merge commit's diff against parent[0]=cM2 has NO row for E in
+	//     commit_log, because E didn't change relative to cM2.
+	//   - For F: only src added → applied. Merge commit DOES change tree.
+	//
+	// After merge, main's branch_commits includes cB1. A new fact G
+	// written on main with refs=[kb/e.md] must resolve target_commit to
+	// cM2 (main's first-parent active version of E), NOT cB1 (which is
+	// reachable but is on the merged-in branch's history, not main's
+	// first-parent line).
+	//
+	// committed_at-based resolver picks cB1 (highest committed_at among
+	// commit_log rows touching E in branch_commits(main)). The
+	// topological resolver picks cM2 by walking M → cM2 along first-parent.
+	t.Run("8_merge_with_local_wins_topological_resolution", func(t *testing.T) {
+		sb := testenv.NewStoryboard(t)
+		repo := sb.Repo("alpha")
+		mainB := repo.Branch("main")
+
+		_ = mainB.Write("kb/e.md", testenv.Fact("e v1"), "init e")
+		// Fork agent/b from main NOW (at cM1), before main makes its
+		// local change to E. agent/b will then diverge.
+		fb := repo.BranchFrom("agent/b", "main")
+
+		cM2 := mainB.Write("kb/e.md", testenv.Fact("e v2-main"), "modify e on main")
+
+		// On agent/b: modify E (will conflict with main) AND add F (no
+		// conflict, ensures merge isn't a no-op).
+		_ = fb.Batch("modify e + add f on agent/b", func(w *testenv.BatchWriter) {
+			w.Write("kb/e.md", testenv.Fact("e v2-branch"))
+			w.Write("kb/f.md", testenv.Fact("f"))
+		})
+
+		// Merge agent/b into main with StrategyLocalWins. Conflict on E
+		// resolves in main's favour (E stays at cM2 content); F is added.
+		_ = mainB.MergeFrom(fb, store.StrategyLocalWins)
+
+		// Write G on main referencing E. Topologically-correct target is
+		// cM2 (main's active E along first-parent line).
+		cG := mainB.Write("kb/g.md", testenv.Fact("g").Refs("kb/e.md"), "g→e")
+
+		// G's outgoing edge for kb/e.md must target cM2 — NOT cB1
+		// (committed_at would pick cB1 because it's wall-clock-newer and
+		// reachable on main post-merge).
+		out := cG.Fact("kb/g.md").Outgoing()
+		out.MustHaveOnly("kb/e.md", cM2.Commit)
+	})
 }

@@ -396,6 +396,24 @@ func (rh *repoHandler) readFileAtCommit(ctx context.Context, path, commitHash st
 	return content, nil
 }
 
+// firstParentCommit returns the first parent of commitHash, or "" if
+// commitHash is a root commit. For merge commits, this returns the "ours"
+// side (parent[0]) — the branch that was checked out when the merge was
+// performed. Walking first-parent traces a single branch's local history,
+// which is what the time-aware DERIVED_FROM resolver needs to find the
+// "active version of path P at commit C on branch B" without being
+// confused by versions merged in from sibling branches.
+func (rh *repoHandler) firstParentCommit(ctx context.Context, commitHash string) (string, error) {
+	commit, err := rh.repo.CommitObject(plumbing.NewHash(commitHash))
+	if err != nil {
+		return "", fmt.Errorf("firstParentCommit: %s: %w", commitHash, err)
+	}
+	if commit.NumParents() == 0 {
+		return "", nil
+	}
+	return commit.ParentHashes[0].String(), nil
+}
+
 // readBlobHashAtCommit returns the blob hash for path in the git tree at
 // commitHash. Used to bridge (path, commit) → blob_hash when wiring graph
 // edges that point to a specific Fact(path, blob_hash) version.

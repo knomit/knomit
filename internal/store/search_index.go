@@ -752,11 +752,10 @@ func (si *searchIndex) rebuildGraph(ctx context.Context, branch string, progress
 	// We pass si.rh.db as the execer to satisfy the helper's signature; the
 	// helper's tx parameter is currently inert (see its doc comment).
 	//
-	// TODO(topo-ordering): orders commit_log by `committed_at` rather than
-	// performing a true first-parent topological walk from branch HEAD. Same
-	// caveat as resolveTargetCommit: correct on linear branches; can resolve
-	// edges in the wrong order on branches with merges. See
-	// .claude/plans/2026-05-01-topological-ordering-followup.md.
+	// Outer ordering by committed_at is for write-order convenience only;
+	// each ref's target_commit is resolved independently by
+	// resolveTargetCommit's first-parent topological walk, so the outer
+	// order does not affect correctness on branches with merge commits.
 	clRows, err := conn(ctx, si.rh.db).QueryContext(ctx, `
 	    SELECT cl.commit_hash, cl.path
 	    FROM commit_log cl

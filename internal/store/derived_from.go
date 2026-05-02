@@ -8,66 +8,79 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// resolveTargetCommit walks ancestors of sourceCommit on the given branch
-// looking for the FIRST commit_log row that touches refPath, and returns
-// (commit_hash, ok=true) if that row's action is "added" or "modified".
-// Returns ("", false, nil) if no ancestor touches refPath, or if the first
-// ancestor that touches it has action="deleted" — both are skip-the-edge
-// cases per design spec write-path step 2.
+// resolveTargetCommit walks first-parent ancestry of sourceCommit on the
+// given branch looking for the FIRST commit (in topological order) that
+// touches refPath, and returns (commit_hash, ok=true) if that row's action
+// is "added" or "modified". Returns ("", false, nil) if no ancestor touches
+// refPath, or if the closest ancestor that touches it has action="deleted"
+// — both are skip-the-edge cases per design spec write-path step 2.
 //
-// The walk uses commit_log + branch_commits to constrain to the branch's
-// ancestry; the result is the most recent commit on the branch with
-// committed_at <= committed_at(sourceCommit) that touches refPath. This
-// honours git topology by filtering through branch_commits, which is
-// populated by walking parents from the branch ref.
+// First-parent ancestry (NOT wall-clock committed_at ordering) is the
+// correct semantic for "the active version of refPath on this branch at
+// sourceCommit". On a branch containing merge commits from sibling
+// branches, wall-clock ordering can pick a sibling-branch commit as the
+// "most recent" touch even when the local first-parent line carries a
+// later authoritative version (e.g. when a merge resolved a conflict in
+// the local side's favour, leaving no commit_log row at the merge commit).
+//
+// The walk stops at: the first row whose action is added/modified/deleted
+// for refPath; the root commit (no parent); or the first parent that
+// leaves the branch (parent ∉ branch_commits(B)).
+//
+// Performance: each step does one git CommitObject lookup + one indexed
+// SQL query against commit_log. For branches where most refs target
+// frequently-modified facts the walk is O(1) per ref. For long-stable
+// targets it's O(commits-since-last-touch). An in-process cache keyed by
+// (refPath, sourceCommit) per ingest call is a possible optimisation if
+// this becomes hot.
 func (si *searchIndex) resolveTargetCommit(ctx context.Context, branch, refPath, sourceCommit string) (string, bool, error) {
 	branchID, err := si.rh.branchID(ctx, branch)
 	if err != nil {
 		return "", false, fmt.Errorf("resolveTargetCommit: branchID: %w", err)
 	}
 
-	var sourceCommittedAt int64
-	err = conn(ctx, si.rh.db).QueryRowContext(ctx,
-		`SELECT committed_at FROM commit_log WHERE commit_hash = ? LIMIT 1`,
-		sourceCommit,
-	).Scan(&sourceCommittedAt)
-	if err == sql.ErrNoRows {
-		// Source commit isn't in commit_log yet (caller passed an arg before
-		// commit_log is populated, or the arg is invalid). No edges resolvable.
-		return "", false, nil
-	}
-	if err != nil {
-		return "", false, fmt.Errorf("resolveTargetCommit: source committed_at: %w", err)
-	}
+	cur := sourceCommit
+	for cur != "" {
+		// Is `cur` reachable on this branch? If not (we walked off the
+		// branch by following first-parent into a foreign-branch ancestor),
+		// stop the walk.
+		var onBranch int
+		err := conn(ctx, si.rh.db).QueryRowContext(ctx,
+			`SELECT 1 FROM branch_commits WHERE branch_id = ? AND commit_hash = ?`,
+			branchID, cur,
+		).Scan(&onBranch)
+		if err == sql.ErrNoRows {
+			return "", false, nil
+		}
+		if err != nil {
+			return "", false, fmt.Errorf("resolveTargetCommit: branch_commits: %w", err)
+		}
 
-	// TODO(topo-ordering): this uses `committed_at` ordering as a v1 stand-in
-	// for a true first-parent ancestor walk. Correct on linear branches; can
-	// pick the wrong "active version" when a branch contains a merge commit
-	// from another branch with overlapping wall-clock timestamps. See
-	// .claude/plans/2026-05-01-topological-ordering-followup.md for the
-	// proposed fix; required before cross-branch merges are a routine
-	// workflow (e.g. once project_merge_to_main lands).
-	var targetCommit, action string
-	err = conn(ctx, si.rh.db).QueryRowContext(ctx, `
-		SELECT cl.commit_hash, cl.action
-		FROM commit_log cl
-		JOIN branch_commits bc ON bc.commit_hash = cl.commit_hash
-		WHERE bc.branch_id = ?
-		  AND cl.path = ?
-		  AND cl.committed_at <= ?
-		ORDER BY cl.committed_at DESC, cl.rowid DESC -- rowid is monotonic (no WITHOUT ROWID)
-		LIMIT 1
-	`, branchID, refPath, sourceCommittedAt).Scan(&targetCommit, &action)
-	if err == sql.ErrNoRows {
-		return "", false, nil
+		// Does `cur` touch refPath? If yes, decide based on action.
+		var action string
+		err = conn(ctx, si.rh.db).QueryRowContext(ctx, `
+			SELECT action FROM commit_log
+			WHERE commit_hash = ? AND path = ?
+			LIMIT 1
+		`, cur, refPath).Scan(&action)
+		if err == nil {
+			if action == "deleted" {
+				return "", false, nil
+			}
+			return cur, true, nil
+		}
+		if err != sql.ErrNoRows {
+			return "", false, fmt.Errorf("resolveTargetCommit: commit_log lookup: %w", err)
+		}
+
+		// `cur` doesn't touch refPath; descend to first parent.
+		parent, err := si.rh.firstParentCommit(ctx, cur)
+		if err != nil {
+			return "", false, fmt.Errorf("resolveTargetCommit: firstParentCommit: %w", err)
+		}
+		cur = parent
 	}
-	if err != nil {
-		return "", false, fmt.Errorf("resolveTargetCommit: lookup: %w", err)
-	}
-	if action == "deleted" {
-		return "", false, nil
-	}
-	return targetCommit, true, nil
+	return "", false, nil
 }
 
 // graphAddDerivedFromAtCommitTx writes one DERIVED_FROM edge per ref-event
