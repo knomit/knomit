@@ -14,6 +14,7 @@ import (
 type RefSummary struct {
 	Path    string `json:"path"`
 	Title   string `json:"title"`
+	Commit  string `json:"commit,omitempty"` // source_commit for incoming, target_commit for outgoing
 	Deleted bool   `json:"deleted,omitempty"`
 }
 
@@ -23,106 +24,35 @@ type ExplainResult struct {
 	Outgoing []RefSummary `json:"outgoing"`
 }
 
-// ExplainFact returns the incoming and outgoing [:DERIVED_FROM] neighbours for
-// the given fact path, scoped to facts visible on the given branch.
-// Incoming excludes deleted referrers. Outgoing includes deleted targets
-// (marked with Deleted: true) so the UI can show them distinctly.
-// Self-loops are filtered out: GraphQLite creates (n)-[:DERIVED_FROM]->(n) when
-// the target node is absent at edge-creation time (upstream bug).
+// ExplainFact returns the incoming and outgoing refs for path on branch at
+// HEAD by resolving the path's HEAD-active commit and delegating to the
+// commit-anchored methods. This unifies the HEAD and commit-anchored read
+// paths on a single underlying query.
 func (si *searchIndex) ExplainFact(ctx context.Context, branch, path string) (ExplainResult, error) {
 	branchID, err := si.rh.branchID(ctx, branch)
 	if err != nil {
-		return ExplainResult{}, fmt.Errorf("explain: %w", err)
+		return ExplainResult{}, fmt.Errorf("ExplainFact: branchID: %w", err)
 	}
 
-	// Resolve the blob_hash for this path on the given branch so we query
-	// the specific fact version visible on this branch, not all versions.
-	var blobHash string
+	// active_commit_for(path, branch) lives in branch_facts.commit_hash.
+	var activeCommit string
 	err = conn(ctx, si.rh.db).QueryRowContext(ctx,
-		`SELECT f.blob_hash FROM branch_facts bf JOIN facts f ON f.id = bf.fact_id
-		 WHERE bf.branch_id = ? AND bf.path = ?`, branchID, path,
-	).Scan(&blobHash)
+		`SELECT commit_hash FROM branch_facts WHERE branch_id = ? AND path = ?`,
+		branchID, path,
+	).Scan(&activeCommit)
 	if err != nil {
-		return ExplainResult{}, fmt.Errorf("explain: resolve blob_hash: %w", err)
+		return ExplainResult{}, fmt.Errorf("ExplainFact: resolve active commit: %w", err)
 	}
 
-	params, _ := json.Marshal(map[string]string{"path": path, "blob_hash": blobHash})
-	pj := string(params)
-
-	// Incoming: all non-deleted facts that reference ANY version at this path.
-	// Scoped to branch-visible facts via filterByBranch.
-	incoming, err := si.queryRefSummaries(ctx,
-		fmt.Sprintf(`MATCH (f:%s)-[:%s]->(t:%s {path: $path}) WHERE NOT f.deleted = true RETURN f.path AS path, f.title AS title, false AS deleted`,
-			NodeFact, EdgeDerivedFrom, NodeFact),
-		pj,
-	)
+	in, err := si.IncomingAtCommit(ctx, branch, path, activeCommit)
 	if err != nil {
-		return ExplainResult{}, fmt.Errorf("explain incoming: %w", err)
+		return ExplainResult{}, fmt.Errorf("ExplainFact incoming: %w", err)
 	}
-
-	// Outgoing: refs from the specific version visible on this branch.
-	outgoing, err := si.queryRefSummaries(ctx,
-		fmt.Sprintf(`MATCH (f:%s {path: $path})-[:%s]->(t:%s) WHERE f.blob_hash = $blob_hash RETURN t.path AS path, t.title AS title, t.deleted AS deleted`,
-			NodeFact, EdgeDerivedFrom, NodeFact),
-		pj,
-	)
+	out, err := si.OutgoingAtCommit(ctx, branch, path, activeCommit)
 	if err != nil {
-		return ExplainResult{}, fmt.Errorf("explain outgoing: %w", err)
+		return ExplainResult{}, fmt.Errorf("ExplainFact outgoing: %w", err)
 	}
-
-	return ExplainResult{
-		Incoming: si.filterByBranch(ctx, filterSelf(incoming, path), branchID),
-		Outgoing: filterSelf(outgoing, path),
-	}, nil
-}
-
-// filterSelf removes any RefSummary whose path equals selfPath (self-loops).
-func filterSelf(refs []RefSummary, selfPath string) []RefSummary {
-	out := refs[:0]
-	for _, r := range refs {
-		if r.Path != selfPath {
-			out = append(out, r)
-		}
-	}
-	return out
-}
-
-// filterByBranch keeps only RefSummary entries whose path is visible on the
-// given branch (present in branch_facts).
-func (si *searchIndex) filterByBranch(ctx context.Context, refs []RefSummary, branchID int64) []RefSummary {
-	if len(refs) == 0 {
-		return refs
-	}
-	placeholders := make([]string, len(refs))
-	args := make([]any, len(refs)+1)
-	args[0] = branchID
-	for i, r := range refs {
-		placeholders[i] = "?"
-		args[i+1] = r.Path
-	}
-	rows, err := conn(ctx, si.rh.db).QueryContext(ctx,
-		`SELECT path FROM branch_facts WHERE branch_id = ? AND path IN (`+strings.Join(placeholders, ",")+`)`,
-		args...,
-	)
-	if err != nil {
-		return refs
-	}
-	defer rows.Close()
-	visible := make(map[string]bool, len(refs))
-	for rows.Next() {
-		var p string
-		if err := rows.Scan(&p); err != nil {
-			return refs
-		}
-		visible[p] = true
-	}
-	out := refs[:0]
-	for _, r := range refs {
-		if visible[r.Path] {
-			out = append(out, r)
-		}
-	}
-	return out
+	return ExplainResult{Incoming: in, Outgoing: out}, nil
 }
 
 // isDeletedVal interprets the raw value returned by json_extract for a boolean
@@ -138,101 +68,6 @@ func isDeletedVal(v interface{}) bool {
 		return string(val) == "1"
 	}
 	return false
-}
-
-// refSummariesByEdgeSource returns RefSummary entries for all target nodes
-// reachable from sourceNodeID via edges of edgeType, where the target has label targetLabel.
-// It reads path and title properties from the EAV tables.
-func (si *searchIndex) refSummariesByEdgeSource(ctx context.Context, sourceNodeID int64, edgeType, targetLabel string) ([]RefSummary, error) {
-	rows, err := conn(ctx, si.rh.db).QueryContext(ctx, `
-		SELECT DISTINCT
-			path_prop.value AS path,
-			COALESCE(title_prop.value, '') AS title
-		FROM edges e
-		JOIN node_labels nl ON nl.node_id = e.target_id AND nl.label = ?
-		JOIN node_props_text path_prop ON path_prop.node_id = e.target_id
-			AND path_prop.key_id = (SELECT id FROM property_keys WHERE key = 'path' LIMIT 1)
-		LEFT JOIN node_props_text title_prop ON title_prop.node_id = e.target_id
-			AND title_prop.key_id = (SELECT id FROM property_keys WHERE key = 'title' LIMIT 1)
-		WHERE e.source_id = ? AND e.type = ?
-	`, targetLabel, sourceNodeID, edgeType)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	return scanRefSummaryRows(rows)
-}
-
-// refSummariesByEdgeTarget returns RefSummary entries for all source nodes
-// pointing to targetNodeID via edges of edgeType, where the source has label sourceLabel.
-// It reads path and title properties from the EAV tables.
-func (si *searchIndex) refSummariesByEdgeTarget(ctx context.Context, targetNodeID int64, edgeType, sourceLabel string) ([]RefSummary, error) {
-	rows, err := conn(ctx, si.rh.db).QueryContext(ctx, `
-		SELECT DISTINCT
-			path_prop.value AS path,
-			COALESCE(title_prop.value, '') AS title
-		FROM edges e
-		JOIN node_labels nl ON nl.node_id = e.source_id AND nl.label = ?
-		JOIN node_props_text path_prop ON path_prop.node_id = e.source_id
-			AND path_prop.key_id = (SELECT id FROM property_keys WHERE key = 'path' LIMIT 1)
-		LEFT JOIN node_props_text title_prop ON title_prop.node_id = e.source_id
-			AND title_prop.key_id = (SELECT id FROM property_keys WHERE key = 'title' LIMIT 1)
-		WHERE e.target_id = ? AND e.type = ?
-	`, sourceLabel, targetNodeID, edgeType)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	return scanRefSummaryRows(rows)
-}
-
-// scanRefSummaryRows scans (path, title) rows into []RefSummary.
-func scanRefSummaryRows(rows interface {
-	Next() bool
-	Scan(dest ...any) error
-	Err() error
-}) ([]RefSummary, error) {
-	var result []RefSummary
-	for rows.Next() {
-		var path, title string
-		if err := rows.Scan(&path, &title); err != nil {
-			return nil, fmt.Errorf("scan ref summary: %w", err)
-		}
-		if path == "" {
-			continue
-		}
-		result = append(result, RefSummary{Path: path, Title: title})
-	}
-	return result, rows.Err()
-}
-
-// queryRefSummaries runs a Cypher query that returns (path, title, deleted) rows.
-// cypherQuery must contain only $param placeholders (no embedded values).
-// paramsJSON is the JSON-encoded parameter object passed as cypher()'s second arg.
-func (si *searchIndex) queryRefSummaries(ctx context.Context, cypherQuery, paramsJSON string) ([]RefSummary, error) {
-	q := `SELECT json_extract(value, '$.path'), json_extract(value, '$.title'), json_extract(value, '$.deleted') FROM json_each(cypher('` + cypherQuery + `', ?))`
-	rows, err := conn(ctx, si.rh.db).QueryContext(ctx, q, paramsJSON)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	result := []RefSummary{}
-	for rows.Next() {
-		var path, title string
-		// json_extract on a JSON boolean returns an integer in SQLite (1=true, 0=false).
-		// However, Cypher literal `false AS col` may return the string "0".
-		// Scan into interface{} to handle both cases uniformly.
-		var deletedRaw interface{}
-		if err := rows.Scan(&path, &title, &deletedRaw); err != nil {
-			return nil, fmt.Errorf("scan ref summary: %w", err)
-		}
-		if path == "" {
-			continue
-		}
-		deleted := isDeletedVal(deletedRaw)
-		result = append(result, RefSummary{Path: path, Title: title, Deleted: deleted})
-	}
-	return result, rows.Err()
 }
 
 // ── Graph operations ──────────────────────────────────────────────────────────
@@ -253,7 +88,6 @@ const (
 	NodeEntity       = "Entity"
 	NodeDomain       = "Domain"
 	NodeOntologyNode = "OntologyNode"
-	NodeFactVersion  = "FactVersion" // historical snapshot of a Fact at a specific commit
 )
 
 // Edge types used in GraphQLite Cypher queries.
@@ -265,17 +99,20 @@ const (
 	EdgeSimilarTo       = "SIMILAR_TO"        // Fact ↔ Fact (KNN similarity)
 	EdgeDomainChildOf   = "DOMAIN_CHILD_OF"   // Domain → Domain (hierarchy)
 	EdgeOntologyChildOf = "ONTOLOGY_CHILD_OF" // OntologyNode → OntologyNode (hierarchy)
-	EdgePrevVersion     = "PREV_VERSION"      // FactVersion → older FactVersion (same path)
 )
 
-// graphSyncFact creates or updates graph nodes and edges for a fact.
-// This implements the Learn mutation from the spec:
+// graphSyncFact creates or updates graph nodes and node-edge relationships
+// (entity / domain / ontology) for a fact. DERIVED_FROM edges are NOT
+// written here — they are written post-commit by writePostCommitDerivedFrom
+// in search_crud.go, because the new graphAddDerivedFromAtCommitTx requires
+// node IDs that are only visible after the surrounding tx commits.
+//
+// Steps:
 //  1. MERGE Fact node
 //  2. Delete old TAGGED, IN_DOMAIN, UNDER, DERIVED_FROM edges
 //  3. MERGE Entity nodes + TAGGED edges
 //  4. MERGE Domain hierarchy + IN_DOMAIN edges
 //  5. MERGE OntologyNode hierarchy + UNDER edge
-//  6. Sync DERIVED_FROM edges from local refs
 func (si *searchIndex) graphSyncFact(ctx context.Context, rec FactRecord) error {
 	return si.graphSyncFactTx(ctx, si.rh.db, rec)
 }
@@ -337,19 +174,6 @@ func (si *searchIndex) graphSyncFactTx(ctx context.Context, tx execer, rec FactR
 	// 5. MERGE OntologyNode hierarchy + UNDER edge.
 	if err := si.graphMergeOntologyHierarchy(ctx, tx, rec.Path, rec.BlobHash); err != nil {
 		return err
-	}
-
-	// 6. Sync DERIVED_FROM edges from local refs (invariant: always matches rec.Refs).
-	var localRefs []string
-	for _, r := range rec.Refs {
-		if !strings.HasPrefix(r, "http://") && !strings.HasPrefix(r, "https://") {
-			localRefs = append(localRefs, r)
-		}
-	}
-	if len(localRefs) > 0 {
-		if err := si.graphAddDerivedFromTx(ctx, tx, rec.Path, rec.BlobHash, localRefs); err != nil {
-			return fmt.Errorf("graph sync derived_from: %w", err)
-		}
 	}
 
 	return nil
@@ -445,27 +269,6 @@ func (si *searchIndex) graphDeleteFactTx(ctx context.Context, tx execer, path, b
 	return nil
 }
 
-// graphAddDerivedFromTx creates DERIVED_FROM edges from a new fact version to
-// its source facts. The source (new fact) is matched by {path, blob_hash}; the
-// target is matched by path only (any version at that path).
-//
-// GraphQLite bug: when the target node is absent, MATCH degenerates and MERGE
-// creates a self-loop (n)-[:DERIVED_FROM]->(n). We accept this and filter
-// self-loops at query time in ExplainFact instead of pre-checking (which would
-// silently drop valid edges when facts are indexed in different orders during
-// rebuild).
-func (si *searchIndex) graphAddDerivedFromTx(ctx context.Context, tx execer, newPath, newBlobHash string, sourcePaths []string) error {
-	np := escapeCypherKey(newPath)
-	nbh := escapeCypherKey(newBlobHash)
-	for _, src := range sourcePaths {
-		sp := escapeCypherKey(src)
-		q := fmt.Sprintf(`SELECT cypher('MATCH (n:%s {path: "%s"}), (s:%s {path: "%s"}) WHERE n.blob_hash = "%s" MERGE (n)-[:%s]->(s)')`, NodeFact, np, NodeFact, sp, nbh, EdgeDerivedFrom)
-		if _, err := tx.Exec(q); err != nil {
-			return fmt.Errorf("graph derived_from %s→%s: %w", newPath, src, err)
-		}
-	}
-	return nil
-}
 
 const (
 	knnK         = 10   // top-K nearest neighbors per fact
@@ -829,16 +632,6 @@ func escapeCypherVal(s string) string {
 	return s
 }
 
-// ── History graph phase ───────────────────────────────────────────────────────
-// History graph phase: creates FactVersion nodes from commit_log entries,
-// linking them with PREV_VERSION chains and DERIVED_FROM edges.
-//
-// GraphQLite limitation: MATCH (a:L {p1: "x"}), (b:L {p1: "y"}) does not
-// correctly find two distinct nodes of the same label by property values — it
-// degenerates into a self-loop (a)-[:R]->(a). To work around this, PREV_VERSION
-// and DERIVED_FROM edges are created via direct SQL INSERT INTO edges after
-// looking up node IDs through the EAV property tables.
-
 // graphNodeIDByProp returns the node ID for a node with the given label, where
 // the property named propKey equals propVal. Returns 0 if not found.
 func (si *searchIndex) graphNodeIDByProp(ctx context.Context, label, propKey, propVal string) (int64, error) {
@@ -867,75 +660,3 @@ func (si *searchIndex) graphInsertEdge(ctx context.Context, sourceID, targetID i
 	return err
 }
 
-// graphSyncFactVersionTx creates a FactVersion node (MERGE only) within the
-// given transaction. Properties (title, committed_at) must be set after the
-// transaction commits via graphSetFactVersionProps, because GraphQLite's
-// MATCH+SET does not persist to EAV tables when executed inside a *sql.Tx.
-func (si *searchIndex) graphSyncFactVersionTx(ctx context.Context, tx execer, commitHash string, rec FactRecord, committedAt int64) error {
-	p := escapeCypherKey(rec.Path)
-	ch := escapeCypherKey(commitHash)
-
-	// MERGE the FactVersion node (identity props only).
-	q := fmt.Sprintf(`SELECT cypher('MERGE (v:%s {path: "%s", commit_hash: "%s"})')`,
-		NodeFactVersion, p, ch)
-	if _, err := tx.Exec(q); err != nil {
-		return fmt.Errorf("graphSyncFactVersionTx: merge node: %w", err)
-	}
-	return nil
-}
-
-// graphSetFactVersionProps sets title and committed_at on an existing FactVersion
-// node via direct SQL INSERTs into the EAV tables. GraphQLite's MATCH+SET
-// silently drops property writes (confirmed: title/committed_at never appear
-// in node_props_text or node_props_real after a Cypher SET), so we bypass
-// Cypher entirely and INSERT directly into the EAV tables.
-//
-// Must be called after the transaction that created the node has committed,
-// because node IDs are only visible post-commit.
-func (si *searchIndex) graphSetFactVersionProps(ctx context.Context, commitHash string, rec FactRecord, committedAt int64) error {
-	nodeID, err := si.graphNodeIDByProp(ctx, NodeFactVersion, "commit_hash", commitHash)
-	if err != nil || nodeID == 0 {
-		return fmt.Errorf("graphSetFactVersionProps: node not found for commit_hash=%s: %w", commitHash, err)
-	}
-
-	// Ensure property key IDs exist, then upsert values into EAV tables.
-	type textProp struct {
-		key   string
-		value string
-	}
-	for _, p := range []textProp{
-		{"title", rec.Title},
-	} {
-		// Ensure property_key row exists.
-		if _, err := conn(ctx, si.rh.db).ExecContext(ctx, `INSERT OR IGNORE INTO property_keys(key) VALUES (?)`, p.key); err != nil {
-			return fmt.Errorf("graphSetFactVersionProps: ensure key %s: %w", p.key, err)
-		}
-		var keyID int64
-		if err := conn(ctx, si.rh.db).QueryRowContext(ctx, `SELECT id FROM property_keys WHERE key = ?`, p.key).Scan(&keyID); err != nil {
-			return fmt.Errorf("graphSetFactVersionProps: get key_id for %s: %w", p.key, err)
-		}
-		if _, err := conn(ctx, si.rh.db).ExecContext(ctx,
-			`INSERT OR REPLACE INTO node_props_text(node_id, key_id, value) VALUES (?, ?, ?)`,
-			nodeID, keyID, p.value,
-		); err != nil {
-			return fmt.Errorf("graphSetFactVersionProps: set text prop %s: %w", p.key, err)
-		}
-	}
-
-	// committed_at is an integer; store in node_props_real (GraphQLite uses REAL for numbers).
-	if _, err := conn(ctx, si.rh.db).ExecContext(ctx, `INSERT OR IGNORE INTO property_keys(key) VALUES (?)`, "committed_at"); err != nil {
-		return fmt.Errorf("graphSetFactVersionProps: ensure key committed_at: %w", err)
-	}
-	var caKeyID int64
-	if err := conn(ctx, si.rh.db).QueryRowContext(ctx, `SELECT id FROM property_keys WHERE key = 'committed_at'`).Scan(&caKeyID); err != nil {
-		return fmt.Errorf("graphSetFactVersionProps: get key_id for committed_at: %w", err)
-	}
-	if _, err := conn(ctx, si.rh.db).ExecContext(ctx,
-		`INSERT OR REPLACE INTO node_props_real(node_id, key_id, value) VALUES (?, ?, ?)`,
-		nodeID, caKeyID, committedAt,
-	); err != nil {
-		return fmt.Errorf("graphSetFactVersionProps: set committed_at: %w", err)
-	}
-
-	return nil
-}

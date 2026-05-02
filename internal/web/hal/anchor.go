@@ -73,8 +73,9 @@ func (b URLBuilder) Fact(repo string, a Anchor, path string) string {
 }
 
 // FactIncoming returns the URL for a fact's incoming-edges collection.
-// Only valid on HEAD-anchored URIs (commit-anchored views are outgoing-only
-// per the design spec §5B). Callers are responsible for honoring that rule.
+// Valid on both HEAD-anchored URIs (returns the lineage of the current
+// version) and commit-anchored URIs (returns the lineage of that specific
+// version).
 func (b URLBuilder) FactIncoming(repo string, a Anchor, path string) string {
 	return b.Fact(repo, a, path) + "/incoming"
 }

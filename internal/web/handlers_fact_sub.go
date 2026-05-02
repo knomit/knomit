@@ -20,6 +20,15 @@ type factSubProvider interface {
 
 	// ExplainFact returns the incoming and outgoing ref graph for a fact.
 	ExplainFact(ri *repos.RepoInstance, branch, path string) (store.ExplainResult, error)
+
+	// IncomingAtCommit returns the version-aware incoming refs for a fact at
+	// a specific commit: every (path, commit) whose ref resolved to this path
+	// at that version.
+	IncomingAtCommit(ri *repos.RepoInstance, branch, path, commitHash string) ([]store.RefSummary, error)
+
+	// OutgoingAtCommit returns the version-aware outgoing refs for a fact at
+	// a specific commit: the refs written by this version of the fact.
+	OutgoingAtCommit(ri *repos.RepoInstance, branch, path, commitHash string) ([]store.RefSummary, error)
 }
 
 // defaultFactSubProvider implements factSubProvider using the store.
@@ -59,6 +68,34 @@ func (defaultFactSubProvider) ExplainFact(
 	return result, err
 }
 
+func (defaultFactSubProvider) IncomingAtCommit(ri *repos.RepoInstance, branch, path, commitHash string) ([]store.RefSummary, error) {
+	var (
+		out []store.RefSummary
+		err error
+	)
+	ri.WithRead(func(svc *store.Service) {
+		if svc == nil {
+			return
+		}
+		out, err = svc.Search().IncomingAtCommit(contextTODO(), branch, path, commitHash)
+	})
+	return out, err
+}
+
+func (defaultFactSubProvider) OutgoingAtCommit(ri *repos.RepoInstance, branch, path, commitHash string) ([]store.RefSummary, error) {
+	var (
+		out []store.RefSummary
+		err error
+	)
+	ri.WithRead(func(svc *store.Service) {
+		if svc == nil {
+			return
+		}
+		out, err = svc.Search().OutgoingAtCommit(contextTODO(), branch, path, commitHash)
+	})
+	return out, err
+}
+
 // commitEntry is one item in the per-fact commit log collection.
 type commitEntry struct {
 	Commit    string           `json:"commit"`
@@ -70,9 +107,12 @@ type commitEntry struct {
 }
 
 // graphRefEntry is one item in the incoming/outgoing graph collection.
+// Commit is required for HEAD and commit-anchored alike: it pins the entry
+// to a specific source-version (incoming) or target-version (outgoing).
 type graphRefEntry struct {
 	Path    string      `json:"path"`
 	Title   string      `json:"title"`
+	Commit  string      `json:"commit,omitempty"`
 	Deleted bool        `json:"deleted,omitempty"`
 	Links   hal.LinkMap `json:"_links,omitempty"`
 }
@@ -208,20 +248,22 @@ func handleFactOutgoing(b hal.URLBuilder, m *repos.Manager, provider factSubProv
 	hal.WriteHAL(w, http.StatusOK, view)
 }
 
-// buildGraphRefItems converts []store.RefSummary into []graphRefEntry with
-// self links for non-deleted facts.
+// buildGraphRefItems converts []store.RefSummary into []graphRefEntry. Each
+// item's _links.self is anchored to the entry's own commit (incoming → the
+// source's commit; outgoing → the target's commit) so callers can navigate
+// directly to the version that produced or received the ref-event.
 func buildGraphRefItems(b hal.URLBuilder, repoName string, a hal.Anchor, refs []store.RefSummary) []graphRefEntry {
 	items := make([]graphRefEntry, 0, len(refs))
 	for _, ref := range refs {
 		item := graphRefEntry{
 			Path:    ref.Path,
 			Title:   ref.Title,
+			Commit:  ref.Commit,
 			Deleted: ref.Deleted,
 		}
 		if !ref.Deleted {
-			item.Links = hal.LinkMap{
-				"self": {Href: b.Fact(repoName, a, ref.Path)},
-			}
+			anchor := hal.Anchor{Branch: a.Branch, Commit: ref.Commit}
+			item.Links = hal.LinkMap{"self": {Href: b.Fact(repoName, anchor, ref.Path)}}
 		}
 		items = append(items, item)
 	}

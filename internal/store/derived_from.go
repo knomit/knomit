@@ -1,0 +1,215 @@
+package store
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+
+	"github.com/rs/zerolog/log"
+)
+
+// resolveTargetCommit walks first-parent ancestry of sourceCommit on the
+// given branch looking for the FIRST commit (in topological order) that
+// touches refPath, and returns (commit_hash, ok=true) if that row's action
+// is "added" or "modified". Returns ("", false, nil) if no ancestor touches
+// refPath, or if the closest ancestor that touches it has action="deleted"
+// — both are skip-the-edge cases per design spec write-path step 2.
+//
+// First-parent ancestry (NOT wall-clock committed_at ordering) is the
+// correct semantic for "the active version of refPath on this branch at
+// sourceCommit". On a branch containing merge commits from sibling
+// branches, wall-clock ordering can pick a sibling-branch commit as the
+// "most recent" touch even when the local first-parent line carries a
+// later authoritative version (e.g. when a merge resolved a conflict in
+// the local side's favour, leaving no commit_log row at the merge commit).
+//
+// The walk stops at: the first row whose action is added/modified/deleted
+// for refPath; the root commit (no parent); or the first parent that
+// leaves the branch (parent ∉ branch_commits(B)).
+//
+// Performance: each step does one git CommitObject lookup + one indexed
+// SQL query against commit_log. For branches where most refs target
+// frequently-modified facts the walk is O(1) per ref. For long-stable
+// targets it's O(commits-since-last-touch). An in-process cache keyed by
+// (refPath, sourceCommit) per ingest call is a possible optimisation if
+// this becomes hot.
+func (si *searchIndex) resolveTargetCommit(ctx context.Context, branch, refPath, sourceCommit string) (string, bool, error) {
+	branchID, err := si.rh.branchID(ctx, branch)
+	if err != nil {
+		return "", false, fmt.Errorf("resolveTargetCommit: branchID: %w", err)
+	}
+
+	cur := sourceCommit
+	for cur != "" {
+		// Is `cur` reachable on this branch? If not (we walked off the
+		// branch by following first-parent into a foreign-branch ancestor),
+		// stop the walk.
+		var onBranch int
+		err := conn(ctx, si.rh.db).QueryRowContext(ctx,
+			`SELECT 1 FROM branch_commits WHERE branch_id = ? AND commit_hash = ?`,
+			branchID, cur,
+		).Scan(&onBranch)
+		if err == sql.ErrNoRows {
+			return "", false, nil
+		}
+		if err != nil {
+			return "", false, fmt.Errorf("resolveTargetCommit: branch_commits: %w", err)
+		}
+
+		// Does `cur` touch refPath? If yes, decide based on action.
+		var action string
+		err = conn(ctx, si.rh.db).QueryRowContext(ctx, `
+			SELECT action FROM commit_log
+			WHERE commit_hash = ? AND path = ?
+			LIMIT 1
+		`, cur, refPath).Scan(&action)
+		if err == nil {
+			if action == "deleted" {
+				return "", false, nil
+			}
+			return cur, true, nil
+		}
+		if err != sql.ErrNoRows {
+			return "", false, fmt.Errorf("resolveTargetCommit: commit_log lookup: %w", err)
+		}
+
+		// `cur` doesn't touch refPath; descend to first parent.
+		parent, err := si.rh.firstParentCommit(ctx, cur)
+		if err != nil {
+			return "", false, fmt.Errorf("resolveTargetCommit: firstParentCommit: %w", err)
+		}
+		cur = parent
+	}
+	return "", false, nil
+}
+
+// graphAddDerivedFromAtCommitTx writes one DERIVED_FROM edge per ref-event
+// from Fact(sourcePath, sourceBlobHash) to Fact(refPath, target_blob_hash),
+// with edge text properties source_commit and target_commit. Refs that
+// resolve to "skip" via resolveTargetCommit (forward-broken or first
+// ancestor is a deletion) are silently skipped. The branch parameter is
+// the ingestion branch (the branch on which sourceCommit was committed).
+//
+// The target Fact node already exists if resolveTargetCommit succeeds — it
+// was upserted when refPath was originally indexed at target_commit. The
+// target's blob_hash is the blob in the target_commit's tree for refPath,
+// resolved via repoHandler.readBlobHashAtCommit.
+//
+// IMPORTANT: must be called AFTER the source Fact node's MERGE has been
+// committed. Direct-SQL reads against the GraphQLite EAV tables cannot see
+// nodes MERGE'd via Cypher inside the same *sql.Tx — node IDs only become
+// visible post-commit. The tx parameter is currently unused for this reason;
+// it is retained in the signature for symmetry with graphSyncFactTx and
+// future call-site flexibility.
+func (si *searchIndex) graphAddDerivedFromAtCommitTx(
+	ctx context.Context,
+	tx execer,
+	branch, sourcePath, sourceBlobHash, sourceCommit string,
+	refs []string,
+) error {
+	srcID, err := si.graphNodeIDByBlob(ctx, sourcePath, sourceBlobHash)
+	if err != nil {
+		return fmt.Errorf("graphAddDerivedFromAtCommitTx: source node id: %w", err)
+	}
+	if srcID == 0 {
+		return fmt.Errorf("graphAddDerivedFromAtCommitTx: source Fact(%s,%s) not found", sourcePath, sourceBlobHash)
+	}
+
+	for _, refPath := range refs {
+		targetCommit, ok, err := si.resolveTargetCommit(ctx, branch, refPath, sourceCommit)
+		if err != nil {
+			return fmt.Errorf("graphAddDerivedFromAtCommitTx: resolve %s: %w", refPath, err)
+		}
+		if !ok {
+			continue // forward-broken or deleted-target — skip
+		}
+
+		targetBlobHash, err := si.rh.readBlobHashAtCommit(ctx, refPath, targetCommit)
+		if err != nil {
+			return fmt.Errorf("graphAddDerivedFromAtCommitTx: blob_hash for %s@%s: %w", refPath, targetCommit, err)
+		}
+		tgtID, err := si.graphNodeIDByBlob(ctx, refPath, targetBlobHash)
+		if err != nil {
+			return fmt.Errorf("graphAddDerivedFromAtCommitTx: target node id: %w", err)
+		}
+		if tgtID == 0 {
+			// Target Fact node missing despite resolveTargetCommit succeeding.
+			// Indicates an indexing race or stale state; skip rather than fail.
+			log.Debug().Str("branch", branch).Str("ref", refPath).Str("target_commit", targetCommit).
+				Msg("graphAddDerivedFromAtCommitTx: target Fact node not found, skipping (likely intra-commit ordering — Sync pass 2 will retry)")
+			continue
+		}
+
+		// Dedup guard: skip if this exact (src→tgt, source_commit, target_commit)
+		// edge already exists. Prevents duplicates when the two-pass sync in
+		// Sync() calls writePostCommitDerivedFrom a second time for intra-batch
+		// refs that succeeded on the first attempt.
+		exists, err := si.graphDerivedFromEdgeExists(ctx, srcID, tgtID, sourceCommit, targetCommit)
+		if err != nil {
+			return fmt.Errorf("graphAddDerivedFromAtCommitTx: dedup check: %w", err)
+		}
+		if exists {
+			continue
+		}
+
+		edgeID, err := si.graphInsertEdgeReturningID(ctx, srcID, tgtID, EdgeDerivedFrom)
+		if err != nil {
+			return fmt.Errorf("graphAddDerivedFromAtCommitTx: insert edge: %w", err)
+		}
+		if err := si.graphSetEdgeProps(ctx, edgeID, map[string]string{
+			"source_commit": sourceCommit,
+			"target_commit": targetCommit,
+		}); err != nil {
+			return fmt.Errorf("graphAddDerivedFromAtCommitTx: set props: %w", err)
+		}
+	}
+	return nil
+}
+
+// graphDerivedFromEdgeExists reports whether a DERIVED_FROM edge with the
+// given source_id → target_id and (source_commit, target_commit) properties
+// already exists. Used by graphAddDerivedFromAtCommitTx as a dedup guard to
+// prevent duplicate edges when the two-pass sync retries edge writes for
+// refs that were already successfully wired in pass 1.
+func (si *searchIndex) graphDerivedFromEdgeExists(ctx context.Context, srcID, tgtID int64, sourceCommit, targetCommit string) (bool, error) {
+	var n int
+	err := conn(ctx, si.rh.db).QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM edges e
+		JOIN edge_props_text sc ON sc.edge_id = e.id
+		JOIN property_keys ksc ON ksc.id = sc.key_id AND ksc.key = 'source_commit'
+		JOIN edge_props_text tc ON tc.edge_id = e.id
+		JOIN property_keys ktc ON ktc.id = tc.key_id AND ktc.key = 'target_commit'
+		WHERE e.source_id = ? AND e.target_id = ? AND e.type = ?
+		  AND sc.value = ? AND tc.value = ?
+		LIMIT 1
+	`, srcID, tgtID, EdgeDerivedFrom, sourceCommit, targetCommit).Scan(&n)
+	if err != nil {
+		return false, err
+	}
+	return n > 0, nil
+}
+
+// graphNodeIDByBlob looks up the Fact node id for (path, blob_hash). Both
+// must match because Fact identity is per-version. Returns 0 if no such
+// node exists (caller decides whether that's an error).
+func (si *searchIndex) graphNodeIDByBlob(ctx context.Context, path, blobHash string) (int64, error) {
+	var nodeID int64
+	err := conn(ctx, si.rh.db).QueryRowContext(ctx, `
+		SELECT npp.node_id
+		FROM node_props_text npp
+		JOIN property_keys kp ON kp.id = npp.key_id AND kp.key = 'path'
+		JOIN node_props_text npb ON npb.node_id = npp.node_id
+		JOIN property_keys kb ON kb.id = npb.key_id AND kb.key = 'blob_hash'
+		JOIN node_labels nl ON nl.node_id = npp.node_id AND nl.label = ?
+		WHERE npp.value = ? AND npb.value = ?
+		LIMIT 1
+	`, NodeFact, path, blobHash).Scan(&nodeID)
+	if err == sql.ErrNoRows {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	return nodeID, nil
+}

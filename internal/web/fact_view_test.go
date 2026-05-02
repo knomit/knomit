@@ -48,7 +48,7 @@ func TestFactView_HEAD_RequiredLinks(t *testing.T) {
 	}
 }
 
-func TestFactView_CommitAnchored_HasLiveNoIncomingNoSnapshot(t *testing.T) {
+func TestFactView_CommitAnchored_HasIncomingLiveNoSnapshot(t *testing.T) {
 	b := hal.URLBuilder{Base: "/api/v1"}
 	a := hal.Anchor{Branch: "agent/test", Commit: "abc12399999999999999999999999999999999"}
 	resolver := &stubRefResolver{existing: map[string]bool{"know/ai/ml/xyz99999.md": true}}
@@ -59,14 +59,11 @@ func TestFactView_CommitAnchored_HasLiveNoIncomingNoSnapshot(t *testing.T) {
 		t.Fatalf("marshal: %v", err)
 	}
 
-	wantRels := []string{"self", "outgoing", "commits", "live", "commit", "parent", "branch"}
+	wantRels := []string{"self", "incoming", "outgoing", "commits", "live", "commit", "parent", "branch"}
 	for _, rel := range wantRels {
 		if !strings.Contains(string(raw), `"`+rel+`":{"href":`) {
 			t.Errorf("missing link %q in %s", rel, raw)
 		}
-	}
-	if strings.Contains(string(raw), `"incoming":`) {
-		t.Errorf("commit-anchored view must not have an incoming link")
 	}
 	if strings.Contains(string(raw), `"snapshot":`) {
 		t.Errorf("commit-anchored view must not have a snapshot link (self is the snapshot)")
@@ -120,5 +117,19 @@ func TestFactView_AsOf_CommitAnchoredUsesAnchorCommit(t *testing.T) {
 	view := BuildFactView(b, "alpha", a, "", makeTestFact(), resolver)
 	if view.AsOf.Branch != "agent/test" || view.AsOf.Commit != "abc123" {
 		t.Errorf("as_of: %+v, want {agent/test, abc123}", view.AsOf)
+	}
+}
+
+func TestBuildFactLinks_CommitAnchoredHasIncoming(t *testing.T) {
+	b := hal.URLBuilder{Base: "https://k.example.com"}
+	a := hal.Anchor{Branch: "main", Commit: "1234abc"}
+	links := buildFactLinks(b, "alpha", a, "", "kb/e.md")
+
+	if links["incoming"].Href == "" {
+		t.Fatal("incoming link missing on commit-anchored view")
+	}
+	want := "https://k.example.com/repos/alpha/branches/main/commits/1234abc/facts/kb/e.md/incoming"
+	if got := links["incoming"].Href; got != want {
+		t.Errorf("incoming href: got %q, want %q", got, want)
 	}
 }

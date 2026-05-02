@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/rs/zerolog/log"
 
@@ -109,7 +110,16 @@ func (si *searchIndex) upsert(ctx context.Context, branch, commitHash string, re
 		if err != nil {
 			return fmt.Errorf("upsert branch_facts (cow hit): %w", err)
 		}
-		return tx.Commit()
+		if err := tx.Commit(); err != nil {
+			return err
+		}
+		// Post-commit work uses ctx without the (now-closed) tx so conn(ctx,db)
+		// resolves to the bare *sql.DB rather than the committed tx.
+		ctx = storegit.WithoutTx(ctx)
+		// Write time-aware DERIVED_FROM edges for the new (path, commit) ref-event.
+		// Each new commit asserting the same content is its own ref-event.
+		si.writePostCommitDerivedFrom(ctx, branch, rec.Path, rec.BlobHash, commitHash, rec.Refs)
+		return nil
 	}
 
 	// COW miss: populate junction tables, embeddings, branch_facts.
@@ -195,6 +205,11 @@ func (si *searchIndex) upsert(ctx context.Context, branch, commitHash string, re
 	// concurrent writes (one writer's facts row committed while another's
 	// graph sync races or fails). The graph-coherence Verify check
 	// catches those holes, so any failure here must propagate.
+	//
+	// DERIVED_FROM edges are an exception — they run post-commit via
+	// writePostCommitDerivedFrom because graphAddDerivedFromAtCommitTx
+	// requires node IDs that are only visible after the source Fact's
+	// MERGE has committed.
 	if err := si.graphSyncFactTx(ctx, tx, rec); err != nil {
 		return fmt.Errorf("upsert graph sync: %w", err)
 	}
@@ -202,6 +217,17 @@ func (si *searchIndex) upsert(ctx context.Context, branch, commitHash string, re
 	if err := tx.Commit(); err != nil {
 		return err
 	}
+
+	// Post-commit work uses ctx without the (now-closed) tx so conn(ctx,db)
+	// resolves to the bare *sql.DB rather than the committed tx.
+	ctx = storegit.WithoutTx(ctx)
+
+	// Write time-aware DERIVED_FROM edges. Runs AFTER commit because direct-SQL
+	// reads against the GraphQLite EAV tables cannot see nodes MERGE'd via
+	// Cypher inside the same *sql.Tx — node IDs only become visible
+	// post-commit. Edge-write failure is non-fatal; logged so verify can flag
+	// missing edges later.
+	si.writePostCommitDerivedFrom(ctx, branch, rec.Path, rec.BlobHash, commitHash, rec.Refs)
 
 	// Build similarity edges if embeddings are available. This runs AFTER
 	// commit because it queries facts_vec rows that must be visible outside
@@ -214,6 +240,25 @@ func (si *searchIndex) upsert(ctx context.Context, branch, commitHash string, re
 	}
 
 	return nil
+}
+
+// writePostCommitDerivedFrom writes time-aware DERIVED_FROM edges for the
+// given (path, blob_hash) at commitHash. Filters refs to local-only.
+// Logged on failure rather than returned: edges are recoverable via
+// rebuild and verify will flag any holes.
+func (si *searchIndex) writePostCommitDerivedFrom(ctx context.Context, branch, path, blobHash, commitHash string, refs []string) {
+	var localRefs []string
+	for _, r := range refs {
+		if !strings.HasPrefix(r, "http://") && !strings.HasPrefix(r, "https://") {
+			localRefs = append(localRefs, r)
+		}
+	}
+	if len(localRefs) == 0 {
+		return
+	}
+	if err := si.graphAddDerivedFromAtCommitTx(ctx, si.rh.db, branch, path, blobHash, commitHash, localRefs); err != nil {
+		log.Warn().Err(err).Str("path", path).Str("commit", commitHash).Msg("post-commit DERIVED_FROM edge write failed")
+	}
 }
 
 // hasAnyBranchFact checks if any branch_facts row exists for the given fact_id.
