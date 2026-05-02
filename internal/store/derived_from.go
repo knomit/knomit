@@ -40,6 +40,13 @@ func (si *searchIndex) resolveTargetCommit(ctx context.Context, branch, refPath,
 		return "", false, fmt.Errorf("resolveTargetCommit: source committed_at: %w", err)
 	}
 
+	// TODO(topo-ordering): this uses `committed_at` ordering as a v1 stand-in
+	// for a true first-parent ancestor walk. Correct on linear branches; can
+	// pick the wrong "active version" when a branch contains a merge commit
+	// from another branch with overlapping wall-clock timestamps. See
+	// .claude/plans/2026-05-01-topological-ordering-followup.md for the
+	// proposed fix; required before cross-branch merges are a routine
+	// workflow (e.g. once project_merge_to_main lands).
 	var targetCommit, action string
 	err = conn(ctx, si.rh.db).QueryRowContext(ctx, `
 		SELECT cl.commit_hash, cl.action
