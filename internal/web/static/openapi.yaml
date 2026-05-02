@@ -174,7 +174,10 @@ paths:
       summary: Read a fact (anchored at HEAD)
       description: |
         When the path terminates with `/incoming` or `/outgoing`, the response
-        is a collection of referencing/referenced facts instead of a fact view.
+        is a `RefsCollection` of referencing/referenced facts instead of a
+        fact view. Each entry carries a `commit` field pinning it to a
+        specific version (source for `/incoming`, target for `/outgoing`)
+        and `_links.self` is anchored to that commit.
       operationId: getFact
       responses:
         "200":
@@ -226,13 +229,28 @@ paths:
     get:
       tags: [facts, commits]
       summary: Read a fact anchored at a specific commit
+      description: |
+        When the path terminates with `/incoming` or `/outgoing`, the
+        response is a `RefsCollection` of referencing/referenced facts at
+        this anchor instead of a fact view. Each entry's `commit` field
+        and `_links.self` are pinned to the entry's own version:
+        - `/incoming` items carry `commit = source_commit` (the commit
+          that asserted the ref); `_links.self` points to the source
+          fact at that commit.
+        - `/outgoing` items carry `commit = target_commit` (the version
+          of the target the ref resolved to at the anchor); `_links.self`
+          points to the target fact at that commit. `deleted=true` items
+          omit `_links.self`.
       operationId: getFactAtCommit
       responses:
         "200":
-          description: Fact as of the commit
+          description: Fact as of the commit, or refs collection
           content:
             application/hal+json:
-              schema: { $ref: "#/components/schemas/Fact" }
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/Fact" }
+                  - { $ref: "#/components/schemas/RefsCollection" }
         "400": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
         "501": { $ref: "#/components/responses/Problem" }
@@ -994,9 +1012,18 @@ components:
       type: object
       required: [path]
       properties:
-        path:   { type: string }
-        type:   { type: string }
-        _links: { $ref: "#/components/schemas/LinkMap" }
+        path:    { type: string }
+        title:   { type: string }
+        type:    { type: string }
+        # commit pins each entry to a specific version: source_commit for
+        # /incoming items (the commit that asserted the ref), target_commit
+        # for /outgoing items (the version of the target the ref resolved to
+        # at the source's commit). _links.self is anchored to this commit.
+        commit:  { type: string, description: "Commit hash this entry is pinned to (source_commit on /incoming, target_commit on /outgoing)." }
+        # Outgoing-only: target Fact node is soft-deleted at the anchor.
+        # When true, _links.self is omitted (no navigable destination).
+        deleted: { type: boolean }
+        _links:  { $ref: "#/components/schemas/LinkMap" }
 
     FactsCollection:
       allOf:

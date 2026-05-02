@@ -415,12 +415,16 @@ export const api = {
     fetch(`${branchBase(repo, branch)}/completions?category=${encodeURIComponent(category)}&prefix=${encodeURIComponent(prefix)}`).then(r => r.json()),
 
   explain: (repo: string, branch: string, path: string): Promise<{
-    incoming: { path: string; title: string }[];
-    outgoing: { path: string; title: string; deleted: boolean }[];
+    incoming: { path: string; title: string; commit?: string }[];
+    outgoing: { path: string; title: string; commit?: string; deleted?: boolean }[];
   }> => {
     const factURL = `${branchBase(repo, branch)}/facts/${path}`;
-    const parseRefs = (data: any): { path: string; title: string; deleted: boolean }[] => {
+    const parseRefs = (data: any): { path: string; title: string; commit?: string; deleted?: boolean }[] => {
       // HAL CollectionView: {_embedded: {refs: [...]}}
+      // Each ref carries a `commit` field pinning it to a specific version:
+      // source_commit for /incoming, target_commit for /outgoing. The
+      // `deleted` flag (outgoing-only) marks tombstoned targets — those
+      // entries omit _links.self.
       if (data && data._embedded && Array.isArray(data._embedded.refs)) {
         return data._embedded.refs;
       }
