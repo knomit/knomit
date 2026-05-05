@@ -114,3 +114,90 @@ func TestFormatMethodologySection_Empty(t *testing.T) {
 	require.Equal(t, "", FormatMethodologySection(nil))
 	require.Equal(t, "", FormatMethodologySection([]MethodologyMatch{}))
 }
+
+// TestRelevantMethodology_TagOverlap_RanksByMatch verifies the tag-overlap
+// scoring: a methodology with both source domain AND source entity matching
+// outranks one with only one matching, which outranks one with no matching.
+// Verifies the universal-marker exclusion (meta/reasoning/methodology don't
+// count toward overlap).
+func TestRelevantMethodology_TagOverlap_RanksByMatch(t *testing.T) {
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	defer svc.Close()
+	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/a"))
+
+	ctx := context.Background()
+	branch := "agent/a"
+
+	// Three methodology facts with progressively-stronger overlap to a
+	// source tagged domain=[security], entities=[Anthropic].
+	_, err = svc.Facts().WriteFact(ctx, branch, "kb/meta/reasoning/full.md",
+		methFactBody("Full", "full match",
+			[]string{"meta", "reasoning", "methodology", "security"},
+			[]string{"Anthropic"}),
+		"full", "")
+	require.NoError(t, err)
+	_, err = svc.Facts().WriteFact(ctx, branch, "kb/meta/reasoning/halfdom.md",
+		methFactBody("HalfDomain", "domain match only",
+			[]string{"meta", "reasoning", "methodology", "security"},
+			[]string{"OpenAI"}),
+		"half-domain", "")
+	require.NoError(t, err)
+	_, err = svc.Facts().WriteFact(ctx, branch, "kb/meta/reasoning/markersonly.md",
+		methFactBody("MarkersOnly", "only meta tags",
+			[]string{"meta", "reasoning", "methodology"},
+			nil),
+		"markers-only", "")
+	require.NoError(t, err)
+
+	got, err := svc.Search().RelevantMethodology(ctx, branch, "any source body",
+		[]string{"security"}, []string{"Anthropic"}, 10)
+	require.NoError(t, err)
+	require.Len(t, got, 3)
+
+	// Ranking: full > halfdom > markersonly.
+	require.Equal(t, "kb/meta/reasoning/full.md", got[0].Path)
+	require.Equal(t, "kb/meta/reasoning/halfdom.md", got[1].Path)
+	require.Equal(t, "kb/meta/reasoning/markersonly.md", got[2].Path)
+
+	// Universal markers (meta/reasoning/methodology) are excluded from
+	// overlap calc — markersonly has TagOverlap == 0.
+	require.Equal(t, 0.0, got[2].TagOverlap)
+
+	// Full match: domain_overlap=1.0, entity_overlap=1.0 → tag_overlap=1.0.
+	require.InDelta(t, 1.0, got[0].TagOverlap, 0.001)
+
+	// Half match: domain_overlap=1.0, entity_overlap=0.0 → tag_overlap=0.5.
+	require.InDelta(t, 0.5, got[1].TagOverlap, 0.001)
+
+	// MatchedDomains/Entities expose what actually matched.
+	require.Equal(t, []string{"security"}, got[0].MatchedDomains)
+	require.Equal(t, []string{"Anthropic"}, got[0].MatchedEntities)
+	require.Empty(t, got[2].MatchedDomains)
+	require.Empty(t, got[2].MatchedEntities)
+}
+
+// TestRelevantMethodology_TagOverlap_EmptySourceTags handles the edge case
+// where the source has no tags. Tag-overlap collapses to 0 for everyone;
+// candidates are still returned (Task 3 will rank them via vector).
+func TestRelevantMethodology_TagOverlap_EmptySourceTags(t *testing.T) {
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	defer svc.Close()
+	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/a"))
+
+	_, err = svc.Facts().WriteFact(context.Background(), "agent/a", "kb/meta/reasoning/m.md",
+		methFactBody("M", "body",
+			[]string{"meta", "reasoning", "methodology", "security"},
+			[]string{"Anthropic"}),
+		"add m", "")
+	require.NoError(t, err)
+
+	got, err := svc.Search().RelevantMethodology(context.Background(), "agent/a", "src",
+		nil, nil, 10)
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	require.Equal(t, 0.0, got[0].TagOverlap)
+}
