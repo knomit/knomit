@@ -135,15 +135,19 @@ func RenderReflectWorkItem(transitionsJSON []byte, ontologyRoot, existingMethodo
 }
 
 // RenderDistillWorkItem renders a distill prompt for the hosting model.
-// ontologyRoot is substituted into the prompt's example paths so the LLM
-// emits paths under the configured root instead of a hardcoded placeholder.
-func RenderDistillWorkItem(facts []factForLLM, ontologyRoot string) (*WorkItemContent, error) {
+// applicableMethodology is the pre-formatted methodology section to inject;
+// pass an empty string when none is relevant.
+func RenderDistillWorkItem(facts []factForLLM, ontologyRoot, applicableMethodology string) (*WorkItemContent, error) {
 	factsJSON, err := json.MarshalIndent(facts, "", "  ")
 	if err != nil {
 		return nil, fmt.Errorf("marshal facts for distill work item: %w", err)
 	}
 
-	prompt, err := RenderTemplate("distill", "user", PromptData{Facts: string(factsJSON), OntologyRoot: ontologyRoot})
+	prompt, err := RenderTemplate("distill", "user", PromptData{
+		Facts:                 string(factsJSON),
+		OntologyRoot:          ontologyRoot,
+		ApplicableMethodology: applicableMethodology,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("render distill work item: %w", err)
 	}

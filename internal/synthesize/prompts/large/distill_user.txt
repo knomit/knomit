@@ -3,7 +3,13 @@ You are synthesizing facts in a knowledge base to find patterns and higher-order
 Facts in scope:
 {{.Facts}}
 
-Identify patterns across these facts. Produce:
+{{if .ApplicableMethodology}}Applicable methodology (reasoning lessons from prior synthesis cycles):
+
+{{.ApplicableMethodology}}
+
+Apply these lessons to the distillation. If a lesson informed how you weighted, combined, or named the synthesis, cite it in the output's refs.
+
+{{end}}Identify patterns across these facts. Produce:
 1. New higher-order facts that capture patterns
 2. Which original facts are fully subsumed and can be forgotten
 

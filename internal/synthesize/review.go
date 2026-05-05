@@ -431,7 +431,8 @@ func (r *Reviewer) nextItem(ctx context.Context, sessionID string) (*ReviewResul
 		if err := json.Unmarshal([]byte(item.FactsJSON), &facts); err != nil {
 			return nil, fmt.Errorf("review: unmarshal facts for prompt: %w", err)
 		}
-		content, err = RenderDistillWorkItem(facts, ontologyRoot)
+		applicableMethodology := r.loadDistillMethodology(ctx, facts)
+		content, err = RenderDistillWorkItem(facts, ontologyRoot, applicableMethodology)
 	case "reflect":
 		existingMethodology := r.loadReflectMethodology(ctx, []byte(item.FactsJSON))
 		content, err = RenderReflectWorkItem([]byte(item.FactsJSON), ontologyRoot, existingMethodology)
@@ -539,6 +540,51 @@ func (r *Reviewer) loadReflectMethodology(ctx context.Context, transitionsJSON [
 		}
 	})
 
+	doms := make([]string, 0, len(domSet))
+	for d := range domSet {
+		doms = append(doms, d)
+	}
+	ents := make([]string, 0, len(entSet))
+	for e := range entSet {
+		ents = append(ents, e)
+	}
+	combinedBody := strings.Join(bodies, "\n\n")
+	if len(combinedBody) > 4000 {
+		combinedBody = combinedBody[:4000]
+	}
+
+	var matches []store.MethodologyMatch
+	r.ri.WithRead(func(svc *store.Service) {
+		if svc == nil {
+			return
+		}
+		matches, _ = svc.Search().RelevantMethodology(
+			ctx, r.ri.AgentBranch(),
+			combinedBody, doms, ents, 3,
+		)
+	})
+	return store.FormatMethodologySection(matches)
+}
+
+// loadDistillMethodology retrieves methodology relevant to the cluster's
+// dominant tags (union of domains/entities across the input facts). Same
+// shape as loadReflectMethodology — returns "" when none.
+func (r *Reviewer) loadDistillMethodology(ctx context.Context, facts []factForLLM) string {
+	domSet := map[string]struct{}{}
+	entSet := map[string]struct{}{}
+	var bodies []string
+	for _, f := range facts {
+		for _, d := range f.Domain {
+			if d == "meta" || d == "reasoning" || d == "methodology" {
+				continue
+			}
+			domSet[d] = struct{}{}
+		}
+		for _, e := range f.Entities {
+			entSet[e] = struct{}{}
+		}
+		bodies = append(bodies, f.Body)
+	}
 	doms := make([]string, 0, len(domSet))
 	for d := range domSet {
 		doms = append(doms, d)
