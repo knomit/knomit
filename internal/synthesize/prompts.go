@@ -15,8 +15,10 @@ var promptFS embed.FS
 // live; templates substitute it into example paths so the LLM receives
 // concrete, validated path conventions instead of hardcoded placeholders.
 type PromptData struct {
-	Facts        string
-	OntologyRoot string
+	Facts                 string
+	OntologyRoot          string
+	ExistingMethodology   string // for reflect_user.txt
+	ApplicableMethodology string // for distill_user.txt (Task 6)
 }
 
 // RenderTemplate loads and renders a prompt template.

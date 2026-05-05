@@ -7,6 +7,14 @@ For each transition, consider:
 - Was the prediction well-formed? What made it succeed or fail?
 - Is there a reusable lesson about the reasoning process itself?
 
-If you identify reusable methodology lessons, describe them. Each methodology fact should be a concise statement about reasoning process, not domain content. Call knomit_learn with type: methodology, topic: "meta", category: "reasoning" for each lesson.
+{{if .ExistingMethodology}}Existing methodology in this domain (top 3 by relevance):
+
+{{.ExistingMethodology}}
+
+When you identify reusable lessons, prefer to refine or contradict an existing methodology rather than emit a duplicate. If your lesson supersedes an existing one, call knomit_update on the existing path. If it qualifies an existing one with a new condition, write a new methodology and add the existing one's path to its refs. Only emit a fresh methodology fact when the lesson is genuinely novel.
+
+{{end}}When you write a new methodology fact, set its domain and entities to the union of (the source hypothesis's tags + the standard methodology markers). The standard markers meta, reasoning, methodology go in domain alongside the inherited tags — they are markers, not replacements for domain-specific tags.
+
+If you identify reusable methodology lessons, describe them. Each methodology fact should be a concise statement about reasoning process, not domain content. Call knomit_learn with type: methodology for each lesson.
 
 Respond with JSON matching the response schema.

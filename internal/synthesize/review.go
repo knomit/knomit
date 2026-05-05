@@ -433,7 +433,8 @@ func (r *Reviewer) nextItem(ctx context.Context, sessionID string) (*ReviewResul
 		}
 		content, err = RenderDistillWorkItem(facts, ontologyRoot)
 	case "reflect":
-		content, err = RenderReflectWorkItem([]byte(item.FactsJSON), ontologyRoot)
+		existingMethodology := r.loadReflectMethodology(ctx, []byte(item.FactsJSON))
+		content, err = RenderReflectWorkItem([]byte(item.FactsJSON), ontologyRoot, existingMethodology)
 	default:
 		return nil, fmt.Errorf("review: unknown step type %q", item.StepType)
 	}
@@ -492,6 +493,76 @@ func (r *Reviewer) completeSession(ctx context.Context, sess *store.PipelineSess
 		Summary:   &ReviewStats{},
 		Progress:  &ReviewProgress{Completed: completed, Remaining: 0},
 	}, nil
+}
+
+// loadReflectMethodology retrieves methodology relevant to the union of tags
+// and bodies from the transitioned hypothesis facts. The transitions JSON is
+// []hypothesisTransition — only paths are present, so we look each one up in
+// the search index to obtain domain/entity tags and body text.
+// Returns "" on any error or when no methodology matches — the reflect template
+// treats empty as "no existing methodology section".
+func (r *Reviewer) loadReflectMethodology(ctx context.Context, transitionsJSON []byte) string {
+	var ts []hypothesisTransition
+	if err := json.Unmarshal(transitionsJSON, &ts); err != nil {
+		return ""
+	}
+	if len(ts) == 0 {
+		return ""
+	}
+
+	domSet := map[string]struct{}{}
+	entSet := map[string]struct{}{}
+	var bodies []string
+
+	r.ri.WithRead(func(svc *store.Service) {
+		if svc == nil {
+			return
+		}
+		branch := r.ri.AgentBranch()
+		for _, t := range ts {
+			f, err := svc.Search().GetByPath(ctx, branch, t.Path)
+			if err != nil || f == nil {
+				continue
+			}
+			for _, d := range f.Domain {
+				if d == "meta" || d == "reasoning" || d == "methodology" {
+					continue
+				}
+				domSet[d] = struct{}{}
+			}
+			for _, e := range f.Entities {
+				entSet[e] = struct{}{}
+			}
+			if f.Body != "" {
+				bodies = append(bodies, f.Body)
+			}
+		}
+	})
+
+	doms := make([]string, 0, len(domSet))
+	for d := range domSet {
+		doms = append(doms, d)
+	}
+	ents := make([]string, 0, len(entSet))
+	for e := range entSet {
+		ents = append(ents, e)
+	}
+	combinedBody := strings.Join(bodies, "\n\n")
+	if len(combinedBody) > 4000 {
+		combinedBody = combinedBody[:4000]
+	}
+
+	var matches []store.MethodologyMatch
+	r.ri.WithRead(func(svc *store.Service) {
+		if svc == nil {
+			return
+		}
+		matches, _ = svc.Search().RelevantMethodology(
+			ctx, r.ri.AgentBranch(),
+			combinedBody, doms, ents, 3,
+		)
+	})
+	return store.FormatMethodologySection(matches)
 }
 
 // hypothesisTransition records a change to a hypothesis fact during a review session.
