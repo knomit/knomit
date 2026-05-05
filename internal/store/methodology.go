@@ -10,6 +10,13 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+// vectorWeight and tagWeight are the composite-score coefficients.
+// var (not const) so tests can override; production tuning happens here.
+var (
+	vectorWeight = 0.6
+	tagWeight    = 0.4
+)
+
 // MethodologyMatch is one entry in RelevantMethodology's ranked result set.
 // Fields beyond Path/Title/Body are populated only when scoring is in play
 // (Tasks 2 and 3 fill them); Task 1 returns Score=0 for every entry.
@@ -71,10 +78,39 @@ func (si *searchIndex) RelevantMethodology(ctx context.Context, branch, sourceBo
 		return nil, fmt.Errorf("RelevantMethodology: rows: %w", err)
 	}
 
-	// Score each candidate: tag-overlap component only (Task 2). Vector
-	// score lands in Task 3.
-	srcDomSet := stringSet(sourceDomains)
+		srcDomSet := stringSet(sourceDomains)
 	srcEntSet := stringSet(sourceEntities)
+
+	// Compute vector similarities once via a single sqlite-vec KNN over
+	// methodology rows. simByID maps facts.id → cosine similarity. When no
+	// embedder is configured or sourceBody is empty, simByID stays empty
+	// and ranking falls back to tag-overlap alone — still useful at low
+	// scale or when the caller has no body to embed.
+	simByID := make(map[int64]float64, len(cands))
+	if emb := si.rh.getEmbedder(); emb != nil && sourceBody != "" && len(cands) > 0 {
+		v, err := emb.Embed(sourceBody)
+		if err == nil && len(v) > 0 {
+			vecBlob := float32SliceToBytes(v)
+			knnRows, err := conn(ctx, si.rh.db).QueryContext(ctx,
+				`SELECT f.id, (1.0 - fv.distance) as similarity
+				 FROM facts_vec fv
+				 JOIN facts f ON f.id = fv.rowid
+				 JOIN branch_facts bf ON bf.fact_id = f.id AND bf.branch_id = ?
+				 WHERE fv.embedding MATCH ? AND fv.k = ? AND f.type = 'methodology'`,
+				branchID, vecBlob, len(cands),
+			)
+			if err == nil {
+				for knnRows.Next() {
+					var id int64
+					var sim float64
+					if err := knnRows.Scan(&id, &sim); err == nil {
+						simByID[id] = sim
+					}
+				}
+				knnRows.Close()
+			}
+		}
+	}
 
 	out := make([]MethodologyMatch, 0, len(cands))
 	for _, c := range cands {
@@ -91,15 +127,18 @@ func (si *searchIndex) RelevantMethodology(ctx context.Context, branch, sourceBo
 		domOverlap := float64(len(matchedDoms)) / float64(max(1, len(sourceDomains)))
 		entOverlap := float64(len(matchedEnts)) / float64(max(1, len(sourceEntities)))
 		tagOverlap := (domOverlap + entOverlap) / 2.0
+		vectorScore := simByID[c.id]
+		composite := vectorWeight*vectorScore + tagWeight*tagOverlap
 
 		out = append(out, MethodologyMatch{
 			Path:            c.path,
 			Title:           c.title,
 			Body:            body,
+			VectorScore:     vectorScore,
 			TagOverlap:      tagOverlap,
+			Score:           composite,
 			MatchedDomains:  matchedDoms,
 			MatchedEntities: matchedEnts,
-			Score:           tagOverlap, // composite still pending vector
 		})
 	}
 

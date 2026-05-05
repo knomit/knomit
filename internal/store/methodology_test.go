@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"testing"
 
@@ -200,4 +201,157 @@ func TestRelevantMethodology_TagOverlap_EmptySourceTags(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, got, 1)
 	require.Equal(t, 0.0, got[0].TagOverlap)
+}
+
+// TestRelevantMethodology_VectorOnly_Fallback verifies that when source
+// has no tag overlap, ranking still works via vector similarity.
+// Modeling the 28%/20% gap: methodology with empty domain/entities (only
+// meta markers) is still retrievable when its body is semantically related.
+func TestRelevantMethodology_VectorOnly_Fallback(t *testing.T) {
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	defer svc.Close()
+	svc.SetEmbedder(&stub768Embedder{})
+	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/a"))
+
+	ctx := context.Background()
+	branch := "agent/a"
+
+	// Two methodology facts, neither has source-overlapping tags. Vector
+	// ranks them by body similarity to source body.
+	_, err = svc.Facts().WriteFact(ctx, branch, "kb/meta/reasoning/close.md",
+		methFactBody("Close", "When evaluating evidence weighting under uncertainty",
+			[]string{"meta", "reasoning", "methodology"}, nil),
+		"close", "")
+	require.NoError(t, err)
+	_, err = svc.Facts().WriteFact(ctx, branch, "kb/meta/reasoning/far.md",
+		methFactBody("Far", "completely unrelated topic about cooking pasta",
+			[]string{"meta", "reasoning", "methodology"}, nil),
+		"far", "")
+	require.NoError(t, err)
+
+	// stub768Embedder hashes by len(text), so two distinct-length bodies
+	// yield two distinct vectors. The exact ordering depends on the stub;
+	// the test asserts only that BOTH are returned and have non-zero
+	// VectorScore — confirming vector retrieval is wired.
+	got, err := svc.Search().RelevantMethodology(ctx, branch,
+		"evidence weighting under uncertainty",
+		nil, nil, 10)
+	require.NoError(t, err)
+	require.Len(t, got, 2)
+	for _, m := range got {
+		require.Greater(t, m.VectorScore, 0.0,
+			"vector score must be non-zero when embedder is configured: %+v", m)
+	}
+}
+
+// TestRelevantMethodology_Composite_FormulaIsApplied verifies the score
+// formula Score == 0.6·VectorScore + 0.4·TagOverlap holds for every
+// returned match. Avoids asserting any particular ordering against the
+// stub embedder (whose cosine similarities are deterministic but
+// content-independent), instead asserting the per-match invariant.
+func TestRelevantMethodology_Composite_FormulaIsApplied(t *testing.T) {
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	defer svc.Close()
+	svc.SetEmbedder(&stub768Embedder{})
+	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/a"))
+
+	ctx := context.Background()
+	branch := "agent/a"
+
+	_, err = svc.Facts().WriteFact(ctx, branch, "kb/meta/reasoning/tagged.md",
+		methFactBody("Tagged", "different content but tags match",
+			[]string{"meta", "reasoning", "methodology", "security"},
+			[]string{"Anthropic"}),
+		"tagged", "")
+	require.NoError(t, err)
+	_, err = svc.Facts().WriteFact(ctx, branch, "kb/meta/reasoning/vectored.md",
+		methFactBody("Vectored", "exact source body for high vector score",
+			[]string{"meta", "reasoning", "methodology"}, nil),
+		"vectored", "")
+	require.NoError(t, err)
+
+	got, err := svc.Search().RelevantMethodology(ctx, branch,
+		"exact source body for high vector score",
+		[]string{"security"}, []string{"Anthropic"}, 10)
+	require.NoError(t, err)
+	require.Len(t, got, 2)
+
+	// Per-match invariant: Score == 0.6·VectorScore + 0.4·TagOverlap.
+	for _, m := range got {
+		expected := 0.6*m.VectorScore + 0.4*m.TagOverlap
+		require.InDelta(t, expected, m.Score, 0.0001,
+			"composite formula violated for %s: vec=%f, tag=%f, score=%f",
+			m.Path, m.VectorScore, m.TagOverlap, m.Score)
+	}
+
+	// Tagged has full tag overlap; Vectored has none.
+	byPath := map[string]MethodologyMatch{}
+	for _, m := range got {
+		byPath[m.Path] = m
+	}
+	require.InDelta(t, 1.0, byPath["kb/meta/reasoning/tagged.md"].TagOverlap, 0.0001)
+	require.InDelta(t, 0.0, byPath["kb/meta/reasoning/vectored.md"].TagOverlap, 0.0001)
+}
+
+// TestRelevantMethodology_Composite_TagWeightWinsAtFullMatch verifies that
+// with no embedder configured, tag-only ranking still works as a fallback
+// (VectorScore stays 0 for all candidates; ranking falls back to
+// 0.4·TagOverlap = TagOverlap, scaled).
+func TestRelevantMethodology_Composite_TagWeightWinsAtFullMatch(t *testing.T) {
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	defer svc.Close()
+	// No embedder: VectorScore stays 0 for all candidates.
+	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/a"))
+
+	ctx := context.Background()
+	branch := "agent/a"
+
+	_, err = svc.Facts().WriteFact(ctx, branch, "kb/meta/reasoning/tagged.md",
+		methFactBody("Tagged", "body",
+			[]string{"meta", "reasoning", "methodology", "security"},
+			[]string{"Anthropic"}),
+		"tagged", "")
+	require.NoError(t, err)
+	_, err = svc.Facts().WriteFact(ctx, branch, "kb/meta/reasoning/untagged.md",
+		methFactBody("Untagged", "body",
+			[]string{"meta", "reasoning", "methodology"}, nil),
+		"untagged", "")
+	require.NoError(t, err)
+
+	got, err := svc.Search().RelevantMethodology(ctx, branch, "src",
+		[]string{"security"}, []string{"Anthropic"}, 10)
+	require.NoError(t, err)
+	require.Len(t, got, 2)
+	require.Equal(t, "kb/meta/reasoning/tagged.md", got[0].Path,
+		"with no embedder, tag-overlap=1.0 must outrank tag-overlap=0")
+}
+
+// TestRelevantMethodology_TopK limits the result count.
+func TestRelevantMethodology_TopK(t *testing.T) {
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	defer svc.Close()
+	svc.SetEmbedder(&stub768Embedder{})
+	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/a"))
+
+	ctx := context.Background()
+	for i := 0; i < 5; i++ {
+		path := fmt.Sprintf("kb/meta/reasoning/m%d.md", i)
+		title := fmt.Sprintf("M%d", i)
+		_, err = svc.Facts().WriteFact(ctx, "agent/a", path,
+			methFactBody(title, "body", []string{"meta", "reasoning", "methodology"}, nil),
+			"add", "")
+		require.NoError(t, err)
+	}
+
+	got, err := svc.Search().RelevantMethodology(ctx, "agent/a", "src", nil, nil, 3)
+	require.NoError(t, err)
+	require.Len(t, got, 3)
 }
