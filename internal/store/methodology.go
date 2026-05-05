@@ -88,8 +88,8 @@ func (si *searchIndex) RelevantMethodology(ctx context.Context, branch, sourceBo
 		matchedDoms := intersectExcludingMarkers(c.domains, srcDomSet)
 		matchedEnts := intersect(c.entities, srcEntSet)
 
-		domOverlap := safeDiv(float64(len(matchedDoms)), float64(max(1, len(sourceDomains))))
-		entOverlap := safeDiv(float64(len(matchedEnts)), float64(max(1, len(sourceEntities))))
+		domOverlap := float64(len(matchedDoms)) / float64(max(1, len(sourceDomains)))
+		entOverlap := float64(len(matchedEnts)) / float64(max(1, len(sourceEntities)))
 		tagOverlap := (domOverlap + entOverlap) / 2.0
 
 		out = append(out, MethodologyMatch{
@@ -103,6 +103,7 @@ func (si *searchIndex) RelevantMethodology(ctx context.Context, branch, sourceBo
 		})
 	}
 
+	// SliceStable: preserve SQL row order for ties (secondary sort by insertion order).
 	// Sort descending by Score; Task 3 will refine the score formula.
 	sort.SliceStable(out, func(i, j int) bool { return out[i].Score > out[j].Score })
 
@@ -148,14 +149,6 @@ func intersectExcludingMarkers(candidateDomains []string, srcSet map[string]stru
 		}
 	}
 	return out
-}
-
-// safeDiv returns a/b, or 0 if b == 0.
-func safeDiv(a, b float64) float64 {
-	if b == 0 {
-		return 0
-	}
-	return a / b
 }
 
 // readFactBodyByBlobHash reads the markdown body for a fact identified by
