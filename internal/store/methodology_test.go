@@ -66,6 +66,14 @@ func TestRelevantMethodology_FiltersByTypeAndBranch(t *testing.T) {
 		paths[i] = m.Path
 	}
 	require.ElementsMatch(t, []string{"kb/meta/reasoning/m1.md", "kb/meta/reasoning/m2.md"}, paths)
+
+	// Verify body hydration: each result has the body we wrote.
+	byPath := map[string]MethodologyMatch{}
+	for _, m := range got {
+		byPath[m.Path] = m
+	}
+	require.Equal(t, "first lesson", byPath["kb/meta/reasoning/m1.md"].Body)
+	require.Equal(t, "second lesson", byPath["kb/meta/reasoning/m2.md"].Body)
 }
 
 // TestRelevantMethodology_EmptyCandidateSet verifies graceful empty return

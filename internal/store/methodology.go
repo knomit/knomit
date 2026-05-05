@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"strings"
+
+	"github.com/rs/zerolog/log"
 )
 
 // MethodologyMatch is one entry in RelevantMethodology's ranked result set.
@@ -68,8 +70,8 @@ func (si *searchIndex) RelevantMethodology(ctx context.Context, branch, sourceBo
 	for _, c := range cands {
 		body, err := si.readFactBodyByBlobHash(ctx, c.blobHash)
 		if err != nil {
-			// Skip candidates whose blob can't be loaded; they're indexed
-			// but inaccessible.
+			log.Warn().Err(err).Str("path", c.path).Str("blob_hash", c.blobHash).
+				Msg("RelevantMethodology: skipping candidate, blob unreadable")
 			continue
 		}
 		out = append(out, MethodologyMatch{
@@ -77,6 +79,9 @@ func (si *searchIndex) RelevantMethodology(ctx context.Context, branch, sourceBo
 			Title: c.title,
 			Body:  body,
 		})
+	}
+	if k > 0 && len(out) > k {
+		out = out[:k]
 	}
 	return out, nil
 }
