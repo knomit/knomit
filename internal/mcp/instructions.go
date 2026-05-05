@@ -106,18 +106,17 @@ You may stop at any time — progress is saved and the next session picks up rem
 Call this tool to generate hypotheses from synthesis facts. Works the same way as knomit_review:
 
 1. Call knomit_hypothesize with no arguments to start a session
-2. You'll receive a synthesis fact to investigate
-3. Use knomit_query (with path: "%s/meta/reasoning/" + domain/entity filters) to find applicable methodology
-4. Use knomit_explain on the synthesis fact to trace its provenance
-5. Gather additional evidence as needed
-6. If a hypothesis is warranted, call knomit_learn with type: hypothesis
-7. After writing the hypothesis, call knomit_learn with type: methodology, topic: "meta", category: "reasoning" to record the reasoning process — what worked, what evidence was decisive, which patterns applied, and any pitfalls
-8. Call knomit_hypothesize with session_id to get the next synthesis fact
-9. Repeat until done
+2. You'll receive a synthesis fact to investigate, with applicable methodology already loaded into the work-item instructions
+3. Use knomit_explain on the synthesis fact to trace its provenance
+4. Gather additional evidence as needed
+5. If a hypothesis is warranted, call knomit_learn with type: hypothesis
+6. After writing the hypothesis, call knomit_learn with type: methodology, topic: "meta", category: "reasoning" to record the reasoning process. Set domain and entities to the union of the synthesis fact's tags plus the standard methodology markers (meta, reasoning, methodology) — inherit, don't reinvent.
+7. Call knomit_hypothesize with session_id to get the next synthesis fact
+8. Repeat until done
 
 Hypothesis body must contain: hypothesis statement, evidence chain (with confidence/sources for each cited fact), reasoning step, known gaps, and falsification condition.
 
-Important: hypotheses must only cite observations and synthesis facts as evidence — never other hypotheses.`, ontologyRoot, ontologyRoot, topicList, ontologyRoot, ontologyRoot, ontologyRoot, ontologyRoot, ontologyRoot)
+Important: hypotheses must only cite observations and synthesis facts as evidence — never other hypotheses.`, ontologyRoot, ontologyRoot, topicList, ontologyRoot, ontologyRoot, ontologyRoot, ontologyRoot)
 }
 
 // ProfileInstructions returns the MCP server instructions for the given profile.

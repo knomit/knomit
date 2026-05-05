@@ -53,8 +53,6 @@ func HypothesizeHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.C
 		ri := repos.RepoFromContext(ctx)
 		s := storeIndices(ri)
 		agentBranch := ri.AgentBranch()
-		ontologyRoot := ri.OntologyRoot()
-
 		sessionID := req.GetString("session_id", "")
 		response := req.GetString("response", "")
 
@@ -62,9 +60,9 @@ func HypothesizeHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.C
 		var err error
 
 		if sessionID == "" {
-			result, err = hypothesizeStart(ctx, s, ontologyRoot, agentBranch)
+			result, err = hypothesizeStart(ctx, ri, s, agentBranch)
 		} else {
-			result, err = hypothesizeContinue(ctx, s, ontologyRoot, agentBranch, sessionID, response)
+			result, err = hypothesizeContinue(ctx, ri, s, agentBranch, sessionID, response)
 		}
 
 		if err != nil {
@@ -77,7 +75,7 @@ func HypothesizeHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.C
 }
 
 // hypothesizeStart creates a new session, finds synthesis facts, and returns the first item.
-func hypothesizeStart(ctx context.Context, s mcpStore, ontologyRoot, agentBranch string) (*HypothesizeResult, error) {
+func hypothesizeStart(ctx context.Context, ri *repos.RepoInstance, s mcpStore, agentBranch string) (*HypothesizeResult, error) {
 	branch := agentBranch
 
 	// Get watermark.
@@ -163,11 +161,11 @@ func hypothesizeStart(ctx context.Context, s mcpStore, ontologyRoot, agentBranch
 		}
 	}
 
-	return hypothesizeNextItem(ctx, s, ontologyRoot, agentBranch, sess.ID)
+	return hypothesizeNextItem(ctx, ri, s, agentBranch, sess.ID)
 }
 
 // hypothesizeContinue acknowledges the current work item and advances to the next.
-func hypothesizeContinue(ctx context.Context, s mcpStore, ontologyRoot, agentBranch, sessionID, response string) (*HypothesizeResult, error) {
+func hypothesizeContinue(ctx context.Context, ri *repos.RepoInstance, s mcpStore, agentBranch, sessionID, response string) (*HypothesizeResult, error) {
 	// Verify session exists and is active.
 	sess, err := s.pipeline.GetPipelineSession(ctx, sessionID)
 	if err != nil {
@@ -195,11 +193,11 @@ func hypothesizeContinue(ctx context.Context, s mcpStore, ontologyRoot, agentBra
 		}
 	}
 
-	return hypothesizeNextItem(ctx, s, ontologyRoot, agentBranch, sessionID)
+	return hypothesizeNextItem(ctx, ri, s, agentBranch, sessionID)
 }
 
 // hypothesizeNextItem fetches the next unanswered work item or completes the session.
-func hypothesizeNextItem(ctx context.Context, s mcpStore, ontologyRoot, agentBranch, sessionID string) (*HypothesizeResult, error) {
+func hypothesizeNextItem(ctx context.Context, ri *repos.RepoInstance, s mcpStore, agentBranch, sessionID string) (*HypothesizeResult, error) {
 	item, err := s.pipeline.NextPipelineWorkItem(ctx, sessionID)
 	if err != nil {
 		return nil, fmt.Errorf("next item: %w", err)
@@ -219,8 +217,11 @@ func hypothesizeNextItem(ctx context.Context, s mcpStore, ontologyRoot, agentBra
 		}, nil
 	}
 
-	// Build instructions.
-	instructions := buildHypothesizeInstructions(ontologyRoot)
+	// Extract the synthesis fact's path from the work-item JSON so we can
+	// query relevant methodology for it.
+	var synthFact fact.Fact
+	_ = json.Unmarshal([]byte(item.FactsJSON), &synthFact)
+	instructions := buildHypothesizeInstructions(ri, ctx, synthFact.Path())
 
 	completed, remaining, _ := s.pipeline.PipelineWorkItemStats(ctx, sessionID)
 
@@ -239,13 +240,44 @@ func hypothesizeNextItem(ctx context.Context, s mcpStore, ontologyRoot, agentBra
 	}, nil
 }
 
-// buildHypothesizeInstructions returns the step-by-step instructions for the agent.
-func buildHypothesizeInstructions(ontologyRoot string) string {
-	return fmt.Sprintf(`1. Query %s/meta/reasoning/ with domain/entity filters from the synthesis fact for applicable methodology
-2. Call knomit_explain on the synthesis fact to trace its provenance
-3. Gather additional evidence as needed using knomit_query
-4. Decide if a hypothesis is warranted based on the evidence
-5. If yes, call knomit_learn with type: hypothesis, including: hypothesis statement, evidence chain, reasoning step, known gaps, falsification condition
-6. After writing the hypothesis, call knomit_learn with type: methodology, topic: "meta", category: "reasoning" to record the reasoning process used — what worked, what evidence was decisive, which patterns applied, and any pitfalls encountered
-7. Call knomit_hypothesize with session_id to continue to the next synthesis fact`, ontologyRoot)
+// buildHypothesizeInstructions returns the step-by-step instructions for the
+// agent. When relevant methodology exists on the branch, it is appended to
+// the instructions as an "Applicable methodology" section so the LLM sees
+// the reasoning lessons inline rather than having to query for them.
+func buildHypothesizeInstructions(ri *repos.RepoInstance, ctx context.Context, synthPath string) string {
+	base := `1. Call knomit_explain on the synthesis fact to trace its provenance
+2. Gather additional evidence as needed using knomit_query
+3. Decide if a hypothesis is warranted based on the evidence
+4. If yes, call knomit_learn with type: hypothesis, including: hypothesis statement, evidence chain, reasoning step, known gaps, falsification condition. If any of the methodology lessons below informed your hypothesis (the line of reasoning, the evidence weighting, or the pitfalls to avoid), include their paths in your hypothesis's refs array. Cite only what you actually used.
+5. After writing the hypothesis, call knomit_learn with type: methodology, topic: "meta", category: "reasoning" to record the reasoning process used. Set the methodology's domain and entities to the union of the source synthesis fact's tags plus the standard markers (meta, reasoning, methodology) — inherit from the source rather than inventing new tags.
+6. Call knomit_hypothesize with session_id to continue to the next synthesis fact`
+
+	// Retrieve relevant methodology and append as a structured section.
+	section := loadMethodologySection(ctx, ri, synthPath)
+	if section == "" {
+		return base
+	}
+	return base + "\n\n" + section
+}
+
+// loadMethodologySection queries the branch's methodology for the given
+// synthesis fact and renders it as a prompt-ready section. Returns "" when
+// no methodology is relevant or any lookup fails.
+func loadMethodologySection(ctx context.Context, ri *repos.RepoInstance, synthPath string) string {
+	var matches []store.MethodologyMatch
+	ri.WithRead(func(svc *store.Service) {
+		if svc == nil {
+			return
+		}
+		// Read the synthesis fact to get its body+tags as the source.
+		f, err := svc.Search().GetByPath(ctx, ri.AgentBranch(), synthPath)
+		if err != nil || f == nil {
+			return
+		}
+		matches, _ = svc.Search().RelevantMethodology(
+			ctx, ri.AgentBranch(),
+			f.Body, f.Domain, f.Entities, 3,
+		)
+	})
+	return store.FormatMethodologySection(matches)
 }
