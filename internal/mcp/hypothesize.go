@@ -39,7 +39,7 @@ type HypothesizeProgress struct {
 // hypothesizeTool returns the Tool definition for knomit_hypothesize.
 func hypothesizeTool() mcpgo.Tool {
 	return mcpgo.NewTool("knomit_hypothesize",
-		mcpgo.WithDescription("Generate hypotheses from synthesis facts. Call with no arguments to start a new session. Call with session_id to continue processing the next fact."),
+		mcpgo.WithDescription("Generate NEW hypothesis facts from synthesis facts on the agent branch. This is a distinct operation from knomit_review — only invoke when the user has explicitly asked to hypothesize, generate predictions, or extend synthesis facts forward. Do NOT invoke as a follow-up to knomit_review or other maintenance tools without an explicit user request. Each work item presents one synthesis fact; the agent decides per-item whether to write a hypothesis (skipping is the expected outcome for most synth facts — see workflow). Call with no arguments to start a new session. Call with session_id to continue processing the next fact."),
 		mcpgo.WithString("session_id", mcpgo.Description("Session ID from a previous call. Omit to start a new session.")),
 		mcpgo.WithString("response", mcpgo.Description("Your response/acknowledgement for the previous work item.")),
 	)
@@ -260,9 +260,14 @@ func buildHypothesizeInstructions(ctx context.Context, ri *repos.RepoInstance, b
 
 1. Call knomit_explain on the synthesis fact to trace its provenance.
 2. Gather evidence as needed via knomit_query.
-3. Decide whether a hypothesis is warranted.
-4. If yes, call knomit_learn with type: hypothesis. The refs array MUST include the synthesis fact's path AND every source fact you cite as evidence. An empty refs array indicates you did not engage with the inputs — do not submit.
-5. Call knomit_learn with type: methodology, topic: "meta", category: "reasoning" to record the reasoning process you used. Set the methodology's domain and entities to the union of the source synthesis fact's tags plus the standard markers (meta, reasoning, methodology).
+3. Decide whether a hypothesis is warranted. Default to NO. Write one ONLY if ALL of these hold:
+   (a) Forward-looking: the hypothesis predicts or causally claims something beyond what the synth fact already establishes. Restating the synth fact is not a hypothesis.
+   (b) Falsifiable: you can state a concrete settlement criterion (date, threshold, or observable). "Trends will continue" does not qualify.
+   (c) Load-bearing gap: there is a specific piece of evidence whose discovery would meaningfully shift the hypothesis's confidence.
+   (d) Not duplicative: no existing hypothesis on this branch already makes substantively the same prediction. If unsure, briefly check via knomit_query.
+   If any condition fails, skip — proceed directly to step 6. Skipping is the expected outcome for most synth facts.
+4. If you decided yes in step 3: call knomit_learn with type: hypothesis. The refs array MUST include the synthesis fact's path AND every source fact you cite as evidence. An empty refs array indicates you did not engage with the inputs — do not submit.
+5. If you wrote a hypothesis in step 4: call knomit_learn with type: methodology, topic: "meta", category: "reasoning" to record the reasoning process you used. Set the methodology's domain and entities to the union of the source synthesis fact's tags plus the standard markers (meta, reasoning, methodology).
 6. Call knomit_hypothesize with session_id to continue to the next synthesis fact.`
 	}
 
@@ -273,13 +278,18 @@ WORKFLOW (do not skip steps):
 1. Call knomit_explain on the synthesis fact to trace its provenance.
 2. For EVERY methodology candidate above with score ≥ 0.50, call knomit_query on its path and read the body. Decide whether it applies to your reasoning here. Titles alone are not enough to judge applicability — do not skip candidates above the threshold.
 3. Gather additional evidence as needed via knomit_query.
-4. Decide whether a hypothesis is warranted.
-5. If yes, call knomit_learn with type: hypothesis. The refs array MUST include:
+4. Decide whether a hypothesis is warranted. Default to NO. Write one ONLY if ALL of these hold:
+   (a) Forward-looking: the hypothesis predicts or causally claims something beyond what the synth fact already establishes. Restating the synth fact is not a hypothesis.
+   (b) Falsifiable: you can state a concrete settlement criterion (date, threshold, or observable). "Trends will continue" does not qualify.
+   (c) Load-bearing gap: there is a specific piece of evidence whose discovery would meaningfully shift the hypothesis's confidence.
+   (d) Not duplicative: no existing hypothesis on this branch already makes substantively the same prediction. If unsure, briefly check via knomit_query.
+   If any condition fails, skip — proceed directly to step 7. Skipping is the expected outcome for most synth facts.
+5. If you decided yes in step 4: call knomit_learn with type: hypothesis. The refs array MUST include:
    - the synthesis fact's path
    - every source fact you cite as evidence
    - every methodology from step 2 that shaped your reasoning
    An empty refs array indicates you did not engage with the inputs — do not submit.
-6. Only call knomit_learn with type: methodology if your reasoning is GENUINELY novel. If a methodology you read in step 2 already captures the same lesson, skip the new methodology fact — adding a near-duplicate pollutes the methodology pool and dilutes future retrieval. When you do write one, set domain and entities to the union of the source synthesis fact's tags plus the standard markers (meta, reasoning, methodology).
+6. If you wrote a hypothesis in step 5: only call knomit_learn with type: methodology if your reasoning is GENUINELY novel. If a methodology you read in step 2 already captures the same lesson, skip the new methodology fact — adding a near-duplicate pollutes the methodology pool and dilutes future retrieval. When you do write one, set domain and entities to the union of the source synthesis fact's tags plus the standard markers (meta, reasoning, methodology).
 7. Call knomit_hypothesize with session_id to continue to the next synthesis fact.`
 }
 
