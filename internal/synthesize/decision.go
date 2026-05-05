@@ -128,6 +128,17 @@ func ApplyPruneDecisions(ctx context.Context,
 			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("merge %s rejected: %v", mf.Path, err)})
 			continue
 		}
+		// Prune-merges cannot create hypothesis-type facts. Hypotheses
+		// are only created by knomit_hypothesize via knomit_learn (the
+		// agent-driven path), never by review. The prompt forbids this
+		// in merged.type's enum but the schema accepts the LLM's word;
+		// this guard mirrors the same check on the distill path so the
+		// architectural invariant "review never creates hypotheses" is
+		// enforced server-side, not just by prompt.
+		if fact.EpistemicType(mf.Type) == fact.Hypothesis {
+			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("merge: skipping hypothesis-type output %s — prune-merge cannot create hypotheses", mf.Path)})
+			continue
+		}
 		weight := computeWeight(ctx, gs, agentBranch, m.Paths)
 		merged := fact.NewFact(mf.Path)
 		merged.Title = mf.Title
