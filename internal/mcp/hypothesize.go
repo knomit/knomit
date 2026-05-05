@@ -221,7 +221,7 @@ func hypothesizeNextItem(ctx context.Context, ri *repos.RepoInstance, s mcpStore
 	// query relevant methodology for it.
 	var synthFact fact.Fact
 	_ = json.Unmarshal([]byte(item.FactsJSON), &synthFact)
-	instructions := buildHypothesizeInstructions(ri, ctx, synthFact.Path())
+	instructions := buildHypothesizeInstructions(ctx, ri, synthFact.Path())
 
 	completed, remaining, _ := s.pipeline.PipelineWorkItemStats(ctx, sessionID)
 
@@ -244,7 +244,7 @@ func hypothesizeNextItem(ctx context.Context, ri *repos.RepoInstance, s mcpStore
 // agent. When relevant methodology exists on the branch, it is appended to
 // the instructions as an "Applicable methodology" section so the LLM sees
 // the reasoning lessons inline rather than having to query for them.
-func buildHypothesizeInstructions(ri *repos.RepoInstance, ctx context.Context, synthPath string) string {
+func buildHypothesizeInstructions(ctx context.Context, ri *repos.RepoInstance, synthPath string) string {
 	base := `1. Call knomit_explain on the synthesis fact to trace its provenance
 2. Gather additional evidence as needed using knomit_query
 3. Decide if a hypothesis is warranted based on the evidence
