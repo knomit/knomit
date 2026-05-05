@@ -78,7 +78,7 @@ func (si *searchIndex) RelevantMethodology(ctx context.Context, branch, sourceBo
 		return nil, fmt.Errorf("RelevantMethodology: rows: %w", err)
 	}
 
-		srcDomSet := stringSet(sourceDomains)
+	srcDomSet := stringSet(sourceDomains)
 	srcEntSet := stringSet(sourceEntities)
 
 	// Compute vector similarities once via a single sqlite-vec KNN over
@@ -106,6 +106,9 @@ func (si *searchIndex) RelevantMethodology(ctx context.Context, branch, sourceBo
 					if err := knnRows.Scan(&id, &sim); err == nil {
 						simByID[id] = sim
 					}
+				}
+				if err := knnRows.Err(); err != nil {
+					log.Warn().Err(err).Msg("RelevantMethodology: KNN row iteration error; falling back to tag-only")
 				}
 				knnRows.Close()
 			}
