@@ -81,36 +81,48 @@ func (si *searchIndex) RelevantMethodology(ctx context.Context, branch, sourceBo
 	srcDomSet := stringSet(sourceDomains)
 	srcEntSet := stringSet(sourceEntities)
 
-	// Compute vector similarities once via a single sqlite-vec KNN over
-	// methodology rows. simByID maps facts.id → cosine similarity. When no
-	// embedder is configured or sourceBody is empty, simByID stays empty
-	// and ranking falls back to tag-overlap alone — still useful at low
-	// scale or when the caller has no body to embed.
+	// Compute vector similarities once via a single sqlite-vec KNN.
+	// sqlite-vec applies the global top-k window BEFORE the WHERE filter,
+	// so we need k to cover the full branch fact count to guarantee every
+	// methodology candidate gets a similarity score. A bare COUNT(*) on the
+	// branch's facts is cheap and bounds k correctly.
 	simByID := make(map[int64]float64, len(cands))
 	if emb := si.rh.getEmbedder(); emb != nil && sourceBody != "" && len(cands) > 0 {
-		v, err := emb.Embed(sourceBody)
-		if err == nil && len(v) > 0 {
-			vecBlob := float32SliceToBytes(v)
-			knnRows, err := conn(ctx, si.rh.db).QueryContext(ctx,
-				`SELECT f.id, (1.0 - fv.distance) as similarity
-				 FROM facts_vec fv
-				 JOIN facts f ON f.id = fv.rowid
-				 JOIN branch_facts bf ON bf.fact_id = f.id AND bf.branch_id = ?
-				 WHERE fv.embedding MATCH ? AND fv.k = ? AND f.type = 'methodology'`,
-				branchID, vecBlob, len(cands),
-			)
-			if err == nil {
-				for knnRows.Next() {
-					var id int64
-					var sim float64
-					if err := knnRows.Scan(&id, &sim); err == nil {
-						simByID[id] = sim
+		// Bound k by total branch fact count so methodology rows always
+		// make it through the global top-k window.
+		var totalFacts int64
+		if err := conn(ctx, si.rh.db).QueryRowContext(ctx,
+			`SELECT COUNT(*) FROM branch_facts WHERE branch_id = ?`,
+			branchID,
+		).Scan(&totalFacts); err != nil {
+			log.Warn().Err(err).Msg("RelevantMethodology: branch fact count failed; falling back to tag-only ranking")
+			totalFacts = 0
+		}
+		if totalFacts > 0 {
+			v, err := emb.Embed(sourceBody)
+			if err == nil && len(v) > 0 {
+				vecBlob := float32SliceToBytes(v)
+				knnRows, err := conn(ctx, si.rh.db).QueryContext(ctx,
+					`SELECT f.id, (1.0 - fv.distance) as similarity
+					 FROM facts_vec fv
+					 JOIN facts f ON f.id = fv.rowid
+					 JOIN branch_facts bf ON bf.fact_id = f.id AND bf.branch_id = ?
+					 WHERE fv.embedding MATCH ? AND fv.k = ? AND f.type = 'methodology'`,
+					branchID, vecBlob, totalFacts,
+				)
+				if err == nil {
+					for knnRows.Next() {
+						var id int64
+						var sim float64
+						if err := knnRows.Scan(&id, &sim); err == nil {
+							simByID[id] = sim
+						}
 					}
+					if err := knnRows.Err(); err != nil {
+						log.Warn().Err(err).Msg("RelevantMethodology: KNN row iteration error; falling back to tag-only")
+					}
+					knnRows.Close()
 				}
-				if err := knnRows.Err(); err != nil {
-					log.Warn().Err(err).Msg("RelevantMethodology: KNN row iteration error; falling back to tag-only")
-				}
-				knnRows.Close()
 			}
 		}
 	}
@@ -175,6 +187,14 @@ func intersect(a []string, set map[string]struct{}) []string {
 	return out
 }
 
+// IsMethodologyMarker reports whether s is one of the universal markers
+// (meta, reasoning, methodology) that every methodology fact carries in
+// its `domain` array. Used to filter these out before tag overlap
+// scoring so they don't generate automatic intersection.
+func IsMethodologyMarker(s string) bool {
+	return s == "meta" || s == "reasoning" || s == "methodology"
+}
+
 // intersectExcludingMarkers is intersect for the candidate-side domain
 // list, with the universal methodology markers (meta, reasoning,
 // methodology) stripped from the candidate set BEFORE intersection. This
@@ -183,7 +203,7 @@ func intersect(a []string, set map[string]struct{}) []string {
 func intersectExcludingMarkers(candidateDomains []string, srcSet map[string]struct{}) []string {
 	out := make([]string, 0, len(candidateDomains))
 	for _, v := range candidateDomains {
-		if v == "meta" || v == "reasoning" || v == "methodology" {
+		if IsMethodologyMarker(v) {
 			continue
 		}
 		if _, ok := srcSet[v]; ok {

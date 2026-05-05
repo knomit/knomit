@@ -8,6 +8,7 @@ import (
 	"time"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
+	"github.com/rs/zerolog/log"
 
 	"knomit/internal/fact"
 	"knomit/internal/repos"
@@ -220,7 +221,9 @@ func hypothesizeNextItem(ctx context.Context, ri *repos.RepoInstance, s mcpStore
 	// Extract the synthesis fact's path from the work-item JSON so we can
 	// query relevant methodology for it.
 	var synthFact fact.Fact
-	_ = json.Unmarshal([]byte(item.FactsJSON), &synthFact)
+	if err := json.Unmarshal([]byte(item.FactsJSON), &synthFact); err != nil {
+		log.Warn().Err(err).Msg("hypothesize: unmarshal synth fact failed; methodology section will be empty")
+	}
 	instructions := buildHypothesizeInstructions(ctx, ri, synthFact.Path())
 
 	completed, remaining, _ := s.pipeline.PipelineWorkItemStats(ctx, sessionID)

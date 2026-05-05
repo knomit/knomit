@@ -511,22 +511,24 @@ func (r *Reviewer) loadReflectMethodology(ctx context.Context, transitionsJSON [
 		return ""
 	}
 
-	domSet := map[string]struct{}{}
-	entSet := map[string]struct{}{}
-	var bodies []string
-
+	// Single WithRead pass: hydrate transitions via GetByPath AND query
+	// RelevantMethodology under one read-lock acquisition.
+	var matches []store.MethodologyMatch
 	r.ri.WithRead(func(svc *store.Service) {
 		if svc == nil {
 			return
 		}
 		branch := r.ri.AgentBranch()
+		domSet := map[string]struct{}{}
+		entSet := map[string]struct{}{}
+		var bodies []string
 		for _, t := range ts {
 			f, err := svc.Search().GetByPath(ctx, branch, t.Path)
 			if err != nil || f == nil {
 				continue
 			}
 			for _, d := range f.Domain {
-				if d == "meta" || d == "reasoning" || d == "methodology" {
+				if store.IsMethodologyMarker(d) {
 					continue
 				}
 				domSet[d] = struct{}{}
@@ -534,34 +536,21 @@ func (r *Reviewer) loadReflectMethodology(ctx context.Context, transitionsJSON [
 			for _, e := range f.Entities {
 				entSet[e] = struct{}{}
 			}
-			if f.Body != "" {
-				bodies = append(bodies, f.Body)
-			}
+			bodies = append(bodies, f.Body)
 		}
-	})
-
-	doms := make([]string, 0, len(domSet))
-	for d := range domSet {
-		doms = append(doms, d)
-	}
-	ents := make([]string, 0, len(entSet))
-	for e := range entSet {
-		ents = append(ents, e)
-	}
-	combinedBody := strings.Join(bodies, "\n\n")
-	if len(combinedBody) > 4000 {
-		combinedBody = combinedBody[:4000]
-	}
-
-	var matches []store.MethodologyMatch
-	r.ri.WithRead(func(svc *store.Service) {
-		if svc == nil {
-			return
+		doms := make([]string, 0, len(domSet))
+		for d := range domSet {
+			doms = append(doms, d)
 		}
-		matches, _ = svc.Search().RelevantMethodology(
-			ctx, r.ri.AgentBranch(),
-			combinedBody, doms, ents, 3,
-		)
+		ents := make([]string, 0, len(entSet))
+		for e := range entSet {
+			ents = append(ents, e)
+		}
+		combinedBody := strings.Join(bodies, "\n\n")
+		if len(combinedBody) > 4000 {
+			combinedBody = combinedBody[:4000]
+		}
+		matches, _ = svc.Search().RelevantMethodology(ctx, branch, combinedBody, doms, ents, 3)
 	})
 	return store.FormatMethodologySection(matches)
 }
@@ -575,7 +564,7 @@ func (r *Reviewer) loadDistillMethodology(ctx context.Context, facts []factForLL
 	var bodies []string
 	for _, f := range facts {
 		for _, d := range f.Domain {
-			if d == "meta" || d == "reasoning" || d == "methodology" {
+			if store.IsMethodologyMarker(d) {
 				continue
 			}
 			domSet[d] = struct{}{}

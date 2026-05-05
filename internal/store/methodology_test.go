@@ -355,3 +355,57 @@ func TestRelevantMethodology_TopK(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, got, 3)
 }
+
+// TestRelevantMethodology_VectorCoverage_WithNoiseInIndex regresses the bug
+// where sqlite-vec's `MATCH ... AND k = N` applied N as a global top-k
+// before the type='methodology' filter, causing methodology rows to fall
+// outside the window when the index has many non-methodology facts.
+//
+// Seeds many non-methodology facts to push methodology rows into the long
+// tail by distance, then asserts every methodology candidate still gets a
+// non-zero VectorScore.
+func TestRelevantMethodology_VectorCoverage_WithNoiseInIndex(t *testing.T) {
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	defer svc.Close()
+	svc.SetEmbedder(&stub768Embedder{})
+	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/a"))
+
+	ctx := context.Background()
+	branch := "agent/a"
+
+	// Seed 30 non-methodology observation facts (the "noise" the KNN
+	// global top-k window would otherwise consume).
+	for i := 0; i < 30; i++ {
+		path := fmt.Sprintf("kb/obs/n%d.md", i)
+		body := fmt.Sprintf("noise body %d with varied content", i)
+		_, err = svc.Facts().WriteFact(ctx, branch, path, testFactBody(body, 0.5, nil), "noise", "")
+		require.NoError(t, err)
+	}
+
+	// Seed 3 methodology facts. With the bug (k = len(cands) = 3), only
+	// the closest 3 vectors GLOBALLY are considered; in a 33-fact index,
+	// the methodology rows are unlikely to all be in that window.
+	for i := 0; i < 3; i++ {
+		path := fmt.Sprintf("kb/meta/reasoning/m%d.md", i)
+		_, err = svc.Facts().WriteFact(ctx, branch, path,
+			methFactBody(fmt.Sprintf("M%d", i), fmt.Sprintf("methodology body %d", i),
+				[]string{"meta", "reasoning", "methodology"}, nil),
+			"meth", "")
+		require.NoError(t, err)
+	}
+
+	got, err := svc.Search().RelevantMethodology(ctx, branch,
+		"some source body for vector ranking",
+		nil, nil, 10)
+	require.NoError(t, err)
+	require.Len(t, got, 3)
+
+	// Every methodology row must have a non-zero VectorScore — the bug
+	// would leave most at 0.
+	for _, m := range got {
+		require.Greater(t, m.VectorScore, 0.0,
+			"methodology candidate %s has VectorScore=0 — KNN window did not cover it", m.Path)
+	}
+}
