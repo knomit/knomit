@@ -50,16 +50,19 @@ func (r *Reviewer) storeIndices() (store.FactIndex, store.SearchIndex, store.Pip
 	return gs, idx, pipelineIdx, branches
 }
 
-func (r *Reviewer) branch() string {
-	return r.ri.AgentBranch()
-}
-
 // StartSession creates a new review session, identifies dirty facts, clusters
 // them, stores work items, and returns the first item to review.
+//
+// This is the boundary at which the agent branch is bound to the
+// session: the value of ri.AgentBranch() at this moment becomes
+// sess.Branch and travels with the session for the rest of its
+// lifetime. All downstream Reviewer methods read sess.Branch — they
+// never reach back into ri.AgentBranch() — so a session continuing
+// across an AgentBranch change still operates on its original branch.
 func (r *Reviewer) StartSession(ctx context.Context) (*ReviewResult, error) {
 	totalStart := time.Now()
 	gs, idx, pipelineIdx, _ := r.storeIndices()
-	branch := r.branch()
+	branch := r.ri.AgentBranch()
 
 	sess, err := pipelineIdx.CreatePipelineSession(ctx, "review", branch)
 	if err != nil {
@@ -147,14 +150,13 @@ func (r *Reviewer) StartSession(ctx context.Context) (*ReviewResult, error) {
 		Msg("review: session started")
 	r.onProgress(ProgressEvent{Phase: "review-start", Message: fmt.Sprintf("session %s: %d clusters, %d seeds", sess.ID, len(pruneClusters), len(seeds))})
 
-	return r.nextItem(ctx, sess.ID)
+	return r.nextItem(ctx, sess)
 }
 
 // ContinueSession processes the model's response for the current work item
 // and returns the next item, or done if the session is complete.
 func (r *Reviewer) ContinueSession(ctx context.Context, sessionID, response string) (*ReviewResult, error) {
 	gs, idx, pipelineIdx, _ := r.storeIndices()
-	branch := r.branch()
 
 	sess, err := pipelineIdx.GetPipelineSession(ctx, sessionID)
 	if err != nil {
@@ -166,6 +168,9 @@ func (r *Reviewer) ContinueSession(ctx context.Context, sessionID, response stri
 	if sess.Status != "active" {
 		return nil, fmt.Errorf("review: session %q is %s, not active", sessionID, sess.Status)
 	}
+	// Use the session's recorded branch — the session was bound to that
+	// branch at creation; do not reach into the live AgentBranch.
+	branch := sess.Branch
 
 	// Get the current (unanswered) work item.
 	item, err := pipelineIdx.NextPipelineWorkItem(ctx, sessionID)
@@ -272,7 +277,7 @@ func (r *Reviewer) ContinueSession(ctx context.Context, sessionID, response stri
 		return nil, fmt.Errorf("review: set response: %w", err)
 	}
 
-	return r.nextItem(ctx, sessionID)
+	return r.nextItem(ctx, sess)
 }
 
 // RunAll drives the review session to completion using an LLM adapter.
@@ -378,8 +383,15 @@ func (r *Reviewer) dirtyFacts(ctx context.Context, branch string, gs store.FactI
 
 // nextItem fetches the next unanswered work item, renders its prompt, and
 // returns a ReviewResult. If no items remain, completes the session.
-func (r *Reviewer) nextItem(ctx context.Context, sessionID string) (*ReviewResult, error) {
+//
+// sess carries the branch the session was created against (sess.Branch);
+// all reads/writes within this method use that recorded branch rather
+// than the live AgentBranch, so a session continuing across an
+// AgentBranch change still operates on its original branch.
+func (r *Reviewer) nextItem(ctx context.Context, sess *store.PipelineSession) (*ReviewResult, error) {
 	_, _, pipelineIdx, _ := r.storeIndices()
+	sessionID := sess.ID
+	branch := sess.Branch
 
 	item, err := pipelineIdx.NextPipelineWorkItem(ctx, sessionID)
 	if err != nil {
@@ -390,7 +402,7 @@ func (r *Reviewer) nextItem(ctx context.Context, sessionID string) (*ReviewResul
 		// Before completing, check if we should enqueue a reflect step.
 		if !r.reflectChecked[sessionID] {
 			r.reflectChecked[sessionID] = true
-			transitions, tErr := r.findHypothesisTransitions(ctx, sessionID)
+			transitions, tErr := r.findHypothesisTransitions(ctx, sess)
 			if tErr != nil {
 				log.Warn().Err(tErr).Msg("review: failed to find hypothesis transitions")
 			}
@@ -407,13 +419,9 @@ func (r *Reviewer) nextItem(ctx context.Context, sessionID string) (*ReviewResul
 					log.Warn().Err(err).Msg("review: failed to enqueue reflect item")
 				} else {
 					// Recurse to fetch the just-enqueued reflect item.
-					return r.nextItem(ctx, sessionID)
+					return r.nextItem(ctx, sess)
 				}
 			}
-		}
-		sess, err := pipelineIdx.GetPipelineSession(ctx, sessionID)
-		if err != nil {
-			return nil, fmt.Errorf("review: get session for complete: %w", err)
 		}
 		return r.completeSession(ctx, sess)
 	}
@@ -432,10 +440,10 @@ func (r *Reviewer) nextItem(ctx context.Context, sessionID string) (*ReviewResul
 		if err := json.Unmarshal([]byte(item.FactsJSON), &facts); err != nil {
 			return nil, fmt.Errorf("review: unmarshal facts for prompt: %w", err)
 		}
-		applicableMethodology := r.loadDistillMethodology(ctx, facts)
+		applicableMethodology := r.loadDistillMethodology(ctx, branch, facts)
 		content, err = RenderDistillWorkItem(facts, ontologyRoot, applicableMethodology)
 	case "reflect":
-		existingMethodology := r.loadReflectMethodology(ctx, []byte(item.FactsJSON))
+		existingMethodology := r.loadReflectMethodology(ctx, branch, []byte(item.FactsJSON))
 		content, err = RenderReflectWorkItem([]byte(item.FactsJSON), ontologyRoot, existingMethodology)
 	default:
 		return nil, fmt.Errorf("review: unknown step type %q", item.StepType)
@@ -464,9 +472,11 @@ func (r *Reviewer) nextItem(ctx context.Context, sessionID string) (*ReviewResul
 }
 
 // completeSession marks the session done and advances the watermark.
+// Branch comes from sess.Branch — the recorded branch the session was
+// created against — so HEAD lookup and watermark advance are consistent.
 func (r *Reviewer) completeSession(ctx context.Context, sess *store.PipelineSession) (*ReviewResult, error) {
 	_, _, pipelineIdx, branches := r.storeIndices()
-	branch := r.branch()
+	branch := sess.Branch
 
 	if err := pipelineIdx.CompletePipelineSession(ctx, sess.ID); err != nil {
 		return nil, fmt.Errorf("review: complete session: %w", err)
@@ -476,7 +486,7 @@ func (r *Reviewer) completeSession(ctx context.Context, sess *store.PipelineSess
 	if err != nil {
 		log.Warn().Err(err).Msg("review: could not get HEAD for watermark")
 	} else {
-		if err := pipelineIdx.SetPipelineWatermark(ctx, "review", sess.Branch, headHash); err != nil {
+		if err := pipelineIdx.SetPipelineWatermark(ctx, "review", branch, headHash); err != nil {
 			log.Warn().Err(err).Msg("review: could not advance watermark")
 		}
 	}
@@ -506,7 +516,11 @@ const methodologyTopK = 3
 // hypothesis fact independently, then merges the per-fact results (keeping
 // the highest score per methodology path). Returns "" on any failure (logged)
 // or when no methodology matches.
-func (r *Reviewer) loadReflectMethodology(ctx context.Context, transitionsJSON []byte) string {
+//
+// branch is required (no implicit AgentBranch fallback): callers pass the
+// session's recorded branch so retrieval lands on the same branch the
+// session was created against.
+func (r *Reviewer) loadReflectMethodology(ctx context.Context, branch string, transitionsJSON []byte) string {
 	var ts []hypothesisTransition
 	if err := json.Unmarshal(transitionsJSON, &ts); err != nil {
 		log.Warn().Err(err).Msg("loadReflectMethodology: transitions JSON malformed; skipping methodology section")
@@ -519,10 +533,9 @@ func (r *Reviewer) loadReflectMethodology(ctx context.Context, transitionsJSON [
 	var merged []store.MethodologyMatch
 	r.ri.WithRead(func(svc *store.Service) {
 		if svc == nil {
-			log.Error().Str("branch", r.ri.AgentBranch()).Msg("loadReflectMethodology: nil store service; methodology disabled")
+			log.Error().Str("branch", branch).Msg("loadReflectMethodology: nil store service; methodology disabled")
 			return
 		}
-		branch := r.ri.AgentBranch()
 		minScore := r.ri.MethodologyMinScore()
 		seen := map[string]store.MethodologyMatch{}
 		for _, t := range ts {
@@ -562,7 +575,9 @@ func (r *Reviewer) loadReflectMethodology(ctx context.Context, transitionsJSON [
 // loadDistillMethodology retrieves methodology relevant to each input fact
 // independently, then merges the per-fact results. Returns "" on failure
 // (logged) or when no methodology matches.
-func (r *Reviewer) loadDistillMethodology(ctx context.Context, facts []factForLLM) string {
+//
+// branch is required (no implicit AgentBranch fallback).
+func (r *Reviewer) loadDistillMethodology(ctx context.Context, branch string, facts []factForLLM) string {
 	if len(facts) == 0 {
 		return ""
 	}
@@ -570,10 +585,9 @@ func (r *Reviewer) loadDistillMethodology(ctx context.Context, facts []factForLL
 	var merged []store.MethodologyMatch
 	r.ri.WithRead(func(svc *store.Service) {
 		if svc == nil {
-			log.Error().Str("branch", r.ri.AgentBranch()).Msg("loadDistillMethodology: nil store service; methodology disabled")
+			log.Error().Str("branch", branch).Msg("loadDistillMethodology: nil store service; methodology disabled")
 			return
 		}
-		branch := r.ri.AgentBranch()
 		minScore := r.ri.MethodologyMinScore()
 		seen := map[string]store.MethodologyMatch{}
 		for _, f := range facts {
@@ -633,20 +647,17 @@ type hypothesisTransition struct {
 }
 
 // findHypothesisTransitions detects hypothesis facts that were promoted,
-// retracted, or had their confidence changed during the current review session.
-func (r *Reviewer) findHypothesisTransitions(ctx context.Context, sessionID string) ([]hypothesisTransition, error) {
+// retracted, or had their confidence changed during the given review
+// session. All branch reads use sess.Branch — the session's recorded
+// branch — so the diff is consistent with the session's scope.
+func (r *Reviewer) findHypothesisTransitions(ctx context.Context, sess *store.PipelineSession) ([]hypothesisTransition, error) {
 	gs, _, pipelineIdx, _ := r.storeIndices()
-	branch := r.branch()
-
-	sess, err := pipelineIdx.GetPipelineSession(ctx, sessionID)
-	if err != nil || sess == nil {
-		return nil, err
-	}
+	branch := sess.Branch
 
 	// Read the watermark set at the end of the previous session.
 	// Since we haven't advanced it yet (that happens in completeSession),
 	// all commits between here and HEAD are changes made during this session.
-	watermark, err := pipelineIdx.GetPipelineWatermark(ctx, "review", sess.Branch)
+	watermark, err := pipelineIdx.GetPipelineWatermark(ctx, "review", branch)
 	if err != nil || watermark == "" {
 		return nil, err
 	}

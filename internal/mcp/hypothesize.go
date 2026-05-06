@@ -224,7 +224,7 @@ func hypothesizeNextItem(ctx context.Context, ri *repos.RepoInstance, s mcpStore
 	if err := json.Unmarshal([]byte(item.FactsJSON), &synthFact); err != nil {
 		log.Warn().Err(err).Msg("hypothesize: unmarshal synth fact failed; methodology section will be empty")
 	}
-	instructions := buildHypothesizeInstructions(ctx, ri, synthFact.Path())
+	instructions := buildHypothesizeInstructions(ctx, ri, agentBranch, synthFact.Path())
 
 	completed, remaining, _ := s.pipeline.PipelineWorkItemStats(ctx, sessionID)
 
@@ -247,7 +247,11 @@ func hypothesizeNextItem(ctx context.Context, ri *repos.RepoInstance, s mcpStore
 // agent. When relevant methodology exists on the branch, it is appended to
 // the instructions as an "Applicable methodology" section so the LLM sees
 // the reasoning lessons inline rather than having to query for them.
-func buildHypothesizeInstructions(ctx context.Context, ri *repos.RepoInstance, synthPath string) string {
+//
+// branch is required and must be the same branch the synthesis fact lives
+// on; it is not derived from ri.AgentBranch() so the caller cannot
+// silently retrieve from the wrong branch.
+func buildHypothesizeInstructions(ctx context.Context, ri *repos.RepoInstance, branch, synthPath string) string {
 	base := `1. Call knomit_explain on the synthesis fact to trace its provenance
 2. If methodology candidates are listed below, scan their titles and scores. Fetch any that look relevant via knomit_query (single-path query). Within a session, you can rely on what you already fetched — don't re-query the same methodology twice.
 3. Gather additional evidence as needed using knomit_query
@@ -256,8 +260,7 @@ func buildHypothesizeInstructions(ctx context.Context, ri *repos.RepoInstance, s
 6. After writing the hypothesis, call knomit_learn with type: methodology, topic: "meta", category: "reasoning" to record the reasoning process used. Set the methodology's domain and entities to the union of the source synthesis fact's tags plus the standard markers (meta, reasoning, methodology) — inherit from the source rather than inventing new tags.
 7. Call knomit_hypothesize with session_id to continue to the next synthesis fact`
 
-	// Retrieve relevant methodology and append as a structured section.
-	section := loadMethodologySection(ctx, ri, synthPath)
+	section := loadMethodologySection(ctx, ri, branch, synthPath)
 	if section == "" {
 		return base
 	}
@@ -267,17 +270,21 @@ func buildHypothesizeInstructions(ctx context.Context, ri *repos.RepoInstance, s
 // loadMethodologySection queries the branch's methodology for the given
 // synthesis fact and renders it as a prompt-ready section. Returns "" when
 // no methodology is relevant or any lookup fails — failures are logged.
-func loadMethodologySection(ctx context.Context, ri *repos.RepoInstance, synthPath string) string {
+//
+// branch is required (no implicit AgentBranch fallback): callers must
+// pass the branch the synth fact was fetched from so retrieval lands on
+// the same branch.
+func loadMethodologySection(ctx context.Context, ri *repos.RepoInstance, branch, synthPath string) string {
 	var matches []store.MethodologyMatch
 	ri.WithRead(func(svc *store.Service) {
 		if svc == nil {
-			log.Error().Str("branch", ri.AgentBranch()).Str("synth_path", synthPath).
+			log.Error().Str("branch", branch).Str("synth_path", synthPath).
 				Msg("hypothesize: nil store service; methodology disabled")
 			return
 		}
-		f, err := svc.Search().GetByPath(ctx, ri.AgentBranch(), synthPath)
+		f, err := svc.Search().GetByPath(ctx, branch, synthPath)
 		if err != nil {
-			log.Warn().Err(err).Str("branch", ri.AgentBranch()).Str("synth_path", synthPath).
+			log.Warn().Err(err).Str("branch", branch).Str("synth_path", synthPath).
 				Msg("hypothesize: synth fact lookup failed; methodology section skipped")
 			return
 		}
@@ -286,12 +293,12 @@ func loadMethodologySection(ctx context.Context, ri *repos.RepoInstance, synthPa
 		}
 		var mErr error
 		matches, mErr = svc.Search().RelevantMethodologyForFact(
-			ctx, ri.AgentBranch(),
+			ctx, branch,
 			f.Path, f.Domain, f.Entities,
 			3, ri.MethodologyMinScore(),
 		)
 		if mErr != nil {
-			log.Warn().Err(mErr).Str("branch", ri.AgentBranch()).Str("synth_path", synthPath).
+			log.Warn().Err(mErr).Str("branch", branch).Str("synth_path", synthPath).
 				Msg("hypothesize: methodology retrieval failed; continuing without section")
 		}
 	})

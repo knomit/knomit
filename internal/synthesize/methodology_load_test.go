@@ -66,7 +66,7 @@ func TestLoadDistillMethodology_InjectsWhenRelevant(t *testing.T) {
 		{File: "kb/synth/a.md", Title: "A", Body: "first body", Type: "synthesis", Domain: []string{"security"}, Entities: []string{"Anthropic"}},
 		{File: "kb/synth/b.md", Title: "B", Body: "second body", Type: "synthesis", Domain: []string{"security"}, Entities: []string{"Anthropic"}},
 	}
-	section := r.loadDistillMethodology(context.Background(), facts)
+	section := r.loadDistillMethodology(context.Background(), "agent/test", facts)
 
 	require.NotEmpty(t, section, "methodology with overlapping tags must surface")
 	require.Contains(t, section, "Distill rule of thumb")
@@ -85,7 +85,7 @@ func TestLoadDistillMethodology_EmptyWhenNoMethodologyExists(t *testing.T) {
 	facts := []factForLLM{
 		{File: "kb/synth/a.md", Title: "A", Body: "x", Type: "synthesis", Domain: []string{"security"}},
 	}
-	require.Equal(t, "", r.loadDistillMethodology(context.Background(), facts))
+	require.Equal(t, "", r.loadDistillMethodology(context.Background(), "agent/test", facts))
 }
 
 // TestLoadDistillMethodology_RespectsCanceledContext asserts that a
@@ -102,7 +102,7 @@ func TestLoadDistillMethodology_RespectsCanceledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	section := r.loadDistillMethodology(ctx, []factForLLM{
+	section := r.loadDistillMethodology(ctx, "agent/test", []factForLLM{
 		{File: "kb/synth/a.md", Title: "A", Body: "x", Type: "synthesis", Domain: []string{"security"}, Entities: []string{"Anthropic"}},
 	})
 	require.Equal(t, "", section, "canceled context must yield empty section, not partial results")
@@ -130,7 +130,7 @@ func TestLoadReflectMethodology_InjectsForTransitionTags(t *testing.T) {
 	transitionsJSON, err := json.Marshal(transitions)
 	require.NoError(t, err)
 
-	section := r.loadReflectMethodology(context.Background(), transitionsJSON)
+	section := r.loadReflectMethodology(context.Background(), "agent/test", transitionsJSON)
 	require.NotEmpty(t, section)
 	require.Contains(t, section, "Reflect lesson")
 	require.Contains(t, section, "kb/meta/reasoning/reflect-lesson.md")
@@ -145,14 +145,14 @@ func TestLoadReflectMethodology_InjectsForTransitionTags(t *testing.T) {
 // unparseable — rather than silently swallowing the corruption.
 func TestLoadReflectMethodology_EmptyOnMalformedJSON(t *testing.T) {
 	r, _ := newReviewerForMethodologyTest(t, 0.0)
-	require.Equal(t, "", r.loadReflectMethodology(context.Background(), []byte("not json")))
+	require.Equal(t, "", r.loadReflectMethodology(context.Background(), "agent/test", []byte("not json")))
 }
 
 // TestLoadReflectMethodology_EmptyOnEmptyTransitions guards the early
 // return: zero transitions short-circuits before any DB work.
 func TestLoadReflectMethodology_EmptyOnEmptyTransitions(t *testing.T) {
 	r, _ := newReviewerForMethodologyTest(t, 0.0)
-	require.Equal(t, "", r.loadReflectMethodology(context.Background(), []byte("[]")))
+	require.Equal(t, "", r.loadReflectMethodology(context.Background(), "agent/test", []byte("[]")))
 }
 
 // TestRenderDistillWorkItem_HeaderAppearsWhenSectionPresent verifies the
@@ -205,7 +205,7 @@ func TestLoadDistillMethodology_ThresholdComparesAgainstScore_NotTagOrVector(t *
 		{File: "kb/synth/a.md", Title: "A", Body: "x", Type: "synthesis", Domain: []string{"security"}, Entities: []string{"Anthropic"}},
 		{File: "kb/synth/b.md", Title: "B", Body: "y", Type: "synthesis", Domain: []string{"security"}, Entities: []string{"Anthropic"}},
 	}
-	section := r.loadDistillMethodology(context.Background(), facts)
+	section := r.loadDistillMethodology(context.Background(), "agent/test", facts)
 
 	require.Contains(t, section, "Full match",
 		"Score=0.4 (above 0.30 threshold) must be kept; comparison against TagOverlap would also keep it but other half check disambiguates")
