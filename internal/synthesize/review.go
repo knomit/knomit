@@ -496,26 +496,25 @@ func (r *Reviewer) completeSession(ctx context.Context, sess *store.PipelineSess
 	}, nil
 }
 
-// loadReflectMethodology retrieves methodology relevant to the union of tags
-// and bodies from the transitioned hypothesis facts. The transitions JSON is
-// []hypothesisTransition — only paths are present, so we look each one up in
-// the search index to obtain domain/entity tags and body text.
-// Returns "" on any error or when no methodology matches — the reflect template
-// treats empty as "no existing methodology section".
+// loadReflectMethodology retrieves methodology relevant to the union of
+// tags and bodies from the transitioned hypothesis facts. Returns "" on
+// any failure (logged) or when no methodology matches — the reflect
+// template treats empty as "no existing methodology section".
 func (r *Reviewer) loadReflectMethodology(ctx context.Context, transitionsJSON []byte) string {
 	var ts []hypothesisTransition
 	if err := json.Unmarshal(transitionsJSON, &ts); err != nil {
+		log.Warn().Err(err).Msg("loadReflectMethodology: transitions JSON malformed; skipping methodology section")
 		return ""
 	}
 	if len(ts) == 0 {
 		return ""
 	}
 
-	// Single WithRead pass: hydrate transitions via GetByPath AND query
-	// RelevantMethodology under one read-lock acquisition.
+	// Hydration and methodology query share one read lock.
 	var matches []store.MethodologyMatch
 	r.ri.WithRead(func(svc *store.Service) {
 		if svc == nil {
+			log.Error().Str("branch", r.ri.AgentBranch()).Msg("loadReflectMethodology: nil store service; methodology disabled")
 			return
 		}
 		branch := r.ri.AgentBranch()
@@ -523,8 +522,17 @@ func (r *Reviewer) loadReflectMethodology(ctx context.Context, transitionsJSON [
 		entSet := map[string]struct{}{}
 		var bodies []string
 		for _, t := range ts {
+			if err := ctx.Err(); err != nil {
+				log.Warn().Err(err).Msg("loadReflectMethodology: ctx canceled during hydration")
+				return
+			}
 			f, err := svc.Search().GetByPath(ctx, branch, t.Path)
-			if err != nil || f == nil {
+			if err != nil {
+				log.Warn().Err(err).Str("branch", branch).Str("path", t.Path).
+					Msg("loadReflectMethodology: transition fact lookup failed; skipping")
+				continue
+			}
+			if f == nil {
 				continue
 			}
 			for _, d := range f.Domain {
@@ -550,14 +558,19 @@ func (r *Reviewer) loadReflectMethodology(ctx context.Context, transitionsJSON [
 		if len(combinedBody) > 4000 {
 			combinedBody = combinedBody[:4000]
 		}
-		matches, _ = svc.Search().RelevantMethodology(ctx, branch, combinedBody, doms, ents, 3)
+		var mErr error
+		matches, mErr = svc.Search().RelevantMethodology(ctx, branch, combinedBody, doms, ents, 3)
+		if mErr != nil {
+			log.Warn().Err(mErr).Str("branch", branch).
+				Msg("loadReflectMethodology: methodology retrieval failed; continuing without section")
+		}
 	})
 	return store.FormatMethodologySection(matches, r.ri.MethodologyMinScore())
 }
 
 // loadDistillMethodology retrieves methodology relevant to the cluster's
-// dominant tags (union of domains/entities across the input facts). Same
-// shape as loadReflectMethodology — returns "" when none.
+// dominant tags (union of domains/entities across the input facts).
+// Returns "" on failure (logged) or when no methodology matches.
 func (r *Reviewer) loadDistillMethodology(ctx context.Context, facts []factForLLM) string {
 	domSet := map[string]struct{}{}
 	entSet := map[string]struct{}{}
@@ -590,12 +603,16 @@ func (r *Reviewer) loadDistillMethodology(ctx context.Context, facts []factForLL
 	var matches []store.MethodologyMatch
 	r.ri.WithRead(func(svc *store.Service) {
 		if svc == nil {
+			log.Error().Str("branch", r.ri.AgentBranch()).Msg("loadDistillMethodology: nil store service; methodology disabled")
 			return
 		}
-		matches, _ = svc.Search().RelevantMethodology(
-			ctx, r.ri.AgentBranch(),
-			combinedBody, doms, ents, 3,
-		)
+		branch := r.ri.AgentBranch()
+		var mErr error
+		matches, mErr = svc.Search().RelevantMethodology(ctx, branch, combinedBody, doms, ents, 3)
+		if mErr != nil {
+			log.Warn().Err(mErr).Str("branch", branch).
+				Msg("loadDistillMethodology: methodology retrieval failed; continuing without section")
+		}
 	})
 	return store.FormatMethodologySection(matches, r.ri.MethodologyMinScore())
 }

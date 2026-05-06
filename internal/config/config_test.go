@@ -1,6 +1,7 @@
 package config
 
 import (
+	"math"
 	"strings"
 	"testing"
 )
@@ -36,4 +37,83 @@ func TestValidate_DefaultsAreValid(t *testing.T) {
 	if err := Defaults().Validate(); err != nil {
 		t.Fatalf("Defaults() must validate cleanly, got: %v", err)
 	}
+}
+
+// TestDefaults_MethodologyMinScore pins the documented default. The value
+// is load-bearing for prompt injection — a regression to 0 admits every
+// candidate; a regression to 1 admits none.
+func TestDefaults_MethodologyMinScore(t *testing.T) {
+	if got := Defaults().MethodologyMinScore; got != 0.15 {
+		t.Fatalf("Defaults().MethodologyMinScore: want 0.15, got %v", got)
+	}
+}
+
+// TestValidate_MethodologyMinScore_RejectsOutOfRange guards against
+// silent misbehavior when a user sets the threshold outside [0, 1].
+// Negative or >1 values either admit everything or filter everything
+// without a log line; NaN silently disables the comparison entirely.
+func TestValidate_MethodologyMinScore_RejectsOutOfRange(t *testing.T) {
+	cases := []struct {
+		name string
+		v    float64
+	}{
+		{"negative", -0.01},
+		{"above one", 1.01},
+		{"NaN", math.NaN()},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := Defaults()
+			cfg.MethodologyMinScore = tc.v
+			err := cfg.Validate()
+			if err == nil {
+				t.Fatalf("Validate() with MethodologyMinScore=%v must error", tc.v)
+			}
+			if !strings.Contains(err.Error(), "methodology_min_score") {
+				t.Errorf("error %q should mention methodology_min_score", err.Error())
+			}
+		})
+	}
+}
+
+// TestValidate_MethodologyMinScore_AcceptsBoundsAndZero covers the
+// in-range edges so the validator does not over-reject.
+func TestValidate_MethodologyMinScore_AcceptsBoundsAndZero(t *testing.T) {
+	for _, v := range []float64{0, 0.15, 0.5, 1.0} {
+		cfg := Defaults()
+		cfg.MethodologyMinScore = v
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("Validate() with MethodologyMinScore=%v must accept, got %v", v, err)
+		}
+	}
+}
+
+// TestEnvFloatOr_MethodologyMinScore exercises the env-var override
+// path. Bad values are silently ignored (default kept); good values
+// override the default.
+func TestEnvFloatOr_MethodologyMinScore(t *testing.T) {
+	t.Run("valid value overrides", func(t *testing.T) {
+		t.Setenv("KNOMIT_METHODOLOGY_MIN_SCORE", "0.42")
+		v := 0.15
+		envFloatOr("KNOMIT_METHODOLOGY_MIN_SCORE", &v)
+		if v != 0.42 {
+			t.Fatalf("want 0.42, got %v", v)
+		}
+	})
+	t.Run("unparseable keeps default", func(t *testing.T) {
+		t.Setenv("KNOMIT_METHODOLOGY_MIN_SCORE", "not-a-number")
+		v := 0.15
+		envFloatOr("KNOMIT_METHODOLOGY_MIN_SCORE", &v)
+		if v != 0.15 {
+			t.Fatalf("unparseable value must leave default untouched; got %v", v)
+		}
+	})
+	t.Run("empty keeps default", func(t *testing.T) {
+		t.Setenv("KNOMIT_METHODOLOGY_MIN_SCORE", "")
+		v := 0.15
+		envFloatOr("KNOMIT_METHODOLOGY_MIN_SCORE", &v)
+		if v != 0.15 {
+			t.Fatalf("empty value must leave default untouched; got %v", v)
+		}
+	})
 }

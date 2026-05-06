@@ -10,16 +10,13 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// vectorWeight and tagWeight are the composite-score coefficients.
-// var (not const) so tests can override; production tuning happens here.
-var (
+// Composite-score coefficients: Score = vectorWeight*VectorScore + tagWeight*TagOverlap.
+const (
 	vectorWeight = 0.6
 	tagWeight    = 0.4
 )
 
 // MethodologyMatch is one entry in RelevantMethodology's ranked result set.
-// Fields beyond Path/Title/Body are populated only when scoring is in play
-// (Tasks 2 and 3 fill them); Task 1 returns Score=0 for every entry.
 type MethodologyMatch struct {
 	Path            string   `json:"path"`
 	Title           string   `json:"title"`
@@ -32,12 +29,8 @@ type MethodologyMatch struct {
 }
 
 // RelevantMethodology returns up to k methodology facts visible on branch,
-// ranked by composite score (0.6·vector + 0.4·tag_overlap). See
-// .claude/plans/2026-05-01-methodology-in-the-loop-design.md for the full
-// retrieval algorithm.
-//
-// In Task 1 only the candidate-set filter is implemented; ranking and top-k
-// land in Tasks 2 and 3.
+// ranked by a weighted combination of vector similarity and tag overlap
+// (see vectorWeight / tagWeight).
 func (si *searchIndex) RelevantMethodology(ctx context.Context, branch, sourceBody string, sourceDomains, sourceEntities []string, k int) ([]MethodologyMatch, error) {
 	branchID, err := si.rh.branchID(ctx, branch)
 	if err != nil {
@@ -70,8 +63,14 @@ func (si *searchIndex) RelevantMethodology(ctx context.Context, branch, sourceBo
 		if err := rows.Scan(&c.path, &c.title, &c.id, &c.blobHash, &domainJSON, &entitiesJSON); err != nil {
 			return nil, fmt.Errorf("RelevantMethodology: scan: %w", err)
 		}
-		_ = json.Unmarshal([]byte(domainJSON), &c.domains)
-		_ = json.Unmarshal([]byte(entitiesJSON), &c.entities)
+		if err := json.Unmarshal([]byte(domainJSON), &c.domains); err != nil {
+			log.Warn().Err(err).Str("path", c.path).
+				Msg("RelevantMethodology: candidate domain JSON malformed; treating as empty")
+		}
+		if err := json.Unmarshal([]byte(entitiesJSON), &c.entities); err != nil {
+			log.Warn().Err(err).Str("path", c.path).
+				Msg("RelevantMethodology: candidate entities JSON malformed; treating as empty")
+		}
 		cands = append(cands, c)
 	}
 	if err := rows.Err(); err != nil {
@@ -83,26 +82,29 @@ func (si *searchIndex) RelevantMethodology(ctx context.Context, branch, sourceBo
 
 	// Compute vector similarities once via a single sqlite-vec KNN.
 	// sqlite-vec applies the global top-k window BEFORE the WHERE filter,
-	// so we need k to cover the full branch fact count to guarantee every
-	// methodology candidate gets a similarity score. A bare COUNT(*) on the
-	// branch's facts is cheap and bounds k correctly.
+	// and facts_vec is keyed by the global facts.id (one row per fact
+	// across all branches). To guarantee every methodology candidate gets
+	// a similarity score even when sibling branches are present in the
+	// same DB, k must cover the full vec table — not just this branch.
 	simByID := make(map[int64]float64, len(cands))
 	if emb := si.rh.getEmbedder(); emb != nil && sourceBody != "" && len(cands) > 0 {
-		// Bound k by total branch fact count so methodology rows always
-		// make it through the global top-k window.
 		var totalFacts int64
 		if err := conn(ctx, si.rh.db).QueryRowContext(ctx,
-			`SELECT COUNT(*) FROM branch_facts WHERE branch_id = ?`,
-			branchID,
+			`SELECT COUNT(*) FROM facts_vec`,
 		).Scan(&totalFacts); err != nil {
-			log.Warn().Err(err).Msg("RelevantMethodology: branch fact count failed; falling back to tag-only ranking")
+			log.Warn().Err(err).Msg("RelevantMethodology: facts_vec count failed; falling back to tag-only ranking")
 			totalFacts = 0
 		}
 		if totalFacts > 0 {
-			v, err := emb.Embed(sourceBody)
-			if err == nil && len(v) > 0 {
+			v, embErr := emb.Embed(sourceBody)
+			switch {
+			case embErr != nil:
+				log.Warn().Err(embErr).Msg("RelevantMethodology: embed failed; falling back to tag-only ranking")
+			case len(v) == 0:
+				log.Warn().Msg("RelevantMethodology: embedder returned empty vector; falling back to tag-only ranking")
+			default:
 				vecBlob := float32SliceToBytes(v)
-				knnRows, err := conn(ctx, si.rh.db).QueryContext(ctx,
+				knnRows, qErr := conn(ctx, si.rh.db).QueryContext(ctx,
 					`SELECT f.id, (1.0 - fv.distance) as similarity
 					 FROM facts_vec fv
 					 JOIN facts f ON f.id = fv.rowid
@@ -110,18 +112,29 @@ func (si *searchIndex) RelevantMethodology(ctx context.Context, branch, sourceBo
 					 WHERE fv.embedding MATCH ? AND fv.k = ? AND f.type = 'methodology'`,
 					branchID, vecBlob, totalFacts,
 				)
-				if err == nil {
-					for knnRows.Next() {
-						var id int64
-						var sim float64
-						if err := knnRows.Scan(&id, &sim); err == nil {
+				if qErr != nil {
+					log.Warn().Err(qErr).Int64("branch_id", branchID).
+						Msg("RelevantMethodology: KNN query failed; falling back to tag-only ranking")
+				} else {
+					func() {
+						defer knnRows.Close()
+						for knnRows.Next() {
+							var id int64
+							var sim float64
+							if err := knnRows.Scan(&id, &sim); err != nil {
+								log.Warn().Err(err).Msg("RelevantMethodology: KNN row scan failed; skipping row")
+								continue
+							}
 							simByID[id] = sim
 						}
-					}
-					if err := knnRows.Err(); err != nil {
-						log.Warn().Err(err).Msg("RelevantMethodology: KNN row iteration error; falling back to tag-only")
-					}
-					knnRows.Close()
+						if err := knnRows.Err(); err != nil {
+							// Partial reads would leave non-uniform similarity
+							// coverage across candidates — clear and degrade
+							// to tag-only ranking instead.
+							log.Warn().Err(err).Msg("RelevantMethodology: KNN row iteration error; clearing partial similarities, ranking tag-only")
+							simByID = make(map[int64]float64, len(cands))
+						}
+					}()
 				}
 			}
 		}
@@ -129,6 +142,9 @@ func (si *searchIndex) RelevantMethodology(ctx context.Context, branch, sourceBo
 
 	out := make([]MethodologyMatch, 0, len(cands))
 	for _, c := range cands {
+		if err := ctx.Err(); err != nil {
+			return nil, fmt.Errorf("RelevantMethodology: %w", err)
+		}
 		body, err := si.readFactBodyByBlobHash(ctx, c.blobHash)
 		if err != nil {
 			log.Warn().Err(err).Str("path", c.path).Str("blob_hash", c.blobHash).
@@ -157,8 +173,7 @@ func (si *searchIndex) RelevantMethodology(ctx context.Context, branch, sourceBo
 		})
 	}
 
-	// SliceStable: preserve SQL row order for ties (secondary sort by insertion order).
-	// Sort descending by Score; Task 3 will refine the score formula.
+	// SliceStable: SQL row order is the deterministic tiebreaker for equal scores.
 	sort.SliceStable(out, func(i, j int) bool { return out[i].Score > out[j].Score })
 
 	if k > 0 && len(out) > k {
@@ -229,10 +244,13 @@ func (si *searchIndex) readFactBodyByBlobHash(ctx context.Context, blobHash stri
 }
 
 // FormatMethodologySection renders ranked methodology candidates as
-// title/path/score lines. Body is intentionally omitted — the model
-// fetches via knomit_query if it chooses to read. Drops matches with
-// `Score < minScore`. Returns "" if no matches survive filtering or if
-// matches is empty.
+// title/path/score bullet lines. Drops matches with Score < minScore.
+// Returns "" when no matches survive filtering, so callers can omit the
+// surrounding heading entirely.
+//
+// The bullets are heading-less; each call site supplies its own framing
+// (e.g. "Applicable methodology" for distill/hypothesize, "Existing
+// methodology" for reflect) so wording can vary by audience.
 func FormatMethodologySection(matches []MethodologyMatch, minScore float64) string {
 	if len(matches) == 0 {
 		return ""
@@ -248,10 +266,12 @@ func FormatMethodologySection(matches []MethodologyMatch, minScore float64) stri
 		return ""
 	}
 	var sb strings.Builder
-	sb.WriteString("Applicable methodology (ranked candidates — fetch via knomit_query if useful, cite path in refs if used):\n")
-	for _, m := range kept {
-		fmt.Fprintf(&sb, "\n• score=%.2f  %s  (%s)", m.Score, m.Title, m.Path)
+	for i, m := range kept {
+		if i > 0 {
+			sb.WriteByte('\n')
+		}
+		fmt.Fprintf(&sb, "• score=%.2f  %s  (%s)", m.Score, m.Title, m.Path)
 	}
-	sb.WriteString("\n")
+	sb.WriteByte('\n')
 	return sb.String()
 }

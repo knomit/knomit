@@ -93,22 +93,26 @@ func TestRelevantMethodology_EmptyCandidateSet(t *testing.T) {
 }
 
 // TestFormatMethodologySection_NonEmpty verifies the prompt-section
-// formatter renders header + per-match title/path/score lines with the
-// body intentionally omitted (the model fetches via knomit_query on
-// demand). Pure function (no DB) — used by mcp and synthesize callers.
+// formatter renders only ranked bullet lines (title + path + score),
+// with no leading heading and with bodies omitted. Each call site
+// supplies its own heading wording — see mcp/hypothesize.go and the
+// distill/reflect templates.
 func TestFormatMethodologySection_NonEmpty(t *testing.T) {
 	matches := []MethodologyMatch{
 		{Path: "kb/meta/reasoning/m1.md", Title: "M1 title", Body: "M1 body about evidence weighting.", Score: 0.87},
 		{Path: "kb/meta/reasoning/m2.md", Title: "M2 title", Body: "M2 body about pitfall detection.", Score: 0.62},
 	}
 	got := FormatMethodologySection(matches, 0.0)
-	require.Contains(t, got, "Applicable methodology (ranked candidates")
-	require.Contains(t, got, "fetch via knomit_query")
+	require.NotContains(t, got, "Applicable methodology",
+		"formatter must not emit a heading; callers own framing")
+	require.NotContains(t, got, "Existing methodology")
 	require.Contains(t, got, "M1 title")
 	require.Contains(t, got, "kb/meta/reasoning/m1.md")
 	require.Contains(t, got, "score=0.87")
 	require.Contains(t, got, "score=0.62")
 	require.NotContains(t, got, "M1 body about evidence weighting.")
+	// Two bullet lines.
+	require.Equal(t, 2, strings.Count(got, "•"))
 }
 
 // TestFormatMethodologySection_Empty returns empty string for empty input
@@ -133,7 +137,7 @@ func TestFormatMethodologySection_BelowThresholdDropped(t *testing.T) {
 	require.NotContains(t, got, "Drop1")
 	require.NotContains(t, got, "Drop2")
 	// Only one bullet rendered.
-	require.Equal(t, 1, strings.Count(got, "\n•"))
+	require.Equal(t, 1, strings.Count(got, "•"))
 }
 
 // TestFormatMethodologySection_AllBelowReturnsEmpty returns "" when every
@@ -384,6 +388,78 @@ func TestRelevantMethodology_TopK(t *testing.T) {
 	got, err := svc.Search().RelevantMethodology(ctx, "agent/a", "src", nil, nil, 3)
 	require.NoError(t, err)
 	require.Len(t, got, 3)
+}
+
+// TestRelevantMethodology_VectorCoverage_WithSiblingBranchNoise regresses
+// the bug where the KNN window was sized to the current branch's fact
+// count via `COUNT(*) FROM branch_facts WHERE branch_id = ?` — but
+// facts_vec is keyed by the global facts.id (one row per fact across all
+// branches). When a sibling branch holds many vector-closer facts, those
+// rows fill the global top-k window first; the post-filter join then
+// drops them, leaving zero rows for the current branch and silently
+// downgrading the methodology section to empty.
+//
+// Seeds 30 noise observations on a sibling branch BEFORE creating the
+// test branch, so the test branch sees only the methodology rows it
+// writes. The fix sizes k to COUNT(*) FROM facts_vec (the global
+// vec-table size), which keeps every methodology row inside the window.
+func TestRelevantMethodology_VectorCoverage_WithSiblingBranchNoise(t *testing.T) {
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	defer svc.Close()
+	svc.SetEmbedder(&stub768Embedder{})
+	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/sibling"))
+
+	ctx := context.Background()
+
+	// Create the test branch from the sibling at init time — BEFORE any
+	// noise is written — so the test branch does not inherit those rows
+	// in its branch_facts view.
+	require.NoError(t, svc.Branches().CreateBranch(ctx, "agent/test", "agent/sibling"))
+
+	// Seed 30 noise observations on the sibling branch only. These rows
+	// exist in facts/facts_vec (global) but not in the test branch's
+	// branch_facts view. They will fill the KNN window first because the
+	// stub embedder's similarity is dominated by body length (~32 chars
+	// here) — close to the source's length but not to the methodology
+	// bodies (18 chars).
+	for i := 0; i < 30; i++ {
+		path := fmt.Sprintf("kb/obs/n%d.md", i)
+		body := fmt.Sprintf("noise body %d with varied content", i)
+		_, err = svc.Facts().WriteFact(ctx, "agent/sibling", path, testFactBody(body, 0.5, nil), "noise", "")
+		require.NoError(t, err)
+	}
+
+	// Seed 3 methodology facts on the test branch. The test branch's
+	// branch_facts holds only these rows (plus inherited ontology), so
+	// `COUNT(*) FROM branch_facts WHERE branch_id = test` ≈ 3 — the
+	// pre-fix bound. With k=3 the KNN window is filled by sibling noise
+	// (closer by length) and methodology rows fall outside it; after the
+	// branch_facts join filters them in, simByID is empty.
+	for i := 0; i < 3; i++ {
+		path := fmt.Sprintf("kb/meta/reasoning/m%d.md", i)
+		_, err = svc.Facts().WriteFact(ctx, "agent/test", path,
+			methFactBody(fmt.Sprintf("M%d", i), fmt.Sprintf("methodology body %d", i),
+				[]string{"meta", "reasoning", "methodology"}, nil),
+			"meth", "")
+		require.NoError(t, err)
+	}
+
+	got, err := svc.Search().RelevantMethodology(ctx, "agent/test",
+		"some source body for vector ranking",
+		nil, nil, 10)
+	require.NoError(t, err)
+	require.Len(t, got, 3, "branch isolation: only the 3 methodology rows on agent/test must surface")
+
+	// Every methodology row must have a non-zero VectorScore. With the
+	// pre-fix bound (k = test branch's fact count) the global top-k window
+	// would be entirely consumed by sibling-branch noise rows and the
+	// methodology rows would land at VectorScore=0.
+	for _, m := range got {
+		require.Greater(t, m.VectorScore, 0.0,
+			"methodology candidate %s has VectorScore=0 — sibling-branch noise consumed the KNN window", m.Path)
+	}
 }
 
 // TestRelevantMethodology_VectorCoverage_WithNoiseInIndex regresses the bug

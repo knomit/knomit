@@ -18,11 +18,11 @@ type PromptData struct {
 	Facts                 string
 	OntologyRoot          string
 	ExistingMethodology   string // for reflect_user.txt
-	ApplicableMethodology string // for distill_user.txt (Task 6)
+	ApplicableMethodology string // for distill_user.txt
 }
 
 // RenderTemplate loads and renders a prompt template.
-// operation: "prune" or "distill"
+// operation: "prune", "distill", or "reflect"
 // promptType: "system", "user", or "retry"
 func RenderTemplate(operation, promptType string, data PromptData) (string, error) {
 	path := fmt.Sprintf("prompts/large/%s_%s.txt", operation, promptType)

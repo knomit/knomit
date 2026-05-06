@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -146,6 +147,12 @@ func Load() (Config, error) {
 func (c Config) Validate() error {
 	if strings.TrimSpace(c.OntologyRoot) == "" {
 		return fmt.Errorf("config: ontology_root must not be empty")
+	}
+	// Composite methodology score is bounded to [0, 1] (0.6·vec + 0.4·tag,
+	// each in [0,1]). NaN, negatives, or values >1 silently break filtering
+	// — fail at boot instead.
+	if math.IsNaN(c.MethodologyMinScore) || c.MethodologyMinScore < 0 || c.MethodologyMinScore > 1 {
+		return fmt.Errorf("config: methodology_min_score must be in [0, 1], got %v", c.MethodologyMinScore)
 	}
 	return nil
 }

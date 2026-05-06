@@ -266,22 +266,37 @@ func buildHypothesizeInstructions(ctx context.Context, ri *repos.RepoInstance, s
 
 // loadMethodologySection queries the branch's methodology for the given
 // synthesis fact and renders it as a prompt-ready section. Returns "" when
-// no methodology is relevant or any lookup fails.
+// no methodology is relevant or any lookup fails — failures are logged.
 func loadMethodologySection(ctx context.Context, ri *repos.RepoInstance, synthPath string) string {
 	var matches []store.MethodologyMatch
 	ri.WithRead(func(svc *store.Service) {
 		if svc == nil {
+			log.Error().Str("branch", ri.AgentBranch()).Str("synth_path", synthPath).
+				Msg("hypothesize: nil store service; methodology disabled")
 			return
 		}
-		// Read the synthesis fact to get its body+tags as the source.
 		f, err := svc.Search().GetByPath(ctx, ri.AgentBranch(), synthPath)
-		if err != nil || f == nil {
+		if err != nil {
+			log.Warn().Err(err).Str("branch", ri.AgentBranch()).Str("synth_path", synthPath).
+				Msg("hypothesize: synth fact lookup failed; methodology section skipped")
 			return
 		}
-		matches, _ = svc.Search().RelevantMethodology(
+		if f == nil {
+			return
+		}
+		var mErr error
+		matches, mErr = svc.Search().RelevantMethodology(
 			ctx, ri.AgentBranch(),
 			f.Body, f.Domain, f.Entities, 3,
 		)
+		if mErr != nil {
+			log.Warn().Err(mErr).Str("branch", ri.AgentBranch()).Str("synth_path", synthPath).
+				Msg("hypothesize: methodology retrieval failed; continuing without section")
+		}
 	})
-	return store.FormatMethodologySection(matches, ri.MethodologyMinScore())
+	bullets := store.FormatMethodologySection(matches, ri.MethodologyMinScore())
+	if bullets == "" {
+		return ""
+	}
+	return "Applicable methodology (ranked — fetch via knomit_query if useful):\n\n" + bullets
 }
