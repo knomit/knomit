@@ -30,7 +30,7 @@ type SearchIndex interface {
 	ExplainFact(ctx context.Context, branch, path string) (ExplainResult, error)
 	IncomingAtCommit(ctx context.Context, branch, path, commitHash string) ([]RefSummary, error)
 	OutgoingAtCommit(ctx context.Context, branch, path, commitHash string) ([]RefSummary, error)
-	RelevantMethodology(ctx context.Context, branch, sourceBody string, sourceDomains, sourceEntities []string, k int) ([]MethodologyMatch, error)
+	RelevantMethodologyForFact(ctx context.Context, branch, factPath string, sourceDomains, sourceEntities []string, k int, minScore float64) ([]MethodologyMatch, error)
 	ClusterFacts(ctx context.Context, branch string, resolution float64, minCommunitySize int) (ClusterResult, error)
 	CachedClusterFacts(ctx context.Context, branch string, resolution float64, minCommunitySize int) (ClusterResult, error)
 	RecentFacts(ctx context.Context, branch, pathPrefix, query string, limit, offset int, includeTypes, excludeTypes, domain, entities, epOps []string) ([]RecentFactEntry, int, error)

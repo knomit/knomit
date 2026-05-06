@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -496,10 +497,15 @@ func (r *Reviewer) completeSession(ctx context.Context, sess *store.PipelineSess
 	}, nil
 }
 
-// loadReflectMethodology retrieves methodology relevant to the union of
-// tags and bodies from the transitioned hypothesis facts. Returns "" on
-// any failure (logged) or when no methodology matches — the reflect
-// template treats empty as "no existing methodology section".
+// methodologyTopK is the per-fact retrieval depth and the final merged-list
+// cap; both share one knob since callers want "show up to N methodologies"
+// in the prompt regardless of cluster size.
+const methodologyTopK = 3
+
+// loadReflectMethodology retrieves methodology relevant to each transitioned
+// hypothesis fact independently, then merges the per-fact results (keeping
+// the highest score per methodology path). Returns "" on any failure (logged)
+// or when no methodology matches.
 func (r *Reviewer) loadReflectMethodology(ctx context.Context, transitionsJSON []byte) string {
 	var ts []hypothesisTransition
 	if err := json.Unmarshal(transitionsJSON, &ts); err != nil {
@@ -510,20 +516,19 @@ func (r *Reviewer) loadReflectMethodology(ctx context.Context, transitionsJSON [
 		return ""
 	}
 
-	// Hydration and methodology query share one read lock.
-	var matches []store.MethodologyMatch
+	var merged []store.MethodologyMatch
 	r.ri.WithRead(func(svc *store.Service) {
 		if svc == nil {
 			log.Error().Str("branch", r.ri.AgentBranch()).Msg("loadReflectMethodology: nil store service; methodology disabled")
 			return
 		}
 		branch := r.ri.AgentBranch()
-		domSet := map[string]struct{}{}
-		entSet := map[string]struct{}{}
-		var bodies []string
+		minScore := r.ri.MethodologyMinScore()
+		seen := map[string]store.MethodologyMatch{}
 		for _, t := range ts {
 			if err := ctx.Err(); err != nil {
-				log.Warn().Err(err).Msg("loadReflectMethodology: ctx canceled during hydration")
+				log.Warn().Err(err).Str("branch", branch).Str("path", t.Path).
+					Msg("loadReflectMethodology: ctx canceled mid-iteration")
 				return
 			}
 			f, err := svc.Search().GetByPath(ctx, branch, t.Path)
@@ -535,86 +540,88 @@ func (r *Reviewer) loadReflectMethodology(ctx context.Context, transitionsJSON [
 			if f == nil {
 				continue
 			}
-			for _, d := range f.Domain {
-				if store.IsMethodologyMarker(d) {
-					continue
-				}
-				domSet[d] = struct{}{}
-			}
-			for _, e := range f.Entities {
-				entSet[e] = struct{}{}
-			}
-			bodies = append(bodies, f.Body)
-		}
-		doms := make([]string, 0, len(domSet))
-		for d := range domSet {
-			doms = append(doms, d)
-		}
-		ents := make([]string, 0, len(entSet))
-		for e := range entSet {
-			ents = append(ents, e)
-		}
-		combinedBody := strings.Join(bodies, "\n\n")
-		if len(combinedBody) > 4000 {
-			combinedBody = combinedBody[:4000]
-		}
-		var mErr error
-		matches, mErr = svc.Search().RelevantMethodology(ctx, branch, combinedBody, doms, ents, 3)
-		if mErr != nil {
-			log.Warn().Err(mErr).Str("branch", branch).
-				Msg("loadReflectMethodology: methodology retrieval failed; continuing without section")
-		}
-	})
-	return store.FormatMethodologySection(matches, r.ri.MethodologyMinScore())
-}
-
-// loadDistillMethodology retrieves methodology relevant to the cluster's
-// dominant tags (union of domains/entities across the input facts).
-// Returns "" on failure (logged) or when no methodology matches.
-func (r *Reviewer) loadDistillMethodology(ctx context.Context, facts []factForLLM) string {
-	domSet := map[string]struct{}{}
-	entSet := map[string]struct{}{}
-	var bodies []string
-	for _, f := range facts {
-		for _, d := range f.Domain {
-			if store.IsMethodologyMarker(d) {
+			matches, mErr := svc.Search().RelevantMethodologyForFact(
+				ctx, branch, f.Path, f.Domain, f.Entities, methodologyTopK, minScore,
+			)
+			if mErr != nil {
+				log.Warn().Err(mErr).Str("branch", branch).Str("path", f.Path).
+					Msg("loadReflectMethodology: per-fact retrieval failed; skipping")
 				continue
 			}
-			domSet[d] = struct{}{}
+			for _, m := range matches {
+				if existing, ok := seen[m.Path]; !ok || m.Score > existing.Score {
+					seen[m.Path] = m
+				}
+			}
 		}
-		for _, e := range f.Entities {
-			entSet[e] = struct{}{}
-		}
-		bodies = append(bodies, f.Body)
-	}
-	doms := make([]string, 0, len(domSet))
-	for d := range domSet {
-		doms = append(doms, d)
-	}
-	ents := make([]string, 0, len(entSet))
-	for e := range entSet {
-		ents = append(ents, e)
-	}
-	combinedBody := strings.Join(bodies, "\n\n")
-	if len(combinedBody) > 4000 {
-		combinedBody = combinedBody[:4000]
+		merged = topKByScore(seen, methodologyTopK)
+	})
+	return store.FormatMethodologySection(merged)
+}
+
+// loadDistillMethodology retrieves methodology relevant to each input fact
+// independently, then merges the per-fact results. Returns "" on failure
+// (logged) or when no methodology matches.
+func (r *Reviewer) loadDistillMethodology(ctx context.Context, facts []factForLLM) string {
+	if len(facts) == 0 {
+		return ""
 	}
 
-	var matches []store.MethodologyMatch
+	var merged []store.MethodologyMatch
 	r.ri.WithRead(func(svc *store.Service) {
 		if svc == nil {
 			log.Error().Str("branch", r.ri.AgentBranch()).Msg("loadDistillMethodology: nil store service; methodology disabled")
 			return
 		}
 		branch := r.ri.AgentBranch()
-		var mErr error
-		matches, mErr = svc.Search().RelevantMethodology(ctx, branch, combinedBody, doms, ents, 3)
-		if mErr != nil {
-			log.Warn().Err(mErr).Str("branch", branch).
-				Msg("loadDistillMethodology: methodology retrieval failed; continuing without section")
+		minScore := r.ri.MethodologyMinScore()
+		seen := map[string]store.MethodologyMatch{}
+		for _, f := range facts {
+			if err := ctx.Err(); err != nil {
+				log.Warn().Err(err).Str("branch", branch).Str("path", f.File).
+					Msg("loadDistillMethodology: ctx canceled mid-iteration")
+				return
+			}
+			matches, mErr := svc.Search().RelevantMethodologyForFact(
+				ctx, branch, f.File, f.Domain, f.Entities, methodologyTopK, minScore,
+			)
+			if mErr != nil {
+				log.Warn().Err(mErr).Str("branch", branch).Str("path", f.File).
+					Msg("loadDistillMethodology: per-fact retrieval failed; skipping")
+				continue
+			}
+			for _, m := range matches {
+				if existing, ok := seen[m.Path]; !ok || m.Score > existing.Score {
+					seen[m.Path] = m
+				}
+			}
 		}
+		merged = topKByScore(seen, methodologyTopK)
 	})
-	return store.FormatMethodologySection(matches, r.ri.MethodologyMinScore())
+	return store.FormatMethodologySection(merged)
+}
+
+// topKByScore returns the up-to-k MethodologyMatch values from seen,
+// sorted descending by Score. SQL row order is not preserved across the
+// map iteration; ties are broken by Path for determinism.
+func topKByScore(seen map[string]store.MethodologyMatch, k int) []store.MethodologyMatch {
+	if len(seen) == 0 {
+		return nil
+	}
+	out := make([]store.MethodologyMatch, 0, len(seen))
+	for _, m := range seen {
+		out = append(out, m)
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].Score != out[j].Score {
+			return out[i].Score > out[j].Score
+		}
+		return out[i].Path < out[j].Path
+	})
+	if k > 0 && len(out) > k {
+		out = out[:k]
+	}
+	return out
 }
 
 // hypothesisTransition records a change to a hypothesis fact during a review session.

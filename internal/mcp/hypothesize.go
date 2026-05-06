@@ -285,16 +285,17 @@ func loadMethodologySection(ctx context.Context, ri *repos.RepoInstance, synthPa
 			return
 		}
 		var mErr error
-		matches, mErr = svc.Search().RelevantMethodology(
+		matches, mErr = svc.Search().RelevantMethodologyForFact(
 			ctx, ri.AgentBranch(),
-			f.Body, f.Domain, f.Entities, 3,
+			f.Path, f.Domain, f.Entities,
+			3, ri.MethodologyMinScore(),
 		)
 		if mErr != nil {
 			log.Warn().Err(mErr).Str("branch", ri.AgentBranch()).Str("synth_path", synthPath).
 				Msg("hypothesize: methodology retrieval failed; continuing without section")
 		}
 	})
-	bullets := store.FormatMethodologySection(matches, ri.MethodologyMinScore())
+	bullets := store.FormatMethodologySection(matches)
 	if bullets == "" {
 		return ""
 	}

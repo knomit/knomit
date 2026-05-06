@@ -25,10 +25,34 @@ func methFactBody(title, body string, domains, entities []string) string {
 	return fact.SerializeFact(f)
 }
 
-// TestRelevantMethodology_FiltersByTypeAndBranch verifies the candidate set
-// is exactly the methodology facts visible on the requested branch — not
-// other types, not other branches.
-func TestRelevantMethodology_FiltersByTypeAndBranch(t *testing.T) {
+// srcFactBody builds a non-methodology source fact (synthesis by default)
+// whose body and tags drive RelevantMethodologyForFact's retrieval.
+func srcFactBody(title, body string, domains, entities []string) string {
+	f := fact.NewFact("placeholder.md")
+	f.Title = title
+	f.Body = body
+	f.Type = fact.Synthesis
+	f.Confidence = 0.9
+	f.Sources = 1
+	f.Domain = domains
+	f.Entities = entities
+	return fact.SerializeFact(f)
+}
+
+// writeSrcFact writes a source synthesis fact and returns its path.
+// Use this BEFORE calling RelevantMethodologyForFact so the fact has a
+// row in branch_facts (and, if an embedder is set, in facts_vec).
+func writeSrcFact(t *testing.T, svc *Service, branch, path, body string, doms, ents []string) {
+	t.Helper()
+	_, err := svc.Facts().WriteFact(context.Background(), branch, path,
+		srcFactBody("source", body, doms, ents), "src", "")
+	require.NoError(t, err)
+}
+
+// TestRelevantMethodologyForFact_FiltersByTypeAndBranch verifies the
+// candidate set is exactly the methodology facts visible on the
+// requested branch — not other types, not other branches.
+func TestRelevantMethodologyForFact_FiltersByTypeAndBranch(t *testing.T) {
 	dir := t.TempDir()
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
@@ -37,6 +61,11 @@ func TestRelevantMethodology_FiltersByTypeAndBranch(t *testing.T) {
 
 	ctx := context.Background()
 	branch := "agent/a"
+
+	// Source fact on agent/a — RelevantMethodologyForFact retrieves
+	// against this fact's identity.
+	writeSrcFact(t, svc, branch, "kb/synth/src.md", "source body",
+		[]string{"security"}, []string{"Anthropic"})
 
 	// Two methodology facts on agent/a, one regular observation, one
 	// methodology on a different branch.
@@ -53,14 +82,14 @@ func TestRelevantMethodology_FiltersByTypeAndBranch(t *testing.T) {
 	require.NoError(t, err)
 
 	// Methodology written on a different branch should be invisible.
-	// CreateBranch first so WriteFact can resolve the git ref.
 	require.NoError(t, svc.Branches().CreateBranch(ctx, "agent/b", branch))
 	_, err = svc.Facts().WriteFact(ctx, "agent/b", "kb/meta/reasoning/m3.md",
 		methFactBody("M3", "branch-b lesson", []string{"meta", "reasoning", "methodology"}, nil),
 		"add m3 on b", "")
 	require.NoError(t, err)
 
-	got, err := svc.Search().RelevantMethodology(ctx, branch, "anything", nil, nil, 10)
+	got, err := svc.Search().RelevantMethodologyForFact(ctx, branch,
+		"kb/synth/src.md", nil, nil, 10, 0.0)
 	require.NoError(t, err)
 
 	paths := make([]string, len(got))
@@ -78,31 +107,68 @@ func TestRelevantMethodology_FiltersByTypeAndBranch(t *testing.T) {
 	require.Equal(t, "second lesson", byPath["kb/meta/reasoning/m2.md"].Body)
 }
 
-// TestRelevantMethodology_EmptyCandidateSet verifies graceful empty return
-// (not an error) when a branch has no methodology facts.
-func TestRelevantMethodology_EmptyCandidateSet(t *testing.T) {
+// TestRelevantMethodologyForFact_EmptyCandidateSet verifies graceful
+// empty return (not an error) when a branch has no methodology facts.
+func TestRelevantMethodologyForFact_EmptyCandidateSet(t *testing.T) {
 	dir := t.TempDir()
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	defer svc.Close()
 	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/a"))
 
-	got, err := svc.Search().RelevantMethodology(context.Background(), "agent/a", "anything", nil, nil, 10)
+	writeSrcFact(t, svc, "agent/a", "kb/synth/src.md", "x", nil, nil)
+
+	got, err := svc.Search().RelevantMethodologyForFact(context.Background(), "agent/a",
+		"kb/synth/src.md", nil, nil, 10, 0.0)
 	require.NoError(t, err)
 	require.Empty(t, got)
+}
+
+// TestRelevantMethodologyForFact_SourceFactMissing returns an error when
+// the source path doesn't resolve on the branch — this is a programming
+// error at the call site, not a degraded-but-functional condition.
+//
+// The fetch falls through gracefully (tag-only ranking) only when the
+// source fact exists but lacks an embedding. A nonexistent source path
+// is a different failure: the entire branch_facts JOIN finds nothing.
+// In that case the helper still returns nil candidates if methodology
+// also doesn't exist, or errors at the candidate query if it does.
+func TestRelevantMethodologyForFact_SourceFactMissing_DegradesToTagOnly(t *testing.T) {
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	defer svc.Close()
+	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/a"))
+
+	// Methodology exists but no source fact at this path.
+	_, err = svc.Facts().WriteFact(context.Background(), "agent/a",
+		"kb/meta/reasoning/m.md",
+		methFactBody("M", "body", []string{"meta", "reasoning", "methodology", "security"}, []string{"Anthropic"}),
+		"add m", "")
+	require.NoError(t, err)
+
+	// Missing source path → no embedding row → falls through to tag-only.
+	// Tag overlap with src tags is still computed, so the methodology surfaces.
+	got, err := svc.Search().RelevantMethodologyForFact(context.Background(), "agent/a",
+		"kb/synth/nonexistent.md",
+		[]string{"security"}, []string{"Anthropic"},
+		10, 0.0)
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	require.InDelta(t, 1.0, got[0].TagOverlap, 0.001)
+	require.Equal(t, 0.0, got[0].VectorScore, "no source vector → vector score must be zero")
 }
 
 // TestFormatMethodologySection_NonEmpty verifies the prompt-section
 // formatter renders only ranked bullet lines (title + path + score),
 // with no leading heading and with bodies omitted. Each call site
-// supplies its own heading wording — see mcp/hypothesize.go and the
-// distill/reflect templates.
+// supplies its own heading wording.
 func TestFormatMethodologySection_NonEmpty(t *testing.T) {
 	matches := []MethodologyMatch{
 		{Path: "kb/meta/reasoning/m1.md", Title: "M1 title", Body: "M1 body about evidence weighting.", Score: 0.87},
 		{Path: "kb/meta/reasoning/m2.md", Title: "M2 title", Body: "M2 body about pitfall detection.", Score: 0.62},
 	}
-	got := FormatMethodologySection(matches, 0.0)
+	got := FormatMethodologySection(matches)
 	require.NotContains(t, got, "Applicable methodology",
 		"formatter must not emit a heading; callers own framing")
 	require.NotContains(t, got, "Existing methodology")
@@ -111,51 +177,22 @@ func TestFormatMethodologySection_NonEmpty(t *testing.T) {
 	require.Contains(t, got, "score=0.87")
 	require.Contains(t, got, "score=0.62")
 	require.NotContains(t, got, "M1 body about evidence weighting.")
-	// Two bullet lines.
 	require.Equal(t, 2, strings.Count(got, "•"))
 }
 
 // TestFormatMethodologySection_Empty returns empty string for empty input
 // so callers can omit the entire section.
 func TestFormatMethodologySection_Empty(t *testing.T) {
-	require.Equal(t, "", FormatMethodologySection(nil, 0.0))
-	require.Equal(t, "", FormatMethodologySection([]MethodologyMatch{}, 0.0))
+	require.Equal(t, "", FormatMethodologySection(nil))
+	require.Equal(t, "", FormatMethodologySection([]MethodologyMatch{}))
 }
 
-// TestFormatMethodologySection_BelowThresholdDropped drops matches whose
-// composite score falls below the configured floor, retaining only
-// candidates at or above the threshold.
-func TestFormatMethodologySection_BelowThresholdDropped(t *testing.T) {
-	matches := []MethodologyMatch{
-		{Path: "kb/meta/reasoning/keep.md", Title: "Keep", Score: 0.20},
-		{Path: "kb/meta/reasoning/drop1.md", Title: "Drop1", Score: 0.10},
-		{Path: "kb/meta/reasoning/drop2.md", Title: "Drop2", Score: 0.05},
-	}
-	got := FormatMethodologySection(matches, 0.15)
-	require.Contains(t, got, "Keep")
-	require.Contains(t, got, "kb/meta/reasoning/keep.md")
-	require.NotContains(t, got, "Drop1")
-	require.NotContains(t, got, "Drop2")
-	// Only one bullet rendered.
-	require.Equal(t, 1, strings.Count(got, "•"))
-}
-
-// TestFormatMethodologySection_AllBelowReturnsEmpty returns "" when every
-// candidate is below the threshold, so callers can omit the section.
-func TestFormatMethodologySection_AllBelowReturnsEmpty(t *testing.T) {
-	matches := []MethodologyMatch{
-		{Path: "kb/meta/reasoning/a.md", Title: "A", Score: 0.05},
-		{Path: "kb/meta/reasoning/b.md", Title: "B", Score: 0.10},
-	}
-	require.Equal(t, "", FormatMethodologySection(matches, 0.15))
-}
-
-// TestRelevantMethodology_TagOverlap_RanksByMatch verifies the tag-overlap
-// scoring: a methodology with both source domain AND source entity matching
-// outranks one with only one matching, which outranks one with no matching.
-// Verifies the universal-marker exclusion (meta/reasoning/methodology don't
-// count toward overlap).
-func TestRelevantMethodology_TagOverlap_RanksByMatch(t *testing.T) {
+// TestRelevantMethodologyForFact_TagOverlap_RanksByMatch verifies the
+// tag-overlap scoring: a methodology with both source domain AND source
+// entity matching outranks one with only one matching, which outranks
+// one with no matching. Verifies the universal-marker exclusion
+// (meta/reasoning/methodology don't count toward overlap).
+func TestRelevantMethodologyForFact_TagOverlap_RanksByMatch(t *testing.T) {
 	dir := t.TempDir()
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
@@ -165,8 +202,10 @@ func TestRelevantMethodology_TagOverlap_RanksByMatch(t *testing.T) {
 	ctx := context.Background()
 	branch := "agent/a"
 
-	// Three methodology facts with progressively-stronger overlap to a
-	// source tagged domain=[security], entities=[Anthropic].
+	writeSrcFact(t, svc, branch, "kb/synth/src.md", "source body",
+		[]string{"security"}, []string{"Anthropic"})
+
+	// Three methodology facts with progressively-stronger overlap.
 	_, err = svc.Facts().WriteFact(ctx, branch, "kb/meta/reasoning/full.md",
 		methFactBody("Full", "full match",
 			[]string{"meta", "reasoning", "methodology", "security"},
@@ -186,8 +225,10 @@ func TestRelevantMethodology_TagOverlap_RanksByMatch(t *testing.T) {
 		"markers-only", "")
 	require.NoError(t, err)
 
-	got, err := svc.Search().RelevantMethodology(ctx, branch, "any source body",
-		[]string{"security"}, []string{"Anthropic"}, 10)
+	got, err := svc.Search().RelevantMethodologyForFact(ctx, branch,
+		"kb/synth/src.md",
+		[]string{"security"}, []string{"Anthropic"},
+		10, 0.0)
 	require.NoError(t, err)
 	require.Len(t, got, 3)
 
@@ -196,32 +237,27 @@ func TestRelevantMethodology_TagOverlap_RanksByMatch(t *testing.T) {
 	require.Equal(t, "kb/meta/reasoning/halfdom.md", got[1].Path)
 	require.Equal(t, "kb/meta/reasoning/markersonly.md", got[2].Path)
 
-	// Universal markers (meta/reasoning/methodology) are excluded from
-	// overlap calc — markersonly has TagOverlap == 0.
 	require.Equal(t, 0.0, got[2].TagOverlap)
-
-	// Full match: domain_overlap=1.0, entity_overlap=1.0 → tag_overlap=1.0.
 	require.InDelta(t, 1.0, got[0].TagOverlap, 0.001)
-
-	// Half match: domain_overlap=1.0, entity_overlap=0.0 → tag_overlap=0.5.
 	require.InDelta(t, 0.5, got[1].TagOverlap, 0.001)
 
-	// MatchedDomains/Entities expose what actually matched.
 	require.Equal(t, []string{"security"}, got[0].MatchedDomains)
 	require.Equal(t, []string{"Anthropic"}, got[0].MatchedEntities)
 	require.Empty(t, got[2].MatchedDomains)
 	require.Empty(t, got[2].MatchedEntities)
 }
 
-// TestRelevantMethodology_TagOverlap_EmptySourceTags handles the edge case
-// where the source has no tags. Tag-overlap collapses to 0 for everyone;
-// candidates are still returned (Task 3 will rank them via vector).
-func TestRelevantMethodology_TagOverlap_EmptySourceTags(t *testing.T) {
+// TestRelevantMethodologyForFact_TagOverlap_EmptySourceTags handles the
+// edge case where the source has no tags. Tag-overlap collapses to 0
+// for everyone; candidates are still returned (vector ranking only).
+func TestRelevantMethodologyForFact_TagOverlap_EmptySourceTags(t *testing.T) {
 	dir := t.TempDir()
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	defer svc.Close()
 	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/a"))
+
+	writeSrcFact(t, svc, "agent/a", "kb/synth/src.md", "src", nil, nil)
 
 	_, err = svc.Facts().WriteFact(context.Background(), "agent/a", "kb/meta/reasoning/m.md",
 		methFactBody("M", "body",
@@ -230,18 +266,17 @@ func TestRelevantMethodology_TagOverlap_EmptySourceTags(t *testing.T) {
 		"add m", "")
 	require.NoError(t, err)
 
-	got, err := svc.Search().RelevantMethodology(context.Background(), "agent/a", "src",
-		nil, nil, 10)
+	got, err := svc.Search().RelevantMethodologyForFact(context.Background(), "agent/a",
+		"kb/synth/src.md", nil, nil, 10, 0.0)
 	require.NoError(t, err)
 	require.Len(t, got, 1)
 	require.Equal(t, 0.0, got[0].TagOverlap)
 }
 
-// TestRelevantMethodology_VectorOnly_Fallback verifies that when source
-// has no tag overlap, ranking still works via vector similarity.
-// Modeling the 28%/20% gap: methodology with empty domain/entities (only
-// meta markers) is still retrievable when its body is semantically related.
-func TestRelevantMethodology_VectorOnly_Fallback(t *testing.T) {
+// TestRelevantMethodologyForFact_VectorOnly_Fallback verifies that when
+// source has no tag overlap, ranking still works via vector similarity
+// against the source fact's stored embedding.
+func TestRelevantMethodologyForFact_VectorOnly_Fallback(t *testing.T) {
 	dir := t.TempDir()
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
@@ -252,8 +287,8 @@ func TestRelevantMethodology_VectorOnly_Fallback(t *testing.T) {
 	ctx := context.Background()
 	branch := "agent/a"
 
-	// Two methodology facts, neither has source-overlapping tags. Vector
-	// ranks them by body similarity to source body.
+	writeSrcFact(t, svc, branch, "kb/synth/src.md", "evidence weighting under uncertainty", nil, nil)
+
 	_, err = svc.Facts().WriteFact(ctx, branch, "kb/meta/reasoning/close.md",
 		methFactBody("Close", "When evaluating evidence weighting under uncertainty",
 			[]string{"meta", "reasoning", "methodology"}, nil),
@@ -265,27 +300,20 @@ func TestRelevantMethodology_VectorOnly_Fallback(t *testing.T) {
 		"far", "")
 	require.NoError(t, err)
 
-	// stub768Embedder hashes by len(text), so two distinct-length bodies
-	// yield two distinct vectors. The exact ordering depends on the stub;
-	// the test asserts only that BOTH are returned and have non-zero
-	// VectorScore — confirming vector retrieval is wired.
-	got, err := svc.Search().RelevantMethodology(ctx, branch,
-		"evidence weighting under uncertainty",
-		nil, nil, 10)
+	got, err := svc.Search().RelevantMethodologyForFact(ctx, branch,
+		"kb/synth/src.md", nil, nil, 10, 0.0)
 	require.NoError(t, err)
 	require.Len(t, got, 2)
 	for _, m := range got {
 		require.Greater(t, m.VectorScore, 0.0,
-			"vector score must be non-zero when embedder is configured: %+v", m)
+			"vector score must be non-zero when source has stored embedding: %+v", m)
 	}
 }
 
-// TestRelevantMethodology_Composite_FormulaIsApplied verifies the score
-// formula Score == 0.6·VectorScore + 0.4·TagOverlap holds for every
-// returned match. Avoids asserting any particular ordering against the
-// stub embedder (whose cosine similarities are deterministic but
-// content-independent), instead asserting the per-match invariant.
-func TestRelevantMethodology_Composite_FormulaIsApplied(t *testing.T) {
+// TestRelevantMethodologyForFact_Composite_FormulaIsApplied verifies the
+// score formula Score == 0.6·VectorScore + 0.4·TagOverlap holds for
+// every returned match.
+func TestRelevantMethodologyForFact_Composite_FormulaIsApplied(t *testing.T) {
 	dir := t.TempDir()
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
@@ -295,6 +323,10 @@ func TestRelevantMethodology_Composite_FormulaIsApplied(t *testing.T) {
 
 	ctx := context.Background()
 	branch := "agent/a"
+
+	writeSrcFact(t, svc, branch, "kb/synth/src.md",
+		"exact source body for high vector score",
+		[]string{"security"}, []string{"Anthropic"})
 
 	_, err = svc.Facts().WriteFact(ctx, branch, "kb/meta/reasoning/tagged.md",
 		methFactBody("Tagged", "different content but tags match",
@@ -308,13 +340,13 @@ func TestRelevantMethodology_Composite_FormulaIsApplied(t *testing.T) {
 		"vectored", "")
 	require.NoError(t, err)
 
-	got, err := svc.Search().RelevantMethodology(ctx, branch,
-		"exact source body for high vector score",
-		[]string{"security"}, []string{"Anthropic"}, 10)
+	got, err := svc.Search().RelevantMethodologyForFact(ctx, branch,
+		"kb/synth/src.md",
+		[]string{"security"}, []string{"Anthropic"},
+		10, 0.0)
 	require.NoError(t, err)
 	require.Len(t, got, 2)
 
-	// Per-match invariant: Score == 0.6·VectorScore + 0.4·TagOverlap.
 	for _, m := range got {
 		expected := 0.6*m.VectorScore + 0.4*m.TagOverlap
 		require.InDelta(t, expected, m.Score, 0.0001,
@@ -322,7 +354,6 @@ func TestRelevantMethodology_Composite_FormulaIsApplied(t *testing.T) {
 			m.Path, m.VectorScore, m.TagOverlap, m.Score)
 	}
 
-	// Tagged has full tag overlap; Vectored has none.
 	byPath := map[string]MethodologyMatch{}
 	for _, m := range got {
 		byPath[m.Path] = m
@@ -331,20 +362,22 @@ func TestRelevantMethodology_Composite_FormulaIsApplied(t *testing.T) {
 	require.InDelta(t, 0.0, byPath["kb/meta/reasoning/vectored.md"].TagOverlap, 0.0001)
 }
 
-// TestRelevantMethodology_Composite_TagWeightWinsAtFullMatch verifies that
-// with no embedder configured, tag-only ranking still works as a fallback
-// (VectorScore stays 0 for all candidates; ranking falls back to
-// 0.4·TagOverlap = TagOverlap, scaled).
-func TestRelevantMethodology_Composite_TagWeightWinsAtFullMatch(t *testing.T) {
+// TestRelevantMethodologyForFact_NoEmbedder_TagOnly verifies that with
+// no embedder configured, the source fact has no embedding row and
+// ranking falls back to tag-only.
+func TestRelevantMethodologyForFact_NoEmbedder_TagOnly(t *testing.T) {
 	dir := t.TempDir()
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	defer svc.Close()
-	// No embedder: VectorScore stays 0 for all candidates.
+	// No embedder: facts_vec stays empty.
 	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/a"))
 
 	ctx := context.Background()
 	branch := "agent/a"
+
+	writeSrcFact(t, svc, branch, "kb/synth/src.md", "src",
+		[]string{"security"}, []string{"Anthropic"})
 
 	_, err = svc.Facts().WriteFact(ctx, branch, "kb/meta/reasoning/tagged.md",
 		methFactBody("Tagged", "body",
@@ -358,16 +391,21 @@ func TestRelevantMethodology_Composite_TagWeightWinsAtFullMatch(t *testing.T) {
 		"untagged", "")
 	require.NoError(t, err)
 
-	got, err := svc.Search().RelevantMethodology(ctx, branch, "src",
-		[]string{"security"}, []string{"Anthropic"}, 10)
+	got, err := svc.Search().RelevantMethodologyForFact(ctx, branch,
+		"kb/synth/src.md",
+		[]string{"security"}, []string{"Anthropic"},
+		10, 0.0)
 	require.NoError(t, err)
 	require.Len(t, got, 2)
 	require.Equal(t, "kb/meta/reasoning/tagged.md", got[0].Path,
 		"with no embedder, tag-overlap=1.0 must outrank tag-overlap=0")
+	for _, m := range got {
+		require.Equal(t, 0.0, m.VectorScore, "no embedder → no vector score")
+	}
 }
 
-// TestRelevantMethodology_TopK limits the result count.
-func TestRelevantMethodology_TopK(t *testing.T) {
+// TestRelevantMethodologyForFact_TopK limits the result count.
+func TestRelevantMethodologyForFact_TopK(t *testing.T) {
 	dir := t.TempDir()
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
@@ -376,6 +414,8 @@ func TestRelevantMethodology_TopK(t *testing.T) {
 	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/a"))
 
 	ctx := context.Background()
+	writeSrcFact(t, svc, "agent/a", "kb/synth/src.md", "src", nil, nil)
+
 	for i := 0; i < 5; i++ {
 		path := fmt.Sprintf("kb/meta/reasoning/m%d.md", i)
 		title := fmt.Sprintf("M%d", i)
@@ -385,25 +425,102 @@ func TestRelevantMethodology_TopK(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	got, err := svc.Search().RelevantMethodology(ctx, "agent/a", "src", nil, nil, 3)
+	got, err := svc.Search().RelevantMethodologyForFact(ctx, "agent/a",
+		"kb/synth/src.md", nil, nil, 3, 0.0)
 	require.NoError(t, err)
 	require.Len(t, got, 3)
 }
 
-// TestRelevantMethodology_VectorCoverage_WithSiblingBranchNoise regresses
-// the bug where the KNN window was sized to the current branch's fact
-// count via `COUNT(*) FROM branch_facts WHERE branch_id = ?` — but
-// facts_vec is keyed by the global facts.id (one row per fact across all
-// branches). When a sibling branch holds many vector-closer facts, those
-// rows fill the global top-k window first; the post-filter join then
-// drops them, leaving zero rows for the current branch and silently
-// downgrading the methodology section to empty.
+// TestRelevantMethodologyForFact_MinScoreFiltering_DBSidePrune
+// regresses the DB-side pruning path: when minScore is high enough
+// that no candidate could possibly clear the threshold even with full
+// tag overlap, the SQL WHERE clause filters them out before they reach
+// the Go side.
 //
-// Seeds 30 noise observations on a sibling branch BEFORE creating the
-// test branch, so the test branch sees only the methodology rows it
-// writes. The fix sizes k to COUNT(*) FROM facts_vec (the global
-// vec-table size), which keeps every methodology row inside the window.
-func TestRelevantMethodology_VectorCoverage_WithSiblingBranchNoise(t *testing.T) {
+// With minScore = 0.9 and weights 0.6/0.4, the per-vec lower bound is
+// (0.9 - 0.4) / 0.6 ≈ 0.833. The stub embedder never produces vectors
+// that close to the source body, so no candidate clears the bound. The
+// composite filter in Go would also drop them, but this test pins the
+// invariant that the function returns nothing rather than something the
+// caller is expected to filter.
+func TestRelevantMethodologyForFact_MinScoreFiltering_DBSidePrune(t *testing.T) {
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	defer svc.Close()
+	svc.SetEmbedder(&stub768Embedder{})
+	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/a"))
+
+	ctx := context.Background()
+	writeSrcFact(t, svc, "agent/a", "kb/synth/src.md", "source body",
+		[]string{"security"}, []string{"Anthropic"})
+
+	for i := 0; i < 3; i++ {
+		path := fmt.Sprintf("kb/meta/reasoning/m%d.md", i)
+		_, err = svc.Facts().WriteFact(ctx, "agent/a", path,
+			methFactBody(fmt.Sprintf("M%d", i), "body",
+				[]string{"meta", "reasoning", "methodology"}, nil),
+			"add", "")
+		require.NoError(t, err)
+	}
+
+	got, err := svc.Search().RelevantMethodologyForFact(ctx, "agent/a",
+		"kb/synth/src.md", []string{"security"}, []string{"Anthropic"},
+		10, 0.9)
+	require.NoError(t, err)
+	require.Empty(t, got, "minScore=0.9 must filter every candidate")
+}
+
+// TestRelevantMethodologyForFact_MinScoreFiltering_GoSidePrune
+// covers the Go-side `composite < minScore` filter — exercised when
+// the DB-side bound is loose enough to admit candidates whose actual
+// composite score still falls below minScore (e.g. tag overlap = 0,
+// vector below threshold).
+//
+// With minScore = 0.30 and a tag-only candidate (no vector match), the
+// candidate's composite is 0.4 * tagOverlap. tagOverlap=0.5 yields
+// composite=0.2 → dropped; tagOverlap=1.0 yields composite=0.4 → kept.
+func TestRelevantMethodologyForFact_MinScoreFiltering_GoSidePrune(t *testing.T) {
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	defer svc.Close()
+	// No embedder → tag-only ranking.
+	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/a"))
+
+	ctx := context.Background()
+	writeSrcFact(t, svc, "agent/a", "kb/synth/src.md", "src",
+		[]string{"security"}, []string{"Anthropic"})
+
+	_, err = svc.Facts().WriteFact(ctx, "agent/a", "kb/meta/reasoning/full.md",
+		methFactBody("Full", "body",
+			[]string{"meta", "reasoning", "methodology", "security"},
+			[]string{"Anthropic"}),
+		"full", "")
+	require.NoError(t, err)
+	_, err = svc.Facts().WriteFact(ctx, "agent/a", "kb/meta/reasoning/half.md",
+		methFactBody("Half", "body",
+			[]string{"meta", "reasoning", "methodology", "security"}, nil),
+		"half", "")
+	require.NoError(t, err)
+
+	got, err := svc.Search().RelevantMethodologyForFact(ctx, "agent/a",
+		"kb/synth/src.md", []string{"security"}, []string{"Anthropic"},
+		10, 0.30)
+	require.NoError(t, err)
+	require.Len(t, got, 1, "only Full (Score=0.4) clears 0.30; Half (Score=0.2) is dropped")
+	require.Equal(t, "kb/meta/reasoning/full.md", got[0].Path)
+}
+
+// TestRelevantMethodologyForFact_VectorCoverage_WithSiblingBranchNoise
+// regresses the bug where the KNN window was sized to the current
+// branch's fact count via `COUNT(*) FROM branch_facts WHERE branch_id =
+// ?` — but facts_vec is keyed by the global facts.id (one row per fact
+// across all branches). When a sibling branch holds many vector-closer
+// facts, those rows fill the global top-k window first; the post-filter
+// join then drops them, leaving zero rows for the current branch and
+// silently downgrading the methodology section to empty.
+func TestRelevantMethodologyForFact_VectorCoverage_WithSiblingBranchNoise(t *testing.T) {
 	dir := t.TempDir()
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
@@ -418,6 +535,10 @@ func TestRelevantMethodology_VectorCoverage_WithSiblingBranchNoise(t *testing.T)
 	// in its branch_facts view.
 	require.NoError(t, svc.Branches().CreateBranch(ctx, "agent/test", "agent/sibling"))
 
+	// Source fact on the test branch.
+	writeSrcFact(t, svc, "agent/test", "kb/synth/src.md",
+		"some source body for vector ranking", nil, nil)
+
 	// Seed 30 noise observations on the sibling branch only. These rows
 	// exist in facts/facts_vec (global) but not in the test branch's
 	// branch_facts view. They will fill the KNN window first because the
@@ -431,12 +552,7 @@ func TestRelevantMethodology_VectorCoverage_WithSiblingBranchNoise(t *testing.T)
 		require.NoError(t, err)
 	}
 
-	// Seed 3 methodology facts on the test branch. The test branch's
-	// branch_facts holds only these rows (plus inherited ontology), so
-	// `COUNT(*) FROM branch_facts WHERE branch_id = test` ≈ 3 — the
-	// pre-fix bound. With k=3 the KNN window is filled by sibling noise
-	// (closer by length) and methodology rows fall outside it; after the
-	// branch_facts join filters them in, simByID is empty.
+	// Seed 3 methodology facts on the test branch.
 	for i := 0; i < 3; i++ {
 		path := fmt.Sprintf("kb/meta/reasoning/m%d.md", i)
 		_, err = svc.Facts().WriteFact(ctx, "agent/test", path,
@@ -446,31 +562,23 @@ func TestRelevantMethodology_VectorCoverage_WithSiblingBranchNoise(t *testing.T)
 		require.NoError(t, err)
 	}
 
-	got, err := svc.Search().RelevantMethodology(ctx, "agent/test",
-		"some source body for vector ranking",
-		nil, nil, 10)
+	got, err := svc.Search().RelevantMethodologyForFact(ctx, "agent/test",
+		"kb/synth/src.md", nil, nil, 10, 0.0)
 	require.NoError(t, err)
 	require.Len(t, got, 3, "branch isolation: only the 3 methodology rows on agent/test must surface")
 
-	// Every methodology row must have a non-zero VectorScore. With the
-	// pre-fix bound (k = test branch's fact count) the global top-k window
-	// would be entirely consumed by sibling-branch noise rows and the
-	// methodology rows would land at VectorScore=0.
 	for _, m := range got {
 		require.Greater(t, m.VectorScore, 0.0,
 			"methodology candidate %s has VectorScore=0 — sibling-branch noise consumed the KNN window", m.Path)
 	}
 }
 
-// TestRelevantMethodology_VectorCoverage_WithNoiseInIndex regresses the bug
-// where sqlite-vec's `MATCH ... AND k = N` applied N as a global top-k
-// before the type='methodology' filter, causing methodology rows to fall
-// outside the window when the index has many non-methodology facts.
-//
-// Seeds many non-methodology facts to push methodology rows into the long
-// tail by distance, then asserts every methodology candidate still gets a
-// non-zero VectorScore.
-func TestRelevantMethodology_VectorCoverage_WithNoiseInIndex(t *testing.T) {
+// TestRelevantMethodologyForFact_VectorCoverage_WithNoiseInIndex
+// regresses the bug where sqlite-vec's `MATCH ... AND k = N` applied N
+// as a global top-k before the type='methodology' filter, causing
+// methodology rows to fall outside the window when the index has many
+// non-methodology facts.
+func TestRelevantMethodologyForFact_VectorCoverage_WithNoiseInIndex(t *testing.T) {
 	dir := t.TempDir()
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
@@ -481,8 +589,10 @@ func TestRelevantMethodology_VectorCoverage_WithNoiseInIndex(t *testing.T) {
 	ctx := context.Background()
 	branch := "agent/a"
 
-	// Seed 30 non-methodology observation facts (the "noise" the KNN
-	// global top-k window would otherwise consume).
+	writeSrcFact(t, svc, branch, "kb/synth/src.md",
+		"some source body for vector ranking", nil, nil)
+
+	// Seed 30 non-methodology observation facts on the same branch.
 	for i := 0; i < 30; i++ {
 		path := fmt.Sprintf("kb/obs/n%d.md", i)
 		body := fmt.Sprintf("noise body %d with varied content", i)
@@ -490,9 +600,6 @@ func TestRelevantMethodology_VectorCoverage_WithNoiseInIndex(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	// Seed 3 methodology facts. With the bug (k = len(cands) = 3), only
-	// the closest 3 vectors GLOBALLY are considered; in a 33-fact index,
-	// the methodology rows are unlikely to all be in that window.
 	for i := 0; i < 3; i++ {
 		path := fmt.Sprintf("kb/meta/reasoning/m%d.md", i)
 		_, err = svc.Facts().WriteFact(ctx, branch, path,
@@ -502,14 +609,11 @@ func TestRelevantMethodology_VectorCoverage_WithNoiseInIndex(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	got, err := svc.Search().RelevantMethodology(ctx, branch,
-		"some source body for vector ranking",
-		nil, nil, 10)
+	got, err := svc.Search().RelevantMethodologyForFact(ctx, branch,
+		"kb/synth/src.md", nil, nil, 10, 0.0)
 	require.NoError(t, err)
 	require.Len(t, got, 3)
 
-	// Every methodology row must have a non-zero VectorScore — the bug
-	// would leave most at 0.
 	for _, m := range got {
 		require.Greater(t, m.VectorScore, 0.0,
 			"methodology candidate %s has VectorScore=0 — KNN window did not cover it", m.Path)

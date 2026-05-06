@@ -57,8 +57,8 @@ func TestMethodologyLoop_CiteBackPlumbing(t *testing.T) {
 
 // TestMethodologyLoop_TagInheritancePlumbing verifies that a methodology
 // fact written with the source synthesis fact's tags (modelling LLM
-// adherence to the inheritance instruction) is correctly retrievable on
-// the inherited tags via RelevantMethodology.
+// adherence to the inheritance instruction) is correctly retrievable
+// against the source fact via RelevantMethodologyForFact.
 func TestMethodologyLoop_TagInheritancePlumbing(t *testing.T) {
 	sb := testenv.NewStoryboard(t)
 	agent := sb.Repo("alpha").Branch("main")
@@ -78,14 +78,15 @@ func TestMethodologyLoop_TagInheritancePlumbing(t *testing.T) {
 			Entities("Anthropic"),
 		"add inherited methodology")
 
-	// RelevantMethodology with source tags retrieves the methodology
-	// with full tag overlap.
+	// Per-fact retrieval against the synth fact surfaces the
+	// methodology with full tag overlap.
 	var matches []store.MethodologyMatch
 	agent.WithRead(func(svc *store.Service) {
-		matches, _ = svc.Search().RelevantMethodology(
+		matches, _ = svc.Search().RelevantMethodologyForFact(
 			context.Background(), "main",
-			"breach probability under structural attack",
-			[]string{"security"}, []string{"Anthropic"}, 5,
+			"kb/synth/breach.md",
+			[]string{"security"}, []string{"Anthropic"},
+			5, 0.0,
 		)
 	})
 
