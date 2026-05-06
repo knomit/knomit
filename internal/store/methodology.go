@@ -228,20 +228,30 @@ func (si *searchIndex) readFactBodyByBlobHash(ctx context.Context, blobHash stri
 	return extractBody(raw), nil
 }
 
-// FormatMethodologySection renders a slice of MethodologyMatch as the
-// "Applicable methodology" prompt section used by knomit_hypothesize,
-// reflect, and distill. Pure function with no DB or context dependencies
-// — exported so consumers in internal/mcp and internal/synthesize can
-// share a single rendering. Returns "" for an empty/nil slice so callers
-// can omit the section entirely.
-func FormatMethodologySection(matches []MethodologyMatch) string {
+// FormatMethodologySection renders ranked methodology candidates as
+// title/path/score lines. Body is intentionally omitted — the model
+// fetches via knomit_query if it chooses to read. Drops matches with
+// `Score < minScore`. Returns "" if no matches survive filtering or if
+// matches is empty.
+func FormatMethodologySection(matches []MethodologyMatch, minScore float64) string {
 	if len(matches) == 0 {
 		return ""
 	}
-	var sb strings.Builder
-	sb.WriteString("Applicable methodology (top 3 by relevance — reasoning lessons from prior cycles):\n")
+	kept := make([]MethodologyMatch, 0, len(matches))
 	for _, m := range matches {
-		fmt.Fprintf(&sb, "\n• %s (%s)\n%s\n", m.Title, m.Path, m.Body)
+		if m.Score < minScore {
+			continue
+		}
+		kept = append(kept, m)
 	}
+	if len(kept) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	sb.WriteString("Applicable methodology (ranked candidates — fetch via knomit_query if useful, cite path in refs if used):\n")
+	for _, m := range kept {
+		fmt.Fprintf(&sb, "\n• score=%.2f  %s  (%s)", m.Score, m.Title, m.Path)
+	}
+	sb.WriteString("\n")
 	return sb.String()
 }

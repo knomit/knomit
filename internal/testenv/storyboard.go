@@ -19,20 +19,26 @@ type StoryboardOpts struct {
 	Embedder   store.BatchEmbedder // nil → DeterministicEmbedder
 	AutoVerify bool                // default true
 	VerifyDeep bool                // default true
+	// MethodologyMinScore overrides the per-repo methodology threshold
+	// when non-nil. Storyboard cfg is not loaded via config.Defaults(),
+	// so the default (0) admits every candidate; tests that need to
+	// observe threshold filtering set this explicitly.
+	MethodologyMinScore *float64
 }
 
 // Storyboard is the root of a test scenario. It owns a tempdir, a
 // per-repo repos.Manager, and registers t.Cleanup to auto-verify every
 // tracked repo before tearing down.
 type Storyboard struct {
-	t        *testing.T
-	homeDir  string
-	embedder store.BatchEmbedder
-	auto     bool
-	deep     bool
-	mu       sync.Mutex
-	repos    map[string]*RepoHandle
-	managers map[string]*repos.Manager
+	t                   *testing.T
+	homeDir             string
+	embedder            store.BatchEmbedder
+	auto                bool
+	deep                bool
+	methodologyMinScore *float64
+	mu                  sync.Mutex
+	repos               map[string]*RepoHandle
+	managers            map[string]*repos.Manager
 }
 
 // NewStoryboard creates a Storyboard with default options. Most tests use this.
@@ -48,13 +54,14 @@ func NewStoryboardWithOpts(t *testing.T, opts StoryboardOpts) *Storyboard {
 		embedder = &DeterministicEmbedder{}
 	}
 	sb := &Storyboard{
-		t:        t,
-		homeDir:  t.TempDir(),
-		embedder: embedder,
-		auto:     opts.AutoVerify,
-		deep:     opts.VerifyDeep,
-		repos:    make(map[string]*RepoHandle),
-		managers: make(map[string]*repos.Manager),
+		t:                   t,
+		homeDir:             t.TempDir(),
+		embedder:            embedder,
+		auto:                opts.AutoVerify,
+		deep:                opts.VerifyDeep,
+		methodologyMinScore: opts.MethodologyMinScore,
+		repos:               make(map[string]*RepoHandle),
+		managers:            make(map[string]*repos.Manager),
 	}
 	t.Cleanup(sb.teardown)
 	return sb
@@ -97,6 +104,9 @@ func (sb *Storyboard) Repo(name string) *RepoHandle {
 
 	homeSub := filepath.Join(sb.homeDir, name)
 	cfg := config.Config{Home: homeSub}
+	if sb.methodologyMinScore != nil {
+		cfg.MethodologyMinScore = *sb.methodologyMinScore
+	}
 	m := repos.New(context.Background(), repos.Deps{
 		Cfg:                   cfg,
 		AgentBranch:           "agent/test",

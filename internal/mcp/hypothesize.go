@@ -249,11 +249,12 @@ func hypothesizeNextItem(ctx context.Context, ri *repos.RepoInstance, s mcpStore
 // the reasoning lessons inline rather than having to query for them.
 func buildHypothesizeInstructions(ctx context.Context, ri *repos.RepoInstance, synthPath string) string {
 	base := `1. Call knomit_explain on the synthesis fact to trace its provenance
-2. Gather additional evidence as needed using knomit_query
-3. Decide if a hypothesis is warranted based on the evidence
-4. If yes, call knomit_learn with type: hypothesis, including: hypothesis statement, evidence chain, reasoning step, known gaps, falsification condition. If any of the methodology lessons below informed your hypothesis (the line of reasoning, the evidence weighting, or the pitfalls to avoid), include their paths in your hypothesis's refs array. Cite only what you actually used.
-5. After writing the hypothesis, call knomit_learn with type: methodology, topic: "meta", category: "reasoning" to record the reasoning process used. Set the methodology's domain and entities to the union of the source synthesis fact's tags plus the standard markers (meta, reasoning, methodology) — inherit from the source rather than inventing new tags.
-6. Call knomit_hypothesize with session_id to continue to the next synthesis fact`
+2. If methodology candidates are listed below, scan their titles and scores. Fetch any that look relevant via knomit_query (single-path query). Within a session, you can rely on what you already fetched — don't re-query the same methodology twice.
+3. Gather additional evidence as needed using knomit_query
+4. Decide if a hypothesis is warranted based on the evidence
+5. If yes, call knomit_learn with type: hypothesis, including: hypothesis statement, evidence chain, reasoning step, known gaps, falsification condition. If any methodology candidates listed below shaped your reasoning (after fetching the ones you found relevant via knomit_query), include their paths in your hypothesis's refs array. Cite only what you actually used.
+6. After writing the hypothesis, call knomit_learn with type: methodology, topic: "meta", category: "reasoning" to record the reasoning process used. Set the methodology's domain and entities to the union of the source synthesis fact's tags plus the standard markers (meta, reasoning, methodology) — inherit from the source rather than inventing new tags.
+7. Call knomit_hypothesize with session_id to continue to the next synthesis fact`
 
 	// Retrieve relevant methodology and append as a structured section.
 	section := loadMethodologySection(ctx, ri, synthPath)
@@ -282,5 +283,5 @@ func loadMethodologySection(ctx context.Context, ri *repos.RepoInstance, synthPa
 			f.Body, f.Domain, f.Entities, 3,
 		)
 	})
-	return store.FormatMethodologySection(matches)
+	return store.FormatMethodologySection(matches, ri.MethodologyMinScore())
 }

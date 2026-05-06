@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -92,28 +93,57 @@ func TestRelevantMethodology_EmptyCandidateSet(t *testing.T) {
 }
 
 // TestFormatMethodologySection_NonEmpty verifies the prompt-section
-// formatter renders header + per-match title/path/body with bullet markers.
-// Pure function (no DB) — used by mcp and synthesize callers in Tasks 4-6.
+// formatter renders header + per-match title/path/score lines with the
+// body intentionally omitted (the model fetches via knomit_query on
+// demand). Pure function (no DB) — used by mcp and synthesize callers.
 func TestFormatMethodologySection_NonEmpty(t *testing.T) {
 	matches := []MethodologyMatch{
-		{Path: "kb/meta/reasoning/m1.md", Title: "M1 title", Body: "M1 body about evidence weighting."},
-		{Path: "kb/meta/reasoning/m2.md", Title: "M2 title", Body: "M2 body about pitfall detection."},
+		{Path: "kb/meta/reasoning/m1.md", Title: "M1 title", Body: "M1 body about evidence weighting.", Score: 0.87},
+		{Path: "kb/meta/reasoning/m2.md", Title: "M2 title", Body: "M2 body about pitfall detection.", Score: 0.62},
 	}
-	got := FormatMethodologySection(matches)
-	require.Contains(t, got, "Applicable methodology")
+	got := FormatMethodologySection(matches, 0.0)
+	require.Contains(t, got, "Applicable methodology (ranked candidates")
+	require.Contains(t, got, "fetch via knomit_query")
 	require.Contains(t, got, "M1 title")
 	require.Contains(t, got, "kb/meta/reasoning/m1.md")
-	require.Contains(t, got, "M1 body about evidence weighting.")
-	require.Contains(t, got, "M2 title")
-	require.Contains(t, got, "M2 body about pitfall detection.")
-	require.Contains(t, got, "• M1 title")
+	require.Contains(t, got, "score=0.87")
+	require.Contains(t, got, "score=0.62")
+	require.NotContains(t, got, "M1 body about evidence weighting.")
 }
 
 // TestFormatMethodologySection_Empty returns empty string for empty input
 // so callers can omit the entire section.
 func TestFormatMethodologySection_Empty(t *testing.T) {
-	require.Equal(t, "", FormatMethodologySection(nil))
-	require.Equal(t, "", FormatMethodologySection([]MethodologyMatch{}))
+	require.Equal(t, "", FormatMethodologySection(nil, 0.0))
+	require.Equal(t, "", FormatMethodologySection([]MethodologyMatch{}, 0.0))
+}
+
+// TestFormatMethodologySection_BelowThresholdDropped drops matches whose
+// composite score falls below the configured floor, retaining only
+// candidates at or above the threshold.
+func TestFormatMethodologySection_BelowThresholdDropped(t *testing.T) {
+	matches := []MethodologyMatch{
+		{Path: "kb/meta/reasoning/keep.md", Title: "Keep", Score: 0.20},
+		{Path: "kb/meta/reasoning/drop1.md", Title: "Drop1", Score: 0.10},
+		{Path: "kb/meta/reasoning/drop2.md", Title: "Drop2", Score: 0.05},
+	}
+	got := FormatMethodologySection(matches, 0.15)
+	require.Contains(t, got, "Keep")
+	require.Contains(t, got, "kb/meta/reasoning/keep.md")
+	require.NotContains(t, got, "Drop1")
+	require.NotContains(t, got, "Drop2")
+	// Only one bullet rendered.
+	require.Equal(t, 1, strings.Count(got, "\n•"))
+}
+
+// TestFormatMethodologySection_AllBelowReturnsEmpty returns "" when every
+// candidate is below the threshold, so callers can omit the section.
+func TestFormatMethodologySection_AllBelowReturnsEmpty(t *testing.T) {
+	matches := []MethodologyMatch{
+		{Path: "kb/meta/reasoning/a.md", Title: "A", Score: 0.05},
+		{Path: "kb/meta/reasoning/b.md", Title: "B", Score: 0.10},
+	}
+	require.Equal(t, "", FormatMethodologySection(matches, 0.15))
 }
 
 // TestRelevantMethodology_TagOverlap_RanksByMatch verifies the tag-overlap

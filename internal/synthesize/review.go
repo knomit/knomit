@@ -552,7 +552,7 @@ func (r *Reviewer) loadReflectMethodology(ctx context.Context, transitionsJSON [
 		}
 		matches, _ = svc.Search().RelevantMethodology(ctx, branch, combinedBody, doms, ents, 3)
 	})
-	return store.FormatMethodologySection(matches)
+	return store.FormatMethodologySection(matches, r.ri.MethodologyMinScore())
 }
 
 // loadDistillMethodology retrieves methodology relevant to the cluster's
@@ -597,7 +597,7 @@ func (r *Reviewer) loadDistillMethodology(ctx context.Context, facts []factForLL
 			combinedBody, doms, ents, 3,
 		)
 	})
-	return store.FormatMethodologySection(matches)
+	return store.FormatMethodologySection(matches, r.ri.MethodologyMinScore())
 }
 
 // hypothesisTransition records a change to a hypothesis fact during a review session.

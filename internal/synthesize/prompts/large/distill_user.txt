@@ -3,11 +3,11 @@ You are synthesizing facts in a knowledge base to find patterns and higher-order
 Facts in scope:
 {{.Facts}}
 
-{{if .ApplicableMethodology}}Applicable methodology (reasoning lessons from prior synthesis cycles):
+{{if .ApplicableMethodology}}Applicable methodology candidates (ranked — fetch via knomit_query if useful):
 
 {{.ApplicableMethodology}}
 
-Apply these lessons to the distillation. If a lesson informed how you weighted, combined, or named the synthesis, cite it in the output's refs.
+Scan the candidates and fetch any that might inform how you weight, combine, or name the synthesis. If a lesson you fetched informed the output, cite its path in the output's refs.
 
 {{end}}Identify patterns across these facts. Produce:
 1. New higher-order facts that capture patterns

@@ -35,7 +35,10 @@ func TestMethodologyWorkflow_HypothesizeInjectsRelevantMethodology(t *testing.T)
 	view.MustNotBeDone()
 	view.MustHaveInstructionsContaining("Applicable methodology")
 	view.MustHaveInstructionsContaining("Use tag-overlap before vector")
-	view.MustHaveInstructionsContaining("Cosine alone gives false positives")
+	view.MustNotHaveInstructionsContaining("Cosine alone gives false positives")
+	view.MustHaveInstructionsContaining("score=")
+	view.MustHaveInstructionsContaining("kb/meta/reasoning/")
+	view.MustHaveInstructionsContaining("knomit_query")
 }
 
 // TestMethodologyWorkflow_HypothesizeOmitsSectionWhenNoMatch asserts
@@ -129,4 +132,47 @@ func TestMethodologyWorkflow_MethodologyPersistsAcrossCycles(t *testing.T) {
 	cycle2 := agent.Hypothesize(nil)
 	cycle2.MustNotBeDone().MustHaveInstructionsContaining("Adversarial breach reasoning")
 	cycle2.Continue("done").MustBeDone()
+}
+
+// TestMethodologyWorkflow_LowScoreCandidatesDropped seeds a methodology
+// fact whose only overlap with the synthesis is via the universal markers
+// (which are excluded from the tag-overlap calculation) and no body
+// similarity. With a high threshold the candidate's composite score
+// falls below the floor and the section is omitted entirely.
+//
+// We override the threshold via StoryboardOpts.MethodologyMinScore
+// because the deterministic embedder hashes inputs into a 768-d vector
+// where cosine similarity between distinct strings is essentially
+// random — engineering reliable sub-0.15 vector scores by tweaking
+// strings is brittle. Forcing the threshold to 0.99 makes any candidate
+// drop and observably exercises the user-facing filter.
+func TestMethodologyWorkflow_LowScoreCandidatesDropped(t *testing.T) {
+	high := 0.99
+	sb := testenv.NewStoryboardWithOpts(t, testenv.StoryboardOpts{
+		AutoVerify:          true,
+		VerifyDeep:          true,
+		MethodologyMinScore: &high,
+	})
+	agent := sb.Repo("alpha").Branch("agent/test")
+
+	agent.Write("kb/meta/reasoning/markers-only.md",
+		testenv.Fact("Markers-only methodology").
+			Type(fact.Methodology).
+			Body("A reasoning lesson with no domain-specific overlap.").
+			Domain("meta", "reasoning", "methodology"),
+		"add methodology")
+
+	agent.Write("kb/synth/unrelated.md",
+		testenv.Fact("Unrelated synthesis fact").
+			Type(fact.Synthesis).
+			Domain("security").
+			Entities("Anthropic").
+			Body("A completely different topic with no body similarity."),
+		"add synth")
+
+	view := agent.Hypothesize(nil)
+	view.MustNotBeDone()
+	view.MustNotHaveInstructionsContaining("Applicable methodology")
+	view.MustHaveInstructionsContaining("knomit_explain")
+	view.MustHaveInstructionsContaining("knomit_query")
 }

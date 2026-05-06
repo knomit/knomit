@@ -48,26 +48,28 @@ type ClusterCacheConfig struct {
 
 // Config is the root configuration, composed of section structs.
 type Config struct {
-	Home         string           `toml:"repo"`
-	Host         string           `toml:"host"`
-	Port         string           `toml:"port"`
-	Socket       string           `toml:"socket"`
-	OntologyRoot string             `toml:"ontology_root"`
-	ONNXLibPath  string             `toml:"onnx_lib_path"`
-	ClusterCache ClusterCacheConfig `toml:"cluster_cache"`
-	LLM          LLMConfig          `toml:"llm"`
-	Remote       RemoteAuthConfig   `toml:"remote"`
-	Git          GitConfig          `toml:"git"`
+	Home                string             `toml:"repo"`
+	Host                string             `toml:"host"`
+	Port                string             `toml:"port"`
+	Socket              string             `toml:"socket"`
+	OntologyRoot        string             `toml:"ontology_root"`
+	ONNXLibPath         string             `toml:"onnx_lib_path"`
+	MethodologyMinScore float64            `toml:"methodology_min_score"`
+	ClusterCache        ClusterCacheConfig `toml:"cluster_cache"`
+	LLM                 LLMConfig          `toml:"llm"`
+	Remote              RemoteAuthConfig   `toml:"remote"`
+	Git                 GitConfig          `toml:"git"`
 }
 
 // Defaults returns a Config populated with default values.
 func Defaults() Config {
 	home, _ := os.UserHomeDir()
 	return Config{
-		Home:         home + "/.knomit",
-		Host:         "localhost",
-		Port:         "19278",
-		OntologyRoot: "kb",
+		Home:                home + "/.knomit",
+		Host:                "localhost",
+		Port:                "19278",
+		OntologyRoot:        "kb",
+		MethodologyMinScore: 0.15,
 		ClusterCache: ClusterCacheConfig{
 			QuietThreshold: "10s",
 			CheckInterval:  "5s",
@@ -124,6 +126,7 @@ func Load() (Config, error) {
 	envOr("KNOMIT_CLUSTER_CACHE_QUIET_THRESHOLD", &cfg.ClusterCache.QuietThreshold)
 	envOr("KNOMIT_CLUSTER_CACHE_CHECK_INTERVAL", &cfg.ClusterCache.CheckInterval)
 	envIntOr("KNOMIT_CLUSTER_CACHE_MAX_CONCURRENT", &cfg.ClusterCache.MaxConcurrent)
+	envFloatOr("KNOMIT_METHODOLOGY_MIN_SCORE", &cfg.MethodologyMinScore)
 
 	// Expand tildes in path fields.
 	expandTilde(&cfg.Home)
@@ -183,6 +186,14 @@ func envIntOr(key string, target *int) {
 	if v := os.Getenv(key); v != "" {
 		if n, err := strconv.Atoi(v); err == nil {
 			*target = n
+		}
+	}
+}
+
+func envFloatOr(key string, target *float64) {
+	if v := os.Getenv(key); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			*target = f
 		}
 	}
 }
