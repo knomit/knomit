@@ -149,7 +149,21 @@ func (si *searchIndex) upsert(ctx context.Context, branch, commitHash string, re
 		}
 		text := rec.Title + " " + extractBody(data)
 		vec, err := emb.Embed(text)
-		if err == nil && len(vec) > 0 {
+		switch {
+		case err != nil:
+			// Indexing proceeds without a vector — the fact will be
+			// retrievable via tag/keyword paths but not via vector
+			// similarity until the next rebuildEmbeddings run.
+			log.Warn().Err(err).Str("path", rec.Path).Str("blob_hash", rec.BlobHash).
+				Msg("upsert: embedder failed; fact indexed without vector (run `knomit rebuild` to backfill)")
+		case len(vec) == 0:
+			log.Warn().Str("path", rec.Path).Str("blob_hash", rec.BlobHash).
+				Msg("upsert: embedder returned empty vector; fact indexed without vector (run `knomit rebuild` to backfill)")
+		case len(vec) != factsVecDim:
+			log.Warn().Str("path", rec.Path).Str("blob_hash", rec.BlobHash).
+				Int("got_dim", len(vec)).Int("want_dim", factsVecDim).
+				Msg("upsert: embedder produced wrong-dim vector; fact indexed without vector")
+		default:
 			vecData = float32SliceToBytes(vec)
 		}
 	}

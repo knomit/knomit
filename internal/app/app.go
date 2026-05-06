@@ -63,6 +63,14 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 	}
 	if embedder != nil {
 		a.closers = append(a.closers, embedder.Close)
+		log.Info().Msg("embedder enabled — facts will be indexed with vectors; semantic search and methodology vector ranking active")
+	} else {
+		// Loud single-line summary of the consequence. Per-write warnings
+		// in store.upsert (embedder failed / wrong dim / empty vec) are
+		// suppressed for the emb==nil case to avoid spamming this notice
+		// for every fact written; this is the canonical place to learn
+		// that the server is running without an embedder.
+		log.Warn().Msg("embedder DISABLED — facts will be indexed without vectors; methodology + semantic search fall back to tag-only ranking. Configure ONNX model files and restart, then run `knomit rebuild` to backfill embeddings for existing facts.")
 	}
 
 	// LLM adapter.
