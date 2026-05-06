@@ -735,6 +735,88 @@ func (si *searchIndex) rebuildGraph(ctx context.Context, branch string, progress
 		}
 	}
 
+	// Phase A.5: ensure every historical (path, blob_hash) ever indexed on
+	// this branch has a graph Fact node, even if the underlying `facts`
+	// row was GC'd after the fact was updated/retracted. Without this,
+	// Phase B below cannot write DERIVED_FROM edges from orphaned source
+	// blobs, leaving the temporal graph internally inconsistent (the edges
+	// it CAN write are missing endpoints for the edges it CANNOT).
+	//
+	// We dedup by (path, blob_hash) since the same blob can appear in
+	// multiple commits (no-op recommits, merges that don't change content).
+	// Versions still in `facts` are skipped — Phase A above already gave
+	// them live nodes.
+	currentSet := make(map[string]struct{}, len(facts))
+	for _, f := range facts {
+		currentSet[f.Path+"|"+f.BlobHash] = struct{}{}
+	}
+	histRows, err := conn(ctx, si.rh.db).QueryContext(ctx, `
+		SELECT cl.commit_hash, cl.path
+		FROM commit_log cl
+		JOIN branch_commits bc ON bc.commit_hash = cl.commit_hash
+		WHERE bc.branch_id = (SELECT id FROM branches WHERE name = ?)
+		  AND cl.action != 'deleted'
+		ORDER BY cl.committed_at ASC, cl.rowid ASC`,
+		branch)
+	if err != nil {
+		return 0, fmt.Errorf("rebuildGraph phaseA.5: query commit_log: %w", err)
+	}
+	type histKey struct {
+		commitHash string
+		path       string
+	}
+	var histEntries []histKey
+	for histRows.Next() {
+		var h histKey
+		if err := histRows.Scan(&h.commitHash, &h.path); err != nil {
+			histRows.Close()
+			return 0, fmt.Errorf("rebuildGraph phaseA.5: scan: %w", err)
+		}
+		histEntries = append(histEntries, h)
+	}
+	histRows.Close()
+
+	seenHistorical := make(map[string]struct{})
+	historicalSynced := 0
+	for _, h := range histEntries {
+		blobHash, err := si.rh.readBlobHashAtCommit(ctx, h.path, h.commitHash)
+		if err != nil {
+			log.Debug().Err(err).Str("path", h.path).Str("commit", h.commitHash[:8]).
+				Msg("rebuildGraph phaseA.5: skip (blob_hash lookup failed)")
+			continue
+		}
+		key := h.path + "|" + blobHash
+		if _, ok := currentSet[key]; ok {
+			continue // current version, Phase A already handled
+		}
+		if _, ok := seenHistorical[key]; ok {
+			continue // already MERGE'd this historical version
+		}
+		seenHistorical[key] = struct{}{}
+
+		content, err := si.rh.readFileAtCommit(ctx, h.path, h.commitHash)
+		if err != nil {
+			log.Debug().Err(err).Str("path", h.path).Str("commit", h.commitHash[:8]).
+				Msg("rebuildGraph phaseA.5: skip (file not at commit)")
+			continue
+		}
+		rec, err := parseFact(h.path, content)
+		if err != nil {
+			log.Debug().Err(err).Str("path", h.path).Msg("rebuildGraph phaseA.5: skip (parse failed)")
+			continue
+		}
+		rec.BlobHash = blobHash
+		if err := si.graphSyncHistoricalFactTx(ctx, tx, rec); err != nil {
+			log.Warn().Err(err).Str("path", h.path).Str("blob", blobHash[:8]).
+				Msg("rebuildGraph phaseA.5: historical sync failed")
+			continue
+		}
+		historicalSynced++
+	}
+	if historicalSynced > 0 {
+		log.Info().Int("historical_facts", historicalSynced).Msg("rebuildGraph phaseA.5: restored historical Fact nodes")
+	}
+
 	if err := tx.Commit(); err != nil {
 		return 0, fmt.Errorf("rebuildGraph: commit: %w", err)
 	}
@@ -808,6 +890,28 @@ func (si *searchIndex) rebuildGraph(ctx context.Context, branch string, progress
 		if len(localRefs) == 0 {
 			continue
 		}
+
+		// Skip when the source blob version was orphaned (no graph node).
+		// Phase A iterates the current `facts` table, which is COW-deduped
+		// by (path, blob_hash) AND garbage-collected of rows that no
+		// branch_facts row points at. After a fact is updated/retracted,
+		// older blob versions can be GC'd out of `facts` while their
+		// commit_log entries (and historical refs) survive. Phase B sees
+		// those historical (commit, path) tuples and tries to write
+		// edges from the orphaned source — there's no graph node to
+		// write from, so we silently skip. Mirrors the symmetric
+		// missing-target handling inside graphAddDerivedFromAtCommitTx.
+		srcID, err := si.graphNodeIDByBlob(ctx, r.path, blobHash)
+		if err != nil {
+			log.Warn().Err(err).Str("path", r.path).Str("commit", r.commitHash[:8]).Msg("rebuildGraph phaseB: source node lookup failed")
+			continue
+		}
+		if srcID == 0 {
+			log.Debug().Str("path", r.path).Str("commit", r.commitHash[:8]).Str("blob", blobHash[:8]).
+				Msg("rebuildGraph phaseB: skip (source blob orphaned out of facts; no graph node)")
+			continue
+		}
+
 		if err := si.graphAddDerivedFromAtCommitTx(ctx, si.rh.db, branch, r.path, blobHash, r.commitHash, localRefs); err != nil {
 			log.Warn().Err(err).Str("path", r.path).Str("commit", r.commitHash[:8]).Msg("rebuildGraph phaseB: edge write failed")
 		}
