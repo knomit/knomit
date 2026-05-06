@@ -7,11 +7,11 @@ For each transition, consider:
 - Was the prediction well-formed? What made it succeed or fail?
 - Is there a reusable lesson about the reasoning process itself?
 
-{{if .ExistingMethodology}}Existing methodology candidates in this domain (ranked — fetch via knomit_query if useful):
+{{if .ExistingMethodology}}Existing methodology candidates (the retrieval system thinks these may overlap with the lesson you're about to identify):
 
 {{.ExistingMethodology}}
 
-Before emitting a new methodology, scan the candidates above; fetch any whose title looks like it could overlap with the lesson you're identifying. If your lesson supersedes an existing one, call knomit_update on the existing path. If it qualifies an existing one with a new condition, write a new methodology and add the existing one's path to its refs. Only emit a fresh methodology fact when the lesson is genuinely novel.
+For EVERY candidate above with score ≥ 0.50, call knomit_query on its path and read the body BEFORE writing any new methodology. Titles alone are not enough. If your lesson supersedes an existing one, call knomit_update on the existing path. If it qualifies one with a new condition, write a new methodology with the existing path in its refs. Only emit a fresh methodology fact when the lesson is genuinely novel — duplicates dilute future retrieval.
 
 {{end}}When you write a new methodology fact, set its domain and entities to the union of (the source hypothesis's tags + the standard methodology markers). The standard markers meta, reasoning, methodology go in domain alongside the inherited tags — they are markers, not replacements for domain-specific tags.
 

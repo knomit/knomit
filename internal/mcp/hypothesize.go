@@ -244,27 +244,43 @@ func hypothesizeNextItem(ctx context.Context, ri *repos.RepoInstance, s mcpStore
 }
 
 // buildHypothesizeInstructions returns the step-by-step instructions for the
-// agent. When relevant methodology exists on the branch, it is appended to
-// the instructions as an "Applicable methodology" section so the LLM sees
-// the reasoning lessons inline rather than having to query for them.
+// agent. When relevant methodology exists on the branch, it is rendered as
+// the FIRST thing the LLM sees so it lands in working context as input,
+// not as an appendix the model can skim past after committing to a plan.
 //
 // branch is required and must be the same branch the synthesis fact lives
 // on; it is not derived from ri.AgentBranch() so the caller cannot
 // silently retrieve from the wrong branch.
 func buildHypothesizeInstructions(ctx context.Context, ri *repos.RepoInstance, branch, synthPath string) string {
-	base := `1. Call knomit_explain on the synthesis fact to trace its provenance
-2. If methodology candidates are listed below, scan their titles and scores. Fetch any that look relevant via knomit_query (single-path query). Within a session, you can rely on what you already fetched — don't re-query the same methodology twice.
-3. Gather additional evidence as needed using knomit_query
-4. Decide if a hypothesis is warranted based on the evidence
-5. If yes, call knomit_learn with type: hypothesis, including: hypothesis statement, evidence chain, reasoning step, known gaps, falsification condition. If any methodology candidates listed below shaped your reasoning (after fetching the ones you found relevant via knomit_query), include their paths in your hypothesis's refs array. Cite only what you actually used.
-6. After writing the hypothesis, call knomit_learn with type: methodology, topic: "meta", category: "reasoning" to record the reasoning process used. Set the methodology's domain and entities to the union of the source synthesis fact's tags plus the standard markers (meta, reasoning, methodology) — inherit from the source rather than inventing new tags.
-7. Call knomit_hypothesize with session_id to continue to the next synthesis fact`
-
 	section := loadMethodologySection(ctx, ri, branch, synthPath)
+
 	if section == "" {
-		return base
+		// No methodology on branch — simpler workflow with no fetch step.
+		return `WORKFLOW (do not skip steps):
+
+1. Call knomit_explain on the synthesis fact to trace its provenance.
+2. Gather evidence as needed via knomit_query.
+3. Decide whether a hypothesis is warranted.
+4. If yes, call knomit_learn with type: hypothesis. The refs array MUST include the synthesis fact's path AND every source fact you cite as evidence. An empty refs array indicates you did not engage with the inputs — do not submit.
+5. Call knomit_learn with type: methodology, topic: "meta", category: "reasoning" to record the reasoning process you used. Set the methodology's domain and entities to the union of the source synthesis fact's tags plus the standard markers (meta, reasoning, methodology).
+6. Call knomit_hypothesize with session_id to continue to the next synthesis fact.`
 	}
-	return base + "\n\n" + section
+
+	return section + `
+
+WORKFLOW (do not skip steps):
+
+1. Call knomit_explain on the synthesis fact to trace its provenance.
+2. For EVERY methodology candidate above with score ≥ 0.50, call knomit_query on its path and read the body. Decide whether it applies to your reasoning here. Titles alone are not enough to judge applicability — do not skip candidates above the threshold.
+3. Gather additional evidence as needed via knomit_query.
+4. Decide whether a hypothesis is warranted.
+5. If yes, call knomit_learn with type: hypothesis. The refs array MUST include:
+   - the synthesis fact's path
+   - every source fact you cite as evidence
+   - every methodology from step 2 that shaped your reasoning
+   An empty refs array indicates you did not engage with the inputs — do not submit.
+6. Only call knomit_learn with type: methodology if your reasoning is GENUINELY novel. If a methodology you read in step 2 already captures the same lesson, skip the new methodology fact — adding a near-duplicate pollutes the methodology pool and dilutes future retrieval. When you do write one, set domain and entities to the union of the source synthesis fact's tags plus the standard markers (meta, reasoning, methodology).
+7. Call knomit_hypothesize with session_id to continue to the next synthesis fact.`
 }
 
 // loadMethodologySection queries the branch's methodology for the given
@@ -306,5 +322,5 @@ func loadMethodologySection(ctx context.Context, ri *repos.RepoInstance, branch,
 	if bullets == "" {
 		return ""
 	}
-	return "Applicable methodology (ranked — fetch via knomit_query if useful):\n\n" + bullets
+	return "Applicable methodology candidates (ranked; you must process the ≥0.50 ones per workflow step 2):\n\n" + bullets
 }

@@ -3,11 +3,11 @@ You are synthesizing facts in a knowledge base to find patterns and higher-order
 Facts in scope:
 {{.Facts}}
 
-{{if .ApplicableMethodology}}Applicable methodology candidates (ranked — fetch via knomit_query if useful):
+{{if .ApplicableMethodology}}Applicable methodology candidates (ranked by retrieval relevance to this cluster):
 
 {{.ApplicableMethodology}}
 
-Scan the candidates and fetch any that might inform how you weight, combine, or name the synthesis. If a lesson you fetched informed the output, cite its path in the output's refs.
+For EVERY candidate above with score ≥ 0.50, call knomit_query on its path and read the body BEFORE producing the synthesis. Titles alone are not enough. If a methodology shapes how you weight, combine, or name the synthesis, include its path in the output's refs. If you read a candidate and judge it does not apply, that is a valid outcome — proceed without citing it.
 
 {{end}}Identify patterns across these facts. Produce:
 1. New higher-order facts that capture patterns

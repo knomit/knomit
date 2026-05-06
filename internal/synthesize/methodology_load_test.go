@@ -157,8 +157,9 @@ func TestLoadReflectMethodology_EmptyOnEmptyTransitions(t *testing.T) {
 
 // TestRenderDistillWorkItem_HeaderAppearsWhenSectionPresent verifies the
 // distill template wraps the formatter bullets in its "Applicable
-// methodology candidates" framing, and omits the entire wrapper when
-// the section is empty (no orphan heading).
+// methodology candidates" framing with the mandatory-fetch directive,
+// and omits the entire wrapper when the section is empty (no orphan
+// heading).
 func TestRenderDistillWorkItem_HeaderAppearsWhenSectionPresent(t *testing.T) {
 	facts := []factForLLM{{File: "kb/x.md", Title: "X", Body: "y", Type: "synthesis"}}
 	bullets := "• score=0.50  Lesson  (kb/meta/reasoning/lesson.md)\n"
@@ -168,7 +169,12 @@ func TestRenderDistillWorkItem_HeaderAppearsWhenSectionPresent(t *testing.T) {
 	require.Contains(t, content.Prompt, "Applicable methodology candidates")
 	require.Contains(t, content.Prompt, "Lesson")
 	require.Contains(t, content.Prompt, "kb/meta/reasoning/lesson.md")
-	require.Contains(t, content.Prompt, "fetch via knomit_query")
+	require.Contains(t, content.Prompt, "knomit_query",
+		"prompt must reference knomit_query as the fetch tool")
+	require.Contains(t, content.Prompt, "score ≥ 0.50",
+		"prompt must state the mandatory-fetch threshold")
+	require.Contains(t, content.Prompt, "EVERY candidate",
+		"prompt must use forcing language, not 'if useful'")
 
 	contentEmpty, err := RenderDistillWorkItem(facts, "kb", "")
 	require.NoError(t, err)
@@ -215,20 +221,24 @@ func TestLoadDistillMethodology_ThresholdComparesAgainstScore_NotTagOrVector(t *
 
 // TestRenderReflectWorkItem_HeaderAppearsWhenSectionPresent verifies the
 // reflect template wraps the formatter bullets in its "Existing
-// methodology candidates in this domain" framing (intentionally distinct
-// from distill's "Applicable" wording) and omits the wrapper when the
-// section is empty.
+// methodology candidates" framing (intentionally distinct from distill's
+// "Applicable" wording) with mandatory-fetch directive, and omits the
+// wrapper when the section is empty.
 func TestRenderReflectWorkItem_HeaderAppearsWhenSectionPresent(t *testing.T) {
 	bullets := "• score=0.40  Existing  (kb/meta/reasoning/existing.md)\n"
 
 	content, err := RenderReflectWorkItem([]byte(`[{"path":"kb/hyp/a.md"}]`), "kb", bullets)
 	require.NoError(t, err)
-	require.Contains(t, content.Prompt, "Existing methodology candidates in this domain")
+	require.Contains(t, content.Prompt, "Existing methodology candidates")
 	require.Contains(t, content.Prompt, "Existing")
 	require.Contains(t, content.Prompt, "kb/meta/reasoning/existing.md")
+	require.Contains(t, content.Prompt, "score ≥ 0.50",
+		"prompt must state the mandatory-fetch threshold")
+	require.Contains(t, content.Prompt, "EVERY candidate",
+		"prompt must use forcing language, not 'if useful'")
 
 	contentEmpty, err := RenderReflectWorkItem([]byte(`[{"path":"kb/hyp/a.md"}]`), "kb", "")
 	require.NoError(t, err)
-	require.NotContains(t, contentEmpty.Prompt, "Existing methodology candidates in this domain",
+	require.NotContains(t, contentEmpty.Prompt, "Existing methodology candidates",
 		"empty section must not render an orphan heading")
 }
