@@ -160,7 +160,11 @@ func LearnHandler(embedders ...store.BatchEmbedder) func(context.Context, mcpgo.
 			f.Entities = entities
 			f.Refs = refs
 			facts[i] = f
-			files[path] = fact.SerializeFact(f)
+			serialized, err := fact.SerializeFact(f)
+			if err != nil {
+				return mcpgo.NewToolResultError(fmt.Sprintf("fact %d: serialize: %v", i, err)), nil
+			}
+			files[path] = serialized
 		}
 
 		// 3b. Dedup check: search for near-duplicates scoped to the same category directory.
@@ -225,7 +229,11 @@ func LearnHandler(embedders ...store.BatchEmbedder) func(context.Context, mcpgo.
 				// Add hypothesis path to observation's refs.
 				f.Refs = fact.AppendUnique(f.Refs, match.Path)
 				facts[i] = f
-				files[f.Path()] = fact.SerializeFact(f)
+				serialized, err := fact.SerializeFact(f)
+				if err != nil {
+					return mcpgo.NewToolResultError(fmt.Sprintf("fact %d: serialize subsumed: %v", i, err)), nil
+				}
+				files[f.Path()] = serialized
 				continue
 			}
 
@@ -267,7 +275,11 @@ func LearnHandler(embedders ...store.BatchEmbedder) func(context.Context, mcpgo.
 
 			// Remove the original new-fact path from the files map and add the merged one.
 			delete(files, f.Path())
-			files[merged.Path()] = fact.SerializeFact(merged)
+			serialized, err := fact.SerializeFact(merged)
+			if err != nil {
+				return mcpgo.NewToolResultError(fmt.Sprintf("fact %d: serialize merged: %v", i, err)), nil
+			}
+			files[merged.Path()] = serialized
 			facts[i] = merged
 		}
 

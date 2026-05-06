@@ -134,8 +134,12 @@ func UpdateHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallTo
 		}
 
 		// 7. Write updated fact.
+		serialized, err := factpkg.SerializeFact(fact)
+		if err != nil {
+			return mcpgo.NewToolResultError(fmt.Sprintf("serialize error: %v", err)), nil
+		}
 		commitMsg := fmt.Sprintf("update: %s", fact.Title)
-		writeRes, err := s.facts.WriteFact(ctx, agentBranch, file, factpkg.SerializeFact(fact), commitMsg, "update")
+		writeRes, err := s.facts.WriteFact(ctx, agentBranch, file, serialized, commitMsg, "update")
 		if err != nil {
 			return mcpgo.NewToolResultError(fmt.Sprintf("write error: %v", err)), nil
 		}

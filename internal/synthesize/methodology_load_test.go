@@ -45,7 +45,9 @@ func writeFactForTest(t *testing.T, svc *store.Service, branch, path, title, bod
 	f.Sources = 1
 	f.Domain = doms
 	f.Entities = ents
-	_, err := svc.Facts().WriteFact(context.Background(), branch, path, fact.SerializeFact(f), "add", "")
+	serialized, err := fact.SerializeFact(f)
+	require.NoError(t, err)
+	_, err = svc.Facts().WriteFact(context.Background(), branch, path, serialized, "add", "")
 	require.NoError(t, err)
 }
 

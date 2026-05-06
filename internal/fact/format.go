@@ -1,6 +1,7 @@
 package fact
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -188,6 +189,7 @@ func extractTitle(path, body string) (string, string, error) {
 // SerializeFact produces a fact file in the standard format:
 //
 //	---
+//	type: observation
 //	domain: [a, b]
 //	confidence: 0.9
 //	sources: 1
@@ -197,62 +199,72 @@ func extractTitle(path, body string) (string, string, error) {
 //	# Title
 //
 //	Body content.
-func SerializeFact(f Fact) string {
-	var sb strings.Builder
-
-	sb.WriteString("---\n")
-	sb.WriteString("type: ")
-	sb.WriteString(string(f.Type))
-	sb.WriteString("\n")
-	sb.WriteString("domain: ")
-	sb.WriteString(serializeInlineList(f.Domain))
-	sb.WriteString("\n")
-
-	// confidence: format without trailing zeros but always show at least one decimal.
-	sb.WriteString(fmt.Sprintf("confidence: %g\n", f.Confidence))
-	sb.WriteString(fmt.Sprintf("sources: %d\n", f.Sources))
-	if f.EvidenceWeight > 0 {
-		sb.WriteString(fmt.Sprintf("evidence_weight: %g\n", f.EvidenceWeight))
+//
+// The frontmatter is rendered via gopkg.in/yaml.v3 (the same library
+// used by ParseFact), so all YAML escaping rules — flow-context
+// indicators (?, :, [, ], {, }, ,), reserved words, leading whitespace,
+// control characters — are handled correctly by construction. Inline
+// lists use FlowStyle to preserve the compact one-line per-key layout.
+func SerializeFact(f Fact) (string, error) {
+	// scalar leaves Tag empty so yaml.v3's resolver picks the type from
+	// Value. Used for keys ("type", "domain", ...) and numeric values
+	// ("0.85", "1") where auto-resolution to !!float / !!int is correct.
+	scalar := func(v string) *yaml.Node {
+		return &yaml.Node{Kind: yaml.ScalarNode, Value: v}
+	}
+	// strScalar pins Tag to !!str so list items like "null", "yes",
+	// "No", "true" — values that would otherwise auto-resolve to YAML
+	// null/bool — are emitted as quoted strings and read back as
+	// strings. Without this, `entities: [No, yes, null, true]` parses
+	// back as ["No", "yes", "true"] (null becomes Go nil and is
+	// dropped from the slice). Items that don't collide with YAML
+	// keywords stay unquoted because yaml.v3 only quotes when needed
+	// to preserve the string tag.
+	strScalar := func(v string) *yaml.Node {
+		return &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: v}
+	}
+	flowSeq := func(items []string) *yaml.Node {
+		n := &yaml.Node{Kind: yaml.SequenceNode, Style: yaml.FlowStyle}
+		for _, s := range items {
+			n.Content = append(n.Content, strScalar(s))
+		}
+		return n
 	}
 
-	sb.WriteString("entities: ")
-	sb.WriteString(serializeInlineList(f.Entities))
-	sb.WriteString("\n")
+	root := &yaml.Node{Kind: yaml.MappingNode}
+	add := func(key string, val *yaml.Node) {
+		root.Content = append(root.Content, scalar(key), val)
+	}
+	add("type", strScalar(string(f.Type)))
+	add("domain", flowSeq(f.Domain))
+	add("confidence", scalar(fmt.Sprintf("%g", f.Confidence)))
+	add("sources", scalar(fmt.Sprintf("%d", f.Sources)))
+	if f.EvidenceWeight > 0 {
+		add("evidence_weight", scalar(fmt.Sprintf("%g", f.EvidenceWeight)))
+	}
+	add("entities", flowSeq(f.Entities))
+	add("refs", flowSeq(f.Refs))
 
-	sb.WriteString("refs: ")
-	sb.WriteString(serializeInlineList(f.Refs))
-	sb.WriteString("\n")
+	var buf bytes.Buffer
+	enc := yaml.NewEncoder(&buf)
+	enc.SetIndent(2)
+	if err := enc.Encode(root); err != nil {
+		return "", fmt.Errorf("SerializeFact: encode frontmatter: %w", err)
+	}
+	if err := enc.Close(); err != nil {
+		return "", fmt.Errorf("SerializeFact: close encoder: %w", err)
+	}
 
+	var sb strings.Builder
 	sb.WriteString("---\n")
-	sb.WriteString("# ")
+	sb.Write(buf.Bytes())
+	sb.WriteString("---\n# ")
 	sb.WriteString(f.Title)
 	sb.WriteString("\n")
-
 	if f.Body != "" {
 		sb.WriteString("\n")
 		sb.WriteString(f.Body)
 		sb.WriteString("\n")
 	}
-
-	return sb.String()
-}
-
-// serializeInlineList renders a []string as a YAML inline list: [a, b, c] or [].
-// Items containing commas, closing brackets, or double quotes are double-quoted.
-func serializeInlineList(items []string) string {
-	if len(items) == 0 {
-		return "[]"
-	}
-	quoted := make([]string, len(items))
-	for i, item := range items {
-		if strings.ContainsAny(item, ",]\"") {
-			// Use double-quoted YAML string
-			escaped := strings.ReplaceAll(item, `\`, `\\`)
-			escaped = strings.ReplaceAll(escaped, `"`, `\"`)
-			quoted[i] = `"` + escaped + `"`
-		} else {
-			quoted[i] = item
-		}
-	}
-	return "[" + strings.Join(quoted, ", ") + "]"
+	return sb.String(), nil
 }

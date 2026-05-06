@@ -106,7 +106,11 @@ func ApplyPruneDecisions(ctx context.Context,
 				continue
 			}
 			f.Confidence = d.Confidence
-			updated := fact.SerializeFact(f)
+			updated, err := fact.SerializeFact(f)
+			if err != nil {
+				onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("update serialize %s: %v", d.Path, err)})
+				continue
+			}
 			msg := fmt.Sprintf("synthesize-%s: update confidence %s → %.2f", recipeName, d.Path, d.Confidence)
 			if _, err := gs.WriteFact(ctx, agentBranch, d.Path, updated, msg, "update"); err != nil {
 				onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("update write %s: %v", d.Path, err)})
@@ -150,7 +154,11 @@ func ApplyPruneDecisions(ctx context.Context,
 		merged.Entities = mf.Entities
 		merged.Refs = mf.Refs
 		merged.EvidenceWeight = weight
-		content := fact.SerializeFact(merged)
+		content, err := fact.SerializeFact(merged)
+		if err != nil {
+			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("merge serialize %s: %v", merged.Path(), err)})
+			continue
+		}
 		msg := fmt.Sprintf("synthesize-%s: merge %s", recipeName, strings.Join(m.Paths, ", "))
 		if _, err := gs.WriteFact(ctx, agentBranch, merged.Path(), content, msg, "subsume"); err != nil {
 			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("merge write %s: %v", merged.Path(), err)})
@@ -230,7 +238,11 @@ func ApplyDistillDecisions(ctx context.Context,
 		f.Refs = df.Refs
 		f.EvidenceWeight = weight
 		df.Path = f.Path() // sync df so written slice reflects the canonical (lowercase) path
-		content := fact.SerializeFact(f)
+		content, err := fact.SerializeFact(f)
+		if err != nil {
+			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("distill serialize %s: %v", f.Path(), err)})
+			continue
+		}
 		msg := fmt.Sprintf("synthesize-%s: distill %s", recipeName, f.Path())
 		if _, err := gs.WriteFact(ctx, agentBranch, f.Path(), content, msg, "subsume"); err != nil {
 			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("distill write %s: %v", f.Path(), err)})

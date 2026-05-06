@@ -1,6 +1,8 @@
 package testenv
 
 import (
+	"fmt"
+
 	"knomit/internal/fact"
 )
 
@@ -66,6 +68,10 @@ func (s FactSpec) Body(body string) FactSpec { s.body = body; return s }
 // Build serializes the spec to a fact file body (YAML frontmatter + markdown)
 // using fact.SerializeFact. The path field on the underlying Fact struct is
 // left as a placeholder because the writer sets the real path when committing.
+//
+// Panics on serialize error — Build is a test-side helper and a serialization
+// failure here means the test author constructed a malformed spec, which
+// should fail loudly rather than silently produce empty content.
 func (s FactSpec) Build() string {
 	f := fact.NewFact("placeholder.md")
 	f.Title = s.title
@@ -76,5 +82,9 @@ func (s FactSpec) Build() string {
 	f.Domain = s.domain
 	f.Entities = s.entities
 	f.Refs = s.refs
-	return fact.SerializeFact(f)
+	out, err := fact.SerializeFact(f)
+	if err != nil {
+		panic(fmt.Sprintf("FactSpec.Build: %v", err))
+	}
+	return out
 }

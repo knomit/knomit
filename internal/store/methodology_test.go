@@ -22,7 +22,11 @@ func methFactBody(title, body string, domains, entities []string) string {
 	f.Sources = 1
 	f.Domain = domains
 	f.Entities = entities
-	return fact.SerializeFact(f)
+	out, err := fact.SerializeFact(f)
+	if err != nil {
+		panic(err)
+	}
+	return out
 }
 
 // srcFactBody builds a non-methodology source fact (synthesis by default)
@@ -36,7 +40,11 @@ func srcFactBody(title, body string, domains, entities []string) string {
 	f.Sources = 1
 	f.Domain = domains
 	f.Entities = entities
-	return fact.SerializeFact(f)
+	out, err := fact.SerializeFact(f)
+	if err != nil {
+		panic(err)
+	}
+	return out
 }
 
 // writeSrcFact writes a source synthesis fact and returns its path.

@@ -92,7 +92,12 @@ func handleFactCreate(b hal.URLBuilder, m *repos.Manager, ontologyRoot string, w
 		f.Confidence = req.Confidence
 		f.Sources = req.Sources
 
-		content := knomitfact.SerializeFact(f)
+		content, err := knomitfact.SerializeFact(f)
+		if err != nil {
+			hal.WriteProblem(w, http.StatusInternalServerError, "Failed to serialize fact",
+				err.Error(), r.URL.Path)
+			return
+		}
 		msg := "create: " + req.Title + " via API"
 
 		if _, err := writer.Write(ri, branch, path, content, msg); err != nil {
