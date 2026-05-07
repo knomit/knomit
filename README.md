@@ -93,6 +93,17 @@ All data lives under `KNOMIT_HOME` (default `~/.knomit`):
   id_ed25519.pub
 ```
 
+A running server discovers `*.db` files only at startup. To pick up a new
+repo created via `knomit init` without restarting, hit the rescan endpoint:
+
+```sh
+curl -X POST http://localhost:19278/api/v1/repos:rescan
+# {"added":["work"],"skipped":["knomit"],"errors":[],"_links":{...}}
+```
+
+Already-open repos are reported in `skipped`; per-repo open failures appear
+in `errors[]` without aborting the scan.
+
 Repos are discovered by scanning `~/.knomit/repos/` for `*.db` files at startup. The filename (minus `.db`) is the repo name. Names must match `[a-z0-9_-]+`.
 
 The default `knomit` repo is always created if missing.
