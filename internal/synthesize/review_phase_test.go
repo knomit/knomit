@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -148,10 +149,67 @@ func TestReviewer_StatelessAcrossInstances(t *testing.T) {
 	require.Equal(t, 0, remaining, "no work items should remain unanswered")
 }
 
+// TestReviewer_ConcurrentContinuations_EnqueueReflectOnce verifies the CAS
+// guarantee: two callers racing on the dispatcher when phase=work and no
+// unanswered work items remain must not both enqueue a reflect work item.
+// Pre-fix (in-memory `reflectChecked` map per Reviewer call) would have
+// *both* callers fall into the enqueue branch, doubling the queue. Post-fix
+// the work→reflect CAS lets exactly one caller insert.
+//
+// We drive nextItem directly instead of ContinueSession because the
+// guarantee under test is the dispatcher's, not ContinueSession's
+// response-application path. Going through ContinueSession would couple the
+// race to whether each caller's NextPipelineWorkItem read happens before or
+// after the winner's insert, which is unrelated to what we want to assert.
+func TestReviewer_ConcurrentContinuations_EnqueueReflectOnce(t *testing.T) {
+	r, svc := newPhaseTestReviewer(t)
+	ctx := context.Background()
+	branch := "agent/test"
+
+	seedHypothesisTransition(t, svc, branch)
+	sess := manualSession(t, svc, branch)
+
+	const callers = 2
+	var wg sync.WaitGroup
+	wg.Add(callers)
+	results := make([]*ReviewResult, callers)
+	errs := make([]error, callers)
+	for i := range callers {
+		go func() {
+			defer wg.Done()
+			fresh, err := svc.Pipeline().GetPipelineSession(ctx, sess.ID)
+			if err != nil {
+				errs[i] = err
+				return
+			}
+			results[i], errs[i] = r.nextItem(ctx, fresh)
+		}()
+	}
+	wg.Wait()
+
+	for i, err := range errs {
+		require.NoErrorf(t, err, "caller %d errored", i)
+		require.NotNilf(t, results[i], "caller %d returned nil result", i)
+	}
+
+	// The CAS guarantee: pipeline_work_items has at most one row for this
+	// session regardless of who won. If the winner finished its insert
+	// before the loser's reflect→done CAS, both callers see the reflect
+	// item; if the loser raced past, the session is already done and the
+	// winner's insert lands in a completed session — still one row, just
+	// orphan. Two rows would mean the CAS broke.
+	completed, remaining, err := svc.Pipeline().PipelineWorkItemStats(ctx, sess.ID)
+	require.NoError(t, err)
+	require.LessOrEqualf(t, completed+remaining, 1,
+		"CAS broken: more than one reflect item enqueued (completed=%d remaining=%d)",
+		completed, remaining)
+}
+
 // TestReviewer_ReflectAppliesReinforce is the end-to-end test for the new
 // reflect contract: an agent's reinforce response submitted via
-// ContinueSession actually inserts a methodology_reinforcements row,
-// proving the dispatcher → parse → validate → apply path is wired.
+// ContinueSession actually appends the methodology path to the cited
+// transition fact's refs, proving the dispatcher → parse → validate →
+// apply path is wired and the resulting commit lands in git.
 func TestReviewer_ReflectAppliesReinforce(t *testing.T) {
 	r, svc := newPhaseTestReviewer(t)
 	ctx := context.Background()
@@ -198,13 +256,14 @@ func TestReviewer_ReflectAppliesReinforce(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, res.Done, "reinforce response should drive session to done")
 
-	// Reinforcement row must be persisted.
-	rows, err := svc.Methodology().ListReinforcementsBySession(ctx, sess.ID)
+	// The transition fact must now cite the methodology in its refs —
+	// that's the canonical record of "this transition reinforced M".
+	transResult, err := svc.Facts().ReadFact(ctx, branch, "kb/technology/h.md", nil)
 	require.NoError(t, err)
-	require.Len(t, rows, 1)
-	require.Equal(t, methPath, rows[0].MethodologyPath)
-	require.Equal(t, "kb/technology/h.md", rows[0].TransitionPath)
-	require.Equal(t, "same reasoning shape", rows[0].Rationale)
+	transFact, err := fact.ParseFact("kb/technology/h.md", transResult.Content)
+	require.NoError(t, err)
+	require.Contains(t, transFact.Refs, methPath,
+		"transition fact must ref the methodology that reinforced it")
 }
 
 // TestReviewer_ReflectRejectsBadResponse asserts that a malformed reflect

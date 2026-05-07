@@ -28,9 +28,10 @@ func (s *stubSearchIndex) Search(_ context.Context, _ string, _ store.SearchQuer
 const reflectTestThreshold = 0.85
 
 // TestApplyReflect_AppliesReinforce — happy path: a single reinforce entry
-// against a real methodology fact yields one row in
-// methodology_reinforcements per (methodology, transition) pair, no fact
-// files written.
+// against a real methodology fact appends the methodology path to each
+// cited transition fact's refs, so the transitions cite the methodology
+// that explains them. No separate counter; reinforcement count for a
+// methodology is "facts that ref it".
 func TestApplyReflect_AppliesReinforce(t *testing.T) {
 	svc, sess := newReflectTestEnv(t)
 	ctx := context.Background()
@@ -39,24 +40,66 @@ func TestApplyReflect_AppliesReinforce(t *testing.T) {
 	const methPath = "kb/meta/reasoning/m.md"
 	writeMethodologyForTest(t, svc, branch, methPath, "M", "Body of methodology M")
 
+	const h1Path = "kb/h1.md"
+	const h2Path = "kb/h2.md"
+	writeFactForTest(t, svc, branch, h1Path, "H1", "transition fact 1", fact.Principle, nil, nil)
+	writeFactForTest(t, svc, branch, h2Path, "H2", "transition fact 2", fact.Principle, nil, nil)
+
 	result := ReflectResult{
 		Reasoning: "h1 and h2 both fit m",
 		Reinforce: []ReinforceEntry{{
 			MethodologyPath: methPath,
-			TransitionPaths: []string{"kb/h1.md", "kb/h2.md"},
+			TransitionPaths: []string{h1Path, h2Path},
 			Rationale:       "same pattern in both",
 		}},
 	}
 
-	err := ApplyReflectDecisions(ctx, svc.Facts(), &stubSearchIndex{}, svc.Methodology(),
+	err := ApplyReflectDecisions(ctx, svc.Facts(), &stubSearchIndex{},
 		result, sess, "kb", reflectTestThreshold, nil)
 	require.NoError(t, err)
 
-	rows, err := svc.Methodology().ListReinforcementsBySession(ctx, sess.ID)
-	require.NoError(t, err)
-	require.Len(t, rows, 2, "two transition_paths → two reinforcement rows")
-	require.Equal(t, methPath, rows[0].MethodologyPath)
-	require.Equal(t, "same pattern in both", rows[0].Rationale)
+	require.Contains(t, readRefsForTest(t, svc, branch, h1Path), methPath,
+		"transition h1 must cite the methodology that reinforced it")
+	require.Contains(t, readRefsForTest(t, svc, branch, h2Path), methPath,
+		"transition h2 must cite the methodology that reinforced it")
+}
+
+// TestApplyReflect_ReinforceIsIdempotent — re-reinforcing the same
+// (methodology, transition) pair must not duplicate the ref. Important
+// because retries after a partial-failure commit will re-run the same
+// reinforce against the same transition fact.
+func TestApplyReflect_ReinforceIsIdempotent(t *testing.T) {
+	svc, sess := newReflectTestEnv(t)
+	ctx := context.Background()
+	branch := sess.Branch
+
+	const methPath = "kb/meta/reasoning/m.md"
+	const transPath = "kb/h1.md"
+	writeMethodologyForTest(t, svc, branch, methPath, "M", "Body")
+	writeFactForTest(t, svc, branch, transPath, "H1", "transition", fact.Principle, nil, nil)
+
+	result := ReflectResult{
+		Reinforce: []ReinforceEntry{{
+			MethodologyPath: methPath,
+			TransitionPaths: []string{transPath},
+			Rationale:       "x",
+		}},
+	}
+
+	for range 3 {
+		err := ApplyReflectDecisions(ctx, svc.Facts(), &stubSearchIndex{},
+			result, sess, "kb", reflectTestThreshold, nil)
+		require.NoError(t, err)
+	}
+
+	refs := readRefsForTest(t, svc, branch, transPath)
+	count := 0
+	for _, r := range refs {
+		if r == methPath {
+			count++
+		}
+	}
+	require.Equal(t, 1, count, "repeated reinforce must not duplicate the ref")
 }
 
 // TestApplyReflect_AppliesPropose — happy path: a single propose with a
@@ -81,7 +124,7 @@ func TestApplyReflect_AppliesPropose(t *testing.T) {
 		}},
 	}
 
-	err := ApplyReflectDecisions(ctx, svc.Facts(), &stubSearchIndex{}, svc.Methodology(),
+	err := ApplyReflectDecisions(ctx, svc.Facts(), &stubSearchIndex{},
 		result, sess, "kb", reflectTestThreshold, nil)
 	require.NoError(t, err)
 
@@ -100,12 +143,6 @@ func TestApplyReflect_AppliesPropose(t *testing.T) {
 	}
 	require.NotNil(t, found, "fact written by propose must appear in the index")
 	require.Equal(t, "methodology", found.Type, "type must be forced to methodology, not whatever agent claimed")
-
-	// No reinforcement row created — propose is a write-fact action, not a
-	// reinforcement.
-	rows, err := svc.Methodology().ListReinforcementsBySession(ctx, sess.ID)
-	require.NoError(t, err)
-	require.Empty(t, rows)
 }
 
 // TestApplyReflect_RejectsProposeTooSimilar — embedding-similarity gate:
@@ -138,7 +175,7 @@ func TestApplyReflect_RejectsProposeTooSimilar(t *testing.T) {
 		}},
 	}
 
-	err := ApplyReflectDecisions(ctx, svc.Facts(), stub, svc.Methodology(),
+	err := ApplyReflectDecisions(ctx, svc.Facts(), stub,
 		result, sess, "kb", reflectTestThreshold, nil)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), conflictPath, "rejection must name the conflicting methodology so the agent can reinforce it")
@@ -165,14 +202,10 @@ func TestApplyReflect_RejectsReinforceUnknownPath(t *testing.T) {
 		}},
 	}
 
-	err := ApplyReflectDecisions(ctx, svc.Facts(), &stubSearchIndex{}, svc.Methodology(),
+	err := ApplyReflectDecisions(ctx, svc.Facts(), &stubSearchIndex{},
 		result, sess, "kb", reflectTestThreshold, nil)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "does-not-exist.md")
-
-	rows, err := svc.Methodology().ListReinforcementsBySession(ctx, sess.ID)
-	require.NoError(t, err)
-	require.Empty(t, rows, "rejected reinforce must not insert any rows")
 }
 
 // TestApplyReflect_RejectsReinforceNonMethodologyTarget — the path
@@ -202,7 +235,7 @@ func TestApplyReflect_RejectsReinforceNonMethodologyTarget(t *testing.T) {
 		}},
 	}
 
-	err = ApplyReflectDecisions(ctx, svc.Facts(), &stubSearchIndex{}, svc.Methodology(),
+	err = ApplyReflectDecisions(ctx, svc.Facts(), &stubSearchIndex{},
 		result, sess, "kb", reflectTestThreshold, nil)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "methodology")
@@ -216,13 +249,9 @@ func TestApplyReflect_AcceptsAllEmpty(t *testing.T) {
 	svc, sess := newReflectTestEnv(t)
 	ctx := context.Background()
 
-	err := ApplyReflectDecisions(ctx, svc.Facts(), &stubSearchIndex{}, svc.Methodology(),
+	err := ApplyReflectDecisions(ctx, svc.Facts(), &stubSearchIndex{},
 		ReflectResult{Reasoning: "no lessons today"}, sess, "kb", reflectTestThreshold, nil)
 	require.NoError(t, err)
-
-	rows, err := svc.Methodology().ListReinforcementsBySession(ctx, sess.ID)
-	require.NoError(t, err)
-	require.Empty(t, rows)
 }
 
 // newReflectTestEnv stands up a fresh on-disk Service with one repo and a
@@ -254,4 +283,14 @@ func writeMethodologyForTest(t *testing.T, svc *store.Service, branch, path, tit
 	require.NoError(t, err)
 	_, err = svc.Facts().WriteFact(context.Background(), branch, path, serialized, "seed-methodology", "")
 	require.NoError(t, err)
+}
+
+// readRefsForTest reads the fact at path and returns its parsed Refs.
+func readRefsForTest(t *testing.T, svc *store.Service, branch, path string) []string {
+	t.Helper()
+	r, err := svc.Facts().ReadFact(context.Background(), branch, path, nil)
+	require.NoError(t, err)
+	f, err := fact.ParseFact(path, r.Content)
+	require.NoError(t, err)
+	return f.Refs
 }

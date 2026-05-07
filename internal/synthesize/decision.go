@@ -273,23 +273,26 @@ func ApplyDistillDecisions(ctx context.Context,
 //
 // Two arms:
 //   - reinforce: each entry binds an existing methodology fact to the
-//     transitions it explained. Inserts one row in
-//     methodology_reinforcements per (methodology, transition) pair.
+//     transitions it explained. The methodology path is appended to each
+//     transition fact's refs, so the transition (the promoted/retracted
+//     hypothesis) cites the methodology that explains it. Reinforcement
+//     count for a methodology emerges as the number of facts whose refs
+//     contain its path — no separate counter, no side-channel table.
 //   - propose: each entry is a brand-new methodology fact. Server-stamped
 //     type=methodology; rejected if too similar to an existing methodology
 //     (cosine ≥ noveltyThreshold).
 //
-// All validation runs before any side effects — a single failed entry
-// rejects the entire response, leaving callers free to mark the work item
-// unanswered and prompt the agent to retry. Caller is expected to have
-// already run validateReflectResponse for structural checks.
+// All structural and DB-resolved validation runs before any writes. Both
+// proposed methodologies and updated transition facts are committed in a
+// single BatchWriteFacts call so the reflect step lands atomically per
+// session. Caller is expected to have already run validateReflectResponse
+// for structural checks.
 //
 // onProgress is tolerated as nil.
 func ApplyReflectDecisions(
 	ctx context.Context,
 	gs store.FactIndex,
 	idx store.SearchIndex,
-	mi store.MethodologyIndex,
 	result ReflectResult,
 	sess *store.PipelineSession,
 	ontologyRoot string,
@@ -302,30 +305,50 @@ func ApplyReflectDecisions(
 
 	branch := sess.Branch
 
-	// Phase 1 — validate every reinforce target resolves to a methodology
-	// fact on the session's branch.
+	// files accumulates everything to commit in this reflect application —
+	// proposed methodology facts plus reinforced transition facts (with
+	// their refs extended). One commit, atomic.
+	files := make(map[string]string)
+
+	// Phase 1 — validate reinforce targets resolve to methodology facts and
+	// stage transition-fact updates appending the methodology path to refs.
 	for i, e := range result.Reinforce {
-		readResult, err := gs.ReadFact(ctx, branch, e.MethodologyPath, nil)
+		mr, err := gs.ReadFact(ctx, branch, e.MethodologyPath, nil)
 		if err != nil {
 			return fmt.Errorf("reinforce[%d]: methodology %q not found: %w", i, e.MethodologyPath, err)
 		}
-		f, err := fact.ParseFact(e.MethodologyPath, readResult.Content)
+		mf, err := fact.ParseFact(e.MethodologyPath, mr.Content)
 		if err != nil {
 			return fmt.Errorf("reinforce[%d]: cannot parse %q: %w", i, e.MethodologyPath, err)
 		}
-		if f.Type != fact.Methodology {
-			return fmt.Errorf("reinforce[%d]: %q is type %q, not methodology", i, e.MethodologyPath, f.Type)
+		if mf.Type != fact.Methodology {
+			return fmt.Errorf("reinforce[%d]: %q is type %q, not methodology", i, e.MethodologyPath, mf.Type)
 		}
+
+		for _, tp := range e.TransitionPaths {
+			tr, err := gs.ReadFact(ctx, branch, tp, nil)
+			if err != nil {
+				return fmt.Errorf("reinforce[%d]: transition fact %q not found: %w", i, tp, err)
+			}
+			tf, err := fact.ParseFact(tp, tr.Content)
+			if err != nil {
+				return fmt.Errorf("reinforce[%d]: cannot parse transition %q: %w", i, tp, err)
+			}
+			if appendRefIfMissing(&tf.Refs, e.MethodologyPath) {
+				serialized, err := fact.SerializeFact(tf)
+				if err != nil {
+					return fmt.Errorf("reinforce[%d]: serialize transition %q: %w", i, tp, err)
+				}
+				files[tf.Path()] = serialized
+			}
+		}
+		onProgress(ProgressEvent{Phase: "detail-reflect-reinforce",
+			Message: fmt.Sprintf("reinforced %s with %d transitions", e.MethodologyPath, len(e.TransitionPaths))})
 	}
 
-	// Phase 2 — validate and stage propose entries. Build the would-be
-	// fact files in memory; nothing is written until every propose passes
-	// the novelty gate.
-	type stagedPropose struct {
-		path string
-		body string
-	}
-	staged := make([]stagedPropose, 0, len(result.Propose))
+	// Phase 2 — validate and stage propose entries. Novelty gate runs
+	// before serialization; staged propose facts share the commit batch
+	// with the transition updates from Phase 1.
 	for i, p := range result.Propose {
 		topic, category, err := splitTopicPath(p.TopicPath, ontologyRoot)
 		if err != nil {
@@ -372,54 +395,41 @@ func ApplyReflectDecisions(
 		if err != nil {
 			return fmt.Errorf("propose[%d]: serialize: %w", i, err)
 		}
-		staged = append(staged, stagedPropose{path: f.Path(), body: serialized})
+		files[f.Path()] = serialized
+		onProgress(ProgressEvent{Phase: "detail-reflect-propose", Message: "wrote methodology " + f.Path()})
 	}
 
-	// Phase 3 — write proposed methodology facts as a single commit. With
-	// only one allowed by the default cap, this is usually 0 or 1 facts;
-	// the batch path keeps the contract symmetric with knomit_learn.
-	if len(staged) > 0 {
-		files := make(map[string]string, len(staged))
-		for _, s := range staged {
-			files[s.path] = s.body
-		}
-		commitMsg := fmt.Sprintf("review: %d new methodology", len(staged))
+	// Phase 3 — single atomic commit covering both arms. If there's
+	// nothing to write (empty reinforce + empty propose, or every
+	// transition already cited the methodology), this is a no-op.
+	if len(files) > 0 {
+		commitMsg := fmt.Sprintf("review: reflect (reinforce=%d propose=%d)",
+			len(result.Reinforce), len(result.Propose))
 		if _, _, err := gs.BatchWriteFacts(ctx, branch, files, commitMsg, "review"); err != nil {
-			return fmt.Errorf("apply propose: write: %w", err)
+			return fmt.Errorf("apply reflect: write: %w", err)
 		}
-		for _, s := range staged {
-			onProgress(ProgressEvent{Phase: "detail-reflect-propose", Message: "wrote methodology " + s.path})
-		}
-	}
-
-	// Phase 4 — record reinforcements. Inserted last so a failure here
-	// doesn't leave methodology files written without their reinforcement
-	// log; if any insert errors, the caller leaves the work item
-	// unanswered and the agent retries with the same intent.
-	for _, e := range result.Reinforce {
-		for _, tp := range e.TransitionPaths {
-			err := mi.InsertReinforcement(ctx, store.MethodologyReinforcement{
-				Branch:          branch,
-				MethodologyPath: e.MethodologyPath,
-				TransitionPath:  tp,
-				SessionID:       sess.ID,
-				Rationale:       e.Rationale,
-			})
-			if err != nil {
-				return fmt.Errorf("apply reinforce: %w", err)
-			}
-		}
-		onProgress(ProgressEvent{Phase: "detail-reflect-reinforce",
-			Message: fmt.Sprintf("reinforced %s with %d transitions", e.MethodologyPath, len(e.TransitionPaths))})
 	}
 
 	log.Info().
 		Str("session", sess.ID).
 		Int("reinforced", len(result.Reinforce)).
-		Int("proposed", len(staged)).
+		Int("proposed", len(result.Propose)).
 		Msg("review: reflect applied")
 
 	return nil
+}
+
+// appendRefIfMissing appends ref to *refs if not already present, treating
+// path comparison case-insensitively to match fact.NewFact's lowercasing.
+// Returns true iff the slice was modified.
+func appendRefIfMissing(refs *[]string, ref string) bool {
+	for _, existing := range *refs {
+		if strings.EqualFold(existing, ref) {
+			return false
+		}
+	}
+	*refs = append(*refs, ref)
+	return true
 }
 
 // splitTopicPath normalises an agent-supplied topic_path into (topic,

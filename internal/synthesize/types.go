@@ -149,7 +149,7 @@ type ReviewResult struct {
 
 // ReviewItem describes a single work item for the hosting model.
 type ReviewItem struct {
-	Type           string `json:"type"` // "prune" or "distill"
+	Type           string `json:"type"` // "prune", "distill", or "reflect"
 	Prompt         string `json:"prompt"`
 	ResponseSchema string `json:"response_schema"`
 }
