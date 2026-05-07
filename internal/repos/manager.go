@@ -32,6 +32,31 @@ type Deps struct {
 	DisableBackgroundSync bool
 }
 
+// RescanError records a single per-repo failure during Manager.Rescan.
+// Top-level errors (e.g. unreadable repos directory) are returned via the
+// second return value of Rescan, not in this slice.
+type RescanError struct {
+	Repo string
+	Err  error
+}
+
+// RescanResult is the outcome of a Manager.Rescan call.
+//
+//   - Added: repo names that were not previously registered and were
+//     successfully opened during this call.
+//   - Skipped: repo names already registered before this call.
+//   - Errors: per-repo Add failures; other repos still attempted.
+//
+// On successful return, all three slices are non-nil; empty slices remain
+// empty (callers/JSON encoders can rely on []string{} rather than nil).
+// When Rescan returns a non-nil error, the caller should not inspect the
+// result — the zero RescanResult{} is returned.
+type RescanResult struct {
+	Added   []string
+	Skipped []string
+	Errors  []RescanError
+}
+
 // Manager owns the full lifecycle of all registered repositories:
 // discovery, initialisation, MCP wiring, sync loop management, the
 // background cluster-cache warmer, and shutdown. Callers drive the
@@ -48,6 +73,11 @@ type Manager struct {
 	// nil when Start hasn't been called or the checker is disabled
 	// (cluster_cache.check_interval = 0).
 	clusterCheckerStop func()
+
+	// rescanMu serialises concurrent Rescan calls so the same .db cannot
+	// be opened twice in a race. Independent of mu — Rescan reads m.repos
+	// via Get/Set, which take mu themselves.
+	rescanMu sync.Mutex
 }
 
 // ResolveAuth resolves a transport.AuthMethod for the given config and remote
@@ -203,6 +233,63 @@ func (m *Manager) Add(name, dbPath string) error {
 	}
 	m.Set(name, ri)
 	return nil
+}
+
+// Rescan re-discovers repos under <home>/repos/. Any *.db file whose name
+// matches isValidRepoName and is not already registered is opened via Add.
+// Already-registered repos are reported in Skipped and otherwise untouched.
+//
+// This is the runtime counterpart of the discovery loop inside Start: it
+// lets a running server pick up new repos created by `knomit init` without
+// a restart. Removed or replaced .db files are NOT handled — see the
+// design doc for the rationale.
+//
+// Concurrent calls are serialised by rescanMu. On success the returned
+// slices are always non-nil (possibly empty). The error return is non-nil
+// only when the repos directory cannot be read; in that case the returned
+// RescanResult is the zero value. Per-repo Add failures appear in
+// result.Errors and do not abort the scan.
+func (m *Manager) Rescan() (RescanResult, error) {
+	m.rescanMu.Lock()
+	defer m.rescanMu.Unlock()
+
+	reposDir := filepath.Join(m.deps.Cfg.Home, "repos")
+	if _, err := os.Stat(reposDir); err != nil {
+		return RescanResult{}, fmt.Errorf("stat repos dir: %w", err)
+	}
+
+	dbFiles, err := filepath.Glob(filepath.Join(reposDir, "*.db"))
+	if err != nil {
+		// filepath.Glob can only return ErrBadPattern, which is unreachable
+		// for our literal pattern — but keep the guard for forward safety.
+		return RescanResult{}, fmt.Errorf("glob repos dir: %w", err)
+	}
+	sort.Strings(dbFiles)
+
+	result := RescanResult{
+		Added:   []string{},
+		Skipped: []string{},
+		Errors:  []RescanError{},
+	}
+
+	for _, dbPath := range dbFiles {
+		name := strings.TrimSuffix(filepath.Base(dbPath), ".db")
+		if !isValidRepoName(name) {
+			continue
+		}
+		if m.Get(name) != nil {
+			result.Skipped = append(result.Skipped, name)
+			continue
+		}
+		if err := m.Add(name, dbPath); err != nil {
+			result.Errors = append(result.Errors, RescanError{Repo: name, Err: err})
+			log.Warn().Err(err).Str("repo", name).Msg("rescan: add failed")
+			continue
+		}
+		result.Added = append(result.Added, name)
+		log.Info().Str("repo", name).Msg("rescan: opened")
+	}
+	return result, nil
 }
 
 // ---------- private helpers ----------
