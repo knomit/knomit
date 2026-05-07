@@ -44,6 +44,7 @@ func (s *Server) NewAPIRouter() chi.Router {
 	r.Get("/", handleAPIRoot(b))
 	r.Get("/openapi.yaml", handleOpenAPISpec())
 	r.Get("/repos", handleHALRepos(b, s.Manager))
+	r.Post("/repos:rescan", handleHALReposRescan(b, s.Manager))
 	r.Get("/repos/{repo}", handleHALRepo(b, s.Manager, s.AgentBranch))
 
 	lister := s.branchesLister

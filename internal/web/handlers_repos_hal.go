@@ -36,12 +36,71 @@ func handleHALRepos(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 		}
 
 		body := hal.CollectionView[repoSummary]{
-			Count:    len(items),
-			Links:    hal.LinkMap{"self": {Href: b.Repos()}},
+			Count: len(items),
+			Links: hal.LinkMap{
+				"self":   {Href: b.Repos()},
+				"rescan": {Href: b.Repos() + ":rescan"},
+			},
 			Embedded: map[string][]repoSummary{"repos": items},
 		}
 		hal.WriteHAL(w, http.StatusOK, body)
 	}
+}
+
+// rescanErrorView is the JSON shape for a per-repo failure entry in a
+// rescan response.
+type rescanErrorView struct {
+	Repo  string `json:"repo"`
+	Error string `json:"error"`
+}
+
+// rescanResultView is the JSON body of POST /repos:rescan. All slices
+// serialize as [] (never null) so clients can iterate without nil checks.
+type rescanResultView struct {
+	Added   []string          `json:"added"`
+	Skipped []string          `json:"skipped"`
+	Errors  []rescanErrorView `json:"errors"`
+	Links   hal.LinkMap       `json:"_links"`
+}
+
+// handleHALReposRescan serves POST /api/v1/repos:rescan. It triggers a
+// runtime rescan of the repos directory and returns what was added,
+// skipped, and what failed. Top-level scan failures (e.g. directory
+// unreadable) yield 500 problem+json; per-repo Add failures appear in
+// the response's errors[] with status 200.
+func handleHALReposRescan(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		result, err := m.Rescan()
+		if err != nil {
+			hal.WriteProblem(w, http.StatusInternalServerError, "Rescan Failed", err.Error(), r.URL.Path)
+			return
+		}
+
+		errs := make([]rescanErrorView, 0, len(result.Errors))
+		for _, e := range result.Errors {
+			errs = append(errs, rescanErrorView{Repo: e.Repo, Error: e.Err.Error()})
+		}
+
+		view := rescanResultView{
+			Added:   nonNilStrings(result.Added),
+			Skipped: nonNilStrings(result.Skipped),
+			Errors:  errs,
+			Links: hal.LinkMap{
+				"self":  {Href: b.Repos() + ":rescan"},
+				"repos": {Href: b.Repos()},
+			},
+		}
+		hal.WriteHAL(w, http.StatusOK, view)
+	}
+}
+
+// nonNilStrings returns s if non-nil, else an empty slice. Used so JSON
+// encoders emit [] instead of null for empty result fields.
+func nonNilStrings(s []string) []string {
+	if s == nil {
+		return []string{}
+	}
+	return s
 }
 
 // handleHALRepo serves GET /api/v1/repos/{repo}.
