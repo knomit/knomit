@@ -187,3 +187,59 @@ func parseDistillResponse(text string) (DistillResult, error) {
 	}
 	return result, nil
 }
+
+// ReflectResult is the LLM JSON response for a reflect step. The contract
+// is a forced choice between reinforcing existing methodologies (the
+// default action) and proposing a new one (capped, dedup-checked, requires
+// a novelty argument). The server applies both arms — reinforce inserts
+// into methodology_reinforcements, propose writes a methodology fact via
+// the standard fact-write path.
+type ReflectResult struct {
+	Reasoning string             `json:"reasoning"`
+	Reinforce []ReinforceEntry   `json:"reinforce"`
+	Propose   []ProposeEntry     `json:"propose"`
+}
+
+// ReinforceEntry binds existing methodologies to the transitions they
+// explain. transition_paths must be a non-empty subset of the session's
+// recorded transitions; methodology_path must resolve to an existing
+// type=methodology fact on the branch.
+type ReinforceEntry struct {
+	MethodologyPath string   `json:"methodology_path"`
+	TransitionPaths []string `json:"transition_paths"`
+	Rationale       string   `json:"rationale"`
+}
+
+// ProposeEntry describes a brand-new methodology fact the agent wants the
+// server to write. NoveltyArgument is the agent's case for why no existing
+// methodology already captures this lesson — required because the prompt
+// already injects a candidate-existing-methodologies section, so the agent
+// has been shown what's available before proposing.
+//
+// Type is implicitly "methodology" — the server stamps it; agent input is
+// ignored here to keep the contract crisp.
+type ProposeEntry struct {
+	Title           string      `json:"title"`
+	Body            string      `json:"body"`
+	Domain          flexStrings `json:"domain"`
+	Entities        flexStrings `json:"entities"`
+	TopicPath       string      `json:"topic_path"`
+	Confidence      float64     `json:"confidence"`
+	Refs            flexStrings `json:"refs"`
+	TransitionPaths []string    `json:"transition_paths"`
+	NoveltyArgument string      `json:"novelty_argument"`
+}
+
+// parseReflectResponse parses the LLM JSON response for a reflect step.
+// It accepts code-fenced output (extractJSON strips fences and <think>
+// blocks) and returns a structurally-typed result; semantic validation
+// (cap, transition-path scope, novelty, etc.) lives in
+// validateReflectResponse and ApplyReflectDecisions.
+func parseReflectResponse(text string) (ReflectResult, error) {
+	raw := extractJSON(text)
+	var result ReflectResult
+	if err := json.Unmarshal([]byte(raw), &result); err != nil {
+		return ReflectResult{}, fmt.Errorf("parseReflectResponse: %w (raw: %.200s)", err, raw)
+	}
+	return result, nil
+}

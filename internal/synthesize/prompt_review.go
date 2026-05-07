@@ -99,21 +99,45 @@ func RenderPruneWorkItem(facts []factForLLM, ontologyRoot string) (*WorkItemCont
 const reflectResponseSchema = `{
   "type": "object",
   "properties": {
-    "methodology_facts": {
+    "reasoning": {
+      "type": "string",
+      "description": "Free-form reflection on the transitions and which methodologies they reinforce or expose gaps in."
+    },
+    "reinforce": {
       "type": "array",
+      "description": "Existing methodologies whose lesson is re-confirmed by these transitions. This is the default action — most reflections should be reinforcements.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "methodology_path": {"type": "string"},
+          "transition_paths": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+          "rationale": {"type": "string"}
+        },
+        "required": ["methodology_path", "transition_paths", "rationale"]
+      }
+    },
+    "propose": {
+      "type": "array",
+      "description": "New methodology to add when no existing one captures the lesson. Rare. Capped at 1 by default; the server rejects proposals too similar to existing methodologies.",
+      "maxItems": 1,
       "items": {
         "type": "object",
         "properties": {
           "title": {"type": "string"},
           "body": {"type": "string"},
+          "topic_path": {"type": "string", "description": "Directory under the ontology root, e.g. \"meta/reasoning\"; the server appends a UUID and writes the fact."},
+          "confidence": {"type": "number", "minimum": 0, "maximum": 1},
           "domain": {"type": "array", "items": {"type": "string"}},
-          "entities": {"type": "array", "items": {"type": "string"}}
+          "entities": {"type": "array", "items": {"type": "string"}},
+          "refs": {"type": "array", "items": {"type": "string"}},
+          "transition_paths": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+          "novelty_argument": {"type": "string", "description": "Why no existing methodology in the prompt's candidates section captures this lesson."}
         },
-        "required": ["title", "body"]
+        "required": ["title", "body", "topic_path", "transition_paths", "novelty_argument"]
       }
     }
   },
-  "required": ["methodology_facts"]
+  "required": ["reasoning", "reinforce", "propose"]
 }`
 
 // RenderReflectWorkItem renders a reflect prompt for hypothesis transition

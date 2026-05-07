@@ -39,19 +39,23 @@ func NewReviewer(ri *repos.RepoInstance, onProgress func(ProgressEvent)) *Review
 	return &Reviewer{ri: ri, onProgress: onProgress}
 }
 
-// storeIndices returns the four store indices under the repo read lock.
-func (r *Reviewer) storeIndices() (store.FactIndex, store.SearchIndex, store.PipelineIndex, store.BranchIndex) {
+// storeIndices returns the store indices under the repo read lock. The
+// MethodologyIndex is bundled in here so the reflect dispatcher can record
+// reinforcements without a second read-lock acquire.
+func (r *Reviewer) storeIndices() (store.FactIndex, store.SearchIndex, store.PipelineIndex, store.BranchIndex, store.MethodologyIndex) {
 	var gs store.FactIndex
 	var idx store.SearchIndex
 	var pipelineIdx store.PipelineIndex
 	var branches store.BranchIndex
+	var methIdx store.MethodologyIndex
 	r.ri.WithRead(func(svc *store.Service) {
 		gs = svc.Facts()
 		idx = svc.Search()
 		pipelineIdx = svc.Pipeline()
 		branches = svc.Branches()
+		methIdx = svc.Methodology()
 	})
-	return gs, idx, pipelineIdx, branches
+	return gs, idx, pipelineIdx, branches, methIdx
 }
 
 // StartSession creates a new review session, identifies dirty facts, clusters
@@ -65,7 +69,7 @@ func (r *Reviewer) storeIndices() (store.FactIndex, store.SearchIndex, store.Pip
 // across an AgentBranch change still operates on its original branch.
 func (r *Reviewer) StartSession(ctx context.Context) (*ReviewResult, error) {
 	totalStart := time.Now()
-	gs, idx, pipelineIdx, _ := r.storeIndices()
+	gs, idx, pipelineIdx, _, _ := r.storeIndices()
 	branch := r.ri.AgentBranch()
 
 	sess, err := pipelineIdx.CreatePipelineSession(ctx, "review", branch)
@@ -160,7 +164,7 @@ func (r *Reviewer) StartSession(ctx context.Context) (*ReviewResult, error) {
 // ContinueSession processes the model's response for the current work item
 // and returns the next item, or done if the session is complete.
 func (r *Reviewer) ContinueSession(ctx context.Context, sessionID, response string) (*ReviewResult, error) {
-	gs, idx, pipelineIdx, _ := r.storeIndices()
+	gs, idx, pipelineIdx, _, methIdx := r.storeIndices()
 
 	sess, err := pipelineIdx.GetPipelineSession(ctx, sessionID)
 	if err != nil {
@@ -192,8 +196,25 @@ func (r *Reviewer) ContinueSession(ctx context.Context, sessionID, response stri
 	// Apply based on step type.
 	switch item.StepType {
 	case "reflect":
-		// Reflect responses are informational — the agent writes methodology facts
-		// via knomit_learn. No server-side action needed.
+		var transitions []hypothesisTransition
+		if err := json.Unmarshal([]byte(item.FactsJSON), &transitions); err != nil {
+			return nil, fmt.Errorf("review: unmarshal transitions: %w", err)
+		}
+		transitionPaths := make([]string, len(transitions))
+		for i, t := range transitions {
+			transitionPaths[i] = t.Path
+		}
+		parsed, err := parseReflectResponse(response)
+		if err != nil {
+			return nil, fmt.Errorf("review: parse reflect response: %w", err)
+		}
+		if err := validateReflectResponse(parsed, transitionPaths, reflectProposeCap()); err != nil {
+			return nil, fmt.Errorf("review: validate reflect: %w", err)
+		}
+		if err := ApplyReflectDecisions(ctx, gs, idx, methIdx, parsed, sess,
+			r.ri.OntologyRoot(), reflectNoveltyThreshold(), r.onProgress); err != nil {
+			return nil, fmt.Errorf("review: apply reflect: %w", err)
+		}
 
 	case "prune":
 		var facts []factForLLM
@@ -418,7 +439,7 @@ func (r *Reviewer) nextItem(ctx context.Context, sess *store.PipelineSession) (*
 // "work" guard. The other observes the row already advanced and falls
 // through to the reflect-phase dispatch on the next iteration.
 func (r *Reviewer) handleWorkPhase(ctx context.Context, sess *store.PipelineSession) (*ReviewResult, error) {
-	_, _, pipelineIdx, _ := r.storeIndices()
+	_, _, pipelineIdx, _, _ := r.storeIndices()
 
 	item, err := pipelineIdx.NextPipelineWorkItem(ctx, sess.ID)
 	if err != nil {
@@ -444,7 +465,7 @@ func (r *Reviewer) handleWorkPhase(ctx context.Context, sess *store.PipelineSess
 // handleReflectPhase serves the (single) reflect work item if one is
 // pending, otherwise advances reflect→done and dispatches into completion.
 func (r *Reviewer) handleReflectPhase(ctx context.Context, sess *store.PipelineSession) (*ReviewResult, error) {
-	_, _, pipelineIdx, _ := r.storeIndices()
+	_, _, pipelineIdx, _, _ := r.storeIndices()
 
 	item, err := pipelineIdx.NextPipelineWorkItem(ctx, sess.ID)
 	if err != nil {
@@ -470,7 +491,7 @@ func (r *Reviewer) handleReflectPhase(ctx context.Context, sess *store.PipelineS
 // detect transitions is logged but not fatal — the session still advances
 // (matching the pre-fix tolerance).
 func (r *Reviewer) maybeEnqueueReflectItem(ctx context.Context, sess *store.PipelineSession) error {
-	_, _, pipelineIdx, _ := r.storeIndices()
+	_, _, pipelineIdx, _, _ := r.storeIndices()
 
 	transitions, err := r.findHypothesisTransitions(ctx, sess)
 	if err != nil {
@@ -497,7 +518,7 @@ func (r *Reviewer) maybeEnqueueReflectItem(ctx context.Context, sess *store.Pipe
 // dispatcher sees the post-advance phase. Used after a phase transition or
 // when the in-memory phase value may be stale.
 func (r *Reviewer) refetchAndDispatch(ctx context.Context, sessionID string) (*ReviewResult, error) {
-	_, _, pipelineIdx, _ := r.storeIndices()
+	_, _, pipelineIdx, _, _ := r.storeIndices()
 	fresh, err := pipelineIdx.GetPipelineSession(ctx, sessionID)
 	if err != nil {
 		return nil, fmt.Errorf("review: refetch session: %w", err)
@@ -512,7 +533,7 @@ func (r *Reviewer) refetchAndDispatch(ctx context.Context, sessionID string) (*R
 // schema, progress counts. Pure rendering; the dispatcher decides whether
 // to call this or advance the phase.
 func (r *Reviewer) renderWorkItem(ctx context.Context, sess *store.PipelineSession, item *store.PipelineWorkItem) (*ReviewResult, error) {
-	_, _, pipelineIdx, _ := r.storeIndices()
+	_, _, pipelineIdx, _, _ := r.storeIndices()
 	branch := sess.Branch
 	ontologyRoot := r.ri.OntologyRoot()
 
@@ -565,7 +586,7 @@ func (r *Reviewer) renderWorkItem(ctx context.Context, sess *store.PipelineSessi
 // Branch comes from sess.Branch — the recorded branch the session was
 // created against — so HEAD lookup and watermark advance are consistent.
 func (r *Reviewer) completeSession(ctx context.Context, sess *store.PipelineSession) (*ReviewResult, error) {
-	_, _, pipelineIdx, branches := r.storeIndices()
+	_, _, pipelineIdx, branches, _ := r.storeIndices()
 	branch := sess.Branch
 
 	if err := pipelineIdx.CompletePipelineSession(ctx, sess.ID); err != nil {
@@ -741,7 +762,7 @@ type hypothesisTransition struct {
 // session. All branch reads use sess.Branch — the session's recorded
 // branch — so the diff is consistent with the session's scope.
 func (r *Reviewer) findHypothesisTransitions(ctx context.Context, sess *store.PipelineSession) ([]hypothesisTransition, error) {
-	gs, _, pipelineIdx, _ := r.storeIndices()
+	gs, _, pipelineIdx, _, _ := r.storeIndices()
 	branch := sess.Branch
 
 	// Read the watermark set at the end of the previous session.

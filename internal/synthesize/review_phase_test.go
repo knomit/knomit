@@ -63,7 +63,7 @@ func TestReviewer_PhaseAdvances_WorkToReflectToDone(t *testing.T) {
 
 	// Answer reflect (informational; the body is irrelevant for this test —
 	// the response shape will be tightened by a separate spec).
-	res, err = r.ContinueSession(ctx, sess.ID, `{"methodology_facts":[]}`)
+	res, err = r.ContinueSession(ctx, sess.ID, `{"reasoning":"none","reinforce":[],"propose":[]}`)
 	require.NoError(t, err)
 	require.True(t, res.Done, "session must complete after reflect is answered")
 	require.NotNil(t, res.Progress)
@@ -135,7 +135,7 @@ func TestReviewer_StatelessAcrossInstances(t *testing.T) {
 	// reach Done. With the fix, the persistent phase column (set by the
 	// first Reviewer's transition) prevents re-enqueue.
 	r2 := NewReviewer(r1.ri, nil)
-	res, err = r2.ContinueSession(ctx, sess.ID, `{"methodology_facts":[]}`)
+	res, err = r2.ContinueSession(ctx, sess.ID, `{"reasoning":"none","reinforce":[],"propose":[]}`)
 	require.NoError(t, err)
 	require.True(t, res.Done, "fresh Reviewer must still drive the session to completion — "+
 		"reflect-already-considered state lives on the session row, not the Reviewer instance")
@@ -146,6 +146,104 @@ func TestReviewer_StatelessAcrossInstances(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 2, completed, "expected exactly one prune + one reflect, both answered")
 	require.Equal(t, 0, remaining, "no work items should remain unanswered")
+}
+
+// TestReviewer_ReflectAppliesReinforce is the end-to-end test for the new
+// reflect contract: an agent's reinforce response submitted via
+// ContinueSession actually inserts a methodology_reinforcements row,
+// proving the dispatcher → parse → validate → apply path is wired.
+func TestReviewer_ReflectAppliesReinforce(t *testing.T) {
+	r, svc := newPhaseTestReviewer(t)
+	ctx := context.Background()
+	branch := "agent/test"
+
+	// Seed both the methodology to reinforce and the hypothesis transition
+	// the agent will cite. The session needs the transition to exist
+	// between watermark and HEAD so the reflect step gets enqueued.
+	const methPath = "kb/meta/reasoning/m.md"
+	mf := fact.NewFact(methPath)
+	mf.Title = "M"
+	mf.Body = "methodology body"
+	mf.Type = fact.Methodology
+	mf.Confidence = 0.8
+	mf.Sources = 1
+	mfBody, err := fact.SerializeFact(mf)
+	require.NoError(t, err)
+	_, err = svc.Facts().WriteFact(ctx, branch, methPath, mfBody, "seed-methodology", "")
+	require.NoError(t, err)
+
+	seedHypothesisTransition(t, svc, branch)
+
+	sess := manualSession(t, svc, branch)
+	insertManualPruneItem(t, svc, sess.ID, "kb/x.md")
+
+	// Answer prune to advance into reflect phase.
+	res, err := r.ContinueSession(ctx, sess.ID, `{"decisions":[],"merges":[]}`)
+	require.NoError(t, err)
+	require.NotNil(t, res.Item)
+	require.Equal(t, "reflect", res.Item.Type)
+
+	// Submit reinforce response. transition path must match the path
+	// seedHypothesisTransition uses ("kb/technology/h.md").
+	reflectResp := `{
+		"reasoning": "h ties to m",
+		"reinforce": [{
+			"methodology_path": "` + methPath + `",
+			"transition_paths": ["kb/technology/h.md"],
+			"rationale": "same reasoning shape"
+		}],
+		"propose": []
+	}`
+	res, err = r.ContinueSession(ctx, sess.ID, reflectResp)
+	require.NoError(t, err)
+	require.True(t, res.Done, "reinforce response should drive session to done")
+
+	// Reinforcement row must be persisted.
+	rows, err := svc.Methodology().ListReinforcementsBySession(ctx, sess.ID)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	require.Equal(t, methPath, rows[0].MethodologyPath)
+	require.Equal(t, "kb/technology/h.md", rows[0].TransitionPath)
+	require.Equal(t, "same reasoning shape", rows[0].Rationale)
+}
+
+// TestReviewer_ReflectRejectsBadResponse asserts that a malformed reflect
+// response (transition path not in the session) errors and leaves the
+// reflect work item unanswered, so the agent can retry. Pre-fix, the
+// reflect case was a no-op: any garbage response was silently accepted.
+func TestReviewer_ReflectRejectsBadResponse(t *testing.T) {
+	r, svc := newPhaseTestReviewer(t)
+	ctx := context.Background()
+	branch := "agent/test"
+
+	seedHypothesisTransition(t, svc, branch)
+	sess := manualSession(t, svc, branch)
+	insertManualPruneItem(t, svc, sess.ID, "kb/x.md")
+
+	res, err := r.ContinueSession(ctx, sess.ID, `{"decisions":[],"merges":[]}`)
+	require.NoError(t, err)
+	require.Equal(t, "reflect", res.Item.Type)
+
+	// Bad response: transition path not from this session's transitions.
+	bad := `{
+		"reasoning": "wrong",
+		"reinforce": [{
+			"methodology_path": "kb/meta/reasoning/m.md",
+			"transition_paths": ["kb/not-in-session.md"],
+			"rationale": "x"
+		}],
+		"propose": []
+	}`
+	_, err = r.ContinueSession(ctx, sess.ID, bad)
+	require.Error(t, err, "bad reflect response must be rejected")
+	require.Contains(t, err.Error(), "kb/not-in-session.md")
+
+	// The reflect work item must still be unanswered: phase stays at
+	// reflect, session is not done. Agent can retry.
+	got, err := svc.Pipeline().GetPipelineSession(ctx, sess.ID)
+	require.NoError(t, err)
+	require.Equal(t, "reflect", got.Phase, "phase must NOT advance on rejected reflect")
+	require.Equal(t, "active", got.Status)
 }
 
 // newPhaseTestReviewer opens a fresh on-disk Service, initialises the agent

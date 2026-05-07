@@ -40,6 +40,7 @@ type Service struct {
 	pi          *pipelineIndex
 	ti          *toolIndex
 	ri          *remoteIndex
+	mi          *methodologyIndex
 }
 
 // Open opens (or creates) a unified SQLite database at path, initializes the
@@ -87,6 +88,7 @@ func Open(path string) (*Service, error) {
 		pi: &pipelineIndex{rh: rh},
 		ti: &toolIndex{rh: rh},
 		ri: ri,
+		mi: &methodologyIndex{rh: rh},
 	}, nil
 }
 
@@ -110,6 +112,10 @@ func (s *Service) SetEmbedder(e BatchEmbedder) { s.rh.setEmbedder(e) }
 
 // Pipeline returns the PipelineIndex for pipeline session management.
 func (s *Service) Pipeline() PipelineIndex { return s.pi }
+
+// Methodology returns the MethodologyIndex for reinforcement tracking and
+// related methodology-fact side signals.
+func (s *Service) Methodology() MethodologyIndex { return s.mi }
 
 // ToolSession returns the ToolSessionIndex for tool session persistence.
 func (s *Service) ToolSession() ToolSessionIndex { return s.ti }

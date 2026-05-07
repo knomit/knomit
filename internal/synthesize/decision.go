@@ -266,3 +266,182 @@ func ApplyDistillDecisions(ctx context.Context,
 
 	return stats, written, nil
 }
+
+// ApplyReflectDecisions is the side-effect channel for the reflect step.
+// It is symmetric with ApplyPruneDecisions / ApplyDistillDecisions: the
+// agent's response IS the write contract.
+//
+// Two arms:
+//   - reinforce: each entry binds an existing methodology fact to the
+//     transitions it explained. Inserts one row in
+//     methodology_reinforcements per (methodology, transition) pair.
+//   - propose: each entry is a brand-new methodology fact. Server-stamped
+//     type=methodology; rejected if too similar to an existing methodology
+//     (cosine ≥ noveltyThreshold).
+//
+// All validation runs before any side effects — a single failed entry
+// rejects the entire response, leaving callers free to mark the work item
+// unanswered and prompt the agent to retry. Caller is expected to have
+// already run validateReflectResponse for structural checks.
+//
+// onProgress is tolerated as nil.
+func ApplyReflectDecisions(
+	ctx context.Context,
+	gs store.FactIndex,
+	idx store.SearchIndex,
+	mi store.MethodologyIndex,
+	result ReflectResult,
+	sess *store.PipelineSession,
+	ontologyRoot string,
+	noveltyThreshold float64,
+	onProgress func(ProgressEvent),
+) error {
+	if onProgress == nil {
+		onProgress = func(ProgressEvent) {}
+	}
+
+	branch := sess.Branch
+
+	// Phase 1 — validate every reinforce target resolves to a methodology
+	// fact on the session's branch.
+	for i, e := range result.Reinforce {
+		readResult, err := gs.ReadFact(ctx, branch, e.MethodologyPath, nil)
+		if err != nil {
+			return fmt.Errorf("reinforce[%d]: methodology %q not found: %w", i, e.MethodologyPath, err)
+		}
+		f, err := fact.ParseFact(e.MethodologyPath, readResult.Content)
+		if err != nil {
+			return fmt.Errorf("reinforce[%d]: cannot parse %q: %w", i, e.MethodologyPath, err)
+		}
+		if f.Type != fact.Methodology {
+			return fmt.Errorf("reinforce[%d]: %q is type %q, not methodology", i, e.MethodologyPath, f.Type)
+		}
+	}
+
+	// Phase 2 — validate and stage propose entries. Build the would-be
+	// fact files in memory; nothing is written until every propose passes
+	// the novelty gate.
+	type stagedPropose struct {
+		path string
+		body string
+	}
+	staged := make([]stagedPropose, 0, len(result.Propose))
+	for i, p := range result.Propose {
+		topic, category, err := splitTopicPath(p.TopicPath, ontologyRoot)
+		if err != nil {
+			return fmt.Errorf("propose[%d]: %w", i, err)
+		}
+		path := fact.BuildFactPath(ontologyRoot, topic, category)
+		if err := validateOutputPath(path, ontologyRoot); err != nil {
+			return fmt.Errorf("propose[%d]: %w", i, err)
+		}
+
+		// Novelty gate: search the existing methodology corpus on this
+		// branch for anything within similarity threshold of (title+body).
+		// Search will internally embed the Text via the configured
+		// embedder; if no embedder is wired up, this falls back to
+		// keyword/tag scoring — still a useful guard, just looser.
+		hits, err := idx.Search(ctx, branch, store.SearchQuery{
+			Text:          p.Title + "\n\n" + p.Body,
+			IncludeTypes:  []string{string(fact.Methodology)},
+			MinSimilarity: noveltyThreshold,
+			Limit:         5,
+		})
+		if err != nil {
+			return fmt.Errorf("propose[%d]: novelty search: %w", i, err)
+		}
+		if len(hits) > 0 {
+			top := hits[0]
+			score := top.Score / 100.0
+			return fmt.Errorf(
+				"propose[%d]: too similar to existing methodology %q (cosine %.2f ≥ threshold %.2f); reinforce it instead",
+				i, top.Path, score, noveltyThreshold,
+			)
+		}
+
+		f := fact.NewFact(path)
+		f.Title = p.Title
+		f.Body = p.Body
+		f.Type = fact.Methodology // server-stamped; agent input ignored
+		f.Domain = []string(p.Domain)
+		f.Entities = []string(p.Entities)
+		f.Confidence = p.Confidence
+		f.Sources = 1
+		f.Refs = []string(p.Refs)
+		serialized, err := fact.SerializeFact(f)
+		if err != nil {
+			return fmt.Errorf("propose[%d]: serialize: %w", i, err)
+		}
+		staged = append(staged, stagedPropose{path: f.Path(), body: serialized})
+	}
+
+	// Phase 3 — write proposed methodology facts as a single commit. With
+	// only one allowed by the default cap, this is usually 0 or 1 facts;
+	// the batch path keeps the contract symmetric with knomit_learn.
+	if len(staged) > 0 {
+		files := make(map[string]string, len(staged))
+		for _, s := range staged {
+			files[s.path] = s.body
+		}
+		commitMsg := fmt.Sprintf("review: %d new methodology", len(staged))
+		if _, _, err := gs.BatchWriteFacts(ctx, branch, files, commitMsg, "review"); err != nil {
+			return fmt.Errorf("apply propose: write: %w", err)
+		}
+		for _, s := range staged {
+			onProgress(ProgressEvent{Phase: "detail-reflect-propose", Message: "wrote methodology " + s.path})
+		}
+	}
+
+	// Phase 4 — record reinforcements. Inserted last so a failure here
+	// doesn't leave methodology files written without their reinforcement
+	// log; if any insert errors, the caller leaves the work item
+	// unanswered and the agent retries with the same intent.
+	for _, e := range result.Reinforce {
+		for _, tp := range e.TransitionPaths {
+			err := mi.InsertReinforcement(ctx, store.MethodologyReinforcement{
+				Branch:          branch,
+				MethodologyPath: e.MethodologyPath,
+				TransitionPath:  tp,
+				SessionID:       sess.ID,
+				Rationale:       e.Rationale,
+			})
+			if err != nil {
+				return fmt.Errorf("apply reinforce: %w", err)
+			}
+		}
+		onProgress(ProgressEvent{Phase: "detail-reflect-reinforce",
+			Message: fmt.Sprintf("reinforced %s with %d transitions", e.MethodologyPath, len(e.TransitionPaths))})
+	}
+
+	log.Info().
+		Str("session", sess.ID).
+		Int("reinforced", len(result.Reinforce)).
+		Int("proposed", len(staged)).
+		Msg("review: reflect applied")
+
+	return nil
+}
+
+// splitTopicPath normalises an agent-supplied topic_path into (topic,
+// category) suitable for fact.BuildFactPath. The topic_path may optionally
+// be prefixed with the ontology root (e.g. "kb/meta/reasoning"); leading
+// and trailing slashes are tolerated. The remainder must split into at
+// least two segments — BuildFactPath produces a malformed path if either
+// segment is empty, so we reject up front with a clear message.
+func splitTopicPath(topicPath, ontologyRoot string) (topic, category string, err error) {
+	clean := strings.TrimSpace(topicPath)
+	clean = strings.Trim(clean, "/")
+	rootPrefix := strings.ToLower(strings.TrimRight(ontologyRoot, "/")) + "/"
+	if strings.HasPrefix(strings.ToLower(clean)+"/", rootPrefix) {
+		clean = clean[len(rootPrefix)-1:]
+		clean = strings.TrimLeft(clean, "/")
+	}
+	if clean == "" {
+		return "", "", fmt.Errorf("topic_path is empty after normalisation")
+	}
+	parts := strings.SplitN(clean, "/", 2)
+	if len(parts) < 2 || parts[0] == "" || parts[1] == "" {
+		return "", "", fmt.Errorf("topic_path %q must contain both topic and category (e.g. \"meta/reasoning\")", topicPath)
+	}
+	return parts[0], parts[1], nil
+}
