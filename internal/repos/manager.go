@@ -47,8 +47,10 @@ type RescanError struct {
 //   - Skipped: repo names already registered before this call.
 //   - Errors: per-repo Add failures; other repos still attempted.
 //
-// Slices are non-nil; empty slices remain empty (callers/JSON encoders
-// can rely on []string{} rather than nil).
+// On successful return, all three slices are non-nil; empty slices remain
+// empty (callers/JSON encoders can rely on []string{} rather than nil).
+// When Rescan returns a non-nil error, the caller should not inspect the
+// result — the zero RescanResult{} is returned.
 type RescanResult struct {
 	Added   []string
 	Skipped []string
@@ -242,26 +244,33 @@ func (m *Manager) Add(name, dbPath string) error {
 // a restart. Removed or replaced .db files are NOT handled — see the
 // design doc for the rationale.
 //
-// Concurrent calls are serialised by rescanMu. The returned slices are
-// always non-nil (possibly empty). The error return is non-nil only when
-// the directory glob itself fails; per-repo Add failures appear in
+// Concurrent calls are serialised by rescanMu. On success the returned
+// slices are always non-nil (possibly empty). The error return is non-nil
+// only when the repos directory cannot be read; in that case the returned
+// RescanResult is the zero value. Per-repo Add failures appear in
 // result.Errors and do not abort the scan.
 func (m *Manager) Rescan() (RescanResult, error) {
 	m.rescanMu.Lock()
 	defer m.rescanMu.Unlock()
+
+	reposDir := filepath.Join(m.deps.Cfg.Home, "repos")
+	if _, err := os.Stat(reposDir); err != nil {
+		return RescanResult{}, fmt.Errorf("stat repos dir: %w", err)
+	}
+
+	dbFiles, err := filepath.Glob(filepath.Join(reposDir, "*.db"))
+	if err != nil {
+		// filepath.Glob can only return ErrBadPattern, which is unreachable
+		// for our literal pattern — but keep the guard for forward safety.
+		return RescanResult{}, fmt.Errorf("glob repos dir: %w", err)
+	}
+	sort.Strings(dbFiles)
 
 	result := RescanResult{
 		Added:   []string{},
 		Skipped: []string{},
 		Errors:  []RescanError{},
 	}
-
-	reposDir := filepath.Join(m.deps.Cfg.Home, "repos")
-	dbFiles, err := filepath.Glob(filepath.Join(reposDir, "*.db"))
-	if err != nil {
-		return result, fmt.Errorf("glob repos dir: %w", err)
-	}
-	sort.Strings(dbFiles)
 
 	for _, dbPath := range dbFiles {
 		name := strings.TrimSuffix(filepath.Base(dbPath), ".db")
