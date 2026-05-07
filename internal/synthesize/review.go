@@ -19,10 +19,14 @@ import (
 )
 
 // Reviewer orchestrates multi-turn review sessions.
+// Reviewer is a stateless dispatcher over a single MCP call. Session-scoped
+// state — including whether the reflect step has been considered for a given
+// session — lives on the pipeline_sessions row, not on this struct. The MCP
+// handler constructs a fresh Reviewer per call; any per-session field on
+// this struct would silently lose state between calls.
 type Reviewer struct {
-	ri             *repos.RepoInstance
-	onProgress     func(ProgressEvent)
-	reflectChecked map[string]bool
+	ri         *repos.RepoInstance
+	onProgress func(ProgressEvent)
 }
 
 // NewReviewer creates a new review orchestrator. ScopedCluster reaches the
@@ -32,7 +36,7 @@ func NewReviewer(ri *repos.RepoInstance, onProgress func(ProgressEvent)) *Review
 	if onProgress == nil {
 		onProgress = func(ProgressEvent) {}
 	}
-	return &Reviewer{ri: ri, onProgress: onProgress, reflectChecked: make(map[string]bool)}
+	return &Reviewer{ri: ri, onProgress: onProgress}
 }
 
 // storeIndices returns the four store indices under the repo read lock.
@@ -178,8 +182,11 @@ func (r *Reviewer) ContinueSession(ctx context.Context, sessionID, response stri
 		return nil, fmt.Errorf("review: next work item: %w", err)
 	}
 	if item == nil {
-		// No unanswered items — session should be done already.
-		return r.completeSession(ctx, sess)
+		// No unanswered items — let the dispatcher handle phase advancement
+		// (work→reflect→done as appropriate). Don't short-circuit to
+		// completeSession: that would skip the reflect phase entirely on
+		// sessions where the last work item was just answered out-of-band.
+		return r.nextItem(ctx, sess)
 	}
 
 	// Apply based on step type.
@@ -381,53 +388,136 @@ func (r *Reviewer) dirtyFacts(ctx context.Context, branch string, gs store.FactI
 	return seeds, nil
 }
 
-// nextItem fetches the next unanswered work item, renders its prompt, and
-// returns a ReviewResult. If no items remain, completes the session.
+// nextItem dispatches based on the session's persistent phase. It is
+// intentionally short — all session-scoped state (including "have we
+// considered enqueueing reflect for this session?") lives on the
+// pipeline_sessions row, not on this Reviewer instance, because the MCP
+// handler constructs a fresh Reviewer per call.
 //
-// sess carries the branch the session was created against (sess.Branch);
-// all reads/writes within this method use that recorded branch rather
-// than the live AgentBranch, so a session continuing across an
-// AgentBranch change still operates on its original branch.
+// sess.Branch is the branch this session was created against; it does not
+// change as the user's live AgentBranch changes during the session.
 func (r *Reviewer) nextItem(ctx context.Context, sess *store.PipelineSession) (*ReviewResult, error) {
-	_, _, pipelineIdx, _ := r.storeIndices()
-	sessionID := sess.ID
-	branch := sess.Branch
+	switch sess.Phase {
+	case "work":
+		return r.handleWorkPhase(ctx, sess)
+	case "reflect":
+		return r.handleReflectPhase(ctx, sess)
+	case "done":
+		return r.completeSession(ctx, sess)
+	default:
+		return nil, fmt.Errorf("review: unknown phase %q on session %s", sess.Phase, sess.ID)
+	}
+}
 
-	item, err := pipelineIdx.NextPipelineWorkItem(ctx, sessionID)
+// handleWorkPhase serves the next prune/distill item if one remains; once
+// the queue is empty, advances the session to phase=reflect and (if any
+// hypothesis transitions occurred) enqueues exactly one reflect item.
+//
+// The work→reflect advance is a CAS on the phase column, so concurrent
+// continuations can't both enqueue: at most one caller's UPDATE matches the
+// "work" guard. The other observes the row already advanced and falls
+// through to the reflect-phase dispatch on the next iteration.
+func (r *Reviewer) handleWorkPhase(ctx context.Context, sess *store.PipelineSession) (*ReviewResult, error) {
+	_, _, pipelineIdx, _ := r.storeIndices()
+
+	item, err := pipelineIdx.NextPipelineWorkItem(ctx, sess.ID)
 	if err != nil {
 		return nil, fmt.Errorf("review: next item: %w", err)
 	}
-
-	if item == nil {
-		// Before completing, check if we should enqueue a reflect step.
-		if !r.reflectChecked[sessionID] {
-			r.reflectChecked[sessionID] = true
-			transitions, tErr := r.findHypothesisTransitions(ctx, sess)
-			if tErr != nil {
-				log.Warn().Err(tErr).Msg("review: failed to find hypothesis transitions")
-			}
-			if len(transitions) > 0 {
-				transJSON, _ := json.Marshal(transitions)
-				reflectItem := store.PipelineWorkItem{
-					SessionID:  sessionID,
-					StepType:   "reflect",
-					ClusterKey: "reflect",
-					FactsJSON:  string(transJSON),
-					Priority:   -100,
-				}
-				if err := pipelineIdx.InsertPipelineWorkItem(ctx, reflectItem); err != nil {
-					log.Warn().Err(err).Msg("review: failed to enqueue reflect item")
-				} else {
-					// Recurse to fetch the just-enqueued reflect item.
-					return r.nextItem(ctx, sess)
-				}
-			}
-		}
-		return r.completeSession(ctx, sess)
+	if item != nil {
+		return r.renderWorkItem(ctx, sess, item)
 	}
 
+	advanced, err := pipelineIdx.AdvancePipelineSessionPhase(ctx, sess.ID, "work", "reflect")
+	if err != nil {
+		return nil, fmt.Errorf("review: advance work→reflect: %w", err)
+	}
+	if advanced {
+		log.Info().Str("session", sess.ID).Str("from", "work").Str("to", "reflect").Msg("review: phase transition")
+		if err := r.maybeEnqueueReflectItem(ctx, sess); err != nil {
+			return nil, err
+		}
+	}
+	return r.refetchAndDispatch(ctx, sess.ID)
+}
+
+// handleReflectPhase serves the (single) reflect work item if one is
+// pending, otherwise advances reflect→done and dispatches into completion.
+func (r *Reviewer) handleReflectPhase(ctx context.Context, sess *store.PipelineSession) (*ReviewResult, error) {
+	_, _, pipelineIdx, _ := r.storeIndices()
+
+	item, err := pipelineIdx.NextPipelineWorkItem(ctx, sess.ID)
+	if err != nil {
+		return nil, fmt.Errorf("review: next item: %w", err)
+	}
+	if item != nil {
+		return r.renderWorkItem(ctx, sess, item)
+	}
+
+	advanced, err := pipelineIdx.AdvancePipelineSessionPhase(ctx, sess.ID, "reflect", "done")
+	if err != nil {
+		return nil, fmt.Errorf("review: advance reflect→done: %w", err)
+	}
+	if advanced {
+		log.Info().Str("session", sess.ID).Str("from", "reflect").Str("to", "done").Msg("review: phase transition")
+	}
+	return r.refetchAndDispatch(ctx, sess.ID)
+}
+
+// maybeEnqueueReflectItem inserts a single reflect work item iff there are
+// hypothesis transitions to reflect on. Called only from the winner of the
+// work→reflect CAS, which guarantees at-most-once insertion. A failure to
+// detect transitions is logged but not fatal — the session still advances
+// (matching the pre-fix tolerance).
+func (r *Reviewer) maybeEnqueueReflectItem(ctx context.Context, sess *store.PipelineSession) error {
+	_, _, pipelineIdx, _ := r.storeIndices()
+
+	transitions, err := r.findHypothesisTransitions(ctx, sess)
+	if err != nil {
+		log.Warn().Err(err).Str("session", sess.ID).Msg("review: failed to find hypothesis transitions")
+		return nil
+	}
+	if len(transitions) == 0 {
+		return nil
+	}
+	transJSON, err := json.Marshal(transitions)
+	if err != nil {
+		return fmt.Errorf("review: marshal transitions: %w", err)
+	}
+	return pipelineIdx.InsertPipelineWorkItem(ctx, store.PipelineWorkItem{
+		SessionID:  sess.ID,
+		StepType:   "reflect",
+		ClusterKey: "reflect",
+		FactsJSON:  string(transJSON),
+		Priority:   -100,
+	})
+}
+
+// refetchAndDispatch reloads the session row and re-enters nextItem so the
+// dispatcher sees the post-advance phase. Used after a phase transition or
+// when the in-memory phase value may be stale.
+func (r *Reviewer) refetchAndDispatch(ctx context.Context, sessionID string) (*ReviewResult, error) {
+	_, _, pipelineIdx, _ := r.storeIndices()
+	fresh, err := pipelineIdx.GetPipelineSession(ctx, sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("review: refetch session: %w", err)
+	}
+	if fresh == nil {
+		return nil, fmt.Errorf("review: session %q disappeared mid-dispatch", sessionID)
+	}
+	return r.nextItem(ctx, fresh)
+}
+
+// renderWorkItem builds a ReviewResult for the given work item — prompt,
+// schema, progress counts. Pure rendering; the dispatcher decides whether
+// to call this or advance the phase.
+func (r *Reviewer) renderWorkItem(ctx context.Context, sess *store.PipelineSession, item *store.PipelineWorkItem) (*ReviewResult, error) {
+	_, _, pipelineIdx, _ := r.storeIndices()
+	branch := sess.Branch
 	ontologyRoot := r.ri.OntologyRoot()
+
 	var content *WorkItemContent
+	var err error
 	switch item.StepType {
 	case "prune":
 		var facts []factForLLM
@@ -452,13 +542,13 @@ func (r *Reviewer) nextItem(ctx context.Context, sess *store.PipelineSession) (*
 		return nil, fmt.Errorf("review: render %s prompt: %w", item.StepType, err)
 	}
 
-	completed, remaining, err := pipelineIdx.PipelineWorkItemStats(ctx, sessionID)
+	completed, remaining, err := pipelineIdx.PipelineWorkItemStats(ctx, sess.ID)
 	if err != nil {
 		return nil, fmt.Errorf("review: work item stats: %w", err)
 	}
 
 	return &ReviewResult{
-		SessionID: sessionID,
+		SessionID: sess.ID,
 		Item: &ReviewItem{
 			Type:           item.StepType,
 			Prompt:         content.Prompt,

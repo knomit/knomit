@@ -10,11 +10,19 @@ import (
 )
 
 // PipelineSession represents an active pipeline session for a tool on a branch.
+//
+// Status tracks lifecycle (active|completed|abandoned). Phase tracks
+// workflow position inside an active session: "work" (prune/distill items
+// being processed), "reflect" (single reflect item enqueued/being served),
+// or "done" (all items including reflect answered, ready for completion).
+// Phase is what makes the reviewer stateless across MCP calls — see
+// AdvancePipelineSessionPhase for the CAS guarantee.
 type PipelineSession struct {
 	ID        string
 	Tool      string
 	Branch    string
 	Status    string // "active", "completed", "abandoned"
+	Phase     string // "work", "reflect", "done"
 	CreatedAt string
 	UpdatedAt string
 }
@@ -94,13 +102,14 @@ func (pi *pipelineIndex) CreatePipelineSession(ctx context.Context, tool, branch
 		Tool:      tool,
 		Branch:    branch,
 		Status:    "active",
+		Phase:     "work",
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
 
 	if _, err := db.ExecContext(ctx,
-		`INSERT INTO pipeline_sessions(id, tool, branch, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`,
-		s.ID, s.Tool, s.Branch, s.Status, s.CreatedAt, s.UpdatedAt,
+		`INSERT INTO pipeline_sessions(id, tool, branch, status, phase, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		s.ID, s.Tool, s.Branch, s.Status, s.Phase, s.CreatedAt, s.UpdatedAt,
 	); err != nil {
 		return nil, fmt.Errorf("CreatePipelineSession insert: %w", err)
 	}
@@ -117,8 +126,8 @@ func (pi *pipelineIndex) CreatePipelineSession(ctx context.Context, tool, branch
 func (pi *pipelineIndex) GetPipelineSession(ctx context.Context, id string) (*PipelineSession, error) {
 	var s PipelineSession
 	err := conn(ctx, pi.rh.db).QueryRowContext(ctx,
-		`SELECT id, tool, branch, status, created_at, updated_at FROM pipeline_sessions WHERE id = ?`, id,
-	).Scan(&s.ID, &s.Tool, &s.Branch, &s.Status, &s.CreatedAt, &s.UpdatedAt)
+		`SELECT id, tool, branch, status, phase, created_at, updated_at FROM pipeline_sessions WHERE id = ?`, id,
+	).Scan(&s.ID, &s.Tool, &s.Branch, &s.Status, &s.Phase, &s.CreatedAt, &s.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -126,6 +135,29 @@ func (pi *pipelineIndex) GetPipelineSession(ctx context.Context, id string) (*Pi
 		return nil, fmt.Errorf("GetPipelineSession: %w", err)
 	}
 	return &s, nil
+}
+
+// AdvancePipelineSessionPhase atomically transitions a session from `from`
+// to `to`. The UPDATE matches on the current phase so concurrent callers
+// can't both succeed: exactly one wins, the rest see the row already
+// advanced and get (false, nil) — a benign no-op, not an error. This is
+// what guarantees the reflect step is enqueued at most once per session,
+// replacing the in-memory `reflectChecked` map that was lost between MCP
+// calls.
+func (pi *pipelineIndex) AdvancePipelineSessionPhase(ctx context.Context, id, from, to string) (bool, error) {
+	now := time.Now().UTC().Format(time.RFC3339)
+	res, err := conn(ctx, pi.rh.db).ExecContext(ctx,
+		`UPDATE pipeline_sessions SET phase = ?, updated_at = ? WHERE id = ? AND phase = ?`,
+		to, now, id, from,
+	)
+	if err != nil {
+		return false, fmt.Errorf("AdvancePipelineSessionPhase: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("AdvancePipelineSessionPhase rows: %w", err)
+	}
+	return n == 1, nil
 }
 
 // CompletePipelineSession marks the session as completed.
