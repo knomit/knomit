@@ -191,9 +191,10 @@ func parseDistillResponse(text string) (DistillResult, error) {
 // ReflectResult is the LLM JSON response for a reflect step. The contract
 // is a forced choice between reinforcing existing methodologies (the
 // default action) and proposing a new one (capped, dedup-checked, requires
-// a novelty argument). The server applies both arms — reinforce inserts
-// into methodology_reinforcements, propose writes a methodology fact via
-// the standard fact-write path.
+// a novelty argument). The server applies both arms — reinforce appends
+// the methodology fact's path to each cited transition fact's refs (so
+// reinforcement count is "facts that ref it"); propose writes a new
+// methodology fact via the standard fact-write path.
 type ReflectResult struct {
 	Reasoning string             `json:"reasoning"`
 	Reinforce []ReinforceEntry   `json:"reinforce"`

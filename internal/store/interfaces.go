@@ -20,6 +20,8 @@ type FactIndex interface {
 	DiffFiles(ctx context.Context, branch, fromCommit string) (added, modified, deleted []string, err error)
 }
 
+//go:generate go run go.uber.org/mock/mockgen -destination=../synthesize/mock_search_index_test.go -package=synthesize knomit/internal/store SearchIndex
+
 // SearchIndex is the interface for querying the fact search index. Implemented by *searchIndex.
 type SearchIndex interface {
 	Search(ctx context.Context, branch string, q SearchQuery) ([]SearchResult, error)
@@ -102,6 +104,8 @@ type PipelineIndex interface {
 type Embedder interface {
 	Embed(text string) ([]float32, error)
 }
+
+//go:generate go run go.uber.org/mock/mockgen -destination=mock_batch_embedder_test.go -package=store knomit/internal/store BatchEmbedder
 
 // BatchEmbedder extends Embedder with batch inference support.
 type BatchEmbedder interface {

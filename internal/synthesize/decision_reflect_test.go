@@ -7,22 +7,23 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"go.uber.org/mock/gomock"
 
 	"knomit/internal/fact"
 	"knomit/internal/store"
 )
 
-// stubSearchIndex returns canned hits from Search, regardless of query.
-// Used to drive the novelty check deterministically without spinning up an
-// embedder. Other SearchIndex methods aren't called by ApplyReflectDecisions
-// — accessing them panics, which is the contract we want.
-type stubSearchIndex struct {
-	store.SearchIndex
-	hits []store.SearchResult
-}
-
-func (s *stubSearchIndex) Search(_ context.Context, _ string, _ store.SearchQuery) ([]store.SearchResult, error) {
-	return s.hits, nil
+// stubSearch returns a MockSearchIndex whose Search returns the given
+// hits regardless of query. Used to drive the novelty check
+// deterministically without spinning up an embedder. Other SearchIndex
+// methods aren't called by ApplyReflectDecisions — leaving them
+// unstubbed means an unexpected call would fail the test, which is the
+// contract we want.
+func stubSearch(t *testing.T, hits []store.SearchResult) *MockSearchIndex {
+	t.Helper()
+	m := NewMockSearchIndex(gomock.NewController(t))
+	m.EXPECT().Search(gomock.Any(), gomock.Any(), gomock.Any()).Return(hits, nil).AnyTimes()
+	return m
 }
 
 const reflectTestThreshold = 0.85
@@ -54,7 +55,7 @@ func TestApplyReflect_AppliesReinforce(t *testing.T) {
 		}},
 	}
 
-	err := ApplyReflectDecisions(ctx, svc.Facts(), &stubSearchIndex{},
+	err := ApplyReflectDecisions(ctx, svc.Facts(), stubSearch(t, nil),
 		result, sess, "kb", reflectTestThreshold, nil)
 	require.NoError(t, err)
 
@@ -87,7 +88,7 @@ func TestApplyReflect_ReinforceIsIdempotent(t *testing.T) {
 	}
 
 	for range 3 {
-		err := ApplyReflectDecisions(ctx, svc.Facts(), &stubSearchIndex{},
+		err := ApplyReflectDecisions(ctx, svc.Facts(), stubSearch(t, nil),
 			result, sess, "kb", reflectTestThreshold, nil)
 		require.NoError(t, err)
 	}
@@ -124,7 +125,7 @@ func TestApplyReflect_AppliesPropose(t *testing.T) {
 		}},
 	}
 
-	err := ApplyReflectDecisions(ctx, svc.Facts(), &stubSearchIndex{},
+	err := ApplyReflectDecisions(ctx, svc.Facts(), stubSearch(t, nil),
 		result, sess, "kb", reflectTestThreshold, nil)
 	require.NoError(t, err)
 
@@ -156,12 +157,12 @@ func TestApplyReflect_RejectsProposeTooSimilar(t *testing.T) {
 	const conflictPath = "kb/meta/reasoning/existing.md"
 	writeMethodologyForTest(t, svc, sess.Branch, conflictPath, "Existing", "Already on file")
 
-	stub := &stubSearchIndex{hits: []store.SearchResult{{
+	stub := stubSearch(t, []store.SearchResult{{
 		FactWithBody: store.FactWithBody{
 			FactRecord: store.FactRecord{Path: conflictPath, Title: "Existing", Type: "methodology"},
 		},
 		Score: 91.0, // 0.91 cosine — well above the 0.85 threshold
-	}}}
+	}})
 
 	result := ReflectResult{
 		Reasoning: "thought it was new",
@@ -202,7 +203,7 @@ func TestApplyReflect_RejectsReinforceUnknownPath(t *testing.T) {
 		}},
 	}
 
-	err := ApplyReflectDecisions(ctx, svc.Facts(), &stubSearchIndex{},
+	err := ApplyReflectDecisions(ctx, svc.Facts(), stubSearch(t, nil),
 		result, sess, "kb", reflectTestThreshold, nil)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "does-not-exist.md")
@@ -235,7 +236,7 @@ func TestApplyReflect_RejectsReinforceNonMethodologyTarget(t *testing.T) {
 		}},
 	}
 
-	err = ApplyReflectDecisions(ctx, svc.Facts(), &stubSearchIndex{},
+	err = ApplyReflectDecisions(ctx, svc.Facts(), stubSearch(t, nil),
 		result, sess, "kb", reflectTestThreshold, nil)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "methodology")
@@ -249,7 +250,7 @@ func TestApplyReflect_AcceptsAllEmpty(t *testing.T) {
 	svc, sess := newReflectTestEnv(t)
 	ctx := context.Background()
 
-	err := ApplyReflectDecisions(ctx, svc.Facts(), &stubSearchIndex{},
+	err := ApplyReflectDecisions(ctx, svc.Facts(), stubSearch(t, nil),
 		ReflectResult{Reasoning: "no lessons today"}, sess, "kb", reflectTestThreshold, nil)
 	require.NoError(t, err)
 }
