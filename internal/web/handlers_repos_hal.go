@@ -82,8 +82,8 @@ func handleHALReposRescan(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 		}
 
 		view := rescanResultView{
-			Added:   nonNilStrings(result.Added),
-			Skipped: nonNilStrings(result.Skipped),
+			Added:   result.Added,
+			Skipped: result.Skipped,
 			Errors:  errs,
 			Links: hal.LinkMap{
 				"self":  {Href: b.Repos() + ":rescan"},
@@ -92,15 +92,6 @@ func handleHALReposRescan(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 		}
 		hal.WriteHAL(w, http.StatusOK, view)
 	}
-}
-
-// nonNilStrings returns s if non-nil, else an empty slice. Used so JSON
-// encoders emit [] instead of null for empty result fields.
-func nonNilStrings(s []string) []string {
-	if s == nil {
-		return []string{}
-	}
-	return s
 }
 
 // handleHALRepo serves GET /api/v1/repos/{repo}.
