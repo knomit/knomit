@@ -46,8 +46,8 @@ func TestManager_Rescan_AddsNewRepo(t *testing.T) {
 	result, err := m.Rescan()
 	require.NoError(t, err)
 
-	require.Contains(t, result.Added, "work")
-	require.Contains(t, result.Skipped, "knomit")
+	require.Equal(t, []string{"work"}, result.Added)
+	require.Equal(t, []string{"knomit"}, result.Skipped)
 	require.Empty(t, result.Errors)
 	require.NotNil(t, m.Get("work"), "work must be registered after Rescan")
 }
@@ -100,31 +100,39 @@ func TestManager_Rescan_ConcurrentSafe(t *testing.T) {
 	m, home := startManager(t)
 	initRepoFile(t, home, "work")
 
+	type rescanReport struct {
+		result repos.RescanResult
+		err    error
+	}
+
 	const n = 8
 	var wg sync.WaitGroup
-	addedReports := make(chan int, n)
+	reports := make(chan rescanReport, n)
 	for i := 0; i < n; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			result, err := m.Rescan()
-			require.NoError(t, err)
-			count := 0
-			for _, name := range result.Added {
-				if name == "work" {
-					count++
-				}
-			}
-			addedReports <- count
+			r, err := m.Rescan()
+			reports <- rescanReport{r, err}
 		}()
 	}
 	wg.Wait()
-	close(addedReports)
+	close(reports)
 
 	totalAdded := 0
-	for c := range addedReports {
-		totalAdded += c
+	for r := range reports {
+		require.NoError(t, r.err)
+		for _, name := range r.result.Added {
+			if name == "work" {
+				totalAdded++
+			}
+		}
 	}
+	// The spec requires rescanMu to serialize entire Rescan calls (not just
+	// the Add step), so exactly one call must observe "work" in Added and
+	// all others must report it in Skipped. A different sync strategy that
+	// allowed parallel calls could legitimately yield totalAdded == 0 here;
+	// this assertion intentionally locks in the spec's serialization design.
 	require.Equal(t, 1, totalAdded, "exactly one Rescan must report 'work' in Added")
 	require.NotNil(t, m.Get("work"))
 }
