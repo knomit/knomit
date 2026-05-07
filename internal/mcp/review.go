@@ -21,7 +21,7 @@ import (
 // timeout. Clients without task support get the original synchronous behavior.
 func reviewTool() mcpgo.Tool {
 	return mcpgo.NewTool("knomit_review",
-		mcpgo.WithDescription("Review and maintain the knowledge base. Call with no arguments to start a new review session. Call with session_id + response to continue."),
+		mcpgo.WithDescription("Maintain the existing knowledge base: prune redundant facts, distill clusters into higher-order synthesis facts, and reflect on hypothesis transitions to record methodology. Does NOT generate new hypotheses — that is a separate explicit operation via knomit_hypothesize. When a user asks for a 'review', they want only this tool; do not chain to knomit_hypothesize unless the user explicitly requests hypothesis generation. Call with no arguments to start a new review session. Call with session_id + response to continue."),
 		mcpgo.WithString("session_id", mcpgo.Description("Session ID from a previous call. Omit to start a new session.")),
 		mcpgo.WithString("response", mcpgo.Description("Your JSON decisions for the previous work item.")),
 		mcpgo.WithTaskSupport(mcpgo.TaskSupportOptional),

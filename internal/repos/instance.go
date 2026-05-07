@@ -10,20 +10,21 @@ import (
 
 // RepoInstance holds all runtime state for a single repository.
 type RepoInstance struct {
-	mu          sync.RWMutex
-	name        string
-	dbPath      string
-	agentBranch string
-	ontology    *fact.Ontology
-	embedder     store.BatchEmbedder
-	ontologyRoot string
-	onCommit     func(string, string) // re-applied to new svc after SwapStore
-	svc         *store.Service
-	hub         *TaskHub
-	syncCancel  context.CancelFunc
-	syncWg      *sync.WaitGroup
-	startSync   func(url string) error
-	closeFn     func()
+	mu                  sync.RWMutex
+	name                string
+	dbPath              string
+	agentBranch         string
+	ontology            *fact.Ontology
+	embedder            store.BatchEmbedder
+	ontologyRoot        string
+	methodologyMinScore float64
+	onCommit            func(string, string) // re-applied to new svc after SwapStore
+	svc                 *store.Service
+	hub                 *TaskHub
+	syncCancel          context.CancelFunc
+	syncWg              *sync.WaitGroup
+	startSync           func(url string) error
+	closeFn             func()
 }
 
 // WithRead calls fn with the store service under a read lock.
@@ -56,6 +57,10 @@ func (ri *RepoInstance) Embedder() store.BatchEmbedder { return ri.embedder }
 
 // OntologyRoot returns the root path under which facts live for this repo (e.g. "kb").
 func (ri *RepoInstance) OntologyRoot() string { return ri.ontologyRoot }
+
+// MethodologyMinScore returns the minimum composite score below which
+// methodology candidates are dropped from prompt injection.
+func (ri *RepoInstance) MethodologyMinScore() float64 { return ri.methodologyMinScore }
 
 // TaskHub returns the hub for broadcasting task status events.
 func (ri *RepoInstance) TaskHub() *TaskHub { return ri.hub }
@@ -102,14 +107,15 @@ func NewTestInstance(name string) *RepoInstance {
 // TestInstanceConfig holds optional fields for NewTestInstanceWithDeps.
 // Zero values are safe — nil fields are treated as "not configured".
 type TestInstanceConfig struct {
-	Name         string
-	AgentBranch  string
-	Svc          *store.Service
-	Ontology     *fact.Ontology
-	Hub          *TaskHub
-	Embedder     store.BatchEmbedder
-	OntologyRoot string
-	StartSync    func(url string) error
+	Name                string
+	AgentBranch         string
+	Svc                 *store.Service
+	Ontology            *fact.Ontology
+	Hub                 *TaskHub
+	Embedder            store.BatchEmbedder
+	OntologyRoot        string
+	MethodologyMinScore float64
+	StartSync           func(url string) error
 }
 
 // NewTestInstanceWithDeps creates a RepoInstance pre-populated with the given
@@ -117,15 +123,16 @@ type TestInstanceConfig struct {
 // Production code must use Manager.openOne instead.
 func NewTestInstanceWithDeps(cfg TestInstanceConfig) *RepoInstance {
 	return &RepoInstance{
-		name:         cfg.Name,
-		agentBranch:  cfg.AgentBranch,
-		svc:          cfg.Svc,
-		ontology:     cfg.Ontology,
-		embedder:     cfg.Embedder,
-		ontologyRoot: cfg.OntologyRoot,
-		hub:          cfg.Hub,
-		startSync:    cfg.StartSync,
-		syncCancel:  func() {},
-		syncWg:      &sync.WaitGroup{},
+		name:                cfg.Name,
+		agentBranch:         cfg.AgentBranch,
+		svc:                 cfg.Svc,
+		ontology:            cfg.Ontology,
+		embedder:            cfg.Embedder,
+		ontologyRoot:        cfg.OntologyRoot,
+		methodologyMinScore: cfg.MethodologyMinScore,
+		hub:                 cfg.Hub,
+		startSync:           cfg.StartSync,
+		syncCancel:          func() {},
+		syncWg:              &sync.WaitGroup{},
 	}
 }

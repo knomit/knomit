@@ -278,7 +278,11 @@ func resolveDeadRefs(ctx context.Context, local *Service, localBranch, content, 
 	}
 
 	f.Refs = newRefs
-	return fact.SerializeFact(f), resolvedCount, droppedCount, nil
+	out, err := fact.SerializeFact(f)
+	if err != nil {
+		return "", 0, 0, fmt.Errorf("resolveDeadRefs: serialize %s: %w", path, err)
+	}
+	return out, resolvedCount, droppedCount, nil
 }
 
 // extractExternalRefsFromHistory looks up the last version of a deleted fact in

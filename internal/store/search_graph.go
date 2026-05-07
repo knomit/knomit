@@ -248,6 +248,41 @@ func (si *searchIndex) graphDeleteFact(ctx context.Context, path, blobHash strin
 	return si.graphDeleteFactTx(ctx, si.rh.db, path, blobHash)
 }
 
+// graphSyncHistoricalFactTx MERGEs a Fact node for an orphaned historical
+// blob version (one that exists in commit_log but not in the current
+// `facts` table — typically because the fact was updated/retracted and
+// GC removed the old row). The node is created with deleted=true and
+// without outgoing TAGGED/IN_DOMAIN/UNDER edges, since those represent
+// "what is currently claimed" relations and don't apply to retired
+// versions. DERIVED_FROM edges are written separately by Phase B of
+// rebuildGraph using this node as the source endpoint.
+//
+// This is what makes the temporal graph honest: every (path, blob_hash)
+// ever indexed retains a node forever, so historical DERIVED_FROM edges
+// can be walked end-to-end. Without it, lineage queries silently break
+// at GC'd boundaries.
+func (si *searchIndex) graphSyncHistoricalFactTx(ctx context.Context, tx execer, rec FactRecord) error {
+	path := escapeCypherKey(rec.Path)
+	bh := escapeCypherKey(rec.BlobHash)
+	title := escapeCypherVal(rec.Title)
+
+	// MERGE the node keyed by (path, blob_hash) and set its frozen-in-time
+	// properties + deleted=true. If the node already exists (e.g. from a
+	// prior live indexing of this blob version that was later soft-deleted),
+	// MERGE is a no-op for the node and SET overwrites the props with the
+	// historical values; deleted stays true.
+	q := fmt.Sprintf(`SELECT cypher('MERGE (f:%s {path: "%s", blob_hash: "%s"})')`, NodeFact, path, bh)
+	if _, err := tx.Exec(q); err != nil {
+		return fmt.Errorf("graph merge historical fact: %w", err)
+	}
+	q = fmt.Sprintf(`SELECT cypher('MATCH (f:%s {path: "%s"}) WHERE f.blob_hash = "%s" SET f.title = "%s", f.user_id = "%s", f.confidence = %f, f.sources = %d, f.deleted = true, f.type = "%s"')`,
+		NodeFact, path, bh, title, path, rec.Confidence, rec.Sources, escapeCypherVal(rec.Type))
+	if _, err := tx.Exec(q); err != nil {
+		return fmt.Errorf("graph set historical fact props: %w", err)
+	}
+	return nil
+}
+
 func (si *searchIndex) graphDeleteFactTx(ctx context.Context, tx execer, path, blobHash string) error {
 	p := escapeCypherKey(path)
 	bh := escapeCypherKey(blobHash)

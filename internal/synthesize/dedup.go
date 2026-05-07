@@ -214,7 +214,10 @@ func dedupCluster(
 		fullWinner.Refs = mergedRefs
 
 		// Serialize and write the winner back to git.
-		newContent := fact.SerializeFact(fullWinner)
+		newContent, err := fact.SerializeFact(fullWinner)
+		if err != nil {
+			return nil, fmt.Errorf("dedupCluster: serialize winner %q: %w", winnerFact.File, err)
+		}
 		if _, err := gs.WriteFact(ctx, agentBranch, winnerFact.File, newContent, fmt.Sprintf("dedup: merge %s into %s [%s]", loserFact.File, winnerFact.File, recipeName), "subsume"); err != nil {
 			return nil, fmt.Errorf("dedupCluster: write winner %q: %w", winnerFact.File, err)
 		}

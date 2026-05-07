@@ -8,6 +8,7 @@ import (
 	"time"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
+	"github.com/rs/zerolog/log"
 
 	"knomit/internal/fact"
 	"knomit/internal/repos"
@@ -38,7 +39,7 @@ type HypothesizeProgress struct {
 // hypothesizeTool returns the Tool definition for knomit_hypothesize.
 func hypothesizeTool() mcpgo.Tool {
 	return mcpgo.NewTool("knomit_hypothesize",
-		mcpgo.WithDescription("Generate hypotheses from synthesis facts. Call with no arguments to start a new session. Call with session_id to continue processing the next fact."),
+		mcpgo.WithDescription("Generate NEW hypothesis facts from synthesis facts on the agent branch. This is a distinct operation from knomit_review — only invoke when the user has explicitly asked to hypothesize, generate predictions, or extend synthesis facts forward. Do NOT invoke as a follow-up to knomit_review or other maintenance tools without an explicit user request. Each work item presents one synthesis fact; the agent decides per-item whether to write a hypothesis (skipping is the expected outcome for most synth facts — see workflow). Call with no arguments to start a new session. Call with session_id to continue processing the next fact."),
 		mcpgo.WithString("session_id", mcpgo.Description("Session ID from a previous call. Omit to start a new session.")),
 		mcpgo.WithString("response", mcpgo.Description("Your response/acknowledgement for the previous work item.")),
 	)
@@ -53,8 +54,6 @@ func HypothesizeHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.C
 		ri := repos.RepoFromContext(ctx)
 		s := storeIndices(ri)
 		agentBranch := ri.AgentBranch()
-		ontologyRoot := ri.OntologyRoot()
-
 		sessionID := req.GetString("session_id", "")
 		response := req.GetString("response", "")
 
@@ -62,9 +61,9 @@ func HypothesizeHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.C
 		var err error
 
 		if sessionID == "" {
-			result, err = hypothesizeStart(ctx, s, ontologyRoot, agentBranch)
+			result, err = hypothesizeStart(ctx, ri, s, agentBranch)
 		} else {
-			result, err = hypothesizeContinue(ctx, s, ontologyRoot, agentBranch, sessionID, response)
+			result, err = hypothesizeContinue(ctx, ri, s, agentBranch, sessionID, response)
 		}
 
 		if err != nil {
@@ -77,7 +76,7 @@ func HypothesizeHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.C
 }
 
 // hypothesizeStart creates a new session, finds synthesis facts, and returns the first item.
-func hypothesizeStart(ctx context.Context, s mcpStore, ontologyRoot, agentBranch string) (*HypothesizeResult, error) {
+func hypothesizeStart(ctx context.Context, ri *repos.RepoInstance, s mcpStore, agentBranch string) (*HypothesizeResult, error) {
 	branch := agentBranch
 
 	// Get watermark.
@@ -163,11 +162,11 @@ func hypothesizeStart(ctx context.Context, s mcpStore, ontologyRoot, agentBranch
 		}
 	}
 
-	return hypothesizeNextItem(ctx, s, ontologyRoot, agentBranch, sess.ID)
+	return hypothesizeNextItem(ctx, ri, s, agentBranch, sess.ID)
 }
 
 // hypothesizeContinue acknowledges the current work item and advances to the next.
-func hypothesizeContinue(ctx context.Context, s mcpStore, ontologyRoot, agentBranch, sessionID, response string) (*HypothesizeResult, error) {
+func hypothesizeContinue(ctx context.Context, ri *repos.RepoInstance, s mcpStore, agentBranch, sessionID, response string) (*HypothesizeResult, error) {
 	// Verify session exists and is active.
 	sess, err := s.pipeline.GetPipelineSession(ctx, sessionID)
 	if err != nil {
@@ -195,11 +194,11 @@ func hypothesizeContinue(ctx context.Context, s mcpStore, ontologyRoot, agentBra
 		}
 	}
 
-	return hypothesizeNextItem(ctx, s, ontologyRoot, agentBranch, sessionID)
+	return hypothesizeNextItem(ctx, ri, s, agentBranch, sessionID)
 }
 
 // hypothesizeNextItem fetches the next unanswered work item or completes the session.
-func hypothesizeNextItem(ctx context.Context, s mcpStore, ontologyRoot, agentBranch, sessionID string) (*HypothesizeResult, error) {
+func hypothesizeNextItem(ctx context.Context, ri *repos.RepoInstance, s mcpStore, agentBranch, sessionID string) (*HypothesizeResult, error) {
 	item, err := s.pipeline.NextPipelineWorkItem(ctx, sessionID)
 	if err != nil {
 		return nil, fmt.Errorf("next item: %w", err)
@@ -219,8 +218,13 @@ func hypothesizeNextItem(ctx context.Context, s mcpStore, ontologyRoot, agentBra
 		}, nil
 	}
 
-	// Build instructions.
-	instructions := buildHypothesizeInstructions(ontologyRoot)
+	// Extract the synthesis fact's path from the work-item JSON so we can
+	// query relevant methodology for it.
+	var synthFact fact.Fact
+	if err := json.Unmarshal([]byte(item.FactsJSON), &synthFact); err != nil {
+		log.Warn().Err(err).Msg("hypothesize: unmarshal synth fact failed; methodology section will be empty")
+	}
+	instructions := buildHypothesizeInstructions(ctx, ri, agentBranch, synthFact.Path())
 
 	completed, remaining, _ := s.pipeline.PipelineWorkItemStats(ctx, sessionID)
 
@@ -239,13 +243,94 @@ func hypothesizeNextItem(ctx context.Context, s mcpStore, ontologyRoot, agentBra
 	}, nil
 }
 
-// buildHypothesizeInstructions returns the step-by-step instructions for the agent.
-func buildHypothesizeInstructions(ontologyRoot string) string {
-	return fmt.Sprintf(`1. Query %s/meta/reasoning/ with domain/entity filters from the synthesis fact for applicable methodology
-2. Call knomit_explain on the synthesis fact to trace its provenance
-3. Gather additional evidence as needed using knomit_query
-4. Decide if a hypothesis is warranted based on the evidence
-5. If yes, call knomit_learn with type: hypothesis, including: hypothesis statement, evidence chain, reasoning step, known gaps, falsification condition
-6. After writing the hypothesis, call knomit_learn with type: methodology, topic: "meta", category: "reasoning" to record the reasoning process used — what worked, what evidence was decisive, which patterns applied, and any pitfalls encountered
-7. Call knomit_hypothesize with session_id to continue to the next synthesis fact`, ontologyRoot)
+// buildHypothesizeInstructions returns the step-by-step instructions for the
+// agent. When relevant methodology exists on the branch, it is rendered as
+// the FIRST thing the LLM sees so it lands in working context as input,
+// not as an appendix the model can skim past after committing to a plan.
+//
+// branch is required and must be the same branch the synthesis fact lives
+// on; it is not derived from ri.AgentBranch() so the caller cannot
+// silently retrieve from the wrong branch.
+func buildHypothesizeInstructions(ctx context.Context, ri *repos.RepoInstance, branch, synthPath string) string {
+	section := loadMethodologySection(ctx, ri, branch, synthPath)
+
+	if section == "" {
+		// No methodology on branch — simpler workflow with no fetch step.
+		return `WORKFLOW (do not skip steps):
+
+1. Call knomit_explain on the synthesis fact to trace its provenance.
+2. Gather evidence as needed via knomit_query.
+3. Decide whether a hypothesis is warranted. Default to NO. Write one ONLY if ALL of these hold:
+   (a) Forward-looking: the hypothesis predicts or causally claims something beyond what the synth fact already establishes. Restating the synth fact is not a hypothesis.
+   (b) Falsifiable: you can state a concrete settlement criterion (date, threshold, or observable). "Trends will continue" does not qualify.
+   (c) Load-bearing gap: there is a specific piece of evidence whose discovery would meaningfully shift the hypothesis's confidence.
+   (d) Not duplicative: no existing hypothesis on this branch already makes substantively the same prediction. If unsure, briefly check via knomit_query.
+   If any condition fails, skip — proceed directly to step 6. Skipping is the expected outcome for most synth facts.
+4. If you decided yes in step 3: call knomit_learn with type: hypothesis. The refs array MUST include the synthesis fact's path AND every source fact you cite as evidence. An empty refs array indicates you did not engage with the inputs — do not submit.
+5. If you wrote a hypothesis in step 4: call knomit_learn with type: methodology, topic: "meta", category: "reasoning" to record the reasoning process you used. Set the methodology's domain and entities to the union of the source synthesis fact's tags plus the standard markers (meta, reasoning, methodology).
+6. Call knomit_hypothesize with session_id to continue to the next synthesis fact.`
+	}
+
+	return section + `
+
+WORKFLOW (do not skip steps):
+
+1. Call knomit_explain on the synthesis fact to trace its provenance.
+2. For EVERY methodology candidate above with score ≥ 0.50, call knomit_query on its path and read the body. Decide whether it applies to your reasoning here. Titles alone are not enough to judge applicability — do not skip candidates above the threshold.
+3. Gather additional evidence as needed via knomit_query.
+4. Decide whether a hypothesis is warranted. Default to NO. Write one ONLY if ALL of these hold:
+   (a) Forward-looking: the hypothesis predicts or causally claims something beyond what the synth fact already establishes. Restating the synth fact is not a hypothesis.
+   (b) Falsifiable: you can state a concrete settlement criterion (date, threshold, or observable). "Trends will continue" does not qualify.
+   (c) Load-bearing gap: there is a specific piece of evidence whose discovery would meaningfully shift the hypothesis's confidence.
+   (d) Not duplicative: no existing hypothesis on this branch already makes substantively the same prediction. If unsure, briefly check via knomit_query.
+   If any condition fails, skip — proceed directly to step 7. Skipping is the expected outcome for most synth facts.
+5. If you decided yes in step 4: call knomit_learn with type: hypothesis. The refs array MUST include:
+   - the synthesis fact's path
+   - every source fact you cite as evidence
+   - every methodology from step 2 that shaped your reasoning
+   An empty refs array indicates you did not engage with the inputs — do not submit.
+6. If you wrote a hypothesis in step 5: only call knomit_learn with type: methodology if your reasoning is GENUINELY novel. If a methodology you read in step 2 already captures the same lesson, skip the new methodology fact — adding a near-duplicate pollutes the methodology pool and dilutes future retrieval. When you do write one, set domain and entities to the union of the source synthesis fact's tags plus the standard markers (meta, reasoning, methodology).
+7. Call knomit_hypothesize with session_id to continue to the next synthesis fact.`
+}
+
+// loadMethodologySection queries the branch's methodology for the given
+// synthesis fact and renders it as a prompt-ready section. Returns "" when
+// no methodology is relevant or any lookup fails — failures are logged.
+//
+// branch is required (no implicit AgentBranch fallback): callers must
+// pass the branch the synth fact was fetched from so retrieval lands on
+// the same branch.
+func loadMethodologySection(ctx context.Context, ri *repos.RepoInstance, branch, synthPath string) string {
+	var matches []store.MethodologyMatch
+	ri.WithRead(func(svc *store.Service) {
+		if svc == nil {
+			log.Error().Str("branch", branch).Str("synth_path", synthPath).
+				Msg("hypothesize: nil store service; methodology disabled")
+			return
+		}
+		f, err := svc.Search().GetByPath(ctx, branch, synthPath)
+		if err != nil {
+			log.Warn().Err(err).Str("branch", branch).Str("synth_path", synthPath).
+				Msg("hypothesize: synth fact lookup failed; methodology section skipped")
+			return
+		}
+		if f == nil {
+			return
+		}
+		var mErr error
+		matches, mErr = svc.Search().RelevantMethodologyForFact(
+			ctx, branch,
+			f.Path, f.Domain, f.Entities,
+			3, ri.MethodologyMinScore(),
+		)
+		if mErr != nil {
+			log.Warn().Err(mErr).Str("branch", branch).Str("synth_path", synthPath).
+				Msg("hypothesize: methodology retrieval failed; continuing without section")
+		}
+	})
+	bullets := store.FormatMethodologySection(matches)
+	if bullets == "" {
+		return ""
+	}
+	return "Applicable methodology candidates (ranked; you must process the ≥0.50 ones per workflow step 2):\n\n" + bullets
 }

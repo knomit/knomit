@@ -2,11 +2,48 @@ The following hypothesis transitions occurred during this review session:
 
 {{.Facts}}
 
-For each transition, consider:
-- What reasoning led to this hypothesis being created?
-- Was the prediction well-formed? What made it succeed or fail?
-- Is there a reusable lesson about the reasoning process itself?
+Your job is to identify which methodologies (reasoning-process patterns)
+those transitions reinforce or expose as gaps. The default action is
+**reinforce** — most reflections should bind transitions to existing
+methodologies. Proposing a new methodology is rare and the server rejects
+proposals too similar to anything already in the corpus.
 
-If you identify reusable methodology lessons, describe them. Each methodology fact should be a concise statement about reasoning process, not domain content. Call knomit_learn with type: methodology, topic: "meta", category: "reasoning" for each lesson.
+{{if .ExistingMethodology}}Existing methodology candidates (the retrieval
+system thinks these may overlap with the lesson):
 
-Respond with JSON matching the response schema.
+{{.ExistingMethodology}}
+
+For EVERY candidate above with score ≥ 0.50, call knomit_query on its path
+and read the body BEFORE deciding it doesn't fit. Titles alone are not
+enough.
+
+{{end}}Decide for each transition (or group of transitions):
+
+  - If an existing methodology already captures the lesson → put it under
+    `reinforce`. This is the expected outcome for most sessions. List the
+    transitions it explains and a one-line rationale.
+
+  - If the lesson is genuinely new and no candidate above fits → you may
+    propose ONE new methodology under `propose`. You must include a
+    `novelty_argument` explaining why each existing candidate fails to
+    capture this lesson; "I didn't see one" is not sufficient.
+
+  - If you looked and found no methodology lessons at all → return both
+    arrays empty. This is also a valid outcome.
+
+For propose entries, the server enforces:
+  - At most 1 entry per response.
+  - Server stamps `type: methodology` regardless of agent input.
+  - `topic_path` is a directory under {{.OntologyRoot}} (e.g.
+    "meta/reasoning"); the server appends a UUID filename.
+  - The server runs an embedding-similarity check against the existing
+    methodology corpus. If your proposed body is too close to any
+    methodology already on file (cosine ≥ 0.85), the response is rejected
+    and you should reinforce that methodology instead.
+
+For reinforce entries, the `methodology_path` must reference a real fact
+of `type: methodology` on this branch, and every path in
+`transition_paths` must be drawn from the transitions listed above.
+
+Respond with a single JSON object matching the response schema. The
+server applies the response — do NOT call knomit_learn yourself.

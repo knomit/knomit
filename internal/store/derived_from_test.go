@@ -71,7 +71,11 @@ func testFactBody(title string, conf float64, refs []string) string {
 	f.Sources = 1
 	f.Domain = []string{"test"}
 	f.Refs = refs
-	return fact.SerializeFact(f)
+	out, err := fact.SerializeFact(f)
+	if err != nil {
+		panic(err)
+	}
+	return out
 }
 
 // TestGraphAddDerivedFromAtCommitTx_WritesEdgeWithBothCommits verifies that a
