@@ -6,10 +6,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
 	"knomit/internal/config"
+	"knomit/internal/fact"
 	"knomit/internal/repos"
 	"knomit/internal/store"
 	"knomit/internal/web/hal"
@@ -155,19 +157,27 @@ func TestHandleHALRepos_EmptyManagerReturnsEmptyCollection(t *testing.T) {
 	}
 }
 
-// initRepoFile creates a fully-initialised knomit repo .db at
-// <home>/repos/<name>.db without going through app.InitRepo (which would
-// introduce an import cycle because internal/app imports internal/web).
+// initRepoFile creates a new repo .db file under <home>/repos/<name>.db.
+// Mirrors the relevant parts of app.InitRepo without importing internal/app
+// (which would create a cycle through the MCP/web layer). The default
+// ontology is committed so Manager.Add doesn't emit a "not found" warning.
 func initRepoFile(t *testing.T, home, name string) {
 	t.Helper()
 	dbPath := filepath.Join(home, "repos", name+".db")
 	svc, err := store.Open(dbPath)
 	if err != nil {
-		t.Fatalf("store.Open(%s): %v", dbPath, err)
+		t.Fatalf("store.Open: %v", err)
 	}
 	defer svc.Close()
-	if err := svc.InitRepo(nil, "machine/test"); err != nil {
-		t.Fatalf("store.InitRepo(%s): %v", name, err)
+
+	ontologyYAML, err := fact.DefaultOntology().Serialize()
+	if err != nil {
+		t.Fatalf("serialize ontology: %v", err)
+	}
+	if err := svc.InitRepo(map[string]string{
+		"domains/ontology.yaml": string(ontologyYAML),
+	}, "machine/test"); err != nil {
+		t.Fatalf("svc.InitRepo: %v", err)
 	}
 }
 
@@ -175,7 +185,10 @@ func TestHandleReposRescan_ReturnsAddedAndSkipped(t *testing.T) {
 	// Bootstrap a real manager so Rescan has a directory to scan.
 	home := t.TempDir()
 	m := repos.New(context.Background(), repos.Deps{
-		Cfg:                   config.Config{Home: home},
+		Cfg: config.Config{
+			Home:         home,
+			ClusterCache: config.ClusterCacheConfig{CheckInterval: "0"},
+		},
 		AgentBranch:           "machine/test",
 		DisableBackgroundSync: true,
 	})
@@ -214,14 +227,20 @@ func TestHandleReposRescan_ReturnsAddedAndSkipped(t *testing.T) {
 		t.Fatalf("unmarshal: %v", err)
 	}
 
-	if !contains(body.Added, "work") {
+	if !slices.Contains(body.Added, "work") {
 		t.Errorf("added: %v, want to contain 'work'", body.Added)
 	}
-	if !contains(body.Skipped, "knomit") {
+	if !slices.Contains(body.Skipped, "knomit") {
 		t.Errorf("skipped: %v, want to contain 'knomit'", body.Skipped)
 	}
 	if len(body.Errors) != 0 {
 		t.Errorf("errors: %v, want empty", body.Errors)
+	}
+	if slices.Contains(body.Added, "knomit") {
+		t.Errorf("knomit must not appear in Added (it was pre-existing)")
+	}
+	if slices.Contains(body.Skipped, "work") {
+		t.Errorf("work must not appear in Skipped (it was newly created)")
 	}
 	if _, ok := body.Links["self"]; !ok {
 		t.Error("missing self link")
@@ -234,7 +253,10 @@ func TestHandleReposRescan_ReturnsAddedAndSkipped(t *testing.T) {
 func TestHandleReposRescan_EmptyArraysSerializeAsArray(t *testing.T) {
 	home := t.TempDir()
 	m := repos.New(context.Background(), repos.Deps{
-		Cfg:                   config.Config{Home: home},
+		Cfg: config.Config{
+			Home:         home,
+			ClusterCache: config.ClusterCacheConfig{CheckInterval: "0"},
+		},
 		AgentBranch:           "machine/test",
 		DisableBackgroundSync: true,
 	})
@@ -290,15 +312,4 @@ func TestHandleHALRepos_IncludesRescanLink(t *testing.T) {
 	if rescan.Href != "/api/v1/repos:rescan" {
 		t.Errorf("rescan href: got %q, want /api/v1/repos:rescan", rescan.Href)
 	}
-}
-
-// contains reports whether haystack contains needle. Local helper —
-// avoids a dependency on slices.Contains.
-func contains(haystack []string, needle string) bool {
-	for _, s := range haystack {
-		if s == needle {
-			return true
-		}
-	}
-	return false
 }
