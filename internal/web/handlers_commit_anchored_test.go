@@ -143,7 +143,7 @@ func TestHandleCommitAnchoredFact_NotFound(t *testing.T) {
 func TestHandleCommitAnchoredOutgoing_ReturnsCollection(t *testing.T) {
 	provider := &stubFactSubProvider{
 		outgoing: []store.RefSummary{
-			{Path: "know/b.md", Title: "Fact B", Commit: "abc123"},
+			{Path: "know/b.md", Title: "Fact B", Type: "synthesis", Commit: "abc123"},
 		},
 	}
 	s := &Server{
@@ -172,6 +172,7 @@ func TestHandleCommitAnchoredOutgoing_ReturnsCollection(t *testing.T) {
 		Embedded struct {
 			Refs []struct {
 				Path  string      `json:"path"`
+				Type  string      `json:"type"`
 				Links hal.LinkMap `json:"_links"`
 			} `json:"refs"`
 		} `json:"_embedded"`
@@ -192,11 +193,15 @@ func TestHandleCommitAnchoredOutgoing_ReturnsCollection(t *testing.T) {
 	}
 
 	// Each ref item's self link should also be commit-anchored.
-	if len(body.Embedded.Refs) > 0 {
-		refSelf := body.Embedded.Refs[0].Links["self"].Href
-		if !strings.Contains(refSelf, "/commits/abc123/") {
-			t.Errorf("ref self href %q should contain /commits/abc123/", refSelf)
-		}
+	if len(body.Embedded.Refs) != 1 {
+		t.Fatalf("refs: %d, want 1", len(body.Embedded.Refs))
+	}
+	refSelf := body.Embedded.Refs[0].Links["self"].Href
+	if !strings.Contains(refSelf, "/commits/abc123/") {
+		t.Errorf("ref self href %q should contain /commits/abc123/", refSelf)
+	}
+	if body.Embedded.Refs[0].Type != "synthesis" {
+		t.Errorf("ref[0].type: %q, want \"synthesis\"", body.Embedded.Refs[0].Type)
 	}
 }
 

@@ -112,6 +112,7 @@ type commitEntry struct {
 type graphRefEntry struct {
 	Path        string      `json:"path"`
 	Title       string      `json:"title"`
+	Type        string      `json:"type,omitempty"`
 	Commit      string      `json:"commit,omitempty"`
 	CommittedAt int64       `json:"committed_at,omitempty"`
 	Deleted     bool        `json:"deleted,omitempty"`
@@ -259,6 +260,7 @@ func buildGraphRefItems(b hal.URLBuilder, repoName string, a hal.Anchor, refs []
 		item := graphRefEntry{
 			Path:        ref.Path,
 			Title:       ref.Title,
+			Type:        ref.Type,
 			Commit:      ref.Commit,
 			CommittedAt: ref.CommittedAt,
 			Deleted:     ref.Deleted,
