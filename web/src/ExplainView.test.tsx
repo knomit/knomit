@@ -197,3 +197,45 @@ describe('ExplainView Chip — type-aware styling', () => {
     expect(screen.queryByText(/commit_at_/)).toBeNull();
   });
 });
+
+describe('ExplainView header strips', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    (api.fact as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(baseFact);
+  });
+
+  it('outgoing header shows total, per-type breakdown, and retracted count', async () => {
+    (api.explain as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+      incoming: [],
+      outgoing: [
+        makeGroup({ path: 'kb/p1.md', title: 'P1', type: 'principle', versions: [{ commit: 'a1234567', committed_at: 1, type: 'principle' }] }),
+        makeGroup({ path: 'kb/p2.md', title: 'P2', type: 'principle', versions: [{ commit: 'b2345678', committed_at: 1, type: 'principle' }] }),
+        makeGroup({ path: 'kb/c1.md', title: 'C1', type: 'concept',   versions: [{ commit: 'c3456789', committed_at: 1, type: 'concept' }] }),
+        makeGroup({ path: 'kb/d1.md', title: 'D1', type: 'concept',   deleted: true, versions: [{ commit: 'd4567890', committed_at: 1, type: 'concept', deleted: true }] }),
+      ],
+    });
+    render(<ExplainView repo="r" branch="b" initialEntry={{ path: 'kb/x.md', commit: null }} onClose={() => {}} />);
+
+    const header = await screen.findByTestId('outgoing-header');
+    expect(header).toHaveTextContent('OUT-EDGES');
+    expect(header).toHaveTextContent('REFERENCES 4');
+    expect(header).toHaveTextContent(/principle\s*2/i);
+    expect(header).toHaveTextContent(/concept\s*2/i);
+    expect(header).toHaveTextContent('1 retracted');
+  });
+
+  it('incoming header shows IN-EDGES · REFERENCED BY <total>', async () => {
+    (api.explain as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+      incoming: [
+        makeGroup({ path: 'kb/h.md', title: 'H', type: 'hypothesis', versions: [{ commit: 'a1', committed_at: 1, type: 'hypothesis' }] }),
+      ],
+      outgoing: [],
+    });
+    render(<ExplainView repo="r" branch="b" initialEntry={{ path: 'kb/x.md', commit: null }} onClose={() => {}} />);
+
+    const header = await screen.findByTestId('incoming-header');
+    expect(header).toHaveTextContent('IN-EDGES');
+    expect(header).toHaveTextContent('REFERENCED BY 1');
+    expect(header).toHaveTextContent(/hypothesis\s*1/i);
+  });
+});

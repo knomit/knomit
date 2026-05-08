@@ -72,12 +72,14 @@ export function ExplainView({ repo, branch, initialEntry, onClose }: Props) {
 
       {/* Incoming refs strip */}
       {current.commit === null && (
-        <div style={{ flexShrink: 0, borderBottom: '1px solid #1a1a1a', padding: '6px 12px', background: '#0d0d0d', minHeight: 38, display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
-          <span style={{ fontSize: 9, color: '#3a3a3a', textTransform: 'uppercase', letterSpacing: '0.08em', marginRight: 4 }}>↙ Referenced by</span>
-          {incoming.length === 0 && !loading && <span style={{ fontSize: 11, color: '#2a2a2a' }}>none</span>}
-          {incoming.map(g => (
-            <Chip key={g.path} group={g} onClick={commit => navigateTo({ path: g.path, commit })} />
-          ))}
+        <div style={{ flexShrink: 0, borderBottom: '1px solid #1a1a1a', background: '#0d0d0d' }}>
+          <RailHeader direction="in" groups={incoming} testId="incoming-header" />
+          <div style={{ padding: '6px 12px', minHeight: 38, display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
+            {incoming.length === 0 && !loading && <span style={{ fontSize: 11, color: '#2a2a2a' }}>none</span>}
+            {incoming.map(g => (
+              <Chip key={g.path} group={g} onClick={commit => navigateTo({ path: g.path, commit })} />
+            ))}
+          </div>
         </div>
       )}
 
@@ -95,17 +97,65 @@ export function ExplainView({ repo, branch, initialEntry, onClose }: Props) {
       </div>
 
       {/* Outgoing refs strip */}
-      <div style={{ flexShrink: 0, borderTop: '1px solid #1a1a1a', padding: '6px 12px', background: '#0d0d0d', minHeight: 38, display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
-        <span style={{ fontSize: 9, color: '#3a3a3a', textTransform: 'uppercase', letterSpacing: '0.08em', marginRight: 4 }}>↗ References</span>
-        {outgoing.length === 0 && !loading && <span style={{ fontSize: 11, color: '#2a2a2a' }}>none</span>}
-        {outgoing.map(g => (
-          <Chip
-            key={g.path}
-            group={g}
-            onClick={commit => navigateTo({ path: g.path, commit: g.deleted ? commit : null })}
-          />
-        ))}
+      <div style={{ flexShrink: 0, borderTop: '1px solid #1a1a1a', background: '#0d0d0d' }}>
+        <RailHeader direction="out" groups={outgoing} testId="outgoing-header" />
+        <div style={{ padding: '6px 12px', minHeight: 38, display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
+          {outgoing.length === 0 && !loading && <span style={{ fontSize: 11, color: '#2a2a2a' }}>none</span>}
+          {outgoing.map(g => (
+            <Chip
+              key={g.path}
+              group={g}
+              onClick={commit => navigateTo({ path: g.path, commit: g.deleted ? commit : null })}
+            />
+          ))}
+        </div>
       </div>
+    </div>
+  );
+}
+
+function RailHeader({ direction, groups, testId }: {
+  direction: 'in' | 'out';
+  groups: RefGroup[];
+  testId: string;
+}) {
+  const total = groups.length;
+  const retracted = groups.filter(g => g.deleted).length;
+
+  // Per-type breakdown, ordered by descending count, ties broken by name.
+  const counts = new Map<string, number>();
+  for (const g of groups) {
+    const t = g.type ?? g.versions[0]?.type;
+    if (!t) continue;
+    counts.set(t, (counts.get(t) ?? 0) + 1);
+  }
+  const breakdown = [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+
+  const arrow = direction === 'in' ? '↙' : '↗';
+  const sectionLabel = direction === 'in' ? 'IN-EDGES · REFERENCED BY' : 'OUT-EDGES · REFERENCES';
+
+  return (
+    <div data-testid={testId} style={{
+      display: 'flex', alignItems: 'center', gap: 10, padding: '6px 12px',
+      background: '#0d0d0d',
+      fontSize: 10, color: '#3a3a3a', textTransform: 'uppercase', letterSpacing: '0.08em',
+      flexShrink: 0,
+    }}>
+      <span style={{ color: '#888' }}>{arrow} {sectionLabel} <span style={{ color: '#ccc' }}>{total}</span></span>
+      <span style={{ display: 'flex', gap: 8, alignItems: 'center', flex: 1, overflow: 'hidden', flexWrap: 'wrap' }}>
+        {breakdown.map(([t, n]) => {
+          const ts = typeStyles[t];
+          if (!ts) return null;
+          return (
+            <span key={t} style={{ color: ts.color, fontFamily: 'monospace', textTransform: 'lowercase' }}>
+              {t} <span style={{ color: '#aaa' }}>{n}</span>
+            </span>
+          );
+        })}
+      </span>
+      {retracted > 0 && (
+        <span style={{ color: '#f88', fontFamily: 'monospace' }}>{retracted} retracted</span>
+      )}
     </div>
   );
 }
