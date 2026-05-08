@@ -24,11 +24,11 @@ func (si *searchIndex) IncomingAtCommit(ctx context.Context, branch, path, commi
 	// 1. Cypher: candidate (source_path, source_title, source_commit) rows.
 	// Note: "commit" is a reserved SQL keyword; use alias "sc" (source commit).
 	cypherQ := fmt.Sprintf(
-		`MATCH (s:%s)-[r:%s]->(t:%s {path: "%s"}) WHERE r.target_commit = "%s" AND NOT s.deleted = true RETURN s.path AS path, s.title AS title, r.source_commit AS sc`,
+		`MATCH (s:%s)-[r:%s]->(t:%s {path: "%s"}) WHERE r.target_commit = "%s" AND NOT s.deleted = true RETURN s.path AS path, s.title AS title, s.type AS type, r.source_commit AS sc`,
 		NodeFact, EdgeDerivedFrom, NodeFact,
 		escapeCypherKey(path), escapeCypherKey(commitHash),
 	)
-	q := `SELECT json_extract(value, '$.path'), json_extract(value, '$.title'), json_extract(value, '$.sc') FROM json_each(cypher('` + cypherQ + `'))`
+	q := `SELECT json_extract(value, '$.path'), json_extract(value, '$.title'), json_extract(value, '$.type'), json_extract(value, '$.sc') FROM json_each(cypher('` + cypherQ + `'))`
 	rows, err := conn(ctx, si.rh.db).QueryContext(ctx, q)
 	if err != nil {
 		return nil, fmt.Errorf("IncomingAtCommit: cypher: %w", err)
@@ -38,7 +38,7 @@ func (si *searchIndex) IncomingAtCommit(ctx context.Context, branch, path, commi
 	var candidates []RefSummary
 	for rows.Next() {
 		var rs RefSummary
-		if err := rows.Scan(&rs.Path, &rs.Title, &rs.Commit); err != nil {
+		if err := rows.Scan(&rs.Path, &rs.Title, &rs.Type, &rs.Commit); err != nil {
 			return nil, fmt.Errorf("IncomingAtCommit: scan: %w", err)
 		}
 		if rs.Path == "" {

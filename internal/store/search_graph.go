@@ -15,7 +15,8 @@ import (
 type RefSummary struct {
 	Path        string `json:"path"`
 	Title       string `json:"title"`
-	Commit      string `json:"commit,omitempty"` // source_commit for incoming, target_commit for outgoing
+	Type        string `json:"type,omitempty"`         // epistemic type of the source (incoming) or target (outgoing) fact
+	Commit      string `json:"commit,omitempty"`       // source_commit for incoming, target_commit for outgoing
 	Deleted     bool   `json:"deleted,omitempty"`
 	CommittedAt int64  `json:"committed_at,omitempty"` // Unix seconds; 0 if commit_log row missing
 }

@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"knomit/internal/fact"
 )
 
 // TestIncomingAtCommit_TwoSourceVersions: spec test scenario 1.
@@ -103,6 +105,40 @@ func refSummaryPaths(rs []RefSummary) []string {
 		out[i] = r.Path
 	}
 	return out
+}
+
+// TestIncomingAtCommit_PopulatesType verifies the type of the source fact is
+// returned on each RefSummary so the UI can color-code chips by epistemic type.
+func TestIncomingAtCommit_PopulatesType(t *testing.T) {
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	defer svc.Close()
+	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+
+	ctx := context.Background()
+	branch := "main"
+
+	c0Res, err := svc.Facts().WriteFact(ctx, branch, "kb/e.md",
+		testFactBodyWithType("e", 0.9, nil, fact.Concept), "init e", "")
+	require.NoError(t, err)
+	_, err = svc.Facts().WriteFact(ctx, branch, "kb/p.md",
+		testFactBodyWithType("p", 0.8, []string{"kb/e.md"}, fact.Principle), "p→e", "")
+	require.NoError(t, err)
+	_, err = svc.Facts().WriteFact(ctx, branch, "kb/h.md",
+		testFactBodyWithType("h", 0.7, []string{"kb/e.md"}, fact.Hypothesis), "h→e", "")
+	require.NoError(t, err)
+
+	got, err := svc.Search().IncomingAtCommit(ctx, branch, "kb/e.md", c0Res.CommitHash)
+	require.NoError(t, err)
+	require.Len(t, got, 2)
+
+	byPath := map[string]string{}
+	for _, rs := range got {
+		byPath[rs.Path] = rs.Type
+	}
+	require.Equal(t, string(fact.Principle), byPath["kb/p.md"])
+	require.Equal(t, string(fact.Hypothesis), byPath["kb/h.md"])
 }
 
 // TestExplainFact_RetractedAtHEAD: when the path has been retracted from HEAD
