@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from 'react';
 import type { Dispatch } from 'react';
 import { createPortal } from 'react-dom';
 import type { AppState, Action } from './state';
+import { isReadOnly, READ_ONLY_TITLE } from './state';
 import type { RepoInfo } from './api';
 import { api } from './api';
 import { BookIcon, GitBranchIcon, WrenchIcon, GlobeIcon, MoreVerticalIcon } from './icons';
@@ -40,6 +41,7 @@ export function TopBar({ state, repos, dispatch, onSettingsClick }: Props) {
   };
 
   const rebuilding = state.tasks.rebuild?.status === 'running';
+  const readOnly = isReadOnly(state);
 
   return (
     <div style={{ height: 40, background: '#111', borderBottom: '1px solid #1c1c1c', display: 'flex', alignItems: 'center', padding: '0 14px', gap: 10, flexShrink: 0 }}>
@@ -119,31 +121,43 @@ export function TopBar({ state, repos, dispatch, onSettingsClick }: Props) {
         }}>
           <div
             data-testid="menu-origin"
-            onClick={() => { setMenuOpen(false); onSettingsClick(); }}
+            title={readOnly ? READ_ONLY_TITLE : undefined}
+            aria-disabled={readOnly}
+            onClick={() => {
+              if (readOnly) return;
+              setMenuOpen(false);
+              onSettingsClick();
+            }}
             style={{
               display: 'flex', alignItems: 'center', gap: 8,
-              padding: '6px 12px', cursor: 'pointer', color: '#aaa', fontSize: 12,
+              padding: '6px 12px',
+              cursor: readOnly ? 'not-allowed' : 'pointer',
+              color: readOnly ? '#555' : '#aaa', fontSize: 12,
+              opacity: readOnly ? 0.5 : 1,
             }}
-            onMouseEnter={e => { e.currentTarget.style.background = '#2a2a3a'; e.currentTarget.style.color = '#eee'; }}
-            onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = '#aaa'; }}
+            onMouseEnter={e => { if (!readOnly) { e.currentTarget.style.background = '#2a2a3a'; e.currentTarget.style.color = '#eee'; } }}
+            onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = readOnly ? '#555' : '#aaa'; }}
           >
             <GlobeIcon color="currentColor" size={13} /> Origin
           </div>
           <div
             data-testid="menu-rebuild"
+            title={readOnly ? READ_ONLY_TITLE : undefined}
+            aria-disabled={readOnly || rebuilding}
             onClick={() => {
-              if (!rebuilding) {
-                api.rebuild(state.repo, state.branch);
-                setMenuOpen(false);
-              }
+              if (rebuilding || readOnly) return;
+              api.rebuild(state.repo, state.branch);
+              setMenuOpen(false);
             }}
             style={{
               display: 'flex', alignItems: 'center', gap: 8,
-              padding: '6px 12px', cursor: rebuilding ? 'default' : 'pointer',
-              color: rebuilding ? '#555' : '#aaa', fontSize: 12,
+              padding: '6px 12px',
+              cursor: (rebuilding || readOnly) ? 'not-allowed' : 'pointer',
+              color: (rebuilding || readOnly) ? '#555' : '#aaa', fontSize: 12,
+              opacity: readOnly ? 0.5 : 1,
             }}
-            onMouseEnter={e => { if (!rebuilding) { e.currentTarget.style.background = '#2a2a3a'; e.currentTarget.style.color = '#eee'; } }}
-            onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = rebuilding ? '#555' : '#aaa'; }}
+            onMouseEnter={e => { if (!rebuilding && !readOnly) { e.currentTarget.style.background = '#2a2a3a'; e.currentTarget.style.color = '#eee'; } }}
+            onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = (rebuilding || readOnly) ? '#555' : '#aaa'; }}
           >
             <WrenchIcon color="currentColor" size={13} /> Rebuild
           </div>

@@ -5,7 +5,7 @@ import type { Dispatch } from 'react';
 import { api } from './api';
 import type { DirChild, RecentFactEntry } from './api';
 import type { AppState, Action } from './state';
-import { currentPath } from './state';
+import { currentPath, isLive } from './state';
 import { HistoryTimeline } from './HistoryTimeline';
 import { typeStyles, defaultTypeStyle, relativeTimeEpoch } from './utils';
 import { TypeIcon, FolderIcon } from './icons';
@@ -15,6 +15,26 @@ interface Props {
   state: AppState;
   dispatch: Dispatch<Action>;
   navigate: (req: NavRequest) => void;
+}
+
+// Permanent honesty cue: when the global anchor is not live, surface the fact
+// that tree/chrono views are still HEAD-anchored regardless of the scrub.
+function ReadOnlyBanner({ message, testid }: { message: string; testid: string }) {
+  return (
+    <div
+      data-testid={testid}
+      style={{
+        display: 'flex', justifyContent: 'flex-end',
+        padding: '4px 12px',
+        borderBottom: '1px solid #1a1a1a',
+        background: '#0f0f0f',
+      }}
+    >
+      <span style={{ color: '#e5a23c', fontSize: 10, fontFamily: 'monospace' }}>
+        {message}
+      </span>
+    </div>
+  );
 }
 
 // ---------- TreeView ----------
@@ -137,6 +157,12 @@ function TreeView({ state, dispatch, navigate }: Props) {
 
   return (
     <div data-testid="left-panel" style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
+      {!isLive(state) && (
+        <ReadOnlyBanner
+          testid="tree-readonly-banner"
+          message="Showing live tree · scrubbed views not yet supported by backend"
+        />
+      )}
       <div style={{ flex: 1, overflowY: 'auto' }}>
         {children.map((c, i) => {
           const ts = (c.type && typeStyles[c.type]) || defaultTypeStyle;
@@ -302,6 +328,12 @@ function ChronoView({ state, dispatch, navigate }: Props) {
 
   return (
     <div data-testid="chrono-list" ref={containerRef} style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
+      {!isLive(state) && (
+        <ReadOnlyBanner
+          testid="chrono-readonly-banner"
+          message="Showing live activity · listFacts is HEAD-only"
+        />
+      )}
       <div style={{ flex: 1, overflowY: 'auto', padding: '4px 0' }}>
         {facts.length === 0 && !loading && (
           <EmptyState message={state.freeText ? 'No facts match the search.' : 'No facts in this path.'} />

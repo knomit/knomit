@@ -5,7 +5,7 @@ import ReactMarkdown from 'react-markdown';
 import { api } from './api';
 import type { Fact, Stats, ActivityStats, CommitDetail } from './api';
 import type { AppState, Action } from './state';
-import { currentPath, selectAnchorCommit, isReadOnly } from './state';
+import { currentPath, selectAnchorCommit, isReadOnly, READ_ONLY_TITLE } from './state';
 import { relativeTime, typeStyles, defaultTypeStyle, opStyles, defaultOpStyle } from './utils';
 import { TypeIcon, EpisodeIcon, RetractIcon, ExplainIcon } from './icons';
 import type { NavRequest } from './useNavigationManager';
@@ -77,7 +77,10 @@ function TagCloud({ label, entries, color, onTagClick, focusedValue }: {
   );
 }
 
-function renderFact(fact: Fact, navigate: (req: NavRequest) => void, dispatch: Dispatch<Action>, onRetract?: () => void, onExplain?: () => void) {
+function renderFact(fact: Fact, navigate: (req: NavRequest) => void, dispatch: Dispatch<Action>, onRetract?: () => void, onExplain?: () => void, readOnly = false) {
+  const retractDisabled = readOnly;
+  const retractTitle = retractDisabled ? READ_ONLY_TITLE : 'Retract fact';
+  const retractColor = retractDisabled ? '#444' : '#f66';
   return (
     <div style={{ padding: '24px 28px', overflowY: 'auto', height: '100%', boxSizing: 'border-box' }}>
       <div style={{ marginBottom: 20 }}>
@@ -111,15 +114,18 @@ function renderFact(fact: Fact, navigate: (req: NavRequest) => void, dispatch: D
             {onRetract && (
               <button
                 data-testid="retract-btn"
-                title="Retract fact"
+                title={retractTitle}
+                disabled={retractDisabled}
                 onClick={onRetract}
                 style={{
                   background: 'none', border: 'none', padding: 2,
-                  color: '#f66', cursor: 'pointer', display: 'flex', alignItems: 'center', opacity: 0.6,
+                  color: retractColor, cursor: retractDisabled ? 'not-allowed' : 'pointer',
+                  display: 'flex', alignItems: 'center',
+                  opacity: retractDisabled ? 0.4 : 0.6,
                 }}
-                onMouseEnter={e => { (e.currentTarget as HTMLElement).style.opacity = '1'; }}
-                onMouseLeave={e => { (e.currentTarget as HTMLElement).style.opacity = '0.6'; }}
-              ><RetractIcon color="#f66" size={15} /></button>
+                onMouseEnter={e => { if (!retractDisabled) (e.currentTarget as HTMLElement).style.opacity = '1'; }}
+                onMouseLeave={e => { if (!retractDisabled) (e.currentTarget as HTMLElement).style.opacity = '0.6'; }}
+              ><RetractIcon color={retractColor} size={15} /></button>
             )}
           </span>
         </div>
@@ -196,12 +202,13 @@ function renderFact(fact: Fact, navigate: (req: NavRequest) => void, dispatch: D
   );
 }
 
-function FactEditor({ fact, repo, branch, onSaved }: { fact: Fact; repo: string; branch: string; onSaved: (updated: Fact) => void }) {
+function FactEditor({ fact, repo, branch, readOnly, onSaved }: { fact: Fact; repo: string; branch: string; readOnly: boolean; onSaved: (updated: Fact) => void }) {
   const [raw, setRaw] = useState(fact.body);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
 
   const save = () => {
+    if (readOnly) return;
     setSaving(true);
     setSaveError(null);
     api.updateFact(repo, branch, fact.path, raw)
@@ -231,11 +238,13 @@ function FactEditor({ fact, repo, branch, onSaved }: { fact: Fact; repo: string;
         <button
           data-testid="fact-save-btn"
           onClick={save}
-          disabled={saving}
+          disabled={saving || readOnly}
+          title={readOnly ? READ_ONLY_TITLE : undefined}
           style={{
             background: '#1a2e1a', border: '1px solid rgba(119,204,153,0.35)', color: '#7c9',
-            padding: '6px 16px', borderRadius: 4, cursor: saving ? 'default' : 'pointer',
-            fontSize: 13, opacity: saving ? 0.6 : 1,
+            padding: '6px 16px', borderRadius: 4,
+            cursor: (saving || readOnly) ? 'not-allowed' : 'pointer',
+            fontSize: 13, opacity: (saving || readOnly) ? 0.6 : 1,
           }}
         >{saving ? 'Saving\u2026' : 'Save'}</button>
         {saveError && <span style={{ color: '#f88', fontSize: 12 }}>{saveError}</span>}
@@ -608,9 +617,13 @@ export function RightPanel({ state, dispatch, navigate, onExplain }: {
   // Fact view (normal or time-travel)
   if (!fact) return <div style={{ padding: 24, color: '#666' }}>Loading...</div>;
 
-  if (fact.parse_error) return <FactEditor fact={fact} repo={state.repo} branch={state.branch} onSaved={setFact} />;
+  if (fact.parse_error) return <FactEditor fact={fact} repo={state.repo} branch={state.branch} readOnly={isReadOnly(state)} onSaved={setFact} />;
 
-  const canRetract = state.view !== 'history' && !isReadOnly(state);
+  // Retract button is shown whenever we're not viewing a historical commit pane.
+  // When the global anchor is not live, the button is rendered disabled with a
+  // tooltip so the user sees the action exists but is read-only.
+  const showRetract = state.view !== 'history';
+  const readOnly = isReadOnly(state);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
@@ -623,7 +636,14 @@ export function RightPanel({ state, dispatch, navigate, onExplain }: {
       )}
       {commitPanel}
       <div style={{ flex: 1, overflow: 'auto' }}>
-        {renderFact(fact, navigate, dispatch, canRetract ? () => setConfirmRetract(true) : undefined, canRetract ? () => onExplain?.(fact.path, null) : undefined)}
+        {renderFact(
+          fact,
+          navigate,
+          dispatch,
+          showRetract ? () => { if (!readOnly) setConfirmRetract(true); } : undefined,
+          showRetract ? () => onExplain?.(fact.path, null) : undefined,
+          readOnly,
+        )}
       </div>
     </div>
   );

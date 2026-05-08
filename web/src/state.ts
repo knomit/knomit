@@ -272,3 +272,5 @@ export function isLive(s: AppState): boolean {
 export function isReadOnly(s: AppState): boolean {
   return !isLive(s);
 }
+
+export const READ_ONLY_TITLE = 'Read-only — anchor is not live';

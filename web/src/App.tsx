@@ -1,5 +1,5 @@
 import { useReducer, useEffect, useState } from 'react';
-import { reducer, init } from './state';
+import { reducer, init, isReadOnly } from './state';
 import { api } from './api';
 import { useNavigationManager } from './useNavigationManager';
 import type { RepoInfo } from './api';
@@ -139,7 +139,7 @@ export default function App() {
           <Console state={state} dispatch={dispatch} />
         </>
       )}
-      {showOrigin && <ConnectRemoteModal repo={state.repo} onClose={() => setShowOrigin(false)} />}
+      {showOrigin && !isReadOnly(state) && <ConnectRemoteModal repo={state.repo} onClose={() => setShowOrigin(false)} />}
     </div>
   );
 }

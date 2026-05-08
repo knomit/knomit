@@ -1,0 +1,69 @@
+import { describe, it, expect, vi } from 'vitest';
+import { render, screen, waitFor } from '@testing-library/react';
+import { RightPanel } from './RightPanel';
+import { init, READ_ONLY_TITLE } from './state';
+import type { AppState, AsOf } from './state';
+
+vi.mock('./api', () => ({
+  api: {
+    fact: vi.fn().mockResolvedValue({
+      path: 'kb/test/foo.md',
+      title: 'Foo',
+      body: 'body',
+      type: 'observation',
+      confidence: 0.9,
+      sources: 1,
+      domain: [],
+      entities: [],
+      refs: [],
+      commit_hash: 'aaa1111',
+      commit_date: '2026-05-01T00:00:00Z',
+    }),
+    stats: vi.fn().mockResolvedValue(null),
+    activity: vi.fn().mockResolvedValue(null),
+    commitDetail: vi.fn().mockResolvedValue(null),
+  },
+}));
+
+function setup(asOf: AsOf, overrides: Partial<AppState> = {}) {
+  const state: AppState = {
+    ...init,
+    repo: 'knomit',
+    branch: 'machine/test',
+    factPath: 'kb/test/foo.md',
+    asOf,
+    ...overrides,
+  };
+  return render(<RightPanel state={state} dispatch={vi.fn()} navigate={vi.fn()} />);
+}
+
+describe('RightPanel — read-only retract gate', () => {
+  it('renders retract button enabled when live', async () => {
+    setup({ mode: 'live' });
+    const btn = await screen.findByTestId('retract-btn');
+    expect(btn).not.toBeDisabled();
+    expect(btn).toHaveAttribute('title', 'Retract fact');
+  });
+
+  it('renders retract button disabled with read-only tooltip when scrubbed', async () => {
+    setup({ mode: 'scrubbed', commit: 'b812d40' });
+    const btn = await screen.findByTestId('retract-btn');
+    expect(btn).toBeDisabled();
+    expect(btn).toHaveAttribute('title', READ_ONLY_TITLE);
+  });
+
+  it('renders retract button disabled when in diff mode', async () => {
+    setup({ mode: 'diff', from: 'aaa1111', to: 'bbb2222' });
+    const btn = await screen.findByTestId('retract-btn');
+    expect(btn).toBeDisabled();
+    expect(btn).toHaveAttribute('title', READ_ONLY_TITLE);
+  });
+
+  it('does not render retract button when viewing the history pane', async () => {
+    setup({ mode: 'scrubbed', commit: 'b812d40' }, { view: 'history' });
+    // Wait for fact to load, then assert retract button is absent.
+    await waitFor(() => {
+      expect(screen.queryByTestId('retract-btn')).toBeNull();
+    });
+  });
+});
