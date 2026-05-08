@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef } from 'react';
 import { api } from './api';
 import type { Fact, RefGroup, RefVersion } from './api';
-import { relativeTimeEpoch } from './utils';
+import { relativeTimeEpoch, typeStyles } from './utils';
+import { TypeIcon } from './icons';
 import { FactBody } from './FactBody';
 
 interface ExplainEntry { path: string; commit: string | null; }
@@ -118,6 +119,8 @@ function Chip({ group, onClick }: { group: RefGroup; onClick: (commit: string) =
   const isMulti = versionCount > 1;
   const deleted = group.deleted ?? false;
   const latest = group.versions[0];
+  const groupType = group.type ?? latest?.type;
+  const typeColor = (groupType && typeStyles[groupType]?.color) || '#253565';
 
   // Outside-click + Escape close the dropdown.
   useEffect(() => {
@@ -156,39 +159,43 @@ function Chip({ group, onClick }: { group: RefGroup; onClick: (commit: string) =
   return (
     <span
       ref={chipRef}
+      data-testid="ref-chip"
       onClick={handleChipClick}
       title={deleted ? 'Target fact retracted.' : group.path}
       style={{
         display: 'inline-flex', flexDirection: 'column',
-        padding: '3px 8px', borderRadius: 12,
-        border: `1px solid ${deleted ? '#2a2a2a' : '#253565'}`,
+        padding: '4px 9px', borderRadius: 8,
+        border: `1px solid ${deleted ? '#2a2a2a' : typeColor}`,
         cursor: 'pointer', background: '#111',
-        maxWidth: 200,
+        maxWidth: 220,
         opacity: deleted ? 0.45 : 1,
         textDecoration: deleted ? 'line-through' : 'none',
         position: 'relative',
       }}
     >
-      <span style={{ fontSize: 11, color: deleted ? '#555' : '#8af', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-        {group.title || group.path}
-        {deleted && <span style={{ fontSize: 9, color: '#444', marginLeft: 4 }}>[deleted]</span>}
-      </span>
       <span style={{ display: 'flex', alignItems: 'center', gap: 6, overflow: 'hidden' }}>
-        <span style={{ fontSize: 9, color: '#333', fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>{group.path}</span>
+        {groupType && <TypeIcon type={groupType} color={deleted ? '#555' : typeColor} size={12} />}
+        <span style={{ fontSize: 12, color: deleted ? '#555' : '#ddd', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {group.title || group.path}
+          {deleted && <span style={{ fontSize: 9, color: '#444', marginLeft: 4 }}>[deleted]</span>}
+        </span>
+      </span>
+      <span style={{ display: 'flex', alignItems: 'center', gap: 6, overflow: 'hidden', marginTop: 2 }}>
+        <span style={{ fontSize: 10, color: '#444', fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>{group.path}</span>
         {isMulti ? (
           <span style={{
-            fontFamily: 'monospace', fontSize: 9, color: '#8af',
+            fontFamily: 'monospace', fontSize: 9, color: typeColor,
             background: '#1a1a2a', padding: '0 4px', borderRadius: 2,
             flexShrink: 0,
           }}>×{versionCount} ⌄</span>
         ) : (
           latest?.commit && (
             <span style={{
-              fontFamily: 'monospace', fontSize: 9, color: '#8af',
+              fontFamily: 'monospace', fontSize: 9, color: typeColor,
               background: '#1a1a2a', padding: '0 4px', borderRadius: 2,
               textDecoration: 'none',
               flexShrink: 0,
-            }}>commit_at_{latest.commit.slice(0, 7)}</span>
+            }}>{latest.commit.slice(0, 7)}</span>
           )
         )}
       </span>
@@ -227,10 +234,10 @@ function Chip({ group, onClick }: { group: RefGroup; onClick: (commit: string) =
                 background: 'transparent',
               }}
             >
-              <span style={{ fontSize: 10, color: idx === 0 ? '#8af' : '#444' }}>
+              <span style={{ fontSize: 10, color: idx === 0 ? typeColor : '#444' }}>
                 {idx === 0 ? '●' : '○'}
               </span>
-              <span style={{ fontFamily: 'monospace', fontSize: 10, color: '#8af' }}>
+              <span style={{ fontFamily: 'monospace', fontSize: 10, color: typeColor }}>
                 {v.commit.slice(0, 7)}
               </span>
               <span style={{ fontSize: 10, color: '#666', marginLeft: 'auto' }}>

@@ -40,7 +40,7 @@ describe('ExplainView Chip', () => {
     render(<ExplainView repo="r" branch="b" initialEntry={{ path: 'kb/x.md', commit: null }} onClose={() => {}} />);
 
     expect(await screen.findByText('Single')).toBeInTheDocument();
-    expect(screen.getByText(/commit_at_abcdef0/)).toBeInTheDocument();
+    expect(screen.getByText('abcdef0')).toBeInTheDocument();
     // No multi-version badge.
     expect(screen.queryByText(/×\d+ ⌄/)).toBeNull();
   });
@@ -150,5 +150,50 @@ describe('ExplainView body parity', () => {
     expect(screen.getByText(/example\.com\/paper/)).toBeInTheDocument();
     // Local ref must NOT appear in the body — it surfaces in the outgoing rail.
     expect(screen.queryByText(/kb\/other\.md/)).toBeNull();
+  });
+});
+
+describe('ExplainView Chip — type-aware styling', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    (api.fact as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(baseFact);
+  });
+
+  it('renders the type icon and uses the type color on the chip border', async () => {
+    (api.explain as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+      incoming: [],
+      outgoing: [makeGroup({
+        path: 'kb/principle.md',
+        title: 'A principle',
+        type: 'principle',
+        versions: [{ commit: 'aaaaaaa1', committed_at: 1000, type: 'principle' }],
+      })],
+    });
+    render(<ExplainView repo="r" branch="b" initialEntry={{ path: 'kb/x.md', commit: null }} onClose={() => {}} />);
+
+    const chip = await screen.findByTestId('ref-chip');
+    // Type icon present (the SVG produced by TypeIcon).
+    expect(chip.querySelector('svg')).not.toBeNull();
+    // Title still rendered.
+    expect(chip).toHaveTextContent('A principle');
+    // Border uses the principle accent. typeStyles.principle.color = '#da8' → rgb(221, 170, 136).
+    // jsdom returns the resolved style as a string; assert it contains the principle hex or rgb.
+    expect(chip.style.borderColor.toLowerCase()).toMatch(/(#da8|rgb\(221,\s*170,\s*136\))/);
+  });
+
+  it('shows just the 7-char commit hash (no commit_at_ prefix)', async () => {
+    (api.explain as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+      incoming: [makeGroup({
+        path: 'kb/single.md',
+        title: 'Single',
+        type: 'concept',
+        versions: [{ commit: 'abcdef0123', committed_at: 1000, type: 'concept' }],
+      })],
+      outgoing: [],
+    });
+    render(<ExplainView repo="r" branch="b" initialEntry={{ path: 'kb/x.md', commit: null }} onClose={() => {}} />);
+    expect(await screen.findByText('Single')).toBeInTheDocument();
+    expect(screen.getByText('abcdef0')).toBeInTheDocument();
+    expect(screen.queryByText(/commit_at_/)).toBeNull();
   });
 });
