@@ -243,6 +243,29 @@ describe('api.explain (grouping)', () => {
     expect(r.outgoing[0].deleted).toBe(true);
     expect(r.outgoing[0].versions[0].commit).toBe('new');
   });
+
+  it('uses the commit-anchored URL when commit is provided', async () => {
+    const calls: string[] = [];
+    globalThis.fetch = vi.fn().mockImplementation(async (url: string) => {
+      calls.push(url);
+      return { ok: true, status: 200, json: async () => ({ _embedded: { refs: [] } }) };
+    });
+    await api.explain('alpha', 'main', 'kb/x.md', 'abc1234');
+    expect(calls).toHaveLength(2);
+    expect(calls[0]).toBe('/api/v1/repos/alpha/branches/main/commits/abc1234/facts/kb/x.md/incoming');
+    expect(calls[1]).toBe('/api/v1/repos/alpha/branches/main/commits/abc1234/facts/kb/x.md/outgoing');
+  });
+
+  it('uses the HEAD-anchored URL when commit is omitted', async () => {
+    const calls: string[] = [];
+    globalThis.fetch = vi.fn().mockImplementation(async (url: string) => {
+      calls.push(url);
+      return { ok: true, status: 200, json: async () => ({ _embedded: { refs: [] } }) };
+    });
+    await api.explain('alpha', 'main', 'kb/x.md');
+    expect(calls[0]).toBe('/api/v1/repos/alpha/branches/main/facts/kb/x.md/incoming');
+    expect(calls[1]).toBe('/api/v1/repos/alpha/branches/main/facts/kb/x.md/outgoing');
+  });
 });
 
 describe('api.factDiff', () => {

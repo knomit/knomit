@@ -481,11 +481,18 @@ export const api = {
     return { from: fromFact, to: toFact };
   },
 
-  explain: (repo: string, branch: string, path: string): Promise<{
+  explain: (repo: string, branch: string, path: string, commit?: string): Promise<{
     incoming: RefGroup[];
     outgoing: RefGroup[];
   }> => {
-    const factURL = `${branchBase(repo, branch)}/facts/${path}`;
+    // When commit is set, use the commit-anchored sub-resource endpoints so
+    // refs reflect the state of the source/target at that commit (the
+    // commit-anchored handler dispatches /incoming and /outgoing to the
+    // *AtCommit store primitives). Without this, navigating to a specific
+    // version of a fact in the Explain view would show no refs.
+    const factURL = commit
+      ? `${branchBase(repo, branch)}/commits/${commit}/facts/${path}`
+      : `${branchBase(repo, branch)}/facts/${path}`;
     type RawRef = { path: string; title: string; commit?: string; committed_at?: number; deleted?: boolean };
     const parseRefs = (data: any): RawRef[] => {
       // HAL CollectionView: {_embedded: {refs: [...]}}
