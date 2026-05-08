@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { api } from './api';
 import type { Fact, RefGroup, RefVersion } from './api';
 import { relativeTimeEpoch } from './utils';
+import { FactBody } from './FactBody';
 
 interface ExplainEntry { path: string; commit: string | null; }
 
@@ -83,7 +84,13 @@ export function ExplainView({ repo, branch, initialEntry, onClose }: Props) {
       <div style={{ flex: 1, overflowY: 'auto', padding: '16px 20px' }}>
         {loading && <div style={{ color: '#444', fontSize: 12 }}>Loading…</div>}
         {error && <div style={{ color: '#f66', fontSize: 12 }}>{error}</div>}
-        {fact && <FactReadOnly fact={fact} />}
+        {fact && (
+          <div style={{ maxWidth: 720 }}>
+            <div style={{ fontSize: 10, color: '#444', fontFamily: 'monospace', marginBottom: 6 }}>{fact.path}</div>
+            <div data-testid="fact-title" style={{ fontSize: 18, fontWeight: 600, color: '#eee', letterSpacing: '-0.3px', marginBottom: 14 }}>{fact.title || fact.path}</div>
+            <FactBody fact={fact} navigate={() => {}} dispatch={() => {}} readOnly={true} />
+          </div>
+        )}
       </div>
 
       {/* Outgoing refs strip */}
@@ -237,26 +244,3 @@ function Chip({ group, onClick }: { group: RefGroup; onClick: (commit: string) =
   );
 }
 
-function FactReadOnly({ fact }: { fact: Fact }) {
-  return (
-    <div style={{ maxWidth: 720 }}>
-      <div style={{ fontSize: 10, color: '#444', fontFamily: 'monospace', marginBottom: 6 }}>{fact.path}</div>
-      <div style={{ fontSize: 15, color: '#ddd', fontWeight: 500, marginBottom: 10 }}>{fact.title}</div>
-      <div style={{ fontSize: 13, color: '#888', lineHeight: 1.7, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{fact.body}</div>
-      {(fact.domain?.length > 0 || fact.entities?.length > 0) && (
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 12 }}>
-          {fact.domain?.map(d => <Tag key={d} label={d} />)}
-          {fact.entities?.map(e => <Tag key={e} label={e} />)}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function Tag({ label }: { label: string }) {
-  return (
-    <span style={{ fontSize: 10, color: '#555', background: '#141414', border: '1px solid #222', borderRadius: 3, padding: '1px 6px' }}>
-      {label}
-    </span>
-  );
-}

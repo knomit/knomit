@@ -120,3 +120,35 @@ describe('ExplainView Chip', () => {
     });
   });
 });
+
+describe('ExplainView body parity', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('renders type badge, stat boxes, tag clouds, external refs in body', async () => {
+    (api.fact as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ...baseFact,
+      type: 'concept',
+      title: 'X',
+      body: 'Hello **world**',
+      domain: ['ai'],
+      entities: ['Anthropic'],
+      confidence: 0.5,
+      sources: 2,
+      refs: ['https://example.com/paper', 'kb/other.md'],
+    });
+    (api.explain as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({ incoming: [], outgoing: [] });
+
+    render(<ExplainView repo="r" branch="b" initialEntry={{ path: 'kb/x.md', commit: null }} onClose={() => {}} />);
+
+    expect(await screen.findByTestId('fact-type-badge')).toBeInTheDocument();
+    expect(screen.getByText('0.50')).toBeInTheDocument();
+    expect(screen.getByText('2')).toBeInTheDocument();
+    expect(screen.getByText('ai')).toBeInTheDocument();
+    expect(screen.getByText('Anthropic')).toBeInTheDocument();
+    expect(screen.getByText(/example\.com\/paper/)).toBeInTheDocument();
+    // Local ref must NOT appear in the body — it surfaces in the outgoing rail.
+    expect(screen.queryByText(/kb\/other\.md/)).toBeNull();
+  });
+});
