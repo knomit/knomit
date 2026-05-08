@@ -158,7 +158,7 @@ describe('resolveNavRequest', () => {
     });
   });
 
-  it('mode-switch to tree preserves current factPath', async () => {
+  it('mode-switch to tree preserves current factPath but demotes asOf to live', async () => {
     const state = makeState({
       factPath: 'kb/foo.md',
       asOf: { mode: 'scrubbed', commit: 'abc123' },
@@ -166,7 +166,7 @@ describe('resolveNavRequest', () => {
     await resolveNavRequest({ view: 'tree' }, state, dispatch);
     expect(dispatch).toHaveBeenCalledWith({
       type: 'APPLY_NAV', view: 'tree',
-      factPath: 'kb/foo.md', asOf: { mode: 'scrubbed', commit: 'abc123' },
+      factPath: 'kb/foo.md', asOf: { mode: 'live' },
     });
   });
 
@@ -177,5 +177,61 @@ describe('resolveNavRequest', () => {
       type: 'APPLY_NAV', view: 'chrono',
       factPath: null, asOf: { mode: 'live' },
     });
+  });
+
+  // ── Regression: HEAD-only views demote scrubbed asOf to live ──────────────
+
+  it('switching to tree from a scrubbed history view demotes asOf to live', async () => {
+    const state = makeState({
+      view: 'history',
+      asOf: { mode: 'scrubbed', commit: 'abc1234' },
+    });
+    await resolveNavRequest({ view: 'tree' }, state, dispatch);
+    expect(dispatch).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'APPLY_NAV',
+      view: 'tree',
+      asOf: { mode: 'live' },
+    }));
+  });
+
+  it('switching to chrono from a scrubbed view demotes asOf to live', async () => {
+    const state = makeState({
+      view: 'history',
+      asOf: { mode: 'scrubbed', commit: 'abc1234' },
+    });
+    await resolveNavRequest({ view: 'chrono' }, state, dispatch);
+    expect(dispatch).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'APPLY_NAV',
+      view: 'chrono',
+      asOf: { mode: 'live' },
+    }));
+  });
+
+  it('explicit tree fact-path nav from a scrubbed view demotes asOf to live', async () => {
+    const state = makeState({
+      view: 'history',
+      asOf: { mode: 'scrubbed', commit: 'abc1234' },
+    });
+    await resolveNavRequest({ view: 'tree', factPath: 'kb/foo.md' }, state, dispatch);
+    expect(dispatch).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'APPLY_NAV',
+      view: 'tree',
+      factPath: 'kb/foo.md',
+      asOf: { mode: 'live' },
+    }));
+  });
+
+  it('explicit chrono fact-path nav from a diff view demotes asOf to live', async () => {
+    const state = makeState({
+      view: 'history',
+      asOf: { mode: 'diff', from: 'aaaa', to: 'bbbb' },
+    });
+    await resolveNavRequest({ view: 'chrono', factPath: 'kb/foo.md' }, state, dispatch);
+    expect(dispatch).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'APPLY_NAV',
+      view: 'chrono',
+      factPath: 'kb/foo.md',
+      asOf: { mode: 'live' },
+    }));
   });
 });

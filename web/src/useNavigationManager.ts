@@ -60,11 +60,14 @@ export async function resolveNavRequest(
       // Preserve current fact when already in tree/chrono (same anchor context).
       // Clear it when coming from history — the selected fact was at a specific commit
       // and may not exist at the current anchor.
+      // Tree is a HEAD-only view by design; demote any non-live anchor to live so
+      // fact-clicks from the HEAD list don't 404 against a stale scrubbed commit.
       const factPath = state.view === 'history' ? null : state.factPath;
-      dispatch({ type: 'APPLY_NAV', view: 'tree', factPath, asOf: state.asOf });
+      dispatch({ type: 'APPLY_NAV', view: 'tree', factPath, asOf: { mode: 'live' } });
     } else {
       // chrono: ChronoView will amend selection once it fetches recent facts.
-      dispatch({ type: 'APPLY_NAV', view: 'chrono', factPath: null, asOf: state.asOf });
+      // Chrono is HEAD-only by design — demote any non-live anchor to live.
+      dispatch({ type: 'APPLY_NAV', view: 'chrono', factPath: null, asOf: { mode: 'live' } });
     }
     return;
   }
@@ -89,8 +92,8 @@ export async function resolveNavRequest(
     // Fully specified: dispatch immediately.
     dispatch({ type: 'APPLY_NAV', view: 'history', factPath: req.factPath, asOf: req.asOf });
   } else {
-    // tree or chrono with explicit factPath — carry current asOf forward.
-    dispatch({ type: 'APPLY_NAV', view: req.view, factPath: req.factPath, asOf: state.asOf });
+    // tree or chrono with explicit factPath — HEAD-only views, force live anchor.
+    dispatch({ type: 'APPLY_NAV', view: req.view, factPath: req.factPath, asOf: { mode: 'live' } });
   }
 }
 
@@ -133,11 +136,12 @@ export function useNavigationManager(
   // History navigation (needs async commitDetail fetch) still goes through the queue.
   const navigate = useRef((req: NavRequest) => {
     if ('factPath' in req && req.view !== 'history') {
+      // tree/chrono are HEAD-only views — force live anchor.
       dispatchRef.current({
         type: 'APPLY_NAV',
         view: req.view,
         factPath: req.factPath,
-        asOf: stateRef.current.asOf,
+        asOf: { mode: 'live' },
       });
       return;
     }
