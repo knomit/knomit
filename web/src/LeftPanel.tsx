@@ -55,7 +55,7 @@ function TreeView({ state, dispatch, navigate }: Props) {
       const matchIdx = items.findIndex(it => it.fullPath === currentFactPath);
       setSelectedIdx(matchIdx >= 0 ? matchIdx : items.length > 0 ? 0 : -1);
       if (matchIdx < 0 && items.length > 0 && items[0].fullPath) {
-        dispatch({ type: 'AMEND_NAV', historyCommit: null, factPath: items[0].fullPath, factCommit: null });
+        dispatch({ type: 'AMEND_NAV', factPath: items[0].fullPath });
       }
     }).catch(() => { if (!stale()) setChildren([]); });
   }, [path, state.headCommit, state.freeText, shouldSearch, state.repo, state.branch, filtersKey]);
@@ -231,7 +231,7 @@ function ChronoView({ state, dispatch, navigate }: Props) {
       // Don't override an already-valid selection (e.g. restored by NAV_BACK).
       const alreadyInList = loaded.some(f => f.path === staleStateRef.current.factPath);
       if (loaded.length > 0 && !alreadyInList) {
-        dispatch({ type: 'AMEND_NAV', historyCommit: null, factPath: loaded[0].path, factCommit: null });
+        dispatch({ type: 'AMEND_NAV', factPath: loaded[0].path });
       }
     }).catch(() => { if (!stale()) { setFacts([]); setLoading(false); } });
   }, [path, state.headCommit, state.freeText, state.repo, state.branch, typeFilter, filtersKey]);

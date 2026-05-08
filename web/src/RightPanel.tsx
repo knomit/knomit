@@ -5,7 +5,7 @@ import ReactMarkdown from 'react-markdown';
 import { api } from './api';
 import type { Fact, Stats, ActivityStats, CommitDetail } from './api';
 import type { AppState, Action } from './state';
-import { currentPath } from './state';
+import { currentPath, selectAnchorCommit, isReadOnly } from './state';
 import { relativeTime, typeStyles, defaultTypeStyle, opStyles, defaultOpStyle } from './utils';
 import { TypeIcon, EpisodeIcon, RetractIcon, ExplainIcon } from './icons';
 import type { NavRequest } from './useNavigationManager';
@@ -137,7 +137,7 @@ function renderFact(fact: Fact, navigate: (req: NavRequest) => void, dispatch: D
           })()}
           <span
             onClick={() => fact.commit_hash
-              ? navigate({ view: 'history', historyCommit: fact.commit_hash, factPath: fact.path, factCommit: fact.commit_hash })
+              ? navigate({ view: 'history', factPath: fact.path, asOf: { mode: 'scrubbed', commit: fact.commit_hash } })
               : navigate({ view: 'history' })
             }
             style={{ fontSize: 12, color: '#555', cursor: 'pointer', fontFamily: 'monospace' }}
@@ -180,7 +180,7 @@ function renderFact(fact: Fact, navigate: (req: NavRequest) => void, dispatch: D
               return (
                 <span key={ref}
                   onClick={() => commit
-                    ? navigate({ view: 'history', historyCommit: commit, factPath: ref, factCommit: commit })
+                    ? navigate({ view: 'history', factPath: ref, asOf: { mode: 'scrubbed', commit: commit } })
                     : navigate({ view: 'tree', factPath: ref })
                   }
                   style={{ color: '#8af', fontSize: 12, fontFamily: 'monospace', cursor: 'pointer', transition: 'color 0.15s' }}
@@ -289,7 +289,7 @@ function CommitPanel({ historyCommit, repo, branch, selectedFact, navigate, righ
     if (!detail) return;
     if (selectedFact && detail.files?.some(f => f.path === selectedFact)) return;
     const first = detail.files?.[0];
-    if (first) dispatch({ type: 'AMEND_NAV', historyCommit, factPath: first.path, factCommit: historyCommit });
+    if (first) dispatch({ type: 'AMEND_NAV', factPath: first.path });
   }, [detail, selectedFact, historyCommit, dispatch]);
 
   useEffect(() => { setListHeight(DEFAULT_LIST_HEIGHT); }, [historyCommit]);
@@ -305,7 +305,11 @@ function CommitPanel({ historyCommit, repo, branch, selectedFact, navigate, righ
         const delta = (e.key === 'ArrowDown' || e.key === 'j') ? 1 : -1;
         const nextIdx = Math.max(0, Math.min(currentIdx + delta, files.length - 1));
         if (nextIdx !== currentIdx) {
-          navigate({ view: 'history', historyCommit, factPath: files[nextIdx].path, factCommit: historyCommit });
+          navigate({
+            view: 'history',
+            factPath: files[nextIdx].path,
+            asOf: { mode: 'scrubbed', commit: historyCommit },
+          });
         }
       }
     };
@@ -375,7 +379,11 @@ function CommitPanel({ historyCommit, repo, branch, selectedFact, navigate, righ
                 data-testid="commit-file"
                 data-path={file.path}
                 onClick={() => {
-                  navigate({ view: 'history', historyCommit, factPath: file.path, factCommit: historyCommit });
+                  navigate({
+                    view: 'history',
+                    factPath: file.path,
+                    asOf: { mode: 'scrubbed', commit: historyCommit },
+                  });
                   dispatch({ type: 'FOCUS_RIGHT_PANEL' });
                 }}
                 style={{
@@ -495,20 +503,20 @@ export function RightPanel({ state, dispatch, navigate, onExplain }: {
   const path = currentPath(state);
 
   const factPath = state.factPath;
-  const factCommit = state.factCommit;
-  const historyCommit = state.historyCommit;
+  const anchorCommit = selectAnchorCommit(state);
+  const historyCommit = state.view === 'history' ? anchorCommit : null;
 
   useAsync((stale) => {
     if (!factPath) { setFact(null); setError(null); return; }
     setError(null);
-    api.fact(state.repo, state.branch, factPath, factCommit ?? undefined)
+    api.fact(state.repo, state.branch, factPath, anchorCommit ?? undefined)
       .then(f => {
         if (stale()) return;
         setFact(f);
-        if (f.commit_hash) dispatch({ type: 'FACT_LOADED', commit: f.commit_hash });
+        // No FACT_LOADED dispatch — fact.commit_hash is read directly from the response.
       })
       .catch(e => { if (!stale()) setError(String(e)); });
-  }, [factPath, factCommit, state.repo]);
+  }, [factPath, anchorCommit, state.repo]);
 
   useAsync((stale) => {
     if (factPath || state.view === 'history') return;
@@ -523,7 +531,7 @@ export function RightPanel({ state, dispatch, navigate, onExplain }: {
   }, [factPath, state.repo, path, state.headCommit]);
 
   const doRetract = useCallback(() => {
-    if (!fact || retracting) return;
+    if (!fact || retracting || isReadOnly(state)) return;
     setConfirmRetract(false);
     setRetracting(true);
     api.retractFact(state.repo, state.branch, fact.path)
@@ -533,10 +541,10 @@ export function RightPanel({ state, dispatch, navigate, onExplain }: {
         // sync the index and then broadcast a status event with the new commit
         // hash, which triggers SET_HEAD in App.tsx. Only then will headCommit
         // change, ensuring the search/chrono re-fire against a fresh index.
-        dispatch({ type: 'AMEND_NAV', historyCommit: null, factPath: null, factCommit: null });
+        dispatch({ type: 'AMEND_NAV', factPath: null });
       })
       .catch(e => { setRetracting(false); setError(String(e)); });
-  }, [fact, retracting, state.repo, dispatch]);
+  }, [fact, retracting, state, dispatch]);
 
   // Keyboard: ArrowLeft blurs right panel; j/k navigation is handled inside CommitPanel
   useEffect(() => {
@@ -602,7 +610,7 @@ export function RightPanel({ state, dispatch, navigate, onExplain }: {
 
   if (fact.parse_error) return <FactEditor fact={fact} repo={state.repo} branch={state.branch} onSaved={setFact} />;
 
-  const canRetract = state.view !== 'history';
+  const canRetract = state.view !== 'history' && !isReadOnly(state);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>

@@ -5,15 +5,19 @@ export interface FilterChip {
   value: string;
 }
 
+export type AsOf =
+  | { mode: 'live' }
+  | { mode: 'scrubbed'; commit: string }
+  | { mode: 'diff'; from: string; to: string };
+
 interface NavEntry {
   repo: string;
   branch: string;
   view: View;
   filters: FilterChip[];
   freeText: string;
-  historyCommit: string | null;
   factPath: string | null;
-  factCommit: string | null;
+  asOf: AsOf;
 }
 
 interface ConsoleEntry {
@@ -26,9 +30,8 @@ interface ConsoleEntry {
 export interface AppState {
   repo: string;
   view: View;
-  historyCommit: string | null;  // history mode: commit selected in timeline
   factPath: string | null;       // right panel: fact to display (all modes)
-  factCommit: string | null;     // right panel: commit to show fact at (null = HEAD)
+  asOf: AsOf;                    // global "as of when" anchor (live | scrubbed | diff)
   filters: FilterChip[];
   freeText: string;              // unprefixed search text
   tasks: Record<string, { status: 'idle' | 'running' | 'done' | 'error'; message: string }>;
@@ -62,16 +65,15 @@ export type Action =
   | { type: 'SET_REMOTE_ERROR'; error: string }
   | { type: 'FOCUS_RIGHT_PANEL' }
   | { type: 'BLUR_RIGHT_PANEL' }
-  | { type: 'APPLY_NAV'; view: View; historyCommit: string | null; factPath: string | null; factCommit: string | null; filters?: FilterChip[]; freeText?: string }
-  | { type: 'AMEND_NAV'; historyCommit: string | null; factPath: string | null; factCommit: string | null }
-  | { type: 'FACT_LOADED'; commit: string };
+  | { type: 'SET_AS_OF'; asOf: AsOf }
+  | { type: 'APPLY_NAV'; view: View; factPath: string | null; asOf: AsOf; filters?: FilterChip[]; freeText?: string }
+  | { type: 'AMEND_NAV'; factPath: string | null; asOf?: AsOf };
 
 export const init: AppState = {
   repo: 'knomit',
   view: 'tree',
-  historyCommit: null,
   factPath: null,
-  factCommit: null,
+  asOf: { mode: 'live' },
   filters: [],
   freeText: '',
   tasks: { sync: { status: 'idle', message: '' }, synth: { status: 'idle', message: '' } },
@@ -94,9 +96,8 @@ function pushNav(s: AppState): NavEntry[] {
     view: s.view,
     filters: [...s.filters],
     freeText: s.freeText,
-    historyCommit: s.historyCommit,
     factPath: s.factPath,
-    factCommit: s.factCommit,
+    asOf: s.asOf,
   };
   const stack = [...s.navStack, entry];
   if (stack.length > 20) stack.shift();
@@ -118,9 +119,7 @@ export function reducer(s: AppState, a: Action): AppState {
       return {
         ...s,
         filters: replacePathChip(s.filters, a.path),
-        historyCommit: null,
         factPath: null,
-        factCommit: null,
         navStack: pushNav(s),
         rightPanelFocused: false,
       };
@@ -132,9 +131,7 @@ export function reducer(s: AppState, a: Action): AppState {
       return {
         ...s,
         filters: replacePathChip(s.filters, parent),
-        historyCommit: null,
         factPath: null,
-        factCommit: null,
         navStack: pushNav(s),
         rightPanelFocused: false,
       };
@@ -147,12 +144,12 @@ export function reducer(s: AppState, a: Action): AppState {
     }
     case 'REMOVE_FILTER': {
       const filters = s.filters.filter((_, i) => i !== a.index);
-      return { ...s, filters, historyCommit: null, factPath: null, factCommit: null, navStack: pushNav(s) };
+      return { ...s, filters, factPath: null, navStack: pushNav(s) };
     }
     case 'SET_FREE_TEXT':
       return { ...s, freeText: a.text };
     case 'CLEAR_FILTERS':
-      return { ...s, filters: [], freeText: '', historyCommit: null, factPath: null, factCommit: null, navStack: pushNav(s) };
+      return { ...s, filters: [], freeText: '', factPath: null, navStack: pushNav(s) };
     case 'NAV_BACK': {
       if (s.navStack.length === 0) return s;
       const prev = s.navStack[s.navStack.length - 1];
@@ -162,9 +159,8 @@ export function reducer(s: AppState, a: Action): AppState {
           ...s,
           repo: prev.repo,
           view: 'tree',
-          historyCommit: null,
           factPath: null,
-          factCommit: null,
+          asOf: { mode: 'live' },
           filters: [],
           freeText: '',
           headCommit: '',
@@ -175,9 +171,8 @@ export function reducer(s: AppState, a: Action): AppState {
       return {
         ...s,
         view: prev.view,
-        historyCommit: prev.historyCommit,
         factPath: prev.factPath,
-        factCommit: prev.factCommit,
+        asOf: prev.asOf,
         filters: prev.filters,
         freeText: prev.freeText,
         navStack: s.navStack.slice(0, -1),
@@ -215,9 +210,8 @@ export function reducer(s: AppState, a: Action): AppState {
         ...s,
         repo: a.repo,
         view: 'tree',
-        historyCommit: null,
         factPath: null,
-        factCommit: null,
+        asOf: { mode: 'live' },
         filters: [],
         freeText: '',
         headCommit: '',
@@ -232,6 +226,8 @@ export function reducer(s: AppState, a: Action): AppState {
       return { ...s, rightPanelFocused: true };
     case 'BLUR_RIGHT_PANEL':
       return { ...s, rightPanelFocused: false };
+    case 'SET_AS_OF':
+      return { ...s, asOf: a.asOf };
     case 'APPLY_NAV': {
       const crossingBoundary =
         (s.view === 'history' && a.view !== 'history') ||
@@ -239,9 +235,8 @@ export function reducer(s: AppState, a: Action): AppState {
       return {
         ...s,
         view: a.view,
-        historyCommit: a.historyCommit,
         factPath: a.factPath,
-        factCommit: a.factCommit,
+        asOf: a.asOf,
         filters: a.filters !== undefined ? a.filters : crossingBoundary ? s.filters.filter(f => f.category === 'path') : s.filters,
         freeText: a.freeText !== undefined ? a.freeText : crossingBoundary ? '' : s.freeText,
         navStack: pushNav(s),
@@ -251,11 +246,29 @@ export function reducer(s: AppState, a: Action): AppState {
     case 'AMEND_NAV':
       // In-place update — no navStack push. Used by auto-select behaviors so that
       // a single user action (e.g. view-button click) creates exactly one navStack entry.
-      if (s.historyCommit === a.historyCommit && s.factPath === a.factPath && s.factCommit === a.factCommit) return s;
-      return { ...s, historyCommit: a.historyCommit, factPath: a.factPath, factCommit: a.factCommit };
-    case 'FACT_LOADED':
-      return { ...s, factCommit: a.commit };
+      if (s.factPath === a.factPath && (a.asOf === undefined || JSON.stringify(s.asOf) === JSON.stringify(a.asOf))) return s;
+      return {
+        ...s,
+        factPath: a.factPath,
+        ...(a.asOf !== undefined ? { asOf: a.asOf } : {}),
+      };
     default:
       return s;
   }
+}
+
+export function selectAnchorCommit(s: AppState): string | null {
+  switch (s.asOf.mode) {
+    case 'live':     return null;
+    case 'scrubbed': return s.asOf.commit;
+    case 'diff':     return s.asOf.to;
+  }
+}
+
+export function isLive(s: AppState): boolean {
+  return s.asOf.mode === 'live';
+}
+
+export function isReadOnly(s: AppState): boolean {
+  return !isLive(s);
 }

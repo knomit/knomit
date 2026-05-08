@@ -5,7 +5,7 @@ import type { Dispatch } from 'react';
 import { api } from './api';
 import type { HistoryEntryWithTags } from './api';
 import type { AppState, Action } from './state';
-import { currentPath } from './state';
+import { currentPath, selectAnchorCommit } from './state';
 import { relativeTime, opStyles, defaultOpStyle } from './utils';
 import type { NavRequest } from './useNavigationManager';
 
@@ -44,22 +44,27 @@ export function HistoryTimeline({ state, dispatch, navigate }: Props) {
     setNextCursor(undefined);
     setPrevCursor(undefined);
     setSelectedIdx(0);
-    api.history(state.repo, state.branch, path, undefined, state.historyCommit || undefined).then(r => {
+    api.history(state.repo, state.branch, path, undefined, selectAnchorCommit(state) || undefined).then(r => {
       if (stale()) return;
       const e = r.entries || [];
       setEntries(e);
       setNextCursor(r.next);
       setPrevCursor(r.prev);
       setLoading(false);
-      // If historyCommit is already set (e.g. NAV_BACK restored it), just sync visual index.
-      if (staleStateRef.current.historyCommit) {
-        const idx = e.findIndex(c => c.commit === staleStateRef.current.historyCommit);
+      // If anchor is already set (e.g. NAV_BACK restored it), just sync visual index.
+      const anchor = selectAnchorCommit(staleStateRef.current);
+      if (anchor) {
+        const idx = e.findIndex(c => c.commit === anchor);
         if (idx >= 0) setSelectedIdx(idx);
         return;
       }
       // No explicit selection — amend current nav entry in-place (no navStack push).
       if (e.length > 0) {
-        dispatch({ type: 'AMEND_NAV', historyCommit: e[0].commit, factPath: null, factCommit: e[0].commit });
+        dispatch({
+          type: 'AMEND_NAV',
+          factPath: null,
+          asOf: { mode: 'scrubbed', commit: e[0].commit },
+        });
       }
     }).catch(() => {
       if (!stale()) { setEntries([]); setLoading(false); }
@@ -146,24 +151,32 @@ export function HistoryTimeline({ state, dispatch, navigate }: Props) {
   );
 
   useEffect(() => {
-    if (!state.historyCommit) return;
-    const idx = filteredEntries.findIndex(e => e.commit === state.historyCommit);
+    const anchor = selectAnchorCommit(state);
+    if (!anchor) return;
+    const idx = filteredEntries.findIndex(e => e.commit === anchor);
     if (idx >= 0 && idx !== selectedIdx) {
       setSelectedIdx(idx);
       itemRefs.current[idx]?.scrollIntoView({ block: 'nearest' });
     }
-  }, [state.historyCommit, filteredEntries]);
+  }, [state.asOf, filteredEntries]);
 
   const moveSelection = useCallback((delta: 1 | -1) => {
     const next = Math.max(0, Math.min(selectedIdx + delta, filteredEntries.length - 1));
     setSelectedIdx(next);
     itemRefs.current[next]?.scrollIntoView({ block: 'nearest' });
     const entry = filteredEntries[next];
-    // Dispatch synchronously so state.historyCommit tracks local selectedIdx without lag.
+    // Dispatch synchronously so the anchor tracks local selectedIdx without lag.
     // Keep the current factPath so the right panel doesn't flash through the stats view while
     // CommitPanel fetches the new commit detail. CommitPanel will switch to the first file if
     // the current fact doesn't exist in the new commit.
-    if (entry) dispatch({ type: 'APPLY_NAV', view: 'history', historyCommit: entry.commit, factPath: staleStateRef.current.factPath, factCommit: entry.commit });
+    if (entry) {
+      dispatch({
+        type: 'APPLY_NAV',
+        view: 'history',
+        factPath: staleStateRef.current.factPath,
+        asOf: { mode: 'scrubbed', commit: entry.commit },
+      });
+    }
   }, [selectedIdx, filteredEntries, dispatch]);
 
   useEffect(() => {
@@ -198,7 +211,7 @@ export function HistoryTimeline({ state, dispatch, navigate }: Props) {
           <EmptyState message={entries.length === 0 ? 'No history for this path.' : 'No commits match the current filters.'} />
         )}
         {filteredEntries.map((entry, i) => {
-          const isSelected = entry.commit === state.historyCommit;
+          const isSelected = entry.commit === selectAnchorCommit(state);
           const cs = commitStyle(entry);
           const hasLabel = cs.label !== '';
           const dotSize = hasLabel ? 10 : 6;
@@ -221,7 +234,11 @@ export function HistoryTimeline({ state, dispatch, navigate }: Props) {
               }}
               onClick={() => {
                 setSelectedIdx(i);
-                navigate({ view: 'history', historyCommit: entry.commit, factPath: null });
+                navigate({
+                  view: 'history',
+                  factPath: null,
+                  asOf: { mode: 'scrubbed', commit: entry.commit },
+                });
               }}
             >
               {/* Timeline column: continuous line + dot */}
