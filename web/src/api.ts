@@ -74,10 +74,11 @@ export interface OriginSetResponse {
   head: string;
 }
 
-export interface RefVersion { commit: string; committed_at?: number; deleted?: boolean }
+export interface RefVersion { commit: string; committed_at?: number; deleted?: boolean; type?: string }
 export interface RefGroup {
   path: string;
   title: string;
+  type?: string;            // type of the latest version (UI uses this for chip color)
   versions: RefVersion[];   // newest-first
   deleted?: boolean;        // true if the latest version is deleted (target retracted)
 }
@@ -493,7 +494,7 @@ export const api = {
     const factURL = commit
       ? `${branchBase(repo, branch)}/commits/${commit}/facts/${path}`
       : `${branchBase(repo, branch)}/facts/${path}`;
-    type RawRef = { path: string; title: string; commit?: string; committed_at?: number; deleted?: boolean };
+    type RawRef = { path: string; title: string; type?: string; commit?: string; committed_at?: number; deleted?: boolean };
     const parseRefs = (data: any): RawRef[] => {
       // HAL CollectionView: {_embedded: {refs: [...]}}
       // Each ref carries a `commit` field pinning it to a specific version:
@@ -539,11 +540,13 @@ export const api = {
           commit: e.ref.commit ?? '',
           committed_at: e.ref.committed_at,
           deleted: e.ref.deleted,
+          type: e.ref.type,
         }));
         const latestRef = sorted[0]?.ref;
         return {
           path: g.path,
           title: latestRef?.title ?? '',
+          type: latestRef?.type,
           versions,
           deleted: latestRef?.deleted ?? false,
         };

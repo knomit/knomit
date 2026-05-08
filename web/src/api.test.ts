@@ -165,7 +165,7 @@ describe('api.fact', () => {
 describe('api.explain (grouping)', () => {
   beforeEach(() => { vi.restoreAllMocks(); });
 
-  type RawRef = { path: string; title: string; commit?: string; committed_at?: number; deleted?: boolean };
+  type RawRef = { path: string; title: string; type?: string; commit?: string; committed_at?: number; deleted?: boolean };
   function mockExplainResponses(incoming: RawRef[], outgoing: RawRef[]) {
     globalThis.fetch = vi.fn().mockImplementation(async (url: string) => {
       const refs = url.endsWith('/incoming') ? incoming : outgoing;
@@ -265,6 +265,26 @@ describe('api.explain (grouping)', () => {
     await api.explain('alpha', 'main', 'kb/x.md');
     expect(calls[0]).toBe('/api/v1/repos/alpha/branches/main/facts/kb/x.md/incoming');
     expect(calls[1]).toBe('/api/v1/repos/alpha/branches/main/facts/kb/x.md/outgoing');
+  });
+
+  it('propagates type from each ref entry into RefVersion and RefGroup', async () => {
+    mockExplainResponses(
+      [
+        { path: 'kb/p.md', title: 'P', type: 'principle', commit: 'aaaaaaa', committed_at: 1000 },
+      ],
+      [
+        { path: 'kb/c.md', title: 'C', type: 'concept', commit: 'bbbbbbb', committed_at: 2000 },
+      ],
+    );
+    const { incoming, outgoing } = await api.explain('alpha', 'main', 'kb/x.md');
+
+    expect(incoming).toHaveLength(1);
+    expect(incoming[0].type).toBe('principle');
+    expect(incoming[0].versions[0].type).toBe('principle');
+
+    expect(outgoing).toHaveLength(1);
+    expect(outgoing[0].type).toBe('concept');
+    expect(outgoing[0].versions[0].type).toBe('concept');
   });
 });
 
