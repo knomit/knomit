@@ -12,10 +12,11 @@ import (
 
 // RefSummary is a lightweight fact reference returned by ExplainFact.
 type RefSummary struct {
-	Path    string `json:"path"`
-	Title   string `json:"title"`
-	Commit  string `json:"commit,omitempty"` // source_commit for incoming, target_commit for outgoing
-	Deleted bool   `json:"deleted,omitempty"`
+	Path        string `json:"path"`
+	Title       string `json:"title"`
+	Commit      string `json:"commit,omitempty"` // source_commit for incoming, target_commit for outgoing
+	Deleted     bool   `json:"deleted,omitempty"`
+	CommittedAt int64  `json:"committed_at,omitempty"` // Unix seconds; 0 if commit_log row missing
 }
 
 // ExplainResult holds the incoming and outgoing reference summary for a fact.

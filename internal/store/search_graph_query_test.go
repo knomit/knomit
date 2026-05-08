@@ -36,6 +36,11 @@ func TestIncomingAtCommit_TwoSourceVersions(t *testing.T) {
 	require.ElementsMatch(t, []string{c1Res.CommitHash, c2Res.CommitHash}, commits)
 	require.Equal(t, "kb/d.md", got[0].Path)
 	require.Equal(t, "kb/d.md", got[1].Path)
+
+	// Each candidate's CommittedAt must be populated from commit_log via the
+	// LEFT JOIN in the post-cypher SQL filter.
+	require.NotZero(t, got[0].CommittedAt, "CommittedAt should be populated from commit_log")
+	require.NotZero(t, got[1].CommittedAt, "CommittedAt should be populated from commit_log")
 }
 
 // TestOutgoingAtCommit returns the outgoing refs of (path, commit_hash)

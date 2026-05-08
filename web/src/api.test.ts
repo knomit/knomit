@@ -162,6 +162,89 @@ describe('api.fact', () => {
   });
 });
 
+describe('api.explain (grouping)', () => {
+  beforeEach(() => { vi.restoreAllMocks(); });
+
+  type RawRef = { path: string; title: string; commit?: string; committed_at?: number; deleted?: boolean };
+  function mockExplainResponses(incoming: RawRef[], outgoing: RawRef[]) {
+    globalThis.fetch = vi.fn().mockImplementation(async (url: string) => {
+      const refs = url.endsWith('/incoming') ? incoming : outgoing;
+      return { ok: true, status: 200, json: async () => ({ _embedded: { refs } }) };
+    });
+  }
+
+  it('groups multiple ref-events with the same path into one group, newest-first', async () => {
+    mockExplainResponses(
+      [
+        { path: 'kb/A.md', title: 'A', commit: 'aaaaaaa', committed_at: 1000 },
+        { path: 'kb/A.md', title: 'A', commit: 'bbbbbbb', committed_at: 2000 },
+        { path: 'kb/B.md', title: 'B', commit: 'ccccccc', committed_at: 1500 },
+      ],
+      [],
+    );
+    const r = await api.explain('alpha', 'main', 'kb/x.md');
+    expect(r.incoming).toHaveLength(2);
+    const groupA = r.incoming.find(g => g.path === 'kb/A.md')!;
+    const groupB = r.incoming.find(g => g.path === 'kb/B.md')!;
+    expect(groupA.versions).toHaveLength(2);
+    expect(groupB.versions).toHaveLength(1);
+    // Newest-first: bbbbbbb (committed_at 2000) before aaaaaaa (committed_at 1000).
+    expect(groupA.versions[0].commit).toBe('bbbbbbb');
+    expect(groupA.versions[1].commit).toBe('aaaaaaa');
+    // Title comes from the latest version.
+    expect(groupA.title).toBe('A');
+  });
+
+  it('single-version: one ref produces one group with versions.length === 1', async () => {
+    mockExplainResponses(
+      [{ path: 'kb/only.md', title: 'Only', commit: 'aaaaaaa', committed_at: 100 }],
+      [],
+    );
+    const r = await api.explain('alpha', 'main', 'kb/x.md');
+    expect(r.incoming).toHaveLength(1);
+    expect(r.incoming[0].versions).toHaveLength(1);
+    expect(r.incoming[0].versions[0].commit).toBe('aaaaaaa');
+  });
+
+  it('orders versions strictly by committed_at descending', async () => {
+    mockExplainResponses(
+      [
+        { path: 'kb/A.md', title: 'A', commit: 'old', committed_at: 100 },
+        { path: 'kb/A.md', title: 'A', commit: 'mid', committed_at: 200 },
+        { path: 'kb/A.md', title: 'A', commit: 'new', committed_at: 300 },
+      ],
+      [],
+    );
+    const r = await api.explain('alpha', 'main', 'kb/x.md');
+    expect(r.incoming[0].versions.map(v => v.commit)).toEqual(['new', 'mid', 'old']);
+  });
+
+  it('falls back to backend insertion order when committed_at is missing', async () => {
+    mockExplainResponses(
+      [
+        { path: 'kb/A.md', title: 'A', commit: 'first' },
+        { path: 'kb/A.md', title: 'A', commit: 'second' },
+      ],
+      [],
+    );
+    const r = await api.explain('alpha', 'main', 'kb/x.md');
+    expect(r.incoming[0].versions.map(v => v.commit)).toEqual(['first', 'second']);
+  });
+
+  it('group-level deleted reflects the latest versions deleted flag (outgoing)', async () => {
+    mockExplainResponses(
+      [],
+      [
+        { path: 'kb/T.md', title: 'T', commit: 'old', committed_at: 100, deleted: false },
+        { path: 'kb/T.md', title: 'T', commit: 'new', committed_at: 200, deleted: true },
+      ],
+    );
+    const r = await api.explain('alpha', 'main', 'kb/x.md');
+    expect(r.outgoing[0].deleted).toBe(true);
+    expect(r.outgoing[0].versions[0].commit).toBe('new');
+  });
+});
+
 describe('api.factDiff', () => {
   beforeEach(() => { vi.restoreAllMocks(); });
 

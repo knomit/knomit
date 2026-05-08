@@ -74,6 +74,14 @@ export interface OriginSetResponse {
   head: string;
 }
 
+export interface RefVersion { commit: string; committed_at?: number; deleted?: boolean }
+export interface RefGroup {
+  path: string;
+  title: string;
+  versions: RefVersion[];   // newest-first
+  deleted?: boolean;        // true if the latest version is deleted (target retracted)
+}
+
 import type { FilterChip, AsOf } from './state';
 
 // parseSearchQuery splits a query string into structured components.
@@ -474,11 +482,12 @@ export const api = {
   },
 
   explain: (repo: string, branch: string, path: string): Promise<{
-    incoming: { path: string; title: string; commit?: string }[];
-    outgoing: { path: string; title: string; commit?: string; deleted?: boolean }[];
+    incoming: RefGroup[];
+    outgoing: RefGroup[];
   }> => {
     const factURL = `${branchBase(repo, branch)}/facts/${path}`;
-    const parseRefs = (data: any): { path: string; title: string; commit?: string; deleted?: boolean }[] => {
+    type RawRef = { path: string; title: string; commit?: string; committed_at?: number; deleted?: boolean };
+    const parseRefs = (data: any): RawRef[] => {
       // HAL CollectionView: {_embedded: {refs: [...]}}
       // Each ref carries a `commit` field pinning it to a specific version:
       // source_commit for /incoming, target_commit for /outgoing. The
@@ -490,12 +499,55 @@ export const api = {
       // Fallback: flat array
       return Array.isArray(data) ? data : [];
     };
+    // groupRefs collapses ref-events that share a `path` into a single
+    // RefGroup with versions[] ordered newest-first by committed_at.
+    // Same source path with different source_commits = different versions
+    // of the source asserting the same target — multi-edges are intentional
+    // (see internal/store/edge_props.go:11). Grouping de-dupes them in the UI.
+    const groupRefs = (refs: RawRef[]): RefGroup[] => {
+      const order: string[] = [];
+      type Pending = { path: string; entries: { ref: RawRef; ord: number }[] };
+      const groups = new Map<string, Pending>();
+      refs.forEach((r, idx) => {
+        const key = r.path;
+        let g = groups.get(key);
+        if (!g) {
+          g = { path: r.path, entries: [] };
+          groups.set(key, g);
+          order.push(key);
+        }
+        g.entries.push({ ref: r, ord: idx });
+      });
+      return order.map(key => {
+        const g = groups.get(key)!;
+        // Sort entries newest-first by committed_at; fall back to backend
+        // insertion order when committed_at is missing on either side.
+        const sorted = [...g.entries].sort((a, b) => {
+          const at = a.ref.committed_at;
+          const bt = b.ref.committed_at;
+          if (at != null && bt != null && at !== bt) return bt - at;
+          return a.ord - b.ord;
+        });
+        const versions: RefVersion[] = sorted.map(e => ({
+          commit: e.ref.commit ?? '',
+          committed_at: e.ref.committed_at,
+          deleted: e.ref.deleted,
+        }));
+        const latestRef = sorted[0]?.ref;
+        return {
+          path: g.path,
+          title: latestRef?.title ?? '',
+          versions,
+          deleted: latestRef?.deleted ?? false,
+        };
+      });
+    };
     return Promise.all([
       fetch(`${factURL}/incoming`).then(r => r.ok ? r.json() : r.json().then((e: { error: string }) => { throw new Error(e.error || r.statusText); })),
       fetch(`${factURL}/outgoing`).then(r => r.ok ? r.json() : r.json().then((e: { error: string }) => { throw new Error(e.error || r.statusText); })),
     ]).then(([inc, out]) => ({
-      incoming: parseRefs(inc),
-      outgoing: parseRefs(out),
+      incoming: groupRefs(parseRefs(inc)),
+      outgoing: groupRefs(parseRefs(out)),
     }));
   },
 };

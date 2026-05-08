@@ -63,20 +63,24 @@ func (si *searchIndex) IncomingAtCommit(ctx context.Context, branch, path, commi
 		placeholders = append(placeholders, "?")
 	}
 	bcRows, err := conn(ctx, si.rh.db).QueryContext(ctx,
-		`SELECT commit_hash FROM branch_commits WHERE branch_id = ? AND commit_hash IN (`+strings.Join(placeholders, ",")+`)`,
+		`SELECT bc.commit_hash, COALESCE(cl.committed_at, 0)
+		   FROM branch_commits bc
+		   LEFT JOIN commit_log cl ON cl.commit_hash = bc.commit_hash
+		  WHERE bc.branch_id = ? AND bc.commit_hash IN (`+strings.Join(placeholders, ",")+`)`,
 		args...,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("IncomingAtCommit: branch filter: %w", err)
 	}
 	defer bcRows.Close()
-	visible := make(map[string]bool, len(candidates))
+	dates := make(map[string]int64, len(candidates))
 	for bcRows.Next() {
 		var h string
-		if err := bcRows.Scan(&h); err != nil {
+		var ts int64
+		if err := bcRows.Scan(&h, &ts); err != nil {
 			return nil, fmt.Errorf("IncomingAtCommit: branch filter scan: %w", err)
 		}
-		visible[h] = true
+		dates[h] = ts
 	}
 	if err := bcRows.Err(); err != nil {
 		return nil, fmt.Errorf("IncomingAtCommit: branch filter rows: %w", err)
@@ -84,7 +88,8 @@ func (si *searchIndex) IncomingAtCommit(ctx context.Context, branch, path, commi
 
 	out := make([]RefSummary, 0, len(candidates))
 	for _, c := range candidates {
-		if visible[c.Commit] {
+		if ts, ok := dates[c.Commit]; ok {
+			c.CommittedAt = ts
 			out = append(out, c)
 		}
 	}
@@ -100,6 +105,7 @@ func (si *searchIndex) IncomingAtCommit(ctx context.Context, branch, path, commi
 // The parameter is accepted for symmetry with IncomingAtCommit and future
 // use (e.g. branch-relative target visibility).
 func (si *searchIndex) OutgoingAtCommit(ctx context.Context, branch, path, commitHash string) ([]RefSummary, error) {
+	_ = branch // reserved for future use; OutgoingAtCommit is currently branchless
 	// Note: "commit" is a reserved SQL keyword; use alias "tc" (target commit).
 	cypherQ := fmt.Sprintf(
 		`MATCH (s:%s {path: "%s"})-[r:%s]->(t:%s) WHERE r.source_commit = "%s" RETURN t.path AS path, t.title AS title, r.target_commit AS tc, t.deleted AS deleted`,
@@ -113,7 +119,7 @@ func (si *searchIndex) OutgoingAtCommit(ctx context.Context, branch, path, commi
 	}
 	defer rows.Close()
 
-	var out []RefSummary
+	var candidates []RefSummary
 	for rows.Next() {
 		var rs RefSummary
 		var del any
@@ -124,10 +130,54 @@ func (si *searchIndex) OutgoingAtCommit(ctx context.Context, branch, path, commi
 			continue
 		}
 		rs.Deleted = isDeletedVal(del)
-		out = append(out, rs)
+		candidates = append(candidates, rs)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("OutgoingAtCommit: rows: %w", err)
+	}
+
+	// Post-cypher SQL: resolve committed_at for each target_commit via
+	// commit_log. LEFT JOIN against branch_commits keeps the symmetric
+	// shape with IncomingAtCommit even though OutgoingAtCommit does not
+	// filter by branch.
+	if len(candidates) == 0 {
+		return candidates, nil
+	}
+	args := make([]any, 0, len(candidates))
+	placeholders := make([]string, 0, len(candidates))
+	for _, c := range candidates {
+		args = append(args, c.Commit)
+		placeholders = append(placeholders, "?")
+	}
+	bcRows, err := conn(ctx, si.rh.db).QueryContext(ctx,
+		`SELECT cl.commit_hash, COALESCE(cl.committed_at, 0)
+		   FROM commit_log cl
+		  WHERE cl.commit_hash IN (`+strings.Join(placeholders, ",")+`)`,
+		args...,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("OutgoingAtCommit: commit_log lookup: %w", err)
+	}
+	defer bcRows.Close()
+	dates := make(map[string]int64, len(candidates))
+	for bcRows.Next() {
+		var h string
+		var ts int64
+		if err := bcRows.Scan(&h, &ts); err != nil {
+			return nil, fmt.Errorf("OutgoingAtCommit: branch filter scan: %w", err)
+		}
+		dates[h] = ts
+	}
+	if err := bcRows.Err(); err != nil {
+		return nil, fmt.Errorf("OutgoingAtCommit: commit_log rows: %w", err)
+	}
+
+	out := make([]RefSummary, 0, len(candidates))
+	for _, c := range candidates {
+		if ts, ok := dates[c.Commit]; ok {
+			c.CommittedAt = ts
+		}
+		out = append(out, c)
 	}
 	return out, nil
 }
