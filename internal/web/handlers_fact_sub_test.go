@@ -229,6 +229,58 @@ func TestHandleFactOutgoing_ReturnsHALCollection(t *testing.T) {
 	}
 }
 
+func TestHandleFactIncoming_FactNotLive_Returns404(t *testing.T) {
+	provider := &stubFactSubProvider{
+		explainErr: store.ErrFactNotLive,
+	}
+	s := &Server{
+		Manager:         newTestManagerWithRepos(t, "alpha"),
+		factSubProvider: provider,
+	}
+	r := s.NewAPIRouter()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet,
+		"/repos/alpha/branches/agent:test/facts/know/gone.md/incoming", nil)
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("status: %d, want 404", rec.Code)
+	}
+	if got := rec.Header().Get("Content-Type"); got != "application/problem+json" {
+		t.Errorf("content-type: %q", got)
+	}
+	var body struct {
+		Title string `json:"title"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if body.Title != "Fact not found" {
+		t.Errorf("title: %q, want %q", body.Title, "Fact not found")
+	}
+}
+
+func TestHandleFactOutgoing_FactNotLive_Returns404(t *testing.T) {
+	provider := &stubFactSubProvider{
+		explainErr: store.ErrFactNotLive,
+	}
+	s := &Server{
+		Manager:         newTestManagerWithRepos(t, "alpha"),
+		factSubProvider: provider,
+	}
+	r := s.NewAPIRouter()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet,
+		"/repos/alpha/branches/agent:test/facts/know/gone.md/outgoing", nil)
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("status: %d, want 404", rec.Code)
+	}
+}
+
 func TestHandleFactIncoming_StoreError_Returns500(t *testing.T) {
 	provider := &stubFactSubProvider{
 		explainErr: errors.New("db error"),

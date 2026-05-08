@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"testing"
 
@@ -102,4 +103,44 @@ func refSummaryPaths(rs []RefSummary) []string {
 		out[i] = r.Path
 	}
 	return out
+}
+
+// TestExplainFact_RetractedAtHEAD: when the path has been retracted from HEAD
+// (its branch_facts row is gone), ExplainFact returns ErrFactNotLive instead
+// of a wrapped sql.ErrNoRows. Handlers map this sentinel to 404.
+func TestExplainFact_RetractedAtHEAD(t *testing.T) {
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	defer svc.Close()
+	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+
+	ctx := context.Background()
+	branch := "main"
+
+	// Create a fact, then retract it. The branch_facts row is removed at delete.
+	_, err = svc.Facts().WriteFact(ctx, branch, "kb/gone.md", testFactBody("gone", 0.9, nil), "init", "")
+	require.NoError(t, err)
+	_, err = svc.Facts().DeleteFact(ctx, branch, "kb/gone.md", "retract gone")
+	require.NoError(t, err)
+
+	_, err = svc.Search().ExplainFact(ctx, branch, "kb/gone.md")
+	require.Error(t, err)
+	require.True(t, errors.Is(err, ErrFactNotLive),
+		"expected ErrFactNotLive for retracted path, got %v", err)
+}
+
+// TestExplainFact_NeverIndexed: a path that has never been written returns
+// ErrFactNotLive too — same code path, no branch_facts row.
+func TestExplainFact_NeverIndexed(t *testing.T) {
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	defer svc.Close()
+	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+
+	_, err = svc.Search().ExplainFact(context.Background(), "main", "kb/never.md")
+	require.Error(t, err)
+	require.True(t, errors.Is(err, ErrFactNotLive),
+		"expected ErrFactNotLive for never-indexed path, got %v", err)
 }
