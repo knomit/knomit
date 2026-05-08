@@ -180,3 +180,29 @@ func TestExplainFact_NeverIndexed(t *testing.T) {
 	require.True(t, errors.Is(err, ErrFactNotLive),
 		"expected ErrFactNotLive for never-indexed path, got %v", err)
 }
+
+// TestOutgoingAtCommit_PopulatesType verifies the type of the target fact is
+// returned on each RefSummary.
+func TestOutgoingAtCommit_PopulatesType(t *testing.T) {
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	defer svc.Close()
+	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+
+	ctx := context.Background()
+	branch := "main"
+
+	_, err = svc.Facts().WriteFact(ctx, branch, "kb/e.md",
+		testFactBodyWithType("e", 0.9, nil, fact.Synthesis), "init e", "")
+	require.NoError(t, err)
+	c1Res, err := svc.Facts().WriteFact(ctx, branch, "kb/d.md",
+		testFactBodyWithType("d", 0.8, []string{"kb/e.md"}, fact.Pattern), "d→e", "")
+	require.NoError(t, err)
+
+	got, err := svc.Search().OutgoingAtCommit(ctx, branch, "kb/d.md", c1Res.CommitHash)
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	require.Equal(t, "kb/e.md", got[0].Path)
+	require.Equal(t, string(fact.Synthesis), got[0].Type)
+}

@@ -108,11 +108,11 @@ func (si *searchIndex) OutgoingAtCommit(ctx context.Context, branch, path, commi
 	_ = branch // reserved for future use; OutgoingAtCommit is currently branchless
 	// Note: "commit" is a reserved SQL keyword; use alias "tc" (target commit).
 	cypherQ := fmt.Sprintf(
-		`MATCH (s:%s {path: "%s"})-[r:%s]->(t:%s) WHERE r.source_commit = "%s" RETURN t.path AS path, t.title AS title, r.target_commit AS tc, t.deleted AS deleted`,
+		`MATCH (s:%s {path: "%s"})-[r:%s]->(t:%s) WHERE r.source_commit = "%s" RETURN t.path AS path, t.title AS title, t.type AS type, r.target_commit AS tc, t.deleted AS deleted`,
 		NodeFact, escapeCypherKey(path), EdgeDerivedFrom, NodeFact,
 		escapeCypherKey(commitHash),
 	)
-	q := `SELECT json_extract(value, '$.path'), json_extract(value, '$.title'), json_extract(value, '$.tc'), json_extract(value, '$.deleted') FROM json_each(cypher('` + cypherQ + `'))`
+	q := `SELECT json_extract(value, '$.path'), json_extract(value, '$.title'), json_extract(value, '$.type'), json_extract(value, '$.tc'), json_extract(value, '$.deleted') FROM json_each(cypher('` + cypherQ + `'))`
 	rows, err := conn(ctx, si.rh.db).QueryContext(ctx, q)
 	if err != nil {
 		return nil, fmt.Errorf("OutgoingAtCommit: cypher: %w", err)
@@ -123,7 +123,7 @@ func (si *searchIndex) OutgoingAtCommit(ctx context.Context, branch, path, commi
 	for rows.Next() {
 		var rs RefSummary
 		var del any
-		if err := rows.Scan(&rs.Path, &rs.Title, &rs.Commit, &del); err != nil {
+		if err := rows.Scan(&rs.Path, &rs.Title, &rs.Type, &rs.Commit, &del); err != nil {
 			return nil, fmt.Errorf("OutgoingAtCommit: scan: %w", err)
 		}
 		if rs.Path == "" {
