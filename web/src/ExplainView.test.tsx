@@ -32,7 +32,7 @@ describe('ExplainView Chip', () => {
     (api.fact as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(baseFact);
   });
 
-  it('renders single-version chip with commit_at_<hash7> pill and no ×N badge', async () => {
+  it('renders single-version chip with 7-char commit hash and no ×N badge', async () => {
     (api.explain as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
       incoming: [makeGroup({ path: 'kb/single.md', title: 'Single', versions: [{ commit: 'abcdef0123', committed_at: 1000 }] })],
       outgoing: [],
