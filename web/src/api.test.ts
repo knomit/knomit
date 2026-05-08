@@ -134,6 +134,34 @@ describe('parseFilterQuery', () => {
   });
 });
 
+describe('api.fact', () => {
+  beforeEach(() => { vi.restoreAllMocks(); });
+
+  it('appends ?fallback=before only when commit is provided AND opts.fallback is set', async () => {
+    const calls: string[] = [];
+    globalThis.fetch = vi.fn().mockImplementation(async (url: string) => {
+      calls.push(url);
+      return { ok: true, status: 200, json: async () => ({ path: 'kb/x.md', title: 'X', body: '', as_of: { commit: 'abc1234' } }) };
+    });
+
+    // Commit + fallback → query string appended.
+    await api.fact('alpha', 'main', 'kb/x.md', 'abc1234', { fallback: 'before' });
+    expect(calls[0]).toContain('/commits/abc1234/facts/kb/x.md');
+    expect(calls[0]).toContain('?fallback=before');
+
+    // Commit but no fallback opt → no query string.
+    await api.fact('alpha', 'main', 'kb/x.md', 'abc1234');
+    expect(calls[1]).toContain('/commits/abc1234/facts/kb/x.md');
+    expect(calls[1]).not.toContain('fallback=');
+
+    // No commit (HEAD-anchored) but fallback opt set → still no query string,
+    // because fallback is meaningless for HEAD reads.
+    await api.fact('alpha', 'main', 'kb/x.md', undefined, { fallback: 'before' });
+    expect(calls[2]).not.toContain('/commits/');
+    expect(calls[2]).not.toContain('fallback=');
+  });
+});
+
 describe('api.factDiff', () => {
   beforeEach(() => { vi.restoreAllMocks(); });
 

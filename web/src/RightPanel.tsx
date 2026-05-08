@@ -78,10 +78,17 @@ function TagCloud({ label, entries, color, onTagClick, focusedValue }: {
   );
 }
 
-function renderFact(fact: Fact, navigate: (req: NavRequest) => void, dispatch: Dispatch<Action>, onRetract?: () => void, onExplain?: () => void, readOnly = false) {
+function renderFact(fact: Fact, navigate: (req: NavRequest) => void, dispatch: Dispatch<Action>, onRetract?: () => void, onExplain?: () => void, readOnly = false, anchorCommit?: string | null) {
   const retractDisabled = readOnly;
   const retractTitle = retractDisabled ? READ_ONLY_TITLE : 'Retract fact';
   const retractColor = retractDisabled ? '#444' : '#f66';
+  // Retracted-version badge: only when anchorCommit is set (history+scrubbed)
+  // and fact.commit_hash is a different commit (the backend's ?fallback=before
+  // walked back to a pre-retraction version). Compare 7-char prefixes since
+  // anchorCommit may already be short.
+  const anchorShort = anchorCommit ? anchorCommit.slice(0, 7) : '';
+  const factShort = fact.commit_hash ? fact.commit_hash.slice(0, 7) : '';
+  const retractedAt = anchorShort && factShort && anchorShort !== factShort ? anchorShort : '';
   return (
     <div style={{ padding: '24px 28px', overflowY: 'auto', height: '100%', boxSizing: 'border-box' }}>
       <div style={{ marginBottom: 20 }}>
@@ -101,6 +108,15 @@ function renderFact(fact: Fact, navigate: (req: NavRequest) => void, dispatch: D
                 style={{ color: '#7c9', fontFamily: 'monospace', fontSize: 11, background: '#1a2e1a', padding: '1px 5px', borderRadius: 3 }}
               >
                 {fact.commit_hash.slice(0, 7)}
+              </span>
+            )}
+            {retractedAt && (
+              <span
+                data-testid="retracted-version-badge"
+                title={`This fact was retracted at ${retractedAt}; showing its content from ${factShort}`}
+                style={{ color: '#e5a23c', fontFamily: 'monospace', fontSize: 11, background: 'rgba(229,162,60,0.12)', border: '1px solid rgba(229,162,60,0.35)', padding: '1px 5px', borderRadius: 3 }}
+              >
+                retracted at {retractedAt} · showing version {factShort}
               </span>
             )}
             {onExplain && (
@@ -516,17 +532,28 @@ export function RightPanel({ state, dispatch, navigate, onExplain }: {
   const anchorCommit = selectAnchorCommit(state);
   const historyCommit = state.view === 'history' ? anchorCommit : null;
 
+  // History + scrubbed: opt into the backend's ?fallback=before so that
+  // clicking a retracted file (in a retract commit) shows the pre-retraction
+  // content instead of a 404. Other view/mode combinations don't need
+  // fallback (tree/chrono are live; diff has its own renderer).
+  const useFallback = state.view === 'history' && state.asOf.mode === 'scrubbed';
+
   useAsync((stale) => {
     if (!factPath) { setFact(null); setError(null); return; }
     setError(null);
-    api.fact(state.repo, state.branch, factPath, anchorCommit ?? undefined)
+    setFact(null);
+    api.fact(
+      state.repo, state.branch, factPath,
+      anchorCommit ?? undefined,
+      useFallback ? { fallback: 'before' } : undefined,
+    )
       .then(f => {
         if (stale()) return;
         setFact(f);
         // No FACT_LOADED dispatch — fact.commit_hash is read directly from the response.
       })
       .catch(e => { if (!stale()) setError(String(e)); });
-  }, [factPath, anchorCommit, state.repo]);
+  }, [factPath, anchorCommit, state.repo, useFallback]);
 
   useAsync((stale) => {
     if (factPath || state.view === 'history') return;
@@ -569,8 +596,6 @@ export function RightPanel({ state, dispatch, navigate, onExplain }: {
     return () => window.removeEventListener('keydown', handler);
   }, [state.rightPanelFocused, dispatch]);
 
-  if (error) return <div style={{ padding: 24, color: '#f44' }}>{error}</div>;
-
   // In diff mode with a selected fact, render the dedicated diff view
   // regardless of view mode. The view falls back to live/scrubbed rendering
   // when factPath is null.
@@ -581,6 +606,23 @@ export function RightPanel({ state, dispatch, navigate, onExplain }: {
   const commitPanel = state.view === 'history' && historyCommit
     ? <CommitPanel historyCommit={historyCommit} repo={state.repo} branch={state.branch} selectedFact={factPath} navigate={navigate} rightPanelFocused={state.rightPanelFocused} dispatch={dispatch} />
     : null;
+
+  // Error from the fact-fetch effect. Don't short-circuit the whole panel —
+  // when in history view, the CommitPanel file list (with +/-/~ markers)
+  // must still render even when the auto-selected fact 404s. Render the
+  // error inside the fact-detail content area below the commit panel.
+  if (error && factPath) {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
+        {commitPanel}
+        <div style={{ padding: 24, color: '#f44' }}>{error}</div>
+      </div>
+    );
+  }
+  // Non-fact errors (e.g. stats failures) were never wired to setError, but
+  // keep the early-return for parity with the old behavior in the unlikely
+  // case error is set without factPath.
+  if (error) return <div style={{ padding: 24, color: '#f44' }}>{error}</div>;
 
   // Summary view: no fact selected
   if (!factPath) {
@@ -651,6 +693,11 @@ export function RightPanel({ state, dispatch, navigate, onExplain }: {
           showRetract ? () => { if (!readOnly) setConfirmRetract(true); } : undefined,
           showRetract ? () => onExplain?.(fact.path, null) : undefined,
           readOnly,
+          // Only pass the anchor in history+scrubbed mode — the retracted-
+          // version badge is only meaningful there. In live/diff/tree the
+          // anchor either matches the fact's commit_hash (no badge) or is
+          // null (badge suppressed).
+          useFallback ? anchorCommit : null,
         )}
       </div>
     </div>

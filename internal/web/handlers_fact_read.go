@@ -28,7 +28,16 @@ type FactReader interface {
 	// returned headOrCommit string is the resolved commit the caller should
 	// stamp into the view's as_of — HEAD's head-commit when the anchor is
 	// HEAD, or the pinned sha unchanged when the anchor is commit-anchored.
-	Read(ri *repos.RepoInstance, a hal.Anchor, path string) (_ knomitfact.Fact, headOrCommit string, _ error)
+	//
+	// When fallback is true and the anchor is commit-anchored and the file
+	// does not exist at the commit, Read falls back to the most recent
+	// ancestor where the file existed (BeforeCommit semantics). In the
+	// fallback case the returned headOrCommit is the actual content's
+	// source commit (different from a.Commit). When fallback is false,
+	// behavior is unchanged: missing-at-commit returns errFactNotFound.
+	// HEAD-anchored callers should pass fallback=false (the parameter is
+	// only meaningful for commit-anchored reads).
+	Read(ri *repos.RepoInstance, a hal.Anchor, path string, fallback bool) (_ knomitfact.Fact, headOrCommit string, _ error)
 
 	// Exists reports whether the given fact path is visible on the anchor
 	// (same semantics as Read's "exists" check — used for structured refs).
@@ -45,6 +54,7 @@ func (defaultFactReader) Read(
 	ri *repos.RepoInstance,
 	a hal.Anchor,
 	path string,
+	fallback bool,
 ) (knomitfact.Fact, string, error) {
 	var (
 		f    knomitfact.Fact
@@ -62,6 +72,26 @@ func (defaultFactReader) Read(
 		}
 		res, rerr := svc.Facts().ReadFact(contextTODO(), a.Branch, path, opts)
 		if rerr != nil {
+			// Opt-in fallback: when the file doesn't exist at the pinned commit,
+			// walk back to the most recent ancestor where it did. Used by the
+			// History view's retract-commit case so the right panel can show
+			// the pre-retraction content instead of a 404.
+			if fallback && !a.IsHEAD() {
+				fbOpts := &store.ReadFactOpts{BeforeCommit: a.Commit}
+				fbRes, fbErr := svc.Facts().ReadFact(contextTODO(), a.Branch, path, fbOpts)
+				if fbErr != nil {
+					err = errFactNotFound
+					return
+				}
+				parsed, perr := knomitfact.ParseFact(path, fbRes.Content)
+				if perr != nil {
+					err = perr
+					return
+				}
+				f = parsed
+				head = fbRes.FromCommit
+				return
+			}
 			err = errFactNotFound
 			return
 		}
@@ -116,7 +146,10 @@ func handleHALFact(b hal.URLBuilder, m *repos.Manager, reader FactReader, subPro
 		}
 
 		a := hal.Anchor{Branch: branch}
-		f, head, err := reader.Read(ri, a, path)
+		// HEAD-anchored reads ignore the fallback parameter (the file either
+		// exists at HEAD or it doesn't — there's no "previous version" to
+		// fall back to). Always pass false here.
+		f, head, err := reader.Read(ri, a, path, false)
 		if err != nil {
 			if errors.Is(err, errFactNotFound) {
 				hal.WriteProblem(w, http.StatusNotFound, "Fact not found",

@@ -331,11 +331,15 @@ export const api = {
     });
   },
 
-  fact: (repo: string, branch: string, path: string, commit?: string): Promise<Fact> => {
-    const url = commit
+  fact: (repo: string, branch: string, path: string, commit?: string, opts?: { fallback?: 'before' }): Promise<Fact> => {
+    const base = commit
       ? `${branchBase(repo, branch)}/commits/${commit}/facts/${path}`
       : `${branchBase(repo, branch)}/facts/${path}`;
-    return fetch(url).then(r => { if (!r.ok) throw new Error(r.statusText); return r.json(); }).then(normalizeFactResponse);
+    // ?fallback=before is only meaningful for commit-anchored reads (a HEAD
+    // read either finds the fact or it doesn't — there's no prior version
+    // to fall back to). Skip the parameter for HEAD reads.
+    const query = (commit && opts?.fallback === 'before') ? '?fallback=before' : '';
+    return fetch(base + query).then(r => { if (!r.ok) throw new Error(r.statusText); return r.json(); }).then(normalizeFactResponse);
   },
 
   search: (repo: string, branch: string, q: string, path = '', minConfidence = 0,

@@ -12,14 +12,34 @@ import (
 )
 
 // stubFactReader implements the minimal interface the HAL fact handler needs.
+//
+// The fallback contract is exercised via three optional fields:
+//   - fallbackFact / fallbackHead: when set AND the caller passes fallback=true,
+//     Read returns these instead of the primary (fact, head, readErr) tuple.
+//     This lets a single test exercise both the primary-success path and the
+//     fallback path without duplicating the whole struct.
+//   - lastFallback: records the fallback flag the handler actually passed
+//     (asserted by tests that care about how the parameter is wired).
 type stubFactReader struct {
 	fact    knomitfact.Fact
 	exists  map[string]bool
 	head    string
 	readErr error
+
+	// Fallback overrides — used only when the caller passes fallback=true.
+	fallbackFact    knomitfact.Fact
+	fallbackHead    string
+	fallbackErr     error
+	useFallbackData bool
+
+	lastFallback bool
 }
 
-func (s *stubFactReader) Read(_ *repos.RepoInstance, _ hal.Anchor, _ string) (knomitfact.Fact, string, error) {
+func (s *stubFactReader) Read(_ *repos.RepoInstance, _ hal.Anchor, _ string, fallback bool) (knomitfact.Fact, string, error) {
+	s.lastFallback = fallback
+	if fallback && s.useFallbackData {
+		return s.fallbackFact, s.fallbackHead, s.fallbackErr
+	}
 	return s.fact, s.head, s.readErr
 }
 
