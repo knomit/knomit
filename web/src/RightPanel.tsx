@@ -1,15 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Dispatch, ReactNode } from 'react';
 import { useAsync } from './hooks';
-import ReactMarkdown from 'react-markdown';
 import { api } from './api';
 import type { Fact, Stats, ActivityStats, CommitDetail } from './api';
 import type { AppState, Action } from './state';
 import { currentPath, selectAnchorCommit, isReadOnly, READ_ONLY_TITLE } from './state';
-import { relativeTime, typeStyles, defaultTypeStyle, opStyles, defaultOpStyle } from './utils';
-import { TypeIcon, EpisodeIcon, RetractIcon, ExplainIcon } from './icons';
+import { relativeTime, opStyles, defaultOpStyle } from './utils';
+import { EpisodeIcon, RetractIcon, ExplainIcon } from './icons';
 import type { NavRequest } from './useNavigationManager';
 import { FactDiffView } from './FactDiffView';
+import { FactBody } from './FactBody';
 
 function StatBox({ label, value, color }: { label: string; value: ReactNode; color: string }) {
   return (
@@ -147,17 +147,6 @@ function renderFact(fact: Fact, navigate: (req: NavRequest) => void, dispatch: D
           </span>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 4 }}>
-          {fact.type && (() => {
-            const ts = typeStyles[fact.type] || defaultTypeStyle;
-            return (
-              <span data-testid="fact-type-badge" style={{
-                color: ts.color, background: ts.bg, fontSize: 10, padding: '2px 8px',
-                borderRadius: 3, fontFamily: 'monospace', letterSpacing: 0.5,
-                border: fact.type === 'hypothesis' ? `1px dashed ${ts.color}` : 'none',
-                display: 'inline-flex', alignItems: 'center', gap: 4,
-              }}><TypeIcon type={fact.type} color={ts.color} size={10} /> {ts.label}</span>
-            );
-          })()}
           <span
             onClick={() => fact.commit_hash
               ? navigate({ view: 'history', factPath: fact.path, asOf: { mode: 'scrubbed', commit: fact.commit_hash } })
@@ -170,51 +159,7 @@ function renderFact(fact: Fact, navigate: (req: NavRequest) => void, dispatch: D
         </div>
       </div>
 
-      <div data-testid="fact-meta" style={{ display: 'flex', gap: 10, marginBottom: 28 }}>
-        <StatBox label="Confidence" value={fact.confidence?.toFixed(2)} color="#8af" />
-        <StatBox label="Sources" value={fact.sources} color="#7c9" />
-      </div>
-
-      <div data-testid="fact-body" style={{ color: '#ccc', lineHeight: 1.7, fontSize: 14, marginBottom: 8 }}>
-        <ReactMarkdown>{fact.body || ''}</ReactMarkdown>
-      </div>
-
-      <TagCloud label="Domains" entries={fact.domain || []} color="119,204,153"
-        onTagClick={d => dispatch({ type: 'ADD_FILTER', chip: { category: 'domain', value: d } })} />
-      <TagCloud label="Entities" entries={fact.entities || []} color="136,170,255"
-        onTagClick={e => dispatch({ type: 'ADD_FILTER', chip: { category: 'entity', value: e } })} />
-
-      {fact.refs?.length > 0 && (
-        <div>
-          <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: 1.5, color: '#555', marginBottom: 10 }}>References</div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-            {fact.refs.map(ref => {
-              if (ref.startsWith('http://') || ref.startsWith('https://')) {
-                return (
-                  <a key={ref} href={ref} target="_blank" rel="noopener noreferrer"
-                    style={{ color: '#8af', fontSize: 12, textDecoration: 'none', transition: 'color 0.15s' }}
-                    onMouseEnter={e => { (e.currentTarget as HTMLElement).style.color = '#adf'; }}
-                    onMouseLeave={e => { (e.currentTarget as HTMLElement).style.color = '#8af'; }}
-                  >{'\u2197'} {ref}</a>
-                );
-              }
-              // Local ref: open at the same commit as the current fact (time-travel).
-              const commit = fact.commit_hash;
-              return (
-                <span key={ref}
-                  onClick={() => commit
-                    ? navigate({ view: 'history', factPath: ref, asOf: { mode: 'scrubbed', commit: commit } })
-                    : navigate({ view: 'tree', factPath: ref })
-                  }
-                  style={{ color: '#8af', fontSize: 12, fontFamily: 'monospace', cursor: 'pointer', transition: 'color 0.15s' }}
-                  onMouseEnter={e => { (e.currentTarget as HTMLElement).style.color = '#adf'; }}
-                  onMouseLeave={e => { (e.currentTarget as HTMLElement).style.color = '#8af'; }}
-                >{'\u2192'} {ref}</span>
-              );
-            })}
-          </div>
-        </div>
-      )}
+      <FactBody fact={fact} navigate={navigate} dispatch={dispatch} readOnly={readOnly} />
     </div>
   );
 }

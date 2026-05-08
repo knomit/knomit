@@ -1,0 +1,156 @@
+import type { Dispatch, ReactNode } from 'react';
+import ReactMarkdown from 'react-markdown';
+import type { Fact } from './api';
+import type { Action } from './state';
+import { typeStyles, defaultTypeStyle } from './utils';
+import { TypeIcon } from './icons';
+import type { NavRequest } from './useNavigationManager';
+
+interface Props {
+  fact: Fact;
+  navigate: (req: NavRequest) => void;
+  dispatch: Dispatch<Action>;
+  readOnly: boolean;
+}
+
+export function FactBody({ fact, navigate, dispatch, readOnly }: Props) {
+  return (
+    <>
+      {fact.type && (() => {
+        const ts = typeStyles[fact.type] || defaultTypeStyle;
+        return (
+          <div style={{ marginBottom: 14 }}>
+            <span data-testid="fact-type-badge" style={{
+              color: ts.color, background: ts.bg, fontSize: 10, padding: '2px 8px',
+              borderRadius: 3, fontFamily: 'monospace', letterSpacing: 0.5,
+              border: fact.type === 'hypothesis' ? `1px dashed ${ts.color}` : 'none',
+              display: 'inline-flex', alignItems: 'center', gap: 4,
+            }}>
+              <TypeIcon type={fact.type} color={ts.color} size={10} /> {ts.label}
+            </span>
+          </div>
+        );
+      })()}
+
+      <div data-testid="fact-meta" style={{ display: 'flex', gap: 10, marginBottom: 28 }}>
+        <StatBox label="Confidence" value={fact.confidence?.toFixed(2)} color="#8af" />
+        <StatBox label="Sources" value={fact.sources} color="#7c9" />
+      </div>
+
+      <div data-testid="fact-body" style={{ color: '#ccc', lineHeight: 1.7, fontSize: 14, marginBottom: 8 }}>
+        <ReactMarkdown>{fact.body || ''}</ReactMarkdown>
+      </div>
+
+      <TagCloud label="Domains" entries={fact.domain || []} color="119,204,153"
+        readOnly={readOnly}
+        onTagClick={d => dispatch({ type: 'ADD_FILTER', chip: { category: 'domain', value: d } })} />
+      <TagCloud label="Entities" entries={fact.entities || []} color="136,170,255"
+        readOnly={readOnly}
+        onTagClick={e => dispatch({ type: 'ADD_FILTER', chip: { category: 'entity', value: e } })} />
+
+      {(() => {
+        const allRefs = fact.refs || [];
+        const visible = readOnly
+          ? allRefs.filter(r => r.startsWith('http://') || r.startsWith('https://'))
+          : allRefs;
+        if (visible.length === 0) return null;
+        return (
+          <div>
+            <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: 1.5, color: '#555', marginBottom: 10 }}>References</div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              {visible.map(ref => {
+                if (ref.startsWith('http://') || ref.startsWith('https://')) {
+                  return (
+                    <a key={ref} href={ref} target="_blank" rel="noopener noreferrer"
+                      style={{ color: '#8af', fontSize: 12, textDecoration: 'none', transition: 'color 0.15s' }}
+                      onMouseEnter={e => { (e.currentTarget as HTMLElement).style.color = '#adf'; }}
+                      onMouseLeave={e => { (e.currentTarget as HTMLElement).style.color = '#8af'; }}
+                    >{'↗'} {ref}</a>
+                  );
+                }
+                const commit = fact.commit_hash;
+                return (
+                  <span key={ref}
+                    onClick={() => commit
+                      ? navigate({ view: 'history', factPath: ref, asOf: { mode: 'scrubbed', commit } })
+                      : navigate({ view: 'tree', factPath: ref })
+                    }
+                    style={{ color: '#8af', fontSize: 12, fontFamily: 'monospace', cursor: 'pointer', transition: 'color 0.15s' }}
+                    onMouseEnter={e => { (e.currentTarget as HTMLElement).style.color = '#adf'; }}
+                    onMouseLeave={e => { (e.currentTarget as HTMLElement).style.color = '#8af'; }}
+                  >{'→'} {ref}</span>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })()}
+    </>
+  );
+}
+
+function StatBox({ label, value, color }: { label: string; value: ReactNode; color: string }) {
+  return (
+    <div style={{ borderLeft: `3px solid ${color}`, padding: '10px 16px', background: '#1a1a2a', borderRadius: '0 6px 6px 0', minWidth: 90 }}>
+      <div style={{ fontSize: 10, color: '#666', textTransform: 'uppercase', letterSpacing: 1 }}>{label}</div>
+      <div style={{ fontSize: 22, fontWeight: 600, color: '#eee', marginTop: 2 }}>{value}</div>
+    </div>
+  );
+}
+
+function TagCloud({ label, entries, color, onTagClick, readOnly }: {
+  label: string;
+  entries: [string, number][] | string[];
+  color: string;
+  onTagClick: (value: string) => void;
+  readOnly: boolean;
+}) {
+  if (entries.length === 0) return null;
+
+  const items: [string, number][] = typeof entries[0] === 'string'
+    ? (entries as string[]).map(s => [s, 1])
+    : entries as [string, number][];
+  const max = items[0][1];
+  const weighted = items.some(([, n]) => n !== items[0][1]);
+
+  return (
+    <div style={{ marginBottom: 22 }}>
+      <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: 1.5, color: '#555', marginBottom: 10 }}>{label}</div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+        {items.map(([name, n]) => {
+          const ratio = max > 0 ? n / max : 1;
+          const accent = `rgba(${color},`;
+          return (
+            <span key={name} data-testid="tag-item" data-value={name}
+              onClick={() => { if (!readOnly) onTagClick(name); }}
+              style={{
+                display: 'inline-flex', alignItems: 'center', gap: 5,
+                cursor: readOnly ? 'default' : 'pointer',
+                padding: weighted && ratio >= 0.75 ? '5px 11px' : weighted ? '4px 9px' : '5px 11px',
+                borderRadius: 6,
+                background: weighted && ratio < 0.5 ? 'rgba(26,26,42,0.6)' : '#1a1a2a',
+                border: `1px solid ${accent}${weighted ? (ratio >= 0.75 ? 0.3 : ratio >= 0.5 ? 0.2 : 0.1) : 0.2})`,
+                transition: 'border-color 0.15s, opacity 0.15s',
+              }}
+              onMouseEnter={e => { if (!readOnly) (e.currentTarget as HTMLElement).style.borderColor = `${accent}0.5)`; }}
+              onMouseLeave={e => { (e.currentTarget as HTMLElement).style.borderColor = `${accent}${weighted ? (ratio >= 0.75 ? 0.3 : ratio >= 0.5 ? 0.2 : 0.1) : 0.2})`; }}
+            >
+              <span style={{
+                fontSize: weighted && ratio >= 0.5 ? 12 : weighted ? 11 : 12,
+                fontWeight: weighted && ratio >= 0.75 ? 600 : 'normal',
+                color: !weighted || ratio >= 0.5 ? `rgb(${color})` : `${accent}0.6)`,
+              }}>{name}</span>
+              {weighted && (
+                <span style={{
+                  fontSize: 9, borderRadius: 10, padding: '1px 5px', fontWeight: 600,
+                  color: ratio >= 0.5 ? '#111' : `${accent}0.5)`,
+                  background: ratio >= 0.75 ? `rgb(${color})` : ratio >= 0.5 ? `${accent}0.8)` : `${accent}0.15)`,
+                }}>{n}</span>
+              )}
+            </span>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
