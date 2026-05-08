@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { Dispatch, ReactNode } from 'react';
+import type { Dispatch } from 'react';
 import { useAsync } from './hooks';
 import { api } from './api';
 import type { Fact, Stats, ActivityStats, CommitDetail } from './api';
@@ -9,74 +9,7 @@ import { relativeTime, opStyles, defaultOpStyle } from './utils';
 import { EpisodeIcon, RetractIcon, ExplainIcon } from './icons';
 import type { NavRequest } from './useNavigationManager';
 import { FactDiffView } from './FactDiffView';
-import { FactBody } from './FactBody';
-
-function StatBox({ label, value, color }: { label: string; value: ReactNode; color: string }) {
-  return (
-    <div style={{ borderLeft: `3px solid ${color}`, padding: '10px 16px', background: '#1a1a2a', borderRadius: '0 6px 6px 0', minWidth: 90 }}>
-      <div style={{ fontSize: 10, color: '#666', textTransform: 'uppercase', letterSpacing: 1 }}>{label}</div>
-      <div style={{ fontSize: 22, fontWeight: 600, color: '#eee', marginTop: 2 }}>{value}</div>
-    </div>
-  );
-}
-
-function TagCloud({ label, entries, color, onTagClick, focusedValue }: {
-  label: string;
-  entries: [string, number][] | string[];
-  color: string;
-  onTagClick: (value: string) => void;
-  focusedValue?: string;
-}) {
-  if (entries.length === 0) return null;
-
-  const items: [string, number][] = typeof entries[0] === 'string'
-    ? (entries as string[]).map(s => [s, 1])
-    : entries as [string, number][];
-  const max = items[0][1];
-  const weighted = items.some(([, n]) => n !== items[0][1]);
-
-  return (
-    <div style={{ marginBottom: 22 }}>
-      <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: 1.5, color: '#555', marginBottom: 10 }}>{label}</div>
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-        {items.map(([name, n]) => {
-          const ratio = max > 0 ? n / max : 1;
-          const accent = `rgba(${color},`;
-          return (
-            <span key={name} data-testid="tag-item" data-value={name}
-              onClick={() => onTagClick(name)}
-              style={{
-                display: 'inline-flex', alignItems: 'center', gap: 5, cursor: 'pointer',
-                padding: weighted && ratio >= 0.75 ? '5px 11px' : weighted ? '4px 9px' : '5px 11px',
-                borderRadius: 6,
-                background: weighted && ratio < 0.5 ? 'rgba(26,26,42,0.6)' : '#1a1a2a',
-                border: `1px solid ${accent}${weighted ? (ratio >= 0.75 ? 0.3 : ratio >= 0.5 ? 0.2 : 0.1) : 0.2})`,
-                transition: 'border-color 0.15s, opacity 0.15s',
-                outline: name === focusedValue ? `2px solid rgba(${color},0.55)` : 'none',
-                outlineOffset: 1,
-              }}
-              onMouseEnter={e => { (e.currentTarget as HTMLElement).style.borderColor = `${accent}0.5)`; }}
-              onMouseLeave={e => { (e.currentTarget as HTMLElement).style.borderColor = `${accent}${weighted ? (ratio >= 0.75 ? 0.3 : ratio >= 0.5 ? 0.2 : 0.1) : 0.2})`; }}
-            >
-              <span style={{
-                fontSize: weighted && ratio >= 0.5 ? 12 : weighted ? 11 : 12,
-                fontWeight: weighted && ratio >= 0.75 ? 600 : 'normal',
-                color: !weighted || ratio >= 0.5 ? `rgb(${color})` : `${accent}0.6)`,
-              }}>{name}</span>
-              {weighted && (
-                <span style={{
-                  fontSize: 9, borderRadius: 10, padding: '1px 5px', fontWeight: 600,
-                  color: ratio >= 0.5 ? '#111' : `${accent}0.5)`,
-                  background: ratio >= 0.75 ? `rgb(${color})` : ratio >= 0.5 ? `${accent}0.8)` : `${accent}0.15)`,
-                }}>{n}</span>
-              )}
-            </span>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
+import { FactBody, StatBox, TagCloud } from './FactBody';
 
 function renderFact(fact: Fact, navigate: (req: NavRequest) => void, dispatch: Dispatch<Action>, onRetract?: () => void, onExplain?: () => void, readOnly = false, anchorCommit?: string | null) {
   const retractDisabled = readOnly;

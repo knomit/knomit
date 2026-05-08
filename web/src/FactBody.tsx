@@ -89,7 +89,7 @@ export function FactBody({ fact, navigate, dispatch, readOnly }: Props) {
   );
 }
 
-function StatBox({ label, value, color }: { label: string; value: ReactNode; color: string }) {
+export function StatBox({ label, value, color }: { label: string; value: ReactNode; color: string }) {
   return (
     <div style={{ borderLeft: `3px solid ${color}`, padding: '10px 16px', background: '#1a1a2a', borderRadius: '0 6px 6px 0', minWidth: 90 }}>
       <div style={{ fontSize: 10, color: '#666', textTransform: 'uppercase', letterSpacing: 1 }}>{label}</div>
@@ -98,12 +98,13 @@ function StatBox({ label, value, color }: { label: string; value: ReactNode; col
   );
 }
 
-function TagCloud({ label, entries, color, onTagClick, readOnly }: {
+export function TagCloud({ label, entries, color, onTagClick, readOnly = false, focusedValue }: {
   label: string;
   entries: [string, number][] | string[];
   color: string;
   onTagClick: (value: string) => void;
-  readOnly: boolean;
+  readOnly?: boolean;
+  focusedValue?: string;
 }) {
   if (entries.length === 0) return null;
 
@@ -131,6 +132,8 @@ function TagCloud({ label, entries, color, onTagClick, readOnly }: {
                 background: weighted && ratio < 0.5 ? 'rgba(26,26,42,0.6)' : '#1a1a2a',
                 border: `1px solid ${accent}${weighted ? (ratio >= 0.75 ? 0.3 : ratio >= 0.5 ? 0.2 : 0.1) : 0.2})`,
                 transition: 'border-color 0.15s, opacity 0.15s',
+                outline: name === focusedValue ? `2px solid rgba(${color},0.55)` : 'none',
+                outlineOffset: 1,
               }}
               onMouseEnter={e => { if (!readOnly) (e.currentTarget as HTMLElement).style.borderColor = `${accent}0.5)`; }}
               onMouseLeave={e => { (e.currentTarget as HTMLElement).style.borderColor = `${accent}${weighted ? (ratio >= 0.75 ? 0.3 : ratio >= 0.5 ? 0.2 : 0.1) : 0.2})`; }}
