@@ -8,3 +8,16 @@ import { cleanup } from '@testing-library/react';
 afterEach(() => {
   cleanup();
 });
+
+// jsdom does not implement IntersectionObserver. Components that use it for
+// infinite scroll (HistoryTimeline, LeftPanel) crash on mount otherwise.
+class MockIntersectionObserver {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+  takeRecords() { return []; }
+  root = null;
+  rootMargin = '';
+  thresholds = [];
+}
+globalThis.IntersectionObserver = MockIntersectionObserver as unknown as typeof IntersectionObserver;
