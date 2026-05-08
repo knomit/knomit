@@ -74,7 +74,7 @@ export function ExplainView({ repo, branch, initialEntry, onClose }: Props) {
       {current.commit === null && (
         <div style={{ flexShrink: 0, borderBottom: '1px solid #1a1a1a', background: '#0d0d0d' }}>
           <RailHeader direction="in" groups={incoming} testId="incoming-header" />
-          <div style={{ padding: '6px 12px', minHeight: 38, display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
+          <div style={{ padding: '6px 12px', minHeight: 38, display: 'flex', flexWrap: 'nowrap', gap: 6, alignItems: 'center', overflowX: 'auto', overflowY: 'hidden' }}>
             {incoming.length === 0 && !loading && <span style={{ fontSize: 11, color: '#2a2a2a' }}>none</span>}
             {incoming.map(g => (
               <Chip key={g.path} group={g} onClick={commit => navigateTo({ path: g.path, commit })} />
@@ -88,7 +88,7 @@ export function ExplainView({ repo, branch, initialEntry, onClose }: Props) {
         {loading && <div style={{ color: '#444', fontSize: 12 }}>Loading…</div>}
         {error && <div style={{ color: '#f66', fontSize: 12 }}>{error}</div>}
         {fact && (
-          <div style={{ maxWidth: 720 }}>
+          <div style={{ maxWidth: 720, margin: '0 auto' }}>
             <div style={{ fontSize: 10, color: '#444', fontFamily: 'monospace', marginBottom: 6 }}>{fact.path}</div>
             <div data-testid="fact-title" style={{ fontSize: 18, fontWeight: 600, color: '#eee', letterSpacing: '-0.3px', marginBottom: 14 }}>{fact.title || fact.path}</div>
             <FactBody fact={fact} navigate={() => {}} dispatch={() => {}} readOnly={true} />
@@ -99,7 +99,7 @@ export function ExplainView({ repo, branch, initialEntry, onClose }: Props) {
       {/* Outgoing refs strip */}
       <div style={{ flexShrink: 0, borderTop: '1px solid #1a1a1a', background: '#0d0d0d' }}>
         <RailHeader direction="out" groups={outgoing} testId="outgoing-header" />
-        <div style={{ padding: '6px 12px', minHeight: 38, display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
+        <div style={{ padding: '6px 12px', minHeight: 38, display: 'flex', flexWrap: 'nowrap', gap: 6, alignItems: 'center', overflowX: 'auto', overflowY: 'hidden' }}>
           {outgoing.length === 0 && !loading && <span style={{ fontSize: 11, color: '#2a2a2a' }}>none</span>}
           {outgoing.map(g => (
             <Chip
@@ -218,6 +218,7 @@ function Chip({ group, onClick }: { group: RefGroup; onClick: (commit: string) =
         border: `1px solid ${deleted ? '#2a2a2a' : typeColor}`,
         cursor: 'pointer', background: '#111',
         maxWidth: 220,
+        flexShrink: 0,
         opacity: deleted ? 0.45 : 1,
         textDecoration: deleted ? 'line-through' : 'none',
         position: 'relative',
