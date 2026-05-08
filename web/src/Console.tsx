@@ -1,5 +1,5 @@
 import { useEffect, useRef, useCallback } from 'react';
-import type { AppState, Action } from './state';
+import type { AppState, Action, AsOf } from './state';
 import { ChevronUpIcon, ChevronDownIcon } from './icons';
 
 interface Props {
@@ -10,6 +10,95 @@ interface Props {
 function formatTime(ts: number): string {
   const d = new Date(ts);
   return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+}
+
+interface StatusFooterProps {
+  asOf: AsOf;
+  info: number;
+  errors: number;
+  task: { op: string; message: string } | null;
+  onExpand: () => void;
+}
+
+function pillContent(asOf: AsOf): { color: string; label: string; descriptor: string; glow: boolean } {
+  switch (asOf.mode) {
+    case 'live':
+      return { color: '#7c9', label: 'LIVE', descriptor: 'HEAD', glow: true };
+    case 'scrubbed':
+      return { color: '#e5a23c', label: 'SCRUBBED', descriptor: asOf.commit.slice(0, 7), glow: false };
+    case 'diff':
+      return { color: '#e5a23c', label: 'DIFF', descriptor: `${asOf.from.slice(0, 7)}..${asOf.to.slice(0, 7)}`, glow: false };
+  }
+}
+
+function Kbd({ children }: { children: string }) {
+  return (
+    <span style={{
+      color: '#a0a0a8', background: '#16161b', padding: '0 4px',
+      borderRadius: 2, border: '1px solid #1f1f26',
+      fontFamily: 'JetBrains Mono, ui-monospace, monospace', fontSize: 10,
+    }}>{children}</span>
+  );
+}
+
+function StatusFooter({ asOf, info, errors, task, onExpand }: StatusFooterProps) {
+  const p = pillContent(asOf);
+  return (
+    <div
+      data-testid="console"
+      onClick={onExpand}
+      style={{
+        height: 26, background: '#0b0b0d', borderTop: '1px solid #1f1f26',
+        display: 'flex', alignItems: 'center', padding: '0 14px', gap: 10,
+        flexShrink: 0, cursor: 'pointer', userSelect: 'none',
+        fontFamily: 'Inter, system-ui, sans-serif', fontSize: 11,
+      }}
+    >
+      <span style={{
+        flex: '0 0 auto', display: 'flex', alignItems: 'center', gap: 8,
+      }}>
+        <span style={{
+          width: 6, height: 6, borderRadius: '50%', background: p.color,
+          boxShadow: p.glow ? `0 0 6px ${p.color}` : 'none',
+        }}/>
+        <span style={{
+          color: p.color, letterSpacing: 1.1, fontWeight: 600,
+          fontFamily: 'JetBrains Mono, ui-monospace, monospace', fontSize: 10,
+        }}>{p.label}</span>
+        <span style={{
+          color: '#a0a0a8', fontFamily: 'JetBrains Mono, ui-monospace, monospace', fontSize: 10,
+        }}>{p.descriptor}</span>
+      </span>
+
+      <span style={{ color: '#1f1f26', flex: '0 0 auto' }}>│</span>
+
+      <span style={{
+        flex: '1 1 auto', minWidth: 0, display: 'flex', alignItems: 'center', gap: 10,
+        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+      }}>
+        <span style={{ color: '#5a5a65' }}>Console</span>
+        <span style={{ color: '#a0a0a8' }}>{info}</span>
+        {errors > 0 && <span style={{ color: '#f88' }}>{errors} err</span>}
+        {task && (
+          <span style={{
+            color: '#8af',
+            fontFamily: 'JetBrains Mono, ui-monospace, monospace',
+            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+            minWidth: 0,
+          }}>[{task.op}] {task.message}</span>
+        )}
+      </span>
+
+      <span style={{
+        flex: '0 0 auto', display: 'flex', alignItems: 'center', gap: 8,
+        fontFamily: 'JetBrains Mono, ui-monospace, monospace', fontSize: 10, color: '#5a5a65',
+      }}>
+        <Kbd>h</Kbd> HEAD · <Kbd>/</Kbd> search
+      </span>
+
+      <ChevronUpIcon color="#5a5a65" size={13} />
+    </div>
+  );
 }
 
 export function Console({ state, dispatch }: Props) {
@@ -56,31 +145,17 @@ export function Console({ state, dispatch }: Props) {
       activeTask = { op, ...t };
     }
   }
-  const taskColor = activeTask?.status === 'done' ? '#8c8' : activeTask?.status === 'error' ? '#c66' : '#8af';
 
-  // Collapsed bar
+  // Collapsed bar — delegated to StatusFooter
   if (!consoleOpen) {
     return (
-      <div
-        data-testid="console"
-        onClick={() => dispatch({ type: 'CONSOLE_TOGGLE' })}
-        style={{
-          height: 24, background: '#0d0d0d', borderTop: '1px solid #222',
-          display: 'flex', alignItems: 'center', padding: '0 12px', flexShrink: 0,
-          cursor: 'pointer', userSelect: 'none', gap: 10,
-        }}
-      >
-        <span style={{ color: '#666', fontSize: 11 }}>Console</span>
-        <span style={{ color: '#888', fontSize: 11 }}>{infoCount}</span>
-        {errorCount > 0 && <span style={{ color: '#c66', fontSize: 11 }}>{errorCount} err</span>}
-        {activeTask && activeTask.status !== 'idle' && (
-          <span style={{ color: taskColor, fontSize: 11, marginLeft: 4 }}>
-            [{activeTask.op}] {activeTask.message}
-          </span>
-        )}
-        <div style={{ flex: 1 }} />
-        <span data-testid="console-toggle" style={{ color: '#666', display: 'flex', alignItems: 'center' }}><ChevronUpIcon color="#666" size={13} /></span>
-      </div>
+      <StatusFooter
+        asOf={state.asOf}
+        info={infoCount}
+        errors={errorCount}
+        task={activeTask ? { op: activeTask.op, message: activeTask.message } : null}
+        onExpand={() => dispatch({ type: 'CONSOLE_TOGGLE' })}
+      />
     );
   }
 
