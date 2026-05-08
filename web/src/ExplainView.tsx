@@ -3,7 +3,7 @@ import { api } from './api';
 import type { Fact } from './api';
 
 interface ExplainEntry { path: string; commit: string | null; }
-interface RefSummary { path: string; title: string; deleted?: boolean; }
+interface RefSummary { path: string; title: string; commit?: string; deleted?: boolean; }
 
 interface Props {
   repo: string;
@@ -109,20 +109,32 @@ function Chip({ item, deleted, onClick }: { item: RefSummary; deleted?: boolean;
   return (
     <span
       onClick={onClick}
-      title={item.path}
+      title={deleted ? 'Target fact retracted.' : item.path}
       style={{
         display: 'inline-flex', flexDirection: 'column',
         padding: '3px 8px', borderRadius: 12,
         border: `1px solid ${deleted ? '#2a2a2a' : '#253565'}`,
         cursor: 'pointer', background: '#111',
         maxWidth: 200,
+        opacity: deleted ? 0.45 : 1,
+        textDecoration: deleted ? 'line-through' : 'none',
       }}
     >
       <span style={{ fontSize: 11, color: deleted ? '#555' : '#8af', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
         {item.title || item.path}
         {deleted && <span style={{ fontSize: 9, color: '#444', marginLeft: 4 }}>[deleted]</span>}
       </span>
-      <span style={{ fontSize: 9, color: '#333', fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{item.path}</span>
+      <span style={{ display: 'flex', alignItems: 'center', gap: 6, overflow: 'hidden' }}>
+        <span style={{ fontSize: 9, color: '#333', fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>{item.path}</span>
+        {item.commit && (
+          <span style={{
+            fontFamily: 'monospace', fontSize: 9, color: '#8af',
+            background: '#1a1a2a', padding: '0 4px', borderRadius: 2,
+            textDecoration: 'none',
+            flexShrink: 0,
+          }}>commit_at_{item.commit.slice(0, 7)}</span>
+        )}
+      </span>
     </span>
   );
 }

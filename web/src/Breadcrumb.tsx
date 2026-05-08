@@ -1,6 +1,6 @@
 import type { Dispatch } from 'react';
 import type { AppState, Action, View } from './state';
-import { currentPath } from './state';
+import { currentPath, isLive } from './state';
 import type { NavRequest } from './useNavigationManager';
 
 interface Props {
@@ -55,7 +55,7 @@ export function Breadcrumb({ state, dispatch, navigate }: Props) {
       gap: 4,
       padding: '0 12px',
       background: '#111',
-      borderBottom: '1px solid #1c1c1c',
+      borderBottom: isLive(state) ? '1px solid #1c1c1c' : '1px solid #e5a23c',
       fontSize: 13,
       height: 34,
       flexShrink: 0,

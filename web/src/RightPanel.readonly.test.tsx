@@ -19,6 +19,7 @@ vi.mock('./api', () => ({
       commit_hash: 'aaa1111',
       commit_date: '2026-05-01T00:00:00Z',
     }),
+    factDiff: vi.fn().mockResolvedValue({ from: null, to: null }),
     stats: vi.fn().mockResolvedValue(null),
     activity: vi.fn().mockResolvedValue(null),
     commitDetail: vi.fn().mockResolvedValue(null),
@@ -52,11 +53,12 @@ describe('RightPanel — read-only retract gate', () => {
     expect(btn).toHaveAttribute('title', READ_ONLY_TITLE);
   });
 
-  it('renders retract button disabled when in diff mode', async () => {
+  it('routes to FactDiffView (no retract button) when in diff mode with a fact', async () => {
     setup({ mode: 'diff', from: 'aaa1111', to: 'bbb2222' });
-    const btn = await screen.findByTestId('retract-btn');
-    expect(btn).toBeDisabled();
-    expect(btn).toHaveAttribute('title', READ_ONLY_TITLE);
+    // RightPanel routes to FactDiffView in diff mode, which has no retract button.
+    await waitFor(() => {
+      expect(screen.queryByTestId('retract-btn')).toBeNull();
+    });
   });
 
   it('does not render retract button when viewing the history pane', async () => {

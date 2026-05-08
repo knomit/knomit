@@ -9,6 +9,7 @@ import { currentPath, selectAnchorCommit, isReadOnly, READ_ONLY_TITLE } from './
 import { relativeTime, typeStyles, defaultTypeStyle, opStyles, defaultOpStyle } from './utils';
 import { TypeIcon, EpisodeIcon, RetractIcon, ExplainIcon } from './icons';
 import type { NavRequest } from './useNavigationManager';
+import { FactDiffView } from './FactDiffView';
 
 function StatBox({ label, value, color }: { label: string; value: ReactNode; color: string }) {
   return (
@@ -569,6 +570,13 @@ export function RightPanel({ state, dispatch, navigate, onExplain }: {
   }, [state.rightPanelFocused, dispatch]);
 
   if (error) return <div style={{ padding: 24, color: '#f44' }}>{error}</div>;
+
+  // In diff mode with a selected fact, render the dedicated diff view
+  // regardless of view mode. The view falls back to live/scrubbed rendering
+  // when factPath is null.
+  if (state.asOf.mode === 'diff' && state.factPath) {
+    return <FactDiffView state={state as AppState & { factPath: string }} dispatch={dispatch} />;
+  }
 
   const commitPanel = state.view === 'history' && historyCommit
     ? <CommitPanel historyCommit={historyCommit} repo={state.repo} branch={state.branch} selectedFact={factPath} navigate={navigate} rightPanelFocused={state.rightPanelFocused} dispatch={dispatch} />

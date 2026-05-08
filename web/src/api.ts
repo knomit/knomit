@@ -74,7 +74,7 @@ export interface OriginSetResponse {
   head: string;
 }
 
-import type { FilterChip } from './state';
+import type { FilterChip, AsOf } from './state';
 
 // parseSearchQuery splits a query string into structured components.
 // Tokens of the form domain:X or entity:X are extracted as filters;
@@ -106,10 +106,49 @@ export function parseSearchQuery(raw: string): { text: string; domains: string[]
   return { text: allText, domains, entities };
 }
 
-export function parseFilterQuery(raw: string): { chips: FilterChip[]; text: string } {
+const SHORT_SHA = /^[0-9a-f]{7}$/i;
+
+function parseAnchorToken(prefix: 'at' | 'vs', value: string, lookupHead?: () => string): AsOf | undefined {
+  const v = value.trim();
+  if (!v) return undefined;
+  if (prefix === 'at') {
+    // at:HEAD
+    if (v === 'HEAD') return { mode: 'live' };
+    // at:<7-char-sha>
+    if (SHORT_SHA.test(v)) return { mode: 'scrubbed', commit: v.toLowerCase() };
+    return undefined;
+  }
+  // vs:<from>..<to>
+  const m = v.match(/^([0-9a-fA-F]{7}|HEAD)\.\.([0-9a-fA-F]{7}|HEAD)$/);
+  if (m) {
+    const from = m[1] === 'HEAD' ? (lookupHead?.() ?? '') : m[1].toLowerCase();
+    const to   = m[2] === 'HEAD' ? (lookupHead?.() ?? '') : m[2].toLowerCase();
+    if (from && to) return { mode: 'diff', from, to };
+  }
+  return undefined;
+}
+
+export function parseFilterQuery(raw: string, lookupHead?: () => string): { chips: FilterChip[]; text: string; asOf?: AsOf } {
   const chips: FilterChip[] = [];
+  let asOf: AsOf | undefined;
+  let warnedMalformed = false;
+
+  // Extract at:VALUE and vs:VALUE first — anchor tokens are side-channel, not chips.
+  let remaining = raw.replace(/(at|vs):"([^"]+)"/g, (_m, prefix, value) => {
+    const result = parseAnchorToken(prefix as 'at' | 'vs', value, lookupHead);
+    if (result) asOf = result;
+    else if (!warnedMalformed) { console.warn(`Invalid ${prefix}: token`, value); warnedMalformed = true; }
+    return '';
+  });
+  remaining = remaining.replace(/(at|vs):(\S+)/g, (_m, prefix, value) => {
+    const result = parseAnchorToken(prefix as 'at' | 'vs', value, lookupHead);
+    if (result) asOf = result;
+    else if (!warnedMalformed) { console.warn(`Invalid ${prefix}: token`, value); warnedMalformed = true; }
+    return '';
+  });
+
   // Extract prefix:"quoted value" patterns first
-  let remaining = raw.replace(/(domain|entity|type|ep|path):"([^"]+)"/g, (_m, prefix, value) => {
+  remaining = remaining.replace(/(domain|entity|type|ep|path):"([^"]+)"/g, (_m, prefix, value) => {
     chips.push({ category: prefix as FilterChip['category'], value });
     return '';
   });
@@ -118,7 +157,7 @@ export function parseFilterQuery(raw: string): { chips: FilterChip[]; text: stri
     chips.push({ category: prefix as FilterChip['category'], value });
     return '';
   });
-  return { chips, text: remaining.trim() };
+  return { chips, text: remaining.trim(), asOf };
 }
 
 export interface SessionCreateResponse {
@@ -413,6 +452,22 @@ export const api = {
 
   completions: (repo: string, branch: string, category: string, prefix = ''): Promise<{ values: string[] }> =>
     fetch(`${branchBase(repo, branch)}/completions?category=${encodeURIComponent(category)}&prefix=${encodeURIComponent(prefix)}`).then(r => r.json()),
+
+  factDiff: async (
+    repo: string, branch: string, path: string,
+    from: string, to: string,
+    signal?: AbortSignal,
+  ): Promise<{ from: Fact | null; to: Fact | null }> => {
+    const fetchSide = async (commit: string): Promise<Fact | null> => {
+      const url = `${branchBase(repo, branch)}/commits/${commit}/facts/${path}`;
+      const res = await fetch(url, { signal });
+      if (res.status === 404) return null;
+      if (!res.ok) throw new Error(res.statusText);
+      return normalizeFactResponse(await res.json());
+    };
+    const [fromFact, toFact] = await Promise.all([fetchSide(from), fetchSide(to)]);
+    return { from: fromFact, to: toFact };
+  },
 
   explain: (repo: string, branch: string, path: string): Promise<{
     incoming: { path: string; title: string; commit?: string }[];

@@ -113,6 +113,15 @@ function replacePathChip(filters: FilterChip[], value: string): FilterChip[] {
   return [...filters.filter(f => f.category !== 'path'), { category: 'path', value }];
 }
 
+// Hoisted above reducer so reducer guards can read it. The selectors below
+// (selectAnchorCommit/isLive/isReadOnly) short-circuit when the flag is off,
+// but direct reads of `state.asOf.mode` (e.g. RightPanel routing into
+// FactDiffView, HistoryTimeline range-tinting, Console pill rendering) would
+// still trigger temporal UI if the reducer accepted scrubbed/diff payloads.
+// The reducer guards are the second-line enforcement: they refuse to ever
+// place the state into a non-live asOf when the flag is off.
+const TEMPORAL_ENABLED = import.meta.env.VITE_TEMPORAL_ENABLED !== 'false';
+
 export function reducer(s: AppState, a: Action): AppState {
   switch (a.type) {
     case 'NAVIGATE':
@@ -227,37 +236,51 @@ export function reducer(s: AppState, a: Action): AppState {
     case 'BLUR_RIGHT_PANEL':
       return { ...s, rightPanelFocused: false };
     case 'SET_AS_OF':
+      // Flag-off enforcement: refuse non-live asOf so direct reads of
+      // state.asOf.mode (RightPanel/FactDiffView/HistoryTimeline/Console)
+      // can never enter temporal UI paths.
+      if (!TEMPORAL_ENABLED && a.asOf.mode !== 'live') return s;
       return { ...s, asOf: a.asOf };
     case 'APPLY_NAV': {
       const crossingBoundary =
         (s.view === 'history' && a.view !== 'history') ||
         (s.view !== 'history' && a.view === 'history');
+      // Flag-off: scrub asOf back to live but still allow the view/path change.
+      const safeAsOf: AsOf = (!TEMPORAL_ENABLED && a.asOf.mode !== 'live')
+        ? { mode: 'live' }
+        : a.asOf;
       return {
         ...s,
         view: a.view,
         factPath: a.factPath,
-        asOf: a.asOf,
+        asOf: safeAsOf,
         filters: a.filters !== undefined ? a.filters : crossingBoundary ? s.filters.filter(f => f.category === 'path') : s.filters,
         freeText: a.freeText !== undefined ? a.freeText : crossingBoundary ? '' : s.freeText,
         navStack: pushNav(s),
         rightPanelFocused: false,
       };
     }
-    case 'AMEND_NAV':
+    case 'AMEND_NAV': {
       // In-place update — no navStack push. Used by auto-select behaviors so that
       // a single user action (e.g. view-button click) creates exactly one navStack entry.
-      if (s.factPath === a.factPath && (a.asOf === undefined || JSON.stringify(s.asOf) === JSON.stringify(a.asOf))) return s;
+      // Flag-off enforcement: strip non-live asOf payloads but still let factPath updates through.
+      const safeAsOf = (!TEMPORAL_ENABLED && a.asOf !== undefined && a.asOf.mode !== 'live')
+        ? undefined
+        : a.asOf;
+      if (s.factPath === a.factPath && (safeAsOf === undefined || JSON.stringify(s.asOf) === JSON.stringify(safeAsOf))) return s;
       return {
         ...s,
         factPath: a.factPath,
-        ...(a.asOf !== undefined ? { asOf: a.asOf } : {}),
+        ...(safeAsOf !== undefined ? { asOf: safeAsOf } : {}),
       };
+    }
     default:
       return s;
   }
 }
 
 export function selectAnchorCommit(s: AppState): string | null {
+  if (!TEMPORAL_ENABLED) return null;
   switch (s.asOf.mode) {
     case 'live':     return null;
     case 'scrubbed': return s.asOf.commit;
@@ -266,6 +289,7 @@ export function selectAnchorCommit(s: AppState): string | null {
 }
 
 export function isLive(s: AppState): boolean {
+  if (!TEMPORAL_ENABLED) return true;
   return s.asOf.mode === 'live';
 }
 

@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest';
-import { parseSearchQuery, parseFilterQuery } from './api';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { parseSearchQuery, parseFilterQuery, api } from './api';
 
 describe('parseSearchQuery', () => {
   it('parses plain text', () => {
@@ -131,5 +131,39 @@ describe('parseFilterQuery', () => {
     expect(r.chips).toHaveLength(2);
     expect(r.chips).toContainEqual({ category: 'ep', value: 'learn' });
     expect(r.chips).toContainEqual({ category: 'domain', value: 'go' });
+  });
+});
+
+describe('api.factDiff', () => {
+  beforeEach(() => { vi.restoreAllMocks(); });
+
+  it('returns both sides on success', async () => {
+    globalThis.fetch = vi.fn()
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ path: 'kb/x.md', title: 'X', body: 'old', as_of: { commit: 'aaaaaaa' } }) })
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ path: 'kb/x.md', title: 'X', body: 'new', as_of: { commit: 'bbbbbbb' } }) });
+    const r = await api.factDiff('alpha', 'main', 'kb/x.md', 'aaaaaaa', 'bbbbbbb');
+    expect(r.from?.body).toBe('old');
+    expect(r.to?.body).toBe('new');
+  });
+
+  it('returns null for the side that 404s (created in to)', async () => {
+    globalThis.fetch = vi.fn()
+      .mockResolvedValueOnce({ ok: false, status: 404, json: async () => ({}) })
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ path: 'kb/x.md', title: 'X', body: 'new', as_of: { commit: 'bbbbbbb' } }) });
+    const r = await api.factDiff('alpha', 'main', 'kb/x.md', 'aaaaaaa', 'bbbbbbb');
+    expect(r.from).toBeNull();
+    expect(r.to?.body).toBe('new');
+  });
+
+  it('honors AbortController', async () => {
+    const controller = new AbortController();
+    globalThis.fetch = vi.fn().mockImplementation((_url: string, opts?: { signal?: AbortSignal }) =>
+      new Promise((_, reject) => {
+        opts?.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+      })
+    );
+    const promise = api.factDiff('alpha', 'main', 'kb/x.md', 'aaaaaaa', 'bbbbbbb', controller.signal);
+    controller.abort();
+    await expect(promise).rejects.toThrow();
   });
 });

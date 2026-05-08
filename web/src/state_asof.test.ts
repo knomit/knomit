@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { init, reducer, selectAnchorCommit, isLive, isReadOnly } from './state';
 
 describe('AsOf selectors', () => {
@@ -104,5 +104,64 @@ describe('reducer — boundary preservation', () => {
       asOf: s.asOf,
     });
     expect(next.asOf).toEqual({ mode: 'diff', from: 'aaa1111', to: 'bbb2222' });
+  });
+});
+
+describe('reducer — flag-off enforcement', () => {
+  beforeEach(() => {
+    vi.stubEnv('VITE_TEMPORAL_ENABLED', 'false');
+    vi.resetModules();
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.resetModules();
+  });
+
+  it('SET_AS_OF refuses non-live payload when flag is off', async () => {
+    const mod = await import('./state');
+    const next = mod.reducer(mod.init, {
+      type: 'SET_AS_OF',
+      asOf: { mode: 'scrubbed', commit: 'abc1234' },
+    });
+    expect(next.asOf).toEqual({ mode: 'live' });
+  });
+
+  it('SET_AS_OF still allows live payload when flag is off', async () => {
+    const mod = await import('./state');
+    const s = { ...mod.init, asOf: { mode: 'scrubbed' as const, commit: 'abc1234' } };
+    // The state shouldn't be reachable with the flag off, but the reducer
+    // must still accept a SET_AS_OF→live to repair it.
+    const next = mod.reducer(s, { type: 'SET_AS_OF', asOf: { mode: 'live' } });
+    expect(next.asOf).toEqual({ mode: 'live' });
+  });
+
+  it('APPLY_NAV scrubs non-live asOf to live when flag is off', async () => {
+    const mod = await import('./state');
+    const next = mod.reducer(mod.init, {
+      type: 'APPLY_NAV',
+      view: 'history',
+      factPath: 'kb/foo.md',
+      asOf: { mode: 'diff', from: 'aaa1111', to: 'bbb2222' },
+    });
+    expect(next.asOf).toEqual({ mode: 'live' });
+    // View/path changes still apply.
+    expect(next.view).toBe('history');
+    expect(next.factPath).toBe('kb/foo.md');
+  });
+
+  it('AMEND_NAV with scrubbed asOf is stripped to current asOf when flag is off', async () => {
+    vi.stubEnv('VITE_TEMPORAL_ENABLED', 'false');
+    vi.resetModules();
+    const m = await import('./state');
+
+    const start = { ...m.init, asOf: { mode: 'live' } as const };
+    // factPath update is allowed; the scrubbed asOf payload is stripped.
+    const next = m.reducer(start, {
+      type: 'AMEND_NAV',
+      factPath: 'kb/foo.md',
+      asOf: { mode: 'scrubbed', commit: 'abc1234' },
+    });
+    expect(next.factPath).toBe('kb/foo.md');
+    expect(next.asOf).toEqual({ mode: 'live' });
   });
 });

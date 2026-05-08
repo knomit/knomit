@@ -1,5 +1,5 @@
 import { useReducer, useEffect, useState } from 'react';
-import { reducer, init, isReadOnly } from './state';
+import { reducer, init, isReadOnly, isLive } from './state';
 import { api } from './api';
 import { useNavigationManager } from './useNavigationManager';
 import type { RepoInfo } from './api';
@@ -95,13 +95,18 @@ export default function App() {
         dispatch({ type: 'NAV_BACK' });
         return;
       }
+      if (e.key === 'h') {
+        e.preventDefault();
+        if (!isLive(state)) dispatch({ type: 'SET_AS_OF', asOf: { mode: 'live' } });
+        return;
+      }
       if (e.key === '1') { e.preventDefault(); navigate({ view: 'tree' }); return; }
       if (e.key === '2') { e.preventDefault(); navigate({ view: 'chrono' }); return; }
       if (e.key === '3') { e.preventDefault(); navigate({ view: 'history' }); return; }
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [navigate]);
+  }, [navigate, state]);
 
   if (!state.branch) {
     return (
