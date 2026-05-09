@@ -55,7 +55,8 @@ func handleHALStats(b hal.URLBuilder, m *repos.Manager, provider statsProvider) 
 		branch := BranchFromContext(r.Context())
 		a := hal.Anchor{Branch: branch}
 
-		result, err := provider.Stats(ri, branch, "")
+		pathPrefix := r.URL.Query().Get("path")
+		result, err := provider.Stats(ri, branch, pathPrefix)
 		if err != nil {
 			writeStoreError(w, r, err, "Failed to load stats", branch)
 			return
