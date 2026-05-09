@@ -189,8 +189,14 @@ function CommitPanel({ historyCommit, repo, branch, selectedFact, navigate, righ
   }, [activeIdx]);
 
   // Auto-select first file when no fact is open or the current fact isn't in this commit.
+  // Guard on detail.commit === historyCommit: when the user clicks a new commit,
+  // historyCommit changes immediately but `detail` remains stale until its fetch
+  // resolves. Without this guard, the effect would AMEND_NAV with the OLD detail's
+  // first file paired with the NEW anchor, producing a transient (factPath, anchor)
+  // pair that 404s before the queued navigation settles — visible as a brief
+  // "Error: not found" flash when clicking between retract commits.
   useEffect(() => {
-    if (!detail) return;
+    if (!detail || detail.commit !== historyCommit) return;
     if (selectedFact && detail.files?.some(f => f.path === selectedFact)) return;
     const first = detail.files?.[0];
     if (first) dispatch({ type: 'AMEND_NAV', factPath: first.path });
