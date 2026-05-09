@@ -21,6 +21,22 @@ describe('reducer — filters', () => {
     expect(pathChips[0].value).toBe('kb/science');
   });
 
+  it('ADD_FILTER with path category clears factPath (breadcrumb up-navigation)', () => {
+    // User opens a fact, then clicks a parent breadcrumb segment. The fact must
+    // be cleared so the right panel switches back to the stats view for the new
+    // path. Other ADD_FILTER categories (domain/entity/type/ep) keep factPath
+    // because they're refinements, not navigations.
+    let s: AppState = { ...init, factPath: 'kb/tech/ai/foo.md' };
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'path', value: 'kb/tech' } });
+    expect(s.factPath).toBeNull();
+  });
+
+  it('ADD_FILTER with non-path category preserves factPath', () => {
+    let s: AppState = { ...init, factPath: 'kb/tech/ai/foo.md' };
+    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'domain', value: 'ai' } });
+    expect(s.factPath).toBe('kb/tech/ai/foo.md');
+  });
+
   it('ADD_FILTER with path category keeps other chips', () => {
     let s = reducer(init, { type: 'ADD_FILTER', chip: { category: 'domain', value: 'tech' } });
     s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'path', value: 'kb/tech' } });

@@ -146,10 +146,14 @@ export function reducer(s: AppState, a: Action): AppState {
       };
     }
     case 'ADD_FILTER': {
-      const filters = a.chip.category === 'path'
+      const isPath = a.chip.category === 'path';
+      const filters = isPath
         ? replacePathChip(s.filters, a.chip.value)
         : [...s.filters, a.chip];
-      return { ...s, filters, navStack: pushNav(s) };
+      // Path-changing filters are navigations; clear the open fact so the
+      // right panel returns to the stats view for the new path. Non-path
+      // filters are refinements that should preserve the current selection.
+      return { ...s, filters, factPath: isPath ? null : s.factPath, navStack: pushNav(s) };
     }
     case 'REMOVE_FILTER': {
       const filters = s.filters.filter((_, i) => i !== a.index);
