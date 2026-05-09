@@ -1,4 +1,5 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useLayoutEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { api } from './api';
 import type { Fact, RefGroup, RefVersion } from './api';
 import { relativeTimeEpoch, typeStyles } from './utils';
@@ -162,6 +163,7 @@ function RailHeader({ direction, groups, testId }: {
 
 function Chip({ group, onClick }: { group: RefGroup; onClick: (commit: string) => void }) {
   const [open, setOpen] = useState(false);
+  const [dropdownPos, setDropdownPos] = useState<{ top: number; left: number } | null>(null);
   const dropdownRef = useRef<HTMLDivElement | null>(null);
   const chipRef = useRef<HTMLSpanElement | null>(null);
 
@@ -171,6 +173,14 @@ function Chip({ group, onClick }: { group: RefGroup; onClick: (commit: string) =
   const latest = group.versions[0];
   const groupType = group.type ?? latest?.type;
   const typeColor = (groupType && typeStyles[groupType]?.color) || '#253565';
+
+  // Anchor the dropdown to the chip's viewport position. We render via a
+  // portal so the rail's overflow:auto doesn't clip the dropdown.
+  useLayoutEffect(() => {
+    if (!open || !chipRef.current) { setDropdownPos(null); return; }
+    const r = chipRef.current.getBoundingClientRect();
+    setDropdownPos({ top: r.bottom + 2, left: r.left });
+  }, [open]);
 
   // Outside-click + Escape close the dropdown.
   useEffect(() => {
@@ -250,15 +260,14 @@ function Chip({ group, onClick }: { group: RefGroup; onClick: (commit: string) =
           )
         )}
       </span>
-      {open && isMulti && (
+      {open && isMulti && dropdownPos && createPortal(
         <div
           ref={dropdownRef}
           onClick={e => e.stopPropagation()}
           style={{
-            position: 'absolute',
-            top: '100%',
-            left: 0,
-            marginTop: 2,
+            position: 'fixed',
+            top: dropdownPos.top,
+            left: dropdownPos.left,
             minWidth: 180,
             maxHeight: 200,
             overflowY: 'auto',
@@ -266,7 +275,7 @@ function Chip({ group, onClick }: { group: RefGroup; onClick: (commit: string) =
             border: '1px solid #2a2a2a',
             borderRadius: 4,
             padding: '4px 0',
-            zIndex: 50,
+            zIndex: 1000,
             textDecoration: 'none',
           }}
         >
@@ -296,7 +305,8 @@ function Chip({ group, onClick }: { group: RefGroup; onClick: (commit: string) =
               </span>
             </div>
           ))}
-        </div>
+        </div>,
+        document.body
       )}
     </span>
   );

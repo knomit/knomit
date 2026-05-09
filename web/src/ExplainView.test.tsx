@@ -95,6 +95,29 @@ describe('ExplainView Chip', () => {
     });
   });
 
+  it('multi-version dropdown is rendered outside the chip row so overflow clipping does not hide it', async () => {
+    const versions = [
+      { commit: 'newcommit1234567', committed_at: 2000 },
+      { commit: 'oldcommit7654321', committed_at: 1000 },
+    ];
+    (api.explain as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+      incoming: [makeGroup({ path: 'kb/multi.md', title: 'Multi', versions })],
+      outgoing: [],
+    });
+    render(<ExplainView repo="r" branch="b" initialEntry={{ path: 'kb/x.md', commit: null }} onClose={() => {}} />);
+
+    await screen.findByText('Multi');
+    fireEvent.click(screen.getByText('Multi'));
+
+    const row = screen.getByText('newcomm');
+    const chip = screen.getByTestId('ref-chip');
+    const chipRow = chip.parentElement;
+    // The dropdown must NOT be inside the chip-row container, because that
+    // container has overflow:auto/hidden which would visually clip the dropdown.
+    expect(chipRow).not.toBeNull();
+    expect(chipRow!.contains(row)).toBe(false);
+  });
+
   it('outside-click closes the dropdown', async () => {
     const versions = [
       { commit: 'newcommit1234567', committed_at: 2000 },
