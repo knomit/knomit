@@ -493,6 +493,33 @@ func (si *searchIndex) rebuildFacts(ctx context.Context, branch, head string, pr
 	affected, _ := res.RowsAffected()
 	n := int(affected)
 
+	// Re-populate fact_domains / fact_entities junction tables for the rebuilt
+	// facts. INSERT OR REPLACE INTO facts above triggered cascade-deletes of
+	// the old junction rows (the fact rowid changed); the search filter path
+	// reads from these junctions, so they MUST be rebuilt from the JSON columns
+	// or domain/entity searches will silently return zero hits even though
+	// stats (which reads f.domain JSON directly) keeps showing the right counts.
+	if _, err := conn(ctx, si.rh.db).ExecContext(ctx, `
+		INSERT INTO fact_domains(fact_id, domain)
+		SELECT f.id, j.value
+		FROM facts f
+		JOIN _rebuild_entries e ON e.path = f.path AND e.blob_hash = f.blob_hash
+		JOIN json_each(f.domain) j
+		WHERE j.value IS NOT NULL AND j.value != ''
+	`); err != nil {
+		return 0, fmt.Errorf("rebuildFacts: repopulate fact_domains: %w", err)
+	}
+	if _, err := conn(ctx, si.rh.db).ExecContext(ctx, `
+		INSERT INTO fact_entities(fact_id, entity)
+		SELECT f.id, j.value
+		FROM facts f
+		JOIN _rebuild_entries e ON e.path = f.path AND e.blob_hash = f.blob_hash
+		JOIN json_each(f.entities) j
+		WHERE j.value IS NOT NULL AND j.value != ''
+	`); err != nil {
+		return 0, fmt.Errorf("rebuildFacts: repopulate fact_entities: %w", err)
+	}
+
 	// Populate branch_facts: link each fact to this branch with its commit_hash.
 	// We pick the most recent commit_log row per path whose commit is visible on
 	// this branch (via branch_commits).
