@@ -170,6 +170,27 @@ describe('resolveNavRequest', () => {
     });
   });
 
+  it('mode-switch from chrono to tree clears factPath (selection from flat list does not carry into hierarchical browser)', async () => {
+    // User selects a fact from Recent (chrono), then switches to Tree. The
+    // tree resets to the kb root and the right panel must show the stats
+    // view, not the previously-selected fact whose path is unrelated to root.
+    const state = makeState({ view: 'chrono', factPath: 'kb/tech/gpt5.md' });
+    await resolveNavRequest({ view: 'tree' }, state, dispatch);
+    expect(dispatch).toHaveBeenCalledWith({
+      type: 'APPLY_NAV', view: 'tree',
+      factPath: null, asOf: { mode: 'live' },
+    });
+  });
+
+  it('mode-switch from tree to tree preserves factPath (re-entering same context)', async () => {
+    const state = makeState({ view: 'tree', factPath: 'kb/tech/foo.md' });
+    await resolveNavRequest({ view: 'tree' }, state, dispatch);
+    expect(dispatch).toHaveBeenCalledWith({
+      type: 'APPLY_NAV', view: 'tree',
+      factPath: 'kb/tech/foo.md', asOf: { mode: 'live' },
+    });
+  });
+
   it('mode-switch to chrono dispatches with null factPath (ChronoView will amend)', async () => {
     const state = makeState({ factPath: 'kb/foo.md' });
     await resolveNavRequest({ view: 'chrono' }, state, dispatch);

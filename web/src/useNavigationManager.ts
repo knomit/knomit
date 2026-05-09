@@ -57,12 +57,16 @@ export async function resolveNavRequest(
         dispatch({ type: 'APPLY_NAV', view: 'history', factPath: null, asOf: { mode: 'live' } });
       }
     } else if (req.view === 'tree') {
-      // Preserve current fact when already in tree/chrono (same anchor context).
-      // Clear it when coming from history — the selected fact was at a specific commit
-      // and may not exist at the current anchor.
+      // Preserve the open fact ONLY when already in tree (re-entering the same
+      // hierarchical context). Clear it when coming from any other mode:
+      //   - history: the fact was anchored to a specific commit that may no
+      //     longer exist at HEAD.
+      //   - chrono: a flat-list selection has no path context and would leave
+      //     the right panel showing a fact that's unrelated to the tree's
+      //     current root.
       // Tree is a HEAD-only view by design; demote any non-live anchor to live so
       // fact-clicks from the HEAD list don't 404 against a stale scrubbed commit.
-      const factPath = state.view === 'history' ? null : state.factPath;
+      const factPath = state.view === 'tree' ? state.factPath : null;
       dispatch({ type: 'APPLY_NAV', view: 'tree', factPath, asOf: { mode: 'live' } });
     } else {
       // chrono: ChronoView will amend selection once it fetches recent facts.
