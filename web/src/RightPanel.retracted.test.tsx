@@ -44,7 +44,7 @@ const baseHistoryState: AppState = {
 };
 
 describe('RightPanel — retracted-version badge', () => {
-  it('renders the badge when fact.commit_hash differs from the anchor commit', async () => {
+  it('renders the badge with the retraction commit only — version hash is not duplicated', async () => {
     (api.fact as ReturnType<typeof vi.fn>).mockResolvedValue({
       path: 'kb/test/foo.md',
       title: 'Foo',
@@ -64,7 +64,10 @@ describe('RightPanel — retracted-version badge', () => {
 
     const badge = await screen.findByTestId('retracted-version-badge');
     expect(badge.textContent).toContain('retracted at 416273e');
-    expect(badge.textContent).toContain('showing version deadbee');
+    // The pre-retraction version hash already appears in the adjacent green
+    // commit chip, so the yellow retracted-badge must not repeat it.
+    expect(badge.textContent).not.toContain('showing version');
+    expect(badge.textContent).not.toContain('deadbee');
   });
 
   it('does not render the badge when fact.commit_hash matches the anchor', async () => {

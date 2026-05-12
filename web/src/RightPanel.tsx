@@ -49,11 +49,12 @@ function renderFact(fact: Fact, navigate: (req: NavRequest) => void, dispatch: D
                 title={`This fact was retracted at ${retractedAt}; showing its content from ${factShort}`}
                 style={{ color: '#e5a23c', fontFamily: 'monospace', fontSize: 11, background: 'rgba(229,162,60,0.12)', border: '1px solid rgba(229,162,60,0.35)', padding: '1px 5px', borderRadius: 3 }}
               >
-                retracted at {retractedAt} · showing version {factShort}
+                retracted at {retractedAt}
               </span>
             )}
             {onExplain && (
               <button
+                data-testid="explain-btn"
                 title="Explain"
                 onClick={onExplain}
                 style={{ background: 'none', border: 'none', padding: 2, color: '#8af', cursor: 'pointer', display: 'flex', alignItems: 'center', opacity: 0.6 }}
@@ -581,7 +582,10 @@ export function RightPanel({ state, dispatch, navigate, onExplain }: {
           navigate,
           dispatch,
           showRetract ? () => { if (!readOnly) setConfirmRetract(true); } : undefined,
-          showRetract ? () => onExplain?.(fact.path, null) : undefined,
+          // Explain is a read-only action and works at any anchor. In history
+          // view we open the commit-anchored explain so in/out edges reflect
+          // the displayed version, not HEAD.
+          onExplain ? () => onExplain(fact.path, state.view === 'history' ? (fact.commit_hash ?? null) : null) : undefined,
           readOnly,
           // Only pass the anchor in history+scrubbed mode — the retracted-
           // version badge is only meaningful there. In live/diff/tree the

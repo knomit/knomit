@@ -69,3 +69,41 @@ describe('RightPanel — read-only retract gate', () => {
     });
   });
 });
+
+describe('RightPanel — Explain availability in history mode', () => {
+  it('renders the Explain button on historical entries', async () => {
+    const state: AppState = {
+      ...init,
+      repo: 'knomit',
+      branch: 'machine/test',
+      factPath: 'kb/test/foo.md',
+      view: 'history',
+      asOf: { mode: 'scrubbed', commit: 'b812d40' },
+    };
+    render(<RightPanel state={state} dispatch={vi.fn()} navigate={vi.fn()} onExplain={vi.fn()} />);
+
+    await screen.findByTestId('fact-title');
+    // Explain is a read-only action and must remain available even when
+    // retract is suppressed in history view.
+    expect(screen.getByTestId('explain-btn')).toBeInTheDocument();
+  });
+
+  it('clicking Explain in history mode anchors to the displayed commit', async () => {
+    const onExplain = vi.fn();
+    const state: AppState = {
+      ...init,
+      repo: 'knomit',
+      branch: 'machine/test',
+      factPath: 'kb/test/foo.md',
+      view: 'history',
+      asOf: { mode: 'scrubbed', commit: 'b812d40' },
+    };
+    render(<RightPanel state={state} dispatch={vi.fn()} navigate={vi.fn()} onExplain={onExplain} />);
+
+    const btn = await screen.findByTestId('explain-btn');
+    btn.click();
+    // The mocked fact's commit_hash is 'aaa1111'; in history mode Explain
+    // must open the commit-anchored view, not the live one.
+    expect(onExplain).toHaveBeenCalledWith('kb/test/foo.md', 'aaa1111');
+  });
+});
