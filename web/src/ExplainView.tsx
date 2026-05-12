@@ -72,17 +72,15 @@ export function ExplainView({ repo, branch, initialEntry, onClose }: Props) {
       </div>
 
       {/* Incoming refs strip */}
-      {current.commit === null && (
-        <div style={{ flexShrink: 0, borderBottom: '1px solid #1a1a1a', background: '#0d0d0d' }}>
-          <RailHeader direction="in" groups={incoming} testId="incoming-header" />
-          <div style={{ padding: '6px 12px', minHeight: 38, display: 'flex', flexWrap: 'nowrap', gap: 6, alignItems: 'center', overflowX: 'auto', overflowY: 'hidden' }}>
-            {incoming.length === 0 && !loading && <span style={{ fontSize: 11, color: '#2a2a2a' }}>none</span>}
-            {incoming.map(g => (
-              <Chip key={g.path} group={g} onClick={commit => navigateTo({ path: g.path, commit })} />
-            ))}
-          </div>
+      <div style={{ flexShrink: 0, borderBottom: '1px solid #1a1a1a', background: '#0d0d0d' }}>
+        <RailHeader direction="in" groups={incoming} testId="incoming-header" />
+        <div style={{ padding: '6px 12px', minHeight: 38, display: 'flex', flexWrap: 'nowrap', gap: 6, alignItems: 'center', overflowX: 'auto', overflowY: 'hidden' }}>
+          {incoming.length === 0 && !loading && <span style={{ fontSize: 11, color: '#2a2a2a' }}>none</span>}
+          {incoming.map(g => (
+            <Chip key={g.path} group={g} onClick={commit => navigateTo({ path: g.path, commit })} />
+          ))}
         </div>
-      )}
+      </div>
 
       {/* Fact body */}
       <div style={{ flex: 1, overflowY: 'auto', padding: '16px 20px' }}>
@@ -106,7 +104,7 @@ export function ExplainView({ repo, branch, initialEntry, onClose }: Props) {
             <Chip
               key={g.path}
               group={g}
-              onClick={commit => navigateTo({ path: g.path, commit: g.deleted ? commit : null })}
+              onClick={commit => navigateTo({ path: g.path, commit })}
             />
           ))}
         </div>

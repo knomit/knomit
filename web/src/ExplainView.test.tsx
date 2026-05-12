@@ -95,6 +95,34 @@ describe('ExplainView Chip', () => {
     });
   });
 
+  it('clicking a non-deleted outgoing chip navigates to the historical target commit, not live', async () => {
+    // Regression: when an outgoing ref's target path no longer exists at HEAD
+    // but t.deleted is false on the graph node (target was moved/renamed/
+    // GC'd without a formal retraction), clicking the chip used to navigate
+    // to the live path (commit=null) and 404. Out-edges must always follow
+    // lineage to the version the source originally pointed to.
+    (api.explain as unknown as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      incoming: [],
+      outgoing: [makeGroup({
+        path: 'kb/target.md',
+        title: 'Target',
+        deleted: false,
+        versions: [{ commit: 'target0commit789', committed_at: 1000 }],
+      })],
+    });
+    (api.fact as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({ ...baseFact, path: 'kb/target.md' });
+
+    render(<ExplainView repo="r" branch="b" initialEntry={{ path: 'kb/x.md', commit: null }} onClose={() => {}} />);
+
+    await screen.findByText('Target');
+    fireEvent.click(screen.getByText('Target'));
+
+    await waitFor(() => {
+      const calls = (api.fact as unknown as ReturnType<typeof vi.fn>).mock.calls;
+      expect(calls.some(c => c[2] === 'kb/target.md' && c[3] === 'target0commit789')).toBe(true);
+    });
+  });
+
   it('multi-version dropdown is rendered outside the chip row so overflow clipping does not hide it', async () => {
     const versions = [
       { commit: 'newcommit1234567', committed_at: 2000 },
@@ -260,5 +288,24 @@ describe('ExplainView header strips', () => {
     expect(header).toHaveTextContent('IN-EDGES');
     expect(header).toHaveTextContent('REFERENCED BY 1');
     expect(header).toHaveTextContent(/hypothesis\s*1/i);
+  });
+
+  it('renders incoming strip in commit-anchored view (not gated to live mode)', async () => {
+    // Regression: ExplainView previously gated the incoming strip on
+    // current.commit === null, hiding incoming edges entirely when the user
+    // navigated to a historical version. The backend supports commit-anchored
+    // /incoming and the data is fetched — the UI must surface it.
+    (api.explain as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+      incoming: [
+        makeGroup({ path: 'kb/source.md', title: 'Source', type: 'synthesis', versions: [{ commit: 'src01234567', committed_at: 1, type: 'synthesis' }] }),
+      ],
+      outgoing: [],
+    });
+    render(<ExplainView repo="r" branch="b" initialEntry={{ path: 'kb/x.md', commit: 'tc01234567' }} onClose={() => {}} />);
+
+    const header = await screen.findByTestId('incoming-header');
+    expect(header).toHaveTextContent('IN-EDGES');
+    expect(header).toHaveTextContent('REFERENCED BY 1');
+    expect(await screen.findByText('Source')).toBeInTheDocument();
   });
 });
