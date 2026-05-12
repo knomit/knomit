@@ -556,6 +556,37 @@ describe('free text state management', () => {
     s = reducer(s, { type: 'SET_REPO', repo: 'other' });
     expect(s.freeText).toBe('');
   });
+
+  it('SET_FREE_TEXT to empty clears auto-selected factPath when no other filters remain', () => {
+    // Regression: in tree mode, searching auto-selects the first result into
+    // factPath. Clicking the 'x' on the freeText chip dispatched SET_FREE_TEXT
+    // with text='' but did NOT clear factPath, so the right panel kept showing
+    // the search-auto-selected fact instead of returning to root stats.
+    let s: AppState = { ...init, freeText: 'some query', factPath: 'kb/x.md' };
+    s = reducer(s, { type: 'SET_FREE_TEXT', text: '' });
+    expect(s.freeText).toBe('');
+    expect(s.factPath).toBeNull();
+  });
+
+  it('SET_FREE_TEXT to empty preserves factPath when other non-path filters remain', () => {
+    // If chips are still active, the user is still in search/filter mode;
+    // their selected fact remains relevant.
+    let s: AppState = {
+      ...init,
+      freeText: 'some query',
+      factPath: 'kb/x.md',
+      filters: [{ category: 'type', value: 'hypothesis' }],
+    };
+    s = reducer(s, { type: 'SET_FREE_TEXT', text: '' });
+    expect(s.freeText).toBe('');
+    expect(s.factPath).toBe('kb/x.md');
+  });
+
+  it('SET_FREE_TEXT to non-empty preserves factPath (user typing)', () => {
+    let s: AppState = { ...init, freeText: '', factPath: 'kb/x.md' };
+    s = reducer(s, { type: 'SET_FREE_TEXT', text: 'hello' });
+    expect(s.factPath).toBe('kb/x.md');
+  });
 });
 
 // ─── Regression: free text + filter chips coexist ───────────────────────────

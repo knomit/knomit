@@ -159,8 +159,14 @@ export function reducer(s: AppState, a: Action): AppState {
       const filters = s.filters.filter((_, i) => i !== a.index);
       return { ...s, filters, factPath: null, navStack: pushNav(s) };
     }
-    case 'SET_FREE_TEXT':
-      return { ...s, freeText: a.text };
+    case 'SET_FREE_TEXT': {
+      // When clearing the search box leaves no active non-path filters, the
+      // user has exited search mode — drop the (typically auto-selected)
+      // factPath so the right panel returns to root stats instead of stranding
+      // the previous result.
+      const exitingSearch = a.text === '' && !s.filters.some(f => f.category !== 'path');
+      return { ...s, freeText: a.text, factPath: exitingSearch ? null : s.factPath };
+    }
     case 'CLEAR_FILTERS':
       return { ...s, filters: [], freeText: '', factPath: null, navStack: pushNav(s) };
     case 'NAV_BACK': {
