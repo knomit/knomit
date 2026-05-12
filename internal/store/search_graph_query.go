@@ -24,11 +24,11 @@ func (si *searchIndex) IncomingAtCommit(ctx context.Context, branch, path, commi
 	// 1. Cypher: candidate (source_path, source_title, source_commit) rows.
 	// Note: "commit" is a reserved SQL keyword; use alias "sc" (source commit).
 	cypherQ := fmt.Sprintf(
-		`MATCH (s:%s)-[r:%s]->(t:%s {path: "%s"}) WHERE r.target_commit = "%s" AND NOT s.deleted = true RETURN s.path AS path, s.title AS title, r.source_commit AS sc`,
+		`MATCH (s:%s)-[r:%s]->(t:%s {path: "%s"}) WHERE r.target_commit = "%s" AND NOT s.deleted = true RETURN s.path AS path, s.title AS title, s.type AS type, r.source_commit AS sc`,
 		NodeFact, EdgeDerivedFrom, NodeFact,
 		escapeCypherKey(path), escapeCypherKey(commitHash),
 	)
-	q := `SELECT json_extract(value, '$.path'), json_extract(value, '$.title'), json_extract(value, '$.sc') FROM json_each(cypher('` + cypherQ + `'))`
+	q := `SELECT json_extract(value, '$.path'), json_extract(value, '$.title'), json_extract(value, '$.type'), json_extract(value, '$.sc') FROM json_each(cypher('` + cypherQ + `'))`
 	rows, err := conn(ctx, si.rh.db).QueryContext(ctx, q)
 	if err != nil {
 		return nil, fmt.Errorf("IncomingAtCommit: cypher: %w", err)
@@ -38,7 +38,7 @@ func (si *searchIndex) IncomingAtCommit(ctx context.Context, branch, path, commi
 	var candidates []RefSummary
 	for rows.Next() {
 		var rs RefSummary
-		if err := rows.Scan(&rs.Path, &rs.Title, &rs.Commit); err != nil {
+		if err := rows.Scan(&rs.Path, &rs.Title, &rs.Type, &rs.Commit); err != nil {
 			return nil, fmt.Errorf("IncomingAtCommit: scan: %w", err)
 		}
 		if rs.Path == "" {
@@ -63,20 +63,24 @@ func (si *searchIndex) IncomingAtCommit(ctx context.Context, branch, path, commi
 		placeholders = append(placeholders, "?")
 	}
 	bcRows, err := conn(ctx, si.rh.db).QueryContext(ctx,
-		`SELECT commit_hash FROM branch_commits WHERE branch_id = ? AND commit_hash IN (`+strings.Join(placeholders, ",")+`)`,
+		`SELECT bc.commit_hash, COALESCE(cl.committed_at, 0)
+		   FROM branch_commits bc
+		   LEFT JOIN commit_log cl ON cl.commit_hash = bc.commit_hash
+		  WHERE bc.branch_id = ? AND bc.commit_hash IN (`+strings.Join(placeholders, ",")+`)`,
 		args...,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("IncomingAtCommit: branch filter: %w", err)
 	}
 	defer bcRows.Close()
-	visible := make(map[string]bool, len(candidates))
+	dates := make(map[string]int64, len(candidates))
 	for bcRows.Next() {
 		var h string
-		if err := bcRows.Scan(&h); err != nil {
+		var ts int64
+		if err := bcRows.Scan(&h, &ts); err != nil {
 			return nil, fmt.Errorf("IncomingAtCommit: branch filter scan: %w", err)
 		}
-		visible[h] = true
+		dates[h] = ts
 	}
 	if err := bcRows.Err(); err != nil {
 		return nil, fmt.Errorf("IncomingAtCommit: branch filter rows: %w", err)
@@ -84,7 +88,8 @@ func (si *searchIndex) IncomingAtCommit(ctx context.Context, branch, path, commi
 
 	out := make([]RefSummary, 0, len(candidates))
 	for _, c := range candidates {
-		if visible[c.Commit] {
+		if ts, ok := dates[c.Commit]; ok {
+			c.CommittedAt = ts
 			out = append(out, c)
 		}
 	}
@@ -95,39 +100,85 @@ func (si *searchIndex) IncomingAtCommit(ctx context.Context, branch, path, commi
 // asserted by (path, commitHash) — DERIVED_FROM edges OUT of this Fact
 // where source_commit edge property matches.
 //
-// Branch is currently unused for the filter (outgoing edges naturally
-// reflect the source's commit, which is already pinned by commitHash).
-// The parameter is accepted for symmetry with IncomingAtCommit and future
-// use (e.g. branch-relative target visibility).
+// Unlike IncomingAtCommit, this does not filter by branch_commits: outgoing
+// edges naturally reflect the source's commit, which is already pinned by
+// commitHash. The branch parameter is accepted for signature symmetry and
+// reserved for future use (e.g. branch-relative target visibility).
+//
+// Candidates whose target_commit is missing from commit_log are dropped:
+// returning them would expose self-links that 404. This is the only filter
+// applied — branch reachability is intentionally not enforced here.
 func (si *searchIndex) OutgoingAtCommit(ctx context.Context, branch, path, commitHash string) ([]RefSummary, error) {
-	// Note: "commit" is a reserved SQL keyword; use alias "tc" (target commit).
+	_ = branch
 	cypherQ := fmt.Sprintf(
-		`MATCH (s:%s {path: "%s"})-[r:%s]->(t:%s) WHERE r.source_commit = "%s" RETURN t.path AS path, t.title AS title, r.target_commit AS tc, t.deleted AS deleted`,
+		`MATCH (s:%s {path: "%s"})-[r:%s]->(t:%s) WHERE r.source_commit = "%s" RETURN t.path AS path, t.title AS title, t.type AS type, r.target_commit AS tc, t.deleted AS deleted`,
 		NodeFact, escapeCypherKey(path), EdgeDerivedFrom, NodeFact,
 		escapeCypherKey(commitHash),
 	)
-	q := `SELECT json_extract(value, '$.path'), json_extract(value, '$.title'), json_extract(value, '$.tc'), json_extract(value, '$.deleted') FROM json_each(cypher('` + cypherQ + `'))`
+	q := `SELECT json_extract(value, '$.path'), json_extract(value, '$.title'), json_extract(value, '$.type'), json_extract(value, '$.tc'), json_extract(value, '$.deleted') FROM json_each(cypher('` + cypherQ + `'))`
 	rows, err := conn(ctx, si.rh.db).QueryContext(ctx, q)
 	if err != nil {
 		return nil, fmt.Errorf("OutgoingAtCommit: cypher: %w", err)
 	}
 	defer rows.Close()
 
-	var out []RefSummary
+	var candidates []RefSummary
 	for rows.Next() {
 		var rs RefSummary
 		var del any
-		if err := rows.Scan(&rs.Path, &rs.Title, &rs.Commit, &del); err != nil {
+		if err := rows.Scan(&rs.Path, &rs.Title, &rs.Type, &rs.Commit, &del); err != nil {
 			return nil, fmt.Errorf("OutgoingAtCommit: scan: %w", err)
 		}
 		if rs.Path == "" {
 			continue
 		}
 		rs.Deleted = isDeletedVal(del)
-		out = append(out, rs)
+		candidates = append(candidates, rs)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("OutgoingAtCommit: rows: %w", err)
+	}
+
+	if len(candidates) == 0 {
+		return candidates, nil
+	}
+	args := make([]any, 0, len(candidates))
+	placeholders := make([]string, 0, len(candidates))
+	for _, c := range candidates {
+		args = append(args, c.Commit)
+		placeholders = append(placeholders, "?")
+	}
+	clRows, err := conn(ctx, si.rh.db).QueryContext(ctx,
+		`SELECT cl.commit_hash, COALESCE(cl.committed_at, 0)
+		   FROM commit_log cl
+		  WHERE cl.commit_hash IN (`+strings.Join(placeholders, ",")+`)`,
+		args...,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("OutgoingAtCommit: commit_log lookup: %w", err)
+	}
+	defer clRows.Close()
+	dates := make(map[string]int64, len(candidates))
+	for clRows.Next() {
+		var h string
+		var ts int64
+		if err := clRows.Scan(&h, &ts); err != nil {
+			return nil, fmt.Errorf("OutgoingAtCommit: commit_log scan: %w", err)
+		}
+		dates[h] = ts
+	}
+	if err := clRows.Err(); err != nil {
+		return nil, fmt.Errorf("OutgoingAtCommit: commit_log rows: %w", err)
+	}
+
+	out := make([]RefSummary, 0, len(candidates))
+	for _, c := range candidates {
+		ts, ok := dates[c.Commit]
+		if !ok {
+			continue
+		}
+		c.CommittedAt = ts
+		out = append(out, c)
 	}
 	return out, nil
 }

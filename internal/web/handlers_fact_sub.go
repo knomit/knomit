@@ -110,11 +110,13 @@ type commitEntry struct {
 // Commit is required for HEAD and commit-anchored alike: it pins the entry
 // to a specific source-version (incoming) or target-version (outgoing).
 type graphRefEntry struct {
-	Path    string      `json:"path"`
-	Title   string      `json:"title"`
-	Commit  string      `json:"commit,omitempty"`
-	Deleted bool        `json:"deleted,omitempty"`
-	Links   hal.LinkMap `json:"_links,omitempty"`
+	Path        string      `json:"path"`
+	Title       string      `json:"title"`
+	Type        string      `json:"type,omitempty"`
+	Commit      string      `json:"commit,omitempty"`
+	CommittedAt int64       `json:"committed_at,omitempty"`
+	Deleted     bool        `json:"deleted,omitempty"`
+	Links       hal.LinkMap `json:"_links,omitempty"`
 }
 
 // handleFactCommits serves GET /repos/{repo}/branches/{branch}/facts/*/commits.
@@ -256,10 +258,12 @@ func buildGraphRefItems(b hal.URLBuilder, repoName string, a hal.Anchor, refs []
 	items := make([]graphRefEntry, 0, len(refs))
 	for _, ref := range refs {
 		item := graphRefEntry{
-			Path:    ref.Path,
-			Title:   ref.Title,
-			Commit:  ref.Commit,
-			Deleted: ref.Deleted,
+			Path:        ref.Path,
+			Title:       ref.Title,
+			Type:        ref.Type,
+			Commit:      ref.Commit,
+			CommittedAt: ref.CommittedAt,
+			Deleted:     ref.Deleted,
 		}
 		if !ref.Deleted {
 			anchor := hal.Anchor{Branch: a.Branch, Commit: ref.Commit}

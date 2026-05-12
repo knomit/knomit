@@ -229,6 +229,58 @@ func TestHandleFactOutgoing_ReturnsHALCollection(t *testing.T) {
 	}
 }
 
+func TestHandleFactIncoming_FactNotLive_Returns404(t *testing.T) {
+	provider := &stubFactSubProvider{
+		explainErr: store.ErrFactNotLive,
+	}
+	s := &Server{
+		Manager:         newTestManagerWithRepos(t, "alpha"),
+		factSubProvider: provider,
+	}
+	r := s.NewAPIRouter()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet,
+		"/repos/alpha/branches/agent:test/facts/know/gone.md/incoming", nil)
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("status: %d, want 404", rec.Code)
+	}
+	if got := rec.Header().Get("Content-Type"); got != "application/problem+json" {
+		t.Errorf("content-type: %q", got)
+	}
+	var body struct {
+		Title string `json:"title"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if body.Title != "Fact not found" {
+		t.Errorf("title: %q, want %q", body.Title, "Fact not found")
+	}
+}
+
+func TestHandleFactOutgoing_FactNotLive_Returns404(t *testing.T) {
+	provider := &stubFactSubProvider{
+		explainErr: store.ErrFactNotLive,
+	}
+	s := &Server{
+		Manager:         newTestManagerWithRepos(t, "alpha"),
+		factSubProvider: provider,
+	}
+	r := s.NewAPIRouter()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet,
+		"/repos/alpha/branches/agent:test/facts/know/gone.md/outgoing", nil)
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("status: %d, want 404", rec.Code)
+	}
+}
+
 func TestHandleFactIncoming_StoreError_Returns500(t *testing.T) {
 	provider := &stubFactSubProvider{
 		explainErr: errors.New("db error"),
@@ -246,6 +298,91 @@ func TestHandleFactIncoming_StoreError_Returns500(t *testing.T) {
 
 	if rec.Code != http.StatusInternalServerError {
 		t.Errorf("status: %d, want 500", rec.Code)
+	}
+}
+
+// TestFactIncoming_IncludesType verifies the source fact's epistemic type is
+// returned on each ref entry so the UI can color-code chips.
+func TestFactIncoming_IncludesType(t *testing.T) {
+	provider := &stubFactSubProvider{
+		explain: store.ExplainResult{
+			Incoming: []store.RefSummary{
+				{Path: "kb/p.md", Title: "P", Type: "principle", Commit: "abc1234"},
+			},
+		},
+	}
+	s := &Server{
+		Manager:         newTestManagerWithRepos(t, "alpha"),
+		factSubProvider: provider,
+	}
+	r := s.NewAPIRouter()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet,
+		"/repos/alpha/branches/agent:test/facts/kb/x.md/incoming", nil)
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: %d, body=%s", rec.Code, rec.Body.String())
+	}
+
+	var body struct {
+		Embedded struct {
+			Refs []struct {
+				Path string `json:"path"`
+				Type string `json:"type"`
+			} `json:"refs"`
+		} `json:"_embedded"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(body.Embedded.Refs) != 1 {
+		t.Fatalf("got %d refs, want 1", len(body.Embedded.Refs))
+	}
+	if body.Embedded.Refs[0].Type != "principle" {
+		t.Errorf("ref[0].type: %q, want \"principle\"", body.Embedded.Refs[0].Type)
+	}
+}
+
+// TestFactOutgoing_IncludesType verifies type is round-tripped on outgoing.
+func TestFactOutgoing_IncludesType(t *testing.T) {
+	provider := &stubFactSubProvider{
+		explain: store.ExplainResult{
+			Outgoing: []store.RefSummary{
+				{Path: "kb/c.md", Title: "C", Type: "concept", Commit: "def5678"},
+			},
+		},
+	}
+	s := &Server{
+		Manager:         newTestManagerWithRepos(t, "alpha"),
+		factSubProvider: provider,
+	}
+	r := s.NewAPIRouter()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet,
+		"/repos/alpha/branches/agent:test/facts/kb/x.md/outgoing", nil)
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: %d, body=%s", rec.Code, rec.Body.String())
+	}
+
+	var body struct {
+		Embedded struct {
+			Refs []struct {
+				Path string `json:"path"`
+				Type string `json:"type"`
+			} `json:"refs"`
+		} `json:"_embedded"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(body.Embedded.Refs) != 1 {
+		t.Fatalf("got %d refs, want 1", len(body.Embedded.Refs))
+	}
+	if body.Embedded.Refs[0].Type != "concept" {
+		t.Errorf("ref[0].type: %q, want \"concept\"", body.Embedded.Refs[0].Type)
 	}
 }
 

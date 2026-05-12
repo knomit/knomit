@@ -14,11 +14,13 @@ import (
 
 // stubStatsProvider implements statsProvider for tests.
 type stubStatsProvider struct {
-	result store.StatsResult
-	err    error
+	result     store.StatsResult
+	err        error
+	pathPrefix string // captured from the last call so tests can assert routing.
 }
 
-func (s *stubStatsProvider) Stats(_ *repos.RepoInstance, _, _ string) (store.StatsResult, error) {
+func (s *stubStatsProvider) Stats(_ *repos.RepoInstance, _, pathPrefix string) (store.StatsResult, error) {
+	s.pathPrefix = pathPrefix
 	return s.result, s.err
 }
 
@@ -93,6 +95,31 @@ func TestHandleHALStats_UnknownRepo_Returns404(t *testing.T) {
 	}
 	if got := rec.Header().Get("Content-Type"); got != "application/problem+json" {
 		t.Errorf("content-type: %q", got)
+	}
+}
+
+// TestHandleHALStats_ForwardsPathQuery regresses the bug where the handler
+// always called provider.Stats with an empty path prefix, so domain/entity
+// counts in the right panel never updated when the user navigated into a
+// subdirectory.
+func TestHandleHALStats_ForwardsPathQuery(t *testing.T) {
+	provider := &stubStatsProvider{result: store.StatsResult{Total: 7}}
+	s := &Server{
+		Manager:       newTestManagerWithRepos(t, "alpha"),
+		statsProvider: provider,
+	}
+	r := s.NewAPIRouter()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet,
+		"/repos/alpha/branches/agent:test/stats?path=kb/meta", nil)
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: %d, body=%s", rec.Code, rec.Body.String())
+	}
+	if provider.pathPrefix != "kb/meta" {
+		t.Errorf("provider received pathPrefix %q, want %q", provider.pathPrefix, "kb/meta")
 	}
 }
 

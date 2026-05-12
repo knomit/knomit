@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 )
@@ -12,10 +13,12 @@ import (
 
 // RefSummary is a lightweight fact reference returned by ExplainFact.
 type RefSummary struct {
-	Path    string `json:"path"`
-	Title   string `json:"title"`
-	Commit  string `json:"commit,omitempty"` // source_commit for incoming, target_commit for outgoing
-	Deleted bool   `json:"deleted,omitempty"`
+	Path        string `json:"path"`
+	Title       string `json:"title"`
+	Type        string `json:"type,omitempty"`         // epistemic type of the source (incoming) or target (outgoing) fact
+	Commit      string `json:"commit,omitempty"`       // source_commit for incoming, target_commit for outgoing
+	Deleted     bool   `json:"deleted,omitempty"`
+	CommittedAt int64  `json:"committed_at,omitempty"` // Unix seconds; 0 if commit_log row missing
 }
 
 // ExplainResult holds the incoming and outgoing reference summary for a fact.
@@ -35,12 +38,19 @@ func (si *searchIndex) ExplainFact(ctx context.Context, branch, path string) (Ex
 	}
 
 	// active_commit_for(path, branch) lives in branch_facts.commit_hash.
+	// A missing row means the path is not currently live on this branch
+	// (retracted at HEAD, or never indexed) — surface as ErrFactNotLive so
+	// handlers can map it to 404. Older versions may still be reachable via
+	// commit-anchored endpoints; that's outside ExplainFact's HEAD-only scope.
 	var activeCommit string
 	err = conn(ctx, si.rh.db).QueryRowContext(ctx,
 		`SELECT commit_hash FROM branch_facts WHERE branch_id = ? AND path = ?`,
 		branchID, path,
 	).Scan(&activeCommit)
 	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ExplainResult{}, ErrFactNotLive
+		}
 		return ExplainResult{}, fmt.Errorf("ExplainFact: resolve active commit: %w", err)
 	}
 

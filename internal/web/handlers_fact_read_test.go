@@ -2,6 +2,7 @@ package web
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -12,14 +13,34 @@ import (
 )
 
 // stubFactReader implements the minimal interface the HAL fact handler needs.
+//
+// The fallback contract is exercised via three optional fields:
+//   - fallbackFact / fallbackHead: when set AND the caller passes fallback=true,
+//     Read returns these instead of the primary (fact, head, readErr) tuple.
+//     This lets a single test exercise both the primary-success path and the
+//     fallback path without duplicating the whole struct.
+//   - lastFallback: records the fallback flag the handler actually passed
+//     (asserted by tests that care about how the parameter is wired).
 type stubFactReader struct {
 	fact    knomitfact.Fact
 	exists  map[string]bool
 	head    string
 	readErr error
+
+	// Fallback overrides — used only when the caller passes fallback=true.
+	fallbackFact    knomitfact.Fact
+	fallbackHead    string
+	fallbackErr     error
+	useFallbackData bool
+
+	lastFallback bool
 }
 
-func (s *stubFactReader) Read(_ *repos.RepoInstance, _ hal.Anchor, _ string) (knomitfact.Fact, string, error) {
+func (s *stubFactReader) Read(_ *repos.RepoInstance, _ hal.Anchor, _ string, fallback bool) (knomitfact.Fact, string, error) {
+	s.lastFallback = fallback
+	if fallback && s.useFallbackData {
+		return s.fallbackFact, s.fallbackHead, s.fallbackErr
+	}
 	return s.fact, s.head, s.readErr
 }
 
@@ -107,6 +128,30 @@ func TestHandleHALFact_NotFound_ReturnsProblem(t *testing.T) {
 
 	if rec.Code != http.StatusNotFound {
 		t.Errorf("status: %d", rec.Code)
+	}
+	if got := rec.Header().Get("Content-Type"); got != "application/problem+json" {
+		t.Errorf("content-type: %q", got)
+	}
+}
+
+// TestHandleHALFact_BackendError_Returns500: regression for the old behavior
+// that collapsed ALL reader errors into errFactNotFound (404). Real backend
+// failures (e.g. disk error, git corruption) must surface as 500 so users
+// know something is broken rather than seeing "no fact at this path".
+func TestHandleHALFact_BackendError_Returns500(t *testing.T) {
+	s := &Server{
+		Manager:    newTestManagerWithRepos(t, "alpha"),
+		factReader: &stubFactReader{readErr: errors.New("disk on fire")},
+	}
+	r := s.NewAPIRouter()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet,
+		"/repos/alpha/branches/agent:test/facts/know/x.md", nil)
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("expected 500 for non-notfound error, got %d body=%s", rec.Code, rec.Body.String())
 	}
 	if got := rec.Header().Get("Content-Type"); got != "application/problem+json" {
 		t.Errorf("content-type: %q", got)

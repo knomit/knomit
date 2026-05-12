@@ -1,9 +1,12 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useLayoutEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { api } from './api';
-import type { Fact } from './api';
+import type { Fact, RefGroup, RefVersion } from './api';
+import { relativeTimeEpoch, typeStyles } from './utils';
+import { TypeIcon } from './icons';
+import { FactBody } from './FactBody';
 
 interface ExplainEntry { path: string; commit: string | null; }
-interface RefSummary { path: string; title: string; deleted?: boolean; }
 
 interface Props {
   repo: string;
@@ -16,8 +19,8 @@ export function ExplainView({ repo, branch, initialEntry, onClose }: Props) {
   const [current, setCurrent] = useState<ExplainEntry>(initialEntry);
   const [backStack, setBackStack] = useState<ExplainEntry[]>([]);
   const [fact, setFact] = useState<Fact | null>(null);
-  const [incoming, setIncoming] = useState<RefSummary[]>([]);
-  const [outgoing, setOutgoing] = useState<RefSummary[]>([]);
+  const [incoming, setIncoming] = useState<RefGroup[]>([]);
+  const [outgoing, setOutgoing] = useState<RefGroup[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -30,9 +33,7 @@ export function ExplainView({ repo, branch, initialEntry, onClose }: Props) {
     setOutgoing([]);
 
     const factPromise = api.fact(repo, branch, current.path, current.commit ?? undefined);
-    const explainPromise = current.commit === null
-      ? api.explain(repo, branch, current.path)
-      : Promise.resolve({ incoming: [], outgoing: [] });
+    const explainPromise = api.explain(repo, branch, current.path, current.commit ?? undefined);
 
     Promise.all([factPromise, explainPromise])
       .then(([f, e]) => {
@@ -72,12 +73,14 @@ export function ExplainView({ repo, branch, initialEntry, onClose }: Props) {
 
       {/* Incoming refs strip */}
       {current.commit === null && (
-        <div style={{ flexShrink: 0, borderBottom: '1px solid #1a1a1a', padding: '6px 12px', background: '#0d0d0d', minHeight: 38, display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
-          <span style={{ fontSize: 9, color: '#3a3a3a', textTransform: 'uppercase', letterSpacing: '0.08em', marginRight: 4 }}>↙ Referenced by</span>
-          {incoming.length === 0 && !loading && <span style={{ fontSize: 11, color: '#2a2a2a' }}>none</span>}
-          {incoming.map(r => (
-            <Chip key={r.path} item={r} onClick={() => navigateTo({ path: r.path, commit: null })} />
-          ))}
+        <div style={{ flexShrink: 0, borderBottom: '1px solid #1a1a1a', background: '#0d0d0d' }}>
+          <RailHeader direction="in" groups={incoming} testId="incoming-header" />
+          <div style={{ padding: '6px 12px', minHeight: 38, display: 'flex', flexWrap: 'nowrap', gap: 6, alignItems: 'center', overflowX: 'auto', overflowY: 'hidden' }}>
+            {incoming.length === 0 && !loading && <span style={{ fontSize: 11, color: '#2a2a2a' }}>none</span>}
+            {incoming.map(g => (
+              <Chip key={g.path} group={g} onClick={commit => navigateTo({ path: g.path, commit })} />
+            ))}
+          </div>
         </div>
       )}
 
@@ -85,68 +88,227 @@ export function ExplainView({ repo, branch, initialEntry, onClose }: Props) {
       <div style={{ flex: 1, overflowY: 'auto', padding: '16px 20px' }}>
         {loading && <div style={{ color: '#444', fontSize: 12 }}>Loading…</div>}
         {error && <div style={{ color: '#f66', fontSize: 12 }}>{error}</div>}
-        {fact && <FactReadOnly fact={fact} />}
+        {fact && (
+          <div style={{ maxWidth: 720, margin: '0 auto' }}>
+            <div style={{ fontSize: 10, color: '#444', fontFamily: 'monospace', marginBottom: 6 }}>{fact.path}</div>
+            <div data-testid="fact-title" style={{ fontSize: 18, fontWeight: 600, color: '#eee', letterSpacing: '-0.3px', marginBottom: 14 }}>{fact.title || fact.path}</div>
+            <FactBody fact={fact} navigate={() => {}} dispatch={() => {}} readOnly={true} />
+          </div>
+        )}
       </div>
 
       {/* Outgoing refs strip */}
-      <div style={{ flexShrink: 0, borderTop: '1px solid #1a1a1a', padding: '6px 12px', background: '#0d0d0d', minHeight: 38, display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
-        <span style={{ fontSize: 9, color: '#3a3a3a', textTransform: 'uppercase', letterSpacing: '0.08em', marginRight: 4 }}>↗ References</span>
-        {outgoing.length === 0 && !loading && <span style={{ fontSize: 11, color: '#2a2a2a' }}>none</span>}
-        {outgoing.map(r => (
-          <Chip
-            key={r.path}
-            item={r}
-            deleted={r.deleted}
-            onClick={() => navigateTo({ path: r.path, commit: r.deleted ? current.commit : null })}
-          />
-        ))}
+      <div style={{ flexShrink: 0, borderTop: '1px solid #1a1a1a', background: '#0d0d0d' }}>
+        <RailHeader direction="out" groups={outgoing} testId="outgoing-header" />
+        <div style={{ padding: '6px 12px', minHeight: 38, display: 'flex', flexWrap: 'nowrap', gap: 6, alignItems: 'center', overflowX: 'auto', overflowY: 'hidden' }}>
+          {outgoing.length === 0 && !loading && <span style={{ fontSize: 11, color: '#2a2a2a' }}>none</span>}
+          {outgoing.map(g => (
+            <Chip
+              key={g.path}
+              group={g}
+              onClick={commit => navigateTo({ path: g.path, commit: g.deleted ? commit : null })}
+            />
+          ))}
+        </div>
       </div>
     </div>
   );
 }
 
-function Chip({ item, deleted, onClick }: { item: RefSummary; deleted?: boolean; onClick: () => void }) {
-  return (
-    <span
-      onClick={onClick}
-      title={item.path}
-      style={{
-        display: 'inline-flex', flexDirection: 'column',
-        padding: '3px 8px', borderRadius: 12,
-        border: `1px solid ${deleted ? '#2a2a2a' : '#253565'}`,
-        cursor: 'pointer', background: '#111',
-        maxWidth: 200,
-      }}
-    >
-      <span style={{ fontSize: 11, color: deleted ? '#555' : '#8af', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-        {item.title || item.path}
-        {deleted && <span style={{ fontSize: 9, color: '#444', marginLeft: 4 }}>[deleted]</span>}
-      </span>
-      <span style={{ fontSize: 9, color: '#333', fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{item.path}</span>
-    </span>
-  );
-}
+function RailHeader({ direction, groups, testId }: {
+  direction: 'in' | 'out';
+  groups: RefGroup[];
+  testId: string;
+}) {
+  const total = groups.length;
+  const retracted = groups.filter(g => g.deleted).length;
 
-function FactReadOnly({ fact }: { fact: Fact }) {
+  // Per-type breakdown, ordered by descending count, ties broken by name.
+  const counts = new Map<string, number>();
+  for (const g of groups) {
+    const t = g.type ?? g.versions[0]?.type;
+    if (!t) continue;
+    counts.set(t, (counts.get(t) ?? 0) + 1);
+  }
+  const breakdown = [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+
+  const arrow = direction === 'in' ? '↙' : '↗';
+  const sectionLabel = direction === 'in' ? 'IN-EDGES · REFERENCED BY' : 'OUT-EDGES · REFERENCES';
+
   return (
-    <div style={{ maxWidth: 720 }}>
-      <div style={{ fontSize: 10, color: '#444', fontFamily: 'monospace', marginBottom: 6 }}>{fact.path}</div>
-      <div style={{ fontSize: 15, color: '#ddd', fontWeight: 500, marginBottom: 10 }}>{fact.title}</div>
-      <div style={{ fontSize: 13, color: '#888', lineHeight: 1.7, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{fact.body}</div>
-      {(fact.domain?.length > 0 || fact.entities?.length > 0) && (
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 12 }}>
-          {fact.domain?.map(d => <Tag key={d} label={d} />)}
-          {fact.entities?.map(e => <Tag key={e} label={e} />)}
-        </div>
+    <div data-testid={testId} style={{
+      display: 'flex', alignItems: 'center', gap: 10, padding: '6px 12px',
+      background: '#0d0d0d',
+      fontSize: 10, color: '#3a3a3a', textTransform: 'uppercase', letterSpacing: '0.08em',
+      flexShrink: 0,
+    }}>
+      <span style={{ color: '#888' }}>{arrow} {sectionLabel} <span style={{ color: '#ccc' }}>{total}</span></span>
+      <span style={{ display: 'flex', gap: 8, alignItems: 'center', flex: 1, overflow: 'hidden', flexWrap: 'wrap' }}>
+        {breakdown.map(([t, n]) => {
+          const ts = typeStyles[t];
+          if (!ts) return null;
+          return (
+            <span key={t} style={{ color: ts.color, fontFamily: 'monospace', textTransform: 'lowercase' }}>
+              {t} <span style={{ color: '#aaa' }}>{n}</span>
+            </span>
+          );
+        })}
+      </span>
+      {retracted > 0 && (
+        <span style={{ color: '#f88', fontFamily: 'monospace' }}>{retracted} retracted</span>
       )}
     </div>
   );
 }
 
-function Tag({ label }: { label: string }) {
+function Chip({ group, onClick }: { group: RefGroup; onClick: (commit: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const [dropdownPos, setDropdownPos] = useState<{ top: number; left: number } | null>(null);
+  const dropdownRef = useRef<HTMLDivElement | null>(null);
+  const chipRef = useRef<HTMLSpanElement | null>(null);
+
+  const versionCount = group.versions.length;
+  const isMulti = versionCount > 1;
+  const deleted = group.deleted ?? false;
+  const latest = group.versions[0];
+  const groupType = group.type ?? latest?.type;
+  const typeColor = (groupType && typeStyles[groupType]?.color) || '#253565';
+
+  // Anchor the dropdown to the chip's viewport position. We render via a
+  // portal so the rail's overflow:auto doesn't clip the dropdown.
+  useLayoutEffect(() => {
+    if (!open || !chipRef.current) { setDropdownPos(null); return; }
+    const r = chipRef.current.getBoundingClientRect();
+    setDropdownPos({ top: r.bottom + 2, left: r.left });
+  }, [open]);
+
+  // Outside-click + Escape close the dropdown.
+  useEffect(() => {
+    if (!open) return;
+    const onMouseDown = (e: MouseEvent) => {
+      const target = e.target as Node | null;
+      if (!target) return;
+      if (dropdownRef.current?.contains(target)) return;
+      if (chipRef.current?.contains(target)) return;
+      setOpen(false);
+    };
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('mousedown', onMouseDown);
+    window.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', onMouseDown);
+      window.removeEventListener('keydown', onKeyDown);
+    };
+  }, [open]);
+
+  const handleChipClick = () => {
+    if (isMulti) {
+      setOpen(o => !o);
+      return;
+    }
+    if (latest) onClick(latest.commit);
+  };
+
+  const handleRowClick = (version: RefVersion) => {
+    setOpen(false);
+    onClick(version.commit);
+  };
+
   return (
-    <span style={{ fontSize: 10, color: '#555', background: '#141414', border: '1px solid #222', borderRadius: 3, padding: '1px 6px' }}>
-      {label}
+    <span
+      ref={chipRef}
+      data-testid="ref-chip"
+      onClick={handleChipClick}
+      title={deleted ? 'Target fact retracted.' : group.path}
+      style={{
+        display: 'inline-flex', flexDirection: 'column',
+        padding: '4px 9px', borderRadius: 8,
+        border: `1px solid ${deleted ? '#2a2a2a' : typeColor}`,
+        cursor: 'pointer', background: '#111',
+        maxWidth: 220,
+        flexShrink: 0,
+        opacity: deleted ? 0.45 : 1,
+        textDecoration: deleted ? 'line-through' : 'none',
+        position: 'relative',
+      }}
+    >
+      <span style={{ display: 'flex', alignItems: 'center', gap: 6, overflow: 'hidden' }}>
+        {groupType && <TypeIcon type={groupType} color={deleted ? '#555' : typeColor} size={12} />}
+        <span style={{ fontSize: 12, color: deleted ? '#555' : '#ddd', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {group.title || group.path}
+          {deleted && <span style={{ fontSize: 9, color: '#444', marginLeft: 4 }}>[deleted]</span>}
+        </span>
+      </span>
+      <span style={{ display: 'flex', alignItems: 'center', gap: 6, overflow: 'hidden', marginTop: 2 }}>
+        <span style={{ fontSize: 10, color: '#444', fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>{group.path}</span>
+        {isMulti ? (
+          <span style={{
+            fontFamily: 'monospace', fontSize: 9, color: typeColor,
+            background: '#1a1a2a', padding: '0 4px', borderRadius: 2,
+            flexShrink: 0,
+          }}>×{versionCount} ⌄</span>
+        ) : (
+          latest?.commit && (
+            <span style={{
+              fontFamily: 'monospace', fontSize: 9, color: typeColor,
+              background: '#1a1a2a', padding: '0 4px', borderRadius: 2,
+              textDecoration: 'none',
+              flexShrink: 0,
+            }}>{latest.commit.slice(0, 7)}</span>
+          )
+        )}
+      </span>
+      {open && isMulti && dropdownPos && createPortal(
+        <div
+          ref={dropdownRef}
+          onClick={e => e.stopPropagation()}
+          style={{
+            position: 'fixed',
+            top: dropdownPos.top,
+            left: dropdownPos.left,
+            minWidth: 180,
+            maxHeight: 200,
+            overflowY: 'auto',
+            background: '#111',
+            border: '1px solid #2a2a2a',
+            borderRadius: 4,
+            padding: '4px 0',
+            zIndex: 1000,
+            textDecoration: 'none',
+          }}
+        >
+          {group.versions.map((v, idx) => (
+            <div
+              key={`${v.commit}-${idx}`}
+              onClick={() => handleRowClick(v)}
+              onMouseEnter={e => (e.currentTarget.style.background = '#1a1a1a')}
+              onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+                padding: '6px 12px',
+                cursor: 'pointer',
+                background: 'transparent',
+              }}
+            >
+              <span style={{ fontSize: 10, color: idx === 0 ? typeColor : '#444' }}>
+                {idx === 0 ? '●' : '○'}
+              </span>
+              <span style={{ fontFamily: 'monospace', fontSize: 10, color: typeColor }}>
+                {v.commit.slice(0, 7)}
+              </span>
+              <span style={{ fontSize: 10, color: '#666', marginLeft: 'auto' }}>
+                {relativeTimeEpoch(v.committed_at ?? 0)}
+              </span>
+            </div>
+          ))}
+        </div>,
+        document.body
+      )}
     </span>
   );
 }
+

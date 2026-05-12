@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest';
-import { parseSearchQuery, parseFilterQuery } from './api';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { parseSearchQuery, parseFilterQuery, api } from './api';
 
 describe('parseSearchQuery', () => {
   it('parses plain text', () => {
@@ -66,12 +66,20 @@ describe('parseSearchQuery', () => {
 describe('parseFilterQuery', () => {
   it('extracts domain and type chips with free text', () => {
     const r = parseFilterQuery('domain:go type:concept free text');
-    expect(r).toEqual({ chips: [{ category: 'domain', value: 'go' }, { category: 'type', value: 'concept' }], text: 'free text' });
+    expect(r).toEqual({
+      chips: [{ category: 'domain', value: 'go' }, { category: 'type', value: 'concept' }],
+      text: 'free text',
+      warnings: [],
+    });
   });
 
   it('extracts quoted entity and unquoted path chips', () => {
     const r = parseFilterQuery('entity:"supply chain" path:kb/go');
-    expect(r).toEqual({ chips: [{ category: 'entity', value: 'supply chain' }, { category: 'path', value: 'kb/go' }], text: '' });
+    expect(r).toEqual({
+      chips: [{ category: 'entity', value: 'supply chain' }, { category: 'path', value: 'kb/go' }],
+      text: '',
+      warnings: [],
+    });
   });
 
   it('ep: prefix is recognized as a filter chip', () => {
@@ -131,5 +139,193 @@ describe('parseFilterQuery', () => {
     expect(r.chips).toHaveLength(2);
     expect(r.chips).toContainEqual({ category: 'ep', value: 'learn' });
     expect(r.chips).toContainEqual({ category: 'domain', value: 'go' });
+  });
+});
+
+describe('api.fact', () => {
+  beforeEach(() => { vi.restoreAllMocks(); });
+
+  it('appends ?fallback=before only when commit is provided AND opts.fallback is set', async () => {
+    const calls: string[] = [];
+    globalThis.fetch = vi.fn().mockImplementation(async (url: string) => {
+      calls.push(url);
+      return { ok: true, status: 200, json: async () => ({ path: 'kb/x.md', title: 'X', body: '', as_of: { commit: 'abc1234' } }) };
+    });
+
+    // Commit + fallback → query string appended.
+    await api.fact('alpha', 'main', 'kb/x.md', 'abc1234', { fallback: 'before' });
+    expect(calls[0]).toContain('/commits/abc1234/facts/kb/x.md');
+    expect(calls[0]).toContain('?fallback=before');
+
+    // Commit but no fallback opt → no query string.
+    await api.fact('alpha', 'main', 'kb/x.md', 'abc1234');
+    expect(calls[1]).toContain('/commits/abc1234/facts/kb/x.md');
+    expect(calls[1]).not.toContain('fallback=');
+
+    // No commit (HEAD-anchored) but fallback opt set → still no query string,
+    // because fallback is meaningless for HEAD reads.
+    await api.fact('alpha', 'main', 'kb/x.md', undefined, { fallback: 'before' });
+    expect(calls[2]).not.toContain('/commits/');
+    expect(calls[2]).not.toContain('fallback=');
+  });
+});
+
+describe('api.explain (grouping)', () => {
+  beforeEach(() => { vi.restoreAllMocks(); });
+
+  type RawRef = { path: string; title: string; type?: string; commit?: string; committed_at?: number; deleted?: boolean };
+  function mockExplainResponses(incoming: RawRef[], outgoing: RawRef[]) {
+    globalThis.fetch = vi.fn().mockImplementation(async (url: string) => {
+      const refs = url.endsWith('/incoming') ? incoming : outgoing;
+      return { ok: true, status: 200, json: async () => ({ _embedded: { refs } }) };
+    });
+  }
+
+  it('groups multiple ref-events with the same path into one group, newest-first', async () => {
+    mockExplainResponses(
+      [
+        { path: 'kb/A.md', title: 'A', commit: 'aaaaaaa', committed_at: 1000 },
+        { path: 'kb/A.md', title: 'A', commit: 'bbbbbbb', committed_at: 2000 },
+        { path: 'kb/B.md', title: 'B', commit: 'ccccccc', committed_at: 1500 },
+      ],
+      [],
+    );
+    const r = await api.explain('alpha', 'main', 'kb/x.md');
+    expect(r.incoming).toHaveLength(2);
+    const groupA = r.incoming.find(g => g.path === 'kb/A.md')!;
+    const groupB = r.incoming.find(g => g.path === 'kb/B.md')!;
+    expect(groupA.versions).toHaveLength(2);
+    expect(groupB.versions).toHaveLength(1);
+    // Newest-first: bbbbbbb (committed_at 2000) before aaaaaaa (committed_at 1000).
+    expect(groupA.versions[0].commit).toBe('bbbbbbb');
+    expect(groupA.versions[1].commit).toBe('aaaaaaa');
+    // Title comes from the latest version.
+    expect(groupA.title).toBe('A');
+  });
+
+  it('single-version: one ref produces one group with versions.length === 1', async () => {
+    mockExplainResponses(
+      [{ path: 'kb/only.md', title: 'Only', commit: 'aaaaaaa', committed_at: 100 }],
+      [],
+    );
+    const r = await api.explain('alpha', 'main', 'kb/x.md');
+    expect(r.incoming).toHaveLength(1);
+    expect(r.incoming[0].versions).toHaveLength(1);
+    expect(r.incoming[0].versions[0].commit).toBe('aaaaaaa');
+  });
+
+  it('orders versions strictly by committed_at descending', async () => {
+    mockExplainResponses(
+      [
+        { path: 'kb/A.md', title: 'A', commit: 'old', committed_at: 100 },
+        { path: 'kb/A.md', title: 'A', commit: 'mid', committed_at: 200 },
+        { path: 'kb/A.md', title: 'A', commit: 'new', committed_at: 300 },
+      ],
+      [],
+    );
+    const r = await api.explain('alpha', 'main', 'kb/x.md');
+    expect(r.incoming[0].versions.map(v => v.commit)).toEqual(['new', 'mid', 'old']);
+  });
+
+  it('falls back to backend insertion order when committed_at is missing', async () => {
+    mockExplainResponses(
+      [
+        { path: 'kb/A.md', title: 'A', commit: 'first' },
+        { path: 'kb/A.md', title: 'A', commit: 'second' },
+      ],
+      [],
+    );
+    const r = await api.explain('alpha', 'main', 'kb/x.md');
+    expect(r.incoming[0].versions.map(v => v.commit)).toEqual(['first', 'second']);
+  });
+
+  it('group-level deleted reflects the latest versions deleted flag (outgoing)', async () => {
+    mockExplainResponses(
+      [],
+      [
+        { path: 'kb/T.md', title: 'T', commit: 'old', committed_at: 100, deleted: false },
+        { path: 'kb/T.md', title: 'T', commit: 'new', committed_at: 200, deleted: true },
+      ],
+    );
+    const r = await api.explain('alpha', 'main', 'kb/x.md');
+    expect(r.outgoing[0].deleted).toBe(true);
+    expect(r.outgoing[0].versions[0].commit).toBe('new');
+  });
+
+  it('uses the commit-anchored URL when commit is provided', async () => {
+    const calls: string[] = [];
+    globalThis.fetch = vi.fn().mockImplementation(async (url: string) => {
+      calls.push(url);
+      return { ok: true, status: 200, json: async () => ({ _embedded: { refs: [] } }) };
+    });
+    await api.explain('alpha', 'main', 'kb/x.md', 'abc1234');
+    expect(calls).toHaveLength(2);
+    expect(calls[0]).toBe('/api/v1/repos/alpha/branches/main/commits/abc1234/facts/kb/x.md/incoming');
+    expect(calls[1]).toBe('/api/v1/repos/alpha/branches/main/commits/abc1234/facts/kb/x.md/outgoing');
+  });
+
+  it('uses the HEAD-anchored URL when commit is omitted', async () => {
+    const calls: string[] = [];
+    globalThis.fetch = vi.fn().mockImplementation(async (url: string) => {
+      calls.push(url);
+      return { ok: true, status: 200, json: async () => ({ _embedded: { refs: [] } }) };
+    });
+    await api.explain('alpha', 'main', 'kb/x.md');
+    expect(calls[0]).toBe('/api/v1/repos/alpha/branches/main/facts/kb/x.md/incoming');
+    expect(calls[1]).toBe('/api/v1/repos/alpha/branches/main/facts/kb/x.md/outgoing');
+  });
+
+  it('propagates type from each ref entry into RefVersion and RefGroup', async () => {
+    mockExplainResponses(
+      [
+        { path: 'kb/p.md', title: 'P', type: 'principle', commit: 'aaaaaaa', committed_at: 1000 },
+      ],
+      [
+        { path: 'kb/c.md', title: 'C', type: 'concept', commit: 'bbbbbbb', committed_at: 2000 },
+      ],
+    );
+    const { incoming, outgoing } = await api.explain('alpha', 'main', 'kb/x.md');
+
+    expect(incoming).toHaveLength(1);
+    expect(incoming[0].type).toBe('principle');
+    expect(incoming[0].versions[0].type).toBe('principle');
+
+    expect(outgoing).toHaveLength(1);
+    expect(outgoing[0].type).toBe('concept');
+    expect(outgoing[0].versions[0].type).toBe('concept');
+  });
+});
+
+describe('api.factDiff', () => {
+  beforeEach(() => { vi.restoreAllMocks(); });
+
+  it('returns both sides on success', async () => {
+    globalThis.fetch = vi.fn()
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ path: 'kb/x.md', title: 'X', body: 'old', as_of: { commit: 'aaaaaaa' } }) })
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ path: 'kb/x.md', title: 'X', body: 'new', as_of: { commit: 'bbbbbbb' } }) });
+    const r = await api.factDiff('alpha', 'main', 'kb/x.md', 'aaaaaaa', 'bbbbbbb');
+    expect(r.from?.body).toBe('old');
+    expect(r.to?.body).toBe('new');
+  });
+
+  it('returns null for the side that 404s (created in to)', async () => {
+    globalThis.fetch = vi.fn()
+      .mockResolvedValueOnce({ ok: false, status: 404, json: async () => ({}) })
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ path: 'kb/x.md', title: 'X', body: 'new', as_of: { commit: 'bbbbbbb' } }) });
+    const r = await api.factDiff('alpha', 'main', 'kb/x.md', 'aaaaaaa', 'bbbbbbb');
+    expect(r.from).toBeNull();
+    expect(r.to?.body).toBe('new');
+  });
+
+  it('honors AbortController', async () => {
+    const controller = new AbortController();
+    globalThis.fetch = vi.fn().mockImplementation((_url: string, opts?: { signal?: AbortSignal }) =>
+      new Promise((_, reject) => {
+        opts?.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+      })
+    );
+    const promise = api.factDiff('alpha', 'main', 'kb/x.md', 'aaaaaaa', 'bbbbbbb', controller.signal);
+    controller.abort();
+    await expect(promise).rejects.toThrow();
   });
 });

@@ -64,8 +64,9 @@ Content in the second repo.`,
     }
     expect(initialNames).toContain('primary-fact.md');
 
-    // Switch to the "second" repo
-    await repoSelect.selectOption('second');
+    // Switch to the "second" repo via the custom dropdown.
+    await repoSelect.click();
+    await page.getByTestId('toknomitr-repo-option-second').click();
     await page.waitForLoadState('domcontentloaded');
     await page.waitForTimeout(1000);
 

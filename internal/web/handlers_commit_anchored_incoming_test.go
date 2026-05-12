@@ -18,8 +18,8 @@ import (
 func TestCommitAnchoredIncoming_HappyPath(t *testing.T) {
 	provider := &stubFactSubProvider{
 		incoming: []store.RefSummary{
-			{Path: "know/b.md", Title: "Fact B", Commit: "dead001"},
-			{Path: "know/c.md", Title: "Fact C (deleted)", Commit: "dead002", Deleted: true},
+			{Path: "know/b.md", Title: "Fact B", Type: "principle", Commit: "dead001"},
+			{Path: "know/c.md", Title: "Fact C (deleted)", Type: "concept", Commit: "dead002", Deleted: true},
 		},
 	}
 	s := &Server{
@@ -47,6 +47,7 @@ func TestCommitAnchoredIncoming_HappyPath(t *testing.T) {
 		Embedded struct {
 			Refs []struct {
 				Path    string      `json:"path"`
+				Type    string      `json:"type"`
 				Commit  string      `json:"commit"`
 				Deleted bool        `json:"deleted"`
 				Links   hal.LinkMap `json:"_links"`
@@ -79,6 +80,9 @@ func TestCommitAnchoredIncoming_HappyPath(t *testing.T) {
 	ref0 := body.Embedded.Refs[0]
 	if ref0.Commit != "dead001" {
 		t.Errorf("ref[0].commit: %q, want dead001", ref0.Commit)
+	}
+	if ref0.Type != "principle" {
+		t.Errorf("ref[0].type: %q, want \"principle\"", ref0.Type)
 	}
 	refSelf, ok := ref0.Links["self"]
 	if !ok {

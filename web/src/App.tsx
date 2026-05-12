@@ -1,7 +1,8 @@
 import { useReducer, useEffect, useState } from 'react';
-import { reducer, init } from './state';
+import { reducer, init, isReadOnly, isLive } from './state';
 import { api } from './api';
 import { useNavigationManager } from './useNavigationManager';
+import { bootstrapStatusWithRetry } from './bootstrap';
 import type { RepoInfo } from './api';
 import { TopBar } from './TopBar';
 import { Breadcrumb } from './Breadcrumb';
@@ -25,25 +26,61 @@ export default function App() {
     api.repos().then(setRepos).catch(() => {});
   }, []);
 
-  // Load status when repo changes (also fires on mount).
-  // The branch root endpoint requires knowing the branch. We bootstrap by
-  // fetching the branches list and picking the agent branch (is_agent_branch),
-  // then calling the branch root for full status.
+  // Load status when repo changes (also fires on mount). Bootstrap fetches the
+  // agent branch then the branch root for full status, retrying with
+  // exponential backoff: a single transient hiccup (dev proxy first-request
+  // hang, brief network blip, backend just-restarted) would otherwise leave
+  // the page stuck on "Loading…" because this effect only re-fires when
+  // state.repo changes. Each failed attempt is logged to the Console so a
+  // permanently broken backend is visible instead of silent.
   useEffect(() => {
-    (async () => {
-      try {
-        // If we already know the branch (e.g. after SET_REPO), use it directly.
-        const branchToQuery = state.branch || await api.getAgentBranch(state.repo);
-        const s = await api.status(state.repo, branchToQuery);
+    let cancelled = false;
+    bootstrapStatusWithRetry({
+      repo: state.repo,
+      initialBranch: state.branch,
+      getAgentBranch: api.getAgentBranch,
+      getStatus: api.status,
+      onSuccess: (s) => {
         dispatch({ type: 'SET_STATUS', head: s.head, branch: s.branch, embeddingsEnabled: s.embeddings_enabled, ontologyRoot: s.ontology_root });
-      } catch {}
-    })();
+      },
+      onAttemptFailed: (err, attempt) => {
+        dispatch({
+          type: 'CONSOLE_LOG',
+          level: 'error',
+          message: `[bootstrap] attempt ${attempt + 1} failed: ${String(err)}`,
+        });
+      },
+      shouldStop: () => cancelled,
+    });
+    return () => { cancelled = true; };
   }, [state.repo]);
 
   // SSE for task and status events — reconnects when repo/branch changes.
   useEffect(() => {
     if (!state.branch) return; // wait until branch is known from status bootstrap
     const es = new EventSource(`/api/v1/repos/${state.repo}/branches/${state.branch.replaceAll('/', ':')}/events`);
+    let connected = false;
+    es.addEventListener('open', () => {
+      if (connected) {
+        dispatch({ type: 'CONSOLE_LOG', level: 'info', message: '[events] reconnected' });
+      }
+      connected = true;
+    });
+    // EventSource silently auto-reconnects on disconnect. Without this handler,
+    // a backend that 500s the stream produces a stale LIVE/SCRUBBED pill (no
+    // SET_HEAD updates arrive) with no signal to the user. Log once per outage.
+    let loggedDisconnect = false;
+    es.addEventListener('error', () => {
+      if (es.readyState === EventSource.CLOSED) {
+        if (!loggedDisconnect) {
+          dispatch({ type: 'CONSOLE_LOG', level: 'error', message: '[events] stream closed — head pill may be stale' });
+          loggedDisconnect = true;
+        }
+      } else if (!loggedDisconnect) {
+        dispatch({ type: 'CONSOLE_LOG', level: 'error', message: '[events] connection lost — retrying' });
+        loggedDisconnect = true;
+      }
+    });
     es.addEventListener('task', (e) => {
       const ev = JSON.parse(e.data);
       dispatch({ type: 'SET_TASK', op: ev.op, status: ev.status, message: ev.message || '' });
@@ -52,7 +89,9 @@ export default function App() {
       dispatch({ type: 'CONSOLE_LOG', level, message: `[${repo}${ev.op}] ${ev.message || ev.status}` });
       // Refresh head when a task completes.
       if (ev.status === 'done' || ev.status === 'error') {
-        api.status(state.repo, state.branch).then(s => dispatch({ type: 'SET_HEAD', head: s.head })).catch(() => {});
+        api.status(state.repo, state.branch)
+          .then(s => dispatch({ type: 'SET_HEAD', head: s.head }))
+          .catch(err => dispatch({ type: 'CONSOLE_LOG', level: 'error', message: `[status] refresh failed: ${String(err)}` }));
       }
     });
     es.addEventListener('status', (e) => {
@@ -95,13 +134,18 @@ export default function App() {
         dispatch({ type: 'NAV_BACK' });
         return;
       }
+      if (e.key === 'h') {
+        e.preventDefault();
+        if (!isLive(state)) dispatch({ type: 'SET_AS_OF', asOf: { mode: 'live' } });
+        return;
+      }
       if (e.key === '1') { e.preventDefault(); navigate({ view: 'tree' }); return; }
       if (e.key === '2') { e.preventDefault(); navigate({ view: 'chrono' }); return; }
       if (e.key === '3') { e.preventDefault(); navigate({ view: 'history' }); return; }
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [navigate]);
+  }, [navigate, state]);
 
   if (!state.branch) {
     return (
@@ -139,7 +183,7 @@ export default function App() {
           <Console state={state} dispatch={dispatch} />
         </>
       )}
-      {showOrigin && <ConnectRemoteModal repo={state.repo} onClose={() => setShowOrigin(false)} />}
+      {showOrigin && !isReadOnly(state) && <ConnectRemoteModal repo={state.repo} onClose={() => setShowOrigin(false)} />}
     </div>
   );
 }

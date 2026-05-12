@@ -391,7 +391,10 @@ func (rh *repoHandler) readFileAtCommit(ctx context.Context, path, commitHash st
 	// Exact lookup failed — try case-insensitive walk.
 	content, err := treeFileInsensitive(rh.repo, tree, path)
 	if err != nil {
-		return "", fmt.Errorf("readFileAtCommit: file %q not found (case-insensitive): %w", path, err)
+		if errors.Is(err, ErrPathNotFound) {
+			return "", fmt.Errorf("readFileAtCommit: %q at %s: %w", path, commitHash, ErrPathNotFound)
+		}
+		return "", fmt.Errorf("readFileAtCommit: file %q (case-insensitive): %w", path, err)
 	}
 	return content, nil
 }
@@ -479,6 +482,9 @@ func (rh *repoHandler) readFileWithHash(ctx context.Context, branch, path string
 	}
 	entry, err := tree.FindEntry(path)
 	if err != nil {
+		if errors.Is(err, object.ErrEntryNotFound) || errors.Is(err, object.ErrDirectoryNotFound) {
+			return "", "", fmt.Errorf("readFileWithHash: %q: %w", path, ErrPathNotFound)
+		}
 		return "", "", fmt.Errorf("readFileWithHash: entry %s: %w", path, err)
 	}
 	blob, err := rh.repo.BlobObject(entry.Hash)

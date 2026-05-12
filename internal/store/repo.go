@@ -32,6 +32,21 @@ var ErrEmptyRemote = errors.New("remote repository has no branches")
 // error chain for introspection.
 var ErrBranchNotFound = errors.New("branch not found")
 
+// ErrFactNotLive is returned by ExplainFact (and any other HEAD-anchored read
+// path that needs to resolve a path's active commit via branch_facts) when
+// no row exists for (branch, path). This means the fact is not currently live
+// at HEAD — typically because it was retracted, or because the path was never
+// indexed on this branch. Older versions may still exist in the graph and be
+// reachable via commit-anchored endpoints.
+var ErrFactNotLive = errors.New("fact not live at HEAD")
+
+// ErrPathNotFound is returned by ReadFact (and the underlying readFile* helpers)
+// when the requested path does not exist at the requested anchor. This is the
+// "true 404" condition — distinct from a git/database error reading a path that
+// should exist. Callers use errors.Is to surface a 404 while propagating real
+// errors as 500.
+var ErrPathNotFound = errors.New("path not found")
+
 // initRepoConfig stamps the repo config with the knomit identity and disables
 // GPG signing, which must be done for both fresh and remote-initialized repos.
 func initRepoConfig(repo *gogit.Repository, label string) error {

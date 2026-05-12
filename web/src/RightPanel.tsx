@@ -1,83 +1,27 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { Dispatch, ReactNode } from 'react';
+import type { Dispatch } from 'react';
 import { useAsync } from './hooks';
-import ReactMarkdown from 'react-markdown';
 import { api } from './api';
 import type { Fact, Stats, ActivityStats, CommitDetail } from './api';
 import type { AppState, Action } from './state';
-import { currentPath } from './state';
-import { relativeTime, typeStyles, defaultTypeStyle, opStyles, defaultOpStyle } from './utils';
-import { TypeIcon, EpisodeIcon, RetractIcon, ExplainIcon } from './icons';
+import { currentPath, selectAnchorCommit, isReadOnly, READ_ONLY_TITLE } from './state';
+import { relativeTime, opStyles, defaultOpStyle } from './utils';
+import { EpisodeIcon, RetractIcon, ExplainIcon } from './icons';
 import type { NavRequest } from './useNavigationManager';
+import { FactDiffView } from './FactDiffView';
+import { FactBody, StatBox, TagCloud } from './FactBody';
 
-function StatBox({ label, value, color }: { label: string; value: ReactNode; color: string }) {
-  return (
-    <div style={{ borderLeft: `3px solid ${color}`, padding: '10px 16px', background: '#1a1a2a', borderRadius: '0 6px 6px 0', minWidth: 90 }}>
-      <div style={{ fontSize: 10, color: '#666', textTransform: 'uppercase', letterSpacing: 1 }}>{label}</div>
-      <div style={{ fontSize: 22, fontWeight: 600, color: '#eee', marginTop: 2 }}>{value}</div>
-    </div>
-  );
-}
-
-function TagCloud({ label, entries, color, onTagClick, focusedValue }: {
-  label: string;
-  entries: [string, number][] | string[];
-  color: string;
-  onTagClick: (value: string) => void;
-  focusedValue?: string;
-}) {
-  if (entries.length === 0) return null;
-
-  const items: [string, number][] = typeof entries[0] === 'string'
-    ? (entries as string[]).map(s => [s, 1])
-    : entries as [string, number][];
-  const max = items[0][1];
-  const weighted = items.some(([, n]) => n !== items[0][1]);
-
-  return (
-    <div style={{ marginBottom: 22 }}>
-      <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: 1.5, color: '#555', marginBottom: 10 }}>{label}</div>
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-        {items.map(([name, n]) => {
-          const ratio = max > 0 ? n / max : 1;
-          const accent = `rgba(${color},`;
-          return (
-            <span key={name} data-testid="tag-item" data-value={name}
-              onClick={() => onTagClick(name)}
-              style={{
-                display: 'inline-flex', alignItems: 'center', gap: 5, cursor: 'pointer',
-                padding: weighted && ratio >= 0.75 ? '5px 11px' : weighted ? '4px 9px' : '5px 11px',
-                borderRadius: 6,
-                background: weighted && ratio < 0.5 ? 'rgba(26,26,42,0.6)' : '#1a1a2a',
-                border: `1px solid ${accent}${weighted ? (ratio >= 0.75 ? 0.3 : ratio >= 0.5 ? 0.2 : 0.1) : 0.2})`,
-                transition: 'border-color 0.15s, opacity 0.15s',
-                outline: name === focusedValue ? `2px solid rgba(${color},0.55)` : 'none',
-                outlineOffset: 1,
-              }}
-              onMouseEnter={e => { (e.currentTarget as HTMLElement).style.borderColor = `${accent}0.5)`; }}
-              onMouseLeave={e => { (e.currentTarget as HTMLElement).style.borderColor = `${accent}${weighted ? (ratio >= 0.75 ? 0.3 : ratio >= 0.5 ? 0.2 : 0.1) : 0.2})`; }}
-            >
-              <span style={{
-                fontSize: weighted && ratio >= 0.5 ? 12 : weighted ? 11 : 12,
-                fontWeight: weighted && ratio >= 0.75 ? 600 : 'normal',
-                color: !weighted || ratio >= 0.5 ? `rgb(${color})` : `${accent}0.6)`,
-              }}>{name}</span>
-              {weighted && (
-                <span style={{
-                  fontSize: 9, borderRadius: 10, padding: '1px 5px', fontWeight: 600,
-                  color: ratio >= 0.5 ? '#111' : `${accent}0.5)`,
-                  background: ratio >= 0.75 ? `rgb(${color})` : ratio >= 0.5 ? `${accent}0.8)` : `${accent}0.15)`,
-                }}>{n}</span>
-              )}
-            </span>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-function renderFact(fact: Fact, navigate: (req: NavRequest) => void, dispatch: Dispatch<Action>, onRetract?: () => void, onExplain?: () => void) {
+function renderFact(fact: Fact, navigate: (req: NavRequest) => void, dispatch: Dispatch<Action>, onRetract?: () => void, onExplain?: () => void, readOnly = false, anchorCommit?: string | null) {
+  const retractDisabled = readOnly;
+  const retractTitle = retractDisabled ? READ_ONLY_TITLE : 'Retract fact';
+  const retractColor = retractDisabled ? '#444' : '#f66';
+  // Retracted-version badge: only when anchorCommit is set (history+scrubbed)
+  // and fact.commit_hash is a different commit (the backend's ?fallback=before
+  // walked back to a pre-retraction version). Compare 7-char prefixes since
+  // anchorCommit may already be short.
+  const anchorShort = anchorCommit ? anchorCommit.slice(0, 7) : '';
+  const factShort = fact.commit_hash ? fact.commit_hash.slice(0, 7) : '';
+  const retractedAt = anchorShort && factShort && anchorShort !== factShort ? anchorShort : '';
   return (
     <div style={{ padding: '24px 28px', overflowY: 'auto', height: '100%', boxSizing: 'border-box' }}>
       <div style={{ marginBottom: 20 }}>
@@ -99,6 +43,15 @@ function renderFact(fact: Fact, navigate: (req: NavRequest) => void, dispatch: D
                 {fact.commit_hash.slice(0, 7)}
               </span>
             )}
+            {retractedAt && (
+              <span
+                data-testid="retracted-version-badge"
+                title={`This fact was retracted at ${retractedAt}; showing its content from ${factShort}`}
+                style={{ color: '#e5a23c', fontFamily: 'monospace', fontSize: 11, background: 'rgba(229,162,60,0.12)', border: '1px solid rgba(229,162,60,0.35)', padding: '1px 5px', borderRadius: 3 }}
+              >
+                retracted at {retractedAt} · showing version {factShort}
+              </span>
+            )}
             {onExplain && (
               <button
                 title="Explain"
@@ -111,33 +64,25 @@ function renderFact(fact: Fact, navigate: (req: NavRequest) => void, dispatch: D
             {onRetract && (
               <button
                 data-testid="retract-btn"
-                title="Retract fact"
+                title={retractTitle}
+                disabled={retractDisabled}
                 onClick={onRetract}
                 style={{
                   background: 'none', border: 'none', padding: 2,
-                  color: '#f66', cursor: 'pointer', display: 'flex', alignItems: 'center', opacity: 0.6,
+                  color: retractColor, cursor: retractDisabled ? 'not-allowed' : 'pointer',
+                  display: 'flex', alignItems: 'center',
+                  opacity: retractDisabled ? 0.4 : 0.6,
                 }}
-                onMouseEnter={e => { (e.currentTarget as HTMLElement).style.opacity = '1'; }}
-                onMouseLeave={e => { (e.currentTarget as HTMLElement).style.opacity = '0.6'; }}
-              ><RetractIcon color="#f66" size={15} /></button>
+                onMouseEnter={e => { if (!retractDisabled) (e.currentTarget as HTMLElement).style.opacity = '1'; }}
+                onMouseLeave={e => { if (!retractDisabled) (e.currentTarget as HTMLElement).style.opacity = '0.6'; }}
+              ><RetractIcon color={retractColor} size={15} /></button>
             )}
           </span>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 4 }}>
-          {fact.type && (() => {
-            const ts = typeStyles[fact.type] || defaultTypeStyle;
-            return (
-              <span data-testid="fact-type-badge" style={{
-                color: ts.color, background: ts.bg, fontSize: 10, padding: '2px 8px',
-                borderRadius: 3, fontFamily: 'monospace', letterSpacing: 0.5,
-                border: fact.type === 'hypothesis' ? `1px dashed ${ts.color}` : 'none',
-                display: 'inline-flex', alignItems: 'center', gap: 4,
-              }}><TypeIcon type={fact.type} color={ts.color} size={10} /> {ts.label}</span>
-            );
-          })()}
           <span
             onClick={() => fact.commit_hash
-              ? navigate({ view: 'history', historyCommit: fact.commit_hash, factPath: fact.path, factCommit: fact.commit_hash })
+              ? navigate({ view: 'history', factPath: fact.path, asOf: { mode: 'scrubbed', commit: fact.commit_hash } })
               : navigate({ view: 'history' })
             }
             style={{ fontSize: 12, color: '#555', cursor: 'pointer', fontFamily: 'monospace' }}
@@ -147,61 +92,18 @@ function renderFact(fact: Fact, navigate: (req: NavRequest) => void, dispatch: D
         </div>
       </div>
 
-      <div data-testid="fact-meta" style={{ display: 'flex', gap: 10, marginBottom: 28 }}>
-        <StatBox label="Confidence" value={fact.confidence?.toFixed(2)} color="#8af" />
-        <StatBox label="Sources" value={fact.sources} color="#7c9" />
-      </div>
-
-      <div data-testid="fact-body" style={{ color: '#ccc', lineHeight: 1.7, fontSize: 14, marginBottom: 8 }}>
-        <ReactMarkdown>{fact.body || ''}</ReactMarkdown>
-      </div>
-
-      <TagCloud label="Domains" entries={fact.domain || []} color="119,204,153"
-        onTagClick={d => dispatch({ type: 'ADD_FILTER', chip: { category: 'domain', value: d } })} />
-      <TagCloud label="Entities" entries={fact.entities || []} color="136,170,255"
-        onTagClick={e => dispatch({ type: 'ADD_FILTER', chip: { category: 'entity', value: e } })} />
-
-      {fact.refs?.length > 0 && (
-        <div>
-          <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: 1.5, color: '#555', marginBottom: 10 }}>References</div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-            {fact.refs.map(ref => {
-              if (ref.startsWith('http://') || ref.startsWith('https://')) {
-                return (
-                  <a key={ref} href={ref} target="_blank" rel="noopener noreferrer"
-                    style={{ color: '#8af', fontSize: 12, textDecoration: 'none', transition: 'color 0.15s' }}
-                    onMouseEnter={e => { (e.currentTarget as HTMLElement).style.color = '#adf'; }}
-                    onMouseLeave={e => { (e.currentTarget as HTMLElement).style.color = '#8af'; }}
-                  >{'\u2197'} {ref}</a>
-                );
-              }
-              // Local ref: open at the same commit as the current fact (time-travel).
-              const commit = fact.commit_hash;
-              return (
-                <span key={ref}
-                  onClick={() => commit
-                    ? navigate({ view: 'history', historyCommit: commit, factPath: ref, factCommit: commit })
-                    : navigate({ view: 'tree', factPath: ref })
-                  }
-                  style={{ color: '#8af', fontSize: 12, fontFamily: 'monospace', cursor: 'pointer', transition: 'color 0.15s' }}
-                  onMouseEnter={e => { (e.currentTarget as HTMLElement).style.color = '#adf'; }}
-                  onMouseLeave={e => { (e.currentTarget as HTMLElement).style.color = '#8af'; }}
-                >{'\u2192'} {ref}</span>
-              );
-            })}
-          </div>
-        </div>
-      )}
+      <FactBody fact={fact} navigate={navigate} dispatch={dispatch} readOnly={readOnly} />
     </div>
   );
 }
 
-function FactEditor({ fact, repo, branch, onSaved }: { fact: Fact; repo: string; branch: string; onSaved: (updated: Fact) => void }) {
+function FactEditor({ fact, repo, branch, readOnly, onSaved }: { fact: Fact; repo: string; branch: string; readOnly: boolean; onSaved: (updated: Fact) => void }) {
   const [raw, setRaw] = useState(fact.body);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
 
   const save = () => {
+    if (readOnly) return;
     setSaving(true);
     setSaveError(null);
     api.updateFact(repo, branch, fact.path, raw)
@@ -231,11 +133,13 @@ function FactEditor({ fact, repo, branch, onSaved }: { fact: Fact; repo: string;
         <button
           data-testid="fact-save-btn"
           onClick={save}
-          disabled={saving}
+          disabled={saving || readOnly}
+          title={readOnly ? READ_ONLY_TITLE : undefined}
           style={{
             background: '#1a2e1a', border: '1px solid rgba(119,204,153,0.35)', color: '#7c9',
-            padding: '6px 16px', borderRadius: 4, cursor: saving ? 'default' : 'pointer',
-            fontSize: 13, opacity: saving ? 0.6 : 1,
+            padding: '6px 16px', borderRadius: 4,
+            cursor: (saving || readOnly) ? 'not-allowed' : 'pointer',
+            fontSize: 13, opacity: (saving || readOnly) ? 0.6 : 1,
           }}
         >{saving ? 'Saving\u2026' : 'Save'}</button>
         {saveError && <span style={{ color: '#f88', fontSize: 12 }}>{saveError}</span>}
@@ -252,11 +156,12 @@ const DEFAULT_LIST_HEIGHT = 3 * ROW_HEIGHT;
 const MIN_LIST_HEIGHT = ROW_HEIGHT;
 const MAX_LIST_HEIGHT = 12 * ROW_HEIGHT;
 
-function CommitPanel({ historyCommit, repo, branch, selectedFact, navigate, rightPanelFocused, dispatch }: {
+function CommitPanel({ historyCommit, repo, branch, selectedFact, asOf, navigate, rightPanelFocused, dispatch }: {
   historyCommit: string;
   repo: string;
   branch: string;
   selectedFact: string | null;
+  asOf: AppState['asOf'];
   navigate: (req: NavRequest) => void;
   rightPanelFocused: boolean;
   dispatch: Dispatch<Action>;
@@ -285,11 +190,17 @@ function CommitPanel({ historyCommit, repo, branch, selectedFact, navigate, righ
   }, [activeIdx]);
 
   // Auto-select first file when no fact is open or the current fact isn't in this commit.
+  // Guard on detail.commit === historyCommit: when the user clicks a new commit,
+  // historyCommit changes immediately but `detail` remains stale until its fetch
+  // resolves. Without this guard, the effect would AMEND_NAV with the OLD detail's
+  // first file paired with the NEW anchor, producing a transient (factPath, anchor)
+  // pair that 404s before the queued navigation settles — visible as a brief
+  // "Error: not found" flash when clicking between retract commits.
   useEffect(() => {
-    if (!detail) return;
+    if (!detail || detail.commit !== historyCommit) return;
     if (selectedFact && detail.files?.some(f => f.path === selectedFact)) return;
     const first = detail.files?.[0];
-    if (first) dispatch({ type: 'AMEND_NAV', historyCommit, factPath: first.path, factCommit: historyCommit });
+    if (first) dispatch({ type: 'AMEND_NAV', factPath: first.path });
   }, [detail, selectedFact, historyCommit, dispatch]);
 
   useEffect(() => { setListHeight(DEFAULT_LIST_HEIGHT); }, [historyCommit]);
@@ -305,13 +216,17 @@ function CommitPanel({ historyCommit, repo, branch, selectedFact, navigate, righ
         const delta = (e.key === 'ArrowDown' || e.key === 'j') ? 1 : -1;
         const nextIdx = Math.max(0, Math.min(currentIdx + delta, files.length - 1));
         if (nextIdx !== currentIdx) {
-          navigate({ view: 'history', historyCommit, factPath: files[nextIdx].path, factCommit: historyCommit });
+          navigate({
+            view: 'history',
+            factPath: files[nextIdx].path,
+            asOf: asOf.mode === 'diff' ? asOf : { mode: 'scrubbed', commit: historyCommit },
+          });
         }
       }
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [rightPanelFocused, detail, selectedFact, historyCommit, navigate]);
+  }, [rightPanelFocused, detail, selectedFact, historyCommit, asOf, navigate]);
 
   // Drag to resize
   const startDrag = (e: React.MouseEvent) => {
@@ -375,7 +290,11 @@ function CommitPanel({ historyCommit, repo, branch, selectedFact, navigate, righ
                 data-testid="commit-file"
                 data-path={file.path}
                 onClick={() => {
-                  navigate({ view: 'history', historyCommit, factPath: file.path, factCommit: historyCommit });
+                  navigate({
+                    view: 'history',
+                    factPath: file.path,
+                    asOf: asOf.mode === 'diff' ? asOf : { mode: 'scrubbed', commit: historyCommit },
+                  });
                   dispatch({ type: 'FOCUS_RIGHT_PANEL' });
                 }}
                 style={{
@@ -495,20 +414,32 @@ export function RightPanel({ state, dispatch, navigate, onExplain }: {
   const path = currentPath(state);
 
   const factPath = state.factPath;
-  const factCommit = state.factCommit;
-  const historyCommit = state.historyCommit;
+  const anchorCommit = selectAnchorCommit(state);
+  const historyCommit = state.view === 'history' ? anchorCommit : null;
+  const inDiff = state.asOf.mode === 'diff';
+
+  // History + scrubbed: opt into the backend's ?fallback=before so that
+  // clicking a retracted file (in a retract commit) shows the pre-retraction
+  // content instead of a 404. Other view/mode combinations don't need
+  // fallback (tree/chrono are live; diff has its own renderer).
+  const useFallback = state.view === 'history' && state.asOf.mode === 'scrubbed';
 
   useAsync((stale) => {
+    // In diff mode, FactDiffView owns the fact fetching via api.factDiff.
+    // Skip this effect's fetch entirely so we don't issue a single-sided
+    // request that gets discarded and may flash a 404 error.
+    if (inDiff) { setFact(null); setError(null); return; }
     if (!factPath) { setFact(null); setError(null); return; }
     setError(null);
-    api.fact(state.repo, state.branch, factPath, factCommit ?? undefined)
-      .then(f => {
-        if (stale()) return;
-        setFact(f);
-        if (f.commit_hash) dispatch({ type: 'FACT_LOADED', commit: f.commit_hash });
-      })
+    setFact(null);
+    api.fact(
+      state.repo, state.branch, factPath,
+      anchorCommit ?? undefined,
+      useFallback ? { fallback: 'before' } : undefined,
+    )
+      .then(f => { if (!stale()) setFact(f); })
       .catch(e => { if (!stale()) setError(String(e)); });
-  }, [factPath, factCommit, state.repo]);
+  }, [factPath, anchorCommit, state.repo, useFallback, inDiff]);
 
   useAsync((stale) => {
     if (factPath || state.view === 'history') return;
@@ -523,7 +454,7 @@ export function RightPanel({ state, dispatch, navigate, onExplain }: {
   }, [factPath, state.repo, path, state.headCommit]);
 
   const doRetract = useCallback(() => {
-    if (!fact || retracting) return;
+    if (!fact || retracting || isReadOnly(state)) return;
     setConfirmRetract(false);
     setRetracting(true);
     api.retractFact(state.repo, state.branch, fact.path)
@@ -533,10 +464,10 @@ export function RightPanel({ state, dispatch, navigate, onExplain }: {
         // sync the index and then broadcast a status event with the new commit
         // hash, which triggers SET_HEAD in App.tsx. Only then will headCommit
         // change, ensuring the search/chrono re-fire against a fresh index.
-        dispatch({ type: 'AMEND_NAV', historyCommit: null, factPath: null, factCommit: null });
+        dispatch({ type: 'AMEND_NAV', factPath: null });
       })
       .catch(e => { setRetracting(false); setError(String(e)); });
-  }, [fact, retracting, state.repo, dispatch]);
+  }, [fact, retracting, state, dispatch]);
 
   // Keyboard: ArrowLeft blurs right panel; j/k navigation is handled inside CommitPanel
   useEffect(() => {
@@ -551,11 +482,37 @@ export function RightPanel({ state, dispatch, navigate, onExplain }: {
     return () => window.removeEventListener('keydown', handler);
   }, [state.rightPanelFocused, dispatch]);
 
-  if (error) return <div style={{ padding: 24, color: '#f44' }}>{error}</div>;
-
   const commitPanel = state.view === 'history' && historyCommit
-    ? <CommitPanel historyCommit={historyCommit} repo={state.repo} branch={state.branch} selectedFact={factPath} navigate={navigate} rightPanelFocused={state.rightPanelFocused} dispatch={dispatch} />
+    ? <CommitPanel historyCommit={historyCommit} repo={state.repo} branch={state.branch} selectedFact={factPath} asOf={state.asOf} navigate={navigate} rightPanelFocused={state.rightPanelFocused} dispatch={dispatch} />
     : null;
+
+  // Diff mode with a selected fact renders FactDiffView in the detail area.
+  // In history view, keep the CommitPanel visible above the diff so the user
+  // can switch between sibling files in the `to` commit without leaving diff.
+  if (inDiff && state.factPath) {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
+        {commitPanel}
+        <div style={{ flex: 1, overflow: 'auto', minHeight: 0 }}>
+          <FactDiffView state={state as AppState & { factPath: string }} dispatch={dispatch} />
+        </div>
+      </div>
+    );
+  }
+
+  // Error from the fact-fetch effect. Don't short-circuit the whole panel —
+  // when in history view, the CommitPanel file list (with +/-/~ markers)
+  // must still render even when the auto-selected fact 404s. Render the
+  // error inside the fact-detail content area below the commit panel.
+  if (error && factPath) {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
+        {commitPanel}
+        <div style={{ padding: 24, color: '#f44' }}>{error}</div>
+      </div>
+    );
+  }
+  if (error) return <div style={{ padding: 24, color: '#f44' }}>{error}</div>;
 
   // Summary view: no fact selected
   if (!factPath) {
@@ -600,9 +557,13 @@ export function RightPanel({ state, dispatch, navigate, onExplain }: {
   // Fact view (normal or time-travel)
   if (!fact) return <div style={{ padding: 24, color: '#666' }}>Loading...</div>;
 
-  if (fact.parse_error) return <FactEditor fact={fact} repo={state.repo} branch={state.branch} onSaved={setFact} />;
+  if (fact.parse_error) return <FactEditor fact={fact} repo={state.repo} branch={state.branch} readOnly={isReadOnly(state)} onSaved={setFact} />;
 
-  const canRetract = state.view !== 'history';
+  // Retract button is shown whenever we're not viewing a historical commit pane.
+  // When the global anchor is not live, the button is rendered disabled with a
+  // tooltip so the user sees the action exists but is read-only.
+  const showRetract = state.view !== 'history';
+  const readOnly = isReadOnly(state);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
@@ -615,7 +576,19 @@ export function RightPanel({ state, dispatch, navigate, onExplain }: {
       )}
       {commitPanel}
       <div style={{ flex: 1, overflow: 'auto' }}>
-        {renderFact(fact, navigate, dispatch, canRetract ? () => setConfirmRetract(true) : undefined, canRetract ? () => onExplain?.(fact.path, null) : undefined)}
+        {renderFact(
+          fact,
+          navigate,
+          dispatch,
+          showRetract ? () => { if (!readOnly) setConfirmRetract(true); } : undefined,
+          showRetract ? () => onExplain?.(fact.path, null) : undefined,
+          readOnly,
+          // Only pass the anchor in history+scrubbed mode — the retracted-
+          // version badge is only meaningful there. In live/diff/tree the
+          // anchor either matches the fact's commit_hash (no badge) or is
+          // null (badge suppressed).
+          useFallback ? anchorCommit : null,
+        )}
       </div>
     </div>
   );

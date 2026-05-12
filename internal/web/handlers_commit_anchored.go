@@ -55,7 +55,10 @@ func handleCommitAnchoredFact(b hal.URLBuilder, m *repos.Manager, reader FactRea
 		}
 
 		a := hal.Anchor{Branch: branch, Commit: sha}
-		f, head, err := reader.Read(ri, a, path)
+		// ?fallback=before: when the fact is missing at the pinned commit,
+		// fall back to the most recent ancestor where it existed.
+		fallback := r.URL.Query().Get("fallback") == "before"
+		f, head, err := reader.Read(ri, a, path, fallback)
 		if err != nil {
 			if errors.Is(err, errFactNotFound) {
 				hal.WriteProblem(w, http.StatusNotFound, "Fact not found",
@@ -67,7 +70,14 @@ func handleCommitAnchoredFact(b hal.URLBuilder, m *repos.Manager, reader FactRea
 			return
 		}
 
-		view := BuildFactView(b, repoName, a, head, f, reader)
+		// When the fallback fired, head is the actual content's source
+		// commit (different from the URL's sha). Reflect that in the
+		// view's anchor so as_of.commit points at the version being shown.
+		viewAnchor := a
+		if head != "" && head != a.Commit {
+			viewAnchor = hal.Anchor{Branch: branch, Commit: head}
+		}
+		view := BuildFactView(b, repoName, viewAnchor, head, f, reader)
 		hal.WriteHAL(w, http.StatusOK, view)
 	}
 }

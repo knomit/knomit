@@ -78,6 +78,23 @@ func testFactBody(title string, conf float64, refs []string) string {
 	return out
 }
 
+// testFactBodyWithType is testFactBody plus an explicit epistemic type.
+// Use when a test needs the indexed Fact node's type to be deterministic.
+func testFactBodyWithType(title string, conf float64, refs []string, t fact.EpistemicType) string {
+	f := fact.NewFact("placeholder.md")
+	f.Title = title
+	f.Confidence = conf
+	f.Sources = 1
+	f.Domain = []string{"test"}
+	f.Refs = refs
+	f.Type = t
+	out, err := fact.SerializeFact(f)
+	if err != nil {
+		panic(err)
+	}
+	return out
+}
+
 // TestGraphAddDerivedFromAtCommitTx_WritesEdgeWithBothCommits verifies that a
 // single ref-event produces exactly one DERIVED_FROM edge with both
 // source_commit and target_commit text properties set.
