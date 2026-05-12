@@ -61,10 +61,11 @@ export function ExplainView({ repo, branch, initialEntry, onClose }: Props) {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: '#0a0a0a' }}>
-      {/* Header bar */}
+      {/* Header bar — navigation controls only; path + commit live with the
+          fact body below so the title gets visual prominence and the path
+          isn't shown twice. */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '0 12px', height: 32, background: '#0f0f0f', borderBottom: '1px solid #1a1a1a', flexShrink: 0 }}>
-        <span style={{ fontSize: 10, color: '#444', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Explain</span>
-        <span style={{ fontSize: 11, color: '#8af', fontFamily: 'monospace', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{current.path}</span>
+        <span style={{ fontSize: 10, color: '#444', textTransform: 'uppercase', letterSpacing: '0.08em', flex: 1 }}>Explain</span>
         {backStack.length > 0 && (
           <button onClick={goBack} style={{ background: 'none', border: '1px solid #2a2a2a', borderRadius: 3, color: '#888', fontSize: 11, padding: '2px 8px', cursor: 'pointer' }}>← Back</button>
         )}
@@ -88,7 +89,18 @@ export function ExplainView({ repo, branch, initialEntry, onClose }: Props) {
         {error && <div style={{ color: '#f66', fontSize: 12 }}>{error}</div>}
         {fact && (
           <div style={{ maxWidth: 720, margin: '0 auto' }}>
-            <div style={{ fontSize: 10, color: '#444', fontFamily: 'monospace', marginBottom: 6 }}>{fact.path}</div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+              <span style={{ fontSize: 10, color: '#666', fontFamily: 'monospace', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{fact.path}</span>
+              {fact.commit_hash && (
+                <span
+                  data-testid="explain-commit-chip"
+                  title={`Showing version ${fact.commit_hash.slice(0, 7)}`}
+                  style={{ color: '#7c9', fontFamily: 'monospace', fontSize: 11, background: '#1a2e1a', padding: '1px 5px', borderRadius: 3, flexShrink: 0 }}
+                >
+                  {fact.commit_hash.slice(0, 7)}
+                </span>
+              )}
+            </div>
             <div data-testid="fact-title" style={{ fontSize: 18, fontWeight: 600, color: '#eee', letterSpacing: '-0.3px', marginBottom: 14 }}>{fact.title || fact.path}</div>
             <FactBody fact={fact} navigate={() => {}} dispatch={() => {}} readOnly={true} />
           </div>
@@ -214,29 +226,32 @@ function Chip({ group, onClick }: { group: RefGroup; onClick: (commit: string) =
     onClick(version.commit);
   };
 
+  // Retracted chips render with the same colors and text weight as live chips
+  // (keeps them readable), then a subtle ~10%-alpha diagonal hatch overlays
+  // the background so the "retracted" status is visible without shouting.
+  const hatch = 'repeating-linear-gradient(45deg, rgba(255,255,255,0.10) 0 1px, transparent 1px 5px)';
   return (
     <span
       ref={chipRef}
       data-testid="ref-chip"
+      data-deleted={deleted ? 'true' : undefined}
       onClick={handleChipClick}
       title={deleted ? 'Target fact retracted.' : group.path}
       style={{
         display: 'inline-flex', flexDirection: 'column',
         padding: '4px 9px', borderRadius: 8,
-        border: `1px solid ${deleted ? '#2a2a2a' : typeColor}`,
-        cursor: 'pointer', background: '#111',
+        border: `1px solid ${typeColor}`,
+        cursor: 'pointer',
+        background: deleted ? `${hatch}, #111` : '#111',
         maxWidth: 220,
         flexShrink: 0,
-        opacity: deleted ? 0.45 : 1,
-        textDecoration: deleted ? 'line-through' : 'none',
         position: 'relative',
       }}
     >
       <span style={{ display: 'flex', alignItems: 'center', gap: 6, overflow: 'hidden' }}>
-        {groupType && <TypeIcon type={groupType} color={deleted ? '#555' : typeColor} size={12} />}
-        <span style={{ fontSize: 12, color: deleted ? '#555' : '#ddd', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        {groupType && <TypeIcon type={groupType} color={typeColor} size={12} />}
+        <span style={{ fontSize: 12, color: '#ddd', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {group.title || group.path}
-          {deleted && <span style={{ fontSize: 9, color: '#444', marginLeft: 4 }}>[deleted]</span>}
         </span>
       </span>
       <span style={{ display: 'flex', alignItems: 'center', gap: 6, overflow: 'hidden', marginTop: 2 }}>

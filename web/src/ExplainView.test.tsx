@@ -172,6 +172,26 @@ describe('ExplainView Chip', () => {
   });
 });
 
+describe('ExplainView header commit chip', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('shows the 7-char commit hash of the loaded fact in the header', async () => {
+    // Without a commit chip, a user landing on a historical version via an
+    // out-edge has no way to tell which version they are looking at.
+    (api.fact as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ...baseFact,
+      commit_hash: 'cafe1234567890',
+    });
+    (api.explain as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({ incoming: [], outgoing: [] });
+
+    render(<ExplainView repo="r" branch="b" initialEntry={{ path: 'kb/x.md', commit: null }} onClose={() => {}} />);
+
+    expect(await screen.findByTestId('explain-commit-chip')).toHaveTextContent('cafe123');
+  });
+});
+
 describe('ExplainView body parity', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
@@ -199,8 +219,10 @@ describe('ExplainView body parity', () => {
     expect(screen.getByText('ai')).toBeInTheDocument();
     expect(screen.getByText('Anthropic')).toBeInTheDocument();
     expect(screen.getByText(/example\.com\/paper/)).toBeInTheDocument();
-    // Local ref must NOT appear in the body — it surfaces in the outgoing rail.
-    expect(screen.queryByText(/kb\/other\.md/)).toBeNull();
+    // Local refs are listed in the body as non-clickable text (the outgoing
+    // rail visualises edges with type/commit metadata; the body shows the
+    // fact's literal refs list — the right panel agrees on this in readOnly).
+    expect(screen.getByText(/kb\/other\.md/)).toBeInTheDocument();
   });
 });
 
