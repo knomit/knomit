@@ -50,15 +50,12 @@ export function FactBody({ fact, navigate, dispatch, readOnly }: Props) {
 
       {(() => {
         const allRefs = fact.refs || [];
-        const visible = readOnly
-          ? allRefs.filter(r => r.startsWith('http://') || r.startsWith('https://'))
-          : allRefs;
-        if (visible.length === 0) return null;
+        if (allRefs.length === 0) return null;
         return (
           <div>
             <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: 1.5, color: '#555', marginBottom: 10 }}>References</div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-              {visible.map(ref => {
+              {allRefs.map(ref => {
                 if (ref.startsWith('http://') || ref.startsWith('https://')) {
                   return (
                     <a key={ref} href={ref} target="_blank" rel="noopener noreferrer"
@@ -66,6 +63,13 @@ export function FactBody({ fact, navigate, dispatch, readOnly }: Props) {
                       onMouseEnter={e => { (e.currentTarget as HTMLElement).style.color = '#adf'; }}
                       onMouseLeave={e => { (e.currentTarget as HTMLElement).style.color = '#8af'; }}
                     >{'↗'} {ref}</a>
+                  );
+                }
+                if (readOnly) {
+                  return (
+                    <span key={ref} style={{ color: '#666', fontSize: 12, fontFamily: 'monospace' }}>
+                      {'→'} {ref}
+                    </span>
                   );
                 }
                 const commit = fact.commit_hash;

@@ -29,7 +29,7 @@ describe('FactBody', () => {
     expect(screen.getByText('world').tagName.toLowerCase()).toBe('strong');
   });
 
-  it('readOnly=true: tag clicks do not dispatch and local refs are hidden', () => {
+  it('readOnly=true: tag clicks do not dispatch and local refs render as non-clickable text', () => {
     const dispatch = vi.fn();
     const navigate = vi.fn();
     render(<FactBody fact={baseFact} navigate={navigate} dispatch={dispatch} readOnly={true} />);
@@ -39,8 +39,12 @@ describe('FactBody', () => {
 
     // External ref is shown.
     expect(screen.getByText(/example\.com\/paper/)).toBeInTheDocument();
-    // Local ref is NOT shown in body (will be in outgoing rail).
-    expect(screen.queryByText(/kb\/local-ref\.md/)).toBeNull();
+    // Local ref is also shown (matches what ExplainView surfaces) but must
+    // not navigate when clicked in readOnly mode.
+    const localRef = screen.getByText(/kb\/local-ref\.md/);
+    expect(localRef).toBeInTheDocument();
+    fireEvent.click(localRef);
+    expect(navigate).not.toHaveBeenCalled();
   });
 
   it('readOnly=false: tag clicks dispatch ADD_FILTER', () => {
