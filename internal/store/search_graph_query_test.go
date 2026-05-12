@@ -242,3 +242,73 @@ func TestOutgoingAtCommit_PopulatesType(t *testing.T) {
 	require.Equal(t, "kb/e.md", got[0].Path)
 	require.Equal(t, string(fact.Synthesis), got[0].Type)
 }
+
+// TestIncomingAtCommit_IncludesRetractedSource regresses the bug where
+// IncomingAtCommit dropped any edge whose source Fact node was tombstoned
+// (s.deleted = true). In the UI this looked like "this fact has no incoming
+// edges" even when another (now-retracted) fact had clearly referenced it.
+// The retracted state must be exposed via RefSummary.Deleted, not hidden.
+func TestIncomingAtCommit_IncludesRetractedSource(t *testing.T) {
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	defer svc.Close()
+	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+
+	ctx := context.Background()
+	branch := "main"
+
+	aRes, err := svc.Facts().WriteFact(ctx, branch, "kb/a.md", testFactBody("a", 0.9, nil), "init a", "")
+	require.NoError(t, err)
+	_, err = svc.Facts().WriteFact(ctx, branch, "kb/b.md", testFactBody("b", 0.8, []string{"kb/a.md"}), "init b →a", "")
+	require.NoError(t, err)
+	_, err = svc.Facts().DeleteFact(ctx, branch, "kb/b.md", "retract b")
+	require.NoError(t, err)
+
+	got, err := svc.Search().IncomingAtCommit(ctx, branch, "kb/a.md", aRes.CommitHash)
+	require.NoError(t, err)
+	require.Len(t, got, 1, "incoming edge from retracted source must still be returned")
+	require.Equal(t, "kb/b.md", got[0].Path)
+	require.True(t, got[0].Deleted, "Deleted must reflect that the source fact is retracted")
+}
+
+// TestOutgoingAtCommit_FiltersStaleSelfLoop covers defense-in-depth: even
+// though resolveTargetCommit now resolves self-refs to the previous version
+// (preventing new self-loops), legacy data may still contain edges where
+// source and target are the same (path, commit) tuple. Such edges navigate
+// to nowhere and must be hidden on read.
+func TestOutgoingAtCommit_FiltersStaleSelfLoop(t *testing.T) {
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	defer svc.Close()
+	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+
+	ctx := context.Background()
+	branch := "main"
+
+	xRes, err := svc.Facts().WriteFact(ctx, branch, "kb/x.md", testFactBody("x", 0.9, nil), "init x", "")
+	require.NoError(t, err)
+
+	si := svc.Search().(*searchIndex)
+
+	// Bypass the write-path fix to inject a stale self-loop edge directly.
+	nodeID, err := si.graphNodeIDByBlob(ctx, "kb/x.md", xRes.BlobHash)
+	require.NoError(t, err)
+	require.NotZero(t, nodeID, "graph node for the written fact must exist")
+
+	edgeID, err := si.graphInsertEdgeReturningID(ctx, nodeID, nodeID, EdgeDerivedFrom)
+	require.NoError(t, err)
+	require.NoError(t, si.graphSetEdgeProps(ctx, edgeID, map[string]string{
+		"source_commit": xRes.CommitHash,
+		"target_commit": xRes.CommitHash,
+	}))
+
+	out, err := si.OutgoingAtCommit(ctx, branch, "kb/x.md", xRes.CommitHash)
+	require.NoError(t, err)
+	require.Empty(t, out, "stale self-loop edge (same path & commit both sides) must be filtered from outgoing")
+
+	in, err := si.IncomingAtCommit(ctx, branch, "kb/x.md", xRes.CommitHash)
+	require.NoError(t, err)
+	require.Empty(t, in, "stale self-loop edge must be filtered from incoming")
+}

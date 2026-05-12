@@ -296,13 +296,22 @@ func (si *searchIndex) graphSyncHistoricalFactTx(ctx context.Context, tx execer,
 func (si *searchIndex) graphDeleteFactTx(ctx context.Context, tx execer, path, blobHash string) error {
 	p := escapeCypherKey(path)
 	bh := escapeCypherKey(blobHash)
-	// Delete outgoing edges.
-	q := fmt.Sprintf(`SELECT cypher('MATCH (f:%s {path: "%s"})-[r]->() WHERE f.blob_hash = "%s" DELETE r')`, NodeFact, p, bh)
-	if _, err := tx.Exec(q); err != nil {
-		return fmt.Errorf("graph delete outgoing edges: %w", err)
+	// Delete outgoing "current state" edges (TAGGED → Entity, IN_DOMAIN → Domain,
+	// UNDER → OntologyNode, SIMILAR_TO → Fact). These represent what the fact
+	// currently claims; a retracted fact makes no current claims.
+	//
+	// DERIVED_FROM edges are NOT deleted: they are immutable historical
+	// assertions of lineage at a specific commit. Removing them would erase
+	// the temporal view (a target fact would lose incoming edges from its
+	// now-retracted referrers, leaving an unexplainable empty in-edge rail).
+	for _, edgeType := range []string{EdgeTagged, EdgeInDomain, EdgeUnder, EdgeSimilarTo} {
+		q := fmt.Sprintf(`SELECT cypher('MATCH (f:%s {path: "%s"})-[r:%s]->() WHERE f.blob_hash = "%s" DELETE r')`, NodeFact, p, edgeType, bh)
+		if _, err := tx.Exec(q); err != nil {
+			return fmt.Errorf("graph delete outgoing %s edges: %w", edgeType, err)
+		}
 	}
 	// Delete incoming SIMILAR_TO edges (bidirectional cleanup).
-	q = fmt.Sprintf(`SELECT cypher('MATCH ()-[r:%s]->(f:%s {path: "%s"}) WHERE f.blob_hash = "%s" DELETE r')`, EdgeSimilarTo, NodeFact, p, bh)
+	q := fmt.Sprintf(`SELECT cypher('MATCH ()-[r:%s]->(f:%s {path: "%s"}) WHERE f.blob_hash = "%s" DELETE r')`, EdgeSimilarTo, NodeFact, p, bh)
 	if _, err := tx.Exec(q); err != nil {
 		return fmt.Errorf("graph delete incoming SIMILAR_TO: %w", err)
 	}

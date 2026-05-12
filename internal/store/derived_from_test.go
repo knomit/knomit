@@ -36,13 +36,13 @@ func TestResolveTargetCommit(t *testing.T) {
 	si := svc.Search().(*searchIndex)
 
 	// (1) D's ref to E at c2: most recent ancestor touching E is c1 (added) → target_commit = c1.
-	got, ok, err := si.resolveTargetCommit(ctx, branch, "kb/e.md", c2)
+	got, ok, err := si.resolveTargetCommit(ctx, branch, "kb/d.md", "kb/e.md", c2)
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.Equal(t, c1, got)
 
 	// (2) Forward-broken: no ancestor touches kb/z.md.
-	_, ok, err = si.resolveTargetCommit(ctx, branch, "kb/z.md", c2)
+	_, ok, err = si.resolveTargetCommit(ctx, branch, "kb/d.md", "kb/z.md", c2)
 	require.NoError(t, err)
 	require.False(t, ok, "no ancestor touches kb/z.md → not ok")
 
@@ -56,9 +56,69 @@ func TestResolveTargetCommit(t *testing.T) {
 	require.NotEmpty(t, c3)
 
 	// F's ref to E at c4: first ancestor touching E is c3 (deleted) → not ok.
-	_, ok, err = si.resolveTargetCommit(ctx, branch, "kb/e.md", c4)
+	_, ok, err = si.resolveTargetCommit(ctx, branch, "kb/f.md", "kb/e.md", c4)
 	require.NoError(t, err)
 	require.False(t, ok, "first ancestor touching kb/e.md is a deletion → not ok")
+}
+
+// TestResolveTargetCommit_SelfRef_ResolvesToPriorVersion regresses the bug
+// where a fact's body listed its own path in refs and the resolver returned
+// the source commit itself, producing a self-loop DERIVED_FROM edge whose
+// source and target commits were identical. The semantically useful meaning
+// of a self-ref is "this version derives from the previous version of this
+// path" — so the walk must start at the source commit's first parent when
+// refPath == sourcePath.
+func TestResolveTargetCommit_SelfRef_ResolvesToPriorVersion(t *testing.T) {
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	defer svc.Close()
+	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+
+	ctx := context.Background()
+	branch := "main"
+
+	// Initial creation of kb/x.md at c1 (no self-ref yet).
+	c1Res, err := svc.Facts().WriteFact(ctx, branch, "kb/x.md", testFactBody("x v1", 0.9, nil), "init x", "")
+	require.NoError(t, err)
+	c1 := c1Res.CommitHash
+
+	// Update at c2 with a self-ref.
+	c2Res, err := svc.Facts().WriteFact(ctx, branch, "kb/x.md", testFactBody("x v2", 0.9, []string{"kb/x.md"}), "update x with self-ref", "")
+	require.NoError(t, err)
+	c2 := c2Res.CommitHash
+
+	si := svc.Search().(*searchIndex)
+
+	got, ok, err := si.resolveTargetCommit(ctx, branch, "kb/x.md", "kb/x.md", c2)
+	require.NoError(t, err)
+	require.True(t, ok, "self-ref with a prior version must resolve")
+	require.Equal(t, c1, got, "self-ref must resolve to the previous version's commit, not the source commit")
+}
+
+// TestResolveTargetCommit_SelfRef_FirstCreation_ReturnsNotOk covers the
+// degenerate case where a fact's first version already lists its own path in
+// refs. There is no prior version to derive from, so the resolver must drop
+// the edge rather than producing a self-loop.
+func TestResolveTargetCommit_SelfRef_FirstCreation_ReturnsNotOk(t *testing.T) {
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	defer svc.Close()
+	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+
+	ctx := context.Background()
+	branch := "main"
+
+	c1Res, err := svc.Facts().WriteFact(ctx, branch, "kb/x.md", testFactBody("x v1", 0.9, []string{"kb/x.md"}), "init x with self-ref", "")
+	require.NoError(t, err)
+	c1 := c1Res.CommitHash
+
+	si := svc.Search().(*searchIndex)
+
+	_, ok, err := si.resolveTargetCommit(ctx, branch, "kb/x.md", "kb/x.md", c1)
+	require.NoError(t, err)
+	require.False(t, ok, "self-ref with no prior version must drop the edge")
 }
 
 // testFactBody builds a minimal markdown fact for store-internal tests.

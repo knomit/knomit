@@ -33,13 +33,24 @@ import (
 // targets it's O(commits-since-last-touch). An in-process cache keyed by
 // (refPath, sourceCommit) per ingest call is a possible optimisation if
 // this becomes hot.
-func (si *searchIndex) resolveTargetCommit(ctx context.Context, branch, refPath, sourceCommit string) (string, bool, error) {
+func (si *searchIndex) resolveTargetCommit(ctx context.Context, branch, sourcePath, refPath, sourceCommit string) (string, bool, error) {
 	branchID, err := si.rh.branchID(ctx, branch)
 	if err != nil {
 		return "", false, fmt.Errorf("resolveTargetCommit: branchID: %w", err)
 	}
 
 	cur := sourceCommit
+	// Self-ref ("this fact derives from the previous version of this path"):
+	// the source commit is where the current version is being written, so it
+	// trivially "touches" refPath. Skip past it so the walk lands on the
+	// genuine prior version (or runs off-branch if there is none).
+	if refPath == sourcePath {
+		parent, err := si.rh.firstParentCommit(ctx, cur)
+		if err != nil {
+			return "", false, fmt.Errorf("resolveTargetCommit: firstParentCommit (self-ref): %w", err)
+		}
+		cur = parent
+	}
 	for cur != "" {
 		// Is `cur` reachable on this branch? If not (we walked off the
 		// branch by following first-parent into a foreign-branch ancestor),
@@ -116,7 +127,7 @@ func (si *searchIndex) graphAddDerivedFromAtCommitTx(
 	}
 
 	for _, refPath := range refs {
-		targetCommit, ok, err := si.resolveTargetCommit(ctx, branch, refPath, sourceCommit)
+		targetCommit, ok, err := si.resolveTargetCommit(ctx, branch, sourcePath, refPath, sourceCommit)
 		if err != nil {
 			return fmt.Errorf("graphAddDerivedFromAtCommitTx: resolve %s: %w", refPath, err)
 		}

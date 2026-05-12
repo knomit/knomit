@@ -21,14 +21,17 @@ func (si *searchIndex) IncomingAtCommit(ctx context.Context, branch, path, commi
 		return nil, fmt.Errorf("IncomingAtCommit: branchID: %w", err)
 	}
 
-	// 1. Cypher: candidate (source_path, source_title, source_commit) rows.
+	// 1. Cypher: candidate (source_path, source_title, source_commit, source_deleted) rows.
 	// Note: "commit" is a reserved SQL keyword; use alias "sc" (source commit).
+	// Retracted sources are returned with deleted=true so the UI can render
+	// them with the retracted treatment instead of hiding the edge entirely
+	// (mirrors how OutgoingAtCommit exposes retracted targets).
 	cypherQ := fmt.Sprintf(
-		`MATCH (s:%s)-[r:%s]->(t:%s {path: "%s"}) WHERE r.target_commit = "%s" AND NOT s.deleted = true RETURN s.path AS path, s.title AS title, s.type AS type, r.source_commit AS sc`,
+		`MATCH (s:%s)-[r:%s]->(t:%s {path: "%s"}) WHERE r.target_commit = "%s" RETURN s.path AS path, s.title AS title, s.type AS type, r.source_commit AS sc, s.deleted AS deleted`,
 		NodeFact, EdgeDerivedFrom, NodeFact,
 		escapeCypherKey(path), escapeCypherKey(commitHash),
 	)
-	q := `SELECT json_extract(value, '$.path'), json_extract(value, '$.title'), json_extract(value, '$.type'), json_extract(value, '$.sc') FROM json_each(cypher('` + cypherQ + `'))`
+	q := `SELECT json_extract(value, '$.path'), json_extract(value, '$.title'), json_extract(value, '$.type'), json_extract(value, '$.sc'), json_extract(value, '$.deleted') FROM json_each(cypher('` + cypherQ + `'))`
 	rows, err := conn(ctx, si.rh.db).QueryContext(ctx, q)
 	if err != nil {
 		return nil, fmt.Errorf("IncomingAtCommit: cypher: %w", err)
@@ -38,12 +41,20 @@ func (si *searchIndex) IncomingAtCommit(ctx context.Context, branch, path, commi
 	var candidates []RefSummary
 	for rows.Next() {
 		var rs RefSummary
-		if err := rows.Scan(&rs.Path, &rs.Title, &rs.Type, &rs.Commit); err != nil {
+		var del any
+		if err := rows.Scan(&rs.Path, &rs.Title, &rs.Type, &rs.Commit, &del); err != nil {
 			return nil, fmt.Errorf("IncomingAtCommit: scan: %w", err)
 		}
 		if rs.Path == "" {
 			continue
 		}
+		// Defense-in-depth: stale self-loops (same path & same commit on
+		// both endpoints) navigate to nowhere; drop them. Legitimate
+		// "previous version" edges have differing commits and pass through.
+		if rs.Path == path && rs.Commit == commitHash {
+			continue
+		}
+		rs.Deleted = isDeletedVal(del)
 		candidates = append(candidates, rs)
 	}
 	if err := rows.Err(); err != nil {
@@ -130,6 +141,12 @@ func (si *searchIndex) OutgoingAtCommit(ctx context.Context, branch, path, commi
 			return nil, fmt.Errorf("OutgoingAtCommit: scan: %w", err)
 		}
 		if rs.Path == "" {
+			continue
+		}
+		// Defense-in-depth: drop stale self-loops where both endpoints
+		// are the same (path, commit). resolveTargetCommit no longer
+		// produces these, but legacy data may still hold them.
+		if rs.Path == path && rs.Commit == commitHash {
 			continue
 		}
 		rs.Deleted = isDeletedVal(del)
