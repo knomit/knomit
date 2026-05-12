@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/rs/zerolog/log"
@@ -154,6 +155,19 @@ func (si *searchIndex) recentFactsSearch(ctx context.Context, branch, pathPrefix
 	if err := rows.Err(); err != nil {
 		return nil, 0, err
 	}
+
+	// When a query is present the SQL ORDER BY committed_at is only used for
+	// stable iteration; rank order is established here by relevance score
+	// descending, with committed_at and path as deterministic tiebreakers.
+	sort.SliceStable(all, func(i, j int) bool {
+		if all[i].Score != all[j].Score {
+			return all[i].Score > all[j].Score
+		}
+		if all[i].CommittedAt != all[j].CommittedAt {
+			return all[i].CommittedAt > all[j].CommittedAt
+		}
+		return all[i].Path < all[j].Path
+	})
 
 	total := len(all)
 	if offset >= total {
