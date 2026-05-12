@@ -2,6 +2,7 @@ import { useReducer, useEffect, useState } from 'react';
 import { reducer, init, isReadOnly, isLive } from './state';
 import { api } from './api';
 import { useNavigationManager } from './useNavigationManager';
+import { bootstrapStatusWithRetry } from './bootstrap';
 import type { RepoInfo } from './api';
 import { TopBar } from './TopBar';
 import { Breadcrumb } from './Breadcrumb';
@@ -29,15 +30,24 @@ export default function App() {
   // The branch root endpoint requires knowing the branch. We bootstrap by
   // fetching the branches list and picking the agent branch (is_agent_branch),
   // then calling the branch root for full status.
+  //
+  // Retries with exponential backoff: a single transient hiccup (dev proxy
+  // first-request hang, brief network blip, backend just-restarted) used to
+  // leave the page stuck on "Loading…" forever because this effect only
+  // re-fires when state.repo changes.
   useEffect(() => {
-    (async () => {
-      try {
-        // If we already know the branch (e.g. after SET_REPO), use it directly.
-        const branchToQuery = state.branch || await api.getAgentBranch(state.repo);
-        const s = await api.status(state.repo, branchToQuery);
+    let cancelled = false;
+    bootstrapStatusWithRetry({
+      repo: state.repo,
+      initialBranch: state.branch,
+      getAgentBranch: api.getAgentBranch,
+      getStatus: api.status,
+      onSuccess: (s) => {
         dispatch({ type: 'SET_STATUS', head: s.head, branch: s.branch, embeddingsEnabled: s.embeddings_enabled, ontologyRoot: s.ontology_root });
-      } catch {}
-    })();
+      },
+      shouldStop: () => cancelled,
+    });
+    return () => { cancelled = true; };
   }, [state.repo]);
 
   // SSE for task and status events — reconnects when repo/branch changes.
