@@ -99,7 +99,6 @@ describe('bootstrapStatusWithRetry', () => {
 
   it('aborts before calling onSuccess if shouldStop becomes true mid-flight', async () => {
     const getAgentBranch = vi.fn().mockResolvedValue('agent/test');
-    const getStatus = vi.fn().mockResolvedValue(ok);
     const onSuccess = vi.fn();
     let stopped = false;
     const shouldStop = () => stopped;

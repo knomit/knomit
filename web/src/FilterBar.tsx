@@ -144,10 +144,10 @@ export function FilterBar({ state, dispatch }: Props) {
     }
 
     if (e.key === 'Enter' || e.key === ' ') {
-      const { chips, text, asOf } = parseFilterQuery(inputValue, () => state.headCommit);
+      const { chips, text, asOf, warnings } = parseFilterQuery(inputValue, () => state.headCommit);
+      warnings.forEach(w => dispatch({ type: 'CONSOLE_LOG', level: 'error', message: `[filter] ${w}` }));
       if (asOf || chips.length > 0) {
         e.preventDefault();
-        // SET_AS_OF first so it lands before any chip dispatches.
         if (asOf) dispatch({ type: 'SET_AS_OF', asOf });
         chips.forEach(chip => dispatch({ type: 'ADD_FILTER', chip }));
         setInputValue(text);

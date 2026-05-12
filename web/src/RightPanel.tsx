@@ -156,11 +156,12 @@ const DEFAULT_LIST_HEIGHT = 3 * ROW_HEIGHT;
 const MIN_LIST_HEIGHT = ROW_HEIGHT;
 const MAX_LIST_HEIGHT = 12 * ROW_HEIGHT;
 
-function CommitPanel({ historyCommit, repo, branch, selectedFact, navigate, rightPanelFocused, dispatch }: {
+function CommitPanel({ historyCommit, repo, branch, selectedFact, asOf, navigate, rightPanelFocused, dispatch }: {
   historyCommit: string;
   repo: string;
   branch: string;
   selectedFact: string | null;
+  asOf: AppState['asOf'];
   navigate: (req: NavRequest) => void;
   rightPanelFocused: boolean;
   dispatch: Dispatch<Action>;
@@ -218,14 +219,14 @@ function CommitPanel({ historyCommit, repo, branch, selectedFact, navigate, righ
           navigate({
             view: 'history',
             factPath: files[nextIdx].path,
-            asOf: { mode: 'scrubbed', commit: historyCommit },
+            asOf: asOf.mode === 'diff' ? asOf : { mode: 'scrubbed', commit: historyCommit },
           });
         }
       }
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [rightPanelFocused, detail, selectedFact, historyCommit, navigate]);
+  }, [rightPanelFocused, detail, selectedFact, historyCommit, asOf, navigate]);
 
   // Drag to resize
   const startDrag = (e: React.MouseEvent) => {
@@ -292,7 +293,7 @@ function CommitPanel({ historyCommit, repo, branch, selectedFact, navigate, righ
                   navigate({
                     view: 'history',
                     factPath: file.path,
-                    asOf: { mode: 'scrubbed', commit: historyCommit },
+                    asOf: asOf.mode === 'diff' ? asOf : { mode: 'scrubbed', commit: historyCommit },
                   });
                   dispatch({ type: 'FOCUS_RIGHT_PANEL' });
                 }}
@@ -415,6 +416,7 @@ export function RightPanel({ state, dispatch, navigate, onExplain }: {
   const factPath = state.factPath;
   const anchorCommit = selectAnchorCommit(state);
   const historyCommit = state.view === 'history' ? anchorCommit : null;
+  const inDiff = state.asOf.mode === 'diff';
 
   // History + scrubbed: opt into the backend's ?fallback=before so that
   // clicking a retracted file (in a retract commit) shows the pre-retraction
@@ -423,6 +425,10 @@ export function RightPanel({ state, dispatch, navigate, onExplain }: {
   const useFallback = state.view === 'history' && state.asOf.mode === 'scrubbed';
 
   useAsync((stale) => {
+    // In diff mode, FactDiffView owns the fact fetching via api.factDiff.
+    // Skip this effect's fetch entirely so we don't issue a single-sided
+    // request that gets discarded and may flash a 404 error.
+    if (inDiff) { setFact(null); setError(null); return; }
     if (!factPath) { setFact(null); setError(null); return; }
     setError(null);
     setFact(null);
@@ -431,13 +437,9 @@ export function RightPanel({ state, dispatch, navigate, onExplain }: {
       anchorCommit ?? undefined,
       useFallback ? { fallback: 'before' } : undefined,
     )
-      .then(f => {
-        if (stale()) return;
-        setFact(f);
-        // No FACT_LOADED dispatch — fact.commit_hash is read directly from the response.
-      })
+      .then(f => { if (!stale()) setFact(f); })
       .catch(e => { if (!stale()) setError(String(e)); });
-  }, [factPath, anchorCommit, state.repo, useFallback]);
+  }, [factPath, anchorCommit, state.repo, useFallback, inDiff]);
 
   useAsync((stale) => {
     if (factPath || state.view === 'history') return;
@@ -480,16 +482,23 @@ export function RightPanel({ state, dispatch, navigate, onExplain }: {
     return () => window.removeEventListener('keydown', handler);
   }, [state.rightPanelFocused, dispatch]);
 
-  // In diff mode with a selected fact, render the dedicated diff view
-  // regardless of view mode. The view falls back to live/scrubbed rendering
-  // when factPath is null.
-  if (state.asOf.mode === 'diff' && state.factPath) {
-    return <FactDiffView state={state as AppState & { factPath: string }} dispatch={dispatch} />;
-  }
-
   const commitPanel = state.view === 'history' && historyCommit
-    ? <CommitPanel historyCommit={historyCommit} repo={state.repo} branch={state.branch} selectedFact={factPath} navigate={navigate} rightPanelFocused={state.rightPanelFocused} dispatch={dispatch} />
+    ? <CommitPanel historyCommit={historyCommit} repo={state.repo} branch={state.branch} selectedFact={factPath} asOf={state.asOf} navigate={navigate} rightPanelFocused={state.rightPanelFocused} dispatch={dispatch} />
     : null;
+
+  // Diff mode with a selected fact renders FactDiffView in the detail area.
+  // In history view, keep the CommitPanel visible above the diff so the user
+  // can switch between sibling files in the `to` commit without leaving diff.
+  if (inDiff && state.factPath) {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
+        {commitPanel}
+        <div style={{ flex: 1, overflow: 'auto', minHeight: 0 }}>
+          <FactDiffView state={state as AppState & { factPath: string }} dispatch={dispatch} />
+        </div>
+      </div>
+    );
+  }
 
   // Error from the fact-fetch effect. Don't short-circuit the whole panel —
   // when in history view, the CommitPanel file list (with +/-/~ markers)
@@ -503,9 +512,6 @@ export function RightPanel({ state, dispatch, navigate, onExplain }: {
       </div>
     );
   }
-  // Non-fact errors (e.g. stats failures) were never wired to setError, but
-  // keep the early-return for parity with the old behavior in the unlikely
-  // case error is set without factPath.
   if (error) return <div style={{ padding: 24, color: '#f44' }}>{error}</div>;
 
   // Summary view: no fact selected

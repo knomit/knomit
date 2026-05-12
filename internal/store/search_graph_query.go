@@ -100,13 +100,16 @@ func (si *searchIndex) IncomingAtCommit(ctx context.Context, branch, path, commi
 // asserted by (path, commitHash) — DERIVED_FROM edges OUT of this Fact
 // where source_commit edge property matches.
 //
-// Branch is currently unused for the filter (outgoing edges naturally
-// reflect the source's commit, which is already pinned by commitHash).
-// The parameter is accepted for symmetry with IncomingAtCommit and future
-// use (e.g. branch-relative target visibility).
+// Unlike IncomingAtCommit, this does not filter by branch_commits: outgoing
+// edges naturally reflect the source's commit, which is already pinned by
+// commitHash. The branch parameter is accepted for signature symmetry and
+// reserved for future use (e.g. branch-relative target visibility).
+//
+// Candidates whose target_commit is missing from commit_log are dropped:
+// returning them would expose self-links that 404. This is the only filter
+// applied — branch reachability is intentionally not enforced here.
 func (si *searchIndex) OutgoingAtCommit(ctx context.Context, branch, path, commitHash string) ([]RefSummary, error) {
-	_ = branch // reserved for future use; OutgoingAtCommit is currently branchless
-	// Note: "commit" is a reserved SQL keyword; use alias "tc" (target commit).
+	_ = branch
 	cypherQ := fmt.Sprintf(
 		`MATCH (s:%s {path: "%s"})-[r:%s]->(t:%s) WHERE r.source_commit = "%s" RETURN t.path AS path, t.title AS title, t.type AS type, r.target_commit AS tc, t.deleted AS deleted`,
 		NodeFact, escapeCypherKey(path), EdgeDerivedFrom, NodeFact,
@@ -136,10 +139,6 @@ func (si *searchIndex) OutgoingAtCommit(ctx context.Context, branch, path, commi
 		return nil, fmt.Errorf("OutgoingAtCommit: rows: %w", err)
 	}
 
-	// Post-cypher SQL: resolve committed_at for each target_commit via
-	// commit_log. LEFT JOIN against branch_commits keeps the symmetric
-	// shape with IncomingAtCommit even though OutgoingAtCommit does not
-	// filter by branch.
 	if len(candidates) == 0 {
 		return candidates, nil
 	}
@@ -149,7 +148,7 @@ func (si *searchIndex) OutgoingAtCommit(ctx context.Context, branch, path, commi
 		args = append(args, c.Commit)
 		placeholders = append(placeholders, "?")
 	}
-	bcRows, err := conn(ctx, si.rh.db).QueryContext(ctx,
+	clRows, err := conn(ctx, si.rh.db).QueryContext(ctx,
 		`SELECT cl.commit_hash, COALESCE(cl.committed_at, 0)
 		   FROM commit_log cl
 		  WHERE cl.commit_hash IN (`+strings.Join(placeholders, ",")+`)`,
@@ -158,25 +157,27 @@ func (si *searchIndex) OutgoingAtCommit(ctx context.Context, branch, path, commi
 	if err != nil {
 		return nil, fmt.Errorf("OutgoingAtCommit: commit_log lookup: %w", err)
 	}
-	defer bcRows.Close()
+	defer clRows.Close()
 	dates := make(map[string]int64, len(candidates))
-	for bcRows.Next() {
+	for clRows.Next() {
 		var h string
 		var ts int64
-		if err := bcRows.Scan(&h, &ts); err != nil {
-			return nil, fmt.Errorf("OutgoingAtCommit: branch filter scan: %w", err)
+		if err := clRows.Scan(&h, &ts); err != nil {
+			return nil, fmt.Errorf("OutgoingAtCommit: commit_log scan: %w", err)
 		}
 		dates[h] = ts
 	}
-	if err := bcRows.Err(); err != nil {
+	if err := clRows.Err(); err != nil {
 		return nil, fmt.Errorf("OutgoingAtCommit: commit_log rows: %w", err)
 	}
 
 	out := make([]RefSummary, 0, len(candidates))
 	for _, c := range candidates {
-		if ts, ok := dates[c.Commit]; ok {
-			c.CommittedAt = ts
+		ts, ok := dates[c.Commit]
+		if !ok {
+			continue
 		}
+		c.CommittedAt = ts
 		out = append(out, c)
 	}
 	return out, nil

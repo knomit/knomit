@@ -224,7 +224,9 @@ export function TopBar({ state, repos, dispatch, onSettingsClick }: Props) {
             aria-disabled={readOnly || rebuilding}
             onClick={() => {
               if (rebuilding || readOnly) return;
-              api.rebuild(state.repo, state.branch);
+              api.rebuild(state.repo, state.branch).catch(err => {
+                dispatch({ type: 'CONSOLE_LOG', level: 'error', message: `[rebuild] failed: ${String(err)}` });
+              });
               setMenuOpen(false);
             }}
             style={{

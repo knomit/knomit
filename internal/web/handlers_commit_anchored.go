@@ -55,10 +55,8 @@ func handleCommitAnchoredFact(b hal.URLBuilder, m *repos.Manager, reader FactRea
 		}
 
 		a := hal.Anchor{Branch: branch, Commit: sha}
-		// Opt-in: when ?fallback=before is set and the fact is missing at
-		// the pinned commit, fall back to the most recent ancestor where it
-		// existed. The History view's retract-commit case uses this to show
-		// the pre-retraction content instead of a 404.
+		// ?fallback=before: when the fact is missing at the pinned commit,
+		// fall back to the most recent ancestor where it existed.
 		fallback := r.URL.Query().Get("fallback") == "before"
 		f, head, err := reader.Read(ri, a, path, fallback)
 		if err != nil {

@@ -27,7 +27,7 @@ func treeFileInsensitive(repo *gogit.Repository, tree *object.Tree, path string)
 			}
 		}
 		if matched == nil {
-			return "", fmt.Errorf("component %q not found", part)
+			return "", fmt.Errorf("component %q: %w", part, ErrPathNotFound)
 		}
 		if i == len(parts)-1 {
 			blob, err := repo.BlobObject(matched.Hash)
@@ -77,7 +77,7 @@ func (fi *factIndex) readFileLastCommit(ctx context.Context, branch, path, befor
 
 	lastCommit, err := logIter.Next()
 	if err != nil {
-		return "", "", fmt.Errorf("readFileLastCommit: %q: no prior commit found", path)
+		return "", "", fmt.Errorf("readFileLastCommit: %q: %w", path, ErrPathNotFound)
 	}
 
 	content, err = fi.rh.readFileAtCommit(ctx, path, lastCommit.Hash.String())

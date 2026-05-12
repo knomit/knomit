@@ -66,12 +66,20 @@ describe('parseSearchQuery', () => {
 describe('parseFilterQuery', () => {
   it('extracts domain and type chips with free text', () => {
     const r = parseFilterQuery('domain:go type:concept free text');
-    expect(r).toEqual({ chips: [{ category: 'domain', value: 'go' }, { category: 'type', value: 'concept' }], text: 'free text' });
+    expect(r).toEqual({
+      chips: [{ category: 'domain', value: 'go' }, { category: 'type', value: 'concept' }],
+      text: 'free text',
+      warnings: [],
+    });
   });
 
   it('extracts quoted entity and unquoted path chips', () => {
     const r = parseFilterQuery('entity:"supply chain" path:kb/go');
-    expect(r).toEqual({ chips: [{ category: 'entity', value: 'supply chain' }, { category: 'path', value: 'kb/go' }], text: '' });
+    expect(r).toEqual({
+      chips: [{ category: 'entity', value: 'supply chain' }, { category: 'path', value: 'kb/go' }],
+      text: '',
+      warnings: [],
+    });
   });
 
   it('ep: prefix is recognized as a filter chip', () => {

@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/rs/zerolog/log"
 
 	knomitfact "knomit/internal/fact"
 	"knomit/internal/repos"
@@ -13,41 +14,34 @@ import (
 )
 
 // errFactNotFound is the sentinel the fact handler maps to 404 problem+json.
-// Production code returns this (wrapped or otherwise) from the real
-// defaultFactReader when FactIndex.ReadFact surfaces a not-found condition.
+// Production code returns this from defaultFactReader when ReadFact surfaces
+// store.ErrPathNotFound — distinguishing "no fact at this path/commit" from a
+// real backend error (which propagates to 500 instead of masquerading as 404).
 var errFactNotFound = errors.New("fact not found")
 
 // FactReader is the narrow interface the HAL fact handler depends on.
 // It combines reading a fact-at-anchor with checking whether a ref target
-// exists at the same anchor. Splitting these two concerns into one interface
-// lets the handler treat them as a single dependency for test injection;
-// production code wires both methods through RepoInstance.WithRead.
+// exists at the same anchor, so the handler can treat them as a single
+// dependency for test injection.
 type FactReader interface {
 	// Read loads the fact at (repo, anchor, path). Returns errFactNotFound
-	// when the path does not exist on the branch (or at the commit). The
-	// returned headOrCommit string is the resolved commit the caller should
-	// stamp into the view's as_of — HEAD's head-commit when the anchor is
-	// HEAD, or the pinned sha unchanged when the anchor is commit-anchored.
+	// when the path does not exist; other store errors are propagated as-is
+	// for the handler to surface as 500. The returned headOrCommit string is
+	// the resolved commit to stamp into the view's as_of (HEAD's head-commit
+	// when the anchor is HEAD, or the pinned sha unchanged when commit-
+	// anchored).
 	//
-	// When fallback is true and the anchor is commit-anchored and the file
-	// does not exist at the commit, Read falls back to the most recent
-	// ancestor where the file existed (BeforeCommit semantics). In the
-	// fallback case the returned headOrCommit is the actual content's
-	// source commit (different from a.Commit). When fallback is false,
-	// behavior is unchanged: missing-at-commit returns errFactNotFound.
-	// HEAD-anchored callers should pass fallback=false (the parameter is
-	// only meaningful for commit-anchored reads).
+	// fallback is only consulted for commit-anchored reads: when set, a
+	// path missing at the pinned commit walks back to the most recent
+	// ancestor where it existed, and headOrCommit reflects that ancestor.
 	Read(ri *repos.RepoInstance, a hal.Anchor, path string, fallback bool) (_ knomitfact.Fact, headOrCommit string, _ error)
 
-	// Exists reports whether the given fact path is visible on the anchor
-	// (same semantics as Read's "exists" check — used for structured refs).
+	// Exists reports whether the given fact path is visible on the anchor.
 	Exists(path string) bool
 }
 
-// defaultFactReader is the production FactReader wired over the store. This
-// type is a stateless adapter — it takes the RepoInstance per call and uses
-// WithRead to access the store. Plan 02 extends this to support commit-
-// anchored reads via ReadFactOpts.AtCommit.
+// defaultFactReader is the production FactReader wired over the store.
+// Stateless adapter — takes RepoInstance per call and uses WithRead.
 type defaultFactReader struct{}
 
 func (defaultFactReader) Read(
@@ -73,14 +67,19 @@ func (defaultFactReader) Read(
 		res, rerr := svc.Facts().ReadFact(contextTODO(), a.Branch, path, opts)
 		if rerr != nil {
 			// Opt-in fallback: when the file doesn't exist at the pinned commit,
-			// walk back to the most recent ancestor where it did. Used by the
-			// History view's retract-commit case so the right panel can show
-			// the pre-retraction content instead of a 404.
-			if fallback && !a.IsHEAD() {
+			// walk back to the most recent ancestor where it did. Only the
+			// History view's retract-commit case sets this — when it's off the
+			// caller wants the raw "not found" answer.
+			if fallback && !a.IsHEAD() && errors.Is(rerr, store.ErrPathNotFound) {
 				fbOpts := &store.ReadFactOpts{BeforeCommit: a.Commit}
 				fbRes, fbErr := svc.Facts().ReadFact(contextTODO(), a.Branch, path, fbOpts)
 				if fbErr != nil {
-					err = errFactNotFound
+					if errors.Is(fbErr, store.ErrPathNotFound) {
+						err = errFactNotFound
+						return
+					}
+					log.Error().Err(fbErr).Str("path", path).Str("commit", a.Commit).Msg("ReadFact fallback failed")
+					err = fbErr
 					return
 				}
 				parsed, perr := knomitfact.ParseFact(path, fbRes.Content)
@@ -92,7 +91,12 @@ func (defaultFactReader) Read(
 				head = fbRes.FromCommit
 				return
 			}
-			err = errFactNotFound
+			if errors.Is(rerr, store.ErrPathNotFound) {
+				err = errFactNotFound
+				return
+			}
+			log.Error().Err(rerr).Str("path", path).Bool("head_anchored", a.IsHEAD()).Msg("ReadFact failed")
+			err = rerr
 			return
 		}
 		parsed, perr := knomitfact.ParseFact(path, res.Content)
@@ -103,9 +107,12 @@ func (defaultFactReader) Read(
 		f = parsed
 		if a.IsHEAD() {
 			h, herr := svc.Branches().HeadCommit(contextTODO(), a.Branch)
-			if herr == nil {
-				head = h
+			if herr != nil {
+				log.Error().Err(herr).Str("branch", a.Branch).Msg("HeadCommit failed")
+				err = herr
+				return
 			}
+			head = h
 		} else {
 			head = a.Commit
 		}

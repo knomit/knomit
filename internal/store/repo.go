@@ -38,10 +38,14 @@ var ErrBranchNotFound = errors.New("branch not found")
 // at HEAD — typically because it was retracted, or because the path was never
 // indexed on this branch. Older versions may still exist in the graph and be
 // reachable via commit-anchored endpoints.
-//
-// Handlers map this via errors.Is to HTTP 404, distinguishing "fact not live"
-// from a real database error (which stays 500).
 var ErrFactNotLive = errors.New("fact not live at HEAD")
+
+// ErrPathNotFound is returned by ReadFact (and the underlying readFile* helpers)
+// when the requested path does not exist at the requested anchor. This is the
+// "true 404" condition — distinct from a git/database error reading a path that
+// should exist. Callers use errors.Is to surface a 404 while propagating real
+// errors as 500.
+var ErrPathNotFound = errors.New("path not found")
 
 // initRepoConfig stamps the repo config with the knomit identity and disables
 // GPG signing, which must be done for both fresh and remote-initialized repos.

@@ -181,6 +181,42 @@ func TestExplainFact_NeverIndexed(t *testing.T) {
 		"expected ErrFactNotLive for never-indexed path, got %v", err)
 }
 
+// TestOutgoingAtCommit_DropsMissingCommitLog: when a target_commit is not
+// in commit_log (e.g. GC'd or never indexed), OutgoingAtCommit drops the
+// entry rather than returning it with CommittedAt=0 — its self-link would
+// 404 and the UI has no way to distinguish a valid entry from a stale one.
+func TestOutgoingAtCommit_DropsMissingCommitLog(t *testing.T) {
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	defer svc.Close()
+	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+
+	ctx := context.Background()
+	branch := "main"
+
+	c0Res, err := svc.Facts().WriteFact(ctx, branch, "kb/e.md", testFactBody("e", 0.9, nil), "init e", "")
+	require.NoError(t, err)
+	c1Res, err := svc.Facts().WriteFact(ctx, branch, "kb/d.md", testFactBody("d", 0.8, []string{"kb/e.md"}), "d→e", "")
+	require.NoError(t, err)
+
+	// Sanity: baseline returns the outgoing ref with CommittedAt populated.
+	got, err := svc.Search().OutgoingAtCommit(ctx, branch, "kb/d.md", c1Res.CommitHash)
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	require.NotZero(t, got[0].CommittedAt)
+
+	// Remove the target's commit_log row to simulate a missing entry.
+	_, err = svc.rh.db.ExecContext(ctx,
+		`DELETE FROM commit_log WHERE commit_hash = ?`, c0Res.CommitHash)
+	require.NoError(t, err)
+
+	got, err = svc.Search().OutgoingAtCommit(ctx, branch, "kb/d.md", c1Res.CommitHash)
+	require.NoError(t, err)
+	require.Empty(t, got,
+		"OutgoingAtCommit must drop entries whose target_commit is not in commit_log")
+}
+
 // TestOutgoingAtCommit_PopulatesType verifies the type of the target fact is
 // returned on each RefSummary.
 func TestOutgoingAtCommit_PopulatesType(t *testing.T) {

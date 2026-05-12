@@ -2,6 +2,7 @@ package web
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -127,6 +128,30 @@ func TestHandleHALFact_NotFound_ReturnsProblem(t *testing.T) {
 
 	if rec.Code != http.StatusNotFound {
 		t.Errorf("status: %d", rec.Code)
+	}
+	if got := rec.Header().Get("Content-Type"); got != "application/problem+json" {
+		t.Errorf("content-type: %q", got)
+	}
+}
+
+// TestHandleHALFact_BackendError_Returns500: regression for the old behavior
+// that collapsed ALL reader errors into errFactNotFound (404). Real backend
+// failures (e.g. disk error, git corruption) must surface as 500 so users
+// know something is broken rather than seeing "no fact at this path".
+func TestHandleHALFact_BackendError_Returns500(t *testing.T) {
+	s := &Server{
+		Manager:    newTestManagerWithRepos(t, "alpha"),
+		factReader: &stubFactReader{readErr: errors.New("disk on fire")},
+	}
+	r := s.NewAPIRouter()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet,
+		"/repos/alpha/branches/agent:test/facts/know/x.md", nil)
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("expected 500 for non-notfound error, got %d body=%s", rec.Code, rec.Body.String())
 	}
 	if got := rec.Header().Get("Content-Type"); got != "application/problem+json" {
 		t.Errorf("content-type: %q", got)

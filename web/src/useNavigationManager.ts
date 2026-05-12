@@ -40,7 +40,10 @@ export async function resolveNavRequest(
           } else {
             dispatch({ type: 'APPLY_NAV', view: 'history', factPath, asOf: { mode: 'live' } });
           }
-        } catch {
+        } catch (err) {
+          // history fetch failed — fall back to the click-time anchor or HEAD
+          // and surface the error so the user sees the timeline may be stale.
+          dispatch({ type: 'CONSOLE_LOG', level: 'error', message: `[history] ${String(err)}` });
           const fallback = anchorAtClick ?? headCommit ?? null;
           dispatch({
             type: 'APPLY_NAV',
@@ -89,7 +92,8 @@ export async function resolveNavRequest(
       const detail = await api.commitDetail(state.repo, state.branch, targetCommit);
       const first = (detail.files || [])[0];
       dispatch({ type: 'APPLY_NAV', view: 'history', factPath: first?.path ?? null, asOf: req.asOf });
-    } catch {
+    } catch (err) {
+      dispatch({ type: 'CONSOLE_LOG', level: 'error', message: `[commitDetail] ${String(err)}` });
       dispatch({ type: 'APPLY_NAV', view: 'history', factPath: null, asOf: req.asOf });
     }
   } else if (req.view === 'history') {
