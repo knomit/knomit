@@ -52,7 +52,10 @@ func TestBareRemote_SyncWithNoOriginNoOps(t *testing.T) {
 	sb := NewStoryboard(t)
 	a := sb.Repo("a").Branch("agent/test")
 	result := a.Sync()
-	require.False(t, result.Synced, "Sync on unconnected repo should not report Synced")
+	require.False(t, result.Main.FastForward, "Sync on unconnected repo should not advance main")
+	require.False(t, result.Main.Rewound, "Sync on unconnected repo should not rewind main")
+	require.False(t, result.Agent.Replayed, "Sync on unconnected repo should not replay agent")
+	require.False(t, result.Agent.FastForward, "Sync on unconnected repo should not fast-forward agent")
 }
 
 // TestBareRemote_PushSyncRoundTrip is the core happy path: repo A writes a

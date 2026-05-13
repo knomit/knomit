@@ -58,11 +58,19 @@ func runSyncLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Service, hu
 			lg.Warn().Err(err).Msg("sync: pull failed")
 			return
 		}
-		if result.Synced {
-			hub.broadcastSyncOK("origin", result.MergeCommit, result.FastForward)
+		// A tick is "interesting" if main advanced (FF or rewind) or the
+		// agent branch replayed/fast-forwarded onto its upstream.
+		mainChanged := result.Main.FastForward || result.Main.Rewound
+		agentChanged := result.Agent.Replayed || result.Agent.FastForward
+		if mainChanged || agentChanged {
+			hub.broadcastSyncOK("origin", result.Agent.NewTip, result.Agent.FastForward)
 			lg.Info().
-				Bool("fast_forward", result.FastForward).
-				Str("merge_commit", result.MergeCommit).
+				Bool("main_fast_forward", result.Main.FastForward).
+				Bool("main_rewound", result.Main.Rewound).
+				Bool("agent_replayed", result.Agent.Replayed).
+				Bool("agent_fast_forward", result.Agent.FastForward).
+				Int("agent_replayed_count", result.Agent.NumReplayed).
+				Str("agent_new_tip", result.Agent.NewTip).
 				Msg("sync: pulled changes")
 		} else {
 			lg.Debug().Msg("sync: up to date")

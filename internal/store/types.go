@@ -53,11 +53,16 @@ type FileRecency struct {
 	Timestamp time.Time
 }
 
-// SyncResult is returned by Sync to report what happened during synchronization.
+// SyncResult is the bundled outcome of a sync tick — one reconcile cycle
+// that brings local main to origin/main (Main) and replays the agent
+// branch's unpushed commits onto its upstream (Agent).
+//
+// A "no-op" sync (everything already up to date) has Main and Agent both
+// zero-valued. Callers can check Main.FastForward / Main.Rewound /
+// Agent.Replayed / Agent.FastForward to learn what changed.
 type SyncResult struct {
-	Synced      bool   // true if tree changed (merge or fast-forward)
-	FastForward bool   // true if fast-forward (no merge commit)
-	MergeCommit string // hash of merge commit (empty if ff or no-op)
+	Main  MainReconcileResult
+	Agent ReplayOntoUpstreamResult
 }
 
 // PushResult is returned by Push to report what happened.

@@ -1,5 +1,7 @@
-// Remote synchronization: fetches from origin and merges the remote branch
-// into the local branch using a common-ancestor-aware three-way merge.
+// Remote synchronization: Sync orchestrates the reconcile primitives
+// (reconcileMain + reconcileAgent) declared in remote_reconcile.go.
+// Push retains a fetch-merge-retry loop on ref conflicts via syncLocked;
+// Task 9 will rewrite Push to use the reconcile primitives directly.
 package store
 
 import (
@@ -36,22 +38,24 @@ func isRefUpdateConflict(err error) bool {
 		strings.Contains(msg, "failed to update ref")
 }
 
-// Sync fetches from origin and merges origin/<remoteBranch> into localBranch
-// using a three-way merge with "origin wins" semantics.
+// Sync runs one reconcile cycle for the agent branch:
 //
-// Lock is held from fetch through ref update, then released before
-// notifyCommit (which triggers index sync and may call back into Service).
+//  1. Fetch origin (configured refspecs: main + agent/<host>).
+//  2. Reconcile local main to origin/main (fast-forward or force-update on rewind).
+//  3. Reconcile the agent branch against its upstream (origin/agent/<host>
+//     if present, else origin/main).
 //
-// If remoteBranch is empty, it defaults to "main".
-func (ri *remoteIndex) Sync(ctx context.Context, localBranch string, auth transport.AuthMethod) (res SyncResult, retErr error) {
+// When reconcileMain reports Rewound, the agent still reconciles correctly
+// because reconcileAgent reads the (new) local main via origin/main as
+// fallback upstream when origin/agent/<host> isn't present. Main is
+// reconciled FIRST so the agent sees the post-fetch tip.
+//
+// Safe to call repeatedly; each step is a no-op when there's nothing to do.
+func (ri *remoteIndex) Sync(ctx context.Context, agentBranch string, auth transport.AuthMethod) (res SyncResult, retErr error) {
 	remote, err := ri.GetRemote("origin")
 	if err != nil || remote == nil {
-		log.Debug().Msg("git sync: no origin remote configured, skipping")
+		log.Debug().Msg("Sync: no origin remote configured, skipping")
 		return SyncResult{}, nil
-	}
-	remoteBranch := remote.Branch
-	if remoteBranch == "" {
-		remoteBranch = "main"
 	}
 
 	// Past the "no remote" gate — write status on every return from here.
@@ -64,44 +68,78 @@ func (ri *remoteIndex) Sync(ctx context.Context, localBranch string, auth transp
 		}
 	}()
 
-	unlock := ri.rh.lockBranch(localBranch)
-	defer unlock()
-
 	// Check if origin remote exists in git config.
 	if _, err := ri.rh.repo.Remote("origin"); err != nil {
-		log.Debug().Msg("git sync: no origin remote configured, skipping")
+		log.Debug().Msg("Sync: no origin git remote configured, skipping")
 		return SyncResult{}, nil
 	}
 
-	return ri.syncLocked(ctx, localBranch, remoteBranch, auth, StrategyRemoteWins)
+	// Fetch using the configured refspecs (Task 1 wrote two: main + agent).
+	if err := ri.rh.repo.Fetch(&gogit.FetchOptions{
+		RemoteName: "origin",
+		Auth:       auth,
+	}); err != nil && err != gogit.NoErrAlreadyUpToDate {
+		return SyncResult{}, fmt.Errorf("Sync: fetch: %w", err)
+	}
+
+	return ri.reconcileNow(ctx, agentBranch)
+}
+
+// reconcileNow runs the post-fetch portion of Sync. Exposed (package-private)
+// for tests that want to set up refs manually without a real remote.
+//
+// Acquires rh.lockBranch("main") for reconcileMain and releases it before
+// reconcileAgent acquires rh.lockBranch(agentBranch). This avoids holding
+// two branch locks simultaneously.
+func (ri *remoteIndex) reconcileNow(ctx context.Context, agentBranch string) (SyncResult, error) {
+	mainUnlock := ri.rh.lockBranch("main")
+	mainRes, err := ri.rh.reconcileMain(ctx)
+	mainUnlock()
+	if err != nil {
+		return SyncResult{Main: mainRes}, fmt.Errorf("Sync: reconcileMain: %w", err)
+	}
+
+	agentRes, err := ri.rh.reconcileAgent(ctx, agentBranch, StrategyLocalWins)
+	if err != nil {
+		return SyncResult{Main: mainRes, Agent: agentRes}, fmt.Errorf("Sync: reconcileAgent: %w", err)
+	}
+
+	return SyncResult{Main: mainRes, Agent: agentRes}, nil
 }
 
 // syncLocked fetches from origin and merges origin/<remoteBranch> into
 // <localBranch> using the given conflict strategy.
 //
+// TRANSITIONAL: this is the legacy three-way-merge sync, retained ONLY
+// for Push's retry-on-conflict path. Task 9 will rewrite Push to use the
+// reconcile primitives directly, at which point syncLocked,
+// isRefUpdateConflict, maxPushAttempts, and SetMaxPushAttemptsForTest
+// can be removed. The public Sync entry point already routes through
+// reconcileNow, not this helper.
+//
 // The caller must hold ri.rh.lockBranch(localBranch). This helper does NOT
 // update the remote status row — that is the outer caller's responsibility
-// (Sync writes sync-status; Push writes push-status).
+// (Push writes push-status).
 func (ri *remoteIndex) syncLocked(
 	ctx context.Context,
 	localBranch, remoteBranch string,
 	auth transport.AuthMethod,
 	strategy ConflictStrategy,
-) (SyncResult, error) {
+) error {
 	log.Debug().Msg("git sync: fetching from origin")
 	err := ri.rh.repo.Fetch(&gogit.FetchOptions{
 		RemoteName: "origin",
 		Auth:       auth,
 	})
 	if err != nil && err != gogit.NoErrAlreadyUpToDate {
-		return SyncResult{}, fmt.Errorf("Sync: fetch: %w", err)
+		return fmt.Errorf("Sync: fetch: %w", err)
 	}
 
 	// Resolve origin/<remoteBranch> ref.
 	originRef, err := ri.rh.gits.Reference(plumbing.NewRemoteReferenceName("origin", remoteBranch))
 	if err != nil {
 		log.Debug().Str("branch", remoteBranch).Msg("git sync: origin ref not found, skipping")
-		return SyncResult{}, nil
+		return nil
 	}
 	originHash := originRef.Hash()
 
@@ -109,7 +147,7 @@ func (ri *remoteIndex) syncLocked(
 	agentRefName := plumbing.NewBranchReferenceName(localBranch)
 	agentRef, err := ri.rh.gits.Reference(agentRefName)
 	if err != nil {
-		return SyncResult{}, fmt.Errorf("Sync: agent ref: %w", err)
+		return fmt.Errorf("Sync: agent ref: %w", err)
 	}
 	agentHash := agentRef.Hash()
 
@@ -121,38 +159,38 @@ func (ri *remoteIndex) syncLocked(
 
 	// Same hash — no-op.
 	if originHash == agentHash {
-		return SyncResult{}, nil
+		return nil
 	}
 
 	originCommit, err := ri.rh.repo.CommitObject(originHash)
 	if err != nil {
-		return SyncResult{}, fmt.Errorf("Sync: origin commit: %w", err)
+		return fmt.Errorf("Sync: origin commit: %w", err)
 	}
 
 	agentCommit, err := ri.rh.repo.CommitObject(agentHash)
 	if err != nil {
-		return SyncResult{}, fmt.Errorf("Sync: agent commit: %w", err)
+		return fmt.Errorf("Sync: agent commit: %w", err)
 	}
 
 	// Check if origin is already an ancestor of agent (already merged).
 	isOriginAncestor, err := originCommit.IsAncestor(agentCommit)
 	if err != nil {
-		return SyncResult{}, fmt.Errorf("Sync: check origin ancestor: %w", err)
+		return fmt.Errorf("Sync: check origin ancestor: %w", err)
 	}
 	if isOriginAncestor {
 		log.Debug().Msg("git sync: origin already merged, nothing to do")
-		return SyncResult{}, nil
+		return nil
 	}
 
 	// Check if agent HEAD is ancestor of origin → fast-forward.
 	isAgentAncestor, err := agentCommit.IsAncestor(originCommit)
 	if err != nil {
-		return SyncResult{}, fmt.Errorf("Sync: check agent ancestor: %w", err)
+		return fmt.Errorf("Sync: check agent ancestor: %w", err)
 	}
 	if isAgentAncestor {
 		newRef := plumbing.NewHashReference(agentRefName, originHash)
 		if err := ri.rh.gits.SetReference(newRef); err != nil {
-			return SyncResult{}, fmt.Errorf("Sync: fast-forward ref: %w", err)
+			return fmt.Errorf("Sync: fast-forward ref: %w", err)
 		}
 
 		log.Info().Str("to", originHash.String()[:8]).Msg("git sync: fast-forward")
@@ -162,18 +200,18 @@ func (ri *remoteIndex) syncLocked(
 		// notifyCommit runs inside the branch lock — see fact_write.go writeFile
 		// for rationale.
 		if err := ri.rh.notifyCommit(ctx, localBranch, originHash); err != nil {
-			return SyncResult{}, fmt.Errorf("Sync: fast-forward notify: %w", err)
+			return fmt.Errorf("Sync: fast-forward notify: %w", err)
 		}
-		return SyncResult{Synced: true, FastForward: true}, nil
+		return nil
 	}
 
 	// Find merge base.
 	bases, err := agentCommit.MergeBase(originCommit)
 	if err != nil {
-		return SyncResult{}, fmt.Errorf("Sync: merge base: %w", err)
+		return fmt.Errorf("Sync: merge base: %w", err)
 	}
 	if len(bases) == 0 {
-		return SyncResult{}, fmt.Errorf("Sync: no common ancestor found (disjoint histories)")
+		return fmt.Errorf("Sync: no common ancestor found (disjoint histories)")
 	}
 	baseCommit := bases[0]
 
@@ -181,13 +219,12 @@ func (ri *remoteIndex) syncLocked(
 
 	// Three-way merge: diff base→origin, apply to agent tree. Conflict
 	// resolution is per the caller's strategy:
-	//   - StrategyRemoteWins: used by Sync (pull). Origin is authoritative.
 	//   - StrategyLocalWins:  used by Push retry. The pusher's changes are
 	//     authoritative; origin's concurrent changes are preserved for
 	//     non-overlapping paths.
 	mergedTreeHash, err := ri.rh.mergeTreesWithStrategy(ctx, baseCommit, originCommit, agentCommit, strategy)
 	if err != nil {
-		return SyncResult{}, fmt.Errorf("Sync: three-way merge: %w", err)
+		return fmt.Errorf("Sync: three-way merge: %w", err)
 	}
 
 	// Create merge commit.
@@ -201,21 +238,21 @@ func (ri *remoteIndex) syncLocked(
 
 	commitObj := ri.rh.gits.NewEncodedObject()
 	if err := mc.Encode(commitObj); err != nil {
-		return SyncResult{}, fmt.Errorf("Sync: encode merge commit: %w", err)
+		return fmt.Errorf("Sync: encode merge commit: %w", err)
 	}
 	mergeHash, err := ri.rh.gits.SetEncodedObject(commitObj)
 	if err != nil {
-		return SyncResult{}, fmt.Errorf("Sync: store merge commit: %w", err)
+		return fmt.Errorf("Sync: store merge commit: %w", err)
 	}
 
 	mergeHash, err = signCommitInPlace(ri.rh.gits, ri.rh.signer, mergeHash)
 	if err != nil {
-		return SyncResult{}, fmt.Errorf("Sync: sign merge commit: %w", err)
+		return fmt.Errorf("Sync: sign merge commit: %w", err)
 	}
 
 	newRef := plumbing.NewHashReference(agentRefName, mergeHash)
 	if err := ri.rh.gits.SetReference(newRef); err != nil {
-		return SyncResult{}, fmt.Errorf("Sync: update ref: %w", err)
+		return fmt.Errorf("Sync: update ref: %w", err)
 	}
 
 	log.Info().Str("merge_commit", mergeHash.String()[:8]).Msg("git sync: merged origin")
@@ -224,9 +261,9 @@ func (ri *remoteIndex) syncLocked(
 	}
 	// notifyCommit runs inside the branch lock — see fact_write.go writeFile.
 	if err := ri.rh.notifyCommit(ctx, localBranch, mergeHash); err != nil {
-		return SyncResult{}, fmt.Errorf("Sync: merge notify: %w", err)
+		return fmt.Errorf("Sync: merge notify: %w", err)
 	}
-	return SyncResult{Synced: true, MergeCommit: mergeHash.String()}, nil
+	return nil
 }
 
 // Push pushes the given branch to origin.
@@ -288,7 +325,7 @@ func (ri *remoteIndex) Push(ctx context.Context, branch string, auth transport.A
 			break
 		}
 		log.Debug().Err(err).Int("attempt", attempt).Msg("git push: ref conflict, merging remote before retry")
-		if _, merr := ri.syncLocked(ctx, branch, branch, auth, StrategyLocalWins); merr != nil {
+		if merr := ri.syncLocked(ctx, branch, branch, auth, StrategyLocalWins); merr != nil {
 			return PushResult{}, fmt.Errorf("Push: reconcile after conflict: %w", merr)
 		}
 	}

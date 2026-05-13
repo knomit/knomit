@@ -567,3 +567,31 @@ func TestReconcileAgent_FallsBackToMainWhenNoAgentUpstream(t *testing.T) {
 	_, err = tree.File("kb/m.md")
 	require.NoError(t, err)
 }
+
+func TestSync_OrchestratesMainAndAgent(t *testing.T) {
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = svc.Close() })
+	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+
+	// Pretend a fetch happened: write origin/main ref directly.
+	originMain := writeMergeFact(t, svc, "main", "kb/m.md", "M", "v1")
+	require.NoError(t, svc.rh.gits.SetReference(
+		plumbing.NewHashReference(plumbing.NewRemoteReferenceName("origin", "main"), plumbing.NewHash(originMain)),
+	))
+	// Move local main back to its parent so reconcileMain has work to do.
+	originMainCommit, err := svc.rh.repo.CommitObject(plumbing.NewHash(originMain))
+	require.NoError(t, err)
+	require.NoError(t, svc.rh.gits.SetReference(
+		plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), originMainCommit.ParentHashes[0]),
+	))
+	// One unpushed commit on agent.
+	writeMergeFact(t, svc, "agent/test", "kb/a.md", "A", "v1")
+
+	// Use the in-process reconcile entry point that skips fetch (no real remote).
+	res, err := svc.Remote().(*remoteIndex).reconcileNow(context.Background(), "agent/test")
+	require.NoError(t, err)
+	require.True(t, res.Agent.Replayed, "agent must replay")
+	require.Equal(t, plumbing.NewHash(originMain), mustHeadHash(t, svc, "main"))
+}
