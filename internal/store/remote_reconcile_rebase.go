@@ -433,6 +433,17 @@ func (rh *repoHandler) replayOntoUpstream(
 // Falls back to MergeBase (watermark=zero) when the watermark is missing
 // or unreadable — defensive for older repos that predate the watermark.
 //
+// Known limitation: when the agent branch contains a merge commit from a
+// prior steady-state tick (where origin/main was merged in via second
+// parent), unpushedCommits walks first-parent only. The merge commit is
+// collected as "local-only" and replayCommit will three-way-merge its
+// (first-parent, merge-commit-tree) delta back onto the new disjoint main
+// — which can resurrect content from the old main side of that merge that
+// the rewind was meant to scrub. This is rare in practice (requires a
+// prior in-flight merge AND a subsequent force-rewind of origin/main) and
+// is left as a follow-up; the more common rewind-without-prior-merge case
+// is correctly handled.
+//
 // On a successful reconcile, the watermark is advanced to current local
 // main. Holds rh.lockBranch(agentBranch) for the duration.
 func (rh *repoHandler) reconcileAgentRebase(ctx context.Context, agentBranch string, strategy ConflictStrategy) (AgentReconcileResult, error) {
