@@ -65,9 +65,13 @@ func (r *RemoteHandle) Name() string { return r.name }
 // to the bare repo. The bare repo never has a worktree, so the merge
 // must happen in a transient clone.
 //
-// The branch must already exist on the bare repo (i.e. some agent
-// previously pushed it). This is the helper Phase 3 Category E and the
-// blueprint scenario rely on.
+// The named branch must already exist on the bare repo (i.e. some
+// agent previously pushed it). If origin/main does NOT yet exist on
+// the bare remote — the steady-state shape for the post-rework model
+// where the first agent push targets only agent/<host> — the helper
+// bootstraps main from the named branch instead of attempting a merge,
+// then pushes main. This matches what the eventual merge-to-main
+// feature must do on first promotion of an agent branch to consensus.
 func (r *RemoteHandle) MergeIntoMain(branch, message string) {
 	t := r.sb.t
 	t.Helper()
@@ -75,19 +79,25 @@ func (r *RemoteHandle) MergeIntoMain(branch, message string) {
 	work := t.TempDir()
 	mustGit(t, "", "clone", r.dir, work)
 
-	// Make sure main exists locally and is checked out. The clone
-	// inherits whatever HEAD the bare repo had — usually main if any
-	// agent has pushed main, otherwise the first pushed branch. Force
-	// a checkout of main if the clone landed on something else.
-	mustGit(t, work, "checkout", "-B", "main", "origin/main")
+	if !hasRef(work, "refs/remotes/origin/main") {
+		// First promotion: no consensus main yet. Bootstrap main from the
+		// agent branch directly. The eventual merge-to-main feature has
+		// to handle this same shape — the first agent to push creates
+		// origin/<agent> on an otherwise empty (or main-less) remote, and
+		// promotion seeds main from it.
+		mustGit(t, work, "checkout", "-B", "main", "origin/"+branch)
+		mustGit(t, work, "push", "origin", "main")
+		return
+	}
 
-	// Merge the named branch with --no-ff so a real merge commit is
-	// created (otherwise a fast-forward would just advance the ref and
-	// not produce a distinct merge commit, which the test scenario
-	// expects to be visible).
+	// Steady-state path: origin/main exists. Check it out and merge the
+	// named branch on top with --no-ff so a real merge commit is created
+	// (otherwise a fast-forward would just advance the ref and not
+	// produce a distinct merge commit, which the test scenario expects
+	// to be visible).
+	mustGit(t, work, "checkout", "-B", "main", "origin/main")
 	mustGit(t, work, "merge", "--no-ff", "-m", message,
 		"--allow-unrelated-histories", "origin/"+branch)
-
 	mustGit(t, work, "push", "origin", "main")
 }
 

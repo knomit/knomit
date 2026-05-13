@@ -190,12 +190,12 @@ func TestProperty_MergeIsIdempotent(t *testing.T) {
 // ── P4 ────────────────────────────────────────────────────────────────────
 
 // TestProperty_PushSyncRoundTripPreservesContent: write N random
-// facts to agent A's main, push to a shared bare remote, then a
-// fresh agent B syncs main and must see exactly the same fact set
-// with identical content.
+// facts to agent A's agent branch, push to a shared bare remote,
+// promote agent → main on the remote, then a fresh agent B syncs
+// and must see exactly the same fact set with identical content.
 func TestProperty_PushSyncRoundTripPreservesContent(t *testing.T) {
 	proptestSkip(t)
-	t.Log("P4: random facts on A, push, B syncs, B sees the same set with same content")
+	t.Log("P4: random facts on A's agent, push, promote to main, B syncs, B sees the same set with same content")
 	seed := proptestSeed(t)
 
 	const iterations = 30
@@ -206,25 +206,29 @@ func TestProperty_PushSyncRoundTripPreservesContent(t *testing.T) {
 		remote := sb.BareRemote("origin")
 
 		a := sb.Repo("a").Connect(remote)
-		aMain := a.Branch("main")
+		aAgent := a.Branch("agent/test")
 
 		want := map[string]string{}
 		for i := range n {
 			path := fmt.Sprintf("kb/p4-%d.md", i)
 			body := fmt.Sprintf("body-%d-%d", iter, gen.Intn(1000))
-			aMain.Write(path, testenv.Fact("p4").Body(body), fmt.Sprintf("add %d", i))
+			aAgent.Write(path, testenv.Fact("p4").Body(body), fmt.Sprintf("add %d", i))
 			want[path] = body
 		}
-		aMain.Push()
+		aAgent.Push()
+
+		// Promote A's agent into main on the remote so B's Sync (which
+		// pulls origin/main and replays the agent on top) sees A's facts.
+		remote.MergeIntoMain("agent/test", "promote A's agent to main")
 
 		b := sb.Repo("b").Connect(remote)
-		bMain := b.Branch("main")
-		bMain.Sync()
+		bAgent := b.Branch("agent/test")
+		bAgent.Sync()
 
-		require.Equal(t, len(want), bMain.FactCount(),
+		require.Equal(t, len(want), bAgent.FactCount(),
 			"iter %d: B must see the same number of facts as A pushed", iter)
 		for path, body := range want {
-			bMain.Head().Fact(path).Body().MustContain(body)
+			bAgent.Head().Fact(path).Body().MustContain(body)
 		}
 		a.MustVerify()
 		b.MustVerify()

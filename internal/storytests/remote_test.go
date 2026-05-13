@@ -19,15 +19,16 @@ import (
 // ── E1 ────────────────────────────────────────────────────────────────────
 
 // TestRemote_SinglePushRoundTrip is the simplest happy path: one repo
-// writes on main, pushes, the bare remote has the commit.
+// writes on its agent branch, pushes, the bare remote has the commit.
+// Under the post-rework model agents push to agent/<host>, never to main.
 func TestRemote_SinglePushRoundTrip(t *testing.T) {
-	t.Log("E1: write on main, push, bare remote receives the commit")
+	t.Log("E1: write on agent/test, push, bare remote receives the commit")
 	sb := testenv.NewStoryboard(t)
 	remote := sb.BareRemote("origin")
 	a := sb.Repo("a").Connect(remote)
-	main := a.Branch("main")
-	main.Write("kb/x.md", testenv.Fact("x"), "add x")
-	result := main.Push()
+	agent := a.Branch("agent/test")
+	agent.Write("kb/x.md", testenv.Fact("x"), "add x")
+	result := agent.Push()
 	require.True(t, result.Pushed, "push must report Pushed=true")
 }
 
@@ -40,28 +41,36 @@ func TestRemote_SinglePushRoundTrip(t *testing.T) {
 // already-promoted change), and agent B syncs and observes the
 // modified version.
 func TestRemote_TwoAgentsPromoteToMain(t *testing.T) {
-	t.Log("E2: A writes X v1, pushes; remote merges agent/test into main; remote writes X v2 on main; B syncs; B sees v2")
+	t.Log("E2: A writes X v1, pushes agent/test; remote merges agent/test into main; remote writes X v2 on main; B syncs; B sees v2")
 	sb := testenv.NewStoryboard(t)
 	remote := sb.BareRemote("origin")
 
-	// Agent A writes v1 on main and pushes (the simplest path through
-	// the production sync code that gets a fact onto the bare remote).
+	// Agent A writes v1 on its agent branch and pushes. Under the post-
+	// rework model agents never push to main directly — main is consensus,
+	// promoted from the agent branch by the remote-side merge-to-main
+	// mechanism (simulated below with RemoteHandle.MergeIntoMain).
 	a := sb.Repo("a").Connect(remote)
-	aMain := a.Branch("main")
-	aMain.Write("kb/x.md", testenv.Fact("x").Body("v1"), "A writes v1")
-	aMain.Push()
+	aAgent := a.Branch("agent/test")
+	aAgent.Write("kb/x.md", testenv.Fact("x").Body("v1"), "A writes v1")
+	aAgent.Push()
 
-	// Remote-side: another agent's promoted change (write v2 on main).
+	// Remote-side step 1: promote agent/test into main (simulates the
+	// merge-to-main feature). This puts A's v1 onto origin/main.
+	remote.MergeIntoMain("agent/test", "promote agent/test to main")
+
+	// Remote-side step 2: another agent's already-promoted change writes
+	// v2 directly on main on top of v1.
 	remote.WriteMain("kb/x.md",
 		testenv.Fact("x").Body("v2 promoted"),
 		"third party promoted v2")
 
-	// Agent B connects and syncs main; expects v2 to land.
+	// Agent B connects and syncs; its agent branch should be replayed
+	// onto the new main and observe v2.
 	b := sb.Repo("b").Connect(remote)
-	bMain := b.Branch("main")
-	bMain.Sync()
+	bAgent := b.Branch("agent/test")
+	bAgent.Sync()
 
-	bMain.Head().Fact("kb/x.md").Body().MustContain("v2 promoted")
+	bAgent.Head().Fact("kb/x.md").Body().MustContain("v2 promoted")
 }
 
 // ── E3 ────────────────────────────────────────────────────────────────────
@@ -84,13 +93,13 @@ func TestRemote_TwoAgentsPromoteToMain(t *testing.T) {
 // For E3 here we assert the simpler invariant: connecting to an empty
 // remote and pushing produces a clean Verify on both repo and remote.
 func TestRemote_EmptyRemoteBootstrap(t *testing.T) {
-	t.Log("E3: connect fresh repo to empty bare remote, push, verify clean")
+	t.Log("E3: connect fresh repo to empty bare remote, push agent/test, verify clean")
 	sb := testenv.NewStoryboard(t)
 	remote := sb.BareRemote("origin")
 	a := sb.Repo("a").Connect(remote)
-	main := a.Branch("main")
-	main.Write("kb/seed.md", testenv.Fact("seed"), "seed")
-	result := main.Push()
+	agent := a.Branch("agent/test")
+	agent.Write("kb/seed.md", testenv.Fact("seed"), "seed")
+	result := agent.Push()
 	require.True(t, result.Pushed)
 	a.MustVerify()
 }
@@ -105,65 +114,65 @@ func TestRemote_PushFastForward(t *testing.T) {
 	sb := testenv.NewStoryboard(t)
 	remote := sb.BareRemote("origin")
 	a := sb.Repo("a").Connect(remote)
-	main := a.Branch("main")
-	main.Write("kb/x.md", testenv.Fact("x"), "x")
-	main.Push()
+	agent := a.Branch("agent/test")
+	agent.Write("kb/x.md", testenv.Fact("x"), "x")
+	agent.Push()
 
 	// Now add another commit and push again — should be a fast-forward.
-	main.Write("kb/y.md", testenv.Fact("y"), "y")
-	result := main.Push()
+	agent.Write("kb/y.md", testenv.Fact("y"), "y")
+	result := agent.Push()
 	require.True(t, result.Pushed, "second push must report Pushed=true")
 }
 
 // ── E5 ────────────────────────────────────────────────────────────────────
 
 // TestRemote_PushWithConcurrentRemoteUpdate exercises the production
-// force-push fallback. Two repos push to the same remote in sequence:
-// A pushes, then B (on a separate clone) pushes a divergent commit.
-// The blueprint promise is that B's push wins on the remote AND A's
-// commits remain reachable in A's LOCAL history.
+// force-push fallback. Two repos push to the same agent branch in
+// sequence: A pushes, then B (a separate clone) pushes a divergent
+// commit. The blueprint promise is that B's push wins on the remote
+// AND A's commits remain reachable in A's LOCAL history.
 //
-// In the DSL we use sb.BareRemote shared between two sb.Repo handles.
-// Both sides write on main and push. The second push must succeed
-// (the production Push retries with force-push) and the first push's
-// commit must still be readable via AtCommit on its local snapshot.
+// Under the post-rework model agents always push to agent/<host>. The
+// scenario uses a single agent-branch name ("agent/test") shared by
+// both Storyboard repos — each repo has its own local agent/test ref,
+// but they target the same ref on the bare remote. The force-push
+// semantic is exactly the same as the legacy main-based version.
 func TestRemote_PushWithConcurrentRemoteUpdate(t *testing.T) {
-	t.Log("E5: A pushes, B pushes divergently; B wins on remote, A's local history still has A's commit")
+	t.Log("E5: A pushes, B pushes divergently to agent/test; B wins on remote, A's local history still has A's commit")
 	sb := testenv.NewStoryboard(t)
 	remote := sb.BareRemote("origin")
 
-	// First, A writes and pushes a baseline so the remote has main.
+	// Seed origin/main with a baseline directly so both repos can
+	// bootstrap from a non-empty remote (InitFromRemote requires
+	// origin/main when the remote has any refs). Agents never write
+	// main themselves under the post-rework model — only the remote-
+	// side merge-to-main mechanism does, which WriteMain simulates.
+	remote.WriteMain("kb/baseline.md", testenv.Fact("base"), "baseline")
+
+	// A connects (its local main + agent/test bootstrap to baseline).
 	a := sb.Repo("a").Connect(remote)
-	aMain := a.Branch("main")
-	aMain.Write("kb/baseline.md", testenv.Fact("base"), "baseline")
-	aMain.Push()
+	aAgent := a.Branch("agent/test")
 
-	// B clones via WriteMain — but the simpler path for testing the
-	// force-push fallback is: A and B both write a NEW fact on main
-	// and try to push. Without a fetch in between, B's push diverges
-	// from A's.
-	//
-	// Step 1: A writes "kb/a.md" and does NOT push yet.
-	aSnap := aMain.Write("kb/a.md", testenv.Fact("from-a"), "A writes a")
+	// Step 1: A writes "kb/a.md" on its agent branch and does NOT push yet.
+	aSnap := aAgent.Write("kb/a.md", testenv.Fact("from-a"), "A writes a")
 
-	// Step 2: B comes online, connects, syncs (gets the baseline).
+	// Step 2: B comes online, connects (sees baseline via origin/main).
 	b := sb.Repo("b").Connect(remote)
-	bMain := b.Branch("main")
-	bMain.Sync()
-	// B writes its own divergent commit on top of the baseline (which
-	// does NOT include A's kb/a.md because A hasn't pushed yet).
-	bMain.Write("kb/b.md", testenv.Fact("from-b"), "B writes b")
-	bMain.Push() // B's push is a fast-forward of baseline.
+	bAgent := b.Branch("agent/test")
+	// B writes its own divergent commit on its agent branch. B's local
+	// agent/test history does NOT include A's kb/a.md (A never pushed).
+	bAgent.Write("kb/b.md", testenv.Fact("from-b"), "B writes b")
+	bAgent.Push() // First push of agent/test to origin.
 
-	// Step 3: A pushes its diverged commit. The remote now has B's
-	// commit at HEAD; A's parent commit is the baseline. This is a
-	// non-fast-forward situation. The production Push retries with
-	// force-push, which means B's commit gets overwritten.
-	aMain.Push()
+	// Step 3: A pushes its diverged agent commit. The remote now has
+	// B's commit at refs/heads/agent/test; A's local history branches
+	// off baseline independently of B's. The production Push force-
+	// pushes, overwriting B's tip on the remote.
+	aAgent.Push()
 
 	// A's local history still has A's commit (force-push only affects
 	// the remote ref).
-	a.Branch("main").At(aSnap).Fact("kb/a.md").MustExist()
+	a.Branch("agent/test").At(aSnap).Fact("kb/a.md").MustExist()
 }
 
 // ── E6 ────────────────────────────────────────────────────────────────────
@@ -195,30 +204,35 @@ func TestRemote_SyncMergesMainIntoAgent(t *testing.T) {
 
 // ── E7 ────────────────────────────────────────────────────────────────────
 
-// TestRemote_RoundTripPreservesHistory asserts that A pushes 5 commits,
-// B syncs, B's log for each touched fact matches A's log. Both repos
-// see the same commit chain.
+// TestRemote_RoundTripPreservesHistory asserts that A pushes 5 commits
+// on its agent branch, the agent branch is promoted to main on the
+// remote, B syncs, and B's log for each touched fact matches A's log.
+// Both repos see the same commit chain.
 func TestRemote_RoundTripPreservesHistory(t *testing.T) {
-	t.Log("E7: A pushes 5 commits to main, B syncs; both see the same chain")
+	t.Log("E7: A pushes 5 commits to agent/test; promote to main; B syncs; both see the same chain")
 	sb := testenv.NewStoryboard(t)
 	remote := sb.BareRemote("origin")
 	a := sb.Repo("a").Connect(remote)
-	aMain := a.Branch("main")
+	aAgent := a.Branch("agent/test")
 
 	for i := range 5 {
-		aMain.Write("kb/item"+itoa(i)+".md", testenv.Fact("item"), "add")
+		aAgent.Write("kb/item"+itoa(i)+".md", testenv.Fact("item"), "add")
 	}
-	aMain.Push()
+	aAgent.Push()
+
+	// Promote A's agent branch into main on the remote so subsequent
+	// agents inherit the full chain through origin/main.
+	remote.MergeIntoMain("agent/test", "promote A's agent to main")
 
 	b := sb.Repo("b").Connect(remote)
-	bMain := b.Branch("main")
-	bMain.Sync()
+	bAgent := b.Branch("agent/test")
+	bAgent.Sync()
 
 	// B sees all 5 items.
 	for i := range 5 {
-		bMain.Head().Fact("kb/item" + itoa(i) + ".md").MustExist()
+		bAgent.Head().Fact("kb/item" + itoa(i) + ".md").MustExist()
 	}
 
 	// Both repos report the same fact count under kb/.
-	require.Equal(t, aMain.FactCount(), bMain.FactCount(), "fact counts must match after sync")
+	require.Equal(t, aAgent.FactCount(), bAgent.FactCount(), "fact counts must match after sync")
 }
