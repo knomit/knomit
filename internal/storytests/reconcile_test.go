@@ -96,13 +96,17 @@ func TestReconcile_G3_CommonAncestorNoRemoteAgent(t *testing.T) {
 	// Remote main advances (some other agent's work was promoted).
 	remote.WriteMain("kb/promoted.md", testenv.Fact("promoted"), "promoted by other")
 
-	// Next sync triggers replay.
-	agent.Sync()
+	// Next sync triggers reconcile. With the merge-based design, divergent
+	// histories (agent has kb/local.md, main has kb/promoted.md, sharing
+	// the seed root) produce a single merge commit.
+	syncRes := agent.Sync()
+	require.Equal(t, "merge", syncRes.Agent.Mode,
+		"diverged histories produce one merge commit")
 
 	postAgent := a.Branch("agent/test")
 	require.True(t, postAgent.HasFile("kb/seed.md"), "seed survived")
 	require.True(t, postAgent.HasFile("kb/promoted.md"), "promoted change pulled in")
-	require.True(t, postAgent.HasFile("kb/local.md"), "local change preserved via replay")
+	require.True(t, postAgent.HasFile("kb/local.md"), "local change preserved via merge")
 }
 
 // G4: origin/agent/<host> already exists (e.g. another instance pushed
@@ -239,7 +243,13 @@ func TestReconcile_G7_PostPushPicksUpMainAdvance(t *testing.T) {
 	remote.WriteMain("kb/promoted.md", testenv.Fact("promoted"), "promoted by other")
 
 	// Agent syncs — must see the new main content on its branch.
-	agent.Sync()
+	// Post-push main advance reconciles via merge (divergent: agent has
+	// kb/local.md, main has kb/promoted.md) or fast-forward; never via
+	// the rebase fallback (which only fires on origin/main rewind).
+	syncRes := agent.Sync()
+	require.Contains(t, []string{"merge", "ff"}, syncRes.Agent.Mode,
+		"post-push main advance must take the merge path, not rebase")
+
 	postAgent := a.Branch("agent/test")
 	require.True(t, postAgent.HasFile("kb/promoted.md"),
 		"agent must pick up main advance even after its own push")
