@@ -126,6 +126,21 @@ func (rh *repoHandler) unpushedCommits(localTip, upstreamTip plumbing.Hash) ([]*
 // For a root commit (orig has no parents), the "base" is the empty tree;
 // the merge becomes "apply every file from orig.TreeHash onto ontoTree
 // with strategy resolving conflicts on overlapping paths".
+//
+// The strategy parameter is interpreted from the replay CALLER's
+// perspective (agent-machine vs origin-server):
+//
+//   - StrategyLocalWins  → the agent's (orig's) content wins overlapping
+//     conflicts. This is the default for origin sync — the agent's local
+//     edits are preserved when both sides modified the same path.
+//   - StrategyRemoteWins → the upstream's (ontoCommit's) content wins.
+//
+// Note the inversion versus mergeTreesWithStrategy: that helper's
+// "Local/Remote" refers to dst/src (merge-target/merge-source), while
+// the user-facing replay framing here refers to agent/origin. Inside
+// replayCommit, orig is passed as src and ontoCommit as dst, so the
+// two namings are opposites. We translate at the boundary so callers
+// pass the strategy they actually mean.
 func (rh *repoHandler) replayCommit(
 	ctx context.Context,
 	orig *object.Commit,
@@ -158,10 +173,29 @@ func (rh *repoHandler) replayCommit(
 		baseCommit = &object.Commit{TreeHash: emptyTreeHash}
 	}
 
+	// Strategy translation: in the user-facing replay framing, "Local"
+	// refers to this machine's agent (which IS the src commit being
+	// replayed). In mergeTreesWithStrategy's framing, "Local" = dst (the
+	// side being updated, which is ontoCommit/upstream here). The two
+	// "Local"s are OPPOSITES. Invert when calling the merge helper so
+	// callers can pass the strategy they actually mean. (See replayCommit
+	// doc comment.)
+	var mergeStrategy ConflictStrategy
+	switch strategy {
+	case StrategyLocalWins:
+		mergeStrategy = StrategyRemoteWins
+	case StrategyRemoteWins:
+		mergeStrategy = StrategyLocalWins
+	default:
+		// Empty / unrecognized: default to agent-wins (the project decision
+		// for origin sync replay).
+		mergeStrategy = StrategyRemoteWins
+	}
+
 	// Three-way merge: base = baseCommit (orig's parent or empty),
 	//                  src  = orig (what orig adds),
 	//                  dst  = ontoCommit (what we're replaying on top of).
-	mergedTreeHash, err := rh.mergeTreesWithStrategy(ctx, baseCommit, orig, ontoCommit, strategy)
+	mergedTreeHash, err := rh.mergeTreesWithStrategy(ctx, baseCommit, orig, ontoCommit, mergeStrategy)
 	if err != nil {
 		return plumbing.ZeroHash, fmt.Errorf("replayCommit: three-way merge: %w", err)
 	}

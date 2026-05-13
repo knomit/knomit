@@ -232,6 +232,14 @@ func TestReplayCommit_PreservesAuthorAndMessage(t *testing.T) {
 	require.NoError(t, err, "base file preserved")
 }
 
+// TestReplayCommit_LocalWinsOnConflict drives a true Modify-vs-Modify
+// three-way merge inside replayCommit. The seed (kb/shared.md = "base-version")
+// is shared between agent/test and main so the diff (base → c1) registers as
+// Modify, and dst (main) has independently modified the same path — the only
+// shape that exercises the strategy branch in mergeTreesWithStrategy.
+//
+// In the replay caller's framing, StrategyLocalWins means "agent wins": c1's
+// content ("agent-version") must survive on the replayed commit.
 func TestReplayCommit_LocalWinsOnConflict(t *testing.T) {
 	dir := t.TempDir()
 	svc, err := Open(filepath.Join(dir, "k.db"))
@@ -239,15 +247,27 @@ func TestReplayCommit_LocalWinsOnConflict(t *testing.T) {
 	t.Cleanup(func() { _ = svc.Close() })
 	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
 
+	// 1. Seed kb/shared.md on agent/test. This commit becomes c1's parent
+	//    AND will be where main starts — making it the merge base.
+	baseHash := writeMergeFact(t, svc, "agent/test", "kb/shared.md", "Shared", "base-version")
+
+	// 2. Reset main to that commit so both branches share the seed.
+	require.NoError(t, svc.rh.gits.SetReference(
+		plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), plumbing.NewHash(baseHash)),
+	))
+
+	// 3. Agent modifies kb/shared.md (Modify on agent side).
 	c1Hash := writeMergeFact(t, svc, "agent/test", "kb/shared.md", "Shared", "agent-version")
 	c1, err := svc.rh.repo.CommitObject(plumbing.NewHash(c1Hash))
 	require.NoError(t, err)
+	// Sanity-check: c1's parent is the seed commit.
+	require.Equal(t, plumbing.NewHash(baseHash), c1.ParentHashes[0], "c1 must parent the seed")
 
+	// 4. Main also modifies the same file (Modify on upstream side).
 	mainHash := writeMergeFact(t, svc, "main", "kb/shared.md", "Shared", "main-version")
-	main, err := svc.rh.repo.CommitObject(plumbing.NewHash(mainHash))
-	require.NoError(t, err)
 
-	newHash, err := svc.rh.replayCommit(context.Background(), c1, main.Hash, StrategyLocalWins)
+	// 5. Replay with LocalWins (agent's perspective: agent should win).
+	newHash, err := svc.rh.replayCommit(context.Background(), c1, plumbing.NewHash(mainHash), StrategyLocalWins)
 	require.NoError(t, err)
 	newCommit, err := svc.rh.repo.CommitObject(newHash)
 	require.NoError(t, err)
@@ -258,5 +278,37 @@ func TestReplayCommit_LocalWinsOnConflict(t *testing.T) {
 	require.NoError(t, err)
 	content, err := f.Contents()
 	require.NoError(t, err)
-	require.Contains(t, content, "agent-version", "LocalWins: agent content survives conflict")
+	require.Contains(t, content, "agent-version", "LocalWins on Modify-vs-Modify: agent content must survive")
+}
+
+// TestReplayCommit_RemoteWinsOnConflict is the inverse of the LocalWins test.
+// Same Modify-vs-Modify setup, but with StrategyRemoteWins — the upstream
+// (main) content must survive.
+func TestReplayCommit_RemoteWinsOnConflict(t *testing.T) {
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = svc.Close() })
+	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+
+	baseHash := writeMergeFact(t, svc, "agent/test", "kb/shared.md", "Shared", "base-version")
+	require.NoError(t, svc.rh.gits.SetReference(
+		plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), plumbing.NewHash(baseHash)),
+	))
+	c1Hash := writeMergeFact(t, svc, "agent/test", "kb/shared.md", "Shared", "agent-version")
+	c1, err := svc.rh.repo.CommitObject(plumbing.NewHash(c1Hash))
+	require.NoError(t, err)
+	mainHash := writeMergeFact(t, svc, "main", "kb/shared.md", "Shared", "main-version")
+
+	newHash, err := svc.rh.replayCommit(context.Background(), c1, plumbing.NewHash(mainHash), StrategyRemoteWins)
+	require.NoError(t, err)
+	newCommit, err := svc.rh.repo.CommitObject(newHash)
+	require.NoError(t, err)
+	tree, err := newCommit.Tree()
+	require.NoError(t, err)
+	f, err := tree.File("kb/shared.md")
+	require.NoError(t, err)
+	content, err := f.Contents()
+	require.NoError(t, err)
+	require.Contains(t, content, "main-version", "RemoteWins on Modify-vs-Modify: upstream content must survive")
 }
