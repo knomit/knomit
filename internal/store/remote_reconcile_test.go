@@ -655,6 +655,14 @@ func TestReconcileAgent_WatermarkPreservedAcrossTicks(t *testing.T) {
 	res, err := svc.rh.reconcileAgent(context.Background(), "agent/test", StrategyLocalWins)
 	require.NoError(t, err)
 	require.True(t, res.Replayed)
+	// The tick-2 walk goes back to the previous watermark (main1), so it
+	// includes both the replayed local-1 (whose parent is main1) and the
+	// fresh local-2. Re-replaying local-1 is a tree-level no-op but
+	// produces a new commit hash so the agent stays linear on top of
+	// main2. Locking this in so a future regression doesn't silently
+	// drop replayed commits or stop re-replaying after the first tick.
+	require.Equal(t, 2, res.NumReplayed,
+		"tick 2 replays both local-1 (re-replay) and local-2")
 
 	wm2, err := svc.rh.readAgentBase("agent/test")
 	require.NoError(t, err)

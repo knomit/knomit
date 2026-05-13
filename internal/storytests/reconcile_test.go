@@ -10,6 +10,9 @@
 //	G6 origin/main rewind — agent re-migrates onto new origin/main.
 //	G7 post-push main advance — agent must keep consuming main updates after
 //	   its own first push (the design bug fixed by the watermark rework).
+//	G8 adopt origin/agent after main advanced — watermark must seed to the
+//	   merge base so subsequent main scrubs propagate (the bootstrap-watermark
+//	   bug fixed by the InitFromRemote MergeBase seed).
 package storytests
 
 import (
@@ -242,4 +245,47 @@ func TestReconcile_G7_PostPushPicksUpMainAdvance(t *testing.T) {
 		"agent must pick up main advance even after its own push")
 	require.True(t, postAgent.HasFile("kb/local.md"), "local change preserved")
 	require.True(t, postAgent.HasFile("kb/seed.md"), "seed preserved")
+}
+
+// G8: Adopt origin/agent after main has advanced past the last push.
+// When a new repo instance connects to origin where (a) origin/agent
+// exists with the agent's pushed state and (b) origin/main has advanced
+// (e.g., scrubbed a file) since that push, the watermark must be seeded
+// to MergeBase(origin/agent, origin/main) so the next reconcile's walk
+// stops there cleanly. If seeded to current origin/main, the walk would
+// reach root and resurrect scrubbed files via re-replay.
+func TestReconcile_G8_AdoptOriginAgentAfterMainAdvanced(t *testing.T) {
+	t.Log("G8: adopt origin/agent at older main; subsequent main delete must propagate")
+	sb := testenv.NewStoryboard(t)
+	remote := sb.BareRemote("origin")
+	remote.WriteMain("kb/keep.md", testenv.Fact("keep"), "seed")
+	remote.WriteMain("kb/scrub-me.md", testenv.Fact("scrub-me"), "to be deleted")
+
+	// First agent: writes and pushes. origin/agent now exists with both files.
+	first := sb.Repo("first").Connect(remote)
+	firstAgent := first.Branch("agent/test")
+	require.True(t, firstAgent.HasFile("kb/scrub-me.md"))
+	firstAgent.Write("kb/local.md", testenv.Fact("local"), "local before scrub")
+	firstAgent.Push()
+
+	// Main advances: admin deletes scrub-me via a forward delete commit.
+	remote.DeleteMain("kb/scrub-me.md", "scrub")
+
+	// Second instance connects (e.g., reinstall on a new machine with the
+	// same hostname). It adopts origin/agent (which still has scrub-me)
+	// but origin/main has advanced past the delete.
+	second := sb.Repo("second").Connect(remote)
+	secondAgent := second.Branch("agent/test")
+
+	// Bug repro: WITHOUT the fix, secondAgent's branch would resurrect
+	// scrub-me on the next reconcile because the watermark would point to
+	// current origin/main (not on agent's chain) and unpushedCommits would
+	// walk to root.
+	secondAgent.Sync()
+	postAgent := second.Branch("agent/test")
+
+	require.True(t, postAgent.HasFile("kb/keep.md"), "kept file preserved")
+	require.True(t, postAgent.HasFile("kb/local.md"), "local change preserved")
+	require.False(t, postAgent.HasFile("kb/scrub-me.md"),
+		"scrubbed file must drop from agent (was deleted on main after last push)")
 }

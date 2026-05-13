@@ -132,6 +132,28 @@ func (r *RemoteHandle) WriteMain(path string, spec FactSpec, message string) {
 	mustGit(t, work, "push", "origin", "main")
 }
 
+// DeleteMain removes a path from main on the bare remote in a new commit.
+// Simulates a forward delete on the consensus branch — e.g. an admin
+// scrubbing a file after some agent had pushed a chain that included it.
+// Mirrors WriteMain's clone-edit-push pattern but does `git rm` + commit
+// instead of writing a file. The path must already exist on origin/main;
+// the helper fails the test otherwise.
+func (r *RemoteHandle) DeleteMain(path, message string) {
+	t := r.sb.t
+	t.Helper()
+
+	work := t.TempDir()
+	mustGit(t, "", "clone", r.dir, work)
+
+	if !hasRef(work, "refs/remotes/origin/main") {
+		t.Fatalf("DeleteMain: origin/main does not exist on %s", r.name)
+	}
+	mustGit(t, work, "checkout", "-B", "main", "origin/main")
+	mustGit(t, work, "rm", path)
+	mustGit(t, work, "commit", "-m", message)
+	mustGit(t, work, "push", "origin", "main")
+}
+
 // WriteDisjointRootOnMain writes a brand-new root commit on main of the
 // bare remote with no relation to any previous commit. Used by tests that
 // model the "origin/main was force-rewound by an admin" recovery path

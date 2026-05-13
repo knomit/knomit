@@ -287,34 +287,68 @@ func (s *Service) InitFromRemote(originURL string, auth transport.AuthMethod, ag
 		return fmt.Errorf("InitFromRemote: set local main: %w", err)
 	}
 
-	// Bootstrap local agent. If origin/agent/<host> exists, start there;
-	// otherwise start at origin/main. Either way reconcileAgent (called by
-	// the caller after init via the sync loop) is a no-op at this point —
-	// there are no local commits to replay. We just need the ref to exist.
+	// Bootstrap local agent and compute the watermark in the same branch
+	// so the origin/agent lookup happens exactly once.
+	//
+	// If origin/agent/<host> exists, adopt it: the local agent ref points
+	// at the adopted tip, and the watermark must be the main commit that
+	// chain last branched from, i.e. MergeBase(origin/agent, origin/main).
+	// Seeding the watermark to current origin/main would be wrong when
+	// origin/main has advanced past the last push — the current main
+	// commit is not on origin/agent's first-parent chain, so the next
+	// reconcile's unpushedCommits walk would reach root and replay every
+	// ancestor (including old main commits), resurrecting files that
+	// main has since deleted under StrategyLocalWins.
+	//
+	// If origin/agent/<host> does NOT exist, bootstrap from origin/main:
+	// the agent ref IS origin/main, so the watermark equals it.
+	//
+	// Watermark = the main commit the agent's chain last branched from.
+	// For bootstrap-from-main this equals origin/main. For adoption of an
+	// existing origin/agent, this equals MergeBase(origin/agent, origin/main).
+	// The watermark commit must be on agent's first-parent chain so the
+	// unpushedCommits walk stops there cleanly.
 	agentRefName := plumbing.NewBranchReferenceName(agentBranch)
+	var watermarkHash plumbing.Hash
 	if remoteAgentRef, err := s.rh.gits.Reference(plumbing.NewRemoteReferenceName("origin", agentBranch)); err == nil {
+		// Adopt path: agent ref points at the adopted origin/agent tip.
 		if err := s.rh.gits.SetReference(plumbing.NewHashReference(agentRefName, remoteAgentRef.Hash())); err != nil {
 			return fmt.Errorf("InitFromRemote: set agent from remote agent: %w", err)
 		}
+		remoteAgentCommit, err := s.rh.repo.CommitObject(remoteAgentRef.Hash())
+		if err != nil {
+			return fmt.Errorf("InitFromRemote: load remote agent commit: %w", err)
+		}
+		originMainCommit, err := s.rh.repo.CommitObject(originMainRef.Hash())
+		if err != nil {
+			return fmt.Errorf("InitFromRemote: load origin main commit: %w", err)
+		}
+		bases, err := remoteAgentCommit.MergeBase(originMainCommit)
+		if err != nil {
+			return fmt.Errorf("InitFromRemote: merge-base(remote agent, origin main): %w", err)
+		}
+		if len(bases) == 0 {
+			// Disjoint histories — fall back to current origin/main and
+			// let the next reconcile's disjoint-replay handle it. Shape
+			// matches scenario G2.
+			watermarkHash = originMainRef.Hash()
+		} else {
+			watermarkHash = bases[0].Hash
+		}
 	} else {
+		// Bootstrap-from-main path: agent ref is origin/main, watermark
+		// equals it.
 		if err := s.rh.gits.SetReference(plumbing.NewHashReference(agentRefName, originMainRef.Hash())); err != nil {
 			return fmt.Errorf("InitFromRemote: set agent from main: %w", err)
 		}
+		watermarkHash = originMainRef.Hash()
 	}
 
 	if err := s.rh.gits.SetReference(plumbing.NewSymbolicReference(plumbing.HEAD, agentRefName)); err != nil {
 		return fmt.Errorf("InitFromRemote: set HEAD: %w", err)
 	}
 
-	// Seed the per-agent watermark to local main. This is correct both
-	// when the agent ref is being bootstrapped from origin/main AND when
-	// it's being adopted from origin/agent/<host>: in both cases the
-	// watermark records "the main commit this agent has consumed", which
-	// is local main right now. (In the adopt-from-origin-agent case the
-	// agent tip may be a descendant of an older main — that's fine, the
-	// next reconcile's unpushedCommits walk will find the agent's local
-	// commits between the watermark and the new main.)
-	if err := s.rh.writeAgentBase(agentBranch, originMainRef.Hash()); err != nil {
+	if err := s.rh.writeAgentBase(agentBranch, watermarkHash); err != nil {
 		return fmt.Errorf("InitFromRemote: seed agent watermark: %w", err)
 	}
 
