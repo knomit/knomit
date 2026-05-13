@@ -248,6 +248,27 @@ func (b *repoBuilder) build() *RepoInstance {
 
 		currentSvc.SetOnCommit(ri.onCommit)
 
+		// One synchronous reconcile so the migration / token-refresh happens
+		// on this call. Fail-fast: if the reconcile errors, return the
+		// error to the HAL handler so the HTTP response surfaces a bad
+		// token (or unreachable origin) immediately. The loops are NOT
+		// started on failure — the user must retry SetRemote (typically
+		// with a corrected token).
+		//
+		// Rationale: this endpoint exists primarily to (a) configure
+		// origin for the first time, and (b) refresh an expired token.
+		// In both cases, immediate feedback on bad credentials is worth
+		// far more than tolerating transient network blips (which the
+		// user can recover from by retrying SetRemote with the same
+		// token).
+		auth, authErr := resolveAuth(cfg.Remote, keyPath)
+		if authErr != nil {
+			return fmt.Errorf("ActivateSync: resolve auth: %w", authErr)
+		}
+		if _, err := currentSvc.Remote().Sync(newCtx, agentBranch, auth); err != nil {
+			return fmt.Errorf("ActivateSync: initial reconcile failed: %w", err)
+		}
+
 		syncWg.Add(2)
 		authFn := makeRemoteAuthFn(cfg.Remote, keyPath)
 		go runSyncLoop(newCtx, &syncWg, currentSvc, hub, name, agentBranch, authFn)
