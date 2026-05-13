@@ -424,3 +424,50 @@ func (rh *repoHandler) replayOntoUpstream(
 		NewTip:      current.String(),
 	}, nil
 }
+
+// reconcileAgentRebase is the rewind-fallback reconcile path. Reads the
+// watermark, walks the agent's local-only commits, and replays them onto
+// current local main via replayOntoUpstream. Only invoked from
+// reconcileAgent when reconcileMain reported Rewound=true.
+//
+// Falls back to MergeBase (watermark=zero) when the watermark is missing
+// or unreadable — defensive for older repos that predate the watermark.
+//
+// On a successful reconcile, the watermark is advanced to current local
+// main. Holds rh.lockBranch(agentBranch) for the duration.
+func (rh *repoHandler) reconcileAgentRebase(ctx context.Context, agentBranch string, strategy ConflictStrategy) (AgentReconcileResult, error) {
+	unlock := rh.lockBranch(agentBranch)
+	defer unlock()
+
+	mainRefName := plumbing.NewBranchReferenceName("main")
+	mainRef, err := rh.gits.Reference(mainRefName)
+	if err != nil {
+		return AgentReconcileResult{}, fmt.Errorf("reconcileAgentRebase: read local main: %w", err)
+	}
+	mainHash := mainRef.Hash()
+
+	base, err := rh.readAgentBase(agentBranch)
+	if err != nil {
+		log.Warn().
+			Str("branch", agentBranch).
+			Err(err).
+			Msg("reconcileAgentRebase: watermark missing; falling back to MergeBase")
+		base = plumbing.ZeroHash
+	}
+
+	log.Info().
+		Str("branch", agentBranch).
+		Str("upstream", "refs/heads/main").
+		Str("base", shortRefHash(base)).
+		Msg("reconcileAgentRebase: replaying onto local main with watermark base")
+
+	res, err := rh.replayOntoUpstream(ctx, agentBranch, mainHash, base, strategy)
+	if err != nil {
+		return res, err
+	}
+
+	if err := rh.writeAgentBase(agentBranch, mainHash); err != nil {
+		return res, fmt.Errorf("reconcileAgentRebase: write watermark: %w", err)
+	}
+	return res, nil
+}

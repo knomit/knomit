@@ -112,11 +112,11 @@ func (ri *remoteIndex) reconcileNow(ctx context.Context, agentBranch string) (Sy
 		return SyncResult{Main: mainRes}, fmt.Errorf("Sync: reconcileMain: %w", err)
 	}
 
-	// reconcileAgent always reconciles against local main (now aligned to
-	// origin/main). The watermark drives the unpushedCommits walk, so
-	// fast-forward / replay / rewind are all handled uniformly — no
-	// special case for mainRes.Rewound is needed here anymore.
-	agentRes, err := ri.rh.reconcileAgent(ctx, agentBranch, StrategyLocalWins)
+	// reconcileAgent dispatches on mainRes.Rewound:
+	//   - false → merge local main into agent (steady-state, one merge commit at most).
+	//   - true  → rebase fallback: replay agent's local-only commits onto the
+	//             disjoint new main, dropping any files scrubbed by the rewind.
+	agentRes, err := ri.rh.reconcileAgent(ctx, agentBranch, StrategyLocalWins, mainRes.Rewound)
 	if err != nil {
 		return SyncResult{Main: mainRes, Agent: agentRes}, fmt.Errorf("Sync: reconcileAgent: %w", err)
 	}

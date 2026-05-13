@@ -163,78 +163,28 @@ func (rh *repoHandler) purgeBranchCommits(ctx context.Context, branch string) er
 	return nil
 }
 
-// reconcileAgent reconciles agentBranch by replaying its unpushed commits
-// (those since the watermark) onto current local main. Conflict resolution
-// uses the supplied strategy (agent-facing semantics — see replayCommit).
+// reconcileAgent dispatches to either the merge-based steady-state path
+// (reconcileAgentMerge) or the rebase fallback (reconcileAgentRebase)
+// depending on whether reconcileMain detected a force-rewind on origin/main.
 //
-// The "upstream" for the agent is now local main (which reconcileMain has
-// already aligned to origin/main). origin/agent/<host> is a push target
-// only; the agent never reads from it after bootstrap.
+// Routing:
+//   - mainRewound=false → reconcileAgentMerge (creates at most one merge
+//     commit, no hash rewriting).
+//   - mainRewound=true  → rebase fallback: walks agent's local-only commits
+//     since the watermark and replays them onto the
+//     disjoint new main. This is the only path where
+//     hash rewriting happens, and it's necessary for
+//     scrub semantics to work (G6).
 //
-// A per-branch watermark (refs/knomit/agent-base/<branch>) records the
-// main commit the agent last consumed. unpushedCommits uses the
-// watermark as its base, so:
+// The watermark is updated to current local main on both paths so it
+// always has a usable base for a future rewind.
 //
-//   - Forward main advances merge cleanly into the agent (the watermark
-//     stays behind main; commits before main and after the watermark
-//     don't exist on the agent, so the agent fast-forwards or replays
-//     local-only commits on top of the new main).
-//   - Forward main deletions correctly drop files from the agent (the
-//     fast-forward picks up the deletion).
-//   - Main force-push rewinds drop scrubbed files from the agent: when
-//     the watermark equals the old main and the agent has no local
-//     commits since it, unpushedCommits returns empty and the agent
-//     fast-forwards onto the new main.
-//
-// If the watermark is missing or unreadable (first reconcile after
-// bootstrap, or transient corruption), we fall back to MergeBase via a
-// zero explicit base — the legacy behavior. This is defensive; InitRepo
-// and InitFromRemote both seed the watermark, so the missing case
-// shouldn't be hit in steady state.
-//
-// On a successful reconcile, the watermark is advanced to current
-// local main. Holds rh.lockBranch(agentBranch) for the duration.
-func (rh *repoHandler) reconcileAgent(ctx context.Context, agentBranch string, strategy ConflictStrategy) (AgentReconcileResult, error) {
-	unlock := rh.lockBranch(agentBranch)
-	defer unlock()
-
-	mainRefName := plumbing.NewBranchReferenceName("main")
-	mainRef, err := rh.gits.Reference(mainRefName)
-	if err != nil {
-		return AgentReconcileResult{}, fmt.Errorf("reconcileAgent: read local main: %w", err)
+// Holds rh.lockBranch(agentBranch) (via the inner primitive) for the duration.
+func (rh *repoHandler) reconcileAgent(ctx context.Context, agentBranch string, strategy ConflictStrategy, mainRewound bool) (AgentReconcileResult, error) {
+	if mainRewound {
+		return rh.reconcileAgentRebase(ctx, agentBranch, strategy)
 	}
-	mainHash := mainRef.Hash()
-
-	base, err := rh.readAgentBase(agentBranch)
-	if err != nil {
-		// Watermark missing — fall back to MergeBase by passing ZeroHash.
-		// This handles older repos that predate the watermark and any
-		// transient ref corruption. Steady-state init paths seed it.
-		log.Warn().
-			Str("branch", agentBranch).
-			Err(err).
-			Msg("reconcileAgent: watermark missing; falling back to MergeBase")
-		base = plumbing.ZeroHash
-	}
-
-	log.Info().
-		Str("branch", agentBranch).
-		Str("upstream", "refs/heads/main").
-		Str("base", shortRefHash(base)).
-		Msg("reconcileAgent: replaying onto local main with watermark base")
-
-	res, err := rh.replayOntoUpstream(ctx, agentBranch, mainHash, base, strategy)
-	if err != nil {
-		return res, err
-	}
-
-	// Advance the watermark to current local main. This is the commit the
-	// agent has now "consumed" — the next Sync tick's unpushedCommits walk
-	// will use it as its stop point.
-	if err := rh.writeAgentBase(agentBranch, mainHash); err != nil {
-		return res, fmt.Errorf("reconcileAgent: write watermark: %w", err)
-	}
-	return res, nil
+	return rh.reconcileAgentMerge(ctx, agentBranch, strategy)
 }
 
 // shortRefHash returns the first 8 chars of a ref hash for log output, or
