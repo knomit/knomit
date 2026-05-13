@@ -451,3 +451,28 @@ func (rh *repoHandler) reconcileMain(ctx context.Context) (MainReconcileResult, 
 		Msg("reconcileMain: origin/main is not a descendant of local main; force-updated")
 	return MainReconcileResult{Rewound: true, NewTip: originHash.String()}, nil
 }
+
+// reconcileAgent reconciles localBranch (the agent branch for this machine)
+// with its upstream. Upstream is origin/agent/<host> when present, else
+// origin/main. Conflict resolution uses the supplied strategy
+// (agent-facing semantics — see replayCommit).
+//
+// Holds rh.lockBranch(agentBranch) for the duration. Returns the
+// ReplayOntoUpstreamResult from the underlying replay so callers can
+// distinguish no-op / fast-forward / replay.
+func (rh *repoHandler) reconcileAgent(ctx context.Context, agentBranch string, strategy ConflictStrategy) (ReplayOntoUpstreamResult, error) {
+	unlock := rh.lockBranch(agentBranch)
+	defer unlock()
+
+	upstream, err := rh.resolveAgentUpstream(ctx, agentBranch)
+	if err != nil {
+		return ReplayOntoUpstreamResult{}, err
+	}
+	log.Info().
+		Str("branch", agentBranch).
+		Str("upstream", upstream.refName.String()).
+		Bool("own_agent", upstream.isOwnAgent).
+		Msg("reconcileAgent: resolved upstream")
+
+	return rh.replayOntoUpstream(ctx, agentBranch, upstream.hash, strategy)
+}

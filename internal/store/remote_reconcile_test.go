@@ -507,3 +507,63 @@ func TestReconcileMain_CreatesLocalMainWhenMissing(t *testing.T) {
 	require.True(t, res.FastForward, "creating missing main is reported as fast-forward")
 	require.Equal(t, plumbing.NewHash(originHash), mustHeadHash(t, svc, "main"), "local main now at origin")
 }
+
+func TestReconcileAgent_UsesAgentUpstreamWhenAvailable(t *testing.T) {
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = svc.Close() })
+	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+
+	// Make origin/agent/test ahead of local agent.
+	upstreamHash := writeMergeFact(t, svc, "agent/test", "kb/u.md", "U", "v1")
+	require.NoError(t, svc.rh.gits.SetReference(
+		plumbing.NewHashReference(plumbing.NewRemoteReferenceName("origin", "agent/test"), plumbing.NewHash(upstreamHash)),
+	))
+	// Move local agent back so it's behind.
+	upstreamCommit, err := svc.rh.repo.CommitObject(plumbing.NewHash(upstreamHash))
+	require.NoError(t, err)
+	require.NoError(t, svc.rh.gits.SetReference(
+		plumbing.NewHashReference(plumbing.NewBranchReferenceName("agent/test"), upstreamCommit.ParentHashes[0]),
+	))
+	// origin/main also present but should be IGNORED (agent upstream is preferred).
+	require.NoError(t, svc.rh.gits.SetReference(
+		plumbing.NewHashReference(plumbing.NewRemoteReferenceName("origin", "main"), upstreamCommit.ParentHashes[0]),
+	))
+
+	res, err := svc.rh.reconcileAgent(context.Background(), "agent/test", StrategyLocalWins)
+	require.NoError(t, err)
+	require.True(t, res.FastForward, "agent fast-forwards to origin/agent")
+	require.Equal(t, plumbing.NewHash(upstreamHash), mustHeadHash(t, svc, "agent/test"))
+}
+
+func TestReconcileAgent_FallsBackToMainWhenNoAgentUpstream(t *testing.T) {
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = svc.Close() })
+	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+
+	// One local commit on agent, one on main; only origin/main is present.
+	writeMergeFact(t, svc, "agent/test", "kb/a.md", "A", "v1")
+	mainHash := writeMergeFact(t, svc, "main", "kb/m.md", "M", "v1")
+	require.NoError(t, svc.rh.gits.SetReference(
+		plumbing.NewHashReference(plumbing.NewRemoteReferenceName("origin", "main"), plumbing.NewHash(mainHash)),
+	))
+
+	res, err := svc.rh.reconcileAgent(context.Background(), "agent/test", StrategyLocalWins)
+	require.NoError(t, err)
+	require.True(t, res.Replayed)
+	require.Equal(t, 1, res.NumReplayed)
+
+	// Tree at new tip has both files.
+	newTip := mustHeadHash(t, svc, "agent/test")
+	commit, err := svc.rh.repo.CommitObject(newTip)
+	require.NoError(t, err)
+	tree, err := commit.Tree()
+	require.NoError(t, err)
+	_, err = tree.File("kb/a.md")
+	require.NoError(t, err)
+	_, err = tree.File("kb/m.md")
+	require.NoError(t, err)
+}
