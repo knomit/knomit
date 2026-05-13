@@ -595,3 +595,12 @@ func TestSync_OrchestratesMainAndAgent(t *testing.T) {
 	require.True(t, res.Agent.Replayed, "agent must replay")
 	require.Equal(t, plumbing.NewHash(originMain), mustHeadHash(t, svc, "main"))
 }
+
+func TestPush_ForcePushesAgent(t *testing.T) {
+	t.Log("agent branch is force-pushed; reconcile-before-push handles upstream drift")
+	// Full coverage lives in storytests/reconcile_test.go (Task 15) where the
+	// testenv BareRemote DSL is available. This package-level test is a
+	// placeholder marking intent; storytests exercise the real bare-repo
+	// round-trip.
+	t.Skip("covered by storytests/reconcile_test.go (Task 15)")
+}
