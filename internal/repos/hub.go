@@ -194,7 +194,7 @@ type SyncMainEvent struct {
 }
 
 // SyncAgentEvent reports the agent-branch side of a reconcile tick.
-// Mirrors store.ReplayOntoUpstreamResult with JSON-friendly field names.
+// Mirrors store.AgentReconcileResult with JSON-friendly field names.
 type SyncAgentEvent struct {
 	Replayed    bool   `json:"replayed"`
 	NumReplayed int    `json:"num_replayed"`

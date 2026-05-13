@@ -53,16 +53,33 @@ type FileRecency struct {
 	Timestamp time.Time
 }
 
-// SyncResult is the bundled outcome of a sync tick — one reconcile cycle
-// that brings local main to origin/main (Main) and replays the agent
-// branch's unpushed commits onto its upstream (Agent).
+// AgentReconcileResult reports the outcome of reconcileAgent — what shape of
+// update happened on the agent branch this tick.
 //
-// A "no-op" sync (everything already up to date) has Main and Agent both
-// zero-valued. Callers can check Main.FastForward / Main.Rewound /
-// Agent.Replayed / Agent.FastForward to learn what changed.
+// Mode discriminates the cases the frontend/log cares about:
+//   - "noop":  agent ref unchanged.
+//   - "ff":    agent fast-forwarded to local main (no new commit synthesized).
+//   - "merge": one merge commit synthesized (steady-state path).
+//   - "rebase": rebase-fallback path ran (origin/main rewind only).
+//
+// Replayed/NumReplayed only populated when Mode == "rebase". Merged only true
+// when Mode == "merge". FastForward true for "ff", "merge" (ref advanced), or
+// "rebase" with a clean FF.
+type AgentReconcileResult struct {
+	Mode        string `json:"mode"`
+	Merged      bool   `json:"merged,omitempty"`
+	Replayed    bool   `json:"replayed,omitempty"`
+	NumReplayed int    `json:"num_replayed,omitempty"`
+	FastForward bool   `json:"fast_forward,omitempty"`
+	NewTip      string `json:"new_tip,omitempty"`
+}
+
+// SyncResult is the bundled outcome of a sync tick — one reconcile cycle
+// that brings local main to origin/main (Main) and reconciles the agent
+// branch (Agent) via merge or rebase fallback.
 type SyncResult struct {
 	Main  MainReconcileResult
-	Agent ReplayOntoUpstreamResult
+	Agent AgentReconcileResult
 }
 
 // PushResult is returned by Push to report what happened.
