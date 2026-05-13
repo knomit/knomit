@@ -101,6 +101,41 @@ func (r *RemoteHandle) MergeIntoMain(branch, message string) {
 	mustGit(t, work, "push", "origin", "main")
 }
 
+// SquashMergeIntoMain squash-merges the named branch into main on the
+// bare remote. Simulates the "remote PR merged with squash" workflow: the
+// agent's chain of N commits becomes one new commit on main whose parents
+// are [previous main tip] only — the agent's commits are NOT in main's
+// ancestry. This is the worst case for the old rebase-based reconcile
+// (which would replay all N commits as orphans on the next sync) and the
+// best case for the merge-based reconcile (which fast-forwards in O(1)).
+//
+// Implemented via the same clone-merge-push pattern as MergeIntoMain but
+// using `git merge --squash` + `git commit` to produce a single new commit
+// on main with no link to the agent branch's chain.
+//
+// origin/main must already exist on the bare remote — squash-merge into a
+// missing main is meaningless. If main doesn't exist yet, the test should
+// call WriteMain first to seed it.
+func (r *RemoteHandle) SquashMergeIntoMain(branch, message string) {
+	t := r.sb.t
+	t.Helper()
+
+	work := t.TempDir()
+	mustGit(t, "", "clone", r.dir, work)
+
+	if !hasRef(work, "refs/remotes/origin/main") {
+		t.Fatalf("SquashMergeIntoMain: origin/main does not exist on %s; call WriteMain first to seed it", r.name)
+	}
+
+	mustGit(t, work, "checkout", "-B", "main", "origin/main")
+	// --squash stages the branch's net diff without recording it as a merge;
+	// the follow-up `commit` produces a single new commit with no second
+	// parent. This is the canonical "squash-merge a PR" shape.
+	mustGit(t, work, "merge", "--squash", "--allow-unrelated-histories", "origin/"+branch)
+	mustGit(t, work, "commit", "-m", message)
+	mustGit(t, work, "push", "origin", "main")
+}
+
 // WriteMain writes a fact directly to main on the bare remote in a new
 // commit. Simulates a "third-party agent's already-promoted change" —
 // the test pretends another agent pushed and merged-to-main a fact, so
