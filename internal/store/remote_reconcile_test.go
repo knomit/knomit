@@ -194,3 +194,69 @@ func makeDisjointRoot(t *testing.T, svc *Service, path, content string) plumbing
 	require.NoError(t, err)
 	return hash
 }
+
+func TestReplayCommit_PreservesAuthorAndMessage(t *testing.T) {
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = svc.Close() })
+	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+
+	c1Hash := writeMergeFact(t, svc, "agent/test", "kb/a.md", "A", "v1")
+	c1, err := svc.rh.repo.CommitObject(plumbing.NewHash(c1Hash))
+	require.NoError(t, err)
+
+	// Create a "new base" — an unrelated commit on main with a different file.
+	c2Hash := writeMergeFact(t, svc, "main", "kb/other.md", "Other", "ov1")
+	c2, err := svc.rh.repo.CommitObject(plumbing.NewHash(c2Hash))
+	require.NoError(t, err)
+
+	newHash, err := svc.rh.replayCommit(context.Background(), c1, c2.Hash, StrategyLocalWins)
+	require.NoError(t, err)
+
+	newCommit, err := svc.rh.repo.CommitObject(newHash)
+	require.NoError(t, err)
+
+	require.Equal(t, c1.Author.Name, newCommit.Author.Name, "author preserved")
+	require.Equal(t, c1.Author.Email, newCommit.Author.Email, "author email preserved")
+	require.Equal(t, c1.Message, newCommit.Message, "message preserved")
+	require.Equal(t, 1, newCommit.NumParents(), "replayed commit has single parent")
+	require.Equal(t, c2.Hash, newCommit.ParentHashes[0], "parent is the new base")
+
+	// Tree must contain both kb/a.md (from c1) and kb/other.md (from c2).
+	tree, err := newCommit.Tree()
+	require.NoError(t, err)
+	_, err = tree.File("kb/a.md")
+	require.NoError(t, err, "replayed file present")
+	_, err = tree.File("kb/other.md")
+	require.NoError(t, err, "base file preserved")
+}
+
+func TestReplayCommit_LocalWinsOnConflict(t *testing.T) {
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = svc.Close() })
+	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+
+	c1Hash := writeMergeFact(t, svc, "agent/test", "kb/shared.md", "Shared", "agent-version")
+	c1, err := svc.rh.repo.CommitObject(plumbing.NewHash(c1Hash))
+	require.NoError(t, err)
+
+	mainHash := writeMergeFact(t, svc, "main", "kb/shared.md", "Shared", "main-version")
+	main, err := svc.rh.repo.CommitObject(plumbing.NewHash(mainHash))
+	require.NoError(t, err)
+
+	newHash, err := svc.rh.replayCommit(context.Background(), c1, main.Hash, StrategyLocalWins)
+	require.NoError(t, err)
+	newCommit, err := svc.rh.repo.CommitObject(newHash)
+	require.NoError(t, err)
+
+	tree, err := newCommit.Tree()
+	require.NoError(t, err)
+	f, err := tree.File("kb/shared.md")
+	require.NoError(t, err)
+	content, err := f.Contents()
+	require.NoError(t, err)
+	require.Contains(t, content, "agent-version", "LocalWins: agent content survives conflict")
+}

@@ -9,9 +9,12 @@ package store
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
+
+	storegit "knomit/internal/store/git"
 )
 
 // agentUpstream identifies the ref the agent branch should reconcile against.
@@ -111,3 +114,96 @@ func (rh *repoHandler) unpushedCommits(localTip, upstreamTip plumbing.Hash) ([]*
 	}
 	return collected, disjoint, nil
 }
+
+// replayCommit synthesizes a new commit by applying orig's tree-delta
+// (orig vs orig's first parent) on top of ontoHash, with conflictStrategy
+// resolving overlapping changes. The returned hash is signed.
+//
+// Preserves orig.Author, orig.Author.When, and orig.Message. Committer is
+// the knomit signer; committer.When is now. ParentHashes is [ontoHash] —
+// single parent, producing linear history.
+//
+// For a root commit (orig has no parents), the "base" is the empty tree;
+// the merge becomes "apply every file from orig.TreeHash onto ontoTree
+// with strategy resolving conflicts on overlapping paths".
+func (rh *repoHandler) replayCommit(
+	ctx context.Context,
+	orig *object.Commit,
+	ontoHash plumbing.Hash,
+	strategy ConflictStrategy,
+) (plumbing.Hash, error) {
+	ontoCommit, err := rh.repo.CommitObject(ontoHash)
+	if err != nil {
+		return plumbing.ZeroHash, fmt.Errorf("replayCommit: onto commit %s: %w", ontoHash, err)
+	}
+
+	// Determine the "base" side of the three-way merge: orig's first parent
+	// if it has one; an empty synthetic commit otherwise.
+	var baseCommit *object.Commit
+	if orig.NumParents() > 0 {
+		parent, err := orig.Parents().Next()
+		if err != nil {
+			return plumbing.ZeroHash, fmt.Errorf("replayCommit: orig parent: %w", err)
+		}
+		baseCommit = parent
+	} else {
+		// Synthesize an empty-tree commit as the base. mergeTreesWithStrategy
+		// only reads .Tree() from baseCommit; an empty tree means every file
+		// in orig.TreeHash registers as an Insert (non-conflicting), which is
+		// the correct semantic for replaying a root commit.
+		emptyTreeHash, err := storeEmptyTree(rh.gits)
+		if err != nil {
+			return plumbing.ZeroHash, fmt.Errorf("replayCommit: empty tree: %w", err)
+		}
+		baseCommit = &object.Commit{TreeHash: emptyTreeHash}
+	}
+
+	// Three-way merge: base = baseCommit (orig's parent or empty),
+	//                  src  = orig (what orig adds),
+	//                  dst  = ontoCommit (what we're replaying on top of).
+	mergedTreeHash, err := rh.mergeTreesWithStrategy(ctx, baseCommit, orig, ontoCommit, strategy)
+	if err != nil {
+		return plumbing.ZeroHash, fmt.Errorf("replayCommit: three-way merge: %w", err)
+	}
+
+	newCommit := &object.Commit{
+		Author: orig.Author, // includes original When
+		Committer: object.Signature{
+			Name:  "knomit",
+			Email: "knomit@local",
+			When:  timeNow(),
+		},
+		Message:      orig.Message,
+		TreeHash:     mergedTreeHash,
+		ParentHashes: []plumbing.Hash{ontoHash},
+	}
+
+	enc := rh.gits.NewEncodedObject()
+	if err := newCommit.Encode(enc); err != nil {
+		return plumbing.ZeroHash, fmt.Errorf("replayCommit: encode: %w", err)
+	}
+	h, err := rh.gits.SetEncodedObject(enc)
+	if err != nil {
+		return plumbing.ZeroHash, fmt.Errorf("replayCommit: store: %w", err)
+	}
+	h, err = signCommitInPlace(rh.gits, rh.signer, h)
+	if err != nil {
+		return plumbing.ZeroHash, fmt.Errorf("replayCommit: sign: %w", err)
+	}
+	return h, nil
+}
+
+// storeEmptyTree stores (or retrieves) the empty tree object and returns
+// its hash. go-git's empty-tree hash is well-known but storing explicitly
+// keeps the storer consistent across encoder backends.
+func storeEmptyTree(s *storegit.Storer) (plumbing.Hash, error) {
+	emptyTree := &object.Tree{}
+	enc := s.NewEncodedObject()
+	if err := emptyTree.Encode(enc); err != nil {
+		return plumbing.ZeroHash, err
+	}
+	return s.SetEncodedObject(enc)
+}
+
+// timeNow is a var so tests can stub it. Otherwise wraps time.Now().
+var timeNow = func() time.Time { return time.Now() }
