@@ -419,6 +419,15 @@ func TestReplayOntoUpstream_FailureLeavesAgentRefUntouched(t *testing.T) {
 	)
 	require.Error(t, err, "must error on bad upstream")
 	require.Equal(t, preReplayHash, mustHeadHash(t, svc, "agent/test"), "agent ref unchanged on failure")
+
+	// Temp ref must not be left behind on failure either. Note: this
+	// particular failure mode errors out in unpushedCommits BEFORE the
+	// temp ref is created, so the assertion documents the invariant
+	// rather than directly exercising the deferred cleanup path.
+	tempRefName := plumbing.NewBranchReferenceName("agent/test-replaying")
+	_, refErr := svc.rh.gits.Reference(tempRefName)
+	require.ErrorIs(t, refErr, plumbing.ErrReferenceNotFound,
+		"temp ref must be removed on failure too")
 }
 
 func TestReconcileMain_FastForwardsWhenOriginAhead(t *testing.T) {

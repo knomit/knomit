@@ -319,9 +319,9 @@ type ReplayOntoUpstreamResult struct {
 //
 // Atomicity: replayed commits accumulate under a temporary ref
 // (refs/heads/<localBranch>-replaying). Only when the full chain succeeds
-// does localBranch advance to the new tip and the temp ref get removed.
-// On failure, the temp ref is left behind for inspection and localBranch
-// is unchanged.
+// does localBranch advance to the new tip. The temp ref is always removed
+// before returning, on both success and failure paths; localBranch is
+// unchanged on failure.
 //
 // Caller must hold rh.lockBranch(localBranch).
 func (rh *repoHandler) replayOntoUpstream(
@@ -395,12 +395,22 @@ func (rh *repoHandler) replayOntoUpstream(
 	if err := rh.gits.SetReference(plumbing.NewHashReference(tempRefName, upstreamTip)); err != nil {
 		return ReplayOntoUpstreamResult{}, fmt.Errorf("replayOntoUpstream: init temp ref: %w", err)
 	}
+	// Always remove the temp ref before returning — success or failure —
+	// so the branch namespace doesn't accumulate stale "-replaying" refs.
+	// The check via Reference() guards against double-removal noise if a
+	// future code path drops the ref explicitly before returning.
+	defer func() {
+		if _, err := rh.gits.Reference(tempRefName); err == nil {
+			if rmErr := rh.gits.RemoveReference(tempRefName); rmErr != nil {
+				log.Warn().Err(rmErr).Msg("replayOntoUpstream: remove temp ref (continuing)")
+			}
+		}
+	}()
 
 	current := upstreamTip
 	for i, orig := range commits {
 		newHash, err := rh.replayCommit(ctx, orig, current, strategy)
 		if err != nil {
-			// Leave temp ref behind for inspection. Agent ref untouched.
 			return ReplayOntoUpstreamResult{}, fmt.Errorf("replayOntoUpstream: replay step %d/%d (%s): %w",
 				i+1, len(commits), orig.Hash.String()[:8], err)
 		}
@@ -411,12 +421,10 @@ func (rh *repoHandler) replayOntoUpstream(
 		}
 	}
 
-	// Atomic move: agent ref → new tip. Then drop temp ref.
+	// Atomic move: agent ref → new tip. Temp ref is cleaned up by the
+	// deferred removal above.
 	if err := rh.gits.SetReference(plumbing.NewHashReference(localRefName, current)); err != nil {
 		return ReplayOntoUpstreamResult{}, fmt.Errorf("replayOntoUpstream: atomic move: %w", err)
-	}
-	if err := rh.gits.RemoveReference(tempRefName); err != nil {
-		log.Warn().Err(err).Msg("replayOntoUpstream: remove temp ref (continuing)")
 	}
 
 	// The pre-replay chain is no longer reachable from localBranch. Purge
