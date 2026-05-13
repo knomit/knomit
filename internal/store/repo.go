@@ -247,42 +247,48 @@ func (s *Service) InitFromRemote(originURL string, auth transport.AuthMethod, ag
 	if agentBranch == "" {
 		agentBranch = defaultAgentBranch()
 	}
-	agentRefName := plumbing.NewBranchReferenceName(agentBranch)
 
-	// Check for existing remote agent branch.
-	remoteAgentRef, err := s.rh.gits.Reference(plumbing.NewRemoteReferenceName("origin", agentBranch))
-	if err == nil {
-		// Remote agent branch exists — use it.
-		localRef := plumbing.NewHashReference(agentRefName, remoteAgentRef.Hash())
-		if err := s.rh.gits.SetReference(localRef); err != nil {
-			return fmt.Errorf("InitFromRemote: set agent ref: %w", err)
-		}
-	} else {
-		// No remote agent branch — create from origin/main.
-		originMainRef, err := s.rh.gits.Reference(plumbing.NewRemoteReferenceName("origin", "main"))
-		if err != nil {
-			return fmt.Errorf("InitFromRemote: resolve origin/main: %w", err)
-		}
-		localRef := plumbing.NewHashReference(agentRefName, originMainRef.Hash())
-		if err := s.rh.gits.SetReference(localRef); err != nil {
-			return fmt.Errorf("InitFromRemote: set agent ref from main: %w", err)
-		}
+	// Configure remote with two-refspec fetch (main + agent/<host>).
+	// The initial CreateRemote above used a wildcard refspec to discover all
+	// remote branches at bootstrap; now we lock it down for steady state.
+	if err := s.rh.configureRemote(originURL, agentBranch); err != nil {
+		return fmt.Errorf("InitFromRemote: configure remote: %w", err)
 	}
 
-	// Set HEAD to agent branch.
-	headRef := plumbing.NewSymbolicReference(plumbing.HEAD, agentRefName)
-	if err := s.rh.gits.SetReference(headRef); err != nil {
-		return fmt.Errorf("InitFromRemote: set HEAD: %w", err)
+	// Re-fetch with the proper refspec so origin/main and origin/agent/<host>
+	// are both tracked consistently. (The initial wildcard fetch already pulled
+	// objects; this just establishes the remote-tracking refs under the new
+	// refspec shape.)
+	if err := repo.Fetch(&gogit.FetchOptions{RemoteName: "origin", Auth: auth}); err != nil && err != gogit.NoErrAlreadyUpToDate {
+		return fmt.Errorf("InitFromRemote: re-fetch: %w", err)
 	}
 
-	// Create local main pointing at origin/main.
+	// Bootstrap local main from origin/main.
 	originMainRef, err := s.rh.gits.Reference(plumbing.NewRemoteReferenceName("origin", "main"))
 	if err != nil {
-		return fmt.Errorf("InitFromRemote: resolve origin/main for local main: %w", err)
+		return fmt.Errorf("InitFromRemote: resolve origin/main: %w", err)
 	}
-	mainRef := plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), originMainRef.Hash())
-	if err := s.rh.gits.SetReference(mainRef); err != nil {
-		return fmt.Errorf("InitFromRemote: set main ref: %w", err)
+	if err := s.rh.gits.SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), originMainRef.Hash())); err != nil {
+		return fmt.Errorf("InitFromRemote: set local main: %w", err)
+	}
+
+	// Bootstrap local agent. If origin/agent/<host> exists, start there;
+	// otherwise start at origin/main. Either way reconcileAgent (called by
+	// the caller after init via the sync loop) is a no-op at this point —
+	// there are no local commits to replay. We just need the ref to exist.
+	agentRefName := plumbing.NewBranchReferenceName(agentBranch)
+	if remoteAgentRef, err := s.rh.gits.Reference(plumbing.NewRemoteReferenceName("origin", agentBranch)); err == nil {
+		if err := s.rh.gits.SetReference(plumbing.NewHashReference(agentRefName, remoteAgentRef.Hash())); err != nil {
+			return fmt.Errorf("InitFromRemote: set agent from remote agent: %w", err)
+		}
+	} else {
+		if err := s.rh.gits.SetReference(plumbing.NewHashReference(agentRefName, originMainRef.Hash())); err != nil {
+			return fmt.Errorf("InitFromRemote: set agent from main: %w", err)
+		}
+	}
+
+	if err := s.rh.gits.SetReference(plumbing.NewSymbolicReference(plumbing.HEAD, agentRefName)); err != nil {
+		return fmt.Errorf("InitFromRemote: set HEAD: %w", err)
 	}
 
 	log.Info().Str("branch", agentBranch).Str("origin", originURL).Msg("git store initialized from remote")
