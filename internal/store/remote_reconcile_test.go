@@ -81,6 +81,7 @@ func TestResolveAgentUpstream_PrefersAgentRefWhenPresent(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "refs/remotes/origin/agent/test", got.refName.String())
 	require.Equal(t, agentHash, got.hash)
+	require.True(t, got.isOwnAgent, "agent upstream must flag isOwnAgent")
 }
 
 func TestResolveAgentUpstream_FallsBackToMain(t *testing.T) {
@@ -103,6 +104,7 @@ func TestResolveAgentUpstream_FallsBackToMain(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "refs/remotes/origin/main", got.refName.String())
 	require.Equal(t, mainHash, got.hash)
+	require.False(t, got.isOwnAgent, "main-fallback upstream must NOT flag isOwnAgent")
 }
 
 func TestResolveAgentUpstream_NoUpstreamIsError(t *testing.T) {
