@@ -207,6 +207,11 @@ func (b *repoBuilder) build() *RepoInstance {
 	ri.onCommit = func(_, hash string) { obs.Notify(hash) }
 	b.svc.SetOnCommit(ri.onCommit)
 
+	// Startup recovery: if origin is configured and reachable, reconcile
+	// once before the background loops start. This catches the
+	// reinstall-with-state-intact and token-expired-then-fixed cases.
+	b.recoverFromOrigin()
+
 	// Background remote sync + push goroutines.
 	syncCtx, syncCancel := context.WithCancel(b.ctx)
 	var syncWg sync.WaitGroup
@@ -259,6 +264,34 @@ func (b *repoBuilder) build() *RepoInstance {
 	}
 
 	return ri
+}
+
+// recoverFromOrigin runs one reconcile cycle on startup if origin is
+// configured. Failures are logged but non-fatal — the sync loops will
+// retry on their next tick. This catches the reinstall-with-state-intact
+// case (we have local state but need to resume against origin) and the
+// token-expired-then-fixed case (auth used to fail, has been updated,
+// next iteration succeeds). Skipped when DisableBackgroundSync is set so
+// test harnesses don't hit a non-existent origin at construction time.
+func (b *repoBuilder) recoverFromOrigin() {
+	if b.disableBackgroundSync {
+		return
+	}
+	if b.cfg.Git.Origin == "" {
+		return
+	}
+	remote, _ := b.svc.Remote().GetRemote("origin")
+	if remote == nil {
+		return
+	}
+	auth, err := resolveAuth(b.cfg.Remote, b.keyPath)
+	if err != nil {
+		log.Warn().Err(err).Str("repo", b.name).Msg("recoverFromOrigin: resolve auth failed")
+		return
+	}
+	if _, err := b.svc.Remote().Sync(b.ctx, b.agentBranch, auth); err != nil {
+		log.Warn().Err(err).Str("repo", b.name).Msg("recoverFromOrigin: initial sync failed (will retry in loop)")
+	}
 }
 
 // startSyncLoops launches the background pull and push goroutines if a remote
