@@ -261,16 +261,20 @@ func (b *repoBuilder) build() *RepoInstance {
 		// far more than tolerating transient network blips (which the
 		// user can recover from by retrying SetRemote with the same
 		// token).
-		auth, authErr := resolveAuth(cfg.Remote, keyPath)
-		if authErr != nil {
-			return fmt.Errorf("ActivateSync: resolve auth: %w", authErr)
-		}
+		//
+		// Build the auth factory once and reuse it for the synchronous
+		// reconcile and the loops. Using the factory (instead of the
+		// static cfg.Remote) ensures we resolve auth from the DB-stored
+		// remote record — so a token just refreshed via PUT
+		// /api/v1/{repo}/origin is honoured immediately, and SSH URLs
+		// are auto-detected via resolveAuthWithOrigin.
+		authFn := makeRemoteAuthFn(cfg.Remote, keyPath)
+		auth := authFn(remote)
 		if _, err := currentSvc.Remote().Sync(newCtx, agentBranch, auth); err != nil {
 			return fmt.Errorf("ActivateSync: initial reconcile failed: %w", err)
 		}
 
 		syncWg.Add(2)
-		authFn := makeRemoteAuthFn(cfg.Remote, keyPath)
 		go runSyncLoop(newCtx, &syncWg, currentSvc, hub, name, agentBranch, authFn)
 		go runPushLoop(newCtx, &syncWg, currentSvc, hub, name, agentBranch, authFn)
 		return nil
@@ -305,11 +309,11 @@ func (b *repoBuilder) recoverFromOrigin() {
 	if remote == nil {
 		return
 	}
-	auth, err := resolveAuth(b.cfg.Remote, b.keyPath)
-	if err != nil {
-		log.Warn().Err(err).Str("repo", b.name).Msg("recoverFromOrigin: resolve auth failed")
-		return
-	}
+	// Use the same factory the loops use so we pick up any fresh token /
+	// auth config stored in the DB (e.g. after a PUT /api/v1/{repo}/origin
+	// refresh) instead of the static b.cfg.Remote captured at startup.
+	authFn := makeRemoteAuthFn(b.cfg.Remote, b.keyPath)
+	auth := authFn(remote)
 	if _, err := b.svc.Remote().Sync(b.ctx, b.agentBranch, auth); err != nil {
 		log.Warn().Err(err).Str("repo", b.name).Msg("recoverFromOrigin: initial sync failed (will retry in loop)")
 	}
