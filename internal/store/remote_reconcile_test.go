@@ -485,3 +485,25 @@ func TestReconcileMain_NoOriginMainIsError(t *testing.T) {
 	_, err = svc.rh.reconcileMain(context.Background())
 	require.Error(t, err)
 }
+
+func TestReconcileMain_CreatesLocalMainWhenMissing(t *testing.T) {
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = svc.Close() })
+	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+
+	// Drop local main so reconcileMain has to create it.
+	require.NoError(t, svc.rh.gits.RemoveReference(plumbing.NewBranchReferenceName("main")))
+
+	// Set origin/main to some content.
+	originHash := writeMergeFact(t, svc, "agent/test", "kb/o.md", "O", "v1")
+	require.NoError(t, svc.rh.gits.SetReference(
+		plumbing.NewHashReference(plumbing.NewRemoteReferenceName("origin", "main"), plumbing.NewHash(originHash)),
+	))
+
+	res, err := svc.rh.reconcileMain(context.Background())
+	require.NoError(t, err)
+	require.True(t, res.FastForward, "creating missing main is reported as fast-forward")
+	require.Equal(t, plumbing.NewHash(originHash), mustHeadHash(t, svc, "main"), "local main now at origin")
+}

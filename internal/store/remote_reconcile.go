@@ -370,6 +370,10 @@ type MainReconcileResult struct {
 // caller must then re-migrate the agent branch against the new main.
 //
 // Errors if origin/main is not present locally (caller must fetch first).
+//
+// Caller must hold rh.lockBranch("main"). After every ref advance,
+// commit_log is repopulated and the index manager is notified so
+// downstream readers see consistent state.
 func (rh *repoHandler) reconcileMain(ctx context.Context) (MainReconcileResult, error) {
 	originMainName := plumbing.NewRemoteReferenceName("origin", "main")
 	originMainRef, err := rh.gits.Reference(originMainName)
@@ -387,6 +391,12 @@ func (rh *repoHandler) reconcileMain(ctx context.Context) (MainReconcileResult, 
 		}
 		if _, err := rh.EnsureBranch(ctx, "main", "refs/heads/main"); err != nil {
 			return MainReconcileResult{}, fmt.Errorf("reconcileMain: ensure main: %w", err)
+		}
+		if err := rh.populateCommitLog(ctx, "main"); err != nil {
+			log.Warn().Err(err).Msg("reconcileMain: populate commit_log after create")
+		}
+		if err := rh.notifyCommit(ctx, "main", originHash); err != nil {
+			return MainReconcileResult{}, fmt.Errorf("reconcileMain: notify after create: %w", err)
 		}
 		return MainReconcileResult{FastForward: true, NewTip: originHash.String()}, nil
 	}
@@ -414,6 +424,12 @@ func (rh *repoHandler) reconcileMain(ctx context.Context) (MainReconcileResult, 
 		if err := rh.gits.SetReference(plumbing.NewHashReference(localMainName, originHash)); err != nil {
 			return MainReconcileResult{}, fmt.Errorf("reconcileMain: fast-forward: %w", err)
 		}
+		if err := rh.populateCommitLog(ctx, "main"); err != nil {
+			log.Warn().Err(err).Msg("reconcileMain: populate commit_log after fast-forward")
+		}
+		if err := rh.notifyCommit(ctx, "main", originHash); err != nil {
+			return MainReconcileResult{}, fmt.Errorf("reconcileMain: notify after fast-forward: %w", err)
+		}
 		log.Info().Str("to", originHash.String()[:8]).Msg("reconcileMain: fast-forward")
 		return MainReconcileResult{FastForward: true, NewTip: originHash.String()}, nil
 	}
@@ -422,6 +438,12 @@ func (rh *repoHandler) reconcileMain(ctx context.Context) (MainReconcileResult, 
 	// Force-update local main; caller is responsible for re-migrating the agent.
 	if err := rh.gits.SetReference(plumbing.NewHashReference(localMainName, originHash)); err != nil {
 		return MainReconcileResult{}, fmt.Errorf("reconcileMain: force-update: %w", err)
+	}
+	if err := rh.populateCommitLog(ctx, "main"); err != nil {
+		log.Warn().Err(err).Msg("reconcileMain: populate commit_log after force-update")
+	}
+	if err := rh.notifyCommit(ctx, "main", originHash); err != nil {
+		return MainReconcileResult{}, fmt.Errorf("reconcileMain: notify after force-update: %w", err)
 	}
 	log.Warn().
 		Str("local", localHash.String()[:8]).
