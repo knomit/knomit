@@ -355,3 +355,77 @@ func (rh *repoHandler) replayOntoUpstream(
 		NewTip:      current.String(),
 	}, nil
 }
+
+// MainReconcileResult reports the outcome of reconcileMain.
+type MainReconcileResult struct {
+	FastForward bool   // local main was advanced to origin/main
+	Rewound     bool   // origin/main was not a descendant of local main — force-updated
+	NewTip      string // hash of the new local main tip (empty when no-op)
+}
+
+// reconcileMain updates local main to track origin/main. Fast-forwards
+// when origin/main is a descendant of local main. When origin/main is
+// NOT a descendant (rewind, force-push, or disjoint history on the
+// remote), force-updates local main and reports Rewound=true — the
+// caller must then re-migrate the agent branch against the new main.
+//
+// Errors if origin/main is not present locally (caller must fetch first).
+func (rh *repoHandler) reconcileMain(ctx context.Context) (MainReconcileResult, error) {
+	originMainName := plumbing.NewRemoteReferenceName("origin", "main")
+	originMainRef, err := rh.gits.Reference(originMainName)
+	if err != nil {
+		return MainReconcileResult{}, fmt.Errorf("reconcileMain: read origin/main: %w", err)
+	}
+	originHash := originMainRef.Hash()
+
+	localMainName := plumbing.NewBranchReferenceName("main")
+	localMainRef, err := rh.gits.Reference(localMainName)
+	if err != nil {
+		// Local main doesn't exist — create at origin/main.
+		if err := rh.gits.SetReference(plumbing.NewHashReference(localMainName, originHash)); err != nil {
+			return MainReconcileResult{}, fmt.Errorf("reconcileMain: create local main: %w", err)
+		}
+		if _, err := rh.EnsureBranch(ctx, "main", "refs/heads/main"); err != nil {
+			return MainReconcileResult{}, fmt.Errorf("reconcileMain: ensure main: %w", err)
+		}
+		return MainReconcileResult{FastForward: true, NewTip: originHash.String()}, nil
+	}
+	localHash := localMainRef.Hash()
+
+	if localHash == originHash {
+		return MainReconcileResult{NewTip: originHash.String()}, nil
+	}
+
+	localCommit, err := rh.repo.CommitObject(localHash)
+	if err != nil {
+		return MainReconcileResult{}, fmt.Errorf("reconcileMain: local commit: %w", err)
+	}
+	originCommit, err := rh.repo.CommitObject(originHash)
+	if err != nil {
+		return MainReconcileResult{}, fmt.Errorf("reconcileMain: origin commit: %w", err)
+	}
+
+	isLocalAncestor, err := localCommit.IsAncestor(originCommit)
+	if err != nil {
+		return MainReconcileResult{}, fmt.Errorf("reconcileMain: IsAncestor: %w", err)
+	}
+	if isLocalAncestor {
+		// Fast-forward.
+		if err := rh.gits.SetReference(plumbing.NewHashReference(localMainName, originHash)); err != nil {
+			return MainReconcileResult{}, fmt.Errorf("reconcileMain: fast-forward: %w", err)
+		}
+		log.Info().Str("to", originHash.String()[:8]).Msg("reconcileMain: fast-forward")
+		return MainReconcileResult{FastForward: true, NewTip: originHash.String()}, nil
+	}
+
+	// origin/main is not a descendant of local main → rewind / divergent advance.
+	// Force-update local main; caller is responsible for re-migrating the agent.
+	if err := rh.gits.SetReference(plumbing.NewHashReference(localMainName, originHash)); err != nil {
+		return MainReconcileResult{}, fmt.Errorf("reconcileMain: force-update: %w", err)
+	}
+	log.Warn().
+		Str("local", localHash.String()[:8]).
+		Str("origin", originHash.String()[:8]).
+		Msg("reconcileMain: origin/main is not a descendant of local main; force-updated")
+	return MainReconcileResult{Rewound: true, NewTip: originHash.String()}, nil
+}

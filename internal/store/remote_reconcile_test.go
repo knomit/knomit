@@ -409,3 +409,79 @@ func TestReplayOntoUpstream_FailureLeavesAgentRefUntouched(t *testing.T) {
 	require.Error(t, err, "must error on bad upstream")
 	require.Equal(t, preReplayHash, mustHeadHash(t, svc, "agent/test"), "agent ref unchanged on failure")
 }
+
+func TestReconcileMain_FastForwardsWhenOriginAhead(t *testing.T) {
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = svc.Close() })
+	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+
+	// origin/main is a descendant of local main (new commit on it).
+	newMainCommit := writeMergeFact(t, svc, "main", "kb/m.md", "M", "v1")
+	// Move main back to its parent to simulate "we're behind origin/main".
+	parent, err := svc.rh.repo.CommitObject(plumbing.NewHash(newMainCommit))
+	require.NoError(t, err)
+	require.NoError(t, svc.rh.gits.SetReference(
+		plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), parent.ParentHashes[0]),
+	))
+	// origin/main points at the newer commit.
+	require.NoError(t, svc.rh.gits.SetReference(
+		plumbing.NewHashReference(plumbing.NewRemoteReferenceName("origin", "main"), plumbing.NewHash(newMainCommit)),
+	))
+
+	res, err := svc.rh.reconcileMain(context.Background())
+	require.NoError(t, err)
+	require.True(t, res.FastForward)
+	require.False(t, res.Rewound)
+	require.Equal(t, plumbing.NewHash(newMainCommit), mustHeadHash(t, svc, "main"))
+}
+
+func TestReconcileMain_NoOpWhenAlreadyAtOrigin(t *testing.T) {
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = svc.Close() })
+	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+
+	mainHash := mustHeadHash(t, svc, "main")
+	require.NoError(t, svc.rh.gits.SetReference(
+		plumbing.NewHashReference(plumbing.NewRemoteReferenceName("origin", "main"), mainHash),
+	))
+
+	res, err := svc.rh.reconcileMain(context.Background())
+	require.NoError(t, err)
+	require.False(t, res.FastForward)
+	require.False(t, res.Rewound)
+}
+
+func TestReconcileMain_DetectsRewind(t *testing.T) {
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = svc.Close() })
+	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+
+	// Local main has a commit; origin/main is a disjoint commit.
+	writeMergeFact(t, svc, "main", "kb/local.md", "L", "v1")
+	disjointHash := makeDisjointRoot(t, svc, "kb/origin.md", "origin content")
+	require.NoError(t, svc.rh.gits.SetReference(
+		plumbing.NewHashReference(plumbing.NewRemoteReferenceName("origin", "main"), disjointHash),
+	))
+
+	res, err := svc.rh.reconcileMain(context.Background())
+	require.NoError(t, err)
+	require.True(t, res.Rewound, "non-descendant origin/main must report Rewound")
+	require.Equal(t, disjointHash, mustHeadHash(t, svc, "main"), "local main force-updated to origin")
+}
+
+func TestReconcileMain_NoOriginMainIsError(t *testing.T) {
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = svc.Close() })
+	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+
+	_, err = svc.rh.reconcileMain(context.Background())
+	require.Error(t, err)
+}
