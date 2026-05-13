@@ -361,11 +361,11 @@ func (rh *repoHandler) replayOntoUpstream(
 	// The pre-replay chain is no longer reachable from localBranch. Purge
 	// stale branch_commits rows so populateCommitLog can rebuild parity from
 	// the new tip without Verify complaining about unreachable rows. (Same
-	// pattern as reconcileMain's rewind path.)
-	if disjoint || len(commits) > 0 {
-		if err := rh.purgeBranchCommits(ctx, localBranch); err != nil {
-			log.Warn().Err(err).Msg("replayOntoUpstream: purge branch_commits")
-		}
+	// pattern as reconcileMain's rewind path.) We always reach this with
+	// len(commits) > 0 (the no-commits case returned earlier), so the purge
+	// is unconditional.
+	if err := rh.purgeBranchCommits(ctx, localBranch); err != nil {
+		log.Warn().Err(err).Msg("replayOntoUpstream: purge branch_commits")
 	}
 	if err := rh.populateCommitLog(ctx, localBranch); err != nil {
 		log.Warn().Err(err).Msg("replayOntoUpstream: populate")

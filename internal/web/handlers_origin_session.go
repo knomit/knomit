@@ -546,7 +546,6 @@ func handleApply(rm *repos.Manager, sm *SessionManager, agentBranch string) http
 			sess.mu.Lock()
 			sess.State = StateApplied
 			sess.ApplyResult = result
-			sess.RemoteBranch = remoteBranch
 			sess.AppliedBranch = replayAgentBranch
 			sess.mu.Unlock()
 
@@ -577,7 +576,6 @@ func handleApply(rm *repos.Manager, sm *SessionManager, agentBranch string) http
 			sess.mu.Lock()
 			sess.State = StateApplied
 			sess.ApplyResult = result
-			sess.RemoteBranch = remoteBranch
 			sess.AppliedBranch = sharedAppliedBranch
 			sess.mu.Unlock()
 

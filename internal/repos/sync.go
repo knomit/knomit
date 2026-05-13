@@ -47,7 +47,7 @@ func runReconcileLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Servic
 	lg := log.With().Str("repo", repo).Str("remote", remote.URL).Logger()
 	lg.Info().Msg("reconcile loop started")
 
-	doTick := func() {
+	doTick := func(ctx context.Context) {
 		// Read fresh remote record so resolveAuth picks up DB-stored auth.
 		fresh, _ := svc.Remote().GetRemote("origin")
 		if fresh == nil {
@@ -56,7 +56,7 @@ func runReconcileLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Servic
 		auth := resolveAuth(fresh)
 
 		// Sync first.
-		syncResult, err := svc.Remote().Sync(context.Background(), agentBranch, auth)
+		syncResult, err := svc.Remote().Sync(ctx, agentBranch, auth)
 		if err != nil {
 			hub.broadcastSyncError("origin", err.Error())
 			lg.Warn().Err(err).Msg("reconcile: sync failed")
@@ -82,7 +82,7 @@ func runReconcileLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Servic
 		}
 
 		// Then push.
-		pushResult, err := svc.Remote().Push(context.Background(), agentBranch, auth)
+		pushResult, err := svc.Remote().Push(ctx, agentBranch, auth)
 		if err != nil {
 			hub.broadcastPushError("origin", err.Error())
 			lg.Warn().Err(err).Msg("reconcile: push failed")
@@ -97,7 +97,7 @@ func runReconcileLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Servic
 	}
 
 	// Immediate first tick.
-	doTick()
+	doTick(ctx)
 
 	for {
 		// Re-read remote config every iteration to pick up interval changes.
@@ -119,7 +119,7 @@ func runReconcileLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Servic
 			lg.Info().Msg("reconcile loop stopped")
 			return
 		case <-time.After(time.Duration(interval) * time.Second):
-			doTick()
+			doTick(ctx)
 		}
 	}
 }
