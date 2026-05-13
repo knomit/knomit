@@ -44,17 +44,8 @@ func (rh *repoHandler) reconcileAgentMerge(ctx context.Context, agentBranch stri
 	log.Info().
 		Str("branch", agentBranch).
 		Str("mode", res.Mode).
-		Str("new_tip", shortRefHash(plumbingHash(res.NewTip))).
+		Str("new_tip", shortRefHash(plumbing.NewHash(res.NewTip))).
 		Msg("reconcileAgentMerge: complete")
 	return res, nil
 }
 
-// plumbingHash converts a hex string to plumbing.Hash, returning zero on
-// empty input. Used in log statements where the NewTip may be empty for
-// no-op results.
-func plumbingHash(s string) plumbing.Hash {
-	if s == "" {
-		return plumbing.ZeroHash
-	}
-	return plumbing.NewHash(s)
-}

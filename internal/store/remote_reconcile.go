@@ -179,7 +179,13 @@ func (rh *repoHandler) purgeBranchCommits(ctx context.Context, branch string) er
 // The watermark is updated to current local main on both paths so it
 // always has a usable base for a future rewind.
 //
-// Holds rh.lockBranch(agentBranch) (via the inner primitive) for the duration.
+// Lock acquisition:
+//   - Merge path: rh.lockBranch(agentBranch) held by mergeIntoBranch only
+//     during the synthesis step; the watermark write afterwards is outside
+//     the lock. Safe because the reconcile loop is single-tick per branch
+//     and only reconcileAgent{Merge,Rebase} write the watermark.
+//   - Rebase path: rh.lockBranch(agentBranch) held by reconcileAgentRebase
+//     for the entire body, including the watermark write.
 func (rh *repoHandler) reconcileAgent(ctx context.Context, agentBranch string, strategy ConflictStrategy, mainRewound bool) (AgentReconcileResult, error) {
 	if mainRewound {
 		return rh.reconcileAgentRebase(ctx, agentBranch, strategy)

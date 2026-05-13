@@ -63,8 +63,9 @@ type FileRecency struct {
 //   - "rebase": rebase-fallback path ran (origin/main rewind only).
 //
 // Replayed/NumReplayed only populated when Mode == "rebase". Merged only true
-// when Mode == "merge". FastForward true for "ff", "merge" (ref advanced), or
-// "rebase" with a clean FF.
+// when Mode == "merge". FastForward true only when Mode == "ff" (or for "rebase"
+// with a clean fast-forward path). NEVER true for "merge" — a merge commit
+// synthesizes a new commit, not a ref advance to an existing one.
 type AgentReconcileResult struct {
 	Mode        string `json:"mode"`
 	Merged      bool   `json:"merged,omitempty"`
