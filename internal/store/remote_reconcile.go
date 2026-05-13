@@ -13,6 +13,7 @@ import (
 
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
+	"github.com/rs/zerolog/log"
 
 	storegit "knomit/internal/store/git"
 )
@@ -241,3 +242,116 @@ func storeEmptyTree(s *storegit.Storer) (plumbing.Hash, error) {
 
 // timeNow is a var so tests can stub it. Otherwise wraps time.Now().
 var timeNow = func() time.Time { return time.Now() }
+
+// ReplayOntoUpstreamResult reports what replayOntoUpstream did.
+type ReplayOntoUpstreamResult struct {
+	Replayed    bool   // true if any new commits were synthesized
+	NumReplayed int    // number of original commits replayed
+	FastForward bool   // true if local ref was advanced to upstream without replay
+	NewTip      string // hash of the new agent tip (empty when no-op)
+}
+
+// replayOntoUpstream reconciles localBranch with upstreamTip by replaying
+// localBranch's unpushed commits onto upstreamTip. Uses local-wins
+// conflict resolution for overlapping paths (agent-facing semantics —
+// see replayCommit for the strategy translation).
+//
+// Atomicity: replayed commits accumulate under a temporary ref
+// (refs/heads/<localBranch>-replaying). Only when the full chain succeeds
+// does localBranch advance to the new tip and the temp ref get removed.
+// On failure, the temp ref is left behind for inspection and localBranch
+// is unchanged.
+//
+// Caller must hold rh.lockBranch(localBranch).
+func (rh *repoHandler) replayOntoUpstream(
+	ctx context.Context,
+	localBranch string,
+	upstreamTip plumbing.Hash,
+	strategy ConflictStrategy,
+) (ReplayOntoUpstreamResult, error) {
+	localRefName := plumbing.NewBranchReferenceName(localBranch)
+	localRef, err := rh.gits.Reference(localRefName)
+	if err != nil {
+		return ReplayOntoUpstreamResult{}, fmt.Errorf("replayOntoUpstream: local ref %q: %w", localBranch, err)
+	}
+	localTip := localRef.Hash()
+
+	commits, disjoint, err := rh.unpushedCommits(localTip, upstreamTip)
+	if err != nil {
+		return ReplayOntoUpstreamResult{}, err
+	}
+
+	// No unpushed commits.
+	if len(commits) == 0 {
+		// Local may still be behind upstream — fast-forward if so.
+		if localTip != upstreamTip {
+			newRef := plumbing.NewHashReference(localRefName, upstreamTip)
+			if err := rh.gits.SetReference(newRef); err != nil {
+				return ReplayOntoUpstreamResult{}, fmt.Errorf("replayOntoUpstream: fast-forward: %w", err)
+			}
+			if err := rh.populateCommitLog(ctx, localBranch); err != nil {
+				log.Warn().Err(err).Msg("replayOntoUpstream: populate after FF")
+			}
+			if err := rh.notifyCommit(ctx, localBranch, upstreamTip); err != nil {
+				return ReplayOntoUpstreamResult{}, fmt.Errorf("replayOntoUpstream: notify after FF: %w", err)
+			}
+			return ReplayOntoUpstreamResult{FastForward: true, NewTip: upstreamTip.String()}, nil
+		}
+		return ReplayOntoUpstreamResult{}, nil
+	}
+
+	log.Info().
+		Str("branch", localBranch).
+		Int("count", len(commits)).
+		Bool("disjoint", disjoint).
+		Str("upstream", upstreamTip.String()[:8]).
+		Msg("replayOntoUpstream: starting")
+
+	tempRefName := plumbing.NewBranchReferenceName(localBranch + "-replaying")
+	// Start temp ref at upstream tip.
+	if err := rh.gits.SetReference(plumbing.NewHashReference(tempRefName, upstreamTip)); err != nil {
+		return ReplayOntoUpstreamResult{}, fmt.Errorf("replayOntoUpstream: init temp ref: %w", err)
+	}
+
+	current := upstreamTip
+	for i, orig := range commits {
+		newHash, err := rh.replayCommit(ctx, orig, current, strategy)
+		if err != nil {
+			// Leave temp ref behind for inspection. Agent ref untouched.
+			return ReplayOntoUpstreamResult{}, fmt.Errorf("replayOntoUpstream: replay step %d/%d (%s): %w",
+				i+1, len(commits), orig.Hash.String()[:8], err)
+		}
+		current = newHash
+		// Advance temp ref so each replayed commit is reachable.
+		if err := rh.gits.SetReference(plumbing.NewHashReference(tempRefName, current)); err != nil {
+			return ReplayOntoUpstreamResult{}, fmt.Errorf("replayOntoUpstream: advance temp ref: %w", err)
+		}
+	}
+
+	// Atomic move: agent ref → new tip. Then drop temp ref.
+	if err := rh.gits.SetReference(plumbing.NewHashReference(localRefName, current)); err != nil {
+		return ReplayOntoUpstreamResult{}, fmt.Errorf("replayOntoUpstream: atomic move: %w", err)
+	}
+	if err := rh.gits.RemoveReference(tempRefName); err != nil {
+		log.Warn().Err(err).Msg("replayOntoUpstream: remove temp ref (continuing)")
+	}
+
+	if err := rh.populateCommitLog(ctx, localBranch); err != nil {
+		log.Warn().Err(err).Msg("replayOntoUpstream: populate")
+	}
+	if err := rh.notifyCommit(ctx, localBranch, current); err != nil {
+		return ReplayOntoUpstreamResult{}, fmt.Errorf("replayOntoUpstream: notify: %w", err)
+	}
+
+	log.Info().
+		Str("branch", localBranch).
+		Int("count", len(commits)).
+		Str("new_tip", current.String()[:8]).
+		Msg("replayOntoUpstream: complete")
+
+	return ReplayOntoUpstreamResult{
+		Replayed:    true,
+		NumReplayed: len(commits),
+		NewTip:      current.String(),
+	}, nil
+}

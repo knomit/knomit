@@ -312,3 +312,100 @@ func TestReplayCommit_RemoteWinsOnConflict(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, content, "main-version", "RemoteWins on Modify-vs-Modify: upstream content must survive")
 }
+
+func TestReplayOntoUpstream_NoUnpushedIsNoOp(t *testing.T) {
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = svc.Close() })
+	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+
+	agentHash := mustHeadHash(t, svc, "agent/test")
+	// Upstream = same hash → unpushed commits is empty → no-op.
+	result, err := svc.rh.replayOntoUpstream(
+		context.Background(), "agent/test", agentHash, StrategyLocalWins,
+	)
+	require.NoError(t, err)
+	require.False(t, result.Replayed, "no-op must not report Replayed")
+	require.Equal(t, agentHash, mustHeadHash(t, svc, "agent/test"), "ref unchanged")
+}
+
+func TestReplayOntoUpstream_FastForwardWhenLocalIsAncestor(t *testing.T) {
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = svc.Close() })
+	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+
+	// Upstream gets a commit; agent stays behind.
+	upstreamHash := writeMergeFact(t, svc, "main", "kb/u.md", "U", "v1")
+	result, err := svc.rh.replayOntoUpstream(
+		context.Background(), "agent/test", plumbing.NewHash(upstreamHash), StrategyLocalWins,
+	)
+	require.NoError(t, err)
+	require.True(t, result.FastForward, "must fast-forward when local is ancestor")
+	require.Equal(t, plumbing.NewHash(upstreamHash), mustHeadHash(t, svc, "agent/test"))
+}
+
+func TestReplayOntoUpstream_ReplaysAllUnpushedCommits(t *testing.T) {
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = svc.Close() })
+	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+
+	// Two local commits.
+	writeMergeFact(t, svc, "agent/test", "kb/a.md", "A", "v1")
+	writeMergeFact(t, svc, "agent/test", "kb/b.md", "B", "v1")
+	// One commit on main = upstream.
+	upstreamHash := writeMergeFact(t, svc, "main", "kb/u.md", "U", "uv1")
+
+	result, err := svc.rh.replayOntoUpstream(
+		context.Background(), "agent/test", plumbing.NewHash(upstreamHash), StrategyLocalWins,
+	)
+	require.NoError(t, err)
+	require.True(t, result.Replayed)
+	require.Equal(t, 2, result.NumReplayed, "two commits replayed")
+
+	// New agent tip is a linear chain ending with replayed commits.
+	newTip := mustHeadHash(t, svc, "agent/test")
+	require.NotEqual(t, plumbing.NewHash(upstreamHash), newTip)
+
+	tip, err := svc.rh.repo.CommitObject(newTip)
+	require.NoError(t, err)
+	require.Equal(t, 1, tip.NumParents(), "linear")
+	// Walk back: tip → mid → upstream.
+	mid, err := tip.Parents().Next()
+	require.NoError(t, err)
+	require.Equal(t, 1, mid.NumParents(), "linear")
+	require.Equal(t, plumbing.NewHash(upstreamHash), mid.ParentHashes[0], "chain rooted at upstream")
+
+	// All three files present in final tree.
+	tree, err := tip.Tree()
+	require.NoError(t, err)
+	_, err = tree.File("kb/a.md")
+	require.NoError(t, err)
+	_, err = tree.File("kb/b.md")
+	require.NoError(t, err)
+	_, err = tree.File("kb/u.md")
+	require.NoError(t, err)
+}
+
+func TestReplayOntoUpstream_FailureLeavesAgentRefUntouched(t *testing.T) {
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = svc.Close() })
+	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+
+	writeMergeFact(t, svc, "agent/test", "kb/a.md", "A", "v1")
+	preReplayHash := mustHeadHash(t, svc, "agent/test")
+
+	// Inject failure by passing an unreadable upstream hash.
+	bogus := plumbing.NewHash("0123456789abcdef0123456789abcdef01234567")
+	_, err = svc.rh.replayOntoUpstream(
+		context.Background(), "agent/test", bogus, StrategyLocalWins,
+	)
+	require.Error(t, err, "must error on bad upstream")
+	require.Equal(t, preReplayHash, mustHeadHash(t, svc, "agent/test"), "agent ref unchanged on failure")
+}
