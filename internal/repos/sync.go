@@ -30,130 +30,96 @@ func makeRemoteAuthFn(fallbackAuth config.RemoteAuthConfig, keyPath string) remo
 	}
 }
 
-// runSyncLoop pulls from the configured remote on a fixed interval.
-// First sync fires immediately, then every remote.Interval seconds.
-// The interval and auth are re-read from the database on each tick so that
-// changes made via PUT /api/v1/{repo}/origin take effect without a restart.
-func runSyncLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Service, hub *TaskHub, repo, agentBranch string, resolveAuth remoteAuthFn) {
+// runReconcileLoop is the single background goroutine for origin sync.
+// On each tick it: (1) calls Sync (fetch + reconcileMain + reconcileAgent),
+// (2) calls Push (force-push agent if local advanced).
+//
+// Interval is min(sync, push) interval from the Remote record. Configured
+// changes are picked up on the next tick (re-read from DB).
+func runReconcileLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Service, hub *TaskHub, repo, agentBranch string, resolveAuth remoteAuthFn) {
 	defer wg.Done()
 
-	//todo: it's possible the remote will change while the job is still running
+	// Initial config read for logging context.
 	remote, _ := svc.Remote().GetRemote("origin")
 	if remote == nil {
 		return
 	}
-	interval := time.Duration(remote.Interval) * time.Second
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-
-	auth := resolveAuth(remote)
-
 	lg := log.With().Str("repo", repo).Str("remote", remote.URL).Logger()
-	lg.Info().Dur("interval", interval).Msg("sync loop started")
+	lg.Info().Msg("reconcile loop started")
 
-	doSync := func() {
-		result, err := svc.Remote().Sync(context.Background(), agentBranch, auth)
+	doTick := func() {
+		// Read fresh remote record so resolveAuth picks up DB-stored auth.
+		fresh, _ := svc.Remote().GetRemote("origin")
+		if fresh == nil {
+			return
+		}
+		auth := resolveAuth(fresh)
+
+		// Sync first.
+		syncResult, err := svc.Remote().Sync(context.Background(), agentBranch, auth)
 		if err != nil {
 			hub.broadcastSyncError("origin", err.Error())
-			lg.Warn().Err(err).Msg("sync: pull failed")
-			return
-		}
-		// A tick is "interesting" if main advanced (FF or rewind) or the
-		// agent branch replayed/fast-forwarded onto its upstream.
-		mainChanged := result.Main.FastForward || result.Main.Rewound
-		agentChanged := result.Agent.Replayed || result.Agent.FastForward
-		if mainChanged || agentChanged {
-			hub.broadcastSyncOK("origin", result.Agent.NewTip, result.Agent.FastForward)
-			lg.Info().
-				Bool("main_fast_forward", result.Main.FastForward).
-				Bool("main_rewound", result.Main.Rewound).
-				Bool("agent_replayed", result.Agent.Replayed).
-				Bool("agent_fast_forward", result.Agent.FastForward).
-				Int("agent_replayed_count", result.Agent.NumReplayed).
-				Str("agent_new_tip", result.Agent.NewTip).
-				Msg("sync: pulled changes")
+			lg.Warn().Err(err).Msg("reconcile: sync failed")
 		} else {
-			lg.Debug().Msg("sync: up to date")
-		}
-	}
-
-	// Immediate first sync.
-	doSync()
-
-	for {
-		select {
-		case <-ctx.Done():
-			lg.Info().Msg("sync loop stopped")
-			return
-		case <-ticker.C:
-			// Re-read remote config so interval and auth changes take effect.
-			if fresh, err := svc.Remote().GetRemote("origin"); err == nil && fresh != nil {
-				if d := time.Duration(fresh.Interval) * time.Second; d != interval {
-					lg.Info().Dur("old", interval).Dur("new", d).Msg("sync: interval changed")
-					interval = d
-					ticker.Reset(interval)
-				}
-				auth = resolveAuth(fresh)
+			mainChanged := syncResult.Main.FastForward || syncResult.Main.Rewound
+			agentChanged := syncResult.Agent.Replayed || syncResult.Agent.FastForward
+			if mainChanged || agentChanged {
+				// TODO(task-13): the SSE wire format still carries
+				// merge_commit/fastForward fields from the legacy Sync.
+				// Redesign around SyncResult{Main, Agent}.
+				hub.broadcastSyncOK("origin", syncResult.Agent.NewTip, syncResult.Agent.FastForward)
+				lg.Info().
+					Bool("main_fast_forward", syncResult.Main.FastForward).
+					Bool("main_rewound", syncResult.Main.Rewound).
+					Bool("agent_replayed", syncResult.Agent.Replayed).
+					Bool("agent_fast_forward", syncResult.Agent.FastForward).
+					Int("agent_replayed_count", syncResult.Agent.NumReplayed).
+					Str("agent_new_tip", syncResult.Agent.NewTip).
+					Msg("reconcile: pulled changes")
+			} else {
+				lg.Debug().Msg("reconcile: sync up to date")
 			}
-			doSync()
 		}
-	}
-}
 
-// runPushLoop pushes the agent branch to origin on a fixed interval.
-// The interval and auth are re-read from the database on each tick so that
-// changes made via PUT /api/v1/{repo}/origin take effect without a restart.
-func runPushLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Service, hub *TaskHub, repo, agentBranch string, resolveAuth remoteAuthFn) {
-	defer wg.Done()
-
-	//todo: it's possible the remote will change while the job is still running
-	remote, _ := svc.Remote().GetRemote("origin")
-	if remote == nil {
-		return
-	}
-	interval := time.Duration(remote.PushInterval) * time.Second
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-
-	auth := resolveAuth(remote)
-
-	lg := log.With().Str("repo", repo).Str("remote", remote.URL).Logger()
-	lg.Info().Dur("interval", interval).Msg("push loop started")
-
-	doPush := func() {
-		result, err := svc.Remote().Push(context.Background(), agentBranch, auth)
+		// Then push.
+		pushResult, err := svc.Remote().Push(context.Background(), agentBranch, auth)
 		if err != nil {
 			hub.broadcastPushError("origin", err.Error())
-			lg.Warn().Err(err).Msg("push: failed")
+			lg.Warn().Err(err).Msg("reconcile: push failed")
 			return
 		}
-		if result.Pushed {
+		if pushResult.Pushed {
 			hub.broadcastPushOK("origin")
-			lg.Info().Str("branch", agentBranch).Msg("push: pushed changes")
+			lg.Info().Str("branch", agentBranch).Msg("reconcile: pushed changes")
 		} else {
-			lg.Debug().Msg("push: up to date")
+			lg.Debug().Msg("reconcile: push up to date")
 		}
 	}
 
-	// Immediate first push.
-	doPush()
+	// Immediate first tick.
+	doTick()
 
 	for {
+		// Re-read remote config every iteration to pick up interval changes.
+		fresh, err := svc.Remote().GetRemote("origin")
+		if err != nil || fresh == nil {
+			lg.Info().Msg("reconcile loop stopped: remote disappeared")
+			return
+		}
+		interval := fresh.Interval
+		if fresh.PushInterval > 0 && fresh.PushInterval < interval {
+			interval = fresh.PushInterval
+		}
+		if interval <= 0 {
+			interval = 300
+		}
+
 		select {
 		case <-ctx.Done():
-			lg.Info().Msg("push loop stopped")
+			lg.Info().Msg("reconcile loop stopped")
 			return
-		case <-ticker.C:
-			// Re-read remote config so interval and auth changes take effect.
-			if fresh, err := svc.Remote().GetRemote("origin"); err == nil && fresh != nil {
-				if d := time.Duration(fresh.PushInterval) * time.Second; d != interval {
-					lg.Info().Dur("old", interval).Dur("new", d).Msg("push: interval changed")
-					interval = d
-					ticker.Reset(interval)
-				}
-				auth = resolveAuth(fresh)
-			}
-			doPush()
+		case <-time.After(time.Duration(interval) * time.Second):
+			doTick()
 		}
 	}
 }

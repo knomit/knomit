@@ -274,9 +274,8 @@ func (b *repoBuilder) build() *RepoInstance {
 			return fmt.Errorf("ActivateSync: initial reconcile failed: %w", err)
 		}
 
-		syncWg.Add(2)
-		go runSyncLoop(newCtx, &syncWg, currentSvc, hub, name, agentBranch, authFn)
-		go runPushLoop(newCtx, &syncWg, currentSvc, hub, name, agentBranch, authFn)
+		syncWg.Add(1)
+		go runReconcileLoop(newCtx, &syncWg, currentSvc, hub, name, agentBranch, authFn)
 		return nil
 	}
 
@@ -333,9 +332,8 @@ func (b *repoBuilder) startSyncLoops(ctx context.Context, wg *sync.WaitGroup, hu
 	}
 
 	authFn := makeRemoteAuthFn(b.cfg.Remote, b.keyPath)
-	wg.Add(2)
-	go runSyncLoop(ctx, wg, b.svc, hub, b.name, b.agentBranch, authFn)
-	go runPushLoop(ctx, wg, b.svc, hub, b.name, b.agentBranch, authFn)
+	wg.Add(1)
+	go runReconcileLoop(ctx, wg, b.svc, hub, b.name, b.agentBranch, authFn)
 }
 
 // close releases resources opened so far. Safe to call at any point during
