@@ -108,14 +108,25 @@ export default function App() {
       dispatch({ type: 'SET_REMOTE_ERROR', error: '' });
       // Sync events now carry structured Main + Agent reconcile detail.
       // Surface a human-readable summary in the console so users can see
-      // *what* changed (main fast-forward, main rewind, N commits replayed
-      // onto agent, agent fast-forward) rather than just "sync_ok".
+      // *what* changed on each side of the reconcile.
       if (e.type === 'sync_ok' && (ev.main || ev.agent)) {
         const parts: string[] = [];
         if (ev.main?.fast_forward) parts.push('main fast-forwarded');
         if (ev.main?.rewound) parts.push('main rewound');
-        if (ev.agent?.replayed) parts.push(`${ev.agent.num_replayed ?? 0} commit(s) replayed onto agent`);
-        if (ev.agent?.fast_forward) parts.push('agent fast-forwarded');
+        switch (ev.agent?.mode) {
+          case 'merge':
+            parts.push('main merged into agent');
+            break;
+          case 'ff':
+            parts.push('agent fast-forwarded to main');
+            break;
+          case 'rebase':
+            parts.push(`${ev.agent.num_replayed ?? 0} commit(s) replayed onto agent (rewind)`);
+            break;
+          case 'noop':
+            // No agent change — only emit a line if main changed.
+            break;
+        }
         if (parts.length) {
           dispatch({ type: 'CONSOLE_LOG', level: 'info', message: `[remote] ${parts.join(', ')}` });
         }
