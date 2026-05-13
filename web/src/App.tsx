@@ -103,8 +103,22 @@ export default function App() {
       if (ev.error) {
         dispatch({ type: 'SET_REMOTE_ERROR', error: ev.error });
         dispatch({ type: 'CONSOLE_LOG', level: 'error', message: `[remote] ${ev.error}` });
-      } else {
-        dispatch({ type: 'SET_REMOTE_ERROR', error: '' });
+        return;
+      }
+      dispatch({ type: 'SET_REMOTE_ERROR', error: '' });
+      // Sync events now carry structured Main + Agent reconcile detail.
+      // Surface a human-readable summary in the console so users can see
+      // *what* changed (main fast-forward, main rewind, N commits replayed
+      // onto agent, agent fast-forward) rather than just "sync_ok".
+      if (e.type === 'sync_ok' && (ev.main || ev.agent)) {
+        const parts: string[] = [];
+        if (ev.main?.fast_forward) parts.push('main fast-forwarded');
+        if (ev.main?.rewound) parts.push('main rewound');
+        if (ev.agent?.replayed) parts.push(`${ev.agent.num_replayed ?? 0} commit(s) replayed onto agent`);
+        if (ev.agent?.fast_forward) parts.push('agent fast-forwarded');
+        if (parts.length) {
+          dispatch({ type: 'CONSOLE_LOG', level: 'info', message: `[remote] ${parts.join(', ')}` });
+        }
       }
     };
     es.addEventListener('sync_ok', handleRemoteEvent);

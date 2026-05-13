@@ -7,6 +7,8 @@ import (
 
 	"github.com/rs/zerolog/log"
 	"github.com/ysmood/goob"
+
+	"knomit/internal/store"
 )
 
 // TaskEvent is the event payload broadcast to SSE clients via TaskHub.
@@ -183,22 +185,55 @@ func (h *TaskHub) broadcastStatus(head string) {
 	h.ob.Publish(StatusEvent{Head: head})
 }
 
-// SyncEvent is broadcast after a remote sync attempt.
-type SyncEvent struct {
-	Remote      string `json:"remote"`
-	Status      string `json:"status"` // "sync_ok" or "sync_error"
-	MergeCommit string `json:"merge_commit,omitempty"`
-	FastForward bool   `json:"fast_forward,omitempty"`
-	Error       string `json:"error,omitempty"`
+// SyncMainEvent reports the main-branch side of a reconcile tick.
+// Mirrors store.MainReconcileResult with JSON-friendly field names.
+type SyncMainEvent struct {
+	FastForward bool   `json:"fast_forward"`
+	Rewound     bool   `json:"rewound"`
+	NewTip      string `json:"new_tip,omitempty"`
 }
 
-// broadcastSyncOK publishes a successful sync event.
-func (h *TaskHub) broadcastSyncOK(remote, mergeCommit string, fastForward bool) {
+// SyncAgentEvent reports the agent-branch side of a reconcile tick.
+// Mirrors store.ReplayOntoUpstreamResult with JSON-friendly field names.
+type SyncAgentEvent struct {
+	Replayed    bool   `json:"replayed"`
+	NumReplayed int    `json:"num_replayed"`
+	FastForward bool   `json:"fast_forward"`
+	NewTip      string `json:"new_tip,omitempty"`
+}
+
+// SyncEvent is broadcast after a remote sync attempt. On success, Main and
+// Agent carry the structured outcome of the two reconcile phases (main
+// fast-forward/rewind vs. agent replay/fast-forward). On error, Error is set
+// and Main/Agent are nil.
+type SyncEvent struct {
+	Remote string          `json:"remote"`
+	Status string          `json:"status"` // "sync_ok" or "sync_error"
+	Main   *SyncMainEvent  `json:"main,omitempty"`
+	Agent  *SyncAgentEvent `json:"agent,omitempty"`
+	Error  string          `json:"error,omitempty"`
+}
+
+// broadcastSyncOK publishes a successful sync event. The Main and Agent
+// payloads carry the full SyncResult shape so frontends can render which
+// side of the reconcile actually changed (main fast-forward, main rewind,
+// agent replay, agent fast-forward) rather than collapsing both into a
+// single merge-commit hash.
+func (h *TaskHub) broadcastSyncOK(remote string, result store.SyncResult) {
 	h.ob.Publish(SyncEvent{
-		Remote:      remote,
-		Status:      "sync_ok",
-		MergeCommit: mergeCommit,
-		FastForward: fastForward,
+		Remote: remote,
+		Status: "sync_ok",
+		Main: &SyncMainEvent{
+			FastForward: result.Main.FastForward,
+			Rewound:     result.Main.Rewound,
+			NewTip:      result.Main.NewTip,
+		},
+		Agent: &SyncAgentEvent{
+			Replayed:    result.Agent.Replayed,
+			NumReplayed: result.Agent.NumReplayed,
+			FastForward: result.Agent.FastForward,
+			NewTip:      result.Agent.NewTip,
+		},
 	})
 }
 

@@ -64,10 +64,7 @@ func runReconcileLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Servic
 			mainChanged := syncResult.Main.FastForward || syncResult.Main.Rewound
 			agentChanged := syncResult.Agent.Replayed || syncResult.Agent.FastForward
 			if mainChanged || agentChanged {
-				// TODO(task-13): the SSE wire format still carries
-				// merge_commit/fastForward fields from the legacy Sync.
-				// Redesign around SyncResult{Main, Agent}.
-				hub.broadcastSyncOK("origin", syncResult.Agent.NewTip, syncResult.Agent.FastForward)
+				hub.broadcastSyncOK("origin", syncResult)
 				lg.Info().
 					Bool("main_fast_forward", syncResult.Main.FastForward).
 					Bool("main_rewound", syncResult.Main.Rewound).
