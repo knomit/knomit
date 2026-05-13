@@ -323,9 +323,11 @@ func (rh *repoHandler) SetDefaultBranch(branch string) error {
 	)
 }
 
-// configureRemote ensures the named remote is registered in the git config
-// with the given URL and fetch refspec for branch. Idempotent.
-func (rh *repoHandler) configureRemote(url, branch string) error {
+// configureRemote ensures origin is registered with two fetch refspecs:
+// one for main (the consensus branch) and one for this machine's agent
+// branch. Idempotent. The agent branch name is part of the refspec, so
+// callers must pass the same agentBranch on every call for a given repo.
+func (rh *repoHandler) configureRemote(url, agentBranch string) error {
 	rh.configMu.Lock()
 	defer rh.configMu.Unlock()
 
@@ -334,15 +336,24 @@ func (rh *repoHandler) configureRemote(url, branch string) error {
 		return fmt.Errorf("read config: %w", err)
 	}
 
-	refspec := fmt.Sprintf("+refs/heads/%s:refs/remotes/origin/%s", branch, branch)
+	mainRefspec := "+refs/heads/main:refs/remotes/origin/main"
+	agentRefspec := fmt.Sprintf("+refs/heads/%s:refs/remotes/origin/%s", agentBranch, agentBranch)
 
-	if rc, ok := cfg.Remotes["origin"]; ok {
-		if len(rc.URLs) > 0 && rc.URLs[0] == url {
-			for _, rs := range rc.Fetch {
-				if string(rs) == refspec {
-					return nil // already configured
-				}
+	if rc, ok := cfg.Remotes["origin"]; ok && len(rc.URLs) > 0 && rc.URLs[0] == url {
+		want := map[string]bool{mainRefspec: true, agentRefspec: true}
+		got := make(map[string]bool, len(rc.Fetch))
+		for _, rs := range rc.Fetch {
+			got[string(rs)] = true
+		}
+		matches := len(got) == len(want)
+		for k := range want {
+			if !got[k] {
+				matches = false
+				break
 			}
+		}
+		if matches {
+			return nil // already configured
 		}
 	}
 
@@ -351,7 +362,8 @@ func (rh *repoHandler) configureRemote(url, branch string) error {
 		Name: "origin",
 		URLs: []string{url},
 		Fetch: []gogitconfig.RefSpec{
-			gogitconfig.RefSpec(refspec),
+			gogitconfig.RefSpec(mainRefspec),
+			gogitconfig.RefSpec(agentRefspec),
 		},
 	})
 	return err

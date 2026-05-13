@@ -55,7 +55,7 @@ type IndexManager interface {
 // Implemented by *remoteIndex, exposed on Service via Remote().
 type RemoteIndex interface {
 	GetRemote(name string) (*Remote, error)
-	SetRemote(name, url, branch string, interval, pushInterval int, authMethod, authToken string) error
+	SetRemote(name, url, agentBranch string, interval, pushInterval int, authMethod, authToken string) error
 	Sync(ctx context.Context, localBranch string, auth transport.AuthMethod) (SyncResult, error)
 	Push(ctx context.Context, branch string, auth transport.AuthMethod) (PushResult, error)
 }

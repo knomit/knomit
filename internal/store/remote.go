@@ -36,9 +36,15 @@ type Remote struct {
 
 // SetRemote inserts or replaces a remote configuration and wires the git
 // remote in the underlying repository so that Sync and Push can use it
-// immediately. authMethod and authToken are optional; if authToken is
-// non-empty it is encrypted at rest when a Crypt instance is configured.
-func (ri *remoteIndex) SetRemote(name, url, branch string, interval, pushInterval int, authMethod, authToken string) error {
+// immediately. The agentBranch parameter is the LOCAL agent branch that
+// this machine writes to (e.g. "agent/<host>"); it is woven into the fetch
+// refspec so origin/agent/<host> is tracked alongside origin/main.
+//
+// The Remote.Branch field stored in the DB continues to mean the upstream
+// consensus branch and is hardcoded to "main" — this is the branch that
+// Sync merges from. authMethod and authToken are optional; if authToken
+// is non-empty it is encrypted at rest when a Crypt instance is configured.
+func (ri *remoteIndex) SetRemote(name, url, agentBranch string, interval, pushInterval int, authMethod, authToken string) error {
 	storedToken := authToken
 	if ri.crypt != nil && authToken != "" {
 		enc, err := ri.crypt.encrypt(authToken)
@@ -47,9 +53,13 @@ func (ri *remoteIndex) SetRemote(name, url, branch string, interval, pushInterva
 		}
 		storedToken = enc
 	}
+	// The DB column "branch" tracks the upstream main branch name. It is
+	// hardcoded to "main" under the new origin-sync model where main is the
+	// consensus branch. agentBranch only flows into the git refspec.
+	const upstreamMain = "main"
 	_, err := ri.rh.db.Exec(
 		`INSERT OR REPLACE INTO remotes (name, url, branch, interval, push_interval, auth_method, auth_token) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		name, url, branch, interval, pushInterval, authMethod, storedToken,
+		name, url, upstreamMain, interval, pushInterval, authMethod, storedToken,
 	)
 	if err != nil {
 		return err
@@ -57,7 +67,7 @@ func (ri *remoteIndex) SetRemote(name, url, branch string, interval, pushInterva
 	// Sync the git config so go-git can fetch/push by remote name.
 	// No-op when the repo has not been initialised yet (DB-only mode).
 	if ri.rh.repo != nil {
-		if err := ri.rh.configureRemote(url, branch); err != nil {
+		if err := ri.rh.configureRemote(url, agentBranch); err != nil {
 			return fmt.Errorf("configure git remote: %w", err)
 		}
 	}

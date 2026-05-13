@@ -131,7 +131,7 @@ func (b *repoBuilder) ensureBranch() {
 		}
 	}
 	if b.isDefault && b.cfg.Git.Origin != "" {
-		if err := b.svc.Remote().SetRemote("origin", b.cfg.Git.Origin, "main", 300, 300, "", ""); err != nil {
+		if err := b.svc.Remote().SetRemote("origin", b.cfg.Git.Origin, b.agentBranch, 300, 300, "", ""); err != nil {
 			log.Warn().Err(err).Msg("failed to seed origin in remotes table")
 		}
 	}

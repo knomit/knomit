@@ -678,7 +678,6 @@ func (s *Server) handleCommit(rm *repos.Manager, sm *SessionManager, agentBranch
 		remoteStore := sess.RemoteStore
 		authCfg := sess.Auth
 		remoteURL := sess.URL
-		remoteBranch := sess.RemoteBranch
 		appliedBranch := sess.AppliedBranch
 		sess.mu.Unlock()
 
@@ -689,11 +688,6 @@ func (s *Server) handleCommit(rm *repos.Manager, sm *SessionManager, agentBranch
 		if remoteStore == nil {
 			writeError(w, http.StatusConflict, "session has no remote store")
 			return
-		}
-
-		// Use the branch chosen during apply; fall back to "main".
-		if remoteBranch == "" {
-			remoteBranch = "main"
 		}
 
 		ri := repos.RepoFromContext(r.Context())
@@ -735,7 +729,11 @@ func (s *Server) handleCommit(rm *repos.Manager, sm *SessionManager, agentBranch
 			authMethod := authCfg.Method
 			authToken := assembleAuthToken(authMethod, authCfg.Token, authCfg.User, authCfg.Password)
 
-			if err := svc.Remote().SetRemote("origin", remoteURL, remoteBranch, 300, 300, authMethod, authToken); err != nil {
+			// SetRemote takes the local agent branch (woven into the fetch
+			// refspec). The upstream main branch name is hardcoded inside
+			// SetRemote, so the session's selected upstream branch is no
+			// longer threaded through here.
+			if err := svc.Remote().SetRemote("origin", remoteURL, agentBranch, 300, 300, authMethod, authToken); err != nil {
 				sendEvent(map[string]string{"phase": "error", "message": fmt.Sprintf("save remote config: %v", err)})
 				return
 			}

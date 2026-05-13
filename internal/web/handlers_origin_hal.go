@@ -86,16 +86,17 @@ func (defaultOriginProvider) SetOrigin(ri *repos.RepoInstance, req setOriginRequ
 		}
 
 		// Preserve existing intervals or use defaults.
-		branch := "main"
 		interval := 300
 		pushInterval := 300
 		if existing != nil {
-			branch = existing.Branch
 			interval = existing.Interval
 			pushInterval = existing.PushInterval
 		}
 
-		err = svc.Remote().SetRemote("origin", u, branch, interval, pushInterval, authMethod, authToken)
+		// SetRemote now takes the local agent branch — it is woven into the
+		// fetch refspec alongside main. The upstream main name remains
+		// hardcoded inside SetRemote.
+		err = svc.Remote().SetRemote("origin", u, ri.AgentBranch(), interval, pushInterval, authMethod, authToken)
 	})
 	return err
 }
