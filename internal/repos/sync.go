@@ -62,14 +62,15 @@ func runReconcileLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Servic
 			lg.Warn().Err(err).Msg("reconcile: sync failed")
 		} else {
 			mainChanged := syncResult.Main.FastForward || syncResult.Main.Rewound
-			agentChanged := syncResult.Agent.Replayed || syncResult.Agent.FastForward
+			agentChanged := syncResult.Agent.Mode != "noop" && syncResult.Agent.Mode != ""
 			if mainChanged || agentChanged {
 				hub.broadcastSyncOK("origin", syncResult)
 				lg.Info().
 					Bool("main_fast_forward", syncResult.Main.FastForward).
 					Bool("main_rewound", syncResult.Main.Rewound).
+					Str("agent_mode", syncResult.Agent.Mode).
+					Bool("agent_merged", syncResult.Agent.Merged).
 					Bool("agent_replayed", syncResult.Agent.Replayed).
-					Bool("agent_fast_forward", syncResult.Agent.FastForward).
 					Int("agent_replayed_count", syncResult.Agent.NumReplayed).
 					Str("agent_new_tip", syncResult.Agent.NewTip).
 					Msg("reconcile: pulled changes")

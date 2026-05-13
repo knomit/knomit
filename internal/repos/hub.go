@@ -196,9 +196,11 @@ type SyncMainEvent struct {
 // SyncAgentEvent reports the agent-branch side of a reconcile tick.
 // Mirrors store.AgentReconcileResult with JSON-friendly field names.
 type SyncAgentEvent struct {
-	Replayed    bool   `json:"replayed"`
-	NumReplayed int    `json:"num_replayed"`
-	FastForward bool   `json:"fast_forward"`
+	Mode        string `json:"mode"`                   // "noop" / "ff" / "merge" / "rebase"
+	Merged      bool   `json:"merged,omitempty"`       // new merge commit synthesized
+	Replayed    bool   `json:"replayed,omitempty"`     // rebase fallback ran
+	NumReplayed int    `json:"num_replayed,omitempty"` // commits replayed (rebase only)
+	FastForward bool   `json:"fast_forward,omitempty"`
 	NewTip      string `json:"new_tip,omitempty"`
 }
 
@@ -229,6 +231,8 @@ func (h *TaskHub) broadcastSyncOK(remote string, result store.SyncResult) {
 			NewTip:      result.Main.NewTip,
 		},
 		Agent: &SyncAgentEvent{
+			Mode:        result.Agent.Mode,
+			Merged:      result.Agent.Merged,
 			Replayed:    result.Agent.Replayed,
 			NumReplayed: result.Agent.NumReplayed,
 			FastForward: result.Agent.FastForward,
