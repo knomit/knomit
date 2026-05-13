@@ -248,6 +248,13 @@ func (s *Service) InitFromRemote(originURL string, auth transport.AuthMethod, ag
 		agentBranch = defaultAgentBranch()
 	}
 
+	// Publish the freshly-initialised repo on the handler BEFORE
+	// configureRemote — that helper reaches into rh.repo to read and rewrite
+	// the git config, and would panic on nil otherwise. The rest of
+	// InitFromRemote also depends on rh.repo being live for the remote-
+	// tracking ref lookups below.
+	s.rh.repo = repo
+
 	// Configure remote with two-refspec fetch (main + agent/<host>).
 	// The initial CreateRemote above used a wildcard refspec to discover all
 	// remote branches at bootstrap; now we lock it down for steady state.
@@ -258,8 +265,9 @@ func (s *Service) InitFromRemote(originURL string, auth transport.AuthMethod, ag
 	// Re-fetch with the proper refspec so origin/main and origin/agent/<host>
 	// are both tracked consistently. (The initial wildcard fetch already pulled
 	// objects; this just establishes the remote-tracking refs under the new
-	// refspec shape.)
-	if err := repo.Fetch(&gogit.FetchOptions{RemoteName: "origin", Auth: auth}); err != nil && err != gogit.NoErrAlreadyUpToDate {
+	// refspec shape.) Use fetchOrigin so the agent ref's absence on origin
+	// (typical first connect) is tolerated.
+	if err := fetchOrigin(repo, auth); err != nil {
 		return fmt.Errorf("InitFromRemote: re-fetch: %w", err)
 	}
 
@@ -292,7 +300,7 @@ func (s *Service) InitFromRemote(originURL string, auth transport.AuthMethod, ag
 	}
 
 	log.Info().Str("branch", agentBranch).Str("origin", originURL).Msg("git store initialized from remote")
-	s.rh.repo = repo
+	// s.rh.repo is already published (set earlier so configureRemote could run).
 	s.fi.auth = auth
 	if _, err := s.rh.EnsureBranch(context.Background(), agentBranch, "refs/heads/"+agentBranch); err != nil {
 		return fmt.Errorf("InitFromRemote: ensure agent branch %q: %w", agentBranch, err)

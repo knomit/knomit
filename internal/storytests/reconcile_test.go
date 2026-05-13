@@ -1,0 +1,213 @@
+// Category G — Origin reconcile rework scenarios. These tests assert the
+// four bootstrap/reconcile scenarios from the 2026-05-11 origin-sync rework
+// plan plus the two recovery paths:
+//
+//	G1 brand-new local repo (no origin) — agent is usable; main is dormant.
+//	G2 origin set later, history disjoint — replay all local onto origin/main.
+//	G3 origin set, common ancestor, no remote agent — replay delta onto origin/main.
+//	G4 origin set, common ancestor, remote agent exists — adopt origin/agent/<host>.
+//	G5 token-expiry resume — local advanced offline; reconnect pushes deltas.
+//	G6 origin/main rewind — agent re-migrates onto new origin/main.
+package storytests
+
+import (
+	"testing"
+
+	"github.com/stretchr/testify/require"
+
+	"knomit/internal/testenv"
+)
+
+// G1: brand-new local repo (no origin). InitRepo path produces a state in
+// which the agent branch is fully usable for local edits without touching
+// any remote. Main exists (it's the consensus branch) but writes on the
+// agent do not advance main locally.
+func TestReconcile_G1_BrandNewLocalNoOrigin(t *testing.T) {
+	t.Log("G1: fresh repo, no origin; agent + main co-exist; commits land on agent only")
+	sb := testenv.NewStoryboard(t)
+	a := sb.Repo("a") // no Connect — no origin
+
+	agent := a.Branch("agent/test")
+	mainBefore := a.Branch("main").Head().CommitHash()
+
+	agent.Write("kb/x.md", testenv.Fact("x"), "add x")
+
+	// Agent advanced; main is unchanged.
+	require.True(t, agent.HasFile("kb/x.md"), "agent has the local write")
+	require.Equal(t, mainBefore, a.Branch("main").Head().CommitHash(),
+		"main does not advance from local agent writes")
+	require.NotEqual(t, mainBefore, agent.Head().CommitHash(),
+		"agent moved past the shared root")
+}
+
+// G2: origin set later with disjoint history. Local accumulates work on the
+// agent branch with no origin configured. Then ConnectKeepingWork wires an
+// origin whose main is unrelated to the local chain. Reconcile must replay
+// the local commits onto origin/main, producing an agent branch that
+// contains BOTH the local files AND origin's main content. The replay
+// rewrites commit hashes, so the post-replay agent tip differs from the
+// pre-migration head.
+func TestReconcile_G2_DisjointHistoryReplaysOntoOriginMain(t *testing.T) {
+	t.Log("G2: local agent has work; origin has disjoint history; replay puts local on top of origin/main")
+	sb := testenv.NewStoryboard(t)
+
+	a := sb.Repo("a") // no origin yet
+	agent := a.Branch("agent/test")
+	agent.Write("kb/local-a.md", testenv.Fact("local-a"), "local A")
+	agent.Write("kb/local-b.md", testenv.Fact("local-b"), "local B")
+	preMigrationHead := agent.HeadCommit()
+
+	// Build a bare remote with disjoint history on main.
+	remote := sb.BareRemote("origin")
+	remote.WriteMain("kb/remote-x.md", testenv.Fact("remote-x"), "remote X (disjoint root)")
+
+	// Now connect — triggers SetRemote + ActivateSync (reconcile).
+	a.ConnectKeepingWork(remote)
+
+	postAgent := a.Branch("agent/test")
+	require.NotEqual(t, preMigrationHead, postAgent.HeadCommit(),
+		"replayed commits have new hashes")
+	require.True(t, postAgent.HasFile("kb/local-a.md"), "local A survived replay")
+	require.True(t, postAgent.HasFile("kb/local-b.md"), "local B survived replay")
+	require.True(t, postAgent.HasFile("kb/remote-x.md"), "remote X is now in agent")
+}
+
+// G3: origin set later, common ancestor exists (the seed), no remote agent
+// branch yet. The agent's local delta replays onto the advanced
+// origin/main; the result is linear history with seed + remote-advanced
+// + local additions.
+func TestReconcile_G3_CommonAncestorNoRemoteAgent(t *testing.T) {
+	t.Log("G3: local agent shares root with origin/main; new commits replay onto advanced origin/main")
+	sb := testenv.NewStoryboard(t)
+	remote := sb.BareRemote("origin")
+	remote.WriteMain("kb/seed.md", testenv.Fact("seed"), "seed")
+
+	// Agent clones (gets seed via InitFromRemote), then accumulates local work.
+	a := sb.Repo("a").Connect(remote)
+	agent := a.Branch("agent/test")
+	require.True(t, agent.HasFile("kb/seed.md"), "agent inherited seed")
+	agent.Write("kb/local.md", testenv.Fact("local"), "local change")
+
+	// Remote main advances (some other agent's work was promoted).
+	remote.WriteMain("kb/promoted.md", testenv.Fact("promoted"), "promoted by other")
+
+	// Next sync triggers replay.
+	agent.Sync()
+
+	postAgent := a.Branch("agent/test")
+	require.True(t, postAgent.HasFile("kb/seed.md"), "seed survived")
+	require.True(t, postAgent.HasFile("kb/promoted.md"), "promoted change pulled in")
+	require.True(t, postAgent.HasFile("kb/local.md"), "local change preserved via replay")
+}
+
+// G4: origin/agent/<host> already exists (e.g. another instance pushed
+// from the same hostname). A new repo on the same agent branch picks up
+// origin/agent/<host> as upstream, not origin/main.
+func TestReconcile_G4_ResumesFromRemoteAgentBranch(t *testing.T) {
+	t.Log("G4: remote already has agent/test with content; this repo picks it up as upstream")
+	sb := testenv.NewStoryboard(t)
+	remote := sb.BareRemote("origin")
+	remote.WriteMain("kb/seed.md", testenv.Fact("seed"), "seed")
+
+	// First instance: writes and pushes the agent branch.
+	first := sb.Repo("first").Connect(remote)
+	firstAgent := first.Branch("agent/test")
+	firstAgent.Write("kb/persisted.md", testenv.Fact("persisted"), "persistence test")
+	firstAgent.Push()
+
+	// Second instance on the SAME agent branch: connects and should see
+	// origin/agent/test, use it as upstream, end up with persisted content.
+	second := sb.Repo("second").Connect(remote)
+	secondAgent := second.Branch("agent/test")
+	require.True(t, secondAgent.HasFile("kb/persisted.md"),
+		"second instance reads upstream from origin/agent/test")
+	require.True(t, secondAgent.HasFile("kb/seed.md"),
+		"second instance also has the main seed (reachable through agent chain)")
+}
+
+// G5: token-expiry resume. Local advances while origin was unreachable.
+// When sync resumes, the deltas push cleanly via force-push (the agent
+// branch is this machine's; no one else writes to it).
+//
+// We don't have a hook to fake a token here, so this test exercises the
+// equivalent "agent advances offline then reconnects" code path via plain
+// Sync + Push. The token-refresh-via-HAL semantics are covered by Task 12's
+// repos-layer test on makeRemoteAuthFn; this test verifies the user-visible
+// outcome (deltas land on origin).
+func TestReconcile_G5_ResumeAfterTokenExpiry(t *testing.T) {
+	t.Log("G5: local advanced while offline; reconnect; force-push replays cleanly")
+	sb := testenv.NewStoryboard(t)
+	remote := sb.BareRemote("origin")
+	remote.WriteMain("kb/seed.md", testenv.Fact("seed"), "seed")
+
+	a := sb.Repo("a").Connect(remote)
+	agent := a.Branch("agent/test")
+	agent.Write("kb/pushed.md", testenv.Fact("pushed"), "before token expired")
+	pushResult := agent.Push()
+	require.True(t, pushResult.Pushed, "initial push must report Pushed=true")
+
+	// Simulate token expiry: local keeps writing while we "lose" auth.
+	// (In production this is "sync loop ticks fail, but local writes still
+	// land on the agent branch". The test models the same delta accumulation
+	// without involving auth state.)
+	agent.Write("kb/while-offline-1.md", testenv.Fact("o1"), "while offline 1")
+	agent.Write("kb/while-offline-2.md", testenv.Fact("o2"), "while offline 2")
+
+	// Auth restored — next sync+push should land the deltas.
+	agent.Sync()
+	res := agent.Push()
+	require.True(t, res.Pushed, "deltas must push")
+
+	// Re-clone via a second repo to verify the deltas landed on origin.
+	verify := sb.Repo("verify").Connect(remote)
+	verifyAgent := verify.Branch("agent/test")
+	require.True(t, verifyAgent.HasFile("kb/pushed.md"), "initial push is visible")
+	require.True(t, verifyAgent.HasFile("kb/while-offline-1.md"), "offline write 1 is visible")
+	require.True(t, verifyAgent.HasFile("kb/while-offline-2.md"), "offline write 2 is visible")
+}
+
+// G6: origin/main is force-rewound by an admin (e.g. a destructive
+// recovery). Local main is reset to the new origin/main, and the local
+// agent re-migrates onto it so the agent ends up on top of the NEW
+// consensus.
+//
+// Note: the local agent's history previously inherited kb/v1.md (the
+// agent was bootstrapped from origin/main). When the agent replays onto
+// the new origin/main (a disjoint root), every commit in the agent
+// chain is treated as a local-wins delta — meaning kb/v1.md is re-
+// asserted as a local addition onto the new root. The post-rewind
+// agent therefore contains: new main content + every file the agent
+// ever introduced (including the original seed it inherited from main).
+// Local main, by contrast, IS reset cleanly to origin/main (no replay),
+// so it no longer carries kb/v1.md.
+func TestReconcile_G6_OriginMainRewindReMigratesAgent(t *testing.T) {
+	t.Log("G6: origin/main is force-rewound to a disjoint history; agent re-migrates onto new main")
+	sb := testenv.NewStoryboard(t)
+	remote := sb.BareRemote("origin")
+	remote.WriteMain("kb/v1.md", testenv.Fact("v1"), "v1 of main")
+
+	a := sb.Repo("a").Connect(remote)
+	agent := a.Branch("agent/test")
+	require.True(t, agent.HasFile("kb/v1.md"), "agent starts with v1")
+	agent.Write("kb/local.md", testenv.Fact("local"), "local change")
+
+	// Admin rewrites origin/main to a disjoint history. We pass a properly
+	// formatted FactSpec body (via .Build()) so the integrity check on the
+	// post-sync agent branch doesn't trip on a non-fact-shaped kb/*.md
+	// file. WriteDisjointRootOnMain takes raw content because it models
+	// arbitrary admin-supplied recovery payloads; in this test we keep
+	// the payload fact-shaped to satisfy Verify.
+	remote.WriteDisjointRootOnMain("kb/v2.md", testenv.Fact("v2").Build(), "force-pushed v2 root")
+
+	agent.Sync()
+
+	postAgent := a.Branch("agent/test")
+	require.True(t, postAgent.HasFile("kb/v2.md"), "new main content is on the agent")
+	require.True(t, postAgent.HasFile("kb/local.md"), "local change replayed onto new main")
+
+	// Local main was force-updated (not replayed); the old chain is gone
+	// from main.
+	postMain := a.Branch("main")
+	require.True(t, postMain.HasFile("kb/v2.md"), "main was force-updated to new origin/main")
+	require.False(t, postMain.HasFile("kb/v1.md"), "old main content is gone from main")
+}

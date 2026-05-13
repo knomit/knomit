@@ -1,13 +1,25 @@
 // Category F — Concurrency. These tests exercise the store's behavior
-// when multiple goroutines operate on the same repo/branch/remote at
-// the same time. The invariants being asserted are:
+// when multiple goroutines operate on the same repo/branch at the same
+// time. The invariants being asserted are:
 //
-//   - disjoint parallel writes all land and the branch stays integral;
-//   - concurrent writes to the same path serialize cleanly (every
-//     commit is reachable, no torn state);
-//   - parallel work on separate branches is isolated;
-//   - simultaneous Push from multiple repos to a shared bare remote
-//     produces an integral final remote state.
+//   - F1: 50 disjoint parallel writes on one branch all land; Verify
+//     remains strictly clean.
+//   - F2: 20 concurrent writes to the same path serialise cleanly —
+//     CommitCount grows by exactly 20, no torn state.
+//   - F3: parallel writes on five separate branches are isolated from
+//     one another.
+//   - F4: a Barrier-released burst of 20 simultaneous writes on the
+//     same branch produces the same outcome as F2 under the tightest
+//     contention the DSL exposes.
+//   - F5: Verify runs concurrently with a writer; every read observes
+//     a strictly clean snapshot (no torn mid-commit state).
+//
+// F6, F7, F8 from the pre-rework suite were deleted with the
+// origin-sync rework: their behaviors (fetch-merge-retry on push
+// conflict, StrategyLocalWins reconcile-on-push, bounded retry
+// exhaustion) no longer exist. The new Push force-pushes the agent
+// branch and reconcile lives in Sync. Force-push semantics for
+// concurrent agents are covered by Category G (reconcile_test.go).
 //
 // These tests call svc.Facts().WriteFact directly via RepoInstance.WithRead
 // inside the goroutines rather than going through BranchHandle.Write.
@@ -238,8 +250,7 @@ func TestConcurrency_ParallelReadsDuringWrites(t *testing.T) {
 	repo.MustVerify()
 }
 
-// F6, F7, F8 removed: their behaviors (fetch-merge-retry on push conflict,
-// StrategyLocalWins reconcile-on-push, and bounded retry exhaustion) no
-// longer exist. The new Push force-pushes the agent branch; reconcile
-// happens in Sync, not inside Push. New coverage for the force-push model
-// lives in storytests/reconcile_test.go (Task 15).
+// F6, F7, F8 were removed during the 2026-05-11 origin-sync rework — see
+// the catalog comment at the top of this file. Force-push semantics and
+// concurrent-agent conflict resolution now live in Category G
+// (reconcile_test.go).

@@ -167,11 +167,33 @@ func (rh *repoHandler) replayCommit(
 		// only reads .Tree() from baseCommit; an empty tree means every file
 		// in orig.TreeHash registers as an Insert (non-conflicting), which is
 		// the correct semantic for replaying a root commit.
+		//
+		// IMPORTANT: object.Commit.Tree() reads through the commit's private
+		// storer field; a struct literal would leave that field nil and
+		// crash on .Tree(). Storing a synthetic commit and rehydrating via
+		// object.GetCommit attaches the storer.
 		emptyTreeHash, err := storeEmptyTree(rh.gits)
 		if err != nil {
 			return plumbing.ZeroHash, fmt.Errorf("replayCommit: empty tree: %w", err)
 		}
-		baseCommit = &object.Commit{TreeHash: emptyTreeHash}
+		synth := &object.Commit{
+			Author:    object.Signature{Name: "knomit", Email: "knomit@local", When: timeNow()},
+			Committer: object.Signature{Name: "knomit", Email: "knomit@local", When: timeNow()},
+			Message:   "synthetic empty-tree base",
+			TreeHash:  emptyTreeHash,
+		}
+		enc := rh.gits.NewEncodedObject()
+		if err := synth.Encode(enc); err != nil {
+			return plumbing.ZeroHash, fmt.Errorf("replayCommit: encode synthetic base: %w", err)
+		}
+		synthHash, err := rh.gits.SetEncodedObject(enc)
+		if err != nil {
+			return plumbing.ZeroHash, fmt.Errorf("replayCommit: store synthetic base: %w", err)
+		}
+		baseCommit, err = object.GetCommit(rh.gits, synthHash)
+		if err != nil {
+			return plumbing.ZeroHash, fmt.Errorf("replayCommit: rehydrate synthetic base: %w", err)
+		}
 	}
 
 	// Strategy translation: in the user-facing replay framing, "Local"
@@ -336,6 +358,15 @@ func (rh *repoHandler) replayOntoUpstream(
 		log.Warn().Err(err).Msg("replayOntoUpstream: remove temp ref (continuing)")
 	}
 
+	// The pre-replay chain is no longer reachable from localBranch. Purge
+	// stale branch_commits rows so populateCommitLog can rebuild parity from
+	// the new tip without Verify complaining about unreachable rows. (Same
+	// pattern as reconcileMain's rewind path.)
+	if disjoint || len(commits) > 0 {
+		if err := rh.purgeBranchCommits(ctx, localBranch); err != nil {
+			log.Warn().Err(err).Msg("replayOntoUpstream: purge branch_commits")
+		}
+	}
 	if err := rh.populateCommitLog(ctx, localBranch); err != nil {
 		log.Warn().Err(err).Msg("replayOntoUpstream: populate")
 	}
@@ -439,6 +470,12 @@ func (rh *repoHandler) reconcileMain(ctx context.Context) (MainReconcileResult, 
 	if err := rh.gits.SetReference(plumbing.NewHashReference(localMainName, originHash)); err != nil {
 		return MainReconcileResult{}, fmt.Errorf("reconcileMain: force-update: %w", err)
 	}
+	// The old chain is no longer reachable from main. Purge stale
+	// branch_commits rows before repopulating; otherwise Verify reports
+	// unreachable rows because populateCommitLog only INSERTs.
+	if err := rh.purgeBranchCommits(ctx, "main"); err != nil {
+		log.Warn().Err(err).Msg("reconcileMain: purge branch_commits after rewind")
+	}
 	if err := rh.populateCommitLog(ctx, "main"); err != nil {
 		log.Warn().Err(err).Msg("reconcileMain: populate commit_log after force-update")
 	}
@@ -450,6 +487,45 @@ func (rh *repoHandler) reconcileMain(ctx context.Context) (MainReconcileResult, 
 		Str("origin", originHash.String()[:8]).
 		Msg("reconcileMain: origin/main is not a descendant of local main; force-updated")
 	return MainReconcileResult{Rewound: true, NewTip: originHash.String()}, nil
+}
+
+// purgeBranchCommits deletes every branch_commits row for the given branch.
+// Used by reconcileMain on a rewind so populateCommitLog can repopulate from
+// the new HEAD without leaving stranded rows for commits that are no longer
+// reachable.
+func (rh *repoHandler) purgeBranchCommits(ctx context.Context, branch string) error {
+	id, err := rh.branchID(ctx, branch)
+	if err != nil {
+		return fmt.Errorf("purgeBranchCommits: branchID: %w", err)
+	}
+	if _, err := rh.db.ExecContext(ctx, `DELETE FROM branch_commits WHERE branch_id = ?`, id); err != nil {
+		return fmt.Errorf("purgeBranchCommits: delete: %w", err)
+	}
+	return nil
+}
+
+// reconcileAgentOntoMain forces the agent branch to replay onto
+// origin/main, ignoring any existing origin/agent/<host> ref. Used by
+// Sync when reconcileMain reports a rewind: the agent's own remote tip
+// (origin/agent/<host>) is now anchored to an obsolete chain, so the
+// only correct upstream is the new origin/main.
+//
+// Holds rh.lockBranch(agentBranch) for the duration.
+func (rh *repoHandler) reconcileAgentOntoMain(ctx context.Context, agentBranch string, strategy ConflictStrategy) (ReplayOntoUpstreamResult, error) {
+	unlock := rh.lockBranch(agentBranch)
+	defer unlock()
+
+	mainRefName := plumbing.NewRemoteReferenceName("origin", "main")
+	mainRef, err := rh.gits.Reference(mainRefName)
+	if err != nil {
+		return ReplayOntoUpstreamResult{}, fmt.Errorf("reconcileAgentOntoMain: read origin/main: %w", err)
+	}
+	log.Info().
+		Str("branch", agentBranch).
+		Str("upstream", mainRefName.String()).
+		Bool("forced_main", true).
+		Msg("reconcileAgentOntoMain: re-migrating agent onto new origin/main")
+	return rh.replayOntoUpstream(ctx, agentBranch, mainRef.Hash(), strategy)
 }
 
 // reconcileAgent reconciles localBranch (the agent branch for this machine)

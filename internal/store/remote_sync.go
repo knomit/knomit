@@ -7,6 +7,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	gogit "github.com/go-git/go-git/v5"
@@ -15,6 +16,36 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/transport"
 	"github.com/rs/zerolog/log"
 )
+
+// fetchOrigin fetches from origin using the configured refspecs. If origin
+// does not have the agent branch yet (e.g. on first connect, before this
+// machine has ever pushed), go-git returns NoMatchingRefSpecError. That is
+// expected — fall back to fetching just refs/heads/main so origin/main is
+// populated and reconcile can run. The agent ref will materialize on the
+// next fetch after the first Push.
+func fetchOrigin(repo *gogit.Repository, auth transport.AuthMethod) error {
+	err := repo.Fetch(&gogit.FetchOptions{RemoteName: "origin", Auth: auth})
+	if err == nil || err == gogit.NoErrAlreadyUpToDate {
+		return nil
+	}
+	var noMatch gogit.NoMatchingRefSpecError
+	if !errors.As(err, &noMatch) {
+		return err
+	}
+	// Strict refspec didn't match (almost certainly the agent ref). Retry
+	// with just the main refspec — origin/main is the only ref we strictly
+	// require for reconcile to proceed.
+	err = repo.Fetch(&gogit.FetchOptions{
+		RemoteName: "origin",
+		Auth:       auth,
+		RefSpecs:   []gogitconfig.RefSpec{"+refs/heads/main:refs/remotes/origin/main"},
+	})
+	if err == nil || err == gogit.NoErrAlreadyUpToDate {
+		log.Debug().Msg("fetchOrigin: agent ref not on origin yet; fetched main only")
+		return nil
+	}
+	return err
+}
 
 // Sync runs one reconcile cycle for the agent branch:
 //
@@ -53,10 +84,10 @@ func (ri *remoteIndex) Sync(ctx context.Context, agentBranch string, auth transp
 	}
 
 	// Fetch using the configured refspecs (Task 1 wrote two: main + agent).
-	if err := ri.rh.repo.Fetch(&gogit.FetchOptions{
-		RemoteName: "origin",
-		Auth:       auth,
-	}); err != nil && err != gogit.NoErrAlreadyUpToDate {
+	// fetchOrigin tolerates a missing agent ref on origin (expected when the
+	// agent branch has not yet been pushed) by falling back to fetching only
+	// origin/main.
+	if err := fetchOrigin(ri.rh.repo, auth); err != nil {
 		return SyncResult{}, fmt.Errorf("Sync: fetch: %w", err)
 	}
 
@@ -77,7 +108,17 @@ func (ri *remoteIndex) reconcileNow(ctx context.Context, agentBranch string) (Sy
 		return SyncResult{Main: mainRes}, fmt.Errorf("Sync: reconcileMain: %w", err)
 	}
 
-	agentRes, err := ri.rh.reconcileAgent(ctx, agentBranch, StrategyLocalWins)
+	// When origin/main was rewound, origin/agent/<host> still points at the
+	// stale chain and is no longer a useful upstream. Force re-migration
+	// onto the new origin/main so the agent picks up the new consensus
+	// (G6 scenario). On the normal fast-forward / no-op cases, fall back
+	// to resolveAgentUpstream which prefers origin/agent.
+	var agentRes ReplayOntoUpstreamResult
+	if mainRes.Rewound {
+		agentRes, err = ri.rh.reconcileAgentOntoMain(ctx, agentBranch, StrategyLocalWins)
+	} else {
+		agentRes, err = ri.rh.reconcileAgent(ctx, agentBranch, StrategyLocalWins)
+	}
 	if err != nil {
 		return SyncResult{Main: mainRes, Agent: agentRes}, fmt.Errorf("Sync: reconcileAgent: %w", err)
 	}

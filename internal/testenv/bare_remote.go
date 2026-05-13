@@ -96,16 +96,29 @@ func (r *RemoteHandle) MergeIntoMain(branch, message string) {
 // the test pretends another agent pushed and merged-to-main a fact, so
 // when our agent under test syncs, it sees that fact arrive from origin/main.
 //
-// Implemented via the same clone-edit-push pattern as MergeIntoMain.
-// The branch's main must exist on the bare repo before this is called
-// (typically because some other agent has already pushed at least once).
+// Implemented via the same clone-edit-push pattern as MergeIntoMain. If
+// origin/main does not yet exist on the bare remote (i.e. nothing has
+// been pushed to main yet), the helper bootstraps a fresh main with the
+// fact as its root commit. This lets tests model the "third-party seeds
+// main" path without requiring an unrelated upstream push first.
 func (r *RemoteHandle) WriteMain(path string, spec FactSpec, message string) {
 	t := r.sb.t
 	t.Helper()
 
 	work := t.TempDir()
 	mustGit(t, "", "clone", r.dir, work)
-	mustGit(t, work, "checkout", "-B", "main", "origin/main")
+
+	// Check whether origin/main exists on the freshly-cloned remote.
+	if hasRef(work, "refs/remotes/origin/main") {
+		mustGit(t, work, "checkout", "-B", "main", "origin/main")
+	} else {
+		// No main yet — initialise an orphan branch so the first commit is
+		// a fresh root.
+		mustGit(t, work, "checkout", "--orphan", "main")
+		// `clone` checked out HEAD; remove any inherited working-tree files
+		// so the orphan branch starts clean.
+		mustGit(t, work, "rm", "-rf", "--ignore-unmatch", ".")
+	}
 
 	full := filepath.Join(work, path)
 	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
@@ -117,6 +130,36 @@ func (r *RemoteHandle) WriteMain(path string, spec FactSpec, message string) {
 	mustGit(t, work, "add", path)
 	mustGit(t, work, "commit", "-m", message)
 	mustGit(t, work, "push", "origin", "main")
+}
+
+// WriteDisjointRootOnMain writes a brand-new root commit on main of the
+// bare remote with no relation to any previous commit. Used by tests that
+// model the "origin/main was force-rewound by an admin" recovery path
+// (G6). The supplied path is created with the supplied content (raw
+// string, not a FactSpec — this helper is for non-knomit-shaped content
+// such as the admin's recovery seed).
+func (r *RemoteHandle) WriteDisjointRootOnMain(path, content, msg string) {
+	t := r.sb.t
+	t.Helper()
+
+	work := t.TempDir()
+	mustGit(t, "", "clone", r.dir, work)
+	mustGit(t, work, "checkout", "--orphan", "fresh-main")
+	// Remove anything inherited from the previous HEAD.
+	mustGit(t, work, "rm", "-rf", "--ignore-unmatch", ".")
+
+	full := filepath.Join(work, path)
+	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+		t.Fatalf("WriteDisjointRootOnMain: mkdir %s: %v", filepath.Dir(full), err)
+	}
+	if err := os.WriteFile(full, []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteDisjointRootOnMain: write %s: %v", full, err)
+	}
+	mustGit(t, work, "add", path)
+	mustGit(t, work, "commit", "-m", msg)
+	// Force-push the orphan onto refs/heads/main, replacing whatever was
+	// there before.
+	mustGit(t, work, "push", "--force", "origin", "fresh-main:main")
 }
 
 // mustGit runs `git <args>` in dir (or the process cwd if dir is ""),
@@ -152,4 +195,18 @@ func envPassthrough() []string {
 		"PATH=" + os.Getenv("PATH"),
 		"HOME=" + os.Getenv("HOME"),
 	}
+}
+
+// hasRef returns true when `git show-ref --verify <ref>` exits 0 in dir.
+// Used by WriteMain to decide whether origin/main already exists on the
+// cloned remote (and a normal checkout works) or whether the helper has
+// to bootstrap an orphan main.
+func hasRef(dir, ref string) bool {
+	cmd := exec.Command("git", "show-ref", "--verify", ref)
+	cmd.Dir = dir
+	cmd.Env = append([]string{
+		"GIT_CONFIG_GLOBAL=/dev/null",
+		"GIT_CONFIG_SYSTEM=/dev/null",
+	}, envPassthrough()...)
+	return cmd.Run() == nil
 }

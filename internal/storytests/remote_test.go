@@ -169,24 +169,28 @@ func TestRemote_PushWithConcurrentRemoteUpdate(t *testing.T) {
 // ── E6 ────────────────────────────────────────────────────────────────────
 
 // TestRemote_SyncMergesMainIntoAgent asserts that after the remote's
-// main has new commits, a local Sync pulls them in. This is the
-// origin-wins three-way merge path of the production Sync.
+// main has new commits, a local Sync replays the agent on top of the
+// advanced origin/main. Under the post-rework model the agent branch is
+// the only branch written locally; main is consensus, mutated only by
+// the remote-side merge-to-main mechanism (simulated here by WriteMain).
 func TestRemote_SyncMergesMainIntoAgent(t *testing.T) {
-	t.Log("E6: remote main gets a new fact, local syncs, local main has the new fact")
+	t.Log("E6: remote main gets a new fact, local agent syncs, local agent has both facts")
 	sb := testenv.NewStoryboard(t)
 	remote := sb.BareRemote("origin")
 	a := sb.Repo("a").Connect(remote)
-	aMain := a.Branch("main")
-	aMain.Write("kb/x.md", testenv.Fact("x"), "init x")
-	aMain.Push()
+	agent := a.Branch("agent/test")
+	agent.Write("kb/x.md", testenv.Fact("x"), "init x")
+	agent.Push()
 
 	// Remote side: a third party writes a NEW file on main directly.
 	remote.WriteMain("kb/y.md", testenv.Fact("y"), "third party adds y")
 
-	// Local sync should fetch and merge.
-	aMain.Sync()
-	aMain.Head().Fact("kb/y.md").MustExist()
-	aMain.Head().Fact("kb/x.md").MustExist()
+	// Local sync should fetch origin/main, fast-forward main, and replay
+	// the agent (the agent already includes kb/x.md; the replay must place
+	// kb/x.md on top of the advanced main that carries kb/y.md).
+	agent.Sync()
+	agent.Head().Fact("kb/y.md").MustExist()
+	agent.Head().Fact("kb/x.md").MustExist()
 }
 
 // ── E7 ────────────────────────────────────────────────────────────────────
