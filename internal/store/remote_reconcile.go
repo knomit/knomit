@@ -52,7 +52,10 @@ func (rh *repoHandler) resolveAgentUpstream(ctx context.Context, agentBranch str
 // In that case the caller will replay the entire chain onto upstreamTip.
 //
 // Returns empty (and disjoint=false) when localTip is an ancestor of
-// upstreamTip (nothing local to replay — caller will fast-forward).
+// upstreamTip (nothing local to replay — caller will fast-forward), OR
+// when upstreamTip is an ancestor of localTip (local is a strict linear
+// extension — caller's force-push will fast-forward origin without
+// rewriting commit hashes).
 func (rh *repoHandler) unpushedCommits(localTip, upstreamTip plumbing.Hash) ([]*object.Commit, bool, error) {
 	if localTip == upstreamTip {
 		return nil, false, nil
@@ -70,9 +73,20 @@ func (rh *repoHandler) unpushedCommits(localTip, upstreamTip plumbing.Hash) ([]*
 	// If local is an ancestor of upstream, nothing to replay.
 	isAncestor, err := local.IsAncestor(upstream)
 	if err != nil {
-		return nil, false, fmt.Errorf("unpushedCommits: IsAncestor: %w", err)
+		return nil, false, fmt.Errorf("unpushedCommits: IsAncestor (local→upstream): %w", err)
 	}
 	if isAncestor {
+		return nil, false, nil
+	}
+
+	// If upstream is an ancestor of local, local is a strict linear extension
+	// of upstream — no replay needed. The caller's force-push will push the
+	// existing local commits as a fast-forward on origin (no hash rewrite).
+	upstreamAncestor, err := upstream.IsAncestor(local)
+	if err != nil {
+		return nil, false, fmt.Errorf("unpushedCommits: IsAncestor (upstream→local): %w", err)
+	}
+	if upstreamAncestor {
 		return nil, false, nil
 	}
 
@@ -303,23 +317,44 @@ func (rh *repoHandler) replayOntoUpstream(
 		return ReplayOntoUpstreamResult{}, err
 	}
 
-	// No unpushed commits.
+	// No unpushed commits. unpushedCommits returns empty in two distinct
+	// ancestry shapes:
+	//   1. local is an ancestor of upstream → fast-forward local to upstream.
+	//   2. upstream is an ancestor of local → local is a strict linear
+	//      extension; the caller's force-push will fast-forward origin.
+	//      Do NOT rewind local — that would orphan its branch_commits rows.
 	if len(commits) == 0 {
-		// Local may still be behind upstream — fast-forward if so.
-		if localTip != upstreamTip {
-			newRef := plumbing.NewHashReference(localRefName, upstreamTip)
-			if err := rh.gits.SetReference(newRef); err != nil {
-				return ReplayOntoUpstreamResult{}, fmt.Errorf("replayOntoUpstream: fast-forward: %w", err)
-			}
-			if err := rh.populateCommitLog(ctx, localBranch); err != nil {
-				log.Warn().Err(err).Msg("replayOntoUpstream: populate after FF")
-			}
-			if err := rh.notifyCommit(ctx, localBranch, upstreamTip); err != nil {
-				return ReplayOntoUpstreamResult{}, fmt.Errorf("replayOntoUpstream: notify after FF: %w", err)
-			}
-			return ReplayOntoUpstreamResult{FastForward: true, NewTip: upstreamTip.String()}, nil
+		if localTip == upstreamTip {
+			return ReplayOntoUpstreamResult{}, nil
 		}
-		return ReplayOntoUpstreamResult{}, nil
+		localCommit, err := rh.repo.CommitObject(localTip)
+		if err != nil {
+			return ReplayOntoUpstreamResult{}, fmt.Errorf("replayOntoUpstream: local commit: %w", err)
+		}
+		upstreamCommit, err := rh.repo.CommitObject(upstreamTip)
+		if err != nil {
+			return ReplayOntoUpstreamResult{}, fmt.Errorf("replayOntoUpstream: upstream commit: %w", err)
+		}
+		isLocalAncestor, err := localCommit.IsAncestor(upstreamCommit)
+		if err != nil {
+			return ReplayOntoUpstreamResult{}, fmt.Errorf("replayOntoUpstream: IsAncestor: %w", err)
+		}
+		if !isLocalAncestor {
+			// Local is strictly ahead of upstream — no replay, no fast-forward.
+			// Caller's force-push will advance origin to local.
+			return ReplayOntoUpstreamResult{NewTip: localTip.String()}, nil
+		}
+		newRef := plumbing.NewHashReference(localRefName, upstreamTip)
+		if err := rh.gits.SetReference(newRef); err != nil {
+			return ReplayOntoUpstreamResult{}, fmt.Errorf("replayOntoUpstream: fast-forward: %w", err)
+		}
+		if err := rh.populateCommitLog(ctx, localBranch); err != nil {
+			log.Warn().Err(err).Msg("replayOntoUpstream: populate after FF")
+		}
+		if err := rh.notifyCommit(ctx, localBranch, upstreamTip); err != nil {
+			return ReplayOntoUpstreamResult{}, fmt.Errorf("replayOntoUpstream: notify after FF: %w", err)
+		}
+		return ReplayOntoUpstreamResult{FastForward: true, NewTip: upstreamTip.String()}, nil
 	}
 
 	log.Info().

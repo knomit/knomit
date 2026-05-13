@@ -127,23 +127,49 @@ func mustHeadHash(t *testing.T, svc *Service, branch string) plumbing.Hash {
 }
 
 func TestUnpushedCommits_LocalAhead(t *testing.T) {
-	// Setup: init repo (one root commit on agent + main), write two more facts on agent.
+	// Setup: divergent histories. Agent has two new commits (c1, c2) on top
+	// of the shared root; main (the "upstream") has its own commit on top
+	// of the same root. Neither side is an ancestor of the other, so
+	// unpushedCommits must return the agent's two commits for replay.
 	dir := t.TempDir()
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
 	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
 
-	rootHash := mustHeadHash(t, svc, "main") // same as agent root at this point
 	c1 := writeMergeFact(t, svc, "agent/test", "kb/a.md", "A", "v1")
 	c2 := writeMergeFact(t, svc, "agent/test", "kb/b.md", "B", "v1")
+	// Independent commit on main so neither side is an ancestor of the other.
+	mainHash := writeMergeFact(t, svc, "main", "kb/m.md", "M", "v1")
 
-	commits, disjoint, err := svc.rh.unpushedCommits(plumbing.NewHash(c2), rootHash)
+	commits, disjoint, err := svc.rh.unpushedCommits(plumbing.NewHash(c2), plumbing.NewHash(mainHash))
 	require.NoError(t, err)
 	require.False(t, disjoint)
 	require.Len(t, commits, 2)
 	require.Equal(t, c1, commits[0].Hash.String())
 	require.Equal(t, c2, commits[1].Hash.String())
+}
+
+func TestUnpushedCommits_LocalStrictlyAheadIsNoOp(t *testing.T) {
+	// Setup: init repo, write a commit on agent. Treat the ROOT (which is
+	// the previous commit, ancestor of local) as the upstream — local is
+	// strictly ahead of upstream by exactly one commit, but the upstream
+	// is itself an ancestor of local. Expected: no replay needed.
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = svc.Close() })
+	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+
+	rootHash := mustHeadHash(t, svc, "main")
+	c1 := writeMergeFact(t, svc, "agent/test", "kb/a.md", "A", "v1")
+
+	// upstream = root (ancestor of c1). local strictly ahead by one commit.
+	// Caller should push c1 as a fast-forward; no replay.
+	commits, disjoint, err := svc.rh.unpushedCommits(plumbing.NewHash(c1), rootHash)
+	require.NoError(t, err)
+	require.False(t, disjoint)
+	require.Empty(t, commits, "linear-ahead local needs no replay; force-push will fast-forward origin")
 }
 
 func TestUnpushedCommits_AlreadyUpstreamAncestor(t *testing.T) {
