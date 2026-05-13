@@ -53,25 +53,31 @@ type FileRecency struct {
 	Timestamp time.Time
 }
 
-// AgentReconcileResult reports the outcome of reconcileAgent — what shape of
-// update happened on the agent branch this tick.
+// Mode classifies the outcome of a reconcile step. The same vocabulary is
+// used by both MainReconcileResult (main side) and AgentReconcileResult
+// (agent side); each side's doc lists which modes it can return.
+type Mode string
+
+const (
+	ModeNoop    Mode = "noop"
+	ModeFF      Mode = "ff"
+	ModeMerge   Mode = "merge"
+	ModeRebase  Mode = "rebase"
+	ModeRewound Mode = "rewound"
+)
+
+// AgentReconcileResult reports the outcome of reconcileAgent.
 //
-// Mode discriminates the cases the frontend/log cares about:
-//   - "noop":  agent ref unchanged.
-//   - "ff":    agent fast-forwarded to local main (no new commit synthesized).
-//   - "merge": one merge commit synthesized (steady-state path).
-//   - "rebase": rebase-fallback path ran (origin/main rewind only).
+// Mode values:
+//   - ModeNoop:   agent ref unchanged.
+//   - ModeFF:     agent fast-forwarded to local main (no new commit synthesized).
+//   - ModeMerge:  one merge commit synthesized (steady-state path).
+//   - ModeRebase: rebase-fallback path ran (origin/main rewind only).
 //
-// Replayed/NumReplayed only populated when Mode == "rebase". Merged only true
-// when Mode == "merge". FastForward true only when Mode == "ff" (or for "rebase"
-// with a clean fast-forward path). NEVER true for "merge" — a merge commit
-// synthesizes a new commit, not a ref advance to an existing one.
+// NumReplayed is populated only when Mode == ModeRebase.
 type AgentReconcileResult struct {
-	Mode        string `json:"mode"`
-	Merged      bool   `json:"merged,omitempty"`
-	Replayed    bool   `json:"replayed,omitempty"`
+	Mode        Mode   `json:"mode"`
 	NumReplayed int    `json:"num_replayed,omitempty"`
-	FastForward bool   `json:"fast_forward,omitempty"`
 	NewTip      string `json:"new_tip,omitempty"`
 }
 
@@ -79,8 +85,8 @@ type AgentReconcileResult struct {
 // that brings local main to origin/main (Main) and reconciles the agent
 // branch (Agent) via merge or rebase fallback.
 type SyncResult struct {
-	Main  MainReconcileResult
-	Agent AgentReconcileResult
+	Main  MainReconcileResult  `json:"main"`
+	Agent AgentReconcileResult `json:"agent"`
 }
 
 // PushResult is returned by Push to report what happened.

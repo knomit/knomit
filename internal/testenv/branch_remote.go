@@ -51,7 +51,7 @@ func (b *BranchHandle) Sync() store.SyncResult {
 		t.Fatalf("Sync(%s): %v", b.name, syncErr)
 	}
 	// Capture the resulting HEAD as a snapshot if the agent branch advanced.
-	if result.Agent.Replayed || result.Agent.FastForward {
+	if result.Agent.Mode == store.ModeRebase || result.Agent.Mode == store.ModeFF || result.Agent.Mode == store.ModeMerge {
 		var headHash string
 		var headErr error
 		b.repo.ri.WithRead(func(svc *store.Service) {

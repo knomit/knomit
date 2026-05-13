@@ -22,26 +22,41 @@ func (rh *repoHandler) MergeBranch(ctx context.Context, src, dst string, strateg
 	return err
 }
 
-// mergeIntoBranch merges src into dst using the given conflict strategy and
-// returns a structured AgentReconcileResult describing what happened.
+// mergeIntoBranch acquires rh.lockBranch(dst) and calls
+// mergeIntoBranchLocked. Callers that already hold the lock (e.g.
+// reconcileAgentMerge, which holds it for the watermark write) should
+// call mergeIntoBranchLocked directly.
+func (rh *repoHandler) mergeIntoBranch(
+	ctx context.Context,
+	src, dst string,
+	strategy ConflictStrategy,
+) (AgentReconcileResult, error) {
+	unlock := rh.lockBranch(dst)
+	defer unlock()
+	return rh.mergeIntoBranchLocked(ctx, src, dst, strategy)
+}
+
+// mergeIntoBranchLocked merges src into dst using the given conflict strategy
+// and returns a structured AgentReconcileResult describing what happened.
+// Caller must hold rh.lockBranch(dst).
 //
 // Modes:
-//   - "noop":  src is ancestor of dst (or hashes match); dst unchanged.
-//   - "ff":    dst is ancestor of src; dst fast-forwarded to src.
-//   - "merge": divergent histories; one merge commit synthesized whose
+//   - ModeNoop:  src is ancestor of dst (or hashes match); dst unchanged.
+//   - ModeFF:    dst is ancestor of src; dst fast-forwarded to src.
+//   - ModeMerge: divergent histories; one merge commit synthesized whose
 //     first parent is the previous dst tip and second parent is
 //     src. The merged tree is produced by mergeTreesWithStrategy
 //     with the given conflict strategy.
 //
 // When the three-way merge produces a tree identical to dst's tree (every
 // src change was either no-op or skipped by strategy), the result is
-// reported as "noop" rather than synthesizing a zero-diff merge commit —
+// reported as ModeNoop rather than synthesizing a zero-diff merge commit —
 // this preserves the commit-log parity invariant.
 //
-// Holds rh.lockBranch(dst) for the duration. Errors if dst/src refs cannot
-// be resolved or if histories are disjoint (no common ancestor — the
-// caller is responsible for routing to the rebase fallback in that case).
-func (rh *repoHandler) mergeIntoBranch(
+// Errors if dst/src refs cannot be resolved or if histories are disjoint
+// (no common ancestor — the caller is responsible for routing to the
+// rebase fallback in that case).
+func (rh *repoHandler) mergeIntoBranchLocked(
 	ctx context.Context,
 	src, dst string,
 	strategy ConflictStrategy,
@@ -56,9 +71,6 @@ func (rh *repoHandler) mergeIntoBranch(
 	if _, err := rh.branchID(ctx, dst); err != nil {
 		return AgentReconcileResult{}, fmt.Errorf("mergeIntoBranch: dst %q: %w", dst, err)
 	}
-
-	unlock := rh.lockBranch(dst)
-	defer unlock()
 
 	srcRefName := plumbing.NewBranchReferenceName(src)
 	dstRefName := plumbing.NewBranchReferenceName(dst)
@@ -75,7 +87,7 @@ func (rh *repoHandler) mergeIntoBranch(
 	dstHash := dstRef.Hash()
 
 	if srcHash == dstHash {
-		return AgentReconcileResult{Mode: "noop", NewTip: dstHash.String()}, nil
+		return AgentReconcileResult{Mode: ModeNoop, NewTip: dstHash.String()}, nil
 	}
 
 	srcCommit, err := rh.repo.CommitObject(srcHash)
@@ -92,7 +104,7 @@ func (rh *repoHandler) mergeIntoBranch(
 		return AgentReconcileResult{}, fmt.Errorf("mergeIntoBranch: check src ancestor: %w", err)
 	}
 	if isSrcAncestor {
-		return AgentReconcileResult{Mode: "noop", NewTip: dstHash.String()}, nil
+		return AgentReconcileResult{Mode: ModeNoop, NewTip: dstHash.String()}, nil
 	}
 
 	isDstAncestor, err := dstCommit.IsAncestor(srcCommit)
@@ -105,7 +117,7 @@ func (rh *repoHandler) mergeIntoBranch(
 			return AgentReconcileResult{}, fmt.Errorf("mergeIntoBranch: fast-forward ref: %w", err)
 		}
 		if err := rh.populateCommitLog(ctx, dst); err != nil {
-			log.Warn().Err(err).Msg("mergeIntoBranch: fast-forward populate failed")
+			return AgentReconcileResult{}, fmt.Errorf("mergeIntoBranch: fast-forward populate: %w", err)
 		}
 		if err := rh.notifyCommit(ctx, dst, srcHash); err != nil {
 			return AgentReconcileResult{}, fmt.Errorf("mergeIntoBranch: fast-forward notify: %w", err)
@@ -114,7 +126,7 @@ func (rh *repoHandler) mergeIntoBranch(
 			Str("src", src).Str("dst", dst).
 			Str("to", srcHash.String()[:8]).
 			Msg("mergeIntoBranch: fast-forward")
-		return AgentReconcileResult{Mode: "ff", FastForward: true, NewTip: srcHash.String()}, nil
+		return AgentReconcileResult{Mode: ModeFF, NewTip: srcHash.String()}, nil
 	}
 
 	bases, err := dstCommit.MergeBase(srcCommit)
@@ -136,7 +148,7 @@ func (rh *repoHandler) mergeIntoBranch(
 			Str("src", src).Str("dst", dst).
 			Str("strategy", string(strategy)).
 			Msg("mergeIntoBranch: no-op (merged tree identical to dst)")
-		return AgentReconcileResult{Mode: "noop", NewTip: dstHash.String()}, nil
+		return AgentReconcileResult{Mode: ModeNoop, NewTip: dstHash.String()}, nil
 	}
 
 	mc := &object.Commit{
@@ -167,7 +179,7 @@ func (rh *repoHandler) mergeIntoBranch(
 	}
 
 	if err := rh.populateCommitLog(ctx, dst); err != nil {
-		log.Warn().Err(err).Msg("mergeIntoBranch: populate commit_log failed")
+		return AgentReconcileResult{}, fmt.Errorf("mergeIntoBranch: populate commit_log: %w", err)
 	}
 	if err := rh.notifyCommit(ctx, dst, mergeHash); err != nil {
 		return AgentReconcileResult{}, fmt.Errorf("mergeIntoBranch: three-way notify: %w", err)
@@ -180,7 +192,7 @@ func (rh *repoHandler) mergeIntoBranch(
 		Str("merge_commit", mergeHash.String()[:8]).
 		Msg("mergeIntoBranch: three-way merge complete")
 
-	return AgentReconcileResult{Mode: "merge", Merged: true, NewTip: mergeHash.String()}, nil
+	return AgentReconcileResult{Mode: ModeMerge, NewTip: mergeHash.String()}, nil
 }
 
 // mergeTreesWithStrategy performs a three-way tree merge anchored on

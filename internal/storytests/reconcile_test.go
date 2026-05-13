@@ -20,6 +20,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"knomit/internal/store"
 	"knomit/internal/testenv"
 )
 
@@ -100,7 +101,7 @@ func TestReconcile_G3_CommonAncestorNoRemoteAgent(t *testing.T) {
 	// histories (agent has kb/local.md, main has kb/promoted.md, sharing
 	// the seed root) produce a single merge commit.
 	syncRes := agent.Sync()
-	require.Equal(t, "merge", syncRes.Agent.Mode,
+	require.Equal(t, store.ModeMerge, syncRes.Agent.Mode,
 		"diverged histories produce one merge commit")
 
 	postAgent := a.Branch("agent/test")
@@ -247,7 +248,7 @@ func TestReconcile_G7_PostPushPicksUpMainAdvance(t *testing.T) {
 	// kb/local.md, main has kb/promoted.md) or fast-forward; never via
 	// the rebase fallback (which only fires on origin/main rewind).
 	syncRes := agent.Sync()
-	require.Contains(t, []string{"merge", "ff"}, syncRes.Agent.Mode,
+	require.Contains(t, []store.Mode{store.ModeMerge, store.ModeFF}, syncRes.Agent.Mode,
 		"post-push main advance must take the merge path, not rebase")
 
 	postAgent := a.Branch("agent/test")
@@ -298,4 +299,52 @@ func TestReconcile_G8_AdoptOriginAgentAfterMainAdvanced(t *testing.T) {
 	require.True(t, postAgent.HasFile("kb/local.md"), "local change preserved")
 	require.False(t, postAgent.HasFile("kb/scrub-me.md"),
 		"scrubbed file must drop from agent (was deleted on main after last push)")
+}
+
+// G10: merge commit + subsequent force-rewind. After the agent has done at
+// least one steady-state reconcile (which puts a merge commit on its
+// branch), origin/main is force-rewound to a disjoint history. The rebase
+// fallback must NOT resurrect old-main content via the merge commit's
+// tree — unpushedCommits skips merge commits so the walk collects only
+// the agent's own commits.
+func TestReconcile_G10_MergeThenRewindDoesNotResurrectOldMain(t *testing.T) {
+	t.Log("G10: agent does a steady-state merge, then origin/main rewinds; old-main content must NOT survive")
+	sb := testenv.NewStoryboard(t)
+	remote := sb.BareRemote("origin")
+	remote.WriteMain("kb/seed.md", testenv.Fact("seed"), "seed")
+
+	a := sb.Repo("a").Connect(remote)
+	agent := a.Branch("agent/test")
+	require.True(t, agent.HasFile("kb/seed.md"))
+	agent.Write("kb/local-1.md", testenv.Fact("local-1"), "local 1")
+
+	// Remote main advances with an unrelated change.
+	remote.WriteMain("kb/main-old.md", testenv.Fact("main-old"), "old main update")
+
+	// Steady-state sync: produces a merge commit on the agent whose tree
+	// includes both agent's local-1 and main's main-old.
+	syncRes := agent.Sync()
+	require.Equal(t, store.ModeMerge, syncRes.Agent.Mode,
+		"setup: steady-state must produce a real merge commit")
+
+	postMergeAgent := a.Branch("agent/test")
+	require.True(t, postMergeAgent.HasFile("kb/main-old.md"),
+		"setup: agent picked up old-main content via merge")
+
+	// Agent makes one more local commit on top of the merge.
+	agent.Write("kb/local-2.md", testenv.Fact("local-2"), "local 2")
+
+	// Admin force-rewinds origin/main to a disjoint history.
+	remote.WriteDisjointRootOnMain("kb/new-main.md",
+		testenv.Fact("new-main").Build(), "force-pushed new disjoint root")
+
+	// Rebase fallback runs.
+	agent.Sync()
+
+	postAgent := a.Branch("agent/test")
+	require.True(t, postAgent.HasFile("kb/local-1.md"), "agent-local-1 survives the rebase")
+	require.True(t, postAgent.HasFile("kb/local-2.md"), "agent-local-2 survives the rebase")
+	require.True(t, postAgent.HasFile("kb/new-main.md"), "new main content is on the agent")
+	require.False(t, postAgent.HasFile("kb/main-old.md"),
+		"OLD-main content (baked into the prior merge commit's tree) must NOT survive the rewind — the walker fix skips merge commits during rebase")
 }

@@ -47,17 +47,29 @@ func (rh *repoHandler) writeAgentBase(agentBranch string, hash plumbing.Hash) er
 }
 
 // MainReconcileResult reports the outcome of reconcileMain.
+//
+// Mode values:
+//   - ModeNoop:    local main was already at origin/main; no change.
+//   - ModeFF:      local main fast-forwarded to origin/main.
+//   - ModeRewound: origin/main was not a descendant of local main; local
+//     main was force-updated. The caller routes the agent
+//     branch to the rebase fallback.
 type MainReconcileResult struct {
-	FastForward bool   // local main was advanced to origin/main
-	Rewound     bool   // origin/main was not a descendant of local main — force-updated
-	NewTip      string // hash of the new local main tip (empty when no-op)
+	Mode   Mode   `json:"mode"`
+	NewTip string `json:"new_tip,omitempty"`
 }
 
 // reconcileMain updates local main to track origin/main. Fast-forwards
 // when origin/main is a descendant of local main. When origin/main is
 // NOT a descendant (rewind, force-push, or disjoint history on the
-// remote), force-updates local main and reports Rewound=true — the
+// remote), force-updates local main and reports Mode=ModeRewound — the
 // caller must then re-migrate the agent branch against the new main.
+//
+// The disjoint-history sub-case (no MergeBase between local and origin)
+// is detected and logged distinctly from a plain rewind; both still
+// dispatch to the rebase fallback, but the operator gets a clear signal
+// when the remote has been replaced wholesale (unrelated repo, corruption,
+// or a complete history rewrite).
 //
 // Errors if origin/main is not present locally (caller must fetch first).
 //
@@ -83,17 +95,17 @@ func (rh *repoHandler) reconcileMain(ctx context.Context) (MainReconcileResult, 
 			return MainReconcileResult{}, fmt.Errorf("reconcileMain: ensure main: %w", err)
 		}
 		if err := rh.populateCommitLog(ctx, "main"); err != nil {
-			log.Warn().Err(err).Msg("reconcileMain: populate commit_log after create")
+			return MainReconcileResult{}, fmt.Errorf("reconcileMain: populate commit_log after create: %w", err)
 		}
 		if err := rh.notifyCommit(ctx, "main", originHash); err != nil {
 			return MainReconcileResult{}, fmt.Errorf("reconcileMain: notify after create: %w", err)
 		}
-		return MainReconcileResult{FastForward: true, NewTip: originHash.String()}, nil
+		return MainReconcileResult{Mode: ModeFF, NewTip: originHash.String()}, nil
 	}
 	localHash := localMainRef.Hash()
 
 	if localHash == originHash {
-		return MainReconcileResult{NewTip: originHash.String()}, nil
+		return MainReconcileResult{Mode: ModeNoop}, nil
 	}
 
 	localCommit, err := rh.repo.CommitObject(localHash)
@@ -115,17 +127,22 @@ func (rh *repoHandler) reconcileMain(ctx context.Context) (MainReconcileResult, 
 			return MainReconcileResult{}, fmt.Errorf("reconcileMain: fast-forward: %w", err)
 		}
 		if err := rh.populateCommitLog(ctx, "main"); err != nil {
-			log.Warn().Err(err).Msg("reconcileMain: populate commit_log after fast-forward")
+			return MainReconcileResult{}, fmt.Errorf("reconcileMain: populate commit_log after fast-forward: %w", err)
 		}
 		if err := rh.notifyCommit(ctx, "main", originHash); err != nil {
 			return MainReconcileResult{}, fmt.Errorf("reconcileMain: notify after fast-forward: %w", err)
 		}
 		log.Info().Str("to", originHash.String()[:8]).Msg("reconcileMain: fast-forward")
-		return MainReconcileResult{FastForward: true, NewTip: originHash.String()}, nil
+		return MainReconcileResult{Mode: ModeFF, NewTip: originHash.String()}, nil
 	}
 
 	// origin/main is not a descendant of local main → rewind / divergent advance.
-	// Force-update local main; caller is responsible for re-migrating the agent.
+	// Distinguish the "disjoint histories" sub-case so the operator log is
+	// clear when origin has been replaced wholesale (unrelated repo pushed,
+	// remote corruption, or a complete history rewrite).
+	bases, mbErr := localCommit.MergeBase(originCommit)
+	disjoint := mbErr == nil && len(bases) == 0
+
 	if err := rh.gits.SetReference(plumbing.NewHashReference(localMainName, originHash)); err != nil {
 		return MainReconcileResult{}, fmt.Errorf("reconcileMain: force-update: %w", err)
 	}
@@ -133,19 +150,24 @@ func (rh *repoHandler) reconcileMain(ctx context.Context) (MainReconcileResult, 
 	// branch_commits rows before repopulating; otherwise Verify reports
 	// unreachable rows because populateCommitLog only INSERTs.
 	if err := rh.purgeBranchCommits(ctx, "main"); err != nil {
-		log.Warn().Err(err).Msg("reconcileMain: purge branch_commits after rewind")
+		return MainReconcileResult{}, fmt.Errorf("reconcileMain: purge branch_commits after rewind: %w", err)
 	}
 	if err := rh.populateCommitLog(ctx, "main"); err != nil {
-		log.Warn().Err(err).Msg("reconcileMain: populate commit_log after force-update")
+		return MainReconcileResult{}, fmt.Errorf("reconcileMain: populate commit_log after force-update: %w", err)
 	}
 	if err := rh.notifyCommit(ctx, "main", originHash); err != nil {
 		return MainReconcileResult{}, fmt.Errorf("reconcileMain: notify after force-update: %w", err)
 	}
-	log.Warn().
+	logEv := log.Warn().
 		Str("local", localHash.String()[:8]).
 		Str("origin", originHash.String()[:8]).
-		Msg("reconcileMain: origin/main is not a descendant of local main; force-updated")
-	return MainReconcileResult{Rewound: true, NewTip: originHash.String()}, nil
+		Bool("disjoint", disjoint)
+	if disjoint {
+		logEv.Msg("reconcileMain: origin/main has DISJOINT history (no common ancestor); force-updated")
+	} else {
+		logEv.Msg("reconcileMain: origin/main is not a descendant of local main; force-updated")
+	}
+	return MainReconcileResult{Mode: ModeRewound, NewTip: originHash.String()}, nil
 }
 
 // purgeBranchCommits deletes every branch_commits row for the given branch.
@@ -177,15 +199,9 @@ func (rh *repoHandler) purgeBranchCommits(ctx context.Context, branch string) er
 //     scrub semantics to work (G6).
 //
 // The watermark is updated to current local main on both paths so it
-// always has a usable base for a future rewind.
-//
-// Lock acquisition:
-//   - Merge path: rh.lockBranch(agentBranch) held by mergeIntoBranch only
-//     during the synthesis step; the watermark write afterwards is outside
-//     the lock. Safe because the reconcile loop is single-tick per branch
-//     and only reconcileAgent{Merge,Rebase} write the watermark.
-//   - Rebase path: rh.lockBranch(agentBranch) held by reconcileAgentRebase
-//     for the entire body, including the watermark write.
+// always has a usable base for a future rewind. Both paths hold
+// rh.lockBranch(agentBranch) for the entire body, including the
+// watermark write.
 func (rh *repoHandler) reconcileAgent(ctx context.Context, agentBranch string, strategy ConflictStrategy, mainRewound bool) (AgentReconcileResult, error) {
 	if mainRewound {
 		return rh.reconcileAgentRebase(ctx, agentBranch, strategy)

@@ -1,18 +1,15 @@
-// Rebase-fallback machinery for the force-rewind case. The merge-based
-// reconcile in remote_reconcile_merge.go (added in Task 3) cannot make
-// progress when local main was force-updated to a disjoint history
-// (origin/main rewind): there is no common ancestor between agent and
-// main, so a three-way merge has nothing to anchor on. In that case
-// reconcileAgent routes here, which walks the agent's local-only commits
-// (since the watermark) and replays them onto the new main using
-// replayCommit. The watermark stops the walk at the last-consumed main
-// commit, so files scrubbed by the rewind don't get resurrected.
-//
-// In steady-state operation (no rewind), this file is never entered.
+// Rebase-fallback machinery for the force-rewind case. When local main
+// was force-updated to a non-FF target, the merge-based reconcile has
+// no anchor (no common ancestor between agent and main). reconcileAgent
+// routes here, which walks the agent's local-only commits (since the
+// watermark) and replays them onto the new main using replayCommit. The
+// watermark stops the walk at the last-consumed main commit, so files
+// scrubbed by the rewind don't get resurrected.
 package store
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -25,8 +22,19 @@ import (
 
 // unpushedCommits returns commits reachable from localTip but not from
 // upstreamTip, ordered oldest → newest (the order in which they should be
-// replayed). The walk follows first-parent ancestry only — merge commits
-// take their "ours" side, matching the linear-history goal.
+// replayed). The walk follows first-parent ancestry and SKIPS merge
+// commits.
+//
+// Merge commits in the agent branch are always reconcile-merges produced
+// by reconcileAgentMerge: their first parent is the agent's prior tip,
+// their second parent is local main, and their tree includes content
+// from the (now-rewound) old main side. Replaying that tree onto the new
+// disjoint main would resurrect the scrubbed content the rewind was meant
+// to drop. The fix is to skip the merge commit itself but continue the
+// first-parent walk past it — agent-only commits made before the merge
+// still get replayed, and any agent-only commits made AFTER the merge
+// have a first-parent delta that is independent of what the merge pulled
+// in from old main (delta is computed against the merge commit's tree).
 //
 // When explicitBase is non-zero, it is used directly as the walk's stop
 // point (the watermark — "the main commit this agent last consumed").
@@ -58,7 +66,6 @@ func (rh *repoHandler) unpushedCommits(localTip, upstreamTip, explicitBase plumb
 		return nil, false, fmt.Errorf("unpushedCommits: upstream commit %s: %w", upstreamTip, err)
 	}
 
-	// If local is an ancestor of upstream, nothing to replay.
 	isAncestor, err := local.IsAncestor(upstream)
 	if err != nil {
 		return nil, false, fmt.Errorf("unpushedCommits: IsAncestor (local→upstream): %w", err)
@@ -67,9 +74,6 @@ func (rh *repoHandler) unpushedCommits(localTip, upstreamTip, explicitBase plumb
 		return nil, false, nil
 	}
 
-	// If upstream is an ancestor of local, local is a strict linear extension
-	// of upstream — no replay needed. The caller's force-push will push the
-	// existing local commits as a fast-forward on origin (no hash rewrite).
 	upstreamAncestor, err := upstream.IsAncestor(local)
 	if err != nil {
 		return nil, false, fmt.Errorf("unpushedCommits: IsAncestor (upstream→local): %w", err)
@@ -81,9 +85,6 @@ func (rh *repoHandler) unpushedCommits(localTip, upstreamTip, explicitBase plumb
 	var stopAt plumbing.Hash
 	disjoint := false
 	if explicitBase != plumbing.ZeroHash {
-		// Caller supplied a watermark — use it directly. We trust the caller
-		// to have established that explicitBase is reachable from localTip
-		// (it was a former tip of either local main or local agent).
 		stopAt = explicitBase
 	} else {
 		bases, err := local.MergeBase(upstream)
@@ -92,21 +93,26 @@ func (rh *repoHandler) unpushedCommits(localTip, upstreamTip, explicitBase plumb
 		}
 		if len(bases) == 0 {
 			disjoint = true
-			// Walk all the way back to root.
 			stopAt = plumbing.ZeroHash
 		} else {
 			stopAt = bases[0].Hash
 		}
 	}
 
-	// Walk first-parent from local back to (but not including) stopAt.
 	var collected []*object.Commit
 	cur := local
 	for {
 		if cur.Hash == stopAt {
 			break
 		}
-		collected = append(collected, cur)
+		if cur.NumParents() <= 1 {
+			collected = append(collected, cur)
+		} else {
+			log.Debug().
+				Str("commit", cur.Hash.String()[:8]).
+				Int("parents", cur.NumParents()).
+				Msg("unpushedCommits: skipping merge commit (reconcile-merge from prior steady-state tick)")
+		}
 		if cur.NumParents() == 0 {
 			break
 		}
@@ -117,7 +123,6 @@ func (rh *repoHandler) unpushedCommits(localTip, upstreamTip, explicitBase plumb
 		cur = parent
 	}
 
-	// Reverse to oldest-first.
 	for i, j := 0, len(collected)-1; i < j; i, j = i+1, j-1 {
 		collected[i], collected[j] = collected[j], collected[i]
 	}
@@ -319,7 +324,7 @@ func (rh *repoHandler) replayOntoUpstream(
 	//      Do NOT rewind local — that would orphan its branch_commits rows.
 	if len(commits) == 0 {
 		if localTip == upstreamTip {
-			return AgentReconcileResult{Mode: "noop"}, nil
+			return AgentReconcileResult{Mode: ModeNoop}, nil
 		}
 		localCommit, err := rh.repo.CommitObject(localTip)
 		if err != nil {
@@ -336,19 +341,19 @@ func (rh *repoHandler) replayOntoUpstream(
 		if !isLocalAncestor {
 			// Local is strictly ahead of upstream — no replay, no fast-forward.
 			// Caller's force-push will advance origin to local.
-			return AgentReconcileResult{Mode: "noop", NewTip: localTip.String()}, nil
+			return AgentReconcileResult{Mode: ModeNoop, NewTip: localTip.String()}, nil
 		}
 		newRef := plumbing.NewHashReference(localRefName, upstreamTip)
 		if err := rh.gits.SetReference(newRef); err != nil {
 			return AgentReconcileResult{}, fmt.Errorf("replayOntoUpstream: fast-forward: %w", err)
 		}
 		if err := rh.populateCommitLog(ctx, localBranch); err != nil {
-			log.Warn().Err(err).Msg("replayOntoUpstream: populate after FF")
+			return AgentReconcileResult{}, fmt.Errorf("replayOntoUpstream: populate after FF: %w", err)
 		}
 		if err := rh.notifyCommit(ctx, localBranch, upstreamTip); err != nil {
 			return AgentReconcileResult{}, fmt.Errorf("replayOntoUpstream: notify after FF: %w", err)
 		}
-		return AgentReconcileResult{Mode: "ff", FastForward: true, NewTip: upstreamTip.String()}, nil
+		return AgentReconcileResult{Mode: ModeFF, NewTip: upstreamTip.String()}, nil
 	}
 
 	log.Info().
@@ -397,15 +402,12 @@ func (rh *repoHandler) replayOntoUpstream(
 
 	// The pre-replay chain is no longer reachable from localBranch. Purge
 	// stale branch_commits rows so populateCommitLog can rebuild parity from
-	// the new tip without Verify complaining about unreachable rows. (Same
-	// pattern as reconcileMain's rewind path.) We always reach this with
-	// len(commits) > 0 (the no-commits case returned earlier), so the purge
-	// is unconditional.
+	// the new tip without Verify complaining about unreachable rows.
 	if err := rh.purgeBranchCommits(ctx, localBranch); err != nil {
-		log.Warn().Err(err).Msg("replayOntoUpstream: purge branch_commits")
+		return AgentReconcileResult{}, fmt.Errorf("replayOntoUpstream: purge branch_commits: %w", err)
 	}
 	if err := rh.populateCommitLog(ctx, localBranch); err != nil {
-		log.Warn().Err(err).Msg("replayOntoUpstream: populate")
+		return AgentReconcileResult{}, fmt.Errorf("replayOntoUpstream: populate: %w", err)
 	}
 	if err := rh.notifyCommit(ctx, localBranch, current); err != nil {
 		return AgentReconcileResult{}, fmt.Errorf("replayOntoUpstream: notify: %w", err)
@@ -418,8 +420,7 @@ func (rh *repoHandler) replayOntoUpstream(
 		Msg("replayOntoUpstream: complete")
 
 	return AgentReconcileResult{
-		Mode:        "rebase",
-		Replayed:    true,
+		Mode:        ModeRebase,
 		NumReplayed: len(commits),
 		NewTip:      current.String(),
 	}, nil
@@ -428,21 +429,17 @@ func (rh *repoHandler) replayOntoUpstream(
 // reconcileAgentRebase is the rewind-fallback reconcile path. Reads the
 // watermark, walks the agent's local-only commits, and replays them onto
 // current local main via replayOntoUpstream. Only invoked from
-// reconcileAgent when reconcileMain reported Rewound=true.
+// reconcileAgent when reconcileMain reported Mode=ModeRewound.
 //
-// Falls back to MergeBase (watermark=zero) when the watermark is missing
-// or unreadable — defensive for older repos that predate the watermark.
+// Falls back to MergeBase (watermark=zero) when the watermark has never
+// been written (plumbing.ErrReferenceNotFound) — defensive for older
+// repos that predate the watermark. Any OTHER error reading the watermark
+// is surfaced rather than silently downgraded to a full-history walk.
 //
-// Known limitation: when the agent branch contains a merge commit from a
-// prior steady-state tick (where origin/main was merged in via second
-// parent), unpushedCommits walks first-parent only. The merge commit is
-// collected as "local-only" and replayCommit will three-way-merge its
-// (first-parent, merge-commit-tree) delta back onto the new disjoint main
-// — which can resurrect content from the old main side of that merge that
-// the rewind was meant to scrub. This is rare in practice (requires a
-// prior in-flight merge AND a subsequent force-rewind of origin/main) and
-// is left as a follow-up; the more common rewind-without-prior-merge case
-// is correctly handled.
+// Merge commits from prior steady-state ticks are skipped by
+// unpushedCommits' walk (see that function's doc), so a force-rewind
+// following an established sync history does not resurrect old-main
+// content via the merge commit's tree.
 //
 // On a successful reconcile, the watermark is advanced to current local
 // main. Holds rh.lockBranch(agentBranch) for the duration.
@@ -459,9 +456,11 @@ func (rh *repoHandler) reconcileAgentRebase(ctx context.Context, agentBranch str
 
 	base, err := rh.readAgentBase(agentBranch)
 	if err != nil {
+		if !errors.Is(err, plumbing.ErrReferenceNotFound) {
+			return AgentReconcileResult{}, fmt.Errorf("reconcileAgentRebase: read watermark: %w", err)
+		}
 		log.Warn().
 			Str("branch", agentBranch).
-			Err(err).
 			Msg("reconcileAgentRebase: watermark missing; falling back to MergeBase")
 		base = plumbing.ZeroHash
 	}

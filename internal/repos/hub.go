@@ -185,59 +185,30 @@ func (h *TaskHub) broadcastStatus(head string) {
 	h.ob.Publish(StatusEvent{Head: head})
 }
 
-// SyncMainEvent reports the main-branch side of a reconcile tick.
-// Mirrors store.MainReconcileResult with JSON-friendly field names.
-type SyncMainEvent struct {
-	FastForward bool   `json:"fast_forward"`
-	Rewound     bool   `json:"rewound"`
-	NewTip      string `json:"new_tip,omitempty"`
-}
-
-// SyncAgentEvent reports the agent-branch side of a reconcile tick.
-// Mirrors store.AgentReconcileResult with JSON-friendly field names.
-type SyncAgentEvent struct {
-	Mode        string `json:"mode"`                   // "noop" / "ff" / "merge" / "rebase"
-	Merged      bool   `json:"merged,omitempty"`       // new merge commit synthesized
-	Replayed    bool   `json:"replayed,omitempty"`     // rebase fallback ran
-	NumReplayed int    `json:"num_replayed,omitempty"` // commits replayed (rebase only)
-	FastForward bool   `json:"fast_forward,omitempty"`
-	NewTip      string `json:"new_tip,omitempty"`
-}
-
 // SyncEvent is broadcast after a remote sync attempt. On success, Main and
-// Agent carry the structured outcome of the two reconcile phases (main
-// fast-forward/rewind vs. agent replay/fast-forward). On error, Error is set
-// and Main/Agent are nil.
+// Agent carry the reconcile outcome for the main and agent branches
+// respectively (the same shapes store.Sync returns). On error, Error is
+// set and Main/Agent are nil.
 type SyncEvent struct {
-	Remote string          `json:"remote"`
-	Status string          `json:"status"` // "sync_ok" or "sync_error"
-	Main   *SyncMainEvent  `json:"main,omitempty"`
-	Agent  *SyncAgentEvent `json:"agent,omitempty"`
-	Error  string          `json:"error,omitempty"`
+	Remote string                       `json:"remote"`
+	Status string                       `json:"status"` // "sync_ok" or "sync_error"
+	Main   *store.MainReconcileResult   `json:"main,omitempty"`
+	Agent  *store.AgentReconcileResult  `json:"agent,omitempty"`
+	Error  string                       `json:"error,omitempty"`
 }
 
-// broadcastSyncOK publishes a successful sync event. The Main and Agent
-// payloads carry the full SyncResult shape so frontends can render which
-// side of the reconcile actually changed (main fast-forward, main rewind,
-// agent replay, agent fast-forward) rather than collapsing both into a
-// single merge-commit hash.
+// broadcastSyncOK publishes a successful sync event carrying the full
+// SyncResult so frontends can render which side of the reconcile actually
+// changed (main fast-forward / rewound, agent merge / ff / rebase / noop)
+// rather than collapsing both into a single merge-commit hash.
 func (h *TaskHub) broadcastSyncOK(remote string, result store.SyncResult) {
+	main := result.Main
+	agent := result.Agent
 	h.ob.Publish(SyncEvent{
 		Remote: remote,
 		Status: "sync_ok",
-		Main: &SyncMainEvent{
-			FastForward: result.Main.FastForward,
-			Rewound:     result.Main.Rewound,
-			NewTip:      result.Main.NewTip,
-		},
-		Agent: &SyncAgentEvent{
-			Mode:        result.Agent.Mode,
-			Merged:      result.Agent.Merged,
-			Replayed:    result.Agent.Replayed,
-			NumReplayed: result.Agent.NumReplayed,
-			FastForward: result.Agent.FastForward,
-			NewTip:      result.Agent.NewTip,
-		},
+		Main:   &main,
+		Agent:  &agent,
 	})
 }
 

@@ -25,7 +25,7 @@ import (
 // next fetch after the first Push.
 func fetchOrigin(repo *gogit.Repository, auth transport.AuthMethod) error {
 	err := repo.Fetch(&gogit.FetchOptions{RemoteName: "origin", Auth: auth})
-	if err == nil || err == gogit.NoErrAlreadyUpToDate {
+	if err == nil || errors.Is(err, gogit.NoErrAlreadyUpToDate) {
 		return nil
 	}
 	var noMatch gogit.NoMatchingRefSpecError
@@ -35,16 +35,19 @@ func fetchOrigin(repo *gogit.Repository, auth transport.AuthMethod) error {
 	// Strict refspec didn't match (almost certainly the agent ref). Retry
 	// with just the main refspec — origin/main is the only ref we strictly
 	// require for reconcile to proceed.
-	err = repo.Fetch(&gogit.FetchOptions{
+	fallbackErr := repo.Fetch(&gogit.FetchOptions{
 		RemoteName: "origin",
 		Auth:       auth,
 		RefSpecs:   []gogitconfig.RefSpec{"+refs/heads/main:refs/remotes/origin/main"},
 	})
-	if err == nil || err == gogit.NoErrAlreadyUpToDate {
+	if fallbackErr == nil || errors.Is(fallbackErr, gogit.NoErrAlreadyUpToDate) {
 		log.Debug().Msg("fetchOrigin: agent ref not on origin yet; fetched main only")
 		return nil
 	}
-	return err
+	// Surface both failures so a misconfigured refspec (which would make
+	// the fallback fail with the same NoMatch error) is distinguishable
+	// from a transport problem.
+	return fmt.Errorf("fetchOrigin: strict fetch failed (%w); fallback fetch failed: %v", err, fallbackErr)
 }
 
 // Sync runs one reconcile cycle for the agent branch:
@@ -75,9 +78,13 @@ func (ri *remoteIndex) Sync(ctx context.Context, agentBranch string, auth transp
 	defer func() {
 		if retErr != nil {
 			errMsg := retErr.Error()
-			_ = ri.updateRemoteStatus("origin", "error", &errMsg)
+			if statusErr := ri.updateRemoteStatus("origin", "error", &errMsg); statusErr != nil {
+				log.Warn().Err(statusErr).Msg("Sync: failed to write error status to remotes table")
+			}
 		} else {
-			_ = ri.updateRemoteStatus("origin", "ok", nil)
+			if statusErr := ri.updateRemoteStatus("origin", "ok", nil); statusErr != nil {
+				log.Warn().Err(statusErr).Msg("Sync: failed to write ok status to remotes table")
+			}
 		}
 	}()
 
@@ -87,10 +94,9 @@ func (ri *remoteIndex) Sync(ctx context.Context, agentBranch string, auth transp
 		return SyncResult{}, nil
 	}
 
-	// Fetch using the configured refspecs (Task 1 wrote two: main + agent).
-	// fetchOrigin tolerates a missing agent ref on origin (expected when the
-	// agent branch has not yet been pushed) by falling back to fetching only
-	// origin/main.
+	// fetchOrigin tolerates a missing agent ref on origin (expected when
+	// the agent branch has not yet been pushed) by falling back to
+	// fetching only origin/main.
 	if err := fetchOrigin(ri.rh.repo, auth); err != nil {
 		return SyncResult{}, fmt.Errorf("Sync: fetch: %w", err)
 	}
@@ -112,11 +118,11 @@ func (ri *remoteIndex) reconcileNow(ctx context.Context, agentBranch string) (Sy
 		return SyncResult{Main: mainRes}, fmt.Errorf("Sync: reconcileMain: %w", err)
 	}
 
-	// reconcileAgent dispatches on mainRes.Rewound:
-	//   - false → merge local main into agent (steady-state, one merge commit at most).
-	//   - true  → rebase fallback: replay agent's local-only commits onto the
-	//             disjoint new main, dropping any files scrubbed by the rewind.
-	agentRes, err := ri.rh.reconcileAgent(ctx, agentBranch, StrategyLocalWins, mainRes.Rewound)
+	// reconcileAgent dispatches on mainRes.Mode:
+	//   - !ModeRewound → merge local main into agent (steady state, one merge commit at most).
+	//   - ModeRewound  → rebase fallback: replay agent's local-only commits onto the
+	//                    disjoint new main, dropping any files scrubbed by the rewind.
+	agentRes, err := ri.rh.reconcileAgent(ctx, agentBranch, StrategyLocalWins, mainRes.Mode == ModeRewound)
 	if err != nil {
 		return SyncResult{Main: mainRes, Agent: agentRes}, fmt.Errorf("Sync: reconcileAgent: %w", err)
 	}
@@ -146,9 +152,13 @@ func (ri *remoteIndex) Push(ctx context.Context, branch string, auth transport.A
 	defer func() {
 		if retErr != nil {
 			errMsg := retErr.Error()
-			_ = ri.updateRemotePushStatus("origin", "error", &errMsg)
+			if statusErr := ri.updateRemotePushStatus("origin", "error", &errMsg); statusErr != nil {
+				log.Warn().Err(statusErr).Msg("Push: failed to write error status to remotes table")
+			}
 		} else {
-			_ = ri.updateRemotePushStatus("origin", "ok", nil)
+			if statusErr := ri.updateRemotePushStatus("origin", "ok", nil); statusErr != nil {
+				log.Warn().Err(statusErr).Msg("Push: failed to write ok status to remotes table")
+			}
 		}
 	}()
 
@@ -171,7 +181,7 @@ func (ri *remoteIndex) Push(ctx context.Context, branch string, auth transport.A
 		RefSpecs:   []gogitconfig.RefSpec{gogitconfig.RefSpec(refspec)},
 		Auth:       auth,
 	}); err != nil {
-		if err == gogit.NoErrAlreadyUpToDate {
+		if errors.Is(err, gogit.NoErrAlreadyUpToDate) {
 			return PushResult{Pushed: false}, nil
 		}
 		return PushResult{}, fmt.Errorf("Push: %w", err)

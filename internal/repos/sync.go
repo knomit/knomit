@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/go-git/go-git/v5/plumbing/transport"
+	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
 	"knomit/internal/config"
@@ -30,6 +31,13 @@ func makeRemoteAuthFn(fallbackAuth config.RemoteAuthConfig, keyPath string) remo
 	}
 }
 
+// reconcileFailureEscalateThreshold is the number of consecutive sync- or
+// push-failures after which the loop escalates a log line from Warn to
+// Error. A repository stuck in permanent failure (revoked credentials,
+// unreachable origin, etc.) otherwise looks identical to a healthy one
+// after log rotation drops the early-tick warnings.
+const reconcileFailureEscalateThreshold = 5
+
 // runReconcileLoop is the single background goroutine for origin sync.
 // On each tick it: (1) calls Sync (fetch + reconcileMain + reconcileAgent),
 // (2) calls Push (force-push agent if local advanced).
@@ -47,6 +55,15 @@ func runReconcileLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Servic
 	lg := log.With().Str("repo", repo).Str("remote", remote.URL).Logger()
 	lg.Info().Msg("reconcile loop started")
 
+	var syncFails, pushFails int
+
+	logFailure := func(count int) *zerolog.Event {
+		if count >= reconcileFailureEscalateThreshold {
+			return lg.Error().Int("consecutive_failures", count)
+		}
+		return lg.Warn().Int("consecutive_failures", count)
+	}
+
 	doTick := func(ctx context.Context) {
 		// Read fresh remote record so resolveAuth picks up DB-stored auth.
 		fresh, _ := svc.Remote().GetRemote("origin")
@@ -58,19 +75,21 @@ func runReconcileLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Servic
 		// Sync first.
 		syncResult, err := svc.Remote().Sync(ctx, agentBranch, auth)
 		if err != nil {
+			syncFails++
 			hub.broadcastSyncError("origin", err.Error())
-			lg.Warn().Err(err).Msg("reconcile: sync failed")
+			logFailure(syncFails).Err(err).Msg("reconcile: sync failed")
 		} else {
-			mainChanged := syncResult.Main.FastForward || syncResult.Main.Rewound
-			agentChanged := syncResult.Agent.Mode != "noop" && syncResult.Agent.Mode != ""
+			if syncFails > 0 {
+				lg.Info().Int("after_failures", syncFails).Msg("reconcile: sync recovered")
+				syncFails = 0
+			}
+			mainChanged := syncResult.Main.Mode != store.ModeNoop && syncResult.Main.Mode != ""
+			agentChanged := syncResult.Agent.Mode != store.ModeNoop && syncResult.Agent.Mode != ""
 			if mainChanged || agentChanged {
 				hub.broadcastSyncOK("origin", syncResult)
 				lg.Info().
-					Bool("main_fast_forward", syncResult.Main.FastForward).
-					Bool("main_rewound", syncResult.Main.Rewound).
-					Str("agent_mode", syncResult.Agent.Mode).
-					Bool("agent_merged", syncResult.Agent.Merged).
-					Bool("agent_replayed", syncResult.Agent.Replayed).
+					Str("main_mode", string(syncResult.Main.Mode)).
+					Str("agent_mode", string(syncResult.Agent.Mode)).
 					Int("agent_replayed_count", syncResult.Agent.NumReplayed).
 					Str("agent_new_tip", syncResult.Agent.NewTip).
 					Msg("reconcile: pulled changes")
@@ -82,9 +101,14 @@ func runReconcileLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Servic
 		// Then push.
 		pushResult, err := svc.Remote().Push(ctx, agentBranch, auth)
 		if err != nil {
+			pushFails++
 			hub.broadcastPushError("origin", err.Error())
-			lg.Warn().Err(err).Msg("reconcile: push failed")
+			logFailure(pushFails).Err(err).Msg("reconcile: push failed")
 			return
+		}
+		if pushFails > 0 {
+			lg.Info().Int("after_failures", pushFails).Msg("reconcile: push recovered")
+			pushFails = 0
 		}
 		if pushResult.Pushed {
 			hub.broadcastPushOK("origin")

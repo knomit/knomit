@@ -253,9 +253,7 @@ func TestMergeIntoBranch_NoopWhenSrcAncestorOfDst(t *testing.T) {
 	// main and agent both at init commit; src=main, dst=agent → no-op.
 	res, err := svc.rh.mergeIntoBranch(context.Background(), "main", "agent/test", StrategyLocalWins)
 	require.NoError(t, err)
-	require.Equal(t, "noop", res.Mode)
-	require.False(t, res.Merged)
-	require.False(t, res.FastForward)
+	require.Equal(t, ModeNoop, res.Mode)
 }
 
 func TestMergeIntoBranch_FastForwardWhenDstAncestorOfSrc(t *testing.T) {
@@ -269,8 +267,7 @@ func TestMergeIntoBranch_FastForwardWhenDstAncestorOfSrc(t *testing.T) {
 
 	res, err := svc.rh.mergeIntoBranch(context.Background(), "main", "agent/test", StrategyLocalWins)
 	require.NoError(t, err)
-	require.Equal(t, "ff", res.Mode)
-	require.True(t, res.FastForward)
+	require.Equal(t, ModeFF, res.Mode)
 	require.Equal(t, mainHash, res.NewTip)
 	require.Equal(t, plumbing.NewHash(mainHash), mustHeadHash(t, svc, "agent/test"))
 }
@@ -291,9 +288,7 @@ func TestMergeIntoBranch_DivergentCreatesOneMergeCommit(t *testing.T) {
 
 	res, err := svc.rh.mergeIntoBranch(context.Background(), "main", "agent/test", StrategyLocalWins)
 	require.NoError(t, err)
-	require.Equal(t, "merge", res.Mode)
-	require.True(t, res.Merged)
-	require.False(t, res.FastForward)
+	require.Equal(t, ModeMerge, res.Mode)
 	require.NotEmpty(t, res.NewTip)
 
 	newTip, err := svc.rh.repo.CommitObject(plumbing.NewHash(res.NewTip))

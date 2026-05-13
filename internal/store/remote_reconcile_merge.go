@@ -1,15 +1,13 @@
-// Merge-based reconcile: the steady-state path. Calls mergeIntoBranch with
-// src=main, dst=agentBranch, StrategyLocalWins. Produces a fast-forward
+// Merge-based reconcile: the steady-state path. Produces a fast-forward
 // when agent is an ancestor of main, a no-op when main is an ancestor of
 // agent (or hashes match), or a single merge commit when histories
 // diverged. Hash rewriting NEVER happens here — that's the rebase
-// fallback's job.
+// fallback's job. Stable commit hashes matter because Push fast-forwards
+// origin on this machine's agent branch; an unrelated rewrite would force
+// an unnecessary force-push.
 //
 // Conflict resolution is StrategyLocalWins for steady-state sync: the
-// agent's local edits win overlapping paths against main. This matches
-// the design intent of the old replay-based reconcile.
-//
-// Holds rh.lockBranch(agentBranch) (inside mergeIntoBranch) for the duration.
+// agent's local edits win overlapping paths against main.
 package store
 
 import (
@@ -20,19 +18,19 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// reconcileAgentMerge merges local main into agentBranch. Wraps
-// mergeIntoBranch and seeds the watermark on success so the rewind
-// fallback always has a usable base to walk back to.
+// reconcileAgentMerge merges local main into agentBranch. Holds
+// rh.lockBranch(agentBranch) for the entire body so the watermark write
+// is atomic with the merge — without this, a concurrent Sync could
+// observe (or write) a stale watermark between the merge and the write.
 func (rh *repoHandler) reconcileAgentMerge(ctx context.Context, agentBranch string, strategy ConflictStrategy) (AgentReconcileResult, error) {
-	res, err := rh.mergeIntoBranch(ctx, "main", agentBranch, strategy)
+	unlock := rh.lockBranch(agentBranch)
+	defer unlock()
+
+	res, err := rh.mergeIntoBranchLocked(ctx, "main", agentBranch, strategy)
 	if err != nil {
 		return res, fmt.Errorf("reconcileAgentMerge: %w", err)
 	}
 
-	// Advance watermark to current local main. The watermark is only
-	// consulted on the rewind path, but bootstrap paths seed it and
-	// reconcileAgent has always kept it current — preserve that invariant
-	// so a future rewind has a sensible base.
 	mainRef, err := rh.gits.Reference(plumbing.NewBranchReferenceName("main"))
 	if err != nil {
 		return res, fmt.Errorf("reconcileAgentMerge: read local main for watermark: %w", err)
@@ -43,7 +41,7 @@ func (rh *repoHandler) reconcileAgentMerge(ctx context.Context, agentBranch stri
 
 	log.Info().
 		Str("branch", agentBranch).
-		Str("mode", res.Mode).
+		Str("mode", string(res.Mode)).
 		Str("new_tip", shortRefHash(plumbing.NewHash(res.NewTip))).
 		Msg("reconcileAgentMerge: complete")
 	return res, nil

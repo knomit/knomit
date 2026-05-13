@@ -111,8 +111,14 @@ export default function App() {
       // *what* changed on each side of the reconcile.
       if (e.type === 'sync_ok' && (ev.main || ev.agent)) {
         const parts: string[] = [];
-        if (ev.main?.fast_forward) parts.push('main fast-forwarded');
-        if (ev.main?.rewound) parts.push('main rewound');
+        switch (ev.main?.mode) {
+          case 'ff':
+            parts.push('main fast-forwarded');
+            break;
+          case 'rewound':
+            parts.push('main rewound');
+            break;
+        }
         switch (ev.agent?.mode) {
           case 'merge':
             parts.push('main merged into agent');

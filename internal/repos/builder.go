@@ -290,6 +290,12 @@ func (b *repoBuilder) build() *RepoInstance {
 	return ri
 }
 
+// recoverFromOriginTimeout bounds the startup reconcile so a slow or
+// unreachable origin cannot stall repo construction past this duration.
+// The background loop retries on its own cadence; failing fast here keeps
+// boot snappy and surfaces auth/network issues quickly without blocking.
+const recoverFromOriginTimeout = 15 * time.Second
+
 // recoverFromOrigin runs one reconcile cycle on startup if origin is
 // configured. Failures are logged but non-fatal — the sync loops will
 // retry on their next tick. This catches the reinstall-with-state-intact
@@ -313,7 +319,9 @@ func (b *repoBuilder) recoverFromOrigin() {
 	// refresh) instead of the static b.cfg.Remote captured at startup.
 	authFn := makeRemoteAuthFn(b.cfg.Remote, b.keyPath)
 	auth := authFn(remote)
-	if _, err := b.svc.Remote().Sync(b.ctx, b.agentBranch, auth); err != nil {
+	ctx, cancel := context.WithTimeout(b.ctx, recoverFromOriginTimeout)
+	defer cancel()
+	if _, err := b.svc.Remote().Sync(ctx, b.agentBranch, auth); err != nil {
 		log.Warn().Err(err).Str("repo", b.name).Msg("recoverFromOrigin: initial sync failed (will retry in loop)")
 	}
 }

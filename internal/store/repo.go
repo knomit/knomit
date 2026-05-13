@@ -244,7 +244,7 @@ func (s *Service) InitFromRemote(originURL string, auth transport.AuthMethod, ag
 		RemoteName: "origin",
 		Auth:       auth,
 	})
-	if err == transport.ErrEmptyRemoteRepository {
+	if errors.Is(err, transport.ErrEmptyRemoteRepository) {
 		return s.initFromEmptyRemote(repo, originURL, auth, agentBranch, initFiles)
 	}
 	if err != nil {

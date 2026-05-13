@@ -191,6 +191,62 @@ func TestUnpushedCommits_DisjointReturnsAllLocal(t *testing.T) {
 	require.Equal(t, c1, commits[len(commits)-1].Hash.String())
 }
 
+// TestUnpushedCommits_SkipsMergeCommits is the regression test for the
+// "merge-commit + force-rewind resurrects old-main content" bug. Setup:
+//
+//  1. Agent writes a local fact.
+//  2. Steady-state reconcile merges local main into the agent (the merge
+//     commit's second parent is local main; its tree contains main's
+//     content alongside the agent's).
+//  3. Agent writes another local fact on top of the merge commit.
+//
+// unpushedCommits must NOT include the merge commit itself — its tree
+// bakes in old-main content that would be resurrected if we replayed it
+// onto a disjoint new main during the rebase fallback.
+func TestUnpushedCommits_SkipsMergeCommits(t *testing.T) {
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = svc.Close() })
+	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+
+	writeMergeFact(t, svc, "agent/test", "kb/local-1.md", "L1", "v1")
+	preMergeAgent := mustHeadHash(t, svc, "agent/test")
+	writeMergeFact(t, svc, "main", "kb/main-old.md", "MO", "v1")
+	oldMainHash := mustHeadHash(t, svc, "main")
+
+	mergeRes, err := svc.rh.reconcileAgentMerge(context.Background(), "agent/test", StrategyLocalWins)
+	require.NoError(t, err)
+	require.Equal(t, ModeMerge, mergeRes.Mode, "setup requires a real merge commit")
+	mergeHash := plumbing.NewHash(mergeRes.NewTip)
+
+	// Sanity: the merge commit has two parents (agent prior, main).
+	mergeCommit, err := svc.rh.repo.CommitObject(mergeHash)
+	require.NoError(t, err)
+	require.Equal(t, 2, mergeCommit.NumParents(), "merge commit must have two parents")
+	require.Equal(t, preMergeAgent, mergeCommit.ParentHashes[0])
+	require.Equal(t, oldMainHash, mergeCommit.ParentHashes[1])
+
+	// One more agent-only commit on top of the merge.
+	postMergeAgent := writeMergeFact(t, svc, "agent/test", "kb/local-2.md", "L2", "v1")
+
+	// Walk: the watermark from reconcileAgentMerge is oldMainHash. Walking
+	// from postMergeAgent back to oldMainHash should yield [preMergeAgent,
+	// postMergeAgent] — i.e. the merge commit itself is SKIPPED.
+	disjoint := makeDisjointRoot(t, svc, "kb/new-main.md", "new disjoint root")
+	commits, _, err := svc.rh.unpushedCommits(plumbing.NewHash(postMergeAgent), disjoint, oldMainHash)
+	require.NoError(t, err)
+
+	hashes := make([]string, 0, len(commits))
+	for _, c := range commits {
+		hashes = append(hashes, c.Hash.String())
+	}
+	require.NotContains(t, hashes, mergeHash.String(),
+		"merge commit MUST be skipped — replaying it resurrects old-main content")
+	require.Contains(t, hashes, preMergeAgent.String(), "pre-merge agent commit must replay")
+	require.Contains(t, hashes, postMergeAgent, "post-merge agent commit must replay")
+}
+
 // makeDisjointRoot writes a single commit with no parent into the storer
 // and returns its hash. The commit has nothing in common with InitRepo's
 // root, so MergeBase against it returns empty.
@@ -337,7 +393,7 @@ func TestReplayOntoUpstream_NoUnpushedIsNoOp(t *testing.T) {
 		context.Background(), "agent/test", agentHash, plumbing.ZeroHash, StrategyLocalWins,
 	)
 	require.NoError(t, err)
-	require.False(t, result.Replayed, "no-op must not report Replayed")
+	require.Equal(t, ModeNoop, result.Mode, "no-op must report Mode=ModeNoop")
 	require.Equal(t, agentHash, mustHeadHash(t, svc, "agent/test"), "ref unchanged")
 }
 
@@ -354,7 +410,7 @@ func TestReplayOntoUpstream_FastForwardWhenLocalIsAncestor(t *testing.T) {
 		context.Background(), "agent/test", plumbing.NewHash(upstreamHash), plumbing.ZeroHash, StrategyLocalWins,
 	)
 	require.NoError(t, err)
-	require.True(t, result.FastForward, "must fast-forward when local is ancestor")
+	require.Equal(t, ModeFF, result.Mode, "must fast-forward when local is ancestor")
 	require.Equal(t, plumbing.NewHash(upstreamHash), mustHeadHash(t, svc, "agent/test"))
 }
 
@@ -375,7 +431,7 @@ func TestReplayOntoUpstream_ReplaysAllUnpushedCommits(t *testing.T) {
 		context.Background(), "agent/test", plumbing.NewHash(upstreamHash), plumbing.ZeroHash, StrategyLocalWins,
 	)
 	require.NoError(t, err)
-	require.True(t, result.Replayed)
+	require.Equal(t, ModeRebase, result.Mode)
 	require.Equal(t, 2, result.NumReplayed, "two commits replayed")
 
 	// New agent tip is a linear chain ending with replayed commits.
@@ -452,8 +508,7 @@ func TestReconcileMain_FastForwardsWhenOriginAhead(t *testing.T) {
 
 	res, err := svc.rh.reconcileMain(context.Background())
 	require.NoError(t, err)
-	require.True(t, res.FastForward)
-	require.False(t, res.Rewound)
+	require.Equal(t, ModeFF, res.Mode)
 	require.Equal(t, plumbing.NewHash(newMainCommit), mustHeadHash(t, svc, "main"))
 }
 
@@ -471,8 +526,7 @@ func TestReconcileMain_NoOpWhenAlreadyAtOrigin(t *testing.T) {
 
 	res, err := svc.rh.reconcileMain(context.Background())
 	require.NoError(t, err)
-	require.False(t, res.FastForward)
-	require.False(t, res.Rewound)
+	require.Equal(t, ModeNoop, res.Mode)
 }
 
 func TestReconcileMain_DetectsRewind(t *testing.T) {
@@ -491,7 +545,7 @@ func TestReconcileMain_DetectsRewind(t *testing.T) {
 
 	res, err := svc.rh.reconcileMain(context.Background())
 	require.NoError(t, err)
-	require.True(t, res.Rewound, "non-descendant origin/main must report Rewound")
+	require.Equal(t, ModeRewound, res.Mode, "non-descendant origin/main must report Mode=ModeRewound")
 	require.Equal(t, disjointHash, mustHeadHash(t, svc, "main"), "local main force-updated to origin")
 }
 
@@ -524,7 +578,7 @@ func TestReconcileMain_CreatesLocalMainWhenMissing(t *testing.T) {
 
 	res, err := svc.rh.reconcileMain(context.Background())
 	require.NoError(t, err)
-	require.True(t, res.FastForward, "creating missing main is reported as fast-forward")
+	require.Equal(t, ModeFF, res.Mode)
 	require.Equal(t, plumbing.NewHash(originHash), mustHeadHash(t, svc, "main"), "local main now at origin")
 }
 
@@ -547,8 +601,8 @@ func TestReconcileAgent_ReplaysLocalCommitsOntoLocalMain(t *testing.T) {
 
 	res, err := svc.rh.reconcileAgent(context.Background(), "agent/test", StrategyLocalWins, false)
 	require.NoError(t, err)
-	require.Equal(t, "merge", res.Mode, "divergent histories merge in steady state")
-	require.True(t, res.Merged)
+	require.Equal(t, ModeMerge, res.Mode, "divergent histories merge in steady state")
+	require.Equal(t, ModeMerge, res.Mode)
 
 	// Tree at new tip has both files.
 	newTip := mustHeadHash(t, svc, "agent/test")
@@ -586,9 +640,7 @@ func TestReconcileAgent_PicksUpMainAdvance(t *testing.T) {
 
 	res, err := svc.rh.reconcileAgent(context.Background(), "agent/test", StrategyLocalWins, false)
 	require.NoError(t, err)
-	require.Equal(t, "ff", res.Mode, "agent is ancestor of main → fast-forward")
-	require.True(t, res.FastForward, "agent must fast-forward to new local main")
-	require.False(t, res.Replayed, "no local commits to replay")
+	require.Equal(t, ModeFF, res.Mode, "agent is ancestor of main → fast-forward")
 	require.Equal(t, plumbing.NewHash(newMainHash), mustHeadHash(t, svc, "agent/test"),
 		"agent tip == new local main after fast-forward")
 
@@ -615,8 +667,8 @@ func TestReconcileAgent_ReplaysLocalCommitsOntoUpdatedMain(t *testing.T) {
 
 	res, err := svc.rh.reconcileAgent(context.Background(), "agent/test", StrategyLocalWins, false)
 	require.NoError(t, err)
-	require.Equal(t, "merge", res.Mode, "divergent histories merge in steady state")
-	require.True(t, res.Merged)
+	require.Equal(t, ModeMerge, res.Mode, "divergent histories merge in steady state")
+	require.Equal(t, ModeMerge, res.Mode)
 
 	newTip := mustHeadHash(t, svc, "agent/test")
 	commit, err := svc.rh.repo.CommitObject(newTip)
@@ -652,8 +704,8 @@ func TestReconcileAgent_WatermarkPreservedAcrossTicks(t *testing.T) {
 	main1 := writeMergeFact(t, svc, "main", "kb/m1.md", "M1", "v1")
 	res1, err := svc.rh.reconcileAgent(context.Background(), "agent/test", StrategyLocalWins, false)
 	require.NoError(t, err)
-	require.Equal(t, "merge", res1.Mode, "tick 1 produces a merge commit")
-	require.True(t, res1.Merged)
+	require.Equal(t, ModeMerge, res1.Mode, "tick 1 produces a merge commit")
+	require.Equal(t, ModeMerge, res1.Mode)
 	wm1, err := svc.rh.readAgentBase("agent/test")
 	require.NoError(t, err)
 	require.Equal(t, plumbing.NewHash(main1), wm1, "watermark at main1 after tick 1")
@@ -663,8 +715,8 @@ func TestReconcileAgent_WatermarkPreservedAcrossTicks(t *testing.T) {
 	main2 := writeMergeFact(t, svc, "main", "kb/m2.md", "M2", "v1")
 	res, err := svc.rh.reconcileAgent(context.Background(), "agent/test", StrategyLocalWins, false)
 	require.NoError(t, err)
-	require.Equal(t, "merge", res.Mode, "tick 2 produces a merge commit")
-	require.True(t, res.Merged, "tick 2 merges new main into agent")
+	require.Equal(t, ModeMerge, res.Mode, "tick 2 produces a merge commit")
+	require.Equal(t, ModeMerge, res.Mode)
 
 	wm2, err := svc.rh.readAgentBase("agent/test")
 	require.NoError(t, err)
@@ -705,7 +757,7 @@ func TestReconcileAgentRebase_FallsBackToMergeBaseWhenWatermarkMissing(t *testin
 
 	res, err := svc.rh.reconcileAgentRebase(context.Background(), "agent/test", StrategyLocalWins)
 	require.NoError(t, err)
-	require.True(t, res.Replayed)
+	require.Equal(t, ModeRebase, res.Mode)
 	require.Equal(t, 1, res.NumReplayed)
 
 	// Watermark was (re)seeded.
@@ -736,9 +788,7 @@ func TestReconcileAgent_SteadyStateUsesMerge(t *testing.T) {
 	// mainRewound=false → merge path.
 	res, err := svc.rh.reconcileAgent(context.Background(), "agent/test", StrategyLocalWins, false)
 	require.NoError(t, err)
-	require.Equal(t, "merge", res.Mode, "steady state must merge, not rebase")
-	require.True(t, res.Merged)
-	require.False(t, res.Replayed)
+	require.Equal(t, ModeMerge, res.Mode, "steady state must merge, not rebase")
 	require.NotEmpty(t, res.NewTip)
 
 	// New tip is a real merge commit with two parents: previous agent first, main second.
@@ -778,10 +828,8 @@ func TestReconcileAgent_RewindUsesRebase(t *testing.T) {
 	// mainRewound=true → rebase path.
 	res, err := svc.rh.reconcileAgent(context.Background(), "agent/test", StrategyLocalWins, true)
 	require.NoError(t, err)
-	require.Equal(t, "rebase", res.Mode, "rewind must rebase, not merge")
-	require.True(t, res.Replayed)
+	require.Equal(t, ModeRebase, res.Mode, "rewind must rebase, not merge")
 	require.GreaterOrEqual(t, res.NumReplayed, 1)
-	require.False(t, res.Merged)
 
 	// Watermark advanced.
 	wm, err := svc.rh.readAgentBase("agent/test")
@@ -813,8 +861,7 @@ func TestSync_OrchestratesMainAndAgent(t *testing.T) {
 	// Use the in-process reconcile entry point that skips fetch (no real remote).
 	res, err := svc.Remote().(*remoteIndex).reconcileNow(context.Background(), "agent/test")
 	require.NoError(t, err)
-	require.Equal(t, "merge", res.Agent.Mode, "steady-state Sync merges local main into agent")
-	require.True(t, res.Agent.Merged, "agent merge produced one merge commit")
+	require.Equal(t, ModeMerge, res.Agent.Mode, "steady-state Sync merges local main into agent (one merge commit)")
 	require.Equal(t, plumbing.NewHash(originMain), mustHeadHash(t, svc, "main"))
 }
 
