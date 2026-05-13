@@ -242,3 +242,63 @@ func TestMergeBranch_MissingSrcReturnsError(t *testing.T) {
 	err := svc.Branches().MergeBranch(context.Background(), "does-not-exist", "main", StrategyLocalWins)
 	require.Error(t, err)
 }
+
+func TestMergeIntoBranch_NoopWhenSrcAncestorOfDst(t *testing.T) {
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = svc.Close() })
+	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+
+	// main and agent both at init commit; src=main, dst=agent → no-op.
+	res, err := svc.rh.mergeIntoBranch(context.Background(), "main", "agent/test", StrategyLocalWins)
+	require.NoError(t, err)
+	require.Equal(t, "noop", res.Mode)
+	require.False(t, res.Merged)
+	require.False(t, res.FastForward)
+}
+
+func TestMergeIntoBranch_FastForwardWhenDstAncestorOfSrc(t *testing.T) {
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = svc.Close() })
+	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+
+	mainHash := writeMergeFact(t, svc, "main", "kb/m.md", "M", "v1")
+
+	res, err := svc.rh.mergeIntoBranch(context.Background(), "main", "agent/test", StrategyLocalWins)
+	require.NoError(t, err)
+	require.Equal(t, "ff", res.Mode)
+	require.True(t, res.FastForward)
+	require.Equal(t, mainHash, res.NewTip)
+	require.Equal(t, plumbing.NewHash(mainHash), mustHeadHash(t, svc, "agent/test"))
+}
+
+func TestMergeIntoBranch_DivergentCreatesOneMergeCommit(t *testing.T) {
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = svc.Close() })
+	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+
+	// Divergent: agent writes one file, main writes another.
+	writeMergeFact(t, svc, "agent/test", "kb/a.md", "A", "v1")
+	writeMergeFact(t, svc, "main", "kb/m.md", "M", "v1")
+
+	preAgentTip := mustHeadHash(t, svc, "agent/test")
+	preMainTip := mustHeadHash(t, svc, "main")
+
+	res, err := svc.rh.mergeIntoBranch(context.Background(), "main", "agent/test", StrategyLocalWins)
+	require.NoError(t, err)
+	require.Equal(t, "merge", res.Mode)
+	require.True(t, res.Merged)
+	require.False(t, res.FastForward)
+	require.NotEmpty(t, res.NewTip)
+
+	newTip, err := svc.rh.repo.CommitObject(plumbing.NewHash(res.NewTip))
+	require.NoError(t, err)
+	require.Equal(t, 2, newTip.NumParents(), "merge commit has two parents")
+	require.Equal(t, preAgentTip, newTip.ParentHashes[0], "first parent is previous agent tip (ours)")
+	require.Equal(t, preMainTip, newTip.ParentHashes[1], "second parent is local main (theirs)")
+}
