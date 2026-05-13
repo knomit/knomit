@@ -147,6 +147,13 @@ func (s *Service) InitRepo(initFiles map[string]string, agentBranch string) erro
 		return fmt.Errorf("InitRepo: set main ref: %w", err)
 	}
 
+	// Seed the per-agent watermark to the initial commit (which is exactly
+	// the local-main hash at this point). On the next reconcileAgent the
+	// walk will use this as its stop point.
+	if err := s.rh.writeAgentBase(agentBranch, lastCommit); err != nil {
+		return fmt.Errorf("InitRepo: seed agent watermark: %w", err)
+	}
+
 	log.Info().Str("branch", agentBranch).Msg("git store initialized")
 	s.rh.repo = repo
 	if _, err := s.rh.EnsureBranch(context.Background(), agentBranch, "refs/heads/"+agentBranch); err != nil {
@@ -299,6 +306,18 @@ func (s *Service) InitFromRemote(originURL string, auth transport.AuthMethod, ag
 		return fmt.Errorf("InitFromRemote: set HEAD: %w", err)
 	}
 
+	// Seed the per-agent watermark to local main. This is correct both
+	// when the agent ref is being bootstrapped from origin/main AND when
+	// it's being adopted from origin/agent/<host>: in both cases the
+	// watermark records "the main commit this agent has consumed", which
+	// is local main right now. (In the adopt-from-origin-agent case the
+	// agent tip may be a descendant of an older main — that's fine, the
+	// next reconcile's unpushedCommits walk will find the agent's local
+	// commits between the watermark and the new main.)
+	if err := s.rh.writeAgentBase(agentBranch, originMainRef.Hash()); err != nil {
+		return fmt.Errorf("InitFromRemote: seed agent watermark: %w", err)
+	}
+
 	log.Info().Str("branch", agentBranch).Str("origin", originURL).Msg("git store initialized from remote")
 	// s.rh.repo is already published (set earlier so configureRemote could run).
 	s.fi.auth = auth
@@ -345,6 +364,10 @@ func (s *Service) initFromEmptyRemote(repo *gogit.Repository, originURL string, 
 	}
 	if writeErr = s.rh.gits.SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), lastCommit)); writeErr != nil {
 		return fmt.Errorf("InitFromRemote: empty remote set main: %w", writeErr)
+	}
+	// Seed the watermark — same shape as the non-empty remote bootstrap.
+	if writeErr = s.rh.writeAgentBase(agentBranch, lastCommit); writeErr != nil {
+		return fmt.Errorf("InitFromRemote: empty remote seed agent watermark: %w", writeErr)
 	}
 	log.Info().Str("branch", agentBranch).Str("origin", originURL).Msg("git store initialized (empty remote)")
 	s.rh.repo = repo

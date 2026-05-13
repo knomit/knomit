@@ -54,69 +54,54 @@ func TestConfigureRemote_IsIdempotent(t *testing.T) {
 	require.Equal(t, "https://example.com/repo.git", rc.URLs[0])
 }
 
-func TestResolveAgentUpstream_PrefersAgentRefWhenPresent(t *testing.T) {
-	dir := t.TempDir()
-	svc, err := Open(filepath.Join(dir, "k.db"))
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
-
-	// Manually create a remote-tracking ref for the agent.
-	agentHash := mustHeadHash(t, svc, "agent/test")
-	require.NoError(t, svc.rh.gits.SetReference(
-		plumbing.NewHashReference(
-			plumbing.NewRemoteReferenceName("origin", "agent/test"),
-			agentHash,
-		),
-	))
-	// And one for main.
-	mainHash := mustHeadHash(t, svc, "main")
-	require.NoError(t, svc.rh.gits.SetReference(
-		plumbing.NewHashReference(
-			plumbing.NewRemoteReferenceName("origin", "main"),
-			mainHash,
-		),
-	))
-
-	got, err := svc.rh.resolveAgentUpstream(context.Background(), "agent/test")
-	require.NoError(t, err)
-	require.Equal(t, "refs/remotes/origin/agent/test", got.refName.String())
-	require.Equal(t, agentHash, got.hash)
-	require.True(t, got.isOwnAgent, "agent upstream must flag isOwnAgent")
+func TestAgentBaseRefName_FormatsUnderKnomitNamespace(t *testing.T) {
+	got := agentBaseRefName("agent/test")
+	require.Equal(t, "refs/knomit/agent-base/agent/test", got.String(),
+		"watermark refs must live under refs/knomit/ to stay out of branch listings")
 }
 
-func TestResolveAgentUpstream_FallsBackToMain(t *testing.T) {
+func TestReadAgentBase_MissingIsReferenceNotFound(t *testing.T) {
 	dir := t.TempDir()
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
 	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
 
-	// Only origin/main is present; no origin/agent/test.
-	mainHash := mustHeadHash(t, svc, "main")
-	require.NoError(t, svc.rh.gits.SetReference(
-		plumbing.NewHashReference(
-			plumbing.NewRemoteReferenceName("origin", "main"),
-			mainHash,
-		),
-	))
+	// InitRepo seeds the watermark; clear it to model the missing case.
+	require.NoError(t, svc.rh.gits.RemoveReference(agentBaseRefName("agent/test")))
 
-	got, err := svc.rh.resolveAgentUpstream(context.Background(), "agent/test")
-	require.NoError(t, err)
-	require.Equal(t, "refs/remotes/origin/main", got.refName.String())
-	require.Equal(t, mainHash, got.hash)
-	require.False(t, got.isOwnAgent, "main-fallback upstream must NOT flag isOwnAgent")
+	_, err = svc.rh.readAgentBase("agent/test")
+	require.Error(t, err)
+	require.ErrorIs(t, err, plumbing.ErrReferenceNotFound, "missing watermark must surface plumbing.ErrReferenceNotFound")
 }
 
-func TestResolveAgentUpstream_NoUpstreamIsError(t *testing.T) {
+func TestWriteAgentBase_RoundTrips(t *testing.T) {
 	dir := t.TempDir()
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
 	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
 
-	_, err = svc.rh.resolveAgentUpstream(context.Background(), "agent/test")
-	require.Error(t, err, "no origin/main and no origin/agent ref → must error")
+	mainHash := mustHeadHash(t, svc, "main")
+	require.NoError(t, svc.rh.writeAgentBase("agent/test", mainHash))
+
+	got, err := svc.rh.readAgentBase("agent/test")
+	require.NoError(t, err)
+	require.Equal(t, mainHash, got)
+}
+
+func TestInitRepo_SeedsAgentWatermark(t *testing.T) {
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = svc.Close() })
+	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+
+	// Watermark = the initial commit (which equals local main at init time).
+	mainHash := mustHeadHash(t, svc, "main")
+	got, err := svc.rh.readAgentBase("agent/test")
+	require.NoError(t, err)
+	require.Equal(t, mainHash, got, "InitRepo must seed watermark to the initial commit")
 }
 
 func mustHeadHash(t *testing.T, svc *Service, branch string) plumbing.Hash {
@@ -142,7 +127,7 @@ func TestUnpushedCommits_LocalAhead(t *testing.T) {
 	// Independent commit on main so neither side is an ancestor of the other.
 	mainHash := writeMergeFact(t, svc, "main", "kb/m.md", "M", "v1")
 
-	commits, disjoint, err := svc.rh.unpushedCommits(plumbing.NewHash(c2), plumbing.NewHash(mainHash))
+	commits, disjoint, err := svc.rh.unpushedCommits(plumbing.NewHash(c2), plumbing.NewHash(mainHash), plumbing.ZeroHash)
 	require.NoError(t, err)
 	require.False(t, disjoint)
 	require.Len(t, commits, 2)
@@ -166,7 +151,7 @@ func TestUnpushedCommits_LocalStrictlyAheadIsNoOp(t *testing.T) {
 
 	// upstream = root (ancestor of c1). local strictly ahead by one commit.
 	// Caller should push c1 as a fast-forward; no replay.
-	commits, disjoint, err := svc.rh.unpushedCommits(plumbing.NewHash(c1), rootHash)
+	commits, disjoint, err := svc.rh.unpushedCommits(plumbing.NewHash(c1), rootHash, plumbing.ZeroHash)
 	require.NoError(t, err)
 	require.False(t, disjoint)
 	require.Empty(t, commits, "linear-ahead local needs no replay; force-push will fast-forward origin")
@@ -181,7 +166,7 @@ func TestUnpushedCommits_AlreadyUpstreamAncestor(t *testing.T) {
 
 	// Local agent === root; if we treat root as upstream, nothing unpushed.
 	rootHash := mustHeadHash(t, svc, "agent/test")
-	commits, disjoint, err := svc.rh.unpushedCommits(rootHash, rootHash)
+	commits, disjoint, err := svc.rh.unpushedCommits(rootHash, rootHash, plumbing.ZeroHash)
 	require.NoError(t, err)
 	require.False(t, disjoint)
 	require.Empty(t, commits)
@@ -198,7 +183,7 @@ func TestUnpushedCommits_DisjointReturnsAllLocal(t *testing.T) {
 	// Create a totally unrelated root commit in the same object store.
 	disjointHash := makeDisjointRoot(t, svc, "disjoint/root.md", "unrelated content")
 
-	commits, disjoint, err := svc.rh.unpushedCommits(plumbing.NewHash(c1), disjointHash)
+	commits, disjoint, err := svc.rh.unpushedCommits(plumbing.NewHash(c1), disjointHash, plumbing.ZeroHash)
 	require.NoError(t, err)
 	require.True(t, disjoint, "must report disjoint when no merge base exists")
 	require.NotEmpty(t, commits, "all local commits must be returned for disjoint replay")
@@ -349,7 +334,7 @@ func TestReplayOntoUpstream_NoUnpushedIsNoOp(t *testing.T) {
 	agentHash := mustHeadHash(t, svc, "agent/test")
 	// Upstream = same hash → unpushed commits is empty → no-op.
 	result, err := svc.rh.replayOntoUpstream(
-		context.Background(), "agent/test", agentHash, StrategyLocalWins,
+		context.Background(), "agent/test", agentHash, plumbing.ZeroHash, StrategyLocalWins,
 	)
 	require.NoError(t, err)
 	require.False(t, result.Replayed, "no-op must not report Replayed")
@@ -366,7 +351,7 @@ func TestReplayOntoUpstream_FastForwardWhenLocalIsAncestor(t *testing.T) {
 	// Upstream gets a commit; agent stays behind.
 	upstreamHash := writeMergeFact(t, svc, "main", "kb/u.md", "U", "v1")
 	result, err := svc.rh.replayOntoUpstream(
-		context.Background(), "agent/test", plumbing.NewHash(upstreamHash), StrategyLocalWins,
+		context.Background(), "agent/test", plumbing.NewHash(upstreamHash), plumbing.ZeroHash, StrategyLocalWins,
 	)
 	require.NoError(t, err)
 	require.True(t, result.FastForward, "must fast-forward when local is ancestor")
@@ -387,7 +372,7 @@ func TestReplayOntoUpstream_ReplaysAllUnpushedCommits(t *testing.T) {
 	upstreamHash := writeMergeFact(t, svc, "main", "kb/u.md", "U", "uv1")
 
 	result, err := svc.rh.replayOntoUpstream(
-		context.Background(), "agent/test", plumbing.NewHash(upstreamHash), StrategyLocalWins,
+		context.Background(), "agent/test", plumbing.NewHash(upstreamHash), plumbing.ZeroHash, StrategyLocalWins,
 	)
 	require.NoError(t, err)
 	require.True(t, result.Replayed)
@@ -430,7 +415,7 @@ func TestReplayOntoUpstream_FailureLeavesAgentRefUntouched(t *testing.T) {
 	// Inject failure by passing an unreadable upstream hash.
 	bogus := plumbing.NewHash("0123456789abcdef0123456789abcdef01234567")
 	_, err = svc.rh.replayOntoUpstream(
-		context.Background(), "agent/test", bogus, StrategyLocalWins,
+		context.Background(), "agent/test", bogus, plumbing.ZeroHash, StrategyLocalWins,
 	)
 	require.Error(t, err, "must error on bad upstream")
 	require.Equal(t, preReplayHash, mustHeadHash(t, svc, "agent/test"), "agent ref unchanged on failure")
@@ -534,48 +519,22 @@ func TestReconcileMain_CreatesLocalMainWhenMissing(t *testing.T) {
 	require.Equal(t, plumbing.NewHash(originHash), mustHeadHash(t, svc, "main"), "local main now at origin")
 }
 
-func TestReconcileAgent_UsesAgentUpstreamWhenAvailable(t *testing.T) {
+// TestReconcileAgent_ReplaysLocalCommitsOntoLocalMain verifies the core
+// design: reconcileAgent always targets local main, walks the agent back
+// to the watermark to find local-only commits, and replays them onto the
+// new main tip. origin/agent/<host> presence is irrelevant (the agent
+// never reads from it after bootstrap).
+func TestReconcileAgent_ReplaysLocalCommitsOntoLocalMain(t *testing.T) {
 	dir := t.TempDir()
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
 	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
 
-	// Make origin/agent/test ahead of local agent.
-	upstreamHash := writeMergeFact(t, svc, "agent/test", "kb/u.md", "U", "v1")
-	require.NoError(t, svc.rh.gits.SetReference(
-		plumbing.NewHashReference(plumbing.NewRemoteReferenceName("origin", "agent/test"), plumbing.NewHash(upstreamHash)),
-	))
-	// Move local agent back so it's behind.
-	upstreamCommit, err := svc.rh.repo.CommitObject(plumbing.NewHash(upstreamHash))
-	require.NoError(t, err)
-	require.NoError(t, svc.rh.gits.SetReference(
-		plumbing.NewHashReference(plumbing.NewBranchReferenceName("agent/test"), upstreamCommit.ParentHashes[0]),
-	))
-	// origin/main also present but should be IGNORED (agent upstream is preferred).
-	require.NoError(t, svc.rh.gits.SetReference(
-		plumbing.NewHashReference(plumbing.NewRemoteReferenceName("origin", "main"), upstreamCommit.ParentHashes[0]),
-	))
-
-	res, err := svc.rh.reconcileAgent(context.Background(), "agent/test", StrategyLocalWins)
-	require.NoError(t, err)
-	require.True(t, res.FastForward, "agent fast-forwards to origin/agent")
-	require.Equal(t, plumbing.NewHash(upstreamHash), mustHeadHash(t, svc, "agent/test"))
-}
-
-func TestReconcileAgent_FallsBackToMainWhenNoAgentUpstream(t *testing.T) {
-	dir := t.TempDir()
-	svc, err := Open(filepath.Join(dir, "k.db"))
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = svc.Close() })
-	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
-
-	// One local commit on agent, one on main; only origin/main is present.
+	// Watermark at this point is the seed (set by InitRepo). One local
+	// commit on agent; one independent commit on main. Local main advances.
 	writeMergeFact(t, svc, "agent/test", "kb/a.md", "A", "v1")
-	mainHash := writeMergeFact(t, svc, "main", "kb/m.md", "M", "v1")
-	require.NoError(t, svc.rh.gits.SetReference(
-		plumbing.NewHashReference(plumbing.NewRemoteReferenceName("origin", "main"), plumbing.NewHash(mainHash)),
-	))
+	writeMergeFact(t, svc, "main", "kb/m.md", "M", "v1")
 
 	res, err := svc.rh.reconcileAgent(context.Background(), "agent/test", StrategyLocalWins)
 	require.NoError(t, err)
@@ -592,6 +551,156 @@ func TestReconcileAgent_FallsBackToMainWhenNoAgentUpstream(t *testing.T) {
 	require.NoError(t, err)
 	_, err = tree.File("kb/m.md")
 	require.NoError(t, err)
+
+	// Watermark advanced to current local main.
+	mainHash := mustHeadHash(t, svc, "main")
+	wm, err := svc.rh.readAgentBase("agent/test")
+	require.NoError(t, err)
+	require.Equal(t, mainHash, wm, "watermark advances to local main on successful reconcile")
+}
+
+// TestReconcileAgent_PicksUpMainAdvance is the targeted regression for the
+// bug this whole rework fixes: when the agent has previously synced
+// (watermark = some past main commit) and local main advances, the next
+// reconcileAgent must fast-forward the agent onto the new main even though
+// the agent has no local-only commits.
+func TestReconcileAgent_PicksUpMainAdvance(t *testing.T) {
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = svc.Close() })
+	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+
+	// Watermark = initial commit (seeded by InitRepo) = agent tip = main tip.
+	// Advance local main; agent has no local commits.
+	newMainHash := writeMergeFact(t, svc, "main", "kb/promoted.md", "P", "v1")
+
+	res, err := svc.rh.reconcileAgent(context.Background(), "agent/test", StrategyLocalWins)
+	require.NoError(t, err)
+	require.True(t, res.FastForward, "agent must fast-forward to new local main")
+	require.False(t, res.Replayed, "no local commits to replay")
+	require.Equal(t, plumbing.NewHash(newMainHash), mustHeadHash(t, svc, "agent/test"),
+		"agent tip == new local main after fast-forward")
+
+	// Watermark also moved.
+	wm, err := svc.rh.readAgentBase("agent/test")
+	require.NoError(t, err)
+	require.Equal(t, plumbing.NewHash(newMainHash), wm)
+}
+
+// TestReconcileAgent_ReplaysLocalCommitsOntoUpdatedMain: agent has a local
+// commit since the watermark; main has advanced. Expect agent at
+// new-main + replayed local.
+func TestReconcileAgent_ReplaysLocalCommitsOntoUpdatedMain(t *testing.T) {
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = svc.Close() })
+	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+
+	// Watermark = initial commit. Agent commits a local file; main advances.
+	writeMergeFact(t, svc, "agent/test", "kb/local.md", "L", "v1")
+	newMain := writeMergeFact(t, svc, "main", "kb/promoted.md", "P", "v1")
+
+	res, err := svc.rh.reconcileAgent(context.Background(), "agent/test", StrategyLocalWins)
+	require.NoError(t, err)
+	require.True(t, res.Replayed)
+	require.Equal(t, 1, res.NumReplayed)
+
+	newTip := mustHeadHash(t, svc, "agent/test")
+	commit, err := svc.rh.repo.CommitObject(newTip)
+	require.NoError(t, err)
+	tree, err := commit.Tree()
+	require.NoError(t, err)
+	_, err = tree.File("kb/local.md")
+	require.NoError(t, err, "local change preserved via replay")
+	_, err = tree.File("kb/promoted.md")
+	require.NoError(t, err, "main advance picked up")
+
+	// Tip's parent must be the new main commit (linear chain).
+	require.Equal(t, plumbing.NewHash(newMain), commit.ParentHashes[0],
+		"replayed commit parents the new main")
+}
+
+// TestReconcileAgent_WatermarkPreservedAcrossTicks: after two consecutive
+// Sync ticks (each advancing main), the watermark always equals current
+// local main, every replayed local fact is preserved, and the final agent
+// tree contains both ticks' content.
+//
+// Note on replay count: each tick walks the agent back to the watermark
+// (the last consumed main), so on tick 2 the walk includes the replayed
+// local-1 commit (whose parent is main1) AND local-2. Re-replaying
+// local-1 is a tree-level no-op (its content is already present on the
+// chain that descends from main2's path) but it produces a new commit
+// hash so the agent stays linear on top of main2.
+func TestReconcileAgent_WatermarkPreservedAcrossTicks(t *testing.T) {
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = svc.Close() })
+	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+
+	// Tick 1: agent writes local-1, main advances, reconcile.
+	writeMergeFact(t, svc, "agent/test", "kb/local-1.md", "L1", "v1")
+	main1 := writeMergeFact(t, svc, "main", "kb/m1.md", "M1", "v1")
+	_, err = svc.rh.reconcileAgent(context.Background(), "agent/test", StrategyLocalWins)
+	require.NoError(t, err)
+	wm1, err := svc.rh.readAgentBase("agent/test")
+	require.NoError(t, err)
+	require.Equal(t, plumbing.NewHash(main1), wm1, "watermark at main1 after tick 1")
+
+	// Tick 2: agent writes local-2, main advances, reconcile.
+	writeMergeFact(t, svc, "agent/test", "kb/local-2.md", "L2", "v1")
+	main2 := writeMergeFact(t, svc, "main", "kb/m2.md", "M2", "v1")
+	res, err := svc.rh.reconcileAgent(context.Background(), "agent/test", StrategyLocalWins)
+	require.NoError(t, err)
+	require.True(t, res.Replayed)
+
+	wm2, err := svc.rh.readAgentBase("agent/test")
+	require.NoError(t, err)
+	require.Equal(t, plumbing.NewHash(main2), wm2, "watermark at main2 after tick 2")
+
+	// Final tree has every file.
+	newTip := mustHeadHash(t, svc, "agent/test")
+	commit, err := svc.rh.repo.CommitObject(newTip)
+	require.NoError(t, err)
+	tree, err := commit.Tree()
+	require.NoError(t, err)
+	for _, p := range []string{"kb/local-1.md", "kb/local-2.md", "kb/m1.md", "kb/m2.md"} {
+		_, err := tree.File(p)
+		require.NoError(t, err, "%s must survive two reconcile ticks", p)
+	}
+}
+
+// TestReconcileAgent_FallsBackToMergeBaseWhenWatermarkMissing models the
+// defensive path: an older repo (or transient ref corruption) that lacks
+// the watermark must still reconcile correctly by falling back to
+// MergeBase. The reconcile produces a clean replay AND seeds the
+// watermark for future ticks.
+func TestReconcileAgent_FallsBackToMergeBaseWhenWatermarkMissing(t *testing.T) {
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = svc.Close() })
+	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+
+	// Drop the watermark to model the legacy/corruption case.
+	require.NoError(t, svc.rh.gits.RemoveReference(agentBaseRefName("agent/test")))
+
+	// Standard "agent has local, main has advanced" setup.
+	writeMergeFact(t, svc, "agent/test", "kb/local.md", "L", "v1")
+	mainHash := writeMergeFact(t, svc, "main", "kb/promoted.md", "P", "v1")
+
+	res, err := svc.rh.reconcileAgent(context.Background(), "agent/test", StrategyLocalWins)
+	require.NoError(t, err)
+	require.True(t, res.Replayed)
+	require.Equal(t, 1, res.NumReplayed)
+
+	// Watermark was (re)seeded.
+	wm, err := svc.rh.readAgentBase("agent/test")
+	require.NoError(t, err)
+	require.Equal(t, plumbing.NewHash(mainHash), wm,
+		"missing watermark must be reseeded to current local main after a successful reconcile")
 }
 
 func TestSync_OrchestratesMainAndAgent(t *testing.T) {

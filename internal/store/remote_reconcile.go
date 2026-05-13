@@ -1,9 +1,13 @@
 // Origin reconciliation primitives. The agent branch is reconciled by
-// replaying its unpushed commits onto an upstream (origin/agent/<host>
-// when present, else origin/main); local main is a strict mirror of
-// origin/main. The reconcile primitives are the single source of truth
-// for "what does sync do" — Sync/Push/InitFromRemote/ActivateSync all
-// call into them.
+// replaying its unpushed commits onto local main (a consensus mirror).
+// origin/agent/<host> is a push target only — the agent no longer reads
+// from it after bootstrap. A per-branch watermark
+// (refs/knomit/agent-base/<branch>) records the main commit the agent
+// last consumed, which acts as the replay base for unpushedCommits.
+//
+// The reconcile primitives are the single source of truth for "what
+// does sync do" — Sync/Push/InitFromRemote/ActivateSync all call into
+// them.
 package store
 
 import (
@@ -18,28 +22,29 @@ import (
 	storegit "knomit/internal/store/git"
 )
 
-// agentUpstream identifies the ref the agent branch should reconcile against.
-type agentUpstream struct {
-	refName plumbing.ReferenceName // remote-tracking ref name (refs/remotes/origin/...)
-	hash    plumbing.Hash          // current tip of that ref
-	// isOwnAgent is true when the upstream is origin/agent/<host>.
-	// false when we fell back to origin/main (no remote agent branch yet).
-	isOwnAgent bool
+// agentBaseRefName returns the watermark ref name for an agent branch.
+// The watermark lives under refs/knomit/ to keep it out of the regular
+// refs/heads/ branch listing (and out of any "show me the branches" UI).
+func agentBaseRefName(agentBranch string) plumbing.ReferenceName {
+	return plumbing.ReferenceName("refs/knomit/agent-base/" + agentBranch)
 }
 
-// resolveAgentUpstream returns the upstream the local agent branch should
-// reconcile against: origin/agent/<host> when that ref exists locally
-// (post-fetch), otherwise origin/main. Errors if neither ref exists.
-func (rh *repoHandler) resolveAgentUpstream(ctx context.Context, agentBranch string) (agentUpstream, error) {
-	agentRefName := plumbing.NewRemoteReferenceName("origin", agentBranch)
-	if ref, err := rh.gits.Reference(agentRefName); err == nil {
-		return agentUpstream{refName: agentRefName, hash: ref.Hash(), isOwnAgent: true}, nil
+// readAgentBase returns the hash recorded in the watermark for agentBranch.
+// Returns plumbing.ErrReferenceNotFound (wrapped) when the watermark has
+// never been written for this branch.
+func (rh *repoHandler) readAgentBase(agentBranch string) (plumbing.Hash, error) {
+	ref, err := rh.gits.Reference(agentBaseRefName(agentBranch))
+	if err != nil {
+		return plumbing.ZeroHash, err
 	}
-	mainRefName := plumbing.NewRemoteReferenceName("origin", "main")
-	if ref, err := rh.gits.Reference(mainRefName); err == nil {
-		return agentUpstream{refName: mainRefName, hash: ref.Hash(), isOwnAgent: false}, nil
-	}
-	return agentUpstream{}, fmt.Errorf("resolveAgentUpstream: neither origin/%s nor origin/main present (fetch first?)", agentBranch)
+	return ref.Hash(), nil
+}
+
+// writeAgentBase updates the watermark for agentBranch to hash. The
+// watermark identifies "the main commit this agent last consumed" and
+// is read on the next Sync tick as the base for unpushedCommits.
+func (rh *repoHandler) writeAgentBase(agentBranch string, hash plumbing.Hash) error {
+	return rh.gits.SetReference(plumbing.NewHashReference(agentBaseRefName(agentBranch), hash))
 }
 
 // unpushedCommits returns commits reachable from localTip but not from
@@ -47,16 +52,23 @@ func (rh *repoHandler) resolveAgentUpstream(ctx context.Context, agentBranch str
 // replayed). The walk follows first-parent ancestry only — merge commits
 // take their "ours" side, matching the linear-history goal.
 //
-// Returns disjoint=true when localTip and upstreamTip share no common
-// ancestor: every local commit (back to root) is treated as unpushed.
-// In that case the caller will replay the entire chain onto upstreamTip.
+// When explicitBase is non-zero, it is used directly as the walk's stop
+// point (the watermark — "the main commit this agent last consumed").
+// disjoint is reported false when explicitBase is set, because the
+// caller (reconcileAgent) wants the linear "since last main" delta even
+// when local and the new upstream are unrelated.
+//
+// When explicitBase is zero, the stop point is computed from MergeBase:
+// disjoint=true when localTip and upstreamTip share no common ancestor
+// (every local commit back to root is replayed onto upstreamTip),
+// disjoint=false otherwise.
 //
 // Returns empty (and disjoint=false) when localTip is an ancestor of
 // upstreamTip (nothing local to replay — caller will fast-forward), OR
 // when upstreamTip is an ancestor of localTip (local is a strict linear
 // extension — caller's force-push will fast-forward origin without
 // rewriting commit hashes).
-func (rh *repoHandler) unpushedCommits(localTip, upstreamTip plumbing.Hash) ([]*object.Commit, bool, error) {
+func (rh *repoHandler) unpushedCommits(localTip, upstreamTip, explicitBase plumbing.Hash) ([]*object.Commit, bool, error) {
 	if localTip == upstreamTip {
 		return nil, false, nil
 	}
@@ -90,19 +102,25 @@ func (rh *repoHandler) unpushedCommits(localTip, upstreamTip plumbing.Hash) ([]*
 		return nil, false, nil
 	}
 
-	bases, err := local.MergeBase(upstream)
-	if err != nil {
-		return nil, false, fmt.Errorf("unpushedCommits: MergeBase: %w", err)
-	}
-
 	var stopAt plumbing.Hash
 	disjoint := false
-	if len(bases) == 0 {
-		disjoint = true
-		// Walk all the way back to root.
-		stopAt = plumbing.ZeroHash
+	if explicitBase != plumbing.ZeroHash {
+		// Caller supplied a watermark — use it directly. We trust the caller
+		// to have established that explicitBase is reachable from localTip
+		// (it was a former tip of either local main or local agent).
+		stopAt = explicitBase
 	} else {
-		stopAt = bases[0].Hash
+		bases, err := local.MergeBase(upstream)
+		if err != nil {
+			return nil, false, fmt.Errorf("unpushedCommits: MergeBase: %w", err)
+		}
+		if len(bases) == 0 {
+			disjoint = true
+			// Walk all the way back to root.
+			stopAt = plumbing.ZeroHash
+		} else {
+			stopAt = bases[0].Hash
+		}
 	}
 
 	// Walk first-parent from local back to (but not including) stopAt.
@@ -292,6 +310,13 @@ type ReplayOntoUpstreamResult struct {
 // conflict resolution for overlapping paths (agent-facing semantics —
 // see replayCommit for the strategy translation).
 //
+// When explicitBase is non-zero, it is passed to unpushedCommits as the
+// walk's stop point — the "this is how far back to consider commits
+// unpushed" marker. reconcileAgent uses this to anchor the walk at the
+// last-consumed main commit (the watermark) rather than at the merge
+// base, which is what allows main-side updates to flow into the agent.
+// When zero, unpushedCommits uses MergeBase as before.
+//
 // Atomicity: replayed commits accumulate under a temporary ref
 // (refs/heads/<localBranch>-replaying). Only when the full chain succeeds
 // does localBranch advance to the new tip and the temp ref get removed.
@@ -303,6 +328,7 @@ func (rh *repoHandler) replayOntoUpstream(
 	ctx context.Context,
 	localBranch string,
 	upstreamTip plumbing.Hash,
+	explicitBase plumbing.Hash,
 	strategy ConflictStrategy,
 ) (ReplayOntoUpstreamResult, error) {
 	localRefName := plumbing.NewBranchReferenceName(localBranch)
@@ -312,7 +338,7 @@ func (rh *repoHandler) replayOntoUpstream(
 	}
 	localTip := localRef.Hash()
 
-	commits, disjoint, err := rh.unpushedCommits(localTip, upstreamTip)
+	commits, disjoint, err := rh.unpushedCommits(localTip, upstreamTip, explicitBase)
 	if err != nil {
 		return ReplayOntoUpstreamResult{}, err
 	}
@@ -539,51 +565,85 @@ func (rh *repoHandler) purgeBranchCommits(ctx context.Context, branch string) er
 	return nil
 }
 
-// reconcileAgentOntoMain forces the agent branch to replay onto
-// origin/main, ignoring any existing origin/agent/<host> ref. Used by
-// Sync when reconcileMain reports a rewind: the agent's own remote tip
-// (origin/agent/<host>) is now anchored to an obsolete chain, so the
-// only correct upstream is the new origin/main.
+// reconcileAgent reconciles agentBranch by replaying its unpushed commits
+// (those since the watermark) onto current local main. Conflict resolution
+// uses the supplied strategy (agent-facing semantics — see replayCommit).
 //
-// Holds rh.lockBranch(agentBranch) for the duration.
-func (rh *repoHandler) reconcileAgentOntoMain(ctx context.Context, agentBranch string, strategy ConflictStrategy) (ReplayOntoUpstreamResult, error) {
-	unlock := rh.lockBranch(agentBranch)
-	defer unlock()
-
-	mainRefName := plumbing.NewRemoteReferenceName("origin", "main")
-	mainRef, err := rh.gits.Reference(mainRefName)
-	if err != nil {
-		return ReplayOntoUpstreamResult{}, fmt.Errorf("reconcileAgentOntoMain: read origin/main: %w", err)
-	}
-	log.Info().
-		Str("branch", agentBranch).
-		Str("upstream", mainRefName.String()).
-		Bool("forced_main", true).
-		Msg("reconcileAgentOntoMain: re-migrating agent onto new origin/main")
-	return rh.replayOntoUpstream(ctx, agentBranch, mainRef.Hash(), strategy)
-}
-
-// reconcileAgent reconciles localBranch (the agent branch for this machine)
-// with its upstream. Upstream is origin/agent/<host> when present, else
-// origin/main. Conflict resolution uses the supplied strategy
-// (agent-facing semantics — see replayCommit).
+// The "upstream" for the agent is now local main (which reconcileMain has
+// already aligned to origin/main). origin/agent/<host> is a push target
+// only; the agent never reads from it after bootstrap.
 //
-// Holds rh.lockBranch(agentBranch) for the duration. Returns the
-// ReplayOntoUpstreamResult from the underlying replay so callers can
-// distinguish no-op / fast-forward / replay.
+// A per-branch watermark (refs/knomit/agent-base/<branch>) records the
+// main commit the agent last consumed. unpushedCommits uses the
+// watermark as its base, so:
+//
+//   - Forward main advances merge cleanly into the agent (the watermark
+//     stays behind main; commits before main and after the watermark
+//     don't exist on the agent, so the agent fast-forwards or replays
+//     local-only commits on top of the new main).
+//   - Forward main deletions correctly drop files from the agent (the
+//     fast-forward picks up the deletion).
+//   - Main force-push rewinds drop scrubbed files from the agent: when
+//     the watermark equals the old main and the agent has no local
+//     commits since it, unpushedCommits returns empty and the agent
+//     fast-forwards onto the new main.
+//
+// If the watermark is missing or unreadable (first reconcile after
+// bootstrap, or transient corruption), we fall back to MergeBase via a
+// zero explicit base — the legacy behavior. This is defensive; InitRepo
+// and InitFromRemote both seed the watermark, so the missing case
+// shouldn't be hit in steady state.
+//
+// On a successful reconcile, the watermark is advanced to current
+// local main. Holds rh.lockBranch(agentBranch) for the duration.
 func (rh *repoHandler) reconcileAgent(ctx context.Context, agentBranch string, strategy ConflictStrategy) (ReplayOntoUpstreamResult, error) {
 	unlock := rh.lockBranch(agentBranch)
 	defer unlock()
 
-	upstream, err := rh.resolveAgentUpstream(ctx, agentBranch)
+	mainRefName := plumbing.NewBranchReferenceName("main")
+	mainRef, err := rh.gits.Reference(mainRefName)
 	if err != nil {
-		return ReplayOntoUpstreamResult{}, err
+		return ReplayOntoUpstreamResult{}, fmt.Errorf("reconcileAgent: read local main: %w", err)
 	}
+	mainHash := mainRef.Hash()
+
+	base, err := rh.readAgentBase(agentBranch)
+	if err != nil {
+		// Watermark missing — fall back to MergeBase by passing ZeroHash.
+		// This handles older repos that predate the watermark and any
+		// transient ref corruption. Steady-state init paths seed it.
+		log.Warn().
+			Str("branch", agentBranch).
+			Err(err).
+			Msg("reconcileAgent: watermark missing; falling back to MergeBase")
+		base = plumbing.ZeroHash
+	}
+
 	log.Info().
 		Str("branch", agentBranch).
-		Str("upstream", upstream.refName.String()).
-		Bool("own_agent", upstream.isOwnAgent).
-		Msg("reconcileAgent: resolved upstream")
+		Str("upstream", "refs/heads/main").
+		Str("base", shortRefHash(base)).
+		Msg("reconcileAgent: replaying onto local main with watermark base")
 
-	return rh.replayOntoUpstream(ctx, agentBranch, upstream.hash, strategy)
+	res, err := rh.replayOntoUpstream(ctx, agentBranch, mainHash, base, strategy)
+	if err != nil {
+		return res, err
+	}
+
+	// Advance the watermark to current local main. This is the commit the
+	// agent has now "consumed" — the next Sync tick's unpushedCommits walk
+	// will use it as its stop point.
+	if err := rh.writeAgentBase(agentBranch, mainHash); err != nil {
+		return res, fmt.Errorf("reconcileAgent: write watermark: %w", err)
+	}
+	return res, nil
+}
+
+// shortRefHash returns the first 8 chars of a ref hash for log output, or
+// "<zero>" for the zero hash.
+func shortRefHash(h plumbing.Hash) string {
+	if h == plumbing.ZeroHash {
+		return "<zero>"
+	}
+	return h.String()[:8]
 }

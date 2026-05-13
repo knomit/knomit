@@ -51,13 +51,17 @@ func fetchOrigin(repo *gogit.Repository, auth transport.AuthMethod) error {
 //
 //  1. Fetch origin (configured refspecs: main + agent/<host>).
 //  2. Reconcile local main to origin/main (fast-forward or force-update on rewind).
-//  3. Reconcile the agent branch against its upstream (origin/agent/<host>
-//     if present, else origin/main).
+//  3. Reconcile the agent branch against local main, replaying any
+//     local-only commits (since the watermark) onto the new main tip.
+//     Main is reconciled FIRST so the agent sees the post-fetch tip.
 //
-// When reconcileMain reports Rewound, the agent still reconciles correctly
-// because reconcileAgent reads the (new) local main via origin/main as
-// fallback upstream when origin/agent/<host> isn't present. Main is
-// reconciled FIRST so the agent sees the post-fetch tip.
+// The agent's reconcile uses a per-branch watermark
+// (refs/knomit/agent-base/<branch>) as the base for unpushedCommits, so
+// main advances always propagate into the agent — even after the agent
+// has previously pushed (the design bug this rework fixes). The rewind
+// case is also handled by the watermark: when the watermark equals the
+// old main and the agent has no local-only commits, the agent
+// fast-forwards onto the new main and scrubbed files drop correctly.
 //
 // Safe to call repeatedly; each step is a no-op when there's nothing to do.
 func (ri *remoteIndex) Sync(ctx context.Context, agentBranch string, auth transport.AuthMethod) (res SyncResult, retErr error) {
@@ -108,17 +112,11 @@ func (ri *remoteIndex) reconcileNow(ctx context.Context, agentBranch string) (Sy
 		return SyncResult{Main: mainRes}, fmt.Errorf("Sync: reconcileMain: %w", err)
 	}
 
-	// When origin/main was rewound, origin/agent/<host> still points at the
-	// stale chain and is no longer a useful upstream. Force re-migration
-	// onto the new origin/main so the agent picks up the new consensus
-	// (G6 scenario). On the normal fast-forward / no-op cases, fall back
-	// to resolveAgentUpstream which prefers origin/agent.
-	var agentRes ReplayOntoUpstreamResult
-	if mainRes.Rewound {
-		agentRes, err = ri.rh.reconcileAgentOntoMain(ctx, agentBranch, StrategyLocalWins)
-	} else {
-		agentRes, err = ri.rh.reconcileAgent(ctx, agentBranch, StrategyLocalWins)
-	}
+	// reconcileAgent always reconciles against local main (now aligned to
+	// origin/main). The watermark drives the unpushedCommits walk, so
+	// fast-forward / replay / rewind are all handled uniformly — no
+	// special case for mainRes.Rewound is needed here anymore.
+	agentRes, err := ri.rh.reconcileAgent(ctx, agentBranch, StrategyLocalWins)
 	if err != nil {
 		return SyncResult{Main: mainRes, Agent: agentRes}, fmt.Errorf("Sync: reconcileAgent: %w", err)
 	}

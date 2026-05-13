@@ -1,6 +1,6 @@
 // Category G — Origin reconcile rework scenarios. These tests assert the
 // four bootstrap/reconcile scenarios from the 2026-05-11 origin-sync rework
-// plan plus the two recovery paths:
+// plan plus the recovery paths and the post-push main-advance regression:
 //
 //	G1 brand-new local repo (no origin) — agent is usable; main is dormant.
 //	G2 origin set later, history disjoint — replay all local onto origin/main.
@@ -8,6 +8,8 @@
 //	G4 origin set, common ancestor, remote agent exists — adopt origin/agent/<host>.
 //	G5 token-expiry resume — local advanced offline; reconnect pushes deltas.
 //	G6 origin/main rewind — agent re-migrates onto new origin/main.
+//	G7 post-push main advance — agent must keep consuming main updates after
+//	   its own first push (the design bug fixed by the watermark rework).
 package storytests
 
 import (
@@ -171,15 +173,14 @@ func TestReconcile_G5_ResumeAfterTokenExpiry(t *testing.T) {
 // agent re-migrates onto it so the agent ends up on top of the NEW
 // consensus.
 //
-// Note: the local agent's history previously inherited kb/v1.md (the
-// agent was bootstrapped from origin/main). When the agent replays onto
-// the new origin/main (a disjoint root), every commit in the agent
-// chain is treated as a local-wins delta — meaning kb/v1.md is re-
-// asserted as a local addition onto the new root. The post-rewind
-// agent therefore contains: new main content + every file the agent
-// ever introduced (including the original seed it inherited from main).
-// Local main, by contrast, IS reset cleanly to origin/main (no replay),
-// so it no longer carries kb/v1.md.
+// With the watermark-based reconcile, the agent's walk runs from
+// agent_tip back to the watermark (which equals the OLD main commit
+// the agent last consumed). That walk collects ONLY the agent's
+// local-only commits — the inherited v1 content is part of the
+// watermark commit, so it is not "unpushed". Replaying only the
+// local-only commits onto the new (disjoint) main means kb/v1.md is
+// correctly DROPPED from the agent — the fix for the original G6
+// design bug. kb/local.md replays cleanly onto the new root.
 func TestReconcile_G6_OriginMainRewindReMigratesAgent(t *testing.T) {
 	t.Log("G6: origin/main is force-rewound to a disjoint history; agent re-migrates onto new main")
 	sb := testenv.NewStoryboard(t)
@@ -204,10 +205,41 @@ func TestReconcile_G6_OriginMainRewindReMigratesAgent(t *testing.T) {
 	postAgent := a.Branch("agent/test")
 	require.True(t, postAgent.HasFile("kb/v2.md"), "new main content is on the agent")
 	require.True(t, postAgent.HasFile("kb/local.md"), "local change replayed onto new main")
+	require.False(t, postAgent.HasFile("kb/v1.md"),
+		"scrubbed-from-main content must drop off the agent (the watermark-based fix)")
 
 	// Local main was force-updated (not replayed); the old chain is gone
 	// from main.
 	postMain := a.Branch("main")
 	require.True(t, postMain.HasFile("kb/v2.md"), "main was force-updated to new origin/main")
 	require.False(t, postMain.HasFile("kb/v1.md"), "old main content is gone from main")
+}
+
+// G7: Post-push agent picks up main advance.
+// After the agent has pushed, subsequent main advances on origin should
+// reach the agent's local branch (this was the design bug — main updates
+// were silently ignored once origin/agent existed).
+func TestReconcile_G7_PostPushPicksUpMainAdvance(t *testing.T) {
+	t.Log("G7: agent pushes, then origin/main advances; agent must pick up the main delta")
+	sb := testenv.NewStoryboard(t)
+	remote := sb.BareRemote("origin")
+	remote.WriteMain("kb/seed.md", testenv.Fact("seed"), "seed")
+
+	a := sb.Repo("a").Connect(remote)
+	agent := a.Branch("agent/test")
+	require.True(t, agent.HasFile("kb/seed.md"))
+	// Agent writes and pushes.
+	agent.Write("kb/local.md", testenv.Fact("local"), "local change")
+	agent.Push()
+
+	// Remote main advances with a third-party fact.
+	remote.WriteMain("kb/promoted.md", testenv.Fact("promoted"), "promoted by other")
+
+	// Agent syncs — must see the new main content on its branch.
+	agent.Sync()
+	postAgent := a.Branch("agent/test")
+	require.True(t, postAgent.HasFile("kb/promoted.md"),
+		"agent must pick up main advance even after its own push")
+	require.True(t, postAgent.HasFile("kb/local.md"), "local change preserved")
+	require.True(t, postAgent.HasFile("kb/seed.md"), "seed preserved")
 }
