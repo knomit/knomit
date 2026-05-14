@@ -547,6 +547,7 @@ func handleApply(rm *repos.Manager, sm *SessionManager, agentBranch string) http
 			sess.State = StateApplied
 			sess.ApplyResult = result
 			sess.AppliedBranch = replayAgentBranch
+			sess.RemoteBranch = remoteBranch
 			sess.mu.Unlock()
 
 			log.Info().Str("repo", repo).Str("session_id", sessionID).
@@ -577,6 +578,7 @@ func handleApply(rm *repos.Manager, sm *SessionManager, agentBranch string) http
 			sess.State = StateApplied
 			sess.ApplyResult = result
 			sess.AppliedBranch = sharedAppliedBranch
+			sess.RemoteBranch = remoteBranch
 			sess.mu.Unlock()
 
 			log.Info().Str("repo", repo).Str("session_id", sessionID).
@@ -677,6 +679,7 @@ func (s *Server) handleCommit(rm *repos.Manager, sm *SessionManager, agentBranch
 		authCfg := sess.Auth
 		remoteURL := sess.URL
 		appliedBranch := sess.AppliedBranch
+		appliedRemoteBranch := sess.RemoteBranch
 		testResult, _ := sess.TestResult.(connectivityResult)
 		sess.mu.Unlock()
 
@@ -730,10 +733,14 @@ func (s *Server) handleCommit(rm *repos.Manager, sm *SessionManager, agentBranch
 
 			// SetRemote takes both the upstream consensus branch (discovered
 			// by the test-connectivity flow) and the local agent branch.
-			// The session's chosen upstream survives — for master-default
-			// (or any non-main) repos this is critical, since SetRemote no
-			// longer hardcodes the upstream name.
-			upstreamMain := testResult.DefaultBranch
+			// Prefer the branch the user chose at /apply time (which may
+			// differ from the remote's default — e.g. a master-default repo
+			// where the user explicitly chose to track a release branch).
+			// Fall back to the test result's default, then "main".
+			upstreamMain := appliedRemoteBranch
+			if upstreamMain == "" {
+				upstreamMain = testResult.DefaultBranch
+			}
 			if upstreamMain == "" {
 				upstreamMain = "main"
 			}

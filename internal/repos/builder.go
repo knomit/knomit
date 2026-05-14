@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/go-git/go-git/v5/plumbing/transport"
 	"github.com/rs/zerolog/log"
 	"golang.org/x/crypto/ssh"
 
@@ -97,6 +98,29 @@ func (b *repoBuilder) loadOntology() {
 	b.ontology = ont
 }
 
+// resolveOriginUpstream queries the configured origin's symbolic HEAD to
+// determine the remote's default branch name (e.g. "main", "master").
+// Returns "main" as the fallback when detection fails — but emits a warn
+// log first so an operator can see that detection actually failed (rather
+// than the remote genuinely defaulting to main).
+//
+// Detection failure typically means: bad auth (token wrong/expired),
+// unreachable URL (DNS/network), or the remote has no symbolic HEAD set.
+// In all three cases the operator needs a signal — silently picking "main"
+// for a `master`-default repo creates a configuration mismatch that the
+// user will only notice when origin/main forever appears empty.
+func (b *repoBuilder) resolveOriginUpstream(auth transport.AuthMethod) string {
+	upstream := store.DetectRemoteUpstreamFromURL(b.cfg.Git.Origin, auth)
+	if upstream != "" {
+		log.Info().Str("repo", b.name).Str("upstream", upstream).
+			Msg("initDefaultGit: detected upstream branch from remote HEAD")
+		return upstream
+	}
+	log.Warn().Str("repo", b.name).Str("origin", b.cfg.Git.Origin).
+		Msg("initDefaultGit: could not detect remote HEAD; defaulting to \"main\" (check auth/connectivity if origin uses a different default)")
+	return "main"
+}
+
 // initDefaultGit creates the git store for the default ("knomit") repo on
 // first run — either by cloning from a configured origin or by creating a
 // fresh repository with the default ontology seed files.
@@ -115,14 +139,12 @@ func (b *repoBuilder) initDefaultGit() error {
 		if authErr != nil {
 			return fmt.Errorf("resolve auth: %w", authErr)
 		}
-		// Pass empty upstreamMain — InitFromRemote will detect from the
-		// remote's symbolic HEAD after the initial fetch, falling back to
-		// "main" if detection fails. Capture the resolved value on the
-		// builder so ensureBranch can pass it to SetRemote.
-		b.upstreamMain = store.DetectRemoteUpstreamFromURL(b.cfg.Git.Origin, auth)
-		if b.upstreamMain == "" {
-			b.upstreamMain = "main"
-		}
+		// Detect the remote's default branch via ls-remote so the local
+		// refspecs and SetRemote record line up with it. Capture the
+		// resolved value on the builder so ensureBranch can pass it to
+		// SetRemote. A failed detection here is logged at warn level —
+		// see resolveOriginUpstream's comment for why this matters.
+		b.upstreamMain = b.resolveOriginUpstream(auth)
 		if err := b.svc.InitFromRemote(b.cfg.Git.Origin, auth, b.upstreamMain, b.agentBranch, seedFiles); err != nil {
 			return fmt.Errorf("init from remote: %w", err)
 		}

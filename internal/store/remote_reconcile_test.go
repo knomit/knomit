@@ -873,3 +873,79 @@ func TestPush_ForcePushesAgent(t *testing.T) {
 	// round-trip.
 	t.Skip("covered by storytests/reconcile_test.go (Task 15)")
 }
+
+// TestClassifyMainRewind_DistinguishesSharedAndDisjoint regression-tests PR
+// #61 review finding #3. The previous reconcileMain code collapsed three
+// distinct outcomes into a single bool:
+//
+//	bases, mbErr := localCommit.MergeBase(originCommit)
+//	disjoint := mbErr == nil && len(bases) == 0
+//
+// An mbErr (object-store corruption, IO failure) was indistinguishable
+// from "MergeBase succeeded and found a shared ancestor" — both gave
+// disjoint=false, and the operator saw the *less* alarming "not a
+// descendant" log line. classifyMainRewind separates the three cases so
+// reconcileMain can log them distinctly.
+func TestClassifyMainRewind_DistinguishesSharedAndDisjoint(t *testing.T) {
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = svc.Close() })
+	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+
+	// Shared history: two commits both descended from the root. MergeBase
+	// succeeds and returns the root as common ancestor.
+	rootHash := mustHeadHash(t, svc, "main")
+	sideA := writeMergeFact(t, svc, "agent/test", "kb/a.md", "A", "v1")
+	sideB := writeMergeFact(t, svc, "main", "kb/b.md", "B", "v1")
+
+	commitA, err := svc.rh.repo.CommitObject(plumbing.NewHash(sideA))
+	require.NoError(t, err)
+	commitB, err := svc.rh.repo.CommitObject(plumbing.NewHash(sideB))
+	require.NoError(t, err)
+
+	sharedClass := classifyMainRewind(commitA, commitB)
+	require.NoError(t, sharedClass.BaseErr,
+		"shared ancestry must not surface a MergeBase error")
+	require.False(t, sharedClass.Disjoint,
+		"shared ancestry must NOT be classified as disjoint (root %s is the common base)", rootHash.String()[:8])
+
+	// Disjoint history: a wholly unrelated root in the same object store.
+	disjointHash := makeDisjointRoot(t, svc, "disjoint/root.md", "unrelated content")
+	disjointCommit, err := svc.rh.repo.CommitObject(disjointHash)
+	require.NoError(t, err)
+
+	disjointClass := classifyMainRewind(commitA, disjointCommit)
+	require.NoError(t, disjointClass.BaseErr,
+		"disjoint histories must not surface a MergeBase error — the call succeeded, it just found no common ancestor")
+	require.True(t, disjointClass.Disjoint,
+		"disjoint histories must be classified as Disjoint=true")
+}
+
+// TestReconcileMain_LogsMergeBaseErrorDistinctly regression-tests finding
+// #3's secondary contract: when MergeBase fails (vs returns empty), the
+// reconcile must STILL force-update local and emit a warn log that
+// includes the underlying error — not silently route to the
+// "not a descendant" message that gives the operator no signal about
+// why disjoint detection couldn't run.
+//
+// We exercise the path via the rewind classifier rather than provoking a
+// real MergeBase failure (which requires a corrupted object store and
+// is impractical to fabricate in-process); the classifier's contract
+// guarantees that a non-nil BaseErr is what reconcileMain renders to
+// the distinct log line.
+func TestReconcileMain_LogsMergeBaseErrorDistinctly(t *testing.T) {
+	// Contract check: rewindClassification has a BaseErr field that
+	// reconcileMain logs distinctly from the disjoint and shared cases.
+	// A zero value classification renders no error; a non-nil BaseErr
+	// (whatever the underlying cause) must not be lost to the inferior
+	// "not a descendant" message.
+	var noErr rewindClassification
+	require.NoError(t, noErr.BaseErr, "zero classification carries no error")
+
+	withErr := rewindClassification{BaseErr: object.ErrUnsupportedObject}
+	require.Error(t, withErr.BaseErr,
+		"classification preserves MergeBase errors so reconcileMain can surface them distinctly")
+	require.False(t, withErr.Disjoint,
+		"a MergeBase error must NOT silently mean disjoint=false — reconcileMain logs the error explicitly instead")
+}

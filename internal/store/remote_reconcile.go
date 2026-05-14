@@ -18,8 +18,42 @@ import (
 	"fmt"
 
 	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/rs/zerolog/log"
 )
+
+// rewindClassification distinguishes three outcomes when reconcileMain
+// finds that origin/main is not an ancestor of local main. They MUST be
+// kept separate because each produces a materially different operator
+// signal:
+//
+//   - Disjoint=true, BaseErr=nil: confirmed disjoint history — origin
+//     was replaced wholesale (unrelated repo, full rewrite, corruption).
+//     The operator likely wants to investigate before letting sync continue.
+//   - Disjoint=false, BaseErr=nil: shared ancestor exists — ordinary rewind
+//     or force-push. The watermark/replay machinery handles it routinely.
+//   - BaseErr != nil: MergeBase itself could not run (object-store IO
+//     failure, etc.). Disjoint detection was UNRELIABLE; the operator
+//     must see the error rather than receive the milder "not a descendant"
+//     log line that would otherwise be emitted.
+//
+// Collapsing the third case into Disjoint=false (the original code) was
+// the bug PR #61 review finding #3 flagged.
+type rewindClassification struct {
+	Disjoint bool
+	BaseErr  error
+}
+
+// classifyMainRewind categorises the relationship between local main and
+// origin/main once origin has been determined to be a non-ancestor. See
+// rewindClassification for the three outcomes.
+func classifyMainRewind(local, origin *object.Commit) rewindClassification {
+	bases, err := local.MergeBase(origin)
+	if err != nil {
+		return rewindClassification{BaseErr: err}
+	}
+	return rewindClassification{Disjoint: len(bases) == 0}
+}
 
 // agentBaseRefName returns the watermark ref name for an agent branch.
 // The watermark lives under refs/knomit/ to keep it out of the regular
@@ -145,11 +179,10 @@ func (rh *repoHandler) reconcileMain(ctx context.Context, upstreamMain string) (
 	}
 
 	// origin/main is not a descendant of local main → rewind / divergent advance.
-	// Distinguish the "disjoint histories" sub-case so the operator log is
-	// clear when origin has been replaced wholesale (unrelated repo pushed,
-	// remote corruption, or a complete history rewrite).
-	bases, mbErr := localCommit.MergeBase(originCommit)
-	disjoint := mbErr == nil && len(bases) == 0
+	// Classify the rewind so the operator log distinguishes ordinary
+	// rewind, disjoint history (origin replaced wholesale), and the rare
+	// case where MergeBase itself fails (object-store IO error).
+	class := classifyMainRewind(localCommit, originCommit)
 
 	if err := rh.gits.SetReference(plumbing.NewHashReference(localMainName, originHash)); err != nil {
 		return MainReconcileResult{}, fmt.Errorf("reconcileMain: force-update: %w", err)
@@ -169,12 +202,17 @@ func (rh *repoHandler) reconcileMain(ctx context.Context, upstreamMain string) (
 	logEv := log.Warn().
 		Str("branch", upstreamMain).
 		Str("local", localHash.String()[:8]).
-		Str("origin", originHash.String()[:8]).
-		Bool("disjoint", disjoint)
-	if disjoint {
-		logEv.Msgf("reconcileMain: origin/%s has DISJOINT history (no common ancestor); force-updated", upstreamMain)
-	} else {
-		logEv.Msgf("reconcileMain: origin/%s is not a descendant of local %s; force-updated", upstreamMain, upstreamMain)
+		Str("origin", originHash.String()[:8])
+	switch {
+	case class.BaseErr != nil:
+		logEv.Err(class.BaseErr).
+			Msgf("reconcileMain: origin/%s force-updated; MergeBase classification failed (disjoint detection unreliable — investigate object store)", upstreamMain)
+	case class.Disjoint:
+		logEv.Bool("disjoint", true).
+			Msgf("reconcileMain: origin/%s has DISJOINT history (no common ancestor); force-updated", upstreamMain)
+	default:
+		logEv.Bool("disjoint", false).
+			Msgf("reconcileMain: origin/%s is not a descendant of local %s; force-updated", upstreamMain, upstreamMain)
 	}
 	return MainReconcileResult{Mode: ModeRewound, NewTip: originHash.String()}, nil
 }
