@@ -93,10 +93,18 @@ func (defaultOriginProvider) SetOrigin(ri *repos.RepoInstance, req setOriginRequ
 			pushInterval = existing.PushInterval
 		}
 
-		// SetRemote now takes the local agent branch — it is woven into the
-		// fetch refspec alongside main. The upstream main name remains
-		// hardcoded inside SetRemote.
-		err = svc.Remote().SetRemote("origin", u, ri.AgentBranch(), interval, pushInterval, authMethod, authToken)
+		// Resolve the upstream consensus branch: explicit request > existing
+		// remote record > "main". The HAL request lets master-default repos
+		// pin the branch without going through the session-based flow.
+		upstreamMain := req.Branch
+		if upstreamMain == "" && existing != nil {
+			upstreamMain = existing.Branch
+		}
+		if upstreamMain == "" {
+			upstreamMain = "main"
+		}
+
+		err = svc.Remote().SetRemote("origin", u, upstreamMain, ri.AgentBranch(), interval, pushInterval, authMethod, authToken)
 	})
 	return err
 }

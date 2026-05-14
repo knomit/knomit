@@ -17,7 +17,7 @@ func TestConfigureRemote_WritesTwoRefspecs(t *testing.T) {
 	t.Cleanup(func() { _ = svc.Close() })
 	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
 
-	require.NoError(t, svc.rh.configureRemote("https://example.com/repo.git", "agent/test"))
+	require.NoError(t, svc.rh.configureRemote("https://example.com/repo.git", "main", "agent/test"))
 
 	cfg, err := svc.rh.repo.Config()
 	require.NoError(t, err)
@@ -43,8 +43,8 @@ func TestConfigureRemote_IsIdempotent(t *testing.T) {
 	t.Cleanup(func() { _ = svc.Close() })
 	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
 
-	require.NoError(t, svc.rh.configureRemote("https://example.com/repo.git", "agent/test"))
-	require.NoError(t, svc.rh.configureRemote("https://example.com/repo.git", "agent/test"))
+	require.NoError(t, svc.rh.configureRemote("https://example.com/repo.git", "main", "agent/test"))
+	require.NoError(t, svc.rh.configureRemote("https://example.com/repo.git", "main", "agent/test"))
 
 	cfg, err := svc.rh.repo.Config()
 	require.NoError(t, err)
@@ -215,7 +215,7 @@ func TestUnpushedCommits_SkipsMergeCommits(t *testing.T) {
 	writeMergeFact(t, svc, "main", "kb/main-old.md", "MO", "v1")
 	oldMainHash := mustHeadHash(t, svc, "main")
 
-	mergeRes, err := svc.rh.reconcileAgentMerge(context.Background(), "agent/test", StrategyLocalWins)
+	mergeRes, err := svc.rh.reconcileAgentMerge(context.Background(), "agent/test", "main", StrategyLocalWins)
 	require.NoError(t, err)
 	require.Equal(t, ModeMerge, mergeRes.Mode, "setup requires a real merge commit")
 	mergeHash := plumbing.NewHash(mergeRes.NewTip)
@@ -506,7 +506,7 @@ func TestReconcileMain_FastForwardsWhenOriginAhead(t *testing.T) {
 		plumbing.NewHashReference(plumbing.NewRemoteReferenceName("origin", "main"), plumbing.NewHash(newMainCommit)),
 	))
 
-	res, err := svc.rh.reconcileMain(context.Background())
+	res, err := svc.rh.reconcileMain(context.Background(), "main")
 	require.NoError(t, err)
 	require.Equal(t, ModeFF, res.Mode)
 	require.Equal(t, plumbing.NewHash(newMainCommit), mustHeadHash(t, svc, "main"))
@@ -524,7 +524,7 @@ func TestReconcileMain_NoOpWhenAlreadyAtOrigin(t *testing.T) {
 		plumbing.NewHashReference(plumbing.NewRemoteReferenceName("origin", "main"), mainHash),
 	))
 
-	res, err := svc.rh.reconcileMain(context.Background())
+	res, err := svc.rh.reconcileMain(context.Background(), "main")
 	require.NoError(t, err)
 	require.Equal(t, ModeNoop, res.Mode)
 }
@@ -543,7 +543,7 @@ func TestReconcileMain_DetectsRewind(t *testing.T) {
 		plumbing.NewHashReference(plumbing.NewRemoteReferenceName("origin", "main"), disjointHash),
 	))
 
-	res, err := svc.rh.reconcileMain(context.Background())
+	res, err := svc.rh.reconcileMain(context.Background(), "main")
 	require.NoError(t, err)
 	require.Equal(t, ModeRewound, res.Mode, "non-descendant origin/main must report Mode=ModeRewound")
 	require.Equal(t, disjointHash, mustHeadHash(t, svc, "main"), "local main force-updated to origin")
@@ -556,7 +556,7 @@ func TestReconcileMain_NoOriginMainIsError(t *testing.T) {
 	t.Cleanup(func() { _ = svc.Close() })
 	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
 
-	_, err = svc.rh.reconcileMain(context.Background())
+	_, err = svc.rh.reconcileMain(context.Background(), "main")
 	require.Error(t, err)
 }
 
@@ -576,7 +576,7 @@ func TestReconcileMain_CreatesLocalMainWhenMissing(t *testing.T) {
 		plumbing.NewHashReference(plumbing.NewRemoteReferenceName("origin", "main"), plumbing.NewHash(originHash)),
 	))
 
-	res, err := svc.rh.reconcileMain(context.Background())
+	res, err := svc.rh.reconcileMain(context.Background(), "main")
 	require.NoError(t, err)
 	require.Equal(t, ModeFF, res.Mode)
 	require.Equal(t, plumbing.NewHash(originHash), mustHeadHash(t, svc, "main"), "local main now at origin")
@@ -599,7 +599,7 @@ func TestReconcileAgent_ReplaysLocalCommitsOntoLocalMain(t *testing.T) {
 	writeMergeFact(t, svc, "agent/test", "kb/a.md", "A", "v1")
 	writeMergeFact(t, svc, "main", "kb/m.md", "M", "v1")
 
-	res, err := svc.rh.reconcileAgent(context.Background(), "agent/test", StrategyLocalWins, false)
+	res, err := svc.rh.reconcileAgent(context.Background(), "agent/test", "main", StrategyLocalWins, false)
 	require.NoError(t, err)
 	require.Equal(t, ModeMerge, res.Mode, "divergent histories merge in steady state")
 	require.Equal(t, ModeMerge, res.Mode)
@@ -638,7 +638,7 @@ func TestReconcileAgent_PicksUpMainAdvance(t *testing.T) {
 	// Advance local main; agent has no local commits.
 	newMainHash := writeMergeFact(t, svc, "main", "kb/promoted.md", "P", "v1")
 
-	res, err := svc.rh.reconcileAgent(context.Background(), "agent/test", StrategyLocalWins, false)
+	res, err := svc.rh.reconcileAgent(context.Background(), "agent/test", "main", StrategyLocalWins, false)
 	require.NoError(t, err)
 	require.Equal(t, ModeFF, res.Mode, "agent is ancestor of main → fast-forward")
 	require.Equal(t, plumbing.NewHash(newMainHash), mustHeadHash(t, svc, "agent/test"),
@@ -665,7 +665,7 @@ func TestReconcileAgent_ReplaysLocalCommitsOntoUpdatedMain(t *testing.T) {
 	writeMergeFact(t, svc, "agent/test", "kb/local.md", "L", "v1")
 	newMain := writeMergeFact(t, svc, "main", "kb/promoted.md", "P", "v1")
 
-	res, err := svc.rh.reconcileAgent(context.Background(), "agent/test", StrategyLocalWins, false)
+	res, err := svc.rh.reconcileAgent(context.Background(), "agent/test", "main", StrategyLocalWins, false)
 	require.NoError(t, err)
 	require.Equal(t, ModeMerge, res.Mode, "divergent histories merge in steady state")
 	require.Equal(t, ModeMerge, res.Mode)
@@ -702,7 +702,7 @@ func TestReconcileAgent_WatermarkPreservedAcrossTicks(t *testing.T) {
 	// Tick 1: agent writes local-1, main advances, reconcile.
 	writeMergeFact(t, svc, "agent/test", "kb/local-1.md", "L1", "v1")
 	main1 := writeMergeFact(t, svc, "main", "kb/m1.md", "M1", "v1")
-	res1, err := svc.rh.reconcileAgent(context.Background(), "agent/test", StrategyLocalWins, false)
+	res1, err := svc.rh.reconcileAgent(context.Background(), "agent/test", "main", StrategyLocalWins, false)
 	require.NoError(t, err)
 	require.Equal(t, ModeMerge, res1.Mode, "tick 1 produces a merge commit")
 	require.Equal(t, ModeMerge, res1.Mode)
@@ -713,7 +713,7 @@ func TestReconcileAgent_WatermarkPreservedAcrossTicks(t *testing.T) {
 	// Tick 2: agent writes local-2, main advances, reconcile.
 	writeMergeFact(t, svc, "agent/test", "kb/local-2.md", "L2", "v1")
 	main2 := writeMergeFact(t, svc, "main", "kb/m2.md", "M2", "v1")
-	res, err := svc.rh.reconcileAgent(context.Background(), "agent/test", StrategyLocalWins, false)
+	res, err := svc.rh.reconcileAgent(context.Background(), "agent/test", "main", StrategyLocalWins, false)
 	require.NoError(t, err)
 	require.Equal(t, ModeMerge, res.Mode, "tick 2 produces a merge commit")
 	require.Equal(t, ModeMerge, res.Mode)
@@ -755,7 +755,7 @@ func TestReconcileAgentRebase_FallsBackToMergeBaseWhenWatermarkMissing(t *testin
 	writeMergeFact(t, svc, "agent/test", "kb/local.md", "L", "v1")
 	mainHash := writeMergeFact(t, svc, "main", "kb/promoted.md", "P", "v1")
 
-	res, err := svc.rh.reconcileAgentRebase(context.Background(), "agent/test", StrategyLocalWins)
+	res, err := svc.rh.reconcileAgentRebase(context.Background(), "agent/test", "main", StrategyLocalWins)
 	require.NoError(t, err)
 	require.Equal(t, ModeRebase, res.Mode)
 	require.Equal(t, 1, res.NumReplayed)
@@ -786,7 +786,7 @@ func TestReconcileAgent_SteadyStateUsesMerge(t *testing.T) {
 	preMain := mustHeadHash(t, svc, "main")
 
 	// mainRewound=false → merge path.
-	res, err := svc.rh.reconcileAgent(context.Background(), "agent/test", StrategyLocalWins, false)
+	res, err := svc.rh.reconcileAgent(context.Background(), "agent/test", "main", StrategyLocalWins, false)
 	require.NoError(t, err)
 	require.Equal(t, ModeMerge, res.Mode, "steady state must merge, not rebase")
 	require.NotEmpty(t, res.NewTip)
@@ -826,7 +826,7 @@ func TestReconcileAgent_RewindUsesRebase(t *testing.T) {
 	))
 
 	// mainRewound=true → rebase path.
-	res, err := svc.rh.reconcileAgent(context.Background(), "agent/test", StrategyLocalWins, true)
+	res, err := svc.rh.reconcileAgent(context.Background(), "agent/test", "main", StrategyLocalWins, true)
 	require.NoError(t, err)
 	require.Equal(t, ModeRebase, res.Mode, "rewind must rebase, not merge")
 	require.GreaterOrEqual(t, res.NumReplayed, 1)
@@ -859,7 +859,7 @@ func TestSync_OrchestratesMainAndAgent(t *testing.T) {
 	writeMergeFact(t, svc, "agent/test", "kb/a.md", "A", "v1")
 
 	// Use the in-process reconcile entry point that skips fetch (no real remote).
-	res, err := svc.Remote().(*remoteIndex).reconcileNow(context.Background(), "agent/test")
+	res, err := svc.Remote().(*remoteIndex).reconcileNow(context.Background(), "agent/test", "main")
 	require.NoError(t, err)
 	require.Equal(t, ModeMerge, res.Agent.Mode, "steady-state Sync merges local main into agent (one merge commit)")
 	require.Equal(t, plumbing.NewHash(originMain), mustHeadHash(t, svc, "main"))

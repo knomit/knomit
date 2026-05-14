@@ -285,7 +285,7 @@ func (r *RepoHandle) ConnectKeepingWork(remote *RemoteHandle) *RepoHandle {
 	// the repo handler already has an open repo from InitRepo.
 	var setErr error
 	r.ri.WithRead(func(svc *store.Service) {
-		setErr = svc.Remote().SetRemote("origin", remote.URL(), "agent/test", 300, 300, "", "")
+		setErr = svc.Remote().SetRemote("origin", remote.URL(), remote.UpstreamBranch(), "agent/test", 300, 300, "", "")
 	})
 	if setErr != nil {
 		t.Fatalf("ConnectKeepingWork(%s): SetRemote: %v", remote.Name(), setErr)

@@ -20,10 +20,16 @@ import (
 // fetchOrigin fetches from origin using the configured refspecs. If origin
 // does not have the agent branch yet (e.g. on first connect, before this
 // machine has ever pushed), go-git returns NoMatchingRefSpecError. That is
-// expected — fall back to fetching just refs/heads/main so origin/main is
-// populated and reconcile can run. The agent ref will materialize on the
-// next fetch after the first Push.
-func fetchOrigin(repo *gogit.Repository, auth transport.AuthMethod) error {
+// expected — fall back to fetching just refs/heads/<upstreamMain> so the
+// consensus branch is populated and reconcile can run. The agent ref will
+// materialize on the next fetch after the first Push.
+//
+// upstreamMain selects the consensus branch (typically "main", configurable
+// to "master" or any other name). Empty defaults to "main".
+func fetchOrigin(repo *gogit.Repository, auth transport.AuthMethod, upstreamMain string) error {
+	if upstreamMain == "" {
+		upstreamMain = "main"
+	}
 	err := repo.Fetch(&gogit.FetchOptions{RemoteName: "origin", Auth: auth})
 	if err == nil || errors.Is(err, gogit.NoErrAlreadyUpToDate) {
 		return nil
@@ -33,15 +39,16 @@ func fetchOrigin(repo *gogit.Repository, auth transport.AuthMethod) error {
 		return err
 	}
 	// Strict refspec didn't match (almost certainly the agent ref). Retry
-	// with just the main refspec — origin/main is the only ref we strictly
-	// require for reconcile to proceed.
+	// with just the upstream refspec — origin/<upstreamMain> is the only ref
+	// we strictly require for reconcile to proceed.
+	upstreamRefspec := gogitconfig.RefSpec(fmt.Sprintf("+refs/heads/%s:refs/remotes/origin/%s", upstreamMain, upstreamMain))
 	fallbackErr := repo.Fetch(&gogit.FetchOptions{
 		RemoteName: "origin",
 		Auth:       auth,
-		RefSpecs:   []gogitconfig.RefSpec{"+refs/heads/main:refs/remotes/origin/main"},
+		RefSpecs:   []gogitconfig.RefSpec{upstreamRefspec},
 	})
 	if fallbackErr == nil || errors.Is(fallbackErr, gogit.NoErrAlreadyUpToDate) {
-		log.Debug().Msg("fetchOrigin: agent ref not on origin yet; fetched main only")
+		log.Debug().Str("upstream", upstreamMain).Msg("fetchOrigin: agent ref not on origin yet; fetched upstream only")
 		return nil
 	}
 	// Surface both failures so a misconfigured refspec (which would make
@@ -94,35 +101,46 @@ func (ri *remoteIndex) Sync(ctx context.Context, agentBranch string, auth transp
 		return SyncResult{}, nil
 	}
 
+	upstreamMain := remote.Branch
+	if upstreamMain == "" {
+		upstreamMain = "main"
+	}
+
 	// fetchOrigin tolerates a missing agent ref on origin (expected when
 	// the agent branch has not yet been pushed) by falling back to
-	// fetching only origin/main.
-	if err := fetchOrigin(ri.rh.repo, auth); err != nil {
+	// fetching only origin/<upstreamMain>.
+	if err := fetchOrigin(ri.rh.repo, auth, upstreamMain); err != nil {
 		return SyncResult{}, fmt.Errorf("Sync: fetch: %w", err)
 	}
 
-	return ri.reconcileNow(ctx, agentBranch)
+	return ri.reconcileNow(ctx, agentBranch, upstreamMain)
 }
 
 // reconcileNow runs the post-fetch portion of Sync. Exposed (package-private)
 // for tests that want to set up refs manually without a real remote.
 //
-// Acquires rh.lockBranch("main") for reconcileMain and releases it before
-// reconcileAgent acquires rh.lockBranch(agentBranch). This avoids holding
-// two branch locks simultaneously.
-func (ri *remoteIndex) reconcileNow(ctx context.Context, agentBranch string) (SyncResult, error) {
-	mainUnlock := ri.rh.lockBranch("main")
-	mainRes, err := ri.rh.reconcileMain(ctx)
+// Acquires rh.lockBranch(upstreamMain) for reconcileMain and releases it
+// before reconcileAgent acquires rh.lockBranch(agentBranch). This avoids
+// holding two branch locks simultaneously.
+//
+// upstreamMain is the consensus branch name (typically "main" but
+// configurable to "master" or any other). Empty defaults to "main".
+func (ri *remoteIndex) reconcileNow(ctx context.Context, agentBranch, upstreamMain string) (SyncResult, error) {
+	if upstreamMain == "" {
+		upstreamMain = "main"
+	}
+	mainUnlock := ri.rh.lockBranch(upstreamMain)
+	mainRes, err := ri.rh.reconcileMain(ctx, upstreamMain)
 	mainUnlock()
 	if err != nil {
 		return SyncResult{Main: mainRes}, fmt.Errorf("Sync: reconcileMain: %w", err)
 	}
 
 	// reconcileAgent dispatches on mainRes.Mode:
-	//   - !ModeRewound → merge local main into agent (steady state, one merge commit at most).
+	//   - !ModeRewound → merge local upstream into agent (steady state, one merge commit at most).
 	//   - ModeRewound  → rebase fallback: replay agent's local-only commits onto the
-	//                    disjoint new main, dropping any files scrubbed by the rewind.
-	agentRes, err := ri.rh.reconcileAgent(ctx, agentBranch, StrategyLocalWins, mainRes.Mode == ModeRewound)
+	//                    disjoint new upstream, dropping any files scrubbed by the rewind.
+	agentRes, err := ri.rh.reconcileAgent(ctx, agentBranch, upstreamMain, StrategyLocalWins, mainRes.Mode == ModeRewound)
 	if err != nil {
 		return SyncResult{Main: mainRes, Agent: agentRes}, fmt.Errorf("Sync: reconcileAgent: %w", err)
 	}

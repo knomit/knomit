@@ -59,11 +59,15 @@ type MainReconcileResult struct {
 	NewTip string `json:"new_tip,omitempty"`
 }
 
-// reconcileMain updates local main to track origin/main. Fast-forwards
-// when origin/main is a descendant of local main. When origin/main is
-// NOT a descendant (rewind, force-push, or disjoint history on the
-// remote), force-updates local main and reports Mode=ModeRewound — the
-// caller must then re-migrate the agent branch against the new main.
+// reconcileMain updates the local consensus branch (upstreamMain) to track
+// origin/<upstreamMain>. Fast-forwards when the origin ref is a descendant of
+// local. When it is NOT a descendant (rewind, force-push, or disjoint history
+// on the remote), force-updates the local branch and reports Mode=ModeRewound
+// — the caller must then re-migrate the agent branch against the new
+// upstream.
+//
+// upstreamMain selects the consensus branch (typically "main" but
+// configurable to "master" or any other name). Empty defaults to "main".
 //
 // The disjoint-history sub-case (no MergeBase between local and origin)
 // is detected and logged distinctly from a plain rewind; both still
@@ -71,33 +75,37 @@ type MainReconcileResult struct {
 // when the remote has been replaced wholesale (unrelated repo, corruption,
 // or a complete history rewrite).
 //
-// Errors if origin/main is not present locally (caller must fetch first).
+// Errors if origin/<upstreamMain> is not present locally (caller must fetch
+// first).
 //
-// Caller must hold rh.lockBranch("main"). After every ref advance,
+// Caller must hold rh.lockBranch(upstreamMain). After every ref advance,
 // commit_log is repopulated and the index manager is notified so
 // downstream readers see consistent state.
-func (rh *repoHandler) reconcileMain(ctx context.Context) (MainReconcileResult, error) {
-	originMainName := plumbing.NewRemoteReferenceName("origin", "main")
+func (rh *repoHandler) reconcileMain(ctx context.Context, upstreamMain string) (MainReconcileResult, error) {
+	if upstreamMain == "" {
+		upstreamMain = "main"
+	}
+	originMainName := plumbing.NewRemoteReferenceName("origin", upstreamMain)
 	originMainRef, err := rh.gits.Reference(originMainName)
 	if err != nil {
-		return MainReconcileResult{}, fmt.Errorf("reconcileMain: read origin/main: %w", err)
+		return MainReconcileResult{}, fmt.Errorf("reconcileMain: read origin/%s: %w", upstreamMain, err)
 	}
 	originHash := originMainRef.Hash()
 
-	localMainName := plumbing.NewBranchReferenceName("main")
+	localMainName := plumbing.NewBranchReferenceName(upstreamMain)
 	localMainRef, err := rh.gits.Reference(localMainName)
 	if err != nil {
-		// Local main doesn't exist — create at origin/main.
+		// Local upstream branch doesn't exist — create at origin/<upstreamMain>.
 		if err := rh.gits.SetReference(plumbing.NewHashReference(localMainName, originHash)); err != nil {
-			return MainReconcileResult{}, fmt.Errorf("reconcileMain: create local main: %w", err)
+			return MainReconcileResult{}, fmt.Errorf("reconcileMain: create local %s: %w", upstreamMain, err)
 		}
-		if _, err := rh.EnsureBranch(ctx, "main", "refs/heads/main"); err != nil {
-			return MainReconcileResult{}, fmt.Errorf("reconcileMain: ensure main: %w", err)
+		if _, err := rh.EnsureBranch(ctx, upstreamMain, "refs/heads/"+upstreamMain); err != nil {
+			return MainReconcileResult{}, fmt.Errorf("reconcileMain: ensure %s: %w", upstreamMain, err)
 		}
-		if err := rh.populateCommitLog(ctx, "main"); err != nil {
+		if err := rh.populateCommitLog(ctx, upstreamMain); err != nil {
 			return MainReconcileResult{}, fmt.Errorf("reconcileMain: populate commit_log after create: %w", err)
 		}
-		if err := rh.notifyCommit(ctx, "main", originHash); err != nil {
+		if err := rh.notifyCommit(ctx, upstreamMain, originHash); err != nil {
 			return MainReconcileResult{}, fmt.Errorf("reconcileMain: notify after create: %w", err)
 		}
 		return MainReconcileResult{Mode: ModeFF, NewTip: originHash.String()}, nil
@@ -126,13 +134,13 @@ func (rh *repoHandler) reconcileMain(ctx context.Context) (MainReconcileResult, 
 		if err := rh.gits.SetReference(plumbing.NewHashReference(localMainName, originHash)); err != nil {
 			return MainReconcileResult{}, fmt.Errorf("reconcileMain: fast-forward: %w", err)
 		}
-		if err := rh.populateCommitLog(ctx, "main"); err != nil {
+		if err := rh.populateCommitLog(ctx, upstreamMain); err != nil {
 			return MainReconcileResult{}, fmt.Errorf("reconcileMain: populate commit_log after fast-forward: %w", err)
 		}
-		if err := rh.notifyCommit(ctx, "main", originHash); err != nil {
+		if err := rh.notifyCommit(ctx, upstreamMain, originHash); err != nil {
 			return MainReconcileResult{}, fmt.Errorf("reconcileMain: notify after fast-forward: %w", err)
 		}
-		log.Info().Str("to", originHash.String()[:8]).Msg("reconcileMain: fast-forward")
+		log.Info().Str("branch", upstreamMain).Str("to", originHash.String()[:8]).Msg("reconcileMain: fast-forward")
 		return MainReconcileResult{Mode: ModeFF, NewTip: originHash.String()}, nil
 	}
 
@@ -146,26 +154,27 @@ func (rh *repoHandler) reconcileMain(ctx context.Context) (MainReconcileResult, 
 	if err := rh.gits.SetReference(plumbing.NewHashReference(localMainName, originHash)); err != nil {
 		return MainReconcileResult{}, fmt.Errorf("reconcileMain: force-update: %w", err)
 	}
-	// The old chain is no longer reachable from main. Purge stale
-	// branch_commits rows before repopulating; otherwise Verify reports
+	// The old chain is no longer reachable from the upstream branch. Purge
+	// stale branch_commits rows before repopulating; otherwise Verify reports
 	// unreachable rows because populateCommitLog only INSERTs.
-	if err := rh.purgeBranchCommits(ctx, "main"); err != nil {
+	if err := rh.purgeBranchCommits(ctx, upstreamMain); err != nil {
 		return MainReconcileResult{}, fmt.Errorf("reconcileMain: purge branch_commits after rewind: %w", err)
 	}
-	if err := rh.populateCommitLog(ctx, "main"); err != nil {
+	if err := rh.populateCommitLog(ctx, upstreamMain); err != nil {
 		return MainReconcileResult{}, fmt.Errorf("reconcileMain: populate commit_log after force-update: %w", err)
 	}
-	if err := rh.notifyCommit(ctx, "main", originHash); err != nil {
+	if err := rh.notifyCommit(ctx, upstreamMain, originHash); err != nil {
 		return MainReconcileResult{}, fmt.Errorf("reconcileMain: notify after force-update: %w", err)
 	}
 	logEv := log.Warn().
+		Str("branch", upstreamMain).
 		Str("local", localHash.String()[:8]).
 		Str("origin", originHash.String()[:8]).
 		Bool("disjoint", disjoint)
 	if disjoint {
-		logEv.Msg("reconcileMain: origin/main has DISJOINT history (no common ancestor); force-updated")
+		logEv.Msgf("reconcileMain: origin/%s has DISJOINT history (no common ancestor); force-updated", upstreamMain)
 	} else {
-		logEv.Msg("reconcileMain: origin/main is not a descendant of local main; force-updated")
+		logEv.Msgf("reconcileMain: origin/%s is not a descendant of local %s; force-updated", upstreamMain, upstreamMain)
 	}
 	return MainReconcileResult{Mode: ModeRewound, NewTip: originHash.String()}, nil
 }
@@ -202,11 +211,14 @@ func (rh *repoHandler) purgeBranchCommits(ctx context.Context, branch string) er
 // always has a usable base for a future rewind. Both paths hold
 // rh.lockBranch(agentBranch) for the entire body, including the
 // watermark write.
-func (rh *repoHandler) reconcileAgent(ctx context.Context, agentBranch string, strategy ConflictStrategy, mainRewound bool) (AgentReconcileResult, error) {
-	if mainRewound {
-		return rh.reconcileAgentRebase(ctx, agentBranch, strategy)
+func (rh *repoHandler) reconcileAgent(ctx context.Context, agentBranch, upstreamMain string, strategy ConflictStrategy, mainRewound bool) (AgentReconcileResult, error) {
+	if upstreamMain == "" {
+		upstreamMain = "main"
 	}
-	return rh.reconcileAgentMerge(ctx, agentBranch, strategy)
+	if mainRewound {
+		return rh.reconcileAgentRebase(ctx, agentBranch, upstreamMain, strategy)
+	}
+	return rh.reconcileAgentMerge(ctx, agentBranch, upstreamMain, strategy)
 }
 
 // shortRefHash returns the first 8 chars of a ref hash for log output, or

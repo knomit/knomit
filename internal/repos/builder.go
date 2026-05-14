@@ -35,6 +35,11 @@ type repoBuilder struct {
 	// accumulated state
 	svc      *store.Service
 	ontology *fact.Ontology
+	// upstreamMain is the resolved consensus branch name for this repo's
+	// origin (e.g. "main" or "master"). Populated by initDefaultGit when
+	// origin is configured (detected from the remote's symbolic HEAD).
+	// Defaults to "main" for repos with no origin.
+	upstreamMain string
 }
 
 // openStore opens the SQLite-backed store and configures credential encryption.
@@ -110,7 +115,15 @@ func (b *repoBuilder) initDefaultGit() error {
 		if authErr != nil {
 			return fmt.Errorf("resolve auth: %w", authErr)
 		}
-		if err := b.svc.InitFromRemote(b.cfg.Git.Origin, auth, b.agentBranch, seedFiles); err != nil {
+		// Pass empty upstreamMain — InitFromRemote will detect from the
+		// remote's symbolic HEAD after the initial fetch, falling back to
+		// "main" if detection fails. Capture the resolved value on the
+		// builder so ensureBranch can pass it to SetRemote.
+		b.upstreamMain = store.DetectRemoteUpstreamFromURL(b.cfg.Git.Origin, auth)
+		if b.upstreamMain == "" {
+			b.upstreamMain = "main"
+		}
+		if err := b.svc.InitFromRemote(b.cfg.Git.Origin, auth, b.upstreamMain, b.agentBranch, seedFiles); err != nil {
 			return fmt.Errorf("init from remote: %w", err)
 		}
 		return nil
@@ -131,19 +144,24 @@ func (b *repoBuilder) ensureBranch() {
 		}
 	}
 	if b.isDefault && b.cfg.Git.Origin != "" {
-		if err := b.svc.Remote().SetRemote("origin", b.cfg.Git.Origin, b.agentBranch, 300, 300, "", ""); err != nil {
+		upstream := b.upstreamMain
+		if upstream == "" {
+			upstream = "main"
+		}
+		if err := b.svc.Remote().SetRemote("origin", b.cfg.Git.Origin, upstream, b.agentBranch, 300, 300, "", ""); err != nil {
 			log.Warn().Err(err).Msg("failed to seed origin in remotes table")
 		}
 	}
 }
 
 // setupIndex configures the search index with the embedder and runs an initial
-// sync against the git store. When an origin is configured, main is also
-// synced — InitFromRemote populates commit_log for both agent/* and main,
-// but without an explicit index sync main's branch_facts / facts_vec / graph
-// tables would be empty even though the tree at HEAD has content cloned from
-// origin. Without this, Verify's facts-coherence check correctly fires on
-// main whenever the cloned tree has any facts.
+// sync against the git store. When an origin is configured, the upstream
+// branch is also synced — InitFromRemote populates commit_log for both
+// agent/* and the upstream, but without an explicit index sync the upstream's
+// branch_facts / facts_vec / graph tables would be empty even though the
+// tree at HEAD has content cloned from origin. Without this, Verify's
+// facts-coherence check correctly fires on the upstream branch whenever the
+// cloned tree has any facts.
 func (b *repoBuilder) setupIndex() {
 	if b.embedder != nil {
 		b.svc.SetEmbedder(b.embedder)
@@ -152,8 +170,12 @@ func (b *repoBuilder) setupIndex() {
 		log.Warn().Err(err).Str("repo", b.name).Msg("initial index sync failed")
 	}
 	if b.cfg.Git.Origin != "" {
-		if err := b.svc.IndexManager().Sync(context.Background(), "main"); err != nil {
-			log.Warn().Err(err).Str("repo", b.name).Msg("initial index sync (main) failed")
+		upstream := b.upstreamMain
+		if upstream == "" {
+			upstream = "main"
+		}
+		if err := b.svc.IndexManager().Sync(context.Background(), upstream); err != nil {
+			log.Warn().Err(err).Str("repo", b.name).Str("branch", upstream).Msg("initial index sync (upstream) failed")
 		}
 	}
 }

@@ -16,6 +16,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/go-git/go-git/v5/plumbing/transport"
+	"github.com/go-git/go-git/v5/storage/memory"
 	"github.com/rs/zerolog/log"
 )
 
@@ -100,10 +101,24 @@ func (s *Service) OpenRepo() error {
 	return nil
 }
 
-// InitRepo creates a new knomit git repo using the Service's storer.
-// initFiles are additional files to create in the initial commit.
-// agentBranch defaults to "agent/<hostname>" if empty.
+// InitRepo creates a new knomit git repo using the Service's storer with
+// "main" as the local consensus branch name. initFiles are additional files
+// to create in the initial commit. agentBranch defaults to "agent/<hostname>"
+// if empty. Thin wrapper around InitRepoWithUpstream — most callers (no
+// origin, default branch naming) should use this.
 func (s *Service) InitRepo(initFiles map[string]string, agentBranch string) error {
+	return s.InitRepoWithUpstream(initFiles, "main", agentBranch)
+}
+
+// InitRepoWithUpstream is InitRepo parameterized on the local consensus
+// branch name. Use when the local repo should default to "master" (or any
+// non-"main" name) — typically only test fixtures need this; production
+// callers either go through InitFromRemote (which detects from the remote)
+// or use the default "main".
+func (s *Service) InitRepoWithUpstream(initFiles map[string]string, upstreamMain, agentBranch string) error {
+	if upstreamMain == "" {
+		upstreamMain = "main"
+	}
 	repo, err := gogit.Init(s.rh.gits, memfs.New())
 	if err != nil {
 		return fmt.Errorf("InitRepo: git init: %w", err)
@@ -142,31 +157,31 @@ func (s *Service) InitRepo(initFiles map[string]string, agentBranch string) erro
 		return fmt.Errorf("InitRepo: set HEAD: %w", err)
 	}
 
-	mainRef := plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), lastCommit)
+	mainRef := plumbing.NewHashReference(plumbing.NewBranchReferenceName(upstreamMain), lastCommit)
 	if err := s.rh.gits.SetReference(mainRef); err != nil {
-		return fmt.Errorf("InitRepo: set main ref: %w", err)
+		return fmt.Errorf("InitRepo: set %s ref: %w", upstreamMain, err)
 	}
 
 	// Seed the per-agent watermark to the initial commit (which is exactly
-	// the local-main hash at this point). On the next reconcileAgent the
+	// the local-upstream hash at this point). On the next reconcileAgent the
 	// walk will use this as its stop point.
 	if err := s.rh.writeAgentBase(agentBranch, lastCommit); err != nil {
 		return fmt.Errorf("InitRepo: seed agent watermark: %w", err)
 	}
 
-	log.Info().Str("branch", agentBranch).Msg("git store initialized")
+	log.Info().Str("branch", agentBranch).Str("upstream", upstreamMain).Msg("git store initialized")
 	s.rh.repo = repo
 	if _, err := s.rh.EnsureBranch(context.Background(), agentBranch, "refs/heads/"+agentBranch); err != nil {
 		return fmt.Errorf("InitRepo: ensure agent branch %q: %w", agentBranch, err)
 	}
-	if _, err := s.rh.EnsureBranch(context.Background(), "main", "refs/heads/main"); err != nil {
-		return fmt.Errorf("InitRepo: ensure main branch: %w", err)
+	if _, err := s.rh.EnsureBranch(context.Background(), upstreamMain, "refs/heads/"+upstreamMain); err != nil {
+		return fmt.Errorf("InitRepo: ensure upstream branch %q: %w", upstreamMain, err)
 	}
 	if err := s.rh.populateCommitLog(context.Background(), agentBranch); err != nil {
 		log.Warn().Err(err).Msg("commit_log: initial populate failed")
 	}
-	if err := s.rh.populateCommitLog(context.Background(), "main"); err != nil {
-		log.Warn().Err(err).Msg("commit_log: initial populate (main) failed")
+	if err := s.rh.populateCommitLog(context.Background(), upstreamMain); err != nil {
+		log.Warn().Err(err).Str("branch", upstreamMain).Msg("commit_log: initial populate (upstream) failed")
 	}
 	return nil
 }
@@ -214,12 +229,18 @@ func (s *Service) CloneFrom(url string, auth transport.AuthMethod, progress func
 }
 
 // InitFromRemote initializes a knomit git repo by fetching from a remote origin.
+//
+// upstreamMain selects the remote's consensus branch (typically "main",
+// configurable to "master" or any other name). When empty, the helper
+// inspects the remote's symbolic HEAD after the initial fetch and uses
+// whatever it points at, falling back to "main" if detection fails.
+//
 // If the remote has an existing agent branch for this hostname, it is used.
-// Otherwise a new agent branch is created from origin/main.
+// Otherwise a new agent branch is created from origin/<upstreamMain>.
 // If the remote is empty (no refs), falls back to creating initial content
 // inline — initFiles are written as seed files on the new agent branch in
 // that case, and are ignored when the remote already has branches.
-func (s *Service) InitFromRemote(originURL string, auth transport.AuthMethod, agentBranch string, initFiles map[string]string) error {
+func (s *Service) InitFromRemote(originURL string, auth transport.AuthMethod, upstreamMain, agentBranch string, initFiles map[string]string) error {
 	repo, err := gogit.Init(s.rh.gits, memfs.New())
 	if err != nil {
 		return fmt.Errorf("InitFromRemote: git init: %w", err)
@@ -245,7 +266,7 @@ func (s *Service) InitFromRemote(originURL string, auth transport.AuthMethod, ag
 		Auth:       auth,
 	})
 	if errors.Is(err, transport.ErrEmptyRemoteRepository) {
-		return s.initFromEmptyRemote(repo, originURL, auth, agentBranch, initFiles)
+		return s.initFromEmptyRemote(repo, originURL, auth, upstreamMain, agentBranch, initFiles)
 	}
 	if err != nil {
 		return fmt.Errorf("InitFromRemote: fetch: %w", err)
@@ -253,6 +274,18 @@ func (s *Service) InitFromRemote(originURL string, auth transport.AuthMethod, ag
 
 	if agentBranch == "" {
 		agentBranch = defaultAgentBranch()
+	}
+
+	// Detect the remote's default branch when the caller didn't specify.
+	// Falls back to "main" if the remote has no symbolic HEAD we can read.
+	if upstreamMain == "" {
+		upstreamMain = detectRemoteUpstream(repo, auth)
+		if upstreamMain == "" {
+			log.Warn().Msg("InitFromRemote: could not detect remote HEAD; defaulting to \"main\"")
+			upstreamMain = "main"
+		} else {
+			log.Info().Str("upstream", upstreamMain).Msg("InitFromRemote: detected upstream branch from remote HEAD")
+		}
 	}
 
 	// Publish the freshly-initialised repo on the handler BEFORE
@@ -265,26 +298,26 @@ func (s *Service) InitFromRemote(originURL string, auth transport.AuthMethod, ag
 	// Configure remote with two-refspec fetch (main + agent/<host>).
 	// The initial CreateRemote above used a wildcard refspec to discover all
 	// remote branches at bootstrap; now we lock it down for steady state.
-	if err := s.rh.configureRemote(originURL, agentBranch); err != nil {
+	if err := s.rh.configureRemote(originURL, upstreamMain, agentBranch); err != nil {
 		return fmt.Errorf("InitFromRemote: configure remote: %w", err)
 	}
 
-	// Re-fetch with the proper refspec so origin/main and origin/agent/<host>
-	// are both tracked consistently. (The initial wildcard fetch already pulled
-	// objects; this just establishes the remote-tracking refs under the new
-	// refspec shape.) Use fetchOrigin so the agent ref's absence on origin
-	// (typical first connect) is tolerated.
-	if err := fetchOrigin(repo, auth); err != nil {
+	// Re-fetch with the proper refspec so origin/<upstreamMain> and
+	// origin/agent/<host> are both tracked consistently. (The initial
+	// wildcard fetch already pulled objects; this just establishes the
+	// remote-tracking refs under the new refspec shape.) Use fetchOrigin so
+	// the agent ref's absence on origin (typical first connect) is tolerated.
+	if err := fetchOrigin(repo, auth, upstreamMain); err != nil {
 		return fmt.Errorf("InitFromRemote: re-fetch: %w", err)
 	}
 
-	// Bootstrap local main from origin/main.
-	originMainRef, err := s.rh.gits.Reference(plumbing.NewRemoteReferenceName("origin", "main"))
+	// Bootstrap local upstream branch from origin/<upstreamMain>.
+	originMainRef, err := s.rh.gits.Reference(plumbing.NewRemoteReferenceName("origin", upstreamMain))
 	if err != nil {
-		return fmt.Errorf("InitFromRemote: resolve origin/main: %w", err)
+		return fmt.Errorf("InitFromRemote: resolve origin/%s: %w", upstreamMain, err)
 	}
-	if err := s.rh.gits.SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), originMainRef.Hash())); err != nil {
-		return fmt.Errorf("InitFromRemote: set local main: %w", err)
+	if err := s.rh.gits.SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName(upstreamMain), originMainRef.Hash())); err != nil {
+		return fmt.Errorf("InitFromRemote: set local %s: %w", upstreamMain, err)
 	}
 
 	// Bootstrap local agent and compute the watermark in the same branch
@@ -352,28 +385,85 @@ func (s *Service) InitFromRemote(originURL string, auth transport.AuthMethod, ag
 		return fmt.Errorf("InitFromRemote: seed agent watermark: %w", err)
 	}
 
-	log.Info().Str("branch", agentBranch).Str("origin", originURL).Msg("git store initialized from remote")
+	log.Info().Str("branch", agentBranch).Str("upstream", upstreamMain).Str("origin", originURL).Msg("git store initialized from remote")
 	// s.rh.repo is already published (set earlier so configureRemote could run).
 	s.fi.auth = auth
 	if _, err := s.rh.EnsureBranch(context.Background(), agentBranch, "refs/heads/"+agentBranch); err != nil {
 		return fmt.Errorf("InitFromRemote: ensure agent branch %q: %w", agentBranch, err)
 	}
-	if _, err := s.rh.EnsureBranch(context.Background(), "main", "refs/heads/main"); err != nil {
-		return fmt.Errorf("InitFromRemote: ensure main branch: %w", err)
+	if _, err := s.rh.EnsureBranch(context.Background(), upstreamMain, "refs/heads/"+upstreamMain); err != nil {
+		return fmt.Errorf("InitFromRemote: ensure upstream branch %q: %w", upstreamMain, err)
 	}
 	if err := s.rh.populateCommitLog(context.Background(), agentBranch); err != nil {
 		log.Warn().Err(err).Msg("commit_log: remote populate failed")
 	}
-	if err := s.rh.populateCommitLog(context.Background(), "main"); err != nil {
-		log.Warn().Err(err).Msg("commit_log: remote populate (main) failed")
+	if err := s.rh.populateCommitLog(context.Background(), upstreamMain); err != nil {
+		log.Warn().Err(err).Str("branch", upstreamMain).Msg("commit_log: remote populate (upstream) failed")
 	}
 	return nil
+}
+
+// detectRemoteUpstream queries origin's symbolic HEAD to determine the default
+// branch (e.g. "main", "master"). Returns "" when detection fails; the caller
+// must fall back to "main".
+//
+// Uses remote.List (which issues a separate ls-remote round-trip) rather than
+// reading a local ref, because go-git's default fetch refspecs do not bring
+// HEAD into refs/remotes/origin/. The extra round-trip happens at repo init
+// only.
+func detectRemoteUpstream(repo *gogit.Repository, auth transport.AuthMethod) string {
+	remote, err := repo.Remote("origin")
+	if err != nil {
+		return ""
+	}
+	return detectFromRemote(remote, auth)
+}
+
+// DetectRemoteUpstreamFromURL is the public detection entry point used by
+// the repos builder at first-boot — before any local repo exists to attach
+// a remote to. Creates a throwaway in-memory repo, attaches `origin` to the
+// given URL, and queries its symbolic HEAD. Returns "" when the remote
+// cannot be reached or has no symbolic HEAD; the caller must fall back to
+// "main".
+func DetectRemoteUpstreamFromURL(url string, auth transport.AuthMethod) string {
+	storage := memory.NewStorage()
+	repo, err := gogit.Init(storage, nil)
+	if err != nil {
+		return ""
+	}
+	remote, err := repo.CreateRemote(&gogitconfig.RemoteConfig{
+		Name: "origin",
+		URLs: []string{url},
+	})
+	if err != nil {
+		return ""
+	}
+	return detectFromRemote(remote, auth)
+}
+
+func detectFromRemote(remote *gogit.Remote, auth transport.AuthMethod) string {
+	refs, err := remote.List(&gogit.ListOptions{Auth: auth})
+	if err != nil {
+		return ""
+	}
+	for _, ref := range refs {
+		if ref.Name() == plumbing.HEAD && ref.Type() == plumbing.SymbolicReference {
+			return strings.TrimPrefix(ref.Target().String(), "refs/heads/")
+		}
+	}
+	return ""
 }
 
 // initFromEmptyRemote handles the empty-remote fallback for InitFromRemote.
 // initFiles are written as additional seed files on top of the root manifest
 // so the new agent branch matches the layout produced by InitRepo.
-func (s *Service) initFromEmptyRemote(repo *gogit.Repository, originURL string, auth transport.AuthMethod, agentBranch string, initFiles map[string]string) error {
+// upstreamMain is the consensus branch name to bootstrap (defaults to "main"
+// when empty). The empty-remote path has no remote HEAD to detect from, so
+// the caller's value (or "main") is authoritative.
+func (s *Service) initFromEmptyRemote(repo *gogit.Repository, originURL string, auth transport.AuthMethod, upstreamMain, agentBranch string, initFiles map[string]string) error {
+	if upstreamMain == "" {
+		upstreamMain = "main"
+	}
 	rootManifest := "# Knowledge Base\n\nRoot manifest.\n"
 	initSig := object.Signature{Name: "knomit", Email: "knomit@local", When: time.Now()}
 	lastCommit, _, writeErr := writeFileToStore(s.rh.gits, plumbing.ZeroHash, "kb.md", rootManifest, "init: create knowledge base", initSig, initSig)
@@ -396,8 +486,8 @@ func (s *Service) initFromEmptyRemote(repo *gogit.Repository, originURL string, 
 	if writeErr = s.rh.gits.SetReference(plumbing.NewSymbolicReference(plumbing.HEAD, agentRefName)); writeErr != nil {
 		return fmt.Errorf("InitFromRemote: empty remote set HEAD: %w", writeErr)
 	}
-	if writeErr = s.rh.gits.SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), lastCommit)); writeErr != nil {
-		return fmt.Errorf("InitFromRemote: empty remote set main: %w", writeErr)
+	if writeErr = s.rh.gits.SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName(upstreamMain), lastCommit)); writeErr != nil {
+		return fmt.Errorf("InitFromRemote: empty remote set %s: %w", upstreamMain, writeErr)
 	}
 	// Seed the watermark — same shape as the non-empty remote bootstrap.
 	if writeErr = s.rh.writeAgentBase(agentBranch, lastCommit); writeErr != nil {
@@ -409,14 +499,14 @@ func (s *Service) initFromEmptyRemote(repo *gogit.Repository, originURL string, 
 	if _, err := s.rh.EnsureBranch(context.Background(), agentBranch, "refs/heads/"+agentBranch); err != nil {
 		return fmt.Errorf("InitFromRemote: empty remote ensure agent branch %q: %w", agentBranch, err)
 	}
-	if _, err := s.rh.EnsureBranch(context.Background(), "main", "refs/heads/main"); err != nil {
-		return fmt.Errorf("InitFromRemote: empty remote ensure main branch: %w", err)
+	if _, err := s.rh.EnsureBranch(context.Background(), upstreamMain, "refs/heads/"+upstreamMain); err != nil {
+		return fmt.Errorf("InitFromRemote: empty remote ensure upstream branch %q: %w", upstreamMain, err)
 	}
 	if err := s.rh.populateCommitLog(context.Background(), agentBranch); err != nil {
 		log.Warn().Err(err).Msg("commit_log: empty-remote populate failed")
 	}
-	if err := s.rh.populateCommitLog(context.Background(), "main"); err != nil {
-		log.Warn().Err(err).Msg("commit_log: empty-remote populate (main) failed")
+	if err := s.rh.populateCommitLog(context.Background(), upstreamMain); err != nil {
+		log.Warn().Err(err).Str("branch", upstreamMain).Msg("commit_log: empty-remote populate (upstream) failed")
 	}
 	return nil
 }

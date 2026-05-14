@@ -36,15 +36,24 @@ type Remote struct {
 
 // SetRemote inserts or replaces a remote configuration and wires the git
 // remote in the underlying repository so that Sync and Push can use it
-// immediately. The agentBranch parameter is the LOCAL agent branch that
-// this machine writes to (e.g. "agent/<host>"); it is woven into the fetch
-// refspec so origin/agent/<host> is tracked alongside origin/main.
+// immediately.
 //
-// The Remote.Branch field stored in the DB continues to mean the upstream
-// consensus branch and is hardcoded to "main" — this is the branch that
-// Sync merges from. authMethod and authToken are optional; if authToken
-// is non-empty it is encrypted at rest when a Crypt instance is configured.
-func (ri *remoteIndex) SetRemote(name, url, agentBranch string, interval, pushInterval int, authMethod, authToken string) error {
+// upstreamMain is the remote's consensus branch (typically "main" but
+// configurable to "master" or any other name). It is stored in
+// Remote.Branch and woven into the fetch refspec. Empty defaults to "main"
+// — callers that have already discovered the right name (e.g. via the
+// connectivity-test UI flow) should pass it explicitly.
+//
+// agentBranch is the LOCAL agent branch this machine writes to
+// (e.g. "agent/<host>"); it is woven into the fetch refspec so
+// origin/agent/<host> is tracked alongside origin/<upstreamMain>.
+//
+// authMethod and authToken are optional; if authToken is non-empty it is
+// encrypted at rest when a Crypt instance is configured.
+func (ri *remoteIndex) SetRemote(name, url, upstreamMain, agentBranch string, interval, pushInterval int, authMethod, authToken string) error {
+	if upstreamMain == "" {
+		upstreamMain = "main"
+	}
 	storedToken := authToken
 	if ri.crypt != nil && authToken != "" {
 		enc, err := ri.crypt.encrypt(authToken)
@@ -53,10 +62,6 @@ func (ri *remoteIndex) SetRemote(name, url, agentBranch string, interval, pushIn
 		}
 		storedToken = enc
 	}
-	// The DB column "branch" tracks the upstream main branch name. It is
-	// hardcoded to "main" under the new origin-sync model where main is the
-	// consensus branch. agentBranch only flows into the git refspec.
-	const upstreamMain = "main"
 	_, err := ri.rh.db.Exec(
 		`INSERT OR REPLACE INTO remotes (name, url, branch, interval, push_interval, auth_method, auth_token) VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		name, url, upstreamMain, interval, pushInterval, authMethod, storedToken,
@@ -67,7 +72,7 @@ func (ri *remoteIndex) SetRemote(name, url, agentBranch string, interval, pushIn
 	// Sync the git config so go-git can fetch/push by remote name.
 	// No-op when the repo has not been initialised yet (DB-only mode).
 	if ri.rh.repo != nil {
-		if err := ri.rh.configureRemote(url, agentBranch); err != nil {
+		if err := ri.rh.configureRemote(url, upstreamMain, agentBranch); err != nil {
 			return fmt.Errorf("configure git remote: %w", err)
 		}
 	}

@@ -677,6 +677,7 @@ func (s *Server) handleCommit(rm *repos.Manager, sm *SessionManager, agentBranch
 		authCfg := sess.Auth
 		remoteURL := sess.URL
 		appliedBranch := sess.AppliedBranch
+		testResult, _ := sess.TestResult.(connectivityResult)
 		sess.mu.Unlock()
 
 		if state != StateApplied {
@@ -727,11 +728,16 @@ func (s *Server) handleCommit(rm *repos.Manager, sm *SessionManager, agentBranch
 			authMethod := authCfg.Method
 			authToken := assembleAuthToken(authMethod, authCfg.Token, authCfg.User, authCfg.Password)
 
-			// SetRemote takes the local agent branch (woven into the fetch
-			// refspec). The upstream main branch name is hardcoded inside
-			// SetRemote, so the session's selected upstream branch is no
-			// longer threaded through here.
-			if err := svc.Remote().SetRemote("origin", remoteURL, agentBranch, 300, 300, authMethod, authToken); err != nil {
+			// SetRemote takes both the upstream consensus branch (discovered
+			// by the test-connectivity flow) and the local agent branch.
+			// The session's chosen upstream survives — for master-default
+			// (or any non-main) repos this is critical, since SetRemote no
+			// longer hardcodes the upstream name.
+			upstreamMain := testResult.DefaultBranch
+			if upstreamMain == "" {
+				upstreamMain = "main"
+			}
+			if err := svc.Remote().SetRemote("origin", remoteURL, upstreamMain, agentBranch, 300, 300, authMethod, authToken); err != nil {
 				sendEvent(map[string]string{"phase": "error", "message": fmt.Sprintf("save remote config: %v", err)})
 				return
 			}

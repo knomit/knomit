@@ -324,19 +324,25 @@ func (rh *repoHandler) SetDefaultBranch(branch string) error {
 }
 
 // configureRemote ensures origin is registered with two fetch refspecs:
-// one for main (the consensus branch) and one for this machine's agent
-// branch. Idempotent. The agent branch name is part of the refspec, so
-// callers must pass the same agentBranch on every call for a given repo.
-func (rh *repoHandler) configureRemote(url, agentBranch string) error {
+// one for the upstream consensus branch (typically "main", configurable to
+// "master" or any other name via upstreamMain) and one for this machine's
+// agent branch. Idempotent. Both branch names are part of their respective
+// refspecs, so callers must pass the same upstreamMain and agentBranch on
+// every call for a given repo. Empty upstreamMain defaults to "main".
+func (rh *repoHandler) configureRemote(url, upstreamMain, agentBranch string) error {
 	rh.configMu.Lock()
 	defer rh.configMu.Unlock()
+
+	if upstreamMain == "" {
+		upstreamMain = "main"
+	}
 
 	cfg, err := rh.repo.Config()
 	if err != nil {
 		return fmt.Errorf("read config: %w", err)
 	}
 
-	mainRefspec := "+refs/heads/main:refs/remotes/origin/main"
+	mainRefspec := fmt.Sprintf("+refs/heads/%s:refs/remotes/origin/%s", upstreamMain, upstreamMain)
 	agentRefspec := fmt.Sprintf("+refs/heads/%s:refs/remotes/origin/%s", agentBranch, agentBranch)
 
 	if rc, ok := cfg.Remotes["origin"]; ok && len(rc.URLs) > 0 && rc.URLs[0] == url {

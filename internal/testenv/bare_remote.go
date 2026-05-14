@@ -18,27 +18,42 @@ import (
 //
 //	exec.Command("git", "init", "--bare", remoteDir).Run()
 type RemoteHandle struct {
-	sb   *Storyboard
-	name string
-	dir  string // absolute path to the bare git directory
-	url  string // file:// URL suitable for go-git
+	sb             *Storyboard
+	name           string
+	dir            string // absolute path to the bare git directory
+	url            string // file:// URL suitable for go-git
+	upstreamBranch string // consensus branch on this remote (default "main")
 }
 
 // BareRemote creates a new bare git remote at <storyboard-tempdir>/remotes/<name>
 // and returns a handle to it. Call this once per test that needs remote-round-trip
 // scenarios, then pass the returned RemoteHandle to RepoHandle.Connect (below).
 //
-// The bare repo starts empty. The first Push from any RepoHandle populates it.
+// The bare repo starts empty with "main" as its symbolic HEAD. The first
+// Push from any RepoHandle populates it. For tests that need a non-"main"
+// upstream (e.g. master), call BareRemoteWithBranch instead.
 func (sb *Storyboard) BareRemote(name string) *RemoteHandle {
+	return sb.BareRemoteWithBranch(name, "main")
+}
+
+// BareRemoteWithBranch is BareRemote parameterized on the upstream branch
+// name. The bare repo's symbolic HEAD is set to refs/heads/<branch> so
+// detectRemoteUpstream picks up the right default when a repo connects
+// without explicitly choosing a branch.
+func (sb *Storyboard) BareRemoteWithBranch(name, upstreamBranch string) *RemoteHandle {
 	t := sb.t
 	t.Helper()
+	if upstreamBranch == "" {
+		upstreamBranch = "main"
+	}
 	dir := filepath.Join(sb.homeDir, "remotes", name)
-	mustGit(t, "", "init", "--bare", dir)
+	mustGit(t, "", "init", "--bare", "--initial-branch="+upstreamBranch, dir)
 	return &RemoteHandle{
-		sb:   sb,
-		name: name,
-		dir:  dir,
-		url:  "file://" + dir,
+		sb:             sb,
+		name:           name,
+		dir:            dir,
+		url:            "file://" + dir,
+		upstreamBranch: upstreamBranch,
 	}
 }
 
@@ -53,6 +68,16 @@ func (r *RemoteHandle) Dir() string { return r.dir }
 // Name returns the Storyboard-assigned name for this remote (used for
 // error messages and debugging).
 func (r *RemoteHandle) Name() string { return r.name }
+
+// UpstreamBranch returns the consensus branch this remote uses (typically
+// "main", configurable via BareRemoteWithBranch). Tests pass this to
+// SetRemote / Connect so the production code uses the right upstream.
+func (r *RemoteHandle) UpstreamBranch() string {
+	if r.upstreamBranch == "" {
+		return "main"
+	}
+	return r.upstreamBranch
+}
 
 // MergeIntoMain merges the named branch into main on the bare remote.
 // Simulates the planned merge-to-main feature: an agent's branch has
@@ -75,30 +100,31 @@ func (r *RemoteHandle) Name() string { return r.name }
 func (r *RemoteHandle) MergeIntoMain(branch, message string) {
 	t := r.sb.t
 	t.Helper()
+	up := r.UpstreamBranch()
 
 	work := t.TempDir()
 	mustGit(t, "", "clone", r.dir, work)
 
-	if !hasRef(work, "refs/remotes/origin/main") {
-		// First promotion: no consensus main yet. Bootstrap main from the
+	if !hasRef(work, "refs/remotes/origin/"+up) {
+		// First promotion: no consensus upstream yet. Bootstrap from the
 		// agent branch directly. The eventual merge-to-main feature has
 		// to handle this same shape — the first agent to push creates
-		// origin/<agent> on an otherwise empty (or main-less) remote, and
-		// promotion seeds main from it.
-		mustGit(t, work, "checkout", "-B", "main", "origin/"+branch)
-		mustGit(t, work, "push", "origin", "main")
+		// origin/<agent> on an otherwise empty (or upstream-less) remote,
+		// and promotion seeds the upstream from it.
+		mustGit(t, work, "checkout", "-B", up, "origin/"+branch)
+		mustGit(t, work, "push", "origin", up)
 		return
 	}
 
-	// Steady-state path: origin/main exists. Check it out and merge the
-	// named branch on top with --no-ff so a real merge commit is created
-	// (otherwise a fast-forward would just advance the ref and not
-	// produce a distinct merge commit, which the test scenario expects
-	// to be visible).
-	mustGit(t, work, "checkout", "-B", "main", "origin/main")
+	// Steady-state path: origin/<upstream> exists. Check it out and merge
+	// the named branch on top with --no-ff so a real merge commit is
+	// created (otherwise a fast-forward would just advance the ref and not
+	// produce a distinct merge commit, which the test scenario expects to
+	// be visible).
+	mustGit(t, work, "checkout", "-B", up, "origin/"+up)
 	mustGit(t, work, "merge", "--no-ff", "-m", message,
 		"--allow-unrelated-histories", "origin/"+branch)
-	mustGit(t, work, "push", "origin", "main")
+	mustGit(t, work, "push", "origin", up)
 }
 
 // SquashMergeIntoMain squash-merges the named branch into main on the
@@ -119,21 +145,22 @@ func (r *RemoteHandle) MergeIntoMain(branch, message string) {
 func (r *RemoteHandle) SquashMergeIntoMain(branch, message string) {
 	t := r.sb.t
 	t.Helper()
+	up := r.UpstreamBranch()
 
 	work := t.TempDir()
 	mustGit(t, "", "clone", r.dir, work)
 
-	if !hasRef(work, "refs/remotes/origin/main") {
-		t.Fatalf("SquashMergeIntoMain: origin/main does not exist on %s; call WriteMain first to seed it", r.name)
+	if !hasRef(work, "refs/remotes/origin/"+up) {
+		t.Fatalf("SquashMergeIntoMain: origin/%s does not exist on %s; call WriteMain first to seed it", up, r.name)
 	}
 
-	mustGit(t, work, "checkout", "-B", "main", "origin/main")
+	mustGit(t, work, "checkout", "-B", up, "origin/"+up)
 	// --squash stages the branch's net diff without recording it as a merge;
 	// the follow-up `commit` produces a single new commit with no second
 	// parent. This is the canonical "squash-merge a PR" shape.
 	mustGit(t, work, "merge", "--squash", "--allow-unrelated-histories", "origin/"+branch)
 	mustGit(t, work, "commit", "-m", message)
-	mustGit(t, work, "push", "origin", "main")
+	mustGit(t, work, "push", "origin", up)
 }
 
 // WriteMain writes a fact directly to main on the bare remote in a new
@@ -149,17 +176,18 @@ func (r *RemoteHandle) SquashMergeIntoMain(branch, message string) {
 func (r *RemoteHandle) WriteMain(path string, spec FactSpec, message string) {
 	t := r.sb.t
 	t.Helper()
+	up := r.UpstreamBranch()
 
 	work := t.TempDir()
 	mustGit(t, "", "clone", r.dir, work)
 
-	// Check whether origin/main exists on the freshly-cloned remote.
-	if hasRef(work, "refs/remotes/origin/main") {
-		mustGit(t, work, "checkout", "-B", "main", "origin/main")
+	// Check whether origin/<upstream> exists on the freshly-cloned remote.
+	if hasRef(work, "refs/remotes/origin/"+up) {
+		mustGit(t, work, "checkout", "-B", up, "origin/"+up)
 	} else {
-		// No main yet — initialise an orphan branch so the first commit is
-		// a fresh root.
-		mustGit(t, work, "checkout", "--orphan", "main")
+		// No upstream yet — initialise an orphan branch so the first commit
+		// is a fresh root.
+		mustGit(t, work, "checkout", "--orphan", up)
 		// `clone` checked out HEAD; remove any inherited working-tree files
 		// so the orphan branch starts clean.
 		mustGit(t, work, "rm", "-rf", "--ignore-unmatch", ".")
@@ -174,7 +202,7 @@ func (r *RemoteHandle) WriteMain(path string, spec FactSpec, message string) {
 	}
 	mustGit(t, work, "add", path)
 	mustGit(t, work, "commit", "-m", message)
-	mustGit(t, work, "push", "origin", "main")
+	mustGit(t, work, "push", "origin", up)
 }
 
 // DeleteMain removes a path from main on the bare remote in a new commit.
@@ -186,17 +214,18 @@ func (r *RemoteHandle) WriteMain(path string, spec FactSpec, message string) {
 func (r *RemoteHandle) DeleteMain(path, message string) {
 	t := r.sb.t
 	t.Helper()
+	up := r.UpstreamBranch()
 
 	work := t.TempDir()
 	mustGit(t, "", "clone", r.dir, work)
 
-	if !hasRef(work, "refs/remotes/origin/main") {
-		t.Fatalf("DeleteMain: origin/main does not exist on %s", r.name)
+	if !hasRef(work, "refs/remotes/origin/"+up) {
+		t.Fatalf("DeleteMain: origin/%s does not exist on %s", up, r.name)
 	}
-	mustGit(t, work, "checkout", "-B", "main", "origin/main")
+	mustGit(t, work, "checkout", "-B", up, "origin/"+up)
 	mustGit(t, work, "rm", path)
 	mustGit(t, work, "commit", "-m", message)
-	mustGit(t, work, "push", "origin", "main")
+	mustGit(t, work, "push", "origin", up)
 }
 
 // WriteDisjointRootOnMain writes a brand-new root commit on main of the
@@ -208,10 +237,11 @@ func (r *RemoteHandle) DeleteMain(path, message string) {
 func (r *RemoteHandle) WriteDisjointRootOnMain(path, content, msg string) {
 	t := r.sb.t
 	t.Helper()
+	up := r.UpstreamBranch()
 
 	work := t.TempDir()
 	mustGit(t, "", "clone", r.dir, work)
-	mustGit(t, work, "checkout", "--orphan", "fresh-main")
+	mustGit(t, work, "checkout", "--orphan", "fresh-upstream")
 	// Remove anything inherited from the previous HEAD.
 	mustGit(t, work, "rm", "-rf", "--ignore-unmatch", ".")
 
@@ -224,9 +254,9 @@ func (r *RemoteHandle) WriteDisjointRootOnMain(path, content, msg string) {
 	}
 	mustGit(t, work, "add", path)
 	mustGit(t, work, "commit", "-m", msg)
-	// Force-push the orphan onto refs/heads/main, replacing whatever was
-	// there before.
-	mustGit(t, work, "push", "--force", "origin", "fresh-main:main")
+	// Force-push the orphan onto refs/heads/<upstream>, replacing whatever
+	// was there before.
+	mustGit(t, work, "push", "--force", "origin", "fresh-upstream:"+up)
 }
 
 // mustGit runs `git <args>` in dir (or the process cwd if dir is ""),
