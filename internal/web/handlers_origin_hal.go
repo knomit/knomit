@@ -202,9 +202,16 @@ func handleHALSetOrigin(b hal.URLBuilder, m *repos.Manager, op originProvider) h
 			return
 		}
 
-		// Attempt to activate sync; log failure but don't fail the request.
+		// Activate sync now (synchronous initial reconcile). If it fails,
+		// the origin row IS persisted — surfacing a 502 lets the operator
+		// distinguish a bad token / unreachable origin from a successful
+		// configure without forcing them to re-enter the URL. The session
+		// flow (handlers_origin_session.go) returns the analogous error.
 		if aerr := ri.ActivateSync(req.URL); aerr != nil {
 			log.Warn().Err(aerr).Str("repo", repoName).Msg("sync activation failed")
+			hal.WriteProblem(w, http.StatusBadGateway, "Sync activation failed",
+				"origin was saved but the initial reconcile failed: "+aerr.Error(), r.URL.Path)
+			return
 		}
 
 		view := map[string]any{

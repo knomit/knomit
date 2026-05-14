@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -173,6 +174,41 @@ func TestHandleHALSetOrigin_SetError_Returns500(t *testing.T) {
 
 	if rec.Code != http.StatusInternalServerError {
 		t.Errorf("status: got %d, want 500", rec.Code)
+	}
+}
+
+// TestHandleHALSetOrigin_ActivateError_Returns502 pins the contract that when
+// SetOrigin persists the row successfully but ActivateSync fails (bad token,
+// unreachable origin), the response is a 502 problem detail rather than the
+// misleading 200 OK the previous code returned. Without this, a user retrying
+// with a corrected token could not distinguish a fixed state from a broken one.
+func TestHandleHALSetOrigin_ActivateError_Returns502(t *testing.T) {
+	m := repos.New(context.Background(), repos.Deps{})
+	ri := repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
+		Name: "alpha",
+		StartSync: func(string) error {
+			return errors.New("auth failed: bad token")
+		},
+	})
+	m.Set("alpha", ri)
+
+	s := &Server{Manager: m, originProvider: &stubOriginProvider{}}
+	r := s.NewAPIRouter()
+
+	body := `{"url":"https://github.com/example/repo.git","auth_method":"token","token":"tok"}`
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPut, "/repos/alpha/origin", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status: got %d, want 502; body=%s", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("Content-Type"); got != "application/problem+json" {
+		t.Errorf("content-type: got %q, want application/problem+json", got)
+	}
+	if !strings.Contains(rec.Body.String(), "auth failed: bad token") {
+		t.Errorf("body should include underlying error; got %s", rec.Body.String())
 	}
 }
 

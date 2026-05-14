@@ -129,9 +129,10 @@ func (ri *remoteIndex) reconcileNow(ctx context.Context, agentBranch, upstreamMa
 	if upstreamMain == "" {
 		upstreamMain = "main"
 	}
-	mainUnlock := ri.rh.lockBranch(upstreamMain)
-	mainRes, err := ri.rh.reconcileMain(ctx, upstreamMain)
-	mainUnlock()
+	mainRes, err := func() (MainReconcileResult, error) {
+		defer ri.rh.lockBranch(upstreamMain)()
+		return ri.rh.reconcileMain(ctx, upstreamMain)
+	}()
 	if err != nil {
 		return SyncResult{Main: mainRes}, fmt.Errorf("Sync: reconcileMain: %w", err)
 	}

@@ -382,6 +382,15 @@ func (rh *repoHandler) replayOntoUpstream(
 
 	current := upstreamTip
 	for i, orig := range commits {
+		// Honour cancellation between commits: a large rewind under server
+		// shutdown (or HTTP client disconnect) would otherwise hold
+		// lockBranch(localBranch) until the full chain finishes. Local
+		// branch is unchanged at this point (only the temp ref has
+		// advanced), and the deferred temp-ref cleanup runs on return.
+		if err := ctx.Err(); err != nil {
+			return AgentReconcileResult{}, fmt.Errorf("replayOntoUpstream: cancelled at step %d/%d: %w",
+				i+1, len(commits), err)
+		}
 		newHash, err := rh.replayCommit(ctx, orig, current, strategy)
 		if err != nil {
 			return AgentReconcileResult{}, fmt.Errorf("replayOntoUpstream: replay step %d/%d (%s): %w",

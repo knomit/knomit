@@ -354,7 +354,12 @@ func (b *repoBuilder) recoverFromOrigin() {
 	if b.cfg.Git.Origin == "" {
 		return
 	}
-	remote, _ := b.svc.Remote().GetRemote("origin")
+	remote, err := b.svc.Remote().GetRemote("origin")
+	if err != nil {
+		log.Warn().Err(err).Str("repo", b.name).
+			Msg("recoverFromOrigin: read remote failed; skipping startup reconcile (loop will retry on next tick)")
+		return
+	}
 	if remote == nil {
 		return
 	}
@@ -378,7 +383,12 @@ func (b *repoBuilder) startSyncLoops(ctx context.Context, wg *sync.WaitGroup, hu
 	if b.disableBackgroundSync {
 		return
 	}
-	remote, _ := b.svc.Remote().GetRemote("origin")
+	remote, err := b.svc.Remote().GetRemote("origin")
+	if err != nil {
+		log.Warn().Err(err).Str("repo", b.name).
+			Msg("startSyncLoops: read remote failed; reconcile loop not started for this repo")
+		return
+	}
 	if remote == nil {
 		return
 	}

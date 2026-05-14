@@ -458,6 +458,42 @@ func TestReplayOntoUpstream_ReplaysAllUnpushedCommits(t *testing.T) {
 	require.NoError(t, err)
 }
 
+// TestReplayOntoUpstream_HonoursContextCancellation pins the contract that a
+// cancelled context aborts the replay loop without advancing the agent ref.
+// Prior to the ctx.Err() check at the top of the replay loop, a large rewind
+// under server shutdown (or HTTP client disconnect) would hold the agent
+// branch lock until the full chain finished, stalling syncWg.Wait() on close.
+func TestReplayOntoUpstream_HonoursContextCancellation(t *testing.T) {
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = svc.Close() })
+	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+
+	// Two unpushed agent commits over a one-commit upstream — enough that the
+	// loop's per-iteration ctx check is the only thing that can stop it.
+	writeMergeFact(t, svc, "agent/test", "kb/a.md", "A", "v1")
+	writeMergeFact(t, svc, "agent/test", "kb/b.md", "B", "v1")
+	upstreamHash := writeMergeFact(t, svc, "main", "kb/u.md", "U", "uv1")
+	preReplayHash := mustHeadHash(t, svc, "agent/test")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err = svc.rh.replayOntoUpstream(
+		ctx, "agent/test", plumbing.NewHash(upstreamHash), plumbing.ZeroHash, StrategyLocalWins,
+	)
+	require.Error(t, err, "replay must abort on cancelled context")
+	require.ErrorIs(t, err, context.Canceled, "error must wrap context.Canceled")
+	require.Equal(t, preReplayHash, mustHeadHash(t, svc, "agent/test"),
+		"agent ref unchanged when replay is cancelled mid-loop")
+
+	tempRefName := plumbing.NewBranchReferenceName("agent/test-replaying")
+	_, refErr := svc.rh.gits.Reference(tempRefName)
+	require.ErrorIs(t, refErr, plumbing.ErrReferenceNotFound,
+		"temp ref cleaned up after cancellation")
+}
+
 func TestReplayOntoUpstream_FailureLeavesAgentRefUntouched(t *testing.T) {
 	dir := t.TempDir()
 	svc, err := Open(filepath.Join(dir, "k.db"))
