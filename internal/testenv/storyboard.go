@@ -257,6 +257,49 @@ func (r *RepoHandle) Connect(remote *RemoteHandle) *RepoHandle {
 	return r
 }
 
+// ConnectKeepingWork wires this repo to use the given RemoteHandle as
+// origin WITHOUT wiping the local DB. The use case is the G2 "connect
+// later" scenario: tests accumulate local work on the agent branch
+// before any origin is configured, then call ConnectKeepingWork to
+// model a user running `knomit set-origin` after they've already used
+// the agent for offline edits. Mirrors the production HAL flow
+// (PUT /api/v1/{repo}/origin → svc.Remote().SetRemote + ri.ActivateSync)
+// exactly — no destructive re-init, the existing branch refs and
+// SQLite rows survive, and ActivateSync runs one synchronous reconcile
+// that should fetch origin and replay the local commits onto the
+// resolved upstream.
+//
+// Idempotent: calling with the already-configured remote URL is a no-op.
+// Returns the same RepoHandle for chaining.
+func (r *RepoHandle) ConnectKeepingWork(remote *RemoteHandle) *RepoHandle {
+	t := r.sb.t
+	t.Helper()
+
+	if r.cfg.Git.Origin == remote.URL() {
+		return r // already connected
+	}
+	r.cfg.Git.Origin = remote.URL()
+
+	// Register origin in the remotes table AND write the git config; the
+	// rh.repo guard inside SetRemote means configureRemote runs because
+	// the repo handler already has an open repo from InitRepo.
+	var setErr error
+	r.ri.WithRead(func(svc *store.Service) {
+		setErr = svc.Remote().SetRemote("origin", remote.URL(), remote.UpstreamBranch(), "agent/test", 300, 300, "", "")
+	})
+	if setErr != nil {
+		t.Fatalf("ConnectKeepingWork(%s): SetRemote: %v", remote.Name(), setErr)
+	}
+
+	// Trigger one synchronous reconcile via the production ActivateSync
+	// path. This is exactly what the HAL handler does on
+	// PUT /api/v1/{repo}/origin.
+	if err := r.ri.ActivateSync(remote.URL()); err != nil {
+		t.Fatalf("ConnectKeepingWork(%s): ActivateSync: %v", remote.Name(), err)
+	}
+	return r
+}
+
 // Restart shuts down the current manager and re-boots a fresh one against
 // the same on-disk home directory. Used by Category I "survives restart"
 // tests to assert that the index persists across process boundaries. All

@@ -38,7 +38,7 @@ func TestMultiRepo_WritesAndRemotesIndependent(t *testing.T) {
 	a := sb.Repo("a").Connect(remoteA)
 	b := sb.Repo("b").Connect(remoteB)
 
-	aMain := a.Branch("main")
+	aAgent := a.Branch("agent/test")
 	bAgent := b.Branch("agent/test")
 
 	// Seed B's agent branch with a fact so "before" is non-trivial.
@@ -49,9 +49,11 @@ func TestMultiRepo_WritesAndRemotesIndependent(t *testing.T) {
 	remoteBSnapshotBefore := hashDirTree(t, remoteB.Dir())
 	bFactCountBefore := bAgent.FactCount()
 
-	// Now do work on A: write a fact on main and push to A's remote.
-	aMain.Write("kb/a-only.md", testenv.Fact("a-only"), "A writes its own fact")
-	result := aMain.Push()
+	// Now do work on A: write a fact on its agent branch and push to
+	// A's remote. Under the post-rework model agents push to
+	// agent/<host>, never to main.
+	aAgent.Write("kb/a-only.md", testenv.Fact("a-only"), "A writes its own fact")
+	result := aAgent.Push()
 	require.True(t, result.Pushed, "A's push must succeed")
 
 	// B's remote directory must be byte-identical to the before-snapshot.

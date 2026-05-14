@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/go-git/go-git/v5/plumbing/transport"
+	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
 	"knomit/internal/config"
@@ -30,122 +31,129 @@ func makeRemoteAuthFn(fallbackAuth config.RemoteAuthConfig, keyPath string) remo
 	}
 }
 
-// runSyncLoop pulls from the configured remote on a fixed interval.
-// First sync fires immediately, then every remote.Interval seconds.
-// The interval and auth are re-read from the database on each tick so that
-// changes made via PUT /api/v1/{repo}/origin take effect without a restart.
-func runSyncLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Service, hub *TaskHub, repo, agentBranch string, resolveAuth remoteAuthFn) {
+// reconcileFailureEscalateThreshold is the number of consecutive sync- or
+// push-failures after which the loop escalates a log line from Warn to
+// Error. A repository stuck in permanent failure (revoked credentials,
+// unreachable origin, etc.) otherwise looks identical to a healthy one
+// after log rotation drops the early-tick warnings.
+const reconcileFailureEscalateThreshold = 5
+
+// runReconcileLoop is the single background goroutine for origin sync.
+// On each tick it: (1) calls Sync (fetch + reconcileMain + reconcileAgent),
+// (2) calls Push (force-push agent if local advanced).
+//
+// Interval is min(sync, push) interval from the Remote record. Configured
+// changes are picked up on the next tick (re-read from DB).
+func runReconcileLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Service, hub *TaskHub, repo, agentBranch string, resolveAuth remoteAuthFn) {
 	defer wg.Done()
 
-	//todo: it's possible the remote will change while the job is still running
-	remote, _ := svc.Remote().GetRemote("origin")
+	// Initial config read for logging context.
+	remote, err := svc.Remote().GetRemote("origin")
+	if err != nil {
+		log.Error().Err(err).Str("repo", repo).Msg("reconcile loop: initial remote read failed; not starting")
+		return
+	}
 	if remote == nil {
 		return
 	}
-	interval := time.Duration(remote.Interval) * time.Second
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-
-	auth := resolveAuth(remote)
-
 	lg := log.With().Str("repo", repo).Str("remote", remote.URL).Logger()
-	lg.Info().Dur("interval", interval).Msg("sync loop started")
+	lg.Info().Msg("reconcile loop started")
 
-	doSync := func() {
-		result, err := svc.Remote().Sync(context.Background(), agentBranch, auth)
+	var syncFails, pushFails int
+
+	logFailure := func(count int) *zerolog.Event {
+		if count >= reconcileFailureEscalateThreshold {
+			return lg.Error().Int("consecutive_failures", count)
+		}
+		return lg.Warn().Int("consecutive_failures", count)
+	}
+
+	doTick := func(ctx context.Context) {
+		// Read fresh remote record so resolveAuth picks up DB-stored auth.
+		fresh, err := svc.Remote().GetRemote("origin")
 		if err != nil {
+			lg.Error().Err(err).Msg("reconcile tick: remote read failed; skipping tick")
+			return
+		}
+		if fresh == nil {
+			return
+		}
+		auth := resolveAuth(fresh)
+
+		// Sync first.
+		syncResult, err := svc.Remote().Sync(ctx, agentBranch, auth)
+		if err != nil {
+			syncFails++
 			hub.broadcastSyncError("origin", err.Error())
-			lg.Warn().Err(err).Msg("sync: pull failed")
-			return
-		}
-		if result.Synced {
-			hub.broadcastSyncOK("origin", result.MergeCommit, result.FastForward)
-			lg.Info().
-				Bool("fast_forward", result.FastForward).
-				Str("merge_commit", result.MergeCommit).
-				Msg("sync: pulled changes")
+			logFailure(syncFails).Err(err).Msg("reconcile: sync failed")
 		} else {
-			lg.Debug().Msg("sync: up to date")
-		}
-	}
-
-	// Immediate first sync.
-	doSync()
-
-	for {
-		select {
-		case <-ctx.Done():
-			lg.Info().Msg("sync loop stopped")
-			return
-		case <-ticker.C:
-			// Re-read remote config so interval and auth changes take effect.
-			if fresh, err := svc.Remote().GetRemote("origin"); err == nil && fresh != nil {
-				if d := time.Duration(fresh.Interval) * time.Second; d != interval {
-					lg.Info().Dur("old", interval).Dur("new", d).Msg("sync: interval changed")
-					interval = d
-					ticker.Reset(interval)
-				}
-				auth = resolveAuth(fresh)
+			if syncFails > 0 {
+				lg.Info().Int("after_failures", syncFails).Msg("reconcile: sync recovered")
+				syncFails = 0
 			}
-			doSync()
+			mainChanged := syncResult.Main.Mode != store.ModeNoop && syncResult.Main.Mode != ""
+			agentChanged := syncResult.Agent.Mode != store.ModeNoop && syncResult.Agent.Mode != ""
+			if mainChanged || agentChanged {
+				hub.broadcastSyncOK("origin", syncResult)
+				lg.Info().
+					Str("main_mode", string(syncResult.Main.Mode)).
+					Str("agent_mode", string(syncResult.Agent.Mode)).
+					Int("agent_replayed_count", syncResult.Agent.NumReplayed).
+					Str("agent_new_tip", syncResult.Agent.NewTip).
+					Msg("reconcile: pulled changes")
+			} else {
+				lg.Debug().Msg("reconcile: sync up to date")
+			}
 		}
-	}
-}
 
-// runPushLoop pushes the agent branch to origin on a fixed interval.
-// The interval and auth are re-read from the database on each tick so that
-// changes made via PUT /api/v1/{repo}/origin take effect without a restart.
-func runPushLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Service, hub *TaskHub, repo, agentBranch string, resolveAuth remoteAuthFn) {
-	defer wg.Done()
-
-	//todo: it's possible the remote will change while the job is still running
-	remote, _ := svc.Remote().GetRemote("origin")
-	if remote == nil {
-		return
-	}
-	interval := time.Duration(remote.PushInterval) * time.Second
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-
-	auth := resolveAuth(remote)
-
-	lg := log.With().Str("repo", repo).Str("remote", remote.URL).Logger()
-	lg.Info().Dur("interval", interval).Msg("push loop started")
-
-	doPush := func() {
-		result, err := svc.Remote().Push(context.Background(), agentBranch, auth)
+		// Then push.
+		pushResult, err := svc.Remote().Push(ctx, agentBranch, auth)
 		if err != nil {
+			pushFails++
 			hub.broadcastPushError("origin", err.Error())
-			lg.Warn().Err(err).Msg("push: failed")
+			logFailure(pushFails).Err(err).Msg("reconcile: push failed")
 			return
 		}
-		if result.Pushed {
+		if pushFails > 0 {
+			lg.Info().Int("after_failures", pushFails).Msg("reconcile: push recovered")
+			pushFails = 0
+		}
+		if pushResult.Pushed {
 			hub.broadcastPushOK("origin")
-			lg.Info().Str("branch", agentBranch).Msg("push: pushed changes")
+			lg.Info().Str("branch", agentBranch).Msg("reconcile: pushed changes")
 		} else {
-			lg.Debug().Msg("push: up to date")
+			lg.Debug().Msg("reconcile: push up to date")
 		}
 	}
 
-	// Immediate first push.
-	doPush()
+	// Immediate first tick.
+	doTick(ctx)
 
 	for {
+		// Re-read remote config every iteration to pick up interval changes.
+		fresh, err := svc.Remote().GetRemote("origin")
+		if err != nil {
+			lg.Error().Err(err).Msg("reconcile loop stopped: remote read failed")
+			return
+		}
+		if fresh == nil {
+			lg.Info().Msg("reconcile loop stopped: remote disappeared")
+			return
+		}
+		interval := fresh.Interval
+		if fresh.PushInterval > 0 && fresh.PushInterval < interval {
+			interval = fresh.PushInterval
+		}
+		if interval <= 0 {
+			interval = 300
+		}
+
 		select {
 		case <-ctx.Done():
-			lg.Info().Msg("push loop stopped")
+			lg.Info().Msg("reconcile loop stopped")
 			return
-		case <-ticker.C:
-			// Re-read remote config so interval and auth changes take effect.
-			if fresh, err := svc.Remote().GetRemote("origin"); err == nil && fresh != nil {
-				if d := time.Duration(fresh.PushInterval) * time.Second; d != interval {
-					lg.Info().Dur("old", interval).Dur("new", d).Msg("push: interval changed")
-					interval = d
-					ticker.Reset(interval)
-				}
-				auth = resolveAuth(fresh)
-			}
-			doPush()
+		case <-time.After(time.Duration(interval) * time.Second):
+			doTick(ctx)
 		}
 	}
 }

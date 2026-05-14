@@ -267,9 +267,15 @@ func (s *Service) checkGitReachability(_ context.Context, branch string) []Integ
 		if len(commit.ParentHashes) == 0 {
 			break
 		}
-		// Only follow first parent. Knomit branches are linear; merge commits
-		// are not expected on agent branches today. If merge-to-main lands as
-		// a real merge (not a fast-forward), this walk must visit all parents.
+		// Only follow first parent. Agent branches CAN now contain merge
+		// commits (introduced by the steady-state merge-based reconcile that
+		// pulls main into the agent), so this walk no longer sees the full
+		// commit DAG — but that's still correct for *this* check, which only
+		// asserts tree/blob reachability. Trees and blobs from main's side
+		// of the merge are reachable through the merge commit's TreeHash
+		// (already covered by walkTreeReachable above). Commit-log parity
+		// (which DOES need to see every commit) is checked separately by
+		// checkCommitLogParity, which walks all parents.
 		cur = commit.ParentHashes[0]
 	}
 	return issues

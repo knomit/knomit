@@ -546,8 +546,8 @@ func handleApply(rm *repos.Manager, sm *SessionManager, agentBranch string) http
 			sess.mu.Lock()
 			sess.State = StateApplied
 			sess.ApplyResult = result
-			sess.RemoteBranch = remoteBranch
 			sess.AppliedBranch = replayAgentBranch
+			sess.RemoteBranch = remoteBranch
 			sess.mu.Unlock()
 
 			log.Info().Str("repo", repo).Str("session_id", sessionID).
@@ -577,8 +577,8 @@ func handleApply(rm *repos.Manager, sm *SessionManager, agentBranch string) http
 			sess.mu.Lock()
 			sess.State = StateApplied
 			sess.ApplyResult = result
-			sess.RemoteBranch = remoteBranch
 			sess.AppliedBranch = sharedAppliedBranch
+			sess.RemoteBranch = remoteBranch
 			sess.mu.Unlock()
 
 			log.Info().Str("repo", repo).Str("session_id", sessionID).
@@ -678,8 +678,9 @@ func (s *Server) handleCommit(rm *repos.Manager, sm *SessionManager, agentBranch
 		remoteStore := sess.RemoteStore
 		authCfg := sess.Auth
 		remoteURL := sess.URL
-		remoteBranch := sess.RemoteBranch
 		appliedBranch := sess.AppliedBranch
+		appliedRemoteBranch := sess.RemoteBranch
+		testResult, _ := sess.TestResult.(connectivityResult)
 		sess.mu.Unlock()
 
 		if state != StateApplied {
@@ -689,11 +690,6 @@ func (s *Server) handleCommit(rm *repos.Manager, sm *SessionManager, agentBranch
 		if remoteStore == nil {
 			writeError(w, http.StatusConflict, "session has no remote store")
 			return
-		}
-
-		// Use the branch chosen during apply; fall back to "main".
-		if remoteBranch == "" {
-			remoteBranch = "main"
 		}
 
 		ri := repos.RepoFromContext(r.Context())
@@ -735,7 +731,20 @@ func (s *Server) handleCommit(rm *repos.Manager, sm *SessionManager, agentBranch
 			authMethod := authCfg.Method
 			authToken := assembleAuthToken(authMethod, authCfg.Token, authCfg.User, authCfg.Password)
 
-			if err := svc.Remote().SetRemote("origin", remoteURL, remoteBranch, 300, 300, authMethod, authToken); err != nil {
+			// SetRemote takes both the upstream consensus branch (discovered
+			// by the test-connectivity flow) and the local agent branch.
+			// Prefer the branch the user chose at /apply time (which may
+			// differ from the remote's default — e.g. a master-default repo
+			// where the user explicitly chose to track a release branch).
+			// Fall back to the test result's default, then "main".
+			upstreamMain := appliedRemoteBranch
+			if upstreamMain == "" {
+				upstreamMain = testResult.DefaultBranch
+			}
+			if upstreamMain == "" {
+				upstreamMain = "main"
+			}
+			if err := svc.Remote().SetRemote("origin", remoteURL, upstreamMain, agentBranch, 300, 300, authMethod, authToken); err != nil {
 				sendEvent(map[string]string{"phase": "error", "message": fmt.Sprintf("save remote config: %v", err)})
 				return
 			}

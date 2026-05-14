@@ -52,37 +52,39 @@ func TestBareRemote_SyncWithNoOriginNoOps(t *testing.T) {
 	sb := NewStoryboard(t)
 	a := sb.Repo("a").Branch("agent/test")
 	result := a.Sync()
-	require.False(t, result.Synced, "Sync on unconnected repo should not report Synced")
+	require.Empty(t, string(result.Main.Mode), "Sync on unconnected repo should not advance main")
+	require.Empty(t, string(result.Agent.Mode), "Sync on unconnected repo should not touch agent")
 }
 
 // TestBareRemote_PushSyncRoundTrip is the core happy path: repo A writes a
-// fact, pushes, repo B syncs, sees the fact.
+// fact on its agent branch, pushes, the agent branch is promoted to main
+// on the remote, repo B syncs, sees the fact.
 //
-// Note: "sync" in knomit's production model pulls origin/main into the
-// local branch. So the test has to write on a branch that the bare remote
-// will accept AND that repo B's Sync will pull. The simplest shape is:
+// Under the post-rework model agents push to agent/<host>, never to main.
+// "Sync" pulls origin/main and replays the agent on top, so the fact must
+// reach origin/main before B can see it — RemoteHandle.MergeIntoMain
+// simulates the remote-side merge-to-main step that the blueprint
+// describes:
 //
-//  1. A.Branch("main").Write(fact).Push()   — A pushes main to origin
-//  2. B.Branch("main").Sync()               — B pulls origin/main into local main
-//  3. B.Branch("main").Head().Fact(...)...  — B sees the fact
-//
-// TODO(Phase3-E2): If this hits "no common ancestor" (disjoint histories
-// between A's initial main commit and B's initial main commit), the full
-// scenario test lives in Phase 3 Category E which will add
-// Storyboard.RepoFromRemote (clone-from-remote semantics).
+//  1. A.Branch("agent/test").Write(fact).Push()   — A pushes its agent branch
+//  2. remote.MergeIntoMain("agent/test", ...)     — promote agent → main on origin
+//  3. B.Branch("agent/test").Sync()               — B pulls origin/main, replays agent
+//  4. B.Branch("agent/test").Head().Fact(...)...  — B sees the promoted fact
 func TestBareRemote_PushSyncRoundTrip(t *testing.T) {
-	t.Log("Scenario: A writes fact on main, pushes; B connects and syncs; B sees the fact")
+	t.Log("Scenario: A writes fact on agent/test, pushes; remote promotes to main; B connects and syncs; B sees the fact")
 	sb := NewStoryboard(t)
 	remote := sb.BareRemote("origin")
 
 	a := sb.Repo("a").Connect(remote)
-	aMain := a.Branch("main")
-	aMain.Write("kb/shared.md", Fact("shared"), "A writes shared fact")
-	aMain.Push()
+	aAgent := a.Branch("agent/test")
+	aAgent.Write("kb/shared.md", Fact("shared"), "A writes shared fact")
+	aAgent.Push()
+
+	remote.MergeIntoMain("agent/test", "promote A's agent to main")
 
 	b := sb.Repo("b").Connect(remote)
-	bMain := b.Branch("main")
-	bMain.Sync()
+	bAgent := b.Branch("agent/test")
+	bAgent.Sync()
 
-	bMain.Head().Fact("kb/shared.md").MustExist()
+	bAgent.Head().Fact("kb/shared.md").MustExist()
 }

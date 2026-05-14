@@ -86,16 +86,25 @@ func (defaultOriginProvider) SetOrigin(ri *repos.RepoInstance, req setOriginRequ
 		}
 
 		// Preserve existing intervals or use defaults.
-		branch := "main"
 		interval := 300
 		pushInterval := 300
 		if existing != nil {
-			branch = existing.Branch
 			interval = existing.Interval
 			pushInterval = existing.PushInterval
 		}
 
-		err = svc.Remote().SetRemote("origin", u, branch, interval, pushInterval, authMethod, authToken)
+		// Resolve the upstream consensus branch: explicit request > existing
+		// remote record > "main". The HAL request lets master-default repos
+		// pin the branch without going through the session-based flow.
+		upstreamMain := req.Branch
+		if upstreamMain == "" && existing != nil {
+			upstreamMain = existing.Branch
+		}
+		if upstreamMain == "" {
+			upstreamMain = "main"
+		}
+
+		err = svc.Remote().SetRemote("origin", u, upstreamMain, ri.AgentBranch(), interval, pushInterval, authMethod, authToken)
 	})
 	return err
 }
@@ -193,9 +202,16 @@ func handleHALSetOrigin(b hal.URLBuilder, m *repos.Manager, op originProvider) h
 			return
 		}
 
-		// Attempt to activate sync; log failure but don't fail the request.
+		// Activate sync now (synchronous initial reconcile). If it fails,
+		// the origin row IS persisted — surfacing a 502 lets the operator
+		// distinguish a bad token / unreachable origin from a successful
+		// configure without forcing them to re-enter the URL. The session
+		// flow (handlers_origin_session.go) returns the analogous error.
 		if aerr := ri.ActivateSync(req.URL); aerr != nil {
 			log.Warn().Err(aerr).Str("repo", repoName).Msg("sync activation failed")
+			hal.WriteProblem(w, http.StatusBadGateway, "Sync activation failed",
+				"origin was saved but the initial reconcile failed: "+aerr.Error(), r.URL.Path)
+			return
 		}
 
 		view := map[string]any{
