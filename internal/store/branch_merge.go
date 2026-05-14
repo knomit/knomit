@@ -322,10 +322,14 @@ func (rh *repoHandler) mergeTreesWithStrategy(
 
 			newRootHash, err := deleteFromTree(rh.gits, currentTree, path)
 			if err != nil {
-				// Path not in current tree — skip (shouldn't happen because
-				// we already confirmed dstHas, but be defensive).
-				log.Debug().Str("path", path).Err(err).Msg("merge: skip delete (not in current tree)")
-				continue
+				// dstHas was confirmed above, so the path SHOULD be present
+				// in currentTree (an earlier iteration cannot have removed
+				// it — merkletrie.Change is per-path). If this fires, either
+				// our invariant is wrong or the storer is failing (corrupt
+				// object, encode/write error). Either case must abort the
+				// merge — silently continuing would produce a tree that
+				// still contains a file the strategy meant to delete.
+				return plumbing.ZeroHash, fmt.Errorf("merge: delete %q from tree: %w", path, err)
 			}
 			currentTree, err = object.GetTree(rh.gits, newRootHash)
 			if err != nil {

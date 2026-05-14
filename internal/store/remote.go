@@ -4,6 +4,8 @@ import (
 	"database/sql"
 	"fmt"
 	"time"
+
+	"github.com/rs/zerolog/log"
 )
 
 // remoteIndex owns remote configuration and git sync/push operations.
@@ -101,8 +103,16 @@ func (ri *remoteIndex) GetRemote(name string) (*Remote, error) {
 	if ri.crypt != nil && r.AuthToken != "" {
 		dec, decErr := ri.crypt.decrypt(r.AuthToken)
 		if decErr != nil {
-			// May be plaintext from before encryption was enabled — use as-is.
-			_ = decErr
+			// May be plaintext from before encryption was enabled — fall
+			// through and use as-is. We can't distinguish "legacy plaintext"
+			// from "ciphertext we can no longer decrypt" (rotated key,
+			// corruption) without a schema flag, so log at Warn so a real
+			// failure is observable instead of surfacing as a confusing 401
+			// from the remote when the wrong bytes are presented as auth.
+			log.Warn().
+				Err(decErr).
+				Str("remote", r.Name).
+				Msg("remote: token decrypt failed; using stored value as plaintext")
 		} else {
 			r.AuthToken = dec
 		}

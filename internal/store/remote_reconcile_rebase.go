@@ -470,9 +470,9 @@ func (rh *repoHandler) reconcileAgentRebase(ctx context.Context, agentBranch, up
 
 	log.Info().
 		Str("branch", agentBranch).
-		Str("upstream", "refs/heads/main").
+		Str("upstream", "refs/heads/"+upstreamMain).
 		Str("base", shortRefHash(base)).
-		Msg("reconcileAgentRebase: replaying onto local main with watermark base")
+		Msgf("reconcileAgentRebase: replaying onto local %s with watermark base", upstreamMain)
 
 	res, err := rh.replayOntoUpstream(ctx, agentBranch, mainHash, base, strategy)
 	if err != nil {

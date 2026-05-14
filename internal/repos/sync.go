@@ -48,7 +48,11 @@ func runReconcileLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Servic
 	defer wg.Done()
 
 	// Initial config read for logging context.
-	remote, _ := svc.Remote().GetRemote("origin")
+	remote, err := svc.Remote().GetRemote("origin")
+	if err != nil {
+		log.Error().Err(err).Str("repo", repo).Msg("reconcile loop: initial remote read failed; not starting")
+		return
+	}
 	if remote == nil {
 		return
 	}
@@ -66,7 +70,11 @@ func runReconcileLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Servic
 
 	doTick := func(ctx context.Context) {
 		// Read fresh remote record so resolveAuth picks up DB-stored auth.
-		fresh, _ := svc.Remote().GetRemote("origin")
+		fresh, err := svc.Remote().GetRemote("origin")
+		if err != nil {
+			lg.Error().Err(err).Msg("reconcile tick: remote read failed; skipping tick")
+			return
+		}
 		if fresh == nil {
 			return
 		}
@@ -124,7 +132,11 @@ func runReconcileLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Servic
 	for {
 		// Re-read remote config every iteration to pick up interval changes.
 		fresh, err := svc.Remote().GetRemote("origin")
-		if err != nil || fresh == nil {
+		if err != nil {
+			lg.Error().Err(err).Msg("reconcile loop stopped: remote read failed")
+			return
+		}
+		if fresh == nil {
 			lg.Info().Msg("reconcile loop stopped: remote disappeared")
 			return
 		}
