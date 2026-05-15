@@ -12,9 +12,9 @@ import (
 // Fact represents a single knomit fact file (YAML frontmatter + Markdown body).
 // path is private and always lowercase — use NewFact to construct, Path() to read.
 type Fact struct {
-	path           string        // private — always lowercase
-	Title          string        `json:"title"`
-	Body           string        `json:"body"`
+	path           string   // private — always lowercase
+	Title          string   `json:"title"`
+	Body           string   `json:"body"`
 	Type           Type     `json:"type"`
 	Domain         []string `json:"domain"`
 	Confidence     float64  `json:"confidence"`
@@ -91,10 +91,10 @@ func (f *Fact) UnmarshalJSON(data []byte) error {
 
 // frontmatter is the YAML structure parsed from the --- block.
 type frontmatter struct {
-	Type       string   `yaml:"type"`
-	Domain     []string `yaml:"domain"`
-	Confidence float64  `yaml:"confidence"`
-	Sources    int      `yaml:"sources"`
+	Type           string   `yaml:"type"`
+	Domain         []string `yaml:"domain"`
+	Confidence     float64  `yaml:"confidence"`
+	Sources        int      `yaml:"sources"`
 	Entities       []string `yaml:"entities"`
 	Refs           []string `yaml:"refs"`
 	EvidenceWeight float64  `yaml:"evidence_weight,omitempty"`
