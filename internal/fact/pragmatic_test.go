@@ -125,3 +125,101 @@ Body.
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "pragmatic")
 }
+
+func TestSerializeFact_Pragmatic_EmitsKind(t *testing.T) {
+	f := NewFact("kb/p.md")
+	f.Title = "Always rotate secrets quarterly"
+	f.Body = ""
+	f.Kind = Pragmatic
+	f.Type = Policy
+	f.Domain = []string{"security"}
+	f.Confidence = 0.9
+	f.Entities = []string{}
+	f.Refs = []string{}
+
+	out, err := SerializeFact(f)
+	require.NoError(t, err)
+	require.Contains(t, out, "kind: pragmatic")
+	require.Contains(t, out, "type: policy")
+}
+
+func TestSerializeFact_Epistemic_OmitsKind(t *testing.T) {
+	f := NewFact("kb/e.md")
+	f.Title = "Login latency spike"
+	f.Body = ""
+	f.Kind = Epistemic
+	f.Type = Observation
+	f.Domain = []string{}
+	f.Entities = []string{}
+	f.Refs = []string{}
+
+	out, err := SerializeFact(f)
+	require.NoError(t, err)
+	require.NotContains(t, out, "kind:",
+		"epistemic facts must serialize without a kind field for round-trip fidelity with existing files")
+}
+
+func TestSerializeFact_DefaultKindOmitsKind(t *testing.T) {
+	// Fact constructed without explicitly setting Kind. Treated as epistemic.
+	f := NewFact("kb/e.md")
+	f.Title = "Login latency spike"
+	f.Type = Observation
+	f.Domain = []string{}
+	f.Entities = []string{}
+	f.Refs = []string{}
+
+	out, err := SerializeFact(f)
+	require.NoError(t, err)
+	require.NotContains(t, out, "kind:")
+}
+
+func TestSerializeFact_RejectsCrossKindMismatch(t *testing.T) {
+	f := NewFact("kb/bad.md")
+	f.Title = "Bad"
+	f.Kind = Pragmatic
+	f.Type = Observation
+	f.Domain = []string{}
+	f.Entities = []string{}
+	f.Refs = []string{}
+
+	_, err := SerializeFact(f)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "type")
+}
+
+func TestSerializeFact_RejectsEmptyType(t *testing.T) {
+	f := NewFact("kb/bad.md")
+	f.Title = "Bad"
+	f.Kind = Epistemic
+	f.Type = ""
+	f.Domain = []string{}
+	f.Entities = []string{}
+	f.Refs = []string{}
+
+	_, err := SerializeFact(f)
+	require.Error(t, err)
+}
+
+func TestSerializeFact_RoundTrip_Pragmatic(t *testing.T) {
+	f := NewFact("kb/p.md")
+	f.Title = "Always rotate secrets quarterly"
+	f.Body = "Body content."
+	f.Kind = Pragmatic
+	f.Type = Policy
+	f.Domain = []string{"security"}
+	f.Confidence = 0.9
+	f.Entities = []string{}
+	f.Refs = []string{}
+
+	out, err := SerializeFact(f)
+	require.NoError(t, err)
+
+	parsed, err := ParseFact("kb/p.md", out)
+	require.NoError(t, err)
+	require.Equal(t, Pragmatic, parsed.Kind)
+	require.Equal(t, Policy, parsed.Type)
+	require.Equal(t, f.Title, parsed.Title)
+	require.Equal(t, f.Body, parsed.Body)
+	require.Equal(t, f.Domain, parsed.Domain)
+	require.Equal(t, f.Confidence, parsed.Confidence)
+}

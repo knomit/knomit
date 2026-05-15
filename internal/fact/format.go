@@ -232,6 +232,14 @@ func extractTitle(path, body string) (string, string, error) {
 // control characters — are handled correctly by construction. Inline
 // lists use FlowStyle to preserve the compact one-line per-key layout.
 func SerializeFact(f Fact) (string, error) {
+	// Validate (kind, type) before writing anything. Symmetric with
+	// ParseFact: a Fact that survives a round-trip is guaranteed to
+	// carry a valid pair.
+	kind, err := validateKindAndType(f.Kind, f.Type)
+	if err != nil {
+		return "", fmt.Errorf("SerializeFact %q: %w", f.path, err)
+	}
+
 	// scalar leaves Tag empty so yaml.v3's resolver picks the type from
 	// Value. Used for keys ("type", "domain", ...) and numeric values
 	// ("0.85", "1") where auto-resolution to !!float / !!int is correct.
@@ -260,6 +268,12 @@ func SerializeFact(f Fact) (string, error) {
 	root := &yaml.Node{Kind: yaml.MappingNode}
 	add := func(key string, val *yaml.Node) {
 		root.Content = append(root.Content, scalar(key), val)
+	}
+	// Emit kind only when pragmatic. Epistemic is the default and historical
+	// fact files have no kind field — omitting preserves byte-identical
+	// round-trip for the existing corpus.
+	if kind == Pragmatic {
+		add("kind", strScalar(string(kind)))
 	}
 	add("type", strScalar(string(f.Type)))
 	add("domain", flowSeq(f.Domain))
