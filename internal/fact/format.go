@@ -15,13 +15,13 @@ type Fact struct {
 	path           string        // private — always lowercase
 	Title          string        `json:"title"`
 	Body           string        `json:"body"`
-	Type           EpistemicType `json:"type"`
-	Domain         []string      `json:"domain"`
-	Confidence     float64       `json:"confidence"`
-	Sources        int           `json:"sources"`
-	Entities       []string      `json:"entities"`
-	Refs           []string      `json:"refs"`
-	EvidenceWeight float64       `json:"evidence_weight,omitempty"`
+	Type           Type     `json:"type"`
+	Domain         []string `json:"domain"`
+	Confidence     float64  `json:"confidence"`
+	Sources        int      `json:"sources"`
+	Entities       []string `json:"entities"`
+	Refs           []string `json:"refs"`
+	EvidenceWeight float64  `json:"evidence_weight,omitempty"`
 }
 
 // NewFact is the sole constructor. path is always lowercased.
@@ -33,16 +33,16 @@ func (f Fact) Path() string { return f.path }
 // MarshalJSON exposes the private path field as "path" in JSON output.
 func (f Fact) MarshalJSON() ([]byte, error) {
 	type plain struct {
-		Path           string        `json:"path"`
-		Title          string        `json:"title"`
-		Body           string        `json:"body"`
-		Type           EpistemicType `json:"type"`
-		Domain         []string      `json:"domain"`
-		Confidence     float64       `json:"confidence"`
-		Sources        int           `json:"sources"`
-		Entities       []string      `json:"entities"`
-		Refs           []string      `json:"refs"`
-		EvidenceWeight float64       `json:"evidence_weight,omitempty"`
+		Path           string   `json:"path"`
+		Title          string   `json:"title"`
+		Body           string   `json:"body"`
+		Type           Type     `json:"type"`
+		Domain         []string `json:"domain"`
+		Confidence     float64  `json:"confidence"`
+		Sources        int      `json:"sources"`
+		Entities       []string `json:"entities"`
+		Refs           []string `json:"refs"`
+		EvidenceWeight float64  `json:"evidence_weight,omitempty"`
 	}
 	return json.Marshal(plain{
 		Path:           f.path,
@@ -61,16 +61,16 @@ func (f Fact) MarshalJSON() ([]byte, error) {
 // UnmarshalJSON reads "path" into the private field, enforcing lowercase.
 func (f *Fact) UnmarshalJSON(data []byte) error {
 	type plain struct {
-		Path           string        `json:"path"`
-		Title          string        `json:"title"`
-		Body           string        `json:"body"`
-		Type           EpistemicType `json:"type"`
-		Domain         []string      `json:"domain"`
-		Confidence     float64       `json:"confidence"`
-		Sources        int           `json:"sources"`
-		Entities       []string      `json:"entities"`
-		Refs           []string      `json:"refs"`
-		EvidenceWeight float64       `json:"evidence_weight,omitempty"`
+		Path           string   `json:"path"`
+		Title          string   `json:"title"`
+		Body           string   `json:"body"`
+		Type           Type     `json:"type"`
+		Domain         []string `json:"domain"`
+		Confidence     float64  `json:"confidence"`
+		Sources        int      `json:"sources"`
+		Entities       []string `json:"entities"`
+		Refs           []string `json:"refs"`
+		EvidenceWeight float64  `json:"evidence_weight,omitempty"`
 	}
 	var p plain
 	if err := json.Unmarshal(data, &p); err != nil {
@@ -138,12 +138,12 @@ func ParseFact(path, content string) (Fact, error) {
 	}
 
 	// Resolve epistemic type: default to observation if missing.
-	eType := EpistemicType(fm.Type)
+	eType := Type(fm.Type)
 	if eType == "" {
-		eType = DefaultType
+		eType = DefaultEpistemicType
 	}
-	if err := eType.Validate(); err != nil {
-		return Fact{}, fmt.Errorf("ParseFact %q: %w", path, err)
+	if !Epistemic.AllowsType(eType) {
+		return Fact{}, fmt.Errorf("ParseFact %q: invalid epistemic type %q", path, eType)
 	}
 
 	// Extract title from the first # heading in bodyRaw.
