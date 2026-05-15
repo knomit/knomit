@@ -13,7 +13,7 @@ func makeTestFact() knomitfact.Fact {
 	f := knomitfact.NewFact("know/ai/ml/abc12345.md")
 	f.Title = "Attention is all you need"
 	f.Body = "Body goes here."
-	f.Type = knomitfact.EpistemicType("observation")
+	f.Type = knomitfact.Type("observation")
 	f.Domain = []string{"ai", "ml"}
 	f.Entities = []string{"transformer"}
 	f.Refs = []string{"know/ai/ml/xyz99999.md", "https://arxiv.org/abs/1706.03762"}

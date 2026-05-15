@@ -100,7 +100,7 @@ func hypothesizeStart(ctx context.Context, ri *repos.RepoInstance, s mcpStore, a
 			sf := fact.NewFact(r.Path)
 			sf.Title = r.Title
 			sf.Body = r.Body
-			sf.Type = fact.EpistemicType(r.Type)
+			sf.Type = fact.Type(r.Type)
 			sf.Domain = r.Domain
 			sf.Confidence = r.Confidence
 			sf.Sources = r.Sources

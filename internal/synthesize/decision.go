@@ -49,7 +49,13 @@ func validateOutputPath(path, ontologyRoot string) error {
 // as `type:` blanks; the API silently masked these by defaulting to
 // "observation" on read, hiding the bug.
 func validateOutputType(t string) error {
-	return fact.EpistemicType(t).Validate()
+	if t == "" {
+		return fmt.Errorf("epistemic type is empty")
+	}
+	if !fact.Epistemic.AllowsType(fact.Type(t)) {
+		return fmt.Errorf("invalid epistemic type %q", t)
+	}
+	return nil
 }
 
 // ReviewStats tracks what actions were taken during a review.
@@ -139,7 +145,7 @@ func ApplyPruneDecisions(ctx context.Context,
 		// this guard mirrors the same check on the distill path so the
 		// architectural invariant "review never creates hypotheses" is
 		// enforced server-side, not just by prompt.
-		if fact.EpistemicType(mf.Type) == fact.Hypothesis {
+		if fact.Type(mf.Type) == fact.Hypothesis {
 			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("merge: skipping hypothesis-type output %s — prune-merge cannot create hypotheses", mf.Path)})
 			continue
 		}
@@ -147,7 +153,7 @@ func ApplyPruneDecisions(ctx context.Context,
 		merged := fact.NewFact(mf.Path)
 		merged.Title = mf.Title
 		merged.Body = mf.Body
-		merged.Type = fact.EpistemicType(mf.Type)
+		merged.Type = fact.Type(mf.Type)
 		merged.Domain = mf.Domain
 		merged.Confidence = mf.Confidence
 		merged.Sources = mf.Sources
@@ -214,7 +220,7 @@ func ApplyDistillDecisions(ctx context.Context,
 			continue
 		}
 		// Distill cannot create hypothesis-type facts.
-		if fact.EpistemicType(df.Type) == fact.Hypothesis {
+		if fact.Type(df.Type) == fact.Hypothesis {
 			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("distill: skipping hypothesis-type output %s — distill cannot create hypotheses", df.Path)})
 			continue
 		}
@@ -230,7 +236,7 @@ func ApplyDistillDecisions(ctx context.Context,
 		f := fact.NewFact(df.Path)
 		f.Title = df.Title
 		f.Body = df.Body
-		f.Type = fact.EpistemicType(df.Type)
+		f.Type = fact.Type(df.Type)
 		f.Domain = df.Domain
 		f.Confidence = df.Confidence
 		f.Sources = 1

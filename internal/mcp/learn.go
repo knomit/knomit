@@ -52,6 +52,7 @@ type learnFactInput struct {
 	Category   string   `json:"category"`
 	Title      string   `json:"title"`
 	Body       string   `json:"body"`
+	Kind       string   `json:"kind"`
 	Type       string   `json:"type"`
 	Domain     []string `json:"domain"`
 	Confidence float64  `json:"confidence"`
@@ -95,9 +96,9 @@ func LearnHandler(embedders ...store.BatchEmbedder) func(context.Context, mcpgo.
 		// Validate batch type consistency: cannot mix observed and inferred types.
 		hasObserved, hasInferred := false, false
 		for _, fi := range factInputs {
-			eType := fact.EpistemicType(fi.Type)
+			eType := fact.Type(fi.Type)
 			if eType == "" {
-				eType = fact.DefaultType
+				eType = fact.DefaultEpistemicType
 			}
 			if eType == fact.Hypothesis || eType == fact.Methodology {
 				hasInferred = true
@@ -142,17 +143,21 @@ func LearnHandler(embedders ...store.BatchEmbedder) func(context.Context, mcpgo.
 			if refs == nil {
 				refs = []string{}
 			}
-			// Validate epistemic type.
-			eType := fact.EpistemicType(fi.Type)
-			if eType == "" {
-				eType = fact.DefaultType
+			// Resolve kind and leaf type. SerializeFact (called below)
+			// validates the (kind, type) pair via the same path that
+			// ParseFact uses, so we don't pre-validate here.
+			kind := fact.Kind(fi.Kind)
+			if kind == "" {
+				kind = fact.DefaultKind
 			}
-			if err := eType.Validate(); err != nil {
-				return mcpgo.NewToolResultError(fmt.Sprintf("fact %d: %v", i, err)), nil
+			eType := fact.Type(fi.Type)
+			if eType == "" && kind == fact.Epistemic {
+				eType = fact.DefaultEpistemicType
 			}
 			f := fact.NewFact(path)
 			f.Title = fi.Title
 			f.Body = fi.Body
+			f.Kind = kind
 			f.Type = eType
 			f.Domain = domain
 			f.Confidence = fi.Confidence

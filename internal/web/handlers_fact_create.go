@@ -15,6 +15,7 @@ import (
 type factCreateRequest struct {
 	Title      string   `json:"title"`
 	Body       string   `json:"body"`
+	Kind       string   `json:"kind"`
 	Type       string   `json:"type"`
 	Domain     []string `json:"domain"`
 	Entities   []string `json:"entities"`
@@ -66,19 +67,23 @@ func handleFactCreate(b hal.URLBuilder, m *repos.Manager, ontologyRoot string, w
 
 		path := knomitfact.BuildFactPath(ontologyRoot, topic, category)
 
-		eType := knomitfact.EpistemicType(req.Type)
-		if eType == "" {
-			eType = knomitfact.DefaultType
+		// Resolve kind and leaf type. SerializeFact validates the (kind,
+		// type) pair below, so we don't pre-validate here — that lets a
+		// single rule reject mismatched values (e.g. pragmatic kind with
+		// epistemic leaf) instead of having two checks drift.
+		kind := knomitfact.Kind(req.Kind)
+		if kind == "" {
+			kind = knomitfact.DefaultKind
 		}
-		if err := eType.Validate(); err != nil {
-			hal.WriteProblem(w, http.StatusBadRequest, "Invalid type",
-				err.Error(), r.URL.Path)
-			return
+		eType := knomitfact.Type(req.Type)
+		if eType == "" && kind == knomitfact.Epistemic {
+			eType = knomitfact.DefaultEpistemicType
 		}
 
 		f := knomitfact.NewFact(path)
 		f.Title = req.Title
 		f.Body = req.Body
+		f.Kind = kind
 		f.Type = eType
 		f.Domain = domain
 		f.Entities = req.Entities
@@ -94,7 +99,7 @@ func handleFactCreate(b hal.URLBuilder, m *repos.Manager, ontologyRoot string, w
 
 		content, err := knomitfact.SerializeFact(f)
 		if err != nil {
-			hal.WriteProblem(w, http.StatusInternalServerError, "Failed to serialize fact",
+			hal.WriteProblem(w, http.StatusBadRequest, "Failed to serialize fact",
 				err.Error(), r.URL.Path)
 			return
 		}

@@ -44,6 +44,7 @@ func updateTool() mcpgo.Tool {
 
 // updateInput represents the updates object in the request.
 type updateInput struct {
+	Kind       *string  `json:"kind"`
 	Type       *string  `json:"type"`
 	Confidence *float64 `json:"confidence"`
 	Sources    *int     `json:"sources"`
@@ -102,13 +103,14 @@ func UpdateHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallTo
 			return mcpgo.NewToolResultError(err.Error()), nil
 		}
 
-		// 6. Merge updates into fact.
+		// 6. Merge updates into fact. (kind, type) validation is deferred
+		// to SerializeFact below — it's the single source of truth for
+		// kind/type consistency.
+		if updates.Kind != nil {
+			fact.Kind = factpkg.Kind(*updates.Kind)
+		}
 		if updates.Type != nil {
-			eType := factpkg.EpistemicType(*updates.Type)
-			if err := eType.Validate(); err != nil {
-				return mcpgo.NewToolResultError(err.Error()), nil
-			}
-			fact.Type = eType
+			fact.Type = factpkg.Type(*updates.Type)
 		}
 		if updates.Confidence != nil {
 			fact.Confidence = *updates.Confidence
