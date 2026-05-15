@@ -699,6 +699,22 @@ func (s *Server) handleCommit(rm *repos.Manager, sm *SessionManager, agentBranch
 			return
 		}
 
+		// Shared history: the local store already shares commits with the
+		// remote, so the standard sync loop's fetch+merge primitives are
+		// what reconcile them — no swap, no rebuild. The clone that /test
+		// produced has served its purpose; close it, wire the remote into
+		// the existing local store, and start sync. Swapping here would
+		// silently discard any local-only facts (the user's 209 → 0 bug).
+		if testResult.History == "shared" {
+			s.commitSharedHistory(sendEvent, sess, ri, sm,
+				repo, sessionID, remoteStore, remoteURL, authCfg,
+				appliedRemoteBranch, testResult.DefaultBranch, agentBranch)
+			return
+		}
+
+		// Disjoint history: the temp clone has the replayed merged state
+		// that must become the local store. Swap, rebuild, configure, sync.
+
 		// Phase: swapping — replace the git store on the repo instance.
 		sendEvent(map[string]string{"phase": "swapping"})
 
@@ -803,4 +819,65 @@ func (s *Server) handleCommit(rm *repos.Manager, sm *SessionManager, agentBranch
 
 		log.Info().Str("repo", repo).Str("session_id", sessionID).Str("url", remoteURL).Msg("commit completed — store swapped and remote configured")
 	}
+}
+
+// commitSharedHistory finalises a shared-history reconnect: it closes the
+// transient clone produced by /test, writes the origin row into the operator's
+// existing local store, and starts the sync loop. The local *store.Service is
+// preserved (no swap), so any local-only facts remain in place and are
+// reconciled by the standard sync primitives on the next cycle.
+func (s *Server) commitSharedHistory(
+	sendEvent func(any),
+	sess *OriginSession,
+	ri *repos.RepoInstance,
+	sm *SessionManager,
+	repo, sessionID string,
+	remoteStore *store.Service,
+	remoteURL string,
+	authCfg AuthConfig,
+	appliedRemoteBranch, defaultBranch, agentBranch string,
+) {
+	sendEvent(map[string]string{"phase": "configuring"})
+
+	if err := remoteStore.Checkpoint(); err != nil {
+		log.Warn().Err(err).Msg("commit: WAL checkpoint failed")
+	}
+	remoteStore.Close()
+
+	var svc *store.Service
+	ri.WithRead(func(c *store.Service) { svc = c })
+	if svc == nil {
+		sendEvent(map[string]string{"phase": "error", "message": "local store unavailable"})
+		return
+	}
+
+	upstreamMain := appliedRemoteBranch
+	if upstreamMain == "" {
+		upstreamMain = defaultBranch
+	}
+	if upstreamMain == "" {
+		upstreamMain = "main"
+	}
+
+	authMethod := authCfg.Method
+	authToken := assembleAuthToken(authMethod, authCfg.Token, authCfg.User, authCfg.Password)
+	if err := svc.Remote().SetRemote("origin", remoteURL, upstreamMain, agentBranch, 300, 300, authMethod, authToken); err != nil {
+		sendEvent(map[string]string{"phase": "error", "message": fmt.Sprintf("save remote config: %v", err)})
+		return
+	}
+
+	if err := ri.ActivateSync(remoteURL); err != nil {
+		log.Warn().Err(err).Str("repo", repo).Msg("commit: sync activation failed")
+		// Non-fatal: remote is saved; sync can be retried later.
+	}
+
+	sendEvent(map[string]string{"phase": "done"})
+
+	sess.mu.Lock()
+	sess.State = StateCommitted
+	sess.mu.Unlock()
+	sm.Delete(repo, sessionID)
+
+	log.Info().Str("repo", repo).Str("session_id", sessionID).Str("url", remoteURL).
+		Msg("commit completed (shared history — local store preserved)")
 }

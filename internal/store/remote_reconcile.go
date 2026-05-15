@@ -144,6 +144,17 @@ func (rh *repoHandler) reconcileMain(ctx context.Context, upstreamMain string) (
 		}
 		return MainReconcileResult{Mode: ModeFF, NewTip: originHash.String()}, nil
 	}
+
+	// Self-heal: a git ref can exist without a matching branches SQL row
+	// (legacy state from older migrations, or a direct SetReference somewhere
+	// that bypassed EnsureBranch). Without the SQL row, downstream readers
+	// like mergeIntoBranchLocked.branchID error out with "branch not found",
+	// which previously killed the entire reconcile loop. EnsureBranch is
+	// idempotent (INSERT OR IGNORE + cache), so this is a cheap invariant
+	// to assert on every success path.
+	if _, err := rh.EnsureBranch(ctx, upstreamMain, "refs/heads/"+upstreamMain); err != nil {
+		return MainReconcileResult{}, fmt.Errorf("reconcileMain: ensure %s: %w", upstreamMain, err)
+	}
 	localHash := localMainRef.Hash()
 
 	if localHash == originHash {

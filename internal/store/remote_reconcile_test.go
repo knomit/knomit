@@ -565,6 +565,57 @@ func TestReconcileMain_NoOpWhenAlreadyAtOrigin(t *testing.T) {
 	require.Equal(t, ModeNoop, res.Mode)
 }
 
+// TestReconcileMain_HealsMissingBranchesRow regression-tests a latent
+// inconsistency observed in the field: a local store can accumulate a
+// refs/heads/<upstreamMain> git ref without a matching row in the branches
+// SQL table. (Older code paths and migrations left this state behind; new
+// shared-history reconnect via /api/v1/{repo}/origin-sessions exposed it
+// because it preserves the existing local store rather than swapping in a
+// freshly-cloned DB the way the disjoint path used to.)
+//
+// When the inconsistency is present, the Sync flow used to fail mid-cycle:
+// reconcileMain returned ModeNoop without touching the SQL table, then
+// reconcileAgent → mergeIntoBranchLocked → branchID("main") errored with
+// "branch \"main\": branch not found", killing the reconcile loop.
+//
+// reconcileMain must heal the SQL table on every success path — not only
+// the create path — so a single tick of the sync loop is enough to recover.
+func TestReconcileMain_HealsMissingBranchesRow(t *testing.T) {
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = svc.Close() })
+	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+
+	// Local main and origin/main both at the same commit (the steady-state
+	// Noop case after fetch).
+	mainHash := mustHeadHash(t, svc, "main")
+	require.NoError(t, svc.rh.gits.SetReference(
+		plumbing.NewHashReference(plumbing.NewRemoteReferenceName("origin", "main"), mainHash),
+	))
+
+	// Simulate the corruption: drop the SQL row for "main" while leaving
+	// the git ref in place. Also drop the cache entry so the next branchID
+	// call re-reads from the DB (otherwise the test passes spuriously).
+	_, err = svc.rh.db.ExecContext(context.Background(), `DELETE FROM branches WHERE name = ?`, "main")
+	require.NoError(t, err)
+	svc.rh.cache.remove("main")
+
+	// Pre-condition: branches.main is missing, so a lookup must fail.
+	_, beforeErr := svc.rh.branchID(context.Background(), "main")
+	require.Error(t, beforeErr, "test setup: branches row for 'main' must be absent")
+
+	// Reconcile — should heal the SQL row even on the Noop path.
+	res, err := svc.rh.reconcileMain(context.Background(), "main")
+	require.NoError(t, err)
+	require.Equal(t, ModeNoop, res.Mode, "ref already at origin: Noop path")
+
+	// Post-condition: branchID must now succeed.
+	id, afterErr := svc.rh.branchID(context.Background(), "main")
+	require.NoError(t, afterErr, "reconcileMain must EnsureBranch on every success path")
+	require.NotZero(t, id)
+}
+
 func TestReconcileMain_DetectsRewind(t *testing.T) {
 	dir := t.TempDir()
 	svc, err := Open(filepath.Join(dir, "k.db"))
