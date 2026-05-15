@@ -15,6 +15,7 @@ type Fact struct {
 	path           string   // private — always lowercase
 	Title          string   `json:"title"`
 	Body           string   `json:"body"`
+	Kind           Kind     `json:"kind,omitempty"`
 	Type           Type     `json:"type"`
 	Domain         []string `json:"domain"`
 	Confidence     float64  `json:"confidence"`
@@ -31,11 +32,14 @@ func NewFact(path string) Fact { return Fact{path: strings.ToLower(path)} }
 func (f Fact) Path() string { return f.path }
 
 // MarshalJSON exposes the private path field as "path" in JSON output.
+// Kind is omitted when epistemic (the default) so existing consumers see
+// no change in shape for epistemic facts.
 func (f Fact) MarshalJSON() ([]byte, error) {
 	type plain struct {
 		Path           string   `json:"path"`
 		Title          string   `json:"title"`
 		Body           string   `json:"body"`
+		Kind           Kind     `json:"kind,omitempty"`
 		Type           Type     `json:"type"`
 		Domain         []string `json:"domain"`
 		Confidence     float64  `json:"confidence"`
@@ -44,10 +48,15 @@ func (f Fact) MarshalJSON() ([]byte, error) {
 		Refs           []string `json:"refs"`
 		EvidenceWeight float64  `json:"evidence_weight,omitempty"`
 	}
+	kind := f.Kind
+	if kind == DefaultKind {
+		kind = ""
+	}
 	return json.Marshal(plain{
 		Path:           f.path,
 		Title:          f.Title,
 		Body:           f.Body,
+		Kind:           kind,
 		Type:           f.Type,
 		Domain:         f.Domain,
 		Confidence:     f.Confidence,
@@ -59,11 +68,13 @@ func (f Fact) MarshalJSON() ([]byte, error) {
 }
 
 // UnmarshalJSON reads "path" into the private field, enforcing lowercase.
+// Missing "kind" defaults to epistemic.
 func (f *Fact) UnmarshalJSON(data []byte) error {
 	type plain struct {
 		Path           string   `json:"path"`
 		Title          string   `json:"title"`
 		Body           string   `json:"body"`
+		Kind           Kind     `json:"kind,omitempty"`
 		Type           Type     `json:"type"`
 		Domain         []string `json:"domain"`
 		Confidence     float64  `json:"confidence"`
@@ -79,6 +90,10 @@ func (f *Fact) UnmarshalJSON(data []byte) error {
 	f.path = strings.ToLower(p.Path)
 	f.Title = p.Title
 	f.Body = p.Body
+	f.Kind = p.Kind
+	if f.Kind == "" {
+		f.Kind = DefaultKind
+	}
 	f.Type = p.Type
 	f.Domain = p.Domain
 	f.Confidence = p.Confidence
