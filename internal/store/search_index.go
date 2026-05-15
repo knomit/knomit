@@ -471,11 +471,12 @@ func (si *searchIndex) rebuildFacts(ctx context.Context, branch, head string, pr
 			FROM _rebuild_entries e
 			JOIN objects o ON o.hash = e.blob_hash AND o.type = ?
 		)
-		INSERT OR REPLACE INTO facts (path, blob_hash, title, type, domain, entities, confidence, sources, refs, evidence_weight)
+		INSERT OR REPLACE INTO facts (path, blob_hash, title, kind, type, domain, entities, confidence, sources, refs, evidence_weight)
 		SELECT
 			pe.path,
 			pe.blob_hash,
 			json_extract(pe.parsed, '$.title'),
+			COALESCE(json_extract(pe.parsed, '$.kind'), 'epistemic'),
 			json_extract(pe.parsed, '$.type'),
 			json_extract(pe.parsed, '$.domain'),
 			json_extract(pe.parsed, '$.entities'),
@@ -713,7 +714,7 @@ func (si *searchIndex) rebuildGraph(ctx context.Context, branch string, progress
 	// Read all facts ordered by oldest commit first so that when a fact's
 	// DERIVED_FROM edges are created, its ref targets are already graph nodes.
 	rows, err := conn(ctx, si.rh.db).QueryContext(ctx, `
-		SELECT f.path, f.title, f.blob_hash, f.type, f.domain, f.entities, f.confidence, f.sources, f.refs, f.evidence_weight
+		SELECT f.path, f.title, f.blob_hash, f.kind, f.type, f.domain, f.entities, f.confidence, f.sources, f.refs, f.evidence_weight
 		FROM facts f
 		LEFT JOIN (
 			SELECT path, MIN(committed_at) AS first_committed FROM commit_log GROUP BY path
@@ -727,7 +728,7 @@ func (si *searchIndex) rebuildGraph(ctx context.Context, branch string, progress
 	for rows.Next() {
 		var rec FactRecord
 		var domainJSON, entitiesJSON, refsJSON string
-		if err := rows.Scan(&rec.Path, &rec.Title, &rec.BlobHash, &rec.Type,
+		if err := rows.Scan(&rec.Path, &rec.Title, &rec.BlobHash, &rec.Kind, &rec.Type,
 			&domainJSON, &entitiesJSON, &rec.Confidence, &rec.Sources,
 			&refsJSON, &rec.EvidenceWeight); err != nil {
 			rows.Close()
