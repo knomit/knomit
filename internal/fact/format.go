@@ -106,6 +106,7 @@ func (f *Fact) UnmarshalJSON(data []byte) error {
 
 // frontmatter is the YAML structure parsed from the --- block.
 type frontmatter struct {
+	Kind           string   `yaml:"kind"`
 	Type           string   `yaml:"type"`
 	Domain         []string `yaml:"domain"`
 	Confidence     float64  `yaml:"confidence"`
@@ -152,13 +153,22 @@ func ParseFact(path, content string) (Fact, error) {
 		fm.Refs = []string{}
 	}
 
-	// Resolve epistemic type: default to observation if missing.
-	eType := Type(fm.Type)
-	if eType == "" {
-		eType = DefaultEpistemicType
+	// Resolve kind: missing → epistemic (backward compat with every
+	// existing fact file authored before pragmatic facts existed).
+	kind := Kind(fm.Kind)
+	if kind == "" {
+		kind = DefaultKind
 	}
-	if !Epistemic.AllowsType(eType) {
-		return Fact{}, fmt.Errorf("ParseFact %q: invalid epistemic type %q", path, eType)
+	// Resolve leaf type. Epistemic facts retain the historical "missing
+	// type → observation" default; pragmatic facts require an explicit
+	// type because policy and heuristic are not interchangeable.
+	leaf := Type(fm.Type)
+	if leaf == "" && kind == Epistemic {
+		leaf = DefaultEpistemicType
+	}
+	kind, err := validateKindAndType(kind, leaf)
+	if err != nil {
+		return Fact{}, fmt.Errorf("ParseFact %q: %w", path, err)
 	}
 
 	// Extract title from the first # heading in bodyRaw.
@@ -170,7 +180,8 @@ func ParseFact(path, content string) (Fact, error) {
 	f := NewFact(path)
 	f.Title = title
 	f.Body = body
-	f.Type = eType
+	f.Kind = kind
+	f.Type = leaf
 	f.Domain = fm.Domain
 	f.Confidence = fm.Confidence
 	f.Sources = fm.Sources
