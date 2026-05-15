@@ -105,3 +105,23 @@ Body.
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "invalid kind")
 }
+
+func TestParseFact_RejectsPragmaticWithoutType(t *testing.T) {
+	// Pragmatic facts require an explicit type — policy and heuristic
+	// are not interchangeable, so there is no safe default.
+	const content = `---
+kind: pragmatic
+domain: []
+confidence: 0.5
+sources: 0
+entities: []
+refs: []
+---
+# Bad
+
+Body.
+`
+	_, err := ParseFact("kb/bad3.md", content)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "pragmatic")
+}
