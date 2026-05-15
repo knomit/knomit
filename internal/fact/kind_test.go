@@ -81,4 +81,13 @@ func TestValidateKindAndType_RejectsCrossKindMismatch(t *testing.T) {
 func TestValidateKindAndType_RejectsEmptyType(t *testing.T) {
 	_, err := validateKindAndType(Epistemic, "")
 	require.Error(t, err)
+	require.Contains(t, err.Error(), "invalid type")
+}
+
+func TestValidateKindAndType_DefaultingHappensBeforeTypeCheck(t *testing.T) {
+	// Empty kind normalizes to Epistemic, then Policy fails the
+	// epistemic-allows-type check (not the kind check).
+	_, err := validateKindAndType("", Policy)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "epistemic")
 }
