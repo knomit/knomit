@@ -10,6 +10,8 @@ import (
 	"knomit/internal/repos"
 	"knomit/internal/store"
 	"knomit/internal/web/hal"
+
+	"github.com/stretchr/testify/require"
 )
 
 // stubFactsCollectionProvider implements factsCollectionProvider for tests.
@@ -126,6 +128,49 @@ func TestHandleHALFactsCollection_Pagination(t *testing.T) {
 	if _, ok := body.Links["prev"]; !ok {
 		t.Error("missing prev link")
 	}
+}
+
+// TestHandleHALFactsCollection_KindSerialization covers the read-side
+// surfacing of fact.Kind: pragmatic entries carry "kind":"pragmatic" on
+// the wire while epistemic entries elide the field (mirrors
+// fact.Fact.MarshalJSON).
+func TestHandleHALFactsCollection_KindSerialization(t *testing.T) {
+	provider := &stubFactsCollectionProvider{
+		entries: []store.RecentFactEntry{
+			{Path: "know/a.md", Title: "Fact A", Kind: "epistemic", Type: "observation"},
+			{Path: "know/b.md", Title: "Fact B", Kind: "pragmatic", Type: "policy"},
+		},
+		total: 2,
+	}
+	s := &Server{
+		Manager:                 newTestManagerWithRepos(t, "alpha"),
+		factsCollectionProvider: provider,
+	}
+	r := s.NewAPIRouter()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet,
+		"/repos/alpha/branches/agent:test/facts", nil)
+	r.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code, "body=%s", rec.Body.String())
+
+	// Parse the raw JSON to inspect the on-wire shape: epistemic should
+	// have no "kind" key at all while pragmatic should have "kind":"pragmatic".
+	var body struct {
+		Embedded struct {
+			Facts []map[string]interface{} `json:"facts"`
+		} `json:"_embedded"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	require.Len(t, body.Embedded.Facts, 2)
+
+	// First fact is epistemic — "kind" key must be absent.
+	_, hasKind := body.Embedded.Facts[0]["kind"]
+	require.False(t, hasKind, "epistemic fact must not carry kind field on the wire: %v", body.Embedded.Facts[0])
+
+	// Second fact is pragmatic — "kind" must be present and equal "pragmatic".
+	require.Equal(t, "pragmatic", body.Embedded.Facts[1]["kind"], "pragmatic fact must carry kind=pragmatic")
 }
 
 func TestHandleHALFactsCollection_UnknownRepo_Returns404(t *testing.T) {

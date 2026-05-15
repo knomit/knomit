@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"knomit/internal/fact"
 	"knomit/internal/repos"
 	"knomit/internal/store"
 	"time"
@@ -77,6 +78,7 @@ func QueryHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToo
 		type factOutput struct {
 			File         string      `json:"file"`
 			Title        string      `json:"title"`
+			Kind         string      `json:"kind,omitempty"` // omitted when epistemic (the default)
 			Type         string      `json:"type"`
 			Body         string      `json:"body"`
 			LastModified string      `json:"last_modified,omitempty"`
@@ -102,9 +104,16 @@ func QueryHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToo
 				Refs:           orEmpty(r.Refs),
 				EvidenceWeight: r.EvidenceWeight,
 			}
+			// Mirror fact.Fact.MarshalJSON: elide Kind when it equals the
+			// default (epistemic) so the field is omitted on the wire.
+			kind := r.Kind
+			if fact.Kind(kind) == fact.DefaultKind {
+				kind = ""
+			}
 			facts[i] = factOutput{
 				File:        r.Path,
 				Title:       r.Title,
+				Kind:        kind,
 				Type:        r.Type,
 				Body:        r.Body,
 				Commit:      r.CommitHash,

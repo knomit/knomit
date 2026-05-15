@@ -69,6 +69,7 @@ func ExploreHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallT
 		type factOutput struct {
 			Path    string `json:"path"`
 			Title   string `json:"title"`
+			Kind    string `json:"kind,omitempty"` // omitted when epistemic (the default)
 			Type    string `json:"type"`
 			Updated string `json:"updated"`
 		}
@@ -85,9 +86,16 @@ func ExploreHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallT
 			if parseErr != nil {
 				continue
 			}
+			// Mirror fact.Fact.MarshalJSON: elide Kind when it equals the
+			// default (epistemic) so the field is omitted on the wire.
+			kind := string(parsed.Kind)
+			if parsed.Kind == fact.DefaultKind {
+				kind = ""
+			}
 			facts = append(facts, factOutput{
 				Path:    f.Path,
 				Title:   parsed.Title,
+				Kind:    kind,
 				Type:    string(parsed.Type),
 				Updated: f.Timestamp.Format(time.RFC3339),
 			})

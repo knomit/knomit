@@ -15,6 +15,7 @@ type FactView struct {
 	Path       string    `json:"path"`
 	Title      string    `json:"title"`
 	Body       string    `json:"body,omitempty"` // omitted in collection items (hard rule §3 #8)
+	Kind       string    `json:"kind,omitempty"` // omitted when epistemic (the default)
 	Type       string    `json:"type,omitempty"`
 	Domain     []string  `json:"domain"`
 	Entities   []string  `json:"entities"`
@@ -66,10 +67,17 @@ func BuildFactView(
 	if asOfCommit == "" {
 		asOfCommit = headCommit
 	}
+	// Mirror fact.Fact.MarshalJSON: elide Kind when it equals the default so
+	// epistemic facts serialize without the field (omitempty).
+	kind := string(f.Kind)
+	if f.Kind == knomitfact.DefaultKind {
+		kind = ""
+	}
 	v := FactView{
 		Path:       f.Path(),
 		Title:      f.Title,
 		Body:       f.Body,
+		Kind:       kind,
 		Type:       string(f.Type),
 		Domain:     f.Domain,
 		Entities:   f.Entities,
