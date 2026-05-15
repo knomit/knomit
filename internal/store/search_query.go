@@ -223,6 +223,8 @@ type SearchQuery struct {
 	QueryByPath   string    // resolve query vector from this branch+path's stored embedding via SQL join; skips Embed(Text). Lower priority than QueryVec.
 	IncludeTypes  []string  // only return facts with these types (empty = all)
 	ExcludeTypes  []string  // exclude facts with these types
+	IncludeKinds  []string  // only return facts with these kinds (empty = all)
+	ExcludeKinds  []string  // exclude facts with these kinds
 	EpisodeOps    []string  // filter by episode operation type (e.g. "learn", "update", "retract"); filtered post-query in Go
 }
 
@@ -272,6 +274,22 @@ func newFactFilter(q SearchQuery) *factFilter {
 			args[i] = t
 		}
 		f.add(" AND f.type NOT IN ("+ph[:len(ph)-1]+")", args...)
+	}
+	if len(q.IncludeKinds) > 0 {
+		ph := strings.Repeat("?,", len(q.IncludeKinds))
+		args := make([]any, len(q.IncludeKinds))
+		for i, t := range q.IncludeKinds {
+			args[i] = t
+		}
+		f.add(" AND f.kind IN ("+ph[:len(ph)-1]+")", args...)
+	}
+	if len(q.ExcludeKinds) > 0 {
+		ph := strings.Repeat("?,", len(q.ExcludeKinds))
+		args := make([]any, len(q.ExcludeKinds))
+		for i, t := range q.ExcludeKinds {
+			args[i] = t
+		}
+		f.add(" AND f.kind NOT IN ("+ph[:len(ph)-1]+")", args...)
 	}
 	if len(q.Entities) > 0 {
 		ph := strings.Repeat("?,", len(q.Entities))
