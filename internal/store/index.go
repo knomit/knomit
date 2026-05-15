@@ -118,7 +118,9 @@ func (si *searchIndex) Completions(ctx context.Context, branch, category, prefix
 			 WHERE bf.branch_id = ? AND fe.entity LIKE ? LIMIT ?`,
 			branchID, prefix+"%", limit)
 	case "type":
-		return []string{"observation", "concept", "process", "principle", "pattern", "reference", "synthesis", "hypothesis", "methodology"}, nil
+		return []string{"observation", "concept", "process", "principle", "pattern", "reference", "synthesis", "hypothesis", "methodology", "policy", "heuristic"}, nil
+	case "kind":
+		return []string{"epistemic", "pragmatic"}, nil
 	case "ep":
 		return []string{"learn", "update", "retract", "subsume", "synthesize", "sync"}, nil
 	case "path":
