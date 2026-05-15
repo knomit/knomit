@@ -35,3 +35,23 @@ func (k Kind) AllowsType(t Type) bool {
 	}
 	return false
 }
+
+// validateKindAndType normalizes a missing kind to DefaultKind, verifies the
+// kind is well-known, and confirms that t is a valid leaf Type for that kind.
+// Returns the normalized Kind on success.
+//
+// This is the single validation entry point shared by ParseFact and
+// SerializeFact, so any Fact that round-trips successfully is guaranteed to
+// carry a valid (kind, type) pair.
+func validateKindAndType(k Kind, t Type) (Kind, error) {
+	if k == "" {
+		k = DefaultKind
+	}
+	if err := k.Validate(); err != nil {
+		return "", err
+	}
+	if !k.AllowsType(t) {
+		return "", fmt.Errorf("invalid type %q for kind %q", t, k)
+	}
+	return k, nil
+}
