@@ -12,6 +12,7 @@ interface Props {
 const FACT_CATEGORIES: { key: FilterChip['category']; label: string }[] = [
   { key: 'domain', label: 'Domain' },
   { key: 'entity', label: 'Entity' },
+  { key: 'kind',   label: 'Kind' },
   { key: 'type',   label: 'Type' },
   { key: 'path',   label: 'Path' },
 ];
@@ -22,7 +23,7 @@ const HISTORY_CATEGORIES: { key: FilterChip['category']; label: string }[] = [
 ];
 
 // Match a trailing prefix token at end of input
-const FACT_PREFIX_RE = /(?:^|\s)(domain|entity|type|path):(\S*)$/;
+const FACT_PREFIX_RE = /(?:^|\s)(domain|entity|type|kind|path):(\S*)$/;
 const HISTORY_PREFIX_RE = /(?:^|\s)(ep|path):(\S*)$/;
 
 export function FilterBar({ state, dispatch }: Props) {

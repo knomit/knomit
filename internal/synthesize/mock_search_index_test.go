@@ -239,9 +239,9 @@ func (mr *MockSearchIndexMockRecorder) OutgoingAtCommit(ctx, branch, path, commi
 }
 
 // RecentFacts mocks base method.
-func (m *MockSearchIndex) RecentFacts(ctx context.Context, branch, pathPrefix, query string, limit, offset int, includeTypes, excludeTypes, domain, entities, epOps []string) ([]store.RecentFactEntry, int, error) {
+func (m *MockSearchIndex) RecentFacts(ctx context.Context, branch string, opts store.SearchOptions) ([]store.RecentFactEntry, int, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "RecentFacts", ctx, branch, pathPrefix, query, limit, offset, includeTypes, excludeTypes, domain, entities, epOps)
+	ret := m.ctrl.Call(m, "RecentFacts", ctx, branch, opts)
 	ret0, _ := ret[0].([]store.RecentFactEntry)
 	ret1, _ := ret[1].(int)
 	ret2, _ := ret[2].(error)
@@ -249,9 +249,9 @@ func (m *MockSearchIndex) RecentFacts(ctx context.Context, branch, pathPrefix, q
 }
 
 // RecentFacts indicates an expected call of RecentFacts.
-func (mr *MockSearchIndexMockRecorder) RecentFacts(ctx, branch, pathPrefix, query, limit, offset, includeTypes, excludeTypes, domain, entities, epOps any) *gomock.Call {
+func (mr *MockSearchIndexMockRecorder) RecentFacts(ctx, branch, opts any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RecentFacts", reflect.TypeOf((*MockSearchIndex)(nil).RecentFacts), ctx, branch, pathPrefix, query, limit, offset, includeTypes, excludeTypes, domain, entities, epOps)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RecentFacts", reflect.TypeOf((*MockSearchIndex)(nil).RecentFacts), ctx, branch, opts)
 }
 
 // RelevantMethodologyForFact mocks base method.
@@ -270,7 +270,7 @@ func (mr *MockSearchIndexMockRecorder) RelevantMethodologyForFact(ctx, branch, f
 }
 
 // Search mocks base method.
-func (m *MockSearchIndex) Search(ctx context.Context, branch string, q store.SearchQuery) ([]store.SearchResult, error) {
+func (m *MockSearchIndex) Search(ctx context.Context, branch string, q store.SearchOptions) ([]store.SearchResult, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "Search", ctx, branch, q)
 	ret0, _ := ret[0].([]store.SearchResult)

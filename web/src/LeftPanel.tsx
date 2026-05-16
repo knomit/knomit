@@ -60,8 +60,9 @@ function TreeView({ state, dispatch, navigate }: Props) {
     const domains = state.filters.filter(f => f.category === 'domain').map(f => f.value);
     const entities = state.filters.filter(f => f.category === 'entity').map(f => f.value);
     const types = state.filters.filter(f => f.category === 'type').map(f => f.value);
+    const kinds = state.filters.filter(f => f.category === 'kind').map(f => f.value);
     const eps = state.filters.filter(f => f.category === 'ep').map(f => f.value);
-    api.search(state.repo, state.branch, state.freeText, path, 0, { types, eps, domains, entities }).then(r => {
+    api.search(state.repo, state.branch, state.freeText, path, 0, { types, kinds, eps, domains, entities }).then(r => {
       if (stale()) return;
       const items: DirChild[] = (r.results || []).map(sr => ({
         name: sr.path.split('/').pop() || sr.path,
@@ -223,15 +224,16 @@ function ChronoView({ state, dispatch, navigate }: Props) {
   staleStateRef.current = state;
 
   const path = currentPath(state);
-  const { domains, entities, types, eps } = useMemo(() => {
-    const domains: string[] = [], entities: string[] = [], types: string[] = [], eps: string[] = [];
+  const { domains, entities, types, kinds, eps } = useMemo(() => {
+    const domains: string[] = [], entities: string[] = [], types: string[] = [], kinds: string[] = [], eps: string[] = [];
     for (const f of state.filters) {
       if (f.category === 'domain') domains.push(f.value);
       else if (f.category === 'entity') entities.push(f.value);
       else if (f.category === 'type') types.push(f.value);
+      else if (f.category === 'kind') kinds.push(f.value);
       else if (f.category === 'ep') eps.push(f.value);
     }
-    return { domains, entities, types, eps };
+    return { domains, entities, types, kinds, eps };
   }, [state.filters]);
   const typeFilter = types.length === 1 ? types[0] : undefined;
   // Stable primitive key so useAsync doesn't re-fire when filters array has a new
@@ -245,6 +247,7 @@ function ChronoView({ state, dispatch, navigate }: Props) {
     setSelectedIdx(0);
     api.recent(state.repo, state.branch, path, state.freeText, 50, 0, {
       typeFilter,
+      kinds: kinds.length ? kinds : undefined,
       domains: domains.length ? domains : undefined,
       entities: entities.length ? entities : undefined,
       eps: eps.length ? eps : undefined,
@@ -272,6 +275,7 @@ function ChronoView({ state, dispatch, navigate }: Props) {
     setLoading(true);
     api.recent(state.repo, state.branch, path, state.freeText, 50, facts.length, {
       typeFilter,
+      kinds: kinds.length ? kinds : undefined,
       domains: domains.length ? domains : undefined,
       entities: entities.length ? entities : undefined,
       eps: eps.length ? eps : undefined,

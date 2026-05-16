@@ -51,7 +51,7 @@ func (defaultDomainsProvider) DomainFacts(ri *repos.RepoInstance, branch, domain
 		if svc == nil {
 			return
 		}
-		out, err = svc.Search().Search(contextTODO(), branch, store.SearchQuery{
+		out, err = svc.Search().Search(contextTODO(), branch, store.SearchOptions{
 			Domain: []string{domain},
 			Limit:  500,
 		})

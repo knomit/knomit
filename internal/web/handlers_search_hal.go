@@ -8,6 +8,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/rs/zerolog/log"
 
+	knomitfact "knomit/internal/fact"
 	"knomit/internal/repos"
 	"knomit/internal/store"
 	"knomit/internal/web/hal"
@@ -16,7 +17,7 @@ import (
 // searchProvider is the narrow interface the search HAL handler depends on.
 // Production wires it to defaultSearchProvider; tests inject stubs.
 type searchProvider interface {
-	Search(ri *repos.RepoInstance, emb store.Embedder, branch string, q store.SearchQuery) ([]store.SearchResult, error)
+	Search(ri *repos.RepoInstance, emb store.Embedder, branch string, q store.SearchOptions) ([]store.SearchResult, error)
 }
 
 // defaultSearchProvider is the production searchProvider that calls through
@@ -24,7 +25,7 @@ type searchProvider interface {
 // query vector generation.
 type defaultSearchProvider struct{}
 
-func (defaultSearchProvider) Search(ri *repos.RepoInstance, emb store.Embedder, branch string, q store.SearchQuery) ([]store.SearchResult, error) {
+func (defaultSearchProvider) Search(ri *repos.RepoInstance, emb store.Embedder, branch string, q store.SearchOptions) ([]store.SearchResult, error) {
 	// Generate query vector if text is provided and an embedder is available.
 	if q.Text != "" && emb != nil && len(q.QueryVec) == 0 {
 		vec, err := emb.Embed(q.Text)
@@ -54,6 +55,7 @@ type searchResultItem struct {
 	Path       string      `json:"path"`
 	Title      string      `json:"title"`
 	Score      float64     `json:"score"`
+	Kind       string      `json:"kind,omitempty"` // omitted when epistemic (the default)
 	Type       string      `json:"type,omitempty"`
 	Domain     []string    `json:"domain,omitempty"`
 	Entities   []string    `json:"entities,omitempty"`
@@ -84,6 +86,8 @@ func handleSearch(b hal.URLBuilder, m *repos.Manager, provider searchProvider, e
 		limitStr := qp.Get("limit")
 		typeStr := qp.Get("type")
 		excludeTypeStr := qp.Get("exclude_type")
+		kindStr := qp.Get("kind")
+		excludeKindStr := qp.Get("exclude_kind")
 		epStr := qp.Get("ep")
 
 		splitCSV := func(s string) []string {
@@ -125,13 +129,15 @@ func handleSearch(b hal.URLBuilder, m *repos.Manager, provider searchProvider, e
 			limit = 500
 		}
 
-		q := store.SearchQuery{
+		q := store.SearchOptions{
 			Text:          text,
 			Path:          path,
 			Entities:      splitCSV(entitiesStr),
 			Domain:        splitCSV(domainStr),
 			IncludeTypes:  splitCSV(typeStr),
 			ExcludeTypes:  splitCSV(excludeTypeStr),
+			IncludeKinds:  splitCSV(kindStr),
+			ExcludeKinds:  splitCSV(excludeKindStr),
 			EpisodeOps:    splitCSV(epStr),
 			MinConfidence: minConfidence,
 			Limit:         limit,
@@ -154,10 +160,17 @@ func handleSearch(b hal.URLBuilder, m *repos.Manager, provider searchProvider, e
 
 		items := make([]searchResultItem, 0, len(results))
 		for _, res := range results {
+			// Mirror fact.Fact.MarshalJSON: elide Kind when it equals the
+			// default (epistemic) so the field is omitted on the wire.
+			kind := res.Kind
+			if knomitfact.Kind(kind) == knomitfact.DefaultKind {
+				kind = ""
+			}
 			item := searchResultItem{
 				Path:       res.Path,
 				Title:      res.Title,
 				Score:      res.Score,
+				Kind:       kind,
 				Type:       res.Type,
 				Domain:     res.Domain,
 				Entities:   res.Entities,

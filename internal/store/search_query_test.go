@@ -80,7 +80,7 @@ func TestRecentFacts_WithQuery_SortsByRelevanceNotDate(t *testing.T) {
 	_, err = svc.Facts().WriteFact(ctx, branch, "kb/c.md", testFactBody("far-target gamma", 0.7, nil), "init c", "")
 	require.NoError(t, err)
 
-	entries, total, err := svc.Search().RecentFacts(ctx, branch, "", "match-target alpha", 50, 0, nil, nil, nil, nil, nil)
+	entries, total, err := svc.Search().RecentFacts(ctx, branch, SearchOptions{Text: "match-target alpha", Limit: 50})
 	require.NoError(t, err)
 	require.GreaterOrEqual(t, total, 1, "match-target fact must be in the result set")
 	require.NotEmpty(t, entries)

@@ -29,7 +29,7 @@ type SearchAssert struct {
 // query goes through the real vector-search code path using whatever
 // embedder the Storyboard has configured (DeterministicEmbedder by default).
 //
-// Uses the default SearchQuery with Text set and Limit 50. Tests that need
+// Uses the default SearchOptions with Text set and Limit 50. Tests that need
 // more control can drop to the production API via b.repo.Instance().
 func (b *BranchHandle) Search(query string) *SearchAssert {
 	t := b.repo.sb.t
@@ -37,7 +37,7 @@ func (b *BranchHandle) Search(query string) *SearchAssert {
 	var results []store.SearchResult
 	var err error
 	b.repo.ri.WithRead(func(svc *store.Service) {
-		results, err = svc.Search().Search(context.Background(), b.name, store.SearchQuery{
+		results, err = svc.Search().Search(context.Background(), b.name, store.SearchOptions{
 			Text:  query,
 			Limit: 50,
 		})

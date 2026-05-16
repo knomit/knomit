@@ -358,7 +358,7 @@ func (r *Reviewer) dirtyFacts(ctx context.Context, branch string, gs store.FactI
 	// Letting a pragmatic fact in would cause it to be silently rewritten as
 	// epistemic on commit and the original deleted.
 	if watermark == "" {
-		results, err := idx.Search(ctx, branch, store.SearchQuery{
+		results, err := idx.Search(ctx, branch, store.SearchOptions{
 			Limit:        100_000,
 			IncludeKinds: []string{string(fact.Epistemic)},
 		})

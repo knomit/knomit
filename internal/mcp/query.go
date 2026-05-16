@@ -59,7 +59,7 @@ func QueryHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToo
 			return mcpgo.NewToolResultError("at least one of text, entities, domain, path, or min_confidence is required"), nil
 		}
 
-		q := store.SearchQuery{
+		q := store.SearchOptions{
 			Text:          text,
 			Entities:      entities,
 			Domain:        domain,

@@ -109,7 +109,7 @@ func TestRebuild_RepopulatesDomainAndEntityJunctions(t *testing.T) {
 	require.Equal(t, 3, domainRows, "fact_domains must be re-populated after rebuild (alpha:2 + beta:1)")
 
 	// Specifically: 'ai' should match both facts via the search filter path.
-	results, err := svc.Search().Search(ctx, branch, SearchQuery{Domain: []string{"ai"}})
+	results, err := svc.Search().Search(ctx, branch, SearchOptions{Domain: []string{"ai"}})
 	require.NoError(t, err)
 	require.Len(t, results, 2, "search by domain=ai must find both facts after rebuild")
 
@@ -119,7 +119,7 @@ func TestRebuild_RepopulatesDomainAndEntityJunctions(t *testing.T) {
 		`SELECT COUNT(*) FROM fact_entities`).Scan(&entityRows))
 	require.Equal(t, 3, entityRows, "fact_entities must be re-populated after rebuild (alpha:2 + beta:1)")
 
-	results, err = svc.Search().Search(ctx, branch, SearchQuery{Entities: []string{"Anthropic"}})
+	results, err = svc.Search().Search(ctx, branch, SearchOptions{Entities: []string{"Anthropic"}})
 	require.NoError(t, err)
 	require.Len(t, results, 1, "search by entity=Anthropic must find alpha after rebuild")
 }

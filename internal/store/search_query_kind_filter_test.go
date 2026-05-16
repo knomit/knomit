@@ -65,14 +65,14 @@ func pathsOfResults(rs []SearchResult) []string {
 	return out
 }
 
-// TestSearchQuery_IncludeKinds_PragmaticOnly verifies that IncludeKinds
+// TestSearchOptions_IncludeKinds_PragmaticOnly verifies that IncludeKinds
 // filters to pragmatic facts (policy + heuristic) and excludes the epistemic
 // observation.
-func TestSearchQuery_IncludeKinds_PragmaticOnly(t *testing.T) {
+func TestSearchOptions_IncludeKinds_PragmaticOnly(t *testing.T) {
 	const branch = "main"
 	svc := seedMixedKindFacts(t, branch)
 
-	results, err := svc.Search().Search(context.Background(), branch, SearchQuery{
+	results, err := svc.Search().Search(context.Background(), branch, SearchOptions{
 		IncludeKinds: []string{"pragmatic"},
 	})
 	require.NoError(t, err)
@@ -82,13 +82,13 @@ func TestSearchQuery_IncludeKinds_PragmaticOnly(t *testing.T) {
 	}
 }
 
-// TestSearchQuery_IncludeKinds_EpistemicOnly verifies that IncludeKinds
+// TestSearchOptions_IncludeKinds_EpistemicOnly verifies that IncludeKinds
 // filters to epistemic facts and excludes both pragmatic types.
-func TestSearchQuery_IncludeKinds_EpistemicOnly(t *testing.T) {
+func TestSearchOptions_IncludeKinds_EpistemicOnly(t *testing.T) {
 	const branch = "main"
 	svc := seedMixedKindFacts(t, branch)
 
-	results, err := svc.Search().Search(context.Background(), branch, SearchQuery{
+	results, err := svc.Search().Search(context.Background(), branch, SearchOptions{
 		IncludeKinds: []string{"epistemic"},
 	})
 	require.NoError(t, err)
@@ -96,14 +96,14 @@ func TestSearchQuery_IncludeKinds_EpistemicOnly(t *testing.T) {
 	require.Equal(t, "epistemic", results[0].Kind)
 }
 
-// TestSearchQuery_IncludeKinds_Both verifies that listing both kinds returns
+// TestSearchOptions_IncludeKinds_Both verifies that listing both kinds returns
 // every fact — equivalent to no filter, but exercises the multi-value
 // placeholder expansion in newFactFilter.
-func TestSearchQuery_IncludeKinds_Both(t *testing.T) {
+func TestSearchOptions_IncludeKinds_Both(t *testing.T) {
 	const branch = "main"
 	svc := seedMixedKindFacts(t, branch)
 
-	results, err := svc.Search().Search(context.Background(), branch, SearchQuery{
+	results, err := svc.Search().Search(context.Background(), branch, SearchOptions{
 		IncludeKinds: []string{"epistemic", "pragmatic"},
 	})
 	require.NoError(t, err)
@@ -112,29 +112,29 @@ func TestSearchQuery_IncludeKinds_Both(t *testing.T) {
 		pathsOfResults(results))
 }
 
-// TestSearchQuery_IncludeKinds_Empty verifies that an absent IncludeKinds
+// TestSearchOptions_IncludeKinds_Empty verifies that an absent IncludeKinds
 // filter behaves as "all kinds" — the SQL clause is suppressed entirely.
-func TestSearchQuery_IncludeKinds_Empty(t *testing.T) {
+func TestSearchOptions_IncludeKinds_Empty(t *testing.T) {
 	const branch = "main"
 	svc := seedMixedKindFacts(t, branch)
 
-	results, err := svc.Search().Search(context.Background(), branch, SearchQuery{})
+	results, err := svc.Search().Search(context.Background(), branch, SearchOptions{})
 	require.NoError(t, err)
 	require.Equal(t,
 		[]string{"kb/heuristic/h.md", "kb/obs/a.md", "kb/policy/p.md"},
 		pathsOfResults(results))
 }
 
-// TestSearchQuery_IncludeKinds_AndIncludeTypes verifies that IncludeKinds and
+// TestSearchOptions_IncludeKinds_AndIncludeTypes verifies that IncludeKinds and
 // IncludeTypes AND-combine. With IncludeKinds=[pragmatic] and
 // IncludeTypes=[policy], only the pragmatic policy fact survives; the
 // pragmatic heuristic is filtered out by the type clause and the epistemic
 // observation by the kind clause.
-func TestSearchQuery_IncludeKinds_AndIncludeTypes(t *testing.T) {
+func TestSearchOptions_IncludeKinds_AndIncludeTypes(t *testing.T) {
 	const branch = "main"
 	svc := seedMixedKindFacts(t, branch)
 
-	results, err := svc.Search().Search(context.Background(), branch, SearchQuery{
+	results, err := svc.Search().Search(context.Background(), branch, SearchOptions{
 		IncludeKinds: []string{"pragmatic"},
 		IncludeTypes: []string{"policy"},
 	})

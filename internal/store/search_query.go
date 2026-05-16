@@ -20,13 +20,15 @@ type RecentFactEntry struct {
 	Score       float64 `json:"score,omitempty"`
 }
 
-// RecentFacts returns facts on the given branch under pathPrefix ordered by
-// most recent commit, paginated by offset/limit. If query is non-empty, it
-// performs a semantic search first and returns only matching facts (still
-// ordered by time). domain, entities, and epOps are optional additional filters.
-func (si *searchIndex) RecentFacts(ctx context.Context, branch, pathPrefix, query string, limit, offset int, includeTypes, excludeTypes, domain, entities, epOps []string) ([]RecentFactEntry, int, error) {
-	if query != "" {
-		return si.recentFactsSearch(ctx, branch, pathPrefix, query, limit, offset, includeTypes, excludeTypes, domain, entities, epOps)
+// RecentFacts returns facts on the given branch ordered by most recent commit,
+// paginated by opts.Offset/opts.Limit. If opts.Text is non-empty, it performs
+// a semantic search first and ranks matches by relevance. All filter fields
+// (Path, IncludeKinds/ExcludeKinds, IncludeTypes/ExcludeTypes, Domain,
+// Entities, EpisodeOps) are applied; vector-search-only fields (QueryVec,
+// QueryByPath, MinSimilarity, GraphHops) are inert here.
+func (si *searchIndex) RecentFacts(ctx context.Context, branch string, opts SearchOptions) ([]RecentFactEntry, int, error) {
+	if opts.Text != "" {
+		return si.recentFactsSearch(ctx, branch, opts)
 	}
 
 	branchID, err := si.rh.branchID(ctx, branch)
@@ -34,21 +36,15 @@ func (si *searchIndex) RecentFacts(ctx context.Context, branch, pathPrefix, quer
 		return nil, 0, fmt.Errorf("RecentFacts: %w", err)
 	}
 
-	flt := newFactFilter(SearchQuery{
-		Path:         pathPrefix,
-		IncludeTypes: includeTypes,
-		ExcludeTypes: excludeTypes,
-		Domain:       domain,
-		Entities:     entities,
-	})
+	flt := newFactFilter(opts)
 
 	// Build the ep filter clause (operates on cl.operation from the LEFT JOIN).
 	epClause := ""
 	epArgs := []any{}
-	if len(epOps) > 0 {
-		ph := strings.Repeat("?,", len(epOps))
-		epArgs = make([]any, len(epOps))
-		for i, op := range epOps {
+	if len(opts.EpisodeOps) > 0 {
+		ph := strings.Repeat("?,", len(opts.EpisodeOps))
+		epArgs = make([]any, len(opts.EpisodeOps))
+		for i, op := range opts.EpisodeOps {
 			epArgs[i] = op
 		}
 		epClause = " AND COALESCE(cl.operation, '') IN (" + ph[:len(ph)-1] + ")"
@@ -67,7 +63,7 @@ func (si *searchIndex) RecentFacts(ctx context.Context, branch, pathPrefix, quer
 		return nil, 0, fmt.Errorf("RecentFacts count: %w", err)
 	}
 
-	queryArgs := append(append(append([]any{branchID}, flt.args...), epArgs...), limit, offset)
+	queryArgs := append(append(append([]any{branchID}, flt.args...), epArgs...), opts.Limit, opts.Offset)
 	rows, err := conn(ctx, si.rh.db).QueryContext(ctx,
 		`SELECT f.path, f.title, f.kind, f.type, COALESCE(cl.committed_at, 0), COALESCE(cl.operation, '')
 		 FROM branch_facts bf
@@ -96,22 +92,19 @@ func (si *searchIndex) RecentFacts(ctx context.Context, branch, pathPrefix, quer
 
 // recentFactsSearch uses semantic search to find matching facts, then returns
 // them ordered by committed_at with pagination.
-func (si *searchIndex) recentFactsSearch(ctx context.Context, branch, pathPrefix, query string, limit, offset int, includeTypes, excludeTypes, domain, entities, epOps []string) ([]RecentFactEntry, int, error) {
+func (si *searchIndex) recentFactsSearch(ctx context.Context, branch string, opts SearchOptions) ([]RecentFactEntry, int, error) {
 	branchID, err := si.rh.branchID(ctx, branch)
 	if err != nil {
 		return nil, 0, fmt.Errorf("RecentFacts search: %w", err)
 	}
 
-	results, err := si.Search(ctx, branch, SearchQuery{
-		Text:         query,
-		Path:         pathPrefix,
-		IncludeTypes: includeTypes,
-		ExcludeTypes: excludeTypes,
-		Domain:       domain,
-		Entities:     entities,
-		EpisodeOps:   epOps,
-		Limit:        500, // large enough to get all matches for pagination
-	})
+	// Override Limit for the search phase: we need a large candidate set so
+	// pagination by score/time below has enough rows to slice. The original
+	// opts.Limit/opts.Offset are applied to the final result list.
+	searchOpts := opts
+	searchOpts.Limit = 500
+	searchOpts.Offset = 0
+	results, err := si.Search(ctx, branch, searchOpts)
 	if err != nil {
 		return nil, 0, fmt.Errorf("RecentFacts search: %w", err)
 	}
@@ -171,14 +164,14 @@ func (si *searchIndex) recentFactsSearch(ctx context.Context, branch, pathPrefix
 	})
 
 	total := len(all)
-	if offset >= total {
+	if opts.Offset >= total {
 		return []RecentFactEntry{}, total, nil
 	}
-	end := offset + limit
+	end := opts.Offset + opts.Limit
 	if end > total {
 		end = total
 	}
-	return all[offset:end], total, nil
+	return all[opts.Offset:end], total, nil
 }
 
 // LastCommitForPath returns the commit hash of the most recent commit_log
@@ -209,8 +202,12 @@ func (si *searchIndex) LastCommitForPath(ctx context.Context, branch, path strin
 // (via embeddings), entity/domain/path/confidence filters, and cosine
 // similarity thresholds.
 
-// SearchQuery describes a hybrid search request.
-type SearchQuery struct {
+// SearchOptions is the unified options struct for fact queries — used by both
+// Search (vector/text ranking) and RecentFacts (time-ordered pagination).
+// Filter fields apply to both; semantic-search-only fields (QueryVec,
+// QueryByPath, MinSimilarity, GraphHops) are inert when passed to RecentFacts.
+// Pagination (Offset) is only consulted by RecentFacts.
+type SearchOptions struct {
 	Text          string
 	Entities      []string
 	Domain        []string
@@ -218,6 +215,7 @@ type SearchQuery struct {
 	MinConfidence float64
 	MinSimilarity float64   // cosine similarity threshold (0–1); 0 uses default 0.40
 	Limit         int
+	Offset        int       // RecentFacts pagination offset; ignored by Search
 	GraphHops     int       // number of graph traversal hops to expand results (0 = disabled)
 	QueryVec      []float32 // pre-computed embedding vector; if set, skips Embed(Text)
 	QueryByPath   string    // resolve query vector from this branch+path's stored embedding via SQL join; skips Embed(Text). Lower priority than QueryVec.
@@ -251,7 +249,7 @@ func (f *factFilter) add(clause string, args ...any) {
 
 func (f *factFilter) SQL() string { return strings.Join(f.clauses, "") }
 
-func newFactFilter(q SearchQuery) *factFilter {
+func newFactFilter(q SearchOptions) *factFilter {
 	f := &factFilter{}
 	if q.MinConfidence > 0 {
 		f.add(" AND f.confidence >= ?", q.MinConfidence)
@@ -388,7 +386,7 @@ func (si *searchIndex) filterByEpisodeOps(ctx context.Context, results []SearchR
 //
 // If Text is empty, all facts matching the non-text filters are returned with
 // score 100.
-func (si *searchIndex) Search(ctx context.Context, branch string, q SearchQuery) ([]SearchResult, error) {
+func (si *searchIndex) Search(ctx context.Context, branch string, q SearchOptions) ([]SearchResult, error) {
 	branchID, err := si.rh.branchID(ctx, branch)
 	if err != nil {
 		return nil, fmt.Errorf("search: %w", err)

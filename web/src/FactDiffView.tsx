@@ -122,6 +122,7 @@ function MetaPanel({ fact, side }: { fact: Fact | null; side: 'from' | 'to' }) {
         {side === 'from' ? 'before' : 'after'}
       </div>
       <div style={{ fontSize: 13, color: '#e6e6ea', marginBottom: 4 }}>{fact.title}</div>
+      <div style={{ fontSize: 11, color: '#a0a0a8' }}>kind: {fact.kind ?? '—'}</div>
       <div style={{ fontSize: 11, color: '#a0a0a8' }}>type: {fact.type ?? '—'}</div>
       <div style={{ fontSize: 11, color: '#a0a0a8' }}>domains: {fact.domain.join(', ') || '—'}</div>
       <div style={{ fontSize: 11, color: '#a0a0a8' }}>entities: {fact.entities.join(', ') || '—'}</div>

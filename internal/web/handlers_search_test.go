@@ -16,10 +16,10 @@ type stubSearchProvider struct {
 	results []store.SearchResult
 	err     error
 	// lastQuery lets tests assert what query was built
-	lastQuery store.SearchQuery
+	lastQuery store.SearchOptions
 }
 
-func (s *stubSearchProvider) Search(_ *repos.RepoInstance, _ store.Embedder, branch string, q store.SearchQuery) ([]store.SearchResult, error) {
+func (s *stubSearchProvider) Search(_ *repos.RepoInstance, _ store.Embedder, branch string, q store.SearchOptions) ([]store.SearchResult, error) {
 	s.lastQuery = q
 	return s.results, s.err
 }
@@ -176,6 +176,34 @@ func TestHandleSearch_EmptyResults(t *testing.T) {
 	}
 	if len(body.Embedded.Results) != 0 {
 		t.Errorf("results: %d, want 0", len(body.Embedded.Results))
+	}
+}
+
+// TestHandleSearch_KindFilterReachesProvider locks in that ?kind= /
+// ?exclude_kind= query params on /search reach SearchOptions.IncludeKinds /
+// ExcludeKinds. Regression: the filter was silently dropped, so a UI chip
+// like "kind:pragmatic" was returning every fact instead of pragmatic ones.
+func TestHandleSearch_KindFilterReachesProvider(t *testing.T) {
+	provider := &stubSearchProvider{}
+	s := &Server{
+		Manager:        newTestManagerWithRepos(t, "alpha"),
+		searchProvider: provider,
+	}
+	r := s.NewAPIRouter()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet,
+		"/repos/alpha/branches/agent:test/search?q=x&kind=pragmatic&exclude_kind=epistemic", nil)
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: %d, body=%s", rec.Code, rec.Body.String())
+	}
+	if got := provider.lastQuery.IncludeKinds; len(got) != 1 || got[0] != "pragmatic" {
+		t.Errorf("IncludeKinds: got %v, want [pragmatic]", got)
+	}
+	if got := provider.lastQuery.ExcludeKinds; len(got) != 1 || got[0] != "epistemic" {
+		t.Errorf("ExcludeKinds: got %v, want [epistemic]", got)
 	}
 }
 
