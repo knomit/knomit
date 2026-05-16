@@ -89,7 +89,7 @@ func hypothesizeStart(ctx context.Context, ri *repos.RepoInstance, s mcpStore, a
 
 	if watermark == "" {
 		// First run: search for all synthesis facts.
-		results, err := s.search.Search(ctx, agentBranch, store.SearchQuery{
+		results, err := s.search.Search(ctx, agentBranch, store.SearchOptions{
 			IncludeTypes: []string{"synthesis"},
 			Limit:        100000,
 		})

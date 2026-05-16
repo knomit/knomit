@@ -83,7 +83,7 @@ func applyGreedyMerges(pairs []mergePair) []mergePair {
 // commits the changes to git and the search index.
 // It returns the surviving cluster facts (after removing losers).
 //
-// Vector lookup uses SearchQuery.QueryByPath, which resolves each member's
+// Vector lookup uses SearchOptions.QueryByPath, which resolves each member's
 // stored vector via a SQL subquery in the sqlite-vec MATCH operand. No
 // ONNX inference runs in this pass — every cluster member is already an
 // indexed fact whose 768-dim vector lives in facts_vec from when it was
@@ -119,7 +119,7 @@ func dedupCluster(
 	g.SetLimit(maxConcurrentDedupSearches)
 	for _, fact := range cluster {
 		g.Go(func() error {
-			sq := store.SearchQuery{
+			sq := store.SearchOptions{
 				QueryByPath:   fact.File,
 				MinSimilarity: threshold,
 				Limit:         10,

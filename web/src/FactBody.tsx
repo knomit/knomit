@@ -18,8 +18,16 @@ export function FactBody({ fact, navigate, dispatch, readOnly }: Props) {
     <>
       {fact.type && (() => {
         const ts = typeStyles[fact.type] || defaultTypeStyle;
+        const isPragmatic = fact.kind === 'pragmatic';
         return (
-          <div style={{ marginBottom: 14 }}>
+          <div style={{ marginBottom: 14, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+            {isPragmatic && (
+              <span data-testid="fact-kind-badge" style={{
+                color: '#fc7', background: '#2e2614', fontSize: 9, padding: '2px 6px',
+                borderRadius: 3, fontFamily: 'monospace', letterSpacing: 0.5,
+                textTransform: 'uppercase',
+              }}>pragmatic</span>
+            )}
             <span data-testid="fact-type-badge" style={{
               color: ts.color, background: ts.bg, fontSize: 10, padding: '2px 8px',
               borderRadius: 3, fontFamily: 'monospace', letterSpacing: 0.5,

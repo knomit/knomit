@@ -35,7 +35,7 @@ export interface RepoInfo { name: string }
 
 export interface DirChild { name: string; is_dir: boolean; type?: string; title?: string; fullPath?: string }
 export interface BrowseResponse { path: string; children: DirChild[] }
-export interface Fact { path: string; title: string; type?: string; body: string; domain: string[]; confidence: number; sources: number; entities: string[]; refs: string[]; parse_error?: string; from_commit?: string; commit_hash?: string; commit_date?: string }
+export interface Fact { path: string; title: string; kind?: string; type?: string; body: string; domain: string[]; confidence: number; sources: number; entities: string[]; refs: string[]; parse_error?: string; from_commit?: string; commit_hash?: string; commit_date?: string }
 
 // normalizeFactResponse maps the new HAL FactView shape to the Fact interface.
 // The new API returns refs as [{raw, kind, _links}] and uses as_of.commit
@@ -48,6 +48,7 @@ function normalizeFactResponse(data: any): Fact {
   return {
     path: data.path,
     title: data.title,
+    kind: data.kind,
     type: data.type,
     body: data.body,
     domain: data.domain || [],
@@ -61,12 +62,12 @@ function normalizeFactResponse(data: any): Fact {
     commit_date: data.commit_date ?? data.as_of?.date,
   };
 }
-export interface SearchResult { path: string; title: string; body: string; score: number; type?: string; domain?: string[]; entities?: string[] }
+export interface SearchResult { path: string; title: string; body: string; score: number; kind?: string; type?: string; domain?: string[]; entities?: string[] }
 export interface HistoryEntry { commit: string; date: string; message: string }
 export interface FileCounts { added?: number; modified?: number; deleted?: number }
 export interface HistoryEntryWithTags { commit: string; date: string; message: string; operation?: string; files?: FileCounts }
 export interface HistoryResponse { entries: HistoryEntryWithTags[]; next?: string; prev?: string }
-export interface RecentFactEntry { path: string; title: string; type?: string; committed_at: number; operation?: string; score?: number }
+export interface RecentFactEntry { path: string; title: string; kind?: string; type?: string; committed_at: number; operation?: string; score?: number }
 export interface RecentResponse { facts: RecentFactEntry[]; total: number }
 export interface CommitFile { path: string; action: string; title?: string }
 export interface CommitDetail { commit: string; date: string; message: string; operation?: string; files: CommitFile[] }
@@ -95,10 +96,11 @@ export interface OriginSetResponse {
   head: string;
 }
 
-export interface RefVersion { commit: string; committed_at?: number; deleted?: boolean; type?: string }
+export interface RefVersion { commit: string; committed_at?: number; deleted?: boolean; kind?: string; type?: string }
 export interface RefGroup {
   path: string;
   title: string;
+  kind?: string;            // kind of the latest version
   type?: string;            // type of the latest version (UI uses this for chip color)
   versions: RefVersion[];   // newest-first
   deleted?: boolean;        // true if the latest version is deleted (target retracted)
@@ -178,12 +180,12 @@ export function parseFilterQuery(raw: string, lookupHead?: () => string): { chip
   });
 
   // Extract prefix:"quoted value" patterns first
-  remaining = remaining.replace(/(domain|entity|type|ep|path):"([^"]+)"/g, (_m, prefix, value) => {
+  remaining = remaining.replace(/(domain|entity|type|kind|ep|path):"([^"]+)"/g, (_m, prefix, value) => {
     chips.push({ category: prefix as FilterChip['category'], value });
     return '';
   });
   // Extract prefix:value patterns (no quotes, no spaces)
-  remaining = remaining.replace(/(domain|entity|type|ep|path):(\S+)/g, (_m, prefix, value) => {
+  remaining = remaining.replace(/(domain|entity|type|kind|ep|path):(\S+)/g, (_m, prefix, value) => {
     chips.push({ category: prefix as FilterChip['category'], value });
     return '';
   });
@@ -373,7 +375,7 @@ export const api = {
   },
 
   search: (repo: string, branch: string, q: string, path = '', minConfidence = 0,
-    opts?: { types?: string[]; eps?: string[]; domains?: string[]; entities?: string[] }
+    opts?: { types?: string[]; kinds?: string[]; excludeKinds?: string[]; eps?: string[]; domains?: string[]; entities?: string[] }
   ): Promise<{ results: SearchResult[] }> => {
     const { text, domains, entities } = parseSearchQuery(q);
     const allDomains = [...domains, ...(opts?.domains || [])];
@@ -385,6 +387,8 @@ export const api = {
     if (path) p.set('path', path);
     if (minConfidence) p.set('min_confidence', String(minConfidence));
     if (opts?.types?.length) p.set('type', opts.types.join(','));
+    if (opts?.kinds?.length) p.set('kind', opts.kinds.join(','));
+    if (opts?.excludeKinds?.length) p.set('exclude_kind', opts.excludeKinds.join(','));
     if (opts?.eps?.length) p.set('ep', opts.eps.join(','));
     return fetchJSON<any>(`${branchBase(repo, branch)}/search?${p}`).then(data => ({
       // HAL CollectionView: {_embedded: {results: [...]}}
@@ -448,12 +452,14 @@ export const api = {
     fetchJSON(`${branchBase(repo, branch)}/index-rebuilds`, { method: 'POST' }),
 
   recent: (repo: string, branch: string, path: string, query = '', limit = 50, offset = 0,
-    opts?: { typeFilter?: string; excludeType?: string; domains?: string[]; entities?: string[]; eps?: string[] }
+    opts?: { typeFilter?: string; excludeType?: string; kinds?: string[]; excludeKinds?: string[]; domains?: string[]; entities?: string[]; eps?: string[] }
   ): Promise<RecentResponse> => {
     const p = new URLSearchParams({ sort: 'recent', path, limit: String(limit), offset: String(offset) });
     if (query) p.set('q', query);
     if (opts?.typeFilter) p.set('type', opts.typeFilter);
     if (opts?.excludeType) p.set('exclude_type', opts.excludeType);
+    if (opts?.kinds?.length) p.set('kind', opts.kinds.join(','));
+    if (opts?.excludeKinds?.length) p.set('exclude_kind', opts.excludeKinds.join(','));
     if (opts?.domains?.length) p.set('domain', opts.domains.join(','));
     if (opts?.entities?.length) p.set('entities', opts.entities.join(','));
     if (opts?.eps?.length) p.set('ep', opts.eps.join(','));
@@ -509,7 +515,7 @@ export const api = {
     const factURL = commit
       ? `${branchBase(repo, branch)}/commits/${commit}/facts/${path}`
       : `${branchBase(repo, branch)}/facts/${path}`;
-    type RawRef = { path: string; title: string; type?: string; commit?: string; committed_at?: number; deleted?: boolean };
+    type RawRef = { path: string; title: string; kind?: string; type?: string; commit?: string; committed_at?: number; deleted?: boolean };
     const parseRefs = (data: any): RawRef[] => {
       // HAL CollectionView: {_embedded: {refs: [...]}}
       // Each ref carries a `commit` field pinning it to a specific version:
@@ -555,12 +561,14 @@ export const api = {
           commit: e.ref.commit ?? '',
           committed_at: e.ref.committed_at,
           deleted: e.ref.deleted,
+          kind: e.ref.kind,
           type: e.ref.type,
         }));
         const latestRef = sorted[0]?.ref;
         return {
           path: g.path,
           title: latestRef?.title ?? '',
+          kind: latestRef?.kind,
           type: latestRef?.type,
           versions,
           deleted: latestRef?.deleted ?? false,

@@ -63,7 +63,7 @@ func ScopedCluster(ctx context.Context,
 			// has a stored vector in facts_vec from when it was learned.
 			// One SQL statement (subquery resolves the source vector inside
 			// the MATCH operand) replaces an embedding inference + KNN.
-			results, err := idx.Search(gctx, agentBranch, store.SearchQuery{
+			results, err := idx.Search(gctx, agentBranch, store.SearchOptions{
 				QueryByPath:  seed.File,
 				Path:         cat,
 				Limit:        10,

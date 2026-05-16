@@ -137,6 +137,33 @@ export const UnknownIcon = ({ color, size = 14 }: IconProps) => (
   </svg>
 );
 
+// ---------- Pragmatic type icons (prescriptive: "what to do") ----------
+
+// policy: scales of justice — a rule that holds or doesn't.
+export const PolicyIcon = ({ color, size = 14 }: IconProps) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <line x1="12" y1="3" x2="12" y2="21"/>
+    <line x1="5" y1="6" x2="19" y2="6"/>
+    <path d="M5 6l-3 7a3 3 0 0 0 6 0z"/>
+    <path d="M19 6l-3 7a3 3 0 0 0 6 0z"/>
+  </svg>
+);
+
+// heuristic: sun/compass rose — directional, fallible guidance.
+export const HeuristicIcon = ({ color, size = 14 }: IconProps) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <circle cx="12" cy="12" r="4"/>
+    <line x1="12" y1="2"  x2="12" y2="5"/>
+    <line x1="12" y1="19" x2="12" y2="22"/>
+    <line x1="2"  y1="12" x2="5"  y2="12"/>
+    <line x1="19" y1="12" x2="22" y2="12"/>
+    <line x1="4.9"  y1="4.9"  x2="7"  y2="7"/>
+    <line x1="17"   y1="17"   x2="19.1" y2="19.1"/>
+    <line x1="4.9"  y1="19.1" x2="7"  y2="17"/>
+    <line x1="17"   y1="7"    x2="19.1" y2="4.9"/>
+  </svg>
+);
+
 // ---------- TypeIcon dispatcher ----------
 
 export function TypeIcon({ type, color, size = 12 }: { type: string; color: string; size?: number }) {
@@ -150,6 +177,8 @@ export function TypeIcon({ type, color, size = 12 }: { type: string; color: stri
     case 'synthesis': return <SynthesisIcon color={color} size={size} />;
     case 'hypothesis': return <HypothesisIcon color={color} size={size} />;
     case 'methodology': return <MethodologyIcon color={color} size={size} />;
+    case 'policy': return <PolicyIcon color={color} size={size} />;
+    case 'heuristic': return <HeuristicIcon color={color} size={size} />;
     default: return <UnknownIcon color={color} size={size} />;
   }
 }

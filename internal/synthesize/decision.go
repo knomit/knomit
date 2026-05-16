@@ -370,7 +370,7 @@ func ApplyReflectDecisions(
 		// Search will internally embed the Text via the configured
 		// embedder; if no embedder is wired up, this falls back to
 		// keyword/tag scoring — still a useful guard, just looser.
-		hits, err := idx.Search(ctx, branch, store.SearchQuery{
+		hits, err := idx.Search(ctx, branch, store.SearchOptions{
 			Text:          p.Title + "\n\n" + p.Body,
 			IncludeTypes:  []string{string(fact.Methodology)},
 			MinSimilarity: noveltyThreshold,

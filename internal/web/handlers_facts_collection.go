@@ -15,15 +15,14 @@ import (
 
 // factsCollectionProvider is the narrow interface the facts collection handler depends on.
 type factsCollectionProvider interface {
-	RecentFacts(ri *repos.RepoInstance, branch, pathPrefix, query string, limit, offset int, includeTypes, excludeTypes, domain, entities, epOps []string) ([]store.RecentFactEntry, int, error)
+	RecentFacts(ri *repos.RepoInstance, branch string, opts store.SearchOptions) ([]store.RecentFactEntry, int, error)
 }
 
 // defaultFactsCollectionProvider implements factsCollectionProvider using the store.
 type defaultFactsCollectionProvider struct{}
 
 func (defaultFactsCollectionProvider) RecentFacts(
-	ri *repos.RepoInstance, branch, pathPrefix, query string, limit, offset int,
-	includeTypes, excludeTypes, domain, entities, epOps []string,
+	ri *repos.RepoInstance, branch string, opts store.SearchOptions,
 ) ([]store.RecentFactEntry, int, error) {
 	var (
 		out   []store.RecentFactEntry
@@ -34,7 +33,7 @@ func (defaultFactsCollectionProvider) RecentFacts(
 		if svc == nil {
 			return
 		}
-		out, total, err = svc.Search().RecentFacts(contextTODO(), branch, pathPrefix, query, limit, offset, includeTypes, excludeTypes, domain, entities, epOps)
+		out, total, err = svc.Search().RecentFacts(contextTODO(), branch, opts)
 	})
 	return out, total, err
 }
@@ -97,15 +96,21 @@ func handleHALFactsCollection(b hal.URLBuilder, m *repos.Manager, provider facts
 			return out
 		}
 
-		pathPrefix := qp.Get("path")
-		query := qp.Get("q")
-		domain := splitCSV(qp.Get("domain"))
-		entities := splitCSV(qp.Get("entities"))
-		includeTypes := splitCSV(qp.Get("type"))
-		excludeTypes := splitCSV(qp.Get("exclude_type"))
-		epOps := splitCSV(qp.Get("ep"))
+		opts := store.SearchOptions{
+			Path:         qp.Get("path"),
+			Text:         qp.Get("q"),
+			Limit:        limit,
+			Offset:       offset,
+			Domain:       splitCSV(qp.Get("domain")),
+			Entities:     splitCSV(qp.Get("entities")),
+			IncludeTypes: splitCSV(qp.Get("type")),
+			ExcludeTypes: splitCSV(qp.Get("exclude_type")),
+			IncludeKinds: splitCSV(qp.Get("kind")),
+			ExcludeKinds: splitCSV(qp.Get("exclude_kind")),
+			EpisodeOps:   splitCSV(qp.Get("ep")),
+		}
 
-		entries, total, err := provider.RecentFacts(ri, branch, pathPrefix, query, limit, offset, includeTypes, excludeTypes, domain, entities, epOps)
+		entries, total, err := provider.RecentFacts(ri, branch, opts)
 		if err != nil {
 			writeStoreError(w, r, err, "Failed to list facts", branch)
 			return

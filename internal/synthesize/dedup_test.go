@@ -17,7 +17,7 @@ type ctxCapturingSearchIndex struct {
 	gotCtx context.Context
 }
 
-func (s *ctxCapturingSearchIndex) Search(ctx context.Context, branch string, q store.SearchQuery) ([]store.SearchResult, error) {
+func (s *ctxCapturingSearchIndex) Search(ctx context.Context, branch string, q store.SearchOptions) ([]store.SearchResult, error) {
 	s.called++
 	s.gotCtx = ctx
 	if err := ctx.Err(); err != nil {
@@ -30,7 +30,7 @@ func (s *ctxCapturingSearchIndex) Search(ctx context.Context, branch string, q s
 // dedupCluster used to take an `embedders ...store.Embedder` variadic and
 // run ONNX inference on every cluster member's title+body — even though
 // each fact already has a 768-dim vector in facts_vec. The function now
-// resolves vectors via SearchQuery.QueryByPath (a SQL subquery in the
+// resolves vectors via SearchOptions.QueryByPath (a SQL subquery in the
 // MATCH operand). If anyone re-introduces an embedder dependency, this
 // test stops compiling.
 //

@@ -16,14 +16,16 @@ import (
 
 // stubFactsCollectionProvider implements factsCollectionProvider for tests.
 type stubFactsCollectionProvider struct {
-	entries []store.RecentFactEntry
-	total   int
-	err     error
+	entries  []store.RecentFactEntry
+	total    int
+	err      error
+	lastOpts store.SearchOptions
 }
 
 func (s *stubFactsCollectionProvider) RecentFacts(
-	_ *repos.RepoInstance, _, _, _ string, _, _ int, _, _, _, _, _ []string,
+	_ *repos.RepoInstance, _ string, opts store.SearchOptions,
 ) ([]store.RecentFactEntry, int, error) {
+	s.lastOpts = opts
 	return s.entries, s.total, s.err
 }
 
@@ -171,6 +173,27 @@ func TestHandleHALFactsCollection_KindSerialization(t *testing.T) {
 
 	// Second fact is pragmatic — "kind" must be present and equal "pragmatic".
 	require.Equal(t, "pragmatic", body.Embedded.Facts[1]["kind"], "pragmatic fact must carry kind=pragmatic")
+}
+
+// TestHandleHALFactsCollection_KindFilterReachesProvider verifies that the
+// ?kind= / ?exclude_kind= query params are parsed into SearchOptions.IncludeKinds
+// / ExcludeKinds and reach the provider unchanged.
+func TestHandleHALFactsCollection_KindFilterReachesProvider(t *testing.T) {
+	provider := &stubFactsCollectionProvider{}
+	s := &Server{
+		Manager:                 newTestManagerWithRepos(t, "alpha"),
+		factsCollectionProvider: provider,
+	}
+	r := s.NewAPIRouter()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet,
+		"/repos/alpha/branches/agent:test/facts?kind=pragmatic&exclude_kind=epistemic", nil)
+	r.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Equal(t, []string{"pragmatic"}, provider.lastOpts.IncludeKinds)
+	require.Equal(t, []string{"epistemic"}, provider.lastOpts.ExcludeKinds)
 }
 
 func TestHandleHALFactsCollection_UnknownRepo_Returns404(t *testing.T) {

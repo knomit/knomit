@@ -130,8 +130,11 @@ func TestApplyReflect_AppliesPropose(t *testing.T) {
 	require.NoError(t, err)
 
 	// Locate the written fact via search; assert it's of type=methodology.
-	entries, _, err := svc.Search().RecentFacts(ctx, branch, "kb/meta/reasoning",
-		"", 50, 0, []string{"methodology"}, nil, nil, nil, nil)
+	entries, _, err := svc.Search().RecentFacts(ctx, branch, store.SearchOptions{
+		Path:         "kb/meta/reasoning",
+		Limit:        50,
+		IncludeTypes: []string{"methodology"},
+	})
 	require.NoError(t, err)
 	require.NotEmpty(t, entries, "propose must result in a methodology fact under kb/meta/reasoning")
 
@@ -183,8 +186,11 @@ func TestApplyReflect_RejectsProposeTooSimilar(t *testing.T) {
 	require.Contains(t, strings.ToLower(err.Error()), "similar")
 
 	// No methodology fact written under meta/reasoning beyond the seeded one.
-	entries, _, err := svc.Search().RecentFacts(ctx, sess.Branch, "kb/meta/reasoning",
-		"", 50, 0, []string{"methodology"}, nil, nil, nil, nil)
+	entries, _, err := svc.Search().RecentFacts(ctx, sess.Branch, store.SearchOptions{
+		Path:         "kb/meta/reasoning",
+		Limit:        50,
+		IncludeTypes: []string{"methodology"},
+	})
 	require.NoError(t, err)
 	require.Len(t, entries, 1, "only the pre-seeded methodology should exist; rejected propose must not write")
 }

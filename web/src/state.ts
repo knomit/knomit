@@ -1,7 +1,7 @@
 export type View = 'tree' | 'chrono' | 'history';
 
 export interface FilterChip {
-  category: 'domain' | 'entity' | 'type' | 'ep' | 'path';
+  category: 'domain' | 'entity' | 'type' | 'kind' | 'ep' | 'path';
   value: string;
 }
 

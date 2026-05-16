@@ -200,7 +200,7 @@ func LearnHandler(embedders ...store.BatchEmbedder) func(context.Context, mcpgo.
 		}
 		for i, f := range facts {
 			categoryDir := f.Path()[:strings.LastIndex(f.Path(), "/")]
-			sq := store.SearchQuery{
+			sq := store.SearchOptions{
 				Text:          f.Title + " " + f.Body,
 				Path:          categoryDir,
 				MinSimilarity: dedupThreshold,
