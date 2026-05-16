@@ -11,7 +11,7 @@ import type { NavRequest } from './useNavigationManager';
 import { FactDiffView } from './FactDiffView';
 import { FactBody, StatBox, TagCloud } from './FactBody';
 
-function renderFact(fact: Fact, navigate: (req: NavRequest) => void, dispatch: Dispatch<Action>, onRetract?: () => void, onExplain?: () => void, readOnly = false, anchorCommit?: string | null) {
+function renderFact(fact: Fact, navigate: (req: NavRequest) => void, dispatch: Dispatch<Action>, onRetract?: () => void, onExplain?: (path: string, commit: string | null) => void, explainAnchorCommit?: string | null, readOnly = false, anchorCommit?: string | null) {
   const retractDisabled = readOnly;
   const retractTitle = retractDisabled ? READ_ONLY_TITLE : 'Retract fact';
   const retractColor = retractDisabled ? '#444' : '#f66';
@@ -56,7 +56,7 @@ function renderFact(fact: Fact, navigate: (req: NavRequest) => void, dispatch: D
               <button
                 data-testid="explain-btn"
                 title="Explain"
-                onClick={onExplain}
+                onClick={() => onExplain(fact.path, explainAnchorCommit ?? null)}
                 style={{ background: 'none', border: 'none', padding: 2, color: '#8af', cursor: 'pointer', display: 'flex', alignItems: 'center', opacity: 0.6 }}
                 onMouseEnter={e => { (e.currentTarget as HTMLElement).style.opacity = '1'; }}
                 onMouseLeave={e => { (e.currentTarget as HTMLElement).style.opacity = '0.6'; }}
@@ -93,7 +93,12 @@ function renderFact(fact: Fact, navigate: (req: NavRequest) => void, dispatch: D
         </div>
       </div>
 
-      <FactBody fact={fact} navigate={navigate} dispatch={dispatch} readOnly={readOnly} />
+      <FactBody
+        fact={fact}
+        dispatch={dispatch}
+        readOnly={readOnly}
+        onRefClick={onExplain ? (refPath) => onExplain(refPath, fact.commit_hash ?? null) : undefined}
+      />
     </div>
   );
 }
@@ -582,10 +587,11 @@ export function RightPanel({ state, dispatch, navigate, onExplain }: {
           navigate,
           dispatch,
           showRetract ? () => { if (!readOnly) setConfirmRetract(true); } : undefined,
+          onExplain,
           // Explain is a read-only action and works at any anchor. In history
           // view we open the commit-anchored explain so in/out edges reflect
           // the displayed version, not HEAD.
-          onExplain ? () => onExplain(fact.path, state.view === 'history' ? (fact.commit_hash ?? null) : null) : undefined,
+          state.view === 'history' ? (fact.commit_hash ?? null) : null,
           readOnly,
           // Only pass the anchor in history+scrubbed mode — the retracted-
           // version badge is only meaningful there. In live/diff/tree the
