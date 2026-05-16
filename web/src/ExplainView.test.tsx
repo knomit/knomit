@@ -331,3 +331,37 @@ describe('ExplainView header strips', () => {
     expect(await screen.findByText('Source')).toBeInTheDocument();
   });
 });
+
+describe('ExplainView fact fetch', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('passes fallback: "before" so retracted refs show their last known version', async () => {
+    (api.fact as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+      path: 'kb/retracted.md', title: 'Retracted Target', body: 'pre-retraction body',
+      domain: [], confidence: 0.5, sources: 1, entities: [], refs: [],
+      commit_hash: 'older1234',
+    });
+    (api.explain as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({ incoming: [], outgoing: [] });
+
+    render(
+      <ExplainView
+        repo="knomit"
+        branch="machine/test"
+        initialEntry={{ path: 'kb/retracted.md', commit: 'parentcommit' }}
+        onClose={() => {}}
+      />
+    );
+
+    await waitFor(() => {
+      expect(api.fact).toHaveBeenCalledWith(
+        'knomit',
+        'machine/test',
+        'kb/retracted.md',
+        'parentcommit',
+        { fallback: 'before' }
+      );
+    });
+  });
+});

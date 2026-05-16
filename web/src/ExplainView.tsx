@@ -32,7 +32,7 @@ export function ExplainView({ repo, branch, initialEntry, onClose }: Props) {
     setIncoming([]);
     setOutgoing([]);
 
-    const factPromise = api.fact(repo, branch, current.path, current.commit ?? undefined);
+    const factPromise = api.fact(repo, branch, current.path, current.commit ?? undefined, { fallback: 'before' });
     const explainPromise = api.explain(repo, branch, current.path, current.commit ?? undefined);
 
     Promise.all([factPromise, explainPromise])
