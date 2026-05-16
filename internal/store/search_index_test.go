@@ -83,6 +83,7 @@ func TestRebuild_RepopulatesDomainAndEntityJunctions(t *testing.T) {
 		f.Sources = 1
 		f.Domain = domains
 		f.Entities = entities
+		f.Type = fact.Observation
 		out, err := fact.SerializeFact(f)
 		require.NoError(t, err)
 		return out

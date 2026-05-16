@@ -13,6 +13,7 @@ import (
 type RecentFactEntry struct {
 	Path        string  `json:"path"`
 	Title       string  `json:"title"`
+	Kind        string  `json:"kind"`
 	Type        string  `json:"type"`
 	CommittedAt int64   `json:"committed_at"`
 	Operation   string  `json:"operation,omitempty"`
@@ -68,7 +69,7 @@ func (si *searchIndex) RecentFacts(ctx context.Context, branch, pathPrefix, quer
 
 	queryArgs := append(append(append([]any{branchID}, flt.args...), epArgs...), limit, offset)
 	rows, err := conn(ctx, si.rh.db).QueryContext(ctx,
-		`SELECT f.path, f.title, f.type, COALESCE(cl.committed_at, 0), COALESCE(cl.operation, '')
+		`SELECT f.path, f.title, f.kind, f.type, COALESCE(cl.committed_at, 0), COALESCE(cl.operation, '')
 		 FROM branch_facts bf
 		 JOIN facts f ON f.id = bf.fact_id
 		 LEFT JOIN commit_log cl ON bf.commit_hash = cl.commit_hash AND f.path = cl.path
@@ -85,7 +86,7 @@ func (si *searchIndex) RecentFacts(ctx context.Context, branch, pathPrefix, quer
 	var entries []RecentFactEntry
 	for rows.Next() {
 		var e RecentFactEntry
-		if err := rows.Scan(&e.Path, &e.Title, &e.Type, &e.CommittedAt, &e.Operation); err != nil {
+		if err := rows.Scan(&e.Path, &e.Title, &e.Kind, &e.Type, &e.CommittedAt, &e.Operation); err != nil {
 			return nil, 0, fmt.Errorf("RecentFacts scan: %w", err)
 		}
 		entries = append(entries, e)
@@ -130,7 +131,7 @@ func (si *searchIndex) recentFactsSearch(ctx context.Context, branch, pathPrefix
 	}
 
 	rows, err := conn(ctx, si.rh.db).QueryContext(ctx,
-		`SELECT f.path, f.title, f.type, COALESCE(cl.committed_at, 0), COALESCE(cl.operation, '')
+		`SELECT f.path, f.title, f.kind, f.type, COALESCE(cl.committed_at, 0), COALESCE(cl.operation, '')
 		 FROM branch_facts bf
 		 JOIN facts f ON f.id = bf.fact_id
 		 LEFT JOIN commit_log cl ON bf.commit_hash = cl.commit_hash AND f.path = cl.path
@@ -146,7 +147,7 @@ func (si *searchIndex) recentFactsSearch(ctx context.Context, branch, pathPrefix
 	var all []RecentFactEntry
 	for rows.Next() {
 		var e RecentFactEntry
-		if err := rows.Scan(&e.Path, &e.Title, &e.Type, &e.CommittedAt, &e.Operation); err != nil {
+		if err := rows.Scan(&e.Path, &e.Title, &e.Kind, &e.Type, &e.CommittedAt, &e.Operation); err != nil {
 			return nil, 0, fmt.Errorf("RecentFacts search scan: %w", err)
 		}
 		e.Score = scoreByPath[e.Path]
@@ -222,6 +223,8 @@ type SearchQuery struct {
 	QueryByPath   string    // resolve query vector from this branch+path's stored embedding via SQL join; skips Embed(Text). Lower priority than QueryVec.
 	IncludeTypes  []string  // only return facts with these types (empty = all)
 	ExcludeTypes  []string  // exclude facts with these types
+	IncludeKinds  []string  // only return facts with these kinds (empty = all)
+	ExcludeKinds  []string  // exclude facts with these kinds
 	EpisodeOps    []string  // filter by episode operation type (e.g. "learn", "update", "retract"); filtered post-query in Go
 }
 
@@ -271,6 +274,22 @@ func newFactFilter(q SearchQuery) *factFilter {
 			args[i] = t
 		}
 		f.add(" AND f.type NOT IN ("+ph[:len(ph)-1]+")", args...)
+	}
+	if len(q.IncludeKinds) > 0 {
+		ph := strings.Repeat("?,", len(q.IncludeKinds))
+		args := make([]any, len(q.IncludeKinds))
+		for i, t := range q.IncludeKinds {
+			args[i] = t
+		}
+		f.add(" AND f.kind IN ("+ph[:len(ph)-1]+")", args...)
+	}
+	if len(q.ExcludeKinds) > 0 {
+		ph := strings.Repeat("?,", len(q.ExcludeKinds))
+		args := make([]any, len(q.ExcludeKinds))
+		for i, t := range q.ExcludeKinds {
+			args[i] = t
+		}
+		f.add(" AND f.kind NOT IN ("+ph[:len(ph)-1]+")", args...)
 	}
 	if len(q.Entities) > 0 {
 		ph := strings.Repeat("?,", len(q.Entities))
@@ -386,7 +405,7 @@ func (si *searchIndex) Search(ctx context.Context, branch string, q SearchQuery)
 	if q.Text == "" && q.QueryByPath == "" && len(q.QueryVec) == 0 {
 		args := append(append([]any{blobObjectType, branchID}, flt.args...), limit)
 		rows, err := conn(ctx, si.rh.db).QueryContext(ctx,
-			`SELECT f.path, f.title, f.blob_hash, f.type, f.domain, f.entities,
+			`SELECT f.path, f.title, f.blob_hash, f.kind, f.type, f.domain, f.entities,
 			        f.confidence, f.sources, f.refs, f.evidence_weight,
 			        bf.commit_hash, o.data
 			 FROM branch_facts bf
@@ -543,7 +562,7 @@ func (si *searchIndex) Search(ctx context.Context, branch string, q SearchQuery)
 	}
 
 	metaRows, err := conn(ctx, si.rh.db).QueryContext(ctx,
-		`SELECT f.path, f.title, f.blob_hash, f.type, f.domain, f.entities,
+		`SELECT f.path, f.title, f.blob_hash, f.kind, f.type, f.domain, f.entities,
 		        f.confidence, f.sources, f.refs, f.evidence_weight
 		 FROM branch_facts bf
 		 JOIN facts f ON f.id = bf.fact_id

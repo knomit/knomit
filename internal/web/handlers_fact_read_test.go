@@ -50,7 +50,7 @@ func TestHandleHALFact_ReturnsHALEnvelope(t *testing.T) {
 	f := knomitfact.NewFact("know/ai/ml/abc12345.md")
 	f.Title = "Attention"
 	f.Body = "Body"
-	f.Type = knomitfact.EpistemicType("observation")
+	f.Type = knomitfact.Type("observation")
 	f.Domain = []string{"ai"}
 	f.Entities = []string{"transformer"}
 	f.Refs = []string{"know/ai/ml/xyz99999.md"}

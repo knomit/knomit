@@ -7,13 +7,15 @@ import (
 
 	knomitfact "knomit/internal/fact"
 	"knomit/internal/web/hal"
+
+	"github.com/stretchr/testify/require"
 )
 
 func makeTestFact() knomitfact.Fact {
 	f := knomitfact.NewFact("know/ai/ml/abc12345.md")
 	f.Title = "Attention is all you need"
 	f.Body = "Body goes here."
-	f.Type = knomitfact.EpistemicType("observation")
+	f.Type = knomitfact.Type("observation")
 	f.Domain = []string{"ai", "ml"}
 	f.Entities = []string{"transformer"}
 	f.Refs = []string{"know/ai/ml/xyz99999.md", "https://arxiv.org/abs/1706.03762"}
@@ -118,6 +120,56 @@ func TestFactView_AsOf_CommitAnchoredUsesAnchorCommit(t *testing.T) {
 	if view.AsOf.Branch != "agent/test" || view.AsOf.Commit != "abc123" {
 		t.Errorf("as_of: %+v, want {agent/test, abc123}", view.AsOf)
 	}
+}
+
+// TestFactView_Kind_PragmaticSerializes ensures a pragmatic fact serializes
+// with "kind":"pragmatic" on the wire.
+func TestFactView_Kind_PragmaticSerializes(t *testing.T) {
+	b := hal.URLBuilder{Base: "/api/v1"}
+	a := hal.Anchor{Branch: "agent/test"}
+	resolver := &stubRefResolver{}
+
+	f := knomitfact.NewFact("know/ops/abc12345.md")
+	f.Title = "Always pin container images"
+	f.Body = "Body."
+	f.Kind = knomitfact.Pragmatic
+	f.Type = knomitfact.Policy
+	f.Domain = []string{"ops"}
+	f.Confidence = 0.9
+	f.Sources = 1
+
+	view := BuildFactView(b, "alpha", a, "deadbeef", f, resolver)
+	require.Equal(t, "pragmatic", view.Kind, "FactView.Kind should mirror fact.Kind")
+
+	raw, err := json.Marshal(view)
+	require.NoError(t, err)
+	var decoded map[string]interface{}
+	require.NoError(t, json.Unmarshal(raw, &decoded))
+	require.Equal(t, "pragmatic", decoded["kind"], "pragmatic kind must appear at top level of JSON: %v", decoded)
+}
+
+// TestFactView_Kind_EpistemicOmitted ensures an epistemic (default) fact
+// serializes WITHOUT a top-level "kind" field, matching
+// fact.Fact.MarshalJSON behavior. Round-trips through a map[string]any so
+// the assertion is robust against unrelated "kind" sub-keys inside refs.
+func TestFactView_Kind_EpistemicOmitted(t *testing.T) {
+	b := hal.URLBuilder{Base: "/api/v1"}
+	a := hal.Anchor{Branch: "agent/test"}
+	resolver := &stubRefResolver{}
+
+	// Explicit epistemic — should still elide on the wire.
+	f := makeTestFact()
+	f.Kind = knomitfact.Epistemic
+
+	view := BuildFactView(b, "alpha", a, "deadbeef", f, resolver)
+	require.Equal(t, "", view.Kind, "epistemic Kind must be elided to empty string for omitempty")
+
+	raw, err := json.Marshal(view)
+	require.NoError(t, err)
+	var decoded map[string]interface{}
+	require.NoError(t, json.Unmarshal(raw, &decoded))
+	_, hasKind := decoded["kind"]
+	require.False(t, hasKind, "epistemic fact must not carry top-level kind field: %v", decoded)
 }
 
 func TestBuildFactLinks_CommitAnchoredHasIncoming(t *testing.T) {

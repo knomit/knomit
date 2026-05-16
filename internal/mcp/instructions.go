@@ -55,16 +55,23 @@ Avoid flat categories. "technology" + "react" is too shallow — prefer "technol
 ## Fact Frontmatter
 
 Each fact has YAML frontmatter with:
-- **type**: epistemic type (defaults to "observation" if omitted):
-  - observation: concrete, specific statements ("Alice likes Japanese tea")
-  - concept: definitions, mental models ("Japanese tea culture emphasizes mindfulness")
-  - process: procedures, workflows, how-to ("How to brew matcha")
-  - principle: rules, heuristics, causal claims ("Brew below boiling to avoid bitterness")
-  - pattern: recurring solutions, idioms ("When X, do Y")
-  - reference: specs, measurements, enumerations ("Sencha steeps at 70°C for 60s")
-  - synthesis: higher-order facts derived from other facts (set automatically by the synthesize pipeline)
-  - hypothesis: predictions derived from patterns — carries inherent uncertainty, not grounded in direct observation
-  - methodology: reasoning process lessons learned from hypothesis outcomes (lives in meta/reasoning/)
+- **kind**: classification family (defaults to "epistemic" if omitted):
+  - epistemic: descriptive knowledge — what is
+  - pragmatic: prescriptive knowledge — what to do
+- **type**: leaf type within the chosen kind. Allowed values depend on kind.
+  - epistemic types (default "observation" if omitted):
+    - observation: concrete, specific statements ("Alice likes Japanese tea")
+    - concept: definitions, mental models ("Japanese tea culture emphasizes mindfulness")
+    - process: procedures, workflows, how-to ("How to brew matcha")
+    - principle: rules, causal claims ("Brew below boiling to avoid bitterness")
+    - pattern: recurring solutions, idioms ("When X, do Y")
+    - reference: specs, measurements, enumerations ("Sencha steeps at 70°C for 60s")
+    - synthesis: higher-order facts derived from other facts (set automatically by the synthesize pipeline)
+    - hypothesis: predictions derived from patterns — carries inherent uncertainty, not grounded in direct observation
+    - methodology: reasoning process lessons learned from hypothesis outcomes (lives in meta/reasoning/)
+  - pragmatic types (must be specified — no default):
+    - policy: mandatory rule that should always be followed ("Always rotate secrets quarterly")
+    - heuristic: rule-of-thumb to bias decisions, not absolute ("Prefer small PRs")
 - **domain**: cross-cutting tags from additional classification systems (not the primary ontology path)
 - **entities**: all entities this fact mentions (for search and graph queries)
 - **confidence**: 0.0–1.0 certainty level

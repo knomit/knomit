@@ -35,7 +35,7 @@ func newReviewerForMethodologyTest(t *testing.T, minScore float64) (*Reviewer, *
 	return NewReviewer(ri, nil), svc
 }
 
-func writeFactForTest(t *testing.T, svc *store.Service, branch, path, title, body string, ftype fact.EpistemicType, doms, ents []string) {
+func writeFactForTest(t *testing.T, svc *store.Service, branch, path, title, body string, ftype fact.Type, doms, ents []string) {
 	t.Helper()
 	f := fact.NewFact(path)
 	f.Title = title

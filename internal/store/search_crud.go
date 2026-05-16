@@ -50,6 +50,10 @@ func (si *searchIndex) upsert(ctx context.Context, branch, commitHash string, re
 	if factType == "" {
 		factType = "observation"
 	}
+	factKind := rec.Kind
+	if factKind == "" {
+		factKind = "epistemic"
+	}
 
 	// Embedding is computed below, AFTER the COW check, so we don't pay
 	// ONNX inference cost for facts whose (path, blob_hash) is already
@@ -67,9 +71,9 @@ func (si *searchIndex) upsert(ctx context.Context, branch, commitHash string, re
 
 	// Atomic: insert fact if it doesn't exist yet (no TOCTOU race).
 	_, err = db.ExecContext(ctx,
-		`INSERT OR IGNORE INTO facts(path, blob_hash, title, type, domain, entities, confidence, sources, refs, evidence_weight)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		rec.Path, rec.BlobHash, rec.Title, factType,
+		`INSERT OR IGNORE INTO facts(path, blob_hash, title, kind, type, domain, entities, confidence, sources, refs, evidence_weight)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		rec.Path, rec.BlobHash, rec.Title, factKind, factType,
 		string(domainJSON), string(entitiesJSON),
 		rec.Confidence, rec.Sources,
 		string(refsJSON), rec.EvidenceWeight,
@@ -360,7 +364,7 @@ func (si *searchIndex) GetByPath(ctx context.Context, branch, path string) (*Fac
 		return nil, fmt.Errorf("getByPath: %w", err)
 	}
 	row := conn(ctx, si.rh.db).QueryRowContext(ctx,
-		`SELECT f.path, f.title, f.blob_hash, f.type, f.domain, f.entities,
+		`SELECT f.path, f.title, f.blob_hash, f.kind, f.type, f.domain, f.entities,
 		        f.confidence, f.sources, f.refs, f.evidence_weight,
 		        bf.commit_hash, o.data, cl.committed_at
 		 FROM branch_facts bf
@@ -397,7 +401,7 @@ func (si *searchIndex) getEmbeddingByFact(ctx context.Context, path, blobHash st
 }
 
 // scanFactWithBody scans a FactWithBody from a *sql.Row (branch_facts JOIN facts JOIN objects LEFT JOIN commit_log).
-// Expected column order: path, title, blob_hash, type, domain, entities,
+// Expected column order: path, title, blob_hash, kind, type, domain, entities,
 // confidence, sources, refs, evidence_weight, commit_hash, data, committed_at.
 func scanFactWithBody(row *sql.Row) (*FactWithBody, error) {
 	var f FactWithBody
@@ -405,7 +409,7 @@ func scanFactWithBody(row *sql.Row) (*FactWithBody, error) {
 	var rawData []byte
 	var committedAt sql.NullInt64
 	err := row.Scan(
-		&f.Path, &f.Title, &f.BlobHash, &f.Type,
+		&f.Path, &f.Title, &f.BlobHash, &f.Kind, &f.Type,
 		&domainJSON, &entitiesJSON,
 		&f.Confidence, &f.Sources,
 		&refsJSON, &f.EvidenceWeight, &f.CommitHash, &rawData, &committedAt,
@@ -427,13 +431,13 @@ func scanFactWithBody(row *sql.Row) (*FactWithBody, error) {
 }
 
 // scanFactRecordFromRows scans a FactRecord from *sql.Rows (used in multi-row queries).
-// Expected column order: path, title, blob_hash, type, domain, entities,
-// confidence, sources, refs, evidence_weight (10 columns, no commit_hash).
+// Expected column order: path, title, blob_hash, kind, type, domain, entities,
+// confidence, sources, refs, evidence_weight (11 columns, no commit_hash).
 func scanFactRecordFromRows(rows *sql.Rows) (*FactRecord, error) {
 	var rec FactRecord
 	var domainJSON, entitiesJSON, refsJSON string
 	err := rows.Scan(
-		&rec.Path, &rec.Title, &rec.BlobHash, &rec.Type,
+		&rec.Path, &rec.Title, &rec.BlobHash, &rec.Kind, &rec.Type,
 		&domainJSON, &entitiesJSON,
 		&rec.Confidence, &rec.Sources,
 		&refsJSON, &rec.EvidenceWeight,
@@ -448,14 +452,14 @@ func scanFactRecordFromRows(rows *sql.Rows) (*FactRecord, error) {
 }
 
 // scanFactWithBodyFromRows scans a FactWithBody from *sql.Rows (branch_facts JOIN facts JOIN objects).
-// Expected column order: path, title, blob_hash, type, domain, entities,
+// Expected column order: path, title, blob_hash, kind, type, domain, entities,
 // confidence, sources, refs, evidence_weight, commit_hash, data.
 func scanFactWithBodyFromRows(rows *sql.Rows) (*FactWithBody, error) {
 	var f FactWithBody
 	var domainJSON, entitiesJSON, refsJSON string
 	var rawData []byte
 	err := rows.Scan(
-		&f.Path, &f.Title, &f.BlobHash, &f.Type,
+		&f.Path, &f.Title, &f.BlobHash, &f.Kind, &f.Type,
 		&domainJSON, &entitiesJSON,
 		&f.Confidence, &f.Sources,
 		&refsJSON, &f.EvidenceWeight, &f.CommitHash, &rawData,

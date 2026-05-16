@@ -23,6 +23,7 @@ type FactRecord struct {
 	Path           string   `json:"path"`
 	Title          string   `json:"title"`
 	BlobHash       string   `json:"blob_hash"`
+	Kind           string   `json:"kind"`
 	Type           string   `json:"type"`
 	Domain         []string `json:"domain"`
 	Entities       []string `json:"entities"`
@@ -35,11 +36,21 @@ type FactRecord struct {
 
 // NewFactRecord constructs a FactRecord from a parsed fact and git metadata.
 // blobHash is the blob SHA returned by WriteFile.
+//
+// Kind is normalized at this boundary: a zero-value fact.Kind (e.g. from a
+// pre-Kind-aware caller) is canonicalized to fact.DefaultKind so the
+// in-memory FactRecord always carries the same value the SQL row will
+// carry under the column's DEFAULT.
 func NewFactRecord(f fact.Fact, blobHash string) FactRecord {
+	kind := f.Kind
+	if kind == "" {
+		kind = fact.DefaultKind
+	}
 	return FactRecord{
 		Path:           f.Path(),
 		Title:          f.Title,
 		BlobHash:       blobHash,
+		Kind:           string(kind),
 		Type:           string(f.Type),
 		Domain:         f.Domain,
 		Entities:       f.Entities,
@@ -107,7 +118,9 @@ func (si *searchIndex) Completions(ctx context.Context, branch, category, prefix
 			 WHERE bf.branch_id = ? AND fe.entity LIKE ? LIMIT ?`,
 			branchID, prefix+"%", limit)
 	case "type":
-		return []string{"observation", "concept", "process", "principle", "pattern", "reference", "synthesis", "hypothesis", "methodology"}, nil
+		return []string{"observation", "concept", "process", "principle", "pattern", "reference", "synthesis", "hypothesis", "methodology", "policy", "heuristic"}, nil
+	case "kind":
+		return []string{"epistemic", "pragmatic"}, nil
 	case "ep":
 		return []string{"learn", "update", "retract", "subsume", "synthesize", "sync"}, nil
 	case "path":

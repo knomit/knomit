@@ -7,6 +7,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	knomitfact "knomit/internal/fact"
 	"knomit/internal/repos"
 	"knomit/internal/store"
 	"knomit/internal/web/hal"
@@ -42,6 +43,7 @@ func (defaultFactsCollectionProvider) RecentFacts(
 type recentFactItem struct {
 	Path        string      `json:"path"`
 	Title       string      `json:"title"`
+	Kind        string      `json:"kind,omitempty"` // omitted when epistemic (the default)
 	Type        string      `json:"type,omitempty"`
 	CommittedAt int64       `json:"committed_at,omitempty"`
 	Operation   string      `json:"operation,omitempty"`
@@ -137,9 +139,16 @@ func handleHALFactsCollection(b hal.URLBuilder, m *repos.Manager, provider facts
 
 		items := make([]recentFactItem, 0, len(entries))
 		for _, e := range entries {
+			// Mirror fact.Fact.MarshalJSON: elide Kind when it equals the
+			// default (epistemic) so the field is omitted on the wire.
+			kind := e.Kind
+			if knomitfact.Kind(kind) == knomitfact.DefaultKind {
+				kind = ""
+			}
 			items = append(items, recentFactItem{
 				Path:        e.Path,
 				Title:       e.Title,
+				Kind:        kind,
 				Type:        e.Type,
 				CommittedAt: e.CommittedAt,
 				Operation:   e.Operation,

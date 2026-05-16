@@ -33,7 +33,8 @@ func learnTool() mcpgo.Tool {
 					"category":   map[string]any{"type": "string", "description": "Category path within the topic (e.g. languages/go/concurrency)."},
 					"title":      map[string]any{"type": "string", "description": "Fact title (short, descriptive)."},
 					"body":       map[string]any{"type": "string", "description": "Fact body in natural language."},
-					"type":       map[string]any{"type": "string", "description": "Epistemic type: observation (default, concrete facts), concept (definitions), process (procedures), principle (rules/heuristics), pattern (recurring structures), reference (specs/measurements), synthesis (derived from other facts), hypothesis (predictions from patterns — carries uncertainty), methodology (reasoning process lessons).", "default": "observation"},
+					"kind":       map[string]any{"type": "string", "description": "Classification family. epistemic (default) for descriptive knowledge — what is. pragmatic for prescriptive knowledge — what to do. The allowed `type` values depend on the kind.", "default": "epistemic", "enum": []string{"epistemic", "pragmatic"}},
+					"type":       map[string]any{"type": "string", "description": "Leaf type. When kind=epistemic: observation (default, concrete facts), concept (definitions), process (procedures), principle (rules), pattern (recurring structures), reference (specs/measurements), synthesis (derived from other facts), hypothesis (predictions from patterns — carries uncertainty), methodology (reasoning process lessons). When kind=pragmatic: policy (mandatory rules), heuristic (rules-of-thumb).", "default": "observation"},
 					"domain":     map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Cross-cutting domain tags."},
 					"confidence": map[string]any{"type": "number", "description": "Certainty level 0.0–1.0.", "default": 0.7},
 					"sources":    map[string]any{"type": "integer", "description": "Number of independent sources.", "default": 1},
@@ -52,6 +53,7 @@ type learnFactInput struct {
 	Category   string   `json:"category"`
 	Title      string   `json:"title"`
 	Body       string   `json:"body"`
+	Kind       string   `json:"kind"`
 	Type       string   `json:"type"`
 	Domain     []string `json:"domain"`
 	Confidence float64  `json:"confidence"`
@@ -95,9 +97,9 @@ func LearnHandler(embedders ...store.BatchEmbedder) func(context.Context, mcpgo.
 		// Validate batch type consistency: cannot mix observed and inferred types.
 		hasObserved, hasInferred := false, false
 		for _, fi := range factInputs {
-			eType := fact.EpistemicType(fi.Type)
+			eType := fact.Type(fi.Type)
 			if eType == "" {
-				eType = fact.DefaultType
+				eType = fact.DefaultEpistemicType
 			}
 			if eType == fact.Hypothesis || eType == fact.Methodology {
 				hasInferred = true
@@ -142,17 +144,21 @@ func LearnHandler(embedders ...store.BatchEmbedder) func(context.Context, mcpgo.
 			if refs == nil {
 				refs = []string{}
 			}
-			// Validate epistemic type.
-			eType := fact.EpistemicType(fi.Type)
-			if eType == "" {
-				eType = fact.DefaultType
+			// Resolve kind and leaf type. SerializeFact (called below)
+			// validates the (kind, type) pair via the same path that
+			// ParseFact uses, so we don't pre-validate here.
+			kind := fact.Kind(fi.Kind)
+			if kind == "" {
+				kind = fact.DefaultKind
 			}
-			if err := eType.Validate(); err != nil {
-				return mcpgo.NewToolResultError(fmt.Sprintf("fact %d: %v", i, err)), nil
+			eType := fact.Type(fi.Type)
+			if eType == "" && kind == fact.Epistemic {
+				eType = fact.DefaultEpistemicType
 			}
 			f := fact.NewFact(path)
 			f.Title = fi.Title
 			f.Body = fi.Body
+			f.Kind = kind
 			f.Type = eType
 			f.Domain = domain
 			f.Confidence = fi.Confidence
