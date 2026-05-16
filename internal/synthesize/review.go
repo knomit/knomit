@@ -351,8 +351,17 @@ func (r *Reviewer) dirtyFacts(ctx context.Context, branch string, gs store.FactI
 	}
 
 	// No watermark → first run, all facts are dirty. Use the index (fast).
+	//
+	// Pragmatic facts (policies, heuristics) are excluded: the synthesis
+	// pipeline merges and distills descriptive knowledge, and its output
+	// path in decision.go does not carry Kind through mergedFact/distillFact.
+	// Letting a pragmatic fact in would cause it to be silently rewritten as
+	// epistemic on commit and the original deleted.
 	if watermark == "" {
-		results, err := idx.Search(ctx, branch, store.SearchQuery{Limit: 100_000})
+		results, err := idx.Search(ctx, branch, store.SearchQuery{
+			Limit:        100_000,
+			IncludeKinds: []string{string(fact.Epistemic)},
+		})
 		if err != nil {
 			return nil, fmt.Errorf("search all: %w", err)
 		}
@@ -387,19 +396,22 @@ func (r *Reviewer) dirtyFacts(ctx context.Context, branch string, gs store.FactI
 		if err != nil {
 			continue // deleted or unreadable
 		}
-		fact, err := fact.ParseFact(path, result.Content)
+		f, err := fact.ParseFact(path, result.Content)
 		if err != nil {
 			continue // not a valid fact
 		}
+		if f.Kind != fact.Epistemic {
+			continue // synthesis does not operate on pragmatic facts (see comment above)
+		}
 		seeds = append(seeds, factForLLM{
-			File:       fact.Path(),
-			Title:      fact.Title,
-			Body:       fact.Body,
-			Type:       string(fact.Type),
-			Domain:     fact.Domain,
-			Entities:   fact.Entities,
-			Confidence: fact.Confidence,
-			Sources:    fact.Sources,
+			File:       f.Path(),
+			Title:      f.Title,
+			Body:       f.Body,
+			Type:       string(f.Type),
+			Domain:     f.Domain,
+			Entities:   f.Entities,
+			Confidence: f.Confidence,
+			Sources:    f.Sources,
 		})
 	}
 	return seeds, nil
