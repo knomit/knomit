@@ -44,7 +44,13 @@ func (s *stubFactReader) Read(_ *repos.RepoInstance, _ hal.Anchor, _ string, fal
 	return s.fact, s.head, s.readErr
 }
 
-func (s *stubFactReader) Exists(path string) bool { return s.exists[path] }
+// Exists ignores the anchor (ri, branch, commit) and consults the test's
+// pre-seeded path → bool map. Sufficient for handler-level tests that
+// exercise wiring; commit-anchored historical semantics are covered by
+// store-level tests for SearchIndex.FactExistsAt.
+func (s *stubFactReader) Exists(_ *repos.RepoInstance, _ string, path, _ string) bool {
+	return s.exists[path]
+}
 
 func TestHandleHALFact_ReturnsHALEnvelope(t *testing.T) {
 	f := knomitfact.NewFact("know/ai/ml/abc12345.md")

@@ -58,6 +58,55 @@ func (si *searchIndex) resolveTargetCommit(ctx context.Context, branch, sourcePa
 	return si.resolveActiveCommitForPath(ctx, branch, refPath, cur)
 }
 
+// FactExistsAt reports whether `path` has any valid (added/modified)
+// version reachable from `commit` on `branch`, walking past retractions.
+// Pass commit == "" for a HEAD-anchored check (uses branch_facts).
+//
+// This is the historical-graph existence predicate used by the ref-kind
+// resolver: a ref is `fact` (not `broken`) when the target has any version
+// the user can navigate to via fallback-before. A target retracted long
+// before the source's commit still has a navigable last-valid blob, so
+// the ref is not broken from the user's perspective.
+func (si *searchIndex) FactExistsAt(ctx context.Context, branch, path, commit string) (bool, error) {
+	if commit == "" {
+		// HEAD anchor: a fact is "live on the branch" iff there's a
+		// branch_facts row for (branch, path). branch_facts is the live
+		// view of which paths are currently un-retracted on the branch.
+		branchID, err := si.rh.branchID(ctx, branch)
+		if err != nil {
+			return false, fmt.Errorf("FactExistsAt: branchID: %w", err)
+		}
+		var n int
+		err = conn(ctx, si.rh.db).QueryRowContext(ctx,
+			`SELECT 1 FROM branch_facts WHERE branch_id = ? AND path = ?`,
+			branchID, path,
+		).Scan(&n)
+		if err == sql.ErrNoRows {
+			// Live row absent — but the fact may still be historically
+			// reachable via fallback-before. Walk back from the branch
+			// HEAD to find any prior add/modify.
+			head, herr := si.rh.HeadCommit(ctx, branch)
+			if herr != nil {
+				return false, fmt.Errorf("FactExistsAt: HeadCommit: %w", herr)
+			}
+			_, ok, werr := si.resolveActiveCommitForPath(ctx, branch, path, head)
+			if werr != nil {
+				return false, fmt.Errorf("FactExistsAt: walk-back at HEAD: %w", werr)
+			}
+			return ok, nil
+		}
+		if err != nil {
+			return false, fmt.Errorf("FactExistsAt: branch_facts lookup: %w", err)
+		}
+		return true, nil
+	}
+	_, ok, err := si.resolveActiveCommitForPath(ctx, branch, path, commit)
+	if err != nil {
+		return false, err
+	}
+	return ok, nil
+}
+
 // resolveActiveCommitForPath walks first-parent ancestry of fromCommit on
 // `branch`, returning the most recent commit where `path` was added or
 // modified. Deletions are stepped over: they're write events in the path's

@@ -111,7 +111,11 @@ func handleFactCreate(b hal.URLBuilder, m *repos.Manager, ontologyRoot string, w
 		}
 
 		a := hal.Anchor{Branch: branch}
-		view := BuildFactView(b, repoName, a, "", f, noopRefResolver{})
+		// Resolver anchored at HEAD (commit:""): the just-created fact is
+		// now the active state of the branch, so HEAD walk-back correctly
+		// classifies outgoing refs in the response view.
+		resolver := readerRefResolver{reader: defaultFactReader{}, ri: ri, branch: branch, commit: ""}
+		view := BuildFactView(b, repoName, a, "", f, resolver)
 		locationURL := b.Fact(repoName, a, path)
 		w.Header().Set("Location", locationURL)
 		hal.WriteHAL(w, http.StatusCreated, view)

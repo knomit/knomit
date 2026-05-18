@@ -106,7 +106,11 @@ func handleFactUpdate(b hal.URLBuilder, m *repos.Manager, writer FactWriter) htt
 		}
 
 		a := hal.Anchor{Branch: branch}
-		view := BuildFactView(b, repoName, a, "", f, noopRefResolver{})
+		// Resolver anchored at HEAD (commit:""): the just-written content is
+		// now the active state of the branch, so HEAD walk-back correctly
+		// classifies the fact's outgoing refs.
+		resolver := readerRefResolver{reader: defaultFactReader{}, ri: ri, branch: branch, commit: ""}
+		view := BuildFactView(b, repoName, a, "", f, resolver)
 		hal.WriteHAL(w, http.StatusOK, view)
 	}
 }
@@ -141,9 +145,4 @@ func handleFactDelete(b hal.URLBuilder, m *repos.Manager, writer FactWriter) htt
 	}
 }
 
-// noopRefResolver is used when the ref resolver is not available (e.g. after a
-// write when we don't have a per-request store snapshot to check against).
-type noopRefResolver struct{}
-
-func (noopRefResolver) Exists(string) bool { return false }
 

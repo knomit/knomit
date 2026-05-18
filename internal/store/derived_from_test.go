@@ -176,6 +176,67 @@ func TestResolveTargetCommit_SelfRef_FirstCreation_ReturnsNotOk(t *testing.T) {
 	require.False(t, ok, "self-ref with no prior version must drop the edge")
 }
 
+// TestFactExistsAt covers the four cases the ref-kind resolver depends on:
+//   - HEAD: live fact (branch_facts row present) → true
+//   - HEAD: retracted at HEAD, but a prior version exists → true (walk-back)
+//   - HEAD: never written → false
+//   - commit-anchored: any prior add/modify in the ancestry → true
+//   - commit-anchored: only retractions or no rows → false / true via walk-back
+//
+// This is the historical-graph existence predicate: a target retracted
+// before the source's anchor must still classify as "exists" so refs
+// to it render as `fact` (resolvable via fallback-before) instead of
+// the misleading `broken`.
+func TestFactExistsAt(t *testing.T) {
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	defer svc.Close()
+	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+
+	ctx := context.Background()
+	branch := "main"
+	search := svc.Search()
+
+	// Never written.
+	exists, err := search.FactExistsAt(ctx, branch, "kb/never.md", "")
+	require.NoError(t, err)
+	require.False(t, exists, "never-written path must not exist at HEAD")
+
+	// c1: write kb/live.md.
+	_, err = svc.Facts().WriteFact(ctx, branch, "kb/live.md", testFactBody("live", 0.9, nil), "init live", "")
+	require.NoError(t, err)
+
+	// c2: write kb/gone.md.
+	_, err = svc.Facts().WriteFact(ctx, branch, "kb/gone.md", testFactBody("gone v1", 0.9, nil), "init gone", "")
+	require.NoError(t, err)
+
+	// c3: retract kb/gone.md (capture the retract commit for the anchored check).
+	retractCommit, err := svc.Facts().DeleteFact(ctx, branch, "kb/gone.md", "retract gone")
+	require.NoError(t, err)
+
+	// HEAD: live → true.
+	exists, err = search.FactExistsAt(ctx, branch, "kb/live.md", "")
+	require.NoError(t, err)
+	require.True(t, exists, "live path must exist at HEAD via branch_facts")
+
+	// HEAD: retracted but historically reachable → true (walk-back).
+	exists, err = search.FactExistsAt(ctx, branch, "kb/gone.md", "")
+	require.NoError(t, err)
+	require.True(t, exists, "retracted path with prior version must exist at HEAD via walk-back")
+
+	// At the retract commit (commit-anchored): gone is retracted at this exact
+	// commit, but a prior add exists in the ancestry — walk-back must surface it.
+	exists, err = search.FactExistsAt(ctx, branch, "kb/gone.md", retractCommit)
+	require.NoError(t, err)
+	require.True(t, exists, "at the retract commit, gone resolves to its prior add via walk-back")
+
+	// Never-written, commit-anchored: no add in any ancestor → false.
+	exists, err = search.FactExistsAt(ctx, branch, "kb/never.md", retractCommit)
+	require.NoError(t, err)
+	require.False(t, exists, "never-written path must not exist at any commit anchor")
+}
+
 // testFactBody builds a minimal markdown fact for store-internal tests.
 // Uses the existing fact.SerializeFact helper so the format matches what
 // the parser expects, avoiding hand-rolled YAML drift.

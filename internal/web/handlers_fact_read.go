@@ -20,9 +20,6 @@ import (
 var errFactNotFound = errors.New("fact not found")
 
 // FactReader is the narrow interface the HAL fact handler depends on.
-// It combines reading a fact-at-anchor with checking whether a ref target
-// exists at the same anchor, so the handler can treat them as a single
-// dependency for test injection.
 type FactReader interface {
 	// Read loads the fact at (repo, anchor, path). Returns errFactNotFound
 	// when the path does not exist; other store errors are propagated as-is
@@ -36,8 +33,27 @@ type FactReader interface {
 	// ancestor where it existed, and headOrCommit reflects that ancestor.
 	Read(ri *repos.RepoInstance, a hal.Anchor, path string, fallback bool) (_ knomitfact.Fact, headOrCommit string, _ error)
 
-	// Exists reports whether the given fact path is visible on the anchor.
-	Exists(path string) bool
+	// Exists reports whether `path` has a navigable version at (branch,
+	// commit). Commit == "" means HEAD-anchored. Implementations must walk
+	// back through retractions per the historical-graph invariant: a target
+	// retracted before the anchor is still "exists" if any prior version
+	// is reachable via fallback-before.
+	Exists(ri *repos.RepoInstance, branch, path, commit string) bool
+}
+
+// readerRefResolver is a thin RefResolver that delegates Exists to a
+// FactReader, baking in the per-request anchor (ri, branch, commit). The
+// handler builds one of these per response so the resolver carries the
+// same anchor as the surrounding fact view.
+type readerRefResolver struct {
+	reader FactReader
+	ri     *repos.RepoInstance
+	branch string
+	commit string // "" for HEAD
+}
+
+func (r readerRefResolver) Exists(path string) bool {
+	return r.reader.Exists(r.ri, r.branch, path, r.commit)
 }
 
 // defaultFactReader is the production FactReader wired over the store.
@@ -120,12 +136,24 @@ func (defaultFactReader) Read(
 	return f, head, err
 }
 
-// Exists on defaultFactReader is stateless and always returns false — this
-// is a placeholder for Plan 01. Plan 02 replaces it with a per-request
-// resolver that checks against the current anchor. For now, structured refs
-// in the single-fact response default to "broken" unless the test override
-// says otherwise.
-func (defaultFactReader) Exists(string) bool { return false }
+// Exists routes to SearchIndex.FactExistsAt via the per-request store
+// snapshot. Honors the historical-graph invariant: passes commit through
+// so commit-anchored reads classify refs against the anchor (with walk-
+// back through retractions), and HEAD reads use branch_facts (with the
+// same walk-back fallback for paths that have been retracted at HEAD).
+func (defaultFactReader) Exists(ri *repos.RepoInstance, branch, path, commit string) bool {
+	var exists bool
+	ri.WithRead(func(svc *store.Service) {
+		if svc == nil {
+			return
+		}
+		ok, err := svc.Search().FactExistsAt(contextTODO(), branch, path, commit)
+		if err == nil {
+			exists = ok
+		}
+	})
+	return exists
+}
 
 // handleHALFact serves GET /api/v1/repos/{repo}/branches/{branch}/facts/{path...}.
 // It also dispatches sub-resource requests (*/commits, */incoming, */outgoing).
@@ -167,7 +195,11 @@ func handleHALFact(b hal.URLBuilder, m *repos.Manager, reader FactReader, subPro
 			return
 		}
 
-		view := BuildFactView(b, repoName, a, head, f, reader)
+		// HEAD anchor — empty commit. Ref kind classification walks back from
+		// the branch's HEAD via FactExistsAt to honor the historical-graph
+		// invariant (retracted-but-recoverable targets still classify as fact).
+		resolver := readerRefResolver{reader: reader, ri: ri, branch: branch, commit: ""}
+		view := BuildFactView(b, repoName, a, head, f, resolver)
 		hal.WriteHAL(w, http.StatusOK, view)
 	}
 }
