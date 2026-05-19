@@ -9,11 +9,19 @@ import (
 )
 
 // resolveTargetCommit walks first-parent ancestry of sourceCommit on the
-// given branch looking for the FIRST commit (in topological order) that
-// touches refPath, and returns (commit_hash, ok=true) if that row's action
-// is "added" or "modified". Returns ("", false, nil) if no ancestor touches
-// refPath, or if the closest ancestor that touches it has action="deleted"
-// — both are skip-the-edge cases per design spec write-path step 2.
+// given branch looking for the most recent commit where refPath was
+// **added or modified**, and returns (commit_hash, ok=true). Deletions
+// are write events too: the walk passes through them to find the prior
+// valid version, so refs to retracted targets resolve to the last live
+// commit. Returns ("", false, nil) only when refPath has never been
+// added/modified anywhere in the source's ancestry (forward-broken).
+//
+// Why walk past deletions: knomit stores a HISTORICAL graph. A ref written
+// at source-commit C declares "this fact derives from that target". If
+// the target was retracted before C, the lineage is still meaningful —
+// the historical record at C must point at the target's last valid blob.
+// This mirrors the fact-read fallback=before semantic. See the
+// project_historical_graph_invariant memory note.
 //
 // First-parent ancestry (NOT wall-clock committed_at ordering) is the
 // correct semantic for "the active version of refPath on this branch at
@@ -23,9 +31,10 @@ import (
 // later authoritative version (e.g. when a merge resolved a conflict in
 // the local side's favour, leaving no commit_log row at the merge commit).
 //
-// The walk stops at: the first row whose action is added/modified/deleted
-// for refPath; the root commit (no parent); or the first parent that
-// leaves the branch (parent ∉ branch_commits(B)).
+// The walk stops at: the first row whose action is added/modified for
+// refPath; the root commit (no parent); or the first parent that leaves
+// the branch (parent ∉ branch_commits(B)). "deleted" rows do not stop
+// the walk — they're stepped over.
 //
 // Performance: each step does one git CommitObject lookup + one indexed
 // SQL query against commit_log. For branches where most refs target
@@ -34,11 +43,6 @@ import (
 // (refPath, sourceCommit) per ingest call is a possible optimisation if
 // this becomes hot.
 func (si *searchIndex) resolveTargetCommit(ctx context.Context, branch, sourcePath, refPath, sourceCommit string) (string, bool, error) {
-	branchID, err := si.rh.branchID(ctx, branch)
-	if err != nil {
-		return "", false, fmt.Errorf("resolveTargetCommit: branchID: %w", err)
-	}
-
 	cur := sourceCommit
 	// Self-ref ("this fact derives from the previous version of this path"):
 	// the source commit is where the current version is being written, so it
@@ -51,10 +55,44 @@ func (si *searchIndex) resolveTargetCommit(ctx context.Context, branch, sourcePa
 		}
 		cur = parent
 	}
+	return si.resolveActiveCommitForPath(ctx, branch, refPath, cur)
+}
+
+// resolveActiveCommitForPath walks first-parent ancestry of fromCommit on
+// `branch`, returning the most recent commit where `path` was added or
+// modified. Deletions are stepped over: they're write events in the path's
+// sparse history, not stop conditions.
+//
+// This is the historical-graph "effective version of path as of fromCommit"
+// resolver. Used by:
+//   - edge writes (target side, via resolveTargetCommit) to anchor target_commit
+//   - edge queries (source side in OutgoingAtCommit, target side in
+//     IncomingAtCommit) to translate a user-supplied query anchor into the
+//     edge's stored commit value
+//
+// Why it matters: facts are stored sparsely — one revision per change. A
+// fact written at commit c1 with no subsequent edits has exactly one stored
+// revision, yet is semantically present at every commit from c1 through the
+// branch tip. Edge filters must resolve via this walk-back, never via exact
+// match on the user's query commit.
+//
+// Returns ("", false, nil) when no add/modify ancestor exists (the path was
+// never written in this branch's history reachable from fromCommit). Stops
+// if the walk leaves the branch (parent ∉ branch_commits(B)) or reaches a
+// root commit. Errors propagate.
+//
+// First-parent (not wall-clock) ancestry is the correct semantic — see
+// resolveTargetCommit's doc-comment for the merge-branch rationale.
+func (si *searchIndex) resolveActiveCommitForPath(ctx context.Context, branch, path, fromCommit string) (string, bool, error) {
+	branchID, err := si.rh.branchID(ctx, branch)
+	if err != nil {
+		return "", false, fmt.Errorf("resolveActiveCommitForPath: branchID: %w", err)
+	}
+
+	cur := fromCommit
 	for cur != "" {
-		// Is `cur` reachable on this branch? If not (we walked off the
-		// branch by following first-parent into a foreign-branch ancestor),
-		// stop the walk.
+		// Walked off-branch (first-parent followed into a sibling-branch
+		// ancestor)? Stop.
 		var onBranch int
 		err := conn(ctx, si.rh.db).QueryRowContext(ctx,
 			`SELECT 1 FROM branch_commits WHERE branch_id = ? AND commit_hash = ?`,
@@ -64,30 +102,28 @@ func (si *searchIndex) resolveTargetCommit(ctx context.Context, branch, sourcePa
 			return "", false, nil
 		}
 		if err != nil {
-			return "", false, fmt.Errorf("resolveTargetCommit: branch_commits: %w", err)
+			return "", false, fmt.Errorf("resolveActiveCommitForPath: branch_commits: %w", err)
 		}
 
-		// Does `cur` touch refPath? If yes, decide based on action.
+		// Does `cur` touch path? add/modify is the anchor we want; delete is
+		// just another write event — step over it and continue.
 		var action string
 		err = conn(ctx, si.rh.db).QueryRowContext(ctx, `
 			SELECT action FROM commit_log
 			WHERE commit_hash = ? AND path = ?
 			LIMIT 1
-		`, cur, refPath).Scan(&action)
-		if err == nil {
-			if action == "deleted" {
-				return "", false, nil
-			}
+		`, cur, path).Scan(&action)
+		if err == nil && action != "deleted" {
 			return cur, true, nil
 		}
-		if err != sql.ErrNoRows {
-			return "", false, fmt.Errorf("resolveTargetCommit: commit_log lookup: %w", err)
+		if err != nil && err != sql.ErrNoRows {
+			return "", false, fmt.Errorf("resolveActiveCommitForPath: commit_log lookup: %w", err)
 		}
 
-		// `cur` doesn't touch refPath; descend to first parent.
+		// Either `cur` doesn't touch path, or it deleted path. Descend.
 		parent, err := si.rh.firstParentCommit(ctx, cur)
 		if err != nil {
-			return "", false, fmt.Errorf("resolveTargetCommit: firstParentCommit: %w", err)
+			return "", false, fmt.Errorf("resolveActiveCommitForPath: firstParentCommit: %w", err)
 		}
 		cur = parent
 	}

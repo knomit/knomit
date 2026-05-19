@@ -46,6 +46,76 @@ func TestIncomingAtCommit_TwoSourceVersions(t *testing.T) {
 	require.NotZero(t, got[1].CommittedAt, "CommittedAt should be populated from commit_log")
 }
 
+// TestOutgoingAtCommit_WalksBackSparseHistory regresses the bug where
+// OutgoingAtCommit filtered edges by exact-match on source_commit. The
+// graph stores facts SPARSELY — a fact added at c1 with no subsequent
+// edits has exactly one stored revision (c1) yet is semantically present
+// at every commit between c1 and HEAD. A query "outgoing for path P as
+// of commit Q" must resolve P's effective write-commit ≤ Q first, then
+// filter edges by source_commit = effective_commit. Exact-match on Q
+// alone returns 0 whenever Q ≠ P's write-commit.
+func TestOutgoingAtCommit_WalksBackSparseHistory(t *testing.T) {
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	defer svc.Close()
+	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+
+	ctx := context.Background()
+	branch := "main"
+
+	// c0: create the ref target.
+	_, err = svc.Facts().WriteFact(ctx, branch, "kb/e.md", testFactBody("e", 0.9, nil), "init e", "")
+	require.NoError(t, err)
+	// c1: create the source fact with a ref to e.
+	_, err = svc.Facts().WriteFact(ctx, branch, "kb/d.md", testFactBody("d", 0.8, []string{"kb/e.md"}), "d→e", "")
+	require.NoError(t, err)
+	// c2: write an UNRELATED fact, advancing the branch tip.
+	c2Res, err := svc.Facts().WriteFact(ctx, branch, "kb/unrelated.md", testFactBody("u", 0.5, nil), "init unrelated", "")
+	require.NoError(t, err)
+	c2 := c2Res.CommitHash
+
+	// Query outgoing for kb/d.md AS OF the branch tip c2 — note that d's
+	// effective write-commit is c1, not c2. Exact-match query returns 0;
+	// the correct behavior is to walk back from c2 to find d's last write
+	// (c1) and surface its edges.
+	got, err := svc.Search().OutgoingAtCommit(ctx, branch, "kb/d.md", c2)
+	require.NoError(t, err)
+	require.Len(t, got, 1, "outgoing must walk back to d's last write to surface its edges")
+	require.Equal(t, "kb/e.md", got[0].Path)
+}
+
+// TestIncomingAtCommit_WalksBackSparseHistory: mirror of the above for
+// the incoming side. E was last written at c0; a query at a later
+// branch tip must still surface incoming edges to it.
+func TestIncomingAtCommit_WalksBackSparseHistory(t *testing.T) {
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	defer svc.Close()
+	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+
+	ctx := context.Background()
+	branch := "main"
+
+	// c0: create the target.
+	_, err = svc.Facts().WriteFact(ctx, branch, "kb/e.md", testFactBody("e", 0.9, nil), "init e", "")
+	require.NoError(t, err)
+	// c1: source ref's e.
+	_, err = svc.Facts().WriteFact(ctx, branch, "kb/d.md", testFactBody("d", 0.8, []string{"kb/e.md"}), "d→e", "")
+	require.NoError(t, err)
+	// c2: unrelated write to advance the branch tip.
+	c2Res, err := svc.Facts().WriteFact(ctx, branch, "kb/unrelated.md", testFactBody("u", 0.5, nil), "init unrelated", "")
+	require.NoError(t, err)
+	c2 := c2Res.CommitHash
+
+	// Query incoming for kb/e.md AS OF c2 (e was last written at c0).
+	got, err := svc.Search().IncomingAtCommit(ctx, branch, "kb/e.md", c2)
+	require.NoError(t, err)
+	require.Len(t, got, 1, "incoming must walk back to e's last write to surface edges into it")
+	require.Equal(t, "kb/d.md", got[0].Path)
+}
+
 // TestOutgoingAtCommit returns the outgoing refs of (path, commit_hash)
 // using edge.source_commit = commit_hash.
 func TestOutgoingAtCommit(t *testing.T) {

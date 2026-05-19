@@ -47,6 +47,12 @@ func TestResolveTargetCommit(t *testing.T) {
 	require.False(t, ok, "no ancestor touches kb/z.md → not ok")
 
 	// (3) Tombstoned: delete kb/e.md, then a later source ref's it.
+	//
+	// Per the historical-graph invariant: a retraction is just another write
+	// event in the sparse history. The resolver must walk past the deletion
+	// and find the prior valid version (c1, where e was added). Anchoring
+	// edges to that prior version preserves the lineage — without this, refs
+	// to retracted targets are silently dropped from the graph.
 	c3, err := svc.Facts().DeleteFact(ctx, branch, "kb/e.md", "retract e")
 	require.NoError(t, err)
 
@@ -55,10 +61,59 @@ func TestResolveTargetCommit(t *testing.T) {
 	c4 := c4Res.CommitHash
 	require.NotEmpty(t, c3)
 
-	// F's ref to E at c4: first ancestor touching E is c3 (deleted) → not ok.
-	_, ok, err = si.resolveTargetCommit(ctx, branch, "kb/f.md", "kb/e.md", c4)
+	got, ok, err = si.resolveTargetCommit(ctx, branch, "kb/f.md", "kb/e.md", c4)
 	require.NoError(t, err)
-	require.False(t, ok, "first ancestor touching kb/e.md is a deletion → not ok")
+	require.True(t, ok, "deletion is a write event — walk past it to the last valid version")
+	require.Equal(t, c1, got, "must resolve to the commit where kb/e.md was added (c1), not stop at the retraction")
+}
+
+// TestResolveTargetCommit_WalksPastMultipleRetractions covers the case where
+// a target was created, retracted, re-created, retracted again — the walk
+// must skip all "deleted" rows and return the most recent "added/modified"
+// ancestor. Mirrors the synthesize-review merge pattern where a fact's
+// lineage refs span across retract cycles.
+func TestResolveTargetCommit_WalksPastMultipleRetractions(t *testing.T) {
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	defer svc.Close()
+	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+
+	ctx := context.Background()
+	branch := "main"
+
+	// c1: add kb/e.md (v1)
+	c1Res, err := svc.Facts().WriteFact(ctx, branch, "kb/e.md", testFactBody("e v1", 0.9, nil), "init e", "")
+	require.NoError(t, err)
+	c1 := c1Res.CommitHash
+
+	// c2: retract kb/e.md
+	_, err = svc.Facts().DeleteFact(ctx, branch, "kb/e.md", "retract e first time")
+	require.NoError(t, err)
+
+	// c3: re-add kb/e.md (v2)
+	c3Res, err := svc.Facts().WriteFact(ctx, branch, "kb/e.md", testFactBody("e v2", 0.9, nil), "re-add e", "")
+	require.NoError(t, err)
+	c3 := c3Res.CommitHash
+
+	// c4: retract kb/e.md again
+	_, err = svc.Facts().DeleteFact(ctx, branch, "kb/e.md", "retract e second time")
+	require.NoError(t, err)
+
+	// c5: write kb/f.md with ref to kb/e.md (currently retracted at c4)
+	c5Res, err := svc.Facts().WriteFact(ctx, branch, "kb/f.md", testFactBody("f", 0.5, []string{"kb/e.md"}), "init f", "")
+	require.NoError(t, err)
+	c5 := c5Res.CommitHash
+
+	si := svc.Search().(*searchIndex)
+
+	// Walk past the c4 retraction → land at c3 (the most recent add).
+	got, ok, err := si.resolveTargetCommit(ctx, branch, "kb/f.md", "kb/e.md", c5)
+	require.NoError(t, err)
+	require.True(t, ok, "two retractions must not block resolution — walk past both")
+	require.Equal(t, c3, got, "must resolve to the most recent ADD (c3), skipping the c4 retraction")
+
+	_ = c1 // kept for clarity; c1 was the *first* add, not what we expect here
 }
 
 // TestResolveTargetCommit_SelfRef_ResolvesToPriorVersion regresses the bug
