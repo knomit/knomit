@@ -143,6 +143,22 @@ export function CommitDrawer({ state, dispatch }: Props) {
           <div style={{ color: '#555', fontSize: 11 }}>Loading…</div>
         )}
       </div>
+      <div style={{ padding: '12px 14px', borderTop: '1px solid #1a1a1a', display: 'flex', alignItems: 'center', gap: 8 }}>
+        <button
+          data-testid="drawer-scrub"
+          onClick={() => {
+            if (commitDrawer.open) {
+              dispatch({ type: 'SET_AS_OF', asOf: { mode: 'scrubbed', commit: commitDrawer.commit } });
+              dispatch({ type: 'CLOSE_COMMIT_DRAWER' });
+            }
+          }}
+          style={{
+            background: '#e5a23c', color: '#0b0b0d', border: 'none',
+            padding: '6px 12px', borderRadius: 3, cursor: 'pointer',
+            fontFamily: 'monospace', fontSize: 11, fontWeight: 600,
+          }}
+        >scrub to {commitDrawer.commit.slice(0, 7)}</button>
+      </div>
     </div>
   );
 }
