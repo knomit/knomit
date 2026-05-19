@@ -68,3 +68,20 @@ describe('Library — Recent sort', () => {
     expect(screen.getByTestId('left-panel').getAttribute('data-sort')).toBe('recent');
   });
 });
+
+describe('Library — Relevance sort', () => {
+  beforeEach(() => { vi.clearAllMocks(); });
+
+  it('renders results from api.search when freeText is set', async () => {
+    const { api } = await import('./api');
+    (api.search as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      results: [
+        { path: 'kb/x.md', title: 'X result', type: 'observation' },
+      ],
+    });
+    setup({ librarySort: 'recent', freeText: 'foo' });
+    // freeText makes effectiveSort='relevance' regardless of stored value
+    await waitFor(() => expect(screen.getByTestId('left-panel').getAttribute('data-sort')).toBe('relevance'));
+    await waitFor(() => expect(screen.getAllByTestId('dir-entry').length).toBeGreaterThan(0));
+  });
+});

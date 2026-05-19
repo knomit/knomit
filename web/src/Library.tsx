@@ -113,6 +113,34 @@ export function Library({ state, dispatch, navigate }: Props) {
     }).catch(() => { if (!stale()) { setFacts([]); setLoading(false); } });
   }, [path, state.headCommit, state.freeText, state.repo, state.branch, typeFilter, filtersKey, effectiveSort]);
 
+  // ── Relevance sort: api.search for free-text results ──
+  useAsync((stale) => {
+    if (effectiveSort !== 'relevance') return;
+    api.search(state.repo, state.branch, state.freeText, path, 0, {
+      types: types.length ? types : undefined,
+      kinds: kinds.length ? kinds : undefined,
+      eps: eps.length ? eps : undefined,
+      domains: domains.length ? domains : undefined,
+      entities: entities.length ? entities : undefined,
+    }).then(r => {
+      if (stale()) return;
+      const items: DirChild[] = (r.results || []).map(sr => ({
+        name: sr.path.split('/').pop() || sr.path,
+        is_dir: false,
+        title: sr.title,
+        type: sr.type,
+        fullPath: sr.path,
+      }));
+      setChildren(items);
+      const currentFactPath = staleStateRef.current.factPath;
+      const matchIdx = items.findIndex(it => it.fullPath === currentFactPath);
+      setSelectedIdx(matchIdx >= 0 ? matchIdx : items.length > 0 ? 0 : -1);
+      if (matchIdx < 0 && items.length > 0 && items[0].fullPath) {
+        dispatch({ type: 'AMEND_NAV', factPath: items[0].fullPath });
+      }
+    }).catch(() => { if (!stale()) setChildren([]); });
+  }, [path, state.headCommit, state.freeText, effectiveSort, state.repo, state.branch, filtersKey]);
+
   const moveSelection = useCallback((delta: 1 | -1) => {
     const len = children.length;
     if (len === 0) return;
@@ -176,7 +204,7 @@ export function Library({ state, dispatch, navigate }: Props) {
         <ReadOnlyBanner message="Showing live library · scrubbed views not yet supported by backend" />
       )}
       <div style={{ flex: 1, overflowY: 'auto' }}>
-        {effectiveSort === 'path' && children.map((c, i) => {
+        {(effectiveSort === 'path' || effectiveSort === 'relevance') && children.map((c, i) => {
           const ts = (c.type && typeStyles[c.type]) || defaultTypeStyle;
           return (
             <div
@@ -214,7 +242,7 @@ export function Library({ state, dispatch, navigate }: Props) {
             </div>
           );
         })}
-        {effectiveSort === 'path' && children.length === 0 && <EmptyState message="No items in this path." />}
+        {(effectiveSort === 'path' || effectiveSort === 'relevance') && children.length === 0 && <EmptyState message={effectiveSort === 'relevance' ? 'No facts match the search.' : 'No items in this path.'} />}
         {effectiveSort === 'recent' && (
           <>
             {facts.length === 0 && !loading && (
