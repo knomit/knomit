@@ -10,8 +10,20 @@ import { EpisodeIcon, RetractIcon, ExplainIcon } from './icons';
 import type { NavRequest } from './useNavigationManager';
 import { FactDiffView } from './FactDiffView';
 import { FactBody, StatBox, TagCloud } from './FactBody';
+import { VersionWalker } from './VersionWalker';
 
-function renderFact(fact: Fact, navigate: (req: NavRequest) => void, dispatch: Dispatch<Action>, onRetract?: () => void, onExplain?: (path: string, commit: string | null) => void, explainAnchorCommit?: string | null, readOnly = false, anchorCommit?: string | null) {
+function renderFact(
+  fact: Fact,
+  repo: string,
+  branch: string,
+  navigate: (req: NavRequest) => void,
+  dispatch: Dispatch<Action>,
+  onRetract?: () => void,
+  onExplain?: (path: string, commit: string | null) => void,
+  explainAnchorCommit?: string | null,
+  readOnly = false,
+  anchorCommit?: string | null,
+) {
   const retractDisabled = readOnly;
   const retractTitle = retractDisabled ? READ_ONLY_TITLE : 'Retract fact';
   const retractColor = retractDisabled ? '#444' : '#f66';
@@ -36,12 +48,13 @@ function renderFact(fact: Fact, navigate: (req: NavRequest) => void, dispatch: D
               </span>
             )}
             {fact.commit_hash && (
-              <span
-                title={`Committed at ${fact.commit_hash.slice(0, 7)}`}
-                style={{ color: '#7c9', fontFamily: 'monospace', fontSize: 11, background: '#1a2e1a', padding: '1px 5px', borderRadius: 3 }}
-              >
-                {fact.commit_hash.slice(0, 7)}
-              </span>
+              <VersionWalker
+                repo={repo}
+                branch={branch}
+                factPath={fact.path}
+                currentCommit={fact.commit_hash}
+                dispatch={dispatch}
+              />
             )}
             {retractedAt && (
               <span
@@ -584,6 +597,8 @@ export function RightPanel({ state, dispatch, navigate, onExplain }: {
       <div style={{ flex: 1, overflow: 'auto' }}>
         {renderFact(
           fact,
+          state.repo,
+          state.branch,
           navigate,
           dispatch,
           showRetract ? () => { if (!readOnly) setConfirmRetract(true); } : undefined,

@@ -23,6 +23,7 @@ vi.mock('./api', () => ({
     stats: vi.fn().mockResolvedValue(null),
     activity: vi.fn().mockResolvedValue(null),
     commitDetail: vi.fn().mockResolvedValue(null),
+    factCommits: vi.fn().mockResolvedValue({ entries: [] }),
   },
 }));
 

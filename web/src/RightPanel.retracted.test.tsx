@@ -25,6 +25,7 @@ vi.mock('./api', () => ({
       files: [{ path: 'kb/test/foo.md', action: 'deleted' }],
     }),
     explain: vi.fn().mockResolvedValue({ incoming: [], outgoing: [] }),
+    factCommits: vi.fn().mockResolvedValue({ entries: [] }),
   },
 }));
 
