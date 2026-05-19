@@ -1,12 +1,12 @@
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { useAsync } from './hooks';
-import { EmptyState } from './ui';
+import { EmptyState, LoadingSpinner } from './ui';
 import type { Dispatch } from 'react';
 import { api } from './api';
-import type { DirChild } from './api';
+import type { DirChild, RecentFactEntry } from './api';
 import type { AppState, Action } from './state';
 import { currentPath, isLive } from './state';
-import { typeStyles, defaultTypeStyle } from './utils';
+import { typeStyles, defaultTypeStyle, relativeTimeEpoch } from './utils';
 import { TypeIcon, FolderIcon } from './icons';
 import { LibraryHeader } from './LibraryHeader';
 import type { NavRequest } from './useNavigationManager';
@@ -64,6 +64,55 @@ export function Library({ state, dispatch, navigate }: Props) {
       }
     }).catch(() => { if (!stale()) setChildren([]); });
   }, [path, state.headCommit, effectiveSort, state.repo, state.branch, state.ontologyRoot, state.factPath]);
+
+  // ── Recent sort: api.recent for chrono entries ──
+  const [facts, setFacts] = useState<RecentFactEntry[]>([]);
+  const [total, setTotal] = useState(0);
+  const [loading, setLoading] = useState(false);
+  const sentinelRef = useRef<HTMLDivElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+  // Stale ref for use inside the async useAsync callback (state updates between
+  // dispatch and resolution would otherwise read closed-over stale values).
+  const staleStateRef = useRef(state);
+  staleStateRef.current = state;
+
+  const { domains, entities, types, kinds, eps } = useMemo(() => {
+    const domains: string[] = [], entities: string[] = [], types: string[] = [], kinds: string[] = [], eps: string[] = [];
+    for (const f of state.filters) {
+      if (f.category === 'domain') domains.push(f.value);
+      else if (f.category === 'entity') entities.push(f.value);
+      else if (f.category === 'type') types.push(f.value);
+      else if (f.category === 'kind') kinds.push(f.value);
+      else if (f.category === 'ep') eps.push(f.value);
+    }
+    return { domains, entities, types, kinds, eps };
+  }, [state.filters]);
+  const typeFilter = types.length === 1 ? types[0] : undefined;
+  const filtersKey = state.filters.map(f => `${f.category}:${f.value}`).join('\0');
+
+  useAsync((stale) => {
+    if (effectiveSort !== 'recent') return;
+    setLoading(true);
+    setFacts([]);
+    setTotal(0);
+    api.recent(state.repo, state.branch, path, state.freeText, 50, 0, {
+      typeFilter,
+      kinds: kinds.length ? kinds : undefined,
+      domains: domains.length ? domains : undefined,
+      entities: entities.length ? entities : undefined,
+      eps: eps.length ? eps : undefined,
+    }).then(r => {
+      if (stale()) return;
+      setFacts(r.facts || []);
+      setTotal(r.total);
+      setLoading(false);
+      const loaded = r.facts || [];
+      const alreadyInList = loaded.some(f => f.path === staleStateRef.current.factPath);
+      if (loaded.length > 0 && !alreadyInList) {
+        dispatch({ type: 'AMEND_NAV', factPath: loaded[0].path });
+      }
+    }).catch(() => { if (!stale()) { setFacts([]); setLoading(false); } });
+  }, [path, state.headCommit, state.freeText, state.repo, state.branch, typeFilter, filtersKey, effectiveSort]);
 
   const moveSelection = useCallback((delta: 1 | -1) => {
     const len = children.length;
@@ -167,6 +216,40 @@ export function Library({ state, dispatch, navigate }: Props) {
           );
         })}
         {effectiveSort === 'path' && children.length === 0 && <EmptyState message="No items in this path." />}
+        {effectiveSort === 'recent' && (
+          <>
+            {facts.length === 0 && !loading && (
+              <EmptyState message={state.freeText ? 'No facts match the search.' : 'No facts in this path.'} />
+            )}
+            {facts.map((f, i) => {
+              const ts = (f.type && typeStyles[f.type]) || defaultTypeStyle;
+              return (
+                <div
+                  key={f.path}
+                  data-testid="chrono-item"
+                  data-path={f.path}
+                  onClick={() => { setSelectedIdx(i); navigate({ view: 'library', factPath: f.path }); }}
+                  style={{
+                    padding: '6px 12px', cursor: 'pointer',
+                    background: i === selectedIdx ? '#2a2a3a' : 'transparent',
+                    borderBottom: '1px solid #1a1a1a',
+                  }}
+                >
+                  <div style={{ fontSize: 12, color: '#ddd', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <span style={{ flexShrink: 0, display: 'flex', alignItems: 'center' }}><TypeIcon type={f.type || ''} color={ts.color} size={12} /></span>
+                    {f.title}
+                  </div>
+                  <div style={{ fontSize: 10, color: '#666', marginTop: 1, display: 'flex', gap: 8 }}>
+                    <span style={{ fontFamily: 'monospace' }}>{f.path.split('/').pop()}</span>
+                    <span>{relativeTimeEpoch(f.committed_at)}</span>
+                  </div>
+                </div>
+              );
+            })}
+            <div ref={sentinelRef} style={{ height: 1 }} />
+            {loading && <LoadingSpinner />}
+          </>
+        )}
       </div>
     </div>
   );

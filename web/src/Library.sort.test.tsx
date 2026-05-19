@@ -45,3 +45,26 @@ describe('Library — Path sort', () => {
     expect(screen.getByTestId('left-panel').getAttribute('data-sort')).toBe('path');
   });
 });
+
+describe('Library — Recent sort', () => {
+  beforeEach(() => { vi.clearAllMocks(); });
+
+  it('renders chrono-item rows from api.recent', async () => {
+    const { api } = await import('./api');
+    (api.recent as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      facts: [
+        { path: 'kb/a.md', title: 'A', committed_at: 1, type: 'observation' },
+        { path: 'kb/b.md', title: 'B', committed_at: 2, type: 'observation' },
+      ],
+      total: 2,
+    });
+    setup({ librarySort: 'recent' });
+    await waitFor(() => expect(screen.getAllByTestId('chrono-item').length).toBe(2));
+  });
+
+  it('exposes data-sort="recent" on the container', async () => {
+    setup({ librarySort: 'recent' });
+    await waitFor(() => screen.getByTestId('left-panel'));
+    expect(screen.getByTestId('left-panel').getAttribute('data-sort')).toBe('recent');
+  });
+});
