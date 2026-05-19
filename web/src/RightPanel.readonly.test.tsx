@@ -70,34 +70,3 @@ describe('RightPanel — read-only retract gate', () => {
   });
 });
 
-describe('RightPanel — Explain availability', () => {
-  it('renders the Explain button when onExplain is provided', async () => {
-    const state: AppState = {
-      ...init,
-      repo: 'knomit',
-      branch: 'machine/test',
-      factPath: 'kb/test/foo.md',
-      asOf: { mode: 'scrubbed', commit: 'b812d40' },
-    };
-    render(<RightPanel state={state} dispatch={vi.fn()} onExplain={vi.fn()} />);
-
-    await screen.findByTestId('fact-title');
-    expect(screen.getByTestId('explain-btn')).toBeInTheDocument();
-  });
-
-  it('clicking Explain passes the fact path and null anchor commit', async () => {
-    const onExplain = vi.fn();
-    const state: AppState = {
-      ...init,
-      repo: 'knomit',
-      branch: 'machine/test',
-      factPath: 'kb/test/foo.md',
-      asOf: { mode: 'scrubbed', commit: 'b812d40' },
-    };
-    render(<RightPanel state={state} dispatch={vi.fn()} onExplain={onExplain} />);
-
-    const btn = await screen.findByTestId('explain-btn');
-    btn.click();
-    expect(onExplain).toHaveBeenCalledWith('kb/test/foo.md', null);
-  });
-});

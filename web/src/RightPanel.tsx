@@ -6,7 +6,7 @@ import type { Fact, Stats, ActivityStats } from './api';
 import type { AppState, Action } from './state';
 import { currentPath, selectAnchorCommit, isReadOnly, READ_ONLY_TITLE } from './state';
 import { relativeTime } from './utils';
-import { RetractIcon, ExplainIcon } from './icons';
+import { RetractIcon } from './icons';
 import { FactDiffView } from './FactDiffView';
 import { FactBody, StatBox, TagCloud } from './FactBody';
 import { VersionWalker } from './VersionWalker';
@@ -18,7 +18,6 @@ function renderFact(
   dispatch: Dispatch<Action>,
   onRetract?: () => void,
   onExplain?: (path: string, commit: string | null) => void,
-  explainAnchorCommit?: string | null,
   readOnly = false,
   anchorCommit?: string | null,
 ) {
@@ -62,16 +61,6 @@ function renderFact(
               >
                 retracted at {retractedAt}
               </span>
-            )}
-            {onExplain && (
-              <button
-                data-testid="explain-btn"
-                title="Explain"
-                onClick={() => onExplain(fact.path, explainAnchorCommit ?? null)}
-                style={{ background: 'none', border: 'none', padding: 2, color: '#8af', cursor: 'pointer', display: 'flex', alignItems: 'center', opacity: 0.6 }}
-                onMouseEnter={e => { (e.currentTarget as HTMLElement).style.opacity = '1'; }}
-                onMouseLeave={e => { (e.currentTarget as HTMLElement).style.opacity = '0.6'; }}
-              ><ExplainIcon color="currentColor" size={15} /></button>
             )}
             {onRetract && (
               <button
@@ -374,7 +363,6 @@ export function RightPanel({ state, dispatch, onExplain }: {
           dispatch,
           () => { if (!readOnly) setConfirmRetract(true); },
           onExplain,
-          null,
           readOnly,
           // Only pass the anchor in history+scrubbed mode — the retracted-
           // version badge is only meaningful there. In live/diff/tree the
