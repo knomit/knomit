@@ -17,9 +17,9 @@ describe('api.* — non-2xx surfaces as a rejected promise', () => {
     } as unknown as Response);
   }
 
-  it('history rejects on 500 (not silently returns empty list)', async () => {
+  it('factCommits rejects on 500 (not silently returns empty list)', async () => {
     mock500('history blew up');
-    await expect(api.history('r', 'b', 'kb/x.md')).rejects.toThrow(/500/);
+    await expect(api.factCommits('r', 'b', 'kb/x.md')).rejects.toThrow(/500/);
   });
 
   it('commitDetail rejects on 500 (not silently returns null/empty)', async () => {

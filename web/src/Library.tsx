@@ -67,7 +67,6 @@ export function Library({ state, dispatch, navigate }: Props) {
 
   // ── Recent sort: api.recent for chrono entries ──
   const [facts, setFacts] = useState<RecentFactEntry[]>([]);
-  const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
   const sentinelRef = useRef<HTMLDivElement>(null);
   // Stale ref for use inside the async useAsync callback (state updates between
@@ -93,7 +92,6 @@ export function Library({ state, dispatch, navigate }: Props) {
     if (effectiveSort !== 'recent') return;
     setLoading(true);
     setFacts([]);
-    setTotal(0);
     api.recent(state.repo, state.branch, path, state.freeText, 50, 0, {
       typeFilter,
       kinds: kinds.length ? kinds : undefined,
@@ -103,7 +101,6 @@ export function Library({ state, dispatch, navigate }: Props) {
     }).then(r => {
       if (stale()) return;
       setFacts(r.facts || []);
-      setTotal(r.total);
       setLoading(false);
       const loaded = r.facts || [];
       const alreadyInList = loaded.some(f => f.path === staleStateRef.current.factPath);
