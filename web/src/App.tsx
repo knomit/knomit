@@ -12,6 +12,7 @@ import { RightPanel } from './RightPanel';
 import { Console } from './Console';
 import { ConnectRemoteModal } from './ConnectRemoteModal';
 import { ExplainView } from './ExplainView';
+import { CommitDrawer } from './CommitDrawer';
 import './App.css';
 
 export default function App() {
@@ -215,6 +216,7 @@ export default function App() {
         </>
       )}
       {showOrigin && !isReadOnly(state) && <ConnectRemoteModal repo={state.repo} onClose={() => setShowOrigin(false)} />}
+      <CommitDrawer state={state} dispatch={dispatch} />
     </div>
   );
 }
