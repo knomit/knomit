@@ -181,9 +181,9 @@ describe('ExplainView header commit chip', () => {
     vi.restoreAllMocks();
   });
 
-  it('shows the 7-char commit hash of the loaded fact in the header', async () => {
-    // Without a commit chip, a user landing on a historical version via an
-    // out-edge has no way to tell which version they are looking at.
+  it('shows the 7-char commit hash of the loaded fact in the history panel header', async () => {
+    // Without a commit hash visible, a user landing on a historical version
+    // via an out-edge has no way to tell which version they are looking at.
     (api.fact as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
       ...baseFact,
       commit_hash: 'cafe1234567890',
@@ -192,7 +192,7 @@ describe('ExplainView header commit chip', () => {
 
     render(<ExplainView repo="r" branch="b" initialEntry={{ path: 'kb/x.md', commit: null }} onClose={() => {}} />);
 
-    expect(await screen.findByTestId('explain-commit-chip')).toHaveTextContent('cafe123');
+    expect(await screen.findByTestId('history-panel-commit')).toHaveTextContent('cafe123');
   });
 });
 
@@ -411,6 +411,6 @@ describe('ExplainView fact fetch', () => {
     });
 
     // Back-stack advanced: Back button is now visible.
-    expect(screen.getByRole('button', { name: /Back/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /back/i })).toBeInTheDocument();
   });
 });

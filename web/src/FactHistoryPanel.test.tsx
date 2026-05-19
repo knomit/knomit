@@ -25,7 +25,6 @@ describe('FactHistoryPanel', () => {
       repo="r" branch="b" factPath="kb/x.md"
       currentCommit="a1b2c3d"
       onNavigateToCommit={vi.fn()}
-      onClose={vi.fn()}
     />);
     await waitFor(() => expect(screen.getByTestId('history-op-chip').textContent).toContain('modify'));
     expect(screen.getByTestId('history-message').textContent).toBe('Test commit');
@@ -37,7 +36,6 @@ describe('FactHistoryPanel', () => {
       repo="r" branch="b" factPath="kb/x.md"
       currentCommit={null}
       onNavigateToCommit={vi.fn()}
-      onClose={vi.fn()}
     />);
     await waitFor(() => screen.getByTestId('fact-history-panel'));
     expect(screen.queryByTestId('history-op-chip')).toBeNull();
@@ -49,7 +47,6 @@ describe('FactHistoryPanel', () => {
       repo="r" branch="b" factPath="kb/x.md"
       currentCommit="a1b2c3d"
       onNavigateToCommit={vi.fn()}
-      onClose={vi.fn()}
     />);
     await waitFor(() => expect(screen.getAllByTestId('history-fact-version').length).toBe(2));
     const rows = screen.getAllByTestId('history-fact-version');
@@ -63,22 +60,18 @@ describe('FactHistoryPanel', () => {
       repo="r" branch="b" factPath="kb/x.md"
       currentCommit="a1b2c3d"
       onNavigateToCommit={onNavigateToCommit}
-      onClose={vi.fn()}
     />);
     await waitFor(() => expect(screen.getAllByTestId('history-fact-version').length).toBe(2));
     fireEvent.click(screen.getAllByTestId('history-fact-version')[1]);
     expect(onNavigateToCommit).toHaveBeenCalledWith('zzz9999');
   });
 
-  it('clicking the close button calls onClose', async () => {
-    const onClose = vi.fn();
+  it('renders the commit hash in the header', () => {
     render(<FactHistoryPanel
       repo="r" branch="b" factPath="kb/x.md"
-      currentCommit="a1b2c3d"
+      currentCommit="a1b2c3d456789"
       onNavigateToCommit={vi.fn()}
-      onClose={onClose}
     />);
-    fireEvent.click(screen.getByTestId('history-panel-close'));
-    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId('history-panel-commit').textContent).toBe('a1b2c3d');
   });
 });

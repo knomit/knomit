@@ -8,7 +8,6 @@ interface Props {
   factPath: string;
   currentCommit: string | null;
   onNavigateToCommit: (commit: string) => void;
-  onClose: () => void;
 }
 
 interface FactVersion {
@@ -17,7 +16,7 @@ interface FactVersion {
   operation?: string;
 }
 
-export function FactHistoryPanel({ repo, branch, factPath, currentCommit, onNavigateToCommit, onClose }: Props) {
+export function FactHistoryPanel({ repo, branch, factPath, currentCommit, onNavigateToCommit }: Props) {
   const [detail, setDetail] = useState<CommitDetail | null>(null);
   const [factVersions, setFactVersions] = useState<FactVersion[]>([]);
 
@@ -55,15 +54,15 @@ export function FactHistoryPanel({ repo, branch, factPath, currentCommit, onNavi
       }}
     >
       <div style={{ padding: '12px 14px', borderBottom: '1px solid #1a1a1a', display: 'flex', alignItems: 'center', gap: 8 }}>
-        <span style={{ fontFamily: 'monospace', fontSize: 12 }}>
+        <span
+          data-testid="history-panel-commit"
+          style={{
+            color: '#7c9', background: '#1a2e1a', padding: '1px 6px', borderRadius: 3,
+            fontFamily: 'monospace', fontSize: 11,
+          }}
+        >
           {currentCommit ? currentCommit.slice(0, 7) : 'HEAD'}
         </span>
-        <div style={{ flex: 1 }} />
-        <button
-          data-testid="history-panel-close"
-          onClick={onClose}
-          style={{ background: 'none', border: 'none', color: '#888', cursor: 'pointer', fontSize: 11 }}
-        >esc ✕</button>
       </div>
 
       <div style={{ flex: 1, overflowY: 'auto', padding: '12px 14px' }}>
@@ -129,8 +128,8 @@ export function FactHistoryPanel({ repo, branch, factPath, currentCommit, onNavi
                     width: '100%',
                     display: 'flex', alignItems: 'center', gap: 8, padding: '3px 4px',
                     fontSize: 11, textAlign: 'left',
-                    background: isCurrent ? '#1a1a1a' : 'none',
-                    border: 'none', borderRadius: 3, cursor: 'pointer', color: 'inherit',
+                    background: 'none', border: 'none', outline: 'none',
+                    borderRadius: 3, cursor: 'pointer', color: 'inherit',
                   }}
                 >
                   {isCurrent

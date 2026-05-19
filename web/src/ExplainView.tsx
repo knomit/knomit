@@ -71,14 +71,14 @@ export function ExplainView({ repo, branch, initialEntry, onClose }: Props) {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: '#0a0a0a' }}>
-      {/* Header bar — navigation controls only; path + commit live with the
-          fact body below so the title gets visual prominence and the path
-          isn't shown twice. Close affordance lives in the history panel. */}
+      {/* Header bar — navigation + close controls. The fact's commit hash is
+          surfaced in the history panel's header, not duplicated here. */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '0 12px', height: 32, background: '#0f0f0f', borderBottom: '1px solid #1a1a1a', flexShrink: 0 }}>
         <span style={{ fontSize: 10, color: '#444', textTransform: 'uppercase', letterSpacing: '0.08em', flex: 1 }}>Explain</span>
         {backStack.length > 0 && (
-          <button onClick={goBack} style={{ background: 'none', border: '1px solid #2a2a2a', borderRadius: 3, color: '#888', fontSize: 11, padding: '2px 8px', cursor: 'pointer' }}>← Back</button>
+          <button onClick={goBack} style={{ background: 'none', border: '1px solid #2a2a2a', borderRadius: 3, color: '#888', fontSize: 11, padding: '2px 8px', cursor: 'pointer' }}>← back</button>
         )}
+        <button data-testid="explain-close" onClick={onClose} style={{ background: 'none', border: '1px solid #2a2a2a', borderRadius: 3, color: '#888', fontSize: 11, padding: '2px 8px', cursor: 'pointer' }}>esc ✕</button>
       </div>
 
       {/* Incoming refs strip */}
@@ -99,18 +99,7 @@ export function ExplainView({ repo, branch, initialEntry, onClose }: Props) {
           {error && <div style={{ color: '#f66', fontSize: 12 }}>{error}</div>}
           {fact && (
             <div style={{ maxWidth: 720, margin: '0 auto' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-                <span style={{ fontSize: 10, color: '#666', fontFamily: 'monospace', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{fact.path}</span>
-                {fact.commit_hash && (
-                  <span
-                    data-testid="explain-commit-chip"
-                    title={`Showing version ${fact.commit_hash.slice(0, 7)}`}
-                    style={{ color: '#7c9', fontFamily: 'monospace', fontSize: 11, background: '#1a2e1a', padding: '1px 5px', borderRadius: 3, flexShrink: 0 }}
-                  >
-                    {fact.commit_hash.slice(0, 7)}
-                  </span>
-                )}
-              </div>
+              <div style={{ fontSize: 10, color: '#666', fontFamily: 'monospace', marginBottom: 6, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{fact.path}</div>
               <div data-testid="fact-title" style={{ fontSize: 18, fontWeight: 600, color: '#eee', letterSpacing: '-0.3px', marginBottom: 14 }}>{fact.title || fact.path}</div>
               <FactBody
                 fact={fact}
@@ -128,7 +117,6 @@ export function ExplainView({ repo, branch, initialEntry, onClose }: Props) {
             factPath={current.path}
             currentCommit={fact?.commit_hash ?? current.commit ?? null}
             onNavigateToCommit={(commit) => navigateTo({ path: current.path, commit })}
-            onClose={onClose}
           />
         </div>
       </div>
