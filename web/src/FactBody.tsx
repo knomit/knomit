@@ -4,16 +4,15 @@ import type { Fact } from './api';
 import type { Action } from './state';
 import { typeStyles, defaultTypeStyle } from './utils';
 import { TypeIcon } from './icons';
-import type { NavRequest } from './useNavigationManager';
 
 interface Props {
   fact: Fact;
-  navigate: (req: NavRequest) => void;
   dispatch: Dispatch<Action>;
   readOnly: boolean;
+  onRefClick?: (refPath: string) => void;
 }
 
-export function FactBody({ fact, navigate, dispatch, readOnly }: Props) {
+export function FactBody({ fact, dispatch, readOnly, onRefClick }: Props) {
   return (
     <>
       {fact.type && (() => {
@@ -73,20 +72,16 @@ export function FactBody({ fact, navigate, dispatch, readOnly }: Props) {
                     >{'↗'} {ref}</a>
                   );
                 }
-                if (readOnly) {
+                if (!onRefClick) {
                   return (
                     <span key={ref} style={{ color: '#666', fontSize: 12, fontFamily: 'monospace' }}>
                       {'→'} {ref}
                     </span>
                   );
                 }
-                const commit = fact.commit_hash;
                 return (
                   <span key={ref}
-                    onClick={() => commit
-                      ? navigate({ view: 'history', factPath: ref, asOf: { mode: 'scrubbed', commit } })
-                      : navigate({ view: 'tree', factPath: ref })
-                    }
+                    onClick={() => onRefClick(ref)}
                     style={{ color: '#8af', fontSize: 12, fontFamily: 'monospace', cursor: 'pointer', transition: 'color 0.15s' }}
                     onMouseEnter={e => { (e.currentTarget as HTMLElement).style.color = '#adf'; }}
                     onMouseLeave={e => { (e.currentTarget as HTMLElement).style.color = '#8af'; }}

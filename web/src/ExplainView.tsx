@@ -32,7 +32,7 @@ export function ExplainView({ repo, branch, initialEntry, onClose }: Props) {
     setIncoming([]);
     setOutgoing([]);
 
-    const factPromise = api.fact(repo, branch, current.path, current.commit ?? undefined);
+    const factPromise = api.fact(repo, branch, current.path, current.commit ?? undefined, { fallback: 'before' });
     const explainPromise = api.explain(repo, branch, current.path, current.commit ?? undefined);
 
     Promise.all([factPromise, explainPromise])
@@ -102,7 +102,12 @@ export function ExplainView({ repo, branch, initialEntry, onClose }: Props) {
               )}
             </div>
             <div data-testid="fact-title" style={{ fontSize: 18, fontWeight: 600, color: '#eee', letterSpacing: '-0.3px', marginBottom: 14 }}>{fact.title || fact.path}</div>
-            <FactBody fact={fact} navigate={() => {}} dispatch={() => {}} readOnly={true} />
+            <FactBody
+              fact={fact}
+              dispatch={() => {}}
+              readOnly={true}
+              onRefClick={(refPath) => navigateTo({ path: refPath, commit: current.commit })}
+            />
           </div>
         )}
       </div>

@@ -331,3 +331,82 @@ describe('ExplainView header strips', () => {
     expect(await screen.findByText('Source')).toBeInTheDocument();
   });
 });
+
+describe('ExplainView fact fetch', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('passes fallback: "before" so retracted refs show their last known version', async () => {
+    (api.fact as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+      path: 'kb/retracted.md', title: 'Retracted Target', body: 'pre-retraction body',
+      domain: [], confidence: 0.5, sources: 1, entities: [], refs: [],
+      commit_hash: 'older1234',
+    });
+    (api.explain as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({ incoming: [], outgoing: [] });
+
+    render(
+      <ExplainView
+        repo="knomit"
+        branch="machine/test"
+        initialEntry={{ path: 'kb/retracted.md', commit: 'parentcommit' }}
+        onClose={() => {}}
+      />
+    );
+
+    await waitFor(() => {
+      expect(api.fact).toHaveBeenCalledWith(
+        'knomit',
+        'machine/test',
+        'kb/retracted.md',
+        'parentcommit',
+        { fallback: 'before' }
+      );
+    });
+  });
+
+  it('clicking a local ref inside the rendered fact body navigates within Explain at parent\'s commit', async () => {
+    (api.fact as unknown as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce({
+        path: 'kb/parent.md', title: 'Parent',
+        body: 'parent body', domain: [], confidence: 0.9, sources: 1, entities: [],
+        refs: ['kb/inner-ref.md'],
+        commit_hash: 'parent7',
+      })
+      .mockResolvedValueOnce({
+        path: 'kb/inner-ref.md', title: 'Inner Ref',
+        body: 'inner body', domain: [], confidence: 0.7, sources: 1, entities: [],
+        refs: [],
+        commit_hash: 'inner7',
+      });
+    (api.explain as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({ incoming: [], outgoing: [] });
+
+    render(
+      <ExplainView
+        repo="knomit"
+        branch="machine/test"
+        initialEntry={{ path: 'kb/parent.md', commit: 'parentcommit' }}
+        onClose={() => {}}
+      />
+    );
+
+    // Wait for parent fact to render (its ref link appears in the body).
+    const refLink = await screen.findByText(/kb\/inner-ref\.md/);
+    fireEvent.click(refLink);
+
+    // Second fact fetch: anchored at PARENT's commit (the moment of reference),
+    // with fallback=before so retracted refs walk back.
+    await waitFor(() => {
+      expect(api.fact).toHaveBeenLastCalledWith(
+        'knomit',
+        'machine/test',
+        'kb/inner-ref.md',
+        'parentcommit',
+        { fallback: 'before' },
+      );
+    });
+
+    // Back-stack advanced: Back button is now visible.
+    expect(screen.getByRole('button', { name: /Back/ })).toBeInTheDocument();
+  });
+});
