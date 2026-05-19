@@ -57,10 +57,46 @@ export function CommitDrawer({ state, dispatch }: Props) {
       <div style={{ flex: 1, overflowY: 'auto', padding: '12px 14px' }}>
         {detail ? (
           <>
-            <div data-testid="drawer-message" style={{ marginBottom: 12, fontSize: 12 }}>{detail.message}</div>
-            <div data-testid="drawer-files" style={{ fontSize: 11, color: '#888' }}>
-              {detail.files.length} file{detail.files.length !== 1 ? 's' : ''} affected
+            {/* Header line: op chip + relative date — commit hash is already in the top bar */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+              {detail.operation && (
+                <span
+                  data-testid="drawer-op-chip"
+                  style={{
+                    fontFamily: 'monospace', fontSize: 10, padding: '1px 6px',
+                    background: '#1a1a2a', color: '#aaf', borderRadius: 3,
+                  }}
+                >{detail.operation}</span>
+              )}
+              <span style={{ color: '#555', fontSize: 11 }}>{detail.date}</span>
             </div>
+
+            {/* Message */}
+            <div data-testid="drawer-message" style={{ marginBottom: 14, fontSize: 12, color: '#ddd' }}>
+              {detail.message}
+            </div>
+
+            {/* Files affected */}
+            <div style={{ fontSize: 10, color: '#666', letterSpacing: 0.5, textTransform: 'uppercase', marginBottom: 6 }}>
+              Files affected
+            </div>
+            {detail.files.map(f => {
+              const glyph = f.action === 'added' ? '+' : f.action === 'deleted' ? '−' : '~';
+              const color = f.action === 'added' ? '#7c9' : f.action === 'deleted' ? '#f66' : '#aaf';
+              return (
+                <div
+                  key={f.path}
+                  data-testid="drawer-file-row"
+                  style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0', fontSize: 11 }}
+                >
+                  <span style={{ color, fontFamily: 'monospace', width: 12 }}>{glyph}</span>
+                  <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {f.title || f.path.split('/').pop()}
+                  </span>
+                  <span style={{ color: '#555', fontFamily: 'monospace', fontSize: 10 }}>{f.path}</span>
+                </div>
+              );
+            })}
           </>
         ) : (
           <div style={{ color: '#555', fontSize: 11 }}>Loading…</div>

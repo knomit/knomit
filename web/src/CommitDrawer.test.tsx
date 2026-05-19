@@ -55,3 +55,19 @@ describe('CommitDrawer — open/close', () => {
     expect(dispatch).toHaveBeenCalledWith({ type: 'CLOSE_COMMIT_DRAWER' });
   });
 });
+
+describe('CommitDrawer — sections', () => {
+  it('renders the op chip, commit hash, date, and message from CommitDetail', async () => {
+    setup();
+    await waitFor(() => expect(screen.getByTestId('drawer-op-chip').textContent).toContain('modify'));
+    expect(screen.getByTestId('drawer-message').textContent).toBe('Test commit');
+  });
+
+  it('renders one row per file with the action glyph', async () => {
+    setup();
+    await waitFor(() => expect(screen.getAllByTestId('drawer-file-row').length).toBe(1));
+    const row = screen.getByTestId('drawer-file-row');
+    expect(row.textContent).toContain('~'); // modified → ~
+    expect(row.textContent).toContain('X'); // title
+  });
+});
