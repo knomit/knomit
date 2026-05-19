@@ -191,7 +191,7 @@ export function Library({ state, dispatch, navigate }: Props) {
   return (
     <div data-testid="left-panel" data-sort={effectiveSort} style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
       <LibraryHeader
-        count={children.length}
+        count={effectiveSort === 'recent' ? facts.length : children.length}
         scoped={hasPathChip}
         sort={state.librarySort}
         searchActive={searchActive}
