@@ -1,4 +1,4 @@
-export type View = 'tree' | 'chrono' | 'history';
+export type View = 'library';
 
 export type LibrarySort = 'path' | 'recent' | 'relevance';
 
@@ -80,7 +80,7 @@ export type Action =
 
 export const init: AppState = {
   repo: 'knomit',
-  view: 'tree',
+  view: 'library',
   factPath: null,
   asOf: { mode: 'live' },
   filters: [],
@@ -188,7 +188,7 @@ export function reducer(s: AppState, a: Action): AppState {
         return {
           ...s,
           repo: prev.repo,
-          view: 'tree',
+          view: 'library',
           factPath: null,
           asOf: { mode: 'live' },
           filters: [],
@@ -239,7 +239,7 @@ export function reducer(s: AppState, a: Action): AppState {
       return {
         ...s,
         repo: a.repo,
-        view: 'tree',
+        view: 'library',
         factPath: null,
         asOf: { mode: 'live' },
         filters: [],
