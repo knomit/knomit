@@ -47,14 +47,14 @@ describe('VersionWalker', () => {
     expect(dispatch).toHaveBeenCalledWith({ type: 'SET_AS_OF', asOf: { mode: 'live' } });
   });
 
-  it('clicking the commit chip opens the drawer without changing asOf', async () => {
+  it('clicking the commit chip opens Explain at the current fact + commit without changing asOf', async () => {
     const { api } = await import('./api');
     (api.factCommits as ReturnType<typeof vi.fn>).mockResolvedValue({ entries: versions });
     const dispatch = vi.fn();
     render(<VersionWalker repo="r" branch="b" factPath="kb/x.md" currentCommit="bbb2222" dispatch={dispatch} />);
     await waitFor(() => screen.getByTestId('walker-commit-chip'));
     fireEvent.click(screen.getByTestId('walker-commit-chip'));
-    expect(dispatch).toHaveBeenCalledWith({ type: 'OPEN_COMMIT_DRAWER', commit: 'bbb2222' });
+    expect(dispatch).toHaveBeenCalledWith({ type: 'OPEN_EXPLAIN', path: 'kb/x.md', commit: 'bbb2222' });
     // No SET_AS_OF dispatch
     const setAsOfCalls = dispatch.mock.calls.filter(c => c[0].type === 'SET_AS_OF');
     expect(setAsOfCalls).toHaveLength(0);

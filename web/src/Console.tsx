@@ -19,6 +19,7 @@ interface StatusFooterProps {
   task: { op: string; message: string } | null;
   onExpand: () => void;
   dispatch: React.Dispatch<Action>;
+  factPath: string | null;
 }
 
 function pillContent(asOf: AsOf): { color: string; label: string; descriptor: string; glow: boolean } {
@@ -42,7 +43,7 @@ function Kbd({ children }: { children: string }) {
   );
 }
 
-function StatusFooter({ asOf, info, errors, task, onExpand, dispatch }: StatusFooterProps) {
+function StatusFooter({ asOf, info, errors, task, onExpand, dispatch, factPath }: StatusFooterProps) {
   const p = pillContent(asOf);
   return (
     <div
@@ -66,12 +67,12 @@ function StatusFooter({ asOf, info, errors, task, onExpand, dispatch }: StatusFo
           color: p.color, letterSpacing: 1.1, fontWeight: 600,
           fontFamily: 'JetBrains Mono, ui-monospace, monospace', fontSize: 10,
         }}>{p.label}</span>
-        {asOf.mode === 'scrubbed' ? (
+        {asOf.mode === 'scrubbed' && factPath ? (
           <span
             data-testid="pill-commit-hash"
             onClick={(e) => {
               e.stopPropagation();
-              dispatch({ type: 'OPEN_COMMIT_DRAWER', commit: asOf.commit });
+              dispatch({ type: 'OPEN_EXPLAIN', path: factPath, commit: asOf.commit });
             }}
             style={{
               color: '#a0a0a8', fontFamily: 'JetBrains Mono, ui-monospace, monospace', fontSize: 10,
@@ -171,6 +172,7 @@ export function Console({ state, dispatch }: Props) {
         task={activeTask ? { op: activeTask.op, message: activeTask.message } : null}
         onExpand={() => dispatch({ type: 'CONSOLE_TOGGLE' })}
         dispatch={dispatch}
+        factPath={state.factPath}
       />
     );
   }

@@ -53,7 +53,7 @@ export function VersionWalker({ repo, branch, factPath, currentCommit, dispatch 
     }
   };
   const handleChipClick = () => {
-    dispatch({ type: 'OPEN_COMMIT_DRAWER', commit: currentCommit });
+    dispatch({ type: 'OPEN_EXPLAIN', path: factPath, commit: currentCommit });
   };
 
   const prevDisabled = isOldest || total < 2 || idx < 0;

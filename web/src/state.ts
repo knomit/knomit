@@ -2,8 +2,6 @@ export type View = 'library';
 
 export type LibrarySort = 'path' | 'recent' | 'relevance';
 
-export type DrawerState = { open: false } | { open: true; commit: string };
-
 export interface ExplainEntry {
   path: string;
   commit: string | null;
@@ -55,7 +53,6 @@ export interface AppState {
   remoteError: string;
   rightPanelFocused: boolean;
   librarySort: LibrarySort;
-  commitDrawer: DrawerState;
   explainEntry: ExplainEntry | null;
 }
 
@@ -81,8 +78,6 @@ export type Action =
   | { type: 'APPLY_NAV'; view: View; factPath: string | null; asOf: AsOf; filters?: FilterChip[]; freeText?: string }
   | { type: 'AMEND_NAV'; factPath: string | null; asOf?: AsOf }
   | { type: 'SET_LIBRARY_SORT'; sort: LibrarySort }
-  | { type: 'OPEN_COMMIT_DRAWER'; commit: string }
-  | { type: 'CLOSE_COMMIT_DRAWER' }
   | { type: 'OPEN_EXPLAIN'; path: string; commit: string | null }
   | { type: 'CLOSE_EXPLAIN' };
 
@@ -105,7 +100,6 @@ export const init: AppState = {
   remoteError: '',
   rightPanelFocused: false,
   librarySort: 'recent',
-  commitDrawer: { open: false },
   explainEntry: null,
 };
 
@@ -273,10 +267,6 @@ export function reducer(s: AppState, a: Action): AppState {
       return { ...s, asOf: a.asOf };
     case 'SET_LIBRARY_SORT':
       return { ...s, librarySort: a.sort };
-    case 'OPEN_COMMIT_DRAWER':
-      return { ...s, commitDrawer: { open: true, commit: a.commit } };
-    case 'CLOSE_COMMIT_DRAWER':
-      return { ...s, commitDrawer: { open: false } };
     case 'OPEN_EXPLAIN':
       return { ...s, explainEntry: { path: a.path, commit: a.commit } };
     case 'CLOSE_EXPLAIN':
