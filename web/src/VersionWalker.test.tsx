@@ -75,4 +75,11 @@ describe('VersionWalker', () => {
     await waitFor(() => screen.getByTestId('walker-next'));
     expect(screen.getByTestId('walker-next')).toBeDisabled();
   });
+
+  it('shows "v? of N" when currentCommit is not in the loaded versions', async () => {
+    const { api } = await import('./api');
+    (api.factCommits as ReturnType<typeof vi.fn>).mockResolvedValue({ entries: versions });
+    render(<VersionWalker repo="r" branch="b" factPath="kb/x.md" currentCommit="not-loaded" dispatch={vi.fn()} />);
+    await waitFor(() => expect(screen.getByTestId('version-walker').textContent).toContain('v? of 3'));
+  });
 });

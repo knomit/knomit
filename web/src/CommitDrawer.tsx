@@ -24,15 +24,17 @@ export function CommitDrawer({ state, dispatch }: Props) {
     return () => window.removeEventListener('keydown', handler);
   }, [commitDrawer.open, dispatch]);
 
+  const openCommit = commitDrawer.open ? commitDrawer.commit : null;
+
   // Fetch commit detail when the open commit changes.
   useEffect(() => {
-    if (!commitDrawer.open) { setDetail(null); return; }
+    if (!openCommit) { setDetail(null); return; }
     let cancelled = false;
-    api.commitDetail(state.repo, state.branch, commitDrawer.commit).then(d => {
+    api.commitDetail(state.repo, state.branch, openCommit).then(d => {
       if (!cancelled) setDetail(d);
     }).catch(() => { if (!cancelled) setDetail(null); });
     return () => { cancelled = true; };
-  }, [commitDrawer.open && commitDrawer.commit, state.repo, state.branch]);
+  }, [openCommit, state.repo, state.branch]);
 
   // Fetch fact version history when a fact is open.
   useEffect(() => {

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { Library } from './Library';
 import { init } from './state';
 import type { AppState } from './state';
@@ -66,6 +66,32 @@ describe('Library — Recent sort', () => {
     setup({ librarySort: 'recent' });
     await waitFor(() => screen.getByTestId('left-panel'));
     expect(screen.getByTestId('left-panel').getAttribute('data-sort')).toBe('recent');
+  });
+});
+
+describe('Library — Recent sort keyboard navigation', () => {
+  beforeEach(() => { vi.clearAllMocks(); });
+
+  it('ArrowDown in Recent mode navigates between facts', async () => {
+    const { api } = await import('./api');
+    (api.recent as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      facts: [
+        { path: 'kb/a.md', title: 'A', committed_at: 1, type: 'observation' },
+        { path: 'kb/b.md', title: 'B', committed_at: 2, type: 'observation' },
+      ],
+      total: 2,
+    });
+    const navigate = vi.fn();
+    render(<Library state={{
+      ...init,
+      repo: 'knomit',
+      branch: 'machine/test',
+      headCommit: 'aaaaaaa',
+      librarySort: 'recent',
+    }} dispatch={vi.fn()} navigate={navigate} />);
+    await waitFor(() => expect(screen.getAllByTestId('chrono-item').length).toBe(2));
+    fireEvent.keyDown(window, { key: 'ArrowDown' });
+    expect(navigate).toHaveBeenCalledWith({ view: 'library', factPath: 'kb/a.md' });
   });
 });
 

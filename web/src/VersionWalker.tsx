@@ -8,7 +8,7 @@ interface Props {
   repo: string;
   branch: string;
   factPath: string;
-  currentCommit: string | null;
+  currentCommit: string;
   dispatch: Dispatch<Action>;
 }
 
@@ -29,9 +29,9 @@ export function VersionWalker({ repo, branch, factPath, currentCommit, dispatch 
   }, [repo, branch, factPath]);
 
   // versions are newest-first from the backend.
-  const idx = currentCommit ? versions.findIndex(v => v.commit === currentCommit) : -1;
+  const idx = versions.findIndex(v => v.commit === currentCommit);
   const total = versions.length;
-  const versionNumber = total - idx;          // 1 = oldest. Display vN of M.
+  const versionDisplay = idx < 0 ? '?' : String(total - idx);  // 1 = oldest. Display vN of M.
   const isOldest = idx === total - 1;
   const isNewest = idx === 0;
 
@@ -53,9 +53,7 @@ export function VersionWalker({ repo, branch, factPath, currentCommit, dispatch 
     }
   };
   const handleChipClick = () => {
-    if (currentCommit) {
-      dispatch({ type: 'OPEN_COMMIT_DRAWER', commit: currentCommit });
-    }
+    dispatch({ type: 'OPEN_COMMIT_DRAWER', commit: currentCommit });
   };
 
   const prevDisabled = isOldest || total < 2 || idx < 0;
@@ -75,7 +73,7 @@ export function VersionWalker({ repo, branch, factPath, currentCommit, dispatch 
         }}
       >← prev</button>
       <span style={{ color: '#aaa' }}>
-        v{versionNumber > 0 ? versionNumber : '?'} of {loading ? '…' : total}
+        v{versionDisplay} of {loading ? '…' : total}
       </span>
       <button
         data-testid="walker-next"

@@ -11,6 +11,8 @@ import { TypeIcon, FolderIcon } from './icons';
 import { LibraryHeader } from './LibraryHeader';
 import type { NavRequest } from './useNavigationManager';
 
+type RowItem = { name: string; fullPath: string; is_dir: boolean };
+
 interface Props {
   state: AppState;
   dispatch: Dispatch<Action>;
@@ -68,7 +70,6 @@ export function Library({ state, dispatch, navigate }: Props) {
   // ── Recent sort: api.recent for chrono entries ──
   const [facts, setFacts] = useState<RecentFactEntry[]>([]);
   const [loading, setLoading] = useState(false);
-  const sentinelRef = useRef<HTMLDivElement>(null);
   // Stale ref for use inside the async useAsync callback (state updates between
   // dispatch and resolution would otherwise read closed-over stale values).
   const staleStateRef = useRef(state);
@@ -138,27 +139,34 @@ export function Library({ state, dispatch, navigate }: Props) {
     }).catch(() => { if (!stale()) setChildren([]); });
   }, [path, state.headCommit, state.freeText, effectiveSort, state.repo, state.branch, filtersKey]);
 
+  const activeList: RowItem[] = useMemo(() => {
+    if (effectiveSort === 'recent') {
+      return facts.map(f => ({ name: f.path.split('/').pop() || f.path, fullPath: f.path, is_dir: false }));
+    }
+    return children.map(c => ({ name: c.name, fullPath: c.fullPath || '', is_dir: c.is_dir }));
+  }, [effectiveSort, facts, children]);
+
   const moveSelection = useCallback((delta: 1 | -1) => {
-    const len = children.length;
+    const len = activeList.length;
     if (len === 0) return;
     const next = Math.max(0, Math.min(selectedIdx + delta, len - 1));
     setSelectedIdx(next);
     itemRefs.current[next]?.scrollIntoView({ block: 'nearest' });
-    const c = children[next];
-    if (c && !c.is_dir) {
-      navigate({ view: 'library', factPath: c.fullPath || `${path}/${c.name}` });
+    const item = activeList[next];
+    if (item && !item.is_dir) {
+      navigate({ view: 'library', factPath: item.fullPath || `${path}/${item.name}` });
     }
-  }, [children, selectedIdx, path, navigate]);
+  }, [activeList, selectedIdx, path, navigate]);
 
   const activateSelected = useCallback(() => {
-    const child = children[selectedIdx];
-    if (!child) return;
-    if (child.is_dir) {
-      dispatch({ type: 'NAVIGATE', path: `${path}/${child.name}` });
+    const item = activeList[selectedIdx];
+    if (!item) return;
+    if (item.is_dir) {
+      dispatch({ type: 'NAVIGATE', path: `${path}/${item.name}` });
     } else {
-      navigate({ view: 'library', factPath: child.fullPath || `${path}/${child.name}` });
+      navigate({ view: 'library', factPath: item.fullPath || `${path}/${item.name}` });
     }
-  }, [children, selectedIdx, path, dispatch, navigate]);
+  }, [activeList, selectedIdx, path, dispatch, navigate]);
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -176,15 +184,15 @@ export function Library({ state, dispatch, navigate }: Props) {
       }
       else if (e.key === 'ArrowRight') {
         e.preventDefault();
-        const child = children[selectedIdx];
-        if (!child) return;
-        if (child.is_dir) activateSelected();
+        const item = activeList[selectedIdx];
+        if (!item) return;
+        if (item.is_dir) activateSelected();
         else dispatch({ type: 'FOCUS_RIGHT_PANEL' });
       }
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [state.rightPanelFocused, moveSelection, activateSelected, children, selectedIdx, path, dispatch]);
+  }, [state.rightPanelFocused, moveSelection, activateSelected, activeList, selectedIdx, path, dispatch]);
 
   const hasPathChip = state.filters.some(f => f.category === 'path');
 
@@ -193,7 +201,7 @@ export function Library({ state, dispatch, navigate }: Props) {
       <LibraryHeader
         count={effectiveSort === 'recent' ? facts.length : children.length}
         scoped={hasPathChip}
-        sort={state.librarySort}
+        sort={effectiveSort}
         searchActive={searchActive}
         onSortChange={(sort) => dispatch({ type: 'SET_LIBRARY_SORT', sort })}
       />
@@ -270,7 +278,6 @@ export function Library({ state, dispatch, navigate }: Props) {
                 </div>
               );
             })}
-            <div ref={sentinelRef} style={{ height: 1 }} />
             {loading && <LoadingSpinner />}
           </>
         )}
