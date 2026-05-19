@@ -12,6 +12,7 @@ interface Props {
 export function CommitDrawer({ state, dispatch }: Props) {
   const { commitDrawer } = state;
   const [detail, setDetail] = useState<CommitDetail | null>(null);
+  const [factVersions, setFactVersions] = useState<{ commit: string; message: string; operation?: string }[]>([]);
 
   // Close on Escape — only when open.
   useEffect(() => {
@@ -32,6 +33,18 @@ export function CommitDrawer({ state, dispatch }: Props) {
     }).catch(() => { if (!cancelled) setDetail(null); });
     return () => { cancelled = true; };
   }, [commitDrawer.open && commitDrawer.commit, state.repo, state.branch]);
+
+  // Fetch fact version history when a fact is open.
+  useEffect(() => {
+    if (!commitDrawer.open || !state.factPath) { setFactVersions([]); return; }
+    let cancelled = false;
+    api.factCommits(state.repo, state.branch, state.factPath).then(r => {
+      if (!cancelled) {
+        setFactVersions((r.entries || []).map(e => ({ commit: e.commit, message: e.message, operation: e.operation })));
+      }
+    }).catch(() => { if (!cancelled) setFactVersions([]); });
+    return () => { cancelled = true; };
+  }, [commitDrawer.open, state.factPath, state.repo, state.branch]);
 
   if (!commitDrawer.open) return null;
 
@@ -97,6 +110,34 @@ export function CommitDrawer({ state, dispatch }: Props) {
                 </div>
               );
             })}
+
+            {state.factPath && factVersions.length > 0 && (
+              <div data-testid="drawer-fact-versions" style={{ marginTop: 16 }}>
+                <div style={{ fontSize: 10, color: '#666', letterSpacing: 0.5, textTransform: 'uppercase', marginBottom: 6 }}>
+                  This fact · {factVersions.length} version{factVersions.length !== 1 ? 's' : ''}
+                </div>
+                {factVersions.map(v => {
+                  const isCurrent = commitDrawer.open && v.commit === commitDrawer.commit;
+                  return (
+                    <div
+                      key={v.commit}
+                      data-testid="drawer-fact-version"
+                      style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '3px 0', fontSize: 11 }}
+                    >
+                      {isCurrent && <span data-testid="drawer-current-dot" style={{ width: 5, height: 5, borderRadius: '50%', background: '#e5a23c' }} />}
+                      {!isCurrent && <span style={{ width: 5 }} />}
+                      {v.operation && (
+                        <span style={{ fontFamily: 'monospace', fontSize: 9, padding: '0 4px', background: '#1a1a2a', color: '#aaf', borderRadius: 2 }}>
+                          {v.operation}
+                        </span>
+                      )}
+                      <span style={{ fontFamily: 'monospace', color: '#7c9' }}>{v.commit.slice(0, 7)}</span>
+                      <span style={{ flex: 1, color: '#aaa', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{v.message}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </>
         ) : (
           <div style={{ color: '#555', fontSize: 11 }}>Loading…</div>

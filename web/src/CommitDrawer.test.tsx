@@ -71,3 +71,38 @@ describe('CommitDrawer — sections', () => {
     expect(row.textContent).toContain('X'); // title
   });
 });
+
+describe('CommitDrawer — this fact section', () => {
+  it('omits the section when no fact is open', async () => {
+    setup({ factPath: null });
+    await waitFor(() => screen.getByTestId('commit-drawer'));
+    expect(screen.queryByTestId('drawer-fact-versions')).toBeNull();
+  });
+
+  it('lists fact versions when a fact is open', async () => {
+    const { api } = await import('./api');
+    (api.factCommits as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      entries: [
+        { commit: 'a1b2c3d', date: '2026-05-01T00:00:00Z', message: 'Test commit', operation: 'modify' },
+        { commit: 'zzz9999', date: '2026-04-01T00:00:00Z', message: 'older', operation: 'add' },
+      ],
+    });
+    setup({ factPath: 'kb/x.md' });
+    await waitFor(() => expect(screen.getAllByTestId('drawer-fact-version').length).toBe(2));
+  });
+
+  it('marks the row matching the drawer commit with the amber dot', async () => {
+    const { api } = await import('./api');
+    (api.factCommits as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      entries: [
+        { commit: 'a1b2c3d', date: '2026-05-01T00:00:00Z', message: 'Test commit', operation: 'modify' },
+        { commit: 'zzz9999', date: '2026-04-01T00:00:00Z', message: 'older', operation: 'add' },
+      ],
+    });
+    setup({ factPath: 'kb/x.md' });
+    await waitFor(() => screen.getAllByTestId('drawer-fact-version'));
+    const rows = screen.getAllByTestId('drawer-fact-version');
+    expect(rows[0].querySelector('[data-testid="drawer-current-dot"]')).not.toBeNull();
+    expect(rows[1].querySelector('[data-testid="drawer-current-dot"]')).toBeNull();
+  });
+});
