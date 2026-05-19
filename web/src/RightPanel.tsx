@@ -17,7 +17,7 @@ function renderFact(
   branch: string,
   dispatch: Dispatch<Action>,
   onRetract?: () => void,
-  onExplain?: (path: string, commit: string | null) => void,
+  onExplain?: (path: string, commit: string) => void,  // commit required — Explain is always commit-anchored
   readOnly = false,
   anchorCommit?: string | null,
 ) {
@@ -91,7 +91,7 @@ function renderFact(
         fact={fact}
         dispatch={dispatch}
         readOnly={readOnly}
-        onRefClick={onExplain ? (refPath) => onExplain(refPath, fact.commit_hash ?? null) : undefined}
+        onRefClick={onExplain && fact.commit_hash ? ((c: string) => (refPath: string) => onExplain(refPath, c))(fact.commit_hash) : undefined}
       />
     </div>
   );
@@ -208,7 +208,7 @@ function ConfirmModal({ message, onConfirm, onCancel }: {
 export function RightPanel({ state, dispatch, onExplain }: {
   state: AppState;
   dispatch: Dispatch<Action>;
-  onExplain?: (path: string, commit: string | null) => void;
+  onExplain?: (path: string, commit: string) => void;  // commit required — Explain is always commit-anchored
 }) {
   const [fact, setFact] = useState<Fact | null>(null);
   const [stats, setStats] = useState<Stats | null>(null);

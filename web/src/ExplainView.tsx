@@ -54,8 +54,10 @@ export function ExplainView({ repo, branch, initialEntry, onClose }: Props) {
     setIncoming([]);
     setOutgoing([]);
 
-    const factPromise = api.fact(repo, branch, current.path, current.commit ?? undefined, { fallback: 'before' });
-    const explainPromise = api.explain(repo, branch, current.path, current.commit ?? undefined);
+    // Explain is ALWAYS commit-anchored — current.commit is a required string.
+    // Never fall back to HEAD endpoints (see ExplainEntry doc in state.ts).
+    const factPromise = api.fact(repo, branch, current.path, current.commit, { fallback: 'before' });
+    const explainPromise = api.explain(repo, branch, current.path, current.commit);
 
     Promise.all([factPromise, explainPromise])
       .then(([f, e]) => {
@@ -171,7 +173,7 @@ export function ExplainView({ repo, branch, initialEntry, onClose }: Props) {
             factPath={current.path}
             currentCommit={fact?.commit_hash ?? current.commit ?? null}
             onNavigateToCommit={(commit) => navigateTo({ path: current.path, commit })}
-            onFileClick={(path) => navigateTo({ path, commit: fact?.commit_hash ?? current.commit ?? null })}
+            onFileClick={(path) => navigateTo({ path, commit: fact?.commit_hash ?? current.commit })}
           />
         </div>
       </div>

@@ -41,7 +41,7 @@ describe('ExplainView Chip', () => {
       incoming: [makeGroup({ path: 'kb/single.md', title: 'Single', versions: [{ commit: 'abcdef0123', committed_at: 1000 }] })],
       outgoing: [],
     });
-    render(<ExplainView repo="r" branch="b" initialEntry={{ path: 'kb/x.md', commit: null }} onClose={() => {}} />);
+    render(<ExplainView repo="r" branch="b" initialEntry={{ path: 'kb/x.md', commit: 'init1234' }} onClose={() => {}} />);
 
     expect(await screen.findByText('Single')).toBeInTheDocument();
     expect(screen.getByText('abcdef0')).toBeInTheDocument();
@@ -58,7 +58,7 @@ describe('ExplainView Chip', () => {
       incoming: [makeGroup({ path: 'kb/multi.md', title: 'Multi', versions })],
       outgoing: [],
     });
-    render(<ExplainView repo="r" branch="b" initialEntry={{ path: 'kb/x.md', commit: null }} onClose={() => {}} />);
+    render(<ExplainView repo="r" branch="b" initialEntry={{ path: 'kb/x.md', commit: 'init1234' }} onClose={() => {}} />);
 
     expect(await screen.findByText('Multi')).toBeInTheDocument();
     const badge = screen.getByText('×2 ⌄');
@@ -85,7 +85,7 @@ describe('ExplainView Chip', () => {
     // is not called again — only fact() is. Mock fact() for the navigated path.
     (api.fact as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({ ...baseFact, path: 'kb/multi.md' });
 
-    render(<ExplainView repo="r" branch="b" initialEntry={{ path: 'kb/x.md', commit: null }} onClose={() => {}} />);
+    render(<ExplainView repo="r" branch="b" initialEntry={{ path: 'kb/x.md', commit: 'init1234' }} onClose={() => {}} />);
 
     await screen.findByText('Multi');
     fireEvent.click(screen.getByText('Multi'));
@@ -116,7 +116,7 @@ describe('ExplainView Chip', () => {
     });
     (api.fact as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({ ...baseFact, path: 'kb/target.md' });
 
-    render(<ExplainView repo="r" branch="b" initialEntry={{ path: 'kb/x.md', commit: null }} onClose={() => {}} />);
+    render(<ExplainView repo="r" branch="b" initialEntry={{ path: 'kb/x.md', commit: 'init1234' }} onClose={() => {}} />);
 
     await screen.findByText('Target');
     fireEvent.click(screen.getByText('Target'));
@@ -136,7 +136,7 @@ describe('ExplainView Chip', () => {
       incoming: [makeGroup({ path: 'kb/multi.md', title: 'Multi', versions })],
       outgoing: [],
     });
-    render(<ExplainView repo="r" branch="b" initialEntry={{ path: 'kb/x.md', commit: null }} onClose={() => {}} />);
+    render(<ExplainView repo="r" branch="b" initialEntry={{ path: 'kb/x.md', commit: 'init1234' }} onClose={() => {}} />);
 
     await screen.findByText('Multi');
     fireEvent.click(screen.getByText('Multi'));
@@ -159,7 +159,7 @@ describe('ExplainView Chip', () => {
       incoming: [makeGroup({ path: 'kb/multi.md', title: 'Multi', versions })],
       outgoing: [],
     });
-    render(<ExplainView repo="r" branch="b" initialEntry={{ path: 'kb/x.md', commit: null }} onClose={() => {}} />);
+    render(<ExplainView repo="r" branch="b" initialEntry={{ path: 'kb/x.md', commit: 'init1234' }} onClose={() => {}} />);
 
     await screen.findByText('Multi');
     fireEvent.click(screen.getByText('Multi'));
@@ -190,7 +190,7 @@ describe('ExplainView header commit chip', () => {
     });
     (api.explain as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({ incoming: [], outgoing: [] });
 
-    render(<ExplainView repo="r" branch="b" initialEntry={{ path: 'kb/x.md', commit: null }} onClose={() => {}} />);
+    render(<ExplainView repo="r" branch="b" initialEntry={{ path: 'kb/x.md', commit: 'init1234' }} onClose={() => {}} />);
 
     expect(await screen.findByTestId('explain-commit-chip')).toHaveTextContent('cafe123');
   });
@@ -215,7 +215,7 @@ describe('ExplainView body parity', () => {
     });
     (api.explain as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({ incoming: [], outgoing: [] });
 
-    render(<ExplainView repo="r" branch="b" initialEntry={{ path: 'kb/x.md', commit: null }} onClose={() => {}} />);
+    render(<ExplainView repo="r" branch="b" initialEntry={{ path: 'kb/x.md', commit: 'init1234' }} onClose={() => {}} />);
 
     expect(await screen.findByTestId('fact-type-badge')).toBeInTheDocument();
     expect(screen.getByText('0.50')).toBeInTheDocument();
@@ -246,7 +246,7 @@ describe('ExplainView Chip — type-aware styling', () => {
         versions: [{ commit: 'aaaaaaa1', committed_at: 1000, type: 'principle' }],
       })],
     });
-    render(<ExplainView repo="r" branch="b" initialEntry={{ path: 'kb/x.md', commit: null }} onClose={() => {}} />);
+    render(<ExplainView repo="r" branch="b" initialEntry={{ path: 'kb/x.md', commit: 'init1234' }} onClose={() => {}} />);
 
     const chip = await screen.findByTestId('ref-chip');
     // Type icon present (the SVG produced by TypeIcon).
@@ -268,7 +268,7 @@ describe('ExplainView Chip — type-aware styling', () => {
       })],
       outgoing: [],
     });
-    render(<ExplainView repo="r" branch="b" initialEntry={{ path: 'kb/x.md', commit: null }} onClose={() => {}} />);
+    render(<ExplainView repo="r" branch="b" initialEntry={{ path: 'kb/x.md', commit: 'init1234' }} onClose={() => {}} />);
     expect(await screen.findByText('Single')).toBeInTheDocument();
     expect(screen.getByText('abcdef0')).toBeInTheDocument();
     expect(screen.queryByText(/commit_at_/)).toBeNull();
@@ -291,7 +291,7 @@ describe('ExplainView header strips', () => {
         makeGroup({ path: 'kb/d1.md', title: 'D1', type: 'concept',   deleted: true, versions: [{ commit: 'd4567890', committed_at: 1, type: 'concept', deleted: true }] }),
       ],
     });
-    render(<ExplainView repo="r" branch="b" initialEntry={{ path: 'kb/x.md', commit: null }} onClose={() => {}} />);
+    render(<ExplainView repo="r" branch="b" initialEntry={{ path: 'kb/x.md', commit: 'init1234' }} onClose={() => {}} />);
 
     const header = await screen.findByTestId('outgoing-header');
     expect(header).toHaveTextContent('OUT-EDGES');
@@ -308,7 +308,7 @@ describe('ExplainView header strips', () => {
       ],
       outgoing: [],
     });
-    render(<ExplainView repo="r" branch="b" initialEntry={{ path: 'kb/x.md', commit: null }} onClose={() => {}} />);
+    render(<ExplainView repo="r" branch="b" initialEntry={{ path: 'kb/x.md', commit: 'init1234' }} onClose={() => {}} />);
 
     const header = await screen.findByTestId('incoming-header');
     expect(header).toHaveTextContent('IN-EDGES');

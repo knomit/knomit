@@ -2,9 +2,17 @@ export type View = 'library';
 
 export type LibrarySort = 'path' | 'recent' | 'relevance';
 
+/**
+ * Explain is ALWAYS commit-anchored. Every Explain entry carries a concrete
+ * commit hash — never null, never undefined. The HEAD-only `/facts/{path}/...`
+ * endpoints have data-divergence issues from the commit-anchored graph index,
+ * so the UI must never fall back to them. Every caller of OPEN_EXPLAIN /
+ * navigateTo / onExplain MUST supply a commit. If the caller has a fact in
+ * hand, that fact's `commit_hash` is the right anchor.
+ */
 export interface ExplainEntry {
   path: string;
-  commit: string | null;
+  commit: string;
 }
 
 export interface FilterChip {
@@ -78,7 +86,7 @@ export type Action =
   | { type: 'APPLY_NAV'; view: View; factPath: string | null; asOf: AsOf; filters?: FilterChip[]; freeText?: string }
   | { type: 'AMEND_NAV'; factPath: string | null; asOf?: AsOf }
   | { type: 'SET_LIBRARY_SORT'; sort: LibrarySort }
-  | { type: 'OPEN_EXPLAIN'; path: string; commit: string | null }
+  | { type: 'OPEN_EXPLAIN'; path: string; commit: string }  // commit is required — see ExplainEntry
   | { type: 'CLOSE_EXPLAIN' };
 
 export const init: AppState = {
