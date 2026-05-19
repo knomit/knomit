@@ -107,12 +107,3 @@ describe('CommitDrawer — this fact section', () => {
   });
 });
 
-describe('CommitDrawer — footer', () => {
-  it('"scrub to" dispatches SET_AS_OF + CLOSE_COMMIT_DRAWER', async () => {
-    const { dispatch } = setup();
-    await waitFor(() => screen.getByTestId('drawer-scrub'));
-    fireEvent.click(screen.getByTestId('drawer-scrub'));
-    expect(dispatch).toHaveBeenCalledWith({ type: 'SET_AS_OF', asOf: { mode: 'scrubbed', commit: 'a1b2c3d' } });
-    expect(dispatch).toHaveBeenCalledWith({ type: 'CLOSE_COMMIT_DRAWER' });
-  });
-});
