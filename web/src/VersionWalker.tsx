@@ -58,33 +58,47 @@ export function VersionWalker({ repo, branch, factPath, currentCommit, dispatch 
     }
   };
 
+  const prevDisabled = isOldest || total < 2 || idx < 0;
+  const nextDisabled = isNewest || total < 2 || idx < 0;
+
   return (
     <span data-testid="version-walker" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontFamily: 'monospace', fontSize: 11 }}>
       <button
         data-testid="walker-prev"
-        disabled={isOldest || total < 2 || idx < 0}
+        disabled={prevDisabled}
         onClick={handlePrev}
-        style={{ background: 'none', border: 'none', color: '#888', cursor: 'pointer', padding: '0 4px' }}
+        style={{
+          background: 'none', border: 'none',
+          color: prevDisabled ? '#444' : '#888',
+          cursor: prevDisabled ? 'default' : 'pointer',
+          padding: '0 4px',
+        }}
       >← prev</button>
       <span style={{ color: '#aaa' }}>
         v{versionNumber > 0 ? versionNumber : '?'} of {loading ? '…' : total}
       </span>
       <button
         data-testid="walker-next"
-        disabled={isNewest || total < 2 || idx < 0}
+        disabled={nextDisabled}
         onClick={handleNext}
-        style={{ background: 'none', border: 'none', color: '#888', cursor: 'pointer', padding: '0 4px' }}
+        style={{
+          background: 'none', border: 'none',
+          color: nextDisabled ? '#444' : '#888',
+          cursor: nextDisabled ? 'default' : 'pointer',
+          padding: '0 4px',
+        }}
       >next →</button>
       <span style={{ color: '#333' }}>│</span>
       {currentCommit && (
-        <span
+        <button
           data-testid="walker-commit-chip"
           onClick={handleChipClick}
           style={{
             color: '#7c9', background: '#1a2e1a', padding: '1px 5px', borderRadius: 3,
-            cursor: 'pointer', userSelect: 'none',
+            cursor: 'pointer', userSelect: 'none', border: 'none',
+            fontFamily: 'monospace', fontSize: 11,
           }}
-        >{currentCommit.slice(0, 7)}</span>
+        >{currentCommit.slice(0, 7)}</button>
       )}
     </span>
   );
