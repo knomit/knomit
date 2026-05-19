@@ -201,7 +201,7 @@ export default function App() {
         </div>
       ) : (
         <>
-          <Breadcrumb state={state} dispatch={dispatch} navigate={navigate} />
+          <Breadcrumb state={state} dispatch={dispatch} />
           <FilterBar state={state} dispatch={dispatch} />
 
           <div style={{ display: 'flex', flex: 1, overflow: 'hidden', minHeight: 0 }}>
