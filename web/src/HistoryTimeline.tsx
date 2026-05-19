@@ -90,7 +90,7 @@ export function HistoryTimeline({ state, dispatch, navigate }: Props) {
     setNextCursor(undefined);
     setPrevCursor(undefined);
     setSelectedIdx(0);
-    api.history(state.repo, state.branch, path, undefined, selectAnchorCommit(state) || undefined).then(r => {
+    api.factCommits(state.repo, state.branch, path, undefined, selectAnchorCommit(state) || undefined).then(r => {
       if (stale()) return;
       const e = r.entries || [];
       setEntries(e);
@@ -123,7 +123,7 @@ export function HistoryTimeline({ state, dispatch, navigate }: Props) {
   const loadMore = useCallback(() => {
     if (loadingRef.current || !nextCursor) return;
     setLoading(true);
-    api.history(state.repo, state.branch, path, nextCursor).then(r => {
+    api.factCommits(state.repo, state.branch, path, nextCursor).then(r => {
       setEntries(prev => [...prev, ...(r.entries || [])]);
       setNextCursor(r.next);
       setLoading(false);
@@ -134,7 +134,7 @@ export function HistoryTimeline({ state, dispatch, navigate }: Props) {
     if (loadingRef.current || !prevCursor) return;
     setLoading(true);
     scrollHeightBeforeRef.current = scrollElRef.current?.scrollHeight ?? 0;
-    api.history(state.repo, state.branch, path, undefined, undefined, prevCursor).then(r => {
+    api.factCommits(state.repo, state.branch, path, undefined, undefined, prevCursor).then(r => {
       const newEntries = r.entries || [];
       if (newEntries.length === 0) {
         scrollHeightBeforeRef.current = 0;

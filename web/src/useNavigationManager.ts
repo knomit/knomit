@@ -33,7 +33,7 @@ export async function resolveNavRequest(
         // Resolve the fact's most-recent commit so CommitPanel opens a commit whose
         // file list actually contains factPath.
         try {
-          const hist = await api.history(state.repo, state.branch, factPath);
+          const hist = await api.factCommits(state.repo, state.branch, factPath);
           const lastTouched = hist.entries[0]?.commit ?? anchorAtClick ?? headCommit ?? null;
           if (lastTouched) {
             dispatch({ type: 'APPLY_NAV', view: 'history', factPath, asOf: { mode: 'scrubbed', commit: lastTouched } });
