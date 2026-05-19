@@ -53,7 +53,12 @@ export function VersionWalker({ repo, branch, factPath, currentCommit, dispatch 
     }
   };
   const handleChipClick = () => {
-    dispatch({ type: 'OPEN_EXPLAIN', path: factPath, commit: currentCommit });
+    // Open Explain "on this fact" — anchor null = live HEAD so outgoing refs
+    // reflect the fact's current state. Commit-anchored outgoing returns the
+    // refs *written at that exact commit*, which is empty for path-touching
+    // commits that didn't author the fact (merges, re-indexing). Specific
+    // versions are still reachable via the row clicks in the history panel.
+    dispatch({ type: 'OPEN_EXPLAIN', path: factPath, commit: null });
   };
 
   const prevDisabled = isOldest || total < 2 || idx < 0;
