@@ -5,7 +5,6 @@ import { useNavigationManager } from './useNavigationManager';
 import { bootstrapStatusWithRetry } from './bootstrap';
 import type { RepoInfo } from './api';
 import { TopBar } from './TopBar';
-import { Breadcrumb } from './Breadcrumb';
 import { FilterBar } from './FilterBar';
 import { LeftPanel } from './LeftPanel';
 import { RightPanel } from './RightPanel';
@@ -197,7 +196,6 @@ export default function App() {
         </div>
       ) : (
         <>
-          <Breadcrumb state={state} dispatch={dispatch} />
           <FilterBar state={state} dispatch={dispatch} />
 
           <div style={{ display: 'flex', flex: 1, overflow: 'hidden', minHeight: 0 }}>
