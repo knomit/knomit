@@ -269,9 +269,6 @@ export function reducer(s: AppState, a: Action): AppState {
     case 'CLOSE_COMMIT_DRAWER':
       return { ...s, commitDrawer: { open: false } };
     case 'APPLY_NAV': {
-      const crossingBoundary =
-        (s.view === 'history' && a.view !== 'history') ||
-        (s.view !== 'history' && a.view === 'history');
       // Flag-off: scrub asOf back to live but still allow the view/path change.
       const safeAsOf: AsOf = (!TEMPORAL_ENABLED && a.asOf.mode !== 'live')
         ? { mode: 'live' }
@@ -281,8 +278,8 @@ export function reducer(s: AppState, a: Action): AppState {
         view: a.view,
         factPath: a.factPath,
         asOf: safeAsOf,
-        filters: a.filters !== undefined ? a.filters : crossingBoundary ? s.filters.filter(f => f.category === 'path') : s.filters,
-        freeText: a.freeText !== undefined ? a.freeText : crossingBoundary ? '' : s.freeText,
+        filters: a.filters !== undefined ? a.filters : s.filters,
+        freeText: a.freeText !== undefined ? a.freeText : s.freeText,
         navStack: pushNav(s),
         rightPanelFocused: false,
       };
