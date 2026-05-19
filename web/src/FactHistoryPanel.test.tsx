@@ -25,6 +25,7 @@ describe('FactHistoryPanel', () => {
       repo="r" branch="b" factPath="kb/x.md"
       currentCommit="a1b2c3d"
       onNavigateToCommit={vi.fn()}
+      onFileClick={vi.fn()}
     />);
     await waitFor(() => expect(screen.getByTestId('history-op-chip').textContent).toContain('modify'));
     expect(screen.getByTestId('history-message').textContent).toBe('Test commit');
@@ -36,6 +37,7 @@ describe('FactHistoryPanel', () => {
       repo="r" branch="b" factPath="kb/x.md"
       currentCommit={null}
       onNavigateToCommit={vi.fn()}
+      onFileClick={vi.fn()}
     />);
     await waitFor(() => screen.getByTestId('fact-history-panel'));
     expect(screen.queryByTestId('history-op-chip')).toBeNull();
@@ -47,6 +49,7 @@ describe('FactHistoryPanel', () => {
       repo="r" branch="b" factPath="kb/x.md"
       currentCommit="a1b2c3d"
       onNavigateToCommit={vi.fn()}
+      onFileClick={vi.fn()}
     />);
     await waitFor(() => expect(screen.getAllByTestId('history-fact-version').length).toBe(2));
     const rows = screen.getAllByTestId('history-fact-version');
@@ -60,18 +63,23 @@ describe('FactHistoryPanel', () => {
       repo="r" branch="b" factPath="kb/x.md"
       currentCommit="a1b2c3d"
       onNavigateToCommit={onNavigateToCommit}
+      onFileClick={vi.fn()}
     />);
     await waitFor(() => expect(screen.getAllByTestId('history-fact-version').length).toBe(2));
     fireEvent.click(screen.getAllByTestId('history-fact-version')[1]);
     expect(onNavigateToCommit).toHaveBeenCalledWith('zzz9999');
   });
 
-  it('renders the commit hash in the header', () => {
+  it('clicking a file row calls onFileClick', async () => {
+    const onFileClick = vi.fn();
     render(<FactHistoryPanel
       repo="r" branch="b" factPath="kb/x.md"
-      currentCommit="a1b2c3d456789"
+      currentCommit="a1b2c3d"
       onNavigateToCommit={vi.fn()}
+      onFileClick={onFileClick}
     />);
-    expect(screen.getByTestId('history-panel-commit').textContent).toBe('a1b2c3d');
+    await waitFor(() => expect(screen.getAllByTestId('history-file-row').length).toBe(1));
+    fireEvent.click(screen.getByTestId('history-file-row'));
+    expect(onFileClick).toHaveBeenCalledWith('kb/x.md');
   });
 });

@@ -15,6 +15,10 @@ interface Props {
   onClose: () => void;
 }
 
+const MIN_PANEL_WIDTH = 200;
+const MAX_PANEL_WIDTH = 800;
+const DEFAULT_PANEL_WIDTH = 380;
+
 export function ExplainView({ repo, branch, initialEntry, onClose }: Props) {
   const [current, setCurrent] = useState<ExplainEntry>(initialEntry);
   const [backStack, setBackStack] = useState<ExplainEntry[]>([]);
@@ -23,6 +27,24 @@ export function ExplainView({ repo, branch, initialEntry, onClose }: Props) {
   const [outgoing, setOutgoing] = useState<RefGroup[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [panelWidth, setPanelWidth] = useState(DEFAULT_PANEL_WIDTH);
+
+  const startResize = (e: React.MouseEvent) => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startWidth = panelWidth;
+    const onMove = (ev: MouseEvent) => {
+      // Dragging left grows the panel (it's on the right edge of the layout).
+      const next = startWidth + (startX - ev.clientX);
+      setPanelWidth(Math.max(MIN_PANEL_WIDTH, Math.min(MAX_PANEL_WIDTH, next)));
+    };
+    const onUp = () => {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -71,14 +93,41 @@ export function ExplainView({ repo, branch, initialEntry, onClose }: Props) {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: '#0a0a0a' }}>
-      {/* Header bar — navigation + close controls. The fact's commit hash is
-          surfaced in the history panel's header, not duplicated here. */}
+      {/* Header bar: EXPLAIN <path> @ <commit>, with back + close on the right. */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '0 12px', height: 32, background: '#0f0f0f', borderBottom: '1px solid #1a1a1a', flexShrink: 0 }}>
-        <span style={{ fontSize: 10, color: '#444', textTransform: 'uppercase', letterSpacing: '0.08em', flex: 1 }}>Explain</span>
-        {backStack.length > 0 && (
-          <button onClick={goBack} style={{ background: 'none', border: '1px solid #2a2a2a', borderRadius: 3, color: '#888', fontSize: 11, padding: '2px 8px', cursor: 'pointer' }}>← back</button>
+        <span style={{ fontSize: 10, color: '#444', textTransform: 'uppercase', letterSpacing: '0.08em', flexShrink: 0 }}>Explain</span>
+        <span style={{ fontFamily: 'monospace', fontSize: 11, color: '#888', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{current.path}</span>
+        {fact?.commit_hash && (
+          <>
+            <span style={{ color: '#444', fontSize: 11, flexShrink: 0 }}>@</span>
+            <span
+              data-testid="explain-commit-chip"
+              style={{
+                color: '#7c9', background: '#1a2e1a', padding: '1px 6px', borderRadius: 3,
+                fontFamily: 'monospace', fontSize: 11, flexShrink: 0,
+              }}
+            >{fact.commit_hash.slice(0, 7)}</span>
+          </>
         )}
-        <button data-testid="explain-close" onClick={onClose} style={{ background: 'none', border: '1px solid #2a2a2a', borderRadius: 3, color: '#888', fontSize: 11, padding: '2px 8px', cursor: 'pointer' }}>esc ✕</button>
+        <div style={{ flex: 1 }} />
+        {backStack.length > 0 && (
+          <button
+            data-testid="explain-back"
+            onClick={goBack}
+            title="Back"
+            style={{ background: 'none', border: 'none', color: '#888', fontSize: 14, padding: '2px 6px', cursor: 'pointer', lineHeight: 1 }}
+            onMouseEnter={e => { (e.currentTarget as HTMLElement).style.color = '#ccc'; }}
+            onMouseLeave={e => { (e.currentTarget as HTMLElement).style.color = '#888'; }}
+          >←</button>
+        )}
+        <button
+          data-testid="explain-close"
+          onClick={onClose}
+          title="Close (esc)"
+          style={{ background: 'none', border: 'none', color: '#888', fontSize: 14, padding: '2px 6px', cursor: 'pointer', lineHeight: 1 }}
+          onMouseEnter={e => { (e.currentTarget as HTMLElement).style.color = '#ccc'; }}
+          onMouseLeave={e => { (e.currentTarget as HTMLElement).style.color = '#888'; }}
+        >✕</button>
       </div>
 
       {/* Incoming refs strip */}
@@ -99,7 +148,6 @@ export function ExplainView({ repo, branch, initialEntry, onClose }: Props) {
           {error && <div style={{ color: '#f66', fontSize: 12 }}>{error}</div>}
           {fact && (
             <div style={{ maxWidth: 720, margin: '0 auto' }}>
-              <div style={{ fontSize: 10, color: '#666', fontFamily: 'monospace', marginBottom: 6, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{fact.path}</div>
               <div data-testid="fact-title" style={{ fontSize: 18, fontWeight: 600, color: '#eee', letterSpacing: '-0.3px', marginBottom: 14 }}>{fact.title || fact.path}</div>
               <FactBody
                 fact={fact}
@@ -110,13 +158,23 @@ export function ExplainView({ repo, branch, initialEntry, onClose }: Props) {
             </div>
           )}
         </div>
-        <div style={{ width: 380, flexShrink: 0 }}>
+        <div style={{ width: panelWidth, flexShrink: 0, position: 'relative' }}>
+          <div
+            data-testid="history-resize-handle"
+            onMouseDown={startResize}
+            title="Drag to resize"
+            style={{
+              position: 'absolute', left: -2, top: 0, bottom: 0, width: 5,
+              cursor: 'ew-resize', zIndex: 1,
+            }}
+          />
           <FactHistoryPanel
             repo={repo}
             branch={branch}
             factPath={current.path}
             currentCommit={fact?.commit_hash ?? current.commit ?? null}
             onNavigateToCommit={(commit) => navigateTo({ path: current.path, commit })}
+            onFileClick={(path) => navigateTo({ path, commit: fact?.commit_hash ?? current.commit ?? null })}
           />
         </div>
       </div>

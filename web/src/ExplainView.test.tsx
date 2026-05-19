@@ -192,7 +192,7 @@ describe('ExplainView header commit chip', () => {
 
     render(<ExplainView repo="r" branch="b" initialEntry={{ path: 'kb/x.md', commit: null }} onClose={() => {}} />);
 
-    expect(await screen.findByTestId('history-panel-commit')).toHaveTextContent('cafe123');
+    expect(await screen.findByTestId('explain-commit-chip')).toHaveTextContent('cafe123');
   });
 });
 
@@ -411,6 +411,6 @@ describe('ExplainView fact fetch', () => {
     });
 
     // Back-stack advanced: Back button is now visible.
-    expect(screen.getByRole('button', { name: /back/i })).toBeInTheDocument();
+    expect(screen.getByTestId('explain-back')).toBeInTheDocument();
   });
 });

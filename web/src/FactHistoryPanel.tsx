@@ -8,6 +8,7 @@ interface Props {
   factPath: string;
   currentCommit: string | null;
   onNavigateToCommit: (commit: string) => void;
+  onFileClick: (path: string) => void;
 }
 
 interface FactVersion {
@@ -16,7 +17,7 @@ interface FactVersion {
   operation?: string;
 }
 
-export function FactHistoryPanel({ repo, branch, factPath, currentCommit, onNavigateToCommit }: Props) {
+export function FactHistoryPanel({ repo, branch, factPath, currentCommit, onNavigateToCommit, onFileClick }: Props) {
   const [detail, setDetail] = useState<CommitDetail | null>(null);
   const [factVersions, setFactVersions] = useState<FactVersion[]>([]);
 
@@ -53,18 +54,6 @@ export function FactHistoryPanel({ repo, branch, factPath, currentCommit, onNavi
         width: '100%', height: '100%',
       }}
     >
-      <div style={{ padding: '12px 14px', borderBottom: '1px solid #1a1a1a', display: 'flex', alignItems: 'center', gap: 8 }}>
-        <span
-          data-testid="history-panel-commit"
-          style={{
-            color: '#7c9', background: '#1a2e1a', padding: '1px 6px', borderRadius: 3,
-            fontFamily: 'monospace', fontSize: 11,
-          }}
-        >
-          {currentCommit ? currentCommit.slice(0, 7) : 'HEAD'}
-        </span>
-      </div>
-
       <div style={{ flex: 1, overflowY: 'auto', padding: '12px 14px' }}>
         {currentCommit ? (
           detail ? (
@@ -92,18 +81,25 @@ export function FactHistoryPanel({ repo, branch, factPath, currentCommit, onNavi
               {detail.files.map(f => {
                 const glyph = f.action === 'added' ? '+' : f.action === 'deleted' ? '−' : '~';
                 const color = f.action === 'added' ? '#7c9' : f.action === 'deleted' ? '#f66' : '#aaf';
+                const isDeleted = f.action === 'deleted';
                 return (
-                  <div
+                  <button
                     key={f.path}
                     data-testid="history-file-row"
-                    style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0', fontSize: 11 }}
+                    disabled={isDeleted}
+                    onClick={() => onFileClick(f.path)}
+                    style={{
+                      width: '100%', display: 'flex', alignItems: 'center', gap: 8, padding: '4px 4px', fontSize: 11,
+                      background: 'none', border: 'none', outline: 'none', borderRadius: 3, textAlign: 'left',
+                      cursor: isDeleted ? 'default' : 'pointer', color: 'inherit',
+                    }}
                   >
                     <span style={{ color, fontFamily: 'monospace', width: 12 }}>{glyph}</span>
                     <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                       {f.title || f.path.split('/').pop()}
                     </span>
                     <span style={{ color: '#555', fontFamily: 'monospace', fontSize: 10 }}>{f.path}</span>
-                  </div>
+                  </button>
                 );
               })}
             </>
