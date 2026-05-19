@@ -2,6 +2,8 @@ export type View = 'tree' | 'chrono' | 'history';
 
 export type LibrarySort = 'path' | 'recent' | 'relevance';
 
+export type DrawerState = { open: false } | { open: true; commit: string };
+
 export interface FilterChip {
   category: 'domain' | 'entity' | 'type' | 'kind' | 'ep' | 'path';
   value: string;
@@ -48,6 +50,7 @@ export interface AppState {
   remoteError: string;
   rightPanelFocused: boolean;
   librarySort: LibrarySort;
+  commitDrawer: DrawerState;
 }
 
 export type Action =
@@ -71,7 +74,9 @@ export type Action =
   | { type: 'SET_AS_OF'; asOf: AsOf }
   | { type: 'APPLY_NAV'; view: View; factPath: string | null; asOf: AsOf; filters?: FilterChip[]; freeText?: string }
   | { type: 'AMEND_NAV'; factPath: string | null; asOf?: AsOf }
-  | { type: 'SET_LIBRARY_SORT'; sort: LibrarySort };
+  | { type: 'SET_LIBRARY_SORT'; sort: LibrarySort }
+  | { type: 'OPEN_COMMIT_DRAWER'; commit: string }
+  | { type: 'CLOSE_COMMIT_DRAWER' };
 
 export const init: AppState = {
   repo: 'knomit',
@@ -92,6 +97,7 @@ export const init: AppState = {
   remoteError: '',
   rightPanelFocused: false,
   librarySort: 'recent',
+  commitDrawer: { open: false },
 };
 
 function pushNav(s: AppState): NavEntry[] {
@@ -258,6 +264,10 @@ export function reducer(s: AppState, a: Action): AppState {
       return { ...s, asOf: a.asOf };
     case 'SET_LIBRARY_SORT':
       return { ...s, librarySort: a.sort };
+    case 'OPEN_COMMIT_DRAWER':
+      return { ...s, commitDrawer: { open: true, commit: a.commit } };
+    case 'CLOSE_COMMIT_DRAWER':
+      return { ...s, commitDrawer: { open: false } };
     case 'APPLY_NAV': {
       const crossingBoundary =
         (s.view === 'history' && a.view !== 'history') ||
