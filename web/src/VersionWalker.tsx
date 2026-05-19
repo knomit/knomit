@@ -28,9 +28,9 @@ export function VersionWalker({ repo, branch, factPath, currentCommit, dispatch 
   }, [repo, branch, factPath]);
 
   const handleChipClick = () => {
-    // Anchor null = live HEAD; specific versions are browsable inside Explain
-    // via the history panel's row clicks.
-    dispatch({ type: 'OPEN_EXPLAIN', path: factPath, commit: null });
+    // Explain is always commit-anchored — path + commit. Specific older
+    // versions are reachable via the history panel's row clicks.
+    dispatch({ type: 'OPEN_EXPLAIN', path: factPath, commit: currentCommit });
   };
 
   return (

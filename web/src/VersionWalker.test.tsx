@@ -43,13 +43,13 @@ describe('VersionWalker', () => {
     expect(screen.queryByTestId('walker-version-count')).toBeNull();
   });
 
-  it('clicking the commit chip opens Explain on the fact at HEAD', async () => {
+  it('clicking the commit chip opens Explain at the fact + commit, no asOf change', async () => {
     const { api } = await import('./api');
     (api.factCommits as ReturnType<typeof vi.fn>).mockResolvedValue({ entries: versions });
     const dispatch = vi.fn();
     render(<VersionWalker repo="r" branch="b" factPath="kb/x.md" currentCommit="bbb2222" dispatch={dispatch} />);
     fireEvent.click(screen.getByTestId('walker-commit-chip'));
-    expect(dispatch).toHaveBeenCalledWith({ type: 'OPEN_EXPLAIN', path: 'kb/x.md', commit: null });
+    expect(dispatch).toHaveBeenCalledWith({ type: 'OPEN_EXPLAIN', path: 'kb/x.md', commit: 'bbb2222' });
     const setAsOfCalls = dispatch.mock.calls.filter(c => c[0].type === 'SET_AS_OF');
     expect(setAsOfCalls).toHaveLength(0);
   });
