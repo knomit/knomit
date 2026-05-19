@@ -44,8 +44,6 @@ export function Library({ state, dispatch, navigate }: Props) {
   const [children, setChildren] = useState<DirChild[]>([]);
   const [selectedIdx, setSelectedIdx] = useState(-1);
   const itemRefs = useRef<(HTMLDivElement | null)[]>([]);
-  const staleStateRef = useRef(state);
-  staleStateRef.current = state;
 
   // ── Path sort: api.browse for directory entries ──
   useAsync((stale) => {
