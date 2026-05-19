@@ -70,7 +70,6 @@ export function Library({ state, dispatch, navigate }: Props) {
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
   const sentinelRef = useRef<HTMLDivElement>(null);
-  const containerRef = useRef<HTMLDivElement>(null);
   // Stale ref for use inside the async useAsync callback (state updates between
   // dispatch and resolution would otherwise read closed-over stale values).
   const staleStateRef = useRef(state);
