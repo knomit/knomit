@@ -32,14 +32,14 @@ vi.mock('./api', () => ({
 import { api } from './api';
 
 function setup(state: AppState) {
-  return render(<RightPanel state={state} dispatch={vi.fn()} navigate={vi.fn()} />);
+  return render(<RightPanel state={state} dispatch={vi.fn()} />);
 }
 
 const baseHistoryState: AppState = {
   ...init,
   repo: 'knomit',
   branch: 'machine/test',
-  view: 'history',
+  view: 'library',
   factPath: 'kb/test/foo.md',
   asOf: { mode: 'scrubbed', commit: '416273e' },
 };

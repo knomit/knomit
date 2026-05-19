@@ -36,7 +36,7 @@ function setup(asOf: AsOf, overrides: Partial<AppState> = {}) {
     asOf,
     ...overrides,
   };
-  return render(<RightPanel state={state} dispatch={vi.fn()} navigate={vi.fn()} />);
+  return render(<RightPanel state={state} dispatch={vi.fn()} />);
 }
 
 describe('RightPanel — read-only retract gate', () => {
@@ -62,49 +62,42 @@ describe('RightPanel — read-only retract gate', () => {
     });
   });
 
-  it('does not render retract button when viewing the history pane', async () => {
-    setup({ mode: 'scrubbed', commit: 'b812d40' }, { view: 'history' });
-    // Wait for fact to load, then assert retract button is absent.
-    await waitFor(() => {
-      expect(screen.queryByTestId('retract-btn')).toBeNull();
-    });
+  it('renders retract button disabled (read-only) when scrubbed', async () => {
+    setup({ mode: 'scrubbed', commit: 'b812d40' });
+    const btn = await screen.findByTestId('retract-btn');
+    expect(btn).toBeDisabled();
+    expect(btn).toHaveAttribute('title', READ_ONLY_TITLE);
   });
 });
 
-describe('RightPanel — Explain availability in history mode', () => {
-  it('renders the Explain button on historical entries', async () => {
+describe('RightPanel — Explain availability', () => {
+  it('renders the Explain button when onExplain is provided', async () => {
     const state: AppState = {
       ...init,
       repo: 'knomit',
       branch: 'machine/test',
       factPath: 'kb/test/foo.md',
-      view: 'history',
       asOf: { mode: 'scrubbed', commit: 'b812d40' },
     };
-    render(<RightPanel state={state} dispatch={vi.fn()} navigate={vi.fn()} onExplain={vi.fn()} />);
+    render(<RightPanel state={state} dispatch={vi.fn()} onExplain={vi.fn()} />);
 
     await screen.findByTestId('fact-title');
-    // Explain is a read-only action and must remain available even when
-    // retract is suppressed in history view.
     expect(screen.getByTestId('explain-btn')).toBeInTheDocument();
   });
 
-  it('clicking Explain in history mode anchors to the displayed commit', async () => {
+  it('clicking Explain passes the fact path and null anchor commit', async () => {
     const onExplain = vi.fn();
     const state: AppState = {
       ...init,
       repo: 'knomit',
       branch: 'machine/test',
       factPath: 'kb/test/foo.md',
-      view: 'history',
       asOf: { mode: 'scrubbed', commit: 'b812d40' },
     };
-    render(<RightPanel state={state} dispatch={vi.fn()} navigate={vi.fn()} onExplain={onExplain} />);
+    render(<RightPanel state={state} dispatch={vi.fn()} onExplain={onExplain} />);
 
     const btn = await screen.findByTestId('explain-btn');
     btn.click();
-    // The mocked fact's commit_hash is 'aaa1111'; in history mode Explain
-    // must open the commit-anchored view, not the live one.
-    expect(onExplain).toHaveBeenCalledWith('kb/test/foo.md', 'aaa1111');
+    expect(onExplain).toHaveBeenCalledWith('kb/test/foo.md', null);
   });
 });

@@ -42,7 +42,7 @@ describe('RightPanel — ref click opens Explain at parent commit', () => {
       factPath: 'kb/technology/ai/geopolitics/parent.md',
       asOf: { mode: 'live' },
     };
-    render(<RightPanel state={state} dispatch={vi.fn()} navigate={vi.fn()} onExplain={onExplain} />);
+    render(<RightPanel state={state} dispatch={vi.fn()} onExplain={onExplain} />);
 
     const refLink = await waitFor(() => screen.getByText(new RegExp(REF_PATH.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))));
     fireEvent.click(refLink);

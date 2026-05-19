@@ -209,7 +209,7 @@ export default function App() {
               <LeftPanel state={state} dispatch={dispatch} navigate={navigate} />
             </div>
             <div style={{ flex: 1, overflow: 'hidden', minWidth: 0 }}>
-              <RightPanel state={state} dispatch={dispatch} navigate={navigate} onExplain={(path, commit) => setExplainEntry({ path, commit })} />
+              <RightPanel state={state} dispatch={dispatch} onExplain={(path, commit) => setExplainEntry({ path, commit })} />
             </div>
           </div>
           <Console state={state} dispatch={dispatch} />
