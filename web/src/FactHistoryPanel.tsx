@@ -71,7 +71,15 @@ export function FactHistoryPanel({ repo, branch, factPath, currentCommit, onNavi
                 <span style={{ color: '#555', fontSize: 11 }}>{detail.date}</span>
               </div>
 
-              <div data-testid="history-message" style={{ marginBottom: 14, fontSize: 12, color: '#ddd' }}>
+              <div
+                data-testid="history-message"
+                style={{
+                  marginBottom: 14, padding: '6px 10px',
+                  borderLeft: '2px solid #2a3a2a',
+                  fontSize: 11, color: '#bbb', fontStyle: 'italic',
+                  lineHeight: 1.45, wordBreak: 'break-word',
+                }}
+              >
                 {detail.message}
               </div>
 
@@ -82,23 +90,31 @@ export function FactHistoryPanel({ repo, branch, factPath, currentCommit, onNavi
                 const glyph = f.action === 'added' ? '+' : f.action === 'deleted' ? '−' : '~';
                 const color = f.action === 'added' ? '#7c9' : f.action === 'deleted' ? '#f66' : '#aaf';
                 const isDeleted = f.action === 'deleted';
+                const isSelf = f.path === factPath;
+                const isDisabled = isDeleted || isSelf;
                 return (
                   <button
                     key={f.path}
                     data-testid="history-file-row"
-                    disabled={isDeleted}
+                    data-self={isSelf ? 'true' : undefined}
+                    disabled={isDisabled}
                     onClick={() => onFileClick(f.path)}
                     style={{
-                      width: '100%', display: 'flex', alignItems: 'center', gap: 8, padding: '4px 4px', fontSize: 11,
+                      width: '100%', display: 'flex', alignItems: 'flex-start', gap: 8, padding: '5px 4px',
                       background: 'none', border: 'none', outline: 'none', borderRadius: 3, textAlign: 'left',
-                      cursor: isDeleted ? 'default' : 'pointer', color: 'inherit',
+                      cursor: isDisabled ? 'default' : 'pointer', color: 'inherit',
+                      opacity: isSelf ? 0.55 : 1,
                     }}
                   >
-                    <span style={{ color, fontFamily: 'monospace', width: 12 }}>{glyph}</span>
-                    <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {f.title || f.path.split('/').pop()}
+                    <span style={{ color, fontFamily: 'monospace', width: 12, fontSize: 12, flexShrink: 0, lineHeight: 1.3 }}>{glyph}</span>
+                    <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 1 }}>
+                      <span style={{ fontSize: 11, color: '#ddd', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {f.title || f.path.split('/').pop()}
+                      </span>
+                      <span style={{ fontSize: 9, color: '#555', fontFamily: 'monospace', lineHeight: 1.3, wordBreak: 'break-all' }}>
+                        {f.path}
+                      </span>
                     </span>
-                    <span style={{ color: '#555', fontFamily: 'monospace', fontSize: 10 }}>{f.path}</span>
                   </button>
                 );
               })}

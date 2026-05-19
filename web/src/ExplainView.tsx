@@ -94,18 +94,15 @@ export function ExplainView({ repo, branch, initialEntry, onClose }: Props) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: '#0a0a0a' }}>
       {/* Header bar: EXPLAIN <path> @ <commit>, with back + close on the right. */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '0 12px', height: 32, background: '#0f0f0f', borderBottom: '1px solid #1a1a1a', flexShrink: 0 }}>
-        <span style={{ fontSize: 10, color: '#444', textTransform: 'uppercase', letterSpacing: '0.08em', flexShrink: 0 }}>Explain</span>
-        <span style={{ fontFamily: 'monospace', fontSize: 11, color: '#888', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{current.path}</span>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, padding: '0 12px', height: 34, background: '#0f0f0f', borderBottom: '1px solid #1a1a1a', flexShrink: 0 }}>
+        <span style={{ fontSize: 10, color: '#666', textTransform: 'uppercase', letterSpacing: '0.1em', fontWeight: 600, flexShrink: 0 }}>Explain</span>
+        <span style={{ fontFamily: 'monospace', fontSize: 12, color: '#ccc', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{current.path}</span>
         {fact?.commit_hash && (
           <>
-            <span style={{ color: '#444', fontSize: 11, flexShrink: 0 }}>@</span>
+            <span style={{ color: '#3a3a3a', fontSize: 11, flexShrink: 0 }}>@</span>
             <span
               data-testid="explain-commit-chip"
-              style={{
-                color: '#7c9', background: '#1a2e1a', padding: '1px 6px', borderRadius: 3,
-                fontFamily: 'monospace', fontSize: 11, flexShrink: 0,
-              }}
+              style={{ color: '#6a9080', fontFamily: 'monospace', fontSize: 11, flexShrink: 0 }}
             >{fact.commit_hash.slice(0, 7)}</span>
           </>
         )}

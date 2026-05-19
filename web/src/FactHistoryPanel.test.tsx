@@ -70,7 +70,12 @@ describe('FactHistoryPanel', () => {
     expect(onNavigateToCommit).toHaveBeenCalledWith('zzz9999');
   });
 
-  it('clicking a file row calls onFileClick', async () => {
+  it('clicking a file row whose path is NOT the open fact calls onFileClick', async () => {
+    const { api } = await import('./api');
+    (api.commitDetail as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      commit: 'a1b2c3d', date: '', message: '', operation: 'modify',
+      files: [{ path: 'kb/other.md', action: 'modified', title: 'Other' }],
+    });
     const onFileClick = vi.fn();
     render(<FactHistoryPanel
       repo="r" branch="b" factPath="kb/x.md"
@@ -80,6 +85,22 @@ describe('FactHistoryPanel', () => {
     />);
     await waitFor(() => expect(screen.getAllByTestId('history-file-row').length).toBe(1));
     fireEvent.click(screen.getByTestId('history-file-row'));
-    expect(onFileClick).toHaveBeenCalledWith('kb/x.md');
+    expect(onFileClick).toHaveBeenCalledWith('kb/other.md');
+  });
+
+  it('disables the file row whose path matches the open fact (no self-navigation)', async () => {
+    const onFileClick = vi.fn();
+    render(<FactHistoryPanel
+      repo="r" branch="b" factPath="kb/x.md"
+      currentCommit="a1b2c3d"
+      onNavigateToCommit={vi.fn()}
+      onFileClick={onFileClick}
+    />);
+    await waitFor(() => expect(screen.getAllByTestId('history-file-row').length).toBe(1));
+    const row = screen.getByTestId('history-file-row');
+    expect(row).toBeDisabled();
+    expect(row.getAttribute('data-self')).toBe('true');
+    fireEvent.click(row);
+    expect(onFileClick).not.toHaveBeenCalled();
   });
 });
