@@ -171,9 +171,6 @@ export default function App() {
         if (!isLive(state)) dispatch({ type: 'SET_AS_OF', asOf: { mode: 'live' } });
         return;
       }
-      if (e.key === '1') { e.preventDefault(); navigate({ view: 'tree' }); return; }
-      if (e.key === '2') { e.preventDefault(); navigate({ view: 'chrono' }); return; }
-      if (e.key === '3') { e.preventDefault(); navigate({ view: 'history' }); return; }
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
