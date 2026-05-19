@@ -79,3 +79,21 @@ describe('StatusFooter (collapsed Console)', () => {
     expect(screen.getByText('/')).toBeInTheDocument();
   });
 });
+
+describe('Console — pill hash click', () => {
+  it('clicking the hash in a scrubbed pill opens the commit drawer', () => {
+    const dispatch = vi.fn();
+    render(<Console
+      state={{ ...init, asOf: { mode: 'scrubbed', commit: 'b812d40' } }}
+      dispatch={dispatch}
+    />);
+    fireEvent.click(screen.getByTestId('pill-commit-hash'));
+    expect(dispatch).toHaveBeenCalledWith({ type: 'OPEN_COMMIT_DRAWER', commit: 'b812d40' });
+  });
+
+  it('does not render a clickable hash when live', () => {
+    const dispatch = vi.fn();
+    render(<Console state={{ ...init, asOf: { mode: 'live' } }} dispatch={dispatch} />);
+    expect(screen.queryByTestId('pill-commit-hash')).toBeNull();
+  });
+});

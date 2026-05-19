@@ -18,6 +18,7 @@ interface StatusFooterProps {
   errors: number;
   task: { op: string; message: string } | null;
   onExpand: () => void;
+  dispatch: React.Dispatch<Action>;
 }
 
 function pillContent(asOf: AsOf): { color: string; label: string; descriptor: string; glow: boolean } {
@@ -41,7 +42,7 @@ function Kbd({ children }: { children: string }) {
   );
 }
 
-function StatusFooter({ asOf, info, errors, task, onExpand }: StatusFooterProps) {
+function StatusFooter({ asOf, info, errors, task, onExpand, dispatch }: StatusFooterProps) {
   const p = pillContent(asOf);
   return (
     <div
@@ -65,9 +66,23 @@ function StatusFooter({ asOf, info, errors, task, onExpand }: StatusFooterProps)
           color: p.color, letterSpacing: 1.1, fontWeight: 600,
           fontFamily: 'JetBrains Mono, ui-monospace, monospace', fontSize: 10,
         }}>{p.label}</span>
-        <span style={{
-          color: '#a0a0a8', fontFamily: 'JetBrains Mono, ui-monospace, monospace', fontSize: 10,
-        }}>{p.descriptor}</span>
+        {asOf.mode === 'scrubbed' ? (
+          <span
+            data-testid="pill-commit-hash"
+            onClick={(e) => {
+              e.stopPropagation();
+              dispatch({ type: 'OPEN_COMMIT_DRAWER', commit: asOf.commit });
+            }}
+            style={{
+              color: '#a0a0a8', fontFamily: 'JetBrains Mono, ui-monospace, monospace', fontSize: 10,
+              cursor: 'pointer', textDecoration: 'underline', textDecorationStyle: 'dotted',
+            }}
+          >{p.descriptor}</span>
+        ) : (
+          <span style={{ color: '#a0a0a8', fontFamily: 'JetBrains Mono, ui-monospace, monospace', fontSize: 10 }}>
+            {p.descriptor}
+          </span>
+        )}
       </span>
 
       <span style={{ color: '#1f1f26', flex: '0 0 auto' }}>│</span>
@@ -155,6 +170,7 @@ export function Console({ state, dispatch }: Props) {
         errors={errorCount}
         task={activeTask ? { op: activeTask.op, message: activeTask.message } : null}
         onExpand={() => dispatch({ type: 'CONSOLE_TOGGLE' })}
+        dispatch={dispatch}
       />
     );
   }
