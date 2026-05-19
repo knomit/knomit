@@ -1,5 +1,7 @@
 export type View = 'tree' | 'chrono' | 'history';
 
+export type LibrarySort = 'path' | 'recent' | 'relevance';
+
 export interface FilterChip {
   category: 'domain' | 'entity' | 'type' | 'kind' | 'ep' | 'path';
   value: string;
@@ -45,6 +47,7 @@ export interface AppState {
   navStack: NavEntry[];
   remoteError: string;
   rightPanelFocused: boolean;
+  librarySort: LibrarySort;
 }
 
 export type Action =
@@ -67,7 +70,8 @@ export type Action =
   | { type: 'BLUR_RIGHT_PANEL' }
   | { type: 'SET_AS_OF'; asOf: AsOf }
   | { type: 'APPLY_NAV'; view: View; factPath: string | null; asOf: AsOf; filters?: FilterChip[]; freeText?: string }
-  | { type: 'AMEND_NAV'; factPath: string | null; asOf?: AsOf };
+  | { type: 'AMEND_NAV'; factPath: string | null; asOf?: AsOf }
+  | { type: 'SET_LIBRARY_SORT'; sort: LibrarySort };
 
 export const init: AppState = {
   repo: 'knomit',
@@ -87,6 +91,7 @@ export const init: AppState = {
   navStack: [],
   remoteError: '',
   rightPanelFocused: false,
+  librarySort: 'recent',
 };
 
 function pushNav(s: AppState): NavEntry[] {
@@ -251,6 +256,8 @@ export function reducer(s: AppState, a: Action): AppState {
       // can never enter temporal UI paths.
       if (!TEMPORAL_ENABLED && a.asOf.mode !== 'live') return s;
       return { ...s, asOf: a.asOf };
+    case 'SET_LIBRARY_SORT':
+      return { ...s, librarySort: a.sort };
     case 'APPLY_NAV': {
       const crossingBoundary =
         (s.view === 'history' && a.view !== 'history') ||

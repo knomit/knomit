@@ -858,3 +858,14 @@ describe('reducer — APPLY_NAV auto-clear path', () => {
     expect(next.filters).toHaveLength(0);
   });
 });
+
+describe('librarySort', () => {
+  it('defaults to "recent" in init state', () => {
+    expect(init.librarySort).toBe('recent');
+  });
+
+  it('SET_LIBRARY_SORT updates the stored value', () => {
+    const next = reducer(init, { type: 'SET_LIBRARY_SORT', sort: 'path' });
+    expect(next.librarySort).toBe('path');
+  });
+});
