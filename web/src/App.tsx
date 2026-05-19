@@ -20,7 +20,7 @@ export default function App() {
   const { navigate } = useNavigationManager(state, dispatch);
   const [repos, setRepos] = useState<RepoInfo[]>([]);
   const [showOrigin, setShowOrigin] = useState(false);
-  const [explainEntry, setExplainEntry] = useState<{ path: string; commit: string | null } | null>(null);
+  const explainEntry = state.explainEntry;
 
   // Fetch repos list on mount.
   useEffect(() => {
@@ -193,7 +193,7 @@ export default function App() {
             repo={state.repo}
             branch={state.branch}
             initialEntry={explainEntry}
-            onClose={() => setExplainEntry(null)}
+            onClose={() => dispatch({ type: 'CLOSE_EXPLAIN' })}
           />
         </div>
       ) : (
@@ -206,7 +206,7 @@ export default function App() {
               <LeftPanel state={state} dispatch={dispatch} navigate={navigate} />
             </div>
             <div style={{ flex: 1, overflow: 'hidden', minWidth: 0 }}>
-              <RightPanel state={state} dispatch={dispatch} onExplain={(path, commit) => setExplainEntry({ path, commit })} />
+              <RightPanel state={state} dispatch={dispatch} onExplain={(path, commit) => dispatch({ type: 'OPEN_EXPLAIN', path, commit })} />
             </div>
           </div>
           <Console state={state} dispatch={dispatch} />

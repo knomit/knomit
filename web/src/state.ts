@@ -4,6 +4,11 @@ export type LibrarySort = 'path' | 'recent' | 'relevance';
 
 export type DrawerState = { open: false } | { open: true; commit: string };
 
+export interface ExplainEntry {
+  path: string;
+  commit: string | null;
+}
+
 export interface FilterChip {
   category: 'domain' | 'entity' | 'type' | 'kind' | 'ep' | 'path';
   value: string;
@@ -51,6 +56,7 @@ export interface AppState {
   rightPanelFocused: boolean;
   librarySort: LibrarySort;
   commitDrawer: DrawerState;
+  explainEntry: ExplainEntry | null;
 }
 
 export type Action =
@@ -76,7 +82,9 @@ export type Action =
   | { type: 'AMEND_NAV'; factPath: string | null; asOf?: AsOf }
   | { type: 'SET_LIBRARY_SORT'; sort: LibrarySort }
   | { type: 'OPEN_COMMIT_DRAWER'; commit: string }
-  | { type: 'CLOSE_COMMIT_DRAWER' };
+  | { type: 'CLOSE_COMMIT_DRAWER' }
+  | { type: 'OPEN_EXPLAIN'; path: string; commit: string | null }
+  | { type: 'CLOSE_EXPLAIN' };
 
 export const init: AppState = {
   repo: 'knomit',
@@ -98,6 +106,7 @@ export const init: AppState = {
   rightPanelFocused: false,
   librarySort: 'recent',
   commitDrawer: { open: false },
+  explainEntry: null,
 };
 
 function pushNav(s: AppState): NavEntry[] {
@@ -268,6 +277,10 @@ export function reducer(s: AppState, a: Action): AppState {
       return { ...s, commitDrawer: { open: true, commit: a.commit } };
     case 'CLOSE_COMMIT_DRAWER':
       return { ...s, commitDrawer: { open: false } };
+    case 'OPEN_EXPLAIN':
+      return { ...s, explainEntry: { path: a.path, commit: a.commit } };
+    case 'CLOSE_EXPLAIN':
+      return { ...s, explainEntry: null };
     case 'APPLY_NAV': {
       // Flag-off: scrub asOf back to live but still allow the view/path change.
       const safeAsOf: AsOf = (!TEMPORAL_ENABLED && a.asOf.mode !== 'live')
