@@ -93,7 +93,6 @@ describe('Library — Recent sort infinite scroll', () => {
     // jsdom doesn't actually scroll, so the observer never naturally fires.
     const observerCallbacks: IntersectionObserverCallback[] = [];
     const origIO = window.IntersectionObserver;
-    // @ts-expect-error — minimal stub for the test
     window.IntersectionObserver = class {
       constructor(cb: IntersectionObserverCallback) { observerCallbacks.push(cb); }
       observe() {}
@@ -133,7 +132,6 @@ describe('Library — Recent sort infinite scroll', () => {
 
     const observerCallbacks: IntersectionObserverCallback[] = [];
     const origIO = window.IntersectionObserver;
-    // @ts-expect-error — minimal stub for the test
     window.IntersectionObserver = class {
       constructor(cb: IntersectionObserverCallback) { observerCallbacks.push(cb); }
       observe() {}

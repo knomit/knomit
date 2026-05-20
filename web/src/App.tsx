@@ -18,6 +18,31 @@ import './App.css';
 // transition: transform `${ms}ms` style declaration below.
 const EXPLAIN_SLIDE_MS = 260;
 
+// Library | RightPanel splitter sizing. Persisted to localStorage so the
+// width survives reloads. Clamped on read + on every drag step.
+const LEFT_PANEL_MIN = 180;
+const LEFT_PANEL_MAX_FRACTION = 0.6;       // never let the left panel exceed 60% of the viewport
+const LEFT_PANEL_DEFAULT_FRACTION = 0.35;  // matches the previous fixed 35% width
+const LEFT_PANEL_STORAGE_KEY = 'knomit.leftPanelWidth';
+
+function loadLeftPanelWidth(): number {
+  const fallback = Math.max(LEFT_PANEL_MIN, Math.round(window.innerWidth * LEFT_PANEL_DEFAULT_FRACTION));
+  try {
+    const raw = localStorage.getItem(LEFT_PANEL_STORAGE_KEY);
+    if (!raw) return fallback;
+    const n = Number(raw);
+    if (!Number.isFinite(n)) return fallback;
+    return clampLeftPanelWidth(n);
+  } catch {
+    return fallback;
+  }
+}
+
+function clampLeftPanelWidth(px: number): number {
+  const max = Math.max(LEFT_PANEL_MIN, Math.floor(window.innerWidth * LEFT_PANEL_MAX_FRACTION));
+  return Math.max(LEFT_PANEL_MIN, Math.min(max, Math.round(px)));
+}
+
 export default function App() {
   const [state, dispatch] = useReducer(reducer, init);
   const { navigate } = useNavigationManager(state, dispatch);
@@ -47,6 +72,37 @@ export default function App() {
     const t = setTimeout(() => setActiveExplainEntry(null), EXPLAIN_SLIDE_MS);
     return () => clearTimeout(t);
   }, [state.explainEntry]);
+
+  // Splitter between Library (left) and RightPanel. Width restored from
+  // localStorage on mount; persisted on drag-end so transient frames during a
+  // drag don't thrash localStorage.
+  const [leftPanelWidth, setLeftPanelWidth] = useState<number>(() => loadLeftPanelWidth());
+  // Re-clamp on viewport shrink so the right panel can't disappear.
+  useEffect(() => {
+    const onResize = () => setLeftPanelWidth(w => clampLeftPanelWidth(w));
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+  const startSplitterDrag = (e: React.MouseEvent) => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startWidth = leftPanelWidth;
+    const onMove = (ev: MouseEvent) => {
+      setLeftPanelWidth(clampLeftPanelWidth(startWidth + (ev.clientX - startX)));
+    };
+    const onUp = () => {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      // Read the latest committed width via setState's functional form so we
+      // don't capture a stale value if React batched the final move.
+      setLeftPanelWidth(w => {
+        try { localStorage.setItem(LEFT_PANEL_STORAGE_KEY, String(w)); } catch { /* quota / disabled */ }
+        return w;
+      });
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  };
 
   // Fetch repos list on mount.
   useEffect(() => {
@@ -221,9 +277,25 @@ export default function App() {
         <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column' }}>
           <FilterBar state={state} dispatch={dispatch} />
           <div style={{ display: 'flex', flex: 1, overflow: 'hidden', minHeight: 0 }}>
-            <div style={{ width: '35%', minWidth: 180, maxWidth: '50%', borderRight: '1px solid #222', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+            <div style={{ width: leftPanelWidth, flexShrink: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
               <LeftPanel state={state} dispatch={dispatch} navigate={navigate} />
             </div>
+            {/* Drag handle. 4px visible separator + 8px hit zone via negative
+                margins on either side so the cursor target is easier to grab
+                than the visible line. */}
+            <div
+              data-testid="library-splitter"
+              onMouseDown={startSplitterDrag}
+              title="Drag to resize"
+              style={{
+                width: 4, marginLeft: -2, marginRight: -2,
+                cursor: 'ew-resize', flexShrink: 0, zIndex: 1,
+                background: 'transparent',
+                borderLeft: '1px solid #222',
+              }}
+              onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = 'rgba(136,170,255,0.15)'; }}
+              onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
+            />
             <div style={{ flex: 1, overflow: 'hidden', minWidth: 0 }}>
               <RightPanel state={state} dispatch={dispatch} onExplain={(path, commit) => dispatch({ type: 'OPEN_EXPLAIN', path, commit })} />
             </div>
