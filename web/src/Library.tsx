@@ -67,9 +67,12 @@ export function Library({ state, dispatch, navigate }: Props) {
     }).catch(() => { if (!stale()) setChildren([]); });
   }, [path, state.headCommit, effectiveSort, state.repo, state.branch, state.ontologyRoot, state.factPath]);
 
-  // ── Recent sort: api.recent for chrono entries ──
+  // ── Recent sort: api.recent for chrono entries (infinite-scroll paged) ──
   const [facts, setFacts] = useState<RecentFactEntry[]>([]);
+  const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
+  const sentinelRef = useRef<HTMLDivElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
   // Stale ref for use inside the async useAsync callback (state updates between
   // dispatch and resolution would otherwise read closed-over stale values).
   const staleStateRef = useRef(state);
@@ -93,6 +96,7 @@ export function Library({ state, dispatch, navigate }: Props) {
     if (effectiveSort !== 'recent') return;
     setLoading(true);
     setFacts([]);
+    setTotal(0);
     api.recent(state.repo, state.branch, path, state.freeText, 50, 0, {
       typeFilter,
       kinds: kinds.length ? kinds : undefined,
@@ -102,6 +106,7 @@ export function Library({ state, dispatch, navigate }: Props) {
     }).then(r => {
       if (stale()) return;
       setFacts(r.facts || []);
+      setTotal(r.total);
       setLoading(false);
       const loaded = r.facts || [];
       const alreadyInList = loaded.some(f => f.path === staleStateRef.current.factPath);
@@ -110,6 +115,41 @@ export function Library({ state, dispatch, navigate }: Props) {
       }
     }).catch(() => { if (!stale()) { setFacts([]); setLoading(false); } });
   }, [path, state.headCommit, state.freeText, state.repo, state.branch, typeFilter, filtersKey, effectiveSort]);
+
+  // Infinite scroll: when the sentinel at the bottom of the Recent list scrolls
+  // into view, fetch the next page and append. loadingRef keeps the callback
+  // identity stable so the IntersectionObserver doesn't reconnect on every
+  // loading-state flip (which would re-fire the trigger and double-load).
+  const loadingRef = useRef(loading);
+  loadingRef.current = loading;
+  const loadMore = useCallback(() => {
+    if (effectiveSort !== 'recent') return;
+    if (loadingRef.current || facts.length >= total) return;
+    setLoading(true);
+    api.recent(state.repo, state.branch, path, state.freeText, 50, facts.length, {
+      typeFilter,
+      kinds: kinds.length ? kinds : undefined,
+      domains: domains.length ? domains : undefined,
+      entities: entities.length ? entities : undefined,
+      eps: eps.length ? eps : undefined,
+    }).then(r => {
+      setFacts(prev => [...prev, ...(r.facts || [])]);
+      setLoading(false);
+    }).catch(() => setLoading(false));
+  }, [effectiveSort, facts.length, total, state.repo, state.branch, path, state.freeText, typeFilter, kinds, domains, entities, eps]);
+
+  useEffect(() => {
+    if (effectiveSort !== 'recent') return;
+    const sentinel = sentinelRef.current;
+    const root = containerRef.current;
+    if (!sentinel || !root) return;
+    const observer = new IntersectionObserver(
+      ([entry]) => { if (entry.isIntersecting) loadMore(); },
+      { root, threshold: 0.1 }
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [effectiveSort, loadMore]);
 
   // ── Relevance sort: api.search for free-text results ──
   useAsync((stale) => {
@@ -208,7 +248,7 @@ export function Library({ state, dispatch, navigate }: Props) {
       {!isLive(state) && (
         <ReadOnlyBanner message="Showing live library · scrubbed views not yet supported by backend" />
       )}
-      <div style={{ flex: 1, overflowY: 'auto' }}>
+      <div ref={containerRef} style={{ flex: 1, overflowY: 'auto' }}>
         {(effectiveSort === 'path' || effectiveSort === 'relevance') && children.map((c, i) => {
           const ts = (c.type && typeStyles[c.type]) || defaultTypeStyle;
           return (
@@ -278,6 +318,10 @@ export function Library({ state, dispatch, navigate }: Props) {
                 </div>
               );
             })}
+            {/* Infinite-scroll sentinel — IntersectionObserver fires loadMore
+                when this scrolls into view. Only meaningful when more pages
+                exist; otherwise stays parked at the bottom inert. */}
+            <div ref={sentinelRef} data-testid="recent-sentinel" style={{ height: 1 }} />
             {loading && <LoadingSpinner />}
           </>
         )}
