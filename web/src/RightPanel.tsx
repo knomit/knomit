@@ -81,9 +81,22 @@ function renderFact(
           </span>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 4 }}>
-          <span
-            style={{ fontSize: 12, color: '#555', fontFamily: 'monospace' }}
-          >{fact.path}</span>
+          {onExplain && fact.commit_hash ? (
+            <button
+              data-testid="fact-path-link"
+              onClick={() => onExplain(fact.path, fact.commit_hash as string)}
+              title="Open Explain at this fact + commit"
+              style={{
+                fontSize: 12, color: '#555', fontFamily: 'monospace',
+                background: 'none', border: 'none', padding: 0,
+                cursor: 'pointer', textAlign: 'left',
+              }}
+              onMouseEnter={e => { (e.currentTarget as HTMLElement).style.color = '#8af'; }}
+              onMouseLeave={e => { (e.currentTarget as HTMLElement).style.color = '#555'; }}
+            >{fact.path}</button>
+          ) : (
+            <span style={{ fontSize: 12, color: '#555', fontFamily: 'monospace' }}>{fact.path}</span>
+          )}
         </div>
       </div>
 
