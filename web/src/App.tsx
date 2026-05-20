@@ -1,5 +1,6 @@
 import { useReducer, useEffect, useState } from 'react';
 import { reducer, init, isReadOnly, isLive } from './state';
+import type { ExplainEntry } from './state';
 import { api } from './api';
 import { useNavigationManager } from './useNavigationManager';
 import { bootstrapStatusWithRetry } from './bootstrap';
@@ -13,12 +14,39 @@ import { ConnectRemoteModal } from './ConnectRemoteModal';
 import { ExplainView } from './ExplainView';
 import './App.css';
 
+// Slide-in/out duration for the Explain overlay. Keep in sync with the
+// transition: transform `${ms}ms` style declaration below.
+const EXPLAIN_SLIDE_MS = 260;
+
 export default function App() {
   const [state, dispatch] = useReducer(reducer, init);
   const { navigate } = useNavigationManager(state, dispatch);
   const [repos, setRepos] = useState<RepoInfo[]>([]);
   const [showOrigin, setShowOrigin] = useState(false);
-  const explainEntry = state.explainEntry;
+
+  // Explain overlay slides in from the right when state.explainEntry is set
+  // and slides out when it becomes null. Two pieces of local state coordinate
+  // the animation:
+  //   - activeExplainEntry: the entry being rendered (lags behind
+  //     state.explainEntry on close so the slide-out has content to show)
+  //   - explainOpen: drives the translateX transform (true => 0, false => 100%)
+  //
+  // Mount: render with translateX(100%) then flip to 0 on the next animation
+  // frame so CSS sees a transition between two committed values.
+  // Unmount: flip to translateX(100%), wait for the transition to complete,
+  // then drop activeExplainEntry to unmount the component.
+  const [activeExplainEntry, setActiveExplainEntry] = useState<ExplainEntry | null>(null);
+  const [explainOpen, setExplainOpen] = useState(false);
+  useEffect(() => {
+    if (state.explainEntry) {
+      setActiveExplainEntry(state.explainEntry);
+      const id = requestAnimationFrame(() => setExplainOpen(true));
+      return () => cancelAnimationFrame(id);
+    }
+    setExplainOpen(false);
+    const t = setTimeout(() => setActiveExplainEntry(null), EXPLAIN_SLIDE_MS);
+    return () => clearTimeout(t);
+  }, [state.explainEntry]);
 
   // Fetch repos list on mount.
   useEffect(() => {
@@ -185,19 +213,13 @@ export default function App() {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', width: '100vw', background: '#141414', color: '#eee', fontFamily: 'system-ui, sans-serif', overflow: 'hidden' }}>
       <TopBar state={state} repos={repos} dispatch={dispatch} onSettingsClick={() => setShowOrigin(true)} />
-      {explainEntry ? (
-        <div style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
-          <ExplainView
-            repo={state.repo}
-            branch={state.branch}
-            initialEntry={explainEntry}
-            onClose={() => dispatch({ type: 'CLOSE_EXPLAIN' })}
-          />
-        </div>
-      ) : (
-        <>
-          <FilterBar state={state} dispatch={dispatch} />
 
+      {/* Stacking context for the Library layout + Explain overlay so the
+          overlay can slide in/out over the layout without affecting flow. */}
+      <div style={{ flex: 1, minHeight: 0, position: 'relative', overflow: 'hidden' }}>
+        {/* Library layout — always mounted; Explain slides over it. */}
+        <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column' }}>
+          <FilterBar state={state} dispatch={dispatch} />
           <div style={{ display: 'flex', flex: 1, overflow: 'hidden', minHeight: 0 }}>
             <div style={{ width: '35%', minWidth: 180, maxWidth: '50%', borderRight: '1px solid #222', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
               <LeftPanel state={state} dispatch={dispatch} navigate={navigate} />
@@ -207,8 +229,32 @@ export default function App() {
             </div>
           </div>
           <Console state={state} dispatch={dispatch} />
-        </>
-      )}
+        </div>
+
+        {/* Explain overlay — slides in from the right when open, out to the
+            right when closed. Pointer events disabled while sliding away so
+            it never blocks the Library beneath during the closing animation. */}
+        <div
+          aria-hidden={!explainOpen}
+          style={{
+            position: 'absolute', inset: 0, zIndex: 10, background: '#0a0a0a',
+            transform: explainOpen ? 'translateX(0)' : 'translateX(100%)',
+            transition: `transform ${EXPLAIN_SLIDE_MS}ms cubic-bezier(0.2, 0.8, 0.2, 1)`,
+            pointerEvents: explainOpen ? 'auto' : 'none',
+            willChange: 'transform',
+          }}
+        >
+          {activeExplainEntry && (
+            <ExplainView
+              repo={state.repo}
+              branch={state.branch}
+              initialEntry={activeExplainEntry}
+              onClose={() => dispatch({ type: 'CLOSE_EXPLAIN' })}
+            />
+          )}
+        </div>
+      </div>
+
       {showOrigin && !isReadOnly(state) && <ConnectRemoteModal repo={state.repo} onClose={() => setShowOrigin(false)} />}
     </div>
   );
