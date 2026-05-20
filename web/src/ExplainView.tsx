@@ -95,8 +95,11 @@ export function ExplainView({ repo, branch, initialEntry, onClose }: Props) {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: '#0a0a0a' }}>
-      {/* Header bar: EXPLAIN <path> @ <commit>, with back + close on the right. */}
-      <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, padding: '0 12px', height: 34, background: '#0f0f0f', borderBottom: '1px solid #1a1a1a', flexShrink: 0 }}>
+      {/* Header bar: EXPLAIN <path> @ <commit>, with back + close on the right.
+          Padding + min-height tuned to match FilterBar's rendered height (37px
+          including its inner bordered search-box) so the bar stays at the same
+          vertical position when toggling between Library and Explain views. */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '5px 12px', minHeight: 37, background: '#0f0f0f', borderBottom: '1px solid #1a1a1a', flexShrink: 0, boxSizing: 'border-box' }}>
         <span style={{ fontSize: 10, color: '#666', textTransform: 'uppercase', letterSpacing: '0.1em', fontWeight: 600, flexShrink: 0 }}>Explain</span>
         <span style={{ fontFamily: 'monospace', fontSize: 12, color: '#ccc', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{current.path}</span>
         {fact?.commit_hash && (
