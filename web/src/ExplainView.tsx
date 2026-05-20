@@ -98,13 +98,15 @@ export function ExplainView({ repo, branch, initialEntry, onClose }: Props) {
       {/* Header bar: EXPLAIN <path> @ <commit>, with back + close on the right.
           Padding + min-height tuned to match FilterBar's rendered height (37px
           including its inner bordered search-box) so the bar stays at the same
-          vertical position when toggling between Library and Explain views. */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '5px 12px', minHeight: 37, background: '#0f0f0f', borderBottom: '1px solid #1a1a1a', flexShrink: 0, boxSizing: 'border-box' }}>
-        <span style={{ fontSize: 10, color: '#666', textTransform: 'uppercase', letterSpacing: '0.1em', fontWeight: 600, flexShrink: 0 }}>Explain</span>
+          vertical position when toggling between Library and Explain views.
+          alignItems: baseline so EXPLAIN, the path, '@' and the commit hash
+          all sit on the same text baseline despite the slight size mix. */}
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, padding: '5px 12px', minHeight: 37, background: '#0f0f0f', borderBottom: '1px solid #1a1a1a', flexShrink: 0, boxSizing: 'border-box' }}>
+        <span style={{ fontSize: 11, color: '#666', textTransform: 'uppercase', letterSpacing: '0.1em', fontWeight: 600, flexShrink: 0 }}>Explain</span>
         <span style={{ fontFamily: 'monospace', fontSize: 12, color: '#ccc', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{current.path}</span>
         {fact?.commit_hash && (
           <>
-            <span style={{ color: '#3a3a3a', fontSize: 11, flexShrink: 0 }}>@</span>
+            <span style={{ color: '#3a3a3a', fontSize: 11, flexShrink: 0, fontFamily: 'monospace' }}>@</span>
             <span
               data-testid="explain-commit-chip"
               style={{ color: '#6a9080', fontFamily: 'monospace', fontSize: 11, flexShrink: 0 }}

@@ -125,8 +125,9 @@ export function TopBar({ state, repos, dispatch, onSettingsClick }: Props) {
         </span>
       )}
       {state.headCommit && (
-        <span data-testid="toknomitr-commit" style={{ display: 'inline-flex', alignItems: 'center', fontSize: 11, fontFamily: 'monospace', color: '#666', background: '#1a1a2a', padding: '0 6px', borderRadius: 3, border: '1px solid #333', lineHeight: '18px' }}>
-          {state.headCommit.slice(0, 7)}
+        <span data-testid="toknomitr-commit" style={{ display: 'inline-flex', alignItems: 'baseline', gap: 4, fontFamily: 'monospace', fontSize: 11 }}>
+          <span style={{ color: '#3a3a3a' }}>@</span>
+          <span style={{ color: '#6a9080' }}>{state.headCommit.slice(0, 7)}</span>
         </span>
       )}
       <button
