@@ -274,7 +274,11 @@ export function reducer(s: AppState, a: Action): AppState {
       if (!TEMPORAL_ENABLED && a.asOf.mode !== 'live') return s;
       return { ...s, asOf: a.asOf };
     case 'SET_LIBRARY_SORT':
-      return { ...s, librarySort: a.sort };
+      // Switching sort clears the selected fact so the right panel doesn't
+      // strand a previous selection in the new view. Recent/Relevance modes
+      // auto-select their first row after the fetch settles; Path mode
+      // starts un-selected so the user picks deliberately from the tree.
+      return { ...s, librarySort: a.sort, factPath: null };
     case 'OPEN_EXPLAIN':
       return { ...s, explainEntry: { path: a.path, commit: a.commit } };
     case 'CLOSE_EXPLAIN':

@@ -815,4 +815,11 @@ describe('librarySort', () => {
     const next = reducer(init, { type: 'SET_LIBRARY_SORT', sort: 'path' });
     expect(next.librarySort).toBe('path');
   });
+
+  it('SET_LIBRARY_SORT clears factPath so the right panel does not strand a stale selection', () => {
+    const s: AppState = { ...init, factPath: 'kb/something.md', librarySort: 'recent' };
+    const next = reducer(s, { type: 'SET_LIBRARY_SORT', sort: 'path' });
+    expect(next.factPath).toBeNull();
+    expect(next.librarySort).toBe('path');
+  });
 });
