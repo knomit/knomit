@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"testing"
 
@@ -402,4 +403,42 @@ func TestGraphAddDerivedFromAtCommitTx_SkipsForwardBroken(t *testing.T) {
 	var count int
 	require.NoError(t, si.rh.db.QueryRow(`SELECT COUNT(*) FROM edges WHERE type = ?`, EdgeDerivedFrom).Scan(&count))
 	require.Zero(t, count, "forward-broken ref must not produce any DERIVED_FROM edge")
+}
+
+// TestResolveActiveCommitForPath_DepthRegression asserts the resolver
+// correctly finds the most-recent add/modify of `path` even when many
+// unrelated commits sit between that write and the query anchor. The
+// vtab-based implementation should handle this in a single SQL query;
+// guards against accidental reintroduction of the old per-step SQL
+// pattern that scaled O(walk-depth) in roundtrips.
+func TestResolveActiveCommitForPath_DepthRegression(t *testing.T) {
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	defer svc.Close()
+	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+	ctx := context.Background()
+	branch := "main"
+
+	// Write the target once.
+	c1Res, err := svc.Facts().WriteFact(ctx, branch, "kb/target.md", testFactBody("t", 0.5, nil), "init", "")
+	require.NoError(t, err)
+	c1 := c1Res.CommitHash
+
+	// Advance the branch tip 20 commits without touching target.
+	var tip string
+	for i := 0; i < 20; i++ {
+		res, werr := svc.Facts().WriteFact(ctx, branch,
+			fmt.Sprintf("kb/filler_%d.md", i),
+			testFactBody(fmt.Sprintf("f%d", i), 0.5, nil),
+			"filler", "")
+		require.NoError(t, werr)
+		tip = res.CommitHash
+	}
+
+	si := svc.Search().(*searchIndex)
+	got, ok, err := si.resolveActiveCommitForPath(ctx, branch, "kb/target.md", tip)
+	require.NoError(t, err)
+	require.True(t, ok, "must resolve target through 20 unrelated commits")
+	require.Equal(t, c1, got, "must resolve to the original add commit")
 }
