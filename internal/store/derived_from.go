@@ -109,74 +109,54 @@ func (si *searchIndex) FactExistsAt(ctx context.Context, branch, path, commit st
 
 // resolveActiveCommitForPath walks first-parent ancestry of fromCommit on
 // `branch`, returning the most recent commit where `path` was added or
-// modified. Deletions are stepped over: they're write events in the path's
+// modified. Deletions are stepped over: they're write events in the
 // sparse history, not stop conditions.
 //
-// This is the historical-graph "effective version of path as of fromCommit"
-// resolver. Used by:
-//   - edge writes (target side, via resolveTargetCommit) to anchor target_commit
-//   - edge queries (source side in OutgoingAtCommit, target side in
-//     IncomingAtCommit) to translate a user-supplied query anchor into the
-//     edge's stored commit value
+// Implementation: pushes the walk into SQLite via the first_parent_chain
+// virtual table, joining against commit_log to find the first add/modify
+// row. SQLite stops pulling from the chain at the first match thanks to
+// LIMIT 1 + AlreadyOrdered, so the git walk amortizes naturally across
+// the join.
 //
-// Why it matters: facts are stored sparsely — one revision per change. A
-// fact written at commit c1 with no subsequent edits has exactly one stored
-// revision, yet is semantically present at every commit from c1 through the
-// branch tip. Edge filters must resolve via this walk-back, never via exact
-// match on the user's query commit.
+// SCHEMA INVARIANT: branch_commits is populated by full-reachability walk
+// from the branch tip (populateCommitLog uses gogit.LogOrderDefault, which
+// follows all parents). Therefore any first-parent ancestor of an on-branch
+// commit is itself on-branch — we don't need an in-walk branch_commits
+// check. The vtab cursor walks first-parent unconditionally; the SQL JOIN
+// restricts to commit_log rows, which only contain commits indexed at
+// populateCommitLog time, so off-branch commits cannot appear in the
+// result set.
 //
-// Returns ("", false, nil) when no add/modify ancestor exists (the path was
-// never written in this branch's history reachable from fromCommit). Stops
-// if the walk leaves the branch (parent ∉ branch_commits(B)) or reaches a
-// root commit. Errors propagate.
+// Returns ("", false, nil) when no add/modify ancestor exists. Errors
+// propagate.
 //
 // First-parent (not wall-clock) ancestry is the correct semantic — see
 // resolveTargetCommit's doc-comment for the merge-branch rationale.
 func (si *searchIndex) resolveActiveCommitForPath(ctx context.Context, branch, path, fromCommit string) (string, bool, error) {
-	branchID, err := si.rh.branchID(ctx, branch)
+	if fromCommit == "" {
+		return "", false, nil
+	}
+
+	var hash string
+	err := conn(ctx, si.rh.db).QueryRowContext(ctx, `
+		SELECT cl.commit_hash
+		  FROM first_parent_chain(?) fpc
+		  JOIN commit_log cl ON cl.commit_hash = fpc.commit_hash
+		 WHERE cl.path = ? AND cl.action IN ('added','modified')
+		 ORDER BY fpc.depth ASC
+		 LIMIT 1
+	`, fromCommit, path).Scan(&hash)
+	if err == sql.ErrNoRows {
+		return "", false, nil
+	}
 	if err != nil {
-		return "", false, fmt.Errorf("resolveActiveCommitForPath: branchID: %w", err)
+		return "", false, fmt.Errorf("resolveActiveCommitForPath: %w", err)
 	}
-
-	cur := fromCommit
-	for cur != "" {
-		// Walked off-branch (first-parent followed into a sibling-branch
-		// ancestor)? Stop.
-		var onBranch int
-		err := conn(ctx, si.rh.db).QueryRowContext(ctx,
-			`SELECT 1 FROM branch_commits WHERE branch_id = ? AND commit_hash = ?`,
-			branchID, cur,
-		).Scan(&onBranch)
-		if err == sql.ErrNoRows {
-			return "", false, nil
-		}
-		if err != nil {
-			return "", false, fmt.Errorf("resolveActiveCommitForPath: branch_commits: %w", err)
-		}
-
-		// Does `cur` touch path? add/modify is the anchor we want; delete is
-		// just another write event — step over it and continue.
-		var action string
-		err = conn(ctx, si.rh.db).QueryRowContext(ctx, `
-			SELECT action FROM commit_log
-			WHERE commit_hash = ? AND path = ?
-			LIMIT 1
-		`, cur, path).Scan(&action)
-		if err == nil && action != "deleted" {
-			return cur, true, nil
-		}
-		if err != nil && err != sql.ErrNoRows {
-			return "", false, fmt.Errorf("resolveActiveCommitForPath: commit_log lookup: %w", err)
-		}
-
-		// Either `cur` doesn't touch path, or it deleted path. Descend.
-		parent, err := si.rh.firstParentCommit(ctx, cur)
-		if err != nil {
-			return "", false, fmt.Errorf("resolveActiveCommitForPath: firstParentCommit: %w", err)
-		}
-		cur = parent
-	}
-	return "", false, nil
+	_ = branch // The branch is implicit in the walk: first-parent of an
+	//          //   on-branch commit is on-branch (see schema invariant above).
+	//          //   The commit_log JOIN further restricts to indexed commits,
+	//          //   so off-branch commits cannot appear.
+	return hash, true, nil
 }
 
 // graphAddDerivedFromAtCommitTx writes one DERIVED_FROM edge per ref-event
