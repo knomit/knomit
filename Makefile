@@ -1,5 +1,7 @@
 .PHONY: build web test clean run dev setup dist download-ort download-graphqlite e2e e2e-ui e2e-setup e2e-report tray tray-run
 
+GOFLAGS ?= -tags sqlite_vtable
+
 ORT_VERSION := 1.24.3
 UNAME_S := $(shell uname -s)
 UNAME_M := $(shell uname -m)
@@ -80,21 +82,21 @@ download-graphqlite:
 	fi
 
 build: web tray
-	CGO_ENABLED=1 go build -o dist/knomit .
-	go build -o dist/knomit-bridge ./tools/bridge/
+	CGO_ENABLED=1 go build $(GOFLAGS) -o dist/knomit .
+	go build $(GOFLAGS) -o dist/knomit-bridge ./tools/bridge/
 
 web:
 	cd web && npm ci && npm run build
 
 test: download-graphqlite
-	CGO_ENABLED=1 go test ./...
+	CGO_ENABLED=1 go test $(GOFLAGS) ./...
 
 dist: download-ort download-graphqlite build
 	@echo "Distribution package ready in dist/"
 
 CMD ?= serve
 run: download-ort
-	CGO_ENABLED=1 ORT_LIB_PATH=dist/lib/$(ORT_LIB_NAME) go run . $(CMD)
+	CGO_ENABLED=1 ORT_LIB_PATH=dist/lib/$(ORT_LIB_NAME) go run $(GOFLAGS) . $(CMD)
 
 dev:
 	cd web && npm run dev
@@ -118,7 +120,7 @@ e2e-report:
 
 tray:
 ifeq ($(UNAME_S),Darwin)
-	CGO_ENABLED=1 go build -ldflags "-X knomit/tools/tray/cmd.version=$(TRAY_VERSION)" -o dist/knomit-tray ./tools/tray
+	CGO_ENABLED=1 go build $(GOFLAGS) -ldflags "-X knomit/tools/tray/cmd.version=$(TRAY_VERSION)" -o dist/knomit-tray ./tools/tray
 	@echo "Built dist/knomit-tray (macOS)"
 else ifeq ($(UNAME_S),Linux)
   # webview_go hardcodes pkg-config webkit2gtk-4.0; Debian 13+ ships only 4.1.
@@ -128,8 +130,8 @@ else ifeq ($(UNAME_S),Linux)
 		cp "$$(pkg-config --variable=pcfiledir webkit2gtk-4.1)/webkit2gtk-4.1.pc" dist/.pc/webkit2gtk-4.0.pc; \
 		echo "Created webkit2gtk-4.0 shim (pointing to 4.1)"; \
 	fi
-	CGO_ENABLED=1 PKG_CONFIG_PATH="$(CURDIR)/dist/.pc:$$PKG_CONFIG_PATH" go build -ldflags "-X knomit/tools/tray/cmd.version=$(TRAY_VERSION)" -o dist/knomit-tray ./tools/tray
-	@go run tools/tray/linux/genicon.go
+	CGO_ENABLED=1 PKG_CONFIG_PATH="$(CURDIR)/dist/.pc:$$PKG_CONFIG_PATH" go build $(GOFLAGS) -ldflags "-X knomit/tools/tray/cmd.version=$(TRAY_VERSION)" -o dist/knomit-tray ./tools/tray
+	@go run $(GOFLAGS) tools/tray/linux/genicon.go
 	@sed -e 's|{{BINARY}}|$(CURDIR)/dist/knomit-tray|g' \
 	     -e 's|{{ICON}}|$(CURDIR)/dist/knomit.png|g' \
 	     tools/tray/linux/knomit.desktop.tmpl > dist/knomit.desktop
