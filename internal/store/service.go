@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"sync"
 
@@ -40,6 +41,7 @@ type Service struct {
 	pi          *pipelineIndex
 	ti          *toolIndex
 	ri          *remoteIndex
+	dbPath      string
 }
 
 // Open opens (or creates) a unified SQLite database at path, initializes the
@@ -80,13 +82,18 @@ func Open(path string) (*Service, error) {
 	rh.im = si // notifyCommit delegates to im.Sync after every commit.
 	fi := &factIndex{rh: rh}
 	ri := &remoteIndex{rh: rh}
+	// Canonicalize the path so the registry key matches the resolved path
+	// returned by PRAGMA database_list (e.g. macOS resolves /var → /private/var).
+	canonPath := canonicalizePath(path)
+	bindVTabRepo(canonPath, rh)
 	return &Service{
-		rh: rh,
-		fi: fi,
-		si: si,
-		pi: &pipelineIndex{rh: rh},
-		ti: &toolIndex{rh: rh},
-		ri: ri,
+		rh:     rh,
+		fi:     fi,
+		si:     si,
+		pi:     &pipelineIndex{rh: rh},
+		ti:     &toolIndex{rh: rh},
+		ri:     ri,
+		dbPath: canonPath,
 	}, nil
 }
 
@@ -130,8 +137,12 @@ func (s *Service) Checkpoint() error {
 	return err
 }
 
-// Close closes the underlying database connection.
-func (s *Service) Close() error { return s.rh.db.Close() }
+// Close closes the underlying database connection and removes the vtab
+// registry entry for this db path.
+func (s *Service) Close() error {
+	unbindVTabRepo(s.dbPath)
+	return s.rh.db.Close()
+}
 
 // SetSigner sets the SSH signer used for commit signing.
 func (s *Service) SetSigner(signer ssh.Signer) {
@@ -206,4 +217,18 @@ func deriveAgentID(branch string) string {
 		return after
 	}
 	return branch
+}
+
+// canonicalizePath resolves symlinks so the path matches what SQLite returns
+// via PRAGMA database_list (e.g. on macOS /var is a symlink to /private/var).
+// Falls back to the original path if resolution fails or path is a special
+// value like ":memory:".
+func canonicalizePath(path string) string {
+	if path == "" || path == ":memory:" {
+		return path
+	}
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		return resolved
+	}
+	return path
 }
