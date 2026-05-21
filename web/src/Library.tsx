@@ -213,6 +213,10 @@ export function Library({ state, dispatch, navigate }: Props) {
       const tag = (document.activeElement as HTMLElement)?.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
       if (state.rightPanelFocused) return;
+      // Library stays mounted under the Explain overlay; without this guard,
+      // arrow keys pressed while reading Explain would silently advance the
+      // Library selection and dispatch APPLY_NAV behind the overlay.
+      if (state.explainEntry) return;
 
       if (e.key === 'ArrowDown' || e.key === 'j') { e.preventDefault(); moveSelection(1); }
       else if (e.key === 'ArrowUp' || e.key === 'k') { e.preventDefault(); moveSelection(-1); }
@@ -232,7 +236,7 @@ export function Library({ state, dispatch, navigate }: Props) {
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [state.rightPanelFocused, moveSelection, activateSelected, activeList, selectedIdx, path, dispatch]);
+  }, [state.rightPanelFocused, state.explainEntry, moveSelection, activateSelected, activeList, selectedIdx, path, dispatch]);
 
   const hasPathChip = state.filters.some(f => f.category === 'path');
 

@@ -141,6 +141,11 @@ func (defaultFactReader) Read(
 // so commit-anchored reads classify refs against the anchor (with walk-
 // back through retractions), and HEAD reads use branch_facts (with the
 // same walk-back fallback for paths that have been retracted at HEAD).
+//
+// On error the ref degrades to "broken" in the view (the resolver
+// interface can't propagate errors per-ref without failing the whole
+// response), but the error is logged so transient DB issues are
+// observable rather than silently misclassifying refs.
 func (defaultFactReader) Exists(ri *repos.RepoInstance, branch, path, commit string) bool {
 	var exists bool
 	ri.WithRead(func(svc *store.Service) {
@@ -148,9 +153,15 @@ func (defaultFactReader) Exists(ri *repos.RepoInstance, branch, path, commit str
 			return
 		}
 		ok, err := svc.Search().FactExistsAt(contextTODO(), branch, path, commit)
-		if err == nil {
-			exists = ok
+		if err != nil {
+			log.Error().Err(err).
+				Str("branch", branch).
+				Str("path", path).
+				Str("commit", commit).
+				Msg("FactExistsAt failed — ref will classify as broken")
+			return
 		}
+		exists = ok
 	})
 	return exists
 }
