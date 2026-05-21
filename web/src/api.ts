@@ -396,7 +396,7 @@ export const api = {
     }));
   },
 
-  history: (repo: string, branch: string, path: string, after?: string, from?: string, before?: string): Promise<HistoryResponse> => {
+  factCommits: (repo: string, branch: string, path: string, after?: string, from?: string, before?: string): Promise<HistoryResponse> => {
     const p = new URLSearchParams({ limit: '50' });
     if (after) p.set('after', after);
     if (from) p.set('from', from);

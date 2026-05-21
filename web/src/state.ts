@@ -1,4 +1,19 @@
-export type View = 'tree' | 'chrono' | 'history';
+export type View = 'library';
+
+export type LibrarySort = 'path' | 'recent' | 'relevance';
+
+/**
+ * Explain is ALWAYS commit-anchored. Every Explain entry carries a concrete
+ * commit hash — never null, never undefined. The HEAD-only `/facts/{path}/...`
+ * endpoints have data-divergence issues from the commit-anchored graph index,
+ * so the UI must never fall back to them. Every caller of OPEN_EXPLAIN /
+ * navigateTo / onExplain MUST supply a commit. If the caller has a fact in
+ * hand, that fact's `commit_hash` is the right anchor.
+ */
+export interface ExplainEntry {
+  path: string;
+  commit: string;
+}
 
 export interface FilterChip {
   category: 'domain' | 'entity' | 'type' | 'kind' | 'ep' | 'path';
@@ -45,6 +60,8 @@ export interface AppState {
   navStack: NavEntry[];
   remoteError: string;
   rightPanelFocused: boolean;
+  librarySort: LibrarySort;
+  explainEntry: ExplainEntry | null;
 }
 
 export type Action =
@@ -67,11 +84,14 @@ export type Action =
   | { type: 'BLUR_RIGHT_PANEL' }
   | { type: 'SET_AS_OF'; asOf: AsOf }
   | { type: 'APPLY_NAV'; view: View; factPath: string | null; asOf: AsOf; filters?: FilterChip[]; freeText?: string }
-  | { type: 'AMEND_NAV'; factPath: string | null; asOf?: AsOf };
+  | { type: 'AMEND_NAV'; factPath: string | null; asOf?: AsOf }
+  | { type: 'SET_LIBRARY_SORT'; sort: LibrarySort }
+  | { type: 'OPEN_EXPLAIN'; path: string; commit: string }  // commit is required — see ExplainEntry
+  | { type: 'CLOSE_EXPLAIN' };
 
 export const init: AppState = {
   repo: 'knomit',
-  view: 'tree',
+  view: 'library',
   factPath: null,
   asOf: { mode: 'live' },
   filters: [],
@@ -87,6 +107,8 @@ export const init: AppState = {
   navStack: [],
   remoteError: '',
   rightPanelFocused: false,
+  librarySort: 'recent',
+  explainEntry: null,
 };
 
 function pushNav(s: AppState): NavEntry[] {
@@ -177,7 +199,7 @@ export function reducer(s: AppState, a: Action): AppState {
         return {
           ...s,
           repo: prev.repo,
-          view: 'tree',
+          view: 'library',
           factPath: null,
           asOf: { mode: 'live' },
           filters: [],
@@ -228,7 +250,7 @@ export function reducer(s: AppState, a: Action): AppState {
       return {
         ...s,
         repo: a.repo,
-        view: 'tree',
+        view: 'library',
         factPath: null,
         asOf: { mode: 'live' },
         filters: [],
@@ -251,10 +273,17 @@ export function reducer(s: AppState, a: Action): AppState {
       // can never enter temporal UI paths.
       if (!TEMPORAL_ENABLED && a.asOf.mode !== 'live') return s;
       return { ...s, asOf: a.asOf };
+    case 'SET_LIBRARY_SORT':
+      // Switching sort clears the selected fact so the right panel doesn't
+      // strand a previous selection in the new view. Recent/Relevance modes
+      // auto-select their first row after the fetch settles; Path mode
+      // starts un-selected so the user picks deliberately from the tree.
+      return { ...s, librarySort: a.sort, factPath: null };
+    case 'OPEN_EXPLAIN':
+      return { ...s, explainEntry: { path: a.path, commit: a.commit } };
+    case 'CLOSE_EXPLAIN':
+      return { ...s, explainEntry: null };
     case 'APPLY_NAV': {
-      const crossingBoundary =
-        (s.view === 'history' && a.view !== 'history') ||
-        (s.view !== 'history' && a.view === 'history');
       // Flag-off: scrub asOf back to live but still allow the view/path change.
       const safeAsOf: AsOf = (!TEMPORAL_ENABLED && a.asOf.mode !== 'live')
         ? { mode: 'live' }
@@ -264,8 +293,8 @@ export function reducer(s: AppState, a: Action): AppState {
         view: a.view,
         factPath: a.factPath,
         asOf: safeAsOf,
-        filters: a.filters !== undefined ? a.filters : crossingBoundary ? s.filters.filter(f => f.category === 'path') : s.filters,
-        freeText: a.freeText !== undefined ? a.freeText : crossingBoundary ? '' : s.freeText,
+        filters: a.filters !== undefined ? a.filters : s.filters,
+        freeText: a.freeText !== undefined ? a.freeText : s.freeText,
         navStack: pushNav(s),
         rightPanelFocused: false,
       };

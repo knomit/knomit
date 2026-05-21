@@ -1,11 +1,11 @@
 import { useReducer, useEffect, useState } from 'react';
 import { reducer, init, isReadOnly, isLive } from './state';
+import type { ExplainEntry } from './state';
 import { api } from './api';
 import { useNavigationManager } from './useNavigationManager';
 import { bootstrapStatusWithRetry } from './bootstrap';
 import type { RepoInfo } from './api';
 import { TopBar } from './TopBar';
-import { Breadcrumb } from './Breadcrumb';
 import { FilterBar } from './FilterBar';
 import { LeftPanel } from './LeftPanel';
 import { RightPanel } from './RightPanel';
@@ -14,12 +14,95 @@ import { ConnectRemoteModal } from './ConnectRemoteModal';
 import { ExplainView } from './ExplainView';
 import './App.css';
 
+// Slide-in/out duration for the Explain overlay. Keep in sync with the
+// transition: transform `${ms}ms` style declaration below.
+const EXPLAIN_SLIDE_MS = 260;
+
+// Library | RightPanel splitter sizing. Persisted to localStorage so the
+// width survives reloads. Clamped on read + on every drag step.
+const LEFT_PANEL_MIN = 180;
+const LEFT_PANEL_MAX_FRACTION = 0.6;       // never let the left panel exceed 60% of the viewport
+const LEFT_PANEL_DEFAULT_FRACTION = 0.35;  // matches the previous fixed 35% width
+const LEFT_PANEL_STORAGE_KEY = 'knomit.leftPanelWidth';
+
+function loadLeftPanelWidth(): number {
+  const fallback = Math.max(LEFT_PANEL_MIN, Math.round(window.innerWidth * LEFT_PANEL_DEFAULT_FRACTION));
+  try {
+    const raw = localStorage.getItem(LEFT_PANEL_STORAGE_KEY);
+    if (!raw) return fallback;
+    const n = Number(raw);
+    if (!Number.isFinite(n)) return fallback;
+    return clampLeftPanelWidth(n);
+  } catch {
+    return fallback;
+  }
+}
+
+function clampLeftPanelWidth(px: number): number {
+  const max = Math.max(LEFT_PANEL_MIN, Math.floor(window.innerWidth * LEFT_PANEL_MAX_FRACTION));
+  return Math.max(LEFT_PANEL_MIN, Math.min(max, Math.round(px)));
+}
+
 export default function App() {
   const [state, dispatch] = useReducer(reducer, init);
   const { navigate } = useNavigationManager(state, dispatch);
   const [repos, setRepos] = useState<RepoInfo[]>([]);
   const [showOrigin, setShowOrigin] = useState(false);
-  const [explainEntry, setExplainEntry] = useState<{ path: string; commit: string | null } | null>(null);
+
+  // Explain overlay slides in from the right when state.explainEntry is set
+  // and slides out when it becomes null. Two pieces of local state coordinate
+  // the animation:
+  //   - activeExplainEntry: the entry being rendered (lags behind
+  //     state.explainEntry on close so the slide-out has content to show)
+  //   - explainOpen: drives the translateX transform (true => 0, false => 100%)
+  //
+  // Mount: render with translateX(100%) then flip to 0 on the next animation
+  // frame so CSS sees a transition between two committed values.
+  // Unmount: flip to translateX(100%), wait for the transition to complete,
+  // then drop activeExplainEntry to unmount the component.
+  const [activeExplainEntry, setActiveExplainEntry] = useState<ExplainEntry | null>(null);
+  const [explainOpen, setExplainOpen] = useState(false);
+  useEffect(() => {
+    if (state.explainEntry) {
+      setActiveExplainEntry(state.explainEntry);
+      const id = requestAnimationFrame(() => setExplainOpen(true));
+      return () => cancelAnimationFrame(id);
+    }
+    setExplainOpen(false);
+    const t = setTimeout(() => setActiveExplainEntry(null), EXPLAIN_SLIDE_MS);
+    return () => clearTimeout(t);
+  }, [state.explainEntry]);
+
+  // Splitter between Library (left) and RightPanel. Width restored from
+  // localStorage on mount; persisted on drag-end so transient frames during a
+  // drag don't thrash localStorage.
+  const [leftPanelWidth, setLeftPanelWidth] = useState<number>(() => loadLeftPanelWidth());
+  // Re-clamp on viewport shrink so the right panel can't disappear.
+  useEffect(() => {
+    const onResize = () => setLeftPanelWidth(w => clampLeftPanelWidth(w));
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+  const startSplitterDrag = (e: React.MouseEvent) => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startWidth = leftPanelWidth;
+    const onMove = (ev: MouseEvent) => {
+      setLeftPanelWidth(clampLeftPanelWidth(startWidth + (ev.clientX - startX)));
+    };
+    const onUp = () => {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      // Read the latest committed width via setState's functional form so we
+      // don't capture a stale value if React batched the final move.
+      setLeftPanelWidth(w => {
+        try { localStorage.setItem(LEFT_PANEL_STORAGE_KEY, String(w)); } catch { /* quota / disabled */ }
+        return w;
+      });
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  };
 
   // Fetch repos list on mount.
   useEffect(() => {
@@ -170,9 +253,6 @@ export default function App() {
         if (!isLive(state)) dispatch({ type: 'SET_AS_OF', asOf: { mode: 'live' } });
         return;
       }
-      if (e.key === '1') { e.preventDefault(); navigate({ view: 'tree' }); return; }
-      if (e.key === '2') { e.preventDefault(); navigate({ view: 'chrono' }); return; }
-      if (e.key === '3') { e.preventDefault(); navigate({ view: 'history' }); return; }
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
@@ -189,31 +269,64 @@ export default function App() {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', width: '100vw', background: '#141414', color: '#eee', fontFamily: 'system-ui, sans-serif', overflow: 'hidden' }}>
       <TopBar state={state} repos={repos} dispatch={dispatch} onSettingsClick={() => setShowOrigin(true)} />
-      {explainEntry ? (
-        <div style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
-          <ExplainView
-            repo={state.repo}
-            branch={state.branch}
-            initialEntry={explainEntry}
-            onClose={() => setExplainEntry(null)}
-          />
-        </div>
-      ) : (
-        <>
-          <Breadcrumb state={state} dispatch={dispatch} navigate={navigate} />
-          <FilterBar state={state} dispatch={dispatch} />
 
+      {/* Stacking context for the Library layout + Explain overlay so the
+          overlay can slide in/out over the layout without affecting flow. */}
+      <div style={{ flex: 1, minHeight: 0, position: 'relative', overflow: 'hidden' }}>
+        {/* Library layout — always mounted; Explain slides over it. */}
+        <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column' }}>
+          <FilterBar state={state} dispatch={dispatch} />
           <div style={{ display: 'flex', flex: 1, overflow: 'hidden', minHeight: 0 }}>
-            <div style={{ width: '35%', minWidth: 180, maxWidth: '50%', borderRight: '1px solid #222', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+            <div style={{ width: leftPanelWidth, flexShrink: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
               <LeftPanel state={state} dispatch={dispatch} navigate={navigate} />
             </div>
+            {/* Drag handle. 4px visible separator + 8px hit zone via negative
+                margins on either side so the cursor target is easier to grab
+                than the visible line. */}
+            <div
+              data-testid="library-splitter"
+              onMouseDown={startSplitterDrag}
+              title="Drag to resize"
+              style={{
+                width: 4, marginLeft: -2, marginRight: -2,
+                cursor: 'ew-resize', flexShrink: 0, zIndex: 1,
+                background: 'transparent',
+                borderLeft: '1px solid #222',
+              }}
+              onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = 'rgba(136,170,255,0.15)'; }}
+              onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
+            />
             <div style={{ flex: 1, overflow: 'hidden', minWidth: 0 }}>
-              <RightPanel state={state} dispatch={dispatch} navigate={navigate} onExplain={(path, commit) => setExplainEntry({ path, commit })} />
+              <RightPanel state={state} dispatch={dispatch} onExplain={(path, commit) => dispatch({ type: 'OPEN_EXPLAIN', path, commit })} />
             </div>
           </div>
           <Console state={state} dispatch={dispatch} />
-        </>
-      )}
+        </div>
+
+        {/* Explain overlay — slides in from the right when open, out to the
+            right when closed. Pointer events disabled while sliding away so
+            it never blocks the Library beneath during the closing animation. */}
+        <div
+          aria-hidden={!explainOpen}
+          style={{
+            position: 'absolute', inset: 0, zIndex: 10, background: '#0a0a0a',
+            transform: explainOpen ? 'translateX(0)' : 'translateX(100%)',
+            transition: `transform ${EXPLAIN_SLIDE_MS}ms cubic-bezier(0.2, 0.8, 0.2, 1)`,
+            pointerEvents: explainOpen ? 'auto' : 'none',
+            willChange: 'transform',
+          }}
+        >
+          {activeExplainEntry && (
+            <ExplainView
+              repo={state.repo}
+              branch={state.branch}
+              initialEntry={activeExplainEntry}
+              onClose={() => dispatch({ type: 'CLOSE_EXPLAIN' })}
+            />
+          )}
+        </div>
+      </div>
+
       {showOrigin && !isReadOnly(state) && <ConnectRemoteModal repo={state.repo} onClose={() => setShowOrigin(false)} />}
     </div>
   );

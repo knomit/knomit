@@ -5,8 +5,8 @@ import type { Fact, RefGroup, RefVersion } from './api';
 import { relativeTimeEpoch, typeStyles } from './utils';
 import { TypeIcon } from './icons';
 import { FactBody } from './FactBody';
-
-interface ExplainEntry { path: string; commit: string | null; }
+import { FactHistoryPanel } from './FactHistoryPanel';
+import type { ExplainEntry } from './state';
 
 interface Props {
   repo: string;
@@ -14,6 +14,10 @@ interface Props {
   initialEntry: ExplainEntry;
   onClose: () => void;
 }
+
+const MIN_PANEL_WIDTH = 200;
+const MAX_PANEL_WIDTH = 800;
+const DEFAULT_PANEL_WIDTH = 380;
 
 export function ExplainView({ repo, branch, initialEntry, onClose }: Props) {
   const [current, setCurrent] = useState<ExplainEntry>(initialEntry);
@@ -23,6 +27,24 @@ export function ExplainView({ repo, branch, initialEntry, onClose }: Props) {
   const [outgoing, setOutgoing] = useState<RefGroup[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [panelWidth, setPanelWidth] = useState(DEFAULT_PANEL_WIDTH);
+
+  const startResize = (e: React.MouseEvent) => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startWidth = panelWidth;
+    const onMove = (ev: MouseEvent) => {
+      // Dragging left grows the panel (it's on the right edge of the layout).
+      const next = startWidth + (startX - ev.clientX);
+      setPanelWidth(Math.max(MIN_PANEL_WIDTH, Math.min(MAX_PANEL_WIDTH, next)));
+    };
+    const onUp = () => {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -32,8 +54,10 @@ export function ExplainView({ repo, branch, initialEntry, onClose }: Props) {
     setIncoming([]);
     setOutgoing([]);
 
-    const factPromise = api.fact(repo, branch, current.path, current.commit ?? undefined, { fallback: 'before' });
-    const explainPromise = api.explain(repo, branch, current.path, current.commit ?? undefined);
+    // Explain is ALWAYS commit-anchored — current.commit is a required string.
+    // Never fall back to HEAD endpoints (see ExplainEntry doc in state.ts).
+    const factPromise = api.fact(repo, branch, current.path, current.commit, { fallback: 'before' });
+    const explainPromise = api.explain(repo, branch, current.path, current.commit);
 
     Promise.all([factPromise, explainPromise])
       .then(([f, e]) => {
@@ -59,17 +83,56 @@ export function ExplainView({ repo, branch, initialEntry, onClose }: Props) {
     setBackStack(prev => prev.slice(0, -1));
   };
 
+  // Escape closes the view. The history panel renders the close affordance
+  // visually; this handler makes the key shortcut actually work.
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [onClose]);
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: '#0a0a0a' }}>
-      {/* Header bar — navigation controls only; path + commit live with the
-          fact body below so the title gets visual prominence and the path
-          isn't shown twice. */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '0 12px', height: 32, background: '#0f0f0f', borderBottom: '1px solid #1a1a1a', flexShrink: 0 }}>
-        <span style={{ fontSize: 10, color: '#444', textTransform: 'uppercase', letterSpacing: '0.08em', flex: 1 }}>Explain</span>
-        {backStack.length > 0 && (
-          <button onClick={goBack} style={{ background: 'none', border: '1px solid #2a2a2a', borderRadius: 3, color: '#888', fontSize: 11, padding: '2px 8px', cursor: 'pointer' }}>← Back</button>
+      {/* Header bar: EXPLAIN <path> @ <commit>, with back + close on the right.
+          Padding + min-height tuned to match FilterBar's rendered height (37px
+          including its inner bordered search-box) so the bar stays at the same
+          vertical position when toggling between Library and Explain views.
+          alignItems: center + lineHeight: 1 so each token's glyph extent is
+          centered vertically (baseline alignment leaves monospace caps too
+          high because their cap-height exceeds the surrounding x-height). */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '5px 12px', minHeight: 37, background: '#0f0f0f', borderBottom: '1px solid #1a1a1a', flexShrink: 0, boxSizing: 'border-box' }}>
+        <span style={{ fontSize: 11, color: '#666', textTransform: 'uppercase', letterSpacing: '0.1em', fontWeight: 600, flexShrink: 0, lineHeight: 1 }}>Explain</span>
+        <span style={{ fontFamily: 'monospace', fontSize: 12, color: '#ccc', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', lineHeight: 1 }}>{current.path}</span>
+        {fact?.commit_hash && (
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, flexShrink: 0, fontFamily: 'monospace', fontSize: 11, lineHeight: 1 }}>
+            <span style={{ color: '#3a3a3a' }}>@</span>
+            <span
+              data-testid="explain-commit-chip"
+              style={{ color: '#6a9080' }}
+            >{fact.commit_hash.slice(0, 7)}</span>
+          </span>
         )}
-        <button onClick={onClose} style={{ background: 'none', border: '1px solid #2a2a2a', borderRadius: 3, color: '#666', fontSize: 11, padding: '2px 8px', cursor: 'pointer' }}>✕ Close</button>
+        <div style={{ flex: 1 }} />
+        {backStack.length > 0 && (
+          <button
+            data-testid="explain-back"
+            onClick={goBack}
+            title="Back"
+            style={{ background: 'none', border: 'none', color: '#888', fontSize: 14, padding: '2px 6px', cursor: 'pointer', lineHeight: 1 }}
+            onMouseEnter={e => { (e.currentTarget as HTMLElement).style.color = '#ccc'; }}
+            onMouseLeave={e => { (e.currentTarget as HTMLElement).style.color = '#888'; }}
+          >←</button>
+        )}
+        <button
+          data-testid="explain-close"
+          onClick={onClose}
+          title="Close (esc)"
+          style={{ background: 'none', border: 'none', color: '#888', fontSize: 14, padding: '2px 6px', cursor: 'pointer', lineHeight: 1 }}
+          onMouseEnter={e => { (e.currentTarget as HTMLElement).style.color = '#ccc'; }}
+          onMouseLeave={e => { (e.currentTarget as HTMLElement).style.color = '#888'; }}
+        >✕</button>
       </div>
 
       {/* Incoming refs strip */}
@@ -83,33 +146,42 @@ export function ExplainView({ repo, branch, initialEntry, onClose }: Props) {
         </div>
       </div>
 
-      {/* Fact body */}
-      <div style={{ flex: 1, overflowY: 'auto', padding: '16px 20px' }}>
-        {loading && <div style={{ color: '#444', fontSize: 12 }}>Loading…</div>}
-        {error && <div style={{ color: '#f66', fontSize: 12 }}>{error}</div>}
-        {fact && (
-          <div style={{ maxWidth: 720, margin: '0 auto' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-              <span style={{ fontSize: 10, color: '#666', fontFamily: 'monospace', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{fact.path}</span>
-              {fact.commit_hash && (
-                <span
-                  data-testid="explain-commit-chip"
-                  title={`Showing version ${fact.commit_hash.slice(0, 7)}`}
-                  style={{ color: '#7c9', fontFamily: 'monospace', fontSize: 11, background: '#1a2e1a', padding: '1px 5px', borderRadius: 3, flexShrink: 0 }}
-                >
-                  {fact.commit_hash.slice(0, 7)}
-                </span>
-              )}
+      {/* Middle: fact body (left) + history panel (right) */}
+      <div style={{ flex: 1, display: 'flex', minHeight: 0, overflow: 'hidden' }}>
+        <div style={{ flex: 1, overflowY: 'auto', padding: '16px 20px', minWidth: 0 }}>
+          {loading && <div style={{ color: '#444', fontSize: 12 }}>Loading…</div>}
+          {error && <div style={{ color: '#f66', fontSize: 12 }}>{error}</div>}
+          {fact && (
+            <div style={{ maxWidth: 720, margin: '0 auto' }}>
+              <div data-testid="fact-title" style={{ fontSize: 18, fontWeight: 600, color: '#eee', letterSpacing: '-0.3px', marginBottom: 14 }}>{fact.title || fact.path}</div>
+              <FactBody
+                fact={fact}
+                dispatch={() => {}}
+                readOnly={true}
+                onRefClick={(refPath) => navigateTo({ path: refPath, commit: current.commit })}
+              />
             </div>
-            <div data-testid="fact-title" style={{ fontSize: 18, fontWeight: 600, color: '#eee', letterSpacing: '-0.3px', marginBottom: 14 }}>{fact.title || fact.path}</div>
-            <FactBody
-              fact={fact}
-              dispatch={() => {}}
-              readOnly={true}
-              onRefClick={(refPath) => navigateTo({ path: refPath, commit: current.commit })}
-            />
-          </div>
-        )}
+          )}
+        </div>
+        <div style={{ width: panelWidth, flexShrink: 0, position: 'relative' }}>
+          <div
+            data-testid="history-resize-handle"
+            onMouseDown={startResize}
+            title="Drag to resize"
+            style={{
+              position: 'absolute', left: -2, top: 0, bottom: 0, width: 5,
+              cursor: 'ew-resize', zIndex: 1,
+            }}
+          />
+          <FactHistoryPanel
+            repo={repo}
+            branch={branch}
+            factPath={current.path}
+            currentCommit={fact?.commit_hash ?? current.commit ?? null}
+            onNavigateToCommit={(commit) => navigateTo({ path: current.path, commit })}
+            onFileClick={(path) => navigateTo({ path, commit: fact?.commit_hash ?? current.commit })}
+          />
+        </div>
       </div>
 
       {/* Outgoing refs strip */}

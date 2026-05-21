@@ -296,6 +296,12 @@ describe('api.explain (grouping)', () => {
   });
 });
 
+describe('api.factCommits', () => {
+  it('exists on the api object', () => {
+    expect(typeof api.factCommits).toBe('function');
+  });
+});
+
 describe('api.factDiff', () => {
   beforeEach(() => { vi.restoreAllMocks(); });
 

@@ -1,17 +1,26 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import type { Dispatch } from 'react';
 import { useAsync } from './hooks';
 import { api } from './api';
-import type { Fact, Stats, ActivityStats, CommitDetail } from './api';
+import type { Fact, Stats, ActivityStats } from './api';
 import type { AppState, Action } from './state';
 import { currentPath, selectAnchorCommit, isReadOnly, READ_ONLY_TITLE } from './state';
-import { relativeTime, opStyles, defaultOpStyle } from './utils';
-import { EpisodeIcon, RetractIcon, ExplainIcon } from './icons';
-import type { NavRequest } from './useNavigationManager';
+import { relativeTime } from './utils';
+import { RetractIcon } from './icons';
 import { FactDiffView } from './FactDiffView';
 import { FactBody, StatBox, TagCloud } from './FactBody';
+import { VersionWalker } from './VersionWalker';
 
-function renderFact(fact: Fact, navigate: (req: NavRequest) => void, dispatch: Dispatch<Action>, onRetract?: () => void, onExplain?: (path: string, commit: string | null) => void, explainAnchorCommit?: string | null, readOnly = false, anchorCommit?: string | null) {
+function renderFact(
+  fact: Fact,
+  repo: string,
+  branch: string,
+  dispatch: Dispatch<Action>,
+  onRetract?: () => void,
+  onExplain?: (path: string, commit: string) => void,  // commit required — Explain is always commit-anchored
+  readOnly = false,
+  anchorCommit?: string | null,
+) {
   const retractDisabled = readOnly;
   const retractTitle = retractDisabled ? READ_ONLY_TITLE : 'Retract fact';
   const retractColor = retractDisabled ? '#444' : '#f66';
@@ -36,12 +45,13 @@ function renderFact(fact: Fact, navigate: (req: NavRequest) => void, dispatch: D
               </span>
             )}
             {fact.commit_hash && (
-              <span
-                title={`Committed at ${fact.commit_hash.slice(0, 7)}`}
-                style={{ color: '#7c9', fontFamily: 'monospace', fontSize: 11, background: '#1a2e1a', padding: '1px 5px', borderRadius: 3 }}
-              >
-                {fact.commit_hash.slice(0, 7)}
-              </span>
+              <VersionWalker
+                repo={repo}
+                branch={branch}
+                factPath={fact.path}
+                currentCommit={fact.commit_hash}
+                dispatch={dispatch}
+              />
             )}
             {retractedAt && (
               <span
@@ -51,16 +61,6 @@ function renderFact(fact: Fact, navigate: (req: NavRequest) => void, dispatch: D
               >
                 retracted at {retractedAt}
               </span>
-            )}
-            {onExplain && (
-              <button
-                data-testid="explain-btn"
-                title="Explain"
-                onClick={() => onExplain(fact.path, explainAnchorCommit ?? null)}
-                style={{ background: 'none', border: 'none', padding: 2, color: '#8af', cursor: 'pointer', display: 'flex', alignItems: 'center', opacity: 0.6 }}
-                onMouseEnter={e => { (e.currentTarget as HTMLElement).style.opacity = '1'; }}
-                onMouseLeave={e => { (e.currentTarget as HTMLElement).style.opacity = '0.6'; }}
-              ><ExplainIcon color="currentColor" size={15} /></button>
             )}
             {onRetract && (
               <button
@@ -81,15 +81,22 @@ function renderFact(fact: Fact, navigate: (req: NavRequest) => void, dispatch: D
           </span>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 4 }}>
-          <span
-            onClick={() => fact.commit_hash
-              ? navigate({ view: 'history', factPath: fact.path, asOf: { mode: 'scrubbed', commit: fact.commit_hash } })
-              : navigate({ view: 'history' })
-            }
-            style={{ fontSize: 12, color: '#555', cursor: 'pointer', fontFamily: 'monospace' }}
-            onMouseEnter={e => { (e.currentTarget as HTMLElement).style.color = '#8af'; }}
-            onMouseLeave={e => { (e.currentTarget as HTMLElement).style.color = '#555'; }}
-          >{fact.path}</span>
+          {onExplain && fact.commit_hash ? (
+            <button
+              data-testid="fact-path-link"
+              onClick={() => onExplain(fact.path, fact.commit_hash as string)}
+              title="Open Explain at this fact + commit"
+              style={{
+                fontSize: 12, color: '#555', fontFamily: 'monospace',
+                background: 'none', border: 'none', padding: 0,
+                cursor: 'pointer', textAlign: 'left',
+              }}
+              onMouseEnter={e => { (e.currentTarget as HTMLElement).style.color = '#8af'; }}
+              onMouseLeave={e => { (e.currentTarget as HTMLElement).style.color = '#555'; }}
+            >{fact.path}</button>
+          ) : (
+            <span style={{ fontSize: 12, color: '#555', fontFamily: 'monospace' }}>{fact.path}</span>
+          )}
         </div>
       </div>
 
@@ -97,7 +104,7 @@ function renderFact(fact: Fact, navigate: (req: NavRequest) => void, dispatch: D
         fact={fact}
         dispatch={dispatch}
         readOnly={readOnly}
-        onRefClick={onExplain ? (refPath) => onExplain(refPath, fact.commit_hash ?? null) : undefined}
+        onRefClick={onExplain && fact.commit_hash ? ((c: string) => (refPath: string) => onExplain(refPath, c))(fact.commit_hash) : undefined}
       />
     </div>
   );
@@ -149,200 +156,6 @@ function FactEditor({ fact, repo, branch, readOnly, onSaved }: { fact: Fact; rep
           }}
         >{saving ? 'Saving\u2026' : 'Save'}</button>
         {saveError && <span style={{ color: '#f88', fontSize: 12 }}>{saveError}</span>}
-      </div>
-    </div>
-  );
-}
-
-
-// ─── Commit Panel (history mode) ─────────────────────────────────────────────
-
-const ROW_HEIGHT = 26;
-const DEFAULT_LIST_HEIGHT = 3 * ROW_HEIGHT;
-const MIN_LIST_HEIGHT = ROW_HEIGHT;
-const MAX_LIST_HEIGHT = 12 * ROW_HEIGHT;
-
-function CommitPanel({ historyCommit, repo, branch, selectedFact, asOf, navigate, rightPanelFocused, dispatch }: {
-  historyCommit: string;
-  repo: string;
-  branch: string;
-  selectedFact: string | null;
-  asOf: AppState['asOf'];
-  navigate: (req: NavRequest) => void;
-  rightPanelFocused: boolean;
-  dispatch: Dispatch<Action>;
-}) {
-  const [detail, setDetail] = useState<CommitDetail | null>(null);
-  const listRef = useRef<HTMLDivElement>(null);
-  const itemRefs = useRef<(HTMLDivElement | null)[]>([]);
-  const [listHeight, setListHeight] = useState(DEFAULT_LIST_HEIGHT);
-  const draggingRef = useRef(false);
-
-  useAsync((stale) => {
-    api.commitDetail(repo, branch, historyCommit)
-      .then(d => { if (!stale()) setDetail(d); })
-      .catch(() => { if (!stale()) setDetail(null); });
-  }, [historyCommit, repo]);
-
-  const files = detail?.files || [];
-  const hasOverflow = files.length * ROW_HEIGHT > listHeight;
-
-  // Scroll selected file into view
-  const activeIdx = files.findIndex(f => f.path === selectedFact);
-  useEffect(() => {
-    if (activeIdx >= 0) {
-      itemRefs.current[activeIdx]?.scrollIntoView({ block: 'nearest' });
-    }
-  }, [activeIdx]);
-
-  // Auto-select first file when no fact is open or the current fact isn't in this commit.
-  // Guard on detail.commit === historyCommit: when the user clicks a new commit,
-  // historyCommit changes immediately but `detail` remains stale until its fetch
-  // resolves. Without this guard, the effect would AMEND_NAV with the OLD detail's
-  // first file paired with the NEW anchor, producing a transient (factPath, anchor)
-  // pair that 404s before the queued navigation settles — visible as a brief
-  // "Error: not found" flash when clicking between retract commits.
-  useEffect(() => {
-    if (!detail || detail.commit !== historyCommit) return;
-    if (selectedFact && detail.files?.some(f => f.path === selectedFact)) return;
-    const first = detail.files?.[0];
-    if (first) dispatch({ type: 'AMEND_NAV', factPath: first.path });
-  }, [detail, selectedFact, historyCommit, dispatch]);
-
-  useEffect(() => { setListHeight(DEFAULT_LIST_HEIGHT); }, [historyCommit]);
-
-  // Keyboard navigation within commit files
-  useEffect(() => {
-    if (!rightPanelFocused) return;
-    const handler = (e: KeyboardEvent) => {
-      if (files.length === 0) return;
-      if ((e.key === 'ArrowDown' || e.key === 'j' || e.key === 'ArrowUp' || e.key === 'k') && files.length > 1) {
-        e.preventDefault();
-        const currentIdx = files.findIndex(f => f.path === selectedFact);
-        const delta = (e.key === 'ArrowDown' || e.key === 'j') ? 1 : -1;
-        const nextIdx = Math.max(0, Math.min(currentIdx + delta, files.length - 1));
-        if (nextIdx !== currentIdx) {
-          navigate({
-            view: 'history',
-            factPath: files[nextIdx].path,
-            asOf: asOf.mode === 'diff' ? asOf : { mode: 'scrubbed', commit: historyCommit },
-          });
-        }
-      }
-    };
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
-  }, [rightPanelFocused, detail, selectedFact, historyCommit, asOf, navigate]);
-
-  // Drag to resize
-  const startDrag = (e: React.MouseEvent) => {
-    e.preventDefault();
-    draggingRef.current = true;
-    const startY = e.clientY;
-    const startH = listHeight;
-    const onMove = (ev: MouseEvent) => {
-      if (!draggingRef.current) return;
-      const delta = ev.clientY - startY;
-      setListHeight(Math.max(MIN_LIST_HEIGHT, Math.min(MAX_LIST_HEIGHT, startH + delta)));
-    };
-    const onUp = () => {
-      draggingRef.current = false;
-      document.removeEventListener('mousemove', onMove);
-      document.removeEventListener('mouseup', onUp);
-    };
-    document.addEventListener('mousemove', onMove);
-    document.addEventListener('mouseup', onUp);
-  };
-
-  if (!detail) return null;
-
-  // Episode tag
-  const op = detail.operation || '';
-  const os = op && opStyles[op] ? opStyles[op] : defaultOpStyle;
-
-  return (
-    <div style={{ flexShrink: 0, background: '#141414' }}>
-      <div style={{ display: 'flex', borderBottom: '1px solid #2a2a2a' }}>
-        <div style={{ width: 4, background: os.color, flexShrink: 0 }} />
-        <div style={{ flex: 1, padding: '8px 14px' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 3 }}>
-            <EpisodeIcon op={op} color={os.color} size={14} />
-            <span style={{ fontSize: 11, color: os.color, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.5 }}>{os.label || op}</span>
-            <span style={{ fontSize: 10, color: '#555', fontFamily: 'monospace', marginLeft: 'auto' }}>{detail.commit.slice(0, 7)} · {relativeTime(detail.date)}</span>
-          </div>
-          <div style={{ fontSize: 12, color: '#bbb', lineHeight: 1.4 }}>{detail.message}</div>
-        </div>
-      </div>
-
-      <div style={{ display: 'flex' }}>
-        <div
-          ref={listRef}
-          style={{
-            height: Math.min(listHeight, files.length * ROW_HEIGHT),
-            maxHeight: listHeight,
-            overflowY: hasOverflow ? 'auto' : 'hidden',
-            flex: 1,
-          }}
-        >
-          {files.map((file, idx) => {
-            const isActive = selectedFact === file.path;
-            const opColor = file.action === 'added' ? '#7c9' : file.action === 'deleted' ? '#f88' : '#8af';
-            const opIndicator = file.action === 'added' ? '+' : file.action === 'deleted' ? '\u2212' : '~';
-            const displayName = file.title || file.path.split('/').pop()?.replace(/\.md$/, '') || file.path;
-            return (
-              <div
-                key={file.path}
-                ref={el => { itemRefs.current[idx] = el; }}
-                data-testid="commit-file"
-                data-path={file.path}
-                onClick={() => {
-                  navigate({
-                    view: 'history',
-                    factPath: file.path,
-                    asOf: asOf.mode === 'diff' ? asOf : { mode: 'scrubbed', commit: historyCommit },
-                  });
-                  dispatch({ type: 'FOCUS_RIGHT_PANEL' });
-                }}
-                style={{
-                  height: ROW_HEIGHT,
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 6,
-                  padding: '0 14px',
-                  fontSize: 11,
-                  cursor: 'pointer',
-                  color: isActive ? '#fff' : '#aaa',
-                  background: isActive ? '#14141e' : 'transparent',
-                  borderLeft: isActive ? `4px solid #8af` : `4px solid transparent`,
-                }}
-                onMouseEnter={e => { if (!isActive) e.currentTarget.style.background = '#222'; }}
-                onMouseLeave={e => { if (!isActive) e.currentTarget.style.background = isActive ? '#22223a' : 'transparent'; }}
-              >
-                <span style={{ color: opColor, fontWeight: 'bold', fontFamily: 'monospace', width: 12, textAlign: 'center', flexShrink: 0 }}>{opIndicator}</span>
-                <span title={displayName} style={{
-                  fontWeight: isActive ? 500 : 400,
-                  overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, minWidth: 0,
-                }}>{displayName}</span>
-              </div>
-            );
-          })}
-        </div>
-
-      </div>
-
-      <div
-        onMouseDown={startDrag}
-        style={{
-          height: 5,
-          cursor: 'ns-resize',
-          background: 'transparent',
-          borderBottom: '1px solid #333',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-        }}
-      >
-        <div style={{ width: 30, height: 2, borderRadius: 1, background: '#444' }} />
       </div>
     </div>
   );
@@ -405,11 +218,10 @@ function ConfirmModal({ message, onConfirm, onCancel }: {
 
 // ─── Main RightPanel ─────────────────────────────────────────────────────────
 
-export function RightPanel({ state, dispatch, navigate, onExplain }: {
+export function RightPanel({ state, dispatch, onExplain }: {
   state: AppState;
   dispatch: Dispatch<Action>;
-  navigate: (req: NavRequest) => void;
-  onExplain?: (path: string, commit: string | null) => void;
+  onExplain?: (path: string, commit: string) => void;  // commit required — Explain is always commit-anchored
 }) {
   const [fact, setFact] = useState<Fact | null>(null);
   const [stats, setStats] = useState<Stats | null>(null);
@@ -421,14 +233,11 @@ export function RightPanel({ state, dispatch, navigate, onExplain }: {
 
   const factPath = state.factPath;
   const anchorCommit = selectAnchorCommit(state);
-  const historyCommit = state.view === 'history' ? anchorCommit : null;
   const inDiff = state.asOf.mode === 'diff';
 
-  // History + scrubbed: opt into the backend's ?fallback=before so that
-  // clicking a retracted file (in a retract commit) shows the pre-retraction
-  // content instead of a 404. Other view/mode combinations don't need
-  // fallback (tree/chrono are live; diff has its own renderer).
-  const useFallback = state.view === 'history' && state.asOf.mode === 'scrubbed';
+  // Scrubbed asOf + anchor: opt into the backend's ?fallback=before so that
+  // clicking a retracted file shows the pre-retraction content instead of a 404.
+  const useFallback = state.asOf.mode === 'scrubbed' && !!anchorCommit;
 
   useAsync((stale) => {
     // In diff mode, FactDiffView owns the fact fetching via api.factDiff.
@@ -448,7 +257,7 @@ export function RightPanel({ state, dispatch, navigate, onExplain }: {
   }, [factPath, anchorCommit, state.repo, useFallback, inDiff]);
 
   useAsync((stale) => {
-    if (factPath || state.view === 'history') return;
+    if (factPath) return;
     Promise.all([
       api.stats(state.repo, state.branch, path).catch(() => null),
       api.activity(state.repo, state.branch, path).catch(() => null),
@@ -475,7 +284,7 @@ export function RightPanel({ state, dispatch, navigate, onExplain }: {
       .catch(e => { setRetracting(false); setError(String(e)); });
   }, [fact, retracting, state, dispatch]);
 
-  // Keyboard: ArrowLeft blurs right panel; j/k navigation is handled inside CommitPanel
+  // Keyboard: ArrowLeft blurs right panel
   useEffect(() => {
     if (!state.rightPanelFocused) return;
     const handler = (e: KeyboardEvent) => {
@@ -488,17 +297,10 @@ export function RightPanel({ state, dispatch, navigate, onExplain }: {
     return () => window.removeEventListener('keydown', handler);
   }, [state.rightPanelFocused, dispatch]);
 
-  const commitPanel = state.view === 'history' && historyCommit
-    ? <CommitPanel historyCommit={historyCommit} repo={state.repo} branch={state.branch} selectedFact={factPath} asOf={state.asOf} navigate={navigate} rightPanelFocused={state.rightPanelFocused} dispatch={dispatch} />
-    : null;
-
   // Diff mode with a selected fact renders FactDiffView in the detail area.
-  // In history view, keep the CommitPanel visible above the diff so the user
-  // can switch between sibling files in the `to` commit without leaving diff.
   if (inDiff && state.factPath) {
     return (
       <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
-        {commitPanel}
         <div style={{ flex: 1, overflow: 'auto', minHeight: 0 }}>
           <FactDiffView state={state as AppState & { factPath: string }} dispatch={dispatch} />
         </div>
@@ -506,17 +308,8 @@ export function RightPanel({ state, dispatch, navigate, onExplain }: {
     );
   }
 
-  // Error from the fact-fetch effect. Don't short-circuit the whole panel —
-  // when in history view, the CommitPanel file list (with +/-/~ markers)
-  // must still render even when the auto-selected fact 404s. Render the
-  // error inside the fact-detail content area below the commit panel.
   if (error && factPath) {
-    return (
-      <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
-        {commitPanel}
-        <div style={{ padding: 24, color: '#f44' }}>{error}</div>
-      </div>
-    );
+    return <div style={{ padding: 24, color: '#f44' }}>{error}</div>;
   }
   if (error) return <div style={{ padding: 24, color: '#f44' }}>{error}</div>;
 
@@ -530,7 +323,6 @@ export function RightPanel({ state, dispatch, navigate, onExplain }: {
 
     return (
       <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
-        {commitPanel}
         <div data-testid="stats-view" style={{ flex: 1, padding: '24px 28px', overflowY: 'auto', boxSizing: 'border-box' }}>
           {stats ? (
             <>
@@ -565,10 +357,6 @@ export function RightPanel({ state, dispatch, navigate, onExplain }: {
 
   if (fact.parse_error) return <FactEditor fact={fact} repo={state.repo} branch={state.branch} readOnly={isReadOnly(state)} onSaved={setFact} />;
 
-  // Retract button is shown whenever we're not viewing a historical commit pane.
-  // When the global anchor is not live, the button is rendered disabled with a
-  // tooltip so the user sees the action exists but is read-only.
-  const showRetract = state.view !== 'history';
   const readOnly = isReadOnly(state);
 
   return (
@@ -580,18 +368,14 @@ export function RightPanel({ state, dispatch, navigate, onExplain }: {
           onCancel={() => setConfirmRetract(false)}
         />
       )}
-      {commitPanel}
       <div style={{ flex: 1, overflow: 'auto' }}>
         {renderFact(
           fact,
-          navigate,
+          state.repo,
+          state.branch,
           dispatch,
-          showRetract ? () => { if (!readOnly) setConfirmRetract(true); } : undefined,
+          () => { if (!readOnly) setConfirmRetract(true); },
           onExplain,
-          // Explain is a read-only action and works at any anchor. In history
-          // view we open the commit-anchored explain so in/out edges reflect
-          // the displayed version, not HEAD.
-          state.view === 'history' ? (fact.commit_hash ?? null) : null,
           readOnly,
           // Only pass the anchor in history+scrubbed mode — the retracted-
           // version badge is only meaningful there. In live/diff/tree the

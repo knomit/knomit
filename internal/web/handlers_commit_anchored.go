@@ -77,7 +77,12 @@ func handleCommitAnchoredFact(b hal.URLBuilder, m *repos.Manager, reader FactRea
 		if head != "" && head != a.Commit {
 			viewAnchor = hal.Anchor{Branch: branch, Commit: head}
 		}
-		view := BuildFactView(b, repoName, viewAnchor, head, f, reader)
+		// Anchor the ref resolver to the SAME commit the view shows so
+		// ref-kind classification is consistent with the displayed content
+		// (walks back to find any prior valid version per the historical-
+		// graph invariant).
+		resolver := readerRefResolver{reader: reader, ri: ri, branch: branch, commit: viewAnchor.Commit}
+		view := BuildFactView(b, repoName, viewAnchor, head, f, resolver)
 		hal.WriteHAL(w, http.StatusOK, view)
 	}
 }

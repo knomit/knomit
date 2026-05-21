@@ -17,19 +17,12 @@ const FACT_CATEGORIES: { key: FilterChip['category']; label: string }[] = [
   { key: 'path',   label: 'Path' },
 ];
 
-const HISTORY_CATEGORIES: { key: FilterChip['category']; label: string }[] = [
-  { key: 'ep',   label: 'Episode' },
-  { key: 'path', label: 'Path' },
-];
-
 // Match a trailing prefix token at end of input
 const FACT_PREFIX_RE = /(?:^|\s)(domain|entity|type|kind|path):(\S*)$/;
-const HISTORY_PREFIX_RE = /(?:^|\s)(ep|path):(\S*)$/;
 
 export function FilterBar({ state, dispatch }: Props) {
-  const isHistory = state.view === 'history';
-  const CATEGORIES = isHistory ? HISTORY_CATEGORIES : FACT_CATEGORIES;
-  const PREFIX_RE = isHistory ? HISTORY_PREFIX_RE : FACT_PREFIX_RE;
+  const CATEGORIES = FACT_CATEGORIES;
+  const PREFIX_RE = FACT_PREFIX_RE;
 
   const [inputValue, setInputValue]               = useState('');
   const [suggestions, setSuggestions]             = useState<string[]>([]);
@@ -498,7 +491,7 @@ export function FilterBar({ state, dispatch }: Props) {
             setInputValue('');
           }}
           placeholder={state.filters.length === 0 && !state.freeText
-            ? (isHistory ? 'Search commits... (ep:learn or free text)' : 'Filter... (domain:x entity:y or free text)')
+            ? 'Filter... (domain:x entity:y or free text)'
             : ''}
           style={{
             width: '100%',

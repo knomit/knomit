@@ -73,9 +73,9 @@ describe('reducer — filters', () => {
 describe('reducer — nav', () => {
   it('NAV_BACK restores previous view/filters/freeText', () => {
     let s: AppState = { ...init, freeText: 'q' };
-    s = reducer(s, { type: 'APPLY_NAV', view: 'chrono', factPath: null, asOf: { mode: 'live' } });
+    s = reducer(s, { type: 'APPLY_NAV', view: 'library', factPath: null, asOf: { mode: 'live' } });
     s = reducer(s, { type: 'NAV_BACK' });
-    expect(s.view).toBe('tree');
+    expect(s.view).toBe('library');
     expect(s.freeText).toBe('q');
     expect(s.navStack.length).toBe(0);
   });
@@ -95,7 +95,7 @@ describe('reducer — nav', () => {
   });
 
   it('NAV_BACK clears rightPanelFocused', () => {
-    let s = reducer(init, { type: 'APPLY_NAV', view: 'chrono', factPath: null, asOf: { mode: 'live' } });
+    let s = reducer(init, { type: 'APPLY_NAV', view: 'library', factPath: null, asOf: { mode: 'live' } });
     s = reducer({ ...s, rightPanelFocused: true }, { type: 'NAV_BACK' });
     expect(s.rightPanelFocused).toBe(false);
   });
@@ -103,7 +103,7 @@ describe('reducer — nav', () => {
   it('nav stack caps at 20 entries', () => {
     let s = init;
     for (let i = 0; i < 22; i++) {
-      s = reducer(s, { type: 'APPLY_NAV', view: i % 2 === 0 ? 'chrono' : 'tree', factPath: null, asOf: { mode: 'live' } });
+      s = reducer(s, { type: 'APPLY_NAV', view: 'library', factPath: null, asOf: { mode: 'live' } });
     }
     expect(s.navStack.length).toBe(20);
   });
@@ -164,10 +164,10 @@ describe('reducer — GO_UP', () => {
 describe('reducer — SET_REPO', () => {
   it('resets navigation state when switching repos', () => {
     let s = reducer(init, { type: 'ADD_FILTER', chip: { category: 'domain', value: 'tech' } });
-    s = reducer(s, { type: 'APPLY_NAV', view: 'history', factPath: null, asOf: { mode: 'live' } });
+    s = reducer(s, { type: 'APPLY_NAV', view: 'library', factPath: null, asOf: { mode: 'live' } });
     s = reducer(s, { type: 'SET_REPO', repo: 'work' });
     expect(s.repo).toBe('work');
-    expect(s.view).toBe('tree');
+    expect(s.view).toBe('library');
     expect(s.filters).toHaveLength(0);
     expect(s.freeText).toBe('');
     expect(s.navStack).toHaveLength(0);
@@ -521,10 +521,10 @@ describe('free text state management', () => {
     expect(s.navStack).toHaveLength(0);
   });
 
-  it('APPLY_NAV tree→chrono preserves freeText', () => {
+  it('APPLY_NAV preserves freeText when not explicitly passed', () => {
     let s: AppState = init;
     s = reducer(s, { type: 'SET_FREE_TEXT', text: 'search query' });
-    s = reducer(s, { type: 'APPLY_NAV', view: 'chrono', factPath: null, asOf: { mode: 'live' } });
+    s = reducer(s, { type: 'APPLY_NAV', view: 'library', factPath: null, asOf: { mode: 'live' } });
     expect(s.freeText).toBe('search query');
   });
 
@@ -621,12 +621,11 @@ describe('free text and filter chips coexist', () => {
   });
 });
 
-// ─── Regression: history mode episode filtering ─────────────────────────────
+// ─── Regression: episode filtering ─────────────────────────────────────────
 
-describe('episode (ep) chips in history mode', () => {
+describe('episode (ep) chips', () => {
   it('ep chip can be added alongside other filters', () => {
     let s: AppState = init;
-    s = reducer(s, { type: 'APPLY_NAV', view: 'history', factPath: null, asOf: { mode: 'live' } });
     s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'ep', value: 'learn' } });
     expect(s.filters).toHaveLength(1);
     expect(s.filters[0]).toEqual({ category: 'ep', value: 'learn' });
@@ -641,14 +640,6 @@ describe('episode (ep) chips in history mode', () => {
     expect(epChips.map(c => c.value).sort()).toEqual(['learn', 'retract']);
   });
 
-  it('ep chips cleared when switching from history to tree', () => {
-    let s: AppState = init;
-    s = reducer(s, { type: 'APPLY_NAV', view: 'history', factPath: null, asOf: { mode: 'live' } });
-    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'ep', value: 'learn' } });
-    s = reducer(s, { type: 'APPLY_NAV', view: 'tree', factPath: null, asOf: { mode: 'live' } });
-    expect(s.filters.filter(f => f.category === 'ep')).toHaveLength(0);
-  });
-
   it('CLEAR_FILTERS removes ep chips', () => {
     let s: AppState = init;
     s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'ep', value: 'learn' } });
@@ -656,9 +647,8 @@ describe('episode (ep) chips in history mode', () => {
     expect(s.filters).toHaveLength(0);
   });
 
-  it('ep chip + freeText coexist for history filtering', () => {
+  it('ep chip + freeText coexist for filtering', () => {
     let s: AppState = init;
-    s = reducer(s, { type: 'APPLY_NAV', view: 'history', factPath: null, asOf: { mode: 'live' } });
     s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'ep', value: 'retract' } });
     s = reducer(s, { type: 'SET_FREE_TEXT', text: 'cybersecurity' });
     expect(s.filters).toHaveLength(1);
@@ -668,67 +658,26 @@ describe('episode (ep) chips in history mode', () => {
 });
 
 
-// ─── Regression: history mode + fact mode filter isolation ──────────────────
-
-describe('filter isolation between fact and history modes', () => {
-  it('ep/freeText cleared when switching history → tree (only path kept)', () => {
-    let s: AppState = init;
-    s = reducer(s, { type: 'APPLY_NAV', view: 'history', factPath: null, asOf: { mode: 'live' } });
-    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'ep', value: 'learn' } });
-    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'path', value: 'kb/tech' } });
-    s = reducer(s, { type: 'SET_FREE_TEXT', text: 'goroutine' });
-    s = reducer(s, { type: 'APPLY_NAV', view: 'tree', factPath: null, asOf: { mode: 'live' } });
-    // ep and freeText cleared, path kept
-    expect(s.filters.filter(f => f.category === 'ep')).toHaveLength(0);
-    expect(s.freeText).toBe('');
-    expect(s.filters.find(f => f.category === 'path')!.value).toBe('kb/tech');
-  });
-
-  it('domain chips cleared when switching tree → history (only path kept)', () => {
-    let s: AppState = init;
-    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'domain', value: 'go' } });
-    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'path', value: 'kb/tech' } });
-    s = reducer(s, { type: 'APPLY_NAV', view: 'history', factPath: null, asOf: { mode: 'live' } });
-    expect(s.filters.filter(f => f.category === 'domain')).toHaveLength(0);
-    expect(s.filters.find(f => f.category === 'path')!.value).toBe('kb/tech');
-  });
-
-  it('filters preserved when switching tree ↔ chrono (same data)', () => {
-    let s: AppState = init;
-    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'domain', value: 'go' } });
-    s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'entity', value: 'goroutine' } });
-    s = reducer(s, { type: 'SET_FREE_TEXT', text: 'scheduling' });
-    s = reducer(s, { type: 'APPLY_NAV', view: 'chrono', factPath: null, asOf: { mode: 'live' } });
-    expect(s.filters.find(f => f.category === 'domain')!.value).toBe('go');
-    expect(s.filters.find(f => f.category === 'entity')!.value).toBe('goroutine');
-    expect(s.freeText).toBe('scheduling');
-    s = reducer(s, { type: 'APPLY_NAV', view: 'tree', factPath: null, asOf: { mode: 'live' } });
-    expect(s.filters.find(f => f.category === 'domain')!.value).toBe('go');
-    expect(s.freeText).toBe('scheduling');
-  });
-});
-
-
 // ─── Full workflow scenarios: operation hierarchy ────────────────────────────
 
 describe('operation hierarchy — full workflow scenarios', () => {
-  it('tree → history → APPLY_NAV commit → APPLY_NAV fact → NAV_BACK restores each step', () => {
+  it('APPLY_NAV with factPath → APPLY_NAV change → NAV_BACK restores each step', () => {
     let s: AppState = init;
-    // Start in tree with a fact open
-    s = reducer(s, { type: 'APPLY_NAV', view: 'tree', factPath: 'kb/tree-fact.md', asOf: { mode: 'live' } });
-    expect(s.view).toBe('tree');
+    // Open a fact
+    s = reducer(s, { type: 'APPLY_NAV', view: 'library', factPath: 'kb/tree-fact.md', asOf: { mode: 'live' } });
+    expect(s.view).toBe('library');
     expect(s.factPath).toBe('kb/tree-fact.md');
 
-    // Switch to history
-    s = reducer(s, { type: 'APPLY_NAV', view: 'history', factPath: null, asOf: { mode: 'live' } });
-    expect(s.view).toBe('history');
+    // Navigate away
+    s = reducer(s, { type: 'APPLY_NAV', view: 'library', factPath: null, asOf: { mode: 'live' } });
+    expect(s.view).toBe('library');
 
-    // APPLY_NAV: select a commit
-    s = reducer(s, { type: 'APPLY_NAV', view: 'history', factPath: null, asOf: { mode: 'scrubbed', commit: 'ccc333' } });
+    // APPLY_NAV: select a commit (scrubbed asOf)
+    s = reducer(s, { type: 'APPLY_NAV', view: 'library', factPath: null, asOf: { mode: 'scrubbed', commit: 'ccc333' } });
     expect(selectAnchorCommit(s)).toBe('ccc333');
 
-    // APPLY_NAV: select a fact in history
-    s = reducer(s, { type: 'APPLY_NAV', view: 'history', factPath: 'kb/hist-fact.md', asOf: { mode: 'scrubbed', commit: 'ccc333' } });
+    // APPLY_NAV: select a fact with that asOf
+    s = reducer(s, { type: 'APPLY_NAV', view: 'library', factPath: 'kb/hist-fact.md', asOf: { mode: 'scrubbed', commit: 'ccc333' } });
     expect(s.factPath).toBe('kb/hist-fact.md');
 
     // NAV_BACK: restore before fact selection
@@ -740,15 +689,14 @@ describe('operation hierarchy — full workflow scenarios', () => {
     s = reducer(s, { type: 'NAV_BACK' });
     expect(selectAnchorCommit(s)).toBeNull();
 
-    // NAV_BACK: restore before APPLY_NAV to history (back to tree)
+    // NAV_BACK: restore before navigation away
     s = reducer(s, { type: 'NAV_BACK' });
-    expect(s.view).toBe('tree');
+    expect(s.view).toBe('library');
     expect(s.factPath).toBe('kb/tree-fact.md');
   });
 
-  it('history with ep filter → change filter → NAV_BACK restores previous filter', () => {
+  it('ep filter → change filter → NAV_BACK restores previous filter', () => {
     let s: AppState = init;
-    s = reducer(s, { type: 'APPLY_NAV', view: 'history', factPath: null, asOf: { mode: 'live' } });
     s = reducer(s, { type: 'ADD_FILTER', chip: { category: 'ep', value: 'learn' } });
     expect(s.filters).toHaveLength(1);
     expect(s.filters[0]).toEqual({ category: 'ep', value: 'learn' });
@@ -763,30 +711,30 @@ describe('operation hierarchy — full workflow scenarios', () => {
     expect(s.filters[0]).toEqual({ category: 'ep', value: 'learn' });
   });
 
-  it('cross-mode: tree → history → commit → fact → NAV_BACK ×N returns to tree', () => {
+  it('open fact → navigate → select commit → select fact → NAV_BACK ×N returns to original', () => {
     let s: AppState = init;
 
-    // Tree mode: open a fact
-    s = reducer(s, { type: 'APPLY_NAV', view: 'tree', factPath: 'kb/original.md', asOf: { mode: 'live' } });
-    expect(s.view).toBe('tree');
+    // Open a fact
+    s = reducer(s, { type: 'APPLY_NAV', view: 'library', factPath: 'kb/original.md', asOf: { mode: 'live' } });
+    expect(s.view).toBe('library');
     expect(s.factPath).toBe('kb/original.md');
 
-    // Switch to history
-    s = reducer(s, { type: 'APPLY_NAV', view: 'history', factPath: null, asOf: { mode: 'live' } });
+    // Navigate away (clear factPath)
+    s = reducer(s, { type: 'APPLY_NAV', view: 'library', factPath: null, asOf: { mode: 'live' } });
 
-    // APPLY_NAV commit
-    s = reducer(s, { type: 'APPLY_NAV', view: 'history', factPath: null, asOf: { mode: 'scrubbed', commit: 'xxx' } });
+    // Select a commit
+    s = reducer(s, { type: 'APPLY_NAV', view: 'library', factPath: null, asOf: { mode: 'scrubbed', commit: 'xxx' } });
 
-    // APPLY_NAV fact in history
-    s = reducer(s, { type: 'APPLY_NAV', view: 'history', factPath: 'kb/history-fact.md', asOf: { mode: 'scrubbed', commit: 'xxx' } });
+    // Select a fact at that commit
+    s = reducer(s, { type: 'APPLY_NAV', view: 'library', factPath: 'kb/history-fact.md', asOf: { mode: 'scrubbed', commit: 'xxx' } });
     expect(s.factPath).toBe('kb/history-fact.md');
 
-    // NAV_BACK ×3 should get us back to tree with original fact
+    // NAV_BACK ×3 should get us back to original fact
     s = reducer(s, { type: 'NAV_BACK' }); // undo APPLY_NAV fact
     s = reducer(s, { type: 'NAV_BACK' }); // undo APPLY_NAV commit
-    s = reducer(s, { type: 'NAV_BACK' }); // undo APPLY_NAV to history → back to tree
+    s = reducer(s, { type: 'NAV_BACK' }); // undo APPLY_NAV away → back to original
 
-    expect(s.view).toBe('tree');
+    expect(s.view).toBe('library');
     expect(s.factPath).toBe('kb/original.md');
   });
 
@@ -796,38 +744,51 @@ describe('reducer — APPLY_NAV', () => {
   it('sets view, factPath, asOf atomically and pushes nav', () => {
     const s = reducer(init, {
       type: 'APPLY_NAV',
-      view: 'history',
+      view: 'library',
       factPath: 'kb/foo.md',
       asOf: { mode: 'scrubbed', commit: 'abc123' },
     });
-    expect(s.view).toBe('history');
+    expect(s.view).toBe('library');
     expect(selectAnchorCommit(s)).toBe('abc123');
     expect(s.factPath).toBe('kb/foo.md');
     expect(s.asOf).toEqual({ mode: 'scrubbed', commit: 'abc123' });
     expect(s.navStack.length).toBe(1);
   });
 
-  it('APPLY_NAV to tree clears asOf back to live', () => {
+  it('APPLY_NAV clears asOf back to live when live is passed', () => {
     const s = reducer(
       { ...init, factPath: 'kb/x.md', asOf: { mode: 'scrubbed' as const, commit: 'abc' } },
-      { type: 'APPLY_NAV', view: 'tree', factPath: 'kb/x.md', asOf: { mode: 'live' } },
+      { type: 'APPLY_NAV', view: 'library', factPath: 'kb/x.md', asOf: { mode: 'live' } },
     );
     expect(s.asOf).toEqual({ mode: 'live' });
     expect(selectAnchorCommit(s)).toBeNull();
     expect(s.factPath).toBe('kb/x.md');
   });
 
-  it('APPLY_NAV crossing history boundary clears non-path filters', () => {
+  it('APPLY_NAV with explicit filters clears non-path filters', () => {
     const s = { ...init, filters: [{ category: 'domain' as const, value: 'tech' }] };
     const next = reducer(s, {
       type: 'APPLY_NAV',
-      view: 'history',
+      view: 'library',
       factPath: null,
       asOf: { mode: 'scrubbed', commit: 'abc123' },
       filters: [],
       freeText: '',
     });
     expect(next.filters).toHaveLength(0);
+  });
+
+  it('APPLY_NAV without explicit filters preserves existing filters', () => {
+    const s = { ...init, filters: [{ category: 'domain' as const, value: 'tech' }] };
+    const next = reducer(s, {
+      type: 'APPLY_NAV',
+      view: 'library',
+      factPath: null,
+      asOf: { mode: 'scrubbed', commit: 'abc123' },
+      // filters and freeText intentionally omitted
+    });
+    expect(next.filters).toHaveLength(1);
+    expect(next.filters[0].value).toBe('tech');
   });
 });
 
@@ -836,7 +797,7 @@ describe('reducer — NAV_BACK with new fields', () => {
   it('NAV_BACK restores asOf, factPath', () => {
     const s = { ...init, factPath: 'kb/f.md', asOf: { mode: 'scrubbed' as const, commit: 'abc' } };
     const sAfter = reducer(s, {
-      type: 'APPLY_NAV', view: 'history',
+      type: 'APPLY_NAV', view: 'library',
       factPath: 'kb/g.md', asOf: { mode: 'scrubbed', commit: 'xyz' },
     });
     const back = reducer(sAfter, { type: 'NAV_BACK' });
@@ -845,16 +806,20 @@ describe('reducer — NAV_BACK with new fields', () => {
   });
 });
 
-describe('reducer — APPLY_NAV auto-clear path', () => {
-  it('APPLY_NAV crossing history boundary auto-clears non-path filters when caller omits filters', () => {
-    const s = { ...init, filters: [{ category: 'domain' as const, value: 'tech' }] };
-    const next = reducer(s, {
-      type: 'APPLY_NAV',
-      view: 'history',
-      factPath: null,
-      asOf: { mode: 'scrubbed', commit: 'abc123' },
-      // filters and freeText intentionally omitted
-    });
-    expect(next.filters).toHaveLength(0);
+describe('librarySort', () => {
+  it('defaults to "recent" in init state', () => {
+    expect(init.librarySort).toBe('recent');
+  });
+
+  it('SET_LIBRARY_SORT updates the stored value', () => {
+    const next = reducer(init, { type: 'SET_LIBRARY_SORT', sort: 'path' });
+    expect(next.librarySort).toBe('path');
+  });
+
+  it('SET_LIBRARY_SORT clears factPath so the right panel does not strand a stale selection', () => {
+    const s: AppState = { ...init, factPath: 'kb/something.md', librarySort: 'recent' };
+    const next = reducer(s, { type: 'SET_LIBRARY_SORT', sort: 'path' });
+    expect(next.factPath).toBeNull();
+    expect(next.librarySort).toBe('path');
   });
 });

@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"testing"
 
@@ -47,6 +48,12 @@ func TestResolveTargetCommit(t *testing.T) {
 	require.False(t, ok, "no ancestor touches kb/z.md → not ok")
 
 	// (3) Tombstoned: delete kb/e.md, then a later source ref's it.
+	//
+	// Per the historical-graph invariant: a retraction is just another write
+	// event in the sparse history. The resolver must walk past the deletion
+	// and find the prior valid version (c1, where e was added). Anchoring
+	// edges to that prior version preserves the lineage — without this, refs
+	// to retracted targets are silently dropped from the graph.
 	c3, err := svc.Facts().DeleteFact(ctx, branch, "kb/e.md", "retract e")
 	require.NoError(t, err)
 
@@ -55,10 +62,59 @@ func TestResolveTargetCommit(t *testing.T) {
 	c4 := c4Res.CommitHash
 	require.NotEmpty(t, c3)
 
-	// F's ref to E at c4: first ancestor touching E is c3 (deleted) → not ok.
-	_, ok, err = si.resolveTargetCommit(ctx, branch, "kb/f.md", "kb/e.md", c4)
+	got, ok, err = si.resolveTargetCommit(ctx, branch, "kb/f.md", "kb/e.md", c4)
 	require.NoError(t, err)
-	require.False(t, ok, "first ancestor touching kb/e.md is a deletion → not ok")
+	require.True(t, ok, "deletion is a write event — walk past it to the last valid version")
+	require.Equal(t, c1, got, "must resolve to the commit where kb/e.md was added (c1), not stop at the retraction")
+}
+
+// TestResolveTargetCommit_WalksPastMultipleRetractions covers the case where
+// a target was created, retracted, re-created, retracted again — the walk
+// must skip all "deleted" rows and return the most recent "added/modified"
+// ancestor. Mirrors the synthesize-review merge pattern where a fact's
+// lineage refs span across retract cycles.
+func TestResolveTargetCommit_WalksPastMultipleRetractions(t *testing.T) {
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	defer svc.Close()
+	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+
+	ctx := context.Background()
+	branch := "main"
+
+	// c1: add kb/e.md (v1)
+	c1Res, err := svc.Facts().WriteFact(ctx, branch, "kb/e.md", testFactBody("e v1", 0.9, nil), "init e", "")
+	require.NoError(t, err)
+	c1 := c1Res.CommitHash
+
+	// c2: retract kb/e.md
+	_, err = svc.Facts().DeleteFact(ctx, branch, "kb/e.md", "retract e first time")
+	require.NoError(t, err)
+
+	// c3: re-add kb/e.md (v2)
+	c3Res, err := svc.Facts().WriteFact(ctx, branch, "kb/e.md", testFactBody("e v2", 0.9, nil), "re-add e", "")
+	require.NoError(t, err)
+	c3 := c3Res.CommitHash
+
+	// c4: retract kb/e.md again
+	_, err = svc.Facts().DeleteFact(ctx, branch, "kb/e.md", "retract e second time")
+	require.NoError(t, err)
+
+	// c5: write kb/f.md with ref to kb/e.md (currently retracted at c4)
+	c5Res, err := svc.Facts().WriteFact(ctx, branch, "kb/f.md", testFactBody("f", 0.5, []string{"kb/e.md"}), "init f", "")
+	require.NoError(t, err)
+	c5 := c5Res.CommitHash
+
+	si := svc.Search().(*searchIndex)
+
+	// Walk past the c4 retraction → land at c3 (the most recent add).
+	got, ok, err := si.resolveTargetCommit(ctx, branch, "kb/f.md", "kb/e.md", c5)
+	require.NoError(t, err)
+	require.True(t, ok, "two retractions must not block resolution — walk past both")
+	require.Equal(t, c3, got, "must resolve to the most recent ADD (c3), skipping the c4 retraction")
+
+	_ = c1 // kept for clarity; c1 was the *first* add, not what we expect here
 }
 
 // TestResolveTargetCommit_SelfRef_ResolvesToPriorVersion regresses the bug
@@ -119,6 +175,67 @@ func TestResolveTargetCommit_SelfRef_FirstCreation_ReturnsNotOk(t *testing.T) {
 	_, ok, err := si.resolveTargetCommit(ctx, branch, "kb/x.md", "kb/x.md", c1)
 	require.NoError(t, err)
 	require.False(t, ok, "self-ref with no prior version must drop the edge")
+}
+
+// TestFactExistsAt covers the four cases the ref-kind resolver depends on:
+//   - HEAD: live fact (branch_facts row present) → true
+//   - HEAD: retracted at HEAD, but a prior version exists → true (walk-back)
+//   - HEAD: never written → false
+//   - commit-anchored: any prior add/modify in the ancestry → true
+//   - commit-anchored: only retractions or no rows → false / true via walk-back
+//
+// This is the historical-graph existence predicate: a target retracted
+// before the source's anchor must still classify as "exists" so refs
+// to it render as `fact` (resolvable via fallback-before) instead of
+// the misleading `broken`.
+func TestFactExistsAt(t *testing.T) {
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	defer svc.Close()
+	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+
+	ctx := context.Background()
+	branch := "main"
+	search := svc.Search()
+
+	// Never written.
+	exists, err := search.FactExistsAt(ctx, branch, "kb/never.md", "")
+	require.NoError(t, err)
+	require.False(t, exists, "never-written path must not exist at HEAD")
+
+	// c1: write kb/live.md.
+	_, err = svc.Facts().WriteFact(ctx, branch, "kb/live.md", testFactBody("live", 0.9, nil), "init live", "")
+	require.NoError(t, err)
+
+	// c2: write kb/gone.md.
+	_, err = svc.Facts().WriteFact(ctx, branch, "kb/gone.md", testFactBody("gone v1", 0.9, nil), "init gone", "")
+	require.NoError(t, err)
+
+	// c3: retract kb/gone.md (capture the retract commit for the anchored check).
+	retractCommit, err := svc.Facts().DeleteFact(ctx, branch, "kb/gone.md", "retract gone")
+	require.NoError(t, err)
+
+	// HEAD: live → true.
+	exists, err = search.FactExistsAt(ctx, branch, "kb/live.md", "")
+	require.NoError(t, err)
+	require.True(t, exists, "live path must exist at HEAD via branch_facts")
+
+	// HEAD: retracted but historically reachable → true (walk-back).
+	exists, err = search.FactExistsAt(ctx, branch, "kb/gone.md", "")
+	require.NoError(t, err)
+	require.True(t, exists, "retracted path with prior version must exist at HEAD via walk-back")
+
+	// At the retract commit (commit-anchored): gone is retracted at this exact
+	// commit, but a prior add exists in the ancestry — walk-back must surface it.
+	exists, err = search.FactExistsAt(ctx, branch, "kb/gone.md", retractCommit)
+	require.NoError(t, err)
+	require.True(t, exists, "at the retract commit, gone resolves to its prior add via walk-back")
+
+	// Never-written, commit-anchored: no add in any ancestor → false.
+	exists, err = search.FactExistsAt(ctx, branch, "kb/never.md", retractCommit)
+	require.NoError(t, err)
+	require.False(t, exists, "never-written path must not exist at any commit anchor")
 }
 
 // testFactBody builds a minimal markdown fact for store-internal tests.
@@ -286,4 +403,42 @@ func TestGraphAddDerivedFromAtCommitTx_SkipsForwardBroken(t *testing.T) {
 	var count int
 	require.NoError(t, si.rh.db.QueryRow(`SELECT COUNT(*) FROM edges WHERE type = ?`, EdgeDerivedFrom).Scan(&count))
 	require.Zero(t, count, "forward-broken ref must not produce any DERIVED_FROM edge")
+}
+
+// TestResolveActiveCommitForPath_DepthRegression asserts the resolver
+// correctly finds the most-recent add/modify of `path` even when many
+// unrelated commits sit between that write and the query anchor. The
+// vtab-based implementation should handle this in a single SQL query;
+// guards against accidental reintroduction of the old per-step SQL
+// pattern that scaled O(walk-depth) in roundtrips.
+func TestResolveActiveCommitForPath_DepthRegression(t *testing.T) {
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	defer svc.Close()
+	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+	ctx := context.Background()
+	branch := "main"
+
+	// Write the target once.
+	c1Res, err := svc.Facts().WriteFact(ctx, branch, "kb/target.md", testFactBody("t", 0.5, nil), "init", "")
+	require.NoError(t, err)
+	c1 := c1Res.CommitHash
+
+	// Advance the branch tip 20 commits without touching target.
+	var tip string
+	for i := 0; i < 20; i++ {
+		res, werr := svc.Facts().WriteFact(ctx, branch,
+			fmt.Sprintf("kb/filler_%d.md", i),
+			testFactBody(fmt.Sprintf("f%d", i), 0.5, nil),
+			"filler", "")
+		require.NoError(t, werr)
+		tip = res.CommitHash
+	}
+
+	si := svc.Search().(*searchIndex)
+	got, ok, err := si.resolveActiveCommitForPath(ctx, branch, "kb/target.md", tip)
+	require.NoError(t, err)
+	require.True(t, ok, "must resolve target through 20 unrelated commits")
+	require.Equal(t, c1, got, "must resolve to the original add commit")
 }

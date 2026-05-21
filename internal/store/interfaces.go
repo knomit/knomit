@@ -32,6 +32,12 @@ type SearchIndex interface {
 	ExplainFact(ctx context.Context, branch, path string) (ExplainResult, error)
 	IncomingAtCommit(ctx context.Context, branch, path, commitHash string) ([]RefSummary, error)
 	OutgoingAtCommit(ctx context.Context, branch, path, commitHash string) ([]RefSummary, error)
+	// FactExistsAt reports whether `path` has any valid (added/modified)
+	// version in the sparse history reachable from `commit` on `branch`,
+	// walking past retractions. Pass commit == "" for a HEAD-anchored check.
+	// Used by ref-kind classification: a ref is `fact` (vs `broken`) when
+	// the target has any historical version visible at the source's anchor.
+	FactExistsAt(ctx context.Context, branch, path, commit string) (bool, error)
 	RelevantMethodologyForFact(ctx context.Context, branch, factPath string, sourceDomains, sourceEntities []string, k int, minScore float64) ([]MethodologyMatch, error)
 	ClusterFacts(ctx context.Context, branch string, resolution float64, minCommunitySize int) (ClusterResult, error)
 	CachedClusterFacts(ctx context.Context, branch string, resolution float64, minCommunitySize int) (ClusterResult, error)

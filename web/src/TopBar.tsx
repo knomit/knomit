@@ -125,8 +125,14 @@ export function TopBar({ state, repos, dispatch, onSettingsClick }: Props) {
         </span>
       )}
       {state.headCommit && (
-        <span data-testid="toknomitr-commit" style={{ display: 'inline-flex', alignItems: 'center', fontSize: 11, fontFamily: 'monospace', color: '#666', background: '#1a1a2a', padding: '0 6px', borderRadius: 3, border: '1px solid #333', lineHeight: '18px' }}>
-          {state.headCommit.slice(0, 7)}
+        // line-height 1 collapses the monospace block to its glyph extent
+        // so the digit caps align visually with the surrounding sans-serif
+        // text (baseline alignment alone leaves the digits a few px high
+        // because monospace glyphs occupy their full cap-height while the
+        // adjacent text is mostly lowercase x-height).
+        <span data-testid="toknomitr-commit" style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontFamily: 'monospace', fontSize: 11, lineHeight: 1 }}>
+          <span style={{ color: '#3a3a3a' }}>@</span>
+          <span style={{ color: '#6a9080' }}>{state.headCommit.slice(0, 7)}</span>
         </span>
       )}
       <button

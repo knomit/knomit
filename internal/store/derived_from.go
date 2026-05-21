@@ -9,11 +9,19 @@ import (
 )
 
 // resolveTargetCommit walks first-parent ancestry of sourceCommit on the
-// given branch looking for the FIRST commit (in topological order) that
-// touches refPath, and returns (commit_hash, ok=true) if that row's action
-// is "added" or "modified". Returns ("", false, nil) if no ancestor touches
-// refPath, or if the closest ancestor that touches it has action="deleted"
-// — both are skip-the-edge cases per design spec write-path step 2.
+// given branch looking for the most recent commit where refPath was
+// **added or modified**, and returns (commit_hash, ok=true). Deletions
+// are write events too: the walk passes through them to find the prior
+// valid version, so refs to retracted targets resolve to the last live
+// commit. Returns ("", false, nil) only when refPath has never been
+// added/modified anywhere in the source's ancestry (forward-broken).
+//
+// Why walk past deletions: knomit stores a HISTORICAL graph. A ref written
+// at source-commit C declares "this fact derives from that target". If
+// the target was retracted before C, the lineage is still meaningful —
+// the historical record at C must point at the target's last valid blob.
+// This mirrors the fact-read fallback=before semantic. See the
+// project_historical_graph_invariant memory note.
 //
 // First-parent ancestry (NOT wall-clock committed_at ordering) is the
 // correct semantic for "the active version of refPath on this branch at
@@ -23,9 +31,10 @@ import (
 // later authoritative version (e.g. when a merge resolved a conflict in
 // the local side's favour, leaving no commit_log row at the merge commit).
 //
-// The walk stops at: the first row whose action is added/modified/deleted
-// for refPath; the root commit (no parent); or the first parent that
-// leaves the branch (parent ∉ branch_commits(B)).
+// The walk stops at: the first row whose action is added/modified for
+// refPath; the root commit (no parent); or the first parent that leaves
+// the branch (parent ∉ branch_commits(B)). "deleted" rows do not stop
+// the walk — they're stepped over.
 //
 // Performance: each step does one git CommitObject lookup + one indexed
 // SQL query against commit_log. For branches where most refs target
@@ -34,11 +43,6 @@ import (
 // (refPath, sourceCommit) per ingest call is a possible optimisation if
 // this becomes hot.
 func (si *searchIndex) resolveTargetCommit(ctx context.Context, branch, sourcePath, refPath, sourceCommit string) (string, bool, error) {
-	branchID, err := si.rh.branchID(ctx, branch)
-	if err != nil {
-		return "", false, fmt.Errorf("resolveTargetCommit: branchID: %w", err)
-	}
-
 	cur := sourceCommit
 	// Self-ref ("this fact derives from the previous version of this path"):
 	// the source commit is where the current version is being written, so it
@@ -51,47 +55,108 @@ func (si *searchIndex) resolveTargetCommit(ctx context.Context, branch, sourcePa
 		}
 		cur = parent
 	}
-	for cur != "" {
-		// Is `cur` reachable on this branch? If not (we walked off the
-		// branch by following first-parent into a foreign-branch ancestor),
-		// stop the walk.
-		var onBranch int
-		err := conn(ctx, si.rh.db).QueryRowContext(ctx,
-			`SELECT 1 FROM branch_commits WHERE branch_id = ? AND commit_hash = ?`,
-			branchID, cur,
-		).Scan(&onBranch)
+	return si.resolveActiveCommitForPath(ctx, branch, refPath, cur)
+}
+
+// FactExistsAt reports whether `path` has any valid (added/modified)
+// version reachable from `commit` on `branch`, walking past retractions.
+// Pass commit == "" for a HEAD-anchored check (uses branch_facts).
+//
+// This is the historical-graph existence predicate used by the ref-kind
+// resolver: a ref is `fact` (not `broken`) when the target has any version
+// the user can navigate to via fallback-before. A target retracted long
+// before the source's commit still has a navigable last-valid blob, so
+// the ref is not broken from the user's perspective.
+func (si *searchIndex) FactExistsAt(ctx context.Context, branch, path, commit string) (bool, error) {
+	if commit == "" {
+		// HEAD anchor: a fact is "live on the branch" iff there's a
+		// branch_facts row for (branch, path). branch_facts is the live
+		// view of which paths are currently un-retracted on the branch.
+		branchID, err := si.rh.branchID(ctx, branch)
+		if err != nil {
+			return false, fmt.Errorf("FactExistsAt: branchID: %w", err)
+		}
+		var n int
+		err = conn(ctx, si.rh.db).QueryRowContext(ctx,
+			`SELECT 1 FROM branch_facts WHERE branch_id = ? AND path = ?`,
+			branchID, path,
+		).Scan(&n)
 		if err == sql.ErrNoRows {
-			return "", false, nil
-		}
-		if err != nil {
-			return "", false, fmt.Errorf("resolveTargetCommit: branch_commits: %w", err)
-		}
-
-		// Does `cur` touch refPath? If yes, decide based on action.
-		var action string
-		err = conn(ctx, si.rh.db).QueryRowContext(ctx, `
-			SELECT action FROM commit_log
-			WHERE commit_hash = ? AND path = ?
-			LIMIT 1
-		`, cur, refPath).Scan(&action)
-		if err == nil {
-			if action == "deleted" {
-				return "", false, nil
+			// Live row absent — but the fact may still be historically
+			// reachable via fallback-before. Walk back from the branch
+			// HEAD to find any prior add/modify.
+			head, herr := si.rh.HeadCommit(ctx, branch)
+			if herr != nil {
+				return false, fmt.Errorf("FactExistsAt: HeadCommit: %w", herr)
 			}
-			return cur, true, nil
+			_, ok, werr := si.resolveActiveCommitForPath(ctx, branch, path, head)
+			if werr != nil {
+				return false, fmt.Errorf("FactExistsAt: walk-back at HEAD: %w", werr)
+			}
+			return ok, nil
 		}
-		if err != sql.ErrNoRows {
-			return "", false, fmt.Errorf("resolveTargetCommit: commit_log lookup: %w", err)
-		}
-
-		// `cur` doesn't touch refPath; descend to first parent.
-		parent, err := si.rh.firstParentCommit(ctx, cur)
 		if err != nil {
-			return "", false, fmt.Errorf("resolveTargetCommit: firstParentCommit: %w", err)
+			return false, fmt.Errorf("FactExistsAt: branch_facts lookup: %w", err)
 		}
-		cur = parent
+		return true, nil
 	}
-	return "", false, nil
+	_, ok, err := si.resolveActiveCommitForPath(ctx, branch, path, commit)
+	if err != nil {
+		return false, err
+	}
+	return ok, nil
+}
+
+// resolveActiveCommitForPath walks first-parent ancestry of fromCommit on
+// `branch`, returning the most recent commit where `path` was added or
+// modified. Deletions are stepped over: they're write events in the
+// sparse history, not stop conditions.
+//
+// Implementation: pushes the walk into SQLite via the first_parent_chain
+// virtual table, joining against commit_log to find the first add/modify
+// row. SQLite stops pulling from the chain at the first match thanks to
+// LIMIT 1 + AlreadyOrdered, so the git walk amortizes naturally across
+// the join.
+//
+// SCHEMA INVARIANT: branch_commits is populated by full-reachability walk
+// from the branch tip (populateCommitLog uses gogit.LogOrderDefault, which
+// follows all parents). Therefore any first-parent ancestor of an on-branch
+// commit is itself on-branch — we don't need an in-walk branch_commits
+// check. The vtab cursor walks first-parent unconditionally; the SQL JOIN
+// restricts to commit_log rows, which only contain commits indexed at
+// populateCommitLog time, so off-branch commits cannot appear in the
+// result set.
+//
+// Returns ("", false, nil) when no add/modify ancestor exists. Errors
+// propagate.
+//
+// First-parent (not wall-clock) ancestry is the correct semantic — see
+// resolveTargetCommit's doc-comment for the merge-branch rationale.
+func (si *searchIndex) resolveActiveCommitForPath(ctx context.Context, branch, path, fromCommit string) (string, bool, error) {
+	if fromCommit == "" {
+		return "", false, nil
+	}
+
+	var hash string
+	err := conn(ctx, si.rh.db).QueryRowContext(ctx, `
+		SELECT cl.commit_hash
+		  FROM first_parent_chain(?) fpc
+		  JOIN commit_log cl ON cl.commit_hash = fpc.commit_hash
+		 WHERE cl.path = ? AND cl.action IN ('added','modified')
+		 ORDER BY fpc.depth ASC
+		 LIMIT 1
+	`, fromCommit, path).Scan(&hash)
+	if err == sql.ErrNoRows {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, fmt.Errorf("resolveActiveCommitForPath: %w", err)
+	}
+	_ = branch // The branch is implicit in the walk: first-parent of an
+	//          //   on-branch commit is on-branch (see schema invariant above).
+	//          //   The commit_log JOIN further restricts to indexed commits,
+	//          //   so off-branch commits cannot appear.
+	return hash, true, nil
 }
 
 // graphAddDerivedFromAtCommitTx writes one DERIVED_FROM edge per ref-event

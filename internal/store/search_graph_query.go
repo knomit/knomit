@@ -21,6 +21,21 @@ func (si *searchIndex) IncomingAtCommit(ctx context.Context, branch, path, commi
 		return nil, fmt.Errorf("IncomingAtCommit: branchID: %w", err)
 	}
 
+	// Sparse-history walk-back: edges are stored anchored to the target's
+	// actual write-commit. Resolve `commitHash` (the query anchor) into the
+	// target path's effective write-commit ≤ commitHash and filter the
+	// cypher by THAT. Without this, queries at any commit other than the
+	// exact write-commit return 0. See the historical-graph-invariant note.
+	effectiveCommit, ok, err := si.resolveActiveCommitForPath(ctx, branch, path, commitHash)
+	if err != nil {
+		return nil, fmt.Errorf("IncomingAtCommit: resolve effective commit: %w", err)
+	}
+	if !ok {
+		// Target path was never written in the ancestry of commitHash —
+		// there can't be any edges into it.
+		return nil, nil
+	}
+
 	// 1. Cypher: candidate (source_path, source_title, source_commit, source_deleted) rows.
 	// Note: "commit" is a reserved SQL keyword; use alias "sc" (source commit).
 	// Retracted sources are returned with deleted=true so the UI can render
@@ -29,7 +44,7 @@ func (si *searchIndex) IncomingAtCommit(ctx context.Context, branch, path, commi
 	cypherQ := fmt.Sprintf(
 		`MATCH (s:%s)-[r:%s]->(t:%s {path: "%s"}) WHERE r.target_commit = "%s" RETURN s.path AS path, s.title AS title, s.type AS type, r.source_commit AS sc, s.deleted AS deleted`,
 		NodeFact, EdgeDerivedFrom, NodeFact,
-		escapeCypherKey(path), escapeCypherKey(commitHash),
+		escapeCypherKey(path), escapeCypherKey(effectiveCommit),
 	)
 	q := `SELECT json_extract(value, '$.path'), json_extract(value, '$.title'), json_extract(value, '$.type'), json_extract(value, '$.sc'), json_extract(value, '$.deleted') FROM json_each(cypher('` + cypherQ + `'))`
 	rows, err := conn(ctx, si.rh.db).QueryContext(ctx, q)
@@ -120,11 +135,24 @@ func (si *searchIndex) IncomingAtCommit(ctx context.Context, branch, path, commi
 // returning them would expose self-links that 404. This is the only filter
 // applied — branch reachability is intentionally not enforced here.
 func (si *searchIndex) OutgoingAtCommit(ctx context.Context, branch, path, commitHash string) ([]RefSummary, error) {
-	_ = branch
+	// Sparse-history walk-back: edges are stored anchored to the source's
+	// actual write-commit. Resolve `commitHash` (the query anchor) into the
+	// source path's effective write-commit ≤ commitHash and filter the
+	// cypher by THAT. Without this, queries at any commit other than the
+	// exact write-commit return 0. See the historical-graph-invariant note.
+	effectiveCommit, ok, err := si.resolveActiveCommitForPath(ctx, branch, path, commitHash)
+	if err != nil {
+		return nil, fmt.Errorf("OutgoingAtCommit: resolve effective commit: %w", err)
+	}
+	if !ok {
+		// Source path was never written in the ancestry of commitHash —
+		// no edges to surface.
+		return nil, nil
+	}
 	cypherQ := fmt.Sprintf(
 		`MATCH (s:%s {path: "%s"})-[r:%s]->(t:%s) WHERE r.source_commit = "%s" RETURN t.path AS path, t.title AS title, t.type AS type, r.target_commit AS tc, t.deleted AS deleted`,
 		NodeFact, escapeCypherKey(path), EdgeDerivedFrom, NodeFact,
-		escapeCypherKey(commitHash),
+		escapeCypherKey(effectiveCommit),
 	)
 	q := `SELECT json_extract(value, '$.path'), json_extract(value, '$.title'), json_extract(value, '$.type'), json_extract(value, '$.tc'), json_extract(value, '$.deleted') FROM json_each(cypher('` + cypherQ + `'))`
 	rows, err := conn(ctx, si.rh.db).QueryContext(ctx, q)

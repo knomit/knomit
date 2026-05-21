@@ -63,44 +63,44 @@ describe('reducer — SET_AS_OF', () => {
 });
 
 describe('reducer — boundary preservation', () => {
-  it('APPLY_NAV with view unchanged does not lose dispatched asOf', () => {
-    const s = { ...init, view: 'history' as const };
-    // Dispatched asOf must survive — boundary-clear branch must not fire on history → history.
+  it('APPLY_NAV with same view does not lose dispatched asOf', () => {
+    const s = { ...init, view: 'library' as const };
+    // Dispatched asOf must survive unchanged when view stays the same.
     const next = reducer(s, {
       type: 'APPLY_NAV',
-      view: 'history',
+      view: 'library',
       factPath: null,
       asOf: { mode: 'scrubbed', commit: 'abc1234' },
     });
     expect(next.asOf).toEqual({ mode: 'scrubbed', commit: 'abc1234' });
   });
 
-  it('APPLY_NAV preserves asOf when crossing tree → history', () => {
+  it('APPLY_NAV preserves scrubbed asOf when factPath changes', () => {
     const s = {
       ...init,
-      view: 'tree' as const,
+      view: 'library' as const,
       asOf: { mode: 'scrubbed' as const, commit: 'aaa1111' },
     };
     const next = reducer(s, {
       type: 'APPLY_NAV',
-      view: 'history',
-      factPath: null,
+      view: 'library',
+      factPath: 'kb/foo.md',
       asOf: { mode: 'scrubbed', commit: 'bbb2222' },
     });
     expect(next.asOf).toEqual({ mode: 'scrubbed', commit: 'bbb2222' });
   });
 
-  it('APPLY_NAV preserves diff mode across view changes', () => {
+  it('APPLY_NAV preserves diff mode across factPath changes', () => {
     const s = {
       ...init,
-      view: 'tree' as const,
+      view: 'library' as const,
       factPath: 'kb/foo.md',
       asOf: { mode: 'diff' as const, from: 'aaa1111', to: 'bbb2222' },
     };
     const next = reducer(s, {
       type: 'APPLY_NAV',
-      view: 'history',
-      factPath: 'kb/foo.md',
+      view: 'library',
+      factPath: 'kb/bar.md',
       asOf: s.asOf,
     });
     expect(next.asOf).toEqual({ mode: 'diff', from: 'aaa1111', to: 'bbb2222' });
@@ -139,13 +139,13 @@ describe('reducer — flag-off enforcement', () => {
     const mod = await import('./state');
     const next = mod.reducer(mod.init, {
       type: 'APPLY_NAV',
-      view: 'history',
+      view: 'library',
       factPath: 'kb/foo.md',
       asOf: { mode: 'diff', from: 'aaa1111', to: 'bbb2222' },
     });
     expect(next.asOf).toEqual({ mode: 'live' });
     // View/path changes still apply.
-    expect(next.view).toBe('history');
+    expect(next.view).toBe('library');
     expect(next.factPath).toBe('kb/foo.md');
   });
 

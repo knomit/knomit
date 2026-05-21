@@ -220,6 +220,33 @@ paths:
         "404": { $ref: "#/components/responses/Problem" }
         "500": { $ref: "#/components/responses/Problem" }
 
+  /repos/{repo}/branches/{branch}/facts/{path}/commits:
+    parameters:
+      - $ref: "#/components/parameters/Repo"
+      - $ref: "#/components/parameters/Branch"
+      - $ref: "#/components/parameters/FactPath"
+    get:
+      tags: [facts, commits]
+      summary: Per-fact commit log
+      description: |
+        Returns commits that touched the given fact path, in reverse chronological
+        order. Used by the version walker (right-pane fact header) and the commit
+        drawer's "this fact · N versions" section.
+      operationId: factCommits
+      parameters:
+        - { name: limit,  in: query, schema: { type: integer, default: 50, maximum: 500 } }
+        - { name: after,  in: query, schema: { type: string }, description: cursor }
+        - { name: from,   in: query, schema: { type: string } }
+        - { name: before, in: query, schema: { type: string } }
+      responses:
+        "200":
+          description: Collection of commits touching the fact
+          content:
+            application/hal+json:
+              schema: { $ref: "#/components/schemas/CommitsCollection" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "500": { $ref: "#/components/responses/Problem" }
+
   /repos/{repo}/branches/{branch}/commits/{sha}/facts/{path}:
     parameters:
       - $ref: "#/components/parameters/Repo"
