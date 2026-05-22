@@ -11,6 +11,7 @@ import (
 
 func initCmd() *cobra.Command {
 	var ontologyPath string
+	var ontologyPreset string
 	var repoName string
 	cmd := &cobra.Command{
 		Use:   "init",
@@ -20,10 +21,12 @@ func initCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("load config: %w", err)
 			}
-			return app.InitRepo(cfg, repoName, ontologyPath)
+			return app.InitRepo(cfg, repoName, ontologyPath, ontologyPreset)
 		},
 	}
 	cmd.Flags().StringVar(&ontologyPath, "ontology", "", "path to custom ontology YAML file")
+	cmd.Flags().StringVar(&ontologyPreset, "ontology-preset", "", "embedded ontology preset name (default|code)")
+	cmd.MarkFlagsMutuallyExclusive("ontology", "ontology-preset")
 	cmd.Flags().StringVar(&repoName, "name", "knomit", "repo name")
 	return cmd
 }

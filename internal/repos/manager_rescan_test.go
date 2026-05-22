@@ -35,7 +35,7 @@ func startManager(t *testing.T) (*repos.Manager, string) {
 func initRepoFile(t *testing.T, home, name string) {
 	t.Helper()
 	cfg := config.Config{Home: home}
-	require.NoError(t, app.InitRepo(cfg, name, ""))
+	require.NoError(t, app.InitRepo(cfg, name, "", ""))
 }
 
 func TestManager_Rescan_AddsNewRepo(t *testing.T) {
