@@ -136,7 +136,7 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 			return nil, fmt.Errorf("parse --intents-code: %w", err)
 		}
 	}
-	scorers := map[string]web.ScorerLike{}
+	scorers := map[string]detect.BlockScorer{}
 	if embedder != nil {
 		if s, err := detect.NewScorer(codeIntents, embedder); err == nil {
 			scorers["code"] = s

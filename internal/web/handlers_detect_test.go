@@ -31,7 +31,7 @@ func TestDetectHandler_KnownProfile_ReturnsScores(t *testing.T) {
 	stub := &scorerStub{results: []detect.BlockResult{
 		{Index: 0, Signals: []detect.Signal{{Intent: "correction", Score: 0.87}}},
 	}}
-	h := handleDetect(map[string]ScorerLike{"code": stub}, nil)
+	h := handleDetect(map[string]detect.BlockScorer{"code": stub}, nil)
 
 	body := `{"blocks":[{"role":"user","text":"that's wrong"}],"intents":["correction"]}`
 	req := httptest.NewRequest("POST", "/api/v1/profiles/code/detect", strings.NewReader(body))
@@ -54,7 +54,7 @@ func TestDetectHandler_KnownProfile_ReturnsScores(t *testing.T) {
 }
 
 func TestDetectHandler_UnknownProfile_Returns404(t *testing.T) {
-	h := handleDetect(map[string]ScorerLike{"code": &scorerStub{}}, nil)
+	h := handleDetect(map[string]detect.BlockScorer{"code": &scorerStub{}}, nil)
 
 	body := `{"blocks":[],"intents":[]}`
 	req := httptest.NewRequest("POST", "/api/v1/profiles/chat/detect", bytes.NewBufferString(body))
@@ -68,7 +68,7 @@ func TestDetectHandler_UnknownProfile_Returns404(t *testing.T) {
 }
 
 func TestDetectHandler_MalformedBody_Returns400(t *testing.T) {
-	h := handleDetect(map[string]ScorerLike{"code": &scorerStub{}}, nil)
+	h := handleDetect(map[string]detect.BlockScorer{"code": &scorerStub{}}, nil)
 
 	req := httptest.NewRequest("POST", "/api/v1/profiles/code/detect", strings.NewReader("not json"))
 	req = withURLParam(req, "profile", "code")
@@ -87,7 +87,7 @@ func TestDetectHandler_WithNovelty_PopulatesSimilarFacts(t *testing.T) {
 		called bool
 	}{}
 	stub := &scorerCaptureNovelty{flag: &captured.called}
-	h := handleDetect(map[string]ScorerLike{"code": stub}, nil)
+	h := handleDetect(map[string]detect.BlockScorer{"code": stub}, nil)
 
 	body := `{
 		"blocks":[{"role":"user","text":"hi"}],

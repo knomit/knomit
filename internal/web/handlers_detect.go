@@ -13,14 +13,6 @@ import (
 	"knomit/internal/web/hal"
 )
 
-// ScorerLike is the small surface of *detect.Scorer that the handler
-// needs. Declared as an interface so tests can substitute a stub without
-// constructing a real Scorer (which requires an embedder).
-type ScorerLike interface {
-	ScoreBlocks(blocks []detect.Block, intents []string) []detect.BlockResult
-	ScoreBlocksWithNovelty(blocks []detect.Block, intents []string, searcher detect.FactSearcher) []detect.BlockResult
-}
-
 type detectRequest struct {
 	Blocks         []detect.Block      `json:"blocks"`
 	Intents        []string            `json:"intents"`
@@ -40,7 +32,7 @@ type detectResponse struct {
 // scorers is keyed by profile name; unknown profiles produce 404.
 // mgr is optional; if provided and the request includes novelty_context, a
 // FactSearcher is built from the named repo/branch for novelty scoring.
-func handleDetect(scorers map[string]ScorerLike, mgr *repos.Manager) http.HandlerFunc {
+func handleDetect(scorers map[string]detect.BlockScorer, mgr *repos.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		profile := chi.URLParam(r, "profile")
 		scorer, ok := scorers[profile]

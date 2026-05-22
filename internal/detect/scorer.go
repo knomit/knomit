@@ -138,6 +138,13 @@ type FactSearcher interface {
 	NearestFacts(vec []float32, k int) ([]SimilarFact, error)
 }
 
+// BlockScorer is the scoring surface used by HTTP handlers and other callers
+// that need to substitute a stub in tests.
+type BlockScorer interface {
+	ScoreBlocks(blocks []Block, intentNames []string) []BlockResult
+	ScoreBlocksWithNovelty(blocks []Block, intentNames []string, searcher FactSearcher) []BlockResult
+}
+
 // ScoreBlocksWithNovelty is ScoreBlocks plus a per-block novelty score
 // and similar-facts list, computed against the provided FactSearcher.
 // k is the number of similar facts to return per block (default 3 if 0).
