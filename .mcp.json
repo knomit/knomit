@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "knomit": {
+      "command": "knomit-bridge",
+      "args": ["--repo", "knomit-kb", "--profile", "code"]
+    }
+  }
+}
