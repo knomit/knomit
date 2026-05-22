@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 
@@ -8,6 +9,7 @@ import (
 
 	"knomit/internal/detect"
 	"knomit/internal/repos"
+	"knomit/internal/store"
 	"knomit/internal/web/hal"
 )
 
@@ -71,9 +73,46 @@ func handleDetect(scorers map[string]ScorerLike, mgr *repos.Manager) http.Handle
 	}
 }
 
-// buildFactSearcher is a stub for this task. Task 9 wires it to the real store.
-// Returning nil here causes ScoreBlocksWithNovelty to gracefully fall back to
-// intent-only scoring (which is honest about not having novelty data yet).
-func buildFactSearcher(_ *repos.Manager, _, _ string) detect.FactSearcher {
-	return nil
+// buildFactSearcher returns a FactSearcher backed by the named repo/branch in
+// mgr. Returns nil if the repo is not registered (ScoreBlocksWithNovelty
+// gracefully falls back to intent-only scoring in that case).
+func buildFactSearcher(mgr *repos.Manager, repoName, branch string) detect.FactSearcher {
+	ri := mgr.Get(repoName)
+	if ri == nil {
+		return nil
+	}
+	return &repoFactSearcher{ri: ri, branch: branch}
+}
+
+// repoFactSearcher implements detect.FactSearcher using the store's vector
+// similarity search (SearchIndex.Search with QueryVec).
+type repoFactSearcher struct {
+	ri     *repos.RepoInstance
+	branch string
+}
+
+// NearestFacts queries the store's vec0 KNN index for the k facts closest to
+// vec on the configured branch. Score is in [0, 100] from the store; we
+// normalise to [0, 1] for the detect layer.
+func (r *repoFactSearcher) NearestFacts(vec []float32, k int) ([]detect.SimilarFact, error) {
+	var out []detect.SimilarFact
+	var searchErr error
+	r.ri.WithRead(func(svc *store.Service) {
+		results, err := svc.Search().Search(context.Background(), r.branch, store.SearchOptions{
+			QueryVec: vec,
+			Limit:    k,
+		})
+		if err != nil {
+			searchErr = err
+			return
+		}
+		out = make([]detect.SimilarFact, 0, len(results))
+		for _, res := range results {
+			out = append(out, detect.SimilarFact{
+				Path:       res.Path,
+				Similarity: res.Score / 100.0,
+			})
+		}
+	})
+	return out, searchErr
 }

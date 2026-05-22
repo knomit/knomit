@@ -80,6 +80,43 @@ func TestDetectHandler_MalformedBody_Returns400(t *testing.T) {
 	}
 }
 
+func TestDetectHandler_WithNovelty_PopulatesSimilarFacts(t *testing.T) {
+	// Verifies that novelty_context in the request body causes the handler to
+	// call ScoreBlocksWithNovelty (even when mgr is nil, searcher will be nil).
+	captured := struct {
+		called bool
+	}{}
+	stub := &scorerCaptureNovelty{flag: &captured.called}
+	h := handleDetect(map[string]ScorerLike{"code": stub}, nil)
+
+	body := `{
+		"blocks":[{"role":"user","text":"hi"}],
+		"intents":["correction"],
+		"novelty_context":{"repo":"knomit","branch":"main"}
+	}`
+	req := httptest.NewRequest("POST", "/api/v1/profiles/code/detect", strings.NewReader(body))
+	req = withURLParam(req, "profile", "code")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if !captured.called {
+		t.Error("ScoreBlocksWithNovelty was not called when novelty_context present")
+	}
+}
+
+type scorerCaptureNovelty struct {
+	flag *bool
+}
+
+func (s *scorerCaptureNovelty) ScoreBlocks(_ []detect.Block, _ []string) []detect.BlockResult {
+	return nil
+}
+
+func (s *scorerCaptureNovelty) ScoreBlocksWithNovelty(_ []detect.Block, _ []string, _ detect.FactSearcher) []detect.BlockResult {
+	*s.flag = true
+	return nil
+}
+
 // withURLParam injects a chi URL param into the request context so handlers
 // can read it via chi.URLParam without going through the router.
 func withURLParam(r *http.Request, key, val string) *http.Request {
