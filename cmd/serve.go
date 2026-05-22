@@ -22,12 +22,13 @@ import (
 
 func serveCmd() *cobra.Command {
 	var (
-		portOverride   string
-		hostOverride   string
-		logFile        string
-		logMaxSizeMB   int
-		logMaxBackups  int
-		logMaxAgeDays  int
+		portOverride    string
+		hostOverride    string
+		logFile         string
+		logMaxSizeMB    int
+		logMaxBackups   int
+		logMaxAgeDays   int
+		intentsCodePath string
 	)
 	cmd := &cobra.Command{
 		Use:   "serve",
@@ -62,7 +63,9 @@ func serveCmd() *cobra.Command {
 				cfg.Host = hostOverride
 			}
 
-			a, err := app.New(cmd.Context(), cfg)
+			a, err := app.New(cmd.Context(), cfg, app.Options{
+				IntentsCodePath: intentsCodePath,
+			})
 			if err != nil {
 				return err
 			}
@@ -151,5 +154,6 @@ func serveCmd() *cobra.Command {
 	cmd.Flags().IntVar(&logMaxSizeMB, "log-max-size", 10, "max log file size in MB before rotation")
 	cmd.Flags().IntVar(&logMaxBackups, "log-max-backups", 3, "max number of rotated log files to keep")
 	cmd.Flags().IntVar(&logMaxAgeDays, "log-max-age", 7, "max age in days to keep rotated log files")
+	cmd.Flags().StringVar(&intentsCodePath, "intents-code", "", "override path for the code-profile intents YAML")
 	return cmd
 }

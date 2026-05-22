@@ -45,7 +45,7 @@ Exit codes:
 				return fmt.Errorf("load config: %w", err)
 			}
 			ctx := context.Background()
-			a, err := app.New(ctx, cfg)
+			a, err := app.New(ctx, cfg, app.Options{})
 			if err != nil {
 				return fmt.Errorf("init app: %w", err)
 			}
