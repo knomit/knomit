@@ -79,6 +79,15 @@ func initLog() {
 }
 
 func main() {
+	// Detect subcommands before flag.Parse() so we can handle them specially.
+	if len(os.Args) >= 2 && os.Args[1] == "init" {
+		if err := runInit(os.Args[2:]); err != nil {
+			fmt.Fprintf(os.Stderr, "knomit-bridge init: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	repo := flag.String("repo", "knomit", "repository name")
 	profile := flag.String("profile", "code", "MCP profile (code, chat, generic)")
 	flag.Usage = func() {
@@ -211,6 +220,12 @@ func main() {
 		fmt.Fprintf(os.Stderr, "stdin read error: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+// runInit is implemented in init.go (added in a later task).
+// This function provides the dispatch only.
+func runInit(args []string) error {
+	return fmt.Errorf("init subcommand not yet implemented")
 }
 
 // writeLine writes a JSON line to stdout as a single atomic write,
