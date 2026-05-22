@@ -32,6 +32,40 @@ func DefaultOntology() *Ontology {
 	return defaultOntology
 }
 
+//go:embed ontology_code.yaml
+var codeOntologyYAML []byte
+
+var (
+	codeOntology     *Ontology
+	codeOntologyOnce sync.Once
+)
+
+// CodeOntology returns the embedded source-code ontology preset.
+// It panics if the embedded YAML is invalid.
+func CodeOntology() *Ontology {
+	codeOntologyOnce.Do(func() {
+		o, err := ParseOntology(codeOntologyYAML)
+		if err != nil {
+			panic(fmt.Sprintf("embedded code ontology is invalid: %v", err))
+		}
+		codeOntology = o
+	})
+	return codeOntology
+}
+
+// OntologyByPreset returns one of the embedded ontology presets by name.
+// Known presets: "default", "code".
+func OntologyByPreset(name string) (*Ontology, error) {
+	switch name {
+	case "default":
+		return DefaultOntology(), nil
+	case "code":
+		return CodeOntology(), nil
+	default:
+		return nil, fmt.Errorf("unknown ontology preset: %q", name)
+	}
+}
+
 // Ontology defines a hierarchical taxonomy for organizing knowledge.
 type Ontology struct {
 	ID          string                   `yaml:"id"`
