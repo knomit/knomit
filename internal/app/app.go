@@ -13,6 +13,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"knomit/internal/config"
+	"knomit/internal/detect"
 	"knomit/internal/embeddings"
 	"knomit/internal/llm"
 	"knomit/internal/repos"
@@ -117,6 +118,15 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 		gitHandler = web.GitRemoteHandler(a.manager)
 	}
 
+	scorers := map[string]web.ScorerLike{}
+	if embedder != nil {
+		if s, err := detect.NewScorer(detect.CodeIntents(), embedder); err == nil {
+			scorers["code"] = s
+		} else {
+			log.Warn().Err(err).Msg("detect: code scorer init failed; /detect will 404 for code")
+		}
+	}
+
 	a.server = &web.Server{
 		Manager:           a.manager,
 		GitHandler:        gitHandler,
@@ -126,6 +136,7 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 		SessionManager:    web.NewSessionManager(),
 		LLMAdapter:        llmAdapter,
 		Embedder:          embedder,
+		Scorers:           scorers,
 	}
 
 	// Start the manager (opens repos, launches background cluster

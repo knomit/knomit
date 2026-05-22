@@ -25,6 +25,8 @@ type Server struct {
 	SessionManager    *SessionManager
 	LLMAdapter        llm.LLMAdapter     // nil if no LLM configured
 	Embedder          store.BatchEmbedder // nil if unavailable
+	// Scorers maps profile name -> scorer for the /detect endpoint. May be empty.
+	Scorers map[string]ScorerLike
 
 	mcpHandlers map[string]http.Handler // profile → handler
 
