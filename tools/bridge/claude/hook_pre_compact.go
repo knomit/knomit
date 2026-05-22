@@ -9,23 +9,27 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+const (
+	preCompactMaxScan  = 50
+	preCompactMaxEmits = 8
+)
+
 type preCompactInput struct {
 	TranscriptPath string `json:"transcript_path"`
 	Cwd            string `json:"cwd"`
 }
 
-// hookPreCompact scans the most recent transcript window for
-// capture-worthy moments via knomit /detect and nudges if any score above
-// threshold (0.7).
+// hookPreCompact scans a wider window than hookStop just before the
+// transcript is compacted away, surfacing capture candidates so they
+// aren't lost to compaction. Not rate-limited — pre-compaction is rare.
 func hookPreCompact(r io.Reader, w io.Writer) error {
 	var (
 		emitted    bool
-		blocksLen  int
 		hitsCount  int
 		skipReason string
 	)
 	defer func() {
-		ev := log.Info().Str("event", "pre-compact").Bool("emitted", emitted).Int("blocks", blocksLen)
+		ev := log.Info().Str("event", "pre-compact").Bool("emitted", emitted)
 		if emitted {
 			ev.Int("hits", hitsCount).Msg("hook result")
 			return
@@ -41,57 +45,39 @@ func hookPreCompact(r io.Reader, w io.Writer) error {
 		skipReason = "bad_input"
 		return nil
 	}
-	blocks, err := parseTranscript(in.TranscriptPath, 24)
-	if err != nil || len(blocks) == 0 {
-		skipReason = "no_transcript_blocks"
-		return nil
-	}
-	blocksLen = len(blocks)
 
-	intents := []string{"correction", "discovery", "decision", "fix-bug", "gotcha"}
-	var novelty *detectNoveltyContext
-	if in.Cwd != "" {
-		repo := repoFromMCP(in.Cwd)
-		if br := agentBranch(repo); br != "" {
-			novelty = &detectNoveltyContext{Repo: repo, Branch: br}
+	var sb strings.Builder
+	hits := 0
+	prevRole := ""
+
+	err := scanTranscript(in.TranscriptPath, preCompactMaxScan, func(role, text string) bool {
+		for _, m := range matchIntents(role, text, prevRole) {
+			if hits == 0 {
+				sb.WriteString("Before compaction, these moments look capture-worthy:\n")
+			}
+			fmt.Fprintf(&sb, "\n- %s (%s): %q\n", m.intent, role, m.quote)
+			hits++
+			if hits >= preCompactMaxEmits {
+				return false
+			}
 		}
-	}
-
-	resp, err := postDetect(blocks, intents, novelty)
+		prevRole = role
+		return true
+	})
 	if err != nil {
-		skipReason = "detect_failed"
+		skipReason = "transcript_unreadable"
 		return nil
 	}
-
-	var hits []string
-	for _, b := range resp.Blocks {
-		maxScore := 0.0
-		var matched []string
-		for _, s := range b.Signals {
-			if s.Score > maxScore {
-				maxScore = s.Score
-			}
-			if s.Score > 0.7 {
-				matched = append(matched, s.Intent)
-			}
-		}
-		if maxScore > 0.7 {
-			hits = append(hits, fmt.Sprintf("  - %s: block %d", strings.Join(matched, ","), b.Index))
-		}
-	}
-	if len(hits) == 0 {
-		skipReason = "no_hits_above_threshold"
+	if hits == 0 {
+		skipReason = "no_hits"
 		return nil
 	}
+	sb.WriteString("\nRun /knomit-remember or /knomit-decided to preserve them.\n")
 
-	ctx := fmt.Sprintf(
-		"Before compaction, these recent moments look capture-worthy:\n%s\n\nRun /knomit-remember or /knomit-decided if you want any of them preserved.",
-		strings.Join(hits, "\n"),
-	)
-	if err := emitAdditionalContext(w, ctx); err != nil {
+	if err := emitAdditionalContext(w, sb.String()); err != nil {
 		return err
 	}
 	emitted = true
-	hitsCount = len(hits)
+	hitsCount = hits
 	return nil
 }

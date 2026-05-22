@@ -136,6 +136,71 @@ func TestHookPreCompact_MissingTranscript_Clean(t *testing.T) {
 	}
 }
 
+func TestHookPreCompact_EmitsQuotedCandidatesOnHit(t *testing.T) {
+	dir := t.TempDir()
+	transcript := filepath.Join(dir, "transcript.jsonl")
+	lines := []string{
+		`{"type":"user","message":{"content":"Some prior question."}}`,
+		`{"type":"assistant","message":{"content":"The root cause was a missing vtab registration."}}`,
+	}
+	if err := os.WriteFile(transcript, []byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
+		t.Fatalf("write transcript: %v", err)
+	}
+
+	payload := map[string]interface{}{
+		"transcript_path": transcript,
+		"cwd":             dir,
+	}
+	data, _ := json.Marshal(payload)
+	var out bytes.Buffer
+	if err := hookPreCompact(bytes.NewReader(data), &out); err != nil {
+		t.Fatalf("hookPreCompact: %v", err)
+	}
+	var resp struct {
+		HookSpecificOutput struct {
+			AdditionalContext string `json:"additionalContext"`
+		} `json:"hookSpecificOutput"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &resp); err != nil {
+		t.Fatalf("output is not valid JSON: %v\ngot: %s", err, out.String())
+	}
+	ctx := resp.HookSpecificOutput.AdditionalContext
+	if !strings.Contains(ctx, "fix-bug") {
+		t.Errorf("additionalContext missing 'fix-bug' label: %q", ctx)
+	}
+	if !strings.Contains(ctx, "root cause") {
+		t.Errorf("additionalContext missing quoted sentence: %q", ctx)
+	}
+	if !strings.Contains(ctx, "/knomit-remember") {
+		t.Errorf("additionalContext missing /knomit-remember nudge: %q", ctx)
+	}
+}
+
+func TestHookPreCompact_NoEmitWhenNoHits(t *testing.T) {
+	dir := t.TempDir()
+	transcript := filepath.Join(dir, "transcript.jsonl")
+	lines := []string{
+		`{"type":"user","message":{"content":"Plain question."}}`,
+		`{"type":"assistant","message":{"content":"Plain answer."}}`,
+	}
+	if err := os.WriteFile(transcript, []byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
+		t.Fatalf("write transcript: %v", err)
+	}
+
+	payload := map[string]interface{}{
+		"transcript_path": transcript,
+		"cwd":             dir,
+	}
+	data, _ := json.Marshal(payload)
+	var out bytes.Buffer
+	if err := hookPreCompact(bytes.NewReader(data), &out); err != nil {
+		t.Fatalf("hookPreCompact: %v", err)
+	}
+	if out.Len() != 0 {
+		t.Errorf("expected no output when no intent matches; got %q", out.String())
+	}
+}
+
 // ---- hookStop ----
 
 func TestHookStop_MalformedStdin_Clean(t *testing.T) {
