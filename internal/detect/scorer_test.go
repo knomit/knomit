@@ -98,3 +98,48 @@ func TestScorer_AllRequestedIntentsAppearInResponse(t *testing.T) {
 		t.Errorf("got %d signals, want 3 (one per requested intent)", len(res[0].Signals))
 	}
 }
+
+// fakeFactSearcher returns canned similar facts for the test.
+type fakeFactSearcher struct {
+	results []SimilarFact
+}
+
+func (f *fakeFactSearcher) NearestFacts(vec []float32, k int) ([]SimilarFact, error) {
+	if len(f.results) <= k {
+		return f.results, nil
+	}
+	return f.results[:k], nil
+}
+
+func TestScorer_NoveltyScoring(t *testing.T) {
+	intents := &IntentSet{
+		Intents: map[string]*Intent{
+			"correction": {CanonicalPhrases: []string{"that's wrong"}},
+		},
+	}
+	s, _ := NewScorer(intents, &fakeEmbedder{})
+	searcher := &fakeFactSearcher{results: []SimilarFact{
+		{Path: "invariants/architecture/historical-graph", Similarity: 0.42},
+	}}
+	results := s.ScoreBlocksWithNovelty(
+		[]Block{{Text: "that's wrong"}},
+		[]string{"correction"},
+		searcher,
+	)
+	if results[0].Novelty == nil {
+		t.Fatal("Novelty is nil; expected a value")
+	}
+	if got, want := *results[0].Novelty, 1-0.42; abs(got-want) > 1e-6 {
+		t.Errorf("Novelty = %v, want %v", got, want)
+	}
+	if len(results[0].SimilarFacts) != 1 || results[0].SimilarFacts[0].Path != "invariants/architecture/historical-graph" {
+		t.Errorf("SimilarFacts = %+v, want one entry for the historical-graph path", results[0].SimilarFacts)
+	}
+}
+
+func abs(x float64) float64 {
+	if x < 0 {
+		return -x
+	}
+	return x
+}

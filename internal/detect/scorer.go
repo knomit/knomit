@@ -131,3 +131,45 @@ func sqrt(x float64) float64 {
 	}
 	return z
 }
+
+// FactSearcher finds existing facts close to a given embedding.
+// Implemented in production by the store's search index; faked in tests.
+type FactSearcher interface {
+	NearestFacts(vec []float32, k int) ([]SimilarFact, error)
+}
+
+// ScoreBlocksWithNovelty is ScoreBlocks plus a per-block novelty score
+// and similar-facts list, computed against the provided FactSearcher.
+// k is the number of similar facts to return per block (default 3 if 0).
+func (s *Scorer) ScoreBlocksWithNovelty(
+	blocks []Block, intentNames []string, searcher FactSearcher,
+) []BlockResult {
+	results := s.ScoreBlocks(blocks, intentNames)
+	if searcher == nil {
+		return results
+	}
+	texts := make([]string, len(blocks))
+	for i, b := range blocks {
+		texts[i] = b.Text
+	}
+	vecs, err := s.embedder.EmbedBatch(texts)
+	if err != nil {
+		return results
+	}
+	for i := range results {
+		similar, err := searcher.NearestFacts(vecs[i], 3)
+		if err != nil {
+			continue
+		}
+		max := 0.0
+		for _, sf := range similar {
+			if sf.Similarity > max {
+				max = sf.Similarity
+			}
+		}
+		novelty := 1 - max
+		results[i].Novelty = &novelty
+		results[i].SimilarFacts = similar
+	}
+	return results
+}
