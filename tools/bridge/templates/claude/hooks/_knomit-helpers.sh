@@ -2,15 +2,12 @@
 # Shared helpers for knomit hooks. Sourced, not executed directly.
 
 # knomit_base_url: print the knomit HTTP base URL.
-# Falls back through: $KNOMIT_BASE_URL env, lockfile, default.
+# Set KNOMIT_BASE_URL if knomit runs on a non-default port; otherwise the
+# default works for the standard local install.
 knomit_base_url() {
   if [[ -n "$KNOMIT_BASE_URL" ]]; then
     echo "$KNOMIT_BASE_URL"
     return
-  fi
-  local lockfile="${TMPDIR:-/tmp}/knomit.lock"
-  if [[ -f "$lockfile" ]]; then
-    awk '/base_url/ {print $2; exit}' "$lockfile" 2>/dev/null && return
   fi
   echo "http://localhost:19278"
 }
