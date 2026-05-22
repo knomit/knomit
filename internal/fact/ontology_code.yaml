@@ -5,43 +5,65 @@ topics:
   invariants:
     description: Load-bearing rules that must never be violated
     children:
-      architecture: { description: Layering, dependency, ownership constraints }
-      data: { description: Invariants on data models, schemas, indexes }
-      protocol: { description: API contracts, wire-format guarantees }
-      concurrency: { description: Thread, lock, ordering rules }
+      architecture:
+        description: Layering, dependency, ownership constraints
+      data:
+        description: Invariants on data models, schemas, indexes
+      protocol:
+        description: API contracts, wire-format guarantees
+      concurrency:
+        description: Thread, lock, ordering rules
   architecture:
     description: Structural facts — what lives where, how it connects
     children:
-      modules: { description: Package/module purpose and boundaries }
-      flows: { description: Request/data flow paths }
-      integrations: { description: External services, libraries, MCP servers }
+      modules:
+        description: Package/module purpose and boundaries
+      flows:
+        description: Request/data flow paths
+      integrations:
+        description: External services, libraries, MCP servers
   conventions:
     description: How we do things here — idioms, patterns, style
     children:
-      testing: { description: Mocks, fixtures, structure }
-      logging: { description: Library, levels, structured fields }
-      errors: { description: Wrapping, surfacing, fallbacks }
-      naming: { description: File, type, function naming patterns }
-      git: { description: Commit messages, branch model, PR norms }
+      testing:
+        description: Mocks, fixtures, structure
+      logging:
+        description: Library, levels, structured fields
+      errors:
+        description: Wrapping, surfacing, fallbacks
+      naming:
+        description: File, type, function naming patterns
+      git:
+        description: Commit messages, branch model, PR norms
   decisions:
     description: Design choices with rationale
     children:
-      accepted: { description: Decisions in force }
-      superseded: { description: Previously accepted, now replaced }
-      rejected: { description: Alternatives considered and rejected }
+      accepted:
+        description: Decisions in force
+      superseded:
+        description: Previously accepted, now replaced
+      rejected:
+        description: Alternatives considered and rejected
   gotchas:
     description: Sharp edges and surprises
     children:
-      tools: { description: Build, test, dev-tool gotchas }
-      libraries: { description: Third-party library quirks }
-      runtime: { description: Language/runtime traps }
+      tools:
+        description: Build, test, dev-tool gotchas
+      libraries:
+        description: Third-party library quirks
+      runtime:
+        description: Language/runtime traps
   incidents:
     description: Past bugs and their fixes (regression-test anchored)
     children:
-      bugs: { description: Bugs that landed }
-      near-misses: { description: Caught before merging }
+      bugs:
+        description: Bugs that landed
+      near-misses:
+        description: Caught before merging
   meta:
     description: Knowledge about the knowledge
     children:
-      reasoning: { description: Methodology facts from knomit_review/hypothesize }
-      ontology: { description: Notes about how this ontology is used }
+      reasoning:
+        description: Methodology facts from knomit_review/hypothesize
+      ontology:
+        description: Notes about how this ontology is used
