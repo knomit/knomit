@@ -119,6 +119,33 @@ func TestRunInit_AlreadyIntegrated_ReportsAndSkips(t *testing.T) {
 	}
 }
 
+func TestRunInit_ProfileOverride_RendersIntoMcpJson(t *testing.T) {
+	dir := t.TempDir()
+	chdir(t, dir)
+
+	if err := runInit([]string{"--repo", "x", "--profile", "chat"}); err != nil {
+		t.Fatalf("runInit: %v", err)
+	}
+
+	mcp, _ := os.ReadFile(filepath.Join(dir, ".mcp.json"))
+	if !strings.Contains(string(mcp), `"chat"`) {
+		t.Errorf(".mcp.json missing chat profile; got:\n%s", mcp)
+	}
+}
+
+func TestRunInit_InvalidProfile_Errors(t *testing.T) {
+	dir := t.TempDir()
+	chdir(t, dir)
+
+	err := runInit([]string{"--repo", "x", "--profile", "bogus"})
+	if err == nil {
+		t.Fatal("runInit with invalid profile = nil, want error")
+	}
+	if !strings.Contains(err.Error(), "invalid profile") {
+		t.Errorf("error %q does not mention invalid profile", err)
+	}
+}
+
 func chdir(t *testing.T, dir string) {
 	t.Helper()
 	old, _ := os.Getwd()

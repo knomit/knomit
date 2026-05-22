@@ -94,14 +94,15 @@ func main() {
 		fmt.Fprintf(os.Stderr, "usage: knomit-bridge [<command>] [flags] [base-url]\n\n")
 		fmt.Fprintf(os.Stderr, "commands:\n")
 		fmt.Fprintf(os.Stderr, "  init    Scaffold CC-side integration files in the current directory\n")
-		fmt.Fprintf(os.Stderr, "          knomit-bridge init [--repo <name>]\n\n")
+		fmt.Fprintf(os.Stderr, "          knomit-bridge init [-repo <name>] [-profile <name>]\n\n")
 		fmt.Fprintf(os.Stderr, "without a command, runs as an MCP stdio↔HTTP proxy.\n\n")
 		fmt.Fprintf(os.Stderr, "examples:\n")
 		fmt.Fprintf(os.Stderr, "  knomit-bridge\n")
 		fmt.Fprintf(os.Stderr, "  knomit-bridge http://myhost:8080\n")
-		fmt.Fprintf(os.Stderr, "  knomit-bridge --repo work --profile chat\n")
-		fmt.Fprintf(os.Stderr, "  knomit-bridge init --repo myproject\n")
+		fmt.Fprintf(os.Stderr, "  knomit-bridge -repo work -profile chat\n")
+		fmt.Fprintf(os.Stderr, "  knomit-bridge init -repo myproject\n")
 		flag.PrintDefaults()
+		fmt.Fprintf(os.Stderr, "\nNote: flags accept both '-flag value' and '--flag value' styles.\n")
 	}
 	flag.Parse()
 

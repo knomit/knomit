@@ -21,8 +21,16 @@ var templatesFS embed.FS
 func runInit(args []string) error {
 	flags := flag.NewFlagSet("init", flag.ContinueOnError)
 	repo := flags.String("repo", "", "knomit repo name (defaults to directory basename)")
+	profile := flags.String("profile", "code", "MCP profile (code, chat, generic)")
 	if err := flags.Parse(args); err != nil {
 		return err
+	}
+
+	switch *profile {
+	case "code", "chat", "generic":
+		// ok
+	default:
+		return fmt.Errorf("invalid profile %q (must be code, chat, or generic)", *profile)
 	}
 
 	cwd, err := os.Getwd()
@@ -61,7 +69,7 @@ func runInit(args []string) error {
 		if err != nil {
 			return err
 		}
-		rendered, err := renderTemplate(string(data), map[string]string{"RepoName": repoName})
+		rendered, err := renderTemplate(string(data), map[string]string{"RepoName": repoName, "Profile": *profile})
 		if err != nil {
 			return fmt.Errorf("render %s: %w", srcPath, err)
 		}
