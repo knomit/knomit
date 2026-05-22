@@ -65,3 +65,11 @@ knomit_extract_recent_turns() {
       | map({role: .type, text: (.message.content | tostring)})
     '
 }
+
+# knomit_inject_context: print a JSON object that injects $1 as a system
+# reminder via CC's hookSpecificOutput.additionalContext mechanism.
+# Use this from PreCompact, Stop, PostToolUse, etc. (any event other than
+# the few that auto-wrap plain stdout: SessionStart, UserPromptSubmit, ...).
+knomit_inject_context() {
+  jq -nc --arg ctx "$1" '{hookSpecificOutput: {additionalContext: $ctx}}'
+}

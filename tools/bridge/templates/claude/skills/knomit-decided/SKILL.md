@@ -1,9 +1,9 @@
 ---
-name: decided
+name: knomit-decided
 description: Capture a design decision made during the session
 ---
 
-# /decided <slug>
+# /knomit-decided <slug>
 
 Use after a tradeoff was resolved in conversation. The skill summarizes:
 

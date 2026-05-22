@@ -26,11 +26,9 @@ if [[ -z "$HITS" ]]; then
   exit 0
 fi
 
-cat <<EOF
-<system-reminder>
-Before compaction, these recent moments look capture-worthy:
+NUDGE="Before compaction, these recent moments look capture-worthy:
 $HITS
 
-Run \`/remember\` or \`/decided\` if you want any of them preserved.
-</system-reminder>
-EOF
+Run /knomit-remember or /knomit-decided if you want any of them preserved."
+
+knomit_inject_context "$NUDGE"

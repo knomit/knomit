@@ -16,8 +16,12 @@ import (
 var templatesFS embed.FS
 
 // runInit scaffolds CC-side integration files into the current directory.
-// Conflict handling: existing files with the same name get a `.knomit`
-// companion file dropped next to them for the user to merge.
+//
+// Semantics:
+//   - Owned files (.claude/hooks/*, .claude/skills/**): always written
+//     (overwritten if they already exist).
+//   - Merge-required files (.mcp.json, .claude/settings.json, CLAUDE.md):
+//     if the destination exists, a companion file is dropped instead.
 func runInit(args []string) error {
 	flags := flag.NewFlagSet("init", flag.ContinueOnError)
 	repo := flags.String("repo", "", "knomit repo name (defaults to directory basename)")
@@ -42,14 +46,8 @@ func runInit(args []string) error {
 		repoName = filepath.Base(cwd)
 	}
 
-	// Idempotency: if .mcp.json already declares mcpServers.knomit and
-	// CLAUDE.md already contains the integration marker, skip everything.
-	if alreadyIntegrated(cwd) {
-		fmt.Println("knomit-bridge: already integrated; nothing to do")
-		return nil
-	}
-
 	var created []string
+	var overwritten []string
 	var conflicts []string
 
 	err = fs.WalkDir(templatesFS, "templates", func(srcPath string, d fs.DirEntry, walkErr error) error {
@@ -80,8 +78,23 @@ func runInit(args []string) error {
 		}
 
 		_, statErr := os.Stat(dst)
-		if statErr == nil {
-			// File exists — write companion instead of overwriting.
+		exists := statErr == nil
+
+		if isOwnedByIntegration(dstRel) {
+			// Always write owned files (hooks, skills).
+			if err := writeFile(dst, []byte(rendered), mode); err != nil {
+				return err
+			}
+			if exists {
+				overwritten = append(overwritten, dstRel)
+			} else {
+				created = append(created, dstRel)
+			}
+			return nil
+		}
+
+		// Merge-required file: write companion if destination exists.
+		if exists {
 			companion := companionPath(dst)
 			if err := writeFile(companion, []byte(rendered), mode); err != nil {
 				return err
@@ -100,8 +113,16 @@ func runInit(args []string) error {
 		return err
 	}
 
-	printSummary(created, conflicts)
+	printSummary(created, overwritten, conflicts)
 	return nil
+}
+
+// isOwnedByIntegration reports whether dstRel is a file that the integration
+// owns outright (hooks and skills). These are always overwritten on re-run,
+// so deleting them and re-running init restores them.
+func isOwnedByIntegration(dstRel string) bool {
+	return strings.HasPrefix(dstRel, ".claude/hooks/") ||
+		strings.HasPrefix(dstRel, ".claude/skills/")
 }
 
 // mapDestination translates a template path under templates/ to its
@@ -150,23 +171,12 @@ func writeFile(path string, data []byte, mode fs.FileMode) error {
 	return os.WriteFile(path, data, mode)
 }
 
-func alreadyIntegrated(cwd string) bool {
-	if mcp, err := os.ReadFile(filepath.Join(cwd, ".mcp.json")); err == nil {
-		if bytes.Contains(mcp, []byte(`"knomit"`)) {
-			return true
-		}
-	}
-	if cmd, err := os.ReadFile(filepath.Join(cwd, "CLAUDE.md")); err == nil {
-		if bytes.Contains(cmd, []byte("<!-- knomit:integration -->")) {
-			return true
-		}
-	}
-	return false
-}
-
-func printSummary(created, conflicts []string) {
+func printSummary(created, overwritten, conflicts []string) {
 	if len(created) > 0 {
 		fmt.Printf("Created: %s\n", strings.Join(created, ", "))
+	}
+	if len(overwritten) > 0 {
+		fmt.Printf("Restored: %s\n", strings.Join(overwritten, ", "))
 	}
 	for _, c := range conflicts {
 		fmt.Printf("WARNING: %s exists — merge from %s manually\n", c, companionRel(c))

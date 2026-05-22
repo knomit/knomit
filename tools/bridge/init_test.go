@@ -23,13 +23,12 @@ func TestRunInit_EmptyDirectory_DropsAllFiles(t *testing.T) {
 		".claude/hooks/knomit-post-commit.sh",
 		".claude/hooks/knomit-pre-compact.sh",
 		".claude/hooks/knomit-stop.sh",
-		".claude/hooks/knomit-session-end.sh",
-		".claude/skills/recall.md",
-		".claude/skills/remember.md",
-		".claude/skills/why.md",
-		".claude/skills/decided.md",
-		".claude/skills/kickoff-area.md",
-		".claude/skills/review.md",
+		".claude/skills/knomit-recall/SKILL.md",
+		".claude/skills/knomit-remember/SKILL.md",
+		".claude/skills/knomit-why/SKILL.md",
+		".claude/skills/knomit-decided/SKILL.md",
+		".claude/skills/knomit-kickoff-area/SKILL.md",
+		".claude/skills/knomit-review/SKILL.md",
 		"CLAUDE.md",
 	}
 	for _, f := range wantFiles {
@@ -93,29 +92,98 @@ func TestRunInit_ExistingClaudeMd_DropsBlockCompanion(t *testing.T) {
 	}
 }
 
-func TestRunInit_AlreadyIntegrated_ReportsAndSkips(t *testing.T) {
+func TestRunInit_HooksDeleted_GetRestored(t *testing.T) {
 	dir := t.TempDir()
 	chdir(t, dir)
 
-	// First run: full scaffold
 	if err := runInit([]string{"--repo", "x"}); err != nil {
 		t.Fatalf("runInit #1: %v", err)
 	}
-	// Modify a hook
 	hookPath := filepath.Join(dir, ".claude/hooks/knomit-session-start.sh")
-	if err := os.WriteFile(hookPath, []byte("#!/bin/sh\necho modified\n"), 0o755); err != nil {
+
+	// User deletes the hook
+	if err := os.Remove(hookPath); err != nil {
 		t.Fatal(err)
 	}
 
-	// Second run: should detect the marker and skip
+	// Re-running init must restore it
 	if err := runInit([]string{"--repo", "x"}); err != nil {
 		t.Fatalf("runInit #2: %v", err)
 	}
 
-	// Modified hook should NOT have been overwritten
-	got, _ := os.ReadFile(hookPath)
-	if !strings.Contains(string(got), "modified") {
-		t.Errorf("hook was overwritten on re-run; want skip")
+	if _, err := os.Stat(hookPath); err != nil {
+		t.Errorf("hook was not restored after re-run: %v", err)
+	}
+}
+
+func TestRunInit_SkillsDeleted_GetRestored(t *testing.T) {
+	dir := t.TempDir()
+	chdir(t, dir)
+
+	if err := runInit([]string{"--repo", "x"}); err != nil {
+		t.Fatalf("runInit #1: %v", err)
+	}
+	skillPath := filepath.Join(dir, ".claude/skills/knomit-recall/SKILL.md")
+
+	// User deletes the skill
+	if err := os.Remove(skillPath); err != nil {
+		t.Fatal(err)
+	}
+
+	// Re-running init must restore it
+	if err := runInit([]string{"--repo", "x"}); err != nil {
+		t.Fatalf("runInit #2: %v", err)
+	}
+
+	if _, err := os.Stat(skillPath); err != nil {
+		t.Errorf("skill was not restored after re-run: %v", err)
+	}
+}
+
+func TestRunInit_DropsNoSessionEndHook(t *testing.T) {
+	dir := t.TempDir()
+	chdir(t, dir)
+
+	if err := runInit([]string{"--repo", "x"}); err != nil {
+		t.Fatalf("runInit: %v", err)
+	}
+
+	p := filepath.Join(dir, ".claude/hooks/knomit-session-end.sh")
+	if _, err := os.Stat(p); err == nil {
+		t.Errorf("session-end hook should NOT be created; SessionEnd is fire-and-forget per CC docs")
+	}
+
+	s, _ := os.ReadFile(filepath.Join(dir, ".claude/settings.json"))
+	if strings.Contains(string(s), "SessionEnd") {
+		t.Errorf("settings.json must not register SessionEnd; got:\n%s", s)
+	}
+}
+
+func TestRunInit_SkillFrontmatterMatchesDir(t *testing.T) {
+	dir := t.TempDir()
+	chdir(t, dir)
+
+	if err := runInit([]string{"--repo", "x"}); err != nil {
+		t.Fatalf("runInit: %v", err)
+	}
+
+	skills := map[string]string{
+		".claude/skills/knomit-recall/SKILL.md":        "name: knomit-recall",
+		".claude/skills/knomit-remember/SKILL.md":      "name: knomit-remember",
+		".claude/skills/knomit-why/SKILL.md":           "name: knomit-why",
+		".claude/skills/knomit-decided/SKILL.md":       "name: knomit-decided",
+		".claude/skills/knomit-kickoff-area/SKILL.md":  "name: knomit-kickoff-area",
+		".claude/skills/knomit-review/SKILL.md":        "name: knomit-review",
+	}
+	for path, wantFrontmatter := range skills {
+		data, err := os.ReadFile(filepath.Join(dir, path))
+		if err != nil {
+			t.Errorf("cannot read %s: %v", path, err)
+			continue
+		}
+		if !strings.Contains(string(data), wantFrontmatter) {
+			t.Errorf("%s: frontmatter missing %q; got:\n%s", path, wantFrontmatter, data)
+		}
 	}
 }
 

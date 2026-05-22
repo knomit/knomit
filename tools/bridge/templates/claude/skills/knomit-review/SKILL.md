@@ -1,9 +1,9 @@
 ---
-name: review
+name: knomit-review
 description: Run a knomit maintenance pass (synthesis, contradictions, stale facts)
 ---
 
-# /review
+# /knomit-review
 
 On-demand KB maintenance. Calls `mcp__knomit__knomit_review` (async MCP
 task). knomit walks the KB to:

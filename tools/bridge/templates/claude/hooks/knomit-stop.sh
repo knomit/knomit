@@ -39,11 +39,9 @@ if [[ -z "$HITS" ]]; then
   exit 0
 fi
 
-cat <<EOF
-<system-reminder>
-This turn produced capture-worthy moments:
+NUDGE="This turn produced capture-worthy moments:
 $HITS
 
-Consider \`/remember\` before moving on.
-</system-reminder>
-EOF
+Consider /knomit-remember before moving on."
+
+knomit_inject_context "$NUDGE"

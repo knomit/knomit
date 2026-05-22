@@ -1,9 +1,9 @@
 ---
-name: why
+name: knomit-why
 description: Walk a fact's provenance graph to verify before relying on it
 ---
 
-# /why <fact-path>
+# /knomit-why <fact-path>
 
 Use when:
 - You doubt a stored fact and want to verify against current code

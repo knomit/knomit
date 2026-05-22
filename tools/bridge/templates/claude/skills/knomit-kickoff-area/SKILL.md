@@ -1,9 +1,9 @@
 ---
-name: kickoff-area
+name: knomit-kickoff-area
 description: Structured per-area seed pass for knomit
 ---
 
-# /kickoff-area <area>
+# /knomit-kickoff-area <area>
 
 Use to bootstrap knomit knowledge for one subsystem.
 

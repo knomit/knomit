@@ -1,9 +1,9 @@
 ---
-name: remember
+name: knomit-remember
 description: Capture a discovery as a knomit fact (with contradiction check)
 ---
 
-# /remember
+# /knomit-remember
 
 Use AFTER:
 - Discovering something non-obvious during exploration

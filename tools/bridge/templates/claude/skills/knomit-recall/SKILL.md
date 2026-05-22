@@ -1,9 +1,9 @@
 ---
-name: recall
+name: knomit-recall
 description: Query knomit for top facts on a topic, grouped by kind
 ---
 
-# /recall <topic-or-text>
+# /knomit-recall <topic-or-text>
 
 Use BEFORE non-trivial work in a known-fact area:
 
