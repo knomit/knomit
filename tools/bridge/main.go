@@ -222,12 +222,6 @@ func main() {
 	}
 }
 
-// runInit is implemented in init.go (added in a later task).
-// This function provides the dispatch only.
-func runInit(args []string) error {
-	return fmt.Errorf("init subcommand not yet implemented")
-}
-
 // writeLine writes a JSON line to stdout as a single atomic write,
 // ensuring exactly one trailing newline.
 func writeLine(w io.Writer, mu *sync.Mutex, data []byte) {
