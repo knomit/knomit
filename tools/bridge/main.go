@@ -51,44 +51,52 @@ import (
 	"sync"
 	"time"
 
-	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
-	"gopkg.in/natefinch/lumberjack.v2"
 
+	"knomit/tools/bridge/bridgelog"
 	"knomit/tools/bridge/claude"
 )
 
-var debug = os.Getenv("KNOMIT_MCP_DEBUG") != ""
-
-// initLog wires zerolog to a rotating file at /tmp/knomit-bridge.log so
-// callers can tail one file regardless of which process spawned the bridge
-// (Claude Desktop captures stderr; sandboxed launchers may not). Lumberjack
-// rotates at 10 MB and keeps 3 backups for 7 days.
-func initLog() {
-	writer := &lumberjack.Logger{
-		Filename:   "/tmp/knomit-bridge.log",
-		MaxSize:    10,
-		MaxBackups: 3,
-		MaxAge:     7,
-		Compress:   false,
+// peelLogFlag extracts --log / -log (with either '=value' or next-arg form)
+// from args before any subcommand dispatch or flag.Parse, so the log path
+// can be configured uniformly across the MCP and hook paths. Unknown args
+// are passed through untouched.
+func peelLogFlag(args []string) (logPath string, remaining []string) {
+	logPath = bridgelog.DefaultPath
+	remaining = make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		switch {
+		case a == "--log" || a == "-log":
+			if i+1 < len(args) {
+				logPath = args[i+1]
+				i++
+			}
+		case strings.HasPrefix(a, "--log=") || strings.HasPrefix(a, "-log="):
+			_, v, _ := strings.Cut(a, "=")
+			logPath = v
+		default:
+			remaining = append(remaining, a)
+		}
 	}
-	level := zerolog.InfoLevel
-	if debug {
-		level = zerolog.DebugLevel
-	}
-	log.Logger = zerolog.New(writer).Level(level).With().Timestamp().Int("pid", os.Getpid()).Logger()
-	fmt.Fprintf(os.Stderr, "[knomit-bridge] log file: /tmp/knomit-bridge.log (pid=%d)\n", os.Getpid())
+	return
 }
 
 func main() {
+	logPath, args := peelLogFlag(os.Args[1:])
+	bridgelog.Init(logPath)
+
 	// Detect subcommands before flag.Parse() so we can handle them specially.
-	if len(os.Args) >= 2 && os.Args[1] == "claude" {
-		if err := claude.Run(os.Args[2:]); err != nil {
+	if len(args) >= 1 && args[0] == "claude" {
+		if err := claude.Run(args[1:]); err != nil {
 			fmt.Fprintf(os.Stderr, "knomit-bridge claude: %v\n", err)
 			os.Exit(1)
 		}
 		return
 	}
+
+	// Re-seat os.Args for flag.Parse, minus the peeled --log entries.
+	os.Args = append([]string{os.Args[0]}, args...)
 
 	repo := flag.String("repo", "knomit", "repository name")
 	source := flag.String("source", "", "source-code slug used in src:// refs (required)")
@@ -101,10 +109,13 @@ func main() {
 		fmt.Fprintf(os.Stderr, "  claude hook <event>     Execute a Claude Code hook (called by CC via settings.json).\n")
 		fmt.Fprintf(os.Stderr, "                          event in: session-start, post-commit, pre-compact, stop\n\n")
 		fmt.Fprintf(os.Stderr, "without a command, runs as an MCP stdio↔HTTP proxy.\n\n")
+		fmt.Fprintf(os.Stderr, "global flags (accepted before any subcommand):\n")
+		fmt.Fprintf(os.Stderr, "  --log <path>            log file path (default %s, lumberjack 4MB rotation)\n\n", bridgelog.DefaultPath)
 		fmt.Fprintf(os.Stderr, "examples:\n")
 		fmt.Fprintf(os.Stderr, "  knomit-bridge\n")
 		fmt.Fprintf(os.Stderr, "  knomit-bridge http://myhost:8080\n")
 		fmt.Fprintf(os.Stderr, "  knomit-bridge -repo work -source workapp -profile chat\n")
+		fmt.Fprintf(os.Stderr, "  knomit-bridge --log /tmp/bridge.log claude hook stop\n")
 		fmt.Fprintf(os.Stderr, "  knomit-bridge claude init -repo myproject\n")
 		fmt.Fprintf(os.Stderr, "  knomit-bridge claude hook session-start  (typically run by CC, not interactively)\n")
 		fmt.Fprintf(os.Stderr, "\nflags (for the default MCP-proxy mode):\n")
@@ -118,7 +129,7 @@ func main() {
 		os.Exit(2)
 	}
 
-	initLog()
+	fmt.Fprintf(os.Stderr, "[knomit-bridge] log file: %s (pid=%d)\n", logPath, os.Getpid())
 	log.Info().Str("repo", *repo).Str("source", *source).Str("profile", *profile).Msg("bridge starting")
 
 	baseURL := "http://localhost:19278"
