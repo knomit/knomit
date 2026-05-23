@@ -43,9 +43,6 @@ func (s *Server) NewAPIRouter() chi.Router {
 	b := hal.URLBuilder{Base: APIBase}
 	r.Get("/", handleAPIRoot(b))
 	r.Get("/openapi.yaml", handleOpenAPISpec())
-	if len(s.Scorers) > 0 {
-		r.Post("/profiles/{profile}/detect", handleDetect(s.Scorers, s.Manager))
-	}
 	r.Get("/repos", handleHALRepos(b, s.Manager))
 	r.Post("/repos:rescan", handleHALReposRescan(b, s.Manager))
 	r.Get("/repos/{repo}", handleHALRepo(b, s.Manager, s.AgentBranch))

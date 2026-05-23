@@ -9,7 +9,6 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/rs/zerolog/log"
 
-	"knomit/internal/detect"
 	"knomit/internal/llm"
 	"knomit/internal/mcp"
 	"knomit/internal/repos"
@@ -26,8 +25,6 @@ type Server struct {
 	SessionManager    *SessionManager
 	LLMAdapter        llm.LLMAdapter     // nil if no LLM configured
 	Embedder          store.BatchEmbedder // nil if unavailable
-	// Scorers maps profile name -> scorer for the /detect endpoint. May be empty.
-	Scorers map[string]detect.BlockScorer
 
 	mcpHandlers map[string]http.Handler // profile → handler
 
