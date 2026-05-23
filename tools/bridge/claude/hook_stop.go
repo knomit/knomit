@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/rs/zerolog/log"
 )
 
 const stopRateLimit = 5
@@ -20,19 +22,44 @@ type stopInput struct {
 // hookStop fires at end of every assistant turn. Rate-limited to one nudge
 // per stopRateLimit turns to keep noise down.
 func hookStop(r io.Reader, w io.Writer) error {
+	var (
+		emitted    bool
+		blocksLen  int
+		hitsCount  int
+		skipReason string
+	)
+	defer func() {
+		ev := log.Info().Str("event", "stop").Bool("emitted", emitted)
+		if blocksLen > 0 {
+			ev.Int("blocks", blocksLen)
+		}
+		if emitted {
+			ev.Int("hits", hitsCount).Msg("hook result")
+			return
+		}
+		if skipReason != "" {
+			ev.Str("skip_reason", skipReason)
+		}
+		ev.Msg("hook result")
+	}()
+
 	var in stopInput
 	if err := json.NewDecoder(r).Decode(&in); err != nil {
+		skipReason = "bad_input"
 		return nil
 	}
 
 	if !rateLimitFire() {
+		skipReason = "rate_limited"
 		return nil
 	}
 
 	blocks, err := parseTranscript(in.TranscriptPath, 6)
 	if err != nil || len(blocks) == 0 {
+		skipReason = "no_transcript_blocks"
 		return nil
 	}
+	blocksLen = len(blocks)
 
 	intents := []string{"correction", "discovery", "decision", "fix-bug", "gotcha"}
 	var novelty *detectNoveltyContext
@@ -45,6 +72,7 @@ func hookStop(r io.Reader, w io.Writer) error {
 
 	resp, err := postDetect(blocks, intents, novelty)
 	if err != nil {
+		skipReason = "detect_failed"
 		return nil
 	}
 
@@ -61,6 +89,7 @@ func hookStop(r io.Reader, w io.Writer) error {
 		}
 	}
 	if len(hits) == 0 {
+		skipReason = "no_hits_above_threshold"
 		return nil
 	}
 
@@ -68,7 +97,12 @@ func hookStop(r io.Reader, w io.Writer) error {
 		"This turn produced capture-worthy moments:\n%s\n\nConsider /knomit-remember before moving on.",
 		strings.Join(hits, "\n"),
 	)
-	return emitAdditionalContext(w, ctx)
+	if err := emitAdditionalContext(w, ctx); err != nil {
+		return err
+	}
+	emitted = true
+	hitsCount = len(hits)
+	return nil
 }
 
 // rateLimitFire returns true at most once per stopRateLimit calls. Uses a

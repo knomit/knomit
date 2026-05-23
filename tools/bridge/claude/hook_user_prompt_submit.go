@@ -6,6 +6,8 @@ import (
 	"io"
 	"regexp"
 	"strings"
+
+	"github.com/rs/zerolog/log"
 )
 
 type userPromptSubmitInput struct {
@@ -31,15 +33,30 @@ var designIntentPattern = regexp.MustCompile(
 // CC's UserPromptSubmit hook protocol: stdout (plain or JSON additionalContext)
 // is injected before the agent processes the prompt.
 func hookUserPromptSubmit(r io.Reader, w io.Writer) error {
+	var (
+		emitted    bool
+		skipReason string
+	)
+	defer func() {
+		ev := log.Info().Str("event", "user-prompt-submit").Bool("emitted", emitted)
+		if !emitted && skipReason != "" {
+			ev.Str("skip_reason", skipReason)
+		}
+		ev.Msg("hook result")
+	}()
+
 	var in userPromptSubmitInput
 	if err := json.NewDecoder(r).Decode(&in); err != nil {
+		skipReason = "bad_input"
 		return nil
 	}
 	prompt := strings.TrimSpace(in.Prompt)
 	if prompt == "" {
+		skipReason = "empty_prompt"
 		return nil
 	}
 	if !designIntentPattern.MatchString(prompt) {
+		skipReason = "no_design_intent"
 		return nil
 	}
 
@@ -48,5 +65,9 @@ func hookUserPromptSubmit(r io.Reader, w io.Writer) error {
 		"This prompt looks like design or implementation intent. Before brainstorming or touching code, run `/knomit-recall <area>` against the %s knowledge base to surface load-bearing invariants, prior decisions, and anti-patterns. After recall, verify the 3–5 load-bearing claims your work will depend on against HEAD (see the knomit-recall skill for the verification handshake).",
 		repo,
 	)
-	return emitAdditionalContext(w, msg)
+	if err := emitAdditionalContext(w, msg); err != nil {
+		return err
+	}
+	emitted = true
+	return nil
 }
