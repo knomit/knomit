@@ -106,6 +106,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "  knomit-bridge -repo work -profile chat\n")
 		fmt.Fprintf(os.Stderr, "  knomit-bridge claude init -repo myproject\n")
 		fmt.Fprintf(os.Stderr, "  knomit-bridge claude hook session-start  (typically run by CC, not interactively)\n")
+		fmt.Fprintf(os.Stderr, "\nflags (for the default MCP-proxy mode):\n")
 		flag.PrintDefaults()
 		fmt.Fprintf(os.Stderr, "\nNote: flags accept both '-flag value' and '--flag value' styles.\n")
 	}
