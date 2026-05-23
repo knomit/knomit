@@ -4,6 +4,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"unicode/utf8"
 )
 
 // intentRule is one labelled regex inside an intent definition. The label
@@ -173,7 +174,11 @@ func extractSentence(text string, p int) string {
 	}
 	s := strings.TrimSpace(text[start:end])
 	if len(s) > maxLen {
-		s = s[:maxLen-3] + "..."
+		cut := maxLen - 3
+		for cut > 0 && !utf8.RuneStart(s[cut]) {
+			cut--
+		}
+		s = s[:cut] + "..."
 	}
 	return s
 }

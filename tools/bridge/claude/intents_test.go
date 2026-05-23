@@ -4,6 +4,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func TestMatchIntents_TableDriven(t *testing.T) {
@@ -73,6 +74,12 @@ func TestMatchIntents_TableDriven(t *testing.T) {
 			want: []string{"decision:go-with"},
 		},
 		{
+			name: "decision_call_right_call",
+			role: "assistant",
+			text: "That's the right call.",
+			want: []string{"decision:call"},
+		},
+		{
 			name: "fixbug_root_cause",
 			role: "assistant",
 			text: "The root cause was a missing vtab registration.",
@@ -129,6 +136,21 @@ func TestMatchIntents_QuoteExtraction(t *testing.T) {
 	}
 	if strings.Contains(got[0].quote, "Some preamble") || strings.Contains(got[0].quote, "Then more") {
 		t.Errorf("quote leaked neighbouring sentences: %q", got[0].quote)
+	}
+}
+
+func TestExtractSentence_TruncatesAtRuneBoundary(t *testing.T) {
+	// Build a sentence that exceeds 200 bytes and contains multi-byte
+	// runes (em-dashes) near the truncation point. The truncated output
+	// must be valid UTF-8.
+	var sb strings.Builder
+	for i := 0; i < 60; i++ {
+		sb.WriteString("ab — ") // each "ab — " is 7 bytes (em-dash is 3 bytes)
+	}
+	long := sb.String() + "the root cause was here."
+	got := extractSentence(long, len(long)-10) // match position near the end
+	if !utf8.ValidString(got) {
+		t.Errorf("extractSentence returned invalid UTF-8: %q", got)
 	}
 }
 
