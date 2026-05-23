@@ -50,13 +50,12 @@ func hookSessionStart(r io.Reader, w io.Writer) error {
 		return nil
 	}
 
-	base := knomitBaseURL()
-	// Server-side topic/entity filters on /facts are currently broken (return
-	// the full corpus). Until that's fixed, fetch a recent window and prefix-
-	// filter client-side for the invariants list. 200 is plenty for typical
-	// KBs and small enough to keep the hook fast.
-	recentWindow := fetchFacts(fmt.Sprintf("%s/api/v1/repos/%s/branches/%s/facts?sort=recent&limit=200",
-		base, repo, url.PathEscape(branch)))
+	// Fetch a recent window in one round-trip and split it client-side into
+	// the invariants list (prefix match on kb/invariants/) and a recent-work
+	// list. 200 is plenty for typical KBs and small enough to keep the hook
+	// fast. Two scoped /facts?topic= calls would also work; the single window
+	// keeps surface area small.
+	recentWindow := fetchFacts(sessionStartFactsURL(repo, branch))
 	invariants := filterByPathPrefix(recentWindow, "kb/invariants/", 5)
 	recent := topN(recentWindow, 5)
 
@@ -95,15 +94,27 @@ type factSummary struct {
 	Entities []string `json:"entities"`
 }
 
+// sessionStartFactsURL builds the recent-facts URL the session-start hook
+// uses. Pure function so a regression test can pin the exact shape (commit
+// 99ec329 fixed a wrong-endpoint bug; keep this assertable).
+func sessionStartFactsURL(repo, branch string) string {
+	return fmt.Sprintf("%s/api/v1/repos/%s/branches/%s/facts?sort=recent&limit=200",
+		knomitBaseURL(), repo, url.PathEscape(branch))
+}
+
 // fetchFacts calls the /facts HAL endpoint and returns the embedded
-// facts collection. Returns nil on any error.
+// facts collection. Returns nil on any error; each failure path logs at Warn
+// so a dead server is visible in the bridge log rather than being
+// indistinguishable from a legitimate empty result.
 func fetchFacts(u string) []factSummary {
-	resp, err := http.Get(u) //nolint:noctx
+	resp, err := hookHTTPClient.Get(u) //nolint:noctx
 	if err != nil {
+		log.Warn().Err(err).Str("url", u).Msg("fetchFacts: GET failed")
 		return nil
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
+		log.Warn().Int("status", resp.StatusCode).Str("url", u).Msg("fetchFacts: non-200")
 		return nil
 	}
 	var body struct {
@@ -112,6 +123,7 @@ func fetchFacts(u string) []factSummary {
 		} `json:"_embedded"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		log.Warn().Err(err).Str("url", u).Msg("fetchFacts: decode failed")
 		return nil
 	}
 	return body.Embedded.Facts

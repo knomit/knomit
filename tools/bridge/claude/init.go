@@ -152,15 +152,18 @@ func companionPath(dst string) string {
 	return dst + ".knomit"
 }
 
+// renderTemplate is strict: templates are //go:embed-bundled and
+// author-controlled, so a parse failure is a build-time bug, not a runtime
+// condition to paper over. Return the error so init aborts loudly instead of
+// shipping a file with unsubstituted {{.Var}} placeholders.
 func renderTemplate(tmpl string, data map[string]string) (string, error) {
-	t, err := template.New("").Parse(tmpl)
+	t, err := template.New("").Option("missingkey=error").Parse(tmpl)
 	if err != nil {
-		// Not a valid template — return as-is.
-		return tmpl, nil
+		return "", fmt.Errorf("parse template: %w", err)
 	}
 	var buf bytes.Buffer
 	if err := t.Execute(&buf, data); err != nil {
-		return "", err
+		return "", fmt.Errorf("execute template: %w", err)
 	}
 	return buf.String(), nil
 }

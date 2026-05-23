@@ -2,6 +2,9 @@ package detect
 
 import (
 	"fmt"
+	"math"
+
+	"github.com/rs/zerolog/log"
 
 	"knomit/internal/store"
 )
@@ -63,9 +66,20 @@ func NewScorer(intents *IntentSet, embedder store.BatchEmbedder) (*Scorer, error
 // per requested intent name (max cosine similarity vs any phrase).
 // Intent names not present in the underlying IntentSet are skipped.
 func (s *Scorer) ScoreBlocks(blocks []Block, intentNames []string) []BlockResult {
+	results, _ := s.scoreBlocksWithVecs(blocks, intentNames)
+	return results
+}
+
+// scoreBlocksWithVecs is the shared scoring core. Returns the results AND the
+// block embeddings so ScoreBlocksWithNovelty can reuse them without paying
+// for a second EmbedBatch call. On embed failure, returns zero-signal results
+// (caller decides whether to retry / skip) and a nil vecs slice — the failure
+// is logged at Warn so it shows up in the bridge log instead of presenting as
+// "everything scored 0".
+func (s *Scorer) scoreBlocksWithVecs(blocks []Block, intentNames []string) ([]BlockResult, [][]float32) {
 	results := make([]BlockResult, len(blocks))
 	if len(blocks) == 0 {
-		return results
+		return results, nil
 	}
 	texts := make([]string, len(blocks))
 	for i, b := range blocks {
@@ -73,12 +87,11 @@ func (s *Scorer) ScoreBlocks(blocks []Block, intentNames []string) []BlockResult
 	}
 	blockVecs, err := s.embedder.EmbedBatch(texts)
 	if err != nil {
-		// On embed failure, return empty results rather than crashing
-		// the hook. Caller can decide whether to retry or skip the nudge.
+		log.Warn().Err(err).Int("blocks", len(blocks)).Msg("detect: embedder failed; returning empty signals")
 		for i := range results {
 			results[i] = BlockResult{Index: i}
 		}
-		return results
+		return results, nil
 	}
 	for i := range blocks {
 		signals := make([]Signal, 0, len(intentNames))
@@ -87,24 +100,27 @@ func (s *Scorer) ScoreBlocks(blocks []Block, intentNames []string) []BlockResult
 			if !ok {
 				continue
 			}
-			max := 0.0
+			maxSim := 0.0
 			for _, pv := range phraseVecs {
 				sim := cosine(blockVecs[i], pv)
-				if sim > max {
-					max = sim
+				if sim > maxSim {
+					maxSim = sim
 				}
 			}
-			signals = append(signals, Signal{Intent: name, Score: max})
+			signals = append(signals, Signal{Intent: name, Score: maxSim})
 		}
 		results[i] = BlockResult{Index: i, Signals: signals}
 	}
-	return results
+	return results, blockVecs
 }
 
 // cosine computes cosine similarity between two equal-length vectors.
-// Returns 0 if either vector has zero magnitude.
+// Returns 0 if either vector has zero magnitude. Length mismatches log at
+// Warn because that's a developer bug (an intent vector encoded with a
+// different embedder than the block vectors), not a runtime condition.
 func cosine(a, b []float32) float64 {
 	if len(a) != len(b) {
+		log.Warn().Int("a", len(a)).Int("b", len(b)).Msg("detect: cosine dim mismatch — returning 0")
 		return 0
 	}
 	var dot, ma, mb float64
@@ -117,64 +133,54 @@ func cosine(a, b []float32) float64 {
 	if ma == 0 || mb == 0 {
 		return 0
 	}
-	return dot / (sqrt(ma) * sqrt(mb))
+	return dot / (math.Sqrt(ma) * math.Sqrt(mb))
 }
 
-func sqrt(x float64) float64 {
-	// Avoid importing math just for this; keep it inline.
-	if x <= 0 {
-		return 0
-	}
-	z := x
-	for i := 0; i < 10; i++ {
-		z = (z + x/z) / 2
-	}
-	return z
-}
+//go:generate go run go.uber.org/mock/mockgen -destination=mock_fact_searcher_test.go -package=detect knomit/internal/detect FactSearcher
+//go:generate go run go.uber.org/mock/mockgen -destination=mock_batch_embedder_test.go -package=detect -build_flags=-tags=sqlite_vtable knomit/internal/store BatchEmbedder
+//go:generate go run go.uber.org/mock/mockgen -destination=../web/mock_block_scorer_test.go -package=web knomit/internal/detect BlockScorer
 
 // FactSearcher finds existing facts close to a given embedding.
-// Implemented in production by the store's search index; faked in tests.
+// Implemented in production by the store's search index.
 type FactSearcher interface {
 	NearestFacts(vec []float32, k int) ([]SimilarFact, error)
 }
 
-// BlockScorer is the scoring surface used by HTTP handlers and other callers
-// that need to substitute a stub in tests.
+// BlockScorer is the scoring surface used by HTTP handlers.
 type BlockScorer interface {
 	ScoreBlocks(blocks []Block, intentNames []string) []BlockResult
 	ScoreBlocksWithNovelty(blocks []Block, intentNames []string, searcher FactSearcher) []BlockResult
 }
 
+// noveltyK is the number of similar facts to fetch per block when novelty
+// scoring is requested. Fixed at 3 — the highest similarity dominates the
+// novelty score anyway, and three keeps the search cost bounded.
+const noveltyK = 3
+
 // ScoreBlocksWithNovelty is ScoreBlocks plus a per-block novelty score
 // and similar-facts list, computed against the provided FactSearcher.
-// k is the number of similar facts to return per block (default 3 if 0).
+// Reuses the block embeddings produced for intent scoring; no second
+// EmbedBatch call.
 func (s *Scorer) ScoreBlocksWithNovelty(
 	blocks []Block, intentNames []string, searcher FactSearcher,
 ) []BlockResult {
-	results := s.ScoreBlocks(blocks, intentNames)
-	if searcher == nil {
-		return results
-	}
-	texts := make([]string, len(blocks))
-	for i, b := range blocks {
-		texts[i] = b.Text
-	}
-	vecs, err := s.embedder.EmbedBatch(texts)
-	if err != nil {
+	results, vecs := s.scoreBlocksWithVecs(blocks, intentNames)
+	if searcher == nil || vecs == nil {
 		return results
 	}
 	for i := range results {
-		similar, err := searcher.NearestFacts(vecs[i], 3)
+		similar, err := searcher.NearestFacts(vecs[i], noveltyK)
 		if err != nil {
+			log.Warn().Err(err).Int("block", i).Msg("detect: NearestFacts failed; novelty omitted for block")
 			continue
 		}
-		max := 0.0
+		maxSim := 0.0
 		for _, sf := range similar {
-			if sf.Similarity > max {
-				max = sf.Similarity
+			if sf.Similarity > maxSim {
+				maxSim = sf.Similarity
 			}
 		}
-		novelty := 1 - max
+		novelty := 1 - maxSim
 		results[i].Novelty = &novelty
 		results[i].SimilarFacts = similar
 	}

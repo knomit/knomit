@@ -10,28 +10,19 @@ import (
 	"testing"
 
 	"github.com/go-chi/chi/v5"
+	"go.uber.org/mock/gomock"
 
 	"knomit/internal/detect"
 )
 
-// scorerStub returns a fixed BlockResult slice for any input.
-type scorerStub struct {
-	results []detect.BlockResult
-}
-
-func (s *scorerStub) ScoreBlocks(blocks []detect.Block, intents []string) []detect.BlockResult {
-	return s.results
-}
-
-func (s *scorerStub) ScoreBlocksWithNovelty(blocks []detect.Block, intents []string, _ detect.FactSearcher) []detect.BlockResult {
-	return s.results
-}
-
 func TestDetectHandler_KnownProfile_ReturnsScores(t *testing.T) {
-	stub := &scorerStub{results: []detect.BlockResult{
+	ctrl := gomock.NewController(t)
+	scorer := NewMockBlockScorer(ctrl)
+	scorer.EXPECT().ScoreBlocks(gomock.Any(), gomock.Any()).Return([]detect.BlockResult{
 		{Index: 0, Signals: []detect.Signal{{Intent: "correction", Score: 0.87}}},
-	}}
-	h := handleDetect(map[string]detect.BlockScorer{"code": stub}, nil)
+	})
+
+	h := handleDetect(map[string]detect.BlockScorer{"code": scorer}, nil)
 
 	body := `{"blocks":[{"role":"user","text":"that's wrong"}],"intents":["correction"]}`
 	req := httptest.NewRequest("POST", "/api/v1/profiles/code/detect", strings.NewReader(body))
@@ -54,7 +45,11 @@ func TestDetectHandler_KnownProfile_ReturnsScores(t *testing.T) {
 }
 
 func TestDetectHandler_UnknownProfile_Returns404(t *testing.T) {
-	h := handleDetect(map[string]detect.BlockScorer{"code": &scorerStub{}}, nil)
+	ctrl := gomock.NewController(t)
+	scorer := NewMockBlockScorer(ctrl)
+	// No EXPECT — unknown profile must short-circuit before any scoring.
+
+	h := handleDetect(map[string]detect.BlockScorer{"code": scorer}, nil)
 
 	body := `{"blocks":[],"intents":[]}`
 	req := httptest.NewRequest("POST", "/api/v1/profiles/chat/detect", bytes.NewBufferString(body))
@@ -68,7 +63,11 @@ func TestDetectHandler_UnknownProfile_Returns404(t *testing.T) {
 }
 
 func TestDetectHandler_MalformedBody_Returns400(t *testing.T) {
-	h := handleDetect(map[string]detect.BlockScorer{"code": &scorerStub{}}, nil)
+	ctrl := gomock.NewController(t)
+	scorer := NewMockBlockScorer(ctrl)
+	// No EXPECT — body never parses, scorer never invoked.
+
+	h := handleDetect(map[string]detect.BlockScorer{"code": scorer}, nil)
 
 	req := httptest.NewRequest("POST", "/api/v1/profiles/code/detect", strings.NewReader("not json"))
 	req = withURLParam(req, "profile", "code")
@@ -80,14 +79,17 @@ func TestDetectHandler_MalformedBody_Returns400(t *testing.T) {
 	}
 }
 
-func TestDetectHandler_WithNovelty_PopulatesSimilarFacts(t *testing.T) {
-	// Verifies that novelty_context in the request body causes the handler to
-	// call ScoreBlocksWithNovelty (even when mgr is nil, searcher will be nil).
-	captured := struct {
-		called bool
-	}{}
-	stub := &scorerCaptureNovelty{flag: &captured.called}
-	h := handleDetect(map[string]detect.BlockScorer{"code": stub}, nil)
+func TestDetectHandler_WithNovelty_RoutesToNoveltyScorer(t *testing.T) {
+	// novelty_context in the body must steer the handler to
+	// ScoreBlocksWithNovelty rather than ScoreBlocks. mgr is nil here so
+	// searcher will be nil — the routing is what we're pinning.
+	ctrl := gomock.NewController(t)
+	scorer := NewMockBlockScorer(ctrl)
+	scorer.EXPECT().
+		ScoreBlocksWithNovelty(gomock.Any(), gomock.Any(), gomock.Nil()).
+		Return(nil)
+
+	h := handleDetect(map[string]detect.BlockScorer{"code": scorer}, nil)
 
 	body := `{
 		"blocks":[{"role":"user","text":"hi"}],
@@ -99,22 +101,9 @@ func TestDetectHandler_WithNovelty_PopulatesSimilarFacts(t *testing.T) {
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 
-	if !captured.called {
-		t.Error("ScoreBlocksWithNovelty was not called when novelty_context present")
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
-}
-
-type scorerCaptureNovelty struct {
-	flag *bool
-}
-
-func (s *scorerCaptureNovelty) ScoreBlocks(_ []detect.Block, _ []string) []detect.BlockResult {
-	return nil
-}
-
-func (s *scorerCaptureNovelty) ScoreBlocksWithNovelty(_ []detect.Block, _ []string, _ detect.FactSearcher) []detect.BlockResult {
-	*s.flag = true
-	return nil
 }
 
 // withURLParam injects a chi URL param into the request context so handlers

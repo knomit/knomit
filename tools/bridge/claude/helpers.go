@@ -8,7 +8,20 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
+
+	"github.com/rs/zerolog/log"
 )
+
+// hookHTTPTimeout caps every hook-side HTTP call. Hooks run synchronously on
+// every CC tool event; without a timeout, an unresponsive knomit server would
+// hang CC indefinitely. The value is generous enough for warm local calls and
+// short enough that a missing/dead server feels like a no-op.
+const hookHTTPTimeout = 2 * time.Second
+
+// hookHTTPClient is the shared client every hook uses. Reusing it allows
+// connection-pool reuse across hooks within a session.
+var hookHTTPClient = &http.Client{Timeout: hookHTTPTimeout}
 
 // knomitBaseURL returns the knomit HTTP base URL.
 // Set KNOMIT_BASE_URL for non-default ports; otherwise the default works
@@ -48,20 +61,26 @@ func repoFromMCP(projectDir string) string {
 }
 
 // agentBranch queries knomit for the repo's agent_branch. Returns "" on
-// error so the caller can skip operations that need a branch.
+// error so the caller can skip operations that need a branch. Every failure
+// path emits a Warn log line so a misbehaving server is visible in the bridge
+// log even though it stays silent toward CC.
 func agentBranch(repo string) string {
-	resp, err := http.Get(fmt.Sprintf("%s/api/v1/repos/%s", knomitBaseURL(), repo)) //nolint:noctx
+	u := fmt.Sprintf("%s/api/v1/repos/%s", knomitBaseURL(), repo)
+	resp, err := hookHTTPClient.Get(u) //nolint:noctx
 	if err != nil {
+		log.Warn().Err(err).Str("url", u).Msg("agentBranch: GET failed")
 		return ""
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
+		log.Warn().Int("status", resp.StatusCode).Str("url", u).Msg("agentBranch: non-200")
 		return ""
 	}
 	var body struct {
 		AgentBranch string `json:"agent_branch"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		log.Warn().Err(err).Str("url", u).Msg("agentBranch: decode failed")
 		return ""
 	}
 	return body.AgentBranch
@@ -107,7 +126,7 @@ func postDetect(blocks []detectBlock, intents []string, novelty *detectNoveltyCo
 	if err != nil {
 		return nil, err
 	}
-	resp, err := http.Post( //nolint:noctx
+	resp, err := hookHTTPClient.Post( //nolint:noctx
 		knomitBaseURL()+"/api/v1/profiles/code/detect",
 		"application/json",
 		strings.NewReader(string(body)),

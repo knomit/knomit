@@ -99,7 +99,7 @@ func main() {
 	os.Args = append([]string{os.Args[0]}, args...)
 
 	repo := flag.String("repo", "knomit", "repository name")
-	source := flag.String("source", "", "source-code slug used in src:// refs (required)")
+	source := flag.String("source", "", "source-code slug used in src:// refs (defaults to --repo)")
 	profile := flag.String("profile", "code", "MCP profile (code, chat, generic)")
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "usage: knomit-bridge [<command> [<subcommand>]] [flags] [base-url]\n\n")
@@ -125,8 +125,11 @@ func main() {
 	flag.Parse()
 
 	if *source == "" {
-		fmt.Fprintln(os.Stderr, "knomit-bridge: --source is required")
-		os.Exit(2)
+		// Backwards-compat: prior releases used .mcp.json entries without
+		// --source. Default to --repo and warn rather than fail; otherwise
+		// every existing user's Claude Desktop config breaks on upgrade.
+		*source = *repo
+		log.Warn().Str("repo", *repo).Msg("--source not set; defaulting to --repo. Add --source explicitly in .mcp.json to silence this.")
 	}
 
 	fmt.Fprintf(os.Stderr, "[knomit-bridge] log file: %s (pid=%d)\n", logPath, os.Getpid())
@@ -366,9 +369,12 @@ func truncate(s string, n int) string {
 
 // discoverAgentBranch queries GET /api/v1/repos/{repo} and returns the
 // agent_branch field. This is the branch the local server writes facts to.
+// Bounded by a short timeout so a missing/dead server fails fast at startup
+// instead of hanging Claude Desktop.
 func discoverAgentBranch(baseURL, repo string) (string, error) {
 	url := fmt.Sprintf("%s/api/v1/repos/%s", baseURL, repo)
-	resp, err := http.Get(url) //nolint:noctx
+	c := &http.Client{Timeout: 3 * time.Second}
+	resp, err := c.Get(url) //nolint:noctx
 	if err != nil {
 		return "", fmt.Errorf("GET %s: %w", url, err)
 	}

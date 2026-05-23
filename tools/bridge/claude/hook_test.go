@@ -145,9 +145,6 @@ func TestHookStop_MalformedStdin_Clean(t *testing.T) {
 }
 
 func TestHookStop_MissingTranscript_Clean(t *testing.T) {
-	// Reset rate-limit counter so rateLimitFire() may return true
-	resetRateLimit(t)
-
 	payload := map[string]interface{}{
 		"transcript_path": "/nonexistent/path/transcript.jsonl",
 		"cwd":             "/tmp",
@@ -160,17 +157,6 @@ func TestHookStop_MissingTranscript_Clean(t *testing.T) {
 	if out.Len() != 0 {
 		t.Errorf("expected no output for missing transcript; got %q", out.String())
 	}
-}
-
-// ---- helpers ----
-
-// resetRateLimit forces the counter file to stopRateLimit-1 so the next call
-// to rateLimitFire() fires (returns true) rather than skipping.
-func resetRateLimit(t *testing.T) {
-	t.Helper()
-	import_os_path := "/tmp/knomit-stop-rate"
-	// Write stopRateLimit-1 so next increment == stopRateLimit → fires
-	_ = writeFile(import_os_path, []byte("4"), 0o644) // stopRateLimit=5, 4+1=5 → fires
 }
 
 // ---- runHook dispatch ----

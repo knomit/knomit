@@ -44,10 +44,11 @@ DON'T invoke:
 The server returns items in this order (highest priority first):
 
 - Prune items — priority = cluster size (more candidates first)
-- Distill depth 0 — priority −1
-- Distill depth 1 — priority −2
-- Distill depth 2 — priority −3
-- Reflect item (singleton at the end)
+- Distill depth 0 (initial seeds) — priority 0
+- Distill depth 1 (RAPTOR roll-up) — priority −1
+- Distill depth 2 — priority −2
+- Distill depth 3 — priority −3
+- Reflect item — priority −100 (singleton at the end)
 
 ## Stopping early
 

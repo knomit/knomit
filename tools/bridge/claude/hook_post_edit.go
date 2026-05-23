@@ -27,9 +27,7 @@ type postEditInput struct {
 //
 // Best-effort: matches by the `entities` field on facts (which conventionally
 // holds relative source paths). Misses facts that mention the file only in
-// `refs` or `body`. A future iteration can add a server-side endpoint that
-// searches refs literally; until then, the entities match is the strongest
-// no-server-change signal available.
+// `refs` or `body`.
 func hookPostEdit(r io.Reader, w io.Writer) error {
 	var (
 		emitted      bool
@@ -78,13 +76,12 @@ func hookPostEdit(r io.Reader, w io.Writer) error {
 		return nil
 	}
 
-	// /search only accepts {q,limit,cursor} — `entities` is silently ignored
-	// server-side. So we fuzzy-search by the path, then client-side filter
-	// for facts whose `entities` array contains the exact rel path.
-	candidates := fetchSearchResults(fmt.Sprintf(
-		"%s/api/v1/repos/%s/branches/%s/search?q=%s&limit=20",
-		knomitBaseURL(), repo, url.PathEscape(branch), url.QueryEscape(rel),
-	))
+	// Fuzzy-search by the path, then client-side filter for facts whose
+	// `entities` array contains the exact rel path. /search accepts an
+	// `entities=` filter, but it does a substring match across the whole
+	// entities list, which over-matches for short rels — the precision step
+	// avoids surfacing unrelated facts in the nudge.
+	candidates := fetchSearchResults(postEditSearchURL(repo, branch, rel))
 	facts := filterByEntity(candidates, rel)
 	if len(facts) == 0 {
 		skipReason = "no_matching_facts"
@@ -138,16 +135,28 @@ func filterByEntity(facts []factSummary, rel string) []factSummary {
 	return out
 }
 
+// postEditSearchURL builds the HAL search URL the post-edit hook uses. Pure
+// function so a regression test can pin the exact shape (commit 99ec329 fixed
+// a wrong-endpoint bug; keep this assertable).
+func postEditSearchURL(repo, branch, rel string) string {
+	return fmt.Sprintf("%s/api/v1/repos/%s/branches/%s/search?q=%s&limit=20",
+		knomitBaseURL(), repo, url.PathEscape(branch), url.QueryEscape(rel))
+}
+
 // fetchSearchResults calls a /search HAL endpoint and returns the embedded
 // results collection. Returns nil on any error (server down, bad response,
-// etc.) — hooks must never fail loudly.
+// etc.) — hooks must never abort CC. Each failure path logs at Warn so a
+// dead server is visible in the bridge log rather than being indistinguishable
+// from a legitimate empty result.
 func fetchSearchResults(u string) []factSummary {
-	resp, err := http.Get(u) //nolint:noctx
+	resp, err := hookHTTPClient.Get(u) //nolint:noctx
 	if err != nil {
+		log.Warn().Err(err).Str("url", u).Msg("fetchSearchResults: GET failed")
 		return nil
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
+		log.Warn().Int("status", resp.StatusCode).Str("url", u).Msg("fetchSearchResults: non-200")
 		return nil
 	}
 	var body struct {
@@ -156,6 +165,7 @@ func fetchSearchResults(u string) []factSummary {
 		} `json:"_embedded"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		log.Warn().Err(err).Str("url", u).Msg("fetchSearchResults: decode failed")
 		return nil
 	}
 	return body.Embedded.Results

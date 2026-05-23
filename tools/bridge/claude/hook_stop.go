@@ -4,23 +4,24 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"os"
-	"path/filepath"
-	"strconv"
 	"strings"
 
 	"github.com/rs/zerolog/log"
 )
-
-const stopRateLimit = 5
 
 type stopInput struct {
 	TranscriptPath string `json:"transcript_path"`
 	Cwd            string `json:"cwd"`
 }
 
-// hookStop fires at end of every assistant turn. Rate-limited to one nudge
-// per stopRateLimit turns to keep noise down.
+// hookStop fires at end of every assistant turn. Scores the recent transcript
+// for capture-worthy moments and nudges /knomit-remember when any intent
+// scores above threshold. The scoring threshold (0.75) is the rate control —
+// most turns score below it and emit nothing. There is no inter-turn rate
+// limit: bridge invocations are one-shot subprocesses, so any cross-invocation
+// counter would need persistent state, and persistent state in /tmp or
+// similar is a bug magnet (cross-user, cross-project, world-writable, dies
+// on tmpfs reboot). If output noise becomes a problem, raise the threshold.
 func hookStop(r io.Reader, w io.Writer) error {
 	var (
 		emitted    bool
@@ -46,11 +47,6 @@ func hookStop(r io.Reader, w io.Writer) error {
 	var in stopInput
 	if err := json.NewDecoder(r).Decode(&in); err != nil {
 		skipReason = "bad_input"
-		return nil
-	}
-
-	if !rateLimitFire() {
-		skipReason = "rate_limited"
 		return nil
 	}
 
@@ -103,25 +99,4 @@ func hookStop(r io.Reader, w io.Writer) error {
 	emitted = true
 	hitsCount = len(hits)
 	return nil
-}
-
-// rateLimitFire returns true at most once per stopRateLimit calls. Uses a
-// counter file in the OS temp dir keyed only by the binary (per-machine,
-// not per-project — multi-project rate-sharing is a known limitation).
-func rateLimitFire() bool {
-	tmpDir := os.TempDir()
-	counterPath := filepath.Join(tmpDir, "knomit-stop-rate")
-	cur := 0
-	if data, err := os.ReadFile(counterPath); err == nil {
-		if v, err := strconv.Atoi(strings.TrimSpace(string(data))); err == nil {
-			cur = v
-		}
-	}
-	next := cur + 1
-	if next >= stopRateLimit {
-		_ = os.WriteFile(counterPath, []byte("0"), 0o644)
-		return true
-	}
-	_ = os.WriteFile(counterPath, []byte(strconv.Itoa(next)), 0o644)
-	return false
 }

@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/rs/zerolog/log"
 
 	"knomit/internal/detect"
 	"knomit/internal/repos"
@@ -54,6 +55,9 @@ func handleDetect(scorers map[string]detect.BlockScorer, mgr *repos.Manager) htt
 			var searcher detect.FactSearcher
 			if mgr != nil {
 				searcher = buildFactSearcher(mgr, req.NoveltyContext.Repo, req.NoveltyContext.Branch)
+				if searcher == nil {
+					log.Warn().Str("repo", req.NoveltyContext.Repo).Msg("detect: novelty_context.repo not registered; falling back to intent-only scoring")
+				}
 			}
 			results = scorer.ScoreBlocksWithNovelty(req.Blocks, req.Intents, searcher)
 		} else {
@@ -61,7 +65,9 @@ func handleDetect(scorers map[string]detect.BlockScorer, mgr *repos.Manager) htt
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(detectResponse{Blocks: results})
+		if err := json.NewEncoder(w).Encode(detectResponse{Blocks: results}); err != nil {
+			log.Warn().Err(err).Str("profile", profile).Msg("detect: response encode failed")
+		}
 	}
 }
 
