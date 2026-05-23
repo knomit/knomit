@@ -77,6 +77,8 @@ func Open(path string) (*Service, error) {
 
 	gits := storegit.NewStorer(db)
 	rh := newRepoHandler(db, gits)
+	// Derive repo name from dbPath: /path/to/knomit.db → "knomit"
+	rh.name = strings.TrimSuffix(filepath.Base(path), ".db")
 	si := &searchIndex{rh: rh}
 	rh.onDrop = si.GC
 	rh.im = si // notifyCommit delegates to im.Sync after every commit.

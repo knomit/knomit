@@ -109,6 +109,7 @@ func (si *searchIndex) Sync(ctx context.Context, branch string) error {
 	}
 	if persistedVer != GraphSchemaVersion {
 		log.Warn().
+			Str("repo", si.rh.name).
 			Str("persisted", persistedVer).
 			Str("expected", GraphSchemaVersion).
 			Msg("graph schema version mismatch — run `knomit rebuild` to update the graph layout")
