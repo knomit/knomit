@@ -59,9 +59,15 @@ func hookStop(r io.Reader, w io.Writer) error {
 	var sb strings.Builder
 	hits := 0
 	prevRole := ""
+	seen := make(map[string]bool)
 
 	err := scanTranscript(in.TranscriptPath, stopMaxScan, func(role, text string) bool {
 		for _, m := range matchIntents(role, text, prevRole) {
+			key := m.intent + "|" + m.quote
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
 			if hits == 0 {
 				sb.WriteString("Capture candidates from this turn:\n")
 			}

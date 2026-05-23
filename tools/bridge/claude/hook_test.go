@@ -176,6 +176,42 @@ func TestHookPreCompact_EmitsQuotedCandidatesOnHit(t *testing.T) {
 	}
 }
 
+func TestHookPreCompact_DedupesSameSentenceIntentHits(t *testing.T) {
+	dir := t.TempDir()
+	transcript := filepath.Join(dir, "transcript.jsonl")
+	// "Be careful — this only works if X" matches BOTH gotcha:warn AND gotcha:silent.
+	lines := []string{
+		`{"type":"user","message":{"content":"how do I use it?"}}`,
+		`{"type":"assistant","message":{"content":"Be careful — this only works if the agent branch is checked out."}}`,
+	}
+	if err := os.WriteFile(transcript, []byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
+		t.Fatalf("write transcript: %v", err)
+	}
+
+	payload := map[string]interface{}{
+		"transcript_path": transcript,
+		"cwd":             dir,
+	}
+	data, _ := json.Marshal(payload)
+	var out bytes.Buffer
+	if err := hookPreCompact(bytes.NewReader(data), &out); err != nil {
+		t.Fatalf("hookPreCompact: %v", err)
+	}
+	var resp struct {
+		HookSpecificOutput struct {
+			AdditionalContext string `json:"additionalContext"`
+		} `json:"hookSpecificOutput"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &resp); err != nil {
+		t.Fatalf("output is not valid JSON: %v\ngot: %s", err, out.String())
+	}
+	occurrences := strings.Count(resp.HookSpecificOutput.AdditionalContext, "Be careful")
+	if occurrences != 1 {
+		t.Errorf("expected exactly 1 occurrence of the quoted sentence, got %d:\n%s",
+			occurrences, resp.HookSpecificOutput.AdditionalContext)
+	}
+}
+
 func TestHookPreCompact_NoEmitWhenNoHits(t *testing.T) {
 	dir := t.TempDir()
 	transcript := filepath.Join(dir, "transcript.jsonl")
@@ -273,6 +309,48 @@ func TestHookStop_EmitsQuotedCandidatesOnHit(t *testing.T) {
 	}
 	if !strings.Contains(ctx, "/knomit-remember") {
 		t.Errorf("additionalContext missing /knomit-remember nudge: %q", ctx)
+	}
+}
+
+func TestHookStop_DedupesSameSentenceIntentHits(t *testing.T) {
+	// Bypass rate-limiter.
+	counterPath := filepath.Join(os.TempDir(), "knomit-stop-rate")
+	_ = os.WriteFile(counterPath, []byte("4"), 0o644)
+	t.Cleanup(func() { _ = os.Remove(counterPath) })
+
+	// "No, that's not what I meant." matches BOTH correction:start AND
+	// correction:phrase. The output should contain ONE candidate line, not two.
+	dir := t.TempDir()
+	transcript := filepath.Join(dir, "transcript.jsonl")
+	lines := []string{
+		`{"type":"assistant","message":{"content":"Some prior message."}}`,
+		`{"type":"user","message":{"content":"No, that's not what I meant."}}`,
+	}
+	if err := os.WriteFile(transcript, []byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
+		t.Fatalf("write transcript: %v", err)
+	}
+
+	payload := map[string]interface{}{
+		"transcript_path": transcript,
+		"cwd":             dir,
+	}
+	data, _ := json.Marshal(payload)
+	var out bytes.Buffer
+	if err := hookStop(bytes.NewReader(data), &out); err != nil {
+		t.Fatalf("hookStop: %v", err)
+	}
+	var resp struct {
+		HookSpecificOutput struct {
+			AdditionalContext string `json:"additionalContext"`
+		} `json:"hookSpecificOutput"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &resp); err != nil {
+		t.Fatalf("output is not valid JSON: %v\ngot: %s", err, out.String())
+	}
+	occurrences := strings.Count(resp.HookSpecificOutput.AdditionalContext, "No, that's not what I meant.")
+	if occurrences != 1 {
+		t.Errorf("expected exactly 1 occurrence of the quoted sentence, got %d:\n%s",
+			occurrences, resp.HookSpecificOutput.AdditionalContext)
 	}
 }
 
