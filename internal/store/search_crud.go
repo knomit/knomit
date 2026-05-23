@@ -177,7 +177,7 @@ func (si *searchIndex) upsert(ctx context.Context, branch, commitHash string, re
 			continue
 		}
 		if _, err := db.ExecContext(ctx,
-			`INSERT INTO fact_entities(fact_id, entity) VALUES (?, ?)`,
+			`INSERT OR IGNORE INTO fact_entities(fact_id, entity) VALUES (?, ?)`,
 			factID, entity,
 		); err != nil {
 			return fmt.Errorf("upsert fact_entities: %w", err)
@@ -188,7 +188,7 @@ func (si *searchIndex) upsert(ctx context.Context, branch, commitHash string, re
 			continue
 		}
 		if _, err := db.ExecContext(ctx,
-			`INSERT INTO fact_domains(fact_id, domain) VALUES (?, ?)`,
+			`INSERT OR IGNORE INTO fact_domains(fact_id, domain) VALUES (?, ?)`,
 			factID, domain,
 		); err != nil {
 			return fmt.Errorf("upsert fact_domains: %w", err)

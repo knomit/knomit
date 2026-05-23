@@ -123,3 +123,87 @@ func TestRebuild_RepopulatesDomainAndEntityJunctions(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, results, 1, "search by entity=Anthropic must find alpha after rebuild")
 }
+
+// TestUpsert_DuplicateEntitiesAndDomains_NoError verifies that when a
+// FactRecord contains duplicate entries in Entities and/or Domain,
+// the upsert does not fail on a UNIQUE constraint violation, but instead
+// deduplicates via INSERT OR IGNORE, leaving one row per unique pair.
+func TestUpsert_DuplicateEntitiesAndDomains_NoError(t *testing.T) {
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	defer svc.Close()
+	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+
+	ctx := context.Background()
+	branch := "main"
+
+	// Create a FactRecord with duplicate entities and domains.
+	rec := FactRecord{
+		Path:       "kb/test-dupes.md",
+		Title:      "Test with duplicates",
+		BlobHash:   "abc123def456",
+		Kind:       "epistemic",
+		Type:       "observation",
+		Domain:     []string{"ai", "machine-learning", "ai"},      // "ai" appears twice
+		Entities:   []string{"Claude", "Anthropic", "Claude"},     // "Claude" appears twice
+		Confidence: 0.9,
+		Sources:    1,
+		Refs:       []string{},
+	}
+
+	si := svc.Search().(*searchIndex)
+
+	// upsert should succeed without constraint violation.
+	err = si.upsert(ctx, branch, "test-commit-hash", rec)
+	require.NoError(t, err, "upsert with duplicate entities and domains must not fail")
+
+	// Verify fact was inserted.
+	var factID int64
+	err = si.rh.db.QueryRowContext(ctx,
+		`SELECT id FROM facts WHERE path = ?`, rec.Path).Scan(&factID)
+	require.NoError(t, err, "fact must be inserted")
+	require.Greater(t, factID, int64(0))
+
+	// Verify fact_entities contains exactly 2 rows (one per unique entity).
+	var entityCount int
+	err = si.rh.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM fact_entities WHERE fact_id = ?`, factID).Scan(&entityCount)
+	require.NoError(t, err)
+	require.Equal(t, 2, entityCount, "fact_entities should have exactly 2 rows for 2 unique entities (Claude, Anthropic)")
+
+	// Verify both entities are present (not just a lucky count).
+	var entities []string
+	rows, err := si.rh.db.QueryContext(ctx,
+		`SELECT entity FROM fact_entities WHERE fact_id = ? ORDER BY entity`, factID)
+	require.NoError(t, err)
+	defer rows.Close()
+	for rows.Next() {
+		var entity string
+		require.NoError(t, rows.Scan(&entity))
+		entities = append(entities, entity)
+	}
+	require.NoError(t, rows.Err())
+	require.Equal(t, []string{"Anthropic", "Claude"}, entities)
+
+	// Verify fact_domains contains exactly 2 rows (one per unique domain).
+	var domainCount int
+	err = si.rh.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM fact_domains WHERE fact_id = ?`, factID).Scan(&domainCount)
+	require.NoError(t, err)
+	require.Equal(t, 2, domainCount, "fact_domains should have exactly 2 rows for 2 unique domains (ai, machine-learning)")
+
+	// Verify both domains are present.
+	var domains []string
+	rows, err = si.rh.db.QueryContext(ctx,
+		`SELECT domain FROM fact_domains WHERE fact_id = ? ORDER BY domain`, factID)
+	require.NoError(t, err)
+	defer rows.Close()
+	for rows.Next() {
+		var domain string
+		require.NoError(t, rows.Scan(&domain))
+		domains = append(domains, domain)
+	}
+	require.NoError(t, rows.Err())
+	require.Equal(t, []string{"ai", "machine-learning"}, domains)
+}
