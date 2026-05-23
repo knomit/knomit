@@ -3,8 +3,12 @@
     "SessionStart": [
       { "matcher": "", "hooks": [{ "type": "command", "command": "knomit-bridge claude hook session-start" }] }
     ],
+    "UserPromptSubmit": [
+      { "matcher": "", "hooks": [{ "type": "command", "command": "knomit-bridge claude hook user-prompt-submit" }] }
+    ],
     "PostToolUse": [
-      { "matcher": "Bash", "hooks": [{ "type": "command", "command": "knomit-bridge claude hook post-commit" }] }
+      { "matcher": "Bash", "hooks": [{ "type": "command", "command": "knomit-bridge claude hook post-commit" }] },
+      { "matcher": "Edit|Write|MultiEdit", "hooks": [{ "type": "command", "command": "knomit-bridge claude hook post-edit" }] }
     ],
     "PreCompact": [
       { "matcher": "", "hooks": [{ "type": "command", "command": "knomit-bridge claude hook pre-compact" }] }

@@ -22,8 +22,11 @@ func TestRunInit_EmptyDirectory_DropsAllFiles(t *testing.T) {
 		".claude/skills/knomit-remember/SKILL.md",
 		".claude/skills/knomit-why/SKILL.md",
 		".claude/skills/knomit-decided/SKILL.md",
-		".claude/skills/knomit-kickoff-area/SKILL.md",
+		".claude/skills/knomit-bootstrap/SKILL.md",
 		".claude/skills/knomit-review/SKILL.md",
+		".claude/skills/knomit-update/SKILL.md",
+		".claude/skills/knomit-retract/SKILL.md",
+		".claude/skills/knomit-hypothesize/SKILL.md",
 		"CLAUDE.md",
 	}
 	for _, f := range wantFiles {
@@ -84,6 +87,12 @@ func TestRunInit_SettingsJsonReferencesGoHooks(t *testing.T) {
 	}
 	if !strings.Contains(content, "knomit-bridge claude hook stop") {
 		t.Errorf("settings.json missing 'knomit-bridge claude hook stop'; got:\n%s", content)
+	}
+	if !strings.Contains(content, "knomit-bridge claude hook post-edit") {
+		t.Errorf("settings.json missing 'knomit-bridge claude hook post-edit'; got:\n%s", content)
+	}
+	if !strings.Contains(content, "knomit-bridge claude hook user-prompt-submit") {
+		t.Errorf("settings.json missing 'knomit-bridge claude hook user-prompt-submit'; got:\n%s", content)
 	}
 
 	// Must NOT reference old .sh paths
@@ -177,8 +186,11 @@ func TestRunInit_SkillFrontmatterMatchesDir(t *testing.T) {
 		".claude/skills/knomit-remember/SKILL.md":     "name: knomit-remember",
 		".claude/skills/knomit-why/SKILL.md":          "name: knomit-why",
 		".claude/skills/knomit-decided/SKILL.md":      "name: knomit-decided",
-		".claude/skills/knomit-kickoff-area/SKILL.md": "name: knomit-kickoff-area",
+		".claude/skills/knomit-bootstrap/SKILL.md": "name: knomit-bootstrap",
 		".claude/skills/knomit-review/SKILL.md":       "name: knomit-review",
+		".claude/skills/knomit-update/SKILL.md":       "name: knomit-update",
+		".claude/skills/knomit-retract/SKILL.md":      "name: knomit-retract",
+		".claude/skills/knomit-hypothesize/SKILL.md":  "name: knomit-hypothesize",
 	}
 	for path, wantFrontmatter := range skills {
 		data, err := os.ReadFile(filepath.Join(dir, path))

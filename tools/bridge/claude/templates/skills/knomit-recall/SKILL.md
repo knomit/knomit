@@ -1,34 +1,55 @@
 ---
 name: knomit-recall
-description: Query knomit for top facts on a topic, grouped by kind
+description: Use before non-trivial work in a known-fact area — recall surfaces invariants, design decisions, and anti-patterns before brainstorming or implementation begins
 ---
 
 # /knomit-recall <topic-or-text>
 
-Use BEFORE non-trivial work in a known-fact area:
+## When to use — trigger phrases
 
-- Picking where new code goes
-- Editing/writing files under areas with known invariants
-- Implementing a pattern that may already exist
-- Answering "why does X work this way?"
+Fire BEFORE acting on any of these user signals:
 
-How: call the knomit MCP tool `mcp__knomit__knomit_query` with the
-user-supplied topic as `text`, plus any open file paths as `entities`.
-Group the response by `kind` and show invariants first.
+- "implement X", "add support for Y", "build a new Z"
+- "redesign", "refactor", "rework"
+- "fix the bug in <area>" — when the area isn't one you've routinely touched this session
+- "why does X work this way?" — existing-code rationale question
+- About to pick where new code goes
 
-**Interpreting refs in returned facts:**
+DON'T fire for:
 
-When knomit returns a fact's `refs`, you may see:
+- Trivial edits in files you're actively iterating on
+- Questions answerable from the current file alone (lint fixes, typos)
+- After you've already recalled in this session for the SAME topic
 
-- `src://<source>/<path>@<commit>` — source file in source repo `<source>`
-  at a specific commit. If `<source>` matches your session's source (read
-  `--source` from `.mcp.json`), the file may have changed since `<commit>` —
-  use `git show <commit>:<path>` to see the version the fact was anchored to.
-- `src://<source>/<path>` — source file with no git anchor. If `<source>`
-  matches your session, read the file directly; the fact was captured
-  without commit-pinning.
-- `https://…`, `http://…` — external URL
-- Anything else (no scheme, no `://`) — a local knomit fact path
+## How
 
-If `<source>` doesn't match your session's source, surface it as "in repo
-`<source>`" rather than trying to open the path locally.
+Call `mcp__knomit__knomit_query` with:
+
+- `text`: the user-supplied topic (or your own one-line summary of the area)
+- `entities`: any file paths currently open or about to be edited
+
+After the query returns, do BOTH steps below. Skipping step 2 means you're trusting facts that may be stale — corpus facts can lag HEAD.
+
+### Step 1 — Read in priority order
+
+1. **Invariants first** (`kb/invariants/`) — load-bearing rules. Violating one breaks the system; if your design needs to, STOP and confirm with the user.
+2. **Decisions** (`kb/decisions/`) — the *why* behind current shape. Most enhancement ideas are already considered here.
+3. **Conventions** — house style for the area.
+4. **Scan all bodies for "anti-pattern:"** — cheapest design constraint you'll find.
+
+### Step 2 — Verify the load-bearing claims
+
+Pick the 3–5 facts whose specific claims (thresholds, ordering, struct shapes, file paths, function signatures) your work will depend on. For each:
+
+- If it has a `src://<source>/<path>@<commit>` ref AND `<source>` matches this session: run `git show <commit>:<path>` and diff mentally against HEAD. If anything load-bearing has drifted, run `/knomit-update` or `/knomit-retract` BEFORE building on the fact.
+- If it has only external (`https://`) refs: sanity-check via the actual source file before relying.
+- If it has no refs at all: lower your trust accordingly; prefer reading the relevant code directly.
+
+## Interpreting refs in returned facts
+
+- `src://<source>/<path>@<commit>` — source file in repo `<source>` at a specific commit. If `<source>` matches your `--source` (read `.mcp.json`), file may have drifted since `<commit>`; verify via `git show <commit>:<path>`.
+- `src://<source>/<path>` — source file, no commit pin. Read the current file directly.
+- `https://…` / `http://…` — external URL.
+- No scheme — local knomit fact path.
+
+If `<source>` doesn't match your session, surface as "in repo `<source>`" rather than trying to open locally.

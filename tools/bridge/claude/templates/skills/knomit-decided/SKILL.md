@@ -1,44 +1,54 @@
 ---
 name: knomit-decided
-description: Capture a design decision made during the session
+description: Use immediately after you and the user resolved a tradeoff in conversation — captures the options, rationale, and choice so the decision isn't re-litigated later
 ---
 
 # /knomit-decided <slug>
 
-Use after a tradeoff was resolved in conversation. The skill summarizes:
+## When to use — trigger phrases
 
-1. Options considered (what was discussed)
-2. Rationale (why the chosen option won)
-3. The choice (concrete decision)
+Fire WHEN the conversation just produced any of these:
 
-Then writes a fact via `mcp__knomit__knomit_learn`:
+- Explicit choice between alternatives: "let's go with X", "we'll do A not B", "yes, that approach", "I think option 2 is right"
+- Resolution of a tradeoff: discussed pros/cons, converged on one
+- A rejected approach with a stated reason: "we won't do X because Y"
+- An accepted constraint: "we have to use X because of Y"
 
-- kind: `decision`
-- topic path: `decisions/accepted/<YYYY-MM>-<slug>`
-- refs: include any files touched + URL to the conversation if available
-- confidence: 0.95
+Compare to `/knomit-remember`: remember captures *what is*; decided captures *what we chose and why*. If options were weighed, it's a decision.
 
-**Ref format for source files (IMPORTANT):**
+DON'T fire for:
 
-Read your source slug from `.mcp.json` at `mcpServers.knomit.args` (the value
-right after `--source`).
+- Mechanical default choices (no real alternative considered)
+- Decisions about the current conversation only (what to say next, how to format)
+- Re-stating a decision already captured earlier in the same session
 
-If the project is a git repository, write source-file refs as:
+## How
 
-    src://<source>/<path>@<commit>
+Summarize the conversation into three parts:
 
-Get the commit with `git rev-parse HEAD`. Example:
+1. **Options considered** — what was on the table
+2. **Rationale** — why the chosen option won (and why others lost, if it's load-bearing)
+3. **The choice** — concrete decision
 
-    src://knomit/internal/store/service.go@cfef409
+Then call `mcp__knomit__knomit_learn` with:
 
-If the project is NOT in git, omit the @commit suffix:
+- `topic`: `decisions`
+- `category`: `<area>/<slug>` (e.g. `synthesize/sumproductnorm-default`)
+- `kind`: `epistemic`, `type`: `observation` (decisions are observed choices; the `decisions/` topic folder is what classifies them as decisions)
+- `title`: short imperative summary of the choice
+- `body`: the three parts above
+- `entities`: files/symbols affected
+- `refs`: source files touched + URL to the conversation if available
+- `confidence`: 0.95
 
-    src://<source>/<path>
+## Ref format for source files (IMPORTANT)
 
-Example:
+Read your source slug from `.mcp.json` at `mcpServers.knomit.args` (the value right after `--source`).
 
-    src://my-scripts/run.sh
+If the project is in git: `src://<source>/<path>@<commit>` (commit via `git rev-parse HEAD`).
 
-NEVER write bare paths like `internal/store/service.go` — knomit's ref
-resolver treats unscheme'd strings as local fact paths and lookups will
-fail or clash with actual facts.
+If not in git: `src://<source>/<path>`.
+
+Example: `src://knomit/internal/store/service.go@cfef409`
+
+NEVER write bare paths — knomit's ref resolver treats unscheme'd strings as local fact paths and lookups will fail or clash.
