@@ -107,7 +107,7 @@ func TestScanTranscript_SkipsCommandStubs(t *testing.T) {
 
 func TestScanTranscript_ContentArray(t *testing.T) {
 	path := writeTranscript(t, []string{
-		`{"type":"assistant","message":{"content":[{"type":"thinking","text":"hidden"},{"type":"text","text":"shown"}]}}`,
+		`{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"hidden","signature":"abc"},{"type":"text","text":"shown"}]}}`,
 	})
 
 	var got string

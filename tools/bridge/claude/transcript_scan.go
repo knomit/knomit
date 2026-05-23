@@ -1,6 +1,7 @@
 package claude
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -85,7 +86,7 @@ func tailLines(f *os.File) func(yield func(string, error) bool) {
 
 			// Split off all complete lines from the right.
 			for {
-				i := lastIndexByte(buf, '\n')
+				i := bytes.LastIndexByte(buf, '\n')
 				if i < 0 {
 					break
 				}
@@ -105,15 +106,6 @@ func tailLines(f *os.File) func(yield func(string, error) bool) {
 			yield(string(tail), nil)
 		}
 	}
-}
-
-func lastIndexByte(b []byte, c byte) int {
-	for i := len(b) - 1; i >= 0; i-- {
-		if b[i] == c {
-			return i
-		}
-	}
-	return -1
 }
 
 // commandStubRE matches CC's slash-command stub user messages
