@@ -3,6 +3,8 @@ package claude
 import (
 	"bytes"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -145,6 +147,11 @@ func TestHookStop_MalformedStdin_Clean(t *testing.T) {
 }
 
 func TestHookStop_MissingTranscript_Clean(t *testing.T) {
+	// Bypass rate limiter: write counter value that triggers a fire next call.
+	counterPath := filepath.Join(os.TempDir(), "knomit-stop-rate")
+	_ = os.WriteFile(counterPath, []byte("4"), 0o644)
+	t.Cleanup(func() { _ = os.Remove(counterPath) })
+
 	payload := map[string]interface{}{
 		"transcript_path": "/nonexistent/path/transcript.jsonl",
 		"cwd":             "/tmp",
@@ -156,6 +163,80 @@ func TestHookStop_MissingTranscript_Clean(t *testing.T) {
 	}
 	if out.Len() != 0 {
 		t.Errorf("expected no output for missing transcript; got %q", out.String())
+	}
+}
+
+func TestHookStop_EmitsQuotedCandidatesOnHit(t *testing.T) {
+	// Bypass rate-limiter so the hook actually fires.
+	counterPath := filepath.Join(os.TempDir(), "knomit-stop-rate")
+	_ = os.WriteFile(counterPath, []byte("4"), 0o644)
+	t.Cleanup(func() { _ = os.Remove(counterPath) })
+
+	dir := t.TempDir()
+	transcript := filepath.Join(dir, "transcript.jsonl")
+	lines := []string{
+		`{"type":"assistant","message":{"content":"Some prior message."}}`,
+		`{"type":"user","message":{"content":"No, that's not what I meant."}}`,
+	}
+	if err := os.WriteFile(transcript, []byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
+		t.Fatalf("write transcript: %v", err)
+	}
+
+	payload := map[string]interface{}{
+		"transcript_path": transcript,
+		"cwd":             dir,
+	}
+	data, _ := json.Marshal(payload)
+	var out bytes.Buffer
+	if err := hookStop(bytes.NewReader(data), &out); err != nil {
+		t.Fatalf("hookStop: %v", err)
+	}
+	var resp struct {
+		HookSpecificOutput struct {
+			AdditionalContext string `json:"additionalContext"`
+		} `json:"hookSpecificOutput"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &resp); err != nil {
+		t.Fatalf("output is not valid JSON: %v\ngot: %s", err, out.String())
+	}
+	ctx := resp.HookSpecificOutput.AdditionalContext
+	if !strings.Contains(ctx, "correction") {
+		t.Errorf("additionalContext missing 'correction' label: %q", ctx)
+	}
+	if !strings.Contains(ctx, "No, that's not what I meant") {
+		t.Errorf("additionalContext missing quoted sentence: %q", ctx)
+	}
+	if !strings.Contains(ctx, "/knomit-remember") {
+		t.Errorf("additionalContext missing /knomit-remember nudge: %q", ctx)
+	}
+}
+
+func TestHookStop_NoEmitWhenNoHits(t *testing.T) {
+	counterPath := filepath.Join(os.TempDir(), "knomit-stop-rate")
+	_ = os.WriteFile(counterPath, []byte("4"), 0o644)
+	t.Cleanup(func() { _ = os.Remove(counterPath) })
+
+	dir := t.TempDir()
+	transcript := filepath.Join(dir, "transcript.jsonl")
+	lines := []string{
+		`{"type":"user","message":{"content":"Plain question about the weather."}}`,
+		`{"type":"assistant","message":{"content":"It is sunny."}}`,
+	}
+	if err := os.WriteFile(transcript, []byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
+		t.Fatalf("write transcript: %v", err)
+	}
+
+	payload := map[string]interface{}{
+		"transcript_path": transcript,
+		"cwd":             dir,
+	}
+	data, _ := json.Marshal(payload)
+	var out bytes.Buffer
+	if err := hookStop(bytes.NewReader(data), &out); err != nil {
+		t.Fatalf("hookStop: %v", err)
+	}
+	if out.Len() != 0 {
+		t.Errorf("expected no output when no intent matches; got %q", out.String())
 	}
 }
 
