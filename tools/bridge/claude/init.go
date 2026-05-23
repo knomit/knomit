@@ -25,9 +25,14 @@ var templatesFS embed.FS
 func runInit(args []string) error {
 	flags := flag.NewFlagSet("init", flag.ContinueOnError)
 	repo := flags.String("repo", "", "knomit repo name (defaults to directory basename)")
+	source := flags.String("source", "", "source-code slug to bake into .mcp.json (required)")
 	profile := flags.String("profile", "code", "MCP profile (code, chat, generic)")
 	if err := flags.Parse(args); err != nil {
 		return err
+	}
+
+	if *source == "" {
+		return fmt.Errorf("--source is required (the source-code slug used in src:// refs)")
 	}
 
 	switch *profile {
@@ -67,7 +72,7 @@ func runInit(args []string) error {
 		if err != nil {
 			return err
 		}
-		rendered, err := renderTemplate(string(data), map[string]string{"RepoName": repoName, "Profile": *profile})
+		rendered, err := renderTemplate(string(data), map[string]string{"RepoName": repoName, "Profile": *profile, "Source": *source})
 		if err != nil {
 			return fmt.Errorf("render %s: %w", srcPath, err)
 		}

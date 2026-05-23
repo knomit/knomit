@@ -91,19 +91,20 @@ func main() {
 	}
 
 	repo := flag.String("repo", "knomit", "repository name")
+	source := flag.String("source", "", "source-code slug used in src:// refs (required)")
 	profile := flag.String("profile", "code", "MCP profile (code, chat, generic)")
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "usage: knomit-bridge [<command> [<subcommand>]] [flags] [base-url]\n\n")
 		fmt.Fprintf(os.Stderr, "commands:\n")
 		fmt.Fprintf(os.Stderr, "  claude init             Scaffold CC integration files in the current directory\n")
-		fmt.Fprintf(os.Stderr, "                          knomit-bridge claude init [-repo <name>] [-profile <name>]\n\n")
+		fmt.Fprintf(os.Stderr, "                          knomit-bridge claude init [-repo <name>] [-source <slug>] [-profile <name>]\n\n")
 		fmt.Fprintf(os.Stderr, "  claude hook <event>     Execute a Claude Code hook (called by CC via settings.json).\n")
 		fmt.Fprintf(os.Stderr, "                          event in: session-start, post-commit, pre-compact, stop\n\n")
 		fmt.Fprintf(os.Stderr, "without a command, runs as an MCP stdio↔HTTP proxy.\n\n")
 		fmt.Fprintf(os.Stderr, "examples:\n")
 		fmt.Fprintf(os.Stderr, "  knomit-bridge\n")
 		fmt.Fprintf(os.Stderr, "  knomit-bridge http://myhost:8080\n")
-		fmt.Fprintf(os.Stderr, "  knomit-bridge -repo work -profile chat\n")
+		fmt.Fprintf(os.Stderr, "  knomit-bridge -repo work -source workapp -profile chat\n")
 		fmt.Fprintf(os.Stderr, "  knomit-bridge claude init -repo myproject\n")
 		fmt.Fprintf(os.Stderr, "  knomit-bridge claude hook session-start  (typically run by CC, not interactively)\n")
 		fmt.Fprintf(os.Stderr, "\nflags (for the default MCP-proxy mode):\n")
@@ -112,8 +113,13 @@ func main() {
 	}
 	flag.Parse()
 
+	if *source == "" {
+		fmt.Fprintln(os.Stderr, "knomit-bridge: --source is required")
+		os.Exit(2)
+	}
+
 	initLog()
-	log.Info().Str("repo", *repo).Str("profile", *profile).Msg("bridge starting")
+	log.Info().Str("repo", *repo).Str("source", *source).Str("profile", *profile).Msg("bridge starting")
 
 	baseURL := "http://localhost:19278"
 	if flag.NArg() >= 1 {
