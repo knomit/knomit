@@ -1,4 +1,4 @@
-package main
+package claude
 
 import (
 	"os"
@@ -18,11 +18,6 @@ func TestRunInit_EmptyDirectory_DropsAllFiles(t *testing.T) {
 	wantFiles := []string{
 		".mcp.json",
 		".claude/settings.json",
-		".claude/hooks/_knomit-helpers.sh",
-		".claude/hooks/knomit-session-start.sh",
-		".claude/hooks/knomit-post-commit.sh",
-		".claude/hooks/knomit-pre-compact.sh",
-		".claude/hooks/knomit-stop.sh",
 		".claude/skills/knomit-recall/SKILL.md",
 		".claude/skills/knomit-remember/SKILL.md",
 		".claude/skills/knomit-why/SKILL.md",
@@ -43,10 +38,63 @@ func TestRunInit_EmptyDirectory_DropsAllFiles(t *testing.T) {
 		t.Errorf(".mcp.json missing repo name; got:\n%s", mcp)
 	}
 
-	// Hooks must be executable
-	info, _ := os.Stat(filepath.Join(dir, ".claude/hooks/knomit-session-start.sh"))
-	if info.Mode().Perm()&0o100 == 0 {
-		t.Errorf("session-start hook not executable; mode=%v", info.Mode())
+	// No .claude/hooks/ directory should be created
+	if _, err := os.Stat(filepath.Join(dir, ".claude/hooks")); err == nil {
+		t.Error(".claude/hooks/ should NOT be created; hooks are now in knomit-bridge binary")
+	}
+}
+
+func TestRunInit_NoHooksDirectory(t *testing.T) {
+	dir := t.TempDir()
+	chdir(t, dir)
+
+	if err := runInit([]string{"--repo", "x"}); err != nil {
+		t.Fatalf("runInit: %v", err)
+	}
+
+	hooksDir := filepath.Join(dir, ".claude", "hooks")
+	if _, err := os.Stat(hooksDir); err == nil {
+		t.Errorf(".claude/hooks/ directory should not exist; got one at %s", hooksDir)
+	}
+}
+
+func TestRunInit_SettingsJsonReferencesGoHooks(t *testing.T) {
+	dir := t.TempDir()
+	chdir(t, dir)
+
+	if err := runInit([]string{"--repo", "x"}); err != nil {
+		t.Fatalf("runInit: %v", err)
+	}
+
+	s, err := os.ReadFile(filepath.Join(dir, ".claude/settings.json"))
+	if err != nil {
+		t.Fatalf("cannot read settings.json: %v", err)
+	}
+	content := string(s)
+
+	// Must reference the new Go-based hook commands
+	if !strings.Contains(content, "knomit-bridge claude hook session-start") {
+		t.Errorf("settings.json missing 'knomit-bridge claude hook session-start'; got:\n%s", content)
+	}
+	if !strings.Contains(content, "knomit-bridge claude hook post-commit") {
+		t.Errorf("settings.json missing 'knomit-bridge claude hook post-commit'; got:\n%s", content)
+	}
+	if !strings.Contains(content, "knomit-bridge claude hook pre-compact") {
+		t.Errorf("settings.json missing 'knomit-bridge claude hook pre-compact'; got:\n%s", content)
+	}
+	if !strings.Contains(content, "knomit-bridge claude hook stop") {
+		t.Errorf("settings.json missing 'knomit-bridge claude hook stop'; got:\n%s", content)
+	}
+
+	// Must NOT reference old .sh paths
+	if strings.Contains(content, ".sh") {
+		t.Errorf("settings.json should not reference .sh files; got:\n%s", content)
+	}
+	if strings.Contains(content, "$CLAUDE_PROJECT_DIR") {
+		t.Errorf("settings.json should not reference $CLAUDE_PROJECT_DIR; got:\n%s", content)
+	}
+	if strings.Contains(content, "SessionEnd") {
+		t.Errorf("settings.json must not register SessionEnd; got:\n%s", content)
 	}
 }
 
@@ -92,30 +140,6 @@ func TestRunInit_ExistingClaudeMd_DropsBlockCompanion(t *testing.T) {
 	}
 }
 
-func TestRunInit_HooksDeleted_GetRestored(t *testing.T) {
-	dir := t.TempDir()
-	chdir(t, dir)
-
-	if err := runInit([]string{"--repo", "x"}); err != nil {
-		t.Fatalf("runInit #1: %v", err)
-	}
-	hookPath := filepath.Join(dir, ".claude/hooks/knomit-session-start.sh")
-
-	// User deletes the hook
-	if err := os.Remove(hookPath); err != nil {
-		t.Fatal(err)
-	}
-
-	// Re-running init must restore it
-	if err := runInit([]string{"--repo", "x"}); err != nil {
-		t.Fatalf("runInit #2: %v", err)
-	}
-
-	if _, err := os.Stat(hookPath); err != nil {
-		t.Errorf("hook was not restored after re-run: %v", err)
-	}
-}
-
 func TestRunInit_SkillsDeleted_GetRestored(t *testing.T) {
 	dir := t.TempDir()
 	chdir(t, dir)
@@ -140,25 +164,6 @@ func TestRunInit_SkillsDeleted_GetRestored(t *testing.T) {
 	}
 }
 
-func TestRunInit_DropsNoSessionEndHook(t *testing.T) {
-	dir := t.TempDir()
-	chdir(t, dir)
-
-	if err := runInit([]string{"--repo", "x"}); err != nil {
-		t.Fatalf("runInit: %v", err)
-	}
-
-	p := filepath.Join(dir, ".claude/hooks/knomit-session-end.sh")
-	if _, err := os.Stat(p); err == nil {
-		t.Errorf("session-end hook should NOT be created; SessionEnd is fire-and-forget per CC docs")
-	}
-
-	s, _ := os.ReadFile(filepath.Join(dir, ".claude/settings.json"))
-	if strings.Contains(string(s), "SessionEnd") {
-		t.Errorf("settings.json must not register SessionEnd; got:\n%s", s)
-	}
-}
-
 func TestRunInit_SkillFrontmatterMatchesDir(t *testing.T) {
 	dir := t.TempDir()
 	chdir(t, dir)
@@ -168,12 +173,12 @@ func TestRunInit_SkillFrontmatterMatchesDir(t *testing.T) {
 	}
 
 	skills := map[string]string{
-		".claude/skills/knomit-recall/SKILL.md":        "name: knomit-recall",
-		".claude/skills/knomit-remember/SKILL.md":      "name: knomit-remember",
-		".claude/skills/knomit-why/SKILL.md":           "name: knomit-why",
-		".claude/skills/knomit-decided/SKILL.md":       "name: knomit-decided",
-		".claude/skills/knomit-kickoff-area/SKILL.md":  "name: knomit-kickoff-area",
-		".claude/skills/knomit-review/SKILL.md":        "name: knomit-review",
+		".claude/skills/knomit-recall/SKILL.md":       "name: knomit-recall",
+		".claude/skills/knomit-remember/SKILL.md":     "name: knomit-remember",
+		".claude/skills/knomit-why/SKILL.md":          "name: knomit-why",
+		".claude/skills/knomit-decided/SKILL.md":      "name: knomit-decided",
+		".claude/skills/knomit-kickoff-area/SKILL.md": "name: knomit-kickoff-area",
+		".claude/skills/knomit-review/SKILL.md":       "name: knomit-review",
 	}
 	for path, wantFrontmatter := range skills {
 		data, err := os.ReadFile(filepath.Join(dir, path))

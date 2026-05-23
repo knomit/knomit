@@ -54,6 +54,8 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"gopkg.in/natefinch/lumberjack.v2"
+
+	"knomit/tools/bridge/claude"
 )
 
 var debug = os.Getenv("KNOMIT_MCP_DEBUG") != ""
@@ -80,9 +82,9 @@ func initLog() {
 
 func main() {
 	// Detect subcommands before flag.Parse() so we can handle them specially.
-	if len(os.Args) >= 2 && os.Args[1] == "init" {
-		if err := runInit(os.Args[2:]); err != nil {
-			fmt.Fprintf(os.Stderr, "knomit-bridge init: %v\n", err)
+	if len(os.Args) >= 2 && os.Args[1] == "claude" {
+		if err := claude.Run(os.Args[2:]); err != nil {
+			fmt.Fprintf(os.Stderr, "knomit-bridge claude: %v\n", err)
 			os.Exit(1)
 		}
 		return
@@ -91,16 +93,19 @@ func main() {
 	repo := flag.String("repo", "knomit", "repository name")
 	profile := flag.String("profile", "code", "MCP profile (code, chat, generic)")
 	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "usage: knomit-bridge [<command>] [flags] [base-url]\n\n")
+		fmt.Fprintf(os.Stderr, "usage: knomit-bridge [<command> [<subcommand>]] [flags] [base-url]\n\n")
 		fmt.Fprintf(os.Stderr, "commands:\n")
-		fmt.Fprintf(os.Stderr, "  init    Scaffold CC-side integration files in the current directory\n")
-		fmt.Fprintf(os.Stderr, "          knomit-bridge init [-repo <name>] [-profile <name>]\n\n")
+		fmt.Fprintf(os.Stderr, "  claude init             Scaffold CC integration files in the current directory\n")
+		fmt.Fprintf(os.Stderr, "                          knomit-bridge claude init [-repo <name>] [-profile <name>]\n\n")
+		fmt.Fprintf(os.Stderr, "  claude hook <event>     Execute a Claude Code hook (called by CC via settings.json).\n")
+		fmt.Fprintf(os.Stderr, "                          event in: session-start, post-commit, pre-compact, stop\n\n")
 		fmt.Fprintf(os.Stderr, "without a command, runs as an MCP stdio↔HTTP proxy.\n\n")
 		fmt.Fprintf(os.Stderr, "examples:\n")
 		fmt.Fprintf(os.Stderr, "  knomit-bridge\n")
 		fmt.Fprintf(os.Stderr, "  knomit-bridge http://myhost:8080\n")
 		fmt.Fprintf(os.Stderr, "  knomit-bridge -repo work -profile chat\n")
-		fmt.Fprintf(os.Stderr, "  knomit-bridge init -repo myproject\n")
+		fmt.Fprintf(os.Stderr, "  knomit-bridge claude init -repo myproject\n")
+		fmt.Fprintf(os.Stderr, "  knomit-bridge claude hook session-start  (typically run by CC, not interactively)\n")
 		flag.PrintDefaults()
 		fmt.Fprintf(os.Stderr, "\nNote: flags accept both '-flag value' and '--flag value' styles.\n")
 	}

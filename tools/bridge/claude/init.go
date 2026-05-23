@@ -1,4 +1,4 @@
-package main
+package claude
 
 import (
 	"bytes"
@@ -18,8 +18,8 @@ var templatesFS embed.FS
 // runInit scaffolds CC-side integration files into the current directory.
 //
 // Semantics:
-//   - Owned files (.claude/hooks/*, .claude/skills/**): always written
-//     (overwritten if they already exist).
+//   - Owned files (.claude/skills/**): always written (overwritten if they
+//     already exist).
 //   - Merge-required files (.mcp.json, .claude/settings.json, CLAUDE.md):
 //     if the destination exists, a companion file is dropped instead.
 func runInit(args []string) error {
@@ -73,15 +73,12 @@ func runInit(args []string) error {
 		}
 
 		mode := fs.FileMode(0o644)
-		if strings.HasSuffix(srcPath, ".sh") {
-			mode = 0o755
-		}
 
 		_, statErr := os.Stat(dst)
 		exists := statErr == nil
 
 		if isOwnedByIntegration(dstRel) {
-			// Always write owned files (hooks, skills).
+			// Always write owned files (skills).
 			if err := writeFile(dst, []byte(rendered), mode); err != nil {
 				return err
 			}
@@ -118,11 +115,10 @@ func runInit(args []string) error {
 }
 
 // isOwnedByIntegration reports whether dstRel is a file that the integration
-// owns outright (hooks and skills). These are always overwritten on re-run,
-// so deleting them and re-running init restores them.
+// owns outright (skills). These are always overwritten on re-run, so deleting
+// them and re-running init restores them.
 func isOwnedByIntegration(dstRel string) bool {
-	return strings.HasPrefix(dstRel, ".claude/hooks/") ||
-		strings.HasPrefix(dstRel, ".claude/skills/")
+	return strings.HasPrefix(dstRel, ".claude/skills/")
 }
 
 // mapDestination translates a template path under templates/ to its
@@ -131,17 +127,17 @@ func isOwnedByIntegration(dstRel string) bool {
 func mapDestination(srcPath string) string {
 	rel := strings.TrimPrefix(srcPath, "templates/")
 	switch rel {
-	case ".mcp.json.tmpl":
+	case "mcp.json.tmpl":
 		return ".mcp.json"
 	case "CLAUDE-md-block.txt":
 		return "CLAUDE.md"
-	case "claude/settings.json.tmpl":
+	case "settings.json.tmpl":
 		return ".claude/settings.json"
 	}
-	if strings.HasPrefix(rel, "claude/") {
-		return ".claude/" + strings.TrimPrefix(rel, "claude/")
+	if strings.HasPrefix(rel, "skills/") {
+		return ".claude/" + rel
 	}
-	return rel
+	return ""
 }
 
 func companionPath(dst string) string {
