@@ -16,7 +16,7 @@ import (
 func TestPostEditSearchURL_PinsExactShape(t *testing.T) {
 	t.Setenv("KNOMIT_BASE_URL", "http://localhost:19278")
 	got := postEditSearchURL("knomit", "machine/host", "internal/store/foo.go")
-	want := "http://localhost:19278/api/v1/repos/knomit/branches/machine%2Fhost/search?q=internal%2Fstore%2Ffoo.go&limit=20"
+	want := "http://localhost:19278/api/v1/repos/knomit/branches/machine:host/search?q=internal%2Fstore%2Ffoo.go&limit=20"
 	if got != want {
 		t.Errorf("postEditSearchURL =\n  %s\nwant\n  %s", got, want)
 	}
@@ -25,7 +25,7 @@ func TestPostEditSearchURL_PinsExactShape(t *testing.T) {
 func TestSessionStartFactsURL_PinsExactShape(t *testing.T) {
 	t.Setenv("KNOMIT_BASE_URL", "http://localhost:19278")
 	got := sessionStartFactsURL("knomit", "machine/host")
-	want := "http://localhost:19278/api/v1/repos/knomit/branches/machine%2Fhost/facts?sort=recent&limit=200"
+	want := "http://localhost:19278/api/v1/repos/knomit/branches/machine:host/facts?sort=recent&limit=200"
 	if got != want {
 		t.Errorf("sessionStartFactsURL =\n  %s\nwant\n  %s", got, want)
 	}

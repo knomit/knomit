@@ -140,7 +140,7 @@ func filterByEntity(facts []factSummary, rel string) []factSummary {
 // a wrong-endpoint bug; keep this assertable).
 func postEditSearchURL(repo, branch, rel string) string {
 	return fmt.Sprintf("%s/api/v1/repos/%s/branches/%s/search?q=%s&limit=20",
-		knomitBaseURL(), repo, url.PathEscape(branch), url.QueryEscape(rel))
+		knomitBaseURL(), repo, encodeBranch(branch), url.QueryEscape(rel))
 }
 
 // fetchSearchResults calls a /search HAL endpoint and returns the embedded

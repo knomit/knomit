@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -21,6 +22,14 @@ const hookHTTPTimeout = 2 * time.Second
 // hookHTTPClient is the shared client every hook uses. Reusing it allows
 // connection-pool reuse across hooks within a session.
 var hookHTTPClient = &http.Client{Timeout: hookHTTPTimeout}
+
+// encodeBranch URL-encodes a branch name for inclusion in a knomit API path.
+// Branches with slashes (e.g. "machine/host") are substituted "/" → ":" per
+// the project convention; the server's branch-route handler does the reverse
+// substitution. See kb/conventions/web/branch-slash-colon-substitution.
+func encodeBranch(branch string) string {
+	return strings.ReplaceAll(branch, "/", ":")
+}
 
 // knomitBaseURL returns the knomit HTTP base URL.
 // Set KNOMIT_BASE_URL for non-default ports; otherwise the default works

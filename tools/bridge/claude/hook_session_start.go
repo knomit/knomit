@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"strings"
 
 	"github.com/rs/zerolog/log"
@@ -99,7 +98,7 @@ type factSummary struct {
 // 99ec329 fixed a wrong-endpoint bug; keep this assertable).
 func sessionStartFactsURL(repo, branch string) string {
 	return fmt.Sprintf("%s/api/v1/repos/%s/branches/%s/facts?sort=recent&limit=200",
-		knomitBaseURL(), repo, url.PathEscape(branch))
+		knomitBaseURL(), repo, encodeBranch(branch))
 }
 
 // fetchFacts calls the /facts HAL endpoint and returns the embedded
