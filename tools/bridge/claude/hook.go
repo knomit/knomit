@@ -16,17 +16,11 @@ func runHook(args []string) error {
 	switch event {
 	case "session-start":
 		return hookSessionStart(os.Stdin, os.Stdout)
-	case "post-commit":
-		return hookPostCommit(os.Stdin, os.Stdout)
 	case "post-edit":
 		return hookPostEdit(os.Stdin, os.Stdout)
-	case "user-prompt-submit":
-		return hookUserPromptSubmit(os.Stdin, os.Stdout)
 	case "pre-compact":
 		return hookPreCompact(os.Stdin, os.Stdout)
-	case "stop":
-		return hookStop(os.Stdin, os.Stdout)
 	default:
-		return fmt.Errorf("unknown hook event %q (valid: session-start, post-commit, post-edit, user-prompt-submit, pre-compact, stop)", event)
+		return fmt.Errorf("unknown hook event %q (valid: session-start, post-edit, pre-compact)", event)
 	}
 }

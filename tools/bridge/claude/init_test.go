@@ -75,24 +75,28 @@ func TestRunInit_SettingsJsonReferencesGoHooks(t *testing.T) {
 	}
 	content := string(s)
 
-	// Must reference the new Go-based hook commands
-	if !strings.Contains(content, "knomit-bridge claude hook session-start") {
-		t.Errorf("settings.json missing 'knomit-bridge claude hook session-start'; got:\n%s", content)
+	// Must reference the three Go-based hook commands we ship.
+	wantHooks := []string{
+		"knomit-bridge claude hook session-start",
+		"knomit-bridge claude hook post-edit",
+		"knomit-bridge claude hook pre-compact",
 	}
-	if !strings.Contains(content, "knomit-bridge claude hook post-commit") {
-		t.Errorf("settings.json missing 'knomit-bridge claude hook post-commit'; got:\n%s", content)
+	for _, h := range wantHooks {
+		if !strings.Contains(content, h) {
+			t.Errorf("settings.json missing %q; got:\n%s", h, content)
+		}
 	}
-	if !strings.Contains(content, "knomit-bridge claude hook pre-compact") {
-		t.Errorf("settings.json missing 'knomit-bridge claude hook pre-compact'; got:\n%s", content)
+
+	// Must NOT reference removed hooks.
+	removedHooks := []string{
+		"hook post-commit",
+		"hook user-prompt-submit",
+		"hook stop",
 	}
-	if !strings.Contains(content, "knomit-bridge claude hook stop") {
-		t.Errorf("settings.json missing 'knomit-bridge claude hook stop'; got:\n%s", content)
-	}
-	if !strings.Contains(content, "knomit-bridge claude hook post-edit") {
-		t.Errorf("settings.json missing 'knomit-bridge claude hook post-edit'; got:\n%s", content)
-	}
-	if !strings.Contains(content, "knomit-bridge claude hook user-prompt-submit") {
-		t.Errorf("settings.json missing 'knomit-bridge claude hook user-prompt-submit'; got:\n%s", content)
+	for _, h := range removedHooks {
+		if strings.Contains(content, h) {
+			t.Errorf("settings.json must not reference removed %q; got:\n%s", h, content)
+		}
 	}
 
 	// Must NOT reference old .sh paths
