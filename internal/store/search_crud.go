@@ -177,7 +177,7 @@ func (si *searchIndex) upsert(ctx context.Context, branch, commitHash string, re
 			continue
 		}
 		if _, err := db.ExecContext(ctx,
-			`INSERT INTO fact_entities(fact_id, entity) VALUES (?, ?)`,
+			`INSERT OR IGNORE INTO fact_entities(fact_id, entity) VALUES (?, ?)`,
 			factID, entity,
 		); err != nil {
 			return fmt.Errorf("upsert fact_entities: %w", err)
@@ -188,7 +188,7 @@ func (si *searchIndex) upsert(ctx context.Context, branch, commitHash string, re
 			continue
 		}
 		if _, err := db.ExecContext(ctx,
-			`INSERT INTO fact_domains(fact_id, domain) VALUES (?, ?)`,
+			`INSERT OR IGNORE INTO fact_domains(fact_id, domain) VALUES (?, ?)`,
 			factID, domain,
 		); err != nil {
 			return fmt.Errorf("upsert fact_domains: %w", err)
@@ -420,9 +420,7 @@ func scanFactWithBody(row *sql.Row) (*FactWithBody, error) {
 	if err != nil {
 		return nil, fmt.Errorf("scanFactWithBody: %w", err)
 	}
-	json.Unmarshal([]byte(domainJSON), &f.Domain)
-	json.Unmarshal([]byte(entitiesJSON), &f.Entities)
-	json.Unmarshal([]byte(refsJSON), &f.Refs)
+	logFactJSONUnmarshal("scanFactWithBody", f.Path, domainJSON, entitiesJSON, refsJSON, &f.Domain, &f.Entities, &f.Refs)
 	f.Body = extractBody(rawData)
 	if committedAt.Valid {
 		f.CommittedAt = committedAt.Int64
@@ -445,9 +443,7 @@ func scanFactRecordFromRows(rows *sql.Rows) (*FactRecord, error) {
 	if err != nil {
 		return nil, fmt.Errorf("scan fact row: %w", err)
 	}
-	json.Unmarshal([]byte(domainJSON), &rec.Domain)
-	json.Unmarshal([]byte(entitiesJSON), &rec.Entities)
-	json.Unmarshal([]byte(refsJSON), &rec.Refs)
+	logFactJSONUnmarshal("scanFactRecordFromRows", rec.Path, domainJSON, entitiesJSON, refsJSON, &rec.Domain, &rec.Entities, &rec.Refs)
 	return &rec, nil
 }
 
@@ -467,9 +463,30 @@ func scanFactWithBodyFromRows(rows *sql.Rows) (*FactWithBody, error) {
 	if err != nil {
 		return nil, fmt.Errorf("scanFactWithBodyFromRows: %w", err)
 	}
-	json.Unmarshal([]byte(domainJSON), &f.Domain)
-	json.Unmarshal([]byte(entitiesJSON), &f.Entities)
-	json.Unmarshal([]byte(refsJSON), &f.Refs)
+	logFactJSONUnmarshal("scanFactWithBodyFromRows", f.Path, domainJSON, entitiesJSON, refsJSON, &f.Domain, &f.Entities, &f.Refs)
 	f.Body = extractBody(rawData)
 	return &f, nil
+}
+
+// logFactJSONUnmarshal decodes the three JSON columns (domain, entities, refs)
+// on a fact row and logs at Warn for any column that fails to parse.
+//
+// We don't propagate the error: a malformed JSON column on one fact shouldn't
+// fail the whole query, and the columns are written from typed Go slices on
+// upsert (search_crud.go:upsert), so a parse error means storage was corrupted
+// out-of-band. Logging surfaces that corruption in the server log instead of
+// silently returning empty slices to callers — combined with the
+// `INSERT OR IGNORE` dedup at fact_entities/fact_domains, a corrupt entities
+// column would otherwise make `?entity=…` queries return nothing for a fact
+// that should match.
+func logFactJSONUnmarshal(scanner, path, domainJSON, entitiesJSON, refsJSON string, domain *[]string, entities *[]string, refs *[]string) {
+	if err := json.Unmarshal([]byte(domainJSON), domain); err != nil {
+		log.Warn().Err(err).Str("scanner", scanner).Str("path", path).Str("column", "domain").Msg("fact JSON column unmarshal failed; field empty")
+	}
+	if err := json.Unmarshal([]byte(entitiesJSON), entities); err != nil {
+		log.Warn().Err(err).Str("scanner", scanner).Str("path", path).Str("column", "entities").Msg("fact JSON column unmarshal failed; field empty")
+	}
+	if err := json.Unmarshal([]byte(refsJSON), refs); err != nil {
+		log.Warn().Err(err).Str("scanner", scanner).Str("path", path).Str("column", "refs").Msg("fact JSON column unmarshal failed; field empty")
+	}
 }

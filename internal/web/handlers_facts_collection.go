@@ -13,6 +13,10 @@ import (
 	"knomit/internal/web/hal"
 )
 
+// factsTopicPrefix is the ontology root under which `?topic=X` translates to
+// `path=kb/X/`. Kept in sync with internal/fact.NewFact's lowercased root.
+const factsTopicPrefix = "kb/"
+
 // factsCollectionProvider is the narrow interface the facts collection handler depends on.
 type factsCollectionProvider interface {
 	RecentFacts(ri *repos.RepoInstance, branch string, opts store.SearchOptions) ([]store.RecentFactEntry, int, error)
@@ -96,18 +100,45 @@ func handleHALFactsCollection(b hal.URLBuilder, m *repos.Manager, provider facts
 			return out
 		}
 
+		// `entity` (singular) is the canonical name advertised by the HAL
+		// template and matches the data model column name. `entities` (plural)
+		// is accepted as a back-compat alias. CSV values merge.
+		entities := append(splitCSV(qp.Get("entity")), splitCSV(qp.Get("entities"))...)
+
+		// `topic` is shorthand for filtering by ontology-root subdirectory:
+		// `?topic=invariants` → `path=kb/invariants/`. An explicit `?path=`
+		// always wins so callers can override the convention.
+		path := qp.Get("path")
+		if path == "" {
+			if topic := strings.TrimSpace(qp.Get("topic")); topic != "" {
+				path = factsTopicPrefix + topic + "/"
+			}
+		}
+
+		var minConfidence float64
+		if v := qp.Get("min_confidence"); v != "" {
+			n, err := strconv.ParseFloat(v, 64)
+			if err != nil {
+				hal.WriteProblem(w, http.StatusBadRequest, "Invalid parameter",
+					"invalid min_confidence value", r.URL.Path)
+				return
+			}
+			minConfidence = n
+		}
+
 		opts := store.SearchOptions{
-			Path:         qp.Get("path"),
-			Text:         qp.Get("q"),
-			Limit:        limit,
-			Offset:       offset,
-			Domain:       splitCSV(qp.Get("domain")),
-			Entities:     splitCSV(qp.Get("entities")),
-			IncludeTypes: splitCSV(qp.Get("type")),
-			ExcludeTypes: splitCSV(qp.Get("exclude_type")),
-			IncludeKinds: splitCSV(qp.Get("kind")),
-			ExcludeKinds: splitCSV(qp.Get("exclude_kind")),
-			EpisodeOps:   splitCSV(qp.Get("ep")),
+			Path:          path,
+			Text:          qp.Get("q"),
+			Limit:         limit,
+			Offset:        offset,
+			MinConfidence: minConfidence,
+			Domain:        splitCSV(qp.Get("domain")),
+			Entities:      entities,
+			IncludeTypes:  splitCSV(qp.Get("type")),
+			ExcludeTypes:  splitCSV(qp.Get("exclude_type")),
+			IncludeKinds:  splitCSV(qp.Get("kind")),
+			ExcludeKinds:  splitCSV(qp.Get("exclude_kind")),
+			EpisodeOps:    splitCSV(qp.Get("ep")),
 		}
 
 		entries, total, err := provider.RecentFacts(ri, branch, opts)

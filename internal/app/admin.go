@@ -14,9 +14,15 @@ import (
 )
 
 // InitRepo creates and initialises a new knomit repo database.
-// If ontologyPath is non-empty the ontology is loaded from that file;
-// otherwise the embedded default ontology is used.
-func InitRepo(cfg config.Config, repoName, ontologyPath string) error {
+// At most one of ontologyPath or ontologyPreset may be set. If both are
+// empty, the default ontology preset is used. If ontologyPath is set,
+// the ontology is loaded from that file. If ontologyPreset is set, the
+// matching embedded preset is used.
+func InitRepo(cfg config.Config, repoName, ontologyPath, ontologyPreset string) error {
+	if ontologyPath != "" && ontologyPreset != "" {
+		return fmt.Errorf("--ontology and --ontology-preset are mutually exclusive")
+	}
+
 	reposDir := filepath.Join(cfg.Home, "repos")
 	if err := os.MkdirAll(reposDir, 0o755); err != nil {
 		return err
@@ -32,8 +38,9 @@ func InitRepo(cfg config.Config, repoName, ontologyPath string) error {
 	}
 	agentBranch := agentBranch(keyFingerprint)
 
-	ontology := fact.DefaultOntology()
-	if ontologyPath != "" {
+	var ontology *fact.Ontology
+	switch {
+	case ontologyPath != "":
 		data, err := os.ReadFile(ontologyPath)
 		if err != nil {
 			return fmt.Errorf("read ontology file: %w", err)
@@ -42,6 +49,13 @@ func InitRepo(cfg config.Config, repoName, ontologyPath string) error {
 		if err != nil {
 			return fmt.Errorf("parse ontology: %w", err)
 		}
+	case ontologyPreset != "":
+		ontology, err = fact.OntologyByPreset(ontologyPreset)
+		if err != nil {
+			return err
+		}
+	default:
+		ontology = fact.DefaultOntology()
 	}
 	ontologyYAML, err := ontology.Serialize()
 	if err != nil {

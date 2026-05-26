@@ -79,10 +79,11 @@ type repoHandler struct {
 	// don't exercise the index.
 	im IndexManager
 
-	configMu sync.Mutex   // guards ConfigureRemote / remote wiring
-	embedMu  sync.RWMutex // guards embedder
+	name     string           // repo name, derived from dbPath at Open time
+	configMu sync.Mutex       // guards ConfigureRemote / remote wiring
+	embedMu  sync.RWMutex     // guards embedder
 	embedder Embedder
-	branchMu sync.Map // per-branch write serialization
+	branchMu sync.Map         // per-branch write serialization
 }
 
 // lockBranch acquires the per-branch write lock and returns an unlock function.

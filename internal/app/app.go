@@ -34,8 +34,11 @@ func (a *App) Server() *web.Server     { return a.server }
 func (a *App) Signer() ssh.Signer      { return a.signer }
 func (a *App) AgentBranch() string     { return a.agentBranch }
 
+// Options holds CLI-only overrides that are not persisted to config.
+type Options struct{}
+
 // New creates and boots the application from the given config and context.
-func New(ctx context.Context, cfg config.Config) (*App, error) {
+func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 	a := &App{}
 
 	// SSH keypair.

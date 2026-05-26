@@ -196,6 +196,120 @@ func TestHandleHALFactsCollection_KindFilterReachesProvider(t *testing.T) {
 	require.Equal(t, []string{"epistemic"}, provider.lastOpts.ExcludeKinds)
 }
 
+// TestHandleHALFactsCollection_TopicReachesProvider verifies ?topic=X is
+// translated to the conventional path prefix kb/X/.
+func TestHandleHALFactsCollection_TopicReachesProvider(t *testing.T) {
+	provider := &stubFactsCollectionProvider{}
+	s := &Server{
+		Manager:                 newTestManagerWithRepos(t, "alpha"),
+		factsCollectionProvider: provider,
+	}
+	r := s.NewAPIRouter()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet,
+		"/repos/alpha/branches/agent:test/facts?topic=invariants", nil)
+	r.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code, "body=%s", rec.Body.String())
+	require.Equal(t, "kb/invariants/", provider.lastOpts.Path)
+}
+
+// TestHandleHALFactsCollection_ExplicitPathBeatsTopic verifies that an
+// explicit ?path= wins over ?topic= so callers can override the convention.
+func TestHandleHALFactsCollection_ExplicitPathBeatsTopic(t *testing.T) {
+	provider := &stubFactsCollectionProvider{}
+	s := &Server{
+		Manager:                 newTestManagerWithRepos(t, "alpha"),
+		factsCollectionProvider: provider,
+	}
+	r := s.NewAPIRouter()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet,
+		"/repos/alpha/branches/agent:test/facts?topic=invariants&path=custom/", nil)
+	r.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Equal(t, "custom/", provider.lastOpts.Path)
+}
+
+// TestHandleHALFactsCollection_EntitySingularReachesProvider verifies that
+// ?entity=X (singular — the canonical name advertised in the HAL template)
+// reaches the provider's Entities field.
+func TestHandleHALFactsCollection_EntitySingularReachesProvider(t *testing.T) {
+	provider := &stubFactsCollectionProvider{}
+	s := &Server{
+		Manager:                 newTestManagerWithRepos(t, "alpha"),
+		factsCollectionProvider: provider,
+	}
+	r := s.NewAPIRouter()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet,
+		"/repos/alpha/branches/agent:test/facts?entity=Service.Verify", nil)
+	r.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code, "body=%s", rec.Body.String())
+	require.Equal(t, []string{"Service.Verify"}, provider.lastOpts.Entities)
+}
+
+// TestHandleHALFactsCollection_EntitySingularAndPluralMerge verifies that
+// ?entity=X&entities=Y,Z merges to all three values (singular is the canonical
+// form, plural is accepted as alias).
+func TestHandleHALFactsCollection_EntitySingularAndPluralMerge(t *testing.T) {
+	provider := &stubFactsCollectionProvider{}
+	s := &Server{
+		Manager:                 newTestManagerWithRepos(t, "alpha"),
+		factsCollectionProvider: provider,
+	}
+	r := s.NewAPIRouter()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet,
+		"/repos/alpha/branches/agent:test/facts?entity=A&entities=B,C", nil)
+	r.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.ElementsMatch(t, []string{"A", "B", "C"}, provider.lastOpts.Entities)
+}
+
+// TestHandleHALFactsCollection_MinConfidenceReachesProvider verifies that
+// ?min_confidence=0.8 is parsed and forwarded.
+func TestHandleHALFactsCollection_MinConfidenceReachesProvider(t *testing.T) {
+	provider := &stubFactsCollectionProvider{}
+	s := &Server{
+		Manager:                 newTestManagerWithRepos(t, "alpha"),
+		factsCollectionProvider: provider,
+	}
+	r := s.NewAPIRouter()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet,
+		"/repos/alpha/branches/agent:test/facts?min_confidence=0.8", nil)
+	r.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.InDelta(t, 0.8, provider.lastOpts.MinConfidence, 1e-9)
+}
+
+// TestHandleHALFactsCollection_InvalidMinConfidence_Returns400 verifies that
+// a non-numeric min_confidence yields a problem+json 400.
+func TestHandleHALFactsCollection_InvalidMinConfidence_Returns400(t *testing.T) {
+	s := &Server{
+		Manager:                 newTestManagerWithRepos(t, "alpha"),
+		factsCollectionProvider: &stubFactsCollectionProvider{},
+	}
+	r := s.NewAPIRouter()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet,
+		"/repos/alpha/branches/agent:test/facts?min_confidence=notanumber", nil)
+	r.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+}
+
 func TestHandleHALFactsCollection_UnknownRepo_Returns404(t *testing.T) {
 	s := &Server{
 		Manager:                 newTestManagerWithRepos(t),

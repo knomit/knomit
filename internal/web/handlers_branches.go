@@ -105,7 +105,7 @@ func handleHALBranch(
 			"is_agent_branch":    branch == agentBranch,
 			"_links": hal.LinkMap{
 				"self":            {Href: branchURL},
-				"facts":          {Href: branchURL + "/facts{?domain,entity,type,topic,min_confidence,sort,limit,cursor}", Templated: true},
+				"facts":          {Href: branchURL + "/facts{?path,q,topic,domain,entity,type,exclude_type,kind,exclude_kind,ep,min_confidence,limit,offset}", Templated: true},
 				"topics":         {Href: branchURL + "/topics"},
 				"commits":        {Href: branchURL + "/commits"},
 				"search":         {Href: branchURL + "/search{?q,limit,cursor}", Templated: true},

@@ -22,12 +22,12 @@ import (
 
 func serveCmd() *cobra.Command {
 	var (
-		portOverride   string
-		hostOverride   string
-		logFile        string
-		logMaxSizeMB   int
-		logMaxBackups  int
-		logMaxAgeDays  int
+		portOverride  string
+		hostOverride  string
+		logFile       string
+		logMaxSizeMB  int
+		logMaxBackups int
+		logMaxAgeDays int
 	)
 	cmd := &cobra.Command{
 		Use:   "serve",
@@ -62,7 +62,7 @@ func serveCmd() *cobra.Command {
 				cfg.Host = hostOverride
 			}
 
-			a, err := app.New(cmd.Context(), cfg)
+			a, err := app.New(cmd.Context(), cfg, app.Options{})
 			if err != nil {
 				return err
 			}
