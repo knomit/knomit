@@ -12,21 +12,30 @@ import (
 // ---- hookSessionStart ----
 
 func TestHookSessionStart_MalformedStdin_Clean(t *testing.T) {
+	// Malformed JSON returns before any HTTP call, so this case is
+	// independent of whether knomit is reachable.
 	in := strings.NewReader(`not json at all`)
 	var out bytes.Buffer
 	if err := hookSessionStart(in, &out); err != nil {
 		t.Fatal(err)
 	}
-	// Should exit cleanly with no output (knomit not running)
+	if out.Len() != 0 {
+		t.Errorf("expected no output for malformed stdin; got %q", out.String())
+	}
 }
 
 func TestHookSessionStart_EmptyInput_Clean(t *testing.T) {
+	// Empty `{}` decodes fine and then hits HTTP; point at a closed server
+	// so agentBranch fails deterministically.
+	closedKnomit(t)
 	in := strings.NewReader(`{}`)
 	var out bytes.Buffer
 	if err := hookSessionStart(in, &out); err != nil {
 		t.Fatal(err)
 	}
-	// No error — knomit may not be running; agentBranch returns ""
+	if out.Len() != 0 {
+		t.Errorf("expected no output when agent_branch unreachable; got %q", out.String())
+	}
 }
 
 // ---- hookPreCompact ----

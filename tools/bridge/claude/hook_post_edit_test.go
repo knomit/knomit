@@ -3,9 +3,24 @@ package claude
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 )
+
+// closedKnomit points KNOMIT_BASE_URL at an immediately-closed httptest server
+// so every hook HTTP call fails fast with "connection refused", making the
+// test deterministic regardless of whether a real knomit happens to be running
+// on localhost.
+func closedKnomit(t *testing.T) {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	srv.Close()
+	t.Setenv("KNOMIT_BASE_URL", srv.URL)
+}
 
 func TestHookPostEdit_MalformedStdin_Clean(t *testing.T) {
 	in := strings.NewReader(`not json`)
@@ -69,13 +84,15 @@ func TestHookPostEdit_EmptyInputs_Quiet(t *testing.T) {
 }
 
 func TestHookPostEdit_ValidEditNoKnomit_Quiet(t *testing.T) {
-	// With no knomit server running, agentBranch returns "" and the hook
-	// exits silently — same defensive pattern as hookSessionStart.
+	// With knomit unreachable, agentBranch returns "" and the hook exits
+	// silently — same defensive pattern as hookSessionStart.
+	closedKnomit(t)
+	dir := t.TempDir()
 	payload := map[string]interface{}{
 		"tool_name": "Edit",
-		"cwd":       "/Users/knomit/data/mine/knomit",
+		"cwd":       dir,
 		"tool_input": map[string]interface{}{
-			"file_path": "/Users/knomit/data/mine/knomit/internal/synthesize/weight.go",
+			"file_path": filepath.Join(dir, "internal/synthesize/weight.go"),
 		},
 	}
 	data, _ := json.Marshal(payload)
@@ -83,7 +100,87 @@ func TestHookPostEdit_ValidEditNoKnomit_Quiet(t *testing.T) {
 	if err := hookPostEdit(bytes.NewReader(data), &out); err != nil {
 		t.Fatal(err)
 	}
-	// No assertion on output — knomit may or may not be running in CI
+	if out.Len() != 0 {
+		t.Errorf("expected no output when knomit unreachable; got %q", out.String())
+	}
+}
+
+func TestHookPostEdit_HappyPath_EmitsNudge(t *testing.T) {
+	dir := t.TempDir()
+	rel := "internal/store/foo.go"
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/repos/", func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/search"):
+			// Search returns one candidate; entities exact-match rel.
+			fmt.Fprintf(w, `{"_embedded":{"results":[
+				{"path":"kb/invariants/store/foo.md","title":"Foo invariant","entities":[%q]}
+			]}}`, rel)
+		case strings.Contains(r.URL.Path, "/branches/"):
+			// shouldn't be hit
+			http.NotFound(w, r)
+		default:
+			// agentBranch lookup: GET /api/v1/repos/{repo}
+			fmt.Fprint(w, `{"agent_branch":"machine/test"}`)
+		}
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	t.Setenv("KNOMIT_BASE_URL", srv.URL)
+
+	payload := map[string]interface{}{
+		"tool_name": "Edit",
+		"cwd":       dir,
+		"tool_input": map[string]interface{}{
+			"file_path": filepath.Join(dir, rel),
+		},
+	}
+	data, _ := json.Marshal(payload)
+	var out bytes.Buffer
+	if err := hookPostEdit(bytes.NewReader(data), &out); err != nil {
+		t.Fatal(err)
+	}
+
+	var resp struct {
+		HookSpecificOutput struct {
+			AdditionalContext string `json:"additionalContext"`
+		} `json:"hookSpecificOutput"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &resp); err != nil {
+		t.Fatalf("output not valid JSON: %v\ngot: %s", err, out.String())
+	}
+	ctx := resp.HookSpecificOutput.AdditionalContext
+	if !strings.Contains(ctx, "kb/invariants/store/foo.md") {
+		t.Errorf("nudge missing matched fact path: %q", ctx)
+	}
+	if !strings.Contains(ctx, "/knomit-update") {
+		t.Errorf("nudge missing /knomit-update instruction: %q", ctx)
+	}
+}
+
+func TestFilterByEntity(t *testing.T) {
+	rel := "internal/store/foo.go"
+	facts := []factSummary{
+		{Path: "kb/a", Title: "bare exact", Entities: []string{rel}},
+		{Path: "kb/b", Title: "src ref", Entities: []string{"src://knomit/" + rel}},
+		{Path: "kb/c", Title: "src ref + commit", Entities: []string{"src://knomit/" + rel + "@abc123"}},
+		{Path: "kb/d", Title: "symbol", Entities: []string{"Service.Verify"}},
+		{Path: "kb/e", Title: "basename only", Entities: []string{"foo.go"}},
+		{Path: "kb/f", Title: "different file", Entities: []string{"internal/store/bar.go"}},
+		{Path: "kb/g", Title: "no-scheme false suffix", Entities: []string{"other/" + rel}},
+		{Path: "kb/h", Title: "src diff path", Entities: []string{"src://knomit/internal/store/bar.go"}},
+		{Path: "kb/i", Title: "multi-entity hit", Entities: []string{"Service.Verify", "src://knomit/" + rel}},
+	}
+	got := filterByEntity(facts, rel)
+	var paths []string
+	for _, f := range got {
+		paths = append(paths, f.Path)
+	}
+	want := []string{"kb/a", "kb/b", "kb/c", "kb/i"}
+	if !equalStrings(paths, want) {
+		t.Errorf("filterByEntity matched %v, want %v", paths, want)
+	}
 }
 
 func TestRelPath_InsideCwd_ReturnsRelative(t *testing.T) {

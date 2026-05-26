@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"net/url"
 	"path/filepath"
-	"slices"
 	"strings"
 
 	"github.com/rs/zerolog/log"
@@ -122,17 +121,42 @@ func relPath(cwd, abs string) string {
 	return rel
 }
 
-// filterByEntity keeps only facts whose entities array contains the exact
-// rel path. The search endpoint matches loosely on body/title/entities, so
-// callers use it for retrieval; this is the precision step.
+// filterByEntity keeps only facts whose entities array references rel —
+// either as a bare relative path equal to rel, or as a `src://<source>/<path>`
+// ref (with optional `@<commit>` suffix) whose path component ends in rel.
+// The search endpoint matches loosely on body/title/entities, so callers use
+// it for retrieval; this is the precision step.
+//
+// Entity naming isn't load-bearing across the corpus: agents may write a
+// source-file entity as `internal/store/foo.go`, `src://knomit/internal/store/foo.go`,
+// or `src://knomit/internal/store/foo.go@abc123`. Suffix matching against
+// src:// entries covers all three. Bare entries (no scheme) are matched
+// exact-only, since accepting `other/internal/store/foo.go` as a hit for
+// `internal/store/foo.go` would over-match unrelated files.
 func filterByEntity(facts []factSummary, rel string) []factSummary {
 	out := make([]factSummary, 0, len(facts))
 	for _, f := range facts {
-		if slices.Contains(f.Entities, rel) {
-			out = append(out, f)
+		for _, e := range f.Entities {
+			if entityMatchesPath(e, rel) {
+				out = append(out, f)
+				break
+			}
 		}
 	}
 	return out
+}
+
+func entityMatchesPath(entity, rel string) bool {
+	if entity == rel {
+		return true
+	}
+	if !strings.HasPrefix(entity, "src://") {
+		return false
+	}
+	if at := strings.LastIndexByte(entity, '@'); at > len("src://") {
+		entity = entity[:at]
+	}
+	return strings.HasSuffix(entity, "/"+rel)
 }
 
 // postEditSearchURL builds the HAL search URL the post-edit hook uses. Pure
