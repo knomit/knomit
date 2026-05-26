@@ -42,9 +42,6 @@ func registerVec() {
 						return err
 					}
 				}
-				if err := registerVTabs(conn); err != nil {
-					return err
-				}
 				return nil
 			},
 			Extensions: []string{graphqliteLibPath()},

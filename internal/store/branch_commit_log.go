@@ -10,6 +10,7 @@ import (
 
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/rs/zerolog/log"
 
 	storegit "knomit/internal/store/git"
@@ -34,20 +35,20 @@ func (rh *repoHandler) populateCommitLog(ctx context.Context, branch string) err
 	defer logIter.Close()
 
 	var count int
-	err = rh.gits.CommitLogSync(branch, func() (string, []storegit.CommitLogEntry, error) {
+	err = rh.gits.CommitLogSync(branch, func() (string, []string, []storegit.CommitLogEntry, error) {
 		c, err := logIter.Next()
 		if err == io.EOF {
-			return "", nil, nil
+			return "", nil, nil, nil
 		}
 		if err != nil {
-			return "", nil, err
+			return "", nil, nil, err
 		}
 		count++
 		files, err := changedFilesInCommit(c)
 		if err != nil {
-			return "", nil, err
+			return "", nil, nil, err
 		}
-		return c.Hash.String(), commitEntries(c, files), nil
+		return c.Hash.String(), parentHashes(c), commitEntries(c, files), nil
 	})
 	if err != nil {
 		return fmt.Errorf("populateCommitLog: sync: %w", err)
@@ -78,14 +79,30 @@ func (rh *repoHandler) AppendCommitLog(ctx context.Context, branch, hashStr stri
 	}
 	done := false
 	entries := commitEntries(c, files)
-	if err := rh.gits.CommitLogSync(branch, func() (string, []storegit.CommitLogEntry, error) {
+	parents := parentHashes(c)
+	if err := rh.gits.CommitLogSync(branch, func() (string, []string, []storegit.CommitLogEntry, error) {
 		if done {
-			return "", nil, nil
+			return "", nil, nil, nil
 		}
 		done = true
-		return hash.String(), entries, nil
+		return hash.String(), parents, entries, nil
 	}); err != nil {
 		return fmt.Errorf("AppendCommitLog: sync %s: %w", hashStr, err)
 	}
 	return nil
+}
+
+// parentHashes extracts the ordered parent commit hashes from a go-git
+// commit object. Returns nil for root commits. parents[0] is the canonical
+// first parent (the "ours" side on a merge commit), matching git's
+// first-parent semantics used by branch-local history walks.
+func parentHashes(c *object.Commit) []string {
+	if c == nil || len(c.ParentHashes) == 0 {
+		return nil
+	}
+	out := make([]string, len(c.ParentHashes))
+	for i, h := range c.ParentHashes {
+		out[i] = h.String()
+	}
+	return out
 }

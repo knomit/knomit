@@ -84,10 +84,7 @@ func Open(path string) (*Service, error) {
 	rh.im = si // notifyCommit delegates to im.Sync after every commit.
 	fi := &factIndex{rh: rh}
 	ri := &remoteIndex{rh: rh}
-	// Canonicalize the path so the registry key matches the resolved path
-	// returned by PRAGMA database_list (e.g. macOS resolves /var → /private/var).
 	canonPath := canonicalizePath(path)
-	bindVTabRepo(canonPath, rh)
 	return &Service{
 		rh:     rh,
 		fi:     fi,
@@ -139,10 +136,8 @@ func (s *Service) Checkpoint() error {
 	return err
 }
 
-// Close closes the underlying database connection and removes the vtab
-// registry entry for this db path.
+// Close closes the underlying database connection.
 func (s *Service) Close() error {
-	unbindVTabRepo(s.dbPath)
 	return s.rh.db.Close()
 }
 

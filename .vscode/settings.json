@@ -1,5 +1,5 @@
 {
   "gopls": {
-    "build.buildFlags": ["-tags=sqlite_vtable"]
+    "build.buildFlags": []
   }
 }

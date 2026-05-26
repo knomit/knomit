@@ -1,7 +1,5 @@
 .PHONY: build web test clean run dev setup dist download-ort download-graphqlite e2e e2e-ui e2e-setup e2e-report tray tray-run
 
-GOFLAGS ?= -tags sqlite_vtable
-
 ORT_VERSION := 1.24.3
 UNAME_S := $(shell uname -s)
 UNAME_M := $(shell uname -m)
