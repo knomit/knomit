@@ -1,6 +1,6 @@
 ---
 name: knomit-recall
-description: Use before non-trivial work in a known-fact area — recall surfaces invariants, design decisions, and anti-patterns before brainstorming or implementation begins
+description: Use BEFORE brainstorming sessions, implementation requests, or any non-trivial work in an area — surfaces invariants, design decisions, and anti-patterns from prior knowledge so they inform the work from the start
 ---
 
 # /knomit-recall <topic-or-text>
@@ -9,8 +9,20 @@ description: Use before non-trivial work in a known-fact area — recall surface
 
 Fire BEFORE acting on any of these user signals:
 
-- "implement X", "add support for Y", "build a new Z"
+**Brainstorming / design exploration** — recall runs first so the brainstorm is informed by what already exists:
+
+- About to invoke the `brainstorming` skill for creative work
+- "let's brainstorm X", "how should we approach Y", "what's the best way to Z", "what are our options for W"
+- "design X", "should we use A or B for Y", "what would it take to support Z"
+
+**Implementation requests** — explicit and softer phrasings both count:
+
+- "implement X", "add support for Y", "build a new Z", "create X"
+- "make X work", "set up Y", "get Z working", "wire up W", "add a way to do X", "change behavior of Y"
 - "redesign", "refactor", "rework"
+
+**Diagnostic / explanatory:**
+
 - "fix the bug in <area>" — when the area isn't one you've routinely touched this session
 - "why does X work this way?" — existing-code rationale question
 - About to pick where new code goes
@@ -28,7 +40,9 @@ Call `mcp__knomit__knomit_query` with:
 - `text`: the user-supplied topic (or your own one-line summary of the area)
 - `entities`: any file paths currently open or about to be edited
 
-After the query returns, do BOTH steps below. Skipping step 2 means you're trusting facts that may be stale — corpus facts can lag HEAD.
+**Empty result?** Note "no prior facts in this area — proceeding" and continue. Empty results are common in unfamiliar areas; not a blocker.
+
+When the query returns facts, do BOTH steps below. Skipping step 2 means you're trusting facts that may be stale — corpus facts can lag HEAD.
 
 ### Step 1 — Read in priority order
 
