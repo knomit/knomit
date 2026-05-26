@@ -72,20 +72,23 @@ export function FactBody({ fact, dispatch, readOnly, onRefClick }: Props) {
                     >{'↗'} {ref}</a>
                   );
                 }
-                if (!onRefClick) {
+                // Only schemeless refs are knomit-local fact paths; src://, file:///, and
+                // any other scheme cannot be opened by the browser or resolved via onRefClick.
+                const isLocalFactPath = !/^[a-z][a-z0-9+.\-]*:/i.test(ref);
+                if (isLocalFactPath && onRefClick) {
                   return (
-                    <span key={ref} style={{ color: '#666', fontSize: 12, fontFamily: 'monospace' }}>
-                      {'→'} {ref}
-                    </span>
+                    <span key={ref}
+                      onClick={() => onRefClick(ref)}
+                      style={{ color: '#8af', fontSize: 12, fontFamily: 'monospace', cursor: 'pointer', transition: 'color 0.15s' }}
+                      onMouseEnter={e => { (e.currentTarget as HTMLElement).style.color = '#adf'; }}
+                      onMouseLeave={e => { (e.currentTarget as HTMLElement).style.color = '#8af'; }}
+                    >{'→'} {ref}</span>
                   );
                 }
                 return (
-                  <span key={ref}
-                    onClick={() => onRefClick(ref)}
-                    style={{ color: '#8af', fontSize: 12, fontFamily: 'monospace', cursor: 'pointer', transition: 'color 0.15s' }}
-                    onMouseEnter={e => { (e.currentTarget as HTMLElement).style.color = '#adf'; }}
-                    onMouseLeave={e => { (e.currentTarget as HTMLElement).style.color = '#8af'; }}
-                  >{'→'} {ref}</span>
+                  <span key={ref} style={{ color: '#666', fontSize: 12, fontFamily: 'monospace' }}>
+                    {'→'} {ref}
+                  </span>
                 );
               })}
             </div>

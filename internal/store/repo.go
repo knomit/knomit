@@ -98,6 +98,9 @@ func (s *Service) OpenRepo() error {
 	if err := s.rh.populateCommitLog(context.Background(), branch); err != nil {
 		log.Warn().Err(err).Msg("commit_log: open populate failed")
 	}
+	if err := backfillCommitParents(context.Background(), s.rh); err != nil {
+		log.Warn().Err(err).Msg("commit_parents: backfill failed")
+	}
 	return nil
 }
 

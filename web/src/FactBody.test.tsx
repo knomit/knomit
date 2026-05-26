@@ -79,4 +79,28 @@ describe('FactBody', () => {
     expect(ext.tagName.toLowerCase()).toBe('a');
     expect(ext).toHaveAttribute('href', 'https://example.com/paper');
   });
+
+  it('src:// refs render as inert (browser cannot open a src: protocol, not a knomit fact path)', () => {
+    const fact: Fact = { ...baseFact, refs: ['src://knomit/internal/store/service.go@cfef409'] };
+    const onRefClick = vi.fn();
+    render(<FactBody fact={fact} dispatch={vi.fn()} readOnly={false} onRefClick={onRefClick} />);
+
+    const el = screen.getByText(/src:\/\/knomit\/internal\/store\/service\.go/);
+    expect(el.tagName.toLowerCase()).toBe('span');
+    expect(el).not.toHaveAttribute('href');
+    fireEvent.click(el);
+    expect(onRefClick).not.toHaveBeenCalled();
+  });
+
+  it('file:/// refs render as inert (not a knomit fact path)', () => {
+    const fact: Fact = { ...baseFact, refs: ['file:///etc/hosts'] };
+    const onRefClick = vi.fn();
+    render(<FactBody fact={fact} dispatch={vi.fn()} readOnly={false} onRefClick={onRefClick} />);
+
+    const el = screen.getByText(/file:\/\/\/etc\/hosts/);
+    expect(el.tagName.toLowerCase()).toBe('span');
+    expect(el).not.toHaveAttribute('href');
+    fireEvent.click(el);
+    expect(onRefClick).not.toHaveBeenCalled();
+  });
 });

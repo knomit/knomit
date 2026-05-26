@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -441,4 +443,68 @@ func TestResolveActiveCommitForPath_DepthRegression(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, ok, "must resolve target through 20 unrelated commits")
 	require.Equal(t, c1, got, "must resolve to the original add commit")
+}
+
+// TestResolveActiveCommitForPath_ConcurrentNoDeadlock guards against a class
+// of bug where the resolver re-enters the *sql.DB connection pool from
+// inside a query — e.g. via a Go-side virtual-table cursor whose Next()
+// callback issues its own database/sql query. With db.SetMaxOpenConns(N),
+// N concurrent walks would each hold one pool connection and block forever
+// waiting for an (N+1)th. The whole pool wedges, downstream handlers like
+// GET /branches hang on any subsequent WithRead. Run enough goroutines to
+// safely exceed the configured pool size.
+func TestResolveActiveCommitForPath_ConcurrentNoDeadlock(t *testing.T) {
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	defer svc.Close()
+	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+	ctx := context.Background()
+	branch := "main"
+
+	c1Res, err := svc.Facts().WriteFact(ctx, branch, "kb/target.md", testFactBody("t", 0.5, nil), "init", "")
+	require.NoError(t, err)
+	c1 := c1Res.CommitHash
+
+	var tip string
+	for i := 0; i < 30; i++ {
+		res, werr := svc.Facts().WriteFact(ctx, branch,
+			fmt.Sprintf("kb/filler_%d.md", i),
+			testFactBody(fmt.Sprintf("f%d", i), 0.5, nil),
+			"filler", "")
+		require.NoError(t, werr)
+		tip = res.CommitHash
+	}
+
+	si := svc.Search().(*searchIndex)
+
+	const N = 8
+	var wg sync.WaitGroup
+	wg.Add(N)
+	errs := make(chan error, N)
+	for i := 0; i < N; i++ {
+		go func() {
+			defer wg.Done()
+			got, ok, rerr := si.resolveActiveCommitForPath(ctx, branch, "kb/target.md", tip)
+			if rerr != nil {
+				errs <- fmt.Errorf("resolveActiveCommitForPath: %w", rerr)
+				return
+			}
+			if !ok || got != c1 {
+				errs <- fmt.Errorf("expected hash=%s ok=true, got hash=%s ok=%v", c1, got, ok)
+			}
+		}()
+	}
+
+	done := make(chan struct{})
+	go func() { wg.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(15 * time.Second):
+		t.Fatalf("deadlock: %d concurrent resolveActiveCommitForPath calls did not complete within 15s", N)
+	}
+	close(errs)
+	for e := range errs {
+		t.Errorf("%v", e)
+	}
 }

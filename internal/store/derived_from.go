@@ -112,20 +112,19 @@ func (si *searchIndex) FactExistsAt(ctx context.Context, branch, path, commit st
 // modified. Deletions are stepped over: they're write events in the
 // sparse history, not stop conditions.
 //
-// Implementation: pushes the walk into SQLite via the first_parent_chain
-// virtual table, joining against commit_log to find the first add/modify
-// row. SQLite stops pulling from the chain at the first match thanks to
-// LIMIT 1 + AlreadyOrdered, so the git walk amortizes naturally across
-// the join.
+// Implementation: a single recursive CTE over commit_parents (parent_order
+// = 0 = first parent), JOINed with commit_log and capped by LIMIT 1.
+// SQLite's recursive-CTE planner is pull-based: with the outer LIMIT 1
+// satisfied, the recursion stops walking — same streaming + short-circuit
+// semantics as the previous first_parent_chain virtual table, without the
+// Go-side cursor callback that could re-enter the *sql.DB pool mid-scan.
 //
 // SCHEMA INVARIANT: branch_commits is populated by full-reachability walk
-// from the branch tip (populateCommitLog uses gogit.LogOrderDefault, which
-// follows all parents). Therefore any first-parent ancestor of an on-branch
-// commit is itself on-branch — we don't need an in-walk branch_commits
-// check. The vtab cursor walks first-parent unconditionally; the SQL JOIN
-// restricts to commit_log rows, which only contain commits indexed at
-// populateCommitLog time, so off-branch commits cannot appear in the
-// result set.
+// from the branch tip (populateCommitLog uses gogit.LogOrderDefault), so
+// any first-parent ancestor of an on-branch commit is itself on-branch.
+// The commit_log JOIN further restricts to indexed commits, so off-branch
+// commits cannot appear in the result set even though the walk itself is
+// branch-agnostic.
 //
 // Returns ("", false, nil) when no add/modify ancestor exists. Errors
 // propagate.
@@ -139,8 +138,15 @@ func (si *searchIndex) resolveActiveCommitForPath(ctx context.Context, branch, p
 
 	var hash string
 	err := conn(ctx, si.rh.db).QueryRowContext(ctx, `
+		WITH RECURSIVE fpc(commit_hash, depth) AS (
+		    SELECT ?, 0
+		    UNION ALL
+		    SELECT cp.parent_hash, fpc.depth + 1
+		      FROM commit_parents cp
+		      JOIN fpc ON cp.commit_hash = fpc.commit_hash AND cp.parent_order = 0
+		)
 		SELECT cl.commit_hash
-		  FROM first_parent_chain(?) fpc
+		  FROM fpc
 		  JOIN commit_log cl ON cl.commit_hash = fpc.commit_hash
 		 WHERE cl.path = ? AND cl.action IN ('added','modified')
 		 ORDER BY fpc.depth ASC
@@ -152,10 +158,7 @@ func (si *searchIndex) resolveActiveCommitForPath(ctx context.Context, branch, p
 	if err != nil {
 		return "", false, fmt.Errorf("resolveActiveCommitForPath: %w", err)
 	}
-	_ = branch // The branch is implicit in the walk: first-parent of an
-	//          //   on-branch commit is on-branch (see schema invariant above).
-	//          //   The commit_log JOIN further restricts to indexed commits,
-	//          //   so off-branch commits cannot appear.
+	_ = branch // See SCHEMA INVARIANT above — branch is implicit.
 	return hash, true, nil
 }
 
