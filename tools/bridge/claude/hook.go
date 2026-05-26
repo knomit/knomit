@@ -18,9 +18,11 @@ func runHook(args []string) error {
 		return hookSessionStart(os.Stdin, os.Stdout)
 	case "post-edit":
 		return hookPostEdit(os.Stdin, os.Stdout)
+	case "post-ask":
+		return hookPostAsk(os.Stdin, os.Stdout)
 	case "pre-compact":
 		return hookPreCompact(os.Stdin, os.Stdout)
 	default:
-		return fmt.Errorf("unknown hook event %q (valid: session-start, post-edit, pre-compact)", event)
+		return fmt.Errorf("unknown hook event %q (valid: session-start, post-edit, post-ask, pre-compact)", event)
 	}
 }
