@@ -86,3 +86,49 @@ func TestUpdateHandler_RejectsFailingValidation(t *testing.T) {
 	require.Contains(t, text, "/knomit-principle",
 		"error must include the rule's message; got %q", text)
 }
+
+// TestUpdateHandler_DedupsRefs regresses a bug where knomit_update appended
+// refs without deduping (fact.Refs = append(fact.Refs, updates.Refs...)), so
+// repeating an update with the same ref accumulated duplicates. The learn
+// handler's merge paths already use AppendUnique; update must match.
+func TestUpdateHandler_DedupsRefs(t *testing.T) {
+	svc, ctx, emb := newPrinciplesTestRepo(t)
+
+	// Seed a valid principle to mutate.
+	seed, err := LearnHandler(emb)(ctx, principleLearnReq("seed", 0.8, []any{"global"}))
+	require.NoError(t, err)
+	require.False(t, seed.IsError, "seed must succeed: %s", resultText(t, seed))
+	path := mergedFactPath(t, seed)
+
+	const ref = "https://example.com/spec"
+	updateReq := func() mcpgo.CallToolRequest {
+		var req mcpgo.CallToolRequest
+		req.Params.Arguments = map[string]any{
+			"file":        path,
+			"moment_name": "add-ref",
+			"updates":     map[string]any{"refs": []any{ref}},
+		}
+		return req
+	}
+
+	// Add the same ref twice via two separate updates.
+	for range 2 {
+		res, err := UpdateHandler()(ctx, updateReq())
+		require.NoError(t, err)
+		require.False(t, res.IsError, "update must succeed: %s", resultText(t, res))
+	}
+
+	// The ref must appear exactly once, not twice.
+	res, err := svc.Facts().ReadFact(context.Background(), "agent/test", path, nil)
+	require.NoError(t, err)
+	updated, err := fact.ParseFact(path, res.Content)
+	require.NoError(t, err)
+
+	count := 0
+	for _, r := range updated.Refs {
+		if r == ref {
+			count++
+		}
+	}
+	require.Equal(t, 1, count, "ref must be deduped; got refs=%v", updated.Refs)
+}

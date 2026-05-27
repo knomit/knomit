@@ -82,14 +82,13 @@ func QueryHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToo
 
 		// 5. Build output.
 		type factOutput struct {
-			File         string      `json:"file"`
-			Title        string      `json:"title"`
-			Kind         string      `json:"kind,omitempty"` // omitted when epistemic (the default)
-			Type         string      `json:"type"`
-			Body         string      `json:"body"`
-			LastModified string      `json:"last_modified,omitempty"`
-			Commit       string      `json:"commit"`
-			Frontmatter  interface{} `json:"frontmatter"`
+			File        string      `json:"file"`
+			Title       string      `json:"title"`
+			Kind        string      `json:"kind,omitempty"` // omitted when epistemic (the default)
+			Type        string      `json:"type"`
+			Body        string      `json:"body"`
+			Commit      string      `json:"commit"`
+			Frontmatter interface{} `json:"frontmatter"`
 		}
 		type frontmatterOutput struct {
 			Domain         []string `json:"domain"`

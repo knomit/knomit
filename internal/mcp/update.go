@@ -134,9 +134,10 @@ func UpdateHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallTo
 		if updates.Entities != nil {
 			fact.Entities = updates.Entities
 		}
-		// Refs are appended (not replaced).
-		if len(updates.Refs) > 0 {
-			fact.Refs = append(fact.Refs, updates.Refs...)
+		// Refs are appended (deduped, not replaced) — mirrors the learn
+		// handler's merge paths, which all use AppendUnique.
+		for _, ref := range updates.Refs {
+			fact.Refs = factpkg.AppendUnique(fact.Refs, ref)
 		}
 
 		// 7. Validate the assembled fact against the ontology's rules.
