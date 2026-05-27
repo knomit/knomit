@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
 	"path/filepath"
 	"testing"
 
@@ -131,23 +132,51 @@ func TestLearnHandler_RejectsFailingValidation(t *testing.T) {
 		"error must include the rule's message; got %q", text)
 }
 
-// TestLearnHandler_DedupMergeReValidates regresses the gap where a dedup
-// merge could produce a fact that violates ontology rules. Without the
-// re-validate step, a violation only surfaces later as an opaque
-// serialize/write error.
-//
-// Setup uses the real CodeOntology principles topic. First write is a
-// valid principle. Second write uses the same title+body (so dedup
-// similarity is 1.0 with the stub embedder, hitting the merge branch)
-// and is itself a valid principle — but the merge logic (see learn.go,
-// "New fact wins" branch) does not copy Kind onto merged, so the merged
-// fact violates must-be-pragmatic-policy. The handler must surface that
-// failure with the rule name, attributed to the dedup-merge stage.
-//
-// Note: the Kind-not-copied behavior in the merge branch is itself a
-// pre-existing latent bug. This test asserts the surfacing behavior; the
-// underlying merge bug is out of scope for this follow-up.
-func TestLearnHandler_DedupMergeReValidates(t *testing.T) {
+// principleLearnReq builds a single-fact learn request for a principle. Title
+// and body are fixed so two requests dedup-match (cosine 1.0 with the
+// length-based mock embedder); moment, confidence, and domain vary per call.
+func principleLearnReq(moment string, confidence float64, domain []any) mcpgo.CallToolRequest {
+	var req mcpgo.CallToolRequest
+	req.Params.Arguments = map[string]any{
+		"moment_name": moment,
+		"facts": []any{
+			map[string]any{
+				"topic":      "principles",
+				"category":   "mission/foo",
+				"title":      "Test Principle",
+				"body":       "designer authored this principle.",
+				"kind":       "pragmatic",
+				"type":       "policy",
+				"domain":     domain,
+				"confidence": confidence,
+				"sources":    1,
+				"entities":   []any{"designer"},
+				"refs":       []any{},
+			},
+		},
+	}
+	return req
+}
+
+// mergedFactPath parses a successful learn result and returns its single
+// committed file path.
+func mergedFactPath(t *testing.T, result *mcpgo.CallToolResult) string {
+	t.Helper()
+	var parsed struct {
+		Commits []struct {
+			File string `json:"file"`
+		} `json:"commits"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &parsed))
+	require.Len(t, parsed.Commits, 1)
+	return parsed.Commits[0].File
+}
+
+// newPrinciplesTestRepo opens an on-disk store wired with the real
+// CodeOntology (which carries the principles validation rules) and a
+// length-based mock embedder so dedup is deterministic.
+func newPrinciplesTestRepo(t *testing.T) (*store.Service, context.Context, store.BatchEmbedder) {
+	t.Helper()
 	dir := t.TempDir()
 	svc, err := store.Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
@@ -165,65 +194,68 @@ func TestLearnHandler_DedupMergeReValidates(t *testing.T) {
 		OntologyRoot: "kb",
 		Embedder:     emb,
 	})
-	ctx := repos.WithRepoInstance(context.Background(), ri)
+	return svc, repos.WithRepoInstance(context.Background(), ri), emb
+}
 
-	const title = "Test Principle"
-	const body = "designer authored this principle."
+// TestLearnHandler_DedupMergePreservesKind regresses the bug where the
+// dedup-merge branches built the merged fact via fact.NewFact but never
+// copied Kind, leaving it empty (→ epistemic). For a principle (kind=
+// pragmatic, type=policy) that made the merged fact an invalid epistemic/
+// policy pair, so re-submitting the same principle failed must-be-pragmatic-
+// policy. The merge must now succeed and the stored fact must keep its kind.
+func TestLearnHandler_DedupMergePreservesKind(t *testing.T) {
+	svc, ctx, emb := newPrinciplesTestRepo(t)
 
 	// First write: valid principle.
-	var first mcpgo.CallToolRequest
-	first.Params.Arguments = map[string]any{
-		"moment_name": "seed",
-		"facts": []any{
-			map[string]any{
-				"topic":      "principles",
-				"category":   "mission/foo",
-				"title":      title,
-				"body":       body,
-				"kind":       "pragmatic",
-				"type":       "policy",
-				"domain":     []any{"global"},
-				"confidence": 0.8,
-				"sources":    1,
-				"entities":   []any{"designer"},
-				"refs":       []any{},
-			},
-		},
-	}
-	r1, err := LearnHandler(emb)(ctx, first)
+	r1, err := LearnHandler(emb)(ctx, principleLearnReq("seed", 0.8, []any{"global"}))
 	require.NoError(t, err)
 	require.False(t, r1.IsError, "seed write must succeed: %s", resultText(t, r1))
 
-	// Second write: same canonical text → dedup matches with similarity 1.0,
-	// new-fact-wins branch (confidence 0.9 > 0.8). The merge produces a
-	// fact whose Kind is unset (separate latent bug), so the merged fact
-	// violates must-be-pragmatic-policy. Pre-merge ValidateFact passed.
-	var second mcpgo.CallToolRequest
-	second.Params.Arguments = map[string]any{
-		"moment_name": "merge-conflict",
-		"facts": []any{
-			map[string]any{
-				"topic":      "principles",
-				"category":   "mission/foo",
-				"title":      title,
-				"body":       body,
-				"kind":       "pragmatic",
-				"type":       "policy",
-				"domain":     []any{"global"},
-				"confidence": 0.9, // higher → new fact wins the merge
-				"sources":    1,
-				"entities":   []any{"designer"},
-				"refs":       []any{},
-			},
-		},
-	}
-	r2, err := LearnHandler(emb)(ctx, second)
+	// Second write: same canonical text → dedup matches (similarity 1.0),
+	// higher confidence so the new fact wins the merge. With Kind copied, the
+	// merged fact is a valid pragmatic/policy principle and the write succeeds.
+	r2, err := LearnHandler(emb)(ctx, principleLearnReq("re-author", 0.9, []any{"global"}))
+	require.NoError(t, err)
+	require.False(t, r2.IsError,
+		"re-authoring a principle must merge cleanly, not fail validation; got %s", resultText(t, r2))
+
+	// The merged fact on disk must retain kind=pragmatic/type=policy and
+	// reflect the merge (max confidence, summed sources).
+	path := mergedFactPath(t, r2)
+	res, err := svc.Facts().ReadFact(context.Background(), "agent/test", path, nil)
+	require.NoError(t, err)
+	merged, err := fact.ParseFact(path, res.Content)
+	require.NoError(t, err)
+	require.Equal(t, fact.Pragmatic, merged.Kind, "merge must preserve kind")
+	require.Equal(t, fact.Policy, merged.Type, "merge must preserve type")
+	require.Equal(t, 0.9, merged.Confidence, "merge keeps the higher confidence")
+	require.Equal(t, 2, merged.Sources, "merge sums sources")
+}
+
+// TestLearnHandler_DedupMergeReValidates regresses the re-validate step: a
+// merge can produce a rule violation even when both inputs were individually
+// valid. Here a [global] principle and an identically-worded [store]-scoped
+// principle dedup-merge; the unioned domain becomes [global, store], which
+// violates domain-mutually-exclusive. Without re-validation this would only
+// surface later as an opaque serialize error.
+func TestLearnHandler_DedupMergeReValidates(t *testing.T) {
+	_, ctx, emb := newPrinciplesTestRepo(t)
+
+	// First write: valid global principle.
+	r1, err := LearnHandler(emb)(ctx, principleLearnReq("seed", 0.8, []any{"global"}))
+	require.NoError(t, err)
+	require.False(t, r1.IsError, "seed write must succeed: %s", resultText(t, r1))
+
+	// Second write: same canonical text (so it dedup-merges) but scoped to an
+	// area instead of global. Individually valid, but the merge unions the
+	// domains into [global, store] → violates domain-mutually-exclusive.
+	r2, err := LearnHandler(emb)(ctx, principleLearnReq("merge-conflict", 0.9, []any{"store"}))
 	require.NoError(t, err)
 	require.True(t, r2.IsError, "expected dedup-merge to surface a rule violation; got success")
 	text := resultText(t, r2)
 	require.Contains(t, text, "dedup-merge",
 		"error must identify the dedup-merge stage; got %q", text)
-	require.Contains(t, text, "must-be-pragmatic-policy",
+	require.Contains(t, text, "domain-mutually-exclusive",
 		"error must reference the failing rule name; got %q", text)
 }
 

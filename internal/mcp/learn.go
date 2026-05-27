@@ -263,6 +263,7 @@ func LearnHandler(embedders ...store.BatchEmbedder) func(context.Context, mcpgo.
 				merged = fact.NewFact(match.Path)
 				merged.Title = f.Title
 				merged.Body = f.Body
+				merged.Kind = f.Kind
 				merged.Type = f.Type
 				merged.Domain = fact.UnionStrings(f.Domain, existingFact.Domain)
 				merged.Entities = fact.UnionStrings(f.Entities, existingFact.Entities)
@@ -277,6 +278,7 @@ func LearnHandler(embedders ...store.BatchEmbedder) func(context.Context, mcpgo.
 				merged = fact.NewFact(match.Path)
 				merged.Title = existingFact.Title
 				merged.Body = existingFact.Body
+				merged.Kind = existingFact.Kind
 				merged.Type = existingFact.Type
 				merged.Domain = fact.UnionStrings(f.Domain, existingFact.Domain)
 				merged.Entities = fact.UnionStrings(f.Entities, existingFact.Entities)
