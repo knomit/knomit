@@ -7,32 +7,36 @@ import (
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/stretchr/testify/require"
+	gomock "go.uber.org/mock/gomock"
 
 	"knomit/internal/fact"
 	"knomit/internal/repos"
 	"knomit/internal/store"
 )
 
-// stub768Embedder is a deterministic 768-dim embedder for handler tests. It
-// is identical-by-length: any two texts of the same length produce identical
-// vectors (cosine 1.0). Used to drive the dedup path predictably.
-type stub768Embedder struct{}
-
-func (e *stub768Embedder) Embed(text string) ([]float32, error) {
-	out := make([]float32, 768)
-	for i := range 768 {
-		out[i] = float32((len(text)*31+i)%256) / 256.0
+// newLenEmbedder returns a mock BatchEmbedder whose 768-dim vectors depend
+// only on text length, so any two equal-length strings embed identically
+// (cosine 1.0). That determinism is what lets the dedup path be driven
+// predictably. Both methods accept any number of calls.
+func newLenEmbedder(t *testing.T) *MockBatchEmbedder {
+	t.Helper()
+	emb := NewMockBatchEmbedder(gomock.NewController(t))
+	embed := func(text string) ([]float32, error) {
+		out := make([]float32, 768)
+		for i := range out {
+			out[i] = float32((len(text)*31+i)%256) / 256.0
+		}
+		return out, nil
 	}
-	return out, nil
-}
-
-func (e *stub768Embedder) EmbedBatch(texts []string) ([][]float32, error) {
-	out := make([][]float32, len(texts))
-	for i, t := range texts {
-		v, _ := e.Embed(t)
-		out[i] = v
-	}
-	return out, nil
+	emb.EXPECT().Embed(gomock.Any()).DoAndReturn(embed).AnyTimes()
+	emb.EXPECT().EmbedBatch(gomock.Any()).DoAndReturn(func(texts []string) ([][]float32, error) {
+		out := make([][]float32, len(texts))
+		for i, txt := range texts {
+			out[i], _ = embed(txt)
+		}
+		return out, nil
+	}).AnyTimes()
+	return emb
 }
 
 // principlesOntologyYAML is a tiny ontology with one validation rule that
@@ -148,10 +152,11 @@ func TestLearnHandler_DedupMergeReValidates(t *testing.T) {
 	svc, err := store.Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
-	svc.SetEmbedder(&stub768Embedder{})
+
+	emb := newLenEmbedder(t)
+	svc.SetEmbedder(emb)
 	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
 
-	emb := &stub768Embedder{}
 	ri := repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
 		Name:         "test",
 		AgentBranch:  "agent/test",

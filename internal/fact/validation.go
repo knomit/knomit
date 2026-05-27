@@ -97,23 +97,30 @@ func ValidateFact(o *Ontology, topicPath string, f Fact) error {
 	if len(parts) == 0 {
 		return nil
 	}
-	node, ok := o.Topics[strings.ToLower(parts[0])]
+	// Ontology keys are lowercase kebab-case (validateKeys), and the rules
+	// cache is keyed by those same lowercase keys. Lowercase each segment so
+	// the node lookup AND the cache lookup share one canonical key — otherwise
+	// a mixed-case topic path would resolve the node but miss the cache,
+	// silently skipping every rule. Mirrors ValidatePath's case-insensitive walk.
+	top := strings.ToLower(parts[0])
+	node, ok := o.Topics[top]
 	if !ok {
 		return nil // unknown topic — let ValidatePath handle it
 	}
-	if err := runRulesCached(o, parts[0], f); err != nil {
+	if err := runRulesCached(o, top, f); err != nil {
 		return err
 	}
-	prefix := parts[0]
+	prefix := top
 	for _, seg := range parts[1:] {
 		if node == nil || node.Children == nil {
 			break
 		}
-		child, ok := node.Children[strings.ToLower(seg)]
+		segLower := strings.ToLower(seg)
+		child, ok := node.Children[segLower]
 		if !ok {
 			break
 		}
-		prefix = prefix + "/" + seg
+		prefix = prefix + "/" + segLower
 		if err := runRulesCached(o, prefix, f); err != nil {
 			return err
 		}

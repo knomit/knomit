@@ -85,6 +85,37 @@ topics:
 	require.Equal(t, "missing designer", vErr.Message)
 }
 
+// TestValidateFact_MixedCaseTopicStillFiresRules guards against a regression
+// where ValidateFact lowercased topic segments for the ontology NODE lookup
+// but not for the rules-CACHE lookup. A mixed-case topic path (e.g.
+// "Principles/Mission") would resolve the node yet miss the lowercase-keyed
+// cache, silently skipping every validation rule. Rules must fire regardless
+// of the casing of the supplied topic path.
+func TestValidateFact_MixedCaseTopicStillFiresRules(t *testing.T) {
+	const y = `
+id: t
+name: T
+topics:
+  principles:
+    description: x
+    validations:
+      - name: must-have-designer
+        message: missing designer
+        rule: "fact.entities.includes('designer')"
+`
+	o, err := ParseOntology([]byte(y))
+	require.NoError(t, err)
+
+	bad := Fact{Entities: []string{"agent"}}
+	for _, topicPath := range []string{"Principles/mission", "PRINCIPLES/MISSION", "principles/Mission"} {
+		err := ValidateFact(o, topicPath, bad)
+		require.Error(t, err, "rule should fire for mixed-case topic %q", topicPath)
+		var vErr *ValidationError
+		require.ErrorAs(t, err, &vErr)
+		require.Equal(t, "must-have-designer", vErr.RuleName)
+	}
+}
+
 func TestValidateFact_NoRulesForTopic(t *testing.T) {
 	const y = `
 id: t
