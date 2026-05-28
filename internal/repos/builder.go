@@ -1,6 +1,7 @@
 package repos
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -95,6 +96,46 @@ func (b *repoBuilder) loadOntology() {
 		b.ontology = fact.DefaultOntology()
 		return
 	}
+
+	// Boot-time refresh: if the stored ontology is preset-derived (matches an
+	// embedded preset by id) AND is a strict subset of that preset, the repo
+	// was initialized against an older preset and is now lagging — upgrade
+	// it in place. A strict subset guarantees the preset only adds; the user
+	// hasn't diverged with custom topics or rules.
+	//
+	// If the stored ontology has diverged (added own topics/rules), log a
+	// warning so an operator knows an upgrade is available, but leave their
+	// version alone — auto-overwriting custom content would lose work.
+	if preset := fact.EmbeddedPresetByID(ont.ID); preset != nil {
+		if ont.IsSubsetOf(preset) {
+			storedY, sErr := ont.Serialize()
+			presetY, pErr := preset.Serialize()
+			if sErr == nil && pErr == nil && !bytes.Equal(storedY, presetY) {
+				log.Info().
+					Str("repo", b.name).
+					Str("preset_id", ont.ID).
+					Msg("ontology refresh: stored is subset of embedded preset; upgrading to latest")
+				if _, werr := b.svc.Facts().WriteFact(
+					context.Background(),
+					b.agentBranch,
+					"domains/ontology.yaml",
+					string(presetY),
+					fmt.Sprintf("ontology: refresh to embedded %s preset", ont.ID),
+					"updated",
+				); werr != nil {
+					log.Warn().Err(werr).Str("repo", b.name).Msg("ontology refresh: write failed, keeping stored")
+				} else {
+					ont = preset
+				}
+			}
+		} else {
+			log.Warn().
+				Str("repo", b.name).
+				Str("preset_id", ont.ID).
+				Msg("ontology refresh: stored has diverged from embedded preset; upgrade skipped")
+		}
+	}
+
 	b.ontology = ont
 }
 

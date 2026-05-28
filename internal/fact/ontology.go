@@ -66,6 +66,92 @@ func OntologyByPreset(name string) (*Ontology, error) {
 	}
 }
 
+// EmbeddedPresetByID returns the embedded preset whose ontology id matches
+// the given id, or nil if no preset matches. Used by boot-time refresh to
+// determine whether a stored ontology is derived from a known preset and
+// therefore a candidate for auto-upgrade.
+func EmbeddedPresetByID(id string) *Ontology {
+	switch id {
+	case "general":
+		return DefaultOntology()
+	case "source-code":
+		return CodeOntology()
+	default:
+		return nil
+	}
+}
+
+// IsSubsetOf returns true if every topic, child, and Validation in o also
+// appears in other (matched by key/name). Used by boot-time refresh to
+// decide whether upgrading to a newer embedded preset is safe — if the
+// stored ontology is a strict subset, the preset can only add, never break.
+//
+// Validations are matched by Name only — rule body and message differences
+// don't block an upgrade (this is how a preset would deliver bug fixes to
+// existing rules).
+func (o *Ontology) IsSubsetOf(other *Ontology) bool {
+	if o == nil || other == nil {
+		return false
+	}
+	// Root-level validations: every name in o must exist in other.
+	if !validationsSubset(o.Validations, other.Validations) {
+		return false
+	}
+	// Every topic in o must exist in other, recursively.
+	for key, node := range o.Topics {
+		otherNode, ok := other.Topics[key]
+		if !ok {
+			return false
+		}
+		if !nodeIsSubsetOf(node, otherNode) {
+			return false
+		}
+	}
+	return true
+}
+
+// nodeIsSubsetOf returns true if every Validation and child in n also
+// appears in other.
+func nodeIsSubsetOf(n, other *OntologyNode) bool {
+	if n == nil {
+		return true
+	}
+	if other == nil {
+		return false
+	}
+	if !validationsSubset(n.Validations, other.Validations) {
+		return false
+	}
+	for key, child := range n.Children {
+		otherChild, ok := other.Children[key]
+		if !ok {
+			return false
+		}
+		if !nodeIsSubsetOf(child, otherChild) {
+			return false
+		}
+	}
+	return true
+}
+
+// validationsSubset returns true if every Validation Name in a appears as a
+// Validation Name in b. Rule body and Message are not compared.
+func validationsSubset(a, b []Validation) bool {
+	if len(a) == 0 {
+		return true
+	}
+	names := make(map[string]struct{}, len(b))
+	for _, v := range b {
+		names[v.Name] = struct{}{}
+	}
+	for _, v := range a {
+		if _, ok := names[v.Name]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
 // Ontology defines a hierarchical taxonomy for organizing knowledge.
 type Ontology struct {
 	ID          string                   `yaml:"id"`
