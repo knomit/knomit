@@ -165,6 +165,11 @@ func LearnHandler(embedders ...store.BatchEmbedder) func(context.Context, mcpgo.
 			f.Sources = fi.Sources
 			f.Entities = entities
 			f.Refs = refs
+			if ontology != nil {
+				if err := fact.ValidateFact(ontology, topicCategory, f); err != nil {
+					return mcpgo.NewToolResultError(fmt.Sprintf("fact %d: %v", i, err)), nil
+				}
+			}
 			facts[i] = f
 			serialized, err := fact.SerializeFact(f)
 			if err != nil {
