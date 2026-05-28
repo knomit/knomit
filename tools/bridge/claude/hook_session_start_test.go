@@ -61,3 +61,53 @@ func TestSessionStart_EmitsGlobalPrinciples(t *testing.T) {
 	require.Contains(t, got, "philosophy/historical-graph")
 	require.Contains(t, got, "ux/agent-voice")
 }
+
+// TestSessionStart_EmitsAvailableOnDemandTOC asserts that after the
+// PROJECT PRINCIPLES block, the hook emits an "AVAILABLE ON DEMAND" line
+// summarizing per-area fact counts grouped by the SECOND path segment
+// under kb/. Global principles (kb/principles/* with domain=global) are
+// excluded from the TOC because they're already rendered above; scoped
+// principles (no global domain) ARE included, grouped by bucket (e.g.
+// "anti-patterns"). Areas are listed alphabetically.
+func TestSessionStart_EmitsAvailableOnDemandTOC(t *testing.T) {
+	dir := t.TempDir()
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/repos/", func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.Contains(r.URL.Path, "/facts"):
+			w.Header().Set("Content-Type", "application/hal+json")
+			w.Write([]byte(`{"_embedded":{"facts":[
+				{"path":"kb/invariants/store/a.md","title":"store a","domain":["store"],"entities":[]},
+				{"path":"kb/invariants/store/b.md","title":"store b","domain":["store"],"entities":[]},
+				{"path":"kb/invariants/ui/c.md","title":"ui c","domain":["ui"],"entities":[]},
+				{"path":"kb/principles/anti-patterns/bridge/d.md","title":"bridge anti-pattern","domain":["bridge"],"entities":["designer"]},
+				{"path":"kb/decisions/mcp/e.md","title":"mcp decision","domain":["mcp"],"entities":[]}
+			]}}`))
+		default:
+			w.Write([]byte(`{"agent_branch":"machine/test"}`))
+		}
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	t.Setenv("KNOMIT_BASE_URL", srv.URL)
+
+	payload := map[string]interface{}{
+		"cwd":             dir,
+		"session_id":      "s1",
+		"transcript_path": "/tmp/nope.jsonl",
+	}
+	data, _ := json.Marshal(payload)
+
+	var out bytes.Buffer
+	require.NoError(t, hookSessionStart(bytes.NewReader(data), &out))
+
+	got := out.String()
+	require.Contains(t, got, "AVAILABLE ON DEMAND (use /knomit-recall <area>):")
+	// Per-area counts (alphabetical order enforced by helper, but assert
+	// substring presence so reordering individual entries is harmless).
+	require.Contains(t, got, "anti-patterns (1)")
+	require.Contains(t, got, "mcp (1)")
+	require.Contains(t, got, "store (2)")
+	require.Contains(t, got, "ui (1)")
+}
