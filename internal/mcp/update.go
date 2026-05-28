@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"path"
+	"strings"
 	"time"
 
 	"knomit/internal/fact"
@@ -66,6 +68,7 @@ func UpdateHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallTo
 		s := storeIndices(ri)
 		agentBranch := ri.AgentBranch()
 		ontologyRoot := ri.OntologyRoot()
+		ontology := ri.Ontology()
 
 		// 1. Get arguments.
 		file := req.GetString("file", "")
@@ -136,7 +139,18 @@ func UpdateHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallTo
 			fact.Refs = append(fact.Refs, updates.Refs...)
 		}
 
-		// 7. Write updated fact.
+		// 7. Validate the assembled fact against the ontology's rules.
+		// Derive topic/category by stripping the ontologyRoot prefix and
+		// the final /<uuid>.md segment from the normalized fact path.
+		if ontology != nil {
+			topicCategory := strings.TrimPrefix(file, ontologyRoot+"/")
+			topicCategory = path.Dir(topicCategory)
+			if err := factpkg.ValidateFact(ontology, topicCategory, fact); err != nil {
+				return mcpgo.NewToolResultError(err.Error()), nil
+			}
+		}
+
+		// 8. Write updated fact.
 		serialized, err := factpkg.SerializeFact(fact)
 		if err != nil {
 			return mcpgo.NewToolResultError(fmt.Sprintf("serialize error: %v", err)), nil
