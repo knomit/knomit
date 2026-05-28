@@ -2,6 +2,7 @@ package fact
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/dop251/goja"
 )
@@ -67,4 +68,76 @@ func evaluateRule(r compiledRule, f Fact) (bool, error) {
 		return false, fmt.Errorf("rule %s: eval: %w", r.Name, err)
 	}
 	return v.ToBoolean(), nil
+}
+
+// ValidationError is returned when a fact fails an ontology validation rule.
+// It carries the rule's name and human-readable message.
+type ValidationError struct {
+	RuleName string
+	Message  string
+	Topic    string
+}
+
+func (e *ValidationError) Error() string {
+	return fmt.Sprintf("validation %q at %s: %s", e.RuleName, e.Topic, e.Message)
+}
+
+// ValidateFact walks the ontology from root → leaf for the given topic path
+// and evaluates every Validation rule encountered. Returns the first failing
+// rule as a *ValidationError. Compilation errors return a plain error.
+func ValidateFact(o *Ontology, topicPath string, f Fact) error {
+	if o == nil {
+		return nil
+	}
+	// Root-level rules first.
+	if err := runRules(o.Validations, "<root>", f); err != nil {
+		return err
+	}
+	parts := strings.Split(topicPath, "/")
+	if len(parts) == 0 {
+		return nil
+	}
+	node, ok := o.Topics[strings.ToLower(parts[0])]
+	if !ok {
+		return nil // unknown topic — let ValidatePath handle it
+	}
+	if err := runRules(node.Validations, parts[0], f); err != nil {
+		return err
+	}
+	prefix := parts[0]
+	for _, seg := range parts[1:] {
+		if node == nil || node.Children == nil {
+			break
+		}
+		child, ok := node.Children[strings.ToLower(seg)]
+		if !ok {
+			break
+		}
+		prefix = prefix + "/" + seg
+		if err := runRules(child.Validations, prefix, f); err != nil {
+			return err
+		}
+		node = child
+	}
+	return nil
+}
+
+func runRules(rules []Validation, topic string, f Fact) error {
+	if len(rules) == 0 {
+		return nil
+	}
+	compiled, err := compileRules(topic, rules)
+	if err != nil {
+		return err
+	}
+	for _, r := range compiled {
+		ok, err := evaluateRule(r, f)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return &ValidationError{RuleName: r.Name, Message: r.Message, Topic: topic}
+		}
+	}
+	return nil
 }

@@ -57,3 +57,64 @@ func TestEvaluateRule_SandboxNoGlobals(t *testing.T) {
 		require.True(t, ok, "sandbox check failed: %s", r.Name)
 	}
 }
+
+func TestValidateFact_RulesAtTopicFire(t *testing.T) {
+	const y = `
+id: t
+name: T
+topics:
+  principles:
+    description: x
+    validations:
+      - name: must-have-designer
+        message: missing designer
+        rule: "fact.entities.includes('designer')"
+`
+	o, err := ParseOntology([]byte(y))
+	require.NoError(t, err)
+
+	good := Fact{Entities: []string{"designer"}}
+	require.NoError(t, ValidateFact(o, "principles/mission", good))
+
+	bad := Fact{Entities: []string{"agent"}}
+	err = ValidateFact(o, "principles/mission", bad)
+	require.Error(t, err)
+	var vErr *ValidationError
+	require.ErrorAs(t, err, &vErr)
+	require.Equal(t, "must-have-designer", vErr.RuleName)
+	require.Equal(t, "missing designer", vErr.Message)
+}
+
+func TestValidateFact_NoRulesForTopic(t *testing.T) {
+	const y = `
+id: t
+name: T
+topics:
+  invariants:
+    description: x
+`
+	o, err := ParseOntology([]byte(y))
+	require.NoError(t, err)
+	require.NoError(t, ValidateFact(o, "invariants/store", Fact{}))
+}
+
+func TestValidateFact_RootRulesFire(t *testing.T) {
+	const y = `
+id: t
+name: T
+validations:
+  - name: kind-set
+    message: "kind is required"
+    rule: "fact.kind !== ''"
+topics:
+  invariants:
+    description: x
+`
+	o, err := ParseOntology([]byte(y))
+	require.NoError(t, err)
+
+	err = ValidateFact(o, "invariants/store", Fact{Kind: ""})
+	require.Error(t, err)
+
+	require.NoError(t, ValidateFact(o, "invariants/store", Fact{Kind: Epistemic}))
+}
