@@ -48,6 +48,8 @@ type recentFactItem struct {
 	Title       string      `json:"title"`
 	Kind        string      `json:"kind,omitempty"` // omitted when epistemic (the default)
 	Type        string      `json:"type,omitempty"`
+	Domain      []string    `json:"domain,omitempty"`
+	Entities    []string    `json:"entities,omitempty"`
 	CommittedAt int64       `json:"committed_at,omitempty"`
 	Operation   string      `json:"operation,omitempty"`
 	Links       hal.LinkMap `json:"_links"`
@@ -186,6 +188,8 @@ func handleHALFactsCollection(b hal.URLBuilder, m *repos.Manager, provider facts
 				Title:       e.Title,
 				Kind:        kind,
 				Type:        e.Type,
+				Domain:      e.Domain,
+				Entities:    e.Entities,
 				CommittedAt: e.CommittedAt,
 				Operation:   e.Operation,
 				Links:       hal.LinkMap{"self": {Href: b.Fact(repoName, a, e.Path)}},

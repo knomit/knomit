@@ -132,6 +132,54 @@ func TestHandleHALFactsCollection_Pagination(t *testing.T) {
 	}
 }
 
+// TestHandleHALFactsCollection_SerializesDomainAndEntities verifies that the
+// HAL endpoint surfaces a fact's domain and entities slices on the wire when
+// the store returns them. The bridge's SessionStart hook filters by these
+// fields client-side; without serialization the bridge silently sees empty
+// arrays and never renders the PROJECT PRINCIPLES block.
+func TestHandleHALFactsCollection_SerializesDomainAndEntities(t *testing.T) {
+	provider := &stubFactsCollectionProvider{
+		entries: []store.RecentFactEntry{
+			{
+				Path:     "kb/policy/p.md",
+				Title:    "Principle",
+				Type:     "policy",
+				Domain:   []string{"global"},
+				Entities: []string{"designer"},
+			},
+		},
+		total: 1,
+	}
+	s := &Server{
+		Manager:                 newTestManagerWithRepos(t, "alpha"),
+		factsCollectionProvider: provider,
+	}
+	r := s.NewAPIRouter()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet,
+		"/repos/alpha/branches/agent:test/facts", nil)
+	r.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code, "body=%s", rec.Body.String())
+
+	var body struct {
+		Embedded struct {
+			Facts []struct {
+				Path     string   `json:"path"`
+				Domain   []string `json:"domain"`
+				Entities []string `json:"entities"`
+			} `json:"facts"`
+		} `json:"_embedded"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	require.Len(t, body.Embedded.Facts, 1)
+	require.Equal(t, []string{"global"}, body.Embedded.Facts[0].Domain,
+		"domain slice must appear in HAL response so the bridge can filter on it")
+	require.Equal(t, []string{"designer"}, body.Embedded.Facts[0].Entities,
+		"entities slice must appear in HAL response so the bridge can filter on it")
+}
+
 // TestHandleHALFactsCollection_KindSerialization covers the read-side
 // surfacing of fact.Kind: pragmatic entries carry "kind":"pragmatic" on
 // the wire while epistemic entries elide the field (mirrors
