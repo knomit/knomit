@@ -72,12 +72,21 @@ type Ontology struct {
 	Name        string                   `yaml:"name"`
 	Description string                   `yaml:"description"`
 	Topics      map[string]*OntologyNode `yaml:"topics"`
+	Validations []Validation             `yaml:"validations,omitempty"`
 }
 
 // OntologyNode is a single node in the ontology tree.
 type OntologyNode struct {
 	Description string                   `yaml:"description"`
 	Children    map[string]*OntologyNode `yaml:"children,omitempty"`
+	Validations []Validation             `yaml:"validations,omitempty"`
+}
+
+// Validation is one ontology-declared rule evaluated against a fact on write.
+type Validation struct {
+	Name    string `yaml:"name"`
+	Message string `yaml:"message"`
+	Rule    string `yaml:"rule"`
 }
 
 // validKeyRe matches lowercase kebab-case identifiers.
