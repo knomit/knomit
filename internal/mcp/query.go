@@ -15,7 +15,7 @@ import (
 // queryTool returns the Tool definition for knomit_query.
 func queryTool() mcpgo.Tool {
 	return mcpgo.NewTool("knomit_query",
-		mcpgo.WithDescription("Search the knowledge base. At least one of text, entities, domain, path, or min_confidence is required."),
+		mcpgo.WithDescription("Search the knowledge base. At least one of text, entities, domain, applies_to, path, or min_confidence is required."),
 		mcpgo.WithString("text",
 			mcpgo.Description("Full-text search query."),
 		),
@@ -25,6 +25,10 @@ func queryTool() mcpgo.Tool {
 		),
 		mcpgo.WithArray("domain",
 			mcpgo.Description("Filter by domain tags."),
+			mcpgo.WithStringItems(),
+		),
+		mcpgo.WithArray("applies_to",
+			mcpgo.Description("Filter by ancestor-or-equal domain match. Use when you want facts whose declared scope INCLUDES one of these areas (e.g. 'store/resolver' surfaces facts scoped to 'store' or 'store/resolver')."),
 			mcpgo.WithStringItems(),
 		),
 		mcpgo.WithString("path",
@@ -51,21 +55,23 @@ func QueryHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToo
 		text := req.GetString("text", "")
 		entities := req.GetStringSlice("entities", nil)
 		domain := req.GetStringSlice("domain", nil)
+		appliesTo := req.GetStringSlice("applies_to", nil)
 		path := req.GetString("path", "")
 		minConfidence := req.GetFloat("min_confidence", 0)
 
 		// Validate at least one filter.
-		if text == "" && len(entities) == 0 && len(domain) == 0 && path == "" && minConfidence == 0 {
-			return mcpgo.NewToolResultError("at least one of text, entities, domain, path, or min_confidence is required"), nil
+		if text == "" && len(entities) == 0 && len(domain) == 0 && len(appliesTo) == 0 && path == "" && minConfidence == 0 {
+			return mcpgo.NewToolResultError("at least one of text, entities, domain, applies_to, path, or min_confidence is required"), nil
 		}
 
 		q := store.SearchOptions{
-			Text:          text,
-			Entities:      entities,
-			Domain:        domain,
-			Path:          path,
-			MinConfidence: minConfidence,
-			Limit:         20,
+			Text:           text,
+			Entities:       entities,
+			Domain:         domain,
+			DomainAncestor: appliesTo,
+			Path:           path,
+			MinConfidence:  minConfidence,
+			Limit:          20,
 		}
 
 		// 4. Search.
