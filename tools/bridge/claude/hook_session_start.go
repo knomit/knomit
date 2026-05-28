@@ -21,15 +21,19 @@ type sessionStartInput struct {
 // from this hook as a system reminder, so we emit plain text (no JSON envelope).
 func hookSessionStart(r io.Reader, w io.Writer) error {
 	var (
-		emitted      bool
-		globalsCount int
-		recentCount  int
-		skipReason   string
+		emitted         bool
+		globalsCount    int
+		invariantsCount int
+		recentCount     int
+		skipReason      string
 	)
 	defer func() {
 		ev := log.Info().Str("event", "session-start").Bool("emitted", emitted)
 		if emitted {
-			ev.Int("globals", globalsCount).Int("recent", recentCount).Msg("hook result")
+			ev.Int("globals", globalsCount).
+				Int("invariants_fallback", invariantsCount).
+				Int("recent", recentCount).
+				Msg("hook result")
 			return
 		}
 		if skipReason != "" {
@@ -59,7 +63,16 @@ func hookSessionStart(r io.Reader, w io.Writer) error {
 	globals := filterGlobalPrinciples(recentWindow, 7)
 	recent := topN(recentWindow, 5)
 
-	if len(globals) == 0 && len(recent) == 0 {
+	// Rollout fallback: until designers seed global principles, surface
+	// the legacy top-5 invariants block so agents don't regress to zero
+	// load-bearing context. Once any global principle exists, this branch
+	// goes dark — the principles block takes over.
+	var invariantsFallback []factSummary
+	if len(globals) == 0 {
+		invariantsFallback = filterByPathPrefix(recentWindow, "kb/invariants/", 5)
+	}
+
+	if len(globals) == 0 && len(invariantsFallback) == 0 && len(recent) == 0 {
 		skipReason = "no_facts"
 		return nil
 	}
@@ -71,6 +84,12 @@ func hookSessionStart(r io.Reader, w io.Writer) error {
 		for _, f := range globals {
 			short := principleShortPath(f.Path)
 			fmt.Fprintf(&sb, "  • %s: %s\n", short, f.Title)
+		}
+		sb.WriteString("\n")
+	} else if len(invariantsFallback) > 0 {
+		sb.WriteString("LOAD-BEARING INVARIANTS:\n")
+		for _, f := range invariantsFallback {
+			fmt.Fprintf(&sb, "  - %s\n    %s\n", f.Title, f.Path)
 		}
 		sb.WriteString("\n")
 	}
@@ -90,6 +109,7 @@ func hookSessionStart(r io.Reader, w io.Writer) error {
 	}
 	emitted = true
 	globalsCount = len(globals)
+	invariantsCount = len(invariantsFallback)
 	recentCount = len(recent)
 	return nil
 }
