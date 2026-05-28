@@ -73,6 +73,46 @@ type Ontology struct {
 	Description string                   `yaml:"description"`
 	Topics      map[string]*OntologyNode `yaml:"topics"`
 	Validations []Validation             `yaml:"validations,omitempty"`
+
+	cache *rulesCacheT
+}
+
+// rulesCacheT memoizes compiled rules per topic path. Populated lazily on
+// first ValidateFact call. The Ontology is treated as immutable after parse
+// so a single sync.Once is enough.
+type rulesCacheT struct {
+	once         sync.Once
+	byTopic      map[string][]compiledRule
+	compileCalls int // test hook
+}
+
+func (o *Ontology) rulesCache() *rulesCacheT {
+	if o.cache == nil {
+		o.cache = &rulesCacheT{}
+	}
+	o.cache.once.Do(func() {
+		o.cache.byTopic = map[string][]compiledRule{}
+		o.cache.compileCalls++
+		if rs, err := compileRules("<root>", o.Validations); err == nil {
+			o.cache.byTopic["<root>"] = rs
+		}
+		var walk func(prefix string, n *OntologyNode)
+		walk = func(prefix string, n *OntologyNode) {
+			if n == nil {
+				return
+			}
+			if rs, err := compileRules(prefix, n.Validations); err == nil {
+				o.cache.byTopic[prefix] = rs
+			}
+			for k, c := range n.Children {
+				walk(prefix+"/"+k, c)
+			}
+		}
+		for k, n := range o.Topics {
+			walk(k, n)
+		}
+	})
+	return o.cache
 }
 
 // OntologyNode is a single node in the ontology tree.

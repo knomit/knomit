@@ -118,3 +118,26 @@ topics:
 
 	require.NoError(t, ValidateFact(o, "invariants/store", Fact{Kind: Epistemic}))
 }
+
+func TestValidateFact_RulesCompiledOncePerOntology(t *testing.T) {
+	const y = `
+id: t
+name: T
+topics:
+  principles:
+    description: x
+    validations:
+      - name: r
+        message: m
+        rule: "fact.entities.length > 0"
+`
+	o, err := ParseOntology([]byte(y))
+	require.NoError(t, err)
+
+	cache := o.rulesCache()
+	for i := 0; i < 5; i++ {
+		err := ValidateFact(o, "principles/m", Fact{Entities: []string{"designer"}})
+		require.NoError(t, err)
+	}
+	require.Equal(t, 1, cache.compileCalls)
+}

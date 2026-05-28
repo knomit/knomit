@@ -90,7 +90,7 @@ func ValidateFact(o *Ontology, topicPath string, f Fact) error {
 		return nil
 	}
 	// Root-level rules first.
-	if err := runRules(o.Validations, "<root>", f); err != nil {
+	if err := runRulesCached(o, "<root>", f); err != nil {
 		return err
 	}
 	parts := strings.Split(topicPath, "/")
@@ -101,7 +101,7 @@ func ValidateFact(o *Ontology, topicPath string, f Fact) error {
 	if !ok {
 		return nil // unknown topic — let ValidatePath handle it
 	}
-	if err := runRules(node.Validations, parts[0], f); err != nil {
+	if err := runRulesCached(o, parts[0], f); err != nil {
 		return err
 	}
 	prefix := parts[0]
@@ -114,7 +114,7 @@ func ValidateFact(o *Ontology, topicPath string, f Fact) error {
 			break
 		}
 		prefix = prefix + "/" + seg
-		if err := runRules(child.Validations, prefix, f); err != nil {
+		if err := runRulesCached(o, prefix, f); err != nil {
 			return err
 		}
 		node = child
@@ -122,15 +122,11 @@ func ValidateFact(o *Ontology, topicPath string, f Fact) error {
 	return nil
 }
 
-func runRules(rules []Validation, topic string, f Fact) error {
-	if len(rules) == 0 {
-		return nil
-	}
-	compiled, err := compileRules(topic, rules)
-	if err != nil {
-		return err
-	}
-	for _, r := range compiled {
+// runRulesCached looks up precompiled rules for `topic` in the ontology
+// cache and evaluates them. Misses are no-ops.
+func runRulesCached(o *Ontology, topic string, f Fact) error {
+	cache := o.rulesCache()
+	for _, r := range cache.byTopic[topic] {
 		ok, err := evaluateRule(r, f)
 		if err != nil {
 			return err
