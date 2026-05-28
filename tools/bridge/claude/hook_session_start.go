@@ -20,15 +20,15 @@ type sessionStartInput struct {
 // from this hook as a system reminder, so we emit plain text (no JSON envelope).
 func hookSessionStart(r io.Reader, w io.Writer) error {
 	var (
-		emitted         bool
-		invariantsCount int
-		recentCount     int
-		skipReason      string
+		emitted      bool
+		globalsCount int
+		recentCount  int
+		skipReason   string
 	)
 	defer func() {
 		ev := log.Info().Str("event", "session-start").Bool("emitted", emitted)
 		if emitted {
-			ev.Int("invariants", invariantsCount).Int("recent", recentCount).Msg("hook result")
+			ev.Int("globals", globalsCount).Int("recent", recentCount).Msg("hook result")
 			return
 		}
 		if skipReason != "" {
@@ -55,20 +55,21 @@ func hookSessionStart(r io.Reader, w io.Writer) error {
 	// fast. Two scoped /facts?topic= calls would also work; the single window
 	// keeps surface area small.
 	recentWindow := fetchFacts(sessionStartFactsURL(repo, branch))
-	invariants := filterByPathPrefix(recentWindow, "kb/invariants/", 5)
+	globals := filterGlobalPrinciples(recentWindow, 7)
 	recent := topN(recentWindow, 5)
 
-	if len(invariants) == 0 && len(recent) == 0 {
+	if len(globals) == 0 && len(recent) == 0 {
 		skipReason = "no_facts"
 		return nil
 	}
 
 	var sb strings.Builder
 	sb.WriteString("Known facts from knomit for this codebase:\n\n")
-	if len(invariants) > 0 {
-		sb.WriteString("LOAD-BEARING INVARIANTS:\n")
-		for _, f := range invariants {
-			fmt.Fprintf(&sb, "  - %s\n    %s\n", f.Title, f.Path)
+	if len(globals) > 0 {
+		sb.WriteString("PROJECT PRINCIPLES:\n")
+		for _, f := range globals {
+			short := principleShortPath(f.Path)
+			fmt.Fprintf(&sb, "  • %s: %s\n", short, f.Title)
 		}
 		sb.WriteString("\n")
 	}
@@ -82,7 +83,7 @@ func hookSessionStart(r io.Reader, w io.Writer) error {
 		return err
 	}
 	emitted = true
-	invariantsCount = len(invariants)
+	globalsCount = len(globals)
 	recentCount = len(recent)
 	return nil
 }
@@ -91,6 +92,7 @@ type factSummary struct {
 	Path     string   `json:"path"`
 	Title    string   `json:"title"`
 	Entities []string `json:"entities"`
+	Domain   []string `json:"domain"`
 }
 
 // sessionStartFactsURL builds the recent-facts URL the session-start hook
@@ -126,6 +128,55 @@ func fetchFacts(u string) []factSummary {
 		return nil
 	}
 	return body.Embedded.Facts
+}
+
+// filterGlobalPrinciples returns facts under kb/principles/ whose Entities
+// contain "designer" and Domain contains "global", up to max. The two-axis
+// filter is what makes a principle "global": designer-authored AND scoped
+// project-wide rather than to a single subarea.
+func filterGlobalPrinciples(facts []factSummary, max int) []factSummary {
+	out := make([]factSummary, 0, max)
+	for _, f := range facts {
+		if !strings.HasPrefix(f.Path, "kb/principles/") {
+			continue
+		}
+		if !containsString(f.Entities, "designer") {
+			continue
+		}
+		if !containsString(f.Domain, "global") {
+			continue
+		}
+		out = append(out, f)
+		if len(out) >= max {
+			break
+		}
+	}
+	return out
+}
+
+func containsString(xs []string, target string) bool {
+	for _, x := range xs {
+		if x == target {
+			return true
+		}
+	}
+	return false
+}
+
+// principleShortPath returns "<bucket>/<slug>" from a fact path like
+// "kb/principles/<bucket>/<slug>/<uuid>.md". Falls back to the raw path
+// on shape mismatch.
+func principleShortPath(p string) string {
+	const prefix = "kb/principles/"
+	if !strings.HasPrefix(p, prefix) {
+		return p
+	}
+	rest := strings.TrimPrefix(p, prefix)
+	parts := strings.Split(rest, "/")
+	if len(parts) < 2 {
+		return rest
+	}
+	return parts[0] + "/" + parts[1]
 }
 
 func filterByPathPrefix(facts []factSummary, prefix string, max int) []factSummary {
