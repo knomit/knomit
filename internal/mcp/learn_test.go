@@ -13,6 +13,28 @@ import (
 	"knomit/internal/store"
 )
 
+// stub768Embedder is a deterministic 768-dim embedder for handler tests. It
+// is identical-by-length: any two texts of the same length produce identical
+// vectors (cosine 1.0). Used to drive the dedup path predictably.
+type stub768Embedder struct{}
+
+func (e *stub768Embedder) Embed(text string) ([]float32, error) {
+	out := make([]float32, 768)
+	for i := range 768 {
+		out[i] = float32((len(text)*31+i)%256) / 256.0
+	}
+	return out, nil
+}
+
+func (e *stub768Embedder) EmbedBatch(texts []string) ([][]float32, error) {
+	out := make([][]float32, len(texts))
+	for i, t := range texts {
+		v, _ := e.Embed(t)
+		out[i] = v
+	}
+	return out, nil
+}
+
 // principlesOntologyYAML is a tiny ontology with one validation rule that
 // enforces 'designer' must be present in fact.entities. It is reused by the
 // two validation tests below.
@@ -103,6 +125,101 @@ func TestLearnHandler_RejectsFailingValidation(t *testing.T) {
 		"error must reference the rule name; got %q", text)
 	require.Contains(t, text, "/knomit-principle",
 		"error must include the rule's message; got %q", text)
+}
+
+// TestLearnHandler_DedupMergeReValidates regresses the gap where a dedup
+// merge could produce a fact that violates ontology rules. Without the
+// re-validate step, a violation only surfaces later as an opaque
+// serialize/write error.
+//
+// Setup uses the real CodeOntology principles topic. First write is a
+// valid principle. Second write uses the same title+body (so dedup
+// similarity is 1.0 with the stub embedder, hitting the merge branch)
+// and is itself a valid principle — but the merge logic (see learn.go,
+// "New fact wins" branch) does not copy Kind onto merged, so the merged
+// fact violates must-be-pragmatic-policy. The handler must surface that
+// failure with the rule name, attributed to the dedup-merge stage.
+//
+// Note: the Kind-not-copied behavior in the merge branch is itself a
+// pre-existing latent bug. This test asserts the surfacing behavior; the
+// underlying merge bug is out of scope for this follow-up.
+func TestLearnHandler_DedupMergeReValidates(t *testing.T) {
+	dir := t.TempDir()
+	svc, err := store.Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = svc.Close() })
+	svc.SetEmbedder(&stub768Embedder{})
+	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+
+	emb := &stub768Embedder{}
+	ri := repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
+		Name:         "test",
+		AgentBranch:  "agent/test",
+		Svc:          svc,
+		Ontology:     fact.CodeOntology(),
+		OntologyRoot: "kb",
+		Embedder:     emb,
+	})
+	ctx := repos.WithRepoInstance(context.Background(), ri)
+
+	const title = "Test Principle"
+	const body = "designer authored this principle."
+
+	// First write: valid principle.
+	var first mcpgo.CallToolRequest
+	first.Params.Arguments = map[string]any{
+		"moment_name": "seed",
+		"facts": []any{
+			map[string]any{
+				"topic":      "principles",
+				"category":   "mission/foo",
+				"title":      title,
+				"body":       body,
+				"kind":       "pragmatic",
+				"type":       "policy",
+				"domain":     []any{"global"},
+				"confidence": 0.8,
+				"sources":    1,
+				"entities":   []any{"designer"},
+				"refs":       []any{},
+			},
+		},
+	}
+	r1, err := LearnHandler(emb)(ctx, first)
+	require.NoError(t, err)
+	require.False(t, r1.IsError, "seed write must succeed: %s", resultText(t, r1))
+
+	// Second write: same canonical text → dedup matches with similarity 1.0,
+	// new-fact-wins branch (confidence 0.9 > 0.8). The merge produces a
+	// fact whose Kind is unset (separate latent bug), so the merged fact
+	// violates must-be-pragmatic-policy. Pre-merge ValidateFact passed.
+	var second mcpgo.CallToolRequest
+	second.Params.Arguments = map[string]any{
+		"moment_name": "merge-conflict",
+		"facts": []any{
+			map[string]any{
+				"topic":      "principles",
+				"category":   "mission/foo",
+				"title":      title,
+				"body":       body,
+				"kind":       "pragmatic",
+				"type":       "policy",
+				"domain":     []any{"global"},
+				"confidence": 0.9, // higher → new fact wins the merge
+				"sources":    1,
+				"entities":   []any{"designer"},
+				"refs":       []any{},
+			},
+		},
+	}
+	r2, err := LearnHandler(emb)(ctx, second)
+	require.NoError(t, err)
+	require.True(t, r2.IsError, "expected dedup-merge to surface a rule violation; got success")
+	text := resultText(t, r2)
+	require.Contains(t, text, "dedup-merge",
+		"error must identify the dedup-merge stage; got %q", text)
+	require.Contains(t, text, "must-be-pragmatic-policy",
+		"error must reference the failing rule name; got %q", text)
 }
 
 // TestLearnHandler_AcceptsValidFact seeds the same ontology and writes a
