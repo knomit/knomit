@@ -134,10 +134,26 @@ topics:
 	o, err := ParseOntology([]byte(y))
 	require.NoError(t, err)
 
-	cache := o.rulesCache()
 	for i := 0; i < 5; i++ {
 		err := ValidateFact(o, "principles/m", Fact{Entities: []string{"designer"}})
 		require.NoError(t, err)
 	}
-	require.Equal(t, 1, cache.compileCalls)
+	require.Equal(t, 1, o.cache.compileCalls)
+}
+
+func TestParseOntology_BadRuleJSFailsLoudly(t *testing.T) {
+	const y = `
+id: t
+name: T
+topics:
+  principles:
+    description: x
+    validations:
+      - name: bad
+        message: m
+        rule: "this is not js {{"
+`
+	_, err := ParseOntology([]byte(y))
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "bad")
 }

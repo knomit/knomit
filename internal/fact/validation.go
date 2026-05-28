@@ -125,8 +125,7 @@ func ValidateFact(o *Ontology, topicPath string, f Fact) error {
 // runRulesCached looks up precompiled rules for `topic` in the ontology
 // cache and evaluates them. Misses are no-ops.
 func runRulesCached(o *Ontology, topic string, f Fact) error {
-	cache := o.rulesCache()
-	for _, r := range cache.byTopic[topic] {
+	for _, r := range o.cache.byTopic[topic] {
 		ok, err := evaluateRule(r, f)
 		if err != nil {
 			return err

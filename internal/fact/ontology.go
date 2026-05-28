@@ -74,45 +74,54 @@ type Ontology struct {
 	Topics      map[string]*OntologyNode `yaml:"topics"`
 	Validations []Validation             `yaml:"validations,omitempty"`
 
-	cache *rulesCacheT
+	cache compiledRulesCache
 }
 
-// rulesCacheT memoizes compiled rules per topic path. Populated lazily on
-// first ValidateFact call. The Ontology is treated as immutable after parse
-// so a single sync.Once is enough.
-type rulesCacheT struct {
-	once         sync.Once
+// compiledRulesCache holds compiled rules keyed by topic path. Built once
+// at ParseOntology time; safe for concurrent reads thereafter.
+type compiledRulesCache struct {
 	byTopic      map[string][]compiledRule
-	compileCalls int // test hook
+	compileCalls int // test hook — incremented once at build time
 }
 
-func (o *Ontology) rulesCache() *rulesCacheT {
-	if o.cache == nil {
-		o.cache = &rulesCacheT{}
+// buildRulesCache compiles every Validation rule in the ontology (root +
+// every node) and stores the result in o.cache. Called once at parse time.
+// Returns an error if any rule fails to compile.
+func (o *Ontology) buildRulesCache() error {
+	o.cache = compiledRulesCache{
+		byTopic: map[string][]compiledRule{},
 	}
-	o.cache.once.Do(func() {
-		o.cache.byTopic = map[string][]compiledRule{}
-		o.cache.compileCalls++
-		if rs, err := compileRules("<root>", o.Validations); err == nil {
-			o.cache.byTopic["<root>"] = rs
+	o.cache.compileCalls++
+
+	if rs, err := compileRules("<root>", o.Validations); err != nil {
+		return err
+	} else if len(rs) > 0 {
+		o.cache.byTopic["<root>"] = rs
+	}
+
+	var walk func(prefix string, n *OntologyNode) error
+	walk = func(prefix string, n *OntologyNode) error {
+		if n == nil {
+			return nil
 		}
-		var walk func(prefix string, n *OntologyNode)
-		walk = func(prefix string, n *OntologyNode) {
-			if n == nil {
-				return
-			}
-			if rs, err := compileRules(prefix, n.Validations); err == nil {
-				o.cache.byTopic[prefix] = rs
-			}
-			for k, c := range n.Children {
-				walk(prefix+"/"+k, c)
+		if rs, err := compileRules(prefix, n.Validations); err != nil {
+			return err
+		} else if len(rs) > 0 {
+			o.cache.byTopic[prefix] = rs
+		}
+		for k, c := range n.Children {
+			if err := walk(prefix+"/"+k, c); err != nil {
+				return err
 			}
 		}
-		for k, n := range o.Topics {
-			walk(k, n)
+		return nil
+	}
+	for k, n := range o.Topics {
+		if err := walk(k, n); err != nil {
+			return err
 		}
-	})
-	return o.cache
+	}
+	return nil
 }
 
 // OntologyNode is a single node in the ontology tree.
@@ -156,6 +165,9 @@ func ParseOntology(data []byte) (*Ontology, error) {
 				return nil, err
 			}
 		}
+	}
+	if err := o.buildRulesCache(); err != nil {
+		return nil, err
 	}
 	return &o, nil
 }
