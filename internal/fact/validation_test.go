@@ -24,3 +24,36 @@ func TestCompileRules_BadJS(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "bad")
 }
+
+func TestEvaluateRule_PassFail(t *testing.T) {
+	rules, err := compileRules("p", []Validation{
+		{Name: "designer", Message: "missing designer", Rule: "fact.entities.includes('designer')"},
+	})
+	require.NoError(t, err)
+
+	pass := Fact{Entities: []string{"designer"}}
+	ok, err := evaluateRule(rules[0], pass)
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	fail := Fact{Entities: []string{"agent"}}
+	ok, err = evaluateRule(rules[0], fail)
+	require.NoError(t, err)
+	require.False(t, ok)
+}
+
+func TestEvaluateRule_SandboxNoGlobals(t *testing.T) {
+	// process, require, globalThis, etc. should be undefined inside the rule.
+	rules, err := compileRules("p", []Validation{
+		{Name: "no-process", Message: "x", Rule: "typeof process === 'undefined'"},
+		{Name: "no-globalThis-keys", Message: "x", Rule: "typeof globalThis === 'undefined' || Object.keys(globalThis).length === 0"},
+	})
+	require.NoError(t, err)
+
+	f := Fact{Entities: []string{"designer"}}
+	for _, r := range rules {
+		ok, err := evaluateRule(r, f)
+		require.NoError(t, err, r.Name)
+		require.True(t, ok, "sandbox check failed: %s", r.Name)
+	}
+}

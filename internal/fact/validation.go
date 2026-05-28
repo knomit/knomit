@@ -27,3 +27,44 @@ func compileRules(topic string, rules []Validation) ([]compiledRule, error) {
 	}
 	return out, nil
 }
+
+// factToJS converts a Fact into a plain map suitable for read-only JS access.
+// Only fields a rule might branch on are exposed.
+func factToJS(f Fact) map[string]any {
+	return map[string]any{
+		"kind":       string(f.Kind),
+		"type":       string(f.Type),
+		"domain":     append([]string{}, f.Domain...),
+		"entities":   append([]string{}, f.Entities...),
+		"refs":       append([]string{}, f.Refs...),
+		"title":      f.Title,
+		"body":       f.Body,
+		"path":       f.Path(),
+		"confidence": f.Confidence,
+	}
+}
+
+// evaluateRule runs one compiled rule against a fact. Returns (pass, err).
+// A fresh goja Runtime is used per evaluation: the cost is small (μs per
+// rule) and it guarantees no state leaks between evaluations.
+func evaluateRule(r compiledRule, f Fact) (bool, error) {
+	vm := goja.New()
+	// Sandbox: remove Node-flavored hooks if any are accidentally present.
+	// Goja exposes a JS standard library (Array, String, JSON, etc.) which
+	// is fine — those are pure.
+	_ = vm.GlobalObject().Delete("process")
+	_ = vm.GlobalObject().Delete("require")
+
+	// Bind `fact` as a non-enumerable, non-writable, non-configurable global
+	// so the rule sees it but Object.keys(globalThis) stays empty. This keeps
+	// the sandbox observably minimal: rules can't enumerate what's available.
+	factVal := vm.ToValue(factToJS(f))
+	if err := vm.GlobalObject().DefineDataProperty("fact", factVal, goja.FLAG_FALSE, goja.FLAG_FALSE, goja.FLAG_FALSE); err != nil {
+		return false, fmt.Errorf("rule %s: bind fact: %w", r.Name, err)
+	}
+	v, err := vm.RunProgram(r.Program)
+	if err != nil {
+		return false, fmt.Errorf("rule %s: eval: %w", r.Name, err)
+	}
+	return v.ToBoolean(), nil
+}
