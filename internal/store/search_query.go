@@ -208,10 +208,16 @@ func (si *searchIndex) LastCommitForPath(ctx context.Context, branch, path strin
 // QueryByPath, MinSimilarity, GraphHops) are inert when passed to RecentFacts.
 // Pagination (Offset) is only consulted by RecentFacts.
 type SearchOptions struct {
-	Text          string
-	Entities      []string
-	Domain        []string
-	Path          string
+	Text     string
+	Entities []string
+	// Domain matches descendant-or-equal: query "store" finds facts with
+	// domain "store", "store/resolver", "store/cache", ...
+	Domain []string
+	// DomainAncestor matches ancestor-or-equal: query "store/resolver" finds
+	// facts with domain "store/resolver", "store", ... (any path ancestor).
+	// Used by principles-style "what scopes apply to this subarea?" lookups.
+	DomainAncestor []string
+	Path           string
 	MinConfidence float64
 	MinSimilarity float64   // cosine similarity threshold (0–1); 0 uses default 0.40
 	Limit         int
@@ -306,6 +312,15 @@ func newFactFilter(q SearchOptions) *factFilter {
 		f.add(
 			" AND EXISTS (SELECT 1 FROM fact_domains WHERE fact_id = f.id AND (domain = ? OR domain LIKE ?))",
 			d, d+"/%",
+		)
+	}
+	for _, d := range q.DomainAncestor {
+		// Ancestor-or-equal match: the fact's domain is either exactly the
+		// query, or a prefix of it (so the query path starts with the fact's
+		// domain followed by '/').
+		f.add(
+			" AND EXISTS (SELECT 1 FROM fact_domains WHERE fact_id = f.id AND (domain = ? OR ? LIKE domain || '/%'))",
+			d, d,
 		)
 	}
 	return f
