@@ -39,17 +39,19 @@ Call `mcp__knomit__knomit_query` with:
 
 - `text`: the user-supplied topic (or your own one-line summary of the area)
 - `entities`: any file paths currently open or about to be edited
+- `applies_to`: the area path the work targets (e.g. `store/resolver`). Derive from an explicit user-supplied path, OR from the dominant directory among open files. Omit if uncertain; text/entities matching still works.
 
-**Empty result?** Note "no prior facts in this area — proceeding" and continue. Empty results are common in unfamiliar areas; not a blocker.
+**Empty result?** Note "no prior facts in this area — proceeding" and continue. Empty results are common in unfamiliar areas; not a blocker. When `applies_to` is set, missing matches mean no designer principle applies at this scope — proceed with text/entity results as today.
 
 When the query returns facts, do BOTH steps below. Skipping step 2 means you're trusting facts that may be stale — corpus facts can lag HEAD.
 
 ### Step 1 — Read in priority order
 
-1. **Invariants first** (`kb/invariants/`) — load-bearing rules. Violating one breaks the system; if your design needs to, STOP and confirm with the user.
-2. **Decisions** (`kb/decisions/`) — the *why* behind current shape. Most enhancement ideas are already considered here.
-3. **Conventions** — house style for the area.
-4. **Scan all bodies for "anti-pattern:"** — cheapest design constraint you'll find.
+1. **Principles first** (`kb/principles/`) — designer intent. Scoped principles are the *first* thing to read in an area; they trump tactical rules. Skip any fact whose `domain` contains `global` — those are already in SessionStart context.
+2. **Invariants** (`kb/invariants/`) — load-bearing rules. Violating one breaks the system; if your design needs to, STOP and confirm with the user.
+3. **Decisions** (`kb/decisions/`) — the *why* behind current shape.
+4. **Conventions** — house style for the area.
+5. **Scan all bodies for "anti-pattern:"** — cheapest design constraint you'll find.
 
 ### Step 2 — Verify the load-bearing claims
 
