@@ -67,3 +67,27 @@ topics:
         description: Methodology facts from knomit_review/hypothesize
       ontology:
         description: Notes about how this ontology is used
+  principles:
+    description: Designer-authored intent — mission, philosophy, anti-patterns, UX taste
+    validations:
+      - name: must-have-designer-entity
+        message: "principles must be authored via /knomit-principle (entities must include 'designer')"
+        rule: "fact.entities.includes('designer')"
+      - name: must-be-pragmatic-policy
+        message: "principles must declare kind=pragmatic and type=policy"
+        rule: "fact.kind === 'pragmatic' && fact.type === 'policy'"
+      - name: domain-mutually-exclusive
+        message: "domain must be either ['global'] or an area path, never both"
+        rule: "!(fact.domain.includes('global') && fact.domain.length > 1)"
+      - name: domain-non-empty
+        message: "domain is required"
+        rule: "fact.domain.length > 0"
+    children:
+      mission:
+        description: What knomit exists to solve, who it's for
+      philosophy:
+        description: Mental-model rules that span subsystems
+      anti-patterns:
+        description: Choices the designer rejects
+      ux:
+        description: Interaction taste, voice, pacing

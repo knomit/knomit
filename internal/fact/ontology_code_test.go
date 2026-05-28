@@ -1,6 +1,10 @@
 package fact
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/stretchr/testify/require"
+)
 
 func TestCodeOntology_LoadsAndValidatesCanonicalPaths(t *testing.T) {
 	o := CodeOntology()
@@ -28,6 +32,28 @@ func TestCodeOntology_RejectsUnknownTopLevel(t *testing.T) {
 	if err := o.ValidatePath("bogus/path"); err == nil {
 		t.Fatal("ValidatePath(bogus/path) = nil, want error")
 	}
+}
+
+func TestCodeOntology_HasPrinciplesTopicAndRules(t *testing.T) {
+	o := CodeOntology()
+	require.NotNil(t, o)
+	p, ok := o.Topics["principles"]
+	require.True(t, ok, "principles topic missing")
+	require.NotNil(t, p)
+	for _, b := range []string{"mission", "philosophy", "anti-patterns", "ux"} {
+		_, ok := p.Children[b]
+		require.True(t, ok, "child bucket %q missing", b)
+	}
+	names := make([]string, 0, len(p.Validations))
+	for _, v := range p.Validations {
+		names = append(names, v.Name)
+	}
+	require.ElementsMatch(t, []string{
+		"must-have-designer-entity",
+		"must-be-pragmatic-policy",
+		"domain-mutually-exclusive",
+		"domain-non-empty",
+	}, names)
 }
 
 func TestOntologyByPreset(t *testing.T) {
