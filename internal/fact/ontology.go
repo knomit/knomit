@@ -220,6 +220,9 @@ func (o *Ontology) Serialize() ([]byte, error) {
 	if o.Description != "" {
 		addScalar(root, "description", o.Description)
 	}
+	if len(o.Validations) > 0 {
+		serializeValidations(root, o.Validations)
+	}
 
 	topicsKey := &yaml.Node{Kind: yaml.ScalarNode, Value: "topics"}
 	topicsVal := &yaml.Node{Kind: yaml.MappingNode}
@@ -248,6 +251,10 @@ func serializeNode(parent *yaml.Node, key string, node *OntologyNode) {
 
 	addScalar(valNode, "description", node.Description)
 
+	if len(node.Validations) > 0 {
+		serializeValidations(valNode, node.Validations)
+	}
+
 	if len(node.Children) > 0 {
 		childKey := &yaml.Node{Kind: yaml.ScalarNode, Value: "children"}
 		childVal := &yaml.Node{Kind: yaml.MappingNode}
@@ -255,6 +262,22 @@ func serializeNode(parent *yaml.Node, key string, node *OntologyNode) {
 		for _, ck := range sortedKeys(node.Children) {
 			serializeNode(childVal, ck, node.Children[ck])
 		}
+	}
+}
+
+func serializeValidations(parent *yaml.Node, vs []Validation) {
+	if len(vs) == 0 {
+		return
+	}
+	key := &yaml.Node{Kind: yaml.ScalarNode, Value: "validations"}
+	seq := &yaml.Node{Kind: yaml.SequenceNode}
+	parent.Content = append(parent.Content, key, seq)
+	for _, v := range vs {
+		item := &yaml.Node{Kind: yaml.MappingNode}
+		addScalar(item, "name", v.Name)
+		addScalar(item, "message", v.Message)
+		addScalar(item, "rule", v.Rule)
+		seq.Content = append(seq.Content, item)
 	}
 }
 
