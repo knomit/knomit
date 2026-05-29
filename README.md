@@ -257,7 +257,7 @@ refs:
 Alice prefers rock music over jazz.
 ```
 
-The `type` field classifies the kind of knowledge: `observation` (default), `concept`, `process`, `principle`, `pattern`, `reference`, `synthesis`, `hypothesis`, or `methodology`.
+The `type` field classifies the kind of knowledge: `observation` (default), `concept`, `process`, `principle`, `pattern`, `reference`, `synthesis`, `insight`, `hypothesis`, or `methodology`.
 
 The directory tree under the ontology root (`kb/` by default) forms an ontological hierarchy. Facts placed at higher levels apply to everything below them — a fact at `kb/geography/` is inherited by `kb/geography/europe/uk/london/`.
 

@@ -39,6 +39,7 @@ export const typeStyles: Record<string, { color: string; bg: string; label: stri
   pattern:      { color: '#c8f', bg: '#2a1a2e', label: 'pattern',      icon: '⬡' },
   reference:    { color: '#888', bg: '#222',    label: 'reference',    icon: '▤' },
   synthesis:    { color: '#fa0', bg: '#2e2a1a', label: 'synthesis',    icon: '◆' },
+  insight:      { color: '#ffcc33', bg: '#2e2814', label: 'insight',  icon: '✸' },
   hypothesis:   { color: '#f8a', bg: '#2e1a2a', label: 'hypothesis',  icon: '?' },
   methodology:  { color: '#af8', bg: '#1a2e2a', label: 'methodology', icon: '⚙' },
   // Pragmatic (prescriptive — "what to do")

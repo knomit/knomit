@@ -34,7 +34,7 @@ func updateTool() mcpgo.Tool {
 				"title":      map[string]any{"type": "string", "description": "New title."},
 				"body":       map[string]any{"type": "string", "description": "New body text."},
 				"kind":       map[string]any{"type": "string", "description": "Classification family — epistemic (descriptive) or pragmatic (prescriptive). Changing kind also requires a compatible type.", "enum": []string{"epistemic", "pragmatic"}},
-				"type":       map[string]any{"type": "string", "description": "Leaf type. Epistemic: observation, concept, process, principle, pattern, reference, synthesis, hypothesis, methodology. Pragmatic: policy, heuristic."},
+				"type":       map[string]any{"type": "string", "description": "Leaf type. Epistemic: observation, concept, process, principle, pattern, reference, synthesis, insight, hypothesis, methodology. Pragmatic: policy, heuristic."},
 				"confidence": map[string]any{"type": "number", "description": "Certainty level 0.0–1.0."},
 				"sources":    map[string]any{"type": "integer", "description": "Number of independent sources."},
 				"domain":     map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Replaces domain tags."},

@@ -66,8 +66,8 @@ describe('opStyles', () => {
 });
 
 describe('typeStyles', () => {
-  it('has entries for all 9 epistemic types', () => {
-    const expectedTypes = ['observation', 'concept', 'process', 'principle', 'pattern', 'reference', 'synthesis', 'hypothesis', 'methodology'];
+  it('has entries for all 10 epistemic types', () => {
+    const expectedTypes = ['observation', 'concept', 'process', 'principle', 'pattern', 'reference', 'synthesis', 'insight', 'hypothesis', 'methodology'];
     for (const t of expectedTypes) {
       expect(typeStyles[t]).toBeDefined();
       expect(typeStyles[t].color).toBeTruthy();
@@ -85,6 +85,11 @@ describe('typeStyles', () => {
   it('methodology has distinct styling', () => {
     expect(typeStyles.methodology.color).toBe('#af8');
     expect(typeStyles.methodology.icon).toBe('⚙');
+  });
+
+  it('insight has distinct styling', () => {
+    expect(typeStyles.insight.color).toBe('#ffcc33');
+    expect(typeStyles.insight.icon).toBe('✸');
   });
 
   it('defaultTypeStyle has unknown label', () => {

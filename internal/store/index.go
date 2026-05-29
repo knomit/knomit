@@ -118,7 +118,12 @@ func (si *searchIndex) Completions(ctx context.Context, branch, category, prefix
 			 WHERE bf.branch_id = ? AND fe.entity LIKE ? LIMIT ?`,
 			branchID, prefix+"%", limit)
 	case "type":
-		return []string{"observation", "concept", "process", "principle", "pattern", "reference", "synthesis", "hypothesis", "methodology", "policy", "heuristic"}, nil
+		types := append(fact.AllEpistemicTypes(), fact.AllPragmaticTypes()...)
+		out := make([]string, len(types))
+		for i, t := range types {
+			out[i] = string(t)
+		}
+		return out, nil
 	case "kind":
 		return []string{"epistemic", "pragmatic"}, nil
 	case "ep":

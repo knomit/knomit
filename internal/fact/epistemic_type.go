@@ -14,6 +14,7 @@ const (
 	Pattern     Type = "pattern"
 	Reference   Type = "reference"
 	Synthesis   Type = "synthesis"
+	Insight     Type = "insight"
 	Hypothesis  Type = "hypothesis"
 	Methodology Type = "methodology"
 )
@@ -27,13 +28,14 @@ var EpistemicTypes = map[Type]bool{
 	Pattern:     true,
 	Reference:   true,
 	Synthesis:   true,
+	Insight:     true,
 	Hypothesis:  true,
 	Methodology: true,
 }
 
 // AllEpistemicTypes returns all epistemic Types in a stable order.
 func AllEpistemicTypes() []Type {
-	return []Type{Observation, Concept, Process, Principle, Pattern, Reference, Synthesis, Hypothesis, Methodology}
+	return []Type{Observation, Concept, Process, Principle, Pattern, Reference, Synthesis, Insight, Hypothesis, Methodology}
 }
 
 // DefaultEpistemicType is the leaf type used when an epistemic fact is

@@ -116,6 +116,13 @@ export const SynthesisIcon = ({ color, size = 14 }: IconProps) => (
   </svg>
 );
 
+// insight: a flash/spark — a sudden grounded realization.
+export const InsightIcon = ({ color, size = 14 }: IconProps) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
+  </svg>
+);
+
 export const HypothesisIcon = ({ color, size = 14 }: IconProps) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
     <circle cx="12" cy="12" r="10"/>
@@ -175,6 +182,7 @@ export function TypeIcon({ type, color, size = 12 }: { type: string; color: stri
     case 'pattern': return <PatternIcon color={color} size={size} />;
     case 'reference': return <ReferenceIcon color={color} size={size} />;
     case 'synthesis': return <SynthesisIcon color={color} size={size} />;
+    case 'insight': return <InsightIcon color={color} size={size} />;
     case 'hypothesis': return <HypothesisIcon color={color} size={size} />;
     case 'methodology': return <MethodologyIcon color={color} size={size} />;
     case 'policy': return <PolicyIcon color={color} size={size} />;

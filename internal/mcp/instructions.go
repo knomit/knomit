@@ -67,6 +67,7 @@ Each fact has YAML frontmatter with:
     - pattern: recurring solutions, idioms ("When X, do Y")
     - reference: specs, measurements, enumerations ("Sencha steeps at 70°C for 60s")
     - synthesis: higher-order facts derived from other facts (set automatically by the synthesize pipeline)
+    - insight: a non-obvious grounded conclusion drawn from connecting facts you already trust ("X and Y together imply Z")
     - hypothesis: predictions derived from patterns — carries inherent uncertainty, not grounded in direct observation
     - methodology: reasoning process lessons learned from hypothesis outcomes (lives in meta/reasoning/)
   - pragmatic types (must be specified — no default):

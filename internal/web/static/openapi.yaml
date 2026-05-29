@@ -1012,7 +1012,7 @@ components:
         body:       { type: string }
         type:
           type: string
-          enum: [observation, concept, process, principle, pattern, reference, synthesis, hypothesis, methodology]
+          enum: [observation, concept, process, principle, pattern, reference, synthesis, insight, hypothesis, methodology]
         domain:     { type: array, items: { type: string } }
         entities:   { type: array, items: { type: string } }
         refs:
