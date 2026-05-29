@@ -95,3 +95,45 @@ func pathsOf(entries []RecentFactEntry) []string {
 	}
 	return out
 }
+
+// TestRecentFacts_PopulatesDomainAndEntities regresses the production gap
+// where RecentFacts returned entries without the domain/entities JSON columns
+// populated. The bridge's SessionStart hook filters by these fields, so an
+// empty round-trip silently dropped every principle from the rendered prompt.
+// Both code paths (no-text and text-search) must surface the slices.
+func TestRecentFacts_PopulatesDomainAndEntities(t *testing.T) {
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	defer svc.Close()
+	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+	svc.SetEmbedder(&rankedEmbedder{})
+
+	ctx := context.Background()
+	const branch = "main"
+	const path = "kb/policy/match-target-tls.md"
+
+	_, err = svc.Facts().WriteFact(ctx, branch, path,
+		pragmaticFactBody("match-target Use TLS", "All cross-host traffic must use TLS 1.3+.",
+			[]string{"global"}, []string{"designer"}),
+		"add policy", "")
+	require.NoError(t, err)
+
+	// Non-search path: empty Text → executes the plain RecentFacts SQL.
+	entries, total, err := svc.Search().RecentFacts(ctx, branch, SearchOptions{Limit: 50})
+	require.NoError(t, err)
+	require.Equal(t, 1, total)
+	require.Len(t, entries, 1)
+	require.Equal(t, path, entries[0].Path)
+	require.Equal(t, []string{"global"}, entries[0].Domain, "Domain must round-trip via non-search RecentFacts")
+	require.Equal(t, []string{"designer"}, entries[0].Entities, "Entities must round-trip via non-search RecentFacts")
+
+	// Search path: Text != "" → executes recentFactsSearch. Use the
+	// rankedEmbedder fixture so the vector search yields a hit on this fact.
+	searchEntries, _, err := svc.Search().RecentFacts(ctx, branch, SearchOptions{Text: "match-target alpha", Limit: 50})
+	require.NoError(t, err)
+	require.NotEmpty(t, searchEntries, "rankedEmbedder must match the match-target fact")
+	require.Equal(t, path, searchEntries[0].Path)
+	require.Equal(t, []string{"global"}, searchEntries[0].Domain, "Domain must round-trip via search RecentFacts")
+	require.Equal(t, []string{"designer"}, searchEntries[0].Entities, "Entities must round-trip via search RecentFacts")
+}

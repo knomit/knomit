@@ -114,12 +114,17 @@ func LearnHandler(embedders ...store.BatchEmbedder) func(context.Context, mcpgo.
 		// 3. Validate inputs, build paths, and serialize facts.
 		files := make(map[string]string, len(factInputs))
 		facts := make([]fact.Fact, len(factInputs))
+		// topicCategories[i] is the ontology path for facts[i]; cached here so
+		// the dedup-merge branch below can re-run ValidateFact without
+		// re-deriving (or losing access to) the topic path.
+		topicCategories := make([]string, len(factInputs))
 		for i, fi := range factInputs {
 			// Validate topic+category against ontology.
 			topicCategory := fi.Topic
 			if fi.Category != "" {
 				topicCategory = fi.Topic + "/" + fi.Category
 			}
+			topicCategories[i] = topicCategory
 			if ontology != nil {
 				if err := ontology.ValidatePath(topicCategory); err != nil {
 					return mcpgo.NewToolResultError(fmt.Sprintf("fact %d: %v", i, err)), nil
@@ -165,6 +170,11 @@ func LearnHandler(embedders ...store.BatchEmbedder) func(context.Context, mcpgo.
 			f.Sources = fi.Sources
 			f.Entities = entities
 			f.Refs = refs
+			if ontology != nil {
+				if err := fact.ValidateFact(ontology, topicCategory, f); err != nil {
+					return mcpgo.NewToolResultError(fmt.Sprintf("fact %d: %v", i, err)), nil
+				}
+			}
 			facts[i] = f
 			serialized, err := fact.SerializeFact(f)
 			if err != nil {
@@ -253,6 +263,7 @@ func LearnHandler(embedders ...store.BatchEmbedder) func(context.Context, mcpgo.
 				merged = fact.NewFact(match.Path)
 				merged.Title = f.Title
 				merged.Body = f.Body
+				merged.Kind = f.Kind
 				merged.Type = f.Type
 				merged.Domain = fact.UnionStrings(f.Domain, existingFact.Domain)
 				merged.Entities = fact.UnionStrings(f.Entities, existingFact.Entities)
@@ -267,6 +278,7 @@ func LearnHandler(embedders ...store.BatchEmbedder) func(context.Context, mcpgo.
 				merged = fact.NewFact(match.Path)
 				merged.Title = existingFact.Title
 				merged.Body = existingFact.Body
+				merged.Kind = existingFact.Kind
 				merged.Type = existingFact.Type
 				merged.Domain = fact.UnionStrings(f.Domain, existingFact.Domain)
 				merged.Entities = fact.UnionStrings(f.Entities, existingFact.Entities)
@@ -277,6 +289,17 @@ func LearnHandler(embedders ...store.BatchEmbedder) func(context.Context, mcpgo.
 				// merged content differs. Drop the donation — upsert will fall
 				// through to a fresh embed.
 				donatePaths[i] = ""
+			}
+
+			// Re-validate the merged fact against ontology rules. The merge
+			// may union entities/domain or pull values from the existing
+			// fact, so the result is not guaranteed to satisfy rules just
+			// because the input did. Without this re-check, a violation
+			// would surface later as an opaque serialize error.
+			if ontology != nil {
+				if err := fact.ValidateFact(ontology, topicCategories[i], merged); err != nil {
+					return mcpgo.NewToolResultError(fmt.Sprintf("fact %d: dedup-merge: %v", i, err)), nil
+				}
 			}
 
 			// Remove the original new-fact path from the files map and add the merged one.

@@ -11,13 +11,15 @@ import (
 
 // RecentFactEntry is a lightweight record for the recent-facts endpoint.
 type RecentFactEntry struct {
-	Path        string  `json:"path"`
-	Title       string  `json:"title"`
-	Kind        string  `json:"kind"`
-	Type        string  `json:"type"`
-	CommittedAt int64   `json:"committed_at"`
-	Operation   string  `json:"operation,omitempty"`
-	Score       float64 `json:"score,omitempty"`
+	Path        string   `json:"path"`
+	Title       string   `json:"title"`
+	Kind        string   `json:"kind"`
+	Type        string   `json:"type"`
+	Domain      []string `json:"domain,omitempty"`
+	Entities    []string `json:"entities,omitempty"`
+	CommittedAt int64    `json:"committed_at"`
+	Operation   string   `json:"operation,omitempty"`
+	Score       float64  `json:"score,omitempty"`
 }
 
 // RecentFacts returns facts on the given branch ordered by most recent commit,
@@ -65,7 +67,8 @@ func (si *searchIndex) RecentFacts(ctx context.Context, branch string, opts Sear
 
 	queryArgs := append(append(append([]any{branchID}, flt.args...), epArgs...), opts.Limit, opts.Offset)
 	rows, err := conn(ctx, si.rh.db).QueryContext(ctx,
-		`SELECT f.path, f.title, f.kind, f.type, COALESCE(cl.committed_at, 0), COALESCE(cl.operation, '')
+		`SELECT f.path, f.title, f.kind, f.type, f.domain, f.entities,
+		        COALESCE(cl.committed_at, 0), COALESCE(cl.operation, '')
 		 FROM branch_facts bf
 		 JOIN facts f ON f.id = bf.fact_id
 		 LEFT JOIN commit_log cl ON bf.commit_hash = cl.commit_hash AND f.path = cl.path
@@ -82,9 +85,12 @@ func (si *searchIndex) RecentFacts(ctx context.Context, branch string, opts Sear
 	var entries []RecentFactEntry
 	for rows.Next() {
 		var e RecentFactEntry
-		if err := rows.Scan(&e.Path, &e.Title, &e.Kind, &e.Type, &e.CommittedAt, &e.Operation); err != nil {
+		var domainJSON, entitiesJSON string
+		if err := rows.Scan(&e.Path, &e.Title, &e.Kind, &e.Type, &domainJSON, &entitiesJSON, &e.CommittedAt, &e.Operation); err != nil {
 			return nil, 0, fmt.Errorf("RecentFacts scan: %w", err)
 		}
+		var refs []string
+		logFactJSONUnmarshal("RecentFacts", e.Path, domainJSON, entitiesJSON, "null", &e.Domain, &e.Entities, &refs)
 		entries = append(entries, e)
 	}
 	return entries, total, rows.Err()
@@ -124,7 +130,8 @@ func (si *searchIndex) recentFactsSearch(ctx context.Context, branch string, opt
 	}
 
 	rows, err := conn(ctx, si.rh.db).QueryContext(ctx,
-		`SELECT f.path, f.title, f.kind, f.type, COALESCE(cl.committed_at, 0), COALESCE(cl.operation, '')
+		`SELECT f.path, f.title, f.kind, f.type, f.domain, f.entities,
+		        COALESCE(cl.committed_at, 0), COALESCE(cl.operation, '')
 		 FROM branch_facts bf
 		 JOIN facts f ON f.id = bf.fact_id
 		 LEFT JOIN commit_log cl ON bf.commit_hash = cl.commit_hash AND f.path = cl.path
@@ -140,9 +147,12 @@ func (si *searchIndex) recentFactsSearch(ctx context.Context, branch string, opt
 	var all []RecentFactEntry
 	for rows.Next() {
 		var e RecentFactEntry
-		if err := rows.Scan(&e.Path, &e.Title, &e.Kind, &e.Type, &e.CommittedAt, &e.Operation); err != nil {
+		var domainJSON, entitiesJSON string
+		if err := rows.Scan(&e.Path, &e.Title, &e.Kind, &e.Type, &domainJSON, &entitiesJSON, &e.CommittedAt, &e.Operation); err != nil {
 			return nil, 0, fmt.Errorf("RecentFacts search scan: %w", err)
 		}
+		var refs []string
+		logFactJSONUnmarshal("RecentFacts.search", e.Path, domainJSON, entitiesJSON, "null", &e.Domain, &e.Entities, &refs)
 		e.Score = scoreByPath[e.Path]
 		all = append(all, e)
 	}
@@ -208,10 +218,16 @@ func (si *searchIndex) LastCommitForPath(ctx context.Context, branch, path strin
 // QueryByPath, MinSimilarity, GraphHops) are inert when passed to RecentFacts.
 // Pagination (Offset) is only consulted by RecentFacts.
 type SearchOptions struct {
-	Text          string
-	Entities      []string
-	Domain        []string
-	Path          string
+	Text     string
+	Entities []string
+	// Domain matches descendant-or-equal: query "store" finds facts with
+	// domain "store", "store/resolver", "store/cache", ...
+	Domain []string
+	// DomainAncestor matches ancestor-or-equal: query "store/resolver" finds
+	// facts with domain "store/resolver", "store", ... (any path ancestor).
+	// Used by principles-style "what scopes apply to this subarea?" lookups.
+	DomainAncestor []string
+	Path           string
 	MinConfidence float64
 	MinSimilarity float64   // cosine similarity threshold (0–1); 0 uses default 0.40
 	Limit         int
@@ -306,6 +322,15 @@ func newFactFilter(q SearchOptions) *factFilter {
 		f.add(
 			" AND EXISTS (SELECT 1 FROM fact_domains WHERE fact_id = f.id AND (domain = ? OR domain LIKE ?))",
 			d, d+"/%",
+		)
+	}
+	for _, d := range q.DomainAncestor {
+		// Ancestor-or-equal match: the fact's domain is either exactly the
+		// query, or a prefix of it (so the query path starts with the fact's
+		// domain followed by '/').
+		f.add(
+			" AND EXISTS (SELECT 1 FROM fact_domains WHERE fact_id = f.id AND (domain = ? OR ? LIKE domain || '/%'))",
+			d, d,
 		)
 	}
 	return f

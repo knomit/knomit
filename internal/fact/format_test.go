@@ -131,6 +131,68 @@ func TestSerializeFact_RoundTrip(t *testing.T) {
 	}
 }
 
+// TestSerializeFact_BoundsValidation enforces the numeric field invariants at
+// the serialize chokepoint: confidence must be in [0,1] and sources >= 0, so
+// no write path can persist an out-of-range fact.
+func TestSerializeFact_BoundsValidation(t *testing.T) {
+	base := func() Fact {
+		f := NewFact("kb/test.md")
+		f.Title, f.Body, f.Type = "T", "B", Observation
+		f.Confidence, f.Sources = 0.5, 1
+		return f
+	}
+	t.Run("confidence above 1 rejected", func(t *testing.T) {
+		f := base()
+		f.Confidence = 1.5
+		_, err := SerializeFact(f)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "confidence")
+	})
+	t.Run("confidence below 0 rejected", func(t *testing.T) {
+		f := base()
+		f.Confidence = -0.1
+		_, err := SerializeFact(f)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "confidence")
+	})
+	t.Run("negative sources rejected", func(t *testing.T) {
+		f := base()
+		f.Sources = -1
+		_, err := SerializeFact(f)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "sources")
+	})
+	t.Run("boundary values 0 and 1 accepted", func(t *testing.T) {
+		for _, c := range []float64{0, 1} {
+			f := base()
+			f.Confidence = c
+			_, err := SerializeFact(f)
+			require.NoError(t, err, "confidence %v must be valid", c)
+		}
+	})
+}
+
+// TestParseFact_RejectsOutOfBoundsConfidence confirms the bounds check fires
+// on read too (symmetric with serialize), so a hand-corrupted fact file with
+// confidence outside [0,1] fails to parse rather than loading silently.
+func TestParseFact_RejectsOutOfBoundsConfidence(t *testing.T) {
+	const content = `---
+type: observation
+domain: [d]
+confidence: 1.5
+sources: 1
+entities: []
+refs: []
+---
+# Title
+
+Body.
+`
+	_, err := ParseFact("kb/test.md", content)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "confidence")
+}
+
 // TestSerializeFact_FlowStyleSequences confirms that lists render as
 // inline `[a, b]` flow style — not block style with one-item-per-line
 // — so existing fact files keep their compact one-line-per-key layout.
