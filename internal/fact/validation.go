@@ -3,9 +3,17 @@ package fact
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/dop251/goja"
 )
+
+// ruleEvalTimeout bounds a single rule's execution. Rules are pure boolean
+// expressions over a small fact map and finish in microseconds; this ceiling
+// exists only to stop a pathological rule (e.g. an infinite loop in a
+// hand-edited ontology) from hanging the request goroutine, since goja does
+// not observe context cancellation on its own.
+const ruleEvalTimeout = 100 * time.Millisecond
 
 // compiledRule is a Validation with its rule precompiled to a goja.Program.
 type compiledRule struct {
@@ -63,6 +71,13 @@ func evaluateRule(r compiledRule, f Fact) (bool, error) {
 	if err := vm.GlobalObject().DefineDataProperty("fact", factVal, goja.FLAG_FALSE, goja.FLAG_FALSE, goja.FLAG_FALSE); err != nil {
 		return false, fmt.Errorf("rule %s: bind fact: %w", r.Name, err)
 	}
+	// Guard against a runaway rule: interrupt the VM if it outlives the
+	// timeout. Stop() cancels the timer on the normal (fast) path; a late
+	// interrupt is harmless because each evaluation uses a fresh VM.
+	timer := time.AfterFunc(ruleEvalTimeout, func() {
+		vm.Interrupt(fmt.Sprintf("rule %s: exceeded %s", r.Name, ruleEvalTimeout))
+	})
+	defer timer.Stop()
 	v, err := vm.RunProgram(r.Program)
 	if err != nil {
 		return false, fmt.Errorf("rule %s: eval: %w", r.Name, err)

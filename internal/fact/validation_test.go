@@ -2,6 +2,7 @@ package fact
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -55,6 +56,28 @@ func TestEvaluateRule_SandboxNoGlobals(t *testing.T) {
 		ok, err := evaluateRule(r, f)
 		require.NoError(t, err, r.Name)
 		require.True(t, ok, "sandbox check failed: %s", r.Name)
+	}
+}
+
+// TestEvaluateRule_TimesOutOnRunaway guards the goja execution-timeout: a
+// rule that never returns (infinite loop in a hand-edited ontology) must be
+// interrupted and surfaced as an error rather than hanging the caller.
+func TestEvaluateRule_TimesOutOnRunaway(t *testing.T) {
+	rules, err := compileRules("p", []Validation{
+		{Name: "runaway", Message: "x", Rule: "while (true) {}"},
+	})
+	require.NoError(t, err)
+
+	done := make(chan error, 1)
+	go func() {
+		_, e := evaluateRule(rules[0], Fact{Entities: []string{"designer"}})
+		done <- e
+	}()
+	select {
+	case e := <-done:
+		require.Error(t, e, "runaway rule must be interrupted, not pass")
+	case <-time.After(5 * time.Second):
+		t.Fatal("evaluateRule did not return — interrupt timer is not working")
 	}
 }
 

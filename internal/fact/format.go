@@ -170,6 +170,9 @@ func ParseFact(path, content string) (Fact, error) {
 	if err != nil {
 		return Fact{}, fmt.Errorf("ParseFact %q: %w", path, err)
 	}
+	if err := validateBounds(fm.Confidence, fm.Sources); err != nil {
+		return Fact{}, fmt.Errorf("ParseFact %q: %w", path, err)
+	}
 
 	// Extract title from the first # heading in bodyRaw.
 	title, body, err := extractTitle(path, bodyRaw)
@@ -237,6 +240,9 @@ func SerializeFact(f Fact) (string, error) {
 	// carry a valid pair.
 	kind, err := validateKindAndType(f.Kind, f.Type)
 	if err != nil {
+		return "", fmt.Errorf("SerializeFact %q: %w", f.path, err)
+	}
+	if err := validateBounds(f.Confidence, f.Sources); err != nil {
 		return "", fmt.Errorf("SerializeFact %q: %w", f.path, err)
 	}
 

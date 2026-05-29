@@ -55,3 +55,18 @@ func validateKindAndType(k Kind, t Type) (Kind, error) {
 	}
 	return k, nil
 }
+
+// validateBounds enforces the numeric field invariants shared by ParseFact
+// and SerializeFact: confidence must lie in [0, 1] and sources must be
+// non-negative. Symmetric with validateKindAndType — any Fact that
+// round-trips successfully is guaranteed to carry in-range values, so no
+// write path (MCP, synthesize, web) can persist an out-of-range fact.
+func validateBounds(confidence float64, sources int) error {
+	if confidence < 0 || confidence > 1 {
+		return fmt.Errorf("confidence %v out of range [0,1]", confidence)
+	}
+	if sources < 0 {
+		return fmt.Errorf("sources %d must be >= 0", sources)
+	}
+	return nil
+}
