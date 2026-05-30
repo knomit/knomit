@@ -501,15 +501,24 @@ func (si *searchIndex) rebuildFacts(ctx context.Context, branch, head string, pr
 	// reads from these junctions, so they MUST be rebuilt from the JSON columns
 	// or domain/entity searches will silently return zero hits even though
 	// stats (which reads f.domain JSON directly) keeps showing the right counts.
+	// Store the CANONICAL domain (NFC + fold + de-hyphenize via knomit_canon_domain)
+	// so case/space/hyphen variants unify. OR IGNORE + DISTINCT because two authored
+	// variants can canonicalise to the same value (e.g. "AI Governance" / "ai-governance").
 	if _, err := conn(ctx, si.rh.db).ExecContext(ctx, `
-		INSERT INTO fact_domains(fact_id, domain)
-		SELECT f.id, j.value
+		INSERT OR IGNORE INTO fact_domains(fact_id, domain)
+		SELECT DISTINCT f.id, knomit_canon_domain(j.value)
 		FROM facts f
 		JOIN _rebuild_entries e ON e.path = f.path AND e.blob_hash = f.blob_hash
 		JOIN json_each(f.domain) j
-		WHERE j.value IS NOT NULL AND j.value != ''
+		WHERE j.value IS NOT NULL AND j.value != '' AND knomit_canon_domain(j.value) != ''
 	`); err != nil {
 		return 0, fmt.Errorf("rebuildFacts: repopulate fact_domains: %w", err)
+	}
+	// Populate the token containment table from the canonical fact_domains rows
+	// of the rebuilt facts (one-to-many tokenisation can't be expressed in the
+	// bulk SQL, so cursor in Go — cheap, inside the rebuild transaction).
+	if err := si.repopulateDomainTokens(ctx); err != nil {
+		return 0, err
 	}
 	if _, err := conn(ctx, si.rh.db).ExecContext(ctx, `
 		INSERT INTO fact_entities(fact_id, entity)

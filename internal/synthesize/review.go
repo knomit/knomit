@@ -86,7 +86,7 @@ func (r *Reviewer) StartSession(ctx context.Context) (*ReviewResult, error) {
 
 	// Build scoped clusters.
 	t = time.Now()
-	clusters, err := ScopedCluster(ctx, seeds, idx, 1.0, r.onProgress, branch)
+	clusters, err := ScopedCluster(ctx, seeds, idx, r.ri.ClusterResolution(), r.ri.ClusterMinCommunitySize(), r.onProgress, branch)
 	if err != nil {
 		return nil, fmt.Errorf("review: cluster: %w", err)
 	}
@@ -267,7 +267,7 @@ func (r *Reviewer) ContinueSession(ctx context.Context, sessionID, response stri
 			}
 
 			// Cluster the new facts to find groups worth distilling further.
-			raptorClusters, clErr := ScopedCluster(ctx, newFacts, idx, 1.0, r.onProgress, branch, "hypothesis")
+			raptorClusters, clErr := ScopedCluster(ctx, newFacts, idx, r.ri.ClusterResolution(), r.ri.ClusterMinCommunitySize(), r.onProgress, branch, "hypothesis")
 			if clErr != nil {
 				log.Warn().Err(clErr).Msg("review: RAPTOR clustering failed")
 			} else {

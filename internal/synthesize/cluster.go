@@ -19,6 +19,16 @@ import (
 // without overwhelming the search backend.
 const maxConcurrentNeighborSearches = 8
 
+// defaultScopedResolution / defaultScopedMinCommunitySize are defensive
+// fallbacks used only when a caller passes a non-positive value. The real
+// values come from config ([cluster_cache] resolution/min_community_size) via
+// RepoInstance and must stay in sync with repos.defaultCluster* — kept as plain
+// constants here because synthesize must not import repos.
+const (
+	defaultScopedResolution       = 2.0
+	defaultScopedMinCommunitySize = 2
+)
+
 // ScopedCluster builds clusters containing only seed facts and their nearest neighbors.
 // Algorithm:
 // 1. For each seed, find neighbors via idx.Search (semantic similarity) scoped to same category
@@ -29,6 +39,7 @@ func ScopedCluster(ctx context.Context,
 	seeds []factForLLM,
 	idx store.SearchIndex,
 	resolution float64,
+	minCommunitySize int,
 	onProgress func(ProgressEvent),
 	agentBranch string,
 	excludeTypes ...string,
@@ -99,11 +110,16 @@ func ScopedCluster(ctx context.Context,
 	onProgress(ProgressEvent{Phase: "cluster", Message: "scoped clustering: subgraph built"})
 
 	// Step 2: Try Louvain clustering on the full graph, then filter to subgraph.
+	// Defensive fallbacks; callers pass the config-driven values via RepoInstance
+	// (config [cluster_cache] resolution/min_community_size) — the source of truth.
 	if resolution <= 0 {
-		resolution = 1.0
+		resolution = defaultScopedResolution
+	}
+	if minCommunitySize <= 0 {
+		minCommunitySize = defaultScopedMinCommunitySize
 	}
 
-	result, err := idx.CachedClusterFacts(ctx, agentBranch, resolution, 2)
+	result, err := idx.CachedClusterFacts(ctx, agentBranch, resolution, minCommunitySize)
 	if err != nil {
 		log.Debug().Err(err).Msg("scoped-cluster: Louvain failed, falling back to category grouping")
 		onProgress(ProgressEvent{Phase: "cluster", Message: "Louvain failed, using category fallback"})

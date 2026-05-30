@@ -117,3 +117,16 @@ func TestEnvFloatOr_MethodologyMinScore(t *testing.T) {
 		}
 	})
 }
+
+// TestDefaults_ClusterResolution pins the configurable Louvain resolution
+// default at 2.0 (was a hardcoded 1.0): higher γ breaks the over-large
+// communities surfaced by the search-clustering analysis (mega-cluster 65→27).
+func TestDefaults_ClusterResolution(t *testing.T) {
+	d := Defaults()
+	if got := d.ClusterCache.Resolution; got != 2.0 {
+		t.Fatalf("Defaults().ClusterCache.Resolution: want 2.0, got %v", got)
+	}
+	if got := d.ClusterCache.MinCommunitySize; got != 2 {
+		t.Fatalf("Defaults().ClusterCache.MinCommunitySize: want 2, got %v", got)
+	}
+}

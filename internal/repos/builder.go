@@ -275,6 +275,8 @@ func (b *repoBuilder) build() *RepoInstance {
 		embedder:            b.embedder,
 		ontologyRoot:        b.cfg.OntologyRoot,
 		methodologyMinScore: b.cfg.MethodologyMinScore,
+		clusterResolution:   clusterResolutionOrDefault(b.cfg.ClusterCache.Resolution),
+		clusterMinCommunity: clusterMinCommunityOrDefault(b.cfg.ClusterCache.MinCommunitySize),
 		svc:                 b.svc,
 		hub:                 hub,
 	}
