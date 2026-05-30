@@ -357,9 +357,11 @@ paths:
       parameters:
         - { name: q,              in: query, schema: { type: string } }
         - { name: entities,       in: query, description: CSV, schema: { type: string } }
-        - { name: domain,         in: query, description: CSV, schema: { type: string } }
+        - { name: domain,         in: query, description: "CSV. Default match is slash-hierarchy OR token containment of the de-hyphenized tag (e.g. 'ai' matches 'ai governance'). Set domain_exact=true for exact canonical match.", schema: { type: string } }
+        - { name: domain_exact,   in: query, description: "Match domain by exact canonical tag only (no containment/hierarchy).", schema: { type: boolean, default: false } }
         - { name: path,           in: query, schema: { type: string } }
         - { name: min_confidence, in: query, schema: { type: number, format: double } }
+        - { name: min_similarity, in: query, description: "Minimum cosine similarity for text search (0–1); 0 uses the server default.", schema: { type: number, format: double } }
         - { name: limit,          in: query, schema: { type: integer, default: 50, maximum: 500 } }
         - { name: type,           in: query, description: CSV, schema: { type: string } }
         - { name: exclude_type,   in: query, description: CSV, schema: { type: string } }

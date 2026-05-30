@@ -143,3 +143,37 @@ func TestRebuild_BackfillsTokensForHistoricalVersions(t *testing.T) {
 	}
 	require.Equal(t, []string{"ai", "governance"}, toks)
 }
+
+// TestCompletions_DomainCanonicalizesPrefix pins that domain autocomplete
+// canonicalises the typed prefix, so a raw "AI-Gov" matches the stored canonical
+// "ai governance" (case + hyphen folded). Entities are intentionally NOT
+// canonicalised (proper nouns / identifiers), so this applies to domain only.
+func TestCompletions_DomainCanonicalizesPrefix(t *testing.T) {
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	defer svc.Close()
+	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+	ctx := context.Background()
+	branch := "main"
+
+	f := fact.NewFact("placeholder.md")
+	f.Title = "Gov"
+	f.Confidence = 0.9
+	f.Sources = 1
+	f.Domain = []string{"AI-Governance"} // canonical: "ai governance"
+	f.Entities = []string{"x"}
+	f.Type = fact.Observation
+	out, err := fact.SerializeFact(f)
+	require.NoError(t, err)
+	_, err = svc.Facts().WriteFact(ctx, branch, "kb/g.md", out, "init", "")
+	require.NoError(t, err)
+	require.NoError(t, svc.IndexManager().Rebuild(ctx, branch, nil))
+
+	for _, prefix := range []string{"AI-Gov", "ai gov", "AI gov"} {
+		got, err := svc.Search().Completions(ctx, branch, "domain", prefix, 10)
+		require.NoError(t, err)
+		require.Contains(t, got, "ai governance",
+			"domain completion for prefix %q must surface canonical 'ai governance', got %v", prefix, got)
+	}
+}

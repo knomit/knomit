@@ -106,11 +106,14 @@ func (si *searchIndex) Completions(ctx context.Context, branch, category, prefix
 
 	switch category {
 	case "domain":
+		// Canonicalise the typed prefix (NFC + fold + de-hyphenize) so it matches
+		// the canonical stored domains — "AI-Gov" → "ai gov" → "ai governance".
+		// Entities (below) are NOT canonicalised: they are proper nouns/identifiers.
 		return si.queryDistinct(ctx,
 			`SELECT DISTINCT fd.domain FROM fact_domains fd
 			 JOIN branch_facts bf ON bf.fact_id = fd.fact_id
 			 WHERE bf.branch_id = ? AND fd.domain LIKE ? LIMIT ?`,
-			branchID, prefix+"%", limit)
+			branchID, canonicalizeDomain(prefix)+"%", limit)
 	case "entity":
 		return si.queryDistinct(ctx,
 			`SELECT DISTINCT fe.entity FROM fact_entities fe

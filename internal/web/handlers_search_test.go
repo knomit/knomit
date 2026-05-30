@@ -225,3 +225,29 @@ func TestHandleSearch_UnknownRepo_Returns404(t *testing.T) {
 		t.Errorf("content-type: got %q, want application/problem+json", got)
 	}
 }
+
+// TestHandleSearch_MinSimilarityAndDomainExactReachProvider pins REST↔MCP parity:
+// the search handler must thread min_similarity and domain_exact into SearchOptions.
+func TestHandleSearch_MinSimilarityAndDomainExactReachProvider(t *testing.T) {
+	provider := &stubSearchProvider{}
+	s := &Server{
+		Manager:        newTestManagerWithRepos(t, "alpha"),
+		searchProvider: provider,
+	}
+	r := s.NewAPIRouter()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet,
+		"/repos/alpha/branches/agent:test/search?q=x&min_similarity=0.55&domain=ai&domain_exact=true", nil)
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: %d, body=%s", rec.Code, rec.Body.String())
+	}
+	if got := provider.lastQuery.MinSimilarity; got != 0.55 {
+		t.Errorf("MinSimilarity: got %v, want 0.55", got)
+	}
+	if !provider.lastQuery.DomainExact {
+		t.Errorf("DomainExact: got false, want true")
+	}
+}
