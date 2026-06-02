@@ -6,6 +6,7 @@ import (
 	"strings"
 	"unicode"
 
+	"github.com/jinzhu/inflection"
 	"golang.org/x/text/cases"
 	"golang.org/x/text/unicode/norm"
 )
@@ -44,31 +45,35 @@ func canonicalizeDomain(s string) string {
 	return strings.TrimRight(b.String(), " ")
 }
 
-// stemDomainToken applies a minimal, symmetric, English plural stemmer for
-// MATCH-ONLY use — the stem is never displayed or stored as the canonical tag,
-// so its quirks (analysis→analysi) are harmless because both query and stored
-// tokens are stemmed identically. Rules: ies→y; strip (s|x|ch|sh)es; strip a
-// trailing s (not ss, len>3).
+// stemDomainToken normalises a token to its singular form as a MATCH-ONLY key —
+// the result is never displayed or stored as the canonical tag, only used so a
+// query token and a stored token collapse to the same key ("vulnerabilities" ≡
+// "vulnerability"). It delegates to inflection.Singular, which (unlike a Porter
+// stemmer) is symmetric and idempotent on the irregulars that matter here:
+// analyses→analysis, theses→thesis, indices→index, matrices→matrix — a
+// hand-rolled -es/-ies stemmer gets these wrong (and so does Snowball/Porter).
+//
+// Short tokens are left untouched: inflection treats a trailing 's' as plural
+// ("aws"→"aw"), which would mangle acronyms (ai, aws, llm) and break matching.
+// 3-char-or-shorter tags are acronyms/identifiers, never plurals worth stemming.
 func stemDomainToken(t string) string {
-	if len(t) > 4 && strings.HasSuffix(t, "ies") {
-		return t[:len(t)-3] + "y"
+	if len(t) <= 3 {
+		return t
 	}
-	for _, suf := range []string{"ses", "xes", "ches", "shes"} {
-		if strings.HasSuffix(t, suf) {
-			return t[:len(t)-2]
-		}
-	}
-	if len(t) > 3 && strings.HasSuffix(t, "s") && !strings.HasSuffix(t, "ss") {
-		return t[:len(t)-1]
-	}
-	return t
+	return inflection.Singular(t)
 }
 
 // domainTokens returns the stemmed, de-duplicated token set of a canonical
-// domain (split on whitespace). Order follows first appearance; callers treat it
-// as a set. Pass the output of canonicalizeDomain.
+// domain, split on whitespace AND slash. Splitting on '/' too means a
+// hierarchical tag's individual segments are each searchable as a word
+// ("multi-tenant/auth" → ["multi","tenant","auth"]) — without it, a segment
+// glued to a slash ("tenant/auth") is unreachable by its own middle word and
+// the slash-hierarchy branch only matches whole prefixes. Order follows first
+// appearance; callers treat it as a set. Pass the output of canonicalizeDomain.
 func domainTokens(canonical string) []string {
-	fields := strings.Fields(canonical)
+	fields := strings.FieldsFunc(canonical, func(r rune) bool {
+		return r == '/' || unicode.IsSpace(r)
+	})
 	seen := make(map[string]struct{}, len(fields))
 	out := make([]string, 0, len(fields))
 	for _, f := range fields {

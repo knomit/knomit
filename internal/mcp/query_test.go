@@ -183,3 +183,24 @@ func TestQuery_FiltersByType(t *testing.T) {
 	require.Zero(t, query("observation"), "type=observation must exclude the policy fact")
 	require.Positive(t, query("policy"), "type=policy must include the policy fact")
 }
+
+// TestQuery_Type_AcceptedAsSoleFilter regresses the MCP↔REST parity gap: the
+// "at least one filter" validator must accept `type` on its own (the store and
+// the REST search handler both support a text-less type-only query).
+func TestQuery_Type_AcceptedAsSoleFilter(t *testing.T) {
+	ri := newLearnTestRepo(t, fact.CodeOntology())
+	ctx := repos.WithRepoInstance(context.Background(), ri)
+
+	var req mcpgo.CallToolRequest
+	req.Params.Arguments = map[string]any{
+		"type": []any{"observation"},
+	}
+	result, err := QueryHandler()(ctx, req)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	if result.IsError {
+		text := resultText(t, result)
+		require.NotContains(t, text, "at least one of",
+			"type alone must satisfy the filter-required check; got %q", text)
+	}
+}

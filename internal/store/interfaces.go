@@ -55,6 +55,9 @@ type IndexManager interface {
 	Sync(ctx context.Context, branch string) error
 	Rebuild(ctx context.Context, branch string, progress RebuildProgress) error
 	SyncWatermark(ctx context.Context, branch string) (string, error)
+	// NeedsRebuild reports whether persisted derived state was written by an
+	// older schema version and must be regenerated via Rebuild.
+	NeedsRebuild(ctx context.Context) (bool, error)
 }
 
 // RemoteIndex is the interface for git remote configuration and synchronization.

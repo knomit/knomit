@@ -130,3 +130,24 @@ func TestDefaults_ClusterResolution(t *testing.T) {
 		t.Fatalf("Defaults().ClusterCache.MinCommunitySize: want 2, got %v", got)
 	}
 }
+
+// TestLoad_ClusterResolutionEnvOverride regresses the gap where the new
+// cluster_cache resolution / min_community_size fields had no env override
+// (the other three fields did). Load must wire KNOMIT_CLUSTER_CACHE_RESOLUTION
+// and KNOMIT_CLUSTER_CACHE_MIN_COMMUNITY_SIZE through to the config.
+func TestLoad_ClusterResolutionEnvOverride(t *testing.T) {
+	t.Setenv("KNOMIT_HOME", t.TempDir()) // empty dir → no TOML, defaults + env only
+	t.Setenv("KNOMIT_CLUSTER_CACHE_RESOLUTION", "1.5")
+	t.Setenv("KNOMIT_CLUSTER_CACHE_MIN_COMMUNITY_SIZE", "3")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := cfg.ClusterCache.Resolution; got != 1.5 {
+		t.Fatalf("env override Resolution: want 1.5, got %v", got)
+	}
+	if got := cfg.ClusterCache.MinCommunitySize; got != 3 {
+		t.Fatalf("env override MinCommunitySize: want 3, got %v", got)
+	}
+}

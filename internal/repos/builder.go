@@ -229,16 +229,43 @@ func (b *repoBuilder) setupIndex() {
 	if b.embedder != nil {
 		b.svc.SetEmbedder(b.embedder)
 	}
-	if err := b.svc.IndexManager().Sync(context.Background(), b.agentBranch); err != nil {
-		log.Warn().Err(err).Str("repo", b.name).Msg("initial index sync failed")
-	}
+
+	// Collect the branches whose index we maintain at startup.
+	branches := []string{b.agentBranch}
 	if b.cfg.Git.Origin != "" {
 		upstream := b.upstreamMain
 		if upstream == "" {
 			upstream = "main"
 		}
-		if err := b.svc.IndexManager().Sync(context.Background(), upstream); err != nil {
-			log.Warn().Err(err).Str("repo", b.name).Str("branch", upstream).Msg("initial index sync (upstream) failed")
+		branches = append(branches, upstream)
+	}
+
+	// If derived state was written by an older schema version (e.g. pre-canonical
+	// domains / empty fact_domain_tokens), a plain Sync no-ops when last==HEAD and
+	// leaves domain search silently broken. Detect the mismatch once (the version
+	// is global) and full-Rebuild each branch instead, which regenerates the
+	// derived state. Rebuild preserves facts rowids, so existing embeddings are
+	// reused — the heal does not re-embed the corpus.
+	im := b.svc.IndexManager()
+	stale, err := im.NeedsRebuild(context.Background())
+	if err != nil {
+		log.Warn().Err(err).Str("repo", b.name).Msg("index schema version check failed; assuming current")
+	}
+
+	for i, branch := range branches {
+		if stale {
+			if err := im.Rebuild(context.Background(), branch, nil); err != nil {
+				log.Warn().Err(err).Str("repo", b.name).Str("branch", branch).Msg("schema-mismatch rebuild failed")
+			}
+			continue
+		}
+		if err := im.Sync(context.Background(), branch); err != nil {
+			level := log.Warn()
+			if i == 0 {
+				level.Err(err).Str("repo", b.name).Msg("initial index sync failed")
+			} else {
+				level.Err(err).Str("repo", b.name).Str("branch", branch).Msg("initial index sync (upstream) failed")
+			}
 		}
 	}
 }

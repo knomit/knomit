@@ -327,8 +327,15 @@ func newFactFilter(q SearchOptions) *factFilter {
 	for _, d := range q.Domain {
 		canon := canonicalizeDomain(d)
 		toks := domainTokens(canon)
-		// Exact mode (or a degenerate canonical with no tokens) → canonical
-		// string equality only.
+		// Degenerate input (e.g. "-", "---", whitespace) canonicalises to "" and
+		// yields no tokens. No fact is ever stored with an empty canonical domain
+		// (index-time skips them), so treat such a filter as a no-op rather than
+		// emitting `domain = ''`, which would silently match zero facts and make
+		// the whole query return nothing.
+		if canon == "" {
+			continue
+		}
+		// Exact mode (or a canonical with no tokens) → canonical string equality.
 		if q.DomainExact || len(toks) == 0 {
 			f.add(" AND EXISTS (SELECT 1 FROM fact_domains WHERE fact_id = f.id AND domain = ?)", canon)
 			continue

@@ -35,21 +35,50 @@ func TestCanonicalizeDomain(t *testing.T) {
 	}
 }
 
-// TestStemDomainToken pins the minimal, symmetric, match-only plural stemmer.
+// TestStemDomainToken pins the match-only singularizer: it normalises a token
+// to its singular key (via inflection.Singular), with a short-token guard.
 func TestStemDomainToken(t *testing.T) {
 	cases := []struct{ in, want string }{
 		{"vulnerabilities", "vulnerability"},
 		{"agents", "agent"},
 		{"models", "model"},
 		{"products", "product"},
-		{"class", "class"}, // ss preserved
+		{"class", "class"}, // already singular, unchanged
 		{"ai", "ai"},       // len guard (<=3)
-		{"aws", "aws"},     // len guard
+		{"aws", "aws"},     // len guard — acronym, NOT treated as plural
+		{"llm", "llm"},     // len guard
 		{"batches", "batch"},
 	}
 	for _, c := range cases {
 		if got := stemDomainToken(c.in); got != c.want {
 			t.Errorf("stemDomainToken(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+// TestStemDomainToken_SymmetricAndIdempotent is the real contract: a word and
+// its plural must collapse to the SAME match key (so a singular query finds a
+// pluralised tag and vice-versa), and stemming a key again must be a fixpoint.
+// This is exactly what the previous hand-rolled stemmer — and Porter/Snowball —
+// get WRONG on -is/-es and irregular plurals.
+func TestStemDomainToken_SymmetricAndIdempotent(t *testing.T) {
+	pairs := []struct{ singular, plural string }{
+		{"vulnerability", "vulnerabilities"},
+		{"model", "models"},
+		{"analysis", "analyses"},
+		{"thesis", "theses"},
+		{"index", "indices"},
+		{"matrix", "matrices"},
+		{"category", "categories"},
+	}
+	for _, p := range pairs {
+		gs, gp := stemDomainToken(p.singular), stemDomainToken(p.plural)
+		if gs != gp {
+			t.Errorf("not symmetric: stem(%q)=%q != stem(%q)=%q", p.singular, gs, p.plural, gp)
+		}
+		// Idempotent: the key is a fixpoint.
+		if got := stemDomainToken(gs); got != gs {
+			t.Errorf("not idempotent: stem(stem(%q))=%q != %q", p.singular, got, gs)
 		}
 	}
 }
@@ -66,6 +95,11 @@ func TestDomainTokens(t *testing.T) {
 		{"vulnerabilities", []string{"vulnerability"}},
 		{"commit_log", []string{"commit_log"}},
 		{"ai ai", []string{"ai"}}, // dedupe
+		// Slash splits like whitespace: each hierarchy segment is its own token
+		// (so a middle segment is searchable as a word). "multi tenant" comes from
+		// the de-hyphenized "multi-tenant" segment.
+		{"store/resolver", []string{"store", "resolver"}},
+		{"multi tenant/auth", []string{"multi", "tenant", "auth"}},
 	}
 	for _, c := range cases {
 		got := domainTokens(c.in)

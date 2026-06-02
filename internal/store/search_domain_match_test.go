@@ -177,3 +177,92 @@ func TestCompletions_DomainCanonicalizesPrefix(t *testing.T) {
 			"domain completion for prefix %q must surface canonical 'ai governance', got %v", prefix, got)
 	}
 }
+
+// TestSearch_DomainMiddleSegmentSearchable regresses the bug where a token glued
+// to a slash ("tenant/auth") was unreachable by its own middle word: tokens are
+// now split on '/' too, so a hierarchical/hyphenated tag's interior segment
+// matches as a word, while the slash-hierarchy prefix match is unaffected.
+func TestSearch_DomainMiddleSegmentSearchable(t *testing.T) {
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	defer svc.Close()
+	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+	ctx := context.Background()
+	branch := "main"
+
+	mk := func(path, title string, domains []string) {
+		f := fact.NewFact("placeholder.md")
+		f.Title = title
+		f.Confidence = 0.9
+		f.Sources = 1
+		f.Domain = domains
+		f.Entities = []string{"x"}
+		f.Type = fact.Observation
+		out, err := fact.SerializeFact(f)
+		require.NoError(t, err)
+		_, err = svc.Facts().WriteFact(ctx, branch, path, out, "init", "")
+		require.NoError(t, err)
+	}
+	mk("kb/mt.md", "Multi-Tenant Auth", []string{"multi-tenant/auth"}) // canonical: "multi tenant/auth"
+	require.NoError(t, svc.IndexManager().Rebuild(ctx, branch, nil))
+
+	paths := func(opts SearchOptions) map[string]bool {
+		res, err := svc.Search().Search(ctx, branch, opts)
+		require.NoError(t, err)
+		m := map[string]bool{}
+		for _, r := range res {
+			m[r.Path] = true
+		}
+		return m
+	}
+
+	for _, term := range []string{"tenant", "auth", "multi"} {
+		got := paths(SearchOptions{Domain: []string{term}})
+		require.True(t, got["kb/mt.md"],
+			"domain=%q must match 'multi-tenant/auth' via its interior token, got %v", term, got)
+	}
+	// Slash-hierarchy descendant match still works for the leading segment.
+	got := paths(SearchOptions{Domain: []string{"multi tenant"}, DomainExact: false})
+	require.True(t, got["kb/mt.md"], "multi tenant must still match, got %v", got)
+}
+
+// TestSearch_DegenerateDomainFilterIsNoOp regresses the bug where a domain term
+// that canonicalises to "" (junk like "---") emitted `domain = ''`, matching
+// zero facts and making the whole query return nothing. Such a filter must be a
+// no-op so the other filters (here: text) still return their hits.
+func TestSearch_DegenerateDomainFilterIsNoOp(t *testing.T) {
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	defer svc.Close()
+	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+	ctx := context.Background()
+	branch := "main"
+
+	f := fact.NewFact("placeholder.md")
+	f.Title = "Real Fact"
+	f.Confidence = 0.9
+	f.Sources = 1
+	f.Domain = []string{"ai"}
+	f.Entities = []string{"x"}
+	f.Type = fact.Observation
+	out, err := fact.SerializeFact(f)
+	require.NoError(t, err)
+	_, err = svc.Facts().WriteFact(ctx, branch, "kb/r.md", out, "init", "")
+	require.NoError(t, err)
+	require.NoError(t, svc.IndexManager().Rebuild(ctx, branch, nil))
+
+	for _, junk := range []string{"---", "-", "   "} {
+		res, err := svc.Search().Search(ctx, branch, SearchOptions{Domain: []string{junk}})
+		require.NoError(t, err)
+		found := false
+		for _, r := range res {
+			if r.Path == "kb/r.md" {
+				found = true
+			}
+		}
+		require.True(t, found,
+			"a junk domain filter %q must be ignored (not emit domain=''), so kb/r.md still returns; got %d results", junk, len(res))
+	}
+}

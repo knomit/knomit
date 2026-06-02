@@ -82,9 +82,12 @@ func QueryHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToo
 		types := req.GetStringSlice("type", nil)
 		domainExact := req.GetBool("domain_exact", false)
 
-		// Validate at least one filter.
-		if text == "" && len(entities) == 0 && len(domain) == 0 && len(appliesTo) == 0 && path == "" && minConfidence == 0 {
-			return mcpgo.NewToolResultError("at least one of text, entities, domain, applies_to, path, or min_confidence is required"), nil
+		// Validate at least one filter. `type` counts: the store supports a
+		// text-less type-only query (returns all facts of that type), and the
+		// REST search handler already accepts it — listing it here keeps
+		// knomit_query at parity with REST instead of rejecting what REST allows.
+		if text == "" && len(entities) == 0 && len(domain) == 0 && len(appliesTo) == 0 && path == "" && minConfidence == 0 && len(types) == 0 {
+			return mcpgo.NewToolResultError("at least one of text, entities, domain, applies_to, path, type, or min_confidence is required"), nil
 		}
 
 		q := store.SearchOptions{

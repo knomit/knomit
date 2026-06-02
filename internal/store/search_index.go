@@ -20,7 +20,16 @@ import (
 // Version 2: DERIVED_FROM edges carry source_commit + target_commit
 // properties (commit-anchored /incoming + /outgoing); FactVersion subsystem
 // retired.
-const GraphSchemaVersion = "2"
+//
+// Version 3: domain tags are stored CANONICAL (NFC + case-fold + de-hyphenize)
+// in fact_domains and tokenised into fact_domain_tokens. Existing deployments
+// indexed under v2 hold RAW domains and an empty token table, so domain search
+// silently returns nothing until the derived state is regenerated — the version
+// bump forces that rebuild on startup (see repoBuilder.setupIndex). Despite the
+// "Graph" name this constant gates ALL forced-rebuild-on-upgrade derived state,
+// graph or not; bump it whenever an indexing-logic change needs an existing
+// deployment to reindex.
+const GraphSchemaVersion = "3"
 
 type searchIndex struct {
 	rh *repoHandler
@@ -89,6 +98,26 @@ func (si *searchIndex) SyncWatermark(ctx context.Context, branch string) (string
 // Supports both full rebuilds (first run) and incremental updates (diffing
 // since the last indexed commit).
 
+// NeedsRebuild reports whether the persisted index schema version differs from
+// the current GraphSchemaVersion — i.e. derived state (graph layout, canonical
+// domains, fact_domain_tokens) was written by an older version and a full
+// Rebuild is required to regenerate it. The version is meta.graph_schema_version,
+// global to the DB (not per-branch); a missing row (fresh or pre-versioning DB)
+// counts as stale. Rebuild bumps it on success.
+func (si *searchIndex) NeedsRebuild(ctx context.Context) (bool, error) {
+	var persistedVer string
+	err := conn(ctx, si.rh.db).QueryRowContext(ctx,
+		`SELECT value FROM meta WHERE key = 'graph_schema_version'`,
+	).Scan(&persistedVer)
+	if err == sql.ErrNoRows {
+		return true, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("read graph_schema_version: %w", err)
+	}
+	return persistedVer != GraphSchemaVersion, nil
+}
+
 // Sync brings the index up to date with the git store.
 //
 // Algorithm:
@@ -98,21 +127,18 @@ func (si *searchIndex) SyncWatermark(ctx context.Context, branch string) (string
 //  4. Else → DiffFiles(last_commit), upsert added+modified, delete removed.
 //  5. Update meta.last_commit = HEAD.
 func (si *searchIndex) Sync(ctx context.Context, branch string) error {
-	// Detect graph schema mismatch on entry. Older deployments may have a
-	// graph laid out by a previous version; this PR changed the DERIVED_FROM
-	// edge shape, so a forced rebuild is required to bring the graph current.
-	var persistedVer string
-	if err := conn(ctx, si.rh.db).QueryRowContext(ctx,
-		`SELECT value FROM meta WHERE key = 'graph_schema_version'`,
-	).Scan(&persistedVer); err != nil && err != sql.ErrNoRows {
-		return fmt.Errorf("sync: read graph_schema_version: %w", err)
-	}
-	if persistedVer != GraphSchemaVersion {
+	// Detect schema mismatch on entry. An older deployment may have derived
+	// state (graph layout, canonical domains, token table) laid out by a
+	// previous version. Callers that orchestrate startup (repoBuilder) call
+	// NeedsRebuild and Rebuild to heal it; Sync only warns, because it cannot
+	// safely escalate to a full rebuild for every branch from here.
+	if stale, err := si.NeedsRebuild(ctx); err != nil {
+		return fmt.Errorf("sync: %w", err)
+	} else if stale {
 		log.Warn().
 			Str("repo", si.rh.name).
-			Str("persisted", persistedVer).
 			Str("expected", GraphSchemaVersion).
-			Msg("graph schema version mismatch — run `knomit rebuild` to update the graph layout")
+			Msg("index schema version mismatch — run `knomit rebuild` to regenerate derived state")
 	}
 
 	// Ensure the branch exists in the branches table.
@@ -426,6 +452,21 @@ func (si *searchIndex) rebuildFacts(ctx context.Context, branch, head string, pr
 		progress("facts", 0, len(paths))
 	}
 
+	// The whole of phase 1 — facts upsert + derived junction/token regeneration
+	// + branch_facts — runs in ONE transaction. This is load-bearing: the
+	// derived-state regeneration below clears tables before repopulating them
+	// (e.g. the global fact_domain_tokens rebuild), so without an enclosing tx a
+	// mid-rebuild failure or a concurrent WAL reader would observe an empty
+	// table. beginTxIfNeeded composes with an outer tx if a caller ever supplies
+	// one; otherwise we own and commit it here.
+	ctx, tx, ownTx, err := beginTxIfNeeded(ctx, si.rh.db)
+	if err != nil {
+		return 0, fmt.Errorf("rebuildFacts: begin tx: %w", err)
+	}
+	if ownTx {
+		defer tx.Rollback()
+	}
+
 	// Create temp table for the rebuild entries.
 	if _, err := conn(ctx, si.rh.db).ExecContext(ctx, `CREATE TEMP TABLE IF NOT EXISTS _rebuild_entries (path TEXT PRIMARY KEY, blob_hash TEXT NOT NULL)`); err != nil {
 		return 0, fmt.Errorf("rebuildFacts: create temp table: %w", err)
@@ -434,13 +475,6 @@ func (si *searchIndex) rebuildFacts(ctx context.Context, branch, head string, pr
 	if _, err := conn(ctx, si.rh.db).ExecContext(ctx, `DELETE FROM _rebuild_entries`); err != nil {
 		return 0, fmt.Errorf("rebuildFacts: clear temp table: %w", err)
 	}
-
-	// Bulk-insert all (path, blobHash) pairs in a single transaction.
-	tx, err := si.rh.db.BeginTx(ctx, nil)
-	if err != nil {
-		return 0, fmt.Errorf("rebuildFacts: begin insert tx: %w", err)
-	}
-	defer tx.Rollback()
 
 	stmt, err := tx.PrepareContext(ctx, `INSERT OR REPLACE INTO _rebuild_entries(path, blob_hash) VALUES (?, ?)`)
 	if err != nil {
@@ -453,26 +487,31 @@ func (si *searchIndex) rebuildFacts(ctx context.Context, branch, head string, pr
 			return 0, fmt.Errorf("rebuildFacts: insert entry %s: %w", paths[i], err)
 		}
 	}
-	if err := tx.Commit(); err != nil {
-		return 0, fmt.Errorf("rebuildFacts: commit entries: %w", err)
-	}
 
-	// Clear branch_facts for this branch before replacing facts rows.
-	// INSERT OR REPLACE on facts does DELETE+INSERT (changes the row id), which
-	// would violate the branch_facts FK if any row still references the old id.
-	// The INSERT OR REPLACE INTO branch_facts below repopulates them.
+	// Drop stale branch_facts pointers for paths no longer present at HEAD; the
+	// INSERT OR REPLACE below repopulates the live ones. Rows are NOT cleared to
+	// dodge an FK violation (facts rowids are preserved — see below), only to
+	// purge paths that vanished from the branch.
 	if _, err := conn(ctx, si.rh.db).ExecContext(ctx, `DELETE FROM branch_facts WHERE branch_id = ?`, branchID); err != nil {
 		return 0, fmt.Errorf("rebuildFacts: clear branch_facts: %w", err)
 	}
 
-	// Bulk INSERT OR REPLACE facts from parsed blob data (no commit_hash in facts table).
+	// Upsert facts from parsed blob data via ON CONFLICT(path, blob_hash) DO
+	// UPDATE — NOT INSERT OR REPLACE. facts rows are content-addressed by
+	// UNIQUE(path, blob_hash); an unchanged blob refreshes its parsed columns
+	// IN PLACE, preserving the rowid. That matters: INSERT OR REPLACE does
+	// DELETE+INSERT, which mints a new rowid and fires facts_after_delete (wiping
+	// the facts_vec row), so rebuildEmbeddings would re-embed the ENTIRE corpus
+	// on every rebuild. Preserving the rowid keeps the embedding (immutable for a
+	// given blob — see the COW invariant) and re-embeds only genuinely new/changed
+	// facts. A changed blob is a fresh (path, new_hash) row and embeds normally.
 	res, err := conn(ctx, si.rh.db).ExecContext(ctx, `
 		WITH parsed_entries AS (
 			SELECT e.path, e.blob_hash, knomit_parse_fact(o.data) AS parsed
 			FROM _rebuild_entries e
 			JOIN objects o ON o.hash = e.blob_hash AND o.type = ?
 		)
-		INSERT OR REPLACE INTO facts (path, blob_hash, title, kind, type, domain, entities, confidence, sources, refs, evidence_weight)
+		INSERT INTO facts (path, blob_hash, title, kind, type, domain, entities, confidence, sources, refs, evidence_weight)
 		SELECT
 			pe.path,
 			pe.blob_hash,
@@ -487,23 +526,41 @@ func (si *searchIndex) rebuildFacts(ctx context.Context, branch, head string, pr
 			COALESCE(json_extract(pe.parsed, '$.evidence_weight'), 0)
 		FROM parsed_entries pe
 		WHERE pe.parsed IS NOT NULL
+		ON CONFLICT(path, blob_hash) DO UPDATE SET
+			title           = excluded.title,
+			kind            = excluded.kind,
+			type            = excluded.type,
+			domain          = excluded.domain,
+			entities        = excluded.entities,
+			confidence      = excluded.confidence,
+			sources         = excluded.sources,
+			refs            = excluded.refs,
+			evidence_weight = excluded.evidence_weight
 	`, blobObjectType)
 	if err != nil {
-		return 0, fmt.Errorf("rebuildFacts: bulk insert: %w", err)
+		return 0, fmt.Errorf("rebuildFacts: upsert facts: %w", err)
 	}
 
 	affected, _ := res.RowsAffected()
 	n := int(affected)
 
-	// Re-populate fact_domains / fact_entities junction tables for the rebuilt
-	// facts. INSERT OR REPLACE INTO facts above triggered cascade-deletes of
-	// the old junction rows (the fact rowid changed); the search filter path
-	// reads from these junctions, so they MUST be rebuilt from the JSON columns
-	// or domain/entity searches will silently return zero hits even though
-	// stats (which reads f.domain JSON directly) keeps showing the right counts.
-	// Store the CANONICAL domain (NFC + fold + de-hyphenize via knomit_canon_domain)
-	// so case/space/hyphen variants unify. OR IGNORE + DISTINCT because two authored
-	// variants can canonicalise to the same value (e.g. "AI Governance" / "ai-governance").
+	// Re-derive the fact_domains / fact_entities junction tables for the rebuilt
+	// facts. Because the upsert above preserves rowids, no cascade-delete fires,
+	// so we explicitly clear the rebuilt facts' junction rows first (scoped by
+	// _rebuild_entries — NOT a global wipe, so other branches' shared facts keep
+	// their rows). The search filter path reads from these junctions; if they
+	// drift from the JSON columns, domain/entity searches silently return zero
+	// hits. Store the CANONICAL domain (knomit_canon_domain) so case/space/hyphen
+	// variants unify; OR IGNORE + DISTINCT because two authored variants can
+	// canonicalise to the same value (e.g. "AI Governance" / "ai-governance").
+	if _, err := conn(ctx, si.rh.db).ExecContext(ctx, `
+		DELETE FROM fact_domains WHERE fact_id IN (
+			SELECT f.id FROM facts f
+			JOIN _rebuild_entries e ON e.path = f.path AND e.blob_hash = f.blob_hash
+		)
+	`); err != nil {
+		return 0, fmt.Errorf("rebuildFacts: clear fact_domains: %w", err)
+	}
 	if _, err := conn(ctx, si.rh.db).ExecContext(ctx, `
 		INSERT OR IGNORE INTO fact_domains(fact_id, domain)
 		SELECT DISTINCT f.id, knomit_canon_domain(j.value)
@@ -514,15 +571,24 @@ func (si *searchIndex) rebuildFacts(ctx context.Context, branch, head string, pr
 	`); err != nil {
 		return 0, fmt.Errorf("rebuildFacts: repopulate fact_domains: %w", err)
 	}
-	// Populate the token containment table from the canonical fact_domains rows
-	// of the rebuilt facts (one-to-many tokenisation can't be expressed in the
-	// bulk SQL, so cursor in Go — cheap, inside the rebuild transaction).
+	// Populate the token containment table from the canonical authored domains of
+	// EVERY fact version (one-to-many tokenisation can't be expressed in the bulk
+	// SQL, so cursor in Go — cheap). Runs inside this transaction, so the global
+	// clear-then-repopulate it performs is atomic to concurrent readers.
 	if err := si.repopulateDomainTokens(ctx); err != nil {
 		return 0, err
 	}
 	if _, err := conn(ctx, si.rh.db).ExecContext(ctx, `
-		INSERT INTO fact_entities(fact_id, entity)
-		SELECT f.id, j.value
+		DELETE FROM fact_entities WHERE fact_id IN (
+			SELECT f.id FROM facts f
+			JOIN _rebuild_entries e ON e.path = f.path AND e.blob_hash = f.blob_hash
+		)
+	`); err != nil {
+		return 0, fmt.Errorf("rebuildFacts: clear fact_entities: %w", err)
+	}
+	if _, err := conn(ctx, si.rh.db).ExecContext(ctx, `
+		INSERT OR IGNORE INTO fact_entities(fact_id, entity)
+		SELECT DISTINCT f.id, j.value
 		FROM facts f
 		JOIN _rebuild_entries e ON e.path = f.path AND e.blob_hash = f.blob_hash
 		JOIN json_each(f.entities) j
@@ -553,6 +619,12 @@ func (si *searchIndex) rebuildFacts(ctx context.Context, branch, head string, pr
 	// Clean up temp table.
 	if _, err := conn(ctx, si.rh.db).ExecContext(ctx, `DROP TABLE IF EXISTS _rebuild_entries`); err != nil {
 		log.Warn().Err(err).Msg("rebuildFacts: drop temp table")
+	}
+
+	if ownTx {
+		if err := tx.Commit(); err != nil {
+			return 0, fmt.Errorf("rebuildFacts: commit: %w", err)
+		}
 	}
 
 	if progress != nil {
