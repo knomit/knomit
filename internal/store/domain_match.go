@@ -6,7 +6,7 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/jinzhu/inflection"
+	"github.com/gertd/go-pluralize"
 	"golang.org/x/text/cases"
 	"golang.org/x/text/unicode/norm"
 )
@@ -20,6 +20,14 @@ import (
 
 // domainCaser performs Unicode case folding (language-neutral). Allocated once.
 var domainCaser = cases.Fold()
+
+// domainPluralizer singularizes plural tokens to a match key. go-pluralize is a
+// port of the widely-used JS `pluralize`, with a real irregular/exception table
+// (not naive suffix rules), so it is symmetric and idempotent on the irregulars
+// a hand-rolled or Porter/Snowball stemmer breaks: analyses≡analysis,
+// indices≡index, matrices≡matrix, theses≡thesis. Allocated once; configured for
+// the technical vocabulary in stemDomainToken's guards. Pure-Go, zero deps.
+var domainPluralizer = pluralize.NewClient()
 
 // canonicalizeDomain normalises a domain tag for matching and junction storage:
 // NFC → case-fold → replace hyphens and Unicode whitespace with a single space →
@@ -48,19 +56,25 @@ func canonicalizeDomain(s string) string {
 // stemDomainToken normalises a token to its singular form as a MATCH-ONLY key —
 // the result is never displayed or stored as the canonical tag, only used so a
 // query token and a stored token collapse to the same key ("vulnerabilities" ≡
-// "vulnerability"). It delegates to inflection.Singular, which (unlike a Porter
-// stemmer) is symmetric and idempotent on the irregulars that matter here:
-// analyses→analysis, theses→thesis, indices→index, matrices→matrix — a
-// hand-rolled -es/-ies stemmer gets these wrong (and so does Snowball/Porter).
+// "vulnerability"). It delegates to go-pluralize, which is symmetric and
+// idempotent on the irregulars a hand-rolled or Porter/Snowball stemmer breaks
+// (analyses≡analysis, indices≡index, matrices≡matrix, theses≡thesis), verified
+// against the real domain corpus.
 //
-// Short tokens are left untouched: inflection treats a trailing 's' as plural
-// ("aws"→"aw"), which would mangle acronyms (ai, aws, llm) and break matching.
-// 3-char-or-shorter tags are acronyms/identifiers, never plurals worth stemming.
+// Two guards prevent over-singularizing non-plurals that merely end in 's'
+// (any pluralizer treats a trailing 's' as plural, which is what we DON'T want
+// for these — confirmed against real knomit domains):
+//   - len <= 3: acronyms/identifiers (ai, aws, llm, tls) are never plurals.
+//   - "...ics": -ics field/mass nouns (economics, robotics, metrics, ethics)
+//     are singular; stripping to -ic would be wrong and asymmetric.
+//
+// Both guards are symmetric (applied identically at index and query time), so
+// they never break matching; they only avoid mangling internal keys.
 func stemDomainToken(t string) string {
-	if len(t) <= 3 {
+	if len(t) <= 3 || strings.HasSuffix(t, "ics") {
 		return t
 	}
-	return inflection.Singular(t)
+	return domainPluralizer.Singular(t)
 }
 
 // domainTokens returns the stemmed, de-duplicated token set of a canonical

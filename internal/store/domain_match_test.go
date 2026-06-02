@@ -36,17 +36,20 @@ func TestCanonicalizeDomain(t *testing.T) {
 }
 
 // TestStemDomainToken pins the match-only singularizer: it normalises a token
-// to its singular key (via inflection.Singular), with a short-token guard.
+// to its singular key (via go-pluralize), with short-token and -ics guards.
 func TestStemDomainToken(t *testing.T) {
 	cases := []struct{ in, want string }{
 		{"vulnerabilities", "vulnerability"},
 		{"agents", "agent"},
 		{"models", "model"},
 		{"products", "product"},
-		{"class", "class"}, // already singular, unchanged
-		{"ai", "ai"},       // len guard (<=3)
-		{"aws", "aws"},     // len guard — acronym, NOT treated as plural
-		{"llm", "llm"},     // len guard
+		{"class", "class"},         // already singular, unchanged
+		{"ai", "ai"},               // len guard (<=3)
+		{"aws", "aws"},             // len guard — acronym, NOT treated as plural
+		{"llm", "llm"},             // len guard
+		{"economics", "economics"}, // -ics guard — field noun, NOT a plural
+		{"robotics", "robotics"},   // -ics guard
+		{"metrics", "metrics"},     // -ics guard
 		{"batches", "batch"},
 	}
 	for _, c := range cases {
