@@ -123,7 +123,7 @@ func ScopedCluster(ctx context.Context,
 	if err != nil {
 		log.Debug().Err(err).Msg("scoped-cluster: Louvain failed, falling back to category grouping")
 		onProgress(ProgressEvent{Phase: "cluster", Message: "Louvain failed, using category fallback"})
-		return filterSmallClusters(groupByCategory(subgraphFacts(subgraph, factByPath))), nil
+		return filterSmallClusters(groupByCategory(subgraphFacts(subgraph, factByPath)), minCommunitySize), nil
 	}
 
 	// Filter Louvain clusters to only include subgraph paths.
@@ -145,11 +145,11 @@ func ScopedCluster(ctx context.Context,
 	if len(clusters) == 0 {
 		log.Debug().Msg("scoped-cluster: no Louvain clusters in subgraph, falling back to category grouping")
 		onProgress(ProgressEvent{Phase: "cluster", Message: "no clusters in subgraph, using category fallback"})
-		return filterSmallClusters(groupByCategory(subgraphFacts(subgraph, factByPath))), nil
+		return filterSmallClusters(groupByCategory(subgraphFacts(subgraph, factByPath)), minCommunitySize), nil
 	}
 
 	onProgress(ProgressEvent{Phase: "cluster", Message: "scoped clustering complete"})
-	return filterSmallClusters(clusters), nil
+	return filterSmallClusters(clusters, minCommunitySize), nil
 }
 
 // categoryDir extracts the parent directory from a fact path.
@@ -183,11 +183,13 @@ func subgraphFacts(subgraph map[string]bool, factByPath map[string]factForLLM) [
 	return facts
 }
 
-// filterSmallClusters removes clusters with fewer than 2 facts.
-func filterSmallClusters(clusters [][]factForLLM) [][]factForLLM {
+// filterSmallClusters removes clusters smaller than minCommunitySize, honouring
+// the configured cluster minimum so the category-fallback paths drop the same
+// small communities the Louvain path does (rather than a hardcoded "< 2").
+func filterSmallClusters(clusters [][]factForLLM, minCommunitySize int) [][]factForLLM {
 	var out [][]factForLLM
 	for _, c := range clusters {
-		if len(c) > 1 {
+		if len(c) >= minCommunitySize {
 			out = append(out, c)
 		}
 	}

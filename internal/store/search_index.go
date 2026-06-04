@@ -118,6 +118,22 @@ func (si *searchIndex) NeedsRebuild(ctx context.Context) (bool, error) {
 	return persistedVer != GraphSchemaVersion, nil
 }
 
+// MarkRebuildNeeded clears the persisted schema version so the next
+// NeedsRebuild reports stale. It exists to undo a premature version bump after
+// a partially-failed multi-branch heal: Rebuild bumps the GLOBAL
+// meta.graph_schema_version on each branch it completes, so an earlier branch's
+// success would otherwise mask a later branch's failure (the version reads
+// current, suppressing the retry), leaving that branch's canonical domains /
+// tokens stale permanently. Re-marking forces the next startup to heal again.
+func (si *searchIndex) MarkRebuildNeeded(ctx context.Context) error {
+	if _, err := conn(ctx, si.rh.db).ExecContext(ctx,
+		`DELETE FROM meta WHERE key = 'graph_schema_version'`,
+	); err != nil {
+		return fmt.Errorf("mark rebuild needed: %w", err)
+	}
+	return nil
+}
+
 // Sync brings the index up to date with the git store.
 //
 // Algorithm:

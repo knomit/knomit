@@ -15,6 +15,24 @@ import (
 // defaultQueryLimit caps knomit_query results when the caller passes no limit.
 const defaultQueryLimit = 20
 
+// maxQueryLimit is the upper bound on knomit_query results, mirroring the REST
+// search handler's cap (internal/web/handlers_search_hal.go) so a caller cannot
+// materialise the entire corpus in one tool response — keeping MCP at parity
+// with REST rather than unbounded.
+const maxQueryLimit = 500
+
+// clampQueryLimit normalises a caller-supplied limit: non-positive falls back to
+// the default, anything above the cap is clamped to maxQueryLimit.
+func clampQueryLimit(limit int) int {
+	if limit <= 0 {
+		return defaultQueryLimit
+	}
+	if limit > maxQueryLimit {
+		return maxQueryLimit
+	}
+	return limit
+}
+
 // queryTool returns the Tool definition for knomit_query.
 func queryTool() mcpgo.Tool {
 	return mcpgo.NewTool("knomit_query",
@@ -75,10 +93,7 @@ func QueryHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToo
 		path := req.GetString("path", "")
 		minConfidence := req.GetFloat("min_confidence", 0)
 		minSimilarity := req.GetFloat("min_similarity", 0)
-		limit := req.GetInt("limit", defaultQueryLimit)
-		if limit <= 0 {
-			limit = defaultQueryLimit
-		}
+		limit := clampQueryLimit(req.GetInt("limit", 0))
 		types := req.GetStringSlice("type", nil)
 		domainExact := req.GetBool("domain_exact", false)
 

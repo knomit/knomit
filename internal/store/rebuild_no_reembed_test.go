@@ -126,3 +126,30 @@ func TestNeedsRebuild_TrueWhenVersionStale(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, stale, "after Rebuild the persisted version is current")
 }
+
+// TestMarkRebuildNeeded_RearmsStaleAfterBump regresses PR #70 review finding #1:
+// Rebuild bumps the GLOBAL schema version on every branch it completes, so a
+// later branch's rebuild failure would be masked (version reads current → the
+// next startup skips the heal). MarkRebuildNeeded must clear the version so a
+// partially-failed heal is retried on the next startup.
+func TestMarkRebuildNeeded_RearmsStaleAfterBump(t *testing.T) {
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	defer svc.Close()
+	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+	ctx := context.Background()
+
+	// A successful rebuild bumps the version to current.
+	require.NoError(t, svc.IndexManager().Rebuild(ctx, "main", nil))
+	stale, err := svc.IndexManager().NeedsRebuild(ctx)
+	require.NoError(t, err)
+	require.False(t, stale, "precondition: rebuilt DB is current")
+
+	// Re-marking (as the heal loop does after a partial failure) makes the next
+	// NeedsRebuild report stale again so every branch is retried.
+	require.NoError(t, svc.IndexManager().MarkRebuildNeeded(ctx))
+	stale, err = svc.IndexManager().NeedsRebuild(ctx)
+	require.NoError(t, err)
+	require.True(t, stale, "after MarkRebuildNeeded the heal must be retried")
+}

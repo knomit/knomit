@@ -266,3 +266,53 @@ func TestSearch_DegenerateDomainFilterIsNoOp(t *testing.T) {
 			"a junk domain filter %q must be ignored (not emit domain=''), so kb/r.md still returns; got %d results", junk, len(res))
 	}
 }
+
+// TestCompletions_JunkDomainPrefixReturnsNothing regresses PR #70 review finding
+// #3: a domain-autocomplete prefix that canonicalises to "" (junk like "---")
+// fell through to `LIKE '%'` and returned every domain. A junk prefix must yield
+// no completions, while empty input still lists everything and a real prefix
+// filters.
+func TestCompletions_JunkDomainPrefixReturnsNothing(t *testing.T) {
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	defer svc.Close()
+	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+	ctx := context.Background()
+	branch := "main"
+
+	mk := func(path string, domains []string) {
+		f := fact.NewFact("placeholder.md")
+		f.Title = "T"
+		f.Confidence = 0.9
+		f.Sources = 1
+		f.Domain = domains
+		f.Entities = []string{"x"}
+		f.Type = fact.Observation
+		out, err := fact.SerializeFact(f)
+		require.NoError(t, err)
+		_, err = svc.Facts().WriteFact(ctx, branch, path, out, "init", "")
+		require.NoError(t, err)
+	}
+	mk("kb/a.md", []string{"ai-governance"}) // canonical: "ai governance"
+	mk("kb/b.md", []string{"security"})
+	require.NoError(t, svc.IndexManager().Rebuild(ctx, branch, nil))
+
+	// Junk prefix → no completions (the bug returned all domains).
+	for _, junk := range []string{"---", "-", "   "} {
+		got, err := svc.Search().Completions(ctx, branch, "domain", junk, 50)
+		require.NoError(t, err)
+		require.Empty(t, got, "junk domain prefix %q must return no completions", junk)
+	}
+
+	// Empty input still lists everything (the intended "nothing typed yet"
+	// behaviour).
+	all, err := svc.Search().Completions(ctx, branch, "domain", "", 50)
+	require.NoError(t, err)
+	require.ElementsMatch(t, []string{"ai governance", "security"}, all)
+
+	// A real prefix filters to the matching canonical domain.
+	one, err := svc.Search().Completions(ctx, branch, "domain", "ai", 50)
+	require.NoError(t, err)
+	require.Equal(t, []string{"ai governance"}, one)
+}

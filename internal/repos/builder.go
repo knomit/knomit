@@ -252,20 +252,41 @@ func (b *repoBuilder) setupIndex() {
 		log.Warn().Err(err).Str("repo", b.name).Msg("index schema version check failed; assuming current")
 	}
 
+	healIndexBranches(context.Background(), im, b.name, branches, stale)
+}
+
+// healIndexBranches brings each maintained branch's search index up to date at
+// startup: when `stale` (the global schema version is behind), it full-Rebuilds
+// every branch to regenerate derived state; otherwise it incrementally Syncs.
+//
+// Rebuild bumps the GLOBAL meta.graph_schema_version on each branch it
+// completes. So if an earlier branch rebuilds successfully and a later branch
+// fails, the version already reads current and the next startup would skip the
+// heal entirely — leaving the failed branch's canonical domains / tokens stale
+// permanently. To prevent that, any rebuild failure during a heal re-marks the
+// schema as needing a rebuild so the next startup retries every branch.
+func healIndexBranches(ctx context.Context, im store.IndexManager, repo string, branches []string, stale bool) {
+	healFailed := false
 	for i, branch := range branches {
 		if stale {
-			if err := im.Rebuild(context.Background(), branch, nil); err != nil {
-				log.Warn().Err(err).Str("repo", b.name).Str("branch", branch).Msg("schema-mismatch rebuild failed")
+			if err := im.Rebuild(ctx, branch, nil); err != nil {
+				log.Warn().Err(err).Str("repo", repo).Str("branch", branch).Msg("schema-mismatch rebuild failed")
+				healFailed = true
 			}
 			continue
 		}
-		if err := im.Sync(context.Background(), branch); err != nil {
+		if err := im.Sync(ctx, branch); err != nil {
 			level := log.Warn()
 			if i == 0 {
-				level.Err(err).Str("repo", b.name).Msg("initial index sync failed")
+				level.Err(err).Str("repo", repo).Msg("initial index sync failed")
 			} else {
-				level.Err(err).Str("repo", b.name).Str("branch", branch).Msg("initial index sync (upstream) failed")
+				level.Err(err).Str("repo", repo).Str("branch", branch).Msg("initial index sync (upstream) failed")
 			}
+		}
+	}
+	if stale && healFailed {
+		if err := im.MarkRebuildNeeded(ctx); err != nil {
+			log.Warn().Err(err).Str("repo", repo).Msg("could not re-mark schema rebuild after partial heal")
 		}
 	}
 }

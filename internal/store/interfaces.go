@@ -58,6 +58,10 @@ type IndexManager interface {
 	// NeedsRebuild reports whether persisted derived state was written by an
 	// older schema version and must be regenerated via Rebuild.
 	NeedsRebuild(ctx context.Context) (bool, error)
+	// MarkRebuildNeeded clears the persisted schema version so the next
+	// NeedsRebuild reports stale. Used to undo a premature version bump after a
+	// partially-failed multi-branch heal.
+	MarkRebuildNeeded(ctx context.Context) error
 }
 
 // RemoteIndex is the interface for git remote configuration and synchronization.
