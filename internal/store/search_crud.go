@@ -184,14 +184,26 @@ func (si *searchIndex) upsert(ctx context.Context, branch, commitHash string, re
 		}
 	}
 	for _, domain := range rec.Domain {
-		if domain == "" {
+		canon := canonicalizeDomain(domain)
+		if canon == "" {
 			continue
 		}
+		// Store the canonical form (NFC + fold + de-hyphenize) so case/space/
+		// hyphen variants unify for filtering.
 		if _, err := db.ExecContext(ctx,
 			`INSERT OR IGNORE INTO fact_domains(fact_id, domain) VALUES (?, ?)`,
-			factID, domain,
+			factID, canon,
 		); err != nil {
 			return fmt.Errorf("upsert fact_domains: %w", err)
+		}
+		// Token containment index: one row per stemmed token of this domain.
+		for _, tok := range domainTokens(canon) {
+			if _, err := db.ExecContext(ctx,
+				`INSERT OR IGNORE INTO fact_domain_tokens(fact_id, domain, token) VALUES (?, ?, ?)`,
+				factID, canon, tok,
+			); err != nil {
+				return fmt.Errorf("upsert fact_domain_tokens: %w", err)
+			}
 		}
 	}
 

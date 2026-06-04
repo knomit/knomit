@@ -19,6 +19,16 @@ import (
 // without overwhelming the search backend.
 const maxConcurrentNeighborSearches = 8
 
+// defaultScopedResolution / defaultScopedMinCommunitySize are defensive
+// fallbacks used only when a caller passes a non-positive value. The real
+// values come from config ([cluster_cache] resolution/min_community_size) via
+// RepoInstance and must stay in sync with repos.defaultCluster* — kept as plain
+// constants here because synthesize must not import repos.
+const (
+	defaultScopedResolution       = 2.0
+	defaultScopedMinCommunitySize = 2
+)
+
 // ScopedCluster builds clusters containing only seed facts and their nearest neighbors.
 // Algorithm:
 // 1. For each seed, find neighbors via idx.Search (semantic similarity) scoped to same category
@@ -29,6 +39,7 @@ func ScopedCluster(ctx context.Context,
 	seeds []factForLLM,
 	idx store.SearchIndex,
 	resolution float64,
+	minCommunitySize int,
 	onProgress func(ProgressEvent),
 	agentBranch string,
 	excludeTypes ...string,
@@ -99,15 +110,20 @@ func ScopedCluster(ctx context.Context,
 	onProgress(ProgressEvent{Phase: "cluster", Message: "scoped clustering: subgraph built"})
 
 	// Step 2: Try Louvain clustering on the full graph, then filter to subgraph.
+	// Defensive fallbacks; callers pass the config-driven values via RepoInstance
+	// (config [cluster_cache] resolution/min_community_size) — the source of truth.
 	if resolution <= 0 {
-		resolution = 1.0
+		resolution = defaultScopedResolution
+	}
+	if minCommunitySize <= 0 {
+		minCommunitySize = defaultScopedMinCommunitySize
 	}
 
-	result, err := idx.CachedClusterFacts(ctx, agentBranch, resolution, 2)
+	result, err := idx.CachedClusterFacts(ctx, agentBranch, resolution, minCommunitySize)
 	if err != nil {
 		log.Debug().Err(err).Msg("scoped-cluster: Louvain failed, falling back to category grouping")
 		onProgress(ProgressEvent{Phase: "cluster", Message: "Louvain failed, using category fallback"})
-		return filterSmallClusters(groupByCategory(subgraphFacts(subgraph, factByPath))), nil
+		return filterSmallClusters(groupByCategory(subgraphFacts(subgraph, factByPath)), minCommunitySize), nil
 	}
 
 	// Filter Louvain clusters to only include subgraph paths.
@@ -129,11 +145,11 @@ func ScopedCluster(ctx context.Context,
 	if len(clusters) == 0 {
 		log.Debug().Msg("scoped-cluster: no Louvain clusters in subgraph, falling back to category grouping")
 		onProgress(ProgressEvent{Phase: "cluster", Message: "no clusters in subgraph, using category fallback"})
-		return filterSmallClusters(groupByCategory(subgraphFacts(subgraph, factByPath))), nil
+		return filterSmallClusters(groupByCategory(subgraphFacts(subgraph, factByPath)), minCommunitySize), nil
 	}
 
 	onProgress(ProgressEvent{Phase: "cluster", Message: "scoped clustering complete"})
-	return filterSmallClusters(clusters), nil
+	return filterSmallClusters(clusters, minCommunitySize), nil
 }
 
 // categoryDir extracts the parent directory from a fact path.
@@ -167,11 +183,13 @@ func subgraphFacts(subgraph map[string]bool, factByPath map[string]factForLLM) [
 	return facts
 }
 
-// filterSmallClusters removes clusters with fewer than 2 facts.
-func filterSmallClusters(clusters [][]factForLLM) [][]factForLLM {
+// filterSmallClusters removes clusters smaller than minCommunitySize, honouring
+// the configured cluster minimum so the category-fallback paths drop the same
+// small communities the Louvain path does (rather than a hardcoded "< 2").
+func filterSmallClusters(clusters [][]factForLLM, minCommunitySize int) [][]factForLLM {
 	var out [][]factForLLM
 	for _, c := range clusters {
-		if len(c) > 1 {
+		if len(c) >= minCommunitySize {
 			out = append(out, c)
 		}
 	}

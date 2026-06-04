@@ -18,9 +18,11 @@ import (
 // from config.ClusterCacheConfig (raw TOML/env strings) via
 // parseClusterCheckerConfig. CheckInterval == 0 disables the loop.
 type clusterCheckerConfig struct {
-	QuietThreshold time.Duration
-	CheckInterval  time.Duration
-	MaxConcurrent  int
+	QuietThreshold   time.Duration
+	CheckInterval    time.Duration
+	MaxConcurrent    int
+	Resolution       float64
+	MinCommunitySize int
 }
 
 // parseClusterCheckerConfig parses the raw config.ClusterCacheConfig
@@ -40,7 +42,39 @@ func parseClusterCheckerConfig(raw config.ClusterCacheConfig) (clusterCheckerCon
 	if maxC <= 0 {
 		maxC = 1
 	}
-	return clusterCheckerConfig{QuietThreshold: q, CheckInterval: c, MaxConcurrent: maxC}, nil
+	return clusterCheckerConfig{
+		QuietThreshold:   q,
+		CheckInterval:    c,
+		MaxConcurrent:    maxC,
+		Resolution:       clusterResolutionOrDefault(raw.Resolution),
+		MinCommunitySize: clusterMinCommunityOrDefault(raw.MinCommunitySize),
+	}, nil
+}
+
+// defaultClusterResolution / defaultClusterMinCommunitySize are the canonical
+// fallbacks when config leaves them unset. Kept here (the repos package) as the
+// single source of truth shared by the checker and, via RepoInstance getters,
+// the synthesize read path — so both warm/read the same cluster_cache key.
+const (
+	defaultClusterResolution       = 2.0
+	defaultClusterMinCommunitySize = 2
+)
+
+// clusterResolutionOrDefault / clusterMinCommunityOrDefault apply the canonical
+// fallbacks for unset (<=0) config values. Shared by parseClusterCheckerConfig
+// (checker) and the RepoInstance builder (read path) so both resolve identically.
+func clusterResolutionOrDefault(v float64) float64 {
+	if v <= 0 {
+		return defaultClusterResolution
+	}
+	return v
+}
+
+func clusterMinCommunityOrDefault(v int) int {
+	if v <= 0 {
+		return defaultClusterMinCommunitySize
+	}
+	return v
 }
 
 func parseClusterDur(field, s string, def time.Duration) (time.Duration, error) {
@@ -55,16 +89,21 @@ func parseClusterDur(field, s string, def time.Duration) (time.Duration, error) 
 }
 
 // clusterKey is one (resolution, minCommunitySize) combination the
-// checker proactively keeps warm. defaultClusterKeys mirrors the values
-// synthesize.ScopedCluster passes to CachedClusterFacts (resolution=1.0,
-// minCommunitySize=2). Callers using a different key fall through to the
-// lazy compute on first read; the checker only warms the common case.
+// checker proactively keeps warm. The keys are derived from the parsed
+// clusterCheckerConfig (config-driven, default resolution=2.0,
+// minCommunitySize=2) and MUST match what synthesize.ScopedCluster passes to
+// CachedClusterFacts — RepoInstance.ClusterResolution()/ClusterMinCommunitySize()
+// read the same config so the checker warms the key the read path requests.
+// Callers using a different key fall through to the lazy compute on first read.
 type clusterKey struct {
 	Resolution       float64
 	MinCommunitySize int
 }
 
-var defaultClusterKeys = []clusterKey{{Resolution: 1.0, MinCommunitySize: 2}}
+// clusterKeys returns the (resolution, minCommunitySize) keys the checker warms.
+func (c clusterCheckerConfig) clusterKeys() []clusterKey {
+	return []clusterKey{{Resolution: c.Resolution, MinCommunitySize: c.MinCommunitySize}}
+}
 
 // clusterDispatcher bundles the concurrency primitives shared across
 // the per-tick traversal: sem caps cross-repo Louvain runs in flight,
@@ -197,7 +236,7 @@ func checkBranchClusters(ctx context.Context, ri *RepoInstance, branch string, n
 		return
 	}
 
-	for _, k := range defaultClusterKeys {
+	for _, k := range cfg.clusterKeys() {
 		var (
 			row   store.ClusterCacheRow
 			found bool

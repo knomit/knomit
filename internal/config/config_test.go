@@ -117,3 +117,37 @@ func TestEnvFloatOr_MethodologyMinScore(t *testing.T) {
 		}
 	})
 }
+
+// TestDefaults_ClusterResolution pins the configurable Louvain resolution
+// default at 2.0 (was a hardcoded 1.0): higher γ breaks the over-large
+// communities surfaced by the search-clustering analysis (mega-cluster 65→27).
+func TestDefaults_ClusterResolution(t *testing.T) {
+	d := Defaults()
+	if got := d.ClusterCache.Resolution; got != 2.0 {
+		t.Fatalf("Defaults().ClusterCache.Resolution: want 2.0, got %v", got)
+	}
+	if got := d.ClusterCache.MinCommunitySize; got != 2 {
+		t.Fatalf("Defaults().ClusterCache.MinCommunitySize: want 2, got %v", got)
+	}
+}
+
+// TestLoad_ClusterResolutionEnvOverride regresses the gap where the new
+// cluster_cache resolution / min_community_size fields had no env override
+// (the other three fields did). Load must wire KNOMIT_CLUSTER_CACHE_RESOLUTION
+// and KNOMIT_CLUSTER_CACHE_MIN_COMMUNITY_SIZE through to the config.
+func TestLoad_ClusterResolutionEnvOverride(t *testing.T) {
+	t.Setenv("KNOMIT_HOME", t.TempDir()) // empty dir → no TOML, defaults + env only
+	t.Setenv("KNOMIT_CLUSTER_CACHE_RESOLUTION", "1.5")
+	t.Setenv("KNOMIT_CLUSTER_CACHE_MIN_COMMUNITY_SIZE", "3")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := cfg.ClusterCache.Resolution; got != 1.5 {
+		t.Fatalf("env override Resolution: want 1.5, got %v", got)
+	}
+	if got := cfg.ClusterCache.MinCommunitySize; got != 3 {
+		t.Fatalf("env override MinCommunitySize: want 3, got %v", got)
+	}
+}

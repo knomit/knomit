@@ -12,6 +12,27 @@ import (
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 )
 
+// defaultQueryLimit caps knomit_query results when the caller passes no limit.
+const defaultQueryLimit = 20
+
+// maxQueryLimit is the upper bound on knomit_query results, mirroring the REST
+// search handler's cap (internal/web/handlers_search_hal.go) so a caller cannot
+// materialise the entire corpus in one tool response — keeping MCP at parity
+// with REST rather than unbounded.
+const maxQueryLimit = 500
+
+// clampQueryLimit normalises a caller-supplied limit: non-positive falls back to
+// the default, anything above the cap is clamped to maxQueryLimit.
+func clampQueryLimit(limit int) int {
+	if limit <= 0 {
+		return defaultQueryLimit
+	}
+	if limit > maxQueryLimit {
+		return maxQueryLimit
+	}
+	return limit
+}
+
 // queryTool returns the Tool definition for knomit_query.
 func queryTool() mcpgo.Tool {
 	return mcpgo.NewTool("knomit_query",
@@ -37,6 +58,19 @@ func queryTool() mcpgo.Tool {
 		mcpgo.WithNumber("min_confidence",
 			mcpgo.Description("Minimum confidence threshold (0–1)."),
 		),
+		mcpgo.WithNumber("min_similarity",
+			mcpgo.Description("Minimum cosine similarity for text search (0–1); 0 uses the server default (0.40)."),
+		),
+		mcpgo.WithNumber("limit",
+			mcpgo.Description("Maximum number of results to return (default 20)."),
+		),
+		mcpgo.WithArray("type",
+			mcpgo.Description("Filter to these epistemic types (e.g. observation, policy, principle, hypothesis)."),
+			mcpgo.WithStringItems(),
+		),
+		mcpgo.WithBoolean("domain_exact",
+			mcpgo.Description("Match `domain` by exact canonical tag only (no token containment / hierarchy). Default false: 'ai' also matches 'ai governance', etc."),
+		),
 	)
 }
 
@@ -58,10 +92,17 @@ func QueryHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToo
 		appliesTo := req.GetStringSlice("applies_to", nil)
 		path := req.GetString("path", "")
 		minConfidence := req.GetFloat("min_confidence", 0)
+		minSimilarity := req.GetFloat("min_similarity", 0)
+		limit := clampQueryLimit(req.GetInt("limit", 0))
+		types := req.GetStringSlice("type", nil)
+		domainExact := req.GetBool("domain_exact", false)
 
-		// Validate at least one filter.
-		if text == "" && len(entities) == 0 && len(domain) == 0 && len(appliesTo) == 0 && path == "" && minConfidence == 0 {
-			return mcpgo.NewToolResultError("at least one of text, entities, domain, applies_to, path, or min_confidence is required"), nil
+		// Validate at least one filter. `type` counts: the store supports a
+		// text-less type-only query (returns all facts of that type), and the
+		// REST search handler already accepts it — listing it here keeps
+		// knomit_query at parity with REST instead of rejecting what REST allows.
+		if text == "" && len(entities) == 0 && len(domain) == 0 && len(appliesTo) == 0 && path == "" && minConfidence == 0 && len(types) == 0 {
+			return mcpgo.NewToolResultError("at least one of text, entities, domain, applies_to, path, type, or min_confidence is required"), nil
 		}
 
 		q := store.SearchOptions{
@@ -71,7 +112,10 @@ func QueryHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToo
 			DomainAncestor: appliesTo,
 			Path:           path,
 			MinConfidence:  minConfidence,
-			Limit:          20,
+			MinSimilarity:  minSimilarity,
+			IncludeTypes:   types,
+			DomainExact:    domainExact,
+			Limit:          limit,
 		}
 
 		// 4. Search.
@@ -86,6 +130,7 @@ func QueryHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToo
 			Title       string      `json:"title"`
 			Kind        string      `json:"kind,omitempty"` // omitted when epistemic (the default)
 			Type        string      `json:"type"`
+			Score       float64     `json:"score"` // relevance score in [0,100]; 100 for filter-only (text-less) queries
 			Body        string      `json:"body"`
 			Commit      string      `json:"commit"`
 			Frontmatter interface{} `json:"frontmatter"`
@@ -120,6 +165,7 @@ func QueryHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToo
 				Title:       r.Title,
 				Kind:        kind,
 				Type:        r.Type,
+				Score:       r.Score,
 				Body:        r.Body,
 				Commit:      r.CommitHash,
 				Frontmatter: fm,

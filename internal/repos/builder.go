@@ -229,16 +229,64 @@ func (b *repoBuilder) setupIndex() {
 	if b.embedder != nil {
 		b.svc.SetEmbedder(b.embedder)
 	}
-	if err := b.svc.IndexManager().Sync(context.Background(), b.agentBranch); err != nil {
-		log.Warn().Err(err).Str("repo", b.name).Msg("initial index sync failed")
-	}
+
+	// Collect the branches whose index we maintain at startup.
+	branches := []string{b.agentBranch}
 	if b.cfg.Git.Origin != "" {
 		upstream := b.upstreamMain
 		if upstream == "" {
 			upstream = "main"
 		}
-		if err := b.svc.IndexManager().Sync(context.Background(), upstream); err != nil {
-			log.Warn().Err(err).Str("repo", b.name).Str("branch", upstream).Msg("initial index sync (upstream) failed")
+		branches = append(branches, upstream)
+	}
+
+	// If derived state was written by an older schema version (e.g. pre-canonical
+	// domains / empty fact_domain_tokens), a plain Sync no-ops when last==HEAD and
+	// leaves domain search silently broken. Detect the mismatch once (the version
+	// is global) and full-Rebuild each branch instead, which regenerates the
+	// derived state. Rebuild preserves facts rowids, so existing embeddings are
+	// reused — the heal does not re-embed the corpus.
+	im := b.svc.IndexManager()
+	stale, err := im.NeedsRebuild(context.Background())
+	if err != nil {
+		log.Warn().Err(err).Str("repo", b.name).Msg("index schema version check failed; assuming current")
+	}
+
+	healIndexBranches(context.Background(), im, b.name, branches, stale)
+}
+
+// healIndexBranches brings each maintained branch's search index up to date at
+// startup: when `stale` (the global schema version is behind), it full-Rebuilds
+// every branch to regenerate derived state; otherwise it incrementally Syncs.
+//
+// Rebuild bumps the GLOBAL meta.graph_schema_version on each branch it
+// completes. So if an earlier branch rebuilds successfully and a later branch
+// fails, the version already reads current and the next startup would skip the
+// heal entirely — leaving the failed branch's canonical domains / tokens stale
+// permanently. To prevent that, any rebuild failure during a heal re-marks the
+// schema as needing a rebuild so the next startup retries every branch.
+func healIndexBranches(ctx context.Context, im store.IndexManager, repo string, branches []string, stale bool) {
+	healFailed := false
+	for i, branch := range branches {
+		if stale {
+			if err := im.Rebuild(ctx, branch, nil); err != nil {
+				log.Warn().Err(err).Str("repo", repo).Str("branch", branch).Msg("schema-mismatch rebuild failed")
+				healFailed = true
+			}
+			continue
+		}
+		if err := im.Sync(ctx, branch); err != nil {
+			level := log.Warn()
+			if i == 0 {
+				level.Err(err).Str("repo", repo).Msg("initial index sync failed")
+			} else {
+				level.Err(err).Str("repo", repo).Str("branch", branch).Msg("initial index sync (upstream) failed")
+			}
+		}
+	}
+	if stale && healFailed {
+		if err := im.MarkRebuildNeeded(ctx); err != nil {
+			log.Warn().Err(err).Str("repo", repo).Msg("could not re-mark schema rebuild after partial heal")
 		}
 	}
 }
@@ -275,6 +323,8 @@ func (b *repoBuilder) build() *RepoInstance {
 		embedder:            b.embedder,
 		ontologyRoot:        b.cfg.OntologyRoot,
 		methodologyMinScore: b.cfg.MethodologyMinScore,
+		clusterResolution:   clusterResolutionOrDefault(b.cfg.ClusterCache.Resolution),
+		clusterMinCommunity: clusterMinCommunityOrDefault(b.cfg.ClusterCache.MinCommunitySize),
 		svc:                 b.svc,
 		hub:                 hub,
 	}

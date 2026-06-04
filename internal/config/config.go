@@ -45,6 +45,13 @@ type ClusterCacheConfig struct {
 	QuietThreshold string `toml:"quiet_threshold"`
 	CheckInterval  string `toml:"check_interval"`
 	MaxConcurrent  int    `toml:"max_concurrent"`
+	// Resolution is the Louvain γ: higher = more, smaller communities. Default
+	// 2.0 (was a hardcoded 1.0) — breaks over-large communities. MinCommunitySize
+	// relabels communities smaller than this as noise. Both must match between the
+	// background checker and the read path or the cluster cache thrashes (the cache
+	// is keyed on (branch, resolution, min_community_size)).
+	Resolution       float64 `toml:"resolution"`
+	MinCommunitySize int     `toml:"min_community_size"`
 }
 
 // Config is the root configuration, composed of section structs.
@@ -72,9 +79,11 @@ func Defaults() Config {
 		OntologyRoot:        "kb",
 		MethodologyMinScore: 0.15,
 		ClusterCache: ClusterCacheConfig{
-			QuietThreshold: "10s",
-			CheckInterval:  "5s",
-			MaxConcurrent:  1,
+			QuietThreshold:   "10s",
+			CheckInterval:    "5s",
+			MaxConcurrent:    1,
+			Resolution:       2.0,
+			MinCommunitySize: 2,
 		},
 		LLM: LLMConfig{
 			Model:    "gemini-2.5-flash",
@@ -127,6 +136,8 @@ func Load() (Config, error) {
 	envOr("KNOMIT_CLUSTER_CACHE_QUIET_THRESHOLD", &cfg.ClusterCache.QuietThreshold)
 	envOr("KNOMIT_CLUSTER_CACHE_CHECK_INTERVAL", &cfg.ClusterCache.CheckInterval)
 	envIntOr("KNOMIT_CLUSTER_CACHE_MAX_CONCURRENT", &cfg.ClusterCache.MaxConcurrent)
+	envFloatOr("KNOMIT_CLUSTER_CACHE_RESOLUTION", &cfg.ClusterCache.Resolution)
+	envIntOr("KNOMIT_CLUSTER_CACHE_MIN_COMMUNITY_SIZE", &cfg.ClusterCache.MinCommunitySize)
 	envFloatOr("KNOMIT_METHODOLOGY_MIN_SCORE", &cfg.MethodologyMinScore)
 
 	// Expand tildes in path fields.

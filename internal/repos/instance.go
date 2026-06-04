@@ -18,6 +18,8 @@ type RepoInstance struct {
 	embedder            store.BatchEmbedder
 	ontologyRoot        string
 	methodologyMinScore float64
+	clusterResolution   float64
+	clusterMinCommunity int
 	onCommit            func(string, string) // re-applied to new svc after SwapStore
 	svc                 *store.Service
 	hub                 *TaskHub
@@ -61,6 +63,14 @@ func (ri *RepoInstance) OntologyRoot() string { return ri.ontologyRoot }
 // MethodologyMinScore returns the minimum composite score below which
 // methodology candidates are dropped from prompt injection.
 func (ri *RepoInstance) MethodologyMinScore() float64 { return ri.methodologyMinScore }
+
+// ClusterResolution returns the Louvain γ the review/cluster read path must use.
+// It mirrors the value the background checker warms (config [cluster_cache]
+// resolution, default 2.0) so both hit the same cluster_cache key.
+func (ri *RepoInstance) ClusterResolution() float64 { return ri.clusterResolution }
+
+// ClusterMinCommunitySize returns the min community size paired with the resolution.
+func (ri *RepoInstance) ClusterMinCommunitySize() int { return ri.clusterMinCommunity }
 
 // TaskHub returns the hub for broadcasting task status events.
 func (ri *RepoInstance) TaskHub() *TaskHub { return ri.hub }
@@ -130,6 +140,8 @@ func NewTestInstanceWithDeps(cfg TestInstanceConfig) *RepoInstance {
 		embedder:            cfg.Embedder,
 		ontologyRoot:        cfg.OntologyRoot,
 		methodologyMinScore: cfg.MethodologyMinScore,
+		clusterResolution:   defaultClusterResolution,
+		clusterMinCommunity: defaultClusterMinCommunitySize,
 		hub:                 cfg.Hub,
 		startSync:           cfg.StartSync,
 		syncCancel:          func() {},

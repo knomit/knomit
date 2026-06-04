@@ -134,3 +134,73 @@ func TestQuery_AppliesTo_AcceptedAsSoleFilter(t *testing.T) {
 			"applies_to alone must satisfy the filter-required check; got %q", text)
 	}
 }
+
+// TestQuery_SurfacesScoreAndRespectsLimit pins that knomit_query returns the
+// relevance score per fact and honours a caller-supplied limit (was hardcoded 20).
+func TestQuery_SurfacesScoreAndRespectsLimit(t *testing.T) {
+	_, ctx, _ := newPrinciplesTestRepo(t)
+	seedPrincipleWithDomain(t, ctx, "seed-a", "mission/store", "Alpha Store Principle", "store")
+	seedPrincipleWithDomain(t, ctx, "seed-b", "mission/store", "Beta Store Principle", "store")
+
+	var req mcpgo.CallToolRequest
+	req.Params.Arguments = map[string]any{
+		"text":  "store principle",
+		"limit": 1,
+	}
+	result, err := QueryHandler()(ctx, req)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.False(t, result.IsError, "query should succeed; got: %s", resultText(t, result))
+
+	var out struct {
+		Facts []struct {
+			Score float64 `json:"score"`
+		} `json:"facts"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &out))
+	require.Len(t, out.Facts, 1, "limit=1 must cap results to 1")
+	require.Greater(t, out.Facts[0].Score, 0.0, "score must be surfaced (non-zero)")
+}
+
+// TestQuery_FiltersByType pins the new `type` knob: a policy-typed fact is
+// excluded when type=["observation"] and included when type=["policy"].
+func TestQuery_FiltersByType(t *testing.T) {
+	_, ctx, _ := newPrinciplesTestRepo(t)
+	seedPrincipleWithDomain(t, ctx, "seed-typed", "mission/store", "Typed Store Principle", "store")
+
+	query := func(typ string) int {
+		var req mcpgo.CallToolRequest
+		req.Params.Arguments = map[string]any{"text": "store principle", "type": []any{typ}}
+		result, err := QueryHandler()(ctx, req)
+		require.NoError(t, err)
+		require.False(t, result.IsError, "query should succeed; got: %s", resultText(t, result))
+		var out struct {
+			Facts []json.RawMessage `json:"facts"`
+		}
+		require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &out))
+		return len(out.Facts)
+	}
+	require.Zero(t, query("observation"), "type=observation must exclude the policy fact")
+	require.Positive(t, query("policy"), "type=policy must include the policy fact")
+}
+
+// TestQuery_Type_AcceptedAsSoleFilter regresses the MCP↔REST parity gap: the
+// "at least one filter" validator must accept `type` on its own (the store and
+// the REST search handler both support a text-less type-only query).
+func TestQuery_Type_AcceptedAsSoleFilter(t *testing.T) {
+	ri := newLearnTestRepo(t, fact.CodeOntology())
+	ctx := repos.WithRepoInstance(context.Background(), ri)
+
+	var req mcpgo.CallToolRequest
+	req.Params.Arguments = map[string]any{
+		"type": []any{"observation"},
+	}
+	result, err := QueryHandler()(ctx, req)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	if result.IsError {
+		text := resultText(t, result)
+		require.NotContains(t, text, "at least one of",
+			"type alone must satisfy the filter-required check; got %q", text)
+	}
+}

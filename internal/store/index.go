@@ -106,11 +106,23 @@ func (si *searchIndex) Completions(ctx context.Context, branch, category, prefix
 
 	switch category {
 	case "domain":
+		// Canonicalise the typed prefix (NFC + fold + de-hyphenize) so it matches
+		// the canonical stored domains — "AI-Gov" → "ai gov" → "ai governance".
+		// Entities (below) are NOT canonicalised: they are proper nouns/identifiers.
+		canonPrefix := canonicalizeDomain(prefix)
+		// A non-empty prefix that canonicalises away (pure separators/hyphens,
+		// e.g. "---") must not fall through to `LIKE '%'`, which would return
+		// every domain — turning a junk keystroke into the full domain list.
+		// Empty input is still allowed through (prefix == "" → `LIKE '%'`), the
+		// intended "nothing typed yet, list everything" behaviour.
+		if prefix != "" && canonPrefix == "" {
+			return []string{}, nil
+		}
 		return si.queryDistinct(ctx,
 			`SELECT DISTINCT fd.domain FROM fact_domains fd
 			 JOIN branch_facts bf ON bf.fact_id = fd.fact_id
 			 WHERE bf.branch_id = ? AND fd.domain LIKE ? LIMIT ?`,
-			branchID, prefix+"%", limit)
+			branchID, canonPrefix+"%", limit)
 	case "entity":
 		return si.queryDistinct(ctx,
 			`SELECT DISTINCT fe.entity FROM fact_entities fe

@@ -220,9 +220,15 @@ func (si *searchIndex) LastCommitForPath(ctx context.Context, branch, path strin
 type SearchOptions struct {
 	Text     string
 	Entities []string
-	// Domain matches descendant-or-equal: query "store" finds facts with
-	// domain "store", "store/resolver", "store/cache", ...
+	// Domain matches, by default, slash-hierarchy descendant-or-equal ("store"
+	// finds "store", "store/resolver", ...) OR token containment of the
+	// de-hyphenized tag ("ai" finds "ai governance", "enterprise ai"; "governance
+	// ai" matches "ai governance" order-independently; plurals are stemmed).
+	// Query terms are canonicalised the same way the stored tags are.
 	Domain []string
+	// DomainExact restricts Domain matching to canonical exact-string equality
+	// (no descendant, no token containment). Opt-in "I mean exactly this tag".
+	DomainExact bool
 	// DomainAncestor matches ancestor-or-equal: query "store/resolver" finds
 	// facts with domain "store/resolver", "store", ... (any path ancestor).
 	// Used by principles-style "what scopes apply to this subarea?" lookups.
@@ -319,18 +325,46 @@ func newFactFilter(q SearchOptions) *factFilter {
 		)
 	}
 	for _, d := range q.Domain {
+		canon := canonicalizeDomain(d)
+		toks := domainTokens(canon)
+		// Degenerate input (e.g. "-", "---", whitespace) canonicalises to "" and
+		// yields no tokens. No fact is ever stored with an empty canonical domain
+		// (index-time skips them), so treat such a filter as a no-op rather than
+		// emitting `domain = ''`, which would silently match zero facts and make
+		// the whole query return nothing.
+		if canon == "" {
+			continue
+		}
+		// Exact mode (or a canonical with no tokens) → canonical string equality.
+		if q.DomainExact || len(toks) == 0 {
+			f.add(" AND EXISTS (SELECT 1 FROM fact_domains WHERE fact_id = f.id AND domain = ?)", canon)
+			continue
+		}
+		// Default: slash-hierarchy descendant-or-equal OR token containment
+		// (a fact has a single domain whose token set ⊇ all query tokens).
+		ph := strings.Repeat("?,", len(toks))
+		ph = ph[:len(ph)-1]
+		args := make([]any, 0, len(toks)+3)
+		args = append(args, canon, canon+"/%")
+		for _, t := range toks {
+			args = append(args, t)
+		}
+		args = append(args, len(toks))
 		f.add(
-			" AND EXISTS (SELECT 1 FROM fact_domains WHERE fact_id = f.id AND (domain = ? OR domain LIKE ?))",
-			d, d+"/%",
+			" AND (EXISTS (SELECT 1 FROM fact_domains WHERE fact_id = f.id AND (domain = ? OR domain LIKE ?))"+
+				" OR EXISTS (SELECT 1 FROM fact_domain_tokens t WHERE t.fact_id = f.id"+
+				" AND t.token IN ("+ph+") GROUP BY t.domain HAVING COUNT(DISTINCT t.token) = ?))",
+			args...,
 		)
 	}
 	for _, d := range q.DomainAncestor {
-		// Ancestor-or-equal match: the fact's domain is either exactly the
-		// query, or a prefix of it (so the query path starts with the fact's
-		// domain followed by '/').
+		// Ancestor-or-equal match on the canonical slash path: the fact's domain
+		// is either exactly the query, or a prefix of it. Kept slash-based (the
+		// principles/applies_to scoping feature), not tokenised.
+		canon := canonicalizeDomain(d)
 		f.add(
 			" AND EXISTS (SELECT 1 FROM fact_domains WHERE fact_id = f.id AND (domain = ? OR ? LIKE domain || '/%'))",
-			d, d,
+			canon, canon,
 		)
 	}
 	return f

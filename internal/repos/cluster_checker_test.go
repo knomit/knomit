@@ -5,6 +5,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"knomit/internal/config"
 )
 
 // TestDispatchRefresh_WaitsForInFlightGoroutine regresses the bug where
@@ -100,5 +102,32 @@ func TestDispatchRefresh_WaitGroupReleasedWhenSemPoolFull(t *testing.T) {
 		// expected: dropped goroutine still calls wg.Done via defer
 	case <-time.After(time.Second):
 		t.Fatal("disp.wg.Wait() blocked after pool-full drop — defer wg.Done is wired wrong")
+	}
+}
+
+// TestParseClusterCheckerConfig_Resolution pins that the configurable Louvain
+// resolution / min community size default (2.0 / 2) when unset and are honoured
+// when overridden, so the background checker warms the SAME cache key the read
+// path requests.
+func TestParseClusterCheckerConfig_Resolution(t *testing.T) {
+	def, err := parseClusterCheckerConfig(config.ClusterCacheConfig{})
+	if err != nil {
+		t.Fatalf("parse default: %v", err)
+	}
+	if def.Resolution != 2.0 {
+		t.Fatalf("default Resolution: want 2.0, got %v", def.Resolution)
+	}
+	if def.MinCommunitySize != 2 {
+		t.Fatalf("default MinCommunitySize: want 2, got %v", def.MinCommunitySize)
+	}
+	over, err := parseClusterCheckerConfig(config.ClusterCacheConfig{Resolution: 1.5, MinCommunitySize: 3})
+	if err != nil {
+		t.Fatalf("parse override: %v", err)
+	}
+	if over.Resolution != 1.5 {
+		t.Fatalf("override Resolution: want 1.5, got %v", over.Resolution)
+	}
+	if over.MinCommunitySize != 3 {
+		t.Fatalf("override MinCommunitySize: want 3, got %v", over.MinCommunitySize)
 	}
 }

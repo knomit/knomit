@@ -18,7 +18,12 @@ func registerSQLFuncs(conn *sqlite3.SQLiteConn) error {
 	if err := conn.RegisterFunc("knomit_parse_fact", sqlParseFact, true); err != nil {
 		return err
 	}
-	return conn.RegisterFunc("knomit_cosine_sim", sqlCosineSim, true)
+	if err := conn.RegisterFunc("knomit_cosine_sim", sqlCosineSim, true); err != nil {
+		return err
+	}
+	// knomit_canon_domain canonicalises a domain tag (NFC + fold + de-hyphenize)
+	// so the bulk rebuild SQL can store canonical fact_domains values.
+	return conn.RegisterFunc("knomit_canon_domain", canonicalizeDomain, true)
 }
 
 // parsedFact is the JSON structure returned by knomit_parse_fact.

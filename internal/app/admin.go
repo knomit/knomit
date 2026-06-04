@@ -100,7 +100,12 @@ func RebuildIndex(ctx context.Context, cfg config.Config, repoName string) error
 	if err := svc.OpenRepo(); err != nil {
 		return fmt.Errorf("open git: %w", err)
 	}
-	if err := svc.IndexManager().Sync(ctx, agentBranch); err != nil {
+	// Rebuild (3-phase, INSERT OR REPLACE + cascade) — NOT Sync. Sync is
+	// COW-aware and skips facts whose content is unchanged, so it would not
+	// regenerate DERIVED index state (canonical fact_domains, fact_domain_tokens,
+	// re-clustering) after an indexing-logic change. "rebuild from scratch" must
+	// reindex every fact; git is the source of truth so this is always safe.
+	if err := svc.IndexManager().Rebuild(ctx, agentBranch, nil); err != nil {
 		return fmt.Errorf("rebuild: %w", err)
 	}
 	log.Info().Str("repo", repoName).Msg("Index rebuilt successfully")

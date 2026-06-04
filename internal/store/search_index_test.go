@@ -191,7 +191,7 @@ func TestUpsert_DuplicateEntitiesAndDomains_NoError(t *testing.T) {
 	err = si.rh.db.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM fact_domains WHERE fact_id = ?`, factID).Scan(&domainCount)
 	require.NoError(t, err)
-	require.Equal(t, 2, domainCount, "fact_domains should have exactly 2 rows for 2 unique domains (ai, machine-learning)")
+	require.Equal(t, 2, domainCount, "fact_domains should have exactly 2 rows for 2 unique domains (ai, machine learning)")
 
 	// Verify both domains are present.
 	var domains []string
@@ -205,5 +205,6 @@ func TestUpsert_DuplicateEntitiesAndDomains_NoError(t *testing.T) {
 		domains = append(domains, domain)
 	}
 	require.NoError(t, rows.Err())
-	require.Equal(t, []string{"ai", "machine-learning"}, domains)
+	// Domains are stored canonicalised (de-hyphenized): "machine-learning" → "machine learning".
+	require.Equal(t, []string{"ai", "machine learning"}, domains)
 }

@@ -83,12 +83,14 @@ func handleSearch(b hal.URLBuilder, m *repos.Manager, provider searchProvider, e
 		domainStr := qp.Get("domain")
 		path := qp.Get("path")
 		minConfidenceStr := qp.Get("min_confidence")
+		minSimilarityStr := qp.Get("min_similarity")
 		limitStr := qp.Get("limit")
 		typeStr := qp.Get("type")
 		excludeTypeStr := qp.Get("exclude_type")
 		kindStr := qp.Get("kind")
 		excludeKindStr := qp.Get("exclude_kind")
 		epStr := qp.Get("ep")
+		domainExact := qp.Get("domain_exact") == "true" || qp.Get("domain_exact") == "1"
 
 		splitCSV := func(s string) []string {
 			if s == "" {
@@ -115,6 +117,17 @@ func handleSearch(b hal.URLBuilder, m *repos.Manager, provider searchProvider, e
 			minConfidence = v
 		}
 
+		var minSimilarity float64
+		if minSimilarityStr != "" {
+			v, err := strconv.ParseFloat(minSimilarityStr, 64)
+			if err != nil {
+				hal.WriteProblem(w, http.StatusBadRequest, "Invalid parameter",
+					"invalid min_similarity value", r.URL.Path)
+				return
+			}
+			minSimilarity = v
+		}
+
 		limit := 50
 		if limitStr != "" {
 			v, err := strconv.Atoi(limitStr)
@@ -134,12 +147,14 @@ func handleSearch(b hal.URLBuilder, m *repos.Manager, provider searchProvider, e
 			Path:          path,
 			Entities:      splitCSV(entitiesStr),
 			Domain:        splitCSV(domainStr),
+			DomainExact:   domainExact,
 			IncludeTypes:  splitCSV(typeStr),
 			ExcludeTypes:  splitCSV(excludeTypeStr),
 			IncludeKinds:  splitCSV(kindStr),
 			ExcludeKinds:  splitCSV(excludeKindStr),
 			EpisodeOps:    splitCSV(epStr),
 			MinConfidence: minConfidence,
+			MinSimilarity: minSimilarity,
 			Limit:         limit,
 			GraphHops:     1, // default
 		}
