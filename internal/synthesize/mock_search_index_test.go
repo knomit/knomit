@@ -284,6 +284,21 @@ func (mr *MockSearchIndexMockRecorder) RelevantMethodologyForFact(ctx, branch, f
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RelevantMethodologyForFact", reflect.TypeOf((*MockSearchIndex)(nil).RelevantMethodologyForFact), ctx, branch, factPath, sourceDomains, sourceEntities, k, minScore)
 }
 
+// RevisionsBefore mocks base method.
+func (m *MockSearchIndex) RevisionsBefore(ctx context.Context, branch, path, anchorCommit string, limit int) ([]store.RevisionMeta, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "RevisionsBefore", ctx, branch, path, anchorCommit, limit)
+	ret0, _ := ret[0].([]store.RevisionMeta)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// RevisionsBefore indicates an expected call of RevisionsBefore.
+func (mr *MockSearchIndexMockRecorder) RevisionsBefore(ctx, branch, path, anchorCommit, limit any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RevisionsBefore", reflect.TypeOf((*MockSearchIndex)(nil).RevisionsBefore), ctx, branch, path, anchorCommit, limit)
+}
+
 // Search mocks base method.
 func (m *MockSearchIndex) Search(ctx context.Context, branch string, q store.SearchOptions) ([]store.SearchResult, error) {
 	m.ctrl.T.Helper()

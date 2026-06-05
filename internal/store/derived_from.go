@@ -137,14 +137,7 @@ func (si *searchIndex) resolveActiveCommitForPath(ctx context.Context, branch, p
 	}
 
 	var hash string
-	err := conn(ctx, si.rh.db).QueryRowContext(ctx, `
-		WITH RECURSIVE fpc(commit_hash, depth) AS (
-		    SELECT ?, 0
-		    UNION ALL
-		    SELECT cp.parent_hash, fpc.depth + 1
-		      FROM commit_parents cp
-		      JOIN fpc ON cp.commit_hash = fpc.commit_hash AND cp.parent_order = 0
-		)
+	err := conn(ctx, si.rh.db).QueryRowContext(ctx, firstParentChainCTE+`
 		SELECT cl.commit_hash
 		  FROM fpc
 		  JOIN commit_log cl ON cl.commit_hash = fpc.commit_hash

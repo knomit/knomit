@@ -44,6 +44,10 @@ type SearchIndex interface {
 	RecentFacts(ctx context.Context, branch string, opts SearchOptions) ([]RecentFactEntry, int, error)
 	Log(ctx context.Context, branch, path string) ([]LogEntry, error)
 	LogPaginated(ctx context.Context, branch, path string, limit int, after, from, before string) ([]LogEntryWithTags, string, string, error)
+	// RevisionsBefore returns up to `limit` revisions of `path` in the
+	// first-parent ancestry of `anchorCommit`, newest → oldest. Used by
+	// knomit_explain to build the root fact's bounded evolution history.
+	RevisionsBefore(ctx context.Context, branch, path, anchorCommit string, limit int) ([]RevisionMeta, error)
 	CommitDetail(ctx context.Context, commitHash, pathPrefix string) (*CommitDetailResult, error)
 	Activity(ctx context.Context, branch, path string) (ActivityResult, error)
 	WalkChangedFiles(ctx context.Context, branch, fromCommit, prefix string, seen map[string]bool, limit int) ([]FileRecency, string, error)
