@@ -433,7 +433,32 @@ export function FilterBar({ state, dispatch }: Props) {
             gap: 4,
             userSelect: 'none',
           }}>
-            {chip.category}:{chip.value}
+            {chip.category === 'path' ? (
+              <span style={{ display: 'inline-flex', alignItems: 'center' }}>
+                <span style={{ opacity: 0.6 }}>path:</span>
+                {chip.value.split('/').map((seg, si, segs) => {
+                  const isLast = si === segs.length - 1;
+                  const ancestor = segs.slice(0, si + 1).join('/');
+                  return (
+                    <span key={si} style={{ display: 'inline-flex', alignItems: 'center' }}>
+                      {si > 0 && <span style={{ opacity: 0.4, margin: '0 2px' }}>/</span>}
+                      {isLast ? (
+                        <span style={{ color: '#fff', fontWeight: 600 }}>{seg}</span>
+                      ) : (
+                        <span
+                          role="button"
+                          title={`Go to ${ancestor}`}
+                          onClick={() => dispatch({ type: 'ADD_FILTER', chip: { category: 'path', value: ancestor } })}
+                          style={{ cursor: 'pointer', textDecoration: 'underline dotted' }}
+                        >{seg}</span>
+                      )}
+                    </span>
+                  );
+                })}
+              </span>
+            ) : (
+              <>{chip.category}:{chip.value}</>
+            )}
             <span
               style={{ color: colors.close, cursor: 'pointer', fontWeight: 'bold', lineHeight: '1' }}
               onClick={() => dispatch({ type: 'REMOVE_FILTER', index: i })}
