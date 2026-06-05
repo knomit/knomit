@@ -43,6 +43,7 @@ type expFact struct {
 	Body       string      `json:"body"`
 	Summary    bool        `json:"summary"`
 	Deleted    bool        `json:"deleted"`
+	Superseded bool        `json:"superseded"`
 	Refs       *expRefs    `json:"refs"`
 	History    *expHistory `json:"history"`
 }
@@ -271,12 +272,37 @@ func TestExplain_CommitAnchorRewindsGraph(t *testing.T) {
 }
 
 // retractExplainFact deletes a fact at path on the test branch.
-func retractExplainFact(t *testing.T, ctx context.Context, ri *repos.RepoInstance, path string) {
+func retractExplainFact(t *testing.T, ctx context.Context, ri *repos.RepoInstance, path string) string {
 	t.Helper()
+	var commit string
 	ri.WithRead(func(svc *store.Service) {
-		_, err := svc.Facts().DeleteFact(ctx, explainTestBranch, path, "retract "+path)
+		c, err := svc.Facts().DeleteFact(ctx, explainTestBranch, path, "retract "+path)
 		require.NoError(t, err)
+		commit = c
 	})
+	return commit
+}
+
+// TestExplain_AnchoredAtRetractionGapFallsBack regresses the case where readNode
+// dropped a node whose pinned version is unreadable but the fact is LIVE at HEAD.
+// A fact created → retracted → re-added, then explained AS OF the retraction-gap
+// commit: ReadFact{AtCommit: gap} fails (the file is absent in that tree), so the
+// walk must fall back to the most recent version before the gap rather than
+// erroring. Previously the live-at-HEAD branch returned ok=false and the root
+// surfaced "could not read".
+func TestExplain_AnchoredAtRetractionGapFallsBack(t *testing.T) {
+	ri := newLearnTestRepo(t, fact.CodeOntology())
+	ctx := repos.WithRepoInstance(context.Background(), ri)
+
+	writeExplainFact(t, ctx, ri, "kb/res.md", "Res-v1", 0.50, nil)
+	gap := retractExplainFact(t, ctx, ri, "kb/res.md")             // file absent as of `gap`
+	writeExplainFact(t, ctx, ri, "kb/res.md", "Res-v3", 0.70, nil) // re-added → live at HEAD
+
+	facts := explainAll(t, ctx, "kb/res.md", gap)
+	root := findExpFact(facts, "kb/res.md")
+	require.NotNil(t, root, "unreadable pin falls back to the pre-gap version instead of dropping")
+	require.Equal(t, "Res-v1", root.Title, "falls back to the most recent version before the gap")
+	require.False(t, root.Deleted, "re-added fact is live at HEAD → deleted:false")
 }
 
 // TestExplain_RetractedReferenceSurfacesDeleted pins that a reference whose
@@ -295,6 +321,35 @@ func TestExplain_RetractedReferenceSurfacesDeleted(t *testing.T) {
 	require.NotNil(t, gone, "retracted reference still resolves at its pinned version")
 	require.Equal(t, "Gone", gone.Title, "reads the pre-retraction version M pointed to")
 	require.True(t, gone.Deleted, "currently retracted at HEAD → deleted:true")
+}
+
+// TestExplain_SupersededReferenceFlagged pins that a child whose source is
+// still live at HEAD but has a NEWER revision than the version the referrer
+// pinned is flagged superseded:true (and not deleted). A sibling whose source
+// never changed after the edge formed is neither superseded nor deleted.
+func TestExplain_SupersededReferenceFlagged(t *testing.T) {
+	ri := newLearnTestRepo(t, fact.CodeOntology())
+	ctx := repos.WithRepoInstance(context.Background(), ri)
+
+	writeExplainFact(t, ctx, ri, "kb/moved.md", "Moved-v1", 0.60, nil)
+	writeExplainFact(t, ctx, ri, "kb/stable.md", "Stable", 0.70, nil)
+	// Root pins moved@v1 and stable@v1 as of this write.
+	writeExplainFact(t, ctx, ri, "kb/root.md", "Root", 0.90, []string{"kb/moved.md", "kb/stable.md"})
+	// moved evolves AFTER the edge formed; stable does not.
+	writeExplainFact(t, ctx, ri, "kb/moved.md", "Moved-v2", 0.80, nil)
+
+	facts := explainAll(t, ctx, "kb/root.md", "")
+
+	moved := findExpFact(facts, "kb/moved.md")
+	require.NotNil(t, moved)
+	require.Equal(t, "Moved-v1", moved.Title, "child reads the pinned version the referrer saw")
+	require.True(t, moved.Superseded, "source is live but its HEAD revision is newer → superseded:true")
+	require.False(t, moved.Deleted, "live source is not deleted")
+
+	stable := findExpFact(facts, "kb/stable.md")
+	require.NotNil(t, stable)
+	require.False(t, stable.Superseded, "unchanged source is not superseded")
+	require.False(t, stable.Deleted)
 }
 
 // TestExplain_SharedPathTwoVersionsBothSurface pins that the composite (path,

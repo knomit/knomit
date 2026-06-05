@@ -25,7 +25,7 @@ const explainHistoryDisplay = 3
 // explainTool returns the Tool definition for knomit_explain.
 func explainTool() mcpgo.Tool {
 	return mcpgo.NewTool("knomit_explain",
-		mcpgo.WithDescription("Explain a fact by walking its versioned provenance graph. The walk is anchored at a commit: pass `commit` to explain the fact AS OF that version (the graph is rewound to how it stood then); omit it to explain at HEAD. The graph is versioned per-edge — every referenced fact is read at the exact version the referrer pointed to, recursively. The root fact is returned in full, with its evolution `history` (recent revisions, each with the confidence/content diff from its predecessor). Every OTHER fact is returned as a lean summary (no body), marked `summary: true` — to read a summary's full body, history, and its own subtree, call knomit_explain again with that fact's `path` AND `commit`. Call with `file` to start; pass `cursor` to page the walk."),
+		mcpgo.WithDescription("Explain a fact by walking its versioned provenance graph. The walk is anchored at a commit: pass `commit` to explain the fact AS OF that version (the graph is rewound to how it stood then); omit it to explain at HEAD. The graph is versioned per-edge — every referenced fact is read at the exact version the referrer pointed to, recursively. The root fact is returned in full, with its evolution `history` (recent revisions, each with the confidence/content diff from its predecessor). Every OTHER fact is returned as a lean summary (no body), marked `summary: true` — to read a summary's full body, history, and its own subtree, call knomit_explain again with that fact's `path` AND `commit`. A summary may carry `deleted: true` (the source was retracted since this edge formed) or `superseded: true` (the source is still live but its HEAD revision is newer than the version the referrer reasoned over — re-explain at HEAD to see how it has changed). Call with `file` to start; pass `cursor` to page the walk."),
 		mcpgo.WithString("file",
 			mcpgo.Required(),
 			mcpgo.Description("Path to the fact file (e.g. kb/technology/go/abc123.md)."),
@@ -51,6 +51,7 @@ type explainFactEntry struct {
 	Kind       string  `json:"kind"`
 	Confidence float64 `json:"confidence"`
 	Deleted    bool    `json:"deleted,omitempty"`
+	Superseded bool    `json:"superseded,omitempty"`
 	Summary    bool    `json:"summary,omitempty"`
 
 	// Root-only fields (omitted on summary nodes).
@@ -137,31 +138,44 @@ func ExplainHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallT
 	}
 }
 
-// readNode reads + parses a fact at a specific commit. ok is false when the
-// version cannot be read or parsed. deleted reports whether the fact is
-// currently retracted at HEAD (independent of the pinned version still reading).
-func readNode(ctx context.Context, s mcpStore, branch, path, commit string) (parsed fact.Fact, deleted, ok bool) {
+// readFactVersion reads + parses a fact at a specific commit. When the pinned
+// version is unreadable — whether the fact was retracted at the anchor, or the
+// pin points at a commit we cannot resolve — it falls back to the most recent
+// version before `commit` so the node still surfaces its content. ok is false
+// only when no version can be read or parsed.
+func readFactVersion(ctx context.Context, s mcpStore, branch, path, commit string) (fact.Fact, bool) {
 	res, err := s.facts.ReadFact(ctx, branch, path, &store.ReadFactOpts{AtCommit: commit})
 	if err != nil {
-		// Pinned version unreadable — fall back to the last pre-retraction
-		// version so a retracted fact still surfaces its content.
-		retractCommit, present := s.search.LastCommitForPath(ctx, branch, path)
-		if !present || retractCommit == "" {
-			// Currently retracted: read the version just before the retraction.
-			res, err = s.facts.ReadFact(ctx, branch, path, &store.ReadFactOpts{BeforeCommit: commit})
-			if err != nil {
-				return fact.Fact{}, true, false
-			}
-		} else {
-			return fact.Fact{}, false, false
+		res, err = s.facts.ReadFact(ctx, branch, path, &store.ReadFactOpts{BeforeCommit: commit})
+		if err != nil {
+			return fact.Fact{}, false
 		}
 	}
 	p, perr := fact.ParseFact(path, res.Content)
 	if perr != nil {
-		return fact.Fact{}, false, false
+		return fact.Fact{}, false
 	}
-	_, present := s.search.LastCommitForPath(ctx, branch, path)
-	return p, !present, true
+	return p, true
+}
+
+// readNode reads a node for the walk: its pinned version plus how that version
+// relates to HEAD. Both flags describe the fact AT HEAD, independent of the
+// pinned version still being readable:
+//   - deleted: the fact is retracted at HEAD (gone since this edge formed).
+//   - superseded: the fact is still live but its HEAD revision is newer than the
+//     pinned `commit` — the referrer reasoned over an older version. Mutually
+//     exclusive with deleted.
+//
+// ok is false when no version can be read or parsed.
+func readNode(ctx context.Context, s mcpStore, branch, path, commit string) (parsed fact.Fact, deleted, superseded, ok bool) {
+	parsed, ok = readFactVersion(ctx, s, branch, path, commit)
+	if !ok {
+		return fact.Fact{}, false, false, false
+	}
+	headCommit, present := s.search.LastCommitForPath(ctx, branch, path)
+	deleted = !present
+	superseded = present && headCommit != commit
+	return parsed, deleted, superseded, true
 }
 
 // bodyDelta returns "" if the bodies are identical, else the smaller of a
@@ -226,15 +240,15 @@ func buildHistory(ctx context.Context, s mcpStore, branch, path, anchorCommit st
 		return nil, nil
 	}
 
-	// Parse each revision's fact once, on demand.
+	// Parse each revision's fact once, on demand. History only needs the
+	// pinned content, so this skips the HEAD-liveness query readNode adds.
 	cache := map[string]*fact.Fact{}
 	parseAt := func(commit string) *fact.Fact {
 		if f, ok := cache[commit]; ok {
 			return f
 		}
-		p, _, ok := readNode(ctx, s, branch, path, commit)
 		var out *fact.Fact
-		if ok {
+		if p, ok := readFactVersion(ctx, s, branch, path, commit); ok {
 			out = &p
 		}
 		cache[commit] = out
@@ -281,8 +295,9 @@ func explainFirstCall(ctx context.Context, s mcpStore, ontologyRoot, agentBranch
 		anchor = head
 	}
 
-	// Read the root fact as of the anchor.
-	parsed, deleted, ok := readNode(ctx, s, agentBranch, file, anchor)
+	// Read the root fact as of the anchor. superseded is a descent-only signal
+	// (the root IS the view the caller asked for), so it is discarded here.
+	parsed, deleted, _, ok := readNode(ctx, s, agentBranch, file, anchor)
 	if !ok {
 		return mcpgo.NewToolResultError(fmt.Sprintf("could not read %s at %s", file, anchor)), nil
 	}
@@ -397,7 +412,7 @@ func explainResume(ctx context.Context, s mcpStore, agentBranch, cursor string) 
 		}
 
 		for _, item := range items {
-			parsed, deleted, ok := readNode(ctx, s, agentBranch, item.Path, item.CommitHash)
+			parsed, deleted, superseded, ok := readNode(ctx, s, agentBranch, item.Path, item.CommitHash)
 			if !ok {
 				continue
 			}
@@ -427,6 +442,7 @@ func explainResume(ctx context.Context, s mcpStore, agentBranch, cursor string) 
 				Kind:       kindString(parsed),
 				Confidence: parsed.Confidence,
 				Deleted:    deleted,
+				Superseded: superseded,
 				Summary:    true,
 			})
 		}
