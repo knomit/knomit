@@ -31,13 +31,17 @@ jobs:
       - name: Fetch native libs (ONNX Runtime, graphqlite, libtokenizers.a)
         run: make setup
 
-      # Build everything EXCEPT tools/tray. The tray is a desktop GUI binary
-      # that links GTK + WebKit (webview_go / fyne systray) and needs its own
-      # platform build path (see the Makefile `tray` target + webkit2gtk pkg-
-      # config shim); it's unrelated to the embedding backend this CI guards.
-      # A dedicated tray CI job with the GUI dev libs is a follow-up.
+      # Build every package that has buildable (non-test) Go files, EXCEPT
+      # tools/tray. Two filters:
+      #   - `{{if .GoFiles}}` drops test-only packages (e.g. internal/storytests);
+      #     `go build` treats an explicitly-listed test-only package as a fatal
+      #     error, so they must not appear in the argument list.
+      #   - grep -v '/tools/tray' drops the desktop GUI binary, which links
+      #     GTK + WebKit (webview_go / fyne systray) and needs its own platform
+      #     build path (Makefile `tray` target + webkit2gtk pkg-config shim).
+      #     A dedicated tray CI job with the GUI dev libs is a follow-up.
       - name: Build (CGo) — proves libtokenizers.a links on ${{ matrix.os }}
-        run: CGO_ENABLED=1 go build $(go list ./... | grep -v '/tools/tray')
+        run: CGO_ENABLED=1 go build $(go list -f '{{if .GoFiles}}{{.ImportPath}}{{end}}' ./... | grep -v '/tools/tray')
 
       - name: Unit tests (no model download)
         run: CGO_ENABLED=1 go test ./internal/embeddings/ ./internal/config/ ./internal/fact/
