@@ -334,6 +334,15 @@ func (r *RepoHandle) Restart() {
 	r.sb.mu.Unlock()
 }
 
+// RestartWithEmbedder restarts the repo using a different embedder, simulating
+// a config change to a new embedding model. The next index open (setupIndex →
+// NeedsRebuild) detects the embedding-identity change and re-embeds the corpus.
+// Like Restart, all existing BranchHandle references become stale afterward.
+func (r *RepoHandle) RestartWithEmbedder(e store.BatchEmbedder) {
+	r.sb.embedder = e
+	r.Restart()
+}
+
 // ExpectDirty marks the repo as deliberately corrupted. The Storyboard
 // teardown auto-verify will skip this repo. Call after CorruptObject /
 // RawSQL / RawGitWrite in G-category tests.

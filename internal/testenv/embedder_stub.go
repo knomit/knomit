@@ -9,19 +9,28 @@ import (
 	"encoding/binary"
 )
 
-// embeddingDim matches the facts_vec schema's hard-coded vec0 dimension.
-// vec0 rejects inserts whose vector length does not match, so this is not
-// configurable.
+// embeddingDim is the default vector dimension used when DimOverride is unset.
+// facts_vec is created with the active embedder's dim, so the dimension is
+// dynamic per model; this constant is only the stub's default.
 const embeddingDim = 768
 
 // DeterministicEmbedder implements store.BatchEmbedder by hashing input text
-// into a fixed 768-dim float32 vector. Same input always yields the same
-// vector. Test-only.
+// into a deterministic float32 vector (768-dim by default). Same input always
+// yields the same vector. Test-only.
 //
 // Matches the role-aware store.Embedder interface (EmbedQuery, EmbedDocument,
 // Dim, ID) plus the BatchEmbedder extension (EmbedDocuments). Document role
 // hashes title+body so callers get a stable vector for the same fact content.
-type DeterministicEmbedder struct{}
+//
+// The zero value behaves as a fixed model with ID "deterministic-stub" and
+// dim 768. Tests that need to model a config change to a different embedding
+// model set IDOverride (and optionally DimOverride) to vary identity.
+type DeterministicEmbedder struct {
+	// IDOverride, when non-empty, is returned by ID(); else "deterministic-stub".
+	IDOverride string
+	// DimOverride, when >0, is returned by Dim() and sizes vectors; else 768.
+	DimOverride int
+}
 
 // EmbedQuery implements store.Embedder.
 func (e *DeterministicEmbedder) EmbedQuery(text string) ([]float32, error) {
@@ -33,11 +42,24 @@ func (e *DeterministicEmbedder) EmbedDocument(title, body string) ([]float32, er
 	return e.vectorFor(title + " " + body), nil
 }
 
+// dim returns the configured vector dimension (DimOverride if set, else 768).
+func (e *DeterministicEmbedder) dim() int {
+	if e.DimOverride > 0 {
+		return e.DimOverride
+	}
+	return embeddingDim
+}
+
 // Dim implements store.Embedder.
-func (e *DeterministicEmbedder) Dim() int { return embeddingDim }
+func (e *DeterministicEmbedder) Dim() int { return e.dim() }
 
 // ID implements store.Embedder.
-func (e *DeterministicEmbedder) ID() string { return "deterministic-stub" }
+func (e *DeterministicEmbedder) ID() string {
+	if e.IDOverride != "" {
+		return e.IDOverride
+	}
+	return "deterministic-stub"
+}
 
 // EmbedDocuments implements store.BatchEmbedder.
 func (e *DeterministicEmbedder) EmbedDocuments(titles, bodies []string) ([][]float32, error) {
@@ -49,10 +71,11 @@ func (e *DeterministicEmbedder) EmbedDocuments(titles, bodies []string) ([][]flo
 }
 
 func (e *DeterministicEmbedder) vectorFor(text string) []float32 {
-	out := make([]float32, embeddingDim)
-	// Stretch sha256 across all 768 floats. sha256 produces 32 bytes = 8
+	d := e.dim()
+	out := make([]float32, d)
+	// Stretch sha256 across all floats. sha256 produces 32 bytes = 8
 	// float32s; we re-hash with a counter to extend.
-	for i := range embeddingDim {
+	for i := range d {
 		h := sha256.Sum256(append([]byte{byte(i), byte(i >> 8)}, []byte(text)...))
 		bits := binary.LittleEndian.Uint32(h[:4])
 		// Map uint32 to a float32 in [-1, 1].
