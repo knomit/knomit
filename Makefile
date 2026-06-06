@@ -1,5 +1,6 @@
-.PHONY: build web test clean run dev setup dist download-ort download-graphqlite e2e e2e-ui e2e-setup e2e-report tray tray-run
+.PHONY: build web test clean run dev setup dist download-ort download-graphqlite tokenizers-lib e2e e2e-ui e2e-setup e2e-report tray tray-run
 
+TOKENIZERS_VERSION := v1.27.0
 ORT_VERSION := 1.24.3
 UNAME_S := $(shell uname -s)
 UNAME_M := $(shell uname -m)
@@ -78,6 +79,10 @@ download-graphqlite:
 		fi; \
 		echo "graphqlite installed to dist/lib/"; \
 	fi
+
+tokenizers-lib:
+	@mkdir -p dist/lib
+	@scripts/fetch_tokenizers_lib.sh $(TOKENIZERS_VERSION) dist/lib
 
 build: web tray
 	CGO_ENABLED=1 go build $(GOFLAGS) -o dist/knomit .
