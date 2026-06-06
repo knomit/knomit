@@ -1,0 +1,76 @@
+name: CI
+
+on:
+  push:
+    branches: [dev, master]
+  pull_request:
+
+# Cross-platform build + test. The pluggable embedder links daulet/tokenizers'
+# libtokenizers.a statically (CGo) and loads ONNX Runtime + graphqlite at
+# runtime, so this matrix proves the native-lib wiring resolves on each OS.
+#
+# Windows is intentionally NOT in the matrix yet: `make setup` and
+# scripts/fetch_tokenizers_lib.sh are bash/uname based and need an MSYS2/mingw
+# build path before they run natively on windows-latest. daulet/tokenizers does
+# ship a windows-amd64 static lib (v1.27.0), so adding Windows is a follow-up of
+# wiring a windows-native fetch + build, not a missing upstream artifact.
+jobs:
+  build-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+
+      - name: Fetch native libs (ONNX Runtime, graphqlite, libtokenizers.a)
+        run: make setup
+
+      - name: Build (CGo) — proves libtokenizers.a links on ${{ matrix.os }}
+        run: CGO_ENABLED=1 go build ./...
+
+      - name: Unit tests (no model download)
+        run: CGO_ENABLED=1 go test ./internal/embeddings/ ./internal/config/ ./internal/fact/
+
+      - name: Store + storytests (runtime native libs)
+        env:
+          LD_LIBRARY_PATH: ${{ github.workspace }}/dist/lib
+          DYLD_LIBRARY_PATH: ${{ github.workspace }}/dist/lib
+        run: CGO_ENABLED=1 go test ./internal/store/... ./internal/storytests/
+
+  # In-process EmbeddingGemma inference smoke — the formal cross-platform
+  # close-out from PoC #2. Downloads the real model (~600MB) once per OS, so it
+  # runs only on dev/master pushes, not every PR, to keep PR CI fast.
+  embed-smoke:
+    if: github.event_name == 'push'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+      - name: Fetch native libs
+        run: make setup
+      - name: Pre-cache EmbeddingGemma ONNX (fp16) + tokenizer
+        run: |
+          base=https://huggingface.co/onnx-community/embeddinggemma-300m-ONNX/resolve/main
+          dir="$RUNNER_TEMP/models/embeddinggemma"
+          mkdir -p "$dir"
+          curl -sL "$base/onnx/model_fp16.onnx"      -o "$dir/model_fp16.onnx"
+          curl -sL "$base/onnx/model_fp16.onnx_data" -o "$dir/model_fp16.onnx_data"
+          curl -sL "$base/tokenizer.json"            -o "$dir/tokenizer.json"
+      - name: In-process embed smoke (768-dim unit vector + retrieval separation)
+        env:
+          LD_LIBRARY_PATH: ${{ github.workspace }}/dist/lib
+          DYLD_LIBRARY_PATH: ${{ github.workspace }}/dist/lib
+          KNOMIT_EMBED_TEST_CACHE: ${{ runner.temp }}/models
+        run: CGO_ENABLED=1 go test ./internal/embeddings/ -run TestEmbedder -v
