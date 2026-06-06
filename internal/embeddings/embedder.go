@@ -92,6 +92,7 @@ func NewEmbedder(m Model, cacheDir string) (*Embedder, error) {
 	}
 	sess, err := ort.NewDynamicAdvancedSession(modelPath, m.ONNXInputs, m.ONNXOutputs, nil)
 	if err != nil {
+		_ = tk.Close()
 		return nil, fmt.Errorf("create onnx session: %w", err)
 	}
 	return &Embedder{model: m, sess: sess, tk: tk}, nil
@@ -133,7 +134,10 @@ func (e *Embedder) embedRaw(text string) ([]float32, error) {
 	}
 	defer outs[0].Destroy() //nolint:errcheck
 
-	t := outs[0].(*ort.Tensor[float32])
+	t, ok := outs[0].(*ort.Tensor[float32])
+	if !ok {
+		return nil, fmt.Errorf("unexpected output type from model %q", e.model.ID)
+	}
 	shape := t.GetShape()
 	data := t.GetData()
 	var vec []float32
