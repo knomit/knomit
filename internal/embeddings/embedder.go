@@ -143,6 +143,9 @@ func (e *Embedder) embedRaw(text string) ([]float32, error) {
 	var vec []float32
 	switch e.model.Pooling {
 	case PoolNone:
+		if len(data) < e.model.Dim {
+			return nil, fmt.Errorf("model %q: output has %d floats, expected at least %d", e.model.ID, len(data), e.model.Dim)
+		}
 		vec = make([]float32, e.model.Dim)
 		copy(vec, data[:e.model.Dim])
 	case PoolMean:

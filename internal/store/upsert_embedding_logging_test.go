@@ -31,8 +31,8 @@ func hasFactsVecRow(t *testing.T, svc *Service, branch, path string) bool {
 	return len(data) > 0
 }
 
-// failingEmbedder returns a MockBatchEmbedder whose Embed and EmbedBatch
-// always error. Regresses the upsert silent-failure path: when Embed
+// failingEmbedder returns a MockBatchEmbedder whose EmbedDocument/EmbedDocuments
+// always error. Regresses the upsert silent-failure path: when embedding
 // errors, the fact must still be indexed (branch_facts row) but without
 // a facts_vec row, and the failure must be surfaced (logged).
 func failingEmbedder(ctrl *gomock.Controller) *MockBatchEmbedder {

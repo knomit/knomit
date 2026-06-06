@@ -65,6 +65,12 @@ var registry = map[string]Model{
 		QueryTemplate: "search_query: {content}",
 		DocTemplate:   "search_document: {content}",
 	},
+	// UNVERIFIED: unlike embeddinggemma and nomic-v1.5 (both PoC-validated), the
+	// qwen3-0.6b ONNX input/output names and last-token pooling below are a
+	// best-guess from the model card, not confirmed against the actual exported
+	// graph. The feature-extraction export may also include position_ids. Verify
+	// against the real ONNX I/O (onnxruntime_go.GetInputOutputInfo) before
+	// relying on this model in production.
 	"qwen3-0.6b": {
 		ID:            "qwen3-0.6b",
 		ModelURL:      hfBase + "/onnx-community/Qwen3-Embedding-0.6B-ONNX/resolve/main/onnx/model.onnx",
@@ -98,4 +104,6 @@ func IDs() []string {
 }
 
 // DefaultModelID is the shipped default (validated best on the knomit corpus).
+// config.Defaults() mirrors this literal ("embeddinggemma") because the config
+// package cannot import this one (it carries cgo); keep the two in sync.
 const DefaultModelID = "embeddinggemma"
