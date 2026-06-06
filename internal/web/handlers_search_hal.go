@@ -28,7 +28,7 @@ type defaultSearchProvider struct{}
 func (defaultSearchProvider) Search(ri *repos.RepoInstance, emb store.Embedder, branch string, q store.SearchOptions) ([]store.SearchResult, error) {
 	// Generate query vector if text is provided and an embedder is available.
 	if q.Text != "" && emb != nil && len(q.QueryVec) == 0 {
-		vec, err := emb.Embed(q.Text)
+		vec, err := emb.EmbedQuery(q.Text)
 		if err != nil {
 			log.Warn().Err(err).Msg("search: embed query failed")
 		} else {

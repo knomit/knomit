@@ -547,7 +547,7 @@ func (si *searchIndex) Search(ctx context.Context, branch string, q SearchOption
 			queryVec := q.QueryVec
 			if len(queryVec) == 0 {
 				var embedErr error
-				queryVec, embedErr = emb.Embed(q.Text)
+				queryVec, embedErr = emb.EmbedQuery(q.Text)
 				if embedErr != nil {
 					log.Warn().Err(embedErr).Msg("search: embed query failed")
 				}

@@ -701,7 +701,8 @@ func (si *searchIndex) rebuildEmbeddings(ctx context.Context, progress RebuildPr
 	type entry struct {
 		rowid int64
 		path  string
-		text  string
+		title string
+		body  string
 	}
 
 	for i := 0; i < len(metas); i += batchSize {
@@ -740,7 +741,8 @@ func (si *searchIndex) rebuildEmbeddings(ctx context.Context, progress RebuildPr
 				bodyRows.Close()
 				return done, fmt.Errorf("rebuildEmbeddings: scan body: %w", err)
 			}
-			e.text = title + " " + extractBody(data)
+			e.title = title
+			e.body = extractBody(data)
 			entries = append(entries, e)
 		}
 		bodyRows.Close()
@@ -755,11 +757,13 @@ func (si *searchIndex) rebuildEmbeddings(ctx context.Context, progress RebuildPr
 		}
 
 		if hasBatch {
-			texts := make([]string, len(entries))
+			titles := make([]string, len(entries))
+			bodies := make([]string, len(entries))
 			for j, e := range entries {
-				texts[j] = e.text
+				titles[j] = e.title
+				bodies[j] = e.body
 			}
-			vecs, err := batcher.EmbedBatch(texts)
+			vecs, err := batcher.EmbedDocuments(titles, bodies)
 			if err != nil {
 				tx.Rollback()
 				return done, fmt.Errorf("rebuildEmbeddings: embed batch: %w", err)
@@ -777,7 +781,7 @@ func (si *searchIndex) rebuildEmbeddings(ctx context.Context, progress RebuildPr
 			}
 		} else {
 			for _, e := range entries {
-				vec, err := emb.Embed(e.text)
+				vec, err := emb.EmbedDocument(e.title, e.body)
 				if err != nil {
 					log.Warn().Err(err).Str("path", e.path).Msg("rebuildEmbeddings: embed failed, skipping")
 					continue

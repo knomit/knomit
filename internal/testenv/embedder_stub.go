@@ -18,21 +18,32 @@ const embeddingDim = 768
 // into a fixed 768-dim float32 vector. Same input always yields the same
 // vector. Test-only.
 //
-// Matches the store.Embedder interface: Embed(text string) ([]float32, error)
-// plus the BatchEmbedder extension: EmbedBatch(texts []string) ([][]float32, error).
-// There is no Dimension() method — the dimension is schema-fixed by vec0.
+// Matches the role-aware store.Embedder interface (EmbedQuery, EmbedDocument,
+// Dim, ID) plus the BatchEmbedder extension (EmbedDocuments). Document role
+// hashes title+body so callers get a stable vector for the same fact content.
 type DeterministicEmbedder struct{}
 
-// Embed implements store.Embedder.
-func (e *DeterministicEmbedder) Embed(text string) ([]float32, error) {
+// EmbedQuery implements store.Embedder.
+func (e *DeterministicEmbedder) EmbedQuery(text string) ([]float32, error) {
 	return e.vectorFor(text), nil
 }
 
-// EmbedBatch implements store.BatchEmbedder.
-func (e *DeterministicEmbedder) EmbedBatch(texts []string) ([][]float32, error) {
-	out := make([][]float32, len(texts))
-	for i, t := range texts {
-		out[i] = e.vectorFor(t)
+// EmbedDocument implements store.Embedder.
+func (e *DeterministicEmbedder) EmbedDocument(title, body string) ([]float32, error) {
+	return e.vectorFor(title + " " + body), nil
+}
+
+// Dim implements store.Embedder.
+func (e *DeterministicEmbedder) Dim() int { return embeddingDim }
+
+// ID implements store.Embedder.
+func (e *DeterministicEmbedder) ID() string { return "deterministic-stub" }
+
+// EmbedDocuments implements store.BatchEmbedder.
+func (e *DeterministicEmbedder) EmbedDocuments(titles, bodies []string) ([][]float32, error) {
+	out := make([][]float32, len(titles))
+	for i := range titles {
+		out[i] = e.vectorFor(titles[i] + " " + bodies[i])
 	}
 	return out, nil
 }

@@ -37,8 +37,11 @@ func hasFactsVecRow(t *testing.T, svc *Service, branch, path string) bool {
 // a facts_vec row, and the failure must be surfaced (logged).
 func failingEmbedder(ctrl *gomock.Controller) *MockBatchEmbedder {
 	m := NewMockBatchEmbedder(ctrl)
-	m.EXPECT().Embed(gomock.Any()).Return(nil, errors.New("embed boom")).AnyTimes()
-	m.EXPECT().EmbedBatch(gomock.Any()).Return(nil, errors.New("embed batch boom")).AnyTimes()
+	m.EXPECT().EmbedQuery(gomock.Any()).Return(nil, errors.New("embed boom")).AnyTimes()
+	m.EXPECT().EmbedDocument(gomock.Any(), gomock.Any()).Return(nil, errors.New("embed boom")).AnyTimes()
+	m.EXPECT().EmbedDocuments(gomock.Any(), gomock.Any()).Return(nil, errors.New("embed batch boom")).AnyTimes()
+	m.EXPECT().Dim().Return(768).AnyTimes()
+	m.EXPECT().ID().Return("failing").AnyTimes()
 	return m
 }
 
@@ -46,14 +49,17 @@ func failingEmbedder(ctrl *gomock.Controller) *MockBatchEmbedder {
 // a zero-length slice. Regresses the second silent-failure mode in upsert.
 func emptyVecEmbedder(ctrl *gomock.Controller) *MockBatchEmbedder {
 	m := NewMockBatchEmbedder(ctrl)
-	m.EXPECT().Embed(gomock.Any()).Return([]float32{}, nil).AnyTimes()
-	m.EXPECT().EmbedBatch(gomock.Any()).DoAndReturn(func(texts []string) ([][]float32, error) {
-		out := make([][]float32, len(texts))
-		for i := range texts {
+	m.EXPECT().EmbedQuery(gomock.Any()).Return([]float32{}, nil).AnyTimes()
+	m.EXPECT().EmbedDocument(gomock.Any(), gomock.Any()).Return([]float32{}, nil).AnyTimes()
+	m.EXPECT().EmbedDocuments(gomock.Any(), gomock.Any()).DoAndReturn(func(titles, bodies []string) ([][]float32, error) {
+		out := make([][]float32, len(titles))
+		for i := range titles {
 			out[i] = []float32{}
 		}
 		return out, nil
 	}).AnyTimes()
+	m.EXPECT().Dim().Return(768).AnyTimes()
+	m.EXPECT().ID().Return("empty-vec").AnyTimes()
 	return m
 }
 
@@ -62,14 +68,17 @@ func emptyVecEmbedder(ctrl *gomock.Controller) *MockBatchEmbedder {
 // facts_vec insert) and log; the fact must still be indexed.
 func wrongDimEmbedder(ctrl *gomock.Controller) *MockBatchEmbedder {
 	m := NewMockBatchEmbedder(ctrl)
-	m.EXPECT().Embed(gomock.Any()).Return(make([]float32, 10), nil).AnyTimes()
-	m.EXPECT().EmbedBatch(gomock.Any()).DoAndReturn(func(texts []string) ([][]float32, error) {
-		out := make([][]float32, len(texts))
-		for i := range texts {
+	m.EXPECT().EmbedQuery(gomock.Any()).Return(make([]float32, 10), nil).AnyTimes()
+	m.EXPECT().EmbedDocument(gomock.Any(), gomock.Any()).Return(make([]float32, 10), nil).AnyTimes()
+	m.EXPECT().EmbedDocuments(gomock.Any(), gomock.Any()).DoAndReturn(func(titles, bodies []string) ([][]float32, error) {
+		out := make([][]float32, len(titles))
+		for i := range titles {
 			out[i] = make([]float32, 10)
 		}
 		return out, nil
 	}).AnyTimes()
+	m.EXPECT().Dim().Return(768).AnyTimes()
+	m.EXPECT().ID().Return("wrong-dim").AnyTimes()
 	return m
 }
 

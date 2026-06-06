@@ -117,16 +117,20 @@ type PipelineIndex interface {
 	SetPipelineWatermark(ctx context.Context, tool, branch, hash string) error
 }
 
-// Embedder computes vector embeddings for text.
+// Embedder computes vector embeddings. Roles differ because retrieval models
+// embed queries and documents with different prompts.
 type Embedder interface {
-	Embed(text string) ([]float32, error)
+	EmbedQuery(text string) ([]float32, error)
+	EmbedDocument(title, body string) ([]float32, error)
+	Dim() int
+	ID() string
 }
 
 //go:generate go run go.uber.org/mock/mockgen -destination=mock_batch_embedder_test.go -package=store knomit/internal/store BatchEmbedder
 //go:generate go run go.uber.org/mock/mockgen -destination=../mcp/mock_batch_embedder_test.go -package=mcp knomit/internal/store BatchEmbedder
 
-// BatchEmbedder extends Embedder with batch inference support.
+// BatchEmbedder extends Embedder with batched document inference.
 type BatchEmbedder interface {
 	Embedder
-	EmbedBatch(texts []string) ([][]float32, error)
+	EmbedDocuments(titles, bodies []string) ([][]float32, error)
 }

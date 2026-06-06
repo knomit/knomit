@@ -17,12 +17,6 @@ import (
 // embedding retrieval, and meta key-value storage (last_commit tracking).
 // All mutations keep the vec0 index in sync within transactions.
 
-// factsVecDim must match the FLOAT[N] dimension declared on the
-// facts_vec virtual table in 000002_facts_vec.up.sql. Any donated or
-// freshly computed embedding vector with a different length cannot be
-// stored — the schema is a hard invariant.
-const factsVecDim = 768
-
 // upsert inserts or replaces a FactRecord on the given branch, keeping the
 // vec0 index in sync. COW dedup: if (path, blob_hash) already exists in the
 // facts table, only the branch_facts pointer is updated.
@@ -136,13 +130,17 @@ func (si *searchIndex) upsert(ctx context.Context, branch, commitHash string, re
 	// neither is available, in which case the fact is indexed without a
 	// vector (search-by-text on this fact will still work via the
 	// keyword path — sqlite-vec just won't return it).
+	emb := si.rh.getEmbedder()
 	if vec, ok := precomputedEmbedding(ctx, rec.Path); ok && len(vec) > 0 {
-		if len(vec) != factsVecDim {
-			return fmt.Errorf("upsert: donated embedding for %q has %d dims, expected %d", rec.Path, len(vec), factsVecDim)
+		// Validate the donated vector against the active embedder's dim. When
+		// no embedder is configured we can't know the expected dim, so we keep
+		// the prior behavior and store the donated vector as-is.
+		if emb != nil && len(vec) != emb.Dim() {
+			return fmt.Errorf("upsert: donated embedding for %q has %d dims, expected %d", rec.Path, len(vec), emb.Dim())
 		}
 		vecData = float32SliceToBytes(vec)
 		log.Debug().Str("path", rec.Path).Str("blob_hash", rec.BlobHash).Msg("upsert: using donated embedding")
-	} else if emb := si.rh.getEmbedder(); emb != nil {
+	} else if emb != nil {
 		var data []byte
 		err := db.QueryRowContext(ctx,
 			`SELECT data FROM objects WHERE hash = ? AND type = ?`,
@@ -151,8 +149,8 @@ func (si *searchIndex) upsert(ctx context.Context, branch, commitHash string, re
 		if err != nil {
 			return fmt.Errorf("upsert: blob %s not found: %w", rec.BlobHash, err)
 		}
-		text := rec.Title + " " + extractBody(data)
-		vec, err := emb.Embed(text)
+		body := extractBody(data)
+		vec, err := emb.EmbedDocument(rec.Title, body)
 		switch {
 		case err != nil:
 			// Indexing proceeds without a vector — the fact will be
@@ -163,9 +161,9 @@ func (si *searchIndex) upsert(ctx context.Context, branch, commitHash string, re
 		case len(vec) == 0:
 			log.Warn().Str("path", rec.Path).Str("blob_hash", rec.BlobHash).
 				Msg("upsert: embedder returned empty vector; fact indexed without vector (run `knomit rebuild` to backfill)")
-		case len(vec) != factsVecDim:
+		case len(vec) != emb.Dim():
 			log.Warn().Str("path", rec.Path).Str("blob_hash", rec.BlobHash).
-				Int("got_dim", len(vec)).Int("want_dim", factsVecDim).
+				Int("got_dim", len(vec)).Int("want_dim", emb.Dim()).
 				Msg("upsert: embedder produced wrong-dim vector; fact indexed without vector")
 		default:
 			vecData = float32SliceToBytes(vec)
