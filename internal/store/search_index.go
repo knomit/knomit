@@ -29,7 +29,13 @@ import (
 // "Graph" name this constant gates ALL forced-rebuild-on-upgrade derived state,
 // graph or not; bump it whenever an indexing-logic change needs an existing
 // deployment to reindex.
-const GraphSchemaVersion = "3"
+//
+// Version 4: facts_vec is code-managed (ensureFactsVec) at the active model's
+// dimension rather than a static FLOAT[768] migration, and NeedsRebuild now
+// ALSO gates on the embedding identity (meta.embed_model_id / meta.embed_dim).
+// A model id or dim change invalidates every stored vector, forcing a rebuild
+// that recreates facts_vec empty and re-embeds the whole corpus.
+const GraphSchemaVersion = "4"
 
 type searchIndex struct {
 	rh *repoHandler
@@ -115,7 +121,25 @@ func (si *searchIndex) NeedsRebuild(ctx context.Context) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("read graph_schema_version: %w", err)
 	}
-	return persistedVer != GraphSchemaVersion, nil
+	if persistedVer != GraphSchemaVersion {
+		return true, nil
+	}
+
+	// Embedding identity: a model/dim change invalidates every stored vector.
+	if emb := si.rh.getEmbedder(); emb != nil {
+		curID, err := si.persistedEmbedModelID(ctx)
+		if err != nil {
+			return false, err
+		}
+		curDim, err := si.persistedEmbedDim(ctx)
+		if err != nil {
+			return false, err
+		}
+		if curID != emb.ID() || curDim != emb.Dim() {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // MarkRebuildNeeded clears the persisted schema version so the next
@@ -264,6 +288,17 @@ func (si *searchIndex) Rebuild(ctx context.Context, branch string, progress Rebu
 		return fmt.Errorf("rebuild: head commit: %w", err)
 	}
 
+	// Ensure facts_vec exists at the active model's dimension BEFORE phase 1.
+	// Phase 1 (rebuildFacts) can DELETE orphaned branch_facts/facts rows, which
+	// fires the facts_after_delete trigger that references facts_vec; the table
+	// must exist first. ensureFactsVec also recreates it empty when the model
+	// identity changed, so phase 2 re-embeds the whole corpus.
+	if emb := si.rh.getEmbedder(); emb != nil {
+		if err := si.ensureFactsVec(ctx, emb.ID(), emb.Dim()); err != nil {
+			return fmt.Errorf("rebuild: ensure facts_vec: %w", err)
+		}
+	}
+
 	// Phase 1: facts
 	start := time.Now()
 	n, err := si.rebuildFacts(ctx, branch, head, progress)
@@ -293,6 +328,20 @@ func (si *searchIndex) Rebuild(ctx context.Context, branch string, progress Rebu
 		GraphSchemaVersion,
 	); err != nil {
 		return fmt.Errorf("rebuild: bump graph schema version: %w", err)
+	}
+
+	// Persist the embedding identity alongside the schema version so a later
+	// model/dim change is detected by NeedsRebuild. Written on success only,
+	// after facts_vec was (re)created and the corpus re-embedded at this dim.
+	if emb := si.rh.getEmbedder(); emb != nil {
+		if _, err := conn(ctx, si.rh.db).ExecContext(ctx,
+			`INSERT OR REPLACE INTO meta(key, value) VALUES ('embed_model_id', ?)`, emb.ID()); err != nil {
+			return fmt.Errorf("rebuild: persist embed_model_id: %w", err)
+		}
+		if _, err := conn(ctx, si.rh.db).ExecContext(ctx,
+			`INSERT OR REPLACE INTO meta(key, value) VALUES ('embed_dim', ?)`, emb.Dim()); err != nil {
+			return fmt.Errorf("rebuild: persist embed_dim: %w", err)
+		}
 	}
 
 	return si.setLastCommit(ctx, branch, head)

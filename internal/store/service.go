@@ -80,6 +80,18 @@ func Open(path string) (*Service, error) {
 	// Derive repo name from dbPath: /path/to/knomit.db → "knomit"
 	rh.name = strings.TrimSuffix(filepath.Base(path), ".db")
 	si := &searchIndex{rh: rh}
+
+	// facts_vec is code-managed (migration 000009 drops the old static
+	// FLOAT[768] table). Recreate it at the default dimension now so the
+	// facts_after_delete trigger and upsert/query paths work even before an
+	// embedder is configured (or when embeddings are disabled entirely). Once
+	// an embedder is set, Rebuild's ensureFactsVec recreates it at the real
+	// model dim and the model-change self-heal re-embeds the corpus.
+	if err := si.ensureFactsVecDefault(context.Background()); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("store.Open: ensure facts_vec: %w", err)
+	}
+
 	rh.onDrop = si.GC
 	rh.im = si // notifyCommit delegates to im.Sync after every commit.
 	fi := &factIndex{rh: rh}

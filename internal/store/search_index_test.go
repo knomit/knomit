@@ -10,6 +10,75 @@ import (
 	"knomit/internal/fact"
 )
 
+// configurableEmbedder is a BatchEmbedder whose ID() and Dim() are settable,
+// for exercising NeedsRebuild's embedding-identity gate. Vectors are
+// deterministic and `dim`-wide so they satisfy facts_vec.
+type configurableEmbedder struct {
+	id  string
+	dim int
+}
+
+func (e *configurableEmbedder) embed() []float32 {
+	out := make([]float32, e.dim)
+	for i := range out {
+		out[i] = float32(i%5) / 5.0
+	}
+	return out
+}
+
+func (e *configurableEmbedder) EmbedQuery(string) ([]float32, error) { return e.embed(), nil }
+func (e *configurableEmbedder) EmbedDocument(string, string) ([]float32, error) {
+	return e.embed(), nil
+}
+func (e *configurableEmbedder) Dim() int    { return e.dim }
+func (e *configurableEmbedder) ID() string  { return e.id }
+func (e *configurableEmbedder) EmbedDocuments(titles, _ []string) ([][]float32, error) {
+	out := make([][]float32, len(titles))
+	for i := range titles {
+		out[i] = e.embed()
+	}
+	return out, nil
+}
+
+// TestNeedsRebuildDetectsModelChange verifies that, with the schema version
+// current, NeedsRebuild gates on the embedding identity: a matching
+// model-id/dim is clean, while a model-id or dim mismatch forces a rebuild.
+func TestNeedsRebuildDetectsModelChange(t *testing.T) {
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	defer svc.Close()
+	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+
+	ctx := context.Background()
+	si := svc.Search().(*searchIndex)
+
+	// Persist a current schema version + a matching embedding identity.
+	emb := &configurableEmbedder{id: "embeddinggemma", dim: 768}
+	svc.SetEmbedder(emb)
+	_, err = si.rh.db.ExecContext(ctx,
+		`INSERT OR REPLACE INTO meta(key, value) VALUES ('graph_schema_version', ?)`, GraphSchemaVersion)
+	require.NoError(t, err)
+	seedEmbedIdentity(t, si, "embeddinggemma", 768)
+
+	stale, err := si.NeedsRebuild(ctx)
+	require.NoError(t, err)
+	require.False(t, stale, "matching model-id and dim must be clean")
+
+	// Model-id change → stale.
+	emb.id = "nomic-v1.5"
+	stale, err = si.NeedsRebuild(ctx)
+	require.NoError(t, err)
+	require.True(t, stale, "model-id change must force a rebuild")
+
+	// Back to matching id, but dim change → stale.
+	emb.id = "embeddinggemma"
+	emb.dim = 1024
+	stale, err = si.NeedsRebuild(ctx)
+	require.NoError(t, err)
+	require.True(t, stale, "dim change must force a rebuild")
+}
+
 // TestRebuild_BumpsGraphSchemaVersion verifies that a successful Rebuild
 // writes meta.graph_schema_version to the current expected value, signalling
 // that the graph layout has been updated to match this binary.
