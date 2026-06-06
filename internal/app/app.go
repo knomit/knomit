@@ -55,11 +55,11 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 
 	// Embedder.
 	var embedder *embeddings.Embedder
-	modelPath, tokPath, err := embeddings.EnsureModel(filepath.Join(cfg.Home, "models"))
+	model, err := embeddings.Lookup(cfg.Embeddings.Model)
 	if err != nil {
-		log.Warn().Err(err).Msg("embedder model unavailable")
+		log.Warn().Err(err).Msg("embedder model config invalid")
 	} else {
-		embedder, err = embeddings.NewEmbedder(modelPath, tokPath)
+		embedder, err = embeddings.NewEmbedder(model, filepath.Join(cfg.Home, "models"))
 		if err != nil {
 			log.Warn().Err(err).Msg("embedder init failed")
 		}

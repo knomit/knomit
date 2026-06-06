@@ -131,6 +131,25 @@ func TestDefaults_ClusterResolution(t *testing.T) {
 	}
 }
 
+func TestEmbeddingsModelDefault(t *testing.T) {
+	c := Defaults()
+	if c.Embeddings.Model != "embeddinggemma" {
+		t.Errorf("default embeddings model = %q, want embeddinggemma", c.Embeddings.Model)
+	}
+}
+
+func TestEmbeddingsModelEnvOverride(t *testing.T) {
+	t.Setenv("KNOMIT_HOME", t.TempDir()) // isolate from any real ~/.knomit/knomit.toml
+	t.Setenv("KNOMIT_EMBED_MODEL", "nomic-v1.5")
+	c, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Embeddings.Model != "nomic-v1.5" {
+		t.Errorf("env override = %q, want nomic-v1.5", c.Embeddings.Model)
+	}
+}
+
 // TestLoad_ClusterResolutionEnvOverride regresses the gap where the new
 // cluster_cache resolution / min_community_size fields had no env override
 // (the other three fields did). Load must wire KNOMIT_CLUSTER_CACHE_RESOLUTION
