@@ -6,17 +6,37 @@ Knomit stores structured facts as markdown files in a Git repository, organized 
 
 ## Requirements
 
-- Go 1.24+
-- Node.js / npm (for the web frontend)
-- SQLite
-- ONNX Runtime (downloaded automatically via `make setup`)
+- **Go 1.24+** — the entire backend
+- **Node.js + npm** — builds the embedded React frontend
+- **Git CLI** — knomit shells out to `git`
+- **A C compiler** — Xcode Command Line Tools on macOS (`xcode-select --install`), `gcc`/`build-essential` on Linux. The build is CGO-based (SQLite via `mattn/go-sqlite3` and the ONNX bindings are compiled in).
+
+Two native shared libraries — **ONNX Runtime** (embeddings) and **graphqlite** (graph queries) — are downloaded automatically into `dist/lib/` by `make setup` / `make build`; you don't install them by hand.
+
+## Quick start
+
+```sh
+git clone <your-knomit-remote-url> knomit
+cd knomit
+make setup    # one-time: download ONNX Runtime + graphqlite into dist/lib/
+make build    # build the web frontend, then the Go binaries
+make run      # start the server on http://localhost:19278
+```
+
+Open <http://localhost:19278/> for the web UI. The default repo is created automatically on first run.
 
 ## Building
 
 ```sh
-make setup    # download ONNX Runtime
-make build    # build Go binary + React frontend → dist/knomit, dist/knomit-bridge
+make setup    # download native libs (ONNX Runtime + graphqlite)
+make build    # build React frontend + Go binaries (CGO)
 ```
+
+`make build` produces:
+
+- `dist/knomit` — the main server / CLI binary
+- `dist/knomit-bridge` — stdio↔HTTP adapter for stdio-only MCP clients
+- `dist/knomit-tray` — menu-bar / system-tray launcher (macOS / Linux only)
 
 Individual targets:
 
@@ -116,6 +136,8 @@ make run CMD=init     # run a different subcommand
 make dev              # Vite dev server for frontend (HMR)
 ```
 
+**Editor setup (VS Code):** install the Go extension (`golang.go`); it uses `gopls`, pre-configured in [.vscode/settings.json](.vscode/settings.json). A C compiler must be on `PATH` so gopls and `go test` can build the CGO packages.
+
 Seed test data (requires the server running):
 
 ```sh
@@ -174,7 +196,22 @@ Profiles tailor the MCP instructions for different use cases:
 
 #### Claude Code
 
-Add to your project's `.mcp.json` (or `~/.claude/mcp.json` for global), substituting the branch logged on startup:
+The simplest setup uses `knomit-bridge` over stdio — no need to look up the agent branch. Add to your project's `.mcp.json` (or `~/.claude/mcp.json` for global); this repo already ships one:
+
+```json
+{
+  "mcpServers": {
+    "knomit": {
+      "command": "dist/knomit-bridge",
+      "args": ["--repo", "knomit", "--source", "knomit", "--profile", "code"]
+    }
+  }
+}
+```
+
+`--source` is the slug used in `src://` refs (defaults to `--repo` if omitted). With the server running, the bridge discovers the agent branch automatically.
+
+Alternatively, connect directly over streamable-HTTP, substituting the branch logged on startup (`/` → `:` in the URL):
 
 ```json
 {
@@ -189,9 +226,9 @@ Add to your project's `.mcp.json` (or `~/.claude/mcp.json` for global), substitu
 
 Knomit's tool descriptions carry all the behavioral guidance the model needs — no `CLAUDE.md` setup required.
 
-#### stdio clients (Claude Desktop, etc.)
+#### Other stdio clients (Claude Desktop, VS Code, Cursor, …)
 
-Claude Desktop and other stdio-only MCP clients use `knomit-bridge`, a thin adapter built by `make build`. It auto-discovers the agent branch from the server. See [tools/bridge/README.md](tools/bridge/README.md) for setup and configuration.
+Claude Desktop and other stdio-only MCP clients use the same `knomit-bridge` adapter built by `make build`. It auto-discovers the agent branch from the server. See [tools/bridge/README.md](tools/bridge/README.md) for setup and configuration.
 
 ### Web UI
 

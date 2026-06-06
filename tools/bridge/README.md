@@ -32,15 +32,37 @@ Port discovery follows this priority:
 
 ## Usage
 
+Without a command, `knomit-bridge` runs as the MCP stdio↔HTTP proxy:
+
 ```
-knomit-bridge [--repo <name>] [--profile <profile>] [base-url]
+knomit-bridge [--repo <name>] [--source <slug>] [--profile <profile>] [--log <path>] [base-url]
 ```
 
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--repo` | `knomit` | Repository name |
+| `--source` | value of `--repo` | Source-code slug used in `src://` refs |
 | `--profile` | `code` | MCP profile (`code`, `chat`, `generic`) |
+| `--log` | platform default (see below) | Log file path (lumberjack 4 MB rotation) |
 | `base-url` | `http://localhost:19278` | Base URL of the knomit server |
+
+Flags accept both `-flag value` and `--flag value` styles.
+
+### Subcommands
+
+The bridge also wraps Claude Code integration helpers (typically invoked by CC, not by hand):
+
+```
+knomit-bridge claude init [-repo <name>] [-source <slug>] [-profile <name>]
+                                  # scaffold CC integration files in the current directory
+knomit-bridge claude hook <event> # run a CC hook; event ∈ session-start, post-edit, pre-compact
+```
+
+Global flags such as `--log` are accepted before any subcommand:
+
+```
+knomit-bridge --log /tmp/bridge.log claude hook post-edit
+```
 
 ## MCP client configuration
 
