@@ -30,9 +30,9 @@ URL="https://github.com/daulet/tokenizers/releases/download/${VERSION}/libtokeni
 
 echo "Downloading libtokenizers ${VERSION} for ${PLAT}..."
 mkdir -p "${DEST}"
-TMPDIR="$(mktemp -d)"
-trap 'rm -rf "${TMPDIR}"' EXIT
+WORK_DIR="$(mktemp -d)"
+trap 'rm -rf "${WORK_DIR}"' EXIT
 
-curl -fsSL "${URL}" | tar xz -C "${TMPDIR}"
-cp "${TMPDIR}/libtokenizers.a" "${DEST}/libtokenizers.a"
+curl -fsSL "${URL}" | tar xz -C "${WORK_DIR}" libtokenizers.a
+cp "${WORK_DIR}/libtokenizers.a" "${DEST}/libtokenizers.a"
 echo "libtokenizers.a installed to ${DEST}/"

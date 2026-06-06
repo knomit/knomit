@@ -56,7 +56,7 @@ else
 endif
 GRAPHQLITE_URL := https://github.com/colliery-io/graphqlite/releases/download/v$(GRAPHQLITE_VERSION)/$(GRAPHQLITE_ASSET)
 
-setup: download-ort download-graphqlite
+setup: download-ort download-graphqlite tokenizers-lib
 	@echo "Setup complete. Run 'make run' to start the server."
 
 download-ort:
@@ -94,7 +94,7 @@ web:
 test: download-graphqlite
 	CGO_ENABLED=1 go test $(GOFLAGS) ./...
 
-dist: download-ort download-graphqlite build
+dist: download-ort download-graphqlite tokenizers-lib build
 	@echo "Distribution package ready in dist/"
 
 CMD ?= serve
