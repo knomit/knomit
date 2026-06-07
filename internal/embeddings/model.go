@@ -6,6 +6,8 @@ package embeddings
 import (
 	"fmt"
 	"sort"
+
+	"knomit/internal/retrieval"
 )
 
 // Pooling selects how a model's token-level output is reduced to one vector.
@@ -37,6 +39,10 @@ type Model struct {
 	Dim           int
 	QueryTemplate string
 	DocTemplate   string
+	// Thresholds are this model's cosine cutoffs for dedup/search/graph/reflect.
+	// They are calibrated per model against the real corpus (tools/calibrate),
+	// because each model has a different cosine distribution.
+	Thresholds retrieval.Thresholds
 }
 
 const hfBase = "https://huggingface.co"
@@ -53,6 +59,21 @@ var registry = map[string]Model{
 		Dim:           768,
 		QueryTemplate: "task: search result | query: {content}",
 		DocTemplate:   "title: {title} | text: {content}",
+		// Calibrated against the real knomit corpus (712 facts, tools/calibrate).
+		// EmbeddingGemma's cosine distribution runs markedly cooler than nomic's
+		// (distinct same-category pairs: mean 0.48 vs 0.75), so every cutoff is
+		// ported DOWN by preserving the percentile it occupied on nomic. Dedup
+		// 0.82 sits in the validated safety gap (distinct p99 0.77 < 0.82 < true
+		// near-dup p05 0.96). SearchFloor's pure port was ~0, clamped to 0.05 to
+		// drop only anti-correlated noise.
+		Thresholds: retrieval.Thresholds{
+			Dedup:          0.82,
+			ReflectNovelty: 0.69,
+			SimilarTo:      0.18,
+			SearchFloor:    0.05,
+			RerankHigh:     0.43,
+			RerankLow:      0.10,
+		},
 	},
 	"nomic-v1.5": {
 		ID:            "nomic-v1.5",
@@ -64,6 +85,9 @@ var registry = map[string]Model{
 		Dim:           768,
 		QueryTemplate: "search_query: {content}",
 		DocTemplate:   "search_document: {content}",
+		// nomic was the original default; these are the historical literals the
+		// thresholds were implicitly tuned against (== retrieval.Defaults()).
+		Thresholds: retrieval.Defaults(),
 	},
 	// UNVERIFIED: unlike embeddinggemma and nomic-v1.5 (both PoC-validated), the
 	// qwen3-0.6b ONNX input/output names and last-token pooling below are a
@@ -82,6 +106,10 @@ var registry = map[string]Model{
 		Dim:           1024,
 		QueryTemplate: "Instruct: Given a query, retrieve knowledge-base facts that answer it\nQuery:{content}",
 		DocTemplate:   "{content}",
+		// UNCALIBRATED (like the ONNX I/O above): qwen's last-token-pooled
+		// geometry differs from both nomic and gemma. Seeded with nomic-era
+		// defaults; run tools/calibrate before relying on this model.
+		Thresholds: retrieval.Defaults(),
 	},
 }
 

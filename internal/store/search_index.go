@@ -1101,6 +1101,7 @@ func (si *searchIndex) rebuildGraph(ctx context.Context, branch string, progress
 	if si.rh.getEmbedder() != nil {
 		type simEdge struct{ fromPath, fromBH, toPath, toBH string }
 		var edges []simEdge
+		simFloor := EmbedderThresholds(si.rh.getEmbedder()).SimilarTo
 
 		for _, rec := range facts {
 			emb, err := si.getEmbeddingByFact(ctx, rec.Path, rec.BlobHash)
@@ -1126,7 +1127,7 @@ func (si *searchIndex) rebuildGraph(ctx context.Context, branch string, progress
 				if err := rows.Scan(&neighborPath, &neighborBH, &sim); err != nil {
 					break
 				}
-				if (neighborPath != rec.Path || neighborBH != rec.BlobHash) && sim >= knnThreshold {
+				if (neighborPath != rec.Path || neighborBH != rec.BlobHash) && sim >= simFloor {
 					edges = append(edges, simEdge{fromPath: rec.Path, fromBH: rec.BlobHash, toPath: neighborPath, toBH: neighborBH})
 				}
 			}

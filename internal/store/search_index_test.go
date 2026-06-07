@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/fact"
+	"knomit/internal/retrieval"
 )
 
 // configurableEmbedder is a BatchEmbedder whose ID() and Dim() are settable,
@@ -30,8 +31,11 @@ func (e *configurableEmbedder) EmbedQuery(string) ([]float32, error) { return e.
 func (e *configurableEmbedder) EmbedDocument(string, string) ([]float32, error) {
 	return e.embed(), nil
 }
-func (e *configurableEmbedder) Dim() int    { return e.dim }
-func (e *configurableEmbedder) ID() string  { return e.id }
+func (e *configurableEmbedder) Dim() int   { return e.dim }
+func (e *configurableEmbedder) ID() string { return e.id }
+func (e *configurableEmbedder) Thresholds() retrieval.Thresholds {
+	return retrieval.Defaults()
+}
 func (e *configurableEmbedder) EmbedDocuments(titles, _ []string) ([][]float32, error) {
 	out := make([][]float32, len(titles))
 	for i := range titles {

@@ -9,6 +9,8 @@ import (
 
 	tok "github.com/daulet/tokenizers"
 	ort "github.com/yalue/onnxruntime_go"
+
+	"knomit/internal/retrieval"
 )
 
 // ortOnce ensures InitializeEnvironment is called only once per process.
@@ -101,6 +103,9 @@ func NewEmbedder(m Model, cacheDir string) (*Embedder, error) {
 func (e *Embedder) Dim() int   { return e.model.Dim }
 func (e *Embedder) ID() string { return e.model.ID }
 func (e *Embedder) Close()     { _ = e.sess.Destroy(); _ = e.tk.Close() }
+
+// Thresholds returns this model's calibrated cosine cutoffs.
+func (e *Embedder) Thresholds() retrieval.Thresholds { return e.model.Thresholds }
 
 // EmbedQuery embeds a search query using the model's query template.
 func (e *Embedder) EmbedQuery(text string) ([]float32, error) {

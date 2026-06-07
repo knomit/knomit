@@ -93,9 +93,11 @@ func (r *Reviewer) StartSession(ctx context.Context) (*ReviewResult, error) {
 	log.Info().Str("session", sess.ID).Int("clusters", len(clusters)).Dur("elapsed", time.Since(t)).Msg("review: clustering done")
 
 	// Dedup pass: merge near-duplicates within each cluster before enqueueing.
+	// The near-duplicate floor is model-dependent (see internal/retrieval).
 	t = time.Now()
+	dedupThreshold := store.EmbedderThresholds(r.ri.Embedder()).Dedup
 	for i := range clusters {
-		surviving, err := dedupCluster(ctx, clusters[i], gs, idx, 0.92, "review", r.onProgress, branch)
+		surviving, err := dedupCluster(ctx, clusters[i], gs, idx, dedupThreshold, "review", r.onProgress, branch)
 		if err != nil {
 			return nil, fmt.Errorf("review: dedup cluster %d: %w", i, err)
 		}
@@ -208,7 +210,7 @@ func (r *Reviewer) ContinueSession(ctx context.Context, sessionID, response stri
 			return nil, fmt.Errorf("review: validate reflect: %w", err)
 		}
 		if err := ApplyReflectDecisions(ctx, gs, idx, parsed, sess,
-			r.ri.OntologyRoot(), reflectNoveltyThreshold(), r.onProgress); err != nil {
+			r.ri.OntologyRoot(), reflectNoveltyThreshold(store.EmbedderThresholds(r.ri.Embedder()).ReflectNovelty), r.onProgress); err != nil {
 			return nil, fmt.Errorf("review: apply reflect: %w", err)
 		}
 

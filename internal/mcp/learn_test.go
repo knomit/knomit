@@ -12,6 +12,7 @@ import (
 
 	"knomit/internal/fact"
 	"knomit/internal/repos"
+	"knomit/internal/retrieval"
 	"knomit/internal/store"
 )
 
@@ -35,6 +36,7 @@ func newLenEmbedder(t *testing.T) *MockBatchEmbedder {
 	}).AnyTimes()
 	emb.EXPECT().Dim().Return(768).AnyTimes()
 	emb.EXPECT().ID().Return("len-stub").AnyTimes()
+	emb.EXPECT().Thresholds().Return(retrieval.Defaults()).AnyTimes()
 	emb.EXPECT().EmbedDocuments(gomock.Any(), gomock.Any()).DoAndReturn(func(titles, bodies []string) ([][]float32, error) {
 		out := make([][]float32, len(titles))
 		for i := range titles {

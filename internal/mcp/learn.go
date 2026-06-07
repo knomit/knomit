@@ -186,7 +186,8 @@ func LearnHandler(embedders ...store.BatchEmbedder) func(context.Context, mcpgo.
 		// 3b. Dedup check: search for near-duplicates scoped to the same category directory.
 		// Batch-embed all incoming facts upfront if a BatchEmbedder is available,
 		// so each dedup Search uses the pre-computed vector instead of re-embedding.
-		const dedupThreshold = 0.92
+		// The near-duplicate cosine floor is model-dependent (see internal/retrieval).
+		dedupThreshold := store.EmbedderThresholds(batchEmb).Dedup
 		var dedupVecs [][]float32
 		if batchEmb != nil && len(facts) > 0 {
 			titles := make([]string, len(facts))

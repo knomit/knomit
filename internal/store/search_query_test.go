@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+
+	"knomit/internal/retrieval"
 )
 
 // rankedEmbedder maps each fact's embedding text and the query to vectors
@@ -48,6 +50,8 @@ func (e *rankedEmbedder) EmbedDocument(title, body string) ([]float32, error) {
 func (e *rankedEmbedder) Dim() int { return rankedEmbedderDim }
 
 func (e *rankedEmbedder) ID() string { return "ranked" }
+
+func (e *rankedEmbedder) Thresholds() retrieval.Thresholds { return retrieval.Defaults() }
 
 func (e *rankedEmbedder) EmbedDocuments(titles, bodies []string) ([][]float32, error) {
 	out := make([][]float32, len(titles))

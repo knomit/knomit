@@ -10,6 +10,7 @@
 package store
 
 import (
+	retrieval "knomit/internal/retrieval"
 	reflect "reflect"
 
 	gomock "go.uber.org/mock/gomock"
@@ -110,4 +111,18 @@ func (m *MockBatchEmbedder) ID() string {
 func (mr *MockBatchEmbedderMockRecorder) ID() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ID", reflect.TypeOf((*MockBatchEmbedder)(nil).ID))
+}
+
+// Thresholds mocks base method.
+func (m *MockBatchEmbedder) Thresholds() retrieval.Thresholds {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Thresholds")
+	ret0, _ := ret[0].(retrieval.Thresholds)
+	return ret0
+}
+
+// Thresholds indicates an expected call of Thresholds.
+func (mr *MockBatchEmbedderMockRecorder) Thresholds() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Thresholds", reflect.TypeOf((*MockBatchEmbedder)(nil).Thresholds))
 }
