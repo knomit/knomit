@@ -59,6 +59,20 @@ type ClusterCacheConfig struct {
 	MinCommunitySize int     `toml:"min_community_size"`
 }
 
+// SessionConfig governs the ephemeral session database's idle reaper. Tool
+// paging cursors and pipeline work-stealing sessions live there; the reaper
+// deletes a session once it has been idle (no page/work-item access) longer
+// than its TTL. ToolIdleTTL covers short-lived query/explain cursors;
+// PipelineIdleTTL is longer because review/hypothesize loops can pause between
+// work-steal calls. SweepInterval=="0"/"0s" disables the reaper entirely (the
+// session DB is still recreated empty each start, so it cannot grow across
+// restarts regardless).
+type SessionConfig struct {
+	ToolIdleTTL     string `toml:"tool_idle_ttl"`
+	PipelineIdleTTL string `toml:"pipeline_idle_ttl"`
+	SweepInterval   string `toml:"sweep_interval"`
+}
+
 // Config is the root configuration, composed of section structs.
 type Config struct {
 	Home                string             `toml:"repo"`
@@ -69,6 +83,7 @@ type Config struct {
 	ONNXLibPath         string             `toml:"onnx_lib_path"`
 	MethodologyMinScore float64            `toml:"methodology_min_score"`
 	ClusterCache        ClusterCacheConfig `toml:"cluster_cache"`
+	Session             SessionConfig      `toml:"session"`
 	Embeddings          EmbeddingsConfig   `toml:"embeddings"`
 	LLM                 LLMConfig          `toml:"llm"`
 	Remote              RemoteAuthConfig   `toml:"remote"`
@@ -90,6 +105,11 @@ func Defaults() Config {
 			MaxConcurrent:    1,
 			Resolution:       2.0,
 			MinCommunitySize: 2,
+		},
+		Session: SessionConfig{
+			ToolIdleTTL:     "15m",
+			PipelineIdleTTL: "60m",
+			SweepInterval:   "5m",
 		},
 		Embeddings: EmbeddingsConfig{Model: "embeddinggemma"},
 		LLM: LLMConfig{
@@ -146,6 +166,9 @@ func Load() (Config, error) {
 	envIntOr("KNOMIT_CLUSTER_CACHE_MAX_CONCURRENT", &cfg.ClusterCache.MaxConcurrent)
 	envFloatOr("KNOMIT_CLUSTER_CACHE_RESOLUTION", &cfg.ClusterCache.Resolution)
 	envIntOr("KNOMIT_CLUSTER_CACHE_MIN_COMMUNITY_SIZE", &cfg.ClusterCache.MinCommunitySize)
+	envOr("KNOMIT_SESSION_TOOL_IDLE_TTL", &cfg.Session.ToolIdleTTL)
+	envOr("KNOMIT_SESSION_PIPELINE_IDLE_TTL", &cfg.Session.PipelineIdleTTL)
+	envOr("KNOMIT_SESSION_SWEEP_INTERVAL", &cfg.Session.SweepInterval)
 	envFloatOr("KNOMIT_METHODOLOGY_MIN_SCORE", &cfg.MethodologyMinScore)
 
 	// Expand tildes in path fields.

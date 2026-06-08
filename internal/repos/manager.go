@@ -74,6 +74,12 @@ type Manager struct {
 	// (cluster_cache.check_interval = 0).
 	clusterCheckerStop func()
 
+	// sessionReaperStop is set by Start when the background idle-session
+	// reaper is launched, and invoked by Close to wind it down. nil when
+	// Start hasn't been called or the reaper is disabled
+	// (session.sweep_interval = 0).
+	sessionReaperStop func()
+
 	// rescanMu serialises concurrent Rescan calls so the same .db cannot
 	// be opened twice in a race. Independent of mu — Rescan reads m.repos
 	// via Get/Set, which take mu themselves.
@@ -142,6 +148,10 @@ func (m *Manager) Close() error {
 	if m.clusterCheckerStop != nil {
 		m.clusterCheckerStop()
 		m.clusterCheckerStop = nil
+	}
+	if m.sessionReaperStop != nil {
+		m.sessionReaperStop()
+		m.sessionReaperStop = nil
 	}
 
 	m.mu.RLock()
@@ -221,6 +231,15 @@ func (m *Manager) Start() error {
 		return fmt.Errorf("cluster checker config: %w", err)
 	}
 	m.clusterCheckerStop = m.startClusterChecker(checkerCfg)
+
+	// Launch the background idle-session reaper. As with the cluster checker,
+	// a misconfigured session block surfaces at boot rather than silently
+	// disabling the reaper.
+	reaperCfg, err := parseSessionReaperConfig(m.deps.Cfg.Session)
+	if err != nil {
+		return fmt.Errorf("session reaper config: %w", err)
+	}
+	m.sessionReaperStop = m.startSessionReaper(reaperCfg)
 	return nil
 }
 

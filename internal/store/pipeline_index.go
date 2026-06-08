@@ -40,8 +40,16 @@ type PipelineWorkItem struct {
 	CreatedAt  string
 }
 
+// pipelineIndex spans two databases. Watermark methods (durable progress: how
+// far review/hypothesize has processed git history) use the MAIN db on rh.
+// Session and work-item methods (ephemeral, in-flight work-stealing state) use
+// the separate session DB (sessionDB). Session methods use sessionDB DIRECTLY
+// and never conn(ctx, …) / beginTxIfNeeded(ctx, …): a ctx-carried *sql.Tx is
+// bound to the MAIN db, so routing session SQL through it would hit the wrong
+// database (where these tables no longer exist).
 type pipelineIndex struct {
-	rh *repoHandler
+	rh        *repoHandler
+	sessionDB *sql.DB
 }
 
 // Compile-time assertion: pipelineIndex must implement PipelineIndex.
@@ -80,17 +88,16 @@ func (pi *pipelineIndex) SetPipelineWatermark(ctx context.Context, tool, branch,
 func (pi *pipelineIndex) CreatePipelineSession(ctx context.Context, tool, branch string) (*PipelineSession, error) {
 	now := time.Now().UTC().Format(time.RFC3339)
 
-	ctx, tx, ownTx, err := beginTxIfNeeded(ctx, pi.rh.db)
+	// Own transaction on the session DB. We deliberately do NOT consult any
+	// ctx-carried tx (it would belong to the main db).
+	tx, err := pi.sessionDB.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, fmt.Errorf("CreatePipelineSession: begin tx: %w", err)
 	}
-	if ownTx {
-		defer tx.Rollback()
-	}
-	db := conn(ctx, pi.rh.db)
+	defer tx.Rollback()
 
 	// Abandon any active session for this tool+branch.
-	if _, err := db.ExecContext(ctx,
+	if _, err := tx.ExecContext(ctx,
 		`UPDATE pipeline_sessions SET status = 'abandoned', updated_at = ? WHERE tool = ? AND branch = ? AND status = 'active'`,
 		now, tool, branch,
 	); err != nil {
@@ -107,17 +114,15 @@ func (pi *pipelineIndex) CreatePipelineSession(ctx context.Context, tool, branch
 		UpdatedAt: now,
 	}
 
-	if _, err := db.ExecContext(ctx,
-		`INSERT INTO pipeline_sessions(id, tool, branch, status, phase, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		s.ID, s.Tool, s.Branch, s.Status, s.Phase, s.CreatedAt, s.UpdatedAt,
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO pipeline_sessions(id, tool, branch, status, phase, created_at, updated_at, last_used_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		s.ID, s.Tool, s.Branch, s.Status, s.Phase, s.CreatedAt, s.UpdatedAt, now,
 	); err != nil {
 		return nil, fmt.Errorf("CreatePipelineSession insert: %w", err)
 	}
 
-	if ownTx {
-		if err := tx.Commit(); err != nil {
-			return nil, err
-		}
+	if err := tx.Commit(); err != nil {
+		return nil, err
 	}
 	return s, nil
 }
@@ -125,7 +130,7 @@ func (pi *pipelineIndex) CreatePipelineSession(ctx context.Context, tool, branch
 // GetPipelineSession returns the session with the given ID, or nil if not found.
 func (pi *pipelineIndex) GetPipelineSession(ctx context.Context, id string) (*PipelineSession, error) {
 	var s PipelineSession
-	err := conn(ctx, pi.rh.db).QueryRowContext(ctx,
+	err := pi.sessionDB.QueryRowContext(ctx,
 		`SELECT id, tool, branch, status, phase, created_at, updated_at FROM pipeline_sessions WHERE id = ?`, id,
 	).Scan(&s.ID, &s.Tool, &s.Branch, &s.Status, &s.Phase, &s.CreatedAt, &s.UpdatedAt)
 	if err == sql.ErrNoRows {
@@ -146,7 +151,7 @@ func (pi *pipelineIndex) GetPipelineSession(ctx context.Context, id string) (*Pi
 // calls.
 func (pi *pipelineIndex) AdvancePipelineSessionPhase(ctx context.Context, id, from, to string) (bool, error) {
 	now := time.Now().UTC().Format(time.RFC3339)
-	res, err := conn(ctx, pi.rh.db).ExecContext(ctx,
+	res, err := pi.sessionDB.ExecContext(ctx,
 		`UPDATE pipeline_sessions SET phase = ?, updated_at = ? WHERE id = ? AND phase = ?`,
 		to, now, id, from,
 	)
@@ -163,7 +168,7 @@ func (pi *pipelineIndex) AdvancePipelineSessionPhase(ctx context.Context, id, fr
 // CompletePipelineSession marks the session as completed.
 func (pi *pipelineIndex) CompletePipelineSession(ctx context.Context, id string) error {
 	now := time.Now().UTC().Format(time.RFC3339)
-	_, err := conn(ctx, pi.rh.db).ExecContext(ctx,
+	_, err := pi.sessionDB.ExecContext(ctx,
 		`UPDATE pipeline_sessions SET status = 'completed', updated_at = ? WHERE id = ?`,
 		now, id,
 	)
@@ -176,7 +181,7 @@ func (pi *pipelineIndex) CompletePipelineSession(ctx context.Context, id string)
 // InsertPipelineWorkItem inserts a new work item into the pipeline_work_items table.
 func (pi *pipelineIndex) InsertPipelineWorkItem(ctx context.Context, item PipelineWorkItem) error {
 	now := time.Now().UTC().Format(time.RFC3339)
-	_, err := conn(ctx, pi.rh.db).ExecContext(ctx,
+	_, err := pi.sessionDB.ExecContext(ctx,
 		`INSERT INTO pipeline_work_items(session_id, step_type, cluster_key, facts_json, response, priority, depth, created_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 		item.SessionID, item.StepType, item.ClusterKey, item.FactsJSON, item.Response, item.Priority, item.Depth, now,
@@ -190,8 +195,16 @@ func (pi *pipelineIndex) InsertPipelineWorkItem(ctx context.Context, item Pipeli
 // NextPipelineWorkItem returns the highest-priority unanswered work item for the given
 // session, or nil if all items have been answered.
 func (pi *pipelineIndex) NextPipelineWorkItem(ctx context.Context, sessionID string) (*PipelineWorkItem, error) {
+	// Heartbeat: serving work keeps the session alive against the idle reaper.
+	now := time.Now().UTC().Format(time.RFC3339)
+	if _, err := pi.sessionDB.ExecContext(ctx,
+		`UPDATE pipeline_sessions SET last_used_at = ? WHERE id = ?`, now, sessionID,
+	); err != nil {
+		return nil, fmt.Errorf("NextPipelineWorkItem touch: %w", err)
+	}
+
 	var item PipelineWorkItem
-	err := conn(ctx, pi.rh.db).QueryRowContext(ctx,
+	err := pi.sessionDB.QueryRowContext(ctx,
 		`SELECT id, session_id, step_type, cluster_key, facts_json, response, priority, depth, created_at
 		 FROM pipeline_work_items
 		 WHERE session_id = ? AND response IS NULL
@@ -210,7 +223,7 @@ func (pi *pipelineIndex) NextPipelineWorkItem(ctx context.Context, sessionID str
 
 // SetPipelineWorkItemResponse records the response for a work item.
 func (pi *pipelineIndex) SetPipelineWorkItemResponse(ctx context.Context, id int64, response string) error {
-	_, err := conn(ctx, pi.rh.db).ExecContext(ctx,
+	_, err := pi.sessionDB.ExecContext(ctx,
 		`UPDATE pipeline_work_items SET response = ? WHERE id = ?`,
 		response, id,
 	)
@@ -222,7 +235,7 @@ func (pi *pipelineIndex) SetPipelineWorkItemResponse(ctx context.Context, id int
 
 // PipelineWorkItemStats returns the count of completed and remaining work items for a session.
 func (pi *pipelineIndex) PipelineWorkItemStats(ctx context.Context, sessionID string) (completed, remaining int, err error) {
-	err = conn(ctx, pi.rh.db).QueryRowContext(ctx,
+	err = pi.sessionDB.QueryRowContext(ctx,
 		`SELECT
 			COALESCE(SUM(CASE WHEN response IS NOT NULL THEN 1 ELSE 0 END), 0),
 			COALESCE(SUM(CASE WHEN response IS NULL     THEN 1 ELSE 0 END), 0)
