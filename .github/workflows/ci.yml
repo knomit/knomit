@@ -87,4 +87,16 @@ jobs:
           LD_LIBRARY_PATH: ${{ github.workspace }}/dist/lib
           DYLD_LIBRARY_PATH: ${{ github.workspace }}/dist/lib
           KNOMIT_EMBED_TEST_CACHE: ${{ runner.temp }}/models
-        run: CGO_ENABLED=1 go test ./internal/embeddings/ -v
+        # onnxruntime_go dlopens the path given by ORT_LIB_PATH; with it unset it
+        # falls back to a bare "onnxruntime.so"/.dylib that the runner does not
+        # have (the file make setup downloads is libonnxruntime.so / .dylib), so
+        # initORT fails and every real-inference test errors. Point it at the
+        # vendored lib explicitly. `go test` runs from the package dir, so the
+        # path must be absolute (GITHUB_WORKSPACE), not relative to dist/lib.
+        run: |
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            export ORT_LIB_PATH="$GITHUB_WORKSPACE/dist/lib/libonnxruntime.dylib"
+          else
+            export ORT_LIB_PATH="$GITHUB_WORKSPACE/dist/lib/libonnxruntime.so"
+          fi
+          CGO_ENABLED=1 go test ./internal/embeddings/ -v
