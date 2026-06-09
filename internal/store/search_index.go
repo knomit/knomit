@@ -929,7 +929,13 @@ func (si *searchIndex) rebuildGraph(ctx context.Context, branch string, progress
 	for _, f := range facts {
 		currentSet[f.Path+"|"+f.BlobHash] = struct{}{}
 	}
-	histRows, err := conn(ctx, si.rh.db).QueryContext(ctx, `
+	// Read on the tx's own connection — NOT conn(ctx, db), which would fall
+	// through to the bare pool and need a SECOND connection while this tx holds
+	// the write lock. Under _txlock=immediate that straddle can starve the pool
+	// (the held write lock blocks other connections' BEGIN IMMEDIATE) during a
+	// rebuild that races concurrent writers. commit_log/branch_commits are
+	// regular tables (not GraphQLite EAV), so reading them inside the tx is safe.
+	histRows, err := tx.QueryContext(ctx, `
 		SELECT cl.commit_hash, cl.path
 		FROM commit_log cl
 		JOIN branch_commits bc ON bc.commit_hash = cl.commit_hash

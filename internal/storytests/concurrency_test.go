@@ -151,6 +151,60 @@ func TestConcurrency_SeparateBranchesAreIsolated(t *testing.T) {
 	repo.MustVerify()
 }
 
+// ── F3b ───────────────────────────────────────────────────────────────────
+
+// TestConcurrency_BarrierSeparateBranches is the tightest cross-branch
+// contention scenario: N goroutines each write to a DISTINCT branch and are
+// released simultaneously by a Barrier, so their notifyCommit index syncs
+// overlap as much as the DSL allows.
+//
+// Regression guard for the shared-graph write race: branchMu only serializes
+// writes to the SAME branch, but the GraphQLite property graph is a single
+// store shared by every branch. Before repoHandler.indexWriteMu, two commits
+// on different branches mutated that graph concurrently and GraphQLite — which
+// has no internal write serialization and no SQLITE_BUSY retry — failed the
+// edge MATCH...DELETE with the opaque "Failed to execute MATCH for DELETE"
+// (observed on linux CI, runs/27155234628). Every write must land, each branch
+// must see only its own fact, and Verify must be strictly clean.
+func TestConcurrency_BarrierSeparateBranches(t *testing.T) {
+	t.Log("F3b: Barrier releases N goroutines simultaneously, each writing to its OWN branch; cross-branch graph writes must not corrupt or fail")
+	sb := testenv.NewStoryboard(t)
+	repo := sb.Repo("alpha")
+
+	const N = 8
+	for i := range N {
+		repo.BranchFrom(fmt.Sprintf("agent/p%d", i), "agent/test")
+	}
+
+	barrier := sb.NewBarrier(N)
+	sb.Parallel(N, func(i int) {
+		path := fmt.Sprintf("kb/par-only-%d.md", i)
+		content := testenv.Fact("par").Body(fmt.Sprintf("branch-%d", i)).Build()
+		barrier.Wait()
+		repo.Instance().WithRead(func(svc *store.Service) {
+			_, err := svc.Facts().WriteFact(
+				context.Background(), fmt.Sprintf("agent/p%d", i), path, content,
+				"branch-local write", "test")
+			if err != nil {
+				t.Errorf("goroutine %d: WriteFact: %v", i, err)
+			}
+		})
+	})
+
+	for i := range N {
+		b := repo.Branch(fmt.Sprintf("agent/p%d", i))
+		b.MustHaveFactCount(1)
+		b.Head().Fact(fmt.Sprintf("kb/par-only-%d.md", i)).MustExist()
+		for j := range N {
+			if i == j {
+				continue
+			}
+			b.Head().Fact(fmt.Sprintf("kb/par-only-%d.md", j)).MustNotExist()
+		}
+	}
+	repo.MustVerify()
+}
+
 // ── F4 ────────────────────────────────────────────────────────────────────
 
 // TestConcurrency_BarrierSimultaneousStart: 20 goroutines wait on a

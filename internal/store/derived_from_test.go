@@ -308,14 +308,13 @@ func TestGraphAddDerivedFromAtCommitTx_WritesEdgeWithBothCommits(t *testing.T) {
 	_, err = si.rh.db.Exec(`DELETE FROM edges WHERE type = ?`, EdgeDerivedFrom)
 	require.NoError(t, err)
 
-	// Manually invoke the new helper to write the edge with both commits.
-	// (Task 4 will wire this into graphSyncFactTx; for this task's test we
-	// drive it directly.)
-	tx, err := si.rh.db.BeginTx(ctx, nil)
-	require.NoError(t, err)
-	defer tx.Rollback()
-	require.NoError(t, si.graphAddDerivedFromAtCommitTx(ctx, tx, branch, "kb/d.md", dBlobHash, c2, []string{"kb/e.md"}))
-	require.NoError(t, tx.Commit())
+	// Manually invoke the helper to write the edge with both commits. It is
+	// driven directly against si.rh.db (autocommit), exactly as production calls
+	// it post-commit via writePostCommitDerivedFrom — NOT wrapped in an explicit
+	// transaction. Its tx parameter is inert (it writes via conn(ctx)); wrapping
+	// it in a held BEGIN IMMEDIATE would deadlock its own bare-db writes against
+	// the write lock that wrapper holds.
+	require.NoError(t, si.graphAddDerivedFromAtCommitTx(ctx, si.rh.db, branch, "kb/d.md", dBlobHash, c2, []string{"kb/e.md"}))
 
 	// Read back via Cypher: expect exactly one edge from D to E with both commit properties.
 	rows, err := si.rh.db.QueryContext(ctx, `

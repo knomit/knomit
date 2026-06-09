@@ -50,22 +50,63 @@ type Service struct {
 func Open(path string) (*Service, error) {
 	registerVec() // one-time sqlite-vec + GraphQLite driver registration
 
+	// A bare :memory: database is per-connection — multiple pooled connections
+	// would each be a SEPARATE empty database. It is only used as a defensive
+	// fallback; pin it to a single connection so schema + data stay coherent and
+	// skip the file-DB write-serialization machinery below (a single connection
+	// cannot have cross-connection contention).
+	memory := path == ":memory:"
+
 	dsn := path
-	if path == ":memory:" {
+	if memory {
 		dsn = path + "?_foreign_keys=1"
 	} else {
-		dsn = path + "?_journal_mode=WAL&_busy_timeout=5000&_foreign_keys=1"
+		// _txlock=immediate makes every transaction BEGIN IMMEDIATE, acquiring
+		// the write lock up front so concurrent writers serialize cleanly at the
+		// storage layer (the loser blocks on _busy_timeout) instead of failing
+		// mid-statement. This is required because GraphQLite issues writes
+		// mid-SELECT on the calling connection and never retries on SQLITE_BUSY —
+		// under the default deferred BEGIN, two writers on different branches
+		// race the shared graph and one fails with "Failed to execute MATCH for
+		// DELETE". See warmPool below for why this needs a pre-warmed pool.
+		dsn = path + "?_journal_mode=WAL&_busy_timeout=5000&_foreign_keys=1&_txlock=immediate"
 	}
 	db, err := sql.Open("sqlite3_knomit", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("store.Open: %w", err)
 	}
-	// SQLite serializes writes internally; limiting the pool avoids SQLITE_BUSY
-	// contention between pooled connections competing for the write lock.
-	db.SetMaxOpenConns(4)
 
-	// Per-connection performance pragmas are applied in the ConnectHook (vec.go)
-	// so every pooled connection is configured, not just the first one.
+	if memory {
+		db.SetMaxOpenConns(1)
+	} else {
+		// Bound the pool AND keep every connection warm. MaxIdleConns must equal
+		// MaxOpenConns: otherwise database/sql closes connections above the idle
+		// limit and re-opens them lazily on demand — and a lazy open runs the
+		// ConnectHook, which loads the GraphQLite extension (a write to its EAV
+		// schema). Under _txlock=immediate, if that lazy open happens while
+		// another statement on the same goroutine holds the write lock (e.g.
+		// rebuildGraph's in-tx read needing a second connection), the new
+		// connection's extension init blocks on the held write lock — a
+		// self-deadlock. Keeping all connections warm + pre-opening them below
+		// guarantees no connection is ever initialized while a write lock is held.
+		const poolSize = 4
+		db.SetMaxOpenConns(poolSize)
+		db.SetMaxIdleConns(poolSize)
+		db.SetConnMaxLifetime(0) // never expire — keep connections warm for the process lifetime
+		db.SetConnMaxIdleTime(0) // never close idle connections
+
+		// Per-connection performance pragmas are applied in the ConnectHook
+		// (vec.go) so every pooled connection is configured, not just the first.
+
+		// Pre-warm the pool: force every connection open now (running the
+		// ConnectHook + GraphQLite extension load) while NO write lock is held,
+		// so later acquisitions reuse warm connections instead of initializing
+		// one mid-transaction. See SetMaxIdleConns rationale above.
+		if err := warmPool(db, poolSize); err != nil {
+			db.Close()
+			return nil, fmt.Errorf("store.Open: warm pool: %w", err)
+		}
+	}
 
 	// Update query planner statistics (one-time hint, not per-connection).
 	db.Exec("PRAGMA optimize")
@@ -106,6 +147,29 @@ func Open(path string) (*Service, error) {
 		ri:     ri,
 		dbPath: canonPath,
 	}, nil
+}
+
+// warmPool forces n distinct physical connections open and returns them to the
+// idle pool. Grabbing all n at once (rather than ping-in-a-loop, which would
+// reuse one connection) guarantees the driver opens n separate handles — each
+// running the ConnectHook + GraphQLite extension load exactly once, now, while
+// no write lock is held. After this, the pool holds n warm connections that are
+// reused without re-initialization (see SetMaxIdleConns rationale in Open).
+func warmPool(db *sql.DB, n int) error {
+	conns := make([]*sql.Conn, 0, n)
+	defer func() {
+		for _, c := range conns {
+			c.Close() // returns to the idle pool; does NOT close the underlying connection
+		}
+	}()
+	for range n {
+		c, err := db.Conn(context.Background())
+		if err != nil {
+			return err
+		}
+		conns = append(conns, c)
+	}
+	return nil
 }
 
 // SetCrypt sets the encryption provider for credential storage.
