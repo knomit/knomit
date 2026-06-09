@@ -30,10 +30,18 @@ type factSubProvider interface {
 	// a specific commit: the refs written by this version of the fact.
 	OutgoingAtCommit(ri *repos.RepoInstance, branch, path, commitHash string) ([]store.RefSummary, error)
 
-	// FactExistsAt reports whether the fact has any navigable version at the
-	// pinned commit (walking past retractions, matching fallback-before
-	// reads). Used to 404 the commit-anchored sub-resources in lockstep with
-	// the fact itself instead of returning empty/erroring when it's absent.
+	// FactLiveAtCommit reports whether the fact is live (present, not
+	// retracted) as of the pinned commit — the delete-RESPECTING check. Used
+	// to 404 the commit-anchored sub-resources in lockstep with the
+	// (no-fallback) fact read, so a fact retracted before this commit is gone
+	// rather than surfacing a misleading empty 200.
+	FactLiveAtCommit(ri *repos.RepoInstance, branch, path, commit string) (bool, error)
+
+	// FactExistsAt reports whether the fact has ANY valid version ≤ commit
+	// (stepping over retractions) — the fallback-before gate. With
+	// ?fallback=before set, the edges follow the fact read: a retracted fact
+	// still resolves to its last-valid version, so only a fact that never
+	// existed in the ancestry 404s.
 	FactExistsAt(ri *repos.RepoInstance, branch, path, commit string) (bool, error)
 }
 
@@ -102,6 +110,20 @@ func (defaultFactSubProvider) OutgoingAtCommit(ri *repos.RepoInstance, branch, p
 	return out, err
 }
 
+func (defaultFactSubProvider) FactLiveAtCommit(ri *repos.RepoInstance, branch, path, commit string) (bool, error) {
+	var (
+		live bool
+		err  error
+	)
+	ri.WithRead(func(svc *store.Service) {
+		if svc == nil {
+			return
+		}
+		live, err = svc.Search().FactLiveAtCommit(contextTODO(), branch, path, commit)
+	})
+	return live, err
+}
+
 func (defaultFactSubProvider) FactExistsAt(ri *repos.RepoInstance, branch, path, commit string) (bool, error) {
 	var (
 		exists bool
@@ -117,11 +139,16 @@ func (defaultFactSubProvider) FactExistsAt(ri *repos.RepoInstance, branch, path,
 }
 
 // factPresentAtCommitOr404 guards the commit-anchored /incoming and /outgoing
-// sub-resources: it writes a 404 (fact absent at this commit) or 500 (lookup
-// failed) and returns false when the caller should stop. The 404 mirrors the
-// commit-anchored fact read so a fact's edges 404 in lockstep with the fact
-// itself, rather than returning a misleading empty 200 or surfacing a 500 from
-// the edge query for a fact that isn't there.
+// sub-resources: it writes a 404 (fact absent as of this commit) or 500
+// (lookup failed) and returns false when the caller should stop. The gate
+// mirrors the commit-anchored fact read so a fact's edges 404 in lockstep with
+// the fact itself:
+//
+//   - default (no fallback): FactLiveAtCommit — a fact retracted before this
+//     commit is gone (404), not a misleading empty 200;
+//   - ?fallback=before: FactExistsAt — the edges follow the fact's fallback
+//     read, resolving a retracted fact to its last-valid version; only a fact
+//     that never existed in the ancestry 404s.
 func factPresentAtCommitOr404(
 	subProvider factSubProvider,
 	w http.ResponseWriter,
@@ -130,12 +157,22 @@ func factPresentAtCommitOr404(
 	a hal.Anchor,
 	factPath string,
 ) bool {
-	exists, err := subProvider.FactExistsAt(ri, a.Branch, factPath, a.Commit)
+	fallback := r.URL.Query().Get("fallback") == "before"
+
+	var (
+		present bool
+		err     error
+	)
+	if fallback {
+		present, err = subProvider.FactExistsAt(ri, a.Branch, factPath, a.Commit)
+	} else {
+		present, err = subProvider.FactLiveAtCommit(ri, a.Branch, factPath, a.Commit)
+	}
 	if err != nil {
 		writeStoreError(w, r, err, "Failed to resolve fact", a.Branch)
 		return false
 	}
-	if !exists {
+	if !present {
 		hal.WriteProblem(w, http.StatusNotFound, "Fact not found",
 			`no fact at path "`+factPath+`" on branch "`+a.Branch+`" at commit "`+a.Commit+`"`,
 			r.URL.Path)

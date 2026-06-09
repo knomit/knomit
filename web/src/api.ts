@@ -515,6 +515,11 @@ export const api = {
     const factURL = commit
       ? `${branchBase(repo, branch)}/commits/${commit}/facts/${path}`
       : `${branchBase(repo, branch)}/facts/${path}`;
+    // Commit-anchored edges follow the fact's fallback-before read: when the
+    // pinned commit is past the fact's retraction, resolve the last-valid
+    // version's edges instead of 404ing (matches the fact view, which fetches
+    // with fallback:'before'). HEAD-anchored reads take no fallback.
+    const edgeQuery = commit ? '?fallback=before' : '';
     type RawRef = { path: string; title: string; kind?: string; type?: string; commit?: string; committed_at?: number; deleted?: boolean };
     const parseRefs = (data: any): RawRef[] => {
       // HAL CollectionView: {_embedded: {refs: [...]}}
@@ -576,8 +581,8 @@ export const api = {
       });
     };
     return Promise.all([
-      fetch(`${factURL}/incoming`).then(r => r.ok ? r.json() : r.json().then((e: { error: string }) => { throw new Error(e.error || r.statusText); })),
-      fetch(`${factURL}/outgoing`).then(r => r.ok ? r.json() : r.json().then((e: { error: string }) => { throw new Error(e.error || r.statusText); })),
+      fetch(`${factURL}/incoming${edgeQuery}`).then(r => r.ok ? r.json() : r.json().then((e: { error: string }) => { throw new Error(e.error || r.statusText); })),
+      fetch(`${factURL}/outgoing${edgeQuery}`).then(r => r.ok ? r.json() : r.json().then((e: { error: string }) => { throw new Error(e.error || r.statusText); })),
     ]).then(([inc, out]) => ({
       incoming: groupRefs(parseRefs(inc)),
       outgoing: groupRefs(parseRefs(out)),

@@ -118,15 +118,16 @@ func TestCommitAnchoredIncoming_UnknownRepo(t *testing.T) {
 	}
 }
 
-// TestCommitAnchoredIncoming_FactAbsentAtCommit returns 404 (not an empty 200
-// or a 500) when the fact has no version at the pinned commit — the edges
-// 404 in lockstep with the fact itself. Regression for the UI browsing bug
-// where navigating to a fact at a commit it never existed at hit 404/500.
-func TestCommitAnchoredIncoming_FactAbsentAtCommit(t *testing.T) {
+// TestCommitAnchoredIncoming_FactNotLiveAtCommit returns 404 (not an empty 200
+// or a 500) when the fact is retracted/absent as of the pinned commit — the
+// edges 404 in lockstep with the (no-fallback) fact read. Regression for the
+// UI browsing bug where navigating to a fact at a commit it isn't live at hit
+// 404/500.
+func TestCommitAnchoredIncoming_FactNotLiveAtCommit(t *testing.T) {
 	provider := &stubFactSubProvider{
-		factMissing: true,
+		notLive:     true,
 		incoming:    []store.RefSummary{{Path: "know/b.md", Commit: "dead001"}},
-		incomingErr: errors.New("IncomingAtCommit must not be called for an absent fact"),
+		incomingErr: errors.New("IncomingAtCommit must not be called for a non-live fact"),
 	}
 	s := &Server{
 		Manager:         newTestManagerWithRepos(t, "alpha"),
@@ -148,12 +149,12 @@ func TestCommitAnchoredIncoming_FactAbsentAtCommit(t *testing.T) {
 	}
 }
 
-// TestCommitAnchoredOutgoing_FactAbsentAtCommit mirrors the incoming case for
+// TestCommitAnchoredOutgoing_FactNotLiveAtCommit mirrors the incoming case for
 // the /outgoing sub-resource.
-func TestCommitAnchoredOutgoing_FactAbsentAtCommit(t *testing.T) {
+func TestCommitAnchoredOutgoing_FactNotLiveAtCommit(t *testing.T) {
 	provider := &stubFactSubProvider{
-		factMissing: true,
-		outgoingErr: errors.New("OutgoingAtCommit must not be called for an absent fact"),
+		notLive:     true,
+		outgoingErr: errors.New("OutgoingAtCommit must not be called for a non-live fact"),
 	}
 	s := &Server{
 		Manager:         newTestManagerWithRepos(t, "alpha"),
@@ -172,11 +173,11 @@ func TestCommitAnchoredOutgoing_FactAbsentAtCommit(t *testing.T) {
 	}
 }
 
-// TestCommitAnchoredIncoming_ExistenceCheckError surfaces a genuine lookup
-// failure as 500, distinct from the 404 absent case.
-func TestCommitAnchoredIncoming_ExistenceCheckError(t *testing.T) {
+// TestCommitAnchoredIncoming_LivenessCheckError surfaces a genuine lookup
+// failure as 500, distinct from the 404 not-live case.
+func TestCommitAnchoredIncoming_LivenessCheckError(t *testing.T) {
 	provider := &stubFactSubProvider{
-		existsErr: errors.New("db exploded"),
+		liveErr: errors.New("db exploded"),
 	}
 	s := &Server{
 		Manager:         newTestManagerWithRepos(t, "alpha"),
@@ -192,5 +193,57 @@ func TestCommitAnchoredIncoming_ExistenceCheckError(t *testing.T) {
 
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("status: got %d, want 500; body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestCommitAnchoredIncoming_FallbackBefore_RetractedStillResolves: with
+// ?fallback=before the gate uses FactExistsAt, so a fact that is retracted as
+// of the commit (notLive) but DID exist earlier (exists) resolves to its
+// last-valid version's edges — the edges follow the fact's fallback read
+// rather than 404ing.
+func TestCommitAnchoredIncoming_FallbackBefore_RetractedStillResolves(t *testing.T) {
+	provider := &stubFactSubProvider{
+		notLive:  true, // retracted as of the commit (no-fallback would 404)
+		notExist: false,
+		incoming: []store.RefSummary{{Path: "know/b.md", Commit: "dead001"}},
+	}
+	s := &Server{
+		Manager:         newTestManagerWithRepos(t, "alpha"),
+		factSubProvider: provider,
+		factReader:      &stubFactReader{},
+	}
+	r := s.NewAPIRouter()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet,
+		"/repos/alpha/branches/agent:test/commits/abc123/facts/know/a.md/incoming?fallback=before", nil)
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: got %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestCommitAnchoredIncoming_FallbackBefore_NeverExisted_404: even with
+// fallback, a fact that never existed in the ancestry 404s.
+func TestCommitAnchoredIncoming_FallbackBefore_NeverExisted_404(t *testing.T) {
+	provider := &stubFactSubProvider{
+		notExist:    true,
+		incomingErr: errors.New("IncomingAtCommit must not be called when the fact never existed"),
+	}
+	s := &Server{
+		Manager:         newTestManagerWithRepos(t, "alpha"),
+		factSubProvider: provider,
+		factReader:      &stubFactReader{},
+	}
+	r := s.NewAPIRouter()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet,
+		"/repos/alpha/branches/agent:test/commits/abc123/facts/know/a.md/incoming?fallback=before", nil)
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status: got %d, want 404; body=%s", rec.Code, rec.Body.String())
 	}
 }

@@ -14,18 +14,20 @@ import (
 
 // stubFactSubProvider implements factSubProvider for tests.
 type stubFactSubProvider struct {
-	entries    []store.LogEntryWithTags
-	next       string
-	prev       string
-	logErr     error
-	explain    store.ExplainResult
-	explainErr error
-	incoming   []store.RefSummary
+	entries     []store.LogEntryWithTags
+	next        string
+	prev        string
+	logErr      error
+	explain     store.ExplainResult
+	explainErr  error
+	incoming    []store.RefSummary
 	incomingErr error
-	outgoing   []store.RefSummary
+	outgoing    []store.RefSummary
 	outgoingErr error
-	factMissing bool // when true, FactExistsAt reports the fact absent at commit
-	existsErr   error
+	notLive     bool // when true, FactLiveAtCommit reports the fact retracted/absent
+	liveErr     error
+	notExist    bool // when true, FactExistsAt reports the fact never existed ≤ commit
+	existErr    error
 }
 
 func (s *stubFactSubProvider) LogPaginatedForPath(
@@ -52,10 +54,16 @@ func (s *stubFactSubProvider) OutgoingAtCommit(
 	return s.outgoing, s.outgoingErr
 }
 
+func (s *stubFactSubProvider) FactLiveAtCommit(
+	_ *repos.RepoInstance, _, _, _ string,
+) (bool, error) {
+	return !s.notLive, s.liveErr
+}
+
 func (s *stubFactSubProvider) FactExistsAt(
 	_ *repos.RepoInstance, _, _, _ string,
 ) (bool, error) {
-	return !s.factMissing, s.existsErr
+	return !s.notExist, s.existErr
 }
 
 func TestHandleFactCommits_ReturnsHALCollection(t *testing.T) {
