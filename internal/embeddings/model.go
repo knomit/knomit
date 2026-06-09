@@ -21,7 +21,7 @@ const (
 	PoolMean
 	// PoolCLS: take token 0 of last_hidden_state.
 	PoolCLS
-	// PoolLastToken: take the last non-pad token (decoder models, e.g. Qwen3).
+	// PoolLastToken: take the last non-pad token (decoder embedding models).
 	PoolLastToken
 )
 
@@ -37,6 +37,12 @@ type Model struct {
 	ONNXOutputs   []string
 	Pooling       Pooling
 	Dim           int
+	// MaxTokens caps the tokenized sequence length fed to the ONNX graph.
+	// Sequences longer than this are truncated (with a warning) so a single
+	// oversized fact cannot exceed the model's max position embeddings — which
+	// would otherwise crash inference or yield an out-of-distribution vector the
+	// calibrated thresholds were never measured against. Must be > 0.
+	MaxTokens     int
 	QueryTemplate string
 	DocTemplate   string
 	// Thresholds are this model's cosine cutoffs for dedup/search/graph/reflect.
@@ -57,6 +63,7 @@ var registry = map[string]Model{
 		ONNXOutputs:   []string{"sentence_embedding"},
 		Pooling:       PoolNone,
 		Dim:           768,
+		MaxTokens:     2048, // EmbeddingGemma max position embeddings.
 		QueryTemplate: "task: search result | query: {content}",
 		DocTemplate:   "title: {title} | text: {content}",
 		// Calibrated against the real knomit corpus (712 facts, tools/calibrate).
@@ -83,32 +90,11 @@ var registry = map[string]Model{
 		ONNXOutputs:   []string{"last_hidden_state"},
 		Pooling:       PoolMean,
 		Dim:           768,
+		MaxTokens:     2048, // nomic-embed-text-v1.5 context window.
 		QueryTemplate: "search_query: {content}",
 		DocTemplate:   "search_document: {content}",
 		// nomic was the original default; these are the historical literals the
 		// thresholds were implicitly tuned against (== retrieval.Defaults()).
-		Thresholds: retrieval.Defaults(),
-	},
-	// UNVERIFIED: unlike embeddinggemma and nomic-v1.5 (both PoC-validated), the
-	// qwen3-0.6b ONNX input/output names and last-token pooling below are a
-	// best-guess from the model card, not confirmed against the actual exported
-	// graph. The feature-extraction export may also include position_ids. Verify
-	// against the real ONNX I/O (onnxruntime_go.GetInputOutputInfo) before
-	// relying on this model in production.
-	"qwen3-0.6b": {
-		ID:            "qwen3-0.6b",
-		ModelURL:      hfBase + "/onnx-community/Qwen3-Embedding-0.6B-ONNX/resolve/main/onnx/model.onnx",
-		DataURL:       hfBase + "/onnx-community/Qwen3-Embedding-0.6B-ONNX/resolve/main/onnx/model.onnx_data",
-		TokenizerURL:  hfBase + "/onnx-community/Qwen3-Embedding-0.6B-ONNX/resolve/main/tokenizer.json",
-		ONNXInputs:    []string{"input_ids", "attention_mask"},
-		ONNXOutputs:   []string{"last_hidden_state"},
-		Pooling:       PoolLastToken,
-		Dim:           1024,
-		QueryTemplate: "Instruct: Given a query, retrieve knowledge-base facts that answer it\nQuery:{content}",
-		DocTemplate:   "{content}",
-		// UNCALIBRATED (like the ONNX I/O above): qwen's last-token-pooled
-		// geometry differs from both nomic and gemma. Seeded with nomic-era
-		// defaults; run tools/calibrate before relying on this model.
 		Thresholds: retrieval.Defaults(),
 	},
 }

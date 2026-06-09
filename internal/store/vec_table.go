@@ -30,10 +30,19 @@ func (si *searchIndex) ensureFactsVecDefault(ctx context.Context) error {
 	if exists {
 		return nil
 	}
+	return si.createFactsVec(ctx, defaultVecDim)
+}
+
+// createFactsVec creates the facts_vec vec0 table at exactly `dim`. It is the
+// single source of the table's DDL, shared by ensureFactsVecDefault and
+// ensureFactsVec so the column spec (width, distance metric) can never drift
+// between the create-on-Open and recreate-on-rebuild paths. `dim` comes from the
+// trusted model registry (or defaultVecDim), so formatting it into DDL is safe.
+func (si *searchIndex) createFactsVec(ctx context.Context, dim int) error {
 	if _, err := conn(ctx, si.rh.db).ExecContext(ctx,
-		fmt.Sprintf(`CREATE VIRTUAL TABLE facts_vec USING vec0(embedding FLOAT[%d] distance_metric=cosine)`, defaultVecDim),
+		fmt.Sprintf(`CREATE VIRTUAL TABLE facts_vec USING vec0(embedding FLOAT[%d] distance_metric=cosine)`, dim),
 	); err != nil {
-		return fmt.Errorf("create facts_vec[%d] (default): %w", defaultVecDim, err)
+		return fmt.Errorf("create facts_vec[%d]: %w", dim, err)
 	}
 	return nil
 }
@@ -65,12 +74,7 @@ func (si *searchIndex) ensureFactsVec(ctx context.Context, modelID string, dim i
 			return err
 		}
 	}
-	if _, err := conn(ctx, si.rh.db).ExecContext(ctx,
-		fmt.Sprintf(`CREATE VIRTUAL TABLE facts_vec USING vec0(embedding FLOAT[%d] distance_metric=cosine)`, dim),
-	); err != nil {
-		return fmt.Errorf("create facts_vec[%d]: %w", dim, err)
-	}
-	return nil
+	return si.createFactsVec(ctx, dim)
 }
 
 func (si *searchIndex) factsVecExists(ctx context.Context) (bool, error) {

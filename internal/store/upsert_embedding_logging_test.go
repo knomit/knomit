@@ -34,9 +34,9 @@ func hasFactsVecRow(t *testing.T, svc *Service, branch, path string) bool {
 }
 
 // failingEmbedder returns a MockBatchEmbedder whose EmbedDocument/EmbedDocuments
-// always error. Regresses the upsert silent-failure path: when embedding
-// errors, the fact must still be indexed (branch_facts row) but without
-// a facts_vec row, and the failure must be surfaced (logged).
+// always error. Used to regress the mandatory-embeddings invariant: when an
+// embedder is configured and embedding fails, the write must FAIL rather than
+// silently index a vectorless fact.
 func failingEmbedder(ctrl *gomock.Controller) *MockBatchEmbedder {
 	m := NewMockBatchEmbedder(ctrl)
 	m.EXPECT().EmbedQuery(gomock.Any()).Return(nil, errors.New("embed boom")).AnyTimes()
@@ -48,8 +48,9 @@ func failingEmbedder(ctrl *gomock.Controller) *MockBatchEmbedder {
 	return m
 }
 
-// emptyVecEmbedder returns a MockBatchEmbedder that returns no error but
-// a zero-length slice. Regresses the second silent-failure mode in upsert.
+// emptyVecEmbedder returns a MockBatchEmbedder that returns no error but a
+// zero-length slice. Same observable contract as the error case: the write
+// must fail.
 func emptyVecEmbedder(ctrl *gomock.Controller) *MockBatchEmbedder {
 	m := NewMockBatchEmbedder(ctrl)
 	m.EXPECT().EmbedQuery(gomock.Any()).Return([]float32{}, nil).AnyTimes()
@@ -67,9 +68,9 @@ func emptyVecEmbedder(ctrl *gomock.Controller) *MockBatchEmbedder {
 	return m
 }
 
-// wrongDimEmbedder returns a MockBatchEmbedder that returns a vector of
-// the wrong dimension. The upsert path must reject the vector (skip
-// facts_vec insert) and log; the fact must still be indexed.
+// wrongDimEmbedder returns a MockBatchEmbedder that returns a vector of the
+// wrong dimension. Inserting it would violate the facts_vec FLOAT[Dim]
+// invariant, so the write must fail.
 func wrongDimEmbedder(ctrl *gomock.Controller) *MockBatchEmbedder {
 	m := NewMockBatchEmbedder(ctrl)
 	m.EXPECT().EmbedQuery(gomock.Any()).Return(make([]float32, 10), nil).AnyTimes()
@@ -87,12 +88,23 @@ func wrongDimEmbedder(ctrl *gomock.Controller) *MockBatchEmbedder {
 	return m
 }
 
-// TestUpsert_EmbedderError_StillIndexesWithoutVector regresses the silent
-// failure where `if err == nil && len(vec) > 0` swallowed Embed errors
-// and left the fact in branch_facts but absent from facts_vec — with no
-// log line to explain why. The fix: log the failure, still index the
-// fact (so tag/keyword retrieval works), skip the vec insert.
-func TestUpsert_EmbedderError_StillIndexesWithoutVector(t *testing.T) {
+// requireNoFact asserts the fact at (branch, path) is absent from the index —
+// no facts_vec row and not resolvable by path. A failed embed must roll back
+// the whole upsert, leaving no partially-indexed (vectorless) fact behind.
+func requireNoFact(t *testing.T, svc *Service, branch, path string) {
+	t.Helper()
+	require.False(t, hasFactsVecRow(t, svc, branch, path),
+		"failed embed must not leave a facts_vec row")
+	got, err := svc.Search().GetByPath(context.Background(), branch, path)
+	require.NoError(t, err)
+	require.Nil(t, got, "failed embed must not leave an indexed (vectorless) fact")
+}
+
+// TestUpsert_EmbedderError_FailsWrite regresses the mandatory-embeddings
+// invariant: with an embedder configured, an embed error must FAIL the write,
+// never silently index a vectorless fact (which would be invisible to vector
+// search and corrupt retrieval guarantees).
+func TestUpsert_EmbedderError_FailsWrite(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	dir := t.TempDir()
 	svc, err := Open(filepath.Join(dir, "k.db"))
@@ -105,23 +117,13 @@ func TestUpsert_EmbedderError_StillIndexesWithoutVector(t *testing.T) {
 		"kb/synth/x.md",
 		srcFactBody("X", "body", []string{"security"}, []string{"Anthropic"}),
 		"add", "")
-	require.NoError(t, err, "WriteFact must succeed even when embedder errors")
-
-	// Fact is in branch_facts (tag/keyword retrieval works).
-	got, err := svc.Search().GetByPath(context.Background(), "agent/a", "kb/synth/x.md")
-	require.NoError(t, err)
-	require.NotNil(t, got, "fact must be readable via path despite embedder failure")
-	require.Equal(t, "X", got.Title)
-
-	// Fact is NOT in facts_vec (vector retrieval will fall back to tag-only).
-	require.False(t, hasFactsVecRow(t, svc, "agent/a", "kb/synth/x.md"),
-		"failing embedder must not produce a facts_vec row")
+	require.Error(t, err, "embed failure must fail the write")
+	requireNoFact(t, svc, "agent/a", "kb/synth/x.md")
 }
 
-// TestUpsert_EmbedderEmptyVector_StillIndexesWithoutVector covers the
-// second silent-failure mode: embedder returns no error but an empty
-// vector. Same observable behavior as the error case.
-func TestUpsert_EmbedderEmptyVector_StillIndexesWithoutVector(t *testing.T) {
+// TestUpsert_EmbedderEmptyVector_FailsWrite covers the second failure mode:
+// embedder returns no error but an empty vector.
+func TestUpsert_EmbedderEmptyVector_FailsWrite(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	dir := t.TempDir()
 	svc, err := Open(filepath.Join(dir, "k.db"))
@@ -134,21 +136,12 @@ func TestUpsert_EmbedderEmptyVector_StillIndexesWithoutVector(t *testing.T) {
 		"kb/synth/x.md",
 		srcFactBody("X", "body", []string{"security"}, nil),
 		"add", "")
-	require.NoError(t, err)
-
-	got, err := svc.Search().GetByPath(context.Background(), "agent/a", "kb/synth/x.md")
-	require.NoError(t, err)
-	require.NotNil(t, got)
-
-	require.False(t, hasFactsVecRow(t, svc, "agent/a", "kb/synth/x.md"),
-		"empty-vec embedder must not produce a facts_vec row")
+	require.Error(t, err, "empty vector must fail the write")
+	requireNoFact(t, svc, "agent/a", "kb/synth/x.md")
 }
 
-// TestUpsert_EmbedderWrongDim_StillIndexesWithoutVector regresses the
-// case where the embedder produces a vector of the wrong dimension.
-// Inserting it would violate the schema's FLOAT[768] invariant, so the
-// vec insert is skipped; the fact still indexes for tag/keyword search.
-func TestUpsert_EmbedderWrongDim_StillIndexesWithoutVector(t *testing.T) {
+// TestUpsert_EmbedderWrongDim_FailsWrite covers a wrong-dimension vector.
+func TestUpsert_EmbedderWrongDim_FailsWrite(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	dir := t.TempDir()
 	svc, err := Open(filepath.Join(dir, "k.db"))
@@ -161,29 +154,22 @@ func TestUpsert_EmbedderWrongDim_StillIndexesWithoutVector(t *testing.T) {
 		"kb/synth/x.md",
 		srcFactBody("X", "body", []string{"security"}, nil),
 		"add", "")
-	require.NoError(t, err)
-
-	got, err := svc.Search().GetByPath(context.Background(), "agent/a", "kb/synth/x.md")
-	require.NoError(t, err)
-	require.NotNil(t, got)
-
-	require.False(t, hasFactsVecRow(t, svc, "agent/a", "kb/synth/x.md"),
-		"wrong-dim embedder must not produce a facts_vec row")
+	require.Error(t, err, "wrong-dim vector must fail the write")
+	requireNoFact(t, svc, "agent/a", "kb/synth/x.md")
 }
 
-// TestRelevantMethodologyForFact_FailingEmbedder_StillRetrievableByTag
-// closes the loop end-to-end: a source fact written with a failing
-// embedder still surfaces relevant methodology via tag-only ranking,
-// rather than producing an error or empty result. This is what the
-// methodology helper's "no stored embedding for source fact; ranking
-// tag-only" warn-and-continue path exists to enable.
-func TestRelevantMethodologyForFact_FailingEmbedder_StillRetrievableByTag(t *testing.T) {
-	ctrl := gomock.NewController(t)
+// TestRelevantMethodologyForFact_NoEmbedder_StillRetrievableByTag closes the
+// loop for the no-embedder context (read-only tooling / tests): facts written
+// without an embedder carry no vector, and methodology retrieval must still
+// surface relevant lessons via tag-only ranking rather than erroring. (The
+// running service always has an embedder — app.New makes it mandatory — so this
+// path is defensive, not the production norm.)
+func TestRelevantMethodologyForFact_NoEmbedder_StillRetrievableByTag(t *testing.T) {
 	dir := t.TempDir()
 	svc, err := Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
 	defer svc.Close()
-	svc.SetEmbedder(failingEmbedder(ctrl))
+	// Deliberately no SetEmbedder: facts index without vectors.
 	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/a"))
 
 	_, err = svc.Facts().WriteFact(context.Background(), "agent/a",

@@ -1,6 +1,7 @@
 package embeddings
 
 import (
+	"strings"
 	"testing"
 
 	"knomit/internal/retrieval"
@@ -66,7 +67,7 @@ func TestEmbeddingGemmaThresholdsAreCooler(t *testing.T) {
 }
 
 func TestLookupKnownModels(t *testing.T) {
-	for _, id := range []string{"embeddinggemma", "nomic-v1.5", "qwen3-0.6b"} {
+	for _, id := range []string{"embeddinggemma", "nomic-v1.5"} {
 		m, err := Lookup(id)
 		if err != nil {
 			t.Fatalf("Lookup(%q) error: %v", id, err)
@@ -83,26 +84,37 @@ func TestLookupKnownModels(t *testing.T) {
 	}
 }
 
+// TestModelsHaveTokenCap guards the truncation safety net: every registered
+// model must declare a positive MaxTokens so an oversized fact is capped before
+// it can exceed the graph's max position embeddings.
+func TestModelsHaveTokenCap(t *testing.T) {
+	for _, id := range IDs() {
+		m, _ := Lookup(id)
+		if m.MaxTokens <= 0 {
+			t.Errorf("%q: MaxTokens = %d, want > 0", id, m.MaxTokens)
+		}
+	}
+}
+
+// TestQwenRemoved asserts the untested qwen3-0.6b descriptor stays out of the
+// live registry; it was removed because its ONNX I/O and pooling were never
+// verified against the real graph.
+func TestQwenRemoved(t *testing.T) {
+	if _, err := Lookup("qwen3-0.6b"); err == nil {
+		t.Error("qwen3-0.6b should not be selectable (unverified model)")
+	}
+}
+
 func TestLookupUnknownListsValidIDs(t *testing.T) {
 	_, err := Lookup("does-not-exist")
 	if err == nil {
 		t.Fatal("expected error for unknown model")
 	}
-	for _, id := range []string{"embeddinggemma", "nomic-v1.5", "qwen3-0.6b"} {
-		if !contains(err.Error(), id) {
+	for _, id := range []string{"embeddinggemma", "nomic-v1.5"} {
+		if !strings.Contains(err.Error(), id) {
 			t.Errorf("error %q should list valid id %q", err.Error(), id)
 		}
 	}
-}
-
-func contains(s, sub string) bool { return len(s) >= len(sub) && (s == sub || indexOf(s, sub) >= 0) }
-func indexOf(s, sub string) int {
-	for i := 0; i+len(sub) <= len(s); i++ {
-		if s[i:i+len(sub)] == sub {
-			return i
-		}
-	}
-	return -1
 }
 
 func TestEmbeddingGemmaDescriptorShape(t *testing.T) {

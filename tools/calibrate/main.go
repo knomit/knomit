@@ -40,6 +40,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 
 	"knomit/internal/embeddings"
+	"knomit/internal/fact"
 )
 
 type doc struct {
@@ -99,14 +100,24 @@ func main() {
 		fmt.Fprintf(os.Stderr, "baseline %q not among -models\n", *baseline)
 		os.Exit(2)
 	}
+	// The baseline values are the thresholds ALREADY configured for the baseline
+	// model — read straight from its descriptor (single source of truth) rather
+	// than re-listing literals here, so re-tuning a model never leaves calibrate
+	// porting from stale numbers. nomic's descriptor == retrieval.Defaults().
+	baseModel, err := embeddings.Lookup(*baseline)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "baseline descriptor %q: %v\n", *baseline, err)
+		os.Exit(2)
+	}
+	bt := baseModel.Thresholds
 	// The six model-dependent thresholds and the distribution each governs.
 	thresholds := []baselineThreshold{
-		{"dedup (learn+synth)", 0.92, func(d dists) []float64 { return d.docDocSame }},
-		{"reflect novelty", 0.85, func(d dists) []float64 { return d.docDocSame }},
-		{"SIMILAR_TO (knn)", 0.60, func(d dists) []float64 { return d.docDocAll }},
-		{"search recall floor", 0.40, func(d dists) []float64 { return d.queryDoc }},
-		{"rerank high tier", 0.70, func(d dists) []float64 { return d.queryDoc }},
-		{"rerank low tier", 0.50, func(d dists) []float64 { return d.queryDoc }},
+		{"dedup (learn+synth)", bt.Dedup, func(d dists) []float64 { return d.docDocSame }},
+		{"reflect novelty", bt.ReflectNovelty, func(d dists) []float64 { return d.docDocSame }},
+		{"SIMILAR_TO (knn)", bt.SimilarTo, func(d dists) []float64 { return d.docDocAll }},
+		{"search recall floor", bt.SearchFloor, func(d dists) []float64 { return d.queryDoc }},
+		{"rerank high tier", bt.RerankHigh, func(d dists) []float64 { return d.queryDoc }},
+		{"rerank low tier", bt.RerankLow, func(d dists) []float64 { return d.queryDoc }},
 	}
 	for _, id := range models {
 		id = strings.TrimSpace(id)
@@ -154,7 +165,7 @@ func loadDocs(dbPaths []string) ([]doc, error) {
 			if seen[fp] {
 				continue
 			}
-			body := extractBody(data)
+			body := fact.ExtractBody([]byte(data))
 			if strings.TrimSpace(body) == "" {
 				continue
 			}
@@ -165,20 +176,6 @@ func loadDocs(dbPaths []string) ([]doc, error) {
 		db.Close()
 	}
 	return docs, nil
-}
-
-// extractBody mirrors store.extractBody (internal/store/index.go): strip the
-// YAML frontmatter and the leading "# Title" line, returning the prose body.
-func extractBody(raw string) string {
-	parts := strings.SplitN(raw, "---", 3)
-	if len(parts) < 3 {
-		return raw
-	}
-	after := strings.TrimSpace(parts[2])
-	if _, rest, found := strings.Cut(after, "\n"); found {
-		return strings.TrimSpace(rest)
-	}
-	return ""
 }
 
 // nearDup builds a realistic near-duplicate: same title, body restated shorter

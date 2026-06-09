@@ -126,10 +126,13 @@ func (si *searchIndex) upsert(ctx context.Context, branch, commitHash string, re
 	//   1. context-donated vector (caller already embedded this content,
 	//      e.g. mcp/learn during its dedup pass);
 	//   2. fresh ONNX inference via the configured embedder.
-	// Either source produces a 768-dim []float32; vecData stays nil if
-	// neither is available, in which case the fact is indexed without a
-	// vector (search-by-text on this fact will still work via the
-	// keyword path — sqlite-vec just won't return it).
+	// INVARIANT: when an embedder is configured, no fact is ever indexed
+	// without a vector — any embed failure FAILS the upsert (rolls back the
+	// whole write) rather than silently producing a vectorless fact, which
+	// would be invisible to vector search and corrupt the corpus's retrieval
+	// guarantees. vecData only stays nil when NO embedder is configured
+	// (read-only tooling / tests); the running service always has one (app.New
+	// makes embeddings mandatory).
 	emb := si.rh.getEmbedder()
 	if vec, ok := precomputedEmbedding(ctx, rec.Path); ok && len(vec) > 0 {
 		// Validate the donated vector against the active embedder's dim. When
@@ -153,18 +156,11 @@ func (si *searchIndex) upsert(ctx context.Context, branch, commitHash string, re
 		vec, err := emb.EmbedDocument(rec.Title, body)
 		switch {
 		case err != nil:
-			// Indexing proceeds without a vector — the fact will be
-			// retrievable via tag/keyword paths but not via vector
-			// similarity until the next rebuildEmbeddings run.
-			log.Warn().Err(err).Str("path", rec.Path).Str("blob_hash", rec.BlobHash).
-				Msg("upsert: embedder failed; fact indexed without vector (run `knomit rebuild` to backfill)")
+			return fmt.Errorf("upsert: embed %q failed (embeddings are required): %w", rec.Path, err)
 		case len(vec) == 0:
-			log.Warn().Str("path", rec.Path).Str("blob_hash", rec.BlobHash).
-				Msg("upsert: embedder returned empty vector; fact indexed without vector (run `knomit rebuild` to backfill)")
+			return fmt.Errorf("upsert: embedder returned empty vector for %q (embeddings are required)", rec.Path)
 		case len(vec) != emb.Dim():
-			log.Warn().Str("path", rec.Path).Str("blob_hash", rec.BlobHash).
-				Int("got_dim", len(vec)).Int("want_dim", emb.Dim()).
-				Msg("upsert: embedder produced wrong-dim vector; fact indexed without vector")
+			return fmt.Errorf("upsert: embedder produced %d-dim vector for %q, expected %d", len(vec), rec.Path, emb.Dim())
 		default:
 			vecData = float32SliceToBytes(vec)
 		}
