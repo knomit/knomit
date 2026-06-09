@@ -1,8 +1,11 @@
 package config
 
 import (
+	"fmt"
+	"math"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/BurntSushi/toml"
@@ -33,27 +36,62 @@ type LLMConfig struct {
 	Batch    bool   `toml:"batch"`
 }
 
+// EmbeddingsConfig selects the embedding model (by registry id).
+type EmbeddingsConfig struct {
+	Model string `toml:"model"`
+}
+
+// ClusterCacheConfig governs the Louvain-cluster cache: how long to wait for
+// activity to settle before a background recompute, how often the checker
+// wakes, and how many concurrent recomputes are allowed across all
+// repos/branches. CheckInterval=="0" or "0s" disables the background
+// checker entirely (read-path stale-then-refresh still applies).
+type ClusterCacheConfig struct {
+	QuietThreshold string `toml:"quiet_threshold"`
+	CheckInterval  string `toml:"check_interval"`
+	MaxConcurrent  int    `toml:"max_concurrent"`
+	// Resolution is the Louvain γ: higher = more, smaller communities. Default
+	// 2.0 (was a hardcoded 1.0) — breaks over-large communities. MinCommunitySize
+	// relabels communities smaller than this as noise. Both must match between the
+	// background checker and the read path or the cluster cache thrashes (the cache
+	// is keyed on (branch, resolution, min_community_size)).
+	Resolution       float64 `toml:"resolution"`
+	MinCommunitySize int     `toml:"min_community_size"`
+}
+
 // Config is the root configuration, composed of section structs.
 type Config struct {
-	Home         string           `toml:"repo"`
-	Host         string           `toml:"host"`
-	Port         string           `toml:"port"`
-	Socket       string           `toml:"socket"`
-	OntologyRoot string           `toml:"ontology_root"`
-	ONNXLibPath  string           `toml:"onnx_lib_path"`
-	LLM          LLMConfig        `toml:"llm"`
-	Remote       RemoteAuthConfig `toml:"remote"`
-	Git          GitConfig        `toml:"git"`
+	Home                string             `toml:"repo"`
+	Host                string             `toml:"host"`
+	Port                string             `toml:"port"`
+	Socket              string             `toml:"socket"`
+	OntologyRoot        string             `toml:"ontology_root"`
+	ONNXLibPath         string             `toml:"onnx_lib_path"`
+	MethodologyMinScore float64            `toml:"methodology_min_score"`
+	ClusterCache        ClusterCacheConfig `toml:"cluster_cache"`
+	Embeddings          EmbeddingsConfig   `toml:"embeddings"`
+	LLM                 LLMConfig          `toml:"llm"`
+	Remote              RemoteAuthConfig   `toml:"remote"`
+	Git                 GitConfig          `toml:"git"`
 }
 
 // Defaults returns a Config populated with default values.
 func Defaults() Config {
 	home, _ := os.UserHomeDir()
 	return Config{
-		Home:         home + "/.knomit",
-		Host:         "localhost",
-		Port:         "19278",
-		OntologyRoot: "kb",
+		Home:                home + "/.knomit",
+		Host:                "localhost",
+		Port:                "19278",
+		OntologyRoot:        "kb",
+		MethodologyMinScore: 0.15,
+		ClusterCache: ClusterCacheConfig{
+			QuietThreshold:   "10s",
+			CheckInterval:    "5s",
+			MaxConcurrent:    1,
+			Resolution:       2.0,
+			MinCommunitySize: 2,
+		},
+		Embeddings: EmbeddingsConfig{Model: "embeddinggemma"},
 		LLM: LLMConfig{
 			Model:    "gemini-2.5-flash",
 			Provider: "gemini",
@@ -88,6 +126,7 @@ func Load() (Config, error) {
 	envOr("KNOMIT_HOST", &cfg.Host)
 	envOr("KNOMIT_PORT", &cfg.Port)
 	envOr("KNOMIT_SOCKET", &cfg.Socket)
+	envOr("KNOMIT_EMBED_MODEL", &cfg.Embeddings.Model)
 	envOr("KNOMIT_LLM_MODEL", &cfg.LLM.Model)
 	envOr("KNOMIT_LLM_PROVIDER", &cfg.LLM.Provider)
 	envOr("KNOMIT_API_KEY", &cfg.LLM.APIKey)
@@ -102,13 +141,39 @@ func Load() (Config, error) {
 	envOr("KNOMIT_REMOTE_SSH_KEY", &cfg.Remote.SSHKey)
 	envOr("KNOMIT_REMOTE_AUTH", &cfg.Remote.AuthMethod)
 	envOr("ONNXRUNTIME_SHARED_LIBRARY", &cfg.ONNXLibPath)
+	envOr("KNOMIT_CLUSTER_CACHE_QUIET_THRESHOLD", &cfg.ClusterCache.QuietThreshold)
+	envOr("KNOMIT_CLUSTER_CACHE_CHECK_INTERVAL", &cfg.ClusterCache.CheckInterval)
+	envIntOr("KNOMIT_CLUSTER_CACHE_MAX_CONCURRENT", &cfg.ClusterCache.MaxConcurrent)
+	envFloatOr("KNOMIT_CLUSTER_CACHE_RESOLUTION", &cfg.ClusterCache.Resolution)
+	envIntOr("KNOMIT_CLUSTER_CACHE_MIN_COMMUNITY_SIZE", &cfg.ClusterCache.MinCommunitySize)
+	envFloatOr("KNOMIT_METHODOLOGY_MIN_SCORE", &cfg.MethodologyMinScore)
 
 	// Expand tildes in path fields.
 	expandTilde(&cfg.Home)
 	expandTilde(&cfg.ONNXLibPath)
 	expandTilde(&cfg.Remote.SSHKey)
 
+	if err := cfg.Validate(); err != nil {
+		return Config{}, err
+	}
 	return cfg, nil
+}
+
+// Validate checks that the config is internally consistent. Called from
+// Load so that a misconfigured TOML or env var (notably an empty
+// ontology_root) surfaces at boot rather than later as silently-dropped
+// synthesize outputs.
+func (c Config) Validate() error {
+	if strings.TrimSpace(c.OntologyRoot) == "" {
+		return fmt.Errorf("config: ontology_root must not be empty")
+	}
+	// Composite methodology score is bounded to [0, 1] (0.6·vec + 0.4·tag,
+	// each in [0,1]). NaN, negatives, or values >1 silently break filtering
+	// — fail at boot instead.
+	if math.IsNaN(c.MethodologyMinScore) || c.MethodologyMinScore < 0 || c.MethodologyMinScore > 1 {
+		return fmt.Errorf("config: methodology_min_score must be in [0, 1], got %v", c.MethodologyMinScore)
+	}
+	return nil
 }
 
 // findConfigFile looks for knomit.toml next to the binary, then in homePath.
@@ -140,6 +205,22 @@ func envOr(key string, target *string) {
 func envBoolOr(key string, target *bool) {
 	if v := os.Getenv(key); v != "" {
 		*target = v == "true"
+	}
+}
+
+func envIntOr(key string, target *int) {
+	if v := os.Getenv(key); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			*target = n
+		}
+	}
+}
+
+func envFloatOr(key string, target *float64) {
+	if v := os.Getenv(key); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			*target = f
+		}
 	}
 }
 

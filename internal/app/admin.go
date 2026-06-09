@@ -14,9 +14,15 @@ import (
 )
 
 // InitRepo creates and initialises a new knomit repo database.
-// If ontologyPath is non-empty the ontology is loaded from that file;
-// otherwise the embedded default ontology is used.
-func InitRepo(cfg config.Config, repoName, ontologyPath string) error {
+// At most one of ontologyPath or ontologyPreset may be set. If both are
+// empty, the default ontology preset is used. If ontologyPath is set,
+// the ontology is loaded from that file. If ontologyPreset is set, the
+// matching embedded preset is used.
+func InitRepo(cfg config.Config, repoName, ontologyPath, ontologyPreset string) error {
+	if ontologyPath != "" && ontologyPreset != "" {
+		return fmt.Errorf("--ontology and --ontology-preset are mutually exclusive")
+	}
+
 	reposDir := filepath.Join(cfg.Home, "repos")
 	if err := os.MkdirAll(reposDir, 0o755); err != nil {
 		return err
@@ -32,8 +38,9 @@ func InitRepo(cfg config.Config, repoName, ontologyPath string) error {
 	}
 	agentBranch := agentBranch(keyFingerprint)
 
-	ontology := fact.DefaultOntology()
-	if ontologyPath != "" {
+	var ontology *fact.Ontology
+	switch {
+	case ontologyPath != "":
 		data, err := os.ReadFile(ontologyPath)
 		if err != nil {
 			return fmt.Errorf("read ontology file: %w", err)
@@ -42,6 +49,13 @@ func InitRepo(cfg config.Config, repoName, ontologyPath string) error {
 		if err != nil {
 			return fmt.Errorf("parse ontology: %w", err)
 		}
+	case ontologyPreset != "":
+		ontology, err = fact.OntologyByPreset(ontologyPreset)
+		if err != nil {
+			return err
+		}
+	default:
+		ontology = fact.DefaultOntology()
 	}
 	ontologyYAML, err := ontology.Serialize()
 	if err != nil {
@@ -86,7 +100,12 @@ func RebuildIndex(ctx context.Context, cfg config.Config, repoName string) error
 	if err := svc.OpenRepo(); err != nil {
 		return fmt.Errorf("open git: %w", err)
 	}
-	if err := svc.IndexManager().Sync(ctx, agentBranch); err != nil {
+	// Rebuild (3-phase, INSERT OR REPLACE + cascade) — NOT Sync. Sync is
+	// COW-aware and skips facts whose content is unchanged, so it would not
+	// regenerate DERIVED index state (canonical fact_domains, fact_domain_tokens,
+	// re-clustering) after an indexing-logic change. "rebuild from scratch" must
+	// reindex every fact; git is the source of truth so this is always safe.
+	if err := svc.IndexManager().Rebuild(ctx, agentBranch, nil); err != nil {
 		return fmt.Errorf("rebuild: %w", err)
 	}
 	log.Info().Str("repo", repoName).Msg("Index rebuilt successfully")

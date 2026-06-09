@@ -19,20 +19,26 @@ type StoryboardOpts struct {
 	Embedder   store.BatchEmbedder // nil → DeterministicEmbedder
 	AutoVerify bool                // default true
 	VerifyDeep bool                // default true
+	// MethodologyMinScore overrides the per-repo methodology threshold
+	// when non-nil. Storyboard cfg is not loaded via config.Defaults(),
+	// so the default (0) admits every candidate; tests that need to
+	// observe threshold filtering set this explicitly.
+	MethodologyMinScore *float64
 }
 
 // Storyboard is the root of a test scenario. It owns a tempdir, a
 // per-repo repos.Manager, and registers t.Cleanup to auto-verify every
 // tracked repo before tearing down.
 type Storyboard struct {
-	t        *testing.T
-	homeDir  string
-	embedder store.BatchEmbedder
-	auto     bool
-	deep     bool
-	mu       sync.Mutex
-	repos    map[string]*RepoHandle
-	managers map[string]*repos.Manager
+	t                   *testing.T
+	homeDir             string
+	embedder            store.BatchEmbedder
+	auto                bool
+	deep                bool
+	methodologyMinScore *float64
+	mu                  sync.Mutex
+	repos               map[string]*RepoHandle
+	managers            map[string]*repos.Manager
 }
 
 // NewStoryboard creates a Storyboard with default options. Most tests use this.
@@ -48,13 +54,14 @@ func NewStoryboardWithOpts(t *testing.T, opts StoryboardOpts) *Storyboard {
 		embedder = &DeterministicEmbedder{}
 	}
 	sb := &Storyboard{
-		t:        t,
-		homeDir:  t.TempDir(),
-		embedder: embedder,
-		auto:     opts.AutoVerify,
-		deep:     opts.VerifyDeep,
-		repos:    make(map[string]*RepoHandle),
-		managers: make(map[string]*repos.Manager),
+		t:                   t,
+		homeDir:             t.TempDir(),
+		embedder:            embedder,
+		auto:                opts.AutoVerify,
+		deep:                opts.VerifyDeep,
+		methodologyMinScore: opts.MethodologyMinScore,
+		repos:               make(map[string]*RepoHandle),
+		managers:            make(map[string]*repos.Manager),
 	}
 	t.Cleanup(sb.teardown)
 	return sb
@@ -80,7 +87,7 @@ func (sb *Storyboard) teardown() {
 		}
 	}
 	for _, m := range managerList {
-		m.Shutdown()
+		m.Close()
 	}
 }
 
@@ -97,13 +104,16 @@ func (sb *Storyboard) Repo(name string) *RepoHandle {
 
 	homeSub := filepath.Join(sb.homeDir, name)
 	cfg := config.Config{Home: homeSub}
+	if sb.methodologyMinScore != nil {
+		cfg.MethodologyMinScore = *sb.methodologyMinScore
+	}
 	m := repos.New(context.Background(), repos.Deps{
 		Cfg:                   cfg,
 		AgentBranch:           "agent/test",
 		Embedder:              sb.embedder,
 		DisableBackgroundSync: true,
 	})
-	if err := m.Boot(); err != nil {
+	if err := m.Start(); err != nil {
 		sb.t.Fatalf("Repo(%q): manager boot failed: %v", name, err)
 	}
 	ri := m.Get("knomit")
@@ -210,7 +220,7 @@ func (r *RepoHandle) Connect(remote *RemoteHandle) *RepoHandle {
 	// This is why Connect MUST be called BEFORE any Branch() writes —
 	// wiping the DB is destructive. Tests that write first and
 	// connect later aren't supported and would lose their data here.
-	r.manager.Shutdown()
+	r.manager.Close()
 
 	reposDir := filepath.Join(r.cfg.Home, "repos")
 	entries, _ := os.ReadDir(reposDir)
@@ -231,7 +241,7 @@ func (r *RepoHandle) Connect(remote *RemoteHandle) *RepoHandle {
 		Embedder:              r.sb.embedder,
 		DisableBackgroundSync: true,
 	})
-	if err := m.Boot(); err != nil {
+	if err := m.Start(); err != nil {
 		t.Fatalf("Connect(%s): re-boot failed: %v", remote.Name(), err)
 	}
 	ri := m.Get("knomit")
@@ -247,6 +257,49 @@ func (r *RepoHandle) Connect(remote *RemoteHandle) *RepoHandle {
 	return r
 }
 
+// ConnectKeepingWork wires this repo to use the given RemoteHandle as
+// origin WITHOUT wiping the local DB. The use case is the G2 "connect
+// later" scenario: tests accumulate local work on the agent branch
+// before any origin is configured, then call ConnectKeepingWork to
+// model a user running `knomit set-origin` after they've already used
+// the agent for offline edits. Mirrors the production HAL flow
+// (PUT /api/v1/{repo}/origin → svc.Remote().SetRemote + ri.ActivateSync)
+// exactly — no destructive re-init, the existing branch refs and
+// SQLite rows survive, and ActivateSync runs one synchronous reconcile
+// that should fetch origin and replay the local commits onto the
+// resolved upstream.
+//
+// Idempotent: calling with the already-configured remote URL is a no-op.
+// Returns the same RepoHandle for chaining.
+func (r *RepoHandle) ConnectKeepingWork(remote *RemoteHandle) *RepoHandle {
+	t := r.sb.t
+	t.Helper()
+
+	if r.cfg.Git.Origin == remote.URL() {
+		return r // already connected
+	}
+	r.cfg.Git.Origin = remote.URL()
+
+	// Register origin in the remotes table AND write the git config; the
+	// rh.repo guard inside SetRemote means configureRemote runs because
+	// the repo handler already has an open repo from InitRepo.
+	var setErr error
+	r.ri.WithRead(func(svc *store.Service) {
+		setErr = svc.Remote().SetRemote("origin", remote.URL(), remote.UpstreamBranch(), "agent/test", 300, 300, "", "")
+	})
+	if setErr != nil {
+		t.Fatalf("ConnectKeepingWork(%s): SetRemote: %v", remote.Name(), setErr)
+	}
+
+	// Trigger one synchronous reconcile via the production ActivateSync
+	// path. This is exactly what the HAL handler does on
+	// PUT /api/v1/{repo}/origin.
+	if err := r.ri.ActivateSync(remote.URL()); err != nil {
+		t.Fatalf("ConnectKeepingWork(%s): ActivateSync: %v", remote.Name(), err)
+	}
+	return r
+}
+
 // Restart shuts down the current manager and re-boots a fresh one against
 // the same on-disk home directory. Used by Category I "survives restart"
 // tests to assert that the index persists across process boundaries. All
@@ -258,7 +311,7 @@ func (r *RepoHandle) Connect(remote *RemoteHandle) *RepoHandle {
 func (r *RepoHandle) Restart() {
 	t := r.sb.t
 	t.Helper()
-	r.manager.Shutdown()
+	r.manager.Close()
 
 	m := repos.New(context.Background(), repos.Deps{
 		Cfg:                   r.cfg,
@@ -266,7 +319,7 @@ func (r *RepoHandle) Restart() {
 		Embedder:              r.sb.embedder,
 		DisableBackgroundSync: true,
 	})
-	if err := m.Boot(); err != nil {
+	if err := m.Start(); err != nil {
 		t.Fatalf("Restart(%q): manager re-boot failed: %v", r.name, err)
 	}
 	ri := m.Get("knomit")
@@ -279,6 +332,15 @@ func (r *RepoHandle) Restart() {
 	r.sb.mu.Lock()
 	r.sb.managers[r.name] = m
 	r.sb.mu.Unlock()
+}
+
+// RestartWithEmbedder restarts the repo using a different embedder, simulating
+// a config change to a new embedding model. The next index open (setupIndex →
+// NeedsRebuild) detects the embedding-identity change and re-embeds the corpus.
+// Like Restart, all existing BranchHandle references become stale afterward.
+func (r *RepoHandle) RestartWithEmbedder(e store.BatchEmbedder) {
+	r.sb.embedder = e
+	r.Restart()
 }
 
 // ExpectDirty marks the repo as deliberately corrupted. The Storyboard

@@ -27,7 +27,7 @@ func treeFileInsensitive(repo *gogit.Repository, tree *object.Tree, path string)
 			}
 		}
 		if matched == nil {
-			return "", fmt.Errorf("component %q not found", part)
+			return "", fmt.Errorf("component %q: %w", part, ErrPathNotFound)
 		}
 		if i == len(parts)-1 {
 			blob, err := repo.BlobObject(matched.Hash)
@@ -77,7 +77,7 @@ func (fi *factIndex) readFileLastCommit(ctx context.Context, branch, path, befor
 
 	lastCommit, err := logIter.Next()
 	if err != nil {
-		return "", "", fmt.Errorf("readFileLastCommit: %q: no prior commit found", path)
+		return "", "", fmt.Errorf("readFileLastCommit: %q: %w", path, ErrPathNotFound)
 	}
 
 	content, err = fi.rh.readFileAtCommit(ctx, path, lastCommit.Hash.String())
@@ -175,7 +175,8 @@ func (fi *factIndex) ListDir(ctx context.Context, branch, path string) ([]DirEnt
 	} else {
 		subtree, err = tree.Tree(path)
 		if err != nil {
-			return nil, fmt.Errorf("ListDir: subtree %q: %w", path, err)
+			// Directory doesn't exist yet — return empty list, not an error.
+			return nil, nil
 		}
 	}
 

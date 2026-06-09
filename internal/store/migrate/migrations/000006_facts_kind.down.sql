@@ -1,0 +1,2 @@
+DROP INDEX IF EXISTS facts_kind;
+ALTER TABLE facts DROP COLUMN kind;

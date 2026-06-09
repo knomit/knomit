@@ -3,7 +3,13 @@ You are synthesizing facts in a knowledge base to find patterns and higher-order
 Facts in scope:
 {{.Facts}}
 
-Identify patterns across these facts. Produce:
+{{if .ApplicableMethodology}}Applicable methodology candidates (ranked by retrieval relevance to this cluster):
+
+{{.ApplicableMethodology}}
+
+For EVERY candidate above with score ≥ 0.50, call knomit_query on its path and read the body BEFORE producing the synthesis. Titles alone are not enough. If a methodology shapes how you weight, combine, or name the synthesis, include its path in the output's refs. If you read a candidate and judge it does not apply, that is a valid outcome — proceed without citing it.
+
+{{end}}Identify patterns across these facts. Produce:
 1. New higher-order facts that capture patterns
 2. Which original facts are fully subsumed and can be forgotten
 
@@ -11,9 +17,10 @@ Respond as JSON (no markdown wrapping):
 {
   "synthesize": [
     {
-      "path": "know/...",
+      "path": "{{.OntologyRoot}}/...",
       "title": "...",
       "body": "...",
+      "type": "synthesis|methodology|observation|concept|process|principle|pattern|reference",
       "domain": [],
       "confidence": 0.X,
       "entities": [],
@@ -23,8 +30,12 @@ Respond as JSON (no markdown wrapping):
   "retract": ["file1.md", "file2.md"]
 }
 
+Path and type are MANDATORY:
+- Every output fact's path MUST start with `{{.OntologyRoot}}/`. Outputs with any other prefix are rejected.
+- Every output fact MUST set `type` to one of the listed values. Outputs with empty or missing type are rejected. Default to "synthesis" for higher-order facts derived from observations.
+
 ## Hypothesis handling
 
 - Do NOT use hypothesis-type facts as inputs for creating new synthesis facts. Hypotheses are unconfirmed predictions.
 - If a hypothesis is confirmed by other evidence in the batch, retract it and include the hypothesis path in the new synthesis fact's refs.
-- When all input facts are type "methodology", the output must also be type "methodology" — not "synthesis". Methodology facts are about reasoning process, not domain content. Always use a path under `knomit/meta/reasoning/` for methodology-type output (e.g. `knomit/meta/reasoning/descriptive-name.md`).
+- When all input facts are type "methodology", the output must also be type "methodology" — not "synthesis". Methodology facts are about reasoning process, not domain content. Always use a path under `{{.OntologyRoot}}/meta/reasoning/` for methodology-type output (e.g. `{{.OntologyRoot}}/meta/reasoning/descriptive-name.md`).

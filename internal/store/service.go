@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"sync"
 
@@ -40,6 +41,7 @@ type Service struct {
 	pi          *pipelineIndex
 	ti          *toolIndex
 	ri          *remoteIndex
+	dbPath      string
 }
 
 // Open opens (or creates) a unified SQLite database at path, initializes the
@@ -75,18 +77,34 @@ func Open(path string) (*Service, error) {
 
 	gits := storegit.NewStorer(db)
 	rh := newRepoHandler(db, gits)
+	// Derive repo name from dbPath: /path/to/knomit.db → "knomit"
+	rh.name = strings.TrimSuffix(filepath.Base(path), ".db")
 	si := &searchIndex{rh: rh}
+
+	// facts_vec is code-managed (migration 000009 drops the old static
+	// FLOAT[768] table). Recreate it at the default dimension now so the
+	// facts_after_delete trigger and upsert/query paths work even before an
+	// embedder is configured (or when embeddings are disabled entirely). Once
+	// an embedder is set, Rebuild's ensureFactsVec recreates it at the real
+	// model dim and the model-change self-heal re-embeds the corpus.
+	if err := si.ensureFactsVecDefault(context.Background()); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("store.Open: ensure facts_vec: %w", err)
+	}
+
 	rh.onDrop = si.GC
 	rh.im = si // notifyCommit delegates to im.Sync after every commit.
 	fi := &factIndex{rh: rh}
 	ri := &remoteIndex{rh: rh}
+	canonPath := canonicalizePath(path)
 	return &Service{
-		rh: rh,
-		fi: fi,
-		si: si,
-		pi: &pipelineIndex{rh: rh},
-		ti: &toolIndex{rh: rh},
-		ri: ri,
+		rh:     rh,
+		fi:     fi,
+		si:     si,
+		pi:     &pipelineIndex{rh: rh},
+		ti:     &toolIndex{rh: rh},
+		ri:     ri,
+		dbPath: canonPath,
 	}, nil
 }
 
@@ -117,6 +135,10 @@ func (s *Service) ToolSession() ToolSessionIndex { return s.ti }
 // Branches returns the branch index.
 func (s *Service) Branches() BranchIndex { return s.rh }
 
+// ClusterCache returns the cluster-cache storage layer (SQL CRUD only;
+// decision logic lives in internal/clustercache).
+func (s *Service) ClusterCache() ClusterCacheStore { return &clusterCacheStore{rh: s.rh} }
+
 
 // Checkpoint flushes the WAL to the main database file so the .db file is
 // self-contained (e.g. before file-level copy). This is a no-op if WAL mode
@@ -127,7 +149,9 @@ func (s *Service) Checkpoint() error {
 }
 
 // Close closes the underlying database connection.
-func (s *Service) Close() error { return s.rh.db.Close() }
+func (s *Service) Close() error {
+	return s.rh.db.Close()
+}
 
 // SetSigner sets the SSH signer used for commit signing.
 func (s *Service) SetSigner(signer ssh.Signer) {
@@ -202,4 +226,18 @@ func deriveAgentID(branch string) string {
 		return after
 	}
 	return branch
+}
+
+// canonicalizePath resolves symlinks so the path matches what SQLite returns
+// via PRAGMA database_list (e.g. on macOS /var is a symlink to /private/var).
+// Falls back to the original path if resolution fails or path is a special
+// value like ":memory:".
+func canonicalizePath(path string) string {
+	if path == "" || path == ":memory:" {
+		return path
+	}
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		return resolved
+	}
+	return path
 }

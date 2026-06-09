@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
-import { createSession, streamTest, streamPreview, streamApply, streamCommit, deleteSession } from './api';
+import { api, createSession, streamTest, streamPreview, streamApply, streamCommit, deleteSession } from './api';
 import type { SSEEvent, TestResult, PreviewResult, ApplyResult } from './api';
 
 type Step =
@@ -43,6 +43,21 @@ export function ConnectRemoteModal({ repo, onClose }: Props) {
   useEffect(() => {
     return () => { cleanupRef.current?.(); };
   }, []);
+
+  // Pre-fill the URL and auth method from the currently configured origin so
+  // the operator sees what they already have, not blank defaults. The secret
+  // (token/password) is intentionally not pre-filled — it isn't returned by
+  // the API and the user must re-enter it if they want to keep using auth.
+  useEffect(() => {
+    let cancelled = false;
+    api.getOrigin(repo).then(o => {
+      if (cancelled || !o) return;
+      if (o.url) setUrl(o.url);
+      const m = o.auth_method;
+      if (m === 'ssh' || m === 'token' || m === 'basic') setAuthMethod(m);
+    }).catch(() => { /* leave the form blank if the lookup fails */ });
+    return () => { cancelled = true; };
+  }, [repo]);
 
   const handleCancel = useCallback(() => {
     if (cleanupRef.current) { cleanupRef.current(); cleanupRef.current = null; }
@@ -228,6 +243,12 @@ export function ConnectRemoteModal({ repo, onClose }: Props) {
   const canTest = url && !authMismatch && step === 'idle';
   const busy = step === 'creating' || step === 'testing' || step === 'previewing' || step === 'applying' || step === 'committing';
 
+  // For shared history the backend skips the replay/swap entirely — the sync
+  // loop's normal fetch+merge reconciles the two stores. The conflict-strategy
+  // radios and apply-result fact counts are meaningless in that case, so the
+  // UI hides them and presents a single "Connect" action.
+  const isSharedHistory = testResult?.history === 'shared';
+
   // Page 1: connection setup (idle, creating, testing)
   // Page 2: merge workflow (tested and beyond)
   const onPage2 = testResult && !error?.section?.startsWith('creat') && !error?.section?.startsWith('test') &&
@@ -404,29 +425,43 @@ export function ConnectRemoteModal({ repo, onClose }: Props) {
             {/* Strategy + Apply */}
             {step !== 'done' && step !== 'committing' && !error?.section?.startsWith('preview') && previewResult && (
               <div style={sectionBox}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 10 }}>
-                  <span style={{ color: '#888', fontSize: 12 }}>Conflict strategy:</span>
-                  <label style={{ display: 'flex', alignItems: 'center', gap: 4, cursor: busy ? 'not-allowed' : 'pointer', color: '#ccc', fontSize: 13 }}>
-                    <input type="radio" name="strategy" checked={strategy === 'local'} onChange={() => setStrategy('local')} disabled={busy} />
-                    Local wins
-                  </label>
-                  <label style={{ display: 'flex', alignItems: 'center', gap: 4, cursor: busy ? 'not-allowed' : 'pointer', color: '#ccc', fontSize: 13 }}>
-                    <input type="radio" name="strategy" checked={strategy === 'remote'} onChange={() => setStrategy('remote')} disabled={busy} />
-                    Remote wins
-                  </label>
-                </div>
+                {!isSharedHistory && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 10 }}>
+                    <span style={{ color: '#888', fontSize: 12 }}>Conflict strategy:</span>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 4, cursor: busy ? 'not-allowed' : 'pointer', color: '#ccc', fontSize: 13 }}>
+                      <input type="radio" name="strategy" checked={strategy === 'local'} onChange={() => setStrategy('local')} disabled={busy} />
+                      Local wins
+                    </label>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 4, cursor: busy ? 'not-allowed' : 'pointer', color: '#ccc', fontSize: 13 }}>
+                      <input type="radio" name="strategy" checked={strategy === 'remote'} onChange={() => setStrategy('remote')} disabled={busy} />
+                      Remote wins
+                    </label>
+                  </div>
+                )}
+
+                {isSharedHistory && (step === 'previewed' || step === 'applying') && (
+                  <div data-testid="shared-history-notice" style={{ color: '#aaa', fontSize: 13, marginBottom: 10 }}>
+                    Histories share an ancestor — sync will reconcile local and remote on its next cycle. No merge preview needed.
+                  </div>
+                )}
 
                 {step === 'applying' && (
                   <div style={{ color: '#8af', marginBottom: 8 }}>{progress}</div>
                 )}
 
-                {step === 'applied' && applyResult && !error && (
+                {step === 'applied' && applyResult && !error && !isSharedHistory && (
                   <div style={{ marginBottom: 8 }}>
                     <div style={{ color: '#4caf50', marginBottom: 4 }}>Merge preview ready</div>
                     <div style={{ color: '#aaa' }}>
                       {applyResult.total_facts} total facts: {applyResult.from_local} local, {applyResult.from_remote} remote
                       {applyResult.overwrites > 0 && <span> ({applyResult.overwrites} overwrites)</span>}
                     </div>
+                  </div>
+                )}
+
+                {step === 'applied' && !error && isSharedHistory && (
+                  <div style={{ marginBottom: 8, color: '#4caf50' }} data-testid="shared-history-ready">
+                    Ready to connect.
                   </div>
                 )}
 
@@ -438,18 +473,20 @@ export function ConnectRemoteModal({ repo, onClose }: Props) {
                 )}
 
                 {step !== 'applying' && step !== 'applied' && (
-                  <button onClick={handleApply} style={btn(false)}>
-                    Preview Merge
+                  <button onClick={handleApply} style={btn(false)} data-testid="connect-remote-apply-btn">
+                    {isSharedHistory ? 'Continue' : 'Preview Merge'}
                   </button>
                 )}
 
-                {step === 'applied' && applyResult && !error && (
+                {step === 'applied' && !error && (isSharedHistory || applyResult) && (
                   <div style={{ display: 'flex', gap: 8 }}>
-                    <button onClick={handleTryDifferentStrategy} style={btn(false, 'secondary')}>
-                      Try Different Strategy
-                    </button>
-                    <button onClick={handleCommit} style={btn(false)}>
-                      Apply
+                    {!isSharedHistory && (
+                      <button onClick={handleTryDifferentStrategy} style={btn(false, 'secondary')}>
+                        Try Different Strategy
+                      </button>
+                    )}
+                    <button onClick={handleCommit} style={btn(false)} data-testid="connect-remote-commit-btn">
+                      {isSharedHistory ? 'Connect' : 'Apply'}
                     </button>
                   </div>
                 )}

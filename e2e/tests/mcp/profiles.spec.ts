@@ -5,7 +5,7 @@ const CORE_TOOLS = ['knomit_learn', 'knomit_query'];
 
 test.describe('MCP profiles', () => {
   test('default profile returns core tools', async ({ freshKnomit }) => {
-    const client = new McpClient(freshKnomit.baseURL, 'knomit', 'code');
+    const client = new McpClient(freshKnomit.baseURL, 'knomit', 'code', freshKnomit.branch);
     await client.initialize();
     const tools = await client.listTools();
     const names = tools.map((t) => t.name);
@@ -16,11 +16,11 @@ test.describe('MCP profiles', () => {
   });
 
   test('unknown profile falls back to code', async ({ freshKnomit }) => {
-    const codeClient = new McpClient(freshKnomit.baseURL, 'knomit', 'code');
+    const codeClient = new McpClient(freshKnomit.baseURL, 'knomit', 'code', freshKnomit.branch);
     await codeClient.initialize();
     const codeTools = await codeClient.listTools();
 
-    const unknownClient = new McpClient(freshKnomit.baseURL, 'knomit', 'nonexistent' as 'code');
+    const unknownClient = new McpClient(freshKnomit.baseURL, 'knomit', 'nonexistent' as 'code', freshKnomit.branch);
     await unknownClient.initialize();
     const unknownTools = await unknownClient.listTools();
 
@@ -34,7 +34,7 @@ test.describe('MCP profiles', () => {
 
   test('all three profiles return core tools', async ({ freshKnomit }) => {
     for (const profile of ['code', 'chat', 'generic'] as const) {
-      const client = new McpClient(freshKnomit.baseURL, 'knomit', profile);
+      const client = new McpClient(freshKnomit.baseURL, 'knomit', profile, freshKnomit.branch);
       await client.initialize();
       const tools = await client.listTools();
       const names = tools.map((t) => t.name);
@@ -48,7 +48,7 @@ test.describe('MCP profiles', () => {
   test('profiles share the same tool set', async ({ freshKnomit }) => {
     const toolSets: string[][] = [];
     for (const profile of ['code', 'chat', 'generic'] as const) {
-      const client = new McpClient(freshKnomit.baseURL, 'knomit', profile);
+      const client = new McpClient(freshKnomit.baseURL, 'knomit', profile, freshKnomit.branch);
       await client.initialize();
       const tools = await client.listTools();
       toolSets.push(tools.map((t) => t.name).sort());

@@ -75,13 +75,20 @@ func (s *Storer) commitLogTableExists() bool {
 }
 
 // CommitLogSync is the core write method for commit_log.
-// It calls iter() repeatedly until it returns ("", nil, nil) (sentinel for done).
+// It calls iter() repeatedly until it returns ("", nil, nil, nil) (sentinel for done).
 // For each non-empty hash: if the hash already exists in commit_log, iteration stops
-// (backfill dedup). All entries for a hash are inserted in a single transaction.
+// (backfill dedup). All rows for a hash — commit_log entries, branch_commits
+// visibility, and commit_parents edges — are inserted in a single transaction.
 // The commitLog atomic is marked true once the table is confirmed to exist
 // and has been previously written to (either via a new insert or confirmed
 // via an existing indexed commit).
-func (s *Storer) CommitLogSync(branchName string, iter func() (hash string, entries []CommitLogEntry, err error)) error {
+//
+// `parents` is the ordered list of parent commit hashes for this commit
+// (parents[0] is the first parent, etc.). Used by resolveActiveCommitForPath's
+// recursive-CTE walk and replaces the retired first_parent_chain virtual
+// table whose Go cursor callback could re-enter the *sql.DB pool mid-scan
+// and deadlock.
+func (s *Storer) CommitLogSync(branchName string, iter func() (hash string, parents []string, entries []CommitLogEntry, err error)) error {
 	if !s.CommitLogAvailable() {
 		return nil
 	}
@@ -97,7 +104,7 @@ func (s *Storer) CommitLogSync(branchName string, iter func() (hash string, entr
 	}
 
 	for {
-		hash, entries, err := iter()
+		hash, parents, entries, err := iter()
 		if err != nil {
 			return fmt.Errorf("CommitLogSync: iter: %w", err)
 		}
@@ -108,6 +115,11 @@ func (s *Storer) CommitLogSync(branchName string, iter func() (hash string, entr
 		}
 
 		// Dedup: is this commit already recorded as visible on this branch?
+		// For linear history an existing row means all ancestors are already
+		// recorded too, so we could stop. But for merge commits the iterator
+		// is walking a DAG — hitting a known commit on one parent's line says
+		// nothing about the other parent's ancestry. Skip this commit and
+		// continue walking rather than short-circuiting.
 		var cnt int
 		if err := s.db.QueryRow(
 			`SELECT COUNT(*) FROM branch_commits WHERE branch_id = ? AND commit_hash = ?`,
@@ -116,16 +128,6 @@ func (s *Storer) CommitLogSync(branchName string, iter func() (hash string, entr
 		}
 		if cnt > 0 {
 			s.commitLog.Store(true)
-			return nil
-		}
-
-		if len(entries) == 0 {
-			// Still record visibility even if no path entries (edge case).
-			if _, err := s.db.Exec(
-				`INSERT OR IGNORE INTO branch_commits (branch_id, commit_hash) VALUES (?, ?)`,
-				branchID, hash); err != nil {
-				return fmt.Errorf("CommitLogSync: record visibility: %w", err)
-			}
 			continue
 		}
 
@@ -134,20 +136,21 @@ func (s *Storer) CommitLogSync(branchName string, iter func() (hash string, entr
 			return fmt.Errorf("CommitLogSync: begin tx: %w", err)
 		}
 
-		stmt, err := tx.Prepare(`INSERT OR IGNORE INTO commit_log (commit_hash, path, message, operation, author_email, action, committed_at) VALUES (?, ?, ?, ?, ?, ?, ?)`)
-		if err != nil {
-			tx.Rollback()
-			return fmt.Errorf("CommitLogSync: prepare commit_log: %w", err)
-		}
-
-		for _, e := range entries {
-			if _, err := stmt.Exec(e.Hash, e.Path, e.Message, e.Operation, e.AuthorEmail, e.Action, e.CommittedAt); err != nil {
-				stmt.Close()
+		if len(entries) > 0 {
+			stmt, err := tx.Prepare(`INSERT OR IGNORE INTO commit_log (commit_hash, path, message, operation, author_email, action, committed_at) VALUES (?, ?, ?, ?, ?, ?, ?)`)
+			if err != nil {
 				tx.Rollback()
-				return fmt.Errorf("CommitLogSync: insert commit_log: %w", err)
+				return fmt.Errorf("CommitLogSync: prepare commit_log: %w", err)
 			}
+			for _, e := range entries {
+				if _, err := stmt.Exec(e.Hash, e.Path, e.Message, e.Operation, e.AuthorEmail, e.Action, e.CommittedAt); err != nil {
+					stmt.Close()
+					tx.Rollback()
+					return fmt.Errorf("CommitLogSync: insert commit_log: %w", err)
+				}
+			}
+			stmt.Close()
 		}
-		stmt.Close()
 
 		// Record visibility for this commit on this branch.
 		if _, err := tx.Exec(
@@ -155,6 +158,21 @@ func (s *Storer) CommitLogSync(branchName string, iter func() (hash string, entr
 			branchID, hash); err != nil {
 			tx.Rollback()
 			return fmt.Errorf("CommitLogSync: insert branch_commits: %w", err)
+		}
+
+		// Record parent edges. INSERT OR IGNORE keeps this idempotent across
+		// branches and re-syncs: every branch that walks the same DAG
+		// converges on the same commit_parents rows.
+		for i, p := range parents {
+			if p == "" {
+				continue
+			}
+			if _, err := tx.Exec(
+				`INSERT OR IGNORE INTO commit_parents (commit_hash, parent_order, parent_hash) VALUES (?, ?, ?)`,
+				hash, i, p); err != nil {
+				tx.Rollback()
+				return fmt.Errorf("CommitLogSync: insert commit_parents: %w", err)
+			}
 		}
 
 		if err := tx.Commit(); err != nil {

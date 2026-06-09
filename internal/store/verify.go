@@ -267,9 +267,15 @@ func (s *Service) checkGitReachability(_ context.Context, branch string) []Integ
 		if len(commit.ParentHashes) == 0 {
 			break
 		}
-		// Only follow first parent. Knomit branches are linear; merge commits
-		// are not expected on agent branches today. If merge-to-main lands as
-		// a real merge (not a fast-forward), this walk must visit all parents.
+		// Only follow first parent. Agent branches CAN now contain merge
+		// commits (introduced by the steady-state merge-based reconcile that
+		// pulls main into the agent), so this walk no longer sees the full
+		// commit DAG — but that's still correct for *this* check, which only
+		// asserts tree/blob reachability. Trees and blobs from main's side
+		// of the merge are reachable through the merge commit's TreeHash
+		// (already covered by walkTreeReachable above). Commit-log parity
+		// (which DOES need to see every commit) is checked separately by
+		// checkCommitLogParity, which walks all parents.
 		cur = commit.ParentHashes[0]
 	}
 	return issues
@@ -323,23 +329,29 @@ func (s *Service) deleteCommitLogRowForTest(commitHash string) error {
 func (s *Service) checkCommitLogParity(ctx context.Context, branch string) []IntegrityIssue {
 	var issues []IntegrityIssue
 
-	// 1. Collect commits reachable on the branch chain.
+	// 1. Collect every commit reachable on the branch chain. Merge
+	// commits have multiple parents and branch_commits records
+	// visibility via every edge, so a first-parent-only walk would
+	// flag the non-first-parent side as "unreachable" even though
+	// it's genuinely in the ancestry. Walk the full parent DAG.
 	ref, err := s.rh.gits.Reference(plumbing.NewBranchReferenceName(branch))
 	if err != nil {
 		return nil // git-reachability already reported it
 	}
 	gitCommits := map[string]bool{}
-	cur := ref.Hash()
-	for !cur.IsZero() {
-		if gitCommits[cur.String()] {
-			break
+	stack := []plumbing.Hash{ref.Hash()}
+	for len(stack) > 0 {
+		cur := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		if cur.IsZero() || gitCommits[cur.String()] {
+			continue
 		}
 		gitCommits[cur.String()] = true
 		commit, err := object.GetCommit(s.rh.gits, cur)
-		if err != nil || len(commit.ParentHashes) == 0 {
-			break
+		if err != nil {
+			continue
 		}
-		cur = commit.ParentHashes[0]
+		stack = append(stack, commit.ParentHashes...)
 	}
 
 	// 2. Collect distinct commit hashes visible on this branch via
@@ -736,21 +748,13 @@ func (s *Service) deleteGraphFactNodeForTest(path, blobHash string) error {
 // The graphqlite model is intentionally a permanent temporal graph:
 //   - Soft-deleted Fact nodes (deleted = true) persist forever after
 //     graphDeleteFact runs, preserving lineage for DERIVED_FROM walks.
-//   - FactVersion nodes (one per fact-at-commit) also persist forever as
-//     the historical snapshot layer.
 //
 // This check explicitly scopes itself to LIVE Fact nodes. Soft-deleted
-// nodes and FactVersion nodes are out of scope.
+// nodes are out of scope.
 //
 // This check is global (not branch-scoped) because facts and graph Fact
 // nodes have no branch dimension — both are deduplicated by (path, blob_hash)
 // via the COW model.
-//
-// TODO(verify): extend to FactVersion node parity against commit history.
-// Every (path, commit_hash) pair where a fact was visible on some branch
-// should have a matching FactVersion node. Requires walking commit history
-// per branch and correlating, which is significantly more expensive than
-// the current check.
 //
 // TODO(verify): extend to Entity, Domain, OntologyNode parity once the
 // basic Fact-node check is stable.

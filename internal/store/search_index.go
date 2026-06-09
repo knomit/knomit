@@ -9,10 +9,42 @@ import (
 	"time"
 
 	"github.com/rs/zerolog/log"
+	"golang.org/x/sync/singleflight"
 )
+
+// GraphSchemaVersion is the expected version of the GraphQLite graph layout.
+// Incremented when the graph schema changes in a way that requires a forced
+// rebuild on existing deployments. Persisted in meta.graph_schema_version
+// after every successful Rebuild; checked on Open.
+//
+// Version 2: DERIVED_FROM edges carry source_commit + target_commit
+// properties (commit-anchored /incoming + /outgoing); FactVersion subsystem
+// retired.
+//
+// Version 3: domain tags are stored CANONICAL (NFC + case-fold + de-hyphenize)
+// in fact_domains and tokenised into fact_domain_tokens. Existing deployments
+// indexed under v2 hold RAW domains and an empty token table, so domain search
+// silently returns nothing until the derived state is regenerated — the version
+// bump forces that rebuild on startup (see repoBuilder.setupIndex). Despite the
+// "Graph" name this constant gates ALL forced-rebuild-on-upgrade derived state,
+// graph or not; bump it whenever an indexing-logic change needs an existing
+// deployment to reindex.
+//
+// Version 4: facts_vec is code-managed (ensureFactsVec) at the active model's
+// dimension rather than a static FLOAT[768] migration, and NeedsRebuild now
+// ALSO gates on the embedding identity (meta.embed_model_id / meta.embed_dim).
+// A model id or dim change invalidates every stored vector, forcing a rebuild
+// that recreates facts_vec empty and re-embeds the whole corpus.
+const GraphSchemaVersion = "4"
 
 type searchIndex struct {
 	rh *repoHandler
+
+	// clusterSF deduplicates concurrent CachedClusterFacts compute paths
+	// keyed by branch|resolution|minCommunitySize. Two concurrent reviews
+	// (or a review + the background checker) on the same key collapse to
+	// one Louvain run; both wait on the singleflight result.
+	clusterSF singleflight.Group
 }
 
 // casLastCommit atomically updates the last-commit watermark for a branch,
@@ -72,6 +104,60 @@ func (si *searchIndex) SyncWatermark(ctx context.Context, branch string) (string
 // Supports both full rebuilds (first run) and incremental updates (diffing
 // since the last indexed commit).
 
+// NeedsRebuild reports whether the persisted index schema version differs from
+// the current GraphSchemaVersion — i.e. derived state (graph layout, canonical
+// domains, fact_domain_tokens) was written by an older version and a full
+// Rebuild is required to regenerate it. The version is meta.graph_schema_version,
+// global to the DB (not per-branch); a missing row (fresh or pre-versioning DB)
+// counts as stale. Rebuild bumps it on success.
+func (si *searchIndex) NeedsRebuild(ctx context.Context) (bool, error) {
+	var persistedVer string
+	err := conn(ctx, si.rh.db).QueryRowContext(ctx,
+		`SELECT value FROM meta WHERE key = 'graph_schema_version'`,
+	).Scan(&persistedVer)
+	if err == sql.ErrNoRows {
+		return true, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("read graph_schema_version: %w", err)
+	}
+	if persistedVer != GraphSchemaVersion {
+		return true, nil
+	}
+
+	// Embedding identity: a model/dim change invalidates every stored vector.
+	if emb := si.rh.getEmbedder(); emb != nil {
+		curID, err := si.persistedEmbedModelID(ctx)
+		if err != nil {
+			return false, err
+		}
+		curDim, err := si.persistedEmbedDim(ctx)
+		if err != nil {
+			return false, err
+		}
+		if curID != emb.ID() || curDim != emb.Dim() {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// MarkRebuildNeeded clears the persisted schema version so the next
+// NeedsRebuild reports stale. It exists to undo a premature version bump after
+// a partially-failed multi-branch heal: Rebuild bumps the GLOBAL
+// meta.graph_schema_version on each branch it completes, so an earlier branch's
+// success would otherwise mask a later branch's failure (the version reads
+// current, suppressing the retry), leaving that branch's canonical domains /
+// tokens stale permanently. Re-marking forces the next startup to heal again.
+func (si *searchIndex) MarkRebuildNeeded(ctx context.Context) error {
+	if _, err := conn(ctx, si.rh.db).ExecContext(ctx,
+		`DELETE FROM meta WHERE key = 'graph_schema_version'`,
+	); err != nil {
+		return fmt.Errorf("mark rebuild needed: %w", err)
+	}
+	return nil
+}
+
 // Sync brings the index up to date with the git store.
 //
 // Algorithm:
@@ -81,6 +167,20 @@ func (si *searchIndex) SyncWatermark(ctx context.Context, branch string) (string
 //  4. Else → DiffFiles(last_commit), upsert added+modified, delete removed.
 //  5. Update meta.last_commit = HEAD.
 func (si *searchIndex) Sync(ctx context.Context, branch string) error {
+	// Detect schema mismatch on entry. An older deployment may have derived
+	// state (graph layout, canonical domains, token table) laid out by a
+	// previous version. Callers that orchestrate startup (repoBuilder) call
+	// NeedsRebuild and Rebuild to heal it; Sync only warns, because it cannot
+	// safely escalate to a full rebuild for every branch from here.
+	if stale, err := si.NeedsRebuild(ctx); err != nil {
+		return fmt.Errorf("sync: %w", err)
+	} else if stale {
+		log.Warn().
+			Str("repo", si.rh.name).
+			Str("expected", GraphSchemaVersion).
+			Msg("index schema version mismatch — run `knomit rebuild` to regenerate derived state")
+	}
+
 	// Ensure the branch exists in the branches table.
 	if _, err := si.rh.EnsureBranch(ctx, branch, "refs/heads/"+branch); err != nil {
 		return fmt.Errorf("sync: ensure branch: %w", err)
@@ -101,6 +201,16 @@ func (si *searchIndex) Sync(ctx context.Context, branch string) error {
 		return nil
 	}
 
+	// indexed collects every FactRecord successfully upserted in this sync
+	// pass. After all fact nodes are committed (pass 1), a second pass writes
+	// DERIVED_FROM edges for all of them. This two-pass order is required for
+	// intra-commit refs: when A.md and B.md land in the same git commit and
+	// A.md refs B.md, B.md's Fact node must exist before A.md's outgoing edge
+	// can be wired. Pass 1 commits all nodes; pass 2 retries all edges (with
+	// the dedup guard in graphAddDerivedFromAtCommitTx preventing duplicates
+	// for refs that were already wired successfully in pass 1).
+	var indexed []FactRecord
+
 	if last == "" {
 		// Full rebuild: no previous commit recorded, so index every file.
 		log.Info().Str("head", head[:8]).Msg("index sync: full rebuild (no previous commit)")
@@ -109,8 +219,12 @@ func (si *searchIndex) Sync(ctx context.Context, branch string) error {
 			return fmt.Errorf("sync: list all: %w", err)
 		}
 		for _, path := range paths {
-			if err := si.indexFile(ctx, branch, path, head); err != nil {
+			rec, err := si.indexFile(ctx, branch, path, head)
+			if err != nil {
 				return err
+			}
+			if rec != nil {
+				indexed = append(indexed, *rec)
 			}
 		}
 		log.Info().Int("files", len(paths)).Msg("index sync: full rebuild complete")
@@ -125,8 +239,12 @@ func (si *searchIndex) Sync(ctx context.Context, branch string) error {
 			Int("added", len(added)).Int("modified", len(modified)).Int("deleted", len(deleted)).
 			Msg("index sync: incremental update")
 		for _, path := range append(added, modified...) {
-			if err := si.indexFile(ctx, branch, path, head); err != nil {
+			rec, err := si.indexFile(ctx, branch, path, head)
+			if err != nil {
 				return err
+			}
+			if rec != nil {
+				indexed = append(indexed, *rec)
 			}
 		}
 		for _, path := range deleted {
@@ -134,6 +252,15 @@ func (si *searchIndex) Sync(ctx context.Context, branch string) error {
 				return fmt.Errorf("sync: delete %q: %w", path, err)
 			}
 		}
+	}
+
+	// Pass 2: retry DERIVED_FROM edge writes for every fact indexed above.
+	// This resolves intra-commit refs that were skipped in pass 1 because the
+	// target Fact node had not been committed yet at that point. The dedup
+	// guard in graphAddDerivedFromAtCommitTx makes these calls idempotent —
+	// edges already written in pass 1 are not duplicated.
+	for _, rec := range indexed {
+		si.writePostCommitDerivedFrom(ctx, branch, rec.Path, rec.BlobHash, rec.SourceCommit, rec.Refs)
 	}
 
 	ok, err := si.casLastCommit(ctx, branch, last, head)
@@ -161,6 +288,17 @@ func (si *searchIndex) Rebuild(ctx context.Context, branch string, progress Rebu
 		return fmt.Errorf("rebuild: head commit: %w", err)
 	}
 
+	// Ensure facts_vec exists at the active model's dimension BEFORE phase 1.
+	// Phase 1 (rebuildFacts) can DELETE orphaned branch_facts/facts rows, which
+	// fires the facts_after_delete trigger that references facts_vec; the table
+	// must exist first. ensureFactsVec also recreates it empty when the model
+	// identity changed, so phase 2 re-embeds the whole corpus.
+	if emb := si.rh.getEmbedder(); emb != nil {
+		if err := si.ensureFactsVec(ctx, emb.ID(), emb.Dim()); err != nil {
+			return fmt.Errorf("rebuild: ensure facts_vec: %w", err)
+		}
+	}
+
 	// Phase 1: facts
 	start := time.Now()
 	n, err := si.rebuildFacts(ctx, branch, head, progress)
@@ -179,19 +317,32 @@ func (si *searchIndex) Rebuild(ctx context.Context, branch string, progress Rebu
 
 	// Phase 3: graph
 	start = time.Now()
-	graphed, err := si.rebuildGraph(ctx, progress)
+	graphed, err := si.rebuildGraph(ctx, branch, progress)
 	if err != nil {
 		return fmt.Errorf("rebuild: graph: %w", err)
 	}
 	log.Info().Int("graphed", graphed).Str("elapsed", fmt.Sprintf("%.1fs", time.Since(start).Seconds())).Msg("rebuild: phase 3 (graph) complete")
 
-	// Phase 4: history (FactVersion nodes from commit_log)
-	start = time.Now()
-	versioned, err := si.rebuildGraphHistory(ctx, branch, progress)
-	if err != nil {
-		return fmt.Errorf("rebuild: history: %w", err)
+	if _, err := conn(ctx, si.rh.db).ExecContext(ctx,
+		`INSERT OR REPLACE INTO meta(key, value) VALUES ('graph_schema_version', ?)`,
+		GraphSchemaVersion,
+	); err != nil {
+		return fmt.Errorf("rebuild: bump graph schema version: %w", err)
 	}
-	log.Info().Int("versions", versioned).Str("elapsed", fmt.Sprintf("%.1fs", time.Since(start).Seconds())).Msg("rebuild: phase 4 (history) complete")
+
+	// Persist the embedding identity alongside the schema version so a later
+	// model/dim change is detected by NeedsRebuild. Written on success only,
+	// after facts_vec was (re)created and the corpus re-embedded at this dim.
+	if emb := si.rh.getEmbedder(); emb != nil {
+		if _, err := conn(ctx, si.rh.db).ExecContext(ctx,
+			`INSERT OR REPLACE INTO meta(key, value) VALUES ('embed_model_id', ?)`, emb.ID()); err != nil {
+			return fmt.Errorf("rebuild: persist embed_model_id: %w", err)
+		}
+		if _, err := conn(ctx, si.rh.db).ExecContext(ctx,
+			`INSERT OR REPLACE INTO meta(key, value) VALUES ('embed_dim', ?)`, emb.Dim()); err != nil {
+			return fmt.Errorf("rebuild: persist embed_dim: %w", err)
+		}
+	}
 
 	return si.setLastCommit(ctx, branch, head)
 }
@@ -202,10 +353,14 @@ func (si *searchIndex) Rebuild(ctx context.Context, branch string, progress Rebu
 //
 // commitHash is the fallback; if commit_log has a more specific last-touch
 // commit for this path, that is used instead.
-func (si *searchIndex) indexFile(ctx context.Context, branch, path, commitHash string) error {
+//
+// Returns the FactRecord that was upserted, or nil if the file was skipped
+// (not a fact file). The commit stored in FactRecord.SourceCommit is the
+// resolved per-path commit, NOT the fallback passed in.
+func (si *searchIndex) indexFile(ctx context.Context, branch, path, commitHash string) (*FactRecord, error) {
 	content, blobHash, err := si.rh.readFileWithHash(ctx, branch, path)
 	if err != nil {
-		return fmt.Errorf("indexFile: read %s: %w", path, err)
+		return nil, fmt.Errorf("indexFile: read %s: %w", path, err)
 	}
 
 	// Use the most recent non-merge commit that touched this file.
@@ -215,11 +370,12 @@ func (si *searchIndex) indexFile(ctx context.Context, branch, path, commitHash s
 
 	rec, err := parseFact(path, content)
 	if err != nil {
-		return nil // not a fact file (e.g. kb.md manifest, ontology.yaml)
+		return nil, nil // not a fact file (e.g. kb.md manifest, ontology.yaml)
 	}
 	rec.BlobHash = blobHash
+	rec.SourceCommit = commitHash
 
-	return si.upsert(ctx, branch, commitHash, rec)
+	return &rec, si.upsert(ctx, branch, commitHash, rec)
 }
 
 // ── GC ────────────────────────────────────────────────────────────────────────
@@ -361,6 +517,21 @@ func (si *searchIndex) rebuildFacts(ctx context.Context, branch, head string, pr
 		progress("facts", 0, len(paths))
 	}
 
+	// The whole of phase 1 — facts upsert + derived junction/token regeneration
+	// + branch_facts — runs in ONE transaction. This is load-bearing: the
+	// derived-state regeneration below clears tables before repopulating them
+	// (e.g. the global fact_domain_tokens rebuild), so without an enclosing tx a
+	// mid-rebuild failure or a concurrent WAL reader would observe an empty
+	// table. beginTxIfNeeded composes with an outer tx if a caller ever supplies
+	// one; otherwise we own and commit it here.
+	ctx, tx, ownTx, err := beginTxIfNeeded(ctx, si.rh.db)
+	if err != nil {
+		return 0, fmt.Errorf("rebuildFacts: begin tx: %w", err)
+	}
+	if ownTx {
+		defer tx.Rollback()
+	}
+
 	// Create temp table for the rebuild entries.
 	if _, err := conn(ctx, si.rh.db).ExecContext(ctx, `CREATE TEMP TABLE IF NOT EXISTS _rebuild_entries (path TEXT PRIMARY KEY, blob_hash TEXT NOT NULL)`); err != nil {
 		return 0, fmt.Errorf("rebuildFacts: create temp table: %w", err)
@@ -369,13 +540,6 @@ func (si *searchIndex) rebuildFacts(ctx context.Context, branch, head string, pr
 	if _, err := conn(ctx, si.rh.db).ExecContext(ctx, `DELETE FROM _rebuild_entries`); err != nil {
 		return 0, fmt.Errorf("rebuildFacts: clear temp table: %w", err)
 	}
-
-	// Bulk-insert all (path, blobHash) pairs in a single transaction.
-	tx, err := si.rh.db.BeginTx(ctx, nil)
-	if err != nil {
-		return 0, fmt.Errorf("rebuildFacts: begin insert tx: %w", err)
-	}
-	defer tx.Rollback()
 
 	stmt, err := tx.PrepareContext(ctx, `INSERT OR REPLACE INTO _rebuild_entries(path, blob_hash) VALUES (?, ?)`)
 	if err != nil {
@@ -388,22 +552,36 @@ func (si *searchIndex) rebuildFacts(ctx context.Context, branch, head string, pr
 			return 0, fmt.Errorf("rebuildFacts: insert entry %s: %w", paths[i], err)
 		}
 	}
-	if err := tx.Commit(); err != nil {
-		return 0, fmt.Errorf("rebuildFacts: commit entries: %w", err)
+
+	// Drop stale branch_facts pointers for paths no longer present at HEAD; the
+	// INSERT OR REPLACE below repopulates the live ones. Rows are NOT cleared to
+	// dodge an FK violation (facts rowids are preserved — see below), only to
+	// purge paths that vanished from the branch.
+	if _, err := conn(ctx, si.rh.db).ExecContext(ctx, `DELETE FROM branch_facts WHERE branch_id = ?`, branchID); err != nil {
+		return 0, fmt.Errorf("rebuildFacts: clear branch_facts: %w", err)
 	}
 
-	// Bulk INSERT OR REPLACE facts from parsed blob data (no commit_hash in facts table).
+	// Upsert facts from parsed blob data via ON CONFLICT(path, blob_hash) DO
+	// UPDATE — NOT INSERT OR REPLACE. facts rows are content-addressed by
+	// UNIQUE(path, blob_hash); an unchanged blob refreshes its parsed columns
+	// IN PLACE, preserving the rowid. That matters: INSERT OR REPLACE does
+	// DELETE+INSERT, which mints a new rowid and fires facts_after_delete (wiping
+	// the facts_vec row), so rebuildEmbeddings would re-embed the ENTIRE corpus
+	// on every rebuild. Preserving the rowid keeps the embedding (immutable for a
+	// given blob — see the COW invariant) and re-embeds only genuinely new/changed
+	// facts. A changed blob is a fresh (path, new_hash) row and embeds normally.
 	res, err := conn(ctx, si.rh.db).ExecContext(ctx, `
 		WITH parsed_entries AS (
 			SELECT e.path, e.blob_hash, knomit_parse_fact(o.data) AS parsed
 			FROM _rebuild_entries e
 			JOIN objects o ON o.hash = e.blob_hash AND o.type = ?
 		)
-		INSERT OR REPLACE INTO facts (path, blob_hash, title, type, domain, entities, confidence, sources, refs, evidence_weight)
+		INSERT INTO facts (path, blob_hash, title, kind, type, domain, entities, confidence, sources, refs, evidence_weight)
 		SELECT
 			pe.path,
 			pe.blob_hash,
 			json_extract(pe.parsed, '$.title'),
+			COALESCE(json_extract(pe.parsed, '$.kind'), 'epistemic'),
 			json_extract(pe.parsed, '$.type'),
 			json_extract(pe.parsed, '$.domain'),
 			json_extract(pe.parsed, '$.entities'),
@@ -413,13 +591,76 @@ func (si *searchIndex) rebuildFacts(ctx context.Context, branch, head string, pr
 			COALESCE(json_extract(pe.parsed, '$.evidence_weight'), 0)
 		FROM parsed_entries pe
 		WHERE pe.parsed IS NOT NULL
+		ON CONFLICT(path, blob_hash) DO UPDATE SET
+			title           = excluded.title,
+			kind            = excluded.kind,
+			type            = excluded.type,
+			domain          = excluded.domain,
+			entities        = excluded.entities,
+			confidence      = excluded.confidence,
+			sources         = excluded.sources,
+			refs            = excluded.refs,
+			evidence_weight = excluded.evidence_weight
 	`, blobObjectType)
 	if err != nil {
-		return 0, fmt.Errorf("rebuildFacts: bulk insert: %w", err)
+		return 0, fmt.Errorf("rebuildFacts: upsert facts: %w", err)
 	}
 
 	affected, _ := res.RowsAffected()
 	n := int(affected)
+
+	// Re-derive the fact_domains / fact_entities junction tables for the rebuilt
+	// facts. Because the upsert above preserves rowids, no cascade-delete fires,
+	// so we explicitly clear the rebuilt facts' junction rows first (scoped by
+	// _rebuild_entries — NOT a global wipe, so other branches' shared facts keep
+	// their rows). The search filter path reads from these junctions; if they
+	// drift from the JSON columns, domain/entity searches silently return zero
+	// hits. Store the CANONICAL domain (knomit_canon_domain) so case/space/hyphen
+	// variants unify; OR IGNORE + DISTINCT because two authored variants can
+	// canonicalise to the same value (e.g. "AI Governance" / "ai-governance").
+	if _, err := conn(ctx, si.rh.db).ExecContext(ctx, `
+		DELETE FROM fact_domains WHERE fact_id IN (
+			SELECT f.id FROM facts f
+			JOIN _rebuild_entries e ON e.path = f.path AND e.blob_hash = f.blob_hash
+		)
+	`); err != nil {
+		return 0, fmt.Errorf("rebuildFacts: clear fact_domains: %w", err)
+	}
+	if _, err := conn(ctx, si.rh.db).ExecContext(ctx, `
+		INSERT OR IGNORE INTO fact_domains(fact_id, domain)
+		SELECT DISTINCT f.id, knomit_canon_domain(j.value)
+		FROM facts f
+		JOIN _rebuild_entries e ON e.path = f.path AND e.blob_hash = f.blob_hash
+		JOIN json_each(f.domain) j
+		WHERE j.value IS NOT NULL AND j.value != '' AND knomit_canon_domain(j.value) != ''
+	`); err != nil {
+		return 0, fmt.Errorf("rebuildFacts: repopulate fact_domains: %w", err)
+	}
+	// Populate the token containment table from the canonical authored domains of
+	// EVERY fact version (one-to-many tokenisation can't be expressed in the bulk
+	// SQL, so cursor in Go — cheap). Runs inside this transaction, so the global
+	// clear-then-repopulate it performs is atomic to concurrent readers.
+	if err := si.repopulateDomainTokens(ctx); err != nil {
+		return 0, err
+	}
+	if _, err := conn(ctx, si.rh.db).ExecContext(ctx, `
+		DELETE FROM fact_entities WHERE fact_id IN (
+			SELECT f.id FROM facts f
+			JOIN _rebuild_entries e ON e.path = f.path AND e.blob_hash = f.blob_hash
+		)
+	`); err != nil {
+		return 0, fmt.Errorf("rebuildFacts: clear fact_entities: %w", err)
+	}
+	if _, err := conn(ctx, si.rh.db).ExecContext(ctx, `
+		INSERT OR IGNORE INTO fact_entities(fact_id, entity)
+		SELECT DISTINCT f.id, j.value
+		FROM facts f
+		JOIN _rebuild_entries e ON e.path = f.path AND e.blob_hash = f.blob_hash
+		JOIN json_each(f.entities) j
+		WHERE j.value IS NOT NULL AND j.value != ''
+	`); err != nil {
+		return 0, fmt.Errorf("rebuildFacts: repopulate fact_entities: %w", err)
+	}
 
 	// Populate branch_facts: link each fact to this branch with its commit_hash.
 	// We pick the most recent commit_log row per path whose commit is visible on
@@ -443,6 +684,12 @@ func (si *searchIndex) rebuildFacts(ctx context.Context, branch, head string, pr
 	// Clean up temp table.
 	if _, err := conn(ctx, si.rh.db).ExecContext(ctx, `DROP TABLE IF EXISTS _rebuild_entries`); err != nil {
 		log.Warn().Err(err).Msg("rebuildFacts: drop temp table")
+	}
+
+	if ownTx {
+		if err := tx.Commit(); err != nil {
+			return 0, fmt.Errorf("rebuildFacts: commit: %w", err)
+		}
 	}
 
 	if progress != nil {
@@ -503,7 +750,8 @@ func (si *searchIndex) rebuildEmbeddings(ctx context.Context, progress RebuildPr
 	type entry struct {
 		rowid int64
 		path  string
-		text  string
+		title string
+		body  string
 	}
 
 	for i := 0; i < len(metas); i += batchSize {
@@ -542,7 +790,8 @@ func (si *searchIndex) rebuildEmbeddings(ctx context.Context, progress RebuildPr
 				bodyRows.Close()
 				return done, fmt.Errorf("rebuildEmbeddings: scan body: %w", err)
 			}
-			e.text = title + " " + extractBody(data)
+			e.title = title
+			e.body = extractBody(data)
 			entries = append(entries, e)
 		}
 		bodyRows.Close()
@@ -557,11 +806,13 @@ func (si *searchIndex) rebuildEmbeddings(ctx context.Context, progress RebuildPr
 		}
 
 		if hasBatch {
-			texts := make([]string, len(entries))
+			titles := make([]string, len(entries))
+			bodies := make([]string, len(entries))
 			for j, e := range entries {
-				texts[j] = e.text
+				titles[j] = e.title
+				bodies[j] = e.body
 			}
-			vecs, err := batcher.EmbedBatch(texts)
+			vecs, err := batcher.EmbedDocuments(titles, bodies)
 			if err != nil {
 				tx.Rollback()
 				return done, fmt.Errorf("rebuildEmbeddings: embed batch: %w", err)
@@ -579,7 +830,7 @@ func (si *searchIndex) rebuildEmbeddings(ctx context.Context, progress RebuildPr
 			}
 		} else {
 			for _, e := range entries {
-				vec, err := emb.Embed(e.text)
+				vec, err := emb.EmbedDocument(e.title, e.body)
 				if err != nil {
 					log.Warn().Err(err).Str("path", e.path).Msg("rebuildEmbeddings: embed failed, skipping")
 					continue
@@ -610,11 +861,11 @@ func (si *searchIndex) rebuildEmbeddings(ctx context.Context, progress RebuildPr
 
 // rebuildGraph syncs graph nodes/edges for all facts in a single transaction,
 // then builds similarity edges after commit.
-func (si *searchIndex) rebuildGraph(ctx context.Context, progress RebuildProgress) (int, error) {
+func (si *searchIndex) rebuildGraph(ctx context.Context, branch string, progress RebuildProgress) (int, error) {
 	// Read all facts ordered by oldest commit first so that when a fact's
 	// DERIVED_FROM edges are created, its ref targets are already graph nodes.
 	rows, err := conn(ctx, si.rh.db).QueryContext(ctx, `
-		SELECT f.path, f.title, f.blob_hash, f.type, f.domain, f.entities, f.confidence, f.sources, f.refs, f.evidence_weight
+		SELECT f.path, f.title, f.blob_hash, f.kind, f.type, f.domain, f.entities, f.confidence, f.sources, f.refs, f.evidence_weight
 		FROM facts f
 		LEFT JOIN (
 			SELECT path, MIN(committed_at) AS first_committed FROM commit_log GROUP BY path
@@ -628,7 +879,7 @@ func (si *searchIndex) rebuildGraph(ctx context.Context, progress RebuildProgres
 	for rows.Next() {
 		var rec FactRecord
 		var domainJSON, entitiesJSON, refsJSON string
-		if err := rows.Scan(&rec.Path, &rec.Title, &rec.BlobHash, &rec.Type,
+		if err := rows.Scan(&rec.Path, &rec.Title, &rec.BlobHash, &rec.Kind, &rec.Type,
 			&domainJSON, &entitiesJSON, &rec.Confidence, &rec.Sources,
 			&refsJSON, &rec.EvidenceWeight); err != nil {
 			rows.Close()
@@ -663,8 +914,186 @@ func (si *searchIndex) rebuildGraph(ctx context.Context, progress RebuildProgres
 		}
 	}
 
+	// Phase A.5: ensure every historical (path, blob_hash) ever indexed on
+	// this branch has a graph Fact node, even if the underlying `facts`
+	// row was GC'd after the fact was updated/retracted. Without this,
+	// Phase B below cannot write DERIVED_FROM edges from orphaned source
+	// blobs, leaving the temporal graph internally inconsistent (the edges
+	// it CAN write are missing endpoints for the edges it CANNOT).
+	//
+	// We dedup by (path, blob_hash) since the same blob can appear in
+	// multiple commits (no-op recommits, merges that don't change content).
+	// Versions still in `facts` are skipped — Phase A above already gave
+	// them live nodes.
+	currentSet := make(map[string]struct{}, len(facts))
+	for _, f := range facts {
+		currentSet[f.Path+"|"+f.BlobHash] = struct{}{}
+	}
+	histRows, err := conn(ctx, si.rh.db).QueryContext(ctx, `
+		SELECT cl.commit_hash, cl.path
+		FROM commit_log cl
+		JOIN branch_commits bc ON bc.commit_hash = cl.commit_hash
+		WHERE bc.branch_id = (SELECT id FROM branches WHERE name = ?)
+		  AND cl.action != 'deleted'
+		ORDER BY cl.committed_at ASC, cl.rowid ASC`,
+		branch)
+	if err != nil {
+		return 0, fmt.Errorf("rebuildGraph phaseA.5: query commit_log: %w", err)
+	}
+	type histKey struct {
+		commitHash string
+		path       string
+	}
+	var histEntries []histKey
+	for histRows.Next() {
+		var h histKey
+		if err := histRows.Scan(&h.commitHash, &h.path); err != nil {
+			histRows.Close()
+			return 0, fmt.Errorf("rebuildGraph phaseA.5: scan: %w", err)
+		}
+		histEntries = append(histEntries, h)
+	}
+	histRows.Close()
+
+	seenHistorical := make(map[string]struct{})
+	historicalSynced := 0
+	for _, h := range histEntries {
+		blobHash, err := si.rh.readBlobHashAtCommit(ctx, h.path, h.commitHash)
+		if err != nil {
+			log.Debug().Err(err).Str("path", h.path).Str("commit", h.commitHash[:8]).
+				Msg("rebuildGraph phaseA.5: skip (blob_hash lookup failed)")
+			continue
+		}
+		key := h.path + "|" + blobHash
+		if _, ok := currentSet[key]; ok {
+			continue // current version, Phase A already handled
+		}
+		if _, ok := seenHistorical[key]; ok {
+			continue // already MERGE'd this historical version
+		}
+		seenHistorical[key] = struct{}{}
+
+		content, err := si.rh.readFileAtCommit(ctx, h.path, h.commitHash)
+		if err != nil {
+			log.Debug().Err(err).Str("path", h.path).Str("commit", h.commitHash[:8]).
+				Msg("rebuildGraph phaseA.5: skip (file not at commit)")
+			continue
+		}
+		rec, err := parseFact(h.path, content)
+		if err != nil {
+			log.Debug().Err(err).Str("path", h.path).Msg("rebuildGraph phaseA.5: skip (parse failed)")
+			continue
+		}
+		rec.BlobHash = blobHash
+		if err := si.graphSyncHistoricalFactTx(ctx, tx, rec); err != nil {
+			log.Warn().Err(err).Str("path", h.path).Str("blob", blobHash[:8]).
+				Msg("rebuildGraph phaseA.5: historical sync failed")
+			continue
+		}
+		historicalSynced++
+	}
+	if historicalSynced > 0 {
+		log.Info().Int("historical_facts", historicalSynced).Msg("rebuildGraph phaseA.5: restored historical Fact nodes")
+	}
+
 	if err := tx.Commit(); err != nil {
 		return 0, fmt.Errorf("rebuildGraph: commit: %w", err)
+	}
+
+	// Phase B: walk commit_log to write DERIVED_FROM edges per ref-event.
+	// Each (commit_hash, path, action != 'deleted') tuple is one ref-event:
+	// the version of `path` committed at `commit_hash` had its blob's refs
+	// asserted at that time. We resolve each ref's target via
+	// resolveTargetCommit (called from inside graphAddDerivedFromAtCommitTx).
+	//
+	// Runs POST-commit because graphAddDerivedFromAtCommitTx uses direct-SQL
+	// reads against the GraphQLite EAV tables, which cannot see Fact nodes
+	// MERGE'd via Cypher inside the same *sql.Tx.
+	//
+	// We pass si.rh.db as the execer to satisfy the helper's signature; the
+	// helper's tx parameter is currently inert (see its doc comment).
+	//
+	// Outer ordering by committed_at is for write-order convenience only;
+	// each ref's target_commit is resolved independently by
+	// resolveTargetCommit's first-parent topological walk, so the outer
+	// order does not affect correctness on branches with merge commits.
+	clRows, err := conn(ctx, si.rh.db).QueryContext(ctx, `
+	    SELECT cl.commit_hash, cl.path
+	    FROM commit_log cl
+	    JOIN branch_commits bc ON bc.commit_hash = cl.commit_hash
+	    WHERE bc.branch_id = (SELECT id FROM branches WHERE name = ?)
+	      AND cl.action != 'deleted'
+	    ORDER BY cl.committed_at ASC, cl.rowid ASC
+	`, branch)
+	if err != nil {
+		return total, fmt.Errorf("rebuildGraph phaseB: query commit_log: %w", err)
+	}
+	type historicalRow struct {
+		commitHash string
+		path       string
+	}
+	var rows2 []historicalRow
+	for clRows.Next() {
+		var r historicalRow
+		if err := clRows.Scan(&r.commitHash, &r.path); err != nil {
+			clRows.Close()
+			return total, fmt.Errorf("rebuildGraph phaseB: scan: %w", err)
+		}
+		rows2 = append(rows2, r)
+	}
+	clRows.Close()
+
+	for _, r := range rows2 {
+		content, err := si.rh.readFileAtCommit(ctx, r.path, r.commitHash)
+		if err != nil {
+			log.Debug().Err(err).Str("path", r.path).Str("commit", r.commitHash[:8]).Msg("rebuildGraph phaseB: skip (file not at commit)")
+			continue
+		}
+		rec, err := parseFact(r.path, content)
+		if err != nil {
+			log.Debug().Err(err).Str("path", r.path).Msg("rebuildGraph phaseB: skip (parse failed)")
+			continue
+		}
+		blobHash, err := si.rh.readBlobHashAtCommit(ctx, r.path, r.commitHash)
+		if err != nil {
+			log.Warn().Err(err).Str("path", r.path).Str("commit", r.commitHash[:8]).Msg("rebuildGraph phaseB: blob_hash lookup failed")
+			continue
+		}
+
+		var localRefs []string
+		for _, ref := range rec.Refs {
+			if !strings.HasPrefix(ref, "http://") && !strings.HasPrefix(ref, "https://") {
+				localRefs = append(localRefs, ref)
+			}
+		}
+		if len(localRefs) == 0 {
+			continue
+		}
+
+		// Skip when the source blob version was orphaned (no graph node).
+		// Phase A iterates the current `facts` table, which is COW-deduped
+		// by (path, blob_hash) AND garbage-collected of rows that no
+		// branch_facts row points at. After a fact is updated/retracted,
+		// older blob versions can be GC'd out of `facts` while their
+		// commit_log entries (and historical refs) survive. Phase B sees
+		// those historical (commit, path) tuples and tries to write
+		// edges from the orphaned source — there's no graph node to
+		// write from, so we silently skip. Mirrors the symmetric
+		// missing-target handling inside graphAddDerivedFromAtCommitTx.
+		srcID, err := si.graphNodeIDByBlob(ctx, r.path, blobHash)
+		if err != nil {
+			log.Warn().Err(err).Str("path", r.path).Str("commit", r.commitHash[:8]).Msg("rebuildGraph phaseB: source node lookup failed")
+			continue
+		}
+		if srcID == 0 {
+			log.Debug().Str("path", r.path).Str("commit", r.commitHash[:8]).Str("blob", blobHash[:8]).
+				Msg("rebuildGraph phaseB: skip (source blob orphaned out of facts; no graph node)")
+			continue
+		}
+
+		if err := si.graphAddDerivedFromAtCommitTx(ctx, si.rh.db, branch, r.path, blobHash, r.commitHash, localRefs); err != nil {
+			log.Warn().Err(err).Str("path", r.path).Str("commit", r.commitHash[:8]).Msg("rebuildGraph phaseB: edge write failed")
+		}
 	}
 
 	// Build similarity edges after commit (needs committed data for KNN).
@@ -672,6 +1101,7 @@ func (si *searchIndex) rebuildGraph(ctx context.Context, progress RebuildProgres
 	if si.rh.getEmbedder() != nil {
 		type simEdge struct{ fromPath, fromBH, toPath, toBH string }
 		var edges []simEdge
+		simFloor := EmbedderThresholds(si.rh.getEmbedder()).SimilarTo
 
 		for _, rec := range facts {
 			emb, err := si.getEmbeddingByFact(ctx, rec.Path, rec.BlobHash)
@@ -697,7 +1127,7 @@ func (si *searchIndex) rebuildGraph(ctx context.Context, progress RebuildProgres
 				if err := rows.Scan(&neighborPath, &neighborBH, &sim); err != nil {
 					break
 				}
-				if (neighborPath != rec.Path || neighborBH != rec.BlobHash) && sim >= knnThreshold {
+				if (neighborPath != rec.Path || neighborBH != rec.BlobHash) && sim >= simFloor {
 					edges = append(edges, simEdge{fromPath: rec.Path, fromBH: rec.BlobHash, toPath: neighborPath, toBH: neighborBH})
 				}
 			}
@@ -730,155 +1160,3 @@ func (si *searchIndex) rebuildGraph(ctx context.Context, progress RebuildProgres
 	return total, nil
 }
 
-// rebuildGraphHistory creates FactVersion nodes for every (path, commit_hash)
-// row in commit_log. Versions of the same path are chained newest→oldest via
-// PREV_VERSION. Each version's refs (local paths only) get DERIVED_FROM edges
-// to the corresponding Fact node. Deleted entries are skipped.
-//
-// Returns the number of FactVersion nodes successfully created.
-func (si *searchIndex) rebuildGraphHistory(ctx context.Context, branch string, progress RebuildProgress) (int, error) {
-	rows, err := conn(ctx, si.rh.db).QueryContext(ctx, `
-		SELECT path, commit_hash, committed_at
-		FROM commit_log
-		WHERE action != 'deleted'
-		ORDER BY path ASC, committed_at ASC
-	`)
-	if err != nil {
-		return 0, fmt.Errorf("rebuildGraphHistory: query: %w", err)
-	}
-
-	type versionRow struct {
-		path, commitHash string
-		committedAt      int64
-	}
-	var versions []versionRow
-	for rows.Next() {
-		var v versionRow
-		if err := rows.Scan(&v.path, &v.commitHash, &v.committedAt); err != nil {
-			rows.Close()
-			return 0, fmt.Errorf("rebuildGraphHistory: scan: %w", err)
-		}
-		versions = append(versions, v)
-	}
-	rows.Close()
-
-	total := len(versions)
-	if progress != nil {
-		progress("history", 0, total)
-	}
-
-	// Phase 1: create all FactVersion nodes in a single transaction.
-	// Edges and property SETs must be applied after commit: node IDs are only
-	// visible post-commit, and GraphQLite MATCH+SET doesn't persist EAV properties
-	// inside a *sql.Tx.
-	type prevEdge struct {
-		newerHash, olderHash string
-	}
-	type createdVersion struct {
-		path, commitHash string
-		refs             []string
-		rec              FactRecord
-		committedAt      int64
-	}
-
-	tx, err := si.rh.db.BeginTx(ctx, nil)
-	if err != nil {
-		return 0, fmt.Errorf("rebuildGraphHistory: begin tx: %w", err)
-	}
-	defer tx.Rollback()
-
-	done := 0
-	prevByPath := make(map[string]string)         // path → previous commit_hash
-	prevEdgesByPath := make(map[string][]prevEdge) // path → edges to create
-	var created []createdVersion
-
-	for _, v := range versions {
-		content, err := si.rh.readFileAtCommit(ctx, v.path, v.commitHash)
-		if err != nil {
-			log.Debug().Err(err).Str("path", v.path).Str("commit", v.commitHash[:8]).Msg("rebuildGraphHistory: skip (file not found at commit)")
-			continue
-		}
-
-		rec, err := parseFact(v.path, content)
-		if err != nil {
-			log.Debug().Err(err).Str("path", v.path).Msg("rebuildGraphHistory: skip (parse failed)")
-			continue
-		}
-
-		if err := si.graphSyncFactVersionTx(ctx, tx, v.commitHash, rec, v.committedAt); err != nil {
-			log.Warn().Err(err).Str("path", v.path).Str("commit", v.commitHash[:8]).Msg("rebuildGraphHistory: sync version failed, skipping")
-			continue
-		}
-
-		if prev, ok := prevByPath[v.path]; ok {
-			prevEdgesByPath[v.path] = append(prevEdgesByPath[v.path], prevEdge{v.commitHash, prev})
-		}
-		prevByPath[v.path] = v.commitHash
-
-		var localRefs []string
-		for _, ref := range rec.Refs {
-			if !strings.HasPrefix(ref, "http://") && !strings.HasPrefix(ref, "https://") {
-				localRefs = append(localRefs, ref)
-			}
-		}
-		created = append(created, createdVersion{v.path, v.commitHash, localRefs, rec, v.committedAt})
-		done++
-	}
-
-	if err := tx.Commit(); err != nil {
-		return 0, fmt.Errorf("rebuildGraphHistory: commit nodes tx: %w", err)
-	}
-
-	if progress != nil {
-		progress("history", done, total)
-	}
-
-	// Phase 1.5: set title and committed_at on each FactVersion node now that
-	// the transaction has committed. GraphQLite MATCH+SET does not persist EAV
-	// properties when executed inside a *sql.Tx, so this must run post-commit.
-	for _, cv := range created {
-		if err := si.graphSetFactVersionProps(ctx, cv.commitHash, cv.rec, cv.committedAt); err != nil {
-			log.Warn().Err(err).Str("path", cv.path).Str("commit", cv.commitHash[:8]).Msg("rebuildGraphHistory: set props failed")
-		}
-	}
-
-	// Phase 2: create PREV_VERSION and DERIVED_FROM edges via direct SQL.
-	// GraphQLite's two-node MATCH-MERGE pattern creates self-loops when both
-	// nodes share the same label, so we look up node IDs directly and INSERT.
-	for path, edges := range prevEdgesByPath {
-		for _, e := range edges {
-			newerID, err := si.graphNodeIDByProp(ctx, NodeFactVersion, "commit_hash", e.newerHash)
-			if err != nil || newerID == 0 {
-				log.Warn().Str("path", path).Str("commit", e.newerHash[:8]).Msg("rebuildGraphHistory: newer node not found for PREV_VERSION")
-				continue
-			}
-			olderID, err := si.graphNodeIDByProp(ctx, NodeFactVersion, "commit_hash", e.olderHash)
-			if err != nil || olderID == 0 {
-				log.Warn().Str("path", path).Str("commit", e.olderHash[:8]).Msg("rebuildGraphHistory: older node not found for PREV_VERSION")
-				continue
-			}
-			if err := si.graphInsertEdge(ctx, newerID, olderID, EdgePrevVersion); err != nil {
-				log.Warn().Err(err).Str("path", path).Msg("rebuildGraphHistory: PREV_VERSION insert failed")
-			}
-		}
-	}
-
-	for _, cv := range created {
-		versionID, err := si.graphNodeIDByProp(ctx, NodeFactVersion, "commit_hash", cv.commitHash)
-		if err != nil || versionID == 0 {
-			continue
-		}
-		for _, ref := range cv.refs {
-			targetID, err := si.graphNodeIDByProp(ctx, NodeFact, "path", ref)
-			if err != nil || targetID == 0 {
-				// Target Fact node doesn't exist — skip (no self-loop risk with direct SQL).
-				continue
-			}
-			if err := si.graphInsertEdge(ctx, versionID, targetID, EdgeDerivedFrom); err != nil {
-				log.Warn().Err(err).Str("ref", ref).Msg("rebuildGraphHistory: DERIVED_FROM insert failed")
-			}
-		}
-	}
-
-	return done, nil
-}

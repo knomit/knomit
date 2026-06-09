@@ -2,8 +2,11 @@ package store
 
 import (
 	"context"
+	"time"
 
 	"github.com/go-git/go-git/v5/plumbing/transport"
+
+	"knomit/internal/retrieval"
 )
 
 // FactIndex is the interface for fact storage. Implemented by *factIndex.
@@ -19,19 +22,35 @@ type FactIndex interface {
 	DiffFiles(ctx context.Context, branch, fromCommit string) (added, modified, deleted []string, err error)
 }
 
+//go:generate go run go.uber.org/mock/mockgen -destination=../synthesize/mock_search_index_test.go -package=synthesize knomit/internal/store SearchIndex
+
 // SearchIndex is the interface for querying the fact search index. Implemented by *searchIndex.
 type SearchIndex interface {
-	Search(ctx context.Context, branch string, q SearchQuery) ([]SearchResult, error)
+	Search(ctx context.Context, branch string, q SearchOptions) ([]SearchResult, error)
 	GetByPath(ctx context.Context, branch, path string) (*FactWithBody, error)
 	LastCommitForPath(ctx context.Context, branch, path string) (string, bool)
 	Stats(ctx context.Context, branch, pathPrefix string) (StatsResult, error)
 	Completions(ctx context.Context, branch, category, prefix string, limit int) ([]string, error)
 	ExplainFact(ctx context.Context, branch, path string) (ExplainResult, error)
+	IncomingAtCommit(ctx context.Context, branch, path, commitHash string) ([]RefSummary, error)
+	OutgoingAtCommit(ctx context.Context, branch, path, commitHash string) ([]RefSummary, error)
+	// FactExistsAt reports whether `path` has any valid (added/modified)
+	// version in the sparse history reachable from `commit` on `branch`,
+	// walking past retractions. Pass commit == "" for a HEAD-anchored check.
+	// Used by ref-kind classification: a ref is `fact` (vs `broken`) when
+	// the target has any historical version visible at the source's anchor.
+	FactExistsAt(ctx context.Context, branch, path, commit string) (bool, error)
+	RelevantMethodologyForFact(ctx context.Context, branch, factPath string, sourceDomains, sourceEntities []string, k int, minScore float64) ([]MethodologyMatch, error)
 	ClusterFacts(ctx context.Context, branch string, resolution float64, minCommunitySize int) (ClusterResult, error)
-	RecentFacts(ctx context.Context, branch, pathPrefix, query string, limit, offset int, includeTypes, excludeTypes, domain, entities, epOps []string) ([]RecentFactEntry, int, error)
+	CachedClusterFacts(ctx context.Context, branch string, resolution float64, minCommunitySize int) (ClusterResult, error)
+	RecentFacts(ctx context.Context, branch string, opts SearchOptions) ([]RecentFactEntry, int, error)
 	Log(ctx context.Context, branch, path string) ([]LogEntry, error)
 	LogPaginated(ctx context.Context, branch, path string, limit int, after, from, before string) ([]LogEntryWithTags, string, string, error)
-	CommitDetail(ctx context.Context, commitHash string) (*CommitDetailResult, error)
+	// RevisionsBefore returns up to `limit` revisions of `path` in the
+	// first-parent ancestry of `anchorCommit`, newest → oldest. Used by
+	// knomit_explain to build the root fact's bounded evolution history.
+	RevisionsBefore(ctx context.Context, branch, path, anchorCommit string, limit int) ([]RevisionMeta, error)
+	CommitDetail(ctx context.Context, commitHash, pathPrefix string) (*CommitDetailResult, error)
 	Activity(ctx context.Context, branch, path string) (ActivityResult, error)
 	WalkChangedFiles(ctx context.Context, branch, fromCommit, prefix string, seen map[string]bool, limit int) ([]FileRecency, string, error)
 	FactsIter(ctx context.Context, branch string) (*FactsIter, error)
@@ -42,13 +61,20 @@ type IndexManager interface {
 	Sync(ctx context.Context, branch string) error
 	Rebuild(ctx context.Context, branch string, progress RebuildProgress) error
 	SyncWatermark(ctx context.Context, branch string) (string, error)
+	// NeedsRebuild reports whether persisted derived state was written by an
+	// older schema version and must be regenerated via Rebuild.
+	NeedsRebuild(ctx context.Context) (bool, error)
+	// MarkRebuildNeeded clears the persisted schema version so the next
+	// NeedsRebuild reports stale. Used to undo a premature version bump after a
+	// partially-failed multi-branch heal.
+	MarkRebuildNeeded(ctx context.Context) error
 }
 
 // RemoteIndex is the interface for git remote configuration and synchronization.
 // Implemented by *remoteIndex, exposed on Service via Remote().
 type RemoteIndex interface {
 	GetRemote(name string) (*Remote, error)
-	SetRemote(name, url, branch string, interval, pushInterval int, authMethod, authToken string) error
+	SetRemote(name, url, upstreamMain, agentBranch string, interval, pushInterval int, authMethod, authToken string) error
 	Sync(ctx context.Context, localBranch string, auth transport.AuthMethod) (SyncResult, error)
 	Push(ctx context.Context, branch string, auth transport.AuthMethod) (PushResult, error)
 }
@@ -64,6 +90,7 @@ type BranchIndex interface {
 	SetDefaultBranch(branch string) error
 	BranchInfo(localAgent string) (branches, agentBranches []string, matchedAgent string)
 	HeadCommit(ctx context.Context, branch string) (string, error)
+	HeadCommitInfo(ctx context.Context, branch string) (hash string, committedAt time.Time, err error)
 }
 
 // ToolSessionIndex is the interface for tool session persistence. Implemented by *toolIndex.
@@ -82,6 +109,7 @@ type ToolSessionIndex interface {
 type PipelineIndex interface {
 	CreatePipelineSession(ctx context.Context, tool, branch string) (*PipelineSession, error)
 	GetPipelineSession(ctx context.Context, id string) (*PipelineSession, error)
+	AdvancePipelineSessionPhase(ctx context.Context, id, from, to string) (advanced bool, err error)
 	CompletePipelineSession(ctx context.Context, id string) error
 	InsertPipelineWorkItem(ctx context.Context, item PipelineWorkItem) error
 	NextPipelineWorkItem(ctx context.Context, sessionID string) (*PipelineWorkItem, error)
@@ -91,13 +119,34 @@ type PipelineIndex interface {
 	SetPipelineWatermark(ctx context.Context, tool, branch, hash string) error
 }
 
-// Embedder computes vector embeddings for text.
+// Embedder computes vector embeddings. Roles differ because retrieval models
+// embed queries and documents with different prompts.
 type Embedder interface {
-	Embed(text string) ([]float32, error)
+	EmbedQuery(text string) ([]float32, error)
+	EmbedDocument(title, body string) ([]float32, error)
+	Dim() int
+	ID() string
+	// Thresholds returns the model's calibrated cosine cutoffs (dedup, search
+	// recall, SIMILAR_TO, reflect novelty). They are model-dependent, so they
+	// travel with the embedder rather than living as hard-coded constants.
+	Thresholds() retrieval.Thresholds
 }
 
-// BatchEmbedder extends Embedder with batch inference support.
+// EmbedderThresholds returns emb's calibrated cutoffs, or the historical
+// nomic-era defaults when no embedder is configured (embeddings disabled), so
+// callers get usable values without a nil check at every site.
+func EmbedderThresholds(emb Embedder) retrieval.Thresholds {
+	if emb == nil {
+		return retrieval.Defaults()
+	}
+	return emb.Thresholds()
+}
+
+//go:generate go run go.uber.org/mock/mockgen -destination=mock_batch_embedder_test.go -package=store knomit/internal/store BatchEmbedder
+//go:generate go run go.uber.org/mock/mockgen -destination=../mcp/mock_batch_embedder_test.go -package=mcp knomit/internal/store BatchEmbedder
+
+// BatchEmbedder extends Embedder with batched document inference.
 type BatchEmbedder interface {
 	Embedder
-	EmbedBatch(texts []string) ([][]float32, error)
+	EmbedDocuments(titles, bodies []string) ([][]float32, error)
 }

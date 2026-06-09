@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/rs/zerolog/log"
@@ -10,21 +11,26 @@ import (
 
 // RecentFactEntry is a lightweight record for the recent-facts endpoint.
 type RecentFactEntry struct {
-	Path        string  `json:"path"`
-	Title       string  `json:"title"`
-	Type        string  `json:"type"`
-	CommittedAt int64   `json:"committed_at"`
-	Operation   string  `json:"operation,omitempty"`
-	Score       float64 `json:"score,omitempty"`
+	Path        string   `json:"path"`
+	Title       string   `json:"title"`
+	Kind        string   `json:"kind"`
+	Type        string   `json:"type"`
+	Domain      []string `json:"domain,omitempty"`
+	Entities    []string `json:"entities,omitempty"`
+	CommittedAt int64    `json:"committed_at"`
+	Operation   string   `json:"operation,omitempty"`
+	Score       float64  `json:"score,omitempty"`
 }
 
-// RecentFacts returns facts on the given branch under pathPrefix ordered by
-// most recent commit, paginated by offset/limit. If query is non-empty, it
-// performs a semantic search first and returns only matching facts (still
-// ordered by time). domain, entities, and epOps are optional additional filters.
-func (si *searchIndex) RecentFacts(ctx context.Context, branch, pathPrefix, query string, limit, offset int, includeTypes, excludeTypes, domain, entities, epOps []string) ([]RecentFactEntry, int, error) {
-	if query != "" {
-		return si.recentFactsSearch(ctx, branch, pathPrefix, query, limit, offset, includeTypes, excludeTypes, domain, entities, epOps)
+// RecentFacts returns facts on the given branch ordered by most recent commit,
+// paginated by opts.Offset/opts.Limit. If opts.Text is non-empty, it performs
+// a semantic search first and ranks matches by relevance. All filter fields
+// (Path, IncludeKinds/ExcludeKinds, IncludeTypes/ExcludeTypes, Domain,
+// Entities, EpisodeOps) are applied; vector-search-only fields (QueryVec,
+// QueryByPath, MinSimilarity, GraphHops) are inert here.
+func (si *searchIndex) RecentFacts(ctx context.Context, branch string, opts SearchOptions) ([]RecentFactEntry, int, error) {
+	if opts.Text != "" {
+		return si.recentFactsSearch(ctx, branch, opts)
 	}
 
 	branchID, err := si.rh.branchID(ctx, branch)
@@ -32,21 +38,15 @@ func (si *searchIndex) RecentFacts(ctx context.Context, branch, pathPrefix, quer
 		return nil, 0, fmt.Errorf("RecentFacts: %w", err)
 	}
 
-	flt := newFactFilter(SearchQuery{
-		Path:         pathPrefix,
-		IncludeTypes: includeTypes,
-		ExcludeTypes: excludeTypes,
-		Domain:       domain,
-		Entities:     entities,
-	})
+	flt := newFactFilter(opts)
 
 	// Build the ep filter clause (operates on cl.operation from the LEFT JOIN).
 	epClause := ""
 	epArgs := []any{}
-	if len(epOps) > 0 {
-		ph := strings.Repeat("?,", len(epOps))
-		epArgs = make([]any, len(epOps))
-		for i, op := range epOps {
+	if len(opts.EpisodeOps) > 0 {
+		ph := strings.Repeat("?,", len(opts.EpisodeOps))
+		epArgs = make([]any, len(opts.EpisodeOps))
+		for i, op := range opts.EpisodeOps {
 			epArgs[i] = op
 		}
 		epClause = " AND COALESCE(cl.operation, '') IN (" + ph[:len(ph)-1] + ")"
@@ -65,9 +65,10 @@ func (si *searchIndex) RecentFacts(ctx context.Context, branch, pathPrefix, quer
 		return nil, 0, fmt.Errorf("RecentFacts count: %w", err)
 	}
 
-	queryArgs := append(append(append([]any{branchID}, flt.args...), epArgs...), limit, offset)
+	queryArgs := append(append(append([]any{branchID}, flt.args...), epArgs...), opts.Limit, opts.Offset)
 	rows, err := conn(ctx, si.rh.db).QueryContext(ctx,
-		`SELECT f.path, f.title, f.type, COALESCE(cl.committed_at, 0), COALESCE(cl.operation, '')
+		`SELECT f.path, f.title, f.kind, f.type, f.domain, f.entities,
+		        COALESCE(cl.committed_at, 0), COALESCE(cl.operation, '')
 		 FROM branch_facts bf
 		 JOIN facts f ON f.id = bf.fact_id
 		 LEFT JOIN commit_log cl ON bf.commit_hash = cl.commit_hash AND f.path = cl.path
@@ -84,9 +85,12 @@ func (si *searchIndex) RecentFacts(ctx context.Context, branch, pathPrefix, quer
 	var entries []RecentFactEntry
 	for rows.Next() {
 		var e RecentFactEntry
-		if err := rows.Scan(&e.Path, &e.Title, &e.Type, &e.CommittedAt, &e.Operation); err != nil {
+		var domainJSON, entitiesJSON string
+		if err := rows.Scan(&e.Path, &e.Title, &e.Kind, &e.Type, &domainJSON, &entitiesJSON, &e.CommittedAt, &e.Operation); err != nil {
 			return nil, 0, fmt.Errorf("RecentFacts scan: %w", err)
 		}
+		var refs []string
+		logFactJSONUnmarshal("RecentFacts", e.Path, domainJSON, entitiesJSON, "null", &e.Domain, &e.Entities, &refs)
 		entries = append(entries, e)
 	}
 	return entries, total, rows.Err()
@@ -94,22 +98,19 @@ func (si *searchIndex) RecentFacts(ctx context.Context, branch, pathPrefix, quer
 
 // recentFactsSearch uses semantic search to find matching facts, then returns
 // them ordered by committed_at with pagination.
-func (si *searchIndex) recentFactsSearch(ctx context.Context, branch, pathPrefix, query string, limit, offset int, includeTypes, excludeTypes, domain, entities, epOps []string) ([]RecentFactEntry, int, error) {
+func (si *searchIndex) recentFactsSearch(ctx context.Context, branch string, opts SearchOptions) ([]RecentFactEntry, int, error) {
 	branchID, err := si.rh.branchID(ctx, branch)
 	if err != nil {
 		return nil, 0, fmt.Errorf("RecentFacts search: %w", err)
 	}
 
-	results, err := si.Search(ctx, branch, SearchQuery{
-		Text:         query,
-		Path:         pathPrefix,
-		IncludeTypes: includeTypes,
-		ExcludeTypes: excludeTypes,
-		Domain:       domain,
-		Entities:     entities,
-		EpisodeOps:   epOps,
-		Limit:        500, // large enough to get all matches for pagination
-	})
+	// Override Limit for the search phase: we need a large candidate set so
+	// pagination by score/time below has enough rows to slice. The original
+	// opts.Limit/opts.Offset are applied to the final result list.
+	searchOpts := opts
+	searchOpts.Limit = 500
+	searchOpts.Offset = 0
+	results, err := si.Search(ctx, branch, searchOpts)
 	if err != nil {
 		return nil, 0, fmt.Errorf("RecentFacts search: %w", err)
 	}
@@ -129,7 +130,8 @@ func (si *searchIndex) recentFactsSearch(ctx context.Context, branch, pathPrefix
 	}
 
 	rows, err := conn(ctx, si.rh.db).QueryContext(ctx,
-		`SELECT f.path, f.title, f.type, COALESCE(cl.committed_at, 0), COALESCE(cl.operation, '')
+		`SELECT f.path, f.title, f.kind, f.type, f.domain, f.entities,
+		        COALESCE(cl.committed_at, 0), COALESCE(cl.operation, '')
 		 FROM branch_facts bf
 		 JOIN facts f ON f.id = bf.fact_id
 		 LEFT JOIN commit_log cl ON bf.commit_hash = cl.commit_hash AND f.path = cl.path
@@ -145,9 +147,12 @@ func (si *searchIndex) recentFactsSearch(ctx context.Context, branch, pathPrefix
 	var all []RecentFactEntry
 	for rows.Next() {
 		var e RecentFactEntry
-		if err := rows.Scan(&e.Path, &e.Title, &e.Type, &e.CommittedAt, &e.Operation); err != nil {
+		var domainJSON, entitiesJSON string
+		if err := rows.Scan(&e.Path, &e.Title, &e.Kind, &e.Type, &domainJSON, &entitiesJSON, &e.CommittedAt, &e.Operation); err != nil {
 			return nil, 0, fmt.Errorf("RecentFacts search scan: %w", err)
 		}
+		var refs []string
+		logFactJSONUnmarshal("RecentFacts.search", e.Path, domainJSON, entitiesJSON, "null", &e.Domain, &e.Entities, &refs)
 		e.Score = scoreByPath[e.Path]
 		all = append(all, e)
 	}
@@ -155,15 +160,28 @@ func (si *searchIndex) recentFactsSearch(ctx context.Context, branch, pathPrefix
 		return nil, 0, err
 	}
 
+	// When a query is present the SQL ORDER BY committed_at is only used for
+	// stable iteration; rank order is established here by relevance score
+	// descending, with committed_at and path as deterministic tiebreakers.
+	sort.SliceStable(all, func(i, j int) bool {
+		if all[i].Score != all[j].Score {
+			return all[i].Score > all[j].Score
+		}
+		if all[i].CommittedAt != all[j].CommittedAt {
+			return all[i].CommittedAt > all[j].CommittedAt
+		}
+		return all[i].Path < all[j].Path
+	})
+
 	total := len(all)
-	if offset >= total {
+	if opts.Offset >= total {
 		return []RecentFactEntry{}, total, nil
 	}
-	end := offset + limit
+	end := opts.Offset + opts.Limit
 	if end > total {
 		end = total
 	}
-	return all[offset:end], total, nil
+	return all[opts.Offset:end], total, nil
 }
 
 // LastCommitForPath returns the commit hash of the most recent commit_log
@@ -194,19 +212,39 @@ func (si *searchIndex) LastCommitForPath(ctx context.Context, branch, path strin
 // (via embeddings), entity/domain/path/confidence filters, and cosine
 // similarity thresholds.
 
-// SearchQuery describes a hybrid search request.
-type SearchQuery struct {
-	Text          string
-	Entities      []string
-	Domain        []string
-	Path          string
+// SearchOptions is the unified options struct for fact queries — used by both
+// Search (vector/text ranking) and RecentFacts (time-ordered pagination).
+// Filter fields apply to both; semantic-search-only fields (QueryVec,
+// QueryByPath, MinSimilarity, GraphHops) are inert when passed to RecentFacts.
+// Pagination (Offset) is only consulted by RecentFacts.
+type SearchOptions struct {
+	Text     string
+	Entities []string
+	// Domain matches, by default, slash-hierarchy descendant-or-equal ("store"
+	// finds "store", "store/resolver", ...) OR token containment of the
+	// de-hyphenized tag ("ai" finds "ai governance", "enterprise ai"; "governance
+	// ai" matches "ai governance" order-independently; plurals are stemmed).
+	// Query terms are canonicalised the same way the stored tags are.
+	Domain []string
+	// DomainExact restricts Domain matching to canonical exact-string equality
+	// (no descendant, no token containment). Opt-in "I mean exactly this tag".
+	DomainExact bool
+	// DomainAncestor matches ancestor-or-equal: query "store/resolver" finds
+	// facts with domain "store/resolver", "store", ... (any path ancestor).
+	// Used by principles-style "what scopes apply to this subarea?" lookups.
+	DomainAncestor []string
+	Path           string
 	MinConfidence float64
-	MinSimilarity float64   // cosine similarity threshold (0–1); 0 uses default 0.40
+	MinSimilarity float64   // cosine similarity threshold (0–1); 0 uses the active model's recall floor
 	Limit         int
+	Offset        int       // RecentFacts pagination offset; ignored by Search
 	GraphHops     int       // number of graph traversal hops to expand results (0 = disabled)
 	QueryVec      []float32 // pre-computed embedding vector; if set, skips Embed(Text)
+	QueryByPath   string    // resolve query vector from this branch+path's stored embedding via SQL join; skips Embed(Text). Lower priority than QueryVec.
 	IncludeTypes  []string  // only return facts with these types (empty = all)
 	ExcludeTypes  []string  // exclude facts with these types
+	IncludeKinds  []string  // only return facts with these kinds (empty = all)
+	ExcludeKinds  []string  // exclude facts with these kinds
 	EpisodeOps    []string  // filter by episode operation type (e.g. "learn", "update", "retract"); filtered post-query in Go
 }
 
@@ -233,7 +271,7 @@ func (f *factFilter) add(clause string, args ...any) {
 
 func (f *factFilter) SQL() string { return strings.Join(f.clauses, "") }
 
-func newFactFilter(q SearchQuery) *factFilter {
+func newFactFilter(q SearchOptions) *factFilter {
 	f := &factFilter{}
 	if q.MinConfidence > 0 {
 		f.add(" AND f.confidence >= ?", q.MinConfidence)
@@ -257,6 +295,22 @@ func newFactFilter(q SearchQuery) *factFilter {
 		}
 		f.add(" AND f.type NOT IN ("+ph[:len(ph)-1]+")", args...)
 	}
+	if len(q.IncludeKinds) > 0 {
+		ph := strings.Repeat("?,", len(q.IncludeKinds))
+		args := make([]any, len(q.IncludeKinds))
+		for i, t := range q.IncludeKinds {
+			args[i] = t
+		}
+		f.add(" AND f.kind IN ("+ph[:len(ph)-1]+")", args...)
+	}
+	if len(q.ExcludeKinds) > 0 {
+		ph := strings.Repeat("?,", len(q.ExcludeKinds))
+		args := make([]any, len(q.ExcludeKinds))
+		for i, t := range q.ExcludeKinds {
+			args[i] = t
+		}
+		f.add(" AND f.kind NOT IN ("+ph[:len(ph)-1]+")", args...)
+	}
 	if len(q.Entities) > 0 {
 		ph := strings.Repeat("?,", len(q.Entities))
 		ph = ph[:len(ph)-1]
@@ -271,9 +325,46 @@ func newFactFilter(q SearchQuery) *factFilter {
 		)
 	}
 	for _, d := range q.Domain {
+		canon := canonicalizeDomain(d)
+		toks := domainTokens(canon)
+		// Degenerate input (e.g. "-", "---", whitespace) canonicalises to "" and
+		// yields no tokens. No fact is ever stored with an empty canonical domain
+		// (index-time skips them), so treat such a filter as a no-op rather than
+		// emitting `domain = ''`, which would silently match zero facts and make
+		// the whole query return nothing.
+		if canon == "" {
+			continue
+		}
+		// Exact mode (or a canonical with no tokens) → canonical string equality.
+		if q.DomainExact || len(toks) == 0 {
+			f.add(" AND EXISTS (SELECT 1 FROM fact_domains WHERE fact_id = f.id AND domain = ?)", canon)
+			continue
+		}
+		// Default: slash-hierarchy descendant-or-equal OR token containment
+		// (a fact has a single domain whose token set ⊇ all query tokens).
+		ph := strings.Repeat("?,", len(toks))
+		ph = ph[:len(ph)-1]
+		args := make([]any, 0, len(toks)+3)
+		args = append(args, canon, canon+"/%")
+		for _, t := range toks {
+			args = append(args, t)
+		}
+		args = append(args, len(toks))
 		f.add(
-			" AND EXISTS (SELECT 1 FROM fact_domains WHERE fact_id = f.id AND (domain = ? OR domain LIKE ?))",
-			d, d+"/%",
+			" AND (EXISTS (SELECT 1 FROM fact_domains WHERE fact_id = f.id AND (domain = ? OR domain LIKE ?))"+
+				" OR EXISTS (SELECT 1 FROM fact_domain_tokens t WHERE t.fact_id = f.id"+
+				" AND t.token IN ("+ph+") GROUP BY t.domain HAVING COUNT(DISTINCT t.token) = ?))",
+			args...,
+		)
+	}
+	for _, d := range q.DomainAncestor {
+		// Ancestor-or-equal match on the canonical slash path: the fact's domain
+		// is either exactly the query, or a prefix of it. Kept slash-based (the
+		// principles/applies_to scoping feature), not tokenised.
+		canon := canonicalizeDomain(d)
+		f.add(
+			" AND EXISTS (SELECT 1 FROM fact_domains WHERE fact_id = f.id AND (domain = ? OR ? LIKE domain || '/%'))",
+			canon, canon,
 		)
 	}
 	return f
@@ -354,7 +445,7 @@ func (si *searchIndex) filterByEpisodeOps(ctx context.Context, results []SearchR
 //
 // If Text is empty, all facts matching the non-text filters are returned with
 // score 100.
-func (si *searchIndex) Search(ctx context.Context, branch string, q SearchQuery) ([]SearchResult, error) {
+func (si *searchIndex) Search(ctx context.Context, branch string, q SearchOptions) ([]SearchResult, error) {
 	branchID, err := si.rh.branchID(ctx, branch)
 	if err != nil {
 		return nil, fmt.Errorf("search: %w", err)
@@ -368,10 +459,10 @@ func (si *searchIndex) Search(ctx context.Context, branch string, q SearchQuery)
 	flt := newFactFilter(q)
 
 	// ── Text-less path: return all facts matching filters with score 100 ──
-	if q.Text == "" {
+	if q.Text == "" && q.QueryByPath == "" && len(q.QueryVec) == 0 {
 		args := append(append([]any{blobObjectType, branchID}, flt.args...), limit)
 		rows, err := conn(ctx, si.rh.db).QueryContext(ctx,
-			`SELECT f.path, f.title, f.blob_hash, f.type, f.domain, f.entities,
+			`SELECT f.path, f.title, f.blob_hash, f.kind, f.type, f.domain, f.entities,
 			        f.confidence, f.sources, f.refs, f.evidence_weight,
 			        bf.commit_hash, o.data
 			 FROM branch_facts bf
@@ -405,51 +496,92 @@ func (si *searchIndex) Search(ctx context.Context, branch string, q SearchQuery)
 		score float64
 	}
 
+	// Model-dependent cosine cutoffs (rerank tiers + recall floor below).
+	th := EmbedderThresholds(si.rh.getEmbedder())
+
 	vecSimByPath := make(map[string]float64)
-	emb := si.rh.getEmbedder()
-	if emb == nil && len(q.QueryVec) == 0 {
-		log.Debug().Msg("search: no embedder configured, skipping vec search")
-	} else {
-		queryVec := q.QueryVec
-		if len(queryVec) == 0 {
-			var embedErr error
-			queryVec, embedErr = emb.Embed(q.Text)
-			if embedErr != nil {
-				log.Warn().Err(embedErr).Msg("search: embed query failed")
-			}
-		}
-		if queryVec == nil {
-			log.Warn().Msg("search: no query vector available")
+	kLimit := limit * 5
+	if q.MinSimilarity > th.RerankHigh {
+		kLimit = limit * 2
+	} else if q.MinSimilarity > th.RerankLow {
+		kLimit = limit * 3
+	}
+
+	// QueryByPath path: do the source-embedding lookup and the KNN match in
+	// one SQL statement, eliminating the round-trip and the embedding
+	// inference. The subquery in MATCH resolves to the stored vector for the
+	// (branch, path) pair; if the pair has no row in facts_vec, MATCH gets
+	// NULL and the outer query returns no rows (caller falls back to filter
+	// search, same as if there were no embedder).
+	if q.QueryByPath != "" && len(q.QueryVec) == 0 {
+		rows, err := conn(ctx, si.rh.db).QueryContext(ctx,
+			`SELECT f.path, (1.0 - fv.distance) as similarity
+			 FROM facts_vec fv
+			 JOIN facts f ON f.id = fv.rowid
+			 JOIN branch_facts bf ON bf.fact_id = f.id AND bf.branch_id = ?
+			 WHERE fv.embedding MATCH (
+			     SELECT fv2.embedding
+			     FROM branch_facts bf2
+			     JOIN facts_vec fv2 ON fv2.rowid = bf2.fact_id
+			     WHERE bf2.branch_id = ? AND bf2.path = ?
+			 ) AND fv.k = ?
+			 ORDER BY fv.distance ASC`,
+			branchID, branchID, q.QueryByPath, kLimit,
+		)
+		if err != nil {
+			log.Warn().Err(err).Str("source_path", q.QueryByPath).Msg("search: query-by-path failed")
 		} else {
-			vecBlob := float32SliceToBytes(queryVec)
-			kLimit := limit * 5
-			if q.MinSimilarity > 0.7 {
-				kLimit = limit * 2
-			} else if q.MinSimilarity > 0.5 {
-				kLimit = limit * 3
-			}
-			rows, err := conn(ctx, si.rh.db).QueryContext(ctx,
-				`SELECT f.path, (1.0 - fv.distance) as similarity
-				 FROM facts_vec fv
-				 JOIN facts f ON f.id = fv.rowid
-				 JOIN branch_facts bf ON bf.fact_id = f.id AND bf.branch_id = ?
-				 WHERE fv.embedding MATCH ? AND fv.k = ?
-				 ORDER BY fv.distance ASC`,
-				branchID, vecBlob, kLimit,
-			)
-			if err != nil {
-				log.Warn().Err(err).Msg("search: vec query failed")
-			} else {
-				for rows.Next() {
-					var path string
-					var sim float64
-					if err := rows.Scan(&path, &sim); err != nil {
-						break
-					}
-					vecSimByPath[path] = sim
+			for rows.Next() {
+				var path string
+				var sim float64
+				if err := rows.Scan(&path, &sim); err != nil {
+					break
 				}
-				rows.Close()
-				log.Debug().Int("vec_hits", len(vecSimByPath)).Msg("vec search complete")
+				vecSimByPath[path] = sim
+			}
+			rows.Close()
+			log.Debug().Int("vec_hits", len(vecSimByPath)).Str("source_path", q.QueryByPath).Msg("vec search complete (via path)")
+		}
+	} else {
+		emb := si.rh.getEmbedder()
+		if emb == nil && len(q.QueryVec) == 0 {
+			log.Debug().Msg("search: no embedder configured, skipping vec search")
+		} else {
+			queryVec := q.QueryVec
+			if len(queryVec) == 0 {
+				var embedErr error
+				queryVec, embedErr = emb.EmbedQuery(q.Text)
+				if embedErr != nil {
+					log.Warn().Err(embedErr).Msg("search: embed query failed")
+				}
+			}
+			if queryVec == nil {
+				log.Warn().Msg("search: no query vector available")
+			} else {
+				vecBlob := float32SliceToBytes(queryVec)
+				rows, err := conn(ctx, si.rh.db).QueryContext(ctx,
+					`SELECT f.path, (1.0 - fv.distance) as similarity
+					 FROM facts_vec fv
+					 JOIN facts f ON f.id = fv.rowid
+					 JOIN branch_facts bf ON bf.fact_id = f.id AND bf.branch_id = ?
+					 WHERE fv.embedding MATCH ? AND fv.k = ?
+					 ORDER BY fv.distance ASC`,
+					branchID, vecBlob, kLimit,
+				)
+				if err != nil {
+					log.Warn().Err(err).Msg("search: vec query failed")
+				} else {
+					for rows.Next() {
+						var path string
+						var sim float64
+						if err := rows.Scan(&path, &sim); err != nil {
+							break
+						}
+						vecSimByPath[path] = sim
+					}
+					rows.Close()
+					log.Debug().Int("vec_hits", len(vecSimByPath)).Msg("vec search complete")
+				}
 			}
 		}
 	}
@@ -468,7 +600,7 @@ func (si *searchIndex) Search(ctx context.Context, branch string, q SearchQuery)
 
 	minSim := q.MinSimilarity
 	if minSim <= 0 {
-		minSim = 0.40
+		minSim = th.SearchFloor
 	}
 
 	candidatePaths := make([]string, 0, len(vecSimByPath))
@@ -490,7 +622,7 @@ func (si *searchIndex) Search(ctx context.Context, branch string, q SearchQuery)
 	}
 
 	metaRows, err := conn(ctx, si.rh.db).QueryContext(ctx,
-		`SELECT f.path, f.title, f.blob_hash, f.type, f.domain, f.entities,
+		`SELECT f.path, f.title, f.blob_hash, f.kind, f.type, f.domain, f.entities,
 		        f.confidence, f.sources, f.refs, f.evidence_weight
 		 FROM branch_facts bf
 		 JOIN facts f ON f.id = bf.fact_id

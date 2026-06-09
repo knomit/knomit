@@ -19,9 +19,10 @@ refs: []
 This fact exercises the full lifecycle.`;
 
     // 1. Create fact via API
-    const createRes = await freshKnomit.api.put(`${freshKnomit.baseURL}/api/v1/knomit/fact`, {
-      data: { path: factPath, content: factContent },
-    });
+    const createRes = await freshKnomit.api.put(
+      `${freshKnomit.baseURL}/api/v1/repos/knomit/branches/${freshKnomit.branch}/facts/${factPath}`,
+      { data: { content: factContent } },
+    );
     expect(createRes.ok()).toBeTruthy();
 
     // 2. Navigate to it in the UI
@@ -64,9 +65,10 @@ refs: []
 
 Updated content after edit.`;
 
-    const editRes = await freshKnomit.api.put(`${freshKnomit.baseURL}/api/v1/knomit/fact`, {
-      data: { path: factPath, content: updatedContent },
-    });
+    const editRes = await freshKnomit.api.put(
+      `${freshKnomit.baseURL}/api/v1/repos/knomit/branches/${freshKnomit.branch}/facts/${factPath}`,
+      { data: { content: updatedContent } },
+    );
     expect(editRes.ok()).toBeTruthy();
 
     // 6. Verify the update in the UI
@@ -88,7 +90,7 @@ Updated content after edit.`;
     await page.keyboard.press('1');
 
     // 8. Retract via MCP
-    const mcp = new McpClient(freshKnomit.baseURL, 'knomit', 'code');
+    const mcp = new McpClient(freshKnomit.baseURL, 'knomit', 'code', freshKnomit.branch);
     await mcp.initialize();
     try {
       const retractResult = await mcp.callTool('knomit_retract', { file: 'lifecycle/demo', moment_name: 'e2e-test' });

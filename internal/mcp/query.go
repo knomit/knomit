@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"knomit/internal/fact"
 	"knomit/internal/repos"
 	"knomit/internal/store"
 	"time"
@@ -11,10 +12,31 @@ import (
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 )
 
+// defaultQueryLimit caps knomit_query results when the caller passes no limit.
+const defaultQueryLimit = 20
+
+// maxQueryLimit is the upper bound on knomit_query results, mirroring the REST
+// search handler's cap (internal/web/handlers_search_hal.go) so a caller cannot
+// materialise the entire corpus in one tool response — keeping MCP at parity
+// with REST rather than unbounded.
+const maxQueryLimit = 500
+
+// clampQueryLimit normalises a caller-supplied limit: non-positive falls back to
+// the default, anything above the cap is clamped to maxQueryLimit.
+func clampQueryLimit(limit int) int {
+	if limit <= 0 {
+		return defaultQueryLimit
+	}
+	if limit > maxQueryLimit {
+		return maxQueryLimit
+	}
+	return limit
+}
+
 // queryTool returns the Tool definition for knomit_query.
 func queryTool() mcpgo.Tool {
 	return mcpgo.NewTool("knomit_query",
-		mcpgo.WithDescription("Search the knowledge base. At least one of text, entities, domain, path, or min_confidence is required."),
+		mcpgo.WithDescription("Search the knowledge base. At least one of text, entities, domain, applies_to, path, or min_confidence is required."),
 		mcpgo.WithString("text",
 			mcpgo.Description("Full-text search query."),
 		),
@@ -26,11 +48,28 @@ func queryTool() mcpgo.Tool {
 			mcpgo.Description("Filter by domain tags."),
 			mcpgo.WithStringItems(),
 		),
+		mcpgo.WithArray("applies_to",
+			mcpgo.Description("Filter by ancestor-or-equal domain match. Use when you want facts whose declared scope INCLUDES one of these areas (e.g. 'store/resolver' surfaces facts scoped to 'store' or 'store/resolver')."),
+			mcpgo.WithStringItems(),
+		),
 		mcpgo.WithString("path",
 			mcpgo.Description("Filter by path prefix."),
 		),
 		mcpgo.WithNumber("min_confidence",
 			mcpgo.Description("Minimum confidence threshold (0–1)."),
+		),
+		mcpgo.WithNumber("min_similarity",
+			mcpgo.Description("Minimum cosine similarity for text search (0–1); 0 uses the active embedding model's calibrated recall floor."),
+		),
+		mcpgo.WithNumber("limit",
+			mcpgo.Description("Maximum number of results to return (default 20)."),
+		),
+		mcpgo.WithArray("type",
+			mcpgo.Description("Filter to these epistemic types (e.g. observation, policy, principle, hypothesis)."),
+			mcpgo.WithStringItems(),
+		),
+		mcpgo.WithBoolean("domain_exact",
+			mcpgo.Description("Match `domain` by exact canonical tag only (no token containment / hierarchy). Default false: 'ai' also matches 'ai governance', etc."),
 		),
 	)
 }
@@ -50,21 +89,33 @@ func QueryHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToo
 		text := req.GetString("text", "")
 		entities := req.GetStringSlice("entities", nil)
 		domain := req.GetStringSlice("domain", nil)
+		appliesTo := req.GetStringSlice("applies_to", nil)
 		path := req.GetString("path", "")
 		minConfidence := req.GetFloat("min_confidence", 0)
+		minSimilarity := req.GetFloat("min_similarity", 0)
+		limit := clampQueryLimit(req.GetInt("limit", 0))
+		types := req.GetStringSlice("type", nil)
+		domainExact := req.GetBool("domain_exact", false)
 
-		// Validate at least one filter.
-		if text == "" && len(entities) == 0 && len(domain) == 0 && path == "" && minConfidence == 0 {
-			return mcpgo.NewToolResultError("at least one of text, entities, domain, path, or min_confidence is required"), nil
+		// Validate at least one filter. `type` counts: the store supports a
+		// text-less type-only query (returns all facts of that type), and the
+		// REST search handler already accepts it — listing it here keeps
+		// knomit_query at parity with REST instead of rejecting what REST allows.
+		if text == "" && len(entities) == 0 && len(domain) == 0 && len(appliesTo) == 0 && path == "" && minConfidence == 0 && len(types) == 0 {
+			return mcpgo.NewToolResultError("at least one of text, entities, domain, applies_to, path, type, or min_confidence is required"), nil
 		}
 
-		q := store.SearchQuery{
-			Text:          text,
-			Entities:      entities,
-			Domain:        domain,
-			Path:          path,
-			MinConfidence: minConfidence,
-			Limit:         20,
+		q := store.SearchOptions{
+			Text:           text,
+			Entities:       entities,
+			Domain:         domain,
+			DomainAncestor: appliesTo,
+			Path:           path,
+			MinConfidence:  minConfidence,
+			MinSimilarity:  minSimilarity,
+			IncludeTypes:   types,
+			DomainExact:    domainExact,
+			Limit:          limit,
 		}
 
 		// 4. Search.
@@ -75,13 +126,14 @@ func QueryHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToo
 
 		// 5. Build output.
 		type factOutput struct {
-			File         string      `json:"file"`
-			Title        string      `json:"title"`
-			Type         string      `json:"type"`
-			Body         string      `json:"body"`
-			LastModified string      `json:"last_modified,omitempty"`
-			Commit       string      `json:"commit"`
-			Frontmatter  interface{} `json:"frontmatter"`
+			File        string      `json:"file"`
+			Title       string      `json:"title"`
+			Kind        string      `json:"kind,omitempty"` // omitted when epistemic (the default)
+			Type        string      `json:"type"`
+			Score       float64     `json:"score"` // relevance score in [0,100]; 100 for filter-only (text-less) queries
+			Body        string      `json:"body"`
+			Commit      string      `json:"commit"`
+			Frontmatter interface{} `json:"frontmatter"`
 		}
 		type frontmatterOutput struct {
 			Domain         []string `json:"domain"`
@@ -102,10 +154,18 @@ func QueryHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToo
 				Refs:           orEmpty(r.Refs),
 				EvidenceWeight: r.EvidenceWeight,
 			}
+			// Mirror fact.Fact.MarshalJSON: elide Kind when it equals the
+			// default (epistemic) so the field is omitted on the wire.
+			kind := r.Kind
+			if fact.Kind(kind) == fact.DefaultKind {
+				kind = ""
+			}
 			facts[i] = factOutput{
 				File:        r.Path,
 				Title:       r.Title,
+				Kind:        kind,
 				Type:        r.Type,
+				Score:       r.Score,
 				Body:        r.Body,
 				Commit:      r.CommitHash,
 				Frontmatter: fm,

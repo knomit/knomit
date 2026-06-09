@@ -12,23 +12,17 @@ interface Props {
 const FACT_CATEGORIES: { key: FilterChip['category']; label: string }[] = [
   { key: 'domain', label: 'Domain' },
   { key: 'entity', label: 'Entity' },
+  { key: 'kind',   label: 'Kind' },
   { key: 'type',   label: 'Type' },
   { key: 'path',   label: 'Path' },
 ];
 
-const HISTORY_CATEGORIES: { key: FilterChip['category']; label: string }[] = [
-  { key: 'ep',   label: 'Episode' },
-  { key: 'path', label: 'Path' },
-];
-
 // Match a trailing prefix token at end of input
-const FACT_PREFIX_RE = /(?:^|\s)(domain|entity|type|path):(\S*)$/;
-const HISTORY_PREFIX_RE = /(?:^|\s)(ep|path):(\S*)$/;
+const FACT_PREFIX_RE = /(?:^|\s)(domain|entity|type|kind|path):(\S*)$/;
 
 export function FilterBar({ state, dispatch }: Props) {
-  const isHistory = state.view === 'history';
-  const CATEGORIES = isHistory ? HISTORY_CATEGORIES : FACT_CATEGORIES;
-  const PREFIX_RE = isHistory ? HISTORY_PREFIX_RE : FACT_PREFIX_RE;
+  const CATEGORIES = FACT_CATEGORIES;
+  const PREFIX_RE = FACT_PREFIX_RE;
 
   const [inputValue, setInputValue]               = useState('');
   const [suggestions, setSuggestions]             = useState<string[]>([]);
@@ -61,7 +55,7 @@ export function FilterBar({ state, dispatch }: Props) {
       window.clearTimeout(debounceRef.current);
       debounceRef.current = window.setTimeout(async () => {
         try {
-          const res = await api.completions(state.repo, category, prefix);
+          const res = await api.completions(state.repo, state.branch, category, prefix);
           setSuggestions(res.values || []);
           setSuggestIdx(0);
         } catch {
@@ -144,9 +138,11 @@ export function FilterBar({ state, dispatch }: Props) {
     }
 
     if (e.key === 'Enter' || e.key === ' ') {
-      const { chips, text } = parseFilterQuery(inputValue);
-      if (chips.length > 0) {
+      const { chips, text, asOf, warnings } = parseFilterQuery(inputValue, () => state.headCommit);
+      warnings.forEach(w => dispatch({ type: 'CONSOLE_LOG', level: 'error', message: `[filter] ${w}` }));
+      if (asOf || chips.length > 0) {
         e.preventDefault();
+        if (asOf) dispatch({ type: 'SET_AS_OF', asOf });
         chips.forEach(chip => dispatch({ type: 'ADD_FILTER', chip }));
         setInputValue(text);
       } else if (e.key === 'Enter' && inputValue.trim()) {
@@ -183,7 +179,7 @@ export function FilterBar({ state, dispatch }: Props) {
     setCategorySearch('');
     if (cat === 'path') setPathPrefix(prefix);
     try {
-      const res = await api.completions(state.repo, cat, prefix);
+      const res = await api.completions(state.repo, state.branch, cat, prefix);
       setCategoryValues(res.values || []);
     } catch {
       setCategoryValues([]);
@@ -193,7 +189,7 @@ export function FilterBar({ state, dispatch }: Props) {
   function drillIntoPath(dir: string) {
     setPathPrefix(dir);
     setCategorySearch('');
-    api.completions(state.repo, 'path', dir + '/').then(res => {
+    api.completions(state.repo, state.branch, 'path', dir + '/').then(res => {
       setCategoryValues(res.values || []);
     }).catch(() => setCategoryValues([]));
   }
@@ -353,7 +349,7 @@ export function FilterBar({ state, dispatch }: Props) {
                       ? pathPrefix + '/' + e.target.value
                       : e.target.value;
                     const seq = ++catSearchSeqRef.current;
-                    api.completions(state.repo, activeCategory, prefix).then(res => {
+                    api.completions(state.repo, state.branch, activeCategory, prefix).then(res => {
                       if (seq === catSearchSeqRef.current) setCategoryValues(res.values || []);
                     }).catch(() => {});
                   }}
@@ -437,7 +433,32 @@ export function FilterBar({ state, dispatch }: Props) {
             gap: 4,
             userSelect: 'none',
           }}>
-            {chip.category}:{chip.value}
+            {chip.category === 'path' ? (
+              <span style={{ display: 'inline-flex', alignItems: 'center' }}>
+                <span style={{ opacity: 0.6 }}>path:</span>
+                {chip.value.split('/').map((seg, si, segs) => {
+                  const isLast = si === segs.length - 1;
+                  const ancestor = segs.slice(0, si + 1).join('/');
+                  return (
+                    <span key={si} style={{ display: 'inline-flex', alignItems: 'center' }}>
+                      {si > 0 && <span style={{ opacity: 0.4, margin: '0 2px' }}>/</span>}
+                      {isLast ? (
+                        <span style={{ color: '#fff', fontWeight: 600 }}>{seg}</span>
+                      ) : (
+                        <span
+                          role="button"
+                          title={`Go to ${ancestor}`}
+                          onClick={() => dispatch({ type: 'ADD_FILTER', chip: { category: 'path', value: ancestor } })}
+                          style={{ cursor: 'pointer', textDecoration: 'underline dotted' }}
+                        >{seg}</span>
+                      )}
+                    </span>
+                  );
+                })}
+              </span>
+            ) : (
+              <>{chip.category}:{chip.value}</>
+            )}
             <span
               style={{ color: colors.close, cursor: 'pointer', fontWeight: 'bold', lineHeight: '1' }}
               onClick={() => dispatch({ type: 'REMOVE_FILTER', index: i })}
@@ -495,7 +516,7 @@ export function FilterBar({ state, dispatch }: Props) {
             setInputValue('');
           }}
           placeholder={state.filters.length === 0 && !state.freeText
-            ? (isHistory ? 'Search commits... (ep:learn or free text)' : 'Filter... (domain:x entity:y or free text)')
+            ? 'Filter... (domain:x entity:y or free text)'
             : ''}
           style={{
             width: '100%',

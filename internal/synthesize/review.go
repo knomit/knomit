@@ -6,7 +6,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
+	"time"
 
 	"knomit/internal/fact"
 	"knomit/internal/llm"
@@ -17,21 +19,27 @@ import (
 )
 
 // Reviewer orchestrates multi-turn review sessions.
+// Reviewer is a stateless dispatcher over a single MCP call. Session-scoped
+// state — including whether the reflect step has been considered for a given
+// session — lives on the pipeline_sessions row, not on this struct. The MCP
+// handler constructs a fresh Reviewer per call; any per-session field on
+// this struct would silently lose state between calls.
 type Reviewer struct {
-	ri             *repos.RepoInstance
-	onProgress     func(ProgressEvent)
-	reflectChecked map[string]bool
+	ri         *repos.RepoInstance
+	onProgress func(ProgressEvent)
 }
 
-// NewReviewer creates a new review orchestrator.
+// NewReviewer creates a new review orchestrator. ScopedCluster reaches the
+// cache via store.SearchIndex.CachedClusterFacts on the per-repo Service;
+// no separate cache parameter is threaded through the synthesize layer.
 func NewReviewer(ri *repos.RepoInstance, onProgress func(ProgressEvent)) *Reviewer {
 	if onProgress == nil {
 		onProgress = func(ProgressEvent) {}
 	}
-	return &Reviewer{ri: ri, onProgress: onProgress, reflectChecked: make(map[string]bool)}
+	return &Reviewer{ri: ri, onProgress: onProgress}
 }
 
-// storeIndices returns the four store indices under the repo read lock.
+// storeIndices returns the store indices under the repo read lock.
 func (r *Reviewer) storeIndices() (store.FactIndex, store.SearchIndex, store.PipelineIndex, store.BranchIndex) {
 	var gs store.FactIndex
 	var idx store.SearchIndex
@@ -46,44 +54,56 @@ func (r *Reviewer) storeIndices() (store.FactIndex, store.SearchIndex, store.Pip
 	return gs, idx, pipelineIdx, branches
 }
 
-func (r *Reviewer) branch() string {
-	return r.ri.AgentBranch()
-}
-
 // StartSession creates a new review session, identifies dirty facts, clusters
 // them, stores work items, and returns the first item to review.
+//
+// This is the boundary at which the agent branch is bound to the
+// session: the value of ri.AgentBranch() at this moment becomes
+// sess.Branch and travels with the session for the rest of its
+// lifetime. All downstream Reviewer methods read sess.Branch — they
+// never reach back into ri.AgentBranch() — so a session continuing
+// across an AgentBranch change still operates on its original branch.
 func (r *Reviewer) StartSession(ctx context.Context) (*ReviewResult, error) {
+	totalStart := time.Now()
 	gs, idx, pipelineIdx, _ := r.storeIndices()
-	branch := r.branch()
+	branch := r.ri.AgentBranch()
 
 	sess, err := pipelineIdx.CreatePipelineSession(ctx, "review", branch)
 	if err != nil {
 		return nil, fmt.Errorf("review: create session: %w", err)
 	}
 
+	t := time.Now()
 	seeds, err := r.dirtyFacts(ctx, branch, gs, idx, pipelineIdx)
 	if err != nil {
 		return nil, fmt.Errorf("review: dirty facts: %w", err)
 	}
+	log.Info().Str("session", sess.ID).Int("seeds", len(seeds)).Dur("elapsed", time.Since(t)).Msg("review: dirty facts")
 
 	if len(seeds) == 0 {
 		return r.completeSession(ctx, sess)
 	}
 
 	// Build scoped clusters.
-	clusters, err := ScopedCluster(ctx, seeds, idx, 1.0, r.onProgress, branch)
+	t = time.Now()
+	clusters, err := ScopedCluster(ctx, seeds, idx, r.ri.ClusterResolution(), r.ri.ClusterMinCommunitySize(), r.onProgress, branch)
 	if err != nil {
 		return nil, fmt.Errorf("review: cluster: %w", err)
 	}
+	log.Info().Str("session", sess.ID).Int("clusters", len(clusters)).Dur("elapsed", time.Since(t)).Msg("review: clustering done")
 
 	// Dedup pass: merge near-duplicates within each cluster before enqueueing.
+	// The near-duplicate floor is model-dependent (see internal/retrieval).
+	t = time.Now()
+	dedupThreshold := store.EmbedderThresholds(r.ri.Embedder()).Dedup
 	for i := range clusters {
-		surviving, err := dedupCluster(context.Background(), clusters[i], gs, idx, 0.92, "review", r.onProgress, branch, r.ri.Embedder())
+		surviving, err := dedupCluster(ctx, clusters[i], gs, idx, dedupThreshold, "review", r.onProgress, branch)
 		if err != nil {
 			return nil, fmt.Errorf("review: dedup cluster %d: %w", i, err)
 		}
 		clusters[i] = surviving
 	}
+	log.Info().Str("session", sess.ID).Int("clusters", len(clusters)).Dur("elapsed", time.Since(t)).Msg("review: dedup done")
 	// Filter to clusters with > 1 fact (nothing for LLM to reason about with just 1).
 	var pruneClusters [][]factForLLM
 	for _, c := range clusters {
@@ -128,17 +148,21 @@ func (r *Reviewer) StartSession(ctx context.Context) (*ReviewResult, error) {
 		}
 	}
 
-	log.Info().Str("session", sess.ID).Int("clusters", len(pruneClusters)).Int("seeds", len(seeds)).Msg("review: session started")
+	log.Info().
+		Str("session", sess.ID).
+		Int("prune_clusters", len(pruneClusters)).
+		Int("seeds", len(seeds)).
+		Dur("total", time.Since(totalStart)).
+		Msg("review: session started")
 	r.onProgress(ProgressEvent{Phase: "review-start", Message: fmt.Sprintf("session %s: %d clusters, %d seeds", sess.ID, len(pruneClusters), len(seeds))})
 
-	return r.nextItem(ctx, sess.ID)
+	return r.nextItem(ctx, sess)
 }
 
 // ContinueSession processes the model's response for the current work item
 // and returns the next item, or done if the session is complete.
 func (r *Reviewer) ContinueSession(ctx context.Context, sessionID, response string) (*ReviewResult, error) {
 	gs, idx, pipelineIdx, _ := r.storeIndices()
-	branch := r.branch()
 
 	sess, err := pipelineIdx.GetPipelineSession(ctx, sessionID)
 	if err != nil {
@@ -150,6 +174,9 @@ func (r *Reviewer) ContinueSession(ctx context.Context, sessionID, response stri
 	if sess.Status != "active" {
 		return nil, fmt.Errorf("review: session %q is %s, not active", sessionID, sess.Status)
 	}
+	// Use the session's recorded branch — the session was bound to that
+	// branch at creation; do not reach into the live AgentBranch.
+	branch := sess.Branch
 
 	// Get the current (unanswered) work item.
 	item, err := pipelineIdx.NextPipelineWorkItem(ctx, sessionID)
@@ -157,15 +184,35 @@ func (r *Reviewer) ContinueSession(ctx context.Context, sessionID, response stri
 		return nil, fmt.Errorf("review: next work item: %w", err)
 	}
 	if item == nil {
-		// No unanswered items — session should be done already.
-		return r.completeSession(ctx, sess)
+		// No unanswered items — let the dispatcher handle phase advancement
+		// (work→reflect→done as appropriate). Don't short-circuit to
+		// completeSession: that would skip the reflect phase entirely on
+		// sessions where the last work item was just answered out-of-band.
+		return r.nextItem(ctx, sess)
 	}
 
 	// Apply based on step type.
 	switch item.StepType {
 	case "reflect":
-		// Reflect responses are informational — the agent writes methodology facts
-		// via knomit_learn. No server-side action needed.
+		var transitions []hypothesisTransition
+		if err := json.Unmarshal([]byte(item.FactsJSON), &transitions); err != nil {
+			return nil, fmt.Errorf("review: unmarshal transitions: %w", err)
+		}
+		transitionPaths := make([]string, len(transitions))
+		for i, t := range transitions {
+			transitionPaths[i] = t.Path
+		}
+		parsed, err := parseReflectResponse(response)
+		if err != nil {
+			return nil, fmt.Errorf("review: parse reflect response: %w", err)
+		}
+		if err := validateReflectResponse(parsed, transitionPaths, reflectProposeCap()); err != nil {
+			return nil, fmt.Errorf("review: validate reflect: %w", err)
+		}
+		if err := ApplyReflectDecisions(ctx, gs, idx, parsed, sess,
+			r.ri.OntologyRoot(), reflectNoveltyThreshold(store.EmbedderThresholds(r.ri.Embedder()).ReflectNovelty), r.onProgress); err != nil {
+			return nil, fmt.Errorf("review: apply reflect: %w", err)
+		}
 
 	case "prune":
 		var facts []factForLLM
@@ -183,7 +230,7 @@ func (r *Reviewer) ContinueSession(ctx context.Context, sessionID, response stri
 		if err := validatePrunePaths(result, inputPaths); err != nil {
 			return nil, fmt.Errorf("review: validate prune: %w", err)
 		}
-		if _, err := ApplyPruneDecisions(ctx, gs, result.Decisions, result.Merges, "review", r.onProgress, branch); err != nil {
+		if _, err := ApplyPruneDecisions(ctx, gs, result.Decisions, result.Merges, "review", r.onProgress, branch, r.ri.OntologyRoot()); err != nil {
 			return nil, fmt.Errorf("review: apply prune: %w", err)
 		}
 
@@ -203,7 +250,7 @@ func (r *Reviewer) ContinueSession(ctx context.Context, sessionID, response stri
 		if err := validateDistillPaths(result, inputPaths); err != nil {
 			return nil, fmt.Errorf("review: validate distill: %w", err)
 		}
-		_, writtenFacts, err := ApplyDistillDecisions(ctx, gs, result.Synthesize, result.Retract, "review", r.onProgress, branch)
+		_, writtenFacts, err := ApplyDistillDecisions(ctx, gs, result.Synthesize, result.Retract, "review", r.onProgress, branch, r.ri.OntologyRoot())
 		if err != nil {
 			return nil, fmt.Errorf("review: apply distill: %w", err)
 		}
@@ -222,7 +269,7 @@ func (r *Reviewer) ContinueSession(ctx context.Context, sessionID, response stri
 			}
 
 			// Cluster the new facts to find groups worth distilling further.
-			raptorClusters, clErr := ScopedCluster(ctx, newFacts, idx, 1.0, r.onProgress, branch, "hypothesis")
+			raptorClusters, clErr := ScopedCluster(ctx, newFacts, idx, r.ri.ClusterResolution(), r.ri.ClusterMinCommunitySize(), r.onProgress, branch, "hypothesis")
 			if clErr != nil {
 				log.Warn().Err(clErr).Msg("review: RAPTOR clustering failed")
 			} else {
@@ -256,7 +303,7 @@ func (r *Reviewer) ContinueSession(ctx context.Context, sessionID, response stri
 		return nil, fmt.Errorf("review: set response: %w", err)
 	}
 
-	return r.nextItem(ctx, sessionID)
+	return r.nextItem(ctx, sess)
 }
 
 // RunAll drives the review session to completion using an LLM adapter.
@@ -306,8 +353,17 @@ func (r *Reviewer) dirtyFacts(ctx context.Context, branch string, gs store.FactI
 	}
 
 	// No watermark → first run, all facts are dirty. Use the index (fast).
+	//
+	// Pragmatic facts (policies, heuristics) are excluded: the synthesis
+	// pipeline merges and distills descriptive knowledge, and its output
+	// path in decision.go does not carry Kind through mergedFact/distillFact.
+	// Letting a pragmatic fact in would cause it to be silently rewritten as
+	// epistemic on commit and the original deleted.
 	if watermark == "" {
-		results, err := idx.Search(ctx, branch, store.SearchQuery{Limit: 100_000})
+		results, err := idx.Search(ctx, branch, store.SearchOptions{
+			Limit:        100_000,
+			IncludeKinds: []string{string(fact.Epistemic)},
+		})
 		if err != nil {
 			return nil, fmt.Errorf("search all: %w", err)
 		}
@@ -342,82 +398,174 @@ func (r *Reviewer) dirtyFacts(ctx context.Context, branch string, gs store.FactI
 		if err != nil {
 			continue // deleted or unreadable
 		}
-		fact, err := fact.ParseFact(path, result.Content)
+		f, err := fact.ParseFact(path, result.Content)
 		if err != nil {
 			continue // not a valid fact
 		}
+		if f.Kind != fact.Epistemic {
+			continue // synthesis does not operate on pragmatic facts (see comment above)
+		}
 		seeds = append(seeds, factForLLM{
-			File:       fact.Path(),
-			Title:      fact.Title,
-			Body:       fact.Body,
-			Type:       string(fact.Type),
-			Domain:     fact.Domain,
-			Entities:   fact.Entities,
-			Confidence: fact.Confidence,
-			Sources:    fact.Sources,
+			File:       f.Path(),
+			Title:      f.Title,
+			Body:       f.Body,
+			Type:       string(f.Type),
+			Domain:     f.Domain,
+			Entities:   f.Entities,
+			Confidence: f.Confidence,
+			Sources:    f.Sources,
 		})
 	}
 	return seeds, nil
 }
 
-// nextItem fetches the next unanswered work item, renders its prompt, and
-// returns a ReviewResult. If no items remain, completes the session.
-func (r *Reviewer) nextItem(ctx context.Context, sessionID string) (*ReviewResult, error) {
+// nextItem dispatches based on the session's persistent phase. It is
+// intentionally short — all session-scoped state (including "have we
+// considered enqueueing reflect for this session?") lives on the
+// pipeline_sessions row, not on this Reviewer instance, because the MCP
+// handler constructs a fresh Reviewer per call.
+//
+// sess.Branch is the branch this session was created against; it does not
+// change as the user's live AgentBranch changes during the session.
+func (r *Reviewer) nextItem(ctx context.Context, sess *store.PipelineSession) (*ReviewResult, error) {
+	switch sess.Phase {
+	case "work":
+		return r.handleWorkPhase(ctx, sess)
+	case "reflect":
+		return r.handleReflectPhase(ctx, sess)
+	case "done":
+		return r.completeSession(ctx, sess)
+	default:
+		return nil, fmt.Errorf("review: unknown phase %q on session %s", sess.Phase, sess.ID)
+	}
+}
+
+// handleWorkPhase serves the next prune/distill item if one remains; once
+// the queue is empty, advances the session to phase=reflect and (if any
+// hypothesis transitions occurred) enqueues exactly one reflect item.
+//
+// The work→reflect advance is a CAS on the phase column, so concurrent
+// continuations can't both enqueue: at most one caller's UPDATE matches the
+// "work" guard. The other observes the row already advanced and falls
+// through to the reflect-phase dispatch on the next iteration.
+func (r *Reviewer) handleWorkPhase(ctx context.Context, sess *store.PipelineSession) (*ReviewResult, error) {
 	_, _, pipelineIdx, _ := r.storeIndices()
 
-	item, err := pipelineIdx.NextPipelineWorkItem(ctx, sessionID)
+	item, err := pipelineIdx.NextPipelineWorkItem(ctx, sess.ID)
 	if err != nil {
 		return nil, fmt.Errorf("review: next item: %w", err)
 	}
-
-	if item == nil {
-		// Before completing, check if we should enqueue a reflect step.
-		if !r.reflectChecked[sessionID] {
-			r.reflectChecked[sessionID] = true
-			transitions, tErr := r.findHypothesisTransitions(ctx, sessionID)
-			if tErr != nil {
-				log.Warn().Err(tErr).Msg("review: failed to find hypothesis transitions")
-			}
-			if len(transitions) > 0 {
-				transJSON, _ := json.Marshal(transitions)
-				reflectItem := store.PipelineWorkItem{
-					SessionID:  sessionID,
-					StepType:   "reflect",
-					ClusterKey: "reflect",
-					FactsJSON:  string(transJSON),
-					Priority:   -100,
-				}
-				if err := pipelineIdx.InsertPipelineWorkItem(ctx, reflectItem); err != nil {
-					log.Warn().Err(err).Msg("review: failed to enqueue reflect item")
-				} else {
-					// Recurse to fetch the just-enqueued reflect item.
-					return r.nextItem(ctx, sessionID)
-				}
-			}
-		}
-		sess, err := pipelineIdx.GetPipelineSession(ctx, sessionID)
-		if err != nil {
-			return nil, fmt.Errorf("review: get session for complete: %w", err)
-		}
-		return r.completeSession(ctx, sess)
+	if item != nil {
+		return r.renderWorkItem(ctx, sess, item)
 	}
 
+	advanced, err := pipelineIdx.AdvancePipelineSessionPhase(ctx, sess.ID, "work", "reflect")
+	if err != nil {
+		return nil, fmt.Errorf("review: advance work→reflect: %w", err)
+	}
+	if advanced {
+		log.Info().Str("session", sess.ID).Str("from", "work").Str("to", "reflect").Msg("review: phase transition")
+		if err := r.maybeEnqueueReflectItem(ctx, sess); err != nil {
+			return nil, err
+		}
+	}
+	return r.refetchAndDispatch(ctx, sess.ID)
+}
+
+// handleReflectPhase serves the (single) reflect work item if one is
+// pending, otherwise advances reflect→done and dispatches into completion.
+func (r *Reviewer) handleReflectPhase(ctx context.Context, sess *store.PipelineSession) (*ReviewResult, error) {
+	_, _, pipelineIdx, _ := r.storeIndices()
+
+	item, err := pipelineIdx.NextPipelineWorkItem(ctx, sess.ID)
+	if err != nil {
+		return nil, fmt.Errorf("review: next item: %w", err)
+	}
+	if item != nil {
+		return r.renderWorkItem(ctx, sess, item)
+	}
+
+	advanced, err := pipelineIdx.AdvancePipelineSessionPhase(ctx, sess.ID, "reflect", "done")
+	if err != nil {
+		return nil, fmt.Errorf("review: advance reflect→done: %w", err)
+	}
+	if advanced {
+		log.Info().Str("session", sess.ID).Str("from", "reflect").Str("to", "done").Msg("review: phase transition")
+	}
+	return r.refetchAndDispatch(ctx, sess.ID)
+}
+
+// maybeEnqueueReflectItem inserts a single reflect work item iff there are
+// hypothesis transitions to reflect on. Called only from the winner of the
+// work→reflect CAS, which guarantees at-most-once insertion. A failure to
+// detect transitions is logged but not fatal — the session still advances
+// (matching the pre-fix tolerance).
+func (r *Reviewer) maybeEnqueueReflectItem(ctx context.Context, sess *store.PipelineSession) error {
+	_, _, pipelineIdx, _ := r.storeIndices()
+
+	transitions, err := r.findHypothesisTransitions(ctx, sess)
+	if err != nil {
+		log.Warn().Err(err).Str("session", sess.ID).Msg("review: failed to find hypothesis transitions")
+		return nil
+	}
+	if len(transitions) == 0 {
+		return nil
+	}
+	transJSON, err := json.Marshal(transitions)
+	if err != nil {
+		return fmt.Errorf("review: marshal transitions: %w", err)
+	}
+	return pipelineIdx.InsertPipelineWorkItem(ctx, store.PipelineWorkItem{
+		SessionID:  sess.ID,
+		StepType:   "reflect",
+		ClusterKey: "reflect",
+		FactsJSON:  string(transJSON),
+		Priority:   -100,
+	})
+}
+
+// refetchAndDispatch reloads the session row and re-enters nextItem so the
+// dispatcher sees the post-advance phase. Used after a phase transition or
+// when the in-memory phase value may be stale.
+func (r *Reviewer) refetchAndDispatch(ctx context.Context, sessionID string) (*ReviewResult, error) {
+	_, _, pipelineIdx, _ := r.storeIndices()
+	fresh, err := pipelineIdx.GetPipelineSession(ctx, sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("review: refetch session: %w", err)
+	}
+	if fresh == nil {
+		return nil, fmt.Errorf("review: session %q disappeared mid-dispatch", sessionID)
+	}
+	return r.nextItem(ctx, fresh)
+}
+
+// renderWorkItem builds a ReviewResult for the given work item — prompt,
+// schema, progress counts. Pure rendering; the dispatcher decides whether
+// to call this or advance the phase.
+func (r *Reviewer) renderWorkItem(ctx context.Context, sess *store.PipelineSession, item *store.PipelineWorkItem) (*ReviewResult, error) {
+	_, _, pipelineIdx, _ := r.storeIndices()
+	branch := sess.Branch
+	ontologyRoot := r.ri.OntologyRoot()
+
 	var content *WorkItemContent
+	var err error
 	switch item.StepType {
 	case "prune":
 		var facts []factForLLM
 		if err := json.Unmarshal([]byte(item.FactsJSON), &facts); err != nil {
 			return nil, fmt.Errorf("review: unmarshal facts for prompt: %w", err)
 		}
-		content, err = RenderPruneWorkItem(facts)
+		content, err = RenderPruneWorkItem(facts, ontologyRoot)
 	case "distill":
 		var facts []factForLLM
 		if err := json.Unmarshal([]byte(item.FactsJSON), &facts); err != nil {
 			return nil, fmt.Errorf("review: unmarshal facts for prompt: %w", err)
 		}
-		content, err = RenderDistillWorkItem(facts)
+		applicableMethodology := r.loadDistillMethodology(ctx, branch, facts)
+		content, err = RenderDistillWorkItem(facts, ontologyRoot, applicableMethodology)
 	case "reflect":
-		content, err = RenderReflectWorkItem([]byte(item.FactsJSON))
+		existingMethodology := r.loadReflectMethodology(ctx, branch, []byte(item.FactsJSON))
+		content, err = RenderReflectWorkItem([]byte(item.FactsJSON), ontologyRoot, existingMethodology)
 	default:
 		return nil, fmt.Errorf("review: unknown step type %q", item.StepType)
 	}
@@ -425,13 +573,13 @@ func (r *Reviewer) nextItem(ctx context.Context, sessionID string) (*ReviewResul
 		return nil, fmt.Errorf("review: render %s prompt: %w", item.StepType, err)
 	}
 
-	completed, remaining, err := pipelineIdx.PipelineWorkItemStats(ctx, sessionID)
+	completed, remaining, err := pipelineIdx.PipelineWorkItemStats(ctx, sess.ID)
 	if err != nil {
 		return nil, fmt.Errorf("review: work item stats: %w", err)
 	}
 
 	return &ReviewResult{
-		SessionID: sessionID,
+		SessionID: sess.ID,
 		Item: &ReviewItem{
 			Type:           item.StepType,
 			Prompt:         content.Prompt,
@@ -445,9 +593,11 @@ func (r *Reviewer) nextItem(ctx context.Context, sessionID string) (*ReviewResul
 }
 
 // completeSession marks the session done and advances the watermark.
+// Branch comes from sess.Branch — the recorded branch the session was
+// created against — so HEAD lookup and watermark advance are consistent.
 func (r *Reviewer) completeSession(ctx context.Context, sess *store.PipelineSession) (*ReviewResult, error) {
 	_, _, pipelineIdx, branches := r.storeIndices()
-	branch := r.branch()
+	branch := sess.Branch
 
 	if err := pipelineIdx.CompletePipelineSession(ctx, sess.ID); err != nil {
 		return nil, fmt.Errorf("review: complete session: %w", err)
@@ -457,7 +607,7 @@ func (r *Reviewer) completeSession(ctx context.Context, sess *store.PipelineSess
 	if err != nil {
 		log.Warn().Err(err).Msg("review: could not get HEAD for watermark")
 	} else {
-		if err := pipelineIdx.SetPipelineWatermark(ctx, "review", sess.Branch, headHash); err != nil {
+		if err := pipelineIdx.SetPipelineWatermark(ctx, "review", branch, headHash); err != nil {
 			log.Warn().Err(err).Msg("review: could not advance watermark")
 		}
 	}
@@ -478,6 +628,137 @@ func (r *Reviewer) completeSession(ctx context.Context, sess *store.PipelineSess
 	}, nil
 }
 
+// methodologyTopK is the per-fact retrieval depth and the final merged-list
+// cap; both share one knob since callers want "show up to N methodologies"
+// in the prompt regardless of cluster size.
+const methodologyTopK = 3
+
+// loadReflectMethodology retrieves methodology relevant to each transitioned
+// hypothesis fact independently, then merges the per-fact results (keeping
+// the highest score per methodology path). Returns "" on any failure (logged)
+// or when no methodology matches.
+//
+// branch is required (no implicit AgentBranch fallback): callers pass the
+// session's recorded branch so retrieval lands on the same branch the
+// session was created against.
+func (r *Reviewer) loadReflectMethodology(ctx context.Context, branch string, transitionsJSON []byte) string {
+	var ts []hypothesisTransition
+	if err := json.Unmarshal(transitionsJSON, &ts); err != nil {
+		log.Warn().Err(err).Msg("loadReflectMethodology: transitions JSON malformed; skipping methodology section")
+		return ""
+	}
+	if len(ts) == 0 {
+		return ""
+	}
+
+	var merged []store.MethodologyMatch
+	r.ri.WithRead(func(svc *store.Service) {
+		if svc == nil {
+			log.Error().Str("branch", branch).Msg("loadReflectMethodology: nil store service; methodology disabled")
+			return
+		}
+		minScore := r.ri.MethodologyMinScore()
+		seen := map[string]store.MethodologyMatch{}
+		for _, t := range ts {
+			if err := ctx.Err(); err != nil {
+				log.Warn().Err(err).Str("branch", branch).Str("path", t.Path).
+					Msg("loadReflectMethodology: ctx canceled mid-iteration")
+				return
+			}
+			f, err := svc.Search().GetByPath(ctx, branch, t.Path)
+			if err != nil {
+				log.Warn().Err(err).Str("branch", branch).Str("path", t.Path).
+					Msg("loadReflectMethodology: transition fact lookup failed; skipping")
+				continue
+			}
+			if f == nil {
+				continue
+			}
+			matches, mErr := svc.Search().RelevantMethodologyForFact(
+				ctx, branch, f.Path, f.Domain, f.Entities, methodologyTopK, minScore,
+			)
+			if mErr != nil {
+				log.Warn().Err(mErr).Str("branch", branch).Str("path", f.Path).
+					Msg("loadReflectMethodology: per-fact retrieval failed; skipping")
+				continue
+			}
+			for _, m := range matches {
+				if existing, ok := seen[m.Path]; !ok || m.Score > existing.Score {
+					seen[m.Path] = m
+				}
+			}
+		}
+		merged = topKByScore(seen, methodologyTopK)
+	})
+	return store.FormatMethodologySection(merged)
+}
+
+// loadDistillMethodology retrieves methodology relevant to each input fact
+// independently, then merges the per-fact results. Returns "" on failure
+// (logged) or when no methodology matches.
+//
+// branch is required (no implicit AgentBranch fallback).
+func (r *Reviewer) loadDistillMethodology(ctx context.Context, branch string, facts []factForLLM) string {
+	if len(facts) == 0 {
+		return ""
+	}
+
+	var merged []store.MethodologyMatch
+	r.ri.WithRead(func(svc *store.Service) {
+		if svc == nil {
+			log.Error().Str("branch", branch).Msg("loadDistillMethodology: nil store service; methodology disabled")
+			return
+		}
+		minScore := r.ri.MethodologyMinScore()
+		seen := map[string]store.MethodologyMatch{}
+		for _, f := range facts {
+			if err := ctx.Err(); err != nil {
+				log.Warn().Err(err).Str("branch", branch).Str("path", f.File).
+					Msg("loadDistillMethodology: ctx canceled mid-iteration")
+				return
+			}
+			matches, mErr := svc.Search().RelevantMethodologyForFact(
+				ctx, branch, f.File, f.Domain, f.Entities, methodologyTopK, minScore,
+			)
+			if mErr != nil {
+				log.Warn().Err(mErr).Str("branch", branch).Str("path", f.File).
+					Msg("loadDistillMethodology: per-fact retrieval failed; skipping")
+				continue
+			}
+			for _, m := range matches {
+				if existing, ok := seen[m.Path]; !ok || m.Score > existing.Score {
+					seen[m.Path] = m
+				}
+			}
+		}
+		merged = topKByScore(seen, methodologyTopK)
+	})
+	return store.FormatMethodologySection(merged)
+}
+
+// topKByScore returns the up-to-k MethodologyMatch values from seen,
+// sorted descending by Score. SQL row order is not preserved across the
+// map iteration; ties are broken by Path for determinism.
+func topKByScore(seen map[string]store.MethodologyMatch, k int) []store.MethodologyMatch {
+	if len(seen) == 0 {
+		return nil
+	}
+	out := make([]store.MethodologyMatch, 0, len(seen))
+	for _, m := range seen {
+		out = append(out, m)
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].Score != out[j].Score {
+			return out[i].Score > out[j].Score
+		}
+		return out[i].Path < out[j].Path
+	})
+	if k > 0 && len(out) > k {
+		out = out[:k]
+	}
+	return out
+}
+
 // hypothesisTransition records a change to a hypothesis fact during a review session.
 type hypothesisTransition struct {
 	Path         string `json:"path"`
@@ -487,20 +768,17 @@ type hypothesisTransition struct {
 }
 
 // findHypothesisTransitions detects hypothesis facts that were promoted,
-// retracted, or had their confidence changed during the current review session.
-func (r *Reviewer) findHypothesisTransitions(ctx context.Context, sessionID string) ([]hypothesisTransition, error) {
+// retracted, or had their confidence changed during the given review
+// session. All branch reads use sess.Branch — the session's recorded
+// branch — so the diff is consistent with the session's scope.
+func (r *Reviewer) findHypothesisTransitions(ctx context.Context, sess *store.PipelineSession) ([]hypothesisTransition, error) {
 	gs, _, pipelineIdx, _ := r.storeIndices()
-	branch := r.branch()
-
-	sess, err := pipelineIdx.GetPipelineSession(ctx, sessionID)
-	if err != nil || sess == nil {
-		return nil, err
-	}
+	branch := sess.Branch
 
 	// Read the watermark set at the end of the previous session.
 	// Since we haven't advanced it yet (that happens in completeSession),
 	// all commits between here and HEAD are changes made during this session.
-	watermark, err := pipelineIdx.GetPipelineWatermark(ctx, "review", sess.Branch)
+	watermark, err := pipelineIdx.GetPipelineWatermark(ctx, "review", branch)
 	if err != nil || watermark == "" {
 		return nil, err
 	}

@@ -32,18 +32,196 @@ func DefaultOntology() *Ontology {
 	return defaultOntology
 }
 
+//go:embed ontology_code.yaml
+var codeOntologyYAML []byte
+
+var (
+	codeOntology     *Ontology
+	codeOntologyOnce sync.Once
+)
+
+// CodeOntology returns the embedded source-code ontology preset.
+// It panics if the embedded YAML is invalid.
+func CodeOntology() *Ontology {
+	codeOntologyOnce.Do(func() {
+		o, err := ParseOntology(codeOntologyYAML)
+		if err != nil {
+			panic(fmt.Sprintf("embedded code ontology is invalid: %v", err))
+		}
+		codeOntology = o
+	})
+	return codeOntology
+}
+
+// OntologyByPreset returns one of the embedded ontology presets by name.
+// Known presets: "default", "code".
+func OntologyByPreset(name string) (*Ontology, error) {
+	switch name {
+	case "default":
+		return DefaultOntology(), nil
+	case "code":
+		return CodeOntology(), nil
+	default:
+		return nil, fmt.Errorf("unknown ontology preset: %q", name)
+	}
+}
+
+// EmbeddedPresetByID returns the embedded preset whose ontology id matches
+// the given id, or nil if no preset matches. Used by boot-time refresh to
+// determine whether a stored ontology is derived from a known preset and
+// therefore a candidate for auto-upgrade.
+func EmbeddedPresetByID(id string) *Ontology {
+	switch id {
+	case "general":
+		return DefaultOntology()
+	case "source-code":
+		return CodeOntology()
+	default:
+		return nil
+	}
+}
+
+// IsSubsetOf returns true if every topic, child, and Validation in o also
+// appears in other (matched by key/name). Used by boot-time refresh to
+// decide whether upgrading to a newer embedded preset is safe — if the
+// stored ontology is a strict subset, the preset can only add, never break.
+//
+// Validations are matched by Name only — rule body and message differences
+// don't block an upgrade (this is how a preset would deliver bug fixes to
+// existing rules).
+func (o *Ontology) IsSubsetOf(other *Ontology) bool {
+	if o == nil || other == nil {
+		return false
+	}
+	// Root-level validations: every name in o must exist in other.
+	if !validationsSubset(o.Validations, other.Validations) {
+		return false
+	}
+	// Every topic in o must exist in other, recursively.
+	for key, node := range o.Topics {
+		otherNode, ok := other.Topics[key]
+		if !ok {
+			return false
+		}
+		if !nodeIsSubsetOf(node, otherNode) {
+			return false
+		}
+	}
+	return true
+}
+
+// nodeIsSubsetOf returns true if every Validation and child in n also
+// appears in other.
+func nodeIsSubsetOf(n, other *OntologyNode) bool {
+	if n == nil {
+		return true
+	}
+	if other == nil {
+		return false
+	}
+	if !validationsSubset(n.Validations, other.Validations) {
+		return false
+	}
+	for key, child := range n.Children {
+		otherChild, ok := other.Children[key]
+		if !ok {
+			return false
+		}
+		if !nodeIsSubsetOf(child, otherChild) {
+			return false
+		}
+	}
+	return true
+}
+
+// validationsSubset returns true if every Validation Name in a appears as a
+// Validation Name in b. Rule body and Message are not compared.
+func validationsSubset(a, b []Validation) bool {
+	if len(a) == 0 {
+		return true
+	}
+	names := make(map[string]struct{}, len(b))
+	for _, v := range b {
+		names[v.Name] = struct{}{}
+	}
+	for _, v := range a {
+		if _, ok := names[v.Name]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
 // Ontology defines a hierarchical taxonomy for organizing knowledge.
 type Ontology struct {
 	ID          string                   `yaml:"id"`
 	Name        string                   `yaml:"name"`
 	Description string                   `yaml:"description"`
 	Topics      map[string]*OntologyNode `yaml:"topics"`
+	Validations []Validation             `yaml:"validations,omitempty"`
+
+	cache compiledRulesCache
+}
+
+// compiledRulesCache holds compiled rules keyed by topic path. Built once
+// at ParseOntology time; safe for concurrent reads thereafter.
+type compiledRulesCache struct {
+	byTopic      map[string][]compiledRule
+	compileCalls int // test hook — incremented once at build time
+}
+
+// buildRulesCache compiles every Validation rule in the ontology (root +
+// every node) and stores the result in o.cache. Called once at parse time.
+// Returns an error if any rule fails to compile.
+func (o *Ontology) buildRulesCache() error {
+	o.cache = compiledRulesCache{
+		byTopic: map[string][]compiledRule{},
+	}
+	o.cache.compileCalls++
+
+	if rs, err := compileRules("<root>", o.Validations); err != nil {
+		return err
+	} else if len(rs) > 0 {
+		o.cache.byTopic["<root>"] = rs
+	}
+
+	var walk func(prefix string, n *OntologyNode) error
+	walk = func(prefix string, n *OntologyNode) error {
+		if n == nil {
+			return nil
+		}
+		if rs, err := compileRules(prefix, n.Validations); err != nil {
+			return err
+		} else if len(rs) > 0 {
+			o.cache.byTopic[prefix] = rs
+		}
+		for k, c := range n.Children {
+			if err := walk(prefix+"/"+k, c); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	for k, n := range o.Topics {
+		if err := walk(k, n); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // OntologyNode is a single node in the ontology tree.
 type OntologyNode struct {
 	Description string                   `yaml:"description"`
 	Children    map[string]*OntologyNode `yaml:"children,omitempty"`
+	Validations []Validation             `yaml:"validations,omitempty"`
+}
+
+// Validation is one ontology-declared rule evaluated against a fact on write.
+type Validation struct {
+	Name    string `yaml:"name"`
+	Message string `yaml:"message"`
+	Rule    string `yaml:"rule"`
 }
 
 // validKeyRe matches lowercase kebab-case identifiers.
@@ -73,6 +251,9 @@ func ParseOntology(data []byte) (*Ontology, error) {
 				return nil, err
 			}
 		}
+	}
+	if err := o.buildRulesCache(); err != nil {
+		return nil, err
 	}
 	return &o, nil
 }
@@ -125,6 +306,9 @@ func (o *Ontology) Serialize() ([]byte, error) {
 	if o.Description != "" {
 		addScalar(root, "description", o.Description)
 	}
+	if len(o.Validations) > 0 {
+		serializeValidations(root, o.Validations)
+	}
 
 	topicsKey := &yaml.Node{Kind: yaml.ScalarNode, Value: "topics"}
 	topicsVal := &yaml.Node{Kind: yaml.MappingNode}
@@ -153,6 +337,10 @@ func serializeNode(parent *yaml.Node, key string, node *OntologyNode) {
 
 	addScalar(valNode, "description", node.Description)
 
+	if len(node.Validations) > 0 {
+		serializeValidations(valNode, node.Validations)
+	}
+
 	if len(node.Children) > 0 {
 		childKey := &yaml.Node{Kind: yaml.ScalarNode, Value: "children"}
 		childVal := &yaml.Node{Kind: yaml.MappingNode}
@@ -160,6 +348,22 @@ func serializeNode(parent *yaml.Node, key string, node *OntologyNode) {
 		for _, ck := range sortedKeys(node.Children) {
 			serializeNode(childVal, ck, node.Children[ck])
 		}
+	}
+}
+
+func serializeValidations(parent *yaml.Node, vs []Validation) {
+	if len(vs) == 0 {
+		return
+	}
+	key := &yaml.Node{Kind: yaml.ScalarNode, Value: "validations"}
+	seq := &yaml.Node{Kind: yaml.SequenceNode}
+	parent.Content = append(parent.Content, key, seq)
+	for _, v := range vs {
+		item := &yaml.Node{Kind: yaml.MappingNode}
+		addScalar(item, "name", v.Name)
+		addScalar(item, "message", v.Message)
+		addScalar(item, "rule", v.Rule)
+		seq.Content = append(seq.Content, item)
 	}
 }
 

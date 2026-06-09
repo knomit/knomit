@@ -81,7 +81,7 @@ test.describe('Fact View', () => {
     const badgeText = await factPanel.typeBadge.textContent();
     expect(badgeText).toBeTruthy();
     // Should contain one of the known type labels
-    expect(badgeText).toMatch(/observation|concept|process|principle|pattern|reference|synthesis|hypothesis|methodology/);
+    expect(badgeText).toMatch(/observation|concept|process|principle|pattern|reference|synthesis|insight|hypothesis|methodology/);
   });
 
   test('switching facts updates the panel', async () => {

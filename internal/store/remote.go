@@ -4,6 +4,8 @@ import (
 	"database/sql"
 	"fmt"
 	"time"
+
+	"github.com/rs/zerolog/log"
 )
 
 // remoteIndex owns remote configuration and git sync/push operations.
@@ -36,9 +38,24 @@ type Remote struct {
 
 // SetRemote inserts or replaces a remote configuration and wires the git
 // remote in the underlying repository so that Sync and Push can use it
-// immediately. authMethod and authToken are optional; if authToken is
-// non-empty it is encrypted at rest when a Crypt instance is configured.
-func (ri *remoteIndex) SetRemote(name, url, branch string, interval, pushInterval int, authMethod, authToken string) error {
+// immediately.
+//
+// upstreamMain is the remote's consensus branch (typically "main" but
+// configurable to "master" or any other name). It is stored in
+// Remote.Branch and woven into the fetch refspec. Empty defaults to "main"
+// — callers that have already discovered the right name (e.g. via the
+// connectivity-test UI flow) should pass it explicitly.
+//
+// agentBranch is the LOCAL agent branch this machine writes to
+// (e.g. "agent/<host>"); it is woven into the fetch refspec so
+// origin/agent/<host> is tracked alongside origin/<upstreamMain>.
+//
+// authMethod and authToken are optional; if authToken is non-empty it is
+// encrypted at rest when a Crypt instance is configured.
+func (ri *remoteIndex) SetRemote(name, url, upstreamMain, agentBranch string, interval, pushInterval int, authMethod, authToken string) error {
+	if upstreamMain == "" {
+		upstreamMain = "main"
+	}
 	storedToken := authToken
 	if ri.crypt != nil && authToken != "" {
 		enc, err := ri.crypt.encrypt(authToken)
@@ -49,7 +66,7 @@ func (ri *remoteIndex) SetRemote(name, url, branch string, interval, pushInterva
 	}
 	_, err := ri.rh.db.Exec(
 		`INSERT OR REPLACE INTO remotes (name, url, branch, interval, push_interval, auth_method, auth_token) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		name, url, branch, interval, pushInterval, authMethod, storedToken,
+		name, url, upstreamMain, interval, pushInterval, authMethod, storedToken,
 	)
 	if err != nil {
 		return err
@@ -57,7 +74,7 @@ func (ri *remoteIndex) SetRemote(name, url, branch string, interval, pushInterva
 	// Sync the git config so go-git can fetch/push by remote name.
 	// No-op when the repo has not been initialised yet (DB-only mode).
 	if ri.rh.repo != nil {
-		if err := ri.rh.configureRemote(url, branch); err != nil {
+		if err := ri.rh.configureRemote(url, upstreamMain, agentBranch); err != nil {
 			return fmt.Errorf("configure git remote: %w", err)
 		}
 	}
@@ -86,8 +103,16 @@ func (ri *remoteIndex) GetRemote(name string) (*Remote, error) {
 	if ri.crypt != nil && r.AuthToken != "" {
 		dec, decErr := ri.crypt.decrypt(r.AuthToken)
 		if decErr != nil {
-			// May be plaintext from before encryption was enabled — use as-is.
-			_ = decErr
+			// May be plaintext from before encryption was enabled — fall
+			// through and use as-is. We can't distinguish "legacy plaintext"
+			// from "ciphertext we can no longer decrypt" (rotated key,
+			// corruption) without a schema flag, so log at Warn so a real
+			// failure is observable instead of surfacing as a confusing 401
+			// from the remote when the wrong bytes are presented as auth.
+			log.Warn().
+				Err(decErr).
+				Str("remote", r.Name).
+				Msg("remote: token decrypt failed; using stored value as plaintext")
 		} else {
 			r.AuthToken = dec
 		}

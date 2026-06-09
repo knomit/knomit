@@ -55,16 +55,24 @@ Avoid flat categories. "technology" + "react" is too shallow — prefer "technol
 ## Fact Frontmatter
 
 Each fact has YAML frontmatter with:
-- **type**: epistemic type (defaults to "observation" if omitted):
-  - observation: concrete, specific statements ("Alice likes Japanese tea")
-  - concept: definitions, mental models ("Japanese tea culture emphasizes mindfulness")
-  - process: procedures, workflows, how-to ("How to brew matcha")
-  - principle: rules, heuristics, causal claims ("Brew below boiling to avoid bitterness")
-  - pattern: recurring solutions, idioms ("When X, do Y")
-  - reference: specs, measurements, enumerations ("Sencha steeps at 70°C for 60s")
-  - synthesis: higher-order facts derived from other facts (set automatically by the synthesize pipeline)
-  - hypothesis: predictions derived from patterns — carries inherent uncertainty, not grounded in direct observation
-  - methodology: reasoning process lessons learned from hypothesis outcomes (lives in meta/reasoning/)
+- **kind**: classification family (defaults to "epistemic" if omitted):
+  - epistemic: descriptive knowledge — what is
+  - pragmatic: prescriptive knowledge — what to do
+- **type**: leaf type within the chosen kind. Allowed values depend on kind.
+  - epistemic types (default "observation" if omitted):
+    - observation: concrete, specific statements ("Alice likes Japanese tea")
+    - concept: definitions, mental models ("Japanese tea culture emphasizes mindfulness")
+    - process: procedures, workflows, how-to ("How to brew matcha")
+    - principle: rules, causal claims ("Brew below boiling to avoid bitterness")
+    - pattern: recurring solutions, idioms ("When X, do Y")
+    - reference: specs, measurements, enumerations ("Sencha steeps at 70°C for 60s")
+    - synthesis: higher-order facts derived from other facts (set automatically by the synthesize pipeline)
+    - insight: a non-obvious grounded conclusion drawn from connecting facts you already trust ("X and Y together imply Z")
+    - hypothesis: predictions derived from patterns — carries inherent uncertainty, not grounded in direct observation
+    - methodology: reasoning process lessons learned from hypothesis outcomes (lives in meta/reasoning/)
+  - pragmatic types (must be specified — no default):
+    - policy: mandatory rule that should always be followed ("Always rotate secrets quarterly")
+    - heuristic: rule-of-thumb to bias decisions, not absolute ("Prefer small PRs")
 - **domain**: cross-cutting tags from additional classification systems (not the primary ontology path)
 - **entities**: all entities this fact mentions (for search and graph queries)
 - **confidence**: 0.0–1.0 certainty level
@@ -83,7 +91,7 @@ Each fact has YAML frontmatter with:
     - path: "%s/technology/go" → all Go-related facts
     - path: "%s/people/alice" → all facts about Alice
   - min_confidence: minimum confidence threshold (0–1)
-- **knomit_explain**: explain a fact by traversing its provenance graph — follows local refs breadth-first, returning referenced facts as they existed at the root fact's commit time. Returns paginated results. Use file to start, pass cursor for next page. External URL refs are returned for you to inspect.
+- **knomit_explain**: explain a fact by walking its versioned provenance graph. Anchored at a commit — pass commit to explain the fact AS OF that version (the graph is rewound to how it stood then), or omit it for HEAD. Every referenced fact is read at the exact version the referrer pointed to, recursively. The root fact comes back in full with its evolution history (recent revisions + confidence/content diffs); every other fact is a lean summary (no body) flagged summary:true — re-call knomit_explain with that fact's path AND commit to read it in full and walk its subtree. A summary may be flagged deleted:true (source retracted since the edge formed) or superseded:true (source still live but changed since the referrer reasoned over it). Use file to start, pass cursor for next page. External URL refs are returned for you to inspect.
 - **knomit_update**: modify an existing fact's fields
 - **knomit_retract**: remove outdated knowledge
 - **knomit_explore**: browse facts ordered by most recently updated. Returns paginated results (25 per page). Call with no arguments to start; pass the returned cursor to get the next page. Use path to scope to a subtree (e.g. path: "%s/technology"). Use knomit_explain for history on individual facts.
@@ -106,18 +114,17 @@ You may stop at any time — progress is saved and the next session picks up rem
 Call this tool to generate hypotheses from synthesis facts. Works the same way as knomit_review:
 
 1. Call knomit_hypothesize with no arguments to start a session
-2. You'll receive a synthesis fact to investigate
-3. Use knomit_query (with path: "%s/meta/reasoning/" + domain/entity filters) to find applicable methodology
-4. Use knomit_explain on the synthesis fact to trace its provenance
-5. Gather additional evidence as needed
-6. If a hypothesis is warranted, call knomit_learn with type: hypothesis
-7. After writing the hypothesis, call knomit_learn with type: methodology, topic: "meta", category: "reasoning" to record the reasoning process — what worked, what evidence was decisive, which patterns applied, and any pitfalls
-8. Call knomit_hypothesize with session_id to get the next synthesis fact
-9. Repeat until done
+2. You'll receive a synthesis fact to investigate, with applicable methodology already loaded into the work-item instructions
+3. Use knomit_explain on the synthesis fact to trace its provenance
+4. Gather additional evidence as needed
+5. If a hypothesis is warranted, call knomit_learn with type: hypothesis
+6. After writing the hypothesis, call knomit_learn with type: methodology, topic: "meta", category: "reasoning" to record the reasoning process. Set domain and entities to the union of the synthesis fact's tags plus the standard methodology markers (meta, reasoning, methodology) — inherit, don't reinvent.
+7. Call knomit_hypothesize with session_id to get the next synthesis fact
+8. Repeat until done
 
 Hypothesis body must contain: hypothesis statement, evidence chain (with confidence/sources for each cited fact), reasoning step, known gaps, and falsification condition.
 
-Important: hypotheses must only cite observations and synthesis facts as evidence — never other hypotheses.`, ontologyRoot, ontologyRoot, topicList, ontologyRoot, ontologyRoot, ontologyRoot, ontologyRoot, ontologyRoot)
+Important: hypotheses must only cite observations and synthesis facts as evidence — never other hypotheses.`, ontologyRoot, ontologyRoot, topicList, ontologyRoot, ontologyRoot, ontologyRoot, ontologyRoot)
 }
 
 // ProfileInstructions returns the MCP server instructions for the given profile.

@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"knomit/internal/retrieval"
 )
 
 // TestVerify_FreshRepoIsClean asserts that a freshly initialised store with
@@ -165,19 +167,32 @@ func TestVerify_DetectsBranchFactsBlobMismatch(t *testing.T) {
 // so verify_test.go has no testenv dependency.
 type stub768Embedder struct{}
 
-func (e *stub768Embedder) Embed(text string) ([]float32, error) {
+func (e *stub768Embedder) embed(text string) []float32 {
 	out := make([]float32, 768)
 	for i := range 768 {
 		out[i] = float32((len(text)*31+i)%256) / 256.0
 	}
-	return out, nil
+	return out
 }
 
-func (e *stub768Embedder) EmbedBatch(texts []string) ([][]float32, error) {
-	out := make([][]float32, len(texts))
-	for i, t := range texts {
-		v, _ := e.Embed(t)
-		out[i] = v
+func (e *stub768Embedder) EmbedQuery(text string) ([]float32, error) {
+	return e.embed(text), nil
+}
+
+func (e *stub768Embedder) EmbedDocument(title, body string) ([]float32, error) {
+	return e.embed(title + " " + body), nil
+}
+
+func (e *stub768Embedder) Dim() int { return 768 }
+
+func (e *stub768Embedder) ID() string { return "stub768" }
+
+func (e *stub768Embedder) Thresholds() retrieval.Thresholds { return retrieval.Defaults() }
+
+func (e *stub768Embedder) EmbedDocuments(titles, bodies []string) ([][]float32, error) {
+	out := make([][]float32, len(titles))
+	for i := range titles {
+		out[i] = e.embed(titles[i] + " " + bodies[i])
 	}
 	return out, nil
 }

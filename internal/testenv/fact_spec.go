@@ -1,6 +1,8 @@
 package testenv
 
 import (
+	"fmt"
+
 	"knomit/internal/fact"
 )
 
@@ -14,7 +16,8 @@ import (
 type FactSpec struct {
 	title      string
 	body       string
-	typ        fact.EpistemicType
+	kind       fact.Kind
+	typ        fact.Type
 	confidence float64
 	sources    int
 	domain     []string
@@ -32,8 +35,14 @@ func Fact(title string) FactSpec {
 	}
 }
 
-// Type sets the epistemic type.
-func (s FactSpec) Type(t fact.EpistemicType) FactSpec { s.typ = t; return s }
+// Kind sets the fact kind (epistemic or pragmatic). Builder leaves Kind unset
+// by default so SerializeFact applies the historical epistemic default — set
+// this explicitly when building pragmatic facts.
+func (s FactSpec) Kind(k fact.Kind) FactSpec { s.kind = k; return s }
+
+// Type sets the leaf type. The type must be valid for the spec's Kind
+// (defaulting to epistemic); SerializeFact rejects mismatched pairs.
+func (s FactSpec) Type(t fact.Type) FactSpec { s.typ = t; return s }
 
 // Confidence sets the confidence score (typically 0.0–1.0).
 func (s FactSpec) Confidence(c float64) FactSpec { s.confidence = c; return s }
@@ -66,15 +75,24 @@ func (s FactSpec) Body(body string) FactSpec { s.body = body; return s }
 // Build serializes the spec to a fact file body (YAML frontmatter + markdown)
 // using fact.SerializeFact. The path field on the underlying Fact struct is
 // left as a placeholder because the writer sets the real path when committing.
+//
+// Panics on serialize error — Build is a test-side helper and a serialization
+// failure here means the test author constructed a malformed spec, which
+// should fail loudly rather than silently produce empty content.
 func (s FactSpec) Build() string {
 	f := fact.NewFact("placeholder.md")
 	f.Title = s.title
 	f.Body = s.body
+	f.Kind = s.kind
 	f.Type = s.typ
 	f.Confidence = s.confidence
 	f.Sources = s.sources
 	f.Domain = s.domain
 	f.Entities = s.entities
 	f.Refs = s.refs
-	return fact.SerializeFact(f)
+	out, err := fact.SerializeFact(f)
+	if err != nil {
+		panic(fmt.Sprintf("FactSpec.Build: %v", err))
+	}
+	return out
 }

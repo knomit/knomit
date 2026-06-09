@@ -52,9 +52,10 @@ Third fact about the discovery topic.`,
     ];
 
     for (const fact of facts) {
-      const res = await freshKnomit.api.put(`${freshKnomit.baseURL}/api/v1/knomit/fact`, {
-        data: { path: fact.path, content: fact.content },
-      });
+      const res = await freshKnomit.api.put(
+        `${freshKnomit.baseURL}/api/v1/repos/knomit/branches/${freshKnomit.branch}/facts/${fact.path}`,
+        { data: { content: fact.content } },
+      );
       expect(res.ok()).toBeTruthy();
     }
 

@@ -10,13 +10,19 @@ import (
 //go:embed prompts/large/*.txt
 var promptFS embed.FS
 
-// PromptData is the data passed to prompt templates.
+// PromptData is the data passed to prompt templates. OntologyRoot is the
+// configured root (e.g. "kb") under which all generated fact paths must
+// live; templates substitute it into example paths so the LLM receives
+// concrete, validated path conventions instead of hardcoded placeholders.
 type PromptData struct {
-	Facts string
+	Facts                 string
+	OntologyRoot          string
+	ExistingMethodology   string // for reflect_user.txt
+	ApplicableMethodology string // for distill_user.txt
 }
 
 // RenderTemplate loads and renders a prompt template.
-// operation: "prune" or "distill"
+// operation: "prune", "distill", or "reflect"
 // promptType: "system", "user", or "retry"
 func RenderTemplate(operation, promptType string, data PromptData) (string, error) {
 	path := fmt.Sprintf("prompts/large/%s_%s.txt", operation, promptType)

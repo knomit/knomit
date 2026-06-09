@@ -23,6 +23,7 @@ type FactRecord struct {
 	Path           string   `json:"path"`
 	Title          string   `json:"title"`
 	BlobHash       string   `json:"blob_hash"`
+	Kind           string   `json:"kind"`
 	Type           string   `json:"type"`
 	Domain         []string `json:"domain"`
 	Entities       []string `json:"entities"`
@@ -30,15 +31,26 @@ type FactRecord struct {
 	Sources        int      `json:"sources"`
 	Refs           []string `json:"refs"`
 	EvidenceWeight float64  `json:"evidence_weight,omitempty"`
+	SourceCommit   string   `json:"source_commit,omitempty"` // commit at which this version was written
 }
 
 // NewFactRecord constructs a FactRecord from a parsed fact and git metadata.
 // blobHash is the blob SHA returned by WriteFile.
+//
+// Kind is normalized at this boundary: a zero-value fact.Kind (e.g. from a
+// pre-Kind-aware caller) is canonicalized to fact.DefaultKind so the
+// in-memory FactRecord always carries the same value the SQL row will
+// carry under the column's DEFAULT.
 func NewFactRecord(f fact.Fact, blobHash string) FactRecord {
+	kind := f.Kind
+	if kind == "" {
+		kind = fact.DefaultKind
+	}
 	return FactRecord{
 		Path:           f.Path(),
 		Title:          f.Title,
 		BlobHash:       blobHash,
+		Kind:           string(kind),
 		Type:           string(f.Type),
 		Domain:         f.Domain,
 		Entities:       f.Entities,
@@ -66,20 +78,11 @@ func beginTxIfNeeded(ctx context.Context, db *sql.DB) (context.Context, *sql.Tx,
 	return storegit.BeginTxIfNeeded(ctx, db)
 }
 
-// extractBody strips YAML frontmatter from raw markdown and returns just the body.
-// It assumes the format: ---\n...\n---\n# Title\n\nBody
+// extractBody strips YAML frontmatter and the title heading from raw markdown,
+// returning just the body. The canonical implementation lives in fact.ExtractBody
+// so the store indexer and tools/calibrate share one definition.
 func extractBody(raw []byte) string {
-	content := string(raw)
-	parts := strings.SplitN(content, "---", 3)
-	if len(parts) < 3 {
-		return content
-	}
-	afterFrontmatter := strings.TrimSpace(parts[2])
-	// Skip the title line (first # heading)
-	if idx := strings.Index(afterFrontmatter, "\n"); idx >= 0 {
-		return strings.TrimSpace(afterFrontmatter[idx+1:])
-	}
-	return ""
+	return fact.ExtractBody(raw)
 }
 
 
@@ -94,11 +97,23 @@ func (si *searchIndex) Completions(ctx context.Context, branch, category, prefix
 
 	switch category {
 	case "domain":
+		// Canonicalise the typed prefix (NFC + fold + de-hyphenize) so it matches
+		// the canonical stored domains — "AI-Gov" → "ai gov" → "ai governance".
+		// Entities (below) are NOT canonicalised: they are proper nouns/identifiers.
+		canonPrefix := canonicalizeDomain(prefix)
+		// A non-empty prefix that canonicalises away (pure separators/hyphens,
+		// e.g. "---") must not fall through to `LIKE '%'`, which would return
+		// every domain — turning a junk keystroke into the full domain list.
+		// Empty input is still allowed through (prefix == "" → `LIKE '%'`), the
+		// intended "nothing typed yet, list everything" behaviour.
+		if prefix != "" && canonPrefix == "" {
+			return []string{}, nil
+		}
 		return si.queryDistinct(ctx,
 			`SELECT DISTINCT fd.domain FROM fact_domains fd
 			 JOIN branch_facts bf ON bf.fact_id = fd.fact_id
 			 WHERE bf.branch_id = ? AND fd.domain LIKE ? LIMIT ?`,
-			branchID, prefix+"%", limit)
+			branchID, canonPrefix+"%", limit)
 	case "entity":
 		return si.queryDistinct(ctx,
 			`SELECT DISTINCT fe.entity FROM fact_entities fe
@@ -106,7 +121,14 @@ func (si *searchIndex) Completions(ctx context.Context, branch, category, prefix
 			 WHERE bf.branch_id = ? AND fe.entity LIKE ? LIMIT ?`,
 			branchID, prefix+"%", limit)
 	case "type":
-		return []string{"observation", "concept", "process", "principle", "pattern", "reference", "synthesis", "hypothesis", "methodology"}, nil
+		types := append(fact.AllEpistemicTypes(), fact.AllPragmaticTypes()...)
+		out := make([]string, len(types))
+		for i, t := range types {
+			out[i] = string(t)
+		}
+		return out, nil
+	case "kind":
+		return []string{"epistemic", "pragmatic"}, nil
 	case "ep":
 		return []string{"learn", "update", "retract", "subsume", "synthesize", "sync"}, nil
 	case "path":

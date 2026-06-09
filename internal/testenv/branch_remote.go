@@ -31,11 +31,10 @@ func (b *BranchHandle) Push() store.PushResult {
 	return result
 }
 
-// Sync fetches from origin and merges origin/main into this branch using
-// the production Sync code path (strategy-wise: origin wins). Returns the
-// store.SyncResult so tests can inspect whether the sync was a fast-forward,
-// a merge commit, or a no-op. Fails the test on a Sync error. Auto-verifies
-// the repo after the sync.
+// Sync runs one reconcile cycle (fetch + reconcileMain + reconcileAgent)
+// using the production Sync code path. Returns the store.SyncResult so
+// tests can inspect Main / Agent outcomes. Fails the test on a Sync error.
+// Auto-verifies the repo after the sync.
 //
 // After Sync, the branch's snapshot stack captures the new HEAD via
 // pushSnapshot so subsequent At/AtIndex/AtName work consistently with
@@ -51,8 +50,8 @@ func (b *BranchHandle) Sync() store.SyncResult {
 	if syncErr != nil {
 		t.Fatalf("Sync(%s): %v", b.name, syncErr)
 	}
-	// Capture the resulting HEAD as a snapshot if anything advanced.
-	if result.Synced {
+	// Capture the resulting HEAD as a snapshot if the agent branch advanced.
+	if result.Agent.Mode == store.ModeRebase || result.Agent.Mode == store.ModeFF || result.Agent.Mode == store.ModeMerge {
 		var headHash string
 		var headErr error
 		b.repo.ri.WithRead(func(svc *store.Service) {

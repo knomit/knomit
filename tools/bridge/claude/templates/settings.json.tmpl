@@ -1,0 +1,14 @@
+{
+  "hooks": {
+    "SessionStart": [
+      { "matcher": "", "hooks": [{ "type": "command", "command": "knomit-bridge claude hook session-start" }] }
+    ],
+    "PostToolUse": [
+      { "matcher": "Edit|Write|MultiEdit", "hooks": [{ "type": "command", "command": "knomit-bridge claude hook post-edit" }] },
+      { "matcher": "AskUserQuestion", "hooks": [{ "type": "command", "command": "knomit-bridge claude hook post-ask" }] }
+    ],
+    "PreCompact": [
+      { "matcher": "", "hooks": [{ "type": "command", "command": "knomit-bridge claude hook pre-compact" }] }
+    ]
+  }
+}

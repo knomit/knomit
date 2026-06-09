@@ -12,6 +12,7 @@ import (
 	"knomit/internal/store"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
+	"github.com/rs/zerolog/log"
 )
 
 // learnTool returns the Tool definition for knomit_learn.
@@ -32,7 +33,8 @@ func learnTool() mcpgo.Tool {
 					"category":   map[string]any{"type": "string", "description": "Category path within the topic (e.g. languages/go/concurrency)."},
 					"title":      map[string]any{"type": "string", "description": "Fact title (short, descriptive)."},
 					"body":       map[string]any{"type": "string", "description": "Fact body in natural language."},
-					"type":       map[string]any{"type": "string", "description": "Epistemic type: observation (default, concrete facts), concept (definitions), process (procedures), principle (rules/heuristics), pattern (recurring structures), reference (specs/measurements), synthesis (derived from other facts), hypothesis (predictions from patterns — carries uncertainty), methodology (reasoning process lessons).", "default": "observation"},
+					"kind":       map[string]any{"type": "string", "description": "Classification family. epistemic (default) for descriptive knowledge — what is. pragmatic for prescriptive knowledge — what to do. The allowed `type` values depend on the kind.", "default": "epistemic", "enum": []string{"epistemic", "pragmatic"}},
+					"type":       map[string]any{"type": "string", "description": "Leaf type. When kind=epistemic: observation (default, concrete facts), concept (definitions), process (procedures), principle (rules), pattern (recurring structures), reference (specs/measurements), synthesis (derived from other facts), insight (a non-obvious grounded conclusion drawn from connecting facts you already trust), hypothesis (predictions from patterns — carries uncertainty), methodology (reasoning process lessons). When kind=pragmatic: policy (mandatory rules), heuristic (rules-of-thumb).", "default": "observation"},
 					"domain":     map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Cross-cutting domain tags."},
 					"confidence": map[string]any{"type": "number", "description": "Certainty level 0.0–1.0.", "default": 0.7},
 					"sources":    map[string]any{"type": "integer", "description": "Number of independent sources.", "default": 1},
@@ -51,6 +53,7 @@ type learnFactInput struct {
 	Category   string   `json:"category"`
 	Title      string   `json:"title"`
 	Body       string   `json:"body"`
+	Kind       string   `json:"kind"`
 	Type       string   `json:"type"`
 	Domain     []string `json:"domain"`
 	Confidence float64  `json:"confidence"`
@@ -94,9 +97,9 @@ func LearnHandler(embedders ...store.BatchEmbedder) func(context.Context, mcpgo.
 		// Validate batch type consistency: cannot mix observed and inferred types.
 		hasObserved, hasInferred := false, false
 		for _, fi := range factInputs {
-			eType := fact.EpistemicType(fi.Type)
+			eType := fact.Type(fi.Type)
 			if eType == "" {
-				eType = fact.DefaultType
+				eType = fact.DefaultEpistemicType
 			}
 			if eType == fact.Hypothesis || eType == fact.Methodology {
 				hasInferred = true
@@ -111,12 +114,17 @@ func LearnHandler(embedders ...store.BatchEmbedder) func(context.Context, mcpgo.
 		// 3. Validate inputs, build paths, and serialize facts.
 		files := make(map[string]string, len(factInputs))
 		facts := make([]fact.Fact, len(factInputs))
+		// topicCategories[i] is the ontology path for facts[i]; cached here so
+		// the dedup-merge branch below can re-run ValidateFact without
+		// re-deriving (or losing access to) the topic path.
+		topicCategories := make([]string, len(factInputs))
 		for i, fi := range factInputs {
 			// Validate topic+category against ontology.
 			topicCategory := fi.Topic
 			if fi.Category != "" {
 				topicCategory = fi.Topic + "/" + fi.Category
 			}
+			topicCategories[i] = topicCategory
 			if ontology != nil {
 				if err := ontology.ValidatePath(topicCategory); err != nil {
 					return mcpgo.NewToolResultError(fmt.Sprintf("fact %d: %v", i, err)), nil
@@ -141,42 +149,71 @@ func LearnHandler(embedders ...store.BatchEmbedder) func(context.Context, mcpgo.
 			if refs == nil {
 				refs = []string{}
 			}
-			// Validate epistemic type.
-			eType := fact.EpistemicType(fi.Type)
-			if eType == "" {
-				eType = fact.DefaultType
+			// Resolve kind and leaf type. SerializeFact (called below)
+			// validates the (kind, type) pair via the same path that
+			// ParseFact uses, so we don't pre-validate here.
+			kind := fact.Kind(fi.Kind)
+			if kind == "" {
+				kind = fact.DefaultKind
 			}
-			if err := eType.Validate(); err != nil {
-				return mcpgo.NewToolResultError(fmt.Sprintf("fact %d: %v", i, err)), nil
+			eType := fact.Type(fi.Type)
+			if eType == "" && kind == fact.Epistemic {
+				eType = fact.DefaultEpistemicType
 			}
 			f := fact.NewFact(path)
 			f.Title = fi.Title
 			f.Body = fi.Body
+			f.Kind = kind
 			f.Type = eType
 			f.Domain = domain
 			f.Confidence = fi.Confidence
 			f.Sources = fi.Sources
 			f.Entities = entities
 			f.Refs = refs
+			if ontology != nil {
+				if err := fact.ValidateFact(ontology, topicCategory, f); err != nil {
+					return mcpgo.NewToolResultError(fmt.Sprintf("fact %d: %v", i, err)), nil
+				}
+			}
 			facts[i] = f
-			files[path] = fact.SerializeFact(f)
+			serialized, err := fact.SerializeFact(f)
+			if err != nil {
+				return mcpgo.NewToolResultError(fmt.Sprintf("fact %d: serialize: %v", i, err)), nil
+			}
+			files[path] = serialized
 		}
 
 		// 3b. Dedup check: search for near-duplicates scoped to the same category directory.
 		// Batch-embed all incoming facts upfront if a BatchEmbedder is available,
 		// so each dedup Search uses the pre-computed vector instead of re-embedding.
-		const dedupThreshold = 0.92
+		// The near-duplicate cosine floor is model-dependent (see internal/retrieval).
+		dedupThreshold := store.EmbedderThresholds(batchEmb).Dedup
 		var dedupVecs [][]float32
 		if batchEmb != nil && len(facts) > 0 {
-			texts := make([]string, len(facts))
+			titles := make([]string, len(facts))
+			bodies := make([]string, len(facts))
 			for i, f := range facts {
-				texts[i] = f.Title + " " + f.Body
+				titles[i] = f.Title
+				bodies[i] = f.Body
 			}
-			dedupVecs, _ = batchEmb.EmbedBatch(texts)
+			var embErr error
+			dedupVecs, embErr = batchEmb.EmbedDocuments(titles, bodies)
+			if embErr != nil {
+				log.Warn().Err(embErr).Int("count", len(titles)).Msg("learn: batch embed failed; dedup falls back to per-fact embedding and donations are skipped")
+				dedupVecs = nil
+			}
+		}
+		// donatePaths[i] is the on-disk path that dedupVecs[i] corresponds to,
+		// or "" to suppress donation (used when the dedup-merge branch decided
+		// to keep the existing fact's title+body, so our vector — computed
+		// over f.Title+f.Body — would not match what gets written).
+		donatePaths := make([]string, len(facts))
+		for i, f := range facts {
+			donatePaths[i] = f.Path()
 		}
 		for i, f := range facts {
 			categoryDir := f.Path()[:strings.LastIndex(f.Path(), "/")]
-			sq := store.SearchQuery{
+			sq := store.SearchOptions{
 				Text:          f.Title + " " + f.Body,
 				Path:          categoryDir,
 				MinSimilarity: dedupThreshold,
@@ -211,7 +248,11 @@ func LearnHandler(embedders ...store.BatchEmbedder) func(context.Context, mcpgo.
 				// Add hypothesis path to observation's refs.
 				f.Refs = fact.AppendUnique(f.Refs, match.Path)
 				facts[i] = f
-				files[f.Path()] = fact.SerializeFact(f)
+				serialized, err := fact.SerializeFact(f)
+				if err != nil {
+					return mcpgo.NewToolResultError(fmt.Sprintf("fact %d: serialize subsumed: %v", i, err)), nil
+				}
+				files[f.Path()] = serialized
 				continue
 			}
 
@@ -225,30 +266,69 @@ func LearnHandler(embedders ...store.BatchEmbedder) func(context.Context, mcpgo.
 				merged = fact.NewFact(match.Path)
 				merged.Title = f.Title
 				merged.Body = f.Body
+				merged.Kind = f.Kind
 				merged.Type = f.Type
 				merged.Domain = fact.UnionStrings(f.Domain, existingFact.Domain)
 				merged.Entities = fact.UnionStrings(f.Entities, existingFact.Entities)
 				merged.Confidence = max(newConf, existConf)
 				merged.Sources = f.Sources + existingFact.Sources
 				merged.Refs = fact.AppendUnique(fact.UnionStrings(f.Refs, existingFact.Refs), match.Path)
+				// dedup vector still describes the merged content (same title+body
+				// as the new fact); just retarget to the existing path it now lives at.
+				donatePaths[i] = merged.Path()
 			} else {
 				// Existing fact wins — keep existing title and body, update metadata.
 				merged = fact.NewFact(match.Path)
 				merged.Title = existingFact.Title
 				merged.Body = existingFact.Body
+				merged.Kind = existingFact.Kind
 				merged.Type = existingFact.Type
 				merged.Domain = fact.UnionStrings(f.Domain, existingFact.Domain)
 				merged.Entities = fact.UnionStrings(f.Entities, existingFact.Entities)
 				merged.Confidence = max(newConf, existConf)
 				merged.Sources = f.Sources + existingFact.Sources
 				merged.Refs = fact.AppendUnique(fact.UnionStrings(f.Refs, existingFact.Refs), match.Path)
+				// dedup vector was computed over f's title+body; existing wins so
+				// merged content differs. Drop the donation — upsert will fall
+				// through to a fresh embed.
+				donatePaths[i] = ""
+			}
+
+			// Re-validate the merged fact against ontology rules. The merge
+			// may union entities/domain or pull values from the existing
+			// fact, so the result is not guaranteed to satisfy rules just
+			// because the input did. Without this re-check, a violation
+			// would surface later as an opaque serialize error.
+			if ontology != nil {
+				if err := fact.ValidateFact(ontology, topicCategories[i], merged); err != nil {
+					return mcpgo.NewToolResultError(fmt.Sprintf("fact %d: dedup-merge: %v", i, err)), nil
+				}
 			}
 
 			// Remove the original new-fact path from the files map and add the merged one.
 			delete(files, f.Path())
-			files[merged.Path()] = fact.SerializeFact(merged)
+			serialized, err := fact.SerializeFact(merged)
+			if err != nil {
+				return mcpgo.NewToolResultError(fmt.Sprintf("fact %d: serialize merged: %v", i, err)), nil
+			}
+			files[merged.Path()] = serialized
 			facts[i] = merged
 		}
+
+		// Build the precomputed-embedding donation map keyed by final on-disk
+		// path. upsert reads this from ctx and skips its own ONNX call when an
+		// entry is present. Empty/missing entries fall through to embedding.
+		embByPath := make(map[string][]float32, len(facts))
+		for i := range donatePaths {
+			if donatePaths[i] == "" {
+				continue
+			}
+			if i >= len(dedupVecs) || len(dedupVecs[i]) == 0 {
+				continue
+			}
+			embByPath[donatePaths[i]] = dedupVecs[i]
+		}
+		ctx = store.WithPrecomputedEmbeddings(ctx, embByPath)
 
 		// 4. BatchWrite all facts in one commit.
 		commitMsg := fmt.Sprintf("learn: %s", momentName)

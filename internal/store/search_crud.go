@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/rs/zerolog/log"
 
@@ -43,24 +44,16 @@ func (si *searchIndex) upsert(ctx context.Context, branch, commitHash string, re
 	if factType == "" {
 		factType = "observation"
 	}
-
-	// Compute embedding vector if an embedder is configured.
-	var vecData []byte
-	if emb := si.rh.getEmbedder(); emb != nil {
-		var data []byte
-		err := conn(ctx, si.rh.db).QueryRowContext(ctx,
-			`SELECT data FROM objects WHERE hash = ? AND type = ?`,
-			rec.BlobHash, blobObjectType,
-		).Scan(&data)
-		if err != nil {
-			return fmt.Errorf("upsert: blob %s not found: %w", rec.BlobHash, err)
-		}
-		text := rec.Title + " " + extractBody(data)
-		vec, err := emb.Embed(text)
-		if err == nil && len(vec) > 0 {
-			vecData = float32SliceToBytes(vec)
-		}
+	factKind := rec.Kind
+	if factKind == "" {
+		factKind = "epistemic"
 	}
+
+	// Embedding is computed below, AFTER the COW check, so we don't pay
+	// ONNX inference cost for facts whose (path, blob_hash) is already
+	// indexed (the COW-hit path returns without touching facts_vec).
+	// vecData stays nil here and is populated only on the COW-miss path.
+	var vecData []byte
 
 	// Begin transaction for atomic COW check + insert.
 	ctx, tx, _, err := beginTxIfNeeded(ctx, si.rh.db)
@@ -72,9 +65,9 @@ func (si *searchIndex) upsert(ctx context.Context, branch, commitHash string, re
 
 	// Atomic: insert fact if it doesn't exist yet (no TOCTOU race).
 	_, err = db.ExecContext(ctx,
-		`INSERT OR IGNORE INTO facts(path, blob_hash, title, type, domain, entities, confidence, sources, refs, evidence_weight)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		rec.Path, rec.BlobHash, rec.Title, factType,
+		`INSERT OR IGNORE INTO facts(path, blob_hash, title, kind, type, domain, entities, confidence, sources, refs, evidence_weight)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		rec.Path, rec.BlobHash, rec.Title, factKind, factType,
 		string(domainJSON), string(entitiesJSON),
 		rec.Confidence, rec.Sources,
 		string(refsJSON), rec.EvidenceWeight,
@@ -105,37 +98,106 @@ func (si *searchIndex) upsert(ctx context.Context, branch, commitHash string, re
 		return fmt.Errorf("upsert cow check branch: %w", err)
 	}
 	if junctionExists > 0 || (len(rec.Entities) == 0 && anyBranch) {
-		// COW hit: fact fully indexed, just update branch pointer.
+		// COW hit: fact fully indexed (junction tables + facts_vec
+		// already populated under this fact_id), just update branch
+		// pointer. No embedding needed — the existing facts_vec row
+		// is the right vector for this (path, blob_hash).
 		_, err = db.ExecContext(ctx,
 			`INSERT OR REPLACE INTO branch_facts(branch_id, path, fact_id, commit_hash) VALUES (?, ?, ?, ?)`,
 			branchID, rec.Path, factID, commitHash)
 		if err != nil {
 			return fmt.Errorf("upsert branch_facts (cow hit): %w", err)
 		}
-		return tx.Commit()
+		if err := tx.Commit(); err != nil {
+			return err
+		}
+		// Post-commit work uses ctx without the (now-closed) tx so conn(ctx,db)
+		// resolves to the bare *sql.DB rather than the committed tx.
+		ctx = storegit.WithoutTx(ctx)
+		// Write time-aware DERIVED_FROM edges for the new (path, commit) ref-event.
+		// Each new commit asserting the same content is its own ref-event.
+		si.writePostCommitDerivedFrom(ctx, branch, rec.Path, rec.BlobHash, commitHash, rec.Refs)
+		return nil
 	}
 
 	// COW miss: populate junction tables, embeddings, branch_facts.
+	//
+	// Embedding source preference (cheapest first):
+	//   1. context-donated vector (caller already embedded this content,
+	//      e.g. mcp/learn during its dedup pass);
+	//   2. fresh ONNX inference via the configured embedder.
+	// INVARIANT: when an embedder is configured, no fact is ever indexed
+	// without a vector — any embed failure FAILS the upsert (rolls back the
+	// whole write) rather than silently producing a vectorless fact, which
+	// would be invisible to vector search and corrupt the corpus's retrieval
+	// guarantees. vecData only stays nil when NO embedder is configured
+	// (read-only tooling / tests); the running service always has one (app.New
+	// makes embeddings mandatory).
+	emb := si.rh.getEmbedder()
+	if vec, ok := precomputedEmbedding(ctx, rec.Path); ok && len(vec) > 0 {
+		// Validate the donated vector against the active embedder's dim. When
+		// no embedder is configured we can't know the expected dim, so we keep
+		// the prior behavior and store the donated vector as-is.
+		if emb != nil && len(vec) != emb.Dim() {
+			return fmt.Errorf("upsert: donated embedding for %q has %d dims, expected %d", rec.Path, len(vec), emb.Dim())
+		}
+		vecData = float32SliceToBytes(vec)
+		log.Debug().Str("path", rec.Path).Str("blob_hash", rec.BlobHash).Msg("upsert: using donated embedding")
+	} else if emb != nil {
+		var data []byte
+		err := db.QueryRowContext(ctx,
+			`SELECT data FROM objects WHERE hash = ? AND type = ?`,
+			rec.BlobHash, blobObjectType,
+		).Scan(&data)
+		if err != nil {
+			return fmt.Errorf("upsert: blob %s not found: %w", rec.BlobHash, err)
+		}
+		body := extractBody(data)
+		vec, err := emb.EmbedDocument(rec.Title, body)
+		switch {
+		case err != nil:
+			return fmt.Errorf("upsert: embed %q failed (embeddings are required): %w", rec.Path, err)
+		case len(vec) == 0:
+			return fmt.Errorf("upsert: embedder returned empty vector for %q (embeddings are required)", rec.Path)
+		case len(vec) != emb.Dim():
+			return fmt.Errorf("upsert: embedder produced %d-dim vector for %q, expected %d", len(vec), rec.Path, emb.Dim())
+		default:
+			vecData = float32SliceToBytes(vec)
+		}
+	}
+
 	for _, entity := range rec.Entities {
 		if entity == "" {
 			continue
 		}
 		if _, err := db.ExecContext(ctx,
-			`INSERT INTO fact_entities(fact_id, entity) VALUES (?, ?)`,
+			`INSERT OR IGNORE INTO fact_entities(fact_id, entity) VALUES (?, ?)`,
 			factID, entity,
 		); err != nil {
 			return fmt.Errorf("upsert fact_entities: %w", err)
 		}
 	}
 	for _, domain := range rec.Domain {
-		if domain == "" {
+		canon := canonicalizeDomain(domain)
+		if canon == "" {
 			continue
 		}
+		// Store the canonical form (NFC + fold + de-hyphenize) so case/space/
+		// hyphen variants unify for filtering.
 		if _, err := db.ExecContext(ctx,
-			`INSERT INTO fact_domains(fact_id, domain) VALUES (?, ?)`,
-			factID, domain,
+			`INSERT OR IGNORE INTO fact_domains(fact_id, domain) VALUES (?, ?)`,
+			factID, canon,
 		); err != nil {
 			return fmt.Errorf("upsert fact_domains: %w", err)
+		}
+		// Token containment index: one row per stemmed token of this domain.
+		for _, tok := range domainTokens(canon) {
+			if _, err := db.ExecContext(ctx,
+				`INSERT OR IGNORE INTO fact_domain_tokens(fact_id, domain, token) VALUES (?, ?, ?)`,
+				factID, canon, tok,
+			); err != nil {
+				return fmt.Errorf("upsert fact_domain_tokens: %w", err)
+			}
 		}
 	}
 
@@ -167,6 +229,11 @@ func (si *searchIndex) upsert(ctx context.Context, branch, commitHash string, re
 	// concurrent writes (one writer's facts row committed while another's
 	// graph sync races or fails). The graph-coherence Verify check
 	// catches those holes, so any failure here must propagate.
+	//
+	// DERIVED_FROM edges are an exception — they run post-commit via
+	// writePostCommitDerivedFrom because graphAddDerivedFromAtCommitTx
+	// requires node IDs that are only visible after the source Fact's
+	// MERGE has committed.
 	if err := si.graphSyncFactTx(ctx, tx, rec); err != nil {
 		return fmt.Errorf("upsert graph sync: %w", err)
 	}
@@ -174,6 +241,17 @@ func (si *searchIndex) upsert(ctx context.Context, branch, commitHash string, re
 	if err := tx.Commit(); err != nil {
 		return err
 	}
+
+	// Post-commit work uses ctx without the (now-closed) tx so conn(ctx,db)
+	// resolves to the bare *sql.DB rather than the committed tx.
+	ctx = storegit.WithoutTx(ctx)
+
+	// Write time-aware DERIVED_FROM edges. Runs AFTER commit because direct-SQL
+	// reads against the GraphQLite EAV tables cannot see nodes MERGE'd via
+	// Cypher inside the same *sql.Tx — node IDs only become visible
+	// post-commit. Edge-write failure is non-fatal; logged so verify can flag
+	// missing edges later.
+	si.writePostCommitDerivedFrom(ctx, branch, rec.Path, rec.BlobHash, commitHash, rec.Refs)
 
 	// Build similarity edges if embeddings are available. This runs AFTER
 	// commit because it queries facts_vec rows that must be visible outside
@@ -186,6 +264,25 @@ func (si *searchIndex) upsert(ctx context.Context, branch, commitHash string, re
 	}
 
 	return nil
+}
+
+// writePostCommitDerivedFrom writes time-aware DERIVED_FROM edges for the
+// given (path, blob_hash) at commitHash. Filters refs to local-only.
+// Logged on failure rather than returned: edges are recoverable via
+// rebuild and verify will flag any holes.
+func (si *searchIndex) writePostCommitDerivedFrom(ctx context.Context, branch, path, blobHash, commitHash string, refs []string) {
+	var localRefs []string
+	for _, r := range refs {
+		if !strings.HasPrefix(r, "http://") && !strings.HasPrefix(r, "https://") {
+			localRefs = append(localRefs, r)
+		}
+	}
+	if len(localRefs) == 0 {
+		return
+	}
+	if err := si.graphAddDerivedFromAtCommitTx(ctx, si.rh.db, branch, path, blobHash, commitHash, localRefs); err != nil {
+		log.Warn().Err(err).Str("path", path).Str("commit", commitHash).Msg("post-commit DERIVED_FROM edge write failed")
+	}
 }
 
 // hasAnyBranchFact checks if any branch_facts row exists for the given fact_id.
@@ -273,7 +370,7 @@ func (si *searchIndex) GetByPath(ctx context.Context, branch, path string) (*Fac
 		return nil, fmt.Errorf("getByPath: %w", err)
 	}
 	row := conn(ctx, si.rh.db).QueryRowContext(ctx,
-		`SELECT f.path, f.title, f.blob_hash, f.type, f.domain, f.entities,
+		`SELECT f.path, f.title, f.blob_hash, f.kind, f.type, f.domain, f.entities,
 		        f.confidence, f.sources, f.refs, f.evidence_weight,
 		        bf.commit_hash, o.data, cl.committed_at
 		 FROM branch_facts bf
@@ -310,7 +407,7 @@ func (si *searchIndex) getEmbeddingByFact(ctx context.Context, path, blobHash st
 }
 
 // scanFactWithBody scans a FactWithBody from a *sql.Row (branch_facts JOIN facts JOIN objects LEFT JOIN commit_log).
-// Expected column order: path, title, blob_hash, type, domain, entities,
+// Expected column order: path, title, blob_hash, kind, type, domain, entities,
 // confidence, sources, refs, evidence_weight, commit_hash, data, committed_at.
 func scanFactWithBody(row *sql.Row) (*FactWithBody, error) {
 	var f FactWithBody
@@ -318,7 +415,7 @@ func scanFactWithBody(row *sql.Row) (*FactWithBody, error) {
 	var rawData []byte
 	var committedAt sql.NullInt64
 	err := row.Scan(
-		&f.Path, &f.Title, &f.BlobHash, &f.Type,
+		&f.Path, &f.Title, &f.BlobHash, &f.Kind, &f.Type,
 		&domainJSON, &entitiesJSON,
 		&f.Confidence, &f.Sources,
 		&refsJSON, &f.EvidenceWeight, &f.CommitHash, &rawData, &committedAt,
@@ -329,9 +426,7 @@ func scanFactWithBody(row *sql.Row) (*FactWithBody, error) {
 	if err != nil {
 		return nil, fmt.Errorf("scanFactWithBody: %w", err)
 	}
-	json.Unmarshal([]byte(domainJSON), &f.Domain)
-	json.Unmarshal([]byte(entitiesJSON), &f.Entities)
-	json.Unmarshal([]byte(refsJSON), &f.Refs)
+	logFactJSONUnmarshal("scanFactWithBody", f.Path, domainJSON, entitiesJSON, refsJSON, &f.Domain, &f.Entities, &f.Refs)
 	f.Body = extractBody(rawData)
 	if committedAt.Valid {
 		f.CommittedAt = committedAt.Int64
@@ -340,13 +435,13 @@ func scanFactWithBody(row *sql.Row) (*FactWithBody, error) {
 }
 
 // scanFactRecordFromRows scans a FactRecord from *sql.Rows (used in multi-row queries).
-// Expected column order: path, title, blob_hash, type, domain, entities,
-// confidence, sources, refs, evidence_weight (10 columns, no commit_hash).
+// Expected column order: path, title, blob_hash, kind, type, domain, entities,
+// confidence, sources, refs, evidence_weight (11 columns, no commit_hash).
 func scanFactRecordFromRows(rows *sql.Rows) (*FactRecord, error) {
 	var rec FactRecord
 	var domainJSON, entitiesJSON, refsJSON string
 	err := rows.Scan(
-		&rec.Path, &rec.Title, &rec.BlobHash, &rec.Type,
+		&rec.Path, &rec.Title, &rec.BlobHash, &rec.Kind, &rec.Type,
 		&domainJSON, &entitiesJSON,
 		&rec.Confidence, &rec.Sources,
 		&refsJSON, &rec.EvidenceWeight,
@@ -354,21 +449,19 @@ func scanFactRecordFromRows(rows *sql.Rows) (*FactRecord, error) {
 	if err != nil {
 		return nil, fmt.Errorf("scan fact row: %w", err)
 	}
-	json.Unmarshal([]byte(domainJSON), &rec.Domain)
-	json.Unmarshal([]byte(entitiesJSON), &rec.Entities)
-	json.Unmarshal([]byte(refsJSON), &rec.Refs)
+	logFactJSONUnmarshal("scanFactRecordFromRows", rec.Path, domainJSON, entitiesJSON, refsJSON, &rec.Domain, &rec.Entities, &rec.Refs)
 	return &rec, nil
 }
 
 // scanFactWithBodyFromRows scans a FactWithBody from *sql.Rows (branch_facts JOIN facts JOIN objects).
-// Expected column order: path, title, blob_hash, type, domain, entities,
+// Expected column order: path, title, blob_hash, kind, type, domain, entities,
 // confidence, sources, refs, evidence_weight, commit_hash, data.
 func scanFactWithBodyFromRows(rows *sql.Rows) (*FactWithBody, error) {
 	var f FactWithBody
 	var domainJSON, entitiesJSON, refsJSON string
 	var rawData []byte
 	err := rows.Scan(
-		&f.Path, &f.Title, &f.BlobHash, &f.Type,
+		&f.Path, &f.Title, &f.BlobHash, &f.Kind, &f.Type,
 		&domainJSON, &entitiesJSON,
 		&f.Confidence, &f.Sources,
 		&refsJSON, &f.EvidenceWeight, &f.CommitHash, &rawData,
@@ -376,9 +469,30 @@ func scanFactWithBodyFromRows(rows *sql.Rows) (*FactWithBody, error) {
 	if err != nil {
 		return nil, fmt.Errorf("scanFactWithBodyFromRows: %w", err)
 	}
-	json.Unmarshal([]byte(domainJSON), &f.Domain)
-	json.Unmarshal([]byte(entitiesJSON), &f.Entities)
-	json.Unmarshal([]byte(refsJSON), &f.Refs)
+	logFactJSONUnmarshal("scanFactWithBodyFromRows", f.Path, domainJSON, entitiesJSON, refsJSON, &f.Domain, &f.Entities, &f.Refs)
 	f.Body = extractBody(rawData)
 	return &f, nil
+}
+
+// logFactJSONUnmarshal decodes the three JSON columns (domain, entities, refs)
+// on a fact row and logs at Warn for any column that fails to parse.
+//
+// We don't propagate the error: a malformed JSON column on one fact shouldn't
+// fail the whole query, and the columns are written from typed Go slices on
+// upsert (search_crud.go:upsert), so a parse error means storage was corrupted
+// out-of-band. Logging surfaces that corruption in the server log instead of
+// silently returning empty slices to callers — combined with the
+// `INSERT OR IGNORE` dedup at fact_entities/fact_domains, a corrupt entities
+// column would otherwise make `?entity=…` queries return nothing for a fact
+// that should match.
+func logFactJSONUnmarshal(scanner, path, domainJSON, entitiesJSON, refsJSON string, domain *[]string, entities *[]string, refs *[]string) {
+	if err := json.Unmarshal([]byte(domainJSON), domain); err != nil {
+		log.Warn().Err(err).Str("scanner", scanner).Str("path", path).Str("column", "domain").Msg("fact JSON column unmarshal failed; field empty")
+	}
+	if err := json.Unmarshal([]byte(entitiesJSON), entities); err != nil {
+		log.Warn().Err(err).Str("scanner", scanner).Str("path", path).Str("column", "entities").Msg("fact JSON column unmarshal failed; field empty")
+	}
+	if err := json.Unmarshal([]byte(refsJSON), refs); err != nil {
+		log.Warn().Err(err).Str("scanner", scanner).Str("path", path).Str("column", "refs").Msg("fact JSON column unmarshal failed; field empty")
+	}
 }

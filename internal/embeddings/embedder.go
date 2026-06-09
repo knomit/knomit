@@ -2,14 +2,23 @@ package embeddings
 
 import (
 	"fmt"
-	"math"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 
+	tok "github.com/daulet/tokenizers"
+	"github.com/rs/zerolog/log"
 	ort "github.com/yalue/onnxruntime_go"
+
+	"knomit/internal/retrieval"
 )
+
+// docBatchSize is how many documents share one ONNX session.Run in
+// EmbedDocuments. Each run pads its texts to the longest in the chunk, so a
+// modest batch keeps padding waste low while amortizing per-call overhead.
+const docBatchSize = 32
 
 // ortOnce ensures InitializeEnvironment is called only once per process.
 var ortOnce sync.Once
@@ -69,125 +78,243 @@ func initORT() error {
 	return ortInitErr
 }
 
-// Embedder tokenizes text, runs ONNX inference using nomic-embed-text-v1.5,
-// mean-pools over sequence length, and L2-normalises to unit vector.
+// Embedder runs one model's ONNX graph in-process and returns vectors.
 type Embedder struct {
-	session *ort.DynamicAdvancedSession
-	tok     *Tokenizer
+	model Model
+	sess  *ort.DynamicAdvancedSession
+	tk    *tok.Tokenizer
 }
 
-// NewEmbedder creates a new ONNX-based sentence embedder.
-// The ONNX Runtime shared library is located automatically.
-// Set ORT_LIB_PATH to override the library path
-// (e.g. ORT_LIB_PATH=/usr/local/lib/libonnxruntime.so).
-func NewEmbedder(modelPath, tokenizerPath string) (*Embedder, error) {
+// NewEmbedder loads the model+tokenizer for descriptor m from <cacheDir>/<id>/,
+// downloading them first if missing.
+func NewEmbedder(m Model, cacheDir string) (*Embedder, error) {
 	if err := initORT(); err != nil {
 		return nil, fmt.Errorf("onnxruntime init: %w", err)
 	}
-
-	tok, err := LoadTokenizer(tokenizerPath)
+	modelPath, tokPath, err := EnsureModel(m, cacheDir)
+	if err != nil {
+		return nil, err
+	}
+	tk, err := tok.FromFile(tokPath)
 	if err != nil {
 		return nil, fmt.Errorf("load tokenizer: %w", err)
 	}
-
-	inputNames := []string{"input_ids", "attention_mask", "token_type_ids"}
-	outputNames := []string{"last_hidden_state"}
-
-	session, err := ort.NewDynamicAdvancedSession(modelPath, inputNames, outputNames, nil)
+	sess, err := ort.NewDynamicAdvancedSession(modelPath, m.ONNXInputs, m.ONNXOutputs, nil)
 	if err != nil {
+		_ = tk.Close()
 		return nil, fmt.Errorf("create onnx session: %w", err)
 	}
-
-	return &Embedder{session: session, tok: tok}, nil
+	return &Embedder{model: m, sess: sess, tk: tk}, nil
 }
 
-// Embed tokenizes text, runs inference, mean-pools last_hidden_state over
-// seq_len, and returns an L2-normalised float32 vector. The embedding
-// dimension is determined by the model (e.g. 384 for MiniLM, 768 for nomic).
-func (e *Embedder) Embed(text string) ([]float32, error) {
-	inputIDs, attentionMask, _ := e.tok.Encode(text)
-	seqLen := int64(len(inputIDs))
+func (e *Embedder) Dim() int   { return e.model.Dim }
+func (e *Embedder) ID() string { return e.model.ID }
+func (e *Embedder) Close()     { _ = e.sess.Destroy(); _ = e.tk.Close() }
 
-	shape := ort.NewShape(1, seqLen)
+// Thresholds returns this model's calibrated cosine cutoffs.
+func (e *Embedder) Thresholds() retrieval.Thresholds { return e.model.Thresholds }
 
-	// Convert int32 slices to int64 for the model.
-	// token_type_ids are all zeros (single-segment input).
-	ids64 := make([]int64, seqLen)
-	mask64 := make([]int64, seqLen)
-	types64 := make([]int64, seqLen) // all zeros
-	for i := int64(0); i < seqLen; i++ {
-		ids64[i] = int64(inputIDs[i])
-		mask64[i] = int64(attentionMask[i])
-	}
-
-	idsTensor, err := ort.NewTensor(shape, ids64)
+// EmbedQuery embeds a search query using the model's query template.
+func (e *Embedder) EmbedQuery(text string) ([]float32, error) {
+	vecs, err := e.embedBatch([]string{fillTemplate(e.model.QueryTemplate, "", text)})
 	if err != nil {
-		return nil, fmt.Errorf("new input_ids tensor: %w", err)
+		return nil, err
 	}
-	defer idsTensor.Destroy()
+	return vecs[0], nil
+}
 
-	maskTensor, err := ort.NewTensor(shape, mask64)
+// EmbedDocument embeds a fact body (+ title) using the model's doc template.
+func (e *Embedder) EmbedDocument(title, body string) ([]float32, error) {
+	vecs, err := e.embedBatch([]string{e.docText(title, body)})
 	if err != nil {
-		return nil, fmt.Errorf("new attention_mask tensor: %w", err)
+		return nil, err
 	}
-	defer maskTensor.Destroy()
+	return vecs[0], nil
+}
 
-	typesTensor, err := ort.NewTensor(shape, types64)
+// EmbedDocuments embeds (title, body) pairs, batching the ONNX inference so a
+// full-corpus re-embed issues one session.Run per docBatchSize docs rather than
+// one per doc.
+func (e *Embedder) EmbedDocuments(titles, bodies []string) ([][]float32, error) {
+	if len(titles) != len(bodies) {
+		return nil, fmt.Errorf("EmbedDocuments: %d titles vs %d bodies", len(titles), len(bodies))
+	}
+	texts := make([]string, len(bodies))
+	for i := range bodies {
+		texts[i] = e.docText(titles[i], bodies[i])
+	}
+	out := make([][]float32, 0, len(texts))
+	for i := 0; i < len(texts); i += docBatchSize {
+		end := min(i+docBatchSize, len(texts))
+		vecs, err := e.embedBatch(texts[i:end])
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, vecs...)
+	}
+	return out, nil
+}
+
+// docText renders a document for embedding. When the model's DocTemplate has a
+// {title} slot the title fills it; otherwise the model has no separate notion of
+// title, so we fall back to the historical behavior of prepending the title to
+// the body so its signal is not lost.
+func (e *Embedder) docText(title, body string) string {
+	if strings.Contains(e.model.DocTemplate, "{title}") {
+		return fillTemplate(e.model.DocTemplate, title, body)
+	}
+	content := body
+	if title != "" {
+		content = title + " " + body
+	}
+	return fillTemplate(e.model.DocTemplate, "", content)
+}
+
+// encode tokenizes one text into int64 id/mask slices, truncating to the
+// model's MaxTokens cap (with a warning) so an oversized input cannot exceed the
+// graph's max position embeddings.
+func (e *Embedder) encode(text string) (ids, mask []int64) {
+	enc := e.tk.EncodeWithOptions(text, true, tok.WithReturnAttentionMask())
+	n := len(enc.IDs)
+	if max := e.model.MaxTokens; max > 0 && n > max {
+		log.Warn().Str("model", e.model.ID).Int("tokens", n).Int("max_tokens", max).
+			Msg("embeddings: input exceeds model max tokens; truncating (tail dropped)")
+		n = max
+	}
+	ids = make([]int64, n)
+	mask = make([]int64, n)
+	for i := 0; i < n; i++ {
+		ids[i] = int64(enc.IDs[i])
+		mask[i] = int64(enc.AttentionMask[i])
+	}
+	return ids, mask
+}
+
+// embedBatch tokenizes texts, pads them to the longest in the batch, runs one
+// ONNX inference, pools per the descriptor, and L2-normalizes each row.
+func (e *Embedder) embedBatch(texts []string) ([][]float32, error) {
+	n := len(texts)
+	if n == 0 {
+		return nil, nil
+	}
+	rowIDs := make([][]int64, n)
+	rowMask := make([][]int64, n)
+	maxLen := 0
+	for i, text := range texts {
+		rowIDs[i], rowMask[i] = e.encode(text)
+		if len(rowIDs[i]) > maxLen {
+			maxLen = len(rowIDs[i])
+		}
+	}
+	if maxLen == 0 {
+		maxLen = 1 // avoid a zero-length sequence dimension
+	}
+
+	// Flatten into [n, maxLen] row-major tensors; short rows are zero-padded
+	// (pad token id 0 + attention_mask 0, so padding is ignored downstream).
+	flatIDs := make([]int64, n*maxLen)
+	flatMask := make([]int64, n*maxLen)
+	for i := range n {
+		copy(flatIDs[i*maxLen:], rowIDs[i])
+		copy(flatMask[i*maxLen:], rowMask[i])
+	}
+
+	inputs, err := e.buildInputs(flatIDs, flatMask, int64(n), int64(maxLen))
 	if err != nil {
-		return nil, fmt.Errorf("new token_type_ids tensor: %w", err)
+		return nil, err
 	}
-	defer typesTensor.Destroy()
+	defer destroyAll(inputs)
 
-	// Let ONNX Runtime allocate the output so the embedding dimension is
-	// determined by the model rather than hardcoded.
-	outputs := []ort.Value{nil}
-	if err := e.session.Run(
-		[]ort.Value{idsTensor, maskTensor, typesTensor},
-		outputs,
-	); err != nil {
+	outs := []ort.Value{nil}
+	if err := e.sess.Run(inputs, outs); err != nil {
 		return nil, fmt.Errorf("onnx run: %w", err)
 	}
-	defer outputs[0].Destroy()
+	defer outs[0].Destroy() //nolint:errcheck
 
-	// Output shape is [1, seqLen, dims].
-	outShape := outputs[0].GetShape()
-	dims := int(outShape[2])
-	outputTensor, ok := outputs[0].(*ort.Tensor[float32])
+	t, ok := outs[0].(*ort.Tensor[float32])
 	if !ok {
-		return nil, fmt.Errorf("unexpected output tensor type")
+		return nil, fmt.Errorf("unexpected output type from model %q", e.model.ID)
 	}
+	data := t.GetData()
+	shape := t.GetShape()
 
-	// Mean-pool over seq_len dimension.
-	data := outputTensor.GetData() // len = seqLen * dims
-	pooled := make([]float32, dims)
-	for tok := int64(0); tok < seqLen; tok++ {
-		for d := 0; d < dims; d++ {
-			pooled[d] += data[tok*int64(dims)+int64(d)]
+	out := make([][]float32, n)
+	if e.model.Pooling == PoolNone {
+		// Graph emits one pre-pooled [n, Dim] vector per row.
+		dim := e.model.Dim
+		if len(data) < n*dim {
+			return nil, fmt.Errorf("model %q: output has %d floats, expected at least %d", e.model.ID, len(data), n*dim)
 		}
-	}
-	invN := float32(1.0 / float64(seqLen))
-	for d := range pooled {
-		pooled[d] *= invN
-	}
-
-	// L2 normalise.
-	var norm float64
-	for _, v := range pooled {
-		norm += float64(v) * float64(v)
-	}
-	norm = math.Sqrt(norm)
-	if norm > 0 {
-		for d := range pooled {
-			pooled[d] = float32(float64(pooled[d]) / norm)
+		for i := range n {
+			vec := make([]float32, dim)
+			copy(vec, data[i*dim:(i+1)*dim])
+			l2normalize(vec)
+			out[i] = vec
 		}
+		return out, nil
 	}
 
-	return pooled, nil
+	// Token-level output [n, maxLen, dim]: pool each row over its own tokens.
+	if len(shape) < 3 {
+		return nil, fmt.Errorf("model %q: expected rank-3 token output for pooling, got shape %v", e.model.ID, shape)
+	}
+	dim := int(shape[len(shape)-1])
+	rowLen := maxLen * dim
+	if len(data) < n*rowLen {
+		return nil, fmt.Errorf("model %q: output has %d floats, expected %d (%d rows × %d)", e.model.ID, len(data), n*rowLen, n, rowLen)
+	}
+	for i := range n {
+		rowData := data[i*rowLen : (i+1)*rowLen]
+		maskRow := flatMask[i*maxLen : (i+1)*maxLen]
+		var vec []float32
+		switch e.model.Pooling {
+		case PoolMean:
+			vec = poolMean(rowData, maskRow, maxLen, dim)
+		case PoolCLS:
+			vec = poolCLS(rowData, dim)
+		case PoolLastToken:
+			vec = poolLastToken(rowData, maskRow, maxLen, dim)
+		default:
+			return nil, fmt.Errorf("model %q: unsupported pooling %d", e.model.ID, e.model.Pooling)
+		}
+		l2normalize(vec)
+		out[i] = vec
+	}
+	return out, nil
 }
 
-// Close destroys the ONNX session. The global ort environment is shared and
-// managed separately; callers that need to fully clean up the environment
-// should call ort.DestroyEnvironment() themselves.
-func (e *Embedder) Close() {
-	e.session.Destroy()
+// buildInputs constructs the int64 tensors named by the descriptor. token_type_ids
+// (if requested) are all-zero.
+func (e *Embedder) buildInputs(ids, mask []int64, batch, seqLen int64) ([]ort.Value, error) {
+	shape := ort.NewShape(batch, seqLen)
+	vals := make([]ort.Value, 0, len(e.model.ONNXInputs))
+	for _, name := range e.model.ONNXInputs {
+		var data []int64
+		switch name {
+		case "input_ids":
+			data = ids
+		case "attention_mask":
+			data = mask
+		case "token_type_ids":
+			data = make([]int64, len(ids)) // zeros
+		default:
+			destroyAll(vals)
+			return nil, fmt.Errorf("unsupported ONNX input %q for model %q", name, e.model.ID)
+		}
+		tn, err := ort.NewTensor(shape, data)
+		if err != nil {
+			destroyAll(vals)
+			return nil, err
+		}
+		vals = append(vals, tn)
+	}
+	return vals, nil
+}
+
+func destroyAll(vals []ort.Value) {
+	for _, v := range vals {
+		if v != nil {
+			_ = v.Destroy()
+		}
+	}
 }

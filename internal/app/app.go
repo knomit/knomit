@@ -34,8 +34,11 @@ func (a *App) Server() *web.Server     { return a.server }
 func (a *App) Signer() ssh.Signer      { return a.signer }
 func (a *App) AgentBranch() string     { return a.agentBranch }
 
+// Options holds CLI-only overrides that are not persisted to config.
+type Options struct{}
+
 // New creates and boots the application from the given config and context.
-func New(ctx context.Context, cfg config.Config) (*App, error) {
+func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 	a := &App{}
 
 	// SSH keypair.
@@ -50,20 +53,22 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 	a.signer = signer
 	a.agentBranch = agentBranch(keyFingerprint)
 
-	// Embedder.
-	var embedder *embeddings.Embedder
-	modelPath, tokPath, err := embeddings.EnsureModel(filepath.Join(cfg.Home, "models"))
+	// Embedder. Embeddings are MANDATORY: every fact is indexed with a vector
+	// and the per-model cosine thresholds are load-bearing for dedup, graph
+	// density, and search recall. A service running without an embedder would
+	// silently write vectorless facts and mis-tune retrieval, so failure to
+	// build one is fatal rather than a degraded mode.
+	model, err := embeddings.Lookup(cfg.Embeddings.Model)
 	if err != nil {
-		log.Warn().Err(err).Msg("embedder model unavailable")
-	} else {
-		embedder, err = embeddings.NewEmbedder(modelPath, tokPath)
-		if err != nil {
-			log.Warn().Err(err).Msg("embedder init failed")
-		}
+		return nil, fmt.Errorf("embedder model config invalid (embeddings.model=%q): %w", cfg.Embeddings.Model, err)
 	}
-	if embedder != nil {
-		a.closers = append(a.closers, embedder.Close)
+	embedder, err := embeddings.NewEmbedder(model, filepath.Join(cfg.Home, "models"))
+	if err != nil {
+		return nil, fmt.Errorf("embedder init failed for model %q (embeddings are required — check ONNX model files / network): %w", model.ID, err)
 	}
+	a.closers = append(a.closers, embedder.Close)
+	log.Info().Str("model", model.ID).Int("dim", model.Dim).
+		Msg("embedder enabled — facts indexed with vectors; semantic search and methodology vector ranking active")
 
 	// LLM adapter.
 	var llmAdapter llm.LLMAdapter
@@ -112,7 +117,7 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 	a.server = &web.Server{
 		Manager:           a.manager,
 		GitHandler:        gitHandler,
-		EmbeddingsEnabled: embedder != nil,
+		EmbeddingsEnabled: true, // mandatory: New returns an error above if absent.
 		OntologyRoot:      cfg.OntologyRoot,
 		AgentBranch:       a.agentBranch,
 		SessionManager:    web.NewSessionManager(),
@@ -120,10 +125,12 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 		Embedder:          embedder,
 	}
 
-	// Boot repos.
-	if err := a.manager.Boot(); err != nil {
+	// Start the manager (opens repos, launches background cluster
+	// checker). Manager owns its own internal lifecycle — app does not
+	// reach into checker config or stop hooks.
+	if err := a.manager.Start(); err != nil {
 		a.Close()
-		return nil, fmt.Errorf("boot: %w", err)
+		return nil, fmt.Errorf("start manager: %w", err)
 	}
 
 	return a, nil
@@ -136,7 +143,9 @@ func (a *App) Handler() http.Handler {
 
 // Close shuts down repos and releases all resources.
 func (a *App) Close() {
-	a.manager.Shutdown()
+	if err := a.manager.Close(); err != nil {
+		log.Warn().Err(err).Msg("app: manager close failed")
+	}
 	for i := len(a.closers) - 1; i >= 0; i-- {
 		a.closers[i]()
 	}

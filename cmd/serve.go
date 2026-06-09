@@ -10,25 +10,59 @@ import (
 	"strings"
 	"time"
 
+	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 	"golang.org/x/crypto/ssh"
+	"gopkg.in/natefinch/lumberjack.v2"
 
 	"knomit/internal/app"
 	"knomit/internal/config"
 )
 
 func serveCmd() *cobra.Command {
-	return &cobra.Command{
+	var (
+		portOverride  string
+		hostOverride  string
+		logFile       string
+		logMaxSizeMB  int
+		logMaxBackups int
+		logMaxAgeDays int
+	)
+	cmd := &cobra.Command{
 		Use:   "serve",
 		Short: "Start the knomit HTTP server",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// If a log file is requested, tee zerolog output to a rotating
+			// file in addition to stderr. The console (stderr) keeps its
+			// human-readable ConsoleWriter formatting; the file gets raw
+			// JSON so it can be grepped/parsed.
+			if logFile != "" {
+				rotator := &lumberjack.Logger{
+					Filename:   logFile,
+					MaxSize:    logMaxSizeMB,
+					MaxBackups: logMaxBackups,
+					MaxAge:     logMaxAgeDays,
+					Compress:   false,
+				}
+				multi := zerolog.MultiLevelWriter(zerolog.ConsoleWriter{Out: os.Stderr}, rotator)
+				log.Logger = log.Output(multi)
+				fmt.Fprintf(os.Stderr, "knomit: logging also to %s (max %dMB, %d backups, %dd retention)\n",
+					logFile, logMaxSizeMB, logMaxBackups, logMaxAgeDays)
+			}
+
 			cfg, err := config.Load()
 			if err != nil {
 				return fmt.Errorf("load config: %w", err)
 			}
+			if portOverride != "" {
+				cfg.Port = portOverride
+			}
+			if hostOverride != "" {
+				cfg.Host = hostOverride
+			}
 
-			a, err := app.New(cmd.Context(), cfg)
+			a, err := app.New(cmd.Context(), cfg, app.Options{})
 			if err != nil {
 				return err
 			}
@@ -43,8 +77,8 @@ func serveCmd() *cobra.Command {
 
 			startupLog := log.Info().
 				Str("http", httpAddr).
-				Str("api", httpAddr+"/api/v1/{repo}").
-				Str("mcp", httpAddr+"/api/v1/{repo}/mcp")
+				Str("api", httpAddr+"/api/v1/repos/{repo}").
+				Str("mcp", httpAddr+"/api/v1/repos/{repo}/branches/{branch}/mcp")
 
 			if cfg.Git.Serve {
 				startupLog = startupLog.Str("git_remote", httpAddr+"/git")
@@ -57,6 +91,10 @@ func serveCmd() *cobra.Command {
 				Msg("knomit ready")
 
 			// HTTP server.
+			// BaseContext propagates cmd.Context() into every request context so
+			// that SSE handlers (which select on r.Context().Done()) are unblocked
+			// immediately when SIGTERM cancels the command context, allowing
+			// Shutdown to return promptly instead of waiting for idle connections.
 			srv := &http.Server{
 				Addr:              listenAddr,
 				Handler:           router,
@@ -64,6 +102,7 @@ func serveCmd() *cobra.Command {
 				ReadTimeout:       30 * time.Second,
 				WriteTimeout:      0, // 0 = no limit for SSE long-poll
 				IdleTimeout:       60 * time.Second,
+				BaseContext:       func(_ net.Listener) context.Context { return cmd.Context() },
 			}
 
 			go func() {
@@ -106,4 +145,11 @@ func serveCmd() *cobra.Command {
 			return srv.Shutdown(shutCtx)
 		},
 	}
+	cmd.Flags().StringVar(&portOverride, "port", "", "override the listen port (default: from config)")
+	cmd.Flags().StringVar(&hostOverride, "host", "", "override the listen host (default: from config)")
+	cmd.Flags().StringVar(&logFile, "log-file", "", "path to a file that receives JSON-structured log output (in addition to stderr)")
+	cmd.Flags().IntVar(&logMaxSizeMB, "log-max-size", 10, "max log file size in MB before rotation")
+	cmd.Flags().IntVar(&logMaxBackups, "log-max-backups", 3, "max number of rotated log files to keep")
+	cmd.Flags().IntVar(&logMaxAgeDays, "log-max-age", 7, "max age in days to keep rotated log files")
+	return cmd
 }

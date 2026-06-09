@@ -49,9 +49,14 @@ type OriginSession struct {
 	State       SessionState
 	CreatedAt   time.Time
 	LastAccess  time.Time
-	RemoteStore   *store.Service  // cloned remote store, set by test handler
-	RemoteBranch  string     // remote branch to track, set by apply handler
-	AppliedBranch string     // agent branch written into the clone during apply; used by commit for rebuild
+	RemoteStore   *store.Service // cloned remote store, set by test handler
+	AppliedBranch string         // agent branch written into the clone during apply; used by commit for rebuild
+	// RemoteBranch is the upstream consensus branch chosen at /apply time
+	// (explicit req.Branch, or the test-step default). The commit handler
+	// must prefer this over TestResult.DefaultBranch so a user picking a
+	// non-default branch (e.g. master when remote default is main) still
+	// has SetRemote configured to track their choice.
+	RemoteBranch  string
 	TestResult    any        // cached result from test step
 	PreviewResult any        // cached result from preview step
 	ApplyResult   any        // cached result from apply step
@@ -151,6 +156,17 @@ func (sm *SessionManager) Shutdown() {
 		return true
 	})
 	log.Debug().Msg("session manager shut down")
+}
+
+// ListByRepo returns all active sessions for the given repo name.
+// The current model stores at most one session per repo, but the return type
+// is a slice so callers don't need to know the storage layout.
+func (sm *SessionManager) ListByRepo(repo string) []*OriginSession {
+	v, ok := sm.sessions.Load(repo)
+	if !ok {
+		return nil
+	}
+	return []*OriginSession{v.(*OriginSession)}
 }
 
 // deleteByRepo removes the session for repo unconditionally (no ID check).

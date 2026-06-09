@@ -3,11 +3,13 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"io"
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	gogit "github.com/go-git/go-git/v5"
 	gogitconfig "github.com/go-git/go-git/v5/config"
@@ -77,10 +79,11 @@ type repoHandler struct {
 	// don't exercise the index.
 	im IndexManager
 
-	configMu sync.Mutex   // guards ConfigureRemote / remote wiring
-	embedMu  sync.RWMutex // guards embedder
+	name     string           // repo name, derived from dbPath at Open time
+	configMu sync.Mutex       // guards ConfigureRemote / remote wiring
+	embedMu  sync.RWMutex     // guards embedder
 	embedder Embedder
-	branchMu sync.Map // per-branch write serialization
+	branchMu sync.Map         // per-branch write serialization
 }
 
 // lockBranch acquires the per-branch write lock and returns an unlock function.
@@ -163,7 +166,7 @@ func (rh *repoHandler) branchID(ctx context.Context, name string) (int64, error)
 	var id int64
 	err := conn(ctx, rh.db).QueryRowContext(ctx, `SELECT id FROM branches WHERE name = ?`, name).Scan(&id)
 	if err == sql.ErrNoRows {
-		return 0, fmt.Errorf("branch %q not found", name)
+		return 0, fmt.Errorf("branch %q: %w", name, ErrBranchNotFound)
 	}
 	if err != nil {
 		return 0, fmt.Errorf("branch lookup: %w", err)
@@ -321,26 +324,43 @@ func (rh *repoHandler) SetDefaultBranch(branch string) error {
 	)
 }
 
-// configureRemote ensures the named remote is registered in the git config
-// with the given URL and fetch refspec for branch. Idempotent.
-func (rh *repoHandler) configureRemote(url, branch string) error {
+// configureRemote ensures origin is registered with two fetch refspecs:
+// one for the upstream consensus branch (typically "main", configurable to
+// "master" or any other name via upstreamMain) and one for this machine's
+// agent branch. Idempotent. Both branch names are part of their respective
+// refspecs, so callers must pass the same upstreamMain and agentBranch on
+// every call for a given repo. Empty upstreamMain defaults to "main".
+func (rh *repoHandler) configureRemote(url, upstreamMain, agentBranch string) error {
 	rh.configMu.Lock()
 	defer rh.configMu.Unlock()
+
+	if upstreamMain == "" {
+		upstreamMain = "main"
+	}
 
 	cfg, err := rh.repo.Config()
 	if err != nil {
 		return fmt.Errorf("read config: %w", err)
 	}
 
-	refspec := fmt.Sprintf("+refs/heads/%s:refs/remotes/origin/%s", branch, branch)
+	mainRefspec := fmt.Sprintf("+refs/heads/%s:refs/remotes/origin/%s", upstreamMain, upstreamMain)
+	agentRefspec := fmt.Sprintf("+refs/heads/%s:refs/remotes/origin/%s", agentBranch, agentBranch)
 
-	if rc, ok := cfg.Remotes["origin"]; ok {
-		if len(rc.URLs) > 0 && rc.URLs[0] == url {
-			for _, rs := range rc.Fetch {
-				if string(rs) == refspec {
-					return nil // already configured
-				}
+	if rc, ok := cfg.Remotes["origin"]; ok && len(rc.URLs) > 0 && rc.URLs[0] == url {
+		want := map[string]bool{mainRefspec: true, agentRefspec: true}
+		got := make(map[string]bool, len(rc.Fetch))
+		for _, rs := range rc.Fetch {
+			got[string(rs)] = true
+		}
+		matches := len(got) == len(want)
+		for k := range want {
+			if !got[k] {
+				matches = false
+				break
 			}
+		}
+		if matches {
+			return nil // already configured
 		}
 	}
 
@@ -349,7 +369,8 @@ func (rh *repoHandler) configureRemote(url, branch string) error {
 		Name: "origin",
 		URLs: []string{url},
 		Fetch: []gogitconfig.RefSpec{
-			gogitconfig.RefSpec(refspec),
+			gogitconfig.RefSpec(mainRefspec),
+			gogitconfig.RefSpec(agentRefspec),
 		},
 	})
 	return err
@@ -361,6 +382,9 @@ func (rh *repoHandler) configureRemote(url, branch string) error {
 func (rh *repoHandler) resolveRef(ctx context.Context, branch string) (plumbing.Hash, error) {
 	ref, err := rh.gits.Reference(plumbing.NewBranchReferenceName(branch))
 	if err != nil {
+		if errors.Is(err, plumbing.ErrReferenceNotFound) {
+			return plumbing.ZeroHash, fmt.Errorf("resolveRef %q: %w: %w", branch, ErrBranchNotFound, err)
+		}
 		return plumbing.ZeroHash, fmt.Errorf("resolveRef %q: %w", branch, err)
 	}
 	return ref.Hash(), nil
@@ -386,9 +410,55 @@ func (rh *repoHandler) readFileAtCommit(ctx context.Context, path, commitHash st
 	// Exact lookup failed — try case-insensitive walk.
 	content, err := treeFileInsensitive(rh.repo, tree, path)
 	if err != nil {
-		return "", fmt.Errorf("readFileAtCommit: file %q not found (case-insensitive): %w", path, err)
+		if errors.Is(err, ErrPathNotFound) {
+			return "", fmt.Errorf("readFileAtCommit: %q at %s: %w", path, commitHash, ErrPathNotFound)
+		}
+		return "", fmt.Errorf("readFileAtCommit: file %q (case-insensitive): %w", path, err)
 	}
 	return content, nil
+}
+
+// firstParentCommit returns the first parent of commitHash, or "" if
+// commitHash is a root commit. For merge commits, this returns the "ours"
+// side (parent[0]) — the branch that was checked out when the merge was
+// performed. Walking first-parent traces a single branch's local history,
+// which is what the time-aware DERIVED_FROM resolver needs to find the
+// "active version of path P at commit C on branch B" without being
+// confused by versions merged in from sibling branches.
+func (rh *repoHandler) firstParentCommit(ctx context.Context, commitHash string) (string, error) {
+	commit, err := rh.repo.CommitObject(plumbing.NewHash(commitHash))
+	if err != nil {
+		return "", fmt.Errorf("firstParentCommit: %s: %w", commitHash, err)
+	}
+	if commit.NumParents() == 0 {
+		return "", nil
+	}
+	return commit.ParentHashes[0].String(), nil
+}
+
+// readBlobHashAtCommit returns the blob hash for path in the git tree at
+// commitHash. Used to bridge (path, commit) → blob_hash when wiring graph
+// edges that point to a specific Fact(path, blob_hash) version.
+//
+// No case-insensitive fallback: refs are stored normalised and target_commit
+// is known-good (returned by resolveTargetCommit), so an exact lookup is
+// sufficient. Compare with readFileAtCommit above which falls back for
+// pre-normalisation legacy paths.
+func (rh *repoHandler) readBlobHashAtCommit(ctx context.Context, path, commitHash string) (string, error) {
+	hash := plumbing.NewHash(commitHash)
+	commit, err := rh.repo.CommitObject(hash)
+	if err != nil {
+		return "", fmt.Errorf("readBlobHashAtCommit: commit: %w", err)
+	}
+	tree, err := commit.Tree()
+	if err != nil {
+		return "", fmt.Errorf("readBlobHashAtCommit: tree: %w", err)
+	}
+	f, err := tree.File(path)
+	if err != nil {
+		return "", fmt.Errorf("readBlobHashAtCommit: file %q at %s: %w", path, commitHash, err)
+	}
+	return f.Hash.String(), nil
 }
 
 // HeadCommit returns the hash of the tip commit of branch as a hex string.
@@ -398,6 +468,21 @@ func (rh *repoHandler) HeadCommit(ctx context.Context, branch string) (string, e
 		return "", fmt.Errorf("HeadCommit: %w", err)
 	}
 	return hash.String(), nil
+}
+
+// HeadCommitInfo returns both the HEAD commit hash and its committer
+// timestamp. Used by the cluster-cache background checker to detect "activity
+// has settled for N seconds" before triggering a recompute.
+func (rh *repoHandler) HeadCommitInfo(ctx context.Context, branch string) (string, time.Time, error) {
+	hash, err := rh.resolveRef(ctx, branch)
+	if err != nil {
+		return "", time.Time{}, fmt.Errorf("HeadCommitInfo: %w", err)
+	}
+	commit, err := rh.repo.CommitObject(hash)
+	if err != nil {
+		return "", time.Time{}, fmt.Errorf("HeadCommitInfo: commit object: %w", err)
+	}
+	return hash.String(), commit.Committer.When, nil
 }
 
 // readFileWithHash returns both the file content and the blob hash for the given path.
@@ -416,6 +501,9 @@ func (rh *repoHandler) readFileWithHash(ctx context.Context, branch, path string
 	}
 	entry, err := tree.FindEntry(path)
 	if err != nil {
+		if errors.Is(err, object.ErrEntryNotFound) || errors.Is(err, object.ErrDirectoryNotFound) {
+			return "", "", fmt.Errorf("readFileWithHash: %q: %w", path, ErrPathNotFound)
+		}
 		return "", "", fmt.Errorf("readFileWithHash: entry %s: %w", path, err)
 	}
 	blob, err := rh.repo.BlobObject(entry.Hash)
@@ -600,15 +688,10 @@ func (rh *repoHandler) BranchInfo(localAgent string) (branches, agentBranches []
 			break
 		}
 		name := ref.Name().String()
-		var short string
-		switch {
-		case strings.HasPrefix(name, "refs/heads/"):
-			short = strings.TrimPrefix(name, "refs/heads/")
-		case strings.HasPrefix(name, "refs/remotes/origin/"):
-			short = strings.TrimPrefix(name, "refs/remotes/origin/")
-		default:
+		if !strings.HasPrefix(name, "refs/heads/") {
 			continue
 		}
+		short := strings.TrimPrefix(name, "refs/heads/")
 		if strings.HasPrefix(short, "agent/") {
 			if _, seen := agentSet[short]; !seen {
 				agentSet[short] = struct{}{}
@@ -616,7 +699,7 @@ func (rh *repoHandler) BranchInfo(localAgent string) (branches, agentBranches []
 					matchedAgent = short
 				}
 			}
-		} else if strings.HasPrefix(name, "refs/heads/") {
+		} else {
 			branches = append(branches, short)
 		}
 	}

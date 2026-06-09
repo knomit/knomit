@@ -7,6 +7,8 @@ import (
 
 	"github.com/rs/zerolog/log"
 	"github.com/ysmood/goob"
+
+	"knomit/internal/store"
 )
 
 // TaskEvent is the event payload broadcast to SSE clients via TaskHub.
@@ -183,22 +185,30 @@ func (h *TaskHub) broadcastStatus(head string) {
 	h.ob.Publish(StatusEvent{Head: head})
 }
 
-// SyncEvent is broadcast after a remote sync attempt.
+// SyncEvent is broadcast after a remote sync attempt. On success, Main and
+// Agent carry the reconcile outcome for the main and agent branches
+// respectively (the same shapes store.Sync returns). On error, Error is
+// set and Main/Agent are nil.
 type SyncEvent struct {
-	Remote      string `json:"remote"`
-	Status      string `json:"status"` // "sync_ok" or "sync_error"
-	MergeCommit string `json:"merge_commit,omitempty"`
-	FastForward bool   `json:"fast_forward,omitempty"`
-	Error       string `json:"error,omitempty"`
+	Remote string                       `json:"remote"`
+	Status string                       `json:"status"` // "sync_ok" or "sync_error"
+	Main   *store.MainReconcileResult   `json:"main,omitempty"`
+	Agent  *store.AgentReconcileResult  `json:"agent,omitempty"`
+	Error  string                       `json:"error,omitempty"`
 }
 
-// broadcastSyncOK publishes a successful sync event.
-func (h *TaskHub) broadcastSyncOK(remote, mergeCommit string, fastForward bool) {
+// broadcastSyncOK publishes a successful sync event carrying the full
+// SyncResult so frontends can render which side of the reconcile actually
+// changed (main fast-forward / rewound, agent merge / ff / rebase / noop)
+// rather than collapsing both into a single merge-commit hash.
+func (h *TaskHub) broadcastSyncOK(remote string, result store.SyncResult) {
+	main := result.Main
+	agent := result.Agent
 	h.ob.Publish(SyncEvent{
-		Remote:      remote,
-		Status:      "sync_ok",
-		MergeCommit: mergeCommit,
-		FastForward: fastForward,
+		Remote: remote,
+		Status: "sync_ok",
+		Main:   &main,
+		Agent:  &agent,
 	})
 }
 

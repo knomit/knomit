@@ -6,10 +6,11 @@ test.describe.serial('Multi-Repo', () => {
   // There is no public API to create repos dynamically.
   test.skip('create facts in two repos → repo selector appears → switch repos → different content', async ({ freshKnomit, page }) => {
     // Create a fact in the default "knomit" repo
-    const res1 = await freshKnomit.api.put(`${freshKnomit.baseURL}/api/v1/knomit/fact`, {
-      data: {
-        path: 'kb/primary-fact.md',
-        content: `---
+    const res1 = await freshKnomit.api.put(
+      `${freshKnomit.baseURL}/api/v1/repos/knomit/branches/${freshKnomit.branch}/facts/kb/primary-fact.md`,
+      {
+        data: {
+          content: `---
 type: observation
 domain: [testing]
 confidence: 0.9
@@ -20,15 +21,17 @@ refs: []
 # Primary Fact
 
 Content in the default knomit repo.`,
+        },
       },
-    });
+    );
     expect(res1.ok()).toBeTruthy();
 
     // Create a fact in a second repo (auto-created on first write)
-    const res2 = await freshKnomit.api.put(`${freshKnomit.baseURL}/api/v1/second/fact`, {
-      data: {
-        path: 'kb/secondary-fact.md',
-        content: `---
+    const res2 = await freshKnomit.api.put(
+      `${freshKnomit.baseURL}/api/v1/repos/second/branches/${freshKnomit.branch}/facts/kb/secondary-fact.md`,
+      {
+        data: {
+          content: `---
 type: observation
 domain: [testing]
 confidence: 0.9
@@ -39,8 +42,9 @@ refs: []
 # Secondary Fact
 
 Content in the second repo.`,
+        },
       },
-    });
+    );
     expect(res2.ok()).toBeTruthy();
 
     // Reload to pick up the new repo list
@@ -60,8 +64,9 @@ Content in the second repo.`,
     }
     expect(initialNames).toContain('primary-fact.md');
 
-    // Switch to the "second" repo
-    await repoSelect.selectOption('second');
+    // Switch to the "second" repo via the custom dropdown.
+    await repoSelect.click();
+    await page.getByTestId('toknomitr-repo-option-second').click();
     await page.waitForLoadState('domcontentloaded');
     await page.waitForTimeout(1000);
 

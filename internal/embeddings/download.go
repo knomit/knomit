@@ -5,31 +5,35 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
 
 	"github.com/rs/zerolog/log"
 )
 
-const (
-	modelURL     = "https://huggingface.co/nomic-ai/nomic-embed-text-v1.5/resolve/main/onnx/model_quantized.onnx"
-	tokenizerURL = "https://huggingface.co/nomic-ai/nomic-embed-text-v1.5/resolve/main/tokenizer.json"
-)
-
-// EnsureModel ensures the nomic-embed-text-v1.5 ONNX model and tokenizer are
-// present in cacheDir, downloading them from HuggingFace if missing.
+// EnsureModel ensures model m's ONNX file (+ external data + tokenizer) exist
+// under <cacheDir>/<m.ID>/, downloading any that are missing. Files are saved
+// under their ORIGINAL URL basenames because ONNX Runtime resolves a model's
+// external-weights file by the name embedded in the graph (e.g.
+// "model_fp16.onnx_data"); renaming would break that resolution.
 // Returns (modelPath, tokenizerPath, error).
-func EnsureModel(cacheDir string) (string, string, error) {
-	modelPath := filepath.Join(cacheDir, "model.onnx")
-	tokPath := filepath.Join(cacheDir, "tokenizer.json")
-
-	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
+func EnsureModel(m Model, cacheDir string) (string, string, error) {
+	dir := filepath.Join(cacheDir, m.ID)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", "", fmt.Errorf("create cache dir: %w", err)
 	}
-
-	if err := downloadIfMissing(modelPath, modelURL, "nomic-embed-text-v1.5 ONNX model"); err != nil {
+	modelPath := filepath.Join(dir, path.Base(m.ModelURL))
+	tokPath := filepath.Join(dir, path.Base(m.TokenizerURL))
+	if err := downloadIfMissing(modelPath, m.ModelURL, m.ID+" ONNX model"); err != nil {
 		return "", "", err
 	}
-	if err := downloadIfMissing(tokPath, tokenizerURL, "tokenizer"); err != nil {
+	if m.DataURL != "" {
+		dataPath := filepath.Join(dir, path.Base(m.DataURL))
+		if err := downloadIfMissing(dataPath, m.DataURL, m.ID+" ONNX external data"); err != nil {
+			return "", "", err
+		}
+	}
+	if err := downloadIfMissing(tokPath, m.TokenizerURL, m.ID+" tokenizer"); err != nil {
 		return "", "", err
 	}
 	return modelPath, tokPath, nil

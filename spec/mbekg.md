@@ -14,7 +14,8 @@ A fact is a single markdown file consisting of YAML frontmatter and a markdown b
 
 ```yaml
 ---
-type: <epistemic_type>
+kind: <epistemic|pragmatic>
+type: <type>
 domain: [<string>, ...]
 confidence: <float 0.0-1.0>
 sources: <integer>
@@ -33,24 +34,39 @@ that an agent would need to understand and apply it.>
 
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `type` | string | no | `observation` | Epistemic type. One of: `observation`, `concept`, `process`, `principle`, `pattern`, `reference`, `synthesis`. |
+| `kind` | string | no | `epistemic` | Classification family: `epistemic` (descriptive — "what is") or `pragmatic` (prescriptive — "what to do"). Determines which `type` values are allowed. |
+| `type` | string | no | `observation` (epistemic only) | Leaf type within the chosen `kind`. Epistemic: `observation`, `concept`, `process`, `principle`, `pattern`, `reference`, `synthesis`, `insight`, `hypothesis`, `methodology`. Pragmatic: `policy`, `heuristic` (no default — must be specified). |
 | `domain` | string[] | yes | | Flexible categorization tags. A fact can belong to multiple domains. Not tied to directory structure. |
 | `confidence` | float | yes | | 0.0 to 1.0. How strongly this fact should be weighted. Guides agent decision-making (e.g., 0.3 = weak signal, 0.9 = near-certain). |
 | `sources` | integer | yes | | Count of independent corroborations. Distinct from Git commit count — tracks how many independent agents or observations produced this fact. |
 | `entities` | string[] | yes | | Flat list of entity tags for discovery. Acts as a lightweight search index. |
 | `refs` | string[] | no | `[]` | Evidence pointers: external URLs or local fact file paths. See Section 4. |
 
-### 2.3 Epistemic Types
+### 2.3 Types
+
+Every `type` belongs to exactly one `kind`.
+
+**Epistemic types** (`kind: epistemic` — descriptive, "what is"):
 
 | Type | Meaning |
 |---|---|
 | `observation` | An empirically observed fact (default) |
 | `concept` | A definition or description of a concept |
 | `process` | A sequence of steps or workflow |
-| `principle` | A guiding rule or heuristic |
+| `principle` | A guiding rule or causal claim |
 | `pattern` | A recurring structure identified across observations |
 | `reference` | A pointer to an external resource or standard |
 | `synthesis` | A higher-order fact derived from other facts via automated synthesis |
+| `insight` | A non-obvious grounded conclusion drawn from connecting facts already trusted |
+| `hypothesis` | A falsifiable prediction derived from patterns — carries inherent uncertainty |
+| `methodology` | A reasoning-process lesson learned from hypothesis outcomes |
+
+**Pragmatic types** (`kind: pragmatic` — prescriptive, "what to do"; no default):
+
+| Type | Meaning |
+|---|---|
+| `policy` | A mandatory rule that should always be followed |
+| `heuristic` | A rule-of-thumb that biases decisions but is not absolute |
 
 ### 2.4 What Is NOT in the File
 

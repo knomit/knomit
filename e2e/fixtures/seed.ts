@@ -36,7 +36,7 @@ PostgreSQL uses Multi-Version Concurrency Control (MVCC) to handle concurrent ac
     path: 'kb/databases/postgresql/vacuum.md',
     content: `---
 confidence: 0.85
-type: practice
+type: principle
 entities:
   - PostgreSQL
   - VACUUM
@@ -139,7 +139,7 @@ HTTP/3 runs over QUIC (UDP-based) rather than TCP. This eliminates head-of-line 
     path: 'kb/networking/load-balancing/l4-vs-l7.md',
     content: `---
 confidence: 0.85
-type: practice
+type: principle
 entities:
   - load balancer
   - L4
@@ -155,7 +155,7 @@ L4 (transport) load balancers route based on IP/port and are faster but less fle
     path: 'kb/security/authn/jwt-best-practices.md',
     content: `---
 confidence: 0.9
-type: practice
+type: principle
 entities:
   - JWT
   - authentication
@@ -170,7 +170,7 @@ Always validate the algorithm header to prevent algorithm confusion attacks. Use
     path: 'kb/security/authn/oauth2-pkce.md',
     content: `---
 confidence: 0.85
-type: practice
+type: principle
 entities:
   - OAuth2
   - PKCE
@@ -212,7 +212,7 @@ SBOMs (Software Bill of Materials) enumerate all dependencies in a software arti
     path: 'kb/observability/metrics/red-method.md',
     content: `---
 confidence: 0.9
-type: practice
+type: principle
 entities:
   - RED method
   - metrics
@@ -242,7 +242,7 @@ OpenTelemetry provides a vendor-neutral API for emitting traces, metrics, and lo
     path: 'kb/observability/logging/structured-logging.md',
     content: `---
 confidence: 0.85
-type: practice
+type: principle
 entities:
   - structured logging
   - JSON logs
@@ -285,7 +285,7 @@ pgvector adds vector similarity search to PostgreSQL. It supports L2 distance, i
     path: 'kb/security/network/mtls.md',
     content: `---
 confidence: 0.9
-type: practice
+type: principle
 entities:
   - mTLS
   - mutual TLS
@@ -330,21 +330,53 @@ export const SEED_FACTS = facts;
 
 export const SEED_PATHS = facts.map((f) => f.path);
 
+// ── URL helpers ─────────────────────────────────────────────────
+
+/** Encode a branch name for use in a URL path segment (replace / with :). */
+export function encodeBranch(name: string): string {
+  return name.replace(/\//g, ':');
+}
+
+/**
+ * Discover the agent branch for a repo by calling GET /api/v1/repos/{repo}/branches.
+ * Returns the first branch starting with "agent/" (encoded for URLs), or the first
+ * branch overall if none starts with "agent/".
+ */
+export async function discoverAgentBranch(baseURL: string, repo = 'knomit'): Promise<string> {
+  const res = await fetch(`${baseURL}/api/v1/repos/${repo}/branches`);
+  if (!res.ok) {
+    throw new Error(`Failed to list branches: ${res.status} ${res.statusText}`);
+  }
+  const body = await res.json();
+  const branches: Array<{ name: string }> = body?._embedded?.branches ?? [];
+  if (branches.length === 0) {
+    throw new Error('No branches found for repo ' + repo);
+  }
+  const agentBranch = branches.find((b) => b.name.startsWith('agent/')) ?? branches[0];
+  return encodeBranch(agentBranch.name);
+}
+
 // ── Seed function ───────────────────────────────────────────────
 
 const BATCH_SIZE = 4;
 const BATCH_DELAY_MS = 1_500;
 
 export async function seedFixture(baseURL: string): Promise<void> {
+  // Discover the agent branch before writing any facts.
+  const encodedBranch = await discoverAgentBranch(baseURL);
+
   for (let i = 0; i < facts.length; i += BATCH_SIZE) {
     const batch = facts.slice(i, i + BATCH_SIZE);
 
     for (const fact of batch) {
-      const res = await fetch(`${baseURL}/api/v1/knomit/fact`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ path: fact.path, content: fact.content }),
-      });
+      const res = await fetch(
+        `${baseURL}/api/v1/repos/knomit/branches/${encodedBranch}/facts/${fact.path}`,
+        {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ content: fact.content }),
+        },
+      );
 
       if (!res.ok) {
         const body = await res.text();

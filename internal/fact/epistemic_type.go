@@ -1,25 +1,26 @@
 // Package fact provides shared domain types for the knomit knowledge base.
 package fact
 
-import "fmt"
+// Type is the leaf value of a fact's classification. A Type belongs to
+// exactly one Kind (epistemic or pragmatic), enforced by Kind.AllowsType.
+type Type string
 
-// EpistemicType classifies the kind of knowledge a fact represents.
-type EpistemicType string
-
+// Epistemic leaf types — descriptive knowledge ("what is").
 const (
-	Observation EpistemicType = "observation"
-	Concept     EpistemicType = "concept"
-	Process     EpistemicType = "process"
-	Principle   EpistemicType = "principle"
-	Pattern     EpistemicType = "pattern"
-	Reference   EpistemicType = "reference"
-	Synthesis   EpistemicType = "synthesis"
-	Hypothesis  EpistemicType = "hypothesis"
-	Methodology EpistemicType = "methodology"
+	Observation Type = "observation"
+	Concept     Type = "concept"
+	Process     Type = "process"
+	Principle   Type = "principle"
+	Pattern     Type = "pattern"
+	Reference   Type = "reference"
+	Synthesis   Type = "synthesis"
+	Insight     Type = "insight"
+	Hypothesis  Type = "hypothesis"
+	Methodology Type = "methodology"
 )
 
-// validTypes is the authoritative set of allowed epistemic types.
-var validTypes = map[EpistemicType]bool{
+// EpistemicTypes is the authoritative set of epistemic Types.
+var EpistemicTypes = map[Type]bool{
 	Observation: true,
 	Concept:     true,
 	Process:     true,
@@ -27,27 +28,16 @@ var validTypes = map[EpistemicType]bool{
 	Pattern:     true,
 	Reference:   true,
 	Synthesis:   true,
+	Insight:     true,
 	Hypothesis:  true,
 	Methodology: true,
 }
 
-// Valid reports whether t is one of the allowed epistemic types.
-func (t EpistemicType) Valid() bool {
-	return validTypes[t]
+// AllEpistemicTypes returns all epistemic Types in a stable order.
+func AllEpistemicTypes() []Type {
+	return []Type{Observation, Concept, Process, Principle, Pattern, Reference, Synthesis, Insight, Hypothesis, Methodology}
 }
 
-// Validate returns an error if t is not a valid epistemic type.
-func (t EpistemicType) Validate() error {
-	if t.Valid() {
-		return nil
-	}
-	return fmt.Errorf("invalid epistemic type %q: must be one of observation, concept, process, principle, pattern, reference, synthesis, hypothesis, methodology", t)
-}
-
-// AllTypes returns all valid epistemic types in a stable order.
-func AllTypes() []EpistemicType {
-	return []EpistemicType{Observation, Concept, Process, Principle, Pattern, Reference, Synthesis, Hypothesis, Methodology}
-}
-
-// DefaultType is the epistemic type used when none is specified.
-const DefaultType = Observation
+// DefaultEpistemicType is the leaf type used when an epistemic fact is
+// parsed without a `type` field. It preserves the historical default.
+const DefaultEpistemicType = Observation

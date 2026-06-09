@@ -11,7 +11,7 @@ async function navigateToFirstFact(page: Parameters<typeof test>[1]['page']) {
     const factCount = await factEntries.count();
     if (factCount > 0) break;
     // Click the first directory entry to descend; wait for browse response
-    const browseResponse = page.waitForResponse(r => r.url().includes('/browse'), { timeout: 5000 });
+    const browseResponse = page.waitForResponse(r => r.url().includes('/topics'), { timeout: 5000 });
     await dirEntries.first().click({ timeout: 10_000 });
     await browseResponse;
   }

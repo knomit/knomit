@@ -6,6 +6,12 @@ import (
 	"knomit/internal/store"
 )
 
+// WithRead delegates to the underlying RepoInstance.WithRead, exposing the
+// store.Service to test code for direct API calls.
+func (b *BranchHandle) WithRead(fn func(*store.Service)) {
+	b.repo.ri.WithRead(fn)
+}
+
 // Drop removes the branch from the repo. Wraps store.Branches().DropBranch
 // which (after production fix in commit ae8c684) deletes both the git ref
 // and the SQLite branches / branch_facts / branch_commits rows. Also
@@ -27,6 +33,45 @@ func (b *BranchHandle) Drop() {
 	if b.repo.sb.auto {
 		AssertIntegrity(t, b.repo)
 	}
+}
+
+// HeadCommit returns the current git HEAD commit hash for this branch,
+// bypassing the DSL snapshot cache. Head() prefers the most recent
+// captured snapshot to keep deterministic linkage in chained tests;
+// HeadCommit always queries the live ref. Used by reconcile tests that
+// need to detect a ref move after a Sync or ConnectKeepingWork advanced
+// the branch without going through the DSL mutation path.
+func (b *BranchHandle) HeadCommit() string {
+	t := b.repo.sb.t
+	t.Helper()
+	var hash string
+	var err error
+	b.repo.ri.WithRead(func(svc *store.Service) {
+		hash, err = svc.Branches().HeadCommit(context.Background(), b.name)
+	})
+	if err != nil {
+		t.Fatalf("HeadCommit(%s): %v", b.name, err)
+	}
+	return hash
+}
+
+// HasFile returns true if path exists in the tree at the branch's
+// current HEAD. Differs from FactCount in that it returns the raw
+// presence of any tree entry — useful in reconcile scenario tests
+// that assert "this file survived the replay" without parsing it as
+// a fact.
+func (b *BranchHandle) HasFile(path string) bool {
+	t := b.repo.sb.t
+	t.Helper()
+	var res store.ReadFactResult
+	var err error
+	b.repo.ri.WithRead(func(svc *store.Service) {
+		res, err = svc.Facts().ReadFact(context.Background(), b.name, path, nil)
+	})
+	if err != nil {
+		return false
+	}
+	return res.Content != ""
 }
 
 // FactCount returns the number of .md files under kb/ at the branch's

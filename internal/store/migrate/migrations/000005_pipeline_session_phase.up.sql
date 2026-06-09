@@ -1,0 +1,11 @@
+-- Add a workflow-phase column to pipeline_sessions. The existing `status`
+-- column tracks lifecycle (active|completed|abandoned); `phase` tracks where
+-- inside an active session we are. Replaces the in-memory `reflectChecked`
+-- map on Reviewer, which was lost between MCP calls and caused reflect items
+-- to be re-enqueued on every continuation.
+--
+-- Values:
+--   work    - default; prune/distill items being processed
+--   reflect - all work items answered; reflect item enqueued or being served
+--   done    - all items including reflect answered; ready to complete
+ALTER TABLE pipeline_sessions ADD COLUMN phase TEXT NOT NULL DEFAULT 'work';

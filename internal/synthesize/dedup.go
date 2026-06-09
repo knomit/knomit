@@ -4,14 +4,19 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"sync"
 
 	"knomit/internal/fact"
 	"knomit/internal/store"
 
 	"github.com/rs/zerolog/log"
+	"golang.org/x/sync/errgroup"
 )
 
-const defaultDedupThreshold = 0.92
+// maxConcurrentDedupSearches caps the number of in-flight idx.Search calls
+// during the candidate-pair discovery phase. Same rationale as
+// maxConcurrentNeighborSearches in cluster.go.
+const maxConcurrentDedupSearches = 8
 
 // mergePair represents two facts that are candidates for merging.
 type mergePair struct {
@@ -75,6 +80,13 @@ func applyGreedyMerges(pairs []mergePair) []mergePair {
 // It searches for near-duplicates, applies greedy merge selection, and
 // commits the changes to git and the search index.
 // It returns the surviving cluster facts (after removing losers).
+//
+// Vector lookup uses SearchOptions.QueryByPath, which resolves each member's
+// stored vector via a SQL subquery in the sqlite-vec MATCH operand. No
+// ONNX inference runs in this pass — every cluster member is already an
+// indexed fact whose 768-dim vector lives in facts_vec from when it was
+// learned, computed over the same title+body content we'd otherwise
+// re-embed here.
 func dedupCluster(
 	ctx context.Context,
 	cluster []factForLLM,
@@ -84,7 +96,6 @@ func dedupCluster(
 	recipeName string,
 	onProgress func(ProgressEvent),
 	agentBranch string,
-	embedders ...store.Embedder,
 ) ([]factForLLM, error) {
 	if len(cluster) < 2 {
 		return cluster, nil
@@ -96,61 +107,58 @@ func dedupCluster(
 		clusterByPath[f.File] = f
 	}
 
-	// Batch-embed all cluster facts upfront if a BatchEmbedder is available.
-	var clusterVecs [][]float32
-	if len(embedders) > 0 {
-		if batcher, ok := embedders[0].(store.BatchEmbedder); ok {
-			texts := make([]string, len(cluster))
-			for i, f := range cluster {
-				texts[i] = f.Title + " " + f.Body
-			}
-			clusterVecs, _ = batcher.EmbedBatch(texts)
-		}
-	}
-
-	// Find candidate pairs via embedding search.
+	// Find candidate pairs via embedding search. Searches run with bounded
+	// concurrency since each idx.Search is independent and dominates wall
+	// time. A single mutex protects the seen-pair set and pairs slice.
 	seen := make(map[string]bool) // track "a|b" canonical pairs already added
 	var pairs []mergePair
-
-	for i, fact := range cluster {
-		sq := store.SearchQuery{
-			Text:          fact.Title + " " + fact.Body,
-			MinSimilarity: threshold,
-			Limit:         10,
-		}
-		if clusterVecs != nil && i < len(clusterVecs) && len(clusterVecs[i]) > 0 {
-			sq.QueryVec = clusterVecs[i]
-		}
-		results, err := idx.Search(ctx, agentBranch, sq)
-		if err != nil {
-			return nil, fmt.Errorf("dedupCluster: search for %q: %w", fact.File, err)
-		}
-
-		for _, r := range results {
-			// Only consider results that are within the current cluster.
-			other, inCluster := clusterByPath[r.Path]
-			if !inCluster {
-				continue
+	var mu sync.Mutex
+	g, gctx := errgroup.WithContext(ctx)
+	g.SetLimit(maxConcurrentDedupSearches)
+	for _, fact := range cluster {
+		g.Go(func() error {
+			sq := store.SearchOptions{
+				QueryByPath:   fact.File,
+				MinSimilarity: threshold,
+				Limit:         10,
 			}
-			// Skip self-match.
-			if r.Path == fact.File {
-				continue
+			results, err := idx.Search(gctx, agentBranch, sq)
+			if err != nil {
+				return fmt.Errorf("dedupCluster: search for %q: %w", fact.File, err)
 			}
-			// Deduplicate symmetric pairs by normalising to (lexicographically smaller, larger).
-			key := fact.File + "|" + other.File
-			reverseKey := other.File + "|" + fact.File
-			if seen[key] || seen[reverseKey] {
-				continue
-			}
-			seen[key] = true
 
-			similarity := r.Score / 100.0
-			pairs = append(pairs, mergePair{
-				a:          fact,
-				b:          other,
-				similarity: similarity,
-			})
-		}
+			mu.Lock()
+			defer mu.Unlock()
+			for _, r := range results {
+				// Only consider results that are within the current cluster.
+				other, inCluster := clusterByPath[r.Path]
+				if !inCluster {
+					continue
+				}
+				// Skip self-match.
+				if r.Path == fact.File {
+					continue
+				}
+				// Deduplicate symmetric pairs by normalising to (lexicographically smaller, larger).
+				key := fact.File + "|" + other.File
+				reverseKey := other.File + "|" + fact.File
+				if seen[key] || seen[reverseKey] {
+					continue
+				}
+				seen[key] = true
+
+				similarity := r.Score / 100.0
+				pairs = append(pairs, mergePair{
+					a:          fact,
+					b:          other,
+					similarity: similarity,
+				})
+			}
+			return nil
+		})
+	}
+	if err := g.Wait(); err != nil {
+		return nil, err
 	}
 
 	if len(pairs) == 0 {
@@ -204,7 +212,10 @@ func dedupCluster(
 		fullWinner.Refs = mergedRefs
 
 		// Serialize and write the winner back to git.
-		newContent := fact.SerializeFact(fullWinner)
+		newContent, err := fact.SerializeFact(fullWinner)
+		if err != nil {
+			return nil, fmt.Errorf("dedupCluster: serialize winner %q: %w", winnerFact.File, err)
+		}
 		if _, err := gs.WriteFact(ctx, agentBranch, winnerFact.File, newContent, fmt.Sprintf("dedup: merge %s into %s [%s]", loserFact.File, winnerFact.File, recipeName), "subsume"); err != nil {
 			return nil, fmt.Errorf("dedupCluster: write winner %q: %w", winnerFact.File, err)
 		}

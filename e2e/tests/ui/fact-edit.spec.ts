@@ -5,10 +5,11 @@ import { FactPanel } from '../../pages/fact-panel.page.js';
 test.describe('Fact Edit', () => {
   test('create a fact via API and verify it appears in UI', async ({ freshKnomit, page }) => {
     // Create a fact via API
-    const res = await freshKnomit.api.put(`${freshKnomit.baseURL}/api/v1/knomit/fact`, {
-      data: {
-        path: 'kb/test-fact.md',
-        content: `---
+    const res = await freshKnomit.api.put(
+      `${freshKnomit.baseURL}/api/v1/repos/knomit/branches/${freshKnomit.branch}/facts/kb/test-fact.md`,
+      {
+        data: {
+          content: `---
 type: observation
 confidence: 0.9
 entities:
@@ -18,8 +19,9 @@ refs: []
 # Test Fact
 
 Created by e2e test.`,
+        },
       },
-    });
+    );
     expect(res.ok()).toBeTruthy();
 
     // Navigate to it in the UI
@@ -33,10 +35,11 @@ Created by e2e test.`,
 
   test('edit an existing fact via API and verify update in UI', async ({ freshKnomit, page }) => {
     // Seed a fact
-    await freshKnomit.api.put(`${freshKnomit.baseURL}/api/v1/knomit/fact`, {
-      data: {
-        path: 'kb/editable.md',
-        content: `---
+    await freshKnomit.api.put(
+      `${freshKnomit.baseURL}/api/v1/repos/knomit/branches/${freshKnomit.branch}/facts/kb/editable.md`,
+      {
+        data: {
+          content: `---
 type: observation
 confidence: 0.5
 entities:
@@ -46,8 +49,9 @@ refs: []
 # Editable Fact
 
 Original content.`,
+        },
       },
-    });
+    );
 
     await page.goto(freshKnomit.baseURL);
     await page.waitForLoadState('domcontentloaded');
@@ -59,10 +63,11 @@ Original content.`,
     await expect(factPanel.body).toContainText('Original content');
 
     // Update the fact via API (the editor textarea only appears for parse errors)
-    const updateRes = await freshKnomit.api.put(`${freshKnomit.baseURL}/api/v1/knomit/fact`, {
-      data: {
-        path: 'kb/editable.md',
-        content: `---
+    const updateRes = await freshKnomit.api.put(
+      `${freshKnomit.baseURL}/api/v1/repos/knomit/branches/${freshKnomit.branch}/facts/kb/editable.md`,
+      {
+        data: {
+          content: `---
 type: observation
 confidence: 0.8
 entities:
@@ -72,8 +77,9 @@ refs: []
 # Editable Fact
 
 Updated content via e2e test.`,
+        },
       },
-    });
+    );
     expect(updateRes.ok()).toBeTruthy();
 
     // Reload page to see the updated fact

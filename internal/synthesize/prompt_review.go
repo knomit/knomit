@@ -77,13 +77,15 @@ const distillResponseSchema = `{
 }`
 
 // RenderPruneWorkItem renders a prune prompt for the hosting model.
-func RenderPruneWorkItem(facts []factForLLM) (*WorkItemContent, error) {
+// ontologyRoot is substituted into the prompt's example paths so the LLM
+// emits paths under the configured root instead of a hardcoded placeholder.
+func RenderPruneWorkItem(facts []factForLLM, ontologyRoot string) (*WorkItemContent, error) {
 	factsJSON, err := json.MarshalIndent(facts, "", "  ")
 	if err != nil {
 		return nil, fmt.Errorf("marshal facts for prune work item: %w", err)
 	}
 
-	prompt, err := RenderTemplate("prune", "user", PromptData{Facts: string(factsJSON)})
+	prompt, err := RenderTemplate("prune", "user", PromptData{Facts: string(factsJSON), OntologyRoot: ontologyRoot})
 	if err != nil {
 		return nil, fmt.Errorf("render prune work item: %w", err)
 	}
@@ -97,26 +99,56 @@ func RenderPruneWorkItem(facts []factForLLM) (*WorkItemContent, error) {
 const reflectResponseSchema = `{
   "type": "object",
   "properties": {
-    "methodology_facts": {
+    "reasoning": {
+      "type": "string",
+      "description": "Free-form reflection on the transitions and which methodologies they reinforce or expose gaps in."
+    },
+    "reinforce": {
       "type": "array",
+      "description": "Existing methodologies whose lesson is re-confirmed by these transitions. This is the default action — most reflections should be reinforcements.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "methodology_path": {"type": "string"},
+          "transition_paths": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+          "rationale": {"type": "string"}
+        },
+        "required": ["methodology_path", "transition_paths", "rationale"]
+      }
+    },
+    "propose": {
+      "type": "array",
+      "description": "New methodology to add when no existing one captures the lesson. Rare. Capped at 1 by default; the server rejects proposals too similar to existing methodologies.",
+      "maxItems": 1,
       "items": {
         "type": "object",
         "properties": {
           "title": {"type": "string"},
           "body": {"type": "string"},
+          "topic_path": {"type": "string", "description": "Directory under the ontology root, e.g. \"meta/reasoning\"; the server appends a UUID and writes the fact."},
+          "confidence": {"type": "number", "minimum": 0, "maximum": 1},
           "domain": {"type": "array", "items": {"type": "string"}},
-          "entities": {"type": "array", "items": {"type": "string"}}
+          "entities": {"type": "array", "items": {"type": "string"}},
+          "refs": {"type": "array", "items": {"type": "string"}},
+          "transition_paths": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+          "novelty_argument": {"type": "string", "description": "Why no existing methodology in the prompt's candidates section captures this lesson."}
         },
-        "required": ["title", "body"]
+        "required": ["title", "body", "topic_path", "transition_paths", "novelty_argument"]
       }
     }
   },
-  "required": ["methodology_facts"]
+  "required": ["reasoning", "reinforce", "propose"]
 }`
 
-// RenderReflectWorkItem renders a reflect prompt for hypothesis transition review.
-func RenderReflectWorkItem(transitionsJSON []byte) (*WorkItemContent, error) {
-	prompt, err := RenderTemplate("reflect", "user", PromptData{Facts: string(transitionsJSON)})
+// RenderReflectWorkItem renders a reflect prompt for hypothesis transition
+// review. existingMethodology is the pre-formatted methodology section to
+// inject; pass an empty string when none is relevant.
+func RenderReflectWorkItem(transitionsJSON []byte, ontologyRoot, existingMethodology string) (*WorkItemContent, error) {
+	prompt, err := RenderTemplate("reflect", "user", PromptData{
+		Facts:               string(transitionsJSON),
+		OntologyRoot:        ontologyRoot,
+		ExistingMethodology: existingMethodology,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("render reflect work item: %w", err)
 	}
@@ -127,13 +159,19 @@ func RenderReflectWorkItem(transitionsJSON []byte) (*WorkItemContent, error) {
 }
 
 // RenderDistillWorkItem renders a distill prompt for the hosting model.
-func RenderDistillWorkItem(facts []factForLLM) (*WorkItemContent, error) {
+// applicableMethodology is the pre-formatted methodology section to inject;
+// pass an empty string when none is relevant.
+func RenderDistillWorkItem(facts []factForLLM, ontologyRoot, applicableMethodology string) (*WorkItemContent, error) {
 	factsJSON, err := json.MarshalIndent(facts, "", "  ")
 	if err != nil {
 		return nil, fmt.Errorf("marshal facts for distill work item: %w", err)
 	}
 
-	prompt, err := RenderTemplate("distill", "user", PromptData{Facts: string(factsJSON)})
+	prompt, err := RenderTemplate("distill", "user", PromptData{
+		Facts:                 string(factsJSON),
+		OntologyRoot:          ontologyRoot,
+		ApplicableMethodology: applicableMethodology,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("render distill work item: %w", err)
 	}
