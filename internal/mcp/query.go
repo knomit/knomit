@@ -59,7 +59,7 @@ func queryTool() mcpgo.Tool {
 			mcpgo.Description("Minimum confidence threshold (0–1)."),
 		),
 		mcpgo.WithNumber("min_similarity",
-			mcpgo.Description("Minimum cosine similarity for text search (0–1); 0 uses the server default (0.40)."),
+			mcpgo.Description("Minimum cosine similarity for text search (0–1); 0 uses the active embedding model's calibrated recall floor."),
 		),
 		mcpgo.WithNumber("limit",
 			mcpgo.Description("Maximum number of results to return (default 20)."),

@@ -77,9 +77,14 @@ jobs:
           curl -sL "$base/onnx/model_fp16.onnx"      -o "$dir/model_fp16.onnx"
           curl -sL "$base/onnx/model_fp16.onnx_data" -o "$dir/model_fp16.onnx_data"
           curl -sL "$base/tokenizer.json"            -o "$dir/tokenizer.json"
-      - name: In-process embed smoke (768-dim unit vector + retrieval separation)
+      # Run the WHOLE embeddings package, not a -run subset: with the model
+      # pre-cached above (KNOMIT_EMBED_TEST_CACHE), the cache-gated real-inference
+      # tests all execute — including batch-vs-single equivalence and the
+      # truncation cap — instead of silently skipping. The pure unit tests run
+      # too (cheap), so any new embedding test is covered without editing the regex.
+      - name: In-process embed smoke (full embeddings suite, real inference)
         env:
           LD_LIBRARY_PATH: ${{ github.workspace }}/dist/lib
           DYLD_LIBRARY_PATH: ${{ github.workspace }}/dist/lib
           KNOMIT_EMBED_TEST_CACHE: ${{ runner.temp }}/models
-        run: CGO_ENABLED=1 go test ./internal/embeddings/ -run TestEmbedder -v
+        run: CGO_ENABLED=1 go test ./internal/embeddings/ -v

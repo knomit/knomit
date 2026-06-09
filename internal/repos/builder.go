@@ -244,8 +244,11 @@ func (b *repoBuilder) setupIndex() {
 	// domains / empty fact_domain_tokens), a plain Sync no-ops when last==HEAD and
 	// leaves domain search silently broken. Detect the mismatch once (the version
 	// is global) and full-Rebuild each branch instead, which regenerates the
-	// derived state. Rebuild preserves facts rowids, so existing embeddings are
-	// reused — the heal does not re-embed the corpus.
+	// derived state. For a schema-version heal Rebuild preserves facts rowids, so
+	// existing embeddings are reused and the corpus is not re-embedded. NeedsRebuild
+	// ALSO trips on an embedding-identity change (model id / dim); in that case
+	// Rebuild's ensureFactsVec recreates facts_vec empty and the corpus IS
+	// re-embedded under the new model.
 	im := b.svc.IndexManager()
 	stale, err := im.NeedsRebuild(context.Background())
 	if err != nil {
