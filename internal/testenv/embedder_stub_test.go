@@ -15,28 +15,29 @@ var _ store.BatchEmbedder = (*DeterministicEmbedder)(nil)
 
 // TestDeterministicEmbedder_SameInputSameOutput asserts that the stub embedder
 // is deterministic and produces 768-dim vectors compatible with the facts_vec
-// vec0 schema. Both Embed and EmbedBatch must agree for the same inputs.
+// vec0 schema. EmbedDocument and EmbedDocuments must agree for the same inputs.
 func TestDeterministicEmbedder_SameInputSameOutput(t *testing.T) {
-	t.Log("Scenario: embed the same texts twice via Embed and EmbedBatch, vectors must be identical and 768-dim")
+	t.Log("Scenario: embed the same docs twice via EmbedDocument and EmbedDocuments, vectors must be identical and 768-dim")
 	e := &DeterministicEmbedder{}
+	require.Equal(t, 768, e.Dim())
 
-	v1, err := e.Embed("hello")
+	v1, err := e.EmbedDocument("hello", "body")
 	require.NoError(t, err)
 	require.Len(t, v1, 768)
 
-	v2, err := e.Embed("hello")
+	v2, err := e.EmbedDocument("hello", "body")
 	require.NoError(t, err)
-	require.Equal(t, v1, v2, "same text must produce identical vectors across calls")
+	require.Equal(t, v1, v2, "same doc must produce identical vectors across calls")
 
-	batch1, err := e.EmbedBatch([]string{"hello", "world"})
+	batch1, err := e.EmbedDocuments([]string{"hello", "world"}, []string{"body", "other"})
 	require.NoError(t, err)
 	require.Len(t, batch1, 2)
 	require.Len(t, batch1[0], 768)
-	require.Equal(t, v1, batch1[0], "Embed(\"hello\") and EmbedBatch({\"hello\",...})[0] must agree")
+	require.Equal(t, v1, batch1[0], "EmbedDocument and EmbedDocuments[0] must agree")
 
-	batch2, err := e.EmbedBatch([]string{"hello", "world"})
+	batch2, err := e.EmbedDocuments([]string{"hello", "world"}, []string{"body", "other"})
 	require.NoError(t, err)
-	require.Equal(t, batch1, batch2, "EmbedBatch must be deterministic")
+	require.Equal(t, batch1, batch2, "EmbedDocuments must be deterministic")
 }
 
 // TestDeterministicEmbedder_DifferentInputsDifferentVectors asserts that
@@ -45,7 +46,7 @@ func TestDeterministicEmbedder_SameInputSameOutput(t *testing.T) {
 func TestDeterministicEmbedder_DifferentInputsDifferentVectors(t *testing.T) {
 	t.Log("Scenario: different texts produce different vectors")
 	e := &DeterministicEmbedder{}
-	a, _ := e.Embed("alpha")
-	b, _ := e.Embed("beta")
+	a, _ := e.EmbedQuery("alpha")
+	b, _ := e.EmbedQuery("beta")
 	require.NotEqual(t, a, b, "distinct inputs must map to distinct vectors")
 }

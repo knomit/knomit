@@ -235,7 +235,7 @@ type SearchOptions struct {
 	DomainAncestor []string
 	Path           string
 	MinConfidence float64
-	MinSimilarity float64   // cosine similarity threshold (0–1); 0 uses default 0.40
+	MinSimilarity float64   // cosine similarity threshold (0–1); 0 uses the active model's recall floor
 	Limit         int
 	Offset        int       // RecentFacts pagination offset; ignored by Search
 	GraphHops     int       // number of graph traversal hops to expand results (0 = disabled)
@@ -496,11 +496,14 @@ func (si *searchIndex) Search(ctx context.Context, branch string, q SearchOption
 		score float64
 	}
 
+	// Model-dependent cosine cutoffs (rerank tiers + recall floor below).
+	th := EmbedderThresholds(si.rh.getEmbedder())
+
 	vecSimByPath := make(map[string]float64)
 	kLimit := limit * 5
-	if q.MinSimilarity > 0.7 {
+	if q.MinSimilarity > th.RerankHigh {
 		kLimit = limit * 2
-	} else if q.MinSimilarity > 0.5 {
+	} else if q.MinSimilarity > th.RerankLow {
 		kLimit = limit * 3
 	}
 
@@ -547,7 +550,7 @@ func (si *searchIndex) Search(ctx context.Context, branch string, q SearchOption
 			queryVec := q.QueryVec
 			if len(queryVec) == 0 {
 				var embedErr error
-				queryVec, embedErr = emb.Embed(q.Text)
+				queryVec, embedErr = emb.EmbedQuery(q.Text)
 				if embedErr != nil {
 					log.Warn().Err(embedErr).Msg("search: embed query failed")
 				}
@@ -597,7 +600,7 @@ func (si *searchIndex) Search(ctx context.Context, branch string, q SearchOption
 
 	minSim := q.MinSimilarity
 	if minSim <= 0 {
-		minSim = 0.40
+		minSim = th.SearchFloor
 	}
 
 	candidatePaths := make([]string, 0, len(vecSimByPath))

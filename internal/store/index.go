@@ -78,20 +78,11 @@ func beginTxIfNeeded(ctx context.Context, db *sql.DB) (context.Context, *sql.Tx,
 	return storegit.BeginTxIfNeeded(ctx, db)
 }
 
-// extractBody strips YAML frontmatter from raw markdown and returns just the body.
-// It assumes the format: ---\n...\n---\n# Title\n\nBody
+// extractBody strips YAML frontmatter and the title heading from raw markdown,
+// returning just the body. The canonical implementation lives in fact.ExtractBody
+// so the store indexer and tools/calibrate share one definition.
 func extractBody(raw []byte) string {
-	content := string(raw)
-	parts := strings.SplitN(content, "---", 3)
-	if len(parts) < 3 {
-		return content
-	}
-	afterFrontmatter := strings.TrimSpace(parts[2])
-	// Skip the title line (first # heading)
-	if idx := strings.Index(afterFrontmatter, "\n"); idx >= 0 {
-		return strings.TrimSpace(afterFrontmatter[idx+1:])
-	}
-	return ""
+	return fact.ExtractBody(raw)
 }
 
 

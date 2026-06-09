@@ -12,6 +12,7 @@ import (
 
 	"knomit/internal/fact"
 	"knomit/internal/repos"
+	"knomit/internal/retrieval"
 	"knomit/internal/store"
 )
 
@@ -29,11 +30,17 @@ func newLenEmbedder(t *testing.T) *MockBatchEmbedder {
 		}
 		return out, nil
 	}
-	emb.EXPECT().Embed(gomock.Any()).DoAndReturn(embed).AnyTimes()
-	emb.EXPECT().EmbedBatch(gomock.Any()).DoAndReturn(func(texts []string) ([][]float32, error) {
-		out := make([][]float32, len(texts))
-		for i, txt := range texts {
-			out[i], _ = embed(txt)
+	emb.EXPECT().EmbedQuery(gomock.Any()).DoAndReturn(embed).AnyTimes()
+	emb.EXPECT().EmbedDocument(gomock.Any(), gomock.Any()).DoAndReturn(func(title, body string) ([]float32, error) {
+		return embed(title + " " + body)
+	}).AnyTimes()
+	emb.EXPECT().Dim().Return(768).AnyTimes()
+	emb.EXPECT().ID().Return("len-stub").AnyTimes()
+	emb.EXPECT().Thresholds().Return(retrieval.Defaults()).AnyTimes()
+	emb.EXPECT().EmbedDocuments(gomock.Any(), gomock.Any()).DoAndReturn(func(titles, bodies []string) ([][]float32, error) {
+		out := make([][]float32, len(titles))
+		for i := range titles {
+			out[i], _ = embed(titles[i] + " " + bodies[i])
 		}
 		return out, nil
 	}).AnyTimes()

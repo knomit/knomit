@@ -7,15 +7,22 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+
+	"knomit/internal/retrieval"
 )
 
 // rankedEmbedder maps each fact's embedding text and the query to vectors
 // chosen so that the query's cosine similarity to "match" is strictly higher
-// than to "near" or "far". Padded to factsVecDim so vec0 accepts it.
+// than to "near" or "far". Padded to 768 dims so vec0 accepts it. The
+// content-based dispatch keys off marker substrings ("match-target", etc.)
+// that appear in both the fact title and the query text, so document and
+// query roles route to the same vector.
+const rankedEmbedderDim = 768
+
 type rankedEmbedder struct{}
 
-func (e *rankedEmbedder) Embed(text string) ([]float32, error) {
-	out := make([]float32, factsVecDim)
+func (e *rankedEmbedder) vectorFor(text string) []float32 {
+	out := make([]float32, rankedEmbedderDim)
 	switch {
 	case containsAll(text, "match-target"):
 		out[0] = 1.0
@@ -29,14 +36,27 @@ func (e *rankedEmbedder) Embed(text string) ([]float32, error) {
 		// anything else (unexpected embeddings) is orthogonal to the target.
 		out[2] = 1.0
 	}
-	return out, nil
+	return out
 }
 
-func (e *rankedEmbedder) EmbedBatch(texts []string) ([][]float32, error) {
-	out := make([][]float32, len(texts))
-	for i, t := range texts {
-		v, _ := e.Embed(t)
-		out[i] = v
+func (e *rankedEmbedder) EmbedQuery(text string) ([]float32, error) {
+	return e.vectorFor(text), nil
+}
+
+func (e *rankedEmbedder) EmbedDocument(title, body string) ([]float32, error) {
+	return e.vectorFor(title + " " + body), nil
+}
+
+func (e *rankedEmbedder) Dim() int { return rankedEmbedderDim }
+
+func (e *rankedEmbedder) ID() string { return "ranked" }
+
+func (e *rankedEmbedder) Thresholds() retrieval.Thresholds { return retrieval.Defaults() }
+
+func (e *rankedEmbedder) EmbedDocuments(titles, bodies []string) ([][]float32, error) {
+	out := make([][]float32, len(titles))
+	for i := range titles {
+		out[i] = e.vectorFor(titles[i] + " " + bodies[i])
 	}
 	return out, nil
 }

@@ -34,16 +34,21 @@ func reflectProposeCap() int {
 }
 
 // reflectNoveltyThreshold returns the cosine-similarity floor at which a
-// proposed methodology is rejected as too similar to an existing one.
-// Defaults to 0.85.
-func reflectNoveltyThreshold() float64 {
+// proposed methodology is rejected as too similar to an existing one. The
+// model-dependent value (modelDefault, from the active embedder's calibrated
+// Thresholds) is the baseline; an explicit, valid env override takes precedence.
+// modelDefault <= 0 falls back to the historical nomic-era constant.
+func reflectNoveltyThreshold(modelDefault float64) float64 {
 	if v := os.Getenv(envReflectNoveltyThreshold); v != "" {
 		f, err := strconv.ParseFloat(v, 64)
 		if err != nil || f < 0 || f > 1 {
-			log.Warn().Str(envReflectNoveltyThreshold, v).Msg("invalid; using default")
-			return defaultReflectNoveltyThreshold
+			log.Warn().Str(envReflectNoveltyThreshold, v).Msg("invalid; using model default")
+		} else {
+			return f
 		}
-		return f
+	}
+	if modelDefault > 0 {
+		return modelDefault
 	}
 	return defaultReflectNoveltyThreshold
 }

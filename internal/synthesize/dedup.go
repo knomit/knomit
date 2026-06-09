@@ -18,8 +18,6 @@ import (
 // maxConcurrentNeighborSearches in cluster.go.
 const maxConcurrentDedupSearches = 8
 
-const defaultDedupThreshold = 0.92
-
 // mergePair represents two facts that are candidates for merging.
 type mergePair struct {
 	a          factForLLM

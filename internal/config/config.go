@@ -36,6 +36,11 @@ type LLMConfig struct {
 	Batch    bool   `toml:"batch"`
 }
 
+// EmbeddingsConfig selects the embedding model (by registry id).
+type EmbeddingsConfig struct {
+	Model string `toml:"model"`
+}
+
 // ClusterCacheConfig governs the Louvain-cluster cache: how long to wait for
 // activity to settle before a background recompute, how often the checker
 // wakes, and how many concurrent recomputes are allowed across all
@@ -64,6 +69,7 @@ type Config struct {
 	ONNXLibPath         string             `toml:"onnx_lib_path"`
 	MethodologyMinScore float64            `toml:"methodology_min_score"`
 	ClusterCache        ClusterCacheConfig `toml:"cluster_cache"`
+	Embeddings          EmbeddingsConfig   `toml:"embeddings"`
 	LLM                 LLMConfig          `toml:"llm"`
 	Remote              RemoteAuthConfig   `toml:"remote"`
 	Git                 GitConfig          `toml:"git"`
@@ -85,6 +91,7 @@ func Defaults() Config {
 			Resolution:       2.0,
 			MinCommunitySize: 2,
 		},
+		Embeddings: EmbeddingsConfig{Model: "embeddinggemma"},
 		LLM: LLMConfig{
 			Model:    "gemini-2.5-flash",
 			Provider: "gemini",
@@ -119,6 +126,7 @@ func Load() (Config, error) {
 	envOr("KNOMIT_HOST", &cfg.Host)
 	envOr("KNOMIT_PORT", &cfg.Port)
 	envOr("KNOMIT_SOCKET", &cfg.Socket)
+	envOr("KNOMIT_EMBED_MODEL", &cfg.Embeddings.Model)
 	envOr("KNOMIT_LLM_MODEL", &cfg.LLM.Model)
 	envOr("KNOMIT_LLM_PROVIDER", &cfg.LLM.Provider)
 	envOr("KNOMIT_API_KEY", &cfg.LLM.APIKey)

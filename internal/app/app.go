@@ -53,28 +53,22 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 	a.signer = signer
 	a.agentBranch = agentBranch(keyFingerprint)
 
-	// Embedder.
-	var embedder *embeddings.Embedder
-	modelPath, tokPath, err := embeddings.EnsureModel(filepath.Join(cfg.Home, "models"))
+	// Embedder. Embeddings are MANDATORY: every fact is indexed with a vector
+	// and the per-model cosine thresholds are load-bearing for dedup, graph
+	// density, and search recall. A service running without an embedder would
+	// silently write vectorless facts and mis-tune retrieval, so failure to
+	// build one is fatal rather than a degraded mode.
+	model, err := embeddings.Lookup(cfg.Embeddings.Model)
 	if err != nil {
-		log.Warn().Err(err).Msg("embedder model unavailable")
-	} else {
-		embedder, err = embeddings.NewEmbedder(modelPath, tokPath)
-		if err != nil {
-			log.Warn().Err(err).Msg("embedder init failed")
-		}
+		return nil, fmt.Errorf("embedder model config invalid (embeddings.model=%q): %w", cfg.Embeddings.Model, err)
 	}
-	if embedder != nil {
-		a.closers = append(a.closers, embedder.Close)
-		log.Info().Msg("embedder enabled — facts will be indexed with vectors; semantic search and methodology vector ranking active")
-	} else {
-		// Loud single-line summary of the consequence. Per-write warnings
-		// in store.upsert (embedder failed / wrong dim / empty vec) are
-		// suppressed for the emb==nil case to avoid spamming this notice
-		// for every fact written; this is the canonical place to learn
-		// that the server is running without an embedder.
-		log.Warn().Msg("embedder DISABLED — facts will be indexed without vectors; methodology + semantic search fall back to tag-only ranking. Configure ONNX model files and restart, then run `knomit rebuild` to backfill embeddings for existing facts.")
+	embedder, err := embeddings.NewEmbedder(model, filepath.Join(cfg.Home, "models"))
+	if err != nil {
+		return nil, fmt.Errorf("embedder init failed for model %q (embeddings are required — check ONNX model files / network): %w", model.ID, err)
 	}
+	a.closers = append(a.closers, embedder.Close)
+	log.Info().Str("model", model.ID).Int("dim", model.Dim).
+		Msg("embedder enabled — facts indexed with vectors; semantic search and methodology vector ranking active")
 
 	// LLM adapter.
 	var llmAdapter llm.LLMAdapter
@@ -123,7 +117,7 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 	a.server = &web.Server{
 		Manager:           a.manager,
 		GitHandler:        gitHandler,
-		EmbeddingsEnabled: embedder != nil,
+		EmbeddingsEnabled: true, // mandatory: New returns an error above if absent.
 		OntologyRoot:      cfg.OntologyRoot,
 		AgentBranch:       a.agentBranch,
 		SessionManager:    web.NewSessionManager(),

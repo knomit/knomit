@@ -10,6 +10,7 @@
 package mcp
 
 import (
+	retrieval "knomit/internal/retrieval"
 	reflect "reflect"
 
 	gomock "go.uber.org/mock/gomock"
@@ -39,32 +40,89 @@ func (m *MockBatchEmbedder) EXPECT() *MockBatchEmbedderMockRecorder {
 	return m.recorder
 }
 
-// Embed mocks base method.
-func (m *MockBatchEmbedder) Embed(text string) ([]float32, error) {
+// Dim mocks base method.
+func (m *MockBatchEmbedder) Dim() int {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Embed", text)
+	ret := m.ctrl.Call(m, "Dim")
+	ret0, _ := ret[0].(int)
+	return ret0
+}
+
+// Dim indicates an expected call of Dim.
+func (mr *MockBatchEmbedderMockRecorder) Dim() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Dim", reflect.TypeOf((*MockBatchEmbedder)(nil).Dim))
+}
+
+// EmbedDocument mocks base method.
+func (m *MockBatchEmbedder) EmbedDocument(title, body string) ([]float32, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "EmbedDocument", title, body)
 	ret0, _ := ret[0].([]float32)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
-// Embed indicates an expected call of Embed.
-func (mr *MockBatchEmbedderMockRecorder) Embed(text any) *gomock.Call {
+// EmbedDocument indicates an expected call of EmbedDocument.
+func (mr *MockBatchEmbedderMockRecorder) EmbedDocument(title, body any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Embed", reflect.TypeOf((*MockBatchEmbedder)(nil).Embed), text)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "EmbedDocument", reflect.TypeOf((*MockBatchEmbedder)(nil).EmbedDocument), title, body)
 }
 
-// EmbedBatch mocks base method.
-func (m *MockBatchEmbedder) EmbedBatch(texts []string) ([][]float32, error) {
+// EmbedDocuments mocks base method.
+func (m *MockBatchEmbedder) EmbedDocuments(titles, bodies []string) ([][]float32, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "EmbedBatch", texts)
+	ret := m.ctrl.Call(m, "EmbedDocuments", titles, bodies)
 	ret0, _ := ret[0].([][]float32)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
-// EmbedBatch indicates an expected call of EmbedBatch.
-func (mr *MockBatchEmbedderMockRecorder) EmbedBatch(texts any) *gomock.Call {
+// EmbedDocuments indicates an expected call of EmbedDocuments.
+func (mr *MockBatchEmbedderMockRecorder) EmbedDocuments(titles, bodies any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "EmbedBatch", reflect.TypeOf((*MockBatchEmbedder)(nil).EmbedBatch), texts)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "EmbedDocuments", reflect.TypeOf((*MockBatchEmbedder)(nil).EmbedDocuments), titles, bodies)
+}
+
+// EmbedQuery mocks base method.
+func (m *MockBatchEmbedder) EmbedQuery(text string) ([]float32, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "EmbedQuery", text)
+	ret0, _ := ret[0].([]float32)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// EmbedQuery indicates an expected call of EmbedQuery.
+func (mr *MockBatchEmbedderMockRecorder) EmbedQuery(text any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "EmbedQuery", reflect.TypeOf((*MockBatchEmbedder)(nil).EmbedQuery), text)
+}
+
+// ID mocks base method.
+func (m *MockBatchEmbedder) ID() string {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ID")
+	ret0, _ := ret[0].(string)
+	return ret0
+}
+
+// ID indicates an expected call of ID.
+func (mr *MockBatchEmbedderMockRecorder) ID() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ID", reflect.TypeOf((*MockBatchEmbedder)(nil).ID))
+}
+
+// Thresholds mocks base method.
+func (m *MockBatchEmbedder) Thresholds() retrieval.Thresholds {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Thresholds")
+	ret0, _ := ret[0].(retrieval.Thresholds)
+	return ret0
+}
+
+// Thresholds indicates an expected call of Thresholds.
+func (mr *MockBatchEmbedderMockRecorder) Thresholds() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Thresholds", reflect.TypeOf((*MockBatchEmbedder)(nil).Thresholds))
 }

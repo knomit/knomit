@@ -9,23 +9,25 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// countingEmbedder wraps stub768Embedder and counts how many times
-// Embed/EmbedBatch are called. Used to prove the upsert path actually
-// avoids the embedder when a precomputed vector is donated via context.
+// countingEmbedder wraps stub768Embedder and counts how many times the
+// document-embedding methods are called. Used to prove the upsert path
+// actually avoids the embedder when a precomputed vector is donated via
+// context. embedCalls counts single-document inference (EmbedDocument);
+// batchCalls counts batched inference (EmbedDocuments).
 type countingEmbedder struct {
 	stub768Embedder
 	embedCalls atomic.Int64
 	batchCalls atomic.Int64
 }
 
-func (e *countingEmbedder) Embed(text string) ([]float32, error) {
+func (e *countingEmbedder) EmbedDocument(title, body string) ([]float32, error) {
 	e.embedCalls.Add(1)
-	return e.stub768Embedder.Embed(text)
+	return e.stub768Embedder.EmbedDocument(title, body)
 }
 
-func (e *countingEmbedder) EmbedBatch(texts []string) ([][]float32, error) {
+func (e *countingEmbedder) EmbedDocuments(titles, bodies []string) ([][]float32, error) {
 	e.batchCalls.Add(1)
-	return e.stub768Embedder.EmbedBatch(texts)
+	return e.stub768Embedder.EmbedDocuments(titles, bodies)
 }
 
 // TestUpsert_DonatedVectorSkipsEmbedder regresses the optimization where
@@ -58,7 +60,7 @@ func TestUpsert_DonatedVectorSkipsEmbedder(t *testing.T) {
 		"---\ntype: observation\n---\n# Baseline\n\nbody-baseline", "add baseline", "test")
 	require.NoError(t, err)
 	require.Equal(t, int64(1), emb.embedCalls.Load(),
-		"baseline write must call Embed exactly once")
+		"baseline write must call EmbedDocument exactly once")
 
 	// Donated path: build a 768-dim vector that's clearly distinct from
 	// what stub768Embedder would produce for any text, donate it, and
@@ -77,9 +79,9 @@ func TestUpsert_DonatedVectorSkipsEmbedder(t *testing.T) {
 		"---\ntype: observation\n---\n# Donated\n\nbody-donated", "add donated", "test")
 	require.NoError(t, err)
 	require.Equal(t, int64(0), emb.embedCalls.Load(),
-		"donated write must NOT call Embed")
+		"donated write must NOT call EmbedDocument")
 	require.Equal(t, int64(0), emb.batchCalls.Load(),
-		"donated write must NOT call EmbedBatch")
+		"donated write must NOT call EmbedDocuments")
 
 	// The stored facts_vec row must hold the DONATED vector, not what
 	// the embedder would have returned for the donated content.

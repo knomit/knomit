@@ -5,6 +5,8 @@ import (
 	"time"
 
 	"github.com/go-git/go-git/v5/plumbing/transport"
+
+	"knomit/internal/retrieval"
 )
 
 // FactIndex is the interface for fact storage. Implemented by *factIndex.
@@ -117,16 +119,34 @@ type PipelineIndex interface {
 	SetPipelineWatermark(ctx context.Context, tool, branch, hash string) error
 }
 
-// Embedder computes vector embeddings for text.
+// Embedder computes vector embeddings. Roles differ because retrieval models
+// embed queries and documents with different prompts.
 type Embedder interface {
-	Embed(text string) ([]float32, error)
+	EmbedQuery(text string) ([]float32, error)
+	EmbedDocument(title, body string) ([]float32, error)
+	Dim() int
+	ID() string
+	// Thresholds returns the model's calibrated cosine cutoffs (dedup, search
+	// recall, SIMILAR_TO, reflect novelty). They are model-dependent, so they
+	// travel with the embedder rather than living as hard-coded constants.
+	Thresholds() retrieval.Thresholds
+}
+
+// EmbedderThresholds returns emb's calibrated cutoffs, or the historical
+// nomic-era defaults when no embedder is configured (embeddings disabled), so
+// callers get usable values without a nil check at every site.
+func EmbedderThresholds(emb Embedder) retrieval.Thresholds {
+	if emb == nil {
+		return retrieval.Defaults()
+	}
+	return emb.Thresholds()
 }
 
 //go:generate go run go.uber.org/mock/mockgen -destination=mock_batch_embedder_test.go -package=store knomit/internal/store BatchEmbedder
 //go:generate go run go.uber.org/mock/mockgen -destination=../mcp/mock_batch_embedder_test.go -package=mcp knomit/internal/store BatchEmbedder
 
-// BatchEmbedder extends Embedder with batch inference support.
+// BatchEmbedder extends Embedder with batched document inference.
 type BatchEmbedder interface {
 	Embedder
-	EmbedBatch(texts []string) ([][]float32, error)
+	EmbedDocuments(titles, bodies []string) ([][]float32, error)
 }

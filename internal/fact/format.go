@@ -116,6 +116,26 @@ type frontmatter struct {
 	EvidenceWeight float64  `yaml:"evidence_weight,omitempty"`
 }
 
+// ExtractBody strips the YAML frontmatter and the leading "# Title" heading
+// from a raw fact file, returning just the prose body. It is a lightweight
+// splitter (no YAML parse) used on hot indexing/embedding paths where the full
+// ParseFact is unnecessary; it is the single source of this logic, shared by
+// the store indexer and tools/calibrate. Returns the input unchanged when it
+// has no frontmatter block.
+func ExtractBody(raw []byte) string {
+	content := string(raw)
+	parts := strings.SplitN(content, "---", 3)
+	if len(parts) < 3 {
+		return content
+	}
+	afterFrontmatter := strings.TrimSpace(parts[2])
+	// Skip the title line (first # heading).
+	if idx := strings.Index(afterFrontmatter, "\n"); idx >= 0 {
+		return strings.TrimSpace(afterFrontmatter[idx+1:])
+	}
+	return ""
+}
+
 // ParseFact parses a fact file. path is the git path (stored in Fact.Path, not
 // used for content parsing). Handles both \n and \r\n line endings.
 func ParseFact(path, content string) (Fact, error) {

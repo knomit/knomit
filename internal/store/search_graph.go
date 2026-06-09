@@ -324,10 +324,10 @@ func (si *searchIndex) graphDeleteFactTx(ctx context.Context, tx execer, path, b
 }
 
 
-const (
-	knnK         = 10   // top-K nearest neighbors per fact
-	knnThreshold = 0.60 // minimum cosine similarity for SIMILAR_TO edges
-)
+// knnK caps how many nearest neighbours are considered per fact. The cosine
+// floor for actually drawing a SIMILAR_TO edge is model-dependent and comes from
+// the active embedder's Thresholds().SimilarTo (see internal/retrieval).
+const knnK = 10 // top-K nearest neighbors per fact
 
 // graphBuildSimilarityEdges creates SIMILAR_TO edges from a fact version to its
 // top-K nearest neighbors (by cosine similarity via sqlite-vec KNN).
@@ -386,11 +386,12 @@ func (si *searchIndex) graphBuildSimilarityEdges(ctx context.Context, path, blob
 		return fmt.Errorf("delete old SIMILAR_TO: %w", err)
 	}
 
+	simFloor := EmbedderThresholds(si.rh.getEmbedder()).SimilarTo
 	for _, n := range neighbors {
 		if n.path == path && n.blobHash == blobHash {
 			continue
 		}
-		if n.similarity < knnThreshold {
+		if n.similarity < simFloor {
 			continue
 		}
 		np := escapeCypherKey(n.path)
