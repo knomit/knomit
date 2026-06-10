@@ -187,6 +187,19 @@ func Open(path string) (*Service, error) {
 	}, nil
 }
 
+// SessionDBSuffix is the filename suffix of a Service's ephemeral session
+// database, written as a sibling of the main DB at "<name>.sessions.db".
+// Repo discovery uses IsSessionDBFile to skip these sidecars, which share the
+// repos directory with real repo DBs.
+const SessionDBSuffix = ".sessions.db"
+
+// IsSessionDBFile reports whether base names a session sidecar database (a
+// "<name>.sessions.db" file). Repo names can never contain a '.', so this
+// suffix unambiguously identifies a session DB rather than a repo DB.
+func IsSessionDBFile(base string) bool {
+	return strings.HasSuffix(base, SessionDBSuffix)
+}
+
 // sessionDBPathFor derives the ephemeral session DB path from the main DB path.
 // For a file DB it is a sibling "<name>.sessions.db"; for the :memory: fallback
 // (tests, DB-only mode) it is a unique temp file so multiple in-memory Services
@@ -195,7 +208,7 @@ func sessionDBPathFor(mainPath string) string {
 	if mainPath == ":memory:" || mainPath == "" {
 		return filepath.Join(os.TempDir(), "knomit-sessions-"+uuid.New().String()+".db")
 	}
-	return strings.TrimSuffix(mainPath, ".db") + ".sessions.db"
+	return strings.TrimSuffix(mainPath, ".db") + SessionDBSuffix
 }
 
 // openSessionDB removes any leftover session files (so the DB starts empty) and

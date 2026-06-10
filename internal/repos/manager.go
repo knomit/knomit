@@ -210,6 +210,9 @@ func (m *Manager) Start() error {
 	sort.Strings(dbFiles)
 	for _, dbPath := range dbFiles {
 		base := filepath.Base(dbPath)
+		if store.IsSessionDBFile(base) {
+			continue // ephemeral session sidecar, not a repo
+		}
 		name := strings.TrimSuffix(base, ".db")
 		if name == config.DefaultRepoName {
 			continue
@@ -292,7 +295,11 @@ func (m *Manager) Rescan() (RescanResult, error) {
 	}
 
 	for _, dbPath := range dbFiles {
-		name := strings.TrimSuffix(filepath.Base(dbPath), ".db")
+		base := filepath.Base(dbPath)
+		if store.IsSessionDBFile(base) {
+			continue // ephemeral session sidecar, not a repo
+		}
+		name := strings.TrimSuffix(base, ".db")
 		if !isValidRepoName(name) {
 			continue
 		}
