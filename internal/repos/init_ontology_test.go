@@ -22,7 +22,7 @@ func TestBoot_firstRunWritesOntologyToAgentBranch(t *testing.T) {
 	})
 	err := m.Start()
 	require.NoError(t, err)
-	ri := m.Get("knomit")
+	ri := m.Get(config.DefaultRepoName)
 	require.NotNil(t, ri)
 
 	result, err := ri.svc.Facts().ReadFact(context.Background(), "agent/test-abc", "domains/ontology.yaml", nil)
@@ -48,7 +48,7 @@ func TestBoot_firstRunWithEmptyRemoteWritesOntology(t *testing.T) {
 	})
 	err := m.Start()
 	require.NoError(t, err)
-	ri := m.Get("knomit")
+	ri := m.Get(config.DefaultRepoName)
 	require.NotNil(t, ri)
 
 	result, err := ri.svc.Facts().ReadFact(context.Background(), "agent/test-abc", "domains/ontology.yaml", nil)

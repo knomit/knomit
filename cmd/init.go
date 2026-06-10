@@ -27,6 +27,6 @@ func initCmd() *cobra.Command {
 	cmd.Flags().StringVar(&ontologyPath, "ontology", "", "path to custom ontology YAML file")
 	cmd.Flags().StringVar(&ontologyPreset, "ontology-preset", "", "embedded ontology preset name (default|code)")
 	cmd.MarkFlagsMutuallyExclusive("ontology", "ontology-preset")
-	cmd.Flags().StringVar(&repoName, "name", "knomit", "repo name")
+	cmd.Flags().StringVar(&repoName, "name", config.DefaultRepoName, "repo name")
 	return cmd
 }

@@ -38,7 +38,7 @@ func bootKnomitWithStaleOntology(t *testing.T, staleYAML string) (dir, agentBran
 	})
 	require.NoError(t, m.Start())
 
-	ri := m.Get("knomit")
+	ri := m.Get(config.DefaultRepoName)
 	require.NotNil(t, ri)
 
 	// Overwrite the seeded ontology with the stale version on the agent branch.
@@ -82,7 +82,7 @@ topics:
 	require.NoError(t, m.Start())
 	t.Cleanup(func() { _ = m.Close() })
 
-	ri := m.Get("knomit")
+	ri := m.Get(config.DefaultRepoName)
 	require.NotNil(t, ri)
 
 	// b.ontology in memory must be the upgraded preset.
@@ -127,7 +127,7 @@ topics:
 	require.NoError(t, m.Start())
 	t.Cleanup(func() { _ = m.Close() })
 
-	ri := m.Get("knomit")
+	ri := m.Get(config.DefaultRepoName)
 	require.NotNil(t, ri)
 
 	// b.ontology must be the stored (diverged) ontology, NOT the preset.

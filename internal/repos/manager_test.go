@@ -11,7 +11,7 @@ import (
 )
 
 // TestBoot_firstRunInitializesDefaultRepo verifies that Boot() succeeds on
-// first run when the default knomit.db has no git data yet. This is a
+// first run when the default trunk.db has no git data yet. This is a
 // regression test for the isDefault=false bug where initDefaultGit() was
 // never reachable, causing Boot() to fail on a fresh install.
 func TestBoot_firstRunInitializesDefaultRepo(t *testing.T) {
@@ -22,7 +22,7 @@ func TestBoot_firstRunInitializesDefaultRepo(t *testing.T) {
 	})
 	err := m.Start()
 	require.NoError(t, err)
-	require.NotNil(t, m.Get("knomit"), "default repo must be registered after Boot")
+	require.NotNil(t, m.Get(config.DefaultRepoName), "default repo must be registered after Boot")
 }
 
 // TestShutdown_concurrentSyncCancelUpdate verifies that Shutdown() does not

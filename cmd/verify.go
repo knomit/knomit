@@ -80,7 +80,7 @@ Exit codes:
 				}
 			} else {
 				if repoName == "" {
-					repoName = "knomit"
+					repoName = config.DefaultRepoName
 				}
 				run(repoName)
 			}

@@ -53,6 +53,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
+	"knomit/internal/config"
 	"knomit/tools/bridge/bridgelog"
 	"knomit/tools/bridge/claude"
 )
@@ -98,7 +99,7 @@ func main() {
 	// Re-seat os.Args for flag.Parse, minus the peeled --log entries.
 	os.Args = append([]string{os.Args[0]}, args...)
 
-	repo := flag.String("repo", "knomit", "repository name")
+	repo := flag.String("repo", config.DefaultRepoName, "repository name")
 	source := flag.String("source", "", "source-code slug used in src:// refs (defaults to --repo)")
 	profile := flag.String("profile", "code", "MCP profile (code, chat, generic)")
 	flag.Usage = func() {

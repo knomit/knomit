@@ -93,8 +93,8 @@ func (sb *Storyboard) teardown() {
 
 // Repo returns (or creates) a RepoHandle named `name`. Each repo gets its
 // own manager rooted in a per-repo subdirectory of the Storyboard's tempdir.
-// The manager boots on first access, which creates the default "knomit"
-// repo database inside that home dir.
+// The manager boots on first access, which creates the default repo
+// database inside that home dir.
 func (sb *Storyboard) Repo(name string) *RepoHandle {
 	sb.mu.Lock()
 	defer sb.mu.Unlock()
@@ -116,9 +116,9 @@ func (sb *Storyboard) Repo(name string) *RepoHandle {
 	if err := m.Start(); err != nil {
 		sb.t.Fatalf("Repo(%q): manager boot failed: %v", name, err)
 	}
-	ri := m.Get("knomit")
+	ri := m.Get(config.DefaultRepoName)
 	if ri == nil {
-		sb.t.Fatalf("Repo(%q): manager.Get(knomit) returned nil after Boot", name)
+		sb.t.Fatalf("Repo(%q): manager.Get(default) returned nil after Boot", name)
 	}
 
 	r := &RepoHandle{
@@ -244,9 +244,9 @@ func (r *RepoHandle) Connect(remote *RemoteHandle) *RepoHandle {
 	if err := m.Start(); err != nil {
 		t.Fatalf("Connect(%s): re-boot failed: %v", remote.Name(), err)
 	}
-	ri := m.Get("knomit")
+	ri := m.Get(config.DefaultRepoName)
 	if ri == nil {
-		t.Fatalf("Connect(%s): manager.Get(knomit) returned nil after re-boot", remote.Name())
+		t.Fatalf("Connect(%s): manager.Get(default) returned nil after re-boot", remote.Name())
 	}
 	r.manager = m
 	r.ri = ri
@@ -322,9 +322,9 @@ func (r *RepoHandle) Restart() {
 	if err := m.Start(); err != nil {
 		t.Fatalf("Restart(%q): manager re-boot failed: %v", r.name, err)
 	}
-	ri := m.Get("knomit")
+	ri := m.Get(config.DefaultRepoName)
 	if ri == nil {
-		t.Fatalf("Restart(%q): manager.Get(knomit) returned nil after Boot", r.name)
+		t.Fatalf("Restart(%q): manager.Get(default) returned nil after Boot", r.name)
 	}
 	r.manager = m
 	r.ri = ri
