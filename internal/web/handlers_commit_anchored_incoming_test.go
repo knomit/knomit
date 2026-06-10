@@ -117,3 +117,80 @@ func TestCommitAnchoredIncoming_UnknownRepo(t *testing.T) {
 		t.Errorf("status: got %d, want 404", rec.Code)
 	}
 }
+
+// TestCommitAnchoredIncoming_FactAbsentAtCommit returns 404 (not an empty 200
+// or a 500) when the fact has no version at the pinned commit — the edges
+// 404 in lockstep with the fact itself. Regression for the UI browsing bug
+// where navigating to a fact at a commit it never existed at hit 404/500.
+func TestCommitAnchoredIncoming_FactAbsentAtCommit(t *testing.T) {
+	provider := &stubFactSubProvider{
+		factMissing: true,
+		incoming:    []store.RefSummary{{Path: "know/b.md", Commit: "dead001"}},
+		incomingErr: errors.New("IncomingAtCommit must not be called for an absent fact"),
+	}
+	s := &Server{
+		Manager:         newTestManagerWithRepos(t, "alpha"),
+		factSubProvider: provider,
+		factReader:      &stubFactReader{},
+	}
+	r := s.NewAPIRouter()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet,
+		"/repos/alpha/branches/agent:test/commits/abc123/facts/know/a.md/incoming", nil)
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status: got %d, want 404; body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "no fact at path") {
+		t.Errorf("body should explain the fact is absent at the commit: %s", rec.Body.String())
+	}
+}
+
+// TestCommitAnchoredOutgoing_FactAbsentAtCommit mirrors the incoming case for
+// the /outgoing sub-resource.
+func TestCommitAnchoredOutgoing_FactAbsentAtCommit(t *testing.T) {
+	provider := &stubFactSubProvider{
+		factMissing: true,
+		outgoingErr: errors.New("OutgoingAtCommit must not be called for an absent fact"),
+	}
+	s := &Server{
+		Manager:         newTestManagerWithRepos(t, "alpha"),
+		factSubProvider: provider,
+		factReader:      &stubFactReader{},
+	}
+	r := s.NewAPIRouter()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet,
+		"/repos/alpha/branches/agent:test/commits/abc123/facts/know/a.md/outgoing", nil)
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status: got %d, want 404; body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestCommitAnchoredIncoming_ExistenceCheckError surfaces a genuine lookup
+// failure as 500, distinct from the 404 absent case.
+func TestCommitAnchoredIncoming_ExistenceCheckError(t *testing.T) {
+	provider := &stubFactSubProvider{
+		existsErr: errors.New("db exploded"),
+	}
+	s := &Server{
+		Manager:         newTestManagerWithRepos(t, "alpha"),
+		factSubProvider: provider,
+		factReader:      &stubFactReader{},
+	}
+	r := s.NewAPIRouter()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet,
+		"/repos/alpha/branches/agent:test/commits/abc123/facts/know/a.md/incoming", nil)
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status: got %d, want 500; body=%s", rec.Code, rec.Body.String())
+	}
+}

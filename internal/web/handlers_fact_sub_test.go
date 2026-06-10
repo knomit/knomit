@@ -24,6 +24,8 @@ type stubFactSubProvider struct {
 	incomingErr error
 	outgoing   []store.RefSummary
 	outgoingErr error
+	factMissing bool // when true, FactExistsAt reports the fact absent at commit
+	existsErr   error
 }
 
 func (s *stubFactSubProvider) LogPaginatedForPath(
@@ -48,6 +50,12 @@ func (s *stubFactSubProvider) OutgoingAtCommit(
 	_ *repos.RepoInstance, _, _, _ string,
 ) ([]store.RefSummary, error) {
 	return s.outgoing, s.outgoingErr
+}
+
+func (s *stubFactSubProvider) FactExistsAt(
+	_ *repos.RepoInstance, _, _, _ string,
+) (bool, error) {
+	return !s.factMissing, s.existsErr
 }
 
 func TestHandleFactCommits_ReturnsHALCollection(t *testing.T) {

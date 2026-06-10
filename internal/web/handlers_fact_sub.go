@@ -29,6 +29,12 @@ type factSubProvider interface {
 	// OutgoingAtCommit returns the version-aware outgoing refs for a fact at
 	// a specific commit: the refs written by this version of the fact.
 	OutgoingAtCommit(ri *repos.RepoInstance, branch, path, commitHash string) ([]store.RefSummary, error)
+
+	// FactExistsAt reports whether the fact has any navigable version at the
+	// pinned commit (walking past retractions, matching fallback-before
+	// reads). Used to 404 the commit-anchored sub-resources in lockstep with
+	// the fact itself instead of returning empty/erroring when it's absent.
+	FactExistsAt(ri *repos.RepoInstance, branch, path, commit string) (bool, error)
 }
 
 // defaultFactSubProvider implements factSubProvider using the store.
@@ -94,6 +100,48 @@ func (defaultFactSubProvider) OutgoingAtCommit(ri *repos.RepoInstance, branch, p
 		out, err = svc.Search().OutgoingAtCommit(contextTODO(), branch, path, commitHash)
 	})
 	return out, err
+}
+
+func (defaultFactSubProvider) FactExistsAt(ri *repos.RepoInstance, branch, path, commit string) (bool, error) {
+	var (
+		exists bool
+		err    error
+	)
+	ri.WithRead(func(svc *store.Service) {
+		if svc == nil {
+			return
+		}
+		exists, err = svc.Search().FactExistsAt(contextTODO(), branch, path, commit)
+	})
+	return exists, err
+}
+
+// factPresentAtCommitOr404 guards the commit-anchored /incoming and /outgoing
+// sub-resources: it writes a 404 (fact absent at this commit) or 500 (lookup
+// failed) and returns false when the caller should stop. The 404 mirrors the
+// commit-anchored fact read so a fact's edges 404 in lockstep with the fact
+// itself, rather than returning a misleading empty 200 or surfacing a 500 from
+// the edge query for a fact that isn't there.
+func factPresentAtCommitOr404(
+	subProvider factSubProvider,
+	w http.ResponseWriter,
+	r *http.Request,
+	ri *repos.RepoInstance,
+	a hal.Anchor,
+	factPath string,
+) bool {
+	exists, err := subProvider.FactExistsAt(ri, a.Branch, factPath, a.Commit)
+	if err != nil {
+		writeStoreError(w, r, err, "Failed to resolve fact", a.Branch)
+		return false
+	}
+	if !exists {
+		hal.WriteProblem(w, http.StatusNotFound, "Fact not found",
+			`no fact at path "`+factPath+`" on branch "`+a.Branch+`" at commit "`+a.Commit+`"`,
+			r.URL.Path)
+		return false
+	}
+	return true
 }
 
 // commitEntry is one item in the per-fact commit log collection.

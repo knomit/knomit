@@ -30,6 +30,10 @@ func handleCommitAnchoredIncoming(
 		return
 	}
 
+	if !factPresentAtCommitOr404(subProvider, w, r, ri, a, factPath) {
+		return
+	}
+
 	refs, err := subProvider.IncomingAtCommit(ri, a.Branch, factPath, a.Commit)
 	if err != nil {
 		writeStoreError(w, r, err, "Failed to load incoming refs", a.Branch)

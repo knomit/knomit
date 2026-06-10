@@ -32,7 +32,9 @@ describe('FactHistoryPanel', () => {
     expect(screen.getAllByTestId('history-file-row').length).toBe(1);
   });
 
-  it('omits commit detail when currentCommit is null', async () => {
+  it('omits commit detail when currentCommit is null and the fact has no versions', async () => {
+    const { api } = await import('./api');
+    (api.factCommits as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ entries: [] });
     render(<FactHistoryPanel
       repo="r" branch="b" factPath="kb/x.md"
       currentCommit={null}
@@ -44,7 +46,23 @@ describe('FactHistoryPanel', () => {
     expect(screen.queryByTestId('history-message')).toBeNull();
   });
 
-  it('renders fact versions and marks the current one with the amber dot', async () => {
+  it('falls back to the latest version when the open commit is not one of the fact versions', async () => {
+    render(<FactHistoryPanel
+      repo="r" branch="b" factPath="kb/x.md"
+      currentCommit="deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+      onNavigateToCommit={vi.fn()}
+      onFileClick={vi.fn()}
+    />);
+    // The latest version (a1b2c3d) is selected and its detail is shown,
+    // even though the open commit matches no version.
+    await waitFor(() => expect(screen.getAllByTestId('history-fact-version').length).toBe(2));
+    const rows = screen.getAllByTestId('history-fact-version');
+    expect(rows[0].getAttribute('data-current')).toBe('true');
+    expect(rows[1].getAttribute('data-current')).toBeNull();
+    await waitFor(() => expect(screen.getByTestId('history-op-chip')).not.toBeNull());
+  });
+
+  it('renders fact versions and marks the current one as selected', async () => {
     render(<FactHistoryPanel
       repo="r" branch="b" factPath="kb/x.md"
       currentCommit="a1b2c3d"
@@ -53,8 +71,21 @@ describe('FactHistoryPanel', () => {
     />);
     await waitFor(() => expect(screen.getAllByTestId('history-fact-version').length).toBe(2));
     const rows = screen.getAllByTestId('history-fact-version');
-    expect(rows[0].querySelector('[data-testid="history-current-dot"]')).not.toBeNull();
-    expect(rows[1].querySelector('[data-testid="history-current-dot"]')).toBeNull();
+    expect(rows[0].getAttribute('data-current')).toBe('true');
+    expect(rows[1].getAttribute('data-current')).toBeNull();
+  });
+
+  it('marks the current version when the open commit is a full hash and the row is abbreviated', async () => {
+    render(<FactHistoryPanel
+      repo="r" branch="b" factPath="kb/x.md"
+      currentCommit="a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0"
+      onNavigateToCommit={vi.fn()}
+      onFileClick={vi.fn()}
+    />);
+    await waitFor(() => expect(screen.getAllByTestId('history-fact-version').length).toBe(2));
+    const rows = screen.getAllByTestId('history-fact-version');
+    expect(rows[0].getAttribute('data-current')).toBe('true');
+    expect(rows[1].getAttribute('data-current')).toBeNull();
   });
 
   it('clicking a version row calls onNavigateToCommit', async () => {
@@ -85,7 +116,35 @@ describe('FactHistoryPanel', () => {
     />);
     await waitFor(() => expect(screen.getAllByTestId('history-file-row').length).toBe(1));
     fireEvent.click(screen.getByTestId('history-file-row'));
-    expect(onFileClick).toHaveBeenCalledWith('kb/other.md');
+    // Navigates to the file AT the commit whose changeset is shown (the
+    // viewed/active commit), so the fact provably exists there.
+    expect(onFileClick).toHaveBeenCalledWith('kb/other.md', 'a1b2c3d');
+  });
+
+  it('navigates a file click to the viewed commit, not the open commit, when they differ', async () => {
+    const { api } = await import('./api');
+    // The fact's only version is a1b2c3d, but we open at an unrelated commit
+    // (deadbeef…). The panel falls back to a1b2c3d and shows ITS changeset, so
+    // a file click must navigate to a1b2c3d — navigating to deadbeef… would
+    // 404 because the sibling file does not exist at that commit.
+    const siblingChangeset = {
+      commit: 'a1b2c3d', date: '', message: '', operation: 'add',
+      files: [{ path: 'kb/sibling.md', action: 'added', title: 'Sibling' }],
+    };
+    // Two fetches: the open commit, then the fallback to the latest version.
+    (api.commitDetail as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce(siblingChangeset)
+      .mockResolvedValueOnce(siblingChangeset);
+    const onFileClick = vi.fn();
+    render(<FactHistoryPanel
+      repo="r" branch="b" factPath="kb/x.md"
+      currentCommit="deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+      onNavigateToCommit={vi.fn()}
+      onFileClick={onFileClick}
+    />);
+    await waitFor(() => expect(screen.getAllByTestId('history-file-row').length).toBe(1));
+    fireEvent.click(screen.getByTestId('history-file-row'));
+    expect(onFileClick).toHaveBeenCalledWith('kb/sibling.md', 'a1b2c3d');
   });
 
   it('disables the file row whose path matches the open fact (no self-navigation)', async () => {

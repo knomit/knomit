@@ -8,7 +8,7 @@ interface Props {
   factPath: string;
   currentCommit: string | null;
   onNavigateToCommit: (commit: string) => void;
-  onFileClick: (path: string) => void;
+  onFileClick: (path: string, commit: string) => void;
 }
 
 interface FactVersion {
@@ -17,19 +17,35 @@ interface FactVersion {
   operation?: string;
 }
 
+// Two commit refs match if either is a prefix of the other, so a full
+// 40-char hash from one endpoint selects an abbreviated hash from another.
+function sameCommit(a: string | null, b: string | null): boolean {
+  return !!a && !!b && (a.startsWith(b) || b.startsWith(a));
+}
+
 export function FactHistoryPanel({ repo, branch, factPath, currentCommit, onNavigateToCommit, onFileClick }: Props) {
   const [detail, setDetail] = useState<CommitDetail | null>(null);
   const [factVersions, setFactVersions] = useState<FactVersion[]>([]);
 
-  // Fetch commit detail for the currently-displayed commit.
+  // The commit whose detail we show below and highlight above. Prefer the
+  // version matching the commit we were opened at; if that commit isn't one
+  // of this fact's versions (e.g. the fact's anchor points at an unrelated
+  // batch commit), fall back to the fact's most recent version so the detail
+  // always corresponds to a selectable row in the list above.
+  const activeCommit =
+    factVersions.find(v => sameCommit(v.commit, currentCommit))?.commit
+    ?? factVersions[0]?.commit
+    ?? currentCommit;
+
+  // Fetch commit detail for the active commit.
   useEffect(() => {
-    if (!currentCommit) { setDetail(null); return; }
+    if (!activeCommit) { setDetail(null); return; }
     let cancelled = false;
-    api.commitDetail(repo, branch, currentCommit).then(d => {
+    api.commitDetail(repo, branch, activeCommit).then(d => {
       if (!cancelled) setDetail(d);
     }).catch(() => { if (!cancelled) setDetail(null); });
     return () => { cancelled = true; };
-  }, [currentCommit, repo, branch]);
+  }, [activeCommit, repo, branch]);
 
   // Fetch per-fact version list.
   useEffect(() => {
@@ -54,23 +70,85 @@ export function FactHistoryPanel({ repo, branch, factPath, currentCommit, onNavi
         width: '100%', height: '100%',
       }}
     >
-      <div style={{ flex: 1, overflowY: 'auto', padding: '12px 14px' }}>
-        {currentCommit ? (
+      {/* TOP: selectable version history */}
+      {factVersions.length > 0 && (
+        <div
+          data-testid="history-fact-versions"
+          style={{
+            flexShrink: 0, maxHeight: '45%',
+            display: 'flex', flexDirection: 'column',
+            borderBottom: '1px solid #1a1a1a',
+          }}
+        >
+          {/* Panel title */}
+          <div style={{
+            flexShrink: 0, display: 'flex', alignItems: 'baseline', gap: 8,
+            padding: '11px 14px 10px', borderBottom: '1px solid #1a1a1a',
+          }}>
+            <span style={{ fontSize: 13, fontWeight: 600, color: '#eee' }}>History</span>
+            <span style={{ flex: 1 }} />
+            <span style={{ fontSize: 10, color: '#666' }}>
+              {factVersions.length} version{factVersions.length !== 1 ? 's' : ''}
+            </span>
+          </div>
+
+          <div style={{ overflowY: 'auto', padding: '6px 8px' }}>
+          {factVersions.map(v => {
+            const isCurrent = sameCommit(v.commit, activeCommit);
+            return (
+              <button
+                key={v.commit}
+                data-testid="history-fact-version"
+                data-current={isCurrent ? 'true' : undefined}
+                aria-current={isCurrent ? 'true' : undefined}
+                onClick={() => onNavigateToCommit(v.commit)}
+                style={{
+                  width: '100%',
+                  display: 'flex', alignItems: 'center', gap: 8, padding: '5px 8px',
+                  fontSize: 11, textAlign: 'left',
+                  background: isCurrent ? '#1c1c1c' : 'none',
+                  border: 'none', outline: 'none',
+                  borderLeft: `2px solid ${isCurrent ? '#e5a23c' : 'transparent'}`,
+                  borderRadius: 3, cursor: 'pointer', color: 'inherit',
+                }}
+              >
+                <span style={{
+                  flexShrink: 0, width: 44, fontFamily: 'monospace', fontSize: 9,
+                  textAlign: 'center', padding: '1px 0', borderRadius: 2,
+                  background: v.operation ? '#1a1a2a' : 'transparent',
+                  color: v.operation ? '#aaf' : 'transparent',
+                }}>
+                  {v.operation || '·'}
+                </span>
+                <span style={{ flexShrink: 0, fontFamily: 'monospace', color: isCurrent ? '#9d6' : '#7c9' }}>{v.commit.slice(0, 7)}</span>
+                <span style={{ flex: 1, minWidth: 0, color: isCurrent ? '#ddd' : '#aaa', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{v.message}</span>
+              </button>
+            );
+          })}
+          </div>
+        </div>
+      )}
+
+      {/* BOTTOM: detail for the selected entry */}
+      <div style={{ flex: 1, overflowY: 'auto' }}>
+        {activeCommit ? (
           detail ? (
             <>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
-                {detail.operation && (
-                  <span
-                    data-testid="history-op-chip"
-                    style={{
-                      fontFamily: 'monospace', fontSize: 10, padding: '1px 6px',
-                      background: '#1a1a2a', color: '#aaf', borderRadius: 3,
-                    }}
-                  >{detail.operation}</span>
-                )}
-                <span style={{ color: '#555', fontSize: 11 }}>{detail.date}</span>
+              {/* Panel title for the selected commit */}
+              <div style={{
+                display: 'flex', alignItems: 'baseline', gap: 8,
+                padding: '11px 14px 10px', borderBottom: '1px solid #1a1a1a',
+              }}>
+                <span
+                  data-testid="history-op-chip"
+                  style={{ fontSize: 13, fontWeight: 600, color: '#eee', textTransform: 'capitalize' }}
+                >{detail.operation || 'Commit'}</span>
+                <span style={{ fontFamily: 'monospace', fontSize: 11, color: '#7c9' }}>{activeCommit.slice(0, 7)}</span>
+                <span style={{ flex: 1 }} />
+                <span style={{ fontSize: 10, color: '#666' }}>{detail.date}</span>
               </div>
 
+              <div style={{ padding: '12px 14px' }}>
               <div
                 data-testid="history-message"
                 style={{
@@ -98,7 +176,7 @@ export function FactHistoryPanel({ repo, branch, factPath, currentCommit, onNavi
                     data-testid="history-file-row"
                     data-self={isSelf ? 'true' : undefined}
                     disabled={isDisabled}
-                    onClick={() => onFileClick(f.path)}
+                    onClick={() => { if (activeCommit) onFileClick(f.path, activeCommit); }}
                     style={{
                       width: '100%', display: 'flex', alignItems: 'flex-start', gap: 8, padding: '5px 4px',
                       background: 'none', border: 'none', outline: 'none', borderRadius: 3, textAlign: 'left',
@@ -118,47 +196,12 @@ export function FactHistoryPanel({ repo, branch, factPath, currentCommit, onNavi
                   </button>
                 );
               })}
+              </div>
             </>
           ) : (
-            <div style={{ color: '#555', fontSize: 11 }}>Loading…</div>
+            <div style={{ color: '#555', fontSize: 11, padding: '12px 14px' }}>Loading…</div>
           )
         ) : null}
-
-        {factVersions.length > 0 && (
-          <div data-testid="history-fact-versions" style={{ marginTop: currentCommit ? 16 : 0 }}>
-            <div style={{ fontSize: 10, color: '#666', letterSpacing: 0.5, textTransform: 'uppercase', marginBottom: 6 }}>
-              This fact · {factVersions.length} version{factVersions.length !== 1 ? 's' : ''}
-            </div>
-            {factVersions.map(v => {
-              const isCurrent = v.commit === currentCommit;
-              return (
-                <button
-                  key={v.commit}
-                  data-testid="history-fact-version"
-                  onClick={() => onNavigateToCommit(v.commit)}
-                  style={{
-                    width: '100%',
-                    display: 'flex', alignItems: 'center', gap: 8, padding: '3px 4px',
-                    fontSize: 11, textAlign: 'left',
-                    background: 'none', border: 'none', outline: 'none',
-                    borderRadius: 3, cursor: 'pointer', color: 'inherit',
-                  }}
-                >
-                  {isCurrent
-                    ? <span data-testid="history-current-dot" style={{ width: 5, height: 5, borderRadius: '50%', background: '#e5a23c' }} />
-                    : <span style={{ width: 5 }} />}
-                  {v.operation && (
-                    <span style={{ fontFamily: 'monospace', fontSize: 9, padding: '0 4px', background: '#1a1a2a', color: '#aaf', borderRadius: 2 }}>
-                      {v.operation}
-                    </span>
-                  )}
-                  <span style={{ fontFamily: 'monospace', color: '#7c9' }}>{v.commit.slice(0, 7)}</span>
-                  <span style={{ flex: 1, color: '#aaa', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{v.message}</span>
-                </button>
-              );
-            })}
-          </div>
-        )}
       </div>
     </div>
   );

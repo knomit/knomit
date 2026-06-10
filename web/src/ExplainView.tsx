@@ -135,34 +135,57 @@ export function ExplainView({ repo, branch, initialEntry, onClose }: Props) {
         >✕</button>
       </div>
 
-      {/* Incoming refs strip */}
-      <div style={{ flexShrink: 0, borderBottom: '1px solid #1a1a1a', background: '#0d0d0d' }}>
-        <RailHeader direction="in" groups={incoming} testId="incoming-header" />
-        <div style={{ padding: '6px 12px', minHeight: 38, display: 'flex', flexWrap: 'nowrap', gap: 6, alignItems: 'center', overflowX: 'auto', overflowY: 'hidden' }}>
-          {incoming.length === 0 && !loading && <span style={{ fontSize: 11, color: '#2a2a2a' }}>none</span>}
-          {incoming.map(g => (
-            <Chip key={g.path} group={g} onClick={commit => navigateTo({ path: g.path, commit })} />
-          ))}
-        </div>
-      </div>
-
-      {/* Middle: fact body (left) + history panel (right) */}
+      {/* Body row: left content column (incoming refs + fact body + outgoing
+          refs) and the history panel, which spans the full height on the right.
+          The ref strips live inside the left column so they stop at the panel's
+          left edge rather than running underneath it. */}
       <div style={{ flex: 1, display: 'flex', minHeight: 0, overflow: 'hidden' }}>
-        <div style={{ flex: 1, overflowY: 'auto', padding: '16px 20px', minWidth: 0 }}>
-          {loading && <div style={{ color: '#444', fontSize: 12 }}>Loading…</div>}
-          {error && <div style={{ color: '#f66', fontSize: 12 }}>{error}</div>}
-          {fact && (
-            <div style={{ maxWidth: 720, margin: '0 auto' }}>
-              <div data-testid="fact-title" style={{ fontSize: 18, fontWeight: 600, color: '#eee', letterSpacing: '-0.3px', marginBottom: 14 }}>{fact.title || fact.path}</div>
-              <FactBody
-                fact={fact}
-                dispatch={() => {}}
-                readOnly={true}
-                onRefClick={(refPath) => navigateTo({ path: refPath, commit: current.commit })}
-              />
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, minHeight: 0 }}>
+          {/* Incoming refs strip */}
+          <div style={{ flexShrink: 0, borderBottom: '1px solid #1a1a1a', background: '#0d0d0d' }}>
+            <RailHeader direction="in" groups={incoming} testId="incoming-header" />
+            <div style={{ padding: '6px 12px', minHeight: 38, display: 'flex', flexWrap: 'nowrap', gap: 6, alignItems: 'center', overflowX: 'auto', overflowY: 'hidden' }}>
+              {incoming.length === 0 && !loading && <span style={{ fontSize: 11, color: '#2a2a2a' }}>none</span>}
+              {incoming.map(g => (
+                <Chip key={g.path} group={g} onClick={commit => navigateTo({ path: g.path, commit })} />
+              ))}
             </div>
-          )}
+          </div>
+
+          {/* Fact body */}
+          <div style={{ flex: 1, overflowY: 'auto', padding: '16px 20px', minWidth: 0, minHeight: 0 }}>
+            {loading && <div style={{ color: '#444', fontSize: 12 }}>Loading…</div>}
+            {error && <div style={{ color: '#f66', fontSize: 12 }}>{error}</div>}
+            {fact && (
+              <div style={{ maxWidth: 720, margin: '0 auto' }}>
+                <div data-testid="fact-title" style={{ fontSize: 18, fontWeight: 600, color: '#eee', letterSpacing: '-0.3px', marginBottom: 14 }}>{fact.title || fact.path}</div>
+                <FactBody
+                  fact={fact}
+                  dispatch={() => {}}
+                  readOnly={true}
+                  onRefClick={(refPath) => navigateTo({ path: refPath, commit: current.commit })}
+                />
+              </div>
+            )}
+          </div>
+
+          {/* Outgoing refs strip */}
+          <div style={{ flexShrink: 0, borderTop: '1px solid #1a1a1a', background: '#0d0d0d' }}>
+            <RailHeader direction="out" groups={outgoing} testId="outgoing-header" />
+            <div style={{ padding: '6px 12px', minHeight: 38, display: 'flex', flexWrap: 'nowrap', gap: 6, alignItems: 'center', overflowX: 'auto', overflowY: 'hidden' }}>
+              {outgoing.length === 0 && !loading && <span style={{ fontSize: 11, color: '#2a2a2a' }}>none</span>}
+              {outgoing.map(g => (
+                <Chip
+                  key={g.path}
+                  group={g}
+                  onClick={commit => navigateTo({ path: g.path, commit })}
+                />
+              ))}
+            </div>
+          </div>
         </div>
+
+        {/* History panel: full height on the right */}
         <div style={{ width: panelWidth, flexShrink: 0, position: 'relative' }}>
           <div
             data-testid="history-resize-handle"
@@ -179,23 +202,8 @@ export function ExplainView({ repo, branch, initialEntry, onClose }: Props) {
             factPath={current.path}
             currentCommit={fact?.commit_hash ?? current.commit ?? null}
             onNavigateToCommit={(commit) => navigateTo({ path: current.path, commit })}
-            onFileClick={(path) => navigateTo({ path, commit: fact?.commit_hash ?? current.commit })}
+            onFileClick={(path, commit) => navigateTo({ path, commit })}
           />
-        </div>
-      </div>
-
-      {/* Outgoing refs strip */}
-      <div style={{ flexShrink: 0, borderTop: '1px solid #1a1a1a', background: '#0d0d0d' }}>
-        <RailHeader direction="out" groups={outgoing} testId="outgoing-header" />
-        <div style={{ padding: '6px 12px', minHeight: 38, display: 'flex', flexWrap: 'nowrap', gap: 6, alignItems: 'center', overflowX: 'auto', overflowY: 'hidden' }}>
-          {outgoing.length === 0 && !loading && <span style={{ fontSize: 11, color: '#2a2a2a' }}>none</span>}
-          {outgoing.map(g => (
-            <Chip
-              key={g.path}
-              group={g}
-              onClick={commit => navigateTo({ path: g.path, commit })}
-            />
-          ))}
         </div>
       </div>
     </div>
