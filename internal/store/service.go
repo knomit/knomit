@@ -142,7 +142,7 @@ func Open(path string) (*Service, error) {
 
 	gits := storegit.NewStorer(db)
 	rh := newRepoHandler(db, gits)
-	// Derive repo name from dbPath: /path/to/knomit.db → "knomit"
+	// Derive repo name from dbPath: /path/to/trunk.db → "trunk"
 	rh.name = strings.TrimSuffix(filepath.Base(path), ".db")
 	si := &searchIndex{rh: rh}
 

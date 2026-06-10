@@ -187,7 +187,7 @@ func (m *Manager) Close() error {
 }
 
 // Start opens all repositories under cfg.Home/repos/ and launches the
-// background cluster-cache warmer. knomit.db is opened first; remaining
+// background cluster-cache warmer. trunk.db is opened first; remaining
 // *.db files are discovered and opened. The warmer's behaviour comes
 // from m.deps.Cfg.ClusterCache; check_interval=0 disables it. Callers
 // must pair Start with a Close.
@@ -199,19 +199,19 @@ func (m *Manager) Start() error {
 
 	// Open the default repo with isDefault=true so that initDefaultGit is
 	// called on first run (no git data in a fresh DB).
-	defaultDB := filepath.Join(reposDir, "knomit.db")
-	ri, err := m.openOne("knomit", defaultDB, true)
+	defaultDB := filepath.Join(reposDir, config.DefaultRepoName+".db")
+	ri, err := m.openOne(config.DefaultRepoName, defaultDB, true)
 	if err != nil {
 		return fmt.Errorf("open default repo: %w", err)
 	}
-	m.Set("knomit", ri)
+	m.Set(config.DefaultRepoName, ri)
 
 	dbFiles, _ := filepath.Glob(filepath.Join(reposDir, "*.db"))
 	sort.Strings(dbFiles)
 	for _, dbPath := range dbFiles {
 		base := filepath.Base(dbPath)
 		name := strings.TrimSuffix(base, ".db")
-		if name == "knomit" {
+		if name == config.DefaultRepoName {
 			continue
 		}
 		if !isValidRepoName(name) {
