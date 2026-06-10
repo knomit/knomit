@@ -11,13 +11,12 @@ import (
 )
 
 // toolIndex persists tool-session paging state. It targets the ephemeral
-// session DB (db), NOT the main git-derived DB on rh — so every method uses the
-// db handle directly and never conn(ctx, …): the context may carry a *sql.Tx
-// bound to the MAIN db, and Conn would hand that back, executing session SQL
-// against the wrong database. rh is retained only for parity with other indexes;
-// session methods must not touch it.
+// session DB (db), NOT the main git-derived DB — so every method uses the db
+// handle directly and never conn(ctx, …): the context may carry a *sql.Tx bound
+// to the MAIN db, and conn would hand that back, executing session SQL against
+// the wrong database. It deliberately holds no *repoHandler, so there is no main
+// DB handle to reach for by mistake.
 type toolIndex struct {
-	rh *repoHandler
 	db *sql.DB
 }
 
@@ -38,8 +37,8 @@ type ToolSession struct {
 // QueueItem represents a single item in a tool session's work queue. SortKey is
 // the SQL-orderable consume order (breadth-first depth for explain/explore;
 // rank index for query). State is an optional per-item JSON payload (query
-// stores its frozen, score-bearing snippet here so paging is stable and never
-// re-fetches).
+// stores the frozen rank score here; the fact body is re-read from path+commit
+// on resume, so the snapshot carries no body text).
 type QueueItem struct {
 	Path       string
 	CommitHash string

@@ -2,7 +2,6 @@ package repos
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -20,38 +19,47 @@ type sessionReaperConfig struct {
 	SweepInterval   time.Duration
 }
 
+// Session reaper defaults. Unlike the cluster checker (where 0 disables the
+// loop), the reaper is never disabled: the relocated session/work-queue tables
+// have no other garbage collection, so an off reaper would let the ephemeral
+// session DB grow unbounded for the whole process lifetime. A non-positive or
+// unset value for any knob therefore falls back to its default.
+const (
+	defaultToolIdleTTL     = 15 * time.Minute
+	defaultPipelineIdleTTL = 60 * time.Minute
+	defaultSweepInterval   = 5 * time.Minute
+)
+
 // parseSessionReaperConfig parses the raw config.SessionConfig duration strings.
-// Returns an error rather than silently substituting defaults so a
-// misconfiguration surfaces at boot.
+// A malformed value is an error (surfaced at boot, not at first sweep); an
+// empty or non-positive value falls back to the default so the reaper always
+// runs and always reaps both clusters.
 func parseSessionReaperConfig(raw config.SessionConfig) (sessionReaperConfig, error) {
-	tool, err := parseSessionDur("tool_idle_ttl", raw.ToolIdleTTL, 15*time.Minute)
+	tool, err := parseConfigDur("session", "tool_idle_ttl", raw.ToolIdleTTL, defaultToolIdleTTL)
 	if err != nil {
 		return sessionReaperConfig{}, err
 	}
-	pipeline, err := parseSessionDur("pipeline_idle_ttl", raw.PipelineIdleTTL, 60*time.Minute)
+	pipeline, err := parseConfigDur("session", "pipeline_idle_ttl", raw.PipelineIdleTTL, defaultPipelineIdleTTL)
 	if err != nil {
 		return sessionReaperConfig{}, err
 	}
-	sweep, err := parseSessionDur("sweep_interval", raw.SweepInterval, 5*time.Minute)
+	sweep, err := parseConfigDur("session", "sweep_interval", raw.SweepInterval, defaultSweepInterval)
 	if err != nil {
 		return sessionReaperConfig{}, err
 	}
 	return sessionReaperConfig{
-		ToolIdleTTL:     tool,
-		PipelineIdleTTL: pipeline,
-		SweepInterval:   sweep,
+		ToolIdleTTL:     orDefaultDur(tool, defaultToolIdleTTL),
+		PipelineIdleTTL: orDefaultDur(pipeline, defaultPipelineIdleTTL),
+		SweepInterval:   orDefaultDur(sweep, defaultSweepInterval),
 	}, nil
 }
 
-func parseSessionDur(field, s string, def time.Duration) (time.Duration, error) {
-	if s == "" {
-		return def, nil
+// orDefaultDur returns def when d is non-positive, else d.
+func orDefaultDur(d, def time.Duration) time.Duration {
+	if d <= 0 {
+		return def
 	}
-	d, err := time.ParseDuration(s)
-	if err != nil {
-		return 0, fmt.Errorf("session.%s: %w", field, err)
-	}
-	return d, nil
+	return d
 }
 
 // startSessionReaper launches a background goroutine that periodically deletes
@@ -60,13 +68,14 @@ func parseSessionDur(field, s string, def time.Duration) (time.Duration, error) 
 // active sessions bump last_used_at on every page/work-item access and are never
 // reaped, so this is safe under concurrent paging.
 //
-// SweepInterval <= 0 disables the loop entirely; the returned stop is a no-op.
 // The returned stop func cancels the loop and joins the goroutine so it cannot
-// outlive the store. Called by Manager.Start.
+// outlive the store. Called by Manager.Start. parseSessionReaperConfig clamps
+// SweepInterval to a positive default, so the loop always runs; the guard below
+// is only a defensive backstop against a directly-constructed zero config (a
+// zero ticker would panic).
 func (m *Manager) startSessionReaper(cfg sessionReaperConfig) (stop func()) {
 	if cfg.SweepInterval <= 0 {
-		log.Info().Msg("session reaper: disabled (sweep_interval=0)")
-		return func() {}
+		cfg.SweepInterval = defaultSweepInterval
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())

@@ -60,8 +60,10 @@ type Service struct {
 	// It uses the stock sqlite3 driver (no vec/GraphQLite extensions, so none of
 	// the _txlock=immediate/warm-pool machinery the main DB needs) and is
 	// recreated empty on every Open and deleted on Close — cursors are not
-	// meaningfully durable across restarts. sessionDBPath is "" when the session
-	// DB could not be set up (degraded fallback to the main handle; see Open).
+	// meaningfully durable across restarts. It is always non-nil on a Service
+	// returned by Open: if the session DB cannot be set up, Open fails rather
+	// than returning a Service without it (there is no main-DB fallback — the
+	// session tables no longer exist there). It is set to nil only by Close.
 	sessionDB     *sql.DB
 	sessionDBPath string
 }
@@ -161,10 +163,11 @@ func Open(path string) (*Service, error) {
 	ri := &remoteIndex{rh: rh}
 	canonPath := canonicalizePath(path)
 
-	// Open the ephemeral session DB (separate file, stock driver). On any
-	// failure we degrade to the main handle rather than refusing to start —
-	// session paging/work-stealing is non-critical, and the session tables no
-	// longer exist in the main DB, so this is a best-effort secondary store.
+	// Open the ephemeral session DB (separate file, stock driver). This is
+	// required, not best-effort: the session/work-queue tables no longer exist
+	// in the main DB, so a Service without it could not page queries or run the
+	// work-stealing pipeline. A setup failure therefore fails Open rather than
+	// silently degrading.
 	sessionDB, sessionPath, err := openSessionDB(path)
 	if err != nil {
 		db.Close()
@@ -176,7 +179,7 @@ func Open(path string) (*Service, error) {
 		fi:            fi,
 		si:            si,
 		pi:            &pipelineIndex{rh: rh, sessionDB: sessionDB},
-		ti:            &toolIndex{rh: rh, db: sessionDB},
+		ti:            &toolIndex{db: sessionDB},
 		ri:            ri,
 		dbPath:        canonPath,
 		sessionDB:     sessionDB,

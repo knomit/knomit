@@ -44,9 +44,21 @@ func (m *Manager) SwapStore(ri *RepoInstance, tempDBPath string) error {
 		if m.deps.Embedder != nil {
 			svc.SetEmbedder(m.deps.Embedder)
 		}
+		// Swap under the write lock, then close the old Service. The write lock
+		// is a barrier: any reader (notably the background session reaper, which
+		// touches svc.sessionDB under WithRead's RLock) has released before the
+		// swap, and readers after it see the new svc — so the old Service has no
+		// in-flight users and is safe to Close. Closing it (rather than dropping
+		// it) also releases its ephemeral session DB handle and file, which would
+		// otherwise leak on every swap.
+		var old *store.Service
 		ri.withWrite(func() {
+			old = ri.svc
 			ri.svc = svc
 		})
+		if old != nil {
+			old.Close()
+		}
 		if ri.onCommit != nil {
 			svc.SetOnCommit(ri.onCommit)
 		}
@@ -54,7 +66,13 @@ func (m *Manager) SwapStore(ri *RepoInstance, tempDBPath string) error {
 		return nil
 	}
 
-	// Close the old database.
+	// File-backed swap: close the old DB, copy the temp file over the real one,
+	// and reopen — all under the write lock so the old Service is never closed
+	// (which closes and removes its ephemeral session DB) while a reader, notably
+	// the background session reaper, holds it under WithRead.
+	ri.mu.Lock()
+	defer ri.mu.Unlock()
+
 	if ri.svc != nil {
 		ri.svc.Close()
 	}
@@ -88,9 +106,7 @@ func (m *Manager) SwapStore(ri *RepoInstance, tempDBPath string) error {
 	if m.deps.Embedder != nil {
 		svc.SetEmbedder(m.deps.Embedder)
 	}
-	ri.withWrite(func() {
-		ri.svc = svc
-	})
+	ri.svc = svc
 	if ri.onCommit != nil {
 		svc.SetOnCommit(ri.onCommit)
 	}

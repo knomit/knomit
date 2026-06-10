@@ -64,9 +64,9 @@ type ClusterCacheConfig struct {
 // deletes a session once it has been idle (no page/work-item access) longer
 // than its TTL. ToolIdleTTL covers short-lived query/explain cursors;
 // PipelineIdleTTL is longer because review/hypothesize loops can pause between
-// work-steal calls. SweepInterval=="0"/"0s" disables the reaper entirely (the
-// session DB is still recreated empty each start, so it cannot grow across
-// restarts regardless).
+// work-steal calls. The reaper is never disabled: the relocated session tables
+// have no other GC, so an empty or non-positive value for any knob falls back
+// to its default rather than turning the sweep off.
 type SessionConfig struct {
 	ToolIdleTTL     string `toml:"tool_idle_ttl"`
 	PipelineIdleTTL string `toml:"pipeline_idle_ttl"`

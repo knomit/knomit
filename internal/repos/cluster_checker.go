@@ -30,11 +30,11 @@ type clusterCheckerConfig struct {
 // error rather than silently substituting defaults so misconfigurations
 // surface at boot, not at first review.
 func parseClusterCheckerConfig(raw config.ClusterCacheConfig) (clusterCheckerConfig, error) {
-	q, err := parseClusterDur("quiet_threshold", raw.QuietThreshold, 10*time.Second)
+	q, err := parseConfigDur("cluster_cache", "quiet_threshold", raw.QuietThreshold, 10*time.Second)
 	if err != nil {
 		return clusterCheckerConfig{}, err
 	}
-	c, err := parseClusterDur("check_interval", raw.CheckInterval, 5*time.Second)
+	c, err := parseConfigDur("cluster_cache", "check_interval", raw.CheckInterval, 5*time.Second)
 	if err != nil {
 		return clusterCheckerConfig{}, err
 	}
@@ -77,13 +77,18 @@ func clusterMinCommunityOrDefault(v int) int {
 	return v
 }
 
-func parseClusterDur(field, s string, def time.Duration) (time.Duration, error) {
+// parseConfigDur parses a raw TOML/env duration string for the named config
+// section/field. An empty string yields def; a malformed value is an error
+// wrapped as "<section>.<field>: ...". A parsed "0"/"0s" is returned as-is
+// (callers decide whether zero disables a loop or should be clamped). Shared by
+// the cluster checker and the session reaper configs.
+func parseConfigDur(section, field, s string, def time.Duration) (time.Duration, error) {
 	if s == "" {
 		return def, nil
 	}
 	d, err := time.ParseDuration(s)
 	if err != nil {
-		return 0, fmt.Errorf("cluster_cache.%s: %w", field, err)
+		return 0, fmt.Errorf("%s.%s: %w", section, field, err)
 	}
 	return d, nil
 }

@@ -75,9 +75,9 @@ type Manager struct {
 	clusterCheckerStop func()
 
 	// sessionReaperStop is set by Start when the background idle-session
-	// reaper is launched, and invoked by Close to wind it down. nil when
-	// Start hasn't been called or the reaper is disabled
-	// (session.sweep_interval = 0).
+	// reaper is launched, and invoked by Close to wind it down. nil only when
+	// Start hasn't been called — the reaper itself is never disabled (see
+	// parseSessionReaperConfig).
 	sessionReaperStop func()
 
 	// rescanMu serialises concurrent Rescan calls so the same .db cannot
