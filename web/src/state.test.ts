@@ -177,8 +177,8 @@ describe('reducer — SET_REPO', () => {
     expect(s.rightPanelFocused).toBe(false);
   });
 
-  it('init has repo set to knomit', () => {
-    expect(init.repo).toBe('knomit');
+  it('init has no repo selected (repo is chosen from the server list on mount)', () => {
+    expect(init.repo).toBe('');
   });
 });
 

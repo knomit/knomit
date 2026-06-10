@@ -4,6 +4,7 @@ import type { ExplainEntry } from './state';
 import { api } from './api';
 import { useNavigationManager } from './useNavigationManager';
 import { bootstrapStatusWithRetry } from './bootstrap';
+import { pickRepo, loadLastRepo, saveLastRepo } from './repoSelection';
 import type { RepoInfo } from './api';
 import { TopBar } from './TopBar';
 import { FilterBar } from './FilterBar';
@@ -47,6 +48,7 @@ export default function App() {
   const [state, dispatch] = useReducer(reducer, init);
   const { navigate } = useNavigationManager(state, dispatch);
   const [repos, setRepos] = useState<RepoInfo[]>([]);
+  const [reposLoaded, setReposLoaded] = useState(false);
   const [showOrigin, setShowOrigin] = useState(false);
 
   // Explain overlay slides in from the right when state.explainEntry is set
@@ -104,10 +106,30 @@ export default function App() {
     document.addEventListener('mouseup', onUp);
   };
 
-  // Fetch repos list on mount.
+  // Fetch the repo list on mount and select which repo to display. The repo
+  // set is owned by the server — the UI never hardcodes a name, so it can't
+  // assume the default ("trunk") still exists. pickRepo derives the selection
+  // from the live list, preferring the user's last explicit choice and falling
+  // back to the first available repo. reposLoaded gates the "no repos" empty
+  // state below so an empty server doesn't hang on "Loading…".
   useEffect(() => {
-    api.repos().then(setRepos).catch(() => {});
+    let cancelled = false;
+    api.repos()
+      .then(list => {
+        if (cancelled) return;
+        setRepos(list);
+        setReposLoaded(true);
+        const next = pickRepo('', list, loadLastRepo());
+        if (next) dispatch({ type: 'SET_REPO', repo: next });
+      })
+      .catch(() => { if (!cancelled) setReposLoaded(true); });
+    return () => { cancelled = true; };
   }, []);
+
+  // Remember the user's repo choice so reloads land on the same repo.
+  useEffect(() => {
+    saveLastRepo(state.repo);
+  }, [state.repo]);
 
   // Load status when repo changes (also fires on mount). Bootstrap fetches the
   // agent branch then the branch root for full status, retrying with
@@ -117,6 +139,7 @@ export default function App() {
   // state.repo changes. Each failed attempt is logged to the Console so a
   // permanently broken backend is visible instead of silent.
   useEffect(() => {
+    if (!state.repo) return; // wait until a repo is selected from the server list
     let cancelled = false;
     bootstrapStatusWithRetry({
       repo: state.repo,
@@ -257,6 +280,15 @@ export default function App() {
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
   }, [navigate, state]);
+
+  if (reposLoaded && repos.length === 0) {
+    return (
+      <div data-testid="no-repos" style={{ display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'center', justifyContent: 'center', height: '100vh', width: '100vw', background: '#141414', color: '#888', fontFamily: 'system-ui, sans-serif' }}>
+        <div>No repositories found.</div>
+        <div style={{ fontSize: 12, color: '#666' }}>Create one with <code style={{ color: '#7c9' }}>knomit init</code>, then reload.</div>
+      </div>
+    );
+  }
 
   if (!state.branch) {
     return (

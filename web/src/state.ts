@@ -90,7 +90,10 @@ export type Action =
   | { type: 'CLOSE_EXPLAIN' };
 
 export const init: AppState = {
-  repo: 'knomit',
+  // No repo is selected until the server's repo list loads — the UI must never
+  // assume a repo name exists (any repo, including the default, can be renamed
+  // or deleted server-side). App picks the repo from /api/v1/repos on mount.
+  repo: '',
   view: 'library',
   factPath: null,
   asOf: { mode: 'live' },
