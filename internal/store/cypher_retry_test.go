@@ -17,6 +17,8 @@ func TestIsTransientCypherError(t *testing.T) {
 		{"raw alias race", errors.New("SQL prepare failed: no such column: _gql_default_alias_1.id"), true},
 		{"structured JSON alias race", errors.New(`{"error":"SQL prepare failed: no such column: _gql_default_alias_1.id","code":"EXECUTION_ERROR"}`), true},
 		{"wrapped", fmt.Errorf("IncomingAtCommit: rows: %w", errors.New("no such column: _gql_default_alias_2.id")), true},
+		{"louvain rollback contention", errors.New("abort due to ROLLBACK"), true},
+		{"wrapped louvain rollback", fmt.Errorf("louvain: %w", errors.New("abort due to ROLLBACK")), true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
