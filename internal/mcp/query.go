@@ -129,6 +129,15 @@ type queryResponse struct {
 	HasMore bool         `json:"has_more"`
 }
 
+// pagedRowState is the minimal per-row state persisted in a session snapshot.
+// Only the search score is stored — it is the one field a resumed page cannot
+// re-derive from the fact. Everything else (title, type, body, frontmatter) is
+// re-read lazily from the fact at its frozen commit when the page is served, so
+// the snapshot stays tiny regardless of body size.
+type pagedRowState struct {
+	Score float64 `json:"score"`
+}
+
 // QueryHandler returns the handler function for knomit_query.
 // The repo is resolved from the request context at call time via RepoMiddleware.
 func QueryHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
@@ -210,8 +219,10 @@ func queryFirstCall(ctx context.Context, s mcpStore, agentBranch string, req mcp
 	}
 	items := make([]store.QueueItem, 0, len(results)-pageSize)
 	for i := pageSize; i < len(results); i++ {
-		snippet := buildFactOutput(results[i], false) // snapshot always stores snippets
-		state, mErr := json.Marshal(snippet)
+		// Snapshot only what a resumed page can't re-derive: the rank score.
+		// path+commit pin the version; title/body/frontmatter are re-read from
+		// the fact on resume, so the snapshot carries no heavy body text.
+		state, mErr := json.Marshal(pagedRowState{Score: results[i].Score})
 		if mErr != nil {
 			return mcpgo.NewToolResultError(fmt.Sprintf("snapshot error: %v", mErr)), nil
 		}
@@ -251,20 +262,18 @@ func queryResume(ctx context.Context, s mcpStore, agentBranch, cursor string, pa
 
 	page := make([]factOutput, 0, len(items))
 	for _, it := range items {
-		var fo factOutput
-		if err := json.Unmarshal([]byte(it.State), &fo); err != nil {
+		var st pagedRowState
+		if err := json.Unmarshal([]byte(it.State), &st); err != nil {
 			return mcpgo.NewToolResultError(fmt.Sprintf("page decode error: %v", err)), nil
 		}
-		if includeBody {
-			// Re-read the full body at the row's frozen commit (version-pinned,
-			// no drift). If the fact was retracted since the snapshot, keep the
-			// snippet rather than failing the whole page.
-			if parsed, _, _, ok := readNode(ctx, s, agentBranch, it.Path, it.CommitHash); ok {
-				fo.Body = parsed.Body
-				fo.BodyTruncated = false
-			}
+		// Re-read the fact at its frozen commit (version-pinned, no drift) and
+		// render snippet or full body per include_body. If it can't be read at
+		// that commit, skip the row rather than failing the whole page.
+		parsed, _, _, ok := readNode(ctx, s, agentBranch, it.Path, it.CommitHash)
+		if !ok {
+			continue
 		}
-		page = append(page, fo)
+		page = append(page, buildFactOutputFromFact(parsed, it.Path, it.CommitHash, st.Score, includeBody))
 	}
 
 	remaining, err := s.toolSession.QueueSize(ctx, cursor)
@@ -282,23 +291,15 @@ func queryResume(ctx context.Context, s mcpStore, agentBranch, cursor string, pa
 	return marshalQueryResponse(resp)
 }
 
-// buildFactOutput renders a search result. When includeBody is false the body
-// is truncated to a snippet (body_truncated set); otherwise the full body is
-// returned as-is.
+// buildFactOutput renders a search result (first-page rows, whose full body is
+// already in hand). When includeBody is false the body is truncated to a
+// snippet (body_truncated set); otherwise the full body is returned as-is.
 func buildFactOutput(r store.SearchResult, includeBody bool) factOutput {
-	kind := r.Kind
-	if fact.Kind(kind) == fact.DefaultKind {
-		kind = ""
-	}
-	body := r.Body
-	truncated := false
-	if !includeBody {
-		body, truncated = snippetBody(r.Body, snippetMaxRunes)
-	}
+	body, truncated := bodyView(r.Body, includeBody)
 	return factOutput{
 		File:          r.Path,
 		Title:         r.Title,
-		Kind:          kind,
+		Kind:          wireKind(r.Kind),
 		Type:          r.Type,
 		Score:         r.Score,
 		Body:          body,
@@ -313,6 +314,49 @@ func buildFactOutput(r store.SearchResult, includeBody bool) factOutput {
 			EvidenceWeight: r.EvidenceWeight,
 		},
 	}
+}
+
+// buildFactOutputFromFact renders a resumed-page row from a fact re-read at its
+// frozen commit, carrying the search score the snapshot preserved (the only
+// field not re-derivable from the fact file itself).
+func buildFactOutputFromFact(f fact.Fact, path, commit string, score float64, includeBody bool) factOutput {
+	body, truncated := bodyView(f.Body, includeBody)
+	return factOutput{
+		File:          path,
+		Title:         f.Title,
+		Kind:          wireKind(string(f.Kind)),
+		Type:          string(f.Type),
+		Score:         score,
+		Body:          body,
+		BodyTruncated: truncated,
+		Commit:        commit,
+		Frontmatter: frontmatterOutput{
+			Domain:         orEmpty(f.Domain),
+			Confidence:     f.Confidence,
+			Sources:        f.Sources,
+			Entities:       orEmpty(f.Entities),
+			Refs:           orEmpty(f.Refs),
+			EvidenceWeight: f.EvidenceWeight,
+		},
+	}
+}
+
+// wireKind elides the default (epistemic) kind so it is omitted on the wire,
+// mirroring fact.Fact.MarshalJSON.
+func wireKind(kind string) string {
+	if fact.Kind(kind) == fact.DefaultKind {
+		return ""
+	}
+	return kind
+}
+
+// bodyView returns the body to emit and whether it was truncated: the full body
+// when includeBody, else a bounded snippet.
+func bodyView(full string, includeBody bool) (string, bool) {
+	if includeBody {
+		return full, false
+	}
+	return snippetBody(full, snippetMaxRunes)
 }
 
 // snippetBody truncates body to at most maxRunes runes, cutting back to a

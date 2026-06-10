@@ -137,6 +137,32 @@ func TestQuery_IncludeBodyAcrossPages(t *testing.T) {
 	}
 }
 
+// TestQuery_ResumedSnippetRebuiltFromFact regresses PR #75 review finding #8
+// (lazy snapshot): the snapshot stores only the rank score, not a snippet, so a
+// resumed snippet page must be rebuilt by re-reading the fact body at its frozen
+// commit and truncating it. A long-bodied fact landing on a resumed page must
+// therefore come back as a bounded, truncated snippet carrying the re-read body
+// text — proving the body was re-read on resume rather than served from state.
+func TestQuery_ResumedSnippetRebuiltFromFact(t *testing.T) {
+	_, ctx, _ := newPrinciplesTestRepo(t)
+	const n = 25 // > defaultPageSize (20): facts [20,25) land on the resumed page
+	longPrefix := strings.Repeat("lorem ipsum dolor sit amet ", 40) // ~1080 chars >> snippetMaxRunes
+	seedManyPrinciples(t, ctx, n, longPrefix)
+
+	first := runQuery(t, ctx, map[string]any{"type": []any{"policy"}})
+	require.NotNil(t, first.Cursor, "more results must remain")
+
+	// Resume in default (snippet) mode.
+	second := runQuery(t, ctx, map[string]any{"cursor": *first.Cursor})
+	require.Equal(t, n-defaultPageSize, len(second.Facts), "resumed page holds the remainder")
+	for _, f := range second.Facts {
+		require.True(t, f.BodyTruncated, "resumed long-body row must be a re-read, truncated snippet")
+		require.LessOrEqual(t, len([]rune(f.Body)), snippetMaxRunes+1, "resumed snippet must be bounded")
+		require.Contains(t, f.Body, "lorem ipsum dolor", "snippet must carry the re-read body text")
+		require.Greater(t, f.Score, 0.0, "score must survive onto the resumed page")
+	}
+}
+
 // TestQuery_ExpiredCursor pins the guidance error for an unknown/expired cursor.
 func TestQuery_ExpiredCursor(t *testing.T) {
 	_, ctx, _ := newPrinciplesTestRepo(t)
