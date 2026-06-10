@@ -441,32 +441,11 @@ func (si *searchIndex) GC(ctx context.Context) error {
 	// 6. Branch-scoped commit_log cleanup is handled automatically by
 	// branch_commits ON DELETE CASCADE when a branch row is dropped.
 
-	// 7. GC tool sessions: keep 5 most recent per (tool, branch).
-	if err := si.gcSessionTable(ctx, "tool_sessions"); err != nil {
-		return fmt.Errorf("gc: tool sessions: %w", err)
-	}
-
-	// 8. GC pipeline sessions: keep 5 most recent per (tool, branch).
-	if err := si.gcSessionTable(ctx, "pipeline_sessions"); err != nil {
-		return fmt.Errorf("gc: pipeline sessions: %w", err)
-	}
+	// Tool/pipeline sessions are no longer in this DB — they live in the
+	// ephemeral session DB and are reaped there by an idle-TTL sweep
+	// (Service.ReapIdleSessions), not by this branch-drop GC.
 
 	return nil
-}
-
-// gcSessionTable deletes all but the 5 most recent sessions per (tool, branch)
-// from the given table. Child rows are cascade-deleted via foreign keys.
-func (si *searchIndex) gcSessionTable(ctx context.Context, table string) error {
-	_, err := conn(ctx, si.rh.db).ExecContext(ctx,
-		fmt.Sprintf(
-			`DELETE FROM %s WHERE rowid NOT IN (
-			    SELECT rowid FROM (
-			        SELECT rowid, ROW_NUMBER() OVER (PARTITION BY tool, branch ORDER BY rowid DESC) AS rn
-			        FROM %s
-			    ) WHERE rn <= 5
-			)`, table, table),
-	)
-	return err
 }
 
 // gcOrphanedGraphNodes removes graph nodes of the given label that have no

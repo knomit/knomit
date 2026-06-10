@@ -346,7 +346,7 @@ func explainFirstCall(ctx context.Context, s mcpStore, ontologyRoot, agentBranch
 			continue
 		}
 		enqueued[k] = true
-		queueItems = append(queueItems, store.QueueItem{Path: e.Path, CommitHash: e.Commit, Depth: 1})
+		queueItems = append(queueItems, store.QueueItem{Path: e.Path, CommitHash: e.Commit, SortKey: 1})
 	}
 
 	session, err := s.toolSession.CreateToolSession(ctx, "explain", agentBranch, file)
@@ -418,7 +418,7 @@ func explainResume(ctx context.Context, s mcpStore, agentBranch, cursor string) 
 			}
 
 			// Surface this node's children from the versioned edges.
-			if item.Depth < explainMaxDepth {
+			if item.SortKey < explainMaxDepth {
 				edges, eerr := s.search.OutgoingAtCommit(ctx, agentBranch, item.Path, item.CommitHash)
 				if eerr == nil {
 					for _, e := range edges {
@@ -428,7 +428,7 @@ func explainResume(ctx context.Context, s mcpStore, agentBranch, cursor string) 
 						}
 						seen[k] = true
 						newSeen = append(newSeen, k)
-						newQueue = append(newQueue, store.QueueItem{Path: e.Path, CommitHash: e.Commit, Depth: item.Depth + 1})
+						newQueue = append(newQueue, store.QueueItem{Path: e.Path, CommitHash: e.Commit, SortKey: item.SortKey + 1})
 					}
 				}
 			}
@@ -436,7 +436,7 @@ func explainResume(ctx context.Context, s mcpStore, agentBranch, cursor string) 
 			facts = append(facts, explainFactEntry{
 				Path:       item.Path,
 				Commit:     item.CommitHash,
-				Depth:      item.Depth,
+				Depth:      item.SortKey,
 				Title:      parsed.Title,
 				Type:       string(parsed.Type),
 				Kind:       kindString(parsed),
