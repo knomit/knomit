@@ -12,7 +12,9 @@ import (
 
 // sessionReaperConfig holds the parsed runtime parameters for the background
 // idle-session reaper. Built once in Manager.Start from config.SessionConfig.
-// SweepInterval <= 0 disables the loop.
+// Every knob is positive by construction: parseSessionReaperConfig clamps a
+// non-positive value to its default, because the reaper is never disabled (see
+// the defaults block below).
 type sessionReaperConfig struct {
 	ToolIdleTTL     time.Duration
 	PipelineIdleTTL time.Duration

@@ -163,13 +163,19 @@ func Load() (Config, error) {
 	envOr("ONNXRUNTIME_SHARED_LIBRARY", &cfg.ONNXLibPath)
 	envOr("KNOMIT_CLUSTER_CACHE_QUIET_THRESHOLD", &cfg.ClusterCache.QuietThreshold)
 	envOr("KNOMIT_CLUSTER_CACHE_CHECK_INTERVAL", &cfg.ClusterCache.CheckInterval)
-	envIntOr("KNOMIT_CLUSTER_CACHE_MAX_CONCURRENT", &cfg.ClusterCache.MaxConcurrent)
-	envFloatOr("KNOMIT_CLUSTER_CACHE_RESOLUTION", &cfg.ClusterCache.Resolution)
-	envIntOr("KNOMIT_CLUSTER_CACHE_MIN_COMMUNITY_SIZE", &cfg.ClusterCache.MinCommunitySize)
 	envOr("KNOMIT_SESSION_TOOL_IDLE_TTL", &cfg.Session.ToolIdleTTL)
 	envOr("KNOMIT_SESSION_PIPELINE_IDLE_TTL", &cfg.Session.PipelineIdleTTL)
 	envOr("KNOMIT_SESSION_SWEEP_INTERVAL", &cfg.Session.SweepInterval)
-	envFloatOr("KNOMIT_METHODOLOGY_MIN_SCORE", &cfg.MethodologyMinScore)
+	for _, err := range []error{
+		envIntOr("KNOMIT_CLUSTER_CACHE_MAX_CONCURRENT", &cfg.ClusterCache.MaxConcurrent),
+		envFloatOr("KNOMIT_CLUSTER_CACHE_RESOLUTION", &cfg.ClusterCache.Resolution),
+		envIntOr("KNOMIT_CLUSTER_CACHE_MIN_COMMUNITY_SIZE", &cfg.ClusterCache.MinCommunitySize),
+		envFloatOr("KNOMIT_METHODOLOGY_MIN_SCORE", &cfg.MethodologyMinScore),
+	} {
+		if err != nil {
+			return Config{}, err
+		}
+	}
 
 	// Expand tildes in path fields.
 	expandTilde(&cfg.Home)
@@ -231,20 +237,35 @@ func envBoolOr(key string, target *bool) {
 	}
 }
 
-func envIntOr(key string, target *int) {
-	if v := os.Getenv(key); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			*target = n
-		}
+// envIntOr overlays an int env var. A set-but-malformed value is an error
+// surfaced at boot rather than silently ignored (which would leave the default
+// in place and give no signal that the override was dropped).
+func envIntOr(key string, target *int) error {
+	v := os.Getenv(key)
+	if v == "" {
+		return nil
 	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return fmt.Errorf("config: %s must be an integer, got %q", key, v)
+	}
+	*target = n
+	return nil
 }
 
-func envFloatOr(key string, target *float64) {
-	if v := os.Getenv(key); v != "" {
-		if f, err := strconv.ParseFloat(v, 64); err == nil {
-			*target = f
-		}
+// envFloatOr overlays a float env var, erroring at boot on a malformed value
+// for the same reason as envIntOr.
+func envFloatOr(key string, target *float64) error {
+	v := os.Getenv(key)
+	if v == "" {
+		return nil
 	}
+	f, err := strconv.ParseFloat(v, 64)
+	if err != nil {
+		return fmt.Errorf("config: %s must be a number, got %q", key, v)
+	}
+	*target = f
+	return nil
 }
 
 func expandTilde(s *string) {
