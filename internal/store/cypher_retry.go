@@ -21,10 +21,28 @@ import (
 // documented anti-pattern). So read collisions are handled here by retry
 // instead of serialization.
 
-// isTransientCypherError reports whether err is the concurrent-cypher
-// translation race, which succeeds on retry.
+// isTransientCypherError reports whether err is a concurrent-cypher failure
+// that succeeds on retry.
+//
+// Two distinct transient signatures, same root cause (GraphQLite has no
+// internal serialization or retry for concurrent cypher() execution):
+//
+//   - "_gql_default_alias…": the Cypher→SQL translation race on the
+//     process-shared alias namespace, surfaced as malformed SQL ("no such
+//     column: _gql_default_alias_N.id"), raw or wrapped in structured JSON.
+//   - "abort due to ROLLBACK": GraphQLite aborts the in-flight statement
+//     rather than blocking when a concurrent cypher writer/reader contends the
+//     connection (seen from louvain() during cluster compute). The read
+//     succeeds once the contender clears. ClusterFacts short-circuits the
+//     *deterministic* empty-graph ROLLBACK before louvain runs, so a ROLLBACK
+//     that reaches retry is the contention kind.
 func isTransientCypherError(err error) bool {
-	return err != nil && strings.Contains(err.Error(), "_gql_default_alias")
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "_gql_default_alias") ||
+		strings.Contains(msg, "abort due to ROLLBACK")
 }
 
 // withCypherRetry runs fn, retrying with jittered backoff while it returns the
