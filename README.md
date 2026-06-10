@@ -93,8 +93,6 @@ knomit verify --all --deep    # every repo, including fact-format check
 knomit serve                  # start HTTP server (default port 19278)
 knomit init                   # initialize the default repo
 knomit init --name work       # initialize a repo named "work"
-knomit rebuild                # rebuild the default repo's search index
-knomit rebuild --name work    # rebuild a specific repo's index
 knomit reset                  # wipe the default repo
 knomit reset --name work      # wipe a specific repo
 ```
@@ -106,7 +104,7 @@ All data lives under `KNOMIT_HOME` (default `~/.knomit`):
 ```text
 ~/.knomit/
   repos/
-    knomit.db        # default repo (auto-created)
+    trunk.db         # default repo (auto-created)
     work.db          # additional repos (discovered at startup)
   models/            # shared ONNX embedder files
   id_ed25519         # SSH identity (shared across repos)
@@ -118,7 +116,7 @@ repo created via `knomit init` without restarting, hit the rescan endpoint:
 
 ```sh
 curl -X POST http://localhost:19278/api/v1/repos:rescan
-# {"added":["work"],"skipped":["knomit"],"errors":[],"_links":{...}}
+# {"added":["work"],"skipped":["trunk"],"errors":[],"_links":{...}}
 ```
 
 Already-open repos are reported in `skipped`; per-repo open failures appear
@@ -126,7 +124,7 @@ in `errors[]` without aborting the scan.
 
 Repos are discovered by scanning `~/.knomit/repos/` for `*.db` files at startup. The filename (minus `.db`) is the repo name. Names must match `[a-z0-9_-]+`.
 
-The default `knomit` repo is always created if missing.
+The default `trunk` repo is always created if missing.
 
 ### Development
 
@@ -203,7 +201,7 @@ The simplest setup uses `knomit-bridge` over stdio — no need to look up the ag
   "mcpServers": {
     "knomit": {
       "command": "dist/knomit-bridge",
-      "args": ["--repo", "knomit", "--source", "knomit", "--profile", "code"]
+      "args": ["--repo", "trunk", "--source", "trunk", "--profile", "code"]
     }
   }
 }
@@ -218,7 +216,7 @@ Alternatively, connect directly over streamable-HTTP, substituting the branch lo
   "mcpServers": {
     "knomit": {
       "type": "streamable-http",
-      "url": "http://localhost:19278/api/v1/repos/knomit/branches/agent:hostname-abc123/mcp"
+      "url": "http://localhost:19278/api/v1/repos/trunk/branches/agent:hostname-abc123/mcp"
     }
   }
 }
