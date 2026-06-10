@@ -1,7 +1,6 @@
 package app
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -75,40 +74,6 @@ func InitRepo(cfg config.Config, repoName, ontologyPath, ontologyPreset string) 
 		return fmt.Errorf("init git: %w", err)
 	}
 	fmt.Printf("Initialized knomit repo %q at %s\n", repoName, dbPath)
-	return nil
-}
-
-// RebuildIndex rebuilds the search index for the named repo from scratch.
-func RebuildIndex(ctx context.Context, cfg config.Config, repoName string) error {
-	keyPath := cfg.Remote.SSHKey
-	if keyPath == "" {
-		keyPath = filepath.Join(cfg.Home, "id_ed25519")
-	}
-	_, keyFingerprint, err := ensureKeyPair(keyPath)
-	if err != nil {
-		return fmt.Errorf("ensure keypair: %w", err)
-	}
-	agentBranch := agentBranch(keyFingerprint)
-
-	dbPath := filepath.Join(cfg.Home, "repos", repoName+".db")
-	svc, err := store.Open(dbPath)
-	if err != nil {
-		return fmt.Errorf("open store: %w", err)
-	}
-	defer svc.Close()
-
-	if err := svc.OpenRepo(); err != nil {
-		return fmt.Errorf("open git: %w", err)
-	}
-	// Rebuild (3-phase, INSERT OR REPLACE + cascade) — NOT Sync. Sync is
-	// COW-aware and skips facts whose content is unchanged, so it would not
-	// regenerate DERIVED index state (canonical fact_domains, fact_domain_tokens,
-	// re-clustering) after an indexing-logic change. "rebuild from scratch" must
-	// reindex every fact; git is the source of truth so this is always safe.
-	if err := svc.IndexManager().Rebuild(ctx, agentBranch, nil); err != nil {
-		return fmt.Errorf("rebuild: %w", err)
-	}
-	log.Info().Str("repo", repoName).Msg("Index rebuilt successfully")
 	return nil
 }
 
