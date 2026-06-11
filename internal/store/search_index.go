@@ -47,15 +47,16 @@ type searchIndex struct {
 	// one Louvain run; both wait on the singleflight result.
 	clusterSF singleflight.Group
 
-	// clusterRefreshing tracks the cluster-cache keys with an async refresh
-	// currently in flight (set by refreshClustersAsync, cleared when the
-	// compute returns). Louvain can take tens of seconds on a large graph,
-	// during which the cache row stays stale; without this the 5s background
-	// checker and every read would re-dispatch and re-log a refresh each tick.
-	// The marker lets callers fire (and log) at most one refresh per key per
-	// staleness window. Guarded by clusterRefreshMu.
-	clusterRefreshMu  sync.Mutex
-	clusterRefreshing map[string]struct{}
+	// clusterRefreshing is the set of cluster-cache keys
+	// (clusterCacheKey: branch|resolution|minCommunitySize) with a refresh
+	// currently in flight — set when a compute starts, cleared when it returns.
+	// Louvain can take tens of seconds on a large graph, during which the cache
+	// row stays stale; without this the 5s background checker and every read
+	// would re-dispatch and re-log a refresh each tick. Keyed (not a single
+	// flag) because one searchIndex serves many branches that refresh
+	// concurrently — a flag would let one branch's compute suppress every other
+	// branch's refresh. sync.Map.LoadOrStore gives the atomic test-and-claim.
+	clusterRefreshing sync.Map
 }
 
 // casLastCommit atomically updates the last-commit watermark for a branch,

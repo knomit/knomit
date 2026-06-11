@@ -144,7 +144,7 @@ func Open(path string) (*Service, error) {
 	rh := newRepoHandler(db, gits)
 	// Derive repo name from dbPath: /path/to/trunk.db → "trunk"
 	rh.name = strings.TrimSuffix(filepath.Base(path), ".db")
-	si := &searchIndex{rh: rh, clusterRefreshing: map[string]struct{}{}}
+	si := &searchIndex{rh: rh}
 
 	// facts_vec is code-managed (migration 000009 drops the old static
 	// FLOAT[768] table). Recreate it at the default dimension now so the

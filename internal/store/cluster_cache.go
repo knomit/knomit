@@ -153,8 +153,8 @@ func (si *searchIndex) CachedClusterFacts(ctx context.Context, branch string, re
 		// singleflight to get a result — there is no cached row to return), and
 		// only the acquirer clears the marker.
 		key := clusterCacheKey(branch, resolution, minCommunitySize)
-		if si.tryMarkClusterRefreshing(key) {
-			defer si.clearClusterRefreshing(key)
+		if _, inFlight := si.clusterRefreshing.LoadOrStore(key, struct{}{}); !inFlight {
+			defer si.clusterRefreshing.Delete(key)
 		}
 		return si.computeAndCacheClusters(ctx, branch, resolution, minCommunitySize)
 	}
@@ -188,33 +188,8 @@ func clusterCacheKey(branch string, resolution float64, minCommunitySize int) st
 // re-logging "triggering refresh") every tick while a long Louvain compute is
 // already in flight for the same key.
 func (si *searchIndex) ClusterRefreshInFlight(branch string, resolution float64, minCommunitySize int) bool {
-	key := clusterCacheKey(branch, resolution, minCommunitySize)
-	si.clusterRefreshMu.Lock()
-	defer si.clusterRefreshMu.Unlock()
-	_, running := si.clusterRefreshing[key]
+	_, running := si.clusterRefreshing.Load(clusterCacheKey(branch, resolution, minCommunitySize))
 	return running
-}
-
-// tryMarkClusterRefreshing records that a refresh for key is starting and
-// returns true. If one is already marked in flight it returns false without
-// changing state — the caller decides whether to skip entirely (stale async
-// path) or still compute via the singleflight (cold path). Only the call that
-// returned true should call clearClusterRefreshing.
-func (si *searchIndex) tryMarkClusterRefreshing(key string) bool {
-	si.clusterRefreshMu.Lock()
-	defer si.clusterRefreshMu.Unlock()
-	if _, running := si.clusterRefreshing[key]; running {
-		return false
-	}
-	si.clusterRefreshing[key] = struct{}{}
-	return true
-}
-
-// clearClusterRefreshing releases the in-flight marker for key. Idempotent.
-func (si *searchIndex) clearClusterRefreshing(key string) {
-	si.clusterRefreshMu.Lock()
-	delete(si.clusterRefreshing, key)
-	si.clusterRefreshMu.Unlock()
 }
 
 // computeAndCacheClusters runs ClusterFacts under the singleflight group,
@@ -296,12 +271,15 @@ func (si *searchIndex) computeAndCacheClusters(ctx context.Context, branch strin
 // the cache stays stale until the next trigger.
 func (si *searchIndex) refreshClustersAsync(branch string, resolution float64, minCommunitySize int) (started bool) {
 	key := clusterCacheKey(branch, resolution, minCommunitySize)
-	if !si.tryMarkClusterRefreshing(key) {
+	// Atomic check-and-claim: LoadOrStore reports whether the key was already
+	// present. If so, a refresh is already in flight — skip without launching a
+	// second goroutine.
+	if _, inFlight := si.clusterRefreshing.LoadOrStore(key, struct{}{}); inFlight {
 		return false
 	}
 
 	go func() {
-		defer si.clearClusterRefreshing(key)
+		defer si.clusterRefreshing.Delete(key)
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 		defer cancel()
 		if _, err := si.computeAndCacheClusters(ctx, branch, resolution, minCommunitySize); err != nil {
