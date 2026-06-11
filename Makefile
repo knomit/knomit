@@ -33,7 +33,7 @@ endif
 
 ORT_URL := https://github.com/microsoft/onnxruntime/releases/download/v$(ORT_VERSION)/onnxruntime-$(ORT_PLATFORM)-$(ORT_VERSION).tgz
 
-GRAPHQLITE_VERSION := 0.3.10
+GRAPHQLITE_VERSION := 0.6.0
 ifeq ($(UNAME_S),Darwin)
   ifeq ($(UNAME_M),arm64)
     GRAPHQLITE_ASSET := graphqlite-macos-arm64.dylib
