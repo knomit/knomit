@@ -7,7 +7,18 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
+
+	"github.com/rs/zerolog/log"
 )
+
+// slowClusterLouvainThreshold is the louvain() query duration above which
+// ClusterFacts logs at WARN with a full timing/attempt breakdown. Steady-state
+// louvain is sub-second; the diagnostic fires only on the anomalous multi-second
+// computes (investigated in
+// .claude/plans/2026-06-10-louvain-slow-compute-investigation.md) so the fast
+// path stays quiet. Tuned well above normal and below the observed ~90s outliers.
+const slowClusterLouvainThreshold = 5 * time.Second
 
 // ── Explain ───────────────────────────────────────────────────────────────────
 
@@ -428,6 +439,7 @@ func (si *searchIndex) ClusterFacts(ctx context.Context, branch string, resoluti
 	if err != nil {
 		return ClusterResult{}, fmt.Errorf("ClusterFacts: %w", err)
 	}
+	probeStart := time.Now()
 	var hasFacts bool
 	if err := conn(ctx, si.rh.db).QueryRowContext(ctx,
 		`SELECT EXISTS(SELECT 1 FROM branch_facts WHERE branch_id = ?)`, branchID,
@@ -437,6 +449,7 @@ func (si *searchIndex) ClusterFacts(ctx context.Context, branch string, resoluti
 	if !hasFacts {
 		return ClusterResult{Clusters: map[int][]string{}}, nil
 	}
+	probeDur := time.Since(probeStart)
 
 	// GraphQLite's louvain() returns a single JSON string of the form:
 	//   [{"column_0": [{"node_id": N, "user_id": null, "community": N}, ...]}]
@@ -464,9 +477,16 @@ func (si *searchIndex) ClusterFacts(ctx context.Context, branch string, resoluti
 	`, resolution, NodeFact)
 
 	// cypher()/louvain() reads can hit the transient concurrent-translation
-	// race; retry re-runs the whole query+scan (see withCypherRetry).
+	// race; retry re-runs the whole query+scan (see withCypherRetry). attempts
+	// counts how many times the closure ran: >1 means the retry path engaged
+	// (alias-race / ROLLBACK contention), 1 with a long louvainDur means a
+	// single long-blocking call (e.g. busy_timeout waits / cold projection) —
+	// the distinction the slow-louvain investigation needs.
 	communities := map[int][]string{}
+	attempts := 0
+	louvainStart := time.Now()
 	if err := withCypherRetry(func() error {
+		attempts++
 		rows, qerr := conn(ctx, si.rh.db).QueryContext(ctx, query)
 		if qerr != nil {
 			return qerr
@@ -485,9 +505,11 @@ func (si *searchIndex) ClusterFacts(ctx context.Context, branch string, resoluti
 	}); err != nil {
 		return ClusterResult{}, fmt.Errorf("louvain: %w", err)
 	}
+	louvainDur := time.Since(louvainStart)
 
 	// Post-filter: exclude facts not visible on this branch (check existence
 	// in `branch_facts` table), then apply minCommunitySize.
+	postStart := time.Now()
 	allPaths := make([]string, 0)
 	for _, members := range communities {
 		allPaths = append(allPaths, members...)
@@ -528,6 +550,25 @@ func (si *searchIndex) ClusterFacts(ctx context.Context, branch string, resoluti
 			result.Clusters[id] = alive
 		}
 	}
+	postDur := time.Since(postStart)
+
+	// Per-phase timing so an anomalous compute pins WHERE the time went: the
+	// louvain() cypher call (the suspect), the branch_facts probe, or the
+	// post-filter. attempts disambiguates retry-contention (>1) from a single
+	// long-blocking call (1). DEBUG on the fast path; WARN when louvain is slow.
+	ev := log.Debug()
+	if louvainDur >= slowClusterLouvainThreshold {
+		ev = log.Warn()
+	}
+	ev.
+		Str("branch", branch).
+		Int("nodes", len(allPaths)).
+		Int("communities", len(communities)).
+		Int("attempts", attempts).
+		Dur("probe", probeDur).
+		Dur("louvain", louvainDur).
+		Dur("postfilter", postDur).
+		Msg("cluster compute: louvain timing")
 
 	return result, nil
 }

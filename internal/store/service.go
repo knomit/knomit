@@ -144,7 +144,7 @@ func Open(path string) (*Service, error) {
 	rh := newRepoHandler(db, gits)
 	// Derive repo name from dbPath: /path/to/trunk.db → "trunk"
 	rh.name = strings.TrimSuffix(filepath.Base(path), ".db")
-	si := &searchIndex{rh: rh}
+	si := &searchIndex{rh: rh, clusterRefreshing: map[string]struct{}{}}
 
 	// facts_vec is code-managed (migration 000009 drops the old static
 	// FLOAT[768] table). Recreate it at the default dimension now so the
@@ -335,7 +335,6 @@ func (s *Service) Branches() BranchIndex { return s.rh }
 // decision logic lives in internal/clustercache).
 func (s *Service) ClusterCache() ClusterCacheStore { return &clusterCacheStore{rh: s.rh} }
 
-
 // Checkpoint flushes the WAL to the main database file so the .db file is
 // self-contained (e.g. before file-level copy). This is a no-op if WAL mode
 // is not enabled.
@@ -370,8 +369,6 @@ func (s *Service) SetSigner(signer ssh.Signer) {
 func (s *Service) SetOnCommit(fn func(branch, hash string)) {
 	s.rh.onCommit = fn
 }
-
-
 
 // HasSharedHistory checks whether localBranch shares any commits with remoteBranch on the remote service.
 // Uses a bounded walk (max 1000 commits) to avoid scanning huge histories.

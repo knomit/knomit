@@ -50,6 +50,11 @@ type SearchIndex interface {
 	RelevantMethodologyForFact(ctx context.Context, branch, factPath string, sourceDomains, sourceEntities []string, k int, minScore float64) ([]MethodologyMatch, error)
 	ClusterFacts(ctx context.Context, branch string, resolution float64, minCommunitySize int) (ClusterResult, error)
 	CachedClusterFacts(ctx context.Context, branch string, resolution float64, minCommunitySize int) (ClusterResult, error)
+	// ClusterRefreshInFlight reports whether an async cluster-cache refresh
+	// for the key is currently running. The background checker consults this
+	// to skip re-dispatching a refresh (and re-logging) every tick while a
+	// long Louvain compute is already in flight for the same key.
+	ClusterRefreshInFlight(branch string, resolution float64, minCommunitySize int) bool
 	RecentFacts(ctx context.Context, branch string, opts SearchOptions) ([]RecentFactEntry, int, error)
 	Log(ctx context.Context, branch, path string) ([]LogEntry, error)
 	LogPaginated(ctx context.Context, branch, path string, limit int, after, from, before string) ([]LogEntryWithTags, string, string, error)

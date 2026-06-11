@@ -147,18 +147,74 @@ func (si *searchIndex) CachedClusterFacts(ctx context.Context, branch string, re
 
 	if !found {
 		log.Info().Str("branch", branch).Msg("cluster cache: cold, computing synchronously")
+		// Mark in flight so the background checker doesn't re-dispatch and
+		// re-log every tick during a slow cold compute. Best-effort: if a
+		// refresh for this key is already marked we still compute (joining the
+		// singleflight to get a result — there is no cached row to return), and
+		// only the acquirer clears the marker.
+		key := clusterCacheKey(branch, resolution, minCommunitySize)
+		if si.tryMarkClusterRefreshing(key) {
+			defer si.clearClusterRefreshing(key)
+		}
 		return si.computeAndCacheClusters(ctx, branch, resolution, minCommunitySize)
 	}
 
 	if row.HeadCommit != headCommit {
-		log.Debug().
-			Str("branch", branch).
-			Str("cached_head", shortHash(row.HeadCommit)).
-			Str("current_head", shortHash(headCommit)).
-			Msg("cluster cache: stale, returning cached + async refresh")
-		si.refreshClustersAsync(branch, resolution, minCommunitySize)
+		// Log only when this call actually starts the refresh. If one is
+		// already in flight for this key (a long Louvain compute leaves the
+		// row stale for its whole duration), refreshClustersAsync is a no-op
+		// and we stay quiet — otherwise every read re-logs every tick.
+		if si.refreshClustersAsync(branch, resolution, minCommunitySize) {
+			log.Debug().
+				Str("branch", branch).
+				Str("cached_head", shortHash(row.HeadCommit)).
+				Str("current_head", shortHash(headCommit)).
+				Msg("cluster cache: stale, returning cached + async refresh")
+		}
 	}
 	return row.Result, nil
+}
+
+// clusterCacheKey is the canonical identity for a cluster-cache entry,
+// shared by the singleflight group and the in-flight refresh marker so both
+// collapse on exactly the same (branch, resolution, minCommunitySize) tuple.
+func clusterCacheKey(branch string, resolution float64, minCommunitySize int) string {
+	return fmt.Sprintf("%s|%g|%d", branch, resolution, minCommunitySize)
+}
+
+// ClusterRefreshInFlight reports whether a cluster-cache refresh for the given
+// key is currently running (async stale refresh or synchronous cold compute).
+// The background cluster checker consults this to avoid re-dispatching (and
+// re-logging "triggering refresh") every tick while a long Louvain compute is
+// already in flight for the same key.
+func (si *searchIndex) ClusterRefreshInFlight(branch string, resolution float64, minCommunitySize int) bool {
+	key := clusterCacheKey(branch, resolution, minCommunitySize)
+	si.clusterRefreshMu.Lock()
+	defer si.clusterRefreshMu.Unlock()
+	_, running := si.clusterRefreshing[key]
+	return running
+}
+
+// tryMarkClusterRefreshing records that a refresh for key is starting and
+// returns true. If one is already marked in flight it returns false without
+// changing state — the caller decides whether to skip entirely (stale async
+// path) or still compute via the singleflight (cold path). Only the call that
+// returned true should call clearClusterRefreshing.
+func (si *searchIndex) tryMarkClusterRefreshing(key string) bool {
+	si.clusterRefreshMu.Lock()
+	defer si.clusterRefreshMu.Unlock()
+	if _, running := si.clusterRefreshing[key]; running {
+		return false
+	}
+	si.clusterRefreshing[key] = struct{}{}
+	return true
+}
+
+// clearClusterRefreshing releases the in-flight marker for key. Idempotent.
+func (si *searchIndex) clearClusterRefreshing(key string) {
+	si.clusterRefreshMu.Lock()
+	delete(si.clusterRefreshing, key)
+	si.clusterRefreshMu.Unlock()
 }
 
 // computeAndCacheClusters runs ClusterFacts under the singleflight group,
@@ -185,7 +241,7 @@ func (si *searchIndex) CachedClusterFacts(ctx context.Context, branch string, re
 // of "latest commit on branch": sequential commits advance it atomically,
 // without the second-resolution ties that affect commit_log timestamps.
 func (si *searchIndex) computeAndCacheClusters(ctx context.Context, branch string, resolution float64, minCommunitySize int) (ClusterResult, error) {
-	key := fmt.Sprintf("%s|%g|%d", branch, resolution, minCommunitySize)
+	key := clusterCacheKey(branch, resolution, minCommunitySize)
 	ch := si.clusterSF.DoChan(key, func() (any, error) {
 		workCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Minute)
 		defer cancel()
@@ -227,19 +283,32 @@ func (si *searchIndex) computeAndCacheClusters(ctx context.Context, branch strin
 }
 
 // refreshClustersAsync fires a background recompute that outlives the
-// request context. The 5-minute ceiling matches the order of magnitude of
-// a worst-case Louvain on a very large knowledge base; without it a hung
-// query could pin a goroutine indefinitely. Errors are logged, not
-// surfaced — the worst case is the cache stays stale until the next
-// trigger.
-func (si *searchIndex) refreshClustersAsync(branch string, resolution float64, minCommunitySize int) {
+// request context, and reports whether it actually started one. If a refresh
+// for this key is already in flight it returns false without launching a
+// second goroutine: the singleflight would collapse the work anyway, but the
+// in-flight marker additionally lets callers skip the redundant dispatch and
+// log. The marker is held for the goroutine's whole lifetime (compute
+// included), so it covers a multi-second Louvain run, not just the launch.
+//
+// The 5-minute ceiling matches the order of magnitude of a worst-case Louvain
+// on a very large knowledge base; without it a hung query could pin a
+// goroutine indefinitely. Errors are logged, not surfaced — the worst case is
+// the cache stays stale until the next trigger.
+func (si *searchIndex) refreshClustersAsync(branch string, resolution float64, minCommunitySize int) (started bool) {
+	key := clusterCacheKey(branch, resolution, minCommunitySize)
+	if !si.tryMarkClusterRefreshing(key) {
+		return false
+	}
+
 	go func() {
+		defer si.clearClusterRefreshing(key)
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 		defer cancel()
 		if _, err := si.computeAndCacheClusters(ctx, branch, resolution, minCommunitySize); err != nil {
 			log.Warn().Err(err).Str("branch", branch).Msg("cluster cache: async refresh failed")
 		}
 	}()
+	return true
 }
 
 func shortHash(h string) string {

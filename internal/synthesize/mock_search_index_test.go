@@ -86,6 +86,20 @@ func (mr *MockSearchIndexMockRecorder) ClusterFacts(ctx, branch, resolution, min
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ClusterFacts", reflect.TypeOf((*MockSearchIndex)(nil).ClusterFacts), ctx, branch, resolution, minCommunitySize)
 }
 
+// ClusterRefreshInFlight mocks base method.
+func (m *MockSearchIndex) ClusterRefreshInFlight(branch string, resolution float64, minCommunitySize int) bool {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ClusterRefreshInFlight", branch, resolution, minCommunitySize)
+	ret0, _ := ret[0].(bool)
+	return ret0
+}
+
+// ClusterRefreshInFlight indicates an expected call of ClusterRefreshInFlight.
+func (mr *MockSearchIndexMockRecorder) ClusterRefreshInFlight(branch, resolution, minCommunitySize any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ClusterRefreshInFlight", reflect.TypeOf((*MockSearchIndex)(nil).ClusterRefreshInFlight), branch, resolution, minCommunitySize)
+}
+
 // CommitDetail mocks base method.
 func (m *MockSearchIndex) CommitDetail(ctx context.Context, commitHash, pathPrefix string) (*store.CommitDetailResult, error) {
 	m.ctrl.T.Helper()

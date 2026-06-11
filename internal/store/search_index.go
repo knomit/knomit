@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -45,6 +46,16 @@ type searchIndex struct {
 	// (or a review + the background checker) on the same key collapse to
 	// one Louvain run; both wait on the singleflight result.
 	clusterSF singleflight.Group
+
+	// clusterRefreshing tracks the cluster-cache keys with an async refresh
+	// currently in flight (set by refreshClustersAsync, cleared when the
+	// compute returns). Louvain can take tens of seconds on a large graph,
+	// during which the cache row stays stale; without this the 5s background
+	// checker and every read would re-dispatch and re-log a refresh each tick.
+	// The marker lets callers fire (and log) at most one refresh per key per
+	// staleness window. Guarded by clusterRefreshMu.
+	clusterRefreshMu  sync.Mutex
+	clusterRefreshing map[string]struct{}
 }
 
 // casLastCommit atomically updates the last-commit watermark for a branch,
@@ -1144,4 +1155,3 @@ func (si *searchIndex) rebuildGraph(ctx context.Context, branch string, progress
 
 	return total, nil
 }
-

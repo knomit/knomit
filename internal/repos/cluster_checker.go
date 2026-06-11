@@ -260,6 +260,22 @@ func checkBranchClusters(ctx context.Context, ri *RepoInstance, branch string, n
 		if found && row.HeadCommit == head {
 			continue
 		}
+		// A refresh for this key may already be running. Louvain can take
+		// tens of seconds on a large graph, during which the cache row stays
+		// stale; without this guard we'd re-dispatch and re-log "triggering
+		// refresh" every tick (~5s) for the whole compute. The store's
+		// singleflight would collapse the duplicate work, but the in-flight
+		// marker lets us skip the redundant dispatch and log entirely.
+		var inFlight bool
+		ri.WithRead(func(svc *store.Service) {
+			if svc == nil {
+				return
+			}
+			inFlight = svc.Search().ClusterRefreshInFlight(branch, k.Resolution, k.MinCommunitySize)
+		})
+		if inFlight {
+			continue
+		}
 		log.Info().
 			Str("repo", ri.Name()).
 			Str("branch", branch).
