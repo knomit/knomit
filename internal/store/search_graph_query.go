@@ -47,33 +47,37 @@ func (si *searchIndex) IncomingAtCommit(ctx context.Context, branch, path, commi
 		escapeCypherKey(path), escapeCypherKey(effectiveCommit),
 	)
 	q := `SELECT json_extract(value, '$.path'), json_extract(value, '$.title'), json_extract(value, '$.type'), json_extract(value, '$.sc'), json_extract(value, '$.deleted') FROM json_each(cypher('` + cypherQ + `'))`
-	rows, err := conn(ctx, si.rh.db).QueryContext(ctx, q)
-	if err != nil {
-		return nil, fmt.Errorf("IncomingAtCommit: cypher: %w", err)
-	}
-	defer rows.Close()
-
+	// cypher() reads can hit the transient concurrent-translation race; retry
+	// re-runs the whole query+scan (see withCypherRetry).
 	var candidates []RefSummary
-	for rows.Next() {
-		var rs RefSummary
-		var del any
-		if err := rows.Scan(&rs.Path, &rs.Title, &rs.Type, &rs.Commit, &del); err != nil {
-			return nil, fmt.Errorf("IncomingAtCommit: scan: %w", err)
+	if err := withCypherRetry(func() error {
+		rows, qerr := conn(ctx, si.rh.db).QueryContext(ctx, q)
+		if qerr != nil {
+			return qerr
 		}
-		if rs.Path == "" {
-			continue
+		defer rows.Close()
+		candidates = candidates[:0] // reset on retry
+		for rows.Next() {
+			var rs RefSummary
+			var del any
+			if serr := rows.Scan(&rs.Path, &rs.Title, &rs.Type, &rs.Commit, &del); serr != nil {
+				return serr
+			}
+			if rs.Path == "" {
+				continue
+			}
+			// Defense-in-depth: stale self-loops (same path & same commit on
+			// both endpoints) navigate to nowhere; drop them. Legitimate
+			// "previous version" edges have differing commits and pass through.
+			if rs.Path == path && rs.Commit == commitHash {
+				continue
+			}
+			rs.Deleted = isDeletedVal(del)
+			candidates = append(candidates, rs)
 		}
-		// Defense-in-depth: stale self-loops (same path & same commit on
-		// both endpoints) navigate to nowhere; drop them. Legitimate
-		// "previous version" edges have differing commits and pass through.
-		if rs.Path == path && rs.Commit == commitHash {
-			continue
-		}
-		rs.Deleted = isDeletedVal(del)
-		candidates = append(candidates, rs)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("IncomingAtCommit: rows: %w", err)
+		return rows.Err()
+	}); err != nil {
+		return nil, fmt.Errorf("IncomingAtCommit: cypher: %w", err)
 	}
 
 	// 2. SQL post-filter: keep only edges whose source_commit is reachable
@@ -155,33 +159,37 @@ func (si *searchIndex) OutgoingAtCommit(ctx context.Context, branch, path, commi
 		escapeCypherKey(effectiveCommit),
 	)
 	q := `SELECT json_extract(value, '$.path'), json_extract(value, '$.title'), json_extract(value, '$.type'), json_extract(value, '$.tc'), json_extract(value, '$.deleted') FROM json_each(cypher('` + cypherQ + `'))`
-	rows, err := conn(ctx, si.rh.db).QueryContext(ctx, q)
-	if err != nil {
-		return nil, fmt.Errorf("OutgoingAtCommit: cypher: %w", err)
-	}
-	defer rows.Close()
-
+	// cypher() reads can hit the transient concurrent-translation race; retry
+	// re-runs the whole query+scan (see withCypherRetry).
 	var candidates []RefSummary
-	for rows.Next() {
-		var rs RefSummary
-		var del any
-		if err := rows.Scan(&rs.Path, &rs.Title, &rs.Type, &rs.Commit, &del); err != nil {
-			return nil, fmt.Errorf("OutgoingAtCommit: scan: %w", err)
+	if err := withCypherRetry(func() error {
+		rows, qerr := conn(ctx, si.rh.db).QueryContext(ctx, q)
+		if qerr != nil {
+			return qerr
 		}
-		if rs.Path == "" {
-			continue
+		defer rows.Close()
+		candidates = candidates[:0] // reset on retry
+		for rows.Next() {
+			var rs RefSummary
+			var del any
+			if serr := rows.Scan(&rs.Path, &rs.Title, &rs.Type, &rs.Commit, &del); serr != nil {
+				return serr
+			}
+			if rs.Path == "" {
+				continue
+			}
+			// Defense-in-depth: drop stale self-loops where both endpoints
+			// are the same (path, commit). resolveTargetCommit no longer
+			// produces these, but legacy data may still hold them.
+			if rs.Path == path && rs.Commit == commitHash {
+				continue
+			}
+			rs.Deleted = isDeletedVal(del)
+			candidates = append(candidates, rs)
 		}
-		// Defense-in-depth: drop stale self-loops where both endpoints
-		// are the same (path, commit). resolveTargetCommit no longer
-		// produces these, but legacy data may still hold them.
-		if rs.Path == path && rs.Commit == commitHash {
-			continue
-		}
-		rs.Deleted = isDeletedVal(del)
-		candidates = append(candidates, rs)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("OutgoingAtCommit: rows: %w", err)
+		return rows.Err()
+	}); err != nil {
+		return nil, fmt.Errorf("OutgoingAtCommit: cypher: %w", err)
 	}
 
 	if len(candidates) == 0 {

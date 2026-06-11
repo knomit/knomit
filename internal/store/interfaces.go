@@ -40,6 +40,13 @@ type SearchIndex interface {
 	// Used by ref-kind classification: a ref is `fact` (vs `broken`) when
 	// the target has any historical version visible at the source's anchor.
 	FactExistsAt(ctx context.Context, branch, path, commit string) (bool, error)
+	// FactLiveAtCommit reports whether `path` is live (present, not retracted)
+	// as of `commit` — the delete-RESPECTING sibling of FactExistsAt. It
+	// inspects the most recent commit_log event in the first-parent ancestry
+	// and is live only if that event is added/modified. Used as the existence
+	// gate for the commit-anchored /incoming and /outgoing sub-resources so a
+	// retracted fact 404s in lockstep with the (no-fallback) fact read.
+	FactLiveAtCommit(ctx context.Context, branch, path, commit string) (bool, error)
 	RelevantMethodologyForFact(ctx context.Context, branch, factPath string, sourceDomains, sourceEntities []string, k int, minScore float64) ([]MethodologyMatch, error)
 	ClusterFacts(ctx context.Context, branch string, resolution float64, minCommunitySize int) (ClusterResult, error)
 	CachedClusterFacts(ctx context.Context, branch string, resolution float64, minCommunitySize int) (ClusterResult, error)

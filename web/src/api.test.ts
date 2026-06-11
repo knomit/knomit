@@ -260,8 +260,11 @@ describe('api.explain (grouping)', () => {
     });
     await api.explain('alpha', 'main', 'kb/x.md', 'abc1234');
     expect(calls).toHaveLength(2);
-    expect(calls[0]).toBe('/api/v1/repos/alpha/branches/main/commits/abc1234/facts/kb/x.md/incoming');
-    expect(calls[1]).toBe('/api/v1/repos/alpha/branches/main/commits/abc1234/facts/kb/x.md/outgoing');
+    // Commit-anchored edges follow the fact's fallback-before read, so a
+    // retracted fact resolves to its last-valid version's edges (matches the
+    // fact view) instead of 404ing.
+    expect(calls[0]).toBe('/api/v1/repos/alpha/branches/main/commits/abc1234/facts/kb/x.md/incoming?fallback=before');
+    expect(calls[1]).toBe('/api/v1/repos/alpha/branches/main/commits/abc1234/facts/kb/x.md/outgoing?fallback=before');
   });
 
   it('uses the HEAD-anchored URL when commit is omitted', async () => {

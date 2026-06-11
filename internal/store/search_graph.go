@@ -15,8 +15,8 @@ import (
 type RefSummary struct {
 	Path        string `json:"path"`
 	Title       string `json:"title"`
-	Type        string `json:"type,omitempty"`         // epistemic type of the source (incoming) or target (outgoing) fact
-	Commit      string `json:"commit,omitempty"`       // source_commit for incoming, target_commit for outgoing
+	Type        string `json:"type,omitempty"`   // epistemic type of the source (incoming) or target (outgoing) fact
+	Commit      string `json:"commit,omitempty"` // source_commit for incoming, target_commit for outgoing
 	Deleted     bool   `json:"deleted,omitempty"`
 	CommittedAt int64  `json:"committed_at,omitempty"` // Unix seconds; 0 if commit_log row missing
 }
@@ -323,7 +323,6 @@ func (si *searchIndex) graphDeleteFactTx(ctx context.Context, tx execer, path, b
 	return nil
 }
 
-
 // knnK caps how many nearest neighbours are considered per fact. The cosine
 // floor for actually drawing a SIMILAR_TO edge is model-dependent and comes from
 // the active embedder's Thresholds().SimilarTo (see internal/retrieval).
@@ -464,23 +463,27 @@ func (si *searchIndex) ClusterFacts(ctx context.Context, branch string, resoluti
 			AND npt.key_id = (SELECT id FROM property_keys WHERE key = 'path' LIMIT 1)
 	`, resolution, NodeFact)
 
-	rows, err := conn(ctx, si.rh.db).QueryContext(ctx, query)
-	if err != nil {
-		return ClusterResult{}, fmt.Errorf("louvain: %w", err)
-	}
-	defer rows.Close()
-
+	// cypher()/louvain() reads can hit the transient concurrent-translation
+	// race; retry re-runs the whole query+scan (see withCypherRetry).
 	communities := map[int][]string{}
-	for rows.Next() {
-		var community int
-		var path string
-		if err := rows.Scan(&community, &path); err != nil {
-			continue
+	if err := withCypherRetry(func() error {
+		rows, qerr := conn(ctx, si.rh.db).QueryContext(ctx, query)
+		if qerr != nil {
+			return qerr
 		}
-		communities[community] = append(communities[community], path)
-	}
-	if err := rows.Err(); err != nil {
-		return ClusterResult{}, fmt.Errorf("louvain rows: %w", err)
+		defer rows.Close()
+		clear(communities) // reset on retry
+		for rows.Next() {
+			var community int
+			var path string
+			if serr := rows.Scan(&community, &path); serr != nil {
+				continue
+			}
+			communities[community] = append(communities[community], path)
+		}
+		return rows.Err()
+	}); err != nil {
+		return ClusterResult{}, fmt.Errorf("louvain: %w", err)
 	}
 
 	// Post-filter: exclude facts not visible on this branch (check existence
@@ -571,8 +574,15 @@ func (si *searchIndex) graphExpandSearch(ctx context.Context, branchID int64, se
 		`SELECT json_extract(value, '$.path') FROM json_each(cypher('MATCH (f:%s)-[:%s]-(neighbor:%s) WHERE (%s) AND NOT neighbor.deleted = true RETURN DISTINCT neighbor.path AS path'))`,
 		NodeFact, EdgeSimilarTo, NodeFact, pathFilter,
 	)
-	rows, err := conn(ctx, si.rh.db).QueryContext(ctx, q)
-	if err == nil {
+	// Best-effort cypher reads; retry the transient concurrent-translation
+	// race. Map updates are idempotent (max-score), so a retry that re-iterates
+	// after a partial first attempt is safe.
+	_ = withCypherRetry(func() error {
+		rows, err := conn(ctx, si.rh.db).QueryContext(ctx, q)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
 		for rows.Next() {
 			var neighborPath string
 			rows.Scan(&neighborPath)
@@ -585,8 +595,8 @@ func (si *searchIndex) graphExpandSearch(ctx context.Context, branchID int64, se
 				}
 			}
 		}
-		rows.Close()
-	}
+		return rows.Err()
+	})
 
 	// Batch query 2: shared-entity neighbors for all seeds.
 	q = fmt.Sprintf(
@@ -594,8 +604,12 @@ func (si *searchIndex) graphExpandSearch(ctx context.Context, branchID int64, se
 		NodeFact, EdgeTagged, NodeEntity, EdgeTagged, NodeFact,
 		pathFilter,
 	)
-	rows, err = conn(ctx, si.rh.db).QueryContext(ctx, q)
-	if err == nil {
+	_ = withCypherRetry(func() error {
+		rows, err := conn(ctx, si.rh.db).QueryContext(ctx, q)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
 		for rows.Next() {
 			var neighborPath string
 			rows.Scan(&neighborPath)
@@ -609,8 +623,8 @@ func (si *searchIndex) graphExpandSearch(ctx context.Context, branchID int64, se
 				}
 			}
 		}
-		rows.Close()
-	}
+		return rows.Err()
+	})
 
 	// Post-filter: keep only paths visible on this branch.
 	if len(expanded) > 0 {
@@ -661,7 +675,7 @@ func jsonParams(key, value string) string {
 
 // escapeCypherKey escapes a string for use in Cypher MATCH/MERGE property
 // patterns (e.g. {path: "value"}) that appear inside a SQL single-quoted string.
-// GraphQLite's MATCH parser does not support unicode escapes or SQL '' escaping
+// GraphQLite's MATCH parser does not support unicode escapes or SQL ” escaping
 // inside property patterns, so single quotes are stripped to avoid breaking the
 // SQL string wrapper. Null bytes are stripped as they break the SQL parser.
 //
@@ -714,4 +728,3 @@ func (si *searchIndex) graphInsertEdge(ctx context.Context, sourceID, targetID i
 	)
 	return err
 }
-
