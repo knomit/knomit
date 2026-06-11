@@ -39,3 +39,9 @@ If not in git, omit the `@commit`: `src://<source>/<path>`.
 Example: `src://knomit/internal/store/service.go@cfef409`
 
 NEVER write bare paths like `internal/store/service.go` — knomit's ref resolver treats unscheme'd strings as local fact paths and lookups will fail or clash.
+
+## Linking to another fact
+
+To reference another knomit fact, put its fact path (the `kb/<topic>/<category>/<uuid>.md` shown in query results) in `refs` — same field as source refs, no scheme. There is NO inline link syntax: `[[name]]` and `[text](path)` are stored as literal body text and resolve to nothing.
+
+(`[[name]]` is the *file-based auto-memory* convention — a different system. Don't carry it into knomit facts.)
