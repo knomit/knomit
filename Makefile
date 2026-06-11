@@ -1,88 +1,33 @@
 .PHONY: build web test clean run dev setup dist download-ort download-graphqlite tokenizers-lib e2e e2e-ui e2e-setup e2e-report tray tray-run
 
-TOKENIZERS_VERSION := v1.27.0
-ORT_VERSION := 1.24.3
 UNAME_S := $(shell uname -s)
-UNAME_M := $(shell uname -m)
 TRAY_VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 
-# Detect platform for ORT download
+# Native libraries (ONNX Runtime, graphqlite, libtokenizers.a) are fetched by
+# the cross-platform Go tool tools/fetchlibs, which is the single source of
+# truth for their versions and per-platform asset names (and works on Windows,
+# unlike the old bash/uname scripts). The only platform bit Make still needs is
+# the ORT library filename, for the `run` target's ORT_LIB_PATH.
 ifeq ($(UNAME_S),Darwin)
-  ifeq ($(UNAME_M),arm64)
-    ORT_PLATFORM := osx-arm64
-    ORT_LIB_NAME := libonnxruntime.dylib
-    ORT_LIB_VERSIONED := libonnxruntime.$(ORT_VERSION).dylib
-  else
-    ORT_PLATFORM := osx-x86_64
-    ORT_LIB_NAME := libonnxruntime.dylib
-    ORT_LIB_VERSIONED := libonnxruntime.$(ORT_VERSION).dylib
-  endif
+  ORT_LIB_NAME := libonnxruntime.dylib
 else ifeq ($(UNAME_S),Linux)
-  ifeq ($(UNAME_M),aarch64)
-    ORT_PLATFORM := linux-aarch64
-  else
-    ORT_PLATFORM := linux-x64
-  endif
   ORT_LIB_NAME := libonnxruntime.so
-  ORT_LIB_VERSIONED := libonnxruntime.so.$(ORT_VERSION)
 else
-  ORT_PLATFORM := win-x64
   ORT_LIB_NAME := onnxruntime.dll
-  ORT_LIB_VERSIONED := onnxruntime.dll
 endif
 
-ORT_URL := https://github.com/microsoft/onnxruntime/releases/download/v$(ORT_VERSION)/onnxruntime-$(ORT_PLATFORM)-$(ORT_VERSION).tgz
-
-GRAPHQLITE_VERSION := 0.6.0
-ifeq ($(UNAME_S),Darwin)
-  ifeq ($(UNAME_M),arm64)
-    GRAPHQLITE_ASSET := graphqlite-macos-arm64.dylib
-    GRAPHQLITE_LIB := graphqlite.dylib
-  else
-    GRAPHQLITE_ASSET := graphqlite-macos-x86_64.dylib
-    GRAPHQLITE_LIB := graphqlite.dylib
-  endif
-else ifeq ($(UNAME_S),Linux)
-  ifeq ($(UNAME_M),aarch64)
-    GRAPHQLITE_ASSET := graphqlite-linux-aarch64.so
-    GRAPHQLITE_LIB := graphqlite.so
-  else
-    GRAPHQLITE_ASSET := graphqlite-linux-x86_64.so
-    GRAPHQLITE_LIB := graphqlite.so
-  endif
-else
-  GRAPHQLITE_ASSET := graphqlite-windows-x86_64.dll
-  GRAPHQLITE_LIB := graphqlite.dll
-endif
-GRAPHQLITE_URL := https://github.com/colliery-io/graphqlite/releases/download/v$(GRAPHQLITE_VERSION)/$(GRAPHQLITE_ASSET)
-
-setup: download-ort download-graphqlite tokenizers-lib
+setup:
+	go run ./tools/fetchlibs dist/lib
 	@echo "Setup complete. Run 'make run' to start the server."
 
 download-ort:
-	@mkdir -p dist/lib
-	@if [ ! -f dist/lib/$(ORT_LIB_NAME) ]; then \
-		echo "Downloading onnxruntime $(ORT_VERSION) for $(ORT_PLATFORM)..."; \
-		curl -sL $(ORT_URL) | tar xz -C /tmp; \
-		cp /tmp/onnxruntime-$(ORT_PLATFORM)-$(ORT_VERSION)/lib/$(ORT_LIB_VERSIONED) dist/lib/$(ORT_LIB_NAME); \
-		rm -rf /tmp/onnxruntime-$(ORT_PLATFORM)-$(ORT_VERSION); \
-		echo "onnxruntime installed to dist/lib/"; \
-	fi
+	go run ./tools/fetchlibs -only ort dist/lib
 
 download-graphqlite:
-	@mkdir -p dist/lib
-	@if [ ! -f dist/lib/$(GRAPHQLITE_LIB) ]; then \
-		echo "Downloading graphqlite v$(GRAPHQLITE_VERSION)..."; \
-		curl -sL $(GRAPHQLITE_URL) -o dist/lib/$(GRAPHQLITE_LIB); \
-		if [ "$(UNAME_S)" = "Darwin" ]; then \
-			codesign --sign - --force dist/lib/$(GRAPHQLITE_LIB); \
-		fi; \
-		echo "graphqlite installed to dist/lib/"; \
-	fi
+	go run ./tools/fetchlibs -only graphqlite dist/lib
 
 tokenizers-lib:
-	@mkdir -p dist/lib
-	@scripts/fetch_tokenizers_lib.sh $(TOKENIZERS_VERSION) dist/lib
+	go run ./tools/fetchlibs -only tokenizers dist/lib
 
 build: web tray
 	CGO_ENABLED=1 go build $(GOFLAGS) -o dist/knomit .

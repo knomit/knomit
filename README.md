@@ -134,7 +134,7 @@ make run CMD=init     # run a different subcommand
 make dev              # Vite dev server for frontend (HMR)
 ```
 
-**Editor setup (VS Code):** install the Go extension (`golang.go`); it uses `gopls`, pre-configured in [.vscode/settings.json](.vscode/settings.json). A C compiler must be on `PATH` so gopls and `go test` can build the CGO packages.
+**Editor setup (VS Code):** install the Go extension (`golang.go`); it uses `gopls`. A C compiler must be on `PATH` so gopls and `go test` can build the CGO packages.
 
 Seed test data (requires the server running):
 

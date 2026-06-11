@@ -9,11 +9,13 @@ on:
 # libtokenizers.a statically (CGo) and loads ONNX Runtime + graphqlite at
 # runtime, so this matrix proves the native-lib wiring resolves on each OS.
 #
-# Windows is intentionally NOT in the matrix yet: `make setup` and
-# scripts/fetch_tokenizers_lib.sh are bash/uname based and need an MSYS2/mingw
-# build path before they run natively on windows-latest. daulet/tokenizers does
-# ship a windows-amd64 static lib (v1.27.0), so adding Windows is a follow-up of
-# wiring a windows-native fetch + build, not a missing upstream artifact.
+# Windows is intentionally NOT in the matrix yet. Native-lib fetching is now
+# cross-platform (`go run ./tools/fetchlibs` replaced the bash scripts and runs
+# on windows-latest), and ONNX Runtime + graphqlite both publish Windows assets.
+# The remaining blocker is upstream: daulet/tokenizers ships NO Windows artifact
+# (darwin/linux only through v1.27.0), and internal/embeddings statically links
+# libtokenizers.a, so a Windows build needs an upstream/from-source .a plus an
+# MSYS2/mingw CGo toolchain on the runner. That is the follow-up, not the fetch.
 jobs:
   build-test:
     strategy:
