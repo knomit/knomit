@@ -109,26 +109,6 @@ export function RemoteConnectWizard({ repo, onCancel, onDone }: Props) {
     }
   };
 
-  const handleApply = async () => {
-    if (!sessionId) return;
-    setError(null); setApplyResult(null); setStep('applying'); setProgress('Merging…');
-    try {
-      await streamApply(repo, sessionId, strategy === 'local' ? 'local_wins' : 'remote_wins', selectedBranch || undefined, (ev: SSEEvent) => {
-        if (ev.phase === 'done') {
-          setApplyResult(ev.result as ApplyResult); setStep('applied'); setProgress('');
-        } else if (ev.phase === 'error') {
-          setError({ section: 'applying', message: ev.message }); setStep('applied');
-        } else if (ev.phase === 'replaying') {
-          setProgress(`Replaying ${ev.current}/${ev.total}…`);
-        } else if (ev.phase === 'merging') {
-          setProgress('Merging…');
-        } else { setProgress(ev.phase + '…'); }
-      });
-    } catch (e) {
-      setError({ section: 'applying', message: (e instanceof Error && e.message) || 'Apply failed' }); setStep('applied');
-    }
-  };
-
   const handleCommit = async () => {
     if (!sessionId) return;
     setError(null); setStep('committing'); setProgress('Finalizing…');
@@ -150,6 +130,32 @@ export function RemoteConnectWizard({ repo, onCancel, onDone }: Props) {
     } catch (e) {
       setError({ section: 'committing', message: (e instanceof Error && e.message) || 'Commit failed' });
     }
+  };
+
+  // handleApply runs the merge. When thenCommit is set (the shared-history
+  // single "Connect" path), it chains straight into commit so the user clicks
+  // once instead of twice. For non-shared history it stops at the merge preview
+  // so the user can review counts / try a different strategy before committing.
+  const handleApply = async (thenCommit = false) => {
+    if (!sessionId) return;
+    setError(null); setApplyResult(null); setStep('applying'); setProgress('Merging…');
+    let ok = true;
+    try {
+      await streamApply(repo, sessionId, strategy === 'local' ? 'local_wins' : 'remote_wins', selectedBranch || undefined, (ev: SSEEvent) => {
+        if (ev.phase === 'done') {
+          setApplyResult(ev.result as ApplyResult); setStep('applied'); setProgress('');
+        } else if (ev.phase === 'error') {
+          ok = false; setError({ section: 'applying', message: ev.message }); setStep('applied');
+        } else if (ev.phase === 'replaying') {
+          setProgress(`Replaying ${ev.current}/${ev.total}…`);
+        } else if (ev.phase === 'merging') {
+          setProgress('Merging…');
+        } else { setProgress(ev.phase + '…'); }
+      });
+    } catch (e) {
+      ok = false; setError({ section: 'applying', message: (e instanceof Error && e.message) || 'Apply failed' }); setStep('applied');
+    }
+    if (ok && thenCommit) await handleCommit();
   };
 
   const handleRetry = () => {
@@ -324,12 +330,12 @@ export function RemoteConnectWizard({ repo, onCancel, onDone }: Props) {
               <button type="button" style={btn(false, 'secondary')} onClick={() => { setApplyResult(null); setStep('previewed'); }}>Try different strategy</button>
             )}
             {(step === 'previewed' || step === 'applying') && !isSharedHistory && (
-              <button type="button" data-testid="wizard-preview" style={btn(busy || !previewResult)} disabled={busy || !previewResult} onClick={handleApply}>Preview merge →</button>
+              <button type="button" data-testid="wizard-preview" style={btn(busy || !previewResult)} disabled={busy || !previewResult} onClick={() => handleApply(false)}>Preview merge →</button>
             )}
-            {(step === 'previewed' && isSharedHistory) && (
-              <button type="button" data-testid="wizard-connect" style={btn(busy)} disabled={busy} onClick={handleApply}>Connect →</button>
+            {step === 'previewed' && isSharedHistory && (
+              <button type="button" data-testid="wizard-connect" style={btn(busy)} disabled={busy} onClick={() => handleApply(true)}>Connect →</button>
             )}
-            {step === 'applied' && !error && (
+            {step === 'applied' && !error && !isSharedHistory && (
               <button type="button" data-testid="wizard-connect" style={btn(false)} onClick={handleCommit}>Connect →</button>
             )}
           </div>
