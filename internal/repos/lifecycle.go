@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/rs/zerolog/log"
+	"github.com/segmentio/ksuid"
 
 	"knomit/internal/config"
 	"knomit/internal/fact"
@@ -108,7 +109,13 @@ func (m *Manager) reserveCreate(name string) (func(), error) {
 
 // Create initialises a new repo on disk per spec, registers it, and (for clone
 // mode) attaches the origin and activates sync. Progress is reported via emit.
-// The work is bound to ctx; cancellation aborts and removes a partial .db.
+//
+// Cancellation is honoured at step boundaries: ctx is checked before each
+// init step and again before the repo is registered, and a cancelled Create
+// removes the partial .db before returning ctx.Err(). The network fetch inside
+// clone mode is not itself interruptible (the store's clone is not yet
+// context-aware), so an in-flight clone runs to completion before the next
+// boundary check fires.
 func (m *Manager) Create(ctx context.Context, spec CreateSpec, emit func(Event)) (*RepoInstance, error) {
 	if emit == nil {
 		emit = func(Event) {}
@@ -136,9 +143,14 @@ func (m *Manager) Create(ctx context.Context, spec CreateSpec, emit func(Event))
 		os.Remove(dbPath + "-shm")
 	}
 
+	if cerr := ctx.Err(); cerr != nil {
+		cleanup()
+		return nil, cerr
+	}
+
 	switch spec.Mode {
 	case "preset", "custom":
-		if ierr := m.initLocal(spec, dbPath, emit); ierr != nil {
+		if ierr := m.initLocal(ctx, spec, dbPath, emit); ierr != nil {
 			cleanup()
 			return nil, ierr
 		}
@@ -149,7 +161,7 @@ func (m *Manager) Create(ctx context.Context, spec CreateSpec, emit func(Event))
 		if active := m.ActiveRepoWithOrigin(spec.Origin.URL); active != "" {
 			return nil, fmt.Errorf("%w: %q", ErrOriginInUse, active)
 		}
-		if ierr := m.initClone(spec, dbPath, emit); ierr != nil {
+		if ierr := m.initClone(ctx, spec, dbPath, emit); ierr != nil {
 			cleanup()
 			return nil, ierr
 		}
@@ -181,7 +193,7 @@ func (m *Manager) Create(ctx context.Context, spec CreateSpec, emit func(Event))
 }
 
 // initLocal handles preset/custom modes: resolve ontology bytes, seed a fresh repo.
-func (m *Manager) initLocal(spec CreateSpec, dbPath string, emit func(Event)) error {
+func (m *Manager) initLocal(ctx context.Context, spec CreateSpec, dbPath string, emit func(Event)) error {
 	emit(Event{Step: "ontology", Message: "resolving ontology", Pct: 20})
 	var ont *fact.Ontology
 	var err error
@@ -204,6 +216,9 @@ func (m *Manager) initLocal(spec CreateSpec, dbPath string, emit func(Event)) er
 		return fmt.Errorf("serialize ontology: %w", err)
 	}
 	emit(Event{Step: "init-git", Message: "initialising git store", Pct: 50})
+	if cerr := ctx.Err(); cerr != nil {
+		return cerr
+	}
 	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
 		return err
 	}
@@ -221,7 +236,10 @@ func (m *Manager) initLocal(spec CreateSpec, dbPath string, emit func(Event)) er
 }
 
 // initClone handles clone mode: fetch from origin, seed branches, persist remote.
-func (m *Manager) initClone(spec CreateSpec, dbPath string, emit func(Event)) error {
+func (m *Manager) initClone(ctx context.Context, spec CreateSpec, dbPath string, emit func(Event)) error {
+	if cerr := ctx.Err(); cerr != nil {
+		return cerr
+	}
 	emit(Event{Step: "clone", Message: "cloning from " + spec.Origin.URL, Pct: 40})
 	auth, err := m.ResolveAuth(authConfigFromSpec(spec.Origin), spec.Origin.URL)
 	if err != nil {
@@ -242,6 +260,9 @@ func (m *Manager) initClone(spec CreateSpec, dbPath string, emit func(Event)) er
 	}
 	if err := svc.InitFromRemote(spec.Origin.URL, auth, spec.Origin.Branch, m.deps.AgentBranch, map[string]string{}); err != nil {
 		return fmt.Errorf("clone: %w", err)
+	}
+	if cerr := ctx.Err(); cerr != nil {
+		return cerr
 	}
 	emit(Event{Step: "persist-origin", Message: "saving remote config", Pct: 70})
 	upstream := spec.Origin.Branch
@@ -286,7 +307,7 @@ func (m *Manager) ActiveRepoWithOrigin(url string) string {
 
 // ArchiveInfo describes one archived repo (manifest + derived id).
 type ArchiveInfo struct {
-	ID         string `json:"id"` // "<name>.<unix>"
+	ID         string `json:"id"` // ksuid — globally unique, k-sortable by archive time
 	Name       string `json:"name"`
 	Origin     string `json:"origin"`
 	ArchivedAt string `json:"archivedAt"`
@@ -346,7 +367,12 @@ func (m *Manager) Archive(name string) (ArchiveInfo, error) {
 		}
 		return ArchiveInfo{}, err
 	}
-	id := fmt.Sprintf("%s.%d", name, time.Now().Unix())
+	// A ksuid is globally unique, so archiving the same name twice within the
+	// same second can never collide on the on-disk id (the old "<name>.<unix>"
+	// scheme could). It is also k-sortable by creation time, which ListArchived
+	// uses to order newest-first.
+	now := time.Now().UTC()
+	id := ksuid.New().String()
 	dstDB := filepath.Join(m.archiveDir(), id+".db")
 	if err := os.Rename(srcDB, dstDB); err != nil {
 		// The db file is still at srcDB — re-register so the repo is not lost.
@@ -366,7 +392,7 @@ func (m *Manager) Archive(name string) (ArchiveInfo, error) {
 		ID:         id,
 		Name:       name,
 		Origin:     origin,
-		ArchivedAt: time.Now().UTC().Format(time.RFC3339),
+		ArchivedAt: now.Format(time.RFC3339Nano),
 	}
 	data, _ := json.MarshalIndent(info, "", "  ")
 	if err := os.WriteFile(filepath.Join(m.archiveDir(), id+".json"), data, 0o644); err != nil {
@@ -386,7 +412,7 @@ func (m *Manager) Archive(name string) (ArchiveInfo, error) {
 	return info, nil
 }
 
-// ListArchived reads all manifests under the archive dir, newest id first.
+// ListArchived reads all manifests under the archive dir, newest first.
 func (m *Manager) ListArchived() ([]ArchiveInfo, error) {
 	entries, err := os.ReadDir(m.archiveDir())
 	if err != nil {
@@ -409,7 +435,17 @@ func (m *Manager) ListArchived() ([]ArchiveInfo, error) {
 			out = append(out, info)
 		}
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].ID > out[j].ID })
+	// Order by archive time, newest first. ArchivedAt is the authoritative
+	// recency signal; the ksuid id is a stable tiebreak (and the fallback when
+	// a legacy manifest has an unparseable timestamp).
+	sort.Slice(out, func(i, j int) bool {
+		ti, ei := time.Parse(time.RFC3339Nano, out[i].ArchivedAt)
+		tj, ej := time.Parse(time.RFC3339Nano, out[j].ArchivedAt)
+		if ei == nil && ej == nil && !ti.Equal(tj) {
+			return ti.After(tj)
+		}
+		return out[i].ID > out[j].ID
+	})
 	return out, nil
 }
 

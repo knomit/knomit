@@ -3,6 +3,7 @@ package repos
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 
@@ -68,6 +69,100 @@ func TestCreate_CustomOntology(t *testing.T) {
 func TestActiveRepoWithOrigin_EmptyWhenNone(t *testing.T) {
 	m := newLifecycleManager(t)
 	require.Equal(t, "", m.ActiveRepoWithOrigin("https://example.com/x.git"))
+}
+
+// runGit runs a git command in dir (empty → process cwd), failing the test on
+// error. Used to build a real bare remote that clone-mode Create fetches from.
+func runGit(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	if dir != "" {
+		cmd.Dir = dir
+	}
+	cmd.Env = append(os.Environ(),
+		"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t",
+		"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t",
+	)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %v: %v\n%s", args, err, out)
+	}
+}
+
+// seedBareRemote builds a bare git repo with one commit on `main` and returns a
+// file:// URL pointing at it — a stand-in for a real remote that clone-mode
+// Create can fetch from.
+func seedBareRemote(t *testing.T) string {
+	t.Helper()
+	bare := t.TempDir()
+	runGit(t, "", "init", "--bare", "--initial-branch=main", bare)
+	work := t.TempDir()
+	runGit(t, "", "clone", bare, work)
+	require.NoError(t, os.WriteFile(filepath.Join(work, "seed.txt"), []byte("seed"), 0o644))
+	runGit(t, work, "add", "seed.txt")
+	runGit(t, work, "commit", "-m", "seed")
+	runGit(t, work, "push", "origin", "main")
+	runGit(t, bare, "symbolic-ref", "HEAD", "refs/heads/main")
+	return "file://" + bare
+}
+
+// TestCreate_CloneMode_FetchesAndPersistsOrigin exercises the clone path end to
+// end against a real (file://) git remote: Create must fetch, register the repo,
+// and persist the origin so ActiveRepoWithOrigin can find it by URL.
+func TestCreate_CloneMode_FetchesAndPersistsOrigin(t *testing.T) {
+	m := newLifecycleManager(t)
+	url := seedBareRemote(t)
+
+	var steps []string
+	ri, err := m.Create(context.Background(), CreateSpec{
+		Name: "cloned", Mode: "clone",
+		Origin: &OriginSpec{URL: url, Branch: "main"},
+	}, func(e Event) { steps = append(steps, e.Step) })
+	require.NoError(t, err)
+	require.NotNil(t, ri)
+	require.Equal(t, "cloned", ri.Name())
+	require.NotNil(t, m.Get("cloned"))
+	require.Contains(t, steps, "clone")
+	require.Contains(t, steps, "done")
+
+	// The origin URL was persisted to the store, so origin-uniqueness sees it.
+	require.Equal(t, "cloned", m.ActiveRepoWithOrigin(url))
+}
+
+// TestCreate_CloneMode_RejectsDuplicateOrigin verifies that, after a successful
+// clone, a second clone of the same origin URL is refused with ErrOriginInUse —
+// the real-clone counterpart to the preflight check.
+func TestCreate_CloneMode_RejectsDuplicateOrigin(t *testing.T) {
+	m := newLifecycleManager(t)
+	url := seedBareRemote(t)
+
+	_, err := m.Create(context.Background(), CreateSpec{
+		Name: "first", Mode: "clone", Origin: &OriginSpec{URL: url, Branch: "main"},
+	}, nil)
+	require.NoError(t, err)
+
+	_, err = m.Create(context.Background(), CreateSpec{
+		Name: "second", Mode: "clone", Origin: &OriginSpec{URL: url, Branch: "main"},
+	}, nil)
+	require.ErrorIs(t, err, ErrOriginInUse)
+	require.Nil(t, m.Get("second"), "rejected clone must not leave a registered repo")
+}
+
+// TestCreate_CloneMode_CancelledContext verifies the ctx boundary check: a
+// Create whose context is already cancelled aborts before fetching and leaves
+// no registered repo or partial .db behind.
+func TestCreate_CloneMode_CancelledContext(t *testing.T) {
+	m := newLifecycleManager(t)
+	url := seedBareRemote(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancel up front
+
+	_, err := m.Create(ctx, CreateSpec{
+		Name: "aborted", Mode: "clone", Origin: &OriginSpec{URL: url, Branch: "main"},
+	}, nil)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Nil(t, m.Get("aborted"))
+	_, statErr := os.Stat(filepath.Join(m.deps.Cfg.Home, "repos", "aborted.db"))
+	require.True(t, os.IsNotExist(statErr), "partial .db must be cleaned up")
 }
 
 func TestArchive_MovesFileAndUnregisters(t *testing.T) {

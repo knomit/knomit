@@ -22,6 +22,7 @@ require (
 	github.com/mattn/go-sqlite3 v1.14.34
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2
 	github.com/rs/zerolog v1.34.0
+	github.com/segmentio/ksuid v1.0.4
 	github.com/spf13/cobra v1.10.2
 	github.com/stretchr/testify v1.11.1
 	github.com/webview/webview_go v0.0.0-20240831120633-6173450d4dd6
