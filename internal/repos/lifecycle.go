@@ -2,10 +2,14 @@ package repos
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
+	"time"
 
 	"github.com/rs/zerolog/log"
 
@@ -24,6 +28,12 @@ var (
 	// ErrOriginInUse is returned when a clone/restore would point a second active
 	// repo at an origin URL already used by an active repo.
 	ErrOriginInUse = errors.New("origin URL already in use by an active repo")
+	// ErrCannotArchiveDefault is returned when archiving the default repo.
+	ErrCannotArchiveDefault = errors.New("cannot archive the default repo")
+	// ErrCannotArchiveLast is returned when archiving the only active repo.
+	ErrCannotArchiveLast = errors.New("cannot archive the last active repo")
+	// ErrArchiveNotFound is returned when no archived repo matches.
+	ErrArchiveNotFound = errors.New("archived repo not found")
 )
 
 // OriginSpec describes a git remote to attach at create/restore time.
@@ -242,4 +252,180 @@ func (m *Manager) ActiveRepoWithOrigin(url string) string {
 		})
 	})
 	return match
+}
+
+// ArchiveInfo describes one archived repo (manifest + derived id).
+type ArchiveInfo struct {
+	ID         string `json:"id"` // "<name>.<unix>"
+	Name       string `json:"name"`
+	Origin     string `json:"origin"`
+	ArchivedAt string `json:"archivedAt"`
+}
+
+func (m *Manager) archiveDir() string {
+	return filepath.Join(m.deps.Cfg.Home, "repos", "archive")
+}
+
+// Archive shuts down the named repo, moves its .db into the archive dir under a
+// timestamped id, writes a manifest, and unregisters it. The default repo and
+// the last remaining active repo cannot be archived.
+func (m *Manager) Archive(name string) (ArchiveInfo, error) {
+	if name == config.DefaultRepoName {
+		return ArchiveInfo{}, ErrCannotArchiveDefault
+	}
+	ri := m.Get(name)
+	if ri == nil {
+		return ArchiveInfo{}, fmt.Errorf("%w: %q", ErrArchiveNotFound, name)
+	}
+	if len(m.Names()) <= 1 {
+		return ArchiveInfo{}, ErrCannotArchiveLast
+	}
+
+	var origin string
+	ri.WithRead(func(svc *store.Service) {
+		if svc == nil {
+			return
+		}
+		if rm, err := svc.Remote().GetRemote("origin"); err == nil && rm != nil {
+			origin = rm.URL
+		}
+	})
+
+	// Remove from the map first so no new request reaches it, then tear down.
+	m.mu.Lock()
+	delete(m.repos, name)
+	m.mu.Unlock()
+	ri.shutdown() // releases the SQLite file handle
+
+	if err := os.MkdirAll(m.archiveDir(), 0o755); err != nil {
+		return ArchiveInfo{}, err
+	}
+	id := fmt.Sprintf("%s.%d", name, time.Now().Unix())
+	srcDB := filepath.Join(m.deps.Cfg.Home, "repos", name+".db")
+	dstDB := filepath.Join(m.archiveDir(), id+".db")
+	if err := os.Rename(srcDB, dstDB); err != nil {
+		return ArchiveInfo{}, fmt.Errorf("move db: %w", err)
+	}
+	_ = os.Rename(srcDB+"-wal", dstDB+"-wal")
+	_ = os.Rename(srcDB+"-shm", dstDB+"-shm")
+	sess := filepath.Join(m.deps.Cfg.Home, "repos", name+store.SessionDBSuffix)
+	os.Remove(sess)
+	os.Remove(sess + "-wal")
+	os.Remove(sess + "-shm")
+
+	info := ArchiveInfo{
+		ID:         id,
+		Name:       name,
+		Origin:     origin,
+		ArchivedAt: time.Now().UTC().Format(time.RFC3339),
+	}
+	data, _ := json.MarshalIndent(info, "", "  ")
+	if err := os.WriteFile(filepath.Join(m.archiveDir(), id+".json"), data, 0o644); err != nil {
+		return ArchiveInfo{}, fmt.Errorf("write manifest: %w", err)
+	}
+	log.Info().Str("repo", name).Str("id", id).Msg("archived repo")
+	return info, nil
+}
+
+// ListArchived reads all manifests under the archive dir, newest id first.
+func (m *Manager) ListArchived() ([]ArchiveInfo, error) {
+	entries, err := os.ReadDir(m.archiveDir())
+	if err != nil {
+		if os.IsNotExist(err) {
+			return []ArchiveInfo{}, nil
+		}
+		return nil, err
+	}
+	out := []ArchiveInfo{}
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+			continue
+		}
+		data, rerr := os.ReadFile(filepath.Join(m.archiveDir(), e.Name()))
+		if rerr != nil {
+			continue
+		}
+		var info ArchiveInfo
+		if json.Unmarshal(data, &info) == nil {
+			out = append(out, info)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID > out[j].ID })
+	return out, nil
+}
+
+// findArchived returns the manifest for archiveID or ErrArchiveNotFound.
+func (m *Manager) findArchived(archiveID string) (ArchiveInfo, error) {
+	all, err := m.ListArchived()
+	if err != nil {
+		return ArchiveInfo{}, err
+	}
+	for _, a := range all {
+		if a.ID == archiveID {
+			return a, nil
+		}
+	}
+	return ArchiveInfo{}, fmt.Errorf("%w: %q", ErrArchiveNotFound, archiveID)
+}
+
+// Restore re-activates an archived repo, optionally under newName to resolve a
+// name collision. Fails if the target name is active, or if the archived repo's
+// origin matches an active repo's origin.
+func (m *Manager) Restore(archiveID, newName string) (*RepoInstance, error) {
+	info, err := m.findArchived(archiveID)
+	if err != nil {
+		return nil, err
+	}
+	target := info.Name
+	if newName != "" {
+		target = newName
+	}
+	if !isValidRepoName(target) {
+		return nil, ErrInvalidName
+	}
+	if m.Get(target) != nil {
+		return nil, fmt.Errorf("%w: %q", ErrRepoExists, target)
+	}
+	if info.Origin != "" {
+		if active := m.ActiveRepoWithOrigin(info.Origin); active != "" {
+			return nil, fmt.Errorf("%w: %q", ErrOriginInUse, active)
+		}
+	}
+
+	srcDB := filepath.Join(m.archiveDir(), archiveID+".db")
+	dstDB := filepath.Join(m.deps.Cfg.Home, "repos", target+".db")
+	if err := os.Rename(srcDB, dstDB); err != nil {
+		return nil, fmt.Errorf("restore move: %w", err)
+	}
+	_ = os.Rename(srcDB+"-wal", dstDB+"-wal")
+	_ = os.Rename(srcDB+"-shm", dstDB+"-shm")
+	os.Remove(filepath.Join(m.archiveDir(), archiveID+".json"))
+
+	if err := m.Add(target, dstDB); err != nil {
+		return nil, fmt.Errorf("restore register: %w", err)
+	}
+	ri := m.Get(target)
+	if ri != nil && info.Origin != "" {
+		if serr := ri.ActivateSync(info.Origin); serr != nil {
+			log.Warn().Err(serr).Str("repo", target).Msg("restore: activate sync failed")
+		}
+	}
+	log.Info().Str("id", archiveID).Str("repo", target).Msg("restored repo")
+	return ri, nil
+}
+
+// Purge permanently deletes an archived repo's db and manifest.
+func (m *Manager) Purge(archiveID string) error {
+	if _, err := m.findArchived(archiveID); err != nil {
+		return err
+	}
+	db := filepath.Join(m.archiveDir(), archiveID+".db")
+	if err := os.Remove(db); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("purge db: %w", err)
+	}
+	os.Remove(db + "-wal")
+	os.Remove(db + "-shm")
+	os.Remove(filepath.Join(m.archiveDir(), archiveID+".json"))
+	log.Info().Str("id", archiveID).Msg("purged repo")
+	return nil
 }
