@@ -72,7 +72,7 @@ export function RemoteConnectWizard({ repo, onCancel, onDone }: Props) {
         const close = streamTest(repo, sess.session_id, (ev: SSEEvent) => {
           if (ev.phase === 'done') {
             const result = ev.result as TestResult;
-            setTestResult(result); setSelectedBranch(result.default_branch);
+            setTestResult(result); setSelectedBranch(result.default_branch || '');
             setStep('tested'); setProgress(''); resolve();
             startPreview(sess.session_id);
           } else if (ev.phase === 'error') {
@@ -247,9 +247,11 @@ export function RemoteConnectWizard({ repo, onCancel, onDone }: Props) {
             </div>
             <div style={{ display: 'flex', gap: 16, marginBottom: 12, fontSize: 13, alignItems: 'center' }}>
               <span style={{ color: '#888' }}>Branch:</span>
-              <select value={selectedBranch} disabled={busy} onChange={e => setSelectedBranch(e.target.value)}
+              <select value={selectedBranch} disabled={busy || (testResult.branches ?? []).length === 0} onChange={e => setSelectedBranch(e.target.value)}
                 style={{ background: '#1a1a1a', border: '1px solid #333', color: '#eee', padding: '2px 6px', borderRadius: 4, fontSize: 13 }}>
-                {testResult.branches.map(b => <option key={b} value={b}>{b}</option>)}
+                {(testResult.branches ?? []).length === 0
+                  ? <option value="">(no remote branches yet)</option>
+                  : (testResult.branches ?? []).map(b => <option key={b} value={b}>{b}</option>)}
               </select>
               {testResult.matched_agent && <span style={{ color: '#8af' }}>agent branch found — will replay on top</span>}
             </div>

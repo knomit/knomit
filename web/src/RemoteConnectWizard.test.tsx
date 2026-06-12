@@ -58,4 +58,29 @@ describe('RemoteConnectWizard', () => {
     expect(screen.queryByText(/Conflict strategy:/)).toBeNull();
     expect(screen.queryByText(/Local wins/)).toBeNull();
   });
+
+  // Regression: a brand-new/empty remote returns branches: null (Go marshals a
+  // nil slice as null). The Review step must not crash on .branches.map.
+  it('does not crash on Review when the remote has no branches (null)', async () => {
+    (api.getOrigin as unknown as Fn).mockResolvedValueOnce(null);
+    (createSession as unknown as Fn).mockResolvedValueOnce({ session_id: 'sess-2' });
+    (streamTest as unknown as Fn).mockImplementation((_r: string, _s: string, onEvent: (e: unknown) => void) => {
+      queueMicrotask(() => onEvent({
+        phase: 'done',
+        result: { branches: null, agent_branches: null, default_branch: '', matched_agent: '', history: 'disjoint', remote_fact_count: 0, local_fact_count: 5 },
+      }));
+      return () => {};
+    });
+    (streamPreview as unknown as Fn).mockImplementation((_r: string, _s: string, onEvent: (e: unknown) => void) => {
+      queueMicrotask(() => onEvent({ phase: 'done', result: { local_only: 5, remote_only: 0, shared_path: 0, dead_refs_found: 0 } }));
+      return () => {};
+    });
+
+    render(<RemoteConnectWizard repo="knomit-kb" onCancel={() => {}} onDone={() => {}} />);
+    const url = await screen.findByTestId('wizard-url') as HTMLInputElement;
+    fireEvent.change(url, { target: { value: 'https://github.com/knomit/knomit-kb' } });
+    fireEvent.click(screen.getByTestId('wizard-test'));
+
+    expect(await screen.findByText('(no remote branches yet)')).toBeInTheDocument();
+  });
 });
