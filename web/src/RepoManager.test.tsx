@@ -10,6 +10,7 @@ vi.mock('./api', () => ({
     ]),
     getAgentBranch: vi.fn().mockResolvedValue('agent/test'),
     getOrigin: vi.fn().mockResolvedValue(null),
+    deleteOrigin: vi.fn(),
   },
 }));
 
@@ -39,8 +40,8 @@ describe('RepoManager', () => {
     // RepoDetail for trunk loads its agent branch and inline origin form.
     await waitFor(() => expect(api.getAgentBranch).toHaveBeenCalledWith('trunk'));
     await waitFor(() => expect(api.getOrigin).toHaveBeenCalledWith('trunk'));
-    // The Origin section renders inline within the same dialog.
-    await waitFor(() => expect(screen.getByText('Origin')).toBeInTheDocument());
+    // The Remote status section renders inline within the same dialog.
+    await waitFor(() => expect(screen.getByText('Remote')).toBeInTheDocument());
     expect(screen.getByText('⟳ Rebuild index')).toBeInTheDocument();
   });
 });

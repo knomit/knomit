@@ -577,6 +577,10 @@ export const api = {
       body: JSON.stringify(opts),
     }).then(r => { if (!r.ok) throw new Error(r.statusText); return r.json(); }),
 
+  deleteOrigin: (repo: string): Promise<void> =>
+    fetch(`${repoBase(repo)}/origin`, { method: 'DELETE' })
+      .then(r => { if (!r.ok) throw new Error(`disconnect → ${r.status} ${r.statusText}`); }),
+
   retractFact: (repo: string, branch: string, path: string): Promise<void> =>
     fetch(`${branchBase(repo, branch)}/facts/${path}`, { method: 'DELETE' })
       .then(r => { if (!r.ok) return r.json().then(e => { throw new Error(e.title || e.detail || r.statusText); }); }),

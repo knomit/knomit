@@ -110,8 +110,19 @@ func (defaultOriginProvider) SetOrigin(ri *repos.RepoInstance, req setOriginRequ
 }
 
 func (defaultOriginProvider) DeleteOrigin(ri *repos.RepoInstance) error {
-	// The legacy API has no delete; we model it as a no-op (204) for now.
-	// A full implementation would call svc.Remote().DeleteRemote("origin").
+	var err error
+	ri.WithRead(func(svc *store.Service) {
+		if svc == nil {
+			err = errOriginNoStore
+			return
+		}
+		err = svc.Remote().DeleteRemote("origin")
+	})
+	if err != nil {
+		return err
+	}
+	// Stop the sync loop now that the remote is gone.
+	ri.DeactivateSync()
 	return nil
 }
 
