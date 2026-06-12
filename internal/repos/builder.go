@@ -419,9 +419,13 @@ func (b *repoBuilder) build() *RepoInstance {
 
 	ri.closeFn = func() {
 		obs.Stop()
-		ri.mu.RLock()
+		// Acquire the WRITE lock to drain all in-flight readers (WithRead holds
+		// the RLock while calling fn(svc)) before closing the SQLite handle.
+		// Using RLock here would let a concurrent WithRead execute fn(svc)
+		// while Close runs → use-after-close.
+		ri.mu.Lock()
 		svc := ri.svc
-		ri.mu.RUnlock()
+		ri.mu.Unlock()
 		svc.Close()
 	}
 

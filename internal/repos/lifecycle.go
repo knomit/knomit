@@ -34,6 +34,8 @@ var (
 	ErrCannotArchiveLast = errors.New("cannot archive the last active repo")
 	// ErrArchiveNotFound is returned when no archived repo matches.
 	ErrArchiveNotFound = errors.New("archived repo not found")
+	// ErrRepoNotFound is returned when no active repo matches a name.
+	ErrRepoNotFound = errors.New("repo not found")
 )
 
 // OriginSpec describes a git remote to attach at create/restore time.
@@ -301,14 +303,29 @@ func (m *Manager) Archive(name string) (ArchiveInfo, error) {
 	if name == config.DefaultRepoName {
 		return ArchiveInfo{}, ErrCannotArchiveDefault
 	}
-	ri := m.Get(name)
+
+	// Atomically: verify the repo exists, enforce the last-repo guard, and
+	// remove it from the map. Doing all three under one Lock closes the TOCTOU
+	// window where a concurrent Archive could see len>1, both delete, and leave
+	// zero repos. ErrCannotArchiveLast is a defensive guard: in normal
+	// operation the default repo (trunk) is always present and is rejected by
+	// the default-repo check above, so this branch is only reachable if the
+	// map has been reduced to a single non-default repo by other means.
+	m.mu.Lock()
+	ri := m.repos[name]
 	if ri == nil {
-		return ArchiveInfo{}, fmt.Errorf("%w: %q", ErrArchiveNotFound, name)
+		m.mu.Unlock()
+		return ArchiveInfo{}, fmt.Errorf("%w: %q", ErrRepoNotFound, name)
 	}
-	if len(m.Names()) <= 1 {
+	if len(m.repos) <= 1 {
+		m.mu.Unlock()
 		return ArchiveInfo{}, ErrCannotArchiveLast
 	}
+	delete(m.repos, name)
+	m.mu.Unlock()
 
+	// The ri pointer is still valid after the delete; capture origin then tear
+	// it down so the SQLite handle is released before we move the file.
 	var origin string
 	ri.WithRead(func(svc *store.Service) {
 		if svc == nil {
@@ -318,20 +335,24 @@ func (m *Manager) Archive(name string) (ArchiveInfo, error) {
 			origin = rm.URL
 		}
 	})
-
-	// Remove from the map first so no new request reaches it, then tear down.
-	m.mu.Lock()
-	delete(m.repos, name)
-	m.mu.Unlock()
 	ri.shutdown() // releases the SQLite file handle
 
+	srcDB := filepath.Join(m.deps.Cfg.Home, "repos", name+".db")
+
 	if err := os.MkdirAll(m.archiveDir(), 0o755); err != nil {
+		// Recovery: re-register the repo so it is not lost.
+		if aerr := m.Add(name, srcDB); aerr != nil {
+			log.Error().Err(aerr).Str("repo", name).Msg("archive: re-register after mkdir failure failed; repo unregistered")
+		}
 		return ArchiveInfo{}, err
 	}
 	id := fmt.Sprintf("%s.%d", name, time.Now().Unix())
-	srcDB := filepath.Join(m.deps.Cfg.Home, "repos", name+".db")
 	dstDB := filepath.Join(m.archiveDir(), id+".db")
 	if err := os.Rename(srcDB, dstDB); err != nil {
+		// The db file is still at srcDB — re-register so the repo is not lost.
+		if aerr := m.Add(name, srcDB); aerr != nil {
+			log.Error().Err(aerr).Str("repo", name).Msg("archive: re-register after rename failure failed; repo unregistered")
+		}
 		return ArchiveInfo{}, fmt.Errorf("move db: %w", err)
 	}
 	_ = os.Rename(srcDB+"-wal", dstDB+"-wal")
@@ -349,6 +370,16 @@ func (m *Manager) Archive(name string) (ArchiveInfo, error) {
 	}
 	data, _ := json.MarshalIndent(info, "", "  ")
 	if err := os.WriteFile(filepath.Join(m.archiveDir(), id+".json"), data, 0o644); err != nil {
+		// Move the db back and re-register so the repo is recoverable as active.
+		if rerr := os.Rename(dstDB, srcDB); rerr != nil {
+			log.Error().Err(rerr).Str("repo", name).Msg("archive: move db back after manifest failure failed")
+		} else {
+			_ = os.Rename(dstDB+"-wal", srcDB+"-wal")
+			_ = os.Rename(dstDB+"-shm", srcDB+"-shm")
+			if aerr := m.Add(name, srcDB); aerr != nil {
+				log.Error().Err(aerr).Str("repo", name).Msg("archive: re-register after manifest failure failed; repo unregistered")
+			}
+		}
 		return ArchiveInfo{}, fmt.Errorf("write manifest: %w", err)
 	}
 	log.Info().Str("repo", name).Str("id", id).Msg("archived repo")
@@ -422,16 +453,34 @@ func (m *Manager) Restore(archiveID, newName string) (*RepoInstance, error) {
 
 	srcDB := filepath.Join(m.archiveDir(), archiveID+".db")
 	dstDB := filepath.Join(m.deps.Cfg.Home, "repos", target+".db")
+
+	// Guard against a leftover destination file from a prior failed restore.
+	// Renaming over it would clobber an unrelated db; refuse instead.
+	if _, err := os.Stat(dstDB); err == nil {
+		return nil, fmt.Errorf("%w: %q (db file already exists)", ErrRepoExists, target)
+	}
+
 	if err := os.Rename(srcDB, dstDB); err != nil {
 		return nil, fmt.Errorf("restore move: %w", err)
 	}
 	_ = os.Rename(srcDB+"-wal", dstDB+"-wal")
 	_ = os.Rename(srcDB+"-shm", dstDB+"-shm")
-	os.Remove(filepath.Join(m.archiveDir(), archiveID+".json"))
 
 	if err := m.Add(target, dstDB); err != nil {
+		// Recovery: move the db back to the archive path so the repo remains a
+		// recoverable archived entry. Do NOT delete the manifest.
+		if rerr := os.Rename(dstDB, srcDB); rerr != nil {
+			log.Error().Err(rerr).Str("repo", target).Msg("restore: move db back after register failure failed")
+		} else {
+			_ = os.Rename(dstDB+"-wal", srcDB+"-wal")
+			_ = os.Rename(dstDB+"-shm", srcDB+"-shm")
+		}
 		return nil, fmt.Errorf("restore register: %w", err)
 	}
+
+	// Only now that the repo is registered is it safe to drop the manifest.
+	os.Remove(filepath.Join(m.archiveDir(), archiveID+".json"))
+
 	ri := m.Get(target)
 	if ri != nil && info.Origin != "" {
 		if serr := ri.ActivateSync(info.Origin); serr != nil {
