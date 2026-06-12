@@ -91,6 +91,28 @@ func (ri *RepoInstance) Close() {
 	}
 }
 
+// shutdown performs the full teardown sequence for a single instance:
+// cancel the sync loop, wait for it to wind down, shut the task hub, then
+// release store/observer resources. Used by Manager.Close (bulk) and the
+// lifecycle Archive path (single).
+func (ri *RepoInstance) shutdown() {
+	ri.mu.RLock()
+	cancel := ri.syncCancel
+	ri.mu.RUnlock()
+	if cancel != nil {
+		cancel()
+	}
+	if ri.syncWg != nil {
+		ri.syncWg.Wait()
+	}
+	if ri.hub != nil {
+		ri.hub.Shutdown()
+	}
+	if ri.closeFn != nil {
+		ri.closeFn()
+	}
+}
+
 // Verify runs the integrity check against the current store under the read
 // lock so that a concurrent SwapStore cannot move the rug. Delegates to
 // store.Service.Verify and stamps the report with this repo's name.
