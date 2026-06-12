@@ -22,20 +22,10 @@ func InitRepo(cfg config.Config, repoName, ontologyPath, ontologyPreset string) 
 		return fmt.Errorf("--ontology and --ontology-preset are mutually exclusive")
 	}
 
-	reposDir := filepath.Join(cfg.Home, "repos")
-	if err := os.MkdirAll(reposDir, 0o755); err != nil {
+	branch, err := ResolveAgentBranch(cfg)
+	if err != nil {
 		return err
 	}
-
-	keyPath := cfg.Remote.SSHKey
-	if keyPath == "" {
-		keyPath = filepath.Join(cfg.Home, "id_ed25519")
-	}
-	_, keyFingerprint, err := ensureKeyPair(keyPath)
-	if err != nil {
-		return fmt.Errorf("ensure keypair: %w", err)
-	}
-	agentBranch := agentBranch(keyFingerprint)
 
 	var ontology *fact.Ontology
 	switch {
@@ -61,20 +51,48 @@ func InitRepo(cfg config.Config, repoName, ontologyPath, ontologyPreset string) 
 		return fmt.Errorf("serialize ontology: %w", err)
 	}
 
-	dbPath := filepath.Join(reposDir, repoName+".db")
-	svc, err := store.Open(dbPath)
+	dbPath, err := InitRepoOnDiskBytes(cfg, repoName, ontologyYAML, branch)
 	if err != nil {
-		return fmt.Errorf("open store: %w", err)
-	}
-	defer svc.Close()
-
-	if err := svc.InitRepo(map[string]string{
-		"domains/ontology.yaml": string(ontologyYAML),
-	}, agentBranch); err != nil {
-		return fmt.Errorf("init git: %w", err)
+		return err
 	}
 	fmt.Printf("Initialized knomit repo %q at %s\n", repoName, dbPath)
 	return nil
+}
+
+// InitRepoOnDiskBytes creates and initialises a new repo database at
+// <cfg.Home>/repos/<repoName>.db, seeding domains/ontology.yaml with the
+// provided ontology bytes on the given agent branch. Returns the dbPath.
+func InitRepoOnDiskBytes(cfg config.Config, repoName string, ontologyYAML []byte, agentBranch string) (string, error) {
+	reposDir := filepath.Join(cfg.Home, "repos")
+	if err := os.MkdirAll(reposDir, 0o755); err != nil {
+		return "", err
+	}
+	dbPath := filepath.Join(reposDir, repoName+".db")
+	svc, err := store.Open(dbPath)
+	if err != nil {
+		return "", fmt.Errorf("open store: %w", err)
+	}
+	defer svc.Close()
+	if err := svc.InitRepo(map[string]string{
+		"domains/ontology.yaml": string(ontologyYAML),
+	}, agentBranch); err != nil {
+		return "", fmt.Errorf("init git: %w", err)
+	}
+	return dbPath, nil
+}
+
+// ResolveAgentBranch ensures the SSH keypair exists and returns the agent
+// branch derived from its fingerprint.
+func ResolveAgentBranch(cfg config.Config) (string, error) {
+	keyPath := cfg.Remote.SSHKey
+	if keyPath == "" {
+		keyPath = filepath.Join(cfg.Home, "id_ed25519")
+	}
+	_, keyFingerprint, err := ensureKeyPair(keyPath)
+	if err != nil {
+		return "", fmt.Errorf("ensure keypair: %w", err)
+	}
+	return agentBranch(keyFingerprint), nil
 }
 
 // ResetRepo removes the database file (and WAL/SHM sidecars) for the named repo.

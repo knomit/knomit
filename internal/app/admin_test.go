@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/require"
+
 	"knomit/internal/config"
 	"knomit/internal/fact"
 	"knomit/internal/store"
@@ -64,4 +66,24 @@ func TestInitRepo_RejectsBothPathAndPreset(t *testing.T) {
 	if !strings.Contains(err.Error(), "mutually exclusive") {
 		t.Errorf("error %q does not mention mutual exclusion", err)
 	}
+}
+
+func TestInitRepoOnDiskBytes_WritesOntologyBytes(t *testing.T) {
+	home := t.TempDir()
+	cfg := config.Config{Home: home}
+
+	ontYAML, err := fact.DefaultOntology().Serialize()
+	require.NoError(t, err)
+
+	dbPath, err := InitRepoOnDiskBytes(cfg, "work", ontYAML, "agent/test")
+	require.NoError(t, err)
+	require.Equal(t, filepath.Join(home, "repos", "work.db"), dbPath)
+
+	svc, err := store.Open(dbPath)
+	require.NoError(t, err)
+	defer svc.Close()
+	require.NoError(t, svc.OpenRepo())
+	res, err := svc.Facts().ReadFact(t.Context(), "agent/test", "domains/ontology.yaml", nil)
+	require.NoError(t, err)
+	require.NotEmpty(t, res.Content)
 }
