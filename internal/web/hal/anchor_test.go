@@ -59,6 +59,16 @@ func TestURLBuilder_APIRoot(t *testing.T) {
 	}
 }
 
+func TestURLBuilder_Archived(t *testing.T) {
+	b := URLBuilder{Base: "/api/v1"}
+	if got := b.Archived(); got != "/api/v1/archived" {
+		t.Errorf("Archived() = %q", got)
+	}
+	if got := b.ArchivedItem("work.123"); got != "/api/v1/archived/work.123" {
+		t.Errorf("ArchivedItem() = %q", got)
+	}
+}
+
 func TestURLBuilder_BranchEncodesSlash(t *testing.T) {
 	b := URLBuilder{Base: "/api/v1"}
 	a := Anchor{Branch: "agent/test"}

@@ -60,6 +60,34 @@ type Event struct {
 	Pct     int    `json:"pct"`
 }
 
+// CreatePreflight runs the cheap synchronous checks that must surface as an
+// HTTP status BEFORE any streaming begins: name validity, clone-origin
+// presence/uniqueness, name already active, and create-in-flight. The
+// authoritative guards still live inside Create.
+func (m *Manager) CreatePreflight(spec CreateSpec) error {
+	if !isValidRepoName(spec.Name) {
+		return ErrInvalidName
+	}
+	if spec.Mode == "clone" {
+		if spec.Origin == nil || spec.Origin.URL == "" {
+			return fmt.Errorf("%w: clone mode requires origin.url", ErrInvalidName)
+		}
+		if active := m.ActiveRepoWithOrigin(spec.Origin.URL); active != "" {
+			return fmt.Errorf("%w: %q", ErrOriginInUse, active)
+		}
+	}
+	if m.Get(spec.Name) != nil {
+		return ErrRepoExists
+	}
+	m.inflightMu.Lock()
+	_, inflight := m.creating[spec.Name]
+	m.inflightMu.Unlock()
+	if inflight {
+		return ErrCreateInFlight
+	}
+	return nil
+}
+
 // reserveCreate marks name as in-flight, returning ErrCreateInFlight if another
 // Create holds it. The returned release func clears the marker.
 func (m *Manager) reserveCreate(name string) (func(), error) {
