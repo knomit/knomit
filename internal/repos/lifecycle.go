@@ -109,7 +109,7 @@ func (m *Manager) Create(ctx context.Context, spec CreateSpec, emit func(Event))
 		if active := m.ActiveRepoWithOrigin(spec.Origin.URL); active != "" {
 			return nil, fmt.Errorf("%w: %q", ErrOriginInUse, active)
 		}
-		if ierr := m.initClone(ctx, spec, dbPath, emit); ierr != nil {
+		if ierr := m.initClone(spec, dbPath, emit); ierr != nil {
 			cleanup()
 			return nil, ierr
 		}
@@ -181,7 +181,7 @@ func (m *Manager) initLocal(spec CreateSpec, dbPath string, emit func(Event)) er
 }
 
 // initClone handles clone mode: fetch from origin, seed branches, persist remote.
-func (m *Manager) initClone(ctx context.Context, spec CreateSpec, dbPath string, emit func(Event)) error {
+func (m *Manager) initClone(spec CreateSpec, dbPath string, emit func(Event)) error {
 	emit(Event{Step: "clone", Message: "cloning from " + spec.Origin.URL, Pct: 40})
 	auth, err := m.ResolveAuth(authConfigFromSpec(spec.Origin), spec.Origin.URL)
 	if err != nil {
