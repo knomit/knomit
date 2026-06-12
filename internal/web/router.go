@@ -46,7 +46,11 @@ func (s *Server) NewAPIRouter() chi.Router {
 	r.Get("/repos", handleHALRepos(b, s.Manager))
 	r.Post("/repos", handleHALReposCreate(b, s.Manager))
 	r.Post("/repos:rescan", handleHALReposRescan(b, s.Manager))
+	r.Delete("/repos/{repo}", handleHALRepoArchive(b, s.Manager))
 	r.Get("/repos/{repo}", handleHALRepo(b, s.Manager, s.AgentBranch))
+	r.Get("/archived", handleHALArchived(b, s.Manager))
+	r.Post("/archived/{id}/restore", handleHALArchivedRestore(b, s.Manager))
+	r.Delete("/archived/{id}", handleHALArchivedPurge(s.Manager))
 
 	lister := s.branchesLister
 	if lister == nil {
