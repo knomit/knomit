@@ -18,7 +18,7 @@ describe('CreateRepoForm', () => {
   it('submits preset mode and reports done', async () => {
     const onDone = vi.fn();
     render(<CreateRepoForm onDone={onDone} onCancel={() => {}} />);
-    fireEvent.change(screen.getByPlaceholderText(/name/i), { target: { value: 'work' } });
+    fireEvent.change(screen.getByTestId('create-name'), { target: { value: 'work' } });
     fireEvent.click(screen.getByRole('button', { name: /^create$/i }));
     await waitFor(() => expect(api.createRepo).toHaveBeenCalled());
     await waitFor(() => expect(onDone).toHaveBeenCalledWith('work'));

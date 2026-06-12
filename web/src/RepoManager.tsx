@@ -189,26 +189,29 @@ function ArchivedDetail({ info, readOnly, activeNames, onRestored, onPurged, onE
   onRestored: (name: string) => void; onPurged: () => void; onError: (m: string) => void;
 }) {
   const [busy, setBusy] = useState(false);
+  const [confirming, setConfirming] = useState<'restore' | 'purge' | null>(null);
+  const [renameTo, setRenameTo] = useState('');
+  const [purgeText, setPurgeText] = useState('');
 
-  const restore = async () => {
+  const nameTaken = activeNames.has(info.name);
+
+  const beginRestore = () => {
+    if (nameTaken) { setRenameTo(''); setConfirming('restore'); return; }
+    void doRestore('');
+  };
+  const doRestore = async (newName: string) => {
     onError(''); setBusy(true);
     try {
-      let newName = '';
-      if (activeNames.has(info.name)) {
-        newName = window.prompt(`"${info.name}" is taken. Restore under a new name:`) ?? '';
-        if (!newName) { setBusy(false); return; }
-      }
       const res = await api.restoreRepo(info.id, newName);
       onRestored(res.name);
     } catch (e) { onError(`restore failed: ${String(e)}`); }
-    finally { setBusy(false); }
+    finally { setBusy(false); setConfirming(null); }
   };
-  const purge = async () => {
-    if (window.prompt(`Type "${info.name}" to permanently purge this archived repo:`) !== info.name) return;
+  const doPurge = async () => {
     onError(''); setBusy(true);
     try { await api.purgeRepo(info.id); onPurged(); }
     catch (e) { onError(`purge failed: ${String(e)}`); }
-    finally { setBusy(false); }
+    finally { setBusy(false); setConfirming(null); }
   };
 
   return (
@@ -216,10 +219,39 @@ function ArchivedDetail({ info, readOnly, activeNames, onRestored, onPurged, onE
       <h3 style={{ margin: 0, fontSize: 16 }}>{info.name}</h3>
       <div style={{ fontSize: 12, color: '#777', marginTop: 4 }}>archived {new Date(info.archivedAt).toLocaleString()}</div>
       <div style={{ fontSize: 13, color: '#aaa', marginTop: 8 }}>origin: {info.origin || '(none)'}</div>
-      <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
-        <button type="button" style={btn(readOnly || busy)} disabled={readOnly || busy} onClick={restore}>↺ Restore</button>
-        <button type="button" style={btn(readOnly || busy, 'danger')} disabled={readOnly || busy} onClick={purge}>🗑 Purge</button>
-      </div>
+
+      {confirming === null && (
+        <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
+          <button type="button" data-testid="archived-restore" style={btn(readOnly || busy)} disabled={readOnly || busy} onClick={beginRestore}>↺ Restore</button>
+          <button type="button" data-testid="archived-purge" style={btn(readOnly || busy, 'danger')} disabled={readOnly || busy} onClick={() => { setPurgeText(''); setConfirming('purge'); }}>🗑 Purge</button>
+        </div>
+      )}
+
+      {confirming === 'restore' && (
+        <div style={confirmBox}>
+          <div style={{ fontSize: 13, marginBottom: 8 }}>“{info.name}” is already active. Restore under a new name:</div>
+          <input autoFocus data-testid="restore-name-input" style={confirmInput} value={renameTo} placeholder="new repo name"
+            onChange={e => setRenameTo(e.target.value)} />
+          <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+            <button type="button" data-testid="restore-confirm" style={btn(busy || !renameTo, 'primary')} disabled={busy || !renameTo} onClick={() => doRestore(renameTo)}>Restore</button>
+            <button type="button" style={btn(busy)} disabled={busy} onClick={() => setConfirming(null)}>Cancel</button>
+          </div>
+        </div>
+      )}
+
+      {confirming === 'purge' && (
+        <div style={confirmBox}>
+          <div style={{ fontSize: 13, marginBottom: 8, color: '#f88' }}>
+            This permanently deletes the archived repo and its history. Type <b>{info.name}</b> to confirm:
+          </div>
+          <input autoFocus data-testid="purge-confirm-input" style={confirmInput} value={purgeText} placeholder={info.name}
+            onChange={e => setPurgeText(e.target.value)} />
+          <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+            <button type="button" data-testid="purge-confirm" style={btn(busy || purgeText !== info.name, 'danger')} disabled={busy || purgeText !== info.name} onClick={doPurge}>Confirm purge</button>
+            <button type="button" style={btn(busy)} disabled={busy} onClick={() => setConfirming(null)}>Cancel</button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -251,3 +283,5 @@ const btn = (disabled: boolean, variant: 'primary' | 'secondary' | 'danger' = 's
   background: disabled ? '#222' : variant === 'primary' ? '#1d4ed8' : variant === 'danger' ? '#7f1d1d' : '#2a2a2a',
   color: disabled ? '#666' : '#eee', border: '1px solid #333', borderRadius: 4, padding: '6px 12px', fontSize: 13, cursor: disabled ? 'default' : 'pointer',
 });
+const confirmBox: React.CSSProperties = { marginTop: 16, padding: 14, background: '#111', border: '1px solid #333', borderRadius: 6 };
+const confirmInput: React.CSSProperties = { width: '100%', boxSizing: 'border-box', background: '#0c0c0c', border: '1px solid #333', color: '#eee', padding: '6px 8px', borderRadius: 4, fontSize: 13 };

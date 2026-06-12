@@ -309,7 +309,17 @@ export default function App() {
         currentRepo={state.repo}
         readOnly={isReadOnly(state)}
         onClose={() => setRepoMgrOpen(false)}
-        onChanged={() => { api.repos().then(setRepos).catch(() => {}); }}
+        onChanged={() => {
+          api.repos().then(list => {
+            setRepos(list);
+            // If the active repo was archived/removed, switch to a remaining
+            // one (prefer trunk) so the app never points at a gone repo.
+            if (list.length && !list.some(r => r.name === state.repo)) {
+              const next = list.find(r => r.name === 'trunk') ?? list[0];
+              dispatch({ type: 'SET_REPO', repo: next.name });
+            }
+          }).catch(() => {});
+        }}
         onSelect={(name) => { dispatch({ type: 'SET_REPO', repo: name }); setRepoMgrOpen(false); }}
         onConnectAdvanced={(name) => { setRepoMgrOpen(false); setOriginRepo(name); }}
       />
