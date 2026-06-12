@@ -17,6 +17,8 @@ servers:
 tags:
   - name: discovery
   - name: repos
+  - name: archive
+    description: Archived-repo lifecycle — list, restore, and purge archived repos
   - name: branches
   - name: facts
   - name: topics
@@ -65,6 +67,28 @@ paths:
             application/hal+json:
               schema: { $ref: "#/components/schemas/ReposCollection" }
         "500": { $ref: "#/components/responses/Problem" }
+    post:
+      tags: [repos]
+      summary: Create a repository
+      description: |
+        Initiates repo creation and streams progress as newline-delimited JSON
+        (NDJSON). Each line is a `CreateRepoEvent` object. The stream ends with
+        a `done` or `error` event.
+      operationId: createRepo
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateRepoRequest" }
+      responses:
+        "200":
+          description: NDJSON stream of creation progress events
+          content:
+            application/x-ndjson:
+              schema:
+                $ref: "#/components/schemas/CreateRepoEvent"
+        "400": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
 
   /repos/{repo}:
     parameters:
@@ -81,6 +105,21 @@ paths:
               schema: { $ref: "#/components/schemas/Repo" }
         "404": { $ref: "#/components/responses/Problem" }
         "500": { $ref: "#/components/responses/Problem" }
+    delete:
+      tags: [repos]
+      summary: Archive a repository
+      description: |
+        Moves the repo to the archive. Returns the archived-repo record.
+        Returns 409 if the repo is the default or the last remaining repo.
+      operationId: archiveRepo
+      responses:
+        "200":
+          description: Repository archived
+          content:
+            application/hal+json:
+              schema: { $ref: "#/components/schemas/ArchivedRepo" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
 
   /repos/{repo}/branches:
     parameters:
@@ -846,6 +885,55 @@ paths:
         "404": { $ref: "#/components/responses/Problem" }
         "409": { $ref: "#/components/responses/Problem" }
 
+  /archived:
+    get:
+      tags: [archive]
+      summary: List archived repositories
+      operationId: listArchivedRepos
+      responses:
+        "200":
+          description: HAL collection of archived repos
+          content:
+            application/hal+json:
+              schema: { $ref: "#/components/schemas/ArchivedReposCollection" }
+        "500": { $ref: "#/components/responses/Problem" }
+
+  /archived/{id}/restore:
+    parameters:
+      - $ref: "#/components/parameters/ArchivedID"
+    post:
+      tags: [archive]
+      summary: Restore an archived repository
+      description: |
+        Moves an archived repo back to active. Optionally renames it via
+        `new_name`. Returns 409 if the name or origin is already in use by an
+        active repo.
+      operationId: restoreArchivedRepo
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RestoreRepoRequest" }
+      responses:
+        "200":
+          description: Repository restored
+          content:
+            application/hal+json:
+              schema: { $ref: "#/components/schemas/Repo" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+
+  /archived/{id}:
+    parameters:
+      - $ref: "#/components/parameters/ArchivedID"
+    delete:
+      tags: [archive]
+      summary: Permanently purge an archived repository
+      operationId: purgeArchivedRepo
+      responses:
+        "204": { description: Purged }
+        "404": { $ref: "#/components/responses/Problem" }
+
   /repos/{repo}/branches/{branch}/mcp:
     parameters:
       - $ref: "#/components/parameters/Repo"
@@ -885,11 +973,12 @@ paths:
 
 components:
   parameters:
-    Repo:      { name: repo,      in: path, required: true, schema: { type: string } }
-    Branch:    { name: branch,    in: path, required: true, schema: { type: string } }
-    Sha:       { name: sha,       in: path, required: true, schema: { type: string } }
-    JobID:     { name: id,        in: path, required: true, schema: { type: string } }
-    SessionID: { name: sessionID, in: path, required: true, schema: { type: string } }
+    Repo:       { name: repo,      in: path, required: true, schema: { type: string } }
+    Branch:     { name: branch,    in: path, required: true, schema: { type: string } }
+    Sha:        { name: sha,       in: path, required: true, schema: { type: string } }
+    JobID:      { name: id,        in: path, required: true, schema: { type: string } }
+    SessionID:  { name: sessionID, in: path, required: true, schema: { type: string } }
+    ArchivedID: { name: id,        in: path, required: true, schema: { type: string }, description: Archived-repo ID }
     FactPath:
       name: path
       in: path
@@ -1275,6 +1364,109 @@ components:
                 jobs:
                   type: array
                   items: { $ref: "#/components/schemas/Job" }
+
+    # Repo lifecycle — create / archive / restore / purge
+    CreateRepoOrigin:
+      type: object
+      description: Remote origin to clone from (used when mode=clone).
+      properties:
+        url:         { type: string, description: Remote URL }
+        branch:      { type: string, description: Remote branch to track }
+        auth_method: { type: string, enum: [token, basic, ssh] }
+        auth_token:  { type: string }
+
+    CreateRepoRequest:
+      type: object
+      required: [name, mode]
+      properties:
+        name:
+          type: string
+          description: Unique repo name (slug).
+        mode:
+          type: string
+          enum: [preset, custom, clone]
+          description: |
+            preset — use a built-in ontology preset (e.g. default, code).
+            custom — supply ontology_yaml directly.
+            clone  — clone from a remote origin; ontology is taken from the remote.
+        ontology_preset:
+          type: string
+          description: "Preset identifier (e.g. default, code). Used when mode=preset."
+        ontology_yaml:
+          type: string
+          description: Raw ontology YAML. Used when mode=custom.
+        origin:
+          $ref: "#/components/schemas/CreateRepoOrigin"
+
+    CreateRepoEvent:
+      type: object
+      description: |
+        One line of the NDJSON creation stream. Each object carries a `type`
+        discriminator and optional progress fields. The stream always ends with
+        a `done` or `error` event.
+      required: [type]
+      properties:
+        type:
+          type: string
+          enum: [progress, done, error]
+          description: Event kind.
+        step:
+          type: string
+          description: Machine-readable step identifier (e.g. "init", "clone", "index").
+        message:
+          type: string
+          description: Human-readable progress message.
+        pct:
+          type: number
+          format: double
+          description: Completion percentage (0–100), present on progress events.
+        repo:
+          type: string
+          description: Repo name, present on the final done event.
+        title:
+          type: string
+          description: Short summary, present on done/error events.
+        detail:
+          type: string
+          description: Extended detail or error description.
+
+    ArchivedRepo:
+      type: object
+      required: [id, name, archivedAt, _links]
+      properties:
+        id:
+          type: string
+          description: Stable identifier for the archived repo record.
+        name:
+          type: string
+          description: Repo name at the time of archival.
+        origin:
+          type: string
+          description: Remote origin URL, if configured.
+        archivedAt:
+          type: string
+          format: date-time
+          description: Timestamp when the repo was archived.
+        _links: { $ref: "#/components/schemas/LinkMap" }
+
+    ArchivedReposCollection:
+      allOf:
+        - $ref: "#/components/schemas/CollectionBase"
+        - type: object
+          properties:
+            _embedded:
+              type: object
+              properties:
+                archived:
+                  type: array
+                  items: { $ref: "#/components/schemas/ArchivedRepo" }
+
+    RestoreRepoRequest:
+      type: object
+      properties:
+        new_name:
+          type: string
+          description: Optional new name for the restored repo (defaults to original name).
 
     # Origin
     Origin:
