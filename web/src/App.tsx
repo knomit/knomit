@@ -7,6 +7,7 @@ import { bootstrapStatusWithRetry } from './bootstrap';
 import { pickRepo, loadLastRepo, saveLastRepo } from './repoSelection';
 import type { RepoInfo } from './api';
 import { TopBar } from './TopBar';
+import { RepoManager } from './RepoManager';
 import { FilterBar } from './FilterBar';
 import { LeftPanel } from './LeftPanel';
 import { RightPanel } from './RightPanel';
@@ -50,6 +51,7 @@ export default function App() {
   const [repos, setRepos] = useState<RepoInfo[]>([]);
   const [reposLoaded, setReposLoaded] = useState(false);
   const [showOrigin, setShowOrigin] = useState(false);
+  const [repoMgrOpen, setRepoMgrOpen] = useState(false);
 
   // Explain overlay slides in from the right when state.explainEntry is set
   // and slides out when it becomes null. Two pieces of local state coordinate
@@ -300,7 +302,16 @@ export default function App() {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', width: '100vw', background: '#141414', color: '#eee', fontFamily: 'system-ui, sans-serif', overflow: 'hidden' }}>
-      <TopBar state={state} repos={repos} dispatch={dispatch} onSettingsClick={() => setShowOrigin(true)} />
+      <TopBar state={state} repos={repos} dispatch={dispatch} onSettingsClick={() => setShowOrigin(true)} onManageRepos={() => setRepoMgrOpen(true)} />
+      <RepoManager
+        open={repoMgrOpen}
+        repos={repos}
+        currentRepo={state.repo}
+        readOnly={isReadOnly(state)}
+        onClose={() => setRepoMgrOpen(false)}
+        onChanged={() => { api.repos().then(setRepos).catch(() => {}); }}
+        onSelect={(name) => { dispatch({ type: 'SET_REPO', repo: name }); setRepoMgrOpen(false); }}
+      />
 
       {/* Stacking context for the Library layout + Explain overlay so the
           overlay can slide in/out over the layout without affecting flow. */}

@@ -12,10 +12,11 @@ interface Props {
   repos: RepoInfo[];
   dispatch: Dispatch<Action>;
   onSettingsClick: () => void;
+  onManageRepos: () => void;
 }
 
 
-export function TopBar({ state, repos, dispatch, onSettingsClick }: Props) {
+export function TopBar({ state, repos, dispatch, onSettingsClick, onManageRepos }: Props) {
   const [menuOpen, setMenuOpen] = useState(false);
   const btnRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -203,6 +204,20 @@ export function TopBar({ state, repos, dispatch, onSettingsClick }: Props) {
           boxShadow: '0 4px 12px rgba(0,0,0,0.5)',
           padding: '4px 0',
         }}>
+          <div
+            data-testid="menu-manage"
+            onClick={() => { setMenuOpen(false); onManageRepos(); }}
+            style={{
+              display: 'flex', alignItems: 'center', gap: 8,
+              padding: '6px 12px',
+              cursor: 'pointer',
+              color: '#aaa', fontSize: 12,
+            }}
+            onMouseEnter={e => { e.currentTarget.style.background = '#2a2a3a'; e.currentTarget.style.color = '#eee'; }}
+            onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = '#aaa'; }}
+          >
+            Manage repos…
+          </div>
           <div
             data-testid="menu-origin"
             title={readOnly ? READ_ONLY_TITLE : undefined}
