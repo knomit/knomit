@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { parseSearchQuery, parseFilterQuery, api } from './api';
+import { parseSearchQuery, parseFilterQuery, parseNDJSONLine, api } from './api';
 
 describe('parseSearchQuery', () => {
   it('parses plain text', () => {
@@ -336,5 +336,22 @@ describe('api.factDiff', () => {
     const promise = api.factDiff('alpha', 'main', 'kb/x.md', 'aaaaaaa', 'bbbbbbb', controller.signal);
     controller.abort();
     await expect(promise).rejects.toThrow();
+  });
+});
+
+describe('parseNDJSONLine', () => {
+  it('parses a progress line', () => {
+    const e = parseNDJSONLine('{"type":"progress","step":"clone","message":"x","pct":40}');
+    expect(e?.type).toBe('progress');
+    expect(e?.pct).toBe(40);
+  });
+  it('parses a done line with repo', () => {
+    const e = parseNDJSONLine('{"type":"done","repo":{"name":"work"}}');
+    expect(e?.type).toBe('done');
+    expect(e?.repo?.name).toBe('work');
+  });
+  it('returns null for blank/garbage lines', () => {
+    expect(parseNDJSONLine('   ')).toBeNull();
+    expect(parseNDJSONLine('not json')).toBeNull();
   });
 });
