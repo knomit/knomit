@@ -8,9 +8,10 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"knomit/internal/app"
 	"knomit/internal/config"
+	"knomit/internal/fact"
 	"knomit/internal/repos"
+	"knomit/internal/store"
 )
 
 // startManager boots a Manager rooted at a t.TempDir() with the default
@@ -29,13 +30,21 @@ func startManager(t *testing.T) (*repos.Manager, string) {
 	return m, home
 }
 
-// initRepoFile uses the production app.InitRepo path to create a new
-// repo .db file under <home>/repos/<name>.db. The manager isn't told
-// about it — that's what Rescan should do.
+// initRepoFile creates a valid repo .db file directly on disk under
+// <home>/repos/<name>.db (via the low-level store, not the Manager). The
+// manager isn't told about it — that's what Rescan should discover. This
+// stands in for a .db that appears out-of-band (e.g. a restored backup).
 func initRepoFile(t *testing.T, home, name string) {
 	t.Helper()
-	cfg := config.Config{Home: home}
-	require.NoError(t, app.InitRepo(cfg, name, "", ""))
+	dbPath := filepath.Join(home, "repos", name+".db")
+	svc, err := store.Open(dbPath)
+	require.NoError(t, err)
+	defer svc.Close()
+	ontYAML, err := fact.DefaultOntology().Serialize()
+	require.NoError(t, err)
+	require.NoError(t, svc.InitRepo(map[string]string{
+		"domains/ontology.yaml": string(ontYAML),
+	}, "machine/test"))
 }
 
 func TestManager_Rescan_AddsNewRepo(t *testing.T) {
