@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { RepoManager } from './RepoManager';
 import { api } from './api';
 
@@ -11,6 +11,7 @@ vi.mock('./api', () => ({
     getAgentBranch: vi.fn().mockResolvedValue('agent/test'),
     getOrigin: vi.fn().mockResolvedValue(null),
     deleteOrigin: vi.fn(),
+    rebuild: vi.fn().mockResolvedValue({ id: 'job1', state: 'running' }),
   },
 }));
 
@@ -43,5 +44,15 @@ describe('RepoManager', () => {
     // The Remote status section renders inline within the same dialog.
     await waitFor(() => expect(screen.getByText('Remote')).toBeInTheDocument());
     expect(screen.getByText('⟳ Rebuild index')).toBeInTheDocument();
+  });
+
+  it('rebuild gives immediate feedback and a completion message', async () => {
+    render(<RepoManager {...baseProps} />);
+    await waitFor(() => expect(screen.getByText('⟳ Rebuild index')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByText('⟳ Rebuild index'));
+    await waitFor(() => expect(api.rebuild).toHaveBeenCalledWith('trunk', 'agent/test'));
+    // Visible confirmation that the background rebuild kicked off (the bug: none).
+    await waitFor(() => expect(screen.getByTestId('rebuild-status')).toHaveTextContent('Rebuild started'));
   });
 });

@@ -1,5 +1,5 @@
 import { createPortal } from 'react-dom';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { api, type ArchivedRepo, type RepoInfo } from './api';
 import { CreateRepoForm } from './CreateRepoForm';
 import { RemoteStatus } from './RemoteStatus';
@@ -154,21 +154,34 @@ function RepoDetail({ name, isCurrent, canArchive, readOnly, onSwitch, onArchive
 }) {
   const [agentBranch, setAgentBranch] = useState('');
   const [rebuilding, setRebuilding] = useState(false);
+  const [rebuildMsg, setRebuildMsg] = useState('');
   const [busy, setBusy] = useState(false);
+  const mounted = useRef(true);
 
   useEffect(() => {
+    mounted.current = true;
     let cancelled = false;
     api.getAgentBranch(name).then(b => { if (!cancelled) setAgentBranch(b); }).catch(() => {});
-    return () => { cancelled = true; };
+    return () => { cancelled = true; mounted.current = false; };
   }, [name]);
 
+  // Rebuild is a fire-and-forget background job (TaskHub) — the POST returns as
+  // soon as it's queued, the re-index runs server-side. We confirm it started;
+  // a 409 means one is already running.
   const rebuild = async () => {
-    onError(''); setRebuilding(true);
+    onError(''); setRebuilding(true); setRebuildMsg('');
     try {
       const branch = agentBranch || await api.getAgentBranch(name);
       await api.rebuild(name, branch);
-    } catch (e) { onError(`rebuild failed: ${String(e)}`); }
-    finally { setRebuilding(false); }
+      setRebuildMsg('✓ Rebuild started — re-indexing in the background.');
+      setTimeout(() => { if (mounted.current) setRebuildMsg(''); }, 6000);
+    } catch (e) {
+      const msg = String(e);
+      setRebuildMsg('');
+      onError(/409|conflict/i.test(msg) ? 'A rebuild is already running for this repo.' : `rebuild failed: ${msg}`);
+    } finally {
+      if (mounted.current) setRebuilding(false);
+    }
   };
   const archive = async () => {
     onError(''); setBusy(true);
@@ -197,6 +210,9 @@ function RepoDetail({ name, isCurrent, canArchive, readOnly, onSwitch, onArchive
           <button type="button" style={btn(false)} onClick={onSwitch}>Switch to this repo</button>
         )}
       </div>
+      {rebuildMsg && (
+        <div data-testid="rebuild-status" style={{ fontSize: 12, color: rebuildMsg.startsWith('✓') ? '#9c9' : '#8af', marginTop: 8 }}>{rebuildMsg}</div>
+      )}
       <RemoteStatus repo={name} readOnly={readOnly} onConnect={onConnect} onChanged={onChanged} />
     </div>
   );

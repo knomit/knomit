@@ -545,7 +545,7 @@ export const api = {
   synthesize: (repo: string, branch: string, recipe = ''): Promise<{ op: string; id?: string; status: string; message?: string }> =>
     fetchJSON(`${branchBase(repo, branch)}/synthesis-runs`, { method: 'POST', body: recipe }),
 
-  rebuild: (repo: string, branch: string): Promise<{ op: string; id?: string; status: string; message?: string }> =>
+  rebuild: (repo: string, branch: string): Promise<{ id?: string; kind?: string; state?: string }> =>
     fetchJSON(`${branchBase(repo, branch)}/index-rebuilds`, { method: 'POST' }),
 
   recent: (repo: string, branch: string, path: string, query = '', limit = 50, offset = 0,
