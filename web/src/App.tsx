@@ -50,7 +50,7 @@ export default function App() {
   const { navigate } = useNavigationManager(state, dispatch);
   const [repos, setRepos] = useState<RepoInfo[]>([]);
   const [reposLoaded, setReposLoaded] = useState(false);
-  const [showOrigin, setShowOrigin] = useState(false);
+  const [originRepo, setOriginRepo] = useState<string | null>(null);
   const [repoMgrOpen, setRepoMgrOpen] = useState(false);
 
   // Explain overlay slides in from the right when state.explainEntry is set
@@ -302,7 +302,7 @@ export default function App() {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', width: '100vw', background: '#141414', color: '#eee', fontFamily: 'system-ui, sans-serif', overflow: 'hidden' }}>
-      <TopBar state={state} repos={repos} dispatch={dispatch} onSettingsClick={() => setShowOrigin(true)} onManageRepos={() => setRepoMgrOpen(true)} />
+      <TopBar state={state} repos={repos} dispatch={dispatch} onManageRepos={() => setRepoMgrOpen(true)} />
       <RepoManager
         open={repoMgrOpen}
         repos={repos}
@@ -311,6 +311,7 @@ export default function App() {
         onClose={() => setRepoMgrOpen(false)}
         onChanged={() => { api.repos().then(setRepos).catch(() => {}); }}
         onSelect={(name) => { dispatch({ type: 'SET_REPO', repo: name }); setRepoMgrOpen(false); }}
+        onConnectAdvanced={(name) => { setRepoMgrOpen(false); setOriginRepo(name); }}
       />
 
       {/* Stacking context for the Library layout + Explain overlay so the
@@ -370,7 +371,7 @@ export default function App() {
         </div>
       </div>
 
-      {showOrigin && !isReadOnly(state) && <ConnectRemoteModal repo={state.repo} onClose={() => setShowOrigin(false)} />}
+      {originRepo && !isReadOnly(state) && <ConnectRemoteModal repo={originRepo} onClose={() => setOriginRepo(null)} />}
     </div>
   );
 }

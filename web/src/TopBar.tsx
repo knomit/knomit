@@ -2,41 +2,21 @@ import { useState, useRef, useEffect } from 'react';
 import type { Dispatch } from 'react';
 import { createPortal } from 'react-dom';
 import type { AppState, Action } from './state';
-import { isReadOnly, READ_ONLY_TITLE } from './state';
 import type { RepoInfo } from './api';
-import { api } from './api';
-import { BookIcon, GitBranchIcon, WrenchIcon, GlobeIcon, MoreVerticalIcon, ChevronDownIcon } from './icons';
+import { BookIcon, GitBranchIcon, ChevronDownIcon, GearIcon } from './icons';
 
 interface Props {
   state: AppState;
   repos: RepoInfo[];
   dispatch: Dispatch<Action>;
-  onSettingsClick: () => void;
   onManageRepos: () => void;
 }
 
-
-export function TopBar({ state, repos, dispatch, onSettingsClick, onManageRepos }: Props) {
-  const [menuOpen, setMenuOpen] = useState(false);
-  const btnRef = useRef<HTMLButtonElement>(null);
-  const menuRef = useRef<HTMLDivElement>(null);
-  const [pos, setPos] = useState({ top: 0, right: 0 });
-
+export function TopBar({ state, repos, dispatch, onManageRepos }: Props) {
   const [repoOpen, setRepoOpen] = useState(false);
   const repoBtnRef = useRef<HTMLButtonElement>(null);
   const repoMenuRef = useRef<HTMLDivElement>(null);
   const [repoPos, setRepoPos] = useState({ top: 0, left: 0, minWidth: 0 });
-
-  useEffect(() => {
-    if (!menuOpen) return;
-    const handler = (e: MouseEvent) => {
-      if (btnRef.current?.contains(e.target as Node)) return;
-      if (menuRef.current?.contains(e.target as Node)) return;
-      setMenuOpen(false);
-    };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, [menuOpen]);
 
   useEffect(() => {
     if (!repoOpen) return;
@@ -54,14 +34,6 @@ export function TopBar({ state, repos, dispatch, onSettingsClick, onManageRepos 
     };
   }, [repoOpen]);
 
-  const toggleMenu = () => {
-    if (!menuOpen && btnRef.current) {
-      const rect = btnRef.current.getBoundingClientRect();
-      setPos({ top: rect.bottom + 4, right: window.innerWidth - rect.right });
-    }
-    setMenuOpen(o => !o);
-  };
-
   const toggleRepoMenu = () => {
     if (!repoOpen && repoBtnRef.current) {
       const rect = repoBtnRef.current.getBoundingClientRect();
@@ -74,9 +46,6 @@ export function TopBar({ state, repos, dispatch, onSettingsClick, onManageRepos 
     setRepoOpen(false);
     if (name !== state.repo) dispatch({ type: 'SET_REPO', repo: name });
   };
-
-  const rebuilding = state.tasks.rebuild?.status === 'running';
-  const readOnly = isReadOnly(state);
 
   return (
     <div style={{ height: 40, background: '#111', borderBottom: '1px solid #1c1c1c', display: 'flex', alignItems: 'center', padding: '0 14px', gap: 10, flexShrink: 0 }}>
@@ -126,26 +95,22 @@ export function TopBar({ state, repos, dispatch, onSettingsClick, onManageRepos 
         </span>
       )}
       {state.headCommit && (
-        // line-height 1 collapses the monospace block to its glyph extent
-        // so the digit caps align visually with the surrounding sans-serif
-        // text (baseline alignment alone leaves the digits a few px high
-        // because monospace glyphs occupy their full cap-height while the
-        // adjacent text is mostly lowercase x-height).
+        // line-height 1 collapses the monospace block to its glyph extent so the
+        // digit caps align visually with the surrounding sans-serif text.
         <span data-testid="toknomitr-commit" style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontFamily: 'monospace', fontSize: 11, lineHeight: 1 }}>
           <span style={{ color: '#3a3a3a' }}>@</span>
           <span style={{ color: '#6a9080' }}>{state.headCommit.slice(0, 7)}</span>
         </span>
       )}
       <button
-        data-testid="toknomitr-menu-btn"
-        ref={btnRef}
-        onClick={toggleMenu}
-        title="Actions"
+        data-testid="toknomitr-manage-btn"
+        onClick={onManageRepos}
+        title="Manage repositories"
         style={{ background: 'none', border: 'none', color: state.remoteError ? '#f44336' : '#666', cursor: 'pointer', padding: 4, display: 'flex', alignItems: 'center', position: 'relative' }}
         onMouseEnter={e => { if (!state.remoteError) e.currentTarget.style.color = '#aaa'; }}
-        onMouseLeave={e => { if (!state.remoteError) e.currentTarget.style.color = state.remoteError ? '#f44336' : '#666'; }}
+        onMouseLeave={e => { e.currentTarget.style.color = state.remoteError ? '#f44336' : '#666'; }}
       >
-        <MoreVerticalIcon color="currentColor" size={14} />
+        <GearIcon color="currentColor" size={15} />
         {state.remoteError && (
           <span style={{ position: 'absolute', top: 2, right: 2, width: 6, height: 6, borderRadius: '50%', background: '#f44336' }} />
         )}
@@ -188,80 +153,6 @@ export function TopBar({ state, repos, dispatch, onSettingsClick, onManageRepos 
               </div>
             );
           })}
-        </div>,
-        document.body
-      )}
-      {menuOpen && createPortal(
-        <div ref={menuRef} style={{
-          position: 'fixed',
-          top: pos.top,
-          right: pos.right,
-          background: '#1a1a1a',
-          border: '1px solid #333',
-          borderRadius: 4,
-          minWidth: 140,
-          zIndex: 10000,
-          boxShadow: '0 4px 12px rgba(0,0,0,0.5)',
-          padding: '4px 0',
-        }}>
-          <div
-            data-testid="menu-manage"
-            onClick={() => { setMenuOpen(false); onManageRepos(); }}
-            style={{
-              display: 'flex', alignItems: 'center', gap: 8,
-              padding: '6px 12px',
-              cursor: 'pointer',
-              color: '#aaa', fontSize: 12,
-            }}
-            onMouseEnter={e => { e.currentTarget.style.background = '#2a2a3a'; e.currentTarget.style.color = '#eee'; }}
-            onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = '#aaa'; }}
-          >
-            Manage repos…
-          </div>
-          <div
-            data-testid="menu-origin"
-            title={readOnly ? READ_ONLY_TITLE : undefined}
-            aria-disabled={readOnly}
-            onClick={() => {
-              if (readOnly) return;
-              setMenuOpen(false);
-              onSettingsClick();
-            }}
-            style={{
-              display: 'flex', alignItems: 'center', gap: 8,
-              padding: '6px 12px',
-              cursor: readOnly ? 'not-allowed' : 'pointer',
-              color: readOnly ? '#555' : '#aaa', fontSize: 12,
-              opacity: readOnly ? 0.5 : 1,
-            }}
-            onMouseEnter={e => { if (!readOnly) { e.currentTarget.style.background = '#2a2a3a'; e.currentTarget.style.color = '#eee'; } }}
-            onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = readOnly ? '#555' : '#aaa'; }}
-          >
-            <GlobeIcon color="currentColor" size={13} /> Origin
-          </div>
-          <div
-            data-testid="menu-rebuild"
-            title={readOnly ? READ_ONLY_TITLE : undefined}
-            aria-disabled={readOnly || rebuilding}
-            onClick={() => {
-              if (rebuilding || readOnly) return;
-              api.rebuild(state.repo, state.branch).catch(err => {
-                dispatch({ type: 'CONSOLE_LOG', level: 'error', message: `[rebuild] failed: ${String(err)}` });
-              });
-              setMenuOpen(false);
-            }}
-            style={{
-              display: 'flex', alignItems: 'center', gap: 8,
-              padding: '6px 12px',
-              cursor: (rebuilding || readOnly) ? 'not-allowed' : 'pointer',
-              color: (rebuilding || readOnly) ? '#555' : '#aaa', fontSize: 12,
-              opacity: readOnly ? 0.5 : 1,
-            }}
-            onMouseEnter={e => { if (!rebuilding && !readOnly) { e.currentTarget.style.background = '#2a2a3a'; e.currentTarget.style.color = '#eee'; } }}
-            onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = (rebuilding || readOnly) ? '#555' : '#aaa'; }}
-          >
-            <WrenchIcon color="currentColor" size={13} /> Rebuild
-          </div>
         </div>,
         document.body
       )}

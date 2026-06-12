@@ -570,7 +570,7 @@ export const api = {
   getOrigin: (repo: string): Promise<OriginResponse | null> =>
     fetch(`${repoBase(repo)}/origin`).then(r => r.status === 204 ? null : r.json()),
 
-  setOrigin: (repo: string, opts: { url?: string; auth_method?: string; token?: string; user?: string; password?: string }): Promise<OriginSetResponse> =>
+  setOrigin: (repo: string, opts: { url?: string; branch?: string; auth_method?: string; token?: string; user?: string; password?: string }): Promise<OriginSetResponse> =>
     fetch(`${repoBase(repo)}/origin`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
