@@ -17,9 +17,12 @@ type Step =
 interface Props {
   repo: string;
   onClose: () => void;
+  // embedded renders the wizard inline (no full-screen overlay) so it can live
+  // inside another dialog (the Repo Manager detail pane) without stacking.
+  embedded?: boolean;
 }
 
-export function ConnectRemoteModal({ repo, onClose }: Props) {
+export function ConnectRemoteModal({ repo, onClose, embedded = false }: Props) {
   // Form state
   const [url, setUrl] = useState('');
   const [authMethod, setAuthMethod] = useState<'' | 'ssh' | 'token' | 'basic'>('');
@@ -103,8 +106,8 @@ export function ConnectRemoteModal({ repo, onClose }: Props) {
         });
         cleanupRef.current = close;
       });
-    } catch (e: any) {
-      if (!error) setError({ section: 'creating', message: e.message || 'Failed to create session' });
+    } catch (e) {
+      if (!error) setError({ section: 'creating', message: (e instanceof Error && e.message) || 'Failed to create session' });
       if (step === 'creating') setStep('idle');
     }
   };
@@ -133,8 +136,8 @@ export function ConnectRemoteModal({ repo, onClose }: Props) {
         });
         cleanupRef.current = close;
       });
-    } catch (e: any) {
-      if (!error) setError({ section: 'previewing', message: e.message || 'Preview failed' });
+    } catch (e) {
+      if (!error) setError({ section: 'previewing', message: (e instanceof Error && e.message) || 'Preview failed' });
     }
   };
 
@@ -161,8 +164,8 @@ export function ConnectRemoteModal({ repo, onClose }: Props) {
           setProgress(ev.phase + '...');
         }
       });
-    } catch (e: any) {
-      setError({ section: 'applying', message: e.message || 'Apply failed' });
+    } catch (e) {
+      setError({ section: 'applying', message: (e instanceof Error && e.message) || 'Apply failed' });
       setStep('applied');
     }
   };
@@ -193,8 +196,8 @@ export function ConnectRemoteModal({ repo, onClose }: Props) {
           setProgress(ev.phase + '...');
         }
       });
-    } catch (e: any) {
-      setError({ section: 'committing', message: e.message || 'Commit failed' });
+    } catch (e) {
+      setError({ section: 'committing', message: (e instanceof Error && e.message) || 'Commit failed' });
     }
   };
 
@@ -287,9 +290,8 @@ export function ConnectRemoteModal({ repo, onClose }: Props) {
     marginTop: 12, padding: 12, background: '#111', borderRadius: 4, fontSize: 13,
   };
 
-  return (
-    <div style={overlay}>
-      <div style={modal} onClick={e => e.stopPropagation()} data-testid="connect-remote-modal">
+  const content = (
+    <>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
           <h2 style={{ margin: 0, fontSize: 16 }}>
             {onPage2 ? 'Merge & Sync' : 'Connect Remote'}
@@ -524,6 +526,16 @@ export function ConnectRemoteModal({ repo, onClose }: Props) {
             )}
           </>
         )}
+    </>
+  );
+
+  if (embedded) {
+    return <div data-testid="connect-remote-modal">{content}</div>;
+  }
+  return (
+    <div style={overlay}>
+      <div style={modal} onClick={e => e.stopPropagation()} data-testid="connect-remote-modal">
+        {content}
       </div>
     </div>
   );

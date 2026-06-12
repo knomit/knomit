@@ -12,7 +12,6 @@ import { FilterBar } from './FilterBar';
 import { LeftPanel } from './LeftPanel';
 import { RightPanel } from './RightPanel';
 import { Console } from './Console';
-import { ConnectRemoteModal } from './ConnectRemoteModal';
 import { ExplainView } from './ExplainView';
 import './App.css';
 
@@ -50,7 +49,6 @@ export default function App() {
   const { navigate } = useNavigationManager(state, dispatch);
   const [repos, setRepos] = useState<RepoInfo[]>([]);
   const [reposLoaded, setReposLoaded] = useState(false);
-  const [originRepo, setOriginRepo] = useState<string | null>(null);
   const [repoMgrOpen, setRepoMgrOpen] = useState(false);
 
   // Explain overlay slides in from the right when state.explainEntry is set
@@ -321,7 +319,6 @@ export default function App() {
           }).catch(() => {});
         }}
         onSelect={(name) => { dispatch({ type: 'SET_REPO', repo: name }); setRepoMgrOpen(false); }}
-        onConnectAdvanced={(name) => { setRepoMgrOpen(false); setOriginRepo(name); }}
       />
 
       {/* Stacking context for the Library layout + Explain overlay so the
@@ -381,7 +378,6 @@ export default function App() {
         </div>
       </div>
 
-      {originRepo && !isReadOnly(state) && <ConnectRemoteModal repo={originRepo} onClose={() => setOriginRepo(null)} />}
     </div>
   );
 }

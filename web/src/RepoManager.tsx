@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 import { api, type ArchivedRepo, type RepoInfo } from './api';
 import { CreateRepoForm } from './CreateRepoForm';
 import { OriginForm } from './OriginForm';
+import { ConnectRemoteModal } from './ConnectRemoteModal';
 
 interface Props {
   open: boolean;
@@ -10,9 +11,8 @@ interface Props {
   currentRepo: string;
   readOnly: boolean;
   onClose: () => void;
-  onChanged: () => void;                       // parent re-fetches the repo list
-  onSelect: (name: string) => void;            // switch the active repo + close
-  onConnectAdvanced: (repo: string) => void;   // close manager, open ConnectRemoteModal
+  onChanged: () => void;             // parent re-fetches the repo list
+  onSelect: (name: string) => void;  // switch the active repo + close
 }
 
 type Selection =
@@ -21,7 +21,7 @@ type Selection =
   | { kind: 'new' }
   | null;
 
-export function RepoManager({ open, repos, currentRepo, readOnly, onClose, onChanged, onSelect, onConnectAdvanced }: Props) {
+export function RepoManager({ open, repos, currentRepo, readOnly, onClose, onChanged, onSelect }: Props) {
   const [archived, setArchived] = useState<ArchivedRepo[]>([]);
   const [sel, setSel] = useState<Selection>(null);
   const [err, setErr] = useState('');
@@ -101,7 +101,6 @@ export function RepoManager({ open, repos, currentRepo, readOnly, onClose, onCha
                 readOnly={readOnly}
                 onSwitch={() => onSelect(view.name)}
                 onArchived={() => { onChanged(); refresh(); setSel(null); }}
-                onConnectAdvanced={onConnectAdvanced}
                 onError={setErr}
               />
             )}
@@ -130,13 +129,14 @@ export function RepoManager({ open, repos, currentRepo, readOnly, onClose, onCha
   );
 }
 
-function RepoDetail({ name, isCurrent, canArchive, readOnly, onSwitch, onArchived, onConnectAdvanced, onError }: {
+function RepoDetail({ name, isCurrent, canArchive, readOnly, onSwitch, onArchived, onError }: {
   name: string; isCurrent: boolean; canArchive: boolean; readOnly: boolean;
-  onSwitch: () => void; onArchived: () => void; onConnectAdvanced: (repo: string) => void; onError: (m: string) => void;
+  onSwitch: () => void; onArchived: () => void; onError: (m: string) => void;
 }) {
   const [agentBranch, setAgentBranch] = useState('');
   const [rebuilding, setRebuilding] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [connecting, setConnecting] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -167,19 +167,28 @@ function RepoDetail({ name, isCurrent, canArchive, readOnly, onSwitch, onArchive
           <div style={{ fontFamily: 'monospace', fontSize: 12, color: '#777', marginTop: 2 }}>{agentBranch || '…'}</div>
         </div>
       </div>
-      <div style={{ display: 'flex', gap: 8, marginTop: 14, flexWrap: 'wrap' }}>
-        <button type="button" style={btn(readOnly || rebuilding)} disabled={readOnly || rebuilding} onClick={rebuild}>
-          {rebuilding ? 'Rebuilding…' : '⟳ Rebuild index'}
-        </button>
-        <button type="button" style={btn(!canArchive || busy, 'danger')} disabled={!canArchive || busy} onClick={archive}
-          title={name === 'trunk' ? 'the default repo cannot be archived' : undefined}>
-          ⌦ Archive
-        </button>
-        {!isCurrent && (
-          <button type="button" style={btn(false)} onClick={onSwitch}>Switch to this repo</button>
-        )}
-      </div>
-      <OriginForm repo={name} readOnly={readOnly} onConnectAdvanced={onConnectAdvanced} />
+      {connecting ? (
+        <div style={{ marginTop: 16 }}>
+          <button type="button" data-testid="connect-back" style={{ background: 'none', border: 'none', color: '#6cf', fontSize: 12, cursor: 'pointer', padding: 0, marginBottom: 8 }} onClick={() => setConnecting(false)}>← Back to repository</button>
+          <ConnectRemoteModal repo={name} embedded onClose={() => setConnecting(false)} />
+        </div>
+      ) : (
+        <>
+          <div style={{ display: 'flex', gap: 8, marginTop: 14, flexWrap: 'wrap' }}>
+            <button type="button" style={btn(readOnly || rebuilding)} disabled={readOnly || rebuilding} onClick={rebuild}>
+              {rebuilding ? 'Rebuilding…' : '⟳ Rebuild index'}
+            </button>
+            <button type="button" style={btn(!canArchive || busy, 'danger')} disabled={!canArchive || busy} onClick={archive}
+              title={name === 'trunk' ? 'the default repo cannot be archived' : undefined}>
+              ⌦ Archive
+            </button>
+            {!isCurrent && (
+              <button type="button" style={btn(false)} onClick={onSwitch}>Switch to this repo</button>
+            )}
+          </div>
+          <OriginForm repo={name} readOnly={readOnly} onConnect={() => setConnecting(true)} />
+        </>
+      )}
     </div>
   );
 }

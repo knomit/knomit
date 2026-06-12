@@ -6,15 +6,15 @@ type AuthMethod = '' | 'ssh' | 'token' | 'basic';
 interface Props {
   repo: string;
   readOnly: boolean;
-  onConnectAdvanced: (repo: string) => void;
+  onConnect: () => void;
 }
 
 // OriginForm is the inline remote-config panel shown in the Repo Manager
 // detail pane. It reads the current origin, lets the operator set URL / branch
 // / auth, and persists via PUT /origin (which also activates sync). The richer
-// multi-step connect-and-reconcile flow is reachable via onConnectAdvanced,
-// which the parent opens AFTER closing the manager (never stacked).
-export function OriginForm({ repo, readOnly, onConnectAdvanced }: Props) {
+// multi-step connect-and-reconcile wizard is launched in-place via onConnect
+// (the detail pane swaps this form for the embedded wizard — never stacked).
+export function OriginForm({ repo, readOnly, onConnect }: Props) {
   const [url, setUrl] = useState('');
   const [branch, setBranch] = useState('');
   const [authMethod, setAuthMethod] = useState<AuthMethod>('');
@@ -119,8 +119,8 @@ export function OriginForm({ repo, readOnly, onConnectAdvanced }: Props) {
           {saving ? 'Saving…' : 'Save origin'}
         </button>
         <button type="button" style={linkBtn(readOnly)} disabled={readOnly}
-          onClick={() => onConnectAdvanced(repo)}>
-          Advanced: connect &amp; reconcile a remote →
+          onClick={onConnect}>
+          Connect / reconcile remote (test → merge → sync) →
         </button>
       </div>
     </div>
