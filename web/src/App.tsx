@@ -320,7 +320,6 @@ export default function App() {
               }
             }).catch(() => {});
           }}
-          onSelect={(name) => { dispatch({ type: 'SET_REPO', repo: name }); setRepoMgrOpen(false); }}
         />
       </ErrorBoundary>
 

@@ -4,6 +4,7 @@ import { api, type ArchivedRepo, type RepoInfo } from './api';
 import { CreateRepoForm } from './CreateRepoForm';
 import { RemoteStatus } from './RemoteStatus';
 import { RemoteConnectWizard } from './RemoteConnectWizard';
+import { BookIcon, ArchiveIcon, PlusIcon } from './icons';
 
 interface Props {
   open: boolean;
@@ -12,7 +13,6 @@ interface Props {
   readOnly: boolean;
   onClose: () => void;
   onChanged: () => void;             // parent re-fetches the repo list
-  onSelect: (name: string) => void;  // switch the active repo + close
 }
 
 type Selection =
@@ -21,7 +21,7 @@ type Selection =
   | { kind: 'new' }
   | null;
 
-export function RepoManager({ open, repos, currentRepo, readOnly, onClose, onChanged, onSelect }: Props) {
+export function RepoManager({ open, repos, currentRepo, readOnly, onClose, onChanged }: Props) {
   const [archived, setArchived] = useState<ArchivedRepo[]>([]);
   const [sel, setSel] = useState<Selection>(null);
   const [connecting, setConnecting] = useState<string | null>(null);
@@ -68,7 +68,19 @@ export function RepoManager({ open, repos, currentRepo, readOnly, onClose, onCha
         <div style={body}>
           {/* ── Master list ── */}
           <nav style={listCol}>
-            <div style={listLabel}>Active</div>
+            <div style={sectionHeader}>
+              <BookIcon color="#7c9" size={13} />
+              <span style={sectionTitle}>Repositories</span>
+              <button
+                type="button"
+                data-testid="repomgr-new"
+                title="New repository"
+                aria-label="New repository"
+                style={plusBtn(readOnly, view.kind === 'new')}
+                disabled={readOnly}
+                onClick={() => setSel({ kind: 'new' })}
+              ><PlusIcon color="currentColor" size={14} /></button>
+            </div>
             {repos.map(r => (
               <button
                 key={r.name}
@@ -78,12 +90,15 @@ export function RepoManager({ open, repos, currentRepo, readOnly, onClose, onCha
                 onClick={() => setSel({ kind: 'repo', name: r.name })}
               >
                 <span>{r.name}</span>
-                {r.name === currentRepo && <span style={currentDot} title="active repo">●</span>}
+                {r.name === currentRepo && <span style={viewingTag} title="the web UI is currently browsing this repo">viewing</span>}
               </button>
             ))}
 
-            <div style={listLabel}>Archived</div>
-            {archived.length === 0 && <div style={{ color: '#666', fontSize: 12, padding: '4px 10px' }}>None</div>}
+            <div style={sectionHeader}>
+              <ArchiveIcon color="#8a7" size={13} />
+              <span style={sectionTitle}>Archived</span>
+            </div>
+            {archived.length === 0 && <div style={{ color: '#555', fontSize: 12, padding: '4px 10px' }}>None</div>}
             {archived.map(a => (
               <button
                 key={a.id}
@@ -95,16 +110,6 @@ export function RepoManager({ open, repos, currentRepo, readOnly, onClose, onCha
                 {a.name}
               </button>
             ))}
-
-            <div style={{ borderTop: '1px solid #222', marginTop: 10, paddingTop: 10 }}>
-              <button
-                type="button"
-                data-testid="repomgr-new"
-                style={newBtn(readOnly, view.kind === 'new')}
-                disabled={readOnly}
-                onClick={() => setSel({ kind: 'new' })}
-              >+ New repository</button>
-            </div>
           </nav>
 
           {/* ── Detail pane ── */}
@@ -113,10 +118,8 @@ export function RepoManager({ open, repos, currentRepo, readOnly, onClose, onCha
               <RepoDetail
                 key={view.name}
                 name={view.name}
-                isCurrent={view.name === currentRepo}
                 canArchive={!readOnly && view.name !== 'trunk' && repos.length > 1}
                 readOnly={readOnly}
-                onSwitch={() => onSelect(view.name)}
                 onArchived={() => { onChanged(); refresh(); setSel(null); }}
                 onConnect={() => setConnecting(view.name)}
                 onChanged={onChanged}
@@ -148,9 +151,9 @@ export function RepoManager({ open, repos, currentRepo, readOnly, onClose, onCha
   );
 }
 
-function RepoDetail({ name, isCurrent, canArchive, readOnly, onSwitch, onArchived, onConnect, onChanged, onError }: {
-  name: string; isCurrent: boolean; canArchive: boolean; readOnly: boolean;
-  onSwitch: () => void; onArchived: () => void; onConnect: () => void; onChanged: () => void; onError: (m: string) => void;
+function RepoDetail({ name, canArchive, readOnly, onArchived, onConnect, onChanged, onError }: {
+  name: string; canArchive: boolean; readOnly: boolean;
+  onArchived: () => void; onConnect: () => void; onChanged: () => void; onError: (m: string) => void;
 }) {
   const [agentBranch, setAgentBranch] = useState('');
   const [rebuilding, setRebuilding] = useState(false);
@@ -194,7 +197,7 @@ function RepoDetail({ name, isCurrent, canArchive, readOnly, onSwitch, onArchive
     <div>
       <div style={detailHead}>
         <div>
-          <h3 style={{ margin: 0, fontSize: 16 }}>{name}{isCurrent && <span style={currentBadge}>active</span>}</h3>
+          <h3 style={{ margin: 0, fontSize: 16 }}>{name}</h3>
           <div style={{ fontFamily: 'monospace', fontSize: 12, color: '#777', marginTop: 2 }}>{agentBranch || '…'}</div>
         </div>
       </div>
@@ -206,9 +209,6 @@ function RepoDetail({ name, isCurrent, canArchive, readOnly, onSwitch, onArchive
           title={name === 'trunk' ? 'the default repo cannot be archived' : undefined}>
           ⌦ Archive
         </button>
-        {!isCurrent && (
-          <button type="button" style={btn(false)} onClick={onSwitch}>Switch to this repo</button>
-        )}
       </div>
       {rebuildMsg && (
         <div data-testid="rebuild-status" style={{ fontSize: 12, color: rebuildMsg.startsWith('✓') ? '#9c9' : '#8af', marginTop: 8 }}>{rebuildMsg}</div>
@@ -299,19 +299,21 @@ const errBox: React.CSSProperties = { background: '#311', border: '1px solid #53
 const body: React.CSSProperties = { display: 'flex', flex: 1, minHeight: 0 };
 const listCol: React.CSSProperties = { width: 230, flexShrink: 0, borderRight: '1px solid #222', padding: 10, overflowY: 'auto' };
 const detailCol: React.CSSProperties = { flex: 1, padding: 20, overflowY: 'auto' };
-const listLabel: React.CSSProperties = { fontSize: 11, color: '#666', textTransform: 'uppercase', padding: '8px 10px 4px' };
 const detailHead: React.CSSProperties = { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' };
-const currentDot: React.CSSProperties = { color: '#6cf', fontSize: 10 };
-const currentBadge: React.CSSProperties = { marginLeft: 8, fontSize: 10, color: '#6cf', border: '1px solid #245', borderRadius: 3, padding: '1px 5px', verticalAlign: 'middle' };
+const sectionHeader: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 7, padding: '6px 8px 5px', marginTop: 6, borderBottom: '1px solid #242424' };
+const sectionTitle: React.CSSProperties = { flex: 1, fontSize: 11, fontWeight: 600, letterSpacing: '0.08em', textTransform: 'uppercase', color: '#9a9a9a' };
+const viewingTag: React.CSSProperties = { fontSize: 10, color: '#7c9', letterSpacing: '0.04em' };
 
 const listItem = (active: boolean): React.CSSProperties => ({
   width: '100%', display: 'flex', justifyContent: 'space-between', alignItems: 'center',
   background: active ? '#22303a' : 'transparent', color: active ? '#eee' : '#bbb',
   border: 'none', borderRadius: 4, padding: '7px 10px', fontSize: 13, cursor: 'pointer', textAlign: 'left',
 });
-const newBtn = (disabled: boolean, active: boolean): React.CSSProperties => ({
-  width: '100%', background: active ? '#1d4ed8' : '#2a2a2a', color: disabled ? '#666' : '#eee',
-  border: '1px solid #333', borderRadius: 4, padding: '7px 10px', fontSize: 13, cursor: disabled ? 'default' : 'pointer',
+const plusBtn = (disabled: boolean, active: boolean): React.CSSProperties => ({
+  display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+  width: 22, height: 22, borderRadius: 4,
+  background: active ? '#1d4ed8' : 'transparent', color: disabled ? '#555' : active ? '#fff' : '#9a9a9a',
+  border: '1px solid ' + (active ? '#1d4ed8' : '#333'), cursor: disabled ? 'default' : 'pointer', padding: 0,
 });
 const btn = (disabled: boolean, variant: 'primary' | 'secondary' | 'danger' = 'secondary'): React.CSSProperties => ({
   background: disabled ? '#222' : variant === 'primary' ? '#1d4ed8' : variant === 'danger' ? '#7f1d1d' : '#2a2a2a',

@@ -25,7 +25,6 @@ describe('RepoManager', () => {
     readOnly: false,
     onClose: () => {},
     onChanged: () => {},
-    onSelect: () => {},
   };
 
   it('lists active repos and the archived list', async () => {
