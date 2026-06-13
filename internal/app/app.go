@@ -35,7 +35,15 @@ func (a *App) Signer() ssh.Signer      { return a.signer }
 func (a *App) AgentBranch() string     { return a.agentBranch }
 
 // Options holds CLI-only overrides that are not persisted to config.
-type Options struct{}
+type Options struct {
+	// APIOnly omits the embedded web UI routes from the HTTP handler. The
+	// desktop build sets this (Wails serves the UI in-process); the cloud
+	// server leaves it false to serve UI + API together.
+	APIOnly bool
+	// CORSOrigins is the cross-origin allow-list passed to the web server (the
+	// Wails origin in the desktop build). Empty in the cloud server.
+	CORSOrigins []string
+}
 
 // New creates and boots the application from the given config and context.
 func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
@@ -123,6 +131,8 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 		SessionManager:    web.NewSessionManager(),
 		LLMAdapter:        llmAdapter,
 		Embedder:          embedder,
+		APIOnly:           opts.APIOnly,
+		CORSOrigins:       opts.CORSOrigins,
 	}
 
 	// Start the manager (opens repos, launches background cluster
