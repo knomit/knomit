@@ -1,7 +1,7 @@
 import { useReducer, useEffect, useState } from 'react';
 import { reducer, init, isReadOnly, isLive } from './state';
 import type { ExplainEntry } from './state';
-import { api } from './api';
+import { api, apiUrl } from './api';
 import { useNavigationManager } from './useNavigationManager';
 import { bootstrapStatusWithRetry } from './bootstrap';
 import { pickRepo, loadLastRepo, saveLastRepo } from './repoSelection';
@@ -165,7 +165,7 @@ export default function App() {
   // SSE for task and status events — reconnects when repo/branch changes.
   useEffect(() => {
     if (!state.branch) return; // wait until branch is known from status bootstrap
-    const es = new EventSource(`/api/v1/repos/${state.repo}/branches/${state.branch.replaceAll('/', ':')}/events`);
+    const es = new EventSource(apiUrl(`/api/v1/repos/${state.repo}/branches/${state.branch.replaceAll('/', ':')}/events`));
     let connected = false;
     es.addEventListener('open', () => {
       if (connected) {
