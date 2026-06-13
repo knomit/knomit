@@ -1,4 +1,4 @@
-.PHONY: build web test clean run dev setup dist docker download-ort download-graphqlite tokenizers-lib e2e e2e-ui e2e-setup e2e-report
+.PHONY: build web test clean run dev setup dist docker desktop desktop-run download-ort download-graphqlite tokenizers-lib e2e e2e-ui e2e-setup e2e-report
 
 UNAME_S := $(shell uname -s)
 
@@ -41,8 +41,9 @@ test: download-graphqlite
 dist: download-ort download-graphqlite tokenizers-lib build
 	@echo "Distribution package ready in dist/"
 
-# Build the cloud HTTP server as a self-contained Docker image (CGO + bundled
-# ONNX/graphqlite native libs; embedding models download on first start).
+# Build the cloud HTTP server as a fully self-contained Docker image (CGO +
+# bundled ONNX/graphqlite native libs + embedding model baked at build time;
+# the running container performs no startup downloads).
 docker:
 	docker build -t knomit:latest .
 
@@ -67,3 +68,18 @@ e2e-ui: dist
 
 e2e-report:
 	cd e2e && npx playwright show-report playwright-report
+
+# ---- knomit-desktop (Wails v3, cross-platform) ------------------------------
+DESKTOP_VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+
+# Build the native desktop app (Wails v3, CGO). Serves the UI in-process and
+# runs the knomit server API-only on a looknomitck port (prefers 19278). Requires
+# the native libs in dist/lib (run `make setup` first).
+desktop: web
+	CGO_ENABLED=1 go build $(GOFLAGS) -tags desktop \
+	  -ldflags "-X main.version=$(DESKTOP_VERSION)" \
+	  -o dist/knomit-desktop ./tools/desktop
+	@echo "Built dist/knomit-desktop"
+
+desktop-run: dist desktop
+	./dist/knomit-desktop
