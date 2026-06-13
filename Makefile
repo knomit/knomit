@@ -1,4 +1,4 @@
-.PHONY: build web test clean run dev setup dist download-ort download-graphqlite tokenizers-lib e2e e2e-ui e2e-setup e2e-report tray tray-run
+.PHONY: build web test clean run dev setup dist docker download-ort download-graphqlite tokenizers-lib e2e e2e-ui e2e-setup e2e-report tray tray-run
 
 UNAME_S := $(shell uname -s)
 TRAY_VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
@@ -41,6 +41,11 @@ test: download-graphqlite
 
 dist: download-ort download-graphqlite tokenizers-lib build
 	@echo "Distribution package ready in dist/"
+
+# Build the cloud HTTP server as a self-contained Docker image (CGO + bundled
+# ONNX/graphqlite native libs; embedding models download on first start).
+docker:
+	docker build -t knomit:latest .
 
 CMD ?= serve
 run: download-ort
