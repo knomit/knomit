@@ -113,6 +113,8 @@ func archiveErrStatus(err error) (int, string) {
 		return http.StatusConflict, "Name in use"
 	case errors.Is(err, repos.ErrOriginInUse):
 		return http.StatusConflict, "Origin in use"
+	case errors.Is(err, repos.ErrCreateInFlight):
+		return http.StatusConflict, "Operation in flight"
 	case errors.Is(err, repos.ErrInvalidName):
 		return http.StatusBadRequest, "Invalid name"
 	default:

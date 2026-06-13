@@ -2,9 +2,11 @@ package repos
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -372,4 +374,142 @@ func TestRestore_OriginInUse(t *testing.T) {
 
 	_, err = m.Restore(info.ID, "")
 	require.ErrorIs(t, err, ErrOriginInUse)
+}
+
+// TestRestore_HonorsInFlightReservation pins the fix for the Restore TOCTOU:
+// Restore must take the same name reservation that Create uses, so it refuses
+// (rather than racing) when another operation is already bringing the target
+// name into the active map. We hold the reservation directly to stand in for an
+// in-flight Create on the same name.
+func TestRestore_HonorsInFlightReservation(t *testing.T) {
+	m := newLifecycleManager(t)
+	_, err := m.Create(context.Background(), CreateSpec{Name: "work", Mode: "preset", OntologyPreset: "default"}, nil)
+	require.NoError(t, err)
+	info, err := m.Archive("work")
+	require.NoError(t, err)
+
+	// Simulate a concurrent Create holding the name reservation.
+	release, err := m.reserveNameAndOrigin("work", "")
+	require.NoError(t, err)
+	defer release()
+
+	_, err = m.Restore(info.ID, "")
+	require.ErrorIs(t, err, ErrCreateInFlight)
+
+	// The archive must remain intact and recoverable — the refused restore must
+	// not have moved the db or dropped the manifest.
+	left, _ := m.ListArchived()
+	require.Len(t, left, 1)
+	require.Equal(t, info.ID, left[0].ID)
+}
+
+// TestCreateRestore_ConcurrentSameName_NoDoubleRegister fires a Create and a
+// Restore at the same name simultaneously and asserts exactly one wins while the
+// other is cleanly refused — never both succeeding and never leaving the name
+// unregistered or its db clobbered. Run under -race to catch any unsynchronised
+// access in the registration path.
+func TestCreateRestore_ConcurrentSameName_NoDoubleRegister(t *testing.T) {
+	m := newLifecycleManager(t)
+	_, err := m.Create(context.Background(), CreateSpec{Name: "work", Mode: "preset", OntologyPreset: "default"}, nil)
+	require.NoError(t, err)
+	info, err := m.Archive("work")
+	require.NoError(t, err)
+	require.Equal(t, "work", info.Name)
+
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	var errCreate, errRestore error
+
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		<-start
+		_, errCreate = m.Create(context.Background(), CreateSpec{Name: "work", Mode: "preset", OntologyPreset: "default"}, nil)
+	}()
+	go func() {
+		defer wg.Done()
+		<-start
+		_, errRestore = m.Restore(info.ID, "")
+	}()
+	close(start)
+	wg.Wait()
+
+	// Exactly one of the two operations succeeded.
+	require.True(t, (errCreate == nil) != (errRestore == nil),
+		"exactly one of Create/Restore must win: errCreate=%v errRestore=%v", errCreate, errRestore)
+	// The loser failed with a name-collision error, not some torn-state error.
+	loser := errCreate
+	if loser == nil {
+		loser = errRestore
+	}
+	require.True(t, isNameCollision(loser), "loser must be a clean name-collision error, got %v", loser)
+	// Whichever won, "work" is registered exactly once and usable.
+	require.NotNil(t, m.Get("work"))
+}
+
+// isNameCollision reports whether err is one of the expected "name already
+// being taken" outcomes from a concurrent Create/Restore on the same name.
+func isNameCollision(err error) bool {
+	return errors.Is(err, ErrCreateInFlight) || errors.Is(err, ErrRepoExists)
+}
+
+// TestCreate_ConcurrentSameOrigin_OnlyOneWins pins the fix for the origin-race:
+// two clones of the SAME origin under DIFFERENT names must not both succeed
+// (which would leave two active repos sharing one remote). The name reservation
+// can't catch this — the names differ — so origin uniqueness is enforced by the
+// origin reservation in reserveNameAndOrigin. Run under -race.
+func TestCreate_ConcurrentSameOrigin_OnlyOneWins(t *testing.T) {
+	m := newLifecycleManager(t)
+	url := seedBareRemote(t)
+
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	var errA, errB error
+
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		<-start
+		_, errA = m.Create(context.Background(), CreateSpec{
+			Name: "alpha", Mode: "clone", Origin: &OriginSpec{URL: url, Branch: "main"},
+		}, nil)
+	}()
+	go func() {
+		defer wg.Done()
+		<-start
+		_, errB = m.Create(context.Background(), CreateSpec{
+			Name: "beta", Mode: "clone", Origin: &OriginSpec{URL: url, Branch: "main"},
+		}, nil)
+	}()
+	close(start)
+	wg.Wait()
+
+	// Exactly one clone won; the other was refused for origin-in-use.
+	require.True(t, (errA == nil) != (errB == nil),
+		"exactly one clone of a shared origin must win: errA=%v errB=%v", errA, errB)
+	loser := errA
+	if loser == nil {
+		loser = errB
+	}
+	require.ErrorIs(t, loser, ErrOriginInUse)
+
+	// And only one active repo carries the origin.
+	require.Equal(t, 1, countActiveWithOrigin(m, url),
+		"exactly one active repo may carry the shared origin")
+}
+
+// countActiveWithOrigin returns how many active repos have origin url.
+func countActiveWithOrigin(m *Manager, url string) int {
+	n := 0
+	m.ForEach(func(_ string, ri *RepoInstance) {
+		ri.WithRead(func(svc *store.Service) {
+			if svc == nil {
+				return
+			}
+			if rm, err := svc.Remote().GetRemote("origin"); err == nil && rm != nil && rm.URL == url {
+				n++
+			}
+		})
+	})
+	return n
 }

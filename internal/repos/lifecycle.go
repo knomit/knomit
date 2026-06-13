@@ -24,8 +24,10 @@ var (
 	ErrRepoExists = errors.New("repo already exists")
 	// ErrInvalidName is returned when a repo name fails validation.
 	ErrInvalidName = errors.New("invalid repo name")
-	// ErrCreateInFlight is returned when a Create is already running for the same name.
-	ErrCreateInFlight = errors.New("create already in flight for this name")
+	// ErrCreateInFlight is returned when a Create or Restore is already bringing
+	// this name into the active map. It gates every operation that registers a
+	// name, so concurrent Create/Restore on the same name can't race.
+	ErrCreateInFlight = errors.New("an operation is already in flight for this name")
 	// ErrOriginInUse is returned when a clone/restore would point a second active
 	// repo at an origin URL already used by an active repo.
 	ErrOriginInUse = errors.New("origin URL already in use by an active repo")
@@ -71,11 +73,13 @@ func (m *Manager) CreatePreflight(spec CreateSpec) error {
 	if !isValidRepoName(spec.Name) {
 		return ErrInvalidName
 	}
+	origin := ""
 	if spec.Mode == "clone" {
 		if spec.Origin == nil || spec.Origin.URL == "" {
 			return fmt.Errorf("%w: clone mode requires origin.url", ErrInvalidName)
 		}
-		if active := m.ActiveRepoWithOrigin(spec.Origin.URL); active != "" {
+		origin = spec.Origin.URL
+		if active := m.ActiveRepoWithOrigin(origin); active != "" {
 			return fmt.Errorf("%w: %q", ErrOriginInUse, active)
 		}
 	}
@@ -83,28 +87,69 @@ func (m *Manager) CreatePreflight(spec CreateSpec) error {
 		return ErrRepoExists
 	}
 	m.inflightMu.Lock()
-	_, inflight := m.creating[spec.Name]
+	_, nameInflight := m.creating[spec.Name]
+	_, originInflight := m.creatingOrigins[origin]
 	m.inflightMu.Unlock()
-	if inflight {
+	if nameInflight {
 		return ErrCreateInFlight
+	}
+	if origin != "" && originInflight {
+		return fmt.Errorf("%w (clone in flight)", ErrOriginInUse)
 	}
 	return nil
 }
 
-// reserveCreate marks name as in-flight, returning ErrCreateInFlight if another
-// Create holds it. The returned release func clears the marker.
-func (m *Manager) reserveCreate(name string) (func(), error) {
+// reserveNameAndOrigin reserves name and (when non-empty) origin for the
+// duration of an operation that brings a name into the active map. It is the
+// single mutual-exclusion gate every Add path must hold across its Get-check →
+// Add window, so two concurrent Create/Restore calls can't both register the
+// same name or attach the same origin to two repos.
+//
+// On success the returned release func frees both reservations; it must be
+// deferred so it runs strictly after Add — that overlap (reserved while also
+// registered) is what makes the active-origin scan below gap-free.
+//
+// Errors: ErrCreateInFlight if name is already reserved; ErrOriginInUse if
+// origin is reserved by another in-flight op or already attached to an active
+// repo. A pass with origin=="" (preset/custom create) reserves the name only.
+func (m *Manager) reserveNameAndOrigin(name, origin string) (func(), error) {
 	m.inflightMu.Lock()
-	defer m.inflightMu.Unlock()
 	if _, ok := m.creating[name]; ok {
+		m.inflightMu.Unlock()
 		return nil, ErrCreateInFlight
 	}
+	if origin != "" {
+		if _, ok := m.creatingOrigins[origin]; ok {
+			m.inflightMu.Unlock()
+			return nil, fmt.Errorf("%w (clone in flight)", ErrOriginInUse)
+		}
+	}
 	m.creating[name] = struct{}{}
-	return func() {
+	if origin != "" {
+		m.creatingOrigins[origin] = struct{}{}
+	}
+	m.inflightMu.Unlock()
+
+	release := func() {
 		m.inflightMu.Lock()
 		delete(m.creating, name)
+		if origin != "" {
+			delete(m.creatingOrigins, origin)
+		}
 		m.inflightMu.Unlock()
-	}, nil
+	}
+
+	// Scan active repos only after reserving: any concurrent clone/restore of
+	// this origin is now blocked above, so an active match here is the
+	// authoritative origin-uniqueness verdict. Done outside inflightMu so we
+	// don't couple it to mu (ActiveRepoWithOrigin takes mu + per-repo locks).
+	if origin != "" {
+		if active := m.ActiveRepoWithOrigin(origin); active != "" {
+			release()
+			return nil, fmt.Errorf("%w: %q", ErrOriginInUse, active)
+		}
+	}
+	return release, nil
 }
 
 // Create initialises a new repo on disk per spec, registers it, and (for clone
@@ -123,10 +168,22 @@ func (m *Manager) Create(ctx context.Context, spec CreateSpec, emit func(Event))
 	if !isValidRepoName(spec.Name) {
 		return nil, ErrInvalidName
 	}
+
+	// Determine the origin to reserve (clone mode only) before reserving, so the
+	// reservation covers the whole clone — including the network fetch — and a
+	// second clone of the same origin is blocked for that entire window.
+	var origin string
+	if spec.Mode == "clone" {
+		if spec.Origin == nil || spec.Origin.URL == "" {
+			return nil, fmt.Errorf("%w: clone mode requires origin.url", ErrInvalidName)
+		}
+		origin = spec.Origin.URL
+	}
+
 	if m.Get(spec.Name) != nil {
 		return nil, ErrRepoExists
 	}
-	release, err := m.reserveCreate(spec.Name)
+	release, err := m.reserveNameAndOrigin(spec.Name, origin)
 	if err != nil {
 		return nil, err
 	}
@@ -155,12 +212,8 @@ func (m *Manager) Create(ctx context.Context, spec CreateSpec, emit func(Event))
 			return nil, ierr
 		}
 	case "clone":
-		if spec.Origin == nil || spec.Origin.URL == "" {
-			return nil, fmt.Errorf("%w: clone mode requires origin.url", ErrInvalidName)
-		}
-		if active := m.ActiveRepoWithOrigin(spec.Origin.URL); active != "" {
-			return nil, fmt.Errorf("%w: %q", ErrOriginInUse, active)
-		}
+		// Name/origin presence and uniqueness were validated and reserved up
+		// front via reserveNameAndOrigin; just clone.
 		if ierr := m.initClone(ctx, spec, dbPath, emit); ierr != nil {
 			cleanup()
 			return nil, ierr
@@ -478,13 +531,19 @@ func (m *Manager) Restore(archiveID, newName string) (*RepoInstance, error) {
 	if !isValidRepoName(target) {
 		return nil, ErrInvalidName
 	}
+
+	// Reserve the target name and the archived origin for the whole check → Add
+	// window so a concurrent Create/Restore can't race us to register the same
+	// name (clobbering each other's .db) or attach the same origin to two repos.
+	// reserveNameAndOrigin also performs the authoritative active-origin scan.
+	release, err := m.reserveNameAndOrigin(target, info.Origin)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+
 	if m.Get(target) != nil {
 		return nil, fmt.Errorf("%w: %q", ErrRepoExists, target)
-	}
-	if info.Origin != "" {
-		if active := m.ActiveRepoWithOrigin(info.Origin); active != "" {
-			return nil, fmt.Errorf("%w: %q", ErrOriginInUse, active)
-		}
 	}
 
 	srcDB := filepath.Join(m.archiveDir(), archiveID+".db")
