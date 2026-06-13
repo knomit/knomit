@@ -109,7 +109,7 @@ All data lives under `KNOMIT_HOME` (default `~/.knomit`):
   repos/
     trunk.db         # default repo (auto-created)
     work.db          # additional repos (created via the API/UI)
-    archive/         # archived repos (<name>.<unixtime>.db + .json manifest)
+    archive/         # archived repos (<ksuid>.db + <ksuid>.json manifest)
   models/            # shared ONNX embedder files
   id_ed25519         # SSH identity (shared across repos)
   id_ed25519.pub
@@ -128,10 +128,11 @@ curl -N -X POST http://localhost:19278/api/v1/repos \
   -d '{"name":"work","mode":"preset","ontology_preset":"default"}'
 
 # Archive (recoverable), list archived, restore, purge.
+# Archiving returns an opaque archive id (a ksuid); list archived to find it.
 curl -X DELETE http://localhost:19278/api/v1/repos/work
 curl http://localhost:19278/api/v1/archived
-curl -X POST http://localhost:19278/api/v1/archived/work.1717000000/restore
-curl -X DELETE http://localhost:19278/api/v1/archived/work.1717000000
+curl -X POST http://localhost:19278/api/v1/archived/2cVcW8aQk1bE9fG0hJ2kL3mN4pQ/restore
+curl -X DELETE http://localhost:19278/api/v1/archived/2cVcW8aQk1bE9fG0hJ2kL3mN4pQ
 ```
 
 The startup scan and the rescan endpoint still pick up `*.db` files that appear
