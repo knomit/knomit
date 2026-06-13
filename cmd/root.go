@@ -8,5 +8,6 @@ func RootCmd() *cobra.Command {
 	root.AddCommand(serveCmd())
 	root.AddCommand(resetCmd())
 	root.AddCommand(verifyCmd())
+	root.AddCommand(warmModelsCmd())
 	return root
 }

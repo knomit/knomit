@@ -1,14 +1,18 @@
 # syntax=docker/dockerfile:1
 #
 # Cloud build of the knomit HTTP server (goal #1: a plain HTTP server deployable
-# anywhere). The server requires CGO (mattn/go-sqlite3, sqlite-vec, ONNX
-# Runtime, daulet/tokenizers) and three native libraries:
+# anywhere). The image is fully self-contained: ALL dependencies — the native
+# libraries AND the embedding model — are fetched at BUILD time. The running
+# container performs NO network downloads at startup.
+#
+# The server requires CGO (mattn/go-sqlite3, sqlite-vec, ONNX Runtime,
+# daulet/tokenizers) and three native libraries:
 #   - libtokenizers.a   — STATIC, linked at build time (-L dist/lib via
 #                         internal/embeddings/cgo_link.go)
 #   - libonnxruntime.so — dlopen'd at runtime (ORT_LIB_PATH)
 #   - graphqlite.so     — SQLite extension dlopen'd at runtime (GRAPHQLITE_LIB_PATH)
-# Embedding model files are downloaded from HuggingFace on first start into
-# KNOMIT_HOME (mount a volume to persist them).
+# The embedding model files are downloaded at build time by `knomit warm-models`
+# and baked into the image at /data/models.
 
 # ---- web UI -----------------------------------------------------------------
 FROM node:22-slim AS web
@@ -34,6 +38,10 @@ COPY --from=web /web/dist ./web/dist
 # libonnxruntime.so + graphqlite.so (copied into the runtime image below).
 RUN go run ./tools/fetchlibs dist/lib
 RUN go build -trimpath -o /out/knomit .
+# Bake the embedding model into the image so the runtime never downloads at
+# startup. warm-models reuses the real model registry/config and does NOT
+# initialise ONNX Runtime, so it runs without the ORT shared library loaded.
+RUN KNOMIT_HOME=/seed /out/knomit warm-models
 
 # ---- runtime ----------------------------------------------------------------
 FROM debian:bookworm-slim
@@ -43,12 +51,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --from=build /out/knomit /usr/local/bin/knomit
 COPY --from=build /src/dist/lib/libonnxruntime.so /opt/knomit/lib/libonnxruntime.so
 COPY --from=build /src/dist/lib/graphqlite.so      /opt/knomit/lib/graphqlite.so
+# Embedding model, pre-downloaded at build time → no startup network access.
+COPY --from=build /seed/models /data/models
 ENV ORT_LIB_PATH=/opt/knomit/lib/libonnxruntime.so \
     GRAPHQLITE_LIB_PATH=/opt/knomit/lib/graphqlite \
     KNOMIT_HOST=0.0.0.0 \
     KNOMIT_PORT=19278 \
     KNOMIT_HOME=/data
-VOLUME ["/data"]
+# NOTE: models are baked into the image at /data/models. For a persistent KB,
+# mount a NAMED volume at /data (Docker auto-populates it from the image,
+# preserving the baked model). A host bind-mount over /data would hide the
+# baked model — pre-seed it or use a named volume.
 EXPOSE 19278
 ENTRYPOINT ["knomit"]
 CMD ["serve"]
