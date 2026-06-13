@@ -332,6 +332,97 @@ async function getAgentBranch(repo: string): Promise<string> {
   return (agent || main || branches[0])?.name || 'main';
 }
 
+export interface CreateEvent {
+  type: 'progress' | 'done' | 'error';
+  step?: string;
+  message?: string;
+  pct?: number;
+  repo?: { name: string };
+  title?: string;
+  detail?: string;
+}
+
+export function parseNDJSONLine(line: string): CreateEvent | null {
+  const t = line.trim();
+  if (!t) return null;
+  try {
+    return JSON.parse(t) as CreateEvent;
+  } catch {
+    return null;
+  }
+}
+
+export interface CreateRepoBody {
+  name: string;
+  mode: 'preset' | 'custom' | 'clone';
+  ontology_preset?: string;
+  ontology_yaml?: string;
+  origin?: { url: string; branch?: string; auth_method?: string; auth_token?: string };
+}
+
+export interface ArchivedRepo {
+  id: string;
+  name: string;
+  origin: string;
+  archivedAt: string;
+}
+
+// createRepo POSTs and streams NDJSON progress, invoking onEvent per line.
+// Resolves when the stream ends. Throws on a pre-stream non-OK (problem+json).
+async function createRepo(body: CreateRepoBody, onEvent: (e: CreateEvent) => void): Promise<void> {
+  const r = await fetch('/api/v1/repos', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) {
+    let detail = r.statusText;
+    try {
+      const b = await r.json();
+      detail = b?.detail || b?.title || detail;
+    } catch { /* ignore */ }
+    throw new Error(`create → ${r.status} ${detail}`);
+  }
+  const reader = r.body!.getReader();
+  const dec = new TextDecoder();
+  let buf = '';
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, { stream: true });
+    let nl: number;
+    while ((nl = buf.indexOf('\n')) >= 0) {
+      const e = parseNDJSONLine(buf.slice(0, nl));
+      buf = buf.slice(nl + 1);
+      if (e) onEvent(e);
+    }
+  }
+  const tail = parseNDJSONLine(buf);
+  if (tail) onEvent(tail);
+}
+
+async function archiveRepo(repo: string): Promise<ArchivedRepo> {
+  return fetchJSON<ArchivedRepo>(repoBase(repo), { method: 'DELETE' });
+}
+
+async function listArchived(): Promise<ArchivedRepo[]> {
+  const data = await fetchJSON<{ _embedded?: { archived?: ArchivedRepo[] } }>('/api/v1/archived');
+  return data._embedded?.archived ?? [];
+}
+
+async function restoreRepo(id: string, newName?: string): Promise<{ name: string }> {
+  return fetchJSON<{ name: string }>(`/api/v1/archived/${id}/restore`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(newName ? { new_name: newName } : {}),
+  });
+}
+
+async function purgeRepo(id: string): Promise<void> {
+  const r = await fetch(`/api/v1/archived/${id}`, { method: 'DELETE' });
+  if (!r.ok) throw new Error(`purge → ${r.status}`);
+}
+
 export const api = {
   getAgentBranch,
 
@@ -344,6 +435,12 @@ export const api = {
       // Fallback: flat array (legacy)
       return Array.isArray(data) ? data : [];
     }),
+
+  createRepo,
+  archiveRepo,
+  listArchived,
+  restoreRepo,
+  purgeRepo,
 
   browse: (repo: string, branch: string, path: string, ontologyRoot: string): Promise<BrowseResponse> => {
     const relative = stripOntologyRoot(ontologyRoot, path);
@@ -448,7 +545,7 @@ export const api = {
   synthesize: (repo: string, branch: string, recipe = ''): Promise<{ op: string; id?: string; status: string; message?: string }> =>
     fetchJSON(`${branchBase(repo, branch)}/synthesis-runs`, { method: 'POST', body: recipe }),
 
-  rebuild: (repo: string, branch: string): Promise<{ op: string; id?: string; status: string; message?: string }> =>
+  rebuild: (repo: string, branch: string): Promise<{ id?: string; kind?: string; state?: string }> =>
     fetchJSON(`${branchBase(repo, branch)}/index-rebuilds`, { method: 'POST' }),
 
   recent: (repo: string, branch: string, path: string, query = '', limit = 50, offset = 0,
@@ -473,12 +570,16 @@ export const api = {
   getOrigin: (repo: string): Promise<OriginResponse | null> =>
     fetch(`${repoBase(repo)}/origin`).then(r => r.status === 204 ? null : r.json()),
 
-  setOrigin: (repo: string, opts: { url?: string; auth_method?: string; token?: string; user?: string; password?: string }): Promise<OriginSetResponse> =>
+  setOrigin: (repo: string, opts: { url?: string; branch?: string; auth_method?: string; token?: string; user?: string; password?: string }): Promise<OriginSetResponse> =>
     fetch(`${repoBase(repo)}/origin`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(opts),
     }).then(r => { if (!r.ok) throw new Error(r.statusText); return r.json(); }),
+
+  deleteOrigin: (repo: string): Promise<void> =>
+    fetch(`${repoBase(repo)}/origin`, { method: 'DELETE' })
+      .then(r => { if (!r.ok) throw new Error(`disconnect → ${r.status} ${r.statusText}`); }),
 
   retractFact: (repo: string, branch: string, path: string): Promise<void> =>
     fetch(`${branchBase(repo, branch)}/facts/${path}`, { method: 'DELETE' })

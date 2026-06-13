@@ -84,8 +84,43 @@ func (ri *RepoInstance) ActivateSync(url string) error {
 	return ri.startSync(url)
 }
 
+// DeactivateSync cancels the running sync/push loops so the repo stops talking
+// to a remote (used when the remote is disconnected). Safe to call when no
+// loop is running; a later ActivateSync starts a fresh loop.
+func (ri *RepoInstance) DeactivateSync() {
+	ri.mu.Lock()
+	cancel := ri.syncCancel
+	ri.syncCancel = func() {}
+	ri.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+}
+
 // Close stops the observer and closes the store.
 func (ri *RepoInstance) Close() {
+	if ri.closeFn != nil {
+		ri.closeFn()
+	}
+}
+
+// shutdown performs the full teardown sequence for a single instance:
+// cancel the sync loop, wait for it to wind down, shut the task hub, then
+// release store/observer resources. Used by Manager.Close (bulk) and the
+// lifecycle Archive path (single).
+func (ri *RepoInstance) shutdown() {
+	ri.mu.RLock()
+	cancel := ri.syncCancel
+	ri.mu.RUnlock()
+	if cancel != nil {
+		cancel()
+	}
+	if ri.syncWg != nil {
+		ri.syncWg.Wait()
+	}
+	if ri.hub != nil {
+		ri.hub.Shutdown()
+	}
 	if ri.closeFn != nil {
 		ri.closeFn()
 	}

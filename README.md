@@ -91,11 +91,14 @@ knomit verify --all --deep    # every repo, including fact-format check
 
 ```sh
 knomit serve                  # start HTTP server (default port 19278)
-knomit init                   # initialize the default repo
-knomit init --name work       # initialize a repo named "work"
 knomit reset                  # wipe the default repo
 knomit reset --name work      # wipe a specific repo
 ```
+
+The default repo (`trunk`) is created automatically the first time you run
+`knomit serve`. Additional repos are created, archived, restored, and purged
+through the web UI ("Manage repos") or the REST API — see
+[Managing repos](#managing-repos). There is no CLI command to create a repo.
 
 ### Data Layout
 
@@ -105,14 +108,35 @@ All data lives under `KNOMIT_HOME` (default `~/.knomit`):
 ~/.knomit/
   repos/
     trunk.db         # default repo (auto-created)
-    work.db          # additional repos (discovered at startup)
+    work.db          # additional repos (created via the API/UI)
+    archive/         # archived repos (<ksuid>.db + <ksuid>.json manifest)
   models/            # shared ONNX embedder files
   id_ed25519         # SSH identity (shared across repos)
   id_ed25519.pub
 ```
 
-A running server discovers `*.db` files only at startup. To pick up a new
-repo created via `knomit init` without restarting, hit the rescan endpoint:
+### Managing repos
+
+Repos are created and managed at runtime — no CLI, no restart. Use the web UI
+("Manage repos" in the top-bar menu) or the REST API:
+
+```sh
+# Create a repo (streams newline-delimited JSON progress).
+# mode is one of: preset | custom | clone
+curl -N -X POST http://localhost:19278/api/v1/repos \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"work","mode":"preset","ontology_preset":"default"}'
+
+# Archive (recoverable), list archived, restore, purge.
+# Archiving returns an opaque archive id (a ksuid); list archived to find it.
+curl -X DELETE http://localhost:19278/api/v1/repos/work
+curl http://localhost:19278/api/v1/archived
+curl -X POST http://localhost:19278/api/v1/archived/2cVcW8aQk1bE9fG0hJ2kL3mN4pQ/restore
+curl -X DELETE http://localhost:19278/api/v1/archived/2cVcW8aQk1bE9fG0hJ2kL3mN4pQ
+```
+
+The startup scan and the rescan endpoint still pick up `*.db` files that appear
+out-of-band (e.g. a restored backup copied into `~/.knomit/repos/`):
 
 ```sh
 curl -X POST http://localhost:19278/api/v1/repos:rescan

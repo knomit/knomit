@@ -84,6 +84,15 @@ type Manager struct {
 	// be opened twice in a race. Independent of mu — Rescan reads m.repos
 	// via Get/Set, which take mu themselves.
 	rescanMu sync.Mutex
+
+	// inflightMu guards creating and creatingOrigins — the sets of repo names
+	// and origin URLs currently being brought into the active map by a Create or
+	// Restore. They are the mutual-exclusion gate that keeps two concurrent
+	// operations from racing on the same name (→ duplicate registration) or the
+	// same origin (→ two active repos sharing one remote).
+	inflightMu      sync.Mutex
+	creating        map[string]struct{}
+	creatingOrigins map[string]struct{}
 }
 
 // ResolveAuth resolves a transport.AuthMethod for the given config and remote
@@ -95,9 +104,11 @@ func (m *Manager) ResolveAuth(cfg config.RemoteAuthConfig, url string) (transpor
 // New returns an uninitialised Manager. Call Boot to open repos.
 func New(ctx context.Context, deps Deps) *Manager {
 	return &Manager{
-		repos: make(map[string]*RepoInstance),
-		ctx:   ctx,
-		deps:  deps,
+		repos:           make(map[string]*RepoInstance),
+		ctx:             ctx,
+		deps:            deps,
+		creating:        make(map[string]struct{}),
+		creatingOrigins: make(map[string]struct{}),
 	}
 }
 

@@ -87,6 +87,7 @@ type IndexManager interface {
 type RemoteIndex interface {
 	GetRemote(name string) (*Remote, error)
 	SetRemote(name, url, upstreamMain, agentBranch string, interval, pushInterval int, authMethod, authToken string) error
+	DeleteRemote(name string) error
 	Sync(ctx context.Context, localBranch string, auth transport.AuthMethod) (SyncResult, error)
 	Push(ctx context.Context, branch string, auth transport.AuthMethod) (PushResult, error)
 }

@@ -85,6 +85,12 @@ func (b URLBuilder) FactOutgoing(repo string, a Anchor, path string) string {
 	return b.Fact(repo, a, path) + "/outgoing"
 }
 
+// Archived returns the URL of the archived-repos collection.
+func (b URLBuilder) Archived() string { return b.Base + "/archived" }
+
+// ArchivedItem returns the URL of a single archived repo by id.
+func (b URLBuilder) ArchivedItem(id string) string { return b.Base + "/archived/" + id }
+
 // FactCommits returns the URL for a fact's per-fact commit log. Always
 // branch-anchored (commit logs are not themselves commit-pinned).
 func (b URLBuilder) FactCommits(repo string, a Anchor, path string) string {

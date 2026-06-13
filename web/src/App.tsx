@@ -7,11 +7,12 @@ import { bootstrapStatusWithRetry } from './bootstrap';
 import { pickRepo, loadLastRepo, saveLastRepo } from './repoSelection';
 import type { RepoInfo } from './api';
 import { TopBar } from './TopBar';
+import { RepoManager } from './RepoManager';
+import { ErrorBoundary } from './ErrorBoundary';
 import { FilterBar } from './FilterBar';
 import { LeftPanel } from './LeftPanel';
 import { RightPanel } from './RightPanel';
 import { Console } from './Console';
-import { ConnectRemoteModal } from './ConnectRemoteModal';
 import { ExplainView } from './ExplainView';
 import './App.css';
 
@@ -49,7 +50,7 @@ export default function App() {
   const { navigate } = useNavigationManager(state, dispatch);
   const [repos, setRepos] = useState<RepoInfo[]>([]);
   const [reposLoaded, setReposLoaded] = useState(false);
-  const [showOrigin, setShowOrigin] = useState(false);
+  const [repoMgrOpen, setRepoMgrOpen] = useState(false);
 
   // Explain overlay slides in from the right when state.explainEntry is set
   // and slides out when it becomes null. Two pieces of local state coordinate
@@ -300,7 +301,27 @@ export default function App() {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', width: '100vw', background: '#141414', color: '#eee', fontFamily: 'system-ui, sans-serif', overflow: 'hidden' }}>
-      <TopBar state={state} repos={repos} dispatch={dispatch} onSettingsClick={() => setShowOrigin(true)} />
+      <TopBar state={state} repos={repos} dispatch={dispatch} onManageRepos={() => setRepoMgrOpen(true)} />
+      <ErrorBoundary label="The repo manager hit an error" onReset={() => setRepoMgrOpen(false)}>
+        <RepoManager
+          open={repoMgrOpen}
+          repos={repos}
+          currentRepo={state.repo}
+          readOnly={isReadOnly(state)}
+          onClose={() => setRepoMgrOpen(false)}
+          onChanged={() => {
+            api.repos().then(list => {
+              setRepos(list);
+              // If the active repo was archived/removed, switch to a remaining
+              // one (prefer trunk) so the app never points at a gone repo.
+              if (list.length && !list.some(r => r.name === state.repo)) {
+                const next = list.find(r => r.name === 'trunk') ?? list[0];
+                dispatch({ type: 'SET_REPO', repo: next.name });
+              }
+            }).catch(() => {});
+          }}
+        />
+      </ErrorBoundary>
 
       {/* Stacking context for the Library layout + Explain overlay so the
           overlay can slide in/out over the layout without affecting flow. */}
@@ -359,7 +380,6 @@ export default function App() {
         </div>
       </div>
 
-      {showOrigin && !isReadOnly(state) && <ConnectRemoteModal repo={state.repo} onClose={() => setShowOrigin(false)} />}
     </div>
   );
 }

@@ -2,9 +2,11 @@ package store
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
+	gogit "github.com/go-git/go-git/v5"
 	"github.com/rs/zerolog/log"
 )
 
@@ -76,6 +78,21 @@ func (ri *remoteIndex) SetRemote(name, url, upstreamMain, agentBranch string, in
 	if ri.rh.repo != nil {
 		if err := ri.rh.configureRemote(url, upstreamMain, agentBranch); err != nil {
 			return fmt.Errorf("configure git remote: %w", err)
+		}
+	}
+	return nil
+}
+
+// DeleteRemote removes a remote configuration: it deletes the remotes row and
+// removes the git remote so neither sync nor push can use it. A missing row and
+// a missing git remote are tolerated, so the call is idempotent.
+func (ri *remoteIndex) DeleteRemote(name string) error {
+	if _, err := ri.rh.db.Exec(`DELETE FROM remotes WHERE name = ?`, name); err != nil {
+		return fmt.Errorf("delete remote row: %w", err)
+	}
+	if ri.rh.repo != nil {
+		if err := ri.rh.repo.DeleteRemote(name); err != nil && !errors.Is(err, gogit.ErrRemoteNotFound) {
+			return fmt.Errorf("delete git remote: %w", err)
 		}
 	}
 	return nil

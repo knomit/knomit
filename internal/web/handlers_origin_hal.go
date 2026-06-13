@@ -110,18 +110,39 @@ func (defaultOriginProvider) SetOrigin(ri *repos.RepoInstance, req setOriginRequ
 }
 
 func (defaultOriginProvider) DeleteOrigin(ri *repos.RepoInstance) error {
-	// The legacy API has no delete; we model it as a no-op (204) for now.
-	// A full implementation would call svc.Remote().DeleteRemote("origin").
+	var err error
+	ri.WithRead(func(svc *store.Service) {
+		if svc == nil {
+			err = errOriginNoStore
+			return
+		}
+		err = svc.Remote().DeleteRemote("origin")
+	})
+	if err != nil {
+		return err
+	}
+	// Stop the sync loop now that the remote is gone.
+	ri.DeactivateSync()
 	return nil
 }
 
-// originView is the HAL response body for GET /repos/{repo}/origin.
+// originView is the HAL response body for GET /repos/{repo}/origin. It mirrors
+// the persisted remote record including sync/push status so the UI can show
+// real last-sync state instead of guessing.
 type originView struct {
-	Name       string      `json:"name"`
-	URL        string      `json:"url"`
-	Branch     string      `json:"branch"`
-	AuthMethod string      `json:"auth_method,omitempty"`
-	Links      hal.LinkMap `json:"_links"`
+	Name           string      `json:"name"`
+	URL            string      `json:"url"`
+	Branch         string      `json:"branch"`
+	Interval       int         `json:"interval"`
+	LastSyncAt     *string     `json:"last_sync_at"`
+	LastStatus     *string     `json:"last_status"`
+	LastError      *string     `json:"last_error"`
+	PushInterval   int         `json:"push_interval"`
+	LastPushAt     *string     `json:"last_push_at"`
+	LastPushStatus *string     `json:"last_push_status"`
+	LastPushError  *string     `json:"last_push_error"`
+	AuthMethod     string      `json:"auth_method,omitempty"`
+	Links          hal.LinkMap `json:"_links"`
 }
 
 func originSelfURL(b hal.URLBuilder, repo string) string {
@@ -152,10 +173,18 @@ func handleHALGetOrigin(b hal.URLBuilder, m *repos.Manager, op originProvider) h
 		}
 
 		view := originView{
-			Name:       remote.Name,
-			URL:        remote.URL,
-			Branch:     remote.Branch,
-			AuthMethod: remote.AuthMethod,
+			Name:           remote.Name,
+			URL:            remote.URL,
+			Branch:         remote.Branch,
+			Interval:       remote.Interval,
+			LastSyncAt:     remote.LastSyncAt,
+			LastStatus:     remote.LastStatus,
+			LastError:      remote.LastError,
+			PushInterval:   remote.PushInterval,
+			LastPushAt:     remote.LastPushAt,
+			LastPushStatus: remote.LastPushStatus,
+			LastPushError:  remote.LastPushError,
+			AuthMethod:     remote.AuthMethod,
 			Links: hal.LinkMap{
 				"self": {Href: originSelfURL(b, repoName)},
 				"repo": {Href: b.Repo(repoName)},
