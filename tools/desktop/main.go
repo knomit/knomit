@@ -27,7 +27,3 @@ func main() {
 		os.Exit(1)
 	}
 }
-
-// run is defined in app.go (Task 6). Temporary stub keeps the package compiling
-// until then; REMOVE in Task 6.
-func run(context.Context) error { return nil }
